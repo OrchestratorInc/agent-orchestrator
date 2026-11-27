@@ -2,6 +2,7 @@ package activity
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"sync/atomic"
 	"time"
@@ -31,6 +32,16 @@ type Config struct {
 	// read, and its native identity resolved, without the session's
 	// environment.
 	StartAfter <-chan struct{}
+	// Rechecks, when set, names sessions whose screen should be read before
+	// their activity goes stale (see RecheckSource).
+	Rechecks RecheckSource
+}
+
+// RecheckSource asks for an early screen read of an active session: a hook
+// arrived whose meaning only the screen can settle, such as a Kimi
+// StopFailure taken for a child's that may have been the parent's own.
+type RecheckSource interface {
+	TerminalActivityRecheckDue(id domain.SessionID, now time.Time) bool
 }
 
 type sessionSource interface {
@@ -58,6 +69,7 @@ type Observer struct {
 	clock       func() time.Time
 	logger      *slog.Logger
 	startAfter  <-chan struct{}
+	rechecks    RecheckSource
 	sessionEnv  atomic.Pointer[SessionEnvFunc]
 }
 
@@ -87,6 +99,7 @@ func New(sessions sessionSource, sink activitySink, runtime outputReader, agents
 		clock:       cfg.Clock,
 		logger:      cfg.Logger,
 		startAfter:  cfg.StartAfter,
+		rechecks:    cfg.Rechecks,
 	}
 	if o.tick <= 0 {
 		o.tick = DefaultTickInterval
@@ -137,9 +150,20 @@ func (o *Observer) Poll(ctx context.Context) error {
 	}
 	now := o.clock()
 	for _, session := range sessions {
-		o.reconcile(ctx, session, now)
+		o.reconcileSession(ctx, session, now)
 	}
 	return nil
+}
+
+// reconcileSession turns a panic while reading one session's pane into a
+// skipped tick for that session, instead of stopping the observer.
+func (o *Observer) reconcileSession(ctx context.Context, session domain.SessionRecord, now time.Time) {
+	defer func() {
+		if r := recover(); r != nil {
+			o.logger.Error("activity observer: reconciliation panicked", "session", session.ID, "panic", r)
+		}
+	}()
+	o.reconcile(ctx, session, now)
 }
 
 func (o *Observer) reconcile(ctx context.Context, session domain.SessionRecord, now time.Time) {
@@ -176,7 +200,7 @@ func (o *Observer) reconcile(ctx context.Context, session domain.SessionRecord, 
 				return
 			}
 		} else if session.Activity.State != domain.ActivityActive || session.Activity.LastActivityAt.IsZero() ||
-			now.Sub(session.Activity.LastActivityAt) < o.staleAfter {
+			(now.Sub(session.Activity.LastActivityAt) < o.staleAfter && !o.recheckDue(session.ID, now)) {
 			return
 		}
 	} else if session.Activity.State != domain.ActivityActive &&
@@ -194,6 +218,10 @@ func (o *Observer) reconcile(ctx context.Context, session domain.SessionRecord, 
 	}
 	if available && (requiresViewport || requiresRendered || options.PreferStyledOutput) {
 		output, err = reader.GetStyledOutput(ctx, handle, o.outputLines)
+		if err != nil && options.RawOutputFallback && !requiresViewport && !requiresRendered &&
+			errors.Is(err, ports.ErrStyledTerminalOutputUnavailable) {
+			output, err = o.runtime.GetOutput(ctx, handle, o.outputLines)
+		}
 	} else {
 		output, err = o.runtime.GetOutput(ctx, ports.RuntimeHandle{ID: session.Metadata.RuntimeHandleID}, o.outputLines)
 	}
@@ -248,4 +276,8 @@ func (o *Observer) reconcile(ctx context.Context, session domain.SessionRecord, 
 	if err != nil {
 		o.logger.Error("activity observer: reconciliation failed", "session", session.ID, "err", err)
 	}
+}
+
+func (o *Observer) recheckDue(id domain.SessionID, now time.Time) bool {
+	return o.rechecks != nil && o.rechecks.TerminalActivityRecheckDue(id, now)
 }

@@ -2,6 +2,7 @@ import type { components } from "../../../api/schema";
 import type {
 	ControllerState,
 	ConversationActivity,
+	ConversationContentSummary,
 	ConversationItem,
 	ConversationMessage,
 	ConversationSnapshot,
@@ -38,6 +39,19 @@ const TURN_STATES: ReadonlySet<string> = new Set([
 	"cancelled",
 ]);
 
+/** The excerpts a side turn was sent with, as its user message's content. */
+export function sideTurnContent(turn: SideTurn | undefined): ConversationContentSummary[] {
+	return (turn?.references ?? []).map((ref) => ({
+		type: "excerpt",
+		annotationId: ref.id, annotationOrder: ref.order,
+		text: ref.selection,
+		comment: ref.comment || undefined,
+		sourceConversationId: ref.conversationId,
+		sourceMessageId: ref.messageId,
+		sourceRevision: ref.revision, snapshot: ref.snapshot,
+	}));
+}
+
 /** A side message in the main chat's shape; user turns carry their excerpts. */
 export function sideConversationMessage(message: SideMessage, turns: readonly SideTurn[]): ConversationMessage {
 	const user = message.role === "user";
@@ -53,17 +67,7 @@ export function sideConversationMessage(message: SideMessage, turns: readonly Si
 		text: message.text,
 		streaming: message.streaming,
 		createdAt: message.createdAt,
-		content: user
-			? (turns.find((turn) => turn.id === message.turnId)?.references ?? []).map((ref) => ({
-					type: "excerpt",
-					annotationId: ref.id, annotationOrder: ref.order,
-					text: ref.selection,
-					comment: ref.comment || undefined,
-					sourceConversationId: ref.conversationId,
-					sourceMessageId: ref.messageId,
-					sourceRevision: ref.revision, snapshot: ref.snapshot,
-				}))
-			: undefined,
+		content: user ? sideTurnContent(turns.find((turn) => turn.id === message.turnId)) : undefined,
 	};
 }
 

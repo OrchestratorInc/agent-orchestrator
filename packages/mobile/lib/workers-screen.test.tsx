@@ -88,7 +88,7 @@ vi.mock("./store", () => ({ useApp: () => ({
 }) }));
 vi.mock("./FreshnessLine", () => ({ FreshnessLine: "FreshnessLine" }));
 vi.mock("./useMachineFreshness", () => ({ useMachineFreshness: () => new Map() }));
-vi.mock("./useBoardFailure", () => ({ useBoardFailure: () => ({ icon: "wifi-off", title: "Can't connect", hint: "Try again" }) }));
+vi.mock("./useBoardFailure", () => ({ useBoardFailure: () => ({ icon: "wifi-off", title: "Can't connect", hint: "Try again" }), useBoardFailureKind: () => "unreachable" }));
 vi.mock("./UnpairedState", () => ({ UnpairedState: "UnpairedState" }));
 vi.mock("./ThemeProvider", () => ({
 	useTheme: () => fixtures.theme,
@@ -116,8 +116,8 @@ vi.mock("./frost", () => ({ useTabBarFrost: () => ({ inset: 0, frost: null }) })
 vi.mock("./largeTitle", async () => {
 	const React = await import("react");
 	return {
-		useLargeTitle: (_title: string, onScroll?: unknown, options?: { accessory?: React.ReactNode }) => fixtures.platform === "android"
-			? { header: null, edge: React.createElement("LargeTitleEdge", null, options?.accessory), onScroll, topInset: 0, accessory: null }
+		useLargeTitle: (_title: string, onScroll?: unknown, options?: { accessory?: React.ReactNode; backdrop?: string }) => fixtures.platform === "android"
+			? { header: null, edge: React.createElement("LargeTitleEdge", { backdrop: options?.backdrop }, options?.accessory), onScroll, topInset: 0, accessory: null }
 			: { header: null, edge: null, onScroll, topInset: 0, accessory: options?.accessory ?? null },
 	};
 });
@@ -350,6 +350,8 @@ describe("Workers filter menu", () => {
 			act(() => { renderer = create(<FleetScreen />); });
 			expect(pinned()).toHaveLength(1);
 			expect(inList()).toHaveLength(0);
+			// The default (lifted) frost: its tail comes up only once the list moves.
+			expect(renderer.root.findByType("LargeTitleEdge" as never).props.backdrop).toBeUndefined();
 			act(() => renderer.unmount());
 		}
 		act(() => { renderer = create(<FleetScreen />); });

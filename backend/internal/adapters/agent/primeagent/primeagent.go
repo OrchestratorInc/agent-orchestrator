@@ -5,13 +5,16 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
 	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/agentbase"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/binaryutil"
+	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/providerenv"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
@@ -26,8 +29,9 @@ type Plugin struct {
 	resolvedBinary string
 	runCommand     primeCommandRunner
 	// extensionFlag remembers, per binary, whether it accepts --extension.
-	extensionMu   sync.Mutex
-	extensionFlag map[string]bool
+	extensionMu      sync.Mutex
+	extensionFlag    map[string]bool
+	daemonSocketFlag map[string]bool
 }
 
 // New returns a ready-to-register Prime Agent adapter.
@@ -35,25 +39,46 @@ func New() *Plugin {
 	return &Plugin{}
 }
 
-// EmitsSemanticMessageAcceptance reports that AO's Prime Agent plugin includes
-// the accepted prompt text in its user-prompt-submit callback.
+// EmitsSemanticMessageAcceptance reports that AO learns the accepted prompt text:
+// from the user-prompt-submit callback, or from ObserveNativeSessions on 0.10.
 func (p *Plugin) EmitsSemanticMessageAcceptance() bool { return true }
 
 // AugmentRuntimeEnv points Prime Agent at AO's isolated profile so persistent
 // daemon/config state stays under AO_DATA_DIR instead of the user's normal
 // ~/.prime/agent profile.
 func (p *Plugin) AugmentRuntimeEnv(env map[string]string, dataDir string) {
+	providerenv.Capture(env)
+	setProfileEnv(env, dataDir)
+}
+
+// RuntimeCredentialEnv points work outside a session, such as model discovery,
+// at the profile sessions run with, so the model list offers the providers
+// signed in there rather than those in ~/.prime/agent.
+func (p *Plugin) RuntimeCredentialEnv(dataDir string, base map[string]string) map[string]string {
+	env := make(map[string]string, len(base)+2)
+	maps.Copy(env, base)
+	setProfileEnv(env, dataDir)
+	if len(env) == 0 {
+		return nil
+	}
+	return env
+}
+
+// setProfileEnv selects AO's Prime profile and its private daemon.
+func setProfileEnv(env map[string]string, dataDir string) {
 	dir, err := primeDataDir(dataDir)
 	if err != nil {
 		return
 	}
 	env[primeAgentCodingAgentDirEnv] = dir
+	env["PRIME_AGENT_DAEMON_SOCKET"] = filepath.Join(dir, "daemon.sock")
 }
 
 var _ adapters.Adapter = (*Plugin)(nil)
 var _ ports.Agent = (*Plugin)(nil)
 var _ ports.SemanticMessageAcceptanceSignaler = (*Plugin)(nil)
 var _ ports.AgentBinaryResolver = (*Plugin)(nil)
+var _ ports.AgentRuntimeCredentialEnv = (*Plugin)(nil)
 var _ ports.AgentNativeSessionTerminator = (*Plugin)(nil)
 var _ ports.ActiveTurnSteerer = (*Plugin)(nil)
 var _ ports.SubmitActivitySignaler = (*Plugin)(nil)
@@ -102,7 +127,7 @@ func (p *Plugin) GetLaunchCommand(ctx context.Context, cfg ports.LaunchConfig) (
 	if cfg.Prompt != "" {
 		cmd = append(cmd, "--", cfg.Prompt)
 	}
-	return cmd, nil
+	return providerenv.Command(cmd, cfg.Env), nil
 }
 
 func (p *Plugin) baseCommand(ctx context.Context, dataDir, systemPrompt, systemPromptFile string, cfg ports.AgentConfig) ([]string, error) {
@@ -120,6 +145,14 @@ func (p *Plugin) baseCommand(ctx context.Context, dataDir, systemPrompt, systemP
 	}
 
 	cmd := []string{binary, "--session-dir", sessions}
+	// Older CLIs accept the environment fallback set by AugmentRuntimeEnv but
+	// reject this option. Imports still require verified flag support.
+	if p.requireDaemonSocket(ctx, binary) == nil {
+		cmd = append(cmd, "--daemon-socket", filepath.Join(filepath.Dir(sessions), "daemon.sock"))
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	if p.acceptsExtension(ctx, binary) {
 		cmd = append(cmd, "--extension", extensionPath)
 	}
@@ -173,19 +206,22 @@ func (p *Plugin) GetRestoreCommand(ctx context.Context, cfg ports.RestoreConfig)
 	if agentSessionID == "" {
 		return nil, false, nil
 	}
+	if cfg.Session.Metadata[ports.MetadataKeyImportSourceNativeID] != "" {
+		return p.importedRestoreCommand(ctx, cfg, agentSessionID)
+	}
 	cmd, err := p.baseCommand(ctx, cfg.DataDir, cfg.SystemPrompt, cfg.SystemPromptFile, cfg.Config)
 	if err != nil {
 		return nil, false, err
 	}
-	return append(cmd, "--resume", agentSessionID), true, nil
+	return providerenv.Command(append(cmd, "--resume", agentSessionID), cfg.Env), true, nil
 }
 
 // SteersActiveTurn reports that Prime queues input submitted during a turn as
 // steering for that active turn.
 func (p *Plugin) SteersActiveTurn() bool { return true }
 
-// EmitsSubmitActivity reports that the managed extension emits an active
-// signal when Prime starts processing a submitted prompt.
+// EmitsSubmitActivity reports that AO sees a submitted prompt go active: through
+// the managed extension, or through ObserveNativeSessions on 0.10.
 func (p *Plugin) EmitsSubmitActivity() bool { return true }
 
 // EmitsBlockedActivity is false because Prime has no lifecycle signal with the
@@ -248,6 +284,7 @@ func (p *Plugin) InvalidateBinaryResolution() {
 	// A binary replaced in place may have changed its flags too.
 	p.extensionMu.Lock()
 	p.extensionFlag = nil
+	p.daemonSocketFlag = nil
 	p.extensionMu.Unlock()
 }
 

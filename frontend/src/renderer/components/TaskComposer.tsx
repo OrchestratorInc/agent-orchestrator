@@ -12,7 +12,7 @@ import { useTranslation } from "react-i18next";
 import { RequiredAgentField } from "./CreateProjectAgentSheet";
 import type { ApprovalMode, ChatModel, TurnSettings } from "../types/conversation";
 import { AGENT_OPTIONS, agentLabel } from "../lib/agent-options";
-import { CHAT_SWITCH_TARGETS } from "../lib/agent-switch-targets";
+import { chatSwitchTargets } from "../lib/agent-switch-targets";
 import type { components } from "../../api/schema";
 import { apiClient, apiErrorCode, apiErrorMessage } from "../lib/api-client";
 import { clientForHost } from "../lib/host-clients";
@@ -39,7 +39,7 @@ import { useCloudOrg } from "../hooks/useCloudOrg";
 import { useCloudOrchestratorModel } from "../hooks/useCloudOrchestratorModel";
 import { useProviderConnections } from "../hooks/useProviderConnections";
 import { CLOUD_AGENT_PROVIDERS, cloudAgentInfos, connectedCredentialType, credentialModelScope } from "../lib/cloud-agents";
-import { CloudTaskFilesNeedChatError, CloudTaskFilesUndeliveredError, createCloudChatSessionWithFiles, createCloudSession } from "../lib/cloud-session-create";
+import { CloudTaskFilesNeedChatError, CloudTaskFilesUndeliveredError, createCloudChatAgentWithFiles, createCloudChatSessionWithFiles, createCloudSession } from "../lib/cloud-session-create";
 import { uploadCloudAttachment } from "../lib/cloud-attachments";
 import { readBlobAsBase64, toWireAttachments } from "../lib/attachment-uploads";
 import { MAX_CLOUD_CP_BINARY_BYTES } from "../../shared/cloud-binary";
@@ -47,7 +47,7 @@ import { reportCloudSessionCreateRequested } from "../lib/cloud-telemetry";
 import { rememberStandaloneAgent } from "../lib/cloud-standalone-agents";
 import { cloudDefaultModel, cloudModelLabel, isConcreteModelID, isModelSelectable, modelChoiceLabel, splitClaudeModels, withoutLocalAvailability } from "../lib/agent-model-choices";
 import { collapseModelVariants, findModelVariant, listsModelVariants, pickModelVariant } from "../lib/model-variants";
-import { ToggleRow } from "./chat/AgentSwitchPicker";
+import { autoCompactKind, ToggleRow } from "./chat/AgentSwitchPicker";
 import { fallbackEffort } from "../lib/effort";
 import {
 	buildRankedAgentOptions,
@@ -99,6 +99,9 @@ type CreateTaskInput = {
 	accountId?: string;
 	attachments?: FileAttachmentPayload[];
 	taskPreparation?: string;
+	/** A local Chat task's starting Fast mode and auto-compaction. */
+	fastMode?: boolean;
+	autoCompactWindow?: TurnSettings["autoCompactWindow"];
 };
 
 const CHAT_PREFLIGHT_CODES = new Set([
@@ -176,6 +179,7 @@ export function resetKeptTaskPreparationsForTests(): void {
 }
 
 class TaskCreateError extends Error {
+	readonly telemetryCode: string = "TASK_CREATE_ERROR";
 	constructor(
 		message: string,
 		readonly code?: string,
@@ -224,6 +228,8 @@ export type LaunchReplay = {
 	approvalMode?: ApprovalMode;
 	mode?: "chat" | "tui";
 	accountId?: string;
+	fastMode?: boolean;
+	autoCompactWindow?: TurnSettings["autoCompactWindow"];
 };
 
 /**
@@ -254,6 +260,9 @@ export function useTaskLaunch({ projectId, hostId }: {
 	const [effortTouched, setEffortTouched] = useState(false);
 	// Only a permission the user picks is sent; otherwise the project's own applies.
 	const [approvalMode, setApprovalMode] = useState<ApprovalMode>();
+	// A Chat task's starting Fast mode and auto-compaction; an agent change resets them.
+	const [fastMode, setFastMode] = useState(false);
+	const [autoCompactWindow, setAutoCompactWindow] = useState<TurnSettings["autoCompactWindow"]>();
 	const [isSubmitting, setIsSubmitting] = useState(false);
 	const [error, setError] = useState<string | undefined>();
 	const [status, setStatus] = useState<string | undefined>();
@@ -320,12 +329,11 @@ export function useTaskLaunch({ projectId, hostId }: {
 		async (input: CreateTaskInput): Promise<string> => {
 			try {
 				const files = input.attachments ?? [];
-				// Files ride the first message of a Chat session (createCloudChatSessionWithFiles),
-				// on a control plane that takes them. A standalone agent starts without
-				// them: its own project comes with its session, and a start the files
-				// did not reach would leave that project behind.
+				// Files ride the first message of a Chat session, in a project
+				// (createCloudChatSessionWithFiles) or of its own (createCloudChatAgentWithFiles),
+				// on a control plane that takes them.
 				// Both are final refusals (a code), so the page hands the task back to change.
-				if (files.length > 0 && (isCloudStandalone || cloudOffering.maxAttachmentBytes === undefined)) {
+				if (files.length > 0 && cloudOffering.maxAttachmentBytes === undefined) {
 					throw new TaskCreateError(t("newTask.cloudAttachmentsUnsupported", { defaultValue: "File attachments are not supported for cloud tasks yet." }), "CLOUD_ATTACHMENTS_UNSUPPORTED");
 				}
 				if (files.length > 0 && input.mode !== "chat") {
@@ -379,7 +387,11 @@ export function useTaskLaunch({ projectId, hostId }: {
 					// The agent and its project come back together; its project joins
 					// the list now so the Scratchpad shows the agent at once.
 					reportCloudSessionCreateRequested({ kind: "worker", projectId: "" });
-					const created = await cloudClient.createStandaloneAgent(orgId, body, createOptions);
+					const created = files.length > 0
+						? await createCloudChatAgentWithFiles(cloudClient, orgId, { ...body, interfaceMode: "chat" }, files,
+							(sessionId, file, signal) => uploadCloudAttachment(cloudBaseUrl, orgId, sessionId, { name: file.name || "attachment", data: file.data }, { signal }),
+							{ idempotencyKey: input.clientRequestId })
+						: await cloudClient.createStandaloneAgent(orgId, body, createOptions);
 					seedCreatedStandaloneAgent(queryClient, cloudBaseUrl, orgId, created.project);
 					rememberStandaloneAgent(created.session.id, created.project.id);
 					session = created.session;
@@ -446,6 +458,8 @@ export function useTaskLaunch({ projectId, hostId }: {
 						...(input.accountId ? { accountId: input.accountId } : {}),
 						...(wireAttachments ? { attachments: wireAttachments } : {}),
 						...(input.taskPreparation ? { taskPreparation: input.taskPreparation } : {}),
+						...(input.fastMode ? { fastMode: true } : {}),
+						...(input.autoCompactWindow ? { autoCompactWindow: input.autoCompactWindow } : {}),
 					},
 				});
 				if (error) {
@@ -498,6 +512,8 @@ export function useTaskLaunch({ projectId, hostId }: {
 					...(input.approvalMode ? { approvalMode: input.approvalMode } : {}),
 					...(input.accountId ? { accountId: input.accountId } : {}),
 					...(wireAttachments ? { attachments: wireAttachments } : {}),
+					...(input.fastMode ? { fastMode: true } : {}),
+					...(input.autoCompactWindow ? { autoCompactWindow: input.autoCompactWindow } : {}),
 				},
 			});
 			if (error) {
@@ -741,6 +757,8 @@ export function useTaskLaunch({ projectId, hostId }: {
 		setEffort("");
 		setModelTouched(false);
 		setEffortTouched(false);
+		setFastMode(false);
+		setAutoCompactWindow(undefined);
 	}, [agentDrafts, cloudBaseUrl, cloudConnectionsQuery.data, cloudOrg?.id, cloudUserId, isCloudProject, projectId, selectedAgent, selectedCloudConnection?.id, selectedCloudConnection?.updatedAt]);
 	// Local picks name this computer's models, which a Cloud worker may not run,
 	// and Cloud picks name the account's, which this computer may not. Moving
@@ -853,11 +871,24 @@ export function useTaskLaunch({ projectId, hostId }: {
 		() => (isCloudProject ? withoutLocalAvailability(localOfferedModels) : localOfferedModels),
 		[isCloudProject, localOfferedModels],
 	);
+	// A model the project pins that the account's list lacks (Codex lists only the
+	// models an account offers) stays selectable, with a note, rather than reading
+	// as a bare id with no row behind it. The agent still decides at launch (#5679).
+	const unlistedProjectModel = !isCloudProject && localCatalog && isConcreteModelID(projectModelForSelectedAgent) &&
+		!offeredModels.some((item) => item.id === projectModelForSelectedAgent)
+		? projectModelForSelectedAgent
+		: "";
+	const pinnedNote = t("settings.models.pinnedNotListed", { agent: agentLabel(selectedAgent) });
+	const localModels = useMemo(() => {
+		if (unlistedProjectModel === "") return offeredModels;
+		const pinned: AgentModelOption & { note: string } = { id: unlistedProjectModel, label: unlistedProjectModel, isDefault: false, note: pinnedNote };
+		return [...offeredModels, pinned];
+	}, [offeredModels, pinnedNote, unlistedProjectModel]);
 	const localModelCatalog: TaskComposerModelCatalog | undefined = localCatalog
 		? {
 				allowCustom: localCatalog.allowCustom,
 				customModelEntry: localCatalog.customModelEntry,
-				models: offeredModels,
+				models: localModels,
 				refreshError: localCatalog.refreshError,
 				refreshState: localCatalog.refreshState,
 				retryAt: localCatalog.retryAt,
@@ -961,6 +992,14 @@ export function useTaskLaunch({ projectId, hostId }: {
 				selectedModelOrMode !== catalogDefaultOption || isConcreteModelID(projectModelOrMode) ||
 				(!catalogUsesModes && !projectModelOrMode)
 			) ? selectedModelOrMode : undefined;
+	// A local task starts its Chat with these: Fast mode where the model has it, and
+	// the agent's own compaction where AO can set it. A Cloud task has neither.
+	const startModel = catalogModels.find((item) => item.id === selectedModelOrMode) ?? catalogModels.find((item) => item.isDefault);
+	const requestedFast = !isCloudProject && fastMode && Boolean(startModel?.supportsFast) ? true : undefined;
+	const compactKind = isCloudProject ? undefined : autoCompactKind(selectedAgent, selectedModelOrMode || startModel?.id);
+	const requestedAutoCompact = compactKind && (compactKind === "window" ? autoCompactWindow !== "off" : autoCompactWindow === "off")
+		? autoCompactWindow
+		: undefined;
 	// An effort the user chose for this project and agent. A Cloud project's
 	// saved before choices were marked may never have been chosen (a launch
 	// saved the level shown), so it applies only where nothing else names one.
@@ -1270,6 +1309,8 @@ export function useTaskLaunch({ projectId, hostId }: {
 					mode: replay.mode ?? (isCloudProject ? settings?.defaultSessionMode : undefined),
 					approvalMode: replay.approvalMode,
 					accountId: replay.accountId,
+					fastMode: replay.fastMode,
+					autoCompactWindow: replay.autoCompactWindow,
 				} : {
 					agent: selectedAgent ? (selectedAgent as CreateTaskInput["agent"]) : undefined,
 					model: requestedModel,
@@ -1280,6 +1321,8 @@ export function useTaskLaunch({ projectId, hostId }: {
 					mode: interfaceMode ?? (isCloudProject ? settings?.defaultSessionMode : undefined),
 					approvalMode: requestedApproval ?? launchApproval,
 					accountId,
+					fastMode: requestedFast,
+					autoCompactWindow: requestedAutoCompact,
 				}),
 				attachments: attachmentPayloads.length > 0 ? attachmentPayloads : undefined,
 				taskPreparation: submittedPreparation || undefined,
@@ -1360,7 +1403,7 @@ export function useTaskLaunch({ projectId, hostId }: {
 					} else message = t("newTask.selectedEffortUnsupported", { defaultValue: "The selected effort is unavailable. Choose another level before starting." });
 				} else if (err.code === "AGENT_BINARY_NOT_FOUND") {
 					setErrorAction("install-agent");
-					message = t("newTask.agentNotInstalled", { defaultValue: "This agent is not installed. Open Agent Harnesses settings to install it, then try again." });
+					message = t("newTask.agentNotInstalled", { defaultValue: "This agent is not installed. Open Agents settings to install it, then try again." });
 				} else if (err.code === "DEFAULT_BRANCH_UNRESOLVED") {
 					message = t("newTask.branchUnresolved", { defaultValue: "Choose a base branch in project settings, then start again." });
 				} else if (err.code === "BRANCH_ALREADY_EXISTS") {
@@ -1402,6 +1445,8 @@ export function useTaskLaunch({ projectId, hostId }: {
 		setEffort("");
 		setModelTouched(false);
 		setEffortTouched(false);
+		setFastMode(false);
+		setAutoCompactWindow(undefined);
 	};
 
 	// The agents the new chat page's picker offers, ranked as in New Task. Locally only
@@ -1419,8 +1464,9 @@ export function useTaskLaunch({ projectId, hostId }: {
 		});
 		if (!agents) return ranked.map(({ id, label }) => ({ id, label }));
 		const runs = hostId ? isLaunchableAgent : startsLocally;
+		const chatAgents = chatSwitchTargets(settings?.chatHarnesses);
 		const offeredForSetup = (agent: AgentInfo) => !isCloudProject
-			&& ((CHAT_SWITCH_TARGETS as readonly string[]).includes(agent.id) || agent.authentication.state === "unauthorized");
+			&& (chatAgents.includes(agent.id) || agent.authentication.state === "unauthorized");
 		return ranked.flatMap((agent) => {
 			if (runs(agent)) return [{ id: agent.id, label: agent.label }];
 			if (!offeredForSetup(agent)) return [];
@@ -1429,7 +1475,7 @@ export function useTaskLaunch({ projectId, hostId }: {
 				: t("agentSelector.needsSetup");
 			return [{ id: agent.id, label: agent.label, unavailable }];
 		});
-	}, [agentCatalog?.agents, cloudAgents, hostId, isCloudProject, t]);
+	}, [agentCatalog?.agents, cloudAgents, hostId, isCloudProject, settings?.chatHarnesses, t]);
 	const catalogProjectId = isCloudProject || isStandalone ? "" : projectId ?? "";
 	// A pick from the picker's other agents: that agent, with the model and effort chosen
 	// alongside it, if any. Its catalog is cached, since the picker lists its models.
@@ -1461,19 +1507,28 @@ export function useTaskLaunch({ projectId, hostId }: {
 	const orchestratorModelHint = orchestratorModelIsValid
 		? { id: orchestratorModelForSelectedAgent, label: t("newTask.sameAsOrchestrator") }
 		: undefined;
-	const chatModels = useMemo<ChatModel[]>(() => catalogModels.map((item) => ({
-		id: item.id,
-		displayName: item.id === "auto" ? t("settings.models.autoRouteLabel") : catalogUsesModes ? modelChoiceLabel(item) : item.label,
-		default: Boolean(item.isDefault),
-		efforts: item.efforts,
-		defaultEffort: item.defaultEffort,
-		...(orchestratorModelHint?.id === item.id ? { hint: orchestratorModelHint.label } : {}),
-	})), [catalogModels, catalogUsesModes, orchestratorModelHint?.id, orchestratorModelHint?.label, t]);
+	// The project's off-catalog pin is listed here too, so /new can re-select it, but
+	// it is never the default and stays out of the catalog the automatic picks read.
+	const chatModels = useMemo<ChatModel[]>(() => [
+		...catalogModels.map((item) => ({
+			id: item.id,
+			displayName: item.id === "auto" ? t("settings.models.autoRouteLabel") : catalogUsesModes ? modelChoiceLabel(item) : item.label,
+			default: Boolean(item.isDefault),
+			efforts: item.efforts,
+			defaultEffort: item.defaultEffort,
+			...(item.supportsFast && !isCloudProject ? { supportsFast: true } : {}),
+			...(orchestratorModelHint?.id === item.id ? { hint: orchestratorModelHint.label } : {}),
+		})),
+		...(unlistedProjectModel !== "" && !catalogModels.some((item) => item.id === unlistedProjectModel)
+			? [{ id: unlistedProjectModel, displayName: unlistedProjectModel, default: false, hint: pinnedNote }]
+			: []),
+	], [catalogModels, catalogUsesModes, isCloudProject, orchestratorModelHint?.id, orchestratorModelHint?.label, pinnedNote, t, unlistedProjectModel]);
 	const turnSettings: TurnSettings = {
 		model: (selectedModel || selectedMode) || undefined,
 		reasoningEffort: showEffort ? effectiveEffort || undefined : undefined,
 		// Display the inherited policy even when the daemon applies it at launch.
 		approvalMode: effectiveApproval,
+		...(requestedFast ? { fastMode: true } : {}),
 	};
 	const chooseTurnSettings = (next: TurnSettings) => {
 		if ((next.model ?? "") !== (turnSettings.model ?? "")) {
@@ -1492,6 +1547,7 @@ export function useTaskLaunch({ projectId, hostId }: {
 			setEffortTouched(true);
 		}
 		if (next.approvalMode && next.approvalMode !== turnSettings.approvalMode) setApprovalMode(next.approvalMode);
+		if (Boolean(next.fastMode) !== Boolean(turnSettings.fastMode)) setFastMode(Boolean(next.fastMode));
 	};
 
 	return {
@@ -1505,6 +1561,8 @@ export function useTaskLaunch({ projectId, hostId }: {
 			approvalMode: launchApproval,
 			mode: submitMode,
 			accountId,
+			fastMode: requestedFast,
+			autoCompactWindow: requestedAutoCompact,
 		}),
 		account: accountProvider && !isCloudProject ? {
 			provider: accountProvider,
@@ -1525,7 +1583,7 @@ export function useTaskLaunch({ projectId, hostId }: {
 		error,
 		status,
 		errorAction: errorAction === "install-agent" ? {
-			label: t("newTask.openHarnessSettings", { defaultValue: "Open Agent Harnesses" }),
+			label: t("newTask.openHarnessSettings", { defaultValue: "Open Agents settings" }),
 			onClick: () => openGlobalSettings("harness", { focusAgentId: selectedAgent, ...(hostId ? { hostId } : {}), harnessView: "local", preserveProject: true }),
 		} : errorAction === "choose-branch" ? {
 			label: t("newTask.chooseNewBranch", { defaultValue: "Choose new branch" }),
@@ -1545,7 +1603,7 @@ export function useTaskLaunch({ projectId, hostId }: {
 		remoteLoadError,
 		// "Set one up in Settings" gets the way there. A remote host's agents are set up on that host.
 		remoteLoadErrorAction: !hostId && remoteLoadError === t("newTask.noReadyAgent") ? {
-			label: t("newTask.openHarnessSettings", { defaultValue: "Open Agent Harnesses" }),
+			label: t("newTask.openHarnessSettings", { defaultValue: "Open Agents settings" }),
 			onClick: () => openGlobalSettings("harness", { harnessView: isCloudProject ? "cloud" : "local", preserveProject: true }),
 		} : undefined,
 		modelWarning,
@@ -1630,6 +1688,10 @@ export function useTaskLaunch({ projectId, hostId }: {
 		approvalModes: usesChatPermissions ? chatPermissionModes ?? [] : undefined,
 		turnSettings,
 		chooseTurnSettings,
+		// The agent's own compaction for a local task, where AO can set it; it starts with it.
+		autoCompact: compactKind
+			? { value: requestedAutoCompact, beforeStart: true, onChange: setAutoCompactWindow }
+			: undefined,
 		agentChoices,
 		catalogProjectId,
 		// A Cloud task's organization: the agent switch lists Cloud's models for the account.

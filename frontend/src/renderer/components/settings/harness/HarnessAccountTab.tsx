@@ -70,8 +70,9 @@ export function HarnessAccountTab({ details, hostId, cloud, authWorkflowActive, 
 	const updateBlocked = Boolean(blockedBy);
 	// Subscription accounts are for local Claude Code and Codex.
 	const accountProvider = isInstalled ? agentAccountProviderFor(details.agentId) : null;
-	// The running job's steps stay in the Installation card until it finishes on Done.
-	const justFinished = useInstallJustFinished(job);
+	// The running job's steps stay in the Installation card until it finishes on
+	// Done. Done needs readiness to confirm the harness is installed, not just the job.
+	const justFinished = useInstallJustFinished(job) && isInstalled && !failed;
 	const stage = justFinished ? "done" : installStage(job);
 	// Progress reads as a solid state, not a greyed-out action.
 	const progress = (label: string) => <span role="status"><Button type="button" size="default" variant="secondary" className="min-w-20 disabled:opacity-100" aria-busy="true" disabled><LoaderCircle className="animate-spin" aria-hidden="true" />{label}</Button></span>;
@@ -198,7 +199,9 @@ export function HarnessAccountTab({ details, hostId, cloud, authWorkflowActive, 
 				{job?.expectedDestination ? <p className="break-all"><span className="font-medium text-settings-label">{t("settings.harness.expectedDestination")}:</span> {job.expectedDestination}</p> : null}
 				{job?.error ? <p className="mt-2 whitespace-pre-wrap text-error">{job.error}</p> : null}
 				{job?.output ? <pre className="settings-thin-scrollbar mt-2 max-h-40 overflow-auto overscroll-contain whitespace-pre-wrap break-words font-mono">{job.output}</pre> : null}
-				<Button type="button" data-harness-copy-diagnostics="" className="mt-2" size="sm" variant="secondary" onClick={() => job && onCopyDiagnostics(job)}><Copy aria-hidden="true" />{t("settings.harness.copyDiagnostics")}</Button>
+				<Button type="button" data-harness-copy-diagnostics="" className="mt-2" size="sm" variant="secondary" onClick={() => job && onCopyDiagnostics(job)}>
+					{copied ? <Check aria-hidden="true" /> : <Copy aria-hidden="true" />}{t(copied ? "settings.harness.copied" : "settings.harness.copyDiagnostics")}
+				</Button>
 			</div> : null}
 		</div> : null}
 	</div>;

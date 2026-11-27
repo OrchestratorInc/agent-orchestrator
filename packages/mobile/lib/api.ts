@@ -5,11 +5,13 @@ import type { ArchiveSummary } from "./archive/archiveSummary";
 import { authHeaders, httpBase, normalizeServerHost, type ServerConfig } from "./config";
 import type { DesktopTelemetryIdentity } from "./telemetry/telemetry";
 import { cachedInstallId, getInstallId } from "./installId";
+import { apiOperation } from "./apiOperation";
 import { captureMobileApiError, httpCategory } from "./sentry";
 import { noteRequestAnswered } from "./answeredRequests";
 import { UnreachableError } from "./connectionError";
 import type { AttentionLevel } from "./theme";
 import type { ApprovalMode } from "./spawnApproval";
+import type { ChatSkill } from "./chat/types";
 
 // ---- Types (subset of AO's DashboardSession we use on the phone) ------------
 
@@ -163,8 +165,8 @@ export type ProjectInfo = {
 export type ProjectDetail = ProjectInfo & {
 	agent?: string;
 	config?: {
-		agentConfig?: { model?: string; effort?: string; permissions?: string };
-		worker?: { agent?: string; agentConfig?: { model?: string; effort?: string; permissions?: string } };
+		agentConfig?: { model?: string; mode?: string; effort?: string; permissions?: string };
+		worker?: { agent?: string; agentConfig?: { model?: string; mode?: string; effort?: string; permissions?: string } };
 		reviewers?: { harness?: string; agentConfig?: { model?: string; mode?: string; effort?: string } }[];
 	};
 };
@@ -420,6 +422,7 @@ export const ATTACHMENT_REQUEST_TIMEOUT_MS = 11 * 60_000;
 // server is unreachable" need very different advice. The message keeps the
 // `${status} ${statusText}` prefix that call sites already match on.
 export class ApiError extends Error {
+	readonly telemetryCode: string = "API_ERROR";
 	constructor(
 		readonly status: number,
 		message: string,
@@ -485,10 +488,10 @@ async function req(cfg: ServerConfig, path: string, init?: RequestInit, timeoutM
 			// error envelope stalls. Never turn a 401 into a retryable timeout.
 		} else if ((e as { name?: string })?.name === "AbortError") {
 			// Timed out reaching the host (commonly a sleeping Tailscale peer).
-			captureMobileApiError(path, "timeout");
+			captureMobileApiError(apiOperation(init?.method, path), "timeout", undefined, undefined, undefined, cfg.hostId);
 			throw new UnreachableError("timeout", { cause: e });
 		} else {
-			captureMobileApiError(path, "offline");
+			captureMobileApiError(apiOperation(init?.method, path), "offline", undefined, undefined, undefined, cfg.hostId);
 			throw new UnreachableError("offline", { cause: e });
 		}
 	} finally {
@@ -510,9 +513,10 @@ async function req(cfg: ServerConfig, path: string, init?: RequestInit, timeoutM
 		} catch {
 			/* ignore */
 		}
-		// Server answered with an error: classify by status + daemon code, and tag
-		// the requestId so a mobile event pivots to the daemon's own capture.
-		captureMobileApiError(path, httpCategory(res.status), res.status, code, requestId);
+		// Server answered with an error: classify by status + daemon code, named
+		// by its route. The requestId stays on ApiError; the daemon's Sentry does
+		// not tag it, so sending it would correlate with nothing.
+		captureMobileApiError(apiOperation(init?.method, path), httpCategory(res.status), res.status, code, detail, cfg.hostId);
 		throw new ApiError(
 			res.status,
 			`${res.status} ${res.statusText}${detail ? ` - ${detail}` : ""}`,
@@ -702,6 +706,73 @@ export function previewFilePath(sessionId: string, path: string): string {
 	return `${API}/sessions/${encodeURIComponent(sessionId)}/preview/files/${path.split("/").map(encodeURIComponent).join("/")}`;
 }
 
+export type SessionDeviceLease = {
+	sessionId: string;
+	provider: string;
+	reason: string;
+	device: { id: string; name: string; platform: "ios" | "android"; version?: string; booted: boolean };
+};
+
+export type DeviceSummary = SessionDeviceLease["device"];
+
+/** The machine's device support: whether it is on, its devices, and which sessions hold which. */
+export type DeviceStatus = {
+	/** False while the desktop app's Developer mode is off: devices are a Developer mode preview. */
+	available: boolean;
+	enabled: boolean;
+	state: "off" | "installing" | "ready" | "error";
+	error?: string;
+	platforms: { platform: "ios" | "android"; available: boolean; reason?: string }[];
+	devices: DeviceSummary[];
+	leases: { sessionId: string; device: { id: string } }[];
+};
+
+export async function getDeviceStatus(cfg: ServerConfig, init?: Pick<RequestInit, "signal">): Promise<DeviceStatus> {
+	const res = await req(cfg, `${API}/devices`, init);
+	return (await res.json()) as DeviceStatus;
+}
+
+/** The simulator or emulator this session holds, or null. */
+export async function getSessionDevice(cfg: ServerConfig, id: string, init?: Pick<RequestInit, "signal">): Promise<SessionDeviceLease | null> {
+	const res = await req(cfg, `${API}/sessions/${encodeURIComponent(id)}/device`, init);
+	const data = await res.json();
+	return (data?.lease ?? null) as SessionDeviceLease | null;
+}
+
+/** Leases (and boots, when it is off) a device for the session. */
+export async function openSessionDevice(cfg: ServerConfig, id: string, device: { deviceId: string; platform: "ios" | "android" }): Promise<SessionDeviceLease | null> {
+	const res = await req(cfg, `${API}/sessions/${encodeURIComponent(id)}/device/open`, { method: "POST", body: JSON.stringify(device) });
+	const data = await res.json();
+	return (data?.lease ?? null) as SessionDeviceLease | null;
+}
+
+/** Releases the session's device; it keeps running unless `shutdown` powers it off too. */
+export async function closeSessionDevice(cfg: ServerConfig, id: string, options: { shutdown?: boolean } = {}): Promise<void> {
+	await req(cfg, `${API}/sessions/${encodeURIComponent(id)}/device/close`, { method: "POST", body: JSON.stringify({ shutdown: Boolean(options.shutdown) }) });
+}
+
+/**
+ * Presses a device button through the daemon's own driver. False when the
+ * provider leaves that button to the input socket (the daemon answers 409
+ * DEVICE_BUTTON_UNSUPPORTED), so the caller sends it there instead.
+ */
+export async function pressSessionDeviceButton(cfg: ServerConfig, id: string, button: "home" | "back" | "recents"): Promise<boolean> {
+	try {
+		await req(cfg, `${API}/sessions/${encodeURIComponent(id)}/device/button`, { method: "POST", body: JSON.stringify({ button }) });
+		return true;
+	} catch (cause) {
+		if (cause instanceof ApiError && cause.code === "DEVICE_BUTTON_UNSUPPORTED") return false;
+		throw cause;
+	}
+}
+
+export type DeviceStreamQuality = "high" | "balanced" | "low";
+
+/** Sets how much the session's device stream costs the link; the daemon resets it when the lease ends. */
+export async function setSessionDeviceQuality(cfg: ServerConfig, id: string, quality: DeviceStreamQuality): Promise<void> {
+	await req(cfg, `${API}/sessions/${encodeURIComponent(id)}/device/quality`, { method: "POST", body: JSON.stringify({ quality }) });
+}
+
 /** The daemon's route for a file in a session's artifact folder, each segment escaped. */
 export function previewArtifactPath(sessionId: string, entry: string): string {
 	return `${API}/sessions/${encodeURIComponent(sessionId)}/preview/artifacts/${entry.split("/").map(encodeURIComponent).join("/")}`;
@@ -812,6 +883,7 @@ export function artifactMarkdownImageSource(cfg: ServerConfig, sessionId: string
  */
 /** A text read stopped at its limit: the file is larger than the viewer loads. */
 export class ArtifactTextTooLargeError extends Error {
+	readonly code: string = "ARTIFACT_TEXT_TOO_LARGE_ERROR";
 	constructor() {
 		super("This file is too large to load as text.");
 		this.name = "ArtifactTextTooLargeError";
@@ -979,6 +1051,9 @@ export async function getTelemetryIdentity(cfg: ServerConfig): Promise<DesktopTe
 		cloudUserId: str(data?.cloudUserId),
 		githubLogin: str(data?.githubLogin),
 		optedOut: data?.optedOut === true,
+		...(typeof data?.isSignedIn === "boolean" ? { isSignedIn: data.isSignedIn } : {}),
+		...(typeof data?.lifetimeSessions === "number" ? { lifetimeSessions: data.lifetimeSessions } : {}),
+		daemonVersion: str(data?.daemonVersion),
 	};
 }
 
@@ -1038,6 +1113,24 @@ export async function getAgentModels(cfg: ServerConfig, agent: string, projectId
 		if (!discovering || signal?.aborted) return catalog;
 		await pollDelay(signal);
 		if (signal?.aborted) return catalog;
+	}
+}
+
+/**
+ * The skills an agent offers in a project before any session of it runs, read
+ * by the machine from the agent's own skill folders: the new task page's "/"
+ * list. Without a project only the user's own skills come back. A machine on a
+ * version without this route answers 404, which lists none.
+ */
+export async function getAgentSkills(cfg: ServerConfig, agent: string, projectId?: string): Promise<ChatSkill[]> {
+	const query = projectId ? `?projectId=${encodeURIComponent(projectId)}` : "";
+	try {
+		const res = await req(cfg, `${API}/agents/${encodeURIComponent(agent)}/skills${query}`);
+		const body = await res.json() as { skills?: ChatSkill[] };
+		return body.skills ?? [];
+	} catch (cause) {
+		if (cause instanceof ApiError && cause.status === 404) return [];
+		throw cause;
 	}
 }
 

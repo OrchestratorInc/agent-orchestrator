@@ -51,7 +51,7 @@ describe("spawn composer", () => {
 	// field rather than a row of chips stacked above it.
 	it("draws attachments inside the composer pill, over the field", () => {
 		expect(spawn).toContain("<ComposerAttachmentTray");
-		const pill = composer.slice(composer.indexOf("<View style={styles.composer}>"));
+		const pill = composer.slice(composer.indexOf("<View style={styles.composer}"));
 		expect(pill.indexOf("{attachments}")).toBeGreaterThan(0);
 		expect(pill.indexOf("{attachments}")).toBeLessThan(pill.indexOf("<TextInput"));
 		for (const controls of platformControls) {
@@ -81,7 +81,7 @@ describe("spawn composer", () => {
 		expect(finish).toContain('if (current !== "recording") return;');
 		expect(finish).toContain("device.stop();");
 		expect(finish.slice(finish.indexOf('if (current !== "recording") return;'))).not.toContain('setPhase("idle")');
-		expect(spawn).toContain('disabled={!selectedHostId || (!config && !cloudSelected) || !projectId || !harness || busy || modelLoading || loading || listening || voice.state === "transcribing" || Boolean(planBlock)}');
+		expect(spawn).toContain('disabled={!selectedHostId || (!config && !cloudSelected) || !projectId || !harness || busy || modelLoading || projectDetailsPending || loading || listening || voice.state === "transcribing" || Boolean(planBlock)}');
 	});
 
 	// The machine's catalog loads before a project is chosen, so a project is
@@ -107,9 +107,11 @@ describe("spawn composer", () => {
 		expect(changeProject.indexOf("loadedFor.current.project = undefined;")).toBeGreaterThan(0);
 		expect(changeProject.indexOf("setProjectDetail(undefined);")).toBeGreaterThan(0);
 		expect(changeProject.indexOf("loadedFor.current.project = undefined;")).toBeLessThan(changeProject.indexOf("setProjectDetail(undefined);"));
-		const chooseHost = between(spawn, "const chooseHost = ", "const changeProject = ");
-		expect(chooseHost).toContain("loadedFor.current.catalog = undefined;");
-		expect(chooseHost).toContain("loadedFor.current.project = undefined;");
+		// Leaving a machine, by hand or by the page's own choice, clears its loads.
+		const resetHostChoice = between(spawn, "const resetHostChoice = ", "const chooseHost = ");
+		expect(resetHostChoice).toContain("loadedFor.current.catalog = undefined;");
+		expect(resetHostChoice).toContain("loadedFor.current.project = undefined;");
+		expect(between(spawn, "const chooseHost = ", "const changeProject = ")).toContain("resetHostChoice();");
 	});
 
 	// The same connection back after an app switch loads nothing; another
@@ -210,7 +212,10 @@ describe("spawn draft", () => {
 	// A Cloud draft picked before Cloud loaded landed on a machine (or none) for good.
 	it("waits for Cloud before picking the machine for a Cloud draft", () => {
 		expect(spawn).toContain("const cloudResolved = Boolean(cloud) || (cloudState.status !== \"loading\" && cloudState.status !== \"connecting\");");
-		expect(spawn).toContain("}, [cloudResolved, configResolved, connectedHosts, currentHostId, draftRestored, hostStates, machineHosts, routeHostId]);");
+		// autoSpawnHostId holds a Cloud draft or route until Cloud has resolved.
+		const choose = between(spawn, "const auto = autoSpawnHostId({", "if (!auto.settled) return;");
+		expect(choose).toContain("cloudResolved,");
+		expect(spawn).toContain("}, [cloud, cloudResolved, configResolved, currentHostId, draftRestored, hostStates, machineHosts, phoneNetwork, routeHostId, selectedHostId]);");
 	});
 
 	// A Start sent with a picked account and restored without it sent another
@@ -236,7 +241,7 @@ describe("spawn draft", () => {
 	// Start stops rather than send a task whose draft has no id on the phone.
 	it("stops a Start whose draft save was dropped, and clears only its own draft once started", () => {
 		const send = spawn.slice(spawn.indexOf("const saved = await saveBeforeStart("), spawn.indexOf("if (projectId === STANDALONE_PROJECT)"));
-		expectBefore(send, "if (saved === \"dropped\") {\n\t\t\t\tholding.current = false;\n\t\t\t\thaptics.error();\n\t\t\t\tsetError(START_DROPPED_NOTICE);\n\t\t\t\tsetBusy(false);\n\t\t\t\treturn;\n\t\t\t}", "await spawn({ ...request, clientRequestId: sent.id });");
+		expectBefore(send, "if (saved === \"dropped\") {\n\t\t\t\tholding.current = false;\n\t\t\t\thaptics.error();\n\t\t\t\tsetError(START_DROPPED_NOTICE);\n\t\t\t\tsetBusy(false);\n\t\t\t\treturn;\n\t\t\t}", "await spawn({ ...request, model: sent.model, clientRequestId: sent.id });");
 		expect(send).toContain("void draftSaver.cancel().then(() => clearStartedSpawnDraft(sent.id)).catch(() => {});");
 		expect(spawn).not.toContain("then(clearSpawnDraft)");
 	});
@@ -253,7 +258,7 @@ describe("spawn draft", () => {
 			expect(dropped).not.toContain("spawn(");
 			// The only request a Start sends comes after the dropped check.
 			expect(onSpawn.match(/await spawn\(/g)).toHaveLength(1);
-			expectBefore(onSpawn, "if (saved === \"dropped\") {", "await spawn({ ...request, clientRequestId: sent.id });");
+			expectBefore(onSpawn, "if (saved === \"dropped\") {", "await spawn({ ...request, model: sent.model, clientRequestId: sent.id });");
 			expect(spawn).toContain("{error ? <Text accessibilityRole=\"alert\" style={styles.error}>{error}</Text> : null}");
 		});
 
@@ -262,7 +267,8 @@ describe("spawn draft", () => {
 		});
 
 		it("clears the notice on every edit the user makes to the form", () => {
-			expect(spawn).toContain("const edited = <A extends unknown[]>(change: (...args: A) => void) => (...args: A) => {\n\t\tsetError(errorAfterEdit);\n\t\tchange(...args);\n\t};");
+			expect(spawn).toContain("const edited = <A extends unknown[]>(change: (...args: A) => void) => (...args: A) => {\n\t\tsetError(errorAfterEdit);");
+			expect(between(spawn, "const edited = <A extends unknown[]>", "const clearModelOverride = ")).toContain("change(...args);\n\t};");
 			const controls = between(spawn, "<SpawnComposerControls", "onSpawn={() => { void onSpawn(); }}");
 			for (const prop of [
 				"onSelectHost={edited(chooseHost)}",
@@ -285,6 +291,8 @@ describe("spawn draft", () => {
 			for (const [, name, value] of handlers) {
 				// Opens the model sheet; the pick it answers with is wrapped below.
 				if (name === "onBrowseModels") continue;
+				// Reads the "/" list; a skill picked from it lands through onChangePrompt.
+				if (name === "onLoadSkills") continue;
 				expect(value, name).toMatch(/^(busy \? null : )?edited\(/);
 			}
 			expect(spawn).toContain("onSelect: edited((id: string) => selectAgentModel(agentId, id || \"__auto__\")),");
@@ -294,7 +302,7 @@ describe("spawn draft", () => {
 
 		it("leaves a Start that saved its draft to send the task as before", () => {
 			const sent = onSpawn.slice(onSpawn.indexOf("if (saved === \"dropped\") {"));
-			expectBefore(sent, "return;\n\t\t\t}\n\t\t\tconst session = await spawn({ ...request, clientRequestId: sent.id });", "router.replace({");
+			expectBefore(sent, "return;\n\t\t\t}\n\t\t\tconst session = await spawn({ ...request, model: sent.model, clientRequestId: sent.id });", "router.replace({");
 			expect(sent.slice(sent.indexOf("const session = await spawn(")).includes("START_DROPPED_NOTICE")).toBe(false);
 		});
 	});
@@ -322,11 +330,11 @@ describe("spawn draft", () => {
 	// Closed after the daemon took the task but before the draft was cleared,
 	// the restored draft's Start reuses the id and the daemon answers with that task.
 	it("keeps the request id with the draft before the request leaves, and reuses it once restored", () => {
-		const send = spawn.slice(spawn.indexOf("const payload = JSON.stringify(requestFields);"), spawn.indexOf("startedDraft.current = { prompt"));
+		const send = spawn.slice(spawn.indexOf("const payload = JSON.stringify({ ...requestFields, model: modelOverride(displayedModel, modelTouched) });"), spawn.indexOf("startedDraft.current = { prompt"));
 		expect(send).toContain("requestMatches(requestRef.current, payload, attachmentsRef.current)");
 		expect(send).toContain("attachments: attachmentsKey(attachmentsRef.current)");
 		expect(send.indexOf("const saved = await saveBeforeStart(draftSaver, { prompt, attachments: attachmentsRef.current, owner: draftOwner, selections: draftSelections, request: sent });")).toBeGreaterThan(0);
-		expect(send.indexOf("await saveBeforeStart(")).toBeLessThan(send.indexOf("await spawn({ ...request, clientRequestId: sent.id });"));
+		expect(send.indexOf("await saveBeforeStart(")).toBeLessThan(send.indexOf("await spawn({ ...request, model: sent.model, clientRequestId: sent.id });"));
 		expect(spawn).toContain("if (draft.request) requestRef.current = draft.request;");
 		// Compared by content: never by the attachments array object.
 		expect(spawn).not.toContain("requestRef.current?.attachments !== attachmentsRef.current");
@@ -350,11 +358,78 @@ describe("spawn draft", () => {
 		expect(spawn).toContain("if (isApprovalMode(picked.approvalMode)) setApprovalChoice(picked.approvalMode);");
 		expect(spawn).toContain("if (picked.effort) setEffort(picked.effort);");
 		// The machine waits for the draft, and goes back to the draft's own.
-		expect(spawn).toContain("if (!draftRestored) return;\n\t\tconst draftHostId = restoredHostId.current;");
-		// Unrouted, the restored draft's machine is waited for before another is picked.
-		expect(spawn).toContain("const awaitedHostId = routeHostId ?? draftHostId ?? undefined;");
-		expect(spawn).toContain("if (!spawnHostSelectionReady({ routeHostId: awaitedHostId, configResolved, hosts: hostStates, connectedMachineCount: machineHosts.length, cloudResolved })) return;");
-		expect(spawn).toContain("const preferredHostId = draftHostId && connectedHosts.some((host) => host.id === draftHostId) ? draftHostId : currentHostId ?? undefined;");
+		const choose = between(spawn, "if (hostSettled.current) return;", "const auto = autoSpawnHostId({");
+		expect(choose).toContain("if (!draftRestored) return;");
+		expect(spawn).toContain("draftHostId: restoredHostId.current ?? undefined,");
+	});
+
+	// Back from the background every machine is reconnecting. The page used to
+	// pick once, then: no machine, another machine or Cloud, and kept it after
+	// the default came back. It now keeps choosing (autoSpawnHostId) until a
+	// machine is picked by hand or the one chosen can be used.
+	it("keeps choosing its machine until one is picked or can be used", () => {
+		const choose = between(spawn, "if (hostSettled.current) return;", "}, [cloud, cloudResolved");
+		expect(choose).toContain("const auto = autoSpawnHostId({");
+		expect(choose).toContain("if (!auto.settled) return;");
+		// Moving off a machine clears what was chosen for it, as a pick by hand does.
+		expect(choose).toContain("if (selectedHostId !== null) resetHostChoice();");
+		expect(choose).toContain("if (isCloudHost(auto.hostId) || machineHosts.some((host) => host.id === auto.hostId)) hostSettled.current = true;");
+		expect(between(spawn, "const chooseHost = (nextHostId: string) => {", "void selectSpawnHost(")).toContain("hostSettled.current = true;");
+	});
+
+	// An automatic move clears project, agent and model, so after a by-hand
+	// edit (every control and the prompt go through `edited`) it would send
+	// Start to a machine the person never picked, with choices they never made.
+	it("stops choosing its machine once the form is edited by hand", () => {
+		const edited = between(spawn, "const edited = <A extends unknown[]>", "const clearModelOverride = ");
+		expectBefore(edited, "formEdited.current = true;", "change(...args);");
+		for (const control of ["onSelectProject={edited(changeProject)}", "onSelectHarness={edited(selectAgent)}", "onSelectModel={edited(selectModel)}", "onChangePrompt={edited(setPrompt)}"]) {
+			expect(spawn).toContain(control);
+		}
+		// Dictation writes the prompt without `edited`, and its callback never
+		// sees a later selection, so it only marks the edit too.
+		expectBefore(between(spawn, "const voice = useVoiceInput({", "const listening ="), "formEdited.current = true;", "setPrompt((old) =>");
+		// The choosing effect reads the selection it is about to change, so an
+		// edit made before any machine was chosen never leaves it on none.
+		const choose = between(spawn, "if (hostSettled.current) return;", "const auto = autoSpawnHostId({");
+		expect(choose).toContain("if (formEdited.current && selectedHostId !== null) {\n\t\t\thostSettled.current = true;\n\t\t\treturn;\n\t\t}");
+	});
+
+	// A restored draft holds what the person chose for its machine (project,
+	// agent, model, the last Start's id). Restoring skips `edited`, so without
+	// this an automatic move cleared those choices and the saver wrote the empty
+	// ones over the draft, under the new machine.
+	it("keeps the machine a restored draft was written for", () => {
+		const restore = between(spawn, "const restoreDraft = () => {", "}).finally(");
+		expectBefore(restore, "if (promptRef.current || attachmentsRef.current.length) return;", "formEdited.current = true;");
+		expectBefore(restore, "formEdited.current = true;", "restoreSelections(draft);");
+	});
+
+	// The choosing effect runs before the project seed in the same commit. After
+	// a move, the seed still sees the old machine and its last project, and its
+	// write would replace the reset's: the new machine would start with the old
+	// machine's project id.
+	it("does not seed the old machine's project in the commit that moves the machine", () => {
+		expect(spawn).toContain("const selectHost = (hostId: string | null) => {\n\t\tselectionTarget.current = hostId;\n\t\tsetSelectedHostId(hostId);\n\t};");
+		const choose = between(spawn, "const auto = autoSpawnHostId({", "}, [cloud, cloudResolved");
+		expect(choose).toContain("selectHost(auto.hostId);");
+		expect(choose).not.toContain("setSelectedHostId(");
+		expect(spawn).toContain("void selectSpawnHost(nextHostId, { select: selectHost, persistDefault:");
+		const seed = between(spawn, "const lastProject = useLastProject(selectedHostId);", "const resolved = resolveSpawnProject(");
+		expect(seed).toContain("if (selectionTarget.current !== selectedHostId) return;");
+	});
+
+	// Chosen while it reconnects, a machine's credential is not proven yet.
+	it("sends its requests only through a connection the machine has answered on", () => {
+		expect(spawn).toContain("const config = provenSpawnConfig(provenConfig.current, liveConfig, selectedHost?.connection ?? \"closed\");");
+		expect(spawn).not.toContain("const config = selectedHostId && !cloudSelected ? configForHost(selectedHostId) : null;");
+	});
+
+	it("asks a machine that failed to connect again as soon as the page is open on it", () => {
+		const retry = between(spawn, "const retriedHost = useRef<string | null>(null);", "}, [cloudSelected, liveConfig");
+		expect(retry).toContain("spawnHostNeedsRetry(");
+		expect(retry).toContain("retriedHost.current = selectedHostId;");
+		expect(retry).toContain("void refreshHost(selectedHostId)");
 	});
 
 	it("saves the draft for the machine picked and the account signed in", () => {
@@ -372,5 +447,25 @@ describe("spawn draft", () => {
 			expect(change.indexOf(reset)).toBeGreaterThan(0);
 			expect(change.indexOf(reset)).toBeLessThan(change.indexOf("restoreDraft();"));
 		}
+	});
+});
+
+// A paired machine's model catalog is the machine's: its default never reflects
+// the project's pinned model. While the project's details load (getProject and
+// the catalog load at once), or after that load failed, the pin is unknown, and
+// sending the catalog default then ran a project pinned to opus on sonnet.
+describe("spawn model default and the project's pin", () => {
+	it("sends the default row's model only once the project's details are this project's", () => {
+		expect(spawn).toContain("const projectPinKnown = !projectId || projectId === STANDALONE_PROJECT || (projectDetailLoadedFor === projectId && projectDetail?.id === projectId);");
+		expect(spawn).toContain("defaultRowModelToSend({ catalog: defaultRowCatalog, projectPin: resolvedModel || resolvedMode, pinKnown: projectPinKnown })");
+	});
+
+	it("keeps Start off on a paired machine while the project's details load", () => {
+		expect(spawn).toContain("const projectDetailsPending = !cloudSelected && Boolean(projectId) && projectId !== STANDALONE_PROJECT && projectDetailLoadedFor !== projectId;");
+		expect(between(spawn, "<SpawnComposerControls", "/>\n\t\t\t</Animated.View>")).toMatch(/disabled=\{[^}]*\bprojectDetailsPending\b/);
+	});
+
+	it("drops the request a server refused, so the next Start is a new one", () => {
+		expectBefore(between(spawn, "} catch (e) {", "setBusy(false);"), "if (startRefused(e)) requestRef.current = undefined;", "setError(spawnErrorCopy(e));");
 	});
 });

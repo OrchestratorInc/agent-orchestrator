@@ -1,3 +1,5 @@
+import { useTelemetrySurface } from "../lib/ui-usage-telemetry";
+import { settingsSurface, type UiSurface } from "../lib/ui-surfaces";
 import type { AppIcon } from "./icons";
 import { Bot, Box, FolderGit2, KeyRound, Loader2, MonitorCog, Play, ScrollText, Share2, TriangleAlert, Wrench } from "@/components/app-icons";
 import * as Dialog from "@radix-ui/react-dialog";
@@ -42,6 +44,7 @@ import { fetchDevices, mobileDevicesQueryKey } from "./settings/MobileDevicesSec
 import { fetchPairingCode, mobilePairingCodeQueryKey, PAIRING_CODE_REFRESH_MS } from "../lib/mobile-pairing-code";
 import { findSettingsTarget, highlightSettingsTarget, SETTINGS_FOCUS_HIGHLIGHT_MS } from "../lib/settings-focus";
 import { useEdgeFade } from "../hooks/useEdgeFade";
+import { SettingsBrowserLinkContext, SettingsBrowserOverlay } from "./settings/SettingsBrowserOverlay";
 
 function initialProjectSaveState(): ProjectSettingsSaveState {
 	return { phase: "idle" };
@@ -328,6 +331,7 @@ function useSettingsLayer(settingsModal: SettingsModal | null) {
 		close: closeSettingsDialog,
 		title: activeLabel,
 		isBodyReady,
+		telemetrySurface: (displaySettings?.scope === "project" ? "settings_project" : settingsSurface(activeSection)) as UiSurface,
 		bodyKey: displaySettings?.scope === "project" ? refKey({ host: displaySettings.hostId ?? LOCAL_HOST, id: displaySettings.projectId }) : "global",
 		body: () => {
 			if (!isBodyReady) return <div aria-hidden="true" className="h-full" data-testid="settings-dialog-body-pending" />;
@@ -471,14 +475,25 @@ export function SettingsProvider({ children }: { children: ReactNode }) {
  * Settings page rendered inside the center panel, in place of the routed page:
  * shared page topbar above a centered, scrolling content column.
  */
+let nextSettingsBrowserRequestId = 0;
+
 export function SettingsPane() {
 	const page = useContext(SettingsPageContext);
 	const scrollerRef = useRef<HTMLDivElement>(null);
+	const [browserRequest, setBrowserRequest] = useState<{ id: number; url: string } | null>(null);
+	const openSettingsBrowser = useCallback((url: string) => {
+		setBrowserRequest({ id: ++nextSettingsBrowserRequestId, url });
+	}, []);
+	useEffect(() => {
+		if (!page) setBrowserRequest(null);
+	}, [page]);
 	useSettingsRowFocus(scrollerRef, page?.active ?? null);
 	useEdgeFade(scrollerRef, "y", [page?.active]);
+	useTelemetrySurface(page?.active.telemetrySurface ?? "settings_general", Boolean(page));
 	if (!page) return null;
 	const layer = page.active;
 	return (
+		<SettingsBrowserLinkContext.Provider value={openSettingsBrowser}>
 		<div className="flex min-h-0 flex-1 flex-col" data-testid="settings-page">
 			<PageTopbar
 				lead={
@@ -500,12 +515,17 @@ export function SettingsPane() {
 					key={entry.bodyKey}
 					ref={entry === layer ? scrollerRef : undefined}
 				>
-					<div className="settings-dialog-body mx-auto flex w-full max-w-6xl flex-col gap-4 px-6 pb-12 pt-6">
+					<div className="settings-dialog-body mx-auto flex w-full max-w-6xl flex-col gap-4 px-6 pb-12 pt-6" data-telemetry-surface={entry.telemetrySurface}>
 						{entry.body()}
 					</div>
 				</div>
 			))}
 		</div>
+		{browserRequest ? createPortal(
+			<SettingsBrowserOverlay key={browserRequest.id} request={browserRequest} onClose={() => setBrowserRequest(null)} />,
+			document.body,
+		) : null}
+		</SettingsBrowserLinkContext.Provider>
 	);
 }
 
@@ -554,10 +574,11 @@ function ProjectSettingsModal({ layer, covered }: { layer: SettingsLayerState; c
 	// body's tree (the page or anything it portals) and keep the dialog open
 	// for exactly that press. A press on the backdrop never passes through here.
 	const bodyPointerDown = useRef<Event | null>(null);
+	useTelemetrySurface(layer.telemetrySurface, !covered);
 	return (
 		<>
 		{createPortal(
-			<div className="contents" onPointerDownCapture={(event) => { bodyPointerDown.current = event.nativeEvent; }}>{layer.body()}</div>,
+			<div className="contents" data-telemetry-surface={layer.telemetrySurface} onPointerDownCapture={(event) => { bodyPointerDown.current = event.nativeEvent; }}>{layer.body()}</div>,
 			bodyHost,
 		)}
 		<Dialog.Root open={!covered} onOpenChange={(open) => { if (!open) layer.close(); }}>

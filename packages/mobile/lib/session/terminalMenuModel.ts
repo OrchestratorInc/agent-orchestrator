@@ -1,6 +1,6 @@
 import type { IOSSymbol } from "../symbols";
 
-export type TerminalMenuAction = "switch_chat" | "preview" | "files" | "artifacts" | "zoom_out" | "zoom_in" | "fit_width" | "archive" | "close_shell" | "stop_reviewer";
+export type TerminalMenuAction = "switch_chat" | "preview" | "device" | "files" | "artifacts" | "zoom_out" | "zoom_in" | "fit_width" | "archive" | "close_shell" | "stop_reviewer";
 
 /** Everything the terminal's "⋯" shows, as plain values, so the header is rebuilt only when one changes. */
 export type TerminalMenuState = {
@@ -14,6 +14,8 @@ export type TerminalMenuState = {
 	switchingToChat: boolean;
 	/** Something the agent produced is ready to preview. */
 	previewReady?: boolean;
+	/** The simulator or emulator this session holds, when it holds one. */
+	deviceName?: string;
 	/** Files in the session's artifact directory. */
 	artifactCount: number;
 	/** The terminal is live, so its view can zoom. */
@@ -49,6 +51,7 @@ export function terminalMenuSections(state: TerminalMenuState): TerminalMenuSect
 		? [
 			switchToChatItem(state),
 			{ action: "preview", label: "Preview", subtitle: state.previewReady ? "Ready to open" : undefined, icon: state.previewReady ? "globe.americas.fill" : "globe" },
+			...(state.deviceName ? [{ action: "device" as const, label: "Device", subtitle: state.deviceName, icon: "iphone" as const }] : []),
 			{ action: "files", label: "Files", icon: "doc.text.magnifyingglass" },
 			...(state.artifactCount ? [{ action: "artifacts" as const, label: `Artifacts (${state.artifactCount})`, icon: "doc.text" as const }] : []),
 		]

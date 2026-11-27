@@ -1,4 +1,5 @@
 import { Feather } from "../icons";
+import { useStableFunctionProps } from "../useStableFunctionProps";
 import * as Clipboard from "expo-clipboard";
 import * as Linking from "expo-linking";
 import { memo, useCallback, useContext, useEffect, useMemo, useRef, useState, type ComponentProps, type ReactNode } from "react";
@@ -65,7 +66,7 @@ import { InlineMessageEditor, type MessageEditDraft } from "./InlineMessageEdito
 import { JumpToLatest } from "./JumpToLatest";
 import { useFlagValue, type Flag } from "./flag";
 import { KeyboardMotionScope, useKeyboardMotion } from "./keyboardMotion";
-import { atTail, openingRow } from "./timelineScroll";
+import { atTail, followsAfterRest, openingRow, RESUME_SLOP, type Release } from "./timelineScroll";
 import { createFieldReveals, fieldRevealOffset, RevealFocusedField } from "./fieldReveal";
 
 /** The jump back to the newest message fades in and out rather than popping. */
@@ -104,12 +105,11 @@ import {
 	settledTurnItems,
 	readableConversationItems,
 	startupPlacement,
-	streamingCursorMessageId,
 	summarizeActivities,
 	type ActivityNode,
 	type ConversationGroup,
 } from "./timelineModel";
-import { iconSize, radius, type, space, touchTarget } from "../tokens";
+import { fontScaleCap, iconSize, radius, type, space, touchTarget } from "../tokens";
 import { useFilesNavigation } from "../files/navigation";
 import { userFacingError } from "../connectionError";
 import { SentResponseQuotes } from "./SentResponseQuotes";
@@ -123,7 +123,8 @@ import { accountHandoffNote } from "./usageLimit";
 import { TurnArtifacts, useTurnArtifactSource } from "./TurnArtifacts";
 import { turnResults } from "./turnArtifactsModel";
 import { ConversationHarness, LatestWorkerUpdates, OriginMessageView, WorkerSessionsProvider, WorkerUpdateRows } from "./AutomationMessage";
-import { humanVisibleText, latestWorkerUpdateKeys, piggybackedUpdates } from "./automationMessages";
+import { humanVisibleText, latestWorkerUpdateKeys, piggybackedUpdates, stripSenderPrefix } from "./automationMessages";
+import { isAutomationSteer, SteerNote } from "./SteerMessage";
 import { SessionStartupStatus } from "./SessionStartup";
 import type { SessionStartupView } from "../session/sessionStartup";
 
@@ -133,6 +134,28 @@ export type TimelineStartup = { view: SessionStartupView; visible: boolean; onRe
 type TimelineRow =
 	| { kind: "single"; key: string; items: [ConversationItem] }
 	| { kind: "activities"; key: string; items: ConversationActivity[] };
+
+/**
+ * The groups, with each one that has not changed since the last render kept as
+ * the same object: same key, same turn (and the daemon's turn it presents) and plan, and the same item objects
+ * (which the conversation keeps by identity while unchanged; see
+ * reuseUnchangedRows). A memoized turn then skips its render.
+ */
+function useStableGroups(groups: ConversationGroup[]): ConversationGroup[] {
+	const previous = useRef(new Map<string, ConversationGroup>());
+	const next = new Map<string, ConversationGroup>();
+	const stable = groups.map((group) => {
+		const old = previous.current.get(group.key);
+		const kept = old && old.turn === group.turn && old.sourceTurn === group.sourceTurn && old.plan === group.plan && old.turnId === group.turnId && old.anchor === group.anchor &&
+			old.items.length === group.items.length && old.items.every((item, index) => item === group.items[index])
+			? old
+			: group;
+		next.set(group.key, kept);
+		return kept;
+	});
+	previous.current = next;
+	return stable;
+}
 
 /** The conversation's rows; its user rows share one width (see `MenuRowWidthScope`). */
 export const ChatTimeline = memo(function ChatTimeline(props: ComponentProps<typeof Timeline>) {
@@ -266,6 +289,8 @@ function Timeline({
 	const latestFollow = useRef<() => void>(() => {});
 	useEffect(() => onKeyboardEnd(() => latestFollow.current()), [onKeyboardEnd]);
 	const dragging = useRef(false);
+	// Where the person's last drag let go (see `followsAfterRest`).
+	const releasedAt = useRef<Release | undefined>(undefined);
 	// Fixed when the list first draws (see `openingRow`); cleared while there is no list.
 	const openedAt = useRef<number | undefined>(undefined);
 	const [showJump, setShowJump] = useState(false);
@@ -304,7 +329,7 @@ function Timeline({
 	// Keyed on the signature, not the set: a new set with the same keys keeps the old one.
 	const latestUpdates = useMemo(() => latestKeys, [latestSignature]);
 	const plan = useMemo(() => conversationTimelineRenderPlan(snapshot, items), [items, snapshot.turns]);
-	const groups = plan.groups;
+	const groups = useStableGroups(plan.groups);
 	// iOS insets the list for the clear header itself (`contentInsetAdjustmentBehavior`);
 	// Android has no such inset, so its first message sat behind the header's frost.
 	const headerPad = Platform.OS === "ios" ? 0 : underHeader;
@@ -355,7 +380,11 @@ function Timeline({
 		else listRef.current?.scrollToEnd({ animated });
 	};
 	// The follow to the newest message that output and measuring rows ask for.
+	// It runs a frame after it was asked for, so it checks again: a drag that
+	// began in between has stopped the follow, and scrolling to the end then
+	// carried the person back mid-fling.
 	const followTail = () => {
+		if (!followsTail.current || dragging.current) return;
 		if (keyboardOffset !== undefined && keyboardMoving.value) {
 			followAfterKeyboard.current = true;
 			return;
@@ -402,6 +431,9 @@ function Timeline({
 		// would pull the list back while the person scrolls to read.
 		// eslint-disable-next-line react-hooks/exhaustive-deps
 	}, [editingTurnId]);
+
+	// Stable for the life of the list, so a memoized turn is not re-rendered by a new handler.
+	const rowHandlers = useStableFunctionProps({ onDecide, onResolveInput, onRollback, onFork, startEdit, cancelEdit, submitEdit, revealEdit, toggleWorked });
 
 	// Where the list was last scrolled to, for `revealField` when it cannot read
 	// the field's place in the content.
@@ -483,7 +515,7 @@ function Timeline({
 	}
 	openedAt.current ??= openingRow(groups.length, OPENING_ROWS);
 	const initialScrollIndex = Math.min(openedAt.current, groups.length - 1);
-	const settle = (event: NativeSyntheticEvent<NativeScrollEvent>) => {
+	const settle = (event: NativeSyntheticEvent<NativeScrollEvent>, released = false) => {
 		scrollOffset.current = event.nativeEvent.contentOffset.y;
 		// iOS reports the end of the list's own scrolls (the opening one, each
 		// follow) as momentum ending too. Only a drag decides whether to follow;
@@ -493,8 +525,13 @@ function Timeline({
 			return;
 		}
 		dragging.current = false;
-		followsTail.current = atTail(event.nativeEvent, keyboardInset.current);
+		const offset = event.nativeEvent.contentOffset.y;
+		const resting = atTail(event.nativeEvent, keyboardInset.current, RESUME_SLOP);
+		followsTail.current = released ? resting : followsAfterRest(releasedAt.current, offset, resting);
+		releasedAt.current = released ? { offset, atEnd: resting } : undefined;
 		setShowJump(!followsTail.current);
+		// A follow that resumes catches up on output that arrived meanwhile.
+		if (followsTail.current) requestAnimationFrame(followTail);
 	};
 	const placement = startupPlacement(groups, openingTurnId, Boolean(startup?.visible));
 	// A checklist no loaded turn can host sits at the live edge instead.
@@ -547,17 +584,19 @@ function Timeline({
 							// Content off screen can resize (a page measured ahead, earlier history
 							// loading in); what is on screen stays put on both platforms.
 							maintainVisibleContentPosition={{ minIndexForVisible: 0 }}
-							onScrollBeginDrag={() => { dragging.current = true; followsTail.current = false; }}
-							onScrollEndDrag={settle}
+							onScrollBeginDrag={() => { dragging.current = true; followsTail.current = false; releasedAt.current = undefined; }}
+							onScrollEndDrag={(event) => settle(event, true)}
 							onMomentumScrollBegin={() => { dragging.current = true; }}
 							onMomentumScrollEnd={settle}
 							onScroll={(event) => {
 								// Only the person's own scrolling stops the follow (see `followsTail`);
 								// passing the end without a drag, as a jump does, resumes it.
 								scrollOffset.current = event.nativeEvent.contentOffset.y;
-								const tail = atTail(event.nativeEvent, keyboardInset.current);
-								if (tail && !dragging.current) followsTail.current = true;
-								setShowJump(!followsTail.current && !tail);
+								// Whenever the list is not following, the jump to the newest message
+								// is offered, on this path and in `settle`.
+								const resting = atTail(event.nativeEvent, keyboardInset.current, RESUME_SLOP);
+								if (!dragging.current && resting) followsTail.current = true;
+								setShowJump(!followsTail.current && !resting);
 								notifyRenderViewport();
 							}}
 							scrollEventThrottle={100}
@@ -577,7 +616,8 @@ function Timeline({
 								contentHeight.current = height;
 								measureFill();
 								notifyRenderViewport();
-								if (followsTail.current) requestAnimationFrame(followTail);
+								// Not while the person scrolls: a drag or its fling owns the list.
+								if (followsTail.current && !dragging.current) requestAnimationFrame(followTail);
 								settleOpening();
 							}}
 							onScrollToIndexFailed={({ index, averageItemLength }) => {
@@ -593,23 +633,25 @@ function Timeline({
 							ListFooterComponent={standaloneStartup}
 							renderItem={({ item: group }) => <ConversationTurnGroup
 								group={group}
-								snapshot={snapshot}
+								sessionId={snapshot.sessionId}
+								conversationId={snapshot.conversationId}
+								canRollBack={Boolean(group.turn && group.endsTurn !== false && onRollback && canRollbackTurn(snapshot, group.turn))}
 								approvalPending={approvalPending}
 								inputPending={inputPending}
-								onDecide={onDecide}
-								onResolveInput={onResolveInput}
-								onRollback={onRollback}
-								onFork={onFork && (forkAnyTurn || group.turn?.id === latestForkTurnId) ? onFork : undefined}
+								onDecide={rowHandlers.onDecide}
+								onResolveInput={rowHandlers.onResolveInput}
+								onRollback={onRollback ? rowHandlers.onRollback : undefined}
+								onFork={onFork && group.endsTurn !== false && (forkAnyTurn || group.turn?.id === latestForkTurnId) ? rowHandlers.onFork : undefined}
 								editableTurns={edits?.editable}
-								onEditMessage={onEditMessage ? startEdit : undefined}
+								onEditMessage={onEditMessage ? rowHandlers.startEdit : undefined}
 								editDraft={editDraft}
-								onCancelEdit={cancelEdit}
-								onSubmitEdit={submitEdit}
-								onEditFocus={revealEdit}
+								onCancelEdit={rowHandlers.cancelEdit}
+								onSubmitEdit={rowHandlers.submitEdit}
+								onEditFocus={rowHandlers.revealEdit}
 								answeredBelow={answeredBelow}
 								workedOpen={openWorked.has(group.key)}
-								onToggleWorked={toggleWorked}
-								startup={placement === "turn" && group.turnId === openingTurnId ? startup : undefined}
+								onToggleWorked={rowHandlers.toggleWorked}
+								startup={placement === "turn" && group.turnId === openingTurnId && !group.continuesTurn ? startup : undefined}
 							/>}
 						/>
 						</RevealFocusedField.Provider>
@@ -628,9 +670,17 @@ function Timeline({
 	);
 }
 
-function ConversationTurnGroup({ group, snapshot, approvalPending, inputPending, onDecide, onResolveInput, onRollback, onFork, editableTurns, onEditMessage, editDraft, onCancelEdit, onSubmitEdit, onEditFocus, answeredBelow, workedOpen, onToggleWorked, startup }: {
+/**
+ * One turn's rows. Memoized, with its groups kept by identity (see
+ * useStableGroups) and its handlers stable, so a streamed word re-renders the
+ * turn it lands in and leaves every other turn on screen alone.
+ */
+const ConversationTurnGroup = memo(function ConversationTurnGroup({ group, sessionId, conversationId, canRollBack, approvalPending, inputPending, onDecide, onResolveInput, onRollback, onFork, editableTurns, onEditMessage, editDraft, onCancelEdit, onSubmitEdit, onEditFocus, answeredBelow, workedOpen, onToggleWorked, startup }: {
 	group: ConversationGroup;
-	snapshot: ConversationSnapshot;
+	sessionId: string;
+	conversationId: string;
+	/** Whether this turn's rollback is offered (canRollbackTurn). */
+	canRollBack: boolean;
 	approvalPending: boolean;
 	inputPending: boolean;
 	onDecide(requestId: string, decisionId: string): Promise<void>;
@@ -651,18 +701,20 @@ function ConversationTurnGroup({ group, snapshot, approvalPending, inputPending,
 	// A provider failure arrives twice: as an error activity, and again as the
 	// turn's errorMessage below it. The turn keeps it — that line carries the
 	// outcome and the rollback — so the activity restating it is dropped.
-	const turnError = group.turn?.state === "failed" ? group.turn.errorMessage : undefined;
+	// Rows follow the daemon's turn: a part a later steer cut off reads as
+	// settled, but a command in it may still run.
+	const lifecycle = group.sourceTurn ?? group.turn;
+	const turnError = lifecycle?.state === "failed" ? lifecycle.errorMessage : undefined;
 	const items = settledTurnItems(turnError
 		? group.items.filter((item) => !(item.kind === "activity" && errorActivityDuplicatesTurn(item, turnError)))
-		: group.items, group.turn);
-	const cursorMessageId = streamingCursorMessageId(items);
+		: group.items, lifecycle);
 	// Only the prompt being edited gets an element, so every other row keeps its memo.
 	const editorFor = (item: ConversationItem) => editDraft && item.kind === "message" && item.role === "user" && item.origin === "human" && item.turnId === editDraft.turnId
 		? <InlineMessageEditor key={editDraft.turnId} draft={editDraft} blocked={!editableTurns?.has(editDraft.turnId)} onCancel={onCancelEdit} onEdit={onSubmitEdit} onFocus={onEditFocus} />
 		: undefined;
 	const renderRows = (list: ConversationItem[]) => activityRuns(list).map((row) => row.kind === "activities"
 		? <ActivityRun key={row.key} activities={row.items} />
-		: <TimelineItem key={row.key} item={row.items[0]} sessionId={snapshot.sessionId} conversationId={snapshot.conversationId} completed={group.turn?.state === "completed" && !group.turn.rolledBack} approvalPending={approvalPending} inputPending={inputPending} onDecide={onDecide} onResolveInput={onResolveInput} onEdit={row.items[0].turnId && editableTurns?.has(row.items[0].turnId) ? onEditMessage : undefined} editor={editorFor(row.items[0])} answeredBelow={answeredBelow} showCursor={row.items[0].id === cursorMessageId} />);
+		: <TimelineItem key={row.key} item={row.items[0]} sessionId={sessionId} conversationId={conversationId} completed={group.turn?.state === "completed" && !group.turn.rolledBack} approvalPending={approvalPending} inputPending={inputPending} onDecide={onDecide} onResolveInput={onResolveInput} onEdit={row.items[0].turnId && editableTurns?.has(row.items[0].turnId) ? onEditMessage : undefined} editor={editorFor(row.items[0])} answeredBelow={answeredBelow} />);
 	if (startup) {
 		// The checklist sits exactly where the Working row will, under the brief,
 		// so the handoff moves nothing.
@@ -677,10 +729,13 @@ function ConversationTurnGroup({ group, snapshot, approvalPending, inputPending,
 		</View>;
 	}
 	const partition = partitionTurnItems(items, group.turn);
-	const summary = group.turn ? <TurnSummary turn={group.turn} plan={group.plan} /> : null;
+	// A stretch a later steer cut off is not where the turn ends: its actions,
+	// diff and plan draw once, under the last stretch.
+	const endsTurn = group.endsTurn !== false;
+	const summary = group.turn && endsTurn ? <TurnSummary turn={group.turn} plan={group.plan} /> : null;
 	if (!partition || !group.turn) return <View>{renderRows(items)}{summary}</View>;
 	const reply = partition.final.find((item): item is ConversationMessage => item.kind === "message");
-	const actions = <TurnActions turn={group.turn} reply={reply} onRollback={canRollbackTurn(snapshot, group.turn) ? onRollback : undefined} onFork={onFork} />;
+	const actions = endsTurn ? <TurnActions turn={group.turn} reply={reply} onRollback={canRollBack ? onRollback : undefined} onFork={onFork} /> : null;
 	// Running: the prompt, a live Working row, then the work as it streams in.
 	// Settled: the same row becomes "Worked for", folding the work away and
 	// leaving the notices and the final reply in view.
@@ -690,7 +745,7 @@ function ConversationTurnGroup({ group, snapshot, approvalPending, inputPending,
 		{partition.settled ? (workedOpen ? <FoldBody style={{ gap: space.xs, paddingBottom: space.xs }}>{renderRows(partition.work)}</FoldBody> : null) : renderRows(partition.work)}
 		{renderRows(partition.notices)}{renderRows(partition.final)}{actions}{summary}
 	</View>;
-}
+});
 
 /** The jump back to the newest message, stepping aside while `hidden` is set. */
 function JumpOverlay({ hidden, bottom, onPress }: { hidden?: Flag; bottom: number; onPress(): void }) {
@@ -712,7 +767,6 @@ const TimelineItem = memo(function TimelineItem({
 	onEdit,
 	editor,
 	answeredBelow,
-	showCursor = false,
 }: {
 	item: ConversationItem;
 	sessionId: string;
@@ -727,7 +781,6 @@ const TimelineItem = memo(function TimelineItem({
 	/** Shown in place of the bubble while this prompt is being edited. */
 	editor?: ReactNode;
 	answeredBelow?: number;
-	showCursor?: boolean;
 }) {
 	const styles = useThemedStyles(makeStyles);
 	// The long-press menu hosts the bubble in a SwiftUI view sized to its
@@ -769,12 +822,12 @@ const TimelineItem = memo(function TimelineItem({
 			);
 		}
 		if (item.role === "user") {
-			return <OriginMessageView message={item} fallback={<OriginMessage message={item} />} />;
+			return <OriginMessageView message={item} fallback={<OriginMessage label={item.senderLabel || (item.origin === "automation" ? "Automation" : "Orchestrator")} text={item.text} />} />;
 		}
 		return (
 			<View style={styles.assistantRow}>
 				{item.senderLabel ? <Text style={styles.sender}>{item.senderLabel}</Text> : null}
-				<ChatMarkdown text={showCursor ? `${item.text || ""} ▍` : item.text} streaming={item.streaming} continuousSelection selectionSource={completed && !item.streaming ? { conversationId, messageId: item.id, revision: item.revision } : undefined} />
+				<ChatMarkdown text={item.text} streaming={item.streaming} continuousSelection selectionSource={completed && !item.streaming ? { conversationId, messageId: item.id, revision: item.revision } : undefined} />
 			</View>
 		);
 	}
@@ -791,10 +844,20 @@ const TimelineItem = memo(function TimelineItem({
 		return <ProviderSwitchMarker activity={item} />;
 	}
 	if (item.activityKind === "system" && item.detail?.event === "steer") {
-		const { body, attachments } = stagedAttachmentParts(item.detail.text || item.summary);
-		const steered = <View style={styles.userRow}><View style={[styles.userBubble, styles.steerBubble]}><Text style={styles.steerLabel}>Steered</Text>{body ? <Text selectable style={styles.userText}>{body}</Text> : null}{attachments.length > 0 ? <StagedAttachments sessionId={sessionId} paths={attachments} spaced={Boolean(body)} /> : null}</View></View>;
-		// Another agent's message that arrived mid-turn names its sender, as one between turns does.
-		return item.detail.senderSessionId ? <OriginMessageView message={item} fallback={steered} /> : steered;
+		const detail = item.detail;
+		const text = detail.text || item.summary;
+		// Another agent's message that arrived mid-turn names its sender, as one
+		// between turns does, and is marked steered as the person's own steer is.
+		if (isAutomationSteer(detail)) {
+			const sender = detail.senderSessionId?.trim();
+			const card = <OriginMessage label={detail.senderDisplayName?.trim() || sender || "Automation"} text={sender ? stripSenderPrefix(text, sender).trim() : text} />;
+			return <View style={styles.steerRow}>{sender ? <OriginMessageView message={item} fallback={card} /> : card}<SteerNote detail={detail} /></View>;
+		}
+		const { body, attachments } = stagedAttachmentParts(text);
+		return <View style={styles.userRow}>
+			<View style={[styles.userBubble, { maxWidth: bubbleWidth }]}>{body ? <Text selectable style={styles.userText}>{body}</Text> : null}{attachments.length > 0 ? <StagedAttachments sessionId={sessionId} paths={attachments} spaced={Boolean(body)} /> : null}</View>
+			<SteerNote detail={detail} />
+		</View>;
 	}
 	// A page the agent published with html_render / ao render.
 	const render = item.activityKind === "system" ? readRenderRef(item.detail) : undefined;
@@ -831,7 +894,9 @@ function TurnActions({ turn, reply, onRollback, onFork }: { turn: ConversationTu
 			{copyText ? <CopyResponseButton text={copyText} /> : null}
 			{canFork && onFork ? <TurnForkButton turnId={turn.id} onFork={onFork} compact /> : null}
 			{canRollBack && onRollback ? <TurnRollbackButton turnId={turn.id} onRollback={onRollback} compact /> : null}
-			{time ? <Text style={styles.turnTime} accessibilityLabel={`Written ${time}`}>{time}</Text> : null}
+			{/* The row's height is fixed, so the time stops growing where its line
+			    still fits it; uncapped, the largest text sizes cut it off. */}
+			{time ? <Text style={styles.turnTime} maxFontSizeMultiplier={fontScaleCap.chrome} accessibilityLabel={`Written ${time}`}>{time}</Text> : null}
 		</View>
 	);
 }
@@ -982,15 +1047,15 @@ function deliveryCopy(state?: string): string | undefined {
 	}
 }
 
-function OriginMessage({ message }: { message: Extract<ConversationItem, { kind: "message" }> }) {
+function OriginMessage({ label, text }: { label: string; text: string }) {
 	const t = useTheme();
 	const styles = useThemedStyles(makeStyles);
 	const feedback = usePressFeedback("button");
-	const long = message.text.length > 600;
+	const long = text.length > 600;
 	const [expanded, setExpanded] = useState(false);
 	return <View style={styles.originMessage}>
-		<View style={styles.originHeader}><Feather name="radio" size={iconSize.xs} color={t.textTertiary} /><Text style={styles.originLabel}>{message.senderLabel || (message.origin === "automation" ? "Automation" : "Orchestrator")}</Text></View>
-		{long && expanded ? <ChatMarkdown text={message.text} /> : <Text selectable numberOfLines={long ? 5 : undefined} style={styles.originText}>{message.text}</Text>}
+		<View style={styles.originHeader}><Feather name="radio" size={iconSize.xs} color={t.textTertiary} /><Text style={styles.originLabel}>{label}</Text></View>
+		{long && expanded ? <ChatMarkdown text={text} /> : <Text selectable numberOfLines={long ? 5 : undefined} style={styles.originText}>{text}</Text>}
 		{long ? <Pressable accessibilityRole="button" accessibilityState={{ expanded }} onPress={() => setExpanded((value) => !value)} android_ripple={feedback.android_ripple} style={({ pressed }) => [styles.originMore, pressed && feedback.pressed]}><FoldChevron open={expanded} color={t.accent} /><Text style={styles.originMoreText}>{expanded ? "Hide report" : "Show full report"}</Text></Pressable> : null}
 	</View>;
 }
@@ -1629,8 +1694,7 @@ const makeStyles = (t: Theme) => {
 		originText: { fontFamily: "DMSans_400Regular", color: t.textSecondary, fontSize: type.subheadline.fontSize, lineHeight: type.subheadline.lineHeight },
 		originMore: { alignSelf: "flex-start", minHeight: touchTarget, flexDirection: "row", alignItems: "center", gap: space.xxs },
 		originMoreText: { fontFamily: "DMSans_600SemiBold", color: t.accent, fontSize: type.footnote.fontSize, fontWeight: "600" },
-		steerBubble: { backgroundColor: t.bgSubtle },
-		steerLabel: { fontFamily: "DMSans_600SemiBold", color: t.textTertiary, fontSize: type.footnote.fontSize, fontWeight: "600", marginBottom: space.hair },
+		steerRow: { paddingBottom: space.xs },
 		assistantRow: { paddingTop: space.sm, paddingBottom: space.xs },
 		sender: { fontFamily: "DMSans_600SemiBold", color: t.textTertiary, fontSize: type.footnote.fontSize, fontWeight: "600", marginBottom: space.xxs },
 		// The glyph lines up with the reply's left edge, and the row ends at its

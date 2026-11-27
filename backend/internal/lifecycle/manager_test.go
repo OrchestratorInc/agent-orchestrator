@@ -142,15 +142,20 @@ type activityRevisionConflictStore struct {
 
 type fakeSemanticDeliveryActivityStore struct {
 	*fakeStore
+	accepted []string // coordination IDs recorded as accepted
 }
 
 func (f *fakeSemanticDeliveryActivityStore) UpdateSessionFromActivitySignalAndAcceptSemanticDelivery(
 	ctx context.Context,
 	rec domain.SessionRecord,
 	expectedRevision int64,
-	_ string,
+	coordinationID string,
 ) (bool, error) {
-	return f.UpdateSessionFromActivitySignal(ctx, rec, expectedRevision)
+	applied, err := f.UpdateSessionFromActivitySignal(ctx, rec, expectedRevision)
+	if applied && err == nil {
+		f.accepted = append(f.accepted, coordinationID)
+	}
+	return applied, err
 }
 
 func (f *activityRevisionConflictStore) UpdateSessionFromActivitySignal(
@@ -5313,5 +5318,112 @@ func TestScopedPostAgentRefreshesIdleProofWithoutStateTransition(t *testing.T) {
 				t.Fatalf("idle proof = %v, want %v", got.LastActivityAt, want)
 			}
 		})
+	}
+}
+
+func TestActivity_ClaudeSessionEndKeepsTheResumedConversation(t *testing.T) {
+	m, st, _ := newManager()
+	rec := working("mer-1")
+	rec.Harness = domain.HarnessClaudeCode
+	rec.Metadata.AgentSessionID = "resumed-1"
+	st.sessions["mer-1"] = rec
+	if err := m.ApplyActivitySignal(ctx, "mer-1", ports.ActivitySignal{
+		Valid: true, State: domain.ActivityExited, Event: "session-end", AgentSessionID: "startup-2",
+		TranscriptPath: "/x/startup-2.jsonl",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if got := st.sessions["mer-1"].Metadata; got.AgentSessionID != "resumed-1" || got.NativeTranscriptPath != "" {
+		t.Fatalf("metadata = %q %q, want resumed-1 and no transcript path", got.AgentSessionID, got.NativeTranscriptPath)
+	}
+}
+
+// Hooks post from their own processes, so a turn's user-prompt-submit can reach
+// AO after the Stop that ended it, as when AO delivers a message just as the
+// previous turn stops (#6686). The session must stay idle at its last turn end
+// instead of reading as working for good; a prompt that fired after that Stop
+// still starts a turn.
+func TestActivity_LatePromptDoesNotUndoALaterStop(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		promptAt  time.Duration
+		wantState domain.ActivityState
+	}{
+		{name: "prompt fired before the last Stop, arrives after it", promptAt: 35500 * time.Millisecond, wantState: domain.ActivityIdle},
+		{name: "prompt fired after the last Stop", promptAt: 40 * time.Second, wantState: domain.ActivityActive},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			m, st, _ := newManager()
+			rec := working("mer-1")
+			rec.Metadata.RuntimeLaunchID = "launch-current"
+			rec.Metadata.AgentSessionID = "native-current"
+			rec.Metadata.AgentSessionIDLaunchID = "launch-current"
+			base := time.Now().UTC().Truncate(time.Second)
+			rec.Activity.LastActivityAt = base
+			st.sessions[rec.ID] = rec
+			signal := func(state domain.ActivityState, event string, at time.Duration) ports.ActivitySignal {
+				return ports.ActivitySignal{Valid: true, State: state, Event: event,
+					LaunchID: "launch-current", AgentSessionID: "native-current", Timestamp: base.Add(at)}
+			}
+			for _, s := range []ports.ActivitySignal{
+				signal(domain.ActivityActive, "user-prompt-submit", 30*time.Second),
+				signal(domain.ActivityIdle, "stop", 35*time.Second),
+				// AO's delivery is answered and that turn ends too.
+				signal(domain.ActivityIdle, "stop", 38*time.Second),
+				// The delivered turn's prompt hook, arriving last.
+				signal(domain.ActivityActive, "user-prompt-submit", tc.promptAt),
+			} {
+				if err := m.ApplyActivitySignal(ctx, rec.ID, s); err != nil {
+					t.Fatal(err)
+				}
+			}
+			got, _, err := st.GetSession(ctx, rec.ID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got.Activity.State != tc.wantState {
+				t.Fatalf("activity = %s at %s, want %s", got.Activity.State, got.Activity.LastActivityAt.Sub(base), tc.wantState)
+			}
+			if tc.wantState == domain.ActivityIdle && !got.Activity.LastActivityAt.Equal(base.Add(38*time.Second)) {
+				t.Fatalf("idle since %s, want the last Stop at 38s", got.Activity.LastActivityAt.Sub(base))
+			}
+		})
+	}
+}
+
+// A late prompt cannot change the idle state, but it was still submitted: the
+// delivery it carries is recorded as accepted.
+func TestActivity_LatePromptStillAcceptsItsDelivery(t *testing.T) {
+	m, st, _ := newManager()
+	semantic := &fakeSemanticDeliveryActivityStore{fakeStore: st}
+	m.store = semantic
+	rec := working("mer-1")
+	rec.Metadata.RuntimeLaunchID = "launch-current"
+	rec.Metadata.AgentSessionID = "native-current"
+	rec.Metadata.AgentSessionIDLaunchID = "launch-current"
+	base := time.Now().UTC().Truncate(time.Second)
+	rec.Activity.LastActivityAt = base
+	st.sessions[rec.ID] = rec
+	signal := func(state domain.ActivityState, event, prompt string, at time.Duration, coordination string) ports.ActivitySignal {
+		return ports.ActivitySignal{Valid: true, State: state, Event: event, LaunchID: "launch-current",
+			AgentSessionID: "native-current", LatestUserPrompt: prompt, CoordinationID: coordination, Timestamp: base.Add(at)}
+	}
+	for _, s := range []ports.ActivitySignal{
+		signal(domain.ActivityActive, "user-prompt-submit", "review notice", 36*time.Second, ""),
+		signal(domain.ActivityIdle, "stop", "", 38*time.Second, ""),
+		// A delayed duplicate of that prompt, carrying its delivery: older than
+		// the Stop and the recorded prompt, it changes neither the state nor any
+		// metadata.
+		signal(domain.ActivityActive, "user-prompt-submit", "review notice", 35*time.Second, "session-send:review-notice"),
+	} {
+		if err := m.ApplyActivitySignal(ctx, rec.ID, s); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if got := st.sessions[rec.ID].Activity.State; got != domain.ActivityIdle {
+		t.Fatalf("activity = %s, want idle", got)
+	}
+	if !slices.Contains(semantic.accepted, "session-send:review-notice") {
+		t.Fatalf("accepted deliveries = %q, want the late prompt's", semantic.accepted)
 	}
 }

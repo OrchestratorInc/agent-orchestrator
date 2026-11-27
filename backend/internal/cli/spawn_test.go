@@ -1199,24 +1199,24 @@ func TestResolveSpawnHarness_OrchestratorDefault(t *testing.T) {
 			Orchestrator: roleOverride{Agent: "claude-code"},
 		},
 	}
-	if got, err := resolveSpawnHarness("", "orchestrator", project); err != nil || got != "claude-code" {
-		t.Fatalf("orchestrator default: got %q err %v, want claude-code", got, err)
+	if got := resolveSpawnHarness("", "orchestrator", project); got != "claude-code" {
+		t.Fatalf("orchestrator default: got %q, want claude-code", got)
 	}
-	if got, err := resolveSpawnHarness("", "worker", project); err != nil || got != "codex" {
-		t.Fatalf("worker default: got %q err %v, want codex", got, err)
+	if got := resolveSpawnHarness("", "worker", project); got != "codex" {
+		t.Fatalf("worker default: got %q, want codex", got)
 	}
-	if got, err := resolveSpawnHarness("aider", "orchestrator", project); err != nil || got != "aider" {
-		t.Fatalf("explicit agent: got %q err %v, want aider", got, err)
+	if got := resolveSpawnHarness("aider", "orchestrator", project); got != "aider" {
+		t.Fatalf("explicit agent: got %q, want aider", got)
 	}
 	// Unset kind is the default `ao spawn` path and must resolve to worker.agent.
-	if got, err := resolveSpawnHarness("", "", project); err != nil || got != "codex" {
-		t.Fatalf("unset kind: got %q err %v, want codex", got, err)
+	if got := resolveSpawnHarness("", "", project); got != "codex" {
+		t.Fatalf("unset kind: got %q, want codex", got)
 	}
-	// Orchestrator spawn with no orchestrator.agent configured surfaces the
-	// --orchestrator-agent hint (the error branch this PR adds).
+	// Orchestrator spawn with no orchestrator.agent configured leaves the
+	// harness to the daemon, which fills the project's empty roles.
 	noOrch := projectDetails{ID: "demo", Config: &projectConfig{Worker: roleOverride{Agent: "codex"}}}
-	if _, err := resolveSpawnHarness("", "orchestrator", noOrch); err == nil || !strings.Contains(err.Error(), "--orchestrator-agent") {
-		t.Fatalf("missing orchestrator agent: err=%v, want --orchestrator-agent hint", err)
+	if got := resolveSpawnHarness("", "orchestrator", noOrch); got != "" {
+		t.Fatalf("missing orchestrator agent: got %q, want daemon-resolved empty harness", got)
 	}
 }
 
@@ -1283,6 +1283,58 @@ func TestSpawnEffortFlagWiring(t *testing.T) {
 	}
 	if req.Effort != "high" {
 		t.Fatalf("spawn request effort = %q, want high", req.Effort)
+	}
+}
+
+// TestSpawnPermissionFlagWiring asserts `ao spawn --permission` reaches the
+// daemon as the spawn's own approval mode, and that leaving it out sends none,
+// so the project's role setting (or the spawning orchestrator's) applies (#5954).
+func TestSpawnPermissionFlagWiring(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		args []string
+		want string
+	}{
+		{"flag set", []string{"--permission", " bypass-permissions "}, "bypass-permissions"},
+		{"flag omitted", nil, ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := setConfigEnv(t)
+			var req spawnRequest
+			var raw map[string]any
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.Header().Set("Content-Type", "application/json")
+				switch {
+				case r.Method == http.MethodGet && r.URL.Path == "/api/v1/projects/demo":
+					_, _ = io.WriteString(w, `{"status":"ok","project":{"id":"demo","name":"Demo","path":"/repo/demo"}}`)
+				case r.Method == http.MethodPost && r.URL.Path == "/api/v1/agents/readiness/ensure":
+					_, _ = io.WriteString(w, authorizedAgentsJSON("codex"))
+				case r.Method == http.MethodPost && r.URL.Path == "/api/v1/sessions":
+					body, _ := io.ReadAll(r.Body)
+					if err := json.Unmarshal(body, &req); err != nil {
+						t.Fatal(err)
+					}
+					_ = json.Unmarshal(body, &raw)
+					_, _ = io.WriteString(w, `{"session":{"id":"demo-21","status":"idle"}}`)
+				default:
+					http.NotFound(w, r)
+				}
+			}))
+			t.Cleanup(srv.Close)
+			writeRunFileFor(t, cfg, srv)
+
+			args := append([]string{"spawn", "--project", "demo", "--agent", "codex", "--name", "worker"}, tc.args...)
+			_, errOut, err := executeCLI(t, Deps{ProcessAlive: func(int) bool { return true }}, args...)
+			if err != nil {
+				t.Fatalf("spawn failed: %v stderr=%s", err, errOut)
+			}
+			if req.ApprovalMode != tc.want {
+				t.Fatalf("spawn request approvalMode = %q, want %q", req.ApprovalMode, tc.want)
+			}
+			if _, sent := raw["approvalMode"]; sent != (tc.want != "") {
+				t.Fatalf("approvalMode sent = %v, want %v", sent, tc.want != "")
+			}
+		})
 	}
 }
 

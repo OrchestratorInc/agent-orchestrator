@@ -17,8 +17,9 @@
  * provider's; only the grouping of the triggers is AO's.
  */
 
+import { uiUsage, useTelemetrySurface } from "../../lib/ui-usage-telemetry";
 import { Fragment, useMemo, useState, type FocusEvent, type ReactNode } from "react";
-import { Check, ChevronDown, Hand, ListTodo, PencilLine, ShieldAlert, ShieldCheck, SlidersHorizontal, TriangleAlert, Zap, type AppIcon } from "@/components/app-icons";
+import { Check, ChevronDown, Hand, ListTodo, PencilLine, ShieldAlert, ShieldCheck, SlidersHorizontal, TriangleAlert, type AppIcon } from "@/components/app-icons";
 import { useTranslation } from "react-i18next";
 import {
 	OptionMenu,
@@ -38,7 +39,7 @@ import { Switch } from "../ui/switch";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "../ui/tooltip";
 import { Button, GHOST_PILL_CLASS } from "../ui/button";
 import { agentLabel } from "../../lib/agent-options";
-import { AgentModelPicker, AutoCompactRow, compactsEarly, ToggleRow, type AgentSwitchProps, type PickerSource } from "./AgentSwitchPicker";
+import { AgentModelPicker, autoCompactKind, ToggleRow, type AgentSwitchProps, type PickerSource } from "./AgentSwitchPicker";
 import { ModelMenuChoices } from "./ModelMenuChoices";
 import { queryShown } from "../../lib/dom-selectors";
 import { providerQualifiedChoice } from "../../lib/model-variants";
@@ -365,12 +366,12 @@ export function TurnSettingsBar({
 		? { fast: Boolean(settings.fastMode), onToggleFast: (on: boolean) => onChange({ ...settings, fastMode: on || undefined }) }
 		: fastControls;
 	const { ultracode, autoCompact } = agentSwitch ?? {};
-	// Ultracode runs at Extra High, so it is only for models that have that level.
-	const offersUltracode = Boolean(
-		ultracode && harness === "claude-code" && onChangeConfigOption &&
-		acpEffortOption?.choices.some((choice) => choice.value === "xhigh"),
-	);
-	const offersAutoCompact = Boolean(autoCompact) && compactsEarly(harness, primaryModelOption?.currentValue);
+	// Ultracode works at any effort level, so it is not tied to one.
+	const offersUltracode = Boolean(ultracode && harness === "claude-code");
+	const compactKind = autoCompact
+		? autoCompactKind(harness, nativeModelMenu ? settings.model ?? fallback?.id : primaryModelOption?.currentValue)
+		: undefined;
+	const ultracodeControls = offersUltracode && ultracode ? { ultracode: ultracode.on, onToggleUltracode: ultracode.onChange } : {};
 	// A model the installed CLI is too old for is shown, disabled, but never sent.
 	const nativeUnavailable = (id: string) => Boolean(displayModels.find((model) => model.id === id)?.unavailableReason);
 	const choiceUnavailable = (id: string) => Boolean(primaryModelOption?.choices.find((choice) => choice.value === id)?.unavailableReason);
@@ -393,15 +394,7 @@ export function TurnSettingsBar({
 			efforts: efforts.map((value) => ({ value, label: formatEffortLabel(value, t) })),
 			effort: effortLabel,
 			onPickEffort: (value) => onChange({ ...settings, reasoningEffort: value }),
-			onPickSetup: (setup) => {
-				if (nativeUnavailable(setup.model)) return;
-				onChange({
-					...settings,
-					model: setup.model,
-					reasoningEffort: setup.effort,
-					fastMode: (setup.fast && displayModels.find((model) => model.id === setup.model)?.supportsFast) || undefined,
-				});
-			},
+			...ultracodeControls,
 			...nativeFastControls,
 		}
 		: {
@@ -417,75 +410,55 @@ export function TurnSettingsBar({
 			onPickModel: primaryModelOption && onChangeConfigOption
 				? (id) => { if (!choiceUnavailable(id)) applyOption(primaryModelOption.id, { value: id }); }
 				: undefined,
-			// The effort, Thinking and Fast are set after the model, because the agent offers them
-			// per model: each is read from the options the previous write returned, not the outgoing
-			// model's. Fast is set either way, so a saved setup without it turns a paid Fast off.
-			onPickSetup: primaryModelOption && onChangeConfigOption
-				? (setup) => {
-					if (choiceUnavailable(setup.model)) return;
-					ultracode?.onChange(false);
-					let catalog = configOptions ?? [];
-					const write = async (optionId: string, value: ChatConfigOptionValue) => {
-						const next = await onChangeConfigOption(optionId, value);
-						if (Array.isArray(next)) catalog = next as ChatConfigOption[];
-					};
-					const current = () => partitionConfigOptions(harness === "agy" ? agyComposerOptions(catalog) : catalog, harness !== "agy");
-					void (async () => {
-						await write(primaryModelOption.id, { value: setup.model });
-						const effortOption = current().effort.at(0);
-						if (setup.effort && effortOption?.choices.some((choice) => choice.value === setup.effort)) {
-							await write(effortOption.id, { value: setup.effort });
-						}
-						const thinking = current().toggles.find(isThinkingToggle);
-						if (thinking && setup.thinking !== undefined) await toggleConfigOption(thinking, setup.thinking, write);
-						const fast = current().toggles.find(isFastOption);
-						if (fast) await toggleConfigOption(fast, Boolean(setup.fast), write);
-					})().catch(() => {});
-				}
+			efforts: (acpEffortOption?.choices ?? [])
+				.filter((choice) => choice.value && choice.value !== "default")
+				// A level the provider leaves unnamed is named as AO names it, never left blank.
+				.map((choice) => ({ value: choice.value, label: choice.name || formatEffortLabel(choice.value, t) })),
+			effort: acpEffortOption?.currentValue && acpEffortOption.currentValue !== "default"
+				? acpEffortOption.currentValue
 				: undefined,
-			efforts: [
-				...(acpEffortOption?.choices ?? [])
-					.filter((choice) => choice.value && choice.value !== "default")
-					// A level the provider leaves unnamed is named as AO names it, never left blank.
-					.map((choice) => ({ value: choice.value, label: choice.name || formatEffortLabel(choice.value, t) })),
-				...(offersUltracode ? [{ value: ULTRACODE, label: "Ultracode" }] : []),
-			],
-			effort: offersUltracode && ultracode?.on
-				? ULTRACODE
-				: acpEffortOption?.currentValue && acpEffortOption.currentValue !== "default"
-					? acpEffortOption.currentValue
-					: undefined,
 			onPickEffort: acpEffortOption && onChangeConfigOption
-				? (value) => {
-					ultracode?.onChange(value === ULTRACODE);
-					applyOption(acpEffortOption.id, { value: value === ULTRACODE ? "xhigh" : value });
-				}
+				? (value) => applyOption(acpEffortOption.id, { value })
 				: undefined,
+			// A mode beside Fast mode, not an effort level.
+			...ultracodeControls,
 			...fastControls,
 			...(thinkingOption && onChangeConfigOption
 				? { thinking: optionIsEnabled(thinkingOption), onToggleThinking: (on: boolean) => setConfigToggle(thinkingOption, on, applyOption) }
 				: {}),
 		};
 	// Plan and on/off settings live in the add menu; here is anything past the first model and effort.
-	const hasPickerExtras = unified && Boolean(onChangeConfigOption) && (offersAutoCompact || grouped.extra.length > 0 ||
+	const hasPickerExtras = unified && Boolean(onChangeConfigOption) && (grouped.extra.length > 0 ||
 		(!nativeModelMenu && (grouped.model.length > 1 || grouped.effort.length > 1)));
-	const pickerExtras = hasPickerExtras ? (
-		<>
-			{offersAutoCompact && autoCompact ? (
-				<AutoCompactRow
-					{...autoCompact}
-					title="When Claude Code compacts the conversation on its own. Changing it restarts the agent; the conversation is kept."
-				/>
-			) : null}
-			{nativeModelMenu ? null : grouped.model.slice(1).map((option) => (
-				<OptionSubmenu key={option.id} option={option} onChange={applyOption} scrollable />
-			))}
-			{nativeModelMenu ? null : grouped.effort.slice(1).map((option) => (
-				<EffortOptionSubmenu key={option.id} option={option} onChange={applyOption} />
-			))}
-			{grouped.extra.length > 0 ? <MoreOptionsSubmenu options={grouped.extra} onChange={applyOption} /> : null}
-		</>
-	) : null;
+	// Handed to the picker on its own, so it can sit beside Fast mode.
+	const pickerAutoCompact = unified && (onChangeConfigOption || nativeModelMenu) && compactKind && autoCompact
+		? {
+			...autoCompact,
+			kind: compactKind,
+			title: [
+				t(compactKind === "toggle" ? "agentSwitch.autoCompactHintToggle" : "agentSwitch.autoCompactHint", { agent: agentLabel(harness ?? "") }),
+				...(autoCompact.beforeStart ? [] : [t("agentSwitch.autoCompactRestarts")]),
+			].join(" "),
+		}
+		: undefined;
+	// Given the picker's pick, so a setting changed here is a choice, not an abandoned menu.
+	const pickerExtras = hasPickerExtras ? (markPick: () => void) => {
+		const apply = (optionId: string, value: ChatConfigOptionValue) => {
+			markPick();
+			applyOption(optionId, value);
+		};
+		return (
+			<>
+				{nativeModelMenu ? null : grouped.model.slice(1).map((option) => (
+					<OptionSubmenu key={option.id} option={option} onChange={apply} scrollable />
+				))}
+				{nativeModelMenu ? null : grouped.effort.slice(1).map((option) => (
+					<EffortOptionSubmenu key={option.id} option={option} onChange={apply} />
+				))}
+				{grouped.extra.length > 0 ? <MoreOptionsSubmenu options={grouped.extra} onChange={apply} /> : null}
+			</>
+		);
+	} : undefined;
 
 	return (
 		<div role="group" aria-label="Turn settings" className="flex min-w-0 flex-1 flex-col gap-0.5">
@@ -506,6 +479,7 @@ export function TurnSettingsBar({
 								savedModel={settings.model || lastModel}
 								title={reroute ? `The provider answered with ${rerouted} instead of ${reroute.fromModel ?? chosenLabel}` : undefined}
 								extras={pickerExtras}
+								autoCompact={pickerAutoCompact}
 								onCloseAutoFocus={restoreComposerFocus}
 							/>
 						</>
@@ -696,7 +670,7 @@ function dedupeChoicesByName<T extends { value: string; name: string; group?: st
 			&& Boolean(other.unavailableReason) === Boolean(choice.unavailableReason));
 		const kept = twins.find((other) => other.value === current) ?? twins[0];
 		if (choice !== kept) return [];
-		// The values folded into this one, so a favourite starred on any of them still shows.
+		// The values folded into this one, so a model remembered under any of them is still found.
 		const aliases = twins.filter((other) => other !== choice).map((other) => other.value);
 		return [aliases.length ? { ...choice, aliases } : choice];
 	});
@@ -766,6 +740,13 @@ function claudeChoiceLabels(catalog: { id: string; displayName: string }[]) {
 	return choiceModel && ((value: string, name?: string) => choiceModel(value, name)?.label);
 }
 
+/** Open state and picks of a model menu, for the model picker's usage counts. */
+function useModelPickerTelemetry() {
+	const [open, setOpen] = useState(false);
+	const markPick = useTelemetrySurface("model_picker", open, { choice: true });
+	return { onOpenChange: setOpen, markPick };
+}
+
 function ModelEffortPicker({
 	models,
 	settings,
@@ -804,17 +785,25 @@ function ModelEffortPicker({
 	onChangeConfigOption?: (optionId: string, value: ChatConfigOptionValue) => void;
 }) {
 	const { t } = useTranslation();
+	const picker = useModelPickerTelemetry();
+	// Any applied choice is a pick; a different model is also a model change.
+	const change = (next: TurnSettings) => {
+		picker.markPick();
+		if (next.model !== settings.model) uiUsage.modelChanged();
+		onChange(next);
+	};
 	const catalog = useMemo(() => models.map((model) => ({ ...model, label: model.displayName })), [models]);
 	const effortChoices = useMemo(() => efforts.map((value) => ({ value })), [efforts]);
 	const savedEffort = settings.reasoningEffort === "default" ? "" : settings.reasoningEffort ?? "";
 
 	return (
-		<OptionMenu>
+		<OptionMenu onOpenChange={picker.onOpenChange}>
 				<OptionMenuTrigger variant="ghost"
 					showCaret={false}
 					disabled={disabled}
 					aria-label="Model and reasoning effort for the next turn"
 					data-shortcut-target="model-picker"
+					data-telemetry-id="composer.model_picker"
 					title={
 						reroute
 							? `The provider answered with ${rerouted} instead of ${reroute.fromModel ?? chosenLabel}${
@@ -826,12 +815,12 @@ function ModelEffortPicker({
 				>
 					<span className="min-w-0 max-w-[38ch] truncate">{groupLabel}</span>
 				</OptionMenuTrigger>
-			<OptionMenuContent align="start" className={CHAT_MENU_CLASS} onCloseAutoFocus={restoreComposerFocus}>
+			<OptionMenuContent align="start" className={CHAT_MENU_CLASS} data-telemetry-surface="model_picker" onCloseAutoFocus={restoreComposerFocus}>
 				<OptionMenuSub closeOnSelect>
 					<OptionMenuSubTrigger label="Model" value={modelLabel} />
 					{/* Scroll on an inner strip: the surface utility caps height but wheel
 					    events do not reliably reach an outer overflow on nested submenus. */}
-					<OptionMenuSubContent scrollable className={CHAT_MENU_CLASS} onFocus={focusModelSearch}>
+					<OptionMenuSubContent data-telemetry-surface="model_picker" scrollable className={CHAT_MENU_CLASS} onFocus={focusModelSearch}>
 						<ModelMenuChoices models={catalog} selectedId={settings.model}>
 							{(matches, searchActiveID, optionID) => matches.map((model) => (
 								<OptionMenuItem
@@ -841,7 +830,7 @@ function ModelEffortPicker({
 									searchActive={model.id === searchActiveID}
 									radio
 									disabled={Boolean(model.unavailableReason)}
-									onSelect={() => onChange({ ...settings, model: model.id, reasoningEffort: undefined })}
+									onSelect={() => change({ ...settings, model: model.id, reasoningEffort: undefined })}
 									className={cn("text-xs", model.id === settings.model ? "text-foreground" : "text-muted-foreground")}
 								>
 									<UnavailableLabel label={model.displayName} reason={model.unavailableReason} />
@@ -857,14 +846,14 @@ function ModelEffortPicker({
 							label={t("settings.models.effort")}
 							value={effortDisplayLabel({ value: savedEffort, choices: effortChoices, followLabel: t("settings.models.effort"), t, defaultEffort })}
 						/>
-						<OptionMenuSubContent className={CHAT_MENU_CLASS}>
+						<OptionMenuSubContent data-telemetry-surface="model_picker" className={CHAT_MENU_CLASS}>
 							<EffortMenuItems
 								value={savedEffort}
 								choices={effortChoices}
 								availability={availability}
 								defaultEffort={defaultEffort}
 								compact
-								onChange={(value) => onChange({ ...settings, reasoningEffort: value || undefined })}
+								onChange={(value) => change({ ...settings, reasoningEffort: value || undefined })}
 							/>
 						</OptionMenuSubContent>
 					</OptionMenuSub>
@@ -1423,17 +1412,6 @@ function setConfigToggle(
 }
 
 /** setConfigToggle for a write the caller waits on; a toggle already set is not written. */
-async function toggleConfigOption(
-	option: ChatConfigOption,
-	enabled: boolean,
-	write: (optionId: string, value: ChatConfigOptionValue) => Promise<void>,
-) {
-	if (optionIsEnabled(option) === enabled) return;
-	let pending: Promise<void> | undefined;
-	setConfigToggle(option, enabled, (optionId, value) => { pending = write(optionId, value); });
-	await pending;
-}
-
 /** Codex names its modes differently: its default has a free hand and its accept-edits asks first. */
 function permissionLook(harness: string | undefined, mode: ApprovalMode): ApprovalMode {
 	if (harness !== "codex") return mode;
@@ -1508,18 +1486,18 @@ export function ComposerMenuRow({
 	);
 }
 
-const ULTRACODE = "ultracode";
-
 /** Claude Code turns Ultracode on for a turn when the user's message names it. */
 export function withUltracode(text: string): string {
 	return /\bultracode\b/i.test(text) ? text : `Ultracode:\n${text}`;
 }
 
-/** The agent's on/off settings as add-menu rows: plan mode, fast mode and any other switch it advertises. */
+/**
+ * The agent's on/off settings as add-menu rows: plan mode and any other switch it advertises.
+ * Fast mode is not one of them: it is set in the agent picker, under the effort.
+ */
 export function ComposerModeItems({
 	configOptions,
 	settings,
-	models,
 	nativePlan = false,
 	onChange,
 	onChangeConfigOption,
@@ -1527,8 +1505,6 @@ export function ComposerModeItems({
 }: {
 	configOptions: ChatConfigOption[];
 	settings: TurnSettings;
-	/** The provider's own model list, for settings AO sends per turn. */
-	models?: ChatModel[];
 	/** The provider takes plan mode as a per-turn setting from AO. */
 	nativePlan?: boolean;
 	onChange?: (next: TurnSettings) => void;
@@ -1551,17 +1527,10 @@ export function ComposerModeItems({
 	const togglePlan = executionMode
 		? planTarget ? () => apply(executionMode.id, { value: planTarget }) : undefined
 		: nativePlan && onChange ? () => onChange({ ...settings, planMode: settings.planMode ? undefined : true }) : undefined;
-	const model = models?.find((entry) => entry.id === settings.model) ?? models?.find((entry) => entry.default);
 	const rows = [
 		...(togglePlan ? [{ icon: ListTodo, title: "Plan mode", on: planOn, toggle: togglePlan }] : []),
-		...(model?.supportsFast && onChange ? [{
-			icon: Zap,
-			title: "Fast mode",
-			on: Boolean(settings.fastMode),
-			toggle: () => onChange({ ...settings, fastMode: settings.fastMode ? undefined : true }),
-		}] : []),
-		...(onChangeConfigOption ? grouped.toggles : []).map((option) => ({
-			icon: isFastOption(option) ? Zap : SlidersHorizontal,
+		...(onChangeConfigOption ? grouped.toggles.filter((option) => !isFastOption(option)) : []).map((option) => ({
+			icon: SlidersHorizontal,
 			title: option.name,
 			on: optionIsEnabled(option),
 			toggle: () => setConfigToggle(option, !optionIsEnabled(option), apply),
@@ -1788,7 +1757,7 @@ function resolveImplicitChoice(option: ChatConfigOption): ChatConfigOption {
 	const followLabel = isModelOption(mapped) ? "Use agent model" : "Use agent setting";
 	if (concrete && mapped.currentValue !== concrete.value) {
 		const label = isDefaultPlaceholderLabel(concrete.name) ? concrete.value : concrete.name;
-		// The row stands for the hidden model too, so a favourite saved on it still shows as offered.
+		// The row stands for the hidden model too, so a model remembered under its id still finds it.
 		const aliases = [...((implicit as typeof implicit & { aliases?: string[] }).aliases ?? []), concrete.value];
 		return {
 			...mapped,
