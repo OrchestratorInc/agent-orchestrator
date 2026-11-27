@@ -1440,3 +1440,35 @@ func TestTaskWaitSettleCannotPassAfterTheDeadline(t *testing.T) {
 		t.Fatalf("result = %v", res)
 	}
 }
+
+// The settle clock starts when the running turn is first seen, at the end of
+// that read, not when the read began.
+func TestTaskWaitSettleStartsWhenRunningIsFirstSeen(t *testing.T) {
+	d := newTaskDaemon(t)
+	deps := fakeClockDeps()
+	d.set("GET /api/v1/sessions/repo-1", 200, `{"session":{"id":"repo-1","harness":"claude-code","mode":"chat","provisionState":"ready","activity":{"state":"active"}}}`)
+	var mu sync.Mutex
+	var seenAt time.Time
+	d.setFunc("GET /api/v1/sessions/repo-1/conversation", func() (int, string) {
+		mu.Lock()
+		defer mu.Unlock()
+		if seenAt.IsZero() {
+			deps.Sleep(2 * time.Second) // the first running read is slow
+			seenAt = deps.Now()
+		}
+		return 200, `{"turns":[{"id":"t1","state":"running"}]}`
+	})
+
+	out, _, err := executeCLI(t, deps, "task", "wait", "repo-1", "--json")
+	if err != nil {
+		t.Fatalf("exit = %d (%v), want 0", ExitCode(err), err)
+	}
+	if res := decodeTaskResult(t, out); res["status"] != "running" {
+		t.Fatalf("result = %v", res)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if settled := deps.Now().Sub(seenAt); settled < 5*time.Second {
+		t.Fatalf("confirmed %s after the turn was first seen running; want at least 5s", settled)
+	}
+}

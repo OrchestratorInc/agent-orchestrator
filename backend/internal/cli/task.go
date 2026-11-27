@@ -1114,7 +1114,9 @@ func (c *commandContext) waitTask(ctx context.Context, res taskResult, timeout t
 			return last
 		case taskStatusRunning:
 			if runningSince.IsZero() || obs.turnID != runningTurn {
-				runningTurn, runningSince = obs.turnID, readAt
+				// Start the clock when the running turn was first seen, at the
+				// end of that read; readAt still bounds it by the deadline.
+				runningTurn, runningSince = obs.turnID, now
 			}
 			if readAt.Sub(runningSince) >= taskRunningSettle && readAt.Before(deadline) {
 				return last
