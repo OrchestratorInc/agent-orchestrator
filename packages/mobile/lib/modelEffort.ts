@@ -21,6 +21,15 @@ const EFFORT_LEVEL_LABELS: Readonly<Record<string, string>> = {
 	max: "Max",
 };
 
+/**
+ * The top level some agents have past Max, such as Codex's and Hermes'
+ * "ultra": drawn in the Ultracode gradient, as desktop draws it
+ * (AgentSwitchPicker's isUltraEffort).
+ */
+export function isUltraEffort(value: string | undefined): boolean {
+	return Boolean(value?.toLowerCase().startsWith("ultra"));
+}
+
 /** A level by name: "high" reads "High", "xhigh" "Extra high"; one never seen is capitalized, as desktop shows it. */
 export function effortLabel(level: string): string {
 	const key = level.trim().toLowerCase();

@@ -240,6 +240,30 @@ describe("effort slider", () => {
 		expect(root.findAll((node) => hostType(node) === "View" && node.props.testID === "effort-slider-track")[0].findAll((node) => hostType(node) === "View" && node.props.pointerEvents === "none" && node.props.style?.[1]?.backgroundColor === "#textFaint")).toHaveLength(5);
 	});
 
+	// The pill says Ultracode is on; the track's fill shows it too, in its gradient.
+	it("fills the track with the Ultracode gradient while Ultra is on", async () => {
+		const ultraFill = () => renderer!.root.findAll((node) => hostType(node) === "View" && node.props.testID === "effort-slider-ultra-fill");
+		await act(async () => { renderer = create(<EffortSlider choices={levels("high")} onChoose={() => {}} ultracode={{ on: false, toggle: () => {} }} />); });
+		expect(ultraFill()).toHaveLength(0);
+		await act(async () => renderer!.update(<EffortSlider choices={levels("high")} onChoose={() => {}} ultracode={{ on: true, toggle: () => {} }} />));
+		expect(ultraFill()).toHaveLength(1);
+		expect(ultraFill()[0].props.style[0].experimental_backgroundImage).toMatch(/^linear-gradient\(to right, /);
+	});
+
+	// Codex's own top level past Max: track and name in the Ultracode gradient,
+	// as desktop draws it; any other level stays plain.
+	it("draws an agent's Ultra level in the Ultracode gradient, track and name", async () => {
+		const codex = (selected: string) => ["low", "medium", "high", "xhigh", "ultra"].map((value) => ({ value, label: value === "ultra" ? "Ultra" : value, selected: value === selected }));
+		const ultraFill = () => renderer!.root.findAll((node) => hostType(node) === "View" && node.props.testID === "effort-slider-ultra-fill");
+		const gradient = () => renderer!.root.findAll((node) => hostType(node) === "GradientText").map((node) => node.props.children);
+		await act(async () => { renderer = create(<EffortSlider choices={codex("high")} onChoose={() => {}} />); });
+		expect(ultraFill()).toHaveLength(0);
+		expect(gradient()).toEqual([]);
+		await act(async () => renderer!.update(<EffortSlider choices={codex("ultra")} onChoose={() => {}} />));
+		expect(ultraFill()).toHaveLength(1);
+		expect(gradient()).toEqual(["Ultra"]);
+	});
+
 	// Both at the heading's right, where the thumb is; the heading stays centred
 	// by an empty slot as wide at its left.
 	it("keeps Ultra and the bolt together at the heading's right", async () => {

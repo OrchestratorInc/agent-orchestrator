@@ -1,6 +1,6 @@
 import type { ReactNode } from "react";
 import type { ComposerImageAsset, PasteOverflow } from "./chat/composerImages";
-import type { ChatSkill } from "./chat/types";
+import type { ChatConfigOption, ChatSkill } from "./chat/types";
 import type { FastToggle } from "./effort-slider";
 import type { EffortChoice } from "./modelEffort";
 import type { VoiceState } from "./voice/types";
@@ -83,6 +83,12 @@ export type SpawnComposerControlsProps = {
 	 * same object between renders, as the slider's host is memoised.
 	 */
 	fast?: FastToggle;
+	/**
+	 * The settings the agent last reported in a chat on this machine
+	 * (chatSettingsTemplate), so the permission picker names its modes as the
+	 * chat does; none before it has.
+	 */
+	settingsTemplate?: readonly ChatConfigOption[];
 	/**
 	 * Claude Code's Ultracode, the switch at the slider's left: only for a
 	 * machine's own Claude Code task, else none. Kept the same object between

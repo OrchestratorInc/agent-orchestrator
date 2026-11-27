@@ -2,7 +2,7 @@ import { Pressable, StyleSheet } from "react-native";
 import Svg, { Circle, Defs, Line, LinearGradient, Path, Stop } from "react-native-svg";
 import type { FastToggle } from "./effort-slider";
 import { haptics } from "./haptics";
-import { effortGaugeNeedle, effortGaugeSegments, type EffortChoice } from "./modelEffort";
+import { effortGaugeNeedle, effortGaugeSegments, isUltraEffort, type EffortChoice } from "./modelEffort";
 import { useTheme } from "./ThemeProvider";
 import { iconSize, touchTarget, ultraGradient } from "./tokens";
 import { markTouchInside } from "./touchOutside";
@@ -43,7 +43,9 @@ export function effortGaugeLabel(choices: readonly EffortChoice[], toggles?: Eff
 export function EffortGauge({ choices, size = iconSize.lg, color, toggles }: { choices: readonly EffortChoice[]; size?: number; color: string; toggles?: EffortGaugeToggles }) {
 	const t = useTheme();
 	const { count, span, gap } = effortGaugeSegments(choices.length);
-	const ultracode = Boolean(toggles?.ultracode);
+	// Lit in the Ultracode gradient for Claude's Ultracode, and for an agent's
+	// own Ultra level (Codex's), as the slider's track is.
+	const ultracode = Boolean(toggles?.ultracode) || isUltraEffort(choices.find((choice) => choice.selected)?.value);
 	// With no levels the one segment stands for the slider's switches, so it
 	// lights for Ultracode.
 	const index = choices.length ? choices.findIndex((choice) => choice.selected) : ultracode ? 0 : -1;

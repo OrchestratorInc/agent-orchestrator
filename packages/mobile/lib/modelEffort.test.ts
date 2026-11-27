@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { effortGaugeNeedle, effortLabel, fallbackEffortIndex, magneticOffset, nearestStop, spawnEffortChoices, spawnEffortToSend, withFallbackEffort } from "./modelEffort";
+import { effortGaugeNeedle, effortLabel, fallbackEffortIndex, isUltraEffort, magneticOffset, nearestStop, spawnEffortChoices, spawnEffortToSend, withFallbackEffort } from "./modelEffort";
 
 describe("effort labels", () => {
 	// Worded as desktop's effort menu words them (formatEffortLabel).
@@ -120,5 +120,12 @@ describe("fallback effort", () => {
 		const picked = none.map((choice) => ({ ...choice, selected: choice.value === "high" }));
 		expect(withFallbackEffort(picked)).toEqual(picked);
 		expect(withFallbackEffort([])).toEqual([]);
+	});
+});
+
+describe("isUltraEffort", () => {
+	it("is an agent's own top level past Max, by its name", () => {
+		expect(["ultra", "Ultra", "ultra-high"].map(isUltraEffort)).toEqual([true, true, true]);
+		expect(["max", "xhigh", "", undefined].map(isUltraEffort)).toEqual([false, false, false, false]);
 	});
 });

@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef } from "react";
 import { AUTOMATIC_MODEL } from "./agentSwitch";
 import { approvalChoiceCopy, approvalLook } from "./chat/approvalCopy";
-import type { ApprovalMode } from "./chat/types";
+import type { ApprovalMode, ChatConfigOption } from "./chat/types";
+import { permissionChoices as chatPermissionChoices } from "./chat/useChatPermissions";
 import { agentName, type WheelAgent, type WheelSetting } from "./chat/useChatModelWheel";
 import type { PermissionChoice } from "./permission-picker";
 import type { SpawnComposerControlsProps } from "./spawn-composer-controls.types";
@@ -33,7 +34,24 @@ export function spawnWheelAgents(
 }
 
 /** The approval modes a new task can start in, as the chat's permission picker lists them. */
-export function spawnPermissionChoices(harness: string, modes: SpawnComposerControlsProps["approvalModes"], current: string): PermissionChoice[] {
+export function spawnPermissionChoices(harness: string, modes: SpawnComposerControlsProps["approvalModes"], current: string, template?: readonly ChatConfigOption[]): PermissionChoice[] {
+	// The agent's own modes by its own names, as the chat lists them, from the
+	// settings it last reported in a chat (permissionChoices, the chat's own).
+	// New task sends AO's mode, so each of the agent's choices stands for the
+	// AO mode it applies; a mode it names none of keeps AO's words.
+	if (template?.length) {
+		const snapshot: Parameters<typeof chatPermissionChoices>[0] = { harness, settings: { approvalMode: current as ApprovalMode }, capabilities: ["config_options"], controller: { state: "ready" } };
+		const named = chatPermissionChoices(snapshot, [], [...template]).choices;
+		const offered = new Set(modes.map((mode) => mode.id));
+		const own = named.filter((choice) => choice.permissionMode && offered.has(choice.permissionMode));
+		if (own.length) {
+			const ids = new Set(own.map((choice) => choice.permissionMode));
+			return [
+				...own.map((choice) => ({ value: choice.permissionMode!, label: choice.label, description: choice.description, selected: choice.permissionMode === current, look: choice.look })),
+				...spawnPermissionChoices(harness, modes.filter((mode) => !ids.has(mode.id as ApprovalMode)), current),
+			];
+		}
+	}
 	return modes.map((mode) => ({
 		value: mode.id,
 		label: mode.label,
@@ -48,9 +66,9 @@ export function spawnPermissionChoices(harness: string, modes: SpawnComposerCont
  * chat's own, over the keyboard. Opening one puts the others away, and typing
  * puts them all away, as in chat.
  */
-export function useSpawnPickers({ agents, agentModels, harness, modelSelection, onSelectAgentModel, approvalModes, approvalMode, onSelectApprovalMode, prompt }: Pick<
+export function useSpawnPickers({ agents, agentModels, harness, modelSelection, onSelectAgentModel, approvalModes, approvalMode, onSelectApprovalMode, prompt, settingsTemplate }: Pick<
 	SpawnComposerControlsProps,
-	"agents" | "agentModels" | "harness" | "modelSelection" | "onSelectAgentModel" | "approvalModes" | "approvalMode" | "onSelectApprovalMode" | "prompt"
+	"agents" | "agentModels" | "harness" | "modelSelection" | "onSelectAgentModel" | "approvalModes" | "approvalMode" | "onSelectApprovalMode" | "prompt" | "settingsTemplate"
 >) {
 	const effortSlider = useEffortSliderSwitch();
 	const modelSlider = useEffortSliderSwitch();
@@ -70,7 +88,7 @@ export function useSpawnPickers({ agents, agentModels, harness, modelSelection, 
 		if (agentId === current && modelKey === model) return;
 		select(agentId, modelKey);
 	}, []);
-	const permissionChoices = useMemo(() => spawnPermissionChoices(harness, approvalModes, approvalMode), [harness, approvalModes, approvalMode]);
+	const permissionChoices = useMemo(() => spawnPermissionChoices(harness, approvalModes, approvalMode, settingsTemplate), [harness, approvalModes, approvalMode, settingsTemplate]);
 	const choosePermission = useCallback((value: string) => {
 		const { approvalMode: current, onSelectApprovalMode: select } = latest.current;
 		if (value !== current) select(value);

@@ -30,6 +30,7 @@ import { loadSpawnSkills } from "../lib/spawnSkills";
 import { spawnEffortChoices, spawnEffortToSend } from "../lib/modelEffort";
 import { useApp } from "../lib/store";
 import { viewMachine } from "../lib/viewMachine";
+import { useChatSettingsTemplate } from "../lib/chat/chatSettingsTemplate";
 import { fastModelName, fastPendingKey, useLearnedFastModels } from "../lib/chat/learnedFast";
 import { offersUltracode, ultracodeKey, withUltracode } from "../lib/chat/ultracode";
 import { useCloud } from "../lib/cloud/CloudProvider";
@@ -567,6 +568,9 @@ function SpawnPage() {
 	// offer it in a chat, and turned on in the chat the task opens (learnedFast).
 	const chatMachine = viewMachine({ config, selectedHostId, configResolved: true }).machine;
 	const learnedFast = useLearnedFastModels(chatMachine, harness);
+	// The agent's settings as it last reported them in a chat here, so the
+	// pickers name its modes as the chat does (chatSettingsTemplate).
+	const settingsTemplate = useChatSettingsTemplate(chatMachine, harness);
 	const fastModel = aliasModel ?? runningModel;
 	const fastLearned = Boolean(fastModel && learnedFast.has(fastModelName(menuModelName(fastModel.label))));
 	const fastOffered = !cloudSelected && (Boolean(runningModel?.supportsFast) || fastLearned);
@@ -1204,6 +1208,7 @@ function SpawnPage() {
 					effortChoices={effortChoices}
 					onSelectEffort={edited(selectEffort)}
 					fast={fastToggle}
+					settingsTemplate={settingsTemplate}
 					ultracode={ultracodeToggle}
 					onChoosePhoto={edited(() => { void pickPhotos(); })}
 					onChooseFile={edited(() => { void pickFiles(); })}

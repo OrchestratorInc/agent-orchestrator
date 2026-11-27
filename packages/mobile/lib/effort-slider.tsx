@@ -7,10 +7,10 @@ import { scheduleOnRN } from "react-native-worklets";
 import { ComposerOverlay, OverlayHeading, overlayCardStyle } from "./composer-overlay";
 import { GradientText } from "./gradient-text";
 import { haptics } from "./haptics";
-import { magneticOffset, nearestStop } from "./modelEffort";
+import { isUltraEffort, magneticOffset, nearestStop } from "./modelEffort";
 import type { Theme } from "./theme";
 import { useTheme, useThemedStyles } from "./ThemeProvider";
-import { duration, iconSize, space, type } from "./tokens";
+import { duration, iconSize, space, type, ultraGradient } from "./tokens";
 import { useReducedMotion } from "./useReducedMotion";
 import { useEffortSlider, type EffortSliderProps } from "./useEffortSlider";
 
@@ -240,9 +240,12 @@ export function EffortSlider({ choices, onChoose, onRelease, fast, ultracode }: 
 			</View>
 		);
 	}
-	// The level in plain text, Ultracode on or off: the Ultra pill beside the
-	// bolt says it is on, and once is enough.
-	const heading = <OverlayHeading title="Effort" value={label} valueTestID="effort-slider-value" />;
+	// An agent's own top level past Max (Codex's "Ultra") in the Ultracode
+	// gradient, as desktop draws it, track and name alike. Claude's Ultracode
+	// leaves the level's name plain: the Ultra pill beside the bolt says it is
+	// on, and once is enough.
+	const ultraLevel = index >= 0 && isUltraEffort(choices[index]?.value);
+	const heading = <OverlayHeading title="Effort" value={label} valueTestID="effort-slider-value" ultra={ultraLevel} />;
 	const togglesWidth = (ultracode ? ULTRA_SLOT : 0) + (fast ? BOLT : 0) + (ultracode && fast ? TOGGLE_GAP : 0);
 	return (
 		<View style={styles.stack}>
@@ -282,7 +285,7 @@ export function EffortSlider({ choices, onChoose, onRelease, fast, ultracode }: 
 				}}
 				testID="effort-slider"
 			>
-				<SliderTrack trackWidth={trackWidth} laidOut={laidOut} keys={keys} lit={index >= 0} blobX={blobX} gesture={drag} onWidth={setWidth} />
+				<SliderTrack trackWidth={trackWidth} laidOut={laidOut} keys={keys} lit={index >= 0} ultra={Boolean(ultracode?.on) || ultraLevel} blobX={blobX} gesture={drag} onWidth={setWidth} />
 			</View>
 		</View>
 	);
@@ -301,12 +304,14 @@ export function EffortSlider({ choices, onChoose, onRelease, fast, ultracode }: 
  * Memoised on props that hold still through a drag, so a level crossed
  * re-renders the heading, not the track.
  */
-const SliderTrack = memo(function SliderTrack({ trackWidth, laidOut, keys, lit, blobX, gesture, onWidth }: {
+const SliderTrack = memo(function SliderTrack({ trackWidth, laidOut, keys, lit, ultra, blobX, gesture, onWidth }: {
 	trackWidth: number;
 	laidOut: number;
 	keys: readonly string[];
 	/** A level is chosen, so the fill and the blob show. */
 	lit: boolean;
+	/** Ultracode is on: the fill is drawn in desktop's Ultracode gradient. */
+	ultra: boolean;
 	blobX: SharedValue<number>;
 	gesture: ComponentProps<typeof GestureDetector>["gesture"];
 	onWidth: (width: number) => void;
@@ -323,7 +328,11 @@ const SliderTrack = memo(function SliderTrack({ trackWidth, laidOut, keys, lit, 
 				{dots(t.textFaint)}
 				{lit ? (
 					<Animated.View pointerEvents="none" style={[styles.fill, fillStyle]} testID="effort-slider-fill">
-						{dots(t.textSecondary)}
+						{/* With Ultracode on, the fill is the Ultracode gradient laid
+						    across the whole track, so the blob uncovers more of it
+						    as it climbs rather than stretching it. */}
+						{ultra ? <View pointerEvents="none" testID="effort-slider-ultra-fill" style={[styles.ultraFill, { width: laidOut }]} /> : null}
+						{dots(ultra ? ULTRA_DOT : t.textSecondary)}
 					</Animated.View>
 				) : null}
 				{lit ? <Animated.View pointerEvents="none" testID="effort-slider-blob" style={[styles.blob, blobStyle]} /> : null}
@@ -354,15 +363,15 @@ function UltracodeSwitch({ on, toggle }: FastToggle) {
 			accessibilityLabel="Ultracode"
 			accessibilityState={{ checked: on }}
 			testID="effort-slider-ultracode"
-			style={styles.ultra}
+			// The pill is the button itself, as the bolt is, and its label takes
+			// no touches: a tap on the gradient label (an SVG, which hit-tests its
+			// own shapes) fell through to the overlay's backdrop and closed the
+			// slider as it flipped Ultra.
+			style={({ pressed }) => [styles.ultraPill, on && styles.ultraPillOn, pressed && styles.ultraPillPressed]}
 		>
-			{({ pressed }) => (
-				// A low wash of the text colour round the word, so it reads as a
-				// button; a touch more of it while on, and while pressed.
-				<View style={[styles.ultraPill, on && styles.ultraPillOn, pressed && styles.ultraPillPressed]}>
-					{on ? <GradientText style={styles.ultraLabel}>Ultra</GradientText> : <Text style={[styles.ultraLabel, styles.ultraOff]} numberOfLines={1}>Ultra</Text>}
-				</View>
-			)}
+			<View pointerEvents="none">
+				{on ? <GradientText style={styles.ultraLabel}>Ultra</GradientText> : <Text style={[styles.ultraLabel, styles.ultraOff]} numberOfLines={1}>Ultra</Text>}
+			</View>
 		</Pressable>
 	);
 }
@@ -394,6 +403,10 @@ const BOLT_SLOP = 6;
 // Ultra's room beside the bolt: the word in the caption face, so the slot
 // opposite is as wide and the heading stays centred.
 const ULTRA_SLOT = 50;
+// The Ultracode gradient as a native gradient, blue through purple to pink.
+const ULTRA_FILL = `linear-gradient(to right, ${ultraGradient.slice(0, 3).join(", ")})`;
+// The lit dots over the gradient: white, as the blob is.
+const ULTRA_DOT = "rgba(255, 255, 255, 0.85)";
 const ULTRA_PILL = 24;
 // Between Ultra and the bolt.
 const TOGGLE_GAP = space.sm;
@@ -437,6 +450,7 @@ const makeStyles = (t: Theme) =>
 			...overlayCardStyle(t, TRACK / 2 + CARD_PAD),
 		},
 		track: { maxWidth: "100%", height: TRACK, borderRadius: TRACK / 2, borderCurve: "continuous", backgroundColor: t.bgElevatedHover, overflow: "hidden", justifyContent: "center" },
+		ultraFill: { position: "absolute", left: 0, top: 0, bottom: 0, experimental_backgroundImage: ULTRA_FILL },
 		// From the track's start to just past the blob, clipping the lit dots.
 		fill: { position: "absolute", left: 0, top: 0, bottom: 0, borderRadius: TRACK / 2, backgroundColor: t.accentBorder, overflow: "hidden", justifyContent: "center" },
 		dot: { position: "absolute", width: DOT * 2, height: DOT * 2, borderRadius: DOT },

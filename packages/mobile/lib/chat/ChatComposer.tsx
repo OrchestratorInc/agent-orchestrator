@@ -9,6 +9,7 @@ import Svg, { Defs, LinearGradient, Rect, Stop } from "react-native-svg";
 import Animated, { FadeIn, FadeOut, interpolate, measure, useAnimatedReaction, useAnimatedRef, useAnimatedStyle, useFrameCallback, useSharedValue, withSpring, withTiming, type SharedValue } from "react-native-reanimated";
 import { useReanimatedFocusedInput, useReanimatedKeyboardAnimation } from "react-native-keyboard-controller";
 import { useComposerDockRise } from "./composerDock";
+import { rememberChatSettings } from "./chatSettingsTemplate";
 import { fastPendingKey, rememberFastModel, usePendingFast } from "./learnedFast";
 import { turnSettingsParts } from "./turnSettingsModel";
 import { KeyboardMotionScope, useKeyboardMotion } from "./keyboardMotion";
@@ -649,6 +650,10 @@ function Composer({
 		if (machine && !cloud && fastModelLabel) void rememberFastModel(machine, snapshot.harness, fastModelLabel);
 	}, [machine, cloud, fastModelLabel, snapshot.harness]);
 	usePendingFast(machine && !cloud ? fastPendingKey(machine, sessionId) : null, effort.fast, Boolean(configOptions?.length));
+	// The agent's settings as it reports them, kept for New task's pickers (chatSettingsTemplate).
+	useEffect(() => {
+		if (machine && !cloud && configOptions?.length) void rememberChatSettings(machine, snapshot.harness, configOptions);
+	}, [machine, cloud, configOptions, snapshot.harness]);
 	// Read as the message goes.
 	ultracodeOn.current = effort.sendsUltracode;
 	keepUltracode.current = effort.keepUltracode;

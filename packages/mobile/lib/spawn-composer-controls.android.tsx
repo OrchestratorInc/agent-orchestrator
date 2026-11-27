@@ -65,6 +65,7 @@ export function SpawnComposerControls({
 	onSelectEffort,
 	fast,
 	ultracode,
+	settingsTemplate,
 	onChoosePhoto,
 	onChooseFile,
 	onPasteImages,
@@ -85,7 +86,7 @@ export function SpawnComposerControls({
 	const close = () => setOpenMenu(null);
 	// The chat's own model wheels, effort slider and permission picker, over
 	// the keyboard; typing puts them away.
-	const pickers = useSpawnPickers({ agents, agentModels, harness, modelSelection, onSelectAgentModel, approvalModes, approvalMode, onSelectApprovalMode, prompt });
+	const pickers = useSpawnPickers({ agents, agentModels, harness, modelSelection, onSelectAgentModel, approvalModes, approvalMode, onSelectApprovalMode, prompt, settingsTemplate });
 	const effortSlider = pickers.effortSlider;
 	useCloseMenuOnBack(Boolean(openMenu), close);
 	const selectedProject = projects.find((project) => project.id === projectId);
