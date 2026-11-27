@@ -15,18 +15,6 @@ const COLOR_CLASS: Record<AccountColor, string> = {
 	pink: "bg-(--account-color-pink)",
 };
 
-// A faint wash of the account's color behind a chip, so the whole chip reads as that account.
-const TINT_CLASS: Record<AccountColor, string> = {
-	red: "bg-[color-mix(in_oklch,var(--account-color-red)_22%,transparent)]",
-	orange: "bg-[color-mix(in_oklch,var(--account-color-orange)_22%,transparent)]",
-	amber: "bg-[color-mix(in_oklch,var(--account-color-amber)_22%,transparent)]",
-	green: "bg-[color-mix(in_oklch,var(--account-color-green)_22%,transparent)]",
-	teal: "bg-[color-mix(in_oklch,var(--account-color-teal)_22%,transparent)]",
-	blue: "bg-[color-mix(in_oklch,var(--account-color-blue)_22%,transparent)]",
-	violet: "bg-[color-mix(in_oklch,var(--account-color-violet)_22%,transparent)]",
-	pink: "bg-[color-mix(in_oklch,var(--account-color-pink)_22%,transparent)]",
-};
-
 /** The class that paints a swatch or segment in an account color token. */
 export const accountColorClass = (color: AccountColor) => COLOR_CLASS[color];
 
@@ -78,8 +66,8 @@ function AccountLetters({ letters, color }: { letters: string; color?: AccountCo
 	);
 }
 
-/** An account as one chip: its letters on their color, then its name, all over a wash of that
- * color. Used where the account is the thing being picked, so it reads before any other text. */
+/** An account as its letters on their color, then its name in plain text. Used where the account is
+ * the thing being picked. */
 export function AccountChip({ provider, accountProvider, name, email, color, letters: given, label, compact, className }: AccountBadgeProps & {
 	label: string;
 	/** Letters only, for a tight row; the caller names the account in its tooltip and label. */
@@ -87,7 +75,7 @@ export function AccountChip({ provider, accountProvider, name, email, color, let
 }) {
 	const letters = given || accountAbbreviation({ name, email, provider: accountProvider ?? provider });
 	return (
-		<span className={cn("inline-flex h-[22px] min-w-0 items-center gap-1.5 rounded-md p-0.5", !compact && "pr-2", color ? TINT_CLASS[color] : "bg-foreground/8", className)}>
+		<span className={cn("inline-flex min-w-0 items-center gap-2", className)}>
 			<AccountLetters letters={letters} color={color} />
 			{compact ? null : <span className="min-w-0 truncate text-foreground">{label}</span>}
 		</span>
