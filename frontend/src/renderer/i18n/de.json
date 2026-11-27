@@ -2819,6 +2819,8 @@
 	"files.sessionFiles": "Sitzungsdateien",
 	"files.error.loadWorkspace": "Workspace-Dateien konnten nicht geladen werden",
 	"files.error.workspaceMissing": "Dieser Arbeitsbereich existiert nicht mehr. Stellen Sie den Ordner wieder her und versuchen Sie es erneut.",
+	"files.workspacePending": "Arbeitsbereich dieser Sitzung wird eingerichtet…",
+	"files.workspaceGone": "Der Arbeitsbereichsordner dieser Sitzung ist nicht auf dem Datenträger.",
 	"files.error.searchWorkspace": "Unable to search workspace files",
 	"files.browseAll": "Browse all files",
 	"files.reviewChanges": "Changes",

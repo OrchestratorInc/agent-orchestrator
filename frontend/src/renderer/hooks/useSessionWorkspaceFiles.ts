@@ -138,9 +138,23 @@ export type ReviewTarget = {
 	error?: Error;
 };
 
+/**
+ * Answers that describe the workspace rather than a fault: a chat whose
+ * worktree is still being made or was removed, a project folder that moved,
+ * and a snapshot the review refreshes on its own. The UI shows these as
+ * states, so they are not reported as crashes.
+ */
+const EXPECTED_WORKSPACE_ANSWERS: ReadonlyMap<string, number> = new Map([
+	["SESSION_WORKSPACE_NOT_FOUND", 404],
+	["PROJECT_FOLDER_MISSING", 404],
+	["WORKSPACE_SNAPSHOT_STALE", 409],
+]);
+
 /** A failed workspace read that keeps the daemon's error code, for callers that act on it. */
 export class WorkspaceRequestError extends Error {
 	readonly telemetryCode: string = "WORKSPACE_REQUEST_ERROR";
+	/** Read by error reporting, which skips an expected answer. */
+	readonly expected: boolean;
 	constructor(
 		message: string,
 		readonly code?: string,
@@ -148,6 +162,7 @@ export class WorkspaceRequestError extends Error {
 	) {
 		super(message);
 		this.name = "WorkspaceRequestError";
+		this.expected = code !== undefined && status !== undefined && EXPECTED_WORKSPACE_ANSWERS.get(code) === status;
 	}
 }
 
@@ -161,6 +176,11 @@ export function workspaceErrorCode(error: unknown): string | undefined {
 
 export function isMissingWorkspaceError(error: unknown): boolean {
 	return error instanceof WorkspaceRequestError && error.code === "PROJECT_FOLDER_MISSING" && error.status === 404;
+}
+
+/** The session has no worktree on disk: one still being made, or one that was removed. */
+export function isWorkspaceNotFoundError(error: unknown): boolean {
+	return error instanceof WorkspaceRequestError && error.code === "SESSION_WORKSPACE_NOT_FOUND" && error.status === 404;
 }
 
 export function isStaleWorkspaceSnapshotError(error: unknown): boolean {

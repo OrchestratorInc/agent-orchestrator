@@ -3307,6 +3307,8 @@
 	"files.sessionFiles": "Oturum dosyaları",
 	"files.error.loadWorkspace": "Çalışma alanı dosyaları yüklenemiyor",
 	"files.error.workspaceMissing": "Bu çalışma alanı artık yok. Klasörünü geri yükleyip yeniden deneyin.",
+	"files.workspacePending": "Bu oturumun çalışma alanı hazırlanıyor…",
+	"files.workspaceGone": "Bu oturumun çalışma alanı klasörü diskte yok.",
 	"files.error.searchWorkspace": "Çalışma alanı dosyalarında aranamıyor",
 	"files.browseAll": "Tüm dosyalara göz at",
 	"files.reviewChanges": "Değişiklikler",

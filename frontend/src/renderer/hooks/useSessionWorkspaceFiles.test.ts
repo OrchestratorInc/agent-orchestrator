@@ -1,8 +1,10 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { isExpectedSentryError } from "../../../../packages/shared/telemetry/ao-error";
 import {
 	WorkspaceRequestError,
 	isMissingWorkspaceError,
 	isStaleWorkspaceSnapshotError,
+	isWorkspaceNotFoundError,
 	clearMissingWorkspace,
 	knownMissingWorkspace,
 	recordWorkspaceResult,
@@ -52,6 +54,26 @@ describe("retryWorkspaceRead", () => {
 		expect(retryWorkspaceRead(3, new Error("offline"))).toBe(false);
 		expect(retryWorkspaceRead(0, new WorkspaceRequestError("moved", "WORKSPACE_REF_MOVED", 409))).toBe(false);
 		expect(retryWorkspaceRead(0, new WorkspaceRequestError("gone", "WORKSPACE_BRANCH_NOT_FOUND", 404))).toBe(false);
+	});
+});
+
+describe("expected workspace answers", () => {
+	it("are not reported as crashes: a worktree not made yet or removed, a moved folder, a refreshed snapshot", () => {
+		expect(isExpectedSentryError(new WorkspaceRequestError("not found", "SESSION_WORKSPACE_NOT_FOUND", 404))).toBe(true);
+		expect(isExpectedSentryError(new WorkspaceRequestError("missing", "PROJECT_FOLDER_MISSING", 404))).toBe(true);
+		expect(isExpectedSentryError(new WorkspaceRequestError("stale", "WORKSPACE_SNAPSHOT_STALE", 409))).toBe(true);
+	});
+
+	it("still reports the same code with another status, other codes, and uncoded failures", () => {
+		expect(isExpectedSentryError(new WorkspaceRequestError("busy", "SESSION_WORKSPACE_NOT_FOUND", 500))).toBe(false);
+		expect(isExpectedSentryError(new WorkspaceRequestError("denied", "SESSION_WORKSPACE_UNREADABLE", 409))).toBe(false);
+		expect(isExpectedSentryError(new WorkspaceRequestError("offline"))).toBe(false);
+	});
+
+	it("names a session with no worktree on disk by exact code and status", () => {
+		expect(isWorkspaceNotFoundError(new WorkspaceRequestError("not found", "SESSION_WORKSPACE_NOT_FOUND", 404))).toBe(true);
+		expect(isWorkspaceNotFoundError(new WorkspaceRequestError("missing", "PROJECT_FOLDER_MISSING", 404))).toBe(false);
+		expect(isWorkspaceNotFoundError(new WorkspaceRequestError("busy", "SESSION_WORKSPACE_NOT_FOUND", 500))).toBe(false);
 	});
 });
 

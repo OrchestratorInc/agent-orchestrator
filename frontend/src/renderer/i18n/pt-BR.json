@@ -2872,6 +2872,8 @@
 	"files.sessionFiles": "Arquivos da sessão",
 	"files.error.loadWorkspace": "Não foi possível carregar os arquivos do workspace",
 	"files.error.workspaceMissing": "Este workspace não existe mais. Restaure a pasta e tente novamente.",
+	"files.workspacePending": "Preparando o workspace desta sessão…",
+	"files.workspaceGone": "A pasta do workspace desta sessão não está no disco.",
 	"files.error.searchWorkspace": "Unable to search workspace files",
 	"files.browseAll": "Browse all files",
 	"files.reviewChanges": "Changes",
