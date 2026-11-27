@@ -149,6 +149,21 @@ it("prefers the list's measured width over the caller's estimate", () => {
 	expect(firstRender(log, "later-k")).toBe(402.5);
 });
 
+it("follows a changed estimate while the row has measured nothing", () => {
+	const log: [string, number | undefined][] = [];
+	const unmeasured = () => ({ getBoundingClientRect: () => ({ width: 0 }) });
+	act(() => { renderer = create(createElement(EstimatedSlot, { id: "steer", estimate: 350, log }), { createNodeMock: unmeasured }); });
+	act(() => renderer!.update(createElement(EstimatedSlot, { id: "steer", estimate: 834, log })));
+	expect(log.at(-1)?.[1]).toBe(834);
+});
+
+it("keeps a measured width when the estimate changes", () => {
+	const log: [string, number | undefined][] = [];
+	act(() => { renderer = create(createElement(EstimatedSlot, { id: "first-a", estimate: 350, log }), { createNodeMock: firstBatchOnly }); });
+	act(() => renderer!.update(createElement(EstimatedSlot, { id: "first-a", estimate: 834, log })));
+	expect(log.at(-1)?.[1]).toBe(402.5);
+});
+
 it("leaves a row unsized when the window has no size yet", () => {
 	screen.width = 0;
 	const log: [string, number | undefined][] = [];

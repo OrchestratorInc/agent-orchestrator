@@ -63,7 +63,11 @@ export function useMenuRowWidth(estimate?: number): {
 } {
 	const shared = useContext(SharedRowWidth);
 	const ref = useRef<View>(null);
-	const [width, setWidth] = useState<number | undefined>(() => shared?.current ?? (estimate != null && estimate > 0 ? estimate : windowWidth()));
+	// Only a real width is kept: one inherited from the list or measured here.
+	// The guess is worked out again on every render, so a row that never
+	// measures follows its caller's estimate when the window changes.
+	const [measuredWidth, setWidth] = useState<number | undefined>(() => shared?.current);
+	const width = measuredWidth ?? (estimate != null && estimate > 0 ? estimate : windowWidth());
 	const measured = useCallback((next: number) => {
 		// Only a real width seeds the rows after this one: a slot laid out at
 		// zero for a moment would otherwise start every later row at zero.
