@@ -35,6 +35,8 @@ export type ReviewActionsSheetProps = {
 	onPolicyChange: (key: ReviewPolicyKey, value: boolean) => void;
 	/** Undefined when no reviewer agent can run. */
 	reviewer?: ReviewerPickerProps;
+	/** The session's settings are not read yet: the reviewer row waits rather than saying none can run. */
+	reviewersLoading?: boolean;
 	externalReviewers: ExternalReviewerRow[];
 	onRerequest: (id: string) => void;
 };

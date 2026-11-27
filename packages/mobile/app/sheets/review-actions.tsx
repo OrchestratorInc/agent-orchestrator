@@ -7,7 +7,7 @@ import {
 	type SessionPRSummary,
 	type SessionReviews,
 } from "../../lib/api";
-import { userFacingError } from "../../lib/connectionError";
+import { RECONNECTING_ACTION_COPY, userFacingError } from "../../lib/connectionError";
 import { haptics } from "../../lib/haptics";
 import { hostRouteMatches } from "../../lib/hostRoute";
 import { ReviewActionsSheet } from "../../lib/review-actions-sheet";
@@ -49,7 +49,8 @@ function ReviewActionsContent() {
 	const { sessionId = "", prUrl = "", hostId: routeHostId } = useLocalSearchParams<{ sessionId?: string; prUrl?: string; reviewer?: string; hostId?: string }>();
 	const hostMatches = hostRouteMatches(routeHostId, currentHostId);
 	const [agents, setAgents] = useState<ReviewSettings["reviewers"]>([]);
-	const [models, setModels] = useState<AgentModelCatalog>();
+	// With the reviewer it lists, so a reconnect keeps it on screen and only a new reviewer drops it.
+	const [models, setModels] = useState<{ harness: string; catalog: AgentModelCatalog }>();
 	const [reviewerConfig, setReviewerConfig] = useState<ReviewerAgentConfig>({});
 	const [inheritedConfig, setInheritedConfig] = useState<ReviewSettings["inheritedConfig"]>({});
 	const [pr, setPR] = useState<SessionPRSummary>();
@@ -64,6 +65,24 @@ function ReviewActionsContent() {
 	const [policies, setPolicies] = useState<ReviewPolicies>();
 	const [busy, setBusy] = useState<BusyAction>();
 	const [error, setError] = useState("");
+	// The machine's live connection is null while the app re-races its endpoints
+	// (after an app switch). The sheet stays as it was: what this machine can do
+	// comes from its last connection, requests only ever go over the live one,
+	// and one asked for meanwhile says it is still reconnecting.
+	const knownBackend = useRef(backend);
+	if (backend) knownBackend.current = backend;
+	const can = backend ?? knownBackend.current;
+	// As of now, not as of the render that made a handler: a confirmation can stay open across a reconnect.
+	const liveBackend = useRef(backend);
+	liveBackend.current = backend;
+	const connection = () => {
+		if (!liveBackend.current) setError(RECONNECTING_ACTION_COPY);
+		return liveBackend.current;
+	};
+	const connected = Boolean(backend);
+	useEffect(() => {
+		if (connected) setError((current) => current === RECONNECTING_ACTION_COPY ? "" : current);
+	}, [connected]);
 
 	const load = useCallback(async () => {
 		if (!hostMatches || !backend || !sessionId) return;
@@ -88,12 +107,11 @@ function ReviewActionsContent() {
 	useEffect(() => { void load(); }, [load]);
 	useEffect(() => {
 		const request = ++modelRequest.current;
-		setModels(undefined);
 		const reviewerModels = backend?.reviewerModels;
 		if (!hostMatches || !reviewerModels || !effectiveReviewer) return;
 		const polling = new AbortController();
 		void reviewerModels(effectiveReviewer, polling.signal)
-			.then((result) => { if (request === modelRequest.current) setModels(result); })
+			.then((result) => { if (request === modelRequest.current) setModels({ harness: effectiveReviewer, catalog: result }); })
 			.catch(() => { if (request === modelRequest.current) setModels(undefined); });
 		return () => polling.abort();
 	}, [backend, effectiveReviewer, hostMatches]);
@@ -107,18 +125,19 @@ function ReviewActionsContent() {
 		.map((agent) => ({ id: agent.id, label: agent.label || agent.id })), [agents, reviewerOverride]);
 	// What the next review runs with: the session's own model and effort, else
 	// the project's for this reviewer, else the catalog's defaults.
-	const modelState: ReviewerModelState = { catalog: effectiveReviewer ? models : undefined, saved: reviewerConfig, inherited: inheritedConfig[effectiveReviewer] ?? {} };
+	const modelState: ReviewerModelState = { catalog: effectiveReviewer && models?.harness === effectiveReviewer ? models.catalog : undefined, saved: reviewerConfig, inherited: inheritedConfig[effectiveReviewer] ?? {} };
 	const modelView = reviewerModelView(modelState);
 
 	// The switch, the picker and the request each show their own progress, so
 	// none of them adds a haptic of its own; success is the moment worth feeling.
 	async function saveReviewer(id: string, agentConfig: ReviewerAgentConfig) {
-		if (!backend) return;
+		const live = connection();
+		if (!live) { setBusy(undefined); return; }
 		setBusy({ kind: "reviewer", id });
 		setError("");
 		try {
 			const selection = reviewerSwitchSelection(id, agentConfig);
-			await backend.setReviewer(sessionId, id, agentConfig);
+			await live.setReviewer(sessionId, id, agentConfig);
 			setReviewerOverride(id);
 			setReviewerConfig(selection.agentConfig ?? {});
 			haptics.success();
@@ -130,12 +149,14 @@ function ReviewActionsContent() {
 	}
 
 	async function confirmReviewerChange(id: string, agentConfig: ReviewerAgentConfig) {
-		if (!backend || busy) return;
+		if (busy) return;
 		if (!reviewerSelectionChanged(reviewerOverride, reviewerConfig, id, agentConfig)) return;
+		const live = connection();
+		if (!live) return;
 		setBusy({ kind: "reviewer", id });
 		setError("");
 		try {
-			const latest = await backend.reviews(sessionId);
+			const latest = await live.reviews(sessionId);
 			setReviews(latest);
 			const warning = reviewerSwitchWarning(latest.reviews.some((item) => item.status === "running"));
 			if (!warning) { await saveReviewer(id, agentConfig); return; }
@@ -163,13 +184,15 @@ function ReviewActionsContent() {
 	}
 
 	async function updatePolicy(key: ReviewPolicyKey, value: boolean) {
-		if (!backend || !policies || busy) return;
+		if (!policies || busy) return;
+		const live = connection();
+		if (!live) return;
 		const previous = policies;
 		setPolicies({ ...policies, [key]: value });
 		setBusy({ kind: "policy", id: key });
 		setError("");
 		try {
-			await backend.setPolicy(sessionId, key, value);
+			await live.setPolicy(sessionId, key, value);
 			haptics.success();
 		} catch (cause) {
 			setPolicies(previous);
@@ -180,8 +203,9 @@ function ReviewActionsContent() {
 	}
 
 	async function rerequest(reviewerId: string) {
-		const ask = backend?.rerequest;
-		if (!ask || !pr || busy) return;
+		if (!can?.rerequest || !pr || busy) return;
+		const ask = connection()?.rerequest;
+		if (!ask) return;
 		setBusy({ kind: "rerequest", id: reviewerId });
 		setError("");
 		try {
@@ -208,9 +232,12 @@ function ReviewActionsContent() {
 		subtitle={pr ? `PR #${pr.number} · ${pr.title}` : "Reviewer and automation"}
 		alerts={[
 			...(error ? [error] : []),
+			// Opened before the machine answers: say so, rather than spin without a word.
+			...(!backend && !policies && error !== RECONNECTING_ACTION_COPY ? [RECONNECTING_ACTION_COPY] : []),
 			...(prMissing ? ["Pull request not found. Its URL may have changed; reopen review details from the current pull request."] : []),
 		]}
 		policies={policyRows}
+		reviewersLoading={!policies}
 		locked={!policies || Boolean(busy)}
 		onPolicyChange={(key, value) => void updatePolicy(key, value)}
 		reviewer={availableReviewers.length || reviewerOverride ? {
@@ -223,9 +250,9 @@ function ReviewActionsContent() {
 			effort: modelView.effort,
 			onSelectEffort: chooseEffort,
 			busy: Boolean(busy),
-			modelChoice: Boolean(backend?.reviewerModels),
+			modelChoice: Boolean(can?.reviewerModels),
 		} : undefined}
-		externalReviewers={(backend?.rerequest ? externalReviewers : []).map((item) => ({
+		externalReviewers={(can?.rerequest ? externalReviewers : []).map((item) => ({
 			id: item.reviewerId,
 			detail: `${item.count} ${item.count === 1 ? "comment" : "comments"}`,
 			busy: busy?.kind === "rerequest" && busy.id === item.reviewerId,

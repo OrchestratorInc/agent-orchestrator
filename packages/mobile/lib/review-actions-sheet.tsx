@@ -17,7 +17,7 @@ import { SHEET_SCROLL_CONTENT, SheetHeader } from "./ui";
  * scroll view stays React Native because it is what cooperates with the
  * bottom sheet's drag; a Compose list there would fight it for every swipe.
  */
-export function ReviewActionsSheet({ subtitle, alerts, policies, locked, onPolicyChange, reviewer, externalReviewers, onRerequest }: ReviewActionsSheetProps) {
+export function ReviewActionsSheet({ subtitle, alerts, policies, locked, onPolicyChange, reviewer, reviewersLoading, externalReviewers, onRerequest }: ReviewActionsSheetProps) {
 	const styles = useThemedStyles(makeStyles);
 	return (
 		<ScrollView style={styles.screen} contentContainerStyle={SHEET_SCROLL_CONTENT} nestedScrollEnabled keyboardShouldPersistTaps="handled">
@@ -31,7 +31,9 @@ export function ReviewActionsSheet({ subtitle, alerts, policies, locked, onPolic
 			<Section title="Orchestrator reviewer" footer={reviewerSectionFooter(reviewer)}>
 				{reviewer
 					? <MaterialList><ReviewerPicker {...reviewer} /></MaterialList>
-					: <Text style={styles.empty}>No reviewer agents are available. Install or sign in to an agent on desktop.</Text>}
+					: reviewersLoading
+						? <MaterialList><LoadingItem title="Reviewer" /></MaterialList>
+						: <Text style={styles.empty}>No reviewer agents are available. Install or sign in to an agent on desktop.</Text>}
 			</Section>
 			{externalReviewers.length ? (
 				<Section title="External reviewers" footer="Ask a GitHub reviewer to look at the latest changes again.">
@@ -91,6 +93,19 @@ function PolicyItem({ policy, locked, onChange }: { policy: ReviewPolicyRow; loc
 				{policy.busy
 					? <CircularProgressIndicator color={t.accent} strokeWidth={3} modifiers={[size(iconSize.xl, iconSize.xl)]} />
 					: <Switch value={policy.value} enabled={interactive} onCheckedChange={(value) => onChange(policy.key, value)} />}
+			</ListItem.TrailingContent>
+		</ListItem>
+	);
+}
+
+/** A row whose value is still being read: its label, with a spinner where the value goes, as a loading switch shows. */
+function LoadingItem({ title }: { title: string }) {
+	const t = useTheme();
+	return (
+		<ListItem colors={listColors(t)}>
+			<ListItem.HeadlineContent><ComposeText style={headline}>{title}</ComposeText></ListItem.HeadlineContent>
+			<ListItem.TrailingContent>
+				<CircularProgressIndicator color={t.accent} strokeWidth={3} modifiers={[size(iconSize.xl, iconSize.xl)]} />
 			</ListItem.TrailingContent>
 		</ListItem>
 	);

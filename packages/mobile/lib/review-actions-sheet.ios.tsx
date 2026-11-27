@@ -18,7 +18,7 @@ import { useAnnounceAlerts } from "./useAnnounceAlerts";
  * The review actions sheet as a SwiftUI Form: switches, menu pickers and
  * button rows in grouped sections, with each section's hint as its footer.
  */
-export function ReviewActionsSheet({ subtitle, alerts, policies, locked, onPolicyChange, reviewer, externalReviewers, onRerequest }: ReviewActionsSheetProps) {
+export function ReviewActionsSheet({ subtitle, alerts, policies, locked, onPolicyChange, reviewer, reviewersLoading, externalReviewers, onRerequest }: ReviewActionsSheetProps) {
 	const t = useTheme();
 	const { scheme } = useThemeState();
 	const styles = useThemedStyles(makeStyles);
@@ -42,7 +42,10 @@ export function ReviewActionsSheet({ subtitle, alerts, policies, locked, onPolic
 					<Section title="Orchestrator reviewer" footer={<Text>{reviewerSectionFooter(reviewer)}</Text>}>
 						{reviewer
 							? <ReviewerPicker {...reviewer} />
-							: <Text modifiers={[appFont("subheadline"), secondary, row]}>No reviewer agents are available. Install or sign in to an agent on desktop.</Text>}
+							: reviewersLoading
+								// As a switch that loads: its label, with a spinner in place of the value.
+								? <HStack modifiers={[row]}><Text modifiers={[appFont("body")]}>Reviewer</Text><Spacer /><ProgressView /></HStack>
+								: <Text modifiers={[appFont("subheadline"), secondary, row]}>No reviewer agents are available. Install or sign in to an agent on desktop.</Text>}
 					</Section>
 					{externalReviewers.length ? (
 						<Section title="External reviewers" footer={<Text>Ask a GitHub reviewer to look at the latest changes again.</Text>}>

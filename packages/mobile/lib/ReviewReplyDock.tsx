@@ -1,8 +1,9 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Pressable, StyleSheet, Text, TextInput, View } from "react-native";
 import { KeyboardStickyView } from "react-native-keyboard-controller";
 import { replyQuote } from "../../shared/review/review-messages";
 import { AppSymbol } from "./AppSymbol";
+import { RECONNECTING_ACTION_COPY, userFacingError } from "./connectionError";
 import { haptics } from "./haptics";
 import { usePressFeedback } from "./pressFeedback";
 import { commentReplyLabel } from "./reviewCommentView";
@@ -22,11 +23,14 @@ import { fontScaleCap, iconSize, radius, space, touchTarget, type } from "./toke
 export function ReviewReplyDock({
 	target,
 	bottomInset,
+	connected,
 	onSend,
 	onClose,
 }: {
 	target: ReviewReplyTarget;
 	bottomInset: number;
+	/** Whether the machine's connection is live; false while the app re-races its endpoints. */
+	connected: boolean;
 	/** Posts the reply; rejects with what went wrong. */
 	onSend: (body: string) => Promise<void>;
 	onClose: () => void;
@@ -41,6 +45,10 @@ export function ReviewReplyDock({
 	const sendFeedback = usePressFeedback("button", { tone: "onAccent" });
 	const trimmed = text.trim();
 	const label = commentReplyLabel(comment);
+	// Back on the machine: a "still reconnecting" note is no longer true. Other failures stay.
+	useEffect(() => {
+		if (connected) setError((current) => current === RECONNECTING_ACTION_COPY ? "" : current);
+	}, [connected]);
 	const send = async () => {
 		if (!trimmed || busy) return;
 		setBusy(true);
@@ -49,7 +57,7 @@ export function ReviewReplyDock({
 			await onSend(trimmed);
 			haptics.success();
 		} catch (cause) {
-			setError(cause instanceof Error ? cause.message : "Could not post the reply.");
+			setError(userFacingError(cause, "Could not post the reply."));
 		} finally {
 			setBusy(false);
 		}

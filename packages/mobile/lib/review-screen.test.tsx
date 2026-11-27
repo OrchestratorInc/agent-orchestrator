@@ -15,6 +15,8 @@ const fixtures = vi.hoisted(() => ({
 	getSessionPR: vi.fn(async (): Promise<unknown[]> => []),
 	loadPRDetails: vi.fn(async (): Promise<void> => {}),
 	sendMessage: vi.fn(async () => {}),
+	triggerSessionReview: vi.fn(async () => ({ created: true })),
+	mergeSessionPR: vi.fn(async () => {}),
 	runs: [] as object[],
 	// The machine's verified connection; false while it is being re-raced (after an app switch).
 	connected: true,
@@ -71,7 +73,7 @@ vi.mock("./api", () => ({
 	loadPRDetails: fixtures.loadPRDetails,
 	getSession: fixtures.getSession,
 	sessionTitle: (session: DashboardSession) => session.displayName ?? session.id,
-	cancelSessionReview: vi.fn(), killSessionReviewer: vi.fn(), mergeSessionPR: vi.fn(), restoreSessionReviewer: vi.fn(), sendMessage: fixtures.sendMessage, triggerSessionReview: vi.fn(),
+	cancelSessionReview: vi.fn(), killSessionReviewer: vi.fn(), mergeSessionPR: fixtures.mergeSessionPR, restoreSessionReviewer: vi.fn(), sendMessage: fixtures.sendMessage, triggerSessionReview: fixtures.triggerSessionReview,
 }));
 vi.mock("./store", () => ({
 	HostScope: ({ children }: { children: unknown }) => children,
@@ -106,6 +108,8 @@ beforeEach(() => {
 	fixtures.reviewerSurface = undefined;
 	fixtures.hostId = "dev";
 	fixtures.sendMessage.mockReset().mockResolvedValue(undefined);
+	fixtures.triggerSessionReview.mockReset().mockResolvedValue({ created: true });
+	fixtures.mergeSessionPR.mockReset().mockResolvedValue(undefined);
 	fixtures.runs = [];
 	fixtures.connected = true;
 	cloudState.client = {};
@@ -301,6 +305,39 @@ it("keeps the Comments section and its view while the machine reconnects", async
 	await act(async () => { again.props.onPress(); });
 	expect(fixtures.sendMessage).toHaveBeenCalledTimes(1);
 	expect(reconnecting()).toHaveLength(0);
+});
+
+// The page's own actions, the same way: while reconnecting, Review now and the
+// merge swipe say so rather than doing nothing, and the note goes once back.
+it("says it is reconnecting when Review now or the merge runs before the machine answers", async () => {
+	fixtures.getSession.mockRejectedValue(new Error("not found"));
+	fixtures.getSessionPR.mockImplementation(async () => [{
+		url: "https://github.com/acme/repo/pull/12", htmlUrl: "https://github.com/acme/repo/pull/12", number: 12, title: "Improve mobile review", state: "open", provider: "github",
+		repo: "acme/repo", author: "ao", sourceBranch: "ao/fix", targetBranch: "main", additions: 1, deletions: 0, changedFiles: 1, detailsObservedAt: "2026-11-08T21:00:00Z", headSha: "abcdef123456",
+		ci: { state: "passing", failingChecks: [] }, review: { decision: "approved", hasUnresolvedHumanComments: false, unresolvedBy: [] },
+		mergeability: { state: "mergeable", reasons: [] },
+	}]);
+	await render();
+	const merge = () => renderer!.root.find((node) => (node.type as unknown) === "SwipeToMerge");
+	expect(merge()).toBeDefined();
+
+	fixtures.connected = false;
+	await act(async () => { renderer!.update(<ReviewDetailScreen />); });
+	const reviewNow = renderer!.root.find((node) => (node.type as unknown) === "ReviewActionButton" && node.props.label === "Review now");
+	await act(async () => { await reviewNow.props.onPress(); });
+	expect(fixtures.triggerSessionReview).not.toHaveBeenCalled();
+	expect(alerts()).toEqual([RECONNECTING_ACTION_COPY]);
+	let merged: boolean | undefined;
+	await act(async () => { merged = await merge().props.onMerge(); });
+	expect(merged).toBe(false);
+	expect(fixtures.mergeSessionPR).not.toHaveBeenCalled();
+
+	fixtures.connected = true;
+	await act(async () => { renderer!.update(<ReviewDetailScreen />); });
+	await act(async () => { await Promise.resolve(); });
+	expect(alerts()).toEqual([]);
+	await act(async () => { await renderer!.root.find((node) => (node.type as unknown) === "ReviewActionButton" && node.props.label === "Review now").props.onPress(); });
+	expect(fixtures.triggerSessionReview).toHaveBeenCalledTimes(1);
 });
 
 describe("a Cloud worker's pull request", () => {

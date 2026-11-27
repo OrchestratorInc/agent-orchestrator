@@ -210,3 +210,26 @@ describe("review actions sheet on iOS", () => {
 		expect(announce.mock.calls.map((call) => call[0])).toEqual(["Could not load review actions.", "Pull request not found."]);
 	});
 });
+
+// Before the session's settings are read (or while the machine reconnects), the
+// reviewer row waits; "no reviewer agents" is only for a machine that has none.
+describe("the reviewer row before the settings are read", () => {
+	const none = "No reviewer agents are available. Install or sign in to an agent on desktop.";
+	const says = (root: Awaited<ReturnType<typeof render>>, text: string) => root.findAll((node) => node.props.children === text).length > 0;
+
+	it("shows a spinner on Android", async () => {
+		const root = await render(<ReviewActionsSheet {...sheet({ externalReviewers: [], policies: [], reviewersLoading: true })} />);
+		expect(says(root, none)).toBe(false);
+		expect(root.findAllByType("CircularProgressIndicator" as never)).toHaveLength(1);
+		await act(async () => renderer!.update(<ReviewActionsSheet {...sheet({ externalReviewers: [], policies: [] })} />));
+		expect(says(renderer!.root, none)).toBe(true);
+	});
+
+	it("shows a spinner on iOS", async () => {
+		const root = await render(<IOSReviewActionsSheet {...sheet({ externalReviewers: [], policies: [], reviewersLoading: true })} />);
+		expect(says(root, none)).toBe(false);
+		expect(root.findAllByType("ProgressView" as never)).toHaveLength(1);
+		await act(async () => renderer!.update(<IOSReviewActionsSheet {...sheet({ externalReviewers: [], policies: [] })} />));
+		expect(says(renderer!.root, none)).toBe(true);
+	});
+});

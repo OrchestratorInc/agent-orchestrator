@@ -113,6 +113,13 @@ function ReviewDetailContent() {
 	// review requested, a merge) finishing later must not show that scope's review.
 	const shownBackend = useRef(backend);
 	shownBackend.current = backend;
+	// What an action runs over: the connection as of now, not the render that made
+	// it (a confirmation can stay open across a reconnect). Without one, while the
+	// app re-races the machine's endpoints, the action says so instead of nothing.
+	const connection = () => {
+		if (!shownBackend.current) setError(RECONNECTING_ACTION_COPY);
+		return shownBackend.current;
+	};
 	const load = useCallback(async (quiet = false) => {
 		if (!hostMatches || !backend || !sessionId || shownBackend.current !== backend) return;
 		const request = ++latestLoad.current;
@@ -170,6 +177,7 @@ function ReviewDetailContent() {
 	}, [autoReviewEnabled, load, review?.status]);
 
 	const refresh = async () => {
+		if (!connection()) return;
 		setRefreshing(true);
 		await load();
 		setRefreshing(false);
@@ -188,12 +196,14 @@ function ReviewDetailContent() {
 		openPage(destination);
 	};
 	const restoreReviewer = async () => {
-		if (!backend?.restoreReviewer || mutation) return;
+		if (mutation) return;
+		const restoreSession = connection()?.restoreReviewer;
+		if (!restoreSession) return;
 		haptics.tap();
 		setMutation("restore");
 		setError("");
 		try {
-			await backend.restoreReviewer(sessionId);
+			await restoreSession(sessionId);
 			await load();
 		} catch (value) {
 			setError(userFacingError(value, "Could not restore the reviewer."));
@@ -220,11 +230,12 @@ function ReviewDetailContent() {
 		}
 	};
 	const confirmKillReviewer = () => {
-		const kill = backend?.killReviewer;
-		if (!kill || mutation || !data.reviewerHandleId || autoReviewEnabled) return;
+		if (mutation || !data.reviewerHandleId || autoReviewEnabled || !connection()?.killReviewer) return;
 		Alert.alert("Stop reviewer session?", "This closes the persistent reviewer and cancels any review it is currently running. Review history is preserved.", [
 			{ text: "Keep reviewer", style: "cancel" },
 			{ text: "Stop reviewer", style: "destructive", onPress: () => void (async () => {
+				const kill = connection()?.killReviewer;
+				if (!kill) return;
 				setMutation("kill"); setError("");
 				try { setData(await kill(sessionId)); haptics.success(); }
 				catch (value) { setError(userFacingError(value, "Could not stop the reviewer session.")); }
@@ -233,15 +244,17 @@ function ReviewDetailContent() {
 		]);
 	};
 	const runPrimaryAction = async () => {
-		if (!backend || primaryAction === "none" || mutation) return;
+		if (primaryAction === "none" || mutation) return;
+		const live = connection();
+		if (!live) return;
 		haptics.tap();
 		setMutation("review");
 		setError("");
 		setReviewNotice("");
 		try {
-			if (primaryAction === "stop") await backend.cancel(sessionId);
+			if (primaryAction === "stop") await live.cancel(sessionId);
 			else {
-				const result = await backend.trigger(sessionId);
+				const result = await live.trigger(sessionId);
 				if (!result.created) setReviewNotice("This commit has already been reviewed. Push a new commit to run another review.");
 			}
 			await load();
@@ -254,8 +267,9 @@ function ReviewDetailContent() {
 	const providerPR = observedPR ?? { number: review.prNumber, url: review.prUrl };
 	const reply = async (target: ReviewReplyTarget, body: string) => {
 		// Thrown, not skipped: the dock keeps the text and says why it did not post.
-		if (!backend) throw new Error(RECONNECTING_ACTION_COPY);
-		const post = backend.reply;
+		const live = shownBackend.current;
+		if (!live) throw new Error(RECONNECTING_ACTION_COPY);
+		const post = live.reply;
 		if (!post) return;
 		const { comment } = target;
 		await post({ number: providerPR.number, url: providerPR.url }, body, comment.kind === "inline" ? comment.threadId : undefined);
@@ -274,21 +288,23 @@ function ReviewDetailContent() {
 	// Cloud has no reviewer session to restore or stop: its reviewers run as
 	// conversations, opened while there is one.
 	const daemonControls = reviewerControls(data, review, sessionId);
-	const controls = backend?.cloud ? { open: daemonControls.open === "chat" ? "chat" as const : undefined, restore: false, stop: false } : daemonControls;
+	const controls = isCloudHost(currentHostId) ? { open: daemonControls.open === "chat" ? "chat" as const : undefined, restore: false, stop: false } : daemonControls;
 	const pr = observedPR && awaitingMerge ? { ...observedPR, state: "merged" as const } : observedPR;
 	const merge = pr ? mergeReadiness(pr) : undefined;
 	const closedPR = pr?.state === "merged" || pr?.state === "closed";
 	const merging = mutation === "merge";
 	// The swipe itself is the confirmation; only the screen reader path asks again.
 	const runMerge = async (): Promise<boolean> => {
-		if (!backend || !pr || !merge?.canMerge || (mutation && !merging)) return false;
+		if (!pr || !merge?.canMerge || (mutation && !merging)) return false;
+		const live = connection();
+		if (!live) return false;
 		setMutation("merge"); setError("");
-		try { await backend.merge(sessionId, pr); setMergedURL(pr.url); haptics.success(); await load(true); return true; }
+		try { await live.merge(sessionId, pr); setMergedURL(pr.url); haptics.success(); await load(true); return true; }
 		catch (value) { setError(userFacingError(value, `Could not merge PR #${pr.number}.`)); return false; }
 		finally { setMutation(undefined); }
 	};
 	const confirmMerge = () => {
-		if (!backend || !pr || !merge?.canMerge || mutation) return;
+		if (!pr || !merge?.canMerge || mutation || !connection()) return;
 		Alert.alert(`Merge PR #${pr.number}?`, `This will squash-merge PR #${pr.number} in the remote repository.`, [
 			{ text: "Cancel", style: "cancel" },
 			{ text: "Merge", onPress: () => void runMerge() },
@@ -391,7 +407,7 @@ function ReviewDetailContent() {
 		{/* The reply dock takes the bottom while it is open; otherwise the merge bar,
 		    docked within thumb reach like a checkout's slide-to-pay. It stays after
 		    the merge as a purple "Merged" bar rather than vanishing. */}
-		{replyTarget ? <ReviewReplyDock key={replyTarget.comment.key} target={replyTarget} bottomInset={insets.bottom} onSend={(body) => reply(replyTarget, body)} onClose={() => setReplyTarget(undefined)} />
+		{replyTarget ? <ReviewReplyDock key={replyTarget.comment.key} target={replyTarget} bottomInset={insets.bottom} connected={Boolean(backend)} onSend={(body) => reply(replyTarget, body)} onClose={() => setReplyTarget(undefined)} />
 		: pr && (merge?.canMerge || pr.state === "merged") ? <View style={[styles.mergeFooter, { paddingBottom: Math.max(insets.bottom, space.md) }]}>
 			<SwipeToMerge label={`Swipe to merge PR #${pr.number}`} busyLabel="Merging…" merged={pr.state === "merged"} mergedLabel={`Merged PR #${pr.number}`} busy={merging} disabled={Boolean(mutation) && !merging} onMerge={runMerge} onAccessibilityActivate={confirmMerge} />
 		</View> : null}
