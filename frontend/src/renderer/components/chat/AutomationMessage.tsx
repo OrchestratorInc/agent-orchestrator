@@ -49,8 +49,9 @@ import type { ConversationActivity, ConversationItem, ConversationMessage } from
 import { ChatMarkdown, FileReference, SessionLabelLink, useChatBrowserOpen, useWorkspaceFile } from "./ChatMarkdown";
 import { formatMessageTimestamp, humanBubbleClass, MessageTimestamp, QueuedNote } from "./ChatTimelineItems";
 import { cachedBy, Folded } from "./WorkerUpdates";
+import type { FailedCheck, PullRequestAutomation, PullRequestRef, ReviewComment } from "../../../../../packages/shared/chat/pull-request-automation";
 
-export type PullRequestRef = { number: number; title?: string; url?: string };
+export type { FailedCheck, PullRequestRef, ReviewComment };
 
 export type FileFeedback = {
 	path: string;
@@ -64,8 +65,6 @@ export type FileFeedback = {
 	feedback: string;
 };
 
-export type FailedCheck = { name: string; url?: string; log?: string };
-export type ReviewComment = { path?: string; line?: number; author: string; body: string };
 export type AutomationNotice = "orchestratorReplaced" | "contextCarried" | "reviewTask";
 
 export type Automation =
@@ -73,11 +72,7 @@ export type Automation =
 	| { kind: "diffSelection"; path: string; start?: number; end?: number; instruction: string }
 	| { kind: "gitAction"; action: SessionGitActionKind; base?: string; prNumber?: number; files?: string[] }
 	| { kind: "browserFeedback"; annotations: ParsedBrowserAnnotationMessage }
-	| { kind: "ciFailing"; pr: PullRequestRef; checks: FailedCheck[] }
-	// `at` is when the event happened on the forge; absent in messages from before AO wrote it.
-	| { kind: "reviewComments"; pr: PullRequestRef; comments: ReviewComment[]; at?: string }
-	| { kind: "changesRequested"; pr: PullRequestRef; author?: string; body: string; at?: string }
-	| { kind: "mergeConflict"; pr: PullRequestRef }
+	| PullRequestAutomation
 	| { kind: "notice"; notice: AutomationNotice };
 
 /* -------------------------------------------------------------------------- */
@@ -286,9 +281,11 @@ export function readAutomation(text: string): Automation | null {
 	return readUserAction(trimmed) ?? readPullRequestNudge(trimmed) ?? readNotice(trimmed);
 }
 
-// A message an agent sent is the agent's, whatever its text says.
+// A message an agent sent is the agent's, whatever its text says. A pull request
+// event AO Cloud sent with the message is read from the event, not its text.
 export const automationOf = cachedBy((item) =>
-	item.kind === "message" && !item.senderSessionId && !/^\s*\[from /.test(item.text) ? readAutomation(item.text) : null,
+	item.kind !== "message" || item.senderSessionId ? null
+		: item.pullRequestEvent ?? (/^\s*\[from /.test(item.text) ? null : readAutomation(item.text)),
 );
 
 type PullRequestFeedback = Extract<Automation, { kind: "reviewComments" | "ciFailing" }>;
@@ -392,7 +389,6 @@ function mergedReviewComments(burst: readonly ConversationMessage[]): Extract<Au
 /* -------------------------------------------------------------------------- */
 
 type UserAction = Extract<Automation, { kind: "fileFeedback" | "diffSelection" | "gitAction" | "browserFeedback" }>;
-type PullRequestAutomation = Extract<Automation, { pr: PullRequestRef }>;
 
 /**
  * An automation message drawn as what it is, or `fallback` when AO cannot tell.

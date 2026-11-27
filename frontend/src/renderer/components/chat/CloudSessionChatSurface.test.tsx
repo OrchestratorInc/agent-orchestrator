@@ -1185,6 +1185,26 @@ describe("CloudSessionChatSurface", () => {
 			role: "user", origin: "automation", senderLabel: "Worker · Builder", text: "Full prompt",
 		});
 	});
+
+	it("reads the pull request event an automation message reports, and only from automation", () => {
+		const automation = {
+			kind: "merge_conflict",
+			pullRequest: { number: 8717, url: "https://github.com/acme/app/pull/8717", title: "fix(settings): keep tabs", repository: "acme/app" },
+		};
+		const text = "There are merge conflicts on acme/app#8717. Rebase onto the base branch and resolve them.\nPR: https://github.com/acme/app/pull/8717";
+		const events: CloudCpClientEvent[] = [
+			{ sessionId: session.id, sequence: 1, type: "chat.user_message", payload: { text, turnId: "turn-1", origin: "automation", senderLabel: "GitHub", displayText: text, automation }, createdAt: "2026-10-01T00:00:00Z" },
+			// A person's message cannot claim to be one.
+			{ sessionId: session.id, sequence: 2, type: "chat.user_message", payload: { text, turnId: "turn-2", authorUserId: "me", automation }, createdAt: "2026-10-01T00:00:01Z" },
+		];
+		const [feedback, typed] = toSnapshot(session, events).items;
+		expect(feedback).toMatchObject({
+			role: "user", origin: "automation", senderLabel: "GitHub", text,
+			pullRequestEvent: { kind: "mergeConflict", pr: { number: 8717, url: "https://github.com/acme/app/pull/8717", title: "fix(settings): keep tabs" } },
+		});
+		expect(typed).toMatchObject({ origin: "human" });
+		expect(typed).not.toHaveProperty("pullRequestEvent");
+	});
 	it("says once, outside any turn, that the session runs the default because the account lacks the project's model", () => {
 		const events: CloudCpClientEvent[] = [
 			{ sessionId: session.id, sequence: 1, type: "session.model_unavailable", payload: { model: "claude-opus-5-5", harness: "claude-code" }, createdAt: "2026-10-01T00:00:00Z" },
