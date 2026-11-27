@@ -20,6 +20,9 @@ var _ ports.WorkspaceTransfer = (*Workspace)(nil)
 // indexSuffix marks the ref that holds what was staged, beside the preserved ref.
 const indexSuffix = "-index"
 
+// movedRef holds the commit a branch was at when its session moved away from here.
+func movedRef(branch string) string { return "refs/ao/moved/" + branch }
+
 // unfinishedGit maps git's per-worktree state files to the operation in progress.
 var unfinishedGit = []struct{ file, name string }{
 	{"rebase-merge", "a rebase"}, {"rebase-apply", "a rebase"}, {"MERGE_HEAD", "a merge"},
@@ -312,8 +315,9 @@ func (w *Workspace) FetchTransfer(ctx context.Context, repoPath, branch, head, b
 }
 
 // AlignTransferBranch points the local branch at head when it is missing or
-// behind head. A local branch with commits head lacks is left alone and
-// returns ErrTransferBranchDiverged.
+// behind head, or still at the commit its session moved away with. A local
+// branch with other commits head lacks is left alone and returns
+// ErrTransferBranchDiverged.
 func (w *Workspace) AlignTransferBranch(ctx context.Context, repoPath, branch, head string) error {
 	repo, err := physicalAbs(repoPath)
 	if err != nil {
@@ -337,10 +341,13 @@ func (w *Workspace) AlignTransferBranch(ctx context.Context, repoPath, branch, h
 	}
 	if _, err := w.run(ctx, w.binary, "-C", repo, "merge-base", "--is-ancestor", current, head); err != nil {
 		var exitErr *exec.ExitError
-		if errors.As(err, &exitErr) && exitErr.ExitCode() == 1 {
+		if !errors.As(err, &exitErr) || exitErr.ExitCode() != 1 {
+			return err
+		}
+		// History rewritten elsewhere replaces the branch only if nothing was committed here since it left.
+		if moved, err := w.revParse(ctx, repo, movedRef(branch)); err != nil || moved != current {
 			return fmt.Errorf("%w: %s", ports.ErrTransferBranchDiverged, branch)
 		}
-		return err
 	}
 	// Refuses a branch checked out in a worktree, which a spawn could not use anyway.
 	_, err = w.run(ctx, w.binary, "-C", repo, "branch", "--force", "--no-track", branch, head)
@@ -356,8 +363,21 @@ func (w *Workspace) RevParse(ctx context.Context, repoPath, ref string) (string,
 	return w.revParse(ctx, repo, ref)
 }
 
-// ReleaseTransferBranch detaches HEAD in the worktree, keeping its files.
+// ReleaseTransferBranch records the branch's commit at movedRef, then detaches
+// HEAD in the worktree when it is still there, keeping its files.
 func (w *Workspace) ReleaseTransferBranch(ctx context.Context, info ports.WorkspaceInfo) error {
+	repo, err := w.repoPathForInfo(info)
+	if err != nil {
+		return err
+	}
+	if tip, err := w.revParse(ctx, repo, "refs/heads/"+info.Branch); err == nil {
+		if out, err := w.run(ctx, w.binary, "-C", repo, "update-ref", movedRef(info.Branch), tip); err != nil {
+			return fmt.Errorf("gitworktree: record moved %s: %w: %s", info.Branch, err, strings.TrimSpace(string(out)))
+		}
+	}
+	if _, err := os.Stat(info.Path); errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
 	path, err := w.validateManagedPath(info.Path)
 	if err != nil {
 		return err

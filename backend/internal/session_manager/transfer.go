@@ -601,10 +601,11 @@ func (m *Manager) receivedSession(ctx context.Context, t domain.SessionTransfer)
 	}
 }
 
-// releaseTransferBranch frees the branch an ended session's worktree still holds.
+// releaseTransferBranch frees the branch an ended session's worktree still
+// holds and records the commit it left at.
 func (m *Manager) releaseTransferBranch(ctx context.Context, rec domain.SessionRecord) {
 	git, ok := m.workspace.(ports.WorkspaceTransfer)
-	if !ok || !dirExists(rec.Metadata.WorkspacePath) {
+	if !ok {
 		return
 	}
 	if err := git.ReleaseTransferBranch(ctx, workspaceInfo(rec)); err != nil {
@@ -812,10 +813,4 @@ func writeFileAtomic(path string, v any) error {
 		return err
 	}
 	return os.Rename(tmp, path)
-}
-
-// dirExists reports whether path is a directory; ending a session removes a clean worktree.
-func dirExists(path string) bool {
-	info, err := os.Stat(path)
-	return path != "" && err == nil && info.IsDir()
 }

@@ -448,13 +448,15 @@ type WorkspaceTransfer interface {
 	// uncommitted work, into the repository from bundlePath, fetching origin
 	// for commits the bundle builds on or the head when there is no bundle.
 	FetchTransfer(ctx context.Context, repoPath, branch, head, bundlePath, remotePreservedRef string) error
-	// AlignTransferBranch points the local branch at head when it is missing or
-	// behind, and returns ErrTransferBranchDiverged when it does not lead there.
+	// AlignTransferBranch points the local branch at head when it is missing,
+	// behind, or still where ReleaseTransferBranch left it, and returns
+	// ErrTransferBranchDiverged when it holds other commits head lacks.
 	AlignTransferBranch(ctx context.Context, repoPath, branch, head string) error
 	// RevParse resolves a ref in the repository.
 	RevParse(ctx context.Context, repoPath, ref string) (string, error)
-	// ReleaseTransferBranch detaches HEAD in a moved session's worktree so the
-	// branch can be checked out again. Files and index are kept.
+	// ReleaseTransferBranch records the commit a moved session's branch is at
+	// and detaches HEAD in its worktree, if still there, so the branch can be
+	// checked out again. Files and index are kept.
 	ReleaseTransferBranch(ctx context.Context, info WorkspaceInfo) error
 	// RestoreTransferIndex puts the index back as it was on the source after
 	// ApplyPreserved, which leaves everything staged.

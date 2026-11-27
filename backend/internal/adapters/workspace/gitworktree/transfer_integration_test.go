@@ -131,6 +131,41 @@ func TestTransferBundleFetchAlign(t *testing.T) {
 	}
 }
 
+// A session that comes back with history rewritten elsewhere replaces the
+// branch it left here, unless a commit was added to that branch since.
+func TestAlignTransferBranchReplacesBranchItsSessionLeft(t *testing.T) {
+	ctx := context.Background()
+	git, _, repoA, _, wsA, _, info := transferPair(t, "feature/back")
+	writeFile(t, info.Path, "one.txt", "one\n")
+	runGit(t, git, info.Path, "add", "-A")
+	runGit(t, git, info.Path, "commit", "-qm", "one")
+	left := gitOutput(t, git, info.Path, "rev-parse", "HEAD")
+	tree := gitOutput(t, git, repoA, "rev-parse", left+"^{tree}")
+	amend := func(message string) string {
+		return gitOutput(t, git, repoA, "commit-tree", tree, "-p", left+"^", "-m", message)
+	}
+	runGit(t, git, repoA, "worktree", "remove", "--force", info.Path)
+	if err := wsA.ReleaseTransferBranch(ctx, info); err != nil {
+		t.Fatalf("release without a worktree: %v", err)
+	}
+	amended := amend("one, amended")
+	if err := wsA.AlignTransferBranch(ctx, repoA, info.Branch, amended); err != nil {
+		t.Fatalf("align over the branch the session left: %v", err)
+	}
+	if got := gitOutput(t, git, repoA, "rev-parse", "refs/heads/"+info.Branch); got != amended {
+		t.Fatalf("branch = %s, want %s", got, amended)
+	}
+
+	if err := wsA.ReleaseTransferBranch(ctx, info); err != nil {
+		t.Fatalf("release again: %v", err)
+	}
+	added := gitOutput(t, git, repoA, "commit-tree", tree, "-p", amended, "-m", "added here")
+	runGit(t, git, repoA, "update-ref", "refs/heads/"+info.Branch, added)
+	if err := wsA.AlignTransferBranch(ctx, repoA, info.Branch, amend("one, amended again")); !errors.Is(err, ports.ErrTransferBranchDiverged) {
+		t.Fatalf("align over a commit added since = %v, want ErrTransferBranchDiverged", err)
+	}
+}
+
 func TestFetchTransferNamesMissingWork(t *testing.T) {
 	ctx := context.Background()
 	git, tmp, _, repoB, wsA, wsB, info := transferPair(t, "feature/missing")

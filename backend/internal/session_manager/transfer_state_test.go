@@ -55,9 +55,10 @@ func (s *moveStore) SessionMovedTo(_ context.Context, id domain.SessionID) (doma
 
 type moveWorkspace struct {
 	*fakeWorkspace
-	bundle func(path string) error
-	head   string
-	apply  func(ports.WorkspaceInfo)
+	bundle   func(path string) error
+	head     string
+	released []string
+	apply    func(ports.WorkspaceInfo)
 }
 
 func (w *moveWorkspace) ApplyPreserved(_ context.Context, ws ports.WorkspaceInfo, _ string) error {
@@ -77,8 +78,11 @@ func (w *moveWorkspace) FetchTransfer(context.Context, string, string, string, s
 func (w *moveWorkspace) AlignTransferBranch(context.Context, string, string, string) error {
 	return nil
 }
-func (w *moveWorkspace) RevParse(context.Context, string, string) (string, error)         { return w.head, nil }
-func (w *moveWorkspace) ReleaseTransferBranch(context.Context, ports.WorkspaceInfo) error { return nil }
+func (w *moveWorkspace) RevParse(context.Context, string, string) (string, error) { return w.head, nil }
+func (w *moveWorkspace) ReleaseTransferBranch(_ context.Context, info ports.WorkspaceInfo) error {
+	w.released = append(w.released, info.Branch)
+	return nil
+}
 func (w *moveWorkspace) RestoreTransferIndex(context.Context, ports.WorkspaceInfo, string) error {
 	return nil
 }
@@ -176,7 +180,7 @@ func TestPrepareTransferWithoutAConversationCarriesTheWork(t *testing.T) {
 }
 
 func TestCommitAfterKeepItHereLeavesTheSessionRunning(t *testing.T) {
-	m, store, _, rt := newMoveManager(t)
+	m, store, ws, rt := newMoveManager(t)
 	if _, err := m.PrepareTransfer(ctx, "mer-1", "trfirst00", toB, false); err != nil {
 		t.Fatal(err)
 	}
@@ -206,6 +210,10 @@ func TestCommitAfterKeepItHereLeavesTheSessionRunning(t *testing.T) {
 	}
 	if !store.sessions["mer-1"].IsTerminated {
 		t.Fatal("commit left the session running")
+	}
+	// The worktree folder is gone, but the commit the branch left at is still recorded.
+	if len(ws.released) == 0 {
+		t.Fatal("commit did not release the branch")
 	}
 }
 
