@@ -521,6 +521,52 @@ describe("SessionChatSurface pending switch effort", () => {
 		expect(modelPicker()).toHaveTextContent("High");
 	});
 
+	it("shows the current agent when another window reverses a switch before the snapshot catches up", async () => {
+		const orchestrator = { ...session, kind: "orchestrator", provider: "claude-code" } satisfies WorkspaceSession;
+		const switchMarker = (sequence: number, sourceHarness: string, targetHarness: string): ConversationSnapshot["items"][number] => ({
+			kind: "activity", id: `switch-${sequence}`, sequence, revision: 0, activityKind: "system", status: "completed",
+			createdAt: "2026-11-27T00:00:00Z", summary: "Switched provider",
+			detail: { event: "provider_switch", sourceHarness, targetHarness },
+		});
+		const sourceSnapshot: ConversationSnapshot & { capabilities: string[] } = {
+			...snapshotFor(orchestrator.id), harness: "claude-code", settings: { model: "claude-opus-5-5" },
+			latestSequence: 1, items: [switchMarker(1, "codex", "claude-code")],
+		};
+		conversationState.snapshot = sourceSnapshot;
+		configState.options = [{
+			id: "model", name: "Model", category: "model", type: "select", currentValue: "claude-opus-5-5",
+			choices: [{ value: "claude-opus-5-5", name: "Opus 5.5" }],
+		}];
+		configState.loaded = true;
+		const client = new QueryClient();
+		const view = render(<Wrapper client={client}><SessionChatSurface session={orchestrator} /></Wrapper>);
+		const modelPicker = () => screen.getByRole("button", { name: "Agent, model and reasoning effort for the next message" });
+		await act(async () => {
+			sideMocks.agentSwitch?.onPendingChange({ harness: "codex", model: "gpt-6.2-sol", modelLabel: "GPT-6.2-Sol", effort: "high" });
+		});
+		await act(async () => {
+			await sideMocks.workspaceSend?.("Start the task.", undefined, "switch-message");
+		});
+		expect(modelPicker()).toHaveTextContent("GPT-6.2-Sol");
+		expect(modelPicker()).toHaveTextContent("High");
+		expect(sideMocks.agentSwitch?.disabled).toBe(true);
+
+		// A newer read that still predates the switch also keeps the Sol selection.
+		conversationState.snapshot = { ...sourceSnapshot, latestSequence: 2 };
+		view.rerender(<Wrapper client={client}><SessionChatSurface session={{ ...orchestrator }} /></Wrapper>);
+		expect(modelPicker()).toHaveTextContent("GPT-6.2-Sol");
+
+		// The first window's next read includes both switches and again reports Claude Code.
+		conversationState.snapshot = {
+			...sourceSnapshot, activeBranchId: "branch-after-reversal", latestSequence: 6,
+			items: [...sourceSnapshot.items, switchMarker(3, "claude-code", "codex"), switchMarker(6, "codex", "claude-code")],
+		};
+		view.rerender(<Wrapper client={client}><SessionChatSurface session={{ ...orchestrator }} /></Wrapper>);
+		expect(modelPicker()).toHaveTextContent("Opus 5.5");
+		expect(sideMocks.agentSwitch?.pending).toBeUndefined();
+		expect(sideMocks.agentSwitch?.disabled).toBe(false);
+	});
+
 	it("sends nothing with a switch until the agent's permission modes are known", async () => {
 		permissionModesState.known = false;
 		conversationState.snapshot = { ...snapshotFor(session.id), harness: "codex" };
