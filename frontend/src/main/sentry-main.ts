@@ -123,9 +123,9 @@ const PROCESS_TYPES = new Map([
 	["renderer", "renderer"], ["GPU", "gpu"], ["Utility", "utility"], ["Zygote", "zygote"],
 	["Sandbox helper", "sandbox_helper"], ["Pepper Plugin", "pepper_plugin"], ["Pepper Plugin Broker", "pepper_plugin_broker"], ["Unknown", "unknown"],
 ]);
-// ResizeObserver loop notices are Chromium warnings raised as window errors;
-// the renderer drops them first, and this catches any other route.
-const EXPECTED_NOISE = /^(?:AbortError|net::ERR_NETWORK_CHANGED|net::ERR_INTERNET_DISCONNECTED|net::ERR_NETWORK_IO_SUSPENDED|ResizeObserver loop (?:completed with undelivered notifications|limit exceeded)\.?)$/i;
+// ResizeObserver loop notices are not listed: only the renderer can tell the
+// bare notice (no error object) from a thrown error with the same text.
+const EXPECTED_NOISE = /^(?:AbortError|net::ERR_NETWORK_CHANGED|net::ERR_INTERNET_DISCONNECTED|net::ERR_NETWORK_IO_SUSPENDED)$/i;
 const DRAIN_TIMEOUT_MS = 2_000;
 const DEBUG_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 // Electron main's own bundles. Any install path before .vite/build is dropped.

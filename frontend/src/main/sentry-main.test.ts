@@ -511,9 +511,11 @@ describe("Electron main Sentry configuration", () => {
 	it("drops expected noise and keeps process-failure and uncaught labels", async () => {
 		await initMainSentry("1.0.0", dataDir, "/tmp/ao-electron-test");
 		const beforeSend = sdk.init.mock.calls[0]?.[0].beforeSend as (event: ErrorEvent) => ErrorEvent | null;
-		for (const message of ["AbortError", "net::ERR_NETWORK_CHANGED", "net::ERR_INTERNET_DISCONNECTED", "ResizeObserver loop completed with undelivered notifications.", "ResizeObserver loop limit exceeded"]) {
+		for (const message of ["AbortError", "net::ERR_NETWORK_CHANGED", "net::ERR_INTERNET_DISCONNECTED"]) {
 			expect(beforeSend({ type: undefined, message })).toBeNull();
 		}
+		// The renderer drops the bare ResizeObserver notice; a thrown error with its text still reports.
+		expect(beforeSend({ type: undefined, message: "ResizeObserver loop completed with undelivered notifications.", exception: { values: [{ type: "TypeError", value: "ResizeObserver loop completed with undelivered notifications." }] } })).not.toBeNull();
 		expect(beforeSend({ type: undefined, message: "Updater failed: net::ERR_NETWORK_CHANGED" })).not.toBeNull();
 		const mainError = (message: string) => beforeSend({
 			type: undefined, message,
