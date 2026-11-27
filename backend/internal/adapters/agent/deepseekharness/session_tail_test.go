@@ -150,7 +150,7 @@ func TestSessionTailStopsOnALogItCannotFollow(t *testing.T) {
 			t.Fatal(err)
 		}
 		appendBytes(t, path, []byte(tailEvent(1, "turn/end")+"\n"))
-		if events, err := tail.Next(ctx); err != shrank || len(events) != 0 {
+		if events, err := tail.Next(ctx); !errors.Is(err, shrank) || len(events) != 0 {
 			t.Fatalf("after the log recovered = %v, %v; want the first failure again", eventTypes(events), err)
 		}
 	})

@@ -177,13 +177,13 @@ func (c *conversation) observeRecordedLaunch(tool *toolState) {
 		return
 	}
 	c.mu.Lock()
-	c.recordFollowerLocked()
+	c.ensureRecordFollowerLocked()
 	c.mu.Unlock()
 	c.pollSubagentRecords()
 }
 
-// recordFollowerLocked returns the follower, creating it. The caller holds mu.
-func (c *conversation) recordFollowerLocked() *recordFollower {
+// ensureRecordFollowerLocked creates the follower once. The caller holds mu.
+func (c *conversation) ensureRecordFollowerLocked() {
 	if c.recordFollower == nil {
 		c.recordFollower = &recordFollower{
 			reader: c.subagentRecords.Open(c.subagentRecordEnv, c.subagentRecordCwd, c.sessionID),
@@ -192,7 +192,6 @@ func (c *conversation) recordFollowerLocked() *recordFollower {
 			said:   map[string]map[string]string{},
 		}
 	}
-	return c.recordFollower
 }
 
 // followRecordsOnReattachLocked follows the records of a turn an earlier
@@ -200,7 +199,7 @@ func (c *conversation) recordFollowerLocked() *recordFollower {
 // while no connection read them. The caller holds mu.
 func (c *conversation) followRecordsOnReattachLocked() {
 	if c.subagentRecords != nil {
-		c.recordFollowerLocked()
+		c.ensureRecordFollowerLocked()
 	}
 }
 
