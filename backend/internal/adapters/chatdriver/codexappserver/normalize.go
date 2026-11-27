@@ -995,17 +995,20 @@ func normalizeItem(params json.RawMessage, completed bool) []ports.ChatEvent {
 	}
 
 	if it.Type == itemContextCompaction {
+		// A compaction in flight is reported running so the timeline can say so
+		// while it works (9 to 15 seconds, longer on a big thread). Its reclaim is
+		// unknown until it settles: the reduced token figure arrives between the
+		// item starting and completing, and the completion rewrites the same row
+		// with it.
+		status := domain.ActivityStatusCompleted
 		if !completed {
-			// A compaction in flight is not yet a fact about the conversation, and the
-			// reclaim is unknown until it settles: the reduced token figure arrives
-			// between the item starting and completing. Emitting on start would put a
-			// row in the timeline that has to be rewritten with the real numbers.
-			return nil
+			status = domain.ActivityStatusRunning
 		}
 		return []ports.ChatEvent{{
 			Kind:           ports.ChatEventCompacted,
 			ProviderTurnID: p.TurnID,
 			ProviderItemID: it.itemID(),
+			ActivityStatus: status,
 		}}
 	}
 
