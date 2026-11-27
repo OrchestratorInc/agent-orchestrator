@@ -276,6 +276,56 @@ func TestNativeCheckpointSettlesDamagedTranscriptsAndSlashCommands(t *testing.T)
 	}
 }
 
+// Stop, Esc or "Cancel request and switch" before Claude's first token: Claude
+// writes the prompt and its hook, then nothing, and puts the prompt back in its
+// input. A later prompt branches from the turn before; a resume adds filler.
+func TestNativeCheckpointSettlesPromptsCancelledBeforeAReply(t *testing.T) {
+	answered := checkpointFixture(t, []string{"A"}, []string{"answer A"})
+	prompt := func(id, promptID, parent, text string) string {
+		return fmt.Sprintf(`{"type":"user","sessionId":"native","uuid":%q,"parentUuid":%q,"promptId":%q,"message":{"content":%q}}`, id, parent, promptID, text) + "\n"
+	}
+	cancelled := prompt("user-p", "prompt-p", "assistant-0", "P") + submissionHookRecord("hook-p", "user-p", 9)
+	filler := `{"type":"assistant","sessionId":"native","uuid":"filler","parentUuid":"hook-p","message":{"model":"<synthetic>","content":[{"type":"text","text":"No response requested."}],"stop_reason":"stop_sequence"}}` + "\n"
+	next := func(parent string) string {
+		return prompt("user-b", "prompt-b", parent, "B") + submissionHookRecord("hook-b", "user-b", 8) +
+			`{"type":"assistant","sessionId":"native","uuid":"answer-b","parentUuid":"hook-b","message":{"content":[{"type":"text","text":"answer B"}],"stop_reason":"end_turn"}}` + "\n"
+	}
+	submitP := domain.NativeCheckpointObservation{Submission: true, PromptID: "prompt-p", SubmissionID: "submission-9", Text: "P"}
+	turnB := []domain.NativeCheckpointObservation{
+		{Submission: true, PromptID: "prompt-b", SubmissionID: "submission-8", Text: "B"}, {PromptID: "prompt-b", Text: "answer B"}}
+	for _, test := range []struct {
+		name, transcript    string
+		later               []domain.NativeCheckpointObservation
+		wantUser, wantError string
+	}{
+		{name: "cancelled tail", transcript: answered + cancelled, wantUser: "user-p"},
+		{name: "cancelled tail resumed with filler", transcript: answered + cancelled + filler, wantUser: "user-p"},
+		{name: "filler, then a normal turn", transcript: answered + cancelled + filler + next("filler"), later: turnB, wantUser: "user-b"},
+		{name: "cancelled on a dead branch", transcript: answered + cancelled + next("assistant-0"), later: turnB, wantUser: "user-b"},
+		{name: "Stop still owed", transcript: answered + cancelled, later: []domain.NativeCheckpointObservation{{PromptID: "prompt-p", Text: "answer P"}},
+			wantError: "Stop answer does not match its native prompt"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			evidence := checkpointEvidence(slices.Concat([]domain.NativeCheckpointObservation{
+				{Submission: true, PromptID: "prompt-0", SubmissionID: "submission-0", Text: "A"},
+				{PromptID: "prompt-0", Text: "answer A"}, submitP}, test.later)...)
+			got, err := verifyCheckpointTranscript(context.Background(), strings.NewReader(test.transcript),
+				ports.NativeCheckpointRequest{ProviderConversationID: "native", Evidence: evidence})
+			if test.wantError != "" {
+				if !errors.Is(err, ports.ErrChatHistoryUnsettled) || !strings.Contains(err.Error(), test.wantError) {
+					t.Fatalf("boundary=%+v error=%v, want %q", got, err, test.wantError)
+				}
+				return
+			}
+			cancelledTail := test.wantUser == "user-p"
+			if err != nil || got.UserMessageID != test.wantUser || got.Interrupted != cancelledTail ||
+				(!cancelledTail && got.AssistantText != "answer B") {
+				t.Fatalf("boundary=%+v error=%v, want user %s", got, err, test.wantUser)
+			}
+		})
+	}
+}
+
 func TestNativeSubmissionCannotAttachToEarlierUserWhenNextPromptIDMissing(t *testing.T) {
 	source := checkpointFixture(t, []string{"continue", "continue"}, []string{"Done", "Done"})
 	source = strings.ReplaceAll(source, `"promptId":"prompt-1",`, "")

@@ -196,7 +196,7 @@ type checkpointTurn struct {
 	// interrupted is a turn Esc ended: Claude records the interrupt marker in
 	// the prompt's own cycle and fires no Stop, so the turn never gets an
 	// end_turn reply. The marker is its settled boundary.
-	interrupted bool
+	interrupted, replied bool
 	// carried is the turn a compaction summary starts. The summary keeps the
 	// prompt ID of the turn that was running or had just ended. resumed means
 	// Claude answered in it after the boundary, so that turn ran on through the
@@ -308,12 +308,6 @@ func verifyCheckpointTranscript(ctx context.Context, input io.Reader, request po
 	for leaf != "" {
 		record, found := records[leaf]
 		if !found && len(chain) > 0 && !uuids[leaf] {
-			first := position[chain[len(chain)-1].UUID]
-			for id, earlier := range records {
-				if position[id] < first {
-					compacted.fold(earlier, wantedSubmissions)
-				}
-			}
 			break
 		}
 		if !found || seen[leaf] {
@@ -322,6 +316,11 @@ func verifyCheckpointTranscript(ctx context.Context, input io.Reader, request po
 		seen[leaf] = true
 		chain = append(chain, record)
 		leaf = record.ParentUUID
+	}
+	for id, record := range records {
+		if !seen[id] {
+			compacted.fold(record, wantedSubmissions)
+		}
 	}
 	slices.Reverse(chain)
 	var turns []checkpointTurn
@@ -413,8 +412,7 @@ func verifyCheckpointTranscript(ctx context.Context, input io.Reader, request po
 			if turn.carried && position[record.UUID] > compacted.boundary {
 				turn.resumed = true
 			}
-			if turn.interrupted && record.Message.Model == claudeSyntheticModel {
-				// Claude's own filler after the marker does not reopen the turn.
+			if record.Message.Model == claudeSyntheticModel {
 				break
 			}
 			text, err := checkpointContent(record.Message.Content)
@@ -423,6 +421,7 @@ func verifyCheckpointTranscript(ctx context.Context, input io.Reader, request po
 			}
 			// A real reply after the marker means the turn is running again.
 			turn.interrupted = false
+			turn.replied = true
 			turn.assistant = text
 			turn.complete = record.Message.StopReason == "end_turn"
 		case "system":
@@ -434,6 +433,11 @@ func verifyCheckpointTranscript(ctx context.Context, input io.Reader, request po
 	}
 	if len(turns) == 0 {
 		return ports.NativeCheckpointBoundary{}, checkpointUnsettled("no native user boundary")
+	}
+	for i := range turns {
+		if !turns[i].replied && !turns[i].complete {
+			turns[i].interrupted, turns[i].complete = true, true
+		}
 	}
 	byPrompt := make(map[string]int)
 	for i, turn := range turns {
@@ -504,8 +508,9 @@ func verifyCheckpointTranscript(ctx context.Context, input io.Reader, request po
 }
 
 // compactedWitnesses names the prompts and AO submissions Claude flushed
-// before its latest compaction. Replay cannot show them, so an observation of
-// one is settled by the boundary that follows it rather than by a turn.
+// before its latest compaction or on a branch it left. Replay cannot show
+// them, so an observation of one is settled by the boundary that follows it
+// rather than by a turn.
 type compactedWitnesses struct {
 	prompts, submissions map[string]bool
 	// boundary is the latest compaction's file position, or -1.
