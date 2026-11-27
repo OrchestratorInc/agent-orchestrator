@@ -5819,5 +5819,7 @@
 	"backgroundTasks.state.failed": "Échec",
 	"backgroundTasks.shells_many": "{{count}} shells sont toujours en cours",
 	"backgroundTasks.agents_many": "{{count}} agents en arrière-plan en cours",
-	"backgroundTasks.tasks_many": "{{count}} tâches en arrière-plan en cours"
+	"backgroundTasks.tasks_many": "{{count}} tâches en arrière-plan en cours",
+	"markdownPreview.loading": "Chargement de l'aperçu du fichier",
+	"markdownPreview.frontmatterReadFailed": "Impossible de lire le frontmatter de ce fichier."
 }

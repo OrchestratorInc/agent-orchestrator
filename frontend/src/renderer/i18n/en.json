@@ -5619,5 +5619,7 @@
 	"backgroundTasks.stale": "stale",
 	"backgroundTasks.kind.shell": "Shell",
 	"backgroundTasks.kind.other": "Background task",
-	"backgroundTasks.state.failed": "Failed"
+	"backgroundTasks.state.failed": "Failed",
+	"markdownPreview.loading": "Loading file preview",
+	"markdownPreview.frontmatterReadFailed": "This file's frontmatter could not be read."
 }

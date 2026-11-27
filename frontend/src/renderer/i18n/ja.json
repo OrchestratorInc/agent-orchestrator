@@ -5639,5 +5639,7 @@
 	"backgroundTasks.stale": "古い情報",
 	"backgroundTasks.kind.shell": "シェル",
 	"backgroundTasks.kind.other": "バックグラウンドタスク",
-	"backgroundTasks.state.failed": "失敗"
+	"backgroundTasks.state.failed": "失敗",
+	"markdownPreview.loading": "ファイルのプレビューを読み込み中",
+	"markdownPreview.frontmatterReadFailed": "このファイルのフロントマターを読み込めませんでした。"
 }

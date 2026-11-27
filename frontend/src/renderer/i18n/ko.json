@@ -5639,5 +5639,7 @@
 	"backgroundTasks.stale": "오래된 정보",
 	"backgroundTasks.kind.shell": "셸",
 	"backgroundTasks.kind.other": "백그라운드 작업",
-	"backgroundTasks.state.failed": "실패"
+	"backgroundTasks.state.failed": "실패",
+	"markdownPreview.loading": "파일 미리보기 로드 중",
+	"markdownPreview.frontmatterReadFailed": "이 파일의 프런트매터를 읽을 수 없습니다。"
 }
