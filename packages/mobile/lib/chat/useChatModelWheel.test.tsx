@@ -1,14 +1,11 @@
 import { act, create, type ReactTestRenderer } from "react-test-renderer";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { PendingAgentSwitch } from "../agentSwitch";
+import type { AgentFastModels, PendingAgentSwitch } from "../agentSwitch";
 import type { ChatConfigOption, ChatModel, ConversationSnapshot } from "./types";
 
 vi.mock("react-native", () => ({ BackHandler: { addEventListener: () => ({ remove: () => {} }) }, Keyboard: { addListener: () => ({ remove: () => {} }) } }));
 
 import { useChatModelWheel } from "./useChatModelWheel";
-
-// Fast mode is off in the app for now (fastMode.ts); its behaviour is still tested.
-vi.mock("./fastMode", () => ({ FAST_MODE_SHOWN: true }));
 
 const snapshot = (over: Partial<ConversationSnapshot> = {}): ConversationSnapshot => ({
 	conversationId: "c",
@@ -36,7 +33,7 @@ let wheel: ReturnType<typeof useChatModelWheel>;
 beforeEach(() => { vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true); });
 afterEach(() => { act(() => renderer?.unmount()); renderer = undefined; vi.unstubAllGlobals(); });
 
-function render(pending?: PendingAgentSwitch, over: { fastOnEffort?: boolean } = {}) {
+function render(pending?: PendingAgentSwitch, over: { fastOnEffort?: boolean; fast?: Record<string, AgentFastModels> } = {}) {
 	const onSettings = vi.fn(() => Promise.resolve());
 	const onOption = vi.fn(() => Promise.resolve([] as ChatConfigOption[]));
 	const onPick = vi.fn();
@@ -48,7 +45,7 @@ function render(pending?: PendingAgentSwitch, over: { fastOnEffort?: boolean } =
 			options: [],
 			onSettings,
 			onOption,
-			otherAgents: { agents: [codex], models: { codex: { models: [{ id: "fable-5-1", label: "Fable 5.1" }], older: [{ id: "fable-5", label: "Fable 5" }], total: 2, defaultLabel: "Fable 5.1" } }, pending, onPick },
+			otherAgents: { agents: [codex], models: { codex: { models: [{ id: "fable-5-1", label: "Fable 5.1" }], older: [{ id: "fable-5", label: "Fable 5" }], total: 2, defaultLabel: "Fable 5.1" } }, fast: over.fast, pending, onPick },
 		});
 		return null;
 	}
@@ -87,6 +84,18 @@ describe("chat model wheel", () => {
 		expect(onSettings).not.toHaveBeenCalled();
 	});
 
+	// Desktop's otherAgentSource keeps Fast mode on another model that has it,
+	// and Ultracode on every Claude Code model.
+	it("keeps what was turned on for the switch when the wheel moves to another model of the same agent", () => {
+		const fast = { codex: { models: ["fable-5-1"], byDefault: true } };
+		const { onPick } = render({ harness: "codex", model: "fable-5", modelLabel: "Fable 5", fastMode: true, ultracode: true }, { fast });
+		act(() => wheel.choose("codex", "fable-5-1"));
+		expect(onPick).toHaveBeenLastCalledWith({ harness: "codex", model: "fable-5-1", modelLabel: "Fable 5.1", fastMode: true, ultracode: true });
+		const { onPick: again } = render({ harness: "codex", model: "fable-5-1", modelLabel: "Fable 5.1", fastMode: true }, { fast: { codex: { models: ["fable-5-1"], byDefault: false } } });
+		act(() => wheel.choose("codex", "fable-5"));
+		expect(again.mock.calls.at(-1)?.[0]).toStrictEqual({ harness: "codex", model: "fable-5", modelLabel: "Fable 5" });
+	});
+
 	it("stands on the switch picked, and drops it when the running agent is chosen again", () => {
 		const { onPick } = render({ harness: "codex", model: "fable-5", modelLabel: "Fable 5" });
 		expect(wheel.chosenAgent).toBe("codex");
@@ -122,6 +131,12 @@ describe("chat model wheel", () => {
 		render(undefined, { fastOnEffort: false });
 		expect(wheel.settings.map((setting) => setting.label)).toEqual(["Fast mode"]);
 		render(undefined, { fastOnEffort: true });
+		expect(wheel.settings).toEqual([]);
+	});
+
+	// The next message goes to the picked agent, so the running one's Fast mode is not offered.
+	it("leaves the running agent's Fast mode out while a switch to another agent is picked", () => {
+		render({ harness: "codex", modelLabel: "Fable 5.1" }, { fastOnEffort: false });
 		expect(wheel.settings).toEqual([]);
 	});
 });

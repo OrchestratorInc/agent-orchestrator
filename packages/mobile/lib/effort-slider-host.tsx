@@ -1,7 +1,7 @@
 import { memo, useEffect, useState, useSyncExternalStore } from "react";
 import type { FastToggle } from "./effort-slider";
 import type { EffortChoice } from "./modelEffort";
-import { EffortGaugeButton } from "./effort-gauge";
+import { EffortGaugeButton, type EffortGaugeToggles } from "./effort-gauge";
 import { EffortSliderOverlay } from "./effort-slider";
 import { useEffortChoicesShown, useEffortSliderOpen, useEffortSliderSwitchOpen, type EffortSliderSwitch } from "./useEffortSlider";
 
@@ -12,22 +12,29 @@ import { useEffortChoicesShown, useEffortSliderOpen, useEffortSliderSwitchOpen, 
  */
 
 /** The speedometer that opens and closes the slider. `onPress` runs first. */
-export function EffortSliderGauge({ slider, choices, disabled, onPress, testID }: {
+export function EffortSliderGauge({ slider, choices, toggles, disabled, onPress, testID }: {
 	slider: EffortSliderSwitch;
 	choices: readonly EffortChoice[];
+	/**
+	 * The switches the slider carries (Fast mode, Ultracode; see
+	 * effortGaugeToggles), shown on the gauge while on. With any, the slider
+	 * opens even for a model with no levels.
+	 */
+	toggles?: EffortGaugeToggles;
 	disabled: boolean;
 	onPress?: () => void;
 	testID: string;
 }) {
-	const open = useEffortSliderSwitchOpen(slider) && !disabled && choices.length > 0;
+	// Lit while its slider is up, busy or not: busy only keeps it from opening.
+	const open = useEffortSliderSwitchOpen(slider) && (choices.length > 0 || Boolean(toggles));
 	const shown = useEffortChoicesShown(slider, choices);
-	return <EffortGaugeButton choices={shown} open={open} disabled={disabled} testID={testID} onPress={() => { onPress?.(); slider.setOpen(!open); }} />;
+	return <EffortGaugeButton choices={shown} toggles={toggles} open={open} disabled={disabled} testID={testID} onPress={() => { onPress?.(); slider.setOpen(!open); }} />;
 }
 
 type HostProps = {
 	slider: EffortSliderSwitch;
 	choices: readonly EffortChoice[];
-	/** Closes the slider while true (the task is sending, the agent is busy). */
+	/** Keeps the slider from opening while true (the task is sending, a save is on its way); one already up stays. */
 	busy: boolean;
 	onChoose: (value: string) => void;
 	onRelease?: () => void;
@@ -37,6 +44,8 @@ type HostProps = {
 	overKeyboard?: boolean;
 	/** Fast mode's bolt, at the right of the slider's heading; none where the model has no fast mode. */
 	fast?: FastToggle;
+	/** Claude Code's Ultracode switch, at the left of the slider's heading; none where it is not offered. */
+	ultracode?: FastToggle;
 };
 
 /**
@@ -47,9 +56,12 @@ type HostProps = {
  * its card, track and veil on the tap held the slider back. Memoised, so a
  * composer re-rendering under a streaming reply leaves it alone.
  */
-export const EffortSliderHost = memo(function EffortSliderHost({ slider, choices: owned, busy, onChoose, onRelease, onClose, overKeyboard, fast }: HostProps) {
+export const EffortSliderHost = memo(function EffortSliderHost({ slider, choices: owned, busy, onChoose, onRelease, onClose, overKeyboard, fast, ultracode }: HostProps) {
 	const choices = useEffortChoicesShown(slider, owned);
-	const { open } = useEffortSliderOpen(choices, busy, onClose, slider);
+	// A model with no levels still opens the slider for its switches.
+	// No timeout: it stays up for as long as it is used, as the wheels and the
+	// permission picker do; a tap outside, back or a pick puts it away.
+	const { open } = useEffortSliderOpen(choices, busy, onClose, slider, null, Boolean(fast || ultracode));
 	// The switch belongs to the composer and outlives this host: a request
 	// card replaces the composer's pill, and the host with it. Close the
 	// switch on the way out, so dismissing the card brings back the pill
@@ -59,7 +71,7 @@ export const EffortSliderHost = memo(function EffortSliderHost({ slider, choices
 	// change re-renders this and not the composer.
 	const bottom = useSyncExternalStore(slider.subscribe, slider.bottom);
 	const warm = useWarmAfterIdle();
-	return (open || warm) && (overKeyboard || bottom) ? <EffortSliderOverlay visible={open} choices={choices} onChoose={onChoose} onRelease={onRelease} fast={fast} bottom={bottom} overKeyboard={overKeyboard} onDismiss={() => slider.setOpen(false)} /> : null;
+	return (open || warm) && (overKeyboard || bottom) ? <EffortSliderOverlay visible={open} choices={choices} onChoose={onChoose} onRelease={onRelease} fast={fast} ultracode={ultracode} bottom={bottom} overKeyboard={overKeyboard} onDismiss={() => slider.setOpen(false)} /> : null;
 });
 
 /**

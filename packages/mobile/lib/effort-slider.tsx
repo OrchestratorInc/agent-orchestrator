@@ -1,16 +1,16 @@
 import Zap from "lucide-react-native/icons/zap";
 import { memo, useEffect, useMemo, useRef, useState, type ComponentProps } from "react";
-import { StyleSheet, useWindowDimensions, View, type DimensionValue, type LayoutChangeEvent } from "react-native";
+import { StyleSheet, Text, useWindowDimensions, View, type DimensionValue, type LayoutChangeEvent } from "react-native";
 import { Gesture, GestureDetector, Pressable } from "react-native-gesture-handler";
 import Animated, { Easing, useAnimatedStyle, useSharedValue, withTiming, type SharedValue } from "react-native-reanimated";
 import { scheduleOnRN } from "react-native-worklets";
 import { ComposerOverlay, OverlayHeading, overlayCardStyle } from "./composer-overlay";
-import { ULTRACODE } from "./chat/ultracode";
+import { GradientText } from "./gradient-text";
 import { haptics } from "./haptics";
 import { magneticOffset, nearestStop } from "./modelEffort";
 import type { Theme } from "./theme";
 import { useTheme, useThemedStyles } from "./ThemeProvider";
-import { duration, iconSize, space } from "./tokens";
+import { duration, iconSize, space, type } from "./tokens";
 import { useReducedMotion } from "./useReducedMotion";
 import { useEffortSlider, type EffortSliderProps } from "./useEffortSlider";
 
@@ -22,11 +22,22 @@ import { useEffortSlider, type EffortSliderProps } from "./useEffortSlider";
  * nearest level, ticks as it lands on each, and glides onto its level when let
  * go. It stays up until a tap lands outside it (see useEffortSliderOpen).
  * Where the model has a fast mode, a bolt at the heading's right flips it,
- * filled while it is on, as desktop marks a fast model.
+ * filled while it is on, as desktop marks a fast model. Claude Code's
+ * Ultracode is a switch at the heading's left, its name drawn in desktop's
+ * Ultracode gradient while it is on; it is no level, so the track is the
+ * model's levels alone. A model with no levels (Claude Haiku) still opens the
+ * slider for those switches: it is then the switches' row and no track.
  */
 
-/** Fast mode as the slider's bolt: on or off, and a flip. */
+/** An on/off over the slider (Fast mode's bolt, Ultracode's switch): on or off, and a flip. */
 export type FastToggle = { on: boolean; toggle: () => void };
+
+type SliderToggles = {
+	/** Fast mode's bolt, at the heading's right; none where the model has no fast mode. */
+	fast?: FastToggle;
+	/** Claude Code's Ultracode, at the heading's left; none where it is not offered. */
+	ultracode?: FastToggle;
+};
 
 const TRACK = 40;
 const INSET = 4;
@@ -49,23 +60,31 @@ const BLOB_SHADOW = "#000000";
 const CATCH_UP = 0.45;
 const CATCH_MS = 60;
 
+/**
+ * Over the keyboard, the slider sits clear of the keys' top edge, level with
+ * the composer's own effort control (the row it opens from), rather than
+ * reaching down over the suggestion strip as the wheels do.
+ */
+const SLIDER_KEYS_OVERLAP = -10;
+
 /** The slider floating over the chat above the composer (see ComposerOverlay). */
-export function EffortSliderOverlay({ bottom, overKeyboard, onDismiss, visible = true, ...props }: EffortSliderProps & { bottom?: DimensionValue; overKeyboard?: boolean; onDismiss?: () => void; visible?: boolean; fast?: FastToggle }) {
+export function EffortSliderOverlay({ bottom, overKeyboard, onDismiss, visible = true, ...props }: EffortSliderProps & SliderToggles & { bottom?: DimensionValue; overKeyboard?: boolean; onDismiss?: () => void; visible?: boolean }) {
 	return (
-		<ComposerOverlay bottom={bottom} overKeyboard={overKeyboard} onDismiss={onDismiss} visible={visible}>
+		<ComposerOverlay bottom={bottom} overKeyboard={overKeyboard} keysOverlap={SLIDER_KEYS_OVERLAP} onDismiss={onDismiss} visible={visible}>
 			<EffortSlider {...props} />
 		</ComposerOverlay>
 	);
 }
 
-export function EffortSlider({ choices, onChoose, onRelease, fast }: EffortSliderProps & { fast?: FastToggle }) {
+export function EffortSlider({ choices, onChoose, onRelease, fast, ultracode }: EffortSliderProps & SliderToggles) {
 	const styles = useThemedStyles(makeStyles);
 	const reduceMotion = useReducedMotion();
 	const [width, setWidth] = useState(0);
 	const { index, label, show, choose, pick } = useEffortSlider(choices, onChoose, haptics.detent);
 	const count = choices.length;
 	// No wider than the screen leaves it, in from the sides by the card's pad
-	// and a gutter: with Ultracode a sixth level ran the track off the screen.
+	// and a gutter: a model with many levels would run the track off a narrow
+	// screen.
 	const { width: screen } = useWindowDimensions();
 	const trackWidth = Math.min(screen - SCREEN_GUTTER * 2, Math.max(MIN_TRACK, END * 2 + Math.max(count - 1, 0) * LEVEL_GAP));
 	const stepFor = (length: number) => (count > 1 ? (length - END * 2) / (count - 1) : 0);
@@ -209,16 +228,41 @@ export function EffortSlider({ choices, onChoose, onRelease, fast }: EffortSlide
 			});
 	}, [count, reduceMotion]); // eslint-disable-line react-hooks/exhaustive-deps
 
+	const headerWidth = { width: trackWidth + CARD_PAD * 2 };
+	// No levels (Claude Haiku): the slider is only its switches, side by side.
+	if (!count) {
+		return (
+			<View style={styles.stack}>
+				<View style={[styles.header, styles.togglesOnly, headerWidth]}>
+					{ultracode ? <UltracodeSwitch {...ultracode} /> : null}
+					{fast ? <FastBolt {...fast} /> : null}
+				</View>
+			</View>
+		);
+	}
+	// The level in plain text, Ultracode on or off: the Ultra pill beside the
+	// bolt says it is on, and once is enough.
+	const heading = <OverlayHeading title="Effort" value={label} valueTestID="effort-slider-value" />;
+	const togglesWidth = (ultracode ? ULTRA_SLOT : 0) + (fast ? BOLT : 0) + (ultracode && fast ? TOGGLE_GAP : 0);
 	return (
 		<View style={styles.stack}>
 			{/* What the track sets, then the level it is on. The track itself is
 			    "Effort", adjustable, valued the level, for screen readers. */}
-			{/* The heading centred over the card, the bolt at the card's right. */}
-			<View style={[styles.header, fast && styles.headerWithBolt, { width: trackWidth + CARD_PAD * 2 }]}>
-				{/* Claude Code's Ultracode in desktop's gradient, as its effort menu draws it. */}
-				<OverlayHeading title="Effort" value={label} valueTestID="effort-slider-value" ultra={choices[index]?.value === ULTRACODE} />
-				{fast ? <FastBolt {...fast} /> : null}
-			</View>
+			{/* The heading centred over the card; Ultra and the bolt together at
+			    its right, where the thumb is, with an empty slot as wide at the
+			    left so the heading stays centred. */}
+			{fast || ultracode ? (
+				<View style={[styles.header, styles.headerWithToggles, headerWidth]}>
+					<View style={[styles.side, { width: togglesWidth }]} />
+					<View style={styles.headingSlot}>{heading}</View>
+					<View style={[styles.side, styles.sideEnd, { width: togglesWidth }]}>
+						{ultracode ? <UltracodeSwitch {...ultracode} /> : null}
+						{fast ? <FastBolt {...fast} /> : null}
+					</View>
+				</View>
+			) : (
+				<View style={[styles.header, headerWidth]}>{heading}</View>
+			)}
 			{/* The card is "Effort" for screen readers, adjustable, valued the level:
 			    the value changes with every level, so it lives here, not on the
 			    track, which must not re-render while a finger drags it. */}
@@ -295,6 +339,34 @@ function useStableCallback<A extends unknown[]>(fn: (...args: A) => void): (...a
 	return useRef((...args: A) => latest.current(...args)).current;
 }
 
+/**
+ * Ultracode's switch, beside the bolt: "Ultra" in a soft pill, muted while off and in desktop's Ultracode
+ * gradient while on, as desktop marks it. Text rather than a filled pill, so
+ * it sits as quietly in the heading's line as the bolt opposite it.
+ */
+function UltracodeSwitch({ on, toggle }: FastToggle) {
+	const styles = useThemedStyles(makeStyles);
+	return (
+		<Pressable
+			onPress={() => { haptics.select(); toggle(); }}
+			hitSlop={BOLT_SLOP}
+			accessibilityRole="switch"
+			accessibilityLabel="Ultracode"
+			accessibilityState={{ checked: on }}
+			testID="effort-slider-ultracode"
+			style={styles.ultra}
+		>
+			{({ pressed }) => (
+				// A low wash of the text colour round the word, so it reads as a
+				// button; a touch more of it while on, and while pressed.
+				<View style={[styles.ultraPill, on && styles.ultraPillOn, pressed && styles.ultraPillPressed]}>
+					{on ? <GradientText style={styles.ultraLabel}>Ultra</GradientText> : <Text style={[styles.ultraLabel, styles.ultraOff]} numberOfLines={1}>Ultra</Text>}
+				</View>
+			)}
+		</Pressable>
+	);
+}
+
 /** Fast mode's bolt: outlined while off, filled solid in the text colour while on. */
 function FastBolt({ on, toggle }: FastToggle) {
 	const t = useTheme();
@@ -319,6 +391,12 @@ const CARD_PAD = space.xs;
 // The bolt's room, and the reach of a touch past it, to a full touch target.
 const BOLT = 32;
 const BOLT_SLOP = 6;
+// Ultra's room beside the bolt: the word in the caption face, so the slot
+// opposite is as wide and the heading stays centred.
+const ULTRA_SLOT = 50;
+const ULTRA_PILL = 24;
+// Between Ultra and the bolt.
+const TOGGLE_GAP = space.sm;
 
 const makeStyles = (t: Theme) =>
 	StyleSheet.create({
@@ -327,9 +405,31 @@ const makeStyles = (t: Theme) =>
 		// screen packs them closer rather than spilling the card off it.
 		stack: { gap: space.xs, alignItems: "center", maxWidth: "100%" },
 		header: { alignItems: "center", justifyContent: "center" },
-		headerWithBolt: { height: BOLT },
-		bolt: { position: "absolute", right: 0, top: 0, width: BOLT, height: BOLT, alignItems: "center", justifyContent: "center" },
+		headerWithToggles: { flexDirection: "row", height: BOLT },
+		togglesOnly: { flexDirection: "row", height: BOLT, gap: space.md },
+		side: { height: BOLT, justifyContent: "center" },
+		sideEnd: { flexDirection: "row", alignItems: "center", justifyContent: "flex-end", gap: TOGGLE_GAP },
+		// Shrinks before the switches do: a long level ("Extra high") is cut
+		// rather than run under them.
+		headingSlot: { flex: 1, minWidth: 0, alignItems: "center" },
+		bolt: { width: BOLT, height: BOLT, alignItems: "center", justifyContent: "center" },
 		boltPressed: { opacity: 0.5 },
+		ultra: { height: BOLT, justifyContent: "center" },
+		ultraPill: {
+			height: ULTRA_PILL,
+			paddingHorizontal: space.sm,
+			borderRadius: ULTRA_PILL / 2,
+			borderCurve: "continuous",
+			justifyContent: "center",
+			alignItems: "center",
+			backgroundColor: t.bgSubtle,
+			borderWidth: StyleSheet.hairlineWidth,
+			borderColor: t.borderSubtle,
+		},
+		ultraPillOn: { backgroundColor: t.accentTint, borderColor: t.accentBorder },
+		ultraPillPressed: { opacity: 0.6 },
+		ultraLabel: { ...type.caption1 },
+		ultraOff: { color: t.textSecondary },
 		card: {
 			maxWidth: "100%",
 			padding: CARD_PAD,

@@ -1,14 +1,52 @@
 import { describe, expect, it } from "vitest";
 import { pendingDraft, retriedDraft } from "./pendingSend";
-import { isSentDraft, offersUltracode, withUltracode } from "./ultracode";
+import { DEFAULT_EFFORT_STOP, isSentDraft, offersUltracode, ULTRACODE, ultracodeKey, ultracodeLevel, withUltracode, withUltracodeStop } from "./ultracode";
 
 const excerpt = { conversationId: "c", messageId: "m", revision: 0, text: "quoted" };
 
 describe("ultracode", () => {
-	it("is offered to Claude Code on a model with Extra High only", () => {
-		expect(offersUltracode("claude-code", ["high", "xhigh"])).toBe(true);
-		expect(offersUltracode("claude-code", ["high"])).toBe(false);
-		expect(offersUltracode("codex", ["xhigh"])).toBe(false);
+	// Every model Claude Code runs on a machine of the user's own, whatever
+	// levels it takes.
+	it("is offered to Claude Code on a machine's own chats, and to nothing else", () => {
+		expect(offersUltracode("claude-code")).toBe(true);
+		expect(offersUltracode("claude-code", true)).toBe(true);
+		expect(offersUltracode("claude-code", false)).toBe(false);
+		expect(offersUltracode("codex")).toBe(false);
+		expect(offersUltracode(undefined)).toBe(false);
+	});
+
+	// The slider's top stop, above the model's own levels.
+	it("is the stop after the model's levels, checked in place of the level while on", () => {
+		const levels = [
+			{ value: "high", label: "High", selected: false },
+			{ value: "xhigh", label: "Extra high", selected: true },
+		];
+		expect(withUltracodeStop(levels, false)).toEqual([...levels, { value: ULTRACODE, label: "Ultracode", selected: false }]);
+		expect(withUltracodeStop(levels, true)).toEqual([
+			{ value: "high", label: "High", selected: false },
+			{ value: "xhigh", label: "Extra high", selected: false },
+			{ value: ULTRACODE, label: "Ultracode", selected: true },
+		]);
+	});
+
+	// Claude Haiku takes no effort: "Default" is the stop that turns it off.
+	it("follows a Default stop on a model with no levels", () => {
+		expect(withUltracodeStop([], false)).toEqual([
+			{ value: DEFAULT_EFFORT_STOP, label: "Default", selected: true },
+			{ value: ULTRACODE, label: "Ultracode", selected: false },
+		]);
+		expect(withUltracodeStop([], true).map((choice) => choice.selected)).toEqual([false, true]);
+	});
+
+	// Claude Code's Ultracode runs at Extra high.
+	it("saves Extra high where the model has it, and no level elsewhere", () => {
+		expect(ultracodeLevel(["low", "high", "xhigh", "max"])).toBe("xhigh");
+		expect(ultracodeLevel(["low", "medium", "high"])).toBeUndefined();
+		expect(ultracodeLevel([])).toBeUndefined();
+	});
+
+	it("is kept per machine and conversation", () => {
+		expect(ultracodeKey("host.m", "s1")).toBe("ao.chat.ultracode.host.m.s1");
 	});
 
 	it("names itself once, at the message's start", () => {

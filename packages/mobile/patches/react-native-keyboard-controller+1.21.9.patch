@@ -208,3 +208,44 @@ index 6ba79e2..1be624d 100644
 +    const val FADE_ID = "RNKC_OverKeyboardFade"
 +  }
 +}
+diff --git a/node_modules/react-native-keyboard-controller/lib/commonjs/views/OverKeyboardView/index.js b/node_modules/react-native-keyboard-controller/lib/commonjs/views/OverKeyboardView/index.js
+--- a/node_modules/react-native-keyboard-controller/lib/commonjs/views/OverKeyboardView/index.js
++++ b/node_modules/react-native-keyboard-controller/lib/commonjs/views/OverKeyboardView/index.js
+@@ -45,7 +45,7 @@
+   }, /*#__PURE__*/_react.default.createElement(_reactNative.View, {
+     collapsable: false,
+     style: style
+-  }, visible && children));
++  }, children));
+ };
+ const styles = _reactNative.StyleSheet.create({
+   absolute: {
+diff --git a/node_modules/react-native-keyboard-controller/lib/module/views/OverKeyboardView/index.js b/node_modules/react-native-keyboard-controller/lib/module/views/OverKeyboardView/index.js
+--- a/node_modules/react-native-keyboard-controller/lib/module/views/OverKeyboardView/index.js
++++ b/node_modules/react-native-keyboard-controller/lib/module/views/OverKeyboardView/index.js
+@@ -38,7 +38,7 @@
+   }, /*#__PURE__*/React.createElement(View, {
+     collapsable: false,
+     style: style
+-  }, visible && children));
++  }, children));
+ };
+ const styles = StyleSheet.create({
+   absolute: {
+diff --git a/node_modules/react-native-keyboard-controller/src/views/OverKeyboardView/index.tsx b/node_modules/react-native-keyboard-controller/src/views/OverKeyboardView/index.tsx
+--- a/node_modules/react-native-keyboard-controller/src/views/OverKeyboardView/index.tsx
++++ b/node_modules/react-native-keyboard-controller/src/views/OverKeyboardView/index.tsx
+@@ -39,8 +39,11 @@
+     <RCTOverKeyboardView visible={visible}>
+       {/* `OverKeyboardView` should always have a single child */}
+       <View collapsable={false} style={style}>
+-        {/* Match RN behavior and trigger mount/unmount when visibility changes */}
+-        {visible && children}
++        {/* Kept mounted while hidden (AO patch): the native side keeps the
++            children in a container that is only attached to a window while
++            visible, so they stay built and an open only attaches it, rather
++            than mounting the whole overlay on the frame it appears. */}
++        {children}
+       </View>
+     </RCTOverKeyboardView>
+   );

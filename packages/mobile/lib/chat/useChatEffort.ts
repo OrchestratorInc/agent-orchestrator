@@ -6,7 +6,7 @@ import { useEffortSliderSwitch } from "../useEffortSlider";
 import type { ChatTurnSettingsControlProps } from "./ChatTurnSettingsControl.types";
 import { followsAgentLabel, turnSettingsRows, turnSettingTopic, turnSettingWrite, type TurnSettingRow } from "./turnSettingsModel";
 import type { TurnSettings } from "./types";
-import { offersUltracode, ULTRACODE, ULTRACODE_LEVEL } from "./ultracode";
+import { offersUltracode, ULTRACODE_HARNESS } from "./ultracode";
 
 /** How long a saved level is shown ahead of the conversation's own before the conversation's is trusted again. */
 export const EFFORT_CONFIRM_MS = 8_000;
@@ -25,14 +25,16 @@ export const EFFORT_CONFIRM_MS = 8_000;
  * when the conversation has not caught up within EFFORT_CONFIRM_MS. Only the
  * newest save can drop it: an older one finishing late changes nothing.
  */
-export function useChatEffort({ snapshot, models, options, disabled, onSettings, onOption, ultracodeKey }: ChatTurnSettingsControlProps & {
+export function useChatEffort({ snapshot, models, options, disabled, onSettings, onOption, ultracodeKey, cloud = false }: ChatTurnSettingsControlProps & {
 	/** Where this conversation's Ultracode is kept on the phone, so it lasts past this screen; none keeps it in memory. */
 	ultracodeKey?: string | null;
+	/** An Orchestrator Cloud chat, which has no Ultracode, as on desktop. */
+	cloud?: boolean;
 }) {
 	const rows = useMemo(() => turnSettingsRows(snapshot, models, options), [snapshot, models, options]);
 	const row = rows.find((item) => item.kind === "select" && turnSettingTopic(item) === "effort");
-	// The level last saved and not yet reported (Ultracode as the Extra High it
-	// saves): a Fast flip's save replaces the whole set too, so it carries this.
+	// The level last saved and not yet reported: a Fast flip's save replaces
+	// the whole set too, so it carries this.
 	const held = useRef<string | undefined>(undefined);
 	const effortRow = useRef(row);
 	effortRow.current = row;
@@ -44,40 +46,46 @@ export function useChatEffort({ snapshot, models, options, disabled, onSettings,
 		return write.kind === "settings" ? write.settings : base;
 	}, []);
 	const fast = useFastToggle(rows, { snapshot, onSettings, onOption }, withHeldEffort);
+	// Claude Code's Ultracode, a switch over the slider apart from the level,
+	// as desktop has it: on at any level, on every model, it only asks for
+	// Ultracode at the start of each message. The daemon has no field for it,
+	// so it is kept per conversation on the phone.
+	const ultracodeOffered = offersUltracode(snapshot.harness, !cloud);
+	const [ultracodeWanted, setUltracode] = usePhoneFlag(ultracodeKey);
+	// Seen running another agent, as the chat opens or once a switch away is
+	// reported, the conversation's Ultracode is off, as desktop's is after a
+	// switch away: a switch back to Claude Code must not bring back a flag
+	// nobody turned on again. A switch made here sets it to the switch's own
+	// choice as it lands (`keepUltracode`), which can be before the chat
+	// reports its new agent, so it is turned off only when an agent is first
+	// seen, never again for the one already seen.
+	const agentSeen = useRef<string | undefined>(undefined);
+	useEffect(() => {
+		const harness = snapshot.harness;
+		const seen = `${ultracodeKey ?? ""}\n${harness ?? ""}`;
+		if (!harness || agentSeen.current === seen) return;
+		agentSeen.current = seen;
+		if (harness !== ULTRACODE_HARNESS) setUltracode(false);
+	}, [snapshot.harness, ultracodeKey, setUltracode]);
+	const ultracodeNow = useRef({ offered: ultracodeOffered, wanted: ultracodeWanted });
+	ultracodeNow.current = { offered: ultracodeOffered, wanted: ultracodeWanted };
+	// Whether the next message asks for Ultracode. Read at send time, and
+	// apart from the effort row: a message sent before the conversation
+	// reports its levels still asks for it.
+	const sendsUltracode = useCallback(() => ultracodeNow.current.offered && ultracodeNow.current.wanted, []);
+	// Stable, so the slider's memoised host is left alone between flips.
+	const toggleUltracode = useCallback(() => setUltracode(!ultracodeNow.current.wanted), [setUltracode]);
+	const ultracode = useMemo<FastToggle | undefined>(
+		() => (ultracodeOffered ? { on: ultracodeWanted, toggle: toggleUltracode } : undefined),
+		[ultracodeOffered, ultracodeWanted, toggleUltracode],
+	);
 	// A provider's "Use agent effort" choice names no level, so it is no stop
 	// on the slider. With it in effect, or no level reported, the fallback is
 	// shown checked; nothing is saved until a level is picked.
 	const saved = row?.choices.find((choice) => choice.selected)?.value;
-	// Claude Code's Ultracode, here the level above Extra High (desktop has it
-	// as a toggle where a chat starts and in the agent-switch picker): saved as
-	// Extra High, and asked for in each message while it is on. The daemon has
-	// no field for it, so it is kept per conversation on the phone.
-	const ultracodeOffered = offersUltracode(snapshot.harness, row?.choices.map((choice) => choice.value) ?? []);
-	const [ultracodeWanted, setUltracode] = usePhoneFlag(ultracodeKey);
-	const ultracode = ultracodeOffered && ultracodeWanted && saved === ULTRACODE_LEVEL;
-	// A model the conversation reports with levels but no Extra High has no
-	// Ultracode; with no effort row reported yet there is nothing to go on.
-	useEffect(() => { if (row && !ultracodeOffered && ultracodeWanted) setUltracode(false); }, [row, ultracodeOffered, ultracodeWanted, setUltracode]);
-	// Whether the next message asks for Ultracode: as the level saved and not
-	// yet reported has it, else as the conversation reports. Read at send time,
-	// since a pick held on the slider changes nothing the composer renders.
-	const ultracodeNow = useRef({ offered: ultracodeOffered, wanted: ultracodeWanted, saved });
-	ultracodeNow.current = { offered: ultracodeOffered, wanted: ultracodeWanted, saved };
-	const sendsUltracode = useCallback(() => {
-		const { offered: on, wanted, saved: reported } = ultracodeNow.current;
-		return on && wanted && (held.current ?? reported) === ULTRACODE_LEVEL;
-	}, []);
-	const choices = useMemo<EffortChoice[]>(() => {
-		const levels = withFallbackEffort(row?.choices
-			.filter((choice) => !followsAgentLabel(choice.label))
-			.map((choice) => ({ value: choice.value, label: choice.label, selected: choice.selected })) ?? []);
-		if (!ultracodeOffered) return levels;
-		// With Ultracode on, it is the level shown, not the Extra High it saves.
-		return [
-			...levels.map((choice) => (ultracode && choice.value === ULTRACODE_LEVEL ? { ...choice, selected: false } : choice)),
-			{ value: ULTRACODE, label: "Ultracode", selected: ultracode },
-		];
-	}, [row, ultracodeOffered, ultracode]);
+	const choices = useMemo<EffortChoice[]>(() => withFallbackEffort(row?.choices
+		.filter((choice) => !followsAgentLabel(choice.label))
+		.map((choice) => ({ value: choice.value, label: choice.label, selected: choice.selected })) ?? []), [row]);
 	// Whether the slider is open, and the level being picked, live in the
 	// switch, not in the composer's state: the gauge and the slider host
 	// subscribe to it themselves.
@@ -91,23 +99,14 @@ export function useChatEffort({ snapshot, models, options, disabled, onSettings,
 		if (confirmTimer.current !== undefined) clearTimeout(confirmTimer.current);
 		confirmTimer.current = undefined;
 	};
-	// Ultracode or not as last confirmed, with no save on its way.
-	const confirmedUltracode = useRef(false);
 	const latest = useRef<() => void>(() => {});
 	// Published once the render commits: a render React drops (a model
 	// change mid-drag, say) must not swap in a handler for a row never shown.
 	useLayoutEffect(() => {
 		latest.current = () => {
-			const pickedValue = picked.current;
+			const value = picked.current;
 			picked.current = undefined;
-			if (pickedValue === undefined) return;
-			const value = pickedValue === ULTRACODE ? ULTRACODE_LEVEL : pickedValue;
-			// Ultracode or not, as it was with no save on its way: what a failed
-			// save returns to. Taken only then, so a pick made over another still
-			// on its way does not take that one's unconfirmed flag for it.
-			if (held.current === undefined) confirmedUltracode.current = ultracodeWanted;
-			// Ultracode is Extra High saved, and on for the messages that follow.
-			setUltracode(pickedValue === ULTRACODE);
+			if (value === undefined) return;
 			// The level already on its way: its save and hold stand.
 			if (row && held.current !== undefined && value === held.current) return;
 			stopConfirmTimer();
@@ -125,21 +124,17 @@ export function useChatEffort({ snapshot, models, options, disabled, onSettings,
 			// would otherwise be cleared by it.
 			const write = turnSettingWrite(fast?.settings(snapshot.settings) ?? snapshot.settings, row, value);
 			held.current = value;
-			// A failed save also takes Ultracode back to how it was. A save only
-			// slow to be reported drops the pick shown and nothing else: if it
-			// lands, its Ultracode stands; a report of another level turns it off.
-			const drop = (failed: boolean) => {
+			const drop = () => {
 				if (saves.current !== save) return;
 				held.current = undefined;
 				if (picked.current !== undefined) return;
 				stopConfirmTimer();
 				slider.setPick(undefined);
-				if (failed) setUltracode(confirmedUltracode.current);
 			};
 			// Held until the conversation shows it (the effect below), or dropped
-			// if it never does.
-			confirmTimer.current = setTimeout(() => drop(false), EFFORT_CONFIRM_MS);
-			void (write.kind === "option" ? onOption(write.id, write.value) : onSettings(write.settings)).catch(() => drop(true));
+			// if it never does, or its save fails.
+			confirmTimer.current = setTimeout(drop, EFFORT_CONFIRM_MS);
+			void (write.kind === "option" ? onOption(write.id, write.value) : onSettings(write.settings)).catch(drop);
 		};
 	});
 	// Stable, so the slider's memoised host is left alone while the composer
@@ -152,26 +147,18 @@ export function useChatEffort({ snapshot, models, options, disabled, onSettings,
 	// The conversation now reports the level picked, or no longer offers it:
 	// show its own again. Not while a finger is still choosing.
 	const offered = useMemo(() => new Set(choices.map((choice) => choice.value)), [choices]);
-	// The conversation reports a level other than Extra High, with Extra High
-	// not on its way: Ultracode, which is Extra High, is off.
-	const lastSaved = useRef(saved);
-	useEffect(() => {
-		const changed = lastSaved.current !== saved;
-		lastSaved.current = saved;
-		if (changed && saved !== undefined && saved !== ULTRACODE_LEVEL && held.current !== ULTRACODE_LEVEL && ultracodeWanted) setUltracode(false);
-	}, [saved, ultracodeWanted, setUltracode]);
 	useEffect(() => {
 		if (held.current !== undefined && (held.current === saved || !row?.choices.some((choice) => choice.value === held.current))) held.current = undefined;
 		const pick = slider.pick();
 		if (pick === undefined || picked.current !== undefined) return;
-		if ((pick === ULTRACODE ? ULTRACODE_LEVEL : pick) === saved || !offered.has(pick)) {
+		if (pick === saved || !offered.has(pick)) {
 			stopConfirmTimer();
 			slider.setPick(undefined);
 		}
 	}, [saved, offered, slider, row]);
 	useEffect(() => stopConfirmTimer, []);
 	const close = useCallback(() => slider.setOpen(false), [slider]);
-	return { choices, slider, busy: Boolean(disabled), close, choose, commit, ultracode, sendsUltracode, fast };
+	return { choices, slider, busy: Boolean(disabled), close, choose, commit, ultracode, sendsUltracode, keepUltracode: setUltracode, fast };
 }
 
 /**

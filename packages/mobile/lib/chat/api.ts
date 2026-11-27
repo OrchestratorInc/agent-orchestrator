@@ -186,7 +186,7 @@ export async function sendConversationMessage(
 }
 
 /** Which agent the next message switches to, and on which model. */
-export type ProviderSwitchInput = { targetHarness: string; model?: string };
+export type ProviderSwitchInput = { targetHarness: string; model?: string; fastMode?: boolean };
 
 /**
  * Switch the chat's agent and send the message to the new one, in one request
@@ -206,6 +206,7 @@ export async function switchProviderAndSend(
 		body: JSON.stringify({
 			targetHarness: providerSwitch.targetHarness,
 			...(providerSwitch.model ? { model: providerSwitch.model } : {}),
+			...(providerSwitch.fastMode ? { fastMode: true } : {}),
 			idempotencyKey: message.clientMessageId,
 			message,
 		}),

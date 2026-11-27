@@ -18,6 +18,7 @@ import { useState, type ReactNode } from "react";
 import { StyleSheet, View } from "react-native";
 import { logoKey } from "./harnessLogo";
 import { hasMenuIcon } from "./harnessMenuIcons";
+import { effortGaugeToggles } from "./effort-gauge";
 import { EffortSliderGauge, EffortSliderHost } from "./effort-slider-host";
 import { haptics } from "./haptics";
 import { Choice, controlsRowTypeSize, ModelCapsuleLabel, useTriggerModifiers } from "./model-controls.ios";
@@ -60,6 +61,8 @@ export function SpawnComposerControls({
 	onSelectApprovalMode,
 	effortChoices,
 	onSelectEffort,
+	fast,
+	ultracode,
 	onChoosePhoto,
 	onChooseFile,
 	onPasteImages,
@@ -142,7 +145,7 @@ export function SpawnComposerControls({
 			</Host>
 
 			{/* The chat's pickers, over the keyboard in a window of their own. */}
-			<EffortSliderHost slider={effortSlider} choices={effortChoices} busy={busy} onChoose={onSelectEffort} overKeyboard />
+			<EffortSliderHost slider={effortSlider} choices={effortChoices} busy={busy} onChoose={onSelectEffort} fast={fast} ultracode={ultracode} overKeyboard />
 			<PermissionPickerHost slider={pickers.permissions.slider} choices={pickers.permissions.choices} busy={busy} onChoose={pickers.permissions.choose} />
 			<ModelWheelHost {...pickers.model} busy={busy} />
 
@@ -179,10 +182,11 @@ export function SpawnComposerControls({
 									<ModelCapsuleLabel mark={<HarnessImage harness={harness} />} title={agentTitle} />
 								</Button>
 								{/* The effort as a speedometer lit to the chosen level; a tap
-								    opens the effort slider over the keyboard. */}
-								{effortChoices.length ? (
+								    opens the effort slider over the keyboard. A model with no
+								    levels still has it while the slider carries a switch. */}
+								{effortChoices.length || fast || ultracode ? (
 									<RNHostView matchContents>
-										<EffortSliderGauge slider={effortSlider} choices={effortChoices} disabled={busy} onPress={() => pickers.closeAllBut("effort")} testID="spawn-effort" />
+										<EffortSliderGauge slider={effortSlider} choices={effortChoices} toggles={effortGaugeToggles(fast, ultracode)} disabled={busy} onPress={() => pickers.closeAllBut("effort")} testID="spawn-effort" />
 									</RNHostView>
 								) : null}
 								<Spacer minLength={0} />

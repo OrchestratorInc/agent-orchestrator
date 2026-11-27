@@ -1,9 +1,9 @@
 import type { ApprovalMode, ChatConfigChoice, ChatConfigOption, ChatModel, ConversationSnapshot, TurnSettings } from "./types";
 import { can } from "./types";
+import { effortLabel } from "../modelEffort";
 import { approvalChoiceCopy, approvalCopy, approvalOrder } from "./approvalCopy";
 import { displayConfigOptions, executionChoiceValues, isFastOption, isModeOption, optionIsEnabled, partitionConfigOptions, toggleValue } from "../../../shared/chat/config-options";
 import { agentModelDisplayLabel, isDefaultPlaceholderLabel } from "../../../shared/models/agent-model-choices";
-import { FAST_MODE_SHOWN } from "./fastMode";
 
 export type TurnSettingChoice = {
 	value: string;
@@ -39,6 +39,11 @@ export type TurnSettingRow = {
 	 * choice each state sends.
 	 */
 	toggle?: { on?: string; off?: string };
+	/**
+	 * On AO's own model row, the models that have a Fast mode: picking one of
+	 * them keeps Fast mode on, as the desktop does, and any other clears it.
+	 */
+	fastModels?: string[];
 	choices: TurnSettingChoice[];
 	target:
 		| { kind: "settings"; key: keyof TurnSettings }
@@ -73,9 +78,9 @@ function approvalModeLabel(mode: ApprovalMode): string {
 	return approvalCopy(undefined)[mode]?.label ?? mode;
 }
 
-/** A native catalog's effort level by name; "default" names no level. */
+/** A native catalog's effort level by name, worded as desktop words it; "default" names no level. */
 export function effortChoiceLabel(effort: string): string {
-	return isDefaultValue(effort) ? FOLLOW_AGENT.effort : capitalize(effort);
+	return isDefaultValue(effort) ? FOLLOW_AGENT.effort : effortLabel(effort);
 }
 
 /** "Use agent model" and the like, including "Use agent model (Opus 5.5)": a choice that follows the agent. */
@@ -217,6 +222,7 @@ export function turnSettingsRows(snapshot: ConversationSnapshot, models: ChatMod
 				description: model.description || undefined,
 				selected: model.id === selectedModel?.id,
 			})),
+			fastModels: nativeModels.filter((model) => model.supportsFast).map((model) => model.id),
 			target: { kind: "settings", key: "model" },
 		});
 		// A "default" level names none; the model's own default is the level shown.
@@ -235,7 +241,12 @@ export function turnSettingsRows(snapshot: ConversationSnapshot, models: ChatMod
 			});
 		}
 		// Fast mode, where the model has one: desktop's toggle beside the model.
-		if (selectedModel?.supportsFast) {
+		// A saved model the catalog no longer lists has no Fast mode to offer, so
+		// the catalog's default is asked only when nothing is saved, as on desktop.
+		const fastModel = snapshot.settings.model
+			? nativeModels.find((model) => model.id === snapshot.settings.model)
+			: nativeModels.find((model) => model.default);
+		if (fastModel?.supportsFast) {
 			const on = Boolean(snapshot.settings.fastMode);
 			rows.push({
 				id: "fast",
@@ -283,9 +294,7 @@ export function turnSettingsRows(snapshot: ConversationSnapshot, models: ChatMod
 	if (grouped.executionMode && !modeOption) rows.push(providerRow(grouped.executionMode, "other", false));
 	// What is left: a second model or effort, and anything else the agent offers.
 	for (const option of [...otherModels, ...otherEfforts, ...grouped.extra]) rows.push(providerRow(option, "other", false));
-	// Fast mode is off for now (see fastMode.ts): no row, so no bolt and no menu entry.
-	const offered = FAST_MODE_SHOWN ? rows : rows.filter((row) => turnSettingTopic(row) !== "fast");
-	return offered.sort((a, b) => controlPriority(a) - controlPriority(b));
+	return rows.sort((a, b) => controlPriority(a) - controlPriority(b));
 }
 
 /**
@@ -300,7 +309,7 @@ export function turnSettingsParts(snapshot: ConversationSnapshot, models: ChatMo
 	const permissions = rows.find(isPermissionRow);
 	return {
 		model: modelLabel(rows, snapshot, models),
-		effort: named(effort ? effort.value : capitalize(snapshot.settings.reasoningEffort ?? "")),
+		effort: named(effort ? effort.value : effortLabel(snapshot.settings.reasoningEffort ?? "")),
 		approval: named(permissions?.value ?? approvalLabel(snapshot.settings.approvalMode ?? "default", snapshot.harness)),
 	};
 }
@@ -394,20 +403,23 @@ function aliasesOf(choice: ChatConfigChoice): string[] {
 
 /**
  * The agent's effort levels. A "default" level names none and is left out, as
- * on desktop; a level the agent leaves unnamed is named as AO names it.
+ * on desktop; a level the agent leaves unnamed, or names only by its id
+ * capitalized (Claude Code's "Xhigh"), is named as AO names it ("Extra high").
  */
 function providerEffortRow(option: ChatConfigOption): TurnSettingRow {
 	const current = sentValue(option.currentValue);
 	const choices = option.choices.filter((choice) => !isDefaultValue(choice.value));
+	const levelName = (choice: ChatConfigChoice | undefined, value: string) =>
+		choice?.name && choice.name.toLowerCase() !== value.toLowerCase() ? choice.name : effortChoiceLabel(value);
 	return {
 		id: `option:${option.id}`,
 		label: option.name,
 		description: option.description,
-		value: current ? choices.find((choice) => choice.value === current)?.name || effortChoiceLabel(current) : NOT_REPORTED,
+		value: current ? levelName(choices.find((choice) => choice.value === current), current) : NOT_REPORTED,
 		kind: "select",
 		choices: choices.map((choice) => ({
 			value: choice.value,
-			label: choice.name || effortChoiceLabel(choice.value),
+			label: levelName(choice, choice.value),
 			description: choice.description,
 			selected: choice.value === current,
 		})),
@@ -494,8 +506,13 @@ export function turnSettingWrite(settings: TurnSettings, row: TurnSettingRow, ch
 
 function applyTurnSettingChoice(settings: TurnSettings, row: TurnSettingRow, value: string): TurnSettings {
 	if (row.target.kind !== "settings") return settings;
-	// A new model starts on its own effort, and fast mode is the old model's to have.
-	if (row.target.key === "model") return { ...settings, model: value, reasoningEffort: undefined, fastMode: undefined };
+	// A new model starts on its own effort. Fast mode stays on only where the
+	// new model has one too, as on desktop; elsewhere it would be sent to a
+	// model that refuses it.
+	if (row.target.key === "model") {
+		const fastMode = row.fastModels?.includes(value) ? settings.fastMode : undefined;
+		return { ...settings, model: value, reasoningEffort: undefined, fastMode };
+	}
 	if (row.defaultValue !== undefined && value === row.defaultValue) return { ...settings, [row.target.key]: undefined };
 	return { ...settings, [row.target.key]: value } as TurnSettings;
 }

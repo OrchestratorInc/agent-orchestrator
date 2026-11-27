@@ -1,5 +1,19 @@
 import { describe, expect, it } from "vitest";
-import { effortGaugeNeedle, fallbackEffortIndex, magneticOffset, nearestStop, spawnEffortChoices, spawnEffortToSend, withFallbackEffort } from "./modelEffort";
+import { effortGaugeNeedle, effortLabel, fallbackEffortIndex, magneticOffset, nearestStop, spawnEffortChoices, spawnEffortToSend, withFallbackEffort } from "./modelEffort";
+
+describe("effort labels", () => {
+	// Worded as desktop's effort menu words them (formatEffortLabel).
+	it("names every level desktop knows as desktop does, and capitalizes the rest", () => {
+		expect(["none", "minimal", "low", "medium", "high", "xhigh", "max"].map(effortLabel)).toEqual(["None", "Minimal", "Low", "Medium", "High", "Extra high", "Max"]);
+		expect(effortLabel("XHigh")).toBe("Extra high");
+		expect(effortLabel("turbo")).toBe("Turbo");
+		expect(effortLabel("")).toBe("");
+	});
+
+	it("reads Extra high in a new task's choices", () => {
+		expect(spawnEffortChoices({ efforts: ["high", "xhigh"] }, "xhigh").map((choice) => choice.label)).toEqual(["High", "Extra high"]);
+	});
+});
 
 describe("new task effort choices", () => {
 	const opus = { efforts: ["low", "medium", "high"], defaultEffort: "medium" };

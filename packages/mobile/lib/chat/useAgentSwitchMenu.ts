@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { rankAgents } from "../agentPicker";
-import { AUTOMATIC_MODEL, agentSwitchTargets, type AgentSwitchTarget } from "../agentSwitch";
+import { AUTOMATIC_MODEL, agentSwitchTargets, type AgentFastModels, type AgentSwitchTarget } from "../agentSwitch";
 import { getAgentModels, getAgents, getSettings } from "../api";
 import type { ServerConfig } from "../config";
 import { STANDALONE_PROJECT } from "../projectFilter";
@@ -12,6 +12,8 @@ export type AgentSwitchMenu = {
 	agents: AgentSwitchTarget[];
 	/** Each agent's models as the new task's menu lists them. */
 	models: Readonly<Record<string, SpawnAgentModels>>;
+	/** Each agent's models with a Fast mode, so a switch to one can start in it. */
+	fast?: Readonly<Record<string, AgentFastModels>>;
 };
 
 /**
@@ -27,6 +29,7 @@ export function useAgentSwitchMenu({ cfg, current, projectId, enabled }: {
 }): AgentSwitchMenu | undefined {
 	const [agents, setAgents] = useState<AgentSwitchTarget[]>();
 	const [models, setModels] = useState<Record<string, SpawnAgentModels>>({});
+	const [fast, setFast] = useState<Record<string, AgentFastModels>>({});
 	const catalogProject = projectId && projectId !== STANDALONE_PROJECT ? projectId : undefined;
 
 	useEffect(() => {
@@ -50,6 +53,7 @@ export function useAgentSwitchMenu({ cfg, current, projectId, enabled }: {
 		if (modelsFor.current !== listing) {
 			modelsFor.current = listing;
 			setModels({});
+			setFast({});
 		}
 		if (!cfg || !targets) return;
 		let cancelled = false;
@@ -63,6 +67,11 @@ export function useAgentSwitchMenu({ cfg, current, projectId, enabled }: {
 				.then((catalog) => {
 					if (cancelled) return;
 					setModels((current) => ({ ...current, [id]: menuModels(catalog?.models ?? [], AUTOMATIC_MODEL) }));
+					const listed = catalog?.models ?? [];
+					setFast((current) => ({ ...current, [id]: {
+						models: listed.filter((model) => model.supportsFast).map((model) => model.id),
+						byDefault: Boolean(listed.find((model) => model.isDefault)?.supportsFast),
+					} }));
 				});
 		}
 		return () => { cancelled = true; abort.abort(); };
@@ -71,5 +80,5 @@ export function useAgentSwitchMenu({ cfg, current, projectId, enabled }: {
 	// Never the running agent, even one listed before the chat moved to it while
 	// the connection was away (and the list could not be read again).
 	const offered = useMemo(() => agents?.filter((agent) => agent.id !== current), [agents, current]);
-	return useMemo(() => (offered?.length ? { agents: offered, models } : undefined), [offered, models]);
+	return useMemo(() => (offered?.length ? { agents: offered, models, fast } : undefined), [offered, models, fast]);
 }

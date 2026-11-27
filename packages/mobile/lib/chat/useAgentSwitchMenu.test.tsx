@@ -88,3 +88,17 @@ it("never offers the running agent from a list kept while the connection is away
 	await act(async () => { renderer!.update(<Switching />); });
 	expect(menu?.agents.map((agent) => agent.id)).toEqual(["cursor"]);
 });
+
+// A switch can start in Fast mode only on a model with a fast tier: the menu
+// reads which from each agent's catalog, and whether its default has one (the
+// pick that names no model).
+it("reads each agent's models with a Fast mode, and whether its default has one", async () => {
+	fixture.getAgentModels.mockImplementation((_cfg: ServerConfig, id: string) => Promise.resolve(id === "codex"
+		? { models: [{ id: "gpt-5.5", label: "GPT-5.5", isDefault: true, supportsFast: true }, { id: "gpt-5.5-codex", label: "GPT-5.5 Codex", supportsFast: true }, { id: "gpt-5.1-mini", label: "mini" }] }
+		: { models: [{ id: "auto", label: "Auto", isDefault: true }, { id: "fast-one", label: "Fast one", supportsFast: true }] }));
+	await act(async () => { renderer = create(<Harness />); });
+	expect(menu?.fast).toEqual({
+		codex: { models: ["gpt-5.5", "gpt-5.5-codex"], byDefault: true },
+		cursor: { models: ["fast-one"], byDefault: false },
+	});
+});

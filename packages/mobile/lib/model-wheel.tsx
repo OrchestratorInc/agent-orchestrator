@@ -1,8 +1,9 @@
 import { memo, useCallback, useEffect, useRef, useState } from "react";
-import { StyleSheet, Text, View } from "react-native";
+import { ScrollView, StyleSheet, Text, View } from "react-native";
 import { Pressable } from "react-native-gesture-handler";
+import { AgentLogo } from "./AgentLogo";
 import type { WheelAgent, WheelSetting } from "./chat/useChatModelWheel";
-import { ComposerOverlay } from "./composer-overlay";
+import { COMPOSER_CONTROL_RISE, ComposerOverlay } from "./composer-overlay";
 import { useWarmAfterIdle } from "./effort-slider-host";
 import { haptics } from "./haptics";
 import type { Theme } from "./theme";
@@ -12,11 +13,19 @@ import { useEffortSliderOpen, type EffortSliderSwitch } from "./useEffortSlider"
 import { WHEEL_ROW, WHEEL_ROWS, WheelPicker } from "./wheel-picker";
 
 /*
- * The model, picked on two wheels over the keyboard, as iOS's date picker
- * picks the time: the agent on the left, its models on the right, the pair in
- * force in one band across both. The pair they stand on as they close is
- * chosen. The provider's other settings are rows under the wheels.
+ * The model, picked over the keyboard: the agents as a row of buttons, one tap
+ * each (desktop's logo rail), and the agent's models on a wheel under them, as
+ * iOS's date picker picks the time. Two wheels side by side made switching
+ * agent a fiddly turn that also turned the models; a button is one tap. The
+ * pair they stand on as they close is chosen. The provider's other settings
+ * are rows under the wheel.
  */
+
+/**
+ * How far the wheel reaches down over the keys for its band to sit on the
+ * composer's control row, level with the pill it opens from.
+ */
+const WHEEL_KEYS_OVERLAP = (WHEEL_ROW * WHEEL_ROWS) / 2 - COMPOSER_CONTROL_RISE;
 
 export type ModelWheelProps = {
 	agents: readonly WheelAgent[];
@@ -62,7 +71,7 @@ export const ModelWheelHost = memo(function ModelWheelHost({ slider, busy, ...wh
 	const warm = useWarmAfterIdle();
 	if (!(open || warm) || !wheel.agents.length) return null;
 	return (
-		<ComposerOverlay overKeyboard visible={open} onDismiss={() => slider.setOpen(false)} fill>
+		<ComposerOverlay overKeyboard keysOverlap={WHEEL_KEYS_OVERLAP} visible={open} onDismiss={() => slider.setOpen(false)} fill>
 			<ModelWheel {...wheel} visible={open} onMove={onMove} onEmptyTap={() => slider.setOpen(false)} />
 		</ComposerOverlay>
 	);
@@ -111,32 +120,26 @@ export function ModelWheel({ agents, chosenAgent, chosenModel, runningAgent, run
 
 	return (
 		<View style={styles.panel} testID="model-wheel">
+			{agents.length > 1 ? (
+				<AgentRail
+					agents={agents}
+					chosen={agent.id}
+					locked={agentsLocked}
+					visible={visible}
+					onPick={(next) => {
+						if (next.id === agent.id) return;
+						// The pair in force rests on its model, the running agent on
+						// its own; another starts on its default.
+						const model = next.id === chosenAgent && chosenModel !== undefined
+							? chosenModel
+							: next.id === runningAgent && runningModel !== undefined ? runningModel : defaultModel(next);
+						if (model !== undefined) move({ agent: next.id, model });
+					}}
+				/>
+			) : null}
 			<View style={styles.wheels}>
-				{/* The band the chosen pair sits in, across both wheels. */}
+				{/* The band the chosen model sits in. */}
 				<View pointerEvents="none" style={styles.band} />
-				{agents.length > 1 ? (
-					<View style={styles.agentColumn}>
-						<WheelPicker
-							items={agents.map((item) => ({ key: item.id, label: item.label, mark: item.id }))}
-							index={agentIndex}
-							disabled={agentsLocked}
-							align="right"
-							accessibilityLabel="Agent"
-							testID="model-wheel-agents"
-							onEmptyTap={onEmptyTap}
-							onSettle={(index) => {
-								const next = agents[index];
-								if (!next || next.id === agent.id) return;
-								// The pair in force rests on its model, the running agent on
-								// its own; another starts on its default.
-								const model = next.id === chosenAgent && chosenModel !== undefined
-									? chosenModel
-									: next.id === runningAgent && runningModel !== undefined ? runningModel : defaultModel(next);
-								if (model !== undefined) move({ agent: next.id, model });
-							}}
-						/>
-					</View>
-				) : null}
 				<View style={styles.modelColumn}>
 					{/* Keyed by agent: a settle still pending on the last agent's list
 					    is dropped with it rather than landing on the new agent. */}
@@ -144,7 +147,7 @@ export function ModelWheel({ agents, chosenAgent, chosenModel, runningAgent, run
 						key={agent.id}
 						items={agent.models}
 						index={modelIndex}
-						align={agents.length > 1 ? "left" : "center"}
+						align="center"
 						accessibilityLabel="Model"
 						testID="model-wheel-models"
 						onEmptyTap={onEmptyTap}
@@ -183,6 +186,64 @@ export function ModelWheel({ agents, chosenAgent, chosenModel, runningAgent, run
 	);
 }
 
+/**
+ * The agents as buttons, the one the wheel lists filled: a tap picks it. Held
+ * still while the agent is working (a switch waits until it is idle).
+ */
+function AgentRail({ agents, chosen, locked, visible, onPick }: { agents: readonly WheelAgent[]; chosen: string; locked: boolean; visible: boolean; onPick: (agent: WheelAgent) => void }) {
+	const styles = useThemedStyles(makeStyles);
+	const rail = useRef<ScrollView>(null);
+	// The chosen agent in view each time the picker opens, however far along
+	// the row; never while it is open, so a button never slides away from the
+	// finger that tapped it.
+	const placed = useRef<Record<string, number>>({});
+	const chosenNow = useRef(chosen);
+	chosenNow.current = chosen;
+	const reveal = () => {
+		const x = placed.current[chosenNow.current];
+		if (x !== undefined) rail.current?.scrollTo({ x: Math.max(0, x - space.xl), animated: false });
+	};
+	useEffect(() => { if (visible) reveal(); }, [visible]); // eslint-disable-line react-hooks/exhaustive-deps
+	return (
+		<ScrollView
+			ref={rail}
+			horizontal
+			showsHorizontalScrollIndicator={false}
+			keyboardShouldPersistTaps="always"
+			contentContainerStyle={styles.rail}
+			accessibilityRole="tablist"
+			accessibilityLabel="Agent"
+			testID="model-wheel-agents"
+		>
+			{agents.map((item) => {
+				const on = item.id === chosen;
+				return (
+					<Pressable
+						key={item.id}
+						disabled={locked && !on}
+						onLayout={(event) => {
+							const first = placed.current[item.id] === undefined;
+							placed.current[item.id] = event.nativeEvent.layout.x;
+							if (first && on) reveal();
+						}}
+						onPress={() => { if (!on) { haptics.select(); onPick(item); } }}
+						accessibilityRole="tab"
+						accessibilityState={{ selected: on, disabled: locked && !on }}
+						accessibilityLabel={item.label}
+						testID={`model-wheel-agent-${item.id}`}
+						style={({ pressed }) => [styles.agent, on && styles.agentOn, pressed && !on && styles.agentPressed, locked && !on && styles.agentLocked]}
+					>
+						<AgentLogo harness={item.id} size={AGENT_MARK} />
+						<Text style={[styles.agentLabel, on && styles.agentLabelOn]} numberOfLines={1}>{item.label}</Text>
+					</Pressable>
+				);
+			})}
+		</ScrollView>
+	);
+}
+
+/** An agent's mark on its button. */
+const AGENT_MARK = 16;
 const TOGGLE_WIDTH = 40;
 const TOGGLE_HEIGHT = 24;
 const KNOB = TOGGLE_HEIGHT - 6;
@@ -201,9 +262,22 @@ const makeStyles = (t: Theme) =>
 			borderCurve: "continuous",
 			backgroundColor: t.bgElevated,
 		},
-		// Model names run longer than agents' ("Demo Large · Default").
-		agentColumn: { flex: 1 },
-		modelColumn: { flex: 1.6 },
+		modelColumn: { flex: 1 },
+		rail: { gap: space.xs, paddingHorizontal: space.xs },
+		agent: {
+			flexDirection: "row",
+			alignItems: "center",
+			gap: space.xs,
+			height: 36,
+			paddingHorizontal: space.md,
+			borderRadius: radius.pill,
+			borderCurve: "continuous",
+		},
+		agentOn: { backgroundColor: t.bgElevated },
+		agentPressed: { backgroundColor: t.bgSubtle },
+		agentLocked: { opacity: 0.4 },
+		agentLabel: { ...type.subheadline, color: t.textSecondary },
+		agentLabelOn: { color: t.textPrimary },
 		settings: { gap: space.hair },
 		setting: {
 			flexDirection: "row",

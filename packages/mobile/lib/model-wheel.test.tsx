@@ -9,6 +9,7 @@ vi.mock("react-native", async () => {
 	return {
 		BackHandler: { addEventListener: () => ({ remove: () => {} }) },
 		Keyboard: { addListener: () => ({ remove: () => {} }) },
+		ScrollView: host("ScrollView"),
 		StyleSheet: { create: (styles: object) => styles },
 		Text: host("Text"),
 		View: host("View"),
@@ -20,12 +21,13 @@ vi.mock("react-native-gesture-handler", async () => {
 });
 vi.mock("./composer-overlay", async () => {
 	const React = await import("react");
-	return { ComposerOverlay: ({ children, ...props }: { children?: React.ReactNode }) => React.createElement("ComposerOverlay", props, children) };
+	return { COMPOSER_CONTROL_RISE: 37, ComposerOverlay: ({ children, ...props }: { children?: React.ReactNode }) => React.createElement("ComposerOverlay", props, children) };
 });
+vi.mock("./AgentLogo", () => ({ AgentLogo: "AgentLogo" }));
 vi.mock("./effort-slider-host", () => ({ useWarmAfterIdle: () => true }));
 vi.mock("./haptics", () => ({ haptics: { select: () => {} } }));
 vi.mock("./ThemeProvider", () => ({ useThemedStyles: (make: (theme: object) => object) => make(fixtures.theme) }));
-vi.mock("./wheel-picker", () => ({ WheelPicker: "WheelPicker", WHEEL_ROW: 40, WHEEL_ROWS: 5 }));
+vi.mock("./wheel-picker", () => ({ WheelPicker: "WheelPicker", WHEEL_ROW: 36, WHEEL_ROWS: 3 }));
 
 import type { WheelAgent } from "./chat/useChatModelWheel";
 import { ModelWheelHost } from "./model-wheel";
@@ -42,10 +44,10 @@ afterEach(() => { act(() => renderer?.unmount()); renderer = undefined; vi.unstu
 
 const hostType = (node: ReactTestInstance): string => (typeof node.type === "string" ? node.type : "");
 
-function render(over: { chosenAgent?: string; chosenModel?: string } = {}) {
+function render(over: { chosenAgent?: string; chosenModel?: string; agentsLocked?: boolean } = {}) {
 	const slider = createEffortSliderSwitch();
 	const choose = vi.fn();
-	const element = (props: { chosenAgent?: string; chosenModel?: string }) => (
+	const element = (props: { chosenAgent?: string; chosenModel?: string; agentsLocked?: boolean }) => (
 		<ModelWheelHost
 			slider={slider}
 			busy={false}
@@ -55,7 +57,7 @@ function render(over: { chosenAgent?: string; chosenModel?: string } = {}) {
 			runningAgent="claude-code"
 			runningModel="opus"
 			settings={[]}
-			agentsLocked={false}
+			agentsLocked={props.agentsLocked ?? false}
 			choose={choose}
 			toggleSetting={() => {}}
 		/>
@@ -66,7 +68,8 @@ function render(over: { chosenAgent?: string; chosenModel?: string } = {}) {
 	return {
 		slider,
 		choose,
-		agentsWheel: () => wheel("model-wheel-agents"),
+		agentButton: (id: string) => renderer!.root.findAll((node) => hostType(node) === "Pressable" && node.props.testID === `model-wheel-agent-${id}`)[0],
+		pickAgent: (id: string) => act(() => renderer!.root.findAll((node) => hostType(node) === "Pressable" && node.props.testID === `model-wheel-agent-${id}`)[0].props.onPress()),
 		modelsWheel: () => wheel("model-wheel-models"),
 		settle: (testID: string, index: number) => act(() => wheel(testID).props.onSettle(index)),
 		rerender: (props: { chosenAgent?: string; chosenModel?: string }) => act(() => renderer!.update(element(props))),
@@ -87,11 +90,11 @@ describe("model wheel", () => {
 	});
 
 	it("looks at another agent without switching to it, and hands back the pair in force when rolled back", () => {
-		const { slider, choose, settle, modelsWheel } = render();
-		settle("model-wheel-agents", 1);
+		const { slider, choose, pickAgent, modelsWheel } = render();
+		pickAgent("codex");
 		// Another agent starts on its starred default, not its first model.
 		expect(modelsWheel().props.items[modelsWheel().props.index].key).toBe("gpt");
-		settle("model-wheel-agents", 0);
+		pickAgent("claude-code");
 		expect(modelsWheel().props.items[modelsWheel().props.index].key).toBe("opus");
 		act(() => slider.setOpen(false));
 		// `choose` leaves the pair already in force alone.
@@ -124,9 +127,9 @@ describe("model wheel", () => {
 	// With a switch to Codex picked, rolling back to Claude returns to the
 	// model Claude runs, not Claude's first listed one.
 	it("returns the running agent to its own model while a switch is picked", () => {
-		const { slider, choose, settle, modelsWheel } = render({ chosenAgent: "codex", chosenModel: "gpt-old" });
+		const { slider, choose, pickAgent, modelsWheel } = render({ chosenAgent: "codex", chosenModel: "gpt-old" });
 		expect(modelsWheel().props.items[modelsWheel().props.index].key).toBe("gpt-old");
-		settle("model-wheel-agents", 0);
+		pickAgent("claude-code");
 		act(() => slider.setOpen(false));
 		expect(choose).toHaveBeenCalledExactlyOnceWith("claude-code", "opus");
 	});
@@ -142,10 +145,27 @@ describe("model wheel", () => {
 
 	// A settle still pending on the last agent's list must not land on the new one.
 	it("rebuilds the model wheel for each agent", () => {
-		const { settle, modelsWheel } = render();
+		const { pickAgent, modelsWheel } = render();
 		const before = modelsWheel();
-		settle("model-wheel-agents", 1);
+		pickAgent("codex");
 		expect(modelsWheel()).not.toBe(before);
 		expect(modelsWheel().props.accessibilityLabel).toBe("Model");
+	});
+
+	// Switching agent is one tap on its button, not a turn of a second wheel.
+	it("lists the agents as buttons, the one the wheel shows selected", () => {
+		const { agentButton, pickAgent } = render();
+		expect(agentButton("claude-code").props.accessibilityState).toEqual({ selected: true, disabled: false });
+		expect(agentButton("codex").props.accessibilityState).toEqual({ selected: false, disabled: false });
+		pickAgent("codex");
+		expect(agentButton("codex").props.accessibilityState).toEqual({ selected: true, disabled: false });
+		expect(agentButton("claude-code").props.accessibilityState).toEqual({ selected: false, disabled: false });
+	});
+
+	// A switch waits until the agent is idle: the other agents are held still.
+	it("holds the other agents' buttons while the agent is working", () => {
+		const { agentButton } = render({ agentsLocked: true });
+		expect(agentButton("codex").props.disabled).toBe(true);
+		expect(agentButton("claude-code").props.disabled).toBe(false);
 	});
 });

@@ -1,5 +1,5 @@
 import { useCallback, useMemo, useRef } from "react";
-import { AUTOMATIC_MODEL } from "../agentSwitch";
+import { AUTOMATIC_MODEL, repickedSwitch } from "../agentSwitch";
 import { cloudAgentLabel } from "../cloud/agents";
 
 import { useEffortSliderSwitch } from "../useEffortSlider";
@@ -43,7 +43,9 @@ export type WheelSetting = { id: string; label: string; kind: "boolean"; on: boo
  * the next message, as the model menu's "Other agents" did. Choosing the
  * running agent again drops that switch. The provider's other settings are
  * rows under the wheels; Fast mode among them only while the effort slider,
- * which carries it as a bolt, is not shown (`fastOnEffort`).
+ * which carries it as a bolt, is not shown (`fastOnEffort`), and never while a
+ * switch to another agent is picked: the running agent's Fast mode is not the
+ * next message's.
  *
  * Whether the wheels are open lives in a switch, as the effort slider's does.
  */
@@ -88,10 +90,10 @@ export function useChatModelWheel({ snapshot, models, options, disabled, onSetti
 
 	const settings = useMemo<WheelSetting[]>(() => rows
 		.filter((row) => row !== modelRow && !["model", "effort", "permissions"].includes(turnSettingTopic(row) ?? ""))
-		.filter((row) => !(fastOnEffort && row.kind === "boolean" && turnSettingTopic(row) === "fast"))
+		.filter((row) => !((fastOnEffort || pending) && row.kind === "boolean" && turnSettingTopic(row) === "fast"))
 		.map((row) => row.kind === "boolean"
 			? { id: row.id, label: row.label, kind: "boolean" as const, on: Boolean(row.enabled) }
-			: { id: row.id, label: row.label, kind: "select" as const, value: row.value }), [rows, modelRow, fastOnEffort]);
+			: { id: row.id, label: row.label, kind: "select" as const, value: row.value }), [rows, modelRow, fastOnEffort, pending]);
 
 	const latest = useRef({ snapshot, rows, modelRow, pending, otherAgents, onSettings, onOption, agents });
 	latest.current = { snapshot, rows, modelRow, pending, otherAgents, onSettings, onOption, agents };
@@ -116,11 +118,13 @@ export function useChatModelWheel({ snapshot, models, options, disabled, onSetti
 		// default on its starred model, which must not be saved as that model.
 		if (!model || (held?.harness === agentId && (held.model ?? defaultModelOf(switching, agentId) ?? AUTOMATIC_MODEL) === modelKey)) return;
 		const defaultLabel = switching?.models[agentId]?.defaultLabel;
-		switching?.onPick({
+		// Another model of the agent already picked keeps its Fast mode where
+		// that model has it too, and its Ultracode (see repickedSwitch).
+		switching?.onPick(repickedSwitch({
 			harness: agentId,
 			model: modelKey === AUTOMATIC_MODEL ? undefined : modelKey,
 			modelLabel: modelKey === AUTOMATIC_MODEL ? defaultLabel ?? "Default model" : model.label,
-		});
+		}, held, switching.fast));
 	}, []);
 
 	/** A setting's row tapped: an on/off flips, a choice steps to the next. */

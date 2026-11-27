@@ -39,6 +39,7 @@ const fixtures = vi.hoisted(() => {
 		configOptions: [],
 		models: [],
 		refresh: vi.fn(async () => {}),
+		send: vi.fn(async (..._args: unknown[]) => "sent-id"),
 		loadTurnOptions: vi.fn(async () => {}),
 		rollback: vi.fn(async () => 0),
 		editMessage: vi.fn(async () => {}),
@@ -110,7 +111,7 @@ vi.mock("../ThemeProvider", () => {
 vi.mock("./api", () => ({
 	getWorkspacePaths: vi.fn(),
 	openSessionShell: vi.fn(),
-	prewarmChatAgent: vi.fn(),
+	prewarmChatAgent: vi.fn(async () => {}),
 	// The screen asks whether its turns can be forked.
 	getForkOptions: () => Promise.resolve({ allowed: false }),
 	forkSession: () => Promise.resolve(undefined),
@@ -351,5 +352,20 @@ describe("Switching the chat's agent", () => {
 	it("offers none to a terminated orchestrator, which must be restarted first", async () => {
 		await mount({ ...(orchestrator as object), isTerminal: true } as never);
 		expect(lastEnabled()).toBe(false);
+	});
+
+	// Fast mode goes with the switch only where the model picked has it, as
+	// the daemon refuses it for any other.
+	it("starts the switch in Fast mode only on a model that has it", async () => {
+		fixtures.agentSwitchMenu.mockReturnValue({ ...menu, fast: { codex: { models: ["gpt-5.5"], byDefault: false } } });
+		await mount();
+		const sendWith = async (pick: object) => {
+			await act(async () => composer().props.otherAgents.onPick(pick));
+			await act(async () => { await composer().props.onSend("hi"); });
+			return fixtures.conversation.send.mock.calls.at(-1)?.[4];
+		};
+		expect(await sendWith({ harness: "codex", model: "gpt-5.5", modelLabel: "GPT-5.5", fastMode: true })).toEqual({ targetHarness: "codex", model: "gpt-5.5", fastMode: true });
+		expect(await sendWith({ harness: "codex", model: "gpt-5.5", modelLabel: "GPT-5.5" })).toEqual({ targetHarness: "codex", model: "gpt-5.5", fastMode: undefined });
+		expect(await sendWith({ harness: "codex", model: "gpt-5.1-mini", modelLabel: "mini", fastMode: true })).toEqual({ targetHarness: "codex", model: "gpt-5.1-mini", fastMode: undefined });
 	});
 });

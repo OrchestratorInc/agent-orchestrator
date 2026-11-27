@@ -15,7 +15,10 @@ vi.mock("./haptics", () => ({ haptics: { select: fixtures.select, tap: () => {} 
 vi.mock("./harnessLogoAssets", () => ({ logoFor: (harness?: string) => (harness === "codex" || harness === "opencode" ? `logo:${harness}` : null) }));
 vi.mock("./effort-gauge", async () => {
 	const React = await import("react");
-	return { EffortGaugeButton: (props: object) => React.createElement("EffortGaugeButton", props) };
+	return {
+		EffortGaugeButton: (props: object) => React.createElement("EffortGaugeButton", props),
+		effortGaugeToggles: (fast?: { on: boolean }, ultracode?: { on: boolean }) => (fast || ultracode ? { fast: fast?.on, ultracode: ultracode?.on } : undefined),
+	};
 });
 vi.mock("./effort-slider", async () => {
 	const React = await import("react");
@@ -294,6 +297,42 @@ describe("Android spawn model", () => {
 		expect(props.onSelectEffort).toHaveBeenCalledWith("low");
 		await act(async () => rootTouchStart());
 		expect(root.findAll((node) => hostType(node) === "EffortSlider")).toHaveLength(0);
+	});
+
+	// Fast mode rides on the slider as its bolt, as in chat, where the task can start in it.
+	it("hands the effort slider Fast mode's bolt only where the task offers it", async () => {
+		const fast = { on: true, toggle: vi.fn() };
+		const root = await render(baseProps({ fast }));
+		await act(async () => gaugeOf(root).props.onPress());
+		const slider = root.findAll((node) => hostType(node) === "EffortSlider")[0];
+		expect(slider.props.fast).toBe(fast);
+		act(() => renderer?.unmount());
+		const plain = await render(baseProps());
+		await act(async () => gaugeOf(plain).props.onPress());
+		expect(plain.findAll((node) => hostType(node) === "EffortSlider")[0].props.fast).toBeUndefined();
+	});
+
+	// Claude Code's Ultracode rides on the slider as its switch, as in chat.
+	it("hands the effort slider Ultracode's switch only where the task offers it", async () => {
+		const ultracode = { on: true, toggle: vi.fn() };
+		const root = await render(baseProps({ ultracode }));
+		await act(async () => gaugeOf(root).props.onPress());
+		expect(root.findAll((node) => hostType(node) === "EffortSlider")[0].props.ultracode).toBe(ultracode);
+		act(() => renderer?.unmount());
+		const plain = await render(baseProps());
+		await act(async () => gaugeOf(plain).props.onPress());
+		expect(plain.findAll((node) => hostType(node) === "EffortSlider")[0].props.ultracode).toBeUndefined();
+	});
+
+	// Claude Haiku takes no effort, but its Ultracode is still on the slider.
+	it("keeps the speedometer for a model with no levels while the slider carries a switch", async () => {
+		const ultracode = { on: false, toggle: vi.fn() };
+		const root = await render(baseProps({ effortChoices: [], ultracode }));
+		// The gauge is handed the switches, to show and name them.
+		expect(gaugeOf(root).props.toggles).toEqual({ fast: undefined, ultracode: false });
+		await act(async () => gaugeOf(root).props.onPress());
+		const slider = root.findAll((node) => hostType(node) === "EffortSlider")[0];
+		expect(slider.props).toMatchObject({ choices: [], ultracode, visible: true });
 	});
 
 	// A focusable popup takes focus from the prompt, and Android puts the

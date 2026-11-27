@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { StyleSheet, Text, View, type TextStyle } from "react-native";
 import Animated, { cancelAnimation, Easing, useAnimatedProps, useSharedValue, withRepeat, withTiming } from "react-native-reanimated";
 import Svg, { Defs, LinearGradient, Mask, Rect, Stop, Text as SvgText } from "react-native-svg";
+import { ultraGradient } from "./tokens";
 import { useReducedMotion } from "./useReducedMotion";
 
 /*
@@ -12,7 +13,6 @@ import { useReducedMotion } from "./useReducedMotion";
  * on the UI thread. A hidden copy of the text, in the same style, sizes it.
  */
 
-export const ULTRA_GRADIENT = ["#5aa2ff", "#9b6dff", "#ed6ac4", "#9b6dff", "#5aa2ff"] as const;
 const SWEEP_MS = 3200;
 
 const AnimatedRect = Animated.createAnimatedComponent(Rect);
@@ -49,7 +49,7 @@ export function GradientText({ children, style, testID }: { children: string; st
 				<Svg width={size.width} height={size.height} style={StyleSheet.absoluteFill} pointerEvents="none">
 					<Defs>
 						<LinearGradient id="ultra-band" x1="0" y1="0" x2="1" y2="0">
-							{ULTRA_GRADIENT.map((color, i) => <Stop key={i} offset={i / (ULTRA_GRADIENT.length - 1)} stopColor={color} />)}
+							{ultraGradient.map((color, i) => <Stop key={i} offset={i / (ultraGradient.length - 1)} stopColor={color} />)}
 						</LinearGradient>
 						<Mask id="ultra-word">
 							<SvgText

@@ -9,7 +9,7 @@ import { PermissionPickerButton } from "../permission-picker";
 import { Choice, controlsRowTypeSize, ModelCapsuleLabel, useTriggerModifiers } from "../model-controls.ios";
 import { HarnessImage } from "../spawn-composer-controls.ios";
 import { defaultModelChoice } from "../spawnModel";
-import { AUTOMATIC_MODEL } from "../agentSwitch";
+import { AUTOMATIC_MODEL, repickedSwitch } from "../agentSwitch";
 import type { IOSSymbol } from "../symbols";
 import { useThemeState } from "../ThemeProvider";
 import { space, touchTarget } from "../tokens";
@@ -110,11 +110,13 @@ export function ChatTurnSettingsControl({ snapshot, models, options, disabled, o
 											key={model.id}
 											label={model.label}
 											selected={pending?.harness === agent.id && (pending.model ?? AUTOMATIC_MODEL) === model.id}
-											onChoose={() => otherAgents.onPick({
+											// Another model of the agent already picked keeps what was
+											// turned on for it (see repickedSwitch).
+											onChoose={() => otherAgents.onPick(repickedSwitch({
 												harness: agent.id,
 												model: model.id === AUTOMATIC_MODEL ? undefined : model.id,
 												modelLabel: model.id === AUTOMATIC_MODEL ? list?.defaultLabel ?? "Default model" : model.label,
-											})}
+											}, pending, otherAgents.fast))}
 										/>
 									);
 									return (
@@ -139,9 +141,9 @@ export function ChatTurnSettingsControl({ snapshot, models, options, disabled, o
 				)}
 				{/* The effort as a speedometer lit to the chosen level; a tap
 				    opens the slider over the composer. */}
-				{effort?.choices.length ? (
+				{effort && (effort.choices.length || effort.toggles) ? (
 					<RNHostView matchContents>
-						<EffortSliderGauge slider={effort.slider} choices={effort.choices} disabled={off} onPress={() => { permissions?.slider.setOpen(false); modelWheel?.slider.setOpen(false); }} testID="chat-effort" />
+						<EffortSliderGauge slider={effort.slider} choices={effort.choices} toggles={effort.toggles} disabled={off} onPress={() => { permissions?.slider.setOpen(false); modelWheel?.slider.setOpen(false); }} testID="chat-effort" />
 					</RNHostView>
 				) : null}
 				<Spacer minLength={0} />

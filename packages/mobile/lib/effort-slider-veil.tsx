@@ -1,5 +1,5 @@
-import { StyleSheet, View } from "react-native";
-import Svg, { Defs, LinearGradient, Rect, Stop } from "react-native-svg";
+import { useMemo } from "react";
+import { processColor, StyleSheet, View } from "react-native";
 import { useTheme } from "./ThemeProvider";
 import { space } from "./tokens";
 
@@ -9,11 +9,31 @@ export const VEIL_RISE = 120;
 const VEIL_BLEED = 24;
 /** How far the solid part reaches past the overlay's top, over a composer's padding it would otherwise leave showing. */
 const SOLID_OVERHANG = space.md;
+/** How much fainter the fade is than its eased curve: the curve's power. */
+const FAINT = 2;
 
 // The fade's opacity from its top to its foot, on an ease-in-out curve: a
 // straight ramp reads as a hard band where it meets the solid part, and an
 // 8-bit dark gradient bands visibly on Android with only two stops.
-const FADE = [0, 0.03, 0.1, 0.21, 0.36, 0.53, 0.7, 0.84, 0.94, 1];
+// Faint: the curve is held low through most of the rise, so the chat above
+// stays readable and only thickens near the overlay, still meeting the solid
+// part at full cover with no seam.
+const FADE = [0, 0.03, 0.1, 0.21, 0.36, 0.53, 0.7, 0.84, 0.94, 1].map((opacity) => opacity ** FAINT);
+
+/**
+ * A fade of `color` as a native gradient, `stops` its opacities from where it
+ * starts to where it ends. React Native's own gradient, drawn by the GPU with
+ * the view: react-native-svg rasterised each gradient into a bitmap on the UI
+ * thread, some 25 ms a frame for the veil's two, on the very frames an
+ * overlay opens on, and its stops were native views of their own to mount.
+ */
+export function fadeGradient(color: string, stops: readonly number[], direction: "to bottom" | "to top"): string {
+	const argb = Number(processColor(color) ?? 0) >>> 0;
+	const [r, g, b] = [(argb >>> 16) & 255, (argb >>> 8) & 255, argb & 255];
+	const alpha = ((argb >>> 24) & 255) / 255;
+	const steps = stops.map((opacity, i) => `rgba(${r}, ${g}, ${b}, ${(opacity * alpha).toFixed(3)}) ${((i / (stops.length - 1)) * 100).toFixed(1)}%`);
+	return `linear-gradient(${direction}, ${steps.join(", ")})`;
+}
 
 /**
  * A veil of the page's own colour behind a composer overlay, edge to edge:
@@ -30,35 +50,20 @@ export function EffortSliderVeil({ rise = VEIL_RISE, fall = 0, fallNativeID }: {
 	fallNativeID?: string;
 }) {
 	const t = useTheme();
+	const riseFade = useMemo(() => fadeGradient(t.bgBase, FADE, "to bottom"), [t.bgBase]);
+	const fallFade = useMemo(() => fadeGradient(t.bgBase, FADE, "to top"), [t.bgBase]);
 	return (
 		<>
 			<View pointerEvents="none" style={[styles.solid, { backgroundColor: t.bgBase }]} />
 			{fall ? (
-				<View nativeID={fallNativeID} collapsable={fallNativeID ? false : undefined} pointerEvents="none" style={[styles.fade, { bottom: -space.sm - fall, height: fall }]}>
-					<Svg width="100%" height="100%" preserveAspectRatio="none" viewBox="0 0 1 1">
-						<Defs>
-							<LinearGradient id="composer-overlay-veil-fall" x1="0" y1="1" x2="0" y2="0">
-								{FADE.map((opacity, i) => (
-									<Stop key={i} offset={i / (FADE.length - 1)} stopColor={t.bgBase} stopOpacity={opacity} />
-								))}
-							</LinearGradient>
-						</Defs>
-						<Rect x="0" y="0" width="1" height="1" fill="url(#composer-overlay-veil-fall)" />
-					</Svg>
-				</View>
+				<View
+					nativeID={fallNativeID}
+					collapsable={fallNativeID ? false : undefined}
+					pointerEvents="none"
+					style={[styles.fade, { bottom: -space.sm - fall, height: fall, experimental_backgroundImage: fallFade }]}
+				/>
 			) : null}
-			<View pointerEvents="none" style={[styles.fade, { top: -SOLID_OVERHANG - rise, height: rise }]}>
-				<Svg width="100%" height="100%" preserveAspectRatio="none" viewBox="0 0 1 1">
-					<Defs>
-						<LinearGradient id="composer-overlay-veil" x1="0" y1="0" x2="0" y2="1">
-							{FADE.map((opacity, i) => (
-								<Stop key={i} offset={i / (FADE.length - 1)} stopColor={t.bgBase} stopOpacity={opacity} />
-							))}
-						</LinearGradient>
-					</Defs>
-					<Rect x="0" y="0" width="1" height="1" fill="url(#composer-overlay-veil)" />
-				</Svg>
-			</View>
+			<View pointerEvents="none" style={[styles.fade, { top: -SOLID_OVERHANG - rise, height: rise, experimental_backgroundImage: riseFade }]} />
 		</>
 	);
 }

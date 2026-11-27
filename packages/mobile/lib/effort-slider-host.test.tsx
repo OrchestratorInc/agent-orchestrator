@@ -19,15 +19,16 @@ beforeEach(() => { vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true); });
 afterEach(() => { act(() => renderer?.unmount()); renderer = undefined; vi.unstubAllGlobals(); });
 
 // A composer that counts its own renders, with the gauge and the slider in it.
-function render(slider: EffortSliderSwitch, over: { busy?: boolean; onPress?: () => void } = {}) {
+function render(slider: EffortSliderSwitch, over: { busy?: boolean; onPress?: () => void; choices?: typeof levels; ultracode?: { on: boolean; toggle: () => void } } = {}) {
 	const counts = { composer: 0 };
 	const onChoose = vi.fn();
+	const choices = over.choices ?? levels;
 	function Composer({ busy }: { busy: boolean }) {
 		counts.composer += 1;
 		return (
 			<>
-				<EffortSliderGauge slider={slider} choices={levels} disabled={busy} onPress={over.onPress} testID="gauge" />
-				<EffortSliderHost slider={slider} choices={levels} busy={busy} onChoose={onChoose} />
+				<EffortSliderGauge slider={slider} choices={choices} toggles={over.ultracode ? { ultracode: over.ultracode.on } : undefined} disabled={busy} onPress={over.onPress} testID="gauge" />
+				<EffortSliderHost slider={slider} choices={choices} busy={busy} onChoose={onChoose} ultracode={over.ultracode} />
 			</>
 		);
 	}
@@ -91,7 +92,8 @@ describe("effort slider host", () => {
 		expect(overlay().props.visible).toBe(false);
 	});
 
-	it("hides the slider and shows the gauge off while busy", () => {
+	// Busy only keeps it from opening: a slider in use stays up under the finger.
+	it("keeps an open slider up while busy, the gauge disabled but lit", () => {
 		const slider = createEffortSliderSwitch();
 		slider.setBottom(120);
 		const { gauge, overlay, setBusy } = render(slider);
@@ -99,8 +101,28 @@ describe("effort slider host", () => {
 		expect(overlay()).toBeDefined();
 		setBusy(true);
 		expect(gauge().props.disabled).toBe(true);
-		expect(gauge().props.open).toBe(false);
-		expect(overlay()).toBeUndefined();
+		expect(gauge().props.open).toBe(true);
+		expect(overlay()).toBeDefined();
+	});
+
+	// Claude Haiku takes no effort: the slider still opens for Ultracode, and
+	// only for a switch.
+	it("opens with no levels while the slider carries Ultracode", () => {
+		const slider = createEffortSliderSwitch();
+		slider.setBottom(120);
+		const ultracode = { on: false, toggle: () => {} };
+		const { gauge, overlay } = render(slider, { choices: [], ultracode });
+		act(() => gauge().props.onPress());
+		expect(gauge().props.open).toBe(true);
+		expect(overlay().props).toMatchObject({ visible: true, choices: [], ultracode });
+		act(() => renderer!.unmount());
+		renderer = undefined;
+		const bare = createEffortSliderSwitch();
+		bare.setBottom(120);
+		const none = render(bare, { choices: [] });
+		act(() => none.gauge().props.onPress());
+		expect(none.gauge().props.open).toBe(false);
+		expect(none.overlay()).toBeUndefined();
 	});
 
 	// A request card takes the composer's place, host and all; dismissing it

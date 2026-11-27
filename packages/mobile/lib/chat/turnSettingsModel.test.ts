@@ -1,10 +1,23 @@
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 import type { ChatConfigOption, ChatModel, ConversationSnapshot } from "./types";
-import { nativeModelLabel, NOT_REPORTED, providerChoiceLabel, resolveDefaultChoices, splitModelChoices,
+import { effortChoiceLabel, nativeModelLabel, NOT_REPORTED, providerChoiceLabel, resolveDefaultChoices, splitModelChoices,
 	turnSettingsParts, turnSettingsRows, turnSettingTopic, turnSettingWrite, readableModelId } from "./turnSettingsModel";
 
-// Fast mode is off in the app for now (fastMode.ts); its behaviour is still tested.
-vi.mock("./fastMode", () => ({ FAST_MODE_SHOWN: true }));
+// Desktop's wording for a level (formatEffortLabel): "xhigh" is "Extra high".
+describe("effort level names", () => {
+	it("names a native catalog's levels as desktop does", () => {
+		expect(effortChoiceLabel("xhigh")).toBe("Extra high");
+		expect(effortChoiceLabel("high")).toBe("High");
+		expect(effortChoiceLabel("max")).toBe("Max");
+	});
+
+	it("names a native catalog's Extra high so on the slider's row", () => {
+		const rows = turnSettingsRows({ conversationId: "c", sessionId: "s", harness: "claude-code", mode: "chat", controller: { state: "ready" }, latestSequence: 0, oldestSequence: 0, hasMoreBefore: false, turns: [], items: [], settings: { model: "opus", approvalMode: "auto", reasoningEffort: "xhigh" }, capabilities: [] } as ConversationSnapshot, [{ id: "opus", displayName: "Opus", efforts: ["high", "xhigh"] }] as ChatModel[], []);
+		const effort = rows.find((row) => turnSettingTopic(row) === "effort");
+		expect(effort?.choices.map((choice) => choice.label)).toEqual(["High", "Extra high"]);
+		expect(effort?.value).toBe("Extra high");
+	});
+});
 
 // What the controls row names, all three parts read together: the model's
 // capsule, the effort's speedometer and the approval mode's symbol.
@@ -46,6 +59,31 @@ describe("turnSettingsRows", () => {
 		// A new model starts without the old one's fast mode.
 		const model = turnSettingsRows(on, models, []).find((row) => row.id === "model")!;
 		expect(turnSettingWrite(on.settings, model, "sonnet")).toEqual({ kind: "settings", settings: { model: "sonnet", reasoningEffort: undefined, fastMode: undefined } });
+	});
+
+	// As on desktop: Fast mode survives a model change only onto another model that has it.
+	it("keeps fast mode when the newly picked model has one too", () => {
+		const models = [
+			{ id: "gpt-5", displayName: "GPT-5", default: true, supportsFast: true },
+			{ id: "gpt-5-mini", displayName: "GPT-5 mini", default: false, supportsFast: true },
+			{ id: "gpt-4", displayName: "GPT-4", default: false },
+		] as ChatModel[];
+		const on = snapshot({ capabilities: [], settings: { model: "gpt-5", reasoningEffort: "high", fastMode: true } });
+		const model = turnSettingsRows(on, models, []).find((row) => row.id === "model")!;
+		expect(model.fastModels).toEqual(["gpt-5", "gpt-5-mini"]);
+		expect(turnSettingWrite(on.settings, model, "gpt-5-mini")).toEqual({ kind: "settings", settings: { model: "gpt-5-mini", reasoningEffort: undefined, fastMode: true } });
+		expect(turnSettingWrite(on.settings, model, "gpt-4")).toEqual({ kind: "settings", settings: { model: "gpt-4", reasoningEffort: undefined, fastMode: undefined } });
+	});
+
+	// A saved model the catalog no longer lists is not the catalog's default, so
+	// it does not borrow the default's Fast mode.
+	it("asks the saved model, not the catalog default, whether it has fast mode", () => {
+		const models = [{ id: "gpt-5", displayName: "GPT-5", default: true, supportsFast: true }] as ChatModel[];
+		const fast = (settings: ConversationSnapshot["settings"]) =>
+			turnSettingsRows(snapshot({ capabilities: [], settings }), models, []).some((row) => row.id === "fast");
+		expect(fast({ model: "gpt-retired" })).toBe(false);
+		expect(fast({})).toBe(true);
+		expect(fast({ model: "gpt-5" })).toBe(true);
 	});
 
 	it("identifies the native controls Android promotes above generic provider options", () => {
@@ -297,7 +335,7 @@ describe("default labels", () => {
 		expect(rowChoices(picked, options, "model")?.filter(([, name]) => name === "Opus 5.5")).toEqual([["opus", "Opus 5.5"]]);
 		const model = turnSettingsRows(picked, [], options).find((row) => row.id === "option:model");
 		expect(model?.choices.filter((choice) => choice.selected).map((choice) => choice.value)).toEqual(["opus"]);
-		expect(turnSettingsSummary(claudeChat, [], options)).toBe("Opus 5.5 · Xhigh · Auto");
+		expect(turnSettingsSummary(claudeChat, [], options)).toBe("Opus 5.5 · Extra high · Auto");
 	});
 
 	// Claude Code reports "opus" for a session nobody pointed at Opus when its
@@ -622,7 +660,7 @@ describe("each agent's settings", () => {
 		const rows = rowsFor("claude-code", options);
 		expect(topics(rows)).toEqual([["Fast mode", "fast"], ["Model", "model"], ["Effort", "effort"], ["Mode", "permissions"]]);
 		expect(rows.find((row) => row.id === "option:model")?.choices.map((choice) => choice.label)).toEqual(["Opus 5.5", "Haiku 4.5"]);
-		expect(rows.find((row) => row.id === "option:effort")?.choices.map((choice) => choice.label)).toEqual(["High", "Xhigh"]);
+		expect(rows.find((row) => row.id === "option:effort")?.choices.map((choice) => choice.label)).toEqual(["High", "Extra high"]);
 	});
 
 	it("Pi: provider-prefixed models under their provider, and its Thinking levels as the effort", () => {

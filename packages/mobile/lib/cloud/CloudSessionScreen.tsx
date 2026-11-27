@@ -684,6 +684,8 @@ export function CloudSessionScreen({ sessionId }: { sessionId: string }) {
 					// Keys the unsent draft and attachments, as a machine's does, so a
 					// cloud chat keeps what was typed across leaving it.
 					machine={CLOUD_HOST_ID}
+					// Desktop offers Ultracode on a machine's own chats only.
+					cloud
 					config={null}
 					snapshot={snapshot}
 					// The starting session's brief reads as sent in the timeline; told

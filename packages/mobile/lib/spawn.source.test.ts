@@ -14,6 +14,10 @@ function expectBefore(text: string, first: string, then: string) {
 const composer = readFileSync(fileURLToPath(new URL("./spawn-composer.tsx", import.meta.url)), "utf8");
 const platformControls = ["ios", "android"].map((platform) => readFileSync(fileURLToPath(new URL(`./spawn-composer-controls.${platform}.tsx`, import.meta.url)), "utf8"));
 const voiceInput = readFileSync(fileURLToPath(new URL("./voice/useVoiceInput.ts", import.meta.url)), "utf8");
+const store = readFileSync(fileURLToPath(new URL("./store.tsx", import.meta.url)), "utf8");
+const chatScreen = readFileSync(fileURLToPath(new URL("./chat/ChatSessionScreen.tsx", import.meta.url)), "utf8");
+const chatComposer = readFileSync(fileURLToPath(new URL("./chat/ChatComposer.tsx", import.meta.url)), "utf8");
+const cloudScreen = readFileSync(fileURLToPath(new URL("./cloud/CloudSessionScreen.tsx", import.meta.url)), "utf8");
 
 /** The text from `start` up to `end`; both must be there, or the slice would be the wrong text. */
 function between(text: string, start: string, end: string): string {
@@ -169,6 +173,78 @@ describe("spawn effort", () => {
 	it("sends no stand-in fallback effort with the default model", () => {
 		expect(spawn).toContain("const usingStandIn = !runningModel && effortModel !== undefined;");
 		expect(spawn).toContain("const chosenEffort = spawnEffortToSend(effortChoices, effort, effortModel, usingStandIn);");
+	});
+});
+
+describe("spawn Fast mode", () => {
+	// Where desktop's New chat offers it: a machine's own task whose starting
+	// model has a faster tier. Sent only then, and only when on.
+	it("offers Fast mode only for a machine's task on a model that has it, and sends it only when on", () => {
+		expect(spawn).toContain("const fastOffered = !cloudSelected && Boolean(runningModel?.supportsFast);");
+		expect(spawn).toContain("const fastToSend = fastOffered && fast;");
+		expectBefore(between(spawn, "const request = {", "const { attachments: _, ...requestFields } = request;"), "effort: chosenEffort,", "...(fastToSend ? { fastMode: true } : {}),");
+		expect(spawn).toContain("fast={fastToggle}");
+		for (const controls of platformControls) expect(controls).toContain("fast={fast} ultracode={ultracode} overKeyboard />");
+	});
+
+	// A new agent or project starts with Fast mode off, as with its effort; a
+	// new model keeps it only where it has it too, as desktop's New chat does.
+	it("turns Fast mode off for a new agent or project, and for a model without it", () => {
+		expect(spawn).toContain("const clearModelOverride = () => { setModel(\"\"); setModelTouched(false); setEffort(undefined); setFast(false); };");
+		expect(between(spawn, "const resetModelSource = () => {", "};")).toContain("clearModelOverride();");
+		const select = between(spawn, "const selectModel = (nextModel: string) => {", "const selectEffort =");
+		expect(select).toContain("if (!spawnKeepsFast(currentModels, nextModel, resolvedModel)) setFast(false);");
+		expect(select).not.toContain("clearModelOverride()");
+		expect(spawn).toContain("if (picked.fastMode) setFast(true);");
+	});
+});
+
+describe("spawn Ultracode", () => {
+	// Where desktop's New chat offers it: a machine's own Claude Code task, at
+	// any level, on any model.
+	it("offers Ultracode only for a machine's Claude Code task", () => {
+		expect(spawn).toContain("const ultracodeOffered = offersUltracode(harness, !cloudSelected);");
+		expect(spawn).toContain("const ultracodeToSend = ultracodeOffered && ultracode;");
+		expect(spawn).toContain("ultracode={ultracodeToggle}");
+		// The slider opens for it, or Fast mode, on a model with no levels.
+		for (const controls of platformControls) expect(controls).toContain("effortChoices.length || fast || ultracode ?");
+	});
+
+	// The prefix is part of the request a retry is matched by, so a retried
+	// draft sends the same text and the same request id.
+	it("asks for Ultracode in the opening message, inside the request a retry matches", () => {
+		const request = between(spawn, "const request = {", "const { attachments: _, ...requestFields } = request;");
+		expect(request).toContain("prompt: prompt.trim() ? (ultracodeToSend ? withUltracode(prompt.trim()) : prompt.trim()) : undefined,");
+		expect(spawn).toContain("...(ultracode ? { ultracode: true } : {}),");
+		expect(spawn).toContain("if (picked.ultracode) setUltracode(true);");
+	});
+
+	// The chat the task becomes keeps Ultracode on: its key, under the machine
+	// as the store names it for that host, is written before the chat opens.
+	it("keeps Ultracode on for the chat the task opens", () => {
+		const started = between(spawn, "const session = await spawn(", "router.replace({");
+		expect(started).toContain("const chatMachine = viewMachine({ config, selectedHostId, configResolved: true }).machine;");
+		expect(started).toContain("await AsyncStorage.setItem(ultracodeKey(chatMachine, session.id), \"1\").catch(() => {});");
+		expectBefore(started, "if (ultracodeToSend) {", "if (!navigation.isFocused()) {");
+	});
+
+	// The chat reads it under the store's `machine`, which viewMachine names
+	// for the selected machine and for every other one (HostScope) alike, so
+	// the key spawn writes is the one the chat's composer reads (see
+	// viewMachine.test.ts for the keys themselves).
+	it("reads the key in the chat under the machine spawn wrote it for", () => {
+		expect(store).toContain("const { configured, machine: activeMachine, paired } = viewMachine({ config, selectedHostId, configResolved });");
+		expect(between(store, "export function HostScope(", "return <AppContext.Provider")).toContain("machine: viewMachine({ config, selectedHostId: host?.hostId ?? null, configResolved: app.configResolved }).machine,");
+		expect(chatScreen).toContain("machine={machine}");
+		expect(chatComposer).toContain("ultracodeKey: machine ? ultracodeKey(machine, sessionId) : null");
+	});
+
+	// Orchestrator Cloud's chats have no Ultracode, as on desktop: the one
+	// thing keeping a flag kept on the phone off them is this prop.
+	it("tells a Cloud chat's composer it is one", () => {
+		const composerProps = between(cloudScreen, "<ChatComposer", "/>");
+		expect(composerProps).toMatch(/\n\t+cloud\n/);
+		expect(chatComposer).toContain("const effort = useChatEffort({ ...settingsProps, ultracodeKey: machine ? ultracodeKey(machine, sessionId) : null, cloud });");
 	});
 });
 

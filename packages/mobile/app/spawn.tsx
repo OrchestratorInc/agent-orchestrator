@@ -1,3 +1,4 @@
+import AsyncStorage from "@react-native-async-storage/async-storage";
 import { useLocalSearchParams, useNavigation, useRouter } from "expo-router";
 import * as DocumentPicker from "expo-document-picker";
 import * as ImagePicker from "expo-image-picker";
@@ -18,7 +19,7 @@ import { haptics } from "../lib/haptics";
 import { autoSpawnHostId, connectedSpawnHosts, selectSpawnHost, spawnHostNeedsRetry, spawnHostRequestIsCurrent } from "../lib/hostRoute";
 import { rememberLastProject, useLastProject } from "../lib/lastProject";
 import { ALL_PROJECTS, STANDALONE_PROJECT, resolveSpawnProject } from "../lib/projectFilter";
-import { claudeAliasModel, defaultEffortModel, defaultRowModelToSend, menuModelName, menuModels, modelOverride, resolveSpawnAgent, resolveSpawnModel, spawnModelSourceChanged } from "../lib/spawnModel";
+import { claudeAliasModel, defaultEffortModel, defaultRowModelToSend, menuModelName, menuModels, modelOverride, resolveSpawnAgent, resolveSpawnModel, spawnKeepsFast, spawnModelSourceChanged } from "../lib/spawnModel";
 import { appendSpawnAttachments, joinAttachmentErrors, MAX_SPAWN_ATTACHMENTS, pastedSpawnAttachments, photoPickerAttachment, readSpawnAttachments, spawnAttachmentPreview, type PickedSpawnAttachment, type SpawnAttachment } from "../lib/spawn-attachments";
 import { ComposerAttachmentTray } from "../lib/chat/ComposerAttachmentTray";
 import type { ComposerImageAsset, PasteOverflow } from "../lib/chat/composerImages";
@@ -29,6 +30,8 @@ import { createAgentModelCache, nextConnectionEpoch, provenSpawnConfig, type Con
 import { loadSpawnSkills } from "../lib/spawnSkills";
 import { spawnEffortChoices, spawnEffortToSend } from "../lib/modelEffort";
 import { useApp } from "../lib/store";
+import { viewMachine } from "../lib/viewMachine";
+import { offersUltracode, ultracodeKey, withUltracode } from "../lib/chat/ultracode";
 import { useCloud } from "../lib/cloud/CloudProvider";
 import { connectedAgents } from "../lib/cloud/agents";
 import { CLOUD_HOST_ID, CLOUD_HOST_NAME, isCloudHost } from "../lib/cloud/mapping";
@@ -246,6 +249,10 @@ function SpawnPage() {
 	const [modelTouched, setModelTouched] = useState(false);
 	// An effort picked here; until then the model runs at its own default.
 	const [effort, setEffort] = useState<string>();
+	// Fast mode turned on here. Sent only where it is offered (`fastOffered`).
+	const [fast, setFast] = useState(false);
+	// Claude Code's Ultracode turned on here. Asked for only where it is offered (`ultracodeOffered`).
+	const [ultracode, setUltracode] = useState(false);
 	const [modelCatalog, setModelCatalog] = useState<AgentModelCatalog>();
 	// Every agent's own models, so the agent menu can offer each one's list
 	// before it is picked. The picked agent's list is the project-aware catalog.
@@ -289,11 +296,13 @@ function SpawnPage() {
 		...(agentTouched && harness ? { harness } : {}),
 		...(modelTouched && model ? { model } : {}),
 		...(effort ? { effort } : {}),
+		...(fast ? { fastMode: true } : {}),
+		...(ultracode ? { ultracode: true } : {}),
 		...(approvalChoice ? { approvalMode: approvalChoice } : {}),
 		mode,
 		// Only an account picked (or one restored, not yet put back): the default goes unnamed, as in a Start.
 		...(accountPick ? { accountId: accountPick, accountHarness: harness } : restoredAccount ? { accountId: restoredAccount.accountId, accountHarness: restoredAccount.harness } : {}),
-	}), [accountPick, agentTouched, approvalChoice, effort, harness, mode, model, modelTouched, projectId, restoredAccount]);
+	}), [accountPick, agentTouched, approvalChoice, effort, fast, harness, mode, model, modelTouched, projectId, restoredAccount, ultracode]);
 	useEffect(() => {
 		if (!draftRestored || !accountKnown) return;
 		if ((draftUnread.current || draftElsewhere.current) && !prompt.trim() && attachments.length === 0) return;
@@ -324,6 +333,8 @@ function SpawnPage() {
 		if (picked.harness) { setHarness(picked.harness); setAgentTouched(true); }
 		if (picked.model) { setModel(picked.model); setModelTouched(true); }
 		if (picked.effort) setEffort(picked.effort);
+		if (picked.fastMode) setFast(true);
+		if (picked.ultracode) setUltracode(true);
 		if (isApprovalMode(picked.approvalMode)) setApprovalChoice(picked.approvalMode);
 		if (picked.accountId && picked.accountHarness) setRestoredAccount({ hostId: restoredHostId.current, harness: picked.accountHarness, accountId: picked.accountId });
 	};
@@ -550,6 +561,24 @@ function SpawnPage() {
 	// names no default. Not a stand-in's fallback: no model is sent with it.
 	const usingStandIn = !runningModel && effortModel !== undefined;
 	const chosenEffort = spawnEffortToSend(effortChoices, effort, effortModel, usingStandIn);
+	// Fast mode where desktop's New chat offers it: a machine's own task whose
+	// starting model has a faster tier. In practice that is Codex; the daemon
+	// refuses it at launch for any other agent, and a Cloud worker has none.
+	const fastOffered = !cloudSelected && Boolean(runningModel?.supportsFast);
+	const fastToSend = fastOffered && fast;
+	// One object while nothing changes: the slider's host is memoised. A flip is
+	// a change to the form, as `edited` counts one.
+	const fastToggle = useMemo(() => (fastOffered
+		? { on: fast, toggle: () => { setError(errorAfterEdit); setFast((on) => !on); } }
+		: undefined), [fast, fastOffered]);
+	// Claude Code's Ultracode where desktop's New chat offers it: a machine's
+	// own Claude Code task, at any level, on any model. Only the opening
+	// message asks for it; the chat it opens keeps it on (see onSpawn).
+	const ultracodeOffered = offersUltracode(harness, !cloudSelected);
+	const ultracodeToSend = ultracodeOffered && ultracode;
+	const ultracodeToggle = useMemo(() => (ultracodeOffered
+		? { on: ultracode, toggle: () => { setError(errorAfterEdit); setUltracode((on) => !on); } }
+		: undefined), [ultracode, ultracodeOffered]);
 	// Each agent's menu list, built once per change rather than per keystroke:
 	// some catalogs run to thousands of models.
 	const agentMenuModels = useMemo(() => Object.fromEntries(agents.filter((agent) => agent.selectable).map((agent) => [
@@ -793,8 +822,9 @@ function SpawnPage() {
 		change(...args);
 	};
 
-	// A level belongs to the model it was picked for, so a new model starts at its own default.
-	const clearModelOverride = () => { setModel(""); setModelTouched(false); setEffort(undefined); };
+	// A level belongs to the model it was picked for, so a new model starts at
+	// its own default. A new agent or project starts with Fast mode off too.
+	const clearModelOverride = () => { setModel(""); setModelTouched(false); setEffort(undefined); setFast(false); };
 	// A cleared catalog is not loaded any more: picking the same agent or
 	// project again (A, B, then A) loads it again rather than leaving it empty.
 	const resetModelSource = () => { clearModelOverride(); loadedFor.current.models = undefined; setModelCatalog(undefined); setModelError(undefined); };
@@ -863,8 +893,12 @@ function SpawnPage() {
 		setHarness(nextHarness);
 	};
 	const selectModel = (nextModel: string) => {
+		// Fast mode carries over only to a model that has it too (spawnKeepsFast).
+		if (!spawnKeepsFast(currentModels, nextModel, resolvedModel)) setFast(false);
 		if (nextModel === "__auto__") {
-			clearModelOverride();
+			setModel("");
+			setModelTouched(false);
+			setEffort(undefined);
 			return;
 		}
 		if (nextModel !== model) setEffort(undefined);
@@ -1004,11 +1038,15 @@ function SpawnPage() {
 			const request = {
 				hostId: selectedHostId,
 				projectId: projectId ?? undefined,
-				prompt: prompt.trim() || undefined,
+				// With Ultracode, the opening message asks for it. Built here, in the
+				// request a retry is matched by, so a retried draft sends the same text.
+				prompt: prompt.trim() ? (ultracodeToSend ? withUltracode(prompt.trim()) : prompt.trim()) : undefined,
 				harness: harness || undefined,
 				model: modelOverride(displayedModel, modelTouched, defaultRowModel),
 				// Only a level picked here; otherwise the model's default applies.
 				effort: chosenEffort,
+				// Only where the task can start in it, and only when on.
+				...(fastToSend ? { fastMode: true } : {}),
 				accountId: accountPick || undefined,
 				// Only a mode picked here overrides the project's; an untouched
 				// picker names the project's mode, which the daemon applies anyway.
@@ -1051,6 +1089,14 @@ function SpawnPage() {
 			void draftSaver.cancel().then(() => clearStartedSpawnDraft(sent.id)).catch(() => {});
 			if (projectId === STANDALONE_PROJECT) setActiveProject(ALL_PROJECTS);
 			else rememberLastProject(selectedHostId, projectId);
+			// The chat this task becomes keeps Ultracode on, as desktop's does:
+			// kept where its composer reads it, under the machine as the store
+			// names it for that host (viewMachine). Before the chat opens, so it
+			// reads it on; a failed write only leaves it off there.
+			if (ultracodeToSend) {
+				const chatMachine = viewMachine({ config, selectedHostId, configResolved: true }).machine;
+				await AsyncStorage.setItem(ultracodeKey(chatMachine, session.id), "1").catch(() => {});
+			}
 			holding.current = false;
 			// Covered while the request ran (a notification or link can still
 			// open a page over this one): the worker shows up on the board, and
@@ -1156,6 +1202,8 @@ function SpawnPage() {
 					onSelectApprovalMode={edited((next: string) => setApprovalChoice(next as ApprovalMode))}
 					effortChoices={effortChoices}
 					onSelectEffort={edited(selectEffort)}
+					fast={fastToggle}
+					ultracode={ultracodeToggle}
 					onChoosePhoto={edited(() => { void pickPhotos(); })}
 					onChooseFile={edited(() => { void pickFiles(); })}
 					onPasteImages={busy ? null : edited(pasteImages)}

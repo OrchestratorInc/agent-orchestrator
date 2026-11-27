@@ -1,6 +1,7 @@
 import type { ReactNode } from "react";
 import type { ComposerImageAsset, PasteOverflow } from "./chat/composerImages";
 import type { ChatSkill } from "./chat/types";
+import type { FastToggle } from "./effort-slider";
 import type { EffortChoice } from "./modelEffort";
 import type { VoiceState } from "./voice/types";
 
@@ -76,6 +77,18 @@ export type SpawnComposerControlsProps = {
 	/** The picked model's effort levels, the one it will run at checked; empty for a model that takes none. */
 	effortChoices: readonly EffortChoice[];
 	onSelectEffort: (effort: string) => void;
+	/**
+	 * Fast mode, the effort slider's bolt: only where the task can start in it
+	 * (a machine's own task on a model with a faster tier), else none. Kept the
+	 * same object between renders, as the slider's host is memoised.
+	 */
+	fast?: FastToggle;
+	/**
+	 * Claude Code's Ultracode, the switch at the slider's left: only for a
+	 * machine's own Claude Code task, else none. Kept the same object between
+	 * renders, as the slider's host is memoised.
+	 */
+	ultracode?: FastToggle;
 	/** The attach button offers both the photo library and the file picker. */
 	onChoosePhoto: () => void;
 	onChooseFile: () => void;

@@ -9,6 +9,7 @@ import type { ConnStatus } from "./store";
 import { sessionRowsForMachine } from "./projectFilter";
 import { sessionRouteView, type SessionLookup } from "./session/sessionRoute";
 import { viewMachine } from "./viewMachine";
+import { ultracodeKey } from "./chat/ultracode";
 
 const lan: ServerConfig = { host: "192.168.1.20", httpPort: "3011", muxPort: "3011", password: "pw", hostId: "h1", endpointKind: "lan" };
 const tunnel: ServerConfig = { host: "x.trycloudflare.com", httpPort: "443", muxPort: "443", secure: true, password: "pw", hostId: "h1", endpointKind: "tunnel" };
@@ -85,5 +86,27 @@ describe("an open chat across an app switch", () => {
 	// previous one's session while it has not answered.
 	it("hides the session once another machine is selected", () => {
 		expect(route({ config: null, configResolved: false, connection: "closed", loading: true, selectedHostId: "h2" })).not.toEqual({ kind: "screen", session: chat });
+	});
+});
+
+// A New task with Ultracode keeps it on for the chat it opens: spawn writes the
+// key under viewMachine's machine for the host it started on, with that host's
+// verified connection in hand, and the chat reads it under the store's
+// `machine` (viewMachine too, for the selected host and HostScope's alike),
+// whatever the connection is doing when the chat opens.
+describe("a New task's Ultracode reaching its chat", () => {
+	const written = ultracodeKey(viewMachine({ config: lan, selectedHostId: "h1", configResolved: true }).machine, "s1");
+
+	it("is read under the key spawn wrote, on any endpoint and with the connection dropped", () => {
+		for (const config of [lan, tunnel, null]) {
+			for (const configResolved of [true, false]) {
+				expect(ultracodeKey(viewMachine({ config, selectedHostId: "h1", configResolved }).machine, "s1")).toBe(written);
+			}
+		}
+	});
+
+	it("is under the chat's own conversation and machine", () => {
+		expect(ultracodeKey(viewMachine({ config: lan, selectedHostId: "h1", configResolved: true }).machine, "s2")).not.toBe(written);
+		expect(ultracodeKey(viewMachine({ config: { ...lan, hostId: "h2" }, selectedHostId: "h2", configResolved: true }).machine, "s1")).not.toBe(written);
 	});
 });

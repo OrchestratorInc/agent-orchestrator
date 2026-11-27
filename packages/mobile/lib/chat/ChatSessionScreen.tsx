@@ -8,7 +8,7 @@ import { mobileReachablePreviewURL, restoreSession, resumeSessionAgent, type Das
 import { haptics } from "../haptics";
 import { openGitHub } from "../openGitHub";
 import { InlineBanner, type InlineBannerProps } from "../InlineBanner";
-import { pendingSwitchFor, requestedSwitchModel, type PendingAgentSwitch } from "../agentSwitch";
+import { pendingSwitchFor, requestedSwitchModel, switchOffersFast, type PendingAgentSwitch } from "../agentSwitch";
 import { useAgentSwitchMenu } from "./useAgentSwitchMenu";
 import { prewarmChatAgent } from "./api";
 import { useApp } from "../store";
@@ -247,10 +247,16 @@ export function ChatSessionScreen({ session: boardSession }: { session: MobileCh
 	const send = useCallback(
 		(text: string, attachments?: ChatImage[], resources?: ChatResource[], excerpts?: ChatExcerpt[], typed?: string) => sendConversation(
 			text, attachments, resources, excerpts,
-			pendingSwitch ? { targetHarness: pendingSwitch.harness, model: requestedSwitchModel(pendingSwitch.model) } : undefined,
+			pendingSwitch ? {
+				targetHarness: pendingSwitch.harness,
+				model: requestedSwitchModel(pendingSwitch.model),
+				// Fast only where the model picked has it, by the catalog as it
+				// stands now: the daemon refuses it for any other model.
+				fastMode: pendingSwitch.fastMode && switchOffersFast(pendingSwitch, agentSwitchMenu?.fast) ? true : undefined,
+			} : undefined,
 			typed,
 		),
-		[pendingSwitch, sendConversation],
+		[agentSwitchMenu?.fast, pendingSwitch, sendConversation],
 	);
 	// A new agent brings its own models and options: reload them uncached, so
 	// the outgoing agent's never stay in the menu (desktop's

@@ -59,8 +59,8 @@ vi.mock("react-native-gesture-handler", async () => {
 		Gesture: { Pan: pan },
 		GestureDetector: ({ gesture, children }: { gesture: unknown; children?: React.ReactNode }) => React.createElement("GestureDetector", { gesture }, children),
 		GestureHandlerRootView: ({ children, ...props }: { children?: React.ReactNode }) => React.createElement("GestureHandlerRootView", props, children),
-		Pressable: ({ children, style, ...props }: { children?: React.ReactNode; style?: unknown }) =>
-			React.createElement("Pressable", { ...props, style: typeof style === "function" ? style({ pressed: false }) : style }, children),
+		Pressable: ({ children, style, ...props }: { children?: React.ReactNode | ((state: { pressed: boolean }) => React.ReactNode); style?: unknown }) =>
+			React.createElement("Pressable", { ...props, style: typeof style === "function" ? style({ pressed: false }) : style }, typeof children === "function" ? children({ pressed: false }) : children),
 	};
 });
 // The drag's worklets call JS through scheduleOnRN; here it calls at once.
@@ -81,10 +81,13 @@ vi.mock("react-native-reanimated", async () => {
 		})()).current,
 		useAnimatedStyle: (style: () => unknown) => style,
 		interpolateColor: (value: number, input: number[], output: string[]) => (value <= input[0] ? output[0] : output[output.length - 1]),
-		withTiming: (value: number) => {
+		withTiming: (value: number, _config?: unknown, done?: (finished: boolean) => void) => {
 			fixtures.glides.push(value);
-			return fixtures.midGlide ? { glidingTo: value } : value;
+			if (fixtures.midGlide) return { glidingTo: value };
+			done?.(true);
+			return value;
 		},
+		runOnJS: (fn: unknown) => fn,
 	};
 });
 
@@ -215,15 +218,57 @@ describe("effort slider", () => {
 		expect(fixtures.events.has("KeyboardController::overKeyboardTouchOutside")).toBe(false);
 	});
 
-	// Claude Code's Ultracode is drawn in desktop's gradient, the other levels plainly.
-	it("draws Ultracode in desktop's gradient, and other levels plainly", async () => {
-		const withUltra = (selected: string) => [...levels(selected === "ultracode" ? undefined : selected), { value: "ultracode", label: "Ultracode", selected: selected === "ultracode" }];
-		await act(async () => { renderer = create(<EffortSlider choices={withUltra("ultracode")} onChoose={() => {}} />); });
-		const gradient = () => renderer!.root.findAll((node) => hostType(node) === "GradientText");
-		expect(gradient()).toHaveLength(1);
-		expect(gradient()[0].props.children).toBe("Ultracode");
-		await act(async () => renderer!.update(<EffortSlider choices={withUltra("high")} onChoose={() => {}} />));
+	// Claude Code's Ultracode, a switch at the heading's left as desktop has
+	// it: its name and the level in desktop's gradient while it is on, muted
+	// while it is off. It is no level, so the track keeps the model's own.
+	it("flips Ultracode from \"Ultra\" beside the bolt, drawn in desktop's gradient while on", async () => {
+		const toggle = vi.fn();
+		await act(async () => { renderer = create(<EffortSlider choices={levels("high")} onChoose={() => {}} ultracode={{ on: false, toggle }} />); });
+		const root = renderer!.root;
+		const ultra = () => root.findAll((node) => hostType(node) === "Pressable" && node.props.testID === "effort-slider-ultracode")[0];
+		const gradient = () => root.findAll((node) => hostType(node) === "GradientText");
+		expect(ultra().props).toMatchObject({ accessibilityRole: "switch", accessibilityLabel: "Ultracode", accessibilityState: { checked: false } });
+		expect(ultra().findAll((node) => hostType(node) === "Text")[0].props.children).toBe("Ultra");
 		expect(gradient()).toHaveLength(0);
+		act(() => ultra().props.onPress());
+		expect(toggle).toHaveBeenCalledOnce();
+		await act(async () => renderer!.update(<EffortSlider choices={levels("high")} onChoose={() => {}} ultracode={{ on: true, toggle }} />));
+		expect(ultra().props.accessibilityState).toEqual({ checked: true });
+		// Only the pill's name in the gradient: the level stays plain.
+		expect(gradient().map((node) => node.props.children)).toEqual(["Ultra"]);
+		// Five levels on the track, no sixth.
+		expect(root.findAll((node) => hostType(node) === "View" && node.props.testID === "effort-slider-track")[0].findAll((node) => hostType(node) === "View" && node.props.pointerEvents === "none" && node.props.style?.[1]?.backgroundColor === "#textFaint")).toHaveLength(5);
+	});
+
+	// Both at the heading's right, where the thumb is; the heading stays centred
+	// by an empty slot as wide at its left.
+	it("keeps Ultra and the bolt together at the heading's right", async () => {
+		await act(async () => { renderer = create(<EffortSlider choices={levels("high")} onChoose={() => {}} ultracode={{ on: false, toggle: () => {} }} fast={{ on: false, toggle: () => {} }} />); });
+		const root = renderer!.root;
+		const has = (node: ReactTestInstance, id: string) => node.findAll((child) => child.props.testID === id).length > 0;
+		// One slot holds both, and not the heading.
+		const slots = root.findAll((node) => hostType(node) === "View" && has(node, "effort-slider-ultracode") && has(node, "effort-slider-fast") && !has(node, "effort-slider-value"));
+		expect(slots.length).toBeGreaterThan(0);
+		// The row: an empty slot, the heading, the toggles' slot, the outer two as wide.
+		const row = root.findAll((node) => hostType(node) === "View" && (node.children as ReactTestInstance[]).length === 3 && has(node, "effort-slider-value") && has(node, "effort-slider-fast"))[0];
+		const [start, , end] = row.children as ReactTestInstance[];
+		expect(start.findAll((node) => node.props.testID !== undefined)).toHaveLength(0);
+		expect(start.props.style.at(-1)).toEqual(end.props.style.at(-1));
+		expect(root.findAll((node) => hostType(node) === "Pressable" && node.props.testID === "effort-slider-ultracode")).toHaveLength(1);
+		expect(root.findAll((node) => hostType(node) === "Pressable" && node.props.testID === "effort-slider-fast")).toHaveLength(1);
+		expect(root.findAll((node) => hostType(node) === "Text" && node.props.testID === "effort-slider-value")[0].props.children).toBe("High");
+	});
+
+	// Claude Haiku takes no effort: the slider is only its switches.
+	it("is only the switches' row for a model with no levels", async () => {
+		const toggle = vi.fn();
+		await act(async () => { renderer = create(<EffortSlider choices={[]} onChoose={() => {}} ultracode={{ on: false, toggle }} fast={{ on: false, toggle: () => {} }} />); });
+		const root = renderer!.root;
+		expect(root.findAll((node) => node.props.testID === "effort-slider")).toHaveLength(0);
+		expect(root.findAll((node) => node.props.testID === "effort-slider-value")).toHaveLength(0);
+		expect(root.findAll((node) => hostType(node) === "Pressable" && node.props.testID === "effort-slider-fast")).toHaveLength(1);
+		act(() => root.findAll((node) => hostType(node) === "Pressable" && node.props.testID === "effort-slider-ultracode")[0].props.onPress());
+		expect(toggle).toHaveBeenCalledOnce();
 	});
 
 	// Closed mid-drag (the keyboard, back), the level the finger was on is
@@ -405,6 +450,21 @@ describe("effort slider", () => {
 		expect(renderer!.root.findAll((node) => hostType(node) === "OverKeyboardView")[0].props.visible).toBe(false);
 	});
 
+	// Closed, it fades rather than vanishing: its window stays up, taking no
+	// touches, until the fade has played.
+	it("keeps its window up through the fade out, and takes it down after", async () => {
+		await act(async () => { renderer = create(<EffortSliderOverlay overKeyboard onDismiss={() => {}} choices={levels("low")} onChoose={() => {}} />); });
+		const window = () => renderer!.root.findAll((node) => hostType(node) === "OverKeyboardView")[0];
+		fixtures.midGlide = true;
+		await act(async () => renderer!.update(<EffortSliderOverlay overKeyboard visible={false} onDismiss={() => {}} choices={levels("low")} onChoose={() => {}} />));
+		expect(window().props.visible).toBe(true);
+		expect(window().findAll((node) => hostType(node) === "View")[0].props.pointerEvents).toBe("none");
+		fixtures.midGlide = false;
+		await act(async () => renderer!.update(<EffortSliderOverlay overKeyboard visible onDismiss={() => {}} choices={levels("low")} onChoose={() => {}} />));
+		await act(async () => renderer!.update(<EffortSliderOverlay overKeyboard visible={false} onDismiss={() => {}} choices={levels("low")} onChoose={() => {}} />));
+		expect(window().props.visible).toBe(false);
+	});
+
 	it("takes no touches and holds nothing while hidden", async () => {
 		await act(async () => { renderer = create(<EffortSliderOverlay visible={false} choices={levels("low")} onChoose={() => {}} bottom="100%" />); });
 		const overlay = () => renderer!.root.findAll((node) => hostType(node) === "AnimatedView")[0];
@@ -438,8 +498,10 @@ describe("effort slider", () => {
 		expect(label()).toBe("High");
 		// Two stops on the 240 track: 20 and 220.
 		expect(blobCentre()).toBe(220);
+		// None: no heading or track to read past, and nothing thrown.
 		await act(async () => renderer!.update(<EffortSlider choices={[]} onChoose={() => {}} />));
-		expect(label()).toBe("Default");
+		expect(renderer!.root.findAll((node) => node.props.testID === "effort-slider-value")).toHaveLength(0);
+		expect(renderer!.root.findAll((node) => node.props.testID === "effort-slider-track")).toHaveLength(0);
 	});
 
 	it("re-places the blob when the level count changes under the same index", async () => {

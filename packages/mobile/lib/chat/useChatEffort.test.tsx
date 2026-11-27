@@ -15,9 +15,6 @@ vi.mock("react-native", () => ({ BackHandler: { addEventListener: () => ({ remov
 import { useEffortSliderOpen, withPick } from "../useEffortSlider";
 import { EFFORT_CONFIRM_MS, useChatEffort } from "./useChatEffort";
 
-// Fast mode is off in the app for now (fastMode.ts); its behaviour is still tested.
-vi.mock("./fastMode", () => ({ FAST_MODE_SHOWN: true }));
-
 const snapshot = (over: Partial<ConversationSnapshot> = {}): ConversationSnapshot => ({
 	conversationId: "c",
 	sessionId: "s",
@@ -45,7 +42,7 @@ let composerRenders = 0;
 beforeEach(() => { vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true); stored.clear(); });
 afterEach(() => { act(() => renderer?.unmount()); renderer = undefined; vi.unstubAllGlobals(); });
 
-function render(over: { snapshot?: ConversationSnapshot; disabled?: boolean; models?: ChatModel[]; onSettings?: () => Promise<void>; ultracodeKey?: string } = {}) {
+function render(over: { snapshot?: ConversationSnapshot; disabled?: boolean; models?: ChatModel[]; onSettings?: () => Promise<void>; ultracodeKey?: string; cloud?: boolean } = {}) {
 	const onSettings = vi.fn(over.onSettings ?? (() => Promise.resolve()));
 	const onOption = vi.fn(() => Promise.resolve([] as ChatConfigOption[]));
 	// The slider's side as EffortSliderHost has it: subscribed to the
@@ -56,7 +53,7 @@ function render(over: { snapshot?: ConversationSnapshot; disabled?: boolean; mod
 	}
 	function Harness({ current }: { current: ConversationSnapshot }) {
 		composerRenders += 1;
-		effort = useChatEffort({ snapshot: current, models: over.models ?? models, options: [], disabled: over.disabled, onSettings, onOption, ultracodeKey: over.ultracodeKey });
+		effort = useChatEffort({ snapshot: current, models: over.models ?? models, options: [], disabled: over.disabled, onSettings, onOption, ultracodeKey: over.ultracodeKey, cloud: over.cloud });
 		return <SliderHost chat={effort} />;
 	}
 	composerRenders = 0;
@@ -240,133 +237,150 @@ describe("chat effort", () => {
 		});
 	});
 
-	// Claude Code's Ultracode, here the level above Extra High (a toggle on
-	// desktop): Extra High saved, and asked for in each message while it is on.
+	// Claude Code's Ultracode, a switch over the slider as desktop has it: on
+	// at any level and on every model, it saves nothing and only asks for
+	// Ultracode at the start of each message.
 	describe("ultracode", () => {
 		const claude = [{ id: "opus", displayName: "Opus", efforts: ["low", "high", "xhigh", "max"], defaultEffort: "high" }] as ChatModel[];
 		const claudeChat = (reasoningEffort?: string) => snapshot({ harness: "claude-code", settings: { model: "opus", approvalMode: "auto", reasoningEffort } });
 
-		it("is the last level for Claude Code on a model with Extra High, and for no one else", () => {
+		it("is a switch for Claude Code, and no level on the slider", () => {
 			render({ models: claude, snapshot: claudeChat() });
-			expect(effort.choices.map((choice) => choice.label)).toEqual(["Low", "High", "Xhigh", "Max", "Ultracode"]);
+			expect(effort.choices.map((choice) => choice.label)).toEqual(["Low", "High", "Extra high", "Max"]);
+			expect(effort.ultracode).toEqual({ on: false, toggle: expect.any(Function) });
+		});
+
+		it("is not offered to another agent, nor in an Orchestrator Cloud chat", () => {
 			render({ models: claude, snapshot: snapshot({ harness: "codex", settings: { model: "opus", approvalMode: "auto" } }) });
-			expect(effort.choices.some((choice) => choice.value === "ultracode")).toBe(false);
+			expect(effort.ultracode).toBeUndefined();
+			expect(effort.sendsUltracode()).toBe(false);
+			render({ models: claude, snapshot: claudeChat("high"), cloud: true });
+			expect(effort.ultracode).toBeUndefined();
+			expect(effort.sendsUltracode()).toBe(false);
 		});
 
-		// The message is prepared as the pick on its way has it, not only as the
-		// conversation last reported; a failed save goes back to what was before.
-		it("asks for Ultracode in the next message as soon as it is picked, until its save fails", async () => {
-			const saves: Array<{ reject: (cause: Error) => void }> = [];
-			const { update } = render({ models: claude, snapshot: claudeChat("high"), onSettings: () => new Promise<void>((_resolve, reject) => { saves.push({ reject }); }) });
+		// A model with no Extra High kept Ultracode out of reach when it was a
+		// level above Extra High.
+		it("turns on at High on a model with no Extra High, and saves no level", () => {
+			const sonnet = [{ id: "opus", displayName: "Opus", efforts: ["low", "medium", "high"], defaultEffort: "high" }] as ChatModel[];
+			const { onSettings, onOption } = render({ models: sonnet, snapshot: claudeChat("high") });
+			act(() => effort.ultracode!.toggle());
+			expect(effort.ultracode?.on).toBe(true);
+			expect(effort.sendsUltracode()).toBe(true);
+			expect(effort.choices.find((choice) => choice.selected)?.value).toBe("high");
+			expect(onSettings).not.toHaveBeenCalled();
+			expect(onOption).not.toHaveBeenCalled();
+			act(() => effort.ultracode!.toggle());
+			expect(effort.ultracode?.on).toBe(false);
 			expect(effort.sendsUltracode()).toBe(false);
+		});
+
+		// Claude Haiku takes no effort: the switch is still there.
+		it("is offered on a model with no levels", () => {
+			render({ snapshot: snapshot({ settings: { model: "haiku", approvalMode: "auto" } }) });
+			expect(effort.choices).toEqual([]);
+			act(() => effort.ultracode!.toggle());
+			expect(effort.sendsUltracode()).toBe(true);
+		});
+
+		// It used to be dropped when the conversation reported another level.
+		it("stays on through level picks and reports", () => {
+			const { update } = render({ models: claude, snapshot: claudeChat("high") });
+			act(() => effort.ultracode!.toggle());
 			act(() => slider.toggle());
-			act(() => { effort.choose("ultracode"); effort.commit(); });
-			expect(effort.sendsUltracode()).toBe(true);
-			await act(async () => saves[0].reject(new Error("no")));
-			expect(effort.sendsUltracode()).toBe(false);
-			// On, reported, then another level on its way: off until it fails.
-			act(() => { effort.choose("ultracode"); effort.commit(); });
-			update(claudeChat("xhigh"));
-			expect(effort.sendsUltracode()).toBe(true);
 			act(() => { effort.choose("max"); effort.commit(); });
-			expect(effort.sendsUltracode()).toBe(false);
-			await act(async () => saves[2].reject(new Error("no")));
+			update(claudeChat("max"));
+			update(claudeChat("low"));
+			expect(effort.ultracode?.on).toBe(true);
 			expect(effort.sendsUltracode()).toBe(true);
 		});
 
-		// Two picks over each other, both failing: Ultracode goes back to how it
-		// was before the first, not to the second's unconfirmed off.
-		it("goes back to Ultracode when two picks made over it both fail", async () => {
-			const saves: Array<{ resolve: () => void; reject: (cause: Error) => void }> = [];
-			const { update } = render({ models: claude, snapshot: claudeChat("high"), onSettings: () => new Promise<void>((resolve, reject) => { saves.push({ resolve, reject }); }) });
-			act(() => slider.toggle());
-			act(() => { effort.choose("ultracode"); effort.commit(); });
-			await act(async () => saves[0].resolve());
-			update(claudeChat("xhigh"));
+		// A message sent before the conversation reports its levels still asks for it.
+		it("asks for Ultracode before the effort row is reported", async () => {
+			stored.set("k", "1");
+			render({ models: [], snapshot: claudeChat(), ultracodeKey: "k" });
+			await act(async () => {});
+			expect(effort.choices).toEqual([]);
 			expect(effort.sendsUltracode()).toBe(true);
-			act(() => { effort.choose("high"); effort.commit(); });
-			act(() => { effort.choose("low"); effort.commit(); });
-			expect(effort.sendsUltracode()).toBe(false);
-			await act(async () => saves[1].reject(new Error("no")));
-			await act(async () => saves[2].reject(new Error("no")));
-			expect(effort.sendsUltracode()).toBe(true);
-			expect(effort.ultracode).toBe(true);
 		});
 
-		// A save only slow to be reported must not turn Ultracode off: if it
-		// lands, the chat would run Extra High with Ultracode silently gone.
-		it("keeps Ultracode through a confirm timeout, until a failure or a report of another level", async () => {
-			vi.useFakeTimers();
-			try {
-				const saves: Array<{ reject: (cause: Error) => void }> = [];
-				const { update } = render({ models: claude, snapshot: claudeChat("high"), ultracodeKey: "k", onSettings: () => new Promise<void>((_resolve, reject) => { saves.push({ reject }); }) });
-				await act(async () => {});
-				act(() => slider.toggle());
-				await act(async () => { effort.choose("ultracode"); effort.commit(); });
-				expect(stored.get("k")).toBe("1");
-				await act(async () => { vi.advanceTimersByTime(EFFORT_CONFIRM_MS); });
-				expect(stored.get("k")).toBe("1");
-				// The save lands late.
-				update(claudeChat("xhigh"));
-				expect(effort.ultracode).toBe(true);
-				expect(effort.sendsUltracode()).toBe(true);
-				// Another level reported: off.
-				await act(async () => { update(claudeChat("max")); });
-				expect(effort.ultracode).toBe(false);
-				expect(stored.has("k")).toBe(false);
-				// And a save that fails after its timeout: off.
-				update(claudeChat("high"));
-				await act(async () => { effort.choose("ultracode"); effort.commit(); });
-				await act(async () => { vi.advanceTimersByTime(EFFORT_CONFIRM_MS); });
-				expect(stored.get("k")).toBe("1");
-				await act(async () => saves[1].reject(new Error("no")));
-				expect(stored.has("k")).toBe(false);
-				update(claudeChat("xhigh"));
-				expect(effort.ultracode).toBe(false);
-			} finally {
-				vi.useRealTimers();
-			}
-		});
-
-		it("saves Extra High, and is on once the conversation reports it", () => {
-			const onSettings = vi.fn(() => Promise.resolve());
-			const { update } = render({ models: claude, snapshot: claudeChat(), onSettings });
-			act(() => slider.toggle());
-			act(() => { effort.choose("ultracode"); effort.commit(); });
-			expect(onSettings).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ reasoningEffort: "xhigh" }));
-			update(claudeChat("xhigh"));
-			expect(effort.ultracode).toBe(true);
-			expect(effort.choices.find((choice) => choice.selected)?.value).toBe("ultracode");
-			// Another level turns it off.
-			act(() => { effort.choose("max"); effort.commit(); });
-			expect(effort.ultracode).toBe(false);
-		});
-
-		// Leaving the chat and coming back kept Extra High saved but dropped
-		// the Ultracode prefix, with nothing to say so.
 		it("lasts past the screen, kept for the conversation", async () => {
 			const key = "ao.chat.ultracode.m.s";
 			render({ models: claude, snapshot: claudeChat(), ultracodeKey: key });
-			act(() => slider.toggle());
-			act(() => { effort.choose("ultracode"); effort.commit(); });
+			await act(async () => {});
+			act(() => effort.ultracode!.toggle());
 			await act(async () => {});
 			expect(stored.get(key)).toBe("1");
 			act(() => renderer!.unmount());
 			renderer = undefined;
-			render({ models: claude, snapshot: claudeChat("xhigh"), ultracodeKey: key });
+			render({ models: claude, snapshot: claudeChat("low"), ultracodeKey: key });
 			await act(async () => {});
-			expect(effort.ultracode).toBe(true);
+			expect(effort.ultracode?.on).toBe(true);
 			// Another conversation has its own.
-			render({ models: claude, snapshot: claudeChat("xhigh"), ultracodeKey: "ao.chat.ultracode.m.other" });
+			render({ models: claude, snapshot: claudeChat("low"), ultracodeKey: "ao.chat.ultracode.m.other" });
 			await act(async () => {});
-			expect(effort.ultracode).toBe(false);
+			expect(effort.ultracode?.on).toBe(false);
 			// Turned off, it is forgotten.
-			render({ models: claude, snapshot: claudeChat("xhigh"), ultracodeKey: key });
+			render({ models: claude, snapshot: claudeChat("low"), ultracodeKey: key });
 			await act(async () => {});
-			act(() => slider.toggle());
-			act(() => { effort.choose("max"); effort.commit(); });
+			act(() => effort.ultracode!.toggle());
 			await act(async () => {});
 			expect(stored.has(key)).toBe(false);
+		});
+
+		// Desktop's Ultracode is off after a switch away; a switch back must not
+		// bring back the flag kept on the phone.
+		it("goes off once the chat runs another agent, and stays off when it comes back to Claude Code", async () => {
+			const key = "ao.chat.ultracode.m.s";
+			const { update } = render({ models: claude, snapshot: claudeChat("high"), ultracodeKey: key });
+			await act(async () => {});
+			act(() => effort.ultracode!.toggle());
+			await act(async () => {});
+			expect(stored.get(key)).toBe("1");
+			update(snapshot({ harness: "codex", settings: { model: "opus", approvalMode: "auto" } }));
+			await act(async () => {});
+			expect(stored.has(key)).toBe(false);
+			update(claudeChat("high"));
+			expect(effort.ultracode?.on).toBe(false);
+			expect(effort.sendsUltracode()).toBe(false);
+		});
+
+		// A flag left from before the chat moved away, while it was not open here.
+		it("is off for a chat opened on another agent", async () => {
+			const key = "ao.chat.ultracode.m.s";
+			stored.set(key, "1");
+			const { update } = render({ models: claude, snapshot: snapshot({ harness: "codex", settings: { model: "opus", approvalMode: "auto" } }), ultracodeKey: key });
+			await act(async () => {});
+			expect(stored.has(key)).toBe(false);
+			update(claudeChat("high"));
+			expect(effort.sendsUltracode()).toBe(false);
+		});
+
+		// A switch to Claude Code sets it as it lands, which can be before the
+		// chat reports the new agent: the agent it still shows must not undo it.
+		it("keeps the switch's Ultracode set before the chat reports its new agent", async () => {
+			const key = "ao.chat.ultracode.m.s";
+			const codex = snapshot({ harness: "codex", settings: { model: "opus", approvalMode: "auto" } });
+			const { update } = render({ models: claude, snapshot: codex, ultracodeKey: key });
+			await act(async () => {});
+			act(() => effort.keepUltracode(true));
+			update({ ...codex, latestSequence: 1 });
+			await act(async () => {});
+			expect(stored.get(key)).toBe("1");
+			update(claudeChat("high"));
+			expect(effort.ultracode?.on).toBe(true);
+			expect(effort.sendsUltracode()).toBe(true);
+		});
+
+		// The switch is the same object while nothing changes: the slider's host is memoised.
+		it("keeps the switch's identity until it flips", () => {
+			const { report } = render({ models: claude, snapshot: claudeChat("high") });
+			const first = effort.ultracode;
+			report("low");
+			expect(effort.ultracode).toBe(first);
+			act(() => effort.ultracode!.toggle());
+			expect(effort.ultracode).not.toBe(first);
+			expect(effort.ultracode!.toggle).toBe(first!.toggle);
 		});
 	});
 
@@ -446,15 +460,6 @@ describe("chat effort", () => {
 		report("low");
 		act(() => effort.fast!.toggle());
 		expect(onSettings).toHaveBeenLastCalledWith({ model: "opus", approvalMode: "auto", reasoningEffort: "low", fastMode: undefined });
-	});
-
-	it("carries a pending Ultracode into a Fast flip as the Extra High it saves", () => {
-		const fastModels = [{ id: "opus", displayName: "Opus", efforts: ["low", "high", "xhigh"], defaultEffort: "high", supportsFast: true }] as ChatModel[];
-		const { onSettings } = render({ models: fastModels });
-		act(() => slider.toggle());
-		act(() => { effort.choose("ultracode"); effort.commit(); });
-		act(() => effort.fast!.toggle());
-		expect(onSettings).toHaveBeenLastCalledWith({ model: "opus", approvalMode: "auto", reasoningEffort: "xhigh", fastMode: true });
 	});
 
 	it("keeps the newest Fast flip through the report of an older one", () => {

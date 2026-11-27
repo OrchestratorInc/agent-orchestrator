@@ -7,7 +7,7 @@ import { StyleSheet, Text, View } from "react-native";
 import { Pressable } from "react-native-gesture-handler";
 import { COMPOSER_RADIUS } from "./chat/composerStyles";
 import type { ApprovalMode } from "./chat/types";
-import { ComposerOverlay } from "./composer-overlay";
+import { COMPOSER_CONTROL_RISE, ComposerOverlay, OverlayHeading } from "./composer-overlay";
 import { useWarmAfterIdle } from "./effort-slider-host";
 import { haptics } from "./haptics";
 import type { Theme } from "./theme";
@@ -19,12 +19,13 @@ import { useEffortSliderOpen, useEffortSliderSwitchOpen, type EffortSliderSwitch
 
 /*
  * The chat's permission mode, picked the way its effort is: the composer's
- * button lays the modes over the composer, on the overlay's veil with no card
- * or heading, the full width of the composer, listed as desktop's permission
- * picker lists them. Every row is the same height and
- * lines up the same way: the mode's icon, its name, and one line on what it
- * lets the agent do. The one in force sits in a soft wash of the text colour
- * rather than being ticked.
+ * button lays the modes over the composer, headed "Permissions › Auto" as the
+ * slider is, as a grid of large buttons two to a row, the mode's icon over
+ * its name. A stack of four tall rows reached far up the screen, out of the
+ * thumb's way; the grid is centred on the composer's control row, where the
+ * thumb already is. The one in force sits in a soft wash of the text colour
+ * rather than being ticked; what each mode lets the agent do is its button's
+ * screen reader hint.
  */
 
 export type PermissionChoice = {
@@ -36,14 +37,19 @@ export type PermissionChoice = {
 	look?: ApprovalMode;
 };
 
-// Every row this tall, whatever its text, so the list reads as an even stack.
-const ROW_HEIGHT = 58;
-// The list is laid over the composer's pill, its full width, and the rows'
-// corners are concentric with the pill's, an even inset in.
+// Every button this tall: a full thumb's press, whatever its name.
+const TILE_HEIGHT = 64;
+const TILE_GAP = space.xs;
+// The grid is laid over the composer's pill, its full width, and the
+// buttons' corners are concentric with the pill's, an even inset in.
 const LIST_INSET = space.xs;
-const ROW_RADIUS = COMPOSER_RADIUS - LIST_INSET;
-// The icons' column, so every name starts at the same place.
-const ICON_COLUMN = 24;
+const TILE_RADIUS = COMPOSER_RADIUS - LIST_INSET;
+
+/** The grid's height for `count` modes, two to a row. */
+export function permissionGridHeight(count: number): number {
+	const rows = Math.max(1, Math.ceil(count / 2));
+	return rows * TILE_HEIGHT + (rows - 1) * TILE_GAP + LIST_INSET * 2;
+}
 
 type LucideIcon = ComponentType<{ size?: number; color?: string; strokeWidth?: number }>;
 
@@ -131,8 +137,10 @@ export const PermissionPickerHost = memo(function PermissionPickerHost({ slider,
 });
 
 export function PermissionPickerOverlay({ visible = true, onDismiss, choices, onChoose }: { visible?: boolean; onDismiss?: () => void; choices: readonly PermissionChoice[]; onChoose: (value: string) => void }) {
+	// The grid's middle on the composer's control row, the heading above it.
+	const keysOverlap = permissionGridHeight(choices.length) / 2 - COMPOSER_CONTROL_RISE;
 	return (
-		<ComposerOverlay overKeyboard onDismiss={onDismiss} visible={visible} fill>
+		<ComposerOverlay overKeyboard keysOverlap={keysOverlap} onDismiss={onDismiss} visible={visible} fill>
 			<PermissionPicker choices={choices} onChoose={onChoose} />
 		</ComposerOverlay>
 	);
@@ -141,38 +149,39 @@ export function PermissionPickerOverlay({ visible = true, onDismiss, choices, on
 export function PermissionPicker({ choices, onChoose }: { choices: readonly PermissionChoice[]; onChoose: (value: string) => void }) {
 	const t = useTheme();
 	const styles = useThemedStyles(makeStyles);
+	const current = choices.find((choice) => choice.selected);
+	// Two to a row; an odd one out takes the last row to itself.
+	const rows = Array.from({ length: Math.ceil(choices.length / 2) }, (_, row) => choices.slice(row * 2, row * 2 + 2));
 	return (
 		<View style={styles.stack}>
-			<View style={styles.list} accessibilityRole="radiogroup" accessibilityLabel="Permissions" testID="permission-picker">
-				{choices.map((choice) => {
-					const Icon = permissionIcon(choice.look);
-					const warning = warns(choice.look);
-					return (
-						<Pressable
-							key={choice.value}
-							onPress={() => {
-								if (!choice.selected) haptics.select();
-								onChoose(choice.value);
-							}}
-							accessibilityRole="radio"
-							accessibilityState={{ checked: choice.selected }}
-							accessibilityLabel={choice.label}
-							accessibilityHint={choice.description}
-							testID={`permission-${choice.value}`}
-							style={({ pressed }) => [styles.row, choice.selected ? styles.rowSelected : pressed && styles.rowPressed]}
-						>
-							<View style={styles.icon}>
-								<Icon size={iconSize.md} strokeWidth={2} color={warning ? t.amber : choice.selected ? t.textPrimary : t.textSecondary} />
-							</View>
-							<View style={styles.text}>
-								<Text style={[styles.title, warning && styles.warning]} numberOfLines={1}>{choice.label}</Text>
-								{choice.description ? (
-									<Text style={[styles.description, warning && styles.warningSoft]} numberOfLines={1}>{choice.description}</Text>
-								) : null}
-							</View>
-						</Pressable>
-					);
-				})}
+			{current ? <OverlayHeading title="Permissions" value={current.label} /> : null}
+			<View style={styles.grid} accessibilityRole="radiogroup" accessibilityLabel="Permissions" testID="permission-picker">
+				{rows.map((pair) => (
+					<View key={pair[0].value} style={styles.row}>
+						{pair.map((choice) => {
+							const Icon = permissionIcon(choice.look);
+							const warning = warns(choice.look);
+							return (
+								<Pressable
+									key={choice.value}
+									onPress={() => {
+										if (!choice.selected) haptics.select();
+										onChoose(choice.value);
+									}}
+									accessibilityRole="radio"
+									accessibilityState={{ checked: choice.selected }}
+									accessibilityLabel={choice.label}
+									accessibilityHint={choice.description}
+									testID={`permission-${choice.value}`}
+									style={({ pressed }) => [styles.tile, choice.selected ? styles.tileSelected : pressed && styles.tilePressed]}
+								>
+									<Icon size={iconSize.md} strokeWidth={2} color={warning ? t.amber : choice.selected ? t.textPrimary : t.textSecondary} />
+									<Text style={[styles.title, !choice.selected && styles.titleIdle, warning && styles.warning]} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.85}>{choice.label}</Text>
+								</Pressable>
+							);
+						})}
+					</View>
+				))}
 			</View>
 		</View>
 	);
@@ -186,24 +195,26 @@ const buttonStyles = StyleSheet.create({
 const makeStyles = (t: Theme) =>
 	StyleSheet.create({
 		stack: { gap: space.xs, alignItems: "center", alignSelf: "stretch" },
-		list: { alignSelf: "stretch", padding: LIST_INSET, gap: space.hair },
-		row: {
-			flexDirection: "row",
+		grid: { alignSelf: "stretch", padding: LIST_INSET, gap: TILE_GAP },
+		row: { flexDirection: "row", gap: TILE_GAP },
+		tile: {
+			flex: 1,
+			height: TILE_HEIGHT,
 			alignItems: "center",
-			gap: space.md,
-			height: ROW_HEIGHT,
+			justifyContent: "center",
+			gap: space.xxs,
 			paddingHorizontal: space.sm,
-			borderRadius: ROW_RADIUS,
+			borderRadius: TILE_RADIUS,
 			borderCurve: "continuous",
+			backgroundColor: t.bgSubtle,
+			// Every button outlined alike, so the one in force gains no size.
+			borderWidth: 1.5,
+			borderColor: "transparent",
 		},
-		// The mode in force: a low wash of the text colour, in place of a tick.
-		rowSelected: { backgroundColor: t.accentTint },
-		rowPressed: { backgroundColor: t.bgSubtle },
-		// A fixed column, so every name starts at the same place.
-		icon: { width: ICON_COLUMN, alignItems: "center", justifyContent: "center" },
-		text: { flex: 1, minWidth: 0, gap: 1, justifyContent: "center" },
+		// The mode in force: a low wash of the text colour, outlined, in place of a tick.
+		tileSelected: { backgroundColor: t.accentTint, borderColor: t.accentBorder },
+		tilePressed: { backgroundColor: t.bgElevatedHover },
 		title: { ...type.subheadline, fontFamily: type.headline.fontFamily, color: t.textPrimary },
-		description: { ...type.footnote, color: t.textSecondary },
+		titleIdle: { color: t.textSecondary },
 		warning: { color: t.amber },
-		warningSoft: { color: t.amber, opacity: 0.8 },
 	});

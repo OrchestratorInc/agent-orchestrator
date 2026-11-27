@@ -1,7 +1,7 @@
 import Star from "lucide-react-native/icons/star";
-import { useEffect, useRef } from "react";
-import { StyleSheet, Text, View, type NativeScrollEvent, type NativeSyntheticEvent } from "react-native";
-import Animated, { Extrapolation, interpolate, runOnJS, useAnimatedReaction, useAnimatedRef, useAnimatedScrollHandler, useAnimatedStyle, useSharedValue, type SharedValue } from "react-native-reanimated";
+import { useEffect, useMemo, useRef } from "react";
+import { StyleSheet, Text, View, type FlatList, type NativeScrollEvent, type NativeSyntheticEvent } from "react-native";
+import Animated, { Extrapolation, interpolate, runOnJS, useAnimatedReaction, useAnimatedScrollHandler, useAnimatedStyle, useSharedValue, type SharedValue } from "react-native-reanimated";
 import { AgentLogo } from "./AgentLogo";
 import { haptics } from "./haptics";
 import { useTheme, useThemedStyles } from "./ThemeProvider";
@@ -16,16 +16,49 @@ import { font } from "./tokens";
  */
 
 /** Every row this tall. */
-export const WHEEL_ROW = 40;
-/** How many rows show at once, the chosen one in the middle. */
-export const WHEEL_ROWS = 5;
+export const WHEEL_ROW = 36;
+/**
+ * How many rows show at once, the chosen one in the middle: one either side,
+ * so the wheels stay a short band over the keys rather than a tall panel.
+ */
+export const WHEEL_ROWS = 3;
 const PAD = WHEEL_ROW * Math.floor(WHEEL_ROWS / 2);
 /** The default's star, a little under the names' cap height. */
 const STAR = 14;
 /** An agent's mark, about the names' height. */
-const MARK = 20;
+const MARK = 18;
 /** How long a drag let go without a fling waits for a snap it may still start. */
 const SETTLE_AFTER_DRAG_MS = 220;
+/**
+ * A looping wheel's list runs this many rows past its resting place either
+ * way, as copies of itself: more than anyone flings through, so it never has
+ * to jump back to the middle while turning (a jump showed as a flash).
+ */
+const LOOP_REACH = 2000;
+/**
+ * The rows the list builds as it opens: those on show and one either side, so
+ * a new agent's wheel is a handful of rows to mount on the tap that picks it
+ * (a screenful and a batch after it cost a frame of 25 ms and one of 15). The
+ * rest follow a few at a time once it is up.
+ */
+const FIRST_ROWS = WHEEL_ROWS + 2;
+const BATCH_ROWS = 4;
+
+/**
+ * How a wheel's rows are laid out: once, or, for a wheel that loops, as copies
+ * of the list with the one it rests in at `base`. A list shorter than the rows
+ * on show does not loop: it would show one entry twice at once.
+ */
+export function wheelLoop(count: number): { copies: number; base: number } {
+	if (count < WHEEL_ROWS) return { copies: 1, base: 0 };
+	const half = Math.ceil(LOOP_REACH / count);
+	return { copies: half * 2 + 1, base: half * count };
+}
+
+/** The entry a laid-out row shows. */
+export function wheelEntry(row: number, count: number): number {
+	return ((row % count) + count) % count;
+}
 
 export type WheelItem = {
 	key: string;
@@ -35,6 +68,9 @@ export type WheelItem = {
 	/** An agent whose mark leads the name. */
 	mark?: string;
 };
+
+/** Where row `row` sits in the list, past the empty rows above the first. */
+const rowLayout = (_data: unknown, row: number) => ({ length: WHEEL_ROW, offset: PAD + WHEEL_ROW * row, index: row });
 
 export function WheelPicker({ items, index, onSettle, onEmptyTap, disabled = false, align = "center", accessibilityLabel, testID }: {
 	items: readonly WheelItem[];
@@ -54,8 +90,17 @@ export function WheelPicker({ items, index, onSettle, onEmptyTap, disabled = fal
 	testID?: string;
 }) {
 	const styles = useThemedStyles(makeStyles);
-	const scroller = useAnimatedRef<Animated.ScrollView>();
-	const offset = useSharedValue(Math.max(index, 0) * WHEEL_ROW);
+	const list = useRef<FlatList<number>>(null);
+	// Looping like a real wheel: the list comes round again past either end.
+	// Only the rows near the band are built (a list), so a catalog of any length
+	// (Cursor lists one model per setting) costs the same few rows: laid out in
+	// full, its copies passed React Native's limit of children in one view and
+	// the app aborted.
+	const count = items.length;
+	const { copies, base } = wheelLoop(count);
+	const rows = useMemo(() => Array.from({ length: count * copies }, (_, row) => row), [count, copies]);
+	const restingY = (entry: number) => (base + Math.max(entry, 0)) * WHEEL_ROW;
+	const offset = useSharedValue(restingY(index));
 	const turning = useRef(false);
 	const settleTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
 	const clear = () => {
@@ -73,16 +118,15 @@ export function WheelPicker({ items, index, onSettle, onEmptyTap, disabled = fal
 	} : null;
 
 	// Resting on the chosen row whenever no finger turns it: on open, and when
-	// the choice changes from outside (another column picked a new list).
-	// Android has no starting offset and drops a scroll made before the rows
-	// are laid out, so it is made again once they are.
+	// the choice changes from outside. Android drops a scroll made before the
+	// rows are laid out, so it is made again once they are.
 	const rest = () => {
 		if (turning.current) return;
-		const y = Math.max(index, 0) * WHEEL_ROW;
+		const y = restingY(index);
 		offset.value = y;
-		scroller.current?.scrollTo({ y, animated: false });
+		list.current?.scrollToOffset({ offset: y, animated: false });
 	};
-	useEffect(rest, [index, items]); // eslint-disable-line react-hooks/exhaustive-deps
+	useEffect(rest, [index, count]); // eslint-disable-line react-hooks/exhaustive-deps
 
 	const onScroll = useAnimatedScrollHandler((event) => { offset.value = event.contentOffset.y; });
 	// A tick as each row crosses the band, while it turns.
@@ -94,26 +138,42 @@ export function WheelPicker({ items, index, onSettle, onEmptyTap, disabled = fal
 	const settle = (y: number) => {
 		clear();
 		turning.current = false;
-		const row = Math.min(items.length - 1, Math.max(0, Math.round(y / WHEEL_ROW)));
-		onSettle(row);
+		const at = Math.round(y / WHEEL_ROW);
+		onSettle(copies > 1 ? wheelEntry(at, count) : Math.min(count - 1, Math.max(0, at)));
 	};
 	const y = (event: NativeSyntheticEvent<NativeScrollEvent>) => event.nativeEvent.contentOffset.y;
 	// A screen reader's swipe up or down steps a row, as the wheel coming to
-	// rest on it would; it reads the row in the band as the wheel's value.
+	// rest on it would; it reads the row in the band as the wheel's value. It
+	// stops at the ends even on a wheel that loops: a list read aloud has a
+	// first and a last entry.
 	const step = (by: number) => {
 		const next = Math.max(index, 0) + by;
-		if (disabled || next < 0 || next >= items.length) return;
+		if (disabled || next < 0 || next >= count) return;
 		clear();
 		haptics.detent();
 		onSettle(next);
 	};
+	const empty = (where: "above" | "below") => <View testID={testID ? `${testID}-empty-${where}` : undefined} style={styles.empty} {...emptyRows} />;
 
 	return (
-		<Animated.ScrollView
-			ref={scroller}
+		<Animated.FlatList
+			ref={list}
 			testID={testID}
 			style={styles.wheel}
-						contentOffset={{ x: 0, y: Math.max(index, 0) * WHEEL_ROW }}
+			data={rows}
+			keyExtractor={String}
+			getItemLayout={rowLayout}
+			renderItem={({ item: row }) => {
+				const item = items[wheelEntry(row, count)];
+				return <WheelRow label={item.label} starred={item.starred} mark={item.mark} at={row} offset={offset} align={align} />;
+			}}
+			ListHeaderComponent={empty("above")}
+			ListFooterComponent={empty("below")}
+			initialScrollIndex={Math.max(0, base + Math.max(index, 0) - Math.floor(WHEEL_ROWS / 2))}
+			initialNumToRender={FIRST_ROWS}
+			maxToRenderPerBatch={BATCH_ROWS}
+			windowSize={5}
+			contentOffset={{ x: 0, y: restingY(index) }}
 			showsVerticalScrollIndicator={false}
 			snapToInterval={WHEEL_ROW}
 			decelerationRate="fast"
@@ -145,13 +205,7 @@ export function WheelPicker({ items, index, onSettle, onEmptyTap, disabled = fal
 			accessibilityState={{ disabled }}
 			accessibilityActions={[{ name: "increment" }, { name: "decrement" }]}
 			onAccessibilityAction={(event) => step(event.nativeEvent.actionName === "increment" ? 1 : -1)}
-		>
-			<View testID={testID ? `${testID}-empty-above` : undefined} style={styles.empty} {...emptyRows} />
-			{items.map((item, i) => (
-				<WheelRow key={item.key} label={item.label} starred={item.starred} mark={item.mark} at={i} offset={offset} align={align} />
-			))}
-			<View testID={testID ? `${testID}-empty-below` : undefined} style={styles.empty} {...emptyRows} />
-		</Animated.ScrollView>
+		/>
 	);
 }
 
@@ -194,7 +248,7 @@ const makeStyles = (t: Theme) =>
 		// own, no tightened tracking. Only brightness and the tilt set the chosen
 		// row apart; bold everywhere read as shouting, and the scale skewed it.
 		line: { flexDirection: "row", alignItems: "center", gap: 8 },
-		label: { fontFamily: font.regular, fontSize: 20, lineHeight: 26, fontWeight: "400", letterSpacing: 0, color: t.textPrimary, flexShrink: 1 },
+		label: { fontFamily: font.regular, fontSize: 18, lineHeight: 24, fontWeight: "400", letterSpacing: 0, color: t.textPrimary, flexShrink: 1 },
 		left: { justifyContent: "flex-start" },
 		right: { justifyContent: "flex-end" },
 		centre: { justifyContent: "center" },

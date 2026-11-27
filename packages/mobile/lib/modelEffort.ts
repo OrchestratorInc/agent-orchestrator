@@ -6,8 +6,25 @@
 
 export type EffortChoice = { value: string; label: string; selected: boolean };
 
-/** A level by name: "high" reads "High". */
+/**
+ * The levels mobile knows by name, worded as desktop's effort menu words them
+ * (formatEffortLabel), so a level reads the same on both: "xhigh" is "Extra
+ * high", never "Xhigh".
+ */
+const EFFORT_LEVEL_LABELS: Readonly<Record<string, string>> = {
+	none: "None",
+	minimal: "Minimal",
+	low: "Low",
+	medium: "Medium",
+	high: "High",
+	xhigh: "Extra high",
+	max: "Max",
+};
+
+/** A level by name: "high" reads "High", "xhigh" "Extra high"; one never seen is capitalized, as desktop shows it. */
 export function effortLabel(level: string): string {
+	const key = level.trim().toLowerCase();
+	if (Object.prototype.hasOwnProperty.call(EFFORT_LEVEL_LABELS, key)) return EFFORT_LEVEL_LABELS[key];
 	return level ? level[0].toUpperCase() + level.slice(1) : level;
 }
 

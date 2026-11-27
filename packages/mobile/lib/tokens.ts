@@ -147,6 +147,12 @@ export const onImage = {
 	mark: "#ffffff",
 } as const;
 
+/**
+ * Desktop's Ultracode gradient (`.ultra-text`): blue to purple to pink and
+ * back. The same in both themes, as desktop draws it.
+ */
+export const ultraGradient = ["#5aa2ff", "#9b6dff", "#ed6ac4", "#9b6dff", "#5aa2ff"] as const;
+
 /** Icon ladder. Match the stroke to the weight of the text beside it. */
 export const iconSize = {
 	xs: 12,

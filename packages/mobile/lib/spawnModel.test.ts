@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { claudeAliasModel, defaultEffortModel, defaultRowModelToSend, listedModels, menuModelName, menuModels, modelOverride, resolveSpawnAgent, resolveSpawnModel, spawnModelSourceChanged } from "./spawnModel";
+import { claudeAliasModel, defaultEffortModel, defaultRowModelToSend, listedModels, menuModelName, menuModels, modelOverride, resolveSpawnAgent, resolveSpawnModel, spawnKeepsFast, spawnModelSourceChanged } from "./spawnModel";
 
 describe("spawn agent resolution", () => {
 	it("prefers the project's worker agent when it is available", () => {
@@ -241,5 +241,32 @@ describe("claude alias model", () => {
 	it("resolves nothing for a concrete model or an unknown family", () => {
 		expect(claudeAliasModel(models, "claude-sonnet-4-5-20250929")).toBeUndefined();
 		expect(claudeAliasModel(models, "fable")).toBeUndefined();
+	});
+});
+
+// Desktop's New chat keeps Fast mode on a model that also has a faster tier
+// (TurnSettingsBar's onPickModel), and drops it on any other.
+describe("spawnKeepsFast", () => {
+	const codex = [
+		{ id: "gpt-5.5", label: "GPT-5.5", isDefault: true, supportsFast: true },
+		{ id: "gpt-5.5-codex", label: "GPT-5.5 Codex", supportsFast: true },
+		{ id: "gpt-5.1-mini", label: "GPT-5.1 mini" },
+	];
+
+	it("keeps Fast mode on a model that has it, the one already running included", () => {
+		expect(spawnKeepsFast(codex, "gpt-5.5-codex")).toBe(true);
+		expect(spawnKeepsFast(codex, "gpt-5.5")).toBe(true);
+	});
+
+	it("drops it on a model without it, or one the catalog does not list", () => {
+		expect(spawnKeepsFast(codex, "gpt-5.1-mini")).toBe(false);
+		expect(spawnKeepsFast(codex, "gpt-9")).toBe(false);
+	});
+
+	// The default row runs the project's pin, else the catalog's default.
+	it("judges the default row by the model it runs", () => {
+		expect(spawnKeepsFast(codex, "__auto__")).toBe(true);
+		expect(spawnKeepsFast(codex, "__auto__", "gpt-5.1-mini")).toBe(false);
+		expect(spawnKeepsFast(codex.map((model) => ({ ...model, isDefault: false })), "__auto__")).toBe(false);
 	});
 });

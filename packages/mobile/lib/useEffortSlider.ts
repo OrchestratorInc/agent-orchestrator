@@ -71,8 +71,11 @@ export function useEffortChoicesShown<T extends { value: string; selected: boole
 /**
  * Whether the effort slider is open. It stays up while the level is adjusted
  * and closes on a tap anywhere outside it (the field included), when the
- * keyboard comes up, on Android's back, and after a hard twelve seconds; it
- * also closes when the task starts sending or the model takes no effort.
+ * keyboard comes up under a slider opened without it, on Android's back, and
+ * after `timeoutMs` where one is given; it also closes when the model takes no
+ * effort and the slider carries no switch (`toggles`: Fast mode, Ultracode).
+ * Busy keeps it from opening, never shuts one in use: a send, a save or a
+ * reconnect flickering busy closed the slider under the finger.
  * `onClose` hears every close, however it came about.
  */
 export function useEffortSliderOpen(
@@ -82,14 +85,16 @@ export function useEffortSliderOpen(
 	slider?: EffortSliderSwitch,
 	/** How long it may stay up; `null` for no limit, as a list being read wants. */
 	timeoutMs: number | null = EFFORT_SLIDER_TIMEOUT_MS,
+	/** The slider carries a switch, so it stays open with no levels to pick. */
+	toggles = false,
 ) {
 	const own = useEffortSliderSwitch();
 	const store = slider ?? own;
 	const open = useEffortSliderSwitchOpen(store);
-	const shown = open && !busy && choices.length > 0;
+	const wasShown = useRef(false);
+	const shown = open && (choices.length > 0 || toggles) && (!busy || wasShown.current);
 	const closeRef = useRef(onClose);
 	closeRef.current = onClose;
-	const wasShown = useRef(false);
 	const close = useCallback(() => store.setOpen(false), [store]);
 	// Unmounting while shown is a close too: the owner's commit must hear it.
 	useEffect(() => () => { if (wasShown.current) closeRef.current?.(); }, []);
@@ -98,7 +103,12 @@ export function useEffortSliderOpen(
 		wasShown.current = shown;
 		if (!shown) return;
 		const back = BackHandler.addEventListener("hardwareBackPress", () => { close(); return true; });
-		const keyboard = Keyboard.addListener("keyboardDidShow", close);
+		// The keyboard coming up puts away a slider opened without it. One opened
+		// over the keys stays: Android reports the keyboard shown again each time
+		// it changes height (its suggestion strip, another keyboard), and that
+		// closed the slider mid-drag.
+		const keysUp = Keyboard.isVisible?.() ?? false;
+		const keyboard = Keyboard.addListener("keyboardDidShow", () => { if (!keysUp) close(); });
 		const outside = onTouchOutside(close);
 		const timer = timeoutMs === null ? undefined : setTimeout(close, timeoutMs);
 		return () => { back.remove(); keyboard.remove(); outside(); if (timer !== undefined) clearTimeout(timer); };
