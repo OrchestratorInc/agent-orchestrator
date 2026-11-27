@@ -2,7 +2,9 @@ import { Globe, KeyRound, Trash2 } from "@/components/app-icons";
 import { useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
+import { useConnectedHosts } from "../../hooks/useHostConnection";
 import { useWorkspaceQuery } from "../../hooks/useWorkspaceQuery";
+import { labelForHost } from "../../lib/host-clients";
 import {
 	forgetApprovalSite,
 	setApprovalMode,
@@ -10,6 +12,7 @@ import {
 	useApprovalPolicy,
 	type ApprovalAuditEntry,
 	type ApprovalMode,
+	type ApprovalPolicy,
 } from "../../lib/approvals";
 import { formatRelativeTime } from "../../lib/usage-format";
 import { Button } from "../ui/button";
@@ -31,6 +34,8 @@ export function BrowserApprovalsSection() {
 	const policy = useApprovalPolicy();
 	const audit = useApprovalAudit();
 	const workspaces = useWorkspaceQuery();
+	// An "Always allow" given on a remote host's prompt is kept by that host.
+	const hosts = useConnectedHosts();
 	const [showAll, setShowAll] = useState(false);
 	const [saveError, setSaveError] = useState<string>();
 	const run = (work: Promise<void>) =>
@@ -91,32 +96,19 @@ export function BrowserApprovalsSection() {
 			</SettingsSection>
 
 			<SettingsSection title={t("settings.approvals.sites")} sectionId="browserApprovalSites" grouped>
-				{policy.data && policy.data.sites.length === 0 ? (
+				{policy.data && policy.data.sites.length === 0 && hosts.length === 0 ? (
 					<SettingsRow label={<span className="text-settings-muted">{t("settings.approvals.sitesEmpty")}</span>} />
 				) : null}
 				{policy.data?.sites.map((rule) => (
-					<SettingsRow
+					<SiteRuleRow
 						key={`${rule.site}|${rule.category}`}
-						className="group"
-						icon={rule.category === "credential" ? KeyRound : Globe}
-						label={<span className="font-mono">{rule.site}</span>}
-					>
-						<div className="flex items-center">
-							<span className="truncate text-control text-settings-muted">{category(rule.category)}</span>
-							{/* Takes no room until the row is hovered or the button focused,
-							    so the label lines up with the decisions' below. */}
-							<Button
-								type="button"
-								variant="destructive-ghost"
-								size="icon-xs"
-								aria-label={`${t("settings.approvals.forget")} ${rule.site}`}
-								className="ml-0 max-w-0 overflow-hidden opacity-0 group-hover:ml-2 group-hover:max-w-8 group-hover:opacity-100 focus-visible:ml-2 focus-visible:max-w-8 focus-visible:opacity-100"
-								onClick={() => void run(forgetApprovalSite(rule.site, rule.category, queryClient))}
-							>
-								<Trash2 aria-hidden="true" />
-							</Button>
-						</div>
-					</SettingsRow>
+						rule={rule}
+						category={category(rule.category)}
+						onForget={() => void run(forgetApprovalSite(rule.site, rule.category, queryClient))}
+					/>
+				))}
+				{hosts.map((hostId) => (
+					<HostSiteRules key={hostId} hostId={hostId} category={category} run={run} />
 				))}
 			</SettingsSection>
 
@@ -154,6 +146,69 @@ export function BrowserApprovalsSection() {
 					);
 				})}
 			</SettingsSection>
+		</>
+	);
+}
+
+type SiteRule = ApprovalPolicy["sites"][number];
+
+/** One remembered site, with a button that forgets it. */
+function SiteRuleRow({ rule, category, host, onForget }: { rule: SiteRule; category: string; host?: string; onForget: () => void }) {
+	const { t } = useTranslation();
+	return (
+		<SettingsRow
+			className="group"
+			icon={rule.category === "credential" ? KeyRound : Globe}
+			label={
+				<span className="flex min-w-0 items-baseline gap-2">
+					<span className="truncate font-mono">{rule.site}</span>
+					{host ? <span className="shrink-0 text-caption text-settings-muted">{host}</span> : null}
+				</span>
+			}
+		>
+			<div className="flex items-center">
+				<span className="truncate text-control text-settings-muted">{category}</span>
+				{/* Takes no room until the row is hovered or the button focused,
+				    so the label lines up with the decisions' below. */}
+				<Button
+					type="button"
+					variant="destructive-ghost"
+					size="icon-xs"
+					aria-label={`${t("settings.approvals.forget")} ${rule.site}`}
+					className="ml-0 max-w-0 overflow-hidden opacity-0 group-hover:ml-2 group-hover:max-w-8 group-hover:opacity-100 focus-visible:ml-2 focus-visible:max-w-8 focus-visible:opacity-100"
+					onClick={onForget}
+				>
+					<Trash2 aria-hidden="true" />
+				</Button>
+			</div>
+		</SettingsRow>
+	);
+}
+
+/** A connected remote host's remembered sites, read and forgotten on that host. */
+function HostSiteRules({
+	hostId,
+	category,
+	run,
+}: {
+	hostId: string;
+	category: (value: string) => string;
+	run: (work: Promise<void>) => void;
+}) {
+	const queryClient = useQueryClient();
+	const policy = useApprovalPolicy(undefined, hostId);
+	const host = labelForHost(hostId) ?? hostId;
+	return (
+		<>
+			{policy.data?.sites.map((rule) => (
+				<SiteRuleRow
+					key={`${hostId}|${rule.site}|${rule.category}`}
+					rule={rule}
+					category={category(rule.category)}
+					host={host}
+					onForget={() => run(forgetApprovalSite(rule.site, rule.category, queryClient, hostId))}
+				/>
+			))}
 		</>
 	);
 }

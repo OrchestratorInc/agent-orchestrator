@@ -66,6 +66,11 @@ type fakeRemote struct {
 	onCall func(f *fakeRemote, args []string)
 	// hangOn makes the calls it selects block until their context ends.
 	hangOn func(args []string) bool
+	// sessionRefs holds other agent-browser sessions' pages: a describe read
+	// prefixed with --session <name> sees that session's refs.
+	sessionRefs map[string]string
+	// unscopedReads counts describe reads that named no session.
+	unscopedReads int
 }
 
 func (f *fakeRemote) Forward(ctx context.Context, args []string, _ map[string]string) (RemoteResponse, error) {
@@ -79,6 +84,23 @@ func (f *fakeRemote) Forward(ctx context.Context, args []string, _ map[string]st
 	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if len(args) > 0 && args[len(args)-1] == "--json" && f.sessionRefs != nil {
+		// A describe read: answer from the session it names.
+		session, rest := "", args
+		if len(args) > 2 && args[0] == "--session" {
+			session, rest = args[1], args[2:]
+		} else if name, ok := strings.CutPrefix(args[0], "--session="); ok {
+			session, rest = name, args[1:]
+		}
+		if session != "" {
+			if slices.Equal(rest, []string{"snapshot", "--interactive", "--json"}) {
+				return RemoteResponse{Output: f.sessionRefs[session]}, nil
+			}
+			args = rest
+		} else {
+			f.unscopedReads++
+		}
+	}
 	if f.onCall != nil && len(args) > 0 && args[len(args)-1] == "--json" {
 		f.onCall(f, args)
 	}
@@ -696,6 +718,52 @@ func TestClassifyRemoteLeadingFlags(t *testing.T) {
 	} {
 		if got := classifyRemoteArgs(tc.args); got != tc.want {
 			t.Errorf("%q = %+v, want %+v", tc.args, got, tc.want)
+		}
+	}
+}
+
+func TestRemoteJudgesTheSessionTheCommandRunsIn(t *testing.T) {
+	// In the default session @e1 is "Home"; in session "pay" it is
+	// "Place order". The command runs in "pay", so it must be judged there.
+	remote := &fakeRemote{
+		refs:        `{"success":true,"data":{"refs":{"e1":{"role":"link","name":"Home"}}}}`,
+		sessionRefs: map[string]string{"pay": `{"success":true,"data":{"refs":{"e1":{"role":"button","name":"Place order"}}}}`},
+	}
+	svc, gate, token := remoteService(t, remote)
+	asked := answer(t, gate, approval.DecisionDeny)
+	for _, args := range [][]string{{"--session", "pay", "click", "@e1"}, {"--session=pay", "click", "@e1"}} {
+		remote.mu.Lock()
+		remote.unscopedReads = 0
+		remote.mu.Unlock()
+		_, err := svc.ExecuteRemote(context.Background(), "s1", token, args, nil)
+		if apiErrorCode(err) != "BROWSER_ACTION_DENIED" || len(remote.sent()) != 0 {
+			t.Fatalf("%q: err=%v forwarded=%v", args, err, remote.sent())
+		}
+		if p := <-asked; p.Category != approval.CategoryPayment {
+			t.Fatalf("%q: prompt = %+v", args, p)
+		}
+		remote.mu.Lock()
+		unscoped := remote.unscopedReads
+		remote.mu.Unlock()
+		if unscoped != 0 {
+			t.Fatalf("%q: %d describe reads ignored the session", args, unscoped)
+		}
+		asked = answer(t, gate, approval.DecisionDeny)
+	}
+}
+
+func TestRemoteScopeFlags(t *testing.T) {
+	for _, tc := range []struct {
+		args []string
+		want []string
+	}{
+		{[]string{"--session", "pay", "click", "@e1"}, []string{"--session", "pay"}},
+		{[]string{"--json", "--namespace", "ns", "--session=pay", "click", "@e1"}, []string{"--namespace", "ns", "--session=pay"}},
+		{[]string{"click", "@e1", "--session", "late"}, nil},
+		{[]string{"click", "@e1"}, nil},
+	} {
+		if got := remoteScope(tc.args); !slices.Equal(got, tc.want) {
+			t.Errorf("%q = %q, want %q", tc.args, got, tc.want)
 		}
 	}
 }

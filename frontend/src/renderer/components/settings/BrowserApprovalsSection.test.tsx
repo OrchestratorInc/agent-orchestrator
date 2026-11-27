@@ -4,6 +4,20 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { apiClient } from "../../lib/api-client";
 import { BrowserApprovalsSection } from "./BrowserApprovalsSection";
 
+const remote = vi.hoisted(() => ({ hosts: [] as string[], GET: vi.fn(), DELETE: vi.fn() }));
+vi.mock("../../hooks/useHostConnection", async (importOriginal) => ({
+	...(await importOriginal<typeof import("../../hooks/useHostConnection")>()),
+	useConnectedHosts: () => remote.hosts,
+}));
+vi.mock("../../lib/host-clients", async (importOriginal) => {
+	const actual = await importOriginal<typeof import("../../lib/host-clients")>();
+	return {
+		...actual,
+		clientForSessionHost: (hostId?: string) => (hostId === "box" ? remote : actual.clientForSessionHost(hostId)),
+		labelForHost: (hostId: string) => (hostId === "box" ? "Studio Mac" : undefined),
+	};
+});
+
 vi.mock("../../hooks/useWorkspaceQuery", () => ({
 	useWorkspaceQuery: () => ({ data: [{ id: "proj", sessions: [{ id: "ao-7", title: "Checkout flow" }] }] }),
 }));
@@ -66,5 +80,28 @@ describe("BrowserApprovalsSection", () => {
 		renderSection();
 		expect(await screen.findByText("No sites yet")).toBeInTheDocument();
 		expect(await screen.findByText("No gated actions yet")).toBeInTheDocument();
+	});
+
+	it("lists and forgets a remote host's site rules on that host", async () => {
+		// An Always allow given on a remote host's prompt lives in that host's
+		// policy: it must be visible and revocable here.
+		remote.hosts = ["box"];
+		remote.GET.mockResolvedValue({ data: { mode: "risky", defaultMode: "risky", sites: [{ site: "https://github.com", category: "delete", createdAt: "2026-11-03T10:00:00Z" }] } });
+		remote.DELETE.mockResolvedValue({ data: {} });
+		vi.spyOn(apiClient, "GET").mockImplementation((async (path: string) =>
+			path === "/api/v1/approvals/policy" ? { data: { ...policy, sites: [] } } : { data: { entries: [] } }) as never);
+		const localDelete = vi.spyOn(apiClient, "DELETE");
+		try {
+			renderSection();
+			expect(await screen.findByText("https://github.com")).toBeInTheDocument();
+			expect(screen.getByText("Studio Mac")).toBeInTheDocument();
+			fireEvent.click(screen.getByRole("button", { name: "Remove https://github.com" }));
+			await waitFor(() =>
+				expect(remote.DELETE).toHaveBeenCalledWith("/api/v1/approvals/sites", { params: { query: { site: "https://github.com", category: "delete" } } }),
+			);
+			expect(localDelete).not.toHaveBeenCalled();
+		} finally {
+			remote.hosts = [];
+		}
 	});
 });

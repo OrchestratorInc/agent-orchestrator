@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"net/url"
 	"os"
@@ -717,36 +718,42 @@ const browserCommandTimeout = approval.BrowserCommandBudget + 10*time.Second
 var approvalHintDelay = 3 * time.Second
 
 // mayWaitForApproval reports actions the daemon can hold for the user's
-// approval (clicks, act clicks, Enter).
+// approval, by the same rule its preflight uses.
 func mayWaitForApproval(action string, args map[string]any) bool {
-	switch action {
-	case "click", "dblclick":
-		return true
-	case "press":
-		key, _ := args["key"].(string)
-		return strings.EqualFold(strings.TrimSpace(key), "enter")
-	case "act":
-		verb, _ := args["action"].(string)
-		return verb == "" || verb == "click" || verb == "dblclick"
-	}
-	return false
+	return approval.MayNeedApproval(action, args)
+}
+
+// withApprovalHint runs a command that may wait for the user's approval and,
+// if it is still running after approvalHintDelay, says why on stderr. The
+// hint never writes after the command's own output.
+func withApprovalHint(stderr io.Writer, run func() error) error {
+	done, finished := make(chan struct{}), make(chan struct{})
+	go func() {
+		defer close(finished)
+		select {
+		case <-time.After(approvalHintDelay):
+			_, _ = fmt.Fprintln(stderr, "ao browser: still waiting. If this action pays, sends, posts, or deletes, it is waiting for the user's approval in Orchestrator (up to "+approval.BrowserWaitTimeout.String()+"; no answer means deny).")
+		case <-done:
+		}
+	}()
+	err := run()
+	close(done)
+	<-finished
+	return err
 }
 
 func (c *commandContext) runBrowserAction(cmd *cobra.Command, action string, args map[string]any, jsonOutput bool) error {
-	if mayWaitForApproval(action, args) {
-		done, finished := make(chan struct{}), make(chan struct{})
-		go func() {
-			defer close(finished)
-			select {
-			case <-time.After(approvalHintDelay):
-				_, _ = fmt.Fprintln(cmd.ErrOrStderr(), "ao browser: still waiting. If this action pays, sends, posts, or deletes, it is waiting for the user's approval in Orchestrator (up to "+approval.BrowserWaitTimeout.String()+"; no answer means deny).")
-			case <-done:
-			}
-		}()
-		// Join the hint so it never writes after the command's own output.
-		defer func() { close(done); <-finished }()
+	var resp browserCommandResponseDTO
+	call := func() (err error) {
+		resp, err = c.browserAction(cmd.Context(), action, args)
+		return err
 	}
-	resp, err := c.browserAction(cmd.Context(), action, args)
+	var err error
+	if mayWaitForApproval(action, args) {
+		err = withApprovalHint(cmd.ErrOrStderr(), call)
+	} else {
+		err = call()
+	}
 	if err != nil {
 		return err
 	}

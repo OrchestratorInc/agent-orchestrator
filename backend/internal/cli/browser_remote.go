@@ -48,11 +48,13 @@ func remoteBrowserForward(getenv func(string) string, args []string) (*remoteBro
 	if baseURL == "" {
 		return nil, nil, nil
 	}
-	token := strings.TrimSpace(getenv(envAgentBrowserToken))
-	if token == "" && strings.TrimSpace(getenv("AO_BROWSER_CAPABILITY")) != "" {
-		// An AO session: its daemon gates and forwards the command.
+	if strings.TrimSpace(getenv("AO_BROWSER_CAPABILITY")) != "" {
+		// An AO session: its daemon gates and forwards the command. This wins
+		// over a service token, which a session started before the host
+		// upgraded may still carry: that token must not bypass the gate.
 		return &remoteBrowserConfig{baseURL: strings.TrimRight(baseURL, "/"), viaDaemon: true}, args[1:], nil
 	}
+	token := strings.TrimSpace(getenv(envAgentBrowserToken))
 	if token == "" {
 		return nil, nil, fmt.Errorf("%s is set but %s is empty: the remote browser refuses every request without its token", envAgentBrowserURL, envAgentBrowserToken)
 	}
@@ -151,15 +153,23 @@ func runGatedRemoteBrowserCommand(ctx context.Context, deps Deps, args []string,
 	}
 	c := &commandContext{deps: deps}
 	var out remoteBrowserResponse
-	err = c.doJSONPathWithHeadersAndTimeout(
-		ctx,
-		http.MethodPost,
-		"/api/v1/browser/remote-commands",
-		map[string]any{"sessionId": sessionID, "args": args, "files": files},
-		&out,
-		map[string]string{browserCapabilityHeader: capability},
-		browserCommandTimeout,
-	)
+	// Only the daemon can read a raw agent-browser command, so any one may be
+	// waiting for the user; a quick one finishes before the hint shows.
+	stderr := deps.Err
+	if stderr == nil {
+		stderr = io.Discard
+	}
+	err = withApprovalHint(stderr, func() error {
+		return c.doJSONPathWithHeadersAndTimeout(
+			ctx,
+			http.MethodPost,
+			"/api/v1/browser/remote-commands",
+			map[string]any{"sessionId": sessionID, "args": args, "files": files},
+			&out,
+			map[string]string{browserCapabilityHeader: capability},
+			browserCommandTimeout,
+		)
+	})
 	if err != nil {
 		return err
 	}
