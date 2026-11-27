@@ -4511,9 +4511,10 @@ describe("agent browser runtime", () => {
 			agent.emitConsoleMessage(0, report({ shown: true }));
 			emit("browser:setBounds", { viewId, revision: 102, rect: { x: 0, y: 0, width: 0, height: 0 }, visible: false });
 			expect(shows().at(-1)).toBe("window.__rbHost && window.__rbHost.show(false)");
-			agent.emitConsoleMessage(0, report({ shown: false }));
+			// Shown again before the viewer reports the hide: its last report still
+			// says shown, so only main's own record of what it sent can tell.
 			emit("browser:setBounds", { viewId, revision: 103, rect: { x: 0, y: 0, width: 800, height: 600 }, visible: true });
-			expect(shows().at(-1)).toBe("window.__rbHost && window.__rbHost.show(true)");
+			expect(shows().slice(-2)).toEqual(["window.__rbHost && window.__rbHost.show(false)", "window.__rbHost && window.__rbHost.show(true)"]);
 		});
 
 		it("keeps going when a torn-down viewer throws while its panel is shown or hidden", async () => {
