@@ -41,7 +41,7 @@ project's defaults with `ao project set-config <id> --worker-agent <agent>
 | `1` | The task failed, `--timeout` ran out before it started, or a status read failed. A failed status read (for example a 503 on the final check) does not mean the task failed or never started: if `taskId` is set, check that id with `ao task status <task-id>` before submitting again. |
 | `2` | Usage error: fix the command (for example pass `--project`). Prints no JSON. |
 | `3` | The task is waiting on the user, such as for an approval. Ask the user; do not start the task again. |
-| `4` | `--wait` ran out while the task was still `queued` behind the agent's current turn. It is accepted and will run: do not start it again. Wait longer with `ao task wait <task-id>`. |
+| `4` | The task was submitted but the wait ended before it was confirmed: `--wait` ran out while it was still `queued`, or the wait was interrupted (Ctrl-C, SIGTERM, a calling agent's tool timeout). The JSON still has the `taskId`. Do not start it again; follow it with `ao task wait <task-id>`. |
 
 `status` in the JSON is `starting`, `queued` (accepted; the agent runs it after
 its current turn), `running`, `done`, `failed`, or `needs_input`. A task counts
@@ -100,6 +100,11 @@ stays `running`; check that worker with `ao session get <id>`.
   again.
 - `sessionIds` lists the session that runs the task and any workers the
   orchestrator started for it; their state is part of `status`.
+- A task that finished stays `done` after its session or a worker is archived
+  (normal cleanup after a merge). Only a session archived before its turn
+  finished makes the task `failed`.
+- A task id whose turn is not in the session's history (a typo, or an id from
+  another session) fails at once; check the id `ao task start` printed.
 - A terminal session reports no turns and is never `done`. If `ao task wait`
   sees the agent working and then back at its prompt, it reports `running`
   (started), because that work may predate the task; check the session itself

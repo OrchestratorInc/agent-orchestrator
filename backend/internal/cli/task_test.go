@@ -26,6 +26,7 @@ func TestParseTaskID(t *testing.T) {
 		{raw: "repo-1", want: taskID{session: "repo-1"}},
 		{raw: " repo-2:7a1f-turn ", want: taskID{session: "repo-2", turn: "7a1f-turn"}},
 		{raw: "repo-2:a:b", want: taskID{session: "repo-2", turn: "a:b"}},
+		{raw: "repo-2 : t1 ", want: taskID{session: "repo-2", turn: "t1"}},
 		{raw: "", wantErr: true},
 		{raw: "bad id", wantErr: true},
 		{raw: "repo-2:", wantErr: true},
@@ -43,8 +44,8 @@ func TestParseTaskID(t *testing.T) {
 		if err != nil || got != tc.want {
 			t.Errorf("parseTaskID(%q) = %+v, %v; want %+v", tc.raw, got, err, tc.want)
 		}
-		if got.String() != strings.TrimSpace(tc.raw) {
-			t.Errorf("taskID(%q).String() = %q", tc.raw, got.String())
+		if want := tc.want.session + map[bool]string{true: ":" + tc.want.turn, false: ""}[tc.want.turn != ""]; got.String() != want {
+			t.Errorf("taskID(%q).String() = %q, want %q", tc.raw, got.String(), want)
 		}
 	}
 }
@@ -78,7 +79,7 @@ func TestEvaluateTask(t *testing.T) {
 		wantCode    string
 		wantSpawned []string
 	}{
-		{name: "archived", sess: taskSession{ID: "repo-1", IsTerminated: true}, wantStatus: taskStatusFailed, wantReason: "archived"},
+		{name: "archived with no readable history", sess: taskSession{ID: "repo-1", IsTerminated: true}, wantStatus: taskStatusFailed, wantReason: "archived"},
 		{name: "provision failed", sess: taskSession{ID: "repo-1", ProvisionState: "failed", ProvisionError: "default branch is unresolved"}, wantStatus: taskStatusFailed, wantReason: "default branch is unresolved"},
 		{name: "provisioning", sess: taskSession{ID: "repo-1", ProvisionState: "provisioning"}, wantStatus: taskStatusStarting},
 		{name: "tui active", sess: tui("active"), wantStatus: taskStatusRunning},
@@ -148,9 +149,26 @@ func TestEvaluateTask(t *testing.T) {
 			wantStatus: taskStatusRunning,
 		},
 		{
-			name: "orchestrator turn not created yet", sess: chat, turn: "t9",
+			// With the whole history loaded, a named turn that is not in it is a
+			// wrong task id, not an agent that has yet to start.
+			name: "named turn absent from the full history", sess: chat, turn: "t9",
 			conv:       `{"turns":[{"id":"t1","state":"running"}]}`,
+			wantStatus: taskStatusFailed, wantReason: "turn t9 is not in session repo-1's history",
+		},
+		{
+			name: "named turn not in the loaded page yet", sess: chat, turn: "t9",
+			conv:       `{"hasMoreBefore":true,"turns":[{"id":"t1","state":"running"}]}`,
 			wantStatus: taskStatusStarting,
+		},
+		{
+			name: "archived after the turn completed stays done", sess: taskSession{ID: "repo-1", Mode: "chat", ProvisionState: "ready", IsTerminated: true},
+			conv:       `{"turns":[{"id":"t1","state":"completed"}]}`,
+			wantStatus: taskStatusDone,
+		},
+		{
+			name: "archived before the turn finished fails", sess: taskSession{ID: "repo-1", Mode: "chat", ProvisionState: "ready", IsTerminated: true},
+			conv:       `{"turns":[{"id":"t1","state":"running"}]}`,
+			wantStatus: taskStatusFailed, wantReason: "archived before the task finished",
 		},
 		{
 			name: "batched turn follows the turn that delivered it", sess: chat, turn: "t3",
@@ -178,7 +196,7 @@ func TestEvaluateTask(t *testing.T) {
 			if tc.conv != "" {
 				conv = decodeTaskConversation(t, tc.conv)
 			}
-			got := evaluateTask(tc.sess, conv, tc.turn)
+			got := evaluateTaskTurn(tc.sess, conv, tc.turn, false)
 			if got.status != tc.wantStatus {
 				t.Fatalf("status = %q (%s), want %q", got.status, got.reason, tc.wantStatus)
 			}
@@ -1260,8 +1278,8 @@ func TestTaskWaitCancelledDuringTheFinalReadIsInterrupted(t *testing.T) {
 
 	c := &commandContext{deps: deps.withDefaults()}
 	res := c.waitTask(ctx, taskResult{TaskID: "repo-orchestrator:t2"}, 5*time.Second)
-	if res.Status != taskStatusFailed || !strings.Contains(res.Reason, "interrupted while waiting") || res.TaskID != "repo-orchestrator:t2" || res.waitTimedOut {
-		t.Fatalf("result = %+v; want an interrupted wait for the known task id", res)
+	if !res.waitInterrupted || res.waitTimedOut || res.Status != taskStatusQueued || res.TaskID != "repo-orchestrator:t2" || !strings.Contains(res.Reason, "do not start it again") {
+		t.Fatalf("result = %+v; want an interrupted wait for the known task id, not exit 4 from a stale reading", res)
 	}
 }
 
@@ -1357,7 +1375,7 @@ func TestTaskWaitCancelledDuringSleepIsInterrupted(t *testing.T) {
 
 	c := &commandContext{deps: deps.withDefaults()}
 	res := c.waitTask(ctx, taskResult{TaskID: "repo-1"}, time.Second)
-	if res.Status != taskStatusFailed || !strings.Contains(res.Reason, "interrupted while waiting") {
+	if !res.waitInterrupted || !strings.Contains(res.Reason, "the wait was interrupted") || res.TaskID != "repo-1" {
 		t.Fatalf("result = %+v; want an interrupted wait, not a timeout", res)
 	}
 }
@@ -1470,5 +1488,83 @@ func TestTaskWaitSettleStartsWhenRunningIsFirstSeen(t *testing.T) {
 	defer mu.Unlock()
 	if settled := deps.Now().Sub(seenAt); settled < 5*time.Second {
 		t.Fatalf("confirmed %s after the turn was first seen running; want at least 5s", settled)
+	}
+}
+
+// A finished worker task stays done once its session is archived, as it is
+// after a merge; the same holds for an orchestrator task's archived worker.
+func TestTaskStatusArchivedAfterFinishingStaysDone(t *testing.T) {
+	d := newTaskDaemon(t)
+	d.set("GET /api/v1/sessions/repo-2", 200, `{"session":{"id":"repo-2","harness":"claude-code","mode":"chat","provisionState":"ready","isTerminated":true,"activity":{"state":"exited"}}}`)
+	d.set("GET /api/v1/sessions/repo-2/conversation", 200, `{"turns":[{"id":"t1","state":"completed"}]}`)
+	out, _, err := executeCLI(t, fakeClockDeps(), "task", "status", "repo-2", "--json")
+	if err != nil || decodeTaskResult(t, out)["status"] != "done" {
+		t.Fatalf("worker task: err = %v, out = %s", err, out)
+	}
+
+	d.set("GET /api/v1/sessions/repo-orchestrator", 200, `{"session":{"id":"repo-orchestrator","harness":"claude-code","mode":"chat","provisionState":"ready","activity":{"state":"waiting_input"}}}`)
+	d.set("GET /api/v1/sessions/repo-orchestrator/conversation", 200, `{"turns":[{"id":"t2","state":"completed"}],"activities":[
+		{"id":"a1","turnId":"t2","activityKind":"ao_action","status":"completed","detail":{"action":"session.spawned","targetSessionId":"repo-2"}}]}`)
+	out, _, err = executeCLI(t, fakeClockDeps(), "task", "status", "repo-orchestrator:t2", "--json")
+	if err != nil {
+		t.Fatalf("orchestrator task: exit = %d (%v), want 0", ExitCode(err), err)
+	}
+	if res := decodeTaskResult(t, out); res["status"] != "done" {
+		t.Fatalf("orchestrator task: result = %v", res)
+	}
+}
+
+// A worker archived before its turn finished still fails the task.
+func TestTaskStatusArchivedBeforeFinishingFails(t *testing.T) {
+	d := newTaskDaemon(t)
+	d.set("GET /api/v1/sessions/repo-2", 200, `{"session":{"id":"repo-2","harness":"claude-code","mode":"chat","provisionState":"ready","isTerminated":true,"activity":{"state":"exited"}}}`)
+	d.set("GET /api/v1/sessions/repo-2/conversation", 200, `{"turns":[{"id":"t1","state":"running"}]}`)
+	out, _, err := executeCLI(t, fakeClockDeps(), "task", "status", "repo-2", "--json")
+	if got := ExitCode(err); got != 1 {
+		t.Fatalf("exit = %d (%v), want 1", got, err)
+	}
+	if res := decodeTaskResult(t, out); !strings.Contains(res["reason"].(string), "archived before the task finished") {
+		t.Fatalf("result = %v", res)
+	}
+}
+
+// A task id whose turn is not in the session fails at once as not found,
+// without the sign-in hint that would invite a resend.
+func TestTaskWaitUnknownTurnFailsWithoutSignInHint(t *testing.T) {
+	d := newTaskDaemon(t)
+	d.set("GET /api/v1/sessions/repo-orchestrator", 200, `{"session":{"id":"repo-orchestrator","harness":"claude-code","mode":"chat","provisionState":"ready","activity":{"state":"waiting_input"}}}`)
+	d.set("GET /api/v1/sessions/repo-orchestrator/conversation", 200, `{"turns":[{"id":"t1","state":"completed"}]}`)
+
+	out, _, err := executeCLI(t, fakeClockDeps(), "task", "wait", " repo-orchestrator : t-typo ", "--json")
+	if got := ExitCode(err); got != 1 {
+		t.Fatalf("exit = %d (%v), want 1", got, err)
+	}
+	res := decodeTaskResult(t, out)
+	if res["taskId"] != "repo-orchestrator:t-typo" || !strings.Contains(res["reason"].(string), "not in session repo-orchestrator's history") || strings.Contains(res["fix"].(string), "auth login") {
+		t.Fatalf("result = %v", res)
+	}
+}
+
+// An interrupted wait prints the task id with exit 4 (submitted, do not start
+// it again), not exit 1.
+func TestTaskInterruptedWaitExitsFour(t *testing.T) {
+	err := writeTaskResult(NewRootCommand(Deps{}), interruptedTask(taskID{session: "repo-1"}, taskResult{Status: taskStatusRunning}), true)
+	if got := ExitCode(err); got != 4 {
+		t.Fatalf("exit = %d (%v), want 4", got, err)
+	}
+}
+
+// The unsupported-agent fix matches the path: --agent is only valid with
+// --worker, so the orchestrator path points at the project settings.
+func TestTaskUnsupportedAgentFixMatchesThePath(t *testing.T) {
+	d := newTaskDaemon(t)
+	d.set("POST /api/v1/agents/claude-code/probe", 200, `{"agent":{"id":"claude-code"},"supported":false,"installed":false}`)
+	out, _, _ := executeCLI(t, fakeClockDeps(), "task", "start", "fix calc", "--project", "repo", "--json")
+	if fix := decodeTaskResult(t, out)["fix"].(string); !strings.Contains(fix, "ao project set-config repo --worker-agent") || strings.Contains(fix, "pass --agent") {
+		t.Fatalf("orchestrator path fix = %q", fix)
+	}
+	out, _, _ = executeCLI(t, fakeClockDeps(), "task", "start", "fix calc", "--project", "repo", "--worker", "--json")
+	if fix := decodeTaskResult(t, out)["fix"].(string); !strings.Contains(fix, "--worker --agent <agent>") {
+		t.Fatalf("worker path fix = %q", fix)
 	}
 }
