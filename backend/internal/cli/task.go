@@ -138,6 +138,11 @@ func newTaskStartCommand(ctx *commandContext) *cobra.Command {
 			if opts.timeout <= 0 {
 				return usageError{fmt.Errorf("--timeout must be positive")}
 			}
+			// The orchestrator picks agents and branches for the workers it
+			// starts, so nothing could enforce these flags on that path.
+			if !opts.worker && (strings.TrimSpace(opts.agent) != "" || strings.TrimSpace(opts.base) != "") {
+				return usageError{fmt.Errorf("--agent and --base apply only with --worker; the orchestrator chooses agents and branches for its workers (set project defaults with `ao project set-config <id> --worker-agent <agent> --default-branch <branch>`)")}
+			}
 			res, err := ctx.startTask(cmd.Context(), brief, opts)
 			if err != nil {
 				return err
@@ -151,8 +156,8 @@ func newTaskStartCommand(ctx *commandContext) *cobra.Command {
 	f := cmd.Flags()
 	f.StringVar(&opts.project, "project", "", "Project id (default: AO_PROJECT_ID or the registered project that contains the current directory)")
 	f.BoolVar(&opts.worker, "worker", false, "Start one worker session on the task instead of sending it to the orchestrator")
-	f.StringVar(&opts.agent, "agent", "", "Agent for the worker(s) (default: the project's worker agent)")
-	f.StringVar(&opts.base, "base", "", "Base branch for the worker(s) (default: the project's default branch)")
+	f.StringVar(&opts.agent, "agent", "", "Agent for the worker (requires --worker; default: the project's worker agent)")
+	f.StringVar(&opts.base, "base", "", "Base branch for the worker (requires --worker; default: the project's default branch)")
 	f.BoolVar(&opts.wait, "wait", false, "Wait until the task has started, failed, or needs the user")
 	f.DurationVar(&opts.timeout, "timeout", defaultTaskTimeout, "How long --wait waits before failing")
 	f.BoolVar(&opts.json, "json", false, "Print the result as JSON")
@@ -376,7 +381,7 @@ func (c *commandContext) createTask(ctx context.Context, project projectDetails,
 		return *res
 	}
 
-	message := orchestratorTaskMessage(brief, strings.TrimSpace(opts.agent), strings.TrimSpace(opts.base))
+	message := brief
 	var sent struct {
 		TurnID string `json:"turnId"`
 	}
@@ -420,22 +425,6 @@ func (c *commandContext) createTask(ctx context.Context, project projectDetails,
 // starts it only when there is none.
 type spawnOrchestratorAPIRequest struct {
 	ProjectID string `json:"projectId"`
-}
-
-// orchestratorTaskMessage is the brief plus the worker choices the caller
-// made, which the orchestrator applies when it spawns workers.
-func orchestratorTaskMessage(brief, agent, base string) string {
-	var notes []string
-	if agent != "" {
-		notes = append(notes, fmt.Sprintf("Spawn workers for this task with `--agent %s`.", agent))
-	}
-	if base != "" {
-		notes = append(notes, fmt.Sprintf("Start workers for this task from base branch `%s` (`--base %s`).", base, base))
-	}
-	if len(notes) == 0 {
-		return brief
-	}
-	return brief + "\n\n" + strings.Join(notes, "\n")
 }
 
 func newTaskClientMessageID() string {
@@ -736,8 +725,55 @@ func (c *commandContext) observeTask(ctx context.Context, id taskID) taskObserva
 	case "provider_key_missing":
 		res.Fix = fmt.Sprintf("set up the API key that %s needs in the Orchestrator app's Agent Harnesses settings, then retry", sess.Harness)
 	}
+	// An orchestrator task is only as finished as the workers its turn started.
+	if id.turn != "" && len(eval.spawned) > 0 && (res.Status == taskStatusRunning || res.Status == taskStatusDone) {
+		res = c.foldTaskWorkers(ctx, res, eval.spawned)
+	}
 	res.phase = eval.phase
 	return taskObservation{result: res, harness: sess.Harness, turnID: eval.turnID, phase: eval.phase}
+}
+
+// foldTaskWorkers combines the orchestrator turn's status with the workers it
+// started: the task needs input if any worker does, and is done only once the
+// turn and every worker have finished. A failed worker fails the task once the
+// orchestrator's turn is over, since nothing is left to react to it.
+func (c *commandContext) foldTaskWorkers(ctx context.Context, res taskResult, workers []string) taskResult {
+	var needs, active, failed []string
+	var failReason, failFix string
+	for _, worker := range workers {
+		w := c.observeTask(ctx, taskID{session: worker}).result
+		switch w.Status {
+		case taskStatusNeedsInput:
+			needs = append(needs, worker)
+		case taskStatusFailed:
+			failed = append(failed, worker)
+			if failReason == "" {
+				failReason, failFix = fmt.Sprintf("worker %s failed: %s", worker, w.Reason), w.Fix
+			}
+		case taskStatusDone:
+		default:
+			active = append(active, fmt.Sprintf("%s (%s)", worker, w.Status))
+		}
+	}
+	turnDone := res.Status == taskStatusDone
+	switch {
+	case len(needs) > 0:
+		res.Status = taskStatusNeedsInput
+		res.Reason = fmt.Sprintf("worker %s is waiting for your answer or approval", strings.Join(needs, ", "))
+		res.Fix = ""
+	case len(failed) > 0 && turnDone:
+		res.Status, res.Reason, res.Fix = taskStatusFailed, failReason, failFix
+	case len(active) > 0 || len(failed) > 0:
+		res.Status = taskStatusRunning
+		if turnDone {
+			res.Reason = "the orchestrator handed the task to its workers; still working: " + strings.Join(active, ", ")
+		} else {
+			res.Reason = "the orchestrator is working on it; workers started so far: " + strings.Join(workers, ", ")
+		}
+	case turnDone:
+		res.Reason = fmt.Sprintf("the orchestrator and its %d worker(s) finished", len(workers))
+	}
+	return res
 }
 
 type taskEvaluation struct {

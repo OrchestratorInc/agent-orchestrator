@@ -22,14 +22,16 @@ ao task wait <task-id> [--timeout <duration>] [--json]
 |---|---|---|
 | `--project string` | Project id | `AO_PROJECT_ID`, then the registered project that contains the current directory |
 | `--worker` | Give the task to one worker instead of the orchestrator | Off |
-| `--agent string` | Agent for the worker(s) | The project's worker agent |
-| `--base string` | Base branch for the worker(s) | The project's default branch |
+| `--agent string` | Agent for the worker (only with `--worker`) | The project's worker agent |
+| `--base string` | Base branch for the worker (only with `--worker`) | The project's default branch |
 | `--wait` | Wait until the task has started, failed, or needs the user | Off |
 | `--timeout duration` | How long `--wait` waits | `120s` |
 | `--json` | Print `{status, taskId, sessionIds, reason, fix}` | Off |
 
-On the orchestrator path, `--agent` and `--base` are passed to the
-orchestrator as instructions for the workers it starts.
+Without `--worker`, `--agent` and `--base` are a usage error (exit `2`): the
+orchestrator chooses agents and branches for the workers it starts. Set the
+project's defaults with `ao project set-config <id> --worker-agent <agent>
+--default-branch <branch>` instead.
 
 ## Exit codes
 
@@ -47,8 +49,22 @@ as started once its turn has finished, or has stayed running for 5 seconds. Use
 a `--timeout` of at least `10s`.
 
 `--wait` and `ao task wait` confirm that the task **started**, not that it
-finished. To learn when it is done, poll `ao task status <task-id>` until
-`status` is `done` (or `failed` / `needs_input`).
+finished: they return once its turn has run for 5 seconds. An approval the
+agent asks for after that is not seen by that call. Keep calling
+`ao task status <task-id>` (or `ao task wait`) until `status` is `done`,
+`failed` or `needs_input`, and act on `needs_input` when it appears.
+
+On the orchestrator path, the status covers the workers the orchestrator
+started for the task, not just its own turn:
+
+- `needs_input` if any of those workers needs the user;
+- `running` while the orchestrator or any worker is still working (the reason
+  names the busy workers);
+- `failed` if a worker failed after the orchestrator finished its turn;
+- `done` only when the orchestrator's turn and every worker have finished.
+
+A worker in a terminal (TUI) session never reads `done`, so a task with one
+stays `running`; check that worker with `ao session get <id>`.
 
 ## Reading the result
 
@@ -60,7 +76,7 @@ finished. To learn when it is done, poll `ao task status <task-id>` until
   its session id alone. `taskId` is empty when the command failed before a task
   existed.
 - `sessionIds` lists the session that runs the task and any workers the
-  orchestrator started for it.
+  orchestrator started for it; their state is part of `status`.
 - A terminal session reports no turns. `ao task wait` reports `done` only if it
   saw the agent working and then back at its prompt.
 - If the reason says delivery could not be confirmed, check `ao session ls` or

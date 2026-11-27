@@ -380,7 +380,9 @@ func TestTaskStartOrchestratorWaitsForTheTurnToRun(t *testing.T) {
 	d.set("POST /api/v1/orchestrators", 201, `{"orchestrator":{"id":"repo-orchestrator","projectId":"repo"}}`)
 	d.set("GET /api/v1/sessions/repo-orchestrator", 200, `{"session":{"id":"repo-orchestrator","harness":"claude-code","mode":"chat","provisionState":"ready","activity":{"state":"active"}}}`)
 	d.set("POST /api/v1/sessions/repo-orchestrator/conversation/messages", 202, `{"turnId":"t2","state":"queued","duplicate":false}`)
-	d.set("POST /api/v1/agents/codex/probe", 200, `{"agent":{"id":"codex","authStatus":"authorized"},"supported":true,"installed":true}`)
+	// The worker the turn started is busy too.
+	d.set("GET /api/v1/sessions/repo-5", 200, `{"session":{"id":"repo-5","harness":"claude-code","mode":"chat","provisionState":"ready","activity":{"state":"active"}}}`)
+	d.set("GET /api/v1/sessions/repo-5/conversation", 200, `{"turns":[{"id":"w1","state":"running"}]}`)
 	deps := fakeClockDeps()
 	polls := 0
 	var firstRunning time.Time
@@ -396,7 +398,7 @@ func TestTaskStartOrchestratorWaitsForTheTurnToRun(t *testing.T) {
 			{"turnId":"t2","activityKind":"ao_action","status":"completed","detail":{"action":"session.spawned","targetSessionId":"repo-5"}}]}`
 	})
 
-	out, _, err := executeCLI(t, deps, "task", "start", "fix calc", "--project", "repo", "--agent", "codex", "--base", "feat/x", "--wait", "--json")
+	out, _, err := executeCLI(t, deps, "task", "start", "fix calc", "--project", "repo", "--wait", "--json")
 	if err != nil {
 		t.Fatalf("exit = %d: %v\n%s", ExitCode(err), err, out)
 	}
@@ -413,14 +415,11 @@ func TestTaskStartOrchestratorWaitsForTheTurnToRun(t *testing.T) {
 	}
 	var msg map[string]string
 	_ = json.Unmarshal([]byte(d.bodies["POST /api/v1/sessions/repo-orchestrator/conversation/messages"]), &msg)
-	if !strings.HasPrefix(msg["text"], "fix calc\n\n") || !strings.Contains(msg["text"], "`--agent codex`") || !strings.Contains(msg["text"], "`--base feat/x`") {
-		t.Fatalf("message = %q", msg["text"])
+	if msg["text"] != "fix calc" {
+		t.Fatalf("message = %q; want the brief unchanged", msg["text"])
 	}
 	if !strings.HasPrefix(msg["clientMessageId"], "ao-task-") {
 		t.Fatalf("clientMessageId = %q", msg["clientMessageId"])
-	}
-	if !d.saw("POST /api/v1/agents/codex/probe") {
-		t.Fatal("the worker agent named by --agent should be checked too")
 	}
 }
 
@@ -577,6 +576,9 @@ func TestTaskWaitRestartsSettleWhenARetryTakesOver(t *testing.T) {
 	if res := decodeTaskResult(t, out); res["status"] != "running" {
 		t.Fatalf("result = %v", res)
 	}
+	if retrySeen.IsZero() {
+		t.Fatal("wait returned before it ever saw the retry t2")
+	}
 	if settled := deps.Now().Sub(retrySeen); settled < 5*time.Second {
 		t.Fatalf("retry reported started after %s; the settle time must restart for the new turn", settled)
 	}
@@ -695,11 +697,15 @@ func TestExitCodeKeepsOtherExitErrorsAtOne(t *testing.T) {
 
 func TestTaskStatusPagesBackWhileThePageSplitsTheTurn(t *testing.T) {
 	d := newTaskDaemon(t)
+	d.set("GET /api/v1/sessions/repo-7", 200, `{"session":{"id":"repo-7","harness":"claude-code","mode":"chat","provisionState":"ready","activity":{"state":"waiting_input"}}}`)
+	d.set("GET /api/v1/sessions/repo-7/conversation", 200, `{"turns":[{"id":"w1","state":"completed"}]}`)
+	var pages []string
 	d.set("GET /api/v1/sessions/repo-orchestrator", 200, `{"session":{"id":"repo-orchestrator","harness":"claude-code","mode":"chat","provisionState":"ready","activity":{"state":"active"}}}`)
 	d.setFunc("GET /api/v1/sessions/repo-orchestrator/conversation", func() (int, string) {
 		d.mu.Lock()
 		query := d.lastQuery
 		d.mu.Unlock()
+		pages = append(pages, query)
 		switch query {
 		case "beforeSequence=300":
 			// Older rows of the same turn, including the worker it spawned.
@@ -721,8 +727,8 @@ func TestTaskStatusPagesBackWhileThePageSplitsTheTurn(t *testing.T) {
 	if res := decodeTaskResult(t, out); !reflect.DeepEqual(res["sessionIds"], []any{"repo-orchestrator", "repo-7"}) {
 		t.Fatalf("result = %v", res)
 	}
-	if d.saw("GET /api/v1/sessions/repo-orchestrator/conversation") && d.lastQuery != "beforeSequence=100" {
-		t.Fatalf("stopped paging at %q; want it to stop once the earlier turn t1 is loaded", d.lastQuery)
+	if want := []string{"", "beforeSequence=300", "beforeSequence=100"}; !reflect.DeepEqual(pages, want) {
+		t.Fatalf("pages read = %q; want %q (stop once the earlier turn t1 is loaded)", pages, want)
 	}
 }
 
@@ -940,5 +946,64 @@ func TestTaskStatusQueuedExitsZero(t *testing.T) {
 	}
 	if res := decodeTaskResult(t, out); res["status"] != "queued" {
 		t.Fatalf("result = %v", res)
+	}
+}
+
+// An orchestrator task is not done while a worker its turn started is still
+// working, and it needs input when a worker does.
+func TestTaskStatusFoldsTheOrchestratorsWorkers(t *testing.T) {
+	orch := `{"turns":[{"id":"t2","state":"completed"}],"activities":[
+		{"id":"a1","turnId":"t2","activityKind":"ao_action","status":"completed","detail":{"action":"session.spawned","targetSessionId":"repo-3"}},
+		{"id":"a2","turnId":"t2","activityKind":"ao_action","status":"completed","detail":{"action":"session.spawned","targetSessionId":"repo-4"}}]}`
+	worker := func(state, activity string) string {
+		return `{"turns":[{"id":"w1","state":"` + state + `"}],"activities":[` + activity + `]}`
+	}
+	cases := []struct {
+		name         string
+		w3, w4       string
+		wantStatus   string
+		wantExit     int
+		wantInReason string
+	}{
+		{name: "a worker still running", w3: worker("completed", ""), w4: worker("running", ""), wantStatus: "running", wantExit: 0, wantInReason: "still working: repo-4 (running)"},
+		{name: "a worker needs input", w3: worker("running", `{"turnId":"w1","activityKind":"approval","status":"pending"}`), w4: worker("completed", ""), wantStatus: "needs_input", wantExit: 3, wantInReason: "worker repo-3 is waiting"},
+		{name: "a worker failed", w3: worker("completed", ""), w4: `{"turns":[{"id":"w1","state":"failed","errorMessage":"tests failed"}]}`, wantStatus: "failed", wantExit: 1, wantInReason: "worker repo-4 failed: tests failed"},
+		{name: "all finished", w3: worker("completed", ""), w4: worker("completed", ""), wantStatus: "done", wantExit: 0, wantInReason: "its 2 worker(s) finished"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			d := newTaskDaemon(t)
+			for _, id := range []string{"repo-orchestrator", "repo-3", "repo-4"} {
+				d.set("GET /api/v1/sessions/"+id, 200, `{"session":{"id":"`+id+`","harness":"claude-code","mode":"chat","provisionState":"ready","activity":{"state":"active"}}}`)
+			}
+			d.set("GET /api/v1/sessions/repo-orchestrator/conversation", 200, orch)
+			d.set("GET /api/v1/sessions/repo-3/conversation", 200, tc.w3)
+			d.set("GET /api/v1/sessions/repo-4/conversation", 200, tc.w4)
+
+			out, _, err := executeCLI(t, fakeClockDeps(), "task", "status", "repo-orchestrator:t2", "--json")
+			if got := ExitCode(err); got != tc.wantExit {
+				t.Fatalf("exit = %d (%v), want %d", got, err, tc.wantExit)
+			}
+			res := decodeTaskResult(t, out)
+			if res["status"] != tc.wantStatus || !strings.Contains(res["reason"].(string), tc.wantInReason) {
+				t.Fatalf("result = %v", res)
+			}
+			if !reflect.DeepEqual(res["sessionIds"], []any{"repo-orchestrator", "repo-3", "repo-4"}) {
+				t.Fatalf("sessionIds = %v", res["sessionIds"])
+			}
+		})
+	}
+}
+
+func TestTaskStartAgentOrBaseWithoutWorkerIsAUsageError(t *testing.T) {
+	d := newTaskDaemon(t)
+	for _, args := range [][]string{{"--base", "no-such-branch"}, {"--agent", "codex"}} {
+		_, _, err := executeCLI(t, fakeClockDeps(), append([]string{"task", "start", "fix calc", "--project", "repo"}, args...)...)
+		if got := ExitCode(err); got != 2 || !strings.Contains(err.Error(), "apply only with --worker") {
+			t.Fatalf("%v: exit = %d (%v), want usage error 2", args, got, err)
+		}
+	}
+	if d.saw("POST /api/v1/orchestrators") {
+		t.Fatal("a usage error must not start the orchestrator")
 	}
 }
