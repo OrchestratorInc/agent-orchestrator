@@ -1160,6 +1160,33 @@ export interface CloudCpArtifactShareView {
 	viewerUrl?: string;
 }
 
+import type {
+	ArtifactComment,
+	ArtifactCommentEditInput,
+	ArtifactCommentsSnapshot,
+	ArtifactCommentThread,
+	ArtifactReplyInput,
+	ArtifactThreadCreateInput,
+	ArtifactCommentThreadStatus,
+} from "../../../../../packages/shared/artifact-comments/types";
+
+/** GET /artifact-shares/{linkId}/comments: every thread on one version of a link. */
+export type CloudCpArtifactCommentsSnapshot = ArtifactCommentsSnapshot;
+export type CloudCpArtifactCommentThread = ArtifactCommentThread;
+export type CloudCpArtifactComment = ArtifactComment;
+export type CloudCpArtifactThreadCreateRequest = ArtifactThreadCreateInput;
+export type CloudCpArtifactReplyRequest = ArtifactReplyInput;
+export type CloudCpArtifactCommentEditRequest = ArtifactCommentEditInput;
+export type CloudCpArtifactCommentThreadStatus = ArtifactCommentThreadStatus;
+
+/**
+ * listArtifactShareComments: the snapshot with the ETag to send next time, or
+ * notModified when the If-None-Match ETag still matches (HTTP 304).
+ */
+export type CloudCpArtifactCommentsResult =
+	| { notModified: true; etag: string }
+	| { notModified: false; etag: string | null; snapshot: CloudCpArtifactCommentsSnapshot };
+
 /** POST /orgs/{orgId}/sessions/{sessionId}/artifacts/access */
 export interface CloudCpArtifactAccessResponse {
 	/** Control-plane path ending in "/"; append a file's escaped path. */

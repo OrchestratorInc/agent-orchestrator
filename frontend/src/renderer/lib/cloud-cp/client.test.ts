@@ -738,6 +738,95 @@ describe("mentions and the personal inbox", () => {
 	});
 });
 
+describe("Cloud control-plane artifact share comments", () => {
+	const thread = {
+		id: "11111111-1111-4111-8111-111111111111",
+		version: 3,
+		status: "open",
+		anchor: { path: "body>main:1>h1:1", tag: "h1", textHash: "9f2c00112233aabb", excerpt: "Title" },
+		createdAt: "2026-11-23T10:00:00Z",
+		updatedAt: "2026-11-23T10:00:00Z",
+		resolvedBy: null,
+		resolvedAt: null,
+		sentToAgentAt: null,
+		sentToAgentCount: 0,
+		comments: [],
+	};
+	const snapshot = { version: 3, currentVersion: 3, revision: 41, you: { userId: "u", isOwner: true }, threads: [thread] };
+
+	function commentsClient(respond: (url: string, init: RequestInit) => Response) {
+		const onForbidden = vi.fn();
+		const fetchImpl = vi.fn(async (url: string | URL | Request, init?: RequestInit) => respond(String(url), init ?? {}));
+		const client = createCloudCpClient({ baseUrl: "https://cloud.example.test", getToken: async () => "token", fetchImpl: fetchImpl as typeof fetch, onForbidden });
+		return { client, fetchImpl, onForbidden, calls: () => fetchImpl.mock.calls as unknown as Array<[string, RequestInit]> };
+	}
+
+	const json = (body: unknown, status = 200, headers: Record<string, string> = {}) =>
+		new Response(JSON.stringify(body), { status, headers: { "Content-Type": "application/json", ...headers } });
+
+	it("lists a version's threads with the ETag to send next time", async () => {
+		const { client, calls } = commentsClient(() => json(snapshot, 200, { ETag: '"r41-v3"' }));
+		await expect(client.listArtifactShareComments("cf-staging/x7", { version: 3 })).resolves.toEqual({ notModified: false, etag: '"r41-v3"', snapshot });
+		expect(calls()[0][0]).toBe("https://cloud.example.test/api/cloud/v1/artifact-shares/cf-staging%2Fx7/comments?version=3");
+		expect(calls()[0][1].method).toBe("GET");
+		expect(new Headers(calls()[0][1].headers).has("If-None-Match")).toBe(false);
+	});
+
+	it("sends If-None-Match and reports 304 as not modified", async () => {
+		const { client, calls } = commentsClient(() => new Response(null, { status: 304, headers: { ETag: '"r41-v3"' } }));
+		await expect(client.listArtifactShareComments("link", { etag: '"r41-v3"' })).resolves.toEqual({ notModified: true, etag: '"r41-v3"' });
+		expect(calls()[0][0]).toBe("https://cloud.example.test/api/cloud/v1/artifact-shares/link/comments");
+		expect(new Headers(calls()[0][1].headers).get("If-None-Match")).toBe('"r41-v3"');
+	});
+
+	it("keeps the caller's ETag when a 304 carries none", async () => {
+		const { client } = commentsClient(() => new Response(null, { status: 304 }));
+		await expect(client.listArtifactShareComments("link", { etag: '"r1-v1"' })).resolves.toEqual({ notModified: true, etag: '"r1-v1"' });
+	});
+
+	it("surfaces lost access and an unknown version as errors", async () => {
+		const { client } = commentsClient((url) =>
+			url.includes("version=9")
+				? json({ code: "artifact_share_version_unknown", message: "Unknown version" }, 409)
+				: json({ code: "not_found", message: "Not found" }, 404),
+		);
+		await expect(client.listArtifactShareComments("link")).rejects.toMatchObject({ status: 404, code: "not_found" });
+		await expect(client.listArtifactShareComments("link", { version: 9 })).rejects.toMatchObject({ status: 409, code: "artifact_share_version_unknown" });
+	});
+
+	it("routes every write to its comment route with its body", async () => {
+		const { client, calls } = commentsClient((_url, init) => (init.method === "DELETE" ? new Response(null, { status: 204 }) : json(thread, init.method === "POST" ? 201 : 200)));
+		const anchor = thread.anchor;
+		await client.createArtifactShareThread("link", { version: 3, anchor, body: "Rename this", clientId: "c1" });
+		await client.replyArtifactShareThread("link", "t/1", { body: "Yes", clientId: "c2" });
+		await client.setArtifactShareThreadStatus("link", "t/1", "resolved");
+		await client.editArtifactShareComment("link", "c-1", { body: "Edited" });
+		await expect(client.deleteArtifactShareComment("link", "c-1")).resolves.toBeUndefined();
+		await client.markArtifactShareThreadSent("link", "t/1");
+		const base = "https://cloud.example.test/api/cloud/v1/artifact-shares/link/comments";
+		expect(calls().map(([url, init]) => [init.method, url, init.body === undefined ? undefined : JSON.parse(init.body as string)])).toEqual([
+			["POST", `${base}/threads`, { version: 3, anchor, body: "Rename this", clientId: "c1" }],
+			["POST", `${base}/threads/t%2F1/replies`, { body: "Yes", clientId: "c2" }],
+			["PATCH", `${base}/threads/t%2F1`, { status: "resolved" }],
+			["PATCH", `${base}/c-1`, { body: "Edited" }],
+			["DELETE", `${base}/c-1`, undefined],
+			["POST", `${base}/threads/t%2F1/sent`, undefined],
+		]);
+	});
+
+	it("treats a retried create (200) the same as a new one (201)", async () => {
+		const { client } = commentsClient(() => json(thread, 200));
+		await expect(client.createArtifactShareThread("link", { version: 3, anchor: thread.anchor, body: "x", clientId: "c1" })).resolves.toEqual(thread);
+	});
+
+	it("does not treat a comment 403 as a stale organization", async () => {
+		const { client, onForbidden } = commentsClient(() => json({ code: "forbidden", message: "Not yours" }, 403));
+		await expect(client.editArtifactShareComment("link", "c-1", { body: "x" })).rejects.toMatchObject({ status: 403, code: "forbidden" });
+		await expect(client.markArtifactShareThreadSent("link", "t")).rejects.toMatchObject({ status: 403 });
+		expect(onForbidden).not.toHaveBeenCalled();
+	});
+});
+
 describe("move export", () => {
 	const json = (body: unknown, status: number, headers: Record<string, string> = {}) =>
 		new Response(JSON.stringify(body), { status, headers: { "Content-Type": "application/json", ...headers } });
