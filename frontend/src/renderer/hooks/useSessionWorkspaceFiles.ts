@@ -178,9 +178,15 @@ export function isMissingWorkspaceError(error: unknown): boolean {
 	return error instanceof WorkspaceRequestError && error.code === "PROJECT_FOLDER_MISSING" && error.status === 404;
 }
 
-/** The session has no worktree on disk: one still being made, or one that was removed. */
+/**
+ * The session has no worktree on disk: one still being made, or one that was
+ * removed. Tree and search reads wrap the daemon's answer as the error's
+ * cause instead; the daemon sends this code only with a 404.
+ */
 export function isWorkspaceNotFoundError(error: unknown): boolean {
-	return error instanceof WorkspaceRequestError && error.code === "SESSION_WORKSPACE_NOT_FOUND" && error.status === 404;
+	if (error instanceof WorkspaceRequestError) return error.code === "SESSION_WORKSPACE_NOT_FOUND" && error.status === 404;
+	const cause: unknown = error instanceof Error ? error.cause : undefined;
+	return typeof cause === "object" && cause !== null && (cause as { code?: unknown }).code === "SESSION_WORKSPACE_NOT_FOUND";
 }
 
 export function isStaleWorkspaceSnapshotError(error: unknown): boolean {

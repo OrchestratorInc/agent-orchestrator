@@ -74,6 +74,9 @@ describe("expected workspace answers", () => {
 		expect(isWorkspaceNotFoundError(new WorkspaceRequestError("not found", "SESSION_WORKSPACE_NOT_FOUND", 404))).toBe(true);
 		expect(isWorkspaceNotFoundError(new WorkspaceRequestError("missing", "PROJECT_FOLDER_MISSING", 404))).toBe(false);
 		expect(isWorkspaceNotFoundError(new WorkspaceRequestError("busy", "SESSION_WORKSPACE_NOT_FOUND", 500))).toBe(false);
+		// Tree and search reads keep the daemon's answer as the cause.
+		expect(isWorkspaceNotFoundError(new Error("Session workspace not found", { cause: { code: "SESSION_WORKSPACE_NOT_FOUND" } }))).toBe(true);
+		expect(isWorkspaceNotFoundError(new Error("other", { cause: { code: "SESSION_NOT_FOUND" } }))).toBe(false);
 	});
 });
 
