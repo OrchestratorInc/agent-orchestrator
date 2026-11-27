@@ -26,6 +26,15 @@ type browserStatusDTO struct {
 	ConnectedAt time.Time `json:"connectedAt,omitempty"`
 	Transport   string    `json:"transport"`
 	Target      string    `json:"target,omitempty"`
+	// Profile is the browser profile this session's browser uses; nil when the
+	// desktop app could not report it.
+	Profile *browserProfileDTO `json:"profile,omitempty"`
+}
+
+type browserProfileDTO struct {
+	ProfileID   *string `json:"profileId"`
+	ProfileName string  `json:"profileName"`
+	Persistent  bool    `json:"persistent"`
 }
 
 type browserCommandRequestDTO struct {
@@ -74,12 +83,15 @@ func newBrowserCommand(ctx *commandContext) *cobra.Command {
 
 	cmd.AddCommand(&cobra.Command{
 		Use:   "status",
-		Short: "Show whether the desktop browser runtime is connected",
+		Short: "Show whether the desktop browser runtime is connected and which profile it uses",
 		Args:  noArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			status, err := ctx.browserStatus(cmd.Context())
 			if err != nil {
 				return err
+			}
+			if status.Connected {
+				status.Profile = ctx.browserProfile(cmd.Context())
 			}
 			if jsonOutput {
 				return writeJSON(cmd.OutOrStdout(), status)
@@ -93,6 +105,9 @@ func newBrowserCommand(ctx *commandContext) *cobra.Command {
 				target = ", target: your Chrome"
 			}
 			_, err = fmt.Fprintf(cmd.OutOrStdout(), "Browser runtime: %s (%s%s)\n", state, status.Transport, target)
+			if err == nil && status.Profile != nil {
+				_, err = fmt.Fprintln(cmd.OutOrStdout(), browserProfileLine(*status.Profile))
+			}
 			return err
 		},
 	})
@@ -745,6 +760,32 @@ func (c *commandContext) browserStatus(ctx context.Context) (browserStatusDTO, e
 		map[string]string{browserCapabilityHeader: capability},
 	)
 	return out, err
+}
+
+// browserProfile asks the browser which profile it uses. Older desktop apps do
+// not answer, so a failure leaves the profile unreported instead of failing status.
+func (c *commandContext) browserProfile(ctx context.Context) *browserProfileDTO {
+	resp, err := c.browserAction(ctx, "profile", nil)
+	if err != nil {
+		return nil
+	}
+	name, _ := resp.Result["profileName"].(string)
+	if name == "" {
+		return nil
+	}
+	persistent, _ := resp.Result["persistent"].(bool)
+	profile := &browserProfileDTO{ProfileName: name, Persistent: persistent}
+	if id, ok := resp.Result["profileId"].(string); ok && id != "" {
+		profile.ProfileID = &id
+	}
+	return profile
+}
+
+func browserProfileLine(profile browserProfileDTO) string {
+	if profile.Persistent {
+		return "Browser profile: " + profile.ProfileName + " (persistent: sign-ins carry over to other sessions)"
+	}
+	return "Browser profile: " + profile.ProfileName + " (not persistent: signed out, cleared when this session ends)"
 }
 
 func (c *commandContext) browserAction(ctx context.Context, action string, args map[string]any) (browserCommandResponseDTO, error) {

@@ -1202,6 +1202,21 @@ export function createBrowserViewHost(
       temporary: !profile,
     };
   };
+  // Read-only: reports the live browser's profile, or the one this session
+  // would open with, without creating a browser.
+  const agentProfileResult = (sessionId: string) => {
+    const viewId = viewIdsBySessionId.get(sessionId);
+    const live = viewId ? entries.get(viewId) : undefined;
+    const profileId = live ? live.profileId : initialProfileIdForSession(sessionId);
+    const profile = profileId
+      ? options.browserProfileStore?.getProfile(profileId)
+      : undefined;
+    return {
+      profileId: profile ? profileId : null,
+      profileName: profile?.name ?? "Temporary",
+      persistent: Boolean(profile),
+    };
+  };
   const pushProfileState = (
     session: BrowserSessionEntry,
   ): BrowserProfileViewState => {
@@ -4515,6 +4530,7 @@ export function createBrowserViewHost(
         if (viewId) destroy(viewId);
         return { destroyed: Boolean(viewId) };
       }
+      if (action === "profile") return agentProfileResult(sessionId);
       const session = await ensureSessionReady(sessionId);
       if (session.profileSwitching) {
         throw browserError(

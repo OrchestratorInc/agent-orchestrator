@@ -1,6 +1,6 @@
 # ao browser
 
-Inspect and control the current Orchestrator-managed session's target-isolated browser. The desktop app must be open. The agent and user share the same live page, cookies, navigation state, and `WebContentsView`; the runtime remains usable while the Browser panel is hidden, except for commands that need the page to be painted (see `--human` and `screenshot` below). Tabs in this worker share an ephemeral browser profile, while other workers use isolated profiles.
+Inspect and control the current Orchestrator-managed session's target-isolated browser. The desktop app must be open. The agent and user share the same live page, cookies, navigation state, and `WebContentsView`; the runtime remains usable while the Browser panel is hidden, except for commands that need the page to be painted (see `--human` and `screenshot` below). Tabs in this worker share one browser profile; see [Browser profiles](#browser-profiles) for which one and whether sign-ins persist.
 
 `AO_SESSION_ID` selects the target, so run these commands from inside a worker session.
 
@@ -227,6 +227,28 @@ instead, omit the path and explicitly combine `--base64` with `--json`.
 
 `ao browser open` requires an explicit HTTP(S) URL or hostname. It does not
 silently search the web and does not allow `file://` or local filesystem paths.
+
+## Browser profiles
+
+By default a session's browser uses the user's default browser profile, which
+is persistent: a site the user signed in to once stays signed in for every
+later session, and several sessions can use it at the same time. A session the
+user switched to Temporary (private) starts signed out and its data is cleared
+when the session ends. Profiles stay on this computer and are never copied
+between machines.
+
+```bash
+ao browser status   # e.g. "Browser profile: Personal (persistent: ...)"
+```
+
+- Run `ao browser status` when a page shows you signed out. If the profile is
+  Temporary or not the one with the user's sign-ins, ask the user to pick a
+  profile from the Browser panel's menu (Profile) or set a default in Settings →
+  Browser. You cannot change profiles yourself; there is no profile flag.
+- If the user is not signed in to a site, ask them to sign in themselves in the
+  Browser panel. Never type the user's passwords or one-time codes, and do not
+  sign in on their behalf.
+- In Chrome mode the profile is the user's own Chrome.
 
 ## Signing in with saved credentials
 

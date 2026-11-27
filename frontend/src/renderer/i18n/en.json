@@ -619,6 +619,7 @@
 	"browser.pickElement": "Pick element",
 	"browser.pinTabs": "Pin tabs list",
 	"browser.popOut": "Pop out",
+	"browser.profile.defaultName": "Personal",
 	"browser.profile.temporary": "Temporary",
 	"browser.profile.label": "Profile",
 	"browser.profile.manage": "Manage profiles",

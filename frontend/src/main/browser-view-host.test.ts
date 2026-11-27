@@ -2782,6 +2782,38 @@ describe("browser profile partitions and replacement", () => {
 		});
 	});
 
+	it("lets two unbound sessions use the default profile at the same time through one shared partition", async () => {
+		const store = fakeBrowserProfileStore(profile, {}, profile.id);
+		const { host, invoke, constructorOptions } = setupTabHost(store);
+		const first = (await invoke("browser:ensure", "worker-1")) as BrowserNavState;
+		const second = (await invoke("browser:ensure", "worker-2")) as BrowserNavState;
+		await invoke("browser:navigate", { viewId: first.viewId, url: "https://example.com/a" });
+		await invoke("browser:navigate", { viewId: second.viewId, url: "https://example.com/b" });
+
+		const partitions = new Set(constructorOptions.map((item) => item.webPreferences.partition));
+		expect(partitions).toEqual(new Set([browserProfilePartition(profile.id)]));
+		expect(host.getProfileUsage(profile.id).map((usage) => usage.sessionId)).toEqual(["worker-1", "worker-2"]);
+		expect(await invoke("browser:getTabs", first.viewId)).toMatchObject({ tabs: [expect.objectContaining({ url: "https://example.com/a" })] });
+		expect(await invoke("browser:getTabs", second.viewId)).toMatchObject({ tabs: [expect.objectContaining({ url: "https://example.com/b" })] });
+	});
+
+	it("reports the active profile to the agent without opening a tab", async () => {
+		const bindings: Record<string, string | null> = { "worker-2": null };
+		const { host, constructorOptions } = setupTabHost(fakeBrowserProfileStore(profile, bindings, profile.id));
+
+		expect(await host.execute("worker-1", "profile")).toEqual({
+			profileId: profile.id,
+			profileName: "Work",
+			persistent: true,
+		});
+		expect(await host.execute("worker-2", "profile")).toEqual({
+			profileId: null,
+			profileName: "Temporary",
+			persistent: false,
+		});
+		expect(constructorOptions).toHaveLength(0);
+	});
+
 	it("keeps a session explicitly switched to Temporary out of the default profile, even across reconstruction", async () => {
 		const bindings: Record<string, string | null> = {};
 		const store = fakeBrowserProfileStore(profile, bindings, profile.id);

@@ -619,6 +619,7 @@
 	"browser.pickElement": "Öğe seç",
 	"browser.pinTabs": "Sekme listesini sabitle",
 	"browser.popOut": "Ayrı pencereye al",
+	"browser.profile.defaultName": "Kişisel",
 	"browser.profile.temporary": "Geçici",
 	"browser.profile.label": "Profil",
 	"browser.profile.manage": "Profilleri yönet",

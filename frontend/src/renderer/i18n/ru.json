@@ -619,6 +619,7 @@
 	"browser.pickElement": "Выбрать элемент",
 	"browser.pinTabs": "Закрепить список вкладок",
 	"browser.popOut": "Открыть отдельно",
+	"browser.profile.defaultName": "Личный",
 	"browser.profile.temporary": "Временный",
 	"browser.profile.label": "Профиль",
 	"browser.profile.manage": "Управление профилями",
