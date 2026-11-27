@@ -840,6 +840,9 @@ describe("AgentModelPicker", () => {
 		expect(await screen.findByRole("menuitemradio", { name: /Work/ })).toHaveAttribute("aria-checked", "true");
 		const home = screen.getByRole("menuitemradio", { name: /me@home/ });
 		expect(home).toHaveTextContent("ME");
+		// The label already holds the email, so neither the row nor the switcher's tooltip repeats it.
+		expect(screen.getAllByText(/me@work/)).toHaveLength(1);
+		expect(switcher).toHaveAttribute("title", "Work · me@work");
 		fireEvent.click(home);
 		expect(two.onPick).toHaveBeenCalledWith("b");
 	});

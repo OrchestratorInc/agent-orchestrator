@@ -875,12 +875,15 @@ function AgentRail({ agents, selected, blockedReason, onPick, onSetup, onManage 
 function AccountSwitcher({ account, provider }: { account: AccountChoice; provider: string }) {
 	const { t } = useTranslation();
 	const chosen = account.options.find((option) => option.id === account.value);
+	// The label already reads "Name · email" when the account has both, so the email is added only where it is missing.
+	const extraEmail = (option: AccountChoice["options"][number]) => (option.email && !option.label.includes(option.email) ? option.email : undefined);
+	const chosenEmail = chosen ? extraEmail(chosen) : undefined;
 	return (
 		<OptionMenuSub closeOnSelect>
 			<OptionMenuSubTrigger
 				disabled={account.disabled}
 				aria-label={chosen ? `${t("settings.agentAccounts.sessionAccount")}: ${chosen.label}` : t("settings.agentAccounts.sessionAccount")}
-				title={chosen?.email && chosen.email !== chosen.label ? `${chosen.label} · ${chosen.email}` : chosen?.label}
+				title={chosenEmail ? `${chosen?.label} · ${chosenEmail}` : chosen?.label}
 				className={cn("h-7 w-auto shrink-0 justify-start gap-0.5 py-0 pr-1 pl-0.5", account.disabled && "opacity-50")}
 			>
 				{/* Letters only: the row also holds fast mode and auto-compact. The name is in the tooltip and the side menu. */}
@@ -895,11 +898,13 @@ function AccountSwitcher({ account, provider }: { account: AccountChoice; provid
 							active={option.id === account.value}
 							radio
 							disabled={option.disabled}
+							// Typeahead matches the account's name, not the badge letters before it.
+							textValue={option.label}
 							onSelect={() => { if (option.id !== account.value) account.onPick(option.id); }}
 							className="text-xs text-foreground"
 						>
 							<AccountChip provider={provider} name={option.name} email={option.email} color={option.color} letters={option.letters} label={option.label} className="max-w-44" />
-							{option.email && option.email !== option.label ? <span className="min-w-0 truncate text-muted-foreground">{option.email}</span> : null}
+							{extraEmail(option) ? <span className="min-w-0 truncate text-muted-foreground">{extraEmail(option)}</span> : null}
 						</OptionMenuItem>
 					))}
 				</div>
