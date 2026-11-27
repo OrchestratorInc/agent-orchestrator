@@ -374,6 +374,28 @@ describe("buildReviewBlocks", () => {
 		expect(new Set(keys).size).toBe(keys.length);
 	});
 
+	// A request that names the app ("dana[bot]") is the app's, even when a person "dana" reviewed too.
+	it("turns the bot's row pending, not the same-named person's, for a [bot] request", () => {
+		const block = blockFor({
+			provider: summary({
+				review: {
+					decision: "changes_requested",
+					hasUnresolvedHumanComments: false,
+					unresolvedBy: [],
+					reviews: [
+						{ reviewerId: "dana", verdict: "changes_requested", submittedAt: "2026-06-15T11:00:00Z", reviewUrl: `${PR_URL}#pullrequestreview-51`, body: "Please fix.", autoInjectReview: false },
+						{ reviewerId: "dana", isBot: true, verdict: "changes_requested", submittedAt: "2026-06-16T11:00:00Z", reviewUrl: `${PR_URL}#pullrequestreview-52`, body: "Automated check.", autoInjectReview: false },
+					],
+				},
+				requestedReviewers: [{ login: "dana[bot]", isTeam: false }],
+			}),
+		});
+		expect(block.reviewers.map((reviewer) => [reviewer.id, reviewer.isBot, reviewer.status, reviewer.canRerequest])).toEqual([
+			["dana", true, "pending", false],
+			["dana", false, "changes_requested", true],
+		]);
+	});
+
 	// A GitHub user may be called "orchestrator": their row and the Orchestrator reviewer's must still differ.
 	it("keeps a person named orchestrator apart from the Orchestrator reviewer", () => {
 		const block = blockFor({
