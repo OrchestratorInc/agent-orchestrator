@@ -314,7 +314,8 @@ func TestWorkspaceDestroyIgnoresOversizedAOGitignore(t *testing.T) {
 
 // memcode keeps its native transcript under a directory its AO .gitignore
 // lists. Restore reads it back, so archiving keeps the folder once it holds
-// one, and still removes an empty transcript directory.
+// one, and still removes an empty transcript directory. Deleting the session
+// releases the transcript; only other files keep the folder then.
 func TestWorkspaceDestroyKeepsRestorableAgentState(t *testing.T) {
 	setup := func(t *testing.T) (*scratch.Workspace, ports.WorkspaceInfo, string) {
 		ws, info := createStandaloneScratch(t)
@@ -337,6 +338,33 @@ func TestWorkspaceDestroyKeepsRestorableAgentState(t *testing.T) {
 		}
 		if _, err := os.Stat(transcript); err != nil {
 			t.Fatalf("memcode transcript was not preserved: %v", err)
+		}
+	})
+
+	t.Run("session deleted", func(t *testing.T) {
+		ws, info, transcript := setup(t)
+		writeScratchFile(t, transcript, "[]\n")
+		info.ReleaseAgentState = true
+		if err := ws.Destroy(context.Background(), info); err != nil {
+			t.Fatalf("Destroy: %v", err)
+		}
+		if _, err := os.Stat(info.Path); !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("scratch dir of a deleted session still exists or stat failed differently: %v", err)
+		}
+	})
+
+	t.Run("session deleted with user work", func(t *testing.T) {
+		ws, info, transcript := setup(t)
+		writeScratchFile(t, transcript, "[]\n")
+		writeScratchFile(t, filepath.Join(info.Path, "notes.md"), "mine\n")
+		info.ReleaseAgentState = true
+		if err := ws.Destroy(context.Background(), info); !errors.Is(err, ports.ErrWorkspaceDirty) {
+			t.Fatalf("Destroy err = %v, want ErrWorkspaceDirty", err)
+		}
+		for _, kept := range []string{transcript, filepath.Join(info.Path, "notes.md")} {
+			if _, err := os.Stat(kept); err != nil {
+				t.Fatalf("%s was not preserved: %v", kept, err)
+			}
 		}
 	})
 

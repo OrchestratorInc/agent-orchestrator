@@ -27,7 +27,7 @@ func TestRemovePreservesEntryReplacedAfterScan(t *testing.T) {
 	writeFile(t, filepath.Join(root, ".gitignore"), hookutil.GitignoreSentinel+"\n/.gitignore\n/hooks.json\n")
 	writeFile(t, filepath.Join(root, "hooks.json"), "{}\n")
 
-	contents, err := scanScratchContents(root)
+	contents, err := scanScratchContents(root, false)
 	if err != nil {
 		t.Fatalf("scan: %v", err)
 	}
@@ -56,7 +56,7 @@ func TestRemovePreservesFileWrittenIntoListedDirectoryAfterScan(t *testing.T) {
 	writeFile(t, filepath.Join(root, ".gitignore"), hookutil.GitignoreSentinel+"\n/.gitignore\n/__pycache__/\n")
 	writeFile(t, filepath.Join(root, "__pycache__", "ao_activity.pyc"), "bytecode\n")
 
-	contents, err := scanScratchContents(root)
+	contents, err := scanScratchContents(root, false)
 	if err != nil {
 		t.Fatalf("scan: %v", err)
 	}

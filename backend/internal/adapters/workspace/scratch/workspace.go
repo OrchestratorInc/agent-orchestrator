@@ -100,7 +100,7 @@ func (w *Workspace) destroy(_ context.Context, info ports.WorkspaceInfo) (ports.
 	if _, statErr := os.Lstat(path); errors.Is(statErr, os.ErrNotExist) {
 		reclaim = ports.WorkspaceReclaimAlreadyAbsent
 	}
-	contents, err := scanScratchContents(path)
+	contents, err := scanScratchContents(path, info.ReleaseAgentState)
 	if err != nil {
 		return reclaim, err
 	}
@@ -137,10 +137,11 @@ type managedFile struct {
 // so the names such a .gitignore lists, and AO's Copilot profiles, are read
 // directly, with the parser the session Files surfaces use. A listed directory
 // is AO's whole, except one holding an agent's restorable conversation
-// (hookutil.IsRestorableStateDir), which keeps the folder once it has files.
+// (hookutil.IsRestorableStateDir), which keeps the folder once it has files
+// unless releaseAgentState says the session is being deleted.
 // Everything else, a symlink or a folder the user ran git init in included,
 // is user work.
-func scanScratchContents(root string) (scratchContents, error) {
+func scanScratchContents(root string, releaseAgentState bool) (scratchContents, error) {
 	var contents scratchContents
 	if _, err := os.Lstat(root); errors.Is(err, os.ErrNotExist) {
 		return contents, nil
@@ -171,7 +172,7 @@ func scanScratchContents(root string) (scratchContents, error) {
 					if err != nil {
 						return err
 					}
-					state = hookutil.IsRestorableStateDir(rel)
+					state = !releaseAgentState && hookutil.IsRestorableStateDir(rel)
 				}
 			}
 		}
