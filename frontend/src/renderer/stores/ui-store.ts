@@ -2,10 +2,12 @@ import { uiUsage } from "../lib/ui-usage-telemetry";
 import { create } from "zustand";
 import { aoBridge } from "../lib/bridge";
 import { developerModeStorageKey, readStoredWindowTranslucency, windowTranslucencyStorageKey } from "../lib/window-translucency";
+import { newDesktopUiStorageKey } from "../lib/new-desktop-ui";
 import { sessionUiKey } from "../lib/hosts";
 import type { ProjectSettingsSection as ProjectFormSection } from "../components/ProjectSettingsForm";
 import type { TerminalTarget } from "../types/terminal";
 import type { TerminalClickMode } from "../lib/terminal-mouse";
+import type { WorkspaceSession } from "../types/workspace";
 import type { FilesSelection } from "../hooks/useSessionWorkspaceFiles";
 import type { CloudCpWorkspaceReviewScope } from "../lib/cloud-cp";
 import type { BackgroundTask } from "../hooks/useBackgroundTasks";
@@ -82,7 +84,7 @@ export type SettingsModal =
 
 /** Worker detail view toggles — Changes (Git rail) is the default. */
 export type WorkbenchTab = "changes" | "files" | "terminal";
-export type InspectorView = "summary" | "reviews" | "browser" | "sideChat" | "subagents" | "files" | "artifacts" | "task";
+export type InspectorView = "summary" | "reviews" | "browser" | "device" | "sideChat" | "subagents" | "files" | "artifacts" | "task";
 
 /**
  * A background task listed in the side panel's Background tasks tab. `task` is
@@ -289,10 +291,13 @@ export type UiState = {
 	developerMode: boolean;
 	/** Experimental: connect to AO daemons on other machines. Default off. */
 	remoteHosts: boolean;
+	autoUpdateRemoteHosts: boolean;
 	/** Memory and CPU monitoring (card chips, memory light, Diagnostics page). Only takes effect in Developer mode. Default off. */
 	diagnostics: boolean;
 	/** Drag center tabs side by side into split panes. Only takes effect in Developer mode. Default off. */
 	splitPanes: boolean;
+	/** Interface v2 (shell, surfaces, motion). Only takes effect in Developer mode. Default off. */
+	newDesktopUi: boolean;
 	/** The PR view: a PR's own tab, its comments, stacks and actions. Only takes effect in Developer mode. Default off. */
 	prView: boolean;
 	/** Developer Mode, macOS only: blur the desktop behind a translucent window. */
@@ -382,8 +387,10 @@ export type UiState = {
 	setThemeStyle: (style: ThemeStyle) => void;
 	setDeveloperMode: (enabled: boolean) => void;
 	setRemoteHosts: (enabled: boolean) => void;
+	setAutoUpdateRemoteHosts: (enabled: boolean) => void;
 	setDiagnostics: (enabled: boolean) => void;
 	setSplitPanes: (enabled: boolean) => void;
+	setNewDesktopUi: (enabled: boolean) => void;
 	setPRView: (enabled: boolean) => void;
 	setWindowTranslucency: (enabled: boolean) => void;
 	setTerminalCopyOnSelect: (enabled: boolean) => void;
@@ -395,6 +402,10 @@ export type UiState = {
 	setProjectAvatars: (enabled: boolean) => void;
 	/** True while the restart-to-update confirmation is open. */
 	updateInstallPromptOpen: boolean;
+	/** The session the Move dialog is open for; null when it is closed. */
+	moveSessionTarget: WorkspaceSession | null;
+	openMoveSession: (session: WorkspaceSession) => void;
+	closeMoveSession: () => void;
 	openUpdateInstallPrompt: () => void;
 	closeUpdateInstallPrompt: () => void;
 	openGlobalSettings: (section?: GlobalSettingsSection, options?: { focusAgentId?: string; hostId?: string; harnessView?: "local" | "cloud"; startLogin?: boolean; loginAccountId?: string; startPairing?: boolean; showDiagnostics?: HarnessDiagnosticsRequest; preserveProject?: boolean; focusSetting?: string }) => void;
@@ -486,6 +497,7 @@ export type OrchestratorReplacementFailure = {
 
 const sidebarStorageKey = "ao.sidebar.open";
 const remoteHostsStorageKey = "ao.remoteHosts";
+const autoUpdateRemoteHostsStorageKey = "ao.autoUpdateRemoteHosts";
 const diagnosticsStorageKey = "ao.diagnostics";
 const splitPanesStorageKey = "ao.splitPanes";
 const prViewStorageKey = "ao.prView";
@@ -631,8 +643,10 @@ export const useUiStore = create<UiState>((set, get) => ({
 	themeStyle: initialThemeStyle,
 	developerMode: initialDeveloperModeValue,
 	remoteHosts: initialRemoteHosts(),
+	autoUpdateRemoteHosts: getLocalStorage()?.getItem(autoUpdateRemoteHostsStorageKey) === "true",
 	diagnostics: initialDiagnostics(),
 	splitPanes: getLocalStorage()?.getItem(splitPanesStorageKey) === "true",
+	newDesktopUi: getLocalStorage()?.getItem(newDesktopUiStorageKey) === "true",
 	prView: getLocalStorage()?.getItem(prViewStorageKey) === "true",
 	windowTranslucency: readStoredWindowTranslucency(),
 	terminalCopyOnSelect: initialTerminalCopyOnSelect(),
@@ -758,6 +772,10 @@ export const useUiStore = create<UiState>((set, get) => ({
 		getLocalStorage()?.setItem(remoteHostsStorageKey, String(remoteHosts));
 		set({ remoteHosts });
 	},
+	setAutoUpdateRemoteHosts: (autoUpdateRemoteHosts) => {
+		getLocalStorage()?.setItem(autoUpdateRemoteHostsStorageKey, String(autoUpdateRemoteHosts));
+		set({ autoUpdateRemoteHosts });
+	},
 	setDiagnostics: (diagnostics) => {
 		getLocalStorage()?.setItem(diagnosticsStorageKey, String(diagnostics));
 		set({ diagnostics });
@@ -765,6 +783,10 @@ export const useUiStore = create<UiState>((set, get) => ({
 	setSplitPanes: (splitPanes) => {
 		getLocalStorage()?.setItem(splitPanesStorageKey, String(splitPanes));
 		set({ splitPanes });
+	},
+	setNewDesktopUi: (newDesktopUi) => {
+		getLocalStorage()?.setItem(newDesktopUiStorageKey, String(newDesktopUi));
+		set({ newDesktopUi });
 	},
 	setPRView: (prView) => {
 		getLocalStorage()?.setItem(prViewStorageKey, String(prView));
@@ -803,6 +825,9 @@ export const useUiStore = create<UiState>((set, get) => ({
 		set({ chatSendKeyMode });
 	},
 	updateInstallPromptOpen: false,
+	moveSessionTarget: null,
+	openMoveSession: (session) => set({ moveSessionTarget: session }),
+	closeMoveSession: () => set({ moveSessionTarget: null }),
 	openUpdateInstallPrompt: () => set({ updateInstallPromptOpen: true }),
 	closeUpdateInstallPrompt: () => set({ updateInstallPromptOpen: false }),
 	openGlobalSettings: (section, options) => set((state) => ({

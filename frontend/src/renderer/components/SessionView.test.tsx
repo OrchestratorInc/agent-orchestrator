@@ -29,6 +29,7 @@ import { noteCloudWorkerStarting, resetCloudWorkerStartingForTests } from "../li
 import { CloudCpError } from "../lib/cloud-cp/errors";
 import { useFileAttachments, type FileAttachment } from "../hooks/useFileAttachments";
 import { forgetSharedSessions, rememberSharedSessions } from "../lib/shared-session-memory";
+import { useMainViewVisible } from "../lib/main-view-visibility";
 
 const navigateMock = vi.hoisted(() => vi.fn());
 const annotationOpen = vi.hoisted(() => ({ current: undefined as import("../../shared/chat-file-reference").OpenFileAnnotation | undefined }));
@@ -668,13 +669,14 @@ vi.mock("./SessionFileExplorer", () => ({
 	},
 }));
 vi.mock("./SessionFileWorkspace", () => ({
-	SessionFileWorkspace: ({ annotation, initialEditing, initialLine, initialMode, initialRequestKey, onInitialLineConsumed, path, previousPath, scope, split }: {
+	SessionFileWorkspace: ({ active, annotation, initialEditing, initialLine, initialMode, initialRequestKey, onInitialLineConsumed, path, previousPath, scope, split }: {
 		annotation: {
 			begin: (target: { path: string; scope: string; side: string; surface: string }) => void;
 			draftFor: (target: { path: string }) => string;
 			setDraft: (target: { path: string }, draft: string) => void;
 			targets: Array<{ path: string }>;
 		};
+		active: boolean;
 		initialEditing?: boolean;
 		initialLine?: number;
 		initialMode?: string;
@@ -686,7 +688,7 @@ vi.mock("./SessionFileWorkspace", () => ({
 		split: boolean;
 	}) => {
 		return (
-			<div data-previous-path={previousPath} data-editing={String(Boolean(initialEditing))} data-line={initialLine} data-mode={initialMode} data-request-key={initialRequestKey} data-split={String(split)} data-testid="session-file-workspace">
+			<div data-active={String(active)} data-main-view-visible={String(useMainViewVisible())} data-previous-path={previousPath} data-editing={String(Boolean(initialEditing))} data-line={initialLine} data-mode={initialMode} data-request-key={initialRequestKey} data-split={String(split)} data-testid="session-file-workspace">
 				{path}
 				{initialLine != null ? <button onClick={() => onInitialLineConsumed?.(path, initialRequestKey ?? 0)} type="button">consume initial line</button> : null}
 				<button onClick={() => annotation.begin({ path, scope: scope ?? "combined", side: "file", surface: "focused" })} type="button">header feedback</button>
@@ -759,6 +761,15 @@ function ArtifactsViewMock({
 		{request?.feedback ? <span>{`feedback request ${request.key}`}</span> : null}
 	</div>;
 }
+const deviceRevealWatcherProps = vi.hoisted(() => ({
+	current: undefined as undefined | { enabled: boolean; onReveal: () => void; sessionId: string; terminated: boolean },
+}));
+vi.mock("./DeviceRevealWatcher", () => ({
+	DeviceRevealWatcher: (props: { enabled: boolean; onReveal: () => void; sessionId: string; terminated: boolean }) => {
+		deviceRevealWatcherProps.current = props;
+		return null;
+	},
+}));
 vi.mock("./SessionInspector", () => ({
 	SessionInspector: ({
 		artifactRequest,
@@ -1055,6 +1066,7 @@ describe("SessionView", () => {
 		workspaceQueryState.isStale = undefined;
 		useUiStore.setState({
 			activeShellTerminalHandleId: null,
+			developerMode: false,
 			prView: false,
 			workspaceFileOpenRequest: null,
 			// Opening a session leaves the inspector closed (covered by the
@@ -5496,6 +5508,46 @@ describe("SessionView", () => {
 		expect(chatSurfaceRenders).toHaveLength(rendersBeforeToggle);
 	});
 
+	it("keeps the device watcher off without Developer mode", () => {
+		useUiStore.setState({ developerMode: false });
+		render(<SessionView sessionId="sess-1" />);
+		expect(deviceRevealWatcherProps.current).toMatchObject({ enabled: false });
+	});
+
+	it("opens the Device tab when the device watcher reveals a device", () => {
+		useUiStore.setState({ developerMode: true });
+		act(() => useUiStore.getState().setInspectorOpen("sess-1", false));
+		render(<SessionView sessionId="sess-1" />);
+		expect(deviceRevealWatcherProps.current).toMatchObject({ enabled: true, sessionId: "sess-1", terminated: false });
+		expect(inspectorOpen("sess-1")).toBe(false);
+
+		act(() => deviceRevealWatcherProps.current!.onReveal());
+
+		expect(inspectorOpen("sess-1")).toBe(true);
+		expect(useUiStore.getState().inspectorSessions["sess-1"]?.view).toBe("device");
+	});
+
+	it("dismisses maximized Files when an agent's device reveals the Device tab", () => {
+		useUiStore.setState({ developerMode: true });
+		render(<SessionView sessionId="sess-1" />);
+		fireEvent.click(screen.getByRole("button", { name: "open files" }));
+		fireEvent.click(within(screen.getByTestId("panel-inspector")).getByRole("button", { name: "files rail" }));
+		expect(document.querySelector(".files-popout-overlay")).toBeInTheDocument();
+
+		act(() => deviceRevealWatcherProps.current!.onReveal());
+
+		expect(document.querySelector(".files-popout-overlay")).not.toBeInTheDocument();
+		expect(useUiStore.getState().inspectorSessions["sess-1"]?.view).toBe("device");
+	});
+
+	it("keeps the device watcher off for cloud sessions", () => {
+		const worker = workspaces.flatMap((workspace) => workspace.sessions).find((candidate) => candidate.id === "sess-1")!;
+		(worker as { cloud?: unknown }).cloud = { orgId: "cloud-org" };
+		useUiStore.setState({ developerMode: true });
+		render(<SessionView sessionId="sess-1" />);
+		expect(deviceRevealWatcherProps.current).toMatchObject({ enabled: false });
+	});
+
 	it("starts collapsing the resize handle with the inspector panel", () => {
 		render(<SessionView sessionId="sess-1" />);
 
@@ -6370,6 +6422,26 @@ describe("SessionView", () => {
 		} finally {
 			rect.mockRestore();
 		}
+	});
+
+	it("hides the center file from its video, but keeps the pane active, while the maximized Browser covers it", async () => {
+		act(() => useUiStore.getState().setInspectorOpen("sess-1", true));
+		render(<SessionView sessionId="sess-1" />);
+		fireEvent.click(screen.getByRole("button", { name: "view review file" }));
+		const workspace = await screen.findByTestId("session-file-workspace");
+		expect(workspace).toHaveAttribute("data-main-view-visible", "true");
+
+		fireEvent.click(screen.getByRole("button", { name: "pop browser" }));
+		expect(document.querySelector(".browser-popout-overlay")).toBeInTheDocument();
+		// A video in the pane pauses...
+		expect(workspace).toHaveAttribute("data-main-view-visible", "false");
+		// ...but the pane stays active, so closing the Browser does not refocus it.
+		expect(workspace).toHaveAttribute("data-active", "true");
+
+		fireEvent.click(screen.getByRole("button", { name: "browser center" }));
+		expect(document.querySelector(".browser-popout-overlay")).not.toBeInTheDocument();
+		expect(workspace).toHaveAttribute("data-main-view-visible", "true");
+		expect(workspace).toHaveAttribute("data-active", "true");
 	});
 
 	it("does not reserve the traffic-light band during native macOS fullscreen", () => {

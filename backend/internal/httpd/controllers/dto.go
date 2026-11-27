@@ -601,6 +601,11 @@ type SessionView struct {
 	// Model is the agent model this session resolved to at spawn time. Empty
 	// means the agent's default model. Pulled from the json:"-" domain Metadata.
 	Model string `json:"model,omitempty"`
+	// RoleAgent is the agent the project named for this session's role when the
+	// session's agent was last chosen, at spawn or by a switch. A project
+	// setting that differs from it changed afterwards. Omitted for sessions
+	// from before AO recorded it. Pulled from the json:"-" domain Metadata.
+	RoleAgent domain.AgentHarness `json:"roleAgent,omitempty"`
 	// LastUserMessageAt is the latest real user-authored task direction time.
 	// Lifecycle and internal automation updates do not advance it.
 	LastUserMessageAt *time.Time `json:"lastUserMessageAt,omitempty"`
@@ -650,7 +655,8 @@ type SessionArtifactView struct {
 // RegisterArtifactsRequest is the body of POST
 // /api/v1/sessions/{sessionId}/artifact-registrations.
 type RegisterArtifactsRequest struct {
-	Paths []string `json:"paths" description:"Files or bundle directories in the session's artifact directory: absolute paths, or paths relative to it."`
+	Paths      []string `json:"paths" description:"Files or bundle directories in the session's artifact directory: absolute paths, or paths relative to it."`
+	WorkingDir string   `json:"workingDir,omitempty" description:"The absolute folder the command ran in. When it is inside the artifact directory, a relative path is read from it if the file is there."`
 }
 
 // RegisterArtifactsResponse reports what a registration did, so the agent can
@@ -725,6 +731,11 @@ type SpawnSessionRequest struct {
 	// AccountID is the subscription account the agent starts on. Empty uses the
 	// provider's default account.
 	AccountID string `json:"accountId,omitempty" maxLength:"128"`
+	// FastMode and AutoCompactWindow are a Chat session's starting Fast mode
+	// and auto-compaction, saved with its new conversation. A terminal session
+	// ignores them.
+	FastMode          bool   `json:"fastMode,omitempty"`
+	AutoCompactWindow string `json:"autoCompactWindow,omitempty" enum:"200k,500k,1m,off"`
 
 	// RequestedOutput asks for a specific deliverable. artifact tells the worker to
 	// write a file in its artifact directory instead of opening a PR. Omitted is
@@ -1551,6 +1562,11 @@ type DelegateTaskRequest struct {
 	// AccountID is the subscription account the worker starts on. Empty uses
 	// the provider's default account.
 	AccountID string `json:"accountId,omitempty" maxLength:"128"`
+	// FastMode and AutoCompactWindow are a Chat session's starting Fast mode
+	// and auto-compaction, saved with its new conversation. A terminal session
+	// ignores them.
+	FastMode          bool   `json:"fastMode,omitempty"`
+	AutoCompactWindow string `json:"autoCompactWindow,omitempty" enum:"200k,500k,1m,off"`
 	// Attachments are files pasted, dropped, or picked into the delegated task
 	// brief. Each carries bytes as standard base64 (no data: URL prefix). The
 	// daemon writes them into the spawned worker worktree and appends path
@@ -2347,6 +2363,12 @@ type AgentAuthenticationObservation = domain.AgentAuthenticationObservation
 type AgentModelsQuery struct {
 	CatalogOnly bool   `query:"catalogOnly,omitempty" description:"Return catalog facts without reading session history for model recency. Cached catalogs are served while discovery refreshes in the background."`
 	ProjectID   string `query:"projectId,omitempty" description:"Optional cloud credential scope. Any other value, including a project identifier, is ignored: model catalogs are cached per device, not per project."`
+}
+
+// AgentSkillsQuery names the project whose own skill folders are scanned
+// alongside the user's.
+type AgentSkillsQuery struct {
+	ProjectID string `query:"projectId,omitempty" description:"Project whose skill folders are read before the user's. Omitted scans only the user's own skills."`
 }
 
 // AgentModelsRefreshQuery controls forced refresh versus cheap background
@@ -3319,10 +3341,38 @@ type IdentityResponse struct {
 	APIVersion int    `json:"apiVersion"`
 }
 
+// RemoteHostUpdateResponse is the body of GET and POST /api/v1/remote-host/update.
+// Supported is false for a host that cannot be updated from another computer.
+// Method says how a supported host updates: its self-hosted service, or the
+// desktop app on it, which closes and relaunches. Version is empty for an
+// unversioned build.
+type RemoteHostUpdateResponse struct {
+	Version   string `json:"version"`
+	Supported bool   `json:"supported"`
+	Method    string `json:"method,omitempty" enum:"service,app"`
+	State     string `json:"state" enum:"idle,updating,failed"`
+	Error     string `json:"error,omitempty"`
+}
+
+// RemoteHostUpdateRequest is the optional body of POST /api/v1/remote-host/update.
+// Version is the release the caller confirmed. A host that runs the desktop
+// app installs only that version; a self-hosted host ignores it.
+type RemoteHostUpdateRequest struct {
+	Version string `json:"version,omitempty"`
+}
+
+// RemoteHostUpdateCheckResponse is the body of POST /api/v1/remote-host/update/check:
+// the version a host that runs the desktop app installs next.
+type RemoteHostUpdateCheckResponse struct {
+	Version string `json:"version"`
+}
+
 // TelemetryIdentityResponse is the body of GET /api/v1/telemetry/identity. A
 // phone paired to this desktop identifies only a signed-in AO Cloud user ID.
 // Without one, DistinctID is the desktop install ID and stays anonymous. The
-// phone honors OptedOut. This response carries no email.
+// phone honors OptedOut. This response carries no email. DaemonVersion is the
+// daemon's release (the same value its own Sentry events use), sent even when
+// opted out so the phone can tell which daemon a failure came from.
 type TelemetryIdentityResponse struct {
 	DistinctID       string `json:"distinctId"`
 	InstallID        string `json:"installId,omitempty"`
@@ -3331,6 +3381,7 @@ type TelemetryIdentityResponse struct {
 	GitHubLogin      string `json:"githubLogin,omitempty"`
 	OptedOut         bool   `json:"optedOut"`
 	LifetimeSessions *int64 `json:"lifetimeSessions,omitempty"`
+	DaemonVersion    string `json:"daemonVersion,omitempty"`
 }
 
 // LinkPreviewQuery selects the external page to unfurl.
@@ -3626,7 +3677,7 @@ type ProviderSwitchRequest struct {
 	Effort            string `json:"effort,omitempty" maxLength:"64"`
 	FastMode          bool   `json:"fastMode,omitempty"`
 	Ultracode         bool   `json:"ultracode,omitempty"`
-	AutoCompactWindow string `json:"autoCompactWindow,omitempty" enum:"200k,1m"`
+	AutoCompactWindow string `json:"autoCompactWindow,omitempty" enum:"200k,500k,1m,off"`
 	// PermissionMode is the mode picked for the new agent; empty keeps the chat's.
 	PermissionMode string `json:"permissionMode,omitempty" enum:"default,accept-edits,auto,bypass-permissions"`
 	Force          bool   `json:"force,omitempty"`
@@ -3894,7 +3945,7 @@ type ConversationTurnSettingsPayload struct {
 	// The rest are described on domain.ConversationSettings.
 	FastMode          bool   `json:"fastMode,omitempty"`
 	PlanMode          bool   `json:"planMode,omitempty"`
-	AutoCompactWindow string `json:"autoCompactWindow,omitempty" enum:"200k,1m"`
+	AutoCompactWindow string `json:"autoCompactWindow,omitempty" enum:"200k,500k,1m,off"`
 }
 
 // InterruptConversationRequest is the optional body of a chat Stop. TurnID is
@@ -3947,6 +3998,7 @@ type ConversationTurnResponse struct {
 	HasRetryAttempt bool `json:"hasRetryAttempt,omitempty"`
 	// HasHumanPrompt includes durable human prompts outside this timeline page.
 	HasHumanPrompt bool                            `json:"hasHumanPrompt,omitempty"`
+	HasEventPrompt bool                            `json:"hasEventPrompt,omitempty"`
 	ErrorMessage   string                          `json:"errorMessage,omitempty"`
 	FailureCode    string                          `json:"failureCode,omitempty" enum:"provider_key_missing,auth_required"`
 	UsageLimit     *ConversationUsageLimitResponse `json:"usageLimit,omitempty"`
@@ -4983,4 +5035,231 @@ type ForkSessionRequest struct {
 type ForkSessionResponse struct {
 	SessionID   domain.SessionID `json:"sessionId"`
 	DisplayName string           `json:"displayName"`
+}
+
+// MovePreviewResponse is what a move to AO Cloud would push now: the branch
+// and the uncommitted paths its WIP commit would carry.
+type MovePreviewResponse struct {
+	Branch        string             `json:"branch"`
+	DefaultBranch string             `json:"defaultBranch,omitempty" description:"The repository's default branch: the project's configured one, else origin's. Absent when neither is known."`
+	Changes       []MoveChange       `json:"changes"`
+	Withheld      []string           `json:"withheld,omitempty" description:"Secret environment files (.env, .env.<name>, not .env.example) with changes the move leaves out. They stay on this computer and never reach origin or Orchestrator Cloud."`
+	Transcript    MoveTranscriptInfo `json:"transcript"`
+}
+
+// MoveTranscriptInfo says whether a move would carry the agent's conversation
+// to AO Cloud, which resumes it, or only the handoff note.
+type MoveTranscriptInfo struct {
+	Bytes              int64  `json:"bytes" description:"The transcript and the subagent transcripts and saved tool output that move with it."`
+	Subagents          int    `json:"subagents,omitempty" description:"Subagent transcripts that move with the conversation."`
+	Unavailable        string `json:"unavailable,omitempty" enum:"unsupported,not_found,too_large" description:"Why the conversation would not move: an agent AO Cloud cannot resume, no saved conversation, or over 64 MiB (or AO Cloud's 32 MiB upload limit once gzipped)."`
+	SidecarUnavailable string `json:"sidecarUnavailable,omitempty" enum:"too_large" description:"The sidecar folder is over AO Cloud's limits, so the transcript moves without it."`
+}
+
+// MoveTranscriptResponse is a stopped session's agent conversation for AO Cloud.
+type MoveTranscriptResponse struct {
+	AgentSessionID string `json:"agentSessionId"`
+	TranscriptGzip []byte `json:"transcriptGzip" description:"The transcript, gzipped and base64-encoded, with this machine's working directory (and Claude Code's project folder) replaced by placeholders AO Cloud's worker fills in."`
+	SidecarGzip    []byte `json:"sidecarGzip,omitempty" description:"The transcript's sidecar folder (subagent transcripts, saved tool output) as a gzipped tar, base64-encoded, paths replaced the same way. Absent when there is none or it is over 64 MiB."`
+	SidecarOmitted string `json:"sidecarOmitted,omitempty" enum:"too_large,unreadable" description:"Why the conversation's sidecar folder stays on this computer, when it does."`
+}
+
+// MoveChange is one uncommitted path a move would push.
+type MoveChange struct {
+	Path   string `json:"path"`
+	Status string `json:"status" enum:"added,modified,deleted"`
+	// Untracked marks an added file git did not track, which the user may not
+	// expect the move to commit and push.
+	Untracked bool `json:"untracked,omitempty"`
+}
+
+// MoveExportRequest asks this machine to push a stopped session for a move to
+// AO Cloud.
+type MoveExportRequest struct {
+	// MoveID identifies one move across every call; the app reuses it on retry.
+	MoveID string `json:"moveId" minLength:"1" maxLength:"64" pattern:"^[A-Za-z0-9._-]+$"`
+	// SourceLabel is this machine's name as the user knows it, for the note
+	// and the WIP commit.
+	SourceLabel string `json:"sourceLabel,omitempty" maxLength:"100"`
+}
+
+// MoveExportResponse is the pushed session: the manifest and handoff note
+// AO Cloud starts it from.
+type MoveExportResponse struct {
+	Manifest    sessionsvc.MoveManifest `json:"manifest"`
+	HandoffNote string                  `json:"handoffNote"`
+	Changes     int                     `json:"changes"`
+	Submodules  []string                `json:"submodules,omitempty"`
+}
+
+// MoveImportRequest starts a session AO Cloud pushed in one of this machine's
+// projects. Its body is the control plane's move/export response plus the
+// project and move id.
+type MoveImportRequest struct {
+	ProjectID   string                  `json:"projectId" minLength:"1"`
+	MoveID      string                  `json:"moveId" minLength:"1" maxLength:"64" pattern:"^[A-Za-z0-9._-]+$"`
+	Manifest    sessionsvc.MoveManifest `json:"manifest"`
+	HandoffNote string                  `json:"handoffNote,omitempty"`
+	// Transcript is the agent's conversation from Orchestrator Cloud's
+	// move/export; the session resumes it instead of the note.
+	Transcript *MoveImportTranscript `json:"transcript,omitempty"`
+}
+
+// MoveImportTranscript is an agent conversation an Orchestrator Cloud sandbox kept.
+type MoveImportTranscript struct {
+	AgentSessionID string `json:"agentSessionId" minLength:"1" maxLength:"80" pattern:"^[A-Za-z0-9_-]+$"`
+	ProjectDir     string `json:"projectDir" minLength:"1" description:"The folder the transcript was in on Orchestrator Cloud. For Claude Code its paths, and the sandbox's working directory, become this machine's."`
+	TranscriptGzip []byte `json:"transcriptGzip" description:"The transcript, gzipped and base64-encoded."`
+	SidecarGzip    []byte `json:"sidecarGzip,omitempty" description:"The transcript's sidecar folder as a gzipped tar, base64-encoded."`
+}
+
+// MoveTargetsQuery names the repository and branch a session from
+// Orchestrator Cloud would move into.
+type MoveTargetsQuery struct {
+	RepoKey string `query:"repoKey" required:"true" description:"The repository's key, lower-case github.com/<owner>/<name>."`
+	Branch  string `query:"branch" required:"true" description:"The branch the session continues on."`
+}
+
+// MoveTargetsResponse lists the projects here a session from Orchestrator
+// Cloud could move into.
+type MoveTargetsResponse struct {
+	Targets []MoveTargetView `json:"targets"`
+}
+
+// MoveTargetView is one project; refusal says why the session cannot move into it.
+type MoveTargetView struct {
+	ProjectID string       `json:"projectId"`
+	Name      string       `json:"name"`
+	Path      string       `json:"path"`
+	Refusal   *MoveRefusal `json:"refusal,omitempty"`
+}
+
+// MoveRefusal is why a move cannot happen, as the dialog shows it.
+type MoveRefusal struct {
+	Code    string `json:"code"`
+	Message string `json:"message"`
+}
+
+// MoveImportResponse is the new session. Warnings list what did not carry
+// over, such as a pull request this machine could not claim.
+type MoveImportResponse struct {
+	Session                SessionView `json:"session"`
+	Warnings               []string    `json:"warnings,omitempty"`
+	ConversationIncomplete bool        `json:"conversationIncomplete,omitempty" description:"The conversation, or its subagent transcripts and saved tool output, came with the move but was not placed here. The source holds the only full copy, so keep it."`
+}
+
+// MoveCompleteRequest records the AO Cloud session the session moved to.
+type MoveCompleteRequest struct {
+	MoveID    string `json:"moveId" minLength:"1" maxLength:"64"`
+	OrgID     string `json:"orgId" minLength:"1"`
+	SessionID string `json:"sessionId" minLength:"1"`
+}
+
+// MoveAbandonRequest ends a move to AO Cloud that this machine will not
+// finish, without starting the agent.
+type MoveAbandonRequest struct {
+	MoveID string `json:"moveId" minLength:"1" maxLength:"64"`
+}
+
+// MoveAbandonResponse says whether the move was still in progress here.
+type MoveAbandonResponse struct {
+	Ended bool `json:"ended" description:"True when the move was in progress and is now over; false when it had already ended or another move is in progress."`
+}
+
+// MoveCompleteResponse is the archived source session with its movedTo set.
+type MoveCompleteResponse struct {
+	Session SessionView `json:"session"`
+}
+
+// DevicePlatformStatus says whether this machine can run a platform's
+// simulators or emulators, and why not.
+type DevicePlatformStatus struct {
+	Platform  string `json:"platform" enum:"ios,android"`
+	Available bool   `json:"available"`
+	Reason    string `json:"reason,omitempty"`
+}
+
+// DeviceSummary is one iOS Simulator or Android Emulator.
+type DeviceSummary struct {
+	ID       string `json:"id" description:"Simulator UDID or emulator serial (AVD name while stopped)."`
+	Name     string `json:"name"`
+	Platform string `json:"platform" enum:"ios,android"`
+	Version  string `json:"version,omitempty"`
+	Booted   bool   `json:"booted"`
+}
+
+// DeviceAgentControl is the agent-device invocation pinned to a session's
+// device: run Command with a subcommand, then Args.
+type DeviceAgentControl struct {
+	Command string   `json:"command"`
+	Args    []string `json:"args"`
+}
+
+// DeviceLease is the device a session holds.
+type DeviceLease struct {
+	SessionID   domain.SessionID   `json:"sessionId"`
+	Provider    string             `json:"provider" description:"Provider serving the device, e.g. local."`
+	Device      DeviceSummary      `json:"device"`
+	Reason      string             `json:"reason" description:"Why the resolver picked this provider."`
+	AgentDevice DeviceAgentControl `json:"agentDevice"`
+	OpenedAt    time.Time          `json:"openedAt"`
+}
+
+// DeviceStatusResponse is the body of GET /api/v1/devices.
+type DeviceStatusResponse struct {
+	Available bool                   `json:"available" description:"Whether devices are available: the desktop app's Developer mode is on. While false, only status, a session's lease and releasing a device are served."`
+	Enabled   bool                   `json:"enabled" description:"Whether the user turned device support on."`
+	State     string                 `json:"state" enum:"off,installing,ready,error"`
+	Error     string                 `json:"error,omitempty"`
+	Platforms []DevicePlatformStatus `json:"platforms"`
+	Devices   []DeviceSummary        `json:"devices"`
+	Leases    []DeviceLease          `json:"leases"`
+}
+
+// DeviceAvailabilityRequest turns devices on or off; the desktop app sends its
+// Developer mode.
+type DeviceAvailabilityRequest struct {
+	Enabled *bool `json:"enabled"`
+}
+
+// DeviceAvailabilityResponse is whether devices are now available.
+type DeviceAvailabilityResponse struct {
+	Enabled bool `json:"enabled"`
+}
+
+// SessionDeviceResponse carries a session's lease, null when it has none.
+type SessionDeviceResponse struct {
+	Lease *DeviceLease `json:"lease"`
+}
+
+// OpenSessionDeviceRequest narrows the device a session wants. Both fields
+// are optional: the resolver picks from the project and this machine.
+type OpenSessionDeviceRequest struct {
+	Platform string `json:"platform,omitempty" enum:"ios,android"`
+	DeviceID string `json:"deviceId,omitempty" description:"Simulator UDID, emulator serial, or device name."`
+}
+
+// InstallSessionDeviceRequest installs a built app on the session's device.
+type InstallSessionDeviceRequest struct {
+	Path string `json:"path" minLength:"1" description:"Absolute path to a .app bundle (iOS) or .apk (Android)."`
+}
+
+// LaunchSessionDeviceRequest starts an installed app.
+type LaunchSessionDeviceRequest struct {
+	AppID string `json:"appId" minLength:"1" description:"Bundle identifier (iOS) or package name (Android)."`
+}
+
+// SetSessionDeviceQualityRequest sets how much the session's device stream costs the link.
+type SetSessionDeviceQualityRequest struct {
+	Quality string `json:"quality" description:"high, balanced or low."`
+}
+
+// PressSessionDeviceButtonRequest presses a hardware button on the session's device.
+type PressSessionDeviceButtonRequest struct {
+	Button string `json:"button" description:"home, back or recents."`
+}
+
+// CloseSessionDeviceRequest releases the session's device.
+type CloseSessionDeviceRequest struct {
+	Shutdown bool `json:"shutdown,omitempty" description:"Also power the simulator or emulator off."`
 }

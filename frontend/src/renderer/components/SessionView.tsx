@@ -1,4 +1,6 @@
 import { apiErrorException } from "../lib/api-error-exception";
+import { DeviceRevealWatcher } from "./DeviceRevealWatcher";
+import { useDevicesEnabled } from "../lib/devices-enabled";
 import { getApiBaseUrl } from "../lib/api-client";
 import { baseUrlForHost } from "../lib/host-clients";
 import { artifactAtPath } from "../../../../packages/shared/artifacts/deliverables";
@@ -27,6 +29,7 @@ import { agentLabel } from "../lib/agent-options";
 import { useCloudAgentSwitch } from "../hooks/useCloudAgentSwitch";
 import { SessionTabAgentMenuContext, SessionTabMenuButton, TabSplitMenuContext, type SessionTabAgentMenu, type TabMenuSpec, type TabSplitActions } from "./TabContextMenu";
 import { useSplitPanesEnabled } from "../lib/split-panes";
+import { MainViewVisibleContext, useMainViewVisible } from "../lib/main-view-visibility";
 import { useSessionSplitGroups, useSplitPanesStore } from "../stores/split-panes-store";
 import { PANE_HEADER_PX, SplitDivider, SplitGroupTab, SplitJunction, SplitPaneHeader, SplitPaneTerminal, findJunctions, type SplitGroupMember } from "./SplitView";
 import { WorkspaceEntryIcon } from "./WorkspaceEntryIcon";
@@ -783,6 +786,7 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 	const browserPopOutPhase = browserPopOutState.sessionId === sessionId ? browserPopOutState.phase : "docked";
 	const browserPopOutMounted = browserPopOutPhase !== "docked";
 	const browserPoppedOut = browserPopOutPhase === "open";
+	const mainViewVisible = useMainViewVisible();
 	const [browserPopoutTopbarHost, setBrowserPopoutTopbarHost] = useState<HTMLDivElement | null>(null);
 	useLayoutEffect(() => {
 		if (browserPopOutPhase !== "mounting" || !browserPopoutTopbarHost) return;
@@ -1079,6 +1083,8 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 	// Split panes are a Developer mode preview; off, no split is shown and
 	// turning it off mid-split puts every tab back in the strip.
 	const splitPanes = useSplitPanesEnabled();
+	// Devices are a Developer mode preview: off, no Device tab opens on its own.
+	const devicesEnabled = useDevicesEnabled();
 	// Tabs can be shown together: they merge into one group tab in the strip and
 	// the screen splits into one pane per member, where any pane can split
 	// again. Every view stays mounted where it is and is only placed into its
@@ -1775,6 +1781,18 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 		if (hostId && remoteBase && browserSlotVisible) void remoteSessionQuery.refetch();
 	}, [hostId, remoteBase, browserSlotVisible, remoteSessionQuery.refetch]);
 	const terminated = session ? !sessionIsActive(session) : false;
+	// An agent's `ao device open` reveals the Device tab, as `ao preview` reveals
+	// Browser: a lease opened while this session is on screen opens the tab once;
+	// entering a session that already holds one does not.
+	const deviceAvailable = devicesEnabled && Boolean(session) && !session?.cloud && !hostId && !isOrchestrator;
+	// A maximized Files or Browser would cover the revealed tab, so both go back
+	// to the inspector first, as opening an artifact does.
+	const revealDevice = useCallback(() => {
+		setBrowserPopOutState({ sessionId, phase: "docked" });
+		setFilesPoppedOut(false);
+		transitionInspectorView("device");
+		setInspectorOpenForSession(uiSessionId, true);
+	}, [sessionId, setInspectorOpenForSession, transitionInspectorView, uiSessionId]);
 	// A completed session's HTML artifact is static output the daemon keeps
 	// serving, so an artifact preview the user opened stays visible; every other
 	// preview of a terminated session is a stale DB fact and is still torn down.
@@ -2926,8 +2944,9 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 		);
 	}
 
-	return (
+	const view = (
 		<div className="relative flex h-full min-h-0 flex-col bg-background text-foreground" data-testid="session-detail">
+			<DeviceRevealWatcher enabled={deviceAvailable} onReveal={revealDevice} sessionId={sessionId} terminated={terminated} uiSessionId={uiSessionId} />
 			{!session?.cloud && session?.mode !== "chat" && sessionAgentExited(session) && autoResume.variables === sessionId && autoResume.isError ? (
 				<p className="px-4 py-2 text-xs text-error" role="alert">
 					{apiErrorMessage(autoResume.error)}
@@ -3461,6 +3480,11 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 				: null}
 		</div>
 	);
+	// The maximized Browser covers the whole app without hiding it, so videos
+	// under it learn to pause from the main-view flag. File panes keep their
+	// own `active`, which also moves focus, so closing the Browser leaves focus
+	// where it was.
+	return <MainViewVisibleContext.Provider value={mainViewVisible && !browserPopOutMounted}>{view}</MainViewVisibleContext.Provider>;
 }
 
 /** The key a terminal target's tab has in the strips and the split layout. */

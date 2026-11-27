@@ -28,6 +28,7 @@ import { cloudChatStartingInPlace, cloudStartupProblem, isWorkspaceStartupError,
 import { PLAN_REFUSAL_CODES } from "../../lib/cloud-cp/client";
 import { forgetCloudOpening, useCloudOpening } from "../../lib/cloud-opening";
 import { CloudCpError } from "../../lib/cloud-cp/errors";
+import { withMoveStateText } from "../../lib/cloud-move-state";
 import { reportPlanRefusal } from "../../lib/cloud-telemetry";
 import { useCloudBilling } from "../../hooks/useCloudBilling";
 import { cloudSessionScriptsEnded, groupScriptRuns, parseScriptStepPayload, SCRIPT_STEP_EVENT, type ScriptRun } from "../../lib/cloud-script-runs";
@@ -43,7 +44,7 @@ import { agentLabel } from "../../lib/agent-options";
 import { formatEffortLabel } from "../settings/EffortPicker";
 import { cloudModelLabel } from "../../lib/agent-model-choices";
 import { ComposerErrorNotice, switchEffort, type AgentSwitchProps, type PendingAgentSwitch } from "./AgentSwitchPicker";
-import { AGENT_SWITCH_FAILED } from "./ChatComposer";
+import { AGENT_SWITCH_FAILED } from "../../lib/composer-send-failure";
 import { useCloudAgentSwitch, type AgentSwitchTransition } from "../../hooks/useCloudAgentSwitch";
 import { apiErrorMessage } from "../../lib/api-client";
 import { apiErrorException } from "../../lib/api-error-exception";
@@ -51,7 +52,7 @@ import { ChatWorkspace } from "./ChatWorkspace";
 import { AdaptiveStreamPacingContext } from "./ChatTimelineItems";
 import { MAX_CLOUD_CP_BINARY_BYTES } from "../../../shared/cloud-binary";
 import { CloudAttachmentSourceProvider } from "./CloudMessageAttachments";
-import { cloudAttachmentReference, cloudMessageAttachments, uploadCloudAttachment, type CloudAttachment } from "../../lib/cloud-attachments";
+import { cloudAttachmentReference, cloudMessageAttachments, splitCloudAttachmentReferences, uploadCloudAttachment, type CloudAttachment } from "../../lib/cloud-attachments";
 import type { ApprovalModeLimits } from "./TurnSettingsBar";
 import { SharedComposerNotice } from "./SharedComposerNotice";
 import { Button } from "../ui/button";
@@ -1997,16 +1998,22 @@ export function CloudSessionChatSurface({
 				...(composerEpoch !== undefined ? { composerEpoch } : {}),
 			};
 			const message = cloudMessageBody(text, display);
-			if (!message.content) return client.sendSessionMessage(orgId, sessionId, request, { idempotencyKey: clientMessageId });
+			// A session whose work is moving takes no messages; the user is told
+			// why in their language (SESSION_MOVING).
+			const post = (body: typeof request) =>
+				client.sendSessionMessage(orgId, sessionId, body, { idempotencyKey: clientMessageId }).catch((error: unknown) => {
+					throw withMoveStateText(error);
+				});
+			if (!message.content) return post(request);
 			try {
-				return await client.sendSessionMessage(orgId, sessionId, { ...request, ...message }, { idempotencyKey: clientMessageId });
+				return await post({ ...request, ...message });
 			} catch (error) {
 				// A control plane from before message displays refuses the fields,
 				// and one that finds the display text missing from the text refuses
 				// it (both 400). The text already carries the quotes and captures,
 				// so it goes as text alone, with the same key.
 				if (!(error instanceof CloudCpError) || error.status !== 400) throw error;
-				return client.sendSessionMessage(orgId, sessionId, request, { idempotencyKey: clientMessageId });
+				return post(request);
 			}
 		},
 		onSuccess: (data, { sessionId }) => {
@@ -2593,7 +2600,7 @@ export function CloudSessionChatSurface({
 			onOpenArtifact={onOpenArtifact}
 			onInterrupt={activeTurn ? () => interrupt.mutate() : undefined}
 			onSteer={activeTurn && snapshot.capabilities?.includes("steer") ? (text, attachments, clientMessageId) => {
-				if (attachments?.length) return Promise.resolve({ status: "not-accepted" as const, reason: "Cloud steering currently accepts text only." });
+				if (attachments?.length || splitCloudAttachmentReferences(text).attachmentIds.length) return Promise.resolve({ status: "not-accepted" as const, reason: "Cloud steering currently accepts text only." });
 				return steer.mutateAsync({ text, clientMessageId });
 			} : undefined}
 			steerPending={steer.isPending}

@@ -3977,6 +3977,7 @@ func TestToAPIErrorMapsWorkspaceBranchSentinels(t *testing.T) {
 		{"runtime workspace cwd mismatch", fmt.Errorf("spawn mer-1: runtime: %w: session mer-1 started in \"/deleted/shipit\", want \"/tmp/ws\"", ports.ErrRuntimeWorkspaceCwdMismatch), apierr.KindConflict, "WORKSPACE_CWD_MISMATCH"},
 		{"workspace locked", fmt.Errorf("restore mer-1: %w: \"/tmp/ws\" (branch \"ao/mer-1\") is registered but its directory is missing", ports.ErrWorkspaceLocked), apierr.KindConflict, "WORKSPACE_LOCKED"},
 		{"workspace path occupied", fmt.Errorf("spawn todo-app-orchestrator: %w: \"/tmp/ws\" exists but is not a worktree of \"/tmp/repo\"", ports.ErrWorkspacePathOccupied), apierr.KindConflict, "WORKSPACE_PATH_OCCUPIED"},
+		{"project not a repo", fmt.Errorf("spawn mer-1: workspace: gitworktree: worktree list: %w", ports.ErrWorkspaceNotARepo), apierr.KindInvalid, "PROJECT_NOT_A_REPO"},
 		{"cleanup script failed", fmt.Errorf("kill mer-1: %w: secret output", sessionmanager.ErrCleanupScript), apierr.KindConflict, "WORKSPACE_CLEANUP_FAILED"},
 		{"delete live session", fmt.Errorf("delete mer-1: %w", sessionmanager.ErrSessionNotTerminated), apierr.KindConflict, "SESSION_NOT_TERMINATED"},
 		{"delete unreleased workspace", fmt.Errorf("delete mer-1: %w", sessionmanager.ErrWorkspaceNotReleased), apierr.KindConflict, "WORKSPACE_NOT_RELEASED"},
@@ -3986,6 +3987,7 @@ func TestToAPIErrorMapsWorkspaceBranchSentinels(t *testing.T) {
 		{"missing harness", fmt.Errorf("spawn: %w: configure project worker.agent or pass --harness", sessionmanager.ErrMissingHarness), apierr.KindInvalid, "AGENT_REQUIRED"},
 		{"artifact output unavailable", fmt.Errorf("spawn: %w", sessionmanager.ErrArtifactOutputUnavailable), apierr.KindInvalid, "ARTIFACT_OUTPUT_UNAVAILABLE"},
 		{"harness install active", fmt.Errorf("spawn: %w", sessionmanager.ErrHarnessInstallActive), apierr.KindConflict, "HARNESS_INSTALL_ACTIVE"},
+		{"orchestrator permission ceiling", fmt.Errorf("spawn: %w", sessionmanager.ErrSpawnPermissionExceedsPolicy), apierr.KindInvalid, "SPAWN_PERMISSION_EXCEEDS_POLICY"},
 		{"awaiting decision", fmt.Errorf("send mer-1: %w", sessionmanager.ErrAwaitingDecision), apierr.KindConflict, "SESSION_AWAITING_DECISION"},
 		{"delivery unconfirmed", fmt.Errorf("send mer-1: %w", sessionmanager.ErrDeliveryUnconfirmed), apierr.KindConflict, "SESSION_DELIVERY_UNCONFIRMED"},
 		{"startup pending", fmt.Errorf("send mer-1: %w", sessionmanager.ErrStartupPending), apierr.KindConflict, "SESSION_STARTUP_PENDING"},
@@ -4026,6 +4028,32 @@ func TestToAPIErrorMapsWorkspaceBranchSentinels(t *testing.T) {
 				t.Fatalf("mapped message leaked script output: %q", e.Message)
 			}
 		})
+	}
+}
+
+// TestToSpawnAPIErrorMapsProjectNotARepo covers #8905: a registered project
+// (or workspace root) whose .git was deleted surfaces a typed error naming the
+// folder and how to recover, not git's raw exit 128.
+func TestToSpawnAPIErrorMapsProjectNotARepo(t *testing.T) {
+	raw := fmt.Errorf("spawn ws-1: %w: gitworktree: worktree list: %w", sessionmanager.ErrWorkspaceCreate, &ports.WorkspaceNotARepoError{
+		Path: "/work/ws",
+		Err:  errors.New("git -C /work/ws worktree list --porcelain: exit status 128: fatal: not a git repository (or any of the parent directories): .git"),
+	})
+	var e *apierr.Error
+	if !errors.As(toSpawnAPIError(raw), &e) {
+		t.Fatalf("mapped = %v, want *apierr.Error", toSpawnAPIError(raw))
+	}
+	if e.Kind != apierr.KindInvalid || e.Code != "PROJECT_NOT_A_REPO" {
+		t.Fatalf("mapped = %v %s, want invalid PROJECT_NOT_A_REPO", e.Kind, e.Code)
+	}
+	if strings.Contains(e.Message, "exit status 128") {
+		t.Fatalf("message leaked raw git failure: %q", e.Message)
+	}
+	if !strings.Contains(e.Message, "/work/ws") || !strings.Contains(e.Message, "git init") {
+		t.Fatalf("message = %q, want folder and recovery guidance", e.Message)
+	}
+	if e.Details["path"] != "/work/ws" || e.Details["suggestedFix"] == "" {
+		t.Fatalf("details = %v, want path and suggestedFix", e.Details)
 	}
 }
 
@@ -5658,14 +5686,14 @@ func TestListPRSummariesSuppressesFailingChecksUnlessCIFailing(t *testing.T) {
 	}
 }
 
-func TestListPRSummariesListsCancelledChecksOnlyWhenCIUnknown(t *testing.T) {
+func TestListPRSummariesListsCurrentCancelledChecksWhenCIFailing(t *testing.T) {
 	cases := []struct {
 		name string
 		ci   domain.CIState
 		want []string
 	}{
-		{name: "failing lists only real failures", ci: domain.CIFailing, want: []string{"build"}},
-		{name: "unknown lists cancelled checks", ci: domain.CIUnknown, want: []string{"lint"}},
+		{name: "failing lists failures and cancellations", ci: domain.CIFailing, want: []string{"build", "lint"}},
+		{name: "unknown lists nothing", ci: domain.CIUnknown},
 		{name: "pending lists nothing", ci: domain.CIPending},
 	}
 	for _, tc := range cases {
@@ -5683,7 +5711,7 @@ func TestListPRSummariesListsCancelledChecksOnlyWhenCIUnknown(t *testing.T) {
 			}}}
 			stList.checks[prURL] = []domain.PullRequestCheck{
 				{Name: "build", CommitHash: "new-sha", Status: domain.PRCheckFailed, Conclusion: "failure"},
-				{Name: "lint", CommitHash: "new-sha", Status: domain.PRCheckCancelled, Conclusion: "cancelled"},
+				{Name: "lint", CommitHash: "new-sha", Status: domain.PRCheckCancelled, Conclusion: "cancelled", URL: "https://github.com/acme/repo/actions/runs/2"},
 			}
 
 			got, err := (&Service{store: stList}).ListPRSummaries(context.Background(), "mer-1")
@@ -5692,6 +5720,9 @@ func TestListPRSummariesListsCancelledChecksOnlyWhenCIUnknown(t *testing.T) {
 			}
 			if names := failingCheckNames(got[0].CI.FailingChecks); !sameStrings(names, tc.want) {
 				t.Fatalf("listed checks = %v, want %v", names, tc.want)
+			}
+			if tc.ci == domain.CIFailing && got[0].CI.FailingChecks[1].URL != "https://github.com/acme/repo/actions/runs/2" {
+				t.Fatalf("cancelled check link = %q", got[0].CI.FailingChecks[1].URL)
 			}
 		})
 	}
@@ -6801,5 +6832,23 @@ func TestWorkspaceFileReadsRenewAHeldPreparation(t *testing.T) {
 	}
 	if want := []domain.TaskPreparationToken{"mer-1"}; !slices.Equal(commander.renewed, want) {
 		t.Fatalf("renewed = %v, want only the preparation %v", commander.renewed, want)
+	}
+}
+
+// An imported chat whose agent CLI changed between import and first open shows
+// the adapter's version message, not the generic "check the daemon log".
+func TestResumeAgentShowsImportVersionMessage(t *testing.T) {
+	originalCapture := captureRelaunchError
+	captureRelaunchError = func(context.Context, error, map[string]string, string) {}
+	t.Cleanup(func() { captureRelaunchError = originalCapture })
+	versionErr := &ports.ImportRefusedError{Message: "droid: session import supports only verified version 0.251.0"}
+	cause := sessionmanager.RelaunchError{Step: "prepare_import", Err: fmt.Errorf("prepare imported session: %w", versionErr)}
+	fc := &fakeCommander{restoreErr: fmt.Errorf("resume agent mer-1: %w", &cause)}
+	svc := NewWithDeps(Deps{Manager: fc, Store: newFakeStore(), Telemetry: &fakeTelemetrySink{}})
+
+	_, err := svc.ResumeAgent(context.Background(), "mer-1")
+	var apiErr *apierr.Error
+	if !errors.As(err, &apiErr) || apiErr.Code != "SESSION_IMPORT_RESUME_FAILED" || apiErr.Message != versionErr.Message {
+		t.Fatalf("err = %#v, want SESSION_IMPORT_RESUME_FAILED with the version message", err)
 	}
 }

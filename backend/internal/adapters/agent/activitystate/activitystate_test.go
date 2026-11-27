@@ -19,6 +19,7 @@ func TestStandardDeriveActivityState(t *testing.T) {
 		{"post-tool-use-failure", domain.ActivityActive, true},
 		{"permission-resolved", domain.ActivityActive, true},
 		{"stop", domain.ActivityIdle, true},
+		{"stop-failure", domain.ActivityIdle, true},
 		{"permission-request", domain.ActivityWaitingInput, true},
 		{"unknown", "", false},
 		{"", "", false},
