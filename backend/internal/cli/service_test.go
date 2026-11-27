@@ -68,6 +68,9 @@ func TestRenderServiceFilesEscapeValues(t *testing.T) {
 			t.Fatalf("unit missing %q:\n%s", want, unit)
 		}
 	}
+	if strings.Contains(unit, "StandardOutput=") || strings.Contains(unit, "StandardError=") {
+		t.Fatalf("unit discards output; journalctl must show early failures:\n%s", unit)
+	}
 }
 
 type serviceCall struct {
@@ -167,8 +170,8 @@ func TestServiceSystemdInstallAndRollback(t *testing.T) {
 	}
 	var got []string
 	for _, c := range calls {
-		if c.args[1] == "show" {
-			continue // servicePID lookups
+		if c.name == "loginctl" || c.args[1] == "show" {
+			continue // linger and servicePID lookups
 		}
 		got = append(got, c.name+" "+strings.Join(c.args, " "))
 	}
@@ -472,5 +475,186 @@ func TestServicePIDParsesManagers(t *testing.T) {
 	}
 	if got := c.servicePID(context.Background(), serviceSpec{Manager: serviceManagerSystemd, Name: "x"}); got != 987 {
 		t.Fatalf("systemd pid = %d", got)
+	}
+}
+
+func systemdDeps(t *testing.T, outputs map[string]string, fails map[string]bool) Deps {
+	t.Helper()
+	now := time.Unix(1000, 0)
+	return Deps{
+		Executable:   func() (string, error) { return "/opt/ao/bin/ao", nil },
+		ProcessAlive: func(int) bool { return false },
+		Now:          func() time.Time { return now },
+		Sleep:        func(d time.Duration) { now = now.Add(d) },
+		CommandOutput: func(_ context.Context, name string, args ...string) ([]byte, error) {
+			// Match "manager subcommand" (e.g. "loginctl show-user") or, for
+			// systemctl, "systemctl --user verb".
+			keys := []string{name + " " + args[0]}
+			if len(args) > 1 {
+				keys = append([]string{name + " " + args[0] + " " + args[1]}, keys...)
+			}
+			for _, key := range keys {
+				if fails[key] {
+					return nil, errors.New("exit status 3")
+				}
+				if out, ok := outputs[key]; ok {
+					return []byte(out), nil
+				}
+			}
+			return nil, nil
+		},
+	}
+}
+
+func TestServiceSystemdReportsLinger(t *testing.T) {
+	setConfigEnv(t)
+	setServiceHome(t)
+	t.Setenv("XDG_CONFIG_HOME", "")
+	old := serviceGOOS
+	serviceGOOS = "linux"
+	t.Cleanup(func() { serviceGOOS = old })
+
+	deps := systemdDeps(t, map[string]string{"loginctl show-user": "no\n"}, nil)
+	out, _, err := executeCLI(t, deps, "service", "install", "--no-wait", "--json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var st serviceStatus
+	if err := json.Unmarshal([]byte(out), &st); err != nil {
+		t.Fatal(err)
+	}
+	if st.Linger == nil || *st.Linger || !strings.HasPrefix(st.LingerFix, "loginctl enable-linger ") {
+		t.Fatalf("linger = %v, fix %q; want false with the enable-linger command", st.Linger, st.LingerFix)
+	}
+	text, _, err := executeCLI(t, deps, "service", "status")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(text, "linger: false") || !strings.Contains(text, st.LingerFix) {
+		t.Fatalf("status does not report lingering:\n%s", text)
+	}
+
+	deps = systemdDeps(t, map[string]string{"loginctl show-user": "yes\n"}, nil)
+	out, _, err = executeCLI(t, deps, "service", "status", "--json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	st = serviceStatus{}
+	if err := json.Unmarshal([]byte(out), &st); err != nil {
+		t.Fatal(err)
+	}
+	if st.Linger == nil || !*st.Linger || st.LingerFix != "" {
+		t.Fatalf("linger = %v, fix %q; want true and no fix", st.Linger, st.LingerFix)
+	}
+
+	// No logind: lingering is left unreported rather than guessed.
+	deps = systemdDeps(t, nil, map[string]bool{"loginctl show-user": true})
+	out, _, err = executeCLI(t, deps, "service", "status", "--json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(out, `"linger"`) {
+		t.Fatalf("linger reported without loginctl:\n%s", out)
+	}
+}
+
+// loaded follows is-active, so an enabled unit that failed or was stopped is
+// not reported as running.
+func TestServiceSystemdStatusSeparatesActiveFromEnabled(t *testing.T) {
+	setConfigEnv(t)
+	setServiceHome(t)
+	t.Setenv("XDG_CONFIG_HOME", "")
+	old := serviceGOOS
+	serviceGOOS = "linux"
+	t.Cleanup(func() { serviceGOOS = old })
+	if _, _, err := executeCLI(t, systemdDeps(t, nil, nil), "service", "install", "--no-wait"); err != nil {
+		t.Fatal(err)
+	}
+	deps := systemdDeps(t, nil, map[string]bool{"systemctl --user is-active": true})
+	out, _, err := executeCLI(t, deps, "service", "status", "--json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var st serviceStatus
+	if err := json.Unmarshal([]byte(out), &st); err != nil {
+		t.Fatal(err)
+	}
+	if st.Loaded || st.Enabled == nil || !*st.Enabled {
+		t.Fatalf("loaded=%t enabled=%v; want loaded false (not active), enabled true", st.Loaded, st.Enabled)
+	}
+}
+
+// writeSelfHostedService installs what scripts/setup-self-hosted.sh would: its
+// LaunchAgent and a runner that exports dataDir when it is set.
+func writeSelfHostedService(t *testing.T, agents, dataDir string) string {
+	t.Helper()
+	runner := filepath.Join(t.TempDir(), "run-daemon.sh")
+	body := "#!/usr/bin/env bash\nexport PATH=/usr/bin\n"
+	if dataDir != "" {
+		body += "export AO_DATA_DIR=" + dataDir + "\n"
+	}
+	if err := os.WriteFile(runner, []byte(body+"exec /x/ao daemon\n"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(agents, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	plist := filepath.Join(agents, "dev.aoagents.self-hosted.plist")
+	if err := os.WriteFile(plist, []byte("<plist><dict><key>ProgramArguments</key><array><string>"+runner+"</string></array></dict></plist>"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return plist
+}
+
+func TestServiceInstallRefusesSelfHostedServiceOnSameDataDir(t *testing.T) {
+	cfg := setConfigEnv(t)
+	setServiceHome(t)
+	old := serviceGOOS
+	serviceGOOS = "darwin"
+	t.Cleanup(func() { serviceGOOS = old })
+	var calls []serviceCall
+	deps := serviceTestDeps(&calls, nil)
+	spec, err := (&commandContext{deps: deps.withDefaults()}).currentServiceSpec(0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	plist := writeSelfHostedService(t, filepath.Dir(spec.File), cfg.dataDir)
+	_, _, err = executeCLI(t, deps, "service", "install", "--no-wait")
+	if err == nil || !strings.Contains(err.Error(), "self-hosted host service") || !strings.Contains(err.Error(), "launchctl bootout") {
+		t.Fatalf("err = %v, want a refusal naming the self-hosted service and how to remove it", err)
+	}
+	if len(calls) != 0 {
+		t.Fatalf("service manager called despite the conflict: %#v", calls)
+	}
+	if _, err := os.Stat(spec.File); !os.IsNotExist(err) {
+		t.Fatalf("refused install wrote %s", spec.File)
+	}
+	if data, _ := os.ReadFile(plist); !strings.Contains(string(data), "run-daemon.sh") {
+		t.Fatal("the self-hosted service file was changed")
+	}
+	out, _, err := executeCLI(t, deps, "service", "status", "--json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out, `"selfHostedService": "`+plist+`"`) {
+		t.Fatalf("status does not report the self-hosted service:\n%s", out)
+	}
+}
+
+func TestServiceInstallAllowsSelfHostedServiceOnOtherDataDir(t *testing.T) {
+	setConfigEnv(t)
+	setServiceHome(t)
+	old := serviceGOOS
+	serviceGOOS = "darwin"
+	t.Cleanup(func() { serviceGOOS = old })
+	var calls []serviceCall
+	deps := serviceTestDeps(&calls, nil)
+	spec, err := (&commandContext{deps: deps.withDefaults()}).currentServiceSpec(0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeSelfHostedService(t, filepath.Dir(spec.File), t.TempDir())
+	if _, _, err := executeCLI(t, deps, "service", "install", "--no-wait"); err != nil {
+		t.Fatalf("install refused although the self-hosted service uses another data dir: %v", err)
 	}
 }

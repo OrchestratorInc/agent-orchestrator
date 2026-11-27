@@ -1,6 +1,6 @@
 # ao service
 
-Keep `ao serve` running across logins and reboots as a user service. It never needs `sudo`.
+Keep `ao serve` running across logins and reboots as a user service. It never needs `sudo`. On Linux it keeps running while you are logged out only with lingering (see Notes).
 
 | Platform | Service |
 |---|---|
@@ -33,8 +33,10 @@ ao service uninstall [--json]
 - The service restarts the daemon after a crash, and when the desktop app's own daemon quits with the app. `ao stop` stops it until the next login.
 - If a daemon is already running when you install, the service watches it instead of starting a second one, and `install` says so.
 - Exception: when the watched daemon is the desktop app's own, the service cannot tell `ao stop` from the app quitting, so it starts its own daemon. To keep Orchestrator stopped in that case, run `ao service uninstall` first.
+- If `scripts/setup-self-hosted.sh` already installed its host service (`dev.aoagents.self-hosted` / `ao-self-hosted.service`) for the same data directory, `install` refuses and prints how to remove that service; that service already keeps the daemon running. A different data directory is fine. `status` reports the self-hosted service when there is one.
 - `install` and `uninstall` only touch a file that `ao service install` wrote. `uninstall` stops the service and removes that file.
-- On Linux the service starts at login; `loginctl enable-linger` starts it at boot.
+- On Linux a user service starts when you log in and stops when you log out, unless lingering is on. `install` and `status` report it (`"linger"` in `--json`) with the command to turn it on, `loginctl enable-linger <user>`. On a headless server, turn it on so the service runs from boot.
+- On Linux, `journalctl --user -u agent-orchestrator-serve` shows early `ao serve` failures; the daemon's own log is `daemon.log` in the data directory.
 - Stopping or uninstalling the service stops the daemon but leaves running session processes alone, as `ao stop` does, so the next daemon can adopt them.
 
 ## Examples

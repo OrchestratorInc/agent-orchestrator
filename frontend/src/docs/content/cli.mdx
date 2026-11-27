@@ -118,7 +118,7 @@ Usage analytics follow the desktop app: on by default, never code, prompts, or c
 
 ### `ao service`
 
-Keeps `ao serve` running across logins and reboots, as a user service that never needs `sudo`.
+Keeps `ao serve` running across logins and reboots, as a user service that never needs `sudo`. On Linux it keeps running while you are logged out only with lingering; see below.
 
 | Command | Purpose |
 | --- | --- |
@@ -132,9 +132,9 @@ Keeps `ao serve` running across logins and reboots, as a user service that never
 | Linux | systemd user unit `~/.config/systemd/user/agent-orchestrator-serve.service` |
 | Windows | Not supported yet. Run `ao serve` from a logon task instead. |
 
-The service runs `ao serve --foreground` with the `PATH`, `AO_DATA_DIR`, `AO_RUN_FILE`, `AO_PORT`, `DO_NOT_TRACK`, and `AO_TELEMETRY_*` values of the shell you install from, so the daemon finds the same agents and tools. Run `ao service install` again after changing them. A custom `AO_DATA_DIR` or `AO_RUN_FILE` gets its own service name, so it never replaces your main one. The service restarts the daemon if it crashes; `ao stop` stops it until the next login. When a daemon is already running for the same data directory (for example, the desktop app's), the service watches it instead of starting a second one, and starts its own if that daemon crashes or quits with the app. Because the service cannot tell `ao stop` from the app quitting, stopping the desktop app's own daemon also makes the service start one; run `ao service uninstall` first to keep Orchestrator stopped. `install` and `uninstall` only touch a file that `ao service install` wrote.
+The service runs `ao serve --foreground` with the `PATH`, `AO_DATA_DIR`, `AO_RUN_FILE`, `AO_PORT`, `DO_NOT_TRACK`, and `AO_TELEMETRY_*` values of the shell you install from, so the daemon finds the same agents and tools. Run `ao service install` again after changing them. A custom `AO_DATA_DIR` or `AO_RUN_FILE` gets its own service name, so it never replaces your main one. The service restarts the daemon if it crashes; `ao stop` stops it until the next login. When a daemon is already running for the same data directory (for example, the desktop app's), the service watches it instead of starting a second one, and starts its own if that daemon crashes or quits with the app. Because the service cannot tell `ao stop` from the app quitting, stopping the desktop app's own daemon also makes the service start one; run `ao service uninstall` first to keep Orchestrator stopped. `install` and `uninstall` only touch a file that `ao service install` wrote. If the self-hosted host setup script already installed its own service (`dev.aoagents.self-hosted` / `ao-self-hosted.service`) for the same data directory, `install` refuses and prints how to remove it, since that service already keeps the daemon running.
 
-`install` accepts `--port`, `--no-wait`, `--timeout`, and `--json`; `status` and `uninstall` accept `--json`. On Linux, a user service starts at login; to start it at boot before you log in, run `loginctl enable-linger`.
+`install` accepts `--port`, `--no-wait`, `--timeout`, and `--json`; `status` and `uninstall` accept `--json`. On Linux, a user service starts when you log in and stops when you log out unless lingering is on; `install` and `status` report it (`"linger"` in `--json`) with the command to turn it on, `loginctl enable-linger <user>`. On a headless server, turn it on so the service runs from boot. `journalctl --user -u agent-orchestrator-serve` shows early `ao serve` failures.
 
 ### `ao doctor`
 

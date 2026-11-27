@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -14,6 +15,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/aoagents/agent-orchestrator/backend/internal/config"
 	"github.com/aoagents/agent-orchestrator/backend/internal/daemonmeta"
 	"github.com/aoagents/agent-orchestrator/backend/internal/runfile"
 )
@@ -594,5 +596,47 @@ func TestServeForegroundCreatesMarkerDirOnFreshHome(t *testing.T) {
 	}
 	if !seen {
 		t.Fatal("no attach marker while the daemon ran on a fresh home")
+	}
+}
+
+// An agent's `ao serve` must not hand its own session and agent variables to
+// the daemon, which passes its environment to every session it spawns.
+func TestServeEnvScrubsCallerSession(t *testing.T) {
+	base := []string{
+		"PATH=/bin", "HOME=/h",
+		"CLAUDECODE=1", "CLAUDE_CODE_ENTRYPOINT=cli", "CLAUDE_CODE_SESSION_ID=s1",
+		"CLAUDE_CODE_MESSAGING_TOKEN=secret", "CLAUDE_CODE_USE_BEDROCK=1",
+		"CODEX_THREAD_ID=t", "GEMINI_CLI=1", "CURSOR_AGENT=1", "OPENCODE=1", "AI_AGENT=claude",
+		"AO_SESSION_ID=ao-1", "AO_SESSION=ao-1", "AO_PROJECT_ID=p", "AO_OWNER=app", "AO_APP_RUN_ID=r",
+		"AO_DATA_DIR=/d", "AO_RUN_FILE=/r.json", "AO_PORT=3101",
+	}
+	env := envMap(serveEnv(base, 0, false, "dev"))
+	for _, k := range []string{"CLAUDECODE", "CLAUDE_CODE_ENTRYPOINT", "CLAUDE_CODE_SESSION_ID", "CLAUDE_CODE_MESSAGING_TOKEN", "CODEX_THREAD_ID", "GEMINI_CLI", "CURSOR_AGENT", "OPENCODE", "AI_AGENT", "AO_SESSION_ID", "AO_SESSION", "AO_PROJECT_ID", "AO_OWNER", "AO_APP_RUN_ID"} {
+		if v, ok := env[k]; ok {
+			t.Errorf("%s=%q reached the daemon", k, v)
+		}
+	}
+	for k, want := range map[string]string{"PATH": "/bin", "HOME": "/h", "CLAUDE_CODE_USE_BEDROCK": "1", "AO_DATA_DIR": "/d", "AO_RUN_FILE": "/r.json", "AO_PORT": "3101"} {
+		if env[k] != want {
+			t.Errorf("%s = %q, want %q kept", k, env[k], want)
+		}
+	}
+}
+
+func TestServeAnalyticsNoticeShownOnce(t *testing.T) {
+	cfg := setConfigEnv(t)
+	c := config.Config{RunFilePath: cfg.runFile}
+	var first, second, off bytes.Buffer
+	noteAnalyticsOnce(&off, c, []string{"AO_TELEMETRY_REMOTE=off"})
+	noteAnalyticsOnce(&first, c, []string{"AO_TELEMETRY_REMOTE=posthog"})
+	noteAnalyticsOnce(&second, c, []string{"AO_TELEMETRY_REMOTE=posthog"})
+	if off.Len() != 0 {
+		t.Fatalf("notice printed with analytics off: %q", off.String())
+	}
+	if !strings.Contains(first.String(), "DO_NOT_TRACK=1") {
+		t.Fatalf("first notice = %q, want the opt-out", first.String())
+	}
+	if second.Len() != 0 {
+		t.Fatalf("notice printed twice: %q", second.String())
 	}
 }

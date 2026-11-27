@@ -10,7 +10,9 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/user"
 	"path/filepath"
+	"regexp"
 	"runtime"
 	"slices"
 	"strconv"
@@ -73,8 +75,20 @@ type serviceStatus struct {
 	// ExistingDaemon is set by install when a daemon was already serving
 	// this data dir. The service then watches it and starts its own if it
 	// stops with the app or crashes.
-	ExistingDaemon bool          `json:"existingDaemon,omitempty"`
-	Daemon         *daemonStatus `json:"daemon,omitempty"`
+	ExistingDaemon bool `json:"existingDaemon,omitempty"`
+	// Enabled is whether a systemd unit is enabled; Loaded is whether it is
+	// running (is-active).
+	Enabled *bool `json:"enabled,omitempty"`
+	// Linger is whether systemd keeps this user's services running while the
+	// user is logged out (systemd only, when loginctl answers). Without it the
+	// service starts at login and stops at logout; LingerFix is the command
+	// that turns it on.
+	// SelfHostedService is the service file scripts/setup-self-hosted.sh
+	// installed on this machine, when there is one.
+	SelfHostedService string        `json:"selfHostedService,omitempty"`
+	Linger            *bool         `json:"linger,omitempty"`
+	LingerFix         string        `json:"lingerFix,omitempty"`
+	Daemon            *daemonStatus `json:"daemon,omitempty"`
 }
 
 func newServiceCommand(ctx *commandContext) *cobra.Command {
@@ -83,7 +97,8 @@ func newServiceCommand(ctx *commandContext) *cobra.Command {
 		Short: "Keep `ao serve` running across reboots",
 		Long: "Keep the Orchestrator daemon running across logins and reboots, with no sudo.\n\n" +
 			"macOS: a launchd user agent in ~/Library/LaunchAgents.\n" +
-			"Linux: a systemd --user unit in ~/.config/systemd/user.\n" +
+			"Linux: a systemd --user unit in ~/.config/systemd/user. It runs while you are logged out\n" +
+			"only with lingering (`loginctl enable-linger`); install and status report it.\n" +
 			"Windows: not supported yet.",
 		Args: noArgs,
 		RunE: func(cmd *cobra.Command, args []string) error { return cmd.Help() },
@@ -169,6 +184,18 @@ func writeServiceStatus(w io.Writer, st serviceStatus, asJSON bool, action strin
 		fmt.Fprintf(&b, "Orchestrator service (%s %s)\n", st.Manager, st.Name)
 	}
 	fmt.Fprintf(&b, "  file: %s\n  installed: %t\n  loaded: %t\n", st.File, st.Installed, st.Loaded)
+	if st.Enabled != nil {
+		fmt.Fprintf(&b, "  enabled: %t\n", *st.Enabled)
+	}
+	if st.SelfHostedService != "" {
+		fmt.Fprintf(&b, "  self-hosted host service: %s\n", st.SelfHostedService)
+	}
+	if st.Linger != nil {
+		fmt.Fprintf(&b, "  linger: %t\n", *st.Linger)
+		if !*st.Linger {
+			fmt.Fprintf(&b, "  note: without lingering the service starts when you log in and stops when you log out; to keep it running on a headless machine, run: %s\n", st.LingerFix)
+		}
+	}
 	if st.ExistingDaemon {
 		b.WriteString("  note: a daemon was already running, so the service watches it and starts its own if it crashes or quits with the app\n")
 	}
@@ -300,7 +327,7 @@ func renderSystemdUnit(spec serviceSpec) string {
 	}
 	// KillMode=process, as in scripts/setup-self-hosted.sh: a cgroup kill
 	// would stop sessions the next daemon must adopt.
-	b.WriteString("KillMode=process\nRestart=on-failure\nRestartSec=10\nStandardOutput=null\nStandardError=null\n\n[Install]\nWantedBy=default.target\n")
+	b.WriteString("KillMode=process\nRestart=on-failure\nRestartSec=10\n\n[Install]\nWantedBy=default.target\n")
 	return b.String()
 }
 
@@ -357,7 +384,7 @@ func (c *commandContext) serviceLoaded(ctx context.Context, spec serviceSpec) bo
 	case serviceManagerLaunchd:
 		return c.serviceCmd(ctx, "launchctl", "print", launchdDomain()+"/"+spec.Name) == nil
 	case serviceManagerSystemd:
-		return c.serviceCmd(ctx, "systemctl", "--user", "is-enabled", "--quiet", spec.Name+".service") == nil
+		return c.serviceCmd(ctx, "systemctl", "--user", "is-active", "--quiet", spec.Name+".service") == nil
 	}
 	return false
 }
@@ -365,6 +392,9 @@ func (c *commandContext) serviceLoaded(ctx context.Context, spec serviceSpec) bo
 func (c *commandContext) serviceInstall(ctx context.Context, opts serviceOptions) (serviceStatus, error) {
 	spec, err := c.currentServiceSpec(opts.port)
 	if err != nil {
+		return serviceStatus{}, err
+	}
+	if err := refuseSelfHostedConflict(spec); err != nil {
 		return serviceStatus{}, err
 	}
 	exists, owned, err := ownedServiceFile(spec.File)
@@ -429,6 +459,7 @@ func (c *commandContext) serviceInstall(ctx context.Context, opts serviceOptions
 		}
 	}
 	st := serviceStatus{Manager: spec.Manager, Name: spec.Name, File: spec.File, Installed: true, Loaded: true, ExistingDaemon: before.State == stateReady && before.PID != oldJobPID}
+	c.fillLinger(ctx, spec, &st)
 	if opts.noWait {
 		return st, nil
 	}
@@ -469,6 +500,95 @@ func (c *commandContext) waitServiceAttached(ctx context.Context, spec serviceSp
 		}
 		c.deps.Sleep(250 * time.Millisecond)
 	}
+}
+
+// selfHostedServiceNames are the user services scripts/setup-self-hosted.sh
+// installs for a self-hosted host, by service manager. They supervise
+// `ao daemon` themselves and are left as they are.
+var selfHostedServiceNames = map[string]string{
+	serviceManagerLaunchd: "dev.aoagents.self-hosted.plist",
+	serviceManagerSystemd: "ao-self-hosted.service",
+}
+
+// selfHostedService returns the self-hosted host service file next to where
+// spec would be written, and the data dir its daemon uses, when it exists.
+func selfHostedService(spec serviceSpec) (file, dataDir string) {
+	name := selfHostedServiceNames[spec.Manager]
+	if name == "" {
+		return "", ""
+	}
+	file = filepath.Join(filepath.Dir(spec.File), name)
+	data, err := os.ReadFile(file)
+	if err != nil {
+		return "", ""
+	}
+	home, _ := os.UserHomeDir()
+	dataDir = filepath.Join(home, ".ao", "data")
+	// The script's runner exports AO_DATA_DIR only when it was set at setup.
+	if runner := selfHostedRunnerRE.Find(data); runner != nil {
+		if body, err := os.ReadFile(string(runner)); err == nil {
+			if m := selfHostedDataDirRE.FindSubmatch(body); m != nil {
+				dataDir = strings.Trim(strings.ReplaceAll(string(m[1]), `\ `, " "), `'"`)
+			}
+		}
+	}
+	return file, dataDir
+}
+
+var (
+	selfHostedRunnerRE  = regexp.MustCompile(`/[^"<>\s]*run-daemon\.sh`)
+	selfHostedDataDirRE = regexp.MustCompile(`(?m)^export AO_DATA_DIR=(.+)$`)
+)
+
+// refuseSelfHostedConflict stops an install that would put a second service
+// on the data dir a self-hosted host service already keeps running: the two
+// would fight over one daemon, and the script's service restarts it after
+// `ao stop`.
+func refuseSelfHostedConflict(spec serviceSpec) error {
+	file, theirs := selfHostedService(spec)
+	if file == "" {
+		return nil
+	}
+	_, ours, _, err := config.ResolvePaths()
+	if err != nil {
+		return err
+	}
+	if !sameDir(theirs, ours) {
+		return nil
+	}
+	remove := fmt.Sprintf("launchctl bootout %s/dev.aoagents.self-hosted && rm %q", launchdDomain(), file)
+	if spec.Manager == serviceManagerSystemd {
+		remove = fmt.Sprintf("systemctl --user disable --now ao-self-hosted.service && rm %q", file)
+	}
+	return fmt.Errorf("this machine already keeps Orchestrator running with the self-hosted host service %s, on the same data dir %s; a second service would fight it. Keep using that service, or remove it first: %s", file, ours, remove)
+}
+
+// fillLinger records, for a systemd service, whether the user lingers and the
+// command that turns it on. It leaves both unset when loginctl cannot answer.
+func (c *commandContext) fillLinger(ctx context.Context, spec serviceSpec, st *serviceStatus) {
+	if spec.Manager != serviceManagerSystemd {
+		return
+	}
+	name := currentUserName()
+	if name == "" {
+		return
+	}
+	out, err := c.deps.CommandOutput(ctx, "loginctl", "show-user", name, "-p", "Linger", "--value")
+	if err != nil {
+		return
+	}
+	linger := strings.TrimSpace(string(out)) == "yes"
+	st.Linger = &linger
+	if !linger {
+		st.LingerFix = "loginctl enable-linger " + name
+	}
+}
+
+func currentUserName() string {
+	if u, err := user.Current(); err == nil && u.Username != "" {
+		return u.Username
+	}
+	return os.Getenv("USER")
 }
 
 // servicePID is the PID of the service's running process, or 0.
@@ -535,6 +655,14 @@ func (c *commandContext) serviceStatus(ctx context.Context) (serviceStatus, erro
 	st := serviceStatus{Manager: spec.Manager, Name: spec.Name, File: spec.File, Installed: exists && owned}
 	if st.Installed {
 		st.Loaded = c.serviceLoaded(ctx, spec)
+		if spec.Manager == serviceManagerSystemd {
+			enabled := c.serviceCmd(ctx, "systemctl", "--user", "is-enabled", "--quiet", spec.Name+".service") == nil
+			st.Enabled = &enabled
+		}
+	}
+	c.fillLinger(ctx, spec, &st)
+	if file, _ := selfHostedService(spec); file != "" {
+		st.SelfHostedService = file
 	}
 	ds, err := c.inspectDaemon(ctx)
 	if err != nil {

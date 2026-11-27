@@ -20,6 +20,7 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/config"
 	"github.com/aoagents/agent-orchestrator/backend/internal/daemon"
 	"github.com/aoagents/agent-orchestrator/backend/internal/runfile"
+	"github.com/aoagents/agent-orchestrator/backend/internal/sessionenv"
 )
 
 // defaultServeReadyTimeout bounds how long `ao serve` waits for a daemon it
@@ -133,6 +134,7 @@ func (c *commandContext) serve(ctx context.Context, out, errOut io.Writer, opts 
 		return res, err
 	}
 	env := serveEnv(os.Environ(), opts.port, telemetryOptedOut(cfg.DataDir), Version)
+	noteAnalyticsOnce(errOut, cfg, env)
 	exe, err := c.deps.Executable()
 	if err != nil {
 		return nil, fmt.Errorf("resolve ao executable: %w", err)
@@ -248,6 +250,7 @@ func (c *commandContext) serveForegroundLoop(ctx context.Context, out, errOut io
 	defer func() { _ = os.Remove(marker) }()
 	if res == nil {
 		env := serveEnv(os.Environ(), opts.port, telemetryOptedOut(cfg.DataDir), Version)
+		noteAnalyticsOnce(errOut, cfg, env)
 		if err := serveForegroundDaemon(env); err != nil {
 			return err
 		}
@@ -454,14 +457,19 @@ func telemetryOptedOut(dataDir string) bool {
 // opted out in the app, set AO_TELEMETRY_REMOTE themselves, or set
 // DO_NOT_TRACK. Any other explicit AO_TELEMETRY_* value wins.
 func serveEnv(base []string, port int, optedOut bool, version string) []string {
-	env := envMap(base)
-	// No AO_OWNER: an empty run-file owner is the headless convention. The
-	// desktop app keeps such a daemon's replacement alive after it quits, just
-	// as for "persistent" (frontend/src/shared/daemon-takeover.ts), and the
-	// daemon does not tell sessions they run under the desktop app
+	// The daemon passes its environment to every session it spawns, so the
+	// calling shell's session and agent variables must not reach it: an
+	// agent's `ao serve` would otherwise make every session look nested in
+	// that agent, or claim to be the session the agent runs in.
+	//
+	// That includes AO_OWNER: an empty run-file owner is the headless
+	// convention. The desktop app keeps such a daemon's replacement alive
+	// after it quits, just as for "persistent"
+	// (frontend/src/shared/daemon-takeover.ts), and the daemon does not tell
+	// sessions they run under the desktop app
 	// (session_manager.desktopOwnedDaemon), which would send macOS permission
 	// prompts to the wrong app.
-	delete(env, "AO_OWNER")
+	env := envMap(sessionenv.ScrubForDaemon(base))
 	if port != 0 {
 		env["AO_PORT"] = strconv.Itoa(port)
 	}
@@ -488,6 +496,27 @@ func serveEnv(base []string, port int, optedOut bool, version string) []string {
 		setDefault("AO_TELEMETRY_APP_VERSION", version)
 	}
 	return envList(env)
+}
+
+// serveAnalyticsNotice is printed once per state dir, the first time `ao serve`
+// starts a daemon that exports usage analytics. A headless or agent-driven
+// user never sees the app's "Share usage analytics" switch.
+const serveAnalyticsNotice = "Orchestrator shares anonymous usage analytics (never code, prompts or conversations). To turn them off, set DO_NOT_TRACK=1, or turn off Share usage analytics in the app's settings."
+
+// noteAnalyticsOnce prints serveAnalyticsNotice to errOut when env exports
+// analytics and the notice has not been shown for this state dir yet.
+func noteAnalyticsOnce(errOut io.Writer, cfg config.Config, env []string) {
+	if envMap(env)["AO_TELEMETRY_REMOTE"] != "posthog" {
+		return
+	}
+	marker := filepath.Join(filepath.Dir(cfg.RunFilePath), "serve-analytics-notice-shown")
+	if _, err := os.Stat(marker); err == nil {
+		return
+	}
+	_, _ = fmt.Fprintln(errOut, serveAnalyticsNotice)
+	if err := os.MkdirAll(filepath.Dir(marker), 0o700); err == nil {
+		_ = os.WriteFile(marker, nil, 0o600)
+	}
 }
 
 // doNotTrack honours the DO_NOT_TRACK convention: any value but empty, "0"
