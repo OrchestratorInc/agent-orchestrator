@@ -110,13 +110,18 @@ func kimiLoginPlan() Plan {
 	return p
 }
 
-// guidedStep is one reviewed move through a native CLI's arrow-key login
-// menu: once readyText is on screen, the keys are pressed in order. Keys are
-// limited to the auth terminal's reviewed actions ("previous", "next",
-// "select"), so no free-form input ever reaches the CLI.
+// guidedStep is one reviewed move through a native CLI's login screens: once
+// readyText is on screen, the step types its command (a fixed slash command,
+// then Enter) and presses its keys in order. Keys are limited to the auth
+// terminal's reviewed actions ("previous", "next", "select") and commands to
+// plain slash commands written in the plan, so no free-form or UI-supplied
+// input ever reaches the CLI. An optional step is skipped when the next
+// step's screen shows without it.
 type guidedStep struct {
 	readyText string
+	command   string
 	keys      []string
+	optional  bool
 }
 
 // loginURLRule allows a sign-in link the CLI prints in its hidden terminal to
@@ -147,15 +152,26 @@ func agyLoginPlan() Plan {
 	p.signInKeepsRunning = true
 	p.loginURLRules = []loginURLRule{{host: "accounts.google.com", pathPrefix: "/o/oauth2/"}}
 	p.guidedPlatforms = []string{"darwin", "windows"}
-	// Signed in, Agy skips its login menu: it signs in silently, then asks
-	// whether to trust the (fresh) working folder. It has /logout but no
-	// /login, so switching accounts starts with signing out.
-	p.signedInHint = "Agy is already signed in. To use a different account, run /logout in Agy, then sign in here again."
-	p.signedInScreens = []string{"Do you trust the contents of this project?"}
+	// Signed in, Agy skips its login menu: it signs in silently, asks whether
+	// to trust the (fresh, empty) working folder, then opens its chat. It has
+	// /logout but no /login, and /logout returns straight to the login menu,
+	// so a login over an existing sign-in replaces it: trust the folder, sign
+	// out, then walk the menu as usual.
+	p.signedInScreens = []string{agyTrustPrompt, agyChatPrompt}
+	// Google's callback page shows an authorization code to paste back into
+	// Agy, which waits for it under the sign-in link.
+	p.codePrompt = "paste the authorization code below"
+	p.codeRejected = "Got an error:"
+	p.signOutSteps = []guidedStep{
+		{readyText: agyTrustPrompt, keys: []string{"select"}, optional: true},
+		{readyText: agyChatPrompt, command: "/logout"},
+	}
 	return p
 }
 
 const (
+	agyTrustPrompt  = "Do you trust the contents of this project?"
+	agyChatPrompt   = "? for shortcuts"
 	agyGoogleMethod = "browser"
 	agyCloudMethod  = "cloud_project"
 )

@@ -115,14 +115,20 @@ type Plan struct {
 	// operating systems where the harness's auth probe can confirm a sign-in
 	// while the CLI runs. Empty means every platform.
 	guidedPlatforms []string
-	// signedInHint is the message a guided login returns when the harness is
-	// already signed in: a CLI that shows its login menu only when signed out
-	// can't switch accounts from it.
-	signedInHint string
-	// signedInScreens are texts the CLI shows only once it is signed in. Seen
-	// while a guided login still waits for its menu, they end the login
-	// instead of leaving it waiting for a menu that will never appear.
+	// signedInScreens are texts the CLI shows only once it is signed in, and
+	// signOutSteps lead from them back to its login menu. A CLI that shows the
+	// menu only when signed out would otherwise leave a guided login waiting
+	// for a menu that never appears: seen before the method's first step is
+	// sent, the sign-out steps run first, so the login replaces the existing
+	// sign-in.
 	signedInScreens []string
+	signOutSteps    []guidedStep
+	// codePrompt is the text a guided login's CLI shows when it waits for the
+	// authorization code the browser page displays; while it shows, the panel
+	// offers its code box and SubmitLoginCode types the code into the CLI.
+	// codeRejected is the text the CLI shows when it rejects that code.
+	codePrompt   string
+	codeRejected string
 }
 
 // currentGOOS is the platform guidedPlatforms is checked against; tests

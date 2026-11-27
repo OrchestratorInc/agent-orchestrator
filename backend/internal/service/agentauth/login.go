@@ -144,6 +144,12 @@ type loginOperation struct {
 	// sent only once the menu has settled.
 	guidedSteps []guidedStep
 	guidedReady bool
+	// methodSteps are the chosen method's own steps; methodStepsUntouched
+	// holds until one of them is sent, and signingOut marks a login that
+	// added the plan's sign-out steps in front of them.
+	methodSteps          []guidedStep
+	methodStepsUntouched bool
+	signingOut           bool
 	// guidedStuck marks a guided login whose key send failed: its remaining
 	// steps are never sent, so it cannot finish on its own.
 	guidedStuck bool
@@ -251,14 +257,6 @@ func (s *Service) StartLoginWithOptions(ctx context.Context, agentID, method, se
 	if steps, ok := planByAgentID[agentID].guidedMethods[method]; ok && planByAgentID[agentID].guidedSupported() {
 		if secret != "" || model != "" || opts.sharesDevice() || account {
 			return LoginSnapshot{}, apierr.Invalid("AGENT_AUTH_SECRET_INVALID", "This sign-in method does not accept a credential or setting.", nil)
-		}
-		if hint := planByAgentID[agentID].signedInHint; hint != "" {
-			probeCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
-			state := s.nativeSignInState(probeCtx, agentID)
-			cancel()
-			if nativeSignInFound(state) {
-				return LoginSnapshot{}, apierr.Conflict("AGENT_AUTH_ALREADY_SIGNED_IN", hint, nil)
-			}
 		}
 		return s.startHiddenLogin(ctx, agentID, method, steps)
 	}
@@ -476,6 +474,8 @@ type guidedAuthTerminal interface {
 	TerminalOpener
 	ObserveAuthTerminal(context.Context, string) (shellterm.AuthTerminalObservation, error)
 	SendAuthTerminalKey(context.Context, string, string) error
+	SendAuthTerminalCommand(context.Context, string, string) error
+	SendAuthTerminalCode(context.Context, string, string) error
 	CloseShellTerminal(context.Context, string) error
 }
 
@@ -526,7 +526,7 @@ func (s *Service) startHiddenLogin(ctx context.Context, agentID, method string, 
 	op := &loginOperation{
 		snapshot: LoginSnapshot{ID: uuid.NewString(), AgentID: agentID, Method: method, Status: "running", ExpiresAt: expires},
 		cancel:   cancel, done: make(chan struct{}), terminalID: result.Terminal.HandleID,
-		guidedSteps: steps, keepsRunning: plan.signInKeepsRunning && plan.guidedSupported(),
+		guidedSteps: steps, methodSteps: steps, methodStepsUntouched: len(steps) > 0, keepsRunning: plan.signInKeepsRunning && plan.guidedSupported(),
 	}
 	if method == "native" {
 		op.snapshot.NativePrompt = "waiting"
@@ -632,23 +632,34 @@ func (s *Service) observeHiddenLogin(ctx context.Context, terminal guidedAuthTer
 		}
 		s.mu.Unlock()
 	} else {
-		if len(op.guidedSteps) > 0 && showsSignedInScreen(op.snapshot.AgentID, output) {
-			// The CLI was already signed in (the start check could not tell,
-			// say from file-based storage), so its menu will never appear.
+		if !op.signingOut && op.methodStepsUntouched && showsSignedInScreen(op.snapshot.AgentID, output) {
+			// The CLI is already signed in, so its login menu will only
+			// appear after signing out: replace the existing sign-in.
+			op.signingOut = true
+			op.guidedSteps = append(append([]guidedStep(nil), planByAgentID[op.snapshot.AgentID].signOutSteps...), op.guidedSteps...)
+			op.guidedReady = false
+		}
+		s.advanceGuidedLogin(ctx, terminal, op, output)
+		plan := planByAgentID[op.snapshot.AgentID]
+		plain := terminalui.PlainTerminalText(output)
+		s.mu.Lock()
+		submitted := op.codeSubmitted
+		if !submitted && op.snapshot.Status == "running" {
+			// Stop reading links once a code is typed: the CLI echoes it.
+			if link := printedLoginURL(op.snapshot.AgentID, output); link != "" {
+				op.snapshot.LoginURL = link
+			}
+			op.snapshot.AcceptsCode = len(op.guidedSteps) == 0 && !op.guidedStuck && plan.codePrompt != "" && strings.Contains(plain, plan.codePrompt)
+		}
+		s.mu.Unlock()
+		if submitted && plan.codeRejected != "" && strings.Contains(plain, plan.codeRejected) {
+			// The CLI rejected the code; a fresh login gets a fresh link.
 			s.mu.Lock()
 			if op.snapshot.Status == "running" {
 				op.snapshot.Status = "failed"
 			}
 			s.mu.Unlock()
 			return true
-		}
-		s.advanceGuidedLogin(ctx, terminal, op, output)
-		if link := printedLoginURL(op.snapshot.AgentID, output); link != "" {
-			s.mu.Lock()
-			if op.snapshot.Status == "running" {
-				op.snapshot.LoginURL = link
-			}
-			s.mu.Unlock()
 		}
 	}
 	// A guided login finishes only after every reviewed step was sent: an
@@ -696,8 +707,14 @@ func (s *Service) advanceGuidedLogin(ctx context.Context, terminal guidedAuthTer
 	if len(op.guidedSteps) == 0 || op.guidedStuck {
 		return
 	}
+	plain := terminalui.PlainTerminalText(output)
 	step := op.guidedSteps[0]
-	if !strings.Contains(terminalui.PlainTerminalText(output), step.readyText) {
+	if step.optional && len(op.guidedSteps) > 1 && !strings.Contains(plain, step.readyText) && strings.Contains(plain, op.guidedSteps[1].readyText) {
+		op.guidedSteps = op.guidedSteps[1:]
+		op.guidedReady = false
+		step = op.guidedSteps[0]
+	}
+	if !strings.Contains(plain, step.readyText) {
 		op.guidedReady = false
 		return
 	}
@@ -705,13 +722,26 @@ func (s *Service) advanceGuidedLogin(ctx context.Context, terminal guidedAuthTer
 		op.guidedReady = true
 		return
 	}
+	if !op.signingOut || len(op.guidedSteps) <= len(op.methodSteps) {
+		op.methodStepsUntouched = false
+	}
+	if step.command != "" {
+		if err := terminal.SendAuthTerminalCommand(ctx, op.terminalID, step.command); err != nil {
+			op.guidedStuck = true
+			return
+		}
+		// Let the CLI's command completion settle before Enter runs it.
+		if !sleepCtx(ctx, commandSettleDelay) {
+			return
+		}
+		if err := terminal.SendAuthTerminalKey(ctx, op.terminalID, "select"); err != nil {
+			op.guidedStuck = true
+			return
+		}
+	}
 	for i, key := range step.keys {
-		if i > 0 {
-			select {
-			case <-ctx.Done():
-				return
-			case <-time.After(100 * time.Millisecond):
-			}
+		if i > 0 && !sleepCtx(ctx, 100*time.Millisecond) {
+			return
 		}
 		if err := terminal.SendAuthTerminalKey(ctx, op.terminalID, key); err != nil {
 			op.guidedStuck = true
@@ -720,6 +750,18 @@ func (s *Service) advanceGuidedLogin(ctx context.Context, terminal guidedAuthTer
 	}
 	op.guidedSteps = op.guidedSteps[1:]
 	op.guidedReady = false
+}
+
+// commandSettleDelay is how long a typed command sits before Enter.
+var commandSettleDelay = time.Second
+
+func sleepCtx(ctx context.Context, d time.Duration) bool {
+	select {
+	case <-ctx.Done():
+		return false
+	case <-time.After(d):
+		return true
+	}
 }
 
 // signInConfirmedWhileRunning probes a CLI that stays open after signing in.
@@ -1028,6 +1070,31 @@ func (s *Service) ActOnLogin(ctx context.Context, agentID, id, action, option st
 	return op.snapshot, nil
 }
 
+// typeLoginCode types an authorization code into a guided login's hidden
+// terminal and presses Enter. A failed write fails the login: the CLI may hold
+// part of the code, and a fresh login gets a fresh link.
+func (s *Service) typeLoginCode(ctx context.Context, op *loginOperation, code string) error {
+	terminal, ok := s.terminals.(guidedAuthTerminal)
+	var err error = apierr.Unavailable("AGENT_AUTH_TERMINAL_UNAVAILABLE", "Guided native sign-in is unavailable.")
+	if ok {
+		err = terminal.SendAuthTerminalCode(ctx, op.terminalID, code)
+		if err == nil && sleepCtx(ctx, commandSettleDelay) {
+			err = terminal.SendAuthTerminalKey(ctx, op.terminalID, "select")
+		} else if err == nil {
+			err = ctx.Err()
+		}
+	}
+	if err != nil {
+		s.mu.Lock()
+		if op.snapshot.Status == "running" {
+			op.snapshot.Status = "failed"
+		}
+		s.mu.Unlock()
+		op.cancel()
+	}
+	return err
+}
+
 // SubmitLoginCode forwards one Claude fallback code to the existing native
 // process. The pipe write never holds the registry/output lock.
 func (s *Service) SubmitLoginCode(ctx context.Context, agentID, id, code string) (LoginSnapshot, error) {
@@ -1043,6 +1110,14 @@ func (s *Service) SubmitLoginCode(ctx context.Context, agentID, id, code string)
 	if op == nil || op.snapshot.AgentID != agentID {
 		s.mu.Unlock()
 		return LoginSnapshot{}, apierr.NotFound("AGENT_AUTH_OPERATION_NOT_FOUND", "Login operation not found.")
+	}
+	if op.snapshot.Status == "running" && op.snapshot.AcceptsCode && op.terminalID != "" && planByAgentID[agentID].codePrompt != "" {
+		op.snapshot.AcceptsCode = false
+		op.codeSubmitted = true
+		op.snapshot.LoginURL = ""
+		snapshot := op.snapshot
+		s.mu.Unlock()
+		return snapshot, s.typeLoginCode(ctx, op, code)
 	}
 	if agentID != "claude-code" || op.stdin == nil || op.snapshot.Status != "running" || !op.snapshot.AcceptsCode {
 		s.mu.Unlock()

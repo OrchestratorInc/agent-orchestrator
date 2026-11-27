@@ -249,30 +249,87 @@ func TestGuidedLoginThatExitsWithStepsUnsentFails(t *testing.T) {
 	}
 }
 
-func TestGuidedLoginRefusesWhenAlreadySignedIn(t *testing.T) {
-	onPlatform(t, "darwin")
+const agyTrustScreen = "Accessing workspace:\n/tmp/x\nDo you trust the contents of this project?\n> Yes, I trust this folder\n  No, exit\n"
 
-	pty := &guidedTerminalFake{output: agyMenuScreen}
-	svc := NewWithAgentResolver(foundExecutable("agy"), &switchableProberFake{state: domain.AgentAuthenticationAuthorized}, pty, "")
+const agyChatScreen = "Antigravity CLI 1.5.18\n> \n? for shortcuts                auto · Gemini · high\n"
+
+func TestGuidedLoginReplacesAnExistingSignIn(t *testing.T) {
+	onPlatform(t, "darwin")
+	previous := commandSettleDelay
+	commandSettleDelay = 10 * time.Millisecond
+	t.Cleanup(func() { commandSettleDelay = previous })
+
+	// Signed in, Agy skips its menu and asks about the fresh folder.
+	pty := &guidedTerminalFake{output: agyTrustScreen}
+	prober := &switchableProberFake{state: domain.AgentAuthenticationAuthorized}
+	svc := NewWithAgentResolver(foundExecutable("agy"), prober, pty, "")
 	t.Cleanup(svc.Close)
 
-	for _, method := range []string{"browser", "cloud_project"} {
-		_, err := svc.StartLogin(t.Context(), "agy", method, "")
-		if err == nil || !strings.Contains(err.Error(), "/logout") {
-			t.Fatalf("%s: err = %v, want the already-signed-in hint", method, err)
-		}
+	started, err := svc.StartLogin(t.Context(), "agy", "browser", "")
+	if err != nil {
+		t.Fatal(err)
 	}
-	if len(pty.input.Argv) != 0 {
-		t.Fatalf("opened a hidden terminal %+v while signed in", pty.input)
+	waitFor(t, "the folder to be trusted", 5*time.Second, func() bool { return len(pty.pressed()) >= 1 })
+	pty.setOutput(agyChatScreen)
+	waitFor(t, "the sign-out", 5*time.Second, func() bool { return len(pty.pressed()) >= 3 })
+	if got := pty.pressed(); !reflect.DeepEqual(got, []string{"select", "type:/logout", "select"}) {
+		t.Fatalf("keys = %v, want [select type:/logout select]", got)
+	}
+	// The old sign-in must not finish the login before its menu is walked.
+	time.Sleep(2500 * time.Millisecond)
+	current, err := svc.Login(t.Context(), "agy", started.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if current.Status != "running" {
+		t.Fatalf("status = %q while signing out, want running", current.Status)
+	}
+
+	prober.set(domain.AgentAuthenticationUnknown)
+	pty.setOutput(agyMenuScreen)
+	waitFor(t, "Google OAuth to be chosen", 5*time.Second, func() bool { return len(pty.pressed()) >= 4 })
+	prober.set(domain.AgentAuthenticationAuthorized)
+	waitFor(t, "the sign-in to finish", 10*time.Second, func() bool {
+		current, err = svc.Login(t.Context(), "agy", started.ID)
+		return err == nil && current.Status != "running"
+	})
+	if current.Status != "succeeded" {
+		t.Fatalf("status = %q, want succeeded", current.Status)
+	}
+	if got := pty.pressed(); !reflect.DeepEqual(got, []string{"select", "type:/logout", "select", "select"}) {
+		t.Fatalf("keys = %v, want trust, /logout, then Google OAuth", got)
 	}
 }
 
-func TestGuidedLoginEndsWhenAgyShowsItsSignedInScreen(t *testing.T) {
+func TestGuidedLoginSkipsTrustWhenAgyOpensItsChat(t *testing.T) {
+	onPlatform(t, "darwin")
+	previous := commandSettleDelay
+	commandSettleDelay = 10 * time.Millisecond
+	t.Cleanup(func() { commandSettleDelay = previous })
+
+	pty := &guidedTerminalFake{output: agyChatScreen}
+	svc := NewWithAgentResolver(foundExecutable("agy"), &switchableProberFake{state: domain.AgentAuthenticationUnknown}, pty, "")
+	t.Cleanup(svc.Close)
+
+	started, err := svc.StartLogin(t.Context(), "agy", "cloud_project", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, "the sign-out", 5*time.Second, func() bool { return len(pty.pressed()) >= 2 })
+	pty.setOutput(agyMenuScreen)
+	waitFor(t, "the project entry", 5*time.Second, func() bool { return len(pty.pressed()) >= 4 })
+	if got := pty.pressed(); !reflect.DeepEqual(got, []string{"type:/logout", "select", "next", "select"}) {
+		t.Fatalf("keys = %v, want /logout then the project entry", got)
+	}
+	if _, err := svc.CancelLogin(t.Context(), "agy", started.ID); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestGuidedLoginDoesNotSignOutAfterAFreshSignIn(t *testing.T) {
 	onPlatform(t, "darwin")
 
-	// The start check can't see the sign-in, but Agy signs in silently and
-	// asks about the working folder instead of showing its login menu.
-	pty := &guidedTerminalFake{output: "Welcome to the Antigravity CLI. You are currently not signed in.\n⣟  Signing in...\n"}
+	pty := &guidedTerminalFake{output: agyMenuScreen}
 	svc := NewWithAgentResolver(foundExecutable("agy"), &switchableProberFake{state: domain.AgentAuthenticationUnknown}, pty, "")
 	t.Cleanup(svc.Close)
 
@@ -280,16 +337,111 @@ func TestGuidedLoginEndsWhenAgyShowsItsSignedInScreen(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	pty.setOutput("Accessing workspace:\n/tmp/x\nDo you trust the contents of this project?\n> Yes, I trust this folder\n  No, exit\n")
+	waitFor(t, "Google OAuth to be chosen", 5*time.Second, func() bool { return len(pty.pressed()) >= 1 })
+	// After signing in Agy asks about the folder and opens its chat: that is
+	// the new sign-in, not one to replace.
+	pty.setOutput(agyTrustScreen)
+	time.Sleep(1500 * time.Millisecond)
+	pty.setOutput(agyChatScreen)
+	time.Sleep(1500 * time.Millisecond)
+	if got := pty.pressed(); !reflect.DeepEqual(got, []string{"select"}) {
+		t.Fatalf("keys = %v, want no sign-out after the new sign-in", got)
+	}
+	if _, err := svc.CancelLogin(t.Context(), "agy", started.ID); err != nil {
+		t.Fatal(err)
+	}
+}
+
+const agyCodePrompt = "Your browser should open automatically. If not:\nhttps://accounts.google.com/o/oauth2/auth?client_id=x\n" +
+	"If you aren't automatically redirected, paste the authorization code below:\nauthorization code...\n"
+
+func TestAgyLoginTakesTheAuthorizationCodeFromThePanel(t *testing.T) {
+	onPlatform(t, "darwin")
+	previous := commandSettleDelay
+	commandSettleDelay = 10 * time.Millisecond
+	t.Cleanup(func() { commandSettleDelay = previous })
+
+	pty := &guidedTerminalFake{output: agyMenuScreen}
+	prober := &switchableProberFake{state: domain.AgentAuthenticationUnknown}
+	svc := NewWithAgentResolver(foundExecutable("agy"), prober, pty, "")
+	t.Cleanup(svc.Close)
+
+	started, err := svc.StartLogin(t.Context(), "agy", "browser", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, "Google OAuth to be chosen", 5*time.Second, func() bool { return len(pty.pressed()) >= 1 })
+	pty.setOutput(agyCodePrompt)
+	var current LoginSnapshot
+	waitFor(t, "the code box", 5*time.Second, func() bool {
+		current, err = svc.Login(t.Context(), "agy", started.ID)
+		return err == nil && current.AcceptsCode
+	})
+	if _, err := svc.SubmitLoginCode(t.Context(), "agy", started.ID, " 4/0AbC_def-123 "); err != nil {
+		t.Fatal(err)
+	}
+	if got := pty.pressed(); !reflect.DeepEqual(got, []string{"select", "code:4/0AbC_def-123", "select"}) {
+		t.Fatalf("keys = %v, want the code typed then Enter", got)
+	}
+	if _, err := svc.SubmitLoginCode(t.Context(), "agy", started.ID, "4/0AbC_def-123"); err == nil {
+		t.Fatal("accepted a second code")
+	}
+	prober.set(domain.AgentAuthenticationAuthorized)
+	waitFor(t, "the sign-in to finish", 10*time.Second, func() bool {
+		current, err = svc.Login(t.Context(), "agy", started.ID)
+		return err == nil && current.Status != "running"
+	})
+	if current.Status != "succeeded" || current.LoginURL != "" {
+		t.Fatalf("snapshot = %+v, want succeeded without the link", current)
+	}
+}
+
+func TestAgyLoginFailsWhenAgyRejectsTheCode(t *testing.T) {
+	onPlatform(t, "darwin")
+	previous := commandSettleDelay
+	commandSettleDelay = 10 * time.Millisecond
+	t.Cleanup(func() { commandSettleDelay = previous })
+
+	pty := &guidedTerminalFake{output: agyMenuScreen}
+	svc := NewWithAgentResolver(foundExecutable("agy"), &switchableProberFake{state: domain.AgentAuthenticationUnknown}, pty, "")
+	t.Cleanup(svc.Close)
+
+	started, err := svc.StartLogin(t.Context(), "agy", "browser", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, "Google OAuth to be chosen", 5*time.Second, func() bool { return len(pty.pressed()) >= 1 })
+	pty.setOutput(agyCodePrompt)
+	waitFor(t, "the code box", 5*time.Second, func() bool {
+		current, err := svc.Login(t.Context(), "agy", started.ID)
+		return err == nil && current.AcceptsCode
+	})
+	if _, err := svc.SubmitLoginCode(t.Context(), "agy", started.ID, "4/0wrongcode"); err != nil {
+		t.Fatal(err)
+	}
+	pty.setOutput("Got an error: token exchange failed: oauth2: \"invalid_grant\" \"Bad Request\"\nPress any key to go back.\n")
 	var current LoginSnapshot
 	waitFor(t, "the login to end", 5*time.Second, func() bool {
 		current, err = svc.Login(t.Context(), "agy", started.ID)
 		return err == nil && current.Status != "running"
 	})
-	if current.Status != "failed" || len(pty.pressed()) != 0 {
-		t.Fatalf("status = %q keys = %v, want failed with no keys pressed", current.Status, pty.pressed())
+	if current.Status != "failed" {
+		t.Fatalf("status = %q, want failed after a rejected code", current.Status)
 	}
-	waitFor(t, "the hidden terminal to close", 5*time.Second, pty.isClosed)
+}
+
+func (f *guidedTerminalFake) SendAuthTerminalCode(_ context.Context, _ string, code string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.keys = append(f.keys, "code:"+code)
+	return nil
+}
+
+func (f *guidedTerminalFake) SendAuthTerminalCommand(_ context.Context, _ string, command string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.keys = append(f.keys, "type:"+command)
+	return nil
 }
 
 func TestGuidedLoginWaitsForItsMenu(t *testing.T) {
