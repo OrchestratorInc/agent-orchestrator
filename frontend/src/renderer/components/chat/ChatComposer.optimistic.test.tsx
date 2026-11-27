@@ -116,6 +116,30 @@ describe("optimistic message delivery", () => {
 		});
 	}
 
+	it("puts a failed long paste back in the box when a same-named file beside it was cancelled during a restore", async () => {
+		const sessionId = "optimistic-restore-paste-same-name";
+		const pending = pendingSend();
+		const fail: ((error: Error) => void)[] = [];
+		const stage = vi.fn(() => new Promise<string[]>((_, reject) => { fail.push(reject); }));
+		render(
+			<TooltipProvider>
+				<ChatComposer draftSessionId={sessionId} onSend={pending.onSend} onStageAttachments={stage} restoring />
+			</TooltipProvider>,
+		);
+		const field = await startSend(pending.onSend, "first message");
+		const log = `notes\n${"line\n".repeat(1000)}`;
+		fireEvent.paste(field, { clipboardData: { files: [], items: [], getData: (type: string) => (type === "text/plain" ? log : ""), setData: () => undefined } });
+		await screen.findByLabelText("Attaching notes.txt");
+		fireEvent.paste(field, { clipboardData: { files: [new File(["x"], "notes.txt", { type: "text/plain" })], items: [], getData: () => "", setData: () => undefined } });
+		await waitFor(() => expect(screen.getAllByLabelText("Attaching notes.txt")).toHaveLength(2));
+
+		await userEvent.click(screen.getAllByRole("button", { name: "Cancel attaching notes.txt" })[1]!);
+		await waitFor(() => expect(stage).toHaveBeenCalledOnce());
+		await act(async () => fail[0]!(new Error("disk full")));
+
+		await waitFor(() => expect(readChatSessionDraft(sessionId).composer.text).toBe(log));
+	});
+
 	it("takes files for the next message during a restore and keeps them when the first message lands", async () => {
 		const sessionId = "optimistic-restore-next-files";
 		const pending = pendingSend();

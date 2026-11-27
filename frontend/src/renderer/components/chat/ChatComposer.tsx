@@ -153,6 +153,22 @@ const DEFINITIVE_SEND_REJECTIONS = new Set<string>(SEND_REJECTION_CODES);
 const SEND_CONCEAL_MS = 3000;
 const MAX_NATIVE_IMAGE_BYTES = 10 * 1024 * 1024;
 const MAX_NATIVE_IMAGES_BYTES = 25 * 1024 * 1024;
+const PASTED_TEXT_ATTACHMENT_CHARS = 5000;
+
+function isPlainPasteShortcut(event: KeyboardEvent<HTMLDivElement>): boolean {
+	const key = event.key.toLowerCase();
+	const isV = /^[a-z]$/.test(key) ? key === "v" : event.code === "KeyV";
+	return isV && event.shiftKey && (event.metaKey || event.ctrlKey);
+}
+
+function pastedTextFileName(text: string, taken: string[]): string {
+	const firstLine = text.split("\n").find((line) => line.trim()) ?? "";
+	const base = firstLine.replace(/[\\/\p{Cc}]/gu, " ").replace(/\s+/g, " ").trim().slice(0, 60).trim() || "pasted-text";
+	for (let index = 1; ; index++) {
+		const name = index === 1 ? `${base}.txt` : `${base} ${index}.txt`;
+		if (!taken.includes(name)) return name;
+	}
+}
 
 /**
  * The band hung on the chat box slides up out from behind it as it comes and
@@ -656,6 +672,9 @@ export const ChatComposer = memo(function ChatComposer({
 	 * the user's own text.
 	 */
 	const historyBrowse = useRef<{ entries: string[]; index: number; draft: string; shown: string } | null>(null);
+	const plainPasteShortcut = useRef(false);
+	const pendingTextPastes = useRef(new Set<Promise<boolean>>());
+	const textPasteUploads = useRef(new Map<string, { cancelled: boolean }>());
 	// Code selected in a file or diff view ("Ask in chat") arrives here as a
 	// reference chip. Only the session's ordinary prompt accepts it; a queued-turn
 	// edit has no draftSessionId and stays out of the way.
@@ -1903,9 +1922,11 @@ export const ChatComposer = memo(function ChatComposer({
 			return;
 		}
 
+		const textPastes = [...pendingTextPastes.current];
 		await fileAttachments.toSettledPayload();
 		// A replacement hook can still have staging work owned by the old surface.
 		if (fileAttachments.hasPendingReads()) return;
+		if ((await Promise.all(textPastes)).includes(false)) return;
 		const settledAttachments = fileAttachments.getAttachments();
 		const settledPaths = settledAttachments.flatMap((attachment) =>
 			attachment.stagedPath ? [attachment.stagedPath] : []);
@@ -2332,6 +2353,7 @@ export const ChatComposer = memo(function ChatComposer({
 	);
 
 	function onKeyDown(event: KeyboardEvent<HTMLDivElement>) {
+		plainPasteShortcut.current = isPlainPasteShortcut(event);
 		if (event.nativeEvent.isComposing || event.keyCode === 229) return;
 		// Typing takes over from dictation, so the next transcript update cannot overwrite it.
 		const typing = !event.metaKey && !event.ctrlKey && (event.key.length === 1 || event.key === "Backspace" || event.key === "Delete");
@@ -2433,16 +2455,18 @@ export const ChatComposer = memo(function ChatComposer({
 
 	// Images get an inline chip only beside prose that can refer to them.
 	// Image-only drafts already show every image in the attachment strip.
-	function attachFiles(files: File[]) {
+	function attachFiles(files: File[], ids?: ReadonlyMap<File, string>) {
 		// Reserve the spot now: staging can take a while, and the user keeps typing.
 		const reservation = proseBesideImages(textRef.current.trim(), composerImages.map((image) => image.path)) &&
 			files.some((file) => file.type.startsWith("image/"))
 			? editor.current?.reserveImages()
 			: undefined;
-		void fileAttachments.addFiles(files).then((added) => {
-			if (!reservation) return;
-			editor.current?.fillImages(reservation, added.flatMap((attachment) =>
-				attachment.stagedPath && isInlineImagePath(attachment.stagedPath) ? [attachment.stagedPath] : []));
+		return fileAttachments.addFiles(files, ids).then((added) => {
+			if (reservation) {
+				editor.current?.fillImages(reservation, added.flatMap((attachment) =>
+					attachment.stagedPath && isInlineImagePath(attachment.stagedPath) ? [attachment.stagedPath] : []));
+			}
+			return added;
 		});
 	}
 
@@ -2451,22 +2475,43 @@ export const ChatComposer = memo(function ChatComposer({
 	}
 
 	function onPaste(event: ClipboardEvent<HTMLDivElement>) {
+		const asText = plainPasteShortcut.current;
+		plainPasteShortcut.current = false;
 		if (!acceptsFiles()) return;
 		const clipboard = event.clipboardData;
 		const files = Array.from(clipboard?.files ?? []);
-		if (files.length === 0) return;
-		// The paste is only claimed when there is no text alongside the image: a copy
-		// carrying both should still paste its text.
-		const hasText = typeof clipboard?.getData === "function" && clipboard.getData("text/plain") !== "";
-		if (!hasText) event.preventDefault();
+		const text = typeof clipboard?.getData === "function" ? clipboard.getData("text/plain") : "";
+		const taken = [...visibleRetainedAttachments, ...fileAttachments.attachments, ...pendingAttachments, ...files].map((file) => file.name);
+		const textAsFile = !asText && !holdAttachments && !historyBrowse.current && !heldSubmitRef.current && !heldDuringSubmit.current && text.length >= PASTED_TEXT_ATTACHMENT_CHARS && taken.length < MAX_ATTACHMENTS;
+		if (textAsFile) files.push(new globalThis.File([text], pastedTextFileName(text, taken), { type: "text/plain" }));
+		else if (files.length === 0) return;
+		// A copy carrying both an image and text still pastes its text, unless that
+		// text becomes a file.
+		if (text === "" || textAsFile) event.preventDefault();
 		uiUsage.attachmentAdded("paste");
-		attachFiles(files);
+		if (!textAsFile) {
+			void attachFiles(files);
+			return;
+		}
+		const pasted = files[files.length - 1]!;
+		const pastedId = crypto.randomUUID();
+		const scope = restoredSessionId.current;
+		const upload = { cancelled: false };
+		textPasteUploads.current.set(pastedId, upload);
+		const landed = attachFiles(files, new Map([[pasted, pastedId]])).then((added) => {
+			textPasteUploads.current.delete(pastedId);
+			if (upload.cancelled || added.some((attachment) => attachment.name === pasted.name)) return true;
+			if (restoredSessionId.current === scope) editor.current?.appendText(text);
+			return false;
+		});
+		pendingTextPastes.current.add(landed);
+		void landed.then(() => pendingTextPastes.current.delete(landed));
 	}
 
 	function acceptDroppedFiles(files: File[]): boolean {
 		if (!acceptsFiles() || files.length === 0) return false;
 		uiUsage.attachmentAdded("drop");
-		attachFiles(files);
+		void attachFiles(files);
 		return true;
 	}
 
@@ -2691,6 +2736,8 @@ export const ChatComposer = memo(function ChatComposer({
 										statusLabel={`Attaching ${file.name}`}
 										cancelLabel={`Cancel attaching ${file.name}`}
 										onCancel={() => {
+											const upload = textPasteUploads.current.get(file.id);
+											if (upload) upload.cancelled = true;
 											fileAttachments.cancelPending(file.id);
 											editor.current?.focus();
 										}}
@@ -2804,7 +2851,7 @@ export const ChatComposer = memo(function ChatComposer({
 									onChange={(event) => {
 										if (!disabled && acceptsFiles()) {
 											if (event.target.files?.length) uiUsage.attachmentAdded("picker");
-											attachFiles(Array.from(event.target.files ?? []));
+											void attachFiles(Array.from(event.target.files ?? []));
 										}
 										// Cleared so picking the same file twice still fires a change.
 										event.target.value = "";

@@ -200,6 +200,8 @@ export type ActivityDetail = {
 	senderSessionId?: string;
 	senderProjectId?: string;
 	senderDisplayName?: string;
+	/** steer: the person deleted the queued message while the agent was taking it; it was delivered. */
+	deliveredBeforeDelete?: boolean;
 	fromModel?: string;
 	toModel?: string;
 	origin?: string;
