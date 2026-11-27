@@ -3,6 +3,7 @@ package acp
 import (
 	"context"
 	"encoding/json"
+	"slices"
 	"strings"
 	"time"
 
@@ -30,7 +31,9 @@ import (
 // Steps are filed on the parent's running turn. That is right only for an agent
 // whose prompt returns once every subagent it started is idle, as DeepSeek's
 // does, so the turn outlives the children it holds and settles their rows.
-// Before the turn completes, the records are read one last time.
+// Before the turn completes, the records are read one last time. A record that
+// cannot be delivered in its turn is held for that turn, never filed on a later
+// one.
 
 // SubagentRecords is a binding's knowledge of subagents an agent records only
 // in its own store. Launch and Open are required.
@@ -62,13 +65,13 @@ type RecordedLaunch struct {
 // SubagentRecordReader reads what an agent recorded of its subagents. It is
 // called from one goroutine at a time.
 type SubagentRecordReader interface {
-	// Read returns what the subagents did since the last Read, in order.
-	// launched holds the launches seen on this connection, by tool call id:
-	// their children are followed from their start. Any other child is
-	// followed from the first run still open, or starting, after the first
-	// Read, so work an earlier connection already filed is not filed again.
-	Read(ctx context.Context, launched map[string]bool) ([]RecordedUpdate, error)
-	// Busy reports whether a followed child has a run that has not ended yet.
+	// Read returns what the subagents did since the last Read, in order: the
+	// work of the conversation's current turn. Work recorded for an earlier
+	// turn is never returned, whether or not a connection filed it then, so a
+	// reader opened mid-turn (a reattach) files the whole turn, and only it.
+	Read(ctx context.Context) ([]RecordedUpdate, error)
+	// Busy reports whether a child of the current turn has a run, or a run's
+	// end, that Read has not returned yet.
 	Busy() bool
 }
 
@@ -97,6 +100,7 @@ type RecordedEnd struct {
 // RecordedEndStatus is how a child's run ended.
 type RecordedEndStatus string
 
+// The ways a child's run can end.
 const (
 	RecordedCompleted RecordedEndStatus = "completed"
 	RecordedFailed    RecordedEndStatus = "failed"
@@ -105,9 +109,10 @@ const (
 
 const (
 	subagentRecordPollEvery = 300 * time.Millisecond
-	// subagentRecordDrainFor bounds the last read before a turn completes:
-	// the agent writes a child's records in batches, so its last ones can land
-	// just after the prompt returns.
+	// subagentRecordDrainFor bounds the last read before a turn completes,
+	// joining the poll and delivering included: the agent writes a child's
+	// records in batches, so its last ones can land just after the prompt
+	// returns.
 	subagentRecordDrainFor   = 3 * time.Second
 	subagentRecordDrainEvery = 100 * time.Millisecond
 	subagentHandbackTool     = "SubagentHandback"
@@ -118,16 +123,19 @@ const (
 // is created on the first launch, or on reattaching to a running turn, and
 // guarded by conversation.mu except where noted.
 type recordFollower struct {
-	reader   SubagentRecordReader
-	launched map[string]bool
+	reader SubagentRecordReader
 	// stop and done belong to the running poll, nil when none runs.
 	stop chan struct{}
 	done chan struct{}
-	// readMu serializes reads, so the poll and the last read never interleave.
-	// Held without mu. tools and said are guarded by it.
+	// readMu serializes reads and Busy, so the poll and the last read never
+	// interleave. Held without mu. The fields below are guarded by it.
 	readMu chan struct{}
-	tools  map[string]map[string]*toolState
-	said   map[string]string
+	// tools and said are each child's open tool calls and messages so far.
+	tools map[string]map[string]*toolState
+	said  map[string]map[string]string
+	// backlog holds what was read but not delivered, and the turn it belongs to.
+	backlog     []RecordedUpdate
+	backlogTurn string
 }
 
 func recordedCallView(tool *toolState) RecordedCall {
@@ -169,10 +177,7 @@ func (c *conversation) observeRecordedLaunch(tool *toolState) {
 		return
 	}
 	c.mu.Lock()
-	follower := c.recordFollowerLocked()
-	if launches {
-		follower.launched[tool.id] = true
-	}
+	c.recordFollowerLocked()
 	c.mu.Unlock()
 	c.pollSubagentRecords()
 }
@@ -181,18 +186,18 @@ func (c *conversation) observeRecordedLaunch(tool *toolState) {
 func (c *conversation) recordFollowerLocked() *recordFollower {
 	if c.recordFollower == nil {
 		c.recordFollower = &recordFollower{
-			reader:   c.subagentRecords.Open(c.subagentRecordEnv, c.subagentRecordCwd, c.sessionID),
-			launched: map[string]bool{},
-			readMu:   make(chan struct{}, 1),
-			tools:    map[string]map[string]*toolState{},
-			said:     map[string]string{},
+			reader: c.subagentRecords.Open(c.subagentRecordEnv, c.subagentRecordCwd, c.sessionID),
+			readMu: make(chan struct{}, 1),
+			tools:  map[string]map[string]*toolState{},
+			said:   map[string]map[string]string{},
 		}
 	}
 	return c.recordFollower
 }
 
-// followRecordsOnReattachLocked follows the records of a turn an earlier connection
-// started: its children may still be working. The caller holds mu.
+// followRecordsOnReattachLocked follows the records of a turn an earlier
+// connection started: its children may still be working, or have finished
+// while no connection read them. The caller holds mu.
 func (c *conversation) followRecordsOnReattachLocked() {
 	if c.subagentRecords != nil {
 		c.recordFollowerLocked()
@@ -200,12 +205,13 @@ func (c *conversation) followRecordsOnReattachLocked() {
 }
 
 // pollSubagentRecords reads the records while a turn runs, once the
-// conversation has subagents to follow. It is a no-op without a running turn,
-// a follower, or with a poll already running.
+// conversation has subagents to follow. It is a no-op without a running turn
+// or a follower, with a poll already running, or once the turn is settling:
+// the last read takes over then.
 func (c *conversation) pollSubagentRecords() {
 	c.mu.Lock()
 	follower := c.recordFollower
-	if follower == nil || follower.stop != nil || c.activeTurn == "" {
+	if follower == nil || follower.stop != nil || c.activeTurn == "" || c.settlingTurn == c.activeTurn {
 		c.mu.Unlock()
 		return
 	}
@@ -224,8 +230,7 @@ func (c *conversation) pollSubagentRecords() {
 		defer close(done)
 		ticker := time.NewTicker(subagentRecordPollEvery)
 		defer ticker.Stop()
-		// The first read is at once: it is the baseline for children an earlier
-		// connection filed, and a child can start, and finish, within a tick.
+		// The first read is at once: a child can start, and finish, within a tick.
 		for {
 			c.readSubagentRecords(ctx, follower)
 			select {
@@ -237,9 +242,9 @@ func (c *conversation) pollSubagentRecords() {
 	}()
 }
 
-// drainSubagentRecords stops the poll and reads the records until no followed
-// child is mid-run, or for subagentRecordDrainFor, so the turn completes with
-// its children's last steps and reports filed on it.
+// drainSubagentRecords stops the poll and reads the records until no child of
+// the turn is mid-run, so the turn completes with its children's last steps
+// and reports filed on it. subagentRecordDrainFor bounds all of it.
 func (c *conversation) drainSubagentRecords() {
 	c.mu.Lock()
 	follower := c.recordFollower
@@ -250,114 +255,198 @@ func (c *conversation) drainSubagentRecords() {
 	stop, done := follower.stop, follower.done
 	follower.stop, follower.done = nil, nil
 	c.mu.Unlock()
-	if stop != nil {
-		close(stop)
-		<-done
-	}
 	ctx, cancel := context.WithTimeout(context.Background(), subagentRecordDrainFor)
 	defer cancel()
+	if stop != nil {
+		// Stopping cancels the poll's read and delivery, so it returns promptly.
+		close(stop)
+		select {
+		case <-done:
+		case <-ctx.Done():
+		}
+	}
 	for {
-		c.readSubagentRecords(ctx, follower)
-		if !follower.reader.Busy() {
-			return
+		busy, ok := c.readSubagentRecords(ctx, follower)
+		if !ok || !busy {
+			break
 		}
 		select {
 		case <-ctx.Done():
-			return
 		case <-c.closing:
-			return
 		case <-time.After(subagentRecordDrainEvery):
+			continue
 		}
+		break
 	}
+	c.dropRecordBacklog(follower)
 }
 
-func (c *conversation) readSubagentRecords(ctx context.Context, follower *recordFollower) {
+// readSubagentRecords reads and delivers what is new, and reports whether a
+// child is still mid-run. ok is false when ctx ended before the read could
+// take its turn.
+func (c *conversation) readSubagentRecords(ctx context.Context, follower *recordFollower) (busy, ok bool) {
 	select {
 	case follower.readMu <- struct{}{}:
 	case <-ctx.Done():
-		return
+		return false, false
 	}
 	defer func() { <-follower.readMu }()
 	c.mu.Lock()
-	launched := make(map[string]bool, len(follower.launched))
-	for id := range follower.launched {
-		launched[id] = true
-	}
+	turnID := c.activeTurn
 	c.mu.Unlock()
-	updates, err := follower.reader.Read(ctx, launched)
+	if turnID == "" {
+		return false, true
+	}
+	if len(follower.backlog) > 0 && follower.backlogTurn != turnID {
+		// Held for a turn that has ended: it is that turn's, not this one's.
+		c.logDroppedRecords(len(follower.backlog), follower.backlogTurn)
+		follower.backlog, follower.backlogTurn = nil, ""
+	}
+	updates, err := follower.reader.Read(ctx)
 	if err != nil && ctx.Err() == nil && c.log != nil {
 		c.log.Debug("ACP subagent records unreadable", "error", err)
 	}
-	for _, update := range updates {
-		c.mu.Lock()
-		turnID := c.activeTurn
-		c.mu.Unlock()
-		if turnID == "" {
-			// The turn has ended; its children's work is filed with it or not at all.
-			return
+	pending := slices.Concat(follower.backlog, updates)
+	follower.backlog, follower.backlogTurn = nil, ""
+	for i, update := range pending {
+		if !c.emitRecordedUpdate(ctx, turnID, follower, update) {
+			follower.backlog, follower.backlogTurn = append([]RecordedUpdate(nil), pending[i:]...), turnID
+			break
 		}
-		c.emitRecordedUpdate(turnID, follower, update)
+	}
+	return follower.reader.Busy() || len(follower.backlog) > 0, true
+}
+
+// dropRecordBacklog discards what the turn could not deliver before it
+// settled, saying so: it cannot be filed on the turn it belongs to.
+func (c *conversation) dropRecordBacklog(follower *recordFollower) {
+	select {
+	case follower.readMu <- struct{}{}:
+	default:
+		// A poll that outlived the deadline still holds it; its backlog is
+		// tagged with this turn and dropped by the next read.
+		return
+	}
+	defer func() { <-follower.readMu }()
+	if len(follower.backlog) > 0 {
+		c.logDroppedRecords(len(follower.backlog), follower.backlogTurn)
+		follower.backlog, follower.backlogTurn = nil, ""
 	}
 }
 
-// emitRecordedUpdate files one recorded update under its launch. The caller
-// holds follower.readMu.
-func (c *conversation) emitRecordedUpdate(turnID string, follower *recordFollower, recorded RecordedUpdate) {
+func (c *conversation) logDroppedRecords(count int, turnID string) {
+	if c.log != nil {
+		c.log.Warn("dropped ACP subagent records: their turn settled first", "count", count, "turn", turnID)
+	}
+}
+
+// emitRecordedUpdate files one recorded update under its launch, reporting
+// whether it was delivered. A child's state changes only once it is, so an
+// update held back is delivered whole on the next try. The caller holds
+// follower.readMu.
+func (c *conversation) emitRecordedUpdate(ctx context.Context, turnID string, follower *recordFollower, recorded RecordedUpdate) bool {
 	if recorded.Launch == "" || recorded.Child == "" {
-		return
+		return true
 	}
 	launch := c.providerItemID(recorded.Launch)
 	if end := recorded.End; end != nil {
-		c.emit(c.recordedHandback(turnID, launch, recorded.Child, *end))
-		return
+		if !c.emitWithin(ctx, c.recordedHandback(turnID, launch, recorded.Child, *end)) {
+			return false
+		}
+		// The run is over: what was held for its messages and calls is not
+		// needed again.
+		delete(follower.said, recorded.Child)
+		delete(follower.tools, recorded.Child)
+		return true
 	}
 	update := recorded.Update
 	if update == nil {
-		return
+		return true
 	}
 	switch {
 	case update.ToolCall != nil, update.ToolCallUpdate != nil:
+		// Merge into a copy; the child's state takes it once it is delivered.
+		scratch := map[string]*toolState{}
+		var tool *toolState
+		if update.ToolCall != nil {
+			tool = newToolState(update.ToolCall)
+		} else {
+			id := string(update.ToolCallUpdate.ToolCallId)
+			if stored := follower.tools[recorded.Child][id]; stored != nil {
+				clone := *stored
+				scratch[id] = &clone
+			}
+			tool = mergeToolState(scratch, update.ToolCallUpdate)
+		}
+		event := c.toolEvent(turnID, tool, toolTerminal(tool.status))
+		event.ProviderItemID = c.providerItemID("subagent-tool:" + lengthPrefixedTuple(recorded.Child, tool.id))
+		if !c.emitWithin(ctx, withParentProviderItem(event, launch)) {
+			return false
+		}
 		tools := follower.tools[recorded.Child]
+		if toolTerminal(tool.status) {
+			delete(tools, tool.id)
+			return true
+		}
 		if tools == nil {
 			tools = map[string]*toolState{}
 			follower.tools[recorded.Child] = tools
 		}
-		var stored *toolState
-		if update.ToolCall != nil {
-			stored = newToolState(update.ToolCall)
-			tools[stored.id] = stored
-		} else {
-			stored = mergeToolState(tools, update.ToolCallUpdate)
-		}
-		snapshot := *stored
-		tool := &snapshot
-		if toolTerminal(tool.status) {
-			delete(tools, tool.id)
-		}
-		event := c.toolEvent(turnID, tool, toolTerminal(tool.status))
-		event.ProviderItemID = c.providerItemID("subagent-tool:" + lengthPrefixedTuple(recorded.Child, tool.id))
-		c.emit(withParentProviderItem(event, launch))
+		tools[tool.id] = tool
 
 	case update.AgentMessageChunk != nil:
 		chunk := update.AgentMessageChunk
 		if chunk.MessageId == nil || *chunk.MessageId == "" {
-			return
+			return true
 		}
 		delta := contentText(chunk.Content)
 		if delta == "" {
-			return
+			return true
 		}
+		said := follower.said[recorded.Child][*chunk.MessageId] + delta
 		key := lengthPrefixedTuple(recorded.Child, *chunk.MessageId)
-		follower.said[key] += delta
-		text := strings.TrimSpace(follower.said[key])
 		detail, _ := json.Marshal(map[string]any{"parentProviderItemId": launch, "nestedAgent": true})
-		c.emit(ports.ChatEvent{
+		if !c.emitWithin(ctx, ports.ChatEvent{
 			Kind: ports.ChatEventActivityCompleted, ProviderTurnID: turnID,
 			ProviderItemID: c.providerItemID("subagent-message:" + key),
 			ActivityKind:   domain.ActivityKindMCPTool, ActivityStatus: domain.ActivityStatusCompleted,
-			Summary: subagentResponseSummary, Detail: detail, Text: text,
-		})
+			Summary: subagentResponseSummary, Detail: detail, Text: strings.TrimSpace(said),
+		}) {
+			return false
+		}
+		messages := follower.said[recorded.Child]
+		if messages == nil {
+			messages = map[string]string{}
+			follower.said[recorded.Child] = messages
+		}
+		messages[*chunk.MessageId] = said
 	}
+	return true
+}
+
+// emitWithin is emit for work that must not outlast ctx: it waits for the
+// consumer only until ctx ends, and reports whether the event was queued.
+func (c *conversation) emitWithin(ctx context.Context, event ports.ChatEvent) bool {
+	if c.captureHistoryEvent(event) {
+		return true
+	}
+	c.eventMu.RLock()
+	defer c.eventMu.RUnlock()
+	if c.eventsClosed {
+		return false
+	}
+	var connDone <-chan struct{}
+	if c.conn != nil {
+		connDone = c.conn.Done()
+	}
+	select {
+	case c.events <- event:
+		return true
+	case <-ctx.Done():
+	case <-connDone:
+	case <-c.closing:
+	}
+	return false
 }
 
 // recordedHandback is a child's report on one run, to the launch that started

@@ -377,6 +377,16 @@ describe("DeepSeek Harness subagents", () => {
 		expect(subagent.steps.map((s) => s.id)).toEqual(["s1"]);
 	});
 
+	it("reports its latest run once a follow-up gives it more work", () => {
+		const subagent = readSubagent(
+			deepseekLaunch("a"),
+			[handback("h1", "tool-a", "First pass.", at(5)), step("s2", "tool-a", { createdAt: at(6) }), handback("h2", "tool-a", "Second pass.", at(9))],
+			false,
+		);
+		expect(subagent).toMatchObject({ state: "done", report: "Second pass." });
+		expect(subagent.steps.map((s) => s.id)).toEqual(["h1", "s2"]);
+	});
+
 	it("has no report, rather than its start note, once the turn ends without one", () => {
 		const subagent = readSubagent(deepseekLaunch("a"), [], false);
 		expect(subagent.state).toBe("unknown");

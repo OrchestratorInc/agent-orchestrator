@@ -144,11 +144,12 @@ export function readSubagent(
 ): Subagent {
 	const input = launchInput(launch);
 	// The steps carry the whole chain under this launch, so an inner child's hand-back
-	// is among them. Only the one addressed to this launch is its report; the rest are
-	// steps the reader can open like any other.
-	const handback = allSteps.find(
-		(step) => isHandback(step) && launch.providerItemId !== undefined && step.detail?.parentProviderItemId === launch.providerItemId,
-	);
+	// is among them. Only one addressed to this launch is its report, and a child that
+	// took more work (a DeepSeek follow-up) reports once per run, so the latest one
+	// stands. The rest are steps the reader can open like any other.
+	const handback = allSteps
+		.filter((step) => isHandback(step) && launch.providerItemId !== undefined && step.detail?.parentProviderItemId === launch.providerItemId)
+		.at(-1);
 	const steps = allSteps.filter((step) => step !== handback);
 	const result = launchResultText(launch);
 	// A background launch settles as soon as the child starts. DeepSeek's driver says

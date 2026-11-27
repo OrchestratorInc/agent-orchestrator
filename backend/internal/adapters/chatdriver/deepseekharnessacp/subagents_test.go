@@ -26,10 +26,15 @@ const (
 )
 
 type dshLog struct {
-	t    *testing.T
-	path string
-	seq  int
+	t     *testing.T
+	path  string
+	seq   int
+	clock *int64
 }
+
+// clocks gives every log under one home the same clock, as the harness's logs
+// share the machine's: a child's times compare with its parent's.
+var clocks = map[string]*int64{}
 
 func newDSHLog(t *testing.T, home, id string, header map[string]any) *dshLog {
 	t.Helper()
@@ -41,7 +46,11 @@ func newDSHLog(t *testing.T, home, id string, header map[string]any) *dshLog {
 	for key, value := range header {
 		h[key] = value
 	}
-	log := &dshLog{t: t, path: filepath.Join(dir, "session.v4.jsonl")}
+	if clocks[home] == nil {
+		clocks[home] = new(int64)
+		*clocks[home] = 1000
+	}
+	log := &dshLog{t: t, path: filepath.Join(dir, "session.v4.jsonl"), clock: clocks[home]}
 	log.write(h)
 	return log
 }
@@ -64,8 +73,16 @@ func (l *dshLog) write(line map[string]any) {
 
 func (l *dshLog) add(typ string, data map[string]any) {
 	l.t.Helper()
-	l.write(map[string]any{"type": typ, "seq": l.seq, "time": 1000 + l.seq, "data": data})
+	*l.clock++
+	l.write(map[string]any{"type": typ, "seq": l.seq, "time": *l.clock, "data": data})
 	l.seq++
+}
+
+// prompt writes a prompt from the user, which starts a turn of the conversation.
+func (l *dshLog) prompt(text string) {
+	l.add("turn/start", map[string]any{"turn": l.seq})
+	l.add("user/message", map[string]any{"id": fmt.Sprintf("prompt-%d", l.seq), "role": "user",
+		"content": []any{map[string]any{"type": "text", "text": text}}, "source": map[string]any{"kind": "user"}})
 }
 
 func text(s string) map[string]any { return map[string]any{"type": "text", "text": s} }
@@ -145,13 +162,9 @@ func describe(updates []acpdriver.RecordedUpdate) []string {
 	return out
 }
 
-func read(t *testing.T, r *recordReader, launched ...string) []string {
+func read(t *testing.T, r *recordReader) []string {
 	t.Helper()
-	set := map[string]bool{}
-	for _, id := range launched {
-		set[id] = true
-	}
-	updates, err := r.Read(context.Background(), set)
+	updates, err := r.Read(context.Background())
 	if err != nil {
 		t.Fatalf("Read: %v", err)
 	}
@@ -193,19 +206,20 @@ func TestSubagentLaunchIsTheLaunchToolWithATask(t *testing.T) {
 func TestReaderFilesALiveChildsWorkAndReportUnderItsLaunch(t *testing.T) {
 	home := t.TempDir()
 	r := openReader(home)
-	if got := read(t, r, "call-launch"); len(got) != 0 {
+	if got := read(t, r); len(got) != 0 {
 		t.Fatalf("before the parent log exists: %v", got)
 	}
 	parent := newDSHLog(t, home, parentSession, nil)
+	parent.prompt("Audit the cart with a subagent.")
 	parent.launch("call-launch", "subagent", "agent-1", childSession)
 	// The child's session has not written its log yet.
-	if got := read(t, r, "call-launch"); len(got) != 0 {
+	if got := read(t, r); len(got) != 0 {
 		t.Fatalf("before the child log exists: %v", got)
 	}
 	child := newDSHLog(t, home, childSession, childHeader())
 	child.runStart(1)
 	child.runWork(1, "The cart is fine.")
-	expectLines(t, read(t, r, "call-launch"),
+	expectLines(t, read(t, r),
 		`call-launch said said-1 "Looking at the cart."`,
 		`call-launch tool_call bash map[command:ls src]`,
 		`call-launch tool_update call-1 completed`,
@@ -219,11 +233,11 @@ func TestReaderFilesALiveChildsWorkAndReportUnderItsLaunch(t *testing.T) {
 	parent.settled(childSession, "agent-1", "completed",
 		"Background subagent agent-1 finished and will do no further work unless you send it more.",
 		"Its closing message:", "The cart is fine.")
-	if got := read(t, r, "call-launch"); len(got) != 0 {
+	if got := read(t, r); len(got) != 0 {
 		t.Fatalf("the end must wait for the run to close, got %v", got)
 	}
 	child.runEnd(1, "completed")
-	expectLines(t, read(t, r, "call-launch"), `call-launch end completed "The cart is fine."`)
+	expectLines(t, read(t, r), `call-launch end completed "The cart is fine."`)
 	if r.Busy() {
 		t.Fatal("a child whose run ended is not busy")
 	}
@@ -233,7 +247,7 @@ func TestReaderFilesALiveChildsWorkAndReportUnderItsLaunch(t *testing.T) {
 	child.runWork(2, "Still fine.")
 	child.runEnd(2, "completed")
 	parent.settled(childSession, "agent-1", "completed", "Background subagent agent-1 finished.", "Its closing message:", "Still fine.")
-	got := read(t, r, "call-launch")
+	got := read(t, r)
 	if last := got[len(got)-1]; last != `call-launch end completed "Still fine."` {
 		t.Fatalf("second run: %v", got)
 	}
@@ -245,19 +259,48 @@ func TestReaderEndsARunWhoseCloseNeverLands(t *testing.T) {
 	r := openReader(home)
 	r.now = func() time.Time { return now }
 	parent := newDSHLog(t, home, parentSession, nil)
+	parent.prompt("Go.")
 	parent.launch("call-launch", "subagent", "agent-1", childSession)
 	child := newDSHLog(t, home, childSession, childHeader())
 	child.runStart(1)
-	read(t, r, "call-launch")
+	read(t, r)
 	parent.settled(childSession, "agent-1", "error", "Background subagent agent-1 failed before it finished.", "It left no closing message.", "rate limited")
-	if got := read(t, r, "call-launch"); len(got) != 0 {
+	if got := read(t, r); len(got) != 0 {
 		t.Fatalf("too soon: %v", got)
 	}
 	now = now.Add(endWaitFor)
-	expectLines(t, read(t, r, "call-launch"),
+	expectLines(t, read(t, r),
 		`call-launch end failed "Background subagent agent-1 failed before it finished.\n\nIt left no closing message.\n\nrate limited"`)
+	// The run the child's log still shows open is left open: releasing an end
+	// on a timeout must not close whatever run is open now.
+	if !r.Busy() {
+		t.Fatal("a run the child's log has not closed is still busy")
+	}
+	child.runEnd(1, "error")
+	read(t, r)
 	if r.Busy() {
-		t.Fatal("an ended run is not busy")
+		t.Fatal("busy after the run closed")
+	}
+}
+
+func TestReaderHoldsAnEndUntilTheChildLogShowsTheRun(t *testing.T) {
+	home := t.TempDir()
+	parent := newDSHLog(t, home, parentSession, nil)
+	parent.prompt("Go.")
+	parent.launch("call-launch", "subagent", "agent-1", childSession)
+	parent.settled(childSession, "agent-1", "completed", "finished.", "Its closing message:", "Done.")
+	r := openReader(home)
+	// The parent's record is on disk, the child's log is not yet.
+	if got := read(t, r); len(got) != 0 {
+		t.Fatalf("the end must wait for the child's log, got %v", got)
+	}
+	child := newDSHLog(t, home, childSession, childHeader())
+	child.runStart(1)
+	child.runWork(1, "Done.")
+	child.runEnd(1, "completed")
+	got := read(t, r)
+	if len(got) != 5 || got[4] != `call-launch end completed "Done."` {
+		t.Fatalf("steps must go out before the end: %v", got)
 	}
 }
 
@@ -286,6 +329,7 @@ func TestSettledRunSaysHowTheRunEnded(t *testing.T) {
 func TestReaderSkipsAForkedChildsInheritedHistory(t *testing.T) {
 	home := t.TempDir()
 	parent := newDSHLog(t, home, parentSession, nil)
+	parent.prompt("Fork it.")
 	parent.launch("call-fork", "subagent_fork", "agent-1", childSession)
 	child := newDSHLog(t, home, childSession, map[string]any{"parentSession": parentSession, "origin": "subagent", "delegationDepth": 1, "isSeeded": true})
 	// The parent's conversation, copied into the child.
@@ -296,20 +340,22 @@ func TestReaderSkipsAForkedChildsInheritedHistory(t *testing.T) {
 	child.runStart(2)
 	child.add("assistant/message", map[string]any{"turn": 2, "step": 1, "stream": []any{}, "message": map[string]any{
 		"id": "own", "role": "assistant", "content": []any{text("My own work.")}}})
-	expectLines(t, read(t, openReader(home), "call-fork"), `call-fork said own "My own work."`)
+	expectLines(t, read(t, openReader(home)), `call-fork said own "My own work."`)
 }
 
-func TestReaderOnReattachFilesOnlyRunsStillGoing(t *testing.T) {
+func TestReaderFilesTheCurrentTurnOnlyOnReattach(t *testing.T) {
 	home := t.TempDir()
 	parent := newDSHLog(t, home, parentSession, nil)
-	// A child that finished before this connection: an earlier one filed it.
+	// An earlier turn's child: that turn filed it, or never will.
+	parent.prompt("First.")
 	parent.launch("call-old", "subagent", "agent-1", childSession)
-	done := newDSHLog(t, home, childSession, childHeader())
-	done.runStart(1)
-	done.runWork(1, "Old report.")
-	done.runEnd(1, "completed")
+	old := newDSHLog(t, home, childSession, childHeader())
+	old.runStart(1)
+	old.runWork(1, "Old report.")
+	old.runEnd(1, "completed")
 	parent.settled(childSession, "agent-1", "completed", "finished.", "Its closing message:", "Old report.")
-	// A child still working when this connection attached.
+	// This turn's child, still working when this connection attached.
+	parent.prompt("Second.")
 	parent.launch("call-running", "subagent", "agent-2", otherChild)
 	running := newDSHLog(t, home, otherChild, childHeader())
 	running.runStart(1)
@@ -328,10 +374,12 @@ func TestReaderOnReattachFilesOnlyRunsStillGoing(t *testing.T) {
 		`call-running tool_update grep completed`,
 		`call-running end completed "Found it."`)
 
-	// The finished child takes more work: that run is new, and is filed.
-	done.runStart(2)
-	done.runWork(2, "New report.")
-	done.runEnd(2, "completed")
+	// The earlier child takes more work in this turn: that run is this turn's.
+	parent.add("tool/call", map[string]any{"turn": 2, "step": 3, "callId": "msg", "name": "send_message",
+		"arguments": `{"agent":"agent-1","message":"Check the totals."}`})
+	old.runStart(2)
+	old.runWork(2, "New report.")
+	old.runEnd(2, "completed")
 	parent.settled(childSession, "agent-1", "completed", "finished.", "Its closing message:", "New report.")
 	got := read(t, r)
 	if len(got) != 5 || got[0] != `call-old said said-2 "Looking at the cart."` || got[4] != `call-old end completed "New report."` {
@@ -339,17 +387,48 @@ func TestReaderOnReattachFilesOnlyRunsStillGoing(t *testing.T) {
 	}
 }
 
-func TestReaderLeavesAChildWithoutAnUnreadableLog(t *testing.T) {
+// A child that finished while no connection read the records, as during a
+// restart, is still filed on its turn when the next connection attaches.
+func TestReaderFilesAChildThatSettledWhileNoOneRead(t *testing.T) {
 	home := t.TempDir()
 	parent := newDSHLog(t, home, parentSession, nil)
+	parent.prompt("Audit the cart.")
 	parent.launch("call-launch", "subagent", "agent-1", childSession)
-	broken := newDSHLog(t, home, childSession, map[string]any{"version": 9})
-	_ = broken
+	child := newDSHLog(t, home, childSession, childHeader())
+	child.runStart(1)
+	child.runWork(1, "The cart is fine.")
+	child.runEnd(1, "completed")
+	parent.settled(childSession, "agent-1", "completed", "finished.", "Its closing message:", "The cart is fine.")
 	r := openReader(home)
-	if got := read(t, r, "call-launch"); len(got) != 0 {
-		t.Fatalf("an unreadable child log files nothing, got %v", got)
+	expectLines(t, read(t, r),
+		`call-launch said said-1 "Looking at the cart."`,
+		`call-launch tool_call bash map[command:ls src]`,
+		`call-launch tool_update call-1 completed`,
+		`call-launch said closing-1 "The cart is fine."`,
+		`call-launch end completed "The cart is fine."`,
+	)
+	if r.Busy() {
+		t.Fatal("a settled child is not busy")
+	}
+}
+
+func TestReaderStillReportsAChildWithAnUnreadableLog(t *testing.T) {
+	home := t.TempDir()
+	now := time.Unix(100, 0)
+	parent := newDSHLog(t, home, parentSession, nil)
+	parent.prompt("Go.")
+	parent.launch("call-launch", "subagent", "agent-1", childSession)
+	newDSHLog(t, home, childSession, map[string]any{"version": 9})
+	r := openReader(home)
+	r.now = func() time.Time { return now }
+	if got := read(t, r); len(got) != 0 {
+		t.Fatalf("an unreadable child log files no steps, got %v", got)
 	}
 	if r.Busy() {
 		t.Fatal("a child that cannot be followed is not busy")
 	}
+	parent.settled(childSession, "agent-1", "completed", "finished.", "Its closing message:", "Done anyway.")
+	read(t, r)
+	now = now.Add(endWaitFor)
+	expectLines(t, read(t, r), `call-launch end completed "Done anyway."`)
 }

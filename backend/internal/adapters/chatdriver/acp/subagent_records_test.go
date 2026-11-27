@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"sync"
 	"testing"
+	"time"
 
 	acpsdk "github.com/coder/acp-go-sdk"
 
@@ -15,29 +16,28 @@ import (
 )
 
 // scriptedRecords plays an agent's records of one child: what the poll finds
-// while the turn runs, then what lands only after the prompt has returned.
+// while the turn runs, then what lands only after the prompt has returned. The
+// last batch goes only to the last read before the turn settles, the one read
+// with a deadline, so the test fails if that read is missing.
 type scriptedRecords struct {
 	mu        sync.Mutex
 	during    []RecordedUpdate
 	after     []RecordedUpdate
-	promptEnd bool
 	sentAfter bool
 	polled    chan struct{}
-	launched  map[string]bool
 	session   string
 }
 
-func (s *scriptedRecords) Read(_ context.Context, launched map[string]bool) ([]RecordedUpdate, error) {
+func (s *scriptedRecords) Read(ctx context.Context) ([]RecordedUpdate, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.launched = launched
 	if s.during != nil {
 		out := s.during
 		s.during = nil
 		close(s.polled)
 		return out, nil
 	}
-	if s.promptEnd && !s.sentAfter {
+	if _, last := ctx.Deadline(); last && ctx.Err() == nil && !s.sentAfter {
 		s.sentAfter = true
 		return s.after, nil
 	}
@@ -89,9 +89,6 @@ func TestRecordedSubagentFilesItsWorkOnTheTurnUnderItsLaunch(t *testing.T) {
 		// The agent's prompt returns once the child is idle; its last records
 		// land after.
 		<-records.polled
-		records.mu.Lock()
-		records.promptEnd = true
-		records.mu.Unlock()
 		return acpsdk.PromptResponse{StopReason: acpsdk.StopReasonEndTurn}, nil
 	}
 	driver := New(Config{
@@ -127,9 +124,6 @@ func TestRecordedSubagentFilesItsWorkOnTheTurnUnderItsLaunch(t *testing.T) {
 
 	if records.session != opened.ProviderConversationID() {
 		t.Fatalf("records opened for session %q, want %q", records.session, opened.ProviderConversationID())
-	}
-	if !records.launched["launch-1"] {
-		t.Fatalf("the launch seen on this connection must be passed to Read, got %v", records.launched)
 	}
 	launchItem := conv.providerItemID("launch-1")
 	detailOf := func(e ports.ChatEvent) map[string]any {
@@ -197,7 +191,7 @@ func TestRecordedHandbackSaysHowTheRunEnded(t *testing.T) {
 // A turn that only sends an earlier child more work, as after a restart that
 // lost the conversation's followers, still follows the records.
 func TestRecordedSubagentIsFollowedWhenATurnResumesIt(t *testing.T) {
-	read := make(chan map[string]bool, 8)
+	read := make(chan struct{}, 8)
 	opened := make(chan string, 1)
 	agent := &fakeAgent{}
 	agent.customPrompt = func(ctx context.Context, params acpsdk.PromptRequest) (acpsdk.PromptResponse, error) {
@@ -210,9 +204,9 @@ func TestRecordedSubagentIsFollowedWhenATurnResumesIt(t *testing.T) {
 		}
 		return acpsdk.PromptResponse{StopReason: acpsdk.StopReasonEndTurn}, nil
 	}
-	reader := readerFunc(func(launched map[string]bool) {
+	reader := readerFunc(func() {
 		select {
-		case read <- launched:
+		case read <- struct{}{}:
 		default:
 		}
 	})
@@ -248,11 +242,97 @@ func TestRecordedSubagentIsFollowedWhenATurnResumesIt(t *testing.T) {
 	}
 }
 
-type readerFunc func(launched map[string]bool)
+type readerFunc func()
 
-func (f readerFunc) Read(_ context.Context, launched map[string]bool) ([]RecordedUpdate, error) {
-	f(launched)
+func (f readerFunc) Read(context.Context) ([]RecordedUpdate, error) {
+	f()
 	return nil, nil
 }
 
 func (readerFunc) Busy() bool { return false }
+
+// listReader hands out one list of updates, then nothing.
+type listReader struct {
+	updates []RecordedUpdate
+	busy    bool
+}
+
+func (r *listReader) Read(context.Context) ([]RecordedUpdate, error) {
+	out := r.updates
+	r.updates = nil
+	return out, nil
+}
+
+func (r *listReader) Busy() bool { return r.busy }
+
+func recordTestConversation(turn string, buffer int, reader SubagentRecordReader) (*conversation, *recordFollower) {
+	conv := newTestConversation()
+	conv.events = make(chan ports.ChatEvent, buffer)
+	conv.closing = make(chan struct{})
+	conv.activeTurn = turn
+	follower := &recordFollower{reader: reader, readMu: make(chan struct{}, 1),
+		tools: map[string]map[string]*toolState{}, said: map[string]map[string]string{}}
+	conv.recordFollower = follower
+	return conv, follower
+}
+
+func said(child, id, text string) RecordedUpdate {
+	return RecordedUpdate{Launch: "launch", Child: child, Update: &acpsdk.SessionUpdate{AgentMessageChunk: &acpsdk.SessionUpdateAgentMessageChunk{
+		MessageId: &id, Content: acpsdk.TextBlock(text),
+	}}}
+}
+
+func TestRecordPollDoesNotStartWhileTheTurnSettles(t *testing.T) {
+	conv, follower := recordTestConversation("turn-1", 4, &listReader{})
+	conv.settlingTurn = "turn-1"
+	conv.pollSubagentRecords()
+	if follower.stop != nil {
+		t.Fatal("a launch seen while the turn settles must leave reading to the last read")
+	}
+}
+
+// A consumer that stops reading must not hold the turn's last read past its
+// deadline, and what it could not take is delivered on the next read of the
+// same turn, whole and once.
+func TestRecordDeliveryGivesUpAndRedeliversInTheSameTurn(t *testing.T) {
+	reader := &listReader{updates: []RecordedUpdate{said("child", "m1", "One."), said("child", "m2", "Two.")}}
+	conv, follower := recordTestConversation("turn-1", 1, reader)
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+	if busy, ok := conv.readSubagentRecords(ctx, follower); !ok || !busy {
+		t.Fatalf("read = busy %v, ok %v; want busy with a backlog", busy, ok)
+	}
+	if len(follower.backlog) != 1 || follower.backlogTurn != "turn-1" {
+		t.Fatalf("backlog = %d for %q", len(follower.backlog), follower.backlogTurn)
+	}
+	if first := <-conv.events; first.Text != "One." {
+		t.Fatalf("first = %q", first.Text)
+	}
+	if busy, _ := conv.readSubagentRecords(context.Background(), follower); busy {
+		t.Fatal("still busy after the backlog went out")
+	}
+	if second := <-conv.events; second.Text != "Two." {
+		t.Fatalf("second = %q; the held update must go out whole", second.Text)
+	}
+}
+
+func TestRecordBacklogIsNeverFiledOnALaterTurn(t *testing.T) {
+	conv, follower := recordTestConversation("turn-2", 4, &listReader{})
+	follower.backlog, follower.backlogTurn = []RecordedUpdate{said("child", "m1", "Late.")}, "turn-1"
+	conv.readSubagentRecords(context.Background(), follower)
+	if len(follower.backlog) != 0 || len(conv.events) != 0 {
+		t.Fatalf("turn-1's backlog must be dropped, not filed on turn-2: %d left, %d sent", len(follower.backlog), len(conv.events))
+	}
+}
+
+func TestRecordedRunEndReleasesItsMessages(t *testing.T) {
+	reader := &listReader{updates: []RecordedUpdate{
+		said("child", "m1", "Working."),
+		{Launch: "launch", Child: "child", End: &RecordedEnd{ID: "run-1", Status: RecordedCompleted}},
+	}}
+	conv, follower := recordTestConversation("turn-1", 4, reader)
+	conv.readSubagentRecords(context.Background(), follower)
+	if len(follower.said) != 0 {
+		t.Fatalf("an ended run's messages are still held: %v", follower.said)
+	}
+}

@@ -486,6 +486,7 @@ func validatePrivateNativeLog(ctx context.Context, root, path, id, cwd string) e
 type NativeHistoryEvent struct {
 	Type      string
 	Seq       int64
+	Time      int64 // milliseconds since the epoch; set by SessionTail
 	Data      json.RawMessage
 	SurfaceOp json.RawMessage
 }

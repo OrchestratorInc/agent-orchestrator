@@ -134,15 +134,48 @@ func TestSessionTailStopsOnALogItCannotFollow(t *testing.T) {
 		if _, err := tail.Next(ctx); err != nil {
 			t.Fatal(err)
 		}
+		original, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatal(err)
+		}
 		if err := os.WriteFile(path, []byte(tailHeader(tailTestID)+"\n"), 0o600); err != nil {
 			t.Fatal(err)
 		}
+		_, shrank := tail.Next(ctx)
+		if !errors.Is(shrank, errTailUnsupported) {
+			t.Fatalf("err = %v, want unsupported", shrank)
+		}
+		// It stays stopped even once the log reads well again.
+		if err := os.WriteFile(path, original, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		appendBytes(t, path, []byte(tailEvent(1, "turn/end")+"\n"))
+		if events, err := tail.Next(ctx); err != shrank || len(events) != 0 {
+			t.Fatalf("after the log recovered = %v, %v; want the first failure again", eventTypes(events), err)
+		}
+	})
+	t.Run("a cancelled read is retried", func(t *testing.T) {
+		path := filepath.Join(t.TempDir(), "session.v4.jsonl")
+		appendBytes(t, path, []byte(tailHeader(tailTestID)+"\n"+tailEvent(0, "turn/start")+"\n"))
+		tail := NewSessionTail(path)
+		cancelled, cancel := context.WithCancel(ctx)
+		cancel()
+		if _, err := tail.Next(cancelled); !errors.Is(err, context.Canceled) {
+			t.Fatalf("err = %v, want cancelled", err)
+		}
+		if events, err := tail.Next(ctx); err != nil || strings.Join(eventTypes(events), ",") != "0:turn/start" {
+			t.Fatalf("retry = %v, %v; want the events the cancelled read left", eventTypes(events), err)
+		}
+	})
+	t.Run("a bad line leaves the batch unconsumed", func(t *testing.T) {
+		path := filepath.Join(t.TempDir(), "session.v4.jsonl")
+		appendBytes(t, path, []byte(tailHeader(tailTestID)+"\n"+tailEvent(0, "turn/start")+"\n{not json\n"))
+		tail := NewSessionTail(path)
 		if _, err := tail.Next(ctx); !errors.Is(err, errTailUnsupported) {
 			t.Fatalf("err = %v, want unsupported", err)
 		}
-		// It stays stopped.
-		if _, err := tail.Next(ctx); !errors.Is(err, errTailUnsupported) {
-			t.Fatalf("second err = %v, want unsupported", err)
+		if tail.offset != 0 || tail.header != nil || tail.nextSeq != 0 {
+			t.Fatalf("a failed batch moved the cursor: offset %d, header %v, next %d", tail.offset, tail.header, tail.nextSeq)
 		}
 	})
 }
@@ -167,6 +200,25 @@ func TestFindSessionLogFindsTheSessionByItsID(t *testing.T) {
 	}
 	if _, err := FindSessionLog(home, "../etc"); err == nil || errors.Is(err, fs.ErrNotExist) {
 		t.Fatalf("an id that is not a session id must be refused, got %v", err)
+	}
+}
+
+func TestFindSessionLogReportsAFolderItCannotRead(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root reads any folder")
+	}
+	home := t.TempDir()
+	locked := filepath.Join(home, "sessions", "--work--")
+	if err := os.MkdirAll(filepath.Join(locked, tailTestID), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(locked, 0o000); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(locked, 0o700) })
+	_, err := FindSessionLog(home, tailTestID)
+	if err == nil || errors.Is(err, fs.ErrNotExist) {
+		t.Fatalf("err = %v; want the permission error, not 'not written yet'", err)
 	}
 }
 
