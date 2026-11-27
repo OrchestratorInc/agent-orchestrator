@@ -30,8 +30,8 @@ import (
 //
 // Exit codes: 0 ready (and the task started, with --start), 10 a person must
 // act first (next_actions says what), 1 failed, 2 usage error, 3 the task
-// started with --start is waiting on the user, 4 that task is still queued
-// when the wait ends (it will run; do not start it again).
+// started with --start is waiting on the user, 4 that task was submitted but
+// the wait ended first, still queued or interrupted (do not start it again).
 
 // Step names, in the order they run. They are part of the --json contract.
 const (
@@ -146,8 +146,8 @@ func newSetupCommand(ctx *commandContext) *cobra.Command {
 			"With --start \"<task>\" it also starts a task, on the project's orchestrator by default or on\n" +
 			"one worker with --worker, and waits until the task has started.\n\n" +
 			"Exit codes: 0 ready, 10 a person must act first (see next_actions), 1 failed, 2 usage error,\n" +
-			"3 the task started with --start is waiting on the user, 4 that task is still queued when\n" +
-			"the wait ends (it will run; do not start it again).\n" +
+			"3 the task started with --start is waiting on the user, 4 that task was submitted but the wait\n" +
+			"ended first, still queued or interrupted (it will run; do not start it again).\n" +
 			"With --json, stdout is {ready, agent, project, steps, next_actions, task}; each step is\n" +
 			"{step, status, detail, fix} with status ok, fixed, skipped, needs_human or failed.",
 		Args: noArgs,
@@ -225,6 +225,9 @@ func setupExit(res setupResult, opts setupOptions) error {
 		return taskExitError{code: taskExitNeedsInput, msg: "the task is waiting on you: " + res.Task.Reason}
 	case res.Task != nil && res.Task.Status == taskStatusQueued && res.Task.waitTimedOut:
 		return taskExitError{code: taskExitStillQueued, msg: "the task is still queued and will run; do not start it again: " + res.Task.Reason}
+	case res.Task != nil && res.Task.waitInterrupted:
+		// Submitted, but the wait was stopped first (as ao task, exit 4).
+		return taskExitError{code: taskExitStillQueued, msg: "the task was submitted but the wait was interrupted; do not start it again: " + res.Task.Reason}
 	case len(human) > 0:
 		return taskExitError{code: setupExitNeedsHuman, msg: "setup needs you: " + strings.Join(human, "; ")}
 	case opts.check && !res.Ready:
@@ -1626,6 +1629,14 @@ func (c *commandContext) setupStartStep(ctx context.Context, opts setupOptions, 
 		task.SessionIDs = []string{}
 	}
 	res.Task = &task
+	if task.waitInterrupted {
+		// The wait was stopped (a signal) after the task was submitted: it
+		// exists, so it must not be started again.
+		step.Status = setupFixed
+		step.Detail = fmt.Sprintf("task %s was submitted to %s, but the wait was interrupted before it was confirmed; do not start it again", task.TaskID, target)
+		step.Fix = "ao task wait " + task.TaskID
+		return step
+	}
 	switch task.Status {
 	case taskStatusFailed:
 		// The exit code comes from the task (1); the step stays out of

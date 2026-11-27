@@ -1598,3 +1598,15 @@ func TestSetupUninstalledCallerFallsBackOnAFreshDaemon(t *testing.T) {
 		t.Fatalf("ready=%v agent=%+v", res.Ready, res.Agent)
 	}
 }
+
+func TestSetupInterruptedStartExits4(t *testing.T) {
+	task := taskResult{Status: taskStatusRunning, TaskID: "calc-1", SessionIDs: []string{"calc-1"}, waitInterrupted: true}
+	res := setupResult{Task: &task, Steps: []setupStep{{Step: setupStepStart, Status: setupFixed, Fix: "ao task wait calc-1"}}, NextActions: []string{}}
+	finishSetup(&res, setupOptions{start: "fix it"})
+	if got := ExitCode(setupExit(res, setupOptions{start: "fix it"})); got != taskExitStillQueued {
+		t.Fatalf("exit = %d, want 4 for a submitted task whose wait was interrupted", got)
+	}
+	if !reflect.DeepEqual(res.NextActions, []string{"ao task wait calc-1"}) {
+		t.Fatalf("next_actions = %q", res.NextActions)
+	}
+}

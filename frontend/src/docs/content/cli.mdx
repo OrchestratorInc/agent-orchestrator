@@ -175,7 +175,7 @@ It runs these steps in order and reports each as `{step, status, detail, fix}`, 
 | `1` | A step failed, or the task started with `--start` failed. If `task.taskId` is set, check it with `ao task status` before starting the task again. |
 | `2` | Usage error. |
 | `3` | The task started with `--start` is waiting on you. |
-| `4` | The task started with `--start` is still queued behind the agent's current turn when the wait ends. It will run; do not start it again. |
+| `4` | The task started with `--start` was submitted, but the wait ended first (still queued, or interrupted). Do not start it again; follow it with `ao task wait <taskId>`. |
 
 ```json
 {
