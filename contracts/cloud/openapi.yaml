@@ -47,6 +47,82 @@ paths:
                 $ref: "#/components/schemas/CurrentAccount"
         default:
           $ref: "#/components/responses/Error"
+  /api/cloud/v1/me/data-retention:
+    get:
+      operationId: getDataRetention
+      tags: [Account]
+      description: >-
+        How long the caller's Cloud sessions and their conversation content
+        are kept. The setting is the signed-in user's own and covers every
+        Cloud session they started, in any organization, team sessions
+        included; a child session an orchestrator started follows the
+        orchestrator session's creator. The clock runs from a session's
+        creation: once a session is older than retentionDays and has ended
+        (a session still running is never ended for it; it waits until
+        someone ends it), its sandbox is deleted and its content (chat
+        timeline, harness transcripts, terminal output, commands,
+        agent-switch handoffs and prompts) is deleted for good. The session
+        itself remains, without its content, for billing and audit. A user
+        follows defaultDays (followsDefault) until they choose another
+        period, and can go back to it.
+      responses:
+        "200":
+          description: The caller's retention period.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DataRetention"
+        "401":
+          description: unauthorized. The caller is not signed in.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+        default:
+          $ref: "#/components/responses/Error"
+    put:
+      operationId: putDataRetention
+      tags: [Account]
+      description: >-
+        Choose how long the caller's Cloud sessions and their conversation
+        content are kept: one of options, or null to follow the deployment's
+        default again (defaultDays, and any later change to it). Both modes
+        answer sessionsToDelete, the number of the caller's sessions, across
+        all organizations, older than the requested period whose content has
+        not been deleted yet: what this change deletes (a session still
+        running once it has ended). With dryRun true nothing changes, so a
+        client can show that number and ask for confirmation before it sends
+        the same request with dryRun false. Every change is written to the
+        audit log with the old and new period.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/PutDataRetentionInput"
+      responses:
+        "200":
+          description: >-
+            The caller's retention period as stored (unchanged by a dry run)
+            and how many of their sessions the requested period deletes.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DataRetentionChange"
+        "400":
+          description: invalid_retention. retentionDays is missing, or neither one of options nor null.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+        "401":
+          description: unauthorized. The caller is not signed in.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+        default:
+          $ref: "#/components/responses/Error"
   /api/cloud/v1/me/providers:
     get:
       operationId: listUserProviderConnections
@@ -420,11 +496,17 @@ paths:
         address and serves the file under that name. The
         file goes in partCount parts of partSize bytes, the last one shorter:
         presign them with presignArtifactShareParts, PUT each, then
-        finalizeArtifactShare. There is no file size limit. Nothing reaches
-        storage when the upload is refused: 415
-        artifact_share_type_unsupported for video, 409
-        artifact_share_limit_reached for a new or restored document over the
-        free plan's link limit. Paid plans have no link limit. An older
+        finalizeArtifactShare. There is no file size limit but for video.
+        Nothing reaches storage when the upload is refused: 415
+        artifact_share_type_unsupported for a video the control plane does
+        not serve (any video while it serves none; .ogv, .avi and .mkv, which
+        browsers do not play, always), 413 artifact_share_video_too_large for
+        a video over its size limit (1 GiB by default; the message names
+        it), 409 artifact_share_limit_reached for a new or restored document
+        over the free plan's link limit. A video's contentUrl answers 302 to
+        a signed URL on a separate video host, which the browser's player
+        follows; with the control plane's video host turned off, a video
+        already published answers 503 artifact_share_video_unavailable. Paid plans have no link limit. An older
         control plane refuses an update with another name with 409
         artifact_share_name_changed. The images and other files an HTML
         page refers to by relative path are uploaded under this upload
@@ -493,8 +575,8 @@ paths:
         createArtifactShareUpload) refers to by relative path, such as an
         image. The link serves it at path under its root, so
         <img src="images/a.png"> in the page loads the file whose path is
-        images/a.png. Any file type but video may be included, and there is
-        no file size limit. Its parts go as the page's do
+        images/a.png. Any file type may be included, and there is no file
+        size limit but for video, as for a link's own file. Its parts go as the page's do
         (presignArtifactShareParts, PUT each, abortArtifactShareUpload to
         cancel); finish it with completeArtifactShareFileUpload. 400
         invalid_request for a path that is absolute, has an empty, "." or
@@ -502,8 +584,12 @@ paths:
         (raw, or under _ao/ or a first segment starting with ~); 429
         artifact_share_rate_limited past the hourly allowance. A control
         plane that predates included files answers 404. 415
-        artifact_share_type_unsupported for video (.mp4, .m4v, .mov, .webm,
-        .ogv, .avi, .mkv), as for a link's own file.
+        artifact_share_type_unsupported for a video the control plane does
+        not serve, and 413 artifact_share_video_too_large for one over its
+        size limit, as for a link's own file: a client leaves that file out
+        and publishes the page with the rest, naming them in
+        finalizeArtifactShare's files (an empty list when none uploaded),
+        since an update without files keeps the files the link served.
       requestBody:
         required: true
         content:
@@ -640,6 +726,306 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/PublicArtifactShare"
+        default:
+          $ref: "#/components/responses/Error"
+  /api/cloud/v1/artifact-shares/{linkId}/comments:
+    parameters:
+      - $ref: "#/components/parameters/ArtifactShareLinkId"
+    get:
+      operationId: listArtifactShareComments
+      tags: [Artifacts]
+      description: >-
+        Returns every comment thread on one version of a share link, with
+        its comments oldest first, for a signed-in person who can open the
+        link: its owner, anyone for a public link, or, for a private link,
+        someone it is shared with by verified email, team or workspace. Any
+        other link, private or not there at all, returns 404, the same as
+        viewArtifactShare, and access is checked before anything else, so
+        someone who loses access gets 404 on their next poll. version
+        defaults to the link's current version; an older version is
+        readable, and a version the link never had returns 409
+        artifact_share_version_unknown. The response carries an ETag of
+        "r<revision>-v<version>", where version is the version read:
+        revision goes up on every comment write on the link (new thread,
+        reply, edit, delete, resolve, reopen, sent to agent), and when the
+        account of someone who commented on the link or resolved one of its
+        threads is deleted, so a 304 never keeps a deleted person's ID or
+        name. A display-name change does not change it: the new name shows
+        from the link's next comment write. Send it back in
+        If-None-Match and an unchanged list answers 304 with no body. Without
+        the version parameter the version read is the current one, so a
+        republish with different bytes changes the ETag and the next poll
+        gets 200 with the new version. With version pinned, the ETag names
+        only that version: a 304 means its threads are unchanged, and says
+        nothing about currentVersion, which a client learns only from a 200
+        (or from an unpinned read). Clients poll this at most every 30
+        seconds while the comments panel is open. Authors are named by display name only, never email.
+      parameters:
+        - name: version
+          in: query
+          required: false
+          description: The link version to read; defaults to the current one.
+          schema:
+            type: integer
+            minimum: 1
+        - name: If-None-Match
+          in: header
+          required: false
+          description: The ETag of the copy the client already has.
+          schema:
+            type: string
+      responses:
+        "200":
+          description: >-
+            Every thread on the version read, with its comments, and the
+            link's currentVersion as of this response.
+          headers:
+            ETag:
+              description: >-
+                "r<revision>-v<version>", quoted; version is the version
+                read, not necessarily the current one.
+              schema:
+                type: string
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ArtifactShareCommentsSnapshot"
+        "304":
+          description: >-
+            The threads on the version read are unchanged since the
+            If-None-Match ETag. For a pinned version this does not cover
+            currentVersion: the cached snapshot's currentVersion may be
+            older than the link's.
+          headers:
+            ETag:
+              description: The same ETag the client sent.
+              schema:
+                type: string
+        "404":
+          $ref: "#/components/responses/ArtifactShareCommentsNotFound"
+        "409":
+          $ref: "#/components/responses/ArtifactShareVersionUnknown"
+        default:
+          $ref: "#/components/responses/Error"
+  /api/cloud/v1/artifact-shares/{linkId}/comments/threads:
+    parameters:
+      - $ref: "#/components/parameters/ArtifactShareLinkId"
+    post:
+      operationId: createArtifactShareThread
+      tags: [Artifacts]
+      description: >-
+        Starts a thread on an element of one version of a share link, with
+        its first comment, for anyone who can list the link's comments.
+        version must be one the link has had (no later than the current
+        one), so a comment made in a tab still showing an older version
+        lands on that version; otherwise 409 artifact_share_version_unknown.
+        Retrying with the same clientId returns the thread already made
+        (201 for a new thread, 200 for that retry) instead of making a
+        second one; 409 conflict when the caller already used the clientId
+        for a different comment. 400 invalid_request for an empty or
+        too-long body or a bad anchor; 413 request_too_large for a request
+        body over 32 KiB; 404 when the link is not there or the caller
+        cannot open it.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ArtifactShareThreadCreateInput"
+      responses:
+        "200":
+          description: A retry; the thread this clientId already made.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ArtifactShareCommentThread"
+        "201":
+          description: The new thread, with its first comment.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ArtifactShareCommentThread"
+        "400":
+          $ref: "#/components/responses/ArtifactShareCommentInvalid"
+        "404":
+          $ref: "#/components/responses/ArtifactShareCommentsNotFound"
+        "409":
+          description: >-
+            artifact_share_version_unknown when the link has never had this
+            version; conflict when the caller already used this clientId for
+            a different comment.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+        "413":
+          $ref: "#/components/responses/ArtifactShareCommentTooLarge"
+        default:
+          $ref: "#/components/responses/Error"
+  /api/cloud/v1/artifact-shares/{linkId}/comments/threads/{threadId}:
+    parameters:
+      - $ref: "#/components/parameters/ArtifactShareLinkId"
+      - $ref: "#/components/parameters/ArtifactShareThreadId"
+    patch:
+      operationId: setArtifactShareThreadStatus
+      tags: [Artifacts]
+      description: >-
+        Resolves or reopens a thread. Anyone who can comment on the link may.
+        Setting the status it already has changes nothing and returns the
+        thread. 404 when the link, or the thread on it, is not there or the
+        caller cannot open the link.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ArtifactShareThreadStatusInput"
+      responses:
+        "200":
+          description: The thread with its new status.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ArtifactShareCommentThread"
+        "400":
+          $ref: "#/components/responses/ArtifactShareCommentInvalid"
+        "404":
+          $ref: "#/components/responses/ArtifactShareCommentsNotFound"
+        "413":
+          $ref: "#/components/responses/ArtifactShareCommentTooLarge"
+        default:
+          $ref: "#/components/responses/Error"
+  /api/cloud/v1/artifact-shares/{linkId}/comments/threads/{threadId}/replies:
+    parameters:
+      - $ref: "#/components/parameters/ArtifactShareLinkId"
+      - $ref: "#/components/parameters/ArtifactShareThreadId"
+    post:
+      operationId: replyArtifactShareThread
+      tags: [Artifacts]
+      description: >-
+        Adds a reply to a thread, for anyone who can comment on the link, on
+        an open or resolved thread. Retrying with the same clientId returns
+        the comment already made (201 for a new reply, 200 for that retry);
+        409 conflict when the caller already used the clientId for a
+        different comment. 400 invalid_request for an empty or too-long
+        body; 413 request_too_large for a request body over 32 KiB; 404 when the link, or the thread on it, is not there
+        or the caller cannot open the link.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ArtifactShareReplyInput"
+      responses:
+        "200":
+          description: A retry; the comment this clientId already made.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ArtifactShareComment"
+        "201":
+          description: The new reply.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ArtifactShareComment"
+        "400":
+          $ref: "#/components/responses/ArtifactShareCommentInvalid"
+        "404":
+          $ref: "#/components/responses/ArtifactShareCommentsNotFound"
+        "409":
+          $ref: "#/components/responses/ArtifactShareCommentClientIdConflict"
+        "413":
+          $ref: "#/components/responses/ArtifactShareCommentTooLarge"
+        default:
+          $ref: "#/components/responses/Error"
+  /api/cloud/v1/artifact-shares/{linkId}/comments/threads/{threadId}/sent:
+    parameters:
+      - $ref: "#/components/parameters/ArtifactShareLinkId"
+      - $ref: "#/components/parameters/ArtifactShareThreadId"
+    post:
+      operationId: markArtifactShareThreadSent
+      tags: [Artifacts]
+      description: >-
+        Records that the link's owner sent the thread to an agent from the
+        desktop app: sets sentToAgentAt to now and adds one to
+        sentToAgentCount, so everyone sees "Sent to agent". The control
+        plane does not contact the agent; the app sends the message itself
+        and calls this only after that succeeded. Only the link's owner may
+        (403 forbidden for anyone else who can open it); 404 when the link,
+        or the thread on it, is not there or the caller cannot open the
+        link.
+      responses:
+        "200":
+          description: The thread with its sent-to-agent mark.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ArtifactShareCommentThread"
+        "403":
+          $ref: "#/components/responses/ArtifactShareCommentForbidden"
+        "404":
+          $ref: "#/components/responses/ArtifactShareCommentsNotFound"
+        default:
+          $ref: "#/components/responses/Error"
+  /api/cloud/v1/artifact-shares/{linkId}/comments/{commentId}:
+    parameters:
+      - $ref: "#/components/parameters/ArtifactShareLinkId"
+      - name: commentId
+        in: path
+        required: true
+        description: The comment's ID.
+        schema:
+          type: string
+          format: uuid
+    patch:
+      operationId: editArtifactShareComment
+      tags: [Artifacts]
+      description: >-
+        Replaces the text of the caller's own comment and sets its editedAt.
+        403 forbidden for someone else's comment; 400 invalid_request for an
+        empty or too-long body or a deleted comment; 404 when the link, or
+        the comment on it, is not there or the caller cannot open the link.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ArtifactShareCommentEditInput"
+      responses:
+        "200":
+          description: The edited comment.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ArtifactShareComment"
+        "400":
+          $ref: "#/components/responses/ArtifactShareCommentInvalid"
+        "403":
+          $ref: "#/components/responses/ArtifactShareCommentForbidden"
+        "404":
+          $ref: "#/components/responses/ArtifactShareCommentsNotFound"
+        "413":
+          $ref: "#/components/responses/ArtifactShareCommentTooLarge"
+        default:
+          $ref: "#/components/responses/Error"
+    delete:
+      operationId: deleteArtifactShareComment
+      tags: [Artifacts]
+      description: >-
+        Deletes a comment, for its author or the link's owner (403 forbidden
+        for anyone else). When no other comment in its thread is left
+        undeleted the whole thread goes; otherwise the comment stays as a
+        deleted placeholder (deleted true, empty body) so its replies keep
+        their place. 404 when the link, or the comment on it, is not there
+        or the caller cannot open the link.
+      responses:
+        "204":
+          description: The comment, or its thread, is deleted.
+        "403":
+          $ref: "#/components/responses/ArtifactShareCommentForbidden"
+        "404":
+          $ref: "#/components/responses/ArtifactShareCommentsNotFound"
         default:
           $ref: "#/components/responses/Error"
   /api/cloud/v1/me/shared-artifacts:
@@ -1576,6 +1962,14 @@ paths:
           description: Also delete the session's artifact files. A restored session comes back without them.
           schema:
             type: boolean
+        - name: moveId
+          in: query
+          required: false
+          description: >-
+            Deletes the session only as the copy a move to an AO daemon left:
+            the move/export with this moveId. Refused (409 MOVE_COPY_IN_USE)
+            when the session was restarted or has activity after that export.
+          schema: { type: string, format: uuid }
       responses:
         "202":
           description: Session sandbox deletion was requested; durable history is retained.
@@ -1583,6 +1977,14 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/DeleteSessionResponse"
+        "409":
+          description: >-
+            MOVE_COPY_IN_USE: the session was used again after the move's
+            export (moveId), so it is kept. Retrying will not delete it.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
         default:
           $ref: "#/components/responses/Error"
     patch:
@@ -1608,6 +2010,67 @@ paths:
                 properties:
                   session:
                     $ref: "#/components/schemas/Session"
+        default:
+          $ref: "#/components/responses/Error"
+  /api/cloud/v1/orgs/{orgId}/sessions/{sessionId}/restore:
+    parameters:
+      - $ref: "#/components/parameters/OrgId"
+      - $ref: "#/components/parameters/SessionId"
+    post:
+      operationId: restoreSession
+      tags: [Sessions]
+      description: >-
+        Restores a deleted session under the same id: it is no longer
+        terminated and a new sandbox is provisioned, which resumes the
+        conversation and work captured before the delete. The provisioning
+        happens after the response.
+      responses:
+        "202":
+          description: The session was restored; its sandbox is being provisioned.
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: false
+                required: [session]
+                properties:
+                  session:
+                    type: object
+                    additionalProperties: false
+                    required: [id, restored]
+                    properties:
+                      id:
+                        type: string
+                        format: uuid
+                      restored:
+                        type: boolean
+                        const: true
+        "404":
+          description: >-
+            not_found. No such session, a session of a deleted project, or one
+            whose content was deleted for its creator's data retention.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+        "409":
+          description: >-
+            SESSION_MOVED_AWAY. The session moved to another computer (its
+            movedAway is true) and continues there; to use AO Cloud again, move
+            it from that computer.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+        "410":
+          description: >-
+            SESSION_CONTENT_EXPIRED. The session is older than its creator's
+            data retention period (GET /me/data-retention), so its content is
+            being deleted, and it cannot be restored.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
         default:
           $ref: "#/components/responses/Error"
   /api/cloud/v1/orgs/{orgId}/sessions/{sessionId}/pin:
@@ -1725,6 +2188,18 @@ paths:
                 properties:
                   transition:
                     $ref: "#/components/schemas/SessionInterfaceTransition"
+        "409":
+          description: >-
+            SESSION_MOVING: the session's work is moving to another machine.
+            While a move's export is in flight, and after it answered, AO
+            Cloud refuses this until the move ends (the session deleted) or is abandoned (agent/restart):
+            the session takes no messages, its worker claims no queued turn,
+            its terminal agent is not started again and its interface does
+            not switch.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
         default:
           $ref: "#/components/responses/Error"
     delete:
@@ -1778,7 +2253,9 @@ paths:
         the worker bootstrap runs again against the existing sandbox; a
         bring-your-own workspace is never recreated. Returns 409
         startup_retry_unavailable when the worker has already checked in or the
-        session is not meant to be running.
+        session is not meant to be running. While the session's work is moving
+        to another machine (SESSION_MOVING), its terminal agent is not started
+        again; agent/restart abandons the move.
       responses:
         "202":
           description: The retry was accepted for asynchronous processing.
@@ -1790,6 +2267,305 @@ paths:
                 properties:
                   session:
                     $ref: "#/components/schemas/Session"
+        default:
+          $ref: "#/components/responses/Error"
+  /api/cloud/v1/orgs/{orgId}/sessions/{sessionId}/move/preview:
+    parameters:
+      - $ref: "#/components/parameters/OrgId"
+      - $ref: "#/components/parameters/SessionId"
+    get:
+      operationId: previewSessionMove
+      tags: [Sessions]
+      description: >-
+        What move/export would push now: the branch, the uncommitted paths it
+        would commit and the conversation it would carry. Changes nothing.
+      responses:
+        "200":
+          description: The move as it stands.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [branch, changes]
+                properties:
+                  branch: { type: string }
+                  changes:
+                    type: array
+                    items:
+                      type: object
+                      required: [path, status]
+                      properties:
+                        path: { type: string }
+                        status: { type: string, enum: [added, modified, deleted] }
+                        untracked:
+                          type: boolean
+                          description: >-
+                            An added file git did not track in the sandbox, which
+                            the user may not expect the move to commit and push.
+                  transcript:
+                    type: object
+                    description: >-
+                      The agent's conversation the move would carry: a Claude
+                      Code, Codex, OpenCode or Cursor conversation. Absent for
+                      another agent or when there is none.
+                    required: [bytes]
+                    properties:
+                      bytes:
+                        type: integer
+                        format: int64
+                        description: The transcript and its sidecar folder.
+                      subagents: { type: integer }
+        "409":
+          description: >-
+            MOVE_WORKER_TOO_OLD: the session's worker is too old to move it;
+            restarting the session updates it. Refused before the worker is
+            asked, so nothing stopped, committed or pushed.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+        default:
+          $ref: "#/components/responses/Error"
+  /api/cloud/v1/orgs/{orgId}/sessions/{sessionId}/move/export:
+    parameters:
+      - $ref: "#/components/parameters/OrgId"
+      - $ref: "#/components/parameters/SessionId"
+    post:
+      operationId: exportSessionMove
+      tags: [Sessions]
+      description: >-
+        Stops the session's agent, then commits the session's uncommitted
+        work, ignored files aside, as one commit on its branch and pushes the
+        branch, so an AO daemon's move/import can continue the session from
+        it. Delete the session once the import succeeds; if the move fails,
+        agent/restart starts its terminal agent again. Viewers get 403. A
+        branch the remote has commits for that the session lacks fails the
+        push. Asked again while a move holds the session (its export running,
+        or answered and the move neither ended nor abandoned), it answers with
+        that move, under the same moveId (200 once answered, 202 while it
+        runs), instead of starting another.
+      parameters:
+        - name: moveId
+          in: query
+          required: false
+          description: >-
+            An export already started (from a 202): wait on it and answer with
+            its result instead of starting another.
+          schema: { type: string, format: uuid }
+      responses:
+        "200":
+          description: The pushed branch, in the shape an AO daemon's move/import takes.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SessionMoveExport"
+        "202":
+          description: >-
+            The export is still running after about 50 s. Its request lives for
+            five minutes; ask again with its moveId (Location) after Retry-After.
+          headers:
+            Location:
+              description: The GET route that answers for this export.
+              schema: { type: string }
+            Retry-After:
+              description: Seconds to wait before asking again.
+              schema: { type: string }
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SessionMoveExportRunning"
+        "504":
+          description: >-
+            MOVE_EXPORT_TIMED_OUT: the export can no longer finish.
+            details.branchMayBePushed says whether its branch may already be
+            pushed (only when a worker took it); details.moveId names it. Try
+            again with a new export, which reuses a pushed WIP commit, or
+            restart the agent to stay in AO Cloud.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+        "409":
+          description: >-
+            MOVE_WORKER_TOO_OLD: the session's worker is too old to move it;
+            restarting the session updates it. Refused before the worker is
+            asked, so nothing stopped, committed or pushed.
+            MOVE_AGENT_STILL_RUNNING: some of the agent's processes could not
+            be confirmed stopped, so nothing was committed or pushed; trying
+            again is safe (it ends them first). MOVE_TURNS_QUEUED: messages
+            are still queued for the session in AO Cloud; let them run or
+            remove them, then move. INTERFACE_TRANSITION_IN_PROGRESS: an
+            interface or agent switch is in progress for the session; try
+            again once it finishes. These two are refused before the worker is
+            asked, so nothing stopped, committed or pushed. Other refusals of
+            the move
+            (such as MOVE_WRONG_BRANCH or MOVE_DEFAULT_BRANCH) answer 409 too,
+            with their code.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+        "422":
+          description: >-
+            MOVE_TRANSCRIPT_NOT_CAPTURED: the branch was pushed, but the
+            session's latest conversation could not be saved to AO Cloud, so the
+            move stopped; ask again. details.branch names the branch and
+            details.pushedTip the commit origin now has. Another refusal of the
+            worker's answers here too, with its code.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+        default:
+          $ref: "#/components/responses/Error"
+  /api/cloud/v1/orgs/{orgId}/sessions/{sessionId}/move/export/{moveId}:
+    parameters:
+      - $ref: "#/components/parameters/OrgId"
+      - $ref: "#/components/parameters/SessionId"
+      - name: moveId
+        in: path
+        required: true
+        schema: { type: string, format: uuid }
+    get:
+      operationId: getSessionMoveExport
+      tags: [Sessions]
+      description: >-
+        Waits up to about 50 s on an export move/export started and answers as
+        it does: the move once done (a late answer is adopted, no second export
+        runs), 202 while its worker is still on it, 504 MOVE_EXPORT_TIMED_OUT
+        once it can no longer finish.
+      responses:
+        "200":
+          description: The pushed branch, in the shape an AO daemon's move/import takes.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SessionMoveExport"
+        "202":
+          description: >-
+            The export is still running after about 50 s. Its request lives for
+            five minutes; ask again with its moveId (Location) after Retry-After.
+          headers:
+            Location:
+              description: The GET route that answers for this export.
+              schema: { type: string }
+            Retry-After:
+              description: Seconds to wait before asking again.
+              schema: { type: string }
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SessionMoveExportRunning"
+        "504":
+          description: >-
+            MOVE_EXPORT_TIMED_OUT: the export can no longer finish.
+            details.branchMayBePushed says whether its branch may already be
+            pushed (only when a worker took it); details.moveId names it. Try
+            again with a new export, which reuses a pushed WIP commit, or
+            restart the agent to stay in AO Cloud.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+        "409":
+          description: >-
+            MOVE_WORKER_TOO_OLD: the session's worker is too old to move it;
+            restarting the session updates it. Refused before the worker is
+            asked, so nothing stopped, committed or pushed.
+            MOVE_AGENT_STILL_RUNNING: some of the agent's processes could not
+            be confirmed stopped, so nothing was committed or pushed; trying
+            again is safe (it ends them first). Other refusals of the move
+            (such as MOVE_WRONG_BRANCH or MOVE_DEFAULT_BRANCH) answer 409 too,
+            with their code.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+        "422":
+          description: >-
+            MOVE_TRANSCRIPT_NOT_CAPTURED: the branch was pushed, but the
+            session's latest conversation could not be saved to AO Cloud, so the
+            move stopped; ask again. details.branch names the branch and
+            details.pushedTip the commit origin now has. Another refusal of the
+            worker's answers here too, with its code.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+        default:
+          $ref: "#/components/responses/Error"
+  /api/cloud/v1/orgs/{orgId}/transcript-imports/{importId}:
+    parameters:
+      - $ref: "#/components/parameters/OrgId"
+      - name: importId
+        in: path
+        required: true
+        schema: { type: string, format: uuid }
+        description: Chosen by the caller; createSession names it as transcriptImportId.
+    put:
+      operationId: putSessionTranscriptImport
+      tags: [Sessions]
+      description: >-
+        Uploads a coding agent's conversation, gzipped, for a session moving
+        here from another machine, before createSession starts it. The
+        transcript names the source's working directory as /ao-moved/cwd and,
+        for Claude Code, its project folder as /ao-moved/claude-project; the
+        worker replaces them with its own. Uploading again under the same id
+        replaces it; another user's id is 409. An upload no create uses is
+        dropped after a day.
+      parameters:
+        - name: harness
+          in: query
+          required: true
+          schema: { type: string, enum: [claude-code, codex, cursor, opencode] }
+        - name: agentSessionId
+          in: query
+          required: true
+          schema: { type: string, maxLength: 80 }
+          description: >-
+            The conversation's id, which the agent resumes: a UUID, or for
+            OpenCode a session id such as ses_e34d0cd52ffeMzGW05mHN4RIm7.
+      requestBody:
+        required: true
+        content:
+          application/gzip:
+            schema:
+              type: string
+              format: binary
+              description: At most 32 MiB gzipped and 64 MiB unzipped.
+      responses:
+        "204":
+          description: Stored.
+        default:
+          $ref: "#/components/responses/Error"
+  /api/cloud/v1/orgs/{orgId}/transcript-imports/{importId}/sidecar:
+    parameters:
+      - $ref: "#/components/parameters/OrgId"
+      - name: importId
+        in: path
+        required: true
+        schema: { type: string, format: uuid }
+    put:
+      operationId: putSessionTranscriptImportSidecar
+      tags: [Sessions]
+      description: >-
+        Adds the uploaded conversation's sidecar folder (subagent transcripts,
+        saved tool output) to its upload, which must exist and be the
+        caller's. The worker places it beside the transcript, filling in the
+        same placeholders. Uploading the transcript again clears it.
+      requestBody:
+        required: true
+        content:
+          application/gzip:
+            schema:
+              type: string
+              format: binary
+              description: >-
+                A gzipped tar of regular files at paths relative to the
+                folder, at most 32 MiB gzipped and 64 MiB unzipped.
+      responses:
+        "204":
+          description: Stored.
         default:
           $ref: "#/components/responses/Error"
   /api/cloud/v1/orgs/{orgId}/sessions/{sessionId}/children:
@@ -2024,9 +2800,13 @@ paths:
         Starts a live session's terminal agent again in its worker after it
         exited (Ctrl+C, /exit, a crash), resuming its conversation where the
         agent keeps one, and reads the session as idle rather than exited.
-        requested is false when the agent is still running or starting. A
-        session in Chat starts its agent with its next message instead; a
-        session viewer cannot restart it.
+        requested is false when the agent is still running or starting, and
+        for a session in Chat, which starts its agent with its next message
+        instead (a move that holds it is still abandoned, so Chat takes
+        messages again); a session viewer cannot restart it. On a session whose work is moving to
+        another machine (SESSION_MOVING), once its export answered, it
+        abandons the move: the session stays here and its agent starts again.
+        While the export still runs it answers 409 MOVE_IN_PROGRESS.
       responses:
         "200":
           description: Whether a start was requested.
@@ -2039,6 +2819,15 @@ paths:
                 properties:
                   requested:
                     type: boolean
+        "409":
+          description: >-
+            MOVE_IN_PROGRESS: the session's move export is still running, so
+            the move is not abandoned and its agent is not started. Restart it
+            once the move has finished or failed.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
         default:
           $ref: "#/components/responses/Error"
   /api/cloud/v1/orgs/{orgId}/sessions/{sessionId}/artifacts/share:
@@ -2058,7 +2847,9 @@ paths:
         member of the organization or the session holds no file at path; 409
         artifact_share_source_changed when the session's file is no longer
         the sha256 the caller was shown (inspect it again); 415
-        artifact_share_type_unsupported for a video.
+        artifact_share_type_unsupported for a video the control plane does
+        not serve, 413 artifact_share_video_too_large for one over its size
+        limit, as for a local file (createArtifactShareUpload).
 
         Only a person publishes: the route accepts only a signed-in account
         session, the bearer token of every user route. Worker, sandbox and
@@ -2371,6 +3162,18 @@ paths:
                 properties:
                   event:
                     $ref: "#/components/schemas/UserMessageEvent"
+        "409":
+          description: >-
+            SESSION_MOVING: the session's work is moving to another machine.
+            While a move's export is in flight, and after it answered, AO
+            Cloud refuses this until the move ends (the session deleted) or is abandoned (agent/restart):
+            the session takes no messages, its worker claims no queued turn,
+            its terminal agent is not started again and its interface does
+            not switch.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
         default:
           $ref: "#/components/responses/Error"
   /api/cloud/v1/orgs/{orgId}/sessions/{sessionId}/chat-models:
@@ -3060,6 +3863,11 @@ paths:
     post:
       operationId: createTerminalTicket
       tags: [Terminal]
+      description: >-
+        While a session's work is moving to another machine (while a move's
+        export is in flight and after it answered, until the session is
+        deleted or agent/restart abandons the move), the ticket opens its terminal but its agent is not
+        started again; a message is refused with 409 SESSION_MOVING.
       requestBody:
         required: true
         content:
@@ -4911,6 +5719,21 @@ components:
         `worker:transport` for workspace and terminal transport, and
         `worker:notification` for durable agent notification intake.
   parameters:
+    ArtifactShareLinkId:
+      name: linkId
+      in: path
+      required: true
+      description: The link's public ID, the slug of an ArtifactShare.
+      schema:
+        type: string
+    ArtifactShareThreadId:
+      name: threadId
+      in: path
+      required: true
+      description: The comment thread's ID.
+      schema:
+        type: string
+        format: uuid
     AgentAccountId:
       name: accountId
       in: path
@@ -5095,6 +5918,56 @@ components:
         application/json:
           schema:
             $ref: "#/components/schemas/ErrorEnvelope"
+    ArtifactShareCommentsNotFound:
+      description: >-
+        not_found: the link is not there, is unpublished, or the caller
+        cannot open it; or the thread or comment is not on this link. The
+        same answer in every case, so it never says that a private link
+        exists.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorEnvelope"
+    ArtifactShareCommentInvalid:
+      description: >-
+        invalid_request: an empty or too-long body, a bad anchor, clientId
+        or status.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorEnvelope"
+    ArtifactShareCommentForbidden:
+      description: >-
+        forbidden: editing someone else's comment, deleting a comment that
+        is neither the caller's nor on the caller's link, or a non-owner
+        marking a thread sent to the agent.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorEnvelope"
+    ArtifactShareCommentTooLarge:
+      description: >-
+        request_too_large: the request body is over 32 KiB.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorEnvelope"
+    ArtifactShareCommentClientIdConflict:
+      description: >-
+        conflict: the caller already used this clientId for a different
+        comment (for example on another link). Make a new clientId.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorEnvelope"
+    ArtifactShareVersionUnknown:
+      description: >-
+        artifact_share_version_unknown: the link has never had this version
+        (it is later than the current one).
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorEnvelope"
     BadRequest:
       description: The JSON body, path value, query value, or required header is invalid.
       content:
@@ -5128,6 +6001,96 @@ components:
           schema:
             $ref: "#/components/schemas/ErrorEnvelope"
   schemas:
+    SessionMoveExport:
+      description: >-
+        A finished move export: the pushed branch, in the shape an AO
+        daemon's move/import takes.
+      type: object
+      required: [manifest, handoffNote]
+      properties:
+        moveId:
+          type: string
+          format: uuid
+          description: The export this answers, as GET .../move/export/{moveId} names it.
+        manifest:
+          type: object
+          required: [sourceSessionId, sourceLabel, repoKey, branch, tip, wip, harness]
+          properties:
+            sourceSessionId: { type: string, format: uuid }
+            sourceLabel: { type: string }
+            repoKey:
+              type: string
+              description: Lower-case github.com/<owner>/<name>.
+            branch: { type: string }
+            tip: { type: string, description: The pushed commit. }
+            wip:
+              type: boolean
+              description: The tip is the commit of the uncommitted work.
+            harness: { type: string }
+            model: { type: string }
+            displayName: { type: string }
+            permissions:
+              type: string
+              enum: [default, accept-edits, auto, bypass-permissions]
+              description: >-
+                The session's approval mode, which the moved session
+                keeps; for a session in Chat, the mode its last turn ran
+                with. Absent when the session has none of its own.
+            interface:
+              type: string
+              enum: [chat, terminal]
+              description: >-
+                The interface the session was in. The daemon starts the
+                moved session in it when its agent supports Chat there,
+                else in the terminal (and says so). Absent from an older
+                control plane: the daemon's default.
+            issueId:
+              type: string
+              description: >-
+                The GitHub issue issue intake started the session for, as
+                owner/repo#N; absent for a session intake did not start.
+            pullRequests:
+              type: array
+              items: { type: string }
+              description: >-
+                URLs of the session's open pull requests (its own or claimed
+                by it; not merged or closed); absent when it has none.
+        handoffNote: { type: string }
+        transcript:
+          type: object
+          description: >-
+            The agent's conversation, checkpointed after the push,
+            for the daemon to resume: a Claude Code, Codex,
+            OpenCode or Cursor conversation, as that agent stores
+            it (for OpenCode, its session export document). Absent
+            for another agent or when none was captured.
+          required: [agentSessionId, projectDir, transcriptGzip]
+          properties:
+            agentSessionId: { type: string }
+            projectDir:
+              type: string
+              description: >-
+                The folder the conversation was in: for Claude Code
+                the sandbox's Claude project folder.
+            transcriptGzip: { type: string, format: byte }
+            sidecarGzip:
+              type: string
+              format: byte
+              description: The sidecar folder (subagent transcripts, saved tool output) as a gzipped tar, when there is one.
+    SessionMoveExportRunning:
+      type: object
+      description: >-
+        An export AO Cloud's worker is still on. Ask again with its moveId
+        (GET .../move/export/{moveId}, or POST .../move/export?moveId=) for its
+        result; do not start another move.
+      required: [moveId, status]
+      properties:
+        moveId: { type: string, format: uuid }
+        status: { type: string, enum: [running] }
+        branchMayBePushed:
+          type: boolean
+          description: The session's agent is stopped and its branch may already be pushed.
+        message: { type: string }
     RemoteHost:
       type: object
       additionalProperties: false
@@ -5559,6 +6522,108 @@ components:
         defaultProvider:
           type: string
           description: A provider from the organization's offering, or empty to clear the choice.
+    DataRetention:
+      type: object
+      additionalProperties: false
+      description: How long the caller's Cloud sessions and their conversation content are kept.
+      required: [retentionDays, defaultDays, followsDefault, options, updatedAt]
+      properties:
+        retentionDays:
+          type: integer
+          minimum: 1
+          description: >-
+            Days the caller's sessions and their conversation content are
+            kept, counted from each session's creation: defaultDays while
+            followsDefault, otherwise the period the caller chose.
+        defaultDays:
+          type: integer
+          minimum: 1
+          description: The deployment's default period, in days. Always one of options.
+        followsDefault:
+          type: boolean
+          description: >-
+            True while the caller has no period of their own and keeps
+            defaultDays, following any later change to it. False once they
+            chose a period, even one equal to defaultDays.
+        options:
+          type: array
+          minItems: 1
+          description: The periods the caller may choose, in days, ascending.
+          items:
+            type: integer
+            minimum: 1
+        updatedAt:
+          description: >-
+            When the caller last chose the period, going back to the default
+            included; null while they have never chosen one.
+          oneOf:
+            - type: string
+              format: date-time
+            - type: "null"
+    PutDataRetentionInput:
+      type: object
+      additionalProperties: false
+      required: [retentionDays]
+      properties:
+        retentionDays:
+          description: >-
+            The new period in days, one of options, or null to follow the
+            deployment's default again (400 invalid_retention otherwise).
+          oneOf:
+            - type: integer
+              minimum: 1
+            - type: "null"
+        dryRun:
+          type: boolean
+          description: Only count the sessions the period would delete and change nothing. Absent means false.
+    DataRetentionChange:
+      type: object
+      additionalProperties: false
+      description: >-
+        The caller's retention period as stored after a PUT (unchanged by a
+        dry run), and how many of their sessions the requested period deletes.
+      required: [retentionDays, defaultDays, followsDefault, options, updatedAt, sessionsToDelete]
+      properties:
+        retentionDays:
+          type: integer
+          minimum: 1
+          description: >-
+            Days the caller's sessions and their conversation content are
+            kept, counted from each session's creation: defaultDays while
+            followsDefault, otherwise the period the caller chose.
+        defaultDays:
+          type: integer
+          minimum: 1
+          description: The deployment's default period, in days. Always one of options.
+        followsDefault:
+          type: boolean
+          description: >-
+            True while the caller has no period of their own and keeps
+            defaultDays, following any later change to it. False once they
+            chose a period, even one equal to defaultDays.
+        options:
+          type: array
+          minItems: 1
+          description: The periods the caller may choose, in days, ascending.
+          items:
+            type: integer
+            minimum: 1
+        updatedAt:
+          description: >-
+            When the caller last chose the period, going back to the default
+            included; null while they have never chosen one.
+          oneOf:
+            - type: string
+              format: date-time
+            - type: "null"
+        sessionsToDelete:
+          type: integer
+          minimum: 0
+          description: >-
+            The caller's sessions, across all organizations, created longer ago
+            than the requested period whose content has not been deleted yet:
+            the sessions the period makes due for deletion. A dry run deletes
+            nothing.
     CloudHarnessVersions:
       type: object
       additionalProperties: false
@@ -5787,7 +6852,8 @@ components:
             whose sessions run on Coder may run its orchestrator on Coder too
             (ProjectOrchestratorSandboxProvider): the deployment offers coder
             and freestyle, and the organization may run Coder as its own
-            (customCoder). Empty when none apply.
+            (customCoder), session.branch and session.transcriptImport for
+            sessions moving here from another machine. Empty when none apply.
           items:
             type: string
         maxAttachmentBytes:
@@ -7861,7 +8927,7 @@ components:
           enum: [failed, ready]
         code:
           type: string
-          enum: [repository_checkout_failed, working_directory_unusable, project_setup_failed, working_directory_occupied, agent_start_failed]
+          enum: [repository_checkout_failed, working_directory_unusable, project_setup_failed, working_directory_occupied, agent_start_failed, conversation_restore_failed]
           description: Required when status is failed.
         message:
           type: string
@@ -8867,6 +9933,13 @@ components:
           $ref: "#/components/schemas/Turn"
         isTerminated:
           type: boolean
+        movedAway:
+          type: boolean
+          description: >-
+            The session moved to another computer: it was deleted by the
+            conditional delete (?moveId=) that finished its move, and continues
+            there. It cannot be restored (restoreSession answers 409
+            SESSION_MOVED_AWAY). Absent or false for any other session.
         requestedOutput:
           $ref: "#/components/schemas/RequestedOutput"
         createdByUserId:
@@ -9718,6 +10791,314 @@ components:
             grantCount:
               type: integer
               minimum: 0
+    ArtifactShareCommentAnchor:
+      type: object
+      additionalProperties: false
+      required: [path, tag, textHash, excerpt]
+      description: >-
+        The element a thread is on, as the comment bridge on the share host
+        reports it, or for the kinds added later a line range, an image point
+        or region, or a video moment. A version's bytes never change, so a
+        path recorded on a version always points at the same element of that
+        version.
+      properties:
+        path:
+          type: string
+          minLength: 4
+          maxLength: 2048
+          pattern: "^body(>[A-Za-z][A-Za-z0-9-]*:[1-9][0-9]*)*$"
+          description: >-
+            A structural path from <body>: each step is the element's tag and
+            its 1-based position among element siblings with the same tag,
+            for example body>main:1>h1:1.
+        tag:
+          type: string
+          minLength: 1
+          maxLength: 64
+          pattern: "^[A-Za-z][A-Za-z0-9-]*$"
+          description: The element's tag name, lowercase for HTML elements.
+        textHash:
+          type: string
+          pattern: "^[0-9a-f]{16}$"
+          description: >-
+            The first 16 hex characters of the SHA-256 of the first 200
+            characters of the element's normalised text, to check the path
+            still finds the same element.
+        excerpt:
+          type: string
+          maxLength: 120
+          description: >-
+            Up to 120 characters of the element's text, kept for the agent
+            message and diagnostics. Never shown in the comments UI.
+        kind:
+          type: string
+          enum: [element, lines, image, video]
+          description: >-
+            What the thread is on. Absent means element: an element of an
+            HTML or rendered Markdown page, picked by the comment bridge.
+            lines: a line or range of lines of a text page (rows of a table
+            page); path, tag, textHash and excerpt describe the first line and
+            lines holds the range. image: a point or rectangle of an image
+            (region). video: a moment of a video (time), optionally a point or
+            rectangle of that frame (region). For image and video the path is
+            body>img:1 or body>video:1, the tag img or video, the textHash
+            that of empty text (e3b0c44298fc1c14) and the excerpt empty.
+            Clients skip threads whose kind they don't know. lines only with
+            kind lines; region only with image (required) or video
+            (optional); time only with video (required).
+        lines:
+          $ref: "#/components/schemas/ArtifactShareCommentLineRange"
+        time:
+          type: number
+          minimum: 0
+          maximum: 360000
+          description: Seconds from the start of the video, for kind video.
+        region:
+          $ref: "#/components/schemas/ArtifactShareCommentRegion"
+    ArtifactShareCommentLineRange:
+      type: object
+      additionalProperties: false
+      required: [start, end]
+      description: >-
+        1-based line numbers of a text page, first and last included (for a
+        table page, data rows in file order, the header not counted).
+      properties:
+        start:
+          type: integer
+          minimum: 1
+          maximum: 1000000
+        end:
+          type: integer
+          minimum: 1
+          maximum: 1000000
+          description: At least start.
+    ArtifactShareCommentRegion:
+      type: object
+      additionalProperties: false
+      required: [x, y, w, h]
+      description: >-
+        A point or rectangle as fractions of the picture's width and height
+        (0 to 1), from its top-left corner, so it holds at any display size.
+        w and h of 0 make a point. x + w and y + h are at most 1.
+      properties:
+        x:
+          type: number
+          minimum: 0
+          maximum: 1
+        y:
+          type: number
+          minimum: 0
+          maximum: 1
+        w:
+          type: number
+          minimum: 0
+          maximum: 1
+        h:
+          type: number
+          minimum: 0
+          maximum: 1
+    ArtifactShareCommentAuthor:
+      type: object
+      additionalProperties: false
+      required: [id, name]
+      description: A commenter, by display name only; never their email.
+      properties:
+        id:
+          type: [string, "null"]
+          format: uuid
+          description: Their user ID; null once their account is deleted.
+        name:
+          type: string
+          description: >-
+            What to show: their display name, "Orchestrator user" when they
+            have none to show, or "Former user" once their account is
+            deleted.
+    ArtifactShareComment:
+      type: object
+      additionalProperties: false
+      required: [id, threadId, author, clientId, body, createdAt, editedAt, deleted]
+      properties:
+        id:
+          type: string
+          format: uuid
+        threadId:
+          type: string
+          format: uuid
+        author:
+          $ref: "#/components/schemas/ArtifactShareCommentAuthor"
+        clientId:
+          type: string
+          description: >-
+            The ID the author's client made for this comment, so it can
+            match its optimistic copy to the saved one.
+        body:
+          type: string
+          maxLength: 5000
+          description: Plain text, never HTML or Markdown; empty when deleted.
+        createdAt:
+          type: string
+          format: date-time
+        editedAt:
+          type: [string, "null"]
+          format: date-time
+        deleted:
+          type: boolean
+          description: >-
+            A deleted comment kept as a placeholder because its thread has
+            other comments.
+    ArtifactShareCommentThreadStatus:
+      type: string
+      enum: [open, resolved]
+    ArtifactShareCommentThread:
+      type: object
+      additionalProperties: false
+      required:
+        - id
+        - version
+        - status
+        - anchor
+        - createdAt
+        - updatedAt
+        - resolvedBy
+        - resolvedAt
+        - sentToAgentAt
+        - sentToAgentCount
+        - comments
+      properties:
+        id:
+          type: string
+          format: uuid
+        version:
+          type: integer
+          minimum: 1
+          description: The link version the thread was made on.
+        status:
+          $ref: "#/components/schemas/ArtifactShareCommentThreadStatus"
+        anchor:
+          $ref: "#/components/schemas/ArtifactShareCommentAnchor"
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+          description: >-
+            When the thread itself last changed: created, resolved,
+            reopened or sent to the agent.
+        resolvedBy:
+          description: >-
+            Who resolved it, while it is resolved; null when it is open.
+          oneOf:
+            - $ref: "#/components/schemas/ArtifactShareCommentAuthor"
+            - type: "null"
+        resolvedAt:
+          type: [string, "null"]
+          format: date-time
+        sentToAgentAt:
+          type: [string, "null"]
+          format: date-time
+          description: When the owner last sent it to an agent from the app.
+        sentToAgentCount:
+          type: integer
+          minimum: 0
+        comments:
+          type: array
+          minItems: 1
+          description: Oldest first; the first is the thread's own comment.
+          items:
+            $ref: "#/components/schemas/ArtifactShareComment"
+    ArtifactShareCommentsSnapshot:
+      type: object
+      additionalProperties: false
+      required: [version, currentVersion, revision, you, threads]
+      properties:
+        version:
+          type: integer
+          minimum: 1
+          description: The version these threads are on.
+        currentVersion:
+          type: integer
+          minimum: 1
+          description: >-
+            The link's current version when this snapshot was made. A 304 on
+            a pinned version does not refresh it.
+        revision:
+          type: integer
+          format: int64
+          minimum: 0
+          description: >-
+            The link's comment revision, the r part of the ETag: up by one on
+            every comment write on the link and when the account of someone
+            who commented on it or resolved one of its threads is deleted;
+            not on a display-name change.
+        you:
+          type: object
+          additionalProperties: false
+          required: [userId, isOwner]
+          properties:
+            userId:
+              type: string
+              format: uuid
+            isOwner:
+              type: boolean
+              description: Whether the caller owns the link.
+        threads:
+          type: array
+          description: >-
+            Every thread on the version, open and resolved, oldest first.
+            Clients group and order them by element.
+          items:
+            $ref: "#/components/schemas/ArtifactShareCommentThread"
+    ArtifactShareCommentBody:
+      type: string
+      minLength: 1
+      maxLength: 5000
+      description: >-
+        Plain text of 1 to 5000 characters (Unicode code points), not only
+        whitespace.
+    ArtifactShareCommentClientId:
+      type: string
+      format: uuid
+      description: >-
+        A random ID the client makes for this one comment and reuses on
+        retries, which makes creating it idempotent per author.
+    ArtifactShareThreadCreateInput:
+      type: object
+      additionalProperties: false
+      required: [version, anchor, body, clientId]
+      properties:
+        version:
+          type: integer
+          minimum: 1
+        anchor:
+          $ref: "#/components/schemas/ArtifactShareCommentAnchor"
+        body:
+          $ref: "#/components/schemas/ArtifactShareCommentBody"
+        clientId:
+          $ref: "#/components/schemas/ArtifactShareCommentClientId"
+    ArtifactShareReplyInput:
+      type: object
+      additionalProperties: false
+      required: [body, clientId]
+      properties:
+        body:
+          $ref: "#/components/schemas/ArtifactShareCommentBody"
+        clientId:
+          $ref: "#/components/schemas/ArtifactShareCommentClientId"
+    ArtifactShareThreadStatusInput:
+      type: object
+      additionalProperties: false
+      required: [status]
+      properties:
+        status:
+          $ref: "#/components/schemas/ArtifactShareCommentThreadStatus"
+    ArtifactShareCommentEditInput:
+      type: object
+      additionalProperties: false
+      required: [body]
+      properties:
+        body:
+          $ref: "#/components/schemas/ArtifactShareCommentBody"
     WorkerArtifactFile:
       type: object
       additionalProperties: false
@@ -9854,10 +11235,11 @@ components:
         runtimeState is "terminated" AO has stopped retrying; otherwise it is
         still trying in the background. The worker-reported codes
         repository_checkout_failed, working_directory_unusable,
-        working_directory_occupied, project_setup_failed and
-        agent_start_failed are the exception: the worker has checked in but
-        could not prepare the workspace or start the terminal agent, so the
-        agent does not start; they stay until the worker reports the workspace
+        working_directory_occupied, project_setup_failed,
+        agent_start_failed and conversation_restore_failed are the exception:
+        the worker has checked in but could not prepare the workspace, restore
+        the session's conversation or start the terminal agent, so the agent
+        does not start; they stay until the worker reports the workspace
         ready (or the agent started) after the user retries or reopens the
         session (a workspace checkout request).
       properties:
@@ -9873,9 +11255,11 @@ components:
             repository_checkout_failed, working_directory_unusable (also
             reported when the Coder bootstrap cannot prepare the project's
             working folder), working_directory_occupied,
-            project_setup_failed or agent_start_failed (the terminal agent
-            could not start in the ready workspace), all reported by the
-            worker. Clients must tolerate codes added later.
+            project_setup_failed, agent_start_failed (the terminal agent
+            could not start in the ready workspace) or
+            conversation_restore_failed (a session woken on a new sandbox could
+            not get back its conversation, so its agent does not start without
+            it), all reported by the worker. Clients must tolerate codes added later.
         message:
           type: string
           description: Human-readable explanation suitable for display as-is.
@@ -9978,6 +11362,28 @@ components:
             from the default stored when the orchestrator was created, unlike
             local spawns, which read the user's default at spawn time; a
             changed default reaches them once a new orchestrator is created.
+        branch:
+          type: string
+          minLength: 1
+          maxLength: 255
+          description: >-
+            Git branch to continue. A branch that exists on the repository is
+            checked out from its commits; any other name starts a new branch
+            from the default branch. The default branch, the session prefix
+            and a name git refuses get 422 invalid_branch; a branch a live
+            session of the project holds gets 409 branch_in_use. Send it only
+            when /me offering.features lists session.branch: an older control
+            plane rejects the whole create.
+        transcriptImportId:
+          type: string
+          format: uuid
+          description: >-
+            A conversation uploaded to transcript-imports/{importId}. The
+            session resumes it instead of starting from prompt, which it uses
+            only if the conversation cannot be placed. The upload must be the
+            caller's and for this harness, else 422
+            transcript_import_not_found; a create uses it up. Send it only
+            when /me offering.features lists session.transcriptImport.
     CreateStandaloneAgentInput:
       type: object
       additionalProperties: false

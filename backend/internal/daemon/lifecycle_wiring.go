@@ -62,6 +62,7 @@ type lifecycleStack struct {
 	reaperDone       <-chan struct{}
 	activityDone     <-chan struct{}
 	turnFailureDone  <-chan struct{}
+	nativeDone       <-chan struct{}
 	artifactsDone    <-chan struct{}
 	autoReviewDone   <-chan struct{}
 	reviewDoneDone   <-chan struct{}
@@ -101,12 +102,13 @@ func startLifecycle(ctx context.Context, dataDir string, store *sqlite.Store, ru
 	reaperStart := make(chan struct{})
 	rp := reaper.New(lcm, store, runtime, reaper.Config{Logger: logger, StartAfter: reaperStart})
 	activityStart := make(chan struct{})
-	activityPoller := activityobserver.New(store, lcm, runtime, agents, activityobserver.Config{Logger: logger, DataDir: dataDir, StartAfter: activityStart})
+	activityPoller := activityobserver.New(store, lcm, runtime, agents, activityobserver.Config{Logger: logger, DataDir: dataDir, StartAfter: activityStart, Rechecks: lcm})
 	turnFailurePoller := activityobserver.NewTurnFailureObserver(store, lcm, agents, activityobserver.TurnFailureConfig{
 		Logger:   logger,
 		Wake:     sessionChanges,
 		IdleTick: turnFailureIdleTick,
 	})
+	nativeSessionPoller := activityobserver.NewNativeSessionObserver(store, lcm, agents, activityobserver.NativeSessionConfig{DataDir: dataDir, Logger: logger})
 	herdrServer, err := herdr.Start(ctx, dataDir, lcm, logger)
 	if err != nil {
 		// fx treats reporting as best effort; an occupied or unavailable socket
@@ -123,6 +125,7 @@ func startLifecycle(ctx context.Context, dataDir string, store *sqlite.Store, ru
 		reaperDone:       rp.Start(ctx),
 		activityDone:     activityPoller.Start(ctx),
 		turnFailureDone:  turnFailurePoller.Start(ctx),
+		nativeDone:       nativeSessionPoller.Start(ctx),
 		herdr:            herdrServer,
 		artifactsDone:    artifactsPoller.Start(ctx),
 		activity:         activityPoller,
@@ -232,6 +235,9 @@ func (l *lifecycleStack) Stop() {
 	if l.turnFailureDone != nil {
 		<-l.turnFailureDone
 	}
+	if l.nativeDone != nil {
+		<-l.nativeDone
+	}
 	if l.artifactsDone != nil {
 		<-l.artifactsDone
 	}
@@ -280,6 +286,8 @@ type sessionLifecycle interface {
 	SetVersionTelemetry(sink ports.EventSink)
 	SetVersionRefreshPolicy(policy func() sessionmanager.VersionRefreshPolicy)
 	SetComputerUseEnabled(enabled func(context.Context) bool)
+	SetDevicesOffered(offered func() bool)
+	SetCommitAttributionEnabled(enabled func(context.Context) bool)
 	RetryVersionMoves(ctx context.Context) error
 	ObserveChatVersionSwitch(id domain.SessionID, version, result string)
 	MarkHarnessUpdated(ctx context.Context, harness domain.AgentHarness, version string, at time.Time) error
@@ -402,6 +410,7 @@ func startSession(ctx context.Context, cfg config.Config, runtime runtimeselect.
 		Logger:              log,
 		ReconcileWorkers:    startupReconcileWorkers,
 		CodexOperationGate:  codexOperationGate,
+		TerminateOnPRMerge:  cfg.TerminateOnPRMerge,
 	})
 	mgr.SetAgentReadiness(agentReadiness)
 	scmProvider := newMultiSCMProvider(cfg.GitLab, log)
@@ -972,6 +981,12 @@ func (c chatLauncher) ArmChatHandoff(
 // the switch instead of a failure.
 func (c chatLauncher) MarkAccountSwitch(ctx context.Context, id domain.SessionID, accountID string) error {
 	return c.svc.MarkAccountSwitch(ctx, id, accountID)
+}
+
+// RecordInterfaceTransitionBoundary shows a degraded handoff's boundary notice
+// in the Chat timeline without sending it to the agent.
+func (c chatLauncher) RecordInterfaceTransitionBoundary(ctx context.Context, id domain.SessionID, transitionID, summary string) error {
+	return c.svc.RecordInterfaceTransitionBoundary(ctx, id, transitionID, summary)
 }
 
 func (c chatLauncher) PrepareChatHandoff(

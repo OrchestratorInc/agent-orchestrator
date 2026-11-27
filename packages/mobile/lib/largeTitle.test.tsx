@@ -11,10 +11,10 @@ const fixtures = vi.hoisted(() => ({
 
 vi.mock("expo-router", () => ({ useNavigation: () => ({ setOptions: fixtures.setOptions }) }));
 vi.mock("expo-router/react-navigation", () => ({ useHeaderHeight: () => 80 }));
-vi.mock("./frost", () => ({ Frost: "Frost", FROST_TAIL: 32, BAR_SEAM: 16, frostStops: (height: number, tail?: number) => (tail === undefined ? [[0, height]] : [[0, height], [1, tail]]) }));
+vi.mock("./frost", () => ({ Frost: "Frost", FROST_TAIL: 32, BAR_SEAM: 16, SEAM_STOPS: [[0, 0.9], [1, 0]], frostStops: (height: number, tail?: number) => (tail === undefined ? [[0, height]] : [[0, height], [1, tail]]) }));
 vi.mock("react-native", () => ({
 	Platform: { get OS() { return fixtures.platform; } },
-	StyleSheet: { create: (styles: object) => styles, hairlineWidth: 0.5 },
+	StyleSheet: { create: (styles: object) => styles, hairlineWidth: 0.5, absoluteFill: { position: "absolute" } },
 	View: "View",
 }));
 vi.mock("react-native-reanimated", async () => {
@@ -23,32 +23,32 @@ vi.mock("react-native-reanimated", async () => {
 	return {
 		default: { Text: host("AnimatedText"), View: host("AnimatedView") },
 		// Records each write under the value's place in creation order (the
-		// title's collapse first, then the frost's), so a test can tell a
+		// title's collapse first, then the solid bar's seam), so a test can tell a
 		// crossing from a repeat.
 		useSharedValue: (initial: number) => {
 			const id = React.useRef(fixtures.values++).current;
 			return React.useRef({
 				_value: initial,
 				get value() { return this._value; },
-				set value(next: number) { fixtures.writes.push(`${id === 0 ? "title" : "frost"}:${next}`); this._value = next; },
+				set value(next: number) { fixtures.writes.push(`${id === 0 ? "title" : "seam"}:${next}`); this._value = next; },
 			}).current;
 		},
 		useAnimatedStyle: () => ({}),
 		withTiming: (value: number) => value,
 	};
 });
-vi.mock("./ThemeProvider", () => ({ useTheme: () => ({ textPrimary: "#textPrimary", borderDefault: "#borderDefault" }) }));
+vi.mock("./ThemeProvider", () => ({ useTheme: () => ({ textPrimary: "#textPrimary", borderDefault: "#borderDefault", bgBase: "#bgBase" }) }));
 
-import { LARGE_TITLE_COLLAPSE_AT, largeTitleCollapsed, useLargeTitle } from "./largeTitle";
+import { LARGE_TITLE_COLLAPSE_AT, largeTitleCollapsed, seamShown, splitStops, useLargeTitle } from "./largeTitle";
 
 type Result = ReturnType<typeof useLargeTitle>;
 
 let renderer: ReactTestRenderer | undefined;
 
-function renderHook(onScroll?: Parameters<typeof useLargeTitle>[1]): { current: Result } {
+function renderHook(onScroll?: Parameters<typeof useLargeTitle>[1], options?: Parameters<typeof useLargeTitle>[2]): { current: Result } {
 	const ref = { current: undefined as unknown as Result };
 	function Probe() {
-		ref.current = useLargeTitle("Workers", onScroll);
+		ref.current = useLargeTitle("Workers", onScroll, options);
 		return null;
 	}
 	act(() => { renderer = create(<Probe />); });
@@ -112,14 +112,14 @@ describe("useLargeTitle", () => {
 
 	it("scales the title on its crossings alone, and still calls the page's own handler on every move", () => {
 		const onScroll = vi.fn();
-		const result = renderHook(onScroll);
+		const result = renderHook(onScroll, { backdrop: "frost" });
 		for (const y of [10, 20, 40, 60, 80, 20, 5, 0]) result.current.onScroll!(scrollTo(y));
 		expect(fixtures.writes).toEqual(["title:1", "title:0"]);
 		expect(onScroll).toHaveBeenCalledTimes(8);
 	});
 
-	it("always frosts the bar and its tail, even at rest, so the bar never reads as see-through", () => {
-		const result = renderHook();
+	it("with a full frost, frosts the bar and its tail even at rest", () => {
+		const result = renderHook(undefined, { backdrop: "frost" });
 		const edge = mount(<>{result.current.edge}</>);
 		const frost = edge.root.findByType("Frost" as never);
 		expect(frost.props).toMatchObject({ from: "top", stops: [[0, 80]] });
@@ -132,7 +132,7 @@ describe("the title's accessory", () => {
 	function renderWith(accessory: React.ReactNode): { current: Result } {
 		const ref = { current: undefined as unknown as Result };
 		function Probe() {
-			ref.current = useLargeTitle("Workers", undefined, { accessory });
+			ref.current = useLargeTitle("Workers", undefined, { accessory, backdrop: "frost" });
 			return null;
 		}
 		act(() => { renderer = create(<Probe />); });
@@ -205,5 +205,134 @@ describe("the title's accessory", () => {
 		expect(hook.current.accessory).toBe("Can't reach Lab");
 		expect(hook.current.edge).toBeNull();
 		expect(hook.current.topInset).toBe(0);
+	});
+});
+
+describe("a solid bar", () => {
+	const flat = (style: unknown) => Object.assign({}, ...[style].flat(Infinity as 1));
+	const mountEdge = (edge: React.ReactElement) => mount(createElement("Edge", null, edge));
+
+	it("shows its seam once the list leaves the top, and not through a pull to refresh", () => {
+		expect(seamShown(0)).toBe(false);
+		expect(seamShown(-80)).toBe(false);
+		expect(seamShown(1)).toBe(true);
+	});
+
+	// The board's machine chips sat in the frost's tail and read dimmed at rest.
+	it("backs the bar with the page's colour, opaque and no deeper than the bar, with no frost over the page", () => {
+		const result = renderHook(undefined, { backdrop: "solid" });
+		const edge = mountEdge(result.current.edge!);
+		const bar = edge.root.find((node) => (node.type as unknown) === "View" && flat(node.props.style).backgroundColor === "#bgBase");
+		expect(flat(bar.props.style)).toMatchObject({ position: "absolute", top: 0, height: 80 });
+		expect(bar.props.pointerEvents).toBe("none");
+		// The only frost left is the seam's, inside its fading view.
+		const frosts = edge.root.findAllByType("Frost" as never);
+		expect(frosts).toHaveLength(1);
+		expect(frosts[0].props.stops).toEqual([[0, 0.9], [1, 0]]);
+		const seam = edge.root.findByType("AnimatedView" as never);
+		expect(flat(seam.props.style)).toMatchObject({ top: 80, height: 16 });
+		expect(seam.props.pointerEvents).toBe("none");
+		// The list's room under the bar is the frosted bar's.
+		expect(result.current.topInset).toBe(80);
+	});
+
+	it("raises the seam on the list leaving the top alone, and lowers it on coming back", () => {
+		const onScroll = vi.fn();
+		const result = renderHook(onScroll, { backdrop: "solid" });
+		for (const y of [-40, 0, 4, 10, 40, 10, 0]) result.current.onScroll!(scrollTo(y));
+		expect(fixtures.writes).toEqual(["seam:1", "title:1", "title:0", "seam:0"]);
+		expect(onScroll).toHaveBeenCalledTimes(7);
+	});
+
+	it("backs the pinned line with the page's colour and puts the seam under it", () => {
+		const ref = { current: undefined as unknown as Result };
+		function Probe() {
+			ref.current = useLargeTitle("Workers", undefined, { accessory: "Can't reach Lab", backdrop: "solid" });
+			return null;
+		}
+		act(() => { renderer = create(<Probe />); });
+		const twin = mount(ref.current.header!).root.find((node) => (node.type as unknown) === "View" && typeof node.props.onLayout === "function");
+		act(() => twin.props.onLayout({ nativeEvent: { layout: { height: 24 } } }));
+		expect(ref.current.topInset).toBe(104);
+		const edge = mountEdge(ref.current.edge!);
+		const pinned = edge.root.find((node) => (node.type as unknown) === "View" && node.props.pointerEvents === "box-none");
+		const backing = pinned.find((node) => (node.type as unknown) === "View" && flat(node.props.style).backgroundColor === "#bgBase");
+		expect(flat(backing.props.style)).toMatchObject({ height: 24 });
+		expect(flat(edge.root.findByType("AnimatedView" as never).props.style)).toMatchObject({ top: 104, height: 16 });
+		expect(edge.root.findAllByType("Frost" as never)).toHaveLength(1);
+	});
+
+	it("draws nothing on iOS", () => {
+		fixtures.platform = "ios";
+		const result = renderHook(undefined, { backdrop: "solid" });
+		expect(result.current.edge).toBeNull();
+	});
+});
+
+describe("a replaced list", () => {
+	function renderKeyed(key: string, backdrop: "frost" | "solid" = "solid"): { current: Result; rekey(next: string): void } {
+		const ref = { current: undefined as unknown as Result, rekey: (_next: string) => {} };
+		function Probe({ k }: { k: string }) {
+			ref.current = useLargeTitle("Workers", undefined, { backdrop, resetKey: k });
+			return null;
+		}
+		act(() => { renderer = create(<Probe k={key} />); });
+		ref.rekey = (next) => act(() => renderer!.update(<Probe k={next} />));
+		return ref;
+	}
+
+	// The board keys its list by filter; the new list starts at its top without a scroll event.
+	it("lowers the seam and settles the title when the list's key changes", () => {
+		const hook = renderKeyed("all|all");
+		hook.current.onScroll!(scrollTo(60));
+		expect(fixtures.writes).toEqual(["title:1", "seam:1"]);
+		hook.rekey("mac|all");
+		expect(fixtures.writes).toEqual(["title:1", "seam:1", "title:0", "seam:0"]);
+		// The new list's first move raises the seam again.
+		hook.current.onScroll!(scrollTo(4));
+		expect(fixtures.writes).toEqual(["title:1", "seam:1", "title:0", "seam:0", "seam:1"]);
+	});
+
+	it("writes nothing on mount, on a render with the same key, or when the list was already at rest", () => {
+		const hook = renderKeyed("all|all");
+		hook.rekey("all|all");
+		hook.rekey("mac|all");
+		expect(fixtures.writes).toEqual([]);
+	});
+
+	it("leaves iOS alone", () => {
+		fixtures.platform = "ios";
+		const hook = renderKeyed("all|all");
+		hook.rekey("mac|all");
+		expect(fixtures.writes).toEqual([]);
+	});
+});
+
+describe("a lifted frost", () => {
+	const flat = (style: unknown) => Object.assign({}, ...[style].flat(Infinity as 1));
+
+	it("splits a frost at the bar's end into halves that meet at the same cover", () => {
+		const { body, tail } = splitStops([[0, 0.9], [0.5, 0.8], [0.75, 0.4], [1, 0]], 0.6);
+		expect(body[0]).toEqual([0, 0.9]);
+		expect(body.at(-1)![0]).toBe(1);
+		expect(tail[0][0]).toBe(0);
+		expect(tail[0][1]).toBeCloseTo(body.at(-1)![1]);
+		expect(tail[0][1]).toBeCloseTo(0.64);
+		expect(tail.at(-1)).toEqual([1, 0]);
+	});
+
+	// The board's machine chips sat in the frost's tail and read dimmed at rest.
+	it("is the default: keeps the frost over the bar, the bar's height, and fades its tail in once the list leaves the top", () => {
+		const onScroll = vi.fn();
+		const result = renderHook(onScroll);
+		const edge = mount(createElement("Edge", null, result.current.edge!));
+		const frosts = edge.root.findAllByType("Frost" as never);
+		expect(frosts).toHaveLength(2);
+		expect(flat(frosts[0].props.style)).toMatchObject({ top: 0, height: 80 });
+		const tail = edge.root.findByType("AnimatedView" as never);
+		expect(flat(tail.props.style)).toMatchObject({ top: 80, height: 32 });
+		expect(tail.props.pointerEvents).toBe("none");
+		for (const y of [-40, 0, 4, 40, 0]) result.current.onScroll!(scrollTo(y));
+		expect(fixtures.writes).toEqual(["seam:1", "title:1", "title:0", "seam:0"]);
 	});
 });

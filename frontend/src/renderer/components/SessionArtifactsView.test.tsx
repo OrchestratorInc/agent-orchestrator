@@ -30,6 +30,7 @@ vi.mock("../hooks/useSettings", async (importOriginal) => {
 	};
 });
 
+const listCommentsMock = vi.hoisted(() => vi.fn());
 const { artifactFileChangesMock, capturedSave, cloudAccessMock, createArtifactAccessMock, deleteArtifactMock, deleteCloudArtifactMock, listArtifactsMock, openPreviewMock, saveCloudArtifactMock, sendSessionMessageMock } = vi.hoisted(() => ({
 	artifactFileChangesMock: vi.fn(),
 	capturedSave: { current: undefined as ((input: { content: string; expectedFileFingerprint: string; path: string }) => Promise<unknown>) | undefined },
@@ -66,6 +67,7 @@ vi.mock("../hooks/useCloudCp", () => ({
 			saveSessionArtifact: saveCloudArtifactMock,
 			listSessionArtifacts: listArtifactsMock,
 			createSessionArtifactAccess: createArtifactAccessMock,
+			listArtifactShareComments: listCommentsMock,
 		},
 		ready: true,
 		baseUrl: "https://cp.test",
@@ -78,8 +80,8 @@ vi.mock("./ArtifactSnapshotThumbnail", async () => {
 	return { ArtifactSnapshotThumbnail: ArtifactThumbnail };
 });
 vi.mock("./ArtifactFileView", () => ({
-	ArtifactFileView: ({ cloud, feedbackRequestKey, initialEditing, onEditingChange, path, rawUrl, readOnly, save, sendMessage }: { cloud?: boolean; feedbackRequestKey?: number; initialEditing?: boolean; onEditingChange?: (editing: boolean) => void; path: string; rawUrl?: string; readOnly?: boolean; save?: typeof capturedSave.current; sendMessage?: (message: string) => Promise<void> }) => (capturedSave.current = save,
-		<div data-editing={initialEditing ? "true" : "false"} data-cloud={cloud ? "true" : ""} data-feedback-key={feedbackRequestKey ?? ""} data-raw-url={rawUrl ?? ""} data-read-only={readOnly ? "true" : "false"} data-saves={save ? "true" : "false"} data-testid="artifact-view">
+	ArtifactFileView: ({ active = true, cloud, feedbackRequestKey, initialEditing, onEditingChange, path, rawUrl, readOnly, save, sendMessage }: { active?: boolean; cloud?: boolean; feedbackRequestKey?: number; initialEditing?: boolean; onEditingChange?: (editing: boolean) => void; path: string; rawUrl?: string; readOnly?: boolean; save?: typeof capturedSave.current; sendMessage?: (message: string) => Promise<void> }) => (capturedSave.current = save,
+		<div data-active={active ? "true" : "false"} data-editing={initialEditing ? "true" : "false"} data-cloud={cloud ? "true" : ""} data-feedback-key={feedbackRequestKey ?? ""} data-raw-url={rawUrl ?? ""} data-read-only={readOnly ? "true" : "false"} data-saves={save ? "true" : "false"} data-testid="artifact-view">
 			{`viewer:${path}`}
 			<button type="button" onClick={() => onEditingChange?.(true)}>start editing</button>
 			<button type="button" onClick={() => onEditingChange?.(false)}>stop editing</button>
@@ -100,6 +102,17 @@ vi.mock("./CloudArtifactFrame", () => ({
 vi.mock("../hooks/useCloudArtifacts", async (importOriginal) => ({
 	...(await importOriginal<typeof import("../hooks/useCloudArtifacts")>()),
 	useCloudArtifactAccess: cloudAccessMock,
+}));
+
+// The published page, framed from its share host: a plain frame naming its link.
+vi.mock("./SharedArtifactFrame", () => ({
+	SharedArtifactFrame: ({ linkId, onShown, title }: { linkId: string; onShown?: () => void; title: string }) => (
+		<>
+			<iframe data-link-id={linkId} data-testid="published-frame" title={title} />
+			{/* jsdom loads a frame with no src at once; the test says when the page has loaded. */}
+			<button onClick={onShown} type="button">mock: page loaded</button>
+		</>
+	),
 }));
 
 const shareAccessMock = vi.hoisted(() => ({ current: new Map<string, "restricted" | "anyone">() }));
@@ -788,9 +801,27 @@ describe("SessionArtifactsView", () => {
 		const view = renderView(<SessionArtifactsView request={request} session={session()} />);
 		expect(screen.getByText("notes/fresh.md isn't in this session's artifacts yet. It opens here once the session lists it.")).toBeInTheDocument();
 		expect(screen.queryByTestId("artifact-view")).not.toBeInTheDocument();
+		// The pending view must listen for the daemon's ready/change events so the
+		// workspace query can discover a file written before this tab opened.
+		expect(artifactFileChangesMock).toHaveBeenLastCalledWith(expect.objectContaining({ id: "sess-1" }), true);
 
 		view.rerender(<SessionArtifactsView request={request} session={session([...artifacts, { kind: "markdown", name: "fresh.md", path: "notes/fresh.md", size: 5, updatedAt: "2026-09-24T00:00:00Z" }])} />);
 		expect(screen.getByTestId("artifact-view")).toHaveTextContent("viewer:notes/fresh.md");
+		expect(artifactFileChangesMock).toHaveBeenLastCalledWith(expect.objectContaining({ id: "sess-1" }), true);
+	});
+
+	it("stops following an absent file on Back and follows it again on a new request", async () => {
+		const view = renderView(<SessionArtifactsView request={{ key: 1, path: "missing.html" }} session={session()} />);
+		expect(screen.getByText(/missing\.html isn't in this session's artifacts yet/)).toBeInTheDocument();
+		expect(artifactFileChangesMock).toHaveBeenLastCalledWith(expect.objectContaining({ id: "sess-1" }), true);
+
+		await userEvent.click(screen.getByRole("button", { name: "Back to artifacts" }));
+		expect(screen.queryByText(/isn't in this session's artifacts yet/)).not.toBeInTheDocument();
+		expect(artifactFileChangesMock).toHaveBeenLastCalledWith(expect.objectContaining({ id: "sess-1" }), false);
+
+		view.rerender(<SessionArtifactsView request={{ key: 2, path: "missing.html" }} session={session()} />);
+		expect(screen.getByText(/missing\.html isn't in this session's artifacts yet/)).toBeInTheDocument();
+		expect(artifactFileChangesMock).toHaveBeenLastCalledWith(expect.objectContaining({ id: "sess-1" }), true);
 	});
 
 	it("opens a requested file listed under a new name, not the not-listed-yet note", () => {
@@ -822,6 +853,7 @@ describe("SessionArtifactsView", () => {
 		view.rerender(<SessionArtifactsView request={request} session={session(remaining)} />);
 		expect(screen.queryByText(/isn't in this session's artifacts yet/)).not.toBeInTheDocument();
 		expect(screen.getByRole("button", { name: /^plan\.md/ })).toBeInTheDocument();
+		expect(artifactFileChangesMock).toHaveBeenLastCalledWith(expect.objectContaining({ id: "sess-1" }), false);
 	});
 
 	it("returns to the gallery from a requested file that is not listed", async () => {
@@ -1041,11 +1073,21 @@ describe("SessionArtifactsView", () => {
 		expect(screen.getByRole("button", { name: "Publish: notes.md" })).toBeInTheDocument();
 	});
 
-	it("disables Publish for a video and says why", async () => {
-		const video: SessionArtifact = { kind: "file", name: "clip.mp4", path: "clip.mp4", size: 2, updatedAt: "2026-09-24T00:00:00Z" };
-		renderView(<SessionArtifactsView request={{ key: 1, path: "clip.mp4" }} session={session([video])} />);
+	it("disables Publish for a video browsers cannot play and says why", async () => {
+		const video: SessionArtifact = { kind: "file", name: "clip.mkv", path: "clip.mkv", size: 2, updatedAt: "2026-09-24T00:00:00Z" };
+		renderView(<SessionArtifactsView request={{ key: 1, path: "clip.mkv" }} session={session([video])} />);
 
-		expect(await screen.findByRole("button", { name: "Publish: clip.mp4" })).toBeDisabled();
+		expect(await screen.findByRole("button", { name: "Publish: clip.mkv" })).toBeDisabled();
+	});
+
+	it("tells the open file whether the view is showing, so a video pauses when the inspector closes", async () => {
+		const video: SessionArtifact = { kind: "file", name: "clip.mp4", path: "clip.mp4", size: 2, updatedAt: "2026-09-24T00:00:00Z" };
+		const view = renderView(<SessionArtifactsView active request={{ key: 1, path: "clip.mp4" }} session={session([video])} />);
+		expect(await screen.findByTestId("artifact-view")).toHaveAttribute("data-active", "true");
+
+		view.rerender(<SessionArtifactsView active={false} request={{ key: 1, path: "clip.mp4" }} session={session([video])} />);
+
+		expect(screen.getByTestId("artifact-view")).toHaveAttribute("data-active", "false");
 	});
 
 	it("copies a markdown artifact as Markdown", async () => {
@@ -1196,5 +1238,80 @@ describe("SessionArtifactsView", () => {
 		const viewer = screen.getByTestId("artifact-view");
 		expect(viewer).toHaveTextContent("viewer:notes.md");
 		expect(viewer).toHaveAttribute("data-feedback-key", "7");
+	});
+});
+
+describe("SessionArtifactsView comments", () => {
+	const published = (files: SessionArtifact[] = artifacts) => files.map((file) => ({ ...file, shareUrl: `https://viewer.test/artifact/${file.name.replace(/\W/g, "-")}` }));
+	const snapshotResult = () => ({
+		notModified: false,
+		etag: "\"r1-v2\"",
+		snapshot: {
+			version: 2, currentVersion: 2, revision: 1, you: { userId: "me-1", isOwner: true },
+			threads: [
+				{ id: "t1", version: 2, status: "open", anchor: { path: "body>h1:1", tag: "p", textHash: "000000000000000a", excerpt: "" }, createdAt: "2026-11-23T00:00:00Z", updatedAt: "2026-11-23T00:00:00Z", resolvedBy: null, resolvedAt: null, sentToAgentAt: null, sentToAgentCount: 0, comments: [{ id: "c-t1", threadId: "t1", clientId: "k-t1", author: { id: "sam", name: "Sam" }, body: "Note t1", createdAt: "2026-11-23T00:00:00Z", editedAt: null, deleted: false }] },
+				{ id: "t2", version: 2, status: "open", anchor: { path: "body>p:1", tag: "p", textHash: "000000000000000b", excerpt: "" }, createdAt: "2026-11-23T00:00:00Z", updatedAt: "2026-11-23T00:00:00Z", resolvedBy: null, resolvedAt: null, sentToAgentAt: null, sentToAgentCount: 0, comments: [{ id: "c-t2", threadId: "t2", clientId: "k-t2", author: { id: "sam", name: "Sam" }, body: "Note t2", createdAt: "2026-11-23T00:00:00Z", editedAt: null, deleted: false }] },
+				{ id: "t3", version: 2, status: "resolved", anchor: { path: "body>p:2", tag: "p", textHash: "000000000000000c", excerpt: "" }, createdAt: "2026-11-23T00:00:00Z", updatedAt: "2026-11-23T00:00:00Z", resolvedBy: null, resolvedAt: null, sentToAgentAt: null, sentToAgentCount: 0, comments: [{ id: "c-t3", threadId: "t3", clientId: "k-t3", author: { id: "sam", name: "Sam" }, body: "Note t3", createdAt: "2026-11-23T00:00:00Z", editedAt: null, deleted: false }] },
+			],
+		},
+	});
+	const renderWithComments = (node: ReactNode) => ({ ...renderView(node), commentsClient: { list: listCommentsMock } });
+
+	beforeEach(() => {
+		cloudAccessMock.mockReset().mockReturnValue({ data: CLOUD_ROOT, isError: false, refetch: vi.fn() });
+		listCommentsMock.mockReset().mockResolvedValue(snapshotResult());
+	});
+
+	it("puts Comments between Publish and Full screen with the open-thread count", async () => {
+		const { commentsClient: client } = renderWithComments(<SessionArtifactsView request={{ key: 1, path: "notes.md" }} session={session(published())} />);
+		const comments = await screen.findByRole("button", { name: "Comments, 2 open" });
+		const after = (first: Element, second: Element) => Boolean(first.compareDocumentPosition(second) & Node.DOCUMENT_POSITION_FOLLOWING);
+		expect(after(screen.getByRole("button", { name: /^(Published|Republish|Publish): notes\.md$/ }), comments)).toBe(true);
+		expect(after(comments, screen.getByRole("button", { name: "Maximize" }))).toBe(true);
+		expect(within(comments).getByTestId("artifact-comments-count")).toHaveTextContent("2");
+		expect(client.list).toHaveBeenCalledWith("notes-md", expect.anything());
+	});
+
+	it.each([
+		{ why: "an unpublished file", files: artifacts, path: "notes.md", cloud: undefined },
+		{ why: "a published file that takes no comments (PDF)", files: published([{ kind: "file", name: "report.pdf", path: "report.pdf", size: 1, updatedAt: "2026-09-22T00:00:00Z" }]), path: "report.pdf", cloud: undefined },
+		{ why: "another member's cloud session", files: published(), path: "notes.md", cloud: { orgId: "org-1", createdByUserId: "someone-else" } },
+		{ why: "a shared project's session", files: published(), path: "notes.md", cloud: { orgId: "org-1", shared: true } },
+	])("shows no Comments for $why", async ({ files, path, cloud }) => {
+		const { commentsClient: client } = renderWithComments(<SessionArtifactsView request={{ key: 1, path }} session={{ ...session(files), ...(cloud ? { cloud } : {}) } as WorkspaceSession} />);
+		await screen.findByRole("button", { name: path.split("/").pop()! });
+		expect(screen.queryByRole("button", { name: /^Comments/ })).not.toBeInTheDocument();
+		expect(client.list).not.toHaveBeenCalled();
+	});
+
+	it("shows Comments for the owner's published cloud file", async () => {
+		const current = { ...cloudSession(), cloud: { orgId: "org-1", createdByUserId: "me-1" } } as WorkspaceSession;
+		current.artifactFiles = published(current.artifactFiles);
+		renderWithComments(<SessionArtifactsView request={{ key: 1, path: "docs/notes.md" }} session={current} />);
+		expect(await screen.findByRole("button", { name: "Comments, 2 open" })).toBeInTheDocument();
+	});
+
+	it("keeps the local preview until the published page loads, then swaps it in for comments", async () => {
+		renderWithComments(<SessionArtifactsView request={{ key: 1, path: "notes.md" }} session={session(published())} />);
+		expect(screen.getByTestId("artifact-view")).toHaveTextContent("viewer:notes.md");
+		const button = await screen.findByRole("button", { name: "Comments, 2 open" });
+		await userEvent.click(button);
+		expect(button).toHaveAttribute("aria-pressed", "true");
+
+		// Loading: the local file stays in view, the published page loads unseen over it.
+		const frame = screen.getByTestId("published-frame");
+		expect(frame).toHaveAttribute("data-link-id", "notes-md");
+		expect(screen.getByTestId("artifact-view")).toHaveTextContent("viewer:notes.md");
+		expect(screen.getByTestId("artifact-comments-layer")).toHaveClass("invisible");
+
+		await userEvent.click(screen.getByRole("button", { name: "mock: page loaded" }));
+		expect(screen.queryByTestId("artifact-view")).not.toBeInTheDocument();
+		expect(screen.getByTestId("artifact-comments-layer")).not.toHaveClass("invisible");
+		// Comment mode: counts on the page, nothing pops up until an element is clicked.
+		expect(screen.queryByRole("complementary", { name: "Comments" })).not.toBeInTheDocument();
+
+		await userEvent.click(button);
+		expect(screen.queryByTestId("published-frame")).not.toBeInTheDocument();
+		expect(screen.getByTestId("artifact-view")).toHaveTextContent("viewer:notes.md");
 	});
 });

@@ -58,3 +58,28 @@ func toContractPRFacts(prs []domain.PRFacts) []contract.PRFacts {
 	}
 	return facts
 }
+
+// GitHub retains CHANGES_REQUESTED after a push. Read the current-head review
+// facts before presenting the aggregate decision so an older request becomes
+// review_required until a reviewer evaluates the new head. No display status
+// is persisted; both single-session and board reads use this derivation.
+func clearStaleChangesRequested(prs []domain.PRFacts, runs []domain.CurrentHeadReviewRun) []domain.PRFacts {
+	out := append([]domain.PRFacts(nil), prs...)
+	for i := range out {
+		pr := &out[i]
+		if pr.Review != domain.ReviewChangesRequest || pr.HeadSHA == "" || !pr.StaleChangesRequested || pr.ExternalChangesRequested {
+			continue
+		}
+		currentRequest := false
+		for _, run := range runs {
+			if run.PRURL == pr.URL && (run.Verdict == domain.VerdictChangesRequested || run.LastVerdictChangesRequested) {
+				currentRequest = true
+				break
+			}
+		}
+		if !currentRequest {
+			pr.Review = domain.ReviewRequired
+		}
+	}
+	return out
+}

@@ -224,6 +224,7 @@ export const LINK_EXPIRED = "share-link-expired";
  * and its URL is here, so it can still be copied.
  */
 export class LinkRevokeError extends Error {
+	readonly code: string = "LINK_REVOKE_ERROR";
 	constructor(readonly failed: number, readonly reason: unknown, readonly url?: string) {
 		super(reason instanceof Error ? reason.message : String(reason));
 		this.name = "LinkRevokeError";

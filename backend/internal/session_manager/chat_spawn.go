@@ -256,7 +256,7 @@ func (m *Manager) launchChatController(ctx context.Context, in chatSpawn) (domai
 		// SessionStart hook, which injects the standing instructions from the
 		// prompt file) a fresh chat session would start with no AO role or
 		// coordination context.
-		if err := m.prepareWorkspace(ctx, agent, id, in.workspace.Path, in.systemPrompt, in.systemPromptFile, agentConfig, env); err != nil {
+		if err := m.prepareWorkspace(ctx, agent, id, in.workspace.Path, in.systemPrompt, in.systemPromptFile, agentConfig, env, workspaceRestoreContext{}); err != nil {
 			m.rollbackSeedSpawnWorkspace(ctx, in.record, in.workspace, in.workspaceProject, false, in.promptQueued)
 			return domain.SessionRecord{}, wrapSpawnStage(id, ErrSpawnPrepare, err)
 		}
@@ -301,6 +301,8 @@ func (m *Manager) launchChatController(ctx context.Context, in chatSpawn) (domai
 		SystemPrompt:            in.systemPrompt,
 		ForkHandoffNote:         forkHandoffNote,
 		ForkFirstStart:          in.cfg.Fork != nil && in.cfg.Fork.PrepareChat != nil,
+		FastMode:                in.cfg.FastMode,
+		AutoCompactWindow:       in.cfg.AutoCompactWindow,
 		AdditionalDirectories:   workspaceProjectDirectories(in.workspace.Path, in.workspaceProject),
 		MCPServers:              m.aoMCPServers(ctx, in.cfg.Harness, env),
 		ExpectedControllerOwner: in.record.ControllerOwner(),
@@ -616,7 +618,7 @@ func (m *Manager) resumeChatController(
 		// env is applied again first.
 		m.applyImportedConfigEnv(ctx, rec, env)
 		if agent, ok := m.agents.Agent(rec.Harness); ok {
-			if err := m.prepareWorkspace(ctx, agent, rec.ID, launchPath, systemPrompt, "", agentConfig, env); err != nil {
+			if err := m.prepareWorkspace(ctx, agent, rec.ID, launchPath, systemPrompt, "", agentConfig, env, workspaceRestoreContext{}); err != nil {
 				return RestoreResult{}, relaunchFailed("import workspace preparation", fmt.Errorf("%s %s: %w", operation, rec.ID, err))
 			}
 		}

@@ -3,7 +3,7 @@ import type { Page } from "@playwright/test";
 import type { UpdateSettings, UpdateStatus } from "../../src/main/update-settings";
 import type { AoBridge } from "../../src/preload";
 import type { DaemonStatus } from "../../src/shared/daemon-status";
-import { coerceUiSettings, DEFAULT_UI_SETTINGS } from "../../src/shared/ui-locale";
+import { coerceUiSettings, DEFAULT_UI_SETTINGS, type AppLocale } from "../../src/shared/ui-locale";
 
 // The e2e suite runs the renderer under `dev:web` (VITE_NO_ELECTRON=1) with no
 // Electron preload, so `window.ao` is undefined and lib/bridge.ts falls back to
@@ -29,6 +29,8 @@ import { coerceUiSettings, DEFAULT_UI_SETTINGS } from "../../src/shared/ui-local
 // not "the boundary works."
 
 export type FakeBridgeOptions = {
+	/** Persisted application language. */
+	locale?: AppLocale;
 	/** Version string surfaced by app.getVersion() (Settings > Updates). */
 	version?: string;
 	/** Daemon lifecycle state the renderer should observe. */
@@ -49,8 +51,9 @@ export async function installFakeBridge(page: Page, opts: FakeBridgeOptions = {}
 	const updateSettings =
 		opts.updateSettings ??
 		({ enabled: false, channel: "latest", nightlyAck: false, feature: null } satisfies UpdateSettings);
+	const uiSettings = { ...DEFAULT_UI_SETTINGS, locale: opts.locale ?? DEFAULT_UI_SETTINGS.locale };
 	await page.addInitScript(
-		({ version, daemonState, daemonPort, updateStatus, updateSettings }) => {
+		({ version, daemonState, daemonPort, updateStatus, updateSettings, uiSettings }) => {
 			const unsubscribe = () => () => undefined;
 			const updateListeners = new Set<(status: UpdateStatus) => void>();
 			let currentUpdateSettings = updateSettings;
@@ -120,6 +123,7 @@ export async function installFakeBridge(page: Page, opts: FakeBridgeOptions = {}
 					onPreviousTabShortcut: unsubscribe,
 					onNextTabShortcut: unsubscribe,
 					onShortcut: unsubscribe,
+					onShortcutPressed: unsubscribe,
 					reportSessionsShown: () => undefined,
 					setMenuAvailability: () => undefined,
 					onMenuAction: unsubscribe,
@@ -153,6 +157,7 @@ export async function installFakeBridge(page: Page, opts: FakeBridgeOptions = {}
 					persistTerminal: async () => undefined,
 					setWindowBackground: async () => undefined,
 					setWindowTranslucent: async () => undefined,
+					setInterfaceV2: async () => undefined,
 				},
 				menu: { action: async () => undefined, notifyShellFocus: () => undefined },
 				clipboard: {
@@ -272,6 +277,7 @@ export async function installFakeBridge(page: Page, opts: FakeBridgeOptions = {}
 					getLifetimeSessions: async () => null,
 					takeLaunchStart: async () => null,
 					takeResourceSummary: async () => null,
+					launchSteps: async () => null,
 					claimFirstOpen: async () => "ineligible" as const,
 					getPolicy: async () => ({ eventsEnabled: false, consentGeneration: "e2e", updatedAt: new Date(0).toISOString(), acknowledged: false, consentRenewalRequired: false, state: "applied", environmentVeto: true, durabilitySupported: false, reason: "environment_veto" }),
 					setEventsEnabled: async () => ({ eventsEnabled: false, consentGeneration: "e2e", updatedAt: new Date(0).toISOString(), acknowledged: false, consentRenewalRequired: false, state: "applied", environmentVeto: true, durabilitySupported: false, reason: "environment_veto" }),
@@ -377,6 +383,8 @@ export async function installFakeBridge(page: Page, opts: FakeBridgeOptions = {}
 					onDevToolsState: unsubscribe,
 					onProfileState: unsubscribe,
 					onProfileManage: unsubscribe,
+					onProfileSwitchConfirm: unsubscribe,
+					onProfileSwitchFailed: unsubscribe,
 					onPageFocus: unsubscribe,
 				},
 				browserProfiles: {
@@ -438,7 +446,7 @@ export async function installFakeBridge(page: Page, opts: FakeBridgeOptions = {}
 					},
 				},
 				uiSettings: {
-					get: async () => ({ ...DEFAULT_UI_SETTINGS }),
+					get: async () => ({ ...uiSettings }),
 					set: async (settings) => coerceUiSettings({ ...DEFAULT_UI_SETTINGS, ...settings }),
 				},
 				keybindings: {
@@ -484,6 +492,13 @@ export async function installFakeBridge(page: Page, opts: FakeBridgeOptions = {}
 					resolvePreviewUrl: async (_hostId: string, _sessionId: string, viewedUrl: string) => viewedUrl,
 					agentBrowserUrl: async () => "",
 					externalUrl: async (_hostId: string, url: string) => url,
+					hostUpdate: async () => null,
+					checkHostUpdate: async (url: string) => {
+						throw new Error(`No fake remote for ${url}`);
+					},
+					startHostUpdate: async (url: string) => {
+						throw new Error(`No fake remote for ${url}`);
+					},
 				},
 				cloud: {
 					getSession: async () => null,
@@ -523,7 +538,7 @@ export async function installFakeBridge(page: Page, opts: FakeBridgeOptions = {}
 			};
 			(window as unknown as { ao: unknown }).ao = ao;
 		},
-		{ version, daemonState, daemonPort, updateStatus, updateSettings },
+		{ version, daemonState, daemonPort, updateStatus, updateSettings, uiSettings },
 	);
 }
 
@@ -1143,6 +1158,7 @@ export async function installFakeAgent(page: Page, opts: FakeAgentOptions = {}):
 					onPreviousTabShortcut: unsubscribe,
 					onNextTabShortcut: unsubscribe,
 					onShortcut: unsubscribe,
+					onShortcutPressed: unsubscribe,
 					reportSessionsShown: () => undefined,
 					setMenuAvailability: () => undefined,
 					onMenuAction: unsubscribe,
@@ -1176,6 +1192,7 @@ export async function installFakeAgent(page: Page, opts: FakeAgentOptions = {}):
 					persistTerminal: async () => undefined,
 					setWindowBackground: async () => undefined,
 					setWindowTranslucent: async () => undefined,
+					setInterfaceV2: async () => undefined,
 				},
 				menu: { action: async () => undefined, notifyShellFocus: () => undefined },
 				clipboard: { writeText: async () => undefined, readText: async () => "", writeImage: async () => undefined },
@@ -1291,6 +1308,7 @@ export async function installFakeAgent(page: Page, opts: FakeAgentOptions = {}):
 					getLifetimeSessions: async () => null,
 					takeLaunchStart: async () => null,
 					takeResourceSummary: async () => null,
+					launchSteps: async () => null,
 					claimFirstOpen: async () => "ineligible" as const,
 					getPolicy: async () => ({ eventsEnabled: false, consentGeneration: "e2e", updatedAt: new Date(0).toISOString(), acknowledged: false, consentRenewalRequired: false, state: "applied", environmentVeto: true, durabilitySupported: false, reason: "environment_veto" }),
 					setEventsEnabled: async () => ({ eventsEnabled: false, consentGeneration: "e2e", updatedAt: new Date(0).toISOString(), acknowledged: false, consentRenewalRequired: false, state: "applied", environmentVeto: true, durabilitySupported: false, reason: "environment_veto" }),
@@ -1397,6 +1415,8 @@ export async function installFakeAgent(page: Page, opts: FakeAgentOptions = {}):
 					onDevToolsState: unsubscribe,
 					onProfileState: unsubscribe,
 					onProfileManage: unsubscribe,
+					onProfileSwitchConfirm: unsubscribe,
+					onProfileSwitchFailed: unsubscribe,
 					onPageFocus: unsubscribe,
 				},
 				browserProfiles: {
@@ -1491,6 +1511,13 @@ export async function installFakeAgent(page: Page, opts: FakeAgentOptions = {}):
 					resolvePreviewUrl: async (_hostId: string, _sessionId: string, viewedUrl: string) => viewedUrl,
 					agentBrowserUrl: async () => "",
 					externalUrl: async (_hostId: string, url: string) => url,
+					hostUpdate: async () => null,
+					checkHostUpdate: async (url: string) => {
+						throw new Error(`No fake remote for ${url}`);
+					},
+					startHostUpdate: async (url: string) => {
+						throw new Error(`No fake remote for ${url}`);
+					},
 				},
 				cloud: {
 					getSession: async () => null,

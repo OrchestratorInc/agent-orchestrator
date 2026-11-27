@@ -16,6 +16,7 @@ import { isWebDistinctId, type CloudAccount, type CloudSignInContext } from "../
 // import cycle with cloud-auth-local that made the bundler split chunks
 // incorrectly and panic. Both modules only use each other's exports inside
 // functions, so the static ES cycle is safe at module-init time.
+import { authCallbackReturnUrl, renderAuthCallbackPage } from "./auth-callback-page";
 import { revokeLocalSession } from "./cloud-auth-local";
 import { providerAuthFlow } from "./provider-auth-flow";
 
@@ -858,11 +859,6 @@ export async function handleCloudDeepLink(
   return { account, signIn: isWebDistinctId(webDistinctId) ? { webDistinctId } : {} };
 }
 
-const CALLBACK_HTML = (title: string, body: string): string =>
-  `<!doctype html><meta charset="utf-8"><title>${title}</title>` +
-  `<body style="font:15px -apple-system,system-ui,sans-serif;max-width:32rem;margin:15vh auto;padding:0 1.5rem;color:#111">` +
-  `<h1 style="font-size:1.25rem">${title}</h1><p style="color:#555">${body}</p></body>`;
-
 function closeLoopbackServer(): void {
   if (loopbackServer) {
     loopbackServer.close();
@@ -900,21 +896,11 @@ function startLoopbackCallbackServer(dataDir: string): void {
         );
         notifyRenderersFn?.(account);
         res.writeHead(200, { "Content-Type": "text/html" });
-        res.end(
-          CALLBACK_HTML(
-            "Signed in to Orchestrator Cloud",
-            "You can close this tab and return to Orchestrator.",
-          ),
-        );
+        res.end(renderAuthCallbackPage({ provider: "cloud", ok: true, returnUrl: authCallbackReturnUrl(app.isPackaged) }));
       } catch (callbackError) {
         console.error("WorkOS loopback callback failed:", callbackError);
         res.writeHead(400, { "Content-Type": "text/html" });
-        res.end(
-          CALLBACK_HTML(
-            "Sign-in failed",
-            "Return to Orchestrator and try signing in again.",
-          ),
-        );
+        res.end(renderAuthCallbackPage({ provider: "cloud", ok: false, returnUrl: authCallbackReturnUrl(app.isPackaged) }));
       } finally {
         closeLoopbackServer();
       }

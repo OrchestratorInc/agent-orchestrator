@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { requestDockModel } from "../chat/requestDockModel";
 import { groupConversationByTurn } from "../chat/timelineModel";
-import { appendCloudEvents, cloudConversationSnapshot, cloudTurnDiff, runningCloudTurnId } from "./conversation";
+import { appendCloudEvents, cloudConversationSnapshot, cloudSessionModel, cloudTurnDiff, runningCloudTurnId } from "./conversation";
 import type { CloudClientEvent, CloudSession } from "./types";
 
 const session = (overrides: Partial<CloudSession> = {}): CloudSession => ({
@@ -121,6 +121,58 @@ describe("cloud conversation projection", () => {
 		expect(cloudConversationSnapshot(session(), [...base, event("chat.turn_capabilities", { turnId: "t1", steering: true })]).capabilities).toEqual(["steer"]);
 	});
 
+	it("keeps who sent a steer and whether it was deleted while the agent took it", () => {
+		sequence = 0;
+		const snapshot = cloudConversationSnapshot(session(), [
+			event("chat.user_message", { turnId: "t1", text: "Go" }),
+			event("chat.turn_started", { turnId: "t1" }),
+			event("chat.turn_steered", { turnId: "t1", text: "Use the staging DB", clientMessageId: "c1" }),
+			event("chat.turn_steered", { turnId: "t1", text: "Never mind", deleteRequested: true }),
+			event("chat.turn_steered", { turnId: "t1", text: "CI is red", origin: "automation", senderLabel: "Orchestrator" }),
+		]);
+		const steers = snapshot.items.flatMap((item) => item.kind === "activity" && item.detail?.event === "steer" ? [item.detail] : []);
+		expect(steers).toEqual([
+			{ event: "steer", text: "Use the staging DB", clientMessageId: "c1", origin: "human" },
+			{ event: "steer", text: "Never mind", clientMessageId: undefined, origin: "human", deliveredBeforeDelete: true },
+			{ event: "steer", text: "CI is red", clientMessageId: undefined, origin: "automation", senderDisplayName: "Orchestrator" },
+		]);
+	});
+
+	it("starts a new reply after a steer, so the steer's part of the turn has its own answer", () => {
+		sequence = 0;
+		const snapshot = cloudConversationSnapshot(session(), [
+			event("chat.user_message", { turnId: "t1", text: "Go" }),
+			event("chat.turn_started", { turnId: "t1" }),
+			event("chat.assistant_delta", { turnId: "t1", text: "Looking" }),
+			event("chat.turn_steered", { turnId: "t1", text: "Use staging" }),
+			event("chat.assistant_delta", { turnId: "t1", text: "Switching" }),
+			event("chat.assistant_delta", { turnId: "t1", text: " to staging." }),
+			event("chat.turn_completed", { turnId: "t1" }),
+		]);
+		const groups = groupConversationByTurn(snapshot);
+		const text = (items: typeof snapshot.items) => items.map((item) => item.kind === "message" ? item.text : item.kind === "activity" ? item.detail?.event : "");
+		expect(groups.map((group) => text(group.items))).toEqual([["Go", "Looking"], ["steer", "Switching to staging."]]);
+	});
+
+	it("splits a turn at the person's steer but keeps an orchestrator's steer in the work", () => {
+		sequence = 0;
+		const snapshot = cloudConversationSnapshot(session(), [
+			event("chat.user_message", { turnId: "t1", text: "Go" }),
+			event("chat.turn_started", { turnId: "t1" }),
+			event("chat.assistant_delta", { turnId: "t1", text: "Looking" }),
+			event("chat.turn_steered", { turnId: "t1", text: "CI is red", origin: "automation", senderLabel: "Orchestrator" }),
+			event("chat.assistant_delta", { turnId: "t1", text: "Checking CI" }),
+			event("chat.turn_steered", { turnId: "t1", text: "Use staging" }),
+			event("chat.assistant_delta", { turnId: "t1", text: "On staging." }),
+			event("chat.turn_completed", { turnId: "t1" }),
+		]);
+		const text = (items: typeof snapshot.items) => items.map((item) => item.kind === "message" ? item.text : item.kind === "activity" ? item.detail?.text : "");
+		expect(groupConversationByTurn(snapshot).map((group) => text(group.items))).toEqual([
+			["Go", "Looking", "CI is red", "Checking CI"],
+			["Use staging", "On staging."],
+		]);
+	});
+
 	it("shows automation prompts by their display text and drops Codex's stdin notice", () => {
 		sequence = 0;
 		const snapshot = cloudConversationSnapshot(session({ harness: "codex" }), [
@@ -193,5 +245,25 @@ describe("cloud conversation projection", () => {
 		const whole = cloudConversationSnapshot(session(), events);
 		expect(whole.hasMoreBefore).toBe(false);
 		expect(groupConversationByTurn(whole).map((group) => group.turnId)).toEqual(["t2", "t1"]);
+	});
+});
+
+describe("the model a cloud session runs", () => {
+	const base = { id: "s", orgId: "o", projectId: "p", kind: "worker", harness: "claude-code", displayName: "", branch: "", mode: "trusted", interfaceMode: "chat", activityState: "idle", status: "idle", runtimeConnected: true, isTerminated: false, createdAt: "", updatedAt: "" } as CloudSession;
+
+	it("is its current model: a Chat pick made anywhere, not only the one it launched with", () => {
+		expect(cloudSessionModel({ ...base, model: "opus", currentModel: "sonnet" })).toBe("sonnet");
+		expect(cloudSessionModel({ ...base, model: "", currentModel: "opus" })).toBe("opus");
+	});
+
+	it("is the agent's default when the current model is empty, whatever it launched with", () => {
+		expect(cloudSessionModel({ ...base, model: "opus", currentModel: "" })).toBeUndefined();
+		expect(cloudSessionModel({ ...base, currentModel: "default" })).toBeUndefined();
+	});
+
+	it("is the launch model from a control plane that predates currentModel", () => {
+		expect(cloudSessionModel({ ...base, model: "opus" })).toBe("opus");
+		expect(cloudSessionModel({ ...base, model: " " })).toBeUndefined();
+		expect(cloudSessionModel(base)).toBeUndefined();
 	});
 });
