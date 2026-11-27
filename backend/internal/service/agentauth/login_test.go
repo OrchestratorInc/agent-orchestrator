@@ -261,7 +261,7 @@ func (f *signInProberFake) ResolveAgentBinary(_ context.Context, agentID string)
 }
 func (f *signInProberFake) InvalidateAgentAuthentication(string) {}
 func (f *signInProberFake) EnsureAgentReadiness(context.Context, string, domain.AgentReadinessPurpose) (domain.AgentReadinessSnapshot, error) {
-	return domain.AgentReadinessSnapshot{Authentication: domain.AgentAuthenticationObservation{State: f.state}}, nil
+	return domain.AgentReadinessSnapshot{Authentication: domain.AgentAuthenticationObservation{State: f.state, Freshness: domain.AgentReadinessFresh}}, nil
 }
 
 // The hidden PTY reports no exit status: Esc, Ctrl+C or a CLI error also end

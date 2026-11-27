@@ -31,7 +31,7 @@ func (f *switchableProberFake) InvalidateAgentAuthentication(string) {}
 func (f *switchableProberFake) EnsureAgentReadiness(context.Context, string, domain.AgentReadinessPurpose) (domain.AgentReadinessSnapshot, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	return domain.AgentReadinessSnapshot{Authentication: domain.AgentAuthenticationObservation{State: f.state}}, nil
+	return domain.AgentReadinessSnapshot{Authentication: domain.AgentAuthenticationObservation{State: f.state, Freshness: domain.AgentReadinessFresh}}, nil
 }
 
 const agyMenuScreen = "Welcome to the Antigravity CLI. You are currently not signed in.\n" +
@@ -435,6 +435,41 @@ func (f *guidedTerminalFake) SendAuthTerminalCode(_ context.Context, _ string, c
 	defer f.mu.Unlock()
 	f.keys = append(f.keys, "code:"+code)
 	return nil
+}
+
+// staleProberFake reports the last sign-in it saw as a stale observation,
+// as the readiness coordinator does when a check is inconclusive.
+type staleProberFake struct{ switchableProberFake }
+
+func (f *staleProberFake) EnsureAgentReadiness(context.Context, string, domain.AgentReadinessPurpose) (domain.AgentReadinessSnapshot, error) {
+	return domain.AgentReadinessSnapshot{Authentication: domain.AgentAuthenticationObservation{State: domain.AgentAuthenticationAuthorized, Freshness: domain.AgentReadinessStale}}, nil
+}
+
+func TestGuidedLoginIgnoresAStaleSignIn(t *testing.T) {
+	onPlatform(t, "darwin")
+
+	// After /logout Agy's probe is inconclusive, and readiness keeps the old
+	// "authorized" state marked stale: that must not finish the login.
+	pty := &guidedTerminalFake{output: agyMenuScreen}
+	svc := NewWithAgentResolver(foundExecutable("agy"), &staleProberFake{}, pty, "")
+	t.Cleanup(svc.Close)
+
+	started, err := svc.StartLogin(t.Context(), "agy", "browser", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, "Google OAuth to be chosen", 5*time.Second, func() bool { return len(pty.pressed()) >= 1 })
+	time.Sleep(3 * time.Second)
+	current, err := svc.Login(t.Context(), "agy", started.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if current.Status != "running" {
+		t.Fatalf("status = %q from a stale sign-in, want running", current.Status)
+	}
+	if _, err := svc.CancelLogin(t.Context(), "agy", started.ID); err != nil {
+		t.Fatal(err)
+	}
 }
 
 func (f *guidedTerminalFake) SendAuthTerminalCommand(_ context.Context, _ string, command string) error {

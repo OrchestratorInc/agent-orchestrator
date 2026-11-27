@@ -866,6 +866,11 @@ func (s *Service) nativeSignInState(ctx context.Context, agentID string) domain.
 	if err != nil {
 		return domain.AgentAuthenticationUnknown
 	}
+	// An inconclusive check keeps the last state it saw, marked stale: after
+	// a CLI signs out, that is the old sign-in. Only a fresh check counts.
+	if snapshot.Authentication.Freshness != domain.AgentReadinessFresh {
+		return domain.AgentAuthenticationUnknown
+	}
 	return snapshot.Authentication.State
 }
 
