@@ -325,7 +325,38 @@ func scriptFlag(rest []string) string {
 	return ""
 }
 
+// remoteScope returns the command's leading flags that pick which
+// agent-browser session (and socket namespace) it runs in. Every read the
+// daemon makes to judge the command carries them, so it judges the page the
+// command will act on, not the default session's.
+func remoteScope(args []string) []string {
+	var scope []string
+	for i := 0; i < len(args) && strings.HasPrefix(args[i], "-"); i++ {
+		name, _, hasValue := strings.Cut(args[i], "=")
+		scoped := name == "--session" || name == "--namespace"
+		switch {
+		case hasValue:
+			if scoped {
+				scope = append(scope, args[i])
+			}
+		case contains(remoteValueFlags, name) && i+1 < len(args):
+			if scoped {
+				scope = append(scope, args[i], args[i+1])
+			}
+			i++
+		case contains(remoteOptionalBoolFlags, name) && i+1 < len(args) && (args[i+1] == "true" || args[i+1] == "false"):
+			i++
+		}
+	}
+	return scope
+}
+
+type remoteScopeKey struct{}
+
 func (s *Service) remotePreflight(ctx context.Context, sessionID domain.SessionID, args []string) error {
+	if scope := remoteScope(args); len(scope) > 0 {
+		ctx = context.WithValue(ctx, remoteScopeKey{}, scope)
+	}
 	gate := classifyRemoteArgs(args)
 	if gate.kind == remoteNone {
 		return nil
@@ -659,6 +690,10 @@ func snapshotRef(selector string) (string, bool) {
 // remoteData runs a describe command on the service and returns its JSON
 // "data" object.
 func (s *Service) remoteData(ctx context.Context, args ...string) (map[string]interface{}, bool) {
+	// Read the session the command runs in (remoteScope).
+	if scope, _ := ctx.Value(remoteScopeKey{}).([]string); len(scope) > 0 {
+		args = append(slices.Clone(scope), args...)
+	}
 	resp, err := s.remote.Forward(ctx, args, nil)
 	if err != nil || resp.Error != "" {
 		return nil, false
