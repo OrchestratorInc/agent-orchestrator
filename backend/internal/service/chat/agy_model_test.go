@@ -252,3 +252,43 @@ func TestAgyOpeningModelReplacementCommitsSettingsAndNoticeAtomically(t *testing
 		})
 	}
 }
+
+func TestAgyOpeningModelReplacementWithoutReadyCallback(t *testing.T) {
+	for _, picked := range []string{"gemini-3.8-flash", "claude-opus-4-6-thinking"} {
+		t.Run(picked, func(t *testing.T) {
+			ctx := context.Background()
+			fixture := seedHistoricalProviderFixture(t)
+			target := fixture.target
+			target.Harness, target.IsTerminated = domain.HarnessAgy, false
+			if err := fixture.store.UpdateSession(ctx, target); err != nil {
+				t.Fatal(err)
+			}
+			provider := variantModelConversation{newFakeConversation()}
+			svc := chatsvc.New(chatsvc.Options{Store: fixture.store, Sessions: fixture.store, Reader: fullSnapshotReader(fixture.store),
+				Drivers: fakeRegistry{driver: fakeDriver{conv: provider}}, Log: slog.New(slog.DiscardHandler), NewID: uuid.NewString})
+			t.Cleanup(func() { _ = svc.Stop(ctx, target.ID) })
+			if _, err := svc.Start(ctx, chatsvc.StartConfig{
+				SessionID: target.ID, ProjectID: testProject, Kind: domain.KindOrchestrator,
+				Harness: domain.HarnessAgy, WorkspacePath: t.TempDir(), Model: picked,
+			}); err != nil {
+				t.Fatal(err)
+			}
+			after, err := fixture.store.LoadConversationSnapshot(ctx, fixture.conversation.ID)
+			if err != nil || after.Conversation.ActiveBranchID == fixture.root.ID || after.Conversation.Settings.Model != "gemini-3.8-flash" {
+				t.Fatalf("replacement did not activate with actual settings: %+v, err=%v", after, err)
+			}
+			foundNotice := false
+			for _, activity := range after.Activities {
+				if strings.Contains(activity.ProviderItemID, ":agy-model-fallback:") {
+					foundNotice = true
+					if !strings.HasPrefix(activity.ProviderItemID, after.Conversation.ActiveBranchID+":") {
+						t.Fatalf("notice belongs to the wrong branch: %+v", activity)
+					}
+				}
+			}
+			if foundNotice != (picked == "claude-opus-4-6-thinking") {
+				t.Fatalf("fallback notice present=%v for %s", foundNotice, picked)
+			}
+		})
+	}
+}

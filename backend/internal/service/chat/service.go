@@ -965,7 +965,7 @@ func (s *Service) startLocked(ctx context.Context, cfg StartConfig) (*Controller
 		conversation.Settings.ReasoningEffort = cfg.Effort
 		conversation.Settings.ApprovalMode = cfg.Permissions
 		// A switch target's settings are saved by the switch's commit.
-		if cfg.ProviderSwitch == nil && (cfg.Harness != domain.HarnessAgy || providerBoundaryID == "") {
+		if cfg.ProviderSwitch == nil && (cfg.Harness != domain.HarnessAgy || providerBoundaryID == "" || cfg.ControllerReady == nil) {
 			if err := s.store.SetConversationSettings(ctx, conversation.ID, conversation.Settings, s.now()); err != nil {
 				return nil, fmt.Errorf("record initial conversation settings: %w", err)
 			}
@@ -1352,13 +1352,14 @@ func (s *Service) startLocked(ctx context.Context, cfg StartConfig) (*Controller
 			return nil, err
 		}
 	}
+	var commitModelAfterActivation func(context.Context) error
 	if cfg.Harness == domain.HarnessAgy && cfg.ProviderSwitch == nil && !liveReconnect {
 		commitModel, modelErr := s.prepareAgyOpeningModel(ctx, controller, providerBoundary)
 		if modelErr != nil {
 			_ = cleanupUnpublishedConversation(conv, cfg.ProviderConversationID == "")
 			return nil, modelErr
 		}
-		if providerBoundary != nil {
+		if providerBoundary != nil && cfg.ControllerReady != nil {
 			commitHistory := commitProviderHistory
 			commitProviderHistory = func(commitCtx context.Context) error {
 				if commitHistory != nil {
@@ -1371,6 +1372,10 @@ func (s *Service) startLocked(ctx context.Context, cfg StartConfig) (*Controller
 				}
 				return controller.SetSettings(commitCtx, controller.Settings())
 			}
+		} else if providerBoundary != nil {
+			// Review and other callback-free starts activate their branch below.
+			// Write its notice afterwards so it belongs to the new branch.
+			commitModelAfterActivation = commitModel
 		} else if commitModel != nil {
 			if err := commitModel(ctx); err != nil {
 				_ = cleanupUnpublishedConversation(conv, cfg.ProviderConversationID == "")
@@ -1407,6 +1412,12 @@ func (s *Service) startLocked(ctx context.Context, cfg StartConfig) (*Controller
 		} else if commit.Conversation.ActiveBranchID != providerBoundary.ID {
 			_ = cleanupUnpublishedConversation(conv, false)
 			return nil, fmt.Errorf("commit chat controller: provider boundary %s was not activated", providerBoundary.ID)
+		}
+	}
+	if commitModelAfterActivation != nil {
+		if err := commitModelAfterActivation(ctx); err != nil {
+			_ = cleanupUnpublishedConversation(conv, cfg.ProviderConversationID == "")
+			return nil, err
 		}
 	}
 	if commit.Conversation.ID != "" {
