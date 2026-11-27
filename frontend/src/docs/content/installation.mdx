@@ -11,6 +11,33 @@ On your phone, install [Orchestrator Mobile for iPhone or iPad](https://apps.app
 
 The desktop app is the canonical install path. It owns the local daemon, requires no global `ao` command, and checks for updates after launch and while it is running.
 
+<span id="install-on-macos" />
+## Install on macOS
+
+The macOS downloads above are the **Stable** disk images (`.dmg`). To install one:
+
+1. Open the downloaded `Orchestrator-darwin-arm64.dmg` (Apple silicon) or `Orchestrator-darwin-x64.dmg` (Intel). Finder opens a window named **Orchestrator** that shows the app and an **Applications** folder.
+2. Drag **Orchestrator** onto **Applications**. If Orchestrator is already installed, quit it first, then choose **Replace** when Finder asks. Your projects, sessions, and settings stay in `~/.ao`, so replacing the app keeps them.
+3. Eject the disk image: choose the eject button beside **Orchestrator** in the Finder sidebar, or drag the disk image to the Trash. You can then delete the downloaded `.dmg`.
+4. Open **Orchestrator** from the Applications folder, Launchpad, or Spotlight.
+
+Always open the copy in Applications, not the one on the disk image or in Downloads. The updater updates only the installed copy, so a copy anywhere else stays on the version you downloaded.
+
+Each release also publishes macOS `.zip` files. The updater installs from them; they aren't meant for a first install. Double-clicking a zip extracts the app next to it, usually in Downloads, so opening it there leaves a second copy of Orchestrator beside the one in Applications.
+
+<span id="nightly-on-macos" />
+### Nightly on macOS
+
+Nightly builds have no disk image. Their direct macOS downloads are `.zip` files only. To use Nightly without running a copy from Downloads, install Stable from the disk image as described above, then switch channels in the app:
+
+1. Open **Settings → Updates**.
+2. Set **Updates channel** to **Nightly**, labeled Nightly (Pre-release).
+3. Choose **Update** to download the newest nightly, then choose **Restart & install**. The updater replaces the app in Applications.
+
+To go back, set **Updates channel** to **Stable**. The updater never installs an older build, so you move to Stable with the first stable release newer than your nightly.
+
+If Orchestrator is already installed, switch channels in the app rather than replacing it by hand. If you download a nightly `.zip` instead, move the extracted app into Applications before you open it: quit Orchestrator if it is running, drag the extracted **Orchestrator** from Downloads onto **Applications**, and choose **Replace** if Finder asks. Your data in `~/.ao` stays. Then delete the zip and any copy left in Downloads, and open Orchestrator from Applications.
+
 <span id="optional-macos-install-with-homebrew" />
 ## Install with a package manager
 
@@ -86,7 +113,7 @@ Orchestrator uses the coding agents and sign-ins already installed on your compu
 
 ### Install and open the desktop app
 
-Choose the download for your platform above, install it, and open **Orchestrator**. The app starts and supervises the local Go daemon automatically.
+Choose the download for your platform above, install it, and open **Orchestrator**. On macOS, drag it to Applications first, as described in [Install on macOS](#install-on-macos). The app starts and supervises the local Go daemon automatically.
 
 </Step>
 <Step>
