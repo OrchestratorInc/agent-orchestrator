@@ -243,6 +243,57 @@ export const APPROVAL_FOCUS_SCRIPT = `(() => {
 	return (marks && el && marks.get(el)) || "";
 })()`;
 
+/**
+ * Guards one approved key, in the same isolated world as the focus marks.
+ * Page script can move focus between any check and agent-browser delivering
+ * the key over CDP; the key event's own target is fixed when it is
+ * dispatched, so the guard checks that and cancels a key that lands on
+ * anything but the approved element. It covers only that key: it ends once
+ * the key landed (or, after a stray one, with its keyup), and on its own
+ * after two seconds. APPROVAL_DISARM_PRESS_SCRIPT reads the result.
+ */
+export function approvalArmPressScript(focus: string): string {
+	return `(() => {
+	window.__aoPressGuard?.stop();
+	const marks = window.__aoApprovalFocus;
+	const expected = ${JSON.stringify(focus)};
+	const guard = { mismatch: false };
+	let timer;
+	function check(event) {
+		const target = event.target;
+		if (!guard.mismatch && marks && target && marks.get(target) === expected) {
+			guard.stop();
+			return;
+		}
+		guard.mismatch = true;
+		event.preventDefault();
+		event.stopImmediatePropagation();
+		if (event.type === "keyup") guard.stop();
+	}
+	guard.stop = () => {
+		clearTimeout(timer);
+		window.removeEventListener("keydown", check, true);
+		window.removeEventListener("keypress", check, true);
+		window.removeEventListener("keyup", check, true);
+	};
+	window.addEventListener("keydown", check, true);
+	window.addEventListener("keypress", check, true);
+	window.addEventListener("keyup", check, true);
+	timer = setTimeout(guard.stop, 2000);
+	window.__aoPressGuard = guard;
+	return true;
+})()`;
+}
+
+/** Ends the press guard and reports whether it held a key back. */
+export const APPROVAL_DISARM_PRESS_SCRIPT = `(() => {
+	const guard = window.__aoPressGuard;
+	window.__aoPressGuard = undefined;
+	if (!guard) return { mismatch: false };
+	guard.stop();
+	return { mismatch: guard.mismatch === true };
+})()`;
+
 /** A crop rectangle around the element, padded and kept inside the viewport. */
 export function approvalCropRect(
 	rect: { x: number; y: number; width: number; height: number } | undefined,
