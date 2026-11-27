@@ -84,7 +84,7 @@ export type SettingsModal =
 
 /** Worker detail view toggles — Changes (Git rail) is the default. */
 export type WorkbenchTab = "changes" | "files" | "terminal";
-export type InspectorView = "summary" | "reviews" | "browser" | "device" | "sideChat" | "subagents" | "files" | "artifacts" | "task";
+export type InspectorView = "summary" | "reviews" | "browser" | "device" | "sideChat" | "subagents" | "files" | "artifacts" | "task" | "computerUse";
 
 /**
  * A background task listed in the side panel's Background tasks tab. `task` is
@@ -151,6 +151,8 @@ export type InspectorSessionState = {
 	subagentsAvailable?: boolean;
 	/** An artifact was registered while the user was busy in Browser or Files. */
 	artifactsUnseen?: boolean;
+	/** A computer-use step arrived while the Computer Use tab was not visible. */
+	computerUseUnseen?: boolean;
 	/** Files tab: review changed files directly. Defaults to true; false shows the full tree. */
 	filesChangedOnly?: boolean;
 	/** Files tab: the branch and changes under review, shared by the docked and maximized explorers. Unset follows the default. */
@@ -456,6 +458,7 @@ export type UiState = {
 	setBrowserUnseen: (sessionId: string, unseen: boolean) => void;
 	setSubagentsAvailable: (sessionId: string, available: boolean) => void;
 	setArtifactsUnseen: (sessionId: string, unseen: boolean) => void;
+	setComputerUseUnseen: (sessionId: string, unseen: boolean) => void;
 	setFilesChangedOnly: (sessionId: string, changedOnly: boolean) => void;
 	setFilesSelection: (sessionId: string, selection: FilesSelection) => void;
 	/** Back to the checked-out branch and the default changes. */
@@ -934,10 +937,11 @@ export const useUiStore = create<UiState>((set, get) => ({
 			const current = inspectorState(state.inspectorSessions, sessionId);
 			const browserUnseen = view === "browser" ? false : current.browserUnseen;
 			const artifactsUnseen = view === "artifacts" ? false : current.artifactsUnseen;
+			const computerUseUnseen = view === "computerUse" ? false : current.computerUseUnseen;
 			return {
 				inspectorSessions: {
 					...state.inspectorSessions,
-					[sessionId]: { ...current, view, browserUnseen, artifactsUnseen },
+					[sessionId]: { ...current, view, browserUnseen, artifactsUnseen, computerUseUnseen },
 				},
 			};
 		}),
@@ -1069,6 +1073,17 @@ export const useUiStore = create<UiState>((set, get) => ({
 				inspectorSessions: {
 					...state.inspectorSessions,
 					[sessionId]: { ...current, artifactsUnseen },
+				},
+			};
+		}),
+	setComputerUseUnseen: (sessionId, computerUseUnseen) =>
+		set((state) => {
+			const current = inspectorState(state.inspectorSessions, sessionId);
+			if (Boolean(current.computerUseUnseen) === computerUseUnseen) return state;
+			return {
+				inspectorSessions: {
+					...state.inspectorSessions,
+					[sessionId]: { ...current, computerUseUnseen },
 				},
 			};
 		}),

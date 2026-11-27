@@ -35,9 +35,10 @@ const INSPECTOR_TELEMETRY_NAMES: Record<InspectorView, string> = {
 	files: "files",
 	artifacts: "artifacts",
 	task: "background_tasks",
+	computerUse: "computer_use",
 };
 
-export type InspectorView = "summary" | "reviews" | "browser" | "device" | "sideChat" | "subagents" | "files" | "artifacts" | "task";
+export type InspectorView = "summary" | "reviews" | "browser" | "device" | "sideChat" | "subagents" | "files" | "artifacts" | "task" | "computerUse";
 
 export type InspectorTab = {
 	badge?: boolean;
@@ -61,6 +62,7 @@ export function SessionInspectorShellView({
 	browserPoppedOut,
 	browserView,
 	deviceView,
+	computerUseView,
 	sideChatView,
 	subagentsView,
 	filesView,
@@ -79,6 +81,7 @@ export function SessionInspectorShellView({
 	browserPoppedOut: boolean;
 	browserView?: ReactNode;
 	deviceView?: ReactNode;
+	computerUseView?: ReactNode;
 	sideChatView?: ReactNode;
 	subagentsView?: ReactNode;
 	filesView?: ReactNode;
@@ -201,10 +204,10 @@ export function SessionInspectorShellView({
 				className={cn(
 					inspectorBodyBaseClass,
 					!isVisible && "invisible pointer-events-none",
-					activeView !== "browser" && activeView !== "files" && activeView !== "sideChat" && activeView !== "subagents" && activeView !== "artifacts" && activeView !== "task" && activeView !== "device" && inspectorScrollableBodyClass,
+					activeView !== "browser" && activeView !== "files" && activeView !== "sideChat" && activeView !== "subagents" && activeView !== "artifacts" && activeView !== "task" && activeView !== "device" && activeView !== "computerUse" && inspectorScrollableBodyClass,
 					// Read-only details opt out of the app-wide `user-select: none` so they can be copied.
 					(activeView === "summary" || activeView === "reviews") && "select-text",
-					(activeView === "sideChat" || activeView === "subagents" || activeView === "artifacts" || activeView === "task" || activeView === "device") && "p-0 overflow-hidden",
+					(activeView === "sideChat" || activeView === "subagents" || activeView === "artifacts" || activeView === "task" || activeView === "device" || activeView === "computerUse") && "p-0 overflow-hidden",
 					activeView === "browser" &&
 						!browserPoppedOut &&
 						"session-inspector__body--browser p-0 overflow-hidden [&>[role=tabpanel]]:border-0 [&>[role=tabpanel]]:rounded-none",
@@ -222,6 +225,7 @@ export function SessionInspectorShellView({
 				{activeView === "files" ? filesView : null}
 				{activeView === "artifacts" ? artifactsView : null}
 				{activeView === "task" ? taskView : null}
+				{activeView === "computerUse" ? computerUseView : null}
 			</div>
 		</aside>
 	);

@@ -575,6 +575,8 @@ var schemaNames = map[string]string{ //nolint:gosec // Public OpenAPI type names
 	"ControllersComputerUseDoctorResponse":     "ComputerUseDoctorResponse",
 	"ComputeruseAgentTool":                     "ComputerUseAgentTool",
 	"ControllersComputerUseAgentToolsResponse": "ComputerUseAgentToolsResponse",
+	"ComputeruseTimelineEntry":                 "ComputerUseTimelineEntry",
+	"ControllersComputerUseTimelineResponse":   "ComputerUseTimelineResponse",
 	// service/systeminstall: Job backs both StartInstallResponse and
 	// InstallStatusResponse (they're the same Go type), so it reflects to one
 	// shared component — name it after the domain concept, not either alias.
@@ -1253,6 +1255,29 @@ func computerUseOperations() []operation {
 				{http.StatusNotImplemented, envelope.APIError{}},
 				{http.StatusServiceUnavailable, envelope.APIError{}},
 			},
+		},
+		{
+			method: http.MethodGet, path: "/api/v1/computer-use/sessions/{sessionId}/timeline", id: "getComputerUseTimeline", tag: "computer-use",
+			summary:    "List an AO session's computer-use calls, oldest first, with the screenshots each one saved",
+			pathParams: []any{controllers.SessionIDParam{}},
+			resps: []respUnit{
+				{http.StatusOK, controllers.ComputerUseTimelineResponse{}},
+				{http.StatusBadRequest, envelope.APIError{}},
+				{http.StatusInternalServerError, envelope.APIError{}},
+				{http.StatusNotImplemented, envelope.APIError{}},
+			},
+		},
+		{
+			method: http.MethodGet, path: "/api/v1/computer-use/sessions/{sessionId}/screenshots/{name}", id: "getComputerUseScreenshot", tag: "computer-use",
+			summary:    "Read one screenshot an AO session's computer-use call saved",
+			pathParams: []any{controllers.SessionIDParam{}, controllers.ComputerUseScreenshotParam{}},
+			resps: []respUnit{
+				{http.StatusOK, ""},
+				{http.StatusBadRequest, envelope.APIError{}},
+				{http.StatusNotFound, envelope.APIError{}},
+				{http.StatusNotImplemented, envelope.APIError{}},
+			},
+			contentTypes: map[int]string{http.StatusOK: "application/octet-stream"},
 		},
 	}
 }

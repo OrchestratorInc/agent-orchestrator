@@ -3505,6 +3505,92 @@ paths:
         progress shows in status
       tags:
       - computer-use
+  /api/v1/computer-use/sessions/{sessionId}/screenshots/{name}:
+    get:
+      operationId: getComputerUseScreenshot
+      parameters:
+      - description: Session identifier, e.g. project-1.
+        in: path
+        name: sessionId
+        required: true
+        schema:
+          description: Session identifier, e.g. project-1.
+          type: string
+      - description: Screenshot file name from a timeline entry.
+        in: path
+        name: name
+        required: true
+        schema:
+          description: Screenshot file name from a timeline entry.
+          type: string
+      responses:
+        "200":
+          content:
+            application/octet-stream:
+              schema:
+                type: string
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Found
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: Read one screenshot an AO session's computer-use call saved
+      tags:
+      - computer-use
+  /api/v1/computer-use/sessions/{sessionId}/timeline:
+    get:
+      operationId: getComputerUseTimeline
+      parameters:
+      - description: Session identifier, e.g. project-1.
+        in: path
+        name: sessionId
+        required: true
+        schema:
+          description: Session identifier, e.g. project-1.
+          type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ComputerUseTimelineResponse'
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: List an AO session's computer-use calls, oldest first, with the screenshots
+        each one saved
+      tags:
+      - computer-use
   /api/v1/computer-use/status:
     get:
       operationId: getComputerUseStatus
@@ -20161,6 +20247,44 @@ components:
       - updateAvailable
       - daemon
       - imageDirectory
+      type: object
+    ComputerUseTimelineEntry:
+      properties:
+        arguments:
+          additionalProperties: {}
+          description: The arguments the agent passed, without the ones AO sets itself.
+          type: object
+        at:
+          format: date-time
+          type: string
+        error:
+          type: string
+        id:
+          type: string
+        ok:
+          type: boolean
+        screenshots:
+          description: Screenshot file names, served by GET /api/v1/computer-use/sessions/{sessionId}/screenshots/{name}.
+          items:
+            type: string
+          type: array
+        tool:
+          type: string
+      required:
+      - id
+      - at
+      - tool
+      - ok
+      - screenshots
+      type: object
+    ComputerUseTimelineResponse:
+      properties:
+        entries:
+          items:
+            $ref: '#/components/schemas/ComputerUseTimelineEntry'
+          type: array
+      required:
+      - entries
       type: object
     ConsumeAgentAccountResetCreditRequest:
       properties:

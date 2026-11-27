@@ -1373,6 +1373,40 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/computer-use/sessions/{sessionId}/screenshots/{name}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Read one screenshot an AO session's computer-use call saved */
+        get: operations["getComputerUseScreenshot"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/computer-use/sessions/{sessionId}/timeline": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List an AO session's computer-use calls, oldest first, with the screenshots each one saved */
+        get: operations["getComputerUseTimeline"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/computer-use/status": {
         parameters: {
             query?: never;
@@ -6886,6 +6920,23 @@ export interface components {
             releaseNotesUrl?: string;
             updateAvailable: boolean;
             version?: string;
+        };
+        ComputerUseTimelineEntry: {
+            /** @description The arguments the agent passed, without the ones AO sets itself. */
+            arguments?: {
+                [key: string]: unknown;
+            };
+            /** Format: date-time */
+            at: string;
+            error?: string;
+            id: string;
+            ok: boolean;
+            /** @description Screenshot file names, served by GET /api/v1/computer-use/sessions/{sessionId}/screenshots/{name}. */
+            screenshots: string[];
+            tool: string;
+        };
+        ComputerUseTimelineResponse: {
+            entries: components["schemas"]["ComputerUseTimelineEntry"][];
         };
         ConsumeAgentAccountResetCreditRequest: {
             idempotencyKey: string;
@@ -15307,6 +15358,108 @@ export interface operations {
             };
             /** @description Conflict */
             409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    getComputerUseScreenshot: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Session identifier, e.g. project-1. */
+                sessionId: string;
+                /** @description Screenshot file name from a timeline entry. */
+                name: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/octet-stream": string;
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    getComputerUseTimeline: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Session identifier, e.g. project-1. */
+                sessionId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ComputerUseTimelineResponse"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
                 headers: {
                     [name: string]: unknown;
                 };

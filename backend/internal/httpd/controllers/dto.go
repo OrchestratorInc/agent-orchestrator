@@ -2718,6 +2718,18 @@ type ComputerUseAgentToolsResponse struct {
 	Tools []computeruse.AgentTool `json:"tools"`
 }
 
+// ComputerUseTimelineResponse is the body of
+// GET /api/v1/computer-use/sessions/{sessionId}/timeline: the session's
+// computer-use calls, oldest first.
+type ComputerUseTimelineResponse struct {
+	Entries []computeruse.TimelineEntry `json:"entries"`
+}
+
+// ComputerUseScreenshotParam names one saved screenshot.
+type ComputerUseScreenshotParam struct {
+	Name string `path:"name" description:"Screenshot file name from a timeline entry."`
+}
+
 // StartInstallResponse is the body of POST /api/v1/system/install/{target} (202).
 type StartInstallResponse = systeminstall.Job
 

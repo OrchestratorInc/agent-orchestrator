@@ -179,6 +179,8 @@ import { queryShown } from "../lib/dom-selectors";
 import { KeepRecentAlive } from "./KeepRecentAlive";
 import { openComposerModelPicker, toggleComposerDictation } from "../lib/composer-shortcuts";
 import { inspectorIsOpen, useResolvedTheme, useUiStore, type InspectorView } from "../stores/ui-store";
+import { localComputerUseSessionId, useComputerUseTimeline } from "../hooks/useComputerUseTimeline";
+import { useSettings } from "../hooks/useSettings";
 import { useSideChatTab, useSideChatsAvailable } from "../lib/side-chats";
 import {
 	INSPECTOR_SEPARATOR_RESERVE_PX,
@@ -636,6 +638,7 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 	const initializeInspectorSession = useUiStore((state) => state.initializeInspectorSession);
 	const setBrowserContentRevealed = useUiStore((state) => state.setBrowserContentRevealed);
 	const setBrowserUnseen = useUiStore((state) => state.setBrowserUnseen);
+	const setComputerUseUnseen = useUiStore((state) => state.setComputerUseUnseen);
 	const setArtifactsUnseen = useUiStore((state) => state.setArtifactsUnseen);
 	const { daemonStatus } = useShell();
 	const resumeStatus = useSessionInterfaceTransitionStatus(canResumeAgent(session) ? session?.id : undefined, hostId);
@@ -2806,6 +2809,67 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 			setBrowserUnseen(uiSessionId, false);
 		}
 	}, [browserPoppedOut, hasInspector, inspectorView, isInspectorOpen, uiSessionId, setBrowserUnseen]);
+
+	// Computer use: the session's first call, made while this session is on
+	// screen, opens its tab. Later calls only badge it while it is not visible,
+	// so a user who closed the tab is not pulled back to it.
+	const computerUseSessionId = localComputerUseSessionId(session, hostId);
+	const { settings: computerUseSettings } = useSettings(undefined, computerUseSessionId !== undefined);
+	const computerUseTimeline = useComputerUseTimeline(computerUseSessionId, {
+		live: computerUseSettings?.computerUse === true && !terminated,
+		open: isInspectorOpen && inspectorView === "computerUse",
+	});
+	const latestComputerUseStep = computerUseTimeline.data?.at(-1)?.id ?? null;
+	// One visit to this session: steps made before it came on screen are
+	// history; steps made after are news, even when they land in the visit's
+	// first read. Reset on every session switch, before any read is checked.
+	const computerUseVisitRef = useRef<{ sessionId: string; enteredAt: number; seen: string | null; revealed: boolean } | null>(null);
+	useEffect(() => {
+		computerUseVisitRef.current = { sessionId: uiSessionId, enteredAt: Date.now(), seen: null, revealed: false };
+	}, [uiSessionId]);
+	useEffect(() => {
+		if (!hasInspector || !computerUseTimeline.isSuccess) return;
+		const visit = computerUseVisitRef.current;
+		if (!visit || visit.sessionId !== uiSessionId || latestComputerUseStep === visit.seen) return;
+		visit.seen = latestComputerUseStep;
+		const entries = computerUseTimeline.data ?? [];
+		// Steps from before this visit mean the session already made its first
+		// call: remember that, since the timeline window can later drop them.
+		if (entries.some((entry) => Date.parse(entry.at) < visit.enteredAt)) visit.revealed = true;
+		const latest = entries.at(-1);
+		if (!latest || Date.parse(latest.at) < visit.enteredAt || terminated) return;
+		// The session's first step ever, made while it is on screen, opens the tab.
+		const first = !visit.revealed && entries.every((entry) => Date.parse(entry.at) >= visit.enteredAt);
+		if (first) {
+			visit.revealed = true;
+			setComputerUseUnseen(uiSessionId, false);
+			// A maximized Browser or Files would hide the tab it opens.
+			setBrowserPopOutState({ sessionId, phase: "docked" });
+			setFilesPoppedOut(false);
+			transitionInspectorView("computerUse");
+			setInspectorOpenForSession(uiSessionId, true);
+			return;
+		}
+		const inspector = useUiStore.getState().inspectorSessions;
+		if (!(inspectorIsOpen(inspector, uiSessionId) && inspector[uiSessionId]?.view === "computerUse")) {
+			setComputerUseUnseen(uiSessionId, true);
+		}
+	}, [
+		computerUseTimeline.data,
+		computerUseTimeline.isSuccess,
+		hasInspector,
+		latestComputerUseStep,
+		sessionId,
+		setComputerUseUnseen,
+		setInspectorOpenForSession,
+		terminated,
+		transitionInspectorView,
+		uiSessionId,
+	]);
+	// Reopening the inspector while parked on Computer Use also clears its badge.
+	useEffect(() => {
+		if (hasInspector && isInspectorOpen && inspectorView === "computerUse") setComputerUseUnseen(uiSessionId, false);
+	}, [hasInspector, inspectorView, isInspectorOpen, setComputerUseUnseen, uiSessionId]);
 
 	const handleToggleInspector = useCallback(() => {
 		if (browserOnly && inspectorView === "browser") setBrowserContentRevealed(uiSessionId, true);
