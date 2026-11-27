@@ -685,6 +685,11 @@ type WorkspaceInfo struct {
 	// when the normal workspace lifecycle primitives operate on one child repo
 	// inside a workspace project.
 	RepoPath string
+	// ReleaseAgentState is set when the session is being deleted, so it can no
+	// longer be restored. Teardown may then remove an agent's restorable
+	// conversation kept in the workspace (see hookutil.IsRestorableStateDir),
+	// which an archive keeps so a later restore can resume it.
+	ReleaseAgentState bool
 }
 
 // WorkspaceProjectConfig describes a multi-repo workspace session. RootRepoPath

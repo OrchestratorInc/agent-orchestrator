@@ -613,6 +613,8 @@
 	"browser.emptyUrl": "Introduce una URL o haz clic en una en el terminal.",
 	"browser.sessionEnded": "Session ended — browser preview unavailable.",
 	"browser.forward": "Adelante",
+	"browser.muteTab": "Silenciar pestaña",
+	"browser.unmuteTab": "Dejar de silenciar la pestaña",
 	"browser.newTab": "Nueva pestaña",
 	"browser.onlyTab": "No se puede cerrar la única pestaña",
 	"browser.openDevTools": "Abrir DevTools",

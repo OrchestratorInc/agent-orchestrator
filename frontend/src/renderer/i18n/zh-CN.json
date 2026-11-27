@@ -609,6 +609,8 @@
 	"browser.emptyUrl": "输入网址，或在终端中点击链接。",
 	"browser.sessionEnded": "Session ended — browser preview unavailable.",
 	"browser.forward": "前进",
+	"browser.muteTab": "静音标签页",
+	"browser.unmuteTab": "取消标签页静音",
 	"browser.newTab": "新标签",
 	"browser.onlyTab": "无法关闭唯一标签",
 	"browser.openDevTools": "打开开发者工具",

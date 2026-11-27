@@ -328,3 +328,27 @@ func TestListWorkspaceTreeGlobalCapNotPerDirectory(t *testing.T) {
 		t.Fatal("root.Truncated = false, want true once the flat visible-path list exceeds the global cap")
 	}
 }
+
+// Files hides what scratch teardown treats as AO's, globs included, so a tau
+// session's per-session instructions never show as user work.
+func TestListWorkspaceTreeHidesAOManagedGlobEntries(t *testing.T) {
+	root := t.TempDir()
+	writeWorkspaceFile(t, root, ".tau/.gitignore", aoManagedGitignoreSentinel+"\n/.gitignore\n/ao-standing-instructions-*.md\n")
+	writeWorkspaceFile(t, root, ".tau/ao-standing-instructions-abc.md", "rules\n")
+	writeWorkspaceFile(t, root, ".tau/notes.md", "user work\n")
+
+	st := newFakeStore()
+	st.sessions["standalone-1"] = domain.SessionRecord{
+		ID:       "standalone-1",
+		Kind:     domain.KindWorker,
+		Metadata: domain.SessionMetadata{WorkspacePath: root},
+	}
+
+	tree, err := (&Service{store: st}).ListWorkspaceTree(context.Background(), "standalone-1", ".tau")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(tree.Entries) != 1 || tree.Entries[0].Name != "notes.md" {
+		t.Fatalf("standalone .tau entries = %#v, want only notes.md", tree.Entries)
+	}
+}
