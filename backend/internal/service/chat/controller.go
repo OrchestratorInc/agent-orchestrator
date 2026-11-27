@@ -2146,8 +2146,13 @@ func (c *Controller) dispatch(
 		// provider id, so looking one up by the empty string would hit whichever
 		// undispatched turn the database returned first.
 		completedAt := c.now()
-		if settleErr := c.store.SettleTurnByID(
-			ctx, turnID, domain.TurnStateFailed, err.Error(), completedAt); settleErr != nil {
+		var settleErr error
+		if holds, ok := c.store.(queueHoldStore); ok {
+			settleErr = holds.SettleRefusedBatchLead(ctx, turnID, followers, err.Error(), completedAt)
+		} else {
+			settleErr = c.store.SettleTurnByID(ctx, turnID, domain.TurnStateFailed, err.Error(), completedAt)
+		}
+		if settleErr != nil {
 			c.log.Error("failed to settle turn after send error", "error", settleErr)
 		}
 		return domain.ConversationTurn{

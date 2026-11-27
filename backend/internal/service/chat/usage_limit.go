@@ -41,6 +41,7 @@ type queueHoldStore interface {
 	ReleaseConversationQueue(context.Context, string) error
 	ReleaseConversationQueueHeldBy(ctx context.Context, conversationID, turnID string) error
 	ReleaseConversationQueueAfterTurn(ctx context.Context, conversationID, providerTurnID string) error
+	SettleRefusedBatchLead(ctx context.Context, turnID string, followers []string, errMessage string, now time.Time) error
 }
 
 func (c *Controller) queueHeld(ctx context.Context) (bool, error) {

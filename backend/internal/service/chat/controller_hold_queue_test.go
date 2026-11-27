@@ -324,44 +324,55 @@ func TestUsageLimitHoldsTheQueueOnlyBehindTheUsersPrompt(t *testing.T) {
 }
 
 func TestUsageLimitHoldsTheQueueBehindABatchWithTheUsersPrompt(t *testing.T) {
-	h := newHarness(t)
-	ctx := context.Background()
-	if _, err := h.svc.Send(ctx, testSession, ports.ChatUserMessage{
-		Text: "busy", ClientMessageID: "c0", Origin: domain.MessageOriginAutomation,
-	}); err != nil {
-		t.Fatal(err)
-	}
-	h.conv.emit(ports.ChatEvent{Kind: ports.ChatEventTurnStarted, ProviderTurnID: "provider-turn-1"})
-	for _, msg := range []ports.ChatUserMessage{
-		{Text: "CI note", ClientMessageID: "c1", Origin: domain.MessageOriginAutomation},
-		{Text: "user note", ClientMessageID: "c2", Origin: domain.MessageOriginAutomation, AuthoredByUser: true},
-	} {
-		if turn, err := h.svc.Send(ctx, testSession, msg); err != nil || turn.State != domain.TurnStateQueued {
-			t.Fatalf("queue %q: %+v, %v", msg.Text, turn, err)
-		}
-	}
-	h.conv.emit(ports.ChatEvent{Kind: ports.ChatEventTurnCompleted, ProviderTurnID: "provider-turn-1", TurnState: domain.TurnStateCompleted})
-	var lead string
-	h.awaitSnapshot(t, func(s store.ConversationSnapshot) bool {
-		for _, turn := range s.Turns {
-			if turn.State == domain.TurnStateRunning {
-				lead = turn.ProviderTurnID
+	for _, atSend := range []bool{false, true} {
+		t.Run(fmt.Sprintf("refused at send %v", atSend), func(t *testing.T) {
+			h := newHarness(t)
+			ctx := context.Background()
+			if _, err := h.svc.Send(ctx, testSession, ports.ChatUserMessage{
+				Text: "busy", ClientMessageID: "c0", Origin: domain.MessageOriginAutomation,
+			}); err != nil {
+				t.Fatal(err)
 			}
-		}
-		return lead != "" && len(h.conv.sentTexts()) == 2
-	})
-	h.conv.emit(ports.ChatEvent{Kind: ports.ChatEventTurnCompleted, ProviderTurnID: lead,
-		TurnState: domain.TurnStateFailed, Err: errors.New(timedUsageLimit)})
-	h.awaitSnapshot(t, func(s store.ConversationSnapshot) bool {
-		return turnStateByText(t, s)["CI note"] == domain.TurnStateFailed
-	})
+			h.conv.emit(ports.ChatEvent{Kind: ports.ChatEventTurnStarted, ProviderTurnID: "provider-turn-1"})
+			for _, msg := range []ports.ChatUserMessage{
+				{Text: "CI note", ClientMessageID: "c1", Origin: domain.MessageOriginAutomation},
+				{Text: "user note", ClientMessageID: "c2", Origin: domain.MessageOriginAutomation, AuthoredByUser: true},
+			} {
+				if turn, err := h.svc.Send(ctx, testSession, msg); err != nil || turn.State != domain.TurnStateQueued {
+					t.Fatalf("queue %q: %+v, %v", msg.Text, turn, err)
+				}
+			}
+			if atSend {
+				h.conv.mu.Lock()
+				h.conv.sendErr = errors.New(timedUsageLimit)
+				h.conv.mu.Unlock()
+			}
+			h.conv.emit(ports.ChatEvent{Kind: ports.ChatEventTurnCompleted, ProviderTurnID: "provider-turn-1", TurnState: domain.TurnStateCompleted})
+			if !atSend {
+				var lead string
+				h.awaitSnapshot(t, func(s store.ConversationSnapshot) bool {
+					for _, turn := range s.Turns {
+						if turn.State == domain.TurnStateRunning {
+							lead = turn.ProviderTurnID
+						}
+					}
+					return lead != "" && len(h.conv.sentTexts()) == 2
+				})
+				h.conv.emit(ports.ChatEvent{Kind: ports.ChatEventTurnCompleted, ProviderTurnID: lead,
+					TurnState: domain.TurnStateFailed, Err: errors.New(timedUsageLimit)})
+			}
+			h.awaitSnapshot(t, func(s store.ConversationSnapshot) bool {
+				return turnStateByText(t, s)["CI note"] == domain.TurnStateFailed
+			})
 
-	if _, err := h.svc.Send(ctx, testSession, ports.ChatUserMessage{
-		Text: "agent note", ClientMessageID: "c3", Origin: domain.MessageOriginAutomation,
-	}); err != nil {
-		t.Fatal(err)
+			if _, err := h.svc.Send(ctx, testSession, ports.ChatUserMessage{
+				Text: "agent note", ClientMessageID: "c3", Origin: domain.MessageOriginAutomation,
+			}); err != nil {
+				t.Fatal(err)
+			}
+			assertTurnStaysQueued(t, h, "agent note")
+		})
 	}
-	assertTurnStaysQueued(t, h, "agent note")
 }
 
 func TestUsageLimitHoldKeepsAgentSteersOffTheRunningRetry(t *testing.T) {

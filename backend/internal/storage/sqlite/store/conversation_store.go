@@ -1771,7 +1771,7 @@ func (s *Store) SettleTurnWithFailureCode(
 	}); err != nil {
 		return fmt.Errorf("settle turn %s: %w", turn.ID, err)
 	}
-	if err := holdQueueBehindUsageLimit(ctx, q, turn, state, errMessage, now); err != nil {
+	if err := holdQueueBehindUsageLimit(ctx, q, turn, nil, state, errMessage, now); err != nil {
 		return err
 	}
 	if err := q.SettleStreamingConversationMessagesForTurn(ctx,
@@ -3270,6 +3270,16 @@ func (s *Store) SettleTurnByID(
 	errMessage string,
 	now time.Time,
 ) error {
+	return s.settleTurnByID(ctx, turnID, nil, state, errMessage, now)
+}
+
+// SettleRefusedBatchLead fails a batch lead the provider refused at send, so a
+// usage limit holds the queue when any claimed follower is the user's prompt.
+func (s *Store) SettleRefusedBatchLead(ctx context.Context, turnID string, followers []string, errMessage string, now time.Time) error {
+	return s.settleTurnByID(ctx, turnID, followers, domain.TurnStateFailed, errMessage, now)
+}
+
+func (s *Store) settleTurnByID(ctx context.Context, turnID string, followers []string, state domain.TurnState, errMessage string, now time.Time) error {
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()
 	return s.inTx(ctx, "settle turn "+turnID, func(q *gen.Queries) error {
@@ -3289,11 +3299,11 @@ func (s *Store) SettleTurnByID(
 		if turn.ID == "" {
 			return nil
 		}
-		return holdQueueBehindUsageLimit(ctx, q, turn, state, errMessage, now)
+		return holdQueueBehindUsageLimit(ctx, q, turn, followers, state, errMessage, now)
 	})
 }
 
-func holdQueueBehindUsageLimit(ctx context.Context, q *gen.Queries, turn gen.ConversationTurn, state domain.TurnState, errMessage string, now time.Time) error {
+func holdQueueBehindUsageLimit(ctx context.Context, q *gen.Queries, turn gen.ConversationTurn, followers []string, state domain.TurnState, errMessage string, now time.Time) error {
 	if state != domain.TurnStateFailed || turn.State == domain.TurnStateFailed ||
 		domain.ParseConversationUsageLimit(errMessage, &now) == nil {
 		return nil
@@ -3301,6 +3311,7 @@ func holdQueueBehindUsageLimit(ctx context.Context, q *gen.Queries, turn gen.Con
 	if err := q.HoldConversationQueueForTurn(ctx, gen.HoldConversationQueueForTurnParams{
 		ConversationID: turn.ConversationID,
 		TurnID:         sql.NullString{String: turn.ID, Valid: true},
+		FollowerIds:    followers,
 	}); err != nil {
 		return fmt.Errorf("hold queue behind turn %s: %w", turn.ID, err)
 	}

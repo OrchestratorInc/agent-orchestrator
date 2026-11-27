@@ -1181,7 +1181,7 @@ WHERE conversations.id = sqlc.arg(conversation_id)
       SELECT 1 FROM conversation_messages
       JOIN conversation_turns AS member ON member.id = conversation_messages.turn_id
       JOIN conversation_turns AS turn ON turn.id = sqlc.arg(turn_id)
-      WHERE (member.id = turn.id OR member.promoted_to_turn_id = turn.id)
+      WHERE (member.id = turn.id OR member.promoted_to_turn_id = turn.id OR member.id IN (sqlc.slice('follower_ids')))
         AND conversation_messages.role = 'user'
         AND (conversation_messages.origin = 'human' OR conversation_messages.authored_by_user = 1)
         AND (conversations.scope <> 'project' OR turn.handled_by_session_id = conversations.current_session_id)

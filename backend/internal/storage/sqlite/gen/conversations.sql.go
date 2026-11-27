@@ -955,7 +955,7 @@ WHERE conversations.id = ?2
       SELECT 1 FROM conversation_messages
       JOIN conversation_turns AS member ON member.id = conversation_messages.turn_id
       JOIN conversation_turns AS turn ON turn.id = ?1
-      WHERE (member.id = turn.id OR member.promoted_to_turn_id = turn.id)
+      WHERE (member.id = turn.id OR member.promoted_to_turn_id = turn.id OR member.id IN (/*SLICE:follower_ids*/?))
         AND conversation_messages.role = 'user'
         AND (conversation_messages.origin = 'human' OR conversation_messages.authored_by_user = 1)
         AND (conversations.scope <> 'project' OR turn.handled_by_session_id = conversations.current_session_id)
@@ -965,10 +965,23 @@ WHERE conversations.id = ?2
 type HoldConversationQueueForTurnParams struct {
 	TurnID         sql.NullString
 	ConversationID string
+	FollowerIds    []string
 }
 
 func (q *Queries) HoldConversationQueueForTurn(ctx context.Context, arg HoldConversationQueueForTurnParams) error {
-	_, err := q.db.ExecContext(ctx, holdConversationQueueForTurn, arg.TurnID, arg.ConversationID)
+	query := holdConversationQueueForTurn
+	var queryParams []interface{}
+	queryParams = append(queryParams, arg.TurnID)
+	queryParams = append(queryParams, arg.ConversationID)
+	if len(arg.FollowerIds) > 0 {
+		for _, v := range arg.FollowerIds {
+			queryParams = append(queryParams, v)
+		}
+		query = strings.Replace(query, "/*SLICE:follower_ids*/?", strings.Repeat(",?", len(arg.FollowerIds))[1:], 1)
+	} else {
+		query = strings.Replace(query, "/*SLICE:follower_ids*/?", "NULL", 1)
+	}
+	_, err := q.db.ExecContext(ctx, query, queryParams...)
 	return err
 }
 
