@@ -1463,7 +1463,6 @@ async function createWindowInternal(): Promise<void> {
 		chatDraftDialog = undefined;
 		chatDraftQuitConfirmed = false;
 		chatDraftWindowCloseConfirmed = false;
-		disposeBrowserRuntimeLink();
 		keybindingRecordingActive = false;
 		if (windowComposition === composition) windowComposition = null;
 		void disposeBrowserViewHost()
@@ -2048,15 +2047,6 @@ function establishBrowserRuntimeLink(): void {
 	browserRuntimeLink = connectBrowserRuntime(address, {
 		token,
 		execute: (command, signal) => {
-			// A render check or measure uses its own hidden offscreen window,
-			// never the main window or the session's Browser panel, so it does
-			// not need (or disturb) the view host.
-			if (command.action === "__render-check") {
-				return checkRender({ BrowserWindow }, command.args ?? {}, signal);
-			}
-			if (command.action === "__render-measure") {
-				return measureRender({ BrowserWindow }, command.args ?? {}, signal);
-			}
 			if (command.action === REMOTE_APP_UPDATE_ACTION) {
 				return runRemoteAppUpdate({
 					packaged: app.isPackaged,
@@ -2073,6 +2063,14 @@ function establishBrowserRuntimeLink(): void {
 				throw Object.assign(new Error("Browser target owner is unavailable"), {
 					code: "BROWSER_TARGET_UNAVAILABLE",
 				});
+			}
+			// A render check or measure uses its own hidden offscreen window,
+			// never the main window or the session's Browser panel.
+			if (command.action === "__render-check") {
+				return checkRender({ BrowserWindow }, command.args ?? {}, signal);
+			}
+			if (command.action === "__render-measure") {
+				return measureRender({ BrowserWindow }, command.args ?? {}, signal);
 			}
 			return host.execute(command.sessionId, command.action, command.args, signal);
 		},
