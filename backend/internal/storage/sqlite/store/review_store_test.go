@@ -756,14 +756,17 @@ func TestSettleReviewChatWorkClearsOrphanedEpoch(t *testing.T) {
 
 func TestReviewerChatCompletionSettlesOnlyItsUnsubmittedBatch(t *testing.T) {
 	for _, tc := range []struct {
-		name  string
-		state domain.TurnState
-		stale bool
-		human bool
+		name       string
+		state      domain.TurnState
+		errMessage string
+		stale      bool
+		human      bool
 	}{
 		{name: "completed", state: domain.TurnStateCompleted},
 		{name: "failed", state: domain.TurnStateFailed},
+		{name: "failed with message", state: domain.TurnStateFailed, errMessage: "rate limit exceeded: tokens per minute"},
 		{name: "interrupted", state: domain.TurnStateInterrupted},
+		{name: "interrupted with message", state: domain.TurnStateInterrupted, errMessage: "interrupted by provider error: server overload"},
 		{name: "obsolete controller", state: domain.TurnStateCompleted, stale: true},
 		{name: "human chat", state: domain.TurnStateCompleted, human: true},
 	} {
@@ -812,7 +815,7 @@ func TestReviewerChatCompletionSettlesOnlyItsUnsubmittedBatch(t *testing.T) {
 					t.Fatalf("replacement: %v %v", ok, err)
 				}
 			}
-			if err := s.SettleTurn(ctx, conversation.ID, "provider-turn", tc.state, "", now.Add(time.Second)); err != nil {
+			if err := s.SettleTurn(ctx, conversation.ID, "provider-turn", tc.state, tc.errMessage, now.Add(time.Second)); err != nil {
 				t.Fatal(err)
 			}
 			missing, _, err := s.GetReviewRun(ctx, "missing")
@@ -826,8 +829,8 @@ func TestReviewerChatCompletionSettlesOnlyItsUnsubmittedBatch(t *testing.T) {
 			if missing.Status != want {
 				t.Fatalf("unsubmitted status = %s, want %s", missing.Status, want)
 			}
-			if want == domain.ReviewRunFailed && (missing.FailureReason != domain.ReviewFailureTurnEndedWithoutSubmit || missing.Body != "" || missing.EndedAt == nil) {
-				t.Fatalf("failure = reason %q body %q ended %v", missing.FailureReason, missing.Body, missing.EndedAt)
+			if want == domain.ReviewRunFailed && (missing.FailureReason != domain.ReviewFailureTurnEndedWithoutSubmit || missing.Body != tc.errMessage || missing.EndedAt == nil) {
+				t.Fatalf("failure = reason %q body %q ended %v, want body %q", missing.FailureReason, missing.Body, missing.EndedAt, tc.errMessage)
 			}
 			submitted, _, err := s.GetReviewRun(ctx, "submitted")
 			if err != nil || submitted.Status != domain.ReviewRunCompleted || submitted.Verdict != domain.VerdictApproved || submitted.Body != "submitted result" {
