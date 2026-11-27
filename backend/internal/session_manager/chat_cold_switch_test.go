@@ -82,9 +82,9 @@ func TestLaunchColdChatSwitchRefusesWhileAResumeRuns(t *testing.T) {
 // project's bypass default, so a cold switch must not hand the target bypass.
 func TestLaunchColdChatSwitchCarriesTheSourceChatsPermissions(t *testing.T) {
 	m, st, _ := newChatManager(&recordingLauncher{permissionModes: []ports.PermissionMode{ports.PermissionModeDefault}})
-	project := st.projects[chatTestProject]
+	project := st.projects[string(chatTestProject)]
 	project.Config.AgentConfig.Permissions = ports.PermissionModeBypassPermissions
-	st.projects[chatTestProject] = project
+	st.projects[string(chatTestProject)] = project
 	seedExitedChatSession(st, "mer-1")
 	rec := st.sessions["mer-1"]
 	rec.Metadata.ImportSource = &domain.SessionImportSource{NativeID: "agy-native"}
