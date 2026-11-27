@@ -31,24 +31,25 @@ export type WorkerRowPullRequest = {
 
 // The live one leads: a worker that closed #12 and opened #15 is on #15.
 const LEAD_ORDER: Record<PRLifecycle, number> = { open: 0, draft: 1, merged: 2, closed: 3 };
-const TONES: Record<PRLifecycle, Tone> = { open: "success", draft: "passive", merged: "merged", closed: "error" };
-const GLYPHS: Record<PRLifecycle, WorkerRowPullRequest["glyph"]> = {
+export const PR_TONES: Record<PRLifecycle, Tone> = { open: "success", draft: "passive", merged: "merged", closed: "error" };
+export const PR_GLYPHS: Record<PRLifecycle, WorkerRowPullRequest["glyph"]> = {
 	open: "git-pull-request",
 	draft: "git-pull-request-draft",
 	merged: "git-merge",
 	closed: "git-pull-request-closed",
 };
 
+/** Open first, then drafts, merged and closed; the newest within each. A sorted copy. */
+export function leadOrdered(prs: readonly DashboardPR[]): DashboardPR[] {
+	return [...prs].sort((a, b) => LEAD_ORDER[prLifecycle(a)] - LEAD_ORDER[prLifecycle(b)] || b.number - a.number);
+}
+
 /** Null for a worker with no pull request. */
-export function workerRowPullRequest(session: DashboardSession): WorkerRowPullRequest | null {
+export function workerRowPullRequest(session: Pick<DashboardSession, "pr" | "prs">): WorkerRowPullRequest | null {
 	const list: DashboardPR[] = session.prs?.length ? session.prs : session.pr ? [session.pr] : [];
 	const real = list.filter((pr) => pr?.number > 0);
 	if (real.length === 0) return null;
-	// Open first, then drafts, merged and closed; the newest within each.
-	const lead = real.reduce((best, pr) => {
-		const rank = LEAD_ORDER[prLifecycle(pr)] - LEAD_ORDER[prLifecycle(best)];
-		return rank < 0 || (rank === 0 && pr.number > best.number) ? pr : best;
-	});
+	const lead = leadOrdered(real)[0];
 	const lifecycle = prLifecycle(lead);
 	const more = real.length - 1;
 	const counts = new Map<PRLifecycle, number>();
@@ -68,18 +69,18 @@ export function workerRowPullRequest(session: DashboardSession): WorkerRowPullRe
 		more,
 		moreTone: moreToneOf(counts),
 		moreLifecycles,
-		tone: TONES[lifecycle],
-		glyph: GLYPHS[lifecycle],
+		tone: PR_TONES[lifecycle],
+		glyph: PR_GLYPHS[lifecycle],
 	};
 }
 
 // A closed one is the thing to notice, so it wins; merged only when every one is.
 function moreToneOf(counts: Map<PRLifecycle, number>): Tone | null {
 	if (counts.size === 0) return null;
-	if (counts.has("closed")) return TONES.closed;
-	if (counts.has("open")) return TONES.open;
-	if (counts.has("draft")) return TONES.draft;
-	return TONES.merged;
+	if (counts.has("closed")) return PR_TONES.closed;
+	if (counts.has("open")) return PR_TONES.open;
+	if (counts.has("draft")) return PR_TONES.draft;
+	return PR_TONES.merged;
 }
 
 const INDICATOR_WORDS: Record<Exclude<WorkerRowIndicator, null | "attention">, string> = {
@@ -114,7 +115,7 @@ export function workerRowAccessibilityLabel({ title, project, indicator, display
 			? INDICATOR_WORDS[indicator]
 			: displayStatus || statusLabel;
 	const parts = [title, state];
-	if (pr) parts.push(`Pull request ${pr.number}, ${pr.lifecycle}${moreWords(pr)}`);
+	if (pr) parts.push(`Pull request ${pr.number}, ${pr.lifecycle}${pullRequestMoreWords(pr)}`);
 	// One sentence for where it runs: "web on Studio", not "web. on Studio".
 	parts.push(machine ? `${project} on ${machine}` : project);
 	if (updated) parts.push(`Updated ${spokenAge(updated)}`);
@@ -122,7 +123,7 @@ export function workerRowAccessibilityLabel({ title, project, indicator, display
 }
 
 /** `, and 3 more merged`, or `, and 3 more: 2 merged, 1 closed`; the colour alone says nothing to a screen reader. */
-function moreWords(pr: WorkerRowPullRequest): string {
+export function pullRequestMoreWords(pr: WorkerRowPullRequest): string {
 	const groups = pr.moreLifecycles;
 	if (groups.length === 0) return "";
 	if (groups.length === 1) return `, and ${pr.more} more ${groups[0].lifecycle}`;
