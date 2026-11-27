@@ -9,7 +9,7 @@ import { useFilesReviewSelection, type FilesSelectionStore } from "../../hooks/u
 import type { FilesSource } from "../../hooks/useSessionWorkspaceFiles";
 import { useCloudSessionStartRequestInFlight, useCloudWorkspaceReady } from "../../hooks/useCloudWorkspaceReady";
 import { refreshCloudSessionLifecycle } from "../../hooks/useWorkspaceQuery";
-import { annotationSource } from "../../lib/files-review-selection";
+import { annotationSource, snapshotAnnotationSource } from "../../lib/files-review-selection";
 import { joinWorkspaceRepositoryPath, splitWorkspaceRepositoryPath, withWorkspaceRepository, type CloudCpWorkspaceReviewFileSummary, type CloudCpWorkspaceReviewScope } from "../../lib/cloud-cp";
 import { cloudStartupProblem, resumeCloudSession } from "../../lib/cloud-lifecycle";
 import type { WorkspaceSession } from "../../types/workspace";
@@ -111,9 +111,10 @@ export function CloudWorkspaceExplorer({ annotation = noAnnotation, session, isM
 	const review = useFilesReviewSelection({ sessionId: session.id, manifest, projectKind: "single_repo", checkedOutBranch, dataSource: reviewDataSource, selectionStore });
 	const reviewBranch = review.target.branch;
 	const viewing = reviewBranch.kind !== "checked_out" && review.branchMenu !== null;
-	// Comments on a branch or PR tell the agent which one they are about.
+	// Comments on a branch or PR tell the agent which revision they are about;
+	// another pick of its commits starts their own comments, as the focused pane does.
 	const sendViewAnnotation = useCallback(async (message: string) => { await client.sendSessionMessage(orgId ?? "", session.id, { text: message }); }, [client, orgId, session.id]);
-	const viewAnnotation = useFileAnnotation(session.id, { source: annotationSource(reviewBranch), sendMessage: sendViewAnnotation });
+	const viewAnnotation = useFileAnnotation(session.id, { source: viewing && review.target.source?.kind === "snapshot" ? snapshotAnnotationSource(review.target.source) : annotationSource(reviewBranch), sendMessage: sendViewAnnotation });
 	const reviewAnnotation = viewing ? viewAnnotation : annotation;
 	const scopedAnnotation = useMemo(() => repositoryAnnotationModel(reviewAnnotation, activeRepository || undefined), [reviewAnnotation, activeRepository]);
 	useCloudWorkspaceReviewEvents({ baseUrl, orgId, sessionId: session.id, enabled });
@@ -122,6 +123,7 @@ export function CloudWorkspaceExplorer({ annotation = noAnnotation, session, isM
 		if (mainSummaryQuery.data && repository !== activeRepository) setRepository(session.id, activeRepository);
 	}, [mainSummaryQuery.data, repository, activeRepository, session.id, setRepository]);
 	// The tree shows the worktree, so another branch or a PR is only reviewed.
+	// A clean worktree keeps the review tab while branches are listed, so its picker stays reachable.
 	const showChanges = storedShowChanges || viewing;
 	const changedFiles = useMemo(() => {
 		const data = summaryQuery.data;
@@ -148,7 +150,7 @@ export function CloudWorkspaceExplorer({ annotation = noAnnotation, session, isM
 		<section aria-label={t("files.sessionFiles")} className="flex h-full min-h-0 flex-col bg-background text-foreground">
 			<header className="flex h-10 shrink-0 items-center gap-0.5 border-b border-border bg-surface px-2">
 				<label className="relative mr-1 min-w-0 flex-1"><Search className="pointer-events-none absolute left-2.5 top-1/2 size-icon-sm -translate-y-1/2 text-passive" /><Input aria-label={t("files.explorer.filter")} className="h-8 pl-8 font-mono text-xs" onChange={(event) => setFilter(event.target.value)} placeholder={t("files.explorer.filterPlaceholder")} value={filter} /></label>
-				{changedFiles.length > 0 && !viewing ? <div aria-label={t("files.viewMode")} className="flex items-center rounded-md border border-border bg-muted/30 p-0.5" role="tablist">
+				{(changedFiles.length > 0 || review.branchMenu !== null) && !viewing ? <div aria-label={t("files.viewMode")} className="flex items-center rounded-md border border-border bg-muted/30 p-0.5" role="tablist">
 					<Button aria-selected={showChanges} data-active={showChanges} role="tab" className="text-2xs" onClick={() => setShowChanges(true)} size="xs" variant="ghost">{t("files.reviewChanges")}</Button>
 					<Button aria-selected={!showChanges} data-active={!showChanges} role="tab" className="text-2xs" onClick={() => setShowChanges(false)} size="xs" variant="ghost">{t("files.allFiles")}</Button>
 				</div> : null}

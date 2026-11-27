@@ -10,7 +10,7 @@ import type { FileAnnotationModel } from "../WorkspaceDiffView";
 import { TooltipProvider } from "../ui/tooltip";
 import { CloudFileContentPane } from "./CloudFileContentPane";
 
-vi.mock("../ReadOnlyFileView", () => ({ ReadOnlyFileView: ({ annotationRange, commitSha, detail, editing, onEditChange, source }: { annotationRange?: { line: number }; commitSha?: string; detail: { content: string }; editing: boolean; onEditChange?: (value: string) => void; source?: { kind: string } }) => editing ? <textarea aria-label="editor" defaultValue={detail.content} onChange={(event) => onEditChange?.(event.target.value)} /> : <pre data-commit={commitSha ?? ""} data-range={annotationRange?.line ?? ""} data-source={source?.kind ?? ""}>{detail.content}</pre> }));
+vi.mock("../ReadOnlyFileView", () => ({ ReadOnlyFileView: ({ annotationRange, chatReferences, commitSha, detail, editing, onEditChange, source }: { annotationRange?: { line: number }; chatReferences?: boolean; commitSha?: string; detail: { content: string }; editing: boolean; onEditChange?: (value: string) => void; source?: { kind: string } }) => editing ? <textarea aria-label="editor" defaultValue={detail.content} onChange={(event) => onEditChange?.(event.target.value)} /> : <pre data-chat={String(chatReferences)} data-commit={commitSha ?? ""} data-range={annotationRange?.line ?? ""} data-source={source?.kind ?? ""}>{detail.content}</pre> }));
 vi.mock("./CloudDiffFile", () => ({ CloudDiffFile: ({ annotationRange, chatReferences, commitSha, source, surface, view }: { annotationRange?: { line: number }; chatReferences?: boolean; commitSha?: string; source?: { kind: string }; surface: string; view?: { branch?: string; prNumber?: number } }) => <div data-chat={String(chatReferences)} data-commit={commitSha ?? ""} data-range={annotationRange?.line ?? ""} data-source={source?.kind ?? ""} data-surface={surface} data-testid="cloud-diff" data-view={view?.branch ?? view?.prNumber ?? ""} /> }));
 vi.mock("../markdown/MarkdownFileView", () => ({ MarkdownFileView: ({ content }: { content: string }) => <article>{content}</article> }));
 
@@ -100,6 +100,23 @@ describe("CloudFileContentPane", () => {
 		expect(screen.getByTestId("cloud-diff")).toHaveAttribute("data-commit", "");
 		expect(getWorkspaceReviewFile).toHaveBeenCalledWith("org-1", "session-1", { path: "README.md", scope: "committed", commitSha: undefined, ...view, prNumber: undefined, sourceUrl: undefined, expectedBaseSha: undefined });
 		expect(screen.getByRole("button", { name: "Edit file" })).toBeDisabled();
+	});
+
+	it("keeps another branch's file read-only even when it is opened for editing", async () => {
+		const updateWorkspaceReviewFile = vi.fn();
+		const getWorkspaceReviewFile = vi.fn().mockResolvedValue(detail);
+		const view = { branch: "feat/x", expectedTipSha: "a".repeat(40) };
+		renderPane({ getWorkspaceReviewFile, updateWorkspaceReviewFile } as unknown as CloudCpClient, { initialEditing: true, initialMode: "file", view });
+		expect(await screen.findByText("# Hello")).toBeInTheDocument();
+		expect(screen.queryByLabelText("editor")).not.toBeInTheDocument();
+		expect(screen.queryByRole("button", { name: "Save file" })).not.toBeInTheDocument();
+		expect(updateWorkspaceReviewFile).not.toHaveBeenCalled();
+	});
+
+	it("offers no chat references from a sibling repository's complete file either", async () => {
+		const client = { getWorkspaceReviewFile: vi.fn().mockResolvedValue(detail) } as unknown as CloudCpClient;
+		renderPane(client, { chatReferences: false, initialMode: "file" });
+		expect(await screen.findByText("# Hello")).toHaveAttribute("data-chat", "false");
 	});
 
 	it("reveals a chat reference's lines in the diff and the complete file, keeping the commit it came from", async () => {

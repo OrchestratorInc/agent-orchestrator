@@ -2,7 +2,7 @@
 
 import "@testing-library/jest-dom/vitest";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { render, screen, waitFor } from "@testing-library/react";
+import { act, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { CloudCpError, type CloudCpClient, type CloudCpWorkspaceReviewFileSummary, type CloudCpWorkspaceReviewResponse } from "../../lib/cloud-cp";
@@ -125,6 +125,13 @@ describe("CloudWorkspaceReviewPane", () => {
 			expect(screen.queryByRole("button", { name: /Staged/ })).not.toBeInTheDocument();
 			expect(screen.getByRole("button", { name: /Changes to review/ })).toBeInTheDocument();
 			expect(getWorkspaceReviewDiffs).not.toHaveBeenCalled();
+		});
+
+		it("keeps the checked-out branch's commit pick while a view is open", async () => {
+			useUiStore.setState({ inspectorSessions: { "session-1": { cloudReviewSelection: { "": { scope: "committed", commitSha: "abcdef123" } } } } as never });
+			renderPane({ getWorkspaceReviewDiffs: vi.fn() } as unknown as CloudCpClient, { review: review({ state: "pending" }) });
+			await act(async () => {});
+			expect(useUiStore.getState().inspectorSessions["session-1"]?.cloudReviewSelection?.[""]).toEqual({ scope: "committed", commitSha: "abcdef123" });
 		});
 
 		it("reads the branch list again when a view's diff says its tip moved", async () => {

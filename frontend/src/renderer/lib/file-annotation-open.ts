@@ -11,7 +11,8 @@ export function fileAnnotationRange(reference: ChatFileReference, resolution: Fi
 	return {
 		...reference,
 		line: resolution.line ?? reference.line,
-		endLine: resolution.endLine ?? reference.endLine,
+		// Without its own end, the range keeps its captured length from the resolved start.
+		endLine: resolution.endLine ?? (resolution.line == null ? reference.endLine : resolution.line + (reference.endLine - reference.line)),
 		lines: reference.lines.map((row) => ({
 			...row,
 			oldNo: row.oldNo == null ? null : row.oldNo + (resolution.oldLineOffset ?? 0),

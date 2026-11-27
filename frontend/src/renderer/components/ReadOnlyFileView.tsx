@@ -46,6 +46,7 @@ export function ReadOnlyFileView({
 	annotation,
 	annotationRange,
  annotationReady = true,
+	chatReferences = true,
 	detail: incomingDetail,
 	editing = false,
 	onContentReady,
@@ -63,6 +64,8 @@ export function ReadOnlyFileView({
 	annotation: FileAnnotationModel;
 	annotationRange?: FileAnnotationRange;
  annotationReady?: boolean;
+	/** False for a file chat references cannot name (a sibling repository's in a Cloud session): selections offer no capture. */
+	chatReferences?: boolean;
 	detail: WorkspaceFileDetail;
 	editing?: boolean;
 	onContentReady?: () => void;
@@ -125,7 +128,7 @@ export function ReadOnlyFileView({
 	// session has a Chat composer; in edit mode a selection belongs to the editor.
 	const askInChat = useAskInChat(sessionId, hostId);
 	const captureSource = fileReferenceSource(source, commitSha);
-	const codeSelection = useCodeSelection(containerRef, (selection) => captureSource ? askInChat?.({ ...codeReference(detail.path, selection, false), side: side === "before" ? "old" : "file", endSide: side === "before" ? "old" : "file", ...captureSource, scope: source.kind === "snapshot" ? "committed" : scope, previousPath: detail.previousPath, fileFingerprint: detail.fileFingerprint, workspaceVersion: detail.workspaceVersion }) ?? false : false, askInChat !== undefined && captureSource !== undefined && !editing);
+	const codeSelection = useCodeSelection(containerRef, (selection) => captureSource ? askInChat?.({ ...codeReference(detail.path, selection, false), side: side === "before" ? "old" : "file", endSide: side === "before" ? "old" : "file", ...captureSource, scope: source.kind === "snapshot" ? "committed" : scope, previousPath: detail.previousPath, fileFingerprint: detail.fileFingerprint, workspaceVersion: detail.workspaceVersion }) ?? false : false, chatReferences && askInChat !== undefined && captureSource !== undefined && !editing);
 	const onPostRender = useLatestCallback(() => {
 		gutterHover.restoreAfterRender();
 		onContentReady?.();

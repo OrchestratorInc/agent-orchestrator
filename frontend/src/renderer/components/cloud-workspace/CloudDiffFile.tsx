@@ -64,7 +64,7 @@ export function CloudDiffFile({
 	const metadata = useMemo(() => metadataForPath(patch, file.path), [file.path, patch]);
 	const rows = useMemo(() => parseUnifiedDiff(patch), [patch]);
 	const otherSurface = surface === "focused" ? "review" : "focused";
-	const activeTargets = annotation.targets.filter((target) => target.surface !== otherSurface && target.path === file.path && target.side !== "file" && target.line != null);
+	const activeTargets = annotation.targets.filter((target) => target.surface !== otherSurface && target.path === file.path && target.side !== "file" && target.line != null && target.scope === scope);
 	const annotations: DiffLineAnnotation<"feedback">[] | undefined = activeTargets.length > 0
 		? activeTargets.map((target) => ({ lineNumber: target.line as number, side: target.side === "old" ? "deletions" : "additions", metadata: "feedback" }))
 		: undefined;

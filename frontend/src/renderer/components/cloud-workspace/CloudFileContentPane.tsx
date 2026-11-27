@@ -69,12 +69,13 @@ export function CloudFileContentPane({
 	const query = useQuery({ ...cloudWorkspaceReviewFileQueryOptions({ client, baseUrl, orgId, sessionId, path: path ?? "", scope, commitSha: fileCommitSha, view }), enabled: Boolean(path) && ready });
 	const detail = query.data;
 	const hasUnsavedChanges = Boolean(editing && detail && draft !== detail.content);
-	useEffect(() => { setMode(initialMode); setEditing(initialEditing); setDraft(""); setSaveError(""); }, [commitSha, initialEditing, initialMode, initialRequestKey, path, scope, viewKey]);
-	useEffect(() => { if (initialEditing && detail) setDraft(detail.content); }, [detail, initialEditing, initialRequestKey]);
+	useEffect(() => { setMode(initialMode); setEditing(initialEditing && !view); setDraft(""); setSaveError(""); }, [commitSha, initialEditing, initialMode, initialRequestKey, path, scope, view, viewKey]);
+	useEffect(() => { if (initialEditing && !view && detail) setDraft(detail.content); }, [detail, initialEditing, initialRequestKey, view]);
 	useEffect(() => { onDirtyChange?.(hasUnsavedChanges); }, [hasUnsavedChanges, onDirtyChange]);
 	useEffect(() => () => onDirtyChange?.(false), [onDirtyChange]);
 	const save = useCallback(async () => {
-		if (!path || !detail?.fileFingerprint || saving) return;
+		// A branch or PR is read-only: its file never writes to the worktree.
+		if (!path || !detail?.fileFingerprint || saving || view) return;
 		setSaving(true); setSaveError("");
 		try {
 			const result = await client.updateWorkspaceReviewFile(orgId, sessionId, { path, content: draft, expectedFileFingerprint: detail.fileFingerprint });
@@ -83,7 +84,7 @@ export function CloudFileContentPane({
 			setEditing(false); setDraft("");
 		} catch (error) { setSaveError(error instanceof Error ? error.message : t("files.saveError")); }
 		finally { setSaving(false); }
-	}, [baseUrl, client, commitSha, detail, draft, orgId, path, queryClient, saving, scope, sessionId, t]);
+	}, [baseUrl, client, commitSha, detail, draft, orgId, path, queryClient, saving, scope, sessionId, t, view]);
 	useEffect(() => {
 		if (!active || !editing) return;
 		const shortcut = (event: KeyboardEvent) => { if (event.key.toLowerCase() === "s" && (event.metaKey || event.ctrlKey) && !event.altKey && !event.shiftKey) { event.preventDefault(); if (hasUnsavedChanges) void save(); } };
@@ -105,10 +106,10 @@ export function CloudFileContentPane({
 		{editing ? <div className="ml-auto flex gap-1"><Button aria-label={t("files.cancelEditing")} disabled={saving} onClick={() => { setEditing(false); setDraft(""); setSaveError(""); }} size="sm" variant="ghost"><X />{t("files.cancelEditing")}</Button><Button aria-label={t("files.saveFile")} disabled={saving || !hasUnsavedChanges} onClick={() => void save()} size="sm" variant="primary">{saving ? <LoaderCircle className="animate-spin" /> : <Save />}{t("files.saveFile")}</Button></div> : <><Button aria-label={t("files.editFile")} className="ml-auto" disabled={!detail.editable || !detail.fileFingerprint || Boolean(commitSha) || Boolean(view)} onClick={() => { cancelFileAnnotations(annotation, (target) => target.surface !== "review" && target.path === path); setMode("file"); setDraft(detail.content); setEditing(true); }} size="icon-sm" variant="ghost"><Pencil /></Button><Button aria-label={t("files.addFeedback")} onClick={() => annotation.begin({ path: detail.path, previousPath: detail.previousPath, side: "file", scope, surface: "focused", workspaceVersion: detail.workspaceVersion, fileFingerprint: detail.fileFingerprint })} size="icon-sm" variant="ghost"><MessageSquarePlus /></Button></>}
 		{wholeFileAnnotationTarget ? <div className="absolute right-2 top-full z-50 w-[min(32rem,calc(100%-1rem))]"><FileAnnotationComposer annotation={annotation} target={wholeFileAnnotationTarget} /></div> : null}
 	</div>;
-	return <div className="relative min-w-0">{tabs}<EditProvider createEditor={createEditor}>{effectiveMode === "diff" ? <CloudDiffFile annotation={annotation} annotationRange={annotationRange} baseUrl={baseUrl} chatReferences={chatReferences} client={client} commitSha={fileCommitSha} file={detail} onActiveSelectionChange={() => undefined} orgId={orgId} patch={detail.diff} scope={scope} sessionId={sessionId} source={source} split={split && (detail.status === "modified" || detail.status === "renamed")} surface="focused" view={view} workspaceVersion={detail.workspaceVersion} fallback={<PanelMessage>{t("files.diffUnavailable")}</PanelMessage>} /> : effectiveMode === "rendered" ? <MarkdownFileView content={detail.content} filePath={path} sessionId={sessionId} truncated={detail.contentTruncated} version={query.dataUpdatedAt} /> : <CompleteCloudFileView annotation={annotation} annotationRange={annotationRange} baseUrl={baseUrl} client={client} commitSha={fileCommitSha} detail={detail} editing={editing} onEditChange={setDraft} orgId={orgId} ready={ready} revealLine={initialLine ? { line: initialLine, requestKey: initialRequestKey } : undefined} scope={scope} sessionId={sessionId} source={source} view={view} />}</EditProvider>{saveError ? <p className="border-t border-error/40 bg-error/10 px-3 py-2 text-xs text-error" role="alert">{saveError}</p> : null}<FileAnnotationSendBar annotation={annotation} className="sticky bottom-0 z-20" surface="focused" /></div>;
+	return <div className="relative min-w-0">{tabs}<EditProvider createEditor={createEditor}>{effectiveMode === "diff" ? <CloudDiffFile annotation={annotation} annotationRange={annotationRange} baseUrl={baseUrl} chatReferences={chatReferences} client={client} commitSha={fileCommitSha} file={detail} onActiveSelectionChange={() => undefined} orgId={orgId} patch={detail.diff} scope={scope} sessionId={sessionId} source={source} split={split && (detail.status === "modified" || detail.status === "renamed")} surface="focused" view={view} workspaceVersion={detail.workspaceVersion} fallback={<PanelMessage>{t("files.diffUnavailable")}</PanelMessage>} /> : effectiveMode === "rendered" ? <MarkdownFileView content={detail.content} filePath={path} sessionId={sessionId} truncated={detail.contentTruncated} version={query.dataUpdatedAt} /> : <CompleteCloudFileView annotation={annotation} annotationRange={annotationRange} chatReferences={chatReferences} baseUrl={baseUrl} client={client} commitSha={fileCommitSha} detail={detail} editing={editing} onEditChange={setDraft} orgId={orgId} ready={ready} revealLine={initialLine ? { line: initialLine, requestKey: initialRequestKey } : undefined} scope={scope} sessionId={sessionId} source={source} view={view} />}</EditProvider>{saveError ? <p className="border-t border-error/40 bg-error/10 px-3 py-2 text-xs text-error" role="alert">{saveError}</p> : null}<FileAnnotationSendBar annotation={annotation} className="sticky bottom-0 z-20" surface="focused" /></div>;
 }
 
-function CompleteCloudFileView({ annotation, annotationRange, baseUrl, client, commitSha, detail, editing, onEditChange, orgId, ready, revealLine, scope, sessionId, source, view }: { annotation: FileAnnotationModel; annotationRange?: FileAnnotationRange; baseUrl: string; client: CloudCpClient; commitSha?: string; detail: CloudCpWorkspaceReviewFileResponse; editing: boolean; onEditChange: (content: string) => void; orgId: string; ready: boolean; revealLine?: { line: number; requestKey: number }; scope: CloudCpWorkspaceReviewScope; sessionId: string; source?: FilesSource; view?: CloudCpWorkspaceReviewView }) {
+function CompleteCloudFileView({ annotation, annotationRange, chatReferences, baseUrl, client, commitSha, detail, editing, onEditChange, orgId, ready, revealLine, scope, sessionId, source, view }: { annotation: FileAnnotationModel; annotationRange?: FileAnnotationRange; chatReferences: boolean; baseUrl: string; client: CloudCpClient; commitSha?: string; detail: CloudCpWorkspaceReviewFileResponse; editing: boolean; onEditChange: (content: string) => void; orgId: string; ready: boolean; revealLine?: { line: number; requestKey: number }; scope: CloudCpWorkspaceReviewScope; sessionId: string; source?: FilesSource; view?: CloudCpWorkspaceReviewView }) {
 	const { t } = useTranslation();
 	const needsRevision = detail.deleted || detail.contentTruncated;
 	const side = detail.deleted ? "before" : "after";
@@ -121,5 +122,5 @@ function CompleteCloudFileView({ annotation, annotationRange, baseUrl, client, c
 		return <MarkdownEditor filePath={local.path} onChange={onEditChange} value={local.content} />;
 	}
 	// The commit (or the PR's) this content is from travels with any code added to the chat.
-	return <ReadOnlyFileView annotation={annotation} annotationRange={annotationRange} commitSha={commitSha} detail={local} editing={editing} onEditChange={onEditChange} revealLine={revealLine} scope={scope === "untracked" ? "combined" : scope} sessionId={sessionId} side={side} source={source} />;
+	return <ReadOnlyFileView annotation={annotation} annotationRange={annotationRange} chatReferences={chatReferences} commitSha={commitSha} detail={local} editing={editing} onEditChange={onEditChange} revealLine={revealLine} scope={scope === "untracked" ? "combined" : scope} sessionId={sessionId} side={side} source={source} />;
 }

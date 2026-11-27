@@ -143,6 +143,8 @@ export function CloudWorkspaceReviewPane({
 		setReviewUi(sessionId, repository, { pane: { selectionKey, files: next } });
 	}, [repository, selectionKey, sessionId, setReviewUi]);
 	useEffect(() => {
+		// A view lists no worktree commits; the checked-out branch's pick waits for its return.
+		if (viewing) return;
 		if (!storedSelection) {
 			setStoredSelection(sessionId, repository, first);
 			return;
@@ -151,7 +153,7 @@ export function CloudWorkspaceReviewPane({
 		if (scope === "combined") return;
 		if (scope !== "committed" && data.sections[scope].length > 0) return;
 		setStoredSelection(sessionId, repository, first);
-	}, [data.sections, first, scope, selectedCommit, sessionId, repository, setStoredSelection, storedSelection]);
+	}, [data.sections, first, scope, selectedCommit, sessionId, repository, setStoredSelection, storedSelection, viewing]);
 
 	const requested = files.filter((file) => !deferredByDefault(file) || fileStates[file.path]?.loadedDeferred);
 	const batches = chunk(requested.map((file) => file.path));

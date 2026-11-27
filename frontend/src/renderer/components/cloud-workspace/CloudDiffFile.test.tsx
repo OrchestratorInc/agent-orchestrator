@@ -100,6 +100,15 @@ describe("CloudDiffFile", () => {
 		expect(screen.getByTestId("file-diff")).toHaveAttribute("data-annotations", "0");
 	});
 
+	it("shows only the line comments left under the scope on screen", () => {
+		const open: FileAnnotationModel = { ...annotation, targets: [{ path: "src/App.tsx", side: "new", line: 2, scope: "combined", surface: "focused" }] };
+		const { unmount } = renderDiff({ annotation: open, scope: "committed" });
+		expect(screen.getByTestId("file-diff")).toHaveAttribute("data-annotations", "0");
+		unmount();
+		renderDiff({ annotation: open, scope: "combined" });
+		expect(screen.getByTestId("file-diff")).toHaveAttribute("data-annotations", "1");
+	});
+
 	it("adds highlighted diff code to the chat as a workspace reference", () => {
 		chat.ask.mockClear();
 		renderDiff({ commitSha: "abc", scope: "untracked" });

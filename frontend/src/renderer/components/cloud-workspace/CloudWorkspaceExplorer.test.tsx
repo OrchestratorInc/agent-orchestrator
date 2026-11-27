@@ -656,6 +656,17 @@ describe("CloudWorkspaceExplorer", () => {
 			expect(screen.queryByRole("alert")).not.toBeInTheDocument();
 		});
 
+		it("keeps the branch menu reachable from the file tree of a clean worktree", async () => {
+			mockViews();
+			getWorkspaceReview.mockResolvedValue({ ...mixedReview(), files: [], sections: { unstaged: [], staged: [], untracked: [], committed: [] }, commits: [], summary: { files: 0, additions: 0, deletions: 0 } });
+			getWorkspaceReviewTree.mockResolvedValue({ path: "", truncated: false, entries: [{ name: "README.md", path: "README.md", type: "file", status: "unmodified", size: 5 }] });
+			useUiStore.getState().setCloudReviewUi("session-1", "", { showChanges: false });
+			renderExplorer();
+			expect(await screen.findByRole("treeitem", { name: /README\.md/ })).toBeInTheDocument();
+			await userEvent.click(await screen.findByRole("tab", { name: "Changes" }));
+			expect(await screen.findByRole("button", { name: "Branch to review: ao/cloud" })).toBeInTheDocument();
+		});
+
 		it("reviews a PR picked from the branch menu through its view, and opens its files from it", async () => {
 			mockViews();
 			const onOpenFile = vi.fn();
