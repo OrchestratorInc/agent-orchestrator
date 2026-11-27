@@ -11,6 +11,13 @@ import { CloudCpAuthError, CloudCpError } from "./errors";
 import { createSseFrameParser } from "./sse";
 import type {
 	CloudCpArtifactShareView,
+	CloudCpArtifactComment,
+	CloudCpArtifactCommentEditRequest,
+	CloudCpArtifactCommentsResult,
+	CloudCpArtifactCommentThread,
+	CloudCpArtifactCommentThreadStatus,
+	CloudCpArtifactReplyRequest,
+	CloudCpArtifactThreadCreateRequest,
 	CloudCpSharedArtifact,
 	CloudCpOffering,
 	CloudCpAgentProvider,
@@ -139,6 +146,10 @@ import type {
 	CloudCpTerminalTicketResponse,
 	CloudCpUpdateProjectRequest,
 	CloudCpUpdateSessionPreferencesRequest,
+	CloudCpMovePreviewResponse,
+	CloudCpMoveExportResponse,
+	CloudCpMoveExportResult,
+	CloudCpMoveExportRunning,
 } from "./types";
 
 const API_PREFIX = "/api/cloud/v1";
@@ -183,6 +194,13 @@ export interface CloudCpWorkspaceRequestOptions extends CloudCpRequestOptions {
  */
 export interface CloudCpMutationOptions extends CloudCpRequestOptions {
 	idempotencyKey?: string;
+}
+
+export interface CloudCpArtifactCommentsListOptions extends CloudCpRequestOptions {
+	/** The link version to read; omit for the current one. */
+	version?: number;
+	/** The ETag of the copy the caller has; sent as If-None-Match. */
+	etag?: string;
 }
 
 export interface CloudCpSessionEventsOptions {
@@ -272,6 +290,25 @@ export interface CloudCpClient {
 	listSharedArtifacts(options?: CloudCpRequestOptions): Promise<{ artifacts: CloudCpSharedArtifact[] }>;
 	/** A link's details with a contentUrl that opens its file for the signed-in person; 404 when it does not open for them. */
 	viewArtifactShare(linkId: string, options?: CloudCpRequestOptions): Promise<CloudCpArtifactShareView>;
+	/**
+	 * Every comment thread on one version of a share link (default: its current
+	 * one). Pass the last ETag to get notModified instead of the list when
+	 * nothing changed. 404 when the link does not open for the caller; 409
+	 * artifact_share_version_unknown for a version it never had.
+	 */
+	listArtifactShareComments(linkId: string, options?: CloudCpArtifactCommentsListOptions): Promise<CloudCpArtifactCommentsResult>;
+	/** Starts a thread on an element; retrying with the same clientId returns the same thread. */
+	createArtifactShareThread(linkId: string, body: CloudCpArtifactThreadCreateRequest, options?: CloudCpRequestOptions): Promise<CloudCpArtifactCommentThread>;
+	/** Replies to a thread; retrying with the same clientId returns the same comment. */
+	replyArtifactShareThread(linkId: string, threadId: string, body: CloudCpArtifactReplyRequest, options?: CloudCpRequestOptions): Promise<CloudCpArtifactComment>;
+	/** Resolves or reopens a thread. */
+	setArtifactShareThreadStatus(linkId: string, threadId: string, status: CloudCpArtifactCommentThreadStatus, options?: CloudCpRequestOptions): Promise<CloudCpArtifactCommentThread>;
+	/** Edits the caller's own comment; 403 forbidden for anyone else's. */
+	editArtifactShareComment(linkId: string, commentId: string, body: CloudCpArtifactCommentEditRequest, options?: CloudCpRequestOptions): Promise<CloudCpArtifactComment>;
+	/** Deletes a comment (its author or the link's owner); a thread left with none goes too. */
+	deleteArtifactShareComment(linkId: string, commentId: string, options?: CloudCpRequestOptions): Promise<void>;
+	/** Owner only, after a successful Send to agent: marks the thread sent. */
+	markArtifactShareThreadSent(linkId: string, threadId: string, options?: CloudCpRequestOptions): Promise<CloudCpArtifactCommentThread>;
 	listSessionArtifacts(
 		orgId: string,
 		sessionId: string,
@@ -286,6 +323,16 @@ export interface CloudCpClient {
 	restoreSessionArtifactVersion(orgId: string, sessionId: string, path: string, version: number, options?: CloudCpRequestOptions): Promise<{ artifact: CloudCpSessionArtifact }>;
 	/** Starts the agent again in a live session whose terminal agent exited. */
 	restartSessionAgent(orgId: string, sessionId: string, options?: CloudCpRequestOptions): Promise<{ requested: boolean }>;
+	/** What exportSessionMove would push now. Changes nothing. */
+	previewSessionMove(orgId: string, sessionId: string, options?: CloudCpRequestOptions): Promise<CloudCpMovePreviewResponse>;
+	/**
+	 * Stops the session's agent, commits its uncommitted work and pushes its
+	 * branch, for an AO daemon's move/import. An export still running after
+	 * about 50 s answers running, with its moveId; moveId waits on that export.
+	 */
+	exportSessionMove(orgId: string, sessionId: string, options?: CloudCpRequestOptions & { moveId?: string }): Promise<CloudCpMoveExportResult>;
+	/** Waits on an export exportSessionMove started and answers as it does. */
+	getSessionMoveExport(orgId: string, sessionId: string, moveId: string, options?: CloudCpRequestOptions): Promise<CloudCpMoveExportResult>;
 	/** Chat messages across the organization's sessions the caller can see that contain query. */
 	searchChats(orgId: string, query: { query: string; limit?: number }, options?: CloudCpRequestOptions): Promise<CloudCpChatSearchResponse>;
 	/** Deletes one artifact file from cloud storage and the session's worker. */
@@ -438,7 +485,8 @@ export interface CloudCpClient {
 	deleteSession(
 		orgId: string,
 		sessionId: string,
-		options?: CloudCpRequestOptions & { deleteArtifacts?: boolean },
+		/** moveId deletes the session only as the copy that move's export left (409 MOVE_COPY_IN_USE otherwise). */
+		options?: CloudCpRequestOptions & { deleteArtifacts?: boolean; moveId?: string },
 	): Promise<CloudCpSessionDeletedResponse>;
 	resumeSession(
 		orgId: string,
@@ -713,6 +761,14 @@ interface SendOptions {
 	signal?: AbortSignal;
 	idempotencyKey?: string;
 	accept?: string;
+	headers?: Record<string, string>;
+	/** Non-2xx statuses returned to the caller instead of thrown (e.g. 304). */
+	passStatuses?: readonly number[];
+	/**
+	 * A 403 here is about the resource (someone else's comment), not a stale
+	 * org, so it must not trigger onForbidden's org re-resolution.
+	 */
+	resourceForbidden?: boolean;
 }
 
 function buildUrl(baseUrl: string, path: string, query?: QueryParams): string {
@@ -753,6 +809,14 @@ export const PLAN_REFUSAL_CODES: ReadonlySet<string> = new Set([
 	"WEEKLY_LIMIT_REACHED",
 ]);
 
+/** A move export's answer: the move, or (202) the export still running with when to ask again. */
+async function moveExportResult(answer: Promise<Response>): Promise<CloudCpMoveExportResult> {
+	const response = await answer;
+	const body = (await response.json()) as CloudCpMoveExportResponse | Omit<CloudCpMoveExportRunning, "retryAfterMs">;
+	if (response.status !== 202) return body as CloudCpMoveExportResponse;
+	return { ...(body as Omit<CloudCpMoveExportRunning, "retryAfterMs">), status: "running", retryAfterMs: retryAfterMs(response.headers.get("retry-after")) };
+}
+
 /** A Retry-After header (seconds, or an HTTP date) as milliseconds from `now`. */
 export function retryAfterMs(value: string | null, now = Date.now()): number | undefined {
 	const header = value?.trim();
@@ -766,6 +830,7 @@ async function errorFromResponse(response: Response): Promise<CloudCpError> {
 	let message = `Cloud control plane request failed with status ${response.status}.`;
 	let code: string | undefined;
 	let requestId: string | undefined;
+	let details: Record<string, unknown> | undefined;
 	try {
 		const body = (await response.json()) as Partial<CloudCpErrorEnvelope> | null;
 		if (typeof body?.message === "string" && body.message !== "") {
@@ -775,10 +840,11 @@ async function errorFromResponse(response: Response): Promise<CloudCpError> {
 		}
 		if (typeof body?.code === "string" && body.code !== "") code = body.code;
 		if (typeof body?.requestId === "string" && body.requestId !== "") requestId = body.requestId;
+		if (body?.details && typeof body.details === "object" && !Array.isArray(body.details)) details = body.details;
 	} catch {
 		// Non-JSON or empty body: keep the status-derived message.
 	}
-	const options = { status: response.status, code, requestId, retryAfterMs: retryAfterMs(response.headers.get("retry-after")) };
+	const options = { status: response.status, code, requestId, details, retryAfterMs: retryAfterMs(response.headers.get("retry-after")) };
 	return response.status === 401 ? new CloudCpAuthError(message, options) : new CloudCpError(message, options);
 }
 
@@ -830,17 +896,18 @@ export function createCloudCpClient(options: CloudCpClientOptions): CloudCpClien
 		});
 		if (init.body !== undefined) headers.set("Content-Type", "application/json");
 		if (init.idempotencyKey !== undefined) headers.set("Idempotency-Key", init.idempotencyKey);
+		for (const [name, value] of Object.entries(init.headers ?? {})) headers.set(name, value);
 		const response = await doFetch(buildUrl(baseUrl, path, init.query), {
 			method,
 			headers,
 			body: init.body === undefined ? undefined : JSON.stringify(init.body),
 			signal: init.signal,
 		});
-		if (!response.ok) {
+		if (!response.ok && init.passStatuses?.includes(response.status) !== true) {
 			// A 403 means the selected org is stale (membership changed) — notify so
 			// the renderer re-resolves the current org instead of stranding every
 			// org-scoped call. Fire before throwing so callers still see the error.
-			if (response.status === 403) onForbidden?.();
+			if (response.status === 403 && init.resourceForbidden !== true) onForbidden?.();
 			const error = await errorFromResponse(response);
 			if (error.code && PLAN_REFUSAL_CODES.has(error.code)) onPlanRefused?.(error.code);
 			throw error;
@@ -1019,6 +1086,30 @@ export function createCloudCpClient(options: CloudCpClientOptions): CloudCpClien
 			requestJson("POST", `/orgs/${seg(orgId)}/sessions/${seg(sessionId)}/artifacts/access`, { signal: o?.signal }),
 		listSharedArtifacts: (o) => requestJson("GET", "/me/shared-artifacts", { signal: o?.signal }),
 		viewArtifactShare: (linkId, o) => requestJson("POST", `/artifact-shares/${seg(linkId)}/view`, { signal: o?.signal }),
+		listArtifactShareComments: async (linkId, o) => {
+			const response = await send("GET", `/artifact-shares/${seg(linkId)}/comments`, {
+				query: { version: o?.version },
+				headers: o?.etag === undefined ? undefined : { "If-None-Match": o.etag },
+				passStatuses: [304],
+				resourceForbidden: true,
+				signal: o?.signal,
+			});
+			const etag = response.headers.get("ETag");
+			if (response.status === 304) return { notModified: true, etag: etag ?? o?.etag ?? "" };
+			return { notModified: false, etag, snapshot: await response.json() };
+		},
+		createArtifactShareThread: (linkId, body, o) =>
+			requestJson("POST", `/artifact-shares/${seg(linkId)}/comments/threads`, { body, resourceForbidden: true, signal: o?.signal }),
+		replyArtifactShareThread: (linkId, threadId, body, o) =>
+			requestJson("POST", `/artifact-shares/${seg(linkId)}/comments/threads/${seg(threadId)}/replies`, { body, resourceForbidden: true, signal: o?.signal }),
+		setArtifactShareThreadStatus: (linkId, threadId, status, o) =>
+			requestJson("PATCH", `/artifact-shares/${seg(linkId)}/comments/threads/${seg(threadId)}`, { body: { status }, resourceForbidden: true, signal: o?.signal }),
+		editArtifactShareComment: (linkId, commentId, body, o) =>
+			requestJson("PATCH", `/artifact-shares/${seg(linkId)}/comments/${seg(commentId)}`, { body, resourceForbidden: true, signal: o?.signal }),
+		deleteArtifactShareComment: (linkId, commentId, o) =>
+			requestVoid("DELETE", `/artifact-shares/${seg(linkId)}/comments/${seg(commentId)}`, { resourceForbidden: true, signal: o?.signal }),
+		markArtifactShareThreadSent: (linkId, threadId, o) =>
+			requestJson("POST", `/artifact-shares/${seg(linkId)}/comments/threads/${seg(threadId)}/sent`, { resourceForbidden: true, signal: o?.signal }),
 		listSessionArtifacts: (orgId, sessionId, o) =>
 			requestJson("GET", `/orgs/${seg(orgId)}/sessions/${seg(sessionId)}/artifacts`, { signal: o?.signal }),
 		saveSessionArtifact: (orgId, sessionId, body, o) =>
@@ -1031,6 +1122,12 @@ export function createCloudCpClient(options: CloudCpClientOptions): CloudCpClien
 			requestJson("POST", `/orgs/${seg(orgId)}/sessions/${seg(sessionId)}/artifacts/versions/restore`, { body: { path, version }, signal: o?.signal }),
 		restartSessionAgent: (orgId, sessionId, o) =>
 			requestJson("POST", `/orgs/${seg(orgId)}/sessions/${seg(sessionId)}/agent/restart`, { signal: o?.signal }),
+		previewSessionMove: (orgId, sessionId, o) =>
+			requestJson("GET", `/orgs/${seg(orgId)}/sessions/${seg(sessionId)}/move/preview`, { signal: o?.signal }),
+		exportSessionMove: (orgId, sessionId, o) =>
+			moveExportResult(send("POST", `/orgs/${seg(orgId)}/sessions/${seg(sessionId)}/move/export`, { query: { moveId: o?.moveId }, signal: o?.signal })),
+		getSessionMoveExport: (orgId, sessionId, moveId, o) =>
+			moveExportResult(send("GET", `/orgs/${seg(orgId)}/sessions/${seg(sessionId)}/move/export/${seg(moveId)}`, { signal: o?.signal })),
 		searchChats: (orgId, query, o) =>
 			requestJson("GET", `/orgs/${seg(orgId)}/chat-search`, { query: { q: query.query, limit: query.limit }, signal: o?.signal }),
 		deleteSessionArtifact: (orgId, sessionId, path, o) =>
@@ -1137,7 +1234,8 @@ export function createCloudCpClient(options: CloudCpClientOptions): CloudCpClien
 		cancelSessionReviews: (orgId, sessionId, o) =>
 			requestJson("POST", `/orgs/${seg(orgId)}/sessions/${seg(sessionId)}/reviews/cancel`, { signal: o?.signal }),
 		deleteSession: (orgId, sessionId, o) =>
-			requestJson("DELETE", `/orgs/${seg(orgId)}/sessions/${seg(sessionId)}${o?.deleteArtifacts ? "?deleteArtifacts=true" : ""}`, {
+			requestJson("DELETE", `/orgs/${seg(orgId)}/sessions/${seg(sessionId)}`, {
+				query: { deleteArtifacts: o?.deleteArtifacts ? "true" : undefined, moveId: o?.moveId },
 				signal: o?.signal,
 			}),
 		resumeSession: (orgId, sessionId, o) =>

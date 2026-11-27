@@ -102,8 +102,10 @@ type Deps struct {
 	// DoctorGitLabRESTBase lets tests point the doctor GitLab token probe at
 	// httptest without mutating package-global state.
 	DoctorGitLabRESTBase string
-	Now                  func() time.Time
-	Sleep                func(time.Duration)
+	// OpenAIRESTBase lets tests point the Codex API key check at httptest.
+	OpenAIRESTBase string
+	Now            func() time.Time
+	Sleep          func(time.Duration)
 	// PIDMayBeHidden reports whether a failed ProcessAlive check may only mean
 	// the daemon's PID is hidden from this process, as in a separate Linux PID
 	// namespace, rather than dead. Only then is the run-file's loopback port
@@ -131,6 +133,7 @@ func DefaultDeps() Deps {
 		ReadSecret:            readSecret,
 		DoctorGitHubRESTBase:  defaultDoctorGitHubRESTBase,
 		DoctorGitLabRESTBase:  defaultDoctorGitLabRESTBase,
+		OpenAIRESTBase:        defaultOpenAIRESTBase,
 		Now:                   time.Now,
 		Sleep:                 time.Sleep,
 
@@ -208,6 +211,9 @@ func (d Deps) withDefaults() Deps {
 	if d.DoctorGitLabRESTBase == "" {
 		d.DoctorGitLabRESTBase = def.DoctorGitLabRESTBase
 	}
+	if d.OpenAIRESTBase == "" {
+		d.OpenAIRESTBase = def.OpenAIRESTBase
+	}
 	if d.Now == nil {
 		d.Now = def.Now
 	}
@@ -265,6 +271,7 @@ func NewRootCommand(deps Deps) *cobra.Command {
 	root.AddCommand(newMCPCommand(ctx))
 	root.AddCommand(newBrowserCommand(ctx))
 	root.AddCommand(newBrowserHostCommand())
+	root.AddCommand(newDeviceCommand(ctx))
 	root.AddCommand(newHooksCommand(ctx))
 	root.AddCommand(newAgentProcessCommand(ctx))
 	root.AddCommand(newChatHostCommand())

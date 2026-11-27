@@ -80,7 +80,8 @@ export type FileAttachmentOptions = {
 	maxAttachmentBytes?: number;
 };
 
-type PendingFileAttachment = Pick<FileAttachment, "id" | "name">;
+/** A file still being read or staged. Its type is known from the start, so its placeholder can take the shape its tile will. */
+type PendingFileAttachment = Pick<FileAttachment, "id" | "name" | "mimeType">;
 
 type SharedAttachmentUpdate = {
 	pending: number;
@@ -593,7 +594,7 @@ export function useFileAttachments(options: FileAttachmentOptions = {}) {
 	}, [initialKey, maxAttachmentBytes, onAttachmentsChange, prepareAttachments, prepareEach]);
 
 	/** Resolves with the attachments this batch actually added, staged when staging is on. */
-	const addFiles = useCallback((files: Iterable<File>): Promise<FileAttachment[]> => {
+	const addFiles = useCallback((files: Iterable<File>, ids?: ReadonlyMap<File, string>): Promise<FileAttachment[]> => {
 		// Serialize batches. Two paste/drop events can arrive before React publishes
 		// `preparing`; processing both against the same attachment snapshot could
 		// otherwise exceed count/byte caps or overwrite one batch with the other.
@@ -601,7 +602,7 @@ export function useFileAttachments(options: FileAttachmentOptions = {}) {
 		if (batch.length === 0) return Promise.resolve([]);
 		const sharedKey = initialKey;
 		const generation = generationRef.current;
-		const pending = batch.map((file) => ({ id: crypto.randomUUID(), name: file.name }));
+		const pending = batch.map((file) => ({ id: ids?.get(file) ?? crypto.randomUUID(), name: file.name, mimeType: file.type }));
 		for (const file of pending) pendingFileControllers.set(file.id, new AbortController());
 		const entries = batch.map((file, index) => ({ file, id: pending[index]!.id }));
 		const sharedWork = sharedKey ? beginSharedAttachmentWork(sharedKey, pending) : undefined;

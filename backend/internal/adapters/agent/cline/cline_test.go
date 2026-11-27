@@ -30,7 +30,7 @@ func TestGetLaunchCommandBuildsCrossPlatformArgv(t *testing.T) {
 
 	want := []string{
 		"cline",
-		"--yolo",
+		"--auto-approve", "true",
 		"-s", "be careful",
 	}
 	if !reflect.DeepEqual(cmd, want) {
@@ -57,7 +57,7 @@ func TestGetLaunchCommandOmitsJSONForPromptlessInteractiveLaunch(t *testing.T) {
 
 	want := []string{
 		"cline",
-		"--yolo",
+		"--auto-approve", "true",
 		"-s", "coordinate the project",
 	}
 	if !reflect.DeepEqual(cmd, want) {
@@ -93,7 +93,7 @@ func TestGetLaunchCommandMapsApprovalModes(t *testing.T) {
 		{
 			name:       "bypass-permissions",
 			permission: ports.PermissionModeBypassPermissions,
-			want:       []string{"--yolo"},
+			want:       []string{"--auto-approve", "true"},
 		},
 		{
 			name:        "empty",

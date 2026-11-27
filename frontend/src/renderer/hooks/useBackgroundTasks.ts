@@ -1,5 +1,7 @@
+import { useEffect } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import type { components } from "../../api/schema";
+import { AoError } from "../../../../packages/shared/telemetry/ao-error";
 import { apiClient } from "../lib/api-client";
 
 export type BackgroundTaskReading = components["schemas"]["BackgroundTasksResponse"];
@@ -40,8 +42,11 @@ export function useBackgroundTaskReadings(enabled: boolean, projectId?: string) 
 	});
 }
 
-/** Only attached providers are inspected; this read never wakes an agent. */
-export function useBackgroundTasks(sessionId: string, enabled: boolean) {
+/**
+ * Only attached providers are inspected; this read never wakes an agent.
+ * `fast` reads every 2 s, for the side panel's Background tasks tab.
+ */
+export function useBackgroundTasks(sessionId: string, enabled: boolean, fast = false) {
 	return useQuery({
 		queryKey: [...backgroundTasksQueryRoot, sessionId],
 		enabled,
@@ -53,7 +58,7 @@ export function useBackgroundTasks(sessionId: string, enabled: boolean) {
 			if (!isTaskReading(data)) throw new Error("Invalid background task response");
 			return data;
 		},
-		refetchInterval: 5_000,
+		refetchInterval: fast ? 2_000 : 5_000,
 		staleTime: 1_000,
 		retry: false,
 	});
@@ -74,4 +79,88 @@ export function useStopBackgroundTask(sessionId: string) {
 		},
 		onSettled: () => queryClient.invalidateQueries({ queryKey: [...backgroundTasksQueryRoot, sessionId] }),
 	});
+}
+
+/** `lastRead`: the daemon no longer has this output, so it is the last one read. */
+/**
+ * `lastRead`: the daemon no longer has this output, so it is the last one read.
+ * `keptLog`: the log read before the daemon left it out (`logOmitted`), which
+ * `output` still leads with.
+ */
+export type BackgroundTaskOutput = components["schemas"]["BackgroundTaskOutputResponse"] & { lastRead?: boolean; keptLog?: string };
+
+/** One run's output: a rerun under the same task id never shows the previous run's. */
+export const backgroundTaskOutputQueryKey = (sessionId: string, taskId: string, runId?: string) =>
+	["background-task-output", sessionId, taskId, runId ?? ""] as const;
+
+/**
+ * One task's latest output (the daemon keeps the last 200 lines). Polls every
+ * second while `live`; otherwise reads once. Unchanged output keeps the same
+ * object, so an idle task does not re-render its tab.
+ *
+ * Once the task is `over`, output the daemon no longer has (the chat ended or
+ * the daemon restarted) stays as last read. The query is never collected, so
+ * reopening the task much later still shows it. While the task runs, such a
+ * read is a failed poll instead: the output read so far stays, with the error.
+ */
+export function useBackgroundTaskOutput(
+	sessionId: string,
+	taskId: string,
+	runId: string | undefined,
+	{ enabled, live, over }: { enabled: boolean; live: boolean; over: boolean },
+) {
+	const queryClient = useQueryClient();
+	const queryKey = backgroundTaskOutputQueryKey(sessionId, taskId, runId);
+	return useQuery({
+		queryKey,
+		enabled,
+		queryFn: async ({ signal }) => {
+			const { data, error } = await apiClient.GET("/api/v1/sessions/{sessionId}/background-tasks/{taskId}/output", {
+				params: { path: { sessionId, taskId } }, signal,
+			});
+			if (error) throw error;
+			if (!data || typeof data.output !== "string" || (data.availability !== "ready" && data.availability !== "unavailable")) {
+				throw new AoError("BACKGROUND_TASK_OUTPUT_INVALID", "Invalid background task output response");
+			}
+			const previous = queryClient.getQueryData<BackgroundTaskOutput>(queryKey);
+			// The task ID names a newer run now: its output isn't this run's, so
+			// this run keeps what it read, or shows none.
+			if (runId && data.runId && data.runId !== runId) {
+				const none: BackgroundTaskOutput = { sessionId, taskId, availability: "unavailable", output: "" };
+				return previous ?? none;
+			}
+			if (data.availability === "unavailable" && previous?.availability === "ready" && previous.output) {
+				if (!over) throw new AoError("BACKGROUND_TASK_OUTPUT_UNAVAILABLE", "Background task output unavailable");
+				return previous.lastRead ? previous : { ...previous, lastRead: true };
+			}
+			// The daemon left out a log another writer took over: keep the log read
+			// before, followed by whatever the task printed itself since.
+			const log = previous?.availability === "ready" ? previous.keptLog ?? (previous.logOmitted ? "" : previous.output) : "";
+			if (data.availability === "ready" && data.logOmitted && log) {
+				const own = data.output.replace(/^\n+|\n+$/g, "");
+				const output = !own || log.endsWith(own) ? log : `${log}\n${own}`;
+				return { ...data, output, keptLog: log, truncated: Boolean(previous?.truncated || data.truncated) };
+			}
+			return data as BackgroundTaskOutput;
+		},
+		refetchInterval: live ? 1_000 : false,
+		gcTime: Infinity,
+		retry: false,
+	});
+}
+
+/**
+ * Drops the cached output of task runs the side panel no longer lists, so a
+ * pruned row frees its log; output queries are otherwise never collected.
+ */
+export function useReleaseTaskOutputs(sessionId: string, tabs: readonly { task: { id: string; runId?: string } }[] | undefined) {
+	const queryClient = useQueryClient();
+	useEffect(() => {
+		if (!sessionId || !tabs) return;
+		const kept = new Set(tabs.map(({ task }) => `${task.id}\n${task.runId ?? ""}`));
+		queryClient.removeQueries({
+			queryKey: ["background-task-output", sessionId],
+			predicate: (query) => !kept.has(`${String(query.queryKey[2])}\n${String(query.queryKey[3] ?? "")}`),
+		});
+	}, [queryClient, sessionId, tabs]);
 }

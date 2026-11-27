@@ -1064,6 +1064,27 @@ func (s *Service) TryBeginHarnessUse(harness domain.AgentHarness) (func(), bool)
 	return gate.RUnlock, true
 }
 
+// TryBeginHarnessUseNow lets background recovery skip an active installer
+// without waiting or claiming a stopped session that the installer will resume.
+func (s *Service) TryBeginHarnessUseNow(harness domain.AgentHarness) (func(), bool) {
+	gate := s.harnessGate(harness)
+	if !gate.TryRLock() {
+		return nil, false
+	}
+	s.mu.Lock()
+	job := s.jobs[Target(harness)]
+	installing := job != nil && activeStatus(job.Status) && job.Status != StatusWaitingForIdle
+	s.mu.Unlock()
+	if installing {
+		gate.RUnlock()
+		return nil, false
+	}
+	if IsAgentTarget(Target(harness)) {
+		s.forgetReplacedBinary(Target(harness))
+	}
+	return gate.RUnlock, true
+}
+
 // Status returns the current or last known Job for target. A target that has
 // never been started returns a plan preview: Idle when the daemon can run it,
 // or Unsupported with a manual command/reason when it cannot. An error is
@@ -2218,9 +2239,10 @@ func (s *Service) planWinget(target Target, id string) Plan {
 		}
 		return plan
 	}
-	command := []string{"winget", "install", "-e", "--id", id}
+	// Pin the community source so a fresh Windows profile never opens msstore's
+	// interactive source-agreement prompt in this background process.
+	command := []string{"winget", "install", "-e", "--id", id, "--source", "winget", "--silent", "--accept-package-agreements", "--accept-source-agreements", "--disable-interactivity"}
 	if IsAgentTarget(target) {
-		command = append(command, "--silent", "--accept-package-agreements", "--accept-source-agreements", "--disable-interactivity")
 		return Plan{Target: target, Command: command, Method: "winget", Package: id}
 	}
 	return Plan{Target: target, Command: command}
