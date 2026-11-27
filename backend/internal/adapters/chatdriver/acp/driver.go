@@ -249,6 +249,10 @@ type Config struct {
 	// keeps only in its own store. Nil for agents whose subagents need none of
 	// it. See subagent_records.go.
 	SubagentRecords *SubagentRecords
+	// SpawnedSubagents opts into the agent's subagents extension and files the
+	// children it announces. Nil for agents without it. See
+	// spawned_subagents.go.
+	SpawnedSubagents *SpawnedSubagents
 	// BackgroundTasks reads native background work without issuing a prompt.
 	BackgroundTasks func(context.Context, *acpsdk.ClientSideConnection, acpsdk.SessionId) ([]ports.ChatBackgroundTask, error)
 	// StopBackgroundTask stops one native background task. Nil when the
@@ -989,6 +993,7 @@ func (d *Driver) initialize(
 	if d.cfg.SubagentRecords != nil && cfg.WorkspacePath != "" {
 		conv.subagentRecords, conv.subagentRecordEnv, conv.subagentRecordCwd = d.cfg.SubagentRecords, cfg.Env, cfg.WorkspacePath
 	}
+	conv.spawnedSubagents = d.cfg.SpawnedSubagents
 	conv.backgroundTasks = d.cfg.BackgroundTasks
 	conv.stopBackgroundTask = d.cfg.StopBackgroundTask
 	conv.backgroundTaskOutput = d.cfg.BackgroundTaskOutput
@@ -1049,6 +1054,27 @@ func (d *Driver) initialize(
 	if d.cfg.AsyncTasks {
 		airCapabilities = append(airCapabilities, "asyncTasks")
 	}
+	capabilityMeta := map[string]any{
+		// Cursor reports a model's effort, thinking and speed as their own
+		// settings only to a client that asks. Other agents ignore it.
+		"parameterizedModelPicker": true,
+		"subagent-transcript":      true,
+		"terminal_output":          true,
+		// claude-agent-acp publishes retryable API/transport failures only
+		// when the client opts into this namespaced metadata extension. It is
+		// observational: AO receives status, but grants no new capability.
+		"jetbrains": map[string]any{
+			"air": map[string]any{
+				"version":      1,
+				"capabilities": airCapabilities,
+			},
+		},
+	}
+	if d.cfg.SpawnedSubagents != nil {
+		// The subagents extension: the agent announces each child and streams
+		// its work under the child's session (see spawned_subagents.go).
+		capabilityMeta["subagents"] = true
+	}
 	init, err := conv.conn.Initialize(initCtx, acpsdk.InitializeRequest{
 		Meta: map[string]any{
 			persistenthost.ACPInitialPermissionsMetaKey: string(ports.NormalizePermissionMode(cfg.Permissions)),
@@ -1062,22 +1088,7 @@ func (d *Driver) initialize(
 		ClientCapabilities: acpsdk.ClientCapabilities{
 			// These two Claude bridge extensions enrich the transcript. They do
 			// not grant the agent access to AO's terminal or filesystem APIs.
-			Meta: map[string]any{
-				// Cursor reports a model's effort, thinking and speed as their own
-				// settings only to a client that asks. Other agents ignore it.
-				"parameterizedModelPicker": true,
-				"subagent-transcript":      true,
-				"terminal_output":          true,
-				// claude-agent-acp publishes retryable API/transport failures only
-				// when the client opts into this namespaced metadata extension. It is
-				// observational: AO receives status, but grants no new capability.
-				"jetbrains": map[string]any{
-					"air": map[string]any{
-						"version":      1,
-						"capabilities": airCapabilities,
-					},
-				},
-			},
+			Meta: capabilityMeta,
 			Elicitation: &acpsdk.ElicitationCapabilities{
 				Form: &acpsdk.ElicitationFormCapabilities{},
 				Url:  &acpsdk.ElicitationUrlCapabilities{},

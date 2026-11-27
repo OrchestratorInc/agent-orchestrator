@@ -36,7 +36,10 @@ func New(plugin nativeacp.Plugin, log *slog.Logger) ports.ChatDriver {
 		ClientExtensionAliases: map[string]string{
 			askQuestionMethod: "_cursor/ask_question",
 			createPlanMethod:  "_cursor/create_plan",
+			taskMethod:        "_cursor/task",
 		},
+		// Subagents are announced over ACP; see subagents.go.
+		SpawnedSubagents:     spawnedSubagents(),
 		ValidateTurnSettings: validateTurnSettings,
 		VersionProbe:         versionProbe,
 		// Cursor has no session/close and ignores stdin closing; it exits on

@@ -78,7 +78,8 @@ type Config struct {
 	// NativeHistoryReplay: see acpdriver.Config. The native process must have
 	// successfully resumed before this adapter-owned history reader is called.
 	NativeHistoryReplay    func(context.Context, acpdriver.LaunchConfig, string) ([]acpsdk.SessionNotification, bool, error)
-	SubagentRecords        *acpdriver.SubagentRecords // see acpdriver.Config
+	SubagentRecords        *acpdriver.SubagentRecords  // see acpdriver.Config
+	SpawnedSubagents       *acpdriver.SpawnedSubagents // see acpdriver.Config
 	PermissionPolicy       acpdriver.PermissionPolicy
 	ClientExtension        acpdriver.ClientExtensionHandler
 	ClientExtensionAliases map[string]string
@@ -204,6 +205,7 @@ func buildConfig(plugin Plugin, cfg Config, log *slog.Logger) acpdriver.Config {
 		HistoryReconciler:            cfg.HistoryReconciler,
 		NativeHistoryReplay:          cfg.NativeHistoryReplay,
 		SubagentRecords:              cfg.SubagentRecords,
+		SpawnedSubagents:             cfg.SpawnedSubagents,
 		PromptErrorFailure:           cfg.PromptErrorFailure,
 		PermissionPolicy:             cfg.PermissionPolicy,
 		ClientExtension:              cfg.ClientExtension,

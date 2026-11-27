@@ -144,6 +144,11 @@ type conversation struct {
 	subagentRecordEnv map[string]string
 	subagentRecordCwd string
 	recordFollower    *recordFollower
+	// spawnedSubagents files subagents the agent announces over ACP, and
+	// spawned holds the children it announced, by session. See
+	// spawned_subagents.go.
+	spawnedSubagents *SpawnedSubagents
+	spawned          map[string]*spawnedChild
 	// compactAdvertised is whether the agent's own list, before HideCommand,
 	// named compact; start derives compaction from it, not from the shown skills.
 	compactAdvertised bool
