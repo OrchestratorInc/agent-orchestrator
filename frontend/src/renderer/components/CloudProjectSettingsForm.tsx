@@ -225,16 +225,18 @@ function SandboxSwitchRow({ project, readOnly, onForbidden, configKey, id, label
 	});
 	// The value being saved shows until the save settles; a failed one goes back.
 	const shown = save.isPending && save.variables !== undefined ? save.variables : saved;
-	// The description stays; why the switch cannot change goes under it.
+	// The description stays; why the switch cannot change, or that a save
+	// failed, goes under it. The server's own words (English) are the tooltip.
 	const status = unsupported ? t("settings.project.sandbox.unsupported") : readOnly ? t("settings.project.sandbox.readOnly") : undefined;
 	const shownDescription = status ? <>
 		{description}
 		<span className="block">{status}</span>
-	</> : save.isError ? (
-		<span className="text-error" role="alert">
-			{save.error instanceof Error ? save.error.message : t("settings.project.saveFailed")}
+	</> : save.isError ? <>
+		{description}
+		<span className="block text-error" role="alert" title={save.error instanceof Error ? save.error.message : undefined}>
+			{t("settings.project.saveFailed")}
 		</span>
-	) : description;
+	</> : description;
 	return <SettingsRow label={label} description={shownDescription}>
 		<Switch id={id} aria-label={label} checked={shown} disabled={unsupported || readOnly || anySaving}
 			onCheckedChange={(checked) => save.mutate(checked)} />

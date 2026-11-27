@@ -769,7 +769,11 @@ describe("Cloud project sandbox settings", () => {
 		mount("sandbox");
 		const docker = await screen.findByRole("switch", { name: "Docker (Coder sandboxes)" });
 		await userEvent.click(docker);
-		expect(await screen.findByRole("alert")).toHaveTextContent("Only org admins can change sandbox settings");
+		const alert = await screen.findByRole("alert");
+		// The description stays; a translated line goes under it, the server's words in its tooltip.
+		expect(alert).toHaveTextContent("Save failed");
+		expect(alert).toHaveAttribute("title", "Only org admins can change sandbox settings");
+		expect(screen.getByText(/Takes effect for new sandboxes/)).toBeInTheDocument();
 		expect(docker).toBeChecked();
 		expect(docker).toBeEnabled();
 	});
@@ -801,7 +805,11 @@ describe("Cloud project sandbox settings", () => {
 		const sudo = await screen.findByRole("switch", { name: "Agents can use sudo" });
 		expect(sudo).toBeEnabled();
 		await userEvent.click(sudo);
-		expect(await screen.findByRole("alert")).toHaveTextContent("Forbidden by policy");
+		const alert = await screen.findByRole("alert");
+		// The description stays; a translated line goes under it, the server's words in its tooltip.
+		expect(alert).toHaveTextContent("Save failed");
+		expect(alert).toHaveAttribute("title", "Forbidden by policy");
+		expect(screen.getByText(/Saved logins are turned off in sandboxes where agents can use sudo/)).toBeInTheDocument();
 		expect(sudo).not.toBeChecked();
 		expect(sudo).toBeEnabled();
 	});
