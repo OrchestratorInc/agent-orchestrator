@@ -258,6 +258,7 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 	// Choosing another agent only records the choice; the switch runs with the next message.
 	const providerSwitch = useProviderSwitchCommand(session.id, hostId);
 	const [chosenSwitch, setChosenSwitch] = useState<PendingAgentSwitch>();
+	const [sentSwitch, setSentSwitch] = useState<{ sessionId: string; sourceHarness: string; target: PendingAgentSwitch }>();
 	// The chat is the tab in front: not a file, terminal or reviewer tab.
 	const chatInFront = !workspaceFileActive && !workspaceActiveTabKey && !reviewerTarget && !reviewerChatSelected && !shellTarget;
 	// Sending is the switch, so a pick is dropped once another tab comes forward: a message
@@ -283,6 +284,14 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 	const clearSwitchError = () => { setSendSwitchError(undefined); providerSwitch.reset(); };
 	const currentHarness = snapshot?.harness;
 	const pendingSwitch = currentHarness && chosenSwitch?.harness !== currentHarness ? chosenSwitch : undefined;
+	// The send can finish before the conversation refetch. Keep the sent choice on screen
+	// while the snapshot still shows the outgoing agent, without sending the switch again.
+	const switchAwaitingSnapshot = sentSwitch?.sessionId === uiSessionId && sentSwitch.sourceHarness === currentHarness
+		? sentSwitch.target : undefined;
+	const displayedSwitch = switchAwaitingSnapshot ?? pendingSwitch;
+	useEffect(() => {
+		if (currentHarness && sentSwitch && !switchAwaitingSnapshot) setSentSwitch(undefined);
+	}, [currentHarness, sentSwitch, switchAwaitingSnapshot]);
 	// Catalogs are cached by session; a switch made elsewhere (another window or device)
 	// leaves the outgoing agent's, so they follow the agent the chat reports.
 	useEffect(() => {
@@ -327,13 +336,14 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 		() => ({ value: autoCompactWindow, disabled: applyingAutoCompact || agentBusy, onChange: saveAutoCompact }),
 		[agentBusy, applyingAutoCompact, autoCompactWindow, saveAutoCompact],
 	);
-	const switchBlocked = agentBusy || providerSwitch.isPending;
+	const switchBlocked = agentBusy || providerSwitch.isPending || Boolean(switchAwaitingSnapshot);
 	// A new pick for the same agent keeps the permission mode picked for it.
 	const choosePendingSwitch = useCallback((next: PendingAgentSwitch | undefined) => {
+		if (switchAwaitingSnapshot) return;
 		setChosenSwitch((current) => next && current?.approvalMode && current.harness === next.harness && !next.approvalMode
 			? { ...next, approvalMode: current.approvalMode }
 			: next);
-	}, []);
+	}, [switchAwaitingSnapshot]);
 	// While the agent runs in a mode it needed (Pi only bypassed), a switch away goes back
 	// to the chat's own, which its switch marker keeps.
 	const chatPermissionMode = useMemo(() => {
@@ -349,9 +359,9 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 	const account = accountSwitch.choice;
 	const agentSwitch = useMemo(
 		() => currentHarness && !session.cloud && !newWorkDisabled
-			? { projectId: session.workspaceId, hostId, pending: pendingSwitch, pendingPermissionModes, chatPermissionMode, onPendingChange: choosePendingSwitch, disabled: switchBlocked, ultracode, autoCompact, account }
+			? { projectId: session.workspaceId, hostId, pending: displayedSwitch, pendingPermissionModes, chatPermissionMode, onPendingChange: choosePendingSwitch, disabled: switchBlocked, ultracode, autoCompact, account }
 			: undefined,
-		[account, autoCompact, chatPermissionMode, choosePendingSwitch, currentHarness, hostId, newWorkDisabled, pendingPermissionModes, pendingSwitch, session.cloud, session.workspaceId, switchBlocked, ultracode],
+		[account, autoCompact, chatPermissionMode, choosePendingSwitch, currentHarness, displayedSwitch, hostId, newWorkDisabled, pendingPermissionModes, session.cloud, session.workspaceId, switchBlocked, ultracode],
 	);
 	useEffect(() => {
 		if (acceptedLocalTurnObserved && pendingAcceptedTurnId) {
@@ -807,9 +817,9 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 						// The main transcript keeps the reader's place: /btw is for asking aside.
 						return SENT_OUTSIDE_TRANSCRIPT;
 					}
-					const viaClaude = (pendingSwitch?.harness ?? currentHarness) === "claude-code";
+					const viaClaude = (displayedSwitch?.harness ?? currentHarness) === "claude-code";
 					const message = {
-						text: viaClaude && (pendingSwitch ? pendingSwitch.ultracode : ultracode.on) ? withUltracode(text) : text,
+						text: viaClaude && (displayedSwitch ? displayedSwitch.ultracode : ultracode.on) ? withUltracode(text) : text,
 						attachments,
 						clientMessageId,
 						fileReferences,
@@ -847,6 +857,7 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 						return Object.assign(apiErrorException(error), { code: AGENT_SWITCH_FAILED });
 					};
 					const switched = () => {
+						if (currentHarness) setSentSwitch({ sessionId: uiSessionId, sourceHarness: currentHarness, target: pendingSwitch });
 						setChosenSwitch(undefined);
 						// Ultracode picked with the switch stays on for the messages after it.
 						ultracode.onChange(Boolean(pendingSwitch.ultracode));
