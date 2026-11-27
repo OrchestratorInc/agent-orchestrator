@@ -805,7 +805,9 @@ function PullRequestFeedbackLine({ messages, queued }: { messages: readonly Conv
 	// The newest instant: a forge time and a delivery time differ in their fractional seconds, so strings do not sort.
 	const at = each.reduce((newest, entry) => (Date.parse(entry.at) > Date.parse(newest) ? entry.at : newest), last.at);
 	const comments = each.flatMap(({ feedback }) => (feedback.kind === "reviewComments" ? feedback.comments : []));
-	const checks = uniqueChecks(each.flatMap(({ feedback }) => (feedback.kind === "ciFailing" ? feedback.checks : [])));
+	// Each CI report lists every check failing when it was sent, so the newest one is the PR's state: an older report's check may pass since.
+	const report = each.findLast(({ feedback }) => feedback.kind === "ciFailing")?.feedback;
+	const checks = report?.kind === "ciFailing" ? uniqueChecks(report.checks) : [];
 	const authors = reviewersOf(comments);
 	const key = comments.length > 0 && checks.length > 0 ? "feedbackBoth" : comments.length > 0 ? "feedbackComments" : "feedbackChecks";
 	const toggle = () => {

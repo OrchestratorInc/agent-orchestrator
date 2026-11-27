@@ -618,6 +618,19 @@ describe("drawing PR feedback in Developer Mode", () => {
 		expect(screen.getByTestId("pull-request-feedback").querySelector("time")).toHaveAttribute("datetime", "2026-11-16T08:26:00Z");
 	});
 
+	it("lists the failing checks of a line's newest CI report, since an older report's check may pass since", async () => {
+		const older = message(ciFailing, { id: "m1" });
+		const newer = message(ciFailing.replace("Failed: lint (failed)\n\n", ""), { id: "m2", sequence: 2 });
+		const bursts = pullRequestBursts([older, newer]);
+		render(<TooltipProvider><AutomationMessage message={older} burst={bursts.get("m1")} fallback={<p>card</p>} /></TooltipProvider> as ReactElement);
+
+		const line = screen.getByTestId("pull-request-feedback");
+		expect(line).toHaveTextContent("1 failing check on #6974");
+		await userEvent.click(within(line).getByRole("button", { name: /1 failing check on #6974/ }));
+		expect(within(line).getByRole("link", { name: "renderer-smoke" })).toBeInTheDocument();
+		expect(within(line).queryByText("lint")).toBeNull();
+	});
+
 	it("ends a line in its newest instant when a forge time and a delivery time differ in fractional seconds", () => {
 		const review = message(reviewComment.replace("need additional context.\n", "need additional context. Newest comment posted at 2026-11-26T12:00:00Z.\n"), { id: "m1" });
 		const checks = message(ciFailing, { id: "m2", sequence: 2, createdAt: "2026-11-26T12:00:00.500Z" });
