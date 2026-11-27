@@ -111,6 +111,12 @@ type commander interface {
 	CancelTaskPreparation(context.Context, domain.TaskPreparationToken) error
 }
 
+// automationChatHibernator is an optional command capability: the manager
+// stops a finished automation's Chat provider without ending the session.
+type automationChatHibernator interface {
+	HibernateChatForAutomation(ctx context.Context, id domain.SessionID) (bool, error)
+}
+
 // interfaceTransitionCommander is an optional command capability. Keeping it
 // separate avoids widening every focused session-service fake while production
 // can expose the feature through the concrete Session Manager.
@@ -1393,6 +1399,18 @@ func restoreModeView(mode sessionmanager.RestoreMode) RestoreModeView {
 	default:
 		return RestoreModeView(mode)
 	}
+}
+
+// HibernateChatForAutomation stops the Chat provider of a scheduled session
+// whose run has finished, keeping the session and its conversation
+// resumable. False without an error means the session still has work (a
+// turn, queued message, approval or open view) and the caller retries later.
+func (s *Service) HibernateChatForAutomation(ctx context.Context, id domain.SessionID) (bool, error) {
+	hibernator, ok := s.manager.(automationChatHibernator)
+	if !ok {
+		return false, ports.ErrChatHibernationUnsupported
+	}
+	return hibernator.HibernateChatForAutomation(ctx, id)
 }
 
 // Kill delegates terminal intent and teardown to the internal manager.

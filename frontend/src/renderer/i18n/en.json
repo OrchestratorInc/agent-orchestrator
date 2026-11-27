@@ -5123,6 +5123,7 @@
 	"automations.runStatus.running": "Running",
 	"automations.runStatus.completed": "Completed",
 	"automations.runStatus.failed": "Failed",
+	"automations.runStatus.skipped": "Skipped",
 	"automations.summary.daily": "Daily",
 	"automations.summary.dailyAt": "Daily at {{time}}",
 	"automations.summary.weekdays": "Weekdays",

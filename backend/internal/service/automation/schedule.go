@@ -165,18 +165,30 @@ func NextOccurrence(rruleText, timezone string, after time.Time) (time.Time, err
 	return next.UTC(), nil
 }
 
-// PreviousOccurrence calculates the latest logical occurrence at or before the
-// supplied instant. It returns the zero time when the schedule had not started.
-func PreviousOccurrence(rruleText, timezone string, atOrBefore time.Time) (time.Time, error) {
+// occurrencesAround returns the latest occurrence at or before at (zero when
+// the schedule had not started) and the first one strictly after it. It parses
+// the rule once and walks it from DTSTART once; rrule-go's Before and After
+// would each walk it again.
+func occurrencesAround(rruleText, timezone string, at time.Time) (time.Time, time.Time, error) {
 	rule, err := parseRule(rruleText, timezone)
 	if err != nil {
-		return time.Time{}, err
+		return time.Time{}, time.Time{}, err
 	}
-	previous := rule.Before(atOrBefore, true)
-	if previous.IsZero() {
-		return time.Time{}, nil
+	var previous time.Time
+	next := rule.Iterator()
+	for {
+		occurrence, ok := next()
+		if !ok {
+			return time.Time{}, time.Time{}, fmt.Errorf("schedule has no future occurrence")
+		}
+		if occurrence.After(at) {
+			if !previous.IsZero() {
+				previous = previous.UTC()
+			}
+			return previous, occurrence.UTC(), nil
+		}
+		previous = occurrence
 	}
-	return previous.UTC(), nil
 }
 
 func parseRule(rruleText, timezone string) (*rrule.RRule, error) {

@@ -696,6 +696,35 @@ func (q *Queries) ListLatestAutomationRuns(ctx context.Context, automationIds []
 	return items, nil
 }
 
+const listPendingAutomationRunIDs = `-- name: ListPendingAutomationRunIDs :many
+SELECT id FROM automation_runs
+WHERE automation_id = ? AND status = 'pending'
+ORDER BY scheduled_for, id
+`
+
+func (q *Queries) ListPendingAutomationRunIDs(ctx context.Context, automationID domain.AutomationID) ([]domain.AutomationRunID, error) {
+	rows, err := q.db.QueryContext(ctx, listPendingAutomationRunIDs, automationID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []domain.AutomationRunID{}
+	for rows.Next() {
+		var id domain.AutomationRunID
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		items = append(items, id)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const markAutomationRunRunning = `-- name: MarkAutomationRunRunning :execrows
 UPDATE automation_runs
 SET status = 'running', session_id = ?, started_at = ?,
@@ -738,6 +767,46 @@ type ReleaseAutomationRunParams struct {
 
 func (q *Queries) ReleaseAutomationRun(ctx context.Context, arg ReleaseAutomationRunParams) (int64, error) {
 	result, err := q.db.ExecContext(ctx, releaseAutomationRun, arg.ErrorMessage, arg.UpdatedAt, arg.ID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
+const rescheduleAutomationRun = `-- name: RescheduleAutomationRun :execrows
+UPDATE automation_runs
+SET scheduled_for = ?, updated_at = ?
+WHERE id = ? AND status = 'pending'
+`
+
+type RescheduleAutomationRunParams struct {
+	ScheduledFor time.Time
+	UpdatedAt    time.Time
+	ID           domain.AutomationRunID
+}
+
+func (q *Queries) RescheduleAutomationRun(ctx context.Context, arg RescheduleAutomationRunParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, rescheduleAutomationRun, arg.ScheduledFor, arg.UpdatedAt, arg.ID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
+const skipAutomationRun = `-- name: SkipAutomationRun :execrows
+UPDATE automation_runs
+SET status = 'skipped', finished_at = ?, error_message = NULL, updated_at = ?
+WHERE id = ? AND status = 'pending'
+`
+
+type SkipAutomationRunParams struct {
+	FinishedAt sql.NullTime
+	UpdatedAt  time.Time
+	ID         domain.AutomationRunID
+}
+
+func (q *Queries) SkipAutomationRun(ctx context.Context, arg SkipAutomationRunParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, skipAutomationRun, arg.FinishedAt, arg.UpdatedAt, arg.ID)
 	if err != nil {
 		return 0, err
 	}

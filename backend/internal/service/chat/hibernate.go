@@ -195,6 +195,9 @@ type hibernateOptions struct {
 	// forUpdate stops an idle provider so an installer can replace its
 	// executable; the session wakes on its next message or once the update ends.
 	forUpdate bool
+	// forAutomation stops the provider of a scheduled session whose run has
+	// finished, so it cannot start working again beside the next occurrence.
+	forAutomation bool
 	// minIdle is how long the session must have been quiet.
 	minIdle time.Duration
 	// ignoreViews lets a refresh run under an open view: the user's next
@@ -204,7 +207,7 @@ type hibernateOptions struct {
 }
 
 func (o hibernateOptions) enabled(s *Service) bool {
-	if o.versionRefresh || o.forUpdate || o.otherWriter {
+	if o.versionRefresh || o.forUpdate || o.forAutomation || o.otherWriter {
 		return true
 	}
 	return s.hibernationEnabled != nil && s.hibernationEnabled()
@@ -214,7 +217,7 @@ func (o hibernateOptions) enabled(s *Service) bool {
 // provider confirms it has no background work.
 func (o hibernateOptions) eligible(s *Service, rec domain.SessionRecord) bool {
 	candidate := rec
-	if (o.forUpdate || o.versionRefresh) && candidate.Kind == domain.KindOrchestrator {
+	if (o.forUpdate || o.versionRefresh || o.forAutomation) && candidate.Kind == domain.KindOrchestrator {
 		// Idle hibernation keeps orchestrators running. An update or a move to
 		// a new release stops them only to start them again, so they go too,
 		// under the same turn, queue and approval checks.
@@ -252,6 +255,27 @@ func (s *Service) HibernateChatForVersionRefresh(ctx context.Context, id domain.
 // pending approvals and background work still keep it running.
 func (s *Service) HibernateChatForUpdate(ctx context.Context, id domain.SessionID) (bool, error) {
 	return s.hibernateChat(ctx, id, hibernateOptions{forUpdate: true, ignoreViews: true})
+}
+
+// HibernateChatForAutomation stops the provider of a scheduled session whose
+// run has finished, whatever the hibernation setting, keeping the session and
+// its conversation resumable. It applies the same checks as idle hibernation,
+// so a turn in flight, a queued message, a pending approval, background work
+// or an open view keeps the provider running and the call reports false. A
+// session with no live controller has nothing left running and reports true.
+// A provider that cannot resume returns ports.ErrChatHibernationUnsupported.
+func (s *Service) HibernateChatForAutomation(ctx context.Context, id domain.SessionID) (bool, error) {
+	controller, err := s.Controller(id)
+	if errors.Is(err, ErrNoController) {
+		return true, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	if !controller.Capabilities().Has(ports.ChatCapabilityResume) {
+		return false, ports.ErrChatHibernationUnsupported
+	}
+	return s.hibernateChat(ctx, id, hibernateOptions{forAutomation: true, minIdle: chatHibernateGrace})
 }
 
 func (s *Service) hibernateChat(ctx context.Context, id domain.SessionID, opts hibernateOptions) (bool, error) {

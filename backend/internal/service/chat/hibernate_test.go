@@ -307,6 +307,34 @@ func TestHibernationGateRechecksAfterEligibilityRead(t *testing.T) {
 	}
 }
 
+// A finished automation run stops its provider whatever the idle hibernation
+// setting, orchestrator kind included, so it cannot work again beside the next
+// occurrence. Work the provider still has keeps it running.
+func TestHibernateChatForAutomationIgnoresIdleSettingButKeepsWork(t *testing.T) {
+	h, conv := settledHibernationHarness(t, domain.TurnStateCompleted, func() bool { return false })
+	ctx := context.Background()
+	rec, found, err := h.st.GetSession(ctx, testSession)
+	if err != nil || !found {
+		t.Fatalf("get session = %v, %v", found, err)
+	}
+	rec.Kind = domain.KindOrchestrator
+	if err := h.st.UpdateSession(ctx, rec); err != nil {
+		t.Fatal(err)
+	}
+	conv.backgroundRunning = true
+	if stopped, err := h.svc.HibernateChatForAutomation(ctx, testSession); err != nil || stopped || conv.calls.Load() != 0 || !h.svc.HasLiveChatController(testSession) {
+		t.Fatalf("background work: stopped=%v err=%v calls=%d live=%v", stopped, err, conv.calls.Load(), h.svc.HasLiveChatController(testSession))
+	}
+	conv.backgroundRunning = false
+	if stopped, err := h.svc.HibernateChatForAutomation(ctx, testSession); err != nil || !stopped || conv.calls.Load() != 1 {
+		t.Fatalf("finished run: stopped=%v err=%v calls=%d", stopped, err, conv.calls.Load())
+	}
+	rec, _, err = h.st.GetSession(ctx, testSession)
+	if err != nil || rec.HibernatedAt == nil || rec.IsTerminated {
+		t.Fatalf("hibernated record = %+v, %v", rec, err)
+	}
+}
+
 func TestHibernateChatKeepsCompletedIdleSessionResumable(t *testing.T) {
 	h, conv := settledHibernationHarness(t, domain.TurnStateCompleted)
 	ctx := context.Background()

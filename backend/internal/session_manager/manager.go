@@ -3954,6 +3954,33 @@ func (m *Manager) hibernateEligibleChat(ctx context.Context, id domain.SessionID
 	return err
 }
 
+// HibernateChatForAutomation stops the Chat provider of a scheduled session
+// whose run has finished, keeping the session resumable. It reports false,
+// without error, while another agent operation or an interface transition
+// owns the session, so the caller retries later.
+func (m *Manager) HibernateChatForAutomation(ctx context.Context, id domain.SessionID) (bool, error) {
+	hibernator, ok := m.chat.(interface {
+		HibernateChatForAutomation(context.Context, domain.SessionID) (bool, error)
+	})
+	if !ok {
+		return false, ports.ErrChatHibernationUnsupported
+	}
+	operationCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+	if err := m.beginAgentOperation(operationCtx, id, agentOperationHibernate); err != nil {
+		if errors.Is(err, errAgentOperationInProgress) {
+			return false, nil
+		}
+		return false, err
+	}
+	defer m.endAgentOperation(id, agentOperationHibernate)
+	active, err := m.hasActiveInterfaceTransition(operationCtx, id)
+	if err != nil || active {
+		return false, err
+	}
+	return hibernator.HibernateChatForAutomation(operationCtx, id)
+}
+
 // WakeHibernatedChat waits for an in-flight hibernation or wake, then resumes
 // the native provider conversation when there is no live Chat controller. This
 // also retries a failed wake after its durable marker was cleared.

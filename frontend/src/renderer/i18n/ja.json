@@ -5062,6 +5062,7 @@
 	"automations.runStatus.running": "実行中",
 	"automations.runStatus.completed": "完了",
 	"automations.runStatus.failed": "失敗",
+	"automations.runStatus.skipped": "スキップ",
 	"automations.summary.daily": "毎日",
 	"automations.summary.dailyAt": "毎日 {{time}}",
 	"automations.summary.weekdays": "平日",

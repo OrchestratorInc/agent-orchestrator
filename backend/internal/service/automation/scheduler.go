@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"sort"
 	"strings"
 	"time"
 
@@ -18,22 +17,22 @@ const (
 	dispatchScanLimit = 100
 	spawnLease        = 2 * time.Minute
 	maxRunErrorBytes  = 512
-	// pendingPageSize is the page size used to read a pending backlog.
-	pendingPageSize   = 100
-	skippedRunMessage = "Skipped: an earlier occurrence of this automation was still waiting to run"
 )
 
 // SessionSpawner is the existing user-facing session launch boundary.
 type SessionSpawner interface {
 	Spawn(context.Context, ports.SpawnConfig) (domain.Session, int, int, error)
 	Kill(context.Context, domain.SessionID) (bool, error)
+	// HibernateChatForAutomation stops a finished Chat session's provider while
+	// keeping it resumable. False without an error means it still has work.
+	HibernateChatForAutomation(context.Context, domain.SessionID) (bool, error)
 }
 
 // schedulerStore is deliberately separate from CRUD Store so focused CRUD
 // tests and alternate read adapters need not implement daemon-only operations.
 type schedulerStore interface {
 	ListDueAutomations(context.Context, time.Time, int64) ([]domain.Automation, error)
-	MaterializeAutomationRuns(context.Context, domain.AutomationID, time.Time, []domain.AutomationRun, time.Time, time.Time, time.Time) (bool, error)
+	MaterializeAutomationRun(context.Context, domain.AutomationID, time.Time, domain.AutomationRun, time.Time, time.Time) (bool, error)
 	ClaimNextAutomationRun(context.Context, time.Time, time.Time) (domain.AutomationRun, bool, error)
 	ListActiveAutomationRuns(context.Context) ([]domain.AutomationRun, error)
 	GetSessionByAutomationRunID(context.Context, domain.AutomationRunID) (domain.SessionRecord, bool, error)
@@ -42,7 +41,6 @@ type schedulerStore interface {
 	CompleteAutomationRun(context.Context, domain.AutomationRunID, time.Time) (bool, error)
 	FailAutomationRun(context.Context, domain.AutomationRunID, string, time.Time) (bool, error)
 	ReleaseAutomationRun(context.Context, domain.AutomationRunID, string, time.Time) (bool, error)
-	ListAutomationRuns(context.Context, domain.AutomationRunFilter) (domain.AutomationRunPage, error)
 }
 
 func (s *Service) schedulerStore() (schedulerStore, error) {
@@ -106,74 +104,24 @@ func (s *Service) materializeDefinition(ctx context.Context, store schedulerStor
 	if !definition.Enabled || definition.NextRunAt.After(now) {
 		return nil
 	}
-	// However many occurrences fell due, they coalesce into at most one
-	// pending run: an automation that is still busy, or whose daemon was
-	// down, owes one more run, not one per missed tick. Like a missed alarm,
-	// that run is for the most recent due occurrence; older ones are dropped.
-	last, err := PreviousOccurrence(definition.RRuleText, definition.Timezone, now)
+	// However many occurrences fell due, the automation owes one run, for the
+	// most recent of them; older ones are dropped. The store inserts that run,
+	// or moves a run already waiting to this time and skips any other waiting
+	// runs, in the same transaction that advances the schedule.
+	last, next, err := occurrencesAround(definition.RRuleText, definition.Timezone, now)
 	if err != nil {
 		return err
 	}
 	if last.Before(definition.NextRunAt) {
 		last = definition.NextRunAt.UTC()
 	}
-	occurrence, err := NextOccurrence(definition.RRuleText, definition.Timezone, now)
-	if err != nil {
-		return err
+	run := domain.AutomationRun{
+		ID: domain.AutomationRunID("automation-run-" + s.newID()), AutomationID: definition.ID,
+		ScheduledFor: last, Status: domain.AutomationRunPending,
+		CreatedAt: now, UpdatedAt: now,
 	}
-	waiting, err := s.coalescePendingRuns(ctx, store, definition.ID, now)
-	if err != nil {
-		return err
-	}
-	var runs []domain.AutomationRun
-	if !waiting {
-		runs = []domain.AutomationRun{{
-			ID: domain.AutomationRunID("automation-run-" + s.newID()), AutomationID: definition.ID,
-			ScheduledFor: last, Status: domain.AutomationRunPending,
-			CreatedAt: now, UpdatedAt: now,
-		}}
-	}
-	_, err = store.MaterializeAutomationRuns(ctx, definition.ID, definition.NextRunAt, runs, last, occurrence, now)
+	_, err = store.MaterializeAutomationRun(ctx, definition.ID, definition.NextRunAt, run, next, now)
 	return err
-}
-
-// coalescePendingRuns keeps only the oldest pending run of one automation and
-// marks any others as skipped. It reports whether a pending run remains, in
-// which case no new occurrence needs to be queued.
-func (s *Service) coalescePendingRuns(ctx context.Context, store schedulerStore, id domain.AutomationID, now time.Time) (bool, error) {
-	// Read every page before changing anything: skipping rows while paging
-	// would shift the offsets, and any extra left pending could be claimed
-	// before this automation falls due again.
-	status := domain.AutomationRunPending
-	filter := domain.AutomationRunFilter{AutomationID: id, Status: &status, Limit: pendingPageSize}
-	var pending []domain.AutomationRun
-	for {
-		page, err := store.ListAutomationRuns(ctx, filter)
-		if err != nil {
-			return false, err
-		}
-		pending = append(pending, page.Items...)
-		filter.Offset += int64(len(page.Items))
-		if len(page.Items) == 0 || filter.Offset >= page.Total {
-			break
-		}
-	}
-	if len(pending) == 0 {
-		return false, nil
-	}
-	sort.Slice(pending, func(i, j int) bool {
-		if !pending[i].ScheduledFor.Equal(pending[j].ScheduledFor) {
-			return pending[i].ScheduledFor.Before(pending[j].ScheduledFor)
-		}
-		return pending[i].ID < pending[j].ID
-	})
-	var problems []error
-	for _, extra := range pending[1:] {
-		if _, err := store.FailAutomationRun(ctx, extra.ID, skippedRunMessage, now); err != nil {
-			problems = append(problems, err)
-		}
-	}
-	return true, errors.Join(problems...)
 }
 
 func (s *Service) dispatch(ctx context.Context, store schedulerStore, run domain.AutomationRun, now time.Time) error {
@@ -222,7 +170,10 @@ func (s *Service) dispatch(ctx context.Context, store schedulerStore, run domain
 		_, releaseErr := store.ReleaseAutomationRun(context.WithoutCancel(ctx), run.ID, runError(spawnErr), now)
 		return errors.Join(spawnErr, releaseErr)
 	}
-	_, err = store.MarkAutomationRunRunning(context.WithoutCancel(ctx), run.ID, session.ID, now)
+	// Record the start after Spawn returns: by then the launch, including any
+	// after-start prompt delivery, has completed, so activity the agent reported
+	// before its prompt arrived cannot settle the run.
+	_, err = store.MarkAutomationRunRunning(context.WithoutCancel(ctx), run.ID, session.ID, s.clock().UTC())
 	return err
 }
 
@@ -267,8 +218,8 @@ func (s *Service) completeAndAdoptActive(ctx context.Context, store schedulerSto
 				_, lookupErr = store.MarkAutomationRunRunning(ctx, run.ID, session.ID, now)
 				if lookupErr != nil {
 					problems = append(problems, lookupErr)
-				} else if automationSessionSettled(session) {
-					if _, lookupErr = store.CompleteAutomationRun(ctx, run.ID, now); lookupErr != nil {
+				} else if automationSessionSettled(session, now) {
+					if lookupErr = s.finishSettledRun(ctx, store, run.ID, session, now); lookupErr != nil {
 						problems = append(problems, lookupErr)
 					}
 				}
@@ -304,13 +255,20 @@ func (s *Service) completeAndAdoptActive(ctx context.Context, store schedulerSto
 			}
 			continue
 		}
+		var startedAt time.Time
+		if run.StartedAt != nil {
+			startedAt = *run.StartedAt
+		}
 		if run.SessionID == nil {
 			if _, err := store.MarkAutomationRunRunning(ctx, run.ID, session.ID, now); err != nil {
 				problems = append(problems, err)
 			}
+			if startedAt.IsZero() {
+				startedAt = now
+			}
 		}
-		if automationSessionSettled(session) {
-			if _, err := store.CompleteAutomationRun(ctx, run.ID, now); err != nil {
+		if automationSessionSettled(session, startedAt) {
+			if err := s.finishSettledRun(ctx, store, run.ID, session, now); err != nil {
 				problems = append(problems, err)
 			}
 		}
@@ -320,34 +278,72 @@ func (s *Service) completeAndAdoptActive(ctx context.Context, store schedulerSto
 
 // automationSessionSettled reports whether a scheduled session has finished
 // the work it was launched for, which ends its run and lets the next
-// occurrence start. Terminating the session still counts, but so does the
-// agent settling on its own: idle after a turn, or exited. The session itself
-// stays open so its output can be read.
+// occurrence start. A terminated session has; otherwise the agent must be idle
+// after a turn, or exited, on a reading taken after the run started.
 //
-// A spawn is seeded idle before the agent reports anything, and an agent may
-// report idle once as it starts. Requiring a later reading than the first
-// signal means the agent has reported at least twice, so a run is not
-// completed before its prompt was ever worked on.
+// startedAt is when the launch, and its prompt delivery, completed. Readings
+// from before it come from the agent starting up (a seeded idle, a
+// SessionStart, an empty Stop before the prompt was pasted), not from working
+// on the prompt. Rows without a start time fall back to requiring a reading
+// later than the first signal.
 //
 // waiting_input and blocked keep the run: harnesses report tool-approval and
 // input requests as either (the chat controller and several terminal adapters
-// use waiting_input for approvals), so the agent is still mid-task and
-// starting the next occurrence would run two sessions at once. A finished
-// turn reports idle.
-func automationSessionSettled(session domain.SessionRecord) bool {
+// use waiting_input for approvals), so the agent is still mid-task.
+func automationSessionSettled(session domain.SessionRecord, startedAt time.Time) bool {
 	if session.IsTerminated {
 		return true
 	}
-	if session.ProvisionState.IsProvisioning() || session.FirstSignalAt.IsZero() ||
-		!session.Activity.LastActivityAt.After(session.FirstSignalAt) {
+	if session.ProvisionState.IsProvisioning() || session.FirstSignalAt.IsZero() {
 		return false
 	}
-	switch session.Activity.State {
-	case domain.ActivityIdle, domain.ActivityExited:
-		return true
-	default:
+	if state := session.Activity.State; state != domain.ActivityIdle && state != domain.ActivityExited {
 		return false
 	}
+	reading := session.Activity.LastActivityAt
+	if startedAt.IsZero() {
+		return reading.After(session.FirstSignalAt)
+	}
+	return reading.After(startedAt)
+}
+
+// finishSettledRun stops a settled session's agent and then completes its run.
+// Stopping it first keeps the non-overlap guarantee: a finished session left
+// running could start working again (a nudge, a queued message) beside the
+// next occurrence. When the agent cannot be stopped yet, the run stays running
+// and the next tick retries.
+func (s *Service) finishSettledRun(ctx context.Context, store schedulerStore, id domain.AutomationRunID, session domain.SessionRecord, now time.Time) error {
+	if !session.IsTerminated && session.HibernatedAt == nil {
+		stopped, err := s.stopSettledSession(ctx, session)
+		if err != nil || !stopped {
+			return err
+		}
+	}
+	_, err := store.CompleteAutomationRun(ctx, id, now)
+	return err
+}
+
+// stopSettledSession hibernates a Chat session, keeping its conversation
+// resumable, and kills a terminal one or a Chat session whose provider cannot
+// resume. Killing keeps the transcript and any uncommitted work; only a clean
+// worktree is removed.
+func (s *Service) stopSettledSession(ctx context.Context, session domain.SessionRecord) (bool, error) {
+	if s.spawner == nil {
+		return false, fmt.Errorf("cannot stop settled automation session %s: session spawner is unavailable", session.ID)
+	}
+	if domain.NormalizeSessionMode(session.Mode) == domain.SessionModeChat && session.Activity.State != domain.ActivityExited {
+		hibernated, err := s.spawner.HibernateChatForAutomation(ctx, session.ID)
+		if !errors.Is(err, ports.ErrChatHibernationUnsupported) {
+			if err != nil {
+				return false, fmt.Errorf("hibernate settled automation session %s: %w", session.ID, err)
+			}
+			return hibernated, nil
+		}
+	}
+	if _, err := s.spawner.Kill(ctx, session.ID); err != nil {
+		return false, fmt.Errorf("kill settled automation session %s: %w", session.ID, err)
+	}
+	return true, nil
 }
 
 func (s *Service) rollbackIncompleteLaunch(ctx context.Context, store schedulerStore, run domain.AutomationRun, session domain.SessionRecord, now time.Time) error {

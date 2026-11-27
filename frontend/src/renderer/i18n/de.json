@@ -5062,6 +5062,7 @@
 	"automations.runStatus.running": "Läuft",
 	"automations.runStatus.completed": "Abgeschlossen",
 	"automations.runStatus.failed": "Fehlgeschlagen",
+	"automations.runStatus.skipped": "Übersprungen",
 	"automations.summary.daily": "Täglich",
 	"automations.summary.dailyAt": "Täglich um {{time}}",
 	"automations.summary.weekdays": "Werktags",

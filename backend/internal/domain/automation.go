@@ -22,6 +22,9 @@ const (
 	AutomationRunCompleted AutomationRunStatus = "completed"
 	// AutomationRunFailed could not complete successfully.
 	AutomationRunFailed AutomationRunStatus = "failed"
+	// AutomationRunSkipped never ran: the scheduler merged it into a later
+	// occurrence of the same automation.
+	AutomationRunSkipped AutomationRunStatus = "skipped"
 )
 
 // Automation is the durable user-authored recurring definition. RRuleText is

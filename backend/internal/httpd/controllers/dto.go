@@ -2774,7 +2774,7 @@ type UpdateAutomationRequest struct {
 // AutomationRunSummaryResponse is the latest-run projection attached to a definition.
 type AutomationRunSummaryResponse struct {
 	ID           string     `json:"id"`
-	Status       string     `json:"status" enum:"pending,spawning,running,completed,failed"`
+	Status       string     `json:"status" enum:"pending,spawning,running,completed,failed,skipped"`
 	ScheduledFor time.Time  `json:"scheduledFor"`
 	SessionID    string     `json:"sessionId,omitempty"`
 	ErrorMessage string     `json:"errorMessage,omitempty"`
@@ -2822,7 +2822,7 @@ type AutomationRunResponse struct {
 	AutomationID   string     `json:"automationId"`
 	ScheduledFor   time.Time  `json:"scheduledFor"`
 	SessionID      string     `json:"sessionId,omitempty"`
-	Status         string     `json:"status" enum:"pending,spawning,running,completed,failed"`
+	Status         string     `json:"status" enum:"pending,spawning,running,completed,failed,skipped"`
 	AttemptCount   int64      `json:"attemptCount"`
 	ClaimedAt      *time.Time `json:"claimedAt,omitempty"`
 	LeaseExpiresAt *time.Time `json:"leaseExpiresAt,omitempty"`

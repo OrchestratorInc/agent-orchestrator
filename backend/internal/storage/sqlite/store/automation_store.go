@@ -145,22 +145,28 @@ func (s *Store) ListDueAutomations(ctx context.Context, now time.Time, limit int
 	return items, nil
 }
 
-// MaterializeAutomationRuns atomically inserts a bounded occurrence batch and
-// advances the definition cursor. expectedNext is a compare-and-swap fence
-// against stale or concurrent scheduler passes.
-func (s *Store) MaterializeAutomationRuns(
+// MaterializeAutomationRun advances the definition cursor and leaves exactly
+// one pending run owed for run.ScheduledFor, in one transaction. expectedNext
+// is a compare-and-swap fence against stale or concurrent scheduler passes.
+//
+// With no pending run, run is inserted. Otherwise the oldest pending run is
+// moved to run.ScheduledFor (keeping its ID) and any other pending runs are
+// marked skipped. Each update matches only rows still pending, and the claim
+// path shares this store's write lock, so a run a claim has taken is never
+// moved or skipped.
+func (s *Store) MaterializeAutomationRun(
 	ctx context.Context,
 	id domain.AutomationID,
 	expectedNext time.Time,
-	runs []domain.AutomationRun,
-	lastRunAt time.Time,
+	run domain.AutomationRun,
 	nextRunAt time.Time,
 	updatedAt time.Time,
 ) (bool, error) {
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()
 	applied := false
-	err := s.inTx(ctx, "materialize automation runs", func(q *gen.Queries) error {
+	err := s.inTx(ctx, "materialize automation run", func(q *gen.Queries) error {
+		lastRunAt := run.ScheduledFor
 		rows, err := q.AdvanceAutomationSchedule(ctx, gen.AdvanceAutomationScheduleParams{
 			LastRunAt: timePtrToNullTime(&lastRunAt), NextRunAt: nextRunAt,
 			UpdatedAt: updatedAt, ID: id, NextRunAt_2: expectedNext,
@@ -171,12 +177,35 @@ func (s *Store) MaterializeAutomationRuns(
 		if rows == 0 {
 			return nil
 		}
-		for _, run := range runs {
-			if _, err := q.InsertAutomationRun(ctx, automationRunToInsert(run)); err != nil {
+		applied = true
+		pending, err := q.ListPendingAutomationRunIDs(ctx, id)
+		if err != nil {
+			return err
+		}
+		if len(pending) == 0 {
+			_, err := q.InsertAutomationRun(ctx, automationRunToInsert(run))
+			return err
+		}
+		// A row already at this occurrence (in any status) owns the unique
+		// slot; leave the retained run where it is rather than collide.
+		if _, err := q.GetAutomationRunByOccurrence(ctx, gen.GetAutomationRunByOccurrenceParams{
+			AutomationID: id, ScheduledFor: run.ScheduledFor,
+		}); errors.Is(err, sql.ErrNoRows) {
+			if _, err := q.RescheduleAutomationRun(ctx, gen.RescheduleAutomationRunParams{
+				ScheduledFor: run.ScheduledFor, UpdatedAt: updatedAt, ID: pending[0],
+			}); err != nil {
+				return err
+			}
+		} else if err != nil {
+			return err
+		}
+		for _, extra := range pending[1:] {
+			if _, err := q.SkipAutomationRun(ctx, gen.SkipAutomationRunParams{
+				FinishedAt: timePtrToNullTime(&updatedAt), UpdatedAt: updatedAt, ID: extra,
+			}); err != nil {
 				return err
 			}
 		}
-		applied = true
 		return nil
 	})
 	if err != nil {

@@ -797,6 +797,7 @@ func (c chatLauncher) waitForPersistentHostReconcile(ctx context.Context) error 
 
 var _ interface {
 	HibernateChat(context.Context, domain.SessionID) (bool, error)
+	HibernateChatForAutomation(context.Context, domain.SessionID) (bool, error)
 } = chatLauncher{}
 
 var _ sessionmanager.ChatLauncher = chatLauncher{}
@@ -944,6 +945,10 @@ func (c chatLauncher) HibernateChat(ctx context.Context, id domain.SessionID) (b
 
 func (c chatLauncher) SwitchToInstalledRelease(ctx context.Context, id domain.SessionID, minIdle time.Duration) (bool, error) {
 	return c.svc.SwitchToInstalledRelease(ctx, id, minIdle)
+}
+
+func (c chatLauncher) HibernateChatForAutomation(ctx context.Context, id domain.SessionID) (bool, error) {
+	return c.svc.HibernateChatForAutomation(ctx, id)
 }
 
 func (c chatLauncher) HibernateChatForUpdate(ctx context.Context, id domain.SessionID) (bool, error) {
