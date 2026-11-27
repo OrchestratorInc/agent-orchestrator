@@ -485,7 +485,10 @@ func verifyCheckpointTranscript(ctx context.Context, input io.Reader, request po
 			}
 			submitted := ""
 			if found {
-				submitted, _ = claudecode.TypedPrompt(turns[index].user)
+				submitted = turns[index].user
+				if turns[index].notice {
+					submitted, _ = claudecode.TypedPrompt(submitted)
+				}
 				if text, ok := queuedTexts[submission]; ok {
 					submitted = text
 				}

@@ -84,32 +84,3 @@ func lastAssistantModelFromJSONL(data []byte) string {
 	}
 	return ""
 }
-
-// TypedPrompt shows a slash command as typed and drops its local output.
-func TypedPrompt(text string) (string, bool) {
-	trimmed := strings.TrimSpace(text)
-	if strings.HasPrefix(trimmed, "<local-command-stdout>") || strings.HasPrefix(trimmed, "<local-command-stderr>") {
-		return "", true
-	}
-	between := func(start, end string) string {
-		_, rest, ok := strings.Cut(trimmed, start)
-		value, _, _ := strings.Cut(rest, end)
-		if !ok {
-			return ""
-		}
-		return strings.TrimSpace(value)
-	}
-	// Claude writes a command record that starts with its tags; a prompt that
-	// merely quotes them is still a prompt.
-	if !strings.HasPrefix(trimmed, "<command-name>") && !strings.HasPrefix(trimmed, "<command-message>") {
-		return text, false
-	}
-	name := between("<command-name>", "</command-name>")
-	if name == "" {
-		return text, false
-	}
-	if args := between("<command-args>", "</command-args>"); args != "" {
-		name += " " + args
-	}
-	return name, true
-}

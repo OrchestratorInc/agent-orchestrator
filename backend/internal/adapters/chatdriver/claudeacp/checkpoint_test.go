@@ -252,12 +252,14 @@ func TestNativeCheckpointRejectsUnprovenAncestry(t *testing.T) {
 
 func TestNativeCheckpointSettlesDamagedTranscriptsAndSlashCommands(t *testing.T) {
 	command := "<command-message>review</command-message>\n<command-name>/review</command-name>\n<command-args>PR 12</command-args>"
+	quoted := "<command-name>/model</command-name> why is this in my log?"
 	source := checkpointFixture(t, []string{"A", "B"}, []string{"answer A", "answer B"})
 	lost := slices.DeleteFunc(strings.SplitAfter(source, "\n"), func(line string) bool { return strings.Contains(line, `"uuid":"assistant-0"`) })
 	for name, test := range map[string]struct{ transcript, typed, owner string }{
 		"blank lines":         {strings.Replace(source, "\n", "\n\n", 4), "B", "user-1"},
 		"lost parent record":  {strings.Join(lost, ""), "B", "user-1"},
 		"typed slash command": {checkpointFixture(t, []string{"A", command}, []string{"answer A", "answer B"}), "/review PR 12", "user-0"},
+		"prompt quoting tags": {checkpointFixture(t, []string{"A", quoted}, []string{"answer A", "answer B"}), quoted, "user-1"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			evidence := checkpointEvidence(
