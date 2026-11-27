@@ -27,6 +27,9 @@ func TestBuildServiceSpec(t *testing.T) {
 	if strings.Join(spec.Args, " ") != "/opt/ao serve --foreground --port 4000" {
 		t.Fatalf("args = %v", spec.Args)
 	}
+	if spec.Env["HOME"] != "/h" {
+		t.Fatalf("service env lacks HOME, so launchd would run with another home: %v", spec.Env)
+	}
 	if spec.Env["PATH"] != "/usr/bin" || spec.Env["AO_TELEMETRY_REMOTE"] != "off" {
 		t.Fatalf("service env lost PATH or the analytics choice: %v", spec.Env)
 	}
@@ -86,6 +89,7 @@ type serviceCall struct {
 
 func serviceTestDeps(calls *[]serviceCall, fail map[string]bool) Deps {
 	now := time.Unix(1000, 0)
+	bootedOut := map[string]bool{}
 	return Deps{
 		Executable:   func() (string, error) { return "/opt/ao/bin/ao", nil },
 		ProcessAlive: func(int) bool { return false },
@@ -99,12 +103,24 @@ func serviceTestDeps(calls *[]serviceCall, fail map[string]bool) Deps {
 			if fail[name+" "+args[0]] || (len(args) > 1 && fail[name+" "+args[0]+" "+args[1]]) {
 				return []byte("refused"), errors.New("exit status 1")
 			}
-			// launchd knows a label while our plist for it is installed.
-			if name == "launchctl" && args[0] == "print" {
-				home, _ := os.UserHomeDir()
-				label := args[1][strings.LastIndex(args[1], "/")+1:]
-				if _, err := os.Stat(filepath.Join(home, "Library", "LaunchAgents", label+".plist")); err != nil {
-					return []byte("Could not find service"), errors.New("exit status 113")
+			// launchd knows a label while our plist for it is installed and
+			// it has not been booted out since.
+			if name == "launchctl" {
+				label := args[len(args)-1]
+				if strings.HasSuffix(label, ".plist") {
+					label = strings.TrimSuffix(filepath.Base(label), ".plist")
+				}
+				label = label[strings.LastIndex(label, "/")+1:]
+				switch args[0] {
+				case "bootout":
+					bootedOut[label] = true
+				case "bootstrap":
+					delete(bootedOut, label)
+				case "print":
+					home, _ := os.UserHomeDir()
+					if _, err := os.Stat(filepath.Join(home, "Library", "LaunchAgents", label+".plist")); err != nil || bootedOut[label] {
+						return []byte("Could not find service"), errors.New("exit status 113")
+					}
 				}
 			}
 			return nil, nil
@@ -1130,5 +1146,102 @@ func TestServiceInstallFailsWhenDaemonNotReadyAtEnd(t *testing.T) {
 	_, _, err := executeCLI(t, deps, "service", "install")
 	if err == nil || !strings.Contains(err.Error(), "service installed, but the daemon is") {
 		t.Fatalf("err = %v, want install to report the daemon is no longer ready", err)
+	}
+}
+
+// Uninstall returns only once launchd has removed the job, so an install
+// right after does not see the label as loaded from somewhere else.
+func TestServiceLaunchdUninstallWaitsForJobToGo(t *testing.T) {
+	setConfigEnv(t)
+	setServiceHome(t)
+	old := serviceGOOS
+	serviceGOOS = "darwin"
+	t.Cleanup(func() { serviceGOOS = old })
+	var calls []serviceCall
+	if _, _, err := executeCLI(t, serviceTestDeps(&calls, nil), "service", "install", "--no-wait"); err != nil {
+		t.Fatal(err)
+	}
+	deps := serviceTestDeps(&calls, nil)
+	inner := deps.CommandOutput
+	lingering := 0
+	deps.CommandOutput = func(ctx context.Context, name string, args ...string) ([]byte, error) {
+		if args[0] == "bootout" {
+			lingering = 3 // launchd still lists the job for a few polls
+		}
+		if args[0] == "print" && lingering > 0 {
+			lingering--
+			return nil, nil
+		}
+		return inner(ctx, name, args...)
+	}
+	if _, _, err := executeCLI(t, deps, "service", "uninstall"); err != nil {
+		t.Fatal(err)
+	}
+	if lingering != 0 {
+		t.Fatalf("uninstall returned while launchd still listed the job (%d polls left)", lingering)
+	}
+	if _, _, err := executeCLI(t, serviceTestDeps(&calls, nil), "service", "install", "--no-wait"); err != nil {
+		t.Fatalf("install right after uninstall failed: %v", err)
+	}
+}
+
+// The default data dir and run file, however they are spelled, name the main
+// service; symlinked spellings of one path name one service.
+func TestServiceNameForDefaultAndSymlinkedPaths(t *testing.T) {
+	setConfigEnv(t)
+	setServiceHome(t)
+	old := serviceGOOS
+	serviceGOOS = "darwin"
+	t.Cleanup(func() { serviceGOOS = old })
+	home, _ := os.UserHomeDir()
+	var calls []serviceCall
+	c := &commandContext{deps: serviceTestDeps(&calls, nil).withDefaults()}
+	t.Setenv("AO_DATA_DIR", filepath.Join(home, ".ao", "data"))
+	t.Setenv("AO_RUN_FILE", filepath.Join(home, ".ao", "running.json"))
+	spec, err := c.currentServiceSpec(0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if spec.Name != serviceLaunchdLabel {
+		t.Fatalf("default paths gave %q, want the main %q", spec.Name, serviceLaunchdLabel)
+	}
+	if runtime.GOOS == "windows" {
+		return
+	}
+	target := filepath.Join(t.TempDir(), "state")
+	if err := os.MkdirAll(target, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(t.TempDir(), "link")
+	if err := os.Symlink(target, link); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("AO_RUN_FILE", "")
+	t.Setenv("AO_DATA_DIR", target)
+	a, _ := c.currentServiceSpec(0)
+	t.Setenv("AO_DATA_DIR", link)
+	b, _ := c.currentServiceSpec(0)
+	if a.Name != b.Name || a.Name == serviceLaunchdLabel {
+		t.Fatalf("one data dir via a symlink gave %q and %q", a.Name, b.Name)
+	}
+}
+
+// Install refuses a daemon that does not report its data dir, as serve does.
+func TestServiceInstallRefusesDaemonWithUnknownDataDir(t *testing.T) {
+	cfg := setConfigEnv(t)
+	setServiceHome(t)
+	old := serviceGOOS
+	serviceGOOS = "darwin"
+	t.Cleanup(func() { serviceGOOS = old })
+	srv := fakeServeDaemonIn(t, 4242, "")
+	if err := runfile.Write(cfg.runFile, runfile.Info{PID: 4242, Port: serverPort(t, srv.URL), StartedAt: time.Unix(100, 0).UTC()}); err != nil {
+		t.Fatal(err)
+	}
+	var calls []serviceCall
+	deps := serviceTestDeps(&calls, nil)
+	deps.ProcessAlive = func(pid int) bool { return pid == 4242 }
+	_, _, err := executeCLI(t, deps, "service", "install", "--no-wait")
+	if err == nil || !strings.Contains(err.Error(), "does not report its data dir") {
+		t.Fatalf("err = %v, want the same refusal as ao serve", err)
 	}
 }

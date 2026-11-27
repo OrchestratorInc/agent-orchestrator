@@ -11,7 +11,7 @@ import (
 	"strings"
 )
 
-// SessionVars are exported by Orchestrator, or by Claude Code, into the shell
+// SessionVars are exported by Orchestrator, or by the calling coding agent, into the shell
 // of an agent session, a reviewer, a side chat, or a session terminal tab.
 var SessionVars = []string{
 	"AO_SESSION_ID",
@@ -90,12 +90,13 @@ var callerSessionVars = []string{
 	"CLAUDE_CODE_SDK_HAS_HOST_AUTH_REFRESH",
 }
 
-// claudeUserSettings are CLAUDE_* variables a user sets for every Claude Code
-// run (model provider, credentials, network and output limits). When the
-// caller is itself a Claude Code session, every other CLAUDE_* variable is that
-// host session's own state or the settings its host app applied to it (tool
-// lists, effort, feature switches), so ScrubForDaemon drops them.
-var claudeUserSettings = map[string]bool{
+// callerUserSettings are CLAUDE_* variables a user sets for every run of the
+// coding agent that reads them (model provider, credentials, network and
+// output limits, privacy choices). When the caller is itself a session of
+// that agent (CLAUDECODE set), every other CLAUDE_* variable is that host
+// session's own state or the settings its host app applied to it (tool lists,
+// effort, feature switches), so ScrubForDaemon drops them.
+var callerUserSettings = map[string]bool{
 	"CLAUDE_CODE_USE_BEDROCK":                  true,
 	"CLAUDE_CODE_USE_VERTEX":                   true,
 	"CLAUDE_CODE_USE_FOUNDRY":                  true,
@@ -135,10 +136,11 @@ var daemonConfigVars = map[string]bool{
 
 // ScrubForDaemon returns env ("KEY=value" entries) without the variables of
 // the session or coding agent it was taken from, keeping the daemon's own
-// configuration. When the caller is a Claude Code session (CLAUDECODE set), it
-// also drops that session's CLAUDE_* settings except claudeUserSettings; from
-// a plain shell, CLAUDE_* user settings are kept. Use it for the environment of a daemon started from a shell
-// that may be an agent's.
+// configuration. When the caller is a coding-agent session that sets
+// CLAUDECODE, it also drops that session's CLAUDE_* settings except
+// callerUserSettings; from a plain shell, CLAUDE_* user settings are kept. Use
+// it for the environment of a daemon started from a shell that may be an
+// agent's.
 func ScrubForDaemon(env []string) []string {
 	drop := map[string]bool{}
 	for _, k := range SessionVars {
@@ -152,10 +154,10 @@ func ScrubForDaemon(env []string) []string {
 	for _, k := range callerSessionVars {
 		drop[k] = true
 	}
-	insideClaude := false
+	callerIsAgentSession := false
 	for _, kv := range env {
 		if k, v, _ := strings.Cut(kv, "="); NormalizeKey(k) == "CLAUDECODE" && v != "" {
-			insideClaude = true
+			callerIsAgentSession = true
 		}
 	}
 	out := make([]string, 0, len(env))
@@ -165,7 +167,7 @@ func ScrubForDaemon(env []string) []string {
 		if drop[k] || hasCallerSessionPrefix(k) {
 			continue
 		}
-		if insideClaude && strings.HasPrefix(k, "CLAUDE") && !claudeUserSettings[k] {
+		if callerIsAgentSession && strings.HasPrefix(k, "CLAUDE") && !callerUserSettings[k] {
 			continue
 		}
 		out = append(out, kv)

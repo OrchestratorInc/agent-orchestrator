@@ -861,3 +861,60 @@ func TestAbsoluteStatePaths(t *testing.T) {
 		t.Fatalf("absoluteStatePaths = %v, want %v", got, want)
 	}
 }
+
+// When a concurrent serve wins the start, the loser's child (still waiting
+// on the data-dir lock) is killed and reaped, so it cannot become a second
+// daemon once the winner stops.
+func TestServeKillsLosingChildAfterConcurrentWin(t *testing.T) {
+	cfg := setConfigEnv(t)
+	srv := fakeServeDaemon(t, 5151)
+	exited := make(chan error, 1)
+	killed := false
+	out, _, err := executeCLI(t, Deps{
+		Executable:   func() (string, error) { return "/opt/ao/bin/ao", nil },
+		ProcessAlive: func(pid int) bool { return pid == 5151 },
+		StartDetached: func(processStartConfig) (startedProcess, error) {
+			if err := runfile.Write(cfg.runFile, runfile.Info{PID: 5151, Port: serverPort(t, srv.URL), StartedAt: time.Unix(100, 0).UTC()}); err != nil {
+				t.Fatal(err)
+			}
+			return startedProcess{PID: 9, Exited: exited, Kill: func() error {
+				killed = true
+				exited <- errors.New("signal: killed")
+				return nil
+			}}, nil
+		},
+	}, "serve", "--json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res := decodeServeResult(t, out); res.PID != 5151 {
+		t.Fatalf("result = %#v, want the winner", res)
+	}
+	if !killed {
+		t.Fatal("the losing child was left running")
+	}
+}
+
+// A requested port the daemon could not bind is reported, not silent.
+func TestServeWarnsWhenRequestedPortIsTaken(t *testing.T) {
+	cfg := setConfigEnv(t)
+	srv := fakeServeDaemon(t, 5151)
+	got := serverPort(t, srv.URL)
+	_, errOut, err := executeCLI(t, Deps{
+		Executable:   func() (string, error) { return "/opt/ao/bin/ao", nil },
+		ProcessAlive: func(pid int) bool { return pid == 5151 },
+		StartDetached: func(processStartConfig) (startedProcess, error) {
+			// The daemon fell back to another port and recorded it.
+			if err := runfile.Write(cfg.runFile, runfile.Info{PID: 5151, Port: got, StartedAt: time.Unix(100, 0).UTC()}); err != nil {
+				t.Fatal(err)
+			}
+			return startedProcess{PID: 5151, Exited: make(chan error)}, nil
+		},
+	}, "serve", "--port", fmt.Sprint(got+1))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(errOut, fmt.Sprintf("port %d was not available; the daemon is serving on port %d", got+1, got)) {
+		t.Fatalf("stderr = %q, want a port fallback warning", errOut)
+	}
+}

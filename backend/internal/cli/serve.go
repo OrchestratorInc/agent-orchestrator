@@ -65,6 +65,8 @@ type serveResult struct {
 type startedProcess struct {
 	PID    int
 	Exited <-chan error
+	// Kill stops the child; nil when the starter cannot.
+	Kill func() error
 }
 
 func newServeCommand(ctx *commandContext) *cobra.Command {
@@ -158,7 +160,30 @@ func (c *commandContext) serve(ctx context.Context, out, errOut io.Writer, opts 
 	if err != nil {
 		return nil, fmt.Errorf("start daemon: %w", err)
 	}
-	return c.waitServeReady(ctx, cfg, child.PID, child.Exited, opts.timeout, false, nil)
+	res, err := c.waitServeReady(ctx, cfg, child.PID, child.Exited, opts.timeout, false, nil)
+	if res != nil && res.PID != child.PID {
+		// A concurrent serve won the start. Our child is waiting on the
+		// data-dir lock and would take over the moment the winner stops,
+		// so stop and reap it.
+		stopLosingChild(child)
+	}
+	if res != nil && opts.port != 0 && res.Port != opts.port && res.PID == child.PID {
+		_, _ = fmt.Fprintf(errOut, "warning: port %d was not available; the daemon is serving on port %d\n", opts.port, res.Port)
+	}
+	return res, err
+}
+
+// stopLosingChild kills a started daemon that lost a concurrent start and
+// waits briefly for it to exit, so it cannot become a second daemon later.
+func stopLosingChild(child startedProcess) {
+	if child.Kill == nil {
+		return
+	}
+	_ = child.Kill()
+	select {
+	case <-child.Exited:
+	case <-time.After(5 * time.Second):
+	}
 }
 
 // existingDaemon returns the daemon that already serves this data dir, or

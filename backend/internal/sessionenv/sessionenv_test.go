@@ -57,12 +57,13 @@ func TestScrubForDaemonCaseInsensitiveOnWindows(t *testing.T) {
 	}
 }
 
-// Inside a Claude Code session, the host's per-session CLAUDE_* settings go;
+// Inside a session of the calling agent (CLAUDECODE set), the host's
+// per-session CLAUDE_* settings go;
 // documented user settings stay. Outside one, CLAUDE_* settings are the user's.
-func TestScrubForDaemonClaudeHostSettings(t *testing.T) {
+func TestScrubForDaemonCallerHostSettings(t *testing.T) {
 	host := []string{"CLAUDECODE=1", "CLAUDE_CODE_TERMINAL_MCP_TOOLS=x", "CLAUDE_CODE_SIMPLE=0", "CLAUDE_EFFORT=medium", "CLAUDE_PREVIEW_CLASSIFIER_FLOOR=1", "CLAUDE_CODE_USE_BEDROCK=1", "CLAUDE_CONFIG_DIR=/c", "CLAUDE_CODE_OAUTH_TOKEN=tok", "CLAUDE_CODE_SKIP_PROMPT_HISTORY=1", "PATH=/bin"}
 	if got, want := ScrubForDaemon(host), []string{"CLAUDE_CODE_USE_BEDROCK=1", "CLAUDE_CONFIG_DIR=/c", "CLAUDE_CODE_OAUTH_TOKEN=tok", "CLAUDE_CODE_SKIP_PROMPT_HISTORY=1", "PATH=/bin"}; !slices.Equal(got, want) {
-		t.Fatalf("inside Claude Code: %v, want %v", got, want)
+		t.Fatalf("inside an agent session: %v, want %v", got, want)
 	}
 	plain := []string{"CLAUDE_CODE_DISABLE_TERMINAL_TITLE=1", "CLAUDE_EFFORT=high", "PATH=/bin"}
 	if got := ScrubForDaemon(plain); !slices.Equal(got, plain) {

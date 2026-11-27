@@ -43,5 +43,5 @@ func startDetachedProcess(cfg processStartConfig) (startedProcess, error) {
 	}
 	exited := make(chan error, 1)
 	go func() { exited <- cmd.Wait() }()
-	return startedProcess{PID: cmd.Process.Pid, Exited: exited}, nil
+	return startedProcess{PID: cmd.Process.Pid, Exited: exited, Kill: cmd.Process.Kill}, nil
 }

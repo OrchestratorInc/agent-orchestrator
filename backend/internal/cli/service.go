@@ -46,7 +46,7 @@ var serviceGOOS = runtime.GOOS
 // serviceEnvKeys are carried from the installing shell into the service, so
 // the daemon finds the same agents, state and analytics choice it would when
 // started by hand. launchd and systemd start services with a minimal PATH.
-var serviceEnvKeys = []string{"PATH", "AO_DATA_DIR", "AO_RUN_FILE", "AO_PORT", "DO_NOT_TRACK"}
+var serviceEnvKeys = []string{"HOME", "PATH", "AO_DATA_DIR", "AO_RUN_FILE", "AO_PORT", "DO_NOT_TRACK"}
 
 var errServiceUnsupported = errors.New("`ao service` is not supported on this platform yet; run `ao serve` from a startup task instead")
 
@@ -275,13 +275,39 @@ func (c *commandContext) currentServiceSpec(port int) (serviceSpec, error) {
 	if err != nil {
 		return serviceSpec{}, err
 	}
-	if env["AO_DATA_DIR"] != "" {
-		env["AO_DATA_DIR"] = dataDir
-	}
-	if env["AO_RUN_FILE"] != "" {
-		env["AO_RUN_FILE"] = runFile
+	// Canonical paths (absolute, symlinks resolved), so /tmp and
+	// /private/tmp name one service; the defaults name the main one.
+	env["HOME"] = home
+	for key, value := range map[string][2]string{
+		"AO_DATA_DIR": {dataDir, filepath.Join(home, ".ao", "data")},
+		"AO_RUN_FILE": {runFile, filepath.Join(home, ".ao", "running.json")},
+	} {
+		if env[key] == "" {
+			continue
+		}
+		path, def := canonicalPath(value[0]), canonicalPath(value[1])
+		if path == def {
+			delete(env, key)
+		} else {
+			env[key] = path
+		}
 	}
 	return buildServiceSpec(serviceGOOS, home, exe, env, port)
+}
+
+// canonicalPath makes p absolute and resolves symlinks in it, or in its
+// directory when p itself does not exist yet.
+func canonicalPath(p string) string {
+	if abs, err := filepath.Abs(p); err == nil {
+		p = abs
+	}
+	if r, err := filepath.EvalSymlinks(p); err == nil {
+		return r
+	}
+	if dir, err := filepath.EvalSymlinks(filepath.Dir(p)); err == nil {
+		return filepath.Join(dir, filepath.Base(p))
+	}
+	return filepath.Clean(p)
 }
 
 // renderLaunchdPlist renders a launchd user agent. KeepAlive restarts the
@@ -430,7 +456,7 @@ func (c *commandContext) serviceInstall(ctx context.Context, opts serviceOptions
 	if err != nil {
 		return serviceStatus{}, err
 	}
-	if (before.State == stateReady || before.State == stateNotReady) && before.workingDirectory != "" {
+	if before.State == stateReady || before.State == stateNotReady {
 		// The run file may name a daemon for another data dir, as when only
 		// AO_DATA_DIR changed: the service's serve would refuse it.
 		_, dataDir, _, err := config.ResolvePaths()
@@ -958,6 +984,19 @@ func (c *commandContext) serviceUninstall(ctx context.Context) (serviceStatus, e
 		if loaded {
 			if err := c.serviceCmd(ctx, "launchctl", "bootout", launchdDomain()+"/"+spec.Name); err != nil {
 				return serviceStatus{}, err
+			}
+			// bootout returns before launchd has removed the job; an install
+			// right after would see the label still loaded.
+			deadline := c.deps.Now().Add(launchdServiceGoneWait)
+			for {
+				still, err := c.launchdJobLoaded(ctx, spec)
+				if err == nil && !still {
+					break
+				}
+				if !c.deps.Now().Before(deadline) {
+					return serviceStatus{}, fmt.Errorf("launchd still lists %s %s after bootout; %s was kept so uninstall can be retried", spec.Name, launchdServiceGoneWait, spec.File)
+				}
+				c.deps.Sleep(250 * time.Millisecond)
 			}
 		}
 	case serviceManagerSystemd:
