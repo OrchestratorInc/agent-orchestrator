@@ -270,9 +270,19 @@ describe("board actions on cloud rows", () => {
 		const listSessions = vi.fn(async () => ({ items: [session({ id: "o9", kind: "orchestrator" })], page: { hasMore: false } }));
 		const ctx = context({ sessions: [] }, { createSession: createSession as never, listSessions: listSessions as never });
 		const link = await launchCloudOrchestrator(ctx, "p1", "chat");
-		expect(listSessions).toHaveBeenCalledWith("o", { projectId: "p1" });
+		expect(listSessions).toHaveBeenCalledWith("o", { projectId: "p1", cursor: undefined });
 		expect(link).toMatchObject({ id: "o9", projectName: "web" });
 		expect(ctx.upsertSession).toHaveBeenCalledWith(expect.objectContaining({ id: "o9" }));
+	});
+
+	it("looks past the first page for the orchestrator a stale listing missed", async () => {
+		const createSession = vi.fn(async () => { throw new CloudError("The resource conflicts with an existing record.", { status: 409, code: "conflict" }); });
+		const listSessions = vi.fn(async (_org: string, list: { cursor?: string }) => list.cursor === "page2"
+			? { items: [session({ id: "o9", kind: "orchestrator" })], page: { hasMore: false } }
+			: { items: [session({ id: "w1" })], page: { hasMore: true, nextCursor: "page2" } });
+		const link = await launchCloudOrchestrator(context({ sessions: [] }, { createSession: createSession as never, listSessions: listSessions as never }), "p1", "chat");
+		expect(listSessions).toHaveBeenCalledWith("o", { projectId: "p1", cursor: "page2" });
+		expect(link.id).toBe("o9");
 	});
 
 	it("still reports a conflict it cannot explain with a live orchestrator", async () => {

@@ -1,6 +1,6 @@
 import type { DashboardSession, OrchestratorLink, SessionMode } from "../api";
 import { cloudAgentLabel, cloudTaskTitle, defaultCloudAgent } from "./agents";
-import type { CloudClient } from "./client";
+import { collectPages, type CloudClient } from "./client";
 import { CloudError, cloudErrorMessage } from "./errors";
 import { cloudOrchestratorLink, cloudSessionRow, cloudStandaloneAgentRow } from "./mapping";
 import type { CloudApprovalMode, CloudOrganization, CloudProject, CloudProviderConnection, CloudSession, CreateCloudSessionInput, CreateCloudStandaloneAgentInput } from "./types";
@@ -170,7 +170,8 @@ async function launchOrchestrator(context: CloudActionContext, projectId: string
 		// The listing was behind: the project got an orchestrator since it was
 		// read (from the desktop, say). Open that one instead.
 		if (!(cause instanceof CloudError && cause.status === 409 && cause.code === "conflict")) throw cause;
-		const { items } = await context.client.listSessions(orgId, { projectId }).catch(() => ({ items: [] as CloudSession[] }));
+		// Pinned and recently updated sessions come first, so the orchestrator may be on a later page.
+		const items = await collectPages((cursor) => context.client.listSessions(orgId, { projectId, cursor }), 5).catch(() => [] as CloudSession[]);
 		const found = liveOrchestrator(items, projectId);
 		if (!found) throw cause;
 		context.upsertSession(found);
