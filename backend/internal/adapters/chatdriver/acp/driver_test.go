@@ -60,6 +60,13 @@ func TestPersistentACPProviderHelper(t *testing.T) {
 		return
 	}
 	scanner := bufio.NewScanner(os.Stdin)
+	if os.Getenv("AO_TEST_PERSISTENT_ACP_CRASH_ON_INITIALIZE") == "1" {
+		// Mirrors an adapter whose runtime dies on startup: it accepts the
+		// initialize request, explains itself only on stderr, and exits.
+		scanner.Scan()
+		_, _ = fmt.Fprintln(os.Stderr, "Error: Cannot find module '@anthropic-ai/claude-agent-sdk'")
+		os.Exit(3)
+	}
 	var parkedPromptID json.RawMessage
 	promptCount := 0
 	for scanner.Scan() {
