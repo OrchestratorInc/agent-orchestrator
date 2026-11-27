@@ -10,6 +10,7 @@ import (
 
 	"golang.org/x/sync/errgroup"
 
+	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/hookutil"
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/apierr"
 )
@@ -357,7 +358,7 @@ func scratchWorkspaceTreeChildren(root, dir string) ([]WorkspaceTreeEntry, bool,
 		}
 		return nil, false, err
 	}
-	managed := scratchAOManagedNamesIn(targetResolved)
+	managed := hookutil.ManagedNamesIn(targetResolved)
 	entries := make([]WorkspaceTreeEntry, 0, len(dirEntries))
 	truncated := false
 	for _, entry := range dirEntries {
@@ -374,7 +375,7 @@ func scratchWorkspaceTreeChildren(root, dir string) ([]WorkspaceTreeEntry, bool,
 			rel = dir + "/" + name
 		}
 		fullPath := filepath.Join(targetResolved, name)
-		if _, hidden := managed[name]; hidden {
+		if managed.Match(name) {
 			continue
 		}
 		if entry.Type()&os.ModeSymlink != 0 {
