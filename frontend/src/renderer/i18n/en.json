@@ -2275,6 +2275,7 @@
 	"settings.harness.endpoint.apiKey": "API key",
 	"settings.harness.endpoint.apiKeyPlaceholder": "Paste your API key",
 	"settings.harness.endpoint.apiKeyKeep": "Leave blank to keep the saved key",
+	"settings.harness.endpoint.apiKeyNewHost": "Enter the API key for the new host",
 	"settings.harness.endpoint.storageNote": "Stored in Orchestrator's data folder on the host that runs these sessions, readable only by its owner account. The key is never shown again.",
 	"settings.harness.endpoint.save": "Save",
 	"settings.harness.endpoint.remove": "Remove",

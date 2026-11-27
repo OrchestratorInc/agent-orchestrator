@@ -3443,6 +3443,7 @@
 	"settings.harness.endpoint.apiKey": "Clave de API",
 	"settings.harness.endpoint.apiKeyPlaceholder": "Pega tu clave de API",
 	"settings.harness.endpoint.apiKeyKeep": "Déjalo en blanco para conservar la clave guardada",
+	"settings.harness.endpoint.apiKeyNewHost": "Introduce la clave de API para el nuevo host",
 	"settings.harness.endpoint.storageNote": "Se guarda en la carpeta de datos de Orchestrator del host que ejecuta estas sesiones y solo la puede leer su cuenta propietaria. La clave no se vuelve a mostrar.",
 	"settings.harness.endpoint.save": "Guardar",
 	"settings.harness.endpoint.remove": "Quitar",

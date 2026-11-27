@@ -231,3 +231,33 @@ func TestSetEndpointRejectsAKeyTheEndpointRefuses(t *testing.T) {
 		t.Fatalf("a refused key must not invalidate readiness: %v", resolver.invalidated)
 	}
 }
+
+// Moving a saved endpoint to another host without entering the key again is
+// refused before any request, so the saved key never reaches the new host.
+func TestSetEndpointNeverSendsTheSavedKeyToANewHost(t *testing.T) {
+	t.Parallel()
+	saved := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(`{"data":[{"id":"m"}]}`))
+	}))
+	t.Cleanup(saved.Close)
+	var reached atomic.Int32
+	other := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		reached.Add(1)
+		w.WriteHeader(http.StatusOK)
+	}))
+	t.Cleanup(other.Close)
+	svc, _ := newEndpointService(t)
+	svc.endpointProbeClient = saved.Client()
+	if _, err := svc.SetEndpoint(context.Background(), "claude-code", harnessendpoint.Input{BaseURL: saved.URL, APIKey: "sk-saved"}); err != nil {
+		t.Fatalf("SetEndpoint: %v", err)
+	}
+
+	_, err := svc.SetEndpoint(context.Background(), "claude-code", harnessendpoint.Input{BaseURL: other.URL})
+	var apiErr *apierr.Error
+	if !errors.As(err, &apiErr) || apiErr.Code != "AGENT_ENDPOINT_INVALID" || reached.Load() != 0 {
+		t.Fatalf("SetEndpoint to another host = %v after %d requests there, want AGENT_ENDPOINT_INVALID and none", err, reached.Load())
+	}
+	if status := claudePlan(t, svc).CustomEndpoint; status == nil || status.BaseURL != saved.URL {
+		t.Fatalf("CustomEndpoint = %+v, want the saved endpoint unchanged", status)
+	}
+}

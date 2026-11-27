@@ -130,9 +130,12 @@ func TestProbeTargetKeepsTheSavedStyleForTheSameEndpoint(t *testing.T) {
 	if err != nil || !ok || target.Key != "sk-saved" || target.SavedStyle != AuthAPIKey || target.SavedModel != "glm-5" {
 		t.Fatalf("same endpoint: target = %+v, ok = %v, err = %v; want the saved key and style", target.SavedStyle, ok, err)
 	}
-	target, ok, err = store.ProbeTarget("claude-code", Input{BaseURL: "https://other.example.com"})
+	target, ok, err = store.ProbeTarget("claude-code", Input{BaseURL: "https://gateway.example.com/anthropic"})
 	if err != nil || !ok || target.Key != "sk-saved" || target.SavedStyle != "" || target.SavedModel != "" {
-		t.Fatalf("new URL: style = %q, ok = %v, err = %v; want the saved key probed again", target.SavedStyle, ok, err)
+		t.Fatalf("new path: style = %q, ok = %v, err = %v; want the saved key probed again", target.SavedStyle, ok, err)
+	}
+	if _, _, err := store.ProbeTarget("claude-code", Input{BaseURL: "https://other.example.com"}); err == nil {
+		t.Fatal("another host must not be probed with the saved key")
 	}
 	target, ok, err = store.ProbeTarget("claude-code", Input{BaseURL: "https://gateway.example.com", APIKey: "sk-new"})
 	if err != nil || !ok || target.Key != "sk-new" || target.SavedStyle != "" || target.SavedModel != "glm-5" {

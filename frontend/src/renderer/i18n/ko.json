@@ -3373,6 +3373,7 @@
 	"settings.harness.endpoint.apiKey": "API 키",
 	"settings.harness.endpoint.apiKeyPlaceholder": "API 키 붙여넣기",
 	"settings.harness.endpoint.apiKeyKeep": "저장된 키를 유지하려면 비워 두세요",
+	"settings.harness.endpoint.apiKeyNewHost": "새 호스트의 API 키 입력",
 	"settings.harness.endpoint.storageNote": "이 세션을 실행하는 호스트의 Orchestrator 데이터 폴더에 저장되며 소유자 계정만 읽을 수 있습니다. 키는 다시 표시되지 않습니다.",
 	"settings.harness.endpoint.save": "저장",
 	"settings.harness.endpoint.remove": "제거",
