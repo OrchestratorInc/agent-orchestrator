@@ -1,7 +1,7 @@
 import type { ApprovalMode, ChatConfigChoice, ChatConfigOption, ChatModel, ConversationSnapshot, TurnSettings } from "./types";
 import { can } from "./types";
 import { approvalChoiceCopy, approvalCopy, approvalOrder } from "./approvalCopy";
-import { displayConfigOptions, isFastOption, isModeOption, optionIsEnabled, partitionConfigOptions, toggleValue } from "../../../shared/chat/config-options";
+import { displayConfigOptions, executionChoiceValues, isFastOption, isModeOption, optionIsEnabled, partitionConfigOptions, toggleValue } from "../../../shared/chat/config-options";
 import { agentModelDisplayLabel, isDefaultPlaceholderLabel } from "../../../shared/models/agent-model-choices";
 import { FAST_MODE_SHOWN } from "./fastMode";
 
@@ -279,7 +279,7 @@ export function turnSettingsRows(snapshot: ConversationSnapshot, models: ChatMod
 	// copy); a mode option offering only execution modes (OpenCode's build and
 	// plan) is a setting, and AO's Approvals row stays.
 	const modeOption = options.find((option) => isModeOption(option) && isPermissionModeOption(option));
-	if (modeOption) rows.push(providerRow(harness === "agy" ? shown.find((option) => option.id === modeOption.id) ?? modeOption : modeOption, "permissions", false));
+	if (modeOption) rows.push(providerRow(permissionModes(harness === "agy" ? shown.find((option) => option.id === modeOption.id) ?? modeOption : modeOption), "permissions", false));
 	if (grouped.executionMode && !modeOption) rows.push(providerRow(grouped.executionMode, "other", false));
 	// What is left: a second model or effort, and anything else the agent offers.
 	for (const option of [...otherModels, ...otherEfforts, ...grouped.extra]) rows.push(providerRow(option, "other", false));
@@ -370,6 +370,21 @@ function providerRow(option: ChatConfigOption, kind: ProviderTurnControlKind, fo
 		target: { kind: "option", optionId: option.id },
 		providerKind: kind,
 	};
+}
+
+/**
+ * The permission picker's choices: the modes the daemon maps to one of AO's
+ * permission modes. Execution modes (Claude's Plan Mode, OpenCode's build and
+ * plan) and modes AO cannot name (Claude's Don't Ask) are left out. An agent
+ * that maps none of its modes keeps its own, less the execution modes; a mode
+ * the chat is in stays, so the picker never shows none selected.
+ */
+function permissionModes(option: ChatConfigOption): ChatConfigOption {
+	const execution = executionChoiceValues(option.choices);
+	const mapped = option.choices.some((choice) => choice.permissionMode);
+	const choices = option.choices.filter((choice) => choice.value === option.currentValue
+		|| (!execution.has(choice.value) && (!mapped || Boolean(choice.permissionMode))));
+	return choices.length === option.choices.length ? option : { ...option, choices };
 }
 
 /** The other ids a choice stands for, when one model was listed under two. */

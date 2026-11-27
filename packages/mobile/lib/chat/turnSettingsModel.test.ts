@@ -707,3 +707,33 @@ describe("each agent's settings", () => {
 		expect(rows.find((row) => turnSettingTopic(row) === "effort")?.choices.map((choice) => choice.label)).toEqual(["Low", "High"]);
 	});
 });
+
+// The permission picker lists the modes AO can name: no Plan Mode (an execution
+// mode) and no Don't Ask (no AO permission mode), unless the chat is in one.
+describe("the permission picker's modes", () => {
+	const claudeModes = (currentValue: string): ChatConfigOption[] => [{
+		id: "mode", name: "Mode", category: "mode", type: "select", currentValue, choices: [
+			{ value: "auto", name: "Auto", permissionMode: "auto" },
+			{ value: "default", name: "Manual", permissionMode: "default" },
+			{ value: "acceptEdits", name: "Accept Edits", permissionMode: "accept-edits" },
+			{ value: "plan", name: "Plan Mode" },
+			{ value: "dontAsk", name: "Don't Ask" },
+			{ value: "bypassPermissions", name: "Bypass Permissions", permissionMode: "bypass-permissions" },
+		],
+	}];
+	const modes = (options: ChatConfigOption[], harness = "claude-code") =>
+		turnSettingsRows(snapshot({ harness }), [], options).find((row) => turnSettingTopic(row) === "permissions")?.choices.map((choice) => choice.value);
+
+	it("leaves out Plan Mode and Don't Ask", () => {
+		expect(modes(claudeModes("auto"))).toEqual(["auto", "default", "acceptEdits", "bypassPermissions"]);
+	});
+
+	it("keeps the mode the chat is in, so one is always selected", () => {
+		expect(modes(claudeModes("plan"))).toEqual(["auto", "default", "acceptEdits", "plan", "bypassPermissions"]);
+	});
+
+	it("keeps an agent's own modes when it maps none, less the execution modes", () => {
+		const qwen: ChatConfigOption[] = [{ id: "mode", name: "Mode", category: "mode", type: "select", currentValue: "default", choices: [{ value: "default", name: "Default" }, { value: "plan", name: "Plan" }, { value: "yolo", name: "YOLO" }] }];
+		expect(modes(qwen, "qwen")).toEqual(["default", "yolo"]);
+	});
+});
