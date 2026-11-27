@@ -14,8 +14,11 @@
 
 import { fileChangeFiles, type ConversationActivity, type ConversationItem } from "../../types/conversation";
 
-/** Tool names a provider uses for "start a subagent". `Task` is Claude's older name. */
-const LAUNCH_TOOLS = new Set(["Agent", "Task"]);
+/**
+ * Tool names a provider uses for "start a subagent". `Task` is Claude's older name;
+ * `subagent` and `subagent_fork` are DeepSeek Harness's.
+ */
+const LAUNCH_TOOLS = new Set(["Agent", "Task", "subagent", "subagent_fork"]);
 
 /** The child's report back to its caller; its payload is the report, not a step. */
 const HANDBACK_TOOL = "SubagentHandback";
@@ -148,7 +151,9 @@ export function readSubagent(
 	);
 	const steps = allSteps.filter((step) => step !== handback);
 	const result = launchResultText(launch);
-	const background = ASYNC_RESULT.test(result);
+	// A background launch settles as soon as the child starts. DeepSeek's driver says
+	// so in the detail; Claude says it in the result note.
+	const background = launch.detail?.background === true || ASYNC_RESULT.test(result);
 	const startedAt = timeOf(launch.createdAt);
 	const lastStepAt = steps.reduce((latest, step) => Math.max(latest, timeOf(step.createdAt)), startedAt);
 	const base = {

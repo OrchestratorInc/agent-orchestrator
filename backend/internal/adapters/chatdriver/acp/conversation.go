@@ -137,6 +137,13 @@ type conversation struct {
 	configOptions     []ports.ChatConfigOption
 	skills            []ports.ChatSkill
 	skillsKnown       bool
+	// subagentRecords reads subagents the agent records only in its own store,
+	// with the launch environment and workspace it reads them under;
+	// recordFollower is what is known of them. See subagent_records.go.
+	subagentRecords   *SubagentRecords
+	subagentRecordEnv map[string]string
+	subagentRecordCwd string
+	recordFollower    *recordFollower
 	// compactAdvertised is whether the agent's own list, before HideCommand,
 	// named compact; start derives compaction from it, not from the shown skills.
 	compactAdvertised bool
@@ -620,8 +627,10 @@ func (c *conversation) ActivateLiveReconnect(ctx context.Context, providerTurnID
 		c.thoughts = make(map[string]string)
 		c.nestedMessages = make(map[string]nestedMessageState)
 		c.tools = make(map[string]*toolState)
+		c.followRecordsOnReattachLocked()
 	}
 	c.mu.Unlock()
+	c.pollSubagentRecords()
 	c.proc.gate.Open()
 	return nil
 }
@@ -1155,6 +1164,8 @@ func (c *conversation) StartDeferredTurn(providerTurnID string) error {
 func (c *conversation) runTurn(ctx context.Context, sessionID string, turn preparedTurn) {
 	c.settleEndedCycle(turn.endedCycle)
 	c.emit(ports.ChatEvent{Kind: ports.ChatEventTurnStarted, ProviderTurnID: turn.id})
+	// A subagent an earlier turn launched can take more work in this one.
+	c.pollSubagentRecords()
 	c.emit(ports.ChatEvent{Kind: ports.ChatEventControllerState, ControllerState: ports.ChatControllerBusy})
 	// ACP message ids are opaque idempotency/correlation keys. Preserve AO's
 	// durable client id when possible so an agent that echoes it from session/load
@@ -1241,6 +1252,9 @@ func (c *conversation) finishPrompt(
 	}
 	c.mu.Unlock()
 	interruptRequested := interrupt != nil && interrupt.turnID == turnID
+	// The children's last steps and reports belong to this turn: file them
+	// before it settles.
+	c.drainSubagentRecords()
 	c.settleOpenItems(turnID, c.keepToolsOutlivingTurn(interruptRequested, resp, err))
 	interruptedLocally := false
 	if interrupt != nil && interrupt.turnID == turnID {

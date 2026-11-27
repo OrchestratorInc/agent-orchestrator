@@ -245,6 +245,10 @@ type Config struct {
 	QuickStop bool
 	// CanHibernate checks provider-owned work that outlives an ACP prompt.
 	CanHibernate func(context.Context, *acpsdk.ClientSideConnection, acpsdk.SessionId) (bool, error)
+	// SubagentRecords follows subagents the agent sends nothing of over ACP and
+	// keeps only in its own store. Nil for agents whose subagents need none of
+	// it. See subagent_records.go.
+	SubagentRecords *SubagentRecords
 	// BackgroundTasks reads native background work without issuing a prompt.
 	BackgroundTasks func(context.Context, *acpsdk.ClientSideConnection, acpsdk.SessionId) ([]ports.ChatBackgroundTask, error)
 	// StopBackgroundTask stops one native background task. Nil when the
@@ -982,6 +986,9 @@ func (d *Driver) initialize(
 	conv.sessionPromptResponseFailure = d.cfg.SessionPromptResponseFailure
 	conv.promptErrorFailure = d.cfg.PromptErrorFailure
 	conv.hibernationCheck = d.cfg.CanHibernate
+	if d.cfg.SubagentRecords != nil && cfg.WorkspacePath != "" {
+		conv.subagentRecords, conv.subagentRecordEnv, conv.subagentRecordCwd = d.cfg.SubagentRecords, cfg.Env, cfg.WorkspacePath
+	}
 	conv.backgroundTasks = d.cfg.BackgroundTasks
 	conv.stopBackgroundTask = d.cfg.StopBackgroundTask
 	conv.backgroundTaskOutput = d.cfg.BackgroundTaskOutput

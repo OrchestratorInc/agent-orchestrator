@@ -328,3 +328,58 @@ describe("latestSubagentLine", () => {
 		expect(latestSubagentLine([edit])).toEqual({ kind: "edit", running: false, path: "page.tsx" });
 	});
 });
+
+// The shape AO's DeepSeek Harness driver records: an ordinary tool call that
+// completes as soon as the child starts, marked background, with the child's
+// steps and report read from DeepSeek's session store.
+function deepseekLaunch(id: string, tool: "subagent" | "subagent_fork" = "subagent", agentType?: string): ConversationActivity {
+	return {
+		kind: "activity",
+		id,
+		providerItemId: `tool-${id}`,
+		sequence: 1,
+		revision: 1,
+		activityKind: "mcp_tool",
+		status: "completed",
+		summary: tool,
+		detail: {
+			providerToolName: tool,
+			background: true,
+			input: { description: "Audit the cart", prompt: "Read-only. Audit the cart." },
+			content: [{ type: "text", text: "started subagent agent-1" }],
+			...(agentType ? { subagentType: agentType } : {}),
+		} as ConversationActivity["detail"],
+		createdAt: at(0),
+	};
+}
+
+describe("DeepSeek Harness subagents", () => {
+	it("recognizes both launch tools, with a fork's type", () => {
+		expect(isSubagentLaunch(deepseekLaunch("a"))).toBe(true);
+		const fork = readSubagent(deepseekLaunch("b", "subagent_fork", "fork"), [], true);
+		expect(isSubagentLaunch(fork.launch)).toBe(true);
+		expect(fork).toMatchObject({ title: "Audit the cart", agentType: "fork", prompt: "Read-only. Audit the cart." });
+	});
+
+	it("is working while the turn holding it runs, not done with its start note", () => {
+		const subagent = readSubagent(deepseekLaunch("a"), [], true);
+		expect(subagent.state).toBe("working");
+		expect(subagent.report).toBeUndefined();
+	});
+
+	it("reports what its hand-back says", () => {
+		const subagent = readSubagent(
+			deepseekLaunch("a"),
+			[step("s1", "tool-a", { activityKind: "mcp_tool", summary: "bash" }), handback("h1", "tool-a", "The cart is fine.")],
+			false,
+		);
+		expect(subagent).toMatchObject({ state: "done", report: "The cart is fine." });
+		expect(subagent.steps.map((s) => s.id)).toEqual(["s1"]);
+	});
+
+	it("has no report, rather than its start note, once the turn ends without one", () => {
+		const subagent = readSubagent(deepseekLaunch("a"), [], false);
+		expect(subagent.state).toBe("unknown");
+		expect(subagent.report).toBeUndefined();
+	});
+});
