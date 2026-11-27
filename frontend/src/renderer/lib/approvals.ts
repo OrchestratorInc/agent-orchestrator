@@ -89,8 +89,9 @@ export async function setApprovalMode(
 	return data;
 }
 
-export async function forgetApprovalSite(site: string, category: string, queryClient: QueryClient): Promise<void> {
-	const { error } = await apiClient.DELETE("/api/v1/approvals/sites", { params: { query: { site, category } } });
+/** hostId forgets a rule kept by that remote host's daemon. */
+export async function forgetApprovalSite(site: string, category: string, queryClient: QueryClient, hostId?: string): Promise<void> {
+	const { error } = await clientForSessionHost(hostId).DELETE("/api/v1/approvals/sites", { params: { query: { site, category } } });
 	await queryClient.invalidateQueries({ queryKey: ["approvals", "policy"] });
 	if (error) throw apiErrorException(error, "Could not save approval settings");
 }
