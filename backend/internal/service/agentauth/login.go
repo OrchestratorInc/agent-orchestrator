@@ -140,6 +140,13 @@ type loginOperation struct {
 	// observed before the code was typed, so only a rejection printed after
 	// it fails the login.
 	rejectionsSeen int
+	// stepsSent records the tick a guided login sent its last step;
+	// signedInScreensSeen counts the plan's signed-in screens in that tick's
+	// output, and signedInAfterSteps holds once more of them appear, so a
+	// sign-in that was already stored cannot finish the login on its own.
+	stepsSent           bool
+	signedInScreensSeen int
+	signedInAfterSteps  bool
 	// nativeDigits holds, for each NativeOptions entry, the digit the CLI
 	// printed for it.
 	nativeDigits []string
@@ -660,7 +667,21 @@ func (s *Service) observeHiddenLogin(ctx context.Context, terminal guidedAuthTer
 		if plan.codeRejected != "" {
 			rejections = strings.Count(plain, plan.codeRejected)
 		}
+		screens := countSignedInScreens(plan, plain)
 		s.mu.Lock()
+		if len(op.guidedSteps) == 0 && !op.guidedStuck {
+			// The CLI returns to a signed-in screen only once this sign-in
+			// lands. The baseline is the output the last step was sent into;
+			// it follows older screens scrolling out of the observed output.
+			switch {
+			case !op.stepsSent:
+				op.stepsSent, op.signedInScreensSeen = true, screens
+			case screens > op.signedInScreensSeen:
+				op.signedInAfterSteps = true
+			case screens < op.signedInScreensSeen:
+				op.signedInScreensSeen = screens
+			}
+		}
 		submitted := op.codeSubmitted
 		rejected := submitted && rejections > op.rejectionsSeen
 		// Before the code is typed this records the baseline; afterwards it
@@ -694,6 +715,16 @@ func (s *Service) observeHiddenLogin(ctx context.Context, terminal guidedAuthTer
 	if !op.keepsRunning || len(op.guidedSteps) > 0 || op.guidedStuck {
 		return false
 	}
+	// A sign-in already stored before the login (a stale Keychain or
+	// Credential Manager entry the CLI no longer accepts, say) passes the
+	// probe at once, so the CLI must also show a signed-in screen that
+	// appeared after the last step.
+	s.mu.Lock()
+	signedInAfterSteps := op.signedInAfterSteps
+	s.mu.Unlock()
+	if len(planByAgentID[op.snapshot.AgentID].signedInScreens) > 0 && !signedInAfterSteps {
+		return false
+	}
 	op.polls++
 	if op.polls%signInPollTicks != 0 || !s.signInConfirmedWhileRunning(ctx, op.snapshot.AgentID) {
 		return false
@@ -705,6 +736,15 @@ func (s *Service) observeHiddenLogin(ctx context.Context, terminal guidedAuthTer
 	op.snapshot.NativePrompt, op.snapshot.SelectedOption, op.snapshot.NativeOptions = "", "", nil
 	s.mu.Unlock()
 	return true
+}
+
+// countSignedInScreens counts the plan's signed-in screen texts in plain.
+func countSignedInScreens(plan Plan, plain string) int {
+	n := 0
+	for _, text := range plan.signedInScreens {
+		n += strings.Count(plain, text)
+	}
+	return n
 }
 
 // showsSignedInScreen reports whether output holds one of the texts the

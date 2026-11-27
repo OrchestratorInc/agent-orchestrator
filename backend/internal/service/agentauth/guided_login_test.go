@@ -148,6 +148,7 @@ func TestAgyGoogleLoginDrivesMenuShowsLinkAndFinishesWhileAgyRuns(t *testing.T) 
 
 	// Agy stays open in its chat view after signing in: the probe finishes it.
 	prober.set(domain.AgentAuthenticationAuthorized)
+	pty.setOutput(agySignedInChat)
 	waitFor(t, "the sign-in to finish", 10*time.Second, func() bool {
 		current, err = svc.Login(t.Context(), "agy", started.ID)
 		return err == nil && current.Status != "running"
@@ -214,6 +215,8 @@ func TestGuidedLoginFinishesOnlyAfterItsStepsAreSent(t *testing.T) {
 	}
 
 	pty.setOutput(agyMenuScreen + "Google Cloud sign-in method:\n> 1. Continue with Google Cloud\n  2. Use advanced SSO config\n")
+	waitFor(t, "the Cloud entry to be chosen", 5*time.Second, func() bool { return len(pty.pressed()) >= 3 })
+	pty.setOutput(agySignedInChat)
 	waitFor(t, "the sign-in to finish", 10*time.Second, func() bool {
 		current, err = svc.Login(t.Context(), "agy", started.ID)
 		return err == nil && current.Status != "running"
@@ -297,6 +300,7 @@ func TestGuidedLoginReplacesAnExistingSignIn(t *testing.T) {
 	pty.setOutput(agyMenuScreen)
 	waitFor(t, "Google OAuth to be chosen", 5*time.Second, func() bool { return len(pty.pressed()) >= 4 })
 	prober.set(domain.AgentAuthenticationAuthorized)
+	pty.setOutput(agySignedInChat)
 	waitFor(t, "the sign-in to finish", 10*time.Second, func() bool {
 		current, err = svc.Login(t.Context(), "agy", started.ID)
 		return err == nil && current.Status != "running"
@@ -359,6 +363,9 @@ func TestGuidedLoginDoesNotSignOutAfterAFreshSignIn(t *testing.T) {
 	}
 }
 
+// agySignedInChat is the chat view Agy returns to once a sign-in lands.
+const agySignedInChat = "Signed in with Google\n> \n? for shortcuts\n"
+
 const agyCodePrompt = "Your browser should open automatically. If not:\nhttps://accounts.google.com/o/oauth2/auth?client_id=x\n" +
 	"If you aren't automatically redirected, paste the authorization code below:\nauthorization code...\n"
 
@@ -394,6 +401,7 @@ func TestAgyLoginTakesTheAuthorizationCodeFromThePanel(t *testing.T) {
 		t.Fatal("accepted a second code")
 	}
 	prober.set(domain.AgentAuthenticationAuthorized)
+	pty.setOutput(agySignedInChat)
 	waitFor(t, "the sign-in to finish", 10*time.Second, func() bool {
 		current, err = svc.Login(t.Context(), "agy", started.ID)
 		return err == nil && current.Status != "running"
@@ -470,6 +478,7 @@ func TestAgyLoginIgnoresARejectionPrintedBeforeTheCode(t *testing.T) {
 		t.Fatalf("status = %q, want running: the rejection was printed before the code", current.Status)
 	}
 	prober.set(domain.AgentAuthenticationAuthorized)
+	pty.setOutput(agySignedInChat)
 	waitFor(t, "the sign-in to finish", 10*time.Second, func() bool {
 		current, err = svc.Login(t.Context(), "agy", started.ID)
 		return err == nil && current.Status != "running"
@@ -596,6 +605,47 @@ func TestAgyWithoutSignInProbeKeepsPlainNativeSignIn(t *testing.T) {
 	}
 	if _, err := svc.CancelLogin(t.Context(), "agy", started.ID); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestGuidedLoginIgnoresAStoredSignInAgyNoLongerAccepts(t *testing.T) {
+	for _, goos := range []string{"darwin", "windows"} {
+		t.Run(goos, func(t *testing.T) {
+			onPlatform(t, goos)
+
+			// Agy's keyring entry is still stored, so the probe passes from
+			// the start, yet Agy shows its login menu (a revoked token, say).
+			pty := &guidedTerminalFake{output: agyMenuScreen}
+			svc := NewWithAgentResolver(foundExecutable("agy"), &switchableProberFake{state: domain.AgentAuthenticationAuthorized}, pty, "")
+			t.Cleanup(svc.Close)
+
+			started, err := svc.StartLogin(t.Context(), "agy", "browser", "")
+			if err != nil {
+				t.Fatal(err)
+			}
+			waitFor(t, "Google OAuth to be chosen", 5*time.Second, func() bool { return len(pty.pressed()) >= 1 })
+			pty.setOutput(agyMenuScreen + "Your browser should open automatically. If not:\n" + strings.Join(agyWrappedLink, "\n") + "\n")
+			time.Sleep(3 * time.Second)
+			current, err := svc.Login(t.Context(), "agy", started.ID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if current.Status != "running" || pty.isClosed() {
+				t.Fatalf("status = %q closed = %v before Agy signed in, want still running", current.Status, pty.isClosed())
+			}
+
+			pty.setOutput(agySignedInChat)
+			waitFor(t, "the sign-in to finish", 10*time.Second, func() bool {
+				current, err = svc.Login(t.Context(), "agy", started.ID)
+				return err == nil && current.Status != "running"
+			})
+			if current.Status != "succeeded" {
+				t.Fatalf("status = %q, want succeeded once Agy shows its chat", current.Status)
+			}
+			if got := pty.pressed(); !reflect.DeepEqual(got, []string{"select"}) {
+				t.Fatalf("keys = %v, want only the Google entry chosen", got)
+			}
+		})
 	}
 }
 
