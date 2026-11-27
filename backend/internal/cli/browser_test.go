@@ -884,6 +884,15 @@ func TestMayWaitForApproval(t *testing.T) {
 		{"act", map[string]any{"instruction": "x"}, true},
 		{"act", map[string]any{"instruction": "x", "action": "fill"}, false},
 		{"snapshot", nil, false},
+		// Everything else the daemon gates waits too.
+		{"press", map[string]any{"key": "Space"}, true},
+		{"press", map[string]any{"key": "NumpadEnter"}, true},
+		{"drag", map[string]any{"ref": "e1", "targetRef": "e2"}, true},
+		{"type", map[string]any{"ref": "e1", "text": "hi\n"}, true},
+		{"type", map[string]any{"ref": "e1", "text": "hi"}, false},
+		{"act", map[string]any{"instruction": "x", "action": "type", "value": "hi\n"}, true},
+		{"dialog", map[string]any{"operation": "accept"}, true},
+		{"dialog", map[string]any{"operation": "dismiss"}, false},
 	} {
 		if got := mayWaitForApproval(tc.action, tc.args); got != tc.want {
 			t.Errorf("%s %v = %v", tc.action, tc.args, got)

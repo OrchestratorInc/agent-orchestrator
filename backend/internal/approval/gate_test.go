@@ -432,3 +432,36 @@ func TestAuditReadsOnlyTheNewestEntries(t *testing.T) {
 		t.Fatalf("entries = %+v", entries)
 	}
 }
+
+func TestPruneSessionsDropsModesOfSessionsThatAreGone(t *testing.T) {
+	dir := t.TempDir()
+	g, _ := Open(dir)
+	for _, id := range []string{"kept", "gone", "unknown"} {
+		if err := g.SetSessionMode(id, ModeOff); err != nil {
+			t.Fatal(err)
+		}
+	}
+	err := g.PruneSessions(func(id string) (bool, error) {
+		switch id {
+		case "kept":
+			return true, nil
+		case "gone":
+			return false, nil
+		}
+		return false, errors.New("store busy") // not known to be gone: kept
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	reopened, _ := Open(dir)
+	if reopened.SessionMode("kept") != ModeOff || reopened.SessionMode("unknown") != ModeOff {
+		t.Fatal("pruned a session that may still exist")
+	}
+	if reopened.SessionMode("gone") != reopened.DefaultMode() {
+		t.Fatal("a deleted session's mode was kept")
+	}
+	raw, _ := os.ReadFile(filepath.Join(dir, "policy.json"))
+	if strings.Contains(string(raw), `"gone"`) {
+		t.Fatalf("policy still names the deleted session: %s", raw)
+	}
+}
