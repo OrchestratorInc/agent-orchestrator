@@ -267,15 +267,15 @@ func TestApprovalTimeoutDenies(t *testing.T) {
 	}
 }
 
-func TestDescribeFailureFallsBackToArguments(t *testing.T) {
-	// An older Chrome extension does not know describe; the instruction text
-	// alone still flags an obviously risky act.
+func TestOlderExtensionIsRefusedWithoutAsking(t *testing.T) {
+	// An older Chrome extension does not know describe. The instruction text
+	// still flags an obviously risky act, but with no binding an approval
+	// could not run, so the agent is told to update and the user not asked.
 	rt := &scriptedRuntime{describeErr: browserruntime.CommandError{Code: "INVALID_ARGUMENT", Message: "Unsupported browser action: describe"}}
 	svc, gate, token := approvalService(t, rt)
-	answer(t, gate, approval.DecisionDeny)
 	_, _, err := svc.Execute(context.Background(), "s1", token, "act", map[string]interface{}{"instruction": "click the place order button"})
-	if apiErrorCode(err) != "BROWSER_ACTION_DENIED" {
-		t.Fatalf("err = %v", err)
+	if apiErrorCode(err) != "BROWSER_APPROVAL_UNBOUND" || slices.Contains(rt.received(), "act") || len(gate.Pending()) != 0 {
+		t.Fatalf("err=%v received=%v pending=%d", err, rt.received(), len(gate.Pending()))
 	}
 }
 
@@ -318,34 +318,42 @@ func TestPreflightForBatchSteps(t *testing.T) {
 	}
 }
 
-func TestApprovedActionWithoutBindingIsRefused(t *testing.T) {
-	// An older runtime describes nothing; the user still approves, but the
-	// runtime could not confirm the target at dispatch, so it is refused.
-	rt := &scriptedRuntime{describeErr: errors.New("unknown action describe")}
-	svc, gate, token := approvalService(t, rt)
-	answer(t, gate, approval.DecisionAllowOnce)
-	_, _, err := svc.Execute(context.Background(), "s1", token, "click", map[string]interface{}{"ref": "e4"})
-	if apiErrorCode(err) != "BROWSER_APPROVAL_UNBOUND" || slices.Contains(rt.received(), "click") {
-		t.Fatalf("err=%v received=%v", err, rt.received())
+func TestUnboundTargetIsRefusedWithoutAsking(t *testing.T) {
+	// Without a binding the runtime cannot confirm the target at dispatch, so
+	// an approval could never run: refuse before asking, so the user is not
+	// shown a prompt they cannot usefully answer.
+	for name, rt := range map[string]*scriptedRuntime{
+		"older runtime, no describe": {describeErr: errors.New("unknown action describe")},
+		"describe gives no binding":  {describe: map[string]interface{}{"target": map[string]interface{}{"pageUrl": "https://shop.example/"}}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			svc, gate, token := approvalService(t, rt)
+			_, _, err := svc.Execute(context.Background(), "s1", token, "click", map[string]interface{}{"ref": "e4"})
+			if apiErrorCode(err) != "BROWSER_APPROVAL_UNBOUND" || slices.Contains(rt.received(), "click") {
+				t.Fatalf("err=%v received=%v", err, rt.received())
+			}
+			if len(gate.Pending()) != 0 {
+				t.Fatal("asked although the action could never run")
+			}
+		})
 	}
 }
 
 func TestUndescribableTargetAsksInsteadOfPassing(t *testing.T) {
-	for name, rt := range map[string]*scriptedRuntime{
-		"describe fails":  {describeErr: errors.New("tab closed")},
-		"no target facts": {describe: map[string]interface{}{"target": map[string]interface{}{"pageUrl": "https://shop.example/"}}},
-	} {
-		t.Run(name, func(t *testing.T) {
-			svc, gate, token := approvalService(t, rt)
-			asked := answer(t, gate, approval.DecisionDeny)
-			_, _, err := svc.Execute(context.Background(), "s1", token, "click", map[string]interface{}{"ref": "e4"})
-			if apiErrorCode(err) != "BROWSER_ACTION_DENIED" || slices.Contains(rt.received(), "click") {
-				t.Fatalf("err=%v received=%v", err, rt.received())
-			}
-			if p := <-asked; p.Category != approval.CategoryScript || p.Reason == "" {
-				t.Fatalf("prompt = %+v", p)
-			}
-		})
+	// The runtime identified the page (a binding) but could not read the
+	// element: ask rather than guess.
+	rt := &scriptedRuntime{describe: map[string]interface{}{
+		"target":  map[string]interface{}{"pageUrl": "https://shop.example/"},
+		"binding": map[string]interface{}{"tabId": "t1", "document": float64(1), "ref": "e4"},
+	}}
+	svc, gate, token := approvalService(t, rt)
+	asked := answer(t, gate, approval.DecisionDeny)
+	_, _, err := svc.Execute(context.Background(), "s1", token, "click", map[string]interface{}{"ref": "e4"})
+	if apiErrorCode(err) != "BROWSER_ACTION_DENIED" || slices.Contains(rt.received(), "click") {
+		t.Fatalf("err=%v received=%v", err, rt.received())
+	}
+	if p := <-asked; p.Category != approval.CategoryScript || p.Reason == "" {
+		t.Fatalf("prompt = %+v", p)
 	}
 }
 
@@ -397,6 +405,7 @@ func TestPartialDescriptionAsks(t *testing.T) {
 	rt := &scriptedRuntime{describe: map[string]interface{}{
 		"target":  map[string]interface{}{"role": "button", "name": "Save changes", "pageUrl": "https://app.example/profile"},
 		"partial": true,
+		"binding": map[string]interface{}{"tabId": "t1", "document": float64(1), "ref": "e5"},
 	}}
 	svc, gate, token := approvalService(t, rt)
 	asked := answer(t, gate, approval.DecisionDeny)
@@ -415,31 +424,23 @@ func TestPartialDescriptionAsks(t *testing.T) {
 	}
 }
 
-func TestStuckDescribeStillShowsAPromptPromptly(t *testing.T) {
+func TestStuckDescribeIsRefusedPromptly(t *testing.T) {
 	// A runtime that never answers describe (a hidden tab whose capture never
-	// finishes) must not hold the request back until the approval times out.
+	// finishes) must not hold the request back: past the describe deadline
+	// there is no binding, so it is refused at once, without a prompt.
 	rt := &scriptedRuntime{describeHang: true}
 	svc, gate, token := approvalService(t, rt)
 	svc.describeTimeout = 50 * time.Millisecond
-	asked := make(chan time.Duration, 1)
 	start := time.Now()
-	go func() {
-		for range 400 {
-			if list := gate.Pending(); len(list) > 0 {
-				asked <- time.Since(start)
-				_ = gate.Decide(list[0].ID, approval.DecisionDeny)
-				return
-			}
-			time.Sleep(5 * time.Millisecond)
-		}
-		close(asked)
-	}()
 	_, _, err := svc.Execute(context.Background(), "s1", token, "click", map[string]interface{}{"ref": "e4"})
-	if apiErrorCode(err) != "BROWSER_ACTION_DENIED" {
+	if apiErrorCode(err) != "BROWSER_APPROVAL_UNBOUND" {
 		t.Fatalf("err = %v", err)
 	}
-	if waited, ok := <-asked; !ok || waited > time.Second {
-		t.Fatalf("prompt listed after %v (ok=%v)", waited, ok)
+	if waited := time.Since(start); waited > time.Second {
+		t.Fatalf("refused after %v", waited)
+	}
+	if len(gate.Pending()) != 0 {
+		t.Fatal("asked although the action could never run")
 	}
 }
 
@@ -727,13 +728,18 @@ func TestDragOntoAnOrdinaryZoneDoesNotAsk(t *testing.T) {
 }
 
 func TestDragOntoAnUnreadableTargetAsks(t *testing.T) {
-	rt := &scriptedRuntime{describeErr: errors.New("no such ref")}
+	// The page is identified (a binding) but the drop target's element is
+	// not: ask rather than guess.
+	rt := &scriptedRuntime{describe: map[string]interface{}{
+		"target":  map[string]interface{}{"pageUrl": "https://mail.example/"},
+		"binding": map[string]interface{}{"tabId": "t1", "document": float64(1), "ref": "e2"},
+	}}
 	svc, gate, token := approvalService(t, rt)
 	asked := answer(t, gate, approval.DecisionDeny)
 	if _, _, err := svc.Execute(context.Background(), "s1", token, "drag", map[string]interface{}{"ref": "e1", "targetRef": "e2"}); apiErrorCode(err) != "BROWSER_ACTION_DENIED" {
 		t.Fatalf("err = %v", err)
 	}
-	if p := <-asked; p.Category != approval.CategoryScript || p.Action != "Drag e1 onto element e2" {
+	if p := <-asked; p.Category != approval.CategoryScript || p.Action != "Drag e1 onto element e2 on mail.example" {
 		t.Fatalf("prompt = %+v", p)
 	}
 }
@@ -769,5 +775,21 @@ func TestDescribeCapturesOnlyWhenTheUserWillBeAsked(t *testing.T) {
 	}
 	if p := <-asked; p.Image != "iVBORw0KGgo=" {
 		t.Fatalf("prompt image = %q", p.Image)
+	}
+}
+
+func TestDialogPromptNamesTheSite(t *testing.T) {
+	status := confirmDialogOn("t1", "Delete account?")
+	status["target"].(map[string]interface{})["url"] = "https://app.example/settings"
+	rt := &scriptedRuntime{dialogs: []map[string]interface{}{status}}
+	svc, gate, token := approvalService(t, rt)
+	asked := answer(t, gate, approval.DecisionDeny)
+	_, _, _ = svc.Execute(context.Background(), "s1", token, "dialog", map[string]interface{}{"operation": "accept"})
+	if p := <-asked; p.Site != "https://app.example" || p.URL != "https://app.example/settings" || !strings.HasSuffix(p.Action, " on app.example") {
+		t.Fatalf("prompt = %+v", p)
+	}
+	entries, _ := gate.Audit(5)
+	if len(entries) == 0 || entries[0].Site != "https://app.example" {
+		t.Fatalf("audit = %+v", entries)
 	}
 }

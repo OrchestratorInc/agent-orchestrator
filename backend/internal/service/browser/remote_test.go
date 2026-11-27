@@ -668,3 +668,34 @@ func TestRemoteLongScriptPromptSaysItIsCut(t *testing.T) {
 		t.Fatalf("summary does not say the script is cut: %q", p.Action)
 	}
 }
+
+func TestClassifyRemoteLeadingFlags(t *testing.T) {
+	for _, tc := range []struct {
+		args []string
+		want remoteGate
+	}{
+		// A flag that takes no value must not swallow the command.
+		{[]string{"--json", "wait", "--fn", "document.forms[0].submit()"}, remoteGate{kind: remoteAsk, action: "wait"}},
+		{[]string{"--json", "keyboard", "type", "hello\n"}, remoteGate{kind: remoteDescribe, action: "press", key: "Enter", typed: true}},
+		{[]string{"-q", "--annotate", "click", "@e2"}, remoteGate{kind: remoteDescribe, action: "click", selector: "@e2"}},
+		{[]string{"--headed", "false", "click", "@e2"}, remoteGate{kind: remoteDescribe, action: "click", selector: "@e2"}},
+		{[]string{"--headed", "click", "@e2"}, remoteGate{kind: remoteDescribe, action: "click", selector: "@e2"}},
+		// Flags documented with a value still skip it.
+		{[]string{"--session", "work", "click", "@e2"}, remoteGate{kind: remoteDescribe, action: "click", selector: "@e2"}},
+		{[]string{"--max-output", "4000", "--json", "snapshot"}, remoteGate{}},
+		{[]string{"--session=work", "snapshot"}, remoteGate{}},
+		// A leading flag it does not know asks.
+		{[]string{"--frobnicate", "click", "@e2"}, remoteGate{kind: remoteAsk, action: "--frobnicate"}},
+		// Flags that run script or change what the browser trusts ask
+		// wherever they appear.
+		{[]string{"--init-script", "/tmp/x.js", "snapshot"}, remoteGate{kind: remoteAsk, action: "--init-script"}},
+		{[]string{"snapshot", "--init-script", "/tmp/x.js"}, remoteGate{kind: remoteAsk, action: "--init-script"}},
+		{[]string{"open", "https://example.com", "--restore-check-fn", "fetch('/x')"}, remoteGate{kind: remoteAsk, action: "--restore-check-fn"}},
+		{[]string{"--allow-file-access", "open", "file:///etc/passwd"}, remoteGate{kind: remoteAsk, action: "--allow-file-access"}},
+		{[]string{"--help"}, remoteGate{}},
+	} {
+		if got := classifyRemoteArgs(tc.args); got != tc.want {
+			t.Errorf("%q = %+v, want %+v", tc.args, got, tc.want)
+		}
+	}
+}

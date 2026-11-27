@@ -127,6 +127,10 @@ var phraseSets = []phraseSet{
 		"pay", "pay now", "place order", "place your order", "submit order", "confirm order", "checkout",
 		"check out", "buy", "buy now", "purchase", "complete purchase", "subscribe", "donate",
 		"transfer", "send money", "confirm payment", "make payment", "book now", "rent now",
+		// Final checkout steps whose card fields sit in a provider iframe
+		// (Stripe Elements, Braintree), where only the label can tell.
+		"submit payment", "complete payment", "process payment", "authorize payment",
+		"complete order", "order now",
 	}},
 	{CategoryDelete, []string{
 		"delete", "remove", "destroy", "erase", "empty trash", "permanently", "cancel subscription",
@@ -243,9 +247,15 @@ func classifyRisk(action, role, name string, target Target) Verdict {
 	if target.IsSubmit && target.FormHasPayment {
 		return paymentFormVerdict()
 	}
-	if name != "" && name != "cancel" && !leadsWith(name, benignPhrases) && !opensComposer(name) {
+	if name != "" && name != "cancel" && !leadsWith(name, benignPhrases) {
 		linkish := role == "link"
+		composer := opensComposer(name)
 		for _, set := range phraseSets {
+			// "Create post" or "New message" opens an editor and sends
+			// nothing; it does not excuse "Create API key" or "Start transfer".
+			if composer && (set.category == CategoryMessage || set.category == CategoryPublish) {
+				continue
+			}
 			// A link labelled with one word is navigation ("Checkout",
 			// "POST") unless that word destroys or changes security.
 			if linkish && set.category != CategoryDelete && set.category != CategorySecurity && !strings.Contains(name, " ") {
