@@ -27,3 +27,16 @@ type NativeCheckpointBoundary struct {
 	// any filler the provider adds after the interrupt, varies with timing.
 	Interrupted bool
 }
+
+// UnansweredNativeTailError is unsettled only because the newest turn has no
+// reply. The provider can still write one just after it stops, so Boundary
+// holds once the settle window has passed without one.
+type UnansweredNativeTailError struct{ Boundary NativeCheckpointBoundary }
+
+func (e *UnansweredNativeTailError) Error() string {
+	return "native tail has no reply: " + e.Unwrap().Error()
+}
+
+func (e *UnansweredNativeTailError) Unwrap() error {
+	return &ChatHistoryUnsettledError{Dimensions: []ChatHistoryMismatchDimension{ChatHistoryMismatchUnsettledBoundary}}
+}

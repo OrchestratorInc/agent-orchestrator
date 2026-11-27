@@ -193,9 +193,9 @@ func relinkCompactedTranscript(records map[string]checkpointRecord, boundaries [
 type checkpointTurn struct {
 	promptID, userID, user, assistant string
 	complete, notice                  bool
-	// interrupted is a turn Esc ended: Claude records the interrupt marker in
-	// the prompt's own cycle and fires no Stop, so the turn never gets an
-	// end_turn reply. The marker is its settled boundary.
+	// interrupted is a turn that ended without an end_turn reply: Esc, whose
+	// marker Claude records in the prompt's own cycle, or no reply at all
+	// (replied is false) once the source stopped. Neither fires a Stop.
 	interrupted, replied bool
 	// carried is the turn a compaction summary starts. The summary keeps the
 	// prompt ID of the turn that was running or had just ended. resumed means
@@ -321,11 +321,6 @@ func verifyCheckpointTranscript(ctx context.Context, input io.Reader, request po
 		chain = append(chain, record)
 		leaf = record.ParentUUID
 	}
-	for id, record := range records {
-		if !seen[id] {
-			compacted.fold(record, wantedSubmissions)
-		}
-	}
 	slices.Reverse(chain)
 	var turns []checkpointTurn
 	submissions := make(map[string]int)
@@ -438,9 +433,17 @@ func verifyCheckpointTranscript(ctx context.Context, input io.Reader, request po
 	if len(turns) == 0 {
 		return ports.NativeCheckpointBoundary{}, checkpointUnsettled("no native user boundary")
 	}
+	newest := position[turns[len(turns)-1].userID]
+	for id, record := range records {
+		if !seen[id] && position[id] < newest {
+			compacted.fold(record, wantedSubmissions)
+		}
+	}
+	unansweredTail := false
 	for i := range turns {
 		if !turns[i].replied && !turns[i].complete && !stopped[turns[i].promptID] {
 			turns[i].interrupted, turns[i].complete = true, true
+			unansweredTail = i == len(turns)-1
 		}
 	}
 	byPrompt := make(map[string]int)
@@ -509,10 +512,14 @@ func verifyCheckpointTranscript(ctx context.Context, input io.Reader, request po
 	for answer > owner && !turns[answer].replied {
 		answer--
 	}
-	return ports.NativeCheckpointBoundary{
+	boundary := ports.NativeCheckpointBoundary{
 		UserMessageID: turns[owner].userID, UserText: turns[owner].user,
 		AssistantText: turns[answer].assistant, Interrupted: turns[answer].interrupted,
-	}, nil
+	}
+	if unansweredTail {
+		return ports.NativeCheckpointBoundary{}, &ports.UnansweredNativeTailError{Boundary: boundary}
+	}
+	return boundary, nil
 }
 
 // compactedWitnesses names the prompts and AO submissions Claude flushed

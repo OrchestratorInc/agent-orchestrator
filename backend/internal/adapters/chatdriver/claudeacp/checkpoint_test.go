@@ -293,25 +293,33 @@ func TestNativeCheckpointSettlesTurnsClaudeNeverAnswered(t *testing.T) {
 	}
 	localCommand := prompt("user-c", "prompt-c", "assistant-0", "<command-name>/cost</command-name>\n<command-message>cost</command-message>\n<command-args></command-args>") +
 		prompt("stdout-c", "prompt-c", "user-c", "<local-command-stdout>Total cost: $0.01</local-command-stdout>")
+	stray := `{"type":"system","sessionId":"native","uuid":"stray","parentUuid":"assistant-0"}` + "\n"
 	submitP := domain.NativeCheckpointObservation{Submission: true, PromptID: "prompt-p", SubmissionID: "submission-9", Text: "P"}
-	turnB := []domain.NativeCheckpointObservation{submitP,
-		{Submission: true, PromptID: "prompt-b", SubmissionID: "submission-8", Text: "B"}, {PromptID: "prompt-b", Text: "answer B"}}
+	submitB := domain.NativeCheckpointObservation{Submission: true, PromptID: "prompt-b", SubmissionID: "submission-8", Text: "B"}
+	stopB := domain.NativeCheckpointObservation{PromptID: "prompt-b", Text: "answer B"}
 	for _, test := range []struct {
 		name, transcript     string
 		later                []domain.NativeCheckpointObservation
 		wantUser, wantAnswer string
 		interrupted          bool
+		afterWindow          bool
 		wantError            string
 	}{
-		{name: "cancelled tail", transcript: answered + cancelled, later: []domain.NativeCheckpointObservation{submitP}, wantUser: "user-p", interrupted: true},
-		{name: "cancelled tail resumed with filler", transcript: answered + cancelled + filler, later: []domain.NativeCheckpointObservation{submitP}, wantUser: "user-p", interrupted: true},
-		{name: "filler, then a normal turn", transcript: answered + cancelled + filler + next("filler"), later: turnB, wantUser: "user-b", wantAnswer: "answer B"},
-		{name: "cancelled on a dead branch", transcript: answered + cancelled + next("assistant-0"), later: turnB, wantUser: "user-b", wantAnswer: "answer B"},
+		{name: "cancelled tail", transcript: answered + cancelled, later: []domain.NativeCheckpointObservation{submitP},
+			wantUser: "user-p", interrupted: true, afterWindow: true},
+		{name: "cancelled tail resumed with filler", transcript: answered + cancelled + filler, later: []domain.NativeCheckpointObservation{submitP},
+			wantUser: "user-p", interrupted: true, afterWindow: true},
 		{name: "usage limit before a reply", transcript: answered + cancelled + synthetic(`"isApiErrorMessage":true,"error":"rate_limit",`, "You've hit your 5-hour limit · resets 7pm (Asia/Calcutta)"),
-			later: []domain.NativeCheckpointObservation{submitP}, wantUser: "user-p", interrupted: true},
-		{name: "local command after an answered turn", transcript: answered + localCommand, wantUser: "user-0", wantAnswer: "answer A"},
+			later: []domain.NativeCheckpointObservation{submitP}, wantUser: "user-p", interrupted: true, afterWindow: true},
+		{name: "local command after an answered turn", transcript: answered + localCommand, wantUser: "user-0", wantAnswer: "answer A", afterWindow: true},
+		{name: "filler, then a normal turn", transcript: answered + cancelled + filler + next("filler"),
+			later: []domain.NativeCheckpointObservation{submitP, submitB, stopB}, wantUser: "user-b", wantAnswer: "answer B"},
+		{name: "cancelled on a dead branch", transcript: answered + cancelled + next("assistant-0"),
+			later: []domain.NativeCheckpointObservation{submitP, submitB, stopB}, wantUser: "user-b", wantAnswer: "answer B"},
 		{name: "Stop still owed", transcript: answered + cancelled, later: []domain.NativeCheckpointObservation{submitP, {PromptID: "prompt-p"}},
 			wantError: "observed native turn not completed"},
+		{name: "newer turn off the live chain", transcript: answered + next("assistant-0") + stray, later: []domain.NativeCheckpointObservation{submitB, stopB},
+			wantError: "native submission attachment not flushed"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			evidence := checkpointEvidence(slices.Concat([]domain.NativeCheckpointObservation{
@@ -319,6 +327,13 @@ func TestNativeCheckpointSettlesTurnsClaudeNeverAnswered(t *testing.T) {
 				{PromptID: "prompt-0", Text: "answer A"}}, test.later)...)
 			got, err := verifyCheckpointTranscript(context.Background(), strings.NewReader(test.transcript),
 				ports.NativeCheckpointRequest{ProviderConversationID: "native", Evidence: evidence})
+			var unanswered *ports.UnansweredNativeTailError
+			if errors.As(err, &unanswered) != test.afterWindow || !errors.Is(err, ports.ErrChatHistoryUnsettled) && test.afterWindow {
+				t.Fatalf("boundary=%+v error=%v, want afterWindow=%v", got, err, test.afterWindow)
+			}
+			if test.afterWindow {
+				got, err = unanswered.Boundary, nil
+			}
 			if test.wantError != "" {
 				if !errors.Is(err, ports.ErrChatHistoryUnsettled) || !strings.Contains(err.Error(), test.wantError) {
 					t.Fatalf("boundary=%+v error=%v, want %q", got, err, test.wantError)
