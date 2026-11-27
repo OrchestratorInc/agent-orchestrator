@@ -13,10 +13,16 @@ import (
 // Only the opened ACP session can say which of those models Chat can use.
 // Stage the choice before publishing the controller; a pending provider boundary
 // persists it and its notice in the activation transaction.
-func (s *Service) prepareAgyOpeningModel(ctx context.Context, controller *Controller, boundary *domain.ConversationBranch) (func(context.Context) error, error) {
+func (s *Service) prepareAgyOpeningModel(ctx context.Context, controller *Controller, requestedModel string, boundary *domain.ConversationBranch) (func(context.Context) error, error) {
 	previous := controller.Settings()
+	picked := previous.Model
+	if picked == "" {
+		// Native imports can have no saved settings even though the session's
+		// model was passed to ACP during resume.
+		picked = requestedModel
+	}
 	configurer, ok := controller.conv.(ports.ChatConfigOptionController)
-	if previous.Model == "" || !ok {
+	if picked == "" || !ok {
 		return nil, nil
 	}
 	options, err := configurer.ListConfigOptions(ctx)
@@ -28,15 +34,15 @@ func (s *Service) prepareAgyOpeningModel(ctx context.Context, controller *Contro
 			continue
 		}
 		live := option.Current.Select
-		if live == "" || live == previous.Model || slices.ContainsFunc(option.Choices, func(choice ports.ChatConfigOptionChoice) bool {
-			return choice.Value == previous.Model
+		if live == "" || live == picked || slices.ContainsFunc(option.Choices, func(choice ports.ChatConfigOptionChoice) bool {
+			return choice.Value == picked
 		}) {
 			return nil, nil
 		}
 		// A supported composite ID still names the selected base and effort.
 		// Keeping it ensures that a restart reapplies the chosen effort.
 		if resolver, ok := controller.conv.(ports.ChatModelVariantResolver); ok {
-			if base, split := resolver.ModelVariantBase(previous.Model); split && base == live {
+			if base, split := resolver.ModelVariantBase(picked); split && base == live {
 				return nil, nil
 			}
 		}
@@ -48,8 +54,8 @@ func (s *Service) prepareAgyOpeningModel(ctx context.Context, controller *Contro
 		}
 		notice := domain.ConversationActivity{
 			ID: s.newID(), Kind: domain.ActivityKindSystem, Status: domain.ActivityStatusCompleted,
-			Summary:        fmt.Sprintf("%s isn't available in Agy Chat. Using %s instead.", previous.Model, live),
-			ProviderItemID: branchID + ":agy-model-fallback:" + previous.Model + ":" + live,
+			Summary:        fmt.Sprintf("%s isn't available in Agy Chat. Using %s instead.", picked, live),
+			ProviderItemID: branchID + ":agy-model-fallback:" + picked + ":" + live,
 		}
 		// This controller is unpublished and has no projection goroutine yet.
 		controller.settings = next

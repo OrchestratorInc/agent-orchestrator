@@ -139,6 +139,67 @@ func TestAgyOpeningModelKeepsSupportedVariantsAndOtherHarnesses(t *testing.T) {
 	}
 }
 
+func TestAgyResumeWithoutSavedModelReconcilesTheRequestedModel(t *testing.T) {
+	for _, tc := range []struct {
+		picked, wantModel, wantEffort string
+		wantNotice                    bool
+	}{
+		{"claude-opus-4-6-thinking", "gemini-3.8-flash", "low", true},
+		{"gemini-3.8-flash", "", "", false},
+		{"gemini-3.8-flash-low", "", "", false},
+		{"", "", "", false},
+	} {
+		t.Run(tc.picked, func(t *testing.T) {
+			ctx := context.Background()
+			st := openStore(t)
+			provider := variantModelConversation{newFakeConversation()}
+			record, found, err := st.GetSession(ctx, testSession)
+			if err != nil || !found {
+				t.Fatalf("read session: found=%v err=%v", found, err)
+			}
+			record.Harness = domain.HarnessAgy
+			record.Metadata.Model = tc.picked
+			record.Metadata.ProviderConversationID = provider.ProviderConversationID()
+			if err := st.UpdateSession(ctx, record); err != nil {
+				t.Fatal(err)
+			}
+			var resumed ports.ChatResumeConfig
+			svc := chatsvc.New(chatsvc.Options{Store: st, Sessions: st, Reader: fullSnapshotReader(st),
+				Drivers: fakeRegistry{driver: fakeDriver{conv: provider, resumeCfg: &resumed}},
+				Log:     slog.New(slog.DiscardHandler), NewID: uuid.NewString})
+			t.Cleanup(func() { _ = svc.Stop(ctx, testSession) })
+			controller, err := svc.Start(ctx, chatsvc.StartConfig{
+				SessionID: testSession, ProjectID: testProject, Harness: domain.HarnessAgy,
+				WorkspacePath: t.TempDir(), ProviderConversationID: record.Metadata.ProviderConversationID,
+				Model: record.Metadata.Model,
+				ControllerReady: func(started chatsvc.StartResult) (chatsvc.ControllerCommit, error) {
+					if started.Conversation.Settings.Model != tc.wantModel {
+						t.Fatalf("published model = %q, want %q", started.Conversation.Settings.Model, tc.wantModel)
+					}
+					return chatsvc.ControllerCommit{Conversation: started.Conversation}, nil
+				},
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if resumed.Model != tc.picked {
+				t.Fatalf("model sent to ACP = %q, want %q", resumed.Model, tc.picked)
+			}
+			after, err := st.LoadConversationSnapshot(ctx, controller.ConversationID())
+			if err != nil || after.Conversation.Settings.Model != tc.wantModel || after.Conversation.Settings.ReasoningEffort != tc.wantEffort {
+				t.Fatalf("saved settings = %+v, err=%v", after.Conversation.Settings, err)
+			}
+			if tc.wantNotice {
+				if len(after.Activities) != 1 || after.Activities[0].Summary != tc.picked+" isn't available in Agy Chat. Using gemini-3.8-flash instead." {
+					t.Fatalf("resume fallback notice = %+v", after.Activities)
+				}
+			} else if len(after.Activities) != 0 {
+				t.Fatalf("unexpected fallback notice = %+v", after.Activities)
+			}
+		})
+	}
+}
+
 type failingAgyNoticeStore struct{ chatsvc.Store }
 
 func (s failingAgyNoticeStore) UpsertActivity(context.Context, string, string, domain.ConversationActivity, time.Time) error {
