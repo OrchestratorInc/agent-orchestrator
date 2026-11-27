@@ -581,6 +581,9 @@ type transitionChat struct {
 	relayIDs         []string
 	supportsChat     bool
 	switchMarks      []string // account moves that told the chat why its turn stopped
+	boundaries       []string // degraded-handoff notices recorded in the timeline
+	boundaryErr      error
+	recordBoundary   func(ctx context.Context, id domain.SessionID, transitionID, summary string) error
 }
 
 type historyPolicyTransitionChat struct {
@@ -804,6 +807,16 @@ func (c *transitionChat) ArmChatHandoff(_ context.Context, _ domain.SessionID, p
 }
 func (c *transitionChat) MarkAccountSwitch(_ context.Context, _ domain.SessionID, accountID string) error {
 	c.switchMarks = append(c.switchMarks, accountID)
+	return nil
+}
+func (c *transitionChat) RecordInterfaceTransitionBoundary(ctx context.Context, id domain.SessionID, transitionID, summary string) error {
+	if c.boundaryErr != nil {
+		return c.boundaryErr
+	}
+	if c.recordBoundary != nil {
+		return c.recordBoundary(ctx, id, transitionID, summary)
+	}
+	c.boundaries = append(c.boundaries, summary)
 	return nil
 }
 func (c *transitionChat) PrepareChatHandoff(_ context.Context, _ domain.SessionID, policy domain.SessionInterfaceTransitionPolicy) error {

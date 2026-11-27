@@ -52,6 +52,48 @@ func TestClaudeLimitsAutoResumeResetUsesOnlyUnambiguousRollingWindows(t *testing
 	}
 }
 
+func TestClaudeLimitsIncompleteWindow(t *testing.T) {
+	for _, tc := range []struct {
+		body       string
+		incomplete bool
+	}{
+		{`{"five_hour":{"utilization":2},"seven_day":{"utilization":2}}`, false},
+		{`{"five_hour":{"utilization":2},"seven_day_opus":null}`, false},
+		{`{"five_hour":{"utilization":2},"seven_day":{"resets_at":"2026-08-02T10:02:00Z"}}`, true},
+		{`{"five_hour":{"utilization":-1}}`, true},
+	} {
+		var body claudeUsageBody
+		if err := json.Unmarshal([]byte(`{"rate_limits":`+tc.body+`}`), &body); err != nil {
+			t.Fatal(err)
+		}
+		if got := body.limits(time.Now()).Incomplete; got != tc.incomplete {
+			t.Fatalf("%s: incomplete = %v, want %v", tc.body, got, tc.incomplete)
+		}
+	}
+}
+
+func TestCodexLimitsIncomplete(t *testing.T) {
+	window := &domain.CodexCapacityWindow{UsedPercent: 2}
+	for _, tc := range []struct {
+		name       string
+		capacity   ports.CodexCapacityObservation
+		incomplete bool
+	}{
+		{"complete", ports.CodexCapacityObservation{Overall: &domain.CodexCapacityBucket{LimitID: "codex", Primary: window, Reached: domain.CodexCapacityNotReached}}, false},
+		{"dropped bucket", ports.CodexCapacityObservation{DroppedBucket: true, Overall: &domain.CodexCapacityBucket{LimitID: "codex", Primary: window, Reached: domain.CodexCapacityNotReached}}, true},
+		{"partial read", ports.CodexCapacityObservation{Partial: true, Overall: &domain.CodexCapacityBucket{LimitID: "codex", Primary: window, Reached: domain.CodexCapacityNotReached}}, true},
+		{"dropped window", ports.CodexCapacityObservation{Overall: &domain.CodexCapacityBucket{LimitID: "codex", Primary: window, Reached: domain.CodexCapacityNotReached, InvalidWindow: true}}, true},
+		{"reached bucket", ports.CodexCapacityObservation{Overall: &domain.CodexCapacityBucket{LimitID: "codex", Primary: window, Reached: domain.CodexCapacityNotReached},
+			AdditionalBuckets: []domain.CodexCapacityBucket{{LimitID: "spark", Primary: window, Reached: domain.CodexCapacityReached}}}, true},
+	} {
+		cli := &Codex{Accounts: &limitsAccountFactory{client: &limitsAccountClient{capacity: tc.capacity}}}
+		limits, err := cli.Limits(context.Background(), "/bound-codex")
+		if err != nil || limits.Incomplete != tc.incomplete {
+			t.Fatalf("%s: incomplete = %v, want %v, err = %v", tc.name, limits.Incomplete, tc.incomplete, err)
+		}
+	}
+}
+
 type limitsAccountFactory struct {
 	ports.CodexAccountClientFactory
 	client *limitsAccountClient

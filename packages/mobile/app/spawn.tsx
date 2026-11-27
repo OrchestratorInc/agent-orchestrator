@@ -22,8 +22,10 @@ import { appendSpawnAttachments, joinAttachmentErrors, MAX_SPAWN_ATTACHMENTS, pa
 import { ComposerAttachmentTray } from "../lib/chat/ComposerAttachmentTray";
 import type { ComposerImageAsset, PasteOverflow } from "../lib/chat/composerImages";
 import { SpawnComposerControls } from "../lib/spawn-composer-controls";
+import { SpawnSuggestionHost, type SpawnSuggestionOverlay } from "../lib/spawn-composer";
 import { errorAfterEdit, spawnHostState, spawnNotices, START_DROPPED_NOTICE } from "../lib/spawnNotices";
 import { createAgentModelCache, nextConnectionEpoch, type ConnectionEpoch } from "../lib/spawnLoads";
+import { loadSpawnSkills } from "../lib/spawnSkills";
 import { spawnEffortChoices, spawnEffortToSend } from "../lib/modelEffort";
 import { useApp } from "../lib/store";
 import { useCloud } from "../lib/cloud/CloudProvider";
@@ -696,6 +698,19 @@ function SpawnPage() {
 		// eslint-disable-next-line react-hooks/exhaustive-deps
 	}, [cloudSelected, connected, epoch, harness, projectId, reloadKey, selectedHostId]);
 
+	// The "/" list's skills, read from the machine when it opens, as a new chat
+	// on the desktop lists them before the agent starts. A Cloud task's agent
+	// runs in its sandbox, away from this machine's skill folders.
+	// The open "/" list, drawn over the page above the composer (see below).
+	const [suggestionOverlay, setSuggestionOverlay] = useState<SpawnSuggestionOverlay | null>(null);
+	const latestConfig = useRef(config);
+	latestConfig.current = config;
+	const skillsProjectId = !projectId || projectId === STANDALONE_PROJECT ? undefined : projectId;
+	const loadSkills = useMemo(() => {
+		if (cloudSelected || !selectedHostId || !harness) return undefined;
+		return () => loadSpawnSkills(latestConfig.current, selectedHostId, harness, skillsProjectId);
+	}, [cloudSelected, harness, selectedHostId, skillsProjectId]);
+
 	// Loads that failed while the desktop was unreachable run again once the
 	// board's poll reconnects. Keyed on the reconnect, not on the errors, so an
 	// endpoint that keeps failing while connected can't loop.
@@ -1020,10 +1035,14 @@ function SpawnPage() {
 			behavior={chatKeyboard.behavior}
 			keyboardVerticalOffset={chatKeyboard.keyboardVerticalOffset}
 		>
+			{/* The room and the dock share one unpadded frame, so the "/" list's
+			    layer below can be measured from the dock's own bottom. */}
+			<View style={styles.stage}>
 			{/* The empty conversation the task will become. A tap there puts the
 			    keyboard away, as it does over a conversation. */}
 			<Pressable accessible={false} style={styles.room} onPress={Keyboard.dismiss} />
 
+			<SpawnSuggestionHost.Provider value={setSuggestionOverlay}>
 			<Animated.View style={[styles.dock, { paddingBottom: restingInset }, dockRise]}>
 				{hasComposerMessage ? <View style={styles.messages}>
 					{notices.map((notice) => <Text key={notice} style={styles.warn}>{notice}</Text>)}
@@ -1073,6 +1092,7 @@ function SpawnPage() {
 					voice={{ state: voice.state, partial: voice.partial, subscribeLevel: voice.subscribeLevel, onToggleLatched: voice.toggleLatched }}
 					prompt={prompt}
 					onChangePrompt={edited(setPrompt)}
+					onLoadSkills={loadSkills}
 					placeholder={harnessLabel ? `Ask ${harnessLabel}` : "What should this worker do?"}
 					attachments={<ComposerAttachmentTray
 						items={trayItems}
@@ -1088,6 +1108,21 @@ function SpawnPage() {
 					disabled={!selectedHostId || (!config && !cloudSelected) || !projectId || !harness || busy || modelLoading || projectDetailsPending || loading || listening || voice.state === "transcribing" || Boolean(planBlock)}
 				/>
 			</Animated.View>
+			</SpawnSuggestionHost.Provider>
+
+			{/* The "/" list floats over the page, just above the composer, rather
+			    than taking room in the dock: the machine and project rows stay put
+			    under it. It rises with the dock over the keyboard, and only the list
+			    itself takes touches. It stands on the page's own colour, as the
+			    chat's list stands on its dock's fade, so the rows under it don't
+			    show through its glass. */}
+			{suggestionOverlay ? <Animated.View
+				pointerEvents="box-none"
+				style={[styles.suggestionLayer, { paddingBottom: restingInset + suggestionOverlay.composerHeight + space.xs }, dockRise]}
+			>
+				<View style={styles.suggestionBackdrop}>{suggestionOverlay.panel}</View>
+			</Animated.View> : null}
+			</View>
 		</KeyboardAvoidingView>
 	);
 }
@@ -1106,9 +1141,15 @@ const makeStyles = (t: Theme) =>
 	StyleSheet.create({
 		// The page a conversation is drawn on, since this is where one begins.
 		screen: { flex: 1, backgroundColor: t.bgBase },
+		stage: { flex: 1 },
 		room: { flex: 1 },
+		// Spans the stage, the list at its foot: in the dock's side margin, and
+		// over the composer by the composer's height and the dock's gap.
+		suggestionLayer: { position: "absolute", top: 0, right: 0, bottom: 0, left: 0, paddingHorizontal: space.sm, justifyContent: "flex-end" },
+		// The list's own corners (ComposerSuggestionPanel), filled with the page.
+		suggestionBackdrop: { backgroundColor: t.bgBase, borderRadius: radius.xl, borderCurve: "continuous" },
 		// The chat composer's dock: its side margin and the gap to the keyboard.
-		dock: { paddingHorizontal: space.md, paddingTop: space.xs, gap: space.xs },
+		dock: { paddingHorizontal: space.sm, paddingTop: space.xs, gap: space.xs },
 		messages: { gap: space.xs, paddingHorizontal: space.xs },
 		warn: { fontFamily: "DMSans_400Regular", color: t.amber, fontSize: type.footnote.fontSize, lineHeight: type.footnote.lineHeight },
 		error: { fontFamily: "DMSans_400Regular", color: t.red, fontSize: type.footnote.fontSize, lineHeight: type.footnote.lineHeight },

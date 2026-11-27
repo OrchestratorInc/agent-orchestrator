@@ -24,6 +24,17 @@ func (s *Service) SetTerminalProviderSwitcher(switcher TerminalProviderSwitcher)
 	s.terminalSwitcher = switcher
 }
 
+// AgentChoiceRecorder notes that a session's agent was chosen by a switch, so
+// the board never reads the switch as the project's agent setting drifting.
+type AgentChoiceRecorder interface {
+	RecordAgentChoice(context.Context, domain.SessionID) error
+}
+
+// SetAgentChoiceRecorder gives the service where to record a switch's choice.
+func (s *Service) SetAgentChoiceRecorder(recorder AgentChoiceRecorder) {
+	s.agentChoices = recorder
+}
+
 type providerSwitchActivityDetail struct {
 	Event         string              `json:"event"`
 	SourceHarness domain.AgentHarness `json:"sourceHarness"`
@@ -212,7 +223,25 @@ func (s *Service) messageDelivered(ctx context.Context, id domain.SessionID, cli
 	return found, err
 }
 
+// switchProvider moves the session to request's agent and, when that changed
+// the agent, records the choice. A failed record is logged, not the switch's error.
 func (s *Service) switchProvider(ctx context.Context, id domain.SessionID, request domain.ProviderSwitchRequest, result *domain.ProviderSwitchResult) error {
+	var before domain.AgentHarness
+	if stored, found, err := s.sessions.GetSession(ctx, id); err == nil && found {
+		before = stored.Harness
+	}
+	if err := s.switchProviderAgent(ctx, id, request, result); err != nil {
+		return err
+	}
+	if s.agentChoices != nil && before != request.TargetHarness {
+		if err := s.agentChoices.RecordAgentChoice(context.WithoutCancel(ctx), id); err != nil {
+			s.log.Warn("record agent choice after provider switch", "session", id, "error", err)
+		}
+	}
+	return nil
+}
+
+func (s *Service) switchProviderAgent(ctx context.Context, id domain.SessionID, request domain.ProviderSwitchRequest, result *domain.ProviderSwitchResult) error {
 	if request.TargetHarness == "" {
 		return &domain.ProviderSwitchError{Kind: domain.ProviderSwitchRefusalUnsupported, Detail: "target provider is required"}
 	}

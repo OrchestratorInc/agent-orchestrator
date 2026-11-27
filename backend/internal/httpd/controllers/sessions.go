@@ -692,7 +692,7 @@ func (c *SessionsController) previewFile(w http.ResponseWriter, r *http.Request)
 			c.serveArtifactVersionFile(w, r, sess, assetPath, version)
 			return
 		}
-		c.serveRootedPreviewFile(w, r, sess.Metadata.ArtifactDir, assetPath)
+		serveArtifactPreviewFile(w, r, sess.Metadata.ArtifactDir, assetPath)
 		return
 	}
 	if name, ok := attachmentstore.NameFromWorkspacePath(assetPath); ok && c.Attachments != nil {
@@ -1148,6 +1148,23 @@ func (c *SessionsController) serveRootedPreviewFile(w http.ResponseWriter, r *ht
 		return
 	}
 	defer func() { _ = file.Close() }()
+	serveOpenedPreviewFile(w, r, file, info, clean)
+}
+
+// serveArtifactPreviewFile serves an artifact file as serveRootedPreviewFile
+// does, naming in previewutil.ResolvedPathHeader the path the opened file
+// is at, read from the open handle itself, for a shared page's files: it
+// always names the bytes served. When it cannot be read, the header is left out.
+func serveArtifactPreviewFile(w http.ResponseWriter, r *http.Request, rootPath, assetPath string) {
+	file, info, clean, err := previewutil.OpenWorkspaceFile(rootPath, assetPath)
+	if err != nil {
+		envelope.WriteAPIError(w, r, http.StatusNotFound, "not_found", "PREVIEW_FILE_NOT_FOUND", "Preview file not found", nil)
+		return
+	}
+	defer func() { _ = file.Close() }()
+	if resolved, ok := previewutil.ResolvedPath(rootPath, file); ok {
+		w.Header().Set(previewutil.ResolvedPathHeader, resolved)
+	}
 	serveOpenedPreviewFile(w, r, file, info, clean)
 }
 
@@ -3257,6 +3274,7 @@ func sessionView(r *http.Request, s domain.Session) SessionView {
 		PreviewURL:         s.Metadata.PreviewURL,
 		PreviewRevision:    s.Metadata.PreviewRevision,
 		Model:              s.Metadata.Model,
+		RoleAgent:          s.Metadata.RoleAgent,
 		LastUserMessageAt: func() *time.Time {
 			if s.Metadata.LatestUserPromptAt.IsZero() {
 				return nil

@@ -1286,6 +1286,58 @@ func TestSpawnEffortFlagWiring(t *testing.T) {
 	}
 }
 
+// TestSpawnPermissionFlagWiring asserts `ao spawn --permission` reaches the
+// daemon as the spawn's own approval mode, and that leaving it out sends none,
+// so the project's role setting (or the spawning orchestrator's) applies (#5954).
+func TestSpawnPermissionFlagWiring(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		args []string
+		want string
+	}{
+		{"flag set", []string{"--permission", " bypass-permissions "}, "bypass-permissions"},
+		{"flag omitted", nil, ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := setConfigEnv(t)
+			var req spawnRequest
+			var raw map[string]any
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.Header().Set("Content-Type", "application/json")
+				switch {
+				case r.Method == http.MethodGet && r.URL.Path == "/api/v1/projects/demo":
+					_, _ = io.WriteString(w, `{"status":"ok","project":{"id":"demo","name":"Demo","path":"/repo/demo"}}`)
+				case r.Method == http.MethodPost && r.URL.Path == "/api/v1/agents/readiness/ensure":
+					_, _ = io.WriteString(w, authorizedAgentsJSON("codex"))
+				case r.Method == http.MethodPost && r.URL.Path == "/api/v1/sessions":
+					body, _ := io.ReadAll(r.Body)
+					if err := json.Unmarshal(body, &req); err != nil {
+						t.Fatal(err)
+					}
+					_ = json.Unmarshal(body, &raw)
+					_, _ = io.WriteString(w, `{"session":{"id":"demo-21","status":"idle"}}`)
+				default:
+					http.NotFound(w, r)
+				}
+			}))
+			t.Cleanup(srv.Close)
+			writeRunFileFor(t, cfg, srv)
+
+			args := append([]string{"spawn", "--project", "demo", "--agent", "codex", "--name", "worker"}, tc.args...)
+			_, errOut, err := executeCLI(t, Deps{ProcessAlive: func(int) bool { return true }}, args...)
+			if err != nil {
+				t.Fatalf("spawn failed: %v stderr=%s", err, errOut)
+			}
+			if req.ApprovalMode != tc.want {
+				t.Fatalf("spawn request approvalMode = %q, want %q", req.ApprovalMode, tc.want)
+			}
+			if _, sent := raw["approvalMode"]; sent != (tc.want != "") {
+				t.Fatalf("approvalMode sent = %v, want %v", sent, tc.want != "")
+			}
+		})
+	}
+}
+
 // TestSpawnEffortSurfacesDaemonUnsupportedEffort asserts `ao spawn --effort`
 // on a harness that cannot honor it fails with the daemon's UNSUPPORTED_EFFORT
 // envelope instead of a CLI-side harness allowlist: the daemon owns which

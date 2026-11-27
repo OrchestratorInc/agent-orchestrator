@@ -1381,7 +1381,7 @@ func (s *Service) HandoffTarget(ctx context.Context, id domain.SessionID, harnes
 	headroom := make([]float64, len(accounts))
 	var wg sync.WaitGroup
 	for i, account := range accounts {
-		if account.Provider != p || account.ID == current.ID || account.PerToken() || s.beingRemoved(account.ID) {
+		if account.Provider != p || account.ID == current.ID || account.Device() || account.PerToken() || s.beingRemoved(account.ID) {
 			continue
 		}
 		wg.Go(func() {

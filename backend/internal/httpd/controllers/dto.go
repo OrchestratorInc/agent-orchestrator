@@ -601,6 +601,11 @@ type SessionView struct {
 	// Model is the agent model this session resolved to at spawn time. Empty
 	// means the agent's default model. Pulled from the json:"-" domain Metadata.
 	Model string `json:"model,omitempty"`
+	// RoleAgent is the agent the project named for this session's role when the
+	// session's agent was last chosen, at spawn or by a switch. A project
+	// setting that differs from it changed afterwards. Omitted for sessions
+	// from before AO recorded it. Pulled from the json:"-" domain Metadata.
+	RoleAgent domain.AgentHarness `json:"roleAgent,omitempty"`
 	// LastUserMessageAt is the latest real user-authored task direction time.
 	// Lifecycle and internal automation updates do not advance it.
 	LastUserMessageAt *time.Time `json:"lastUserMessageAt,omitempty"`

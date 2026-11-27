@@ -143,27 +143,28 @@ test("diagram source stays hidden behind the flowchart badge @T0", async ({ page
 	await expect(page.getByRole("dialog").getByText("Flowchart attached", { exact: true })).toBeVisible();
 });
 
-test("reply controls retain the existing floating layout on hover and focus @T0", async ({ page }) => {
+test("reply controls keep their own line under the bubble on hover and focus @T0", async ({ page }) => {
 	await page.setViewportSize({ width: 1000, height: 850 });
 	await page.goto("/e2e/excerpt-snapshots/harness.html");
 	await page.locator('[data-chat-message-id="question"]').hover();
 	const edit = page.getByRole("button", { name: "Copy user message", exact: true });
 	await expect(edit).toBeVisible();
-	const assertFloating = async () => {
+	const assertOwnLine = async () => {
 		expect(await edit.evaluate(element => {
 			const row = element.closest(".h-7");
 			if (!row) throw new Error("Reply action row missing");
+			// In the flow, so the row takes its own line instead of covering the reply below.
 			return getComputedStyle(row).position;
-		})).toBe("absolute");
+		})).toBe("static");
 	};
 	await page.screenshot({ path: test.info().outputPath("reply-controls.png") });
-	await assertFloating();
+	await assertOwnLine();
 	await edit.focus();
 	await page.mouse.move(0, 0);
 	await expect(edit).toBeFocused();
-	await assertFloating();
+	await assertOwnLine();
 	await page.setViewportSize({ width: 400, height: 850 });
-	await assertFloating();
+	await assertOwnLine();
 });
 
 test("captured excerpts span formatting and code and survive source deletion @T0", async ({ page }) => {

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"math"
+	"reflect"
 	"sort"
 	"strings"
 	"time"
@@ -58,6 +59,7 @@ type capacityReadEnvelope struct {
 
 func capacityObservationFromEnvelope(envelope capacityReadEnvelope, observedAt time.Time, partial bool) ports.CodexCapacityObservation {
 	overall := normalizeCapacityBucket(envelope.RateLimits, "codex", partial)
+	dropped := overall == nil
 	var plan *string
 	if envelope.RateLimits.PlanType != nil {
 		plan = safeCapacityText(*envelope.RateLimits.PlanType, 80)
@@ -65,7 +67,15 @@ func capacityObservationFromEnvelope(envelope capacityReadEnvelope, observedAt t
 	additional := make([]domain.CodexCapacityBucket, 0, len(envelope.RateLimitsByLimitID))
 	for key, wire := range envelope.RateLimitsByLimitID {
 		bucket := normalizeCapacityBucket(wire, key, partial)
-		if bucket == nil || (overall != nil && bucket.LimitID == overall.LimitID) {
+		if bucket == nil {
+			dropped = true
+			continue
+		}
+		if overall != nil && bucket.LimitID == overall.LimitID {
+			// A duplicate that disagrees with the overall bucket leaves capacity unknown.
+			if !reflect.DeepEqual(capacityState(*bucket), capacityState(*overall)) {
+				dropped = true
+			}
 			continue
 		}
 		additional = append(additional, *bucket)
@@ -75,8 +85,12 @@ func capacityObservationFromEnvelope(envelope capacityReadEnvelope, observedAt t
 		Plan: plan, Overall: overall, AdditionalBuckets: additional,
 		ResetCredits: normalizeResetCredits(envelope.RateLimitResetCredits),
 		ObservedAt:   observedAt.UTC(), Partial: partial,
-		AutoResumeResetsAt: capacityAutoResumeReset(envelope, observedAt, partial),
+		AutoResumeResetsAt: capacityAutoResumeReset(envelope, observedAt, partial), DroppedBucket: dropped,
 	}
+}
+
+func capacityState(b domain.CodexCapacityBucket) []any {
+	return []any{b.Primary, b.Secondary, b.Reached, b.InvalidWindow}
 }
 
 func capacityAutoResumeReset(envelope capacityReadEnvelope, now time.Time, partial bool) *time.Time {
@@ -135,10 +149,11 @@ func normalizeCapacityBucket(wire capacityWireBucket, fallbackID string, partial
 		(wire.SpendControlReached != nil && *wire.SpendControlReached) {
 		reached = domain.CodexCapacityReached
 	}
+	primary, secondary := normalizeCapacityWindow(wire.Primary), normalizeCapacityWindow(wire.Secondary)
 	return &domain.CodexCapacityBucket{
 		LimitID: id, DisplayName: safeOptionalCapacityText(wire.LimitName, 160),
-		Primary: normalizeCapacityWindow(wire.Primary), Secondary: normalizeCapacityWindow(wire.Secondary),
-		Reached: reached,
+		Primary: primary, Secondary: secondary, Reached: reached,
+		InvalidWindow: (wire.Primary != nil && primary == nil) || (wire.Secondary != nil && secondary == nil),
 	}
 }
 

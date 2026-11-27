@@ -1130,3 +1130,54 @@ func TestForcedSettingsChangeOnTheRunningAgentStopsItsTurn(t *testing.T) {
 		return len(snapshot.Turns) == 2 && snapshot.Turns[0].State.Terminal() && snapshot.Turns[1].State.Terminal()
 	})
 }
+
+type recordedAgentChoices struct {
+	mu  sync.Mutex
+	ids []domain.SessionID
+}
+
+func (r *recordedAgentChoices) RecordAgentChoice(_ context.Context, id domain.SessionID) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.ids = append(r.ids, id)
+	return nil
+}
+
+func (r *recordedAgentChoices) count() int {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return len(r.ids)
+}
+
+// A switch to another agent records the choice, so the board never reads it as
+// the project's agent setting drifting. A failed switch, or a pick of the agent
+// already running, chose nothing new.
+func TestProviderSwitchRecordsTheAgentChoiceOnlyWhenTheAgentChanged(t *testing.T) {
+	h, _, driver := newEditHarness(t, false)
+	ctx := context.Background()
+	choices := &recordedAgentChoices{}
+	h.svc.SetAgentChoiceRecorder(choices)
+
+	driver.startErr = errProviderSwitchTarget
+	if err := h.svc.SwitchProvider(ctx, testSession, domain.ProviderSwitchRequest{TargetHarness: domain.HarnessClaudeCode, IdempotencyKey: "fails"}); err == nil {
+		t.Fatal("switch with a failing target = nil, want an error")
+	}
+	if got := choices.count(); got != 0 {
+		t.Fatalf("recorded %d choices after a failed switch, want 0", got)
+	}
+
+	driver.startErr = nil
+	if err := h.svc.SwitchProvider(ctx, testSession, domain.ProviderSwitchRequest{TargetHarness: domain.HarnessClaudeCode, IdempotencyKey: "works"}); err != nil {
+		t.Fatal(err)
+	}
+	if got := choices.count(); got != 1 || choices.ids[0] != testSession {
+		t.Fatalf("recorded choices = %v, want one for %s", choices.ids, testSession)
+	}
+
+	if err := h.svc.SwitchProvider(ctx, testSession, domain.ProviderSwitchRequest{TargetHarness: domain.HarnessClaudeCode, IdempotencyKey: "same"}); !errors.Is(err, domain.ErrProviderAlreadyActive) {
+		t.Fatalf("switch to the running agent = %v, want already active", err)
+	}
+	if got := choices.count(); got != 1 {
+		t.Fatalf("recorded %d choices after picking the running agent, want 1", got)
+	}
+}

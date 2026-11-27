@@ -120,6 +120,12 @@ describe("buildMacAppMenuTemplate", () => {
 		);
 	});
 
+	it("binds Shift+Command+V to Paste and Match Style without showing a second item", () => {
+		expect(buildMacAppMenuTemplate(() => undefined, quit).find((item) => item.role === "fileMenu")?.submenu).toContainEqual(
+			{ role: "pasteAndMatchStyle", accelerator: "Shift+Command+V", visible: false },
+		);
+	});
+
 	it("routes Command+Q through a plain Quit item that reports whether the shortcut fired it", () => {
 		const onQuit = vi.fn();
 		const appMenu = buildMacAppMenuTemplate(() => undefined, { appName: "Agent Orchestrator", onQuit }).find(
