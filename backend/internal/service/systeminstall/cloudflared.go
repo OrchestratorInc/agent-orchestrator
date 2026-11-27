@@ -157,7 +157,12 @@ func (s *Service) runCloudflaredDownload(parent context.Context, download ports.
 		s.cloudflaredAutoStarted = errors.Is(err, ports.ErrDownloadRejected)
 		job.Status = StatusFailed
 		job.Error = fmt.Sprintf("Could not download cloudflared %s: %v", cloudflaredVersion, err)
-		job.FailureCause = classifyFailure(job.Status, job.Error, job.Output)
+		// The download's own error only wraps the expired deadline.
+		if ctx.Err() == context.DeadlineExceeded && !errors.Is(err, ports.ErrDownloadRejected) {
+			job.FailureCause = FailureTimeout
+		} else {
+			job.FailureCause = classifyFailure(job.Status, job.Error, job.Output)
+		}
 		s.mu.Unlock()
 		return
 	}
