@@ -4,6 +4,7 @@ import (
 	"testing"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
+	"github.com/aoagents/agent-orchestrator/backend/internal/sessionenv"
 )
 
 func envFrom(m map[string]string) func(string) string {
@@ -57,4 +58,27 @@ func TestCallerTagsNameShippedAgents(t *testing.T) {
 			t.Errorf("callerAIAgentAliases: %s maps to unknown agent %q", alias, harness)
 		}
 	}
+}
+
+// Every tag that names the calling agent must also be scrubbed from the
+// environment of a daemon that agent starts (sessionenv.ScrubForDaemon), or
+// the daemon's sessions would think they run inside the caller.
+func TestCallerTagsAreScrubbedFromDaemons(t *testing.T) {
+	scrubbed := map[string]bool{}
+	for _, k := range sessionenv.CallerMarkers {
+		scrubbed[k] = true
+	}
+	for _, k := range append([]string{CallerAIAgentEnv}, callerTagEnvs()...) {
+		if !scrubbed[k] {
+			t.Errorf("%s detects the calling agent but is not in sessionenv.CallerMarkers", k)
+		}
+	}
+}
+
+func callerTagEnvs() []string {
+	out := make([]string, 0, len(CallerEnvTags))
+	for _, tag := range CallerEnvTags {
+		out = append(out, tag.Env)
+	}
+	return out
 }
