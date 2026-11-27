@@ -111,6 +111,12 @@ type commander interface {
 	CancelTaskPreparation(context.Context, domain.TaskPreparationToken) error
 }
 
+// automationChatHibernator is an optional command capability: the manager
+// stops a finished automation's Chat provider without ending the session.
+type automationChatHibernator interface {
+	HibernateChatForAutomation(ctx context.Context, id domain.SessionID) (bool, error)
+}
+
 // interfaceTransitionCommander is an optional command capability. Keeping it
 // separate avoids widening every focused session-service fake while production
 // can expose the feature through the concrete Session Manager.
@@ -1395,6 +1401,52 @@ func restoreModeView(mode sessionmanager.RestoreMode) RestoreModeView {
 	default:
 		return RestoreModeView(mode)
 	}
+}
+
+// HibernateChatForAutomation stops the Chat provider of a scheduled session
+// whose run has finished, keeping the session and its conversation
+// resumable. False without an error means the session still has work (a
+// turn, queued message, approval or open view) and the caller retries later.
+func (s *Service) HibernateChatForAutomation(ctx context.Context, id domain.SessionID) (bool, error) {
+	hibernator, ok := s.manager.(automationChatHibernator)
+	if !ok {
+		return false, ports.ErrChatHibernationUnsupported
+	}
+	return hibernator.HibernateChatForAutomation(ctx, id)
+}
+
+// automationSettledKiller is an optional command capability: the manager
+// kills a finished automation's session only if it is still finished once
+// input admission is closed.
+type automationSettledKiller interface {
+	KillIfSettled(ctx context.Context, read domain.SessionRecord) (bool, error)
+}
+
+// KillSettledForAutomation ends a scheduled session whose run has finished,
+// as Kill does, unless it started work after the caller read it as settled.
+// False without an error means it did, and the caller re-checks later.
+func (s *Service) KillSettledForAutomation(ctx context.Context, read domain.SessionRecord) (bool, error) {
+	killer, ok := s.manager.(automationSettledKiller)
+	if !ok {
+		return false, errors.New("conditional kill is unavailable")
+	}
+	before, live := s.liveSessionBeforeEnd(ctx, read.ID)
+	_, err := killer.KillIfSettled(ctx, read)
+	if errors.Is(err, sessionmanager.ErrSessionActivityChanged) {
+		return false, nil
+	}
+	s.cancelTitleRefinement(read.ID)
+	s.recordKillOutcome(ctx, before, live, err)
+	if err != nil {
+		apiErr := toAPIError(err)
+		s.recordTerminated(ctx, read.ID, actionStatusForError(err), apiErr)
+		return false, apiErr
+	}
+	s.recordTerminated(ctx, read.ID, domain.ActivityStatusCompleted, nil)
+	if s.usageArchiveFlush != nil {
+		s.usageArchiveFlush(ctx)
+	}
+	return true, nil
 }
 
 // Kill delegates terminal intent and teardown to the internal manager.

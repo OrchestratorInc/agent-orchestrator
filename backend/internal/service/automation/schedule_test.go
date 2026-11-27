@@ -150,3 +150,28 @@ func TestCanonicalizeScheduleKeepsDailyWallClockAcrossDST(t *testing.T) {
 		t.Fatalf("next run = %s, want %s", schedule.NextRunAt, want)
 	}
 }
+
+func TestOccurrencesAroundIsInclusiveAndZeroBeforeStart(t *testing.T) {
+	const rule = "DTSTART:20260825T090000Z\nRRULE:FREQ=HOURLY"
+	base := time.Date(2026, time.August, 25, 9, 0, 0, 0, time.UTC)
+	for _, tc := range []struct {
+		at, previous, next time.Time
+	}{
+		{at: base.Add(-time.Minute), previous: time.Time{}, next: base},
+		{at: base, previous: base, next: base.Add(time.Hour)},
+		{at: base.Add(2*time.Hour + 59*time.Minute), previous: base.Add(2 * time.Hour), next: base.Add(3 * time.Hour)},
+		{at: base.Add(3 * time.Hour), previous: base.Add(3 * time.Hour), next: base.Add(4 * time.Hour)},
+	} {
+		previous, next, err := occurrencesAround(rule, "UTC", tc.at)
+		if err != nil {
+			t.Fatalf("occurrencesAround(%s): %v", tc.at, err)
+		}
+		if !previous.Equal(tc.previous) || !next.Equal(tc.next) {
+			t.Fatalf("occurrencesAround(%s) = %s, %s; want %s, %s", tc.at, previous, next, tc.previous, tc.next)
+		}
+		want, err := NextOccurrence(rule, "UTC", tc.at)
+		if err != nil || !want.Equal(next) {
+			t.Fatalf("NextOccurrence(%s) = %s, %v; occurrencesAround next = %s", tc.at, want, err, next)
+		}
+	}
+}

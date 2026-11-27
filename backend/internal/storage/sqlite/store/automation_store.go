@@ -145,22 +145,28 @@ func (s *Store) ListDueAutomations(ctx context.Context, now time.Time, limit int
 	return items, nil
 }
 
-// MaterializeAutomationRuns atomically inserts a bounded occurrence batch and
-// advances the definition cursor. expectedNext is a compare-and-swap fence
-// against stale or concurrent scheduler passes.
-func (s *Store) MaterializeAutomationRuns(
+// MaterializeAutomationRun advances the definition cursor and leaves exactly
+// one pending run owed for run.ScheduledFor, in one transaction. expectedNext
+// is a compare-and-swap fence against stale or concurrent scheduler passes.
+//
+// With no pending run, run is inserted. Otherwise one pending run is kept, the
+// one already at run.ScheduledFor or else the oldest moved there (keeping its
+// ID), and any other pending runs are marked skipped. Each update matches only rows still pending, and the claim
+// path shares this store's write lock, so a run a claim has taken is never
+// moved or skipped.
+func (s *Store) MaterializeAutomationRun(
 	ctx context.Context,
 	id domain.AutomationID,
 	expectedNext time.Time,
-	runs []domain.AutomationRun,
-	lastRunAt time.Time,
+	run domain.AutomationRun,
 	nextRunAt time.Time,
 	updatedAt time.Time,
 ) (bool, error) {
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()
 	applied := false
-	err := s.inTx(ctx, "materialize automation runs", func(q *gen.Queries) error {
+	err := s.inTx(ctx, "materialize automation run", func(q *gen.Queries) error {
+		lastRunAt := run.ScheduledFor
 		rows, err := q.AdvanceAutomationSchedule(ctx, gen.AdvanceAutomationScheduleParams{
 			LastRunAt: timePtrToNullTime(&lastRunAt), NextRunAt: nextRunAt,
 			UpdatedAt: updatedAt, ID: id, NextRunAt_2: expectedNext,
@@ -171,12 +177,45 @@ func (s *Store) MaterializeAutomationRuns(
 		if rows == 0 {
 			return nil
 		}
-		for _, run := range runs {
-			if _, err := q.InsertAutomationRun(ctx, automationRunToInsert(run)); err != nil {
+		applied = true
+		pending, err := q.ListPendingAutomationRunIDs(ctx, id)
+		if err != nil {
+			return err
+		}
+		if len(pending) == 0 {
+			_, err := q.InsertAutomationRun(ctx, automationRunToInsert(run))
+			return err
+		}
+		// A row already at this occurrence owns the unique slot. When it is
+		// pending, it is the run to keep. When a claim has taken it, leave the
+		// retained run where it is rather than collide. Otherwise move the
+		// oldest pending run to the occurrence.
+		keep := pending[0]
+		occupant, err := q.GetAutomationRunByOccurrence(ctx, gen.GetAutomationRunByOccurrenceParams{
+			AutomationID: id, ScheduledFor: run.ScheduledFor,
+		})
+		switch {
+		case errors.Is(err, sql.ErrNoRows):
+			if _, err := q.RescheduleAutomationRun(ctx, gen.RescheduleAutomationRunParams{
+				ScheduledFor: run.ScheduledFor, UpdatedAt: updatedAt, ID: keep,
+			}); err != nil {
+				return err
+			}
+		case err != nil:
+			return err
+		case occupant.Status == domain.AutomationRunPending:
+			keep = occupant.ID
+		}
+		for _, extra := range pending {
+			if extra == keep {
+				continue
+			}
+			if _, err := q.SkipAutomationRun(ctx, gen.SkipAutomationRunParams{
+				FinishedAt: timePtrToNullTime(&updatedAt), UpdatedAt: updatedAt, ID: extra,
+			}); err != nil {
 				return err
 			}
 		}
-		applied = true
 		return nil
 	})
 	if err != nil {
@@ -320,11 +359,11 @@ func automationRunsFromGen(rows []gen.AutomationRun) []domain.AutomationRun {
 }
 
 // MarkAutomationRunRunning links the unique spawned session.
-func (s *Store) MarkAutomationRunRunning(ctx context.Context, id domain.AutomationRunID, sessionID domain.SessionID, now time.Time) (bool, error) {
+func (s *Store) MarkAutomationRunRunning(ctx context.Context, id domain.AutomationRunID, sessionID domain.SessionID, startedAt, now time.Time) (bool, error) {
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()
 	rows, err := s.qw.MarkAutomationRunRunning(ctx, gen.MarkAutomationRunRunningParams{
-		SessionID: &sessionID, StartedAt: timePtrToNullTime(&now), UpdatedAt: now, ID: id,
+		SessionID: &sessionID, StartedAt: timePtrToNullTime(&startedAt), UpdatedAt: now, ID: id,
 	})
 	if err != nil {
 		return false, fmt.Errorf("mark automation run %s running: %w", id, err)

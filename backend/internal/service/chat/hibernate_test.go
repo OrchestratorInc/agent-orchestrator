@@ -307,6 +307,73 @@ func TestHibernationGateRechecksAfterEligibilityRead(t *testing.T) {
 	}
 }
 
+// A finished automation run stops its provider whatever the idle hibernation
+// setting, orchestrator kind included, so it cannot work again beside the next
+// occurrence. Work the provider still has keeps it running.
+func TestHibernateChatForAutomationIgnoresIdleSettingButKeepsWork(t *testing.T) {
+	h, conv := settledHibernationHarness(t, domain.TurnStateCompleted, func() bool { return false })
+	ctx := context.Background()
+	rec, found, err := h.st.GetSession(ctx, testSession)
+	if err != nil || !found {
+		t.Fatalf("get session = %v, %v", found, err)
+	}
+	rec.Kind = domain.KindOrchestrator
+	if err := h.st.UpdateSession(ctx, rec); err != nil {
+		t.Fatal(err)
+	}
+	conv.backgroundRunning = true
+	if stopped, err := h.svc.HibernateChatForAutomation(ctx, testSession); err != nil || stopped || conv.calls.Load() != 0 || !h.svc.HasLiveChatController(testSession) {
+		t.Fatalf("background work: stopped=%v err=%v calls=%d live=%v", stopped, err, conv.calls.Load(), h.svc.HasLiveChatController(testSession))
+	}
+	conv.backgroundRunning = false
+	if stopped, err := h.svc.HibernateChatForAutomation(ctx, testSession); err != nil || !stopped || conv.calls.Load() != 1 {
+		t.Fatalf("finished run: stopped=%v err=%v calls=%d", stopped, err, conv.calls.Load())
+	}
+	rec, _, err = h.st.GetSession(ctx, testSession)
+	if err != nil || rec.HibernatedAt == nil || rec.IsTerminated {
+		t.Fatalf("hibernated record = %+v, %v", rec, err)
+	}
+}
+
+// A provider that advertises resume but cannot hibernate is reported as
+// unsupported, so the scheduler kills the session instead of retrying forever.
+func TestHibernateChatForAutomationReportsProviderWithoutHibernator(t *testing.T) {
+	h := newHarness(t)
+	if stopped, err := h.svc.HibernateChatForAutomation(context.Background(), testSession); stopped || !errors.Is(err, ports.ErrChatHibernationUnsupported) {
+		t.Fatalf("HibernateChatForAutomation = %v, %v; want unsupported", stopped, err)
+	}
+	if !h.svc.HasLiveChatController(testSession) {
+		t.Fatal("an unsupported hibernation stopped the provider")
+	}
+}
+
+// A shutdown whose provider and host stops both failed leaves the session
+// marked hibernated with its controller live. The next automation call
+// finishes that shutdown instead of reporting the session busy forever.
+func TestHibernateChatForAutomationFinishesFailedShutdown(t *testing.T) {
+	h, conv := settledHibernationHarness(t, domain.TurnStateCompleted)
+	conv.shutdownErr = errors.New("shutdown acknowledgement lost")
+	conv.hostShutdownErr = errors.New("host still unreachable")
+	ctx := context.Background()
+	if stopped, err := h.svc.HibernateChatForAutomation(ctx, testSession); stopped || err == nil {
+		t.Fatalf("first attempt = %v, %v; want a failed shutdown", stopped, err)
+	}
+	if stopped, err := h.svc.HibernateChatForAutomation(ctx, testSession); stopped || err == nil || conv.hostStops.Load() != 2 {
+		t.Fatalf("retry while the host is down = %v, %v, host stops=%d", stopped, err, conv.hostStops.Load())
+	}
+	conv.hostShutdownErr = nil
+	if stopped, err := h.svc.HibernateChatForAutomation(ctx, testSession); !stopped || err != nil {
+		t.Fatalf("retry = %v, %v; want the shutdown finished", stopped, err)
+	}
+	rec, _, err := h.st.GetSession(ctx, testSession)
+	if err != nil || rec.HibernatedAt == nil || h.svc.HasLiveChatController(testSession) || conv.hostStops.Load() != 3 {
+		t.Fatalf("after retry: marker=%v live=%v host stops=%d err=%v", rec.HibernatedAt, h.svc.HasLiveChatController(testSession), conv.hostStops.Load(), err)
+	}
+	if stopped, err := h.svc.HibernateChatForAutomation(ctx, testSession); !stopped || err != nil {
+		t.Fatalf("stopped session = %v, %v; want reported stopped", stopped, err)
+	}
+}
+
 func TestHibernateChatKeepsCompletedIdleSessionResumable(t *testing.T) {
 	h, conv := settledHibernationHarness(t, domain.TurnStateCompleted)
 	ctx := context.Background()

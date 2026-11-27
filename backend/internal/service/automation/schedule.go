@@ -154,23 +154,57 @@ func embeddedTimezone(value string) string {
 // NextOccurrence calculates the first logical occurrence strictly after the
 // supplied instant using the persisted anchor and named timezone.
 func NextOccurrence(rruleText, timezone string, after time.Time) (time.Time, error) {
-	loc, err := time.LoadLocation(timezone)
+	rule, err := parseRule(rruleText, timezone)
 	if err != nil {
-		return time.Time{}, fmt.Errorf("load timezone %q: %w", timezone, err)
-	}
-	option, err := rrule.StrToROptionInLocation(rruleText, loc)
-	if err != nil {
-		return time.Time{}, fmt.Errorf("parse rrule: %w", err)
-	}
-	rule, err := rrule.NewRRule(*option)
-	if err != nil {
-		return time.Time{}, fmt.Errorf("build rrule: %w", err)
+		return time.Time{}, err
 	}
 	next := rule.After(after, false)
 	if next.IsZero() {
 		return time.Time{}, fmt.Errorf("schedule has no future occurrence")
 	}
 	return next.UTC(), nil
+}
+
+// occurrencesAround returns the latest occurrence at or before at (zero when
+// the schedule had not started) and the first one strictly after it. It parses
+// the rule once and walks it from DTSTART once; rrule-go's Before and After
+// would each walk it again.
+func occurrencesAround(rruleText, timezone string, at time.Time) (time.Time, time.Time, error) {
+	rule, err := parseRule(rruleText, timezone)
+	if err != nil {
+		return time.Time{}, time.Time{}, err
+	}
+	var previous time.Time
+	next := rule.Iterator()
+	for {
+		occurrence, ok := next()
+		if !ok {
+			return time.Time{}, time.Time{}, fmt.Errorf("schedule has no future occurrence")
+		}
+		if occurrence.After(at) {
+			if !previous.IsZero() {
+				previous = previous.UTC()
+			}
+			return previous, occurrence.UTC(), nil
+		}
+		previous = occurrence
+	}
+}
+
+func parseRule(rruleText, timezone string) (*rrule.RRule, error) {
+	loc, err := time.LoadLocation(timezone)
+	if err != nil {
+		return nil, fmt.Errorf("load timezone %q: %w", timezone, err)
+	}
+	option, err := rrule.StrToROptionInLocation(rruleText, loc)
+	if err != nil {
+		return nil, fmt.Errorf("parse rrule: %w", err)
+	}
+	rule, err := rrule.NewRRule(*option)
+	if err != nil {
+		return nil, fmt.Errorf("build rrule: %w", err)
+	}
+	return rule, nil
 }
 
 // cronToRRule intentionally accepts the unambiguous minute/hour + optional

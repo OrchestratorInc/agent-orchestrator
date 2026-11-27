@@ -18459,6 +18459,7 @@ components:
           - running
           - completed
           - failed
+          - skipped
           type: string
         updatedAt:
           format: date-time
@@ -18500,6 +18501,7 @@ components:
           - running
           - completed
           - failed
+          - skipped
           type: string
       required:
       - id

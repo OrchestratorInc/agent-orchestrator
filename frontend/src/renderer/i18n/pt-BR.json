@@ -5216,6 +5216,7 @@
 	"automations.runStatus.running": "Em execução",
 	"automations.runStatus.completed": "Concluída",
 	"automations.runStatus.failed": "Falhou",
+	"automations.runStatus.skipped": "Ignorada",
 	"automations.summary.daily": "Diariamente",
 	"automations.summary.dailyAt": "Diariamente às {{time}}",
 	"automations.summary.weekdays": "Dias úteis",

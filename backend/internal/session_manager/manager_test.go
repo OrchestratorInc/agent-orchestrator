@@ -3129,6 +3129,41 @@ func TestSpawnAutomationAfterStartPromptFailureDoesNotCompleteLaunch(t *testing.
 	}
 }
 
+// Marking an automation launch complete moves its prompt time to the
+// completion, which follows after-start delivery, so a run recovered after a
+// restart never starts before the prompt reached the agent. A later prompt
+// time (the agent's prompt-submit hook) is kept.
+func TestMarkAutomationLaunchCompletedRecordsPromptTimeAfterDelivery(t *testing.T) {
+	built := time.Date(2026, time.August, 25, 11, 0, 0, 0, time.UTC)
+	completed := built.Add(5 * time.Second)
+	for _, tc := range []struct {
+		name     string
+		promptAt time.Time
+		want     time.Time
+	}{
+		{name: "built before delivery", promptAt: built, want: completed},
+		{name: "hook already later", promptAt: completed.Add(time.Second), want: completed.Add(time.Second)},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			m, st, _, _ := newManager()
+			m.clock = func() time.Time { return completed }
+			runID := domain.AutomationRunID("run-1")
+			rec := mkLive("mer-1")
+			rec.AutomationRunID = &runID
+			rec.Metadata.LatestUserPromptAt = tc.promptAt
+			st.sessions[rec.ID] = rec
+
+			if err := m.markAutomationLaunchCompleted(ctx, rec.ID); err != nil {
+				t.Fatal(err)
+			}
+			got := st.sessions[rec.ID]
+			if !got.AutomationLaunchCompleted || !got.Metadata.LatestUserPromptAt.Equal(tc.want) {
+				t.Fatalf("completed=%v prompt at %s, want %s", got.AutomationLaunchCompleted, got.Metadata.LatestUserPromptAt, tc.want)
+			}
+		})
+	}
+}
+
 func TestSpawnAutomationChatMarksLaunchCompletedAfterPromptDelivery(t *testing.T) {
 	st := newFakeStore()
 	st.projects["mer"] = domain.ProjectRecord{ID: "mer", Config: testRoleAgents()}
@@ -4338,6 +4373,44 @@ func TestKill_TearsDownRuntimeAndWorkspace(t *testing.T) {
 		t.Fatalf("reviewer terminate bodies = %v", reviewer.bodies)
 	}
 	requireNoPromptDir(t, dataDir, "mer-1")
+}
+
+// KillIfSettled re-reads the session once input admission is closed. A prompt
+// recorded after the caller's reading, or activity that is no longer idle,
+// refuses the kill and leaves the session running; an unchanged session is
+// killed.
+func TestKillIfSettledRefusesASessionThatStartedWork(t *testing.T) {
+	promptAt := time.Date(2026, time.August, 25, 11, 0, 0, 0, time.UTC)
+	for _, tc := range []struct {
+		name   string
+		change func(*domain.SessionRecord)
+		killed bool
+	}{
+		{name: "newer prompt", change: func(rec *domain.SessionRecord) { rec.Metadata.LatestUserPromptAt = promptAt.Add(time.Minute) }},
+		{name: "active again", change: func(rec *domain.SessionRecord) { rec.Activity.State = domain.ActivityActive }},
+		{name: "unchanged", change: func(*domain.SessionRecord) {}, killed: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			m, st, _, _ := newManager()
+			read := mkLive("mer-1")
+			read.Activity.State = domain.ActivityIdle
+			read.Metadata.LatestUserPromptAt = promptAt
+			current := read
+			tc.change(&current)
+			st.sessions[read.ID] = current
+
+			_, err := m.KillIfSettled(ctx, read)
+			if tc.killed {
+				if err != nil || !st.sessions[read.ID].IsTerminated {
+					t.Fatalf("kill = %v, terminated=%v; want killed", err, st.sessions[read.ID].IsTerminated)
+				}
+				return
+			}
+			if !errors.Is(err, ErrSessionActivityChanged) || st.sessions[read.ID].IsTerminated {
+				t.Fatalf("kill = %v, terminated=%v; want refused", err, st.sessions[read.ID].IsTerminated)
+			}
+		})
+	}
 }
 
 func TestKillCleanupScriptHasNoTimeLimit(t *testing.T) {

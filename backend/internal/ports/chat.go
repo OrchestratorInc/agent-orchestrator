@@ -109,6 +109,11 @@ var (
 	// did not answer with an error, so the failure says nothing about whether
 	// the next prompt would fail too.
 	ErrChatPromptStalled = errors.New("chat provider stopped responding")
+
+	// ErrChatHibernationUnsupported means a chat session cannot be hibernated
+	// because its provider cannot resume the conversation afterwards. A caller
+	// that must stop the provider ends the session instead.
+	ErrChatHibernationUnsupported = errors.New("chat provider cannot resume a hibernated conversation")
 )
 
 // ChatHistoryMismatchDimension identifies the exact durable checkpoint fact a

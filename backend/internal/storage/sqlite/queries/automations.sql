@@ -155,6 +155,21 @@ SET status = 'failed', finished_at = ?, claimed_at = NULL,
     lease_expires_at = NULL, error_message = ?, updated_at = ?
 WHERE id = ? AND status IN ('pending', 'spawning', 'running');
 
+-- name: ListPendingAutomationRunIDs :many
+SELECT id FROM automation_runs
+WHERE automation_id = ? AND status = 'pending'
+ORDER BY scheduled_for, id;
+
+-- name: RescheduleAutomationRun :execrows
+UPDATE automation_runs
+SET scheduled_for = ?, updated_at = ?
+WHERE id = ? AND status = 'pending';
+
+-- name: SkipAutomationRun :execrows
+UPDATE automation_runs
+SET status = 'skipped', finished_at = ?, error_message = NULL, updated_at = ?
+WHERE id = ? AND status = 'pending';
+
 -- name: ReleaseAutomationRun :execrows
 UPDATE automation_runs
 SET status = 'pending', claimed_at = NULL, lease_expires_at = NULL,

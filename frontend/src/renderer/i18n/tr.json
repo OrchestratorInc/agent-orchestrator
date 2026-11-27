@@ -5124,6 +5124,7 @@
 	"automations.runStatus.running": "Çalışıyor",
 	"automations.runStatus.completed": "Tamamlandı",
 	"automations.runStatus.failed": "Başarısız",
+	"automations.runStatus.skipped": "Atlandı",
 	"automations.summary.daily": "Her gün",
 	"automations.summary.dailyAt": "Her gün {{time}} saatinde",
 	"automations.summary.weekdays": "Hafta içi",

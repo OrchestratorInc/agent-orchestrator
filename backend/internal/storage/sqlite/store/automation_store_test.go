@@ -318,7 +318,7 @@ func TestAutomationRunHistoryFiltersNewestFirst(t *testing.T) {
 }
 
 // Materialization must atomically advance the definition with its occurrence
-// inserts; a stale scheduler pass must not append a second batch.
+// insert; a stale scheduler pass must not add a second run.
 func TestAutomationMaterializationUsesNextRunCompareAndSwap(t *testing.T) {
 	store := newTestStore(t)
 	seedProject(t, store, "scheduled")
@@ -331,25 +331,121 @@ func TestAutomationMaterializationUsesNextRunCompareAndSwap(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("CreateAutomation: %v", err)
 	}
-	runs := []domain.AutomationRun{
-		{ID: "run-1", AutomationID: "automation-1", ScheduledFor: base, Status: domain.AutomationRunPending, CreatedAt: base, UpdatedAt: base},
-		{ID: "run-2", AutomationID: "automation-1", ScheduledFor: base.Add(time.Hour), Status: domain.AutomationRunPending, CreatedAt: base, UpdatedAt: base},
-	}
+	run := domain.AutomationRun{ID: "run-1", AutomationID: "automation-1", ScheduledFor: base.Add(time.Hour), Status: domain.AutomationRunPending, CreatedAt: base, UpdatedAt: base}
 	next := base.Add(2 * time.Hour)
-	applied, err := store.MaterializeAutomationRuns(ctx, "automation-1", base, runs, base.Add(time.Hour), next, base)
+	applied, err := store.MaterializeAutomationRun(ctx, "automation-1", base, run, next, base)
 	if err != nil || !applied {
-		t.Fatalf("MaterializeAutomationRuns: applied=%v err=%v", applied, err)
+		t.Fatalf("MaterializeAutomationRun: applied=%v err=%v", applied, err)
 	}
-	applied, err = store.MaterializeAutomationRuns(ctx, "automation-1", base, []domain.AutomationRun{{
+	applied, err = store.MaterializeAutomationRun(ctx, "automation-1", base, domain.AutomationRun{
 		ID: "run-stale", AutomationID: "automation-1", ScheduledFor: base.Add(30 * time.Minute), Status: domain.AutomationRunPending, CreatedAt: base, UpdatedAt: base,
-	}}, base, next, base)
+	}, next, base)
 	if err != nil || applied {
-		t.Fatalf("stale MaterializeAutomationRuns: applied=%v err=%v", applied, err)
+		t.Fatalf("stale MaterializeAutomationRun: applied=%v err=%v", applied, err)
 	}
 	definition, _, _ := store.GetAutomation(ctx, "automation-1")
 	page, err := store.ListAutomationRuns(ctx, domain.AutomationRunFilter{AutomationID: "automation-1", Limit: 10})
-	if err != nil || page.Total != 2 || !definition.NextRunAt.Equal(next) {
+	if err != nil || page.Total != 1 || !definition.NextRunAt.Equal(next) {
 		t.Fatalf("materialized state: definition=%#v runs=%#v err=%v", definition, page, err)
+	}
+	if definition.LastRunAt == nil || !definition.LastRunAt.Equal(run.ScheduledFor) {
+		t.Fatalf("last run = %v, want %s", definition.LastRunAt, run.ScheduledFor)
+	}
+}
+
+// With runs already pending, materialization keeps one: the oldest moves to
+// the new occurrence and the rest become skipped. A run a claim has taken is
+// not pending, so it is neither moved nor skipped.
+func TestAutomationMaterializationCoalescesPendingRuns(t *testing.T) {
+	store := newTestStore(t)
+	seedProject(t, store, "scheduled")
+	ctx := context.Background()
+	base := time.Date(2026, time.August, 25, 9, 0, 0, 0, time.UTC)
+	if _, err := store.CreateAutomation(ctx, domain.Automation{
+		ID: "automation-1", ProjectID: "scheduled", DisplayName: "Triage", Prompt: "Review",
+		Kind: domain.KindWorker, RRuleText: "FREQ=HOURLY", Timezone: "UTC", Enabled: true,
+		NextRunAt: base, CreatedAt: base, UpdatedAt: base,
+	}); err != nil {
+		t.Fatalf("CreateAutomation: %v", err)
+	}
+	for i, id := range []domain.AutomationRunID{"run-claimed", "run-oldest", "run-middle", "run-newest"} {
+		if _, _, err := store.CreateAutomationRun(ctx, domain.AutomationRun{
+			ID: id, AutomationID: "automation-1", ScheduledFor: base.Add(time.Duration(i-4) * time.Hour),
+			Status: domain.AutomationRunPending, CreatedAt: base, UpdatedAt: base,
+		}); err != nil {
+			t.Fatalf("CreateAutomationRun %s: %v", id, err)
+		}
+	}
+	claimed, ok, err := store.ClaimNextAutomationRun(ctx, base, base.Add(time.Minute))
+	if err != nil || !ok || claimed.ID != "run-claimed" {
+		t.Fatalf("ClaimNextAutomationRun = %#v ok=%v err=%v", claimed, ok, err)
+	}
+
+	latest := base.Add(3 * time.Hour)
+	applied, err := store.MaterializeAutomationRun(ctx, "automation-1", base, domain.AutomationRun{
+		ID: "run-new", AutomationID: "automation-1", ScheduledFor: latest, Status: domain.AutomationRunPending, CreatedAt: latest, UpdatedAt: latest,
+	}, latest.Add(time.Hour), latest)
+	if err != nil || !applied {
+		t.Fatalf("MaterializeAutomationRun: applied=%v err=%v", applied, err)
+	}
+	want := map[domain.AutomationRunID]domain.AutomationRunStatus{
+		"run-claimed": domain.AutomationRunSpawning,
+		"run-oldest":  domain.AutomationRunPending,
+		"run-middle":  domain.AutomationRunSkipped,
+		"run-newest":  domain.AutomationRunSkipped,
+	}
+	for id, status := range want {
+		got, ok, err := store.GetAutomationRun(ctx, id)
+		if err != nil || !ok || got.Status != status {
+			t.Fatalf("run %s = %#v ok=%v err=%v, want %s", id, got, ok, err, status)
+		}
+		if id == "run-oldest" && !got.ScheduledFor.Equal(latest) {
+			t.Fatalf("retained run scheduled for %s, want %s", got.ScheduledFor, latest)
+		}
+		if status == domain.AutomationRunSkipped && (got.FinishedAt == nil || got.ErrorMessage != "") {
+			t.Fatalf("skipped run %s = %#v", id, got)
+		}
+	}
+	if _, ok, _ := store.GetAutomationRun(ctx, "run-new"); ok {
+		t.Fatal("a pending run existed, so no new row should be inserted")
+	}
+}
+
+// A pending run already at the requested occurrence is the one to keep:
+// moving the oldest there would collide with it, and skipping it would leave
+// the kept run at an older time.
+func TestAutomationMaterializationKeepsPendingRunAtTheOccurrence(t *testing.T) {
+	store := newTestStore(t)
+	seedProject(t, store, "scheduled")
+	ctx := context.Background()
+	base := time.Date(2026, time.August, 25, 9, 0, 0, 0, time.UTC)
+	if _, err := store.CreateAutomation(ctx, domain.Automation{
+		ID: "automation-1", ProjectID: "scheduled", DisplayName: "Triage", Prompt: "Review",
+		Kind: domain.KindWorker, RRuleText: "FREQ=HOURLY", Timezone: "UTC", Enabled: true,
+		NextRunAt: base, CreatedAt: base, UpdatedAt: base,
+	}); err != nil {
+		t.Fatalf("CreateAutomation: %v", err)
+	}
+	latest := base.Add(time.Hour)
+	for id, at := range map[domain.AutomationRunID]time.Time{"run-older": base, "run-at-occurrence": latest} {
+		if _, _, err := store.CreateAutomationRun(ctx, domain.AutomationRun{
+			ID: id, AutomationID: "automation-1", ScheduledFor: at,
+			Status: domain.AutomationRunPending, CreatedAt: base, UpdatedAt: base,
+		}); err != nil {
+			t.Fatalf("CreateAutomationRun %s: %v", id, err)
+		}
+	}
+	applied, err := store.MaterializeAutomationRun(ctx, "automation-1", base, domain.AutomationRun{
+		ID: "run-new", AutomationID: "automation-1", ScheduledFor: latest, Status: domain.AutomationRunPending, CreatedAt: latest, UpdatedAt: latest,
+	}, latest.Add(time.Hour), latest)
+	if err != nil || !applied {
+		t.Fatalf("MaterializeAutomationRun: applied=%v err=%v", applied, err)
+	}
+	if got, ok, err := store.GetAutomationRun(ctx, "run-at-occurrence"); err != nil || !ok || got.Status != domain.AutomationRunPending || !got.ScheduledFor.Equal(latest) {
+		t.Fatalf("run at the occurrence = %#v ok=%v err=%v, want pending at %s", got, ok, err, latest)
+	}
+	if got, ok, err := store.GetAutomationRun(ctx, "run-older"); err != nil || !ok || got.Status != domain.AutomationRunSkipped {
+		t.Fatalf("older run = %#v ok=%v err=%v, want skipped", got, ok, err)
 	}
 }
 

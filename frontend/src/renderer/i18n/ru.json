@@ -5310,6 +5310,7 @@
 	"automations.runStatus.running": "Выполняется",
 	"automations.runStatus.completed": "Завершён",
 	"automations.runStatus.failed": "Ошибка",
+	"automations.runStatus.skipped": "Пропущено",
 	"automations.summary.daily": "Ежедневно",
 	"automations.summary.dailyAt": "Ежедневно в {{time}}",
 	"automations.summary.weekdays": "По будням",

@@ -5045,6 +5045,7 @@
 	"automations.runStatus.running": "运行中",
 	"automations.runStatus.completed": "已完成",
 	"automations.runStatus.failed": "失败",
+	"automations.runStatus.skipped": "已跳过",
 	"automations.summary.daily": "每天",
 	"automations.summary.dailyAt": "每天 {{time}}",
 	"automations.summary.weekdays": "工作日",

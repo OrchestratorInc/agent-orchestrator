@@ -6253,7 +6253,7 @@ export interface components {
             /** Format: date-time */
             startedAt?: null | string;
             /** @enum {string} */
-            status: "pending" | "spawning" | "running" | "completed" | "failed";
+            status: "pending" | "spawning" | "running" | "completed" | "failed" | "skipped";
             /** Format: date-time */
             updatedAt: string;
         };
@@ -6268,7 +6268,7 @@ export interface components {
             /** Format: date-time */
             startedAt?: null | string;
             /** @enum {string} */
-            status: "pending" | "spawning" | "running" | "completed" | "failed";
+            status: "pending" | "spawning" | "running" | "completed" | "failed" | "skipped";
         };
         AwakeApplication: {
             id: string;
