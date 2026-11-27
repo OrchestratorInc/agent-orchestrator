@@ -157,7 +157,7 @@ func (c *commandContext) serve(ctx context.Context, out, errOut io.Writer, opts 
 	if err != nil {
 		return nil, fmt.Errorf("start daemon: %w", err)
 	}
-	return c.waitServeReady(ctx, cfg, child.PID, child.Exited, opts.timeout, false)
+	return c.waitServeReady(ctx, cfg, child.PID, child.Exited, opts.timeout, false, nil)
 }
 
 // existingDaemon returns the daemon that already serves this data dir, or
@@ -180,7 +180,7 @@ func (c *commandContext) existingDaemon(ctx context.Context, errOut io.Writer, c
 		return &res, nil
 	case stateNotReady:
 		// Ours, alive and still booting: wait for it instead of starting another.
-		return c.waitServeReady(ctx, cfg, 0, nil, opts.timeout, true)
+		return c.waitServeReady(ctx, cfg, 0, nil, opts.timeout, true, &st)
 	case stateUnhealthy:
 		return nil, fmt.Errorf("a daemon (pid %d) is running for %s but is not healthy: %s; check it with `ao status` or stop it with `ao stop`", st.PID, cfg.DataDir, st.Error)
 	}
@@ -429,12 +429,12 @@ func (c *commandContext) watchDaemon(ctx context.Context, cfg config.Config, pid
 
 // waitServeReady polls the run file and /readyz until a daemon for this data
 // dir is ready. wantPID, when set, is the daemon this command started; exited
-// reports that child ending early.
-func (c *commandContext) waitServeReady(ctx context.Context, cfg config.Config, wantPID int, exited <-chan error, timeout time.Duration, reused bool) (*serveResult, error) {
+// reports that child ending early. seen, when set, is the daemon already observed booting, so
+// a stop right after that observation is reported as a stop.
+func (c *commandContext) waitServeReady(ctx context.Context, cfg config.Config, wantPID int, exited <-chan error, timeout time.Duration, reused bool, seen *daemonStatus) (*serveResult, error) {
 	deadline := c.deps.Now().Add(timeout)
 	logPath := filepath.Join(cfg.DataDir, "daemon.log")
 	var last daemonStatus
-	var seen *daemonStatus
 	for {
 		select {
 		case <-ctx.Done():

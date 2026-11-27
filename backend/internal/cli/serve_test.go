@@ -817,3 +817,36 @@ func TestServeEnvHonoursMixedCaseOptOutOnWindows(t *testing.T) {
 		}
 	}
 }
+
+// A stop that lands right after existingDaemon saw the daemon booting, before
+// waitServeReady's first poll, is still a stop: serve exits 0.
+func TestServeForegroundStopRightAfterBootingObservation(t *testing.T) {
+	h := newForegroundHarness(t)
+	srv := fakeBootingDaemon(t, 4242)
+	if err := runfile.Write(h.cfg.runFile, runfile.Info{PID: 4242, Port: serverPort(t, srv.URL), StartedAt: time.Unix(100, 0).UTC()}); err != nil {
+		t.Fatal(err)
+	}
+	checks := 0
+	old := serveForegroundDaemon
+	t.Cleanup(func() { serveForegroundDaemon = old })
+	serveForegroundDaemon = func([]string) error { h.started++; return nil }
+	_, _, err := executeCLI(t, Deps{
+		ProcessAlive: func(int) bool {
+			checks++
+			if checks <= 2 { // settleStartup and existingDaemon: booting
+				return true
+			}
+			_ = runfile.Remove(h.cfg.runFile) // `ao stop` before the first poll
+			return false
+		},
+		PIDMayBeHidden: func() bool { return false },
+		Now:            func() time.Time { return h.now },
+		Sleep:          func(d time.Duration) { h.now = h.now.Add(d) },
+	}, "serve", "--foreground", "--timeout", "5s")
+	if err != nil {
+		t.Fatalf("a stop right after the booting observation should exit 0: %v", err)
+	}
+	if h.started != 0 {
+		t.Fatal("serve started a daemon in place of the stopped one")
+	}
+}

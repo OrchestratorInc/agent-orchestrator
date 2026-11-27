@@ -504,7 +504,7 @@ func (c *commandContext) serviceInstall(ctx context.Context, opts serviceOptions
 	if err != nil {
 		return serviceStatus{}, fmt.Errorf("service installed, but %w", err)
 	}
-	if _, err := c.waitServeReady(ctx, cfg, 0, nil, opts.timeout, false); err != nil {
+	if _, err := c.waitServeReady(ctx, cfg, 0, nil, opts.timeout, false, nil); err != nil {
 		return serviceStatus{}, fmt.Errorf("service installed, but %w", err)
 	}
 	// Ready must mean supervised: the attached serve is still running.
