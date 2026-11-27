@@ -3,6 +3,7 @@ package cli
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -10,8 +11,11 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/spf13/cobra"
+
+	"github.com/aoagents/agent-orchestrator/backend/internal/approval"
 )
 
 type browserRequestCapture struct {
@@ -23,6 +27,7 @@ type browserRequestCapture struct {
 	statusPath             string
 	profileResult          string
 	actions                []string
+	loginCandidates        bool
 }
 
 func browserCLIServer(t *testing.T, capture *browserRequestCapture) *httptest.Server {
@@ -70,6 +75,13 @@ func browserCLIServer(t *testing.T, capture *browserRequestCapture) *httptest.Se
 				if capture.annotationsIgnored {
 					result = `{"data":"cG5n","width":10,"height":20}`
 				}
+			}
+		case "fill-secret":
+			result = `{"filled":true,"field":"` + capture.body.Args["field"].(string) + `","itemId":"i1","origin":"http://localhost:4173","value":"••••"}`
+		case "login":
+			result = `{"filled":["username","password"],"itemId":"i1","origin":"http://localhost:4173","value":"••••"}`
+			if capture.loginCandidates {
+				result = `{"filled":[],"origin":"http://localhost:4173","candidates":[{"id":"i1","label":"Demo","username":"alice","hasTotp":true},{"id":"i2","label":"Demo 2","username":"bob","hasTotp":false}]}`
 			}
 		case "tabs":
 			result = `{"activeTabId":"t2","tabs":[{"id":"t1","title":"First","url":"http://localhost:3000/","active":false},{"id":"t2","title":"Second","url":"http://localhost:4173/","active":true}]}`
@@ -875,5 +887,188 @@ func TestBrowserPreservesDaemonErrorEnvelopeAndRequestID(t *testing.T) {
 	if !strings.Contains(err.Error(), "Session is terminated (SESSION_TERMINATED)") ||
 		!strings.Contains(err.Error(), "[request req-browser-1]") {
 		t.Fatalf("error did not preserve daemon envelope: %v", err)
+	}
+}
+
+func TestBrowserClickSaysWhenItMayBeWaitingForApproval(t *testing.T) {
+	setBrowserIdentity(t)
+	cfg := setConfigEnv(t)
+	previous := approvalHintDelay
+	approvalHintDelay = 20 * time.Millisecond
+	t.Cleanup(func() { approvalHintDelay = previous })
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body browserCommandRequestDTO
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		if body.Action == "click" {
+			time.Sleep(150 * time.Millisecond)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		if body.Action == "click" {
+			w.WriteHeader(http.StatusForbidden)
+			_, _ = io.WriteString(w, `{"error":"forbidden","code":"BROWSER_ACTION_DENIED","message":"The user denied this action: Click \"Place order\" on shop.example. It was not performed.","requestId":"req-1"}`)
+			return
+		}
+		_, _ = io.WriteString(w, `{"requestId":"r1","sessionId":"ao-1","action":"`+body.Action+`","result":{"text":"ok"}}`)
+	}))
+	t.Cleanup(srv.Close)
+	writeRunFileFor(t, cfg, srv)
+	deps := Deps{ProcessAlive: func(int) bool { return true }}
+
+	_, stderr, err := executeCLI(t, deps, "browser", "click", "e4")
+	if err == nil || !strings.Contains(err.Error(), "BROWSER_ACTION_DENIED") || !strings.Contains(err.Error(), "Place order") {
+		t.Fatalf("err = %v", err)
+	}
+	if !strings.Contains(stderr, "waiting for the user's approval in Orchestrator") {
+		t.Fatalf("stderr = %q", stderr)
+	}
+	_, stderr, err = executeCLI(t, deps, "browser", "snapshot")
+	if err != nil || strings.Contains(stderr, "approval") {
+		t.Fatalf("snapshot err=%v stderr=%q", err, stderr)
+	}
+}
+
+func TestMayWaitForApproval(t *testing.T) {
+	for _, tc := range []struct {
+		action string
+		args   map[string]any
+		want   bool
+	}{
+		{"click", nil, true},
+		{"press", map[string]any{"key": "Enter"}, true},
+		{"press", map[string]any{"key": "Tab"}, false},
+		{"act", map[string]any{"instruction": "x"}, true},
+		{"act", map[string]any{"instruction": "x", "action": "fill"}, false},
+		{"snapshot", nil, false},
+		// Everything else the daemon gates waits too.
+		{"press", map[string]any{"key": "Space"}, true},
+		{"press", map[string]any{"key": "NumpadEnter"}, true},
+		{"drag", map[string]any{"ref": "e1", "targetRef": "e2"}, true},
+		{"type", map[string]any{"ref": "e1", "text": "hi\n"}, true},
+		{"type", map[string]any{"ref": "e1", "text": "hi"}, false},
+		{"act", map[string]any{"instruction": "x", "action": "type", "value": "hi\n"}, true},
+		{"dialog", map[string]any{"operation": "accept"}, true},
+		{"dialog", map[string]any{"operation": "dismiss"}, false},
+	} {
+		if got := mayWaitForApproval(tc.action, tc.args); got != tc.want {
+			t.Errorf("%s %v = %v", tc.action, tc.args, got)
+		}
+	}
+}
+
+// TestBrowserTimeoutsNest keeps a slow approval decision a clean deny: the
+// approval wait ends before the daemon's command budget, which ends before
+// the CLI gives up. The approval wait also stays under the CLI's generic
+// two-minute command timeout and the remote-browser timeout, which other
+// browser callers (batch steps, self-hosted browsers) use.
+func TestBrowserTimeoutsNest(t *testing.T) {
+	wait := approval.BrowserWaitTimeout
+	if wait >= approval.BrowserCommandBudget || approval.BrowserCommandBudget >= browserCommandTimeout {
+		t.Fatalf("approval wait %s, daemon budget %s, CLI browser timeout %s must increase", wait, approval.BrowserCommandBudget, browserCommandTimeout)
+	}
+	if wait >= commandTimeout || wait >= remoteBrowserTimeout {
+		t.Fatalf("approval wait %s must stay below the CLI command timeout %s and remote browser timeout %s", wait, commandTimeout, remoteBrowserTimeout)
+	}
+}
+
+func TestBrowserFillSecretSendsOnlyTheItemID(t *testing.T) {
+	setBrowserIdentity(t)
+	cfg := setConfigEnv(t)
+	capture := &browserRequestCapture{}
+	srv := browserCLIServer(t, capture)
+	writeRunFileFor(t, cfg, srv)
+	deps := Deps{ProcessAlive: func(int) bool { return true }}
+
+	out, _, err := executeCLI(t, deps, "browser", "fill-secret", "e3", "--item", "i1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if capture.body.Action != "fill-secret" || capture.body.Args["ref"] != "e3" || capture.body.Args["itemId"] != "i1" || capture.body.Args["field"] != "password" {
+		t.Fatalf("fill-secret = %#v", capture.body)
+	}
+	if _, ok := capture.body.Args["projectId"]; ok {
+		t.Fatalf("CLI must not send a project: %#v", capture.body.Args)
+	}
+	if !strings.Contains(out, "Filled password into e3 (••••)") {
+		t.Fatalf("output = %q", out)
+	}
+
+	if _, _, err := executeCLI(t, deps, "browser", "fill-secret", "e4", "--item", "i1", "--totp"); err != nil {
+		t.Fatal(err)
+	}
+	if capture.body.Args["field"] != "totp" {
+		t.Fatalf("totp field = %#v", capture.body.Args)
+	}
+	if _, _, err := executeCLI(t, deps, "browser", "fill-secret", "e5", "--item", "i1", "--field", "username"); err != nil {
+		t.Fatal(err)
+	}
+	if capture.body.Args["field"] != "username" {
+		t.Fatalf("username field = %#v", capture.body.Args)
+	}
+}
+
+func TestBrowserFillSecretUsage(t *testing.T) {
+	setBrowserIdentity(t)
+	cfg := setConfigEnv(t)
+	capture := &browserRequestCapture{}
+	srv := browserCLIServer(t, capture)
+	writeRunFileFor(t, cfg, srv)
+	deps := Deps{ProcessAlive: func(int) bool { return true }}
+
+	for _, args := range [][]string{
+		{"browser", "fill-secret", "e3"},
+		{"browser", "fill-secret", "e3", "--item", "i1", "--field", "cookie"},
+		{"browser", "fill-secret", "e3", "--item", "i1", "--field", "username", "--totp"},
+	} {
+		_, _, err := executeCLI(t, deps, args...)
+		var usage usageError
+		if !errors.As(err, &usage) {
+			t.Fatalf("%v: err = %v, want usage error", args, err)
+		}
+	}
+	if capture.body.Action != "" {
+		t.Fatalf("misuse reached the daemon: %#v", capture.body)
+	}
+}
+
+func TestBrowserLoginOutput(t *testing.T) {
+	setBrowserIdentity(t)
+	cfg := setConfigEnv(t)
+	capture := &browserRequestCapture{}
+	srv := browserCLIServer(t, capture)
+	writeRunFileFor(t, cfg, srv)
+	deps := Deps{ProcessAlive: func(int) bool { return true }}
+
+	out, _, err := executeCLI(t, deps, "browser", "login")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if capture.body.Action != "login" || capture.body.Args["itemId"] != nil {
+		t.Fatalf("login = %#v", capture.body)
+	}
+	if !strings.Contains(out, "Signed in fields username, password on http://localhost:4173 (••••)") {
+		t.Fatalf("output = %q", out)
+	}
+
+	capture.loginCandidates = true
+	out, _, err = executeCLI(t, deps, "browser", "login")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"Several saved credentials match http://localhost:4173", "i1\tDemo\talice", "i2\tDemo 2\tbob", "ao browser login --item <id>"} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("output %q missing %q", out, want)
+		}
+	}
+	if _, _, err := executeCLI(t, deps, "browser", "login", "--item", "i2"); err != nil {
+		t.Fatal(err)
+	}
+	if capture.body.Args["itemId"] != "i2" {
+		t.Fatalf("login item = %#v", capture.body.Args)
+	}
+	if _, _, err := executeCLI(t, deps, "browser", "login", "https://app.example.test"); err != nil {
+		t.Fatal(err)
+	}
+	if capture.body.Args["origin"] != "https://app.example.test" {
+		t.Fatalf("login origin = %#v", capture.body.Args)
 	}
 }

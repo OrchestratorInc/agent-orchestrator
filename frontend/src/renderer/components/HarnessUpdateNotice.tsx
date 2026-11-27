@@ -450,7 +450,9 @@ function SwipeCard({ variant, role, label, icon, title, help, dismissLabel, onDi
 	children?: ReactNode;
 }) {
 	const ref = useRef<HTMLElement>(null);
-	const leave = useSwipeToDismiss(ref, onDismiss, swipeable);
+	// Opaque throughout a swipe: the card floats over the chat, so a fading card
+	// lets the transcript show through its text. The frame's clip hides it as it leaves.
+	const leave = useSwipeToDismiss(ref, onDismiss, swipeable, { fade: false });
 	return <article ref={ref} aria-label={label} role={role}
 		// The chat model selector's menu surface, so it reads as a floating menu
 		// apart from the composer and other cards it can sit over.

@@ -24,6 +24,21 @@ describe("daemonExitReason", () => {
 		expect(daemonExitReason("fatal error: concurrent map writes\n\ngoroutine 9 [running]:", 2)).toBe("panic");
 	});
 
+	it("knows a Windows native crash by its NTSTATUS exit code", () => {
+		expect(daemonExitReason("", 3221225477)).toBe("crashed"); // 0xC0000005 access violation
+		expect(daemonExitReason("", 3221225725)).toBe("crashed"); // 0xC00000FD stack overflow
+		expect(daemonExitReason("", 3221226505)).toBe("crashed"); // 0xC0000409 fail-fast
+		expect(daemonExitReason(undefined, -1073741819)).toBe("crashed"); // signed 0xC0000005
+		// The crash is why it stopped, whatever routine line came last.
+		expect(daemonExitReason('{"level":"INFO","msg":"open /Users/me/x: permission denied"}', 3221225477)).toBe("crashed");
+	});
+
+	it("does not call a console close or an ordinary exit code a crash", () => {
+		expect(daemonExitReason("", 3221225786)).toBe("unknown"); // 0xC000013A STATUS_CONTROL_C_EXIT
+		expect(daemonExitReason("", 5)).toBe("unknown");
+		expect(daemonExitReason("panic: boom\n\ngoroutine 1 [running]:", 3221226505)).toBe("panic");
+	});
+
 	it("ignores an earlier warning that is not why it stopped", () => {
 		const output = 'WARN permission denied reading /Users/me/.config/gh\n{"level":"INFO","msg":"serving"}\n{"level":"INFO","msg":"shutting down"}\n{"level":"INFO","msg":"stopped"}\nsomething unexpected happened';
 		expect(daemonExitReason(output, 1)).toBe("unknown");

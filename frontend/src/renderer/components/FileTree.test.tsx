@@ -232,6 +232,15 @@ describe("FileTree", () => {
 		expect(screen.queryByText("This folder is empty.")).not.toBeInTheDocument();
 	});
 
+	it("says a removed worktree is not on disk and offers Retry instead of the daemon's text", async () => {
+		getMock.mockResolvedValue({ error: { code: "SESSION_WORKSPACE_NOT_FOUND", message: "Session workspace not found" } });
+		renderWithQuery(<FileTree changedOnly={false} changedOnlyData={[]} onSelectPath={vi.fn()} selectedPath={null} sessionId="sess-1" filterText="" />);
+		expect(await screen.findByText("This session's workspace folder isn't on disk.")).toBeInTheDocument();
+		expect(screen.queryByText("Session workspace not found")).not.toBeInTheDocument();
+		await userEvent.click(screen.getByRole("button", { name: "Retry" }));
+		await waitFor(() => expect(getMock).toHaveBeenCalledTimes(2));
+	});
+
 	it("shows stand-in rows, not a line of text, while the tree loads", async () => {
 		getMock.mockImplementation(() => new Promise(() => {}));
 		renderWithQuery(<FileTree changedOnly={false} changedOnlyData={[]} onSelectPath={vi.fn()} selectedPath={null} sessionId="sess-1" filterText="" />);

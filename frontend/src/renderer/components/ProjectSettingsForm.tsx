@@ -20,7 +20,6 @@ import { captureRendererEvent } from "../lib/telemetry";
 import { importableProject } from "../lib/session-import";
 import { useSessionImportStore } from "../stores/session-import-store";
 import { type OrchestratorReplacementFailure, useUiStore } from "../stores/ui-store";
-import { newestActiveOrchestrator } from "../types/workspace";
 import { RequiredAgentField } from "./CreateProjectAgentSheet";
 import { buildIntake } from "./IntakeFields";
 import { ReviewerSelect, reviewerTrustWarning } from "./ReviewerSelect";
@@ -147,7 +146,6 @@ function SettingsBody({ project, projectId, hostId, hostConnected, onSaved, sect
 	const { settings } = useSettings(hostId);
 	const intakeVisible = !isScratchProject && !!settings?.trackerIntakeEnabled;
 	const workspace = hostId ? remoteProjectQuery.data : workspaceQuery.data?.find((item) => item.id === projectId);
-	const activeOrchestrator = newestActiveOrchestrator(workspace?.sessions ?? []);
 	const openProjectImport = useSessionImportStore((state) => state.openProjectImport);
 	const intake: TrackerIntakeConfig = config.trackerIntake ?? {};
 	const initialValues: ProjectSettingsDraft = {
@@ -179,7 +177,6 @@ function SettingsBody({ project, projectId, hostId, hostConnected, onSaved, sect
 		intakeAssignee: intake.assignee ?? "",
 	};
 	const lastOrchestratorRef = useRef(config.orchestrator?.agent ?? "");
-	const replacementAttemptedRef = useRef(false);
 	const replacementFailedRef = useRef(false);
 	const agentsQuery = useAgentReadinessQuery(true, hostId);
 	useEnsureAgentReadiness({ hostId });
@@ -273,11 +270,12 @@ function SettingsBody({ project, projectId, hostId, hostConnected, onSaved, sect
 			body: { displayName, config: next },
 		});
 		if (error) throw apiErrorException(error);
-		const replaceOrchestrator = replacementFailedRef.current || values.orchestratorAgent !== lastOrchestratorRef.current ||
-			(Boolean(activeOrchestrator && activeOrchestrator.provider !== values.orchestratorAgent) && !replacementAttemptedRef.current);
+		// Only a changed orchestrator agent (or a replacement that failed) replaces
+		// the running orchestrator. One already on another agent was chosen, by a
+		// spawn or an agent switch, so saving other settings leaves it running.
+		const replaceOrchestrator = replacementFailedRef.current || values.orchestratorAgent !== lastOrchestratorRef.current;
 		lastOrchestratorRef.current = values.orchestratorAgent;
 		if (replaceOrchestrator) {
-			replacementAttemptedRef.current = true;
 			try {
 				const sessionId = hostId
 					? await openRemoteOrchestrator(hostId, projectId, undefined, undefined, true, "settings")

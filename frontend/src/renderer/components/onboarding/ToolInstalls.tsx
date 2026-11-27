@@ -97,10 +97,10 @@ export function useAgentInstalls(onInstalled: (agentId: string) => void) {
 	useEffect(() => {
 		for (const [agentId, startedAt] of startedAgentJobs) {
 			const job = jobs.data?.find((candidate) => candidate.target === agentId);
-			const end = job && (job.startedAt ?? "") === startedAt ? installJobOutcome(job.status) : null;
+			const end = job && (job.startedAt ?? "") === startedAt ? installJobOutcome(job.status, job.failureCause) : null;
 			if (!end) continue;
 			startedAgentJobs.delete(agentId);
-			finishOnboardingAction("agent_install", end.outcome, { target: agentId, reason: end.reason });
+			finishOnboardingAction("agent_install", end.outcome, { target: agentId, reason: end.reason, failureCause: end.failureCause });
 		}
 		for (const agentId of attempted) {
 			const job = jobs.data?.find((candidate) => candidate.target === agentId);
@@ -326,8 +326,8 @@ export function useGhInstall(onInstalled: () => void) {
 		setJob(next);
 		if (isActiveInstallJob(next)) return false;
 		window.clearInterval(timer.current);
-		const end = installJobOutcome(next.status);
-		if (end) finishOnboardingAction("gh_install", end.outcome, { target: "gh", reason: end.reason });
+		const end = installJobOutcome(next.status, next.failureCause);
+		if (end) finishOnboardingAction("gh_install", end.outcome, { target: "gh", reason: end.reason, failureCause: end.failureCause });
 		if (next.status === "succeeded") onInstalledRef.current();
 		return true;
 	}, []);

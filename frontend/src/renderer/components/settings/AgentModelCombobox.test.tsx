@@ -67,6 +67,78 @@ describe("AgentModelCombobox", () => {
 		expect(picker).toHaveTextContent("Low");
 	});
 
+	// Catalogs that route through several providers repeat a model's name, and a
+	// compact menu otherwise shows only that name: the rows read the same.
+	it("tells same-named models apart in a compact menu", async () => {
+		const { onChange } = renderCombobox([
+			{ id: "deepseek/deepseek-v4-pro", label: "deepseek-v4-pro", provider: "deepseek" },
+			{ id: "venice/deepseek-v4-pro", label: "deepseek-v4-pro", provider: "venice" },
+			{ id: "fireworks/accounts/fireworks/models/kimi", label: "kimi", provider: "fireworks" },
+			{ id: "fireworks/accounts/team/models/kimi", label: "kimi", provider: "fireworks" },
+			{ id: "venice/only-here", label: "only-here", provider: "venice" },
+		], { compact: true });
+
+		await userEvent.click(screen.getByRole("button", { name: "Worker model" }));
+
+		// A shared name shows its provider.
+		await userEvent.click(screen.getByRole("menuitem", { name: /deepseek-v4-pro\s*venice/ }));
+		expect(onChange).toHaveBeenCalledWith("venice/deepseek-v4-pro");
+		await userEvent.click(screen.getByRole("button", { name: "Worker model" }));
+		expect(screen.getByRole("menuitem", { name: /deepseek-v4-pro\s*deepseek$/ })).toBeInTheDocument();
+		// Where the provider repeats too, the full ID is what differs.
+		expect(screen.getByRole("menuitem", { name: /kimi\s*fireworks\/accounts\/team\/models\/kimi/ })).toBeInTheDocument();
+		// A long ID wraps too, or the part that differs would be cut off again.
+		const detail = screen.getByText("fireworks/accounts/team/models/kimi");
+		expect(detail).toHaveClass("wrap-anywhere");
+		expect(detail).not.toHaveClass("truncate");
+		// A name that appears once stays on its own, with the full ID on hover.
+		const unique = screen.getByRole("menuitem", { name: "only-here" });
+		expect(unique).toBeInTheDocument();
+		expect(screen.getByText("only-here")).toHaveAttribute("title", "venice/only-here");
+	});
+
+	it("names the provider on the closed picker when the picked model's name is shared", () => {
+		const models = [
+			{ id: "deepseek/deepseek-v4-pro", label: "deepseek-v4-pro", provider: "deepseek" },
+			{ id: "venice/deepseek-v4-pro", label: "deepseek-v4-pro", provider: "venice" },
+			{ id: "venice/only-here", label: "only-here", provider: "venice" },
+		];
+		const { unmount } = renderCombobox(models, { compact: true, value: "venice/deepseek-v4-pro" });
+		expect(screen.getByRole("button", { name: "Worker model" })).toHaveTextContent("deepseek-v4-pro (venice)");
+		unmount();
+		renderCombobox(models, { compact: true, value: "venice/only-here" });
+		expect(screen.getByRole("button", { name: "Worker model" })).toHaveTextContent(/^only-here$/);
+	});
+
+	it("names the provider on the closed picker for a shared name whose ID has no slash", () => {
+		const { unmount } = renderCombobox([
+			{ id: "local-a", label: "Shared", provider: "alpha" },
+			{ id: "local-b", label: "Shared", provider: "beta" },
+		], { compact: true, value: "local-b" });
+		expect(screen.getByRole("button", { name: "Worker model" })).toHaveTextContent("Shared (beta)");
+		unmount();
+		// Aliases with nothing but their ID to tell them apart keep the plain name.
+		renderCombobox([
+			{ id: "default", label: "Shared" },
+			{ id: "alias", label: "Shared" },
+		], { compact: true, value: "alias" });
+		expect(screen.getByRole("button", { name: "Worker model" })).toHaveTextContent(/^Shared$/);
+	});
+
+	// Long names often differ only at the end ("…-large-flash", "…-large-v2"),
+	// which a narrow menu cuts off, so a compact row wraps instead.
+	it("wraps a long model name in a compact menu instead of cutting it off", async () => {
+		renderCombobox([
+			{ id: "venice/abliterated-model-large-flash", label: "abliterated-model-large-flash", provider: "venice" },
+		], { compact: true });
+
+		await userEvent.click(screen.getByRole("button", { name: "Worker model" }));
+
+		const name = screen.getByText("abliterated-model-large-flash");
+		expect(name).toHaveClass("wrap-anywhere");
+		expect(name).not.toHaveClass("truncate");
+	});
+
 	it("disables a model the installed CLI is too old for and explains the fix", async () => {
 		const { onChange } = renderCombobox([
 			{ id: "claude-sonnet-5-5", label: "Sonnet 5.5" },

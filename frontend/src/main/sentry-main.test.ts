@@ -426,6 +426,23 @@ describe("Electron main Sentry configuration", () => {
 		expect(beforeSend(sdk.captureEvent.mock.calls.at(-1)?.[0] as ErrorEvent).tags).not.toHaveProperty("target");
 	});
 
+	it("tags a failed onboarding install with its cause from the closed list only", async () => {
+		const transport = await initMainSentry("1.0.0", dataDir, "/tmp/ao-electron-test");
+		const beforeSend = sdk.init.mock.calls[0]?.[0].beforeSend as (event: ErrorEvent) => ErrorEvent;
+		transport.capture({ consentGeneration: "generation-1", kind: "message", message: "safe", tags: { category: "onboarding", code: "gh_install:install_failed", target: "gh", cause: "brew_missing" } });
+		expect(sdk.captureEvent.mock.calls.at(-1)?.[0].tags).toMatchObject({ "ao.cause": "brew_missing" });
+		const event = beforeSend(sdk.captureEvent.mock.calls.at(-1)?.[0] as ErrorEvent);
+		expect(event.tags).toMatchObject({ action: "gh_install", reason: "install_failed", cause: "brew_missing" });
+		// A tag to filter by: the issue stays grouped by action and reason.
+		expect(event.fingerprint).toEqual(["electron", "onboarding", "gh_install", "install_failed", "renderer"]);
+		transport.capture({ consentGeneration: "generation-1", kind: "message", message: "safe", tags: { category: "onboarding", code: "agent_install:install_failed", target: "codex", cause: "EACCES /Users/alice/.npm" } });
+		expect(sdk.captureEvent.mock.calls.at(-1)?.[0].tags).toMatchObject({ "ao.cause": "other" });
+		expect(JSON.stringify(sdk.captureEvent.mock.calls.at(-1)?.[0])).not.toContain("alice");
+		// Other renderer events don't carry it.
+		transport.capture({ consentGeneration: "generation-1", kind: "message", message: "safe", tags: { category: "http_5xx", code: "CHAT_DELIVERY_FAILED", cause: "network" } });
+		expect(sdk.captureEvent.mock.calls.at(-1)?.[0].tags).not.toHaveProperty("ao.cause");
+	});
+
 	it("drops onboarding codes outside the closed action and reason lists", async () => {
 		const transport = await initMainSentry("1.0.0", dataDir, "/tmp/ao-electron-test");
 		const beforeSend = sdk.init.mock.calls[0]?.[0].beforeSend as (event: ErrorEvent) => ErrorEvent;
@@ -456,6 +473,26 @@ describe("Electron main Sentry configuration", () => {
 		expect(plain.tags).not.toHaveProperty("flow");
 		transport.capture({ ...request, tags: { ...request.tags, flow: "private-flow" } });
 		expect(sdk.captureEvent.mock.calls.at(-1)?.[0].tags).not.toHaveProperty("ao.flow");
+	});
+
+	it("titles, tags, and groups an Electron process failure by its process type and reason", async () => {
+		await initMainSentry("1.0.0", dataDir, "/tmp/ao-electron-test");
+		const beforeSend = sdk.init.mock.calls[0]?.[0].beforeSend as (event: ErrorEvent) => ErrorEvent;
+		const exit = (message: string) => beforeSend({ type: undefined, level: "fatal", message, tags: { "event.process": "GPU" } });
+		const gpu = exit("'GPU' process exited with 'crashed'");
+		expect(gpu.message).toBe("Electron gpu process failure (crashed)");
+		expect(gpu.exception?.values?.[0]?.value).toBe("Electron gpu process failure (crashed)");
+		expect(gpu.tags).toMatchObject({ surface: "electron-main", kind: "process_exit", reason: "crashed", process: "gpu" });
+		expect(gpu.tags).not.toHaveProperty(["event.process"]);
+		expect(gpu.fingerprint).toEqual(["electron", "process_exit", "crashed", "gpu", "Error", "unknown", "electron-main"]);
+		expect(exit("'Utility' process exited with 'oom'").tags).toMatchObject({ reason: "oom", process: "utility" });
+		expect(exit("'Sandbox helper' process exited with 'launch-failed'").tags).toMatchObject({ process: "sandbox_helper" });
+		expect(exit("'renderer' process exited with 'crashed'").fingerprint).not.toEqual(gpu.fingerprint);
+		// A process name outside Electron's fixed types is never sent.
+		const other = exit("'/Users/alice/private helper' process exited with 'crashed'");
+		expect(other.message).toBe("Electron unknown process failure (crashed)");
+		expect(other.tags).toMatchObject({ process: "unknown" });
+		expect(JSON.stringify(other)).not.toContain("alice");
 	});
 
 	it("groups Electron main exceptions by safe type and top in-app frame", async () => {
@@ -494,6 +531,8 @@ describe("Electron main Sentry configuration", () => {
 		for (const message of ["AbortError", "net::ERR_NETWORK_CHANGED", "net::ERR_INTERNET_DISCONNECTED"]) {
 			expect(beforeSend({ type: undefined, message })).toBeNull();
 		}
+		// The renderer drops the bare ResizeObserver notice; a thrown error with its text still reports.
+		expect(beforeSend({ type: undefined, message: "ResizeObserver loop completed with undelivered notifications.", exception: { values: [{ type: "TypeError", value: "ResizeObserver loop completed with undelivered notifications." }] } })).not.toBeNull();
 		expect(beforeSend({ type: undefined, message: "Updater failed: net::ERR_NETWORK_CHANGED" })).not.toBeNull();
 		const mainError = (message: string) => beforeSend({
 			type: undefined, message,
@@ -501,7 +540,7 @@ describe("Electron main Sentry configuration", () => {
 		});
 		expect(mainError("resume agent ai-sports-coach-113")?.fingerprint).toEqual(["electron", "unhandled_rejection", "unknown", "Error", "unknown", "electron-main", ...hashParts("resume agent <id>")]);
 		expect(mainError("get project private-repo")?.fingerprint).not.toEqual(mainError("resume agent ai-sports-coach-113")?.fingerprint);
-		expect(beforeSend({ type: undefined, message: "'renderer' process exited with 'crashed'" })?.fingerprint).toEqual(["electron", "process_exit", "crashed", "Error", "unknown", "electron-main"]);
+		expect(beforeSend({ type: undefined, message: "'renderer' process exited with 'crashed'" })?.fingerprint).toEqual(["electron", "process_exit", "crashed", "renderer", "Error", "unknown", "electron-main"]);
 		expect(beforeSend({ type: undefined, level: "fatal", exception: { values: [{ type: "TypeError", mechanism: { type: "generic" } }] } })?.fingerprint).toEqual(["electron", "uncaught_exception", "unknown", "TypeError", "unknown", "electron-main"]);
 	});
 

@@ -2,10 +2,12 @@ import { uiUsage } from "../lib/ui-usage-telemetry";
 import { create } from "zustand";
 import { aoBridge } from "../lib/bridge";
 import { developerModeStorageKey, readStoredWindowTranslucency, windowTranslucencyStorageKey } from "../lib/window-translucency";
+import { newDesktopUiStorageKey } from "../lib/new-desktop-ui";
 import { sessionUiKey } from "../lib/hosts";
 import type { ProjectSettingsSection as ProjectFormSection } from "../components/ProjectSettingsForm";
 import type { TerminalTarget } from "../types/terminal";
 import type { TerminalClickMode } from "../lib/terminal-mouse";
+import type { WorkspaceSession } from "../types/workspace";
 import type { FilesSelection } from "../hooks/useSessionWorkspaceFiles";
 import type { CloudCpWorkspaceReviewScope } from "../lib/cloud-cp";
 import type { BackgroundTask } from "../hooks/useBackgroundTasks";
@@ -160,6 +162,8 @@ export type InspectorSessionState = {
 	cloudReviewUi?: Record<string, CloudReviewUiState>;
 	/** Files: display mode picked per path in a centre tab, restored for the same open request after a remount. */
 	fileDisplayModes?: Record<string, RememberedFileDisplayMode>;
+	/** Artifacts: the view as it was left, put back when the tab or the session is shown again. In memory only, like the tab itself. */
+	artifactsView?: RememberedArtifactsView;
 	/** The session-entry defaulting (Summary tab, baseline browser reveal) has already run once for this session's lifetime. */
 	initialized?: boolean;
 	/** The background tasks the side panel lists, in the order first seen. In memory only: they go with the app. */
@@ -174,6 +178,27 @@ export type FileDisplayMode = "diff" | "file" | "rendered";
 
 export type RememberedFileDisplayMode = { mode: FileDisplayMode; requestKey: number };
 
+/** Where a scrolled view was, in CSS pixels. */
+export type ScrollPosition = { x: number; y: number };
+
+/** The inspector's Artifacts view as it was left: the open file and how it was being viewed, or the list. */
+export type RememberedArtifactsView = {
+	/** The open file; null shows the list. */
+	path: string | null;
+	/** The file was asked for before the session listed it, so it still waits for the list. */
+	awaited?: boolean;
+	/** An HTML artifact showed its source rather than its page. */
+	htmlSource?: boolean;
+	/** The saved version being looked at in place of the live file. */
+	previewVersion?: number;
+	/** The viewer's zoom, 1 at fit. */
+	zoom?: number;
+	/** Where the open file, or the list, was scrolled. */
+	scroll?: ScrollPosition;
+	/** The last open request the view acted on, so coming back does not act on it again. */
+	requestKey?: number;
+};
+
 export type GlobalToast = {
 	title: string;
 	body?: string;
@@ -185,10 +210,12 @@ export type GlobalToast = {
 	dedupeKey?: string;
 	/** One button on the toast, such as Undo or Open; pressing it dismisses the toast. */
 	action?: { label: string; run: () => void };
+	/** One line until hovered or focused: the body opens on hover or keyboard focus, and the action is the ✕. */
+	compact?: boolean;
 	nonce: number;
 };
 
-export type GlobalToastOptions = Pick<GlobalToast, "tone" | "placement" | "dismissible" | "durationMs" | "dedupeKey" | "action">;
+export type GlobalToastOptions = Pick<GlobalToast, "tone" | "placement" | "dismissible" | "durationMs" | "dedupeKey" | "action" | "compact">;
 
 export type WorkspaceFileOpenRequest = {
 	sessionId: string;
@@ -294,6 +321,8 @@ export type UiState = {
 	diagnostics: boolean;
 	/** Drag center tabs side by side into split panes. Only takes effect in Developer mode. Default off. */
 	splitPanes: boolean;
+	/** Interface v2 (shell, surfaces, motion). Only takes effect in Developer mode. Default off. */
+	newDesktopUi: boolean;
 	/** The PR view: a PR's own tab, its comments, stacks and actions. Only takes effect in Developer mode. Default off. */
 	prView: boolean;
 	/** Developer Mode, macOS only: blur the desktop behind a translucent window. */
@@ -386,6 +415,7 @@ export type UiState = {
 	setAutoUpdateRemoteHosts: (enabled: boolean) => void;
 	setDiagnostics: (enabled: boolean) => void;
 	setSplitPanes: (enabled: boolean) => void;
+	setNewDesktopUi: (enabled: boolean) => void;
 	setPRView: (enabled: boolean) => void;
 	setWindowTranslucency: (enabled: boolean) => void;
 	setTerminalCopyOnSelect: (enabled: boolean) => void;
@@ -397,6 +427,10 @@ export type UiState = {
 	setProjectAvatars: (enabled: boolean) => void;
 	/** True while the restart-to-update confirmation is open. */
 	updateInstallPromptOpen: boolean;
+	/** The session the Move dialog is open for; null when it is closed. */
+	moveSessionTarget: WorkspaceSession | null;
+	openMoveSession: (session: WorkspaceSession) => void;
+	closeMoveSession: () => void;
 	openUpdateInstallPrompt: () => void;
 	closeUpdateInstallPrompt: () => void;
 	openGlobalSettings: (section?: GlobalSettingsSection, options?: { focusAgentId?: string; hostId?: string; harnessView?: "local" | "cloud"; startLogin?: boolean; loginAccountId?: string; startPairing?: boolean; showDiagnostics?: HarnessDiagnosticsRequest; preserveProject?: boolean; focusSetting?: string }) => void;
@@ -453,6 +487,8 @@ export type UiState = {
 	setCloudReviewRepository: (sessionId: string, repository: string) => void;
 	setCloudReviewUi: (sessionId: string, repository: string | undefined, changes: CloudReviewUiState) => void;
 	setFileDisplayMode: (sessionId: string, path: string, mode: FileDisplayMode, requestKey: number) => void;
+	/** Remembers how the session's Artifacts view was left. */
+	setArtifactsView: (sessionId: string, view: RememberedArtifactsView) => void;
 	setCommandPaletteOpen: (open: boolean) => void;
 	setNewChatSending: (sending: boolean) => void;
 	setProjectRestarting: (projectId: string, restarting: boolean, hostId?: string) => void;
@@ -560,6 +596,12 @@ function loginTaken(state: UiState, waiting: LoginReturn): Partial<UiState> {
 	};
 }
 
+function sameArtifactsView(a: RememberedArtifactsView | undefined, b: RememberedArtifactsView): boolean {
+	return a !== undefined && a.path === b.path && a.awaited === b.awaited && a.htmlSource === b.htmlSource
+		&& a.previewVersion === b.previewVersion && a.zoom === b.zoom && a.requestKey === b.requestKey
+		&& a.scroll?.x === b.scroll?.x && a.scroll?.y === b.scroll?.y;
+}
+
 function inspectorState(sessions: Record<string, InspectorSessionState>, sessionId: string): InspectorSessionState {
 	return sessions[sessionId] ?? { isOpen: false, view: "summary" };
 }
@@ -637,6 +679,7 @@ export const useUiStore = create<UiState>((set, get) => ({
 	autoUpdateRemoteHosts: getLocalStorage()?.getItem(autoUpdateRemoteHostsStorageKey) === "true",
 	diagnostics: initialDiagnostics(),
 	splitPanes: getLocalStorage()?.getItem(splitPanesStorageKey) === "true",
+	newDesktopUi: getLocalStorage()?.getItem(newDesktopUiStorageKey) === "true",
 	prView: getLocalStorage()?.getItem(prViewStorageKey) === "true",
 	windowTranslucency: readStoredWindowTranslucency(),
 	terminalCopyOnSelect: initialTerminalCopyOnSelect(),
@@ -774,6 +817,10 @@ export const useUiStore = create<UiState>((set, get) => ({
 		getLocalStorage()?.setItem(splitPanesStorageKey, String(splitPanes));
 		set({ splitPanes });
 	},
+	setNewDesktopUi: (newDesktopUi) => {
+		getLocalStorage()?.setItem(newDesktopUiStorageKey, String(newDesktopUi));
+		set({ newDesktopUi });
+	},
 	setPRView: (prView) => {
 		getLocalStorage()?.setItem(prViewStorageKey, String(prView));
 		set({ prView });
@@ -811,6 +858,9 @@ export const useUiStore = create<UiState>((set, get) => ({
 		set({ chatSendKeyMode });
 	},
 	updateInstallPromptOpen: false,
+	moveSessionTarget: null,
+	openMoveSession: (session) => set({ moveSessionTarget: session }),
+	closeMoveSession: () => set({ moveSessionTarget: null }),
 	openUpdateInstallPrompt: () => set({ updateInstallPromptOpen: true }),
 	closeUpdateInstallPrompt: () => set({ updateInstallPromptOpen: false }),
 	openGlobalSettings: (section, options) => set((state) => ({
@@ -1137,6 +1187,12 @@ export const useUiStore = create<UiState>((set, get) => ({
 					[sessionId]: { ...current, fileDisplayModes: { ...current.fileDisplayModes, [path]: { mode, requestKey } } },
 				},
 			};
+		}),
+	setArtifactsView: (sessionId, view) =>
+		set((state) => {
+			const current = inspectorState(state.inspectorSessions, sessionId);
+			if (sameArtifactsView(current.artifactsView, view)) return state;
+			return { inspectorSessions: { ...state.inspectorSessions, [sessionId]: { ...current, artifactsView: view } } };
 		}),
 	setCommandPaletteOpen: (isCommandPaletteOpen) => set({ isCommandPaletteOpen }),
 	setNewChatSending: (newChatSending) => set({ newChatSending }),
