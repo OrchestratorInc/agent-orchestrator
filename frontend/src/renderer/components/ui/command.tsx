@@ -1,5 +1,6 @@
 "use client";
 
+import type { UiSurface } from "@/lib/ui-surfaces";
 import * as React from "react";
 import { FocusScope } from "@radix-ui/react-focus-scope";
 import { Command as CommandPrimitive } from "cmdk";
@@ -34,6 +35,7 @@ function CommandDialog({
 	contentProps,
 	modal,
 	plain = false,
+	telemetrySurface,
 	...props
 }: React.ComponentProps<typeof Dialog.Root> & {
 	title?: string;
@@ -46,6 +48,8 @@ function CommandDialog({
 	 * keys (the archive grid). Only `commandProps.className` applies.
 	 */
 	plain?: boolean;
+	/** The usage-telemetry surface clicks inside the dialog count against. */
+	telemetrySurface?: UiSurface;
 }) {
 	const { className: bodyClassName, ...restCommandProps } = commandProps ?? {};
 	const nonModal = modal === false;
@@ -54,6 +58,7 @@ function CommandDialog({
 			data-slot="command-dialog-content"
 			aria-label={title}
 			aria-modal={nonModal || undefined}
+			data-telemetry-surface={telemetrySurface}
 			{...contentProps}
 			className={cn(
 				"fixed left-1/2 top-command-palette z-overlay w-command-palette -translate-x-1/2 overflow-hidden rounded-[var(--radius-command-palette)] border border-[var(--color-border-command-palette)] overlay-glass text-foreground shadow-[var(--shadow-command-palette)] outline-none data-[state=open]:animate-modal-in data-[state=closed]:animate-modal-out motion-reduce:animate-none",

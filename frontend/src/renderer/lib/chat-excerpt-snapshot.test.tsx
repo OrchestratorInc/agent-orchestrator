@@ -33,6 +33,9 @@ describe("captured chat excerpts", () => {
 		const { container } = render(<ChatLinkProvider workspacePaths={[path]} onFileOpen={onFileOpen}><ChatMarkdown text={source} /></ChatLinkProvider>);
 		const buttons = container.querySelectorAll("button[data-excerpt-include]");
 		expect(buttons).toHaveLength(2);
+		// The file icon sits beside the code text, never inside the mapped element.
+		expect(buttons[1].querySelector("svg")).not.toBeNull();
+		expect(buttons[1].querySelector("code svg")).toBeNull();
 		const node = buttons[1].querySelector("code")!.firstChild!;
 		// Build from the DOM, independently of the projection under test.
 		const range = document.createRange();
@@ -135,6 +138,13 @@ describe("captured chat excerpts", () => {
 		expect(captured.snapshot.captureMode).toBe("exact");
 		expect(captured.text).not.toContain("Copy");
 		expect(isExcerptSnapshot(captured.snapshot)).toBe(true);
+	});
+	it("leaves a streamed code block's language caption out of the quote", async () => {
+		const source = "Before **bold**.\n\n```ts\n\tgo();\n```\n\nAfter";
+		const { container } = render(<ChatMarkdown streaming text={source} />);
+		await waitFor(() => expect(container).toHaveTextContent("After"));
+		const captured = captureExcerptSnapshot(container, select(container, "bold", "After"), source);
+		expect(captured.text).toBe("bold.\n\tgo();\nAfter");
 	});
 	it.each([
 		["Say &quot;hello&quot; &amp; bye.", '"hello" & bye', "&quot;hello&quot; &amp; bye"],

@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -19,11 +20,13 @@ import (
 	"strings"
 	"time"
 
+	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/agentbase"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/authprobe"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/dockeragent"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/nativeconfig"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/opencodev2"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/openinterpreter"
+	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/tau"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 	aoprocess "github.com/aoagents/agent-orchestrator/backend/internal/process"
 	"github.com/aoagents/agent-orchestrator/backend/pkg/agentcreds"
@@ -61,6 +64,25 @@ type commandSpec struct {
 	// retryEmpty reruns a listing that exits cleanly with no output once.
 	// OpenCode 2 prints nothing the first time it runs in a new folder.
 	retryEmpty bool
+	// env adds to the environment of the model command.
+	env map[string]string
+	// killTree stops the command's children too when it times out, for CLIs
+	// whose launcher waits on the real binary.
+	killTree bool
+}
+
+func (s commandSpec) command(ctx context.Context, binary, workingDir string, env map[string]string) *exec.Cmd {
+	merged := make(map[string]string, len(env)+len(s.env))
+	maps.Copy(merged, env)
+	agentbase.ApplyEnvOverrides(merged, s.env, runtime.GOOS == "windows")
+	cmd := modelCommand(ctx, binary, s.args, workingDir, merged)
+	if s.killTree {
+		aoprocess.ConfigureTreeCancellation(cmd)
+	}
+	if s.interruptOnCancel {
+		aoprocess.InterruptOnCancel(cmd, commandTerminationWait)
+	}
+	return cmd
 }
 
 // signInCheck confirms a login before a sign-in-prompting model command runs.
@@ -133,6 +155,7 @@ var commandSpecs = map[string]commandSpec{
 	"agy":         {args: []string{"models"}, parser: parseAgyModels},
 	"kilocode":    {args: []string{"models"}, parser: parseProviderIDLines},
 	"pi":          {args: []string{"--list-models"}, parser: parsePiModels},
+	"tau":         {args: []string{"providers"}, parser: parseTauModels},
 	"kimchi":      {args: []string{"--list-models"}, parser: parsePiModels},
 	"prime-agent": {args: []string{"model", "list"}, parser: parsePiModels},
 	"kimi":        {args: []string{"provider", "list", "--json"}, parser: parseJSONModels},
@@ -144,7 +167,15 @@ var commandSpecs = map[string]commandSpec{
 	"droid":       {args: []string{"exec", "--help"}, parser: parseDroidHelpModels},
 	"crush":       {args: []string{"models"}, parser: parseProviderIDLines},
 	"fx":          {args: []string{"models", "--json"}, parser: parseFXModels},
-	"mimo-code":   {args: []string{"models"}, parser: parseMiMoModels},
+	"mimo-code": {
+		args:   []string{"models"},
+		parser: parseMiMoModels,
+		// Every MiMo command but --version copies all Claude Code history into
+		// MiMo's database at startup, so a listing must not start that scan.
+		env: map[string]string{"MIMOCODE_DISABLE_CLAUDE_IMPORT": "1"},
+		// `mimo` is a Node wrapper that waits on the real binary.
+		killTree: true,
+	},
 	// `cmd --list-models` prints `provider/model` followed by a marketing
 	// description, not a display name — see parseCommandCodeModels.
 	"command-code":     {args: []string{"--list-models"}, parser: parseCommandCodeModels},
@@ -254,9 +285,9 @@ func Manual(agentID string) ports.AgentModelCatalog {
 func customModelEntryMode(agentID string) ports.CustomModelEntryMode {
 	switch agentID {
 	case "claude-code", "codex", "opencode", "opencode-v2", "grok", "cursor", "qwen", "gemini",
-		"kimi", "muse", "aider", "goose", "autohand", "fx", "unreal-agent", "codewhale", "mimo-code", "deepseek-harness", "openhands", "devin", "hermes", "stakpak", "open-interpreter":
+		"kimi", "muse", "aider", "goose", "autohand", "fx", "unreal-agent", "codewhale", "mimo-code", "deepseek-harness", "openhands", "devin", "hermes", "stakpak", "open-interpreter", "mastra-code":
 		return ports.CustomModelEntryDirect
-	case "docker-agent", "minimax-code", "continue", "cline", "kilocode", "vibe", "pi", "kimchi", "prime-agent":
+	case "docker-agent", "minimax-code", "continue", "cline", "kilocode", "vibe", "pi", "tau", "kimchi", "prime-agent":
 		return ports.CustomModelEntryConfigured
 	default:
 		return ports.CustomModelEntryNone
@@ -497,16 +528,12 @@ func discoverCommandCatalog(ctx context.Context, agentID, binary, workingDir str
 	}
 	runCtx, cancel := context.WithTimeout(ctx, commandTimeout)
 	defer cancel()
-	cmd := modelCommand(runCtx, binary, spec.args, workingDir, env)
-	if spec.interruptOnCancel {
-		aoprocess.InterruptOnCancel(cmd, commandTerminationWait)
-	}
-	output, err := cmd.CombinedOutput()
+	output, err := spec.command(runCtx, binary, workingDir, env).CombinedOutput()
 	if err == nil && spec.retryEmpty && len(bytes.TrimSpace(output)) == 0 {
 		cancel()
 		runCtx, cancel = context.WithTimeout(ctx, commandTimeout)
 		defer cancel()
-		output, err = modelCommand(runCtx, binary, spec.args, workingDir, env).CombinedOutput()
+		output, err = spec.command(runCtx, binary, workingDir, env).CombinedOutput()
 	}
 	if err != nil {
 		return base, modelDiscoveryError(runCtx, agentID, err, output)
@@ -909,7 +936,17 @@ func BinaryVersion(ctx context.Context, binary string) string {
 
 // catalogSchemaVersions invalidates snapshots when an adapter's catalog format
 // changes independently of its installed executable or configuration.
-var catalogSchemaVersions = map[string]string{"memcode": "native-picker-v1"}
+var catalogSchemaVersions = map[string]string{
+	"memcode": "native-picker-v1",
+	// Catalogs cached before resource-path IDs were labelled with the model's
+	// name still show the whole path.
+	"aider":       "path-labels-v1",
+	"crush":       "path-labels-v1",
+	"kilocode":    "path-labels-v1",
+	"mimo-code":   "path-labels-v1",
+	"opencode":    "path-labels-v1",
+	"opencode-v2": "path-labels-v1",
+}
 
 // CatalogFingerprint hashes every stable discovery input for an agent: the
 // resolved executable plus the configuration and credentials its discovery
@@ -944,6 +981,9 @@ func CatalogFingerprint(ctx context.Context, agentID, binary, workingDir string,
 // discoveryConfigInputs returns the configuration an agent's discovery consults,
 // or "" when the catalog depends on the binary alone.
 func discoveryConfigInputs(ctx context.Context, agentID, workingDir string, env map[string]string) string {
+	if agentID == "tau" {
+		return "config=" + fingerprintConfigPaths(tauConfigPaths(env))
+	}
 	if agentID == "open-interpreter" {
 		// The native catalog follows the selected provider and account. Include
 		// a version marker to invalidate older binary-only manual catalogs.
@@ -1066,12 +1106,32 @@ func parseProviderIDLines(output []byte) ([]ports.AgentModelInfo, error) {
 	return models, nil
 }
 
+// accountModelPathPattern matches the resource name Fireworks uses as a model
+// ID, accounts/<account>/models/<model>.
+var accountModelPathPattern = regexp.MustCompile(`^accounts/([^/]+)/models/([^/]+)$`)
+
+// sharedModelAccount is the account Fireworks publishes its public models under.
+const sharedModelAccount = "fireworks"
+
 // splitProviderID labels a provider/model selector with its provider and the
-// name after the first slash, reporting whether the ID had both parts.
+// name after the first slash, reporting whether the ID had both parts. A
+// resource path is labelled with its model's name, and another account's
+// deployment as account/model so it does not read as the public one. Any other
+// nested name (a router's vendor/model) is kept whole, as the vendor is part of
+// it. So is a public path to a model literally named "default", because
+// normalize reads that label as the default-model marker.
 func splitProviderID(item *ports.AgentModelInfo) bool {
 	provider, name, ok := strings.Cut(item.ID, "/")
 	if !ok || provider == "" || name == "" {
 		return false
+	}
+	if match := accountModelPathPattern.FindStringSubmatch(name); len(match) == 3 {
+		switch account, model := match[1], match[2]; {
+		case account != sharedModelAccount:
+			name = account + "/" + model
+		case !strings.EqualFold(model, "default"):
+			name = model
+		}
 	}
 	item.Provider, item.Label = provider, name
 	return true
@@ -1669,4 +1729,35 @@ func normalize(models []ports.AgentModelInfo) []ports.AgentModelInfo {
 		return out[i].ID < out[j].ID
 	})
 	return out
+}
+
+// parseTauModels consumes the released provider/model TSV, retaining exact
+// provider-qualified selection even when multiple providers expose one model.
+func parseTauModels(output []byte) ([]ports.AgentModelInfo, error) {
+	var models []ports.AgentModelInfo
+	for _, provider := range tau.ParseProviders(output) {
+		for _, id := range provider.Models {
+			models = append(models, ports.AgentModelInfo{ID: provider.Name + "/" + id, Label: id, Provider: provider.Name, IsDefault: provider.Default && id == provider.DefaultModel})
+		}
+	}
+	if len(models) == 0 {
+		return nil, fmt.Errorf("tau providers returned no configured models")
+	}
+	return models, nil
+}
+
+func tauConfigPaths(env map[string]string) []string {
+	home := envValue(env, "TAU_HOME")
+	if home == "" {
+		homeKey := "HOME"
+		if runtime.GOOS == "windows" {
+			homeKey = "USERPROFILE"
+		}
+		userHome := envValue(env, homeKey)
+		if userHome == "" {
+			userHome, _ = os.UserHomeDir()
+		}
+		home = filepath.Join(userHome, ".tau")
+	}
+	return []string{filepath.Join(home, "providers.json"), filepath.Join(home, "catalog.toml"), filepath.Join(home, "models-store.json"), filepath.Join(home, "codex-models-store.json")}
 }

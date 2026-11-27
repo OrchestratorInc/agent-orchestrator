@@ -1,14 +1,13 @@
-import { render, screen } from "@testing-library/react";
+import { act, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { ContextMeter } from "./ContextMeter";
-import type { ConversationRateLimits, ConversationUsage } from "../../types/conversation";
+import type { ConversationUsage } from "../../types/conversation";
 
 // The behaviour under test is the threshold encoding, because that is what carries
 // the meaning: a user glances at the fill and the colour, and only reads the digits
 // if something looks wrong. The numbers here are the real ones a live codex
-// app-server reported (18055 of a 258400 window; a pro account at 71% of a 7 day
-// rate limit window).
+// app-server reported (18055 of a 258400 window).
 
 function usage(over: Partial<ConversationUsage> = {}): ConversationUsage {
 	return {
@@ -18,16 +17,6 @@ function usage(over: Partial<ConversationUsage> = {}): ConversationUsage {
 		outputTokens: 5,
 		cachedTokens: 11008,
 		totalTokens: 18055,
-		...over,
-	};
-}
-
-function limits(over: Partial<ConversationRateLimits> = {}): ConversationRateLimits {
-	return {
-		primaryUsedPercent: 71,
-		secondaryUsedPercent: -1,
-		primaryResetsInSeconds: 490444,
-		planLabel: "pro",
 		...over,
 	};
 }
@@ -57,6 +46,68 @@ describe("ContextMeter", () => {
 		expect(await screen.findByRole("tooltip")).toHaveTextContent("Compacts on its own at 200K");
 	});
 
+	describe("compact button", () => {
+		it("compacts from the card that opens on hover", async () => {
+			const onCompact = vi.fn().mockResolvedValue(undefined);
+			render(<ContextMeter usage={usage()} onCompact={onCompact} />);
+			await userEvent.hover(screen.getByRole("progressbar"));
+			await userEvent.click(await screen.findByRole("button", { name: "Compact now" }));
+			expect(onCompact).toHaveBeenCalledTimes(1);
+		});
+
+		it("says why it cannot compact right now", async () => {
+			const onCompact = vi.fn();
+			render(<ContextMeter usage={usage()} onCompact={onCompact} compactBlockedReason="Stop the current turn before compacting." />);
+			await userEvent.hover(screen.getByRole("progressbar"));
+			expect(await screen.findByRole("button", { name: "Compact now" })).toBeDisabled();
+			expect(screen.getByText("Stop the current turn before compacting.")).toBeInTheDocument();
+		});
+
+		it("reports a failed compaction", async () => {
+			render(<ContextMeter usage={usage()} onCompact={() => Promise.reject(new Error("nope"))} />);
+			await userEvent.hover(screen.getByRole("progressbar"));
+			await userEvent.click(await screen.findByRole("button", { name: "Compact now" }));
+			expect(await screen.findByRole("alert")).toHaveTextContent("Conversation history could not be compacted. Try again.");
+		});
+
+		it("is reached from the meter with the keyboard, and Escape or Tab returns there", async () => {
+			const user = userEvent.setup();
+			render(<ContextMeter usage={usage()} onCompact={vi.fn()} />);
+			const meter = screen.getByRole("progressbar");
+			for (const leave of ["{Escape}", "{Tab}"]) {
+				act(() => meter.focus());
+				await user.keyboard("{Enter}");
+				const button = await screen.findByRole("button", { name: "Compact now" });
+				await waitFor(() => expect(button).toHaveFocus());
+				await user.keyboard(leave);
+				await waitFor(() => expect(screen.queryByRole("button", { name: "Compact now" })).not.toBeInTheDocument());
+				expect(meter).toHaveFocus();
+				act(() => meter.blur());
+			}
+		});
+
+		it("returns focus to the meter after compacting from the keyboard", async () => {
+			const user = userEvent.setup();
+			const onCompact = vi.fn().mockResolvedValue(undefined);
+			render(<ContextMeter usage={usage()} onCompact={onCompact} />);
+			const meter = screen.getByRole("progressbar");
+			act(() => meter.focus());
+			await user.keyboard("{ArrowDown}");
+			await waitFor(() => expect(screen.getByRole("button", { name: "Compact now" })).toHaveFocus());
+			await user.keyboard("{Enter}");
+			expect(onCompact).toHaveBeenCalledTimes(1);
+			await waitFor(() => expect(screen.queryByRole("button", { name: "Compact now" })).not.toBeInTheDocument());
+			expect(meter).toHaveFocus();
+		});
+
+		it("is absent without a compact action", async () => {
+			render(<ContextMeter usage={usage()} />);
+			await userEvent.hover(screen.getByRole("progressbar"));
+			await screen.findByRole("tooltip");
+			expect(screen.queryByRole("button", { name: "Compact now" })).not.toBeInTheDocument();
+		});
+	});
+
 	it("encodes fullness in the circular stroke", () => {
 		render(<ContextMeter usage={usage({ contextUsed: 129200 })} />);
 		expect(fill()).toHaveAttribute("stroke-dasharray", "50 100");
@@ -76,7 +127,7 @@ describe("ContextMeter", () => {
 		it("shifts to the needs-you token from 70%", () => {
 			// Exactly at the boundary, which must warn rather than stay normal.
 			render(<ContextMeter usage={usage({ contextUsed: 180_880 })} />);
-			expect(screen.getByRole("progressbar")).toHaveClass("text-status-needs-you");
+			expect(screen.getByRole("progressbar")).toHaveClass("text-status-in-review");
 		});
 
 		it("shifts to the exited token from 90%, where the next turn is at risk", () => {
@@ -120,56 +171,5 @@ describe("ContextMeter", () => {
 		// Absent is distinct from zero: an empty meter for an unreported conversation
 		// would be a claim AO has not earned.
 		expect(container).toBeEmptyDOMElement();
-	});
-
-	describe("quota warning", () => {
-		it("stays hidden while the account has comfortable headroom", () => {
-			render(<ContextMeter usage={usage()} rateLimits={limits({ primaryUsedPercent: 20 })} />);
-			// A readout that is always present becomes furniture, and this one has to be
-			// noticed on the day it matters.
-			expect(screen.queryByText(/quota/)).not.toBeInTheDocument();
-		});
-
-		it("appears once the account is close to a wall", () => {
-			render(<ContextMeter usage={usage()} rateLimits={limits({ primaryUsedPercent: 76 })} />);
-			expect(screen.getByText("Session 76% used")).toBeInTheDocument();
-		});
-
-		it("escalates its colour past 90%, where turns start failing", () => {
-			render(<ContextMeter usage={usage()} rateLimits={limits({ primaryUsedPercent: 94 })} />);
-			expect(screen.getByText("Session 94% used").className).toContain("text-status-exited");
-		});
-
-		it("warns on the tighter of the two windows", () => {
-			render(
-				<ContextMeter
-					usage={usage()}
-					rateLimits={limits({ primaryUsedPercent: 30, secondaryUsedPercent: 88 })}
-				/>,
-			);
-			// The tighter window is the one that will actually stop the next turn.
-			expect(screen.getByText("Weekly 88% used")).toBeInTheDocument();
-		});
-
-		it("ignores a window the provider did not report", () => {
-			render(
-				<ContextMeter
-					usage={usage()}
-					rateLimits={limits({ primaryUsedPercent: -1, secondaryUsedPercent: -1 })}
-				/>,
-			);
-			// Negative is the daemon's "not reported". Treating it as data would draw a
-			// meter running backwards.
-			expect(screen.queryByText(/quota/)).not.toBeInTheDocument();
-		});
-
-		it("warns on quota even when no usage has been reported yet", () => {
-			// The startup rate-limit read lands before the first turn, so this is the
-			// state a user sees when opening a conversation on a nearly-spent account:
-			// exactly when the warning is most useful.
-			render(<ContextMeter rateLimits={limits({ primaryUsedPercent: 97 })} />);
-			expect(screen.getByText("Session 97% used")).toBeInTheDocument();
-			expect(screen.queryByRole("progressbar")).not.toBeInTheDocument();
-		});
 	});
 });

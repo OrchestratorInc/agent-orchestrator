@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -31,6 +32,8 @@ type sessionListOptions struct {
 	sessionOptions
 	all               bool
 	includeTerminated bool
+	agent             string
+	quiet             bool
 }
 
 type sessionCleanupOptions struct {
@@ -83,6 +86,10 @@ type sessionDTO struct {
 	// WorkspaceCleanup is the recorded teardown outcome of a terminated
 	// session's workspace, empty when none has been recorded.
 	WorkspaceCleanup string `json:"workspaceCleanup,omitempty"`
+	// ProvisionState is "failed" when the session never started;
+	// ProvisionError is the reason.
+	ProvisionState string `json:"provisionState,omitempty"`
+	ProvisionError string `json:"provisionError,omitempty"`
 }
 
 type sessionArtifactDTO struct {
@@ -221,6 +228,9 @@ type sessionListEntry struct {
 	LastActivityAt *time.Time      `json:"lastActivityAt,omitempty"`
 	CreatedAt      time.Time       `json:"createdAt"`
 	UpdatedAt      time.Time       `json:"updatedAt"`
+	// ProvisionState is "failed" when the session never started.
+	ProvisionState string `json:"provisionState,omitempty"`
+	ProvisionError string `json:"provisionError,omitempty"`
 }
 
 type sessionListPR struct {
@@ -257,6 +267,7 @@ func newSessionCommand(ctx *commandContext) *cobra.Command {
 	cmd.AddCommand(newSessionClaimPRCommand(ctx))
 	cmd.AddCommand(newSessionHistoryCommand(ctx))
 	cmd.AddCommand(newSessionForkCommand(ctx))
+	cmd.AddCommand(newSessionSwitchCommand(ctx))
 	return cmd
 }
 
@@ -275,6 +286,8 @@ func newSessionListCommand(ctx *commandContext) *cobra.Command {
 	f.BoolVarP(&opts.all, "all", "a", false, "Include orchestrator sessions")
 	f.BoolVar(&opts.includeTerminated, "include-terminated", false, "Include terminated sessions")
 	f.BoolVar(&opts.json, "json", false, "Output as JSON")
+	f.StringVar(&opts.agent, "agent", "", "Only sessions running this agent, for example claude-code")
+	f.BoolVarP(&opts.quiet, "quiet", "q", false, "Print only session ids, one per line")
 	return cmd
 }
 
@@ -359,7 +372,7 @@ func newSessionRestoreCommand(ctx *commandContext) *cobra.Command {
 	var opts sessionOptions
 	cmd := &cobra.Command{
 		Use:   "restore <id>",
-		Short: "Restore a terminated session or resume an exited agent",
+		Short: "Restore a terminated session, resume an exited agent, or retry a failed start",
 		Args:  oneSessionIDArg,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			id, err := normalizeSessionID(args[0])
@@ -717,6 +730,10 @@ func writeClaimPRResult(cmd *cobra.Command, res claimPRResponse, review *bool) e
 }
 
 func (c *commandContext) listSessions(ctx context.Context, cmd *cobra.Command, opts sessionListOptions) error {
+	agent, err := knownAgentFlag(opts.agent)
+	if err != nil {
+		return err
+	}
 	params := url.Values{}
 	if opts.project != "" {
 		params.Set("project", opts.project)
@@ -737,6 +754,17 @@ func (c *commandContext) listSessions(ctx context.Context, cmd *cobra.Command, o
 		}
 	}
 	sessions := filterAndSortSessions(res.Sessions, opts.all)
+	if agent != "" {
+		sessions = slices.DeleteFunc(sessions, func(sess sessionDTO) bool { return sess.Harness != agent })
+	}
+	if opts.quiet {
+		for _, sess := range sessions {
+			if _, err := fmt.Fprintln(cmd.OutOrStdout(), sess.ID); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
 	hiddenTerminatedCount := 0
 	if !opts.includeTerminated {
 		terminatedCount, terminatedOrchestratorCount, err := c.countHiddenTerminated(ctx, opts.project, opts.all)
@@ -945,7 +973,8 @@ func (c *commandContext) restoreSession(ctx context.Context, cmd *cobra.Command,
 	if err != nil {
 		return err
 	}
-	if !sess.IsTerminated && sess.Activity.State == "exited" {
+	// A failed start is retried through the same route as an exited agent.
+	if !sess.IsTerminated && (sess.Activity.State == "exited" || sess.ProvisionState == "failed") {
 		return c.resumeSessionAgent(ctx, cmd, id, sessionOptions{})
 	}
 	var res restoreSessionResponse
@@ -990,6 +1019,19 @@ func (c *commandContext) resumeSessionAgent(ctx context.Context, cmd *cobra.Comm
 	var res resumeAgentResponse
 	if err := c.postJSON(ctx, "sessions/"+url.PathEscape(id)+"/resume-agent", struct{}{}, &res); err != nil {
 		return err
+	}
+	// A retried failed start runs in the background, as a new spawn does. Wait
+	// for it so a second failure reaches the caller, then report the session as
+	// it is after the start, not as the retry request left it.
+	if res.Session.ProvisionState == "provisioning" {
+		if _, err := c.awaitSpawnStart(ctx, spawnedSession{ID: res.SessionID, ProvisionState: res.Session.ProvisionState}); err != nil {
+			return err
+		}
+		settled, err := c.fetchScopedSession(ctx, id, "")
+		if err != nil {
+			return err
+		}
+		res.Session = settled
 	}
 	if opts.json {
 		return writeJSON(cmd.OutOrStdout(), res)
@@ -1186,6 +1228,8 @@ func sessionListEntries(sessions []sessionDTO, summaries map[string][]sessionPRS
 			LastActivityAt: last,
 			CreatedAt:      sess.CreatedAt,
 			UpdatedAt:      sess.UpdatedAt,
+			ProvisionState: sess.ProvisionState,
+			ProvisionError: sess.ProvisionError,
 		})
 	}
 	return entries
@@ -1260,7 +1304,7 @@ func writeSessionList(cmd *cobra.Command, sessions []sessionDTO, summaries map[s
 				}
 			}
 			pr, ci, review, threads := sessionPRColumns(sess, summaries[sess.ID])
-			if _, err := fmt.Fprintf(table, "  %s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n", sess.ID, sessionRole(sess), emptyDash(sess.Branch), pr, ci, review, threads, emptyDash(sess.Activity.State), sessionAge(now, sess.Activity.LastActivityAt)); err != nil {
+			if _, err := fmt.Fprintf(table, "  %s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n", sess.ID, sessionRole(sess), emptyDash(sess.Branch), pr, ci, review, threads, sessionActivityLabel(sess), sessionAge(now, sess.Activity.LastActivityAt)); err != nil {
 				return err
 			}
 		}
@@ -1314,6 +1358,16 @@ func emptyDash(value string) string {
 	return value
 }
 
+// sessionActivityLabel is the list's ACTIVITY cell. A session that never
+// started reports an idle activity state, which would read as a session
+// waiting for input.
+func sessionActivityLabel(sess sessionDTO) string {
+	if sess.ProvisionState == "failed" {
+		return "start failed"
+	}
+	return emptyDash(sess.Activity.State)
+}
+
 func sessionAge(now, at time.Time) string {
 	if at.IsZero() {
 		return "-"
@@ -1323,6 +1377,13 @@ func sessionAge(now, at time.Time) string {
 
 func writeSessionDetails(cmd *cobra.Command, sess sessionDTO) error {
 	out := cmd.OutOrStdout()
+	startFailure := ""
+	if sess.ProvisionState == "failed" {
+		startFailure = strings.TrimSpace(sess.ProvisionError)
+		if startFailure == "" {
+			startFailure = "unknown error"
+		}
+	}
 	fields := [][2]string{
 		{"id", sess.ID},
 		{"project", sess.ProjectID},
@@ -1330,6 +1391,7 @@ func writeSessionDetails(cmd *cobra.Command, sess sessionDTO) error {
 		{"role", sessionRole(sess)},
 		{"status", sess.Status},
 		{"activity", sess.Activity.State},
+		{"start failed", startFailure},
 		{"harness", sess.Harness},
 		{"issue", sess.IssueID},
 		{"branch", formatBranchState(sess)},

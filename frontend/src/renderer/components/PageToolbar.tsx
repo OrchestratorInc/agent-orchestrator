@@ -1,4 +1,4 @@
-import { useRef, useState } from "react";
+import { useRef, useState, type RefObject } from "react";
 import { Search, X } from "@/components/app-icons";
 import { Button } from "./ui/button";
 import { Input } from "./ui/input";
@@ -7,29 +7,37 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "./ui/tooltip";
 /**
  * Search behind an icon for a page's filter row; the field shows while
  * focused or holding a query. Escape clears it and returns focus to the icon.
+ * `persistent` keeps the field always shown (no icon, no autofocus): Escape
+ * clears the text, and a second Escape leaves the field.
  */
-export function ToolbarSearch({ label, query, onQueryChange }: { label: string; query: string; onQueryChange: (query: string) => void }) {
+export function ToolbarSearch({ label, query, onQueryChange, persistent = false, inputRef }: { label: string; query: string; onQueryChange: (query: string) => void; persistent?: boolean; inputRef?: RefObject<HTMLInputElement | null> }) {
 	const [open, setOpen] = useState(false);
 	const toggleRef = useRef<HTMLButtonElement>(null);
-	if (open || query) {
+	if (persistent || open || query) {
 		return (
-			<label className="relative me-1 block w-56 min-w-0 shrink">
+			<label className="relative block w-56 min-w-0 shrink">
 				<Search aria-hidden="true" className="pointer-events-none absolute start-2.5 top-1/2 size-icon-sm -translate-y-1/2 text-passive" />
 				<Input
 					aria-label={label}
-					autoFocus
+					autoFocus={!persistent}
 					className="inspector-field-input ps-8 [&::-webkit-search-cancel-button]:appearance-none"
-					onBlur={() => setOpen(false)}
+					onBlur={persistent ? undefined : () => setOpen(false)}
 					onChange={(event) => onQueryChange(event.target.value)}
 					onKeyDown={(event) => {
 						if (event.key !== "Escape") return;
+						if (persistent && !query) {
+							event.currentTarget.blur();
+							return;
+						}
 						// Escape clears search first; a later one reaches the page.
 						event.preventDefault();
 						onQueryChange("");
+						if (persistent) return;
 						setOpen(false);
 						requestAnimationFrame(() => toggleRef.current?.focus());
 					}}
 					placeholder={label}
+					ref={inputRef}
 					type="search"
 					value={query}
 				/>
@@ -49,7 +57,7 @@ export function ToolbarSearch({ label, query, onQueryChange }: { label: string; 
 }
 
 /** One active filter from a page's Filter menu, removable in place. */
-export function FilterChip({ label, value, removeLabel, onRemove }: { label: string; value: string; removeLabel: string; onRemove: () => void }) {
+export function FilterChip({ label, value, removeLabel, onRemove }: { label: string; value?: string; removeLabel: string; onRemove: () => void }) {
 	return (
 		<Button
 			type="button"
@@ -60,8 +68,12 @@ export function FilterChip({ label, value, removeLabel, onRemove }: { label: str
 			aria-label={removeLabel}
 			onClick={onRemove}
 		>
-			<span className="text-muted-foreground">{label}:</span>
-			<span className="truncate">{value}</span>
+			{value === undefined ? <span className="truncate">{label}</span> : (
+				<>
+					<span className="text-muted-foreground">{label}:</span>
+					<span className="truncate">{value}</span>
+				</>
+			)}
 			<X aria-hidden="true" className="size-icon-xs text-muted-foreground" />
 		</Button>
 	);

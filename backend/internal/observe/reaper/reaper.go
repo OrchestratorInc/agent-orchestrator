@@ -196,7 +196,10 @@ func (r *Reaper) Tick(ctx context.Context) error {
 }
 
 func (r *Reaper) observeSessions(ctx context.Context, now time.Time) error {
-	sessions, err := r.sessions.ListAllSessions(ctx)
+	// Not cancellable: a cancellable context makes the SQLite driver and
+	// database/sql each start a watcher goroutine for every query, and this runs
+	// every tick. The loop still stops on ctx; one in-flight read simply finishes.
+	sessions, err := r.sessions.ListAllSessions(context.WithoutCancel(ctx))
 	if err != nil {
 		return err
 	}
@@ -279,7 +282,8 @@ func (r *Reaper) observeReviewers(ctx context.Context, now time.Time) error {
 
 func (r *Reaper) probeReviewers(ctx context.Context, observer ports.ReviewerObserver, now time.Time, boot bool) (ports.ReviewerObservationPass, error) {
 	pass := ports.ReviewerObservationPass{ObservedAt: now, Boot: boot}
-	targets, err := observer.ListObservableReviewers(ctx)
+	// Not cancellable, like the session listing above.
+	targets, err := observer.ListObservableReviewers(context.WithoutCancel(ctx))
 	if err != nil {
 		return pass, err
 	}

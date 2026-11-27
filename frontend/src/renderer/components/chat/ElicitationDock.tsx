@@ -17,9 +17,12 @@ type PropertyEntry = [string, Record<string, unknown>];
  */
 export function ElicitationDock({
 	activity,
+	harness,
 	onResolve,
 }: {
 	activity: ConversationActivity;
+	/** The session's agent. Antigravity's question fields are read only when it asked. */
+	harness?: string;
 	onResolve?: (
 		requestId: string,
 		action: InputAction,
@@ -54,7 +57,7 @@ export function ElicitationDock({
 			{activity.detail?.inputMode === "url" ? (
 				<URLRequest activity={activity} disabled={submitting || unavailable} onResolve={resolve} />
 			) : (
-				<FormRequest activity={activity} disabled={submitting || unavailable} onResolve={resolve} />
+				<FormRequest activity={activity} harness={harness} disabled={submitting || unavailable} onResolve={resolve} />
 			)}
 
 			{error ? (
@@ -66,7 +69,7 @@ export function ElicitationDock({
 	);
 }
 
-export function ElicitationHistory({ activity }: { activity: ConversationActivity }) {
+export function ElicitationHistory({ activity, harness }: { activity: ConversationActivity; harness?: string }) {
 	const response = activity.inputResponse;
 	const answered = (activity.status === "resolved" || activity.status === "completed") && response?.action === "accept";
 	const outcome = activity.status === "failed" ? "Question expired"
@@ -75,7 +78,8 @@ export function ElicitationHistory({ activity }: { activity: ConversationActivit
 				: answered ? "Answered" : "Question closed";
 	const schema = activity.detail?.schema;
 	const properties = Object.entries(schema?.properties ?? {});
-	const groups = claudeQuestionGroups(properties);
+	const form = questionForm(properties, harness);
+	const groups = form?.groups;
 	const message = activity.detail?.message ?? schema?.title ?? activity.summary;
 	const content = answered ? response.content : undefined;
 	// The line under the question is the answer, or how the question ended when
@@ -85,13 +89,13 @@ export function ElicitationHistory({ activity }: { activity: ConversationActivit
 
 	return (
 		<section aria-label="Agent question history" className="min-w-0 space-y-3 rounded-lg border border-border bg-surface/45 p-3 text-xs leading-relaxed">
-			{groups ? groups.map((group, index) => {
+			{form && groups ? groups.map((group, index) => {
 				const question = group[0];
 				if (!question) return null;
 				return (
 					<div key={question[0]} className="space-y-1">
 						<p className="whitespace-pre-wrap break-words font-medium text-foreground">
-							{questionPrompt(question, groups.length === 1 ? activity.detail?.message : undefined)}
+							{questionFormPrompt(form, question, activity.detail?.message)}
 						</p>
 						{showsAnswers ? <HistoryAnswers properties={group} content={content} /> : index === groups.length - 1 ? ending : null}
 					</div>
@@ -314,16 +318,19 @@ function URLRequest({
 
 function FormRequest({
 	activity,
+	harness,
 	disabled,
 	onResolve,
 }: {
 	activity: ConversationActivity;
+	harness?: string;
 	disabled: boolean;
 	onResolve: (action: InputAction, content?: Record<string, unknown>) => Promise<void>;
 }) {
 	const schema = activity.detail?.schema;
 	const properties = useMemo(() => Object.entries(schema?.properties ?? {}), [schema?.properties]);
-	const questionGroups = useMemo(() => claudeQuestionGroups(properties), [properties]);
+	const form = useMemo(() => questionForm(properties, harness), [properties, harness]);
+	const questionGroups = form?.groups;
 	const otherAnswers = useMemo(() => otherAnswerFields(properties), [properties]);
 	const required = useMemo(() => new Set(schema?.required ?? []), [schema?.required]);
 	const [values, setValues] = useState<Record<string, InputValue>>(() => initialValues(properties));
@@ -349,10 +356,11 @@ function FormRequest({
 	}, [activeQuestion]);
 
 	// Claude puts a single prompt in message and each prompt of a multi-question
-	// form in its field description. The field title is only a short topic label.
+	// form in its field description; its field title is only a short topic label.
+	// Antigravity puts every prompt in the field title.
 	const question = questionGroups ? visibleProperties[0] : undefined;
-	const title = question
-		? questionPrompt(question, questionGroups?.length === 1 ? activity.detail?.message : undefined)
+	const title = form && question
+		? questionFormPrompt(form, question, activity.detail?.message)
 		: activity.detail?.message ?? schema?.title ?? activity.summary;
 	const pager =
 		questionGroups && questionGroups.length > 1
@@ -403,6 +411,35 @@ function FormRequest({
 			return;
 		}
 		void onResolve("accept", values);
+	}
+
+	// On a form of several questions, Skip leaves only the shown question blank,
+	// as the phone's card does: it moves on, and on the last question sends what
+	// was answered. A required question has no Skip; the close still ends the
+	// form. Anywhere else, Skip declines the whole request.
+	const skipsOneQuestion = questionGroups !== undefined && questionGroups.length > 1;
+	const canSkip = !skipsOneQuestion || !visibleProperties.some(([name]) => required.has(name));
+
+	function skip() {
+		if (!skipsOneQuestion) {
+			void onResolve("decline");
+			return;
+		}
+		const next = { ...values };
+		// Cleared, not reset: a schema default would send the question as answered.
+		for (const [name, property] of visibleProperties) {
+			if (property.type === "array") next[name] = [];
+			else delete next[name];
+		}
+		setValues(next);
+		setMissing(new Set());
+		if (hasNextQuestion) {
+			setActiveQuestion((current) => current + 1);
+			return;
+		}
+		// With every question left blank, the whole form was skipped.
+		const answered = properties.some(([name]) => !isBlank(next[name]));
+		void (answered ? onResolve("accept", next) : onResolve("decline"));
 	}
 
 	return (
@@ -508,16 +545,18 @@ function FormRequest({
 								))}
 							</div>
 						) : null}
-						<Button
-							type="button"
-							variant="quiet"
-							size="sm"
-							shape="pill"
-							disabled={disabled}
-							onClick={() => onResolve("decline")}
-						>
-							Skip
-						</Button>
+						{canSkip ? (
+							<Button
+								type="button"
+								variant="quiet"
+								size="sm"
+								shape="pill"
+								disabled={disabled}
+								onClick={skip}
+							>
+								Skip
+							</Button>
+						) : null}
 					</div>
 					{/* Sending an answer is the composer's send, so it wears the composer's send colour. */}
 					<Button
@@ -706,6 +745,7 @@ function FormField({
 			aria-invalid={invalid || undefined}
 			aria-describedby={invalid ? errorId : undefined}
 			onChange={(event) => onChange(numeric && event.target.value !== "" ? Number(event.target.value) : event.target.value)}
+			data-field={rows ? undefined : "field"}
 			className={cn(
 				"w-full min-w-0 rounded-lg border bg-background/40 px-2.5 text-xs leading-relaxed text-foreground outline-none transition-colors focus-visible:border-border-strong",
 				rows ? "h-7 border-0 bg-transparent px-0 focus-visible:border-transparent" : "mt-1.5 h-8",
@@ -789,12 +829,42 @@ function enumOptions(property: Record<string, unknown>): Array<{ value: string; 
 	});
 }
 
-function claudeQuestionGroups(properties: PropertyEntry[]): PropertyEntry[][] | undefined {
+/**
+ * Field names an AskUserQuestion bridge gives each question and its free-text
+ * "Other" field. claude-agent-acp writes `question_<n>` / `question_<n>_custom`
+ * and carries a single question's prompt in `message`. Antigravity (`agy acp`)
+ * writes `q<n>` / `q<n>_other`, puts the prompt in the field title and sends only
+ * "The agent has N questions." as `message`. Any MCP form may name its fields
+ * `q1`, `q2`, so that scheme applies only when Antigravity asked.
+ */
+const QUESTION_FIELD_SCHEMES: Array<{ pattern: RegExp; promptInTitle: boolean; harness?: string }> = [
+	{ pattern: /^question_(\d+)(_custom)?$/, promptInTitle: false },
+	{ pattern: /^q(\d+)(_other)?$/, promptInTitle: true, harness: "agy" },
+];
+
+type QuestionForm = { groups: PropertyEntry[][]; promptInTitle: boolean };
+
+/** A question form shows one question, with its Other field, at a time. */
+function questionForm(properties: PropertyEntry[], harness?: string): QuestionForm | undefined {
+	for (const scheme of QUESTION_FIELD_SCHEMES) {
+		if (scheme.harness !== undefined && scheme.harness !== harness) continue;
+		const groups = questionGroups(properties, scheme.pattern);
+		if (groups) return { groups, promptInTitle: scheme.promptInTitle };
+	}
+	return undefined;
+}
+
+/** The prompt above a question: its description, else a single question's message, else its title. */
+function questionFormPrompt(form: QuestionForm, question: PropertyEntry, message?: string): string {
+	return questionPrompt(question, form.groups.length === 1 && !form.promptInTitle ? message : undefined);
+}
+
+function questionGroups(properties: PropertyEntry[], pattern: RegExp): PropertyEntry[][] | undefined {
 	if (properties.length === 0) return undefined;
 
 	const groups = new Map<number, { question?: PropertyEntry; custom?: PropertyEntry }>();
 	for (const entry of properties) {
-		const match = /^question_(\d+)(_custom)?$/.exec(entry[0]);
+		const match = pattern.exec(entry[0]);
 		if (!match) return undefined;
 		const index = Number(match[1]);
 		const group = groups.get(index) ?? {};

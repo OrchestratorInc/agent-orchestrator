@@ -6,9 +6,18 @@ export type ProbeAnswer = { hostId: string };
 export type ProbeFn = (endpoint: Endpoint, signal: AbortSignal) => Promise<ProbeAnswer>;
 
 export class IncompatibleHostVersionError extends Error {
+	readonly code: string = "INCOMPATIBLE_HOST_VERSION_ERROR";
 	constructor(readonly hostId: string) {
 		super("Orchestrator versions are incompatible. Update Orchestrator on this phone and the machine.");
 		this.name = "IncompatibleHostVersionError";
+	}
+}
+
+/** An endpoint that did not answer within the probe's own timeout. */
+export class ProbeTimeoutError extends Error {
+	constructor(readonly endpoint: Endpoint) {
+		super(`identity probe to ${endpoint.kind}://${endpoint.host}:${endpoint.port} timed out`);
+		this.name = "ProbeTimeoutError";
 	}
 }
 
@@ -33,7 +42,14 @@ export type RaceOutcome =
 	/** hostId is what actually answered, so a machine migrated without one can
 	 * record the identity it just learned. */
 	| { ok: true; endpoint: Endpoint; hostId: string }
-	| { ok: false; reason: "no-candidates" | "none-reachable" | "incompatible" };
+	| {
+		ok: false;
+		reason: "no-candidates" | "none-reachable" | "incompatible";
+		/** The endpoints that failed by timing out (ProbeTimeoutError), when
+		 * any did: the link to them may only be slow, even beside an address
+		 * that answered incompatible. Absent when none did. */
+		timedOut?: Endpoint[];
+	};
 
 /**
  * Probes every candidate at once and returns the best one that answers as the
@@ -77,6 +93,7 @@ export async function raceEndpoints(
 	let bestHostId = "";
 	let settled = 0;
 	let incompatible = false;
+	const timedOut: Endpoint[] = [];
 	let done = false;
 	let graceTimer: ReturnType<typeof setTimeout> | undefined;
 
@@ -90,7 +107,7 @@ export async function raceEndpoints(
 			controller.abort();
 			const result: RaceOutcome = best
 				? { ok: true, endpoint: best, hostId: bestHostId }
-				: { ok: false, reason: incompatible ? "incompatible" : "none-reachable" };
+				: { ok: false, reason: incompatible ? "incompatible" : "none-reachable", ...(timedOut.length > 0 ? { timedOut } : {}) };
 			if (isDev) {
 				console.log("[race] Race finished:", result);
 			}
@@ -129,6 +146,7 @@ export async function raceEndpoints(
 				})
 				.catch((err) => {
 					if (err instanceof IncompatibleHostVersionError && (expectedHostId === "" || err.hostId === expectedHostId)) incompatible = true;
+					if (err instanceof ProbeTimeoutError) timedOut.push(endpoint);
 					if (isDev) {
 						console.log("[race] Endpoint failed:", `${endpoint.kind}://${endpoint.host}:${endpoint.port}`, err);
 					}

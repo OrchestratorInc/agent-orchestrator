@@ -1491,6 +1491,30 @@ func TestCatalogFingerprintKeepsTheExecutableOnlyValueForConfiglessAgents(t *tes
 	}
 }
 
+func TestTauCatalogFingerprintTracksProjectHome(t *testing.T) {
+	// An inherited TAU_HOME would override both HOME values below.
+	t.Setenv("TAU_HOME", "")
+	homeA := t.TempDir()
+	homeB := t.TempDir()
+	for home, provider := range map[string]string{homeA: "provider-a", homeB: "provider-b"} {
+		tauHome := filepath.Join(home, ".tau")
+		if err := os.MkdirAll(tauHome, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(tauHome, "providers.json"), []byte(provider), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	env := func(home string) map[string]string {
+		return map[string]string{"HOME": home, "USERPROFILE": home}
+	}
+
+	first := CatalogFingerprint(context.Background(), "tau", "", "", env(homeA))
+	if second := CatalogFingerprint(context.Background(), "tau", "", "", env(homeB)); second == first {
+		t.Fatalf("fingerprint unchanged (%q) across project home overrides", second)
+	}
+}
+
 // TestACPOnlyHarnessReportsDiscoveryFailure guards the difference between the
 // ACP harnesses. Cline keeps configured provider selections, so an ACP
 // failure falls back to those. DeepSeek Harness and Devin have no second
@@ -1585,5 +1609,64 @@ func TestModelDiscoveryErrorNamesACrashedCLIsError(t *testing.T) {
 		"    at Module.require (node:internal/modules/cjs/loader:1311:19)\n"
 	if detail := discoveryErrorDetail([]byte(output)); detail != "Error: Cannot find module 'tree-sitter'" {
 		t.Fatalf("detail = %q, want the error line", detail)
+	}
+}
+
+// Fireworks model IDs are resource names. A model of the shared "fireworks"
+// account is labelled with its own name; another account's deployment keeps the
+// account, so it does not read as the shared one. The ID, which selects the
+// model, is unchanged. Other nested names carry a vendor that is part of the
+// name, so they stay as they are.
+func TestParseProviderIDLinesLabelsAccountModelResourcePaths(t *testing.T) {
+	t.Parallel()
+	models, err := parseProviderIDLines([]byte(strings.Join([]string{
+		"fireworks/accounts/fireworks/models/deepseek-v4-pro",
+		"fireworks/accounts/myteam/models/deepseek-v4-pro",
+		"openrouter/anthropic/claude-sonnet",
+		"openai/gpt-5",
+	}, "\n")))
+	if err != nil {
+		t.Fatalf("parseProviderIDLines() error = %v", err)
+	}
+	got := map[string]string{}
+	for _, model := range models {
+		got[model.ID] = model.Provider + " | " + model.Label
+	}
+	want := map[string]string{
+		"fireworks/accounts/fireworks/models/deepseek-v4-pro": "fireworks | deepseek-v4-pro",
+		"fireworks/accounts/myteam/models/deepseek-v4-pro":    "fireworks | myteam/deepseek-v4-pro",
+		"openrouter/anthropic/claude-sonnet":                  "openrouter | anthropic/claude-sonnet",
+		"openai/gpt-5":                                        "openai | gpt-5",
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("labels = %v, want %v", got, want)
+	}
+}
+
+// A cached catalog keeps its old labels until its fingerprint changes, so every
+// agent whose list goes through splitProviderID needs a schema version.
+func TestResourcePathLabelsInvalidateCachedCatalogs(t *testing.T) {
+	t.Parallel()
+	for _, agentID := range []string{"aider", "crush", "kilocode", "mimo-code", "opencode", "opencode-v2"} {
+		if catalogSchemaVersions[agentID] == "" {
+			t.Errorf("%s has no catalog schema version; cached labels would never refresh", agentID)
+		}
+	}
+}
+
+// normalize reads a label of "default" as the default-model marker. A resource
+// path whose model happens to be named "default" is a real model, so it keeps
+// its path as the label and is not marked as the default.
+func TestResourcePathModelNamedDefaultIsNotTheDefaultMarker(t *testing.T) {
+	t.Parallel()
+	models, err := parseMiMoModels([]byte("fireworks/accounts/fireworks/models/default — Custom deployment"))
+	if err != nil {
+		t.Fatalf("parseMiMoModels() error = %v", err)
+	}
+	if len(models) != 1 {
+		t.Fatalf("models = %+v, want one", models)
+	}
+	if got := models[0]; got.Label != "accounts/fireworks/models/default" || got.IsDefault {
+		t.Fatalf("model = %+v, want the path as its label and not the default", got)
 	}
 }

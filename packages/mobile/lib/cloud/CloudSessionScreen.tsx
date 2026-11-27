@@ -2,22 +2,26 @@ import { Stack, useNavigation, useRouter } from "expo-router";
 import { useHeaderHeight, useIsFocused } from "expo-router/react-navigation";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { Alert, Keyboard, Platform, StyleSheet, View, type LayoutChangeEvent } from "react-native";
-import { KeyboardAvoidingView } from "react-native-keyboard-controller";
+import { useSharedValue } from "react-native-reanimated";
 import { backOr } from "../backNavigation";
 import { ChatComposer } from "../chat/ChatComposer";
 import { sessionLink } from "../chat/automationMessages";
 import { ChatLinkProvider } from "../chat/ChatMarkdown";
 import { ChatTimeline, type TimelineStartup } from "../chat/ChatTimeline";
+import { useFlag } from "../chat/flag";
 import { chatSheetRoute } from "../chat/chatSheetRegistry";
 import type { ConversationMenuAction, ConversationMenuGroup } from "../chat/conversationMenuModel";
 import { ConversationTitle } from "../chat/ConversationTitle";
 import { KeyboardFollower } from "../chat/KeyboardFollower";
+import { KeyboardMotionScope } from "../chat/keyboardMotion";
 import { MessageFileSourceContext } from "../chat/messageFiles";
 import { requestDockModel } from "../chat/requestDockModel";
 import { SessionStartupStatus } from "../chat/SessionStartup";
 import type { ChatConfigOption, ChatImage, ChatResource, MessageFile, TurnSettings } from "../chat/types";
 import { useChatKeyboard } from "../chat/useChatKeyboard";
 import { cloudFilesBackend } from "../files/cloudBackend";
+import { isAbsoluteFileReference, matchAbsoluteFile, matchBareFile } from "../chat/fileLinks";
+import { useStillHere } from "../useStillHere";
 import { changedPathCount, fileRoute, filesRoute, FilesNavigationContext, type FilesNavigation } from "../files/navigation";
 import { useBackendChangeSummary } from "../files/useChangeSummary";
 import { Frost, FROST_TAIL, frostStops } from "../frost";
@@ -106,26 +110,39 @@ export function CloudSessionScreen({ sessionId }: { sessionId: string }) {
 	const clearJumpToSequence = useCallback(() => setJumpToSequence(undefined), []);
 	const [dismissedRequest, setDismissedRequest] = useState<number>();
 	const restoreRequest = useCallback(() => setDismissedRequest(undefined), []);
-	const chatKeyboard = useChatKeyboard({ underHeader: CLEAR_HEADER });
+	const chatKeyboard = useChatKeyboard({ underHeader: CLEAR_HEADER, floating: true });
 	const headerHeight = useHeaderHeight();
 	const headerOverlap = CLEAR_HEADER ? headerHeight : 0;
 	const [bannersHeight, setBannersHeight] = useState(0);
 	const [composerHeight, setComposerHeight] = useState(0);
-	const [composerOpen, setComposerOpen] = useState(false);
+	// The composer's open state, for the jump to the newest message alone (see Flag).
+	const composerOpen = useFlag();
 	const composerSettle = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
 	useEffect(() => () => clearTimeout(composerSettle.current), []);
+	// Padded for the composer fully open, as a local chat's is.
+	const composerDeficit = useSharedValue(0);
+	// Lines typed (and quotes or attachments over the field) move the
+	// conversation up by a transform on the UI thread (ChatTimeline's
+	// `composerGrowth`), so the padding leaves them out and typing changes no
+	// React state of the conversation's: padding that followed the field put a
+	// new line over the last message for a quarter second, then jumped.
+	const composerFieldGrowth = useSharedValue(0);
 	const measureComposer = useCallback((event: LayoutChangeEvent) => {
-		const height = Math.round(event.nativeEvent.layout.height);
+		const height = event.nativeEvent.layout.height;
 		clearTimeout(composerSettle.current);
-		composerSettle.current = setTimeout(() => setComposerHeight(height), COMPOSER_SETTLE_MS);
-	}, []);
+		composerSettle.current = setTimeout(() => setComposerHeight(Math.round(height + composerDeficit.value - composerFieldGrowth.value)), COMPOSER_SETTLE_MS);
+	}, [composerDeficit, composerFieldGrowth]);
 
 	const tui = session?.interfaceMode === "tui";
 	const current: SessionView = view ?? (tui ? "agent" : "chat");
 	// A switch of interface (from here or the desktop) shows the new one's own view.
 	useEffect(() => { setView(null); }, [tui]);
 	const terminated = Boolean(session?.isTerminated);
-	const project = session ? projects.find((item) => item.id === session.projectId) : undefined;
+	const sessionProject = session ? projects.find((item) => item.id === session.projectId) : undefined;
+	// A standalone agent's project is its own and hidden: the session reads as
+	// standalone, with no project to open.
+	const standaloneAgent = sessionProject?.standaloneAgent === true;
+	const project = standaloneAgent ? undefined : sessionProject;
 	const harness = session?.harness ?? "";
 	const title = session?.displayName?.trim() || (session?.kind === "orchestrator" ? "Orchestrator" : cloudAgentLabel(harness));
 	const headerState = snapshot?.controller.state ?? (terminated ? "stopped" : undefined);
@@ -307,15 +324,15 @@ export function CloudSessionScreen({ sessionId }: { sessionId: string }) {
 			headerTitle: () => (
 				<ConversationTitle
 					title={title || "Cloud session"}
-					// The project and the agent, as a local chat's bar reads; the state
-					// is the dot's alone (the sandbox's own steps are banners below).
-					subtitle={[project?.displayName ?? "Cloud", harness ? cloudAgentLabel(harness) : ""].filter(Boolean).join(" · ")}
+					// The project, as a local chat's bar reads; the logo names the agent
+					// and the dot its state (the sandbox's own steps are banners below).
+					subtitle={standaloneAgent ? "Standalone" : project?.displayName ?? "Cloud"}
 					harness={harness || undefined}
 					state={headerState}
 				/>
 			),
 		});
-	}, [harness, headerState, navigation, project?.displayName, title]);
+	}, [harness, headerState, navigation, project?.displayName, standaloneAgent, title]);
 	// The conversation scrolls up under a clear bar, as a local chat's does.
 	useLayoutEffect(() => {
 		if (!CLEAR_HEADER) return;
@@ -413,18 +430,62 @@ export function CloudSessionScreen({ sessionId }: { sessionId: string }) {
 		}
 		void openGitHub(url);
 	}, [router]);
-	// Every surface that shows the agent changed files opens them, as a local
-	// chat's does: the turn's changed-files card and the composer's chip.
-	const filesNavigation = useMemo<FilesNavigation>(() => ({
-		openChanges: () => router.push(filesRoute(sessionId, CLOUD_HOST_ID, title)),
-		openFile: (path, previousPath) => router.push(fileRoute(sessionId, path, CLOUD_HOST_ID, previousPath)),
-	}), [router, sessionId, title]);
 	// git's totals, re-read when a turn reports edits. Only while the sandbox
 	// runs: the read goes to its worker, and would wake a paused one.
 	const lastTurn = snapshot?.turns.at(-1);
 	const changeSignal = `${changedPathCount(snapshot?.turns)}:${lastTurn?.id ?? ""}:${lastTurn?.state ?? ""}:${lastTurn?.diff?.files.length ?? 0}`;
 	const filesBackend = useMemo(() => org?.id ? cloudFilesBackend(client, org.id) : null, [client, org?.id]);
+	// Every surface that shows the agent changed files opens them, as a local
+	// chat's does: the turn's changed-files card, the composer's chip, and a
+	// reply's file links. Cloud has no route that places an absolute path, so
+	// one is found by its name and matched to the worktree path it ends with;
+	// it opens only if it is still the latest file action on this chat.
 	const workspaceLive = Boolean(session?.runtimeConnected && !session.isTerminated);
+	// A bare name in a reply (`README.md:3`) is a link only when the worktree has
+	// that file: each name is searched once, while the sandbox runs (a search
+	// would wake a paused one), and matched exactly or to the one file by that name.
+	const [bareFiles, setBareFiles] = useState<Readonly<Record<string, string | null>>>({});
+	const bareLookups = useRef(new Set<string>());
+	const fileOpenRequest = useRef(0);
+	const fileOpenStillHere = useStillHere(sessionId, () => navigation.isFocused?.() !== false);
+	const filesNavigation = useMemo<FilesNavigation>(() => ({
+		openChanges: () => {
+			fileOpenRequest.current++;
+			router.push(filesRoute(sessionId, CLOUD_HOST_ID, title));
+		},
+		openFile: (path, previousPath, line) => {
+			const request = ++fileOpenRequest.current;
+			if (!filesBackend || !isAbsoluteFileReference(path)) {
+				router.push(fileRoute(sessionId, path, CLOUD_HOST_ID, previousPath, line));
+				return;
+			}
+			const here = fileOpenStillHere();
+			const current = () => request === fileOpenRequest.current && here();
+			const name = path.slice(path.lastIndexOf("/") + 1);
+			// The changed files too: a turn's card names files it deleted, which a
+			// search of the worktree no longer finds.
+			void Promise.all([
+				filesBackend.search(sessionId, name),
+				filesBackend.manifest(sessionId).catch(() => null),
+			]).then(([{ results }, manifest]) => {
+				if (!current()) return;
+				const found = matchAbsoluteFile(path, [...results.map((result) => result.path), ...(manifest?.files.map((file) => file.path) ?? [])]);
+				if (found) router.push(fileRoute(sessionId, found, CLOUD_HOST_ID, previousPath, line));
+				else Alert.alert("Outside this session", `${path} isn't in this session's worktree.`);
+			}, () => {
+				if (current()) Alert.alert("Couldn't open this file", `${path} couldn't be found in this session.`);
+			});
+		},
+		bareFile: (name) => workspaceLive && filesBackend ? bareFiles[name] : null,
+		wantBareFile: (name) => {
+			if (!workspaceLive || !filesBackend || bareLookups.current.has(name)) return;
+			bareLookups.current.add(name);
+			void filesBackend.search(sessionId, name).then(
+				({ results, truncated }) => matchBareFile(name, results.map((result) => result.path), !truncated),
+				() => null,
+			).then((found) => setBareFiles((known) => ({ ...known, [name]: found })));
+		},
+	}), [bareFiles, fileOpenStillHere, filesBackend, router, sessionId, title, workspaceLive]);
 	const changeSummary = useBackendChangeSummary(workspaceLive ? filesBackend : null, sessionId, changeSignal);
 	const nameOfSession = useCallback((id: string) => {
 		const named = sessions.find((item) => item.id === id);
@@ -569,9 +630,13 @@ export function CloudSessionScreen({ sessionId }: { sessionId: string }) {
 		);
 	}
 
+	// One keyboard handler for the composer, its follower and the conversation
+	// (see KeyboardMotionScope).
 	return (
+		<KeyboardMotionScope>
 		<View style={styles.screen}>
-			<KeyboardAvoidingView style={[styles.screen, chatKeyboard.rootStyle]} behavior={chatKeyboard.behavior} keyboardVerticalOffset={chatKeyboard.keyboardVerticalOffset}>
+			{/* Not padded for the keyboard: the timeline makes its own room, as a local chat's does. */}
+			<View style={[styles.screen, chatKeyboard.floatingRootStyle]}>
 				{headerItems}
 				{CLEAR_HEADER ? null : banners}
 				<View style={styles.conversation}>
@@ -593,6 +658,8 @@ export function CloudSessionScreen({ sessionId }: { sessionId: string }) {
 								underHeader={headerOverlap}
 								topInset={bannersHeight}
 								bottomInset={composerHeight}
+								keyboardOffset={chatKeyboard.listKeyboardOffset}
+								composerGrowth={composerFieldGrowth}
 								jumpHidden={composerOpen}
 							/>
 						</MessageFileSourceContext.Provider>
@@ -607,12 +674,12 @@ export function CloudSessionScreen({ sessionId }: { sessionId: string }) {
 						</View>
 					) : null}
 				</View>
-			</KeyboardAvoidingView>
+			</View>
 			{/* The composer floats over the conversation and rides the keyboard, as a local chat's does. */}
 			<KeyboardFollower lift={chatKeyboard.composerLift} style={styles.floatingComposer} onLayout={measureComposer}>
 				<ChatComposer
 					key={session.id}
-					onExpandedChange={setComposerOpen}
+					onExpandedChange={composerOpen.set}
 					sessionId={`cloud.${session.id}`}
 					// Keys the unsent draft and attachments, as a machine's does, so a
 					// cloud chat keeps what was typed across leaving it.
@@ -648,6 +715,8 @@ export function CloudSessionScreen({ sessionId }: { sessionId: string }) {
 					onSettings={chooseTurnSettings}
 					onConfigOption={chooseOption}
 					restingInset={chatKeyboard.restingInset}
+					openDeficit={composerDeficit}
+					fieldGrowth={composerFieldGrowth}
 					dockRiseOverride={chatKeyboard.dockRiseOverride}
 					startingAgentName={startingAgentName}
 					fileUploads={attachmentLimit ? { maxBytes: attachmentLimit } : undefined}
@@ -660,6 +729,7 @@ export function CloudSessionScreen({ sessionId }: { sessionId: string }) {
 			</KeyboardFollower>
 			{switchCard}
 		</View>
+		</KeyboardMotionScope>
 	);
 }
 

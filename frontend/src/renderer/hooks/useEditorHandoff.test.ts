@@ -1,5 +1,9 @@
-import { describe, expect, it } from "vitest";
-import { editorHandoffErrorMessage } from "./useEditorHandoff";
+import { QueryClient } from "@tanstack/react-query";
+import { describe, expect, it, vi } from "vitest";
+import { aoBridge } from "../lib/bridge";
+import { editorHandoffErrorMessage, editorHandoffQueryKey, prefetchEditorHandoffState } from "./useEditorHandoff";
+
+vi.mock("../lib/bridge", () => ({ aoBridge: { editorHandoff: { getState: vi.fn() } } }));
 
 // Electron wraps ipcMain rejections; the topbar used to render the wrapper
 // verbatim, so a missing worktree read as "Error invoking remote method
@@ -34,5 +38,34 @@ describe("editorHandoffErrorMessage", () => {
 	it("returns null for non-Error rejections", () => {
 		expect(editorHandoffErrorMessage("nope")).toBeNull();
 		expect(editorHandoffErrorMessage(undefined)).toBeNull();
+	});
+});
+
+describe("prefetchEditorHandoffState", () => {
+	const getState = vi.mocked(aoBridge.editorHandoff.getState);
+
+	it("reads an older session's workspace once and leaves a missing one stale", async () => {
+		const queryClient = new QueryClient();
+		getState.mockReset().mockResolvedValue({ workspaceAvailable: false, targets: [] } as never);
+		prefetchEditorHandoffState(queryClient, { id: "s1", createdAt: "2026-01-01T00:00:00Z" });
+		await vi.waitFor(() => expect(queryClient.getQueryData(editorHandoffQueryKey("s1"))).toEqual({ workspaceAvailable: false, targets: [] }));
+		expect(getState).toHaveBeenCalledTimes(1);
+		// A later menu opening reads again: the workspace may have appeared since.
+		await vi.waitFor(() => expect(queryClient.getQueryState(editorHandoffQueryKey("s1"))?.isInvalidated).toBe(true));
+	});
+
+	it("waits out a new session's workspace like the menu's own read, so a menu opening mid-read gets the final answer", async () => {
+		const queryClient = new QueryClient();
+		getState
+			.mockReset()
+			.mockResolvedValueOnce({ workspaceAvailable: false, targets: [] } as never)
+			.mockResolvedValue({ workspaceAvailable: true, targets: [] } as never);
+		prefetchEditorHandoffState(queryClient, { id: "s2", createdAt: new Date().toISOString() });
+		await vi.waitFor(
+			() => expect(queryClient.getQueryData(editorHandoffQueryKey("s2"))).toEqual({ workspaceAvailable: true, targets: [] }),
+			{ timeout: 3000 },
+		);
+		expect(getState).toHaveBeenCalledTimes(2);
+		expect(queryClient.getQueryState(editorHandoffQueryKey("s2"))?.isInvalidated).toBe(false);
 	});
 });
