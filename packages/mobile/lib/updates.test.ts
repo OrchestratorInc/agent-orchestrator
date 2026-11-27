@@ -1,9 +1,11 @@
 import { describe, expect, it, vi } from "vitest";
 import {
 	checkAndDownload,
+	CHECK_STALE_MS,
 	describeUpdateRow,
-	MIN_BACKGROUND_MS,
+	latestTime,
 	onForeground,
+	REOFFER_MS,
 	shouldOfferUpdate,
 	type UpdatesApi,
 } from "./updates";
@@ -18,17 +20,38 @@ function api(over: Partial<UpdatesApi> = {}): UpdatesApi {
 }
 
 describe("onForeground", () => {
-	const away = 1_000_000;
+	const t0 = 1_000_000_000;
+	const idle = { pending: false, lastCheckAt: t0, lastOfferedAt: null };
 
-	it("does nothing until the app has been away long enough", () => {
-		expect(onForeground(false, null, away)).toBe("none");
-		expect(onForeground(true, null, away)).toBe("none");
-		expect(onForeground(true, away, away + MIN_BACKGROUND_MS - 1)).toBe("none");
+	it("checks again once the last check is stale, however short the absence", () => {
+		expect(onForeground({ ...idle, now: t0 + CHECK_STALE_MS - 1 })).toBe("none");
+		expect(onForeground({ ...idle, now: t0 + CHECK_STALE_MS })).toBe("check");
 	});
 
-	it("offers a pending update again after a long absence, otherwise checks", () => {
-		expect(onForeground(true, away, away + MIN_BACKGROUND_MS)).toBe("prompt");
-		expect(onForeground(false, away, away + MIN_BACKGROUND_MS)).toBe("check");
+	it("checks when nothing has checked yet this run", () => {
+		expect(onForeground({ ...idle, lastCheckAt: null, now: t0 })).toBe("check");
+	});
+
+	it("offers a put-off update again once a day, not on every return", () => {
+		const offered = { pending: true, lastCheckAt: t0, lastOfferedAt: t0 };
+		expect(onForeground({ ...offered, now: t0 + 60_000 })).toBe("none");
+		// A stale check still runs in between: a newer update may be out.
+		expect(onForeground({ ...offered, now: t0 + CHECK_STALE_MS })).toBe("check");
+		expect(onForeground({ ...offered, now: t0 + REOFFER_MS - 1 })).toBe("check");
+		expect(onForeground({ ...offered, lastCheckAt: t0 + REOFFER_MS - 1, now: t0 + REOFFER_MS })).toBe("prompt");
+	});
+
+	it("leaves a pending update that was never offered to shouldOfferUpdate", () => {
+		expect(onForeground({ pending: true, lastCheckAt: t0, lastOfferedAt: null, now: t0 + REOFFER_MS })).toBe("check");
+	});
+});
+
+describe("latestTime", () => {
+	it("picks the later known time", () => {
+		expect(latestTime(1, 2)).toBe(2);
+		expect(latestTime(3, null)).toBe(3);
+		expect(latestTime(undefined, 4)).toBe(4);
+		expect(latestTime(null, undefined)).toBeNull();
 	});
 });
 

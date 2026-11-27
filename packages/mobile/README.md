@@ -364,10 +364,12 @@ publishing-machine fingerprints matching, the Settings check-and-restart path, c
 applying on the second launch, and rollback to embedded over populated storage without a
 crash.
 
-**The 15-minute resume path is covered by unit tests only.** `onForeground` is tested
-directly; the `AppState` wiring around it has never been exercised on a device. Note also
-that any foreground resets the timer, so testing it needs one uninterrupted background
-stretch.
+**The resume path.** Native checks only on a cold start, and Android keeps the process
+alive between uses far longer than iOS, so every return to the app also checks once the
+last check (native or ours) is 10 minutes old, however short the absence. An update the
+user put off with Not now is offered again at most once a day. `onForeground` and the
+`AppState` wiring in `UpdatesManager` are unit tested; the resume check was verified on
+the Android emulator against a local update server.
 
 ## Store updates
 
