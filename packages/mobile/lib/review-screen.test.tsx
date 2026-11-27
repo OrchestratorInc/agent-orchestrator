@@ -17,6 +17,7 @@ const fixtures = vi.hoisted(() => ({
 	sendMessage: vi.fn(async () => {}),
 	triggerSessionReview: vi.fn(async () => ({ created: true })),
 	mergeSessionPR: vi.fn(async () => {}),
+	requestSessionRereview: vi.fn(async () => {}),
 	runs: [] as object[],
 	// The machine's verified connection; false while it is being re-raced (after an app switch).
 	connected: true,
@@ -73,7 +74,7 @@ vi.mock("./api", () => ({
 	loadPRDetails: fixtures.loadPRDetails,
 	getSession: fixtures.getSession,
 	sessionTitle: (session: DashboardSession) => session.displayName ?? session.id,
-	cancelSessionReview: vi.fn(), killSessionReviewer: vi.fn(), mergeSessionPR: fixtures.mergeSessionPR, restoreSessionReviewer: vi.fn(), sendMessage: fixtures.sendMessage, triggerSessionReview: fixtures.triggerSessionReview,
+	cancelSessionReview: vi.fn(), killSessionReviewer: vi.fn(), mergeSessionPR: fixtures.mergeSessionPR, requestSessionRereview: fixtures.requestSessionRereview, restoreSessionReviewer: vi.fn(), sendMessage: fixtures.sendMessage, triggerSessionReview: fixtures.triggerSessionReview,
 }));
 vi.mock("./store", () => ({
 	HostScope: ({ children }: { children: unknown }) => children,
@@ -110,6 +111,7 @@ beforeEach(() => {
 	fixtures.sendMessage.mockReset().mockResolvedValue(undefined);
 	fixtures.triggerSessionReview.mockReset().mockResolvedValue({ created: true });
 	fixtures.mergeSessionPR.mockReset().mockResolvedValue(undefined);
+	fixtures.requestSessionRereview.mockReset().mockResolvedValue(undefined);
 	fixtures.runs = [];
 	fixtures.connected = true;
 	cloudState.client = {};
@@ -338,6 +340,77 @@ it("says it is reconnecting when Review now or the merge runs before the machine
 	expect(alerts()).toEqual([]);
 	await act(async () => { await renderer!.root.find((node) => (node.type as unknown) === "ReviewActionButton" && node.props.label === "Review now").props.onPress(); });
 	expect(fixtures.triggerSessionReview).toHaveBeenCalledTimes(1);
+});
+
+// Two taps on Send all before the page re-renders read the same open comments
+// and the same not-yet-sending flag: the batch must go to the worker once.
+it("sends the open comments once when Send all is tapped twice in a row", async () => {
+	fixtures.getSession.mockRejectedValue(new Error("not found"));
+	fixtures.runs = [{
+		id: "run-double-tap", prUrl: "https://github.com/acme/repo/pull/12", status: "completed", body: "Fix the sum.", createdAt: "2026-11-08T21:00:00Z",
+		harness: "claude-code", verdict: "changes_requested", githubReviewId: "", autoInjectReview: false, triggerSource: "manual", targetSha: "abcdef123456",
+	}];
+	let finish!: () => void;
+	fixtures.sendMessage.mockImplementation(() => new Promise<void>((resolve) => { finish = resolve; }));
+	await render();
+	const sendAll = renderer!.root.find((node) => (node.type as unknown) === "ReviewActionButton" && node.props.accessibilityLabel === "Send all open comments to the agent");
+	await act(async () => { void sendAll.props.onPress(); void sendAll.props.onPress(); });
+	expect(fixtures.sendMessage).toHaveBeenCalledTimes(1);
+	await act(async () => { finish(); await Promise.resolve(); });
+});
+
+// The page polls every 2 s while a review runs or auto-review is on. An answer
+// that matches what is shown must not rebuild the comment list, or every row
+// re-renders on each poll.
+it("keeps the same comment list when a reload brings nothing new", async () => {
+	fixtures.getSession.mockRejectedValue(new Error("not found"));
+	fixtures.runs = [{
+		id: "run-reload", prUrl: "https://github.com/acme/repo/pull/12", status: "completed", body: "Fix the sum.", createdAt: "2026-11-08T21:00:00Z",
+		harness: "claude-code", verdict: "changes_requested", githubReviewId: "", autoInjectReview: false, triggerSource: "manual", targetSha: "abcdef123456",
+	}];
+	await render();
+	const section = () => renderer!.root.find((node) => node.props.sentScope !== undefined && node.props.block !== undefined);
+	const before = section().props.block;
+	const scroll = renderer!.root.find((node) => (node.type as unknown) === "ScrollView");
+	await act(async () => { await scroll.props.refreshControl.props.onRefresh(); });
+	expect(section().props.block).toBe(before);
+});
+
+// Asked again from here: not offered while GitHub waits on the reviewer, and
+// offered again once they have answered with a new review, not only after the
+// page is reopened.
+it("offers Ask again once the reviewer has answered the request", async () => {
+	fixtures.getSession.mockRejectedValue(new Error("not found"));
+	const URL = "https://github.com/acme/repo/pull/12";
+	const review = (id: number, at: string) => ({ reviewerId: "maya", verdict: "changes_requested", submittedAt: at, reviewUrl: `${URL}#pullrequestreview-${id}`, body: `Round ${id}.`, autoInjectReview: false });
+	const pr = (reviews: object[], requested: string[]) => ({
+		url: URL, htmlUrl: URL, number: 12, title: "Improve mobile review", state: "open", provider: "github", repo: "acme/repo", author: "ao",
+		sourceBranch: "ao/fix", targetBranch: "main", additions: 1, deletions: 0, changedFiles: 1, detailsObservedAt: "2026-11-08T21:00:00Z", threads: [], conversation: [],
+		ci: { state: "passing", failingChecks: [] }, review: { decision: "changes_requested", hasUnresolvedHumanComments: false, unresolvedBy: [], reviews },
+		mergeability: { state: "mergeable", reasons: [] }, requestedReviewers: requested.map((login) => ({ login, isTeam: false })),
+	});
+	let current = pr([review(1, "2026-11-08T20:00:00Z")], []);
+	fixtures.getSessionPR.mockImplementation(async () => [current]);
+	const offered = () => renderer!.root.findAll((node) => (node.type as unknown) === "ItemActionsMenu" && String(node.props.accessibilityLabel).startsWith("Actions for maya"))
+		.some((menu) => menu.props.actions.some((action: { id: string }) => action.id === "ask"));
+	const reload = async () => { await act(async () => { await renderer!.root.find((node) => (node.type as unknown) === "ScrollView").props.refreshControl.props.onRefresh(); }); };
+	await render();
+	expect(offered()).toBe(true);
+
+	const menu = renderer!.root.find((node) => (node.type as unknown) === "ItemActionsMenu" && String(node.props.accessibilityLabel).startsWith("Actions for maya"));
+	await act(async () => { menu.props.actions.find((action: { id: string }) => action.id === "ask").onPress(); await Promise.resolve(); });
+	expect(fixtures.requestSessionRereview).toHaveBeenCalledTimes(1);
+	expect(offered()).toBe(false);
+
+	// GitHub now waits on her.
+	current = pr([review(1, "2026-11-08T20:00:00Z")], ["maya"]);
+	await reload();
+	expect(offered()).toBe(false);
+
+	// She answered with a new review; the request is gone.
+	current = pr([review(2, "2026-11-08T22:00:00Z"), review(1, "2026-11-08T20:00:00Z")], []);
+	await reload();
+	expect(offered()).toBe(true);
 });
 
 describe("a Cloud worker's pull request", () => {

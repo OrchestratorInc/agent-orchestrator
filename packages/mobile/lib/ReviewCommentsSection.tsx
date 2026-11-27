@@ -1,5 +1,5 @@
 import * as Clipboard from "expo-clipboard";
-import { useCallback, useEffect, useReducer, useRef, useState } from "react";
+import { memo, useCallback, useEffect, useReducer, useRef, useState } from "react";
 import { Alert, Pressable, StyleSheet, Text, View } from "react-native";
 import { reviewCommentIsOpen, type ReviewComment, type ReviewReply } from "../../shared/review/review-comments";
 import { reviewCommentsWorkerMessage, reviewCommentWorkerMessage } from "../../shared/review/review-messages";
@@ -54,7 +54,7 @@ export type ReviewReplyTarget = { comment: ReviewComment; block: MobileReviewBlo
  * switch. A row is two lines (who and when, then where and the first words)
  * and opens in place to the whole text, its replies and Send to agent.
  */
-export function ReviewCommentsSection({
+export const ReviewCommentsSection = memo(function ReviewCommentsSection({
 	block,
 	backend,
 	sessionId,
@@ -98,6 +98,17 @@ export function ReviewCommentsSection({
 	const [resolvedHere, setResolvedHere] = useState<ReadonlySet<string>>(() => new Set());
 	// Asked to review again from here: not offered again, so a second tap cannot send another request.
 	const [asked, setAsked] = useState<ReadonlySet<string>>(() => new Set());
+	// Who can be asked again, from the PR's reviewers: not a bot, not someone who
+	// approved, and not someone GitHub already waits on. "asked" covers only the
+	// gap until GitHub's next read lists the request; then it goes, so once they
+	// answer with a new review they are offered again.
+	const askable = new Set(block.reviewers.filter((reviewer) => !reviewer.orchestrator && reviewer.canRerequest).map((reviewer) => rerequestKey(reviewer.id)));
+	const waitedOn = block.reviewers.filter((reviewer) => !reviewer.orchestrator && reviewer.status === "pending").map((reviewer) => rerequestKey(reviewer.id)).join("\n");
+	useEffect(() => {
+		if (!waitedOn) return;
+		const listed = new Set(waitedOn.split("\n"));
+		setAsked((current) => [...current].some((key) => listed.has(key)) ? new Set([...current].filter((key) => !listed.has(key))) : current);
+	}, [waitedOn]);
 	const providerUrl = block.provider?.url ?? block.prUrl;
 	// What this machine can do (resolve, reply, ask again), from its last connection,
 	// so a reconnect does not take actions out of the menus. Never sent a request.
@@ -198,9 +209,14 @@ export function ReviewCommentsSection({
 			hold([comment.sentKey], false);
 		}
 	};
+	// A ref, not the state: two taps before the next render must see each other.
+	const sendingAllNow = useRef(false);
 	const sendAll = async () => {
-		const batch = unsent;
-		if (!batch.length || sendingAll) return;
+		if (sendingAllNow.current) return;
+		// From the sending ref as it is now, so a comment already on its way is not sent again.
+		const batch = unsentOpenComments(openComments, sent, sending.current);
+		if (!batch.length) return;
+		sendingAllNow.current = true;
 		const keys = batch.map((comment) => comment.sentKey);
 		hold(keys, true);
 		setSendingAll(true);
@@ -222,6 +238,7 @@ export function ReviewCommentsSection({
 			setSectionError(userFacingError(cause, "Could not send the open comments to the agent."));
 		} finally {
 			hold(keys, false);
+			sendingAllNow.current = false;
 			setSendingAll(false);
 		}
 	};
@@ -309,7 +326,7 @@ export function ReviewCommentsSection({
 								onSend={commentCanSend(comment) ? () => void sendOne(comment) : undefined}
 								onResolve={can?.resolveComment && commentCanResolve(comment) ? () => resolve(comment) : undefined}
 								onReply={onReply && can?.reply && commentReplyOffered(comment, block) ? () => onReply({ comment, block }) : undefined}
-								onAskAgain={can?.rerequest && reviewerId && !asked.has(rerequestKey(reviewerId)) ? () => void askAgain(comment, reviewerId) : undefined}
+								onAskAgain={can?.rerequest && reviewerId && askable.has(rerequestKey(reviewerId)) && !asked.has(rerequestKey(reviewerId)) ? () => void askAgain(comment, reviewerId) : undefined}
 								onViewInFile={onViewInFile && comment.file ? () => onViewInFile(comment.file!, comment.line) : undefined}
 								t={t}
 							/>
@@ -320,7 +337,7 @@ export function ReviewCommentsSection({
 		</View>
 		</WorkerSessionsProvider>
 	);
-}
+});
 
 function ReviewCommentRow({
 	comment,

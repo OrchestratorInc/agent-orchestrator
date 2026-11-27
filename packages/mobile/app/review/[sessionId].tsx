@@ -74,8 +74,24 @@ function ReviewDetailContent() {
 	}, [backend, hostMatches, listed, sessionId]);
 	const worker = listedWorker ?? readWorker ?? undefined;
 	const autoReviewEnabled = worker?.autoReviewEnabled === true;
-	const [data, setData] = useState<SessionReviews>();
-	const [prs, setPRs] = useState<SessionPRSummary[]>([]);
+	const [data, setDataState] = useState<SessionReviews>();
+	const [prs, setPRsState] = useState<SessionPRSummary[]>([]);
+	// The page polls every 2 s while a review runs or auto-review is on. An answer
+	// matching what is shown keeps the objects on screen, so the comment list is
+	// not rebuilt and its rows do not re-render for it.
+	const shown = useRef({ data: "", prs: "" });
+	const setData = useCallback((next: SessionReviews | undefined) => {
+		const json = next ? JSON.stringify(next) : "";
+		if (next && json === shown.current.data) return;
+		shown.current.data = json;
+		setDataState(next);
+	}, []);
+	const setPRs = useCallback((next: SessionPRSummary[]) => {
+		const json = JSON.stringify(next);
+		if (json === shown.current.prs) return;
+		shown.current.prs = json;
+		setPRsState(next);
+	}, []);
 	// The comment the reply dock answers, docked where the merge bar sits.
 	const [replyTarget, setReplyTarget] = useState<ReviewReplyTarget>();
 	// The daemon learns a merge from its next GitHub observation, seconds after
@@ -163,6 +179,19 @@ function ReviewDetailContent() {
 		</Stack.Toolbar>
 	) : null, [harness, reviewPRNumber, reviewPRUrl, routeHostId, router, sessionId]);
 	const observedPR = review ? pullRequestSummaryForURL(prs, review.prUrl) : undefined;
+	// The PR's comments, the Orchestrator's and the provider's in one list, as the desktop's Reviews tab builds them.
+	const reviewTitle = review?.title;
+	const reviews = data?.reviews;
+	const runs = data?.runs;
+	const block = useMemo(() => reviewPRUrl && reviewPRNumber !== undefined ? buildReviewBlocks({
+		openPRs: [{ url: reviewPRUrl, number: reviewPRNumber, title: reviewTitle }],
+		providerPRs: observedPR ? [observedPR] : [],
+		reviewStates: reviews ?? [],
+		runs: runs ?? [],
+	})[0] : undefined, [observedPR, reviewPRNumber, reviewPRUrl, reviewTitle, reviews, runs]);
+	// Stable, with the list above, so the Comments section skips the page's other renders.
+	const cloudHost = isCloudHost(currentHostId);
+	const viewInFile = useCallback((file: string, line?: number) => openPage(fileRoute(sessionId, file, routeHostId, undefined, line)), [openPage, routeHostId, sessionId]);
 	const awaitingMerge = Boolean(mergedURL && observedPR && observedPR.url === mergedURL && observedPR.state !== "merged");
 	useEffect(() => {
 		if (!awaitingMerge) return;
@@ -276,13 +305,6 @@ function ReviewDetailContent() {
 		setReplyTarget(undefined);
 		await reload();
 	};
-	// The PR's comments, the Orchestrator's and the provider's in one list, as the desktop's Reviews tab builds them.
-	const [block] = buildReviewBlocks({
-		openPRs: [{ url: review.prUrl, number: review.prNumber, title: review.title }],
-		providerPRs: observedPR ? [observedPR] : [],
-		reviewStates: data.reviews,
-		runs: data.runs ?? [],
-	});
 	const hostKey = routeHostId ?? currentHostId ?? "";
 
 	// Cloud has no reviewer session to restore or stop: its reviewers run as
@@ -398,10 +420,10 @@ function ReviewDetailContent() {
 				backend={backend}
 				sessionId={sessionId}
 				sentScope={sentScope(hostKey, sessionId)}
-				runs={data.runs ?? []}
+				runs={runs ?? NO_RUNS}
 				onChanged={reload}
 				onReply={setReplyTarget}
-				onViewInFile={isCloudHost(currentHostId) ? undefined : (file, line) => openPage(fileRoute(sessionId, file, routeHostId, undefined, line))}
+				onViewInFile={cloudHost ? undefined : viewInFile}
 			/> : null}
 		</ScrollView>
 		{/* The reply dock takes the bottom while it is open; otherwise the merge bar,
@@ -463,6 +485,7 @@ const PLAY = { ios: "play.fill", android: "play_arrow" } as const;
 // Where the reviewer row's button and menu sit, and the room the row keeps for
 // them until their width is known.
 const OVERLAY_INSET = space.lg - space.xxs;
+const NO_RUNS: SessionReviews["runs"] = [];
 /** The status dot's size; the facts line under the label is indented past it. */
 const STATUS_DOT = 6;
 const OVERLAY_RESERVE = 150;
