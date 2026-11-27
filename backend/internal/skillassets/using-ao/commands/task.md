@@ -68,6 +68,12 @@ started for the task, not just its own turn:
 - `failed` if a worker failed after the orchestrator finished its turn;
 - `done` only when the orchestrator's turn and every worker have finished.
 
+Each worker is read at its latest turn, so follow-up work the orchestrator
+sends it (such as review findings) keeps the task `running`. If the
+orchestrator's turn was retried, only the current attempt's workers can fail
+the task. Workers that already existed before the task are not tracked: nothing
+records which of them the orchestrator messaged for it.
+
 A worker in a terminal (TUI) session never reads `done`, so a task with one
 stays `running`; check that worker with `ao session get <id>`.
 

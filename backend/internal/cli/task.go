@@ -220,6 +220,10 @@ func newTaskWaitCommand(ctx *commandContext) *cobra.Command {
 type taskID struct {
 	session string
 	turn    string
+	// latest selects the session's most recent turn instead of its first.
+	// Used for the workers an orchestrator task started (never printed): an
+	// orchestrator can send a worker follow-up work after its first turn.
+	latest bool
 }
 
 func (id taskID) String() string {
@@ -621,6 +625,9 @@ func (c *commandContext) fetchTaskConversation(ctx context.Context, id taskID) (
 	if err := c.getJSON(ctx, path, &conv); err != nil {
 		return nil, err
 	}
+	if id.latest {
+		return &conv, nil // the latest page holds the latest turn
+	}
 	for page := 0; page < taskHistoryPageLimit && conv.HasMoreBefore && conv.OldestSequence > 0; page++ {
 		// Once an earlier turn is loaded too, the page boundary no longer
 		// splits the task's turn, so its earliest activity (such as a worker
@@ -736,7 +743,7 @@ func (c *commandContext) observeTask(ctx context.Context, id taskID) taskObserva
 			harness: sess.Harness,
 		}
 	}
-	eval := evaluateTask(sess, conv, id.turn)
+	eval := evaluateTaskTurn(sess, conv, id.turn, id.latest)
 	res := taskResult{
 		Status:     eval.status,
 		TaskID:     id.String(),
@@ -751,25 +758,33 @@ func (c *commandContext) observeTask(ctx context.Context, id taskID) taskObserva
 	}
 	// An orchestrator task is only as finished as the workers its turn started.
 	if id.turn != "" && len(eval.spawned) > 0 && (res.Status == taskStatusRunning || res.Status == taskStatusDone) {
-		res = c.foldTaskWorkers(ctx, res, eval.spawned)
+		res = c.foldTaskWorkers(ctx, res, eval.spawned, eval.spawnedNow)
 	}
 	res.phase = eval.phase
 	return taskObservation{result: res, harness: sess.Harness, turnID: eval.turnID, phase: eval.phase}
 }
 
-// foldTaskWorkers combines the orchestrator turn's status with the workers it
-// started: the task needs input if any worker does, and is done only once the
-// turn and every worker have finished. A failed worker fails the task once the
-// orchestrator's turn is over, since nothing is left to react to it.
-func (c *commandContext) foldTaskWorkers(ctx context.Context, res taskResult, workers []string) taskResult {
+// foldTaskWorkers combines the orchestrator turn's status with the workers its
+// turn (and earlier attempts of it) started. Each worker is read at its latest
+// turn, so follow-up work the orchestrator sends it, and an approval pending on
+// that work, count. The task needs input if any worker does, and is done only
+// once the turn and every worker have finished. A failed worker fails the task
+// once the orchestrator's turn is over, but only a worker of the current
+// attempt: a retry that succeeded supersedes an earlier attempt's failures.
+// Workers that existed before the task started are not tracked, since nothing
+// records which of them the orchestrator messaged for it.
+func (c *commandContext) foldTaskWorkers(ctx context.Context, res taskResult, workers, current []string) taskResult {
 	var needs, active, failed []string
 	var failReason, failFix string
 	for _, worker := range workers {
-		w := c.observeTask(ctx, taskID{session: worker}).result
+		w := c.observeTask(ctx, taskID{session: worker, latest: true}).result
 		switch w.Status {
 		case taskStatusNeedsInput:
 			needs = append(needs, worker)
 		case taskStatusFailed:
+			if !slices.Contains(current, worker) {
+				continue // superseded by a retry of the attempt that started it
+			}
 			failed = append(failed, worker)
 			if failReason == "" {
 				failReason, failFix = fmt.Sprintf("worker %s failed: %s", worker, w.Reason), w.Fix
@@ -805,7 +820,10 @@ type taskEvaluation struct {
 	reason      string
 	failureCode string
 	spawned     []string
-	turnID      string
+	// spawnedNow are the workers the selected attempt itself started; a
+	// failure among only earlier, retried attempts' workers is superseded.
+	spawnedNow []string
+	turnID     string
 	// phase says why a task is still starting, so a timeout can name the
 	// likely cause instead of always suggesting sign-in.
 	phase string
@@ -824,6 +842,12 @@ const (
 // evaluateTask turns a session and its conversation into a task status. With
 // no turn id the task is the session's first turn (a worker's prompt).
 func evaluateTask(sess taskSession, conv *taskConversation, turnID string) taskEvaluation {
+	return evaluateTaskTurn(sess, conv, turnID, false)
+}
+
+// evaluateTaskTurn is evaluateTask that, with latest, reads the session's most
+// recent turn instead of its first.
+func evaluateTaskTurn(sess taskSession, conv *taskConversation, turnID string, latest bool) taskEvaluation {
 	switch {
 	case sess.IsTerminated:
 		return taskEvaluation{status: taskStatusFailed, reason: fmt.Sprintf("session %s was archived", sess.ID)}
@@ -844,6 +868,8 @@ func evaluateTask(sess taskSession, conv *taskConversation, turnID string) taskE
 	switch {
 	case turnID != "":
 		idx = conv.findTurn(turnID)
+	case latest && len(conv.Turns) > 0:
+		idx = len(conv.Turns) - 1
 	case len(conv.Turns) > 0 && !conv.HasMoreBefore:
 		idx = 0
 	}
@@ -877,16 +903,19 @@ func evaluateTask(sess taskSession, conv *taskConversation, turnID string) taskE
 	}
 	turn := conv.Turns[idx]
 
-	var spawned []string
+	var spawned, spawnedNow []string
 	for _, act := range conv.Activities {
 		if chain[act.TurnID] && act.ActivityKind == "ao_action" && detailString(act.Detail, "action") == "session.spawned" {
 			if target := detailString(act.Detail, "targetSessionId"); target != "" && target != sess.ID && !slices.Contains(spawned, target) {
 				spawned = append(spawned, target)
+				if act.TurnID == turn.ID {
+					spawnedNow = append(spawnedNow, target)
+				}
 			}
 		}
 	}
 	eval := func(status, reason string) taskEvaluation {
-		return taskEvaluation{status: status, reason: reason, spawned: spawned, turnID: turn.ID}
+		return taskEvaluation{status: status, reason: reason, spawned: spawned, spawnedNow: spawnedNow, turnID: turn.ID}
 	}
 
 	// Only the live attempt can still be answered: an approval left pending on

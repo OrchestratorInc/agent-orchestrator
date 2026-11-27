@@ -1086,3 +1086,66 @@ func TestTaskWaitRereadsAQueuedTaskBeforeExitFour(t *testing.T) {
 		t.Fatalf("result = %v", res)
 	}
 }
+
+// A worker is read at its latest turn: follow-up work the orchestrator sent it
+// after its first turn keeps the task running, and an approval on that work
+// makes the task need input.
+func TestTaskStatusReadsAWorkersLatestTurn(t *testing.T) {
+	orch := `{"turns":[{"id":"t2","state":"completed"}],"activities":[
+		{"id":"a1","turnId":"t2","activityKind":"ao_action","status":"completed","detail":{"action":"session.spawned","targetSessionId":"repo-3"}}]}`
+	cases := []struct {
+		name, worker string
+		wantStatus   string
+		wantExit     int
+	}{
+		{name: "follow-up turn running", worker: `{"turns":[{"id":"w1","state":"completed"},{"id":"w2","state":"running"}]}`, wantStatus: "running", wantExit: 0},
+		{name: "follow-up turn waiting on an approval", worker: `{"turns":[{"id":"w1","state":"completed"},{"id":"w2","state":"running"}],"activities":[{"turnId":"w2","activityKind":"approval","status":"pending"}]}`, wantStatus: "needs_input", wantExit: 3},
+		{name: "follow-up turn finished", worker: `{"turns":[{"id":"w1","state":"completed"},{"id":"w2","state":"completed"}]}`, wantStatus: "done", wantExit: 0},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			d := newTaskDaemon(t)
+			for _, id := range []string{"repo-orchestrator", "repo-3"} {
+				d.set("GET /api/v1/sessions/"+id, 200, `{"session":{"id":"`+id+`","harness":"claude-code","mode":"chat","provisionState":"ready","activity":{"state":"active"}}}`)
+			}
+			d.set("GET /api/v1/sessions/repo-orchestrator/conversation", 200, orch)
+			d.set("GET /api/v1/sessions/repo-3/conversation", 200, tc.worker)
+
+			out, _, err := executeCLI(t, fakeClockDeps(), "task", "status", "repo-orchestrator:t2", "--json")
+			if got := ExitCode(err); got != tc.wantExit {
+				t.Fatalf("exit = %d (%v), want %d", got, err, tc.wantExit)
+			}
+			if res := decodeTaskResult(t, out); res["status"] != tc.wantStatus {
+				t.Fatalf("result = %v", res)
+			}
+		})
+	}
+}
+
+// A retried orchestrator turn that succeeded is not failed by the worker an
+// earlier, superseded attempt started; the earlier worker stays in sessionIds.
+func TestTaskStatusRetrySupersedesAnEarlierAttemptsFailedWorker(t *testing.T) {
+	d := newTaskDaemon(t)
+	for _, id := range []string{"repo-orchestrator", "repo-3", "repo-4"} {
+		d.set("GET /api/v1/sessions/"+id, 200, `{"session":{"id":"`+id+`","harness":"claude-code","mode":"chat","provisionState":"ready","activity":{"state":"waiting_input"}}}`)
+	}
+	d.set("GET /api/v1/sessions/repo-orchestrator/conversation", 200, `{"turns":[
+		{"id":"t1","state":"failed","errorMessage":"rate limited"},
+		{"id":"t2","state":"completed","retryOfTurnId":"t1"}],"activities":[
+		{"id":"a1","turnId":"t1","activityKind":"ao_action","status":"completed","detail":{"action":"session.spawned","targetSessionId":"repo-3"}},
+		{"id":"a2","turnId":"t2","activityKind":"ao_action","status":"completed","detail":{"action":"session.spawned","targetSessionId":"repo-4"}}]}`)
+	d.set("GET /api/v1/sessions/repo-3/conversation", 200, `{"turns":[{"id":"w1","state":"failed","errorMessage":"tests failed"}]}`)
+	d.set("GET /api/v1/sessions/repo-4/conversation", 200, `{"turns":[{"id":"w1","state":"completed"}]}`)
+
+	out, _, err := executeCLI(t, fakeClockDeps(), "task", "status", "repo-orchestrator:t1", "--json")
+	if err != nil {
+		t.Fatalf("exit = %d (%v), want 0", ExitCode(err), err)
+	}
+	res := decodeTaskResult(t, out)
+	if res["status"] != "done" {
+		t.Fatalf("result = %v", res)
+	}
+	if !reflect.DeepEqual(res["sessionIds"], []any{"repo-orchestrator", "repo-3", "repo-4"}) {
+		t.Fatalf("sessionIds = %v", res["sessionIds"])
+	}
+}
