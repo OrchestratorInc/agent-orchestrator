@@ -60,6 +60,7 @@ var agentDocumentationURLs = map[Target]string{
 	TargetStakpak:         "https://github.com/stakpak/agent#installation",
 	TargetOpenInterpreter: "https://www.openinterpreter.com/docs/terminal/install",
 	TargetTau:             "https://github.com/huggingface/tau",
+	TargetPax:             "https://pypi.org/project/pydantic-ai-pax/",
 }
 
 func (s requestPlanner) agentMethodPlans(target Target, operation AgentOperation) []Plan {
@@ -290,6 +291,9 @@ func (s requestPlanner) agentMethodPlans(target Target, operation AgentOperation
 		plans = []Plan{manualPlan(target, "Install mastracode 0.45.0 with @mastra/code-sdk pinned to 1.11.0 and Node >=22.19; AO qualifies the native TUI only. A plain `npm install -g mastracode@0.45.0` resolves @mastra/code-sdk 1.19.1, which needs a newer @mastra/core than mastracode pins and is unsupported. In an empty folder, create package.json with {\"dependencies\":{\"mastracode\":\"0.45.0\"},\"overrides\":{\"@mastra/code-sdk\":\"1.11.0\"}}, run `ONNXRUNTIME_NODE_INSTALL=skip npm install` there (the variable omits optional CUDA downloads for API-backed use), and add its node_modules/.bin to PATH.", agentDocumentationURLs[target])}
 	case TargetTau:
 		plans = []Plan{s.planUV(target, "tau-ai")}
+	case TargetPax:
+		// Pax's only documented installer, on every platform.
+		plans = []Plan{s.planUV(target, "pydantic-ai-pax")}
 	case TargetOpenInterpreter:
 		plan := s.officialByOS(target, "https://www.openinterpreter.com/install", "sh", "https://www.openinterpreter.com/install.ps1", agentDocumentationURLs[target])
 		if plan.Script != nil {

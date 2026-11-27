@@ -122,6 +122,8 @@ func officialSourceFor(target Target, goos, goarch string) (officialSource, bool
 		return officialSource{kind: officialPyPI, ref: "aider-chat"}, true
 	case TargetVibe:
 		return officialSource{kind: officialPyPI, ref: "mistral-vibe"}, true
+	case TargetPax:
+		return officialSource{kind: officialPyPI, ref: "pydantic-ai-pax"}, true
 	case TargetDroid:
 		// Factory publishes the native CLI and the npm package at one version.
 		return officialSource{kind: officialNPM, ref: "droid"}, true

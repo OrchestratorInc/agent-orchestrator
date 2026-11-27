@@ -2328,7 +2328,8 @@ func reconcileHarnessConstraint(db *sql.DB) error {
 	needsOpenInterpreter := !strings.Contains(schema, "'open-interpreter'")
 	needsTau := !strings.Contains(schema, "'tau'")
 	needsMastraCode := !strings.Contains(schema, "'mastra-code'")
-	if !needsMastraCode && !needsNativeAssistant && !needsMemcode && !needsStakpak && !needsMuse && !needsKimchi && !needsPrimeAgent && !needsOMP && !needsGemini && !needsUnreal && !needsCodewhale && !needsMiMo && !needsDeepSeek && !needsOpenHands && !needsCommandCode && !needsDockerAgent && !needsFX && !needsOpenCodeV2 && !needsMiniMaxCode && !needsOpenInterpreter && !needsTau {
+	needsPax := !strings.Contains(schema, "'pax'")
+	if !needsPax && !needsMastraCode && !needsNativeAssistant && !needsMemcode && !needsStakpak && !needsMuse && !needsKimchi && !needsPrimeAgent && !needsOMP && !needsGemini && !needsUnreal && !needsCodewhale && !needsMiMo && !needsDeepSeek && !needsOpenHands && !needsCommandCode && !needsDockerAgent && !needsFX && !needsOpenCodeV2 && !needsMiniMaxCode && !needsOpenInterpreter && !needsTau {
 		return nil
 	}
 	if _, err := db.Exec(`PRAGMA writable_schema = ON`); err != nil {
@@ -2395,6 +2396,15 @@ func reconcileHarnessConstraint(db *sql.DB) error {
 			return fmt.Errorf("schema repair: normalize Mastra Code constraint: %w", err)
 		}
 		needsMastraCode = true
+	}
+	if !needsPax {
+		// Pax's migration runs after Mastra Code's, so it is last before
+		// 'fake' on a fresh database. Remove it the same way and append it
+		// again after Mastra Code.
+		if _, err := db.Exec(`UPDATE sqlite_master SET sql = replace(sql, '''pax'', ', '') WHERE type = 'table' AND name = 'sessions'`); err != nil {
+			return fmt.Errorf("schema repair: normalize Pax constraint: %w", err)
+		}
+		needsPax = true
 	}
 	type replacement struct {
 		old string
@@ -2541,6 +2551,10 @@ func reconcileHarnessConstraint(db *sql.DB) error {
 	if needsMastraCode {
 		repairs = append(repairs, replacement{"'fake'))", "'mastra-code', 'fake'))"})
 	}
+	// Pax's migration runs after Mastra Code's, so it follows it.
+	if needsPax {
+		repairs = append(repairs, replacement{"'fake'))", "'pax', 'fake'))"})
+	}
 	for _, r := range repairs {
 		if _, err := db.Exec(
 			`UPDATE sqlite_master
@@ -2616,6 +2630,9 @@ WHERE type = 'table' AND name = 'sessions'`,
 	}
 	if !strings.Contains(schema, "'mastra-code'") {
 		return fmt.Errorf("schema repair: sessions harness constraint is missing Mastra Code")
+	}
+	if !strings.Contains(schema, "'pax'") {
+		return fmt.Errorf("schema repair: sessions harness constraint is missing Pax")
 	}
 	return nil
 }

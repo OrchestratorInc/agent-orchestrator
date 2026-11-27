@@ -22401,6 +22401,7 @@ components:
           - stakpak
           - open-interpreter
           - tau
+          - pax
           - fake
           type: string
         approvalMode:
@@ -23349,6 +23350,7 @@ components:
           - stakpak
           - open-interpreter
           - tau
+          - pax
           - cloudflared
           - cua-driver
           type: string
@@ -28186,6 +28188,7 @@ components:
           - stakpak
           - open-interpreter
           - tau
+          - pax
           type: string
         issueId:
           type: string

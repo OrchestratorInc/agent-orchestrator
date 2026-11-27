@@ -44,6 +44,7 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/opencodev2"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/openhands"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/openinterpreter"
+	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/pax"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/pi"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/primeagent"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/qwen"
@@ -105,6 +106,7 @@ func Constructors() []adapters.Adapter {
 		deepseekharness.New(),
 		dockeragent.New(),
 		stakpak.New(),
+		pax.New(),
 	}
 }
 

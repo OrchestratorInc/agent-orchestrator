@@ -45,6 +45,7 @@ const AGENT_HUES: Record<AgentId, number | null> = {
 	stakpak: 215,
 	"open-interpreter": null,
 	tau: null,
+	pax: null,
 };
 
 export function agentTone(harness: string): string {

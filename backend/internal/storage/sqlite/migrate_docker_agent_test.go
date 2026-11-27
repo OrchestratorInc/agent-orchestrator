@@ -117,7 +117,7 @@ func TestDockerAgentStaysLastWhenAnotherHarnessIsRepaired(t *testing.T) {
 	if err := db.QueryRow(`SELECT sql FROM sqlite_master WHERE name='sessions'`).Scan(&repaired); err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(repaired, "'stakpak', 'docker-agent', 'minimax-code', 'open-interpreter', 'tau', 'mastra-code', 'fake'))") {
+	if !strings.Contains(repaired, "'stakpak', 'docker-agent', 'minimax-code', 'open-interpreter', 'tau', 'mastra-code', 'pax', 'fake'))") {
 		t.Fatalf("Docker Agent is not in fresh-database order after repair: %s", repaired)
 	}
 }
