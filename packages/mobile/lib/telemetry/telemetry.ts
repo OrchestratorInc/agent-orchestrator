@@ -1,5 +1,6 @@
 import { type ActiveStorage, reserveDailyActive } from "./dailyActive";
 import { MOBILE_ALLOWLIST, MOBILE_EVENTS, type MobileEventName } from "./events";
+import { safeDaemonVersion } from "./context";
 import { sanitizeMobileProperties } from "./sanitize";
 
 // The capture facade. Everything the app calls goes through here, so the
@@ -32,6 +33,8 @@ export type DesktopTelemetryIdentity = {
 	githubLogin?: string;
 	optedOut: boolean;
 	lifetimeSessions?: number;
+	/** The daemon's release. Sent even when opted out; it names a build, not a person. */
+	daemonVersion?: string;
 };
 
 export type MobileTelemetry = {
@@ -93,6 +96,7 @@ export function createMobileTelemetry(
 	let cloudUserId: string | null = null;
 	let githubActor: string | null = null;
 	let lifetimeSessions: number | null = null;
+	let pairedDaemonVersion: string | null = null;
 	let signInKnown = false;
 	void client.unregister("ao_cloud_user_id");
 	void client.unregister("github_actor");
@@ -102,6 +106,7 @@ export function createMobileTelemetry(
 		cloudUserId = null;
 		githubActor = null;
 		lifetimeSessions = null;
+		pairedDaemonVersion = null;
 		signInKnown = false;
 		void client.unregister("paired_install_id");
 		void client.unregister("github_actor");
@@ -131,6 +136,7 @@ export function createMobileTelemetry(
 			cloudUserId = null;
 			githubActor = null;
 			lifetimeSessions = null;
+			pairedDaemonVersion = null;
 			signInKnown = false;
 			return;
 		}
@@ -154,6 +160,7 @@ export function createMobileTelemetry(
 			...(phoneInstallId ? { install_id: phoneInstallId } : {}),
 			...(pairedInstallId ? { paired_install_id: pairedInstallId } : {}),
 			...(lifetimeSessions !== null ? { lifetime_sessions: lifetimeSessions } : {}),
+			...(pairedDaemonVersion !== null ? { paired_daemon_version: pairedDaemonVersion } : {}),
 			...(signInKnown ? { is_signed_in: cloudUserId !== null } : {}),
 			ao_cloud_user_id: cloudUserId,
 			github_actor: githubActor,
@@ -183,6 +190,7 @@ export function createMobileTelemetry(
 		pairedInstallId = typeof identity.installId === "string" && /^ins_[0-9a-f-]{36}$/.test(identity.installId) ? identity.installId : null;
 		lifetimeSessions = typeof identity.lifetimeSessions === "number" && Number.isSafeInteger(identity.lifetimeSessions) && identity.lifetimeSessions >= 0 ? identity.lifetimeSessions : null;
 		signInKnown = typeof identity.isSignedIn === "boolean" || Boolean(identity.cloudUserId);
+		pairedDaemonVersion = safeDaemonVersion(identity.daemonVersion) ?? null;
 		const key = JSON.stringify([identity.distinctId, identity.cloudUserId, identity.githubLogin, pairedInstallId]);
 		if (key === adoptedKey) return;
 		adoptedKey = key;

@@ -4,6 +4,7 @@ import { useEffect, useRef } from "react";
 import { AppState, type AppStateStatus } from "react-native";
 import { captureMobileException, setMobileSentryContext } from "./sentry";
 import { useApp } from "./store";
+import { updateIdOf } from "./telemetry/context";
 import { initMobileTelemetry, loadMobileOptOut, mobileTelemetry, syncDesktopTelemetryIdentity, telemetryActiveStorage } from "./telemetry/runtime";
 
 // RN's global JS error hook. Typed locally so we don't depend on RN internals.
@@ -29,7 +30,11 @@ export function TelemetryManager() {
 		initMobileTelemetry();
 		const version = Constants.nativeAppVersion ?? Constants.expoConfig?.version ?? "unknown";
 		const build = Constants.nativeBuildVersion ?? "unknown";
-		setMobileSentryContext({ release: `${version}@${build}`, channel: Updates.channel ?? undefined });
+		setMobileSentryContext({
+			release: `${version}@${build}`,
+			channel: Updates.channel ?? undefined,
+			updateId: updateIdOf(Updates.isEnabled ? { id: Updates.updateId, embedded: Updates.isEmbeddedLaunch, channel: Updates.channel } : undefined),
+		});
 		// The persisted opt-out is restored before the first heartbeat can fire.
 		void loadMobileOptOut().then(() => mobileTelemetry()?.active(telemetryActiveStorage));
 		// The telemetry preference and authenticated desktop identity govern

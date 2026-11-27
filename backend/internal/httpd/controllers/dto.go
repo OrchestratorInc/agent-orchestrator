@@ -3370,7 +3370,9 @@ type RemoteHostUpdateCheckResponse struct {
 // TelemetryIdentityResponse is the body of GET /api/v1/telemetry/identity. A
 // phone paired to this desktop identifies only a signed-in AO Cloud user ID.
 // Without one, DistinctID is the desktop install ID and stays anonymous. The
-// phone honors OptedOut. This response carries no email.
+// phone honors OptedOut. This response carries no email. DaemonVersion is the
+// daemon's release (the same value its own Sentry events use), sent even when
+// opted out so the phone can tell which daemon a failure came from.
 type TelemetryIdentityResponse struct {
 	DistinctID       string `json:"distinctId"`
 	InstallID        string `json:"installId,omitempty"`
@@ -3379,6 +3381,7 @@ type TelemetryIdentityResponse struct {
 	GitHubLogin      string `json:"githubLogin,omitempty"`
 	OptedOut         bool   `json:"optedOut"`
 	LifetimeSessions *int64 `json:"lifetimeSessions,omitempty"`
+	DaemonVersion    string `json:"daemonVersion,omitempty"`
 }
 
 // LinkPreviewQuery selects the external page to unfurl.

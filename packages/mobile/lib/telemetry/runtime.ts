@@ -1,12 +1,13 @@
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import Constants from "expo-constants";
 import * as Device from "expo-device";
+import * as Updates from "expo-updates";
 import { Platform } from "react-native";
 import PostHog from "posthog-react-native";
 import { getTelemetryIdentity, type SessionMode } from "../api";
 import type { ServerConfig } from "../config";
 import { cachedInstallId } from "../installId";
-import { setMobileSentryConsent, setMobileSentryPairedInstallId } from "../sentry";
+import { setMobileDaemonVersions, setMobileSentryConsent, setMobileSentryPairedInstallId } from "../sentry";
 import { buildMobileContext } from "./context";
 import { type ActiveStorage } from "./dailyActive";
 import {
@@ -94,6 +95,9 @@ export function initMobileTelemetry(): MobileTelemetry | null {
 		isPhysicalDevice: Device.isDevice === true,
 		dev: __DEV__,
 		appVersion: version,
+		update: Updates.isEnabled
+			? { id: Updates.updateId, embedded: Updates.isEmbeddedLaunch, channel: Updates.channel }
+			: undefined,
 	});
 
 	loadRateState();
@@ -148,11 +152,13 @@ export async function loadMobileOptOut(): Promise<void> {
 }
 
 /** Adopts the identity and opt-out of the connected desktops (see identitySync.ts). */
-const desktopIdentitySync = createDesktopIdentitySync(getTelemetryIdentity, (identity) =>
-	{
+const desktopIdentitySync = createDesktopIdentitySync(
+	getTelemetryIdentity,
+	(identity) => {
 		telemetry?.adoptDesktopIdentity(identity);
 		setMobileSentryPairedInstallId(identity && !identity.optedOut ? identity.installId ?? null : null);
 	},
+	setMobileDaemonVersions,
 );
 
 export function syncDesktopTelemetryIdentity(configs: ServerConfig[]): Promise<void> {
