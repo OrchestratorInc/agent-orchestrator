@@ -167,8 +167,8 @@ func (c *commandContext) serve(ctx context.Context, out, errOut io.Writer, opts 
 	childDone := make(chan struct{})
 	go func() {
 		e := <-child.Exited
+		close(childDone) // before the wait can see the exit
 		exited <- e
-		close(childDone)
 	}()
 	res, err := c.waitServeReady(ctx, cfg, child.PID, exited, opts.timeout, false, nil)
 	if res != nil && res.PID != child.PID {

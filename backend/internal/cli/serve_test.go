@@ -961,3 +961,15 @@ func TestServeForegroundFollowsBootingAppReplacement(t *testing.T) {
 		t.Fatalf("err = %v, want a restart error for the app's booting replacement", err)
 	}
 }
+
+// A child already known to have exited is neither killed nor waited for.
+func TestStopLosingChildSkipsExitedChild(t *testing.T) {
+	done := make(chan struct{})
+	close(done)
+	killed := false
+	start := time.Now()
+	stopLosingChild(startedProcess{Kill: func() error { killed = true; return nil }}, done)
+	if killed || time.Since(start) > time.Second {
+		t.Fatalf("killed=%t after %s; want an immediate return", killed, time.Since(start))
+	}
+}
