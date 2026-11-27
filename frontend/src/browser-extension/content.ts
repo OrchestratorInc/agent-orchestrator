@@ -39,7 +39,7 @@ export function handleContentRequest(document: Document, registry: RefRegistry, 
 			return { snapshot: result.snapshot, refs: result.refs, truncated: result.truncated };
 		}
 		case "geometry":
-			return geometry(element());
+			return geometry(element(), request.verify === true);
 		case "focus":
 			(element() as HTMLElement).focus?.();
 			return { focused: true };

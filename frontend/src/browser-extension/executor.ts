@@ -347,10 +347,10 @@ export class Executor {
 
 	// --- navigation and tabs ----------------------------------------------
 
-	private async waitForNavigation(tabId: number, signal: AbortSignal): Promise<boolean> {
+	private async waitForNavigation(tabId: number, signal: AbortSignal): Promise<{ complete: boolean; committed: boolean }> {
 		throwIfAborted(signal);
 		const chrome = this.deps.chrome;
-		return new Promise<boolean>((resolve, reject) => {
+		return new Promise((resolve, reject) => {
 			let done = false;
 			const finish = (loaded: boolean, error?: Error) => {
 				if (done) return;
@@ -364,7 +364,7 @@ export class Executor {
 				clearTimeout(graceTimer);
 				signal.removeEventListener("abort", onAbort);
 				if (error) reject(error);
-				else resolve(loaded);
+				else resolve({ complete: loaded, committed });
 			};
 			// Until this navigation commits, load events belong to the page that
 			// was already loading.
@@ -374,7 +374,10 @@ export class Executor {
 			};
 			// A same-document navigation is done at once and fires no load events.
 			const onFragment = (details: { tabId: number; frameId: number }) => {
-				if (details.tabId === tabId && details.frameId === 0) finish(true);
+				if (details.tabId === tabId && details.frameId === 0) {
+					committed = true;
+					finish(true);
+				}
 			};
 			let graceTimer: ReturnType<typeof setTimeout> | undefined;
 			const onDomContentLoaded = (details: { tabId: number; frameId: number }) => {
@@ -406,12 +409,21 @@ export class Executor {
 		this.resetPageState(ctx);
 		const loaded = this.waitForNavigation(page.tabId, ctx.signal);
 		await this.deps.chrome.tabs.update(page.tabId, { url });
-		const complete = await loaded;
+		const navigation = await loaded;
+		if (!navigation.committed) {
+			// The tab accepted the update but no navigation ever committed, so the
+			// old page is still there. Report that instead of returning its URL.
+			const current = await this.deps.chrome.tabs.get(page.tabId).catch(() => undefined);
+			throw new BridgeError(
+				"NAVIGATION_FAILED",
+				`The tab never started navigating to ${url}${current?.url ? `; it is still on ${current.url}` : ""}`,
+			);
+		}
 		const after = await this.refreshed(page);
 		return {
 			url: sanitizeBrowserURL(after.tab.url ?? url),
 			title: sanitizeBrowserTitle(after.tab.title ?? ""),
-			isLoading: !complete,
+			isLoading: !navigation.complete,
 			target: this.target(after),
 			untrustedExternalContent: true,
 		};
@@ -614,10 +626,13 @@ export class Executor {
 
 	// --- element actions ------------------------------------------------------
 
-	private async point(ctx: Context, page: ActiveTab, ref: string): Promise<{ x: number; y: number }> {
-		const geometry = (await this.content(page, ctx, { op: "geometry", ref })) as Geometry;
+	private async point(ctx: Context, page: ActiveTab, ref: string, verify = false): Promise<{ x: number; y: number }> {
+		const geometry = (await this.content(page, ctx, { op: "geometry", ref, verify })) as Geometry;
 		if (!geometry.inViewport || geometry.width <= 0 || geometry.height <= 0) {
 			throw new BridgeError("ELEMENT_NOT_VISIBLE", `Element ${ref} is not visible on screen`);
+		}
+		if (geometry.coveredBy) {
+			throw new BridgeError("ELEMENT_COVERED", `Element ${ref} is covered by ${geometry.coveredBy}, so a click would not reach it`);
 		}
 		const frame = ctx.extras.frame;
 		if (!frame || frame.logicalTabId !== page.logicalId) return { x: geometry.x, y: geometry.y };
@@ -641,7 +656,7 @@ export class Executor {
 				case "click":
 				case "dblclick":
 					if (trusted) {
-						const input = await this.deps.trusted.click(page.tabId, await this.point(ctx, page, ref), {
+						const input = await this.deps.trusted.click(page.tabId, await this.point(ctx, page, ref, true), {
 							clicks: action === "dblclick" ? 2 : 1,
 							human: args.human === true,
 							signal: ctx.signal,

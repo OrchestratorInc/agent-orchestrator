@@ -135,3 +135,57 @@ describe("content operations", () => {
 		expect(() => handleContentRequest(document, registry, request("eval"))).toThrow(expect.objectContaining({ code: "INVALID_ARGUMENT" }));
 	});
 });
+
+describe("geometry", () => {
+	let registry: RefRegistry;
+	let refs: Record<string, { role: string; name: string }>;
+	const refFor = (name: string) => Object.entries(refs).find(([, info]) => info.name === name)![0];
+	const rect = (over: Partial<DOMRect>) =>
+		({ left: 0, top: 0, width: 0, height: 0, right: 0, bottom: 0, x: 0, y: 0, toJSON: () => ({}), ...over }) as DOMRect;
+	const visible = () => rect({ left: 10, top: 20, width: 100, height: 30, right: 110, bottom: 50 });
+
+	beforeEach(() => {
+		document.body.innerHTML = `<button id="save">Save</button>`;
+		registry = new RefRegistry();
+		refs = (handleContentRequest(document, registry, request("snapshot", { interactive: true })) as { refs: typeof refs }).refs;
+	});
+
+	it("recentres an element that is only partially inside the window", () => {
+		const button = document.getElementById("save")!;
+		const scrolled = vi.fn();
+		button.scrollIntoView = scrolled;
+		// jsdom's window is 1024x768: this rect sticks out of the bottom edge but
+		// counts as inViewport, so its centre used to be clicked off-screen.
+		vi.spyOn(button, "getBoundingClientRect").mockReturnValue(rect({ left: 10, top: 740, width: 100, height: 90, right: 110, bottom: 830 }));
+		handleContentRequest(document, registry, request("geometry", { ref: refFor("Save") }));
+		expect(scrolled).toHaveBeenCalledOnce();
+	});
+
+	it("names the covering element when the click point is verified", () => {
+		const button = document.getElementById("save")!;
+		vi.spyOn(button, "getBoundingClientRect").mockReturnValue(visible());
+		const overlay = document.createElement("div");
+		overlay.id = "consent-overlay";
+		document.body.appendChild(overlay);
+		(document as { elementFromPoint?: unknown }).elementFromPoint = () => overlay;
+		try {
+			const result = handleContentRequest(document, registry, request("geometry", { ref: refFor("Save"), verify: true })) as { coveredBy?: string };
+			expect(result.coveredBy).toContain("#consent-overlay");
+		} finally {
+			delete (document as { elementFromPoint?: unknown }).elementFromPoint;
+		}
+	});
+
+	it("accepts a hit on the element's own descendant", () => {
+		const button = document.getElementById("save")!;
+		button.innerHTML = "<span>Save</span>";
+		vi.spyOn(button, "getBoundingClientRect").mockReturnValue(visible());
+		(document as { elementFromPoint?: unknown }).elementFromPoint = () => button.querySelector("span");
+		try {
+			const result = handleContentRequest(document, registry, request("geometry", { ref: refFor("Save"), verify: true })) as { coveredBy?: string };
+			expect(result.coveredBy).toBeUndefined();
+		} finally {
+			delete (document as { elementFromPoint?: unknown }).elementFromPoint;
+		}
+	});
+});

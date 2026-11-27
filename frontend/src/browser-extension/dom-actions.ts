@@ -7,7 +7,7 @@ import { buildSnapshot, INTERACTIVE_ROLES, type RefRegistry, roleOf, accessibleN
 
 const MAX_TEXT = 50_000;
 
-export type Geometry = { x: number; y: number; width: number; height: number; inViewport: boolean };
+export type Geometry = { x: number; y: number; width: number; height: number; inViewport: boolean; coveredBy?: string };
 
 function htmlElement(element: Element): HTMLElement {
 	return element as HTMLElement;
@@ -19,17 +19,71 @@ function assertEnabled(element: Element): void {
 	}
 }
 
-/** Scroll the element to the viewport centre when needed and return its centre. */
-export function geometry(element: Element): Geometry {
+/** A short human-readable tag for the element sitting over a click target. */
+function describeElement(element: Element): string {
+	const tag = element.tagName.toLowerCase();
+	const id = element.id ? `#${element.id}` : "";
+	const label = (element.getAttribute("aria-label") ?? element.textContent ?? "").trim().replace(/\s+/g, " ").slice(0, 40);
+	return label ? `<${tag}${id}> "${label}"` : `<${tag}${id}>`;
+}
+
+const fullyVisible = (rect: DOMRect, view: Window): boolean =>
+	rect.width > 0 && rect.height > 0 && rect.top >= 0 && rect.left >= 0 && rect.bottom <= view.innerHeight && rect.right <= view.innerWidth;
+
+const partlyVisible = (rect: DOMRect, view: Window): boolean =>
+	rect.bottom > 0 && rect.right > 0 && rect.top < view.innerHeight && rect.left < view.innerWidth;
+
+type HitResult = { kind: "reached" } | { kind: "covered"; by: Element } | { kind: "unknown" };
+
+/** The element a trusted click at (x, y) would actually land on, when the DOM can say. */
+function hitTarget(view: Window, element: Element, x: number, y: number): HitResult {
+	const fromPoint = view.document.elementFromPoint;
+	if (typeof fromPoint !== "function") return { kind: "unknown" };
+	const hit = fromPoint.call(view.document, x, y);
+	// null means the point is outside the painted viewport; the rect-based
+	// visibility check already reports that, so stay silent here.
+	if (hit === null) return { kind: "unknown" };
+	if (hit === element || element.contains(hit)) return { kind: "reached" };
+	return { kind: "covered", by: hit };
+}
+
+/**
+ * Scroll the element to the viewport centre when needed and return its centre.
+ * A partly visible element counts as needing the scroll: its centre can sit
+ * outside the window or past the clip of a scrolling container. With `verify`,
+ * also hit-test the centre so a trusted click provably reaches the element
+ * instead of an overlay; a covered centre gets one recentring retry, since a
+ * scrolling container (a tall dialog) can clip a target the window shows.
+ */
+export function geometry(element: Element, verify = false): Geometry {
 	const view = element.ownerDocument.defaultView!;
 	let rect = element.getBoundingClientRect();
-	const outside = rect.bottom < 0 || rect.right < 0 || rect.top > view.innerHeight || rect.left > view.innerWidth;
-	if (outside || rect.width === 0) {
+	let scrolled = false;
+	if (!fullyVisible(rect, view)) {
 		htmlElement(element).scrollIntoView?.({ block: "center", inline: "center" });
+		scrolled = true;
 		rect = element.getBoundingClientRect();
 	}
-	const inViewport = rect.bottom > 0 && rect.right > 0 && rect.top < view.innerHeight && rect.left < view.innerWidth;
-	return { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2, width: rect.width, height: rect.height, inViewport };
+	let inViewport = partlyVisible(rect, view);
+	let coveredBy: string | undefined;
+	if (verify && inViewport && rect.width > 0 && rect.height > 0) {
+		let hit = hitTarget(view, element, rect.left + rect.width / 2, rect.top + rect.height / 2);
+		if (hit.kind === "covered" && !scrolled) {
+			htmlElement(element).scrollIntoView?.({ block: "center", inline: "center" });
+			rect = element.getBoundingClientRect();
+			inViewport = partlyVisible(rect, view);
+			if (inViewport) hit = hitTarget(view, element, rect.left + rect.width / 2, rect.top + rect.height / 2);
+		}
+		if (hit.kind === "covered") coveredBy = describeElement(hit.by);
+	}
+	return {
+		x: rect.left + rect.width / 2,
+		y: rect.top + rect.height / 2,
+		width: rect.width,
+		height: rect.height,
+		inViewport,
+		...(coveredBy ? { coveredBy } : {}),
+	};
 }
 
 function nativeValueSetter(element: HTMLInputElement | HTMLTextAreaElement): ((value: string) => void) | undefined {

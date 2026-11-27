@@ -105,7 +105,9 @@ export class TrustedInput {
 					"BROWSER_DEBUGGER_UNAVAILABLE",
 					/attached|another debugger/i.test(message)
 						? "Another debugger (DevTools?) is attached to this tab; close it or use synthetic input for this site"
-						: `Chrome refused trusted input for this tab: ${message}`,
+						: /chrome-extension:\/\//i.test(message)
+							? "Another extension is holding Chrome's debugger for this tab; disable other extensions that automate or inspect pages (translators, other agents) and retry, or use synthetic input for this site"
+							: `Chrome refused trusted input for this tab: ${message}`,
 				);
 			}
 			await send("Page.enable").catch(() => undefined);
