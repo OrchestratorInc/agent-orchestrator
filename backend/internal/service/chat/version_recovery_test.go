@@ -19,7 +19,9 @@ func TestVersionMoveKeepsQueuedTurnAfterServiceRecreation(t *testing.T) {
 		t.Run(fmt.Sprintf("in_place=%v", inPlace), func(t *testing.T) {
 			h, _, _ := versionRefreshHarness(t)
 			ctx := context.Background()
-			markStale(t, h)
+			if !inPlace {
+				markStale(t, h)
+			}
 			h.advance(refreshIdle)
 			var stopped bool
 			var err error
@@ -61,7 +63,20 @@ func TestVersionMoveKeepsQueuedTurnAfterServiceRecreation(t *testing.T) {
 				t.Fatalf("work lost after recreation: state=%s error=%s", last.State, last.ErrorMessage)
 			}
 			rec, _, err := h.st.GetSession(ctx, testSession)
-			if err != nil || rec.StaleBinary == nil || rec.StaleBinary.SwitchFailedAt == nil {
+			if err != nil {
+				t.Fatal(err)
+			}
+			if inPlace {
+				if rec.StaleBinary != nil {
+					t.Fatalf("unknown target created a hidden stale-version marker: %+v", rec.StaleBinary)
+				}
+				counts, err := h.st.CountStaleBinarySessions(ctx)
+				if err != nil || counts[domain.HarnessCodex] != 0 {
+					t.Fatalf("unknown target holds stale cleanup: counts=%v err=%v", counts, err)
+				}
+				return
+			}
+			if rec.StaleBinary == nil || rec.StaleBinary.SwitchFailedAt == nil {
 				t.Fatalf("failed wake has no recovery action: stale=%+v err=%v", rec.StaleBinary, err)
 			}
 		})

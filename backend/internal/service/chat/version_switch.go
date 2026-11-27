@@ -132,7 +132,7 @@ func (s *Service) versionSwitchFailed(ctx context.Context, id domain.SessionID, 
 	s.observeVersionSwitch(id, version, "failed")
 	s.log.Warn("version_switch_failed: chat session could not start on the new harness release; queued messages kept",
 		"session", id, "version", version, "err", wakeErr)
-	if store, ok := s.sessions.(versionSwitchStore); ok {
+	if store, ok := s.sessions.(versionSwitchStore); ok && version != "" {
 		if err := store.SetSessionVersionSwitchFailed(ctx, id, version, s.now()); err != nil {
 			s.log.Warn("could not record version switch failure", "session", id, "err", err)
 		}

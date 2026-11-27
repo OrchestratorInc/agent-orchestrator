@@ -293,6 +293,34 @@ func TestVersionMoveNilWakeWaitDoesNotCompleteStoppedChat(t *testing.T) {
 	if len(store.moves) != 1 || len(launcher.started) != 1 {
 		t.Fatal("unpublished/ended replacement was forgotten or duplicated")
 	}
+	if store.sessions[rec.ID].StaleBinary != nil {
+		t.Fatal("uncertain update with unknown target created a hidden stale marker")
+	}
+}
+
+func TestVersionMoveLiveSourceAfterRecreationDoesNotBlockUpdate(t *testing.T) {
+	ctx := context.Background()
+	rt := &versionFailureRuntime{refreshTestRuntime: &refreshTestRuntime{fakeRestartRuntime: &fakeRestartRuntime{fakeRuntime: &fakeRuntime{aliveByHandle: map[string]bool{"tmux-mer-1": true}}}}, probes: map[string]ports.FencedLiveness{"launch-old": ports.FencedAlive}}
+	before, store, rec := versionFailureManager(t, rt)
+	if err := before.beginVersionMove(ctx, rec); err != nil {
+		t.Fatal(err)
+	}
+	agent := refreshTestAgent{supervisedLaunchAgent{launchArgvAgent{argv: []string{"pi", "--session", "agent-x"}}}}
+	after, _, _ := newExitedResumeManager(t, rt, agent)
+	after.store, after.lcm = store, &fakeLCM{store: store.fakeStore}
+	after.SetTerminalInputGate(&refreshInputGate{})
+	for range 3 {
+		if err := after.RetryVersionMoves(ctx); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if len(store.moves) != 0 || store.sessions[rec.ID].StaleBinary.SwitchFailedAt != nil || rt.restarted != 0 || rt.destroyed != 0 {
+		t.Fatal("pre-stop crash stranded intent, marked failure or touched the live source")
+	}
+	ids, err := after.StopHarnessSessions(ctx, rec.Harness)
+	if err != nil || len(ids) != 1 || ids[0] != rec.ID || store.moves[rec.ID].Stage != domain.VersionMoveRetry {
+		t.Fatalf("next update blocked: stopped=%v moves=%+v err=%v", ids, store.moves, err)
+	}
 }
 
 func TestVersionMoveRetriesQueueDeliveryWithoutAnotherController(t *testing.T) {

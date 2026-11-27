@@ -83,12 +83,17 @@ func (m *Manager) recoverVersionMoves(ctx context.Context) (map[domain.SessionID
 		}
 		pending[move.SessionID] = move
 		if move.Mode == domain.SessionModeTUI && move.Stage == domain.VersionMoveStopping {
-			stopped, err := m.recoverStoppingTerminal(ctx, rec)
+			stopped, abandoned, err := m.recoverStoppingTerminal(ctx, rec)
 			if errors.Is(err, errAgentOperationInProgress) {
 				continue
 			}
 			if err != nil {
 				return nil, err
+			}
+			if abandoned {
+				delete(pending, move.SessionID)
+				m.versionRetries.done(move.SessionID)
+				continue
 			}
 			if stopped {
 				move.Stage, rec.Activity.State = domain.VersionMoveRetry, domain.ActivityExited
@@ -97,7 +102,7 @@ func (m *Manager) recoverVersionMoves(ctx context.Context) (map[domain.SessionID
 		}
 		if move.Stage != domain.VersionMoveRetry || move.Attempts >= maxVersionResumeAttempts {
 			m.versionRetries.done(move.SessionID)
-			if rec.StaleBinary == nil || rec.StaleBinary.SwitchFailedAt == nil {
+			if move.Version != "" && (rec.StaleBinary == nil || rec.StaleBinary.SwitchFailedAt == nil) {
 				if marker, ok := m.store.(staleTerminalStore); ok {
 					if err := marker.SetSessionVersionSwitchFailed(ctx, rec.ID, move.Version, m.clock()); err != nil {
 						return nil, err
@@ -123,35 +128,40 @@ func (m *Manager) recoverVersionMoves(ctx context.Context) (map[domain.SessionID
 // Before Starting was journaled, no replacement could have launched. A dead
 // source therefore closes the stop-to-start crash window without guessing at
 // the liveness of an uncommitted target. Hold the same claim as Resume/Exit.
-func (m *Manager) recoverStoppingTerminal(ctx context.Context, original domain.SessionRecord) (bool, error) {
+func (m *Manager) recoverStoppingTerminal(ctx context.Context, original domain.SessionRecord) (stopped, abandoned bool, err error) {
 	if err := m.beginAgentOperation(ctx, original.ID, agentOperationResume); err != nil {
-		return false, err
+		return false, false, err
 	}
 	defer m.endAgentOperation(original.ID, agentOperationResume)
 	store, err := m.versionMoveStoreForOwner(ctx, original, domain.VersionMoveStopping)
 	if err != nil || store == nil {
-		return false, err
+		return false, false, err
 	}
 	rec, err := m.getRecord(ctx, original.ID)
 	if err != nil {
-		return false, err
+		return false, false, err
 	}
 	if rec.IsTerminated || rec.Metadata.RuntimeLaunchID != original.Metadata.RuntimeLaunchID ||
 		rec.Metadata.AgentSessionID != original.Metadata.AgentSessionID || rec.Harness != original.Harness ||
 		domain.NormalizeSessionMode(rec.Mode) != domain.SessionModeTUI {
-		return false, nil
+		return false, false, nil
 	}
 	probe := m.runtime.ProbeFencedRuntime(ctx, ports.FencedRuntimeRef{Handle: runtimeHandle(rec.Metadata), SessionID: rec.ID, Generation: rec.Metadata.RuntimeLaunchID})
+	if probe.Liveness == ports.FencedAlive {
+		// No replacement started; a crash before shutdown must not strand the
+		// healthy source behind an unfinished stop or block the next update.
+		return false, true, store.DeleteSessionVersionMove(ctx, rec.ID)
+	}
 	if probe.Liveness != ports.FencedDead {
-		return false, nil
+		return false, false, nil
 	}
 	if err := m.recordAgentExited(ctx, rec); err != nil {
-		return false, err
+		return false, false, err
 	}
 	if err := m.versionMoveStage(ctx, rec.ID, domain.VersionMoveRetry); err != nil {
-		return false, err
+		return false, false, err
 	}
-	return true, nil
+	return true, false, nil
 }
 
 func (m *Manager) attemptVersionMove(ctx context.Context, id domain.SessionID, moves map[domain.SessionID]domain.SessionVersionMove) (bool, error) {

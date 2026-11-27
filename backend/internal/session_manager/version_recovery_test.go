@@ -237,8 +237,8 @@ func TestVersionMoveRetryBudgetSurvivesRecreation(t *testing.T) {
 	if got := store.moves[rec.ID].Attempts; got != maxVersionResumeAttempts || rt.created != 0 {
 		t.Fatalf("budget reset or fresh session launched: attempts=%d created=%d", got, rt.created)
 	}
-	if base.sessions[rec.ID].StaleBinary == nil || base.sessions[rec.ID].StaleBinary.SwitchFailedAt == nil {
-		t.Fatal("exhausted move lost its recovery notice")
+	if base.sessions[rec.ID].StaleBinary != nil || len(store.moves) != 1 {
+		t.Fatal("unknown target created a hidden stale marker or lost resume intent")
 	}
 }
 
