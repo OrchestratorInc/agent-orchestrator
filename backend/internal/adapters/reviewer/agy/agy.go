@@ -332,6 +332,8 @@ func linkFileIfPresent(src, dst string) bool {
 		}
 		if _, statErr := os.Stat(dst); statErr == nil {
 			return true
+		} else if !errors.Is(statErr, os.ErrNotExist) {
+			return false
 		}
 		// Broken/dangling symlink: replace it so the live host credential is used.
 		if rmErr := os.Remove(dst); rmErr != nil && !errors.Is(rmErr, os.ErrNotExist) {
