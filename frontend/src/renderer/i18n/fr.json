@@ -2872,6 +2872,8 @@
 	"files.sessionFiles": "Fichiers de la session",
 	"files.error.loadWorkspace": "Impossible de charger les fichiers de l'espace de travail",
 	"files.error.workspaceMissing": "Cet espace de travail n'existe plus. Restaurez son dossier, puis réessayez.",
+	"files.workspacePending": "Préparation de l'espace de travail de cette session…",
+	"files.workspaceGone": "Le dossier de l'espace de travail de cette session n'est pas sur le disque.",
 	"files.error.searchWorkspace": "Unable to search workspace files",
 	"files.browseAll": "Browse all files",
 	"files.reviewChanges": "Changes",
