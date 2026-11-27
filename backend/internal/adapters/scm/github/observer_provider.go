@@ -62,10 +62,15 @@ func (p *Provider) RepoPRListGuard(ctx context.Context, repo ports.SCMRepo, etag
 	return ports.SCMGuardResult{ETag: firstNonEmptyHeader(resp.ETag, etag), NotModified: resp.NotModified}, nil
 }
 
-// ListPRsByRepo lists pull requests in the repository, optionally filtered to
-// those updated after updatedAfter (zero = full listing). It paginates the REST
-// pulls endpoint using state=open and sort=updated
-func (p *Provider) ListPRsByRepo(ctx context.Context, repo ports.SCMRepo, updatedAfter time.Time) ([]ports.SCMPRObservation, error) {
+// ListPRsByRepo lists the repository's open pull requests. It paginates the
+// REST pulls endpoint using state=open and sort=updated.
+//
+// updatedAfter is ignored. GitHub's pulls endpoint has no since filter and
+// returns every open PR regardless, and the observer relies on that full
+// listing to notice tracked PRs that closed. Sending since anyway only gave
+// every poll a new query string, so each page landed in the client's response
+// cache under a new key and the cache filled with stale copies of the listing.
+func (p *Provider) ListPRsByRepo(ctx context.Context, repo ports.SCMRepo, _ time.Time) ([]ports.SCMPRObservation, error) {
 	const perPage = 100
 	out := []ports.SCMPRObservation{}
 	for page := 1; ; page++ {
@@ -75,9 +80,6 @@ func (p *Provider) ListPRsByRepo(ctx context.Context, repo ports.SCMRepo, update
 		q.Set("direction", "desc")
 		q.Set("per_page", strconv.Itoa(perPage))
 		q.Set("page", strconv.Itoa(page))
-		if !updatedAfter.IsZero() {
-			q.Set("since", updatedAfter.UTC().Format(time.RFC3339Nano))
-		}
 		resp, err := p.client.doREST(ctx, http.MethodGet, repoPath(repo.Owner, repo.Name, "pulls"), q, nil)
 		if err != nil {
 			return nil, err
@@ -489,7 +491,7 @@ func scmPRFields() string {
 	return strings.ReplaceAll(`
 number id url state isDraft merged closed title additions deletions changedFiles
 mergeable mergeStateStatus reviewDecision headRefName headRefOid baseRefName baseRefOid
-isCrossRepository headRepository{ defaultBranchRef{ name } }
+isCrossRepository headRepository{ defaultBranchRef{ name } } isMergeQueueEnabled mergeQueueEntry{ state position estimatedTimeToMerge enqueuedAt }
 createdAt updatedAt mergedAt closedAt
 author{ login avatarUrl }
 mergeCommit{ oid }
@@ -610,8 +612,8 @@ func pageInfoEndCursor(connection map[string]any) string {
 
 func scmObservationFromGraphQL(ref ports.SCMPRRef, pr map[string]any) ports.SCMObservation {
 	checks := scmChecksFromGraphQL(pr)
-	failed := failedSCMChecks(checks)
 	ci := string(scmCISummary(pr))
+	failed := failedSCMChecks(checks, ci == string(domain.CIFailing))
 	prURL := firstNonEmpty(str(pr["url"]), ref.URL)
 	review := string(reviewDecisionFromGraphQL(pr))
 	providerMergeable := str(pr["mergeable"])
@@ -659,6 +661,8 @@ func scmObservationFromGraphQL(ref ports.SCMPRRef, pr map[string]any) ports.SCMO
 			ProviderMergeable:        providerMergeable,
 			ProviderMergeStateStatus: providerMergeState,
 			HTMLURL:                  str(pr["url"]),
+			MergeQueueRequired:       boolv(pr["isMergeQueueEnabled"]),
+			MergeQueue:               mergeQueueEntryFromGraphQL(pr["mergeQueueEntry"]),
 			CreatedAtProvider:        parseGitHubTime(str(pr["createdAt"])),
 			UpdatedAtProvider:        parseGitHubTime(str(pr["updatedAt"])),
 			MergedAtProvider:         parseGitHubTime(str(pr["mergedAt"])),
@@ -685,28 +689,14 @@ func ciSummaryFromRollupState(pr map[string]any) domain.CIState {
 	return mapRollupState(str(roll["state"]))
 }
 
-// scmCISummary is GitHub's rollup state, except a FAILURE that only superseded
-// or cancelled check runs cause: rollup state counts every run on the commit
-// and treats cancelled as failed, so with the full context list in hand the
-// verdict comes from the newest run per check.
+// scmCISummary uses the same filtered checks as the detail projection when the
+// context list is complete. A paginated list uses GitHub's aggregate rollup
+// because unseen checks may change the verdict.
 func scmCISummary(pr map[string]any) domain.CIState {
-	ci := ciSummaryFromRollupState(pr)
-	if ci != domain.CIFailing || scmContextsPaginated(pr) {
-		return ci
+	if scmContextsPaginated(pr) {
+		return ciSummaryFromRollupState(pr)
 	}
-	if latest := ciSummaryFromGraphQL(pr); latest != domain.CIUnknown || hasCancelledCheck(pr) {
-		return latest
-	}
-	return ci
-}
-
-func hasCancelledCheck(pr map[string]any) bool {
-	for _, n := range latestCheckRuns(nodes(statusContexts(pr)["nodes"])) {
-		if checkStatusFromGraphQL(n) == domain.PRCheckCancelled {
-			return true
-		}
-	}
-	return false
+	return ciSummaryFromGraphQL(pr)
 }
 
 func scmContextsPaginated(pr map[string]any) bool {
@@ -746,10 +736,10 @@ func scmChecksFromGraphQL(pr map[string]any) []ports.SCMCheckObservation {
 	return out
 }
 
-func failedSCMChecks(checks []ports.SCMCheckObservation) []ports.SCMCheckObservation {
+func failedSCMChecks(checks []ports.SCMCheckObservation, ciFailing bool) []ports.SCMCheckObservation {
 	out := make([]ports.SCMCheckObservation, 0, len(checks))
 	for _, ch := range checks {
-		if isFailingCheckStatus(domain.PRCheckStatus(ch.Status)) {
+		if isFailingCheckStatus(domain.PRCheckStatus(ch.Status)) || (ciFailing && ch.Status == string(domain.PRCheckCancelled)) {
 			out = append(out, ch)
 		}
 	}

@@ -90,6 +90,7 @@ export type ComposerEditorHandle = {
 	/** Where a collapsed caret sits relative to the whole text; undefined for a range. */
 	caretBoundary(): { atStart: boolean; atEnd: boolean } | undefined;
 	insertToken(trigger: ComposerTrigger, value: string): void;
+	appendText(text: string): void;
 	/** Removes the typed `/query` or `@query`, for a completion that runs instead of inserting. */
 	removeTrigger(trigger: ComposerTrigger): void;
 	/**
@@ -313,7 +314,7 @@ class ComposerTokenNode extends DecoratorNode<JSX.Element> {
 				className={cn(
 					"mx-0.5 inline-flex items-center gap-1 rounded-md border border-border-strong bg-interactive-hover px-1.5 py-0.5 align-middle text-[0.9em] leading-none select-none",
 					this.__kind === "skill"
-						? "text-logo-accent"
+						? "text-logo-accent-text"
 						: "text-foreground",
 				)}
 			>
@@ -693,6 +694,13 @@ const EditorBridge = forwardRef<
 			insertToken: (trigger, value) => {
 				editor.update(() => {
 					$insertComposerToken(trigger, value);
+				}, { discrete: true });
+			},
+			appendText: (text) => {
+				editor.update(() => {
+					$getRoot().selectEnd();
+					const selection = $getSelection();
+					if ($isRangeSelection(selection)) selection.insertRawText(text);
 				}, { discrete: true });
 			},
 			removeTrigger: (trigger) => {

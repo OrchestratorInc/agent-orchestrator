@@ -1,12 +1,14 @@
 import { type RefObject, useCallback, useEffect, useRef } from "react";
 import { aoBridge } from "../lib/bridge";
+import { claimSwipe, NO_SWIPE_NAV_ATTRIBUTE } from "../lib/swipe-ownership";
 
 // A two-finger horizontal trackpad swipe, or a pointer drag, to the right moves
 // the element with the fingers. Letting go past DISMISS_FRACTION of its width,
 // or flicking it, slides it out and dismisses it; anything shorter springs back.
 // As in SwipeNavigation, the main process relays native scroll begin/end, so
 // momentum after the lift is ignored; without that signal a gesture ends after
-// IDLE_MS without wheel events.
+// IDLE_MS without wheel events. A swipe it takes never also goes back or
+// forward: the element opts out of swipe navigation and claims what it tracks.
 const IDLE_MS = 120;
 const AXIS_DECIDE_PX = 8;
 const DISMISS_FRACTION = 0.35;
@@ -34,16 +36,20 @@ function prefersReducedMotion(): boolean {
 
 /** Slides the element out to the right (a swipe) or fades it in place (the ×
  * button), then closes the gap it leaves so the content below moves up instead
- * of jumping, then calls `done`. */
-function leave(element: HTMLElement, from: number, done: () => void, style: "slide" | "fade" = "slide"): number {
+ * of jumping, then calls `done`. Without `fade` a slide keeps the element
+ * opaque all the way out; its container's clip is what hides it. */
+function leave(element: HTMLElement, from: number, done: () => void, style: "slide" | "fade" = "slide", fade = true): number {
 	if (prefersReducedMotion()) {
 		done();
 		return 0;
 	}
 	const outMs = style === "slide" ? OUT_MS : FADE_MS;
-	element.style.transition = style === "slide" ? `transform ${outMs}ms var(--ease-out), opacity ${outMs}ms var(--ease-out)` : `opacity ${outMs}ms var(--ease-out)`;
+	const slideFades = style === "slide" && fade;
+	element.style.transition = style === "slide"
+		? `transform ${outMs}ms var(--ease-out)${slideFades ? `, opacity ${outMs}ms var(--ease-out)` : ""}`
+		: `opacity ${outMs}ms var(--ease-out)`;
 	if (style === "slide") element.style.transform = `translate3d(${Math.max(from, 0) + (element.offsetWidth || 1) + 24}px, 0, 0)`;
-	element.style.opacity = "0";
+	if (style === "fade" || slideFades) element.style.opacity = "0";
 	return window.setTimeout(() => {
 		element.style.height = `${element.offsetHeight}px`;
 		element.style.overflow = "hidden";
@@ -67,8 +73,10 @@ function restore(element: HTMLElement): void {
 }
 
 /** Wires swipe-to-dismiss on `ref` and returns a quick fade-out for a × button.
- * If `onDismiss` resolves to false the dismissal failed and the element comes back. */
-export function useSwipeToDismiss(ref: RefObject<HTMLElement | null>, onDismiss: () => void | Promise<boolean>, enabled = true): () => void {
+ * If `onDismiss` resolves to false the dismissal failed and the element comes back.
+ * `fade: false` keeps the element fully opaque while it is swiped and as it
+ * slides out, for a floating card whose text must stay readable over content. */
+export function useSwipeToDismiss(ref: RefObject<HTMLElement | null>, onDismiss: () => void | Promise<boolean>, enabled = true, { fade = true }: { fade?: boolean } = {}): () => void {
 	const dismissRef = useRef(onDismiss);
 	dismissRef.current = onDismiss;
 	const leaving = useRef(false);
@@ -106,9 +114,9 @@ export function useSwipeToDismiss(ref: RefObject<HTMLElement | null>, onDismiss:
 
 		// Written straight to the DOM: wheel events arrive far faster than React should re-render.
 		const paint = (x: number, ms = 0) => {
-			element.style.transition = ms ? `transform ${ms}ms var(--ease-out), opacity ${ms}ms var(--ease-out)` : "none";
+			element.style.transition = ms ? `transform ${ms}ms var(--ease-out)${fade ? `, opacity ${ms}ms var(--ease-out)` : ""}` : "none";
 			element.style.transform = x > 0 && !prefersReducedMotion() ? `translate3d(${x}px, 0, 0)` : "";
-			element.style.opacity = x > 0 ? String(Math.max(0, 1 - x / (element.offsetWidth || 1))) : "";
+			if (fade) element.style.opacity = x > 0 ? String(Math.max(0, 1 - x / (element.offsetWidth || 1))) : "";
 		};
 
 		const track = (x: number) => {
@@ -130,7 +138,7 @@ export function useSwipeToDismiss(ref: RefObject<HTMLElement | null>, onDismiss:
 			const width = element.offsetWidth || 1;
 			if (offset >= width * DISMISS_FRACTION || (offset > AXIS_DECIDE_PX && speed >= FLICK_SPEED_PX)) {
 				leaving.current = true;
-				outTimer = leave(element, offset, complete);
+				outTimer = leave(element, offset, complete, "slide", fade);
 				return;
 			}
 			offset = 0;
@@ -150,6 +158,7 @@ export function useSwipeToDismiss(ref: RefObject<HTMLElement | null>, onDismiss:
 			if (leaving.current || event.ctrlKey || event.deltaMode !== WheelEvent.DOM_DELTA_PIXEL) return;
 			if (nativePhases && !fingersDown) return;
 			if (scrollSpent) {
+				claimSwipe();
 				if (!nativePhases) {
 					window.clearTimeout(scrollSpentTimer);
 					scrollSpentTimer = window.setTimeout(() => { scrollSpent = false; }, IDLE_MS);
@@ -167,9 +176,13 @@ export function useSwipeToDismiss(ref: RefObject<HTMLElement | null>, onDismiss:
 			if (mode === "pending") {
 				sumX += event.deltaX;
 				sumY += event.deltaY;
-				if (decide(sumX, sumY)) track(-sumX);
+				if (decide(sumX, sumY)) {
+					claimSwipe();
+					track(-sumX);
+				}
 				return;
 			}
+			claimSwipe();
 			track(offset - event.deltaX);
 			if (speed > 0 && speed < lastSpeed) decay += 1;
 			else {
@@ -236,6 +249,7 @@ export function useSwipeToDismiss(ref: RefObject<HTMLElement | null>, onDismiss:
 			fingersDown = false;
 			if (mode !== "idle") finish();
 		});
+		element.setAttribute(NO_SWIPE_NAV_ATTRIBUTE, "");
 		element.addEventListener("wheel", onWheel, { passive: true });
 		element.addEventListener("pointerdown", onPointerDown);
 		// A native drag would cancel the pointer stream mid-gesture.
@@ -247,12 +261,13 @@ export function useSwipeToDismiss(ref: RefObject<HTMLElement | null>, onDismiss:
 			mountedCount -= 1;
 			if (mountedCount === 0) scrollSpent = false;
 			element.removeEventListener("dragstart", onDragStart);
+			element.removeAttribute(NO_SWIPE_NAV_ATTRIBUTE);
 			stopPhases();
 			element.removeEventListener("wheel", onWheel);
 			element.removeEventListener("pointerdown", onPointerDown);
 			window.clearTimeout(idleTimer);
 			window.clearTimeout(outTimer);
 		};
-	}, [complete, enabled, ref]);
+	}, [complete, enabled, fade, ref]);
 	return dismiss;
 }

@@ -1,4 +1,5 @@
 import { Feather } from "../icons";
+import { useStableFunctionProps } from "../useStableFunctionProps";
 import * as Clipboard from "expo-clipboard";
 import * as Linking from "expo-linking";
 import { memo, useCallback, useContext, useEffect, useMemo, useRef, useState, type ComponentProps, type ReactNode } from "react";
@@ -14,8 +15,10 @@ import {
 	View,
 	type NativeScrollEvent,
 	type NativeSyntheticEvent,
+	type ScrollViewProps,
 } from "react-native";
-import Animated, { FadeIn, FadeOut } from "react-native-reanimated";
+import { KeyboardChatScrollView, useReanimatedKeyboardAnimation } from "react-native-keyboard-controller";
+import Animated, { FadeIn, FadeOut, useAnimatedStyle, useSharedValue, type SharedValue } from "react-native-reanimated";
 import { usePreventRemove } from "expo-router/build/react-navigation/core";
 import { AppSymbol } from "../AppSymbol";
 import { authHeaders, httpBase } from "../config";
@@ -27,7 +30,7 @@ import type { Theme } from "../theme";
 import { useTheme, useThemedStyles } from "../ThemeProvider";
 import { Spinner } from "../Spinner";
 import { MascotLamp } from "../ui";
-import { FoldBody, FoldChevron, FoldLayout, StatusLabel, StatusSpinner } from "./TurnFoldMotion";
+import { FoldBody, FoldChevron } from "./TurnFoldMotion";
 import { LatticeLoader } from "./LatticeLoader";
 import { TurnPlan } from "./TurnPlan";
 import { ChatMarkdown } from "./ChatMarkdown";
@@ -42,7 +45,8 @@ import { MenuRowWidthScope, useMenuRowWidth } from "../useMenuRowWidth";
 import { requestPresentation } from "./chatPresentation";
 import { workingElapsedLabel } from "./conversationChrome";
 import { errorActivityDuplicatesTurn, providerErrorCopy } from "./providerError";
-import { ElicitationAction } from "./elicitation-native-controls";
+import { ElicitationAction, ElicitationActionRow } from "./elicitation-native-controls";
+import { primaryDecisionId } from "./approvalDecisions";
 import { ElicitationInputField } from "./ElicitationInputField";
 import {
 	elicitationPromptCopy,
@@ -60,7 +64,10 @@ import { attachmentName, attachmentTileSize, editableMessageText, isImageAttachm
 import { isDrawnImageFile, MessageFileGoneError, MessageFileSourceContext } from "./messageFiles";
 import { InlineMessageEditor, type MessageEditDraft } from "./InlineMessageEditor";
 import { JumpToLatest } from "./JumpToLatest";
-import { atTail, openingRow } from "./timelineScroll";
+import { useFlagValue, type Flag } from "./flag";
+import { KeyboardMotionScope, useKeyboardMotion } from "./keyboardMotion";
+import { atTail, followsAfterRest, openingRow, RESUME_SLOP, type Release } from "./timelineScroll";
+import { createFieldReveals, fieldRevealOffset, RevealFocusedField } from "./fieldReveal";
 
 /** The jump back to the newest message fades in and out rather than popping. */
 const JUMP_FADE_MS = 160;
@@ -70,6 +77,8 @@ const OPENING_ROWS = 4;
 // shown, and the longest it stays hidden whatever it does.
 const OPENING_SETTLE_MS = 90;
 const OPENING_REVEAL_CAP_MS = 600;
+/** The longest a focused request field waits for the keyboard to open (none comes with a hardware keyboard). */
+const FIELD_REVEAL_WAIT_MS = 600;
 import { useMessageEdit } from "./useMessageEdit";
 import { MessageContextMenu } from "./MessageContextMenu";
 import type {
@@ -93,24 +102,29 @@ import {
 	sameEditableTurns,
 	countActivityNodes,
 	partitionTurnItems,
+	settledTurnItems,
 	readableConversationItems,
 	startupPlacement,
-	streamingCursorMessageId,
 	summarizeActivities,
 	type ActivityNode,
 	type ConversationGroup,
 } from "./timelineModel";
-import { iconSize, radius, type, space, touchTarget } from "../tokens";
+import { fontScaleCap, iconSize, radius, type, space, touchTarget } from "../tokens";
 import { useFilesNavigation } from "../files/navigation";
 import { userFacingError } from "../connectionError";
 import { SentResponseQuotes } from "./SentResponseQuotes";
 import { forkableTurn, latestForkableTurnId } from "./forkTurns";
 import { TurnForkButton } from "./TurnForkButton";
-import { TurnRollbackButton } from "./TurnRollbackButton";
+import { TURN_ACTION_SIZE, TURN_ACTION_SLOP, TurnRollbackButton, turnActionControl } from "./TurnRollbackButton";
+import { formatReplyTime } from "./replyTime";
+import { CONVERSATION_END_GAP, KEYBOARD_END_GAP_TUCK } from "../session/keyboardInset";
+import { AccountHandoffRow, UsageLimitNotice } from "./UsageLimitNotice";
+import { accountHandoffNote } from "./usageLimit";
 import { TurnArtifacts, useTurnArtifactSource } from "./TurnArtifacts";
 import { turnResults } from "./turnArtifactsModel";
 import { ConversationHarness, LatestWorkerUpdates, OriginMessageView, WorkerSessionsProvider, WorkerUpdateRows } from "./AutomationMessage";
-import { humanVisibleText, latestWorkerUpdateKeys, piggybackedUpdates } from "./automationMessages";
+import { humanVisibleText, latestWorkerUpdateKeys, piggybackedUpdates, stripSenderPrefix } from "./automationMessages";
+import { isAutomationSteer, SteerNote } from "./SteerMessage";
 import { SessionStartupStatus } from "./SessionStartup";
 import type { SessionStartupView } from "../session/sessionStartup";
 
@@ -121,9 +135,31 @@ type TimelineRow =
 	| { kind: "single"; key: string; items: [ConversationItem] }
 	| { kind: "activities"; key: string; items: ConversationActivity[] };
 
+/**
+ * The groups, with each one that has not changed since the last render kept as
+ * the same object: same key, same turn (and the daemon's turn it presents) and plan, and the same item objects
+ * (which the conversation keeps by identity while unchanged; see
+ * reuseUnchangedRows). A memoized turn then skips its render.
+ */
+function useStableGroups(groups: ConversationGroup[]): ConversationGroup[] {
+	const previous = useRef(new Map<string, ConversationGroup>());
+	const next = new Map<string, ConversationGroup>();
+	const stable = groups.map((group) => {
+		const old = previous.current.get(group.key);
+		const kept = old && old.turn === group.turn && old.sourceTurn === group.sourceTurn && old.plan === group.plan && old.turnId === group.turnId && old.anchor === group.anchor &&
+			old.items.length === group.items.length && old.items.every((item, index) => item === group.items[index])
+			? old
+			: group;
+		next.set(group.key, kept);
+		return kept;
+	});
+	previous.current = next;
+	return stable;
+}
+
 /** The conversation's rows; its user rows share one width (see `MenuRowWidthScope`). */
 export const ChatTimeline = memo(function ChatTimeline(props: ComponentProps<typeof Timeline>) {
-	return <MenuRowWidthScope><Timeline {...props} /></MenuRowWidthScope>;
+	return <KeyboardMotionScope><MenuRowWidthScope><Timeline {...props} /></MenuRowWidthScope></KeyboardMotionScope>;
 });
 
 function Timeline({
@@ -146,7 +182,9 @@ function Timeline({
 	underHeader = 0,
 	topInset = 0,
 	bottomInset = 0,
-	jumpHidden = false,
+	keyboardOffset,
+	composerGrowth,
+	jumpHidden,
 }: {
 	snapshot: ConversationSnapshot;
 	loadingOlder: boolean;
@@ -184,8 +222,15 @@ function Timeline({
 	topInset?: number;
 	/** What floats over the list's end (the composer), so the newest message clears it. */
 	bottomInset?: number;
-	/** Keeps the jump back to the newest message out of the way (while the composer is open). */
-	jumpHidden?: boolean;
+	/**
+	 * Set when the composer floats over the list: the list makes room for the
+	 * keyboard itself, less this much (see `listKeyboardOffset`).
+	 */
+	keyboardOffset?: number;
+	/** How much the floating composer has grown past one line; the conversation rises by it. */
+	composerGrowth?: SharedValue<number>;
+	/** Hides the jump to the newest message (while the composer is open); a flag, so only the jump re-renders. */
+	jumpHidden?: Flag;
 }) {
 	const t = useTheme();
 	const styles = useThemedStyles(makeStyles);
@@ -199,7 +244,53 @@ function Timeline({
 	// The list's own height and its content's, for `scrollToLatest`.
 	const viewportHeight = useRef(0);
 	const contentHeight = useRef(0);
+	// The room the list has made below its content for the keyboard (see `keyboardOffset`).
+	const keyboardInset = useRef(0);
+	// keyboard-controller's chat scroll view moves the content with the keyboard
+	// on the UI thread; a list that shrank and chased its end from JS jittered.
+	// "always": "whenAtEnd" read a cached content size that could be stale.
+	const renderScrollComponent = useMemo(() => keyboardOffset === undefined ? undefined : (props: ScrollViewProps) => (
+		<KeyboardChatScrollView
+			{...props}
+			keyboardLiftBehavior="always"
+			offset={keyboardOffset}
+			onContentInsetChange={(insets) => { keyboardInset.current = insets.bottom; }}
+		/>
+	), [keyboardOffset]);
+	// The conversation rises with lines typed (see `composerGrowth`). On Android
+	// it is also held to the composer through the keyboard's stretch behind the
+	// navigation bar, where the composer has already come to rest (ChatComposer's
+	// `dockRise`).
+	const keyboard = useReanimatedKeyboardAnimation();
+	const keyboardRest = keyboardOffset === undefined ? 0 : keyboardOffset - KEYBOARD_END_GAP_TUCK;
+	// A conversation shorter than the list is lifted only as far as it can
+	// scroll, not on the straight line, so it is not held either.
+	const fillsList = useSharedValue(false);
+	const growthLift = useAnimatedStyle(() => {
+		const growth = composerGrowth ? composerGrowth.value : 0;
+		let hold = 0;
+		if (Platform.OS === "android" && keyboardOffset !== undefined && fillsList.value) {
+			const height = -keyboard.height.value;
+			const progress = keyboard.progress.value;
+			const full = progress > 0.01 ? height / progress : 0;
+			if (full > keyboardOffset && full > keyboardRest) {
+				const lifted = height * (full - keyboardOffset) / full;
+				const owed = Math.max(0, height - keyboardRest) * (full - keyboardOffset) / (full - keyboardRest);
+				hold = lifted - owed;
+			}
+		}
+		return { transform: [{ translateY: hold - growth }] };
+	}, [composerGrowth, keyboardOffset, keyboardRest]);
+	const measureFill = () => { fillsList.value = viewportHeight.current > 0 && contentHeight.current >= viewportHeight.current; };
+	// A follow to the end from JS while the keyboard scrolls the list jumped it;
+	// it waits for the keyboard to stop.
+	const { moving: keyboardMoving, onEnd: onKeyboardEnd } = useKeyboardMotion();
+	const followAfterKeyboard = useRef(false);
+	const latestFollow = useRef<() => void>(() => {});
+	useEffect(() => onKeyboardEnd(() => latestFollow.current()), [onKeyboardEnd]);
 	const dragging = useRef(false);
+	// Where the person's last drag let go (see `followsAfterRest`).
+	const releasedAt = useRef<Release | undefined>(undefined);
 	// Fixed when the list first draws (see `openingRow`); cleared while there is no list.
 	const openedAt = useRef<number | undefined>(undefined);
 	const [showJump, setShowJump] = useState(false);
@@ -238,17 +329,16 @@ function Timeline({
 	// Keyed on the signature, not the set: a new set with the same keys keeps the old one.
 	const latestUpdates = useMemo(() => latestKeys, [latestSignature]);
 	const plan = useMemo(() => conversationTimelineRenderPlan(snapshot, items), [items, snapshot.turns]);
-	const groups = plan.groups;
+	const groups = useStableGroups(plan.groups);
 	// iOS insets the list for the clear header itself (`contentInsetAdjustmentBehavior`);
 	// Android has no such inset, so its first message sat behind the header's frost.
 	const headerPad = Platform.OS === "ios" ? 0 : underHeader;
-	// Over the composer, no gap of the list's own: every row ends in its own
-	// padding, and the dock's chips stand off it by their touch slop. The
-	// canvas's end gap on top of the composer's height left an empty band above
-	// the PR chips. Not less either: ending the list inside the composer's
-	// height hid a last activity row, which has no turn padding, under the dock.
+	// Over a floating composer, its height and then a comfortable gap: the
+	// reply's action row ended flush against the pill. Never less: ending the
+	// list inside the composer's height hid a last activity row under the dock.
+	// The keyboard takes back a little of the gap (see `keyboardOffset`).
 	const contentStyle = useMemo(() => headerPad || topInset || bottomInset
-		? [styles.content, { paddingTop: space.md + headerPad + topInset, paddingBottom: bottomInset || space.xxxl }]
+		? [styles.content, { paddingTop: space.md + headerPad + topInset, paddingBottom: bottomInset ? bottomInset + CONVERSATION_END_GAP : space.xxxl }]
 		: styles.content, [bottomInset, headerPad, styles.content, topInset]);
 	// Recomputed per snapshot but kept by identity while its contents are the
 	// same, so `extraData` changes (and every row re-renders) only when they do.
@@ -280,7 +370,7 @@ function Timeline({
 		const scroll = listRef.current?.getNativeScrollRef() as { scrollToEnd?(options: { animated: boolean }): void } | null | undefined;
 		const clampsUnderHeader = Platform.OS === "ios" && underHeader > 0;
 		if (clampsUnderHeader && !viewportHeight.current) return;
-		const overflow = contentHeight.current - viewportHeight.current;
+		const overflow = contentHeight.current - (viewportHeight.current - keyboardInset.current);
 		// `scrollToOffset` passes a negative offset through; FlatList's own
 		// scrollToEnd, the fallback below, clamps it to 0. The native scrollTo
 		// then clamps to the list's own content inset, which leaves out the one
@@ -288,6 +378,23 @@ function Timeline({
 		if (clampsUnderHeader && overflow < 0) listRef.current?.scrollToOffset({ offset: Math.max(overflow, -underHeader), animated });
 		else if (scroll?.scrollToEnd) scroll.scrollToEnd({ animated });
 		else listRef.current?.scrollToEnd({ animated });
+	};
+	// The follow to the newest message that output and measuring rows ask for.
+	// It runs a frame after it was asked for, so it checks again: a drag that
+	// began in between has stopped the follow, and scrolling to the end then
+	// carried the person back mid-fling.
+	const followTail = () => {
+		if (!followsTail.current || dragging.current) return;
+		if (keyboardOffset !== undefined && keyboardMoving.value) {
+			followAfterKeyboard.current = true;
+			return;
+		}
+		scrollToLatest(false);
+	};
+	latestFollow.current = () => {
+		if (!followAfterKeyboard.current) return;
+		followAfterKeyboard.current = false;
+		if (followsTail.current) scrollToLatest(false);
 	};
 	const jumpToLatest = () => { followsTail.current = true; setShowJump(false); scrollToLatest(true); };
 
@@ -325,6 +432,67 @@ function Timeline({
 		// eslint-disable-next-line react-hooks/exhaustive-deps
 	}, [editingTurnId]);
 
+	// Stable for the life of the list, so a memoized turn is not re-rendered by a new handler.
+	const rowHandlers = useStableFunctionProps({ onDecide, onResolveInput, onRollback, onFork, startEdit, cancelEdit, submitEdit, revealEdit, toggleWorked });
+
+	// Where the list was last scrolled to, for `revealField` when it cannot read
+	// the field's place in the content.
+	const scrollOffset = useRef(0);
+	// A request-form field that takes focus comes into view above the keyboard
+	// and the composer: the list does not scroll a focused child into view (see
+	// `scrollsChildToFocus`). It is measured once the keyboard is up, and only a
+	// field that is hidden moves the list, by as little as shows it, so focusing
+	// one in view never nudges the conversation.
+	//
+	// A field focused with the keyboard down waits for it to finish opening (and
+	// for the list's lift with it); with it up, nothing moves first. Only the
+	// newest focus is revealed: an earlier field's wait or measurement is
+	// cancelled, so it never scrolls back to that field once another took focus.
+	const [fieldReveals] = useState(() => createFieldReveals(Keyboard, FIELD_REVEAL_WAIT_MS));
+	useEffect(() => fieldReveals.cancel, [fieldReveals]);
+	const revealField = useCallback((field: View | null, input?: View | null) => {
+		const scroll = listRef.current?.getNativeScrollRef() as (View & { getInnerViewRef?(): View | null }) | null | undefined;
+		if (!field || !scroll?.measureInWindow) {
+			fieldReveals.cancel();
+			return;
+		}
+		// The input on its own, so a long hint never keeps it under the keyboard.
+		const measureInput = (done: (top?: number, height?: number) => void) => {
+			if (input?.measureInWindow) input.measureInWindow((_x, top, _width, height) => done(top, height));
+			else done();
+		};
+		fieldReveals.request((isCurrent) => requestAnimationFrame(() => {
+			if (!isCurrent()) return;
+			field.measureInWindow((_x, fieldTop, _width, fieldHeight) => measureInput((inputTop, inputHeight) => scroll.measureInWindow((_listX, listTop, _listWidth, listHeight) => {
+				const listBottom = listTop + listHeight;
+				const keyboardTop = Keyboard.isVisible() ? Keyboard.metrics()?.screenY : undefined;
+				const spans = {
+					fieldTop,
+					fieldBottom: fieldTop + fieldHeight,
+					inputTop,
+					inputBottom: inputTop === undefined || inputHeight === undefined ? undefined : inputTop + inputHeight,
+					visibleTop: listTop + underHeader + topInset + space.md,
+					visibleBottom: Math.min(listBottom, keyboardTop ?? listBottom) - bottomInset - space.md,
+				};
+				const scrollTo = (offset: number) => {
+					const target = fieldRevealOffset({ ...spans, offset });
+					// A later focus took over while this one measured.
+					if (target === undefined || !isCurrent()) return;
+					// A move of ours, not the person's: the list stops following new
+					// output until it comes back to the end.
+					followsTail.current = false;
+					listRef.current?.scrollToOffset({ offset: Math.max(target, Platform.OS === "ios" ? -underHeader : 0), animated: true });
+				};
+				if (fieldRevealOffset({ ...spans, offset: 0 }) === undefined) return;
+				// The list's offset right now, from where the field sits in the content
+				// and on screen: the last scroll event can trail the keyboard's lift.
+				const content = scroll.getInnerViewRef?.();
+				if (content) field.measureLayout(content, (_contentX, contentTop) => scrollTo(listTop + contentTop - fieldTop), () => scrollTo(scrollOffset.current));
+				else scrollTo(scrollOffset.current);
+			})));
+		}));
+	}, [bottomInset, fieldReveals, topInset, underHeader]);
+
 	if (plan.kind === "empty") openedAt.current = undefined;
 	if (plan.kind === "empty" && startup?.visible) {
 		// No brief in the timeline (a promptless start): the checklist stands alone.
@@ -347,17 +515,23 @@ function Timeline({
 	}
 	openedAt.current ??= openingRow(groups.length, OPENING_ROWS);
 	const initialScrollIndex = Math.min(openedAt.current, groups.length - 1);
-	const settle = (event: NativeSyntheticEvent<NativeScrollEvent>) => {
+	const settle = (event: NativeSyntheticEvent<NativeScrollEvent>, released = false) => {
+		scrollOffset.current = event.nativeEvent.contentOffset.y;
 		// iOS reports the end of the list's own scrolls (the opening one, each
 		// follow) as momentum ending too. Only a drag decides whether to follow;
 		// one of ours that landed short of an end still moving goes again.
 		if (!dragging.current) {
-			if (followsTail.current && !atTail(event.nativeEvent)) requestAnimationFrame(() => scrollToLatest(false));
+			if (followsTail.current && !atTail(event.nativeEvent, keyboardInset.current)) requestAnimationFrame(followTail);
 			return;
 		}
 		dragging.current = false;
-		followsTail.current = atTail(event.nativeEvent);
+		const offset = event.nativeEvent.contentOffset.y;
+		const resting = atTail(event.nativeEvent, keyboardInset.current, RESUME_SLOP);
+		followsTail.current = released ? resting : followsAfterRest(releasedAt.current, offset, resting);
+		releasedAt.current = released ? { offset, atEnd: resting } : undefined;
 		setShowJump(!followsTail.current);
+		// A follow that resumes catches up on output that arrived meanwhile.
+		if (followsTail.current) requestAnimationFrame(followTail);
 	};
 	const placement = startupPlacement(groups, openingTurnId, Boolean(startup?.visible));
 	// A checklist no loaded turn can host sits at the live edge instead.
@@ -382,9 +556,11 @@ function Timeline({
 		<WorkerSessionsProvider>
 			<ConversationHarness.Provider value={snapshot.harness}>
 				<LatestWorkerUpdates.Provider value={latestUpdates}>
-					<View style={styles.timelineWrap}>
+					<Animated.View style={[styles.timelineWrap, growthLift]}>
+						<RevealFocusedField.Provider value={revealField}>
 						<FlatList<ConversationGroup>
 							ref={listRef}
+							renderScrollComponent={renderScrollComponent}
 							data={groups}
 							extraData={rowState}
 							keyExtractor={(group) => group.key}
@@ -395,6 +571,11 @@ function Timeline({
 							scrollToOverflowEnabled={Platform.OS === "ios" && underHeader > 0}
 							scrollIndicatorInsets={{ bottom: bottomInset }}
 							keyboardShouldPersistTaps="handled"
+							// A tap gives Android's selectable text focus, and scrolling it into
+							// view nudged the conversation as the keyboard closed. The list's
+							// fields reveal themselves: the message editor (`revealEdit`) and a
+							// request form's fields (`revealField`).
+							scrollsChildToFocus={false}
 							initialNumToRender={OPENING_ROWS}
 							initialScrollIndex={initialScrollIndex > 0 ? initialScrollIndex : undefined}
 							maxToRenderPerBatch={4}
@@ -403,16 +584,19 @@ function Timeline({
 							// Content off screen can resize (a page measured ahead, earlier history
 							// loading in); what is on screen stays put on both platforms.
 							maintainVisibleContentPosition={{ minIndexForVisible: 0 }}
-							onScrollBeginDrag={() => { dragging.current = true; followsTail.current = false; }}
-							onScrollEndDrag={settle}
+							onScrollBeginDrag={() => { dragging.current = true; followsTail.current = false; releasedAt.current = undefined; }}
+							onScrollEndDrag={(event) => settle(event, true)}
 							onMomentumScrollBegin={() => { dragging.current = true; }}
 							onMomentumScrollEnd={settle}
 							onScroll={(event) => {
 								// Only the person's own scrolling stops the follow (see `followsTail`);
 								// passing the end without a drag, as a jump does, resumes it.
-								const tail = atTail(event.nativeEvent);
-								if (tail && !dragging.current) followsTail.current = true;
-								setShowJump(!followsTail.current && !tail);
+								scrollOffset.current = event.nativeEvent.contentOffset.y;
+								// Whenever the list is not following, the jump to the newest message
+								// is offered, on this path and in `settle`.
+								const resting = atTail(event.nativeEvent, keyboardInset.current, RESUME_SLOP);
+								if (!dragging.current && resting) followsTail.current = true;
+								setShowJump(!followsTail.current && !resting);
 								notifyRenderViewport();
 							}}
 							scrollEventThrottle={100}
@@ -420,6 +604,7 @@ function Timeline({
 								const previous = viewportHeight.current;
 								const measured = !previous;
 								viewportHeight.current = event.nativeEvent.layout.height;
+								measureFill();
 								// The keyboard shrinks the list from below while the composer rides
 								// up over it, so a list at its end would leave the newest message
 								// behind the composer. Following the end, it stays at the end.
@@ -429,8 +614,10 @@ function Timeline({
 							}}
 							onContentSizeChange={(_width, height) => {
 								contentHeight.current = height;
+								measureFill();
 								notifyRenderViewport();
-								if (followsTail.current) requestAnimationFrame(() => scrollToLatest(false));
+								// Not while the person scrolls: a drag or its fling owns the list.
+								if (followsTail.current && !dragging.current) requestAnimationFrame(followTail);
 								settleOpening();
 							}}
 							onScrollToIndexFailed={({ index, averageItemLength }) => {
@@ -446,25 +633,28 @@ function Timeline({
 							ListFooterComponent={standaloneStartup}
 							renderItem={({ item: group }) => <ConversationTurnGroup
 								group={group}
-								snapshot={snapshot}
+								sessionId={snapshot.sessionId}
+								conversationId={snapshot.conversationId}
+								canRollBack={Boolean(group.turn && group.endsTurn !== false && onRollback && canRollbackTurn(snapshot, group.turn))}
 								approvalPending={approvalPending}
 								inputPending={inputPending}
-								onDecide={onDecide}
-								onResolveInput={onResolveInput}
-								onRollback={onRollback}
-								onFork={onFork && (forkAnyTurn || group.turn?.id === latestForkTurnId) ? onFork : undefined}
+								onDecide={rowHandlers.onDecide}
+								onResolveInput={rowHandlers.onResolveInput}
+								onRollback={onRollback ? rowHandlers.onRollback : undefined}
+								onFork={onFork && group.endsTurn !== false && (forkAnyTurn || group.turn?.id === latestForkTurnId) ? rowHandlers.onFork : undefined}
 								editableTurns={edits?.editable}
-								onEditMessage={onEditMessage ? startEdit : undefined}
+								onEditMessage={onEditMessage ? rowHandlers.startEdit : undefined}
 								editDraft={editDraft}
-								onCancelEdit={cancelEdit}
-								onSubmitEdit={submitEdit}
-								onEditFocus={revealEdit}
+								onCancelEdit={rowHandlers.cancelEdit}
+								onSubmitEdit={rowHandlers.submitEdit}
+								onEditFocus={rowHandlers.revealEdit}
 								answeredBelow={answeredBelow}
 								workedOpen={openWorked.has(group.key)}
-								onToggleWorked={toggleWorked}
-								startup={placement === "turn" && group.turnId === openingTurnId ? startup : undefined}
+								onToggleWorked={rowHandlers.toggleWorked}
+								startup={placement === "turn" && group.turnId === openingTurnId && !group.continuesTurn ? startup : undefined}
 							/>}
 						/>
+						</RevealFocusedField.Provider>
 						{/* An unresolved edit whose prompt left the conversation keeps its Retry and
 						    Abandon controls here, apart from the list, as the desktop does. */}
 						{detached && editDraft ? <View style={styles.detachedEditor}>
@@ -472,19 +662,25 @@ function Timeline({
 						</View> : null}
 						{/* Floating above whatever sits over the list's end, so it never moves
 						    the composer or the conversation; it fades rather than pops. */}
-						{showJump && !jumpHidden ? <Animated.View entering={FadeIn.duration(JUMP_FADE_MS)} exiting={FadeOut.duration(JUMP_FADE_MS)} pointerEvents="box-none" style={[StyleSheet.absoluteFill, { bottom: bottomInset }]}>
-							<JumpToLatest onPress={jumpToLatest} />
-						</Animated.View> : null}
-					</View>
+						{showJump ? <JumpOverlay hidden={jumpHidden} bottom={bottomInset} onPress={jumpToLatest} /> : null}
+					</Animated.View>
 				</LatestWorkerUpdates.Provider>
 			</ConversationHarness.Provider>
 		</WorkerSessionsProvider>
 	);
 }
 
-function ConversationTurnGroup({ group, snapshot, approvalPending, inputPending, onDecide, onResolveInput, onRollback, onFork, editableTurns, onEditMessage, editDraft, onCancelEdit, onSubmitEdit, onEditFocus, answeredBelow, workedOpen, onToggleWorked, startup }: {
+/**
+ * One turn's rows. Memoized, with its groups kept by identity (see
+ * useStableGroups) and its handlers stable, so a streamed word re-renders the
+ * turn it lands in and leaves every other turn on screen alone.
+ */
+const ConversationTurnGroup = memo(function ConversationTurnGroup({ group, sessionId, conversationId, canRollBack, approvalPending, inputPending, onDecide, onResolveInput, onRollback, onFork, editableTurns, onEditMessage, editDraft, onCancelEdit, onSubmitEdit, onEditFocus, answeredBelow, workedOpen, onToggleWorked, startup }: {
 	group: ConversationGroup;
-	snapshot: ConversationSnapshot;
+	sessionId: string;
+	conversationId: string;
+	/** Whether this turn's rollback is offered (canRollbackTurn). */
+	canRollBack: boolean;
 	approvalPending: boolean;
 	inputPending: boolean;
 	onDecide(requestId: string, decisionId: string): Promise<void>;
@@ -505,18 +701,20 @@ function ConversationTurnGroup({ group, snapshot, approvalPending, inputPending,
 	// A provider failure arrives twice: as an error activity, and again as the
 	// turn's errorMessage below it. The turn keeps it — that line carries the
 	// outcome and the rollback — so the activity restating it is dropped.
-	const turnError = group.turn?.state === "failed" ? group.turn.errorMessage : undefined;
-	const items = turnError
+	// Rows follow the daemon's turn: a part a later steer cut off reads as
+	// settled, but a command in it may still run.
+	const lifecycle = group.sourceTurn ?? group.turn;
+	const turnError = lifecycle?.state === "failed" ? lifecycle.errorMessage : undefined;
+	const items = settledTurnItems(turnError
 		? group.items.filter((item) => !(item.kind === "activity" && errorActivityDuplicatesTurn(item, turnError)))
-		: group.items;
-	const cursorMessageId = streamingCursorMessageId(items);
+		: group.items, lifecycle);
 	// Only the prompt being edited gets an element, so every other row keeps its memo.
 	const editorFor = (item: ConversationItem) => editDraft && item.kind === "message" && item.role === "user" && item.origin === "human" && item.turnId === editDraft.turnId
 		? <InlineMessageEditor key={editDraft.turnId} draft={editDraft} blocked={!editableTurns?.has(editDraft.turnId)} onCancel={onCancelEdit} onEdit={onSubmitEdit} onFocus={onEditFocus} />
 		: undefined;
-	const renderRows = (list: ConversationItem[], actionsHost?: string, actions?: ReactNode) => activityRuns(list).map((row) => row.kind === "activities"
+	const renderRows = (list: ConversationItem[]) => activityRuns(list).map((row) => row.kind === "activities"
 		? <ActivityRun key={row.key} activities={row.items} />
-		: <TimelineItem key={row.key} item={row.items[0]} sessionId={snapshot.sessionId} conversationId={snapshot.conversationId} completed={group.turn?.state === "completed" && !group.turn.rolledBack} approvalPending={approvalPending} inputPending={inputPending} onDecide={onDecide} onResolveInput={onResolveInput} onEdit={row.items[0].turnId && editableTurns?.has(row.items[0].turnId) ? onEditMessage : undefined} editor={editorFor(row.items[0])} answeredBelow={answeredBelow} showCursor={row.items[0].id === cursorMessageId} turnActions={row.items[0].id === actionsHost ? actions : undefined} />);
+		: <TimelineItem key={row.key} item={row.items[0]} sessionId={sessionId} conversationId={conversationId} completed={group.turn?.state === "completed" && !group.turn.rolledBack} approvalPending={approvalPending} inputPending={inputPending} onDecide={onDecide} onResolveInput={onResolveInput} onEdit={row.items[0].turnId && editableTurns?.has(row.items[0].turnId) ? onEditMessage : undefined} editor={editorFor(row.items[0])} answeredBelow={answeredBelow} />);
 	if (startup) {
 		// The checklist sits exactly where the Working row will, under the brief,
 		// so the handoff moves nothing.
@@ -531,28 +729,30 @@ function ConversationTurnGroup({ group, snapshot, approvalPending, inputPending,
 		</View>;
 	}
 	const partition = partitionTurnItems(items, group.turn);
-	// The prompt's editor grows as it opens and as lines are typed. The list
-	// misplaces rows whose layout transition runs under that growth, so the turn
-	// being edited lays out without the fold motion.
-	const editing = Boolean(editDraft && group.turnId === editDraft.turnId);
-	const WorkBody = editing ? View : FoldBody;
-	const BelowFold = editing ? View : FoldLayout;
-	const rollback = group.turn && canRollbackTurn(snapshot, group.turn) ? onRollback : undefined;
-	const actions = group.turn ? turnActionButtons(group.turn, rollback, onFork) : null;
-	// The turn's actions sit beside Copy on its final reply, as on the desktop;
-	// a turn with no reply to copy keeps them on a row of their own.
-	const actionsHost = actions && partition?.settled ? lastReplyID(partition.final) : undefined;
-	const summary = group.turn ? <TurnSummary turn={group.turn} plan={group.plan} actions={actionsHost ? null : actions} /> : null;
+	// A stretch a later steer cut off is not where the turn ends: its actions,
+	// diff and plan draw once, under the last stretch.
+	const endsTurn = group.endsTurn !== false;
+	const summary = group.turn && endsTurn ? <TurnSummary turn={group.turn} plan={group.plan} /> : null;
 	if (!partition || !group.turn) return <View>{renderRows(items)}{summary}</View>;
+	const reply = partition.final.find((item): item is ConversationMessage => item.kind === "message");
+	const actions = endsTurn ? <TurnActions turn={group.turn} reply={reply} onRollback={canRollBack ? onRollback : undefined} onFork={onFork} /> : null;
 	// Running: the prompt, a live Working row, then the work as it streams in.
 	// Settled: the same row becomes "Worked for", folding the work away and
 	// leaving the notices and the final reply in view.
 	return <View>
 		{renderRows(partition.prompt)}
 		<TurnStatusRow turn={group.turn} foldable={partition.settled && partition.work.length > 0} open={workedOpen} onToggle={() => onToggleWorked(group.key)} />
-		{partition.settled ? (workedOpen ? <WorkBody style={{ gap: space.xs, paddingBottom: space.xs }}>{renderRows(partition.work)}</WorkBody> : null) : renderRows(partition.work)}
-		<BelowFold>{renderRows(partition.notices)}{renderRows(partition.final, actionsHost, actions)}{summary}</BelowFold>
+		{partition.settled ? (workedOpen ? <FoldBody style={{ gap: space.xs, paddingBottom: space.xs }}>{renderRows(partition.work)}</FoldBody> : null) : renderRows(partition.work)}
+		{renderRows(partition.notices)}{renderRows(partition.final)}{actions}{summary}
 	</View>;
+});
+
+/** The jump back to the newest message, stepping aside while `hidden` is set. */
+function JumpOverlay({ hidden, bottom, onPress }: { hidden?: Flag; bottom: number; onPress(): void }) {
+	const composerOpen = useFlagValue(hidden);
+	return composerOpen ? null : <Animated.View entering={FadeIn.duration(JUMP_FADE_MS)} exiting={FadeOut.duration(JUMP_FADE_MS)} pointerEvents="box-none" style={[StyleSheet.absoluteFill, { bottom }]}>
+		<JumpToLatest onPress={onPress} />
+	</Animated.View>;
 }
 
 const TimelineItem = memo(function TimelineItem({
@@ -567,8 +767,6 @@ const TimelineItem = memo(function TimelineItem({
 	onEdit,
 	editor,
 	answeredBelow,
-	showCursor = false,
-	turnActions,
 }: {
 	item: ConversationItem;
 	sessionId: string;
@@ -583,9 +781,6 @@ const TimelineItem = memo(function TimelineItem({
 	/** Shown in place of the bubble while this prompt is being edited. */
 	editor?: ReactNode;
 	answeredBelow?: number;
-	showCursor?: boolean;
-	/** The turn's Fork and Roll back, beside Copy on its final reply. */
-	turnActions?: ReactNode;
 }) {
 	const styles = useThemedStyles(makeStyles);
 	// The long-press menu hosts the bubble in a SwiftUI view sized to its
@@ -627,16 +822,12 @@ const TimelineItem = memo(function TimelineItem({
 			);
 		}
 		if (item.role === "user") {
-			return <OriginMessageView message={item} fallback={<OriginMessage message={item} />} />;
+			return <OriginMessageView message={item} fallback={<OriginMessage label={item.senderLabel || (item.origin === "automation" ? "Automation" : "Orchestrator")} text={item.text} />} />;
 		}
 		return (
 			<View style={styles.assistantRow}>
 				{item.senderLabel ? <Text style={styles.sender}>{item.senderLabel}</Text> : null}
-				<ChatMarkdown text={showCursor ? `${item.text || ""} ▍` : item.text} streaming={item.streaming} continuousSelection selectionSource={completed && !item.streaming ? { conversationId, messageId: item.id, revision: item.revision } : undefined} />
-				{!item.streaming && item.text ? <View style={styles.responseActions}>
-					<CopyResponseButton text={item.text} />
-					{turnActions}
-				</View> : null}
+				<ChatMarkdown text={item.text} streaming={item.streaming} continuousSelection selectionSource={completed && !item.streaming ? { conversationId, messageId: item.id, revision: item.revision } : undefined} />
 			</View>
 		);
 	}
@@ -653,10 +844,20 @@ const TimelineItem = memo(function TimelineItem({
 		return <ProviderSwitchMarker activity={item} />;
 	}
 	if (item.activityKind === "system" && item.detail?.event === "steer") {
-		const { body, attachments } = stagedAttachmentParts(item.detail.text || item.summary);
-		const steered = <View style={styles.userRow}><View style={[styles.userBubble, styles.steerBubble]}><Text style={styles.steerLabel}>Steered</Text>{body ? <Text selectable style={styles.userText}>{body}</Text> : null}{attachments.length > 0 ? <StagedAttachments sessionId={sessionId} paths={attachments} spaced={Boolean(body)} /> : null}</View></View>;
-		// Another agent's message that arrived mid-turn names its sender, as one between turns does.
-		return item.detail.senderSessionId ? <OriginMessageView message={item} fallback={steered} /> : steered;
+		const detail = item.detail;
+		const text = detail.text || item.summary;
+		// Another agent's message that arrived mid-turn names its sender, as one
+		// between turns does, and is marked steered as the person's own steer is.
+		if (isAutomationSteer(detail)) {
+			const sender = detail.senderSessionId?.trim();
+			const card = <OriginMessage label={detail.senderDisplayName?.trim() || sender || "Automation"} text={sender ? stripSenderPrefix(text, sender).trim() : text} />;
+			return <View style={styles.steerRow}>{sender ? <OriginMessageView message={item} fallback={card} /> : card}<SteerNote detail={detail} /></View>;
+		}
+		const { body, attachments } = stagedAttachmentParts(text);
+		return <View style={styles.userRow}>
+			<View style={[styles.userBubble, { maxWidth: bubbleWidth }]}>{body ? <Text selectable style={styles.userText}>{body}</Text> : null}{attachments.length > 0 ? <StagedAttachments sessionId={sessionId} paths={attachments} spaced={Boolean(body)} /> : null}</View>
+			<SteerNote detail={detail} />
+		</View>;
 	}
 	// A page the agent published with html_render / ao render.
 	const render = item.activityKind === "system" ? readRenderRef(item.detail) : undefined;
@@ -666,14 +867,44 @@ const TimelineItem = memo(function TimelineItem({
 	const artifactPage = artifact ? artifactRenderRef(sessionId, artifact) : undefined;
 	if (artifact && artifactPage) return <RenderFrame render={artifactPage} artifact={{ sessionId, path: artifact.path }} />;
 	if (item.detail?.event === "auth.reauth_required") return <SystemSignal icon="key" danger title="The provider asked you to sign in again" detail={item.detail.reason} />;
+	const handoff = accountHandoffNote(item.detail);
+	if (handoff) return <AccountHandoffRow note={handoff} />;
 	if (item.activityKind === "error") return <ErrorActivity activity={item} />;
 	return <ActivityRow activity={item} />;
 });
 
-/** How long a copy control shows its checkmark before it turns back. */
+/**
+ * The row a turn closes on, under its reply: copy, fork, roll back, and when the reply
+ * was written (the desktop's TurnActions; the time shows outright, a phone
+ * having no hover). One per turn, not one under every fragment of prose.
+ *
+ * Its height is held from the moment the turn starts, so settling fills the row
+ * rather than adding one, and the controls are small with their touch taken out
+ * by slop: the row never moves the conversation or the composer over it.
+ */
+function TurnActions({ turn, reply, onRollback, onFork }: { turn: ConversationTurn; reply?: ConversationMessage; onRollback?(turnId: string): Promise<number>; onFork?(turnId: string): Promise<void> }) {
+	const styles = useThemedStyles(makeStyles);
+	const settled = turn.state !== "running" && turn.state !== "queued";
+	const copyText = settled && reply && !reply.streaming && reply.text.trim() ? reply.text : undefined;
+	const canRollBack = settled && Boolean(onRollback) && Boolean(turn.providerTurnId) && !turn.rolledBack;
+	const canFork = Boolean(onFork) && forkableTurn(turn);
+	const time = settled ? formatReplyTime(reply?.createdAt ?? turn.completedAt) : "";
+	return (
+		<View style={styles.turnActions}>
+			{copyText ? <CopyResponseButton text={copyText} /> : null}
+			{canFork && onFork ? <TurnForkButton turnId={turn.id} onFork={onFork} compact /> : null}
+			{canRollBack && onRollback ? <TurnRollbackButton turnId={turn.id} onRollback={onRollback} compact /> : null}
+			{/* The row's height is fixed, so the time stops growing where its line
+			    still fits it; uncapped, the largest text sizes cut it off. */}
+			{time ? <Text style={styles.turnTime} maxFontSizeMultiplier={fontScaleCap.chrome} accessibilityLabel={`Written ${time}`}>{time}</Text> : null}
+		</View>
+	);
+}
+
+/** How long the copy control shows its checkmark before it turns back. */
 const COPIED_MS = 1_400;
 
-/** Copies the whole reply in one tap, without selecting it first. */
+/** Copies the whole reply, as the agent wrote it, in one tap. */
 function CopyResponseButton({ text }: { text: string }) {
 	const t = useTheme();
 	const styles = useThemedStyles(makeStyles);
@@ -688,10 +919,11 @@ function CopyResponseButton({ text }: { text: string }) {
 		accessibilityRole="button"
 		accessibilityLabel="Copy response"
 		onPress={() => { void Clipboard.setStringAsync(text); haptics.success(); setCopied(true); }}
+		hitSlop={TURN_ACTION_SLOP}
 		android_ripple={feedback.android_ripple}
-		style={({ pressed }) => [styles.copy, pressed && feedback.pressed]}
+		style={({ pressed }) => [styles.turnAction, pressed && feedback.pressed]}
 	>
-		<AppSymbol name={copied ? "checkmark" : "copy"} size={iconSize.md} color={copied ? t.green : t.textTertiary} />
+		<AppSymbol name={copied ? "checkmark" : "copy"} size={iconSize.sm} color={copied ? t.green : t.textTertiary} />
 	</Pressable>;
 }
 
@@ -815,15 +1047,15 @@ function deliveryCopy(state?: string): string | undefined {
 	}
 }
 
-function OriginMessage({ message }: { message: Extract<ConversationItem, { kind: "message" }> }) {
+function OriginMessage({ label, text }: { label: string; text: string }) {
 	const t = useTheme();
 	const styles = useThemedStyles(makeStyles);
 	const feedback = usePressFeedback("button");
-	const long = message.text.length > 600;
+	const long = text.length > 600;
 	const [expanded, setExpanded] = useState(false);
 	return <View style={styles.originMessage}>
-		<View style={styles.originHeader}><Feather name="radio" size={iconSize.xs} color={t.textTertiary} /><Text style={styles.originLabel}>{message.senderLabel || (message.origin === "automation" ? "Automation" : "Orchestrator")}</Text></View>
-		{long && expanded ? <ChatMarkdown text={message.text} /> : <Text selectable numberOfLines={long ? 5 : undefined} style={styles.originText}>{message.text}</Text>}
+		<View style={styles.originHeader}><Feather name="radio" size={iconSize.xs} color={t.textTertiary} /><Text style={styles.originLabel}>{label}</Text></View>
+		{long && expanded ? <ChatMarkdown text={text} /> : <Text selectable numberOfLines={long ? 5 : undefined} style={styles.originText}>{text}</Text>}
 		{long ? <Pressable accessibilityRole="button" accessibilityState={{ expanded }} onPress={() => setExpanded((value) => !value)} android_ripple={feedback.android_ripple} style={({ pressed }) => [styles.originMore, pressed && feedback.pressed]}><FoldChevron open={expanded} color={t.accent} /><Text style={styles.originMoreText}>{expanded ? "Hide report" : "Show full report"}</Text></Pressable> : null}
 	</View>;
 }
@@ -1104,9 +1336,9 @@ function TurnStatusRow({ turn, foldable, open, onToggle }: { turn: ConversationT
 		accessibilityLabel={running ? (workingDuration ? `Working for ${workingDuration}` : "Working") : undefined}
 		style={[styles.turnState, running && styles.turnTimer, turn.state === "failed" && { color: t.red }]}
 	>{label}</Text>;
-	// One element throughout, so the spinner can leave and the label slide into
-	// its place when the turn settles instead of the whole row remounting. The row
-	// is a touch target tall, as is the startup checklist header it replaces.
+	// One element throughout, so a settling turn changes the row rather than
+	// remounting it. The row is a touch target tall, as is the startup checklist
+	// header it replaces.
 	return <Pressable
 		accessibilityRole={foldable ? "button" : undefined}
 		accessibilityState={foldable ? { expanded: open } : undefined}
@@ -1116,34 +1348,13 @@ function TurnStatusRow({ turn, foldable, open, onToggle }: { turn: ConversationT
 		style={({ pressed }) => [styles.statusRow, pressed && feedback.pressed]}
 	>
 		{/* The desktop's lattice; it holds still under Reduce Motion, where the ticking label still reads as in progress. */}
-		{running ? <StatusSpinner><LatticeLoader color={t.textTertiary} /></StatusSpinner> : null}
-		<StatusLabel>{text}</StatusLabel>
+		{running ? <LatticeLoader color={t.textTertiary} /> : null}
+		{text}
 		{foldable ? <FoldChevron open={open} color={t.textTertiary} /> : null}
 	</Pressable>;
 }
 
-/** A settled turn's Fork and Roll back, or null when it has neither. */
-function turnActionButtons(turn: ConversationTurn, onRollback?: (turnId: string) => Promise<number>, onFork?: (turnId: string) => Promise<void>): ReactNode {
-	const settled = turn.state !== "running" && turn.state !== "queued";
-	const canRollBack = Boolean(onRollback) && settled && Boolean(turn.providerTurnId) && !turn.rolledBack;
-	const canFork = Boolean(onFork) && forkableTurn(turn);
-	if (!canRollBack && !canFork) return null;
-	return <>
-		{canFork && onFork ? <TurnForkButton turnId={turn.id} onFork={onFork} /> : null}
-		{canRollBack && onRollback ? <TurnRollbackButton turnId={turn.id} onRollback={onRollback} /> : null}
-	</>;
-}
-
-/** The last assistant reply with text in a turn's final rows, which carries Copy. */
-function lastReplyID(items: ConversationItem[]): string | undefined {
-	for (let i = items.length - 1; i >= 0; i--) {
-		const item = items[i]!;
-		if (item.kind === "message" && item.role === "assistant" && !item.streaming && item.text) return item.id;
-	}
-	return undefined;
-}
-
-function TurnSummary({ turn, plan, actions }: { turn: ConversationTurn; plan?: ConversationPlan; actions: ReactNode }) {
+function TurnSummary({ turn, plan }: { turn: ConversationTurn; plan?: ConversationPlan }) {
 	const styles = useThemedStyles(makeStyles);
 	// The deliverables a completed turn made show as tiles; every other changed
 	// file stays in the changed-files card, so nothing shows twice or goes
@@ -1152,14 +1363,16 @@ function TurnSummary({ turn, plan, actions }: { turn: ConversationTurn; plan?: C
 	const results = useMemo(() => turnResults(turn, source), [source, turn]);
 	// Nothing to show draws nothing: an empty one still padded every turn's end,
 	// most of the gap between a reply and the next prompt.
-	if (!plan && !results.artifacts.length && !results.files.length && !actions && !turn.errorMessage) return null;
+	// A usage limit gets its own notice, which carries the provider's message.
+	const usageLimited = turn.state === "failed" && turn.usageLimit ? { ...turn, usageLimit: turn.usageLimit } : undefined;
+	if (!plan && !results.artifacts.length && !results.files.length && !turn.errorMessage && !usageLimited) return null;
 	return (
 		<View style={styles.turnWrap}>
 			{plan ? <TurnPlan plan={plan} live={turn.state === "running"} /> : null}
 			{results.artifacts.length && source ? <TurnArtifacts artifacts={results.artifacts} source={source} /> : null}
 			{results.files.length ? <ChangedFiles turn={turn} changed={results.files} /> : null}
-			{actions ? <View style={styles.turnLine}>{actions}</View> : null}
-			{turn.errorMessage ? <Text style={styles.turnError}>{turn.errorMessage}</Text> : null}
+			{usageLimited ? <UsageLimitNotice turn={usageLimited} /> : null}
+			{turn.errorMessage && !usageLimited ? <Text style={styles.turnError}>{turn.errorMessage}</Text> : null}
 		</View>
 	);
 }
@@ -1247,6 +1460,7 @@ function ApprovalCard({ activity, busy, onDecide, handledBelow }: { activity: Co
 	const pending = activity.status === "pending";
 	const presentation = requestPresentation("approval", pending);
 	const command = activity.detail?.command ?? activity.summary;
+	const primaryId = primaryDecisionId(activity.decisions);
 	if (pending && handledBelow) return <RequestEcho title={presentation.title} detail={command} />;
 	if (!pending) return <View style={styles.approvalResolved}>
 		<Feather name={presentation.icon} size={iconSize.xs} color={t.textFaint} />
@@ -1261,10 +1475,13 @@ function ApprovalCard({ activity, busy, onDecide, handledBelow }: { activity: Co
 			<Text selectable style={styles.requestCommand}>{command}</Text>
 		</View>
 		{activity.detail?.cwd ? <LabelValue label="cwd" value={activity.detail.cwd} /> : null}
-		{activity.decisions?.length ? <View style={styles.approvalActions}>{activity.decisions.map((decision, index) => {
-			const label = submitting === decision.id ? "Sending…" : decision.label;
+		{activity.decisions?.length ? <View style={styles.approvalActions}><ElicitationActionRow reportsOutcome actions={activity.decisions.map((decision) => ({
+			key: decision.id,
+			label: submitting === decision.id ? "Sending…" : decision.label,
+			primary: decision.id === primaryId,
+			disabled: busy || Boolean(submitting) || !activity.requestId,
 			// One haptic per decision, when it lands: the press itself only starts the work.
-			return <ElicitationAction key={decision.id} label={label} primary={index === 0} reportsOutcome disabled={busy || Boolean(submitting) || !activity.requestId} onPress={() => {
+			onPress: () => {
 				setSubmitting(decision.id);
 				setSubmitError(undefined);
 				void onDecide(activity.requestId ?? "", decision.id)
@@ -1274,8 +1491,8 @@ function ApprovalCard({ activity, busy, onDecide, handledBelow }: { activity: Co
 						haptics.error();
 					})
 					.finally(() => setSubmitting(undefined));
-			}} />;
-		})}</View> : <Text style={[styles.partial, { color: t.amber }]}>The agent offered no decisions Orchestrator can present. Open diagnostics from the host.</Text>}
+			},
+		}))} /></View> : <Text style={[styles.partial, { color: t.amber }]}>The agent offered no decisions Orchestrator can present. Open diagnostics from the host.</Text>}
 		{submitError ? <Text accessibilityRole="alert" selectable style={styles.validation}>{submitError}</Text> : null}
 	</View>;
 }
@@ -1477,17 +1694,12 @@ const makeStyles = (t: Theme) => {
 		originText: { fontFamily: "DMSans_400Regular", color: t.textSecondary, fontSize: type.subheadline.fontSize, lineHeight: type.subheadline.lineHeight },
 		originMore: { alignSelf: "flex-start", minHeight: touchTarget, flexDirection: "row", alignItems: "center", gap: space.xxs },
 		originMoreText: { fontFamily: "DMSans_600SemiBold", color: t.accent, fontSize: type.footnote.fontSize, fontWeight: "600" },
-		steerBubble: { backgroundColor: t.bgSubtle },
-		steerLabel: { fontFamily: "DMSans_600SemiBold", color: t.textTertiary, fontSize: type.footnote.fontSize, fontWeight: "600", marginBottom: space.hair },
+		steerRow: { paddingBottom: space.xs },
 		assistantRow: { paddingTop: space.sm, paddingBottom: space.xs },
 		sender: { fontFamily: "DMSans_600SemiBold", color: t.textTertiary, fontSize: type.footnote.fontSize, fontWeight: "600", marginBottom: space.xxs },
-		// The first glyph lines up with the reply's left edge and the row takes
-		// no more height than the glyphs; the touch targets reach past both.
-		responseActions: { flexDirection: "row", alignItems: "center", alignSelf: "flex-start", marginLeft: -(touchTarget - iconSize.md) / 2, marginBottom: -(touchTarget - iconSize.md) / 2 },
 		// The glyph lines up with the reply's left edge, and the row ends at its
 		// foot. The target reaches into the row's bottom padding rather than up
 		// over the text, where a long press selects.
-		copy: { alignItems: "center", justifyContent: "center", width: touchTarget, height: touchTarget },
 		systemSignal: { ...card, marginVertical: space.xs, flexDirection: "row", alignItems: "flex-start", gap: space.sm, borderColor: t.borderDefault, backgroundColor: t.bgSurface, padding: space.sm },
 		systemTitle: { fontFamily: "DMSans_600SemiBold", color: t.textPrimary, fontSize: type.footnote.fontSize, fontWeight: "600" },
 		systemDetail: { fontFamily: "DMSans_400Regular", color: t.textTertiary, fontSize: type.footnote.fontSize, lineHeight: type.footnote.lineHeight, marginTop: space.hair },
@@ -1524,7 +1736,12 @@ const makeStyles = (t: Theme) => {
 		output: { color: t.textSecondary, backgroundColor: t.bgColumn, borderRadius: radius.sm, padding: space.sm, fontFamily: t.fontMono, fontSize: type.footnote.fontSize, lineHeight: type.footnote.lineHeight },
 		partial: { fontFamily: "DMSans_400Regular", color: t.textFaint, fontSize: type.footnote.fontSize },
 		turnWrap: { paddingTop: space.sm, paddingBottom: space.lg, gap: space.sm },
-		turnLine: { flexDirection: "row", alignItems: "center", marginLeft: -(touchTarget - iconSize.md) / 2 },
+		// The leading glyph lines up with the reply's text above it.
+		// A full touch target, so the controls' slop is inside it; the margins
+		// keep its footprint at the controls' size.
+		turnActions: { height: TURN_ACTION_SIZE + 2 * TURN_ACTION_SLOP, marginVertical: -TURN_ACTION_SLOP, flexDirection: "row", alignItems: "center", gap: space.xxs, marginLeft: -(TURN_ACTION_SIZE - iconSize.sm) / 2 },
+		turnAction: turnActionControl,
+		turnTime: { fontFamily: "DMSans_400Regular", paddingHorizontal: space.xs, color: t.textTertiary, fontSize: type.footnote.fontSize, lineHeight: type.footnote.lineHeight, fontVariant: ["tabular-nums"] },
 		// Full width with a rule under it, matching the desktop's Working / Worked
 		// rows and the setup checklist header, so the line holds through the handoff.
 		statusRow: { minHeight: touchTarget, flexDirection: "row", alignItems: "center", gap: space.xs, paddingVertical: space.xs, borderBottomWidth: rowDividerWidth, borderBottomColor: t.borderDefault },
@@ -1558,7 +1775,7 @@ const makeStyles = (t: Theme) => {
 		approvalDot: { width: 7, height: 7, borderRadius: radius.pill, backgroundColor: t.amber },
 		approvalStatusText: { fontFamily: "DMSans_600SemiBold", color: t.textPrimary, fontSize: type.footnote.fontSize, fontWeight: "600" },
 		approvalCommandSurface: { flexDirection: "row", alignItems: "flex-start", gap: space.sm, borderRadius: radius.md, borderCurve: "continuous", backgroundColor: t.bgSubtle, paddingHorizontal: space.md, paddingVertical: space.md },
-		approvalActions: { minHeight: 36, flexDirection: "row", alignItems: "center", justifyContent: "flex-end", flexWrap: "wrap", gap: space.xxs, paddingTop: space.none },
+		approvalActions: { minHeight: 36, paddingTop: space.none },
 		approvalResolved: { minHeight: 38, marginVertical: space.sm, flexDirection: "row", alignItems: "center", gap: space.xs, paddingHorizontal: space.hair },
 		approvalResolvedLabel: { fontFamily: "DMSans_600SemiBold", color: t.textTertiary, fontSize: type.footnote.fontSize, fontWeight: "600" },
 		approvalResolvedCommand: { flex: 1, color: t.textFaint, fontSize: type.footnote.fontSize, fontFamily: t.fontMono },

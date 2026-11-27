@@ -333,6 +333,8 @@ func claimRowsFromSCM(sessionID domain.SessionID, obs ports.SCMObservation, revi
 		ProviderMergeable:        obs.PR.ProviderMergeable,
 		ProviderMergeStateStatus: obs.PR.ProviderMergeStateStatus,
 		HTMLURL:                  obs.PR.HTMLURL,
+		MergeQueueRequired:       obs.PR.MergeQueueRequired,
+		MergeQueue:               obs.PR.MergeQueue,
 		CreatedAtProvider:        obs.PR.CreatedAtProvider,
 		UpdatedAtProvider:        obs.PR.UpdatedAtProvider,
 		MergedAtProvider:         obs.PR.MergedAtProvider,

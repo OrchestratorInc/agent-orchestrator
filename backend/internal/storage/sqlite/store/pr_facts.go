@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/storage/sqlite/gen"
@@ -67,6 +68,28 @@ func (s *Store) ListPRFactsForSessions(ctx context.Context, ids []domain.Session
 	return out, nil
 }
 
+// ListPRStateTimes maps each session owning a PR in state to when its newest
+// such PR reached it: the recorded state change, or the PR's last update for a
+// row stored before state changes were timed.
+func (s *Store) ListPRStateTimes(ctx context.Context, state domain.PRState) (map[domain.SessionID]time.Time, error) {
+	rows, err := s.qr.ListPRStateTimes(ctx, state)
+	if err != nil {
+		return nil, fmt.Errorf("list pr state times: %w", err)
+	}
+	out := make(map[domain.SessionID]time.Time, len(rows))
+	for _, r := range rows {
+		at := r.UpdatedAt
+		if r.StateChangedAt.Valid {
+			at = r.StateChangedAt.Time
+		}
+		at = at.UTC()
+		if prev, seen := out[r.SessionID]; !seen || at.After(prev) {
+			out[r.SessionID] = at
+		}
+	}
+	return out, nil
+}
+
 // prFactsFromListRow maps a PR-facts row. The batch query selects the same
 // columns in the same order, so its rows convert to this type.
 func prFactsFromListRow(r gen.ListPRFactsBySessionRow) domain.PRFacts {
@@ -90,6 +113,7 @@ func prFactsFromListRow(r gen.ListPRFactsBySessionRow) domain.PRFacts {
 		ExternalComments:         r.ExternalComments,
 		ExternalApproved:         r.ExternalApproved,
 		ExternalChangesRequested: r.ExternalChangesRequested,
+		StaleChangesRequested:    r.StaleChangesRequested != 0,
 		StackParent:              int(r.StackParentNumber),
 		Host:                     r.Host,
 		Repo:                     r.Repo,

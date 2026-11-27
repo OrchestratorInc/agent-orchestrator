@@ -15,6 +15,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
+	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/apierr"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 	reportsvc "github.com/aoagents/agent-orchestrator/backend/internal/service/report"
 )
@@ -84,6 +85,7 @@ type Service struct {
 	renderMeasures     sync.WaitGroup
 	sides              *sideManager
 	wakeChat           func(context.Context, domain.SessionID) error
+	resumeAgent        func(context.Context, domain.SessionID) error
 	hibernationEnabled func() bool
 	// versionRefresh reports whether open sessions move to a newly installed
 	// harness release, and how long they must be quiet first.
@@ -105,12 +107,19 @@ type Service struct {
 	autoResumeRetryAt     map[string]time.Time
 	autoResumeInFlight    map[string]bool
 	autoResumeScanning    bool
-	usageLimitAccounts    usageLimitAccountReader
-	handoffMu             sync.Mutex
-	handoff               accountHandoffDeps
-	handoffSince          time.Time
-	handoffScanning       bool
-	handoffs              map[string]*accountHandoff
+	// autoResumeIdle is set when the last scan found no armed turn; the daemon's
+	// resume loop then waits longer, and arming a turn wakes it (autoResumeWake).
+	autoResumeIdle bool
+	autoResumeWake chan struct{}
+	// autoResumeArms counts arming calls, so a scan that started before one
+	// does not mark the loop idle when it finishes.
+	autoResumeArms     uint64
+	usageLimitAccounts usageLimitAccountReader
+	handoffMu          sync.Mutex
+	handoff            accountHandoffDeps
+	handoffSince       time.Time
+	handoffScanning    bool
+	handoffs           map[string]*accountHandoff
 	// updateStops are sessions stopped so an update could replace their
 	// executable; the update starts them again, so their queue is kept.
 	updateStops map[domain.SessionID]bool
@@ -134,6 +143,7 @@ type Service struct {
 	prewarming         sync.Map // domain.AgentHarness -> struct{}
 	providerSwitches   sync.Map // domain.SessionID -> chan struct{}, one switch at a time
 	terminalSwitcher   TerminalProviderSwitcher
+	agentChoices       AgentChoiceRecorder
 }
 
 // SetReportCoordinator installs the report piggyback hook after daemon wiring
@@ -361,6 +371,71 @@ func notifyControllerReady(
 // claudeAutoCompactWindowEnv is the token count at which Claude Code compacts on its own.
 const claudeAutoCompactWindowEnv = "CLAUDE_CODE_AUTO_COMPACT_WINDOW"
 
+// openCodeConfigContentEnv is OpenCode's inline config, merged over its config files.
+const openCodeConfigContentEnv = "OPENCODE_CONFIG_CONTENT"
+
+// withOpenCodeAutoCompactOff returns a copy of env whose inline OpenCode config
+// turns compaction off.
+func withOpenCodeAutoCompactOff(env map[string]string) (map[string]string, error) {
+	content, err := openCodeConfigWithoutAutoCompact(env[openCodeConfigContentEnv])
+	if err != nil {
+		return nil, fmt.Errorf("turn off OpenCode auto-compaction: %w", err)
+	}
+	out := make(map[string]string, len(env)+1)
+	for key, value := range env {
+		out[key] = value
+	}
+	out[openCodeConfigContentEnv] = content
+	return out, nil
+}
+
+// openCodeConfigWithoutAutoCompact returns the project's inline OpenCode config
+// with compaction.auto set false, keeping everything else it sets.
+func openCodeConfigWithoutAutoCompact(content string) (string, error) {
+	config := map[string]any{}
+	if strings.TrimSpace(content) != "" {
+		if err := json.Unmarshal([]byte(content), &config); err != nil {
+			return "", fmt.Errorf("%s must be a JSON object: %w", openCodeConfigContentEnv, err)
+		}
+		if config == nil {
+			config = map[string]any{}
+		}
+	}
+	compaction, ok := config["compaction"].(map[string]any)
+	if !ok {
+		compaction = map[string]any{}
+	}
+	compaction["auto"] = false
+	config["compaction"] = compaction
+	out, err := json.Marshal(config)
+	if err != nil {
+		return "", err
+	}
+	return string(out), nil
+}
+
+// openCodeConfigWithAutoCompactRestored undoes openCodeConfigWithoutAutoCompact,
+// leaving OpenCode's own default. Content it cannot read is returned unchanged.
+func openCodeConfigWithAutoCompactRestored(content string) string {
+	var config map[string]any
+	if err := json.Unmarshal([]byte(content), &config); err != nil || config == nil {
+		return content
+	}
+	compaction, ok := config["compaction"].(map[string]any)
+	if !ok || compaction["auto"] != false {
+		return content
+	}
+	delete(compaction, "auto")
+	if len(compaction) == 0 {
+		delete(config, "compaction")
+	}
+	out, err := json.Marshal(config)
+	if err != nil {
+		return content
+	}
+	return string(out)
+}
+
 func cloneStartConfig(cfg StartConfig) StartConfig {
 	cloned := cfg
 	if cfg.AwakeReconnectTarget != nil {
@@ -388,6 +463,26 @@ func cloneStartConfig(cfg StartConfig) StartConfig {
 	return cloned
 }
 
+// strandedActivitySettler is implemented by stores that can settle running rows
+// left on turns that have already settled.
+type strandedActivitySettler interface {
+	SettleStrandedActivities(ctx context.Context, conversationID string, now time.Time) error
+}
+
+// settleStrandedActivities stops the spinners older daemons left behind: they
+// stored replayed provider notices as running rows on long-settled turns. Like
+// settleOrphanedWork it is best-effort, so a failure is logged and never blocks
+// the session from starting.
+func (s *Service) settleStrandedActivities(ctx context.Context, session domain.SessionID, conversationID string) {
+	settler, ok := s.store.(strandedActivitySettler)
+	if !ok {
+		return
+	}
+	if err := settler.SettleStrandedActivities(ctx, conversationID, s.now()); err != nil {
+		s.log.Error("chat start: settle stranded activities", "session", session, "conversation", conversationID, "error", err)
+	}
+}
+
 // settleOrphanedWork closes out anything a previous controller left behind.
 //
 // Best-effort by design: a failure here must not stop a session from coming back,
@@ -405,6 +500,21 @@ func (s *Service) settleOrphanedWork(ctx context.Context, session domain.Session
 	}
 	if err := s.store.FailPendingInputs(ctx, conversationID, now); err != nil {
 		s.log.Error("chat start: close pending input requests", "session", session, "error", err)
+	}
+}
+
+// applyConversationSettings overlays a conversation's durable choices onto the
+// launch config of a provider that continues it. A chosen model and approval
+// mode win over what the session was spawned with; effort follows the
+// conversation outright, since an empty effort is itself the choice of the
+// provider default.
+func applyConversationSettings(cfg *StartConfig, settings domain.ConversationSettings) {
+	if settings.Model != "" {
+		cfg.Model = settings.Model
+	}
+	cfg.Effort = settings.ReasoningEffort
+	if settings.ApprovalMode != "" {
+		cfg.Permissions = settings.ApprovalMode
 	}
 }
 
@@ -784,15 +894,30 @@ func (s *Service) startLocked(ctx context.Context, cfg StartConfig) (*Controller
 				ports.ErrChatResumeFailed, activeBranch.ProviderConversationID, cfg.ProviderConversationID)
 		}
 	}
-	// A switch to Claude Code sets the window, Auto (empty) included.
-	if cfg.ProviderSwitch != nil && cfg.Harness == domain.HarnessClaudeCode {
-		// The switch's config is the source's, which may still carry the window
-		// AO set for an earlier Claude Code start. Drop that value so the new
-		// choice, Auto included, is what starts; a project's own value stays.
+	// A new conversation starts with the Fast mode and auto-compaction picked
+	// for it; the block below that records its first settings saves them.
+	if cfg.ProviderConversationID == "" && cfg.ProviderSwitch == nil {
+		if cfg.FastMode {
+			conversation.Settings.FastMode = true
+		}
+		if cfg.AutoCompactWindow != "" {
+			conversation.Settings.AutoCompactWindow = cfg.AutoCompactWindow
+		}
+	}
+	// A switch to Claude Code or OpenCode sets its auto-compaction, Auto (empty) included.
+	if cfg.ProviderSwitch != nil && (cfg.Harness == domain.HarnessClaudeCode || domain.CanTurnOffAutoCompact(cfg.Harness)) {
+		// The switch's config is the source's, which may still carry what AO set
+		// for an earlier start: Claude Code's window, or OpenCode's compaction
+		// turned off. Drop that so the new choice, Auto included, is what starts;
+		// a project's own window stays.
 		if previous := domain.AutoCompactTokens[conversation.Settings.AutoCompactWindow]; previous > 0 &&
 			cfg.Env[claudeAutoCompactWindowEnv] == fmt.Sprint(previous) {
 			cfg.Env = cloneStartConfig(cfg).Env
 			delete(cfg.Env, claudeAutoCompactWindowEnv)
+		}
+		if content, ok := cfg.Env[openCodeConfigContentEnv]; ok && conversation.Settings.AutoCompactWindow == domain.AutoCompactOff {
+			cfg.Env = cloneStartConfig(cfg).Env
+			cfg.Env[openCodeConfigContentEnv] = openCodeConfigWithAutoCompactRestored(content)
 		}
 		conversation.Settings.AutoCompactWindow = cfg.ProviderSwitch.AutoCompactWindow
 	}
@@ -802,6 +927,18 @@ func (s *Service) startLocked(ctx context.Context, cfg StartConfig) (*Controller
 	if tokens := domain.AutoCompactTokens[conversation.Settings.AutoCompactWindow]; cfg.Harness == domain.HarnessClaudeCode && tokens > 0 {
 		cfg.Env = cloneStartConfig(cfg).Env
 		cfg.Env[claudeAutoCompactWindowEnv] = fmt.Sprint(tokens)
+	}
+	// OpenCode reads its compaction setting from its config when it starts; Auto
+	// leaves whatever the project's config says.
+	// The environment a persistent host prepares at launch replaces this one, so it
+	// is turned off there too.
+	compactionOff := conversation.Settings.AutoCompactWindow == domain.AutoCompactOff && domain.CanTurnOffAutoCompact(cfg.Harness)
+	if compactionOff {
+		env, err := withOpenCodeAutoCompactOff(cfg.Env)
+		if err != nil {
+			return nil, err
+		}
+		cfg.Env = env
 	}
 	// A fork's first start resumes the provider conversation copied for it,
 	// into a conversation with no settings saved yet: it starts with the
@@ -817,14 +954,8 @@ func (s *Service) startLocked(ctx context.Context, cfg StartConfig) (*Controller
 	// Conversation settings are durable user choices. Restore the selected
 	// model when rebuilding a controller after a daemon restart; the caller's
 	// session default must not silently replace it.
-	if cfg.ProviderConversationID != "" && conversation.Settings.Model != "" {
-		cfg.Model = conversation.Settings.Model
-	}
 	if cfg.ProviderConversationID != "" {
-		cfg.Effort = conversation.Settings.ReasoningEffort
-	}
-	if cfg.ProviderConversationID != "" && conversation.Settings.ApprovalMode != "" {
-		cfg.Permissions = conversation.Settings.ApprovalMode
+		applyConversationSettings(&cfg, conversation.Settings)
 	}
 	if cfg.ProviderConversationID == "" {
 		if err := chatAdmissionError(driver, cfg.Harness, caps, cfg.Permissions); err != nil {
@@ -847,6 +978,9 @@ func (s *Service) startLocked(ctx context.Context, cfg StartConfig) (*Controller
 			env, prepareErr := cfg.PrepareControllerEnv(prepareCtx, cfg.ExpectedControllerOwner)
 			if prepareErr != nil {
 				return nil, fmt.Errorf("prepare chat controller environment: %w", prepareErr)
+			}
+			if compactionOff {
+				return withOpenCodeAutoCompactOff(env)
 			}
 			return env, nil
 		}
@@ -1082,6 +1216,10 @@ func (s *Service) startLocked(ctx context.Context, cfg StartConfig) (*Controller
 		!queuedBeforeFirstController && !preserveUndispatchedQueue {
 		s.settleOrphanedWork(ctx, cfg.SessionID, conversation.ID)
 	}
+	// Unlike orphaned work, rows stranded on settled turns are never a live
+	// controller's, so a live reconnect cleans them too. The whole conversation:
+	// a handoff keeps turns another session handled in this timeline.
+	s.settleStrandedActivities(ctx, cfg.SessionID, conversation.ID)
 	// A fresh generation per launch, so events from the controller this one
 	// replaced can be told apart from the current one's.
 	controller := newController(
@@ -1281,6 +1419,9 @@ func (s *Service) startLocked(ctx context.Context, cfg StartConfig) (*Controller
 	cfg.ProviderScopeID = ""
 	cfg.AwakeReconnectTarget = nil
 	cfg.HistoryMode = ports.ChatHistoryImport
+	// The starting Fast mode and auto-compaction are saved with the
+	// conversation now; a restart must not put them back over a later change.
+	cfg.FastMode, cfg.AutoCompactWindow = false, ""
 	s.startConfigs[owner] = cloneStartConfig(cfg)
 	delete(s.awakeInterrupted, owner)
 	controller.start()
@@ -1764,6 +1905,19 @@ func (s *Service) Interrupt(ctx context.Context, id domain.SessionID) error {
 		return err
 	}
 	return controller.Interrupt(ctx)
+}
+
+// InterruptTurn cancels a session's in-flight turn only while it is still the
+// turn the user pressed Stop on. See Controller.InterruptTurn.
+func (s *Service) InterruptTurn(ctx context.Context, id domain.SessionID, turnID string) error {
+	if _, err := s.requireChatSession(ctx, id); err != nil {
+		return err
+	}
+	controller, err := s.Controller(id)
+	if err != nil {
+		return err
+	}
+	return controller.InterruptTurn(ctx, turnID)
 }
 
 // InterruptForOwner cancels the in-flight turn for an owner-specific controller.
@@ -2819,9 +2973,10 @@ func (s *Service) SetConfigOption(
 	options = permissionConfigOptions(record.Harness, options)
 	settings, _ := settingsFromConfigOptions(previous, options)
 	if record.Harness == domain.HarnessClaudeCode {
-		// Provider-owned defaults stay implicit so future Claude defaults still apply.
-		if settings.Model == "default" {
-			settings.Model = ""
+		// A picked "default" is saved so a relaunch passes --model default and gets
+		// the model the picker showed; without it Claude uses settings.json's model.
+		if settings.Model == "default" && configID != "model" {
+			settings.Model = previous.Model
 		}
 		if settings.ReasoningEffort == "default" {
 			settings.ReasoningEffort = ""
@@ -3010,6 +3165,16 @@ func (s *Service) setTurnSettings(ctx context.Context, controller *Controller, o
 		return domain.ConversationSettings{}, ErrReviewerPermissionsFixed
 	}
 	settings.OpenCodeMode = previous.OpenCodeMode
+	// A choice the agent cannot take is refused. Only a change is checked, so a
+	// value saved before this check existed does not block every later change.
+	if settings.AutoCompactWindow != previous.AutoCompactWindow {
+		if problem := domain.AutoCompactWindowProblem(controller.harness, settings.AutoCompactWindow); problem != "" {
+			return domain.ConversationSettings{}, apierr.Invalid("AUTO_COMPACT_WINDOW_UNSUPPORTED", problem, nil)
+		}
+	}
+	if settings.FastMode && !previous.FastMode && !domain.CanUseFastMode(controller.harness) {
+		return domain.ConversationSettings{}, apierr.Invalid("FAST_MODE_UNSUPPORTED", fmt.Sprintf("%s has no Fast mode", controller.harness), nil)
+	}
 	if err := controller.SetSettings(ctx, settings); err != nil {
 		return domain.ConversationSettings{}, err
 	}

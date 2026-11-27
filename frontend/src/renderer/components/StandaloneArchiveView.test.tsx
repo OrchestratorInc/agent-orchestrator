@@ -72,6 +72,7 @@ import { appI18n } from "../i18n";
 import { aoBridge } from "../lib/bridge";
 import { StandaloneArchiveView } from "./StandaloneArchiveView";
 import { ArchivedSessionCardAdapter } from "./SessionsBoardAdapters";
+import { useContentExpiredSessionsStore } from "../stores/content-expired-sessions-store";
 import { TooltipProvider } from "./ui/tooltip";
 
 function renderArchive() {
@@ -206,6 +207,28 @@ describe("StandaloneArchiveView with Cloud standalone agents", () => {
 			to: "/projects/$projectId/sessions/$sessionId",
 			params: { projectId: "agent-1", sessionId: "cloud-agent" },
 		}));
+	});
+});
+
+describe("an archived Cloud session that moved to another computer", () => {
+	it("offers no Restore and says where it continues", () => {
+		workspaceQueryMock.mockReturnValue({
+			data: [{
+				id: "agent-1", name: "Fix the flake", kind: "cloud", cloudOrgId: "org-1", standaloneAgent: true, path: "",
+				sessions: [terminatedSession({
+					id: "cloud-agent", title: "Fix the flake", workspaceId: "agent-1", workspaceName: "Fix the flake",
+					branch: undefined, cloud: { orgId: "org-1", movedAway: true },
+				})],
+			}],
+			isError: false,
+			isSuccess: true,
+		});
+
+		renderArchive();
+		const list = screen.getByRole("list", { name: "Archived sessions" });
+		expect(within(list).getByText("Fix the flake")).toBeInTheDocument();
+		expect(screen.queryByRole("button", { name: "Restore Fix the flake" })).toBeNull();
+		expect(screen.getByTestId("moved-away")).toHaveTextContent("This session moved to another computer and continues there.");
 	});
 });
 
@@ -402,6 +425,31 @@ describe("archived session delete", () => {
 		);
 		expect(screen.getByRole("button", { name: "Restore cloud worker" })).toBeInTheDocument();
 		expect(screen.queryByRole("button", { name: "Delete cloud worker permanently" })).not.toBeInTheDocument();
+	});
+
+	it("offers no restore for a cloud session refused for its data retention, and says why", () => {
+		const session = terminatedSession({ title: "cloud worker", cloud: { orgId: "org-1" } });
+		useContentExpiredSessionsStore.getState().mark(session.id);
+		try {
+			render(
+				<QueryClientProvider client={new QueryClient()}>
+					<TooltipProvider>
+						<ArchivedSessionCardAdapter
+							isRestoreDisabled={false}
+							isRestoring={false}
+							restoreAction={vi.fn()}
+							session={session}
+						/>
+					</TooltipProvider>
+				</QueryClientProvider>,
+			);
+			expect(screen.queryByRole("button", { name: "Restore cloud worker" })).not.toBeInTheDocument();
+			expect(screen.getByRole("alert")).toHaveTextContent(
+				"This session is past its data retention period, so its content is being removed. It can't be restored.",
+			);
+		} finally {
+			useContentExpiredSessionsStore.setState({ ids: {} });
+		}
 	});
 });
 

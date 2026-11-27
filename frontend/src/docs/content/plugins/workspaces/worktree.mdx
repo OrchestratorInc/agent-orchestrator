@@ -32,6 +32,8 @@ The daemon stores project configuration as validated JSON in SQLite. Relevant fi
 | `agentRules`, `agentRulesFile` | Standing worker instructions. |
 | `orchestratorRules`, `orchestratorRulesFile` | Standing orchestrator instructions. |
 
+A `.worktreeinclude` file at the repository root also copies gitignored files such as `.env` into each new worktree. See [Setup and rules](/configuration/projects#setup-and-rules).
+
 Use `ao project set-config <id> --help` for flags. To pass the complete object with `--config-json`, first read the [full-config warning](/configuration/projects#update-from-the-cli).
 
 ## Cleanup safety

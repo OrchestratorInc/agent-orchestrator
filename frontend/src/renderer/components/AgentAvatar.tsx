@@ -1,6 +1,5 @@
 import {
 	AgentAvatar as ProductAgentAvatar,
-	getAgentIdentity,
 	type AgentAvatarProps,
 	type AgentLogoSources,
 } from "@aoagents/product-ui";
@@ -53,6 +52,7 @@ import kimiLightLogo from "../assets/agents/kimi-light.svg";
 import kimchiLogo from "../assets/agents/kimchi.svg";
 import kiroLogo from "../assets/agents/kiro.svg";
 import museLogo from "../assets/agents/muse.svg";
+import mastraCodeLogo from "../assets/agents/mastra-code.svg";
 import mimoCodeLogo from "../assets/agents/mimo-code.svg";
 import minimaxCodeLogo from "../assets/agents/minimax-code.svg";
 import memcodeLogo from "../assets/agents/memcode.png";
@@ -71,6 +71,7 @@ import qwenDarkLogo from "../assets/agents/qwen-dark.svg";
 import qwenLightLogo from "../assets/agents/qwen-light.svg";
 // stakpak/agent (Apache-2.0): the mark from assets/stakpak-dark.png.
 import stakpakLogo from "../assets/agents/stakpak.png";
+import tauLogo from "../assets/agents/tau.png";
 import unrealAgentDarkLogo from "../assets/agents/unreal-agent-dark.png";
 import unrealAgentLightLogo from "../assets/agents/unreal-agent-light.png";
 import vibeLogo from "../assets/agents/vibe.svg";
@@ -80,6 +81,7 @@ import vibeLogo from "../assets/agents/vibe.svg";
 // background; a single mark reads on both. Agents without an asset fall back to
 // a lettered tile.
 const LOGOS: AgentLogoSources = {
+	"mastra-code": mastraCodeLogo,
 	codex: codexLogo,
 	codewhale: { light: codewhaleLightLogo, dark: codewhaleDarkLogo },
 	"command-code": { light: commandCodeLightLogo, dark: commandCodeDarkLogo },
@@ -122,6 +124,7 @@ const LOGOS: AgentLogoSources = {
 	"unreal-agent": { light: unrealAgentLightLogo, dark: unrealAgentDarkLogo },
 	"mimo-code": mimoCodeLogo,
 	"minimax-code": minimaxCodeLogo,
+	tau: tauLogo,
 	"deepseek-harness": { light: deepseekHarnessLightLogo, dark: deepseekHarnessDarkLogo },
 };
 
@@ -137,25 +140,6 @@ const LOGOS: AgentLogoSources = {
  */
 export function AgentAvatar({ provider, className, decorative = false }: AgentAvatarProps) {
 	return <ProductAgentAvatar className={className} decorative={decorative} logoSources={LOGOS} provider={provider} />;
-}
-
-/** The logo an agent draws, or none. */
-function logoFor(provider: string): AgentLogoSources[string] {
-	const key = getAgentIdentity(provider).logoKey;
-	return key ? LOGOS[key] : undefined;
-}
-
-function sameLogo(a: AgentLogoSources[string], b: AgentLogoSources[string]): boolean {
-	if (!a || !b) return false;
-	if (typeof a === "string" || typeof b === "string") return a === b;
-	return a.light === b.light && a.dark === b.dark;
-}
-
-/** Whether another agent draws the same logo (OpenCode and OpenCode 2), so the mark alone does not name the agent. */
-export function sharesAgentMark(provider: string): boolean {
-	const logo = logoFor(provider);
-	const own = getAgentIdentity(provider).logoKey;
-	return Object.entries(LOGOS).some(([key, other]) => key !== own && sameLogo(logo, other));
 }
 
 export type { AgentAvatarProps };

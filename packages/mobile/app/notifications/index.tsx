@@ -6,6 +6,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
 	ActivityIndicator,
 	Alert,
+	Platform,
 	Pressable,
 	RefreshControl,
 	SectionList,
@@ -47,8 +48,10 @@ import { Button, Dot, EmptyState, ListSectionHeader } from "../../lib/ui";
 import { usePressFeedback } from "../../lib/pressFeedback";
 import { refreshControlColors } from "../../lib/refreshControlColors";
 import { toolbarIcon } from "../../lib/toolbarIcon";
+import { HeaderPillButton, PillHeaderRight } from "../../lib/headerPill";
 import { UnpairedState } from "../../lib/UnpairedState";
 import { iconSize, radius, space, stateOpacity, type } from "../../lib/tokens";
+import { useGlassBarInset } from "../../lib/useHeaderOverlap";
 import { userFacingError } from "../../lib/connectionError";
 import { ToastHost } from "../../lib/Toast";
 import type { ToastDuration } from "../../lib/Toast.types";
@@ -82,6 +85,9 @@ function NotificationsContent() {
 	const styles = useThemedStyles(makeStyles);
 	const openPage = useOpenPage();
 	const insets = useSafeAreaInsets();
+	// Android's clear pill bar: the list starts below it (iOS insets itself).
+	const glassInset = useGlassBarInset();
+	const barInset = Platform.OS === "android" ? glassInset : 0;
 	const { hostStates, cloud, configForHost, refreshHost, restore } = useApp();
 	// Orchestrator Cloud is one more feed here, beside each machine's.
 	const cloudState = useCloud();
@@ -106,6 +112,10 @@ function NotificationsContent() {
 	const loadedOnceRef = useRef(false);
 	const [loading, setLoading] = useState(true);
 	const [refreshing, setRefreshing] = useState(false);
+	// A reload nobody pulled for (Retry, after Clear all, a failed mark-read):
+	// it must not drive the RefreshControl, whose iOS spinner scrolls the list
+	// down to show itself and never scrolls it back.
+	const [reloading, setReloading] = useState(false);
 	const [loadingMore, setLoadingMore] = useState(false);
 	// Opening the screen marks what it loaded as read, as the desktop panel does.
 	// Those rows keep their unread look for this visit so the user can still see
@@ -148,7 +158,7 @@ function NotificationsContent() {
 	}, []);
 
 	const load = useCallback(
-		async (mode: "initial" | "refresh" | "more") => {
+		async (mode: "initial" | "refresh" | "reload" | "more") => {
 			if (mode === "more" && loadingMoreRef.current) return;
 			const hosts = hostsRef.current;
 			const currentFeeds = feedsRef.current;
@@ -162,7 +172,12 @@ function NotificationsContent() {
 				return [{ host, source, cursor: mode === "more" ? cursor : undefined }];
 			});
 			if (mode === "initial" && !loadedOnceRef.current) setLoading(true);
-			if (mode === "refresh") setRefreshing(true);
+			// The newer pull or reload owns both indicators: a load it cuts off
+			// returns below without clearing either.
+			if (mode === "refresh" || mode === "reload") {
+				setRefreshing(mode === "refresh");
+				setReloading(mode === "reload");
+			}
 			if (mode === "more") {
 				loadingMoreRef.current = true;
 				setLoadingMore(true);
@@ -242,6 +257,7 @@ function NotificationsContent() {
 			loadedOnceRef.current = true;
 			setLoading(false);
 			setRefreshing(false);
+			setReloading(false);
 			loadingMoreRef.current = false;
 			setLoadingMore(false);
 		},
@@ -374,7 +390,7 @@ function NotificationsContent() {
 			} };
 		});
 		if (notification.status === "unread") {
-			markNotificationRead(source, notification.id).catch(() => void load("refresh"));
+			markNotificationRead(source, notification.id).catch(() => void load("reload"));
 		}
 		// What a tap does depends on the session behind it, exactly as the renderer
 		// decides: a terminated agent waiting on input is restored, not opened.
@@ -529,7 +545,7 @@ function NotificationsContent() {
 			notify(`${offline.map((feed) => feed.hostName).join(", ")} ${offline.length === 1 ? "is" : "are"} offline, so ${offline.length === 1 ? "its" : "their"} notifications were not cleared.`, "long");
 		}
 		// Also releases pagination that the generation bump cut off.
-		void load("refresh");
+		void load("reload");
 	}
 
 	// Memoized on whether there is anything to clear: the screen re-renders on
@@ -541,8 +557,14 @@ function NotificationsContent() {
 	const clearable = items.length > 0;
 	// A pushed page on both platforms: the bar's back button leaves it, and
 	// Clear all takes the trailing end.
+	// On Android the bar is the chat's clear pill bar, so Clear all takes a
+	// pill of its own rather than floating bare over the frost.
 	const headerItems = useMemo(() => (
-		clearable ? (
+		Platform.OS === "android" ? (
+			<PillHeaderRight>
+				{clearable ? <HeaderPillButton icon="delete" label="Clear all" onPress={() => confirmClearAllRef.current()} testID="notifications-clear-all" /> : null}
+			</PillHeaderRight>
+		) : clearable ? (
 			<Stack.Toolbar placement="right">
 				<Stack.Toolbar.Button icon={toolbarIcon("delete")} accessibilityLabel="Clear all" onPress={() => confirmClearAllRef.current()} />
 			</Stack.Toolbar>
@@ -568,8 +590,8 @@ function NotificationsContent() {
 				contentInsetAdjustmentBehavior="automatic"
 				contentContainerStyle={
 					items.length === 0
-						? { flexGrow: 1 }
-						: { paddingBottom: insets.bottom + 24 }
+						? { flexGrow: 1, paddingTop: barInset }
+						: { paddingTop: barInset, paddingBottom: insets.bottom + 24 }
 				}
 				stickySectionHeadersEnabled={false}
 				refreshControl={
@@ -577,6 +599,7 @@ function NotificationsContent() {
 						refreshing={refreshing}
 						// The refresh control gives each platform's own feedback.
 						onRefresh={() => void load("refresh")}
+						progressViewOffset={barInset}
 						{...refreshControlColors(t)}
 					/>
 				}
@@ -628,7 +651,7 @@ function NotificationsContent() {
 							icon="wifi-off"
 							title="Machines are offline"
 							message="Notifications will appear when at least one paired machine reconnects."
-							action={<Button title="Retry" icon="refresh-cw" onPress={() => void load("refresh")} />}
+							action={<Button title="Retry" icon="refresh-cw" loading={reloading} onPress={() => void load("reload")} />}
 						/>
 					) : hostStates.length === 0 && !cloud ? (
 						// Shared with the tabs: "Connecting…" while the launch race runs,

@@ -93,6 +93,44 @@ describe("collapseModelVariants", () => {
 	});
 });
 
+// Shapes taken from `agy models` (Antigravity 1.5).
+describe("collapseModelVariants for Antigravity", () => {
+	const families = collapseModelVariants([
+		{ id: "gemini-4-neon-high", label: "Gemini 4 Neon (High)" },
+		{ id: "gemini-4-neon-xhigh", label: "Gemini 4 Neon (XHigh)" },
+		{ id: "gemini-4-neon-medium", label: "Gemini 4 Neon (Medium)" },
+		{ id: "gemini-4-neon-low", label: "Gemini 4 Neon (Low)" },
+		{ id: "gemini-pro-orchestrator-neon", label: "Orchestrator (Neon)" },
+		{ id: "gemini-pro-orchestrator", label: "Orchestrator (Carbon)" },
+		{ id: "claude-opus-5-5-low", label: "Claude Opus 5.5 (Low)" },
+		{ id: "claude-opus-5-5-medium", label: "Claude Opus 5.5 (Medium)" },
+		{ id: "claude-opus-5-5-high", label: "Claude Opus 5.5 (High)" },
+		{ id: "gpt-oss-120b-medium", label: "GPT-OSS 120B (Medium)" },
+	]);
+	const family = (id: string) => families.find((entry) => entry.id === id);
+
+	it("lists each model once with its levels as efforts, low first", () => {
+		expect(families.map((entry) => `${entry.group}: ${entry.label}`)).toEqual([
+			"Google: Gemini 4 Neon",
+			"Google: Orchestrator (Neon)",
+			"Google: Orchestrator (Carbon)",
+			"Anthropic: Claude Opus 5.5",
+			"OpenAI: GPT-OSS 120B",
+		]);
+		expect(family("gemini-4-neon")?.efforts).toEqual(["low", "medium", "high", "xhigh"]);
+		expect(family("claude-opus-5-5")?.efforts).toEqual(["low", "medium", "high"]);
+		expect(family("gemini-pro-orchestrator")?.efforts).toEqual([]);
+	});
+
+	it("starts a model at High and sends the variant id for a picked level", () => {
+		const opus = family("claude-opus-5-5")!;
+		expect(opus.defaultVariant.id).toBe("claude-opus-5-5-high");
+		expect(pickModelVariant(opus, { ...opus.defaultVariant, effort: "low" }).id).toBe("claude-opus-5-5-low");
+		expect(findModelVariant(families, "claude-opus-5-5-medium")?.variant.effort).toBe("medium");
+		expect(family("gpt-oss-120b")?.defaultVariant.id).toBe("gpt-oss-120b-medium");
+	});
+});
+
 describe("providerQualifiedChoice", () => {
 	it("formats provider headings independently of harness-specific group suppression", () => {
 		expect(modelGroupLabel("opencode", "opencode")).toBeUndefined();

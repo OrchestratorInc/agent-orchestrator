@@ -72,7 +72,9 @@ export function hostedProjectSections(hosts: readonly {
 				project: {
 					...row.project,
 					hostId: host.hostId,
-					hostName: `${host.name}${host.connection === "closed" ? " (offline)" : ""}`,
+					// The name alone: the machine's state is its freshness dot, which
+					// waits out a blip, where " (offline)" appeared on one failed poll.
+					hostName: host.name,
 					hostAppearance: machineAppearance({ id: host.hostId, name: host.name, appearance: host.appearance }),
 				},
 			})));
