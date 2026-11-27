@@ -113,9 +113,12 @@ type setupResult struct {
 	// project keeps.
 	readiness []agentReadinessSnapshot
 	checked   map[string]bool
-	// agentUsable is set when the agent step passed.
-	agentUsable bool
-	authPlans   map[string]setupAuthPlan
+	// agentSaveable is set when the chosen agents may be saved on the
+	// project: they passed, or only wait on a person (sign in, install).
+	// The project then keeps the person's choice for the next run, rather
+	// than the daemon's own default agent.
+	agentSaveable bool
+	authPlans     map[string]setupAuthPlan
 }
 
 func newSetupCommand(ctx *commandContext) *cobra.Command {
@@ -243,9 +246,9 @@ func (c *commandContext) runSetup(ctx context.Context, errOut io.Writer, opts se
 	}
 
 	agentStep := add(c.setupAgentStep(ctx, opts, &res))
-	// Save agents on the project only once they passed their check, so a
-	// person who picks another agent next run is not asked for --yes.
-	res.agentUsable = agentStep.Status == setupOK || agentStep.Status == setupFixed
+	// Save the chosen agents even when they still need a sign-in: an
+	// unsupported agent or a failed check is the only reason not to.
+	res.agentSaveable = agentStep.Status == setupOK || agentStep.Status == setupFixed || agentStep.Status == setupNeedsHuman
 	add(c.setupGitHubStep(ctx, opts))
 	projectStep := add(c.setupProjectStep(ctx, opts, &res))
 	add(setupFirstRunStep(projectStep))
@@ -591,13 +594,15 @@ func setupReplaceHint(alt string) string {
 	if alt == "" {
 		return ""
 	}
-	return strings.Replace(alt, "`ao setup --agent ", "replace it with `ao setup --yes --agent ", 1)
+	return strings.Replace(alt, "(or use ", "(or replace it with ", 1)
 }
 
 // setupAlternative names a ready agent the person could use instead.
 func setupAlternative(agents []agentReadinessSnapshot, skip string) string {
 	if alt := firstReadyAgentExcept(agents, skip); alt != "" {
-		return fmt.Sprintf(" (or use `ao setup --agent %s`)", alt)
+		// --yes: the project already saves (or will save) the agent
+		// that is not ready.
+		return fmt.Sprintf(" (or use `ao setup --yes --agent %s`)", alt)
 	}
 	return ""
 }
@@ -860,7 +865,7 @@ func (c *commandContext) setupProjectStep(ctx context.Context, opts setupOptions
 			res.pending = true
 			step.Status = setupSkipped
 			step.Detail = fmt.Sprintf("%s is not registered; `ao setup` would register it", path)
-			if res.Agent != nil && res.agentUsable {
+			if res.Agent != nil && res.agentSaveable {
 				step.Detail += fmt.Sprintf(" with worker %s and orchestrator %s", res.Agent.Worker, res.Agent.Orchestrator)
 			}
 			res.Project = &setupProject{Path: path}
@@ -882,7 +887,7 @@ func (c *commandContext) setupProjectStep(ctx context.Context, opts setupOptions
 			return step
 		}
 		req := addProjectRequest{Path: path}
-		if res.Agent != nil && res.agentUsable {
+		if res.Agent != nil && res.agentSaveable {
 			req.Config = &projectConfig{
 				Worker:       roleOverride{Agent: res.Agent.Worker},
 				Orchestrator: roleOverride{Agent: res.Agent.Orchestrator},
@@ -921,7 +926,7 @@ func (c *commandContext) setupProjectStep(ctx context.Context, opts setupOptions
 		}
 	}
 
-	if reused && res.agentUsable {
+	if reused && res.agentSaveable {
 		agentStep, changed := c.setupReconcileAgents(ctx, opts, res, &project)
 		if agentStep != nil {
 			return *agentStep

@@ -10,6 +10,7 @@ import (
 	"reflect"
 	"sort"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/registry"
@@ -272,7 +273,7 @@ func TestSetupSignedOutAgentNeedsHumanWithLoginCommand(t *testing.T) {
 	if agent.Fix != want || !reflect.DeepEqual(res.NextActions, []string{want}) {
 		t.Fatalf("fix = %q, next_actions = %q; want %q", agent.Fix, res.NextActions, want)
 	}
-	if !strings.Contains(agent.Detail, "(or use `ao setup --agent codex`)") {
+	if !strings.Contains(agent.Detail, "(or use `ao setup --yes --agent codex`)") {
 		t.Fatalf("detail = %q, want the ready alternative", agent.Detail)
 	}
 	if stepNamed(t, res, "verify").Status != setupNeedsHuman {
@@ -709,23 +710,83 @@ func TestSetupChecksAgentsAReusedProjectKeeps(t *testing.T) {
 	}
 }
 
-func TestSetupDoesNotSaveAnAgentThatFailedItsCheck(t *testing.T) {
+// TestSetupKeepsTheChosenAgentAcrossSignIn is the three-run flow a person
+// follows: setup asks for a sign-in, they rerun before and after signing in.
+// The project must save the agent setup chose, not leave the roles empty for
+// the daemon to fill with its own default.
+func TestSetupKeepsTheChosenAgentAcrossSignIn(t *testing.T) {
 	d := newSetupDaemon(t)
 	repo := gitRepo(t, true)
-	t.Setenv("CLAUDECODE", "1")
-	registerOnPost(d, repo, "example/calc")
-	d.set("POST /api/v1/agents/claude-code/probe", 200, `{"agent":{"id":"claude-code","authStatus":"unauthorized"},"supported":true,"installed":true}`)
+	t.Setenv("AI_AGENT", "claude-code")
+	var mu sync.Mutex
+	saved := ""
+	d.setFunc("POST /api/v1/projects", func() (int, string) {
+		mu.Lock()
+		defer mu.Unlock()
+		var body addProjectRequest
+		_ = json.Unmarshal([]byte(d.bodies["POST /api/v1/projects"]), &body)
+		worker, orch := "opencode-v2", "opencode-v2" // what the daemon fills in for empty roles
+		if body.Config != nil && body.Config.Worker.Agent != "" {
+			worker, orch = body.Config.Worker.Agent, body.Config.Orchestrator.Agent
+		}
+		saved = fmt.Sprintf(`{"id":"calc","path":%q,"repo":"example/calc","defaultBranch":"main","config":{"worker":{"agent":%q},"orchestrator":{"agent":%q}}}`, repo, worker, orch)
+		return 201, `{"project":` + saved + `}`
+	})
+	d.setFunc("GET /api/v1/projects", func() (int, string) {
+		mu.Lock()
+		defer mu.Unlock()
+		if saved == "" {
+			return 200, `{"projects":[]}`
+		}
+		return 200, fmt.Sprintf(`{"projects":[{"id":"calc","path":%q}]}`, repo)
+	})
+	d.setFunc("GET /api/v1/projects/calc", func() (int, string) {
+		mu.Lock()
+		defer mu.Unlock()
+		return 200, `{"status":"ok","project":` + saved + `}`
+	})
+	signedOut := `{"agent":{"id":"claude-code","authStatus":"unauthorized"},"supported":true,"installed":true}`
+	d.set("POST /api/v1/agents/claude-code/probe", 200, signedOut)
 
-	_, _, err := executeCLI(t, fakeClockDeps(), "setup", "--path", repo, "--json")
-	if got := ExitCode(err); got != setupExitNeedsHuman {
+	for run, want := range []struct {
+		exit   int
+		source string
+	}{{setupExitNeedsHuman, "caller"}, {setupExitNeedsHuman, "project"}, {0, "project"}} {
+		if run == 2 {
+			d.set("POST /api/v1/agents/claude-code/probe", 200, `{"agent":{"id":"claude-code","authStatus":"authorized"},"supported":true,"installed":true}`)
+		}
+		out, _, err := executeCLI(t, fakeClockDeps(), "setup", "--path", repo, "--json")
+		if got := ExitCode(err); got != want.exit {
+			t.Fatalf("run %d: exit = %d (%v), want %d\n%s", run+1, got, err, want.exit, out)
+		}
+		res := decodeSetup(t, out)
+		if res.Agent == nil || res.Agent.ID != "claude-code" || res.Agent.Worker != "claude-code" || res.Agent.Orchestrator != "claude-code" || res.Agent.Source != want.source {
+			t.Fatalf("run %d: agent = %+v, want claude-code from %s", run+1, res.Agent, want.source)
+		}
+		if run < 2 && !reflect.DeepEqual(res.NextActions, []string{"claude auth login"}) {
+			t.Fatalf("run %d: next_actions = %q", run+1, res.NextActions)
+		}
+		if run == 2 && !res.Ready {
+			t.Fatalf("run 3: not ready: %+v", res.Steps)
+		}
+	}
+	if !strings.Contains(saved, `"worker":{"agent":"claude-code"}`) {
+		t.Fatalf("project saved %s, want claude-code", saved)
+	}
+}
+
+func TestSetupDoesNotSaveAnUnsupportedAgent(t *testing.T) {
+	d := newSetupDaemon(t)
+	repo := gitRepo(t, true)
+	registerOnPost(d, repo, "example/calc")
+	d.set("POST /api/v1/agents/nope/probe", 200, `{"agent":{"id":"nope"},"supported":false,"installed":false}`)
+	_, _, err := executeCLI(t, fakeClockDeps(), "setup", "--path", repo, "--agent", "nope", "--json")
+	if got := ExitCode(err); got != setupExitFailed {
 		t.Fatalf("exit = %d (%v)", got, err)
 	}
 	var body addProjectRequest
-	if err := json.Unmarshal([]byte(d.bodies["POST /api/v1/projects"]), &body); err != nil {
-		t.Fatal(err)
-	}
-	if body.Config != nil {
-		t.Fatalf("project registered with agents %+v although the agent is signed out", body.Config)
+	if err := json.Unmarshal([]byte(d.bodies["POST /api/v1/projects"]), &body); err == nil && body.Config != nil {
+		t.Fatalf("project registered with unsupported agent config %+v", body.Config)
 	}
 }
 
