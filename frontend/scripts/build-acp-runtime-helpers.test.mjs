@@ -22,6 +22,7 @@ import {
 	patchClaudeFoldedPromptSettlement,
 	patchClaudeHibernationCheck,
 	patchClaudeBackgroundTasks,
+	patchClaudeCompactionStatus,
 	patchClaudeRetryDetails,
 	patchClaudeStaleIdleDebt,
 	patchClaudeSteerSettlement,
@@ -941,6 +942,159 @@ describe("patchClaudeStaleIdleDebt", () => {
 		writeFileSync(adapterPath, 'case "session_state_changed": {\n');
 
 		expect(() => patchClaudeStaleIdleDebt(adapterPath)).toThrow(/idle-debt patch/);
+	});
+});
+
+describe("patchClaudeCompactionStatus", () => {
+	// claude-agent-acp 0.70's status case, as compiled.
+	const statusCase = `
+                            case "status": {
+                                if (message.status === "compacting") {
+                                    compactionInProgress = true;
+                                    await sendUpdate({
+                                        sessionId: message.session_id,
+                                        update: {
+                                            sessionUpdate: "agent_message_chunk",
+                                            content: { type: "text", text: "Compacting..." },
+                                        },
+                                    });
+                                }
+                                else if (message.compact_result === "success" && compactionInProgress) {
+                                    compactionInProgress = false;
+                                    await sendUpdate({
+                                        sessionId: message.session_id,
+                                        update: {
+                                            sessionUpdate: "agent_message_chunk",
+                                            content: { type: "text", text: "\\n\\nCompacting completed." },
+                                        },
+                                    });
+                                }
+                                else if (message.compact_result === "failed" && compactionInProgress) {
+                                    compactionInProgress = false;
+                                    const reason = message.compact_error ? \`: \${message.compact_error}\` : ".";
+                                    await sendUpdate({
+                                        sessionId: message.session_id,
+                                        update: {
+                                            sessionUpdate: "agent_message_chunk",
+                                            content: { type: "text", text: \`\\n\\nCompacting failed\${reason}\` },
+                                        },
+                                    });
+                                }
+                                break;
+                            }
+                            case "compact_boundary": {
+                                const usedTokens = await fetchContextUsedTokens(session.query, this.logger);
+                                lastAssistantUsage = null;
+                                lastAssistantTotalUsage = usedTokens ?? 0;
+                                await sendUpdate({
+                                    sessionId: message.session_id,
+                                    update: {
+                                        sessionUpdate: "usage_update",
+                                        used: lastAssistantTotalUsage,
+                                        size: session.contextWindowSize,
+                                    },
+                                });
+                                break;
+                            }
+`;
+
+	function boundaryHandler(usedTokens) {
+		const adapterPath = join(temporaryDirectory(), "acp-agent.js");
+		writeFileSync(adapterPath, statusCase);
+		patchClaudeCompactionStatus(adapterPath);
+		const patched = readFileSync(adapterPath, "utf8");
+		const start = patched.indexOf("const usedTokens = await fetchContextUsedTokens");
+		const body = patched.slice(start, patched.indexOf("break;", start));
+		const sent = [];
+		const AsyncFunction = (async () => {}).constructor;
+		const run = new AsyncFunction("message", "session", "sendUpdate", "fetchContextUsedTokens", `
+			let lastAssistantUsage, lastAssistantTotalUsage;
+			${body}
+		`);
+		const onBoundary = (message) => run(
+			{ session_id: "s1", ...message },
+			{ query: {}, contextWindowSize: 200000 },
+			async (update) => { sent.push(update.update); },
+			async () => usedTokens,
+		);
+		return { onBoundary, sent };
+	}
+
+	function statusHandler() {
+		const adapterPath = join(temporaryDirectory(), "acp-agent.js");
+		writeFileSync(adapterPath, statusCase);
+		expect(patchClaudeCompactionStatus(adapterPath)).toBe(true);
+		expect(patchClaudeCompactionStatus(adapterPath)).toBe(false);
+		const patched = readFileSync(adapterPath, "utf8");
+		const start = patched.indexOf('if (message.status === "compacting")');
+		const body = patched.slice(start, patched.indexOf("break;", start));
+		const sent = [];
+		const session = { emittedAssistantText: false };
+		const AsyncFunction = (async () => {}).constructor;
+		const run = new AsyncFunction("message", "session", "sendUpdate", "state", `
+			let compactionInProgress = state.inProgress;
+			${body}
+			state.inProgress = compactionInProgress;
+		`);
+		const state = { inProgress: false };
+		const onStatus = (message) => run({ session_id: "s1", ...message }, session, async (update) => { sent.push(update); }, state);
+		return { onStatus, sent, session };
+	}
+
+	it("reports a compaction that runs and settles as status, never as reply text", async () => {
+		const { onStatus, sent, session } = statusHandler();
+
+		await onStatus({ status: "compacting" });
+		await onStatus({ status: "compacting" });
+		await onStatus({ status: null, compact_result: "success" });
+		// The SDK repeats the terminal status; only the first one is reported.
+		await onStatus({ status: null, compact_result: "success" });
+
+		expect(sent.map((update) => update.update)).toEqual([
+			{ sessionUpdate: "session_info_update", _meta: { "ao/compaction": { status: "started" } } },
+			{ sessionUpdate: "session_info_update", _meta: { "ao/compaction": { status: "started" } } },
+			{ sessionUpdate: "session_info_update", _meta: { "ao/compaction": { status: "completed" } } },
+		]);
+		expect(sent.every((update) => update.sessionId === "s1")).toBe(true);
+		expect(session.emittedAssistantText).toBe(true);
+	});
+
+	it("carries the SDK's reason when compaction fails", async () => {
+		const { onStatus, sent } = statusHandler();
+
+		await onStatus({ status: "compacting" });
+		await onStatus({ status: null, compact_result: "failed", compact_error: "Conversation too long" });
+
+		expect(sent.at(-1).update).toEqual({
+			sessionUpdate: "session_info_update",
+			_meta: { "ao/compaction": { status: "failed", error: { message: "Conversation too long" } } },
+		});
+	});
+
+	it("reports what the compaction freed at its boundary, before the usage it publishes", async () => {
+		const { onBoundary, sent } = boundaryHandler(56805);
+
+		await onBoundary({ compact_metadata: { trigger: "auto", pre_tokens: 73559, post_tokens: 19805 } });
+
+		expect(sent).toEqual([
+			{ sessionUpdate: "session_info_update", _meta: { "ao/compaction": { status: "completed", tokensBefore: 110559, tokensAfter: 56805 } } },
+			{ sessionUpdate: "usage_update", used: 56805, size: 200000 },
+		]);
+	});
+
+	it("falls back to the SDK's own scale when the context usage is unknown", async () => {
+		const { onBoundary, sent } = boundaryHandler(null);
+
+		await onBoundary({ compact_metadata: { pre_tokens: 73559, post_tokens: 19805 } });
+
+		expect(sent[0]._meta["ao/compaction"]).toEqual({ status: "completed", tokensBefore: 73559, tokensAfter: 19805 });
+	});
+
+	it("fails packaging when the adapter's compaction banners change", () => {
+		const adapterPath = join(temporaryDirectory(), "acp-agent.js");
+		writeFileSync(adapterPath, statusCase.replace("Compacting...", "Compacting…"));
+
+		expect(() => patchClaudeCompactionStatus(adapterPath)).toThrow(/compaction status patch/);
 	});
 });
 

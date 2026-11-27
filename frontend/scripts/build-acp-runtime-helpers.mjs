@@ -664,6 +664,94 @@ export function patchClaudeStaleIdleDebt(adapterPath) {
 	return true;
 }
 
+const CLAUDE_COMPACTION_STATUS_MARKER = "// AO: report compaction as status, not reply text.";
+
+/**
+ * Report Claude's compaction as a status update instead of reply text.
+ *
+ * claude-agent-acp 0.70 turns the SDK's compaction status into assistant text:
+ * "Compacting..." for every status message while it runs, then "Compacting
+ * completed." or "Compacting failed: <reason>". A compaction Claude starts on
+ * its own lands in the reply as "Compacting...Compacting...Compacting...".
+ * Send each step as a `session_info_update` carrying `_meta["ao/compaction"]`
+ * instead, in the shape OpenCode uses for `opencode/compaction`, so AO can draw
+ * one compaction row that runs and then settles. The banners still count as
+ * delivered text, as they did, so the issue-#453 result fallback is unchanged.
+ *
+ * The SDK reports the result before the `compact_boundary` that carries its own
+ * figures (pre_tokens, post_tokens). The boundary therefore sends a second
+ * "completed" with tokensBefore/tokensAfter, on the scale of the context usage
+ * it publishes right after: what the compaction freed, and how full the context
+ * is now. It goes first, so the row settles on these figures and not on a
+ * usage report alone.
+ */
+export function patchClaudeCompactionStatus(adapterPath) {
+	let source = readFileSync(adapterPath, "utf8");
+	if (source.includes(CLAUDE_COMPACTION_STATUS_MARKER)) return false;
+	const indent = (spaces, lines) => lines.map(line => " ".repeat(spaces) + line).join("\n");
+	const banner = (content) => indent(36, [
+		"await sendUpdate({",
+		"    sessionId: message.session_id,",
+		"    update: {",
+		'        sessionUpdate: "agent_message_chunk",',
+		`        ${content}`,
+		"    },",
+		"});",
+	]);
+	const status = (meta, marker = false) => indent(36, [
+		...(marker ? [CLAUDE_COMPACTION_STATUS_MARKER] : []),
+		"session.emittedAssistantText = true;",
+		"await sendUpdate({",
+		"    sessionId: message.session_id,",
+		"    update: {",
+		'        sessionUpdate: "session_info_update",',
+		`        _meta: { "ao/compaction": ${meta} },`,
+		"    },",
+		"});",
+	]);
+	const boundary = "                                lastAssistantTotalUsage = usedTokens ?? 0;";
+	const figures = [
+		boundary,
+		"                                {",
+		"                                    // AO: what the compaction freed, from the SDK's own figures.",
+		"                                    const pre = message.compact_metadata?.pre_tokens;",
+		"                                    const post = message.compact_metadata?.post_tokens;",
+		'                                    const known = typeof pre === "number" && typeof post === "number";',
+		"                                    const freed = known && pre > post ? pre - post : undefined;",
+		"                                    const figures = usedTokens != null && usedTokens > 0",
+		"                                        ? { tokensAfter: usedTokens, ...(freed !== undefined ? { tokensBefore: usedTokens + freed } : {}) }",
+		"                                        : known ? { tokensBefore: pre, tokensAfter: post } : undefined;",
+		"                                    if (figures) {",
+		"                                        await sendUpdate({",
+		"                                            sessionId: message.session_id,",
+		"                                            update: {",
+		'                                                sessionUpdate: "session_info_update",',
+		'                                                _meta: { "ao/compaction": { status: "completed", ...figures } },',
+		"                                            },",
+		"                                        });",
+		"                                    }",
+		"                                }",
+	].join("\n");
+	const patches = [
+		[boundary, figures],
+		[banner('content: { type: "text", text: "Compacting..." },'), status('{ status: "started" }', true)],
+		[banner('content: { type: "text", text: "\\n\\nCompacting completed." },'), status('{ status: "completed" }')],
+		[
+			banner("content: { type: \"text\", text: `\\n\\nCompacting failed${reason}` },"),
+			status('{ status: "failed", error: { message: message.compact_error ?? "" } }'),
+		],
+	];
+	for (const [original, replacement] of patches) {
+		const at = source.indexOf(original);
+		if (at < 0 || source.indexOf(original, at + 1) >= 0) {
+			throw new Error("claude-agent-acp compaction banners no longer match AO's compaction status patch");
+		}
+		source = source.slice(0, at) + replacement + source.slice(at + original.length);
+	}
+	writeFileSync(adapterPath, source);
+	return true;
+}
+
 /**
  * Settle steered turns the way upstream claude-agent-acp#1166 does.
  *
