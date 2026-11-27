@@ -39,6 +39,7 @@ import type {
 	CloudCpMentionCandidates,
 	CloudCpNotificationListResponse,
 } from "../../lib/cloud-cp/types";
+import { AoError } from "../../../../../packages/shared/telemetry/ao-error";
 import { CloudCpError } from "../../lib/cloud-cp/errors";
 import { isPathQuery, MAX_MENTIONS, mentionRefusal, mentionToken, parseEventMentions, type ComposerMention } from "../../lib/cloud-mentions";
 import { ASIDE_REPLY, asideReplyMetadata, cloudInboxQueryKey, MENTIONED, mentionMetadata } from "../../lib/cloud-notifications";
@@ -1037,7 +1038,7 @@ export function CloudAsidePane({
 			// the server answers carries its history, and the threads view reads again.
 			invalidateCommentThreads(queryClient, baseUrl, userId);
 		} catch (error) {
-			throw new Error(t(replyRefusalKey(error)));
+			throw new AoError("COMMENT_REPLY_REFUSED", t(replyRefusalKey(error)), { cause: error });
 		} finally {
 			if (shown) setPending((current) => current.filter((entry) => entry.id !== shown.id));
 		}
@@ -1055,7 +1056,7 @@ export function CloudAsidePane({
 			setSent((current) => [...current.filter((entry) => entry.replyId !== replyId), reply]);
 			queryClient.setQueryData<CloudCpAsideThread>(threadKey, (current) => current && { ...current, replies: mergeAsideReplies(current.replies, [reply]) });
 		} catch (error) {
-			throw new Error(t(error instanceof CloudCpError && error.status === 409 ? "comment.ended" : "comment.editFailed"));
+			throw new AoError("COMMENT_EDIT_FAILED", t(error instanceof CloudCpError && error.status === 409 ? "comment.ended" : "comment.editFailed"), { cause: error });
 		}
 	}, [asideId, client, orgId, queryClient, replies, sessionId, t, threadKey]);
 
@@ -1064,7 +1065,7 @@ export function CloudAsidePane({
 		try {
 			await client.deleteSessionAsideReply(orgId, sessionId, asideId, replyId);
 		} catch (error) {
-			throw new Error(t(error instanceof CloudCpError && error.status === 409 ? "comment.ended" : "comment.deleteFailed"));
+			throw new AoError("COMMENT_DELETE_FAILED", t(error instanceof CloudCpError && error.status === 409 ? "comment.ended" : "comment.deleteFailed"), { cause: error });
 		}
 		setRemoved((current) => new Set(current).add(replyId));
 		if (first) {
@@ -1201,7 +1202,7 @@ export function CloudCommentDraftPane({
 			});
 			openAside(sessionId, aside.asideId, { focusReply: false });
 		} catch (error) {
-			throw new Error(t(createRefusalKey(error)));
+			throw new AoError("COMMENT_CREATE_REFUSED", t(createRefusalKey(error)), { cause: error });
 		}
 	}, [client, draft, orgId, queryClient, sessionId, t]);
 	return (

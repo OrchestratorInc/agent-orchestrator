@@ -28,6 +28,7 @@ import type { CloudCpAgentProvider, CloudCpClientEvent, CloudCpSessionChatSettin
 import { cloudChatStartingInPlace, cloudStartupProblem, isWorkspaceStartupError, resumeCloudSession, type CloudStartupProblem } from "../../lib/cloud-lifecycle";
 import { PLAN_REFUSAL_CODES } from "../../lib/cloud-cp/client";
 import { forgetCloudOpening, useCloudOpening } from "../../lib/cloud-opening";
+import { AoError } from "../../../../../packages/shared/telemetry/ao-error";
 import { CloudCpError } from "../../lib/cloud-cp/errors";
 import { withMoveStateText } from "../../lib/cloud-move-state";
 import { reportPlanRefusal } from "../../lib/cloud-telemetry";
@@ -962,7 +963,7 @@ function mentionRefusedError(error: unknown): unknown {
 		: reason === "no_access" ? "mention.refused.noAccess"
 		: reason === "outside_session" ? "mention.refused.outsideSession"
 		: "mention.refused.unknown";
-	return Object.assign(new Error(appI18n.t(key)), { code: "validation_error", status: 422 });
+	return Object.assign(new AoError("validation_error", appI18n.t(key), { cause: error }), { status: 422 });
 }
 
 function promptAuthorName(payload: EventPayload, viewerUserId: string | undefined): string | undefined {
