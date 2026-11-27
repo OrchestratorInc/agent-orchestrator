@@ -321,14 +321,19 @@ func (s *Service) completeAndAdoptActive(ctx context.Context, store schedulerSto
 // automationSessionSettled reports whether a scheduled session has finished
 // the work it was launched for, which ends its run and lets the next
 // occurrence start. Terminating the session still counts, but so does the
-// agent settling on its own: idle, waiting for its next instruction, or
-// exited. The session itself stays open so its output can be read.
+// agent settling on its own: idle after a turn, or exited. The session itself
+// stays open so its output can be read.
 //
 // A spawn is seeded idle before the agent reports anything, and an agent may
 // report idle once as it starts. Requiring a later reading than the first
 // signal means the agent has reported at least twice, so a run is not
-// completed before its prompt was ever worked on. A blocked agent, stopped on
-// a permission or approval prompt, is still mid-task and keeps its run.
+// completed before its prompt was ever worked on.
+//
+// waiting_input and blocked keep the run: harnesses report tool-approval and
+// input requests as either (the chat controller and several terminal adapters
+// use waiting_input for approvals), so the agent is still mid-task and
+// starting the next occurrence would run two sessions at once. A finished
+// turn reports idle.
 func automationSessionSettled(session domain.SessionRecord) bool {
 	if session.IsTerminated {
 		return true
@@ -338,7 +343,7 @@ func automationSessionSettled(session domain.SessionRecord) bool {
 		return false
 	}
 	switch session.Activity.State {
-	case domain.ActivityIdle, domain.ActivityWaitingInput, domain.ActivityExited:
+	case domain.ActivityIdle, domain.ActivityExited:
 		return true
 	default:
 		return false

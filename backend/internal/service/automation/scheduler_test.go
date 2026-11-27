@@ -375,7 +375,7 @@ func TestTickCollapsesPendingBacklogLongerThanOnePage(t *testing.T) {
 func TestTickCompletesSettledSessionWithoutKilling(t *testing.T) {
 	now := time.Date(2026, time.August, 25, 12, 0, 0, 0, time.UTC)
 	firstSignal := now.Add(-30 * time.Minute)
-	for _, state := range []domain.ActivityState{domain.ActivityIdle, domain.ActivityWaitingInput, domain.ActivityExited} {
+	for _, state := range []domain.ActivityState{domain.ActivityIdle, domain.ActivityExited} {
 		t.Run(string(state), func(t *testing.T) {
 			store := newSchedulerStore()
 			store.automations["automation-1"] = domain.Automation{ID: "automation-1", ProjectID: "scheduled", Enabled: true, NextRunAt: now.Add(time.Hour)}
@@ -400,16 +400,19 @@ func TestTickCompletesSettledSessionWithoutKilling(t *testing.T) {
 }
 
 // A session that has not yet worked on its prompt, is still working, or is
-// stopped on a permission prompt keeps its run and the gate closed.
+// stopped on an approval or input request keeps its run and the gate closed.
 func TestTickKeepsRunWhileSessionHasNotSettled(t *testing.T) {
 	now := time.Date(2026, time.August, 25, 12, 0, 0, 0, time.UTC)
 	firstSignal := now.Add(-30 * time.Minute)
+	// The chat controller reports chat.approval.requested and
+	// chat.input.requested as waiting_input.
 	cases := map[string]domain.SessionRecord{
-		"seeded idle without signal": {Activity: domain.Activity{State: domain.ActivityIdle, LastActivityAt: firstSignal}},
-		"first signal only":          {FirstSignalAt: firstSignal, Activity: domain.Activity{State: domain.ActivityIdle, LastActivityAt: firstSignal}},
-		"working":                    {FirstSignalAt: firstSignal, Activity: domain.Activity{State: domain.ActivityActive, LastActivityAt: now}},
-		"blocked on approval":        {FirstSignalAt: firstSignal, Activity: domain.Activity{State: domain.ActivityBlocked, LastActivityAt: now}},
-		"still provisioning":         {FirstSignalAt: firstSignal, ProvisionState: domain.SessionProvisionProvisioning, Activity: domain.Activity{State: domain.ActivityIdle, LastActivityAt: now}},
+		"seeded idle without signal":   {Activity: domain.Activity{State: domain.ActivityIdle, LastActivityAt: firstSignal}},
+		"first signal only":            {FirstSignalAt: firstSignal, Activity: domain.Activity{State: domain.ActivityIdle, LastActivityAt: firstSignal}},
+		"working":                      {FirstSignalAt: firstSignal, Activity: domain.Activity{State: domain.ActivityActive, LastActivityAt: now}},
+		"blocked on approval":          {FirstSignalAt: firstSignal, Activity: domain.Activity{State: domain.ActivityBlocked, LastActivityAt: now}},
+		"waiting on approval or input": {FirstSignalAt: firstSignal, Activity: domain.Activity{State: domain.ActivityWaitingInput, LastActivityAt: now}},
+		"still provisioning":           {FirstSignalAt: firstSignal, ProvisionState: domain.SessionProvisionProvisioning, Activity: domain.Activity{State: domain.ActivityIdle, LastActivityAt: now}},
 	}
 	for name, session := range cases {
 		t.Run(name, func(t *testing.T) {
