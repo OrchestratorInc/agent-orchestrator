@@ -30,17 +30,43 @@ export type ArtifactCommentsConnectMessage = {
 	protocol: number;
 };
 
-/** markdown: whole blocks are pickable; html: the smallest visible element ≥ 8×8 px. */
-export type ArtifactCommentsPickKind = "markdown" | "html";
+/**
+ * markdown: whole blocks are pickable; html: the smallest visible element ≥ 8×8 px;
+ * text: lines of a text page (rows of a table page), one or a dragged or
+ * shift-clicked range. "text" is additive to protocol 1; the share host's
+ * bridge also detects a text page on its own.
+ */
+export type ArtifactCommentsPickKind = "markdown" | "html" | "text";
 
-export type BridgePickedAnchor = { path: string; tag: string; textHash: string; excerpt: string };
+/** 1-based first and last line (or table row), as in ArtifactCommentLineRange. */
+export type BridgeLineRange = { start: number; end: number };
+
+/**
+ * A picked element; in text mode also `kind: "lines"` and the range, with
+ * path, tag and textHash describing the first line. A panel that predates
+ * lines drops the two fields and gets an element anchor on the first line.
+ */
+export type BridgePickedAnchor = {
+	path: string;
+	tag: string;
+	textHash: string;
+	excerpt: string;
+	kind?: "lines";
+	lines?: BridgeLineRange;
+};
 
 /**
  * Elements to mark. `count` is the element group's open threads; the bridge
  * draws no bubble at 0 but still reports the element's position, so resolved
  * groups can be ordered too.
  */
-export type BridgeAnchorMarker = { path: string; textHash: string; count: number };
+export type BridgeAnchorMarker = {
+	path: string;
+	textHash: string;
+	count: number;
+	/** A lines group's span (first to last line of its threads): outlined whole when selected. */
+	lines?: BridgeLineRange;
+};
 
 /** `top` is in CSS px from the top of the document (not the viewport). */
 export type BridgeAnchorPosition = { path: string; top: number; found: boolean };
@@ -72,6 +98,7 @@ export type BridgeToViewerMessage =
 	| ({ type: "selection" } & BridgeSelection);
 
 const MAX_PATH_LENGTH = 2048;
+const MAX_LINE = 1_000_000;
 const MAX_ANCHORS = 2000;
 const PATH_PATTERN = /^body(>[A-Za-z][A-Za-z0-9-]*:[1-9][0-9]*)*$/;
 const TAG_PATTERN = /^[A-Za-z][A-Za-z0-9-]{0,63}$/;
@@ -93,6 +120,14 @@ function codePoints(value: string): number {
 	return count;
 }
 
+function lineRange(value: unknown): BridgeLineRange | null {
+	const range = record(value);
+	if (range === null) return null;
+	const { start, end } = range;
+	if (typeof start !== "number" || typeof end !== "number" || !Number.isInteger(start) || !Number.isInteger(end)) return null;
+	return start >= 1 && start <= end && end <= MAX_LINE ? { start, end } : null;
+}
+
 function pickedAnchor(value: unknown): BridgePickedAnchor | null {
 	const anchor = record(value);
 	if (anchor === null) return null;
@@ -101,7 +136,11 @@ function pickedAnchor(value: unknown): BridgePickedAnchor | null {
 	if (typeof tag !== "string" || !TAG_PATTERN.test(tag)) return null;
 	if (typeof textHash !== "string" || !TEXT_HASH_PATTERN.test(textHash)) return null;
 	if (typeof excerpt !== "string" || codePoints(excerpt) > 120) return null;
-	return { path, tag, textHash, excerpt };
+	if (anchor.kind === undefined && anchor.lines === undefined) return { path, tag, textHash, excerpt };
+	// Lines: both fields, well formed; anything else is not a pick this panel can use.
+	const lines = lineRange(anchor.lines);
+	if (anchor.kind !== "lines" || lines === null) return null;
+	return { path, tag, textHash, excerpt, kind: "lines", lines };
 }
 
 /** Returns a well-formed bridge message, or null for anything else (drop it). */
@@ -152,7 +191,7 @@ export function parseViewerToBridgeMessage(data: unknown): ViewerToBridgeMessage
 	if (message === null) return null;
 	switch (message.type) {
 		case "mode":
-			return typeof message.on === "boolean" && (message.kind === "markdown" || message.kind === "html")
+			return typeof message.on === "boolean" && (message.kind === "markdown" || message.kind === "html" || message.kind === "text")
 				? { type: "mode", on: message.on, kind: message.kind }
 				: null;
 		case "anchors": {
@@ -163,7 +202,13 @@ export function parseViewerToBridgeMessage(data: unknown): ViewerToBridgeMessage
 				if (anchor === null || !isPath(anchor.path)) return null;
 				if (typeof anchor.textHash !== "string" || !TEXT_HASH_PATTERN.test(anchor.textHash)) return null;
 				if (typeof anchor.count !== "number" || !Number.isInteger(anchor.count) || anchor.count < 0) return null;
-				anchors.push({ path: anchor.path, textHash: anchor.textHash, count: anchor.count });
+				if (anchor.lines === undefined) {
+					anchors.push({ path: anchor.path, textHash: anchor.textHash, count: anchor.count });
+					continue;
+				}
+				const lines = lineRange(anchor.lines);
+				if (lines === null) return null;
+				anchors.push({ path: anchor.path, textHash: anchor.textHash, count: anchor.count, lines });
 			}
 			return { type: "anchors", anchors };
 		}
