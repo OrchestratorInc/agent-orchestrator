@@ -66,6 +66,7 @@ export async function saveEnvironmentMachine(
 
 /** Forgetting a machine failed and its saved connection is still there. */
 export class ForgetMachineError extends Error {
+	readonly code: string = "FORGET_MACHINE_ERROR";
 	constructor(message: string) {
 		super(message);
 		this.name = "ForgetMachineError";

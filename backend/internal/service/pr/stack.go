@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
@@ -28,6 +29,35 @@ type StackLayer struct {
 	NoChecks bool
 	// SessionID is the AO session tracking this layer, when one does.
 	SessionID domain.SessionID
+	// BehindParent counts the commits of the open layer below that this layer
+	// lacks, so it needs rebasing onto it. Zero when it has them all, when the
+	// layer below has merged (GitHub rebases the rest then), or when unknown.
+	BehindParent int
+}
+
+// stackBehindCache keeps CommitsBehind answers. They are keyed by commit SHAs,
+// so one never goes stale; the map is only emptied to bound its size.
+type stackBehindCache struct {
+	mu      sync.Mutex
+	entries map[string]int
+}
+
+const stackBehindCacheLimit = 512
+
+func (c *stackBehindCache) get(key string) (int, bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	n, ok := c.entries[key]
+	return n, ok
+}
+
+func (c *stackBehindCache) put(key string, n int) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.entries == nil || len(c.entries) >= stackBehindCacheLimit {
+		c.entries = map[string]int{}
+	}
+	c.entries[key] = n
 }
 
 // Stack is a provider-native stack, bottom layer first.
@@ -176,7 +206,32 @@ func (s *ActionService) stackView(ctx context.Context, repo ports.SCMRepo, stack
 		}
 		view.Layers = append(view.Layers, out)
 	}
+	for i := 1; i < len(stack.Layers); i++ {
+		view.Layers[i].BehindParent = s.behindParent(ctx, repo, stack.Layers[i-1], stack.Layers[i])
+	}
 	return view, nil
+}
+
+// behindParent counts what layer is missing from the open layer below it. A
+// failed read counts as nothing missing: the stack still shows, and merging
+// re-checks with the provider.
+func (s *ActionService) behindParent(ctx context.Context, repo ports.SCMRepo, below, layer ports.SCMStackLayer) int {
+	if below.Merged || !below.Open || layer.Merged || !layer.Open || below.HeadSHA == "" || layer.HeadSHA == "" {
+		return 0
+	}
+	key := repo.Host + "/" + repo.Owner + "/" + repo.Name + ":" + strings.ToLower(below.HeadSHA) + "..." + strings.ToLower(layer.HeadSHA)
+	if n, ok := s.stackBehind.get(key); ok {
+		return n
+	}
+	n, err := s.stacker.CommitsBehind(ctx, repo, below.HeadSHA, layer.HeadSHA)
+	if err != nil {
+		if !errors.Is(err, ports.ErrSCMUnsupported) {
+			s.logger.Warn("comparing stack layers failed", "layer", layer.Number, "below", below.Number, "err", err)
+		}
+		return 0
+	}
+	s.stackBehind.put(key, n)
+	return n
 }
 
 func stackLayerState(layer ports.SCMStackLayer) domain.PRState {

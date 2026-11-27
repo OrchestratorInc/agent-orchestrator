@@ -2,7 +2,7 @@ import { useLocalSearchParams, useNavigation, useRouter } from "expo-router";
 import * as DocumentPicker from "expo-document-picker";
 import * as ImagePicker from "expo-image-picker";
 import { File } from "expo-file-system";
-import { attachmentsKey, clearStartedSpawnDraft, createSpawnDraftSaver, loadSpawnDraft, requestMatches, saveBeforeStart, type SpawnDraft, type SpawnDraftRequest, type SpawnDraftSelections } from "../lib/spawnDraft";
+import { attachmentsKey, clearStartedSpawnDraft, createSpawnDraftSaver, loadSpawnDraft, requestMatches, saveBeforeStart, startRefused, type SpawnDraft, type SpawnDraftRequest, type SpawnDraftSelections } from "../lib/spawnDraft";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { AppState, Keyboard, Pressable, StyleSheet, Text, View } from "react-native";
 import Animated, { useAnimatedStyle } from "react-native-reanimated";
@@ -11,19 +11,22 @@ import { agentErrorCopy } from "../lib/agentError";
 import { AppSymbol } from "../lib/AppSymbol";
 import { defaultAgent, rankAgents } from "../lib/agentPicker";
 import { ApiError, getAgentModels, getAgents, getProject, getSettings, type AgentCatalog, type AgentModelCatalog, type AgentModelInfo, type ProjectDetail, type SessionMode } from "../lib/api";
+import type { ServerConfig } from "../lib/config";
 import { userFacingError } from "../lib/connectionError";
 import { chatErrorCopy, isChatPreflightError } from "../lib/chatError";
 import { haptics } from "../lib/haptics";
-import { connectedSpawnHosts, initialSpawnHostId, selectSpawnHost, spawnHostRequestIsCurrent, spawnHostSelectionReady } from "../lib/hostRoute";
+import { autoSpawnHostId, connectedSpawnHosts, selectSpawnHost, spawnHostNeedsRetry, spawnHostRequestIsCurrent } from "../lib/hostRoute";
 import { rememberLastProject, useLastProject } from "../lib/lastProject";
 import { ALL_PROJECTS, STANDALONE_PROJECT, resolveSpawnProject } from "../lib/projectFilter";
-import { claudeAliasModel, defaultEffortModel, menuModelName, menuModels, modelOverride, resolveSpawnAgent, resolveSpawnModel, spawnModelSourceChanged } from "../lib/spawnModel";
+import { claudeAliasModel, defaultEffortModel, defaultRowModelToSend, menuModelName, menuModels, modelOverride, resolveSpawnAgent, resolveSpawnModel, spawnModelSourceChanged } from "../lib/spawnModel";
 import { appendSpawnAttachments, joinAttachmentErrors, MAX_SPAWN_ATTACHMENTS, pastedSpawnAttachments, photoPickerAttachment, readSpawnAttachments, spawnAttachmentPreview, type PickedSpawnAttachment, type SpawnAttachment } from "../lib/spawn-attachments";
 import { ComposerAttachmentTray } from "../lib/chat/ComposerAttachmentTray";
 import type { ComposerImageAsset, PasteOverflow } from "../lib/chat/composerImages";
 import { SpawnComposerControls } from "../lib/spawn-composer-controls";
+import { SpawnSuggestionHost, type SpawnSuggestionOverlay } from "../lib/spawn-composer";
 import { errorAfterEdit, spawnHostState, spawnNotices, START_DROPPED_NOTICE } from "../lib/spawnNotices";
-import { createAgentModelCache, nextConnectionEpoch, type ConnectionEpoch } from "../lib/spawnLoads";
+import { createAgentModelCache, nextConnectionEpoch, provenSpawnConfig, type ConnectionEpoch } from "../lib/spawnLoads";
+import { loadSpawnSkills } from "../lib/spawnSkills";
 import { spawnEffortChoices, spawnEffortToSend } from "../lib/modelEffort";
 import { useApp } from "../lib/store";
 import { useCloud } from "../lib/cloud/CloudProvider";
@@ -31,8 +34,10 @@ import { connectedAgents } from "../lib/cloud/agents";
 import { CLOUD_HOST_ID, CLOUD_HOST_NAME, isCloudHost } from "../lib/cloud/mapping";
 import { cloudPlanBlock, cloudSessionBilled, planBlocksCloudSetup } from "../lib/cloud/plan";
 import { useCloudPlan } from "../lib/cloud/planStore";
-import { agentModelCatalog } from "../lib/cloud/modelCatalog";
-import { cloudAgentCatalog, cloudModelCatalog, cloudProjectDetail, NEW_CLOUD_PROJECT } from "../lib/cloud/spawnSource";
+import { agentModelCatalog, isReleaseCatalog } from "../lib/cloud/modelCatalog";
+import { useReleaseCatalogRereads } from "../lib/cloud/useReleaseCatalogRereads";
+import { cloudAgentCatalog, cloudModelCatalog, cloudProjectDetail, cloudSpawnProjectOptions, NEW_CLOUD_PROJECT } from "../lib/cloud/spawnSource";
+import { standaloneAgentsOffered } from "../lib/cloud/standaloneAgents";
 import { useVoiceInput } from "../lib/voice/useVoiceInput";
 import type { Theme } from "../lib/theme";
 import { useTheme, useThemedStyles } from "../lib/ThemeProvider";
@@ -43,18 +48,29 @@ import { modelSheetRoute } from "../lib/sheetResult";
 import { agentAccountLabel, useAgentAccounts } from "../lib/agentAccounts";
 import { useChatKeyboard } from "../lib/chat/useChatKeyboard";
 import { SYSTEM_GLASS_HEADER } from "../lib/stackScreenOptions";
+import { PillHeaderFrame } from "../lib/headerPill";
 import { useGlassBarInset } from "../lib/useHeaderOverlap";
 import { KEYBOARD_DOCK_GAP } from "../lib/session/keyboardInset";
 
 export { RouteErrorBoundary as ErrorBoundary } from "../lib/RouteErrorBoundary";
 
+// Android: the chat's pill bar (see `pillHeaderOptions` on the route) over its
+// frost; the page holds itself below the bar through `useGlassBarInset`.
 export default function SpawnScreen() {
+	return (
+		<PillHeaderFrame>
+			<SpawnPage />
+		</PillHeaderFrame>
+	);
+}
+
+function SpawnPage() {
 	const t = useTheme();
 	const styles = useThemedStyles(makeStyles);
 	const router = useRouter();
 	const navigation = useNavigation();
 	const { projectId: routeProjectId, hostId: routeHostId } = useLocalSearchParams<{ projectId?: string; hostId?: string }>();
-	const { hostStates, cloud, activeProjectId, currentHostId, configForHost, switchHost, setActiveProject, spawn, configResolved, phoneNetwork } = useApp();
+	const { hostStates, cloud, activeProjectId, currentHostId, configForHost, switchHost, setActiveProject, spawn, configResolved, phoneNetwork, refreshHost } = useApp();
 	const cloudState = useCloud();
 	// Orchestrator Cloud is the picker's last choice, after the connected machines, while signed in.
 	const machineHosts = useMemo(() => connectedSpawnHosts(hostStates), [hostStates]);
@@ -63,7 +79,21 @@ export default function SpawnScreen() {
 	// out, or failed. A Cloud draft's page waits for it before picking.
 	const cloudResolved = Boolean(cloud) || (cloudState.status !== "loading" && cloudState.status !== "connecting");
 	const [selectedHostId, setSelectedHostId] = useState<string | null>(null);
+	// The machine the page last asked for. Until a render shows it, effects later
+	// in the same commit still see the machine being left (see the project seed).
+	const selectionTarget = useRef<string | null>(null);
+	const selectHost = (hostId: string | null) => {
+		selectionTarget.current = hostId;
+		setSelectedHostId(hostId);
+	};
 	const hostSelectionInitialized = useRef(false);
+	// Set once a machine is picked by hand, or the one chosen for the person can
+	// be used: until then the page keeps choosing (see autoSpawnHostId).
+	const hostSettled = useRef(false);
+	// The person has edited the form (any control, typing or dictation). From
+	// then on the chosen machine stays: a move would clear their choices and
+	// send Start to a machine they never picked.
+	const formEdited = useRef(false);
 	// State, not a ref: what was typed while the saved New task draft was being
 	// read is saved as soon as the read is done (see the draft below).
 	const [draftRestored, setDraftRestored] = useState(false);
@@ -72,7 +102,12 @@ export default function SpawnScreen() {
 	const catalogGeneration = useRef(0);
 	const selectedHost = hostStates.find((host) => host.hostId === selectedHostId);
 	const cloudSelected = isCloudHost(selectedHostId);
-	const config = selectedHostId && !cloudSelected ? configForHost(selectedHostId) : null;
+	const liveConfig = selectedHostId && !cloudSelected ? configForHost(selectedHostId) : null;
+	// A machine can be chosen while it reconnects, so the page's own requests
+	// wait for a connection the machine has answered a poll on (provenSpawnConfig).
+	const provenConfig = useRef<ServerConfig | null>(null);
+	const config = provenSpawnConfig(provenConfig.current, liveConfig, selectedHost?.connection ?? "closed");
+	if (config) provenConfig.current = config;
 	// The pickers load once per machine, not once per connection. An app switch
 	// drops the connection and brings it back, and the loads below used to empty
 	// every picker and fetch it all again each time. Each remembers what it last
@@ -94,6 +129,8 @@ export default function SpawnScreen() {
 	// before that, an empty list would ask to create a project that exists.
 	const projectsKnown = cloudSelected ? Boolean(cloud) && cloudState.projectsLoaded : selectedHost?.projectsKnown ?? false;
 	const connection = cloudSelected ? (cloud ? "open" : "closed") : selectedHost?.connection ?? "closed";
+	// Cloud starts a standalone agent (no project) where its control plane offers them.
+	const cloudStandaloneOffered = cloudSelected && standaloneAgentsOffered(cloudState.org?.offering ?? cloudState.me?.offering);
 	const cloudAgentsKey = connectedAgents(cloudState.connections).join(",");
 	// Known before anything is typed: a Free organization runs no cloud agents,
 	// and a spent session-hour window starts none until it resets. The control
@@ -112,19 +149,53 @@ export default function SpawnScreen() {
 		return selected ? [{ id: selected.hostId, label: selected.name }, ...connectedHosts] : connectedHosts;
 	}, [connectedHosts, hostStates, selectedHostId]);
 
+	// Back from the background every machine is reconnecting, and a choice made
+	// once then stuck: no machine, another machine or Cloud. The page keeps
+	// choosing until a machine is picked or the chosen one can be used, so the
+	// default (or the route's, or the draft's) shows at once and is ready as
+	// soon as it answers.
 	useEffect(() => {
-		if (hostSelectionInitialized.current) return;
+		if (hostSettled.current) return;
+		// Read here, not where the edit happened, so an edit made before any
+		// machine was chosen never leaves the page on none.
+		if (formEdited.current && selectedHostId !== null) {
+			hostSettled.current = true;
+			return;
+		}
 		// The saved draft is read first: restored, it goes back to its own machine.
 		if (!draftRestored) return;
-		const draftHostId = restoredHostId.current;
-		// Unrouted, a restored draft's machine is the one waited for: picking
-		// another while it is still connecting would move its draft there.
-		const awaitedHostId = routeHostId ?? draftHostId ?? undefined;
-		if (!spawnHostSelectionReady({ routeHostId: awaitedHostId, configResolved, hosts: hostStates, connectedMachineCount: machineHosts.length, cloudResolved })) return;
+		const now = Date.now();
+		const auto = autoSpawnHostId({
+			routeHostId,
+			draftHostId: restoredHostId.current ?? undefined,
+			currentHostId: currentHostId ?? undefined,
+			hosts: hostStates.map((host) => ({ hostId: host.hostId, ready: machineHosts.some((item) => item.id === host.hostId), state: spawnHostState(host, phoneNetwork, now) })),
+			cloud: Boolean(cloud),
+			configResolved,
+			cloudResolved,
+		});
+		if (!auto.settled) return;
 		hostSelectionInitialized.current = true;
-		const preferredHostId = draftHostId && connectedHosts.some((host) => host.id === draftHostId) ? draftHostId : currentHostId ?? undefined;
-		setSelectedHostId(initialSpawnHostId({ routeHostId, currentHostId: preferredHostId, hosts: connectedHosts }));
-	}, [cloudResolved, configResolved, connectedHosts, currentHostId, draftRestored, hostStates, machineHosts, routeHostId]);
+		if (auto.hostId !== selectedHostId) {
+			if (selectedHostId !== null) resetHostChoice();
+			selectHost(auto.hostId);
+		}
+		// Usable now: kept from here on, so a later blip never moves the page.
+		if (isCloudHost(auto.hostId) || machineHosts.some((host) => host.id === auto.hostId)) hostSettled.current = true;
+		// resetHostChoice only clears state; it changes with every render.
+		// eslint-disable-next-line react-hooks/exhaustive-deps
+	}, [cloud, cloudResolved, configResolved, currentHostId, draftRestored, hostStates, machineHosts, phoneNetwork, routeHostId, selectedHostId]);
+
+	// Opened on a machine whose last try failed, ask again now instead of at the
+	// next recovery try: the person is waiting to use it. Once per machine; the
+	// store's own retries take over after that.
+	const retriedHost = useRef<string | null>(null);
+	useEffect(() => {
+		if (!selectedHostId || cloudSelected || retriedHost.current === selectedHostId) return;
+		if (!spawnHostNeedsRetry(selectedHost && { connection: selectedHost.connection, loading: selectedHost.loading, config: liveConfig })) return;
+		retriedHost.current = selectedHostId;
+		void refreshHost(selectedHostId).catch(() => {});
+	}, [cloudSelected, liveConfig, refreshHost, selectedHost, selectedHostId]);
 
 	const [projectId, setProjectId] = useState<string | null>(null);
 	// Only a session the plan pays for is the plan's to stop: Coder the
@@ -276,6 +347,9 @@ export default function SpawnScreen() {
 			// Text typed or files added before the draft was read are the page's
 			// now: the old draft neither replaces nor joins them.
 			if (promptRef.current || attachmentsRef.current.length) return;
+			// What the person chose for the draft's machine: the page keeps that
+			// machine, as after an edit, so a move never clears or overwrites it.
+			formEdited.current = true;
 			setPrompt(draft.prompt);
 			attachmentsRef.current = draft.attachments;
 			setAttachments(draft.attachments);
@@ -331,12 +405,14 @@ export default function SpawnScreen() {
 	// Dictation edits the form too, so it clears a dropped Start's notice.
 	const voice = useVoiceInput({ onTranscript: useCallback((spoken: string) => {
 		setError(errorAfterEdit);
+		formEdited.current = true;
 		setPrompt((old) => old ? `${old} ${spoken}` : spoken);
 	}, []) });
 	const listening = voice.state === "starting" || voice.state === "recording";
 	// The composer docks to the bottom as the chat's does, on the same keyboard
 	// avoidance: its resting inset closes to the keyboard gap as the keys rise.
-	// The page sits below the stack's opaque bar, so the avoider counts it.
+	// On iOS the page sits below the stack's bar, so the avoider counts it; on
+	// Android it runs under the clear pill bar, and the offset is iOS's alone.
 	const chatKeyboard = useChatKeyboard({ underHeader: SYSTEM_GLASS_HEADER });
 	const glassInset = useGlassBarInset();
 	const keyboard = useReanimatedKeyboardAnimation();
@@ -358,17 +434,23 @@ export default function SpawnScreen() {
 	// seeded first would stick.
 	const lastProject = useLastProject(selectedHostId);
 	useEffect(() => {
+		// Moved this commit by the choosing effect: these values are still the
+		// machine being left, and its project would replace the reset's.
+		if (selectionTarget.current !== selectedHostId) return;
 		if (!lastProject.loaded) return;
-		const nextProjectId = resolveSpawnProject(
-			projectId,
+		const resolved = resolveSpawnProject(
+			// Standalone holds only where it is offered: a machine always, Cloud when its control plane says so.
+			projectId === STANDALONE_PROJECT && cloudSelected && !cloudStandaloneOffered ? null : projectId,
 			routeHostId === selectedHostId ? routeProjectId : undefined,
 			selectedHostId === currentHostId ? activeProjectId : ALL_PROJECTS,
 			projects,
 			projectsKnown,
 			lastProject.projectId,
 		);
+		// A Cloud with no projects yet still starts a standalone agent.
+		const nextProjectId = resolved ?? (cloudStandaloneOffered && projectsKnown && projects.length === 0 ? STANDALONE_PROJECT : null);
 		if (nextProjectId !== projectId) changeProject(nextProjectId);
-	}, [activeProjectId, currentHostId, lastProject.loaded, lastProject.projectId, projects, projectsKnown, projectId, routeHostId, routeProjectId, selectedHostId]);
+	}, [activeProjectId, cloudSelected, cloudStandaloneOffered, currentHostId, lastProject.loaded, lastProject.projectId, projects, projectsKnown, projectId, routeHostId, routeProjectId, selectedHostId]);
 
 	// Orchestrator Cloud's catalog: every cloud agent, the connected ones usable.
 	useEffect(() => {
@@ -421,18 +503,40 @@ export default function SpawnScreen() {
 	const projectWorkerAgent = projectDetail?.config?.worker?.agent ?? projectDetail?.agent ?? "";
 	const projectWorkerModel = projectDetail?.config?.worker?.agentConfig?.model ?? projectDetail?.config?.agentConfig?.model ?? "";
 	const resolvedModel = resolveSpawnModel({ selectedAgent: harness, projectWorkerAgent, projectWorkerModel });
+	// The mode the project pins for the agent (a mode-list agent such as Amp), which the daemon applies.
+	const projectWorkerMode = projectDetail?.config?.worker?.agentConfig?.mode ?? projectDetail?.config?.agentConfig?.mode ?? "";
+	const resolvedMode = resolveSpawnModel({ selectedAgent: harness, projectWorkerAgent, projectWorkerModel: projectWorkerMode });
 	const displayedModel = modelTouched ? model : resolvedModel;
 	// The project-aware catalog once it lists something. An empty one (still
 	// discovering, or a project that names none) must not hide the machine's
 	// list, which is what left the menu offering only the default.
 	const currentModels = modelCatalog?.models.length ? modelCatalog.models : agentModelLists[harness] ?? [];
-	// "Default model" when the project pins nothing, because that is the truth:
-	// the provider picks, and naming a model here promised one the session never
-	// ran. Not "Automatic", which reads as an approval mode.
+	// "Default model" when nothing is picked and the project pins nothing: the
+	// default row then names the catalog's default, which the task sends
+	// (modelOverride). Not "Automatic", which reads as an approval mode.
 	const displayedModelLabel = displayedModel ? menuModelName(currentModels.find((item) => item.id === displayedModel)?.label ?? displayedModel) : "Default model";
 	const projectApproval = projectDetail?.config?.worker?.agentConfig?.permissions ?? projectDetail?.config?.agentConfig?.permissions;
 	const approvalMode = resolveApprovalMode({ harness, chosen: approvalChoice, projectMode: projectApproval });
 	const modelSelection = modelTouched ? model : "__auto__";
+	// The model the default row names ("Opus 5.5 · Default"), which the task
+	// sends when nothing is picked (modelOverride): from this agent's own loaded
+	// catalog, never one still shown from the agent picked before; none for a
+	// mode list or over the project's pinned model or mode. On Cloud, while the
+	// agent's catalog is missing (reloading after a project change, or its load
+	// failed), the menu names the default from the agent's menu list, which is
+	// the same Cloud catalog (always models, never modes), so that is sent.
+	const defaultRowCatalog = modelCatalog?.agentId === harness
+		? modelCatalog
+		: cloudSelected && agentModelLists[harness]?.length ? { selectionMode: "catalog" as const, models: agentModelLists[harness] } : undefined;
+	// The project's pin is known once its details have loaded for this project;
+	// until then, or when that load failed, no default is sent and the server
+	// applies whatever the project pins. A paired machine's catalog is the
+	// machine's, so its default never reflects the pin.
+	const projectPinKnown = !projectId || projectId === STANDALONE_PROJECT || (projectDetailLoadedFor === projectId && projectDetail?.id === projectId);
+	// On a paired machine Start waits for them: sent before, an unpinned
+	// project's task would carry no model and run the agent's own default.
+	const projectDetailsPending = !cloudSelected && Boolean(projectId) && projectId !== STANDALONE_PROJECT && projectDetailLoadedFor !== projectId;
+	const defaultRowModel = defaultRowModelToSend({ catalog: defaultRowCatalog, projectPin: resolvedModel || resolvedMode, pinKnown: projectPinKnown });
 	// The model the task will run, picked or the catalog's default, for its
 	// effort levels.
 	const runningModel = displayedModel ? currentModels.find((item) => item.id === displayedModel) : currentModels.find((item) => item.isDefault);
@@ -460,7 +564,7 @@ export default function SpawnScreen() {
 	const setupBlocked = planBlocksCloudSetup(planBlock);
 	const cloudNotices = [
 		...(planBlock ? [planBlock.message] : []),
-		...(!setupBlocked && cloudSelected && projectsKnown && projects.length === 0 ? ["Create a cloud project first: choose New cloud project from the project menu."] : []),
+		...(!setupBlocked && cloudSelected && !cloudStandaloneOffered && projectsKnown && projects.length === 0 ? ["Create a cloud project first: choose New cloud project from the project menu."] : []),
 	];
 	const notices = [...hostNotices, ...cloudNotices, ...(setupBlocked ? [] : spawnNotices({
 		// One line for a machine that is gone or refused this phone, in place of
@@ -528,19 +632,49 @@ export default function SpawnScreen() {
 	const agentIds = agents.filter((agent) => agent.selectable).map((agent) => agent.id).join("|");
 	// Orchestrator Cloud's model lists, one per connected agent, from its catalog.
 	const cloudOrgId = cloudState.org?.id;
+	// While a list shown is still Cloud's release list, it is read again until
+	// the account's own arrives, as the desktop does (useReleaseCatalogRereads).
+	const [cloudMenuListsRelease, setCloudMenuListsRelease] = useState(false);
+	const [cloudPickedListRelease, setCloudPickedListRelease] = useState(false);
+	const cloudRereads = useReleaseCatalogRereads(cloudSelected && (cloudMenuListsRelease || cloudPickedListRelease));
+	const cloudListsFor = useRef<string | undefined>(undefined);
+	// Whether each agent's menu list is still the release list.
+	const cloudListsRelease = useRef<Record<string, boolean>>({});
+	// The organization the menu lists were loaded for.
+	const cloudListsOrg = useRef<string | undefined>(undefined);
 	useEffect(() => {
-		if (!cloudSelected) return;
-		if (!cloudOrgId || !agentIds) { setAgentModelLists({}); return; }
+		if (!cloudSelected) { cloudListsFor.current = undefined; return; }
+		if (!cloudOrgId || !agentIds) { cloudListsFor.current = undefined; cloudListsOrg.current = undefined; cloudListsRelease.current = {}; setAgentModelLists({}); setCloudMenuListsRelease(false); return; }
+		// Another organization's lists go at once, not when the new ones land:
+		// the default row falls back to them (defaultRowCatalog), and must never
+		// send a model from an organization this task is not in.
+		if (cloudListsOrg.current !== cloudOrgId) {
+			cloudListsOrg.current = cloudOrgId;
+			cloudListsRelease.current = {};
+			setAgentModelLists({});
+		}
+		const key = `${cloudOrgId}/${agentIds}`;
+		const reread = cloudListsFor.current === key;
 		let cancelled = false;
 		void Promise.all(agentIds.split("|").map(async (id) => {
 			try {
-				return [id, cloudModelCatalog(id, await agentModelCatalog(cloudState.client, cloudOrgId, id)).models] as const;
+				const catalog = await agentModelCatalog(cloudState.client, cloudOrgId, id, { rereadRelease: reread });
+				return [id, cloudModelCatalog(id, catalog).models, isReleaseCatalog(catalog)] as const;
 			} catch {
-				return [id, []] as const;
+				return [id, undefined, undefined] as const;
 			}
-		})).then((entries) => { if (!cancelled) setAgentModelLists(Object.fromEntries(entries)); });
+		})).then((entries) => {
+			if (cancelled) return;
+			cloudListsFor.current = key;
+			// A failed re-read keeps the list already shown, and whether it is
+			// still the release list, so its re-reads go on.
+			const released = Object.fromEntries(entries.map(([id, , release]) => [id, release ?? (reread ? cloudListsRelease.current[id] : undefined) ?? false]));
+			cloudListsRelease.current = released;
+			setAgentModelLists((current) => Object.fromEntries(entries.map(([id, models]) => [id, models ?? (reread ? current[id] : undefined) ?? []])));
+			setCloudMenuListsRelease(Object.values(released).some(Boolean));
+		});
 		return () => { cancelled = true; };
-	}, [agentIds, cloudOrgId, cloudSelected, cloudState.client]);
+	}, [agentIds, cloudOrgId, cloudRereads, cloudSelected, cloudState.client]);
 
 	useEffect(() => {
 		if (cloudSelected) return;
@@ -572,17 +706,32 @@ export default function SpawnScreen() {
 	}, [agentIds, cloudSelected, connected, epoch, reloadKey, selectedHostId]);
 
 	// A new cloud task's models come from Orchestrator Cloud's catalog for the agent.
+	const cloudCatalogFor = useRef<string | undefined>(undefined);
 	useEffect(() => {
-		if (!cloudSelected) return;
-		if (!cloudOrgId || !harness) { setModelCatalog(undefined); setModelLoading(false); return; }
+		if (!cloudSelected) { cloudCatalogFor.current = undefined; return; }
+		if (!cloudOrgId || !harness) { cloudCatalogFor.current = undefined; setModelCatalog(undefined); setModelLoading(false); setCloudPickedListRelease(false); return; }
+		// A re-read of the list shown neither clears it nor shows it loading.
+		// Another project is a new load: changing it clears the catalog
+		// (changeProject), and Start waits until it is back, so the default
+		// row's model is there to send.
+		const key = `${cloudOrgId}/${harness}/${projectId ?? ""}`;
+		const reread = cloudCatalogFor.current === key;
 		let cancelled = false;
-		setModelLoading(true);
-		agentModelCatalog(cloudState.client, cloudOrgId, harness)
-			.then((catalog) => { if (!cancelled) { setModelCatalog(cloudModelCatalog(harness, catalog)); setModelError(undefined); } })
-			.catch(() => { if (!cancelled) setModelCatalog(undefined); })
+		if (!reread) setModelLoading(true);
+		agentModelCatalog(cloudState.client, cloudOrgId, harness, { rereadRelease: reread })
+			.then((catalog) => {
+				if (cancelled) return;
+				cloudCatalogFor.current = key;
+				setModelCatalog(cloudModelCatalog(harness, catalog));
+				setCloudPickedListRelease(isReleaseCatalog(catalog));
+				setModelError(undefined);
+			})
+			.catch(() => { if (!cancelled && !reread) setModelCatalog(undefined); })
+			// Any answer ends a load: a re-read shows none, but the load it
+			// replaced (another agent's, cut short) may have.
 			.finally(() => { if (!cancelled) setModelLoading(false); });
 		return () => { cancelled = true; };
-	}, [cloudOrgId, cloudSelected, cloudState.client, harness]);
+	}, [cloudOrgId, cloudRereads, cloudSelected, cloudState.client, harness, projectId]);
 
 	useEffect(() => {
 		if (cloudSelected) return;
@@ -610,6 +759,19 @@ export default function SpawnScreen() {
 		// eslint-disable-next-line react-hooks/exhaustive-deps
 	}, [cloudSelected, connected, epoch, harness, projectId, reloadKey, selectedHostId]);
 
+	// The "/" list's skills, read from the machine when it opens, as a new chat
+	// on the desktop lists them before the agent starts. A Cloud task's agent
+	// runs in its sandbox, away from this machine's skill folders.
+	// The open "/" list, drawn over the page above the composer (see below).
+	const [suggestionOverlay, setSuggestionOverlay] = useState<SpawnSuggestionOverlay | null>(null);
+	const latestConfig = useRef(config);
+	latestConfig.current = config;
+	const skillsProjectId = !projectId || projectId === STANDALONE_PROJECT ? undefined : projectId;
+	const loadSkills = useMemo(() => {
+		if (cloudSelected || !selectedHostId || !harness) return undefined;
+		return () => loadSpawnSkills(latestConfig.current, selectedHostId, harness, skillsProjectId);
+	}, [cloudSelected, harness, selectedHostId, skillsProjectId]);
+
 	// Loads that failed while the desktop was unreachable run again once the
 	// board's poll reconnects. Keyed on the reconnect, not on the errors, so an
 	// endpoint that keeps failing while connected can't loop.
@@ -626,6 +788,7 @@ export default function SpawnScreen() {
 	// change emptying the composer) leave it.
 	const edited = <A extends unknown[]>(change: (...args: A) => void) => (...args: A) => {
 		setError(errorAfterEdit);
+		formEdited.current = true;
 		change(...args);
 	};
 
@@ -634,8 +797,9 @@ export default function SpawnScreen() {
 	// A cleared catalog is not loaded any more: picking the same agent or
 	// project again (A, B, then A) loads it again rather than leaving it empty.
 	const resetModelSource = () => { clearModelOverride(); loadedFor.current.models = undefined; setModelCatalog(undefined); setModelError(undefined); };
-	const chooseHost = (nextHostId: string) => {
-		if (nextHostId === selectedHostId) return;
+	// Clears what was chosen for the machine being left: a project id is never
+	// carried across machines. Shared by a pick by hand and the page's own choice.
+	const resetHostChoice = () => {
 		catalogGeneration.current += 1;
 		setProjectId(null);
 		setHarness("");
@@ -654,8 +818,14 @@ export default function SpawnScreen() {
 		setError(null);
 		setOfferTUI(false);
 		requestRef.current = undefined;
+	};
+	const chooseHost = (nextHostId: string) => {
+		if (nextHostId === selectedHostId) return;
+		// Picked by hand: the page stops choosing for the person.
+		hostSettled.current = true;
+		resetHostChoice();
 		// Cloud is never the default machine: choosing it here leaves that alone.
-		void selectSpawnHost(nextHostId, { select: setSelectedHostId, persistDefault: isCloudHost(nextHostId) ? async () => {} : switchHost })
+		void selectSpawnHost(nextHostId, { select: selectHost, persistDefault: isCloudHost(nextHostId) ? async () => {} : switchHost })
 			.catch(() => setError("Could not make that machine the default. Try again."));
 	};
 	const changeProject = (nextProjectId: string | null) => {
@@ -835,7 +1005,7 @@ export default function SpawnScreen() {
 				projectId: projectId ?? undefined,
 				prompt: prompt.trim() || undefined,
 				harness: harness || undefined,
-				model: modelOverride(displayedModel, modelTouched),
+				model: modelOverride(displayedModel, modelTouched, defaultRowModel),
 				// Only a level picked here; otherwise the model's default applies.
 				effort: chosenEffort,
 				accountId: accountPick || undefined,
@@ -846,12 +1016,16 @@ export default function SpawnScreen() {
 				attachments: attachmentsRef.current.map(({ mimeType, data }) => ({ mimeType, data })),
 			};
 			const { attachments: _, ...requestFields } = request;
-			const payload = JSON.stringify(requestFields);
+			// A request is what the person chose. The default row's model is the
+			// catalog's, which a re-read can change between a Start whose answer
+			// was lost and its retry: the retry keeps the id, and the model it
+			// went with, so the server matches it instead of starting a second worker.
+			const payload = JSON.stringify({ ...requestFields, model: modelOverride(displayedModel, modelTouched) });
 			// Compared by content, not by object: attachments read back from a
 			// restored draft are the same files the last Start sent.
 			const sent: SpawnDraftRequest = requestMatches(requestRef.current, payload, attachmentsRef.current)
 				? requestRef.current
-				: { payload, attachments: attachmentsKey(attachmentsRef.current), id: `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}-${Math.random().toString(36).slice(2)}` };
+				: { payload, attachments: attachmentsKey(attachmentsRef.current), id: `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}-${Math.random().toString(36).slice(2)}`, ...(request.model ? { model: request.model } : {}) };
 			requestRef.current = sent;
 			// The request id is on the phone before the request leaves: closed
 			// after the daemon took the task but before the draft is cleared, the
@@ -869,7 +1043,7 @@ export default function SpawnScreen() {
 				setBusy(false);
 				return;
 			}
-			const session = await spawn({ ...request, clientRequestId: sent.id });
+			const session = await spawn({ ...request, model: sent.model, clientRequestId: sent.id });
 			// Started: the draft goes, so the next New task opens empty. Only this
 			// Start's: another open page's draft saved meanwhile stays.
 			startedDraft.current = { prompt, attachments: attachmentsRef.current };
@@ -899,6 +1073,9 @@ export default function SpawnScreen() {
 		} catch (e) {
 			holding.current = false;
 			haptics.error();
+			// Refused by the server, no task started: the next Start goes under a
+			// new id, with the model shown then rather than this one's default.
+			if (startRefused(e)) requestRef.current = undefined;
 			setError(spawnErrorCopy(e));
 			setOfferTUI(mode === "chat" && isChatPreflightError(e));
 			setBusy(false);
@@ -927,10 +1104,14 @@ export default function SpawnScreen() {
 			behavior={chatKeyboard.behavior}
 			keyboardVerticalOffset={chatKeyboard.keyboardVerticalOffset}
 		>
+			{/* The room and the dock share one unpadded frame, so the "/" list's
+			    layer below can be measured from the dock's own bottom. */}
+			<View style={styles.stage}>
 			{/* The empty conversation the task will become. A tap there puts the
 			    keyboard away, as it does over a conversation. */}
 			<Pressable accessible={false} style={styles.room} onPress={Keyboard.dismiss} />
 
+			<SpawnSuggestionHost.Provider value={setSuggestionOverlay}>
 			<Animated.View style={[styles.dock, { paddingBottom: restingInset }, dockRise]}>
 				{hasComposerMessage ? <View style={styles.messages}>
 					{notices.map((notice) => <Text key={notice} style={styles.warn}>{notice}</Text>)}
@@ -946,8 +1127,12 @@ export default function SpawnScreen() {
 					hostId={selectedHostId}
 					onSelectHost={edited(chooseHost)}
 					projects={cloudSelected
-						// Cloud sessions always run in a project; a new one is created from here.
-						? [...unlistedProject, ...projects.map((item) => ({ id: item.id, label: item.name, icon: "folder" as const })), { id: NEW_CLOUD_PROJECT, label: "New cloud project", icon: "folder-plus" as const, sectionBreakBefore: unlistedProject.length + projects.length > 0 }]
+						// A cloud project is created from here; a standalone agent, where
+						// offered, needs none.
+						? cloudSpawnProjectOptions(
+							[...unlistedProject, ...projects.map((item) => ({ id: item.id, label: item.name, icon: "folder" as const }))],
+							cloudStandaloneOffered,
+						)
 						: [...unlistedProject, ...projects.map((item) => ({ id: item.id, label: item.name, icon: "folder" as const })), { id: STANDALONE_PROJECT, label: "Standalone agent", icon: "message-square-plus" as const, sectionBreakBefore: true }]}
 					projectId={projectId}
 					onSelectProject={edited(changeProject)}
@@ -976,6 +1161,7 @@ export default function SpawnScreen() {
 					voice={{ state: voice.state, partial: voice.partial, subscribeLevel: voice.subscribeLevel, onToggleLatched: voice.toggleLatched }}
 					prompt={prompt}
 					onChangePrompt={edited(setPrompt)}
+					onLoadSkills={loadSkills}
 					placeholder={harnessLabel ? `Ask ${harnessLabel}` : "What should this worker do?"}
 					attachments={<ComposerAttachmentTray
 						items={trayItems}
@@ -988,9 +1174,24 @@ export default function SpawnScreen() {
 					/>}
 					onSpawn={() => { void onSpawn(); }}
 					busy={busy}
-					disabled={!selectedHostId || (!config && !cloudSelected) || !projectId || !harness || busy || modelLoading || loading || listening || voice.state === "transcribing" || Boolean(planBlock)}
+					disabled={!selectedHostId || (!config && !cloudSelected) || !projectId || !harness || busy || modelLoading || projectDetailsPending || loading || listening || voice.state === "transcribing" || Boolean(planBlock)}
 				/>
 			</Animated.View>
+			</SpawnSuggestionHost.Provider>
+
+			{/* The "/" list floats over the page, just above the composer, rather
+			    than taking room in the dock: the machine and project rows stay put
+			    under it. It rises with the dock over the keyboard, and only the list
+			    itself takes touches. It stands on the page's own colour, as the
+			    chat's list stands on its dock's fade, so the rows under it don't
+			    show through its glass. */}
+			{suggestionOverlay ? <Animated.View
+				pointerEvents="box-none"
+				style={[styles.suggestionLayer, { paddingBottom: restingInset + suggestionOverlay.composerHeight + space.xs }, dockRise]}
+			>
+				<View style={styles.suggestionBackdrop}>{suggestionOverlay.panel}</View>
+			</Animated.View> : null}
+			</View>
 		</KeyboardAvoidingView>
 	);
 }
@@ -1009,9 +1210,15 @@ const makeStyles = (t: Theme) =>
 	StyleSheet.create({
 		// The page a conversation is drawn on, since this is where one begins.
 		screen: { flex: 1, backgroundColor: t.bgBase },
+		stage: { flex: 1 },
 		room: { flex: 1 },
+		// Spans the stage, the list at its foot: in the dock's side margin, and
+		// over the composer by the composer's height and the dock's gap.
+		suggestionLayer: { position: "absolute", top: 0, right: 0, bottom: 0, left: 0, paddingHorizontal: space.sm, justifyContent: "flex-end" },
+		// The list's own corners (ComposerSuggestionPanel), filled with the page.
+		suggestionBackdrop: { backgroundColor: t.bgBase, borderRadius: radius.xl, borderCurve: "continuous" },
 		// The chat composer's dock: its side margin and the gap to the keyboard.
-		dock: { paddingHorizontal: space.md, paddingTop: space.xs, gap: space.xs },
+		dock: { paddingHorizontal: space.sm, paddingTop: space.xs, gap: space.xs },
 		messages: { gap: space.xs, paddingHorizontal: space.xs },
 		warn: { fontFamily: "DMSans_400Regular", color: t.amber, fontSize: type.footnote.fontSize, lineHeight: type.footnote.lineHeight },
 		error: { fontFamily: "DMSans_400Regular", color: t.red, fontSize: type.footnote.fontSize, lineHeight: type.footnote.lineHeight },

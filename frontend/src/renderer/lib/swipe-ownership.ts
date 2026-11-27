@@ -8,8 +8,9 @@
 export const NO_SWIPE_NAV_ATTRIBUTE = "data-no-swipe-nav";
 
 // Opted out without the marker: strips that scroll sideways and fade at their
-// edges (tab strips, attachment rows), the Browser panel, and terminals.
-export const NO_SWIPE_NAV_SELECTOR = `[${NO_SWIPE_NAV_ATTRIBUTE}], .edge-fade-x, .browser-panel, .xterm`;
+// edges (tab strips, attachment rows), the Browser panel, terminals, and the
+// code and table scrollers of a streaming chat reply.
+export const NO_SWIPE_NAV_SELECTOR = `[${NO_SWIPE_NAV_ATTRIBUTE}], .edge-fade-x, .browser-panel, .xterm, .chat-md-stream :is(pre, [data-markdown="table"])`;
 
 let claimed = false;
 

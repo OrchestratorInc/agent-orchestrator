@@ -1,16 +1,24 @@
 import type { ErrorEvent, StackFrame } from "@sentry/react-native";
 import { classifyError, type ClassifyInput } from "./observability";
+import { safeSentryExceptionType, sentryIdentityTitle, sentryMessageIdentity, sentryExceptionValue } from "../../shared/telemetry/sentry-message";
+import { safeSentryCode, sentryErrorCode } from "../../shared/telemetry/ao-error";
+import { isApiOperation } from "./apiOperation";
 import { DEFAULT_SENTRY_DSN } from "./sentry-config";
 
 const SAFE_CATEGORIES = new Set(["native_crash", "render_crash", "http_5xx", "http_4xx", "offline", "timeout"]);
 const INSTALL_ID = /^ins_[0-9a-f-]{36}$/;
+const UPDATE_ID = /^(?:embedded|[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$/;
 
 let initialized = false;
 let permitted = false;
 let initPromise: Promise<void> | null = null;
 let sentry: typeof import("@sentry/react-native") | null = null;
 let pairedInstallId: string | null = null;
-let daemonVersion: string | undefined;
+// Each connected desktop's daemon version, by host id, and whether every
+// connected desktop reported one (an older daemon or a failed fetch does not).
+let daemonVersions: Record<string, string> = {};
+let daemonVersionsComplete = false;
+const DAEMON_VERSION = /^\d+\.\d+\.\d+(?:[.-][A-Za-z0-9.]+)?$/;
 let observabilityContext: MobileObservabilityContext = {};
 let consentGeneration = 0;
 const allowedEventIds = new Set<string>();
@@ -32,19 +40,45 @@ function safeFrame(frame: StackFrame): StackFrame {
 	};
 }
 
-export function sanitizeMobileSentryEvent(event: ErrorEvent): ErrorEvent | null {
+export async function sanitizeMobileSentryEvent(event: ErrorEvent, hint?: { originalException?: unknown }): Promise<ErrorEvent | null> {
 	if (!permitted) return null;
 	if (event.tags?.["ao.consent_generation"] !== String(consentGeneration)) return null;
 	const category = typeof event.tags?.["ao.category"] === "string" && SAFE_CATEGORIES.has(event.tags["ao.category"])
 		? event.tags["ao.category"] : "other";
 	const severity = typeof event.tags?.["ao.severity"] === "string" && /^P[0-3]$/.test(event.tags["ao.severity"])
 		? event.tags["ao.severity"] : undefined;
-	const title = event.message === "Mobile API error" ? "Mobile API error" : "Mobile error";
-	const values = event.exception?.values?.map((value) => ({
-		type: "MobileError",
-		value: "Mobile error",
-		stacktrace: value.stacktrace?.frames ? { frames: value.stacktrace.frames.map(safeFrame) } : undefined,
-	}));
+	const kindTitle = event.tags?.["ao.kind"] === "api" ? "Mobile API error" : "Mobile error";
+	// Checked word by word against the route list, not by character class.
+	const operation = isApiOperation(event.tags?.["ao.operation"]) ? event.tags["ao.operation"] : undefined;
+	const title = operation ? `${kindTitle} in ${operation}` : kindTitle;
+	const updateId = observabilityContext.updateId && UPDATE_ID.test(observabilityContext.updateId) ? observabilityContext.updateId : undefined;
+	const exceptions = event.exception?.values ?? [];
+	const identity = sentryMessageIdentity(
+		exceptions.at(-1)?.value ?? (event.message === "Mobile API error" ? undefined : event.message),
+		sentryErrorCode(hint?.originalException) ?? event.tags?.["ao.code"],
+		safeSentryExceptionType(exceptions.at(-1)?.type),
+	);
+	let messageFingerprint: string[] = [];
+	if (identity.hashInput !== undefined) {
+		try {
+			const { CryptoDigestAlgorithm, digestStringAsync } = await import("expo-crypto");
+			const hash = await digestStringAsync(CryptoDigestAlgorithm.SHA256, identity.hashInput);
+			messageFingerprint = ["sha256", hash.slice(0, 10)];
+		} catch { /* Keep the fallback title if the device could not hash. */ }
+		// Opt-out can happen while the native digest is pending.
+		if (!permitted || event.tags?.["ao.consent_generation"] !== String(consentGeneration)) return null;
+	}
+	const values = exceptions.map((value, index) => {
+		const frames = value.stacktrace?.frames?.map(safeFrame);
+		const top = frames?.at(-1);
+		const location = top?.lineno ? `mobile:${top.lineno}` : "mobile";
+		return {
+			type: safeSentryExceptionType(value.type),
+			value: sentryExceptionValue(index === exceptions.length - 1 ? sentryIdentityTitle(identity, "") : "", title, location, category),
+			stacktrace: frames ? { frames } : undefined,
+		};
+	});
+	const primary = values.at(-1);
 	const clean: ErrorEvent = {
 		type: undefined,
 		event_id: event.event_id,
@@ -52,31 +86,53 @@ export function sanitizeMobileSentryEvent(event: ErrorEvent): ErrorEvent | null 
 		level: event.level,
 		platform: "javascript",
 		release: observabilityContext.release,
+		// The OTA bundle under this release; one store build runs several.
+		...(updateId ? { dist: updateId } : {}),
 		environment: environment(observabilityContext.channel),
-		message: title,
+		message: sentryIdentityTitle(identity, title),
 		exception: values?.length ? { values } : undefined,
 		tags: {
 			"ao.platform": "mobile",
 			"ao.category": category,
+			...(operation ? { "ao.operation": operation } : {}),
+			...(updateId ? { "ao.update_id": updateId } : {}),
+			...(identity.code ? { "ao.code": identity.code } : {}),
 			...(severity ? { "ao.severity": severity } : {}),
-			...(daemonVersion && /^\d+\.\d+\.\d+(?:[.-][A-Za-z0-9.]+)?$/.test(daemonVersion) ? { "ao.daemon_version": daemonVersion } : {}),
+			...(typeof event.tags?.["ao.daemon_version"] === "string" && DAEMON_VERSION.test(event.tags["ao.daemon_version"]) ? { "ao.daemon_version": event.tags["ao.daemon_version"] } : {}),
 		},
-		fingerprint: ["mobile", title, category],
+		fingerprint: ["mobile", kindTitle, category, ...(operation ? [operation] : []), ...(primary ? [primary.type] : []),
+			...(identity.code ? ["code", identity.code] : messageFingerprint)],
 		user: pairedInstallId ? { id: pairedInstallId } : undefined,
 	};
 	if (clean.event_id) allowedEventIds.add(clean.event_id);
 	return clean;
 }
 
-export type MobileObservabilityContext = { release?: string; channel?: string };
+export type MobileObservabilityContext = { release?: string; channel?: string; updateId?: string };
 
 export function setMobileSentryContext(context: MobileObservabilityContext): void {
 	observabilityContext = context;
 	if (permitted) void initMobileSentry();
 }
 
-export function setMobileDaemonVersion(version: string): void {
-	daemonVersion = version;
+/** Each connected desktop's daemon version by host id; `complete` when every connected desktop reported one. */
+export function setMobileDaemonVersions(byHost: Record<string, string>, complete: boolean): void {
+	daemonVersions = { ...byHost };
+	daemonVersionsComplete = complete;
+}
+
+// The daemon an error came from: the host's own version for an API error;
+// otherwise the one version every connected desktop runs, known for all of
+// them, or none, rather than naming a desktop that may not be involved.
+function daemonVersionFor(hostId?: string): Record<string, string> {
+	const version = hostId !== undefined
+		? daemonVersions[hostId]
+		: (() => {
+			if (!daemonVersionsComplete) return undefined;
+			const distinct = [...new Set(Object.values(daemonVersions))];
+			return distinct.length === 1 ? distinct[0] : undefined;
+		})();
+	return version && DAEMON_VERSION.test(version) ? { "ao.daemon_version": version } : {};
 }
 
 export function setMobileSentryPairedInstallId(id: string | null): void {
@@ -133,6 +189,7 @@ async function initialize(configuredDsn: string, generation: number): Promise<vo
 		enableCaptureFailedRequests: false,
 		tracesSampleRate: 0,
 		maxBreadcrumbs: 0,
+		maxValueLength: 4097,
 		maxQueueSize: 1,
 		// TelemetryManager owns uncaught JS capture so it can attach the consent
 		// generation before Sentry's duplicate-event guard sees the exception.
@@ -169,19 +226,24 @@ export function captureMobileException(error: unknown, meta: CaptureMeta = {}): 
 	if (!initialized || !permitted) return;
 	const triage = classifyError(meta);
 	if (!triage.report) return;
+	const code = sentryErrorCode(error) ?? safeSentryCode(meta.code);
 	sentry?.captureException(error, {
 		level: triage.level,
-		tags: { "ao.category": SAFE_CATEGORIES.has(meta.category ?? "") ? meta.category : "other", "ao.severity": triage.severity, "ao.consent_generation": String(consentGeneration) },
+		tags: { "ao.category": SAFE_CATEGORIES.has(meta.category ?? "") ? meta.category : "other", ...(code ? { "ao.code": code } : {}), ...daemonVersionFor(), "ao.severity": triage.severity, "ao.consent_generation": String(consentGeneration) },
 	});
 }
 
-export function captureMobileApiError(_path: string, category: string, status?: number, code?: string, _requestId?: string): void {
+/**
+ * `operation` is apiOperation()'s route name; anything else is dropped at send.
+ * `hostId` is the machine the request went to, which names its daemon version.
+ */
+export function captureMobileApiError(operation: string, category: string, status?: number, code?: string, message?: string, hostId?: string): void {
 	if (!initialized || !permitted) return;
 	const triage = classifyError({ category, httpStatus: status, code });
 	if (!triage.report) return;
-	sentry?.captureMessage("Mobile API error", {
+	sentry?.captureMessage(typeof message === "string" && message.length <= 4096 && message ? message : "Mobile API error", {
 		level: triage.level,
-		tags: { "ao.category": SAFE_CATEGORIES.has(category) ? category : "other", "ao.severity": triage.severity, "ao.consent_generation": String(consentGeneration) },
+		tags: { "ao.category": SAFE_CATEGORIES.has(category) ? category : "other", "ao.kind": "api", "ao.operation": operation, ...daemonVersionFor(hostId ?? ""), ...(safeSentryCode(code) ? { "ao.code": code } : {}), "ao.severity": triage.severity, "ao.consent_generation": String(consentGeneration) },
 	});
 }
 

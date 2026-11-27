@@ -14,12 +14,13 @@ export interface CloudCpErrorOptions {
 	requestId?: string;
 	/** How long the control plane asked the caller to wait (its Retry-After), in milliseconds. */
 	retryAfterMs?: number;
-	/** The envelope's details object, such as a validation error's field and reason. */
+	/** The error envelope's details, such as a validation error's field and reason or MOVE_EXPORT_TIMED_OUT's branchMayBePushed. */
 	details?: Record<string, unknown>;
 	cause?: unknown;
 }
 
 export class CloudCpError extends Error {
+	readonly telemetryCode: string = "CLOUD_CP_ERROR";
 	readonly status: number;
 	readonly code?: string;
 	readonly requestId?: string;
@@ -36,7 +37,7 @@ export class CloudCpError extends Error {
 		this.code = options.code;
 		this.requestId = options.requestId;
 		this.retryAfterMs = options.retryAfterMs;
-		if (options.details !== undefined) this.details = options.details;
+		this.details = options.details;
 	}
 }
 
@@ -46,6 +47,7 @@ export class CloudCpError extends Error {
  * never as a retryable request failure.
  */
 export class CloudCpAuthError extends CloudCpError {
+	override readonly telemetryCode: string = "CLOUD_CP_AUTH_ERROR";
 	constructor(message: string, options: CloudCpErrorOptions) {
 		super(message, options);
 		this.name = "CloudCpAuthError";

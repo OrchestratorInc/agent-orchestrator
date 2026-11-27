@@ -209,6 +209,20 @@ export type CloudSnapshotOptions = {
 };
 
 /**
+ * The model a cloud session runs now, for its chat to name with nothing picked
+ * on this phone: `currentModel` (its owner's Chat pick from any device, else
+ * the model it launched with; "" for the agent's own default), as the desktop
+ * reads it (cloudOrchestratorModel). Only a control plane that predates the
+ * field leaves it out, and then the launch model stands in. Undefined is the
+ * agent's default, which the chat names from its worker's list.
+ */
+export function cloudSessionModel(session: Pick<CloudSession, "model" | "currentModel">): string | undefined {
+	const raw = Object.prototype.hasOwnProperty.call(session, "currentModel") ? session.currentModel : session.model;
+	const model = raw?.trim() ?? "";
+	return model && model.toLowerCase() !== "default" ? model : undefined;
+}
+
+/**
  * The conversation a cloud session's events describe.
  *
  * Turns come from the turn events; assistant text is concatenated per
@@ -219,6 +233,8 @@ export type CloudSnapshotOptions = {
 export function cloudConversationSnapshot(session: CloudSession, events: readonly CloudClientEvent[], options: CloudSnapshotOptions = {}): ConversationSnapshot {
 	const turns = new Map<string, ConversationTurn>();
 	const assistant = new Map<string, ConversationMessage>();
+	/** Steers each turn has taken so far, in event order; see the assistant reply key. */
+	const steers = new Map<string, number>();
 	const approvals = new Map<string, ConversationActivity>();
 	const activities = new Map<string, ConversationActivity>();
 	const patches = new Map<string, FileChange[]>();
@@ -438,17 +454,29 @@ export function cloudConversationSnapshot(session: CloudSession, events: readonl
 		}
 		if (!text) continue;
 		if (event.type === "chat.turn_steered") {
+			if (turnId) steers.set(turnId, (steers.get(turnId) ?? 0) + 1);
 			items.push({
 				kind: "activity", id: `cloud-steer-${event.sequence}`, turnId, sequence: event.sequence, revision: 1,
 				activityKind: "system", status: "completed", summary: `Steered: ${text}`,
-				detail: { event: "steer", text, origin: "human", clientMessageId: str(payload.clientMessageId) }, createdAt: event.createdAt,
+				detail: {
+					event: "steer", text, clientMessageId: str(payload.clientMessageId),
+					// An orchestrator's message steered into a busy worker names only its label.
+					...(payload.origin === "automation" ? { origin: "automation", senderDisplayName: str(payload.senderLabel) } : { origin: "human" }),
+					// Deleted while the agent was taking it: it got the message anyway.
+					...(payload.deleteRequested === true ? { deliveredBeforeDelete: true } : {}),
+				},
+				createdAt: event.createdAt,
 			});
 			continue;
 		}
 		if (event.type !== "chat.assistant_delta") continue;
 		// Older Codex workers persisted this CLI status line as assistant text.
 		if (session.harness === "codex" && text.trim() === "Reading additional input from stdin...") continue;
-		const key = `${turnId ?? `event-${event.sequence}`}:${str(payload.itemId) ?? "reply"}`;
+		// Output frames carry no message identity, so a turn's text is one reply
+		// until a steer: what the agent writes after it answers the steer, and is
+		// its own reply in the steer's part of the turn.
+		const steered = turnId ? steers.get(turnId) ?? 0 : 0;
+		const key = `${turnId ?? `event-${event.sequence}`}:${str(payload.itemId) ?? "reply"}${steered ? `:steer-${steered}` : ""}`;
 		const previous = assistant.get(key);
 		if (previous) {
 			previous.text += text;
