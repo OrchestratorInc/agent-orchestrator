@@ -1136,7 +1136,7 @@ out):
   `request_<kind>_count` and `request_<kind>_p75_ms`, where `<kind>` is `lan`,
   `tailscale`, `tunnel`, `relay`, or `unknown`. A request the app cancelled
   because the screen was left, or one still in flight when the app went to the
-  background, is not counted. Orchestrator Cloud requests are not included.
+  background or telemetry was switched off or on, is not counted. Orchestrator Cloud requests are not included.
 - Returns to the app from the background with a machine paired:
   `resume_count`, and the time until a paired machine's data was fresh again
   in `resume_fresh_lt1000_count`,
