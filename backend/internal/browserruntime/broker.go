@@ -299,6 +299,16 @@ func (b *Broker) DestroySession(ctx context.Context, sessionID domain.SessionID)
 	return err
 }
 
+// ForgetSession clears durable profile state only after a worker has ended.
+// It is separate from DestroySession, which also runs before a failed kill.
+func (b *Broker) ForgetSession(ctx context.Context, sessionID domain.SessionID) error {
+	_, err := b.Execute(ctx, sessionID, "__forget-session", nil)
+	if errors.Is(err, ErrUnavailable) {
+		return nil
+	}
+	return err
+}
+
 // Serve accepts Electron runtime connections until ctx is cancelled. A new
 // valid runtime replaces an older connection and fails its in-flight commands;
 // this makes renderer reload/restart recovery deterministic.
