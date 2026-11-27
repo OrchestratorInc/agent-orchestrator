@@ -1,5 +1,6 @@
 // Settings UI access to the vault. Secrets are write-only: the renderer can
 // save a password or TOTP seed but no channel ever returns one.
+import { AoError } from "../../../packages/shared/telemetry/ao-error";
 import type { IpcMain, IpcMainInvokeEvent, WebContents } from "electron";
 import { VaultKeyLostError, type VaultAuditEntry, type VaultItemInput, type VaultItemSummary, type VaultStore } from "./browser-vault-store";
 
@@ -19,7 +20,7 @@ export function registerBrowserVaultIpc(options: {
     channels.push(channel);
   };
   const requireTrusted = (event: IpcMainInvokeEvent) => {
-    if (!trusted(event)) throw new Error("Vault access is not allowed from this page");
+    if (!trusted(event)) throw new AoError("VAULT_UNTRUSTED_SENDER", "Vault access is not allowed from this page");
   };
 
   handle("vault:list", async (event): Promise<VaultListResult> => {
@@ -42,7 +43,7 @@ export function registerBrowserVaultIpc(options: {
   handle("vault:delete", async (event, input) => {
     requireTrusted(event);
     const id = (input as { id?: unknown } | null)?.id;
-    if (typeof id !== "string" || !id) throw new Error("Invalid credential id");
+    if (typeof id !== "string" || !id) throw new AoError("VAULT_INVALID_ID", "Invalid credential id");
     await options.store.delete(id);
   });
   handle("vault:audit", async (event): Promise<VaultAuditEntry[]> => {
@@ -69,7 +70,7 @@ function parseItemInput(input: unknown): VaultItemInput {
     (raw.label !== undefined && typeof raw.label !== "string") ||
     (raw.totpSeed !== undefined && raw.totpSeed !== null && typeof raw.totpSeed !== "string")
   ) {
-    throw new Error("Invalid credential");
+    throw new AoError("VAULT_INVALID_ITEM", "Invalid credential");
   }
   return {
     ...(raw.id ? { id: raw.id as string } : {}),

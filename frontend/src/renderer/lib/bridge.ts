@@ -395,7 +395,7 @@ export const aoBridge: AoBridge =
 		vault: {
 			list: async () => ({ available: false, items: [] }),
 			save: async () => {
-				throw new Error("Saved passwords need the desktop app");
+				throw new AoError("VAULT_DESKTOP_REQUIRED", "Saved passwords need the desktop app");
 			},
 			delete: async () => undefined,
 			audit: async () => [],

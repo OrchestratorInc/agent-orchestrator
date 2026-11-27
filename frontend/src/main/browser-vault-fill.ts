@@ -1,6 +1,7 @@
 // Fills vault secrets into a page at the edge. The plaintext goes from the
 // vault straight into CDP Input.insertText; callers get back only a mask, and
 // the session's redactor scrubs the value from every later result.
+import { AoError } from "../../../packages/shared/telemetry/ao-error";
 import { randomBytes } from "node:crypto";
 import { MIN_REDACT_LENGTH, SECRET_MASK, createRedactor, normalizeVaultOrigin, secureCredentialOrigin, type Redactor } from "./browser-vault";
 import type { VaultField, VaultItemSummary, VaultStore } from "./browser-vault-store";
@@ -228,7 +229,7 @@ export function createCredentialFiller(options: { store: VaultStore; now?: () =>
       returnByValue: true,
     })) as { result?: { value?: T }; exceptionDetails?: { text?: string } };
     // A script that threw has no answer; callers fail closed on this.
-    if (response.exceptionDetails) throw new Error(`In-page check failed: ${response.exceptionDetails.text ?? "exception"}`);
+    if (response.exceptionDetails) throw new AoError("VAULT_PAGE_CHECK_FAILED", `In-page check failed: ${response.exceptionDetails.text ?? "exception"}`);
     return response.result?.value as T;
   };
 

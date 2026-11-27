@@ -1,6 +1,7 @@
 // Pure building blocks for the local credential vault: sealing, TOTP, origin
 // matching and redaction. Nothing here touches Electron, so tests and a future
 // remote-machine filler can share it.
+import { AoError } from "../../../packages/shared/telemetry/ao-error";
 import { createCipheriv, createDecipheriv, createHmac, randomBytes } from "node:crypto";
 
 export const SECRET_MASK = "••••";
@@ -24,7 +25,7 @@ export function seal(key: Buffer, value: unknown): string {
 /** Decrypts `seal` output; throws on a wrong key or any tampering. */
 export function openSealed<T = unknown>(key: Buffer, sealed: string): T {
   const parsed = JSON.parse(sealed) as Sealed;
-  if (parsed.v !== 1) throw new Error("unsupported vault format");
+  if (parsed.v !== 1) throw new AoError("VAULT_FORMAT_UNSUPPORTED", "unsupported vault format");
   const decipher = createDecipheriv("aes-256-gcm", key, Buffer.from(parsed.iv, "base64"));
   decipher.setAuthTag(Buffer.from(parsed.tag, "base64"));
   const plain = Buffer.concat([decipher.update(Buffer.from(parsed.ct, "base64")), decipher.final()]);
@@ -40,7 +41,7 @@ export function decodeBase32(input: string): Buffer {
   const out: number[] = [];
   for (const char of clean) {
     const index = BASE32.indexOf(char);
-    if (index < 0) throw new Error("TOTP seed is not valid base32");
+    if (index < 0) throw new AoError("VAULT_TOTP_INVALID", "TOTP seed is not valid base32");
     value = (value << 5) | index;
     bits += 5;
     if (bits >= 8) {
@@ -54,7 +55,7 @@ export function decodeBase32(input: string): Buffer {
 /** RFC 6238 TOTP (SHA-1, 30 s step, 6 digits), the default every site uses. */
 export function totpCode(seed: string, nowMs: number = Date.now()): string {
   const key = decodeBase32(seed);
-  if (!key.length) throw new Error("TOTP seed is empty");
+  if (!key.length) throw new AoError("VAULT_TOTP_EMPTY", "TOTP seed is empty");
   const counter = Buffer.alloc(8);
   counter.writeBigUInt64BE(BigInt(Math.floor(nowMs / 1000 / 30)));
   const hmac = createHmac("sha1", key).update(counter).digest();
@@ -72,9 +73,9 @@ export function normalizeVaultOrigin(input: string): string {
   const withScheme = /^[a-z][a-z0-9+.-]*:\/\//i.test(trimmed) || /^(javascript|data|about|blob):/i.test(trimmed) ? trimmed : `https://${trimmed}`;
   const url = new URL(withScheme);
   if (url.protocol !== "https:" && url.protocol !== "http:") {
-    throw new Error("Only http and https sites can hold credentials");
+    throw new AoError("VAULT_SITE_SCHEME", "Only http and https sites can hold credentials");
   }
-  if (!url.hostname) throw new Error("Site has no host");
+  if (!url.hostname) throw new AoError("VAULT_SITE_NO_HOST", "Site has no host");
   return url.origin;
 }
 

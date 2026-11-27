@@ -5,6 +5,7 @@
 //             machine's host key is the seam for future vault sync.
 // items.sealed every item, AES-256-GCM under the data key.
 // audit.jsonl one line per fill attempt; never holds a secret.
+import { AoError } from "../../../packages/shared/telemetry/ao-error";
 import { randomBytes, randomUUID } from "node:crypto";
 import { appendFile, chmod, mkdir, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
@@ -95,16 +96,16 @@ export class VaultStore {
   save(input: VaultItemInput): Promise<VaultItemSummary> {
     return this.mutate((contents) => {
       const origins = [...new Set(input.origins.map(normalizeVaultOrigin))];
-      if (!origins.length) throw new Error("Add at least one site");
+      if (!origins.length) throw new AoError("VAULT_NO_SITE", "Add at least one site");
       const insecure = origins.find((origin) => !secureCredentialOrigin(origin));
       if (insecure) {
-        throw new Error(`${insecure} uses plain HTTP. Saved passwords only fill over HTTPS, or http:// on this computer.`);
+        throw new AoError("VAULT_INSECURE_SITE", `${insecure} uses plain HTTP. Saved passwords only fill over HTTPS, or http:// on this computer.`);
       }
       const time = new Date(this.now()).toISOString();
       const existing = input.id ? contents.items.find((item) => item.id === input.id) : undefined;
-      if (input.id && !existing) throw new Error("Credential not found");
+      if (input.id && !existing) throw new AoError("VAULT_ITEM_NOT_FOUND", "Credential not found");
       const password = input.password || existing?.password || "";
-      if (!password) throw new Error("Password is required");
+      if (!password) throw new AoError("VAULT_PASSWORD_REQUIRED", "Password is required");
       const seed =
         input.totpSeed === null
           ? undefined
@@ -153,16 +154,16 @@ export class VaultStore {
     projectId: string;
   }): Promise<string> {
     const item = (await this.read()).items.find((candidate) => candidate.id === request.itemId);
-    if (!item) throw new Error("Credential not found");
+    if (!item) throw new AoError("VAULT_ITEM_NOT_FOUND", "Credential not found");
     if (!originAllowed(item.origins, request.pageURL)) {
-      throw new Error("Page origin does not match this credential");
+      throw new AoError("VAULT_ORIGIN_MISMATCH", "Page origin does not match this credential");
     }
     if (!projectAllowed(item, request.projectId)) {
-      throw new Error("This project may not use this credential");
+      throw new AoError("VAULT_PROJECT_NOT_ALLOWED", "This project may not use this credential");
     }
     if (request.field === "username") return item.username;
     if (request.field === "password") return item.password;
-    if (!item.totpSeed) throw new Error("This credential has no TOTP seed");
+    if (!item.totpSeed) throw new AoError("VAULT_NO_TOTP", "This credential has no TOTP seed");
     return totpCode(item.totpSeed, this.now());
   }
 
@@ -221,7 +222,7 @@ export class VaultStore {
   private async dataKey(create: boolean): Promise<Buffer | undefined> {
     if (this.key) return this.key;
     if (!this.protector.available()) {
-      throw new Error("The OS keychain is unavailable, so credentials cannot be stored safely");
+      throw new AoError("VAULT_KEYCHAIN_UNAVAILABLE", "The OS keychain is unavailable, so credentials cannot be stored safely");
     }
     const file = path.join(this.dir, "key.bin");
     let wrapped: Buffer | undefined;
