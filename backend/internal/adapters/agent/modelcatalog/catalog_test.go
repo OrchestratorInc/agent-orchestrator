@@ -23,11 +23,18 @@ func TestModelCommandUsesProjectWorkingDirectory(t *testing.T) {
 	if cmd.Dir != "/work/project" {
 		t.Fatalf("Dir = %q, want /work/project", cmd.Dir)
 	}
-	if cmd.WaitDelay != commandTerminationWait {
-		t.Fatalf("WaitDelay = %s, want %s", cmd.WaitDelay, commandTerminationWait)
+	if cmd.WaitDelay != 5*time.Second {
+		t.Fatalf("WaitDelay = %s, want 5s", cmd.WaitDelay)
 	}
 	if !environmentContains(cmd.Env, "OPENCODE_CONFIG=/project/opencode.json") {
 		t.Fatalf("Env does not contain project override: %#v", cmd.Env)
+	}
+}
+
+func TestModelCommandKeepsInterruptGraceShort(t *testing.T) {
+	cmd := commandSpecs["minimax-code"].command(context.Background(), "agent", "/work/project", nil)
+	if cmd.WaitDelay != 2*time.Second {
+		t.Fatalf("interrupt grace = %s, want 2s", cmd.WaitDelay)
 	}
 }
 
@@ -200,7 +207,7 @@ func TestModelDiscoveryErrorExplainsTimeout(t *testing.T) {
 func TestModelDiscoveryErrorExplainsWaitDelay(t *testing.T) {
 	for _, cause := range []error{exec.ErrWaitDelay, fmt.Errorf("command wrapper: %w", exec.ErrWaitDelay)} {
 		err := modelDiscoveryError(context.Background(), "agy", cause, []byte("\x1b[33mCLI diagnostic\x1b[0m\n"))
-		for _, want := range []string{"agy", "background process", "2s", "Retry model refresh"} {
+		for _, want := range []string{"agy", "background process", "Retry model refresh"} {
 			if !strings.Contains(err.Error(), want) {
 				t.Errorf("error = %q, want %q", err, want)
 			}
@@ -236,6 +243,28 @@ func TestModelDiscoveryContextErrorsTakePrecedenceOverWaitDelay(t *testing.T) {
 		if tc.ctx == canceledCtx && !errors.Is(err, context.Canceled) {
 			t.Errorf("error = %v, want cancellation identity preserved", err)
 		}
+	}
+}
+
+func TestDiscoverWaitsForShortLivedDescendant(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("fixture requires a POSIX shell")
+	}
+	dir := t.TempDir()
+	binary := filepath.Join(dir, "fake-agy")
+	// The child outlives the old 2s drain wait but exits within the new 5s wait.
+	script := "#!/bin/sh\nsleep 3 &\nprintf 'gemini-3.7-flash-high  Gemini 3.7 Flash (High)\\n'\nexit 0\n"
+	if err := os.WriteFile(binary, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	catalog, err := (Discoverer{}).Discover(context.Background(), ports.AgentModelDiscoveryRequest{
+		AgentID: "agy", Binary: binary, WorkingDir: dir,
+	})
+	if err != nil {
+		t.Fatalf("Discover: %v", err)
+	}
+	if len(catalog.Models) != 1 || catalog.Models[0].ID != "gemini-3.7-flash-high" {
+		t.Fatalf("models = %#v, want the discovered model", catalog.Models)
 	}
 }
 

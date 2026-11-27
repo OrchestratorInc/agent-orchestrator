@@ -39,9 +39,12 @@ const (
 	// bounded allowance for every command-backed adapter.
 	commandTimeout = 20 * time.Second
 
-	// Some CLIs leave descendants holding stdout/stderr open after the parent is
-	// canceled. Bound that pipe-drain wait so a timed-out discovery request does
-	// not linger well beyond commandTimeout.
+	// Give short-lived descendants time to release stdout/stderr after the
+	// parent exits, while bounding the extra wait for a stuck output pipe.
+	commandOutputWait = 5 * time.Second
+
+	// Keep the interrupt grace short for CLIs that must release profile locks
+	// before cancellation escalates to a forced kill.
 	commandTerminationWait = 2 * time.Second
 )
 
@@ -816,7 +819,7 @@ func hasDiscoverySource(agentID string) bool {
 
 func modelCommand(ctx context.Context, binary string, args []string, workingDir string, env map[string]string) *exec.Cmd {
 	cmd := aoprocess.CommandContext(ctx, binary, args...) //nolint:gosec // binary is adapter-resolved, args are static
-	cmd.WaitDelay = commandTerminationWait
+	cmd.WaitDelay = commandOutputWait
 	if strings.TrimSpace(workingDir) != "" {
 		cmd.Dir = workingDir
 	}
@@ -854,7 +857,7 @@ type modelDiscoveryPipeError struct {
 }
 
 func (e modelDiscoveryPipeError) Error() string {
-	return fmt.Sprintf("Could not load %s models: a background process kept the agent's output open for more than %s after the command exited. Retry model refresh; if it keeps failing, restart or update the agent CLI.", e.agentID, commandTerminationWait)
+	return fmt.Sprintf("Could not load %s models: a background process kept the agent's output open after the command exited. Retry model refresh; if it keeps failing, restart or update the agent CLI.", e.agentID)
 }
 
 func (e modelDiscoveryPipeError) Unwrap() error { return e.cause }
