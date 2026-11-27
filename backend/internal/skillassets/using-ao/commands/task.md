@@ -46,7 +46,10 @@ project's defaults with `ao project set-config <id> --worker-agent <agent>
 `status` in the JSON is `starting`, `queued` (accepted; the agent runs it after
 its current turn), `running`, `done`, `failed`, or `needs_input`. A task counts
 as started once its turn has finished, or has stayed running for 5 seconds. Use
-a `--timeout` of at least `10s`.
+a `--timeout` of at least `10s`. A status read that fails for a passing reason
+(the daemon briefly unreachable, a 5xx) does not end a wait; it keeps polling
+within `--timeout`. A task that was just created keeps its `taskId` even if its
+first status read fails.
 
 `--wait` and `ao task wait` confirm that the task **started**, not that it
 finished: they return once its turn has run for 5 seconds. An approval the

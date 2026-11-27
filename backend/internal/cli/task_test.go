@@ -1199,8 +1199,9 @@ func TestTaskStatusWorkerApprovalBeforeAQueuedFollowUp(t *testing.T) {
 		t.Fatalf("result = %v", res)
 	}
 	// The fix names the worker to answer, not the orchestrator in sessionIds[0].
-	if fix := res["fix"].(string); !strings.Contains(fix, "session repo-3") || strings.Contains(fix, "repo-orchestrator") {
-		t.Fatalf("fix = %q; want it to name worker repo-3", fix)
+	// It then says how to keep following the original task.
+	if fix := res["fix"].(string); !strings.HasPrefix(fix, "answer the pending request in session repo-3 ") || !strings.HasSuffix(fix, "`ao task wait repo-orchestrator:t2`") {
+		t.Fatalf("fix = %q; want it to name worker repo-3, then `ao task wait repo-orchestrator:t2`", fix)
 	}
 }
 
@@ -1258,5 +1259,57 @@ func TestTaskWaitCancelledDuringTheFinalReadIsInterrupted(t *testing.T) {
 	res := c.waitTask(ctx, taskResult{TaskID: "repo-orchestrator:t2"}, 5*time.Second)
 	if res.Status != taskStatusFailed || !strings.Contains(res.Reason, "interrupted while waiting") || res.TaskID != "repo-orchestrator:t2" || res.waitTimedOut {
 		t.Fatalf("result = %+v; want an interrupted wait for the known task id", res)
+	}
+}
+
+// A transient status-read failure (503) right after a worker task is created
+// keeps its task id and does not end `start --wait`; the next read succeeds.
+func TestTaskStartWaitRetriesATransientReadFailure(t *testing.T) {
+	d := newTaskDaemon(t)
+	d.set("POST /api/v1/orchestrators/delegate", 202, `{"ok":true,"workerId":"repo-1"}`)
+	reads := 0
+	d.setFunc("GET /api/v1/sessions/repo-1", func() (int, string) {
+		reads++
+		if reads <= 2 {
+			return 503, `{"error":"unavailable","code":"TEMPORARY","message":"try again"}`
+		}
+		return 200, `{"session":{"id":"repo-1","harness":"claude-code","mode":"chat","provisionState":"ready","activity":{"state":"waiting_input"}}}`
+	})
+	d.set("GET /api/v1/sessions/repo-1/conversation", 200, `{"turns":[{"id":"t1","state":"completed"}]}`)
+
+	out, _, err := executeCLI(t, fakeClockDeps(), "task", "start", "fix calc", "--project", "repo", "--worker", "--wait", "--json")
+	if err != nil {
+		t.Fatalf("exit = %d (%v), want 0", ExitCode(err), err)
+	}
+	if res := decodeTaskResult(t, out); res["status"] != "done" || res["taskId"] != "repo-1" {
+		t.Fatalf("result = %v", res)
+	}
+}
+
+// `ao task wait` keeps polling through a transient read failure, but a
+// permanent lookup error (unknown session) still ends it at once.
+func TestTaskWaitTransientVersusPermanentReadFailures(t *testing.T) {
+	d := newTaskDaemon(t)
+	reads := 0
+	d.setFunc("GET /api/v1/sessions/repo-1", func() (int, string) {
+		reads++
+		if reads == 1 {
+			return 503, `{"error":"unavailable","code":"TEMPORARY","message":"try again"}`
+		}
+		return 200, `{"session":{"id":"repo-1","harness":"claude-code","mode":"chat","provisionState":"ready","activity":{"state":"waiting_input"}}}`
+	})
+	d.set("GET /api/v1/sessions/repo-1/conversation", 200, `{"turns":[{"id":"t1","state":"completed"}]}`)
+
+	out, _, err := executeCLI(t, fakeClockDeps(), "task", "wait", "repo-1", "--json")
+	if err != nil || decodeTaskResult(t, out)["status"] != "done" {
+		t.Fatalf("transient: err = %v, out = %s", err, out)
+	}
+
+	out, _, err = executeCLI(t, fakeClockDeps(), "task", "wait", "repo-9", "--json")
+	if got := ExitCode(err); got != 1 {
+		t.Fatalf("permanent: exit = %d (%v), want 1", got, err)
+	}
+	if res := decodeTaskResult(t, out); res["reason"] != "session repo-9 not found" {
+		t.Fatalf("permanent: result = %v", res)
 	}
 }

@@ -357,7 +357,7 @@ func (c *commandContext) createTask(ctx context.Context, project projectDetails,
 		if strings.TrimSpace(out.WorkerID) == "" {
 			return failedTask("", nil, "daemon returned no worker id", "")
 		}
-		return c.taskStatus(ctx, taskID{session: out.WorkerID})
+		return c.createdTaskStatus(ctx, taskID{session: out.WorkerID})
 	}
 
 	if project.Config != nil {
@@ -418,7 +418,7 @@ func (c *commandContext) createTask(ctx context.Context, project projectDetails,
 		if err := c.postJSON(ctx, "sessions/"+url.PathEscape(orchestratorID)+"/send", sendAPIRequest{Message: message, SenderSessionID: sender, UserAuthored: sender == ""}, nil); err != nil {
 			return c.taskAPIFailure(ctx, sessions, sess.Harness, "send task to orchestrator", err)
 		}
-		return c.taskStatus(ctx, taskID{session: orchestratorID})
+		return c.createdTaskStatus(ctx, taskID{session: orchestratorID})
 	}
 	switch {
 	case errors.As(sendErr, &apiErr):
@@ -433,7 +433,7 @@ func (c *commandContext) createTask(ctx context.Context, project projectDetails,
 		return failedTask("", sessions, fmt.Sprintf("orchestrator %s accepted the task but the daemon returned no turn id, so no task id can be reported; the task may still run (client message id %s)", orchestratorID, clientMessageID),
 			fmt.Sprintf("check `ao session history %s` before starting the task again, so it does not run twice", orchestratorID))
 	}
-	return c.taskStatus(ctx, taskID{session: orchestratorID, turn: strings.TrimSpace(sent.TurnID)})
+	return c.createdTaskStatus(ctx, taskID{session: orchestratorID, turn: strings.TrimSpace(sent.TurnID)})
 }
 
 // spawnOrchestratorAPIRequest mirrors the daemon's SpawnOrchestratorRequest
@@ -706,9 +706,35 @@ type taskObservation struct {
 	phase   string
 	// readFailed: the result is a failed read, not a reading of the task.
 	readFailed bool
+	// transient: the failed read may succeed if tried again (daemon
+	// unreachable, 5xx, 429), so it says nothing about the task.
+	transient bool
 	// turnID is the turn the status describes (after retries), empty for a
 	// terminal session or before the turn exists.
 	turnID string
+}
+
+// isTransientReadErr reports whether a status read failed for a reason that a
+// later read can clear, as opposed to a permanent lookup error such as 404.
+func isTransientReadErr(err error) bool {
+	var unavailable daemonUnavailableError
+	if errors.As(err, &unavailable) || errors.Is(err, context.DeadlineExceeded) {
+		return true
+	}
+	var apiErr apiResponseError
+	return errors.As(err, &apiErr) && (apiErr.StatusCode >= 500 || apiErr.StatusCode == http.StatusTooManyRequests)
+}
+
+// createdTaskStatus is the first status of a task that was just created. A
+// transient read failure must not turn it into a failed task: the task exists
+// and keeps its id, so it reports starting and a wait keeps polling.
+func (c *commandContext) createdTaskStatus(ctx context.Context, id taskID) taskResult {
+	obs := c.observeTask(ctx, id)
+	if obs.readFailed && obs.transient {
+		return taskResult{Status: taskStatusStarting, TaskID: id.String(), SessionIDs: []string{id.session},
+			Reason: "the task was created, but its first status read failed: " + obs.result.Reason}
+	}
+	return obs.result
 }
 
 // taskStatus reads the task's session and conversation once.
@@ -720,7 +746,7 @@ func (c *commandContext) observeTask(ctx context.Context, id taskID) taskObserva
 	sessions := []string{id.session}
 	sess, err := c.fetchTaskSession(ctx, id.session)
 	if err != nil {
-		return taskObservation{result: failedTask(id.String(), sessions, err.Error(), ""), readFailed: true}
+		return taskObservation{result: failedTask(id.String(), sessions, err.Error(), ""), readFailed: true, transient: isTransientReadErr(err)}
 	}
 	var conv *taskConversation
 	if sess.Mode != "tui" && sess.ProvisionState != "provisioning" && !sess.IsTerminated {
@@ -735,6 +761,7 @@ func (c *commandContext) observeTask(ctx context.Context, id taskID) taskObserva
 				result:     failedTask(id.String(), sessions, fmt.Sprintf("read conversation of %s: %s", id.session, err.Error()), ""),
 				harness:    sess.Harness,
 				readFailed: true,
+				transient:  isTransientReadErr(err),
 			}
 		}
 	}
@@ -760,7 +787,7 @@ func (c *commandContext) observeTask(ctx context.Context, id taskID) taskObserva
 		res.Fix = fmt.Sprintf("set up the API key that %s needs in the Orchestrator app's Agent Harnesses settings, then retry", sess.Harness)
 	}
 	if res.Status == taskStatusNeedsInput && res.Fix == "" {
-		res.Fix = answerInSessionFix(id.session)
+		res.Fix = answerInSessionFix(id.session, id.String())
 	}
 	// An orchestrator task is only as finished as the workers its turn started.
 	if id.turn != "" && len(eval.spawned) > 0 && (res.Status == taskStatusRunning || res.Status == taskStatusDone) {
@@ -772,8 +799,8 @@ func (c *commandContext) observeTask(ctx context.Context, id taskID) taskObserva
 
 // answerInSessionFix names the session whose pending request the user must
 // answer, so a caller opens the right one rather than the orchestrator.
-func answerInSessionFix(session string) string {
-	return fmt.Sprintf("answer the pending request in session %s (open it in the Orchestrator app; `ao session get %s` shows it), then keep waiting with `ao task wait`", session, session)
+func answerInSessionFix(session, task string) string {
+	return fmt.Sprintf("answer the pending request in session %s (open it in the Orchestrator app; `ao session get %s` shows it), then keep waiting with `ao task wait %s`", session, session, task)
 }
 
 // foldTaskWorkers combines the orchestrator turn's status with the workers its
@@ -819,7 +846,7 @@ func (c *commandContext) foldTaskWorkers(ctx context.Context, res taskResult, wo
 		res.Status = taskStatusNeedsInput
 		res.Reason = fmt.Sprintf("worker %s is waiting for your answer or approval", strings.Join(needs, ", "))
 		// Name the worker, not the orchestrator, as the session to answer.
-		res.Fix = answerInSessionFix(needs[0])
+		res.Fix = answerInSessionFix(needs[0], res.TaskID)
 	case len(failed) > 0 && turnDone:
 		res.Status, res.Reason, res.Fix = taskStatusFailed, failReason, failFix
 	case len(active) > 0 || len(failed) > 0:
@@ -1037,6 +1064,19 @@ func (c *commandContext) waitTask(ctx context.Context, res taskResult, timeout t
 		}
 		if obs.readFailed && readErr != nil {
 			break // the read ran into the deadline
+		}
+		if obs.readFailed && obs.transient {
+			// Says nothing about the task: keep the last reading and try again
+			// within the wait budget.
+			if last.Status == "" || last.Status == taskStatusFailed {
+				last.Status = taskStatusStarting
+			}
+			last.Reason = "the last status read failed: " + obs.result.Reason
+			if remaining = deadline.Sub(c.deps.Now()); remaining <= 0 {
+				break
+			}
+			c.deps.Sleep(min(taskPollInterval, remaining))
+			continue
 		}
 		if obs.harness != "" {
 			harness = obs.harness
