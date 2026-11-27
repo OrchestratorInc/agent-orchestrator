@@ -203,6 +203,36 @@ ao report --done --note "Focused tests passed"
 
 `ao report` must run in a worker environment that provides `AO_SESSION_ID`.
 
+## Agent tokens and limits
+
+Unreleased: an agent that runs `ao` from outside the app can have its own token, and the daemon holds that token to a limit. A caller with no token on this machine is still you, with no limit.
+
+```bash
+ao token create ci-bot --level operate --project my-app --expires 30d
+export AO_TOKEN=aoa_...   # printed once by the command above
+ao whoami
+```
+
+| Command | Purpose |
+| --- | --- |
+| `ao token create <name>` | Create a token. `--level read\|operate\|manage` sets what it may do, `--project <id>` limits it to projects, and `--expires 12h` ends it. |
+| `ao token ls` / `ao token revoke <id-or-name>` | List or end tokens. |
+| `ao whoami` | Show who the daemon takes the caller to be, and its limit. |
+| `ao actions ls` / `ao actions show <action>` | List the actions a limited caller can reach, with each action's input. |
+| `ao call <action> --input '<json>'` | Run one listed action that has no command of its own. |
+| `ao session wait <id>...` | Block until a session stops working or asks for an answer. `--timeout` defaults to 10 minutes. |
+| `ao send --session <id> --message "..." --wait` | Send a message and block until the session answers it. |
+
+`read` can look at sessions, projects and settings. `operate` can also start, message and stop sessions, answer their questions and merge pull requests. `manage` can also change projects, automations and settings, and delete sessions. A call above the limit is refused and never asks for approval.
+
+Only `read` is a hard limit. A token that can start or message a session can have that session run any command as you, so give `operate` or `manage` only to an agent you trust with this machine. A session has no limit of its own, and it keeps running when the token that started it is ended.
+
+Inside a session, `AO_TOKEN` is not used: the session is the caller, so a token exported in your shell profile does not change the sessions the app starts.
+
+Exit codes a script can branch on: `3` unknown action, `4` refused by the limit or the token, `5` a session waits for an answer, `124` a wait timed out.
+
+The limit covers calls to the daemon. It does not confine a process that runs as your OS user, and an agent's permission mode stays separate.
+
 ## Pull requests and reviews
 
 | Command | Purpose |
@@ -282,6 +312,7 @@ Lets your other devices use this machine through its authenticated remote listen
 | `AO_SHUTDOWN_TIMEOUT` | `10s` | Graceful shutdown limit. It also scales how long a starting daemon waits for a previous daemon to release the data directory (9 × this + 18 s). |
 | `AO_SESSION_ID` | unset | Current session context for preview, browser, and in-session calls. |
 | `AO_PROJECT_ID` | unset | Current project context for spawn resolution. |
+| `AO_TOKEN` | unset | Unreleased: the agent token the CLI presents. The caller is then held to that token's limit. |
 
 All current Orchestrator application state stays under `~/.ao` unless `AO_DATA_DIR` or `AO_RUN_FILE` overrides it.
 

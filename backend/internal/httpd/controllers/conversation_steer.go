@@ -41,6 +41,9 @@ func (c *ConversationsController) steerOrSend(w http.ResponseWriter, r *http.Req
 	if !decodeConversationBody(w, r, &req) {
 		return
 	}
+	if text, token := relayed(r, req.Text); token {
+		req.Text, req.SenderSessionID = text, ""
+	}
 	content, attachmentErr := conversationContent(SendConversationMessageRequest{
 		Attachments: req.Attachments,
 	})

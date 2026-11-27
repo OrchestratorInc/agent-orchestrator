@@ -88,8 +88,9 @@ type sessionDTO struct {
 	WorkspaceCleanup string `json:"workspaceCleanup,omitempty"`
 	// ProvisionState is "failed" when the session never started;
 	// ProvisionError is the reason.
-	ProvisionState string `json:"provisionState,omitempty"`
-	ProvisionError string `json:"provisionError,omitempty"`
+	ProvisionState  string `json:"provisionState,omitempty"`
+	ProvisionError  string `json:"provisionError,omitempty"`
+	StatusReadiness string `json:"statusReadiness,omitempty"`
 }
 
 type sessionArtifactDTO struct {
@@ -268,6 +269,7 @@ func newSessionCommand(ctx *commandContext) *cobra.Command {
 	cmd.AddCommand(newSessionHistoryCommand(ctx))
 	cmd.AddCommand(newSessionForkCommand(ctx))
 	cmd.AddCommand(newSessionSwitchCommand(ctx))
+	cmd.AddCommand(newSessionWaitCommand(ctx))
 	return cmd
 }
 

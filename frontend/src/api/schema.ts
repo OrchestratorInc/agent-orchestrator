@@ -4,6 +4,92 @@
  */
 
 export interface paths {
+    "/api/v1/access/actions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List the actions a caller with a grant can run */
+        get: operations["listAccessActions"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/access/actions/{actionId}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Show one catalog action with its input shape */
+        get: operations["getAccessAction"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/access/tokens": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List this machine's agent tokens */
+        get: operations["listAccessTokens"];
+        put?: never;
+        /** Create a named agent token with a grant */
+        post: operations["createAccessToken"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/access/tokens/{tokenId}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /** Revoke an agent token by id or name */
+        delete: operations["revokeAccessToken"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/access/whoami": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Show who the daemon takes the caller to be, and its grant */
+        get: operations["getAccessWhoami"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/agents": {
         parameters: {
             query?: never;
@@ -5645,6 +5731,65 @@ export interface components {
             reporting_owner?: "http";
             requestId?: string;
         };
+        AccessActionDetailResponse: {
+            /** @description Whether the caller's grant reaches the action's level. Project limits are checked on the call. */
+            allowed: boolean;
+            /** @description The JSON body schema, when the action takes a body. */
+            body?: {
+                [key: string]: unknown;
+            };
+            id: string;
+            /**
+             * @description The lowest grant level that reaches the action.
+             * @enum {string}
+             */
+            level: "read" | "operate" | "manage";
+            method: string;
+            /** @description The path and query parameters, as OpenAPI parameter objects. */
+            parameters: {
+                [key: string]: unknown;
+            }[];
+            path: string;
+            summary?: string;
+        };
+        AccessActionEnvelope: {
+            action: components["schemas"]["AccessActionDetailResponse"];
+        };
+        AccessActionResponse: {
+            /** @description Whether the caller's grant reaches the action's level. Project limits are checked on the call. */
+            allowed: boolean;
+            id: string;
+            /**
+             * @description The lowest grant level that reaches the action.
+             * @enum {string}
+             */
+            level: "read" | "operate" | "manage";
+            method: string;
+            path: string;
+            summary?: string;
+        };
+        AccessGrantResponse: {
+            /** @description True when the grant has expired. */
+            ended?: boolean;
+            /** Format: date-time */
+            expiresAt?: null | string;
+            /**
+             * @description read looks, operate also runs work, manage also changes setup and deletes.
+             * @enum {string}
+             */
+            level: "read" | "operate" | "manage";
+            /** @description Project ids the grant is limited to. Empty means every project. */
+            projects?: string[];
+        };
+        AccessTokenResponse: {
+            /** Format: date-time */
+            createdAt: string;
+            grant: components["schemas"]["AccessGrantResponse"];
+            id: string;
+            /** Format: date-time */
+            lastUsedAt?: null | string;
+            name: string;
+        };
         AcknowledgeSessionInterfaceTransitionNoticeResponse: {
             ok: boolean;
             sessionId: string;
@@ -7500,6 +7645,18 @@ export interface components {
             /** Format: int64 */
             totalTokens: number;
         };
+        CreateAccessTokenRequest: {
+            /** Format: date-time */
+            expiresAt?: null | string;
+            /** @enum {string} */
+            level: "read" | "operate" | "manage";
+            name: string;
+            projects?: string[];
+        };
+        CreateAccessTokenResponse: {
+            secret: string;
+            token: components["schemas"]["AccessTokenResponse"];
+        };
         CreateAutomationRequest: {
             cron?: string;
             displayName: string;
@@ -7999,6 +8156,12 @@ export interface components {
             siteName?: string;
             title?: string;
             url: string;
+        };
+        ListAccessActionsResponse: {
+            actions: components["schemas"]["AccessActionResponse"][];
+        };
+        ListAccessTokensResponse: {
+            tokens: components["schemas"]["AccessTokenResponse"][];
         };
         ListAgentAuthPlansResponse: {
             plans: components["schemas"]["AgentAuthPlan"][];
@@ -10234,6 +10397,17 @@ export interface components {
             /** @enum {string} */
             status: "waiting" | "complete" | "duplicate" | "mismatch" | "not_subscription";
         };
+        WhoamiResponse: {
+            grant?: components["schemas"]["AccessGrantResponse"];
+            id?: string;
+            /**
+             * @description user is a caller on this machine with no token. A session is named by its own header, which is not a proof.
+             * @enum {string}
+             */
+            kind: "user" | "session" | "token" | "device";
+            /** @description The token name. */
+            name?: string;
+        };
         WorkspaceBranchResponse: {
             checkedOut: boolean;
             detached?: boolean;
@@ -10524,6 +10698,305 @@ export interface components {
 }
 export type $defs = Record<string, never>;
 export interface operations {
+    listAccessActions: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ListAccessActionsResponse"];
+                };
+            };
+            /** @description Unauthorized */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    getAccessAction: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Catalog action id, for example session.spawn. */
+                actionId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AccessActionEnvelope"];
+                };
+            };
+            /** @description Unauthorized */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    listAccessTokens: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ListAccessTokensResponse"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Forbidden */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    createAccessToken: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CreateAccessTokenRequest"];
+            };
+        };
+        responses: {
+            /** @description Created */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CreateAccessTokenResponse"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Forbidden */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    revokeAccessToken: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Agent token id or name. */
+                tokenId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description No Content */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Forbidden */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    getAccessWhoami: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WhoamiResponse"];
+                };
+            };
+            /** @description Unauthorized */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
     listAgents: {
         parameters: {
             query?: never;

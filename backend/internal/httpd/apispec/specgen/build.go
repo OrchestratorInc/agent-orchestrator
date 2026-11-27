@@ -655,14 +655,26 @@ var schemaNames = map[string]string{ //nolint:gosec // Public OpenAPI type names
 	"ControllersOpenCodexAccountLoginTerminalResponse": "OpenCodexAccountLoginTerminalResponse",
 	"ControllersCodexAccountLoginTerminalResponse":     "CodexAccountLoginTerminalResponse",
 	// httpd/controllers — project cue wire envelopes
-	"ControllersCueIDParam":           "CueIDParam",
-	"ControllersCueProjectIDParam":    "CueProjectIDParam",
-	"ControllersCueDefinitionRequest": "CueDefinitionRequest",
-	"ControllersCueResponse":          "CueResponse",
-	"ControllersListCuesResponse":     "ListCuesResponse",
-	"ControllersInvokeCueRequest":     "InvokeCueRequest",
-	"ControllersInvokeCueResponse":    "InvokeCueResponse",
-	"ControllersCueEnvelope":          "CueEnvelope",
+	"ControllersCueIDParam":                 "CueIDParam",
+	"ControllersCueProjectIDParam":          "CueProjectIDParam",
+	"ControllersCueDefinitionRequest":       "CueDefinitionRequest",
+	"ControllersCueResponse":                "CueResponse",
+	"ControllersListCuesResponse":           "ListCuesResponse",
+	"ControllersInvokeCueRequest":           "InvokeCueRequest",
+	"ControllersInvokeCueResponse":          "InvokeCueResponse",
+	"ControllersCueEnvelope":                "CueEnvelope",
+	"ControllersAccessGrantResponse":        "AccessGrantResponse",
+	"ControllersWhoamiResponse":             "WhoamiResponse",
+	"ControllersAccessActionResponse":       "AccessActionResponse",
+	"ControllersListAccessActionsResponse":  "ListAccessActionsResponse",
+	"ControllersAccessActionDetailResponse": "AccessActionDetailResponse",
+	"ControllersAccessActionEnvelope":       "AccessActionEnvelope",
+	"ControllersAccessActionIDParam":        "AccessActionIDParam",
+	"ControllersAccessTokenResponse":        "AccessTokenResponse",
+	"ControllersListAccessTokensResponse":   "ListAccessTokensResponse",
+	"ControllersCreateAccessTokenRequest":   "CreateAccessTokenRequest",
+	"ControllersCreateAccessTokenResponse":  "CreateAccessTokenResponse",
+	"ControllersAccessTokenIDParam":         "AccessTokenIDParam",
 	// httpd/controllers — PR wire envelopes
 	"ControllersMergePRRequest":             "MergePRRequest",
 	"ControllersPRStackLayerResponse":       "PRStackLayerResponse",
@@ -912,7 +924,26 @@ func operations() []operation {
 	ops = append(ops, linkPreviewOperations()...)
 	ops = append(ops, prPreviewOperations()...)
 	ops = append(ops, sessionSearchOperations()...)
+	ops = append(ops, accessOperations()...)
 	return ops
+}
+
+func accessOperations() []operation {
+	tokenErrors := []respUnit{
+		{http.StatusBadRequest, envelope.APIError{}},
+		{http.StatusForbidden, envelope.APIError{}},
+		{http.StatusNotFound, envelope.APIError{}},
+		{http.StatusInternalServerError, envelope.APIError{}},
+		{http.StatusNotImplemented, envelope.APIError{}},
+	}
+	return []operation{
+		{method: http.MethodGet, path: "/api/v1/access/whoami", id: "getAccessWhoami", tag: "access", summary: "Show who the daemon takes the caller to be, and its grant", resps: []respUnit{{http.StatusOK, controllers.WhoamiResponse{}}, {http.StatusUnauthorized, envelope.APIError{}}}},
+		{method: http.MethodGet, path: "/api/v1/access/actions", id: "listAccessActions", tag: "access", summary: "List the actions a caller with a grant can run", resps: []respUnit{{http.StatusOK, controllers.ListAccessActionsResponse{}}, {http.StatusUnauthorized, envelope.APIError{}}}},
+		{method: http.MethodGet, path: "/api/v1/access/actions/{actionId}", id: "getAccessAction", tag: "access", summary: "Show one catalog action with its input shape", pathParams: []any{controllers.AccessActionIDParam{}}, resps: []respUnit{{http.StatusOK, controllers.AccessActionEnvelope{}}, {http.StatusUnauthorized, envelope.APIError{}}, {http.StatusNotFound, envelope.APIError{}}}},
+		{method: http.MethodGet, path: "/api/v1/access/tokens", id: "listAccessTokens", tag: "access", summary: "List this machine's agent tokens", resps: append([]respUnit{{http.StatusOK, controllers.ListAccessTokensResponse{}}}, tokenErrors...)},
+		{method: http.MethodPost, path: "/api/v1/access/tokens", id: "createAccessToken", tag: "access", summary: "Create a named agent token with a grant", reqBody: controllers.CreateAccessTokenRequest{}, resps: append([]respUnit{{http.StatusCreated, controllers.CreateAccessTokenResponse{}}}, tokenErrors...)},
+		{method: http.MethodDelete, path: "/api/v1/access/tokens/{tokenId}", id: "revokeAccessToken", tag: "access", summary: "Revoke an agent token by id or name", pathParams: []any{controllers.AccessTokenIDParam{}}, resps: append([]respUnit{{http.StatusNoContent, nil}}, tokenErrors...)},
+	}
 }
 
 func automationOperations() []operation {

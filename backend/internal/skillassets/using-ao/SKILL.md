@@ -18,6 +18,8 @@ trigger: "Using the `ao` CLI, setting up Orchestrator for a user, importing exis
 | `project` | Register, inspect, configure, or remove projects | Setting up or managing repos Orchestrator knows about | [commands/project.md](commands/project.md) |
 | `automation` | Manage durable recurring session automations | Creating, editing, disabling, deleting, and inspecting scheduled runs | [commands/automation.md](commands/automation.md) |
 | `cue` | Create or list reusable project Cues | Saving a repetitive command or agent task at the user's request | [commands/cue.md](commands/cue.md) |
+| `whoami`, `actions`, `call` | Show who the daemon takes you to be and your grant, list the action catalog, and run one catalog action | Checking what you may do, or running an action that has no command of its own | [commands/access.md](commands/access.md) |
+| `token` | Make and revoke tokens that hold an agent outside the app to a grant | Only when the user asks for a token for another agent or bot | [commands/access.md](commands/access.md) |
 | `orchestrator` | List orchestrator sessions | Viewing which sessions are orchestrators | [commands/orchestrator.md](commands/orchestrator.md) |
 | `review` | Start, list, cancel, or submit Orchestrator's native reviewer for a worker's PR (default: this session) | Reviewing implementation PRs owned by workers. For someone else's PR, use a worker that claims it with automatic fixing off | [commands/review.md](commands/review.md) |
 | `send` | Send a message to a running agent session | Messaging a live agent; use `--steer` to correct it mid-turn | [commands/send.md](commands/send.md) |
@@ -44,6 +46,8 @@ trigger: "Using the `ao` CLI, setting up Orchestrator for a user, importing exis
 - When the user asks you to set up Orchestrator, add their first project, or get them started, read [commands/setup.md](commands/setup.md) first and follow it.
 - For importing existing agent conversations from outside Orchestrator, read [commands/import.md](commands/import.md). This includes Claude Code and Codex terminal sessions.
 - Most read commands accept `--json` for machine-readable output.
+- To wait for another session, run `ao session wait <id>` once after `ao spawn`, not a loop of `ao session get`. To message a session and wait for its reply, run `ao send --wait` on a session that is idle: if the session is in the middle of a turn, the command refuses with exit 1 and sends nothing, so run `ao session wait <id>` first or add `--steer`. Exit 5 means the session waits for an answer.
+- Exit 4 with `GRANT_REFUSED` means your grant does not allow the call. Do not retry it and do not look for another route: tell the user what was refused. `ao whoami` shows the grant.
 - `-p / --project` scopes session subcommand lookups to one project.
 - Session and project ids are shown by `ao session ls` and `ao project ls`.
 - To refer to a session in Orchestrator Chat or the Orchestrator terminal, use the canonical in-app

@@ -13,6 +13,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/aoagents/agent-orchestrator/backend/internal/access"
 	"github.com/aoagents/agent-orchestrator/backend/internal/caller"
 	"github.com/aoagents/agent-orchestrator/backend/internal/config"
 	"github.com/aoagents/agent-orchestrator/backend/internal/runfile"
@@ -27,6 +28,12 @@ const commandTimeout = 2 * time.Minute
 // maxDrainedBodyBytes bounds how much of an unused response body the CLI
 // discards for keep-alive reuse without an unbounded read.
 const maxDrainedBodyBytes = 4 << 10
+
+const agentTokenEnv = "AO_TOKEN"
+
+type rawResponse struct{ body []byte }
+
+const maxRawResponseBytes = 64 << 20
 
 // apiError is the subset of the daemon's JSON error envelope the CLI surfaces.
 // RequestID is surfaced so a failed command can be correlated with daemon logs.
@@ -200,8 +207,8 @@ func (c *commandContext) doJSONPathWithHeadersAndTimeout(
 	for name, value := range headers {
 		req.Header.Set(name, value)
 	}
-	if callerID := callerSession(); callerID != "" {
-		req.Header.Set(caller.Header, callerID)
+	if err := identifyCaller(req); err != nil {
+		return err
 	}
 	if sideID := os.Getenv("AO_SIDE_CONVERSATION_ID"); sideID != "" {
 		req.Header.Set("X-AO-Side-Conversation", sideID)
@@ -222,6 +229,13 @@ func (c *commandContext) doJSONPathWithHeadersAndTimeout(
 		var e apiError
 		_ = json.NewDecoder(resp.Body).Decode(&e)
 		return apiResponseError{StatusCode: resp.StatusCode, ErrorBody: e}
+	}
+	if raw, ok := out.(*rawResponse); ok {
+		raw.body, err = io.ReadAll(io.LimitReader(resp.Body, maxRawResponseBytes+1))
+		if err == nil && len(raw.body) > maxRawResponseBytes {
+			return fmt.Errorf("the response is over %d MiB; narrow the request", maxRawResponseBytes>>20)
+		}
+		return err
 	}
 	if out == nil {
 		// Explicitly bodyless call (telemetry/activity hooks, fire-and-forget
@@ -268,6 +282,20 @@ func (c *commandContext) doJSONPathWithHeadersAndTimeout(
 			return fmt.Errorf("decode response: missing required response body (HTTP %d %s %s): %w", resp.StatusCode, method, path, err)
 		}
 		return fmt.Errorf("decode response: %w", err)
+	}
+	return nil
+}
+
+func identifyCaller(req *http.Request) error {
+	callerID := callerSession()
+	if token := strings.TrimSpace(os.Getenv(agentTokenEnv)); token != "" && callerID == "" && req.Header.Get("Authorization") == "" {
+		if !strings.HasPrefix(token, access.TokenPrefix) {
+			return exitError{code: exitRefused, err: fmt.Errorf("%s is not an agent token: it must start with %s", agentTokenEnv, access.TokenPrefix)}
+		}
+		req.Header.Set("Authorization", "Bearer "+token)
+	}
+	if callerID != "" {
+		req.Header.Set(caller.Header, callerID)
 	}
 	return nil
 }

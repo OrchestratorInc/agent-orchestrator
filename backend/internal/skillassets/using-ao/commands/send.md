@@ -22,6 +22,33 @@ ao send [flags]
 | `--steer` | Add guidance to the active Chat turn, or start a normal turn when idle | Optional |
 | `--client-message-id string` | Stable delivery handle for steering and safe retries | Generated automatically with `--steer` |
 | `--recover-only` | Recover the outcome for an existing delivery handle without resending | Requires `--steer` and `--client-message-id` |
+| `--wait` | After sending, block until the session next finishes a turn or asks for an answer | Optional; not with `--recover-only` |
+| `--timeout duration` | With `--wait`, give up after this long and exit 124 | `10m` |
+
+## Waiting for the reply
+
+`--wait` makes one call out of "message a session and wait for its answer". It
+notes the session's last activity before it sends, and accepts a settled state
+only when it is newer than that. A plain `ao session wait` started after
+`ao send` can return at once on the idle state from before the message,
+because a message can reach the agent after `ao send` returns.
+
+```bash
+ao send --session mer-3 --message "Run the tests and report the result." --wait --timeout 20m
+```
+
+Exit codes are those of `ao session wait`: 0 the turn finished, 5 the session
+asks for an answer or an approval, 124 timed out. Read the reply with
+`ao session get mer-3 --transcript 5`.
+
+Send to a session that is idle. If it is in the middle of a turn, a plain
+message would be queued behind that turn and the wait would end with the wrong
+turn, so `--wait` refuses with exit 1 and sends nothing: run
+`ao session wait <id>` first, or add `--steer`.
+
+Exit 2 means nothing was sent. If the wait itself fails after delivery, the
+error starts with "the message was sent": do not send it again; check the
+session with `ao session wait` or `ao session get`.
 
 ## Steering and recovery
 

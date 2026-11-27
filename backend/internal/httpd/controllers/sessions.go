@@ -384,6 +384,9 @@ func (c *SessionsController) spawn(w http.ResponseWriter, r *http.Request) {
 		envelope.WriteAPIError(w, r, http.StatusBadRequest, "bad_request", "PROMPT_TOO_LONG", "Prompt must be 100 KiB or fewer", nil)
 		return
 	}
+	if text, token := relayed(r, in.Prompt); token {
+		in.Prompt, in.ParentSessionID = text, ""
+	}
 	// displayName is optional at the API (the desktop new-task dialog omits it
 	// and the read model falls back to the session id). `ao spawn` makes it
 	// required CLI-side. When present, it is held to the same length cap here so
@@ -2472,6 +2475,9 @@ func (c *SessionsController) send(w http.ResponseWriter, r *http.Request) {
 	if len(in.Message) > maxMessageLen {
 		envelope.WriteAPIError(w, r, http.StatusBadRequest, "bad_request", "MESSAGE_TOO_LONG", "Message is too long", nil)
 		return
+	}
+	if text, token := relayed(r, in.Message); token {
+		in.Message, in.SenderSessionID = text, ""
 	}
 	var attachment *ports.SpawnAttachment
 	if in.Attachment != nil {

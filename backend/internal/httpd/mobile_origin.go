@@ -12,12 +12,21 @@ const hostUpdatePath = "/api/v1/remote-host/update"
 // Mobile controls create remote access and disclose pairing credentials. They
 // require exact renderer origins even when other APIs allow paired mobile clients.
 // Run this before CORS so rejected preflights cannot acquire a browser grant.
+func remoteAccessControlPath(path string) bool {
+	for _, prefix := range []string{"/api/v1/mobile", "/api/v1/access/tokens"} {
+		if path == prefix || strings.HasPrefix(path, prefix+"/") {
+			return true
+		}
+	}
+	return false
+}
+
 func mobileControlOriginMiddleware(allowedOrigins []string) func(http.Handler) http.Handler {
 	allowed := exactAllowedOrigins(allowedOrigins)
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			hostUpdate := r.URL.Path == hostUpdatePath || r.URL.Path == hostUpdatePath+"/check"
-			if r.URL.Path != "/api/v1/mobile" && !strings.HasPrefix(r.URL.Path, "/api/v1/mobile/") && !hostUpdate {
+			if !remoteAccessControlPath(r.URL.Path) && !hostUpdate {
 				next.ServeHTTP(w, r)
 				return
 			}
@@ -30,7 +39,7 @@ func mobileControlOriginMiddleware(allowedOrigins []string) func(http.Handler) h
 				_, trusted = allowed[origins[0]]
 			}
 			if !trusted {
-				message := "Origin is not allowed to manage mobile access"
+				message := "Origin is not allowed to manage remote access or agent tokens"
 				if hostUpdate {
 					message = "Origin is not allowed to update this host"
 				}

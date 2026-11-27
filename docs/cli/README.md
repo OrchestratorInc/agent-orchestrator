@@ -103,6 +103,11 @@ the report. Re-running skips rows that already exist.
 | `ao account switch <session-id> <account-id>` | `PUT /api/v1/agents/accounts/sessions/{id}`; `--wait` polls `GET /api/v1/sessions/{id}/interface-transition` |
 | `ao automation create/list/get/update/delete/runs` | `POST/GET/PATCH/DELETE /api/v1/automations` |
 | `ao cue create/list`                | `POST/GET /api/v1/projects/{id}/cues`         |
+| `ao whoami`                         | `GET /api/v1/access/whoami`                    |
+| `ao token create/ls/revoke`         | `POST/GET/DELETE /api/v1/access/tokens` (loopback only) |
+| `ao actions ls` / `ao actions show <action>` | `GET /api/v1/access/actions[/{id}]`   |
+| `ao call <action> [--input <json>]` | The catalog action's own route, after `GET /api/v1/access/actions/{id}` |
+| `ao session wait <id>...`           | Polls `GET /api/v1/sessions/{id}` until a session stops working |
 | `ao spawn`                          | Targeted launch ensure, then `POST /api/v1/sessions` |
 | `ao session ls`                     | `GET /api/v1/sessions` plus per-session PR summaries; shows branch, PR, CI, review, unresolved threads, activity, and age. |
 | `ao session get <id>`               | `GET /api/v1/sessions/{id}`. `--transcript N` also reads `GET /api/v1/sessions/{id}/conversation` for chat sessions on the local daemon. |
@@ -120,7 +125,7 @@ the report. Re-running skips rows that already exist.
 | `ao session fork <id> [--check]` | `POST /api/v1/sessions/{id}/fork`             |
 | `ao session switch <id> [agent]` / `--from <agent> [agent]` `[--model <m>] [--effort <e>] [--permission <p>] [--force] [-m <text>]` | `--from` lists via `GET /api/v1/sessions?active=true`; each switch is `POST /api/v1/sessions/{id}/provider-switch`, then `POST /api/v1/sessions/{id}/send` for `-m` |
 | `ao orchestrator ls`                | `GET /api/v1/orchestrators`                    |
-| `ao send`                           | `POST /api/v1/sessions/{id}/send`              |
+| `ao send`                           | `POST /api/v1/sessions/{id}/send`; `--wait` then polls `GET /api/v1/sessions/{id}` |
 | `ao report ...`                     | `POST /api/v1/reports`                         |
 | `ao preview [url]`                  | `POST /api/v1/sessions/{id}/preview`           |
 | `ao preview clear`                  | `DELETE /api/v1/sessions/{id}/preview`         |
@@ -306,6 +311,36 @@ PR actions are available through `ao pr merge` and
 `ao review trigger` (also `execute` and `restart`), `ao review cancel` (also
 `stop`), and `ao review submit`.
 
+## Agent callers: identity, grants and the action catalog
+
+The CLI's main caller is an agent. Three parts decide what a call does:
+
+| Part | What it answers | Where |
+| --- | --- | --- |
+| Authentication | Who calls. A caller with no token on this machine is the user. `AO_TOKEN=aoa_...` makes the caller a named agent token. A session is named by `AO_SESSION_ID`, which locates it but proves nothing. | `ao whoami`, `ao token` |
+| Authorization | What that caller may do. A token carries a grant: a level (`read`, `operate` or `manage`, each including the one before), optionally limited to project ids, with an optional expiry. The daemon checks it before the route runs. | `backend/internal/access`, `httpd/access_gate.go` |
+| Execution | Which actions exist. A caller with a grant can reach only the routes in the action catalog; every other route answers `403 GRANT_REFUSED`. | `ao actions ls`, `ao call` |
+
+```bash
+ao token create ci-bot --level operate --project api --expires 30d
+AO_TOKEN=aoa_... ao spawn --project api --agent claude-code --name "Fix login test" --prompt "..."
+AO_TOKEN=aoa_... ao session wait api-12 --timeout 20m     # exit 0 done, 5 needs an answer, 124 timed out
+AO_TOKEN=aoa_... ao send --session api-12 --message "Also update the changelog." --wait
+AO_TOKEN=aoa_... ao call chat.input.resolve --input '{"sessionId":"api-12","requestId":"...","action":"accept","content":{}}'
+```
+
+- `read` looks. `operate` also runs work: it starts, messages and stops sessions, answers their questions and approvals, merges PRs and runs reviews. `manage` also changes setup and deletes: projects, automations, settings, accounts, deleting sessions.
+- Only `read` is a hard limit. A token that can start or message a session can have that session run any command as the user, so `operate` and `manage` are for an agent the user trusts with the machine; they differ in what the agent can do by mistake. A grant limits calls to the daemon. It does not confine a process that runs as the same OS user. The provider's permission mode is separate.
+- A session has no limit, whoever started it, and it keeps running when the token that started it is revoked.
+- What a token sends (a message, a steer, the prompt of a session it starts) is marked `[via <token name>]` by the daemon, which the app shows under that name. A token cannot name a session as its sender or as the parent of a session it starts.
+- With remote access on, the same token is accepted by the authenticated listener as a bearer token, held to the same catalog and grant. Token management answers only on the loopback listener.
+- The loopback listener stays open: a caller that presents no token has no limit, as before.
+- Inside a session the caller is always the session: the CLI does not send `AO_TOKEN` there, so a token exported in a shell profile cannot limit or break the sessions the app starts. Outside a session, an `AO_TOKEN` that does not start with `aoa_` is refused with exit 4, never treated as no token.
+- A token limited to projects cannot run an action that reaches every project, such as machine-wide settings, the default account or automations.
+- Exit codes an agent can branch on: `2` wrong usage, `3` unknown catalog action, `4` refused by the grant or the token, `5` a session waits for an answer, `124` a wait timed out.
+
+Add an action to the catalog (`backend/internal/access/catalog.go`) only with its level and the place its project comes from. `TestRealRouterHoldsEveryActionToItsLevel` runs every action at every level through the real router, and `TestRealRouterGatesTokensAndServesWhoami` fails for an action whose route is not in the API spec.
+
 ## Configuration
 
 The CLI and daemon share the same environment-driven config:
@@ -318,6 +353,7 @@ The CLI and daemon share the same environment-driven config:
 | `AO_REQUEST_TIMEOUT`  | `60s`                | REST request timeout.                                                                          |
 | `AO_SHUTDOWN_TIMEOUT` | `10s`                | Graceful shutdown cap. Also scales how long a new daemon waits for the data dir (8x + 18s, plus the installer wait). |
 | `AO_INSTALLER_SHUTDOWN_TIMEOUT` | about `285s` | How long the daemon waits at shutdown for an agent CLI install or update it started to stop and clean up. Never less than `AO_SHUTDOWN_TIMEOUT`. A new daemon on the same data directory waits for this too. Tests set it low. |
+| `AO_TOKEN`            | unset                | Agent token the CLI presents. The caller is then held to that token's grant.                   |
 | `AO_KEEP_DAEMON`      | unset (off)          | Keep the desktop app's daemon running after the window closes; stop only via `ao stop`. (fork) |
 | `AO_DISABLE_GPU`      | unset (off)          | Skip Chromium hardware acceleration; escape hatch for broken Linux GPU drivers.                |
 

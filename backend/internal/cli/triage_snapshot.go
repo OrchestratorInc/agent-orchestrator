@@ -300,6 +300,9 @@ func (c *commandContext) triageSessions(ctx context.Context, port int, out io.Wr
 		if err != nil {
 			return err
 		}
+		if err := identifyCaller(req); err != nil {
+			return err
+		}
 		resp, err := c.deps.HTTPClient.Do(req)
 		if err != nil {
 			return err

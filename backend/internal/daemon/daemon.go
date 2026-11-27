@@ -21,6 +21,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/aoagents/agent-orchestrator/backend/internal/access"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/binaryutil"
 	claudecodeagent "github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/claudecode"
 	codexagent "github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/codex"
@@ -985,6 +986,10 @@ func Run(buildVersion string) (retErr error) {
 	if accessErr != nil {
 		log.Warn("load access device registry failed; paired devices must pair again", "err", accessErr)
 	}
+	agentTokens, agentTokensErr := access.LoadRegistry(access.TokensPath(cfg.DataDir))
+	if agentTokensErr != nil {
+		log.Warn("load agent token registry failed", "err", agentTokensErr)
+	}
 	pairingCodes := mobilebridge.NewPairingCodes(nil)
 	bs := &controllers.BridgeService{
 		ConfigPath:  mobilebridge.Path(cfg.DataDir),
@@ -1370,6 +1375,7 @@ func Run(buildVersion string) (retErr error) {
 		DeviceLive:         presenceTracker,
 		DeviceAccess:       bs,
 		AccessDevices:      accessDevices,
+		Access:             agentTokens,
 		Import:             importsvc.New(importsvc.Deps{Store: store}),
 		SessionImport:      sessionImportSvc,
 		Directories:        fsbrowsersvc.New(),
@@ -1484,6 +1490,7 @@ func Run(buildVersion string) (retErr error) {
 	// the LAN surface and loopback surface never drift apart.
 	lan := httpd.NewMobileLAN(srv.Handler(), hostIdentity.HostID, mobilebridge.DefaultPort, log, telemetrySink)
 	lan.UseDeviceCredentials(accessDevices, pairingCodes)
+	lan.UseAgentTokens(agentTokens)
 	bs.LAN = lan
 
 	// Restore Connect Mobile across a daemon restart: if the bridge was left

@@ -108,6 +108,42 @@ func (s *Spec) Operation(method, path string) map[string]any {
 	return out
 }
 
+// Inline returns node with each local $ref replaced by the schema it names.
+func (s *Spec) Inline(node any) any {
+	return s.inline(node, 0)
+}
+
+const maxInlineDepth = 8
+
+func (s *Spec) inline(node any, depth int) any {
+	switch value := node.(type) {
+	case map[string]any:
+		if ref, ok := value["$ref"].(string); ok && strings.HasPrefix(ref, "#/") && depth < maxInlineDepth {
+			target := any(s.doc)
+			for _, part := range strings.Split(strings.TrimPrefix(ref, "#/"), "/") {
+				fields, _ := target.(map[string]any)
+				target = fields[part]
+			}
+			if target != nil {
+				return s.inline(target, depth+1)
+			}
+			return value
+		}
+		out := make(map[string]any, len(value))
+		for key, child := range value {
+			out[key] = s.inline(child, depth)
+		}
+		return out
+	case []any:
+		out := make([]any, len(value))
+		for i, child := range value {
+			out[i] = s.inline(child, depth)
+		}
+		return out
+	}
+	return node
+}
+
 // notImplementedResponse is the wire shape for 501 — APIError envelope
 // plus a `spec` field carrying the operation slice. Mirrors the
 // NotImplementedResponse schema in openapi.yaml.
