@@ -388,8 +388,9 @@ export default function TerminalScreen({ session: resolved }: { session?: RouteS
 		restartPaintWait();
 	}, [restartPaintWait, terminalHandleId]);
 	const startLoaderShown = !painted && !paintWaitOver && !dead && !viewGone && !switchCardShown && status !== "error";
-	// Opening the session is timed until its first output is drawn.
-	useSessionContentShown(painted);
+	// Opening the session is timed until its first output is drawn and nothing
+	// covers it: not the terminated or dead-view overlays, nor the switch card.
+	useSessionContentShown(painted && !dead && !viewGone && !switchCardShown);
 
 	useLayoutEffect(() => {
 		xtermReadyRef.current = false;

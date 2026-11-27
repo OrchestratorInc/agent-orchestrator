@@ -95,6 +95,16 @@ describe("CloudTerminalView output shown", () => {
 		expect(onOutputShown).toHaveBeenCalledTimes(1);
 	});
 
+	// Drawn behind the ended cover, the output is not on screen; it is once the cover goes.
+	it("waits while an overlay covers the drawn output", async () => {
+		await output("> before exit");
+		await act(async () => fixtures.handlers!.onStatus("exited"));
+		await xtermReady();
+		expect(onOutputShown).not.toHaveBeenCalled();
+		await act(async () => fixtures.handlers!.onStatus("open"));
+		expect(onOutputShown).toHaveBeenCalledTimes(1);
+	});
+
 	it("does not count control-only bytes, and reports the first visible output once", async () => {
 		await xtermReady();
 		await output("\x1b[?25l\x1b[2J");
