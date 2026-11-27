@@ -14,13 +14,15 @@ import { useBrowserView, type BrowserNavState } from "../hooks/useBrowserView";
 import { useUiStore } from "../stores/ui-store";
 import { aoBridge } from "../lib/bridge";
 import type { WorkspaceSession } from "../types/workspace";
+import { tabFadeClassName, tabWideActionTitleClassName } from "./TerminalTabFrame";
 import { TooltipProvider } from "./ui/tooltip";
 import type {
 	BrowserAnnotationCancelPayload,
 	BrowserAnnotationSubmitPayload,
 } from "../../shared/browser-annotations";
 import type { BrowserDownloadsState } from "../../shared/browser-downloads";
-import type { BrowserRuntimeState } from "../../main/browser-view-host";
+import type { BrowserProfileSwitchFailure } from "../../shared/browser-profiles";
+import type { BrowserRuntimeState, BrowserTabState } from "../../main/browser-view-host";
 
 function render(ui: ReactElement) {
 	return rtlRender(<TooltipProvider>{ui}</TooltipProvider>);
@@ -50,6 +52,7 @@ const hookState = vi.hoisted(() => ({
 	findState: { viewId: "42:sess-1", tabId: "t1", query: "", activeMatchOrdinal: 0, matches: 0, finalUpdate: true },
 	selectTab: vi.fn(),
 	closeTab: vi.fn(),
+	muteTab: vi.fn(),
 	openTab: vi.fn(),
 	reorderTabs: vi.fn(),
 	closedTabs: [] as { id: string; title: string; url: string; favicon?: string }[],
@@ -63,7 +66,9 @@ const hookState = vi.hoisted(() => ({
 	annotationMode: false,
 	annotationState: { count: 0, screenshotCount: 0, hasDraft: false },
 	runtimeState: { connected: true, connecting: false, rejected: false } as BrowserRuntimeState | null,
-	tabs: [{ id: "t1", url: "", title: "", active: true }],
+	tabs: [
+		{ id: "t1", url: "", title: "", active: true },
+	] as BrowserTabState[],
 	activeTabId: "t1",
 	tabNotice: "",
 	agentBrowserActive: false,
@@ -105,6 +110,7 @@ vi.mock("../hooks/useBrowserView", () => ({
 			tabNotice: hookState.tabNotice,
 			selectTab: hookState.selectTab,
 			closeTab: hookState.closeTab,
+			muteTab: hookState.muteTab,
 			openTab: hookState.openTab,
 			reorderTabs: hookState.reorderTabs,
 			closedTabs: hookState.closedTabs,
@@ -233,6 +239,21 @@ function PersistentBrowserPanelView({
 	);
 }
 
+/** The panel without a session, as the Settings login browser uses it. */
+function SessionlessBrowserPanelView() {
+	const browserView = useBrowserView({ sessionId: "settings-login", active: true, poppedOut: false });
+	const annotationQueue = useBrowserAnnotationQueue({ sessionId: "settings-login", navUrl: browserView.navState.url });
+	return (
+		<BrowserPanelView
+			active
+			annotationQueue={annotationQueue}
+			browserView={browserView}
+			onTogglePopOut={() => undefined}
+			poppedOut={false}
+		/>
+	);
+}
+
 describe("BrowserPanel", () => {
 	const annotationSubmitListeners = new Set<(payload: BrowserAnnotationSubmitPayload) => void>();
 	const annotationCancelListeners = new Set<(payload: BrowserAnnotationCancelPayload) => void>();
@@ -265,6 +286,7 @@ describe("BrowserPanel", () => {
 		};
 		hookState.selectTab.mockReset();
 		hookState.closeTab.mockReset();
+		hookState.muteTab.mockReset();
 		hookState.openTab.mockReset();
 		hookState.reopenClosedTab.mockReset();
 		hookState.closedTabs = [];
@@ -833,6 +855,18 @@ describe("BrowserPanel", () => {
 		expect(screen.getByRole("menuitem", { name: /iPhone SE/ }).parentElement).toHaveClass("board-scrollbar");
 	});
 
+	it("shows the approval mode for a session's browser and leaves it out without a session", async () => {
+		const { unmount } = render(<BrowserPanel active onTogglePopOut={() => undefined} poppedOut={false} session={session} />);
+		await openBrowserControls();
+		expect(screen.getByRole("menuitem", { name: /^Approvals/ })).toBeInTheDocument();
+		unmount();
+
+		render(<SessionlessBrowserPanelView />);
+		await openBrowserControls();
+		expect(screen.getByRole("menuitem", { name: "Device preset" })).toBeInTheDocument();
+		expect(screen.queryByRole("menuitem", { name: /^Approvals/ })).not.toBeInTheDocument();
+	});
+
 	it("captures the active page from the controls menu and confirms the clipboard copy", async () => {
 		hookState.navState = { ...hookState.navState, url: "https://example.test/" };
 		render(<BrowserPanel active onTogglePopOut={() => undefined} poppedOut={false} session={session} />);
@@ -983,6 +1017,85 @@ describe("BrowserPanel", () => {
 				profileId: "11111111-1111-4111-8111-111111111111",
 			}),
 		);
+	});
+
+	it("confirms a reloading profile switch in an in-app dialog, not a native one", async () => {
+		let confirmListener: ((request: { viewId: string; profileId: string | null }) => void) | undefined;
+		window.ao!.browser.onProfileSwitchConfirm = vi.fn((listener) => {
+			confirmListener = listener;
+			return () => {
+				if (confirmListener === listener) confirmListener = undefined;
+			};
+		});
+		render(<BrowserPanel active onTogglePopOut={() => undefined} poppedOut={false} session={session} />);
+		await waitFor(() => expect(confirmListener).toBeDefined());
+
+		// Another session's browser asked; this panel stays quiet.
+		act(() => confirmListener!({ viewId: "7:other", profileId: null }));
+		expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+
+		act(() => confirmListener!({ viewId: "42:sess-1", profileId: "11111111-1111-4111-8111-111111111111" }));
+		const dialog = await screen.findByRole("dialog", { name: "Switch profile?" });
+		expect(within(dialog).getByText("Switching profiles will reload the browser pages. Unsaved page state may be lost.")).toBeInTheDocument();
+		expect(window.ao!.browser.selectProfile).not.toHaveBeenCalled();
+		// Like the native alert's "No" default: a repeated Enter from the menu
+		// must not reload away unsaved page state.
+		await waitFor(() => expect(within(dialog).getByRole("button", { name: "Cancel" })).toHaveFocus());
+
+		await userEvent.click(within(dialog).getByRole("button", { name: "Switch profile" }));
+		expect(window.ao!.browser.selectProfile).toHaveBeenCalledWith({
+			viewId: "42:sess-1",
+			profileId: "11111111-1111-4111-8111-111111111111",
+			confirmed: true,
+		});
+		await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+	});
+
+	it("leaves the profile alone when the in-app switch prompt is cancelled", async () => {
+		let confirmListener: ((request: { viewId: string; profileId: string | null }) => void) | undefined;
+		window.ao!.browser.onProfileSwitchConfirm = vi.fn((listener) => {
+			confirmListener = listener;
+			return () => undefined;
+		});
+		render(<BrowserPanel active onTogglePopOut={() => undefined} poppedOut={false} session={session} />);
+		await waitFor(() => expect(confirmListener).toBeDefined());
+
+		act(() => confirmListener!({ viewId: "42:sess-1", profileId: null }));
+		const dialog = await screen.findByRole("dialog", { name: "Switch profile?" });
+		await waitFor(() => expect(within(dialog).getByRole("button", { name: "Cancel" })).toHaveFocus());
+		await userEvent.keyboard("{Enter}");
+
+		await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+		expect(window.ao!.browser.selectProfile).not.toHaveBeenCalled();
+	});
+
+	it("shows a failed profile switch as an in-app error toast", async () => {
+		let failedListener: ((failure: BrowserProfileSwitchFailure) => void) | undefined;
+		window.ao!.browser.onProfileSwitchFailed = vi.fn((listener) => {
+			failedListener = listener;
+			return () => undefined;
+		});
+		render(<BrowserPanel active onTogglePopOut={() => undefined} poppedOut={false} session={session} />);
+		await waitFor(() => expect(failedListener).toBeDefined());
+
+		act(() => failedListener!({ viewId: "7:other", message: "Not this one." }));
+		expect(useUiStore.getState().globalToast).toBeNull();
+
+		act(() => failedListener!({ viewId: "42:sess-1", message: "Profile storage is unavailable." }));
+		expect(useUiStore.getState().globalToast).toMatchObject({
+			title: "Couldn't switch profile",
+			body: "Profile storage is unavailable.",
+			tone: "error",
+		});
+
+		// An agent took over the browser after the user confirmed: explain it in
+		// the user's language rather than echoing the main process's text.
+		act(() => failedListener!({ viewId: "42:sess-1", message: "An agent is using this browser.", reason: "agent-active" }));
+		expect(useUiStore.getState().globalToast).toMatchObject({
+			title: "Couldn't switch profile",
+			body: "An agent is using this browser. Try again when its browser action finishes.",
+			tone: "error",
+		});
 	});
 
 	it("constrains the device frame to a named preset's width, and clears it back to fit", async () => {
@@ -1285,6 +1398,77 @@ describe("BrowserPanel", () => {
 		expect(hookState.closeTab).toHaveBeenCalledWith("t2");
 		// Closing an inactive tab does not select it first.
 		expect(hookState.selectTab).not.toHaveBeenCalled();
+	});
+
+	it("shows a mute control on an audible tab and mutes it on click", async () => {
+		hookState.tabs = [{ id: "t1", url: "http://localhost:3000/", title: "Loud app", active: true, audible: true, muted: false }];
+		hookState.activeTabId = "t1";
+		render(<BrowserPanel active onTogglePopOut={() => undefined} poppedOut session={session} />);
+
+		const tabList = screen.getByRole("tablist", { name: "Browser tabs" });
+		const mute = within(tabList).getByRole("button", { name: "Mute tab" });
+		expect(mute).toHaveAttribute("aria-pressed", "false");
+		await userEvent.click(mute);
+
+		expect(hookState.muteTab).toHaveBeenCalledWith("t1", true);
+	});
+
+	it("shows a pressed mute control on a muted tab and unmutes it on click", async () => {
+		hookState.tabs = [{ id: "t1", url: "http://localhost:3000/", title: "Loud app", active: true, audible: true, muted: true }];
+		hookState.activeTabId = "t1";
+		render(<BrowserPanel active onTogglePopOut={() => undefined} poppedOut session={session} />);
+
+		const tabList = screen.getByRole("tablist", { name: "Browser tabs" });
+		const unmute = within(tabList).getByRole("button", { name: "Unmute tab" });
+		expect(unmute).toHaveAttribute("aria-pressed", "true");
+		await userEvent.click(unmute);
+
+		expect(hookState.muteTab).toHaveBeenCalledWith("t1", false);
+	});
+
+	it("keeps a muted control visible after the tab stops playing sound", () => {
+		hookState.tabs = [{ id: "t1", url: "http://localhost:3000/", title: "Loud app", active: true, muted: true }];
+		hookState.activeTabId = "t1";
+		render(<BrowserPanel active onTogglePopOut={() => undefined} poppedOut session={session} />);
+
+		expect(screen.getByRole("button", { name: "Unmute tab" })).toBeInTheDocument();
+	});
+
+	it("truncates the title before both controls when a tab shows mute and close", () => {
+		hookState.tabs = [
+			{ id: "t1", url: "http://localhost:3000/", title: "Loud app with a long title", active: true, audible: true },
+			{ id: "t2", url: "http://localhost:4000/", title: "Quiet app with a long title", active: false },
+		];
+		hookState.activeTabId = "t1";
+		render(<BrowserPanel active onTogglePopOut={() => undefined} poppedOut session={session} />);
+
+		const tabList = screen.getByRole("tablist", { name: "Browser tabs" });
+		const [loud, quiet] = within(tabList).getAllByRole("tab");
+		expect(loud).toHaveClass(tabWideActionTitleClassName);
+		expect(loud).not.toHaveClass(tabFadeClassName);
+		expect(quiet).toHaveClass(tabFadeClassName);
+		expect(quiet).not.toHaveClass(tabWideActionTitleClassName);
+	});
+
+	it("hides the mute control on a quiet tab", () => {
+		hookState.tabs = [{ id: "t1", url: "http://localhost:3000/", title: "Quiet app", active: true }];
+		hookState.activeTabId = "t1";
+		render(<BrowserPanel active onTogglePopOut={() => undefined} poppedOut session={session} />);
+
+		const tabList = screen.getByRole("tablist", { name: "Browser tabs" });
+		expect(within(tabList).queryByRole("button", { name: "Mute tab" })).not.toBeInTheDocument();
+		expect(within(tabList).queryByRole("button", { name: "Unmute tab" })).not.toBeInTheDocument();
+	});
+
+	it("hides the mute control on an agent tab whose audio plays on the remote host", () => {
+		hookState.tabs = [
+			{ id: "t1", url: "http://localhost:3000/", title: "Agent page", active: true, audible: true, remote: { tabId: "" } },
+		];
+		hookState.activeTabId = "t1";
+		render(<BrowserPanel active onTogglePopOut={() => undefined} poppedOut session={session} />);
+
+		const tabList = screen.getByRole("tablist", { name: "Browser tabs" });
+		expect(within(tabList).queryByRole("button", { name: "Mute tab" })).not.toBeInTheDocument();
 	});
 
 	it("allows closing the final browser tab", async () => {

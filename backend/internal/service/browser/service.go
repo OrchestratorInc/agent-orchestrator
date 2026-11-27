@@ -7,6 +7,7 @@ import (
 	"errors"
 	"log/slog"
 	"strings"
+	"time"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/browserruntime"
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
@@ -43,6 +44,16 @@ type Service struct {
 	chrome  runtime
 	targets *TargetStore
 	log     *slog.Logger
+
+	approvals       approvalGate
+	approvalTimeout time.Duration
+	// describeTimeout caps how long a runtime may take to describe a target,
+	// so a stuck read (a hidden tab's capture) never delays the prompt.
+	describeTimeout time.Duration
+	remote          RemoteBrowser
+	// approvalsErr is why the gate could not load. While set, actions that
+	// may need approval are refused rather than run unasked.
+	approvalsErr error
 }
 
 // New creates a browser service.
@@ -115,8 +126,21 @@ func (s *Service) Execute(
 		// per command (never arguments, which can hold typed text).
 		s.log.Info("browser chrome command", "session", sessionID, "action", action)
 	}
-	result, err := s.runtimeFor(target).Execute(ctx, sessionID, action, args)
+	rt := s.runtimeFor(target)
+	// Consequential actions (pay, send, post, delete...) wait for the user.
+	args, err := s.preflight(ctx, sessionID, rt, action, args)
+	if err != nil {
+		return browserruntime.Result{}, action, err
+	}
+	result, err := rt.Execute(ctx, sessionID, action, args)
 	return result, action, err
+}
+
+// ApprovalsUnavailable records that the approval gate could not load. Until a
+// gate is installed, consequential actions fail with
+// BROWSER_APPROVAL_UNAVAILABLE instead of running unasked.
+func (s *Service) ApprovalsUnavailable(err error) {
+	s.approvalsErr = err
 }
 
 // target reads or changes which browser the session's commands go to.

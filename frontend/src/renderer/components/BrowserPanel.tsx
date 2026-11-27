@@ -65,9 +65,12 @@ import {
 	Tablet,
 	Trash2,
 	UserRound,
+	VolumeOff,
+	VolumeOn,
 	X,
 } from "@/components/app-icons";
 import { apiErrorMessage } from "../lib/api-client";
+import { ApprovalModeMenuItems, ApprovalModeMenuRow } from "./approvals/ApprovalModeMenu";
 import { clientForSessionHost } from "../lib/host-clients";
 import { useBrowserView, type BrowserViewModel } from "../hooks/useBrowserView";
 import { useBrowserRuntimeState } from "../hooks/useBrowserRuntimeState";
@@ -76,6 +79,7 @@ import { formatBrowserAnnotationMessage, type BrowserAnnotationSubmitPayload } f
 import type { BrowserProfile } from "../../shared/browser-profiles";
 import type { WorkspaceSession } from "../types/workspace";
 import { Button } from "./ui/button";
+import { ConfirmDialog } from "./ConfirmDialog";
 import {
 	DropdownMenu,
 	DropdownMenuContent,
@@ -85,7 +89,7 @@ import {
 import { SETTINGS_MENU_ROW, SETTINGS_MENU_SURFACE } from "./settings/SettingsMenuTrigger";
 import { Input } from "./ui/input";
 import { Pressable } from "./ui/pressable";
-import { TabCloseButton, TerminalTabFrame } from "./TerminalTabFrame";
+import { TabCloseButton, TerminalTabFrame, terminalTabActionClassName } from "./TerminalTabFrame";
 import { Popover, PopoverAnchor, PopoverContent } from "./ui/popover";
 import { Tooltip, TooltipContent, TooltipTrigger } from "./ui/tooltip";
 import { cn } from "../lib/utils";
@@ -165,7 +169,7 @@ function clampDeviceFrameWidth(width: number): number | undefined {
 }
 
 type BrowserPanelProps = {
-	session: WorkspaceSession;
+	session?: WorkspaceSession;
 	active: boolean;
 	poppedOut: boolean;
 	onTogglePopOut: (next: boolean) => void;
@@ -389,7 +393,7 @@ export function BrowserPanel({
 	poppedOut,
 	onTogglePopOut,
 	topbarHost,
-}: BrowserPanelProps) {
+}: BrowserPanelProps & { session: WorkspaceSession }) {
 	const browserView = useBrowserView({
 		sessionId: session.id,
 		active,
@@ -432,6 +436,9 @@ export const BrowserPanelView = memo(function BrowserPanelView({
 	const { t } = useTranslation();
 	const prefersReducedMotion = useReducedMotion();
 	const browserUnavailable = sessionBrowserUnavailable(session);
+	// Approval mode belongs to this machine's daemon; Cloud sessions keep theirs,
+	// and a panel without a session (the Settings login browser) has none.
+	const approvalSessionId = session && !session.cloud ? session.id : undefined;
 	const {
 		viewId,
 		navState,
@@ -450,6 +457,7 @@ export const BrowserPanelView = memo(function BrowserPanelView({
 		tabNotice,
 		selectTab,
 		closeTab,
+		muteTab = async () => undefined,
 		openTab,
 		reorderTabs,
 		closedTabs,
@@ -481,7 +489,7 @@ export const BrowserPanelView = memo(function BrowserPanelView({
 	const showStaticPreview = !hasNativeBrowser && navState.url !== "";
 	// Not on an agent tab: its page is its viewer's picture of the agent's page.
 	const onAgentTab = Boolean(tabs.find((tab) => tab.active)?.remote);
-	const canAnnotate = Boolean(window.ao?.browser && viewId && navState.url && !onAgentTab);
+	const canAnnotate = Boolean(session && window.ao?.browser && viewId && navState.url && !onAgentTab);
 	// An agent tab's localhost page is the host's: opened here it would be this
 	// computer's own. Before the viewer's first report the tab shows the viewer
 	// itself, an ao-preview-….localhost address, so that is held back too.
@@ -491,7 +499,7 @@ export const BrowserPanelView = memo(function BrowserPanelView({
 	const [devicePreset, setDevicePreset] = useState<string | null>(null);
 	const [customDeviceWidth, setCustomDeviceWidth] = useState("390");
 	const customWidthInputRef = useRef<HTMLInputElement>(null);
-	const [controlsView, setControlsView] = useState<"root" | "devices" | "profiles">("root");
+	const [controlsView, setControlsView] = useState<"root" | "devices" | "profiles" | "approvals">("root");
 	const [controlsOpen, setControlsOpen] = useState(false);
 	const [runtimeReconnectPending, setRuntimeReconnectPending] = useState(false);
 	const [browserProfiles, setBrowserProfiles] = useState<BrowserProfile[]>([]);
@@ -567,24 +575,35 @@ export const BrowserPanelView = memo(function BrowserPanelView({
 	}, [controlsView]);
 
 	const selectBrowserProfile = useCallback(
-		(profileId: string | null) => {
+		(profileId: string | null, confirmed = false) => {
 			if (!viewId || !window.ao?.browser) return;
-			void window.ao.browser.selectProfile({
-				viewId,
-				profileId,
-				labels: {
-					temporary: t("browser.profile.temporary"),
-					manage: t("browser.profile.manage"),
-					switchTitle: t("browser.profile.switchTitle"),
-					switchMessage: t("browser.profile.switchMessage"),
-					switchDetail: t("browser.profile.switchDetail"),
-					cancel: t("common.no"),
-					confirm: t("common.yes"),
-				},
-			});
+			void window.ao.browser.selectProfile({ viewId, profileId, confirmed }).catch(() => undefined);
 		},
-		[t, viewId],
+		[viewId],
 	);
+
+	// The main process decides whether a switch needs confirming (the page has
+	// navigated) and reports failures; both are shown here, inside the app,
+	// rather than as native dialogs detached from the window.
+	const [pendingProfileSwitch, setPendingProfileSwitch] = useState<{ profileId: string | null } | null>(null);
+	const showProfileSwitchFailure = useUiStore((state) => state.showGlobalToast);
+	useEffect(() => {
+		if (!viewId || !window.ao?.browser) return;
+		const offConfirm = window.ao.browser.onProfileSwitchConfirm((request) => {
+			if (request.viewId === viewId) setPendingProfileSwitch({ profileId: request.profileId });
+		});
+		const offFailed = window.ao.browser.onProfileSwitchFailed((failure) => {
+			if (failure.viewId !== viewId) return;
+			const body = failure.reason === "agent-active" ? t("browser.profile.switchAgentActive") : failure.message;
+			showProfileSwitchFailure(t("browser.profile.switchFailed"), body, "error");
+		});
+		return () => {
+			offConfirm();
+			offFailed();
+		};
+	}, [showProfileSwitchFailure, t, viewId]);
+	// A different session's browser has its own view; never carry a prompt over.
+	useEffect(() => setPendingProfileSwitch(null), [viewId]);
 
 	useEffect(() => {
 		if (!viewId) return;
@@ -887,7 +906,7 @@ export const BrowserPanelView = memo(function BrowserPanelView({
 	// A remote preview's address works only in this panel, which trusts its
 	// certificate: outside AO it goes by its plain-http address.
 	const externalURL = async (url: string): Promise<string> => {
-		if (!session.hostId) return url;
+		if (!session?.hostId) return url;
 		// A disconnected host has no other address for it: keep the one shown.
 		return aoBridge.remotes.externalUrl(session.hostId, url).catch(() => url);
 	};
@@ -951,6 +970,12 @@ export const BrowserPanelView = memo(function BrowserPanelView({
 			void closeTab(tabId);
 		},
 		[closeTab],
+	);
+	const handleMuteTab = useCallback(
+		(tabId: string, muted: boolean) => {
+			void muteTab(tabId, muted);
+		},
+		[muteTab],
 	);
 
 	const annotationStatusLabel =
@@ -1151,6 +1176,7 @@ export const BrowserPanelView = memo(function BrowserPanelView({
 								<SortableBrowserTopTab
 									key={tab.id}
 									onClose={handleCloseTab}
+									onMute={handleMuteTab}
 									onSelect={handleSelectTab}
 									selected={tab.id === activeTabId}
 									tab={tab}
@@ -1608,6 +1634,8 @@ export const BrowserPanelView = memo(function BrowserPanelView({
 							/>
 						</DropdownMenuItem>
 							</>
+						) : controlsView === "approvals" && approvalSessionId ? (
+							<ApprovalModeMenuItems sessionId={approvalSessionId} hostId={session?.hostId} onBack={() => setControlsView("root")} />
 						) : controlsView === "profiles" ? (
 							<>
 								<DropdownMenuItem
@@ -1678,6 +1706,9 @@ export const BrowserPanelView = memo(function BrowserPanelView({
 									</span>
 									<ChevronRight aria-hidden="true" className="size-3.5 shrink-0 text-passive" />
 								</DropdownMenuItem>
+								{approvalSessionId ? (
+									<ApprovalModeMenuRow sessionId={approvalSessionId} hostId={session?.hostId} onOpen={() => setControlsView("approvals")} />
+								) : null}
 								<DropdownMenuItem
 									className="gap-2"
 									disabled={!canUseDevTools}
@@ -1843,6 +1874,23 @@ export const BrowserPanelView = memo(function BrowserPanelView({
 					) : null}
 				</div>
 			</div>
+			<ConfirmDialog
+				open={pendingProfileSwitch !== null}
+				title={t("browser.profile.switchTitle")}
+				description={`${t("browser.profile.switchMessage")} ${t("browser.profile.switchDetail")}`}
+				confirmLabel={t("browser.profile.switchConfirm")}
+				// The old native alert defaulted to No: a repeated Enter from the
+				// profile menu must not reload away unsaved page state.
+				initialFocus="cancel"
+				onConfirm={() => {
+					if (!pendingProfileSwitch) return;
+					setPendingProfileSwitch(null);
+					selectBrowserProfile(pendingProfileSwitch.profileId, true);
+				}}
+				onOpenChange={(open) => {
+					if (!open) setPendingProfileSwitch(null);
+				}}
+			/>
 		</div>
 	);
 });
@@ -1879,16 +1927,25 @@ const SortableBrowserTopTab = memo(function SortableBrowserTopTab({
 	selected,
 	onSelect,
 	onClose,
+	onMute,
 }: {
 	tab: BrowserViewModel["tabs"][number];
 	selected: boolean;
 	onSelect: (tabId: string) => void;
 	onClose: (tabId: string) => void;
+	onMute: (tabId: string, muted: boolean) => void;
 }) {
 	const { t } = useTranslation();
 	const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id: tab.id });
 	const label = browserTabLabel(tab.title, tab.url);
 	const close = useCallback(() => onClose(tab.id), [onClose, tab.id]);
+	// A quiet tab needs no mute control (nothing to mute), and an agent tab's
+	// page plays its audio on the remote host — muting the local viewer would
+	// have no effect on what the person hears.
+	const muted = tab.muted === true;
+	const showMute = tab.remote === undefined && (muted || tab.audible === true);
+	const muteLabel = muted ? t("browser.unmuteTab") : t("browser.muteTab");
+	const closeLabel = t("browser.closeTab", { title: label.title });
 	return (
 		<div
 			className={cn("browser-panel__tab", isDragging && "browser-panel__tab--drag-placeholder")}
@@ -1897,8 +1954,34 @@ const SortableBrowserTopTab = memo(function SortableBrowserTopTab({
 			style={{ transform: CSS.Transform.toString(transform), transition }}
 		>
 			<TerminalTabFrame
-				action={<TabCloseButton label={t("browser.closeTab", { title: label.title })} onClose={close} />}
+				action={
+					showMute ? (
+						<span className="flex items-center gap-1">
+							<Pressable
+								aria-label={muteLabel}
+								aria-pressed={muted}
+								className={cn(terminalTabActionClassName, muted && "text-foreground")}
+								onClick={(event) => {
+									event.stopPropagation();
+									onMute(tab.id, !muted);
+								}}
+								onDoubleClick={(event) => event.stopPropagation()}
+								type="button"
+							>
+								{muted ? (
+									<VolumeOff aria-hidden="true" className="size-icon-sm" />
+								) : (
+									<VolumeOn aria-hidden="true" className="size-icon-sm" />
+								)}
+							</Pressable>
+							<TabCloseButton label={closeLabel} onClose={close} />
+						</span>
+					) : (
+						<TabCloseButton label={closeLabel} onClose={close} />
+					)
+				}
 				actionPinned
+				actionWide={showMute}
 				active={selected}
 				buttonProps={{
 					...attributes,

@@ -10,20 +10,26 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/apierr"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
+	sessionmanager "github.com/aoagents/agent-orchestrator/backend/internal/session_manager"
 )
 
 const (
-	catchupLimit      = 3
 	dueScanLimit      = 100
 	dispatchScanLimit = 100
 	spawnLease        = 2 * time.Minute
 	maxRunErrorBytes  = 512
+
+	unfinishedRunMessage = "Did not finish before the next scheduled run"
 )
 
 // SessionSpawner is the existing user-facing session launch boundary.
 type SessionSpawner interface {
 	Spawn(context.Context, ports.SpawnConfig) (domain.Session, int, int, error)
-	Kill(context.Context, domain.SessionID) (bool, error)
+	// RequestKill returns once the controller is closed and termination is
+	// durable. Untimed cleanup commands continue on background workers, which
+	// hold the session's operation guard, so Tick and Reconcile never wait on them.
+	// The scheduler has no blocking Kill, so no close path can wait on cleanup.
+	RequestKill(context.Context, domain.SessionID) (sessionmanager.KillResult, error)
 }
 
 // schedulerStore is deliberately separate from CRUD Store so focused CRUD
@@ -31,11 +37,13 @@ type SessionSpawner interface {
 type schedulerStore interface {
 	ListDueAutomations(context.Context, time.Time, int64) ([]domain.Automation, error)
 	MaterializeAutomationRuns(context.Context, domain.AutomationID, time.Time, []domain.AutomationRun, time.Time, time.Time, time.Time) (bool, error)
+	AutomationSessionReadyToComplete(context.Context, domain.SessionID, time.Time) (bool, error)
 	ClaimNextAutomationRun(context.Context, time.Time, time.Time) (domain.AutomationRun, bool, error)
 	ListActiveAutomationRuns(context.Context) ([]domain.AutomationRun, error)
 	GetSessionByAutomationRunID(context.Context, domain.AutomationRunID) (domain.SessionRecord, bool, error)
 	GetSession(context.Context, domain.SessionID) (domain.SessionRecord, bool, error)
 	MarkAutomationRunRunning(context.Context, domain.AutomationRunID, domain.SessionID, time.Time) (bool, error)
+	RecordAutomationRunOutcome(context.Context, domain.AutomationRunID, string, time.Time) (bool, error)
 	CompleteAutomationRun(context.Context, domain.AutomationRunID, time.Time) (bool, error)
 	FailAutomationRun(context.Context, domain.AutomationRunID, string, time.Time) (bool, error)
 	ReleaseAutomationRun(context.Context, domain.AutomationRunID, string, time.Time) (bool, error)
@@ -102,38 +110,31 @@ func (s *Service) materializeDefinition(ctx context.Context, store schedulerStor
 	if !definition.Enabled || definition.NextRunAt.After(now) {
 		return nil
 	}
-	occurrence := definition.NextRunAt.UTC()
-	runs := make([]domain.AutomationRun, 0, catchupLimit)
-	var last time.Time
-	for !occurrence.After(now) && len(runs) < catchupLimit {
-		runs = append(runs, domain.AutomationRun{
-			ID: domain.AutomationRunID("automation-run-" + s.newID()), AutomationID: definition.ID,
-			ScheduledFor: occurrence, Status: domain.AutomationRunPending,
-			CreatedAt: now, UpdatedAt: now,
-		})
-		last = occurrence
-		next, err := NextOccurrence(definition.RRuleText, definition.Timezone, occurrence)
-		if err != nil {
-			return err
-		}
-		occurrence = next
+	// A schedule is a request for current work, not a replay of every missed
+	// interval. Materialize only the newest due occurrence after downtime.
+	last, err := latestOccurrence(definition.RRuleText, definition.Timezone, now)
+	if err != nil {
+		return err
 	}
-	if !occurrence.After(now) {
-		var err error
-		occurrence, err = NextOccurrence(definition.RRuleText, definition.Timezone, now)
-		if err != nil {
-			return err
-		}
+	if last.Before(definition.NextRunAt) {
+		return fmt.Errorf("latest occurrence precedes schedule cursor")
 	}
-	if len(runs) == 0 {
-		return nil
+	occurrence, err := NextOccurrence(definition.RRuleText, definition.Timezone, last)
+	if err != nil {
+		return err
 	}
-	_, err := store.MaterializeAutomationRuns(ctx, definition.ID, definition.NextRunAt, runs, last, occurrence, now)
+	runs := []domain.AutomationRun{{
+		ID: domain.AutomationRunID("automation-run-" + s.newID()), AutomationID: definition.ID,
+		ScheduledFor: last, Status: domain.AutomationRunPending,
+		CreatedAt: now, UpdatedAt: now,
+	}}
+	_, err = store.MaterializeAutomationRuns(ctx, definition.ID, definition.NextRunAt, runs, last, occurrence, now)
 	return err
 }
 
 func (s *Service) dispatch(ctx context.Context, store schedulerStore, run domain.AutomationRun, now time.Time) error {
-	definition, err := s.Get(ctx, run.AutomationID)
+	// The settings alone: a failed read here fails the run, so skip the run projections.
+	definition, err := s.definition(ctx, run.AutomationID)
 	if err != nil {
 		message := runError(err)
 		_, markErr := store.FailAutomationRun(context.WithoutCancel(ctx), run.ID, message, now)
@@ -160,7 +161,7 @@ func (s *Service) dispatch(ctx context.Context, store schedulerStore, run domain
 				return errors.Join(spawnErr, markErr)
 			}
 			if !session.IsTerminated {
-				_, killErr := s.spawner.Kill(context.WithoutCancel(ctx), session.ID)
+				_, killErr := s.spawner.RequestKill(context.WithoutCancel(ctx), session.ID)
 				if killErr != nil {
 					return errors.Join(spawnErr, killErr)
 				}
@@ -265,10 +266,80 @@ func (s *Service) completeAndAdoptActive(ctx context.Context, store schedulerSto
 				problems = append(problems, err)
 			}
 		}
+		if !session.IsTerminated && session.Kind == domain.KindWorker && session.Activity.State == domain.ActivityIdle {
+			ready, readyErr := store.AutomationSessionReadyToComplete(ctx, session.ID, now)
+			if readyErr != nil {
+				problems = append(problems, readyErr)
+				continue
+			}
+			if ready && s.spawner != nil {
+				// Keep the active run's non-overlap fence until its controller
+				// is closed. A failed kill must never release the next run.
+				if _, err := s.spawner.RequestKill(ctx, session.ID); err != nil {
+					problems = append(problems, fmt.Errorf("close finished automation session %s: %w", session.ID, err))
+					continue
+				}
+				session.IsTerminated = true
+			}
+		}
 		if session.IsTerminated {
-			if _, err := store.CompleteAutomationRun(ctx, run.ID, now); err != nil {
+			// An outcome recorded before an interrupted close still decides the run.
+			if run.ErrorMessage != "" {
+				_, err = store.FailAutomationRun(ctx, run.ID, run.ErrorMessage, now)
+			} else {
+				_, err = store.CompleteAutomationRun(ctx, run.ID, now)
+			}
+			if err != nil {
 				problems = append(problems, err)
 			}
+			continue
+		}
+		if session.Activity.State != domain.ActivityIdle && session.Activity.State != domain.ActivityExited {
+			continue
+		}
+		// Otherwise a run holds the slot only until a newer occurrence is due.
+		// A worker without completion evidence keeps its session open. An idle
+		// orchestrator may be waiting on its workers, so it is closed only now,
+		// because the project's next orchestrator cannot start while it lives.
+		definition, found, err := s.store.GetAutomation(ctx, run.AutomationID)
+		if err != nil {
+			problems = append(problems, err)
+			continue
+		}
+		if !found || definition.LastRunAt == nil || !definition.LastRunAt.After(run.ScheduledFor) {
+			continue
+		}
+		if session.Kind == domain.KindOrchestrator && s.spawner != nil {
+			finished, err := store.AutomationSessionReadyToComplete(ctx, session.ID, now)
+			if err != nil {
+				problems = append(problems, err)
+				continue
+			}
+			// Readiness needs a live, idle session, so record it before closing.
+			// A later pass reads it if this one ends the session but not the run.
+			failure := ""
+			if !finished {
+				failure = unfinishedRunMessage
+			}
+			if recorded, err := store.RecordAutomationRunOutcome(ctx, run.ID, failure, now); err != nil || !recorded {
+				if err != nil {
+					problems = append(problems, err)
+				}
+				continue
+			}
+			if _, err := s.spawner.RequestKill(ctx, session.ID); err != nil {
+				problems = append(problems, fmt.Errorf("close automation orchestrator %s: %w", session.ID, err))
+				continue
+			}
+			if finished {
+				if _, err := store.CompleteAutomationRun(ctx, run.ID, now); err != nil {
+					problems = append(problems, err)
+				}
+				continue
+			}
+		}
+		if _, err := store.FailAutomationRun(ctx, run.ID, unfinishedRunMessage, now); err != nil {
+			problems = append(problems, err)
 		}
 	}
 	return errors.Join(problems...)
@@ -278,7 +349,7 @@ func (s *Service) rollbackIncompleteLaunch(ctx context.Context, store schedulerS
 	if s.spawner == nil {
 		return fmt.Errorf("cannot roll back incomplete automation session %s: session spawner is unavailable", session.ID)
 	}
-	if _, err := s.spawner.Kill(ctx, session.ID); err != nil {
+	if _, err := s.spawner.RequestKill(ctx, session.ID); err != nil {
 		return fmt.Errorf("roll back incomplete automation session %s: %w", session.ID, err)
 	}
 	_, err := store.FailAutomationRun(ctx, run.ID, "Recovered incomplete session launch", now)

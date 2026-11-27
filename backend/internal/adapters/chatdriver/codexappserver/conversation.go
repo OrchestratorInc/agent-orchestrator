@@ -14,6 +14,7 @@ import (
 
 	"github.com/google/uuid"
 
+	codexagent "github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/codex"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/chatdriver/backgroundtasks"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/chatdriver/codexappserver/codexproto"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/chatdriver/commanddetail"
@@ -26,9 +27,9 @@ import (
 const eventBuffer = 4096
 
 // approvalWait bounds how long the provider is left blocked on an unanswered
-// request. Codex holds its turn until the client replies, so an approval nobody
+// approval. Codex holds its turn until the client replies, so an approval nobody
 // resolves would hang the session indefinitely. On expiry AO refuses rather than
-// deciding on the user's behalf.
+// deciding on the user's behalf. Questions have no such bound (see inputDeadline).
 const approvalWait = 30 * time.Minute
 
 // errConversationClosed reports a decision arriving after the controller ended.
@@ -46,15 +47,21 @@ var approvalMethods = map[string]domain.ActivityKind{
 // conversation is one live Codex thread. It is the only writer to that thread.
 type conversation struct {
 	backgroundObserved backgroundtasks.Tracker
-	conn               *conn
-	proc               *process
-	log                *slog.Logger
+	// backgroundOutput keeps recent command output by exec item, since the
+	// app-server streams it but has no way to read it back.
+	backgroundOutput backgroundtasks.OutputBuffer
+	conn             *conn
+	proc             *process
+	log              *slog.Logger
 
 	threadID        string
 	historyParentID string
 	providerScopeID string
-	readOnly        bool
-	disableNetwork  bool
+	// codexHome is the CODEX_HOME the app-server runs under, naming the Codex
+	// account its refusals belong to. Empty is the computer's own.
+	codexHome      string
+	readOnly       bool
+	disableNetwork bool
 	// launchMode is the permission mode the thread started or resumed with;
 	// a turn without its own approval setting runs under it.
 	launchMode ports.PermissionMode
@@ -79,6 +86,16 @@ type conversation struct {
 	backgroundCommands map[string]backgroundCommand
 	// A surviving host reconnect needs launch evidence without transcript replay.
 	backgroundHistoryPending bool
+	// backgroundRuns maps a terminal's process ID to the exec item its output
+	// streams on, oldest first in backgroundRunOrder.
+	backgroundRuns     map[string]string
+	backgroundRunOrder []string
+	// backgroundStarted holds the exec items whose start this controller saw,
+	// oldest first in backgroundStartOrder, so a terminal started before it
+	// attached (a daemon restart) can read as missing its earlier output. The
+	// value says whether it printed, so output evicted since reads as missing.
+	backgroundStarted    map[string]backgroundStart
+	backgroundStartOrder []string
 
 	// sendMu serializes turn dispatch so only one operation mutates the provider
 	// conversation at a time.
@@ -98,10 +115,22 @@ type conversation struct {
 	// its own provider turn, so the figure captured at that turn's start is the
 	// context position the compaction is about to shrink.
 	contextAtTurnStart int64
-	// compactedTurn is the last turn a compaction was reported for, so a provider
-	// build that emits both the notification and the item reports one compaction
-	// once.
+	// compactedTurn and compactedItem are the last compaction reported settled,
+	// so a provider build that emits both the notification and the item reports
+	// one compaction once.
 	compactedTurn string
+	compactedItem string
+	// compactingItem is the compaction item under way, and compactingFrom the
+	// context position it started from: the "before" of a compaction the agent
+	// runs inside a longer turn.
+	compactingItem string
+	compactingFrom int64
+	// endedTurn, endedItem and endedFrom are the compaction its turn ended
+	// before it settled, so the deprecated notification arriving after the turn
+	// settles that row instead of adding a second.
+	endedTurn string
+	endedItem string
+	endedFrom int64
 
 	pumpDone     chan struct{}
 	eventsMu     sync.RWMutex
@@ -140,6 +169,7 @@ func newConversation(proc *process, log *slog.Logger, providerScopeID string) *c
 		pumpDone:        make(chan struct{}),
 		providerScopeID: providerScopeID,
 	}
+	c.backgroundOutput.MaxDeltas = codexMaxOutputDeltas
 	c.conn = newConnAt(proc.stdin, proc.stdout, log, c.handleServerRequest, proc.nextRequestID)
 	return c
 }
@@ -204,7 +234,14 @@ func (c *conversation) pump() {
 		// The clock is passed in rather than read inside: a rate-limit reset arrives
 		// as an absolute instant and has to become a remaining duration, and a
 		// normalizer that reads the clock itself cannot be tested deterministically.
+		refusedAt, refusal := turnCompletedAt(n)
 		for _, ev := range normalizeNotification(n, now) {
+			if refusal && ev.Err != nil {
+				// A model this account cannot use: refuse the next session on it
+				// before it starts (#4518), dated by the provider so a turn
+				// replayed on reattach cannot revive a refusal since cleared.
+				codexagent.RecordUnavailableModelFrom(c.codexHome, ev.Err.Error(), refusedAt)
+			}
 			ev = usageLimits.decorate(ev, now)
 			threadID := ev.ProviderConversationID
 			if threadID == "" {
@@ -213,6 +250,8 @@ func (c *conversation) pump() {
 			if threadID == "" {
 				threadID = c.threadID
 			}
+			var threadStatus *ports.ChatEvent
+			ev, threadStatus = usageLimits.threadStatus(ev, threadID)
 			var visible bool
 			ev, visible = citations.formatEvent(threadID, ev)
 			if !visible {
@@ -261,7 +300,23 @@ func (c *conversation) pump() {
 				if c.activeTurn == ev.ProviderTurnID {
 					c.activeTurn = ""
 				}
+				unreported, from, window := c.compactingItem, c.compactingFrom, c.contextWindow
+				c.compactingItem = ""
+				c.compactingFrom = 0
+				if unreported != "" {
+					c.endedTurn, c.endedItem, c.endedFrom = ev.ProviderTurnID, unreported, from
+				}
 				c.mu.Unlock()
+				if unreported != "" && ev.Err == nil && ev.TurnState == domain.TurnStateCompleted {
+					// A compaction still under way when its turn ended never said how it
+					// went. A stopped or failed turn settles its row as such; one that
+					// ended normally would settle it as a finished compaction.
+					c.emit(ports.ChatEvent{
+						Kind: ports.ChatEventCompacted, ProviderTurnID: ev.ProviderTurnID, ProviderItemID: unreported,
+						ActivityStatus: domain.ActivityStatusFailed, Summary: "No result reported",
+						Detail: compactionFigures(from, 0, window),
+					})
+				}
 			}
 			if ev.Kind == ports.ChatEventCompacted {
 				settled, ok := c.settleCompaction(ev)
@@ -287,6 +342,9 @@ func (c *conversation) pump() {
 				c.mu.Unlock()
 			}
 			c.emit(ev)
+			if threadStatus != nil {
+				c.emit(*threadStatus)
+			}
 		}
 	}
 	// The connection ended. Say so explicitly rather than letting the stream go
@@ -297,6 +355,25 @@ func (c *conversation) pump() {
 	}
 	c.emit(state)
 	c.failPendingApprovals()
+}
+
+// turnCompletedAt is when Codex says a failed turn ended, for a turn/completed
+// notification that carries it. A model refusal is recorded only from these:
+// the provider's own time stays the same when a detached host replays the
+// notification, where the time AO received it would not.
+//
+// Codex reports whole seconds, so the refusal is dated to the last instant of
+// that second: a catalog observed within the same second cannot be shown to
+// come after the refusal, and must not clear it.
+func turnCompletedAt(n notification) (time.Time, bool) {
+	if n.Method != codexproto.MethodTurnCompleted {
+		return time.Time{}, false
+	}
+	var p codexproto.TurnCompletedNotification
+	if json.Unmarshal(n.Params, &p) != nil || p.Turn.Error == nil || p.Turn.CompletedAt == nil || *p.Turn.CompletedAt <= 0 {
+		return time.Time{}, false
+	}
+	return time.Unix(*p.Turn.CompletedAt+1, 0).Add(-time.Nanosecond).UTC(), true
 }
 
 // emit delivers an event, preferring to drop a delta over blocking the reader. A
@@ -655,14 +732,53 @@ func (c *conversation) settleCompaction(ev ports.ChatEvent) (ports.ChatEvent, bo
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
-	if ev.ProviderTurnID != "" && ev.ProviderTurnID == c.compactedTurn {
+	if ev.ActivityStatus == domain.ActivityStatusRunning {
+		if ev.ProviderItemID != "" && ev.ProviderItemID == c.compactingItem {
+			return ports.ChatEvent{}, false
+		}
+		c.compactingItem = ev.ProviderItemID
+		c.compactingFrom = c.contextTokens
+		ev.Detail = compactionFigures(c.compactingFrom, 0, c.contextWindow)
+		return ev, true
+	}
+	endedFrom := int64(0)
+	if ev.ProviderItemID == "" {
+		// The deprecated notification names no item: it settles the one under way,
+		// or, arriving after its turn ended, the one that turn left unsettled.
+		ev.ProviderItemID = c.compactingItem
+		if ev.ProviderItemID == "" && ev.ProviderTurnID != "" && ev.ProviderTurnID == c.endedTurn {
+			ev.ProviderItemID = c.endedItem
+		}
+	}
+	if ev.ProviderItemID != "" && ev.ProviderItemID == c.endedItem {
+		endedFrom = c.endedFrom
+		c.endedTurn, c.endedItem, c.endedFrom = "", "", 0
+	}
+	if ev.ProviderTurnID != "" && ev.ProviderTurnID == c.compactedTurn &&
+		(ev.ProviderItemID == "" || c.compactedItem == "" || ev.ProviderItemID == c.compactedItem) {
 		return ports.ChatEvent{}, false
 	}
 	c.compactedTurn = ev.ProviderTurnID
+	c.compactedItem = ev.ProviderItemID
 
 	before, after, window := c.contextAtTurnStart, c.contextTokens, c.contextWindow
+	if c.compactingFrom > 0 && (ev.ProviderItemID == "" || ev.ProviderItemID == c.compactingItem) {
+		before = c.compactingFrom
+	} else if endedFrom > 0 {
+		before = endedFrom
+	}
+	if ev.ProviderItemID == c.compactingItem {
+		c.compactingItem = ""
+		c.compactingFrom = 0
+	}
 	ev.Summary = compactionSummary(before, after)
+	ev.Detail = compactionFigures(before, after, window)
+	return ev, true
+}
 
+// compactionFigures is what a compaction reclaimed, as far as the token reports
+// either side of it show. Zero means unknown and is left out.
+func compactionFigures(before, after, window int64) []byte {
 	detail := map[string]any{}
 	if before > 0 {
 		detail["tokensBefore"] = before
@@ -676,10 +792,11 @@ func (c *conversation) settleCompaction(ev ports.ChatEvent) (ports.ChatEvent, bo
 	if window > 0 {
 		detail["contextWindow"] = window
 	}
-	if encoded, err := json.Marshal(detail); err == nil {
-		ev.Detail = encoded
+	encoded, err := json.Marshal(detail)
+	if err != nil {
+		return nil
 	}
-	return ev, true
+	return encoded
 }
 
 // compactionSummary labels the reclaim for a timeline row.

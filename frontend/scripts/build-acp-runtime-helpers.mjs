@@ -391,15 +391,113 @@ function aoObserveBackgroundTasks(session, message) {
 	while (recent.size > 128) recent.delete(recent.keys().next().value);
 }
 
+// Claude Code names a background shell's live output file only in the text of
+// the result that launched it ("Output is being written to: <path>."), and its
+// command only in that call's input. Record both by task id before the adapter
+// drops the call from its tool-use cache.
+function aoObserveBackgroundLaunch(session, message) {
+	const taskId = message.type === "user" ? message.tool_use_result?.backgroundTaskId : undefined;
+	if (typeof taskId !== "string" || !taskId || !Array.isArray(message.message?.content)) return;
+	const results = message.message.content.filter(block => block?.type === "tool_result");
+	const fileName = `${taskId}.output`;
+	let launch;
+	for (const block of results) {
+		const text = typeof block.content === "string" ? block.content
+			: Array.isArray(block.content) ? block.content.map(part => typeof part?.text === "string" ? part.text : "").join("\n") : "";
+		const outputPath = aoBackgroundOutputPath(text, fileName);
+		if (!outputPath && results.length > 1) continue;
+		const command = session.toolUseCache?.[block.tool_use_id]?.input?.command;
+		launch = { command: typeof command === "string" ? command : undefined, outputPath };
+		break;
+	}
+	if (!launch) return;
+	const launches = session.aoBackgroundLaunches ??= new Map();
+	launches.delete(taskId);
+	launches.set(taskId, launch);
+	while (launches.size > 128) launches.delete(launches.keys().next().value);
+}
+
+// The output file a launch result names, which ends with the task's file name.
+// The path may contain spaces (a Windows profile such as "C:\Users\Jane Doe"),
+// so it runs from "written to:" to the first file name after it when the
+// sentence has that phrase, else from the path root nearest the file name.
+function aoBackgroundOutputPath(text, fileName) {
+	const root = /^(?:\/|[A-Za-z]:[\\/]|\\\\)/;
+	const endsAt = (line, from) => {
+		for (let end = line.indexOf(fileName, from); end >= 0; end = line.indexOf(fileName, end + 1)) {
+			if (end > 0 && (line[end - 1] === "/" || line[end - 1] === "\\")) return end + fileName.length;
+		}
+		return -1;
+	};
+	for (const line of text.split(/\r?\n/)) {
+		const anchor = /written to:\s*/i.exec(line);
+		if (anchor) {
+			const start = anchor.index + anchor[0].length;
+			const end = endsAt(line, start);
+			const path = end < 0 ? "" : line.slice(start, end).replace(/^['"(]/, "");
+			if (root.test(path)) return path;
+			continue;
+		}
+		const end = endsAt(line, 0);
+		if (end < 0) continue;
+		const head = line.slice(0, end);
+		const starts = [...head.matchAll(/(?:^|[\s'"(])(?=\/|[A-Za-z]:[\\/]|\\\\)/g)].map(m => m.index + m[0].length);
+		for (const start of starts.reverse()) {
+			const path = head.slice(start);
+			if (root.test(path)) return path;
+		}
+	}
+	return undefined;
+}
+
+// The tail of a task's output file, at most maxBytes, starting on a whole line.
+// Null when the file is gone or not a regular file. The agent can write that
+// directory, so a symlink is not followed and a FIFO never blocks the read.
+async function aoReadBackgroundOutput(path, maxBytes) {
+	const { lstat, open, realpath } = process.getBuiltinModule("node:fs/promises");
+	const { constants } = process.getBuiltinModule("node:fs");
+	const { basename, dirname, join } = process.getBuiltinModule("node:path");
+	// Never a network share: a forged result line could point the read at one.
+	if (/^(?:\\\\|\/\/)/.test(path)) return null;
+	let file;
+	try {
+		if (!(await lstat(path)).isFile()) return null;
+		file = await open(path, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0) | (constants.O_NONBLOCK ?? 0));
+	} catch {
+		return null;
+	}
+	try {
+		const stats = await file.stat();
+		if (!stats.isFile()) return null;
+		// Windows has no O_NOFOLLOW, so a link swapped in after the lstat is
+		// caught here: the opened name must still be the file itself.
+		if (await realpath(path) !== join(await realpath(dirname(path)), basename(path))) return null;
+		const start = Math.max(0, stats.size - maxBytes);
+		const buffer = Buffer.alloc(stats.size - start);
+		const { bytesRead } = await file.read(buffer, 0, buffer.length, start);
+		let output = buffer.subarray(0, bytesRead).toString("utf8");
+		if (start > 0) {
+			// Drop the partial first line only when a complete line follows it.
+			const at = output.replace(/[\r\n]+$/, "").indexOf("\n");
+			if (at >= 0) output = output.slice(at + 1);
+		}
+		return { output, truncated: start > 0 };
+	} finally {
+		await file.close();
+	}
+}
+
 export function patchClaudeBackgroundTasks(adapterPath) {
 	let source = readFileSync(adapterPath, "utf8");
 	const method = '"_ao/session/background_tasks"';
 	if (source.includes(method)) return false;
 	const marker = ".onRequest(GOAL_CONTROL_METHOD, { parse: parseGoalRequest }, (ctx) => agent.goal(ctx.params))";
 	const cases = ["task_started", "task_updated", "task_notification", "background_tasks_changed"];
-	if (!source.includes(marker) || cases.some(name => source.split(`case "${name}":`).length !== 2)) {
+	const messages = /case "user":\s*case "assistant": \{/g;
+	if (!source.includes(marker) || cases.some(name => source.split(`case "${name}":`).length !== 2) || source.match(messages)?.length !== 1) {
 		throw new Error("claude-agent-acp no longer matches AO's background-task projection");
 	}
+	source = source.replace(messages, match => `${match}\n                        aoObserveBackgroundLaunch(session, message);`);
 	for (const name of cases) {
 		source = source.replace(`case "${name}":`, `case "${name}":\n                                aoObserveBackgroundTasks(session, message);`);
 	}
@@ -411,7 +509,22 @@ export function patchClaudeBackgroundTasks(adapterPath) {
             if (!session.aoBackgroundReady) throw RequestError.methodNotFound("Background task snapshot unavailable.");
             aoObserveBackgroundTasks(session, { subtype: "prune" });
             const tasks = [...session.aoBackgroundLive.values(), ...session.aoBackgroundRecent.values()];
-            return { tasks: tasks.map(({ id, runId, kind, description, state, startedAt, endedAt }) => ({ id, runId, kind, description, state, startedAt, endedAt, stoppable: state === "running" })) };
+            return { tasks: tasks.map(({ id, runId, kind, description, state, startedAt, endedAt }) => ({
+                id, runId, kind, description, command: session.aoBackgroundLaunches?.get(id)?.command, state, startedAt, endedAt, stoppable: state === "running",
+            })) };
+        })
+        .onRequest("_ao/session/background_task_output", { parse: params => params }, async (ctx) => {
+            const id = ctx.params?.sessionId;
+            const taskId = ctx.params?.taskId;
+            const session = typeof id === "string" && Object.hasOwn(agent.sessions, id) ? agent.sessions[id] : undefined;
+            if (!session || session.queryClosed) throw RequestError.invalidParams(undefined, "Live Claude session unavailable.");
+            // Only the file Claude Code named for this task, never a path from the request.
+            const path = typeof taskId === "string" ? session.aoBackgroundLaunches?.get(taskId)?.outputPath : undefined;
+            if (!path) throw RequestError.invalidParams(undefined, "This background task has no output file.");
+            const maxBytes = Math.min(Math.max(Number(ctx.params?.maxBytes) || 65536, 1024), 1048576);
+            const tail = await aoReadBackgroundOutput(path, maxBytes);
+            if (!tail) throw RequestError.invalidParams(undefined, "This background task's output file is gone.");
+            return tail;
         })
         .onRequest("_ao/session/stop_background_task", { parse: params => params }, async (ctx) => {
             const id = ctx.params?.sessionId;
@@ -437,7 +550,8 @@ export function patchClaudeBackgroundTasks(adapterPath) {
             return {};
         })
         `;
-	writeFileSync(adapterPath, `${aoObserveBackgroundTasks.toString()}\n${source.replace(marker, registration + marker)}`);
+	const helpers = [aoObserveBackgroundTasks, aoObserveBackgroundLaunch, aoBackgroundOutputPath, aoReadBackgroundOutput].map(String).join("\n");
+	writeFileSync(adapterPath, `${helpers}\n${source.replace(marker, registration + marker)}`);
 	return true;
 }
 
@@ -547,6 +661,94 @@ export function patchClaudeStaleIdleDebt(adapterPath) {
 		'                                if (message.state === "idle") {',
 	].join("\n");
 	writeFileSync(adapterPath, source.slice(0, at) + replacement + source.slice(at + original.length));
+	return true;
+}
+
+const CLAUDE_COMPACTION_STATUS_MARKER = "// AO: report compaction as status, not reply text.";
+
+/**
+ * Report Claude's compaction as a status update instead of reply text.
+ *
+ * claude-agent-acp 0.70 turns the SDK's compaction status into assistant text:
+ * "Compacting..." for every status message while it runs, then "Compacting
+ * completed." or "Compacting failed: <reason>". A compaction Claude starts on
+ * its own lands in the reply as "Compacting...Compacting...Compacting...".
+ * Send each step as a `session_info_update` carrying `_meta["ao/compaction"]`
+ * instead, in the shape OpenCode uses for `opencode/compaction`, so AO can draw
+ * one compaction row that runs and then settles. The banners still count as
+ * delivered text, as they did, so the issue-#453 result fallback is unchanged.
+ *
+ * The SDK reports the result before the `compact_boundary` that carries its own
+ * figures (pre_tokens, post_tokens). The boundary therefore sends a second
+ * "completed" with tokensBefore/tokensAfter, on the scale of the context usage
+ * it publishes right after: what the compaction freed, and how full the context
+ * is now. It goes first, so the row settles on these figures and not on a
+ * usage report alone.
+ */
+export function patchClaudeCompactionStatus(adapterPath) {
+	let source = readFileSync(adapterPath, "utf8");
+	if (source.includes(CLAUDE_COMPACTION_STATUS_MARKER)) return false;
+	const indent = (spaces, lines) => lines.map(line => " ".repeat(spaces) + line).join("\n");
+	const banner = (content) => indent(36, [
+		"await sendUpdate({",
+		"    sessionId: message.session_id,",
+		"    update: {",
+		'        sessionUpdate: "agent_message_chunk",',
+		`        ${content}`,
+		"    },",
+		"});",
+	]);
+	const status = (meta, marker = false) => indent(36, [
+		...(marker ? [CLAUDE_COMPACTION_STATUS_MARKER] : []),
+		"session.emittedAssistantText = true;",
+		"await sendUpdate({",
+		"    sessionId: message.session_id,",
+		"    update: {",
+		'        sessionUpdate: "session_info_update",',
+		`        _meta: { "ao/compaction": ${meta} },`,
+		"    },",
+		"});",
+	]);
+	const boundary = "                                lastAssistantTotalUsage = usedTokens ?? 0;";
+	const figures = [
+		boundary,
+		"                                {",
+		"                                    // AO: what the compaction freed, from the SDK's own figures.",
+		"                                    const pre = message.compact_metadata?.pre_tokens;",
+		"                                    const post = message.compact_metadata?.post_tokens;",
+		'                                    const known = typeof pre === "number" && typeof post === "number";',
+		"                                    const freed = known && pre > post ? pre - post : undefined;",
+		"                                    const figures = usedTokens != null && usedTokens > 0",
+		"                                        ? { tokensAfter: usedTokens, ...(freed !== undefined ? { tokensBefore: usedTokens + freed } : {}) }",
+		"                                        : known ? { tokensBefore: pre, tokensAfter: post } : undefined;",
+		"                                    if (figures) {",
+		"                                        await sendUpdate({",
+		"                                            sessionId: message.session_id,",
+		"                                            update: {",
+		'                                                sessionUpdate: "session_info_update",',
+		'                                                _meta: { "ao/compaction": { status: "completed", ...figures } },',
+		"                                            },",
+		"                                        });",
+		"                                    }",
+		"                                }",
+	].join("\n");
+	const patches = [
+		[boundary, figures],
+		[banner('content: { type: "text", text: "Compacting..." },'), status('{ status: "started" }', true)],
+		[banner('content: { type: "text", text: "\\n\\nCompacting completed." },'), status('{ status: "completed" }')],
+		[
+			banner("content: { type: \"text\", text: `\\n\\nCompacting failed${reason}` },"),
+			status('{ status: "failed", error: { message: message.compact_error ?? "" } }'),
+		],
+	];
+	for (const [original, replacement] of patches) {
+		const at = source.indexOf(original);
+		if (at < 0 || source.indexOf(original, at + 1) >= 0) {
+			throw new Error("claude-agent-acp compaction banners no longer match AO's compaction status patch");
+		}
+		source = source.slice(0, at) + replacement + source.slice(at + original.length);
+	}
+	writeFileSync(adapterPath, source);
 	return true;
 }
 

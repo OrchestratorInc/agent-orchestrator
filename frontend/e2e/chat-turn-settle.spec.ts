@@ -19,7 +19,7 @@ const replyText = [
 
 type Frame = { scrollTop: number; prompt: number; reply: number; live: number | null; worked: boolean };
 
-function conversation(settled: boolean, withSteps: boolean, priorTurns: number) {
+function conversation(settled: boolean, withSteps: boolean, priorTurns: number, longReply = false) {
 	const base = priorTurns * 2;
 	const prior = Array.from({ length: priorTurns }, (_, index) => [
 		{ kind: "message", id: `prior-user-${index}`, turnId: `prior-${index}`, sequence: index * 2 + 1, revision: 0, role: "user", origin: "human", text: "Look at the test runner config", streaming: false, createdAt: at },
@@ -28,10 +28,16 @@ function conversation(settled: boolean, withSteps: boolean, priorTurns: number) 
 	const steps = withSteps
 		? [
 				{ kind: "activity", id: "run-1", turnId: "turn", sequence: base + 2, revision: 1, activityKind: "command", status: "completed", summary: "npm test -- poller", detail: { command: "npm test -- poller", exitCode: 1 }, createdAt: at },
-				{ kind: "activity", id: "edit", turnId: "turn", sequence: base + 3, revision: 1, activityKind: "file_change", status: "completed", summary: "Edited poller.ts", detail: {}, createdAt: at },
-				{ kind: "activity", id: "run-2", turnId: "turn", sequence: base + 4, revision: 1, activityKind: "command", status: "completed", summary: "npm test", detail: { command: "npm test", exitCode: 0 }, createdAt: at },
+				{ kind: "activity", id: "edit", turnId: "turn", sequence: base + 4, revision: 1, activityKind: "file_change", status: "completed", summary: "Edited poller.ts", detail: {}, createdAt: at },
+				{ kind: "activity", id: "run-2", turnId: "turn", sequence: base + 5, revision: 1, activityKind: "command", status: "completed", summary: "npm test", detail: { command: "npm test", exitCode: 0 }, createdAt: at },
 			]
 		: [];
+	const intermediateNotes = withSteps
+		? [{ kind: "message", id: "note-1", turnId: "turn", sequence: base + 3, revision: 0, role: "assistant", origin: "provider", text: "Checking the poller fixture setup.", streaming: false, createdAt: at }]
+		: [];
+	const finalReplyText = longReply
+		? Array.from({ length: 30 }, (_, index) => `Paragraph ${index + 1}: ${replyText}`).join("\n\n")
+		: replyText;
 	return {
 		conversationId: "conversation-turn-settle",
 		sessionId,
@@ -40,7 +46,7 @@ function conversation(settled: boolean, withSteps: boolean, priorTurns: number) 
 		controller: settled ? "ready" : "busy",
 		settings: {},
 		oldestSequence: 1,
-		latestSequence: base + (settled ? 6 : 5),
+		latestSequence: base + (settled ? 7 : 6),
 		hasMoreBefore: false,
 		turns: [
 			...Array.from({ length: priorTurns }, (_, index) => ({ id: `prior-${index}`, state: "completed", providerTurnId: `provider-prior-${index}`, requestedAt: at, startedAt: at, completedAt: "2026-11-05T10:00:20Z" })),
@@ -51,14 +57,15 @@ function conversation(settled: boolean, withSteps: boolean, priorTurns: number) 
 		messages: [
 			...prior,
 			{ kind: "message", id: "prompt", turnId: "turn", sequence: base + 1, revision: 0, role: "user", origin: "human", text: "Fix the flaky poller test", streaming: false, createdAt: at },
-			{ kind: "message", id: "reply", turnId: "turn", sequence: base + 5, revision: 0, role: "assistant", origin: "provider", text: replyText, streaming: false, createdAt: at },
+			...intermediateNotes,
+			{ kind: "message", id: "reply", turnId: "turn", sequence: base + 6, revision: 0, role: "assistant", origin: "provider", text: finalReplyText, streaming: false, createdAt: at },
 		],
 		activities: steps,
 	};
 }
 
 /** Serves a running turn until `settle()`, which finishes it and tells the app, as the daemon would. */
-async function openTurn(page: Page, { withSteps, priorTurns }: { withSteps: boolean; priorTurns: number }) {
+async function openTurn(page: Page, { withSteps, priorTurns, longReply = false }: { withSteps: boolean; priorTurns: number; longReply?: boolean }) {
 	await page.setViewportSize({ width: 900, height: 700 });
 	await installFakeAgent(page, { workers: [{ id: sessionId, title: "Turn settle", mode: "chat" }] });
 	// Keep the fake CDC streams reachable, to announce the finished turn on them.
@@ -76,7 +83,7 @@ async function openTurn(page: Page, { withSteps, priorTurns }: { withSteps: bool
 	let settled = false;
 	await page.route(`**/api/v1/sessions/${sessionId}/**`, async (route) => {
 		const path = new URL(route.request().url()).pathname;
-		if (path.endsWith("/conversation") && route.request().method() === "GET") return route.fulfill({ json: conversation(settled, withSteps, priorTurns) });
+		if (path.endsWith("/conversation") && route.request().method() === "GET") return route.fulfill({ json: conversation(settled, withSteps, priorTurns, longReply) });
 		if (path.endsWith("/conversation/models")) return route.fulfill({ json: { models: [], selected: {} } });
 		if (path.endsWith("/conversation/skills")) return route.fulfill({ json: { skills: [] } });
 		if (path.endsWith("/workspace/files")) return route.fulfill({ json: { files: [], truncated: false } });
@@ -162,8 +169,7 @@ for (const priorTurns of [1, 30]) {
 
 		expectSteady(frames, "scrollTop");
 		expectSteady(frames, "prompt");
-		// The reply rises into the room its steps left, and only rises. The steps are
-		// already folded to one summary line while the turn runs, so that room is one row.
+		// The reply rises into the room its steps left, and only rises.
 		expectOnlyRising(frames);
 		expect(frames.at(-1)!.reply).toBeLessThan(frames[settled - 1]!.reply - 20);
 		// The live row fades out where it was rather than jumping away.
@@ -172,7 +178,7 @@ for (const priorTurns of [1, 30]) {
 	});
 }
 
-test("a turn that went straight to its answer gets Worked for as plain text, with nothing moving @T0", async ({ page }) => {
+test("a turn that went straight to its answer animates Worked for in as plain text @T0", async ({ page }) => {
 	test.setTimeout(60_000);
 	const turn = await openTurn(page, { withSteps: false, priorTurns: 1 });
 	const stop = await recordFrames(page);
@@ -183,14 +189,41 @@ test("a turn that went straight to its answer gets Worked for as plain text, wit
 	await expect(page.locator("[data-turn-worked]").first()).toHaveText("Worked for 20s");
 	await page.waitForTimeout(600);
 	const frames = await stop();
+	const settled = frames.findIndex((frame) => frame.worked);
+	expect(settled).toBeGreaterThan(0);
 
 	// Nothing to open: no control and no chevron.
 	await expect(page.getByRole("button", { name: /^Worked for/ })).toHaveCount(0);
 	await expect(worked.locator("svg")).toHaveCount(0);
 	expectSteady(frames, "scrollTop");
 	expectSteady(frames, "prompt");
+	// No space was reserved before settle: the reply moves smoothly down as "Worked for" opens in.
+	for (let index = 1; index < frames.length; index += 1) {
+		expect(frames[index]!.reply, `reply top, frame ${index}: ${frames.map((frame) => frame.reply.toFixed(1)).join(", ")}`).toBeGreaterThanOrEqual(frames[index - 1]!.reply - 0.5);
+	}
+	expect(frames.at(-1)!.reply).toBeGreaterThan(frames[settled - 1]!.reply + 20);
+});
+
+test("a long scrolling reply holds steady when Worked for arrives off-screen above it @T0", async ({ page }) => {
+	test.setTimeout(60_000);
+	const turn = await openTurn(page, { withSteps: false, priorTurns: 1, longReply: true });
+	const stop = await recordFrames(page);
+	await turn.settle();
+	const worked = page.locator("[data-chat-turn]").last().locator("[data-turn-worked]");
+	await expect(worked).toHaveText("Worked for 42s");
+	await page.waitForTimeout(600);
+	const frames = await stop();
+	const settled = frames.findIndex((frame) => frame.worked);
+	expect(settled).toBeGreaterThan(0);
+
+	// The reply already scrolled past the viewport: advancing scrollTop by the new
+	// "Worked for" height before paint prevents any back-and-forth bounce (only the
+	// ~4px height difference between the live row and the reply's action row remains).
 	const replies = frames.map((frame) => frame.reply);
-	expect(Math.max(...replies) - Math.min(...replies)).toBeLessThan(1);
+	for (let index = 1; index < frames.length; index += 1) {
+		expect(frames[index]!.reply, `reply top, frame ${index}: ${replies.map((v) => v.toFixed(1)).join(", ")}`).toBeGreaterThanOrEqual(frames[index - 1]!.reply - 0.5);
+	}
+	expect(Math.max(...replies) - Math.min(...replies), `reply across ${frames.length} frames: ${replies.map((v) => v.toFixed(1)).join(", ")}`).toBeLessThan(6);
 });
 
 test("opening and closing Worked for in a windowed chat keeps the view still @T0", async ({ page }) => {

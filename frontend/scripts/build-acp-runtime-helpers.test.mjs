@@ -1,4 +1,5 @@
 // @vitest-environment node
+import { execFileSync } from "node:child_process";
 import {
 	existsSync,
 	mkdirSync,
@@ -21,6 +22,7 @@ import {
 	patchClaudeFoldedPromptSettlement,
 	patchClaudeHibernationCheck,
 	patchClaudeBackgroundTasks,
+	patchClaudeCompactionStatus,
 	patchClaudeRetryDetails,
 	patchClaudeStaleIdleDebt,
 	patchClaudeSteerSettlement,
@@ -120,9 +122,11 @@ describe("patchClaudeRetryDetails", () => {
 describe("patchClaudeBackgroundTasks", () => {
 	function harness() {
 		const path = join(temporaryDirectory(), "tasks.js");
-		writeFileSync(path, `function dispatch(session, message) { switch(message.subtype) {
+		writeFileSync(path, `function dispatch(session, message) { switch(message.subtype ?? message.type) {
 			case "task_started": break; case "task_updated": break;
 			case "task_notification": break; case "background_tasks_changed": break;
+			case "user":
+			case "assistant": { break; }
 		} }
 		connection.onRequest(GOAL_CONTROL_METHOD, { parse: parseGoalRequest }, (ctx) => agent.goal(ctx.params));`);
 		expect(patchClaudeBackgroundTasks(path)).toBe(true);
@@ -322,6 +326,122 @@ describe("patchClaudeBackgroundTasks", () => {
 			await expect(stop("server", "__proto__")).rejects.toThrow("invalid session");
 			expect(stopped).toEqual(["server"]);
 		} finally { vi.useRealTimers(); }
+	});
+});
+
+describe("patchClaudeBackgroundTasks output", () => {
+	function harness() {
+		const path = join(temporaryDirectory(), "tasks.js");
+		writeFileSync(path, `function dispatch(session, message) { switch(message.subtype ?? message.type) {
+			case "task_started": break; case "task_updated": break;
+			case "task_notification": break; case "background_tasks_changed": break;
+			case "user":
+			case "assistant": { break; }
+		} }
+		connection.onRequest(GOAL_CONTROL_METHOD, { parse: parseGoalRequest }, (ctx) => agent.goal(ctx.params));`);
+		patchClaudeBackgroundTasks(path);
+		const handlers = new Map();
+		const connection = { onRequest(method, _parser, handler) { handlers.set(method, handler); return connection; } };
+		const session = { toolUseCache: {} };
+		const dispatch = new Function("connection", "agent", "GOAL_CONTROL_METHOD", "parseGoalRequest", "RequestError", `${readFileSync(path, "utf8")}\nreturn dispatch;`)(
+			connection, { sessions: { native: session } }, "goal", p => p,
+			{ invalidParams: (_data, message) => new Error(message ?? "invalid session"), methodNotFound: () => new Error("unavailable") },
+		);
+		const emit = message => dispatch(session, message);
+		const output = (taskId, params = {}) => handlers.get("_ao/session/background_task_output")({ params: { sessionId: "native", taskId, ...params } });
+		const read = () => handlers.get("_ao/session/background_tasks")({ params: { sessionId: "native" } });
+		return { emit, output, read, session };
+	}
+
+	/** What Claude Code sends when a Bash call goes to the background (2.1.323). */
+	function launch(h, { taskId, toolUseId, command, file, text }) {
+		h.session.toolUseCache[toolUseId] = { name: "Bash", input: { command, run_in_background: true } };
+		h.emit({
+			type: "user",
+			tool_use_result: { stdout: "", stderr: "", interrupted: false, backgroundTaskId: taskId },
+			message: { role: "user", content: [{ type: "tool_result", tool_use_id: toolUseId, content: text ?? `Command running in background with ID: ${taskId}. Output is being written to: ${file}.` }] },
+		});
+		delete h.session.toolUseCache[toolUseId];
+	}
+
+	it("reports a background shell's command and reads the tail of its output file", async () => {
+		const h = harness();
+		const dir = join(temporaryDirectory(), "session", "tasks");
+		mkdirSync(dir, { recursive: true });
+		const file = join(dir, "server.output");
+		writeFileSync(file, "> vite\n  Local: http://localhost:3000/\n");
+		h.emit({ subtype: "background_tasks_changed", tasks: [{ task_id: "server", task_type: "local_bash", description: "Start the dev server" }] });
+		launch(h, { taskId: "server", toolUseId: "toolu_1", command: "npm run dev", file });
+		expect(h.read().tasks).toMatchObject([{ id: "server", description: "Start the dev server", command: "npm run dev" }]);
+		await expect(h.output("server")).resolves.toEqual({ output: "> vite\n  Local: http://localhost:3000/\n", truncated: false });
+
+		// Past the byte cap, the read starts on the next whole line.
+		writeFileSync(file, `${"x".repeat(1500)}\nlast line\n`);
+		await expect(h.output("server", { maxBytes: 1024 })).resolves.toEqual({ output: "last line\n", truncated: true });
+
+		// With no complete line after the cut, the read keeps the bounded tail.
+		writeFileSync(file, `${"x".repeat(1500)}end\n`);
+		await expect(h.output("server", { maxBytes: 1024 })).resolves.toEqual({ output: `${"x".repeat(1020)}end\n`, truncated: true });
+	});
+
+	it("reads only the file Claude Code named for that task", async () => {
+		const h = harness();
+		const file = join(temporaryDirectory(), "watch.output");
+		writeFileSync(file, "tick\n");
+		launch(h, { taskId: "watch", toolUseId: "toolu_2", command: "npm test -- --watch", file });
+		await expect(h.output("watch", { path: "/etc/hosts" })).resolves.toEqual({ output: "tick\n", truncated: false });
+		// Unknown tasks and a result that named a different file have no output.
+		launch(h, { taskId: "other", toolUseId: "toolu_3", command: "make", file: join(temporaryDirectory(), "unrelated.txt") });
+		for (const id of ["missing", "other", 7]) await expect(h.output(id)).rejects.toThrow("no output file");
+		rmSync(file);
+		await expect(h.output("watch")).rejects.toThrow("is gone");
+		h.session.queryClosed = true;
+		await expect(h.output("watch")).rejects.toThrow("Live Claude session unavailable");
+	});
+
+	it("keeps an output path that contains spaces", async () => {
+		const h = harness();
+		const dir = join(temporaryDirectory(), "Jane Doe", "tasks");
+		mkdirSync(dir, { recursive: true });
+		const file = join(dir, "spaced.output");
+		writeFileSync(file, "tick\n");
+		launch(h, { taskId: "spaced", toolUseId: "toolu_4", command: "npm run dev", file });
+		await expect(h.output("spaced")).resolves.toEqual({ output: "tick\n", truncated: false });
+		for (const [taskId, path] of [
+			["win", "C:\\Users\\Jane Doe\\AppData\\Local\\Temp\\claude\\tasks\\win.output"],
+			["unc", "\\\\server\\share\\Jane Doe\\unc.output"],
+		]) {
+			launch(h, { taskId, toolUseId: `toolu_${taskId}`, command: "make", file: path });
+			expect(h.session.aoBackgroundLaunches.get(taskId).outputPath).toBe(path);
+		}
+		// A network share is never read.
+		await expect(h.output("unc")).rejects.toThrow("is gone");
+	});
+
+	it("takes the path nearest the file name, ending at its first mention", () => {
+		const h = harness();
+		for (const [taskId, text, path] of [
+			["near", "Output (see /docs) at /tmp/t/near.output", "/tmp/t/near.output"],
+			["first", "Output is being written to: /tmp/x/first.output. Use /tmp/y/first.output", "/tmp/x/first.output"],
+		]) {
+			launch(h, { taskId, toolUseId: `toolu_${taskId}`, command: "make", text });
+			expect(h.session.aoBackgroundLaunches.get(taskId).outputPath).toBe(path);
+		}
+	});
+
+	it.skipIf(process.platform === "win32")("refuses a symlink or a FIFO in place of the output file", async () => {
+		const h = harness();
+		const dir = temporaryDirectory();
+		const target = join(dir, "secret.txt");
+		writeFileSync(target, "not task output\n");
+		const link = join(dir, "link.output");
+		symlinkSync(target, link);
+		launch(h, { taskId: "link", toolUseId: "toolu_5", command: "make", file: link });
+		await expect(h.output("link")).rejects.toThrow("is gone");
+		const fifo = join(dir, "fifo.output");
+		execFileSync("mkfifo", [fifo]);
+		launch(h, { taskId: "fifo", toolUseId: "toolu_6", command: "make", file: fifo });
+		await expect(h.output("fifo")).rejects.toThrow("is gone");
 	});
 });
 
@@ -822,6 +942,159 @@ describe("patchClaudeStaleIdleDebt", () => {
 		writeFileSync(adapterPath, 'case "session_state_changed": {\n');
 
 		expect(() => patchClaudeStaleIdleDebt(adapterPath)).toThrow(/idle-debt patch/);
+	});
+});
+
+describe("patchClaudeCompactionStatus", () => {
+	// claude-agent-acp 0.70's status case, as compiled.
+	const statusCase = `
+                            case "status": {
+                                if (message.status === "compacting") {
+                                    compactionInProgress = true;
+                                    await sendUpdate({
+                                        sessionId: message.session_id,
+                                        update: {
+                                            sessionUpdate: "agent_message_chunk",
+                                            content: { type: "text", text: "Compacting..." },
+                                        },
+                                    });
+                                }
+                                else if (message.compact_result === "success" && compactionInProgress) {
+                                    compactionInProgress = false;
+                                    await sendUpdate({
+                                        sessionId: message.session_id,
+                                        update: {
+                                            sessionUpdate: "agent_message_chunk",
+                                            content: { type: "text", text: "\\n\\nCompacting completed." },
+                                        },
+                                    });
+                                }
+                                else if (message.compact_result === "failed" && compactionInProgress) {
+                                    compactionInProgress = false;
+                                    const reason = message.compact_error ? \`: \${message.compact_error}\` : ".";
+                                    await sendUpdate({
+                                        sessionId: message.session_id,
+                                        update: {
+                                            sessionUpdate: "agent_message_chunk",
+                                            content: { type: "text", text: \`\\n\\nCompacting failed\${reason}\` },
+                                        },
+                                    });
+                                }
+                                break;
+                            }
+                            case "compact_boundary": {
+                                const usedTokens = await fetchContextUsedTokens(session.query, this.logger);
+                                lastAssistantUsage = null;
+                                lastAssistantTotalUsage = usedTokens ?? 0;
+                                await sendUpdate({
+                                    sessionId: message.session_id,
+                                    update: {
+                                        sessionUpdate: "usage_update",
+                                        used: lastAssistantTotalUsage,
+                                        size: session.contextWindowSize,
+                                    },
+                                });
+                                break;
+                            }
+`;
+
+	function boundaryHandler(usedTokens) {
+		const adapterPath = join(temporaryDirectory(), "acp-agent.js");
+		writeFileSync(adapterPath, statusCase);
+		patchClaudeCompactionStatus(adapterPath);
+		const patched = readFileSync(adapterPath, "utf8");
+		const start = patched.indexOf("const usedTokens = await fetchContextUsedTokens");
+		const body = patched.slice(start, patched.indexOf("break;", start));
+		const sent = [];
+		const AsyncFunction = (async () => {}).constructor;
+		const run = new AsyncFunction("message", "session", "sendUpdate", "fetchContextUsedTokens", `
+			let lastAssistantUsage, lastAssistantTotalUsage;
+			${body}
+		`);
+		const onBoundary = (message) => run(
+			{ session_id: "s1", ...message },
+			{ query: {}, contextWindowSize: 200000 },
+			async (update) => { sent.push(update.update); },
+			async () => usedTokens,
+		);
+		return { onBoundary, sent };
+	}
+
+	function statusHandler() {
+		const adapterPath = join(temporaryDirectory(), "acp-agent.js");
+		writeFileSync(adapterPath, statusCase);
+		expect(patchClaudeCompactionStatus(adapterPath)).toBe(true);
+		expect(patchClaudeCompactionStatus(adapterPath)).toBe(false);
+		const patched = readFileSync(adapterPath, "utf8");
+		const start = patched.indexOf('if (message.status === "compacting")');
+		const body = patched.slice(start, patched.indexOf("break;", start));
+		const sent = [];
+		const session = { emittedAssistantText: false };
+		const AsyncFunction = (async () => {}).constructor;
+		const run = new AsyncFunction("message", "session", "sendUpdate", "state", `
+			let compactionInProgress = state.inProgress;
+			${body}
+			state.inProgress = compactionInProgress;
+		`);
+		const state = { inProgress: false };
+		const onStatus = (message) => run({ session_id: "s1", ...message }, session, async (update) => { sent.push(update); }, state);
+		return { onStatus, sent, session };
+	}
+
+	it("reports a compaction that runs and settles as status, never as reply text", async () => {
+		const { onStatus, sent, session } = statusHandler();
+
+		await onStatus({ status: "compacting" });
+		await onStatus({ status: "compacting" });
+		await onStatus({ status: null, compact_result: "success" });
+		// The SDK repeats the terminal status; only the first one is reported.
+		await onStatus({ status: null, compact_result: "success" });
+
+		expect(sent.map((update) => update.update)).toEqual([
+			{ sessionUpdate: "session_info_update", _meta: { "ao/compaction": { status: "started" } } },
+			{ sessionUpdate: "session_info_update", _meta: { "ao/compaction": { status: "started" } } },
+			{ sessionUpdate: "session_info_update", _meta: { "ao/compaction": { status: "completed" } } },
+		]);
+		expect(sent.every((update) => update.sessionId === "s1")).toBe(true);
+		expect(session.emittedAssistantText).toBe(true);
+	});
+
+	it("carries the SDK's reason when compaction fails", async () => {
+		const { onStatus, sent } = statusHandler();
+
+		await onStatus({ status: "compacting" });
+		await onStatus({ status: null, compact_result: "failed", compact_error: "Conversation too long" });
+
+		expect(sent.at(-1).update).toEqual({
+			sessionUpdate: "session_info_update",
+			_meta: { "ao/compaction": { status: "failed", error: { message: "Conversation too long" } } },
+		});
+	});
+
+	it("reports what the compaction freed at its boundary, before the usage it publishes", async () => {
+		const { onBoundary, sent } = boundaryHandler(56805);
+
+		await onBoundary({ compact_metadata: { trigger: "auto", pre_tokens: 73559, post_tokens: 19805 } });
+
+		expect(sent).toEqual([
+			{ sessionUpdate: "session_info_update", _meta: { "ao/compaction": { status: "completed", tokensBefore: 110559, tokensAfter: 56805 } } },
+			{ sessionUpdate: "usage_update", used: 56805, size: 200000 },
+		]);
+	});
+
+	it("falls back to the SDK's own scale when the context usage is unknown", async () => {
+		const { onBoundary, sent } = boundaryHandler(null);
+
+		await onBoundary({ compact_metadata: { pre_tokens: 73559, post_tokens: 19805 } });
+
+		expect(sent[0]._meta["ao/compaction"]).toEqual({ status: "completed", tokensBefore: 73559, tokensAfter: 19805 });
+	});
+
+	it("fails packaging when the adapter's compaction banners change", () => {
+		const adapterPath = join(temporaryDirectory(), "acp-agent.js");
+		writeFileSync(adapterPath, statusCase.replace("Compacting...", "Compacting…"));
+
+		expect(() => patchClaudeCompactionStatus(adapterPath)).toThrow(/compaction status patch/);
 	});
 });
 

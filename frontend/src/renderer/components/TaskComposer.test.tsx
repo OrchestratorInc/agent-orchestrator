@@ -347,7 +347,7 @@ describe("TaskComposer", () => {
 		expect(await screen.findByText("No agent is ready. Set one up in Settings.")).toBeInTheDocument();
 		expect(startTask()).toBeDisabled();
 		expect(h.post).not.toHaveBeenCalledWith("/api/v1/orchestrators/delegate", expect.anything());
-		fireEvent.click(screen.getByRole("button", { name: "Open Agent Harnesses" }));
+		fireEvent.click(screen.getByRole("button", { name: "Open Agents settings" }));
 		expect(useUiStore.getState().settingsModal).toEqual(expect.objectContaining({ section: "harness", harnessView: "local" }));
 	});
 
@@ -355,7 +355,7 @@ describe("TaskComposer", () => {
 		const queryClient = cloudFixture("", {}, []);
 		render(<Wrap queryClient={queryClient}><TaskComposer projectId="cloud-1" onCreated={vi.fn()} /></Wrap>);
 		expect(await screen.findByText("No agent is ready. Set one up in Settings.")).toBeInTheDocument();
-		fireEvent.click(screen.getByRole("button", { name: "Open Agent Harnesses" }));
+		fireEvent.click(screen.getByRole("button", { name: "Open Agents settings" }));
 		expect(useUiStore.getState().settingsModal).toEqual(expect.objectContaining({ section: "harness", harnessView: "cloud" }));
 	});
 
@@ -1157,14 +1157,14 @@ describe("TaskComposer", () => {
 		await waitFor(() => expect(h.ensureTargetedReadiness).toHaveBeenCalledTimes(2));
 		expect(h.ensureTargetedReadiness).toHaveBeenLastCalledWith(["codex"], "launch", undefined);
 		const expectedError = errorCode === "AGENT_BINARY_NOT_FOUND"
-			? "This agent is not installed. Open Agent Harnesses settings to install it, then try again."
+			? "This agent is not installed. Open Agents settings to install it, then try again."
 			: "Codex is not ready";
 		expect(screen.queryByText(expectedError)).not.toBeInTheDocument();
 
 		await act(async () => finishReadiness({ agents: [completed] }));
 		expect(await screen.findByText(expectedError)).toBeInTheDocument();
 		if (errorCode === "AGENT_BINARY_NOT_FOUND") {
-			fireEvent.click(screen.getByRole("button", { name: "Open Agent Harnesses" }));
+			fireEvent.click(screen.getByRole("button", { name: "Open Agents settings" }));
 			expect(useUiStore.getState().settingsModal).toEqual(expect.objectContaining({ section: "harness", focusAgentId: "codex" }));
 		}
 		expect(queryClient.getQueryData(agentReadinessQueryKey)).toEqual({ agents: [completed] });
@@ -1427,7 +1427,7 @@ describe("TaskComposer", () => {
 	it("manages cloud harness connections from a cloud project's agent picker", async () => {
 		h.cloudProjects.push({ id: "cloud-1", displayName: "Cloud", repositoryUrl: "https://example.com/repo", defaultBranch: "main", config: {} });
 		const { unmount } = render(<Wrap><TaskComposer projectId="cloud-1" onCreated={vi.fn()} /></Wrap>);
-		// Only connected harnesses, with "Manage harness connections…" (Harness settings' Cloud view).
+		// Only connected agents, with "Manage agent connections…" (Agents settings' Cloud view).
 		expect(await screen.findByLabelText("Agent")).toHaveAttribute("data-manage-view", "cloud");
 		unmount();
 
@@ -2539,6 +2539,54 @@ describe("TaskComposer", () => {
 				}),
 			),
 		);
+	});
+
+	// #5679: Codex lists only the models an account offers, so a project can pin
+	// one the list lacks. It stays a selectable row, noted, and the task runs it.
+	it("lists a project-pinned model the account's catalog lacks, with a note", async () => {
+		h.get.mockImplementation(async (path: string) => {
+			if (path.includes("/models")) {
+				return {
+					data: {
+						agent: "codex",
+						selectionMode: "catalog",
+						models: [{ id: "gpt-5.1", label: "GPT-5.1", isDefault: true }],
+						allowCustom: false,
+						refreshRecommended: false,
+					},
+				};
+			}
+			return {
+				data: {
+					status: "ok",
+					project: { config: { worker: { agent: "codex", agentConfig: { model: "gpt-5.4-mini" } } } },
+				},
+			};
+		});
+		h.post.mockResolvedValueOnce({ data: { workerId: "sess-2" } });
+
+		render(
+			<Wrap>
+				<TaskComposer projectId="proj-1" onCreated={vi.fn()} />
+			</Wrap>,
+		);
+
+		const model = await screen.findByRole("button", { name: "Model" });
+		await waitFor(() => expect(model).toHaveTextContent("gpt-5.4-mini"));
+		await userEvent.click(model);
+		const pinned = screen.getByRole("menuitem", { name: /gpt-5\.4-mini/ });
+		expect(pinned).toHaveTextContent("Set for this project · Codex doesn't list it for this account");
+		expect(pinned).not.toHaveAttribute("aria-disabled", "true");
+		expect(screen.getByRole("menuitem", { name: /GPT-5\.1/ })).not.toHaveTextContent("Set for this project");
+		await userEvent.keyboard("{Escape}");
+		fireEvent.change(task(), { target: { value: "Run on the pinned model" } });
+		fireEvent.click(screen.getByText("Start task"));
+
+		// The project's model applies on the daemon, as for any inherited model;
+		// the composer sends no override that could replace it.
+		await waitFor(() => expect(h.post).toHaveBeenCalledOnce());
+		expect(h.post.mock.calls[0][1].body).toEqual(expect.objectContaining({ agent: "codex" }));
+		expect(h.post.mock.calls[0][1].body).not.toHaveProperty("model");
 	});
 
 	function mockDisabledModels(disabledModels: string[]) {
@@ -4308,6 +4356,31 @@ describe("useTaskLaunch agent choices", () => {
 		await waitFor(() => expect(screen.getAllByRole("listitem").map((item) => item.textContent).sort())
 			.toEqual(["claude-code", "codex: Not installed", "goose: Not signed in"]));
 	});
+
+	it("passes a not-installed Antigravity to the picker with its setup reason instead of dropping it (#7640)", async () => {
+		h.get.mockResolvedValue({ data: { status: "ok", project: { agent: "claude-code", config: {} } } });
+		h.agentCatalog = { agents: [
+			agentReadiness("claude-code", "Claude Code"),
+			agentReadiness("agy", "Antigravity", { installation: "not_installed" }),
+		] };
+		render(<Wrap><Choices /></Wrap>);
+		await waitFor(() => expect(screen.getAllByRole("listitem").map((item) => item.textContent).sort())
+			.toEqual(["agy: Not installed", "claude-code"]));
+	});
+
+	it("offers any agent the host has a Chat driver for, not installed, dimmed for setup", async () => {
+		h.get.mockImplementation(async (path: string) => path === "/api/v1/settings"
+			? { data: { defaultSessionMode: "chat", chatHarnesses: ["claude-code", "agy"] } }
+			: { data: { status: "ok", project: { agent: "claude-code", config: {} } } });
+		h.agentCatalog = { agents: [
+			agentReadiness("claude-code", "Claude Code"),
+			agentReadiness("agy", "Antigravity", { installation: "not_installed" }),
+			agentReadiness("aider", "Aider", { installation: "not_installed" }),
+		] };
+		render(<Wrap><Choices /></Wrap>);
+		await waitFor(() => expect(screen.getAllByRole("listitem").map((item) => item.textContent).sort())
+			.toEqual(["agy: Not installed", "claude-code"]));
+	});
 });
 
 describe("useTaskLaunch Cloud start on send", () => {
@@ -4525,11 +4598,44 @@ describe("useTaskLaunch Cloud start on send", () => {
 		expect((outcome as { status?: number }).status).toBeUndefined();
 	});
 
-	// Its own project comes with its session, so a start the files did not
-	// reach would leave that project behind: it starts without them.
-	it("refuses files on a Cloud standalone agent as final, starting nothing", async () => {
+	// A Cloud session of its own starts with files as a project's task does:
+	// created without a prompt, the files uploaded to it, the brief sent with them.
+	it("starts a Cloud session with files in Chat, the brief carrying them", async () => {
 		const queryClient = freestyleFixture();
 		h.cloudMaxAttachmentBytes = 25 * 1024 * 1024;
+		const project = { id: "agent-f5", displayName: "Look at this", standaloneAgent: true };
+		h.cloudCreateStandaloneAgent.mockResolvedValue({ project, session: { id: "s-f5", harness: "codex", interfaceMode: "chat" } });
+		h.cloudUpload.mockResolvedValue({ id: "file-1" });
+		h.cloudSendSessionMessage.mockResolvedValue({});
+		let standalone!: ReturnType<typeof useTaskLaunch>;
+		function StandaloneLauncher() {
+			standalone = useTaskLaunch({ projectId: CLOUD_STANDALONE_WORKSPACE_ID });
+			return <p>{standalone.canSubmit ? "ready" : "loading"}</p>;
+		}
+		render(<Wrap queryClient={queryClient}><StandaloneLauncher /></Wrap>);
+		await screen.findByText("ready");
+		let sessionId!: string;
+		await act(async () => {
+			sessionId = await standalone.launch("Look at this", { clientRequestId: "req-f5", interfaceMode: "chat", attachments: [{ mimeType: "image/png", data: "aGk=", name: "shot.png" }] });
+		});
+		expect(sessionId).toBe("s-f5");
+		expect(h.cloudCreateStandaloneAgent).toHaveBeenCalledWith("org-1",
+			expect.objectContaining({ prompt: "", interfaceMode: "chat" }),
+			{ idempotencyKey: expect.stringMatching(/^req-f5:files:/) });
+		expect(h.cloudUpload).toHaveBeenCalledWith(h.cloudBaseUrl, "org-1", "s-f5", { name: "shot.png", data: "aGk=" }, { signal: expect.any(AbortSignal) });
+		expect(h.cloudSendSessionMessage).toHaveBeenCalledWith("org-1", "s-f5",
+			expect.objectContaining({ text: "Look at this", attachmentIds: ["file-1"] }),
+			{ idempotencyKey: expect.stringMatching(/^req-f5:files:.*:brief$/) });
+		expect(h.cloudCreateSession).not.toHaveBeenCalled();
+		expect(h.seedCreatedStandaloneAgent).toHaveBeenCalledWith(expect.anything(), h.cloudBaseUrl, "org-1", project);
+		expect(standaloneAgentProjectId("s-f5")).toBe("agent-f5");
+	});
+
+	it("deletes a Cloud session whose files did not upload, and returns the task as final", async () => {
+		const queryClient = freestyleFixture();
+		h.cloudMaxAttachmentBytes = 25 * 1024 * 1024;
+		h.cloudCreateStandaloneAgent.mockResolvedValue({ project: { id: "agent-f6", standaloneAgent: true }, session: { id: "s-f6", harness: "codex", interfaceMode: "chat" } });
+		h.cloudUpload.mockRejectedValue(new Error("This file type is not allowed."));
 		let standalone!: ReturnType<typeof useTaskLaunch>;
 		function StandaloneLauncher() {
 			standalone = useTaskLaunch({ projectId: CLOUD_STANDALONE_WORKSPACE_ID });
@@ -4539,13 +4645,12 @@ describe("useTaskLaunch Cloud start on send", () => {
 		await screen.findByText("ready");
 		let outcome: unknown;
 		await act(async () => {
-			outcome = await standalone.launch("Look at this", { clientRequestId: "req-f5", interfaceMode: "chat", attachments: [{ mimeType: "image/png", data: "aGk=", name: "shot.png" }] })
+			outcome = await standalone.launch("Look at this", { clientRequestId: "req-f6", interfaceMode: "chat", attachments: [{ mimeType: "image/png", data: "aGk=", name: "shot.png" }] })
 				.catch((error: unknown) => error);
 		});
-		expect(outcome).toMatchObject({ name: "TaskCreateError", code: "CLOUD_ATTACHMENTS_UNSUPPORTED" });
-		expect(h.cloudCreateStandaloneAgent).not.toHaveBeenCalled();
-		expect(h.cloudCreateSession).not.toHaveBeenCalled();
-		expect(h.cloudUpload).not.toHaveBeenCalled();
+		expect(h.cloudDeleteSession).toHaveBeenCalledWith("org-1", "s-f6");
+		expect(h.cloudSendSessionMessage).not.toHaveBeenCalled();
+		expect(outcome).toMatchObject({ name: "TaskCreateError", code: "CLOUD_TASK_FILES_UNDELIVERED", message: "This file type is not allowed." });
 	});
 
 	it("keeps a full plan's refusal as the reason, and creates nothing else", async () => {
@@ -4631,6 +4736,29 @@ describe("useTaskLaunch on the new chat page", () => {
 			expect(h.post).toHaveBeenCalledWith("/api/v1/orchestrators/delegate", expect.anything());
 		},
 	);
+
+	it("gives the new chat page a project-pinned model the catalog lacks, noted, and never as its default", async () => {
+		h.get.mockImplementation(async (path: string) => {
+			if (path.includes("/models")) {
+				return { data: { agent: "codex", selectionMode: "catalog", models: [{ id: "gpt-5.1", label: "GPT-5.1", isDefault: true }], allowCustom: false, refreshRecommended: false } };
+			}
+			return { data: { status: "ok", project: { config: { worker: { agent: "codex", agentConfig: { model: "gpt-5.4-mini" } } } } } };
+		});
+		let task!: ReturnType<typeof useTaskLaunch>;
+		function Launcher() {
+			task = useTaskLaunch({ projectId: "proj-1" });
+			return null;
+		}
+		render(<Wrap><Launcher /></Wrap>);
+		const pinned = { id: "gpt-5.4-mini", displayName: "gpt-5.4-mini", default: false, hint: "Set for this project · Codex doesn't list it for this account" };
+		await waitFor(() => expect(task.chatModels).toEqual([expect.objectContaining({ id: "gpt-5.1", default: true }), pinned]));
+		await waitFor(() => expect(task.turnSettings.model).toBe("gpt-5.4-mini"));
+		act(() => task.chooseTurnSettings({ ...task.turnSettings, model: "gpt-5.1" }));
+		await waitFor(() => expect(task.turnSettings.model).toBe("gpt-5.1"));
+		expect(task.chatModels).toContainEqual(pinned);
+		act(() => task.chooseTurnSettings({ ...task.turnSettings, model: "gpt-5.4-mini" }));
+		await waitFor(() => expect(task.turnSettings.model).toBe("gpt-5.4-mini"));
+	});
 
 	it("says at once that Scratchpad has no ready agent", async () => {
 		h.agentCatalog = { agents: [agentReadiness("goose", "Goose", { authentication: "unauthorized" })] };
@@ -4881,6 +5009,60 @@ describe("Chat launch permission capability boundary", () => {
 		act(() => task.chooseTurnSettings({ ...task.turnSettings, approvalMode: "auto" }));
 		await act(async () => { await task.launch("back on auto"); });
 		expect(h.post).toHaveBeenCalledWith(path, expect.objectContaining({ body: expect.objectContaining({ approvalMode: "auto" }) }));
+	});
+});
+
+describe("Chat launch starting settings", () => {
+	it.each(["proj-1", "__standalone__"])("starts a Claude Code chat with the Fast mode and auto-compaction picked in %s", async (projectId) => {
+		h.get.mockImplementation(async (path: string) => {
+			if (path === "/api/v1/settings") return { data: { defaultSessionMode: "chat", chatHarnesses: ["claude-code", "codex"], agent: "claude-code" } };
+			if (path.includes("/models")) {
+				return { data: { agent: "claude-code", selectionMode: "catalog", allowCustom: true, models: [
+					{ id: "opus", label: "Opus", isDefault: true, supportsFast: true },
+					{ id: "sonnet", label: "Sonnet" },
+				] } };
+			}
+			return { data: { status: "ok", project: { id: "proj-1", config: { worker: { agent: "claude-code" } } } } };
+		});
+		h.post.mockResolvedValue({ data: { session: { id: "standalone-1" }, workerId: "proj-1-1" } });
+		let task!: ReturnType<typeof useTaskLaunch>;
+		function Launcher() { task = useTaskLaunch({ projectId }); return null; }
+		render(<Wrap><Launcher /></Wrap>);
+		await waitFor(() => expect(task.canSubmit).toBe(true));
+		act(() => task.switchAgent("claude-code"));
+		await waitFor(() => expect(task.chatModels.find((model) => model.id === "opus")?.supportsFast).toBe(true));
+		expect(task.autoCompact).toEqual(expect.objectContaining({ value: undefined, beforeStart: true }));
+		const path = projectId === "__standalone__" ? "/api/v1/sessions" : "/api/v1/orchestrators/delegate";
+
+		// Nothing picked sends nothing: the agent's own defaults apply.
+		await act(async () => { await task.launch("defaults"); });
+		const plain = h.post.mock.calls.filter(([route]) => route === path).at(-1)?.[1];
+		expect(plain?.body).not.toHaveProperty("fastMode");
+		expect(plain?.body).not.toHaveProperty("autoCompactWindow");
+
+		act(() => task.chooseTurnSettings({ ...task.turnSettings, fastMode: true }));
+		act(() => task.autoCompact?.onChange("1m"));
+		expect(task.turnSettings.fastMode).toBe(true);
+		expect(task.autoCompact?.value).toBe("1m");
+		const replay = task.launchSnapshot();
+		expect(replay).toEqual(expect.objectContaining({ fastMode: true, autoCompactWindow: "1m" }));
+		await act(async () => { await task.launch("picked"); });
+		expect(h.post).toHaveBeenLastCalledWith(path, expect.objectContaining({ body: expect.objectContaining({ fastMode: true, autoCompactWindow: "1m" }) }));
+
+		// A model without Fast mode drops it; a retry repeats what was sent.
+		act(() => task.chooseTurnSettings({ ...task.turnSettings, model: "sonnet", fastMode: undefined }));
+		expect(task.turnSettings.fastMode).toBeUndefined();
+		await act(async () => { await task.launch("retry", { replay }); });
+		expect(h.post).toHaveBeenLastCalledWith(path, expect.objectContaining({ body: expect.objectContaining({ fastMode: true, autoCompactWindow: "1m" }) }));
+
+		// Another agent starts with its own defaults.
+		act(() => task.switchAgent("codex"));
+		await waitFor(() => expect(task.agent.value).toBe("codex"));
+		expect(task.autoCompact).toBeUndefined();
+		await act(async () => { await task.launch("codex"); });
+		const codex = h.post.mock.calls.filter(([route]) => route === path).at(-1)?.[1];
+		expect(codex?.body).not.toHaveProperty("fastMode");
+		expect(codex?.body).not.toHaveProperty("autoCompactWindow");
 	});
 });
 

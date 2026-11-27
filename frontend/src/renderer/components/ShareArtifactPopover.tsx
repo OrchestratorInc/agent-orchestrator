@@ -528,7 +528,7 @@ function usePublishedShare(file: CloudShareFile | null, scope: ShareScope, revis
  * click puts the newer version on the same link and opens the popover on it.
  * For a video the button is disabled and says why.
  */
-export function ShareArtifactButton({ file, name, className, iconOnly = false, revision = "", published = false }: {
+export function ShareArtifactButton({ file, name, className, iconOnly = false, revision = "", published = false, onOutdatedChange }: {
 	file: Omit<CloudShareFile, "baseUrl" | "shareId">;
 	name: string;
 	className?: string;
@@ -537,6 +537,8 @@ export function ShareArtifactButton({ file, name, className, iconOnly = false, r
 	revision?: string;
 	/** Whether the artifact list has the file published: the label until the button's own check answers. */
 	published?: boolean;
+	/** Told whether the link serves an older version of the file (the amber dot), as each check answers. */
+	onOutdatedChange?: (outdated: boolean) => void;
 }) {
 	const { t } = useTranslation();
 	const [open, setOpen] = useState(false);
@@ -550,6 +552,7 @@ export function ShareArtifactButton({ file, name, className, iconOnly = false, r
 	const video = isUnplayableShareVideo(file.path);
 	const publishing = usePublishing(pendingKey(baseUrl, file));
 	const { share, outdated, checked } = usePublishedShare(available && signedIn && !video ? { ...file, baseUrl } : null, scope, `${revision}:${checks}:${publishing}`);
+	useEffect(() => onOutdatedChange?.(outdated), [onOutdatedChange, outdated]);
 	// What the panel does on opening is fixed when it opens, so a check that
 	// lands while it is open never starts a second publish.
 	const [republishOnOpen, setRepublishOnOpen] = useState(false);
@@ -670,10 +673,9 @@ function SharePanel({
 	const [staged, setStaged] = useState<string[]>([]);
 	// Adding past what one publish can share the link with: said under the field.
 	const [stagedOver, setStagedOver] = useState(false);
-	// On a team workspace: its teams, and whether everyone in it, a file on
-	// this computer is shared with once its Publish has made the link.
+	// On a team workspace: the teams a file on this computer is shared with
+	// once its Publish has made the link.
 	const [stagedTeams, setStagedTeams] = useState<ArtifactTeam[]>([]);
-	const [stagedWorkspace, setStagedWorkspace] = useState(false);
 	const [removing, setRemoving] = useState<string>();
 	const [changingAccess, setChangingAccess] = useState(false);
 	// Teams and workspaces are for a team workspace on a paid Cloud plan, as
@@ -768,7 +770,6 @@ function SharePanel({
 			case "published":
 				setStaged([]);
 				setStagedTeams([]);
-				setStagedWorkspace(false);
 				showPublished(result.share, result.pageFiles ? { pageFiles: result.pageFiles } : {});
 				onChanged?.();
 				refreshArtifacts();
@@ -1089,7 +1090,11 @@ function SharePanel({
 		if (files?.unsupported) return status(t("artifacts.share.pageFiles.unsupported"), "status");
 		if (!files?.skipped) return null;
 		const left = t("artifacts.share.pageFiles.skipped", { count: files.skipped });
-		return status(files.videos > 0 ? `${left} ${t("artifacts.share.pageFiles.videos")}` : left, "status");
+		const why = [
+			files.videos > 0 ? t("artifacts.share.pageFiles.videos") : "",
+			files.hostOutdated ? t("artifacts.share.pageFiles.hostOutdated") : "",
+		].filter(Boolean);
+		return status([left, ...why].join(" "), "status");
 	};
 	const note = (text: string) => (
 		<p role="status" className="rounded-md bg-status-in-review/10 px-2.5 py-2 text-caption leading-4 text-status-in-review" data-share-note="">{text}</p>
@@ -1108,7 +1113,11 @@ function SharePanel({
 	const meta = (text: string) => <span className="block truncate text-caption text-muted-foreground tabular-nums">{text}</span>;
 	const spinner = <Loader2 aria-hidden="true" className="size-3 animate-spin motion-reduce:animate-none" />;
 	const ownerIdentity = { name: owner?.displayName, email: owner?.email };
-	const workspaceChoice = teamWorkspace ? { name: workspaceName } : undefined;
+	// Sharing a link with everyone at a workspace is off for now: the app
+	// cannot yet tell a workspace on a Cloud plan from a free one. Only a
+	// published link already shared with its workspace shows that choice, as
+	// the one it has, and choosing another access stops it.
+	const workspaceChoice = (audience: ArtifactAudience) => teamWorkspace && audience === "workspace" ? { name: workspaceName } : undefined;
 
 	switch (phase.kind) {
 		case "loading":
@@ -1162,7 +1171,6 @@ function SharePanel({
 				setStagedTeams([...stagedTeams, ...added.map((team) => ({ teamId: team.teamId, name: team.name, memberCount: team.memberCount, pending: true }))]);
 				return true;
 			};
-			const stagedAudience: ArtifactAudience = stagedWorkspace ? "workspace" : stagedAccess;
 			return (
 				<>
 					{titled(t("artifacts.share.title.publish"))}
@@ -1190,13 +1198,9 @@ function SharePanel({
 								teams={stagedTeams}
 							/>
 							<ArtifactGeneralAccess
-								access={stagedAudience}
+								access={stagedAccess}
 								invited={staged.length + stagedTeams.length}
-								onChange={(next) => {
-									setStagedWorkspace(next === "workspace");
-									setStagedAccess(next === "workspace" ? "restricted" : next);
-								}}
-								workspace={workspaceChoice}
+								onChange={(next) => setStagedAccess(next === "workspace" ? "restricted" : next)}
 							/>
 						</div>
 					) : null}
@@ -1207,7 +1211,6 @@ function SharePanel({
 								access: stagedAccess,
 								emails: staged,
 								teamIds: stagedTeams.map((team) => team.teamId),
-								workspace: stagedWorkspace,
 							})}
 							size="sm"
 							type="button"
@@ -1320,7 +1323,7 @@ function SharePanel({
 							disabled={changingAccess}
 							invited={invited}
 							onChange={(next) => void changeAudience(phase, next)}
-							workspace={privateLinks ? workspaceChoice : undefined}
+							workspace={privateLinks ? workspaceChoice(audience) : undefined}
 						/>
 						{phase.narrowed && access === "restricted" ? note(t("artifacts.share.access.narrowed")) : null}
 					</div>

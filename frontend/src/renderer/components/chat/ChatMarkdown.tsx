@@ -67,6 +67,7 @@ import {
 } from "../../lib/external-link-policy";
 import { AppLink } from "../AppLink";
 import { LinkFavicon } from "../LinkPreviewCard";
+import { PULL_REQUEST_CHIP_CLASS, PullRequestChipContent, PullRequestHoverCard, parsePullRequestLink, pullRequestChipLabel } from "./PullRequestLink";
 import { useCachedLinkFavicons } from "../../hooks/useLinkPreview";
 import { canLoadLinkFavicon, preloadLinkFavicon } from "../../lib/link-preload";
 import { ChatPathMenu, ChatPathMenuContext } from "../ChatPathMenu";
@@ -83,6 +84,7 @@ import { HighlightedCode } from "./HighlightedCode";
 import { MermaidBlock } from "./MermaidBlock";
 import { formulaHtml, MathFormula, useKatex } from "./MathFormula";
 import { CopyButton } from "./CopyButton";
+import { FileChip } from "./ChatFileIcon";
 import { ChatImage, ChatImageGallery, ChatImageLinkScope, isImageOnlyParagraph } from "./ChatImage";
 import "./code-theme.css";
 
@@ -350,7 +352,7 @@ const StreamLink = memo(function StreamLink({ href, label, image }: { href: stri
 		return { content: host.querySelector("[data-words-island-content]")!, src, alt };
 	})), [label]);
 	return (
-		<MarkdownLink href={href} node={image ? LINKED_IMAGE : undefined}>
+		<MarkdownLink href={href} node={image ? LINKED_IMAGE : undefined} labelText={label.includes("<") ? undefined : unescapeHtml(label)}>
 			<span ref={ref} dangerouslySetInnerHTML={html} />
 			{images.map(({ content, src, alt }, index) => createPortal(<MarkdownImage src={src} alt={alt} />, content, index))}
 		</MarkdownLink>
@@ -466,7 +468,15 @@ function compactEmoji(children: ReactNode): ReactNode {
 	return children;
 }
 
-type MarkdownLinkProps = { href?: string; children?: ReactNode; className?: string; menuPath?: string; node?: HastElement };
+type MarkdownLinkProps = {
+	href?: string;
+	children?: ReactNode;
+	className?: string;
+	menuPath?: string;
+	node?: HastElement;
+	/** The link's text, where it is plain text; read from node otherwise. */
+	labelText?: string;
+};
 
 function MarkdownLink(props: MarkdownLinkProps) {
 	const { href } = props;
@@ -492,6 +502,24 @@ function ArtifactFileLink(props: MarkdownLinkProps & { href: string }) {
 	return artifact
 		? <MarkdownLinkTarget {...props} href={artifact} menuPath={props.menuPath ?? explicitWorkspaceFilePath(props.href)} />
 		: <MarkdownLinkTarget {...props} />;
+}
+
+/**
+ * The plain text of a markdown link, or undefined when it wraps anything but
+ * text. Settled text arrives wrapped in excerpt spans, which count as text.
+ */
+function hastLinkText(node: HastElement | undefined): string | undefined {
+	if (!node) return undefined;
+	let text = "";
+	for (const child of node.children) {
+		if (child.type === "text") text += child.value;
+		else if (child.type === "element" && child.tagName === "span") {
+			const inner = hastLinkText(child);
+			if (inner === undefined) return undefined;
+			text += inner;
+		} else return undefined;
+	}
+	return text;
 }
 
 /** Whether a markdown link wraps a picture, which marks itself. */
@@ -529,7 +557,7 @@ function InlineLinkFavicon({ href }: { href: string }) {
 	);
 }
 
-function MarkdownLinkTarget({ href, children, className, menuPath, node }: MarkdownLinkProps) {
+function MarkdownLinkTarget({ href, children, className, menuPath, node, labelText }: MarkdownLinkProps) {
 	const safeOriginContent = useContext(SafeOriginContent);
 	const { sessionId, open: onLinkOpen, openFile: onFileOpen, openSession: onSessionLinkOpen, remoteHost, sessionLinkHostId, sessionLinkSourceKind, workspacePaths, findFile } = useContext(OpenChatLink);
 	const filePath = href && onFileOpen
@@ -554,6 +582,11 @@ function MarkdownLinkTarget({ href, children, className, menuPath, node }: Markd
 			: unavailable;
 	}
 	const browserLink = href ? !sessionLink && (isWebLink(href) || (!remoteHost && (!!filePath || isPotentialWorkspaceFileLink(href)))) : false;
+	// A GitHub pull request link shows the PR's card on hover; one whose text
+	// only names the PR is drawn as a chip with its state.
+	const pullRequest = href && !sessionLink && !linksImage(node) ? parsePullRequestLink(href) : undefined;
+	const text = labelText ?? hastLinkText(node);
+	const chip = pullRequest && href && text !== undefined ? pullRequestChipLabel(href, text) : undefined;
 	return (
 		<AppLink
 			href={href}
@@ -566,7 +599,9 @@ function MarkdownLinkTarget({ href, children, className, menuPath, node }: Markd
 				? () => isSessionLink(href!)
 					? <SessionLinkPreviewCard href={href!} sourceHostId={sessionLinkHostId} sourceKind={sessionLinkSourceKind} onOpen={onSessionLinkOpen && (() => onSessionLinkOpen(href!))} />
 					: <ArtifactLinkPreviewCard href={href!} sourceHostId={sessionLinkHostId} sourceKind={sessionLinkSourceKind} />
-				: undefined}
+				: pullRequest
+					? () => <PullRequestHoverCard url={href!} onBrowserOpen={onLinkOpen} />
+					: undefined}
 			onClick={(event) => {
 				if (href && sessionLink) {
 					event.preventDefault();
@@ -587,14 +622,18 @@ function MarkdownLinkTarget({ href, children, className, menuPath, node }: Markd
 			}}
 			target="_blank"
 			rel="noreferrer noopener"
-			className={className ?? "text-markdown-link underline decoration-markdown-link/45 underline-offset-2 transition-colors hover:text-markdown-link-hover hover:decoration-markdown-link-hover/75"}
+			className={chip ? PULL_REQUEST_CHIP_CLASS : className ?? "text-markdown-link underline decoration-markdown-link/45 underline-offset-2 transition-colors hover:text-markdown-link-hover hover:decoration-markdown-link-hover/75"}
 		>
-			{href && !sessionLink && isWebLink(href) && !linksImage(node) ? <InlineLinkFavicon href={href} /> : null}
-			<ChatImageLinkScope>
-				<InsideMarkdownLink.Provider value>
-					<InsideArtifactLink.Provider value={sessionLink && !isSessionLink(href!)}>{children}</InsideArtifactLink.Provider>
-				</InsideMarkdownLink.Provider>
-			</ChatImageLinkScope>
+			{chip && href ? <PullRequestChipContent href={href} repo={chip.repo} number={chip.number} /> : (
+				<>
+					{href && !sessionLink && isWebLink(href) && !linksImage(node) ? <InlineLinkFavicon href={href} /> : null}
+					<ChatImageLinkScope>
+						<InsideMarkdownLink.Provider value>
+							<InsideArtifactLink.Provider value={sessionLink && !isSessionLink(href!)}>{children}</InsideArtifactLink.Provider>
+						</InsideMarkdownLink.Provider>
+					</ChatImageLinkScope>
+				</>
+			)}
 		</AppLink>
 	);
 }
@@ -684,7 +723,7 @@ function MermaidFence({ code }: { code: string }) {
 }
 
 /** A path this chat can open in Files, and how to open it (at a line when given); undefined when it cannot. */
-function useWorkspaceFile(path: string | undefined) {
+export function useWorkspaceFile(path: string | undefined) {
 	const { openFile, findFile } = useContext(OpenChatLink);
 	const filePath = path && openFile ? findFile(path) : undefined;
 	if (!path || !filePath || !openFile) return undefined;
@@ -784,6 +823,8 @@ function InlineCode({ children, className, node }: { children?: ReactNode; class
 		return path ? <ChatPathMenu path={path}>{code}</ChatPathMenu> : code;
 	}
 	const openFile = () => file.open(workspaceFileReferenceLine(text ?? ""));
+	// A file this chat can open gets its Files-tree icon on a faint brand wash,
+	// so it reads apart from code names, which keep the plain chip.
 	return (
 		<ChatPathMenu path={normalizeWorkspaceFileReference(text ?? "")} onFileOpen={openFile}>
 			<Pressable
@@ -791,9 +832,16 @@ function InlineCode({ children, className, node }: { children?: ReactNode; class
 				data-excerpt-include=""
 				onClick={openFile}
 				aria-label={`Open ${file.filePath} in Files`}
-				className="inline rounded transition-colors hover:bg-interactive-hover"
+				className="group mx-0.5 inline rounded"
 			>
-				{code}
+				{/* The tint sits on the chip's inline span, sized like a plain code chip (a
+				    button's box follows the line height and would grow it). Its icon stays
+				    outside the code element, whose text alone carries the excerpt offsets. */}
+				<FileChip path={file.filePath}>
+					<code {...positions} data-excerpt-kind="inline-code" className="text-chat-file-foreground">
+						{children}
+					</code>
+				</FileChip>
 			</Pressable>
 		</ChatPathMenu>
 	);

@@ -70,10 +70,11 @@ test("renderer: hidden model-menu scrollbar keeps wheel scrolling functional @T0
 	await page.mouse.wheel(0, 400);
 
 	await expect.poll(() => scroller.evaluate((element) => element.scrollTop)).toBeGreaterThan(0);
-	// A model picked from the list keeps the menu open, with effort right under it.
+	// A model picked from the list closes the menu.
 	await scroller.getByRole("menuitemradio").last().click();
 	await expect(trigger).toContainText("model-30");
-	await expect(menu).toBeVisible();
+	await expect(page.getByRole("menu")).toHaveCount(0);
+	await trigger.click();
 	const search = menu.getByRole("searchbox", { name: "Search models" });
 	await search.fill("model-29");
 	await expect(page.getByRole("menuitemradio", { name: /model-29/ })).toHaveAttribute("data-search-active", "true");

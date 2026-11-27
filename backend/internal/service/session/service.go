@@ -225,6 +225,8 @@ type terminalTitleSource interface {
 // session operations to the internal sessionmanager.Manager and owns read-model
 // assembly, including user-facing display status derivation.
 type Service struct {
+	// preferredAgent picks the agent for a project role that names none.
+	preferredAgent func(context.Context) domain.AgentHarness
 	// prMoved tells a live session that another session took its PR.
 	prMoved             PRMovedNotifier
 	manager             commander
@@ -299,6 +301,8 @@ type Service struct {
 	// githubRepos lets ClaimPR accept a PR on the repository a github.com
 	// origin was renamed or transferred to. Nil keeps exact origin matching.
 	githubRepos ports.GitHubRepositoryResolver
+	// moveNotes renders the handoff note of a session moved to AO Cloud.
+	moveNotes MoveNoter
 }
 
 // renewTaskPreparation extends a hidden preparation's expiry when its files
@@ -316,6 +320,146 @@ func (s *Service) renewTaskPreparation(rec domain.SessionRecord) {
 // a github.com origin's rename or transfer.
 func (s *Service) SetGitHubRepositoryResolver(r ports.GitHubRepositoryResolver) {
 	s.githubRepos = r
+}
+
+// SetPreferredProjectAgent late-binds the ranked default agent that heals a
+// project whose worker or orchestrator role names no agent before a session of
+// that project starts. It returns "" when no agent can launch, and the role is
+// then left empty.
+func (s *Service) SetPreferredProjectAgent(pick func(context.Context) domain.AgentHarness) {
+	s.preferredAgent = pick
+}
+
+// projectRoleAgentFiller fills a project's empty role agents atomically.
+type projectRoleAgentFiller interface {
+	FillProjectRoleAgents(ctx context.Context, id string, agent domain.AgentHarness) (domain.ProjectRecord, bool, error)
+}
+
+// fillMissingRoleAgents gives every empty role the ranked default before a
+// project session starts. The transaction preserves concurrent settings edits
+// and roles that already name an agent. Each ranked candidate is validated
+// under the launch readiness policy before saving so stale cached readiness
+// never persists a removed or signed-out agent.
+func (s *Service) fillMissingRoleAgents(ctx context.Context, project domain.ProjectRecord) domain.ProjectRecord {
+	if !project.Config.MissingRoleAgent() || s.preferredAgent == nil {
+		return project
+	}
+	filler, ok := s.store.(projectRoleAgentFiller)
+	if !ok {
+		return project
+	}
+	agent := s.pickLaunchableProjectAgent(ctx)
+	if agent == "" {
+		return project
+	}
+	row, changed, err := filler.FillProjectRoleAgents(ctx, project.ID, agent)
+	if err != nil {
+		if s.logger != nil {
+			s.logger.Warn("fill project role agents", "projectID", project.ID, "agent", agent, "error", err)
+		}
+		return project
+	}
+	if changed && s.logger != nil {
+		s.logger.Info("filled missing project role agents", "projectID", project.ID, "agent", agent)
+	}
+	if row.ID == "" {
+		return project
+	}
+	return row
+}
+
+// pickLaunchableProjectAgent validates the ranked candidate under the launch
+// readiness policy before it can be saved to a project. When cached readiness
+// went stale (for example, an agent was uninstalled or signed out), the launch
+// check updates the coordinator's snapshot so the next iteration can rank any
+// remaining launchable agent without persisting the broken one.
+func (s *Service) pickLaunchableProjectAgent(ctx context.Context) domain.AgentHarness {
+	var tried map[domain.AgentHarness]struct{}
+	for {
+		agent := s.preferredAgent(ctx)
+		if agent == "" {
+			return ""
+		}
+		if _, seen := tried[agent]; seen {
+			return ""
+		}
+		ok, err := s.roleCandidateLaunchable(ctx, agent)
+		if err != nil {
+			if s.logger != nil {
+				s.logger.Warn("validate preferred project agent", "agent", agent, "error", err)
+			}
+			if ctx.Err() != nil {
+				return ""
+			}
+			if tried == nil {
+				tried = make(map[domain.AgentHarness]struct{})
+			}
+			tried[agent] = struct{}{}
+			continue
+		}
+		if !ok {
+			if s.logger != nil {
+				s.logger.Info("skipping unlaunchable preferred project agent", "agent", agent)
+			}
+			if tried == nil {
+				tried = make(map[domain.AgentHarness]struct{})
+			}
+			tried[agent] = struct{}{}
+			continue
+		}
+		return agent
+	}
+}
+
+func (s *Service) roleCandidateLaunchable(ctx context.Context, agent domain.AgentHarness) (bool, error) {
+	if s.agentReadiness == nil || agent == "" {
+		return true, nil
+	}
+	readiness, err := s.agentReadiness.EnsureAgentReadiness(ctx, string(agent), domain.AgentReadinessPurposeLaunch)
+	if err != nil {
+		return false, err
+	}
+	if readiness.Installation.State == domain.AgentInstallationNotInstalled {
+		return false, nil
+	}
+	if readiness.Authentication.State == domain.AgentAuthenticationUnauthorized &&
+		(s.runsOnComputerLogin == nil || s.runsOnComputerLogin(ctx, agent, "")) {
+		return false, nil
+	}
+	return true, nil
+}
+
+// refuseUnsupportedStartSettings refuses a starting Fast mode or auto-compaction
+// the launching agent cannot take, rather than dropping it, so the caller is
+// not left believing it took effect. The agent is the spawn's own or else the
+// project's role agent, as the manager resolves it. A spawn that asks for a
+// terminal ignores both settings, so it is not checked.
+func refuseUnsupportedStartSettings(cfg ports.SpawnConfig, project domain.ProjectRecord) error {
+	if cfg.RequestedMode == domain.SessionModeTUI {
+		return nil
+	}
+	harness := cfg.Harness
+	if harness == "" {
+		harness = roleHarness(project, cfg.Kind)
+	}
+	if harness == "" {
+		return nil
+	}
+	if problem := domain.AutoCompactWindowProblem(harness, cfg.AutoCompactWindow); problem != "" {
+		return apierr.Invalid("AUTO_COMPACT_WINDOW_UNSUPPORTED", problem, nil)
+	}
+	if cfg.FastMode && !domain.CanUseFastMode(harness) {
+		return apierr.Invalid("FAST_MODE_UNSUPPORTED", fmt.Sprintf("%s has no Fast mode", harness), nil)
+	}
+	return nil
+}
+
+// roleHarness is the agent the project names for sessions of kind.
+func roleHarness(project domain.ProjectRecord, kind domain.SessionKind) domain.AgentHarness {
+	if kind == domain.KindOrchestrator {
+		return project.Config.Orchestrator.Harness
+	}
+	return project.Config.Worker.Harness
 }
 
 // SetComputerLoginCheck late-binds the account check the launch gate needs: the
@@ -470,6 +614,13 @@ func (s *Service) spawn(ctx context.Context, cfg ports.SpawnConfig) (domain.Sess
 		if err != nil {
 			return domain.Session{}, 0, 0, err
 		}
+		needsHarness := cfg.Harness == "" && roleHarness(project, cfg.Kind) == ""
+		project = s.fillMissingRoleAgents(ctx, project)
+		if needsHarness {
+			// A daemon-selected agent goes through the same launch checks as
+			// an explicit one.
+			cfg.Harness = roleHarness(project, cfg.Kind)
+		}
 	} else {
 		if cfg.IssueID != "" || strings.TrimSpace(cfg.Branch) != "" {
 			return domain.Session{}, 0, 0, apierr.Invalid("STANDALONE_PROJECT_FEATURE_UNSUPPORTED", "Standalone sessions do not support issues or branches", nil)
@@ -477,6 +628,9 @@ func (s *Service) spawn(ctx context.Context, cfg ports.SpawnConfig) (domain.Sess
 		if cfg.Harness == "" {
 			return domain.Session{}, 0, 0, apierr.Invalid("HARNESS_REQUIRED", "harness is required for a standalone session", nil)
 		}
+	}
+	if err := refuseUnsupportedStartSettings(cfg, project); err != nil {
+		return domain.Session{}, 0, 0, err
 	}
 	if s.agentReadiness != nil && cfg.Harness != "" {
 		readiness, err := s.agentReadiness.EnsureAgentReadiness(ctx, string(cfg.Harness), domain.AgentReadinessPurposeLaunch)
@@ -982,7 +1136,8 @@ func (s *Service) verifyOrchestratorReplacement(project domain.ProjectRecord, se
 		return orchestratorReplacementUnverified("new session %s uses harness %q, want %q", sess.ID, sess.Harness, expected)
 	}
 	expectedBranch := sessionmanager.DefaultOrchestratorBranch(serviceSessionPrefix(project), s.dataDir)
-	if branch := sess.Metadata.Branch; branch != "" && !isOrchestratorBranch(branch, expectedBranch) {
+	legacyBranch := sessionmanager.LegacyOrchestratorBranch(serviceSessionPrefix(project), s.dataDir)
+	if branch := sess.Metadata.Branch; branch != "" && !isOrchestratorBranch(branch, expectedBranch) && !isOrchestratorBranch(branch, legacyBranch) {
 		return orchestratorReplacementUnverified("new session %s uses branch %q, want %q", sess.ID, branch, expectedBranch)
 	}
 	return nil
@@ -1918,7 +2073,7 @@ func (s *Service) toSessionWithFacts(ctx context.Context, rec domain.SessionReco
 		}
 	}
 	runs = canonicalizeCurrentHeadReviewRuns(prs, runs)
-	prs = deduplicatePRFacts(prs)
+	prs = clearStaleChangesRequested(deduplicatePRFacts(prs), runs)
 	// Both derivations read the clock once, from the same instant: they share
 	// the no-signal rule, and two reads could put them either side of its grace
 	// period and have the card contradict its own status.
@@ -1962,6 +2117,7 @@ func toAPIError(err error) error {
 
 func mapSessionError(err error) error {
 	var relaunchErr *sessionmanager.RelaunchError
+	var importRefusedErr *ports.ImportRefusedError
 	var cleanupRefused *sessionmanager.CleanupRefusedError
 	switch {
 	case err == nil:
@@ -1987,6 +2143,8 @@ func mapSessionError(err error) error {
 	case errors.Is(err, ports.ErrAgentAccountUnshared):
 		return apierr.Conflict("AGENT_ACCOUNT_UNSHARED",
 			"Orchestrator cannot link this account's folder to this computer's history.", nil)
+	case errors.Is(err, sessionmanager.ErrSessionMoved):
+		return apierr.Conflict("SESSION_MOVED", "This session moved to Orchestrator Cloud. Open it there.", nil)
 	case errors.Is(err, sessionmanager.ErrNotRestorable):
 		return apierr.Conflict("SESSION_NOT_RESTORABLE", "Session is not restorable", nil)
 	case errors.Is(err, sessionmanager.ErrTerminated):
@@ -2077,6 +2235,8 @@ func mapSessionError(err error) error {
 		return apierr.Conflict("HARNESS_INSTALL_ACTIVE", "The selected harness is currently being installed", nil)
 	case errors.Is(err, sessionmanager.ErrUnsupportedModel):
 		return apierr.Invalid("UNSUPPORTED_MODEL", err.Error(), nil)
+	case errors.Is(err, sessionmanager.ErrSpawnPermissionExceedsPolicy):
+		return apierr.Invalid("SPAWN_PERMISSION_EXCEEDS_POLICY", err.Error(), nil)
 	case errors.Is(err, sessionmanager.ErrTerminalUnsupported):
 		return apierr.Invalid("TERMINAL_UNSUPPORTED", err.Error(), nil)
 	case errors.Is(err, sessionmanager.ErrTargetAgentUnauthorized):
@@ -2160,10 +2320,17 @@ func mapSessionError(err error) error {
 		return apierr.Conflict("WORKSPACE_LOCKED", err.Error(), nil)
 	case errors.Is(err, ports.ErrWorkspacePathOccupied):
 		return apierr.Conflict("WORKSPACE_PATH_OCCUPIED", err.Error(), nil)
+	case errors.Is(err, ports.ErrWorkspaceNotARepo):
+		return projectNotARepoError(err)
 	case errors.Is(err, sessionmanager.ErrCleanupScript):
 		return apierr.Conflict("WORKSPACE_CLEANUP_FAILED", "Workspace cleanup script failed; the worktree was preserved. Fix the script and retry cleanup.", nil)
 	case errors.Is(err, context.DeadlineExceeded):
 		return err
+	case errors.As(err, &importRefusedErr):
+		// An import refused for a reason the user can fix, such as an agent
+		// CLI that changed between import and first open; the adapter's fixed
+		// message says what to do.
+		return apierr.Conflict("SESSION_IMPORT_RESUME_FAILED", importRefusedErr.Message, nil)
 	case errors.As(err, &relaunchErr):
 		return apierr.Conflict("AGENT_RESUME_FAILED",
 			"Orchestrator could not relaunch the agent (step: "+relaunchErr.Step+"). Check the daemon log for details.",
@@ -2171,6 +2338,19 @@ func mapSessionError(err error) error {
 	default:
 		return err
 	}
+}
+
+// projectNotARepoError turns git's raw "not a git repository" exit 128 for a
+// registered project folder (for example a project or workspace root whose .git
+// was deleted) into an actionable error that names the folder and how to
+// recover. The text is shared with asynchronous chat start failures.
+func projectNotARepoError(err error) error {
+	message, path, fix, _ := sessionmanager.ProjectNotARepoGuidance(err)
+	details := map[string]any{"suggestedFix": fix}
+	if path != "" {
+		details["path"] = path
+	}
+	return apierr.Invalid("PROJECT_NOT_A_REPO", message, details)
 }
 
 // toSpawnAPIError maps spawn failures to structured API errors so telemetry and
@@ -2327,12 +2507,10 @@ func currentWorkspaceCleanup(rec domain.SessionRecord, facts domain.SessionClean
 	return domain.SessionCleanupRecord{}
 }
 
-// currentHeadReviewRuns reads the session's AO review passes for the Kanban
-// reducer. Sessions the reducer already decides without them — terminated ones
-// and ones with no PR yet — skip the query, so listing a board of building
-// workers stays one read per session.
+// currentHeadReviewRuns reads the session's AO review passes for both Kanban
+// and the effective review decision. Only sessions without PRs skip the query.
 func (s *Service) currentHeadReviewRuns(ctx context.Context, rec domain.SessionRecord, prs []domain.PRFacts) ([]domain.CurrentHeadReviewRun, error) {
-	if rec.IsTerminated || len(prs) == 0 {
+	if len(prs) == 0 {
 		return nil, nil
 	}
 	runs, err := s.store.ListCurrentHeadReviewRunsForSession(ctx, rec.ID)

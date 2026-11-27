@@ -18,7 +18,7 @@ import type { MessageKey } from "../i18n";
 import { apiClient, apiErrorMessage } from "../lib/api-client";
 import { aoBridge } from "../lib/bridge";
 import { clientForHost } from "../lib/host-clients";
-import { renameCloudSession, renameSession } from "../lib/rename-session";
+import { commitSessionRename } from "../lib/commit-session-rename";
 import { MAX_SESSION_DISPLAY_NAME_LEN } from "../hooks/useSessionRename";
 import { workspaceQueryKeyForHost } from "../hooks/useWorkspaceQuery";
 import { keptArtifactsQueryKey } from "../hooks/useKeptArtifacts";
@@ -46,6 +46,7 @@ import { ProductExternalLink } from "./ProductExternalLink";
 import { SessionArchiveDialog, type SessionArchiveChoice } from "./SessionArchiveDialog";
 import { ConfirmDialog } from "./ConfirmDialog";
 import { SessionContextMenuItems } from "./SessionContextMenuItems";
+import { prefetchEditorHandoffState } from "../hooks/useEditorHandoff";
 import { ContextMenu, ContextMenuContent, ContextMenuTrigger } from "./ui/context-menu";
 import { Input } from "./ui/input";
 import { Button } from "./ui/button";
@@ -58,6 +59,9 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "./ui/tooltip";
 import { someoneElseWorking, type SessionPerson } from "../lib/session-people";
 import { SessionPeopleStack } from "./SessionPeople";
 import { SessionOwnerTag } from "./SessionOwnerTag";
+import { MovedHereNote } from "./MovedHereNote";
+import { MovedToCloudNote } from "./MovedToCloudNote";
+import { useSessionContentExpired } from "../stores/content-expired-sessions-store";
 
 export function toBoardSessionPresentation(
 	session: WorkspaceSession,
@@ -198,6 +202,8 @@ export function ArchivedSessionCardAdapter({
 }) {
 	const { t } = useTranslation();
 	const branch = sessionBranchPresentation(session).branch ?? "";
+	// The control plane refused its restore for data retention: say so instead of offering Restore.
+	const contentExpired = useSessionContentExpired(session.cloud ? session.id : undefined);
 	return (
 		<DesktopSessionCard
 			compact={compact}
@@ -210,12 +216,15 @@ export function ArchivedSessionCardAdapter({
 			hideTerminatedStatus={hideTerminatedStatus}
 			action={
 				<div className="flex items-center">
-					<ArchiveRestoreButton
-						isDisabled={isRestoreDisabled}
-						isRestoring={isRestoring}
-						label={t("shell.restoreNamed", { title: session.title })}
-						onClick={restoreAction}
-					/>
+					{/* A session that moved (to Orchestrator Cloud, or a Cloud one to another computer) continues there; the footer says where. */}
+					{contentExpired || session.movedTo || session.cloud?.movedAway ? null : (
+						<ArchiveRestoreButton
+							isDisabled={isRestoreDisabled}
+							isRestoring={isRestoring}
+							label={t("shell.restoreNamed", { title: session.title })}
+							onClick={restoreAction}
+						/>
+					)}
 					{/* The control plane owns a cloud session's record; this daemon cannot delete it. */}
 					{session.cloud ? null : <ArchiveDeleteButton isDisabled={isRestoreDisabled || isRestoring} onRequest={onDelete} session={session} />}
 				</div>
@@ -229,7 +238,15 @@ export function ArchivedSessionCardAdapter({
 					/>
 				) : undefined
 			}
-			footer={<ArchiveRestoreError message={restoreError} />}
+			footer={
+				session.movedTo ? (
+					<MovedToCloudNote session={session} className="border-t border-border px-2 py-1.5" />
+				) : session.cloud?.movedAway ? (
+					<MovedHereNote session={session} className="border-t border-border px-2 py-1.5" />
+				) : (
+					<ArchiveRestoreError message={contentExpired ? t("restoreUnavailable.contentExpired") : restoreError} />
+				)
+			}
 			interactive={Boolean(onOpen)}
 			onOpen={onOpen}
 			session={session}
@@ -285,6 +302,8 @@ function DesktopSessionCard({
 	const queryClient = useQueryClient();
 	const [confirmOpen, setConfirmOpen] = useState(false);
 	const [renameOpen, setRenameOpen] = useState(false);
+	const menuPrefetchTimer = useRef<ReturnType<typeof setTimeout>>(undefined);
+	useEffect(() => () => clearTimeout(menuPrefetchTimer.current), []);
 	const summaries = sessionPRDisplaySummaries(
 		session,
 		useSessionScmSummary(session.id, live, session.cloud?.orgId, session.cloud?.orgId ? session.autoInjectCI === true : false, session.hostId).data?.prs,
@@ -441,9 +460,21 @@ function DesktopSessionCard({
 		<>
 			<ContextMenu>
 				<ContextMenuTrigger asChild>
-					<div>{card}</div>
+					{/* The menu opens on its final rows: its data is read when the pointer
+					    rests on the card, or at once on a press or focus. */}
+					<div
+						onFocusCapture={() => prefetchEditorHandoffState(queryClient, session)}
+						onPointerDownCapture={() => prefetchEditorHandoffState(queryClient, session)}
+						onPointerEnter={() => {
+							clearTimeout(menuPrefetchTimer.current);
+							menuPrefetchTimer.current = setTimeout(() => prefetchEditorHandoffState(queryClient, session), 100);
+						}}
+						onPointerLeave={() => clearTimeout(menuPrefetchTimer.current)}
+					>
+						{card}
+					</div>
 				</ContextMenuTrigger>
-				<ContextMenuContent className="min-w-44">
+				<ContextMenuContent className="w-48">
 					<SessionContextMenuItems
 						onArchive={showTerminate ? () => {
 							clearTerminateSessionState(queryClient, session.id, session.hostId);
@@ -473,17 +504,12 @@ function SessionRenameDialog({
 	const queryClient = useQueryClient();
 	const inputRef = useRef<HTMLInputElement>(null);
 	const [draft, setDraft] = useState(session.title);
-	const [busy, setBusy] = useState(false);
-	const [error, setError] = useState<string | null>(null);
 	// Start each opening from the current title, but keep what is typed if the
 	// title changes while the dialog is open.
 	const [wasOpen, setWasOpen] = useState(open);
 	if (open !== wasOpen) {
 		setWasOpen(open);
-		if (open) {
-			setDraft(session.title);
-			setError(null);
-		}
+		if (open) setDraft(session.title);
 	}
 	useEffect(() => {
 		if (!open) return;
@@ -492,34 +518,18 @@ function SessionRenameDialog({
 		return () => cancelAnimationFrame(frame);
 	}, [open]);
 	const name = draft.trim();
-	const save = async () => {
-		if (name === session.title) {
-			onOpenChange(false);
-			return;
-		}
-		setBusy(true);
-		try {
-			if (session.cloud) {
-				await renameCloudSession(queryClient, { id: session.id, cloud: session.cloud }, name);
-			} else {
-				await renameSession(session.id, name, session.hostId);
-				await queryClient.invalidateQueries({ queryKey: workspaceQueryKeyForHost(session.hostId) });
-			}
-			onOpenChange(false);
-		} catch (err) {
-			setError(err instanceof Error ? err.message : String(err));
-		} finally {
-			setBusy(false);
-		}
+	// The card shows the new title as the dialog closes; a failure rolls it back
+	// and says so in a toast.
+	const save = () => {
+		onOpenChange(false);
+		void commitSessionRename(queryClient, session, name);
 	};
 	return (
 		<ConfirmDialog
-			busy={busy}
 			confirmDisabled={!name}
 			confirmLabel={t("shell.rename")}
 			description={null}
-			error={error}
-			onConfirm={() => void save()}
+			onConfirm={save}
 			onOpenChange={onOpenChange}
 			open={open}
 			title={t("shell.renameSession", { title: session.title })}
@@ -529,9 +539,9 @@ function SessionRenameDialog({
 				maxLength={MAX_SESSION_DISPLAY_NAME_LEN}
 				onChange={(event) => setDraft(event.target.value)}
 				onKeyDown={(event) => {
-					if (event.key !== "Enter" || event.nativeEvent.isComposing || !name || busy) return;
+					if (event.key !== "Enter" || event.nativeEvent.isComposing || !name) return;
 					event.preventDefault();
-					void save();
+					save();
 				}}
 				ref={inputRef}
 				value={draft}

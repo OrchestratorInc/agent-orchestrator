@@ -13,6 +13,7 @@ import (
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/agentlaunch"
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
+	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 	aoprocess "github.com/aoagents/agent-orchestrator/backend/internal/process"
 )
 
@@ -504,6 +505,18 @@ func (m *Manager) DeleteSession(ctx context.Context, id domain.SessionID, cleanu
 		// Resolve while the session still has its account binding.
 		forkNative = m.forkNativeSessionFile(ctx, rec)
 	}
+	if rec.Harness == domain.HarnessKimi && rec.Metadata.ImportSource != nil {
+		if agent, ok := m.agents.Agent(rec.Harness); ok {
+			if cleaner, ok := agent.(workspaceCleaner); ok {
+				ref := importedNativeRef(rec.Metadata.ImportSource)
+				if err := cleaner.CleanupWorkspace(ctx, ports.WorkspaceHookConfig{DataDir: m.dataDir,
+					WorkspacePath: rec.Metadata.WorkspacePath, SessionID: string(rec.ID),
+					NativeSessionID: ref.NativeSessionID, ImportConfigDir: ref.ConfigDir}); err != nil {
+					m.logger.Warn("delete: imported Kimi authentication cleanup failed; preserving unverified files", "sessionID", id, "error", err)
+				}
+			}
+		}
+	}
 	deleted, err := deleter.DeleteTerminatedSession(ctx, id)
 	if err != nil {
 		return fmt.Errorf("delete %s: %w", id, err)
@@ -530,7 +543,11 @@ func (m *Manager) cleanupBeforeDelete(ctx context.Context, id domain.SessionID) 
 	if h := runtimeHandle(rec.Metadata); h.ID != "" {
 		_ = m.runtime.Destroy(ctx, h) // best effort; usually already gone
 	}
-	if _, refusal := m.cleanupWorkspaceUnderGate(ctx, rec, workspaceInfo(rec)); refusal.refused() {
+	// The session is going away, so nothing will restore its agent's
+	// conversation; that state no longer keeps the workspace.
+	info := workspaceInfo(rec)
+	info.ReleaseAgentState = true
+	if _, refusal := m.cleanupWorkspaceUnderGate(ctx, rec, info); refusal.refused() {
 		return &CleanupRefusedError{Code: refusal.code, Reason: refusal.reason}
 	}
 	return nil

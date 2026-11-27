@@ -113,6 +113,7 @@ func (c *ConversationsController) Register(r chi.Router) {
 	r.Get("/sessions/background-tasks", c.listBackgroundTasks)
 	r.Get("/sessions/{sessionId}/background-tasks", c.backgroundTasks)
 	r.Post("/sessions/{sessionId}/background-tasks/{taskId}/stop", c.stopBackgroundTask)
+	r.Get("/sessions/{sessionId}/background-tasks/{taskId}/output", c.backgroundTaskOutput)
 	r.Get("/conversations/search", c.searchConversations)
 	r.Patch("/sessions/{sessionId}/conversation/side-chats/{sideId}/label", c.renameSideChat)
 	r.Post("/sessions/{sessionId}/conversation/side-chats/{sideId}/turns/{turnId}/cancel", c.cancelSideQuestion)
@@ -457,7 +458,7 @@ func writeConversationRetryError(w http.ResponseWriter, r *http.Request, err err
 	case errors.Is(err, chatsvc.ErrTurnNotRetryable):
 		envelope.WriteAPIError(w, r, http.StatusConflict, "conflict",
 			"CHAT_RETRY_NOT_RETRYABLE",
-			"this turn cannot be retried: it is not a failed human turn in this conversation", nil)
+			"this turn cannot be retried: it is not a failed message you can resend in this conversation", nil)
 	case errors.Is(err, chatsvc.ErrRetryDeliveryUncertain):
 		envelope.WriteAPIError(w, r, http.StatusConflict, "conflict",
 			"CHAT_RETRY_DELIVERY_UNCERTAIN",
@@ -1532,7 +1533,7 @@ func conversationSnapshotResponse(s chatsvc.Snapshot) ConversationSnapshotRespon
 		Title:                            s.Conversation.ProviderTitle,
 		ModelReroute:                     modelReroutePayload(s.Conversation.ModelReroute),
 		Account:                          accountPayload(s.Conversation.Account),
-		ThreadState:                      threadStatePayload(s.Conversation.ThreadState),
+		ThreadState:                      threadStatePayload(s.Conversation.ThreadStateFor(s.Harness, s.ActiveBranch.ProviderConversationID)),
 		MCPServers:                       mcpServersPayload(s.Conversation.MCPServers),
 		Capabilities:                     capabilityNames(s.Capabilities),
 	}
@@ -1545,6 +1546,7 @@ func conversationSnapshotResponse(s chatsvc.Snapshot) ConversationSnapshotRespon
 			RetryOfTurnID:   turn.RetryOfTurnID,
 			HasRetryAttempt: turn.HasRetryAttempt,
 			HasHumanPrompt:  turn.HasHumanPrompt,
+			HasEventPrompt:  turn.HasEventPrompt,
 			ErrorMessage:    turn.ErrorMessage,
 			FailureCode:     string(turn.FailureCode),
 			UsageLimit:      usageLimitPayload(turn.UsageLimit),
@@ -1817,6 +1819,8 @@ func accountPayload(account *domain.ConversationAccount) *ConversationAccountPay
 }
 
 // threadStatePayload maps the provider's thread lifecycle onto the wire shape.
+// Callers pass only state that describes the current agent's thread; a report
+// about a thread the conversation has since left is not this thread's state.
 func threadStatePayload(state *domain.ConversationThreadState) *ConversationThreadStatePayload {
 	if state == nil {
 		return nil

@@ -101,6 +101,19 @@ function setupBridge() {
 				},
 			],
 		})),
+		muteTab: vi.fn(async ({ viewId, tabId, muted }: { viewId: string; tabId: string; muted: boolean }) => ({
+			viewId,
+			activeTabId: "t1",
+			tabs: [
+				{
+					id: tabId,
+					url: "http://localhost:3000/",
+					title: "First",
+					active: true,
+					muted,
+				},
+			],
+		})),
 		openTab: vi.fn(async ({ viewId }: { viewId: string; url?: string }) => ({
 			viewId,
 			activeTabId: "t2",
@@ -190,6 +203,8 @@ function setupBridge() {
 			return () => profileListeners.delete(listener);
 		}),
 		onProfileManage: vi.fn(() => () => undefined),
+		onProfileSwitchConfirm: vi.fn(() => () => undefined),
+		onProfileSwitchFailed: vi.fn(() => () => undefined),
 		onAnnotationSubmit: vi.fn(() => () => undefined),
 		onAnnotationCancel: vi.fn(() => () => undefined),
 		onAnnotationState: vi.fn((listener: AnnotationStateListener) => {
@@ -572,6 +587,28 @@ describe("useBrowserView", () => {
 		expect(bridge.closeTab).toHaveBeenCalledWith({
 			viewId: "42:sess-1",
 			tabId: "t2",
+		});
+	});
+
+	it("mutes and unmutes a tab through the bridge", async () => {
+		const bridge = setupBridge();
+		const { result } = renderHook(() => useBrowserView({ sessionId: "sess-1", active: true, poppedOut: false }));
+		await act(async () => {
+			await result.current.openTab("http://localhost:3000/");
+		});
+
+		await act(() => result.current.muteTab("t1", true));
+		expect(bridge.muteTab).toHaveBeenCalledWith({
+			viewId: "42:sess-1",
+			tabId: "t1",
+			muted: true,
+		});
+
+		await act(() => result.current.muteTab("t1", false));
+		expect(bridge.muteTab).toHaveBeenLastCalledWith({
+			viewId: "42:sess-1",
+			tabId: "t1",
+			muted: false,
 		});
 	});
 
@@ -1376,6 +1413,56 @@ describe("useBrowserView", () => {
 			visible: false,
 		}));
 		expect(bridge.destroy).not.toHaveBeenCalled();
+	});
+
+	it("destroys a transient Settings Browser view on close so another login starts fresh", async () => {
+		const bridge = setupBridge();
+		const first = renderHook(() => useBrowserView({
+			sessionId: "settings-login-browser:1", active: true, poppedOut: true, transient: true,
+		}));
+		await waitFor(() => expect(first.result.current.viewId).toBe("42:settings-login-browser:1"));
+		first.unmount();
+		expect(bridge.destroy).toHaveBeenCalledExactlyOnceWith("42:settings-login-browser:1");
+
+		const second = renderHook(() => useBrowserView({
+			sessionId: "settings-login-browser:2", active: true, poppedOut: true, transient: true,
+		}));
+		await waitFor(() => expect(second.result.current.viewId).toBe("42:settings-login-browser:2"));
+		expect(bridge.ensure).toHaveBeenLastCalledWith("settings-login-browser:2", false);
+		second.unmount();
+		expect(bridge.destroy).toHaveBeenCalledWith("42:settings-login-browser:2");
+	});
+
+	it("destroys a transient view if native creation finishes after Settings closes", async () => {
+		const bridge = setupBridge();
+		let finish!: (state: BrowserNavState) => void;
+		bridge.ensure.mockImplementationOnce(() => new Promise((resolve) => { finish = resolve; }));
+		const view = renderHook(() => useBrowserView({
+			sessionId: "settings-login-browser:3", active: true, poppedOut: true, transient: true,
+		}));
+		view.unmount();
+		await act(async () => finish(bridge.stateFor("42:settings-login-browser:3")));
+		expect(bridge.destroy).toHaveBeenCalledExactlyOnceWith("42:settings-login-browser:3");
+	});
+
+	it("does not navigate a transient login link after Settings closes during creation", async () => {
+		const bridge = setupBridge();
+		const pending: Array<(state: BrowserNavState) => void> = [];
+		bridge.ensure.mockImplementation(() => new Promise((resolve) => { pending.push(resolve); }));
+		const view = renderHook(() => useBrowserView({
+			sessionId: "settings-login-browser:4", active: true, poppedOut: true, transient: true,
+		}));
+		const opening = view.result.current.openLink("https://app.cline.bot/auth/device");
+		expect(pending).toHaveLength(2);
+		view.unmount();
+		await act(async () => {
+			pending.forEach((finish) => finish(bridge.stateFor("42:settings-login-browser:4")));
+			await opening;
+		});
+		expect(bridge.destroy).toHaveBeenCalledWith("42:settings-login-browser:4");
+		expect(bridge.getTabs).not.toHaveBeenCalled();
+		expect(bridge.navigate).not.toHaveBeenCalled();
+		expect(bridge.openTab).not.toHaveBeenCalled();
 	});
 
 	it("does not snapshot or park the native page for an ordinary modal dialog", async () => {

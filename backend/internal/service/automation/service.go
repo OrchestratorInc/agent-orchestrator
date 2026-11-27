@@ -114,12 +114,18 @@ func (s *Service) Create(ctx context.Context, input CreateInput) (domain.Automat
 	if !domain.ValidAutomationUseCase(input.UseCase) {
 		return domain.Automation{}, apierr.Invalid("INVALID_AUTOMATION_USE_CASE", "Unknown automation use case", nil)
 	}
-	project, ok, err := s.store.GetProject(ctx, string(input.ProjectID))
-	if err != nil {
-		return domain.Automation{}, apierr.Internal("AUTOMATION_CREATE_FAILED", "Failed to create automation")
-	}
-	if !ok || !project.ArchivedAt.IsZero() {
-		return domain.Automation{}, apierr.NotFound("PROJECT_NOT_FOUND", "Unknown project")
+	if input.ProjectID == "" {
+		if err := validateScratchpad(input.Kind, input.Harness); err != nil {
+			return domain.Automation{}, err
+		}
+	} else {
+		project, ok, err := s.store.GetProject(ctx, string(input.ProjectID))
+		if err != nil {
+			return domain.Automation{}, apierr.Internal("AUTOMATION_CREATE_FAILED", "Failed to create automation")
+		}
+		if !ok || !project.ArchivedAt.IsZero() {
+			return domain.Automation{}, apierr.NotFound("PROJECT_NOT_FOUND", "Unknown project")
+		}
 	}
 	displayName := strings.TrimSpace(input.DisplayName)
 	if displayName == "" || utf8.RuneCountInString(displayName) > maxDisplayNameRunes {
@@ -179,14 +185,11 @@ func (s *Service) Create(ctx context.Context, input CreateInput) (domain.Automat
 	return created, nil
 }
 
-// Get returns one automation definition.
+// Get returns one automation definition with its latest and active runs.
 func (s *Service) Get(ctx context.Context, id domain.AutomationID) (domain.Automation, error) {
-	rec, ok, err := s.store.GetAutomation(ctx, id)
+	rec, err := s.definition(ctx, id)
 	if err != nil {
-		return domain.Automation{}, apierr.Internal("AUTOMATION_READ_FAILED", "Failed to read automation")
-	}
-	if !ok {
-		return domain.Automation{}, apierr.NotFound("AUTOMATION_NOT_FOUND", "Unknown automation")
+		return domain.Automation{}, err
 	}
 	latest, err := s.store.ListLatestAutomationRuns(ctx, []domain.AutomationID{id})
 	if err != nil {
@@ -203,6 +206,19 @@ func (s *Service) Get(ctx context.Context, id domain.AutomationID) (domain.Autom
 		if run.AutomationID == id {
 			rec.ActiveRun = &run
 		}
+	}
+	return rec, nil
+}
+
+// definition returns one automation definition without the run projections Get
+// adds, for callers that only need its settings.
+func (s *Service) definition(ctx context.Context, id domain.AutomationID) (domain.Automation, error) {
+	rec, ok, err := s.store.GetAutomation(ctx, id)
+	if err != nil {
+		return domain.Automation{}, apierr.Internal("AUTOMATION_READ_FAILED", "Failed to read automation")
+	}
+	if !ok {
+		return domain.Automation{}, apierr.NotFound("AUTOMATION_NOT_FOUND", "Unknown automation")
 	}
 	return rec, nil
 }
@@ -289,6 +305,11 @@ func (s *Service) Update(ctx context.Context, id domain.AutomationID, input Upda
 		}
 		rec.Harness = *input.Harness
 	}
+	if rec.ProjectID == "" {
+		if err := validateScratchpad(rec.Kind, rec.Harness); err != nil {
+			return domain.Automation{}, err
+		}
+	}
 	if input.Model != nil {
 		rec.Model = strings.TrimSpace(*input.Model)
 	}
@@ -341,6 +362,19 @@ func (s *Service) Update(ctx context.Context, id domain.AutomationID, input Upda
 		return domain.Automation{}, apierr.NotFound("AUTOMATION_NOT_FOUND", "Unknown automation")
 	}
 	return s.Get(ctx, id)
+}
+
+// validateScratchpad holds a Scratchpad automation, one with no project, to the
+// rules of the standalone session each of its runs starts: a worker, with its
+// harness named.
+func validateScratchpad(kind domain.SessionKind, harness domain.AgentHarness) error {
+	if kind != domain.KindWorker {
+		return apierr.Invalid("INVALID_AUTOMATION_KIND", "Scratchpad automations must be workers", nil)
+	}
+	if harness == "" {
+		return apierr.Invalid("INVALID_AUTOMATION_HARNESS", "Scratchpad automations need a harness", nil)
+	}
+	return nil
 }
 
 // Delete removes a definition and its run history. Linked sessions survive by
