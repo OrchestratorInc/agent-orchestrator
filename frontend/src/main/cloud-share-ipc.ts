@@ -441,7 +441,9 @@ export function registerCloudShareIpc(deps: CloudShareIpcDeps): void {
 		for (const skip of found.skipped) if (skip.relativePath) fingerprints[skip.relativePath] = "";
 		for (const used of found.files) fingerprints[used.referencedPath] = used.file.sha256;
 		return {
-			files: found.files.map((used) => ({ path: used.path, artifactPath: used.referencedPath })),
+			// Each is bound to the version listed, the one its fingerprint records:
+			// one committed again since is left out and named missing.
+			files: found.files.map((used) => ({ path: used.path, artifactPath: used.referencedPath, sha256: used.file.sha256 })),
 			skipped: [...found.skipped],
 			referenced: new Map(found.files.map((used) => [used.path, used.referencedPath])),
 			fingerprints,

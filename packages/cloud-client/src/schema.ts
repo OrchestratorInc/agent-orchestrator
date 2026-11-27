@@ -5089,7 +5089,7 @@ export interface components {
             refusedVideos: string[];
             /** @description The paths of listed videos left out for being over the control plane's size limit. */
             tooLargeVideos: string[];
-            /** @description The paths of listed files the session no longer holds, left out. */
+            /** @description The paths of listed files left out because the session no longer holds them, or holds another version than the sha256 listed. */
             missing: string[];
         };
         ArtifactShareList: {
@@ -5226,6 +5226,8 @@ export interface components {
             path: string;
             /** @description The file's path in the session's artifact directory, as SessionArtifact.path. */
             artifactPath: string;
+            /** @description The file's committed version as the page's sharer listed it, as SessionArtifact.sha256. Only that version is copied: one the session committed again since is left out and named in missing. */
+            sha256: string;
         };
         /** @description A link someone else published and shared with the signed-in person, as their Artifacts list shows it. */
         SharedArtifact: {

@@ -434,10 +434,11 @@ describe("cloudShare IPC", () => {
 			});
 			expect(bodies.get(`${CLOUD_SESSION_PATH}/artifacts/share`)).toEqual({
 				path: PAGE, sha256: sha(HTML),
+				// Each bound to the version listed, which the control plane copies or leaves out as missing.
 				files: [
-					{ path: "img/a.png", artifactPath: "site/img/a.png" },
-					{ path: "img/b.png", artifactPath: "site/img/b.png" },
-					{ path: "clip.webm", artifactPath: "site/clip.webm" },
+					{ path: "img/a.png", artifactPath: "site/img/a.png", sha256: sha("png-a") },
+					{ path: "img/b.png", artifactPath: "site/img/b.png", sha256: sha("png-b") },
+					{ path: "clip.webm", artifactPath: "site/clip.webm", sha256: sha("video") },
 				],
 			});
 			// Only the page is read; its files are copied by the control plane, never downloaded here.

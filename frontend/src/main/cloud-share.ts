@@ -722,6 +722,8 @@ export interface CloudSessionShareFileRef {
 	path: string;
 	/** Its path in the session's artifacts. */
 	artifactPath: string;
+	/** Its committed version as listed: the control plane copies only that one. */
+	sha256: string;
 }
 
 /** What the control plane did with the files a cloud session's page listed. */
@@ -749,7 +751,7 @@ export function shareCloudSessionArtifact(
 		sha256: ref.sha256,
 		...(ref.shareId ? { shareId: ref.shareId } : {}),
 		...accessFields(ref),
-		...(ref.files ? { files: ref.files.map(({ path: served, artifactPath }) => ({ path: served, artifactPath })) } : {}),
+		...(ref.files ? { files: ref.files.map(({ path: served, artifactPath, sha256 }) => ({ path: served, artifactPath, sha256 })) } : {}),
 	}, signal, SHARE_TIMEOUTS.publish);
 }
 
