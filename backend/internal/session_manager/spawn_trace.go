@@ -268,7 +268,12 @@ func agentStartCause(err error) string {
 	}
 	var adapter interface{ FailureCause() string }
 	if errors.As(err, &adapter) {
-		if cause := adapter.FailureCause(); cause == "agent_error" || cause == "host_failed" {
+		switch cause := adapter.FailureCause(); {
+		// An agent that refuses the ACP initialize handshake answered, but the
+		// useful label is that it does not speak AO's protocol.
+		case cause == "agent_error" && errors.Is(err, ports.ErrChatDriverIncompatible):
+			return "incompatible"
+		case cause == "agent_error" || cause == "host_failed":
 			return cause
 		}
 	}
