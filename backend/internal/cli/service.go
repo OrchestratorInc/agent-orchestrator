@@ -605,28 +605,95 @@ func shellUnquote(word string) string {
 				b.WriteByte(word[i])
 			}
 		case ch == '$' && i+1 < len(word) && word[i+1] == '\'':
-			for i += 2; i < len(word) && word[i] != '\''; i++ {
-				if word[i] != '\\' || i+1 >= len(word) {
-					b.WriteByte(word[i])
-					continue
-				}
-				i++
-				switch word[i] {
-				case 'n':
-					b.WriteByte('\n')
-				case 't':
-					b.WriteByte('\t')
-				case 'r':
-					b.WriteByte('\r')
-				default:
-					b.WriteByte(word[i])
-				}
-			}
+			i = decodeANSIC(word, i+2, &b)
 		default:
 			b.WriteByte(ch)
 		}
 	}
 	return b.String()
+}
+
+// decodeANSIC decodes the body of a $'...' word starting at word[i] into b,
+// as bash does: single-letter escapes, octal \nnn, hex \xHH and \uHHHH /
+// \UHHHHHHHH. printf %q writes non-ASCII bytes as octal under LC_ALL=C. It
+// returns the index of the closing quote.
+func decodeANSIC(word string, i int, b *strings.Builder) int {
+	simple := map[byte]byte{'a': '\a', 'b': '\b', 'e': 0x1b, 'E': 0x1b, 'f': '\f', 'n': '\n', 'r': '\r', 't': '\t', 'v': '\v', '\\': '\\', '\'': '\'', '"': '"', '?': '?'}
+	digits := func(start, limit int, ok func(byte) bool) int {
+		end := start
+		for end < len(word) && end-start < limit && ok(word[end]) {
+			end++
+		}
+		return end
+	}
+	isOct := func(c byte) bool { return c >= '0' && c <= '7' }
+	isHex := func(c byte) bool { return strings.IndexByte("0123456789abcdefABCDEF", c) >= 0 }
+	for ; i < len(word) && word[i] != '\''; i++ {
+		if word[i] != '\\' || i+1 >= len(word) {
+			b.WriteByte(word[i])
+			continue
+		}
+		i++
+		c := word[i]
+		if v, ok := simple[c]; ok {
+			b.WriteByte(v)
+			continue
+		}
+		switch {
+		case isOct(c):
+			end := digits(i, 3, isOct)
+			var v byte // wraps to one byte, as bash does for \777
+			for _, d := range []byte(word[i:end]) {
+				v = v*8 + (d - '0')
+			}
+			b.WriteByte(v)
+			i = end - 1
+		case c == 'x':
+			end := digits(i+1, 2, isHex)
+			if end == i+1 {
+				b.WriteString(`\x`)
+				continue
+			}
+			var v byte
+			for _, d := range []byte(word[i+1 : end]) {
+				v = v*16 + hexVal(d)
+			}
+			b.WriteByte(v)
+			i = end - 1
+		case c == 'u' || c == 'U':
+			n := 4
+			if c == 'U' {
+				n = 8
+			}
+			end := digits(i+1, n, isHex)
+			if end == i+1 {
+				b.WriteByte('\\')
+				b.WriteByte(c)
+				continue
+			}
+			var r rune
+			for _, d := range []byte(word[i+1 : end]) {
+				r = r*16 + rune(hexVal(d))
+			}
+			b.WriteRune(r) // an out-of-range code point is written as U+FFFD
+			i = end - 1
+		default:
+			b.WriteByte('\\')
+			b.WriteByte(c)
+		}
+	}
+	return i
+}
+
+func hexVal(c byte) byte {
+	switch {
+	case c >= 'a':
+		return c - 'a' + 10
+	case c >= 'A':
+		return c - 'A' + 10
+	default:
+		return c - '0'
+	}
 }
 
 // refuseSelfHostedConflict stops an install that would put a second service

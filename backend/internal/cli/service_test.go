@@ -830,6 +830,8 @@ func TestShellUnquoteDecodesPrintfQ(t *testing.T) {
 		`"/srv/ao\$x \"q\""`:  `/srv/ao$x "q"`,
 		`$'/srv/a\nb'`:        "/srv/a\nb",
 		`/srv/it\'s`:          "/srv/it's",
+		`$'/srv/caf\303\251'`: "/srv/café",
+		`$'/srv/\x41é\t'`:     "/srv/Aé\t",
 	} {
 		if got := shellUnquote(in); got != want {
 			t.Errorf("shellUnquote(%q) = %q, want %q", in, got, want)
@@ -870,5 +872,28 @@ func TestServiceInstallRefusesSelfHostedWithShellQuotedDataDir(t *testing.T) {
 	writeSelfHostedService(t, filepath.Dir(spec.File), string(quoted))
 	if _, _, err := executeCLI(t, deps, "service", "install", "--no-wait"); err == nil || !strings.Contains(err.Error(), "self-hosted host service") {
 		t.Fatalf("err = %v, want the conflict seen through %%q quoting (%s)", err, quoted)
+	}
+}
+
+// Under LC_ALL=C, printf %q writes non-ASCII bytes as octal escapes; the
+// decoded value must be the original directory name.
+func TestShellUnquoteRoundTripsBashNonASCII(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("needs bash")
+	}
+	bash, err := exec.LookPath("bash")
+	if err != nil {
+		t.Skip("bash not found")
+	}
+	for _, dir := range []string{"/srv/café data", "/srv/ao $state", "/srv/日本", "/srv/tab\there", "/srv/new\nline"} {
+		cmd := exec.Command(bash, "-c", `printf %q "$1"`, "_", dir)
+		cmd.Env = append(os.Environ(), "LC_ALL=C")
+		quoted, err := cmd.Output()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := shellUnquote(string(quoted)); got != dir {
+			t.Errorf("printf %%q %q = %s, decoded %q", dir, quoted, got)
+		}
 	}
 }
