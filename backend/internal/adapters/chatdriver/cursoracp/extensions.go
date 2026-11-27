@@ -62,6 +62,9 @@ func handleExtension(
 	case createPlanMethod:
 		result, err := handleCreatePlan(ctx, bridge, raw)
 		return result, true, err
+	case taskMethod:
+		// What it says reaches AO as the subagent's own updates.
+		return map[string]any{}, true, nil
 	default:
 		return nil, false, nil
 	}

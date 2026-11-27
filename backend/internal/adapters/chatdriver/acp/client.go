@@ -612,6 +612,10 @@ func (c *conversation) discardPermission(requestID string) {
 }
 
 func (c *conversation) SessionUpdate(_ context.Context, params acpsdk.SessionNotification) error {
+	// An announced subagent's own session is filed under its launch.
+	if c.spawnedSubagents != nil && c.routeSpawnedChild(params) {
+		return nil
+	}
 	// Keep replay normalization off the SDK's bounded notification queue.
 	if c.captureReplayUpdate(params) {
 		return nil
@@ -629,6 +633,9 @@ func (c *conversation) handleNotification(method string, params json.RawMessage)
 		// Decode for an async task only when its discriminator can be present,
 		// so ordinary frames are not decoded twice on the frame reader.
 		if bytes.Contains(params, []byte("async_task")) && c.observeAsyncTaskNotification(params) {
+			return true
+		}
+		if c.spawnedSubagents != nil && bytes.Contains(params, []byte("subagent_")) && c.spawnedSubagentNotification(params) {
 			return true
 		}
 		var update acpsdk.SessionNotification

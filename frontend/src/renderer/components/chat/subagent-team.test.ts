@@ -412,3 +412,37 @@ describe("DeepSeek Harness subagents", () => {
 		expect(subagent.report).toBeUndefined();
 	});
 });
+
+// The shape AO's Cursor driver records: a Task call that completes when its
+// child does, with the child's steps and its last message, as a hand-back,
+// streamed over ACP.
+function cursorLaunch(status: ConversationActivity["status"]): ConversationActivity {
+	return {
+		kind: "activity",
+		id: "c",
+		providerItemId: "tool-c",
+		sequence: 1,
+		revision: 1,
+		activityKind: "mcp_tool",
+		status,
+		summary: "Task: Read notes",
+		detail: {
+			providerToolName: "Task",
+			input: { description: "Read notes", prompt: "Read notes.txt." },
+			subagentType: "explore",
+		} as ConversationActivity["detail"],
+		createdAt: at(0),
+	};
+}
+
+describe("Cursor subagents", () => {
+	it("is working while its Task runs, typed by its subagent type", () => {
+		const subagent = readSubagent(cursorLaunch("running"), [], true);
+		expect(subagent).toMatchObject({ state: "working", title: "Read notes", agentType: "explore" });
+	});
+
+	it("reports the child's last message once its Task completes", () => {
+		const subagent = readSubagent(cursorLaunch("completed"), [handback("h1", "tool-c", "The second line says kiwi.")], false);
+		expect(subagent).toMatchObject({ state: "done", report: "The second line says kiwi." });
+	});
+});

@@ -50,17 +50,22 @@ type SubagentRecords struct {
 	Open func(env map[string]string, workspace, session string) SubagentRecordReader
 }
 
-// RecordedCall is what SubagentRecords reads of a tool call.
+// RecordedCall is what a binding reads of a tool call to tell a launch.
 type RecordedCall struct {
-	Title    string
-	Kind     acpsdk.ToolKind
-	RawInput any
+	Title     string
+	Kind      acpsdk.ToolKind
+	RawInput  any
+	RawOutput any
 }
 
 // RecordedLaunch is how a launch shows: the tool name the renderer lists as a
 // launch, a short title, the task, and the agent type (empty for the default).
+// Foreground is set for a launch that completes only when its child does, so
+// its own status says the child finished; any other completes when the child
+// starts.
 type RecordedLaunch struct {
 	ToolName, Title, Prompt, AgentType string
+	Foreground                         bool
 }
 
 // SubagentRecordReader reads what an agent recorded of its subagents. It is
@@ -160,22 +165,33 @@ func (f *recordFollower) closeTurn(turnID string) {
 }
 
 func recordedCallView(tool *toolState) RecordedCall {
-	return RecordedCall{Title: tool.title, Kind: tool.kind, RawInput: tool.rawInput}
+	return RecordedCall{Title: tool.title, Kind: tool.kind, RawInput: tool.rawInput, RawOutput: tool.rawOutput}
+}
+
+// subagentLaunch tells a launch with whichever subagent support the binding
+// has: one recorded in the agent's store, or one announced over ACP.
+func (c *conversation) subagentLaunch(call RecordedCall) (RecordedLaunch, bool) {
+	switch {
+	case c.subagentRecords != nil:
+		return c.subagentRecords.Launch(call)
+	case c.spawnedSubagents != nil:
+		return c.spawnedSubagents.Launch(call)
+	}
+	return RecordedLaunch{}, false
 }
 
 // decorateRecordedLaunch marks a launch in its activity detail: the renderer's
 // launch name, the child's task as input, and background, because the launch
 // completes when the child starts, not when it finishes.
 func (c *conversation) decorateRecordedLaunch(tool *toolState, detail map[string]any) {
-	if c.subagentRecords == nil {
-		return
-	}
-	launch, ok := c.subagentRecords.Launch(recordedCallView(tool))
+	launch, ok := c.subagentLaunch(recordedCallView(tool))
 	if !ok {
 		return
 	}
 	detail["providerToolName"] = launch.ToolName
-	detail["background"] = true
+	if !launch.Foreground {
+		detail["background"] = true
+	}
 	input := map[string]any{"prompt": launch.Prompt}
 	if launch.Title != "" {
 		input["description"] = launch.Title
@@ -190,6 +206,7 @@ func (c *conversation) decorateRecordedLaunch(tool *toolState, detail map[string
 // subagent, or gives an earlier one more work.
 func (c *conversation) observeRecordedLaunch(tool *toolState) {
 	if c.subagentRecords == nil {
+		// Announced subagents need no reading: their frames file themselves.
 		return
 	}
 	view := recordedCallView(tool)
@@ -203,11 +220,17 @@ func (c *conversation) observeRecordedLaunch(tool *toolState) {
 	c.pollSubagentRecords()
 }
 
-// ensureRecordFollowerLocked creates the follower once. The caller holds mu.
+// ensureRecordFollowerLocked creates the follower once. An agent that
+// announces its subagents has no store to read: its follower has no reader.
+// The caller holds mu.
 func (c *conversation) ensureRecordFollowerLocked() {
 	if c.recordFollower == nil {
+		var reader SubagentRecordReader
+		if c.subagentRecords != nil {
+			reader = c.subagentRecords.Open(c.subagentRecordEnv, c.subagentRecordCwd, c.sessionID)
+		}
 		c.recordFollower = &recordFollower{
-			reader: c.subagentRecords.Open(c.subagentRecordEnv, c.subagentRecordCwd, c.sessionID),
+			reader: reader,
 			readMu: make(chan struct{}, 1),
 			tools:  map[string]map[string]*toolState{},
 			said:   map[string]map[string]string{},
@@ -232,7 +255,7 @@ func (c *conversation) pollSubagentRecords() {
 	c.mu.Lock()
 	follower := c.recordFollower
 	turnID := c.activeTurn
-	if follower == nil || follower.stop != nil || turnID == "" || c.settlingTurn == turnID {
+	if follower == nil || follower.reader == nil || follower.stop != nil || turnID == "" || c.settlingTurn == turnID {
 		c.mu.Unlock()
 		return
 	}
@@ -269,7 +292,7 @@ func (c *conversation) pollSubagentRecords() {
 func (c *conversation) drainSubagentRecords() {
 	c.mu.Lock()
 	follower := c.recordFollower
-	if follower == nil {
+	if follower == nil || follower.reader == nil {
 		c.mu.Unlock()
 		return
 	}
