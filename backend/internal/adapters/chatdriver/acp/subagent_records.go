@@ -83,12 +83,14 @@ type RecordedUpdate struct {
 	Launch string
 	// Child names the child, scoping its tool call and message ids.
 	Child string
+	// Run names the child's run the update or end belongs to: an End
+	// releases what was held for its own run only.
+	Run string
 	// Update is a tool_call, tool_call_update, or agent_message_chunk carrying
 	// a messageId. Anything else is ignored.
 	Update *acpsdk.SessionUpdate
-	// End closes one run of the child and releases what was held for its
-	// messages and calls, so it comes after every update of that run and
-	// before any of the next.
+	// End closes one run of the child and releases what was held for that
+	// run's messages and calls.
 	End *RecordedEnd
 }
 
@@ -139,7 +141,8 @@ type recordFollower struct {
 	// readMu serializes reads and Busy, so the poll and the last read never
 	// interleave. Held without mu. The fields below are guarded by it.
 	readMu chan struct{}
-	// tools and said are each child's open tool calls and messages so far.
+	// tools and said are each run's open tool calls and messages so far, by
+	// child and run.
 	tools map[string]map[string]*toolState
 	said  map[string]map[string]string
 	// backlog holds what was read but not delivered, and the turn it belongs to.
@@ -386,14 +389,15 @@ func (c *conversation) emitRecordedUpdate(ctx context.Context, turnID string, fo
 		return true
 	}
 	launch := c.providerItemID(recorded.Launch)
+	run := lengthPrefixedTuple(recorded.Child, recorded.Run)
 	if end := recorded.End; end != nil {
 		if !c.emitRecord(ctx, follower, c.recordedHandback(turnID, launch, recorded.Child, *end)) {
 			return false
 		}
 		// The run is over: what was held for its messages and calls is not
-		// needed again.
-		delete(follower.said, recorded.Child)
-		delete(follower.tools, recorded.Child)
+		// needed again. Another run's is kept.
+		delete(follower.said, run)
+		delete(follower.tools, run)
 		return true
 	}
 	update := recorded.Update
@@ -409,7 +413,7 @@ func (c *conversation) emitRecordedUpdate(ctx context.Context, turnID string, fo
 			tool = newToolState(update.ToolCall)
 		} else {
 			id := string(update.ToolCallUpdate.ToolCallId)
-			if stored := follower.tools[recorded.Child][id]; stored != nil {
+			if stored := follower.tools[run][id]; stored != nil {
 				clone := *stored
 				scratch[id] = &clone
 			}
@@ -420,14 +424,14 @@ func (c *conversation) emitRecordedUpdate(ctx context.Context, turnID string, fo
 		if !c.emitRecord(ctx, follower, withParentProviderItem(event, launch)) {
 			return false
 		}
-		tools := follower.tools[recorded.Child]
+		tools := follower.tools[run]
 		if toolTerminal(tool.status) {
 			delete(tools, tool.id)
 			return true
 		}
 		if tools == nil {
 			tools = map[string]*toolState{}
-			follower.tools[recorded.Child] = tools
+			follower.tools[run] = tools
 		}
 		tools[tool.id] = tool
 
@@ -440,7 +444,7 @@ func (c *conversation) emitRecordedUpdate(ctx context.Context, turnID string, fo
 		if delta == "" {
 			return true
 		}
-		said := follower.said[recorded.Child][*chunk.MessageId] + delta
+		said := follower.said[run][*chunk.MessageId] + delta
 		key := lengthPrefixedTuple(recorded.Child, *chunk.MessageId)
 		detail, _ := json.Marshal(map[string]any{"parentProviderItemId": launch, "nestedAgent": true})
 		if !c.emitRecord(ctx, follower, ports.ChatEvent{
@@ -451,10 +455,10 @@ func (c *conversation) emitRecordedUpdate(ctx context.Context, turnID string, fo
 		}) {
 			return false
 		}
-		messages := follower.said[recorded.Child]
+		messages := follower.said[run]
 		if messages == nil {
 			messages = map[string]string{}
-			follower.said[recorded.Child] = messages
+			follower.said[run] = messages
 		}
 		messages[*chunk.MessageId] = said
 	}
@@ -473,19 +477,22 @@ func (c *conversation) emitRecord(ctx context.Context, follower *recordFollower,
 // event lock and the consumer only until ctx ends, and reports whether the
 // event was queued.
 func (c *conversation) emitWithin(ctx context.Context, event ports.ChatEvent) bool {
-	if c.captureHistoryEvent(event) {
+	// A history capture is checked under its lock, and nothing is captured once
+	// ctx has ended.
+	if !lockWithin(ctx, c.historyMu.TryLock, c.historyMu.Unlock) {
+		return false
+	}
+	captured := false
+	if ctx.Err() == nil {
+		captured = c.captureHistoryEventLocked(event)
+	}
+	c.historyMu.Unlock()
+	if captured {
 		return true
 	}
 	// A writer can hold the event lock while it waits on the consumer itself.
-	for !c.eventMu.TryRLock() {
-		if ctx.Err() != nil {
-			return false
-		}
-		select {
-		case <-ctx.Done():
-			return false
-		case <-time.After(time.Millisecond):
-		}
+	if !lockWithin(ctx, c.eventMu.TryRLock, c.eventMu.RUnlock) {
+		return false
 	}
 	defer c.eventMu.RUnlock()
 	// With ctx over, a free slot must not win the select below.
@@ -504,6 +511,24 @@ func (c *conversation) emitWithin(ctx context.Context, event ports.ChatEvent) bo
 	case <-c.closing:
 	}
 	return false
+}
+
+// lockWithin takes a lock with try until ctx ends, reporting whether it holds
+// it: a lock some other path holds for long cannot keep a record past its
+// deadline.
+func lockWithin(ctx context.Context, try func() bool, unlock func()) bool {
+	for !try() {
+		select {
+		case <-ctx.Done():
+			return false
+		case <-time.After(time.Millisecond):
+		}
+	}
+	if ctx.Err() != nil {
+		unlock()
+		return false
+	}
+	return true
 }
 
 // recordedHandback is a child's report on one run, to the launch that started

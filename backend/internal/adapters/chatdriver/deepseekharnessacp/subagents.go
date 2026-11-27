@@ -138,6 +138,9 @@ type childLog struct {
 	runOpen bool
 	runAt   int64
 	run     int
+	// runIDs names each of the turn's runs by where it starts in the child's
+	// log, which stays the same across reads.
+	runIDs map[int]string
 	// Runs and their ends are numbered in order within the turn, so each end
 	// pairs with its own run: runs counts the turn's runs, ends its ends, closed
 	// holds the runs the child's log has closed and released the last run whose
@@ -234,6 +237,7 @@ func (r *recordReader) startTurn(event deepseekharness.NativeHistoryEvent) {
 		child.runs, child.endCount, child.released = 0, 0, 0
 		child.closed = nil
 		child.run = 0
+		child.runIDs = nil
 	}
 }
 
@@ -365,7 +369,8 @@ func (r *recordReader) releaseEnds(child *childLog, out *[]acpdriver.RecordedUpd
 		delete(child.closed, pending.run)
 		child.released = pending.run
 		end := pending.end
-		*out = append(*out, acpdriver.RecordedUpdate{Launch: child.launch, Child: child.id, End: &end})
+		*out = append(*out, acpdriver.RecordedUpdate{Launch: child.launch, Child: child.id, Run: child.runIDs[pending.run], End: &end})
+		delete(child.runIDs, pending.run)
 		child.ends = child.ends[1:]
 	}
 }
@@ -413,7 +418,7 @@ func (r *recordReader) childEvent(child *childLog, event deepseekharness.NativeH
 	}
 	emit := func(update acpsdk.SessionUpdate) {
 		if r.current(child) {
-			*out = append(*out, acpdriver.RecordedUpdate{Launch: child.launch, Child: child.id, Update: &update})
+			*out = append(*out, acpdriver.RecordedUpdate{Launch: child.launch, Child: child.id, Run: child.runIDs[child.run], Update: &update})
 		}
 	}
 	switch event.Type {
@@ -423,6 +428,10 @@ func (r *recordReader) childEvent(child *childLog, event deepseekharness.NativeH
 		if event.Time >= r.turnAt {
 			child.runs++
 			child.run = child.runs
+			if child.runIDs == nil {
+				child.runIDs = map[int]string{}
+			}
+			child.runIDs[child.run] = strconv.FormatInt(event.Seq, 10)
 		}
 	case "turn/end":
 		if r.current(child) && child.run > child.released {

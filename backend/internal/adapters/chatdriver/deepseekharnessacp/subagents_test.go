@@ -527,3 +527,39 @@ func TestReaderDropsAnEarlierTurnsWaitingEnd(t *testing.T) {
 		t.Fatalf("an earlier turn's end was filed on the new one: %v", got)
 	}
 }
+
+// Each update and end names its run, so ACP releases only that run's state.
+func TestReaderNamesTheRunOfEachUpdateAndEnd(t *testing.T) {
+	home := t.TempDir()
+	parent := newDSHLog(t, home, parentSession, nil)
+	parent.prompt("Go.")
+	parent.launch("call-launch", "subagent", "agent-1", childSession)
+	child := newDSHLog(t, home, childSession, childHeader())
+	child.runStart(1)
+	child.runWork(1, "First.")
+	child.runEnd(1, "completed")
+	parent.settled(childSession, "agent-1", "completed", "finished.", "Its closing message:", "First.")
+	child.runStart(2)
+	child.add("assistant/message", map[string]any{"turn": 2, "step": 1, "stream": []any{}, "message": map[string]any{
+		"id": "next", "role": "assistant", "content": []any{text("On it.")}}})
+	updates, err := openReader(home).Read(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	runs := map[string]bool{}
+	for _, u := range updates {
+		if u.Run == "" {
+			t.Fatalf("an update with no run: %+v", u)
+		}
+		runs[u.Run] = true
+	}
+	first, last := updates[0].Run, updates[len(updates)-1].Run
+	if len(runs) != 2 || first == last {
+		t.Fatalf("want two runs, the first's updates and end apart from the second's: %v", runs)
+	}
+	for _, u := range updates {
+		if u.End != nil && u.Run != first {
+			t.Fatalf("run 1's end names run %q, want %q", u.Run, first)
+		}
+	}
+}

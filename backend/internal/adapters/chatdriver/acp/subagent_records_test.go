@@ -345,7 +345,7 @@ func TestRecordedRunEndReleasesItsMessages(t *testing.T) {
 	reader := &listReader{updates: []RecordedUpdate{said("child", "m1", "Working.")}}
 	conv, follower := recordTestConversation("turn-1", 4, reader)
 	conv.readSubagentRecords(context.Background(), follower)
-	if follower.said["child"]["m1"] != "Working." {
+	if follower.said[lengthPrefixedTuple("child", "")]["m1"] != "Working." {
 		t.Fatalf("a running child's message must be held, got %v", follower.said)
 	}
 	reader.updates = []RecordedUpdate{{Launch: "launch", Child: "child", End: &RecordedEnd{ID: "run-1", Status: RecordedCompleted}}}
@@ -419,5 +419,66 @@ func TestNoRecordGoesOutAfterTheLastRead(t *testing.T) {
 	defer func() { <-follower.readMu }()
 	if len(follower.backlog) != 1 || follower.backlogTurn != "turn-1" {
 		t.Fatalf("the late record must be held for its own turn: %d for %q", len(follower.backlog), follower.backlogTurn)
+	}
+}
+
+// A run's end can land between two chunks of the next run's message: it
+// releases only its own run's state, so the message keeps its first chunk.
+func TestRecordedRunEndKeepsTheNextRunsMessage(t *testing.T) {
+	part := func(run, text string) RecordedUpdate {
+		update := said("child", "m1", text)
+		update.Run = run
+		return update
+	}
+	reader := &listReader{updates: []RecordedUpdate{
+		part("run-2", "Part one."),
+		{Launch: "launch", Child: "child", Run: "run-1", End: &RecordedEnd{ID: "end-1", Status: RecordedCompleted}},
+		part("run-2", " Part two."),
+	}}
+	conv, follower := recordTestConversation("turn-1", 8, reader)
+	conv.readSubagentRecords(context.Background(), follower)
+	var last ports.ChatEvent
+	for len(conv.events) > 0 {
+		last = <-conv.events
+	}
+	if last.Text != "Part one. Part two." {
+		t.Fatalf("run 2's message = %q; run 1's end must not drop its first chunk", last.Text)
+	}
+}
+
+// A record waiting on a history capture's lock gives up at its deadline.
+func TestRecordDeliveryGivesUpWhileTheHistoryLockIsHeld(t *testing.T) {
+	conv, _ := recordTestConversation("turn-1", 4, &listReader{})
+	conv.historyMu.Lock()
+	defer conv.historyMu.Unlock()
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+	defer cancel()
+	sent := make(chan bool, 1)
+	go func() { sent <- conv.emitWithin(ctx, ports.ChatEvent{Kind: ports.ChatEventActivityCompleted}) }()
+	select {
+	case ok := <-sent:
+		if ok {
+			t.Fatal("an event went out while the history lock was held")
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("delivery waited on the history lock past its deadline")
+	}
+}
+
+// A cancelled record is never captured into a running history replay.
+func TestCancelledRecordIsNotCapturedIntoHistory(t *testing.T) {
+	conv, _ := recordTestConversation("turn-1", 4, &listReader{})
+	conv.history = &historyCapture{sessionID: "session", occurrences: map[string]int{}}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if conv.emitWithin(ctx, ports.ChatEvent{Kind: ports.ChatEventActivityCompleted, ProviderItemID: "late"}) {
+		t.Fatal("a cancelled record reported delivery")
+	}
+	if len(conv.history.events) != 0 {
+		t.Fatalf("a cancelled record was captured: %d events", len(conv.history.events))
+	}
+	if !conv.emitWithin(context.Background(), ports.ChatEvent{Kind: ports.ChatEventActivityCompleted, ProviderItemID: "live"}) ||
+		len(conv.history.events) != 1 {
+		t.Fatal("a live record is still captured while history is being replayed")
 	}
 }
