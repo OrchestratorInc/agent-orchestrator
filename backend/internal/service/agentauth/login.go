@@ -136,6 +136,10 @@ type loginOperation struct {
 	cleanupFailed bool
 	stdin         io.WriteCloser
 	codeSubmitted bool
+	// rejectionsSeen counts the plan's codeRejected text in the output last
+	// observed before the code was typed, so only a rejection printed after
+	// it fails the login.
+	rejectionsSeen int
 	// nativeDigits holds, for each NativeOptions entry, the digit the CLI
 	// printed for it.
 	nativeDigits []string
@@ -652,8 +656,18 @@ func (s *Service) observeHiddenLogin(ctx context.Context, terminal guidedAuthTer
 		s.advanceGuidedLogin(ctx, terminal, op, output)
 		plan := planByAgentID[op.snapshot.AgentID]
 		plain := terminalui.PlainTerminalText(output)
+		rejections := 0
+		if plan.codeRejected != "" {
+			rejections = strings.Count(plain, plan.codeRejected)
+		}
 		s.mu.Lock()
 		submitted := op.codeSubmitted
+		rejected := submitted && rejections > op.rejectionsSeen
+		// Before the code is typed this records the baseline; afterwards it
+		// follows older rejections scrolling out of the observed output.
+		if !submitted || rejections < op.rejectionsSeen {
+			op.rejectionsSeen = rejections
+		}
 		if !submitted && op.snapshot.Status == "running" {
 			// Stop reading links once a code is typed: the CLI echoes it.
 			if link := printedLoginURL(op.snapshot.AgentID, output); link != "" {
@@ -662,7 +676,7 @@ func (s *Service) observeHiddenLogin(ctx context.Context, terminal guidedAuthTer
 			op.snapshot.AcceptsCode = len(op.guidedSteps) == 0 && !op.guidedStuck && plan.codePrompt != "" && strings.Contains(plain, plan.codePrompt)
 		}
 		s.mu.Unlock()
-		if submitted && plan.codeRejected != "" && strings.Contains(plain, plan.codeRejected) {
+		if rejected {
 			// The CLI rejected the code; a fresh login gets a fresh link.
 			s.mu.Lock()
 			if op.snapshot.Status == "running" {

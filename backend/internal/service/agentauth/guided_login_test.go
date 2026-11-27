@@ -437,6 +437,48 @@ func TestAgyLoginFailsWhenAgyRejectsTheCode(t *testing.T) {
 	}
 }
 
+func TestAgyLoginIgnoresARejectionPrintedBeforeTheCode(t *testing.T) {
+	onPlatform(t, "darwin")
+	previous := commandSettleDelay
+	commandSettleDelay = 10 * time.Millisecond
+	t.Cleanup(func() { commandSettleDelay = previous })
+
+	pty := &guidedTerminalFake{output: agyMenuScreen}
+	prober := &switchableProberFake{state: domain.AgentAuthenticationUnknown}
+	svc := NewWithAgentResolver(foundExecutable("agy"), prober, pty, "")
+	t.Cleanup(svc.Close)
+
+	started, err := svc.StartLogin(t.Context(), "agy", "browser", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, "Google OAuth to be chosen", 5*time.Second, func() bool { return len(pty.pressed()) >= 1 })
+	pty.setOutput("Got an error: token exchange failed\n" + agyCodePrompt)
+	waitFor(t, "the code box", 5*time.Second, func() bool {
+		current, err := svc.Login(t.Context(), "agy", started.ID)
+		return err == nil && current.AcceptsCode
+	})
+	if _, err := svc.SubmitLoginCode(t.Context(), "agy", started.ID, "4/0AbC_def-123"); err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(1500 * time.Millisecond)
+	current, err := svc.Login(t.Context(), "agy", started.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if current.Status != "running" {
+		t.Fatalf("status = %q, want running: the rejection was printed before the code", current.Status)
+	}
+	prober.set(domain.AgentAuthenticationAuthorized)
+	waitFor(t, "the sign-in to finish", 10*time.Second, func() bool {
+		current, err = svc.Login(t.Context(), "agy", started.ID)
+		return err == nil && current.Status != "running"
+	})
+	if current.Status != "succeeded" {
+		t.Fatalf("status = %q, want succeeded", current.Status)
+	}
+}
+
 func (f *guidedTerminalFake) SendAuthTerminalCode(_ context.Context, _ string, code string) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
