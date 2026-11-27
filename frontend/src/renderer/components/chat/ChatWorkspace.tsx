@@ -205,7 +205,7 @@ import {
 	WorkerUpdateRows,
 	workerUpdatesOf,
 } from "./WorkerUpdates";
-import { AutomationMessage, ReplacedNotice, reviewBursts, SteeredBrowserFeedback, steeredBrowserFeedback } from "./AutomationMessage";
+import { AutomationMessage, pullRequestBursts, pullRequestFeedbackNumber, ReplacedNotice, reviewBursts, SteeredBrowserFeedback, steeredBrowserFeedback } from "./AutomationMessage";
 import { accountFailure, turnStanding, turnUpdates } from "./background-turns";
 import { HumanMessageEditor } from "./HumanMessageEditor";
 import { ChatLinkProvider } from "./ChatMarkdown";
@@ -452,6 +452,8 @@ export interface ChatWorkspaceProps {
 	onFindRequestHandled?: (id: string) => void;
 	snapshot: ConversationSnapshot;
 	promptSuggestion?: ComposerPromptSuggestion;
+	/** Drawn after the last turn, above the prompt spacer: the session's pending browser approval. */
+	timelineEnd?: ReactNode;
 	/** Renderer-owned state identity; the snapshot's sessionId remains the daemon wire ID. */
 	uiSessionId?: string;
 	/** Durable draft owner for a conversation that is not a worker session. */
@@ -874,6 +876,7 @@ function ChatWorkspaceContent({
 	onFindRequestHandled,
 	snapshot,
 	promptSuggestion,
+	timelineEnd,
 	sessionTitle,
 	sessionRole = "worker",
 	assetBaseUrl,
@@ -2387,6 +2390,7 @@ function ChatWorkspaceContent({
 								{conversationEmpty ? <ForkTextCopyNotice /> : null}
 								<Timeline
 									shownAt={panelShownAt}
+									timelineEnd={timelineEnd}
 							onAddToSideChat={onAddToSideChat}
 									subagentPanel={subagentPanel}
 									checkingSideChatAvailability={checkingSideChatAvailability}
@@ -3426,6 +3430,7 @@ function minimapCrowdsText(track: HTMLElement, content: HTMLElement): boolean {
  * this behavior while keeping its own composer.
  */
 export function Timeline({
+	timelineEnd,
 	onAddToSideChat,
 	subagentPanel,
 	checkingSideChatAvailability,
@@ -3479,6 +3484,7 @@ export function Timeline({
 	findRequest,
 	onFindRequestHandled,
 }: {
+	timelineEnd?: ReactNode;
 	/** The agent controller is really gone; a turn still marked running settles with an unknown outcome. */
 	controllerStopped?: boolean;
 	/** When the panel holding this transcript was last shown again after being covered (epoch ms). */
@@ -4581,6 +4587,7 @@ export function Timeline({
 	const workerUpdateIndex = useWorkerUpdateIndex(workerUpdates ? snapshot.items : undefined);
 	const endedSpawns = useEndedSpawns(workerUpdates ? snapshot.items : undefined);
 	const runKeys = useRef<ReadonlyMap<string, string>>(new Map());
+	const developerMode = useUiStore((state) => state.developerMode);
 	const grouped = useMemo(() => {
 		const hiddenTurns = hiddenTimelineTurnIds(snapshot);
 		if (openingTurnId) hiddenTurns.delete(openingTurnId);
@@ -4591,8 +4598,9 @@ export function Timeline({
 		const kept = dropped.size > 0 ? timelineItems.map((item) => outlivingAction(item, dropped)) : timelineItems;
 		const items = atCarrier(kept, snapshot.batchedDeliveries ?? [], batchedReports.moved);
 		const pendingTurns = new Set(snapshot.turns.filter((turn) => turn.agentPending).map((turn) => turn.id));
-		const groups = groupByTurn({ ...snapshot, items }, { controllerStopped })
-			.filter((group) => !group.turnId || !hiddenTurns.has(group.turnId))
+		const visible = groupByTurn({ ...snapshot, items }, { controllerStopped }).filter((group) => !group.turnId || !hiddenTurns.has(group.turnId));
+		// The user's own queued prompts sit in the dock, so feedback queued around one still merges.
+		const groups = (developerMode ? mergeQueuedPullRequestFeedback(visible, queuedTurnIds(snapshot)) : visible)
 			.map((group, index) => openingPending && (firstTurn ? group.turnId === firstTurn.id : index === 0 && group.turnId?.startsWith("local:"))
 				? { ...group, live: true, liveStartedAt: openingStartedAt, liveStartupLabel: openingStartupLabel }
 				: group)
@@ -4620,7 +4628,7 @@ export function Timeline({
 		const folded = foldBackground(cleaned, workerUpdateIndex, endedSpawns, new Set(snapshot.turns.map((turn) => turn.id)), runKeys.current, batchedReports.under, find.gapBeforeSequence);
 		runKeys.current = new Map(folded.flatMap((group) => group.folded ? group.folded.members.map((member) => [member.key, group.key] as const) : []));
 		return folded;
-	}, [batchedReports, controllerStopped, endedSpawns, find.gapBeforeSequence, openingPending, openingStartedAt, openingStartupLabel, openingTurnId, pendingTurnLabel, snapshot, timelineItems, workerUpdateIndex, workerUpdates]);
+	}, [batchedReports, controllerStopped, developerMode, endedSpawns, find.gapBeforeSequence, openingPending, openingStartedAt, openingStartupLabel, openingTurnId, pendingTurnLabel, snapshot, timelineItems, workerUpdateIndex, workerUpdates]);
 	const groups = useStableList(grouped, groupKey, sameGroup);
 	// Read from every group, not the mounted ones: the timeline is virtualized, and the
 	// panel lists a child whose turn has scrolled far out of view.
@@ -5683,6 +5691,12 @@ export function Timeline({
 	function onViewportKeyDown(event: ReactKeyboardEvent<HTMLDivElement>) {
 		const target = event.target as HTMLElement;
 		if (event.defaultPrevented || target.closest("input, textarea, select, [contenteditable='true'], [contenteditable=''], [role='menu'], [role='listbox'], [role='textbox']")) return;
+		// A disclosure opened from the keyboard, as onViewportPointerDown does for a pointer.
+		if ((event.key === "Enter" || (event.key === " " && !event.shiftKey)) && target.closest("[aria-expanded]:not([aria-haspopup])")) {
+			clearRelatch();
+			releaseFollow();
+			return;
+		}
 		if (event.key === "ArrowUp" || event.key === "PageUp" || event.key === "Home" || (event.key === " " && event.shiftKey)) {
 			noteReaderIntent();
 			holdScrollFollow(READER_INTENT_HOLD_MS);
@@ -6054,6 +6068,7 @@ export function Timeline({
 							/>
 						</div>
 					) : null}
+					{timelineEnd}
 					{/* Pushes the latest prompt toward the top of the viewport when following,
 					    then shrinks as the reply fills the space below it. */}
 					<div
@@ -6419,8 +6434,13 @@ const TurnGroup = memo(function TurnGroup({
 		// eslint-disable-next-line react-hooks/exhaustive-deps -- turnFlowItems reads only these fields of the group.
 		[group.items, group.subagents, group.liveProviderFailure, group.outcome?.state, group.outcome?.error, workerUpdates, endedSpawns],
 	);
-	// A review round arrives as one message per comment; it draws as one event.
-	const bursts = useMemo(() => reviewBursts(runs.map((run) => (run.kind === "single" ? run.items[0] : undefined))), [runs]);
+	// A review round arrives as one message per comment; it draws as one event, or in
+	// Developer Mode, a PR's comments and failing CI draw as one line.
+	const developerMode = useUiStore((state) => state.developerMode);
+	const bursts = useMemo(() => {
+		const singles = runs.map((run) => (run.kind === "single" ? run.items[0] : undefined));
+		return developerMode ? pullRequestBursts(singles) : reviewBursts(singles);
+	}, [developerMode, runs]);
 	const lastAssistantId = [...group.items]
 		.reverse()
 		.find((item) => item.kind === "message" && item.role === "assistant" && item.text.trim() !== "")?.id;
@@ -6435,7 +6455,21 @@ const TurnGroup = memo(function TurnGroup({
 	// hands its copy and undo down to the outcome's action row: one row per turn.
 	// An account switch shows its own marker instead of an outcome, so its turn keeps
 	// the answer's row (or the tool-only fallback) like a finished one.
-	const endsWithOutcome = Boolean(group.outcome && group.outcome.state !== "completed" && !group.accountSwitched);
+	// A compaction that could not run says why on its own row ("Couldn't compact
+	// conversation · reason"), so the turn does not tell the same failure again.
+	const compactionToldFailure = group.outcome?.state === "failed" && Boolean(group.outcome.error?.trim()) &&
+		group.items.some((item) =>
+			item.kind === "activity" && isCompaction(item) && item.status === "failed" &&
+			item.detail?.error?.trim() === group.outcome?.error?.trim());
+	// So does a stopped /compact ("Couldn't compact conversation · Stopped"), when
+	// compacting was all the turn did.
+	const compactionToldStop = group.outcome?.state === "interrupted" &&
+		group.items.some((item) => item.kind === "activity" && isCompaction(item) && item.status === "cancelled") &&
+		group.items.every((item) => (item.kind === "activity" && isCompaction(item)) || (item.kind === "message" && item.role === "user"));
+	const compactionToldOutcome = compactionToldFailure || compactionToldStop;
+	const endsWithOutcome = Boolean(group.outcome && group.outcome.state !== "completed" && !group.accountSwitched && !compactionToldOutcome);
+	// Only the failure is told once: the turn can still be retried.
+	const compactionRetry = compactionToldFailure ? retry : undefined;
 	// A message refused for its login, in a turn that did nothing else, says what
 	// happens to it under its own bubble, so the turn needs no outcome of its own.
 	const loginNoteMessageId = login?.align === "end"
@@ -6499,13 +6533,25 @@ const TurnGroup = memo(function TurnGroup({
 						item.activityKind !== "plan" &&
 						item.activityKind !== "approval" &&
 						item.activityKind !== "user_input" &&
-						item.detail?.event !== "provider.failure",
+						item.detail?.event !== "provider.failure" &&
+						!isCompaction(item),
 				)
+		: undefined;
+	// Setup and a provider retry say so on the live row before anything else.
+	const liveRowTaken = Boolean(startup || group.liveStartupLabel || group.liveProviderFailure);
+	// A compaction under way takes over the live row ("Compacting conversation 1m")
+	// instead of drawing a row of its own; its row joins the turn when it settles.
+	// While the live row says something else, it keeps its own running row.
+	const liveCompaction = group.live && !liveRowTaken
+		? [...group.items]
+				.reverse()
+				.find((item): item is ConversationActivity => item.kind === "activity" && isCompaction(item) && item.status === "running")
 		: undefined;
 	// The step in progress shows once, on the live row next to the loader, which
 	// opens onto its command and output; its own row joins the steps above when it
-	// is done and has had its moment on the live row.
-	const liveStep = useLiveRowStep(group, Boolean(startup || group.liveStartupLabel || group.liveProviderFailure));
+	// is done and has had its moment on the live row. While a compaction holds the
+	// live row, the step keeps its own row.
+	const liveStep = useLiveRowStep(group, liveRowTaken || Boolean(liveCompaction));
 	// The live row names a visible step while it runs; between steps it says Thinking.
 	const liveTask = liveStep ?? currentTask;
 	const renderRun = (run: TimelineRun) => {
@@ -6524,6 +6570,7 @@ const TurnGroup = memo(function TurnGroup({
 				/>
 			);
 		}
+		if (run.kind === "single" && liveCompaction && run.items[0]?.id === liveCompaction.id) return null;
 		if (run.kind !== "activities") return renderSingleRun(run);
 		const activities = run.items.filter(
 			(item): item is ConversationActivity => item.kind === "activity" && item.id !== liveStep?.id,
@@ -6543,7 +6590,7 @@ const TurnGroup = memo(function TurnGroup({
 		<TimelineItem
 			key={run.key}
 			item={run.items[0]!}
-			reviewBurst={bursts.get(run.items[0]!.id)}
+			pullRequestBurst={bursts.get(run.items[0]!.id)}
 			harness={harness}
 			sessionId={sessionId}
 			apiBaseUrl={apiBaseUrl}
@@ -6578,6 +6625,7 @@ const TurnGroup = memo(function TurnGroup({
 					: undefined
 			}
 			rollbackDisabled={rollbackDisabled}
+			retry={run.items[0]?.id === copyableMessageId ? compactionRetry : undefined}
 			onSelectAnnotation={onSelectAnnotation}
 			status={run.items[0]?.id === loginNoteMessageId && login
 				? <LoginStatusNote status={login.status} {...(login.ownRetry && retry ? { retry } : {})} />
@@ -6647,6 +6695,7 @@ const TurnGroup = memo(function TurnGroup({
 				// writing, so both keep the timer alone.
 				task={liveTask ? liveTaskLabel(liveTask) : group.live && !group.blocked && !tailIsReply ? "Thinking" : undefined}
 				step={liveStep}
+				compaction={liveCompaction}
 				reconnect={group.liveProviderFailure ? reconnectCopy(group.liveProviderFailure) : undefined}
 			>
 				{startup && (startup.steps.length > 0 || startup.failed) ? <SessionStartup {...startup} /> : null}
@@ -6769,14 +6818,17 @@ const TurnGroup = memo(function TurnGroup({
 			{group.live ? <TurnLiveStatus blocked={group.blocked} /> : null}
 			{/* No assistant prose to hang the undo on — still offer it so a tool-only
 			    turn is not stuck without a way back. A stopped or failed turn carries
-			    it on its outcome's row instead. */}
-			{!copyableMessageId && !group.live && !endsWithOutcome && canRollback ? (
+			    it on its outcome's row instead. One whose compaction row already said
+			    why it failed has no outcome, so its Retry is here too, or on its
+			    answer's row when it has one. */}
+			{!copyableMessageId && !group.live && !endsWithOutcome && (canRollback || compactionRetry) ? (
 				<TurnActions
-					onRollback={() => onRollback(group.turnId as string)}
+					retry={compactionRetry}
+					onRollback={canRollback ? () => onRollback(group.turnId as string) : undefined}
 					rollbackDisabled={rollbackDisabled}
 				/>
 			) : null}
-			{group.outcome && group.outcome.state !== "completed" && !group.accountSwitched && !loginNoteMessageId ? (
+			{group.outcome && group.outcome.state !== "completed" && !group.accountSwitched && !loginNoteMessageId && !compactionToldOutcome ? (
 				<TurnOutcome
 					state={group.outcome.state}
 					error={group.outcome.error}
@@ -6839,10 +6891,11 @@ function TimelineItem({
 	live,
 	onRollback,
 	rollbackDisabled,
+	retry,
 	onSelectAnnotation,
 	status,
 	beforeActions,
-	reviewBurst,
+	pullRequestBurst,
 }: {
 	item: ConversationItem;
 	harness?: string;
@@ -6882,13 +6935,15 @@ function TimelineItem({
 	onRollback?: () => void;
 	/** Keep the action row mounted while another turn is running. */
 	rollbackDisabled?: boolean;
+	/** Retry the failed turn from the answer that owns its action row. */
+	retry?: TurnOutcomeRetryControl;
 	onSelectAnnotation?: (annotation: { text: string; snapshot?: ChatExcerptSnapshot; messageId?: string; revision?: number }) => void;
 	/** Where a human message stands, leading the row under its bubble. */
 	status?: ReactNode;
 	/** What an answer introduced, between its prose and its action row. */
 	beforeActions?: ReactNode;
-	/** This message's review burst (see `reviewBursts`): the messages it draws for, or null when another draws it. */
-	reviewBurst?: readonly ConversationMessage[] | null;
+	/** This message's PR feedback burst (see `pullRequestBursts` and `reviewBursts`): the messages it draws for, or null when another draws it. */
+	pullRequestBurst?: readonly ConversationMessage[] | null;
 }) {
 	if (item.kind === "message") {
 		if (item.role === "assistant") {
@@ -6900,6 +6955,7 @@ function TimelineItem({
 					onRollback={onRollback}
 					rollbackDisabled={rollbackDisabled}
 					beforeActions={beforeActions}
+					retry={retry}
 				/>
 			);
 		}
@@ -6945,11 +7001,11 @@ function TimelineItem({
 				/>
 			);
 		}
-		// An earlier message of its review burst draws this one.
-		if (reviewBurst === null) return null;
+		// An earlier message of its PR feedback burst draws this one.
+		if (pullRequestBurst === null) return null;
 		return (
 			<FromAgent item={item} queued={queued}>
-				<AutomationMessage message={item} queued={queued} burst={reviewBurst} fallback={<OriginMessage message={item} />} />
+				<AutomationMessage message={item} queued={queued} burst={pullRequestBurst} fallback={<OriginMessage message={item} />} />
 			</FromAgent>
 		);
 	}
@@ -7948,6 +8004,36 @@ function openingTurnSettled(snapshot: ConversationSnapshot, controllerStopped: b
 }
 
 /**
+ * In Developer Mode, queued turns that hold only one PR's review comments or
+ * failing CI, back to back, as one group. The daemon queues each comment that
+ * arrives while the agent works as its own turn, so a review round stacked one
+ * row per comment under the working row; as one group its messages draw as one
+ * line, and the count grows in place as more arrive. The group keeps the first
+ * turn's key and id, so the line stays where it is.
+ */
+function mergeQueuedPullRequestFeedback(groups: TimelineGroup[], queued: ReadonlySet<string>): TimelineGroup[] {
+	const pullRequestOf = (group: TimelineGroup) => {
+		if (!group.turnId || !queued.has(group.turnId) || group.items.length === 0) return undefined;
+		const numbers = new Set(group.items.map((item) => pullRequestFeedbackNumber(item)));
+		const [number] = numbers;
+		return numbers.size === 1 ? number : undefined;
+	};
+	const merged: TimelineGroup[] = [];
+	let runPullRequest: number | undefined;
+	for (const group of groups) {
+		const pullRequest = pullRequestOf(group);
+		const previous = merged.at(-1);
+		if (pullRequest !== undefined && pullRequest === runPullRequest && previous) {
+			merged[merged.length - 1] = { ...previous, items: [...previous.items, ...group.items] };
+			continue;
+		}
+		merged.push(group);
+		runPullRequest = pullRequest;
+	}
+	return merged.length === groups.length ? groups : merged;
+}
+
+/**
  * Group items by the turn that produced them, so a completed turn can be closed
  * off with its outcome.
  *
@@ -8294,7 +8380,8 @@ function isNoticeItem(item: ConversationItem | undefined): boolean {
 	// daemon gave no reason for stays out like any failed call.
 	if (isOrdinaryActivity(item) && isFailedCall(item) && !isFailedSpawn(item)) return true;
 	if (item.activityKind === "user_input") return item.status !== "pending";
-	return item.detail?.event !== undefined && !isSteer(item) && !isCompaction(item) && item.activityKind !== "plan";
+	// A compaction stays too: it is where the agent's earlier history was summarized.
+	return item.detail?.event !== undefined && !isSteer(item) && item.activityKind !== "plan";
 }
 
 const NO_BATCHED_REPORTS: BatchedReports = { under: new Map(), moved: new Set() };

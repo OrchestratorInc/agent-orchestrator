@@ -133,6 +133,7 @@ function createOtherHostRunner(host: Host, previous: HostSnapshot | undefined, p
 				return;
 			}
 			runner.config = result.config;
+			reconnectAfterRepair(result);
 			update({ config: result.config, connection: "connecting", endpoints: host.endpoints });
 			await poll();
 		} catch (cause) {
@@ -142,6 +143,21 @@ function createOtherHostRunner(host: Host, previous: HostSnapshot | undefined, p
 			record("no-answer");
 			schedule(15_000);
 		}
+	};
+	// A late fallback to the kept password left `result.config` with the token
+	// the machine refused: its first poll gets 401 and the runner stops. Connect
+	// again, with the stored password, unless another connection replaced it.
+	// `inUse` is the config the runner holds for this result: the result's own,
+	// or the one it kept because the result named the same connection.
+	const reconnectAfterRepair = (result: { config: ServerConfig; credentialRepair?: Promise<boolean> }, inUse: ServerConfig = result.config) => {
+		void result.credentialRepair?.then(async (repaired) => {
+			const ours = () => !stopped && (runner.config === inUse || runner.config === null);
+			if (!repaired || !ours()) return;
+			if (busy) await busy.catch(() => {});
+			if (!ours()) return;
+			runner.config = null;
+			void runner.refresh();
+		});
 	};
 	const checkUpgrade = async () => {
 		const current = runner.config;
@@ -158,9 +174,20 @@ function createOtherHostRunner(host: Host, previous: HostSnapshot | undefined, p
 			})) return;
 			lastRaceAt = Date.now();
 			const result = await connectToHost(host.id);
-			if (stopped || !connected || runner.config !== current || !result.ok || result.hostId !== host.id) return;
-			if (sameServerConfig(current, result.config)) return;
+			if (stopped || !result.ok || result.hostId !== host.id) return;
+			if (!connected || runner.config !== current) {
+				// A poll refused the token meanwhile and dropped the connection: a
+				// late repair from this race is what brings it back.
+				if (runner.config === null) reconnectAfterRepair(result, current);
+				return;
+			}
+			if (sameServerConfig(current, result.config)) {
+				// Same connection, same refused token: a late repair still applies to it.
+				reconnectAfterRepair(result, current);
+				return;
+			}
 			runner.config = result.config;
+			reconnectAfterRepair(result);
 			connected = false;
 			update({ config: result.config, connection: "connecting", loading: true, endpoints: known });
 			// An old-endpoint poll may still own `busy`; wait for it to finish
