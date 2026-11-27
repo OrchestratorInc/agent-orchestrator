@@ -216,19 +216,27 @@ func workspaceCause(err error) string {
 }
 
 // osErrorCause names an operating-system failure shared by worktree and agent
-// starts: disk_full, permission, path_too_long, or "" for none of them.
+// starts: disk_full, permission, path_too_long, or "" for none of them. Typed
+// errors decide first, so a path in the message cannot override the real
+// errno; message text is only the fallback for errors that lost their type.
 func osErrorCause(err error) string {
+	switch {
+	case errors.Is(err, syscall.ENOSPC):
+		return "disk_full"
+	case errors.Is(err, os.ErrPermission):
+		return "permission"
+	case errors.Is(err, syscall.ENAMETOOLONG):
+		return "path_too_long"
+	}
 	text := strings.ToLower(err.Error())
 	switch {
-	case errors.Is(err, syscall.ENOSPC), strings.Contains(text, "no space left on device"),
-		strings.Contains(text, "not enough space on the disk"), strings.Contains(text, "disk quota exceeded"):
+	case strings.Contains(text, "no space left on device"), strings.Contains(text, "not enough space on the disk"),
+		strings.Contains(text, "disk quota exceeded"):
 		return "disk_full"
-	case errors.Is(err, os.ErrPermission), strings.Contains(text, "permission denied"),
-		strings.Contains(text, "access is denied"), strings.Contains(text, "operation not permitted"),
-		strings.Contains(text, "read-only file system"):
+	case strings.Contains(text, "permission denied"), strings.Contains(text, "access is denied"),
+		strings.Contains(text, "operation not permitted"), strings.Contains(text, "read-only file system"):
 		return "permission"
-	case errors.Is(err, syscall.ENAMETOOLONG), strings.Contains(text, "file name too long"),
-		strings.Contains(text, "filename too long"):
+	case strings.Contains(text, "file name too long"), strings.Contains(text, "filename too long"):
 		return "path_too_long"
 	}
 	return ""

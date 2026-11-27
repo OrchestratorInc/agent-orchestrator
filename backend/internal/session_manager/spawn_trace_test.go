@@ -53,6 +53,7 @@ func TestClassifySpawnFailureNamesTheUnderlyingCause(t *testing.T) {
 		{"git did not run, OS says why", worktree(adapterFailure{cause: "other", err: &os.PathError{Op: "fork/exec", Path: "/g", Err: syscall.EACCES}}), "worktree", "permission"},
 		{"managed folder on a full disk", worktree(&os.PathError{Op: "mkdir", Path: "/w", Err: syscall.ENOSPC}), "worktree", "disk_full"},
 		{"managed folder not writable", worktree(&os.PathError{Op: "mkdir", Path: "/w", Err: syscall.EACCES}), "worktree", "permission"},
+		{"errno wins over path text", worktree(&os.PathError{Op: "mkdir", Path: "/work/no space left on device/p", Err: syscall.EACCES}), "worktree", "permission"},
 		{"git not installed", worktree(&exec.Error{Name: "git", Err: exec.ErrNotFound}), "worktree", "git_missing"},
 		{"unrecognised worktree error", worktree(errors.New("gitworktree: no unused branch")), "worktree", "other"},
 
