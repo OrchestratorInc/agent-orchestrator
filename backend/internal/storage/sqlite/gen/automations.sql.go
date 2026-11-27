@@ -45,7 +45,7 @@ func (q *Queries) AdvanceAutomationSchedule(ctx context.Context, arg AdvanceAuto
 const automationRunDedupeExists = `-- name: AutomationRunDedupeExists :one
 SELECT EXISTS (
     SELECT 1 FROM automation_runs
-    WHERE automation_id = ? AND dedupe_key = ? AND created_at >= ?
+    WHERE automation_id = ? AND dedupe_key = ? AND created_at >= ? AND status != 'failed'
 )
 `
 

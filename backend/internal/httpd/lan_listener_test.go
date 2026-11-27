@@ -158,6 +158,7 @@ func TestLANManagerLetsOnlyHookCallsSkipAuth(t *testing.T) {
 		"/hooks/..%2Fapi%2Fv1%2Fsessions": http.StatusUnauthorized,
 		"/hooks/abc%2F..%2F..%2Fapi%2Fv1": http.StatusUnauthorized,
 		"/api/v1/hooks/abc":               http.StatusUnauthorized,
+		"/%68ooks/abc":                    http.StatusUnauthorized,
 	} {
 		resp, err := http.Post(fmt.Sprintf("http://127.0.0.1:%d%s", port, path), "application/json", strings.NewReader("{}"))
 		if err != nil {

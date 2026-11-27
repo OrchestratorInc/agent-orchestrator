@@ -97,6 +97,10 @@ func TestCallChecksSignatureFiltersDedupesAndCaps(t *testing.T) {
 	if len(spawner.prompts) != 1 || spawner.prompts[0] != run.Prompt {
 		t.Fatalf("spawned prompts = %q, want the called run's prompt", spawner.prompts)
 	}
+	if res, err := call(auto.HookKey, "d1", opened, true); err != nil || res.Status != domain.AutomationCallAccepted {
+		t.Fatalf("redelivery after a failed run = %#v %v, want accepted", res, err)
+	}
+	_ = svc.Tick(ctx, clock())
 
 	if _, err := call("unknown", "d2", opened, true); !isAPIError(err, apierr.KindNotFound) {
 		t.Fatalf("unknown key = %v, want not found", err)
@@ -129,6 +133,7 @@ func TestCreateRejectsMixedTriggerSettings(t *testing.T) {
 		"secret without header": {Trigger: domain.AutomationTriggerCall, HookSecret: "s"},
 		"filter outside data":   {Trigger: domain.AutomationTriggerCall, HookFilters: []string{"env.HOME"}},
 		"constant dedupe key":   {Trigger: domain.AutomationTriggerCall, HookDedupeKey: "same"},
+		"filter with newline":   {Trigger: domain.AutomationTriggerCall, HookFilters: []string{"body.action=opened\nbody.draft"}},
 	} {
 		in.ProjectID, in.DisplayName, in.Prompt, in.Kind = "scheduled", "x", "y", domain.KindWorker
 		if _, err := svc.Create(context.Background(), in); !isAPIError(err, apierr.KindInvalid) {
@@ -181,5 +186,12 @@ func TestCallReadsFormBodiesAndSkipsDedupeWithoutItsValue(t *testing.T) {
 	}
 	if res, _ := call(payload, "d1"); res.Status != domain.AutomationCallDuplicate {
 		t.Fatalf("redelivery = %v, want duplicate", res.Status)
+	}
+	only, err := svc.Create(ctx, CreateInput{ProjectID: "p1", DisplayName: "Only data", Prompt: "{{body.text}}", Kind: domain.KindWorker, Trigger: domain.AutomationTriggerCall})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if res, err := svc.Call(ctx, only.HookKey, CallInput{Body: []byte(`{}`)}); err != nil || res.Status != domain.AutomationCallIgnored {
+		t.Fatalf("empty filled prompt = %#v %v, want ignored", res, err)
 	}
 }

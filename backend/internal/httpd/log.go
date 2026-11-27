@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/go-chi/chi/v5/middleware"
@@ -43,10 +44,14 @@ func requestLoggerWithCapture(log *slog.Logger, sink ports.EventSink, captureHTT
 			r, capturedErr := envelope.WithErrorCapture(r)
 			start := time.Now()
 			defer func() {
+				path := r.URL.Path
+				if strings.HasPrefix(path, "/hooks/") {
+					path = "/hooks/{hookKey}"
+				}
 				attrs := []any{
 					"id", middleware.GetReqID(r.Context()),
 					"method", r.Method,
-					"path", r.URL.Path,
+					"path", path,
 					"status", ww.Status(),
 					"bytes", ww.BytesWritten(),
 					"duration", time.Since(start),

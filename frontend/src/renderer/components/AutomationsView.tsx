@@ -666,7 +666,7 @@ function AutomationFormDialog({
 							hookSignatureHeader: hookHeader.trim(),
 							hookFilters: hookFilters.split("\n").map((line) => line.trim()).filter(Boolean),
 							hookDedupeKey: hookDedupeKey.trim(),
-							...(hookSecret ? { hookSecret } : {}),
+							...(hookSecret || !hookHeader.trim() ? { hookSecret } : {}),
 						}
 					: scheduleChanged ? { rrule: nextRRule } : {}),
 			});

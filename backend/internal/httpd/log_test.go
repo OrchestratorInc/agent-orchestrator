@@ -323,3 +323,14 @@ func TestRequestLoggerCapturesRegisteredFaultCodes(t *testing.T) {
 		}
 	}
 }
+
+func TestRequestLoggerHidesHookKey(t *testing.T) {
+	var buf bytes.Buffer
+	handler := requestLoggerWithCapture(slog.New(slog.NewTextHandler(&buf, nil)), nil, nil)(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusAccepted)
+	}))
+	handler.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodPost, "/hooks/secretKey123", nil))
+	if strings.Contains(buf.String(), "secretKey123") || !strings.Contains(buf.String(), "path=/hooks/{hookKey}") {
+		t.Fatalf("log = %q, want the hook key hidden", buf.String())
+	}
+}

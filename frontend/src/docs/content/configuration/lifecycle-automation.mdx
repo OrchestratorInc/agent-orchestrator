@@ -89,7 +89,7 @@ ao automation create --project my-app --name "Issue triage" \
 | Response | When |
 | --- | --- |
 | 202 with `runId` | The run is queued |
-| 200 | A filter did not match, or the dedupe key repeated |
+| 200 | A filter did not match, the filled prompt was empty, or the dedupe key repeated |
 | 400 | The filled prompt is larger than 64 KiB, or the body could not be read |
 | 403 | The signature does not match |
 | 404 | Unknown address, or the project is archived |

@@ -372,7 +372,7 @@ func (m *LANManager) dispatch() http.Handler {
 			m.tunnel.ServeHTTP(w, r)
 			return
 		}
-		if r.Method == http.MethodPost && lanHookPath.MatchString(r.URL.Path) {
+		if r.Method == http.MethodPost && r.URL.RawPath == "" && lanHookPath.MatchString(r.URL.Path) {
 			m.hooks.ServeHTTP(w, r)
 			return
 		}

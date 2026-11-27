@@ -74,7 +74,7 @@ SELECT COUNT(*) FROM automation_runs WHERE automation_id = ? AND status = 'pendi
 -- name: AutomationRunDedupeExists :one
 SELECT EXISTS (
     SELECT 1 FROM automation_runs
-    WHERE automation_id = ? AND dedupe_key = ? AND created_at >= ?
+    WHERE automation_id = ? AND dedupe_key = ? AND created_at >= ? AND status != 'failed'
 );
 
 -- name: GetAutomationRun :one

@@ -66,6 +66,7 @@ const (
 // AutomationCallStatus is the outcome of one hook call.
 type AutomationCallStatus string
 
+// Hook call outcomes.
 const (
 	AutomationCallAccepted  AutomationCallStatus = "accepted"
 	AutomationCallIgnored   AutomationCallStatus = "ignored"
