@@ -5,6 +5,7 @@ import type { CommentDraft } from "../../lib/cloud-asides";
 import { cn } from "../../lib/utils";
 import { Button } from "../ui/button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "../ui/tooltip";
+import { CHAT_BUBBLE_SHAPE } from "./chatBubble";
 import type { MentionTint } from "./MentionChip";
 
 // Comments on a shared Cloud session's conversation, like comments in a
@@ -71,7 +72,8 @@ export const NO_MENTION_TINT: MentionTint = {};
 /** The dashed box a message with an aside draws as: only its text and chips, no fill. */
 export function asideBoxClass(queued?: boolean): string {
 	return cn(
-		"w-fit max-w-full rounded-[10px] border border-dashed border-foreground/25 bg-transparent px-3 py-2.5 text-sm leading-[1.55]",
+		"w-fit max-w-full border border-dashed border-foreground/25 bg-transparent",
+		CHAT_BUBBLE_SHAPE,
 		queued ? "text-muted-foreground" : "text-foreground",
 	);
 }
@@ -318,7 +320,7 @@ function CommentTargetWith({
 				// message has one.
 				<div
 					className={cn(
-						"absolute -right-9 z-20 flex rounded-[9px] border border-border bg-popover opacity-0 shadow-sm transition-opacity duration-150 ease-out focus-within:opacity-100 group-hover/comment:opacity-100 motion-reduce:transition-none",
+						"absolute -right-9 z-20 flex rounded-lg border border-border bg-popover opacity-0 shadow-sm transition-opacity duration-150 ease-out focus-within:opacity-100 group-hover/comment:opacity-100 motion-reduce:transition-none",
 						comments ? "top-8" : "top-0",
 					)}
 					data-comment-toolbar=""

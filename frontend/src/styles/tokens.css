@@ -130,6 +130,16 @@
 	--color-status-terminated-foreground: var(--chart-3);
 	--color-status-unknown: var(--chart-4);
 
+	/*
+	 * Comments on a shared Cloud session: a commented passage's tint, the
+	 * stronger tint while its thread is open, and a quote's edge in the comment
+	 * pane. Checked against --background with --foreground text: tint 1.45:1 and
+	 * text 11.2:1, strong 2.29:1 and text 7.1:1, edge 4.9:1.
+	 */
+	--color-comment-highlight: rgb(250 204 21 / 0.16);
+	--color-comment-highlight-strong: rgb(250 204 21 / 0.32);
+	--color-comment-quote-edge: rgb(250 204 21 / 0.6);
+
 	/* Compatibility roles used by non-session surfaces. */
 	--color-working: var(--color-status-working);
 	--color-warning: var(--color-status-needs-you);
@@ -786,6 +796,15 @@
 	--color-status-terminated: var(--color-text-passive);
 	--color-status-terminated-foreground: var(--color-text-passive);
 	--color-status-unknown: var(--chart-4);
+
+	/*
+	 * The comment tints deepen on the light canvas, where a pale yellow mix
+	 * disappears: tint 1.24:1 and text 14.5:1, strong 1.45:1 and text 12.4:1,
+	 * edge 4.72:1 (WCAG non-text contrast).
+	 */
+	--color-comment-highlight: rgb(234 179 8 / 0.35);
+	--color-comment-highlight-strong: rgb(234 179 8 / 0.6);
+	--color-comment-quote-edge: #a16207;
 
 	--color-working: var(--color-status-working);
 	--color-warning: var(--color-status-needs-you);

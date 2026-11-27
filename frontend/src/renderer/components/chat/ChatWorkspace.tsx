@@ -5,6 +5,7 @@ import { captureExcerptSnapshot, captureExcerptTurn } from "../../lib/chat-excer
 import { FileAnnotationContext } from "./FileAnnotationPreview";
 import { useChatFind } from "../../hooks/useChatFind";
 import { occurrenceKey, type FindOccurrence } from "../../lib/chat-find";
+import { clearChatFlash, flashChatMessage } from "../../lib/chat-flash";
 import "./chat-find.css";
 import { ForkableTurnContext, ForkTextCopyNotice, LatestForkTurnContext } from "../SessionForkControls";
 import type { ChatFileReference, OpenFileAnnotation } from "../../../shared/chat-file-reference";
@@ -3395,8 +3396,6 @@ function ControllerBanner({
  * an unbounded history in every snapshot response.
  */
 const CHAT_VIRTUALIZE_THRESHOLD = 20;
-/** How long an opened mention's message glows. */
-const MENTION_FOCUS_GLOW_MS = 2000;
 /** How long the welcome heading takes to fade out on the first send. */
 const WELCOME_FADE_MS = 150;
 /** Opening a chat snaps to the end for this long while rows measure and history arrives. */
@@ -5614,12 +5613,11 @@ export function Timeline({
 	}, [groups.length, captureViewportResize, virtualizer, loadOlderToFill]);
 
 	// Opening a mention lands on its message, before the first paint when the
-	// message is already here (the cache its arrival filled), and gives it a
-	// brief glow. The view stops following the end there; it follows again once
+	// message is already here (the cache its arrival filled), and tints it for
+	// a moment (lib/chat-flash.ts). The view stops following the end there; it follows again once
 	// the reader scrolls back down. Each request key lands once; one the history
 	// can't reach (gone, or past the pages it reads) opens the chat as usual.
 	const focusRequest = useRef<{ key: string | number; landed: boolean; tries: number; olderAt?: number }>(undefined);
-	const focusGlow = useRef<{ element: HTMLElement; timer: number } | undefined>(undefined);
 	const [focusRetry, setFocusRetry] = useState(0);
 	useLayoutEffect(() => {
 		if (!focusMessage) return undefined;
@@ -5661,25 +5659,11 @@ export function Timeline({
 		node.scrollTop = Math.max(0, node.scrollTop + sourceRect.top - viewport.top - inset);
 		markWritten(node.scrollTop);
 		lastScrollTop.current = node.scrollTop;
-		if (focusGlow.current) {
-			window.clearTimeout(focusGlow.current.timer);
-			delete focusGlow.current.element.dataset.mentionFocus;
-		}
-		source.dataset.mentionFocus = "";
-		const glowing = source;
-		focusGlow.current = {
-			element: glowing,
-			timer: window.setTimeout(() => {
-				delete glowing.dataset.mentionFocus;
-				focusGlow.current = undefined;
-			}, MENTION_FOCUS_GLOW_MS),
-		};
+		flashChatMessage(source);
 		done();
 		return undefined;
 	}, [focusMessage, focusRetry, groups, hasOlder, loadingOlder, onFocusMessageDone, onLoadOlder, releaseFollow, markWritten, timelineHistoryPending, virtualRows, virtualized, virtualizer]);
-	useEffect(() => () => {
-		if (focusGlow.current) window.clearTimeout(focusGlow.current.timer);
-	}, []);
+	useEffect(() => clearChatFlash, []);
 
 	// The pause-then-resume for a reader who only nudged up a little: armed by their
 	// scroll, re-armed by each further scroll, dropped once they go past the band or

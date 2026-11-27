@@ -66,7 +66,7 @@ describe("mentions in a Cloud chat's timeline", () => {
 });
 
 describe("opening a chat at a mention", () => {
-	it("lands on the message in its first layout and gives it a brief glow", async () => {
+	it("lands on the message in its first layout and tints its bubble for a moment", async () => {
 		const done = vi.fn();
 		render(
 			<ChatWorkspace
@@ -79,8 +79,11 @@ describe("opening a chat at a mention", () => {
 		// Landed before anything waited on a read: the message was already there.
 		expect(done).toHaveBeenCalledWith("1:loaded");
 		const row = document.querySelector<HTMLElement>('[data-chat-focus-id="cloud-event-4"]');
-		expect(row).toHaveAttribute("data-mention-focus");
-		await waitFor(() => expect(row).not.toHaveAttribute("data-mention-focus"), { timeout: 3000 });
+		// The shared flash tints the bubble, not the row around it.
+		const bubble = row?.querySelector<HTMLElement>(".cursor-chat-human-message");
+		expect(bubble).toHaveAttribute("data-chat-flash");
+		expect(row).not.toHaveAttribute("data-chat-flash");
+		await waitFor(() => expect(bubble).not.toHaveAttribute("data-chat-flash"), { timeout: 3000 });
 	});
 
 	it("lands on the notification's own text when nothing else is loaded yet", () => {
@@ -101,7 +104,7 @@ describe("opening a chat at a mention", () => {
 		const row = document.querySelector<HTMLElement>('[data-chat-focus-id="cloud-event-4"]');
 		expect(row?.textContent).toContain("Can you check the backoff? @Priya Shah");
 		expect(row?.textContent).toContain("Chen Li");
-		expect(row).toHaveAttribute("data-mention-focus");
+		expect(row?.querySelector("[data-chat-flash]")).not.toBeNull();
 		expect(done).toHaveBeenCalledWith("1:fallback");
 	});
 
@@ -116,7 +119,7 @@ describe("opening a chat at a mention", () => {
 			/>,
 		);
 		expect(done).toHaveBeenCalledWith("2:loaded");
-		expect(document.querySelector("[data-mention-focus]")).toBeNull();
+		expect(document.querySelector("[data-chat-flash]")).toBeNull();
 	});
 });
 

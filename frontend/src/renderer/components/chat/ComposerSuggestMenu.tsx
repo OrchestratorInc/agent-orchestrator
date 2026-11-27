@@ -86,7 +86,7 @@ export function ComposerSuggestMenu({
 					<span aria-hidden="true" className="flex shrink-0 items-center">
 						{item.mention.kind === "person"
 							? <PersonAvatar name={item.mention.name} size="xs" />
-							: <TeamTile name={item.mention.name} size="sm" className="size-4 rounded-[4px] text-[7px]" />}
+							: <TeamTile name={item.mention.name} size="xs" />}
 					</span>
 				) : kind === "file" ? <WorkspaceEntryIcon kind="file" name={item.label} /> : null}
 				{/* Name first, then its description or folder on the same line,

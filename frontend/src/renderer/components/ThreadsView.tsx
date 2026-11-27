@@ -157,7 +157,7 @@ export function ThreadRow({ row, selected, onOpen }: { row: CloudCpCommentThread
 				<time className="text-caption tabular-nums text-muted-foreground" dateTime={row.lastActivityAt}>{formatTimeCompact(row.lastActivityAt)}</time>
 				{row.unread ? <span aria-label={t("threads.unread")} className="size-2 rounded-full bg-status-working" data-thread-unread="" role="img" /> : null}
 			</span>
-			<span className="col-span-2 truncate border-l-2 border-[var(--comment-quote-edge)] pl-2 text-caption text-foreground/80" data-thread-anchor="">{anchor}</span>
+			<span className="col-span-2 truncate border-l-2 border-(--color-comment-quote-edge) pl-2 text-caption text-foreground/80" data-thread-anchor="">{anchor}</span>
 			{row.lastComment ? (
 				<span className="col-span-2 truncate text-control text-muted-foreground" data-thread-last="">
 					<span className="font-medium text-foreground/90">{row.lastComment.authorName}</span>

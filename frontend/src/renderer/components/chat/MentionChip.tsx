@@ -32,7 +32,7 @@ export function MentionChip({ kind, name, tinted, className, ...props }: { kind:
 			data-mention-self={tinted ? "" : undefined}
 			{...props}
 		>
-			{kind === "person" ? <PersonAvatar name={name} size="xs" /> : <TeamTile name={name} size="sm" className="size-4 rounded-[4px] text-[7px]" />}
+			{kind === "person" ? <PersonAvatar name={name} size="xs" /> : <TeamTile name={name} size="xs" />}
 			{name}
 		</span>
 	);

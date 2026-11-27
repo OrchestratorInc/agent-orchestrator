@@ -143,6 +143,7 @@ import { CopyButton } from "./CopyButton";
 import { CollapsibleHumanBody } from "./CollapsibleHumanBody";
 import { MentionedText, MentionTintContext } from "./MentionChip";
 import { asideBoxClass, NO_MENTION_TINT, useAsideMarker } from "./AsideMarker";
+import { CHAT_BUBBLE_SHAPE } from "./chatBubble";
 import type { TimelineMention } from "../../lib/cloud-mentions";
 import { LatticeLoader } from "./LatticeLoader";
 import { ScriptRunPanel } from "../ScriptRunPanel";
@@ -1122,7 +1123,8 @@ export function formatMessageTimestamp(iso: string, now = new Date()): string {
 /** The user's bubble. A queued one reads as not-yet-sent rather than as sent-and-ignored. */
 export function humanBubbleClass(queued?: boolean): string {
 	return cn(
-		"cursor-chat-human-message w-fit max-w-[min(78%,560px)] rounded-[10px] px-3 py-2.5 text-sm leading-[1.55]",
+		"cursor-chat-human-message w-fit max-w-[min(78%,560px)]",
+		CHAT_BUBBLE_SHAPE,
 		queued ? "border border-dashed border-border-strong bg-transparent text-muted-foreground" : "bg-raised text-foreground",
 	);
 }
@@ -1449,13 +1451,13 @@ export function FromCommentThreadCard({ thread, className }: { thread: NonNullab
 				<span className="tabular-nums">· {t("comment.count", { count: total })}</span>
 			</div>
 			{thread.framed ? (
-				<p className={cn("whitespace-pre-wrap break-words text-sm leading-[1.5]", thread.requestText ? "font-medium" : "text-muted-foreground")} data-from-comment-request="">
+				<p className={cn("whitespace-pre-wrap break-words text-sm leading-body", thread.requestText ? "font-medium" : "text-muted-foreground")} data-from-comment-request="">
 					{thread.requestText ?? t("comment.card.sentThread")}
 				</p>
 			) : null}
 			{thread.quote || thread.anchorExcerpt ? (
 				// Under a request, the quote is context: a few lines of it (the message is in the conversation).
-				<div className={cn("border-l-2 border-[var(--comment-quote-edge)] pl-2 text-control text-foreground/85", thread.framed && "line-clamp-3")} data-from-comment-quote="">
+				<div className={cn("border-l-2 border-(--color-comment-quote-edge) pl-2 text-control text-foreground/85", thread.framed && "line-clamp-3")} data-from-comment-quote="">
 					{thread.quote ? `“${thread.quote}”` : thread.anchorExcerpt}
 				</div>
 			) : null}
@@ -1469,7 +1471,7 @@ export function FromCommentThreadCard({ thread, className }: { thread: NonNullab
 					{index === omittedAt ? (
 						<p className="text-caption text-muted-foreground" data-from-comment-omitted="">{t("comment.card.omitted", { count: thread.omittedComments ?? 0 })}</p>
 					) : null}
-					<p className={cn("whitespace-pre-wrap break-words leading-[1.5]", thread.framed ? "text-control text-foreground/85" : "text-sm")} data-from-comment-entry="">
+					<p className={cn("whitespace-pre-wrap break-words leading-body", thread.framed ? "text-control text-foreground/85" : "text-sm")} data-from-comment-entry="">
 						<span className="mr-1.5 font-medium text-foreground">{comment.authorName}</span>
 						{comment.text}
 					</p>
@@ -3785,7 +3787,7 @@ export function SteerMessage({
 							</div>
 						</div>
 					) : body || (!annotationSummary && attachments.length === 0 && remainingContent.length === 0) ? (
-						<div className="break-words text-sm leading-[1.55] w-fit max-w-[min(78%,560px)] rounded-[10px] bg-raised px-3 py-2.5 text-foreground" data-chat-focus-bubble="">
+						<div className={cn("w-fit max-w-[min(78%,560px)] break-words bg-raised text-foreground", CHAT_BUBBLE_SHAPE)} data-chat-focus-bubble="">
 							{body ? (
 								<div className={USER_BODY_CLASS} onCopy={(event) => copyWholeMessageAsTyped(event, body)}>
 									<UserMarkdown text={body} renderText={renderText} />

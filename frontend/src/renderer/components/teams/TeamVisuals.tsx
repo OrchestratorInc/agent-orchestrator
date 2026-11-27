@@ -37,9 +37,11 @@ export function PersonAvatar({ name, email, invited, size = "md", className }: {
 	);
 }
 
-export function TeamTile({ name, size = "md", className }: { name: string; size?: "sm" | "md" | "lg" | "xl"; className?: string }) {
+/** A team: a rounded square with its initials. `xs` (16px) sits inline with text: a mention chip, an @ menu row. */
+export function TeamTile({ name, size = "md", className }: { name: string; size?: "xs" | "sm" | "md" | "lg" | "xl"; className?: string }) {
 	const box =
-		size === "sm" ? "size-5 rounded-[5px] text-[8.5px]"
+		size === "xs" ? "size-4 rounded-xs text-[length:var(--font-size-nano)]"
+		: size === "sm" ? "size-5 rounded-[5px] text-[8.5px]"
 		: size === "lg" ? "size-7 rounded-[7px] text-2xs"
 		: size === "xl" ? "size-10 rounded-[9px] text-[13px]"
 		: "size-6 rounded-sm text-[9.5px]";

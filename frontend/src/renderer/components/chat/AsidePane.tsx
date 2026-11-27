@@ -24,6 +24,7 @@ import {
 	threadTimeline,
 	type CommentDraft,
 } from "../../lib/cloud-asides";
+import { flashChatMessage } from "../../lib/chat-flash";
 import { CHAT_EVENTS_CACHE_MS } from "../../lib/cloud-chat-history";
 import { cloudMeQueryKey } from "../../lib/cloud-offering";
 import type {
@@ -49,6 +50,7 @@ import { Button } from "../ui/button";
 import { Checkbox } from "../ui/checkbox";
 import { CloseButton } from "../ui/close-button";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "../ui/dropdown-menu";
+import { Pressable } from "../ui/pressable";
 import { messageExcerpt, NO_MENTION_TINT } from "./AsideMarker";
 import { ComposerEditor, type ComposerEditorHandle, type ComposerEditorSnapshot, type ComposerTrigger } from "./ComposerEditor";
 import { ComposerSuggestMenu } from "./ComposerSuggestMenu";
@@ -319,14 +321,14 @@ function AsideHistoryRow({ entry }: { entry: CloudCpAsideHistoryEntry }) {
 function CommentAnchorBlock({ anchor }: { anchor: CommentAnchorView }) {
 	const { t } = useTranslation();
 	return (
-		<div className="flex flex-col gap-1 rounded-r-lg border-l-2 border-[var(--comment-quote-edge)] bg-raised/60 px-2.5 py-2" data-comment-anchor-block="">
+		<div className="flex flex-col gap-1 rounded-r-lg border-l-2 border-(--color-comment-quote-edge) bg-raised/60 px-2.5 py-2" data-comment-anchor-block="">
 			{anchor.gone ? <span className="text-caption text-muted-foreground">{t("comment.gone")}</span> : null}
 			{anchor.quote ? (
-				<p className="text-control leading-[1.5] text-foreground/90">“{anchor.quote}”</p>
+				<p className="text-control leading-body text-foreground/90">“{anchor.quote}”</p>
 			) : (
 				<>
 					{anchor.label ? <span className="text-caption text-muted-foreground">{anchor.label}</span> : null}
-					{anchor.excerpt ? <p className="line-clamp-2 text-control leading-[1.5] text-foreground/90">{anchor.excerpt}</p> : null}
+					{anchor.excerpt ? <p className="line-clamp-2 text-control leading-body text-foreground/90">{anchor.excerpt}</p> : null}
 				</>
 			)}
 			{anchor.onJump && !anchor.gone ? (
@@ -395,7 +397,7 @@ function AsideEntryRow({ entry, onEdit, onDelete }: { entry: AsideEntry; onEdit?
 						<textarea
 							aria-label={t("comment.edit")}
 							autoFocus
-							className="min-h-14 w-full resize-none rounded-md border border-border bg-raised px-2 py-1.5 text-control leading-[1.5] text-foreground outline-none focus-visible:ring-2 focus-visible:ring-ring/60"
+							className="min-h-14 w-full resize-none rounded-md border border-border bg-raised px-2 py-1.5 text-control leading-body text-foreground outline-none focus-visible:ring-2 focus-visible:ring-ring/60"
 							disabled={busy}
 							onChange={(event) => setDraft(event.target.value)}
 							onKeyDown={(event) => {
@@ -415,7 +417,7 @@ function AsideEntryRow({ entry, onEdit, onDelete }: { entry: AsideEntry; onEdit?
 						</div>
 					</div>
 				) : (
-					<p className="mt-0.5 whitespace-pre-wrap break-words text-control leading-[1.55] text-foreground">
+					<p className="mt-0.5 whitespace-pre-wrap break-words text-control leading-body-md text-foreground">
 						<MentionedText mentions={entry.mentions} text={entry.text} />
 					</p>
 				)}
@@ -550,7 +552,7 @@ function AsideReplyBox({
 
 	return (
 		<div className="shrink-0 px-3 pb-3">
-			<div className="relative rounded-[12px] bg-raised px-1.5 pt-1 pb-1.5" data-aside-reply-box="">
+			<div className="relative rounded-lg bg-raised px-1.5 pt-1 pb-1.5" data-aside-reply-box="">
 				{menuOpen ? (
 					<ComposerSuggestMenu highlighted={active} id={menuId} items={suggestions} kind="file" onPick={pick} />
 				) : null}
@@ -660,15 +662,15 @@ export function CommentThreadListView({
 			</header>
 			<div className="min-h-0 flex-1 overflow-y-auto p-2">
 				{threads.map((thread) => (
-					<button
-						className="flex w-full flex-col gap-1 rounded-lg px-2.5 py-2 text-left hover:bg-raised"
+					<Pressable
+						// The same row treatment as the threads view's rows (ThreadRow).
+						className="flex w-full flex-col gap-1 rounded-lg px-2.5 py-2 transition-none hover:bg-interactive-hover focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring/60"
 						data-comment-card={thread.asideId}
 						key={thread.asideId}
 						onClick={() => onOpen(thread.asideId)}
-						type="button"
 					>
 						{thread.quote ? (
-							<span className="line-clamp-2 border-l-2 border-[var(--comment-quote-edge)] pl-2 text-control text-foreground/90">“{thread.quote}”</span>
+							<span className="line-clamp-2 border-l-2 border-(--color-comment-quote-edge) pl-2 text-control text-foreground/90">“{thread.quote}”</span>
 						) : (
 							<span className="text-control text-foreground/90">{t("comment.wholeMessage")}</span>
 						)}
@@ -677,7 +679,7 @@ export function CommentThreadListView({
 							<span className={cn("tabular-nums", thread.unread && "text-status-working")}>{t("comment.count", { count: thread.replyCount })}</span>
 							{thread.lastAt ? <span className="tabular-nums">· {formatTimeCompact(thread.lastAt)}</span> : null}
 						</span>
-					</button>
+					</Pressable>
 				))}
 			</div>
 		</aside>
@@ -707,13 +709,12 @@ export interface AsideFallback {
 
 const EMPTY_EVENTS: CloudCpClientEvent[] = [];
 
-/** Scrolls the conversation to a message's anchor and flashes it. */
+/** Scrolls the conversation to a message's anchor and tints it for a moment (lib/chat-flash.ts). */
 export function jumpToCommentAnchor(sequence: number): void {
 	const node = document.querySelector<HTMLElement>(`[data-comment-anchor="${sequence}"]`);
 	if (!node) return;
 	node.scrollIntoView({ block: "center", behavior: "smooth" });
-	node.dataset.commentFlash = "";
-	window.setTimeout(() => { delete node.dataset.commentFlash; }, 1200);
+	flashChatMessage(node);
 }
 
 /** Translates one of the anchor labels. */
