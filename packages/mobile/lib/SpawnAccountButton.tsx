@@ -24,10 +24,11 @@ const GLASS_CIRCLE_SIZE = touchTarget;
  */
 export function SpawnAccountButton({ account, accounts, onPress }: { account?: AgentAccount; accounts: readonly AgentAccount[]; onPress(): void }) {
 	const label = accountUsageAccessibilityLabel(account ? agentAccountLabel(account, accounts) : undefined, account);
-	// Offered whenever there is an account to pick, even while the one picked
-	// (a restored draft's, since removed) or a default is missing: the sheet is
-	// the only way to replace it.
-	const shown = Boolean(account) || accounts.some((candidate) => candidate.signedIn);
+	// Offered whenever a signed-in account can be picked, even while the one
+	// picked (a restored draft's, since removed) or a default is missing: the
+	// sheet is the only way to replace it. Not for a signed-out default alone,
+	// whose sheet would hold one row that cannot be chosen.
+	const shown = accounts.some((candidate) => candidate.signedIn);
 	const press = useMemo(() => () => { haptics.tap(); onPress(); }, [onPress]);
 	const pill = useMemo(() => (Platform.OS === "android" && shown ? (
 		<HeaderPillButton label={label} onPress={press} testID="spawn-account">

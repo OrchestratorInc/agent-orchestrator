@@ -102,7 +102,8 @@ export function agentAccountUsageSummary(account: Pick<AgentAccount, "limits">, 
 /** What a screen reader says for the avatar's button. */
 export function accountUsageAccessibilityLabel(name: string | undefined, account: Pick<AgentAccount, "limits" | "signedIn"> | undefined): string {
 	if (!account || !name) return "Account, choose an account";
-	const percent = account.signedIn ? agentAccountPeakUsage(account) : undefined;
+	if (!account.signedIn) return `Account, ${name}, signed out`;
+	const percent = agentAccountPeakUsage(account);
 	return percent === undefined ? `Account, ${name}` : `Account, ${name}, ${Math.round(percent)}% of usage limit used`;
 }
 
@@ -147,20 +148,26 @@ function accountReadRetryable(error: unknown): boolean {
 	return !(error instanceof ApiError) || error.status >= 500 || error.status === 408 || error.status === 429;
 }
 
-/** Reloads when `reloadKey` changes. An older machine that refuses the phone offers no accounts. */
+/**
+ * Reloads when `reloadKey` changes. An older machine that refuses the phone
+ * offers no accounts. What it holds belongs to one scope (the machine, the
+ * agent's provider, the session): a read started for another scope, such as a
+ * reload still in flight when the person switched machine or agent, is
+ * dropped, and a scope change hides the last scope's accounts in the same
+ * render rather than an effect later.
+ */
 export function useAgentAccounts(cfg: ServerConfig | null | undefined, harness: string | undefined, sessionId?: string, reloadKey?: unknown) {
 	const provider = agentAccountProvider(harness);
-	const [accounts, setAccounts] = useState<AgentAccount[]>([]);
-	const [current, setCurrent] = useState<string>();
+	const cfgKey = cfg ? JSON.stringify(cfg) : "";
+	const scope = JSON.stringify([cfgKey, provider ?? "", sessionId ?? ""]);
+	const [loaded, setLoaded] = useState<{ scope: string; accounts: AgentAccount[]; current?: string }>();
 	const [attempt, setAttempt] = useState(0);
 	const failures = useRef(0);
 	const cfgRef = useRef(cfg);
 	cfgRef.current = cfg;
-	const cfgKey = cfg ? JSON.stringify(cfg) : "";
-	useEffect(() => {
-		setAccounts((list) => (list.length ? [] : list));
-		setCurrent(undefined);
-	}, [cfgKey, provider, sessionId]);
+	// Read by a result when it lands, so it knows whether its scope is still the one shown.
+	const scopeRef = useRef(scope);
+	scopeRef.current = scope;
 	useEffect(() => {
 		const cfg = cfgRef.current;
 		if (!cfg || !provider) return;
@@ -170,8 +177,7 @@ export function useAgentAccounts(cfg: ServerConfig | null | undefined, harness: 
 			.then(([list, id]) => {
 				if (cancelled) return;
 				failures.current = 0;
-				setAccounts(list);
-				setCurrent(id);
+				setLoaded({ scope, accounts: list, current: id });
 			})
 			.catch((error) => {
 				if (cancelled || !accountReadRetryable(error)) return;
@@ -179,14 +185,19 @@ export function useAgentAccounts(cfg: ServerConfig | null | undefined, harness: 
 				retry = setTimeout(() => setAttempt((n) => n + 1), delay);
 			});
 		return () => { cancelled = true; clearTimeout(retry); };
-	}, [attempt, cfgKey, provider, reloadKey, sessionId]);
+	}, [attempt, provider, reloadKey, scope, sessionId]);
+	/** Undefined when there is nothing to read, or the scope changed while it read. */
 	const reload = useCallback(async () => {
 		const cfg = cfgRef.current;
+		const startedFor = scopeRef.current;
 		if (!cfg || !provider) return undefined;
 		const [list, id] = await Promise.all([getAgentAccounts(cfg, provider), sessionId ? getSessionAgentAccount(cfg, sessionId, provider) : undefined]);
-		setAccounts(list);
-		setCurrent(id);
+		if (scopeRef.current !== startedFor) return undefined;
+		setLoaded({ scope: startedFor, accounts: list, current: id });
 		return { accounts: list, current: id };
 	}, [provider, sessionId]);
-	return { provider, accounts, current, reload };
+	const mine = loaded?.scope === scope ? loaded : undefined;
+	return { provider, accounts: mine?.accounts ?? NO_ACCOUNTS, current: mine?.current, reload };
 }
+
+const NO_ACCOUNTS: AgentAccount[] = [];

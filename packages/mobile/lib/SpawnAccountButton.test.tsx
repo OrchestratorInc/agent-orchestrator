@@ -70,6 +70,9 @@ describe("New task account button", () => {
 	it("is not offered without a signed-in account", () => {
 		render(undefined, [old]);
 		expect(header.right).toBeNull();
+		// A signed-out default on its own: its sheet would hold one row nobody can choose.
+		render(old, [old]);
+		expect(header.right).toBeNull();
 		render(undefined, []);
 		expect(header.right).toBeNull();
 	});

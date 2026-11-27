@@ -44,6 +44,8 @@ describe("agent account usage", () => {
 	it("names the account and its use for screen readers, or asks for one", () => {
 		expect(accountUsageAccessibilityLabel("a@x.dev", { signedIn: true, limits })).toBe("Account, a@x.dev, 42% of usage limit used");
 		expect(accountUsageAccessibilityLabel("a@x.dev", { signedIn: true })).toBe("Account, a@x.dev");
+		// Signed out says so, not only through a dimmed letter.
+		expect(accountUsageAccessibilityLabel("a@x.dev", { signedIn: false, limits })).toBe("Account, a@x.dev, signed out");
 		expect(accountUsageAccessibilityLabel(undefined, undefined)).toBe("Account, choose an account");
 	});
 
@@ -173,6 +175,49 @@ describe("useAgentAccounts", () => {
 		expect(fresh!.current).toBe("c2");
 		expect(probe.get().current).toBe("c2");
 		probe.unmount();
+	});
+
+	it("drops a reload that lands after the agent changed, and hides the last agent's accounts at once", async () => {
+		// The Claude list answers at once; a reload's list waits on `releaseLate`.
+		let releaseLate!: () => void;
+		let holdNext = false;
+		vi.mocked(fetch).mockImplementation(async (url) => {
+			if (String(url).includes("/sessions/")) return json({});
+			const body = { accounts: [
+				{ id: "c1", provider: "claude", email: "a@x.dev", signedIn: true, default: true },
+				{ id: "x1", provider: "codex", email: "b@x.dev", signedIn: true, default: true },
+			] };
+			if (!holdNext) return json(body);
+			holdNext = false;
+			await new Promise<void>((resolve) => { releaseLate = resolve; });
+			return json({ accounts: [{ id: "c-late", provider: "claude", email: "late@x.dev", signedIn: true, default: true }] });
+		});
+		let state!: ReturnType<typeof useAgentAccounts>;
+		const seen: string[][] = [];
+		function Probe({ harness }: { harness: string }) {
+			state = useAgentAccounts(cfg, harness);
+			seen.push(state.accounts.map((account) => account.id));
+			return null;
+		}
+		let renderer!: ReactTestRenderer;
+		act(() => { renderer = create(createElement(Probe, { harness: "claude-code" })); });
+		await act(async () => { await vi.advanceTimersByTimeAsync(0); });
+		expect(state.accounts.map((account) => account.id)).toEqual(["c1"]);
+		// The avatar's tap starts a reload on Claude, which hangs.
+		holdNext = true;
+		let late: Promise<unknown> | undefined;
+		act(() => { late = state.reload(); });
+		// Switching to Codex shows no Claude account, not even for one render.
+		seen.length = 0;
+		act(() => renderer.update(createElement(Probe, { harness: "codex" })));
+		expect(seen[0]).toEqual([]);
+		await act(async () => { await vi.advanceTimersByTimeAsync(0); });
+		expect(state.accounts.map((account) => account.id)).toEqual(["x1"]);
+		// Claude's late answer is dropped: Codex's list stays, and the caller learns nothing.
+		await act(async () => { releaseLate(); await vi.advanceTimersByTimeAsync(0); });
+		await expect(late).resolves.toBeUndefined();
+		expect(state.accounts.map((account) => account.id)).toEqual(["x1"]);
+		act(() => renderer.unmount());
 	});
 
 	it("does not retry a machine that refuses the phone", async () => {
