@@ -3237,6 +3237,8 @@
 	"settings.harness.cloud.updatesAvailableBoth": "Updates für {{host}} und Cloud verfügbar",
 	"settings.harness.cloud.versionAvailable": "{{version}} in der Cloud verfügbar",
 	"settings.harness.cloud.modelsUnavailable": "Die Cloud hat keine Modellliste für {{agent}}. Wähle das Modell, wenn du eine Cloud-Aufgabe startest.",
+	"settings.harness.cloud.modelsReleaseList": "Standardliste der Cloud: Die Modelle deines Kontos erscheinen nach seiner ersten Cloud-Aufgabe.",
+	"settings.harness.cloud.modelsDefaultAccount": "Modelle für dein Standardkonto.",
 	"settings.harness.cloud.targetBoth": "{{host}} und Cloud",
 	"settings.harness.cloud.targetVersions": "{{host}}: {{local}} → {{localLatest}}. Cloud: {{cloud}} → {{cloudLatest}}.",
 	"settings.harness.updateFailed": "Das Update konnte nicht gestartet werden.",

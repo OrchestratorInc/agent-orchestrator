@@ -4,6 +4,7 @@ import { useTranslation } from "react-i18next";
 import { cloudCatalogAsAgentCatalog, useCloudModelCatalog } from "../../../hooks/useCloudModelCatalog";
 import { agentModelDisplayLabel } from "../../../lib/agent-model-choices";
 import { agentLabel, type AgentId } from "../../../lib/agent-options";
+import { CLOUD_CATALOG_HARNESSES } from "../../../lib/cloud-agents";
 import { cn } from "../../../lib/utils";
 import { Button } from "../../ui/button";
 import { HARNESS_CARD_CLASS, HARNESS_CARD_ROW_CLASS } from "./harness-ui";
@@ -12,14 +13,18 @@ const MODELS_PAGE_SIZE = 10;
 
 /** The models Cloud runs for a harness, laid out like the local Models tab.
  * Cloud pickers list them all, so there is nothing to switch off here. */
-export function CloudHarnessModelsPanel({ agentId, orgId, connected, onOpenAccount }: {
+export function CloudHarnessModelsPanel({ agentId, orgId, connected, multiAccount = false, onOpenAccount }: {
 	agentId: AgentId;
 	orgId: string;
 	connected: boolean;
+	/** The harness holds several Cloud accounts: the list is its default account's. */
+	multiAccount?: boolean;
 	onOpenAccount: () => void;
 }) {
 	const { t } = useTranslation();
-	const { catalog, gap, loading } = useCloudModelCatalog({ orgId, agent: agentId, enabled: connected });
+	// Cloud keeps no list for some harnesses (OpenCode): nothing to ask for.
+	const hasCatalog = CLOUD_CATALOG_HARNESSES.has(agentId);
+	const { catalog, gap, loading } = useCloudModelCatalog({ orgId, agent: agentId, enabled: connected && hasCatalog });
 	const [page, setPage] = useState(0);
 	const [modelSearch, setModelSearch] = useState("");
 	useEffect(() => { setPage(0); setModelSearch(""); }, [agentId]);
@@ -32,6 +37,11 @@ export function CloudHarnessModelsPanel({ agentId, orgId, connected, onOpenAccou
 			<Button type="button" size="sm" variant="secondary" onClick={onOpenAccount}>{t("settings.harness.tabAccount")}</Button>
 		</div>;
 	}
+	// No Cloud list for this harness, said plainly: New Task offers its models
+	// from the connected provider instead.
+	if (!hasCatalog || gap === "unavailable") {
+		return <p className="px-3 py-8 text-center text-sm text-settings-muted">{t("settings.harness.cloud.modelsUnavailable", { agent })}</p>;
+	}
 	const normalizedModelSearch = modelSearch.trim().toLocaleLowerCase();
 	const models = normalizedModelSearch
 		? allModels.filter((model) => `${model.label} ${model.id}`.toLocaleLowerCase().includes(normalizedModelSearch))
@@ -41,18 +51,22 @@ export function CloudHarnessModelsPanel({ agentId, orgId, connected, onOpenAccou
 	const pageStart = currentPage * MODELS_PAGE_SIZE;
 	const visibleModels = models.slice(pageStart, pageStart + MODELS_PAGE_SIZE);
 	return <div className="flex min-h-0 flex-1 flex-col gap-3">
-		<h3 className="shrink-0 text-xs font-medium leading-4 text-settings-muted">{t("settings.harness.models.title")}</h3>
+		<div className="shrink-0 space-y-0.5">
+			<h3 className="text-xs font-medium leading-4 text-settings-muted">{t("settings.harness.models.title")}</h3>
+			{/* Whose list this is: Cloud's generic one until it has seen the account's, and the default account's among several. */}
+			{catalog?.source === "release" ? <p className="text-xs leading-4 text-settings-muted">{t("settings.harness.cloud.modelsReleaseList")}</p> : null}
+			{multiAccount && catalog ? <p className="text-xs leading-4 text-settings-muted">{t("settings.harness.cloud.modelsDefaultAccount")}</p> : null}
+		</div>
 		{allModels.length > MODELS_PAGE_SIZE ? <label className="flex h-8 shrink-0 items-center gap-2 rounded-md border border-(--color-border-settings-input) bg-(--color-bg-settings-input) px-2.5">
 			<Search aria-hidden="true" className="size-3.5 shrink-0 text-settings-muted" />
 			<input type="search" aria-label={t("settings.models.searchAria", { label: t("settings.harness.models.title").toLocaleLowerCase() })}
 				className="min-w-0 flex-1 bg-transparent text-sm text-settings-label outline-none placeholder:text-settings-muted"
 				placeholder={t("settings.models.searchPlaceholder")} value={modelSearch} onChange={(event) => { setModelSearch(event.target.value); setPage(0); }} />
 		</label> : null}
-		{gap === "failed" ? <p role="alert" className="text-xs text-error">{t("settings.harness.models.loadFailed")}</p> : null}
+		{/* A 404/501 with no error envelope ("legacy") may not be an older control
+		    plane at all, so it reads as a failure here. */}
+		{gap ? <p role="alert" className="text-xs text-error">{t("settings.harness.models.loadFailed")}</p> : null}
 		{loading ? <p role="status" className="flex items-center justify-center gap-2 px-3 py-6 text-sm text-settings-muted"><LoaderCircle className="size-3.5 shrink-0 animate-spin" aria-hidden="true" />{t("settings.models.loading")}</p>
-			// No Cloud list for this harness (OpenCode has no pinned CLI) or an older
-			// control plane: not an error, New Task offers its models another way.
-			: gap === "unavailable" || gap === "legacy" ? <p className="px-3 py-6 text-center text-sm text-settings-muted">{t("settings.harness.cloud.modelsUnavailable", { agent })}</p>
 			: gap ? null
 			: !models.length ? <p className="px-3 py-6 text-center text-sm text-settings-muted">{t(normalizedModelSearch ? "settings.options.noMatches" : "settings.harness.models.empty", { agent })}</p>
 			: <ul className={cn(HARNESS_CARD_CLASS, "settings-thin-scrollbar min-h-0 flex-initial overflow-y-auto overscroll-contain")} tabIndex={0} aria-label={t("settings.harness.models.title")}>

@@ -3307,6 +3307,8 @@
 	"settings.harness.cloud.updatesAvailableBoth": "{{host}}和云端有可用更新",
 	"settings.harness.cloud.versionAvailable": "云端可用 {{version}}",
 	"settings.harness.cloud.modelsUnavailable": "云端没有 {{agent}} 的模型列表。请在启动云端任务时选择模型。",
+	"settings.harness.cloud.modelsReleaseList": "云端默认列表：你的账号模型会在其首个云端任务后显示。",
+	"settings.harness.cloud.modelsDefaultAccount": "默认账号的模型。",
 	"settings.harness.cloud.targetBoth": "{{host}}和云端",
 	"settings.harness.cloud.targetVersions": "{{host}}：{{local}} → {{localLatest}}。云端：{{cloud}} → {{cloudLatest}}。",
 	"settings.harness.updateFailed": "无法开始更新。",

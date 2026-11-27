@@ -3306,6 +3306,8 @@
 	"settings.harness.cloud.updatesAvailableBoth": "Actualizaciones disponibles en {{host}} y la nube",
 	"settings.harness.cloud.versionAvailable": "{{version}} disponible en la nube",
 	"settings.harness.cloud.modelsUnavailable": "La nube no tiene una lista de modelos para {{agent}}. Elige el modelo al iniciar una tarea en la nube.",
+	"settings.harness.cloud.modelsReleaseList": "Lista predeterminada de la nube: los modelos de tu cuenta aparecen tras su primera tarea en la nube.",
+	"settings.harness.cloud.modelsDefaultAccount": "Modelos de tu cuenta predeterminada.",
 	"settings.harness.cloud.targetBoth": "{{host}} y la nube",
 	"settings.harness.cloud.targetVersions": "{{host}}: {{local}} → {{localLatest}}. Nube: {{cloud}} → {{cloudLatest}}.",
 	"settings.harness.updateFailed": "No se pudo iniciar la actualización.",

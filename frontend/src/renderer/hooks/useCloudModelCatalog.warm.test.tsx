@@ -45,6 +45,13 @@ describe("useWarmCloudModelCatalogs", () => {
 		expect(listUserAgentModels).toHaveBeenCalledWith("org-1", "codex", expect.anything());
 	});
 
+	it("never asks for OpenCode's models, which Cloud keeps no list for", async () => {
+		state.connections = [connection("opencode"), connection("cursor")];
+		render(<QueryClientProvider client={new QueryClient()}><CloudModelCatalogWarmer /></QueryClientProvider>);
+		await waitFor(() => expect(listUserAgentModels).toHaveBeenCalledWith("org-1", "cursor", expect.anything()));
+		expect(listUserAgentModels).toHaveBeenCalledTimes(1);
+	});
+
 	it("loads a harness's models as soon as it is logged in", async () => {
 		const client = new QueryClient();
 		const view = render(<QueryClientProvider client={client}><CloudModelCatalogWarmer /></QueryClientProvider>);

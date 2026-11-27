@@ -188,7 +188,7 @@ function CloudHarnessPages({ connections, focusAgentId, onDetailChange, orgId, s
 						</TabsList>
 						<TabsContent value="account" className="settings-thin-scrollbar min-h-0 min-w-0 flex-1 overflow-x-hidden overflow-y-auto overscroll-contain pt-4">{accountTab(selected)}</TabsContent>
 						<TabsContent value="models" className="min-h-0 min-w-0 overflow-hidden pt-4 data-[state=active]:flex data-[state=active]:flex-col">
-							<CloudHarnessModelsPanel agentId={selected} orgId={orgId} connected={selectedConnected} onOpenAccount={() => setDetailTab("account")} />
+							<CloudHarnessModelsPanel agentId={selected} orgId={orgId} connected={selectedConnected} multiAccount={Boolean(agentAccounts)} onOpenAccount={() => setDetailTab("account")} />
 						</TabsContent>
 					</Tabs>
 				</div>

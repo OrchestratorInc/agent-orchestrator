@@ -4,6 +4,7 @@ import { Trans, useTranslation } from "react-i18next";
 import { useQueryClient } from "@tanstack/react-query";
 import { Button } from "../ui/button";
 import { Input } from "../ui/input";
+import { Pressable } from "../ui/pressable";
 import { agentLabel } from "../../lib/agent-options";
 import type { CLOUD_AGENT_PROVIDERS } from "../../lib/cloud-agents";
 import { cn } from "../../lib/utils";
@@ -262,13 +263,13 @@ export function CloudHarnessLoginPanel({ agent, account, onClose, onPendingChang
 							const open = openMethod === method.value;
 							const MethodIcon = method.kind === "browser" ? UserRound : KeyRound;
 							return <div key={method.value}>
-								<button type="button" data-login-method="" aria-describedby={method.kind === "browser" ? titleId + "-" + method.value : undefined} aria-expanded={method.kind === "browser" ? undefined : open} onClick={() => choose(method)} className="group/method relative flex min-h-9 w-full cursor-pointer items-center gap-2.5 px-3 py-2 text-left outline-none transition-colors hover:bg-(--color-interactive-hover) aria-expanded:hover:bg-transparent focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring disabled:cursor-default disabled:opacity-60">
+								<Pressable data-login-method="" aria-describedby={method.kind === "browser" ? titleId + "-" + method.value : undefined} aria-expanded={method.kind === "browser" ? undefined : open} onClick={() => choose(method)} className="group/method relative flex min-h-9 w-full cursor-pointer items-center gap-2.5 px-3 py-2 transition-colors hover:bg-(--color-interactive-hover) aria-expanded:hover:bg-transparent focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring disabled:cursor-default disabled:opacity-60">
 									<MethodIcon className="size-3.5 shrink-0 text-settings-muted group-aria-expanded/method:text-settings-label" aria-hidden="true" />
 									<span className="min-w-0 flex-1 truncate text-control leading-5 text-settings-label">{label}</span>
 									{method.kind === "browser"
 										? <ExternalLink className="size-3.5 shrink-0 text-settings-muted" aria-hidden="true" />
 										: <ChevronDown className="size-3.5 shrink-0 text-settings-muted transition-transform group-aria-expanded/method:rotate-180" aria-hidden="true" />}
-								</button>
+								</Pressable>
 								{method.kind === "browser" ? <span id={titleId + "-" + method.value} className="sr-only">{browserHint}</span> : null}
 								{open && method.kind !== "browser" ? <div className="grid grid-cols-[5.5rem_minmax(0,1fr)] items-center gap-x-3 gap-y-2.5 pt-0.5 pr-3 pb-3.5 pl-9" onKeyDown={(event) => { if (event.key === "Escape") { event.stopPropagation(); close(); } }}>
 									<label htmlFor={titleId + "-secret"} className={fieldLabelClass}>{t(method.kind === "setupToken" ? "settings.harness.loginUi.setupToken" : "settings.harness.loginUi.apiKey")}</label>

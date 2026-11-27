@@ -3237,6 +3237,8 @@
 	"settings.harness.cloud.updatesAvailableBoth": "{{host}} とクラウドに更新があります",
 	"settings.harness.cloud.versionAvailable": "クラウドで {{version}} が利用可能",
 	"settings.harness.cloud.modelsUnavailable": "クラウドには {{agent}} のモデル一覧がありません。クラウドタスクの開始時にモデルを選択してください。",
+	"settings.harness.cloud.modelsReleaseList": "クラウドの既定の一覧です。アカウントのモデルは最初のクラウドタスク後に表示されます。",
+	"settings.harness.cloud.modelsDefaultAccount": "既定のアカウントのモデルです。",
 	"settings.harness.cloud.targetBoth": "{{host}} とクラウド",
 	"settings.harness.cloud.targetVersions": "{{host}}: {{local}} → {{localLatest}}。クラウド: {{cloud}} → {{cloudLatest}}。",
 	"settings.harness.updateFailed": "更新を開始できませんでした。",

@@ -9,6 +9,11 @@ import type { CloudCpProviderConnection } from "./cloud-cp";
  * unlisted agent would just be a dead end. */
 export const CLOUD_AGENT_PROVIDERS = ["claude-code", "codex", "cursor", "opencode"] as const;
 
+/** The cloud harnesses Cloud keeps a model list for: those whose CLI the control
+ * plane pins. OpenCode has none, so Cloud answers MODEL_CATALOG_UNAVAILABLE and
+ * its models come from the connected provider instead. */
+export const CLOUD_CATALOG_HARNESSES: ReadonlySet<string> = new Set<(typeof CLOUD_AGENT_PROVIDERS)[number]>(["claude-code", "codex", "cursor"]);
+
 /** A cloud session has no local daemon project, yet its opencode model picker
  * must reflect the models the *pushed* credential can run — opencode lists a
  * provider's catalog only when that provider's key is present. We can't (and

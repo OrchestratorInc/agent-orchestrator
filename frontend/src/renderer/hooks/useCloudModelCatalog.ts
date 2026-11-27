@@ -1,7 +1,7 @@
 import { focusManager, queryOptions, useQueries, useQuery, type Query, type QueryClient, type UseQueryResult } from "@tanstack/react-query";
 import { useCallback } from "react";
 import { cloudModelLabel } from "../lib/agent-model-choices";
-import { CLOUD_AGENT_PROVIDERS } from "../lib/cloud-agents";
+import { CLOUD_AGENT_PROVIDERS, CLOUD_CATALOG_HARNESSES } from "../lib/cloud-agents";
 import type { CloudCpAgentProvider, CloudCpClient, CloudCpProviderConnection } from "../lib/cloud-cp";
 import type { AgentModelCatalog } from "./useAgentModelsQuery";
 import { cloudModelCatalogGap, type CloudModelCatalog, type CloudModelCatalogGap } from "../lib/cloud-model-catalog";
@@ -150,7 +150,8 @@ export function useWarmCloudModelCatalogs(enabled = true): void {
 			const connection = agentConnection(connections.data, agent);
 			return {
 				...cloudModelCatalogQueryOptions({ client, baseUrl, userId, orgId: orgId ?? "", agent, connection }),
-				enabled: enabled && ready && Boolean(orgId) && connection !== undefined,
+				// Only harnesses Cloud keeps a list for: asking for OpenCode's always fails.
+				enabled: enabled && ready && Boolean(orgId) && connection !== undefined && CLOUD_CATALOG_HARNESSES.has(agent),
 				refetchOnWindowFocus: false,
 				refetchInterval: false as const,
 				// Nothing renders the lists here, so their arrival re-renders nothing.

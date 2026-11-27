@@ -353,6 +353,46 @@ describe("Cloud harness tab", () => {
 		expect(await within(page).findByText("Cloud has no model list for OpenCode. Choose its model when you start a Cloud task.")).toBeInTheDocument();
 		expect(within(page).queryByRole("alert")).toBeNull();
 		expect(within(page).queryByText("Could not load models.")).toBeNull();
+		// Cloud keeps no list for it, so nothing asks for one.
+		expect(listUserAgentModels).not.toHaveBeenCalled();
+	});
+
+	it("reads a 404 without an error envelope as a failure, not as an older control plane", async () => {
+		providerConnections.value = [{ id: "cx-1", provider: "codex", label: "default", validationState: "valid" }];
+		listUserAgentModels.mockRejectedValue(new CloudCpError("not found", { status: 404 }));
+		const { CloudHarnessContent } = await import("./harness/CloudHarnessContent");
+		const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+		render(<QueryClientProvider client={client}><TooltipProvider><CloudHarnessContent search="" /></TooltipProvider></QueryClientProvider>);
+
+		const page = await openHarness("codex");
+		await userEvent.click(within(page).getByRole("tab", { name: "Models" }));
+		expect(await within(page).findByRole("alert")).toHaveTextContent("Could not load models.");
+		expect(within(page).queryByText(/Cloud has no model list/)).toBeNull();
+	});
+
+	it("says when the list is Cloud's default one, and that it is the default account's among several", async () => {
+		providerConnections.value = [{ id: "cx-1", provider: "codex", label: "default", validationState: "valid" }];
+		listUserAgentModels.mockResolvedValue({ source: "release", models: [{ id: "gpt-5.5", displayName: "GPT-5.5", default: true }] });
+		const { CloudHarnessModelsPanel } = await import("./harness/CloudHarnessModelsPanel");
+		const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+		const panel = (multiAccount: boolean) => <QueryClientProvider client={client}><CloudHarnessModelsPanel agentId="codex" orgId="org-1" connected multiAccount={multiAccount} onOpenAccount={() => undefined} /></QueryClientProvider>;
+		const view = render(panel(false));
+
+		expect(await screen.findByText("Cloud's default list: your account's models appear after its first Cloud task.")).toBeInTheDocument();
+		expect(screen.queryByText("Models for your default account.")).toBeNull();
+		view.rerender(panel(true));
+		expect(screen.getByText("Models for your default account.")).toBeInTheDocument();
+	});
+
+	it("leaves the caption out once the list is the account's own", async () => {
+		providerConnections.value = [{ id: "cx-1", provider: "codex", label: "default", validationState: "valid" }];
+		listUserAgentModels.mockResolvedValue({ source: "worker", models: [{ id: "gpt-5.5", displayName: "GPT-5.5", default: true }] });
+		const { CloudHarnessModelsPanel } = await import("./harness/CloudHarnessModelsPanel");
+		const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+		render(<QueryClientProvider client={client}><CloudHarnessModelsPanel agentId="codex" orgId="org-1" connected onOpenAccount={() => undefined} /></QueryClientProvider>);
+
+		expect(await screen.findByRole("list", { name: "Available models" })).toBeInTheDocument();
+		expect(screen.queryByText(/Cloud's default list/)).toBeNull();
 	});
 
 	it("still reports a Cloud model list that failed to load", async () => {
