@@ -151,6 +151,44 @@ describe("OpenCode 2 subagents", () => {
 			steps: [read],
 		});
 	});
+
+	const handbackWith = (id: string, status: ConversationActivity["status"], message: string, sequence: number) => ({
+		...handback(id, "tool-oc", message),
+		status,
+		sequence,
+	});
+	const run = (id: string, status: ConversationActivity["status"], sequence: number) =>
+		step(id, "tool-oc", { activityKind: "mcp_tool", summary: "SubagentRun", status, sequence, detail: { providerToolName: "SubagentRun" } });
+
+	it("reads a failed or interrupted child as Failed or Stopped, not Done with the launch note", () => {
+		const failed = readSubagent(openCodeLaunch, [handbackWith("hb", "failed", "rate limited", 3)], false);
+		expect(failed).toMatchObject({ state: "failed", error: "rate limited", steps: [] });
+		expect(failed.report).toBeUndefined();
+
+		const stopped = readSubagent(openCodeLaunch, [handbackWith("hb", "cancelled", "", 3)], false);
+		expect(stopped).toMatchObject({ state: "stopped", steps: [] });
+		expect(stopped.report).toBeUndefined();
+	});
+
+	it("reads a child as working while its run is open, with no step running", () => {
+		const thinking = readSubagent(openCodeLaunch, [run("run-1", "running", 2)], false);
+		expect(thinking).toMatchObject({ state: "working", steps: [] });
+		expect(readSubagent(openCodeLaunch, [run("run-1", "running", 2)], false, true).state).not.toBe("working");
+	});
+
+	it("takes the latest run's report, and reads a run after it as working", () => {
+		const first = [run("run-1", "completed", 2), handbackWith("hb-1", "cancelled", "", 3)];
+		const second = [...first, run("run-2", "running", 4), step("ls", "tool-oc", { sequence: 5 })];
+		expect(readSubagent(openCodeLaunch, second, false)).toMatchObject({ state: "working" });
+
+		const reported = [...first, run("run-2", "completed", 4), handbackWith("hb-2", "completed", "Found 3 tests.", 6)];
+		expect(readSubagent(openCodeLaunch, reported, false)).toMatchObject({ state: "done", report: "Found 3 tests.", steps: [] });
+	});
+
+	it("does not keep an earlier report once a later run ended without one", () => {
+		const lost = [run("run-1", "completed", 2), handbackWith("hb-1", "completed", "Found 3 tests.", 3), run("run-2", "failed", 4)];
+		expect(readSubagent(openCodeLaunch, lost, false).state).toBe("unknown");
+	});
 });
 
 describe("partitionSubagentSteps", () => {

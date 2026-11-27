@@ -159,6 +159,13 @@ func TestOpenCodeV2SubagentFilesChildWorkUnderItsLaunch(t *testing.T) {
 	if launched.Kind != ports.ChatEventActivityCompleted || launched.ProviderItemID != "call_launch" {
 		t.Fatalf("event after the launch completed = %#v, want the launch itself first", launched)
 	}
+	// The child's run opens under the launch, so the launch reads as working
+	// even while the child has no step running.
+	run := nextActivity(t, conv)
+	if detail := detailOf(t, run); run.Kind != ports.ChatEventActivityStarted || run.ActivityStatus != domain.ActivityStatusRunning ||
+		run.ProviderTurnID != "" || detail["providerToolName"] != subagentRunTool || detail["parentProviderItemId"] != "call_launch" {
+		t.Fatalf("child run = %#v, detail %#v", run, detail)
+	}
 	step := nextActivity(t, conv)
 	if step.Kind != ports.ChatEventActivityStarted || step.ProviderItemID != "ses_child:call_read" ||
 		step.ProviderTurnID != "" || step.Summary != "read" {
@@ -196,6 +203,10 @@ func TestOpenCodeV2SubagentFilesChildWorkUnderItsLaunch(t *testing.T) {
 	if finished := nextActivity(t, conv); finished.Kind != ports.ChatEventActivityCompleted ||
 		finished.ProviderItemID != said.ProviderItemID || finished.Text != "Found 3 tests." {
 		t.Fatalf("child message completion = %#v", finished)
+	}
+	if ended := nextActivity(t, conv); ended.Kind != ports.ChatEventActivityCompleted ||
+		ended.ProviderItemID != run.ProviderItemID || ended.ActivityStatus != domain.ActivityStatusCompleted {
+		t.Fatalf("child run end = %#v", ended)
 	}
 	handback := nextActivity(t, conv)
 	detail := detailOf(t, handback)
@@ -461,5 +472,113 @@ func TestOpenCodeV2FollowUpTakesTheChildOnlyOnceAccepted(t *testing.T) {
 	}
 	if parent := parentOf(childToolCall("ses_child:call_grep", "Find tests: grep", "pending")); parent != "call_accepted" {
 		t.Fatalf("step after an accepted follow-up is under %v, want call_accepted", parent)
+	}
+}
+
+// childEvents gathers what the conversation emits until it goes quiet.
+func childEvents(t *testing.T, conv *conversation) []ports.ChatEvent {
+	t.Helper()
+	var events []ports.ChatEvent
+	for {
+		select {
+		case event := <-conv.Events():
+			events = append(events, event)
+		case <-time.After(200 * time.Millisecond):
+			return events
+		}
+	}
+}
+
+func handbacksIn(t *testing.T, events []ports.ChatEvent) []ports.ChatEvent {
+	t.Helper()
+	var out []ports.ChatEvent
+	for _, event := range events {
+		if detailOf(t, event)["providerToolName"] == subagentHandbackTool {
+			out = append(out, event)
+		}
+	}
+	return out
+}
+
+// A child can run again under the same launch: a background shell it started
+// wakes it after it completed, or it resumes after an interrupt. Each run
+// reports as an item of its own, so the second report never overwrites the
+// first, and the conversation stays awake while either run is going.
+func TestOpenCodeV2ChildReportsEachRunOnItsOwn(t *testing.T) {
+	for _, first := range []struct {
+		status string
+		want   domain.ActivityStatus
+	}{
+		{status: "completed", want: domain.ActivityStatusCompleted},
+		{status: "interrupted", want: domain.ActivityStatusCancelled},
+	} {
+		t.Run(first.status, func(t *testing.T) {
+			agent, conv := startOpenCode(t, domain.HarnessOpenCodeV2)
+			_ = launchSubagent(t, agent, conv, "call_launch")
+			_ = completeLaunch(t, agent, conv, "call_launch", "ses_child")
+			setActiveTurn(conv, "")
+			canHibernate := func() bool {
+				t.Helper()
+				ok, err := conv.CanHibernate(context.Background())
+				if err != nil {
+					t.Fatalf("CanHibernate: %v", err)
+				}
+				return ok
+			}
+
+			sendChild(t, agent, conv, "ses_child", map[string]any{"type": "status", "status": "running"})
+			_ = childEvents(t, conv)
+			if canHibernate() {
+				t.Fatal("conversation can hibernate while its child runs")
+			}
+			sendChild(t, agent, conv, "ses_child", map[string]any{"type": "status", "status": first.status})
+			firstRun := handbacksIn(t, childEvents(t, conv))
+			if len(firstRun) != 1 || firstRun[0].ActivityStatus != first.want {
+				t.Fatalf("first run's hand-backs = %#v", firstRun)
+			}
+			if !canHibernate() {
+				t.Fatal("conversation cannot hibernate after its child's run ended")
+			}
+
+			sendChild(t, agent, conv, "ses_child", map[string]any{"type": "status", "status": "running"})
+			sendChild(t, agent, conv, "ses_child", map[string]any{"type": "update",
+				"update": childToolCall("ses_child:call_read", "Find tests: read", "completed")})
+			_ = childEvents(t, conv)
+			if canHibernate() {
+				t.Fatal("conversation can hibernate while its child runs again")
+			}
+			sendChild(t, agent, conv, "ses_child", map[string]any{"type": "status", "status": "completed"})
+			secondRun := handbacksIn(t, childEvents(t, conv))
+			if len(secondRun) != 1 || secondRun[0].ActivityStatus != domain.ActivityStatusCompleted {
+				t.Fatalf("second run's hand-backs = %#v", secondRun)
+			}
+			if secondRun[0].ProviderItemID == firstRun[0].ProviderItemID {
+				t.Fatalf("both runs reported as item %q", firstRun[0].ProviderItemID)
+			}
+			if parent := detailOf(t, secondRun[0])["parentProviderItemId"]; parent != "call_launch" {
+				t.Fatalf("second run reported to %v, want call_launch", parent)
+			}
+		})
+	}
+}
+
+// Outside a turn, a child no launch is known for, as after a reattach that lost
+// its launch, is dropped as before the capability: filed as an update of the
+// parent's, its prose would read as the parent's reply.
+func TestOpenCodeV2UnplacedChildOutsideATurnIsDropped(t *testing.T) {
+	agent, conv := startOpenCode(t, domain.HarnessOpenCodeV2)
+	setActiveTurn(conv, "")
+	sendChild(t, agent, conv, "ses_orphan", map[string]any{"type": "update", "update": map[string]any{
+		"sessionUpdate": "agent_message_chunk", "messageId": "msg_orphan",
+		"content": map[string]any{"type": "text", "text": "Found 3 tests."},
+	}})
+	sendChild(t, agent, conv, "ses_orphan", map[string]any{"type": "update",
+		"update": childToolCall("ses_orphan:call_read", "Find tests: read", "pending")})
+	for _, event := range childEvents(t, conv) {
+		switch event.Kind {
+		case ports.ChatEventActivityStarted, ports.ChatEventActivityCompleted, ports.ChatEventActivityText,
+			ports.ChatEventMessageDelta, ports.ChatEventMessageCompleted, ports.ChatEventProviderState:
+			t.Fatalf("unplaced child update outside a turn emitted %#v", event)
+		}
 	}
 }

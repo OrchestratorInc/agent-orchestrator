@@ -20,6 +20,12 @@ const LAUNCH_TOOLS = new Set(["Agent", "Task"]);
 /** The child's report back to its caller; its payload is the report, not a step. */
 const HANDBACK_TOOL = "SubagentHandback";
 
+/**
+ * One run of a background child, from its start to its end. It is how the child
+ * reads as working with no step running; it is not a step itself.
+ */
+const RUN_TOOL = "SubagentRun";
+
 /** OpenCode 2's launch. ACP carries no tool name, so its driver names the call `subagent`. */
 LAUNCH_TOOLS.add("subagent");
 
@@ -144,14 +150,21 @@ export function readSubagent(
 ): Subagent {
 	const input = launchInput(launch);
 	// The steps carry the whole chain under this launch, so an inner child's hand-back
-	// is among them. Only the one addressed to this launch is its report; the rest are
-	// steps the reader can open like any other.
-	const handback = allSteps.find(
-		(step) => isHandback(step) && launch.providerItemId !== undefined && step.detail?.parentProviderItemId === launch.providerItemId,
-	);
-	const steps = allSteps.filter((step) => step !== handback);
+	// is among them. Only one addressed to this launch is its report, and a child that
+	// ran again (an OpenCode child a shell woke) reports once per run, so the latest one
+	// stands. The rest are steps the reader can open like any other.
+	const addressed = (step: ConversationActivity) =>
+		launch.providerItemId !== undefined && step.detail?.parentProviderItemId === launch.providerItemId;
+	const handback = allSteps.filter((step) => isHandback(step) && addressed(step)).at(-1);
+	const runs = allSteps.filter((step) => isRun(step) && addressed(step));
+	const steps = allSteps.filter((step) => step !== handback && !isRun(step) && !(isHandback(step) && addressed(step)));
+	// A run the child started after its latest report makes that report out of date.
+	const lastRun = runs.at(-1);
+	const runAfterReport = lastRun !== undefined && (handback === undefined || allSteps.indexOf(lastRun) > allSteps.indexOf(handback));
 	const result = launchResultText(launch);
-	const background = ASYNC_RESULT.test(result);
+	// A background launch settles as soon as the child starts. OpenCode's driver says
+	// so in the detail; Claude says it in the result note.
+	const background = launch.detail?.background === true || ASYNC_RESULT.test(result);
 	const startedAt = timeOf(launch.createdAt);
 	const lastStepAt = steps.reduce((latest, step) => Math.max(latest, timeOf(step.createdAt)), startedAt);
 	const base = {
@@ -167,6 +180,13 @@ export function readSubagent(
 		return { ...base, state: "failed", error: firstParagraph(result), endedAt: lastStepAt };
 	}
 	if (launch.status === "cancelled") return { ...base, state: "stopped", endedAt: lastStepAt };
+	if (!stopped && runs.some((run) => run.status === "running")) return { ...base, state: "working" };
+	// The latest run ended with no report, such as when its controller went away.
+	if (runAfterReport) return { ...base, state: "unknown", endedAt: lastStepAt };
+	if (handback?.status === "failed") {
+		return { ...base, state: "failed", error: stringOf(launchInput(handback).message), endedAt: timeOf(handback.createdAt) };
+	}
+	if (handback?.status === "cancelled") return { ...base, state: "stopped", endedAt: timeOf(handback.createdAt) };
 	if (handback && handback.status === "completed") {
 		return {
 			...base,
@@ -250,6 +270,10 @@ export function stepSections(steps: readonly ConversationActivity[]): StepSectio
 
 function isHandback(step: ConversationActivity): boolean {
 	return step.detail?.providerToolName === HANDBACK_TOOL;
+}
+
+function isRun(step: ConversationActivity): boolean {
+	return step.detail?.providerToolName === RUN_TOOL;
 }
 
 function launchInput(activity: ConversationActivity): Record<string, unknown> {

@@ -3,7 +3,9 @@ package acp
 import (
 	"encoding/json"
 	"regexp"
+	"strconv"
 	"strings"
+	"time"
 
 	acpsdk "github.com/coder/acp-go-sdk"
 
@@ -39,6 +41,10 @@ const (
 	// subagentHandbackTool marks the child's report to its launch. It is the name
 	// the renderer already reads for Claude's hand-back.
 	subagentHandbackTool = "SubagentHandback"
+	// subagentRunTool marks one run of a child under a launch, running from the
+	// status that starts the run to the one that ends it. It is how the renderer
+	// knows a child is working while it has no step running.
+	subagentRunTool = "SubagentRun"
 	// maxHeldChildUpdates caps what waits for a launch to name its child. The
 	// launch completes as soon as the child is queued, so the wait is short;
 	// past the cap, everything held goes out unfiled rather than piling up.
@@ -86,6 +92,14 @@ type openCodeSubagents struct {
 	// text of the latest one it finished, which becomes its report.
 	open     map[string]childMessage
 	lastSaid map[string]string
+
+	// run names each child's run in progress. A child can run more than once
+	// under one launch: a background shell it started wakes it after it
+	// completed, or it is resumed after an interrupt. Each run reports on its
+	// own, so a later run never overwrites an earlier report. runs counts a
+	// child's runs, to name one that came on a frame with no stable id.
+	run  map[string]string
+	runs map[string]int
 }
 
 // childMessage is what a child is saying, and the launch it was saying it for.
@@ -102,6 +116,8 @@ func (c *conversation) subagentsLocked() *openCodeSubagents {
 			tools:      map[string]*toolState{},
 			open:       map[string]childMessage{},
 			lastSaid:   map[string]string{},
+			run:        map[string]string{},
+			runs:       map[string]int{},
 		}
 	}
 	return c.subagents
@@ -169,7 +185,7 @@ func (c *conversation) observeSubagentLaunch(turnID string, tool *toolState, emi
 		if match == nil {
 			return
 		}
-		emit(c.handbackEvent(turnID, tool.id, domain.ActivityStatusCompleted, strings.TrimSpace(match[1])))
+		emit(c.handbackEvent(turnID, tool.id, "", domain.ActivityStatusCompleted, strings.TrimSpace(match[1])))
 	case domain.HarnessOpenCodeV2:
 		if !isOpenCodeSubagentLaunch(tool) {
 			return
@@ -186,10 +202,13 @@ func (c *conversation) observeSubagentLaunch(turnID string, tool *toolState, emi
 		if tool.status == acpsdk.ToolCallStatusCompleted {
 			child = trimmedStringField(nestedMap(asMap(tool.rawOutput), "metadata"), "sessionID")
 		}
+		// A follow-up to a child that is running joins its run.
+		joinedRun := ""
 		switch {
 		case child != "":
-			if s.launchOf[child] != tool.id {
+			if s.launchOf[child] != tool.id && !containsString(s.awaiting[child], tool.id) {
 				s.awaiting[child] = append(s.awaiting[child], tool.id)
+				joinedRun = s.run[child]
 			}
 			s.launchOf[child] = tool.id
 			delete(s.inflight, tool.id)
@@ -200,6 +219,9 @@ func (c *conversation) observeSubagentLaunch(turnID string, tool *toolState, emi
 		}
 		released := s.release(false)
 		c.mu.Unlock()
+		if joinedRun != "" {
+			emit(c.runEvent(tool.id, joinedRun, domain.ActivityStatusRunning))
+		}
 		for _, update := range released {
 			c.applyChildUpdate(update)
 		}
@@ -292,10 +314,12 @@ func (c *conversation) applyChildUpdate(update openCodeChildUpdate) {
 	c.mu.Lock()
 	s := c.subagentsLocked()
 	launch, placed := s.launchOf[update.ChildSessionID]
+	run := s.run[update.ChildSessionID]
+	inTurn := c.activeTurn != ""
 	c.mu.Unlock()
 	if update.Type == "status" {
 		if placed {
-			c.childEnded(update, launch)
+			c.childStatus(update, launch)
 		}
 		return
 	}
@@ -308,12 +332,23 @@ func (c *conversation) applyChildUpdate(update openCodeChildUpdate) {
 		return
 	}
 	if !placed {
+		// Outside a turn, OpenCode sent nothing of a child's before the
+		// capability. Here it would open a cycle of the parent's and file the
+		// child's prose as the parent's reply, as after a reattach that lost
+		// which launch the child is under.
+		if !inTurn {
+			return
+		}
 		if err := c.processUpdate(acpsdk.SessionNotification{
 			SessionId: acpsdk.SessionId(update.RootSessionID), Update: sessionUpdate, Meta: update.Meta,
 		}); err != nil {
 			c.log.Warn("failed to handle unfiled OpenCode child update", "child", update.ChildSessionID, "err", err)
 		}
 		return
+	}
+	if run != "" {
+		// Each thing the child does keeps its run from reading as stale.
+		c.backgroundObserved.Update(openCodeChildTask(update, run, "running"), time.Now())
 	}
 	c.childStep(update, sessionUpdate, launch)
 }
@@ -422,10 +457,47 @@ func (c *conversation) childMessageEvent(message childMessage, completed bool) p
 	return event
 }
 
-// childEnded writes the child's report when its run ends: what it said last, or
-// why it failed.
+// childStatus follows a child's run from the status that starts it to the one
+// that ends it.
+func (c *conversation) childStatus(update openCodeChildUpdate, launch string) {
+	switch update.Status {
+	case "created", "running":
+		c.childStarted(update, launch)
+	case "completed", "failed", "interrupted":
+		c.childEnded(update, launch)
+	}
+}
+
+// childStarted opens the child's run, under every launch waiting on it. Until
+// the run ends, the renderer reads the child as working and the conversation
+// does not hibernate, also with no step of the child's running.
+func (c *conversation) childStarted(update openCodeChildUpdate, launch string) {
+	child := update.ChildSessionID
+	c.mu.Lock()
+	s := c.subagentsLocked()
+	if _, running := s.run[child]; running {
+		c.mu.Unlock()
+		return
+	}
+	run := s.runKey(child, update.Meta)
+	s.run[child] = run
+	if len(s.awaiting[child]) == 0 {
+		s.awaiting[child] = []string{launch}
+	}
+	launches := append([]string(nil), s.awaiting[child]...)
+	c.mu.Unlock()
+	c.backgroundObserved.Update(openCodeChildTask(update, run, "running"), time.Now())
+	emit := c.sourceEmitter(stableACPEventID(update.Meta))
+	for _, waiting := range launches {
+		emit(c.runEvent(waiting, run, domain.ActivityStatusRunning))
+	}
+}
+
+// childEnded closes the child's run and writes its report: what it said last,
+// or why it failed.
 func (c *conversation) childEnded(update openCodeChildUpdate, launch string) {
 	var status domain.ActivityStatus
+	state := update.Status
 	switch update.Status {
 	case "completed":
 		status = domain.ActivityStatusCompleted
@@ -433,6 +505,7 @@ func (c *conversation) childEnded(update openCodeChildUpdate, launch string) {
 		status = domain.ActivityStatusFailed
 	case "interrupted":
 		status = domain.ActivityStatusCancelled
+		state = "stopped"
 	default:
 		return
 	}
@@ -449,9 +522,19 @@ func (c *conversation) childEnded(update openCodeChildUpdate, launch string) {
 	delete(s.lastSaid, child)
 	launches := s.awaiting[child]
 	delete(s.awaiting, child)
+	run, running := s.run[child]
+	delete(s.run, child)
+	if !running {
+		// An end with no start seen, such as from an agent that sends no
+		// running status, still reports as a run of its own.
+		run = s.runKey(child, update.Meta)
+	}
 	c.mu.Unlock()
 	if len(launches) == 0 {
 		launches = []string{launch}
+	}
+	if running {
+		c.backgroundObserved.Finish(openCodeChildTaskID(child), state, time.Now())
 	}
 	if streaming {
 		emit(c.childMessageEvent(open, true))
@@ -462,12 +545,67 @@ func (c *conversation) childEnded(update openCodeChildUpdate, launch string) {
 	// A follow-up joins the child's run, so its outcome answers each launch that
 	// is waiting on it, not only the latest.
 	for _, waiting := range launches {
-		emit(c.handbackEvent("", waiting, status, report))
+		if running {
+			emit(c.runEvent(waiting, run, status))
+		}
+		emit(c.handbackEvent("", waiting, run, status, report))
 	}
 }
 
+// runKey names a child's next run. The frame's stable id keeps the name the same
+// across a replay of that frame; without one, the child's runs are counted.
+func (s *openCodeSubagents) runKey(child string, meta map[string]any) string {
+	if id := stableACPEventID(meta); id != "" {
+		return id
+	}
+	s.runs[child]++
+	return strconv.Itoa(s.runs[child])
+}
+
+// runEvent opens or ends one run of a child under a launch. It carries no turn:
+// the child runs on its own clock.
+func (c *conversation) runEvent(launch, run string, status domain.ActivityStatus) ports.ChatEvent {
+	detail, _ := json.Marshal(map[string]any{
+		"parentProviderItemId": c.providerItemID(launch),
+		"providerToolName":     subagentRunTool,
+	})
+	event := ports.ChatEvent{
+		Kind: ports.ChatEventActivityCompleted, ProviderItemID: c.providerItemID("subagent-run:" + launch + ":" + run),
+		ActivityKind: domain.ActivityKindMCPTool, ActivityStatus: status,
+		Summary: subagentRunTool, Detail: detail,
+	}
+	if status == domain.ActivityStatusRunning {
+		event.Kind = ports.ChatEventActivityStarted
+	}
+	return event
+}
+
+func openCodeChildTaskID(child string) string { return "opencode-subagent:" + child }
+
+// openCodeChildTask is a child's run as a background task, which keeps the
+// conversation from hibernating while it runs (CanHibernate).
+func openCodeChildTask(update openCodeChildUpdate, run, state string) ports.ChatBackgroundTask {
+	return ports.ChatBackgroundTask{
+		ID: openCodeChildTaskID(update.ChildSessionID), RunID: run,
+		Kind: "agent", Description: update.Title, State: state,
+	}
+}
+
+func containsString(list []string, value string) bool {
+	for _, each := range list {
+		if each == value {
+			return true
+		}
+	}
+	return false
+}
+
 // handbackEvent is a child's report to the launch that started it.
-func (c *conversation) handbackEvent(turn, launch string, status domain.ActivityStatus, message string) ports.ChatEvent {
+//
+// A child reports once per run, so each run's report is an item of its own: a
+// later run adds its report rather than overwriting an earlier one. OpenCode 1's
+// inline task has one run and no name for it.
+func (c *conversation) handbackEvent(turn, launch, run string, status domain.ActivityStatus, message string) ports.ChatEvent {
 	detail := map[string]any{
 		"parentProviderItemId": c.providerItemID(launch),
 		"providerToolName":     subagentHandbackTool,
@@ -478,7 +616,7 @@ func (c *conversation) handbackEvent(turn, launch string, status domain.Activity
 	encoded, _ := json.Marshal(detail)
 	return ports.ChatEvent{
 		Kind: ports.ChatEventActivityCompleted, ProviderTurnID: turn,
-		ProviderItemID: c.providerItemID("subagent-handback:" + launch),
+		ProviderItemID: c.providerItemID(handbackItem(launch, run)),
 		ActivityKind:   domain.ActivityKindMCPTool, ActivityStatus: status,
 		Summary: subagentHandbackTool, Detail: encoded,
 	}
@@ -492,4 +630,11 @@ func asMap(value any) map[string]any {
 func trimmedStringField(value any, key string) string {
 	s, _ := asMap(value)[key].(string)
 	return strings.TrimSpace(s)
+}
+
+func handbackItem(launch, run string) string {
+	if run == "" {
+		return "subagent-handback:" + launch
+	}
+	return "subagent-handback:" + launch + ":" + run
 }

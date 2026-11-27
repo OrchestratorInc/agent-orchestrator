@@ -694,6 +694,33 @@ func (q *Queries) DetachSessionConversation(ctx context.Context, arg DetachSessi
 	return err
 }
 
+const failDetachedSubagentActivities = `-- name: FailDetachedSubagentActivities :exec
+UPDATE conversation_activities
+SET status = 'failed', revision = revision + 1, updated_at = ?1
+WHERE conversation_activities.conversation_id = ?2
+  AND status = 'running'
+  AND turn_id IS NULL
+  AND kind <> 'ao_action'
+  AND json_valid(detail_json)
+  AND COALESCE(json_extract(detail_json, '$.parentProviderItemId'), '') <> ''
+`
+
+type FailDetachedSubagentActivitiesParams struct {
+	UpdatedAt      time.Time
+	ConversationID string
+}
+
+// A subagent's step that runs on the child's clock carries no turn (OpenCode 2's
+// ACP driver files a background child's work this way), so none of the turn-based
+// settles above reach it. Only the controller that saw the child start can end
+// it, from what it holds in memory. Once that controller is gone, or a new one
+// starts without the child's state, nothing will: settle the row as failed, as
+// orphaned work is, rather than leave the launch reading as working forever.
+func (q *Queries) FailDetachedSubagentActivities(ctx context.Context, arg FailDetachedSubagentActivitiesParams) error {
+	_, err := q.db.ExecContext(ctx, failDetachedSubagentActivities, arg.UpdatedAt, arg.ConversationID)
+	return err
+}
+
 const failOrphanedConversationActivities = `-- name: FailOrphanedConversationActivities :exec
 UPDATE conversation_activities
 SET status = 'failed', revision = revision + 1, updated_at = ?1
