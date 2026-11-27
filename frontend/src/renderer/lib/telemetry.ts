@@ -884,6 +884,12 @@ function sanitizeSensitiveString(value: string): string {
 function sanitizePostHogValue(value: unknown): unknown {
 	if (typeof value === "string") return sanitizeSensitiveString(value);
 	if (Array.isArray(value)) return value.map((item) => sanitizePostHogValue(item));
+	// The SDK stamps every event with a Date. Rebuilding it gives {}, and an
+	// immediately sent event such as $identify then goes out with "timestamp": {},
+	// which PostHog does not store. A Date serializes to an ISO string, no path
+	// or URL. Any other object keeps the rebuild, which reads only its own
+	// enumerable values (a URL instance would otherwise serialize its href).
+	if (value instanceof Date) return value;
 	if (value && typeof value === "object") {
 		return Object.fromEntries(Object.entries(value).map(([key, nested]) => [key, sanitizePostHogValue(nested)]));
 	}
