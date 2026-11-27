@@ -119,7 +119,9 @@ type setupResult struct {
 	// The project then keeps the person's choice for the next run, rather
 	// than the daemon's own default agent.
 	agentSaveable bool
-	authPlans     map[string]setupAuthPlan
+	// readOnly is set for --check and --dry-run.
+	readOnly  bool
+	authPlans map[string]setupAuthPlan
 }
 
 func newSetupCommand(ctx *commandContext) *cobra.Command {
@@ -223,7 +225,7 @@ func setupExit(res setupResult, opts setupOptions) error {
 // runSetup runs every step and never returns an error: each problem is a
 // step result, so --json callers always get the same shape.
 func (c *commandContext) runSetup(ctx context.Context, errOut io.Writer, opts setupOptions) setupResult {
-	res := setupResult{Steps: []setupStep{}, NextActions: []string{}}
+	res := setupResult{Steps: []setupStep{}, NextActions: []string{}, readOnly: opts.readOnly()}
 	add := func(s setupStep) setupStep {
 		res.Steps = append(res.Steps, s)
 		return s
@@ -286,6 +288,11 @@ func finishSetup(res *setupResult, opts setupOptions) {
 	res.Ready = !blocked && !res.pending
 	verify := setupStep{Step: setupStepVerify, Status: setupOK, Detail: "Orchestrator is ready to take a task"}
 	switch {
+	case blocked && res.Task != nil && res.Task.TaskID != "" && res.Task.Status == taskStatusNeedsInput:
+		// The task was submitted: rerunning `ao setup --start` would send it
+		// again.
+		verify.Status = setupNeedsHuman
+		verify.Detail = fmt.Sprintf("setup is done and task %s is waiting on you: answer it in Orchestrator and follow it with `ao task wait %s`; do not run `ao setup --start` again", res.Task.TaskID, res.Task.TaskID)
 	case blocked:
 		verify.Status = setupNeedsHuman
 		verify.Detail = "not ready: finish next_actions, then run `ao setup` again"
@@ -370,6 +377,9 @@ func (c *commandContext) setupDaemon(ctx context.Context, errOut io.Writer, opts
 // setupAgentWithoutDaemon names the agent setup would pick when no daemon
 // can say which agents are installed.
 func setupAgentWithoutDaemon(opts setupOptions) *setupAgent {
+	if opts.workerAgent != "" && opts.orchestratorAgent != "" {
+		return &setupAgent{ID: opts.workerAgent, Source: "roles", AuthStatus: "unknown", Worker: opts.workerAgent, Orchestrator: opts.orchestratorAgent}
+	}
 	if opts.agent != "" {
 		return &setupAgent{ID: opts.agent, Source: "flag", AuthStatus: "unknown", Worker: firstNonEmpty(opts.workerAgent, opts.agent), Orchestrator: firstNonEmpty(opts.orchestratorAgent, opts.agent)}
 	}
@@ -378,6 +388,22 @@ func setupAgentWithoutDaemon(opts setupOptions) *setupAgent {
 		return &setupAgent{ID: id, Source: "caller", DetectedFrom: match.Env, AuthStatus: "unknown", Worker: firstNonEmpty(opts.workerAgent, id), Orchestrator: firstNonEmpty(opts.orchestratorAgent, id)}
 	}
 	return nil
+}
+
+// setupProbeFromReadiness answers what a probe would, from a readiness reading.
+func setupProbeFromReadiness(agents []agentReadinessSnapshot, id string) setupProbe {
+	var probe setupProbe
+	probe.Agent.ID = id
+	for _, a := range agents {
+		if a.ID != id {
+			continue
+		}
+		probe.Supported = true
+		probe.Installed = a.Installation.State == "installed"
+		probe.Agent.Label = a.Label
+		probe.Agent.AuthStatus = a.Authentication.State
+	}
+	return probe
 }
 
 type setupProbe struct {
@@ -538,7 +564,13 @@ func (c *commandContext) setupCheckAgent(ctx context.Context, id string, res *se
 	}
 	res.checked[id] = true
 	var probe setupProbe
-	if err := c.postJSON(ctx, "agents/"+url.PathEscape(id)+"/probe", struct{}{}, &probe); err != nil {
+	if res.readOnly {
+		// The daemon's probe can start background work (a Codex account
+		// reconciliation), which --check and --dry-run must not. Read the
+		// readiness the agent step already loaded instead; the agent's own
+		// status command below still checks the sign-in.
+		probe = setupProbeFromReadiness(res.readiness, id)
+	} else if err := c.postJSON(ctx, "agents/"+url.PathEscape(id)+"/probe", struct{}{}, &probe); err != nil {
 		return setupAgentCheck{}, fmt.Errorf("could not check agent %s: %w", id, err)
 	}
 	check := setupAgentCheck{status: setupOK, auth: probe.Agent.AuthStatus}
@@ -1012,9 +1044,20 @@ func (c *commandContext) setupReconcileAgents(ctx context.Context, opts setupOpt
 	if res.Agent == nil {
 		return nil, ""
 	}
-	saved := projectConfig{}
+	var saved projectConfig
 	if project.Config != nil {
 		saved = *project.Config
+	} else {
+		// No config in the lookup: read it now, so the saved-agent rules below
+		// (fill empty roles, replace only with --yes) apply to what is really
+		// saved. A degraded project cannot be read, and is not overwritten.
+		cfg, err := c.currentProjectConfig(ctx, project.ID)
+		if err != nil {
+			step := setupStep{Step: setupStepProject, Status: setupFailed, Detail: "could not read the project config: " + err.Error()}
+			return &step, ""
+		}
+		saved = cfg
+		project.Config = &cfg
 	}
 	explicitWorker := opts.workerAgent != "" || opts.agent != ""
 	explicitOrch := opts.orchestratorAgent != "" || opts.agent != ""
@@ -1080,16 +1123,6 @@ func (c *commandContext) setupReconcileAgents(ctx context.Context, opts setupOpt
 	if opts.readOnly() {
 		res.pending = true
 		return nil, "would " + summary
-	}
-	if project.Config == nil {
-		// A degraded project reports no config; writing over it would wipe it.
-		cfg, err := c.currentProjectConfig(ctx, project.ID)
-		if err != nil {
-			step := setupStep{Step: setupStepProject, Status: setupFailed, Detail: "could not read the project config: " + err.Error()}
-			return &step, ""
-		}
-		cfg.Worker.Agent, cfg.Orchestrator.Agent = want.Worker.Agent, want.Orchestrator.Agent
-		want = cfg
 	}
 	var updated projectResult
 	if err := c.putJSON(ctx, "projects/"+url.PathEscape(project.ID)+"/config", setConfigRequest{Config: want}, &updated); err != nil {
@@ -1187,7 +1220,10 @@ type setupBranchPlan struct {
 // previewFix is the command a person runs before setup registers the repo.
 func (p setupBranchPlan) previewFix(path string) string {
 	if p.remote {
-		return fmt.Sprintf("git -C %s remote set-head origin <branch>", shellQuote(path))
+		// set-head needs the remote-tracking branch, so fetch first. If the
+		// remote is unreachable, register the project and set its default
+		// branch with `ao project set-config` instead.
+		return fmt.Sprintf("git -C %s fetch origin && git -C %s remote set-head origin --auto", shellQuote(path), shellQuote(path))
 	}
 	return fmt.Sprintf("git -C %s switch <branch>", shellQuote(path))
 }
@@ -1343,7 +1379,9 @@ func (c *commandContext) setupStartStep(ctx context.Context, opts setupOptions, 
 		step.Status, step.Detail, step.Fix = setupNeedsHuman, "the task is waiting on you: "+task.Reason, task.Fix
 		if step.Fix == "" && len(task.SessionIDs) > 0 {
 			// The task already exists: starting it again would run it twice.
-			step.Fix = fmt.Sprintf("answer the agent in Orchestrator (session %s); do not start the task again", task.SessionIDs[0])
+			// The session waiting may be a worker the orchestrator started;
+			// `ao task status` names it.
+			step.Fix = fmt.Sprintf("answer the agent that is waiting in Orchestrator (`ao task status %s` names it); do not start the task again", task.TaskID)
 		}
 	case taskStatusQueued:
 		// Accepted behind the agent's current turn: it will run, so it is
@@ -1376,7 +1414,11 @@ func writeSetupResult(w io.Writer, res setupResult, opts setupOptions) error {
 	case res.Ready:
 		b.WriteString("\nOrchestrator is ready.")
 		if opts.start == "" {
-			b.WriteString(" Start a task with: ao task start \"<task>\"")
+			if res.Project != nil && res.Project.ID != "" {
+				fmt.Fprintf(&b, " Start a task with: ao task start --project %s \"<task>\"", shellQuote(res.Project.ID))
+			} else {
+				b.WriteString(" Start a task with: ao task start \"<task>\"")
+			}
 		}
 		b.WriteString("\n")
 		if len(res.NextActions) > 0 {

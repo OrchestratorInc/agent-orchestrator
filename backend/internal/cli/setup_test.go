@@ -8,6 +8,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"sort"
 	"strings"
 	"sync"
@@ -444,7 +445,11 @@ func TestSetupExplicitAgentOnRegisteredProjectNeedsYes(t *testing.T) {
 
 func TestSetupUnbornAndNonGitRepos(t *testing.T) {
 	d := newSetupDaemon(t)
-	dir := t.TempDir()
+	// A space in the path: the suggested commands must quote it.
+	dir := filepath.Join(t.TempDir(), "my repo")
+	if err := os.Mkdir(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
 	d.set("POST /api/v1/projects", 400, `{"code":"PROJECT_UNBORN","message":"needs a commit"}`)
 	out, _, err := executeCLI(t, fakeClockDeps(), "setup", "--path", dir, "--json")
 	if got := ExitCode(err); got != setupExitNeedsHuman {
@@ -459,7 +464,7 @@ func TestSetupUnbornAndNonGitRepos(t *testing.T) {
 	if got := ExitCode(err); got != setupExitNeedsHuman {
 		t.Fatalf("exit = %d (%v)", got, err)
 	}
-	if fix := stepNamed(t, decodeSetup(t, out), "project").Fix; fix != fmt.Sprintf("git -C %s init && git -C %s commit --allow-empty -m \"initial commit\"", dir, dir) {
+	if fix := stepNamed(t, decodeSetup(t, out), "project").Fix; fix != fmt.Sprintf("git -C %s init && git -C %s commit --allow-empty -m \"initial commit\"", shellQuote(dir), shellQuote(dir)) {
 		t.Fatalf("fix = %q", fix)
 	}
 }
@@ -612,7 +617,7 @@ func TestSetupStartWaitingOnUserExits3(t *testing.T) {
 	if res.Task == nil || res.Task.Status != taskStatusNeedsInput {
 		t.Fatalf("task = %+v", res.Task)
 	}
-	if want := []string{"answer the agent in Orchestrator (session calc-1); do not start the task again"}; !reflect.DeepEqual(res.NextActions, want) {
+	if want := []string{"answer the agent that is waiting in Orchestrator (`ao task status calc-1` names it); do not start the task again"}; !reflect.DeepEqual(res.NextActions, want) {
 		t.Fatalf("next_actions = %q, want %q", res.NextActions, want)
 	}
 }
@@ -939,6 +944,11 @@ func TestSetupBothRoleFlagsIgnoreAnUnusedAgentFlag(t *testing.T) {
 // prints out and exits with code.
 func fakeStatusCommand(t *testing.T, agent, out string, code int, cmd setupAuthStatusCommand) {
 	t.Helper()
+	if runtime.GOOS == "windows" {
+		// The fixture is a POSIX shell script, which Windows cannot run
+		// directly. The status parsing it exercises is platform-neutral.
+		t.Skip("status-command fixture is a POSIX shell script")
+	}
 	script := filepath.Join(t.TempDir(), "status")
 	body := fmt.Sprintf("#!/bin/sh\nprintf '%%s\\n' '%s'\nexit %d\n", out, code)
 	if err := os.WriteFile(script, []byte(body), 0o755); err != nil {
@@ -1175,5 +1185,81 @@ func TestSetupStartStillQueuedExits4(t *testing.T) {
 		if strings.Contains(a, "retry") {
 			t.Fatalf("next_actions tells the agent to retry a queued task: %q", res.NextActions)
 		}
+	}
+}
+
+func TestSetupStartNeedsInputDoesNotSayRerunSetup(t *testing.T) {
+	d := newSetupDaemon(t)
+	repo := gitRepo(t, true)
+	registerOnPost(d, repo, "example/calc")
+	d.set("POST /api/v1/orchestrators/delegate", 202, `{"ok":true,"workerId":"calc-1"}`)
+	d.set("GET /api/v1/sessions/calc-1", 200, `{"session":{"id":"calc-1","harness":"claude-code","mode":"chat","provisionState":"ready","activity":{"state":"active"}}}`)
+	d.set("GET /api/v1/sessions/calc-1/conversation", 200, `{"turns":[{"id":"t1","state":"running"}],"activities":[{"turnId":"t1","activityKind":"approval","status":"pending"}]}`)
+	out, _, _ := executeCLI(t, fakeClockDeps(), "setup", "--path", repo, "--start", "fix it", "--worker", "--json")
+	verify := stepNamed(t, decodeSetup(t, out), "verify")
+	if strings.Contains(verify.Detail, "then run `ao setup` again") || !strings.Contains(verify.Detail, "do not run `ao setup --start` again") {
+		t.Fatalf("verify = %+v", verify)
+	}
+}
+
+func TestSetupCheckWithoutDaemonReportsRoleFlags(t *testing.T) {
+	setConfigEnv(t)
+	clearCallerEnv(t)
+	out, _, _ := executeCLI(t, Deps{}, "setup", "--check", "--agent", "gemini", "--worker-agent", "codex", "--orchestrator-agent", "claude-code", "--json")
+	res := decodeSetup(t, out)
+	if res.Agent == nil || res.Agent.Source != "roles" || res.Agent.Worker != "codex" || res.Agent.Orchestrator != "claude-code" || res.Agent.AuthStatus != "unknown" {
+		t.Fatalf("agent = %+v", res.Agent)
+	}
+}
+
+func TestSetupCheckDoesNotProbeAgents(t *testing.T) {
+	d := newSetupDaemon(t)
+	repo := gitRepo(t, true)
+	for _, mode := range []string{"--check", "--dry-run"} {
+		out, _, _ := executeCLI(t, fakeClockDeps(), "setup", "--path", repo, "--agent", "codex", mode, "--json")
+		for _, r := range d.requests {
+			if strings.HasSuffix(r, "/probe") {
+				t.Fatalf("%s called %s; the probe can start background work", mode, r)
+			}
+		}
+		if agent := stepNamed(t, decodeSetup(t, out), "agent"); agent.Status != setupOK {
+			t.Fatalf("%s: agent step = %+v (codex is ready in the readiness reading)", mode, agent)
+		}
+	}
+}
+
+func TestSetupReconcileUsesTheReReadConfig(t *testing.T) {
+	d := newSetupDaemon(t)
+	repo := gitRepo(t, true)
+	d.set("GET /api/v1/projects", 200, fmt.Sprintf(`{"projects":[{"id":"calc","path":%q}]}`, repo))
+	// The first read carries no config; the re-read shows claude-code saved.
+	reads := 0
+	d.setFunc("GET /api/v1/projects/calc", func() (int, string) {
+		reads++
+		if reads == 1 {
+			return 200, fmt.Sprintf(`{"status":"ok","project":{"id":"calc","path":%q,"repo":"example/calc","defaultBranch":"main"}}`, repo)
+		}
+		return 200, fmt.Sprintf(`{"status":"ok","project":{"id":"calc","path":%q,"repo":"example/calc","defaultBranch":"main","config":{"worker":{"agent":"claude-code"},"orchestrator":{"agent":"claude-code"}}}}`, repo)
+	})
+	d.set("PUT /api/v1/projects/calc/config", 200, `{"project":{"id":"calc"}}`)
+	out, _, err := executeCLI(t, fakeClockDeps(), "setup", "--path", repo, "--agent", "codex", "--json")
+	if got := ExitCode(err); got != setupExitNeedsHuman {
+		t.Fatalf("exit = %d (%v)\n%s", got, err, out)
+	}
+	if d.saw("PUT /api/v1/projects/calc/config") {
+		t.Fatalf("setup replaced the saved agents without --yes: %s", d.bodies["PUT /api/v1/projects/calc/config"])
+	}
+}
+
+func TestSetupReadyHintNamesTheProject(t *testing.T) {
+	d := newSetupDaemon(t)
+	repo := gitRepo(t, true)
+	registerOnPost(d, repo, "example/calc")
+	out, _, err := executeCLI(t, fakeClockDeps(), "setup", "--path", repo)
+	if err != nil {
+		t.Fatalf("err = %v\n%s", err, out)
+	}
+	if !strings.Contains(out, `ao task start --project calc "<task>"`) {
+		t.Fatalf("output:\n%s", out)
 	}
 }
