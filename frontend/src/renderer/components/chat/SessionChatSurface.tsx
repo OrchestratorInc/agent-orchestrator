@@ -1,4 +1,5 @@
 import { apiErrorException } from "../../lib/api-error-exception";
+import { SessionChatApprovalCard } from "../approvals/ApprovalHost";
 import { useSessionAccountSwitch } from "../SessionAccountSummary";
 import type { OpenFileAnnotation } from "../../../shared/chat-file-reference";
 import { ForkSessionContext } from "../SessionForkControls";
@@ -80,6 +81,7 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 	onRevealSubagents,
 	session,
 	hostId,
+	showApprovals = false,
 	assetBaseUrl,
 	reviewerTerminal,
 	onOpenReviewerTerminal,
@@ -136,6 +138,8 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 	session: WorkspaceSession;
 	/** Owning daemon for a remote session; omitted for the local daemon. */
 	hostId?: string;
+	/** Draw the session's pending browser approval at the end of its chat. */
+	showApprovals?: boolean;
 	assetBaseUrl?: string;
 	reviewerTerminal?: { handleId: string; harness: string };
 	onOpenReviewerTerminal?: (target: { handleId: string; harness: string }) => void;
@@ -741,6 +745,7 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 				remoteHostId={hostId}
 				snapshot={renderSnapshot}
 				promptSuggestion={promptSuggestion}
+				timelineEnd={showApprovals ? <SessionChatApprovalCard sessionId={session.id} hostId={hostId} /> : undefined}
 				newWorkDisabled={newWorkDisabled || savedCopy}
 				composerLockedPlaceholder={hostUnreachable && newWorkDisabled ? t("remote.offlineCopy") : showingSavedPage ? "Loading conversation…" : undefined}
 				sendBlockedReason={hostUnreachable && !newWorkDisabled ? t("remote.sendWhenConnected") : undefined}

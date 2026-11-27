@@ -198,6 +198,10 @@ type Config struct {
 	// reply text or tool call. A nil result keeps the generic error, and an
 	// authentication refusal never reaches it.
 	PromptErrorFailure func(err error, answered bool) error
+	// CompactionMessage recognizes reply text an agent sends to report its own
+	// compaction (Qwen Code), given the chunk's text and `_meta`. A recognized
+	// chunk is kept out of the reply and drives the turn's compaction row.
+	CompactionMessage func(text string, meta map[string]any) (CompactionReport, bool)
 	// HistoryNotice reports a replayed user message chunk that the agent wrote
 	// into its own transcript. Replay starts no turn for it, so the agent's
 	// output after it stays in the turn before, as it did live.
@@ -983,6 +987,7 @@ func (d *Driver) initialize(
 	conv.backgroundTaskOutput = d.cfg.BackgroundTaskOutput
 	conv.decodeConversationID = d.cfg.DecodeProviderConversationID
 	conv.historyNotice = d.cfg.HistoryNotice
+	conv.compactionMessage = d.cfg.CompactionMessage
 	conv.hideCommand = d.cfg.HideCommand
 	conv.historyUserChunkIsMessage = d.cfg.HistoryUserChunkIsMessage
 	conv.historyReconciler = d.cfg.HistoryReconciler

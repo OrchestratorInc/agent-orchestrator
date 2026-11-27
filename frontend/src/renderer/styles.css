@@ -745,13 +745,8 @@ html[data-ao-platform="darwin"] .settings-dialog-body :is(button, a, input, sele
 	background: transparent;
 }
 
-/* The rail's line is drawn by the session column, one pixel left of the rail,
- * so the rail's own edge pixel is empty. The resize handle's hover line (which
- * the rail clips to its own box) steps onto that pixel, so it continues the
- * divider instead of floating 1px off it. */
-.center-panel-shell--floating-topbar [data-slot="inspector-container"] [data-resize-line] {
-	transform: translateX(-1px);
-}
+/* The resize handle's hover line finds that line itself (SessionInspectorRail's
+ * `edge`), so no nudge here: a fixed offset drifts as soon as the layout does. */
 
 /* Page roots (board, session, automations, …) fill the whole surface, band
  * included; the panel fill comes from the surface's ::before instead. */
@@ -7542,8 +7537,10 @@ html[data-new-desktop-ui] {
 	--sidebar-width-rail: calc(var(--sidebar-rail-button) + 16px);
 }
 
+/* Open, 2px past the right edge stay painted: the resize line is centered on
+ * the panel's border, which starts where the sidebar ends. */
 html[data-new-desktop-ui] .sidebar-rail-clip {
-	clip-path: inset(0 0 0 0);
+	clip-path: inset(0 -2px 0 0);
 	transition: clip-path var(--ease-shell-panel);
 }
 
@@ -8132,6 +8129,13 @@ html[data-new-desktop-ui] [role="menu"]:not(:has(> [role="menuitem"]:not([aria-h
 	display: none;
 }
 
+/* Stay Awake's switch row wraps its icon in a span, which the rule above
+ * doesn't reach; drop it too so the Mobile menu is words only. Its paused
+ * warning still shows as the row's red second line and on the footer icon. */
+html[data-new-desktop-ui] [role="menu"] [data-awake-menu-icon] {
+	display: none;
+}
+
 /* The menu's edge: a slight hairline so the panel holds its shape over any
  * surface; the overlay border token is too faint to read on its own. */
 html[data-new-desktop-ui] [role="menu"] {
@@ -8149,7 +8153,8 @@ html[data-new-desktop-ui] [role="menu"] :is([role="menuitem"], [role="menuitemch
 
 /* A destructive row under the pointer takes a soft red fill instead, so the
  * row reads as a warning before it runs. */
-html[data-new-desktop-ui] [role="menu"] .text-destructive:is(:focus, [data-highlighted]):not([data-disabled]) {
+/* Same selector shape as the fill rule above, so this one outranks it. */
+html[data-new-desktop-ui] [role="menu"] :is([role="menuitem"], [role="menuitemcheckbox"], [role="menuitemradio"]).text-destructive:is(:focus, [data-highlighted]):not([data-disabled], .settings-menu-surface [class*="before:absolute"]) {
 	background-color: color-mix(in oklab, var(--destructive) 22%, transparent);
 	color: color-mix(in oklab, var(--destructive) 75%, var(--foreground));
 }

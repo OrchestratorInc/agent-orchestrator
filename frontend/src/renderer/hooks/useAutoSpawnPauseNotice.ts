@@ -36,7 +36,7 @@ export function useAutoSpawnPauseNotice(projects: { id: string; name: string; ho
 						model: pause.model || "default", effort: pause.effort || "default", message: pause.message,
 					}),
 					{
-						tone: "error", durationMs: 0, dedupeKey,
+						tone: "error", durationMs: 0, dedupeKey, compact: true,
 						action: { label: t("autoSpawnPause.acknowledge", { defaultValue: "Acknowledge" }), run: () => {
 							seen.add(key);
 							try { window.localStorage.setItem(SEEN_KEY, JSON.stringify([...seen])); } catch { /* Retained in memory for this app run. */ }

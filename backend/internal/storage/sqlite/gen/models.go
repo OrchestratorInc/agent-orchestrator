@@ -197,7 +197,7 @@ type AppSetting struct {
 
 type Automation struct {
 	ID          domain.AutomationID
-	ProjectID   domain.ProjectID
+	ProjectID   *domain.ProjectID
 	DisplayName string
 	Prompt      string
 	Kind        domain.SessionKind
@@ -847,6 +847,9 @@ type Session struct {
 	AcceptedDeliveryID               string
 	AcceptedDeliveryLaunchID         string
 	RoleAgent                        string
+	MovedTo                          string
+	MoveConversationPlaced           int64
+	MoveStarted                      string
 }
 
 type SessionAgentAccount struct {
@@ -995,6 +998,13 @@ type SessionTerminalTurn struct {
 	AgentResponse   string
 	RequestedAt     time.Time
 	RespondedAt     sql.NullTime
+}
+
+type SessionVersionMove struct {
+	SessionID string
+	Intent    string
+	Stage     string
+	Attempts  int64
 }
 
 type SessionWorktree struct {

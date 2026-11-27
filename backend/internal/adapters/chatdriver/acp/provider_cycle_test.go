@@ -22,8 +22,7 @@ import (
 // own, with no prompt, no messageId, and no start or end marker, and closes
 // each model response with a usage_update.
 func TestACPProviderCycleAfterTurnSettlesAndStaysOutOfTheNextTurn(t *testing.T) {
-	restore := setProviderCycleWaits(50*time.Millisecond, time.Minute)
-	defer restore()
+	setProviderCycleWaits(t, 50*time.Millisecond, time.Minute)
 
 	agent := &fakeAgent{}
 	var prompts int
@@ -175,8 +174,7 @@ func TestACPProviderCycleAfterTurnSettlesAndStaysOutOfTheNextTurn(t *testing.T) 
 // completion must not end the cycle at the short grace; the new response's
 // own usage_update does.
 func TestACPProviderCycleWaitsForTheResponseAfterAToolCompletes(t *testing.T) {
-	restore := setProviderCycleWaits(20*time.Millisecond, time.Hour)
-	defer restore()
+	setProviderCycleWaits(t, 20*time.Millisecond, time.Hour)
 	conv := &conversation{
 		log:       slog.New(slog.NewTextHandler(io.Discard, nil)),
 		sessionID: "s", events: make(chan ports.ChatEvent, 32),
@@ -211,8 +209,7 @@ func TestACPProviderCycleWaitsForTheResponseAfterAToolCompletes(t *testing.T) {
 // Claude Code reports its own running and idle states; its idle ends the
 // cycle, and AO adds no state of its own.
 func TestACPProviderCycleEndsOnTheProvidersOwnIdle(t *testing.T) {
-	restore := setProviderCycleWaits(time.Hour, time.Hour)
-	defer restore()
+	setProviderCycleWaits(t, time.Hour, time.Hour)
 	conv := &conversation{
 		log:       slog.New(slog.NewTextHandler(io.Discard, nil)),
 		sessionID: "s", events: make(chan ports.ChatEvent, 32),
@@ -245,10 +242,75 @@ func TestACPProviderCycleEndsOnTheProvidersOwnIdle(t *testing.T) {
 	}
 }
 
-func setProviderCycleWaits(grace, quiet time.Duration) func() {
+// A compaction the agent runs between prompts, as when a background task wakes
+// it, gets a turn-less row like the rest of its cycle: it runs, then settles on
+// the agent's figures, or, left open when the next turn ends the cycle, says no
+// result came.
+func TestACPProviderCycleCompactionGetsATurnlessRow(t *testing.T) {
+	for name, test := range map[string]struct {
+		outcome map[string]any
+		exit    bool
+		want    string
+	}{
+		"reported":  {outcome: map[string]any{"status": "completed", "tokensBefore": 120000.0, "tokensAfter": 30000.0}},
+		"left open": {want: "No result reported"},
+		// Nothing else would settle the turn-less row once the agent is gone.
+		"agent exits": {exit: true, want: "No result reported"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			setProviderCycleWaits(t, 50*time.Millisecond, time.Minute)
+			agent, opened := compactionFailureTestDriver(t)
+			events := opened.Events()
+			push := func(value map[string]any) {
+				t.Helper()
+				if err := agent.conn.SessionUpdate(context.Background(), acpsdk.SessionNotification{
+					SessionId: acpsdk.SessionId(opened.ProviderConversationID()),
+					Update: acpsdk.SessionUpdate{SessionInfoUpdate: &acpsdk.SessionSessionInfoUpdate{
+						SessionUpdate: "session_info_update",
+						Meta:          map[string]any{"opencode/compaction": value},
+					}},
+				}); err != nil {
+					t.Fatalf("session/update: %v", err)
+				}
+			}
+			isCompacted := func(e ports.ChatEvent) bool { return e.Kind == ports.ChatEventCompacted }
+
+			push(map[string]any{"status": "started"})
+			running := collectUntil(t, events, isCompacted)
+			first := running[len(running)-1]
+			if first.ActivityStatus != domain.ActivityStatusRunning || first.ProviderTurnID != "" {
+				t.Fatalf("first compaction event = %q in turn %q, want a running turn-less row", first.ActivityStatus, first.ProviderTurnID)
+			}
+			switch {
+			case test.outcome != nil:
+				push(test.outcome)
+			case test.exit:
+				_ = opened.(*conversation).proc.stop()
+			default:
+				startTurn(t, opened, "next")
+			}
+			settled := collectUntil(t, events, isCompacted)
+			last := settled[len(settled)-1]
+			if last.ProviderItemID != first.ProviderItemID || last.ProviderTurnID != "" || last.ActivityStatus == domain.ActivityStatusRunning {
+				t.Fatalf("settled %q in turn %q on %q, want the same turn-less row settled", last.ActivityStatus, last.ProviderTurnID, last.ProviderItemID)
+			}
+			if last.Summary != test.want && test.want != "" {
+				t.Fatalf("settled summary = %q, want %q", last.Summary, test.want)
+			}
+			if test.want == "" && !strings.Contains(string(last.Detail), `"tokensReclaimed":90000`) {
+				t.Fatalf("settled detail = %s, want the agent's own figures", last.Detail)
+			}
+		})
+	}
+}
+
+// Registered as a cleanup before the test opens a driver, so it restores the
+// waits only after the driver's goroutines, which read them, have stopped.
+func setProviderCycleWaits(t *testing.T, grace, quiet time.Duration) {
+	t.Helper()
 	oldGrace, oldQuiet := providerCycleSettleGrace, providerCycleQuietWait
 	providerCycleSettleGrace, providerCycleQuietWait = grace, quiet
-	return func() { providerCycleSettleGrace, providerCycleQuietWait = oldGrace, oldQuiet }
+	t.Cleanup(func() { providerCycleSettleGrace, providerCycleQuietWait = oldGrace, oldQuiet })
 }
 
 func usageUpdate() acpsdk.SessionUpdate {
@@ -406,4 +468,58 @@ func TestACPProviderCycleEventsKeepTheOrderItsItemsChanged(t *testing.T) {
 			t.Fatalf("events = %q, want %q", got, want)
 		}
 	})
+}
+
+// Stop during AO's own /compact ends the turn before the agent reports the
+// compaction failed. That late failure has nothing open between prompts and
+// gets no row of its own; a later compaction still gets one.
+func TestACPProviderCycleDropsLateCompactionFailure(t *testing.T) {
+	setProviderCycleWaits(t, 50*time.Millisecond, time.Minute)
+	agent, opened := compactionFailureTestDriver(t)
+	events := opened.Events()
+	push := func(value map[string]any) {
+		t.Helper()
+		if err := agent.conn.SessionUpdate(context.Background(), acpsdk.SessionNotification{
+			SessionId: acpsdk.SessionId(opened.ProviderConversationID()),
+			Update: acpsdk.SessionUpdate{SessionInfoUpdate: &acpsdk.SessionSessionInfoUpdate{
+				SessionUpdate: "session_info_update",
+				Meta:          map[string]any{"opencode/compaction": value},
+			}},
+		}); err != nil {
+			t.Fatalf("session/update: %v", err)
+		}
+	}
+	push(map[string]any{"status": "failed", "error": map[string]any{"message": "API Error: Request was aborted."}})
+	// The late failure opens no cycle, so the agent never reads as busy: the
+	// next update, a usage report, arrives with no provider state before it.
+	if err := agent.conn.SessionUpdate(context.Background(), acpsdk.SessionNotification{
+		SessionId: acpsdk.SessionId(opened.ProviderConversationID()),
+		Update: acpsdk.SessionUpdate{UsageUpdate: &acpsdk.SessionUsageUpdate{
+			SessionUpdate: "usage_update", Used: 1000, Size: 200000,
+		}},
+	}); err != nil {
+		t.Fatalf("session/update: %v", err)
+	}
+	beforeUsage := collectUntil(t, events, func(e ports.ChatEvent) bool { return e.Kind == ports.ChatEventUsage })
+	if hasEvent(beforeUsage, func(e ports.ChatEvent) bool { return e.Kind == ports.ChatEventProviderState }) {
+		t.Fatalf("late compaction failure changed the provider state: %+v", beforeUsage)
+	}
+	push(map[string]any{"status": "started"})
+	got := collectUntil(t, events, func(e ports.ChatEvent) bool { return e.Kind == ports.ChatEventCompacted })
+	if first := got[len(got)-1]; first.ActivityStatus != domain.ActivityStatusRunning {
+		t.Fatalf("first compaction row = %q %q, want the later compaction running", first.ActivityStatus, first.Summary)
+	}
+}
+
+func TestCompactionFailureText(t *testing.T) {
+	for reason, want := range map[string]string{
+		"too_few_groups":          "Not enough messages to compact.",
+		"some_new_code":           "Compaction failed",
+		"":                        "Compaction failed",
+		"API Error: rate limited": "API Error: rate limited",
+	} {
+		if got := compactionFailureText(reason); got != want {
+			t.Errorf("compactionFailureText(%q) = %q, want %q", reason, got, want)
+		}
+	}
 }
