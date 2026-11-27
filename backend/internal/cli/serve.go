@@ -243,7 +243,7 @@ func (c *commandContext) serveForeground(parent context.Context, out, errOut io.
 }
 
 func (c *commandContext) serveForegroundLoop(ctx context.Context, out, errOut io.Writer, cfg config.Config, opts serveOptions) error {
-	sawDaemon, stopped, err := c.settleStartup(ctx, opts.timeout)
+	sawDaemon, sawOwner, stopped, err := c.settleStartup(ctx, opts.timeout)
 	if err != nil || stopped {
 		return err
 	}
@@ -255,8 +255,16 @@ func (c *commandContext) serveForegroundLoop(ctx context.Context, out, errOut io
 		// The daemon seen a moment ago went away cleanly, as under an
 		// `ao stop`: follow a replacement if one comes, and do not start a
 		// daemon in its place.
-		if res, err = c.waitForReplacement(ctx, cfg); err != nil || res == nil {
+		if res, err = c.waitForReplacement(ctx, cfg); err != nil {
 			return err
+		}
+		if res == nil {
+			// Like watchDaemon: the app's own daemon quitting with the app is
+			// a reason to run one, not a stop to honour.
+			if sawOwner == "app" {
+				return errors.New("the desktop app's daemon stopped with the app while this serve started; exiting so the service manager starts one")
+			}
+			return nil
 		}
 	}
 	// Tell `ao service install` that this serve has decided what to run, so
@@ -296,31 +304,38 @@ func serveAttachMarker(runFile string, pid int) string {
 
 // settleStartup waits out a daemon that is alive but not answering, as one
 // that `ao stop` is shutting down while this serve starts. It reports whether
-// it saw a live daemon at all, and stopped=true when that daemon then stopped
-// cleanly: the stop was meant to stick.
-func (c *commandContext) settleStartup(ctx context.Context, timeout time.Duration) (sawDaemon, stopped bool, err error) {
+// it saw a live daemon at all and that daemon's run-file owner, and
+// stopped=true when that daemon then stopped cleanly: the stop was meant to
+// stick. The desktop app's own daemon stopping is not such a stop.
+func (c *commandContext) settleStartup(ctx context.Context, timeout time.Duration) (sawDaemon bool, owner string, stopped bool, err error) {
 	deadline := c.deps.Now().Add(timeout)
 	settling := false
 	for {
 		st, err := c.inspectDaemon(ctx)
 		if err != nil {
-			return false, false, err
+			return false, "", false, err
 		}
 		switch st.State {
 		case stateUnhealthy:
 			settling = true
+			owner = st.owner
 		case stateStopped:
-			return settling, settling, nil
+			// An app-owned daemon that quit with the app is not a stop to
+			// honour: let the caller start one.
+			if settling && owner == "app" {
+				return false, "", false, nil
+			}
+			return settling, owner, settling, nil
 		case stateReady, stateNotReady:
-			return true, false, nil
+			return true, st.owner, false, nil
 		default:
-			return false, false, nil
+			return false, "", false, nil
 		}
 		if !c.deps.Now().Before(deadline) {
-			return true, false, nil // existingDaemon reports the unhealthy daemon
+			return true, owner, false, nil // existingDaemon reports the unhealthy daemon
 		}
 		if err := ctx.Err(); err != nil {
-			return false, false, err
+			return false, "", false, err
 		}
 		c.deps.Sleep(250 * time.Millisecond)
 	}

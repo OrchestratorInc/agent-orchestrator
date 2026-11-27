@@ -718,3 +718,33 @@ func TestServeAcceptsConcurrentWinnerAfterChildExit(t *testing.T) {
 		t.Fatalf("result = %#v, want the winner, reused", res)
 	}
 }
+
+// The desktop app's own daemon quitting while serve starts is a reason to run
+// one: serve exits non-zero so the service manager starts it again.
+func TestServeForegroundAppDaemonQuitsDuringStartup(t *testing.T) {
+	h := newForegroundHarness(t)
+	h.daemon(4242, "app")
+	checks := 0
+	old := serveForegroundDaemon
+	t.Cleanup(func() { serveForegroundDaemon = old })
+	serveForegroundDaemon = func([]string) error { h.started++; return nil }
+	_, _, err := executeCLI(t, Deps{
+		ProcessAlive: func(pid int) bool {
+			checks++
+			if checks == 1 {
+				return true // settleStartup: the app's daemon is ready
+			}
+			_ = runfile.Remove(h.cfg.runFile) // it quits with the app
+			return false
+		},
+		PIDMayBeHidden: func() bool { return false },
+		Now:            func() time.Time { return h.now },
+		Sleep:          func(d time.Duration) { h.now = h.now.Add(d) },
+	}, "serve", "--foreground")
+	if err == nil || !strings.Contains(err.Error(), "stopped with the app") {
+		t.Fatalf("err = %v, want a restart error when the app's daemon quits during startup", err)
+	}
+	if h.started != 0 {
+		t.Fatal("serve started a daemon itself; the service manager restart should")
+	}
+}

@@ -791,10 +791,9 @@ func TestServiceInstallFailsWhenAttachedServeExits(t *testing.T) {
 	}
 	var calls []serviceCall
 	deps := serviceTestDeps(&calls, nil)
-	loaded, inspected := false, 0
+	loaded := false
 	deps.ProcessAlive = func(pid int) bool {
-		inspected++
-		if inspected == 3 { // the readiness check: the serve exits meanwhile
+		if loaded { // the first readiness poll after bootstrap: the serve exits meanwhile
 			_ = os.Remove(marker)
 		}
 		return pid == 4242
