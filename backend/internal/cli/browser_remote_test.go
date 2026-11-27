@@ -286,3 +286,28 @@ func TestRemoteBrowserForwardRoutesAOSessionsThroughTheDaemonEvenWithAToken(t *t
 		t.Fatalf("rest = %v", rest)
 	}
 }
+
+func TestBrowserRemoteSaysWhenItMayBeWaitingForApproval(t *testing.T) {
+	setBrowserIdentity(t)
+	cfg := setConfigEnv(t)
+	previous := approvalHintDelay
+	approvalHintDelay = 20 * time.Millisecond
+	t.Cleanup(func() { approvalHintDelay = previous })
+	daemon := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		time.Sleep(150 * time.Millisecond) // the daemon is waiting for the user
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusForbidden)
+		_, _ = w.Write([]byte(`{"error":"forbidden","code":"BROWSER_ACTION_DENIED","message":"The user denied this action: Click \"Pay\". It was not performed.","requestId":"r1"}`))
+	}))
+	t.Cleanup(daemon.Close)
+	writeRunFileFor(t, cfg, daemon)
+	t.Setenv(envAgentBrowserURL, "http://127.0.0.1:9")
+	t.Setenv(envAgentBrowserToken, "")
+	_, stderr, err := executeCLIRoot(t, Deps{ProcessAlive: func(int) bool { return true }}, "browser", "wait", "--fn", "document.forms[0].submit()")
+	if err == nil || !strings.Contains(err.Error(), "BROWSER_ACTION_DENIED") {
+		t.Fatalf("err = %v", err)
+	}
+	if !strings.Contains(stderr, "waiting for the user's approval in Orchestrator") {
+		t.Fatalf("stderr = %q", stderr)
+	}
+}

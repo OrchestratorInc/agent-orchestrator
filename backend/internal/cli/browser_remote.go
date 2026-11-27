@@ -153,15 +153,23 @@ func runGatedRemoteBrowserCommand(ctx context.Context, deps Deps, args []string,
 	}
 	c := &commandContext{deps: deps}
 	var out remoteBrowserResponse
-	err = c.doJSONPathWithHeadersAndTimeout(
-		ctx,
-		http.MethodPost,
-		"/api/v1/browser/remote-commands",
-		map[string]any{"sessionId": sessionID, "args": args, "files": files},
-		&out,
-		map[string]string{browserCapabilityHeader: capability},
-		browserCommandTimeout,
-	)
+	// Only the daemon can read a raw agent-browser command, so any one may be
+	// waiting for the user; a quick one finishes before the hint shows.
+	stderr := deps.Err
+	if stderr == nil {
+		stderr = io.Discard
+	}
+	err = withApprovalHint(stderr, func() error {
+		return c.doJSONPathWithHeadersAndTimeout(
+			ctx,
+			http.MethodPost,
+			"/api/v1/browser/remote-commands",
+			map[string]any{"sessionId": sessionID, "args": args, "files": files},
+			&out,
+			map[string]string{browserCapabilityHeader: capability},
+			browserCommandTimeout,
+		)
+	})
 	if err != nil {
 		return err
 	}

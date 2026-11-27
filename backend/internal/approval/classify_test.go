@@ -330,3 +330,30 @@ func TestLongConfirmButtonsMatchAfterALeadingFiller(t *testing.T) {
 		t.Fatalf("link headline asked: %+v", got)
 	}
 }
+
+func TestMayNeedApprovalCoversEveryGatedAction(t *testing.T) {
+	for _, tc := range []struct {
+		action string
+		args   map[string]any
+		want   bool
+	}{
+		{"click", nil, true},
+		{"dblclick", nil, true},
+		{"press", map[string]any{"key": "Space"}, true},
+		{"press", map[string]any{"key": "Tab"}, false},
+		{"act", map[string]any{"instruction": "x"}, true},
+		{"act", map[string]any{"instruction": "x", "action": "fill", "value": "a\n"}, false},
+		{"act", map[string]any{"instruction": "x", "action": "type", "value": "a\n"}, true},
+		{"type", map[string]any{"text": "a\r"}, true},
+		{"fill", map[string]any{"text": "a\n"}, false},
+		{"drag", nil, true},
+		{"dialog", map[string]any{"operation": "accept"}, true},
+		{"dialog", map[string]any{"operation": "status"}, false},
+		{"check", nil, false},
+		{"snapshot", nil, false},
+	} {
+		if got := MayNeedApproval(tc.action, tc.args); got != tc.want {
+			t.Errorf("%s %v = %v", tc.action, tc.args, got)
+		}
+	}
+}
