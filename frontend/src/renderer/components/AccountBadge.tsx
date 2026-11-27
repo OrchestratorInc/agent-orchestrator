@@ -69,8 +69,8 @@ function AccountLetters({ letters, color }: { letters: string; color?: AccountCo
 		<span
 			aria-hidden="true"
 			className={cn(
-				"inline-flex h-[18px] min-w-[18px] shrink-0 items-center justify-center rounded-[5px] px-1 text-[10px] font-semibold leading-none",
-				color ? `${COLOR_CLASS[color]} text-(--account-badge-foreground)` : "bg-foreground/20 text-foreground",
+				"inline-flex h-[18px] min-w-[18px] shrink-0 items-center justify-center rounded-[5px] px-1 text-[length:10px] font-semibold leading-none",
+				color ? `${COLOR_CLASS[color]} text-(color:--account-badge-foreground)` : "bg-foreground/20 text-foreground",
 			)}
 		>
 			{letters}
@@ -107,8 +107,8 @@ export function ProviderMarkWithAccount({ provider, accountProvider, name, email
 			<span
 				aria-hidden="true"
 				className={cn(
-					"absolute -right-2 -bottom-1.5 inline-flex size-4 items-center justify-center rounded-full text-[7.5px] font-bold leading-none tracking-tight shadow-[0_0_0_1.5px_var(--composer-bg,var(--color-bg-tertiary))]",
-					color ? `${COLOR_CLASS[color]} text-(--account-badge-foreground)` : "bg-foreground/45 text-background",
+					"absolute -right-2 -bottom-1 inline-flex size-[15px] items-center justify-center rounded-full text-[length:7px] font-bold leading-none tracking-[-0.02em] shadow-[0_0_0_1.5px_var(--composer-bg,var(--color-bg-tertiary))]",
+					color ? `${COLOR_CLASS[color]} text-(color:--account-badge-foreground)` : "bg-foreground/45 text-background",
 				)}
 			>
 				{letters}

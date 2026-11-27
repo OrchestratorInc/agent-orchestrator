@@ -19,7 +19,7 @@ describe("AccountBadge", () => {
 		render(<AccountBadge provider="claude" name="Work" color="teal" />);
 		const letters = screen.getByText("WO");
 		expect(letters.className).toContain("bg-(--account-color-teal)");
-		expect(letters.className).toContain("text-(--account-badge-foreground)");
+		expect(letters.className).toContain("text-(color:--account-badge-foreground)");
 	});
 
 	it("is neutral without a color", () => {
