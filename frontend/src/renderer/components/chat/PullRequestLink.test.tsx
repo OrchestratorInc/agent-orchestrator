@@ -45,7 +45,7 @@ describe("pullRequestChipLabel", () => {
 describe("pull request links in chat", () => {
 	const text = `Reviewed ${PR}, which builds on [acme/api#9](https://github.com/acme/api/pull/9), and [the share fix](https://github.com/acme/api/pull/14).`;
 
-	it.each([false, true])("draws PR references as chips and keeps worded links as text (streaming: %s)", (streaming) => {
+	it.each([false, true])("draws PR references as chips, and a worded link as a chip with its words (streaming: %s)", (streaming) => {
 		render(<ChatMarkdown streaming={streaming} text={text} />);
 		const bare = screen.getByRole("link", { name: "#12" });
 		expect(bare).toHaveAttribute("href", PR);
@@ -58,8 +58,8 @@ describe("pull request links in chat", () => {
 		expect(within(cross).getByText("acme/api")).toHaveClass("text-muted-foreground");
 
 		const worded = screen.getByRole("link", { name: "the share fix" });
-		expect(worded.className).toContain("text-markdown-link");
-		expect(worded.querySelector("[data-link-favicon]")).not.toBeNull();
+		expect(worded.className).toContain("bg-interactive-active");
+		expect(worded.querySelector("[data-link-words]")).toHaveTextContent("the share fix");
 	});
 
 	it("colours a chip by its PR's state once read", () => {
