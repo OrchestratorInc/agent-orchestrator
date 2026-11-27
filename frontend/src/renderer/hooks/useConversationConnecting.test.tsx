@@ -54,6 +54,9 @@ function LiveConversation() {
 	) : null;
 }
 
+// The chat also reads projects, sessions and settings; only its conversation fetches count here.
+const conversationFetches = () => getMock.mock.calls.filter(([path]) => path === "/api/v1/sessions/{sessionId}/conversation").length;
+
 let queryClient: QueryClient;
 let disconnect: (() => void) | undefined;
 let serverController: string;
@@ -125,7 +128,7 @@ describe("conversation readiness updates", () => {
 	it.each(["ancillary", "provisioned"] as const)("clears connecting after ready is followed by the %s session update", async (kind) => {
 		await openWhileConnecting();
 		await publishReadySession(kind);
-		expect(getMock).toHaveBeenCalledTimes(2);
+		expect(conversationFetches()).toBe(2);
 		expect(postMock).not.toHaveBeenCalled();
 		expect(screen.queryByText("Connecting to the agent…")).not.toBeInTheDocument();
 	});
@@ -133,7 +136,7 @@ describe("conversation readiness updates", () => {
 	it("clears connecting if the readiness event also identifies its conversation", async () => {
 		await openWhileConnecting();
 		await publishReadySession("ancillary", true);
-		expect(getMock).toHaveBeenCalledTimes(2);
+		expect(conversationFetches()).toBe(2);
 		expect(screen.queryByText("Connecting to the agent…")).not.toBeInTheDocument();
 	});
 
@@ -143,7 +146,7 @@ describe("conversation readiness updates", () => {
 		render(<QueryClientProvider client={queryClient}><LiveConversation /></QueryClientProvider>);
 		await act(async () => { await vi.advanceTimersByTimeAsync(60_000); });
 		expect(screen.getByRole("combobox", { name: "Message the agent" })).toBeInTheDocument();
-		expect(getMock).toHaveBeenCalledTimes(1);
+		expect(conversationFetches()).toBe(1);
 		expect(screen.queryByText("Connecting to the agent…")).not.toBeInTheDocument();
 	});
 });
