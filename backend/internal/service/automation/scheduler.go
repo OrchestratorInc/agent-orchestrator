@@ -329,7 +329,7 @@ func recoveredStart(session domain.SessionRecord) time.Time {
 // next occurrence. When the agent cannot be stopped yet, the run stays running
 // and the next tick retries.
 func (s *Service) finishSettledRun(ctx context.Context, store schedulerStore, id domain.AutomationRunID, session domain.SessionRecord, now time.Time) error {
-	if !session.IsTerminated && session.HibernatedAt == nil {
+	if !session.IsTerminated {
 		stopped, err := s.stopSettledSession(ctx, session)
 		if err != nil || !stopped {
 			return err
@@ -342,12 +342,18 @@ func (s *Service) finishSettledRun(ctx context.Context, store schedulerStore, id
 // stopSettledSession hibernates a Chat session, keeping its conversation
 // resumable, and kills a terminal one or a Chat session whose provider cannot
 // resume. Killing keeps the transcript and any uncommitted work; only a clean
-// worktree is removed.
+// worktree is removed. A Chat session already marked hibernated still goes
+// through hibernation: its provider is gone unless an earlier shutdown failed,
+// and that call finishes such a shutdown.
 func (s *Service) stopSettledSession(ctx context.Context, session domain.SessionRecord) (bool, error) {
+	chat := domain.NormalizeSessionMode(session.Mode) == domain.SessionModeChat
+	if !chat && session.HibernatedAt != nil {
+		return true, nil
+	}
 	if s.spawner == nil {
 		return false, fmt.Errorf("cannot stop settled automation session %s: session spawner is unavailable", session.ID)
 	}
-	if domain.NormalizeSessionMode(session.Mode) == domain.SessionModeChat && session.Activity.State != domain.ActivityExited {
+	if chat && (session.HibernatedAt != nil || session.Activity.State != domain.ActivityExited) {
 		hibernated, err := s.spawner.HibernateChatForAutomation(ctx, session.ID)
 		if !errors.Is(err, ports.ErrChatHibernationUnsupported) {
 			if err != nil {

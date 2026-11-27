@@ -411,6 +411,44 @@ func TestAutomationMaterializationCoalescesPendingRuns(t *testing.T) {
 	}
 }
 
+// A pending run already at the requested occurrence is the one to keep:
+// moving the oldest there would collide with it, and skipping it would leave
+// the kept run at an older time.
+func TestAutomationMaterializationKeepsPendingRunAtTheOccurrence(t *testing.T) {
+	store := newTestStore(t)
+	seedProject(t, store, "scheduled")
+	ctx := context.Background()
+	base := time.Date(2026, time.August, 25, 9, 0, 0, 0, time.UTC)
+	if _, err := store.CreateAutomation(ctx, domain.Automation{
+		ID: "automation-1", ProjectID: "scheduled", DisplayName: "Triage", Prompt: "Review",
+		Kind: domain.KindWorker, RRuleText: "FREQ=HOURLY", Timezone: "UTC", Enabled: true,
+		NextRunAt: base, CreatedAt: base, UpdatedAt: base,
+	}); err != nil {
+		t.Fatalf("CreateAutomation: %v", err)
+	}
+	latest := base.Add(time.Hour)
+	for id, at := range map[domain.AutomationRunID]time.Time{"run-older": base, "run-at-occurrence": latest} {
+		if _, _, err := store.CreateAutomationRun(ctx, domain.AutomationRun{
+			ID: id, AutomationID: "automation-1", ScheduledFor: at,
+			Status: domain.AutomationRunPending, CreatedAt: base, UpdatedAt: base,
+		}); err != nil {
+			t.Fatalf("CreateAutomationRun %s: %v", id, err)
+		}
+	}
+	applied, err := store.MaterializeAutomationRun(ctx, "automation-1", base, domain.AutomationRun{
+		ID: "run-new", AutomationID: "automation-1", ScheduledFor: latest, Status: domain.AutomationRunPending, CreatedAt: latest, UpdatedAt: latest,
+	}, latest.Add(time.Hour), latest)
+	if err != nil || !applied {
+		t.Fatalf("MaterializeAutomationRun: applied=%v err=%v", applied, err)
+	}
+	if got, ok, err := store.GetAutomationRun(ctx, "run-at-occurrence"); err != nil || !ok || got.Status != domain.AutomationRunPending || !got.ScheduledFor.Equal(latest) {
+		t.Fatalf("run at the occurrence = %#v ok=%v err=%v, want pending at %s", got, ok, err, latest)
+	}
+	if got, ok, err := store.GetAutomationRun(ctx, "run-older"); err != nil || !ok || got.Status != domain.AutomationRunSkipped {
+		t.Fatalf("older run = %#v ok=%v err=%v, want skipped", got, ok, err)
+	}
+}
+
 // Removing a project archives it. Dropping the project filter from the due
 // query must make this test fail: the scheduler would keep firing (and
 // failing) the archived project's automation on every occurrence.

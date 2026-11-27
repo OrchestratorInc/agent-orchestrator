@@ -46,9 +46,17 @@ func (f *schedulerMemoryStore) MaterializeAutomationRun(_ context.Context, id do
 		f.runs[run.ID] = run
 	} else {
 		kept := pending[0]
+		for _, candidate := range pending {
+			if candidate.ScheduledFor.Equal(run.ScheduledFor) {
+				kept = candidate
+			}
+		}
 		kept.ScheduledFor, kept.UpdatedAt = run.ScheduledFor, updated
 		f.runs[kept.ID] = kept
-		for _, extra := range pending[1:] {
+		for _, extra := range pending {
+			if extra.ID == kept.ID {
+				continue
+			}
 			extra.Status, extra.FinishedAt, extra.UpdatedAt = domain.AutomationRunSkipped, &updated, updated
 			f.runs[extra.ID] = extra
 		}
@@ -421,6 +429,33 @@ func TestTickKeepsRunWhileSettledChatCannotHibernateYet(t *testing.T) {
 	}
 	if store.runs[runID].Status != domain.AutomationRunRunning || store.runs["run-2"].Status != domain.AutomationRunPending || len(spawner.calls) != 0 || len(spawner.kills) != 0 {
 		t.Fatalf("runs=%#v calls=%d kills=%v", store.runs, len(spawner.calls), spawner.kills)
+	}
+}
+
+// A Chat session marked hibernated by a shutdown that then failed may still
+// have a live provider. Its run waits for the stop to be finished instead of
+// completing on the marker alone.
+func TestTickFinishesAFailedHibernationBeforeCompletingRun(t *testing.T) {
+	now := time.Date(2026, time.August, 25, 12, 0, 0, 0, time.UTC)
+	firstSignal := now.Add(-30 * time.Minute)
+	marked := now.Add(-5 * time.Minute)
+	store := newSchedulerStore()
+	store.automations["automation-1"] = domain.Automation{ID: "automation-1", ProjectID: "scheduled", Enabled: true, NextRunAt: now.Add(time.Hour)}
+	runID, sessionID := domain.AutomationRunID("run-1"), domain.SessionID("session-1")
+	store.runs[runID] = domain.AutomationRun{ID: runID, AutomationID: "automation-1", ScheduledFor: now.Add(-time.Hour), SessionID: &sessionID, Status: domain.AutomationRunRunning}
+	store.sessions[sessionID] = domain.SessionRecord{ID: sessionID, Mode: domain.SessionModeChat, AutomationRunID: &runID, HibernatedAt: &marked, FirstSignalAt: firstSignal, Activity: domain.Activity{State: domain.ActivityIdle, LastActivityAt: firstSignal.Add(10 * time.Minute)}}
+	spawner := &recordingSpawner{store: store, hibernateErr: errors.New("provider host stop failed")}
+	svc := New(Deps{Store: store, Spawner: spawner, Clock: func() time.Time { return now }})
+
+	if err := svc.Tick(context.Background(), now); err == nil || store.runs[runID].Status != domain.AutomationRunRunning {
+		t.Fatalf("failed stop: err=%v run=%#v", err, store.runs[runID])
+	}
+	spawner.hibernateErr = nil
+	if err := svc.Tick(context.Background(), now); err != nil {
+		t.Fatal(err)
+	}
+	if store.runs[runID].Status != domain.AutomationRunCompleted || len(spawner.hibernations) != 2 || len(spawner.kills) != 0 {
+		t.Fatalf("run=%#v hibernations=%v kills=%v", store.runs[runID], spawner.hibernations, spawner.kills)
 	}
 }
 

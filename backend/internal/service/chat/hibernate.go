@@ -263,7 +263,9 @@ func (s *Service) HibernateChatForUpdate(ctx context.Context, id domain.SessionI
 // so a turn in flight, a queued message, a pending approval, background work
 // or an open view keeps the provider running and the call reports false. A
 // session with no live controller has nothing left running and reports true.
-// A provider that cannot resume returns ports.ErrChatHibernationUnsupported.
+// A provider that cannot resume, or cannot hibernate, returns
+// ports.ErrChatHibernationUnsupported. A shutdown an earlier call started but
+// could not confirm is finished here rather than left to a later wake.
 func (s *Service) HibernateChatForAutomation(ctx context.Context, id domain.SessionID) (bool, error) {
 	controller, err := s.Controller(id)
 	if errors.Is(err, ErrNoController) {
@@ -272,10 +274,62 @@ func (s *Service) HibernateChatForAutomation(ctx context.Context, id domain.Sess
 	if err != nil {
 		return false, err
 	}
+	controller.mu.Lock()
+	hibernating := controller.handoff == controllerHandoffHibernate
+	controller.mu.Unlock()
+	if hibernating {
+		return s.finishAutomationHibernation(ctx, id, controller)
+	}
 	if !controller.Capabilities().Has(ports.ChatCapabilityResume) {
 		return false, ports.ErrChatHibernationUnsupported
 	}
+	if _, ok := controller.conv.(ports.ChatProviderHibernator); !ok {
+		return false, ports.ErrChatHibernationUnsupported
+	}
 	return s.hibernateChat(ctx, id, hibernateOptions{forAutomation: true, minIdle: chatHibernateGrace})
+}
+
+// finishAutomationHibernation completes the provider shutdown of a controller
+// left in the hibernating handoff after both the provider and the host stop
+// failed, the way a wake does. An attempt still holding the gate reports false
+// so the caller retries; a stop that fails again returns its error.
+func (s *Service) finishAutomationHibernation(ctx context.Context, id domain.SessionID, controller *Controller) (bool, error) {
+	select {
+	case <-controller.stopped:
+		return true, nil
+	default:
+	}
+	gate := s.controllerGate(domain.SessionConversationOwner(id))
+	if !gate.tryLock() {
+		return false, nil
+	}
+	defer gate.unlock()
+	current, err := s.Controller(id)
+	if errors.Is(err, ErrNoController) {
+		return true, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	if current != controller {
+		// A wake replaced the stranded controller; the next call sees the
+		// replacement and applies the usual checks to it.
+		return false, nil
+	}
+	if s.stopProviderHost == nil {
+		return false, errors.New("finish hibernated chat shutdown: provider host stop is unavailable")
+	}
+	waitCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
+	defer cancel()
+	if err := s.stopProviderHost(waitCtx, id); err != nil {
+		return false, fmt.Errorf("finish hibernated chat shutdown: %w", err)
+	}
+	select {
+	case <-controller.stopped:
+		return true, nil
+	case <-waitCtx.Done():
+		return false, fmt.Errorf("wait for hibernated chat controller: %w", waitCtx.Err())
+	}
 }
 
 func (s *Service) hibernateChat(ctx context.Context, id domain.SessionID, opts hibernateOptions) (bool, error) {

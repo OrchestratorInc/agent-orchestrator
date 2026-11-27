@@ -149,9 +149,9 @@ func (s *Store) ListDueAutomations(ctx context.Context, now time.Time, limit int
 // one pending run owed for run.ScheduledFor, in one transaction. expectedNext
 // is a compare-and-swap fence against stale or concurrent scheduler passes.
 //
-// With no pending run, run is inserted. Otherwise the oldest pending run is
-// moved to run.ScheduledFor (keeping its ID) and any other pending runs are
-// marked skipped. Each update matches only rows still pending, and the claim
+// With no pending run, run is inserted. Otherwise one pending run is kept, the
+// one already at run.ScheduledFor or else the oldest moved there (keeping its
+// ID), and any other pending runs are marked skipped. Each update matches only rows still pending, and the claim
 // path shares this store's write lock, so a run a claim has taken is never
 // moved or skipped.
 func (s *Store) MaterializeAutomationRun(
@@ -186,20 +186,30 @@ func (s *Store) MaterializeAutomationRun(
 			_, err := q.InsertAutomationRun(ctx, automationRunToInsert(run))
 			return err
 		}
-		// A row already at this occurrence (in any status) owns the unique
-		// slot; leave the retained run where it is rather than collide.
-		if _, err := q.GetAutomationRunByOccurrence(ctx, gen.GetAutomationRunByOccurrenceParams{
+		// A row already at this occurrence owns the unique slot. When it is
+		// pending, it is the run to keep. When a claim has taken it, leave the
+		// retained run where it is rather than collide. Otherwise move the
+		// oldest pending run to the occurrence.
+		keep := pending[0]
+		occupant, err := q.GetAutomationRunByOccurrence(ctx, gen.GetAutomationRunByOccurrenceParams{
 			AutomationID: id, ScheduledFor: run.ScheduledFor,
-		}); errors.Is(err, sql.ErrNoRows) {
+		})
+		switch {
+		case errors.Is(err, sql.ErrNoRows):
 			if _, err := q.RescheduleAutomationRun(ctx, gen.RescheduleAutomationRunParams{
-				ScheduledFor: run.ScheduledFor, UpdatedAt: updatedAt, ID: pending[0],
+				ScheduledFor: run.ScheduledFor, UpdatedAt: updatedAt, ID: keep,
 			}); err != nil {
 				return err
 			}
-		} else if err != nil {
+		case err != nil:
 			return err
+		case occupant.Status == domain.AutomationRunPending:
+			keep = occupant.ID
 		}
-		for _, extra := range pending[1:] {
+		for _, extra := range pending {
+			if extra == keep {
+				continue
+			}
 			if _, err := q.SkipAutomationRun(ctx, gen.SkipAutomationRunParams{
 				FinishedAt: timePtrToNullTime(&updatedAt), UpdatedAt: updatedAt, ID: extra,
 			}); err != nil {
