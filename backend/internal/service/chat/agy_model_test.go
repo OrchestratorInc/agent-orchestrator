@@ -200,6 +200,50 @@ func TestAgyResumeWithoutSavedModelReconcilesTheRequestedModel(t *testing.T) {
 	}
 }
 
+func TestAgyOpeningModelReconcilesAnOfferedButRejectedChoice(t *testing.T) {
+	for _, resume := range []bool{false, true} {
+		t.Run(fmt.Sprintf("resume=%v", resume), func(t *testing.T) {
+			ctx := context.Background()
+			st := openStore(t)
+			const picked, live = "claude-opus-4-6-thinking", "gemini-3.8-flash"
+			// An optional ACP setter can reject a listed choice with invalid
+			// params, leaving the opened conversation on its previous model.
+			provider := agyOpeningConversation{
+				variantModelConversation: variantModelConversation{newFakeConversation()},
+				options: []ports.ChatConfigOption{{
+					ID: "model", Category: "model", Type: ports.ChatConfigOptionSelect,
+					Current: ports.ChatConfigOptionValue{Select: live},
+					Choices: []ports.ChatConfigOptionChoice{{Value: picked}, {Value: live}},
+				}},
+			}
+			svc := chatsvc.New(chatsvc.Options{Store: st, Sessions: st, Reader: fullSnapshotReader(st),
+				Drivers: fakeRegistry{driver: fakeDriver{conv: provider}},
+				Log:     slog.New(slog.DiscardHandler), NewID: uuid.NewString})
+			t.Cleanup(func() { _ = svc.Stop(ctx, testSession) })
+			cfg := chatsvc.StartConfig{SessionID: testSession, ProjectID: testProject,
+				Harness: domain.HarnessAgy, WorkspacePath: t.TempDir(), Model: picked,
+				ControllerReady: func(started chatsvc.StartResult) (chatsvc.ControllerCommit, error) {
+					if started.Conversation.Settings.Model != live {
+						t.Errorf("published model = %q, want %q", started.Conversation.Settings.Model, live)
+					}
+					return chatsvc.ControllerCommit{Conversation: started.Conversation}, nil
+				}}
+			if resume {
+				cfg.ProviderConversationID = provider.ProviderConversationID()
+			}
+			controller, err := svc.Start(ctx, cfg)
+			if err != nil {
+				t.Fatal(err)
+			}
+			after, err := st.LoadConversationSnapshot(ctx, controller.ConversationID())
+			if err != nil || after.Conversation.Settings.Model != live || len(after.Activities) != 1 ||
+				after.Activities[0].Summary != picked+" isn't available in Agy Chat. Using "+live+" instead." {
+				t.Fatalf("fallback settings/notice = %+v, err=%v", after, err)
+			}
+		})
+	}
+}
+
 type failingAgyNoticeStore struct{ chatsvc.Store }
 
 func (s failingAgyNoticeStore) UpsertActivity(context.Context, string, string, domain.ConversationActivity, time.Time) error {

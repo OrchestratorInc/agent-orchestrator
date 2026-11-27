@@ -3,7 +3,6 @@ package chat
 import (
 	"context"
 	"fmt"
-	"slices"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
@@ -34,9 +33,7 @@ func (s *Service) prepareAgyOpeningModel(ctx context.Context, controller *Contro
 			continue
 		}
 		live := option.Current.Select
-		if live == "" || live == picked || slices.ContainsFunc(option.Choices, func(choice ports.ChatConfigOptionChoice) bool {
-			return choice.Value == picked
-		}) {
+		if live == "" || live == picked {
 			return nil, nil
 		}
 		// A supported composite ID still names the selected base and effort.
