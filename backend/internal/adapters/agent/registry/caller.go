@@ -4,6 +4,7 @@ import (
 	"strings"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
+	"github.com/aoagents/agent-orchestrator/backend/internal/sessionenv"
 )
 
 // CallerEnvTag is an environment variable that a coding agent sets in the
@@ -93,10 +94,8 @@ func aiAgentHarness(raw string, known map[domain.AgentHarness]bool) (domain.Agen
 	return "", false
 }
 
+// envTagSet is the same rule the daemon's environment scrub uses
+// (sessionenv.MarkerSet), so detection and scrubbing never disagree.
 func envTagSet(value string) bool {
-	switch strings.ToLower(value) {
-	case "", "0", "false":
-		return false
-	}
-	return true
+	return sessionenv.MarkerSet(value)
 }
