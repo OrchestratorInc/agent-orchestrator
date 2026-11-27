@@ -1071,6 +1071,14 @@ func (s *Service) TryBeginHarnessUseNow(harness domain.AgentHarness) (func(), bo
 	if !gate.TryRLock() {
 		return nil, false
 	}
+	s.mu.Lock()
+	job := s.jobs[Target(harness)]
+	installing := job != nil && activeStatus(job.Status) && job.Status != StatusWaitingForIdle
+	s.mu.Unlock()
+	if installing {
+		gate.RUnlock()
+		return nil, false
+	}
 	if IsAgentTarget(Target(harness)) {
 		s.forgetReplacedBinary(Target(harness))
 	}
