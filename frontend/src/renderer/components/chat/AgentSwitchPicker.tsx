@@ -601,7 +601,7 @@ export function AgentModelPicker({
 				data-shortcut-target={terminal ? undefined : "model-picker"}
 				data-telemetry-id={terminal ? undefined : "composer.model_picker"}
 			>
-				{chipAccount ? <ProviderMarkWithAccount provider={shownHarness} name={chipAccount.name} email={chipAccount.email} color={chipAccount.color} />
+				{chipAccount ? <ProviderMarkWithAccount provider={shownHarness} name={chipAccount.name} email={chipAccount.email} color={chipAccount.color} letters={chipAccount.letters} />
 					: <ProviderMark provider={terminal ? currentHarness : shownHarness} className="size-3.5" />}
 				{loadingModels && !savedLabel && !pending && !terminal ? (
 					<span className="flex items-center gap-1.5 text-muted-foreground">
