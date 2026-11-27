@@ -8,14 +8,15 @@
 import { cleanup, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { ReactElement } from "react";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { formatDiffSelectionMessage } from "../../../shared/diff-selection";
 import { formatFileAnnotationMessage, formatFileAnnotationMessages } from "../../../shared/file-annotations";
 import type { ConversationMessage } from "../../types/conversation";
 import { gitActionMessage, otherPRConflictMessage } from "../SessionBranchSummary";
 import { TooltipProvider } from "../ui/tooltip";
 import { openLinkInSystemBrowser } from "../../lib/external-link-policy";
-import { AutomationMessage, pullRequestBursts, readAutomation } from "./AutomationMessage";
+import { useUiStore } from "../../stores/ui-store";
+import { AutomationMessage, pullRequestBursts, readAutomation, reviewBursts } from "./AutomationMessage";
 
 vi.mock("../../lib/external-link-policy", async (importOriginal) => ({
 	...(await importOriginal<typeof import("../../lib/external-link-policy")>()),
@@ -227,7 +228,251 @@ describe("drawing AO's automation messages", () => {
 		expect(feedback).not.toHaveTextContent("Apply this feedback");
 	});
 
-	it("draws failing CI as one centered line with its count, opening onto each check with its log a click away", async () => {
+	it("draws failing CI as one line with its count, opening onto each check with its log a click away", async () => {
+		draw(ciFailing);
+
+		const event = screen.getByTestId("pull-request-event");
+		expect(event).toHaveTextContent("CI failing on #6974");
+		expect(event).toHaveTextContent("2 checks");
+		expect(within(event).getByRole("link", { name: "#6974" })).toHaveAttribute("href", URL);
+		expect(within(event).queryByRole("link", { name: "renderer-smoke" })).toBeNull();
+
+		const line = within(event).getByRole("button", { name: /CI failing on #6974/ });
+		expect(line).toHaveAttribute("aria-expanded", "false");
+		await userEvent.click(line);
+		expect(line).toHaveAttribute("aria-expanded", "true");
+		expect(within(event).getByRole("link", { name: "renderer-smoke" })).toHaveAttribute("href", "https://github.com/o/r/actions/runs/1/job/2");
+		expect(event).not.toHaveTextContent("npm ERR!");
+
+		await userEvent.click(within(event).getByRole("button", { name: "Show log" }));
+		expect(event).toHaveTextContent("npm ERR! smoke failed");
+	});
+
+	it("lists a check the report names twice once", async () => {
+		draw(ciFailing.replace("Failed: lint (failed)\n", "Failed: lint (failed)\n\nFailed: lint (failed)\n"));
+
+		const event = screen.getByTestId("pull-request-event");
+		expect(event).toHaveTextContent("2 checks");
+		await userEvent.click(within(event).getByRole("button", { name: /CI failing on #6974/ }));
+		expect(within(event).getAllByText("lint")).toHaveLength(1);
+	});
+
+	it("keeps a log tail only the later copy of a repeated check carries", async () => {
+		draw(ciFailing.replace("Failed: lint (failed)\n", "Failed: lint (failed)\n\nFailed: lint (failed)\n\nLog tail (last 1 line):\n```\nlint broke\n```\n"));
+
+		const event = screen.getByTestId("pull-request-event");
+		await userEvent.click(within(event).getByRole("button", { name: /CI failing on #6974/ }));
+		expect(within(event).getAllByText("lint")).toHaveLength(1);
+		// renderer-smoke's log and lint's, which only its second listing had.
+		expect(within(event).getAllByRole("button", { name: "Show log" })).toHaveLength(2);
+	});
+
+	it("links only to the forge, so a look-alike message cannot send the user elsewhere", async () => {
+		draw(ciFailing.replace("https://github.com/o/r/actions/runs/1/job/2", "https://evil.example/login").replace(`PR: ${URL}`, "PR: https://evil.example/pr"));
+
+		const event = screen.getByTestId("pull-request-event");
+		await userEvent.click(within(event).getByRole("button", { name: /CI failing on #6974/ }));
+		expect(within(event).queryByRole("link")).toBeNull();
+		expect(event).toHaveTextContent("renderer-smoke");
+	});
+
+	it("counts the comments, reviewers and files when comments come from several reviewers", async () => {
+		const two = reviewComment
+			.replace("The following 1 unresolved", "The following 2 unresolved")
+			.replace("   Thread ID: PRRT_1\n", "   Thread ID: PRRT_1\n\n2. a.ts:3 (@whoisasx):\nRename this.\n");
+		draw(two);
+
+		const event = screen.getByTestId("pull-request-event");
+		expect(event).toHaveTextContent("2 review comments on #6974");
+		expect(event).toHaveTextContent("2 reviewers, 2 files");
+		await userEvent.click(within(event).getByRole("button", { name: /2 review comments on #6974/ }));
+		expect(event).toHaveTextContent("@whoisasxa.ts:3");
+	});
+
+	it("draws a review round the daemon sent comment by comment as one event", async () => {
+		const first = message(reviewComment, { id: "m1" });
+		const second = message(reviewComment.replace("frontend/src/ThisComputerAccess.tsx:97 (@illegalcall)", "a.ts:3 (@whoisasx)").replace("A failed turn-on does not undo what it started.", "Rename this."), { id: "m2", sequence: 2 });
+		const other = message(reviewComment.replace(PR, PR.replace("#6974", "#7000")), { id: "m3", sequence: 3 });
+		const bursts = reviewBursts([first, second, other]);
+		expect(bursts.get("m1")).toEqual([first, second]);
+		expect(bursts.get("m2")).toBeNull();
+		// A lone comment, here on another PR, draws as itself.
+		expect(bursts.has("m3")).toBe(false);
+
+		render(<TooltipProvider><AutomationMessage message={first} burst={bursts.get("m1")} fallback={<p>card</p>} /><AutomationMessage message={second} burst={bursts.get("m2")} fallback={<p>card</p>} /></TooltipProvider> as ReactElement);
+		const events = screen.getAllByTestId("pull-request-event");
+		expect(events).toHaveLength(1);
+		expect(events[0]).toHaveTextContent("2 review comments on #6974");
+		await userEvent.click(within(events[0]!).getByRole("button", { name: /2 review comments on #6974/ }));
+		expect(events[0]).toHaveTextContent("A failed turn-on does not undo what it started.");
+		expect(events[0]).toHaveTextContent("Rename this.");
+	});
+
+	it("names the one reviewer of a review round", () => {
+		const first = message(reviewComment, { id: "m1" });
+		const second = message(reviewComment.replace("frontend/src/ThisComputerAccess.tsx:97", "a.ts:3"), { id: "m2", sequence: 2 });
+		const bursts = reviewBursts([first, second]);
+		render(<TooltipProvider><AutomationMessage message={first} burst={bursts.get("m1")} fallback={<p>card</p>} /></TooltipProvider> as ReactElement);
+		expect(screen.getByTestId("pull-request-event")).toHaveTextContent("@illegalcall, 2 files");
+	});
+
+	it("keeps a human message that reads like a review nudge out of the burst", () => {
+		const pasted = message(reviewComment, { id: "h1", origin: "human" });
+		const first = message(reviewComment, { id: "m1" });
+		const second = message(reviewComment, { id: "m2" });
+		const bursts = reviewBursts([pasted, first, second]);
+		expect(bursts.has("h1")).toBe(false);
+		expect(bursts.get("m1")).toEqual([first, second]);
+		expect(bursts.get("m2")).toBeNull();
+	});
+
+	it("times a PR event by when it happened on the forge, not when AO delivered it", () => {
+		draw(reviewComment.replace("need additional context.\n", "need additional context. Newest comment posted at 2026-11-16T07:54:42Z.\n"), { createdAt: "2026-11-16T08:26:00Z" });
+		expect(screen.getByTestId("pull-request-event").querySelector("time")).toHaveAttribute("datetime", "2026-11-16T07:54:42Z");
+		cleanup();
+
+		// Messages from before the daemon wrote the time keep the delivery time.
+		draw(reviewComment, { createdAt: "2026-11-16T08:26:00Z" });
+		expect(screen.getByTestId("pull-request-event").querySelector("time")).toHaveAttribute("datetime", "2026-11-16T08:26:00Z");
+	});
+
+	it("draws changes requested, merge conflicts and AO's notices", () => {
+		draw(changesRequested);
+		expect(screen.getByTestId("pull-request-event")).toHaveTextContent("@whoisasx requested changes on #6974");
+		cleanup();
+
+		draw(mergeConflict);
+		expect(screen.getByTestId("pull-request-event")).toHaveTextContent("Merge conflicts on #6974");
+		cleanup();
+
+		draw("AO transferred the previous agent's context in hidden system instructions. Continue a clear, safe, already-authorized unfinished action.");
+		expect(screen.getByTestId("automation-notice")).toHaveTextContent("Context carried over from the previous agent");
+	});
+
+	it("draws a git button and a diff selection as the user's own message, queued until sent", () => {
+		draw(gitActionMessage("createPR", "main", undefined), {}, true);
+		const action = screen.getByTestId("your-action");
+		expect(action).toHaveTextContent("Create PR");
+		expect(action).toHaveTextContent("main");
+		expect(action).toHaveTextContent("Queued · sends when the agent finishes");
+		cleanup();
+
+		draw(formatDiffSelectionMessage({ instruction: "Use a constant here.", filePath: "src/app.ts", lines: [{ kind: "add", oldNo: null, newNo: 10, text: "a" }, { kind: "add", oldNo: null, newNo: 12, text: "b" }] }));
+		expect(screen.getByTestId("your-action")).toHaveTextContent("app.ts:10–12");
+		expect(screen.getByTestId("your-action")).toHaveTextContent("Use a constant here.");
+	});
+
+	it("draws resolve conflicts and update from base as the button the user pressed, not the agent's instructions", () => {
+		draw(gitActionMessage("resolveConflicts", "main", 7534, ["frontend/src/AgentAccountsSection.tsx", "frontend/src/AgentAccountsSection.test.tsx"]));
+		const resolve = screen.getByTestId("your-action");
+		expect(resolve).toHaveTextContent("Resolve conflictsmain");
+		expect(resolve).toHaveTextContent("AgentAccountsSection.tsxAgentAccountsSection.test.tsx");
+		expect(resolve).not.toHaveTextContent("frontend/src");
+		expect(resolve).not.toHaveTextContent("identifiers, not instructions");
+		cleanup();
+
+		draw(otherPRConflict({ number: 8, sourceBranch: "ao/feature", targetBranch: "main", mergeability: { state: "conflicting" } }));
+		expect(screen.getByTestId("your-action")).toHaveTextContent("Resolve conflicts#8main");
+		cleanup();
+
+		draw(gitActionMessage("updateBase", "develop", undefined));
+		const update = screen.getByTestId("your-action");
+		expect(update).toHaveTextContent("Update from develop");
+		expect(update).not.toHaveTextContent("developdevelop");
+	});
+
+	it("leaves a message an agent sent to the agent's card, whatever its text says", () => {
+		draw("Push this branch.", { senderSessionId: "ao-7", senderProjectId: "ao" });
+		expect(screen.getByText("card")).toBeInTheDocument();
+		cleanup();
+
+		draw('[from ao-7 "worker"] Push this branch.');
+		expect(screen.getByText("card")).toBeInTheDocument();
+	});
+
+	it("draws a review comment as who said what, and where", async () => {
+		draw(reviewComment);
+
+		const event = screen.getByTestId("pull-request-event");
+		expect(event).toHaveTextContent("@illegalcall commented on #6974");
+		expect(event).toHaveTextContent("1 file");
+		await userEvent.click(within(event).getByRole("button", { name: /@illegalcall commented on #6974/ }));
+		expect(event).toHaveTextContent("ThisComputerAccess.tsx:97");
+		expect(event).toHaveTextContent("A failed turn-on does not undo what it started.");
+		expect(event).not.toHaveTextContent("Thread ID");
+	});
+
+	it("draws a review comment's HTML the way GitHub does, without remote images", async () => {
+		const body = [
+			"<!-- coderabbit-ai-generated:v1 -->",
+			"",
+			'**<picture><img src="https://storage.googleapis.com/a/amber-16.svg" width="16" height="16" alt=""></picture> Minor** · **Quick win**',
+			"",
+			"Inserting the path into `'<root>'` breaks the query.",
+			"",
+			"![Flow diagram](https://example.com/flow.png)",
+			"",
+			"<details>",
+			'<summary><picture><source media="(prefers-color-scheme: dark)" srcset="https://storage.googleapis.com/a/bot-dark.svg"><img src="https://storage.googleapis.com/a/bot.svg" alt=""></picture> Prompt for AI Agents</summary>',
+			"<dl>",
+			"<dd>",
+			"",
+			"```",
+			"Bind the root as a parameter.",
+			"```",
+			"",
+			"</dd>",
+			"</dl>",
+			"</details>",
+			"",
+			"<pre>first",
+			"  second</pre>",
+			"",
+			"<pre>third<br>fourth</pre>",
+			"",
+			"<!-- This is an auto-generated comment by CodeRabbit -->",
+		].join("\n");
+		draw(reviewComment.replace("A failed turn-on does not undo what it started.\n\nThe switch then shows **off**.", body));
+
+		const event = screen.getByTestId("pull-request-event");
+		await userEvent.click(within(event).getByRole("button", { name: /commented on #6974/ }));
+		expect(event).toHaveTextContent("Minor · Quick win");
+		expect(event).toHaveTextContent("Inserting the path into '<root>' breaks the query.");
+		expect(event).not.toHaveTextContent("<!--");
+		expect(event).not.toHaveTextContent("<picture");
+		expect(event).not.toHaveTextContent("storage.googleapis.com");
+		expect(event).toHaveTextContent("Flow diagram");
+		expect(event).not.toHaveTextContent("example.com/flow.png");
+		expect(event.querySelector("img, picture, source")).toBeNull();
+		const details = event.querySelector("details");
+		expect(details).not.toHaveAttribute("open");
+		expect(details?.querySelector("summary")).toHaveTextContent("Prompt for AI Agents");
+		expect(details).toHaveTextContent("Bind the root as a parameter.");
+		expect([...event.querySelectorAll("pre")].map((pre) => pre.textContent)).toContain("first\n  second");
+		expect([...event.querySelectorAll("pre")].map((pre) => pre.textContent)).toContain("third\nfourth");
+
+		await userEvent.click(within(details as HTMLElement).getByText("Prompt for AI Agents"));
+		expect(details).toHaveAttribute("open");
+		await userEvent.click(await within(event).findByRole("button", { name: "Show less" }));
+		expect(details).not.toHaveAttribute("open");
+	});
+
+	it("keeps the card for anything it cannot read", () => {
+		draw("Checks failed:\nlint exited 1");
+
+		expect(screen.getByText("card")).toBeInTheDocument();
+	});
+});
+
+// Developer Mode draws a PR's review comments and failing CI as one right-aligned line.
+describe("drawing PR feedback in Developer Mode", () => {
+	beforeEach(() => useUiStore.setState({ developerMode: true }));
+	afterEach(() => {
+		cleanup();
+		useUiStore.setState({ developerMode: false });
+	});
+
+	it("draws failing CI as one line with its count, opening onto each check with its log a click away", async () => {
 		draw(ciFailing);
 
 		const line = screen.getByTestId("pull-request-feedback");
@@ -373,60 +618,6 @@ describe("drawing AO's automation messages", () => {
 		expect(screen.getByTestId("pull-request-feedback").querySelector("time")).toHaveAttribute("datetime", "2026-11-16T08:26:00Z");
 	});
 
-	it("draws changes requested, merge conflicts and AO's notices", () => {
-		draw(changesRequested);
-		expect(screen.getByTestId("pull-request-event")).toHaveTextContent("@whoisasx requested changes on #6974");
-		cleanup();
-
-		draw(mergeConflict);
-		expect(screen.getByTestId("pull-request-event")).toHaveTextContent("Merge conflicts on #6974");
-		cleanup();
-
-		draw("AO transferred the previous agent's context in hidden system instructions. Continue a clear, safe, already-authorized unfinished action.");
-		expect(screen.getByTestId("automation-notice")).toHaveTextContent("Context carried over from the previous agent");
-	});
-
-	it("draws a git button and a diff selection as the user's own message, queued until sent", () => {
-		draw(gitActionMessage("createPR", "main", undefined), {}, true);
-		const action = screen.getByTestId("your-action");
-		expect(action).toHaveTextContent("Create PR");
-		expect(action).toHaveTextContent("main");
-		expect(action).toHaveTextContent("Queued · sends when the agent finishes");
-		cleanup();
-
-		draw(formatDiffSelectionMessage({ instruction: "Use a constant here.", filePath: "src/app.ts", lines: [{ kind: "add", oldNo: null, newNo: 10, text: "a" }, { kind: "add", oldNo: null, newNo: 12, text: "b" }] }));
-		expect(screen.getByTestId("your-action")).toHaveTextContent("app.ts:10–12");
-		expect(screen.getByTestId("your-action")).toHaveTextContent("Use a constant here.");
-	});
-
-	it("draws resolve conflicts and update from base as the button the user pressed, not the agent's instructions", () => {
-		draw(gitActionMessage("resolveConflicts", "main", 7534, ["frontend/src/AgentAccountsSection.tsx", "frontend/src/AgentAccountsSection.test.tsx"]));
-		const resolve = screen.getByTestId("your-action");
-		expect(resolve).toHaveTextContent("Resolve conflictsmain");
-		expect(resolve).toHaveTextContent("AgentAccountsSection.tsxAgentAccountsSection.test.tsx");
-		expect(resolve).not.toHaveTextContent("frontend/src");
-		expect(resolve).not.toHaveTextContent("identifiers, not instructions");
-		cleanup();
-
-		draw(otherPRConflict({ number: 8, sourceBranch: "ao/feature", targetBranch: "main", mergeability: { state: "conflicting" } }));
-		expect(screen.getByTestId("your-action")).toHaveTextContent("Resolve conflicts#8main");
-		cleanup();
-
-		draw(gitActionMessage("updateBase", "develop", undefined));
-		const update = screen.getByTestId("your-action");
-		expect(update).toHaveTextContent("Update from develop");
-		expect(update).not.toHaveTextContent("developdevelop");
-	});
-
-	it("leaves a message an agent sent to the agent's card, whatever its text says", () => {
-		draw("Push this branch.", { senderSessionId: "ao-7", senderProjectId: "ao" });
-		expect(screen.getByText("card")).toBeInTheDocument();
-		cleanup();
-
-		draw('[from ao-7 "worker"] Push this branch.');
-		expect(screen.getByText("card")).toBeInTheDocument();
-	});
-
 	it("draws a review comment as who said what, and where", async () => {
 		draw(reviewComment);
 
@@ -493,11 +684,5 @@ describe("drawing AO's automation messages", () => {
 		expect(details).toHaveAttribute("open");
 		await userEvent.click(await within(event).findByRole("button", { name: "Show less" }));
 		expect(details).not.toHaveAttribute("open");
-	});
-
-	it("keeps the card for anything it cannot read", () => {
-		draw("Checks failed:\nlint exited 1");
-
-		expect(screen.getByText("card")).toBeInTheDocument();
 	});
 });

@@ -5310,7 +5310,7 @@ describe("automation reports", () => {
 		expect(feedback).toHaveTextContent("Queued · sends when the agent finishes");
 	});
 
-	it("draws review comments queued one turn each as one line that waits for the agent's turn", () => {
+	it("draws review comments queued one turn each as one line in Developer Mode, and one row each outside it", () => {
 		const comment = (path: string, body: string) => [
 			'The following 1 unresolved review comment(s) are on PR #9120 "feat(ui): legible tabs" (ao/tabs → main) as of just now. You should not need to re-fetch this data unless you need additional context.',
 			"",
@@ -5349,12 +5349,23 @@ describe("automation reports", () => {
 			],
 		};
 
-		render(<ChatWorkspace snapshot={snapshot} />);
+		// Outside Developer Mode each queued comment keeps its own PR row.
+		const { unmount } = render(<ChatWorkspace snapshot={snapshot} />);
+		expect(screen.getAllByTestId("pull-request-event")).toHaveLength(3);
+		expect(screen.queryByTestId("pull-request-feedback")).toBeNull();
+		unmount();
 
-		const lines = screen.getAllByTestId("pull-request-feedback");
-		expect(lines).toHaveLength(1);
-		expect(lines[0]).toHaveTextContent("3 comments from coderabbitai on #9120");
-		expect(lines[0]).toHaveTextContent("after this turn");
+		useUiStore.setState({ developerMode: true });
+		try {
+			render(<ChatWorkspace snapshot={snapshot} />);
+			const lines = screen.getAllByTestId("pull-request-feedback");
+			expect(lines).toHaveLength(1);
+			expect(lines[0]).toHaveTextContent("3 comments from coderabbitai on #9120");
+			expect(lines[0]).toHaveTextContent("after this turn");
+			expect(screen.queryByTestId("pull-request-event")).toBeNull();
+		} finally {
+			useUiStore.setState({ developerMode: false });
+		}
 	});
 
 	it("renders browser annotation transport as the user's feedback, without its transport details", () => {

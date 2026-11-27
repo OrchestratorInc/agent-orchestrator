@@ -199,7 +199,7 @@ import {
 	WorkerUpdateRows,
 	workerUpdatesOf,
 } from "./WorkerUpdates";
-import { AutomationMessage, pullRequestBursts, pullRequestFeedbackNumber, ReplacedNotice, SteeredBrowserFeedback, steeredBrowserFeedback } from "./AutomationMessage";
+import { AutomationMessage, pullRequestBursts, pullRequestFeedbackNumber, ReplacedNotice, reviewBursts, SteeredBrowserFeedback, steeredBrowserFeedback } from "./AutomationMessage";
 import { accountFailure, turnStanding, turnUpdates } from "./background-turns";
 import { HumanMessageEditor } from "./HumanMessageEditor";
 import { ChatLinkProvider } from "./ChatMarkdown";
@@ -4574,6 +4574,7 @@ export function Timeline({
 	);
 	const workerUpdateIndex = useWorkerUpdateIndex(workerUpdates ? snapshot.items : undefined);
 	const runKeys = useRef<ReadonlyMap<string, string>>(new Map());
+	const developerMode = useUiStore((state) => state.developerMode);
 	const grouped = useMemo(() => {
 		const hiddenTurns = hiddenTimelineTurnIds(snapshot);
 		if (openingTurnId) hiddenTurns.delete(openingTurnId);
@@ -4584,11 +4585,9 @@ export function Timeline({
 		const kept = dropped.size > 0 ? timelineItems.map((item) => outlivingAction(item, dropped)) : timelineItems;
 		const items = atCarrier(kept, snapshot.batchedDeliveries ?? [], batchedReports.moved);
 		const pendingTurns = new Set(snapshot.turns.filter((turn) => turn.agentPending).map((turn) => turn.id));
+		const visible = groupByTurn({ ...snapshot, items }, { controllerStopped }).filter((group) => !group.turnId || !hiddenTurns.has(group.turnId));
 		// The user's own queued prompts sit in the dock, so feedback queued around one still merges.
-		const groups = mergeQueuedPullRequestFeedback(
-			groupByTurn({ ...snapshot, items }, { controllerStopped }).filter((group) => !group.turnId || !hiddenTurns.has(group.turnId)),
-			queuedTurnIds(snapshot),
-		)
+		const groups = (developerMode ? mergeQueuedPullRequestFeedback(visible, queuedTurnIds(snapshot)) : visible)
 			.map((group, index) => openingPending && (firstTurn ? group.turnId === firstTurn.id : index === 0 && group.turnId?.startsWith("local:"))
 				? { ...group, live: true, liveStartedAt: openingStartedAt, liveStartupLabel: openingStartupLabel }
 				: group)
@@ -4604,7 +4603,7 @@ export function Timeline({
 		const folded = foldBackground(cleaned, workerUpdateIndex, new Set(snapshot.turns.map((turn) => turn.id)), runKeys.current, batchedReports.under, find.gapBeforeSequence);
 		runKeys.current = new Map(folded.flatMap((group) => group.folded ? group.folded.members.map((member) => [member.key, group.key] as const) : []));
 		return folded;
-	}, [batchedReports, controllerStopped, find.gapBeforeSequence, openingPending, openingStartedAt, openingStartupLabel, openingTurnId, pendingTurnLabel, snapshot, timelineItems, workerUpdateIndex, workerUpdates]);
+	}, [batchedReports, controllerStopped, developerMode, find.gapBeforeSequence, openingPending, openingStartedAt, openingStartupLabel, openingTurnId, pendingTurnLabel, snapshot, timelineItems, workerUpdateIndex, workerUpdates]);
 	const groups = useStableList(grouped, groupKey, sameGroup);
 	// Read from every group, not the mounted ones: the timeline is virtualized, and the
 	// panel lists a child whose turn has scrolled far out of view.
@@ -6401,8 +6400,13 @@ const TurnGroup = memo(function TurnGroup({
 		// eslint-disable-next-line react-hooks/exhaustive-deps -- turnFlowItems reads only these fields of the group.
 		[group.items, group.subagents, group.liveProviderFailure, group.outcome?.state, group.outcome?.error],
 	);
-	// A review round arrives as one message per comment; a PR's comments and failing CI draw as one line.
-	const bursts = useMemo(() => pullRequestBursts(runs.map((run) => (run.kind === "single" ? run.items[0] : undefined))), [runs]);
+	// A review round arrives as one message per comment; it draws as one event, or in
+	// Developer Mode, a PR's comments and failing CI draw as one line.
+	const developerMode = useUiStore((state) => state.developerMode);
+	const bursts = useMemo(() => {
+		const singles = runs.map((run) => (run.kind === "single" ? run.items[0] : undefined));
+		return developerMode ? pullRequestBursts(singles) : reviewBursts(singles);
+	}, [developerMode, runs]);
 	const lastAssistantId = [...group.items]
 		.reverse()
 		.find((item) => item.kind === "message" && item.role === "assistant" && item.text.trim() !== "")?.id;
@@ -6855,7 +6859,7 @@ function TimelineItem({
 	onSelectAnnotation?: (annotation: { text: string; snapshot?: ChatExcerptSnapshot; messageId?: string; revision?: number }) => void;
 	/** Where a human message stands, leading the row under its bubble. */
 	status?: ReactNode;
-	/** This message's PR feedback burst (see `pullRequestBursts`): the messages it draws for, or null when another draws it. */
+	/** This message's PR feedback burst (see `pullRequestBursts` and `reviewBursts`): the messages it draws for, or null when another draws it. */
 	pullRequestBurst?: readonly ConversationMessage[] | null;
 }) {
 	if (item.kind === "message") {
@@ -7910,12 +7914,12 @@ function openingTurnSettled(snapshot: ConversationSnapshot, controllerStopped: b
 }
 
 /**
- * Queued turns that hold only one PR's review comments or failing CI, back to
- * back, as one group. The daemon queues each comment that arrives while the
- * agent works as its own turn, so a review round stacked one row per comment
- * under the working row; as one group its messages draw as one line, and the
- * count grows in place as more arrive. The group keeps the first turn's key and
- * id, so the line stays where it is.
+ * In Developer Mode, queued turns that hold only one PR's review comments or
+ * failing CI, back to back, as one group. The daemon queues each comment that
+ * arrives while the agent works as its own turn, so a review round stacked one
+ * row per comment under the working row; as one group its messages draw as one
+ * line, and the count grows in place as more arrive. The group keeps the first
+ * turn's key and id, so the line stays where it is.
  */
 function mergeQueuedPullRequestFeedback(groups: TimelineGroup[], queued: ReadonlySet<string>): TimelineGroup[] {
 	const pullRequestOf = (group: TimelineGroup) => {
