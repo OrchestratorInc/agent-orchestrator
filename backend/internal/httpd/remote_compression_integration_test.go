@@ -160,8 +160,15 @@ func TestLANManagerCompressionThroughTunnel(t *testing.T) {
 			return conn, nil
 		},
 	}
-	defer transport.CloseIdleConnections()
-	client := &http.Client{Transport: transport}
+	// One ClientConn carries every request: a pooled Transport may dial again
+	// and wrap the same tunnel in a second HTTP/2 connection, and closing either
+	// cancels the other's writes.
+	tunnel, err := transport.NewClientConn(ctx, "http", "tunnel:80")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tunnel.Close()
+	client := &http.Client{Transport: tunnel}
 	for _, tc := range []struct {
 		auth, accept, encoding string
 		status                 int
