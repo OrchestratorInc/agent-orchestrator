@@ -43,9 +43,10 @@ const SCREEN_GUTTER = 28;
 // The blob is white in both themes, as a system switch's thumb is.
 const BLOB_FILL = "#ffffff";
 const BLOB_SHADOW = "#000000";
-// While the blob is still gliding from touch down, each move retargets a glide
-// this long at the finger: about half the gap closes in a frame, and the glide
-// still lands on a finger that stops.
+// While the blob is still gliding from touch down, each move closes this
+// share of the gap to the finger at once, then glides the rest in CATCH_MS, so
+// it keeps up with a moving finger and still lands on one that stops.
+const CATCH_UP = 0.45;
 const CATCH_MS = 60;
 
 /** The slider floating over the chat above the composer (see ComposerOverlay). */
@@ -177,12 +178,23 @@ export function EffortSlider({ choices, onChoose, onRelease, fast }: EffortSlide
 			.onUpdate((event) => {
 				"worklet";
 				const { stop, pulled } = target(event.x);
-				// Still gliding from touch down: retarget a short glide at the
-				// finger, then hold the finger once caught. Setting a partial
-				// position instead cancelled the glide, and the blob stopped short
-				// of a finger that stopped moving.
-				if (catching.value && Math.abs(pulled - blobX.value) < 1) catching.value = false;
-				blobX.value = catching.value ? withTiming(pulled, { duration: CATCH_MS, easing: Easing.out(Easing.quad) }) : pulled;
+				// Still gliding from touch down: close a share of the gap at once,
+				// then glide the rest, and hold the finger once caught. A glide
+				// alone, retargeted from where the blob was on every move, trailed
+				// a moving finger for the whole drag; a jump alone stopped short of
+				// a finger that stopped.
+				if (!catching.value) {
+					blobX.value = pulled;
+				} else {
+					const next = blobX.value + (pulled - blobX.value) * CATCH_UP;
+					if (Math.abs(pulled - next) < 1) {
+						catching.value = false;
+						blobX.value = pulled;
+					} else {
+						blobX.value = next;
+						blobX.value = withTiming(pulled, { duration: CATCH_MS, easing: Easing.out(Easing.quad) });
+					}
+				}
 				level(stop);
 			})
 			.onFinalize(() => {

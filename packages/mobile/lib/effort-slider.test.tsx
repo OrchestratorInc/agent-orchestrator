@@ -262,6 +262,19 @@ describe("effort slider", () => {
 		expect(fixtures.glides.at(-1)).toBeGreaterThan(160);
 	});
 
+	// Regression guard: the blob must keep up with a finger that moves while the
+	// touch-down glide runs. A glide alone, retargeted from where the blob was
+	// on every move, left it trailing the finger for the whole drag (the slider
+	// felt laggy and glitchy on a phone); each move closes much of the gap at once.
+	it("closes much of the gap to a moving finger at once, not only by gliding", async () => {
+		const { drag, blobCentre } = await render("low");
+		fixtures.midGlide = true;
+		await act(async () => drag.begin(170));
+		const from = blobCentre();
+		await act(async () => drag.move(172));
+		expect(blobCentre() - from).toBeGreaterThanOrEqual((172 - from) * 0.4);
+	});
+
 	// A model with fewer levels arriving mid-drag must not leave the release
 	// on a level that is gone.
 	it("lands the release on a real level when the levels shrink mid-drag", async () => {
