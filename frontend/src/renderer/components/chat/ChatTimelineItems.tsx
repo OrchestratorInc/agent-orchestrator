@@ -4332,9 +4332,10 @@ export function TurnChangedFiles({
 			) : null}
 
 			{diff.truncated ? (
-				<p className="px-3 pb-2 text-xs leading-relaxed text-warning">
-					This turn changed more files than Orchestrator lists here.
-					{onReview ? " Use Review for the whole change." : " Open the Files tab for the whole change."}
+				<p className="px-3 pb-2 text-xs leading-relaxed text-muted-foreground">
+					{onReview
+						? "Preview shortened. Open Review for the full diff."
+						: "Preview shortened. Open the Files tab for the full diff."}
 				</p>
 			) : null}
 		</div>

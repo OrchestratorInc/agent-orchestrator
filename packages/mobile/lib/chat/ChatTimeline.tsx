@@ -1434,7 +1434,7 @@ function ChangedFiles({ turn, changed }: { turn: ConversationTurn; changed: Diff
 					style={({ pressed }) => [styles.fileRow, styles.fileRowTap, pressed && feedback.pressed]}
 				>{row}</Pressable>
 				: <View key={`${file.oldPath}:${file.path}`} style={styles.fileRow}>{row}</View>;
-		})}{turn.diff?.truncated ? <Text style={[styles.partial, { color: t.amber }]}>{files ? "This turn changed more files than Orchestrator lists here. Review changes shows all of them." : "This turn changed more files than Orchestrator lists here. Open the worktree shell for the complete diff."}</Text> : null}</View> : null}
+		})}{turn.diff?.truncated ? <Text style={[styles.partial, { color: t.amber }]}>{files ? "Preview shortened. Open Review changes for the full diff." : "Preview shortened. Open the worktree shell for the full diff."}</Text> : null}</View> : null}
 	</View>;
 }
 
