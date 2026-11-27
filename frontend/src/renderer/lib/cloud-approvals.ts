@@ -13,7 +13,8 @@
 import { useQueries, useQueryClient, type QueryClient } from "@tanstack/react-query";
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { useCloudCp } from "../hooks/useCloudCp";
-import { useWorkspaceQuery } from "../hooks/useWorkspaceQuery";
+import { useCloudOrg } from "../hooks/useCloudOrg";
+import { useCloudSessionsQuery, useWorkspaceQuery } from "../hooks/useWorkspaceQuery";
 import type { CloudCpBrowserApproval, CloudCpClient } from "./cloud-cp";
 import { CloudCpError } from "./cloud-cp/errors";
 import { tapCloudSessionEvents } from "./cloud-cp/session-events-hub";
@@ -243,7 +244,13 @@ export function useCloudPendingApprovals(): PendingApproval[] {
 export function useLiveCloudPendingApprovals(): PendingApproval[] {
 	const queryClient = useQueryClient();
 	const { client, ready, baseUrl, userId } = useCloudCp();
+	// The merged workspace list waits for this machine's daemon, so AO Cloud's
+	// own session list is read too: approvals must be found while it is down.
+	// The workspace list still adds sessions shared from other organizations.
 	const workspaces = useWorkspaceQuery();
+	const cloudSessions = useCloudSessionsQuery();
+	const { org } = useCloudOrg();
+	const orgId = org?.id;
 	const base = baseUrl.replace(/\/+$/, "");
 	const watchedRefs = useSyncExternalStore(subscribeRefs, getWatched, getWatched);
 	const heardRefs = useSyncExternalStore(subscribeRefs, getHeard, getHeard);
@@ -254,6 +261,11 @@ export function useLiveCloudPendingApprovals(): PendingApproval[] {
 			const known = found.get(refKey(ref));
 			found.set(refKey(ref), { baseUrl: base, ...ref, watched: isWatched || Boolean(known?.watched) });
 		};
+		if (orgId) {
+			for (const session of cloudSessions.data ?? []) {
+				if (mayHaveApprovals(session) && mayDecide(session, userId)) add({ orgId, sessionId: session.id }, false);
+			}
+		}
 		for (const workspace of workspaces.data ?? []) {
 			for (const session of workspace.sessions) {
 				if (session.cloud?.orgId && mayHaveApprovals(session.cloud) && mayDecide(session.cloud, userId)) {
@@ -264,7 +276,7 @@ export function useLiveCloudPendingApprovals(): PendingApproval[] {
 		for (const ref of heardRefs) add(ref, false);
 		for (const ref of watchedRefs) add(ref, true);
 		return [...found.values()];
-	}, [base, heardRefs, ready, userId, watchedRefs, workspaces.data]);
+	}, [base, cloudSessions.data, heardRefs, orgId, ready, userId, watchedRefs, workspaces.data]);
 
 	// What was read belongs to one account on one control plane. When that
 	// changes (sign-out, another account, another base URL) or the reader goes,

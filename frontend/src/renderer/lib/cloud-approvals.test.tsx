@@ -7,6 +7,10 @@ const hooks = vi.hoisted(() => ({
 	userId: "me",
 	listBrowserApprovals: vi.fn(),
 	sessions: [] as Array<{ id: string; cloud?: { orgId: string; observedState?: string; desiredState?: string; createdByUserId?: string; requestedBy?: { userId: string } } }>,
+	// The local daemon is down: the merged workspace list has nothing yet.
+	localDown: false,
+	// AO Cloud's own session list, read without the local daemon.
+	cloudSessions: [] as Array<{ id: string; observedState?: string; desiredState?: string; createdByUserId?: string; requestedBy?: { userId: string } }>,
 	tap: undefined as undefined | ((target: { baseUrl: string; orgId: string; sessionId: string }, event: { type: string }) => void),
 }));
 vi.mock("./cloud-cp/session-events-hub", () => ({
@@ -21,7 +25,11 @@ vi.mock("../hooks/useCloudCp", () => ({
 	useCloudCp: () => ({ ready: hooks.ready, baseUrl: "https://cp.test/", userId: hooks.userId, client: { listBrowserApprovals: hooks.listBrowserApprovals } }),
 }));
 vi.mock("./telemetry", () => ({ captureRendererException: vi.fn() }));
-vi.mock("../hooks/useWorkspaceQuery", () => ({ useWorkspaceQuery: () => ({ data: [{ id: "p", sessions: hooks.sessions }] }) }));
+vi.mock("../hooks/useWorkspaceQuery", () => ({
+	useWorkspaceQuery: () => ({ data: hooks.localDown ? undefined : [{ id: "p", sessions: hooks.sessions }] }),
+	useCloudSessionsQuery: () => ({ data: hooks.cloudSessions }),
+}));
+vi.mock("../hooks/useCloudOrg", () => ({ useCloudOrg: () => ({ org: { id: "org-1" } }) }));
 
 import { QueryClient, QueryClientProvider, focusManager } from "@tanstack/react-query";
 import { renderHook, waitFor } from "@testing-library/react";
@@ -190,6 +198,28 @@ describe("cloud approvals", () => {
 		} finally {
 			hooks.ready = true;
 			hooks.userId = "me";
+			shell.unmount();
+			client.clear();
+		}
+	});
+
+	it("finds a cloud session's request while the local daemon is down", async () => {
+		const future = new Date(Date.now() + 60_000).toISOString();
+		hooks.localDown = true;
+		hooks.sessions = [];
+		hooks.cloudSessions = [{ id: "s-cold", desiredState: "running", observedState: "running", createdByUserId: "me" }];
+		hooks.listBrowserApprovals.mockReset().mockImplementation(async (_org: string, sessionId: string) => ({
+			pending: sessionId === "s-cold" ? [cloudRequest({ id: "cold-start", sessionId: "s-cold", expiresAt: future })] : [],
+		}));
+		const client = new QueryClient();
+		const wrapper = ({ children }: { children: ReactNode }) => <QueryClientProvider client={client}>{children}</QueryClientProvider>;
+		const shell = renderHook(() => useLiveCloudPendingApprovals(), { wrapper });
+		try {
+			await waitFor(() => expect(shell.result.current.map((request) => request.id)).toEqual(["cold-start"]));
+			expect(hooks.listBrowserApprovals).toHaveBeenCalledWith("org-1", "s-cold");
+		} finally {
+			hooks.localDown = false;
+			hooks.cloudSessions = [];
 			shell.unmount();
 			client.clear();
 		}

@@ -9,7 +9,9 @@ const state = vi.hoisted(() => ({ list: vi.fn() }));
 vi.mock("../../hooks/useCloudCp", () => ({
 	useCloudCp: () => ({ ready: true, baseUrl: "https://cp.test", userId: "u", client: { listBrowserApprovals: state.list } }),
 }));
+vi.mock("../../hooks/useCloudOrg", () => ({ useCloudOrg: () => ({ org: { id: ORG } }) }));
 vi.mock("../../hooks/useWorkspaceQuery", () => ({
+	useCloudSessionsQuery: () => ({ data: undefined }),
 	useWorkspaceQuery: () => ({
 		data: [{ id: "c3bd963e-b623-40e0-93b0-369110e345c8", sessions: [{ id: SESSION, title: "Freestyle", cloud: { orgId: ORG, desiredState: "running", observedState: "running" } }] }],
 	}),
