@@ -18,7 +18,7 @@ import type { ArtifactRow } from "../lib/artifacts";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
 import { useNavigate } from "@tanstack/react-router";
-import { memo, useCallback, useEffect, useLayoutEffect, useRef, useState, type ComponentProps, type ReactNode } from "react";
+import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ComponentProps, type ReactNode } from "react";
 import {
 	InspectorActivityTimelineView,
 	InspectorPullRequestCardView,
@@ -185,6 +185,10 @@ export const SessionInspector = memo(function SessionInspector({
 	browserAnnotationQueue,
 	isInspectorVisible = true,
 	onToggleBrowserPopOut,
+	browserInWindow = false,
+	browserRecordingViewport,
+	onToggleBrowserWindow,
+	onFocusBrowserWindow,
 	artifactRequest,
 	onArtifactRequestConsumed,
 	onOpenArtifact,
@@ -211,6 +215,13 @@ export const SessionInspector = memo(function SessionInspector({
 	browserAnnotationQueue?: BrowserAnnotationQueueModel;
 	isInspectorVisible?: boolean;
 	onToggleBrowserPopOut?: (next: boolean) => void;
+	/** The session's Browser panel is in its own window. */
+	browserInWindow?: boolean;
+	/** An `ao browser record` recording's size, while one runs. */
+	browserRecordingViewport?: { width: number; height: number } | null;
+	/** Moves the Browser panel into its own window (true) or back here (false). */
+	onToggleBrowserWindow?: (next: boolean) => void;
+	onFocusBrowserWindow?: () => void;
 	/** The artifact the Artifacts view should show, e.g. one clicked in the Summary. */
 	artifactRequest?: ArtifactOpenRequest | null;
 	onArtifactRequestConsumed?: (key: number) => void;
@@ -382,16 +393,20 @@ export const SessionInspector = memo(function SessionInspector({
 						<SessionArtifactsView active={isInspectorVisible && view === "artifacts"} hostId={hostId} key={sessionUiKey(session.id, hostId)} onRequestConsumed={onArtifactRequestConsumed} request={artifactRequest} session={session} />
 					) : undefined
 				}
-				browserPoppedOut={browserPoppedOut}
+				browserPoppedOut={browserPoppedOut || browserInWindow}
 				deviceView={session && deviceAvailable ? <DevicePanel isActive={isInspectorVisible} key={session.id} sessionId={session.id} /> : undefined}
 				browserView={
 					session && (!hostId || browserView) ? (
 						<BrowserView
 							browserPoppedOut={browserPoppedOut}
+							browserInWindow={browserInWindow}
+							recordingViewport={browserRecordingViewport ?? null}
 							browserAnnotationQueue={browserAnnotationQueue}
 							browserView={browserView}
-							isActive={isInspectorVisible && !browserPoppedOut}
+							isActive={isInspectorVisible && !browserPoppedOut && !browserInWindow}
+							onFocusWindow={onFocusBrowserWindow}
 							onTogglePopOut={onToggleBrowserPopOut}
+							onToggleWindow={onToggleBrowserWindow}
 							session={session}
 							topbarHost={browserTopbarHost}
 						/>
@@ -408,7 +423,7 @@ export const SessionInspector = memo(function SessionInspector({
 				}
 				headerActions={
 					<>
-						{view === "browser" && !browserPoppedOut ? (
+						{view === "browser" && !browserPoppedOut && !browserInWindow ? (
 							<div className="browser-panel__topbar-host min-w-0 flex-1" ref={setBrowserTopbarHost} />
 						) : view === "files" && filesView ? (
 							<div className="files-panel__topbar-host min-w-0 flex-1" ref={setFilesTopbarHost} />
@@ -3004,16 +3019,24 @@ function BrowserView({
 	session,
 	isActive,
 	browserPoppedOut,
+	browserInWindow,
+	recordingViewport,
 	browserAnnotationQueue,
 	onTogglePopOut,
+	onToggleWindow,
+	onFocusWindow,
 	browserView,
 	topbarHost,
 }: {
 	session: WorkspaceSession;
 	isActive: boolean;
 	browserPoppedOut: boolean;
+	browserInWindow: boolean;
+	recordingViewport: { width: number; height: number } | null;
 	browserAnnotationQueue?: BrowserAnnotationQueueModel;
 	onTogglePopOut?: (next: boolean) => void;
+	onToggleWindow?: (next: boolean) => void;
+	onFocusWindow?: () => void;
 	browserView?: BrowserViewModel;
 	topbarHost?: HTMLElement | null;
 }) {
@@ -3024,6 +3047,29 @@ function BrowserView({
 	const { t } = useTranslation();
 	// Stable, so the memoized panel skips this view's unrelated renders.
 	const togglePopOut = useCallback((next: boolean) => onTogglePopOut?.(next), [onTogglePopOut]);
+	const openWindow = useMemo(() => (onToggleWindow ? () => onToggleWindow(true) : undefined), [onToggleWindow]);
+	// In its own window the panel is there, not here (the same one-slot rule).
+	if (browserInWindow) {
+		return (
+			<div className="h-full min-h-0" data-browser-dock-target="" role="tabpanel">
+				<div className={cn(inspectorEmptyClass, "flex flex-col items-center gap-2 py-10 px-5 text-center")}>
+					<p className="text-md-sm text-muted-foreground">
+						{recordingViewport
+							? t("inspector.browserRecordingInWindow", { width: recordingViewport.width, height: recordingViewport.height })
+							: t("inspector.browserInWindow")}
+					</p>
+					<div className="flex flex-wrap items-center justify-center gap-2">
+						<Button onClick={() => onFocusWindow?.()} size="sm" type="button" variant="secondary">
+							{t("inspector.showBrowserWindow")}
+						</Button>
+						<Button onClick={() => onToggleWindow?.(false)} size="sm" type="button" variant="ghost">
+							{t("inspector.returnBrowserFromWindow")}
+						</Button>
+					</div>
+				</div>
+			</div>
+		);
+	}
 	if (browserPoppedOut) {
 		return (
 			<div className="h-full min-h-0" data-browser-dock-target="" role="tabpanel">
@@ -3046,6 +3092,7 @@ function BrowserView({
 			active={isActive}
 			annotationQueue={browserAnnotationQueue}
 			browserView={browserView}
+			onOpenWindow={openWindow}
 			onTogglePopOut={togglePopOut}
 			poppedOut={false}
 			session={session}

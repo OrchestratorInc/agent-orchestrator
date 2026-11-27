@@ -4,6 +4,7 @@ type MainWindowHost = Pick<BaseWindow, "contentView" | "isDestroyed">;
 
 export type WebContentsViewConstructor = new (options: {
 	webPreferences: Electron.WebPreferences;
+	webContents?: WebContents;
 }) => WebContentsView;
 
 export type WindowComposition = {
@@ -27,7 +28,12 @@ export type WindowComposition = {
 export function createWindowComposition(options: {
 	mainWindow: MainWindowHost;
 	WebContentsView: WebContentsViewConstructor;
-	preload: string;
+	preload?: string;
+	/**
+	 * An existing document to use as the shell, such as a window the app shell
+	 * opened with window.open. Its own preferences already apply.
+	 */
+	webContents?: WebContents;
 	platform: NodeJS.Platform;
 	allowShellDebugging?: boolean;
 	/**
@@ -38,6 +44,7 @@ export function createWindowComposition(options: {
 	hasLivePageBelow?: () => boolean;
 }): WindowComposition {
 	const shellView = new options.WebContentsView({
+		...(options.webContents ? { webContents: options.webContents } : {}),
 		webPreferences: {
 			devTools: options.allowShellDebugging === true,
 			preload: options.preload,

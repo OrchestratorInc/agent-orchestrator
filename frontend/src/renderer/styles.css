@@ -5645,6 +5645,13 @@ html[data-shell-linux] body > .files-popout-overlay {
 	box-shadow: none;
 }
 
+/* The Browser in its own window (BrowserWindowsHost) is the page alone: the
+   native page view is placed over this full-window slot. */
+.browser-window-page {
+	position: fixed;
+	inset: 0;
+}
+
 /* Pin the URL bar into the reserved titlebar band (macOS traffic lights,
    Windows custom titlebar, Linux shell topbar) instead of consuming a second
    row inside the popout frame. The popout overlay itself still begins below

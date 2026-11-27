@@ -180,6 +180,7 @@ import { queryShown } from "../lib/dom-selectors";
 import { KeepRecentAlive } from "./KeepRecentAlive";
 import { openComposerModelPicker, toggleComposerDictation } from "../lib/composer-shortcuts";
 import { inspectorIsOpen, useResolvedTheme, useUiStore, type InspectorView } from "../stores/ui-store";
+import { useBrowserWindowStore, type BrowserWindowPanel } from "../stores/browser-window-store";
 import { useSideChatTab, useSideChatsAvailable } from "../lib/side-chats";
 import {
 	INSPECTOR_SEPARATOR_RESERVE_PX,
@@ -230,6 +231,8 @@ const BROWSER_REVEAL_ACTIONS = new Set(["open", "tab-new"]);
 
 function browserIsVisible(sessionId: string, browserPoppedOut: boolean): boolean {
 	if (browserPoppedOut) return true;
+	// In its own window, the Browser is on screen there.
+	if (useBrowserWindowStore.getState().windows[sessionId]) return true;
 	const { inspectorSessions } = useUiStore.getState();
 	return inspectorIsOpen(inspectorSessions, sessionId) && (inspectorSessions[sessionId]?.view ?? "summary") === "browser";
 }
@@ -796,6 +799,8 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 	const browserPopOutPhase = browserPopOutState.sessionId === sessionId ? browserPopOutState.phase : "docked";
 	const browserPopOutMounted = browserPopOutPhase !== "docked";
 	const browserPoppedOut = browserPopOutPhase === "open";
+	// The session's Browser panel is in its own window (BrowserWindowsHost).
+	const browserInWindow = useBrowserWindowStore((state) => Boolean(state.windows[uiSessionId]));
 	const mainViewVisible = useMainViewVisible();
 	const [browserPopoutTopbarHost, setBrowserPopoutTopbarHost] = useState<HTMLDivElement | null>(null);
 	useLayoutEffect(() => {
@@ -1785,6 +1790,7 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 	const browserSlotVisible = Boolean(
 		session &&
 			hasInspector &&
+			!browserInWindow &&
 			(browserPoppedOut || (inspectorPanelVisible && inspectorView === "browser")),
 	);
 	useEffect(() => {
@@ -1807,10 +1813,12 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 	// serving, so an artifact preview the user opened stays visible; every other
 	// preview of a terminated session is a stale DB fact and is still torn down.
 	const browserTerminated = sessionBrowserUnavailable(session, hostId);
+	const browserOrigin = hostId ? { hostId, sessionId, proxyBase: remoteBase ?? "" } : undefined;
+	const browserCloudAgent = session?.cloud && cloudCpReady ? { baseUrl: cloudCpBaseUrl, orgId: session.cloud.orgId, sessionId: session.id } : undefined;
 	const browserView = useBrowserView({
 		sessionId: uiSessionId,
-		origin: hostId ? { hostId, sessionId, proxyBase: remoteBase ?? "" } : undefined,
-		cloudAgentBrowser: session?.cloud && cloudCpReady ? { baseUrl: cloudCpBaseUrl, orgId: session.cloud.orgId, sessionId: session.id } : undefined,
+		origin: browserOrigin,
+		cloudAgentBrowser: browserCloudAgent,
 		active: browserSlotVisible,
 		poppedOut: browserPoppedOut,
 		terminated: browserTerminated,
@@ -1825,6 +1833,45 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 		navUrl: browserView.navState.url,
 	});
 	const browserViewId = browserView.viewId;
+	// What the session's Browser window renders, kept current while this view
+	// shows the session.
+	const browserWindowPanel: BrowserWindowPanel | undefined = session
+		? {
+				session,
+				hostId,
+				origin: browserOrigin,
+				cloudAgentBrowser: browserCloudAgent,
+				previewUrl,
+				previewRevision,
+				terminated: browserTerminated,
+				sessionEnded: session.isTerminated,
+			}
+		: undefined;
+	const browserWindowPanelRef = useRef(browserWindowPanel);
+	browserWindowPanelRef.current = browserWindowPanel;
+	useEffect(() => {
+		if (browserInWindow && browserWindowPanel) useBrowserWindowStore.getState().updatePanel(uiSessionId, browserWindowPanel);
+	});
+	const handleToggleBrowserWindow = useCallback(
+		(next: boolean) => {
+			if (!next) {
+				const entry = useBrowserWindowStore.getState().windows[uiSessionId];
+				if (entry) void window.ao?.browser.closeWindow(entry.viewId);
+				return;
+			}
+			const panel = browserWindowPanelRef.current;
+			if (!panel || !browserViewId) return;
+			// The maximized Browser goes back first: the window takes its place.
+			setBrowserPopOutState({ sessionId, phase: "docked" });
+			useBrowserWindowStore.getState().openWindow(uiSessionId, browserViewId, panel);
+		},
+		[browserViewId, sessionId, uiSessionId],
+	);
+	const handleOpenBrowserWindow = useCallback(() => handleToggleBrowserWindow(true), [handleToggleBrowserWindow]);
+	const handleFocusBrowserWindow = useCallback(() => {
+		const entry = useBrowserWindowStore.getState().windows[uiSessionId];
+		if (entry) void window.ao?.browser.focusWindow(entry.viewId);
+	}, [uiSessionId]);
 	useEffect(
 		() =>
 			window.ao?.browser.onClosePanel((targetViewId) => {
@@ -2692,6 +2739,8 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 
 	const handleToggleBrowserPopOut = useCallback(
 		(next: boolean) => {
+			// The Browser in its own window has nothing to maximize here.
+			if (next && useBrowserWindowStore.getState().windows[uiSessionId]) return;
 			if (next) setFilesPoppedOut(false);
 			setBrowserPopOutState((current) => {
 				if (next) {
@@ -2702,7 +2751,7 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 				return { sessionId, phase: "docked" };
 			});
 		},
-		[sessionId],
+		[sessionId, uiSessionId],
 	);
 
 	useEffect(() => {
@@ -3361,6 +3410,10 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 							orchestrator={browserOnly}
 							browserAnnotationQueue={inspectorView === "browser" ? browserAnnotationQueue : undefined}
 							browserPoppedOut={browserPoppedOut}
+							browserInWindow={browserInWindow}
+							browserRecordingViewport={browserView.recordingViewport}
+							onToggleBrowserWindow={handleToggleBrowserWindow}
+							onFocusBrowserWindow={handleFocusBrowserWindow}
 							filesView={
 								inspectorView === "files" && session ? (
 									session.cloud ? (
@@ -3483,7 +3536,7 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
           sidebar + topbar, not just the session area) and sits outside any
           `[data-panel]` column, so the native WebContentsView is not clamped
           and fills the window below any native titlebar overlay. */}
-			{browserPopOutMounted && session
+			{browserPopOutMounted && session && !browserInWindow
 				? createPortal(
 						<SessionBrowserPopOut onClose={() => handleToggleBrowserPopOut(false)} onTopbarHost={setBrowserPopoutTopbarHost} phase={browserPopOutPhase === "open" ? "open" : "mounting"}>
 								{browserPoppedOut && browserPopoutTopbarHost ? <BrowserPanelView
@@ -3491,6 +3544,7 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 									annotationQueue={browserAnnotationQueue}
 									browserView={browserView}
 									onTogglePopOut={handleToggleBrowserPopOut}
+									onOpenWindow={handleOpenBrowserWindow}
 									poppedOut
 									session={session}
 									topbarHost={browserPopoutTopbarHost}

@@ -37,6 +37,7 @@ import { QuitConfirmDialog } from "../components/QuitConfirmDialog";
 import { ExitFeedbackPrompt } from "../components/ExitFeedbackPrompt";
 import { PageTopbar } from "../components/PageTopbar";
 import { SessionTopbarProvider } from "../components/SessionTopbarPortal";
+import { BrowserWindowsHost } from "../components/BrowserWindowsHost";
 import { OrchestratorReplacementDialog } from "../components/OrchestratorReplacementDialog";
 import { RestartToUpdateDialog } from "../components/RestartToUpdateDialog";
 import { SessionImportDialog } from "../components/SessionImportDialog";
@@ -194,6 +195,8 @@ function ShellLayoutWithSettings() {
 			{/* Outside ShellLayout, so links it holds survive every route and the
 			    startup loader that replaces the shell while the daemon restarts. */}
 			<SharedArtifactLinkHost />
+			{/* Browser panels moved into their own windows; they outlive routes too. */}
+			<BrowserWindowsHost />
 		</SettingsProvider>
 	);
 }
