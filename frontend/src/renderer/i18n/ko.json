@@ -3594,6 +3594,8 @@
 	"chat.startup.failed": "세션 설정 실패",
 	"chat.background.count_one": "백그라운드 업데이트 {{count}}개",
 	"chat.background.count_other": "백그라운드 업데이트 {{count}}개",
+	"chat.background.waiting_one": "대기 중인 업데이트 {{count}}개",
+	"chat.background.waiting_other": "대기 중인 업데이트 {{count}}개",
 	"chat.background.workers_one": "워커 {{count}}개",
 	"chat.background.workers_other": "워커 {{count}}개",
 	"chat.background.failedEarlier_one": "이전 업데이트 {{count}}개가 같은 오류로 실패",

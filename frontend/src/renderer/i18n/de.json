@@ -3594,6 +3594,8 @@
 	"chat.startup.failed": "Einrichtung der Sitzung fehlgeschlagen",
 	"chat.background.count_one": "{{count}} Hintergrund-Update",
 	"chat.background.count_other": "{{count}} Hintergrund-Updates",
+	"chat.background.waiting_one": "{{count}} Update wartet",
+	"chat.background.waiting_other": "{{count}} Updates warten",
 	"chat.background.workers_one": "{{count}} Worker",
 	"chat.background.workers_other": "{{count}} Worker",
 	"chat.background.failedEarlier_one": "{{count}} früheres Update ist genauso fehlgeschlagen",

@@ -1133,6 +1133,122 @@ describe("background turns in the orchestrator chat", () => {
 	});
 });
 
+describe("agent messages around the user's turns", () => {
+	const steer = (id: string, sequence: number, text: string, sender?: string): ConversationActivity => ({
+		kind: "activity", id, turnId: "h", sequence, revision: 0, activityKind: "system", status: "completed", summary: text, createdAt: at(Math.floor(sequence / 10)),
+		detail: { event: "steer", text: sender ? `[from ${sender}] ${text}` : text, ...(sender ? { senderSessionId: sender } : {}) },
+	});
+	const withStates = (items: ConversationItem[], states: Record<string, "queued" | "running">, extra: Partial<ConversationSnapshot> = {}): ConversationSnapshot => {
+		const base = snapshot(items);
+		return {
+			...base, ...extra,
+			turns: base.turns.map((turn) => states[turn.id] === "queued"
+				? { ...turn, state: "queued" as const, providerTurnId: undefined, completedAt: undefined }
+				: states[turn.id] === "running" ? { ...turn, state: "running" as const, completedAt: undefined } : turn),
+		};
+	};
+	const lines = () => screen.queryAllByTestId("background-updates").map((line) => line.textContent?.replace(/ · Oct.*$/, ""));
+	const turnItems = (): ConversationItem[] => [
+		human("h", 1, "Ship the shop changes."),
+		{ ...command("h", 1, "ao status"), sequence: 11 },
+		steer("s1", 20, "Design checkpoint verified.", "proj-7"),
+		steer("s2", 21, "Draft PR created.", "proj-8"),
+		steer("u1", 22, "Also check the logo link."),
+		{ ...command("h", 2, "gh pr view 53"), id: "h-command-2", sequence: 23 },
+		steer("s3", 24, "Fixes pushed.", "proj-7"),
+		{
+			kind: "activity", id: "ask", turnId: "h", sequence: 25, revision: 0, activityKind: "approval", status: "completed", summary: "Run a command",
+			detail: { command: "npm test", decision: "approved" }, createdAt: at(2),
+		} as ConversationActivity,
+		steer("s4", 26, "Integration passed.", "proj-7"),
+		steer("s5", 27, "Final head pushed.", "proj-7"),
+	];
+
+	it("folds agent messages that reach the user's running turn into one line between anything the user acts on", async () => {
+		renderSnapshot(withStates(turnItems(), { h: "running" }));
+		expect(lines()).toEqual(["2 background updates · 2 workers", "2 background updates · 1 worker"]);
+		expect(screen.getByText("Also check the logo link.")).toBeInTheDocument();
+		expect(screen.getByText("npm test")).toBeInTheDocument();
+		expect(screen.getAllByTestId("worker-update").filter((row) => !row.closest("[data-testid=background-updates]"))).toHaveLength(1);
+
+		await userEvent.click(within(screen.getAllByTestId("background-updates")[0]!).getAllByRole("button")[0]!);
+		expect(screen.getByText(/Draft PR created/)).toBeInTheDocument();
+	});
+
+	it("keeps those lines once the user's turn settles, joining what an answered approval no longer splits", () => {
+		renderSnapshot(snapshot([...turnItems(), reply("h", 3, "Shipped.")]));
+		expect(lines()).toEqual(["2 background updates · 2 workers", "3 background updates · 1 worker"]);
+		expect(screen.getByText("Also check the logo link.")).toBeInTheDocument();
+		expect(screen.getByText("Shipped.")).toBeInTheDocument();
+	});
+
+	it("spans a line from its earliest to its latest message when delivery order differs", () => {
+		const today = (hour: number) => new Date(new Date().setHours(hour, 0, 0, 0)).toISOString();
+		renderSnapshot(withStates([
+			human("h", 1, "Ship the shop changes."),
+			{ ...steer("s1", 20, "Fixes pushed.", "proj-7"), createdAt: today(11) },
+			{ ...steer("s2", 21, "Final head pushed.", "proj-8"), createdAt: today(10) },
+		], { h: "running" }));
+		expect(screen.getByTestId("background-updates").querySelector("button")).toHaveTextContent(/10:00.*–.*11:00/);
+	});
+
+	it("folds a batch of agent messages into one line while the orchestrator handles it", () => {
+		const items = [
+			automation("b", 1, "[from proj-7] Checkpoint one."),
+			automation("c1", 2, "[from proj-8] Checkpoint two."),
+			automation("c2", 3, "[from proj-7] Checkpoint three."),
+		];
+		const value = withStates(items, { b: "running" }, { batchedDeliveries: [{ turnId: "c1", deliveredWithTurnId: "b" }, { turnId: "c2", deliveredWithTurnId: "b" }] });
+		renderSnapshot({ ...value, turns: value.turns.filter((turn) => turn.id === "b") });
+		expect(lines()).toEqual(["3 background updates · 2 workers"]);
+		expect(screen.queryAllByTestId("worker-update")).toHaveLength(0);
+	});
+
+	it("folds agent messages waiting behind the user's turn into a line of their own, apart from handled ones", () => {
+		renderSnapshot(withStates([
+			automation("d1", 1, "[from proj-7] Earlier checkpoint."),
+			reply("d1", 2, "Noted."),
+			human("h", 3, "Ship the shop changes."),
+			automation("a1", 4, "[from proj-7] Checkpoint one."),
+			automation("a2", 5, "[from proj-8] Checkpoint two."),
+			automation("v", 6, "[via Slack #c1] Is the shop live?"),
+			automation("a3", 7, "[from proj-7] Checkpoint three."),
+		], { h: "running", a1: "queued", a2: "queued", v: "queued", a3: "queued" }));
+		expect(lines()).toEqual(["1 background update · 1 worker", "2 updates waiting · 2 workers", "1 update waiting · 1 worker"]);
+		expect(screen.getByText("Is the shop live?")).toBeInTheDocument();
+	});
+
+	it("keeps a waiting report that needs the user out of the waiting line", () => {
+		renderSnapshot(withStates([
+			human("h", 1, "Ship the shop changes."),
+			report("a1", 2, "[done] [Menus](ao://sessions/proj/proj-285)\nMenus render."),
+			report("a2", 3, "[needs_input] [iOS pages](ao://sessions/proj/proj-286)\nTunnel or loopback?"),
+		], { h: "running", a1: "queued", a2: "queued" }));
+		expect(lines()).toEqual(["1 update waiting · 1 done"]);
+		expect(screen.getByTestId("worker-reports")).toHaveTextContent("1 needs you");
+	});
+
+	it("keeps a worker turn that carried a review result in view", () => {
+		renderOrchestrator([
+			automation("t1", 1, "[from proj-7] Checkpoint one."),
+			{ ...automation("t1", 1, "AO review done: approved\nPR: https://github.com/acme/shop/pull/53"), id: "t1-review", sequence: 11 },
+			reply("t1", 2, "Recorded."),
+		]);
+		expect(lines()).toEqual([]);
+		expect(screen.getByText("Recorded.")).toBeInTheDocument();
+	});
+
+	it("shows the user's steer without the reports it carried", () => {
+		renderSnapshot(withStates([
+			human("h", 1, "Ship the shop changes."),
+			{ ...command("h", 1, "ao status"), sequence: 11 },
+			steer("s1", 20, "Please continue\n\n<ao-worker-reports>\nReports since your previous turn:\n\n[checkpoint] [Menus](ao://sessions/proj/proj-285)\nMenus render.\n</ao-worker-reports>\n"),
+		], { h: "running" }));
+		expect(screen.getByText("Please continue")).toBeInTheDocument();
+		expect(screen.queryByText(/ao-worker-reports/)).not.toBeInTheDocument();
+	});
+});
+
 describe("agent messages in a worker chat", () => {
 	const workspaces = [{
 		id: "proj", name: "proj", path: "/tmp/proj",

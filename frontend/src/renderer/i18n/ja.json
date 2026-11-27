@@ -3594,6 +3594,8 @@
 	"chat.startup.failed": "セッションのセットアップに失敗しました",
 	"chat.background.count_one": "バックグラウンド更新 {{count}} 件",
 	"chat.background.count_other": "バックグラウンド更新 {{count}} 件",
+	"chat.background.waiting_one": "待機中の更新 {{count}} 件",
+	"chat.background.waiting_other": "待機中の更新 {{count}} 件",
 	"chat.background.workers_one": "ワーカー {{count}} 件",
 	"chat.background.workers_other": "ワーカー {{count}} 件",
 	"chat.background.failedEarlier_one": "以前の更新 {{count}} 件が同じエラーで失敗",

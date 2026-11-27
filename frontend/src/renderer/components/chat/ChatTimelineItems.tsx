@@ -1204,7 +1204,7 @@ export function steerAnnotations(content: SteerContent = []): ChatAnnotationSumm
 }
 
 export function humanVisibleText(text: string): string {
-	if (!text.endsWith(WORKER_REPORT_CLOSE)) return text;
+	if (!text.trimEnd().endsWith(WORKER_REPORT_CLOSE)) return text;
 	const reportStart = text.lastIndexOf(`\n\n${WORKER_REPORT_OPEN}\n`);
 	if (reportStart < 0) return text;
 	return text.slice(0, reportStart);
@@ -3650,7 +3650,7 @@ export function SteerMessage({
 	const senderHref = senderSessionId && senderProjectId
 		? `ao://sessions/${encodeURIComponent(senderProjectId)}/${encodeURIComponent(senderSessionId)}`
 		: undefined;
-	const visibleText = senderSessionId ? stripSteerSenderPrefix(text, senderSessionId) : text;
+	const visibleText = senderSessionId ? stripSteerSenderPrefix(text, senderSessionId) : humanVisibleText(text);
 	const { body, attachments } = stagedAttachmentParts(visibleText);
 	// Only the person's own steer is marked; a steer from another session is not theirs.
 	const renderText = useUserTextRenderer(sessionId, body, attachments, apiBaseUrl);

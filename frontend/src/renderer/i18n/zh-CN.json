@@ -3576,6 +3576,8 @@
 	"chat.startup.failed": "会话设置失败",
 	"chat.background.count_one": "{{count}} 条后台更新",
 	"chat.background.count_other": "{{count}} 条后台更新",
+	"chat.background.waiting_one": "{{count}} 条更新等待中",
+	"chat.background.waiting_other": "{{count}} 条更新等待中",
 	"chat.background.workers_one": "{{count}} 个 worker",
 	"chat.background.workers_other": "{{count}} 个 worker",
 	"chat.background.failedEarlier_one": "之前有 {{count}} 条更新以同样的错误失败",

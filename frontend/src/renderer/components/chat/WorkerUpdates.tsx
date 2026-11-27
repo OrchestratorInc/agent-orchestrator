@@ -167,10 +167,13 @@ export function finalReply(items: readonly ConversationItem[]): string {
 
 /** Reports the daemon folded into a human message because the orchestrator was busy. */
 export const piggybackedUpdates = cachedBy((item): WorkerUpdate[] => {
-	if (item.kind !== "message" || item.role !== "user" || item.origin !== "human") return [];
-	const visible = humanVisibleText(item.text);
-	if (visible === item.text) return [];
-	const envelope = item.text
+	const text = item.kind === "message"
+		? item.role === "user" && item.origin === "human" ? item.text : undefined
+		: isSteer(item) && !item.detail?.senderSessionId?.trim() ? item.detail?.text : undefined;
+	if (text === undefined) return [];
+	const visible = humanVisibleText(text);
+	if (visible === text) return [];
+	const envelope = text
 		.slice(visible.length)
 		.trim()
 		.replace(/^<ao-worker-reports>/, "")
@@ -494,10 +497,11 @@ function pastState(t: TFunction, state: string | undefined): string | undefined 
 	return state && (STATES[state]?.label ?? state.replaceAll("_", " "));
 }
 
-export function BackgroundUpdates({ turns, tally, failed = false, open, onOpenChange, children }: {
+export function BackgroundUpdates({ turns, tally, failed = false, waiting = false, open, onOpenChange, children }: {
 	turns: readonly { at: string; updates: readonly WorkerUpdate[] }[];
 	tally?: BackgroundTally;
 	failed?: boolean;
+	waiting?: boolean;
 	open: boolean;
 	onOpenChange: (open: boolean) => void;
 	children: ReactNode;
@@ -505,8 +509,9 @@ export function BackgroundUpdates({ turns, tally, failed = false, open, onOpenCh
 	const { t } = useTranslation();
 	const workers = new Set(turns.flatMap((turn) => turn.updates.map(senderOf))).size;
 	const tallies = TALLY_ORDER.filter((name) => tally?.[name]).map((name) => t(`chat.background.tally.${name}`, { count: tally![name] }));
-	const first = turns[0]?.at ?? "";
-	const last = turns.at(-1)?.at ?? first;
+	const times = turns.map((turn) => turn.at).sort((a, b) => Date.parse(a) - Date.parse(b));
+	const first = times[0] ?? "";
+	const last = times.at(-1) ?? first;
 	const start = formatMessageTimestamp(first);
 	const span = new Date(first).toDateString() !== new Date(last).toDateString()
 		? `${start} – ${formatMessageTimestamp(last)}`
@@ -525,7 +530,7 @@ export function BackgroundUpdates({ turns, tally, failed = false, open, onOpenCh
 					<span className="font-medium text-foreground/85">
 						{failed
 							? t("chat.background.failedEarlier", { count: turns.length })
-							: t("chat.background.count", { count: turns.reduce((sum, turn) => sum + Math.max(1, turn.updates.length), 0) })}
+							: t(waiting ? "chat.background.waiting" : "chat.background.count", { count: turns.reduce((sum, turn) => sum + Math.max(1, turn.updates.length), 0) })}
 					</span>
 					{workers > 0 && !STATE_TALLIES.some((name) => tally?.[name]) ? ` · ${t("chat.background.workers", { count: workers })}` : null}
 					{tallies.map((label) => ` · ${label}`).join("")} · {span}
