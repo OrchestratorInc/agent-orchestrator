@@ -121,6 +121,12 @@ func rendererOnlyArea(path string) string {
 			return "agent credential management"
 		}
 	}
+	// Moving a session reads its whole conversation, pushes its branch, places
+	// a conversation from AO Cloud and archives the session: the desktop app's
+	// move dialogs only. A paired phone has no move feature.
+	if isSessionMoveRoute(path) {
+		return "session moves"
+	}
 	for _, area := range []struct {
 		name     string
 		prefixes []string
@@ -149,6 +155,21 @@ func rendererOnlyArea(path string) string {
 		}
 	}
 	return ""
+}
+
+// isSessionMoveRoute matches the move routes that read or change a session:
+// /api/v1/sessions/move/import and /api/v1/sessions/{id}/move/{transcript,export,complete,abandon}.
+func isSessionMoveRoute(path string) bool {
+	rest, ok := strings.CutPrefix(path, "/api/v1/sessions/")
+	if !ok {
+		return false
+	}
+	if rest == "move/import" {
+		return true
+	}
+	parts := strings.Split(rest, "/")
+	return len(parts) == 3 && parts[0] != "" && parts[0] != "move" && parts[1] == "move" &&
+		(parts[2] == "transcript" || parts[2] == "export" || parts[2] == "complete" || parts[2] == "abandon")
 }
 
 // browserRequestAllowed guards browser access to REST routes. Local HTTP
