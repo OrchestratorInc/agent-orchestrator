@@ -82,9 +82,8 @@ its own update channel installs and names it in the confirm, then the app there
 downloads the update, closes and relaunches. It refuses while a draft there
 isn't saved yet. Auto update updates these computers too, without the confirm.
 A host on a release from before desktop updates has to be updated by hand
-once. A release
-without `ao remote-host link` prints an address and password instead of the
-sign-in link; pair it by hand, or install nightly. A release without
+once. A release without `ao remote-host link` prints an address and password
+instead of the sign-in link; pair it by hand, or install nightly. A release without
 `ao remote-host pair` prints the pairing password where a newer one prints a
 pairing code.
 
