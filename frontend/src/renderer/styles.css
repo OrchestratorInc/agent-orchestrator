@@ -2198,12 +2198,16 @@ textarea,
 	mask-image: linear-gradient(to right, transparent 0, #000 var(--session-title-fade-start), #000 calc(100% - var(--session-title-fade-end)), transparent 100%);
 }
 
-.group\/session-row:is(:hover, :has(:focus-visible)) .session-title[data-overflow] {
-	animation: session-title-fade var(--marquee-duration) var(--session-title-ease) var(--marquee-delay) infinite alternate both;
-}
+/* Only with motion allowed: under reduced motion the title keeps its static
+   fade and never slides. */
+@media (prefers-reduced-motion: no-preference) {
+	.group\/session-row:is(:hover, :has(:focus-visible)) .session-title[data-overflow] {
+		animation: session-title-fade var(--marquee-duration) var(--session-title-ease) var(--marquee-delay) infinite alternate both;
+	}
 
-.group\/session-row:is(:hover, :has(:focus-visible)) .session-title[data-overflow] .session-title-track {
-	animation: session-title-scroll var(--marquee-duration) var(--session-title-ease) var(--marquee-delay) infinite alternate both;
+	.group\/session-row:is(:hover, :has(:focus-visible)) .session-title[data-overflow] .session-title-track {
+		animation: session-title-scroll var(--marquee-duration) var(--session-title-ease) var(--marquee-delay) infinite alternate both;
+	}
 }
 
 @keyframes session-title-scroll {
@@ -2216,13 +2220,6 @@ textarea,
 	24% { --session-title-fade-start: 16px; }
 	76% { --session-title-fade-end: 24px; }
 	88%, 100% { --session-title-fade-start: 16px; --session-title-fade-end: 0px; }
-}
-
-@media (prefers-reduced-motion: reduce) {
-	.group\/session-row .session-title[data-overflow],
-	.group\/session-row .session-title[data-overflow] .session-title-track {
-		animation: none;
-	}
 }
 
 /* Project → session tree rail. A muted spine drops from under the project
