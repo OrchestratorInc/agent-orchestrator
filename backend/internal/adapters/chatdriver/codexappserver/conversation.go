@@ -27,9 +27,9 @@ import (
 const eventBuffer = 4096
 
 // approvalWait bounds how long the provider is left blocked on an unanswered
-// request. Codex holds its turn until the client replies, so an approval nobody
+// approval. Codex holds its turn until the client replies, so an approval nobody
 // resolves would hang the session indefinitely. On expiry AO refuses rather than
-// deciding on the user's behalf.
+// deciding on the user's behalf. Questions have no such bound (see inputDeadline).
 const approvalWait = 30 * time.Minute
 
 // errConversationClosed reports a decision arriving after the controller ended.
@@ -115,10 +115,22 @@ type conversation struct {
 	// its own provider turn, so the figure captured at that turn's start is the
 	// context position the compaction is about to shrink.
 	contextAtTurnStart int64
-	// compactedTurn is the last turn a compaction was reported for, so a provider
-	// build that emits both the notification and the item reports one compaction
-	// once.
+	// compactedTurn and compactedItem are the last compaction reported settled,
+	// so a provider build that emits both the notification and the item reports
+	// one compaction once.
 	compactedTurn string
+	compactedItem string
+	// compactingItem is the compaction item under way, and compactingFrom the
+	// context position it started from: the "before" of a compaction the agent
+	// runs inside a longer turn.
+	compactingItem string
+	compactingFrom int64
+	// endedTurn, endedItem and endedFrom are the compaction its turn ended
+	// before it settled, so the deprecated notification arriving after the turn
+	// settles that row instead of adding a second.
+	endedTurn string
+	endedItem string
+	endedFrom int64
 
 	pumpDone     chan struct{}
 	eventsMu     sync.RWMutex
@@ -238,6 +250,8 @@ func (c *conversation) pump() {
 			if threadID == "" {
 				threadID = c.threadID
 			}
+			var threadStatus *ports.ChatEvent
+			ev, threadStatus = usageLimits.threadStatus(ev, threadID)
 			var visible bool
 			ev, visible = citations.formatEvent(threadID, ev)
 			if !visible {
@@ -286,7 +300,23 @@ func (c *conversation) pump() {
 				if c.activeTurn == ev.ProviderTurnID {
 					c.activeTurn = ""
 				}
+				unreported, from, window := c.compactingItem, c.compactingFrom, c.contextWindow
+				c.compactingItem = ""
+				c.compactingFrom = 0
+				if unreported != "" {
+					c.endedTurn, c.endedItem, c.endedFrom = ev.ProviderTurnID, unreported, from
+				}
 				c.mu.Unlock()
+				if unreported != "" && ev.Err == nil && ev.TurnState == domain.TurnStateCompleted {
+					// A compaction still under way when its turn ended never said how it
+					// went. A stopped or failed turn settles its row as such; one that
+					// ended normally would settle it as a finished compaction.
+					c.emit(ports.ChatEvent{
+						Kind: ports.ChatEventCompacted, ProviderTurnID: ev.ProviderTurnID, ProviderItemID: unreported,
+						ActivityStatus: domain.ActivityStatusFailed, Summary: "No result reported",
+						Detail: compactionFigures(from, 0, window),
+					})
+				}
 			}
 			if ev.Kind == ports.ChatEventCompacted {
 				settled, ok := c.settleCompaction(ev)
@@ -312,6 +342,9 @@ func (c *conversation) pump() {
 				c.mu.Unlock()
 			}
 			c.emit(ev)
+			if threadStatus != nil {
+				c.emit(*threadStatus)
+			}
 		}
 	}
 	// The connection ended. Say so explicitly rather than letting the stream go
@@ -699,14 +732,53 @@ func (c *conversation) settleCompaction(ev ports.ChatEvent) (ports.ChatEvent, bo
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
-	if ev.ProviderTurnID != "" && ev.ProviderTurnID == c.compactedTurn {
+	if ev.ActivityStatus == domain.ActivityStatusRunning {
+		if ev.ProviderItemID != "" && ev.ProviderItemID == c.compactingItem {
+			return ports.ChatEvent{}, false
+		}
+		c.compactingItem = ev.ProviderItemID
+		c.compactingFrom = c.contextTokens
+		ev.Detail = compactionFigures(c.compactingFrom, 0, c.contextWindow)
+		return ev, true
+	}
+	endedFrom := int64(0)
+	if ev.ProviderItemID == "" {
+		// The deprecated notification names no item: it settles the one under way,
+		// or, arriving after its turn ended, the one that turn left unsettled.
+		ev.ProviderItemID = c.compactingItem
+		if ev.ProviderItemID == "" && ev.ProviderTurnID != "" && ev.ProviderTurnID == c.endedTurn {
+			ev.ProviderItemID = c.endedItem
+		}
+	}
+	if ev.ProviderItemID != "" && ev.ProviderItemID == c.endedItem {
+		endedFrom = c.endedFrom
+		c.endedTurn, c.endedItem, c.endedFrom = "", "", 0
+	}
+	if ev.ProviderTurnID != "" && ev.ProviderTurnID == c.compactedTurn &&
+		(ev.ProviderItemID == "" || c.compactedItem == "" || ev.ProviderItemID == c.compactedItem) {
 		return ports.ChatEvent{}, false
 	}
 	c.compactedTurn = ev.ProviderTurnID
+	c.compactedItem = ev.ProviderItemID
 
 	before, after, window := c.contextAtTurnStart, c.contextTokens, c.contextWindow
+	if c.compactingFrom > 0 && (ev.ProviderItemID == "" || ev.ProviderItemID == c.compactingItem) {
+		before = c.compactingFrom
+	} else if endedFrom > 0 {
+		before = endedFrom
+	}
+	if ev.ProviderItemID == c.compactingItem {
+		c.compactingItem = ""
+		c.compactingFrom = 0
+	}
 	ev.Summary = compactionSummary(before, after)
+	ev.Detail = compactionFigures(before, after, window)
+	return ev, true
+}
 
+// compactionFigures is what a compaction reclaimed, as far as the token reports
+// either side of it show. Zero means unknown and is left out.
+func compactionFigures(before, after, window int64) []byte {
 	detail := map[string]any{}
 	if before > 0 {
 		detail["tokensBefore"] = before
@@ -720,10 +792,11 @@ func (c *conversation) settleCompaction(ev ports.ChatEvent) (ports.ChatEvent, bo
 	if window > 0 {
 		detail["contextWindow"] = window
 	}
-	if encoded, err := json.Marshal(detail); err == nil {
-		ev.Detail = encoded
+	encoded, err := json.Marshal(detail)
+	if err != nil {
+		return nil
 	}
-	return ev, true
+	return encoded
 }
 
 // compactionSummary labels the reclaim for a timeline row.

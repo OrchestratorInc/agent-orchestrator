@@ -198,6 +198,10 @@ type Config struct {
 	// reply text or tool call. A nil result keeps the generic error, and an
 	// authentication refusal never reaches it.
 	PromptErrorFailure func(err error, answered bool) error
+	// CompactionMessage recognizes reply text an agent sends to report its own
+	// compaction (Qwen Code), given the chunk's text and `_meta`. A recognized
+	// chunk is kept out of the reply and drives the turn's compaction row.
+	CompactionMessage func(text string, meta map[string]any) (CompactionReport, bool)
 	// HistoryNotice reports a replayed user message chunk that the agent wrote
 	// into its own transcript. Replay starts no turn for it, so the agent's
 	// output after it stays in the turn before, as it did live.
@@ -211,6 +215,11 @@ type Config struct {
 	// assigned, so an identical provider replay stays identical after the same
 	// rewrite. See hermesacp for the motivating shape.
 	HistoryReconciler func([]ports.ChatEvent) []ports.ChatEvent
+	// NativeHistoryReplay reads authoritative provider state when a resume-only
+	// ACP implementation does not replay session/update. It runs only AFTER a
+	// successful native resume, never as a fresh-session or missing-state fallback.
+	// available=false preserves ordinary resume-only history behavior.
+	NativeHistoryReplay func(context.Context, LaunchConfig, string) ([]acpsdk.SessionNotification, bool, error)
 	// PlansSpanTurns marks the agent's ACP plan as one list kept for the whole
 	// session (claude-agent-acp's task list), re-sent into later turns, rather
 	// than a plan for the turn it arrives in.
@@ -816,6 +825,12 @@ func (d *Driver) resumeSession(
 		configOptions = resp.ConfigOptions
 		modes = resp.Modes
 	}
+	if !init.AgentCapabilities.LoadSession {
+		if err := d.replayNativeHistory(resumeCtx, conv, launchCfg, cfg.ProviderConversationID); err != nil {
+			conv.discard()
+			return nil, fmt.Errorf("%w: native history: %w", ports.ErrChatResumeFailed, err)
+		}
+	}
 	conv.hasDurableTurns = cfg.HasPriorTurns
 	modeFor, permissionFor := d.sessionPolicy(launchCfg, init)
 	conv.start(
@@ -972,6 +987,7 @@ func (d *Driver) initialize(
 	conv.backgroundTaskOutput = d.cfg.BackgroundTaskOutput
 	conv.decodeConversationID = d.cfg.DecodeProviderConversationID
 	conv.historyNotice = d.cfg.HistoryNotice
+	conv.compactionMessage = d.cfg.CompactionMessage
 	conv.hideCommand = d.cfg.HideCommand
 	conv.historyUserChunkIsMessage = d.cfg.HistoryUserChunkIsMessage
 	conv.historyReconciler = d.cfg.HistoryReconciler

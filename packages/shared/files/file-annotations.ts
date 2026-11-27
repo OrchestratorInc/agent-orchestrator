@@ -190,14 +190,16 @@ function fenceSafe(code: string): string {
 	return code.replace(/```/g, "``\u200b`");
 }
 
-function compactText(value: string, maxLength: number): string {
+/** Whitespace collapsed; past maxLength, cut with a " [truncated]" suffix. */
+export function compactText(value: string, maxLength: number): string {
 	const compact = value.replace(/\s+/g, " ").trim();
 	if (compact.length <= maxLength) return compact;
 	const suffix = " [truncated]";
 	return `${compact.slice(0, Math.max(0, maxLength - suffix.length)).trimEnd()}${suffix}`;
 }
 
-function limitMessage(message: string, maxLength: number): string {
+/** Past maxLength, cut with a "\n[truncated]" suffix. */
+export function limitMessage(message: string, maxLength: number): string {
 	if (message.length <= maxLength) return message;
 	const suffix = "\n[truncated]";
 	return `${message.slice(0, Math.max(0, maxLength - suffix.length)).trimEnd()}${suffix}`;

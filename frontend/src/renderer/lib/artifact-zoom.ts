@@ -47,6 +47,11 @@ export class ArtifactZoomController {
 	private listeners = new Set<Listener>();
 	private revealListeners = new Set<Listener>();
 
+	/** Starts at `zoom`, as a view coming back at the zoom it was left at; the first target applies it. */
+	constructor(zoom = 1) {
+		this.zoom = clampZoom(zoom);
+	}
+
 	subscribe = (listener: Listener) => {
 		this.listeners.add(listener);
 		return () => { this.listeners.delete(listener); };

@@ -262,12 +262,18 @@ func (c *conversation) requestInput(
 		return ports.ChatInputResponse{Action: ports.ChatInputActionCancel}, nil
 	}
 	accepted, hasAccepted := c.accepted[requestID]
+	turnID := c.activeTurn
+	parked.turnID = turnID
 	if hasAccepted && accepted.Kind == persistentInteractionInput {
 		delete(c.accepted, requestID)
+	} else if c.turnInterruptedLocked(turnID) {
+		// Stop already closed this turn's questions; one that arrives after
+		// that scan would otherwise wait with no deadline.
+		c.mu.Unlock()
+		return ports.ChatInputResponse{Action: ports.ChatInputActionCancel}, nil
 	} else {
 		c.pendingInputs[requestID] = parked
 	}
-	turnID := c.activeTurn
 	c.mu.Unlock()
 
 	c.emit(ports.ChatEvent{
@@ -280,7 +286,10 @@ func (c *conversation) requestInput(
 		parked.result <- *accepted.Input
 	}
 
-	timer := timeAfter(approvalWait)
+	// Unlike an approval, a question has no deadline: it waits for an answer, the
+	// provider withdrawing it (Stop does this), or the conversation ending. An
+	// expired form reaches the agent as an empty one, which reads as the user
+	// having answered nothing.
 	select {
 	case response := <-parked.result:
 		return response, nil
@@ -289,10 +298,6 @@ func (c *conversation) requestInput(
 		if !c.providerDetaching() {
 			c.emit(ports.ChatEvent{Kind: ports.ChatEventInputResolved, RequestID: requestID})
 		}
-		return ports.ChatInputResponse{Action: ports.ChatInputActionCancel}, nil
-	case <-timer:
-		c.discardInput(requestID)
-		c.emit(ports.ChatEvent{Kind: ports.ChatEventInputResolved, RequestID: requestID})
 		return ports.ChatInputResponse{Action: ports.ChatInputActionCancel}, nil
 	}
 }
@@ -349,10 +354,23 @@ func (c *conversation) ResolveInput(
 	eventID, err := c.recordPersistentInteraction(ctx, command)
 	if err != nil {
 		c.mu.Lock()
-		if !c.closed {
+		// A question whose turn was stopped or has since ended is not put back:
+		// nothing would close it, since questions have no deadline.
+		stopped := !c.closed && (c.turnInterruptedLocked(request.turnID) ||
+			(request.turnID != "" && request.turnID != c.activeTurn))
+		if !c.closed && !stopped {
 			c.pendingInputs[requestID] = request
 		}
 		c.mu.Unlock()
+		if stopped {
+			// Stop's scan, or the turn's end, came while the answer was being
+			// recorded and could not see this question, so close it as Stop would.
+			c.emit(ports.ChatEvent{Kind: ports.ChatEventInputResolved, RequestID: requestID})
+			select {
+			case request.result <- ports.ChatInputResponse{Action: ports.ChatInputActionCancel}:
+			default:
+			}
+		}
 		return err
 	}
 	command.EventID = eventID
@@ -759,6 +777,7 @@ func (c *conversation) processUpdate(params acpsdk.SessionNotification) error {
 		update.Plan != nil
 	if providerOutputResumed {
 		c.completeProviderFailure(turnID, emit)
+		c.settleFinishedCompaction(emit)
 	}
 	switch {
 	case update.AgentMessageChunk != nil:
@@ -766,6 +785,12 @@ func (c *conversation) processUpdate(params acpsdk.SessionNotification) error {
 			// The agent's note that it took a steer prompt; the "↳ Steered" mark
 			// already says so.
 			break
+		}
+		if turnID != "" && c.compactionMessage != nil && parentToolUseID(update.AgentMessageChunk.Meta) == "" {
+			if report, ok := c.compactionMessage(contentText(update.AgentMessageChunk.Content), update.AgentMessageChunk.Meta); ok &&
+				c.reportCompaction(turnID, report, emit) {
+				break
+			}
 		}
 		c.mu.Lock()
 		isCompacting := c.compactingTurnID != "" && c.compactingTurnID == turnID
@@ -869,7 +894,11 @@ func (c *conversation) processUpdate(params acpsdk.SessionNotification) error {
 					emit(event)
 				}
 			}
-			c.trackCompactionStatus(turnID, update.SessionInfoUpdate.Meta)
+			c.trackCompactionStatus(turnID, update.SessionInfoUpdate.Meta, emit)
+		} else if cycle != nil {
+			// A compaction the agent runs between prompts, as when a background
+			// task wakes it: tracked by its cycle, its row turn-less like the rest.
+			c.trackCompactionStatus(cycle.id, update.SessionInfoUpdate.Meta, emit)
 		}
 	case update.ConfigOptionUpdate != nil:
 		// The update is a complete replacement, not a delta. Model changes can
@@ -881,7 +910,8 @@ func (c *conversation) processUpdate(params acpsdk.SessionNotification) error {
 		// when its configuration changes, so retaining absent entries is wrong.
 		c.replaceAvailableCommands(update.AvailableCommandsUpdate.AvailableCommands)
 	case update.UsageUpdate != nil:
-		c.trackContext(int64(update.UsageUpdate.Used), int64(update.UsageUpdate.Size))
+		c.trackContext(itemTurn, int64(update.UsageUpdate.Used), int64(update.UsageUpdate.Size))
+		c.settleFinishedCompaction(emit)
 		usage := &ports.ChatUsage{
 			ContextUsed: int64(update.UsageUpdate.Used), ContextWindow: int64(update.UsageUpdate.Size),
 			ContextKnown: true,
@@ -1372,34 +1402,6 @@ func (c *conversation) sessionFailureEvent(
 	c.providerFailure = &event
 	c.mu.Unlock()
 	return event, true
-}
-
-// trackCompactionStatus records the outcome OpenCode reports for a /compact turn.
-// OpenCode ends a failed compaction with a normal end_turn, so this update is the
-// only sign that the history was left as it was.
-func (c *conversation) trackCompactionStatus(turnID string, meta map[string]any) {
-	compaction := nestedMap(meta, "opencode/compaction")
-	if compaction == nil {
-		return
-	}
-	failure := ""
-	switch status, _ := compaction["status"].(string); status {
-	case "started", "completed":
-	case "failed":
-		failure, _ = nestedMap(compaction, "error")["message"].(string)
-		if failure = strings.TrimSpace(failure); failure == "" {
-			failure = "Compaction failed"
-		}
-	default:
-		// OpenCode only sends the three statuses above. Leave the recorded
-		// outcome alone rather than guess what a new one means.
-		return
-	}
-	c.mu.Lock()
-	if c.compactingTurnID == turnID {
-		c.compactionFailure = failure
-	}
-	c.mu.Unlock()
 }
 
 func sessionFailure(meta map[string]any) map[string]any {

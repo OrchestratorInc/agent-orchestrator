@@ -1,4 +1,5 @@
 import { apiErrorException } from "../../lib/api-error-exception";
+import { SessionChatApprovalCard } from "../approvals/ApprovalHost";
 import { useSessionAccountSwitch } from "../SessionAccountSummary";
 import type { OpenFileAnnotation } from "../../../shared/chat-file-reference";
 import { ForkSessionContext } from "../SessionForkControls";
@@ -56,10 +57,12 @@ import type { Theme } from "../../stores/ui-store";
 import { activeTurn, can } from "../../types/conversation";
 import type { ConversationSnapshot, TurnSettings } from "../../types/conversation";
 import type { TerminalTarget } from "../../types/terminal";
-import { STANDALONE_WORKSPACE_ID, sessionIsActive, type WorkspaceSession } from "../../types/workspace";
+import { STANDALONE_WORKSPACE_ID, sessionIsActive, workerSessions, type WorkspaceSession, type WorkspaceSummary } from "../../types/workspace";
+import { workspaceQueryKeyForHost } from "../../hooks/useWorkspaceQuery";
 import { ComposerErrorNotice, switchEffort, type PendingAgentSwitch } from "./AgentSwitchPicker";
-import { AGENT_SWITCH_FAILED } from "./ChatComposer";
+import { AGENT_SWITCH_FAILED } from "../../lib/composer-send-failure";
 import { SessionBackgroundTasks } from "../BackgroundTasks";
+import type { BackgroundTask } from "../../hooks/useBackgroundTasks";
 import { useUiStore } from "../../stores/ui-store";
 import { useTranscriptTiming } from "../../lib/performance-telemetry";
 import { CONTINUE_STOPPED_TURN_PROMPT, ChatWorkspace, SENT_OUTSIDE_TRANSCRIPT, continuableTurnId, type ChatFindRequest } from "./ChatWorkspace";
@@ -79,6 +82,7 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 	onRevealSubagents,
 	session,
 	hostId,
+	showApprovals = false,
 	assetBaseUrl,
 	reviewerTerminal,
 	onOpenReviewerTerminal,
@@ -135,6 +139,8 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 	session: WorkspaceSession;
 	/** Owning daemon for a remote session; omitted for the local daemon. */
 	hostId?: string;
+	/** Draw the session's pending browser approval at the end of its chat. */
+	showApprovals?: boolean;
 	assetBaseUrl?: string;
 	reviewerTerminal?: { handleId: string; harness: string };
 	onOpenReviewerTerminal?: (target: { handleId: string; harness: string }) => void;
@@ -217,6 +223,16 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 	const currentTurn = snapshot ? activeTurn(snapshot) : undefined;
 	const commands = useConversationCommands(session.id, hostId, !sessionIsActive(session), Boolean(currentTurn), currentTurn?.id);
 	const importBlock = useImportedAgentBlock(session, hostId ?? session.hostId).block;
+	// An orchestrator's empty chat asks for the project's first task, unless the
+	// project list (read from the shell's cache, never fetched here) shows it
+	// already has workers: a replaced orchestrator on a busy project gets the
+	// usual heading. Until the list is known it stays on "first task", so a
+	// project just added never switches heading as the list arrives.
+	const { data: cachedProjects } = useQuery<WorkspaceSummary[]>({ queryKey: workspaceQueryKeyForHost(hostId), enabled: false });
+	const orchestratorProject = session.kind === "orchestrator" ? cachedProjects?.find((project) => project.id === session.workspaceId) : undefined;
+	const orchestratorHeading = session.kind === "orchestrator" && !(orchestratorProject && workerSessions(orchestratorProject.sessions).length > 0)
+		? t("chat.welcome.orchestratorFirstHeading")
+		: undefined;
 	// Set only when this task was started from the new chat page.
 	const queryClient = useQueryClient();
 	// Whether the project has a setup script, so a start lists that step only when it
@@ -307,7 +323,8 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 			.catch(() => undefined);
 	}, [hostId, pendingHarness]);
 	// Ultracode is asked for in each message, so it is kept here, not on the agent.
-	const [ultracodeOn, setUltracodeOn] = useState(false);
+	// A task started with it on, from the new chat page, keeps it on.
+	const [ultracodeOn, setUltracodeOn] = useState(() => Boolean(launchSettings?.ultracode));
 	const ultracode = useMemo(() => ({ on: ultracodeOn, onChange: setUltracodeOn }), [ultracodeOn]);
 	const autoCompactWindow = snapshot?.settings.autoCompactWindow;
 	const [applyingAutoCompact, setApplyingAutoCompact] = useState(false);
@@ -442,7 +459,7 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 		rememberChatSkills(snapshot.harness, hostId, skills, session.workspaceId);
 	}, [hostId, session.kind, session.workspaceId, skills, skillsSettled, snapshot?.harness]);
 	const { paths, truncated, isLoading: filePathsLoading } = useWorkspaceFilePaths(session.id, Boolean(snapshot) && !session.needsResume, hostId);
-	const stageAttachments = useStageAttachments(session.id, hostId);
+	const stageAttachments = useStageAttachments(session.id, hostId, !sessionIsActive(session));
 	// Applied once: the chat below unmounts while the conversation reloads, and
 	// a request still held would scroll it back to the same message on return.
 	const annotationNavigation = useChatNavigationRequest<{ id: string; text: string; snapshot?: import("../../../shared/chat-excerpt").ChatExcerptSnapshot; messageId?: string; revision?: number; activitySequence?: number }>(uiSessionId);
@@ -477,6 +494,10 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 	}, [onSelectChat, uiSessionId]);
 	const sideEnabled = useSideChatsAvailable(session, hostId) && !unavailable;
 	const sideCreationEnabled = sideEnabled && Boolean(snapshot && can(snapshot, "resume"));
+	// A background task opens in its own temporary side-panel tab.
+	const openBackgroundTask = useCallback((task: BackgroundTask) => {
+		useUiStore.getState().openTaskTab(uiSessionId, task);
+	}, [uiSessionId]);
 	const openSideInspector = () => {
 		const ui = useUiStore.getState();
 		ui.setInspectorView(uiSessionId, "sideChat");
@@ -734,6 +755,7 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 				remoteHostId={hostId}
 				snapshot={renderSnapshot}
 				promptSuggestion={promptSuggestion}
+				timelineEnd={showApprovals ? <SessionChatApprovalCard sessionId={session.id} hostId={hostId} /> : undefined}
 				newWorkDisabled={newWorkDisabled || savedCopy}
 				composerLockedPlaceholder={hostUnreachable && newWorkDisabled ? t("remote.offlineCopy") : showingSavedPage ? "Loading conversation…" : undefined}
 				sendBlockedReason={hostUnreachable && !newWorkDisabled ? t("remote.sendWhenConnected") : undefined}
@@ -742,6 +764,7 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 				onLinkOpen={openLinkInBrowser}
 				onSessionLinkOpen={openSessionLink}
 				sessionTitle={session.title}
+				welcomeHeading={orchestratorHeading}
 				sessionRole={session.kind}
 				session={session}
 				onSessionRenamed={onSessionRenamed}
@@ -864,7 +887,7 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 				}}
 				commandError={commands.error}
 				agentSwitch={agentSwitch}
-				composerNotice={<>{!hostId ? <SessionBackgroundTasks session={session} /> : null}{interfaceSwitch?.errorNotice ?? (switchError ? (
+				composerNotice={<>{!hostId ? <SessionBackgroundTasks session={session} onOpenTask={openBackgroundTask} /> : null}{interfaceSwitch?.errorNotice ?? (switchError ? (
 					<ComposerErrorNotice
 						title={t("agentSwitch.couldNotSwitch")}
 						message={apiErrorMessage(switchError)}
@@ -945,9 +968,7 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 				filePathsTruncated={truncated}
 				filePathsLoading={filePathsLoading}
 				localEchos={localEchos}
-				// An archived session's worktree is gone until the restore its first message
-				// runs, so files are taken once it is back, as an archived Cloud chat does.
-				onStageAttachments={sessionIsActive(session) ? stageAttachments : undefined}
+				onStageAttachments={sessionIsActive(session) || commands.resumingAgent ? stageAttachments : undefined}
 				nativeImages={can(renderSnapshot, "images")}
 				// Gated on what the daemon advertises, so the control is never drawn for a
 				// harness that cannot steer. The refusal check stays as a backstop: it
