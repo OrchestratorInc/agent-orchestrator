@@ -908,6 +908,95 @@ func (f *fakeSessionService) ListWorkspaceTree(_ context.Context, id domain.Sess
 	return sessionsvc.WorkspaceTree{SessionID: id, Path: path}, nil
 }
 
+func TestSessionsAPI_MemcodeModelPendingUntilLaunch(t *testing.T) {
+	svc := newFakeSessionService()
+	sess := svc.sessions["ao-1"]
+	sess.Harness = domain.HarnessMemcode
+	sess.Mode = domain.SessionModeTUI
+	sess.Metadata.Model = ""
+	sess.Metadata.RuntimeLaunchID = ""
+	svc.sessions["ao-1"] = sess
+	srv := newSessionTestServer(t, svc)
+
+	for _, tc := range []struct {
+		name     string
+		model    string
+		launch   string
+		pending  bool
+		imported bool
+	}{
+		{name: "resolving", pending: true},
+		{name: "selected model", model: "opus", launch: "launch-1"},
+		{name: "custom endpoint default", launch: "launch-1"},
+		{name: "imported idle session", imported: true},
+	} {
+		sess.Metadata.Model = tc.model
+		sess.Metadata.RuntimeLaunchID = tc.launch
+		sess.Metadata.ImportSource = nil
+		if tc.imported {
+			sess.Metadata.ImportSource = &domain.SessionImportSource{}
+		}
+		svc.sessions["ao-1"] = sess
+		body, status, _ := doRequest(t, srv, "GET", "/api/v1/sessions/ao-1", "")
+		if status != http.StatusOK {
+			t.Fatalf("%s: GET = %d: %s", tc.name, status, body)
+		}
+		var response struct {
+			Session struct {
+				Model        string `json:"model"`
+				ModelPending bool   `json:"modelPending"`
+			} `json:"session"`
+		}
+		mustJSON(t, body, &response)
+		if response.Session.Model != tc.model || response.Session.ModelPending != tc.pending {
+			t.Fatalf("%s: model/pending = %q/%t, want %q/%t", tc.name, response.Session.Model, response.Session.ModelPending, tc.model, tc.pending)
+		}
+	}
+}
+
+func TestSessionsAPI_SelectionSurvivesLiveAndRestoredReads(t *testing.T) {
+	svc := newFakeSessionService()
+	sess := svc.sessions["ao-1"]
+	sess.Metadata.Model = "gpt-6.1-sol"
+	sess.Metadata.Effort = "high"
+	svc.sessions["ao-1"] = sess
+	srv := newSessionTestServer(t, svc)
+
+	for _, restored := range []bool{false, true} {
+		if restored {
+			sess := svc.sessions["ao-1"]
+			sess.IsTerminated = true
+			svc.sessions["ao-1"] = sess
+			body, status, _ := doRequest(t, srv, "POST", "/api/v1/sessions/ao-1/restore", "{}")
+			if status != http.StatusOK || !strings.Contains(string(body), `"effort":"high"`) {
+				t.Fatalf("restore response = %d: %s", status, body)
+			}
+		}
+		for _, path := range []string{"/api/v1/sessions/ao-1", "/api/v1/sessions?project=ao"} {
+			body, status, _ := doRequest(t, srv, "GET", path, "")
+			if status != http.StatusOK {
+				t.Fatalf("GET %s = %d: %s", path, status, body)
+			}
+			var response map[string]json.RawMessage
+			mustJSON(t, body, &response)
+			var selected struct {
+				Model  string `json:"model"`
+				Effort string `json:"effort"`
+			}
+			if path == "/api/v1/sessions/ao-1" {
+				mustJSON(t, response["session"], &selected)
+			} else {
+				var sessions []json.RawMessage
+				mustJSON(t, response["sessions"], &sessions)
+				mustJSON(t, sessions[0], &selected)
+			}
+			if selected.Model != "gpt-6.1-sol" || selected.Effort != "high" {
+				t.Fatalf("restored=%t GET %s selection = %+v", restored, path, selected)
+			}
+		}
+	}
+}
+
 func TestSessionsAPI_ListWorkspaceTree(t *testing.T) {
 	t.Run("lists the requested directory", func(t *testing.T) {
 		svc := newFakeSessionService()

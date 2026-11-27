@@ -338,6 +338,12 @@ func (m *Manager) launchChatController(ctx context.Context, in chatSpawn) (domai
 				Model:                     agentConfig.Model,
 				Effort:                    agentConfig.Effort,
 			}
+			if in.cfg.Harness == domain.HarnessAgy && started.Conversation.ID != "" {
+				if started.Conversation.Settings.Model != "" {
+					metadata.Model = started.Conversation.Settings.Model
+				}
+				metadata.Effort = started.Conversation.Settings.ReasoningEffort
+			}
 			committedConversation, commitErr := m.markChatControllerSpawned(
 				ctx, id, metadata, started.Conversation, started.ProviderBoundary,
 				started.CommitProviderHistory, nil, started.LiveReconnect,
@@ -724,6 +730,13 @@ func (m *Manager) resumeChatController(
 			// A fresh generation per launch: events still arriving from the
 			// controller this one replaced carry the old one and are rejected.
 			metadata.ControllerGeneration = started.ControllerGeneration
+			// Imported and older conversations may not have saved settings yet.
+			if rec.Harness == domain.HarnessAgy && !started.LiveReconnect && started.Conversation.ID != "" {
+				if started.Conversation.Settings.Model != "" {
+					metadata.Model = started.Conversation.Settings.Model
+				}
+				metadata.Effort = started.Conversation.Settings.ReasoningEffort
+			}
 
 			committedConversation, commitErr := m.markChatControllerSpawned(
 				ctx, rec.ID, metadata, started.Conversation, started.ProviderBoundary,

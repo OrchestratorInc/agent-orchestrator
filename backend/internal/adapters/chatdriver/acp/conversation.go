@@ -755,6 +755,15 @@ func (c *conversation) markSettingsApplied(settings ports.ChatTurnSettings) {
 // expandModelVariant maps a composite model onto the base model and separate
 // variant option when that is how the live catalog offers it.
 func (c *conversation) expandModelVariant(options []SessionOption) []SessionOption {
+	// Agy also restores the separate effort saved after an opening fallback.
+	// Its two servers use different IDs for the same thought-level control.
+	if c.harness == domain.HarnessAgy {
+		for i, option := range options {
+			if option.ID == "thinking_level" {
+				options[i] = c.variantOptionFor(option)
+			}
+		}
+	}
 	if c.splitModelVariant == nil {
 		return options
 	}

@@ -494,6 +494,20 @@ func (s *Store) UpdateSessionModel(ctx context.Context, id domain.SessionID, mod
 	return rows > 0, nil
 }
 
+// UpdateSessionEffort changes only the selected effort, leaving concurrent
+// lifecycle and controller ownership updates intact.
+func (s *Store) UpdateSessionEffort(ctx context.Context, id domain.SessionID, effort string) (bool, error) {
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
+	rows, err := s.qw.UpdateSessionEffort(ctx, gen.UpdateSessionEffortParams{
+		ID: id, Effort: effort,
+	})
+	if err != nil {
+		return false, fmt.Errorf("update session effort for %s: %w", id, err)
+	}
+	return rows > 0, nil
+}
+
 // SetSessionRoleAgent records the agent the project named for the session's
 // role when the session's agent was chosen. Only this and the insert write it.
 func (s *Store) SetSessionRoleAgent(ctx context.Context, id domain.SessionID, agent domain.AgentHarness) (bool, error) {
