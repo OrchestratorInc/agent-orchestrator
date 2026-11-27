@@ -283,6 +283,50 @@ func TestLaunchWaitsForAHarnessChangeInsteadOfFailing(t *testing.T) {
 	}
 }
 
+func TestVersionRecoverySkipsChangingHarnessWithoutWaiting(t *testing.T) {
+	s := newTestService("linux")
+	harness := domain.AgentHarness(TargetAuggie)
+	gate := s.harnessGate(harness)
+	gate.Lock()
+	s.setHarnessChanging(TargetAuggie, true)
+	var unlock sync.Once
+	releaseInstall := func() {
+		s.setHarnessChanging(TargetAuggie, false)
+		gate.Unlock()
+	}
+	t.Cleanup(func() { unlock.Do(releaseInstall) })
+	done := make(chan bool, 1)
+	go func() {
+		release, ok := s.TryBeginHarnessUseNow(harness)
+		if ok {
+			release()
+		}
+		done <- ok
+	}()
+	select {
+	case ok := <-done:
+		if ok {
+			t.Fatal("recovery acquired an installer-held harness")
+		}
+	case <-time.After(time.Second):
+		t.Fatal("recovery waited on the installer")
+	}
+	unlock.Do(releaseInstall)
+	release, ok := s.TryBeginHarnessUseNow(harness)
+	if !ok {
+		t.Fatal("recovery refused a completed installation")
+	}
+	if gate.TryLock() {
+		gate.Unlock()
+		t.Fatal("recovery did not hold a read lease")
+	}
+	release()
+	if !gate.TryLock() {
+		t.Fatal("recovery did not release the harness")
+	}
+	gate.Unlock()
+}
+
 // eventRecorder keeps the telemetry events a test emitted.
 type eventRecorder struct {
 	mu     sync.Mutex

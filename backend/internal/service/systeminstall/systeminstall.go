@@ -1064,6 +1064,19 @@ func (s *Service) TryBeginHarnessUse(harness domain.AgentHarness) (func(), bool)
 	return gate.RUnlock, true
 }
 
+// TryBeginHarnessUseNow lets background recovery skip an active installer
+// without waiting or claiming a stopped session that the installer will resume.
+func (s *Service) TryBeginHarnessUseNow(harness domain.AgentHarness) (func(), bool) {
+	gate := s.harnessGate(harness)
+	if !gate.TryRLock() {
+		return nil, false
+	}
+	if IsAgentTarget(Target(harness)) {
+		s.forgetReplacedBinary(Target(harness))
+	}
+	return gate.RUnlock, true
+}
+
 // Status returns the current or last known Job for target. A target that has
 // never been started returns a plan preview: Idle when the daemon can run it,
 // or Unsupported with a manual command/reason when it cannot. An error is

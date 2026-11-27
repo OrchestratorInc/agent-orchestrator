@@ -281,8 +281,28 @@ func (m *Manager) RetryVersionMoves(ctx context.Context) error {
 		if err != nil {
 			return errors.Join(append(errs, err)...)
 		}
+		// Update-stop journals exist while installation still owns the harness.
+		// Reserve it without waiting, before spending budget or claiming resume.
+		var releaseHarness func()
+		if gate, ok := m.harnessUseGate.(interface {
+			TryBeginHarnessUseNow(domain.AgentHarness) (func(), bool)
+		}); ok {
+			var available bool
+			releaseHarness, available = gate.TryBeginHarnessUseNow(rec.Harness)
+			if !available {
+				release()
+				continue
+			}
+		} else {
+			releaseHarness, err = m.beginHarnessUse(rec.Harness)
+			if err != nil {
+				release()
+				continue
+			}
+		}
 		allowed, err := m.attemptVersionMove(ctx, id, moves)
 		if err != nil || !allowed {
+			releaseHarness()
 			release()
 			if err != nil {
 				errs = append(errs, err)
@@ -295,7 +315,7 @@ func (m *Manager) RetryVersionMoves(ctx context.Context) error {
 		if move, ok := moves[id]; ok {
 			expected = []domain.SessionVersionMove{move}
 		}
-		if _, err := m.resumeAgentWithMode(ctx, id, true, expected...); err != nil {
+		if _, err := m.resumeAgentWithMode(ctx, id, true, releaseHarness, expected...); err != nil {
 			release()
 			errs = append(errs, fmt.Errorf("resume %s after a failed version move: %w", id, err))
 			continue

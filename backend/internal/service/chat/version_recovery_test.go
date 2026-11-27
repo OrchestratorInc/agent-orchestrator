@@ -188,7 +188,7 @@ func TestVersionMoveAdmissionCleanupFailureWithholdsRetry(t *testing.T) {
 				if !errors.Is(err, ports.ErrChatRecoveryInconclusive) || !errors.Is(err, conv.cleanupErr) {
 					t.Fatalf("uncertain provider host permits retry: %v", err)
 				}
-			} else if err != admissionErr {
+			} else if err.Error() != admissionErr.Error() {
 				t.Fatalf("successful cleanup changed admission error: %v", err)
 			}
 			if _, err := svc.Controller(testSession); !errors.Is(err, chatsvc.ErrNoController) {

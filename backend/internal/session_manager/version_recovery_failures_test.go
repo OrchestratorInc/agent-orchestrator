@@ -315,3 +315,54 @@ func TestVersionMoveRetriesQueueDeliveryWithoutAnotherController(t *testing.T) {
 		t.Fatal("queue delivery did not recover without a second start")
 	}
 }
+
+type versionRetryHarnessGate struct {
+	held, active bool
+	waitCalls    int
+}
+
+func (g *versionRetryHarnessGate) TryBeginHarnessUse(domain.AgentHarness) (func(), bool) {
+	g.waitCalls++
+	return nil, false // A retry must reuse its immediate lease, never wait again.
+}
+
+func (g *versionRetryHarnessGate) TryBeginHarnessUseNow(domain.AgentHarness) (func(), bool) {
+	if g.held {
+		return nil, false
+	}
+	g.active = true
+	return func() { g.active = false }, true
+}
+
+func TestVersionMoveInstallerHoldPreservesBudgetAndResumeClaim(t *testing.T) {
+	launcher := &recordingLauncher{}
+	launcher.afterReady = func() { launcher.live = true }
+	mgr, store, rec := stoppedVersionChat(t, launcher)
+	launcher.providerConversationID = rec.Metadata.ProviderConversationID
+	gate := &versionRetryHarnessGate{held: true}
+	mgr.SetHarnessUseGate(gate)
+	for i := 0; i <= maxVersionResumeAttempts; i++ {
+		if err := mgr.RetryVersionMoves(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+		if store.moves[rec.ID].Attempts != 0 || len(launcher.started) != 0 || gate.waitCalls != 0 {
+			t.Fatal("installer hold spent retry budget, launched, or waited on the harness")
+		}
+		if err := mgr.beginAgentResume(context.Background(), rec.ID); err != nil {
+			t.Fatalf("sweep retained installer's resume claim: %v", err)
+		}
+		mgr.endAgentResume(rec.ID)
+	}
+	gate.held = false
+	launcher.beforeStart = func(ChatStart) {
+		if !gate.active {
+			t.Fatal("retry released the harness before launch")
+		}
+	}
+	if err := mgr.RetryVersionMoves(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if len(launcher.started) != 1 || len(store.moves) != 0 || gate.active || gate.waitCalls != 0 {
+		t.Fatal("retry did not recover and release its single harness lease")
+	}
+}

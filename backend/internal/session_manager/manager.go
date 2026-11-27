@@ -4050,13 +4050,18 @@ func (m *Manager) WakeHibernatedChat(ctx context.Context, id domain.SessionID) e
 // identity and never changes the durable terminated flag as an intermediate
 // step.
 func (m *Manager) ResumeAgentWithMode(ctx context.Context, id domain.SessionID) (result RestoreResult, err error) {
-	return m.resumeAgentWithMode(ctx, id, false)
+	return m.resumeAgentWithMode(ctx, id, false, nil)
 }
 
 // resumeAgentWithMode preserves strict native-history intent for automatic
 // retries, including update stops that have no stale-binary failure marker.
-func (m *Manager) resumeAgentWithMode(ctx context.Context, id domain.SessionID, requireNativeHistory bool, expectedMoves ...domain.SessionVersionMove) (result RestoreResult, err error) {
+func (m *Manager) resumeAgentWithMode(ctx context.Context, id domain.SessionID, requireNativeHistory bool, releaseHarness func(), expectedMoves ...domain.SessionVersionMove) (result RestoreResult, err error) {
 	defer func() { m.logRelaunchFailure("resume agent", id, err) }()
+	defer func() {
+		if releaseHarness != nil {
+			releaseHarness()
+		}
+	}()
 	if err := m.beginAgentResume(ctx, id); err != nil {
 		return RestoreResult{}, fmt.Errorf("resume agent %s: %w", id, err)
 	}
@@ -4104,15 +4109,12 @@ func (m *Manager) resumeAgentWithMode(ctx context.Context, id domain.SessionID, 
 	if starting {
 		return RestoreResult{}, fmt.Errorf("resume agent %s: %w", id, ErrResumeInProgress)
 	}
-	releaseHarness, err := m.beginHarnessUse(rec.Harness)
-	if err != nil {
-		return RestoreResult{}, fmt.Errorf("resume agent %s: %w", id, err)
-	}
-	defer func() {
-		if releaseHarness != nil {
-			releaseHarness()
+	if releaseHarness == nil {
+		releaseHarness, err = m.beginHarnessUse(rec.Harness)
+		if err != nil {
+			return RestoreResult{}, fmt.Errorf("resume agent %s: %w", id, err)
 		}
-	}()
+	}
 	if rec.IsTerminated {
 		return RestoreResult{}, fmt.Errorf("resume agent %s: %w", id, ErrTerminated)
 	}
