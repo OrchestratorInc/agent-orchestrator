@@ -101,7 +101,7 @@ func (s *Service) SetChatView(ctx context.Context, id domain.SessionID, viewID s
 	// Renewing a lease keeps the view open; only a newly opened view wakes a
 	// sleeping provider. A failed resume must not spawn another process on
 	// every heartbeat. Explicit sends and newly opened views can still retry.
-	if !newView || !s.HasChatView(id) {
+	if !newView || !s.hasChatView(id) {
 		return nil
 	}
 	if rec.ProvisionState.WithDefault() != domain.SessionProvisionReady ||
@@ -153,8 +153,7 @@ func (s *Service) setViewLease(id domain.SessionID, viewID string, active bool) 
 	return newView
 }
 
-// HasChatView reports whether a renderer has the session's chat open.
-func (s *Service) HasChatView(id domain.SessionID) bool {
+func (s *Service) hasChatView(id domain.SessionID) bool {
 	s.viewMu.Lock()
 	defer s.viewMu.Unlock()
 	views := s.liveViewLeasesLocked(id)
@@ -163,6 +162,19 @@ func (s *Service) HasChatView(id domain.SessionID) bool {
 	}
 	delete(s.viewClosedAt, id)
 	return len(views) != 0
+}
+
+// OpenChats lists the sessions a renderer has open now, without the close grace.
+func (s *Service) OpenChats() []domain.SessionID {
+	s.viewMu.Lock()
+	defer s.viewMu.Unlock()
+	var ids []domain.SessionID
+	for id := range s.viewLeases {
+		if s.liveViewLeasesLocked(id) != nil {
+			ids = append(ids, id)
+		}
+	}
+	return ids
 }
 
 // Callers hold viewMu. Expired leases cannot keep a provider alive after a
@@ -228,7 +240,7 @@ func (o hibernateOptions) eligible(s *Service, rec domain.SessionRecord) bool {
 }
 
 func (o hibernateOptions) viewed(s *Service, id domain.SessionID) bool {
-	return !o.ignoreViews && s.HasChatView(id)
+	return !o.ignoreViews && s.hasChatView(id)
 }
 
 // HibernateChat stops a quiescent provider without ending its AO session. A

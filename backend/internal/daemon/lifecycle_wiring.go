@@ -934,8 +934,8 @@ func (c chatLauncher) DrainChatQueue(ctx context.Context, id domain.SessionID) e
 	return c.svc.DrainQueued(ctx, id)
 }
 
-func (c chatLauncher) HasChatView(id domain.SessionID) bool {
-	return c.svc.HasChatView(id)
+func (c chatLauncher) OpenChats() []domain.SessionID {
+	return c.svc.OpenChats()
 }
 
 func (c chatLauncher) HasLiveChatController(id domain.SessionID) bool {

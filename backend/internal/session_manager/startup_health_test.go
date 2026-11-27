@@ -71,7 +71,9 @@ type viewedHealthCheckLauncher struct {
 	viewed domain.SessionID
 }
 
-func (l *viewedHealthCheckLauncher) HasChatView(id domain.SessionID) bool { return id == l.viewed }
+func (l *viewedHealthCheckLauncher) OpenChats() []domain.SessionID {
+	return []domain.SessionID{l.viewed}
+}
 
 func TestStartupHealthChecksOpenChatFirst(t *testing.T) {
 	for _, viewed := range []domain.SessionID{"mer-a", "mer-b", "mer-c"} {
@@ -104,10 +106,10 @@ type lateViewLauncher struct {
 	release chan struct{}
 }
 
-func (l *lateViewLauncher) HasChatView(id domain.SessionID) bool {
+func (l *lateViewLauncher) OpenChats() []domain.SessionID {
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	return id == l.viewed
+	return []domain.SessionID{l.viewed}
 }
 
 func (l *lateViewLauncher) StartChat(ctx context.Context, cfg ChatStart) (ChatStarted, error) {

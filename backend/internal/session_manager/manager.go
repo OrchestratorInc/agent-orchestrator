@@ -13,7 +13,6 @@ import (
 	"path/filepath"
 	"regexp"
 	"runtime"
-	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -5190,17 +5189,23 @@ func (m *Manager) reconcileLivePass(ctx context.Context, recs []domain.SessionRe
 		workers = len(live)
 	}
 	var pendingMu sync.Mutex
-	pending := live
+	pending := make(map[domain.SessionID]int, len(live))
+	for i, rec := range live {
+		pending[rec.ID] = i
+	}
+	next := 0
 	take := func() (domain.SessionRecord, bool) {
 		pendingMu.Lock()
 		defer pendingMu.Unlock()
-		if len(pending) == 0 {
+		i, ok := m.openStartupCheck(pending)
+		for ; !ok && next < len(live); next++ {
+			i, ok = pending[live[next].ID]
+		}
+		if !ok {
 			return domain.SessionRecord{}, false
 		}
-		next := m.nextStartupCheck(pending)
-		rec := pending[next]
-		pending = slices.Delete(pending, next, next+1)
-		return rec, true
+		delete(pending, live[i].ID)
+		return live[i], true
 	}
 	var wg sync.WaitGroup
 	var retryMu sync.Mutex
@@ -5243,21 +5248,21 @@ func (m *Manager) reconcileLivePass(ctx context.Context, recs []domain.SessionRe
 	}
 }
 
-type chatViews interface {
-	HasChatView(id domain.SessionID) bool
+type openChats interface {
+	OpenChats() []domain.SessionID
 }
 
-func (m *Manager) nextStartupCheck(pending []domain.SessionRecord) int {
-	views, ok := m.chat.(chatViews)
+func (m *Manager) openStartupCheck(pending map[domain.SessionID]int) (int, bool) {
+	chats, ok := m.chat.(openChats)
 	if !ok {
-		return 0
+		return 0, false
 	}
-	for i, rec := range pending {
-		if views.HasChatView(rec.ID) {
-			return i
+	for _, id := range chats.OpenChats() {
+		if i, ok := pending[id]; ok {
+			return i, true
 		}
 	}
-	return 0
+	return 0, false
 }
 
 // RestoreAll relaunches every terminated session that was saved by the last
