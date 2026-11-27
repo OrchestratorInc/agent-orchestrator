@@ -16,7 +16,7 @@ import { ChatImage } from "./ChatImage";
 import { useSentAttachmentPreview } from "../../lib/sent-attachment-previews";
 import { CloudMessageAttachments } from "./CloudMessageAttachments";
 import { splitCloudAttachmentReferences } from "../../lib/cloud-attachments";
-import { createContext, Fragment, memo, useCallback, useContext, useEffect, useId, useMemo, useRef, useState, type ClipboardEvent, type ReactNode } from "react";
+import { createContext, Fragment, memo, useCallback, useContext, useEffect, useId, useMemo, useRef, useState, type ClipboardEvent, type CSSProperties, type ReactNode } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
 import { agentModelsQueryOptions } from "../../hooks/useAgentModelsQuery";
@@ -135,7 +135,7 @@ import { readArtifactRef, readRenderRef } from "../../lib/render-frame";
 import { aoToolView, mcpToolArguments, mcpToolName, type AOToolView } from "../../lib/mcp-tool";
 import { isWebLink, openLinkInSystemBrowser } from "../../lib/external-link-policy";
 import { useComposerTokenRenderer } from "./sentComposerTokens";
-import { ActivityTitle, ChatMarkdown, OriginPreviewMarkdown, SessionLabelLink, SessionLinkedText, UserMarkdown } from "./ChatMarkdown";
+import { ActivityTitle, ChatMarkdown, OriginPreviewMarkdown, SessionLabelLink, UserMarkdown } from "./ChatMarkdown";
 import { HighlightedCode } from "./HighlightedCode";
 import { ProviderMark } from "./ProviderMark";
 import { CopyButton } from "./CopyButton";
@@ -2197,9 +2197,9 @@ function GenericActivityBody({ activity }: { activity: ConversationActivity }) {
 				</pre>
 			) : null}
 			{!isFileChange && (detail?.reason || detail?.text) ? (
-				<p className="whitespace-pre-wrap px-1 text-caption leading-relaxed text-muted-foreground">
-					{detail.reason ?? detail.text}
-				</p>
+				<div className="px-1" style={{ "--chat-readable-font-size": "var(--text-caption)" } as CSSProperties}>
+					<ChatMarkdown text={detail.reason ?? detail.text ?? ""} muted className="text-caption leading-relaxed" />
+				</div>
 			) : null}
 			{!isFileChange && detail?.terminalInput ? (
 				<TerminalInput
@@ -3614,9 +3614,10 @@ export function SteerMessage({
 			{longReport && expanded ? (
 				<ChatMarkdown text={body} muted />
 			) : body ? (
-				<p className={cn("whitespace-pre-wrap text-sm leading-relaxed text-muted-foreground", longReport && "line-clamp-3")}>
-					<SessionLinkedText text={preview} />
-				</p>
+				// Markdown like the reply, so a link, path or code reads as its chip before it is opened.
+				<div className={cn(longReport && "line-clamp-3")}>
+					<ChatMarkdown text={preview} muted className="whitespace-pre-wrap text-sm leading-relaxed" />
+				</div>
 			) : null}
 				{annotationSummary ? <div className={cn(body && "mt-2")}>{annotationSummary}</div> : null}
 				<StagedAttachmentItems

@@ -21,7 +21,6 @@ import {
 	ArrowUpFromLine,
 	ClipboardCheck,
 	CircleX,
-	FileText,
 	GitCommitHorizontal,
 	GitMerge,
 	GitPullRequest,
@@ -42,6 +41,7 @@ import type { SessionGitActionKind } from "../../stores/session-git-action-store
 import { Pressable } from "../ui/pressable";
 import type { ConversationActivity, ConversationItem, ConversationMessage } from "../../types/conversation";
 import { ChatMarkdown, FileReference, SessionLabelLink } from "./ChatMarkdown";
+import { ChatFileIcon } from "./ChatFileIcon";
 import { formatMessageTimestamp, humanBubbleClass, MessageTimestamp, QueuedNote } from "./ChatTimelineItems";
 import { cachedBy, Folded } from "./WorkerUpdates";
 
@@ -416,14 +416,15 @@ function UserActionBody({ action }: { action: UserAction }) {
 	}
 }
 
-const chip = "inline-flex min-w-0 max-w-full items-center gap-1.5 rounded-md bg-foreground/[0.06] px-1.5 py-0.5 text-xs text-muted-foreground transition-colors enabled:hover:text-foreground";
+// The chat's file chip: the file's own icon, its name on the file tint.
+const chip = "inline-flex min-w-0 max-w-full items-center gap-[5px] rounded bg-chat-file py-[2px] pr-[5px] pl-1 text-xs text-chat-file-foreground transition-colors enabled:hover:bg-chat-file-hover";
 
 function FileChip({ path, line, end }: { path: string; line?: number; end?: number }) {
 	const name = path.slice(path.lastIndexOf("/") + 1);
 	const at = line ? (end && end !== line ? `:${line}–${end}` : `:${line}`) : "";
 	return (
 		<FileReference path={path} line={line} className={chip}>
-			<FileText aria-hidden="true" className="size-3 shrink-0" />
+			<ChatFileIcon path={path} className="shrink-0" />
 			<span className="truncate font-mono">{name}{at}</span>
 		</FileReference>
 	);

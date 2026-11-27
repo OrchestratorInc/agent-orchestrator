@@ -35,6 +35,7 @@ import { useTabScrollEdges } from "../../hooks/useTabScrollEdges";
 import { MAX_SESSION_DISPLAY_NAME_LEN } from "../../hooks/useSessionRename";
 import { beginOptimisticRename, queueRenameWrite, renamedTitle, renameReadStarted, settleOptimisticRename } from "../../hooks/optimistic-renames";
 import { appI18n } from "../../i18n";
+import { ChatMarkdown, SessionLabelLink } from "./ChatMarkdown";
 import { useUiStore } from "../../stores/ui-store";
 import { INLINE_ATTACHMENT_BYTES, readBlobAsBase64, type OutgoingAttachment } from "../../lib/attachment-uploads";
 
@@ -2041,11 +2042,9 @@ export function useIndependentSideChats(
 		const input = activity.input!;
 		return (
 			<div key={activity.id} className="space-y-2 rounded-lg border border-border px-3 py-2 text-sm">
-				<p>{input.message}</p>
+				<ChatMarkdown text={input.message} />
 				{input.url && /^https?:\/\//i.test(input.url) ? (
-					<a className="underline" href={input.url} target="_blank" rel="noreferrer">
-						{t("sideChat.openRequestedUrl")}
-					</a>
+					<p className="m-0"><SessionLabelLink href={input.url}>{t("sideChat.openRequestedUrl")}</SessionLabelLink></p>
 				) : null}
 				{Object.keys((input.schema?.properties ?? {}) as Record<string, unknown>).map((key) => (
 					<label key={key} className="block">
