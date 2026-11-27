@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
+	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
 func seedExitedChatSession(st *fakeStore, id domain.SessionID) {
@@ -73,5 +74,30 @@ func TestLaunchColdChatSwitchRefusesWhileAResumeRuns(t *testing.T) {
 	}
 	if started {
 		t.Fatal("target started while a resume held the session")
+	}
+}
+
+// The target launches under the mode the source chat runs with. An imported agy
+// chat that never chose a mode runs under the strictest mode agy accepts, not the
+// project's bypass default, so a cold switch must not hand the target bypass.
+func TestLaunchColdChatSwitchCarriesTheSourceChatsPermissions(t *testing.T) {
+	m, st, _ := newChatManager(&recordingLauncher{permissionModes: []ports.PermissionMode{ports.PermissionModeDefault}})
+	project := st.projects[chatTestProject]
+	project.Config.AgentConfig.Permissions = ports.PermissionModeBypassPermissions
+	st.projects[chatTestProject] = project
+	seedExitedChatSession(st, "mer-1")
+	rec := st.sessions["mer-1"]
+	rec.Metadata.ImportSource = &domain.SessionImportSource{NativeID: "agy-native"}
+	st.sessions["mer-1"] = rec
+	var got ChatStart
+	if err := m.LaunchColdChatSwitch(context.Background(), "mer-1", domain.HarnessClaudeCode,
+		func(_ context.Context, cfg ChatStart) error {
+			got = cfg
+			return nil
+		}); err != nil {
+		t.Fatalf("LaunchColdChatSwitch: %v", err)
+	}
+	if got.Permissions != ports.PermissionModeDefault {
+		t.Fatalf("target launch permissions = %q, want the source chat's %q", got.Permissions, ports.PermissionModeDefault)
 	}
 }

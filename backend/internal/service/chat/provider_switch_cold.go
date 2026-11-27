@@ -152,6 +152,8 @@ func (s *Service) coldSwitchProvider(
 		} else if pending && !request.Force {
 			return &domain.ProviderSwitchError{Kind: domain.ProviderSwitchRefusalPendingInteraction, Detail: "the agent is waiting on an approval or question"}
 		}
+		// base.Permissions is the mode the source chat launches with, as the live
+		// path reads its source's launched mode, never the target's defaults.
 		mode := ports.NormalizePermissionMode(cmp.Or(conversation.Settings.ApprovalMode, base.Permissions, ports.PermissionModeAuto))
 		permissions, chatPermissions := s.switchPermissionsFrom(ctx, conversation.ID, record.Harness, mode, request)
 		if err := s.PreflightChat(ctx, request.TargetHarness, permissions); err != nil {

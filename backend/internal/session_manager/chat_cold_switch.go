@@ -79,6 +79,10 @@ func (m *Manager) LaunchColdChatSwitch(
 		return fmt.Errorf("switch %s: workspace roots: %w", id, err)
 	}
 	env := m.runtimeEnvForHarness(rec.ID, rec.ProjectID, rec.IssueID, project.Config.Env, target)
+	// The mode the source chat runs with, as its own resume would launch it. A
+	// chat with no stored approval mode hands this to the target rather than the
+	// target's defaults, so a switch never drops approvals the chat had.
+	sourcePermissions := m.importedChatPermissions(ctx, rec, restoredAgentConfig(rec, project.Config).Permissions)
 	agent, hasAgent := m.agents.Agent(target)
 	if hasAgent {
 		m.augmentAgentRuntimeEnv(agent, env)
@@ -91,7 +95,7 @@ func (m *Manager) LaunchColdChatSwitch(
 		DataDir:                 m.dataDir,
 		WorkspacePath:           rec.Metadata.WorkspacePath,
 		Env:                     maps.Clone(env),
-		Permissions:             restoredAgentConfig(targetRec, project.Config).Permissions,
+		Permissions:             sourcePermissions,
 		SystemPrompt:            systemPrompt,
 		AdditionalDirectories:   additionalDirectories,
 		MCPServers:              m.aoMCPServers(ctx, target, env),
