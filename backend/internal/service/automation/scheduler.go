@@ -37,7 +37,7 @@ type schedulerStore interface {
 	ListActiveAutomationRuns(context.Context) ([]domain.AutomationRun, error)
 	GetSessionByAutomationRunID(context.Context, domain.AutomationRunID) (domain.SessionRecord, bool, error)
 	GetSession(context.Context, domain.SessionID) (domain.SessionRecord, bool, error)
-	MarkAutomationRunRunning(context.Context, domain.AutomationRunID, domain.SessionID, time.Time) (bool, error)
+	MarkAutomationRunRunning(context.Context, domain.AutomationRunID, domain.SessionID, time.Time, time.Time) (bool, error)
 	CompleteAutomationRun(context.Context, domain.AutomationRunID, time.Time) (bool, error)
 	FailAutomationRun(context.Context, domain.AutomationRunID, string, time.Time) (bool, error)
 	ReleaseAutomationRun(context.Context, domain.AutomationRunID, string, time.Time) (bool, error)
@@ -148,7 +148,8 @@ func (s *Service) dispatch(ctx context.Context, store schedulerStore, run domain
 			return errors.Join(spawnErr, lookupErr)
 		} else if ok {
 			if session.AutomationLaunchCompleted {
-				_, markErr := store.MarkAutomationRunRunning(context.WithoutCancel(ctx), run.ID, session.ID, now)
+				started := s.clock().UTC()
+				_, markErr := store.MarkAutomationRunRunning(context.WithoutCancel(ctx), run.ID, session.ID, started, started)
 				return errors.Join(spawnErr, markErr)
 			}
 			if !session.IsTerminated {
@@ -173,7 +174,8 @@ func (s *Service) dispatch(ctx context.Context, store schedulerStore, run domain
 	// Record the start after Spawn returns: by then the launch, including any
 	// after-start prompt delivery, has completed, so activity the agent reported
 	// before its prompt arrived cannot settle the run.
-	_, err = store.MarkAutomationRunRunning(context.WithoutCancel(ctx), run.ID, session.ID, s.clock().UTC())
+	started := s.clock().UTC()
+	_, err = store.MarkAutomationRunRunning(context.WithoutCancel(ctx), run.ID, session.ID, started, started)
 	return err
 }
 
@@ -215,10 +217,11 @@ func (s *Service) completeAndAdoptActive(ctx context.Context, store schedulerSto
 			if lookupErr != nil {
 				problems = append(problems, lookupErr)
 			} else if ok && session.AutomationLaunchCompleted {
-				_, lookupErr = store.MarkAutomationRunRunning(ctx, run.ID, session.ID, now)
+				started := recoveredStart(session)
+				_, lookupErr = store.MarkAutomationRunRunning(ctx, run.ID, session.ID, started, now)
 				if lookupErr != nil {
 					problems = append(problems, lookupErr)
-				} else if automationSessionSettled(session, now) {
+				} else if automationSessionSettled(session, started) {
 					if lookupErr = s.finishSettledRun(ctx, store, run.ID, session, now); lookupErr != nil {
 						problems = append(problems, lookupErr)
 					}
@@ -260,11 +263,11 @@ func (s *Service) completeAndAdoptActive(ctx context.Context, store schedulerSto
 			startedAt = *run.StartedAt
 		}
 		if run.SessionID == nil {
-			if _, err := store.MarkAutomationRunRunning(ctx, run.ID, session.ID, now); err != nil {
-				problems = append(problems, err)
-			}
 			if startedAt.IsZero() {
-				startedAt = now
+				startedAt = recoveredStart(session)
+			}
+			if _, err := store.MarkAutomationRunRunning(ctx, run.ID, session.ID, startedAt, now); err != nil {
+				problems = append(problems, err)
 			}
 		}
 		if automationSessionSettled(session, startedAt) {
@@ -305,6 +308,19 @@ func automationSessionSettled(session domain.SessionRecord, startedAt time.Time)
 		return reading.After(session.FirstSignalAt)
 	}
 	return reading.After(startedAt)
+}
+
+// recoveredStart is the start recorded for a run adopted after a restart,
+// whose launch completed without the scheduler seeing Spawn return. The
+// recovery time would hide a turn that finished while the daemon was down, so
+// use the session's latest prompt time instead: the launch sets it when it
+// builds the prompt and the agent's prompt-submit hook moves it forward. A
+// session without one falls back to its creation time.
+func recoveredStart(session domain.SessionRecord) time.Time {
+	if at := session.Metadata.LatestUserPromptAt; !at.IsZero() {
+		return at.UTC()
+	}
+	return session.CreatedAt.UTC()
 }
 
 // finishSettledRun stops a settled session's agent and then completes its run.

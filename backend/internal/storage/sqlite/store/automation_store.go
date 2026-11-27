@@ -349,11 +349,11 @@ func automationRunsFromGen(rows []gen.AutomationRun) []domain.AutomationRun {
 }
 
 // MarkAutomationRunRunning links the unique spawned session.
-func (s *Store) MarkAutomationRunRunning(ctx context.Context, id domain.AutomationRunID, sessionID domain.SessionID, now time.Time) (bool, error) {
+func (s *Store) MarkAutomationRunRunning(ctx context.Context, id domain.AutomationRunID, sessionID domain.SessionID, startedAt, now time.Time) (bool, error) {
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()
 	rows, err := s.qw.MarkAutomationRunRunning(ctx, gen.MarkAutomationRunRunningParams{
-		SessionID: &sessionID, StartedAt: timePtrToNullTime(&now), UpdatedAt: now, ID: id,
+		SessionID: &sessionID, StartedAt: timePtrToNullTime(&startedAt), UpdatedAt: now, ID: id,
 	})
 	if err != nil {
 		return false, fmt.Errorf("mark automation run %s running: %w", id, err)

@@ -122,12 +122,12 @@ func (f *schedulerMemoryStore) GetSession(_ context.Context, id domain.SessionID
 	return rec, ok, nil
 }
 
-func (f *schedulerMemoryStore) MarkAutomationRunRunning(_ context.Context, id domain.AutomationRunID, sessionID domain.SessionID, now time.Time) (bool, error) {
+func (f *schedulerMemoryStore) MarkAutomationRunRunning(_ context.Context, id domain.AutomationRunID, sessionID domain.SessionID, startedAt, now time.Time) (bool, error) {
 	run := f.runs[id]
 	if run.Status != domain.AutomationRunSpawning {
 		return false, nil
 	}
-	run.Status, run.SessionID, run.StartedAt, run.LeaseExpiresAt, run.UpdatedAt = domain.AutomationRunRunning, &sessionID, &now, nil, now
+	run.Status, run.SessionID, run.StartedAt, run.LeaseExpiresAt, run.UpdatedAt = domain.AutomationRunRunning, &sessionID, &startedAt, nil, now
 	f.runs[id] = run
 	return true, nil
 }
@@ -555,6 +555,48 @@ func TestReconcileAdoptsSessionForExpiredClaim(t *testing.T) {
 	}
 	if store.runs[runID].Status != domain.AutomationRunRunning || store.runs[runID].SessionID == nil || *store.runs[runID].SessionID != sessionID || len(spawner.calls) != 0 {
 		t.Fatalf("run=%#v calls=%d", store.runs[runID], len(spawner.calls))
+	}
+}
+
+// A restart between a launch completing and the scheduler marking its run
+// running must not use the recovery time as the start: a turn that finished
+// while the daemon was down would never settle. The session's prompt time is
+// the start, so its later idle settles the run while a startup idle from
+// before the prompt still does not.
+func TestReconcileStartsAdoptedRunAtThePromptNotTheRecovery(t *testing.T) {
+	now := time.Date(2026, time.August, 25, 12, 0, 0, 0, time.UTC)
+	prompt := now.Add(-20 * time.Minute)
+	for _, tc := range []struct {
+		name    string
+		reading time.Time
+		settled bool
+	}{
+		{name: "idle after the prompt, before the restart", reading: prompt.Add(5 * time.Minute), settled: true},
+		{name: "startup idle before the prompt", reading: prompt.Add(-time.Minute), settled: false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			store := newSchedulerStore()
+			store.automations["automation-1"] = domain.Automation{ID: "automation-1", Enabled: true, NextRunAt: now.Add(time.Hour)}
+			runID, sessionID := domain.AutomationRunID("run-1"), domain.SessionID("session-1")
+			lease := now.Add(-time.Minute)
+			store.runs[runID] = domain.AutomationRun{ID: runID, AutomationID: "automation-1", Status: domain.AutomationRunSpawning, LeaseExpiresAt: &lease}
+			session := domain.SessionRecord{ID: sessionID, AutomationRunID: &runID, AutomationLaunchCompleted: true, FirstSignalAt: prompt.Add(-2 * time.Minute), Activity: domain.Activity{State: domain.ActivityIdle, LastActivityAt: tc.reading}}
+			session.Metadata.LatestUserPromptAt = prompt
+			store.sessions[sessionID] = session
+			spawner := &recordingSpawner{store: store}
+			svc := New(Deps{Store: store, Spawner: spawner, Clock: func() time.Time { return now }})
+
+			if err := svc.Reconcile(context.Background()); err != nil {
+				t.Fatal(err)
+			}
+			run := store.runs[runID]
+			if run.StartedAt == nil || !run.StartedAt.Equal(prompt) {
+				t.Fatalf("started at %v, want the prompt time %s", run.StartedAt, prompt)
+			}
+			if completed := run.Status == domain.AutomationRunCompleted; completed != tc.settled {
+				t.Fatalf("run = %#v, want completed=%v", run, tc.settled)
+			}
+		})
 	}
 }
 
