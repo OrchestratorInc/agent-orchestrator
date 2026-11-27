@@ -855,8 +855,10 @@ const TimelineItem = memo(function TimelineItem({
 			return <View style={styles.steerRow}>{sender ? <OriginMessageView message={item} fallback={card} /> : card}<SteerNote detail={detail} /></View>;
 		}
 		const { body, attachments } = stagedAttachmentParts(text);
+		// This row never measures, so it sizes from the current estimate rather
+		// than a width inherited on mount, and follows the window when it turns.
 		return <View style={styles.userRow}>
-			<View style={[styles.userBubble, { maxWidth: bubbleWidth }]}>{body ? <Text selectable style={styles.userText}>{body}</Text> : null}{attachments.length > 0 ? <StagedAttachments sessionId={sessionId} paths={attachments} spaced={Boolean(body)} /> : null}</View>
+			<View style={[styles.userBubble, { maxWidth: Math.floor(rowEstimate * 0.88) }]}>{body ? <Text selectable style={styles.userText}>{body}</Text> : null}{attachments.length > 0 ? <StagedAttachments sessionId={sessionId} paths={attachments} spaced={Boolean(body)} /> : null}</View>
 			<SteerNote detail={detail} />
 		</View>;
 	}

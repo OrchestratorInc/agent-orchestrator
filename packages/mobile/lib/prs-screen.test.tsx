@@ -19,7 +19,6 @@ vi.mock("react-native", async () => {
 	const React = await import("react");
 	return {
 		ActivityIndicator: "ActivityIndicator", RefreshControl: "RefreshControl", View: "View", Text: "Text", Platform: { OS: "ios" },
-		Dimensions: { get: () => ({ width: 402 }) },
 		StyleSheet: { create: (styles: object) => styles, hairlineWidth: 1 },
 		Pressable: ({ children, ...props }: { children?: React.ReactNode; accessibilityRole?: string; accessibilityLabel?: string }) => {
 			if (props.accessibilityRole === "button" && props.accessibilityLabel?.includes("Pull request")) fixture.cardRenders.push(props.accessibilityLabel);

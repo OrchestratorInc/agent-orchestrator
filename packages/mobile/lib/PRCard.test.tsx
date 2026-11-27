@@ -16,7 +16,6 @@ vi.mock("react-native", async () => {
 	const React = await import("react");
 	const host = (name: string) => ({ children, ...props }: { children?: React.ReactNode }) => React.createElement(name, props, children);
 	return {
-		Dimensions: { get: () => ({ width: 402 }) },
 		Platform: fixture.platform,
 		Pressable: host("Pressable"),
 		StyleSheet: { create: (styles: unknown) => styles, hairlineWidth: 0.5 },
@@ -182,5 +181,15 @@ describe("PRCard", () => {
 		const menu = renderer!.root.findByType("MenuView" as never);
 		expect(menu.props.style).toEqual(expect.arrayContaining([{ left: 120, top: 30 }]));
 		expect(menu.findAllByType("Pressable" as never)).toHaveLength(0);
+	});
+
+	// Android's card is a plain view that never measures its slot: a fixed width
+	// there would be a guess, and one wider than the gutter-inset slot runs the
+	// card past the screen's edge.
+	it("leaves the row to fill its slot on Android, with no fixed width", () => {
+		fixture.platform.OS = "android";
+		render();
+		const style = [row().props.style({ pressed: false })].flat(Infinity) as Array<Record<string, unknown> | false | null | undefined>;
+		expect(style.some((entry) => entry && "width" in entry)).toBe(false);
 	});
 });

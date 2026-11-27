@@ -1,5 +1,5 @@
 import { createContext, createElement, useCallback, useContext, useLayoutEffect, useRef, useState, type ReactNode, type RefObject } from "react";
-import { Dimensions, type LayoutChangeEvent, type View, type ViewStyle } from "react-native";
+import type { LayoutChangeEvent, View, ViewStyle } from "react-native";
 
 /** The width a list's menu rows last measured, shared by the rows under one `MenuRowWidthScope`. */
 export type MenuRowWidths = RefObject<number | undefined>;
@@ -48,12 +48,13 @@ export function MenuRowWidthScope({ widths, children }: { widths?: MenuRowWidths
  * first render does not recover: once the measured width arrives, the row is
  * the right size but its title line keeps the width it was first laid out at,
  * so a long title still runs off the screen and pushes the row's time past the
- * edge. So a row with no width to inherit starts at `estimate`, by default the
- * window's. That is only a guess where the list is narrower than the window,
- * but any width on the first render is enough: the layout effect and
- * `onLayout` then correct it, and follow resizes, without leaving the title
- * behind. A caller that sizes something else from `width`, and knows its
- * list's insets, passes a closer estimate.
+ * edge. So a caller that measures its slot (attaches `ref` and `onLayout`)
+ * passes `estimate`, its best guess at the slot's width, and a row with no
+ * width to inherit starts there. A first width wider than the slot was checked
+ * to correct itself, title and all, once the slot measures; one narrower than
+ * the slot has not been checked. Without `estimate` a row stays unsized until
+ * it is measured, so a caller that never measures (Android's PR card) keeps
+ * filling its slot instead of being held at a guess.
  */
 export function useMenuRowWidth(estimate?: number): {
 	ref: RefObject<View | null>;
@@ -67,7 +68,7 @@ export function useMenuRowWidth(estimate?: number): {
 	// The guess is worked out again on every render, so a row that never
 	// measures follows its caller's estimate when the window changes.
 	const [measuredWidth, setWidth] = useState<number | undefined>(() => shared?.current);
-	const width = measuredWidth ?? (estimate != null && estimate > 0 ? estimate : windowWidth());
+	const width = measuredWidth ?? (estimate != null && estimate > 0 ? estimate : undefined);
 	const measured = useCallback((next: number) => {
 		// Only a real width seeds the rows after this one: a slot laid out at
 		// zero for a moment would otherwise start every later row at zero.
@@ -82,8 +83,3 @@ export function useMenuRowWidth(estimate?: number): {
 	return { ref, onLayout, width, style: width == null ? undefined : { width } };
 }
 
-/** The window's width, or undefined before the window has one. */
-function windowWidth(): number | undefined {
-	const width = Dimensions.get("window").width;
-	return width > 0 ? width : undefined;
-}

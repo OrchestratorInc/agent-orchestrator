@@ -121,6 +121,14 @@ const settle = () => act(() => {
 	done.forEach((spring) => spring.done?.(true));
 });
 
+// On iOS a row first drawn without a width keeps a title running off the
+// screen, so a row starts at the window's width (402 here) before it measures.
+it("gives the row the window's width before its slot has measured", () => {
+	Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
+	act(() => { renderer = create(<WorkerRowInteraction {...props} />); });
+	expect(renderer!.root.findByType("ContextMenu" as never).props.style).toEqual([{}, { width: 402 }]);
+});
+
 // A board switch builds every row it shows, so a resting row must cost little
 // more than its content: one detector, and no rail until a drag uncovers it.
 it("mounts one gesture detector and no rail while the row rests", () => {
