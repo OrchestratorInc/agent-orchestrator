@@ -24,6 +24,7 @@ import { installRendererErrorHandlers } from "../../shared/renderer-error-handle
 import { launchProperties, takeLaunchStart } from "./launch-telemetry";
 import { PERFORMANCE_EVENTS, sanitizePerformanceProperties } from "./performance-telemetry-properties";
 import { DAEMON_EXIT_REASONS } from "../../shared/daemon-exit-reason";
+import { EXIT_FEEDBACK_ANSWERS, EXIT_FEEDBACK_DISMISSALS, EXIT_FEEDBACK_EVENTS, EXIT_FEEDBACK_TEXT_LIMIT, isExitFeedbackVersion } from "../../shared/exit-feedback";
 
 const POSTHOG_KEY = import.meta.env.VITE_AO_POSTHOG_KEY?.trim() || DEFAULT_POSTHOG_PROJECT_KEY;
 const POSTHOG_HOST = import.meta.env.VITE_AO_POSTHOG_HOST?.trim() || DEFAULT_POSTHOG_HOST;
@@ -1098,6 +1099,34 @@ function sanitizeArtifactProperties(event: string, properties?: TelemetryPropert
 	return safe;
 }
 
+const EXIT_FEEDBACK_EVENT_SET = new Set<string>(EXIT_FEEDBACK_EVENTS);
+const EXIT_FEEDBACK_DISMISSAL_SET = new Set<string>(EXIT_FEEDBACK_DISMISSALS);
+
+/**
+ * The exit feedback events: a fixed version, answer and dismissal vocabulary,
+ * whole seconds, and the typed text only with an answer. The text is trimmed,
+ * stripped of local paths and URLs and capped at 500 characters.
+ */
+export function sanitizeExitFeedbackProperties(event: string, properties?: TelemetryProperties): TelemetryProperties {
+	const safe: TelemetryProperties = {};
+	const version = properties?.version;
+	if (!isExitFeedbackVersion(version)) return safe;
+	safe.version = version;
+	if (event === "ao.exit_feedback.shown") return safe;
+	const seconds = properties?.seconds_open;
+	if (typeof seconds === "number" && Number.isFinite(seconds) && seconds >= 0) safe.seconds_open = Math.min(Math.floor(seconds), 86_400);
+	if (event === "ao.exit_feedback.dismissed") {
+		if (typeof properties?.how === "string" && EXIT_FEEDBACK_DISMISSAL_SET.has(properties.how)) safe.how = properties.how;
+		return safe;
+	}
+	if (typeof properties?.answer === "string" && EXIT_FEEDBACK_ANSWERS[version].includes(properties.answer)) safe.answer = properties.answer;
+	const raw = typeof properties?.text === "string" ? properties.text.trim().slice(0, EXIT_FEEDBACK_TEXT_LIMIT) : "";
+	const text = sanitizeSensitiveString(raw).slice(0, EXIT_FEEDBACK_TEXT_LIMIT);
+	safe.has_text = text !== "";
+	if (text) safe.text = text;
+	return safe;
+}
+
 function agentList(value: unknown): string | undefined {
 	if (typeof value !== "string") return undefined;
 	const agents = value.split(",").filter((agent) => IMPORTABLE_AGENTS.has(agent));
@@ -1123,6 +1152,11 @@ export async function sanitizeRendererProperties(
 			}
 			break;
 		case "ao.app.loaded":
+			break;
+		case "ao.exit_feedback.shown":
+		case "ao.exit_feedback.answered":
+		case "ao.exit_feedback.dismissed":
+			Object.assign(safe, sanitizeExitFeedbackProperties(event, properties));
 			break;
 		case "ao.agents.missing":
 			if (properties?.reason === "none_installed") safe.reason = properties.reason;
@@ -1493,7 +1527,11 @@ export function buildPostHogConfig(distinctId: string, identified = false): Post
 			distinctID: distinctId,
 			isIdentifiedID: identified,
 		},
-		before_send: (event) => (event ? sanitizePostHogCaptureResult(event) : event),
+		before_send: (event) => {
+			if (!event) return event;
+			const safe = sanitizePostHogCaptureResult(event);
+			return handOffExitFeedbackEvent(safe as unknown as Record<string, unknown>) ? null : safe;
+		},
 		session_recording: {
 			maskCapturedNetworkRequestFn: (request) => {
 				if (request.name) {
@@ -1503,6 +1541,44 @@ export function buildPostHogConfig(distinctId: string, identified = false): Post
 			},
 		},
 	};
+}
+
+// Set by before_send when it hands an exit feedback event to main.
+let exitFeedbackHandedOff = false;
+
+/**
+ * The exit feedback events are captured right before the app quits, where the
+ * SDK's batch would die with the window. The SDK still builds each event
+ * (identity, context, cleanup); main posts it and holds the quit until it is
+ * delivered or 2 s pass. Serialized here, so the timestamp leaves as ISO text.
+ */
+export function handOffExitFeedbackEvent(event: Record<string, unknown>): boolean {
+	if (typeof event.event !== "string" || !EXIT_FEEDBACK_EVENT_SET.has(event.event)) return false;
+	try {
+		aoBridge.telemetry.sendExitFeedbackEvent(JSON.parse(JSON.stringify(event)) as Record<string, unknown>);
+		exitFeedbackHandedOff = true;
+		return true;
+	} catch {
+		// Let the SDK try instead.
+		return false;
+	}
+}
+
+/**
+ * Whether the exit feedback prompt may show: usage analytics on and none of its
+ * events silenced by the kill switch. Waits at most 1 s for telemetry to start.
+ */
+export async function exitFeedbackAllowed(): Promise<boolean> {
+	if (analyticsOptedOut) return false;
+	let timeout: ReturnType<typeof setTimeout> | undefined;
+	const ready = await Promise.race([
+		initTelemetry().catch(() => false),
+		new Promise<boolean>((resolve) => {
+			timeout = setTimeout(() => resolve(false), 1_000);
+		}),
+	]);
+	clearTimeout(timeout);
+	return ready && !analyticsOptedOut && !EXIT_FEEDBACK_EVENTS.some((event) => isDeniedEvent(event));
 }
 
 export async function initTelemetry(): Promise<boolean> {
@@ -1694,7 +1770,8 @@ export async function captureRendererEvent(event: string, properties?: Record<st
 	const safeProperties = withTelemetryContext(sanitizedProperties);
 	let captured = false;
 	try {
-		captured = Boolean(posthog.capture(postHogEventName(event), safeProperties));
+		exitFeedbackHandedOff = false;
+		captured = Boolean(posthog.capture(postHogEventName(event), safeProperties)) || exitFeedbackHandedOff;
 		if (captured && LIFETIME_SESSION_REFRESH_EVENTS.has(event)) void refreshLifetimeSessions();
 		return captured;
 	} finally {
