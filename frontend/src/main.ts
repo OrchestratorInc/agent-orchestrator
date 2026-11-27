@@ -923,8 +923,10 @@ function setDaemonStatus(nextStatus: DaemonStatus): void {
 	if (nextStatus.state === "ready") void telemetryIdentity.flush();
 	else telemetryIdentity.invalidate();
 	getShellWebContents()?.send("daemon:status", daemonStatus);
-	if (nextStatus.state === "ready") establishBrowserRuntimeLink();
-	if (nextStatus.state === "ready" && browserViewHost) establishBrowserStreamLink();
+	if (nextStatus.state === "ready") {
+		establishBrowserRuntimeLink();
+		establishBrowserStreamLink();
+	}
 	const daemonIdentity = nextStatus.pid ?? daemonProcess?.pid;
 	if (sideLaunchRecovery.setAttachment(nextStatus.state === "ready" && nextStatus.port && daemonIdentity
 		? { generation: daemonAttachmentGeneration, pid: daemonIdentity, port: nextStatus.port, appRunId }
