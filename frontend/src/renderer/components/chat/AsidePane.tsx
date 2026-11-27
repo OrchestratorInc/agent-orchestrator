@@ -169,6 +169,7 @@ export function AsidePaneView({
 	firstComment = false,
 	initialText,
 	replyFallback,
+	messageJump,
 }: {
 	/** The pane's accessible name ("Comment", "New comment"); its header shows only the session's title. */
 	label: string;
@@ -207,6 +208,8 @@ export function AsidePaneView({
 	initialText?: string;
 	/** Offered beside an error from onReply: posts the kept draft another way. */
 	replyFallback?: CommentFallback;
+	/** A tagged message's thread: goes to that message ("Jump to message", or "Open in session" outside it). */
+	messageJump?: { onJump: () => void; label: string };
 }) {
 	const { t } = useTranslation();
 	const list = useRef<HTMLDivElement>(null);
@@ -263,6 +266,10 @@ export function AsidePaneView({
 					<div className="flex flex-col gap-3.5">
 						{anchor ? <CommentAnchorBlock anchor={anchor} /> : null}
 						{message ? <AsideEntryRow entry={message} /> : null}
+						{message && messageJump ? (
+							// Under the message, in line with its text, as a comment thread's quote has it.
+							<Button className="-mt-2 w-fit pl-8.5 text-caption text-status-working" data-comment-jump="" onClick={messageJump.onJump} size="xs" type="button" variant="link">{messageJump.label}</Button>
+						) : null}
 						{resolved ? (
 							<>
 								<div className="flex flex-col gap-1" data-comment-resolved="">
@@ -765,6 +772,18 @@ export function jumpToCommentAnchor(sequence: number): void {
 	flashChatMessage(node);
 }
 
+/** Scrolls the conversation to the message or steer whose tags started a thread, and tints it. */
+export function jumpToTaggedMessage(asideId: string, sequence: number): void {
+	// A tagged steer's anchor is the event its request returned, so the row is found by its thread.
+	const tagged = document.querySelector<HTMLElement>(`[data-chat-aside="${asideId}"]`);
+	if (!tagged) {
+		jumpToCommentAnchor(sequence);
+		return;
+	}
+	tagged.scrollIntoView({ block: "center", behavior: "smooth" });
+	flashChatMessage(tagged);
+}
+
 /** Translates one of the anchor labels. */
 type AnchorLabelT = (key: "comment.onAgentAnswer" | "comment.onSteer" | "comment.onMessage" | "comment.onAMessage", values?: { name: string }) => string;
 
@@ -907,6 +926,15 @@ export function CloudAsidePane({
 		const text = thread.data?.message.text ?? shown?.text ?? "";
 		return { label: anchorLabel(t as unknown as AnchorLabelT, aside.anchor.kind, thread.data?.message.authorName ?? shown?.authorName), excerpt: messageExcerpt(text), gone, onJump, jumpLabel };
 	}, [anchorShown, aside, comment, events, jumpLabel, jumpTo, t, thread.data?.message]);
+
+	// A tagged message's thread goes to its message too, as a comment thread does:
+	// in the conversation, or its session from the threads view (scrolled to it,
+	// with this thread open).
+	const messageJump = useMemo(() => {
+		if (comment || !aside || !message || anchorShown?.(aside) === false) return undefined;
+		const { asideId: tagged, anchor: { sequence } } = aside;
+		return { onJump: () => (onOpenInSession ? onOpenInSession(sequence) : jumpToTaggedMessage(tagged, sequence)), label: jumpLabel ?? t("comment.jump") };
+	}, [anchorShown, aside, comment, jumpLabel, message, onOpenInSession, t]);
 
 	const [sent, setSent] = useState<CloudCpAsideReply[]>([]);
 	const [pending, setPending] = useState<AsideEntry[]>([]);
@@ -1191,6 +1219,7 @@ export function CloudAsidePane({
 		<AsidePaneView
 			agentComments={agentComments}
 			anchor={anchor}
+			messageJump={messageJump}
 			canSendToAgent={canPrompt && !ended}
 			focusKey={focusKey}
 			mentionSource={mentionSource}

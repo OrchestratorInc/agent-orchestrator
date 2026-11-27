@@ -252,6 +252,19 @@ describe("opening a thread from the list", () => {
 		expect(mocks.openInSession).toHaveBeenCalledWith({ orgId: "org-1", projectId: "project-1", sessionId: "session-c-1", asideId: "c-1", sequence: 41 });
 	});
 
+	it("opens a tagged message's thread in its session at that message, as it does a comment thread", async () => {
+		const tagAside = { asideId: "a-1", anchor: { sequence: 42, kind: "user_message" as const }, replyCount: 1, unread: false, muted: false, origin: "tag" as const, startedBy: { userId: "u-chen", name: "Chen Li" } };
+		mocks.listMyCommentThreads.mockResolvedValue(page([row("a-1", { aside: tagAside })]));
+		mocks.getSessionAside.mockResolvedValue({ aside: tagAside, message: { kind: "user_message", sequence: 42, text: "Can you check the backoff?", mentions: [], authorName: "Chen Li", createdAt: at }, replies: [], hasMore: false });
+		mocks.markSessionAsideRead.mockResolvedValue({ ...tagAside, unread: false });
+		renderView();
+		fireEvent.click(await findRow("a-1"));
+		const pane = await screen.findByTestId("aside-pane");
+		await within(pane).findByText("Can you check the backoff?");
+		fireEvent.click(within(pane).getByRole("button", { name: "Open in session" }));
+		expect(mocks.openInSession).toHaveBeenCalledWith({ orgId: "org-1", projectId: "project-1", sessionId: "session-a-1", asideId: "a-1", sequence: 42 });
+	});
+
 	it("keeps a thread in an ended session read-only", async () => {
 		mocks.listMyCommentThreads.mockResolvedValue(page([row("c-1", { sessionTerminated: true })]));
 		renderView();

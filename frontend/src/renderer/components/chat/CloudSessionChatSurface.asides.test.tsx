@@ -194,6 +194,25 @@ describe("the conversation", () => {
 		expect(screen.queryByTestId("aside-pane")).toBeNull();
 	});
 
+	it("goes to a tagged message from its thread, as from a comment thread", async () => {
+		const user = userEvent.setup();
+		const scroll = vi.fn();
+		const row = document.createElement("div");
+		row.innerHTML = '<div data-chat-aside="a-1"><div data-chat-aside-box="">tagged</div></div>';
+		row.querySelector<HTMLElement>("[data-chat-aside]")!.scrollIntoView = scroll;
+		document.body.append(row);
+		try {
+			openAside(session.id, "a-1");
+			renderSurface();
+			const pane = await screen.findByTestId("aside-pane");
+			await user.click(await within(pane).findByRole("button", { name: "Jump to message" }));
+			expect(scroll).toHaveBeenCalled();
+			expect(row.querySelector("[data-chat-aside-box]")).toHaveAttribute("data-chat-flash");
+		} finally {
+			row.remove();
+		}
+	});
+
 	it("draws no comments on a control plane without them", async () => {
 		const { CloudCpError } = await import("../../lib/cloud-cp/errors");
 		cloudMocks.listSessionAsides.mockRejectedValue(new CloudCpError("not found", { status: 404 }));
