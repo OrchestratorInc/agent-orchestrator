@@ -483,7 +483,7 @@ func (d Discoverer) CatalogFingerprint(ctx context.Context, request ports.AgentM
 			// Snapshots from before RunnableModels lack it.
 			return fingerprint + ":shared-providers-v1:runnable-v1"
 		}
-		if request.AgentID == "pi" || request.AgentID == "kimchi" || request.AgentID == "prime-agent" {
+		if request.AgentID == "pi" || request.AgentID == "kimchi" || request.AgentID == "prime-agent" || request.AgentID == "omp" {
 			// Snapshots from before discovery kept Pi's thinking metadata and
 			// matched Pi's level rules lack those levels.
 			return fingerprint + ":shared-providers-v1:thinking-v3"

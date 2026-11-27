@@ -114,13 +114,16 @@ func TestOMPProviderCacheUsesModelProviderNotAccountCacheKey(t *testing.T) {
 	}
 	defer func() { _ = db.Close() }()
 	_, err = db.Exec(`CREATE TABLE model_cache (provider_id TEXT, models TEXT);
- INSERT INTO model_cache VALUES ('router:account-private', '[{"id":"org/model","provider":"router","name":"Model"}]');`)
+ INSERT INTO model_cache VALUES ('router:account-private', '[{"id":"org/model","provider":"router","name":"Model","reasoning":true,"thinkingLevelMap":{"high":"high","low":null}}]');`)
 	if err != nil {
 		t.Fatal(err)
 	}
 	catalog := ompProviderCatalog(context.Background(), path)
 	if len(catalog.Models) != 1 || catalog.Models[0].Provider != "router" || catalog.Models[0].ID != "router/org/model" {
 		t.Fatalf("catalog = %#v", catalog)
+	}
+	if want := []string{"minimal", "medium", "high"}; !reflect.DeepEqual(catalog.Models[0].Efforts, want) {
+		t.Fatalf("efforts = %v, want %v", catalog.Models[0].Efforts, want)
 	}
 	if len(catalog.ConfiguredProviders) != 0 {
 		t.Fatal("cached catalog isn't credential evidence")
@@ -331,7 +334,7 @@ func TestPiModelRecordsCarryTheirThinkingLevels(t *testing.T) {
 // TestPiCatalogKeysReplaceSnapshotsWithoutThinkingLevels keeps catalogs saved
 // before discovery kept Pi's thinking metadata from serving levelless models.
 func TestPiCatalogKeysReplaceSnapshotsWithoutThinkingLevels(t *testing.T) {
-	for _, agentID := range []string{"pi", "prime-agent"} {
+	for _, agentID := range []string{"pi", "prime-agent", "omp"} {
 		home := t.TempDir()
 		key := (Discoverer{}).CatalogFingerprint(context.Background(), ports.AgentModelDiscoveryRequest{
 			AgentID: agentID, WorkingDir: home, Env: map[string]string{"HOME": home},
