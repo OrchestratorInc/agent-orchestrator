@@ -1003,7 +1003,7 @@ Properties on `ao.launches.timed`:
 
 Properties on `ao.usage.ui_performance`:
 
-- Window: `measurement_schema_version` (3), `flush_reason` (`interval` or
+- Window: `measurement_schema_version` (4), `flush_reason` (`interval` or
   `startup`), `window_seconds` (elapsed time while the app was running, so a
   window kept across a quit leaves out the time the app was closed; never less
   than `active_seconds`),
@@ -1030,10 +1030,16 @@ Properties on `ao.usage.ui_performance`:
   from the browser's Event Timing API, which reports only interactions of
   40 ms or more, so `interaction_p98_ms` is 0 when none reached 40 ms: a
   fallback, not a measured duration.
-- Frozen frames: `long_frame_count` (frames that took over 50 ms),
+- Frozen frames: `long_frame_count` (frames that took over 50 ms and that
+  someone could notice: an input arrived during the frame, or it drew to the
+  screen while the user was active, within five minutes of their last input),
   `long_frame_blocking_ms` (their total blocking time), `long_frame_ms` (their
   total duration), `long_frame_max_ms` (the longest one), and
-  `long_frame_no_script_count` (those the browser listed no script for). Each
+  `long_frame_no_script_count` (those the browser listed no script for). Frames
+  over 50 ms that drew nothing with no input waiting, or that came while the
+  user was away, are only counted in `long_frame_unnoticed_count` and
+  `long_frame_unnoticed_ms` (their total duration), and none of the other
+  frozen-frame properties include them. Each counted
   frame's time is split by phase into causes, and each cause's total is sent
   as `long_frame_<cause>_ms` with dashes as underscores, such as
   `long_frame_frame_callbacks_ms`: before rendering starts, each script the
@@ -1055,8 +1061,10 @@ Properties on `ao.usage.ui_performance`:
   with no ids, attributes or URLs; script loads are not named.
   `long_frame_top_bundle` is the app code bundle whose listed scripts took
   longest, such as `SessionView`, and is left out for code from anywhere else.
-  Version 2 summaries put `unlisted` and `frame-callbacks` time under `other`,
-  and version 1 also put rendering there.
+  Version 3 and earlier summaries counted every frame over 50 ms while the
+  window was visible, including ones no one could notice. Version 2 summaries
+  also put `unlisted` and `frame-callbacks` time under `other`, and version 1
+  also put rendering there.
 - Chat open: `chat_open_count` and `chat_open_p75_ms`, for opening a chat whose
   messages were not in memory, from the click to the frame that shows them.
 - Memory and CPU: `renderer_mb_bucket` (the window's peak memory) and

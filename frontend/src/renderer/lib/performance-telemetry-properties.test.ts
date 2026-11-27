@@ -37,7 +37,7 @@ describe("sanitizePerformanceProperties", () => {
 
 	it("keeps only the documented summary properties and closed values", () => {
 		const safe = sanitizePerformanceProperties("ao.usage.ui_performance", {
-			measurement_schema_version: 3,
+			measurement_schema_version: 4,
 			flush_reason: "interval",
 			window_seconds: 2_700,
 			active_seconds: 1_200.4,
@@ -49,6 +49,8 @@ describe("sanitizePerformanceProperties", () => {
 			long_frame_unlisted_ms: 412.4,
 			long_frame_frame_callbacks_ms: 30,
 			long_frame_no_script_count: 2,
+			long_frame_unnoticed_count: 7,
+			long_frame_unnoticed_ms: 1_204.6,
 			long_frame_top_invoker: "MessagePort.onmessage",
 			long_frame_top_bundle: "SessionView",
 			open_sessions_bucket: "4-10",
@@ -60,7 +62,7 @@ describe("sanitizePerformanceProperties", () => {
 			script_url: "file:///app.js",
 		});
 		expect(safe).toEqual({
-			measurement_schema_version: 3,
+			measurement_schema_version: 4,
 			flush_reason: "interval",
 			window_seconds: 2_700,
 			active_seconds: 1_200,
@@ -70,6 +72,8 @@ describe("sanitizePerformanceProperties", () => {
 			long_frame_unlisted_ms: 412,
 			long_frame_frame_callbacks_ms: 30,
 			long_frame_no_script_count: 2,
+			long_frame_unnoticed_count: 7,
+			long_frame_unnoticed_ms: 1_205,
 			long_frame_top_invoker: "MessagePort.onmessage",
 			long_frame_top_bundle: "SessionView",
 			open_sessions_bucket: "4-10",

@@ -71,6 +71,12 @@ type Summary = {
 	longFrameMaxMs: number;
 	/** Long frames the browser listed no script for. */
 	longFrameNoScript: number;
+	/**
+	 * Long frames no one could notice, left out of the counts above: nothing
+	 * was drawn and no input waited on them, or the user was not active.
+	 */
+	longFrameUnnoticed: number;
+	longFrameUnnoticedMs: number;
 	causes: Partial<Record<Cause, number>>;
 	/** Listed script time by entry point name, such as Window.requestAnimationFrame. */
 	invokers: Record<string, number>;
@@ -82,10 +88,11 @@ type Summary = {
 
 type PersistedState = {
 	/**
-	 * 3 since frames split into phases ("other" became "unlisted") and kept
-	 * entry points and bundles; an earlier window is dropped.
+	 * 4 since only long frames someone could notice are counted; 3 since frames
+	 * split into phases ("other" became "unlisted") and kept entry points and
+	 * bundles. An earlier window is dropped.
 	 */
-	version: 3;
+	version: 4;
 	windowStartedAt: number;
 	windowFlushAt: number;
 	/** When this state was last saved, so a later launch knows how long the app was closed. */
@@ -124,6 +131,8 @@ const zeroSummary = (): Summary => ({
 	longFrameMs: 0,
 	longFrameMaxMs: 0,
 	longFrameNoScript: 0,
+	longFrameUnnoticed: 0,
+	longFrameUnnoticedMs: 0,
 	causes: {},
 	invokers: {},
 	bundles: {},
@@ -132,7 +141,7 @@ const zeroSummary = (): Summary => ({
 });
 
 function freshState(now: number): PersistedState {
-	return { version: 3, windowStartedAt: now, windowFlushAt: now + FLUSH_MIN_MS + Math.random() * FLUSH_JITTER_MS, closedMs: 0, summary: zeroSummary() };
+	return { version: 4, windowStartedAt: now, windowFlushAt: now + FLUSH_MIN_MS + Math.random() * FLUSH_JITTER_MS, closedMs: 0, summary: zeroSummary() };
 }
 
 const isCount = (value: unknown): value is number => typeof value === "number" && Number.isFinite(value) && value >= 0;
@@ -148,7 +157,7 @@ function loadState(storage: Storage, now: number): PersistedState {
 		const parsed = JSON.parse(storage.getItem(STORAGE_KEY) ?? "null") as Partial<PersistedState> | null;
 		const summary = parsed?.summary as Partial<Summary> | undefined;
 		if (
-			parsed?.version === 3 && isCount(parsed.windowStartedAt) && isCount(parsed.windowFlushAt) && summary &&
+			parsed?.version === 4 && isCount(parsed.windowStartedAt) && isCount(parsed.windowFlushAt) && summary &&
 			isBuckets(summary.switchCached) && isBuckets(summary.switchUncached) &&
 			isCountList(summary.switchVisibleMs, SAMPLES_KEPT) && isCountList(summary.chatOpenMs, SAMPLES_KEPT) &&
 			Array.isArray(summary.longest) && summary.longest.length <= LONGEST_KEPT &&
@@ -157,7 +166,7 @@ function loadState(storage: Storage, now: number): PersistedState {
 			Object.entries(summary.causes).every(([cause, ms]) => (LONG_FRAME_CAUSES as readonly string[]).includes(cause) && isCount(ms)) &&
 			isNameTotals(summary.invokers, (name) => invokerName(name) === name) &&
 			isNameTotals(summary.bundles, (name) => bundleName(`app://renderer/assets/${name}-00000000.js`) === name) &&
-			(["activeMs", "switchVisibleSeen", "switchDropped", "interactions", "slowInteractions", "verySlowInteractions", "longFrames", "longFrameBlockingMs", "longFrameMs", "longFrameMaxMs", "longFrameNoScript", "chatOpenSeen"] as const)
+			(["activeMs", "switchVisibleSeen", "switchDropped", "interactions", "slowInteractions", "verySlowInteractions", "longFrames", "longFrameBlockingMs", "longFrameMs", "longFrameMaxMs", "longFrameNoScript", "longFrameUnnoticed", "longFrameUnnoticedMs", "chatOpenSeen"] as const)
 				.every((key) => isCount(summary[key]))
 		) {
 			// Interaction ids restart with each page, so kept ones cannot be matched again.
@@ -283,8 +292,14 @@ export class PerformanceAccumulator {
 	 * way and the rest under "frame-callbacks". Style, layout and paint:
 	 * "rendering", less listed scripts that ran inside it (such as
 	 * ResizeObserver callbacks). The browser lists only scripts over 5 ms.
+	 *
+	 * Only a frame someone could notice is counted: one an input arrived
+	 * during, or one that drew while the user was active (startedAt, in epoch
+	 * ms, at most IDLE_MS after their last input). A frame that drew nothing
+	 * held up nothing on screen, and one while the user was away froze nothing
+	 * they saw; those go to long_frame_unnoticed_*.
 	 */
-	recordLongFrame(frame: LongFrame): void {
+	recordLongFrame(frame: LongFrame, startedAt: number = this.now()): void {
 		const summary = this.state.summary;
 		const add = (cause: Cause, ms: number) => {
 			if (ms > 0) summary.causes[cause] = (summary.causes[cause] ?? 0) + ms;
@@ -298,6 +313,13 @@ export class PerformanceAccumulator {
 		const end = frame.startTime + duration;
 		const renderStart = frame.renderStart ?? 0;
 		const rendered = renderStart > 0;
+		const inputWaited = (frame.firstUIEventTimestamp ?? 0) > 0;
+		const userActive = this.activeSince !== null && startedAt <= this.lastActivityAt + IDLE_MS;
+		if (!inputWaited && !(rendered && userActive)) {
+			summary.longFrameUnnoticed += 1;
+			summary.longFrameUnnoticedMs += duration;
+			return;
+		}
 		const tasksEnd = rendered ? Math.min(end, renderStart) : end;
 		const styleStart = rendered && (frame.styleAndLayoutStart ?? 0) > 0 ? Math.min(end, frame.styleAndLayoutStart!) : end;
 		const scripts = frame.scripts ?? [];
@@ -378,7 +400,7 @@ export class PerformanceAccumulator {
 		const resources = await this.readResources().catch(() => null);
 		const openSessions = this.countOpenSessions();
 		const properties: Record<string, unknown> = {
-			measurement_schema_version: 3,
+			measurement_schema_version: 4,
 			flush_reason: reason,
 			// Never shorter than the active time, even after the clock was set back.
 			window_seconds: Math.round(Math.max(summary.activeMs, now - windowStartedAt - closedMs) / 1000),
@@ -394,6 +416,8 @@ export class PerformanceAccumulator {
 			long_frame_ms: Math.round(summary.longFrameMs),
 			long_frame_max_ms: Math.round(summary.longFrameMaxMs),
 			long_frame_no_script_count: summary.longFrameNoScript,
+			long_frame_unnoticed_count: summary.longFrameUnnoticed,
+			long_frame_unnoticed_ms: Math.round(summary.longFrameUnnoticedMs),
 			long_frame_top_cause: topCause,
 			// Left out, not undefined, when no long frame named one.
 			...(topInvoker ? { long_frame_top_invoker: topInvoker } : {}),
@@ -443,6 +467,8 @@ export type LongFrame = {
 	renderStart?: number;
 	/** When style and layout began; 0 for a frame that did not reach them. */
 	styleAndLayoutStart?: number;
+	/** When the first input queued during the frame arrived; 0 when none did. */
+	firstUIEventTimestamp?: number;
 	scripts?: ReadonlyArray<{
 		invokerType?: string;
 		/** The entry point, such as "BUTTON#send.onclick"; reduced to "BUTTON.onclick" before it is kept. */
@@ -685,7 +711,7 @@ function startRuntime(): void {
 	// during the opt-out belong to no window.
 	const frameObserver = observe("long-animation-frame", (entries) => {
 		if (!visible()) return;
-		for (const entry of entries as unknown as LongFrame[]) accumulator.recordLongFrame(entry);
+		for (const entry of entries as unknown as LongFrame[]) accumulator.recordLongFrame(entry, performance.timeOrigin + entry.startTime);
 	}, { buffered: !restarted });
 
 	const checkpoint = window.setInterval(() => {
