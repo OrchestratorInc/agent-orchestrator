@@ -389,6 +389,7 @@ type Store interface {
 	CommitClientRequestSession(ctx context.Context, id domain.SessionID) error
 	UpdateSession(ctx context.Context, rec domain.SessionRecord) error
 	UpdateSessionModel(ctx context.Context, id domain.SessionID, model string) (bool, error)
+	UpdateSessionEffort(ctx context.Context, id domain.SessionID, effort string) (bool, error)
 	RenameSessionIfDisplayName(ctx context.Context, id domain.SessionID, currentDisplayName, displayName string, updatedAt time.Time) (bool, error)
 	// UpdateSessionArtifactOutput is the only write that changes artifact_dir
 	// and session_output_type on an existing row; UpdateSession leaves them
@@ -1348,11 +1349,12 @@ func (m *Manager) Spawn(ctx context.Context, cfg ports.SpawnConfig) (result doma
 			cfg.AgentConfigResolved = true
 		}
 	}
-	// Pi and Prime Agent also resolve an effort inherited from role/project
-	// settings, so a stale level is cleared instead of reaching --thinking.
-	inheritsThinking := (cfg.Harness == domain.HarnessPi || cfg.Harness == domain.HarnessPrimeAgent) &&
-		strings.TrimSpace(agentConfig.Effort) != ""
-	if mode == domain.SessionModeTUI && (cfg.Harness == domain.HarnessClaudeCode || cfg.Harness == domain.HarnessCodex || strings.TrimSpace(cfg.AgentConfig.Effort) != "" || inheritsThinking) {
+	// Resolve inherited effort too, so a harness that cannot use it stores the
+	// provider default instead of advertising a level it never launched with.
+	// OMP already accepts inherited --thinking in its TUI adapter, but does not
+	// yet expose effort in the model catalog. Explicit effort still goes through
+	// validation, as it does for other harnesses.
+	if mode == domain.SessionModeTUI && (cfg.Harness == domain.HarnessClaudeCode || cfg.Harness == domain.HarnessCodex || strings.TrimSpace(cfg.AgentConfig.Effort) != "" || (cfg.Harness != domain.HarnessOMP && strings.TrimSpace(agentConfig.Effort) != "")) {
 		checked := BeginSpawnStep(ctx, SpawnStepModelCheck)
 		resolved, err := m.resolveTUIAgentConfig(ctx, cfg, project.Config, agentConfig)
 		checked(err)
@@ -1381,6 +1383,17 @@ func (m *Manager) Spawn(ctx context.Context, cfg ports.SpawnConfig) (result doma
 	}
 
 	asyncChat := cfg.Async && mode == domain.SessionModeChat && m.chat != nil && (cfg.Kind == domain.KindOrchestrator || cfg.Kind == domain.KindWorker)
+	resolvedSelection := agentConfig
+	if mode == domain.SessionModeChat {
+		resolvedSelection = cfg.AgentConfig
+	} else {
+		resolvedSelection.Model = resolvedModelForMetadata(cfg.Harness, agentConfig, adapterConfig)
+		// Memcode may discover a workspace-native endpoint only after this row
+		// is created. Until then its model is not resolved for the launch.
+		if cfg.Harness == domain.HarnessMemcode {
+			resolvedSelection.Model = ""
+		}
+	}
 
 	var prep *taskPreparation
 	if cfg.AutomationRunID == nil && cfg.Branch == "" {
@@ -1391,10 +1404,8 @@ func (m *Manager) Spawn(ctx context.Context, cfg ports.SpawnConfig) (result doma
 		rec = prep.record
 	} else {
 		seed := m.seedRecord(cfg, project.Config, m.clock())
-		if mode == domain.SessionModeChat {
-			seed.Metadata.Model = cfg.AgentConfig.Model
-			seed.Metadata.Effort = cfg.AgentConfig.Effort
-		}
+		seed.Metadata.Model = resolvedSelection.Model
+		seed.Metadata.Effort = resolvedSelection.Effort
 		// Visible from its first row: without this, a view that opens the session
 		// before beginAsyncChatSpawn reads a ready session with no controller.
 		if asyncChat {
@@ -1524,10 +1535,8 @@ func (m *Manager) Spawn(ctx context.Context, cfg ports.SpawnConfig) (result doma
 		seed := m.seedRecord(cfg, project.Config, m.clock())
 		seed.ID = id
 		seed.Metadata.ArtifactDir = artifactDir
-		if mode == domain.SessionModeChat {
-			seed.Metadata.Model = cfg.AgentConfig.Model
-			seed.Metadata.Effort = cfg.AgentConfig.Effort
-		}
+		seed.Metadata.Model = resolvedSelection.Model
+		seed.Metadata.Effort = resolvedSelection.Effort
 		if asyncChat {
 			seed.ProvisionState = domain.SessionProvisionProvisioning
 		}
@@ -2031,15 +2040,15 @@ func (m *Manager) resolveAgentConfigOnce(ctx context.Context, cfg ports.SpawnCon
 	resolved := applySpawnAgentConfig(base, requested)
 	modelChangedWithoutExplicitEffort := requested.Model != "" && requested.Model != base.Model &&
 		!cfg.EffortOverride && requested.Effort == ""
-	// Role or project settings may carry a stale Pi or Prime Agent effort that
-	// the selected model does not advertise. Clear that level instead of failing
+	// Role or project settings may carry a stale Pi, Prime Agent, or Open
+	// Interpreter effort that the selected model does not advertise. Clear it instead of failing
 	// the launch; terminals let the CLI judge levels the catalog cannot confirm.
 	// A level the request carries itself (a flagged override, or a nonempty effort
 	// in the spawn request) is explicit and still validated, so an unsupported
 	// choice is rejected rather than silently dropped.
-	inheritedPiEffort := !cfg.EffortOverride && strings.TrimSpace(requested.Effort) == "" &&
-		(cfg.Harness == domain.HarnessPi || cfg.Harness == domain.HarnessPrimeAgent)
-	clearUnconfirmedPiEffort := inheritedPiEffort &&
+	inheritedCatalogEffort := !cfg.EffortOverride && strings.TrimSpace(requested.Effort) == "" &&
+		(cfg.Harness == domain.HarnessPi || cfg.Harness == domain.HarnessPrimeAgent || cfg.Harness == domain.HarnessOpenInterpreter)
+	clearUnconfirmedInheritedEffort := inheritedCatalogEffort &&
 		(cfg.RequestedMode != domain.SessionModeTUI || modelChangedWithoutExplicitEffort)
 	if cfg.EffortOverride {
 		resolved.Effort = requested.Effort
@@ -2086,7 +2095,7 @@ func (m *Manager) resolveAgentConfigOnce(ctx context.Context, cfg ports.SpawnCon
 		if validateClaudeModel {
 			return ports.AgentConfig{}, fmt.Errorf("%w: model catalog is unavailable", ports.ErrModelCapabilitiesUnavailable)
 		}
-		if clearUnconfirmedPiEffort {
+		if clearUnconfirmedInheritedEffort {
 			resolved.Effort = ""
 		}
 		return resolved, nil
@@ -2109,7 +2118,7 @@ func (m *Manager) resolveAgentConfigOnce(ctx context.Context, cfg ports.SpawnCon
 			return ports.AgentConfig{}, fmt.Errorf("model catalog: %w", ctxErr)
 		}
 		NoteSpawnModel(ctx, modelID, false)
-		if modelChangedWithoutExplicitEffort || clearUnconfirmedPiEffort {
+		if modelChangedWithoutExplicitEffort || clearUnconfirmedInheritedEffort {
 			resolved.Effort = ""
 		}
 		return resolved, nil
@@ -2157,7 +2166,7 @@ func (m *Manager) resolveAgentConfigOnce(ctx context.Context, cfg ports.SpawnCon
 		// capabilities, including its default model when none was selected.
 		// Terminals preserve inherited effort for the CLI to validate.
 		// A level no Claude model accepts is still certain.
-		if clearUnconfirmedPiEffort {
+		if clearUnconfirmedInheritedEffort {
 			resolved.Effort = ""
 			return resolved, nil
 		}
@@ -2167,7 +2176,7 @@ func (m *Manager) resolveAgentConfigOnce(ctx context.Context, cfg ports.SpawnCon
 		return resolved, nil
 	}
 	if !containsString(selected.Efforts, resolved.Effort) {
-		if inheritedPiEffort {
+		if inheritedCatalogEffort {
 			resolved.Effort = ""
 			return resolved, nil
 		}
@@ -4718,6 +4727,19 @@ func (m *Manager) PersistChatModel(ctx context.Context, id domain.SessionID, mod
 	}
 	if !updated {
 		return fmt.Errorf("persist chat model %s: %w", id, ErrNotFound)
+	}
+	return nil
+}
+
+// PersistChatEffort keeps the session's durable selection in sync with the
+// effort chosen for the next Chat turn, including clearing the override.
+func (m *Manager) PersistChatEffort(ctx context.Context, id domain.SessionID, effort string) error {
+	updated, err := m.store.UpdateSessionEffort(ctx, id, strings.TrimSpace(effort))
+	if err != nil {
+		return fmt.Errorf("persist chat effort %s: %w", id, err)
+	}
+	if !updated {
+		return fmt.Errorf("persist chat effort %s: %w", id, ErrNotFound)
 	}
 	return nil
 }

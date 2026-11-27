@@ -2572,6 +2572,25 @@ func (q *Queries) UpdateSessionArtifactOutput(ctx context.Context, arg UpdateSes
 	return result.RowsAffected()
 }
 
+const updateSessionEffort = `-- name: UpdateSessionEffort :execrows
+UPDATE sessions
+SET effort = ?1
+WHERE id = ?2
+`
+
+type UpdateSessionEffortParams struct {
+	Effort string
+	ID     domain.SessionID
+}
+
+func (q *Queries) UpdateSessionEffort(ctx context.Context, arg UpdateSessionEffortParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, updateSessionEffort, arg.Effort, arg.ID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
 const updateSessionModel = `-- name: UpdateSessionModel :execrows
 UPDATE sessions
 SET model = ?1
