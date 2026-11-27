@@ -35,6 +35,11 @@ const NCURSES = {
 	name: "ncurses",
 	version: "6.5",
 	url: "https://invisible-mirror.net/archives/ncurses/ncurses-6.5.tar.gz",
+	urls: [
+		"https://invisible-mirror.net/archives/ncurses/ncurses-6.5.tar.gz",
+		"https://ftpmirror.gnu.org/gnu/ncurses/ncurses-6.5.tar.gz",
+		"https://ftp.gnu.org/gnu/ncurses/ncurses-6.5.tar.gz",
+	],
 	sha256: "136d91bc269a9a5785e5f9e980bc76ab57428f604ce3e5a5a90cebc767971cc6",
 	directory: "ncurses-6.5",
 	license: "COPYING",
@@ -230,19 +235,22 @@ async function download(source) {
 	rmSync(archive, { force: true });
 	const part = `${archive}.part-${process.pid}`;
 	console.log(`Downloading ${source.name} ${source.version}...`);
+	const urls = source.urls || [source.url];
 	let lastError;
-	for (let attempt = 1; attempt <= 3; attempt += 1) {
-		rmSync(part, { force: true });
-		try {
-			const response = await fetch(source.url, { redirect: "follow" });
-			if (!response.ok) throw new Error(`HTTP ${response.status}`);
-			writeFileSync(part, Buffer.from(await response.arrayBuffer()));
-			if (sha256(part) !== source.sha256) throw new Error("sha256 mismatch");
-			renameSync(part, archive);
-			return;
-		} catch (error) {
-			lastError = error;
-			if (attempt < 3) await new Promise((resolveDelay) => setTimeout(resolveDelay, attempt * 1000));
+	for (const url of urls) {
+		for (let attempt = 1; attempt <= 3; attempt += 1) {
+			rmSync(part, { force: true });
+			try {
+				const response = await fetch(url, { redirect: "follow" });
+				if (!response.ok) throw new Error(`HTTP ${response.status}`);
+				writeFileSync(part, Buffer.from(await response.arrayBuffer()));
+				if (sha256(part) !== source.sha256) throw new Error("sha256 mismatch");
+				renameSync(part, archive);
+				return;
+			} catch (error) {
+				lastError = error;
+				if (attempt < 3) await new Promise((resolveDelay) => setTimeout(resolveDelay, attempt * 1000));
+			}
 		}
 	}
 	rmSync(part, { force: true });

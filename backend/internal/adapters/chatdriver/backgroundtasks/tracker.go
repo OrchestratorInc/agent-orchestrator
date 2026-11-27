@@ -4,6 +4,7 @@
 package backgroundtasks
 
 import (
+	"log/slog"
 	"sort"
 	"sync"
 	"time"
@@ -16,6 +17,10 @@ import (
 // Callers retain it across turns and reconstruct it from provider replay after
 // reconnect. A read of this tracker alone is always a partial inventory.
 type Tracker struct {
+	SessionID string
+	Store     Store
+	Log       *slog.Logger
+
 	mu    sync.Mutex
 	tasks map[string]ports.ChatBackgroundTask
 	// Last explicit event per task, so a missed completion cannot hold the
@@ -57,6 +62,21 @@ func (t *Tracker) Update(task ports.ChatBackgroundTask, now time.Time) {
 	sameRun := exists && (task.RunID == "" || old.RunID == "" || task.RunID == old.RunID)
 	if sameRun && old.StartedAt != nil && (task.StartedAt == nil || old.StartedAt.Before(*task.StartedAt)) {
 		task.StartedAt = old.StartedAt
+	}
+	if t.Store != nil && t.SessionID != "" {
+		if stored, ok := t.Store.GetStartedAt(t.SessionID, task.ID, runID); ok && !stored.IsZero() {
+			if task.StartedAt == nil || stored.Before(*task.StartedAt) {
+				task.StartedAt = &stored
+			} else if task.StartedAt != nil && task.StartedAt.Before(stored) {
+				if err := t.Store.SetStartedAt(t.SessionID, task.ID, runID, *task.StartedAt); err != nil {
+					t.logError("persist task start time failed", "sessionID", t.SessionID, "taskID", task.ID, "runID", runID, "error", err)
+				}
+			}
+		} else if task.StartedAt != nil && !task.StartedAt.IsZero() {
+			if err := t.Store.SetStartedAt(t.SessionID, task.ID, runID, *task.StartedAt); err != nil {
+				t.logError("persist task start time failed", "sessionID", t.SessionID, "taskID", task.ID, "runID", runID, "error", err)
+			}
+		}
 	}
 	if task.RunID == "" {
 		task.RunID = old.RunID
@@ -160,6 +180,22 @@ func (t *Tracker) Snapshot(now time.Time) []ports.ChatBackgroundTask {
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].ID < out[j].ID })
 	return out
+}
+
+func (t *Tracker) logError(msg string, args ...any) {
+	if t.Log != nil {
+		t.Log.Error(msg, args...)
+	} else {
+		slog.Default().Error(msg, args...)
+	}
+}
+
+// Get returns the tracked task for the given task ID, if any.
+func (t *Tracker) Get(id string) (ports.ChatBackgroundTask, bool) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	task, ok := t.tasks[id]
+	return task, ok
 }
 
 // Caller holds mu. Keep only identities, not expired labels or timestamps.

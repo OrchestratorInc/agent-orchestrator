@@ -89,6 +89,7 @@ type toolState struct {
 	rawOutput      any
 	meta           map[string]any
 	terminalOutput string
+	startedAt      time.Time
 }
 
 type nestedMessageState struct {
@@ -97,6 +98,8 @@ type nestedMessageState struct {
 }
 
 type conversation struct {
+	aoSessionID          domain.SessionID
+	dataDir              string
 	harness              domain.AgentHarness
 	suppressSessionModes bool
 	backgroundObserved   backgroundtasks.Tracker

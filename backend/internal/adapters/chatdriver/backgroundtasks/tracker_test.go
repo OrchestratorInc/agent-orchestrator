@@ -1,6 +1,10 @@
 package backgroundtasks
 
 import (
+	"encoding/json"
+	"fmt"
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -138,5 +142,220 @@ func TestInventoryDoesNotInventStartTime(t *testing.T) {
 	tracker.ReconcileShells([]ports.ChatBackgroundTask{{ID: "late", Kind: "shell", State: "running"}}, time.Now())
 	if tasks := tracker.Snapshot(time.Now()); len(tasks) != 1 || tasks[0].StartedAt != nil {
 		t.Fatal(tasks)
+	}
+}
+
+func TestPersistedStartedAtSurvivesTrackerRebuild(t *testing.T) {
+	dir := t.TempDir()
+	store := NewFileStore(dir)
+	sessionID := "ses-1"
+	t1 := Tracker{SessionID: sessionID, Store: store}
+
+	startTime := time.Now().Add(-10 * time.Minute).Truncate(time.Millisecond).UTC()
+	t1.Update(ports.ChatBackgroundTask{
+		ID:        "task-1",
+		RunID:     "run-1",
+		Kind:      "shell",
+		State:     "running",
+		StartedAt: &startTime,
+	}, startTime)
+
+	// Rebuild tracker simulating daemon restart or chat reconnect with fresh in-memory state.
+	t2 := Tracker{SessionID: sessionID, Store: NewFileStore(dir)}
+	// Later reading or replay with newer timestamp must keep the persisted start time.
+	now := time.Now().Truncate(time.Millisecond).UTC()
+	t2.Update(ports.ChatBackgroundTask{
+		ID:        "task-1",
+		RunID:     "run-1",
+		Kind:      "shell",
+		State:     "running",
+		StartedAt: &now,
+	}, now)
+
+	tasks := t2.Snapshot(now)
+	if len(tasks) != 1 {
+		t.Fatalf("expected 1 task, got %d", len(tasks))
+	}
+	if tasks[0].StartedAt == nil || !tasks[0].StartedAt.Equal(startTime) {
+		t.Fatalf("StartedAt was not restored from store: got %v, want %v", tasks[0].StartedAt, startTime)
+	}
+
+	// Also verify ReconcileShells without a start time restores persisted start time.
+	t3 := Tracker{SessionID: sessionID, Store: NewFileStore(dir)}
+	t3.ReconcileShells([]ports.ChatBackgroundTask{{
+		ID:    "task-1",
+		RunID: "run-1",
+		Kind:  "shell",
+		State: "running",
+	}}, now)
+	tasks = t3.Snapshot(now)
+	if len(tasks) != 1 || tasks[0].StartedAt == nil || !tasks[0].StartedAt.Equal(startTime) {
+		t.Fatalf("ReconcileShells did not restore persisted StartedAt: %+v", tasks)
+	}
+}
+
+func TestNewRunIDResetsElapsedTime(t *testing.T) {
+	store := NewMemoryStore()
+	sessionID := "ses-1"
+	tracker := Tracker{SessionID: sessionID, Store: store}
+
+	startTime1 := time.Now().Add(-5 * time.Minute).Truncate(time.Millisecond).UTC()
+	tracker.Update(ports.ChatBackgroundTask{
+		ID:        "task-1",
+		RunID:     "run-1",
+		Kind:      "shell",
+		State:     "running",
+		StartedAt: &startTime1,
+	}, startTime1)
+
+	tasks := tracker.Snapshot(startTime1)
+	if len(tasks) != 1 || tasks[0].StartedAt == nil || !tasks[0].StartedAt.Equal(startTime1) {
+		t.Fatalf("run-1 start time incorrect: %+v", tasks)
+	}
+
+	// New run of the same task ID starts from zero (its own new start time).
+	startTime2 := time.Now().Truncate(time.Millisecond).UTC()
+	tracker.Update(ports.ChatBackgroundTask{
+		ID:        "task-1",
+		RunID:     "run-2",
+		Kind:      "shell",
+		State:     "running",
+		StartedAt: &startTime2,
+	}, startTime2)
+
+	tasks = tracker.Snapshot(startTime2)
+	if len(tasks) != 1 || tasks[0].StartedAt == nil || !tasks[0].StartedAt.Equal(startTime2) {
+		t.Fatalf("run-2 did not reset start time: got %v, want %v", tasks[0].StartedAt, startTime2)
+	}
+}
+
+func TestStartedAtStaysUnsetWhenNoStartTimeAvailable(t *testing.T) {
+	store := NewMemoryStore()
+	sessionID := "ses-1"
+	tracker := Tracker{SessionID: sessionID, Store: store}
+
+	now := time.Now()
+	tracker.Update(ports.ChatBackgroundTask{
+		ID:    "unknown-start",
+		RunID: "run-x",
+		Kind:  "shell",
+		State: "running",
+	}, now)
+
+	tasks := tracker.Snapshot(now)
+	if len(tasks) != 1 {
+		t.Fatalf("expected 1 task, got %d", len(tasks))
+	}
+	if tasks[0].StartedAt != nil {
+		t.Fatalf("expected StartedAt to stay nil, got %v", tasks[0].StartedAt)
+	}
+}
+
+func TestFileStoreRollsBackCacheOnSaveFailure(t *testing.T) {
+	dir := t.TempDir()
+	store := NewFileStore(dir)
+	// Create a regular file where the chat-hosts directory would be, causing save to fail.
+	blocker := filepath.Join(dir, "chat-hosts")
+	if err := os.WriteFile(blocker, []byte("blocker"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	at := time.Now().UTC()
+	err := store.SetStartedAt("ses-fail", "task-1", "run-1", at)
+	if err == nil {
+		t.Fatal("expected save error")
+	}
+
+	// Verify cache does not retain the failed write.
+	if _, ok := store.GetStartedAt("ses-fail", "task-1", "run-1"); ok {
+		t.Fatal("cache retained entry after save failure")
+	}
+}
+
+func TestFileStoreLoadErrorDoesNotCacheEmptyMapAndDoesNotOverwrite(t *testing.T) {
+	dir := t.TempDir()
+	sessionID := "ses-corrupt"
+	sessionDir := filepath.Join(dir, "chat-hosts", sessionID)
+	if err := os.MkdirAll(sessionDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	taskFile := filepath.Join(sessionDir, "background-tasks.json")
+	corruptContent := []byte("{invalid json corrupt content")
+	if err := os.WriteFile(taskFile, corruptContent, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	store := NewFileStore(dir)
+
+	// GetStartedAt should fail gracefully without caching an empty map.
+	if _, ok := store.GetStartedAt(sessionID, "task-1", "run-1"); ok {
+		t.Fatal("expected GetStartedAt to return false on corrupt file")
+	}
+
+	// SetStartedAt should fail and NOT overwrite the existing file.
+	at := time.Now().UTC()
+	err := store.SetStartedAt(sessionID, "task-2", "run-2", at)
+	if err == nil {
+		t.Fatal("expected SetStartedAt to fail on corrupt file")
+	}
+
+	// Verify the original file was NOT overwritten.
+	content, err := os.ReadFile(taskFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(content) != string(corruptContent) {
+		t.Fatalf("corrupted file was overwritten: got %q, want %q", string(content), string(corruptContent))
+	}
+}
+
+func TestNewFileStoreSharedPerDataDir(t *testing.T) {
+	dir := t.TempDir()
+	s1 := NewFileStore(dir)
+	s2 := NewFileStore(dir)
+	if s1 != s2 {
+		t.Fatalf("expected NewFileStore to return singleton instance for the same dataDir: %p != %p", s1, s2)
+	}
+}
+
+func TestFileStorePrunesOldAndExcessRecords(t *testing.T) {
+	dir := t.TempDir()
+	sessionID := "ses-prune"
+	store := NewFileStore(dir)
+
+	now := time.Now().UTC()
+	oldTime := now.Add(-10 * 24 * time.Hour) // > 7 days ago
+
+	// Add an expired record.
+	if err := store.SetStartedAt(sessionID, "old-task", "run-old", oldTime); err != nil {
+		t.Fatal(err)
+	}
+
+	// Add 260 tasks newer than maxPersistedAge.
+	for i := 0; i < 260; i++ {
+		taskID := fmt.Sprintf("task-%03d", i)
+		taskTime := now.Add(time.Duration(i) * time.Minute)
+		if err := store.SetStartedAt(sessionID, taskID, "run-1", taskTime); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	// Old task should have been pruned.
+	if _, ok := store.GetStartedAt(sessionID, "old-task", "run-old"); ok {
+		t.Fatal("expected old-task (> 7 days) to be pruned")
+	}
+
+	// Check that file contains at most maxPersistedRecords (256).
+	taskFile := filepath.Join(dir, "chat-hosts", sessionID, "background-tasks.json")
+	data, err := os.ReadFile(taskFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var records []persistedTaskRecord
+	if err := json.Unmarshal(data, &records); err != nil {
+		t.Fatal(err)
+	}
+	if len(records) > maxPersistedRecords {
+		t.Fatalf("expected at most %d records, got %d", maxPersistedRecords, len(records))
 	}
 }

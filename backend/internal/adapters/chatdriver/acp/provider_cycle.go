@@ -388,8 +388,12 @@ func (c *conversation) keepToolsOutlivingTurn(interrupted bool, resp acpsdk.Prom
 		if description == "" {
 			description = tool.title
 		}
+		var startPtr *time.Time
+		if !tool.startedAt.IsZero() {
+			startPtr = &tool.startedAt
+		}
 		c.backgroundObserved.Update(ports.ChatBackgroundTask{ID: tool.id, RunID: tool.id, Kind: kind,
-			Description: description, Command: command, State: "running", StartedAt: &now}, now)
+			Description: description, Command: command, State: "running", StartedAt: startPtr}, now)
 	}
 	return kept
 }

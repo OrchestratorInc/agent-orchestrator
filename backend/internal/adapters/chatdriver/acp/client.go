@@ -852,12 +852,17 @@ func (c *conversation) processUpdate(params acpsdk.SessionNotification) error {
 			emit(ports.ChatEvent{Kind: ports.ChatEventReasoningDelta, ProviderTurnID: turnID, ProviderItemID: id, Delta: delta})
 		}
 	case update.ToolCall != nil:
+		var startedAt time.Time
+		if !replaying && (c.proc == nil || !c.proc.reconnected || turnID != "") {
+			startedAt = time.Now()
+		}
 		tool := &toolState{
 			id: string(update.ToolCall.ToolCallId), title: update.ToolCall.Title,
 			kind: update.ToolCall.Kind, status: update.ToolCall.Status,
 			locations: update.ToolCall.Locations, content: update.ToolCall.Content,
 			rawInput: update.ToolCall.RawInput, rawOutput: update.ToolCall.RawOutput,
-			meta: cloneMeta(update.ToolCall.Meta),
+			meta:      cloneMeta(update.ToolCall.Meta),
+			startedAt: startedAt,
 		}
 		c.mu.Lock()
 		c.tools[tool.id] = tool
@@ -964,6 +969,9 @@ func (c *conversation) mergeToolUpdate(update *acpsdk.SessionToolCallUpdate) *to
 	if tool == nil {
 		tool = &toolState{id: id}
 		c.tools[id] = tool
+	}
+	if tool.startedAt.IsZero() && !c.historyReplayActive() && (c.proc == nil || !c.proc.reconnected || c.activeTurn != "") {
+		tool.startedAt = time.Now()
 	}
 	if update.Title != nil {
 		tool.title = *update.Title
