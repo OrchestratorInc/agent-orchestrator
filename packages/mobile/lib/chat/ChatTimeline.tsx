@@ -44,7 +44,7 @@ import { userMessageSurfaceStyle } from "./chatChrome";
 import { MenuRowWidthScope, useMenuRowWidth } from "../useMenuRowWidth";
 import { requestPresentation } from "./chatPresentation";
 import { workingElapsedLabel } from "./conversationChrome";
-import { errorActivityDuplicatesTurn, providerErrorCopy, sameSentence, turnErrorCopy } from "./providerError";
+import { errorActivityDuplicatesTurn, providerErrorCopy, turnErrorCopy } from "./providerError";
 import { ElicitationAction, ElicitationActionRow } from "./elicitation-native-controls";
 import { primaryDecisionId } from "./approvalDecisions";
 import { ElicitationInputField } from "./ElicitationInputField";
@@ -1365,11 +1365,7 @@ function TurnSummary({ turn, plan, replyText }: { turn: ConversationTurn; plan?:
 	// Nothing to show draws nothing: an empty one still padded every turn's end,
 	// most of the gap between a reply and the next prompt.
 	// A usage limit gets its own notice, which carries the provider's message.
-	// Its message is dropped when the reply already said it, as a cloud Claude
-	// worker's reply does.
-	const usageLimited = turn.state === "failed" && turn.usageLimit
-		? { ...turn, usageLimit: turn.usageLimit, errorMessage: turn.errorMessage && replyText && sameSentence(replyText, turn.errorMessage) ? undefined : turn.errorMessage }
-		: undefined;
+	const usageLimited = turn.state === "failed" && turn.usageLimit ? { ...turn, usageLimit: turn.usageLimit } : undefined;
 	if (!plan && !results.artifacts.length && !results.files.length && !turn.errorMessage && !usageLimited) return null;
 	return (
 		<View style={styles.turnWrap}>

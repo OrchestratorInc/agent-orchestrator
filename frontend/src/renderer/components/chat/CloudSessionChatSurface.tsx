@@ -57,7 +57,7 @@ import type { ApprovalModeLimits } from "./TurnSettingsBar";
 import { SharedComposerNotice } from "./SharedComposerNotice";
 import { Button } from "../ui/button";
 import { artifactAtPath } from "../../../../../packages/shared/artifacts/deliverables";
-import { usageLimitSentence } from "../../../../../packages/shared/chat/usage-limit";
+import { sameSentence, usageLimitSentence } from "../../../../../packages/shared/chat/usage-limit";
 
 type EventPayload = {
 	attempt?: unknown;
@@ -1469,9 +1469,17 @@ export function toSnapshot(session: WorkspaceSession, events: CloudCpClientEvent
 	}
 	const hasRunningTurn = orderedTurns.some((turn) => turn.state === "running");
 	const activeTurn = orderedTurns.find((turn) => turn.state === "running");
+	// A cloud Claude worker also sends its quota refusal as the turn's reply. A
+	// local turn has no reply there, only the usage-limit outcome carrying the
+	// sentence, so the echo is dropped and the two read the same.
+	const echoesLimit = (item: ConversationItem) => {
+		if (item.kind !== "message" || item.role !== "assistant" || !item.turnId) return false;
+		const turn = turns.get(item.turnId);
+		return Boolean(turn?.usageLimit && turn.errorMessage && sameSentence(item.text, turn.errorMessage));
+	};
 	return {
 		conversationId: `cloud:${session.id}`, sessionId: session.id, harness: session.provider, mode: "chat",
-		controller: { state: hasRunningTurn ? "busy" : "ready" }, turns: orderedTurns, items: shownItems,
+		controller: { state: hasRunningTurn ? "busy" : "ready" }, turns: orderedTurns, items: shownItems.filter((item) => !echoesLimit(item)),
 		latestSequence: events.at(-1)?.sequence ?? 0, oldestSequence: events[0]?.sequence ?? 1,
 		hasMoreBefore: partial, settings: {}, capabilities: activeTurn && steerableTurns.has(activeTurn.id) ? ["steer"] : [],
 		...(usage ? { usage } : {}),

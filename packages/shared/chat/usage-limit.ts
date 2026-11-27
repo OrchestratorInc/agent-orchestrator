@@ -36,6 +36,12 @@ export function usageLimitSentence(error: string): string | undefined {
 	return undefined;
 }
 
+/** Whether two provider sentences say the same thing, ignoring quotes and spacing. */
+export function sameSentence(a: string, b: string): boolean {
+	const norm = (value: string) => value.replace(/’/g, "'").replace(/\s+/g, " ").trim().toLowerCase();
+	return Boolean(a) && norm(a) === norm(b);
+}
+
 // The first "message" string in the text, less the "Internal error: " a
 // JSON-RPC -32603 answer puts ahead of the provider's own words.
 function jsonRpcMessage(raw: string): string | undefined {

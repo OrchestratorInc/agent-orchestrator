@@ -127,10 +127,7 @@ function stripRpcErrorPrefix(message: string): string {
 	return message.replace(/^internal error(?::\s*|\s*$)/i, "").trim();
 }
 
-/** Whether two provider sentences say the same thing, ignoring quotes and spacing. */
-export function sameSentence(a: string, b: string): boolean {
-	const norm = (value: string) => value.replace(/[’]/g, "'").replace(/\s+/g, " ").trim().toLowerCase();
-	return Boolean(a) && norm(a) === norm(b);
-}
 
-export { usageLimitSentence } from "../../../shared/chat/usage-limit";
+import { sameSentence } from "../../../shared/chat/usage-limit";
+
+export { sameSentence, usageLimitSentence } from "../../../shared/chat/usage-limit";
