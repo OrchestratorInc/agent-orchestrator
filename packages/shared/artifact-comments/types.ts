@@ -18,6 +18,27 @@ export const ARTIFACT_COMMENT_PATH_PATTERN = /^body(>[A-Za-z][A-Za-z0-9-]*:[1-9]
 export const ARTIFACT_COMMENT_TAG_PATTERN = /^[A-Za-z][A-Za-z0-9-]*$/;
 export const ARTIFACT_COMMENT_TEXT_HASH_PATTERN = /^[0-9a-f]{16}$/;
 
+/**
+ * What a thread is on. Absent on the wire means "element" (HTML and Markdown
+ * pages, the original kind); a new client writes element anchors without it,
+ * so they stay byte-identical to the original ones.
+ */
+export type ArtifactCommentAnchorKind = "element" | "lines" | "image" | "video";
+export const ARTIFACT_COMMENT_ANCHOR_KINDS: readonly ArtifactCommentAnchorKind[] = ["element", "lines", "image", "video"];
+/** The highest line (or table row) number a lines anchor may name. */
+export const ARTIFACT_COMMENT_MAX_LINE = 1_000_000;
+/** The latest moment, in seconds, a video anchor may name (100 hours). */
+export const ARTIFACT_COMMENT_MAX_TIME_SECONDS = 360_000;
+
+/** 1-based lines of a text page (data rows of a table page), first and last included. */
+export type ArtifactCommentLineRange = { start: number; end: number };
+
+/**
+ * A point (w = h = 0) or rectangle of a picture, as fractions (0..1) of its
+ * width and height from its top-left corner, so it holds at any size.
+ */
+export type ArtifactCommentRegion = { x: number; y: number; w: number; h: number };
+
 export type ArtifactCommentAnchor = {
 	path: string;
 	tag: string;
@@ -25,6 +46,14 @@ export type ArtifactCommentAnchor = {
 	textHash: string;
 	/** ≤120 chars of the element's text; for the agent message only, never shown in the UI. */
 	excerpt: string;
+	/** Absent for an element. lines: path/tag/textHash describe the first line. */
+	kind?: ArtifactCommentAnchorKind;
+	/** kind "lines" only. */
+	lines?: ArtifactCommentLineRange;
+	/** kind "video" only (required there): seconds from the start. */
+	time?: number;
+	/** kind "image" (required) or "video" (optional). */
+	region?: ArtifactCommentRegion;
 };
 
 /**
@@ -122,10 +151,59 @@ export function artifactCommentBodyProblem(body: string): ArtifactCommentBodyPro
 	return null;
 }
 
+export function isArtifactCommentLineRange(value: unknown): value is ArtifactCommentLineRange {
+	if (typeof value !== "object" || value === null) return false;
+	const { start, end } = value as Record<string, unknown>;
+	return (
+		Number.isInteger(start) &&
+		Number.isInteger(end) &&
+		(start as number) >= 1 &&
+		(start as number) <= (end as number) &&
+		(end as number) <= ARTIFACT_COMMENT_MAX_LINE
+	);
+}
+
+const fraction = (value: unknown): value is number => typeof value === "number" && Number.isFinite(value) && value >= 0 && value <= 1;
+/** Rounding slack for x + w and y + h. */
+const REGION_EPSILON = 1e-6;
+
+export function isArtifactCommentRegion(value: unknown): value is ArtifactCommentRegion {
+	if (typeof value !== "object" || value === null) return false;
+	const { x, y, w, h } = value as Record<string, unknown>;
+	return fraction(x) && fraction(y) && fraction(w) && fraction(h) && x + w <= 1 + REGION_EPSILON && y + h <= 1 + REGION_EPSILON;
+}
+
+export function isArtifactCommentTime(value: unknown): value is number {
+	return typeof value === "number" && Number.isFinite(value) && value >= 0 && value <= ARTIFACT_COMMENT_MAX_TIME_SECONDS;
+}
+
+/**
+ * Whether the kind-specific fields fit the kind: lines only on "lines",
+ * region on "image" (required) or "video", time on "video" (required). An
+ * unknown kind is not an anchor this client knows, so it fails.
+ */
+function kindFieldsValid(anchor: Record<string, unknown>): boolean {
+	const kind = anchor.kind === undefined ? "element" : anchor.kind;
+	const has = (key: string) => anchor[key] !== undefined;
+	switch (kind) {
+		case "element":
+			return !has("lines") && !has("time") && !has("region");
+		case "lines":
+			return isArtifactCommentLineRange(anchor.lines) && !has("time") && !has("region");
+		case "image":
+			return isArtifactCommentRegion(anchor.region) && !has("lines") && !has("time");
+		case "video":
+			return isArtifactCommentTime(anchor.time) && (!has("region") || isArtifactCommentRegion(anchor.region)) && !has("lines");
+		default:
+			return false;
+	}
+}
+
 export function isArtifactCommentAnchor(value: unknown): value is ArtifactCommentAnchor {
 	if (typeof value !== "object" || value === null) return false;
 	const anchor = value as Record<string, unknown>;
 	return (
+		kindFieldsValid(anchor) &&
 		typeof anchor.path === "string" &&
 		anchor.path.length <= ARTIFACT_COMMENT_MAX_PATH_LENGTH &&
 		ARTIFACT_COMMENT_PATH_PATTERN.test(anchor.path) &&

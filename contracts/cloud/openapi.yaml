@@ -10331,8 +10331,10 @@ components:
       required: [path, tag, textHash, excerpt]
       description: >-
         The element a thread is on, as the comment bridge on the share host
-        reports it. A version's bytes never change, so a path recorded on a
-        version always points at the same element of that version.
+        reports it, or for the kinds added later a line range, an image point
+        or region, or a video moment. A version's bytes never change, so a
+        path recorded on a version always points at the same element of that
+        version.
       properties:
         path:
           type: string
@@ -10362,6 +10364,73 @@ components:
           description: >-
             Up to 120 characters of the element's text, kept for the agent
             message and diagnostics. Never shown in the comments UI.
+        kind:
+          type: string
+          enum: [element, lines, image, video]
+          description: >-
+            What the thread is on. Absent means element: an element of an
+            HTML or rendered Markdown page, picked by the comment bridge.
+            lines: a line or range of lines of a text page (rows of a table
+            page); path, tag, textHash and excerpt describe the first line and
+            lines holds the range. image: a point or rectangle of an image
+            (region). video: a moment of a video (time), optionally a point or
+            rectangle of that frame (region). For image and video the path is
+            body>img:1 or body>video:1, the tag img or video, the textHash
+            that of empty text (e3b0c44298fc1c14) and the excerpt empty.
+            Clients skip threads whose kind they don't know. lines only with
+            kind lines; region only with image (required) or video
+            (optional); time only with video (required).
+        lines:
+          $ref: "#/components/schemas/ArtifactShareCommentLineRange"
+        time:
+          type: number
+          minimum: 0
+          maximum: 360000
+          description: Seconds from the start of the video, for kind video.
+        region:
+          $ref: "#/components/schemas/ArtifactShareCommentRegion"
+    ArtifactShareCommentLineRange:
+      type: object
+      additionalProperties: false
+      required: [start, end]
+      description: >-
+        1-based line numbers of a text page, first and last included (for a
+        table page, data rows in file order, the header not counted).
+      properties:
+        start:
+          type: integer
+          minimum: 1
+          maximum: 1000000
+        end:
+          type: integer
+          minimum: 1
+          maximum: 1000000
+          description: At least start.
+    ArtifactShareCommentRegion:
+      type: object
+      additionalProperties: false
+      required: [x, y, w, h]
+      description: >-
+        A point or rectangle as fractions of the picture's width and height
+        (0 to 1), from its top-left corner, so it holds at any display size.
+        w and h of 0 make a point. x + w and y + h are at most 1.
+      properties:
+        x:
+          type: number
+          minimum: 0
+          maximum: 1
+        y:
+          type: number
+          minimum: 0
+          maximum: 1
+        w:
+          type: number
+          minimum: 0
+          maximum: 1
+        h:
+          type: number
+          minimum: 0
+          maximum: 1
     ArtifactShareCommentAuthor:
       type: object
       additionalProperties: false
