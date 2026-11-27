@@ -46,6 +46,7 @@ func TestCommandErrorFailureCause(t *testing.T) {
 		{"fatal: not a git repository (or any of the parent directories): .git", exitErr, "not_a_repo"},
 		{"fatal: detected dubious ownership in repository at '/r'", exitErr, "unsafe_repo"},
 		{"fatal: cannot change to '/gone': No such file or directory", exitErr, "repo_missing"},
+		{"fatal: cannot change to '/r': Permission denied", exitErr, "permission"},
 		{"error: unable to write file: No space left on device", exitErr, "disk_full"},
 		{"error: unable to unlink old 'a.txt': Device or resource busy", exitErr, "in_use"},
 		{"error: object file .git/objects/ab/cd is empty\nfatal: loose object abcd is corrupt", exitErr, "repo_corrupt"},

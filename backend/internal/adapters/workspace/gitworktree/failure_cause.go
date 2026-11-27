@@ -69,8 +69,6 @@ func classifyGitFailure(output string, err error) string {
 		return "not_a_repo"
 	case has("dubious ownership", "unsafe repository", "safe.directory"):
 		return "unsafe_repo"
-	case has("cannot change to"):
-		return "repo_missing"
 	case has("file name too long", "filename too long"):
 		return "path_too_long"
 	case has("no space left on device", "disk quota exceeded", "not enough space on the disk"):
@@ -79,6 +77,10 @@ func classifyGitFailure(output string, err error) string {
 		return "permission"
 	case has("device or resource busy", "being used by another process"):
 		return "in_use"
+	// After the permission and disk checks: git cannot enter a folder that
+	// exists but is unreadable either, and that is not a missing repository.
+	case has("cannot change to"):
+		return "repo_missing"
 	// git's own phrasings, with spaces no branch name can contain, so a
 	// quoted branch such as 'fix-corrupt-cache' is not read as corruption.
 	case has(" is corrupt", "index file corrupt", "bad object ", "bad signature"):
