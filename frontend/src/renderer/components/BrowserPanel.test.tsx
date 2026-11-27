@@ -41,6 +41,7 @@ vi.mock("../lib/api-client", () => ({
 vi.mock("../lib/host-clients", () => ({ clientForSessionHost: () => ({ POST: postMock }) }));
 
 const hookState = vi.hoisted(() => ({
+	recordingViewport: null as { width: number; height: number; mobile: boolean } | null,
 	navigate: vi.fn(),
 	goBack: vi.fn(),
 	goForward: vi.fn(),
@@ -125,6 +126,7 @@ vi.mock("../hooks/useBrowserView", () => ({
 			annotationState: hookState.annotationState,
 			setAnnotationMode: hookState.setAnnotationMode,
 			annotationAction: hookState.annotationAction,
+			recordingViewport: hookState.recordingViewport,
 		};
 	},
 }));
@@ -381,6 +383,40 @@ describe("BrowserPanel", () => {
 
 		expect(hookState.navigate).toHaveBeenCalledWith("localhost:5173");
 		expect(input).not.toHaveFocus();
+	});
+
+	it("opens the page in a separate window", async () => {
+		const onOpenWindow = vi.fn();
+		render(<BrowserPanel active onOpenWindow={onOpenWindow} onTogglePopOut={() => undefined} poppedOut={false} session={session} />);
+		// Maximize stays beside it.
+		expect(screen.getByRole("button", { name: "Maximize" })).toBeInTheDocument();
+		await userEvent.click(screen.getByRole("button", { name: "Open in new window" }));
+		expect(onOpenWindow).toHaveBeenCalledTimes(1);
+	});
+
+	it("says where the page is while a sized recording lays it out", () => {
+		hookState.navState = { ...hookState.navState, url: "https://example.com/" };
+		hookState.recordingViewport = { width: 390, height: 844, mobile: true };
+		try {
+			render(<BrowserPanel active onTogglePopOut={() => undefined} poppedOut={false} session={session} />);
+			expect(screen.getByTestId("browser-recording-elsewhere")).toHaveTextContent(
+				"Recording at 390×844. The page shows here again when the recording stops.",
+			);
+			expect(screen.getByTestId("browser-viewport")).toHaveAttribute("data-placeholder", "true");
+		} finally {
+			hookState.recordingViewport = null;
+		}
+	});
+
+	it("offers no separate window without native pages to move", () => {
+		const browser = window.ao!.browser as { nativeCompositionEnabled: boolean };
+		browser.nativeCompositionEnabled = false;
+		try {
+			render(<BrowserPanel active onOpenWindow={() => undefined} onTogglePopOut={() => undefined} poppedOut={false} session={session} />);
+			expect(screen.queryByRole("button", { name: "Open in new window" })).not.toBeInTheDocument();
+		} finally {
+			browser.nativeCompositionEnabled = true;
+		}
 	});
 
 	it("toggles find-in-page, searches as text changes, and supports keyboard navigation", async () => {

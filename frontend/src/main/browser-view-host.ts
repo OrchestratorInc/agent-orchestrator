@@ -68,6 +68,19 @@ import { trustPreviewCertificate } from "./preview-certificate";
 import { REMOTE_TAB_REPORT, parseRemoteTabReport, type RemoteTabReport } from "../shared/remote-tab";
 import type { ActCandidate } from "./browser-act-matcher";
 import { BrowserScreencast } from "./browser-screencast";
+import { MAX_BROWSER_VIEWPORT, resolveBrowserViewport } from "../shared/browser-device-presets";
+import {
+  BrowserRecording,
+  DEFAULT_RECORDING_FPS,
+  DEFAULT_RECORDING_MAX_SECONDS,
+  MAX_RECORDING_BYTES,
+  MAX_RECORDING_FPS,
+  MAX_RECORDING_MAX_SECONDS,
+  type BrowserRecordingResult,
+  type BrowserRecordingStopReason,
+  type BrowserRecordingStore,
+  type CreateBrowserRecordingEncoder,
+} from "./browser-recording";
 import { type BrowserSiteBlock, canOpenInUserBrowser, classifySiteResponse } from "../shared/browser-site-block";
 import type { UserBrowser } from "./user-browser";
 import type {
@@ -242,6 +255,8 @@ type BrowserBoundsInput = {
   revision: number;
   rect: BrowserRect;
   visible: boolean;
+  // Measured in the session's own Browser window rather than the app window.
+  surface?: "window";
 };
 
 type BrowserNavigateInput = {
@@ -530,6 +545,16 @@ type BrowserWindowLike = {
   isVisible?: () => boolean;
 };
 
+/**
+ * A separate OS window a session's Browser panel was moved into. Its page views
+ * live in this window's content view instead of the app window's until it is
+ * released.
+ */
+export type BrowserSessionWindow = BrowserWindowLike & {
+  /** Keep the window's raised shell above a page view just added to it. */
+  onNativeViewAdded?: () => void;
+};
+
 type ShellLike = {
   openExternal: (url: string) => Promise<void>;
 };
@@ -583,6 +608,24 @@ export type BrowserViewHostOptions = {
   // keep a raised shell (open dialog/notice) above the new view.
   onNativeViewAdded?: () => void;
   onTabCloseFailure?: (failure: BrowserCloseFailure) => void;
+  // Close a session's separate window (its session closed, or a recording
+  // that opened it stopped). Its views come back through releaseWindow.
+  closeSessionWindow?: (viewId: string) => void;
+  // Ask the app shell to open a session's separate window, for a recording.
+  // Without it, a recording captures the page off screen instead.
+  requestSessionWindow?: (viewId: string, sessionId: string) => void;
+  // Size a session's open window for a recording's viewport, or (null) give
+  // it back its own size and let the person resize it again.
+  fitSessionWindow?: (viewId: string, viewport: { width: number; height: number } | null) => void;
+  // How long a recording waits for its window to open before recording off
+  // screen instead.
+  recordingWindowTimeoutMs?: number;
+  // `ao browser record`: where finished recordings wait to be read back, and
+  // how a recording's video is encoded. Without it, recording is unavailable.
+  recording?: {
+    store: BrowserRecordingStore;
+    createEncoder: CreateBrowserRecordingEncoder;
+  };
   // Test hook: how long a tab's initial about:blank load may take before
   // awaiting callers get a typed failure instead of hanging forever.
   entryReadyTimeoutMs?: number;
@@ -626,6 +669,17 @@ export type BrowserViewHost = {
   isLastUsedBrowser: () => boolean;
   // Whether any Browser panel is on screen with a page in it.
   hasVisiblePanel: () => boolean;
+  /** Whether a session's panel exists and could move into a separate window. */
+  canAttachWindow: (viewId: string) => boolean;
+  /**
+   * Move a session's page views into a separate window. They stay parked
+   * offscreen until its renderer reports bounds measured in that window.
+   */
+  attachWindow: (viewId: string, window: BrowserSessionWindow) => boolean;
+  /** Move a session's page views back into the app window. */
+  releaseWindow: (viewId: string) => void;
+  /** The viewport a recording is opening this session's window for, if any. */
+  recordingWindowSize: (viewId: string) => { width: number; height: number } | undefined;
   // Refresh the live page after raising the transparent shell for an overlay.
   // Hide immediately, then restore visibility with the bounds nudge on the next
   // tick — a same-turn hide/show can coalesce into a no-op on macOS and leave
@@ -769,9 +823,12 @@ type BrowserSessionEntry = {
   };
   nativeOperationQueue: Promise<void>;
   devtoolsPlacement: BrowserDevToolsPlacement;
+	// The page's frame capture. Its consumers are the phone's live view (streamId
+	// and sink) and an `ao browser record` recording; it runs while either does.
 	live?: {
-		streamId: number;
-		sink: BrowserLiveSink;
+		streamId?: number;
+		sink?: BrowserLiveSink;
+		recording?: BrowserRecording;
 		screencast?: BrowserScreencast;
 		tabId?: string;
 		lastStateKey?: string;
@@ -780,6 +837,8 @@ type BrowserSessionEntry = {
   signals: {
     entries: BrowserSignalEntry[];
   };
+  // The separate window this session's Browser panel shows in, if any.
+  window?: BrowserSessionWindow;
   devtools?: {
     contents: BrowserWebContents;
     placement: BrowserDevToolsPlacement;
@@ -1042,6 +1101,13 @@ export function createBrowserViewHost(
   if (!shellWebContents)
     throw new Error("Browser view host requires shell WebContents");
   const viewIdsBySessionId = new Map<string, string>();
+  // The window a session's page views live in: its separate window, or the app's.
+  const windowOf = (session: BrowserSessionEntry | undefined): BrowserSessionWindow =>
+    session?.window ?? options.mainWindow;
+  const sessionOfEntry = (entry: BrowserEntry): BrowserSessionEntry | undefined => {
+    const viewId = viewIdsBySessionId.get(entry.sessionId);
+    return viewId ? entries.get(viewId) : undefined;
+  };
   const rendererOwnersByViewId = new Map<string, Set<number>>();
   const tabsByWebContentsId = new Map<number, BrowserEntry>();
   const pendingTemporaryPartitionClears = new Set<Promise<void>>();
@@ -1293,8 +1359,9 @@ export function createBrowserViewHost(
       ...(popupOptions?.webContents ? { webContents: popupOptions.webContents } : {}),
     });
     applyBrowserViewBounds(view, OFFSCREEN_BOUNDS, false);
-    options.mainWindow.contentView.addChildView(view);
-    options.onNativeViewAdded?.();
+    windowOf(session).contentView.addChildView(view);
+    if (session.window) session.window.onNativeViewAdded?.();
+    else options.onNativeViewAdded?.();
     view.setBorderRadius?.(BROWSER_VIEW_BORDER_RADIUS);
     // Main-frame sites use this permission for actions such as "Copy link".
     // Keep embedded frames, clipboard reads, and every other permission denied.
@@ -1661,7 +1728,7 @@ export function createBrowserViewHost(
         for (const entry of session.tabs.values()) {
           tabsByWebContentsId.delete(entry.view.webContents.id);
           disposeNetworkCapture(entry, "session-startup-failed");
-          if (!options.mainWindow.isDestroyed?.()) destroyTabView(entry);
+          if (!windowOf(session).isDestroyed?.()) destroyTabView(entry);
         }
         session.tabs.clear();
         entries.delete(viewId);
@@ -2292,7 +2359,7 @@ export function createBrowserViewHost(
     }
 		if (session.live && session.live.tabId !== tabId) {
 			void retargetLiveStream(session).catch((error) =>
-				session.live?.sink.error("BROWSER_CAPTURE_UNAVAILABLE", error instanceof Error ? error.message : "Browser capture failed"),
+				session.live?.sink?.error("BROWSER_CAPTURE_UNAVAILABLE", error instanceof Error ? error.message : "Browser capture failed"),
 			);
 		}
     return next;
@@ -2368,7 +2435,7 @@ export function createBrowserViewHost(
     session.tabs.delete(tabId);
     tabsByWebContentsId.delete(closedContents?.id ?? tab.view.webContents.id);
     if (closedContents) {
-      options.mainWindow.contentView.removeChildView?.(tab.view);
+      windowOf(session).contentView.removeChildView?.(tab.view);
       if (session.nativeActiveTabId === tabId)
         session.nativeActiveTabId = undefined;
       session.snapshotDeltaBaseline = undefined;
@@ -2870,19 +2937,25 @@ export function createBrowserViewHost(
     entry: BrowserEntry,
   ): void {
     syncLiveViewport(session, entry);
-    if (!session.visible) {
+    // A recording is captured from a surface of its own size. In the session's
+    // own window that is the window; with no window it is off screen.
+    const pinned = session.live?.recording?.viewport;
+    if (!session.visible || (pinned && !session.window)) {
       if (session.live) {
         // A never-shown hidden WebContentsView has no compositor surface:
         // screencast emits nothing and captureScreenshot can wait forever.
         // Show the native view before moving it so Chromium updates its bounds,
         // but keep it completely outside the window while mobile is watching.
         entry.view.setVisible?.(true);
-        const parkingBounds = applyBrowserViewBounds(entry.view, OFFSCREEN_BOUNDS);
+        const parkingBounds = applyBrowserViewBounds(
+          entry.view,
+          pinned ? { ...OFFSCREEN_BOUNDS, width: pinned.width, height: pinned.height } : OFFSCREEN_BOUNDS,
+        );
         const parked = entry.view.getBounds?.();
         if (parked && (parked.x !== parkingBounds.x || parked.y !== parkingBounds.y ||
           parked.width !== parkingBounds.width || parked.height !== parkingBounds.height)) {
           entry.view.setVisible?.(false);
-          session.live.sink.error("BROWSER_CAPTURE_UNAVAILABLE", "Browser capture could not be parked outside the desktop window");
+          session.live.sink?.error("BROWSER_CAPTURE_UNAVAILABLE", "Browser capture could not be parked outside the desktop window");
         }
       } else {
         applyBrowserViewBounds(entry.view, OFFSCREEN_BOUNDS, false);
@@ -2933,12 +3006,15 @@ export function createBrowserViewHost(
   }
 
   const setBounds = (
-    { viewId, revision, rect, visible }: BrowserBoundsInput,
+    { viewId, revision, rect, visible, surface }: BrowserBoundsInput,
     zoomFactor = 1,
   ): BrowserBoundsInput | undefined => {
     const session = entries.get(viewId);
     if (
       !session ||
+      // Another panel of the same session (the app window's, while the pages
+      // are in their own window, or the reverse) does not place the pages.
+      Boolean(session.window) !== (surface === "window") ||
       !Number.isSafeInteger(revision) ||
       revision <= session.layoutRevision
     )
@@ -2964,7 +3040,7 @@ export function createBrowserViewHost(
     session.rendererBounds = { ...rect };
     session.bounds = clampBoundsToWindow(
       scaleBoundsForZoom(rect, effectiveZoomFactor),
-      options.mainWindow.getContentBounds(),
+      windowOf(session).getContentBounds(),
     );
     session.visible = true;
     syncBackgroundThrottling(session);
@@ -3188,15 +3264,74 @@ export function createBrowserViewHost(
     return cleanup;
   };
 
+  // Move a session's page views between windows, parked offscreen: the panel
+  // reports its geometry in the new window once it is laid out there.
+  const moveSessionViews = (
+    session: BrowserSessionEntry,
+    from: BrowserSessionWindow,
+    to: BrowserSessionWindow,
+  ): void => {
+    for (const entry of session.tabs.values()) {
+      applyBrowserViewBounds(entry.view, OFFSCREEN_BOUNDS, false);
+      try {
+        from.contentView.removeChildView?.(entry.view);
+      } catch {
+        // A closing window may already have torn down its content view.
+      }
+      to.contentView.addChildView(entry.view);
+    }
+    session.bounds = OFFSCREEN_BOUNDS;
+    session.visible = false;
+    syncBackgroundThrottling(session);
+    forgetNativeFocus(session.viewId);
+  };
+
+  // Recordings waiting for their session's window, by view.
+  const recordingWindowWaiters = new Map<string, (opened: boolean) => void>();
+  const recordingWindowRequests = new Map<string, { width: number; height: number }>();
+
+  const canAttachWindow = (viewId: string): boolean => {
+    const session = entries.get(viewId);
+    return Boolean(session && !session.window);
+  };
+
+  const attachWindow = (viewId: string, window: BrowserSessionWindow): boolean => {
+    const session = entries.get(viewId);
+    if (!session || session.window || window.isDestroyed?.()) return false;
+    moveSessionViews(session, options.mainWindow, window);
+    session.window = window;
+    window.onNativeViewAdded?.();
+    recordingWindowWaiters.get(viewId)?.(true);
+    return true;
+  };
+
+  const releaseWindow = (viewId: string): void => {
+    const session = entries.get(viewId);
+    const window = session?.window;
+    if (!session || !window) return;
+    session.window = undefined;
+    // On app quit the views close with the session instead.
+    if (options.mainWindow.isDestroyed?.()) return;
+    moveSessionViews(session, window, options.mainWindow);
+    options.onNativeViewAdded?.();
+  };
+
   const destroy = (viewId: string): void => {
     const session = entries.get(viewId);
     if (!session) return;
+    // A separate window gives its views back before they close, and then goes.
+    if (session.window) {
+      releaseWindow(viewId);
+      options.closeSessionWindow?.(viewId);
+    }
     // Every teardown path below, including a window that already closed.
     for (const entry of session.tabs.values()) clearSiteChallenge(entry);
 		const live = session.live;
-		live?.sink.error("BROWSER_SESSION_CLOSED", "The desktop browser session was closed");
+		live?.sink?.error("BROWSER_SESSION_CLOSED", "The desktop browser session was closed");
 		session.live = undefined;
 		if (live?.screencast) void live.screencast.stop();
+		// The recording keeps what it captured: the agent can still read it back.
+		if (live?.recording) void finishRecording(session, live.recording, "session-closed").catch(() => undefined);
     const partitionToClear =
       session.profileId === null ? session.profilePartition : undefined;
     session.signals.entries.length = 0;
@@ -3234,7 +3369,7 @@ export function createBrowserViewHost(
   const destroyTabView = (entry: BrowserEntry): void => {
     clearSiteChallenge(entry);
     applyBrowserViewBounds(entry.view, OFFSCREEN_BOUNDS, false);
-    options.mainWindow.contentView.removeChildView?.(entry.view);
+    windowOf(sessionOfEntry(entry)).contentView.removeChildView?.(entry.view);
     if (entry.view.webContents.debugger?.isAttached()) {
       entry.view.webContents.debugger.detach();
     }
@@ -3250,7 +3385,7 @@ export function createBrowserViewHost(
     for (const entry of session.tabs.values()) {
       tabsByWebContentsId.delete(entry.view.webContents.id);
       disposeNetworkCapture(entry, "profile-switch");
-      if (!options.mainWindow.isDestroyed?.()) destroyTabView(entry);
+      if (!windowOf(session).isDestroyed?.()) destroyTabView(entry);
     }
     session.tabs.clear();
     session.activeTabId = "";
@@ -4233,6 +4368,9 @@ export function createBrowserViewHost(
 	// CSS-pixel size the streamed page is laid out at. Remote pointer and wheel
 	// input is mapped against this, so it must match what the capture shows.
 	function liveViewport(session: BrowserSessionEntry): { width: number; height: number } {
+		// A recording made at a chosen size lays the page out at that size.
+		const pinned = session.live?.recording?.viewport;
+		if (pinned) return { width: pinned.width, height: pinned.height };
 		const source = session.visible ? session.bounds : session.lastVisibleSize ?? OFFSCREEN_BOUNDS;
 		return {
 			width: Math.max(1, Math.round(source.width)),
@@ -4244,9 +4382,17 @@ export function createBrowserViewHost(
 	// desktop last showed, and a session whose panel was never opened has no
 	// size at all, so nothing paints and input lands nowhere. Pin the viewport
 	// while a parked page is streamed, and release it once the desktop shows it.
+	// A recording at a chosen size pins it whether or not the desktop shows the page.
 	function syncLiveViewport(session: BrowserSessionEntry, entry: BrowserEntry): void {
-		const size = session.live && !session.visible ? liveViewport(session) : undefined;
-		const key = size ? `${size.width}x${size.height}` : undefined;
+		const pinned = session.live?.recording?.viewport;
+		const size = pinned || (session.live && !session.visible) ? liveViewport(session) : undefined;
+		const mobile = pinned?.mobile === true;
+		// In a window smaller than the viewport (a size bigger than the screen),
+		// the page keeps its layout and is shown scaled to fit.
+		const scale = pinned && session.window && session.visible
+			? Math.min(1, session.bounds.width / pinned.width, session.bounds.height / pinned.height)
+			: 1;
+		const key = size ? `${size.width}x${size.height}${mobile ? ":mobile" : ""}${scale < 1 ? `@${scale.toFixed(3)}` : ""}` : undefined;
 		if (liveViewportOverrides.get(entry) === key) return;
 		const debug = entry.view.webContents.debugger;
 		if (!debug?.isAttached()) {
@@ -4256,10 +4402,15 @@ export function createBrowserViewHost(
 		if (key) liveViewportOverrides.set(entry, key);
 		else liveViewportOverrides.delete(entry);
 		const pending = size
-			? debug.sendCommand("Emulation.setDeviceMetricsOverride", { ...size, deviceScaleFactor: 0, mobile: false })
+			? debug.sendCommand("Emulation.setDeviceMetricsOverride", { ...size, deviceScaleFactor: 0, mobile, ...(scale < 1 ? { scale } : {}) })
 			: debug.sendCommand("Emulation.clearDeviceMetricsOverride");
-		void Promise.resolve(pending).catch(() => {
-			if (liveViewportOverrides.get(entry) === key) liveViewportOverrides.delete(entry);
+		void Promise.resolve(pending).catch((error: unknown) => {
+			console.warn("AO: browser viewport override failed", key ?? "clear", error);
+			if (liveViewportOverrides.get(entry) !== key) return;
+			// A failed override is not in place; a failed clear may leave one in
+			// place, so the next layout pass clears again.
+			if (key) liveViewportOverrides.delete(entry);
+			else liveViewportOverrides.set(entry, "unknown");
 		});
 	}
 
@@ -4286,7 +4437,7 @@ export function createBrowserViewHost(
 	function emitLiveState(session: BrowserSessionEntry): BrowserLiveState {
 		const state = browserLiveState(session);
 		const key = JSON.stringify(state);
-		if (session.live && session.live.lastStateKey !== key) {
+		if (session.live?.sink && session.live.lastStateKey !== key) {
 			session.live.lastStateKey = key;
 			session.live.sink.state(state);
 		}
@@ -4318,12 +4469,19 @@ export function createBrowserViewHost(
 			entry.view.webContents.debugger!,
 			(frame) => {
 				if (session.live !== live || live.screencast !== cast || live.tabId !== entry.tabId) return;
+				live.recording?.frame(frame);
+				if (!live.sink) return;
 				live.sink.frame(frame);
 				emitLiveState(session);
 			},
-			(code, message) => live.sink.error(code, message),
+			(code, message) => live.sink?.error(code, message),
 			() => liveViewport(session),
-			() => !session.visible || options.mainWindow.isMinimized?.() === true || options.mainWindow.isVisible?.() === false,
+			() =>
+				!session.visible ||
+				Boolean(session.live?.recording?.viewport) ||
+				windowOf(session).isMinimized?.() === true ||
+				windowOf(session).isVisible?.() === false,
+			() => captureMaxSize(session),
 		);
 		live.screencast = cast;
 		live.tabId = entry.tabId;
@@ -4335,9 +4493,230 @@ export function createBrowserViewHost(
 		emitLiveState(session);
 	}
 
+	// The largest frame the capture sends: the phone's usual 1280x720, grown to
+	// hold a recording's chosen viewport so a tall phone page is not shrunk.
+	function captureMaxSize(session: BrowserSessionEntry): { width: number; height: number } {
+		const pinned = session.live?.recording?.viewport;
+		if (!pinned) return { width: 1280, height: 720 };
+		return {
+			width: Math.min(MAX_BROWSER_VIEWPORT, Math.max(1280, pinned.width)),
+			height: Math.min(MAX_BROWSER_VIEWPORT, Math.max(720, pinned.height)),
+		};
+	}
+
+	// Tells the panel a recording laid its page out elsewhere, so it can say so.
+	function pushRecordingState(session: BrowserSessionEntry): void {
+		const viewport = session.live?.recording?.viewport;
+		shellWebContents?.send("browser:recordingState", {
+			viewId: session.viewId,
+			recording: Boolean(session.live?.recording),
+			...(viewport ? { viewport } : {}),
+		});
+	}
+
+	// A session's last finished recording, until it is read back.
+	const finishedRecordings = new Map<string, Promise<BrowserRecordingResult>>();
+	let recordingDirectoryReady: Promise<void> | undefined;
+
+	function recordingNumberArg(value: unknown, fallback: number, max: number, name: string): number {
+		if (value === undefined || value === null) return fallback;
+		const number = typeof value === "number" ? value : Number(value);
+		if (!Number.isInteger(number) || number < 1 || number > max) {
+			throw browserError("INVALID_ARGUMENT", `${name} must be a whole number from 1 to ${max}`);
+		}
+		return number;
+	}
+
+	// Whether a recording opened its session's window ("opened": it closes it
+	// again), sized one already open ("existing": it gives the size back), or
+	// records off screen ("none": no window could open).
+	type RecordingWindowMode = "opened" | "existing" | "none";
+	const recordingWindowModes = new WeakMap<BrowserRecording, RecordingWindowMode>();
+
+	async function prepareRecordingWindow(
+		session: BrowserSessionEntry,
+		viewport: { width: number; height: number },
+	): Promise<RecordingWindowMode> {
+		const viewId = session.viewId;
+		if (session.window) {
+			options.fitSessionWindow?.(viewId, viewport);
+			return "existing";
+		}
+		if (!options.requestSessionWindow) return "none";
+		recordingWindowRequests.set(viewId, { width: viewport.width, height: viewport.height });
+		try {
+			const opened = await new Promise<boolean>((resolve) => {
+				const timer = setTimeout(() => resolve(false), options.recordingWindowTimeoutMs ?? 5_000);
+				recordingWindowWaiters.set(viewId, (value) => {
+					clearTimeout(timer);
+					resolve(value);
+				});
+				options.requestSessionWindow!(viewId, session.sessionId);
+			});
+			return opened && session.window ? "opened" : "none";
+		} finally {
+			recordingWindowWaiters.delete(viewId);
+			recordingWindowRequests.delete(viewId);
+		}
+	}
+
+	async function startRecording(session: BrowserSessionEntry, args: Record<string, unknown>): Promise<unknown> {
+		const recordingOptions = options.recording;
+		if (!recordingOptions) throw browserError("BROWSER_RECORDING_UNAVAILABLE", "Browser recording is unavailable in this app");
+		if (session.live?.recording) {
+			throw browserError("BROWSER_RECORDING_ACTIVE", "A recording is already running for this session; stop it first");
+		}
+		const fps = recordingNumberArg(args.fps, DEFAULT_RECORDING_FPS, MAX_RECORDING_FPS, "fps");
+		const maxSeconds = recordingNumberArg(args.maxSeconds, DEFAULT_RECORDING_MAX_SECONDS, MAX_RECORDING_MAX_SECONDS, "maxSeconds");
+		// Without a size, a recording is a desktop page.
+		const requestedSize = typeof args.size === "string" && args.size.trim() ? args.size : "desktop";
+		{
+			const viewport = resolveBrowserViewport(requestedSize, args.mobile === true);
+			if (!viewport) {
+				throw browserError(
+					"INVALID_ARGUMENT",
+					"size must be WIDTHxHEIGHT (240 to 2560 each), desktop, laptop, full-hd, or a device such as iphone-12-pro or ipad-air",
+				);
+			}
+		}
+		const viewport = resolveBrowserViewport(requestedSize, args.mobile === true)!;
+		if (!session.tabs.size) await openTab(session, undefined, true);
+		recordingDirectoryReady ??= recordingOptions.store.prepare();
+		await recordingDirectoryReady;
+		const id = recordingOptions.store.newId();
+		const file = recordingOptions.store.fileFor(id);
+		let recording: BrowserRecording | undefined;
+		const encoder = await recordingOptions.createEncoder(file, (bytes) => {
+			if (bytes > MAX_RECORDING_BYTES && recording) void finishRecording(session, recording, "max-size").catch(() => undefined);
+		});
+		const started = new BrowserRecording(encoder, {
+			id,
+			file,
+			fps,
+			viewport,
+			maxDurationMs: maxSeconds * 1000,
+			onLimit: (reason) => void finishRecording(session, started, reason).catch(() => undefined),
+		});
+		recording = started;
+		// A finished recording nobody read gives way to the new one.
+		const previous = finishedRecordings.get(session.sessionId);
+		finishedRecordings.delete(session.sessionId);
+		void previous?.then((result) => recordingOptions.store.remove(result.id)).catch(() => undefined);
+		// The page is recorded where the person can watch it: its own window.
+		const windowMode = await prepareRecordingWindow(session, viewport);
+		recordingWindowModes.set(started, windowMode);
+		if (session.live) {
+			session.live.recording = started;
+			// The recording's size changes the page's layout and the frame size: restart.
+			await retargetLiveStream(session);
+		} else {
+			session.live = { recording: started };
+			syncBackgroundThrottling(session);
+			try {
+				await retargetLiveStream(session);
+			} catch (error) {
+				if (session.live?.recording === started) await stopCapture(session);
+				await started.stop("failed").catch(() => undefined);
+				throw error;
+			}
+		}
+		pushRecordingState(session);
+		return { ...started.status(), window: windowMode, target: agentActionTarget(activeEntry(session)) };
+	}
+
+	function finishRecording(
+		session: BrowserSessionEntry,
+		recording: BrowserRecording,
+		reason: BrowserRecordingStopReason,
+	): Promise<BrowserRecordingResult> {
+		const live = session.live;
+		if (live?.recording === recording) {
+			live.recording = undefined;
+			// No phone is watching: the capture stops with the recording.
+			if (!live.sink) void stopCapture(session);
+			else if (recording.viewport) {
+				// The phone goes on watching the page at the desktop's own size.
+				void retargetLiveStream(session).catch((error) =>
+					live.sink?.error("BROWSER_CAPTURE_UNAVAILABLE", error instanceof Error ? error.message : "Browser capture failed"),
+				);
+			}
+			// Every tab the recording laid out at its size goes back to its own,
+			// and the page back to where the desktop shows it.
+			if (recording.viewport) {
+				for (const entry of session.tabs.values()) syncLiveViewport(session, entry);
+				if (session.tabs.size) applySessionBounds(session, activeEntry(session));
+			}
+			// A window the recording opened closes (the page docks again); one the
+			// person had open gets its own size back.
+			const windowMode = recordingWindowModes.get(recording);
+			if (windowMode === "opened" && session.window) options.closeSessionWindow?.(session.viewId);
+			else if (windowMode === "existing" && session.window) options.fitSessionWindow?.(session.viewId, null);
+			pushRecordingState(session);
+		}
+		const existing = finishedRecordings.get(session.sessionId);
+		if (existing && recording.status().recording === false) return existing;
+		const result = recording.stop(reason).then((finished) => {
+			options.recording?.store.keep(finished);
+			return finished;
+		});
+		finishedRecordings.set(session.sessionId, result);
+		result.catch(() => {
+			if (finishedRecordings.get(session.sessionId) === result) finishedRecordings.delete(session.sessionId);
+		});
+		return result;
+	}
+
+	async function recordingAction(
+		session: BrowserSessionEntry,
+		action: string,
+		args: Record<string, unknown>,
+	): Promise<unknown> {
+		switch (action) {
+			case "record-start":
+				return startRecording(session, args);
+			case "record-status": {
+				const active = session.live?.recording;
+				if (active) return active.status();
+				const finished = await finishedRecordings.get(session.sessionId)?.catch(() => undefined);
+				return finished ? { recording: false, finished } : { recording: false };
+			}
+			case "record-stop": {
+				const active = session.live?.recording;
+				const finished = active
+					? finishRecording(session, active, "stopped")
+					: finishedRecordings.get(session.sessionId);
+				if (!finished) throw browserError("BROWSER_RECORDING_NOT_ACTIVE", "No recording is running for this session");
+				return await finished;
+			}
+			case "record-read": {
+				const store = options.recording?.store;
+				if (!store) throw browserError("BROWSER_RECORDING_UNAVAILABLE", "Browser recording is unavailable in this app");
+				const id = typeof args.id === "string" ? args.id : "";
+				const finished = await finishedRecordings.get(session.sessionId)?.catch(() => undefined);
+				// Only this session's own recording.
+				if (!id || finished?.id !== id) {
+					throw browserError("BROWSER_RECORDING_NOT_FOUND", "No finished recording with that id for this session");
+				}
+				const offset = typeof args.offset === "number" ? args.offset : Number(args.offset ?? 0);
+				const chunk = await store.read(id, offset);
+				if (chunk.done) finishedRecordings.delete(session.sessionId);
+				return chunk;
+			}
+			default:
+				throw browserError("INVALID_ARGUMENT", `Unknown browser recording action ${action}`);
+		}
+	}
+
 	async function startLiveStream(sessionId: string, streamId: number, sink: BrowserLiveSink): Promise<BrowserLiveState> {
 		if (!Number.isSafeInteger(streamId) || streamId <= 0) throw browserError("INVALID_ARGUMENT", "streamId is invalid");
 		const session = await ensureSessionReady(sessionId);
+		if (session.live?.recording) {
+			// A recording already captures the page: the phone joins that capture.
+			session.live.streamId = streamId;
+			session.live.sink = sink;
+			session.live.lastStateKey = undefined;
+			return emitLiveState(session);
+		}
 		if (session.live) await stopLiveCapture(session);
 		session.live = { streamId, sink };
 		syncBackgroundThrottling(session);
@@ -4356,6 +4735,19 @@ export function createBrowserViewHost(
 	}
 
 	function detachLiveStream(session: BrowserSessionEntry): Promise<void> | undefined {
+		if (!session.live?.sink) return undefined;
+		if (session.live.recording) {
+			// The recording keeps the capture; only the phone leaves it.
+			session.live.streamId = undefined;
+			session.live.sink = undefined;
+			session.live.lastStateKey = undefined;
+			return undefined;
+		}
+		return stopCapture(session);
+	}
+
+	// Stop the page's frame capture and park its view as no one is watching.
+	function stopCapture(session: BrowserSessionEntry): Promise<void> | undefined {
 		if (!session.live) return undefined;
 		const live = session.live;
 		session.live = undefined;
@@ -4387,7 +4779,7 @@ export function createBrowserViewHost(
 	}
 
 	function assertRemoteWritable(session: BrowserSessionEntry, scrollOnly = false): void {
-		if (!session.live) throw browserError("BROWSER_REMOTE_NOT_VIEWED", "Remote browser stream is not active");
+		if (!session.live?.sink) throw browserError("BROWSER_REMOTE_NOT_VIEWED", "Remote browser stream is not active");
 		if (session.agentBrowserCommands > 0 || session.profileSwitching) {
 			throw browserError("BROWSER_REMOTE_READ_ONLY", "Browser control is temporarily read-only while the agent is active");
 		}
@@ -4396,8 +4788,8 @@ export function createBrowserViewHost(
 		if (
 			!scrollOnly &&
 			session.visible &&
-			options.mainWindow.isFocused?.() !== false &&
-			options.mainWindow.isMinimized?.() !== true &&
+			windowOf(session).isFocused?.() !== false &&
+			windowOf(session).isMinimized?.() !== true &&
 			lastFocusedViewId === session.viewId
 		) {
 			throw browserError("BROWSER_REMOTE_READ_ONLY", "Desktop browser control is active");
@@ -4499,7 +4891,7 @@ export function createBrowserViewHost(
 		}
 		await withBrowserOperation(session, async () => {
 			const entry = activeEntry(session);
-			if (!session.live || !session.livePreviewPending || !isBlankBrowserEntry(entry) || entry.pendingNavigation) return;
+			if (!session.live?.sink || !session.livePreviewPending || !isBlankBrowserEntry(entry) || entry.pendingNavigation) return;
 			session.livePreviewPending = false;
 			await navigateEntry(entry, normalizeAgentBrowserURL(target));
 			emitLiveState(session);
@@ -4539,6 +4931,8 @@ export function createBrowserViewHost(
         );
       }
       if (!session.tabs.size && action === "tabs") return agentTabsResult(session);
+      // Recording watches the page rather than acting on it: no agent activity.
+      if (action.startsWith("record-")) return recordingAction(session, action, args);
       // While the shown document holds a filled secret, a selector that tests
       // a value would leak it one match at a time; refuse it up front.
       if (
@@ -5521,7 +5915,11 @@ export function createBrowserViewHost(
     isLastUsedBrowser: () =>
       lastUsedViewId !== null && entries.has(lastUsedViewId),
     hasVisiblePanel: () =>
-      [...entries.values()].some((session) => session.visible && session.tabs.size > 0),
+      [...entries.values()].some((session) => session.visible && session.tabs.size > 0 && !session.window),
+    canAttachWindow,
+    attachWindow,
+    releaseWindow,
+    recordingWindowSize: (viewId) => recordingWindowRequests.get(viewId),
     // Reordering the transparent shell above a live page can leave either
     // WebContentsView showing a stale compositor surface on macOS. A one-pixel
     // bounds nudge alone is insufficient: Electron also needs a visibility
@@ -5531,24 +5929,28 @@ export function createBrowserViewHost(
     // closes), which is why the restore must not run synchronously.
     refreshLastFocusedPanelSurface: () => {
       const targetViewId = lastFocusedViewId ?? lastUsedViewId;
-      if (targetViewId === null) return;
-      const session = entries.get(targetViewId);
-      if (!session || !session.visible || !session.tabs.size) return;
-      const entry = activeEntry(session);
-      const bounds = session.bounds;
-      if (bounds.width <= 0 || bounds.height <= 0) return;
-      entry.view.setVisible?.(false);
-      applyBrowserViewBounds(entry.view, {
-        ...bounds,
-        height: Math.max(1, bounds.height - 1),
-      });
-      setTimeout(() => {
-        const current = entries.get(targetViewId);
-        if (!current || !current.visible || !current.tabs.size) return;
-        applyBrowserViewBounds(activeEntry(current).view, current.bounds, true);
-      }, 0);
+      // A page in its own window is not under the app window's shell.
+      if (targetViewId !== null && !entries.get(targetViewId)?.window) refreshPanelSurface(targetViewId);
     },
   };
+
+  function refreshPanelSurface(targetViewId: string): void {
+    const session = entries.get(targetViewId);
+    if (!session || !session.visible || !session.tabs.size) return;
+    const entry = activeEntry(session);
+    const bounds = session.bounds;
+    if (bounds.width <= 0 || bounds.height <= 0) return;
+    entry.view.setVisible?.(false);
+    applyBrowserViewBounds(entry.view, {
+      ...bounds,
+      height: Math.max(1, bounds.height - 1),
+    });
+    setTimeout(() => {
+      const current = entries.get(targetViewId);
+      if (!current || !current.visible || !current.tabs.size) return;
+      applyBrowserViewBounds(activeEntry(current).view, current.bounds, true);
+    }, 0);
+  }
 }
 
 function withDefaultScheme(raw: string): string {

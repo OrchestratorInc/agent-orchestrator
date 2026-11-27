@@ -338,6 +338,11 @@ if (typeof window !== "undefined") {
 		setBounds: () => undefined,
 		onBoundsApplied: () => () => undefined,
 		setOverlayOpen: () => undefined,
+		focusWindow: async () => undefined,
+		closeWindow: async () => undefined,
+		onWindowState: () => () => undefined,
+		onRecordingState: () => () => undefined,
+		onOpenWindowRequest: () => () => undefined,
 		navigate: async ({ viewId }: { viewId: string }) => ({
 				viewId,
 				url: "",

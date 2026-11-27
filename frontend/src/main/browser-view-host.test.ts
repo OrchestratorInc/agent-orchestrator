@@ -1,4 +1,8 @@
+import { mkdtempSync, readdirSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
+import { BrowserRecordingStore } from "./browser-recording";
 import { net } from "electron";
 import {
 	type BrowserNavState,
@@ -430,6 +434,224 @@ function setupHost(
 	};
 }
 
+describe("browser recording", () => {
+	// The default recording is a 1280x800 desktop page: frames of its shape.
+	const jpegFrame = (width = 1280, height = 800): string => {
+		const data = Buffer.alloc(21);
+		data.set([0xff, 0xd8, 0xff, 0xc0, 0x00, 0x11, 0x08]);
+		data.writeUInt16BE(height, 7);
+		data.writeUInt16BE(width, 9);
+		return data.toString("base64");
+	};
+
+	function setupRecordingHost(hostOptions: Partial<Parameters<typeof createBrowserViewHost>[0]> = {}) {
+		const directory = mkdtempSync(path.join(tmpdir(), "ao-host-recording-"));
+		const store = new BrowserRecordingStore(directory);
+		const encoded: string[] = [];
+		const createEncoder = vi.fn(async (file: string) => ({
+			frame: (jpeg: Buffer) => encoded.push(jpeg.toString("base64")),
+			finish: async () => writeFileSync(file, "webm-bytes"),
+			abort: async () => undefined,
+		}));
+		const harness = setupHost(undefined, { recording: { store, createEncoder }, ...hostOptions });
+		const sendFrame = (data = jpegFrame()) =>
+			harness.debuggerListeners.get("message")?.({} as never, "Page.screencastFrame" as never, { sessionId: 1, data } as never);
+		const record = (action: string, args: Record<string, unknown> = {}) =>
+			harness.host.execute("sess-1", action, args) as Promise<Record<string, unknown>>;
+		return { ...harness, createEncoder, directory, encoded, record, sendFrame };
+	}
+
+	it("records the page's frames and reads the finished video back", async () => {
+		const { debuggerSendCommand, directory, encoded, invoke, record, sendFrame } = setupRecordingHost();
+		await invoke("browser:ensure", "sess-1");
+
+		const started = await record("record-start", { fps: 5 });
+		expect(started).toMatchObject({ recording: true, fps: 5 });
+		expect(debuggerSendCommand).toHaveBeenCalledWith("Page.startScreencast", expect.any(Object));
+		sendFrame();
+		await vi.waitFor(() => expect(encoded).toHaveLength(1));
+		expect(await record("record-status")).toMatchObject({ recording: true, frames: 1 });
+
+		const result = await record("record-stop");
+		expect(result).toMatchObject({ frames: 1, bytes: "webm-bytes".length, mimeType: "video/webm", stopReason: "stopped" });
+		// Nobody else watches: the capture stops with the recording.
+		expect(debuggerSendCommand).toHaveBeenCalledWith("Page.stopScreencast");
+		// Stopping again answers the same finished recording.
+		expect(await record("record-stop")).toEqual(result);
+
+		const chunk = await record("record-read", { id: result.id, offset: 0 });
+		expect(Buffer.from(String(chunk.data), "base64").toString()).toBe("webm-bytes");
+		expect(chunk.done).toBe(true);
+		expect(readdirSync(directory)).toEqual([]);
+		await expect(record("record-stop")).rejects.toMatchObject({ code: "BROWSER_RECORDING_NOT_ACTIVE" });
+	});
+
+	it("refuses a second recording, bad limits, and another session's video", async () => {
+		const { host, invoke, record, sendFrame } = setupRecordingHost();
+		await invoke("browser:ensure", "sess-1");
+		await expect(record("record-start", { fps: 31 })).rejects.toMatchObject({ code: "INVALID_ARGUMENT" });
+		await expect(record("record-start", { maxSeconds: 0 })).rejects.toMatchObject({ code: "INVALID_ARGUMENT" });
+		await record("record-start");
+		await expect(record("record-start")).rejects.toMatchObject({ code: "BROWSER_RECORDING_ACTIVE" });
+		sendFrame();
+		const result = await record("record-stop");
+		await expect(host.execute("sess-2", "record-read", { id: result.id, offset: 0 })).rejects.toMatchObject({
+			code: "BROWSER_RECORDING_NOT_FOUND",
+		});
+	});
+
+	it("shares the page capture with a phone watching it", async () => {
+		const { debuggerSendCommand, encoded, host, invoke, record, sendFrame } = setupRecordingHost();
+		await invoke("browser:ensure", "sess-1");
+		await record("record-start", { fps: 30 });
+		const sink = { frame: vi.fn(), state: vi.fn(), error: vi.fn() };
+
+		await host.startLiveStream("sess-1", 7, sink);
+		const starts = () => debuggerSendCommand.mock.calls.filter(([method]) => method === "Page.startScreencast").length;
+		expect(starts()).toBe(1);
+		sendFrame();
+		await vi.waitFor(() => expect(sink.frame).toHaveBeenCalledTimes(1));
+		expect(encoded).toHaveLength(1);
+
+		// The phone leaving keeps the recording's capture.
+		await host.stopLiveStream("sess-1", 7);
+		expect(debuggerSendCommand).not.toHaveBeenCalledWith("Page.stopScreencast");
+		await record("record-stop");
+		expect(debuggerSendCommand).toHaveBeenCalledWith("Page.stopScreencast");
+	});
+
+	it("leaves a phone's capture running when its recording stops", async () => {
+		const { debuggerSendCommand, host, invoke, record, sendFrame } = setupRecordingHost();
+		await invoke("browser:ensure", "sess-1");
+		const sink = { frame: vi.fn(), state: vi.fn(), error: vi.fn() };
+		await host.startLiveStream("sess-1", 7, sink);
+		await record("record-start");
+		sendFrame();
+		await record("record-stop");
+		// The phone goes on watching: its capture restarts at the desktop's size.
+		await vi.waitFor(() => {
+			const screencast = debuggerSendCommand.mock.calls.map(([method]) => method).filter((method) => method.endsWith("Screencast"));
+			expect(screencast.at(-1)).toBe("Page.startScreencast");
+		});
+		sendFrame(jpegFrame(800, 600));
+		await vi.waitFor(() => expect(sink.frame).toHaveBeenCalledTimes(2));
+		await host.stopLiveStream("sess-1", 7);
+	});
+
+	it("keeps what it captured when the session closes", async () => {
+		const { host, invoke, record, sendFrame } = setupRecordingHost();
+		const { viewId } = await invoke("browser:ensure", "sess-1");
+		await record("record-start");
+		sendFrame();
+		host.destroy(viewId);
+		await vi.waitFor(async () => expect(await record("record-status")).toMatchObject({ recording: false, finished: { stopReason: "session-closed" } }));
+		expect(await record("record-stop")).toMatchObject({ frames: 1, stopReason: "session-closed" });
+	});
+
+	it("lays the page out at a chosen size while it records, and back after", async () => {
+		const { debuggerSendCommand, emit, invoke, record, sendFrame, sent, view } = setupRecordingHost();
+		const { viewId } = await invoke("browser:ensure", "sess-1");
+		const slot = { x: 300, y: 40, width: 480, height: 520 };
+		emit("browser:setBounds", 1, { viewId, revision: 1, rect: slot, visible: true });
+
+		const started = await record("record-start", { size: "iphone-12-pro" });
+		expect(started).toMatchObject({ viewport: { width: 390, height: 844, mobile: true } });
+		// Even with the panel on screen, the page is laid out as the phone.
+		expect(debuggerSendCommand).toHaveBeenCalledWith("Emulation.setDeviceMetricsOverride", {
+			width: 390,
+			height: 844,
+			deviceScaleFactor: 0,
+			mobile: true,
+		});
+		// The frames are big enough to hold the whole phone page.
+		expect(debuggerSendCommand).toHaveBeenCalledWith("Page.startScreencast", expect.objectContaining({ maxWidth: 1280, maxHeight: 844 }));
+		// It is captured from a surface of exactly that size, off the panel.
+		expect(view.setBounds).toHaveBeenLastCalledWith({ x: -10_000, y: -10_000, width: 390, height: 844 });
+		expect(sent).toContainEqual({
+			channel: "browser:recordingState",
+			payload: { viewId, recording: true, viewport: { width: 390, height: 844, mobile: true } },
+		});
+
+		sendFrame(jpegFrame(390, 844));
+		const result = await record("record-stop");
+		expect(result).toMatchObject({ viewport: { width: 390, height: 844, mobile: true } });
+		expect(debuggerSendCommand).toHaveBeenCalledWith("Emulation.clearDeviceMetricsOverride");
+		// The page is back in the panel at the panel's size.
+		expect(view.setBounds).toHaveBeenLastCalledWith(slot);
+		expect(sent).toContainEqual({ channel: "browser:recordingState", payload: { viewId, recording: false } });
+	});
+
+	it("records in a window it opens for the recording, and closes it after", async () => {
+		const sessionWindow = {
+			contentView: { addChildView: vi.fn(), removeChildView: vi.fn() },
+			getContentBounds: () => ({ x: 0, y: 0, width: 390, height: 844 }),
+			isDestroyed: () => false,
+		};
+		let attach: (() => void) | undefined;
+		const requestSessionWindow = vi.fn(() => attach?.());
+		const closeSessionWindow = vi.fn();
+		const { emit, host, invoke, record, sendFrame, view } = setupRecordingHost({ requestSessionWindow, closeSessionWindow });
+		const { viewId } = await invoke("browser:ensure", "sess-1");
+		attach = () => {
+			// The window asks for its size first, then takes the page.
+			expect(host.recordingWindowSize(viewId)).toEqual({ width: 390, height: 844 });
+			host.attachWindow(viewId, sessionWindow);
+		};
+
+		const started = await record("record-start", { size: "iphone-12-pro" });
+		expect(started).toMatchObject({ window: "opened", viewport: { width: 390, height: 844 } });
+		expect(requestSessionWindow).toHaveBeenCalledWith(viewId, "sess-1");
+		expect(sessionWindow.contentView.addChildView).toHaveBeenCalledWith(view);
+		// The window's page reports its slot: the page is shown there, not off screen.
+		emit("browser:setBounds", 1, { viewId, revision: 1, rect: { x: 0, y: 0, width: 390, height: 844 }, visible: true, surface: "window" });
+		expect(view.setBounds).toHaveBeenLastCalledWith({ x: 0, y: 0, width: 390, height: 844 });
+
+		sendFrame(jpegFrame(390, 844));
+		await record("record-stop");
+		expect(closeSessionWindow).toHaveBeenCalledWith(viewId);
+	});
+
+	it("sizes a window that was already open and gives its size back", async () => {
+		const fitSessionWindow = vi.fn();
+		const closeSessionWindow = vi.fn();
+		const { host, invoke, record, sendFrame } = setupRecordingHost({ fitSessionWindow, closeSessionWindow, requestSessionWindow: vi.fn() });
+		const { viewId } = await invoke("browser:ensure", "sess-1");
+		host.attachWindow(viewId, {
+			contentView: { addChildView: vi.fn(), removeChildView: vi.fn() },
+			getContentBounds: () => ({ x: 0, y: 0, width: 1200, height: 820 }),
+			isDestroyed: () => false,
+		});
+		expect(await record("record-start")).toMatchObject({ window: "existing", viewport: { width: 1280, height: 800, mobile: false } });
+		expect(fitSessionWindow).toHaveBeenCalledWith(viewId, { width: 1280, height: 800, mobile: false });
+		sendFrame();
+		await record("record-stop");
+		expect(fitSessionWindow).toHaveBeenLastCalledWith(viewId, null);
+		expect(closeSessionWindow).not.toHaveBeenCalled();
+	});
+
+	it("records off screen when no window opens in time", async () => {
+		const { invoke, record, sendFrame, view } = setupRecordingHost({ requestSessionWindow: vi.fn(), recordingWindowTimeoutMs: 5 });
+		await invoke("browser:ensure", "sess-1");
+		expect(await record("record-start")).toMatchObject({ window: "none" });
+		expect(view.setBounds).toHaveBeenLastCalledWith({ x: -10_000, y: -10_000, width: 1280, height: 800 });
+		sendFrame();
+		expect(await record("record-stop")).toMatchObject({ frames: 1 });
+	});
+
+	it("refuses a size it does not know", async () => {
+		const { invoke, record } = setupRecordingHost();
+		await invoke("browser:ensure", "sess-1");
+		await expect(record("record-start", { size: "big-phone" })).rejects.toMatchObject({ code: "INVALID_ARGUMENT" });
+		await expect(record("record-start", { size: "100x100" })).rejects.toMatchObject({ code: "INVALID_ARGUMENT" });
+	});
+
+	it("is unavailable without a recorder", async () => {
+		const { host, invoke } = setupHost();
+		await invoke("browser:ensure", "sess-1");
+		await expect(host.execute("sess-1", "record-start", {})).rejects.toMatchObject({ code: "BROWSER_RECORDING_UNAVAILABLE" });
+	});
+});
+
 describe("browser live stream", () => {
 	it("stops and detaches live capture when the private stream link drops", async () => {
 		const { debuggerSendCommand, host } = setupHost();
@@ -473,6 +695,90 @@ describe("browser live stream", () => {
 
 		expect(view.setBounds).toHaveBeenLastCalledWith({ x: -10000, y: -10000, width: 1280, height: 720 });
 		expect(view.setVisible.mock.invocationCallOrder.at(-1)).toBeLessThan(view.setBounds.mock.invocationCallOrder.at(-1)!);
+	});
+
+	describe("a session's own Browser window", () => {
+		const sessionWindow = (contentBounds = { x: 900, y: 80, width: 1200, height: 820 }) => ({
+			contentView: { addChildView: vi.fn(), removeChildView: vi.fn() },
+			getContentBounds: () => contentBounds,
+			isDestroyed: () => false,
+			onNativeViewAdded: vi.fn(),
+		});
+
+		it("moves the session's pages into the window, parked until it reports bounds there", async () => {
+			const { emit, host, invoke, mainContentView, view } = setupHost();
+			const { viewId } = await invoke("browser:ensure", "sess-1");
+			emit("browser:setBounds", 1, { viewId, revision: 1, rect: panelRect, visible: true });
+			const window = sessionWindow();
+
+			expect(host.canAttachWindow(viewId)).toBe(true);
+			expect(host.attachWindow(viewId, window)).toBe(true);
+
+			expect(mainContentView.removeChildView).toHaveBeenCalledWith(view);
+			expect(window.contentView.addChildView).toHaveBeenCalledWith(view);
+			expect(window.onNativeViewAdded).toHaveBeenCalled();
+			expect(view.setBounds).toHaveBeenLastCalledWith({ x: -10000, y: -10000, width: 1280, height: 720 });
+			// One window per session.
+			expect(host.canAttachWindow(viewId)).toBe(false);
+			expect(host.attachWindow(viewId, sessionWindow())).toBe(false);
+			// A page in its own window is not under the app window's shell.
+			expect(host.hasVisiblePanel()).toBe(false);
+
+			// Measured in the window, clamped to the window's size, not the app's.
+			const windowRect = { x: 0, y: 36, width: 1200, height: 784 };
+			emit("browser:setBounds", 1, { viewId, revision: 2, rect: windowRect, visible: true, surface: "window" });
+			expect(view.setBounds).toHaveBeenLastCalledWith(windowRect);
+		});
+
+		it("places the pages only from the panel of the window that holds them", async () => {
+			const { emit, host, invoke, view } = setupHost();
+			const { viewId } = await invoke("browser:ensure", "sess-1");
+			host.attachWindow(viewId, sessionWindow());
+			const windowRect = { x: 0, y: 36, width: 1200, height: 784 };
+			emit("browser:setBounds", 1, { viewId, revision: 1, rect: windowRect, visible: true, surface: "window" });
+			view.setBounds.mockClear();
+
+			// The app window's panel of the session hides; the window's page stays.
+			emit("browser:setBounds", 1, { viewId, revision: 2, rect: hiddenRect, visible: false });
+			expect(view.setBounds).not.toHaveBeenCalled();
+
+			host.releaseWindow(viewId);
+			view.setBounds.mockClear();
+			// Back in the app window, the window's last report is the stale one.
+			emit("browser:setBounds", 1, { viewId, revision: 3, rect: windowRect, visible: true, surface: "window" });
+			expect(view.setBounds).not.toHaveBeenCalled();
+			emit("browser:setBounds", 1, { viewId, revision: 4, rect: panelRect, visible: true });
+			expect(view.setBounds).toHaveBeenLastCalledWith(panelRect);
+		});
+
+		it("gives the pages back to the app window on release", async () => {
+			const { host, invoke, mainContentView, view } = setupHost();
+			const { viewId } = await invoke("browser:ensure", "sess-1");
+			const window = sessionWindow();
+			host.attachWindow(viewId, window);
+			mainContentView.addChildView.mockClear();
+
+			host.releaseWindow(viewId);
+
+			expect(window.contentView.removeChildView).toHaveBeenCalledWith(view);
+			expect(mainContentView.addChildView).toHaveBeenCalledWith(view);
+			expect(host.canAttachWindow(viewId)).toBe(true);
+		});
+
+		it("releases the window when its session closes, before closing the pages", async () => {
+			const closeSessionWindow = vi.fn();
+			const { host, invoke, mainContentView, view } = setupHost(undefined, { closeSessionWindow });
+			const { viewId } = await invoke("browser:ensure", "sess-1");
+			const window = sessionWindow();
+			host.attachWindow(viewId, window);
+
+			host.destroy(viewId);
+
+			expect(window.contentView.removeChildView).toHaveBeenCalledWith(view);
+			expect(closeSessionWindow).toHaveBeenCalledWith(viewId);
+			expect(mainContentView.removeChildView).toHaveBeenLastCalledWith(view);
+			expect(view.webContents.close).toHaveBeenCalled();
+		});
 	});
 
 	it("hides a streamed view if the native view does not accept offscreen bounds", async () => {

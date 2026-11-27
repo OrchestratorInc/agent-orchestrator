@@ -92,6 +92,7 @@ import type { UpdateOutcome } from "./shared/update-telemetry";
 import type { UiSettings } from "./main/ui-settings";
 import type { UpdateCheckOptions } from "./main/auto-updater";
 import type { FeatureBuild } from "./main/feature-builds";
+import type { BrowserWindowState } from "./shared/browser-window";
 import type {
 	BrowserAnnotationActionInput,
 	BrowserAnnotationCancelPayload,
@@ -145,9 +146,19 @@ export type BrowserBoundsInput = {
 	revision: number;
 	rect: BrowserRect;
 	visible: boolean;
+	// Set when the panel was measured in the session's own Browser window.
+	// While that window is open, only its geometry places the pages.
+	surface?: "window";
 };
 
 export type BrowserBoundsApplied = BrowserBoundsInput;
+
+// An `ao browser record` recording of a view's session, as the panel shows it.
+export type BrowserRecordingPanelState = {
+	viewId: string;
+	recording: boolean;
+	viewport?: { width: number; height: number; mobile: boolean };
+};
 
 export type BrowserNavigateInput = {
 	viewId: string;
@@ -727,6 +738,31 @@ const api = {
 			};
 		},
 		setOverlayOpen: (open: boolean) => ipcRenderer.send("browser:overlay", open),
+		/** A session's Browser page in its own window (browser-session-windows.ts). */
+		focusWindow: (viewId: string) => ipcRenderer.invoke("browser:window:focus", viewId) as Promise<void>,
+		closeWindow: (viewId: string) => ipcRenderer.invoke("browser:window:close", viewId) as Promise<void>,
+		/** `ao browser record` asks for a session's page in its own window. */
+		onOpenWindowRequest: (listener: (request: { viewId: string; sessionId: string }) => void) => {
+			const wrapped = (_event: Electron.IpcRendererEvent, request: { viewId: string; sessionId: string }) => listener(request);
+			ipcRenderer.on("browser:openWindowRequest", wrapped);
+			return () => {
+				ipcRenderer.off("browser:openWindowRequest", wrapped);
+			};
+		},
+		onRecordingState: (listener: (state: BrowserRecordingPanelState) => void) => {
+			const wrapped = (_event: Electron.IpcRendererEvent, state: BrowserRecordingPanelState) => listener(state);
+			ipcRenderer.on("browser:recordingState", wrapped);
+			return () => {
+				ipcRenderer.off("browser:recordingState", wrapped);
+			};
+		},
+		onWindowState: (listener: (state: BrowserWindowState) => void) => {
+			const wrapped = (_event: Electron.IpcRendererEvent, state: BrowserWindowState) => listener(state);
+			ipcRenderer.on("browser:windowState", wrapped);
+			return () => {
+				ipcRenderer.off("browser:windowState", wrapped);
+			};
+		},
 		navigate: (input: BrowserNavigateInput) =>
 			ipcRenderer.invoke("browser:navigate", input) as Promise<BrowserNavState>,
 		historySuggestions: (input: { viewId: string; query: string }) =>

@@ -24,6 +24,8 @@ export class BrowserScreencast {
 		private readonly fail: (code: string, message: string) => void,
 		private readonly viewport: () => { width: number; height: number } = () => ({ width: 1280, height: 720 }),
 		private readonly needsHiddenPaint: () => boolean = () => true,
+		// The largest frame to send; a pinned viewport bigger than this is scaled down.
+		private readonly maxSize: () => { width: number; height: number } = () => ({ width: 1280, height: 720 }),
 	) {
 		this.listener = (_event, method, params) => {
 			if (method !== "Page.screencastFrame" || this.stopped) return;
@@ -35,11 +37,12 @@ export class BrowserScreencast {
 		this.debug.on("message", this.listener);
 		try {
 			await this.debug.sendCommand("Page.enable");
+			const max = this.maxSize();
 			await this.debug.sendCommand("Page.startScreencast", {
 				format: "jpeg",
 				quality: 70,
-				maxWidth: 1280,
-				maxHeight: 720,
+				maxWidth: max.width,
+				maxHeight: max.height,
 				everyNthFrame: 1,
 			});
 			if (!this.stopped) {
@@ -89,7 +92,8 @@ export class BrowserScreencast {
 		const inputGeneration = this.inputGeneration;
 		try {
 			const { width, height } = this.viewport();
-			const scale = Math.min(1, 1280 / width, 720 / height);
+			const max = this.maxSize();
+			const scale = Math.min(1, max.width / width, max.height / height);
 			const metrics = await this.debug.sendCommand("Page.getLayoutMetrics") as {
 				cssVisualViewport?: { pageX: number; pageY: number };
 			};
