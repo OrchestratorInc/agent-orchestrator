@@ -7,7 +7,7 @@ import {
 	type WorkspaceSummary,
 } from "../types/workspace";
 import type { CloudCpSharedArtifact } from "./cloud-cp/types";
-import { artifactChangeError, artifactContext, artifactCount, artifactKey, artifactLocationCounts, artifactOwner, sharedArtifactGroup, SHARED_WITH_ME_GROUP_ID, NO_PROJECT_GROUP_ID, withKeptArtifacts, artifactLocation, artifactSharing, artifactType, canChangeSessionArtifacts, filterArtifactGroups, findHostShareLink, groupArtifactsByProject, hostArtifactLocation, withHostShareLinks, withShareAccess } from "./artifacts";
+import { artifactChangeError, artifactContext, artifactCount, artifactKey, artifactLocationCounts, artifactOwner, sharedArtifactGroup, SHARED_WITH_ME_GROUP_ID, NO_PROJECT_GROUP_ID, withKeptArtifacts, artifactLocation, artifactSharing, artifactType, canChangeSessionArtifacts, filterArtifactGroups, findHostShareLink, isPublishedArtifact, groupArtifactsByProject, hostArtifactLocation, withHostShareLinks, withShareAccess } from "./artifacts";
 import { CloudCpError } from "./cloud-cp/errors";
 
 function artifact(name: string, updatedAt: string, kind: SessionArtifact["kind"] = "markdown"): SessionArtifact {
@@ -286,6 +286,15 @@ describe("filterArtifactGroups", () => {
 		expect(names(filterArtifactGroups(shared, { query: "", sharings: ["public"] }))).toEqual(["notes.md", "chart.png"]);
 		expect(names(filterArtifactGroups(shared, { query: "", sharings: ["private"] }))).toEqual(["metrics.html", "artifacts-user-flow.html"]);
 		expect(names(filterArtifactGroups(shared, { query: "", projectIds: ["ao"], sharings: ["public"] }))).toEqual(["notes.md"]);
+	});
+
+	it("keeps only the artifacts this person published, whoever their link opens for", () => {
+		const shared = groups.map((group) => ({ ...group, rows: group.rows.map((row) => row.name === "notes.md" || row.name === "chart.png" ? { ...row, shareUrl: `https://share.test/${row.name}` } : row) }));
+		expect(names(filterArtifactGroups(shared, { query: "", published: true }))).toEqual(["notes.md", "chart.png"]);
+		expect(names(filterArtifactGroups(shared, { query: "", projectIds: ["ao"], published: true }))).toEqual(["notes.md"]);
+		expect(filterArtifactGroups(groups, { query: "", published: true })).toEqual([]);
+		// A link someone else published to this person is not theirs.
+		expect(isPublishedArtifact({ shareUrl: "https://share.test/x", shared: { access: "anyone" } as never })).toBe(false);
 	});
 
 	it("tells a private link apart from a public one, once the link list says who it opens for", () => {

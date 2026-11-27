@@ -29,6 +29,7 @@ import {
 	artifactOwner,
 	canChangeSessionArtifacts,
 	filterArtifactGroups,
+	isPublishedArtifact,
 	groupArtifactsByProject,
 	hostArtifactLocation,
 	sharedArtifactGroup,
@@ -63,6 +64,7 @@ import { ArtifactPreviewModal } from "./ArtifactPreviewModal";
 import { PageTopbar, PageTopbarTitle } from "./PageTopbar";
 import { FilterChip, ToolbarSearch } from "./PageToolbar";
 import { Button } from "./ui/button";
+import { Tabs, TabsList, TabsTrigger } from "./ui/tabs";
 import {
 	DropdownMenu,
 	DropdownMenuContent,
@@ -104,6 +106,9 @@ function ArtifactProjectIcon({ workspace, avatarUrl }: { workspace: Pick<Workspa
  * Every artifact agents have written, grouped by project: on this machine, and
  * in cloud sessions when the control plane keeps artifacts.
  */
+/** The Artifacts page's sections: every artifact, or only the published ones. */
+type ArtifactSection = "all" | "published";
+
 export function ArtifactsView() {
 	const edgeFadeRef = useEdgeFadeRef<HTMLDivElement>();
 	const [scrollElement, setScrollElement] = useState<HTMLDivElement | null>(null);
@@ -146,6 +151,8 @@ export function ArtifactsView() {
 	const [sharings, setSharings] = useState<readonly ArtifactSharing[]>([]);
 	const [owner, setOwner] = useState<ArtifactOwner | undefined>();
 	const [pinnedOnly, setPinnedOnly] = useState(false);
+	// The Published section lists only the files this person published a link to.
+	const [section, setSection] = useState<ArtifactSection>("all");
 	const [preview, setPreview] = useState<{ row: ArtifactRow; projectName: string } | null>(null);
 	const openPreview = useCallback((row: ArtifactRow, projectName: string) => setPreview({ row, projectName }), []);
 	// A shared link opened from outside the app (ao-app://shared-artifact) opens here once.
@@ -172,13 +179,15 @@ export function ArtifactsView() {
 	const cloudUserId = useCloudMeUserId(cloudArtifacts);
 	const pinnedKeys = useMemo(() => pinnedOnly ? new Set(pinnedArtifactIds) : undefined, [pinnedOnly, pinnedArtifactIds]);
 	const filters = useMemo(
-		() => ({ query, projectIds, location, types, sharings, owner, cloudUserId, onlyKeys: pinnedKeys }),
-		[query, projectIds, location, types, sharings, owner, cloudUserId, pinnedKeys],
+		() => ({ query, projectIds, location, types, sharings, owner, cloudUserId, onlyKeys: pinnedKeys, published: section === "published" }),
+		[query, projectIds, location, types, sharings, owner, cloudUserId, pinnedKeys, section],
 	);
 	const visibleGroups = useMemo(() => filterArtifactGroups(groups, filters, scratchpadName), [groups, filters, scratchpadName]);
 	// Each location chip counts what choosing it would show under the other filters.
 	const locationCounts = useMemo(() => artifactLocationCounts(groups, filters, scratchpadName), [groups, filters, scratchpadName]);
 	const hasArtifacts = artifactCount(groups) > 0;
+	// Every published file, whatever the filters, so the section's count and its empty state agree.
+	const publishedCount = useMemo(() => groups.reduce((count, group) => count + group.rows.filter(isPublishedArtifact).length, 0), [groups]);
 	// One list, newest change (or name) first, with pinned artifacts kept at the
 	// top. The filters narrow it; nothing splits it into sections.
 	const cards = useMemo(() => {
@@ -366,6 +375,17 @@ export function ArtifactsView() {
 		<div className="flex min-h-0 flex-1 flex-col bg-background">
 			<PageTopbar lead={<PageTopbarTitle as="h1" icon={<Package className="size-icon-md" aria-hidden="true" />}>{t("artifacts.title")}</PageTopbarTitle>} />
 			<div className="shrink-0 pt-3 pr-4 pl-(--space-4_5)">
+				{hasArtifacts ? (
+					<Tabs value={section} onValueChange={(value) => setSection(value as ArtifactSection)} className="mb-2">
+						<TabsList aria-label={t("artifacts.section")}>
+							<TabsTrigger value="all">{t("artifacts.sectionAll")}</TabsTrigger>
+							<TabsTrigger value="published">
+								{t("artifacts.sectionPublished")}
+								<span aria-hidden="true" className="tabular-nums text-passive">{publishedCount}</span>
+							</TabsTrigger>
+						</TabsList>
+					</Tabs>
+				) : null}
 				<div className="flex min-h-control-md items-center gap-2">
 					{hasArtifacts ? (
 						<div role="group" aria-label={t("artifacts.location")} className="flex min-w-0 items-center gap-1">
@@ -574,7 +594,12 @@ export function ArtifactsView() {
 								<p role="alert" className="px-3 py-8 text-center text-sm text-destructive">{workspaceQuery.error.message}</p>
 							) : !hasArtifacts ? (
 								<EmptyArtifacts workspaces={workspaces ?? []} />
-							) : visibleGroups.length === 0 && location !== undefined && failedHosts.length > 0 ? null : visibleGroups.length === 0 ? (
+							) : visibleGroups.length === 0 && location !== undefined && failedHosts.length > 0 ? null : section === "published" && publishedCount === 0 ? (
+								<div className="flex flex-col items-center gap-1 py-16 text-center">
+									<h2 className="text-heading-sm font-semibold text-foreground">{t("artifacts.publishedEmpty.title")}</h2>
+									<p className="max-w-72 text-xs text-muted-foreground">{t("artifacts.publishedEmpty.description")}</p>
+								</div>
+							) : visibleGroups.length === 0 ? (
 								<div className="flex flex-col items-center gap-1 py-16 text-center">
 									<p className="text-control font-medium text-foreground">{t("artifacts.noMatches")}</p>
 									<Button variant="quiet" size="sm" onClick={clearFilters}>
