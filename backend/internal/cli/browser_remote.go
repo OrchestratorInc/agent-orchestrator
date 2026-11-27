@@ -48,11 +48,13 @@ func remoteBrowserForward(getenv func(string) string, args []string) (*remoteBro
 	if baseURL == "" {
 		return nil, nil, nil
 	}
-	token := strings.TrimSpace(getenv(envAgentBrowserToken))
-	if token == "" && strings.TrimSpace(getenv("AO_BROWSER_CAPABILITY")) != "" {
-		// An AO session: its daemon gates and forwards the command.
+	if strings.TrimSpace(getenv("AO_BROWSER_CAPABILITY")) != "" {
+		// An AO session: its daemon gates and forwards the command. This wins
+		// over a service token, which a session started before the host
+		// upgraded may still carry: that token must not bypass the gate.
 		return &remoteBrowserConfig{baseURL: strings.TrimRight(baseURL, "/"), viaDaemon: true}, args[1:], nil
 	}
+	token := strings.TrimSpace(getenv(envAgentBrowserToken))
 	if token == "" {
 		return nil, nil, fmt.Errorf("%s is set but %s is empty: the remote browser refuses every request without its token", envAgentBrowserURL, envAgentBrowserToken)
 	}

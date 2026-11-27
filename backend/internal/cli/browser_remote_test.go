@@ -266,3 +266,23 @@ func TestBrowserRemoteDaemonModeFailsClosed(t *testing.T) {
 		t.Fatalf("err = %v", err)
 	}
 }
+
+func TestRemoteBrowserForwardRoutesAOSessionsThroughTheDaemonEvenWithAToken(t *testing.T) {
+	// A session started before the host upgraded still has the service token
+	// in its environment; it must still go through the daemon's gate.
+	env := map[string]string{
+		envAgentBrowserURL:      "http://127.0.0.1:9333",
+		envAgentBrowserToken:    "old-session-token",
+		"AO_BROWSER_CAPABILITY": "cap",
+	}
+	cfg, rest, err := remoteBrowserForward(func(k string) string { return env[k] }, []string{"browser", "click", "@e2"})
+	if err != nil || cfg == nil {
+		t.Fatalf("cfg=%v err=%v", cfg, err)
+	}
+	if !cfg.viaDaemon || cfg.token != "" {
+		t.Fatalf("cfg = %+v: an AO session must go through its daemon, without the token", cfg)
+	}
+	if len(rest) != 2 || rest[0] != "click" {
+		t.Fatalf("rest = %v", rest)
+	}
+}
