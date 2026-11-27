@@ -17,6 +17,9 @@ import (
 type TelemetryIdentityController struct {
 	Source           ports.TelemetryIdentityStore
 	LifetimeSessions func(context.Context) (int64, error)
+	// DaemonVersion is this daemon's release. The phone tags its own error
+	// reports with it, because a paired daemon can be older than the app.
+	DaemonVersion string
 }
 
 // Register mounts the telemetry identity route on the supplied router.
@@ -30,7 +33,7 @@ func (c *TelemetryIdentityController) get(w http.ResponseWriter, r *http.Request
 		return
 	}
 	snap := c.Source.Snapshot()
-	resp := TelemetryIdentityResponse{OptedOut: snap.OptedOut}
+	resp := TelemetryIdentityResponse{OptedOut: snap.OptedOut, DaemonVersion: c.DaemonVersion}
 	if !snap.OptedOut {
 		resp.DistinctID = snap.DistinctID()
 		resp.InstallID = snap.InstallID

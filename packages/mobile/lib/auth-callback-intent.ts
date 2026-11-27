@@ -1,5 +1,6 @@
 import { parseSharedArtifactLink } from "../../shared/artifacts/shared-artifact-link";
 import { ARTIFACT_VIEWER_ORIGINS } from "./artifactViewer";
+import { reportOpenedBy, sessionTargetInPath } from "./telemetry/uiUsageRegistry";
 
 // The Orchestrator sign-in returns to ao-app://callback. On iOS the auth
 // session captures that URL privately. On Android the Custom Tab delivers it to
@@ -20,6 +21,11 @@ export function isAuthCallback(path: string): boolean {
 export function redirectSystemPath({ path, initial }: { path: string; initial: boolean }): string | null {
 	const artifact = parseSharedArtifactLink(path, ARTIFACT_VIEWER_ORIGINS);
 	if (artifact) return `/shared-artifact?url=${encodeURIComponent(artifact)}`;
-	if (!isAuthCallback(path)) return path;
-	return initial ? "/" : null;
+	if (isAuthCallback(path)) return initial ? "/" : null;
+	// Every link the app opens passes here first, on a cold start too, before the
+	// screen it names mounts. A home-screen launch passes the app's root URL, so
+	// only a link that names a session marks the session as opened from a link.
+	const target = sessionTargetInPath(path);
+	if (target) reportOpenedBy("deep_link", target);
+	return path;
 }

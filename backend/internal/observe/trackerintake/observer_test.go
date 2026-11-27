@@ -677,3 +677,13 @@ func TestCanonicalIssueIDGitLabHostDisambiguates(t *testing.T) {
 		t.Fatalf("gitlab.com and self-managed with same native produced identical IssueID %q", dotCom)
 	}
 }
+
+func TestSeenIssueIDsKeepsAMovedSessionsIssue(t *testing.T) {
+	sessions := []domain.SessionRecord{{
+		ID: "demo-1", IssueID: "github:acme/demo#12", IsTerminated: true,
+		MovedTo: &domain.SessionMove{OrgID: "org-1", SessionID: "demo-9"},
+	}}
+	if !seenIssueIDs(sessions)["github:acme/demo#12"] {
+		t.Fatal("a moved session still works on its issue elsewhere; intake must not respawn it")
+	}
+}

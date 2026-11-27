@@ -66,6 +66,21 @@ type HandoffNoteInput struct {
 	// fork given its conversation as text: the conversation from before it,
 	// which its own turns don't hold.
 	Inherited string
+	// MovedFrom names the machine a moved session came from. Its note leaves
+	// out paths and commands that only work on that machine.
+	MovedFrom string
+	// MovedWIP says the branch's top commit holds the work that was not
+	// committed on MovedFrom.
+	MovedWIP bool
+	// MovedWIPCommit is that commit's subject, and MovedWIPSHA its id.
+	MovedWIPCommit string
+	MovedWIPSHA    string
+	// HomeDir is the user's home folder; the note writes paths under it with a
+	// placeholder the destination fills in.
+	HomeDir string
+	// MaxBytes lowers the byte cap for a destination with a smaller prompt
+	// limit; Orchestrator Cloud takes 65,536 bytes. Zero keeps the default.
+	MaxBytes int
 }
 
 // HandoffFork names the session a text-handoff fork was copied from.
@@ -128,6 +143,9 @@ func BuildHandoffNote(in HandoffNoteInput) string {
 		fork = &handoffnote.Fork{SourceSessionID: string(in.Fork.SourceSessionID), SourceTitle: in.Fork.SourceTitle}
 		fullHistory = fmt.Sprintf(handoffForkFullHistory, in.Fork.SourceSessionID)
 	}
+	if in.MovedFrom != "" {
+		fullHistory = fmt.Sprintf("The full conversation stays on %s.", in.MovedFrom)
+	}
 	return handoffnote.Build(handoffnote.Input{
 		SwitchID: in.SwitchID, SourceHarness: string(in.SourceHarness), TargetHarness: string(in.TargetHarness),
 		SessionTitle: in.SessionTitle, Project: in.Project, WorkspacePath: in.WorkspacePath, Branch: in.Branch,
@@ -135,5 +153,6 @@ func BuildHandoffNote(in HandoffNoteInput) string {
 		ArtifactDir: in.ArtifactDir, Artifacts: artifacts, Turns: turns, Terminal: in.Terminal,
 		HistoryFiles: history, Fork: fork, TerminalOutput: in.TerminalOutput, Inherited: in.Inherited,
 		FullHistory: fullHistory, MaxChars: handoffNoteMaxChars,
+		MovedFrom: in.MovedFrom, MovedWIP: in.MovedWIP, MovedWIPCommit: in.MovedWIPCommit, MovedWIPSHA: in.MovedWIPSHA, HomeDir: in.HomeDir, MaxBytes: in.MaxBytes,
 	})
 }
