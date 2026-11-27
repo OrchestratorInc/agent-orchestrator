@@ -152,7 +152,7 @@ export function splitClaudeModels<T extends { id: string; label: string }>(model
  * One row per name within a group. Claude reaches one model by several ids (an alias
  * and its start id), which read the same once labeled. The row for `keep`, the chosen
  * model, stays, else one that can be chosen now; the others' ids become its aliases,
- * so a favourite saved on any shows.
+ * so a model remembered under any of them is still found.
  */
 export function mergeSameNamedModels<T extends { id: string; label: string; group?: string; aliases?: string[] } & ModelAvailability>(models: T[], keep?: string): T[] {
 	return models.flatMap((model) => {

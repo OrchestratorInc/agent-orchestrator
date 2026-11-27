@@ -202,7 +202,7 @@ export function HarnessModelsPanel({ agentId, hostId, installed, needsLogin, onO
 		</div>
 		{disabledModelsError ? <p role="alert" className="text-xs text-error">{disabledModelsError}</p> : null}
 		{defaultError ? <p role="alert" className="text-xs text-error">{defaultError}</p> : null}
-		{providerModels.length > MODELS_PAGE_SIZE ? <label className="flex h-8 shrink-0 items-center gap-2 rounded-md border border-(--color-border-settings-input) bg-(--color-bg-settings-input) px-2.5">
+		{providerModels.length > MODELS_PAGE_SIZE ? <label data-field="search" className="flex h-8 shrink-0 items-center gap-2 rounded-md border border-(--color-border-settings-input) bg-(--color-bg-settings-input) px-2.5">
 			<Search aria-hidden="true" className="size-3.5 shrink-0 text-settings-muted" />
 			<input type="search" aria-label={t("settings.models.searchAria", { label: t("settings.harness.models.title").toLocaleLowerCase() })}
 				className="min-w-0 flex-1 bg-transparent text-sm text-settings-label outline-none placeholder:text-settings-muted"

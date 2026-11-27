@@ -1,4 +1,5 @@
 import { Stack } from "expo-router";
+import { pillHeaderOptions, pillScreenLayout } from "../../lib/headerPill";
 import { GLASS_HEADER_OPTIONS, stackScreenOptions } from "../../lib/stackScreenOptions";
 import { useTheme } from "../../lib/ThemeProvider";
 
@@ -16,7 +17,7 @@ export default function SettingsLayout() {
 	const t = useTheme();
 
 	return (
-		<Stack screenOptions={{ ...stackScreenOptions(t), ...GLASS_HEADER_OPTIONS }}>
+		<Stack screenOptions={{ ...stackScreenOptions(t), ...GLASS_HEADER_OPTIONS, ...pillHeaderOptions() }} screenLayout={pillScreenLayout}>
 			<Stack.Screen name="index" options={{ title: "Settings" }} />
 			<Stack.Screen name="theme" options={{ title: "Theme" }} />
 			{/* A machine's page renames itself to the machine once it loads. */}

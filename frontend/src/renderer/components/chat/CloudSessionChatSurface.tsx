@@ -51,7 +51,7 @@ import { ChatWorkspace } from "./ChatWorkspace";
 import { AdaptiveStreamPacingContext } from "./ChatTimelineItems";
 import { MAX_CLOUD_CP_BINARY_BYTES } from "../../../shared/cloud-binary";
 import { CloudAttachmentSourceProvider } from "./CloudMessageAttachments";
-import { cloudAttachmentReference, cloudMessageAttachments, uploadCloudAttachment, type CloudAttachment } from "../../lib/cloud-attachments";
+import { cloudAttachmentReference, cloudMessageAttachments, splitCloudAttachmentReferences, uploadCloudAttachment, type CloudAttachment } from "../../lib/cloud-attachments";
 import type { ApprovalModeLimits } from "./TurnSettingsBar";
 import { SharedComposerNotice } from "./SharedComposerNotice";
 import { Button } from "../ui/button";
@@ -2593,7 +2593,7 @@ export function CloudSessionChatSurface({
 			onOpenArtifact={onOpenArtifact}
 			onInterrupt={activeTurn ? () => interrupt.mutate() : undefined}
 			onSteer={activeTurn && snapshot.capabilities?.includes("steer") ? (text, attachments, clientMessageId) => {
-				if (attachments?.length) return Promise.resolve({ status: "not-accepted" as const, reason: "Cloud steering currently accepts text only." });
+				if (attachments?.length || splitCloudAttachmentReferences(text).attachmentIds.length) return Promise.resolve({ status: "not-accepted" as const, reason: "Cloud steering currently accepts text only." });
 				return steer.mutateAsync({ text, clientMessageId });
 			} : undefined}
 			steerPending={steer.isPending}

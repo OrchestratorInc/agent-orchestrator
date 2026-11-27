@@ -182,6 +182,21 @@ describe("createMobileTelemetry", () => {
 			expect(captures.at(-1)?.props).toHaveProperty("is_signed_in", false);
 		});
 
+		it("stamps the paired daemon's version and drops it on unpair or an odd value", () => {
+			const { client, captures } = fakeClient();
+			const t = createMobileTelemetry(client, {});
+			t.adoptDesktopIdentity({ distinctId: "ins_abc", optedOut: false, daemonVersion: "1.9.0", lifetimeSessions: 12 });
+			t.capture(MOBILE_EVENTS.paired, { method: "qr" });
+			expect(captures.at(-1)?.props).toMatchObject({ paired_daemon_version: "1.9.0", lifetime_sessions: 12 });
+			t.adoptDesktopIdentity({ distinctId: "ins_abc", optedOut: false, daemonVersion: "/Users/alice build" });
+			t.capture(MOBILE_EVENTS.paired, { method: "qr" });
+			expect(captures.at(-1)?.props).not.toHaveProperty("paired_daemon_version");
+			t.adoptDesktopIdentity({ distinctId: "ins_abc", optedOut: false, daemonVersion: "1.9.0" });
+			t.adoptDesktopIdentity(null);
+			t.capture(MOBILE_EVENTS.paired, { method: "qr" });
+			expect(captures.at(-1)?.props).not.toHaveProperty("paired_daemon_version");
+		});
+
 		it("restores paired attribution after an incomplete identity refresh", () => {
 			const { client, captures } = fakeClient();
 			const t = createMobileTelemetry(client, {});
