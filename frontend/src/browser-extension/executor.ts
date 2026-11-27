@@ -138,6 +138,7 @@ export class Executor {
 					stringArg(args, "ref", "REFERENCE_REQUIRED", "ref is required"),
 					stringArg(args, "targetRef", "REFERENCE_REQUIRED", "target ref is required"),
 					args.human === true,
+					args.approvalBinding,
 				);
 			case "select":
 				return this.elementAction(ctx, "select", stringArg(args, "ref", "REFERENCE_REQUIRED", "ref is required"), {
@@ -786,8 +787,10 @@ export class Executor {
 		});
 	}
 
-	private async drag(ctx: Context, ref: string, targetRef: string, human: boolean): Promise<unknown> {
+	private async drag(ctx: Context, ref: string, targetRef: string, human: boolean, approvalBinding?: unknown): Promise<unknown> {
 		return this.withPage(ctx, async (page) => {
+			// An approved drag must drop onto the target the user approved.
+			await this.assertApprovalBinding(ctx, page, approvalBinding, targetRef);
 			if (!(await this.useTrustedInput(ctx, page))) {
 				throw new BridgeError("BROWSER_TRUSTED_INPUT_REQUIRED", "Dragging needs trusted input, which is off for this site");
 			}

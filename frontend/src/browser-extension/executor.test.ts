@@ -614,6 +614,25 @@ describe("Executor", () => {
 		expect(shots()).toBeGreaterThan(before);
 	});
 
+	it("drags an approved drag only onto the drop target the user approved", async () => {
+		const { fake, run, approve } = setup();
+		await approve("s1", true);
+		await run("open", { url: "https://shop.test/" });
+		const { refs } = (await run("snapshot", { interactive: true })) as { refs: Record<string, { name: string }> };
+		const refOf = (name: string) => Object.entries(refs).find(([, info]) => info.name === name)![0];
+		const help = refOf("Help");
+		const buy = refOf("Buy now");
+		const { binding } = (await run("describe", { action: "drag", ref: buy })) as { binding: Record<string, unknown> };
+		const moves = () => fake.debuggerCalls.filter((call) => call.method === "Input.dispatchMouseEvent").length;
+		const before = moves();
+		for (const stale of [{ ...binding, ref: help }, { ...binding, document: "older-document" }, { ...binding, tabId: "t2" }]) {
+			await expect(run("drag", { ref: help, targetRef: buy, approvalBinding: stale })).rejects.toMatchObject({ code: "BROWSER_TARGET_CHANGED" });
+		}
+		expect(moves()).toBe(before);
+		await run("drag", { ref: help, targetRef: buy, approvalBinding: binding });
+		expect(moves()).toBeGreaterThan(before);
+	});
+
 	it("describes a drag's drop target for the approval gate", async () => {
 		const { run, approve } = setup();
 		await approve("s1", false);

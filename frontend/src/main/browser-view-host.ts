@@ -347,7 +347,8 @@ const APPROVAL_DESCRIBE_WORLD_ID = 1013;
 
 // Input actions the approval binding (tab, document, element) is checked for.
 // type is bound because a typed line break presses Enter in the field.
-const APPROVAL_BOUND_ACTIONS = new Set(["click", "dblclick", "press", "type"]);
+// drag is bound to its drop target, which decides what the drag does.
+const APPROVAL_BOUND_ACTIONS = new Set(["click", "dblclick", "press", "type", "drag"]);
 
 type ApprovalBinding = { tabId: string; document: number; ref?: string; focus?: string };
 
@@ -4539,7 +4540,8 @@ export function createBrowserViewHost(
                 );
               }
               if (approvalBinding && APPROVAL_BOUND_ACTIONS.has(nativeAction)) {
-                const ref = typeof nativeArgs.ref === "string" ? nativeArgs.ref.replace(/^@/, "") : undefined;
+                const boundArg = nativeAction === "drag" ? nativeArgs.targetRef : nativeArgs.ref;
+                const ref = typeof boundArg === "string" ? boundArg.replace(/^@/, "") : undefined;
                 if (
                   approvalBinding.tabId !== targetEntry.tabId ||
                   approvalBinding.document !== targetEntry.documentGeneration ||
