@@ -18,8 +18,12 @@ export function ReviewActionButton({ label, accessibilityLabel, icon, tone, busy
 	// The accent is near white on the dark theme, where the prominent style's
 	// white label would vanish; the accent's own ink reads on it in both.
 	const ink = tone === "filled" ? [foregroundStyle(t.onAccent)] : [];
+	// The Host's height is the touch target's and only its width follows the
+	// label. Sized to its content both ways, it measured some buttons 52pt tall
+	// with the capsule at the top and others 44pt with it centred, so two buttons
+	// in one row could sit 17pt apart.
 	return (
-		<Host matchContents colorScheme={scheme}>
+		<Host matchContents={HOST_SIZING} colorScheme={scheme} style={HOST_STYLE}>
 			<Button
 				role={tone === "destructive" ? "destructive" : undefined}
 				onPress={onPress}
@@ -48,3 +52,6 @@ export function ReviewActionButton({ label, accessibilityLabel, icon, tone, busy
 		</Host>
 	);
 }
+
+const HOST_SIZING = { horizontal: true } as const;
+const HOST_STYLE = { height: touchTarget } as const;

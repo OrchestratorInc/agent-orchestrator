@@ -52,6 +52,7 @@ vi.mock("@expo/ui/swift-ui/modifiers", () => {
 
 import { ReviewActionButton } from "./review-action-button";
 import { ReviewActionButton as IOSReviewActionButton } from "./review-action-button.ios";
+import { touchTarget } from "./tokens";
 import { symbols } from "./symbols";
 
 let renderer: ReactTestRenderer | undefined;
@@ -110,6 +111,16 @@ describe("ReviewActionButton on iOS", () => {
 		button.props.onPress();
 		(modifier(modifiers, "onTapGesture")?.[0] as () => void)();
 		expect(onPress).toHaveBeenCalledTimes(2);
+	});
+
+	// A Host sized to its content measured some buttons 52pt tall with the capsule
+	// at the top and others 44pt with it centred, so two buttons in one row could
+	// sit 17pt apart. The height is the touch target's; only the width follows the label.
+	it("is always the touch target's height, its width following the label", async () => {
+		const root = await render(<IOSReviewActionButton label="Send to agent" icon={symbols.send} tone="filled" onPress={() => {}} />);
+		const host = root.findByType("Host" as never);
+		expect(host.props.matchContents).toEqual({ horizontal: true });
+		expect(host.props.style).toEqual({ height: touchTarget });
 	});
 
 	it("gives a stopping action the destructive role", async () => {
