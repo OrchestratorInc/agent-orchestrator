@@ -12,7 +12,7 @@ import { leadOrdered, PR_GLYPHS, PR_TONES, workerRowPullRequest, type WorkerRowP
 export type PullRequestRow = {
 	pr: DashboardPR;
 	number: number;
-	/** The PR's own title once its summary loads; its number until then. */
+	/** The PR's own title once its summary loads; "Pull request" until then (the row shows `#N` beside it). */
 	title: string;
 	lifecycle: PRLifecycle;
 	glyph: WorkerRowPullRequest["glyph"];
@@ -44,7 +44,9 @@ export function pullRequestRows(prs: readonly DashboardPR[], summaryFor: Summary
 	return prs.map((pr) => {
 		const summary = summaryFor(pr.number);
 		const lifecycle = prLifecycle(pr);
-		const title = summary?.title?.trim() || `Pull request #${pr.number}`;
+		const loaded = summary?.title?.trim();
+		// The row draws `#N` beside the title, so until the title loads it reads `#N Pull request`.
+		const title = loaded || "Pull request";
 		const status = prReviewPromptHeadline(pr, summary);
 		return {
 			pr,
@@ -54,7 +56,7 @@ export function pullRequestRows(prs: readonly DashboardPR[], summaryFor: Summary
 			glyph: PR_GLYPHS[lifecycle],
 			glyphTone: PR_TONES[lifecycle],
 			status,
-			accessibilityLabel: `Pull request ${pr.number}, ${title}, ${status.text}`,
+			accessibilityLabel: loaded ? `Pull request ${pr.number}, ${loaded}, ${status.text}` : `Pull request ${pr.number}, ${status.text}`,
 		};
 	});
 }

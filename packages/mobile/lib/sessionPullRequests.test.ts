@@ -40,7 +40,9 @@ describe("pullRequestRows", () => {
 	// Review Focus 1: before summaries load (first open, offline) a row is never blank.
 	it("falls back to the number before summaries load", () => {
 		const rows = pullRequestRows(sessionPullRequests({ prs: FIVE }), () => undefined);
-		expect(rows.map((row) => row.title)).toEqual(FIVE.map(() => expect.stringMatching(/^Pull request #\d+$/)));
+		// The row already draws `#N` beside the title, so the fallback does not repeat it.
+		expect(rows.map((row) => row.title)).toEqual(FIVE.map(() => "Pull request"));
+		expect(rows[0].accessibilityLabel).toBe(`Pull request 9137, ${rows[0].status.text}`);
 		expect(rows.find((row) => row.number === 9125)?.status).toEqual({ text: "Merged", tone: "merged" });
 		expect(rows.find((row) => row.number === 9140)).toMatchObject({ lifecycle: "draft", glyph: "git-pull-request-draft", glyphTone: "passive" });
 		expect(rows.find((row) => row.number === 9001)).toMatchObject({ glyph: "git-pull-request-closed", glyphTone: "error" });
