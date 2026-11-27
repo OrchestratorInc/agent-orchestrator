@@ -678,8 +678,9 @@ it("gives two accounts whose emails start alike different letters", async () => 
 		{ ...device, email: "ronish.rohan@gmail.com", color: "blue" },
 		{ ...saved, email: "ronish@untrivial.ai", color: "violet" },
 	]);
-	expect(within(await rowOf("device-claude")).getByRole("img", { name: "ronish.rohan@gmail.com" })).toHaveTextContent("RO");
-	expect(within(await rowOf("acct-b")).getByRole("img", { name: "ronish@untrivial.ai" })).toHaveTextContent("RU");
+	// The computer's own login picks last, so the saved account keeps its letters as it signs in and out.
+	expect(within(await rowOf("acct-b")).getByRole("img", { name: "ronish@untrivial.ai" })).toHaveTextContent("RO");
+	expect(within(await rowOf("device-claude")).getByRole("img", { name: "ronish.rohan@gmail.com" })).toHaveTextContent("RR");
 });
 
 it("shows an account's name before its email, with a badge once there are two accounts", async () => {

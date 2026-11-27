@@ -85,10 +85,38 @@ func pickColor(accounts []domain.AgentAccount, p domain.AgentAccountProvider, id
 }
 
 // saveIdentity writes an account's name and color: a "This computer" account's
-// to its own table, since it has no saved account row.
+// to its own table, since it has no saved account row, and to the cache of it.
 func (s *Service) saveIdentity(ctx context.Context, account domain.AgentAccount, name, color string) error {
-	if account.Device() {
-		return s.store.SetDeviceAgentAccountIdentity(ctx, account.ID, name, color)
+	if !account.Device() {
+		return s.store.UpdateAgentAccountIdentity(ctx, account.ID, name, color)
 	}
-	return s.store.UpdateAgentAccountIdentity(ctx, account.ID, name, color)
+	s.deviceLabelsMu.Lock()
+	defer s.deviceLabelsMu.Unlock()
+	if err := s.store.SetDeviceAgentAccountIdentity(ctx, account.ID, name, color); err != nil {
+		return err
+	}
+	if s.deviceLabels != nil {
+		s.deviceLabels[account.ID] = domain.AgentAccountLabel{Name: name, Color: color}
+	}
+	return nil
+}
+
+// deviceAccountLabels is the "This computer" accounts' names and colors, read
+// from the store the first time and kept after. The write holds the same lock,
+// so a read never caches a label a concurrent save is replacing.
+func (s *Service) deviceAccountLabels(ctx context.Context) (map[string]domain.AgentAccountLabel, error) {
+	s.deviceLabelsMu.Lock()
+	defer s.deviceLabelsMu.Unlock()
+	if s.deviceLabels == nil {
+		labels, err := s.store.ListDeviceAgentAccountIdentities(ctx)
+		if err != nil {
+			return nil, err
+		}
+		s.deviceLabels = labels
+	}
+	out := make(map[string]domain.AgentAccountLabel, len(s.deviceLabels))
+	for id, label := range s.deviceLabels {
+		out[id] = label
+	}
+	return out, nil
 }

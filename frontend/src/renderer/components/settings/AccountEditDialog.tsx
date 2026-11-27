@@ -46,7 +46,7 @@ export function AccountEditDialog({ account, label, takenColors, onSave, onClose
 		<div className="space-y-3">
 			<div className="space-y-1.5">
 				<label htmlFor={`${id}-name`} className="text-xs text-muted-foreground">{t("settings.agentAccounts.apiKeyName")}</label>
-				<Input ref={nameRef} id={`${id}-name`} value={name} maxLength={80} autoComplete="off" disabled={pending} placeholder={t("settings.agentAccounts.apiKeyNamePlaceholder")} onChange={(event) => setName(event.target.value)} onKeyDown={(event) => { if (event.key !== "Enter" || event.nativeEvent.isComposing || event.keyCode === 229) return; event.preventDefault(); void save(); }} />
+				<Input ref={nameRef} id={`${id}-name`} value={name} maxLength={80} autoComplete="off" disabled={pending} placeholder={account.kind !== "api_key" && account.email ? account.email : t("settings.agentAccounts.apiKeyNamePlaceholder")} onChange={(event) => setName(event.target.value)} onKeyDown={(event) => { if (event.key !== "Enter" || event.nativeEvent.isComposing || event.keyCode === 229) return; event.preventDefault(); void save(); }} />
 			</div>
 			<div className="space-y-1.5">
 				<span id={`${id}-color`} className="block text-xs text-muted-foreground">{t("settings.agentAccounts.colorLabel")}</span>

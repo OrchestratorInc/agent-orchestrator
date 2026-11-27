@@ -244,3 +244,36 @@ func TestUpdateIdentityRenamesTheComputersOwnAccount(t *testing.T) {
 		t.Fatalf("listed = %+v, err = %v", views, err)
 	}
 }
+
+// countingStore counts reads of the "This computer" accounts' labels.
+type countingStore struct {
+	*memStore
+	deviceReads int
+}
+
+func (c *countingStore) ListDeviceAgentAccountIdentities(ctx context.Context) (map[string]domain.AgentAccountLabel, error) {
+	c.deviceReads++
+	return c.memStore.ListDeviceAgentAccountIdentities(ctx)
+}
+
+// The computer's own account's name and color are read from the store once;
+// later lookups, and a rename, use and update the kept copy.
+func TestDeviceAccountLabelsAreReadOnce(t *testing.T) {
+	ctx := context.Background()
+	svc, store, _ := newAPIKeyService(t, &fakeClaude{signedInAs: map[string]string{}})
+	counting := &countingStore{memStore: store}
+	svc.store = counting
+	if _, err := svc.List(ctx, false); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.UpdateIdentity(ctx, "device-claude", strPtr("Personal"), nil); err != nil {
+		t.Fatal(err)
+	}
+	views, err := svc.List(ctx, false)
+	if err != nil || views[0].Account.Name != "Personal" {
+		t.Fatalf("listed = %+v, err = %v", views, err)
+	}
+	if counting.deviceReads != 1 {
+		t.Fatalf("device labels read %d times, want 1", counting.deviceReads)
+	}
+}

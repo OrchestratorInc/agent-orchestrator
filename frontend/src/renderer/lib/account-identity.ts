@@ -25,7 +25,7 @@ export function accountAbbreviation(account: { name?: string; email?: string; pr
 	return letters.toUpperCase();
 }
 
-type LetterAccount = { id: string; name?: string; email?: string; provider: AgentAccount["provider"] | string };
+type LetterAccount = { id: string; name?: string; email?: string; provider: AgentAccount["provider"] | string; device?: boolean };
 
 /** The letters an account could show, best first: its own abbreviation, then the initials of its
  * email's words (ronish.rohan gives RR), the email's first two characters, and the first characters
@@ -42,14 +42,17 @@ function letterCandidates(account: LetterAccount): string[] {
 
 /**
  * The letters each account shows, by account id, so no two accounts of a provider show the same
- * ones. Accounts take letters in the order given (the daemon lists the computer's own first, then
- * the rest oldest first), each its first candidate no earlier account of its provider took; when
- * every candidate is taken, its first letter and a number (R2, R3).
+ * ones. Saved accounts take letters in the order given (the daemon lists them oldest first), each
+ * its first candidate no earlier account of its provider took; when every candidate is taken, its
+ * first letter and a number (R2, R3). The computer's own login goes last: its email is known only
+ * while it is signed in, so going first would move every other account's letters as it signs in
+ * and out.
  */
 export function accountLetters(accounts: readonly LetterAccount[]): Map<string, string> {
 	const taken = new Map<string, Set<string>>();
 	const out = new Map<string, string>();
-	for (const account of accounts) {
+	const ordered = [...accounts.filter((account) => !account.device), ...accounts.filter((account) => account.device)];
+	for (const account of ordered) {
 		const used = taken.get(account.provider) ?? new Set<string>();
 		taken.set(account.provider, used);
 		const candidates = letterCandidates(account);

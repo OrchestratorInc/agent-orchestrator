@@ -84,6 +84,11 @@ type Service struct {
 	// identityMu serializes UpdateIdentity's read and write, so two partial
 	// updates never write back a field the other just changed.
 	identityMu sync.Mutex
+
+	// deviceLabels caches the "This computer" accounts' names and colors, read
+	// once: every account lookup needs them, and only saveIdentity changes them.
+	deviceLabelsMu sync.Mutex
+	deviceLabels   map[string]domain.AgentAccountLabel
 }
 
 // reading is the last identity and limits read for one account.
@@ -522,7 +527,7 @@ func (s *Service) accounts(ctx context.Context) ([]domain.AgentAccount, error) {
 	if err != nil {
 		return nil, err
 	}
-	devices, err := s.store.ListDeviceAgentAccountIdentities(ctx)
+	devices, err := s.deviceAccountLabels(ctx)
 	if err != nil {
 		return nil, err
 	}

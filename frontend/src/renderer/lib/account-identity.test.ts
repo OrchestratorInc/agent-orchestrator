@@ -40,8 +40,8 @@ describe("accountLetters", () => {
 	});
 
 	it("gives a later account with the same letters the next candidate from its email", () => {
-		const letters = accountLetters([claude("device-claude", { email: "ronish.rohan@gmail.com" }), claude("b", { email: "ronish@untrivial.ai" })]);
-		expect(letters).toEqual(new Map([["device-claude", "RO"], ["b", "RU"]]));
+		const letters = accountLetters([claude("a", { email: "ronish.rohan@gmail.com" }), claude("b", { email: "ronish@untrivial.ai" })]);
+		expect(letters).toEqual(new Map([["a", "RO"], ["b", "RU"]]));
 		// Words in the email come before its domain.
 		expect(accountLetters([claude("a", { email: "ronish@untrivial.ai" }), claude("b", { email: "ronish.rohan@gmail.com" })]).get("b")).toBe("RR");
 	});
@@ -54,6 +54,14 @@ describe("accountLetters", () => {
 	it("gives API keys without an email distinct letters", () => {
 		const letters = accountLetters([claude("a"), claude("b"), claude("c", { name: "Key" })]);
 		expect(new Set(letters.values()).size).toBe(3);
+	});
+
+	it("lets the computer's own login pick last, so its sign-in never moves another account's letters", () => {
+		const saved = claude("b", { email: "ronish@untrivial.ai" });
+		const signedIn = accountLetters([{ ...claude("device-claude", { email: "ronish.rohan@gmail.com" }), device: true }, saved]);
+		const signedOut = accountLetters([{ ...claude("device-claude"), device: true }, saved]);
+		expect(signedIn).toEqual(new Map([["b", "RO"], ["device-claude", "RR"]]));
+		expect(signedOut.get("b")).toBe("RO");
 	});
 
 	it("lets accounts of different providers share letters", () => {
