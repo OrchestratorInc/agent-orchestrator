@@ -3659,7 +3659,7 @@ func (c *Controller) apply(ctx context.Context, event ports.ChatEvent) error {
 		if event.ProviderTurnID == "" || event.Text == "" {
 			return nil
 		}
-		return c.store.AppendImportedUserMessage(ctx, c.conversation.ID, event.ProviderTurnID,
+		err := c.store.AppendImportedUserMessage(ctx, c.conversation.ID, event.ProviderTurnID,
 			domain.ConversationMessage{
 				ID:              c.newID(),
 				Role:            domain.MessageRoleUser,
@@ -3668,6 +3668,18 @@ func (c *Controller) apply(ctx context.Context, event ports.ChatEvent) error {
 				ProviderItemID:  event.ProviderItemID,
 				ClientMessageID: event.ClientMessageID,
 			}, now)
+		if errors.Is(err, domain.ErrNoConversationTurn) {
+			// The turn's start was already archived under this replay identity by
+			// an earlier import that matched it to another AO turn. ACP agents
+			// without message ids (agy) number replay turns by position, and a
+			// later replay can match the same position differently. The earlier
+			// import already showed this prompt, so skip it: failing here would
+			// fail every resume of the session.
+			c.log.Warn("skipped imported user message: its provider turn was never recorded",
+				"session", c.sessionID, "providerTurn", event.ProviderTurnID, "event", event.ProviderEventID)
+			return nil
+		}
+		return err
 
 	case ports.ChatEventTurnCompleted:
 		message := ""

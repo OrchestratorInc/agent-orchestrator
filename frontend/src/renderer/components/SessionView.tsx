@@ -1,4 +1,5 @@
 import { apiErrorException } from "../lib/api-error-exception";
+import { SessionApprovalDock } from "./approvals/ApprovalHost";
 import { DeviceRevealWatcher } from "./DeviceRevealWatcher";
 import { useDevicesEnabled } from "../lib/devices-enabled";
 import { getApiBaseUrl } from "../lib/api-client";
@@ -502,6 +503,15 @@ function CloudPausedStatus({ stage }: { stage: "paused" | "paused_by_coder" }) {
 			{stage === "paused_by_coder" ? t("cloud.lifecycle.pausedByCoder") : t("cloud.lifecycle.paused")}
 		</motion.div>
 	);
+}
+
+// Open requests are numbered across the app's life, not per mounted view: the
+// Artifacts view remembers the last one it acted on per session, and a remote
+// host's session view mounts afresh for each session.
+let artifactRequestSeq = 0;
+function nextArtifactRequestKey(): number {
+	artifactRequestSeq += 1;
+	return artifactRequestSeq;
 }
 
 export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: SessionViewProps) {
@@ -1983,6 +1993,13 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 	const reviewerInPane = Boolean(reviewerPaneKey && shownLayout?.leaves.has(reviewerPaneKey));
 	const reviewerVisible = reviewerInPane || Boolean(retainedReviewerChatId && mainReviewerChatId === retainedReviewerChatId);
 	const sessionPaneHidden = Boolean(shownLayout && !shownLayout.leaves.has(SESSION_TAB_KEY));
+	// A visible worker chat shows the session's browser approval at its end;
+	// anything else (a terminal, a file, PR or reviewer tab over it) gets the dock.
+	const chatShowsApprovals =
+		showChatSurface &&
+		!session?.cloud &&
+		chatTargetKind === "worker" &&
+		!(mainActiveFilePath || mainReviewerChatId || sessionPaneHidden || activePRUrl);
 	const paneCreateMux = useMemo(
 		() => (remoteBase ? () => createTerminalMux(muxUrlFromApiBase(remoteBase)) : undefined),
 		[remoteBase],
@@ -2491,7 +2508,7 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 			setInspectorOpenForSession(uiSessionId, true);
 			setArtifactRequestsBySession((current) => ({
 				...current,
-				[uiSessionId]: { feedback: target.feedback, path: target.path, key: (current[uiSessionId]?.key ?? 0) + 1 },
+				[uiSessionId]: { feedback: target.feedback, path: target.path, key: nextArtifactRequestKey() },
 			}));
 		},
 		[sessionId, setInspectorOpenForSession, transitionInspectorView, uiSessionId],
@@ -2979,6 +2996,7 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 							className="relative z-chrome flex h-toolbar w-full shrink-0 overflow-hidden"
 							data-testid="session-topbar-host"
 						/>
+						{!session?.cloud && !chatShowsApprovals ? <SessionApprovalDock sessionId={sessionId} hostId={hostId} /> : null}
 						<div
 							className="relative min-h-0 flex-1"
 							data-split-group={shownGroup?.id}
@@ -3056,6 +3074,7 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 									key={uiSessionId}
 									assetBaseUrl={remoteBase}
 									hostId={hostId}
+									showApprovals={chatShowsApprovals}
 									session={session}
 									reviewerTerminal={reviewerTerminal}
 									reviewerChat={reviewerChat}

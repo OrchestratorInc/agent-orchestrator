@@ -199,7 +199,7 @@ import {
 	WorkerUpdateRows,
 	workerUpdatesOf,
 } from "./WorkerUpdates";
-import { AutomationMessage, ReplacedNotice, reviewBursts, SteeredBrowserFeedback, steeredBrowserFeedback } from "./AutomationMessage";
+import { AutomationMessage, pullRequestBursts, pullRequestFeedbackNumber, ReplacedNotice, reviewBursts, SteeredBrowserFeedback, steeredBrowserFeedback } from "./AutomationMessage";
 import { accountFailure, turnStanding, turnUpdates } from "./background-turns";
 import { HumanMessageEditor } from "./HumanMessageEditor";
 import { ChatLinkProvider } from "./ChatMarkdown";
@@ -446,6 +446,8 @@ export interface ChatWorkspaceProps {
 	onFindRequestHandled?: (id: string) => void;
 	snapshot: ConversationSnapshot;
 	promptSuggestion?: ComposerPromptSuggestion;
+	/** Drawn after the last turn, above the prompt spacer: the session's pending browser approval. */
+	timelineEnd?: ReactNode;
 	/** Renderer-owned state identity; the snapshot's sessionId remains the daemon wire ID. */
 	uiSessionId?: string;
 	/** Durable draft owner for a conversation that is not a worker session. */
@@ -868,6 +870,7 @@ function ChatWorkspaceContent({
 	onFindRequestHandled,
 	snapshot,
 	promptSuggestion,
+	timelineEnd,
 	sessionTitle,
 	sessionRole = "worker",
 	assetBaseUrl,
@@ -2381,6 +2384,7 @@ function ChatWorkspaceContent({
 								{conversationEmpty ? <ForkTextCopyNotice /> : null}
 								<Timeline
 									shownAt={panelShownAt}
+									timelineEnd={timelineEnd}
 							onAddToSideChat={onAddToSideChat}
 									subagentPanel={subagentPanel}
 									checkingSideChatAvailability={checkingSideChatAvailability}
@@ -3420,6 +3424,7 @@ function minimapCrowdsText(track: HTMLElement, content: HTMLElement): boolean {
  * this behavior while keeping its own composer.
  */
 export function Timeline({
+	timelineEnd,
 	onAddToSideChat,
 	subagentPanel,
 	checkingSideChatAvailability,
@@ -3473,6 +3478,7 @@ export function Timeline({
 	findRequest,
 	onFindRequestHandled,
 }: {
+	timelineEnd?: ReactNode;
 	/** The agent controller is really gone; a turn still marked running settles with an unknown outcome. */
 	controllerStopped?: boolean;
 	/** When the panel holding this transcript was last shown again after being covered (epoch ms). */
@@ -4574,6 +4580,7 @@ export function Timeline({
 	);
 	const workerUpdateIndex = useWorkerUpdateIndex(workerUpdates ? snapshot.items : undefined);
 	const runKeys = useRef<ReadonlyMap<string, string>>(new Map());
+	const developerMode = useUiStore((state) => state.developerMode);
 	const grouped = useMemo(() => {
 		const hiddenTurns = hiddenTimelineTurnIds(snapshot);
 		if (openingTurnId) hiddenTurns.delete(openingTurnId);
@@ -4584,8 +4591,9 @@ export function Timeline({
 		const kept = dropped.size > 0 ? timelineItems.map((item) => outlivingAction(item, dropped)) : timelineItems;
 		const items = atCarrier(kept, snapshot.batchedDeliveries ?? [], batchedReports.moved);
 		const pendingTurns = new Set(snapshot.turns.filter((turn) => turn.agentPending).map((turn) => turn.id));
-		const groups = groupByTurn({ ...snapshot, items }, { controllerStopped })
-			.filter((group) => !group.turnId || !hiddenTurns.has(group.turnId))
+		const visible = groupByTurn({ ...snapshot, items }, { controllerStopped }).filter((group) => !group.turnId || !hiddenTurns.has(group.turnId));
+		// The user's own queued prompts sit in the dock, so feedback queued around one still merges.
+		const groups = (developerMode ? mergeQueuedPullRequestFeedback(visible, queuedTurnIds(snapshot)) : visible)
 			.map((group, index) => openingPending && (firstTurn ? group.turnId === firstTurn.id : index === 0 && group.turnId?.startsWith("local:"))
 				? { ...group, live: true, liveStartedAt: openingStartedAt, liveStartupLabel: openingStartupLabel }
 				: group)
@@ -4601,7 +4609,7 @@ export function Timeline({
 		const folded = foldBackground(cleaned, workerUpdateIndex, new Set(snapshot.turns.map((turn) => turn.id)), runKeys.current, batchedReports.under, find.gapBeforeSequence);
 		runKeys.current = new Map(folded.flatMap((group) => group.folded ? group.folded.members.map((member) => [member.key, group.key] as const) : []));
 		return folded;
-	}, [batchedReports, controllerStopped, find.gapBeforeSequence, openingPending, openingStartedAt, openingStartupLabel, openingTurnId, pendingTurnLabel, snapshot, timelineItems, workerUpdateIndex, workerUpdates]);
+	}, [batchedReports, controllerStopped, developerMode, find.gapBeforeSequence, openingPending, openingStartedAt, openingStartupLabel, openingTurnId, pendingTurnLabel, snapshot, timelineItems, workerUpdateIndex, workerUpdates]);
 	const groups = useStableList(grouped, groupKey, sameGroup);
 	// Read from every group, not the mounted ones: the timeline is virtualized, and the
 	// panel lists a child whose turn has scrolled far out of view.
@@ -5664,6 +5672,12 @@ export function Timeline({
 	function onViewportKeyDown(event: ReactKeyboardEvent<HTMLDivElement>) {
 		const target = event.target as HTMLElement;
 		if (event.defaultPrevented || target.closest("input, textarea, select, [contenteditable='true'], [contenteditable=''], [role='menu'], [role='listbox'], [role='textbox']")) return;
+		// A disclosure opened from the keyboard, as onViewportPointerDown does for a pointer.
+		if ((event.key === "Enter" || (event.key === " " && !event.shiftKey)) && target.closest("[aria-expanded]:not([aria-haspopup])")) {
+			clearRelatch();
+			releaseFollow();
+			return;
+		}
 		if (event.key === "ArrowUp" || event.key === "PageUp" || event.key === "Home" || (event.key === " " && event.shiftKey)) {
 			noteReaderIntent();
 			holdScrollFollow(READER_INTENT_HOLD_MS);
@@ -6033,6 +6047,7 @@ export function Timeline({
 							/>
 						</div>
 					) : null}
+					{timelineEnd}
 					{/* Pushes the latest prompt toward the top of the viewport when following,
 					    then shrinks as the reply fills the space below it. */}
 					<div
@@ -6392,8 +6407,13 @@ const TurnGroup = memo(function TurnGroup({
 		// eslint-disable-next-line react-hooks/exhaustive-deps -- turnFlowItems reads only these fields of the group.
 		[group.items, group.subagents, group.liveProviderFailure, group.outcome?.state, group.outcome?.error],
 	);
-	// A review round arrives as one message per comment; it draws as one event.
-	const bursts = useMemo(() => reviewBursts(runs.map((run) => (run.kind === "single" ? run.items[0] : undefined))), [runs]);
+	// A review round arrives as one message per comment; it draws as one event, or in
+	// Developer Mode, a PR's comments and failing CI draw as one line.
+	const developerMode = useUiStore((state) => state.developerMode);
+	const bursts = useMemo(() => {
+		const singles = runs.map((run) => (run.kind === "single" ? run.items[0] : undefined));
+		return developerMode ? pullRequestBursts(singles) : reviewBursts(singles);
+	}, [developerMode, runs]);
 	const lastAssistantId = [...group.items]
 		.reverse()
 		.find((item) => item.kind === "message" && item.role === "assistant" && item.text.trim() !== "")?.id;
@@ -6516,7 +6536,7 @@ const TurnGroup = memo(function TurnGroup({
 		<TimelineItem
 			key={run.key}
 			item={run.items[0]!}
-			reviewBurst={bursts.get(run.items[0]!.id)}
+			pullRequestBurst={bursts.get(run.items[0]!.id)}
 			harness={harness}
 			sessionId={sessionId}
 			apiBaseUrl={apiBaseUrl}
@@ -6803,7 +6823,7 @@ function TimelineItem({
 	rollbackDisabled,
 	onSelectAnnotation,
 	status,
-	reviewBurst,
+	pullRequestBurst,
 }: {
 	item: ConversationItem;
 	harness?: string;
@@ -6846,8 +6866,8 @@ function TimelineItem({
 	onSelectAnnotation?: (annotation: { text: string; snapshot?: ChatExcerptSnapshot; messageId?: string; revision?: number }) => void;
 	/** Where a human message stands, leading the row under its bubble. */
 	status?: ReactNode;
-	/** This message's review burst (see `reviewBursts`): the messages it draws for, or null when another draws it. */
-	reviewBurst?: readonly ConversationMessage[] | null;
+	/** This message's PR feedback burst (see `pullRequestBursts` and `reviewBursts`): the messages it draws for, or null when another draws it. */
+	pullRequestBurst?: readonly ConversationMessage[] | null;
 }) {
 	if (item.kind === "message") {
 		if (item.role === "assistant") {
@@ -6903,11 +6923,11 @@ function TimelineItem({
 				/>
 			);
 		}
-		// An earlier message of its review burst draws this one.
-		if (reviewBurst === null) return null;
+		// An earlier message of its PR feedback burst draws this one.
+		if (pullRequestBurst === null) return null;
 		return (
 			<FromAgent item={item} queued={queued}>
-				<AutomationMessage message={item} queued={queued} burst={reviewBurst} fallback={<OriginMessage message={item} />} />
+				<AutomationMessage message={item} queued={queued} burst={pullRequestBurst} fallback={<OriginMessage message={item} />} />
 			</FromAgent>
 		);
 	}
@@ -7898,6 +7918,36 @@ function firstTurnSettled(snapshot: ConversationSnapshot): boolean {
  */
 function openingTurnSettled(snapshot: ConversationSnapshot, controllerStopped: boolean): boolean {
 	return firstTurnSettled(snapshot) || (controllerStopped && snapshot.turns[0]?.state === "running");
+}
+
+/**
+ * In Developer Mode, queued turns that hold only one PR's review comments or
+ * failing CI, back to back, as one group. The daemon queues each comment that
+ * arrives while the agent works as its own turn, so a review round stacked one
+ * row per comment under the working row; as one group its messages draw as one
+ * line, and the count grows in place as more arrive. The group keeps the first
+ * turn's key and id, so the line stays where it is.
+ */
+function mergeQueuedPullRequestFeedback(groups: TimelineGroup[], queued: ReadonlySet<string>): TimelineGroup[] {
+	const pullRequestOf = (group: TimelineGroup) => {
+		if (!group.turnId || !queued.has(group.turnId) || group.items.length === 0) return undefined;
+		const numbers = new Set(group.items.map((item) => pullRequestFeedbackNumber(item)));
+		const [number] = numbers;
+		return numbers.size === 1 ? number : undefined;
+	};
+	const merged: TimelineGroup[] = [];
+	let runPullRequest: number | undefined;
+	for (const group of groups) {
+		const pullRequest = pullRequestOf(group);
+		const previous = merged.at(-1);
+		if (pullRequest !== undefined && pullRequest === runPullRequest && previous) {
+			merged[merged.length - 1] = { ...previous, items: [...previous.items, ...group.items] };
+			continue;
+		}
+		merged.push(group);
+		runPullRequest = pullRequest;
+	}
+	return merged.length === groups.length ? groups : merged;
 }
 
 /**

@@ -162,6 +162,8 @@ export type InspectorSessionState = {
 	cloudReviewUi?: Record<string, CloudReviewUiState>;
 	/** Files: display mode picked per path in a centre tab, restored for the same open request after a remount. */
 	fileDisplayModes?: Record<string, RememberedFileDisplayMode>;
+	/** Artifacts: the view as it was left, put back when the tab or the session is shown again. In memory only, like the tab itself. */
+	artifactsView?: RememberedArtifactsView;
 	/** The session-entry defaulting (Summary tab, baseline browser reveal) has already run once for this session's lifetime. */
 	initialized?: boolean;
 	/** The background tasks the side panel lists, in the order first seen. In memory only: they go with the app. */
@@ -175,6 +177,27 @@ export type InspectorSessionState = {
 export type FileDisplayMode = "diff" | "file" | "rendered";
 
 export type RememberedFileDisplayMode = { mode: FileDisplayMode; requestKey: number };
+
+/** Where a scrolled view was, in CSS pixels. */
+export type ScrollPosition = { x: number; y: number };
+
+/** The inspector's Artifacts view as it was left: the open file and how it was being viewed, or the list. */
+export type RememberedArtifactsView = {
+	/** The open file; null shows the list. */
+	path: string | null;
+	/** The file was asked for before the session listed it, so it still waits for the list. */
+	awaited?: boolean;
+	/** An HTML artifact showed its source rather than its page. */
+	htmlSource?: boolean;
+	/** The saved version being looked at in place of the live file. */
+	previewVersion?: number;
+	/** The viewer's zoom, 1 at fit. */
+	zoom?: number;
+	/** Where the open file, or the list, was scrolled. */
+	scroll?: ScrollPosition;
+	/** The last open request the view acted on, so coming back does not act on it again. */
+	requestKey?: number;
+};
 
 export type GlobalToast = {
 	title: string;
@@ -464,6 +487,8 @@ export type UiState = {
 	setCloudReviewRepository: (sessionId: string, repository: string) => void;
 	setCloudReviewUi: (sessionId: string, repository: string | undefined, changes: CloudReviewUiState) => void;
 	setFileDisplayMode: (sessionId: string, path: string, mode: FileDisplayMode, requestKey: number) => void;
+	/** Remembers how the session's Artifacts view was left. */
+	setArtifactsView: (sessionId: string, view: RememberedArtifactsView) => void;
 	setCommandPaletteOpen: (open: boolean) => void;
 	setNewChatSending: (sending: boolean) => void;
 	setProjectRestarting: (projectId: string, restarting: boolean, hostId?: string) => void;
@@ -569,6 +594,12 @@ function loginTaken(state: UiState, waiting: LoginReturn): Partial<UiState> {
 		loginReturn: { ...waiting, loggedInAt: Date.now() },
 		...(modal?.scope === "global" ? { settingsModal: modal.returnTo ?? null } : {}),
 	};
+}
+
+function sameArtifactsView(a: RememberedArtifactsView | undefined, b: RememberedArtifactsView): boolean {
+	return a !== undefined && a.path === b.path && a.awaited === b.awaited && a.htmlSource === b.htmlSource
+		&& a.previewVersion === b.previewVersion && a.zoom === b.zoom && a.requestKey === b.requestKey
+		&& a.scroll?.x === b.scroll?.x && a.scroll?.y === b.scroll?.y;
 }
 
 function inspectorState(sessions: Record<string, InspectorSessionState>, sessionId: string): InspectorSessionState {
@@ -1156,6 +1187,12 @@ export const useUiStore = create<UiState>((set, get) => ({
 					[sessionId]: { ...current, fileDisplayModes: { ...current.fileDisplayModes, [path]: { mode, requestKey } } },
 				},
 			};
+		}),
+	setArtifactsView: (sessionId, view) =>
+		set((state) => {
+			const current = inspectorState(state.inspectorSessions, sessionId);
+			if (sameArtifactsView(current.artifactsView, view)) return state;
+			return { inspectorSessions: { ...state.inspectorSessions, [sessionId]: { ...current, artifactsView: view } } };
 		}),
 	setCommandPaletteOpen: (isCommandPaletteOpen) => set({ isCommandPaletteOpen }),
 	setNewChatSending: (newChatSending) => set({ newChatSending }),

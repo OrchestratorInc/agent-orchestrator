@@ -6737,6 +6737,145 @@ describe("browser human pointer and annotated screenshots", () => {
 		return { ...setupHost(runtime), runtime };
 	}
 
+	it("dispatches an approved action only on the tab, document, and element approved", async () => {
+		const { host, runtime, invoke, emit } = setupPointerHost();
+		const ensure = (await invoke("browser:ensure", "sess-1")) as { viewId: string };
+		emit("browser:setBounds", 1, {
+			viewId: ensure.viewId,
+			revision: 1,
+			rect: { x: 0, y: 0, width: 10, height: 10 },
+			visible: true,
+		});
+		const clicks = () =>
+			(runtime.runAction as unknown as ReturnType<typeof vi.fn>).mock.calls.filter((call: unknown[]) => call[1] === "click").length;
+		const tabs = (await host.execute("sess-1", "tabs")) as { activeTabId: string };
+		const tabId = tabs.activeTabId;
+
+		for (const binding of [
+			{ tabId, document: 99, ref: "e1" },
+			{ tabId: "t-other", document: 0, ref: "e1" },
+			{ tabId, document: 0, ref: "e7" },
+			{ nonsense: true },
+		]) {
+			await expect(host.execute("sess-1", "click", { ref: "e1", approvalBinding: binding })).rejects.toMatchObject({
+				code: "BROWSER_TARGET_CHANGED",
+			});
+		}
+		expect(clicks()).toBe(0);
+		await host.execute("sess-1", "click", { ref: "e1", approvalBinding: { tabId, document: 0, ref: "e1" } });
+		expect(clicks()).toBe(1);
+	});
+
+	it("discards a description when the page navigates while it is read", async () => {
+		const { host, runtime, invoke, emit, webContentsListeners } = setupPointerHost();
+		const ensure = (await invoke("browser:ensure", "sess-1")) as { viewId: string };
+		emit("browser:setBounds", 1, { viewId: ensure.viewId, revision: 1, rect: { x: 0, y: 0, width: 10, height: 10 }, visible: true });
+		let navigate = false;
+		(runtime.runAction as unknown as ReturnType<typeof vi.fn>).mockImplementation(async (...call: unknown[]) => {
+			if (call[1] === "snapshot") {
+				// The page moves on between the tab read and the snapshot reply.
+				if (navigate) webContentsListeners.get("did-navigate")?.({} as never, "http://localhost:5173/next" as never);
+				return { snapshot: "- button \"Save\" [ref=e1]", refs: { e1: { role: "button", name: "Save" } } };
+			}
+			return {};
+		});
+		await expect(host.execute("sess-1", "describe", { action: "click", ref: "e1" })).resolves.toMatchObject({ binding: { ref: "e1" } });
+		navigate = true;
+		await expect(host.execute("sess-1", "describe", { action: "click", ref: "e1" })).rejects.toMatchObject({ code: "BROWSER_TARGET_CHANGED" });
+	});
+
+	it("guards an approved Enter against focus moving before agent-browser delivers it", async () => {
+		const { host, runtime, invoke, emit, webContents } = setupPointerHost();
+		const ensure = (await invoke("browser:ensure", "sess-1")) as { viewId: string };
+		emit("browser:setBounds", 1, { viewId: ensure.viewId, revision: 1, rect: { x: 0, y: 0, width: 10, height: 10 }, visible: true });
+		const tabs = (await host.execute("sess-1", "tabs")) as { activeTabId: string };
+		const order: string[] = [];
+		let mismatch = true;
+		(webContents as unknown as Record<string, unknown>).executeJavaScriptInIsolatedWorld = vi.fn(async (_world: number, [{ code }]: Array<{ code: string }>) => {
+			if (code.includes("__aoPressGuard?.stop()")) {
+				order.push("arm");
+				return true;
+			}
+			if (code.includes("const guard = window.__aoPressGuard")) {
+				order.push("disarm");
+				return { mismatch };
+			}
+			return "f1"; // the focus check: focus is where it was approved
+		});
+		(runtime.runAction as unknown as ReturnType<typeof vi.fn>).mockImplementation(async (...call: unknown[]) => {
+			if (call[1] === "press") order.push("press");
+			return {};
+		});
+		const binding = { tabId: tabs.activeTabId, document: 0, focus: "f1" };
+		// The page moved focus after the check: the guard held the key back.
+		await expect(host.execute("sess-1", "press", { key: "Enter", approvalBinding: binding })).rejects.toMatchObject({ code: "BROWSER_TARGET_CHANGED" });
+		expect(order).toEqual(["arm", "press", "disarm"]);
+		// Focus stayed put: the press goes through.
+		mismatch = false;
+		await expect(host.execute("sess-1", "press", { key: "Enter", approvalBinding: binding })).resolves.toBeDefined();
+	});
+
+	it("answers an approved dialog only on the tab the user approved", async () => {
+		const { host, runtime, invoke, emit } = setupPointerHost();
+		const ensure = (await invoke("browser:ensure", "sess-1")) as { viewId: string };
+		emit("browser:setBounds", 1, { viewId: ensure.viewId, revision: 1, rect: { x: 0, y: 0, width: 10, height: 10 }, visible: true });
+		const tabs = (await host.execute("sess-1", "tabs")) as { activeTabId: string };
+		const dialogCalls = () =>
+			(runtime.runAction as unknown as ReturnType<typeof vi.fn>).mock.calls.filter((call: unknown[]) => call[1] === "dialog").length;
+		await expect(host.execute("sess-1", "dialog", { operation: "accept", dialogTab: "t-other" })).rejects.toMatchObject({
+			code: "BROWSER_TARGET_CHANGED",
+		});
+		expect(dialogCalls()).toBe(0);
+		await host.execute("sess-1", "dialog", { operation: "accept", dialogTab: tabs.activeTabId });
+		expect(dialogCalls()).toBe(1);
+	});
+
+	it("refuses an approved act whose description found no element", async () => {
+		const { host, runtime, invoke, emit } = setupPointerHost();
+		const ensure = (await invoke("browser:ensure", "sess-1")) as { viewId: string };
+		emit("browser:setBounds", 1, { viewId: ensure.viewId, revision: 1, rect: { x: 0, y: 0, width: 10, height: 10 }, visible: true });
+		(runtime.runAction as unknown as ReturnType<typeof vi.fn>).mockImplementation(async (...call: unknown[]) =>
+			call[1] === "snapshot"
+				? { snapshot: "- button \"Save\" [ref=e1]", refs: { e1: { role: "button", name: "Save" } } }
+				: {},
+		);
+		const tabs = (await host.execute("sess-1", "tabs")) as { activeTabId: string };
+		// The element exists now, but nothing matched when the user was asked,
+		// so the binding names none.
+		await expect(
+			host.execute("sess-1", "act", { instruction: "the save button", approvalBinding: { tabId: tabs.activeTabId, document: 0 } }),
+		).rejects.toMatchObject({ code: "BROWSER_TARGET_CHANGED" });
+		const acted = (runtime.runAction as unknown as ReturnType<typeof vi.fn>).mock.calls.filter((call: unknown[]) => call[1] === "click");
+		expect(acted).toHaveLength(0);
+	});
+
+	it("dispatches an approved line-break type only on the tab, document, and element approved", async () => {
+		const { host, runtime, invoke, emit } = setupPointerHost();
+		const ensure = (await invoke("browser:ensure", "sess-1")) as { viewId: string };
+		emit("browser:setBounds", 1, {
+			viewId: ensure.viewId,
+			revision: 1,
+			rect: { x: 0, y: 0, width: 10, height: 10 },
+			visible: true,
+		});
+		const typed = () =>
+			(runtime.runAction as unknown as ReturnType<typeof vi.fn>).mock.calls.filter((call: unknown[]) => call[1] === "type").length;
+		const tabs = (await host.execute("sess-1", "tabs")) as { activeTabId: string };
+		const tabId = tabs.activeTabId;
+		for (const binding of [
+			{ tabId, document: 99, ref: "e1" },
+			{ tabId: "t-other", document: 0, ref: "e1" },
+			{ tabId, document: 0, ref: "e7" },
+		]) {
+			await expect(host.execute("sess-1", "type", { ref: "e1", text: "4111\n", approvalBinding: binding })).rejects.toMatchObject({
+				code: "BROWSER_TARGET_CHANGED",
+			});
+		}
+		expect(typed()).toBe(0);
+		await host.execute("sess-1", "type", { ref: "e1", text: "4111\n", approvalBinding: { tabId, document: 0, ref: "e1" } });
+		expect(typed()).toBe(1);
+	});
+
 	it("forwards the human pointer option for clicks and drags only when asked", async () => {
 		const { host, runtime, invoke, emit } = setupPointerHost();
 		const ensure = (await invoke("browser:ensure", "sess-1")) as { viewId: string };

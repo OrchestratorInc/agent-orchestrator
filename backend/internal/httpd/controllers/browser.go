@@ -13,6 +13,7 @@ import (
 	"github.com/OrchestratorInc/agent-orchestrator/backend/internal/httpd/apierr"
 	"github.com/OrchestratorInc/agent-orchestrator/backend/internal/httpd/apispec"
 	"github.com/OrchestratorInc/agent-orchestrator/backend/internal/httpd/envelope"
+	browsersvc "github.com/OrchestratorInc/agent-orchestrator/backend/internal/service/browser"
 )
 
 const browserCapabilityHeader = "X-AO-Browser-Capability"
@@ -30,6 +31,7 @@ var browserTelemetryActions = map[string]struct{}{
 type BrowserService interface {
 	Status(ctx context.Context, sessionID domain.SessionID, capability string) (browserruntime.Status, error)
 	Execute(ctx context.Context, sessionID domain.SessionID, capability, action string, args map[string]interface{}) (browserruntime.Result, string, error)
+	ExecuteRemote(ctx context.Context, sessionID domain.SessionID, capability string, args []string, files map[string]string) (browsersvc.RemoteResponse, error)
 }
 
 // BrowserChromeService installs and reports Chrome mode: the native host
@@ -48,6 +50,7 @@ type BrowserController struct {
 
 // Register adds browser status, command, and Chrome-mode routes to the API router.
 func (c *BrowserController) Register(r chi.Router) {
+	r.Post("/browser/remote-commands", c.executeRemote)
 	r.Get("/browser/status", c.status)
 	r.Post("/browser/commands", c.execute)
 	r.Get("/browser/chrome", c.chromeStatus)
@@ -160,6 +163,30 @@ func (c *BrowserController) execute(w http.ResponseWriter, r *http.Request) {
 		Action:    action,
 		Result:    result.Value,
 	})
+}
+
+// executeRemote runs a raw agent-browser command on this host's self-hosted
+// agent browser, after the approval gate.
+func (c *BrowserController) executeRemote(w http.ResponseWriter, r *http.Request) {
+	if c.Svc == nil {
+		apispec.NotImplemented(w, r, http.MethodPost, "/api/v1/browser/remote-commands")
+		return
+	}
+	var in BrowserRemoteCommandRequest
+	if err := decodeJSON(r, &in); err != nil {
+		envelope.WriteAPIError(w, r, http.StatusBadRequest, "bad_request", "INVALID_JSON", "Invalid JSON body", nil)
+		return
+	}
+	if in.SessionID == "" || len(in.Args) == 0 {
+		envelope.WriteAPIError(w, r, http.StatusBadRequest, "bad_request", "INVALID_ARGUMENT", "sessionId and args are required", nil)
+		return
+	}
+	out, err := c.Svc.ExecuteRemote(r.Context(), in.SessionID, r.Header.Get(browserCapabilityHeader), in.Args, in.Files)
+	if err != nil {
+		writeBrowserError(w, r, err)
+		return
+	}
+	envelope.WriteJSON(w, http.StatusOK, BrowserRemoteCommandResponse{Output: out.Output, Error: out.Error, Files: out.Files})
 }
 
 func browserTelemetryAction(action string) string {
