@@ -1,5 +1,5 @@
 import { createContext, createElement, useCallback, useContext, useLayoutEffect, useRef, useState, type ReactNode, type RefObject } from "react";
-import type { LayoutChangeEvent, View, ViewStyle } from "react-native";
+import { Dimensions, type LayoutChangeEvent, type View, type ViewStyle } from "react-native";
 
 /** The width a list's menu rows last measured, shared by the rows under one `MenuRowWidthScope`. */
 export type MenuRowWidths = RefObject<number | undefined>;
@@ -42,8 +42,16 @@ export function MenuRowWidthScope({ widths, children }: { widths?: MenuRowWidths
  * layout effect's read did for rows a list mounts in a later render batch, so
  * those rows showed a few frames at their intrinsic width (titles running off
  * the screen) before snapping. Under a `MenuRowWidthScope` a new row starts at
- * the width the list's rows last measured. The layout effect and `onLayout`
- * still measure each slot, cover a list's very first rows, and follow resizes.
+ * the width the list's rows last measured.
+ *
+ * A list's very first rows have nothing measured to start from, and an unsized
+ * first render does not recover: once the measured width arrives, the row is
+ * the right size but its title line keeps the width it was first laid out at,
+ * so a long title still runs off the screen and pushes the row's time past the
+ * edge. So a row with no width to inherit starts at the window's. That is only
+ * a guess where the list is narrower than the window, but any width on the
+ * first render is enough: the layout effect and `onLayout` then correct it,
+ * and follow resizes, without leaving the title behind.
  */
 export function useMenuRowWidth(): {
 	ref: RefObject<View | null>;
@@ -53,7 +61,7 @@ export function useMenuRowWidth(): {
 } {
 	const shared = useContext(SharedRowWidth);
 	const ref = useRef<View>(null);
-	const [width, setWidth] = useState<number | undefined>(() => shared?.current);
+	const [width, setWidth] = useState<number | undefined>(() => shared?.current ?? windowWidth());
 	const measured = useCallback((next: number) => {
 		// Only a real width seeds the rows after this one: a slot laid out at
 		// zero for a moment would otherwise start every later row at zero.
@@ -66,4 +74,10 @@ export function useMenuRowWidth(): {
 	}, [measured]);
 	const onLayout = useCallback((event: LayoutChangeEvent) => measured(event.nativeEvent.layout.width), [measured]);
 	return { ref, onLayout, width, style: width == null ? undefined : { width } };
+}
+
+/** The window's width, or undefined before the window has one. */
+function windowWidth(): number | undefined {
+	const width = Dimensions.get("window").width;
+	return width > 0 ? width : undefined;
 }

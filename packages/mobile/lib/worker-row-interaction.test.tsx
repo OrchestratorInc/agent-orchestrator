@@ -17,6 +17,7 @@ const springs = vi.hoisted(() => ({ pending: [] as { to: number; done?: (finishe
 const haptics = vi.hoisted(() => ({ armed: vi.fn() }));
 
 vi.mock("react-native", () => ({
+	Dimensions: { get: () => ({ width: 402 }) },
 	Platform: { OS: "ios" },
 	StyleSheet: { create: (styles: unknown) => styles, hairlineWidth: 0.5, absoluteFill: { position: "absolute" } },
 	View: "View",

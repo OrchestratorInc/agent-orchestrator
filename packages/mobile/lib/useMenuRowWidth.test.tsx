@@ -2,7 +2,9 @@ import { act, create, type ReactTestRenderer } from "react-test-renderer";
 import { createElement, type ReactElement } from "react";
 import { afterEach, expect, it, vi } from "vitest";
 
-vi.mock("react-native", () => ({ View: "View" }));
+// The window the rows sit in; a test may set it to 0, as before the window has a size.
+const screen = vi.hoisted(() => ({ width: 430 }));
+vi.mock("react-native", () => ({ View: "View", Dimensions: { get: () => ({ width: screen.width }) } }));
 
 import { MenuRowWidthScope, useMenuRowWidth, useMenuRowWidths, type MenuRowWidths } from "./useMenuRowWidth";
 
@@ -10,6 +12,7 @@ let renderer: ReactTestRenderer | undefined;
 afterEach(() => {
 	act(() => renderer?.unmount());
 	renderer = undefined;
+	screen.width = 430;
 });
 
 // The slot and the row inside it, as the worker row and PR card build them.
@@ -35,9 +38,9 @@ it("gives the row the slot's width on mount, before any onLayout", () => {
 	expect(rowStyle(mount(402.5))).toEqual({ width: 402.5 });
 });
 
-it("leaves the row unsized while the slot has no width yet, and takes it from onLayout", () => {
+it("starts the row at the window's width while the slot has none yet, and takes the slot's from onLayout", () => {
 	const tree = mount(0);
-	expect(rowStyle(tree)).toBeUndefined();
+	expect(rowStyle(tree)).toEqual({ width: 430 });
 	act(() => tree.root.findByProps({ testID: "slot" }).props.onLayout({ nativeEvent: { layout: { width: 390 } } }));
 	expect(rowStyle(tree)).toEqual({ width: 390 });
 });
@@ -95,11 +98,39 @@ it("takes the width a row measures later as the seed for the rows after it", () 
 	expect(firstRender(log, "later-e")).toBe(874);
 });
 
-it("leaves rows outside a scope to measure themselves", () => {
+it("starts rows outside a scope at the window's width, then measures each slot", () => {
 	const log: [string, number | undefined][] = [];
 	act(() => { renderer = create(list(["first-a"], log, false), { createNodeMock: firstBatchOnly }); });
 	act(() => renderer!.update(list(["first-a", "later-f"], log, false)));
-	expect(firstRender(log, "later-f")).toBeUndefined();
+	expect(firstRender(log, "later-f")).toBe(430);
+	expect(rowStyle(renderer!, "first-a")).toEqual({ width: 402.5 });
+});
+
+// A list's first rows have no sibling to inherit from. Rendered once without a
+// width inside an iOS menu, a row's title line keeps its intrinsic width for
+// good, running off the screen with the row's time past its edge.
+it("renders a list's first rows at the window's width, never unsized, then at their slot's", () => {
+	const log: [string, number | undefined][] = [];
+	act(() => { renderer = create(list(["first-a", "first-b"], log), { createNodeMock: firstBatchOnly }); });
+	expect(firstRender(log, "first-a")).toBe(430);
+	expect(firstRender(log, "first-b")).toBe(430);
+	expect(log.some(([, width]) => width === undefined)).toBe(false);
+	expect(rowStyle(renderer!, "first-a")).toEqual({ width: 402.5 });
+	expect(rowStyle(renderer!, "first-b")).toEqual({ width: 402.5 });
+});
+
+it("prefers the list's measured width over the window's for later rows", () => {
+	const log: [string, number | undefined][] = [];
+	act(() => { renderer = create(list(["first-a"], log), { createNodeMock: firstBatchOnly }); });
+	act(() => renderer!.update(list(["first-a", "later-j"], log)));
+	expect(firstRender(log, "later-j")).toBe(402.5);
+});
+
+it("leaves a row unsized when the window has no size yet", () => {
+	screen.width = 0;
+	const log: [string, number | undefined][] = [];
+	act(() => { renderer = create(list(["first-a"], log), { createNodeMock: () => ({ getBoundingClientRect: () => ({ width: 0 }) }) }); });
+	expect(firstRender(log, "first-a")).toBeUndefined();
 });
 
 it("seeds a remounted list from widths held above it", () => {

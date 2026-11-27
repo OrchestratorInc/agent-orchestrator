@@ -16,6 +16,7 @@ vi.mock("react-native", async () => {
 	const React = await import("react");
 	const host = (name: string) => ({ children, ...props }: { children?: React.ReactNode }) => React.createElement(name, props, children);
 	return {
+		Dimensions: { get: () => ({ width: 402 }) },
 		Platform: fixture.platform,
 		Pressable: host("Pressable"),
 		StyleSheet: { create: (styles: unknown) => styles, hairlineWidth: 0.5 },
