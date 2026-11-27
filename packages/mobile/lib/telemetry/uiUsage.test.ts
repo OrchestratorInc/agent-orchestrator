@@ -370,6 +370,21 @@ describe("performance", () => {
 		expect(perfAfter(t)).toMatchObject({ session_open_count: 1, session_open_lt1000_count: 1, session_open_p75_ms: 700 });
 	});
 
+	// Back on session A after a detour, then straight to B: a switch, not an opening.
+	it("does not time a switch to another session after a return", () => {
+		const t = setup();
+		t.tracker.setRoute("board");
+		t.tracker.setRoute("session");
+		t.advance(400);
+		t.tracker.sessionOpened("h|a");
+		t.tracker.setRoute("files");
+		t.tracker.setRoute("session");
+		t.tracker.sessionReturned("h|a");
+		t.advance(5_000);
+		t.tracker.sessionOpened("h|b");
+		expect(perfAfter(t)).toMatchObject({ session_open_count: 1, session_open_p75_ms: 400 });
+	});
+
 	it("times a return to the front until fresh data, and counts one that got none", () => {
 		const t = setup();
 		t.tracker.setRoute("board");

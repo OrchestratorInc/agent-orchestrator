@@ -406,13 +406,15 @@ export function createUiUsageTracker(deps: UiUsageDeps): UiUsageTracker {
 					: lastOutsideSession ? SOURCE_BY_SURFACE[lastOutsideSession] ?? "other" : "other";
 			if (marked) pendingSource = null;
 			window.sessionOpens[source] = (window.sessionOpens[source] ?? 0) + 1;
-			if (sessionRouteAt !== null) {
-				recordSessionOpen(window.perf, now - sessionRouteAt);
-				sessionRouteAt = null;
-			}
+			// Only an opening from outside the session screens is timed, not a switch.
+			if (sessionRouteAt !== null && !fromSession) recordSessionOpen(window.perf, now - sessionRouteAt);
+			sessionRouteAt = null;
 		},
 		sessionReturned(key) {
-			if (enabled) countedSession = key;
+			if (!enabled) return;
+			countedSession = key;
+			// A return is not an opening, so nothing after it is timed from that route.
+			sessionRouteAt = null;
 		},
 		openedBy(source, target) {
 			pendingSource = { source, at: deps.now(), ...(target ? { target } : {}) };

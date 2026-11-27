@@ -460,6 +460,8 @@ async function req(cfg: ServerConfig, path: string, init?: RequestInit, timeoutM
 	const timer = setTimeout(cancel, timeoutMs);
 	let received: Response | undefined;
 	let bodyText = "";
+	// Time to the answer's headers, reported once the request's outcome is known.
+	let headersMs = 0;
 	try {
 		const installId = cachedInstallId();
 		const startedAt = Date.now();
@@ -475,8 +477,7 @@ async function req(cfg: ServerConfig, path: string, init?: RequestInit, timeoutM
 				},
 			});
 			noteRequestAnswered(startedAt);
-			// Time to the answer's headers, by the kind of connection it went over.
-			reportRequestTimed(Date.now() - startedAt, transportOf(cfg.endpointKind), received.ok);
+			headersMs = Date.now() - startedAt;
 			// This boundary serves finite JSON responses, not SSE or downloads.
 			// Finish loading here so writes with no body consumer also release their
 			// timer, and /sessions cannot fan out while its body is still stalled.
@@ -505,6 +506,9 @@ async function req(cfg: ServerConfig, path: string, init?: RequestInit, timeoutM
 		controller.signal.removeEventListener("abort", rejectAbort);
 	}
 	const res = received!;
+	// Once per answered request, by the kind of connection it went over. Timeouts
+	// and network failures were reported above; a cancelled request never is.
+	reportRequestTimed(headersMs, transportOf(cfg.endpointKind), res.ok);
 	if (!res.ok) {
 		// The daemon returns a locked JSON envelope: { error, code, message, requestId }.
 		let detail = "";
