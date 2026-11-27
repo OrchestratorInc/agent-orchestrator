@@ -285,6 +285,23 @@ describe("board actions on cloud rows", () => {
 		expect(link.id).toBe("o9");
 	});
 
+	it("lists a launched or recovered orchestrator only through the writes taken before the create", async () => {
+		const scopedWrites = { upsertSession: vi.fn(), upsertProject: vi.fn() };
+		const scoped = vi.fn(() => scopedWrites);
+		const created = context({ sessions: [], scoped }, { createSession: vi.fn(async () => ({ session: session({ id: "o1", kind: "orchestrator" }) })) as never });
+		await launchCloudOrchestrator(created, "p1", "chat");
+		expect(scopedWrites.upsertSession).toHaveBeenCalledWith(expect.objectContaining({ id: "o1" }));
+		expect(created.upsertSession).not.toHaveBeenCalled();
+
+		const createSession = vi.fn(async () => { throw new CloudError("The resource conflicts with an existing record.", { status: 409, code: "conflict" }); });
+		const listSessions = vi.fn(async () => ({ items: [session({ id: "o9", kind: "orchestrator" })], page: { hasMore: false } }));
+		const recovered = context({ sessions: [], scoped }, { createSession: createSession as never, listSessions: listSessions as never });
+		await launchCloudOrchestrator(recovered, "p1", "chat");
+		expect(scopedWrites.upsertSession).toHaveBeenCalledWith(expect.objectContaining({ id: "o9" }));
+		expect(recovered.upsertSession).not.toHaveBeenCalled();
+		expect(scoped).toHaveBeenCalledTimes(2);
+	});
+
 	it("still reports a conflict it cannot explain with a live orchestrator", async () => {
 		const createSession = vi.fn(async () => { throw new CloudError("The resource conflicts with an existing record.", { status: 409, code: "conflict" }); });
 		const listSessions = vi.fn(async () => ({ items: [], page: { hasMore: false } }));

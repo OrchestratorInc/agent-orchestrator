@@ -158,12 +158,15 @@ async function launchOrchestrator(context: CloudActionContext, projectId: string
 	if (existing) return cloudOrchestratorLink(existing, projectName);
 	const harness = defaultCloudAgent(context.connections, project?.config?.orchestrator?.agent);
 	if (!harness) throw new Error("Connect a coding agent to Orchestrator Cloud first (Settings → Coding agents).");
+	// Taken before the create goes out: its answer, or the one recovered after a
+	// conflict, is listed only while this account and organization are still shown.
+	const writes = context.scoped?.() ?? context;
 	try {
 		const { session } = await context.client.createSession(orgId, {
 			projectId, kind: "orchestrator", harness, displayName: "Orchestrator", prompt: "",
 			interfaceMode: mode === "chat" && context.chatHarnesses.includes(harness) ? "chat" : "tui",
 		});
-		context.upsertSession(session);
+		writes.upsertSession(session);
 		void context.refreshSessions();
 		return cloudOrchestratorLink(session, projectName);
 	} catch (cause) {
@@ -174,7 +177,7 @@ async function launchOrchestrator(context: CloudActionContext, projectId: string
 		const items = await collectPages((cursor) => context.client.listSessions(orgId, { projectId, cursor }), 5).catch(() => [] as CloudSession[]);
 		const found = liveOrchestrator(items, projectId);
 		if (!found) throw cause;
-		context.upsertSession(found);
+		writes.upsertSession(found);
 		void context.refreshSessions();
 		return cloudOrchestratorLink(found, projectName);
 	}
