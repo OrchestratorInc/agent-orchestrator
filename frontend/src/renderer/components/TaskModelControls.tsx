@@ -1,4 +1,4 @@
-import { useEffect, type ReactNode } from "react";
+import { useEffect, useId, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 import type { TaskComposerEffortControl, TaskComposerModelControl } from "@aoagents/product-ui";
 import { acceptsLocalModelID, agentModelDisplayLabel, isConcreteModelID, modelChoiceLabel } from "../lib/agent-model-choices";
@@ -164,6 +164,7 @@ export function TaskModelSelection(props: TaskComposerModelControl & {
 	const models = catalog?.models;
 	const selectedModel = value || models?.find((item) => item.isDefault)?.id || "";
 	const { selected, invalidEffort } = useModelTuning({ models, model: selectedModel, effort, onEffortChange });
+	const problemId = useId();
 	const problem = props.warning ?? (invalidEffort ? t("settings.models.unsupportedTuning", { role: "" }) : undefined);
 	// Only an agent with no models to pick, or a level its model no longer offers, cannot be saved;
 	// a warning beside a usable list (cached models, a partial listing) is information.
@@ -211,15 +212,15 @@ export function TaskModelSelection(props: TaskComposerModelControl & {
 				<TooltipProvider>
 					<Tooltip>
 						<TooltipTrigger asChild>
-							<span role="alert" tabIndex={0} aria-describedby={undefined} className={`flex size-6 shrink-0 cursor-default items-center justify-center rounded-md ${blocking ? "text-destructive" : "text-warning"}`}>
+							<Button type="button" variant="quiet" size="icon-xs" aria-label={t("newTask.modelNotice.icon")} aria-describedby={problemId} className={`shrink-0 cursor-default ${blocking ? "text-destructive hover:text-destructive focus-visible:text-destructive" : "text-warning hover:text-warning focus-visible:text-warning"}`}>
 								<TriangleAlert aria-hidden="true" className="size-3.5" />
-								<span className="sr-only">{problem}</span>
-							</span>
+							</Button>
 						</TooltipTrigger>
 						<TooltipContent side="top" className="max-w-80">{problem}</TooltipContent>
 					</Tooltip>
 				</TooltipProvider>
 			) : null}
+			{problem ? <span id={problemId} className="sr-only">{problem}</span> : null}
 			{problem && props.onRetry ? (
 				<Button type="button" size="xs" variant="ghost" className="shrink-0" onClick={() => void props.onRetry?.().catch(() => undefined)}>
 					{t("newTask.modelNotice.retry")}

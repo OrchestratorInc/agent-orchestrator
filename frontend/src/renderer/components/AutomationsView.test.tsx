@@ -83,9 +83,14 @@ async function openBlankCreate(user: Pick<typeof userEvent, "click">) {
 	if (trigger.getAttribute("aria-haspopup") === "menu") await user.click(await screen.findByRole("menuitem", { name: "Start from scratch" }));
 }
 
+/** An automation's row in the list; its accessible name is its content: name, schedule, project, status. */
+function automationRow(name: string) {
+	return screen.getByRole("button", { name: (accessible) => accessible.startsWith(`${name} `) });
+}
+
 /** Opens an automation's details panel from its row in the list. */
 async function openDetails(user: Pick<typeof userEvent, "click">, name: string) {
-	await user.click(screen.getByRole("button", { name: `Show details for ${name}` }));
+	await user.click(automationRow(name));
 }
 
 // The automation form's one agent, model and effort picker, as in the composer.
@@ -750,11 +755,11 @@ describe("AutomationsView", () => {
 		await user.type(within(dialog).getByRole("textbox", { name: "Name" }), "Review");
 		await user.type(within(dialog).getByRole("textbox", { name: "Prompt" }), "Review the board");
 		// The message is the icon's, read on hover or focus, not a line of its own.
-		expect(await within(dialog).findByRole("alert")).toHaveTextContent("Codex is not signed in; sign in to load its models");
+		expect(await within(dialog).findByRole("button", { name: "Model warning" })).toHaveAccessibleDescription("Codex is not signed in; sign in to load its models");
 		expect(within(dialog).getByText("Codex is not signed in; sign in to load its models")).toHaveClass("sr-only");
 		expect(within(dialog).getByRole("button", { name: "Create automation" })).toBeDisabled();
 		await choose(user, dialog, "Agent", /Amp/);
-		await waitFor(() => expect(within(dialog).queryByRole("alert")).not.toBeInTheDocument());
+		await waitFor(() => expect(within(dialog).queryByRole("button", { name: "Model warning" })).not.toBeInTheDocument());
 		expect(within(dialog).getByRole("button", { name: "Create automation" })).toBeEnabled();
 	});
 
@@ -768,7 +773,7 @@ describe("AutomationsView", () => {
 		await user.click(screen.getByRole("menuitem", { name: "Demo" }));
 		await user.type(within(dialog).getByRole("textbox", { name: "Name" }), "Review");
 		await user.type(within(dialog).getByRole("textbox", { name: "Prompt" }), "Review the board");
-		expect(await within(dialog).findByRole("alert")).toHaveTextContent("Model discovery failed; showing cached models");
+		expect(await within(dialog).findByRole("button", { name: "Model warning" })).toHaveAccessibleDescription("Model discovery failed; showing cached models");
 		expect(within(dialog).getByRole("button", { name: "Create automation" })).toBeEnabled();
 	});
 
@@ -945,11 +950,18 @@ describe("AutomationsView", () => {
 		expect(within(screen.getByRole("article")).getByText(label)).toBeInTheDocument();
 	});
 
+	it("reads each row's status as part of its name", () => {
+		const base = { projectId: "demo", prompt: "Review", kind: "worker", rrule: "FREQ=DAILY;BYHOUR=9;BYMINUTE=0;BYSECOND=0", timezone: "UTC" };
+		mocks.automations = [{ ...base, id: "paused", displayName: "Paused review", enabled: false }];
+		renderView();
+		expect(automationRow("Paused review")).toHaveAccessibleName(/^Paused review .*Demo.*Paused$/);
+	});
+
 	it("opens details in a side panel and surfaces failed toggles", async () => {
 		mocks.automations = [{ id: "active", projectId: "demo", displayName: "Morning triage", prompt: "Review the board", kind: "worker", harness: "codex", rrule: "FREQ=DAILY;BYHOUR=9;BYMINUTE=30;BYSECOND=0", timezone: "UTC", enabled: true }];
 		mocks.update.mockRejectedValue(new Error("Could not pause"));
 		renderView();
-		const row = screen.getByRole("button", { name: "Show details for Morning triage" });
+		const row = automationRow("Morning triage");
 		expect(row).toHaveAttribute("aria-expanded", "false");
 		expect(screen.queryByRole("complementary")).not.toBeInTheDocument();
 		await userEvent.click(row);
@@ -976,7 +988,7 @@ describe("AutomationsView", () => {
 		});
 		try {
 			renderView();
-			await userEvent.click(screen.getByRole("button", { name: "Show details for Morning triage" }));
+			await userEvent.click(automationRow("Morning triage"));
 			expect(within(screen.getByRole("complementary", { name: "Morning triage" })).getByRole("button", { name: "Close" })).toHaveFocus();
 		} finally {
 			style.mockRestore();
@@ -987,7 +999,7 @@ describe("AutomationsView", () => {
 		const base = { projectId: "demo", prompt: "Review", kind: "worker", rrule: "FREQ=DAILY;BYHOUR=9;BYMINUTE=0;BYSECOND=0", timezone: "UTC" };
 		mocks.automations = [{ ...base, id: "active", displayName: "Friday review", enabled: true }, { ...base, id: "paused", displayName: "Paused review", enabled: false }];
 		renderView();
-		await userEvent.click(screen.getByRole("button", { name: "Show details for Friday review" }));
+		await userEvent.click(automationRow("Friday review"));
 		const status = screen.getByRole("group", { name: "Status" });
 		await userEvent.click(within(status).getByRole("button", { name: "Paused 1" }));
 		expect(screen.queryByRole("complementary")).not.toBeInTheDocument();

@@ -436,7 +436,7 @@ function AutomationRow({ item, projectName, selected, onSelect }: { item: Automa
 	const failed = item.enabled && item.latestRun?.status === "failed";
 	const failedAt = item.latestRun?.finishedAt ?? item.latestRun?.scheduledFor;
 	return <article>
-		<Pressable id={automationRowId(item.id)} aria-label={t("automations.details.show", { name: item.displayName })} aria-expanded={selected} aria-controls={selected ? AUTOMATION_DETAILS_ID : undefined} onClick={onSelect}
+		<Pressable id={automationRowId(item.id)} aria-expanded={selected} aria-controls={selected ? AUTOMATION_DETAILS_ID : undefined} onClick={onSelect}
 			className={cn("flex w-full min-w-0 items-center gap-3 rounded-md px-2 py-2.5 text-start", selected ? "bg-interactive-hover" : "hover:bg-interactive-hover")}>
 			<StatusMark state={!item.enabled ? "paused" : failed ? "failed" : item.latestRun ? "ran" : "waiting"} />
 			<div className="min-w-0 flex-1">
@@ -447,7 +447,7 @@ function AutomationRow({ item, projectName, selected, onSelect }: { item: Automa
 					<span className="truncate">{projectName}</span>
 				</p>
 			</div>
-			<span className={cn("hidden shrink-0 text-caption tabular-nums @md:block", failed ? "text-destructive" : item.enabled ? "text-foreground" : "text-muted-foreground")}>
+			<span className={cn("sr-only shrink-0 text-caption tabular-nums @md:not-sr-only", failed ? "text-destructive" : item.enabled ? "text-foreground" : "text-muted-foreground")}>
 				{!item.enabled
 					? t("automations.paused")
 					: failed && failedAt
