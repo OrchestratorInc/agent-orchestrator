@@ -571,6 +571,8 @@
 	"browser.emptyUrl": "Enter a URL or click one in the terminal.",
 	"browser.sessionEnded": "Session ended — browser preview unavailable.",
 	"browser.forward": "Forward",
+	"browser.muteTab": "Mute tab",
+	"browser.unmuteTab": "Unmute tab",
 	"browser.newTab": "New tab",
 	"browser.onlyTab": "The only tab cannot be closed",
 	"browser.openDevTools": "Open DevTools",

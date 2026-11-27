@@ -609,6 +609,8 @@
 	"browser.emptyUrl": "URL을 입력하거나 터미널에서 링크를 클릭하세요.",
 	"browser.sessionEnded": "Session ended — browser preview unavailable.",
 	"browser.forward": "앞으로",
+	"browser.muteTab": "탭 음소거",
+	"browser.unmuteTab": "탭 음소거 해제",
 	"browser.newTab": "새 탭",
 	"browser.onlyTab": "마지막 탭은 닫을 수 없습니다",
 	"browser.openDevTools": "개발자 도구 열기",

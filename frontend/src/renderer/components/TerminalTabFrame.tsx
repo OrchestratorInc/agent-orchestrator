@@ -149,7 +149,7 @@ export function TerminalTabFrame({
 			{action ? (
 				<span
 					className={cn(
-						"grid size-icon-base shrink-0 place-items-center",
+						"grid h-icon-base w-auto min-w-icon-base shrink-0 place-items-center",
 						slotted ? "mr-2" : cn("absolute right-2 top-1/2 -translate-y-1/2", !shownAtRest && tabHoverRevealClassName),
 						// Renaming hides the control (keeping the ⋮'s room, so the tab holds its width).
 						editingContent && "invisible",

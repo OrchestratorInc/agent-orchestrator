@@ -571,6 +571,8 @@
 	"browser.emptyUrl": "Введите URL или нажмите на ссылку в терминале.",
 	"browser.sessionEnded": "Сессия завершена. Предпросмотр в браузере недоступен.",
 	"browser.forward": "Вперёд",
+	"browser.muteTab": "Выключить звук вкладки",
+	"browser.unmuteTab": "Включить звук вкладки",
 	"browser.newTab": "Новая вкладка",
 	"browser.onlyTab": "Единственную вкладку нельзя закрыть",
 	"browser.openDevTools": "Открыть DevTools",

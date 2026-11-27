@@ -65,6 +65,8 @@ import {
 	Tablet,
 	Trash2,
 	UserRound,
+	VolumeOff,
+	VolumeOn,
 	X,
 } from "@/components/app-icons";
 import { apiErrorMessage } from "../lib/api-client";
@@ -86,7 +88,7 @@ import {
 import { SETTINGS_MENU_ROW, SETTINGS_MENU_SURFACE } from "./settings/SettingsMenuTrigger";
 import { Input } from "./ui/input";
 import { Pressable } from "./ui/pressable";
-import { TabCloseButton, TerminalTabFrame } from "./TerminalTabFrame";
+import { TabCloseButton, TerminalTabFrame, terminalTabActionClassName } from "./TerminalTabFrame";
 import { Popover, PopoverAnchor, PopoverContent } from "./ui/popover";
 import { Tooltip, TooltipContent, TooltipTrigger } from "./ui/tooltip";
 import { cn } from "../lib/utils";
@@ -451,6 +453,7 @@ export const BrowserPanelView = memo(function BrowserPanelView({
 		tabNotice,
 		selectTab,
 		closeTab,
+		muteTab = async () => undefined,
 		openTab,
 		reorderTabs,
 		closedTabs,
@@ -964,6 +967,12 @@ export const BrowserPanelView = memo(function BrowserPanelView({
 		},
 		[closeTab],
 	);
+	const handleMuteTab = useCallback(
+		(tabId: string, muted: boolean) => {
+			void muteTab(tabId, muted);
+		},
+		[muteTab],
+	);
 
 	const annotationStatusLabel =
 		status === "picking"
@@ -1163,6 +1172,7 @@ export const BrowserPanelView = memo(function BrowserPanelView({
 								<SortableBrowserTopTab
 									key={tab.id}
 									onClose={handleCloseTab}
+									onMute={handleMuteTab}
 									onSelect={handleSelectTab}
 									selected={tab.id === activeTabId}
 									tab={tab}
@@ -1908,16 +1918,25 @@ const SortableBrowserTopTab = memo(function SortableBrowserTopTab({
 	selected,
 	onSelect,
 	onClose,
+	onMute,
 }: {
 	tab: BrowserViewModel["tabs"][number];
 	selected: boolean;
 	onSelect: (tabId: string) => void;
 	onClose: (tabId: string) => void;
+	onMute: (tabId: string, muted: boolean) => void;
 }) {
 	const { t } = useTranslation();
 	const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id: tab.id });
 	const label = browserTabLabel(tab.title, tab.url);
 	const close = useCallback(() => onClose(tab.id), [onClose, tab.id]);
+	// A quiet tab needs no mute control (nothing to mute), and an agent tab's
+	// page plays its audio on the remote host — muting the local viewer would
+	// have no effect on what the person hears.
+	const muted = tab.muted === true;
+	const showMute = tab.remote === undefined && (muted || tab.audible === true);
+	const muteLabel = muted ? t("browser.unmuteTab") : t("browser.muteTab");
+	const closeLabel = t("browser.closeTab", { title: label.title });
 	return (
 		<div
 			className={cn("browser-panel__tab", isDragging && "browser-panel__tab--drag-placeholder")}
@@ -1926,7 +1945,32 @@ const SortableBrowserTopTab = memo(function SortableBrowserTopTab({
 			style={{ transform: CSS.Transform.toString(transform), transition }}
 		>
 			<TerminalTabFrame
-				action={<TabCloseButton label={t("browser.closeTab", { title: label.title })} onClose={close} />}
+				action={
+					showMute ? (
+						<span className="flex items-center gap-1">
+							<Pressable
+								aria-label={muteLabel}
+								aria-pressed={muted}
+								className={cn(terminalTabActionClassName, muted && "text-foreground")}
+								onClick={(event) => {
+									event.stopPropagation();
+									onMute(tab.id, !muted);
+								}}
+								onDoubleClick={(event) => event.stopPropagation()}
+								type="button"
+							>
+								{muted ? (
+									<VolumeOff aria-hidden="true" className="size-icon-sm" />
+								) : (
+									<VolumeOn aria-hidden="true" className="size-icon-sm" />
+								)}
+							</Pressable>
+							<TabCloseButton label={closeLabel} onClose={close} />
+						</span>
+					) : (
+						<TabCloseButton label={closeLabel} onClose={close} />
+					)
+				}
 				actionPinned
 				active={selected}
 				buttonProps={{

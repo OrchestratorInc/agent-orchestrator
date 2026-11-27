@@ -613,6 +613,8 @@
 	"browser.emptyUrl": "Saisissez une URL ou cliquez-en une dans le terminal.",
 	"browser.sessionEnded": "Session ended — browser preview unavailable.",
 	"browser.forward": "Suivant",
+	"browser.muteTab": "Rendre l’onglet muet",
+	"browser.unmuteTab": "Réactiver le son de l’onglet",
 	"browser.newTab": "Nouvel onglet",
 	"browser.onlyTab": "L'unique onglet ne peut pas être fermé",
 	"browser.openDevTools": "Ouvrir les DevTools",
