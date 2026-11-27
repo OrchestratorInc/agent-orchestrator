@@ -296,19 +296,29 @@ func (c *commandContext) currentServiceSpec(port int) (serviceSpec, error) {
 	return buildServiceSpec(serviceGOOS, home, exe, env, port)
 }
 
-// canonicalPath makes p absolute and resolves symlinks in it, or in its
-// directory when p itself does not exist yet.
+// canonicalPath makes p absolute and resolves symlinks in its nearest
+// existing ancestor, re-attaching the parts that do not exist yet, so a
+// path names the same service before and after the daemon creates it.
 func canonicalPath(p string) string {
 	if abs, err := filepath.Abs(p); err == nil {
 		p = abs
 	}
-	if r, err := filepath.EvalSymlinks(p); err == nil {
-		return r
+	p = filepath.Clean(p)
+	var tail []string
+	for dir := p; ; {
+		if r, err := filepath.EvalSymlinks(dir); err == nil {
+			for i := len(tail) - 1; i >= 0; i-- {
+				r = filepath.Join(r, tail[i])
+			}
+			return r
+		}
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			return p
+		}
+		tail = append(tail, filepath.Base(dir))
+		dir = parent
 	}
-	if dir, err := filepath.EvalSymlinks(filepath.Dir(p)); err == nil {
-		return filepath.Join(dir, filepath.Base(p))
-	}
-	return filepath.Clean(p)
 }
 
 // renderLaunchdPlist renders a launchd user agent. KeepAlive restarts the

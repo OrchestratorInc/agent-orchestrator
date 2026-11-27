@@ -1323,3 +1323,27 @@ func TestServiceSelfHostedRunnerWithXMLEscapesAndTrailingSpace(t *testing.T) {
 		t.Fatalf("err = %v, want the conflict found", err)
 	}
 }
+
+// A missing data dir below a symlinked ancestor names the same service
+// before and after the daemon creates it.
+func TestCanonicalPathResolvesNearestExistingAncestor(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("needs symlinks")
+	}
+	target := t.TempDir()
+	link := filepath.Join(t.TempDir(), "link")
+	if err := os.Symlink(target, link); err != nil {
+		t.Fatal(err)
+	}
+	missing := filepath.Join(link, "a", "b", "data")
+	before := canonicalPath(missing)
+	if err := os.MkdirAll(missing, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if after := canonicalPath(missing); before != after {
+		t.Fatalf("canonicalPath changed once the dir existed: %q then %q", before, after)
+	}
+	if want, _ := filepath.EvalSymlinks(missing); before != want {
+		t.Fatalf("canonicalPath = %q, want %q", before, want)
+	}
+}
