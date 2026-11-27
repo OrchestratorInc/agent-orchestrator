@@ -66,6 +66,9 @@ function treeStyle(flushTop: boolean): React.CSSProperties {
 		"--trees-icon-width-override": "14px",
 		"--trees-font-family-override": "inherit",
 		"--trees-font-size-override": "var(--font-size-base)",
+		// The tree's :host asks for `light dark`, which follows the OS. Inherit
+		// AO's theme instead, so icon colours match the chat's file chips.
+		colorScheme: "inherit",
 		paddingTop: flushTop ? 0 : 4,
 	} as React.CSSProperties;
 }

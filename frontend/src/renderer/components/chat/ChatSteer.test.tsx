@@ -999,6 +999,158 @@ describe("ChatWorkspace steering", () => {
 		expect(carried.compareDocumentPosition(answer) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
 	});
 
+	it("draws a steer after a subagent turn that finished before it, not above it", () => {
+		const at = (minute: number) => `2026-08-11T10:${String(minute).padStart(2, "0")}:00Z`;
+		render(
+			<ChatWorkspace
+				snapshot={{
+					...chatFixture,
+					latestSequence: 15,
+					turns: [
+						{ id: "run", state: "running", providerTurnId: "provider-run", requestedAt: at(0), startedAt: at(0) },
+						{ id: "child", state: "completed", providerTurnId: "provider-child", requestedAt: at(1), startedAt: at(1), completedAt: at(21) },
+					],
+					items: [
+						{ kind: "message", id: "prompt", turnId: "run", sequence: 10, revision: 0, role: "user", origin: "human", text: "Clean up the copied code", streaming: false, createdAt: at(0) },
+						{ kind: "activity", id: "work", turnId: "run", sequence: 11, revision: 0, activityKind: "command", status: "completed", summary: "go test ./...", detail: { command: "go test ./...", output: "ok" }, createdAt: at(1) },
+						{ kind: "message", id: "child-report", turnId: "child", sequence: 12, revision: 0, role: "assistant", origin: "provider", text: "Four packages passed.", streaming: false, createdAt: at(21) },
+						{ kind: "activity", id: "steer-1", turnId: "run", sequence: 13, revision: 0, activityKind: "system", status: "completed", summary: "what are you stuck on?", detail: { event: "steer", origin: "human", text: "what are you stuck on?", clientMessageId: "steer-1" }, createdAt: at(22) },
+						{ kind: "message", id: "answer", turnId: "run", sequence: 14, revision: 0, role: "assistant", origin: "provider", text: "Rebasing onto main.", streaming: false, createdAt: at(23) },
+					],
+				}}
+			/>,
+		);
+		const report = screen.getByText("Four packages passed.");
+		const steer = screen.getByText("what are you stuck on?");
+		expect(report.compareDocumentPosition(steer) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+		expect(steer.compareDocumentPosition(screen.getByText("Rebasing onto main.")) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+	});
+
+	describe("turns that run beside the active one", () => {
+		const at = (minute: number) => `2026-08-11T10:${String(minute).padStart(2, "0")}:00Z`;
+		const said = (id: string, turnId: string, sequence: number, text: string, role: "user" | "assistant" = "assistant") =>
+			({ kind: "message" as const, id, turnId, sequence, revision: 0, role, origin: role === "user" ? "human" as const : "provider" as const, text, streaming: false, createdAt: at(sequence) });
+		const run = { id: "run", state: "running" as const, providerTurnId: "provider-run", requestedAt: at(0), startedAt: at(0) };
+		const child = (id: string, start: number, end: number) =>
+			({ id, state: "completed" as const, providerTurnId: `provider-${id}`, requestedAt: at(start), startedAt: at(start), completedAt: at(end) });
+		const opening = [said("prompt", "run", 1, "Check both platforms", "user"), said("plan", "run", 2, "Starting two checks.")];
+		const parallel = [said("a1", "a", 4, "Linux started."), said("b1", "b", 5, "Mac started."), said("a2", "a", 6, "Linux passed."), said("b2", "b", 7, "Mac passed.")];
+		const snapshot = (turns: (typeof run | ReturnType<typeof child>)[], items: ReturnType<typeof said>[]) =>
+			({ ...chatFixture, turns, items, latestSequence: items.at(-1)!.sequence });
+		const expectOrder = (rows: Element[]) => rows.slice(1).forEach((row, index) =>
+			expect(rows[index]!.compareDocumentPosition(row) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy());
+
+		it("keeps a waiting turn's live row below them, in the part its next row joins", () => {
+			const turns = [run, child("a", 3, 6), child("b", 3, 7)];
+			const view = render(<ChatWorkspace snapshot={snapshot(turns, [...opening, ...parallel])} />);
+			const live = () => [...document.querySelectorAll("[data-turn-live-row]")];
+			const part = () => live()[0]!.closest("[data-chat-turn]")!.getAttribute("data-chat-turn");
+			expect(live()).toHaveLength(1);
+			expectOrder([screen.getByText("Check both platforms"), screen.getByText("Starting two checks."), screen.getByText("Mac passed."), live()[0]!]);
+
+			const waiting = part();
+			view.rerender(<ChatWorkspace snapshot={snapshot(turns, [...opening, ...parallel, said("next", "run", 8, "Both passed.")])} />);
+			expectOrder([screen.getByText("Mac passed."), screen.getByText("Both passed."), live()[0]!]);
+			expect(part()).toBe(waiting);
+		});
+
+		it("leaves turns that run beside each other whole, and draws the answer last once settled", () => {
+			const settled = { ...child("run", 0, 9), id: "run" };
+			render(<ChatWorkspace snapshot={snapshot([settled, child("a", 3, 6), child("b", 4, 7)], [...opening, ...parallel, said("answer", "run", 8, "Both passed.")])} />);
+			expect(document.querySelectorAll("[data-chat-turn]")).toHaveLength(4);
+			expectOrder(["Starting two checks.", "Linux passed.", "Mac passed.", "Both passed."].map((text) => screen.getByText(text)));
+		});
+	});
+
+	it("draws a queued turn that ran after a steered turn below that turn's steer and answer", () => {
+		const at = (minute: number) => `2026-08-11T10:${String(minute).padStart(2, "0")}:00Z`;
+		render(
+			<ChatWorkspace
+				snapshot={{
+					...chatFixture,
+					latestSequence: 15,
+					// B was queued while A ran; C was queued after it and steered into A. B ran once A finished.
+					turns: [
+						{ id: "a", state: "completed", providerTurnId: "provider-a", requestedAt: at(0), startedAt: at(0), completedAt: at(5) },
+						{ id: "b", state: "running", providerTurnId: "provider-b", requestedAt: at(1), startedAt: at(5) },
+					],
+					items: [
+						{ kind: "message", id: "a-prompt", turnId: "a", sequence: 10, revision: 0, role: "user", origin: "human", text: "Fix the flaky test", streaming: false, createdAt: at(0) },
+						{ kind: "message", id: "b-prompt", turnId: "b", sequence: 11, revision: 0, role: "user", origin: "human", text: "Then update the changelog", streaming: false, createdAt: at(1) },
+						{ kind: "activity", id: "steer-c", turnId: "a", sequence: 13, revision: 0, activityKind: "system", status: "completed", summary: "use the unit tests only", detail: { event: "steer", origin: "human", text: "use the unit tests only", clientMessageId: "c" }, createdAt: at(3) },
+						{ kind: "message", id: "a-answer", turnId: "a", sequence: 14, revision: 0, role: "assistant", origin: "provider", text: "Fixed with unit tests only.", streaming: false, createdAt: at(4) },
+						{ kind: "message", id: "b-reply", turnId: "b", sequence: 15, revision: 0, role: "assistant", origin: "provider", text: "Updating the changelog.", streaming: false, createdAt: at(7) },
+					],
+				}}
+			/>,
+		);
+		const follows = (a: Element, b: Element) => Boolean(a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING);
+		const answer = screen.getByText("Fixed with unit tests only.");
+		const prompt = screen.getByText("Then update the changelog");
+		expect(follows(screen.getByText("use the unit tests only"), answer)).toBe(true);
+		expect(follows(answer, prompt)).toBe(true);
+		expect(follows(prompt, screen.getByText("Updating the changelog."))).toBe(true);
+		expect(follows(answer, document.querySelector("[data-turn-live-row]")!)).toBe(true);
+	});
+
+	it("draws queued turns in the order they ran after the queue was reordered", () => {
+		const at = (minute: number) => `2026-08-11T10:${String(minute).padStart(2, "0")}:00Z`;
+		render(
+			<ChatWorkspace
+				snapshot={{
+					...chatFixture,
+					latestSequence: 14,
+					turns: [
+						{ id: "a", state: "completed", providerTurnId: "provider-a", requestedAt: at(0), startedAt: at(0), completedAt: at(3) },
+						{ id: "c", state: "completed", providerTurnId: "provider-c", requestedAt: at(1), startedAt: at(3), completedAt: at(5) },
+						{ id: "b", state: "completed", providerTurnId: "provider-b", requestedAt: at(2), startedAt: at(5), completedAt: at(7) },
+					],
+					items: [
+						{ kind: "message", id: "a-prompt", turnId: "a", sequence: 9, revision: 0, role: "user", origin: "human", text: "Fix the flaky test", streaming: false, createdAt: at(0) },
+						{ kind: "message", id: "b-prompt", turnId: "b", sequence: 10, revision: 0, role: "user", origin: "human", text: "Then update the changelog", streaming: false, createdAt: at(1) },
+						{ kind: "message", id: "c-prompt", turnId: "c", sequence: 11, revision: 0, role: "user", origin: "human", text: "First bump the version", streaming: false, createdAt: at(2) },
+						{ kind: "message", id: "a-answer", turnId: "a", sequence: 12, revision: 0, role: "assistant", origin: "provider", text: "Fixed the test.", streaming: false, createdAt: at(3) },
+						{ kind: "message", id: "c-answer", turnId: "c", sequence: 13, revision: 0, role: "assistant", origin: "provider", text: "Bumped the version.", streaming: false, createdAt: at(5) },
+						{ kind: "message", id: "b-answer", turnId: "b", sequence: 14, revision: 0, role: "assistant", origin: "provider", text: "Updated the changelog.", streaming: false, createdAt: at(7) },
+					],
+				}}
+			/>,
+		);
+		const order = ["Fix the flaky test", "Fixed the test.", "First bump the version", "Bumped the version.", "Then update the changelog", "Updated the changelog."]
+			.map((text) => screen.getByText(text));
+		for (const [index, row] of order.slice(1).entries()) {
+			expect(order[index]!.compareDocumentPosition(row) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+		}
+	});
+
+	it("keeps a steered turn's first part where the turn began when its prompt is above the loaded history", () => {
+		const at = (minute: number) => `2026-08-11T10:${String(minute).padStart(2, "0")}:00Z`;
+		render(
+			<ChatWorkspace
+				snapshot={{
+					...chatFixture,
+					latestSequence: 13,
+					oldestSequence: 10,
+					hasMoreBefore: true,
+					turns: [
+						{ id: "x", state: "running", providerTurnId: "provider-x", requestedAt: at(0), startedAt: at(0), anchorSequence: 9.1 },
+						{ id: "y", state: "completed", providerTurnId: "provider-y", requestedAt: at(1), startedAt: at(1), completedAt: at(5), anchorSequence: 9.5 },
+					],
+					items: [
+						{ kind: "message", id: "x-before", turnId: "x", sequence: 10, revision: 0, role: "assistant", origin: "provider", text: "X before the steer.", streaming: false, createdAt: at(2) },
+						{ kind: "message", id: "y-report", turnId: "y", sequence: 11, revision: 0, role: "assistant", origin: "provider", text: "Y report.", streaming: false, createdAt: at(5) },
+						{ kind: "activity", id: "steer-1", turnId: "x", sequence: 12, revision: 0, activityKind: "system", status: "completed", summary: "keep going", detail: { event: "steer", origin: "human", text: "keep going", clientMessageId: "steer-1" }, createdAt: at(6) },
+						{ kind: "message", id: "x-after", turnId: "x", sequence: 13, revision: 0, role: "assistant", origin: "provider", text: "X after the steer.", streaming: false, createdAt: at(7) },
+					],
+				}}
+			/>,
+		);
+		const before = screen.getByText("X before the steer.");
+		const report = screen.getByText("Y report.");
+		expect(before.compareDocumentPosition(report) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+		expect(report.compareDocumentPosition(screen.getByText("keep going")) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+	});
+
 	it("draws a message drained behind an earlier queued report before the reply to it", () => {
 		const at = (second: number) => `2026-08-11T10:00:${String(second).padStart(2, "0")}Z`;
 		render(

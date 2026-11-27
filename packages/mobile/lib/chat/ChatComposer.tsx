@@ -115,6 +115,7 @@ function Composer({
 	config,
 	machine,
 	changes,
+	device,
 	snapshot,
 	skills,
 	filePaths,
@@ -168,6 +169,8 @@ function Composer({
 	machine: string;
 	/** What this session changed, from git. Present only when it changed something. */
 	changes?: { files: number; additions: number; deletions: number; onOpen(): void };
+	/** The simulator or emulator this session holds, when it holds one; opens its screen. */
+	device?: { name: string; onOpen(): void };
 	snapshot: ConversationSnapshot;
 	skills: ChatSkill[];
 	filePaths: string[];
@@ -741,9 +744,9 @@ function Composer({
 		};
 	});
 	// The session's state as chips over the composer, open or not: the account's
-	// quota once that matters, its PR, what it changed, and how full the context
-	// is once that matters.
-	const chips = activeReviewPR || changes || contextMeter || quotaChip ? <Animated.View entering={FadeIn.duration(COMPOSER_FADE_MS)} exiting={FadeOut.duration(COMPOSER_FADE_MS)}>
+	// quota once that matters, its PR, what it changed, the device it holds, and
+	// how full the context is once that matters.
+	const chips = activeReviewPR || changes || device || contextMeter || quotaChip ? <Animated.View entering={FadeIn.duration(COMPOSER_FADE_MS)} exiting={FadeOut.duration(COMPOSER_FADE_MS)}>
 		<ScrollView key={fieldSize.fontScale} horizontal showsHorizontalScrollIndicator={false} keyboardShouldPersistTaps="handled" contentContainerStyle={styles.chips}>
 			{/* First: the row scrolls with no indicator, and this is the only quota
 			    warning, so it must not start off screen behind the PR and changes chips. */}
@@ -759,6 +762,10 @@ function Composer({
 				<Text numberOfLines={1} maxFontSizeMultiplier={fontScaleCap.chrome} style={styles.chipText}>{changes.files}</Text>
 				{changes.additions ? <Text numberOfLines={1} maxFontSizeMultiplier={fontScaleCap.chrome} style={[styles.chipCount, { color: t.green }]}>+{compactCount(changes.additions)}</Text> : null}
 				{changes.deletions ? <Text numberOfLines={1} maxFontSizeMultiplier={fontScaleCap.chrome} style={[styles.chipCount, { color: t.red }]}>−{compactCount(changes.deletions)}</Text> : null}
+			</ComposerChip> : null}
+			{device ? <ComposerChip accessibilityLabel={`Open ${device.name}`} accessibilityHint="Opens the device screen" onPress={device.onOpen}>
+				<AppSymbol name="phone" size={iconSize.xs} color={t.textSecondary} />
+				<Text numberOfLines={1} maxFontSizeMultiplier={fontScaleCap.chrome} style={styles.chipText}>{device.name}</Text>
 			</ComposerChip> : null}
 			{contextMeter ? <View accessible accessibilityRole="progressbar" accessibilityLabel="Context window" accessibilityValue={contextMeter.accessibilityValue} style={styles.chip}>
 				<ComposerGlass radius={CHIP_HEIGHT / 2} />

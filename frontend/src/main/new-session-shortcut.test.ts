@@ -267,6 +267,26 @@ describe("attachAppShortcuts", () => {
 		expect(target.send).toHaveBeenCalledWith(channel);
 	});
 
+	it("reports each claimed chord by id before its action, once per press", () => {
+		const source = fakeSource();
+		const target = fakeTarget();
+		const order: string[] = [];
+		target.send.mockImplementation((channel: string) => order.push(channel));
+		const onPressed = vi.fn((id: string) => order.push(`pressed:${id}`));
+		attachAppShortcuts(source, true, target, false, undefined, undefined, undefined, undefined, undefined, undefined, undefined, onPressed);
+
+		source.emit({ key: "}", code: "BracketRight", meta: true, shift: true });
+		// A held chord repeats without running or counting again.
+		source.emit({ key: "}", code: "BracketRight", meta: true, shift: true, isAutoRepeat: true });
+		// Find is left to the page, which counts it itself.
+		source.emit({ key: "f", meta: true });
+		// Not a shortcut.
+		source.emit({ key: "q", shift: true });
+
+		expect(onPressed).toHaveBeenCalledExactlyOnceWith("next-session");
+		expect(order).toEqual(["pressed:next-session", NEXT_SESSION_SHORTCUT_CHANNEL]);
+	});
+
 	it.each([1, 5, 9])("sends the zero-based index for jump-to-session with digit %i", (digit) => {
 		const source = fakeSource();
 		const target = fakeTarget();
