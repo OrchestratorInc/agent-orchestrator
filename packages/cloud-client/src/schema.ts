@@ -6253,9 +6253,62 @@ export interface components {
                 authorName?: string;
                 /** @description The files the message carries. */
                 attachments?: components["schemas"]["MessageAttachment"][];
+                /** @description automation for a message AO sent, not a person: the project's orchestrator, a worker's report, or feedback from the session's pull request. Absent for a person's message. */
+                origin?: string;
+                /** @description With origin automation, who sent the message (Orchestrator, a worker, GitHub). */
+                senderLabel?: string;
+                /** @description With origin automation, how the message reads in the transcript when text carries more for the agent (a relayed message's prefix). */
+                displayText?: string;
+                automation?: components["schemas"]["ChatAutomation"];
             };
             /** Format: date-time */
             createdAt: string;
+        };
+        /** @description With origin automation, the pull request event that made AO send the message, so a client can show it as that event rather than as the prompt the agent received. A client that does not know the kind shows the message text. */
+        ChatAutomation: {
+            /**
+             * @description ci_failing: checks failed (checks). review_comment: an unresolved review comment (comment). changes_requested: a review requested changes (review). merge_conflict: the branch conflicts with its base.
+             * @enum {string}
+             */
+            kind: "ci_failing" | "review_comment" | "changes_requested" | "merge_conflict";
+            pullRequest: components["schemas"]["ChatAutomationPullRequest"];
+            /** @description ci_failing only. The checks that failed. */
+            checks?: {
+                name: string;
+                url?: string;
+            }[];
+            /** @description review_comment only. */
+            comment?: {
+                /** @description The commenter's forge login. */
+                author: string;
+                body: string;
+                /** @description The commented file, relative to the repository root. */
+                path?: string;
+                line?: number;
+                url?: string;
+            };
+            /** @description changes_requested only. */
+            review?: {
+                /** @description The reviewer's forge login. */
+                author?: string;
+                /** @description The review's own text; empty when the reviewer wrote none. */
+                body: string;
+                url?: string;
+            };
+            /**
+             * Format: date-time
+             * @description When the event happened on the forge, when known.
+             */
+            at?: string;
+        };
+        ChatAutomationPullRequest: {
+            number: number;
+            url?: string;
+            title?: string;
+            /** @description owner/name on the forge. */
+            repository?: string;
+            sourceBranch?: string;
+            targetBranch?: string;
         };
         /** @description A queued message was edited (editQueuedMessage). Its chat.user_message event (payload.messageSequence) now reads as edited; a client holding that event shows payload.text and payload.attachments in its place. */
         UserMessageEditedEvent: {
@@ -6392,10 +6445,11 @@ export interface components {
                 queuedTurnId?: string;
                 /** @description With queuedTurnId: the person deleted the message while the agent was taking its steer (deleteQueuedMessage). On chat.turn_steered the agent took it anyway, so it was delivered; on chat.turn_steer_failed it was deleted. */
                 deleteRequested?: boolean;
-                /** @description With queuedTurnId: automation for a message the project's orchestrator sent (senderLabel names it), absent for a person's. */
+                /** @description With queuedTurnId: automation for a message AO sent (the project's orchestrator, or feedback from the session's pull request; senderLabel names it), absent for a person's. */
                 origin?: string;
-                /** @description With queuedTurnId and origin automation, who sent the message (Orchestrator). */
+                /** @description With queuedTurnId and origin automation, who sent the message (Orchestrator, GitHub). */
                 senderLabel?: string;
+                automation?: components["schemas"]["ChatAutomation"];
                 /** @description With queuedTurnId, the person whose message it is. */
                 authorUserId?: string;
                 /** @description With authorUserId, their name when they sent it. */
@@ -6447,10 +6501,11 @@ export interface components {
                 queuedTurnId?: string;
                 /** @description With queuedTurnId: the person deleted the message while the agent was taking its steer (deleteQueuedMessage). On chat.turn_steered the agent took it anyway, so it was delivered; on chat.turn_steer_failed it was deleted. */
                 deleteRequested?: boolean;
-                /** @description With queuedTurnId: automation for a message the project's orchestrator sent (senderLabel names it), absent for a person's. */
+                /** @description With queuedTurnId: automation for a message AO sent (the project's orchestrator, or feedback from the session's pull request; senderLabel names it), absent for a person's. */
                 origin?: string;
-                /** @description With queuedTurnId and origin automation, who sent the message (Orchestrator). */
+                /** @description With queuedTurnId and origin automation, who sent the message (Orchestrator, GitHub). */
                 senderLabel?: string;
+                automation?: components["schemas"]["ChatAutomation"];
                 /** @description With queuedTurnId, the person whose message it is. */
                 authorUserId?: string;
                 /** @description With authorUserId, their name when they sent it. */

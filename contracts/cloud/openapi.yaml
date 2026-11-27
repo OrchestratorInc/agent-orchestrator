@@ -12339,9 +12339,114 @@ components:
               description: The files the message carries.
               items:
                 $ref: "#/components/schemas/MessageAttachment"
+            origin:
+              type: string
+              description: >-
+                automation for a message AO sent, not a person: the project's
+                orchestrator, a worker's report, or feedback from the session's
+                pull request. Absent for a person's message.
+            senderLabel:
+              type: string
+              description: With origin automation, who sent the message (Orchestrator, a worker, GitHub).
+            displayText:
+              type: string
+              description: >-
+                With origin automation, how the message reads in the
+                transcript when text carries more for the agent (a relayed
+                message's prefix).
+            automation:
+              $ref: "#/components/schemas/ChatAutomation"
         createdAt:
           type: string
           format: date-time
+    ChatAutomation:
+      type: object
+      additionalProperties: false
+      required: [kind, pullRequest]
+      description: >-
+        With origin automation, the pull request event that made AO send the
+        message, so a client can show it as that event rather than as the
+        prompt the agent received. A client that does not know the kind shows
+        the message text.
+      properties:
+        kind:
+          type: string
+          enum: [ci_failing, review_comment, changes_requested, merge_conflict]
+          description: >-
+            ci_failing: checks failed (checks). review_comment: an unresolved
+            review comment (comment). changes_requested: a review requested
+            changes (review). merge_conflict: the branch conflicts with its
+            base.
+        pullRequest:
+          $ref: "#/components/schemas/ChatAutomationPullRequest"
+        checks:
+          type: array
+          description: ci_failing only. The checks that failed.
+          items:
+            type: object
+            additionalProperties: false
+            required: [name]
+            properties:
+              name:
+                type: string
+              url:
+                type: string
+        comment:
+          type: object
+          additionalProperties: false
+          required: [author, body]
+          description: review_comment only.
+          properties:
+            author:
+              type: string
+              description: The commenter's forge login.
+            body:
+              type: string
+            path:
+              type: string
+              description: The commented file, relative to the repository root.
+            line:
+              type: integer
+              minimum: 1
+            url:
+              type: string
+        review:
+          type: object
+          additionalProperties: false
+          required: [body]
+          description: changes_requested only.
+          properties:
+            author:
+              type: string
+              description: The reviewer's forge login.
+            body:
+              type: string
+              description: The review's own text; empty when the reviewer wrote none.
+            url:
+              type: string
+        at:
+          type: string
+          format: date-time
+          description: When the event happened on the forge, when known.
+    ChatAutomationPullRequest:
+      type: object
+      additionalProperties: false
+      required: [number]
+      properties:
+        number:
+          type: integer
+          minimum: 1
+        url:
+          type: string
+        title:
+          type: string
+        repository:
+          type: string
+          description: owner/name on the forge.
+        sourceBranch:
+          type: string
+        targetBranch:
+          type: string
     UserMessageEditedEvent:
       type: object
       additionalProperties: false
@@ -12615,12 +12720,14 @@ components:
             origin:
               type: string
               description: >-
-                With queuedTurnId: automation for a message the project's
-                orchestrator sent (senderLabel names it), absent for a
-                person's.
+                With queuedTurnId: automation for a message AO sent (the
+                project's orchestrator, or feedback from the session's pull
+                request; senderLabel names it), absent for a person's.
             senderLabel:
               type: string
-              description: With queuedTurnId and origin automation, who sent the message (Orchestrator).
+              description: With queuedTurnId and origin automation, who sent the message (Orchestrator, GitHub).
+            automation:
+              $ref: "#/components/schemas/ChatAutomation"
             authorUserId:
               type: string
               description: With queuedTurnId, the person whose message it is.
@@ -12715,12 +12822,14 @@ components:
             origin:
               type: string
               description: >-
-                With queuedTurnId: automation for a message the project's
-                orchestrator sent (senderLabel names it), absent for a
-                person's.
+                With queuedTurnId: automation for a message AO sent (the
+                project's orchestrator, or feedback from the session's pull
+                request; senderLabel names it), absent for a person's.
             senderLabel:
               type: string
-              description: With queuedTurnId and origin automation, who sent the message (Orchestrator).
+              description: With queuedTurnId and origin automation, who sent the message (Orchestrator, GitHub).
+            automation:
+              $ref: "#/components/schemas/ChatAutomation"
             authorUserId:
               type: string
               description: With queuedTurnId, the person whose message it is.
