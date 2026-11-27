@@ -185,12 +185,14 @@ import {
 	isWorkerLead,
 	relayedVia,
 	renamedTitle,
+	EndedSpawnsContext,
 	SpawnedAgents,
 	spawnedBy,
 	spawnedSessionIds,
 	spawnedWorker,
 	TaskNamedLine,
 	terminatedBy,
+	useEndedSpawns,
 	useWorkerUpdateIndex,
 	waitingSpawns,
 	WorkerUpdateIndexContext,
@@ -224,7 +226,7 @@ import { ActivityRun } from "./ActivityRun";
 import { SubagentPanel, type SubagentPanelHost } from "./SubagentPanel";
 import { OpenSubagentContext, SubagentTeam } from "./SubagentTeam";
 import { isSubagentLaunch, partitionSubagentSteps, readSubagent, type SubagentRef } from "./subagent-team";
-import { aoActionName, isFailedSpawn, isOrdinaryActivity } from "./activity-action";
+import { aoActionName, isFailedSpawn, isOrdinaryActivity, mergeFailedSpawns } from "./activity-action";
 import { isFailedCall } from "./activity-command";
 import { TurnPlan } from "./TurnPlan";
 import { ComposerModeItems, TurnSettingsBar, type ApprovalModeLimits } from "./TurnSettingsBar";
@@ -4577,6 +4579,7 @@ export function Timeline({
 		[snapshot.batchedDeliveries, snapshot.items, workerUpdates],
 	);
 	const workerUpdateIndex = useWorkerUpdateIndex(workerUpdates ? snapshot.items : undefined);
+	const endedSpawns = useEndedSpawns(workerUpdates ? snapshot.items : undefined);
 	const runKeys = useRef<ReadonlyMap<string, string>>(new Map());
 	const grouped = useMemo(() => {
 		const hiddenTurns = hiddenTimelineTurnIds(snapshot);
@@ -4601,22 +4604,23 @@ export function Timeline({
 		// A worker this chat spawned is drawn by its spawn tree row and then by its reports,
 		// so the daemon's records of it would only repeat them: its termination while the row
 		// is still up, and its spawn once it has answered and the row is gone. Dropped here,
-		// before they can leave an empty group behind.
+		// before they can leave an empty group behind. One that ended without answering loses
+		// its row at the next turn, and both records then stand for it.
 		const spawned = new Set(snapshot.items.flatMap((item) => spawnedBy(item) ?? []));
 		const answered = (workerUpdateIndex ?? indexWorkerUpdates(snapshot.items)).latest;
 		const repeats = (item: ConversationItem) => {
 			const started = spawnedBy(item);
 			if (started) return answered.has(started);
 			const ended = terminatedBy(item);
-			return ended !== undefined && spawned.has(ended) && !answered.has(ended);
+			return ended !== undefined && spawned.has(ended) && !answered.has(ended) && !endedSpawns.has(ended);
 		};
 		const cleaned = spawned.size === 0 || !placed.some((group) => group.items.some(repeats)) ? placed : placed
 			.map((group) => group.items.some(repeats) ? { ...group, items: group.items.filter((item) => !repeats(item)) } : group)
 			.filter((group) => group.live || group.items.length > 0);
-		const folded = foldBackground(cleaned, workerUpdateIndex, new Set(snapshot.turns.map((turn) => turn.id)), runKeys.current, batchedReports.under, find.gapBeforeSequence);
+		const folded = foldBackground(cleaned, workerUpdateIndex, endedSpawns, new Set(snapshot.turns.map((turn) => turn.id)), runKeys.current, batchedReports.under, find.gapBeforeSequence);
 		runKeys.current = new Map(folded.flatMap((group) => group.folded ? group.folded.members.map((member) => [member.key, group.key] as const) : []));
 		return folded;
-	}, [batchedReports, controllerStopped, find.gapBeforeSequence, openingPending, openingStartedAt, openingStartupLabel, openingTurnId, pendingTurnLabel, snapshot, timelineItems, workerUpdateIndex, workerUpdates]);
+	}, [batchedReports, controllerStopped, endedSpawns, find.gapBeforeSequence, openingPending, openingStartedAt, openingStartupLabel, openingTurnId, pendingTurnLabel, snapshot, timelineItems, workerUpdateIndex, workerUpdates]);
 	const groups = useStableList(grouped, groupKey, sameGroup);
 	// Read from every group, not the mounted ones: the timeline is virtualized, and the
 	// panel lists a child whose turn has scrolled far out of view.
@@ -5990,6 +5994,7 @@ export function Timeline({
 							>
 								{group.key === findGapGroupKey ? <div role="note" className="py-3 text-center text-caption text-muted-foreground">{t("chat.find.gap")}</div> : null}
 								<WorkerUpdateIndexContext.Provider value={workerUpdateIndex}>
+								<EndedSpawnsContext.Provider value={endedSpawns}>
 								<BatchedReportsContext.Provider value={batchedReports}>
 								<LatestForkTurnContext.Provider value={latestForkTurnId}>
 								{group.folded ? (
@@ -6002,6 +6007,7 @@ export function Timeline({
 								) : renderTurn(group)}
 								</LatestForkTurnContext.Provider>
 								</BatchedReportsContext.Provider>
+								</EndedSpawnsContext.Provider>
 								</WorkerUpdateIndexContext.Provider>
 							</div>
 						);
@@ -6399,17 +6405,19 @@ const TurnGroup = memo(function TurnGroup({
 	const hostId = useContext(ChatHostId);
 	const batched = useContext(BatchedReportsContext);
 	const updateIndex = useContext(WorkerUpdateIndexContext);
+	const endedSpawns = useContext(EndedSpawnsContext);
 	const { t } = useTranslation();
 	const reducedMotion = useReducedMotion();
 	const { steps: subagentSteps, live: subagentsLive, stopped: subagentsStopped } = groupSubagents(group);
 	const runs = useMemo(
 		() =>
 			runsOf(
-				// A worker the turn spawned draws under the turn as its own row, not as a step.
-				workerUpdates ? turnFlowItems(group).filter((item) => !spawnedBy(item)) : turnFlowItems(group),
+				// A worker the turn spawned draws under the turn as its own row, not as a step,
+				// until it has ended without answering and the row is gone.
+				workerUpdates ? turnFlowItems(group).filter((item) => endedSpawns.has(spawnedBy(item) ?? "") || !spawnedBy(item)) : turnFlowItems(group),
 			),
 		// eslint-disable-next-line react-hooks/exhaustive-deps -- turnFlowItems reads only these fields of the group.
-		[group.items, group.subagents, group.liveProviderFailure, group.outcome?.state, group.outcome?.error, workerUpdates],
+		[group.items, group.subagents, group.liveProviderFailure, group.outcome?.state, group.outcome?.error, workerUpdates, endedSpawns],
 	);
 	// A review round arrives as one message per comment; it draws as one event.
 	const bursts = useMemo(() => reviewBursts(runs.map((run) => (run.kind === "single" ? run.items[0] : undefined))), [runs]);
@@ -6655,11 +6663,12 @@ const TurnGroup = memo(function TurnGroup({
 	const workedDurationMs = outcome?.durationMs !== undefined && outcome.durationMs > 0 ? outcome.durationMs : undefined;
 	// Each worker the turn spawned is a row in the spawn tree under it, from the moment
 	// the daemon records the spawn until the worker answers, so it stays out of the fold.
+	// One that ended without answering keeps its row only until the next turn.
 	// `ao spawn` output still names the workers a daemon too old to record the spawn started.
 	const recordedSpawns = workerUpdates ? group.items.flatMap((item) => spawnedWorker(item) ?? []) : [];
 	const commandSpawns = workerUpdates && outcome ? spawnedSessionIds(group.items) : [];
 	// The tree goes with its last waiting worker, so the reply keeps no empty space for it.
-	const waitingWorkers = waitingSpawns(recordedSpawns, commandSpawns, updateIndex);
+	const waitingWorkers = waitingSpawns(recordedSpawns, commandSpawns, updateIndex, endedSpawns);
 	const spawnTree = waitingWorkers.length > 0 ? <SpawnedAgents key="spawned" spawns={waitingWorkers} /> : null;
 	const hasFoldedWork = foldedRuns.length > 0;
 	const foldedWork = (): ReactNode[] => foldedRuns.flatMap(renderWorkerRun);
@@ -7178,7 +7187,7 @@ function bannerOf(group: TimelineGroup): TimelineGroup | undefined {
 	return last && isAccountFailure(last) ? last : undefined;
 }
 
-function foldBackground(groups: readonly TimelineGroup[], index: WorkerUpdateIndex | null, known: ReadonlySet<string>, prior: ReadonlyMap<string, string>, carried: ReadonlyMap<string, readonly WorkerUpdate[]>, gap?: number): TimelineGroup[] {
+function foldBackground(groups: readonly TimelineGroup[], index: WorkerUpdateIndex | null, endedSpawns: ReadonlySet<string>, known: ReadonlySet<string>, prior: ReadonlyMap<string, string>, carried: ReadonlyMap<string, readonly WorkerUpdate[]>, gap?: number): TimelineGroup[] {
 	const out: TimelineGroup[] = [];
 	const used = new Set<string>();
 	const held: TimelineGroup[] = [];
@@ -7213,8 +7222,9 @@ function foldBackground(groups: readonly TimelineGroup[], index: WorkerUpdateInd
 		const teamWorking = group.items.some((item) => isSubagentLaunch(item) && readSubagent(item, steps.get(item.id) ?? [], live.has(item.id), stopped).state === "working");
 		// A turn stays in view while a worker it spawned has not answered, as one does while
 		// a subagent it launched works: the worker's line is under the reply until then. One
-		// terminated before it answered keeps it too, since that line is where the chat says so.
-		const spawnWaiting = waitingSpawns(group.items.flatMap((item) => spawnedWorker(item) ?? []), spawnedSessionIds(group.items), index).length > 0;
+		// that ended before it answered keeps it until the next turn, since that line is where
+		// the chat says so, and then lets the turn go.
+		const spawnWaiting = waitingSpawns(group.items.flatMap((item) => spawnedWorker(item) ?? []), spawnedSessionIds(group.items), index, endedSpawns).length > 0;
 		const standing = outcome && !teamWorking && !spawnWaiting ? turnStanding(group.items, outcome, index, carried) : "yours";
 		if (standing !== "background" && standing !== "failed") {
 			close();
@@ -8270,7 +8280,9 @@ function isHumanRun(item: ConversationItem | undefined): boolean {
 
 /** Conversation records that stay readable outside a settled turn's folded work. */
 function isNoticeRun(run: TimelineRun): boolean {
-	return run.items.some(isNoticeItem);
+	// Read as the run draws them: a failed spawn's call carries the daemon's reason once merged.
+	const items: readonly ConversationItem[] = run.items;
+	return mergeFailedSpawns(items.filter((item) => item.kind === "activity")).some(isNoticeItem);
 }
 
 function isNoticeItem(item: ConversationItem | undefined): boolean {
@@ -8278,7 +8290,8 @@ function isNoticeItem(item: ConversationItem | undefined): boolean {
 	if (item.activityKind === "error") return true;
 	// A run holding a failed call stays out of the fold, so the failure shows under it.
 	// A spawn that failed folds into Worked for with the rest of the work: its step
-	// says so there, and the reply above the fold already tells the reader.
+	// says why there, and the reply above the fold already tells the reader. One the
+	// daemon gave no reason for stays out like any failed call.
 	if (isOrdinaryActivity(item) && isFailedCall(item) && !isFailedSpawn(item)) return true;
 	if (item.activityKind === "user_input") return item.status !== "pending";
 	return item.detail?.event !== undefined && !isSteer(item) && !isCompaction(item) && item.activityKind !== "plan";

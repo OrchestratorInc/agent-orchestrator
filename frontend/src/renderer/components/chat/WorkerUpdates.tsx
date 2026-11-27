@@ -802,9 +802,54 @@ export function terminatedBy(item: ConversationItem): string | undefined {
  * The workers a turn started that have not answered yet: those the daemon recorded
  * it spawning, then any only `ao spawn` output names (a daemon too old to record the spawn).
  */
-export function waitingSpawns(recorded: readonly SpawnedWorker[], commandSessionIds: readonly string[], index: WorkerUpdateIndex | null): SpawnedWorker[] {
+export function waitingSpawns(recorded: readonly SpawnedWorker[], commandSessionIds: readonly string[], index: WorkerUpdateIndex | null, ended: ReadonlySet<string> = NO_ENDED_SPAWNS): SpawnedWorker[] {
 	const unrecorded = commandSessionIds.filter((id) => !index?.spawnRecorded.has(id) && !recorded.some((spawn) => spawn.sessionId === id));
-	return [...recorded, ...unrecorded.map((sessionId) => ({ sessionId }))].filter((spawn) => !index?.latest.has(spawn.sessionId));
+	return [...recorded, ...unrecorded.map((sessionId) => ({ sessionId }))]
+		.filter((spawn) => !index?.latest.has(spawn.sessionId) && !ended.has(spawn.sessionId));
+}
+
+const NO_ENDED_SPAWNS: ReadonlySet<string> = new Set();
+
+/** The spawned workers no turn waits on any longer though they never answered ({@link useEndedSpawns}). */
+export const EndedSpawnsContext = createContext<ReadonlySet<string>>(NO_ENDED_SPAWNS);
+
+/** A worker that will not answer: terminated, exited, never started, or gone from the session list. */
+function cannotAnswer(session: WorkspaceSession | undefined): boolean {
+	return !session || session.isTerminated || session.status === "terminated" || session.provisionState === "failed"
+		|| session.activity?.state === "exited" || session.status === "exited";
+}
+
+/**
+ * The workers this chat spawned that ended without answering, once a later turn has
+ * started. Until then the row under the reply is where the chat says how the worker
+ * ended; after it the row would stay for good and hold its turn out of the background
+ * fold, so the spawn goes back into Worked for with the rest of the turn's work.
+ * The same set until a worker joins or leaves it, since the session list changes
+ * with every session event.
+ */
+export function useEndedSpawns(items: readonly ConversationItem[] | undefined): ReadonlySet<string> {
+	const workspaces = useChatLinkWorkspaces();
+	const previous = useRef(NO_ENDED_SPAWNS);
+	return useMemo(() => {
+		const lastOfTurn = items?.findLast((item) => item.turnId);
+		// An empty list has not loaded, so it says nothing about which workers are gone.
+		if (!items || !lastOfTurn || workspaces.length === 0) return previous.current = NO_ENDED_SPAWNS;
+		const sessions = new Map(workspaces.flatMap((workspace) => workspace.sessions.map((session) => [session.id, session] as const)));
+		const ended = new Set<string>();
+		const byTurn = new Map<string | undefined, ConversationItem[]>();
+		for (const item of items) {
+			if (item.sequence >= lastOfTurn.sequence) break;
+			if (item.turnId === lastOfTurn.turnId) continue;
+			byTurn.set(item.turnId, [...(byTurn.get(item.turnId) ?? []), item]);
+		}
+		for (const turn of byTurn.values()) {
+			for (const id of [...turn.flatMap((item) => spawnedBy(item) ?? []), ...spawnedSessionIds(turn)]) {
+				if (cannotAnswer(sessions.get(id))) ended.add(id);
+			}
+		}
+		if (ended.size === 0) return previous.current = NO_ENDED_SPAWNS;
+		return previous.current = sameSet(previous.current, ended) ? previous.current : ended;
+	}, [items, workspaces]);
 }
 
 /**

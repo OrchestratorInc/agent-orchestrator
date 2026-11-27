@@ -214,6 +214,18 @@ describe("orchestrator worker updates", () => {
 		expect(screen.getByText(reason)).toBeInTheDocument();
 	});
 
+	it("keeps a failed spawn the daemon recorded nothing for under the fold, like any failed call", () => {
+		const cmd = "ao spawn --project proj --name 'background config snapshot'";
+		const failedCall: ConversationActivity = {
+			kind: "activity", id: "t1-spawn", turnId: "t1", sequence: 12, revision: 0, activityKind: "command", status: "failed",
+			summary: cmd, detail: { command: cmd }, createdAt: at(1),
+		};
+		renderOrchestrator([automation("t1", 1, "Check the config."), failedCall, { ...reply("t1", 1, "I couldn't start the check."), sequence: 14 }]);
+		// An older daemon, or a record that landed in another run: no step says why, so the
+		// call that failed stays on screen.
+		expect(screen.getByRole("button", { name: /background config snapshot/ })).toBeInTheDocument();
+	});
+
 	it("keeps a failed spawn as the action row that says so, inside Worked for", async () => {
 		renderOrchestrator([automation("t1", 1, "Check current usage."), { ...spawnRecord("", undefined, 2, "failed"), detail: { action: "session.spawned", operationId: "failed:req-1", error: "project not found" } }]);
 		expect(screen.queryByTestId("spawned-agent")).not.toBeInTheDocument();
@@ -605,6 +617,63 @@ describe("background turns in the orchestrator chat", () => {
 		]);
 		expect(screen.queryByTestId("spawned-agent")).not.toBeInTheDocument();
 		expect(screen.getByTestId("background-updates")).toHaveTextContent(/^2 background updates · 2 done · /);
+	});
+
+	// A worker that is killed, exits, never starts or is deleted sends no report, so nothing
+	// would ever take its row down or let its turn fold.
+	const fixCi = (overrides: Record<string, unknown> | null) => [{
+		id: "proj", name: "proj", path: "/tmp/proj",
+		sessions: overrides ? [{ id: "proj-290", workspaceId: "proj", title: "Fix CI", provider: "codex", kind: "worker", status: "idle", prs: [], ...overrides }] : [],
+	}] as unknown as WorkspaceSummary[];
+	const laterTurn = [
+		report("t2", 3, "[done] [Menus](ao://sessions/proj/proj-285)\nMenus also close on Escape."),
+		reply("t2", 4, "Noted."),
+	];
+
+	it.each([
+		["terminated", { status: "terminated", isTerminated: true }],
+		["exited", { status: "exited", activity: { state: "exited" } }],
+		["never started", { provisionState: "failed" }],
+		["gone from the session list", null],
+	] as const)("lets go of a worker that %s without reporting once a later turn starts", (_case, session) => {
+		renderOrchestrator([...spawnedInBackground, ...laterTurn], vi.fn(), fixCi(session));
+		expect(screen.queryByTestId("spawned-agent")).not.toBeInTheDocument();
+		// Its turn folds with the one after it.
+		expect(screen.getByTestId("background-updates")).toHaveTextContent(/^2 background updates · /);
+	});
+
+	it("puts the spawn of a worker that ended without reporting back into its turn's work", async () => {
+		renderOrchestrator([
+			automation("t1", 1, "Fix CI."), spawnedFixCi, { ...reply("t1", 1, "Started Fix CI."), sequence: 16 },
+			automation("t2", 3, "Thanks."), reply("t2", 4, "Anytime."),
+		], vi.fn(), fixCi({ status: "terminated", isTerminated: true }));
+		expect(screen.queryByTestId("spawned-agent")).not.toBeInTheDocument();
+		expect(screen.queryByText("Spawned an agent")).not.toBeInTheDocument();
+		await userEvent.click(screen.getAllByRole("button", { name: /^Worked for/ })[0]!);
+		expect(await screen.findByText("Spawned an agent")).toBeInTheDocument();
+	});
+
+	it("keeps an ended worker's row while its turn is still the last", () => {
+		renderOrchestrator(spawnedInBackground, vi.fn(), fixCi({ status: "terminated", isTerminated: true }));
+		expect(within(screen.getByTestId("spawned-agent")).getByText("Terminated")).toBeInTheDocument();
+		expect(screen.queryByTestId("background-updates")).not.toBeInTheDocument();
+	});
+
+	it("keeps a worker that is still running after a later turn starts", () => {
+		renderOrchestrator([...spawnedInBackground, ...laterTurn], vi.fn(), fixCi({ status: "working", activity: { state: "active" } }));
+		expect(screen.getByTestId("spawned-agent")).toHaveTextContent("Fix CI");
+	});
+
+	it("shows the termination of a worker whose row has gone", async () => {
+		const terminated: ConversationActivity = {
+			kind: "activity", id: "ao-action:session.terminated:proj-290", turnId: "t2", sequence: 31, revision: 0, activityKind: "ao_action",
+			status: "completed", summary: "Terminated an agent", createdAt: at(3),
+			detail: { action: "session.terminated", operationId: "proj-290:generation:0", targetSessionId: "proj-290" },
+		};
+		renderOrchestrator([...spawnedInBackground, automation("t2", 3, "Stop Fix CI."), terminated, reply("t2", 4, "Stopped it.")], vi.fn(), fixCi({ status: "terminated", isTerminated: true }));
+		expect(screen.queryByTestId("spawned-agent")).not.toBeInTheDocument();
+		await userEvent.click(screen.getAllByRole("button", { name: /^Worked for/ }).at(-1)!);
+		expect(await screen.findByText("Terminated an agent")).toBeInTheDocument();
 	});
 
 	it("folds a needs-you report a newer update from the same worker overtook", () => {

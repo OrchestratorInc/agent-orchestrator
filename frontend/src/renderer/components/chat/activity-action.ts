@@ -192,14 +192,18 @@ function isFailedSpawnCommand(activity: ConversationActivity): boolean {
 	return activity.activityKind === "command" && activity.status === "failed" && runsAOSpawn(activity.detail?.command ?? activity.summary);
 }
 
-/** Either half of a spawn that failed: the `ao spawn` call or the daemon's record of it. */
-export function isFailedSpawn(activity: ConversationActivity): boolean {
-	return isFailedSpawnRecord(activity) || isFailedSpawnCommand(activity);
-}
-
 /** A failed `ao spawn` call that carries the daemon's reason, as {@link mergeFailedSpawns} leaves it. */
 export function isSpawnFailure(activity: ConversationActivity): boolean {
 	return isFailedSpawnCommand(activity) && Boolean(text(activity.detail?.error));
+}
+
+/**
+ * A failed spawn whose own step says why: the daemon's record of it, or the `ao spawn`
+ * call once it carries that record's reason. A failed call with no record beside it (an
+ * older daemon, or the record landed in another run) has only its exit code to show.
+ */
+export function isFailedSpawn(activity: ConversationActivity): boolean {
+	return isFailedSpawnRecord(activity) || isSpawnFailure(activity);
 }
 
 /**

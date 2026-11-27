@@ -181,8 +181,8 @@ export function ActivityRun({
 
 /**
  * The calls that failed, kept on screen while the disclosure holding them is folded.
- * A failed spawn stays inside: its run sits in Worked for, the run's count says one
- * failed, and the reply above says so.
+ * A failed spawn that says why stays inside: its run sits in Worked for, the run's
+ * count says one failed, and the reply above says so.
  */
 function FailedCalls({ activities, folded }: { activities: ConversationActivity[]; folded: boolean }) {
 	const reducedMotion = useReducedMotion();
