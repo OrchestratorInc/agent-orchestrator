@@ -2,6 +2,7 @@ import { createContext, useContext, useId, useLayoutEffect, useRef, type MouseEv
 import { useTranslation } from "react-i18next";
 import { MessageSquare, MessageSquarePlus } from "@/components/app-icons";
 import type { CommentDraft } from "../../lib/cloud-asides";
+import { renderedSnippetText } from "../../lib/chat-annotation-navigation";
 import { cn } from "../../lib/utils";
 import { Button } from "../ui/button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "../ui/tooltip";
@@ -214,16 +215,42 @@ export function commentDraftForSelection(range: Range): CommentDraft | undefined
 	if (!quote || quote.length > COMMENT_QUOTE_MAX) return undefined;
 	const body = start.querySelector("[data-chat-message-body]") ?? start;
 	const authorName = start.dataset.commentAuthor;
-	return { anchor: { sequence, kind }, quote, excerpt: messageExcerpt(body.textContent ?? ""), ...(authorName ? { authorName } : {}) };
+	// The body as drawn is already plain text: only its first line is taken.
+	const shown = body.textContent?.split(/\r?\n/).find((line) => line.trim() !== "")?.trim() ?? "";
+	return { anchor: { sequence, kind }, quote, excerpt: clampExcerpt(shown), ...(authorName ? { authorName } : {}) };
 }
 
 /**
- * The first line of a message's text, to show what a comment is about. A
- * markdown code fence ("```python") is markup, not a line: an answer that
- * starts with code shows its first line of code.
+ * A message's markdown as the one-line preview text the app shows elsewhere
+ * (renderedSnippetText, as search snippets): **bold** and `code` lose their
+ * markers, a link shows its text, a heading, list or quote marker goes. A
+ * code fence ("```python") is markup, not a line, and code inside one stays
+ * as written. Blank lines go.
+ */
+export function markdownPreviewLines(markdown: string): string[] {
+	const lines: string[] = [];
+	let code = false;
+	for (const line of markdown.split(/\r?\n/)) {
+		if (/^\s*(```|~~~)/.test(line)) {
+			code = !code;
+			continue;
+		}
+		const text = code ? line.trim() : renderedSnippetText(line);
+		if (text !== "") lines.push(text);
+	}
+	return lines;
+}
+
+/**
+ * The first line of a message, to show what a comment is about, as the
+ * message reads (markdownPreviewLines): an answer that starts with code shows
+ * its first line of code.
  */
 export function messageExcerpt(text: string): string {
-	const line = text.split(/\r?\n/).find((candidate) => candidate.trim() !== "" && !/^\s*(```|~~~)/.test(candidate))?.trim() ?? "";
+	return clampExcerpt(markdownPreviewLines(text)[0] ?? "");
+}
+
+function clampExcerpt(line: string): string {
 	return line.length > 200 ? `${line.slice(0, 199).trimEnd()}…` : line;
 }
 

@@ -142,7 +142,7 @@ import { ProviderMark } from "./ProviderMark";
 import { CopyButton } from "./CopyButton";
 import { CollapsibleHumanBody } from "./CollapsibleHumanBody";
 import { MentionedText, MentionTintContext } from "./MentionChip";
-import { asideBoxClass, NO_MENTION_TINT, useAsideMarker } from "./AsideMarker";
+import { asideBoxClass, markdownPreviewLines, NO_MENTION_TINT, useAsideMarker } from "./AsideMarker";
 import { CHAT_BUBBLE_SHAPE } from "./chatBubble";
 import type { TimelineMention } from "../../lib/cloud-mentions";
 import { LatticeLoader } from "./LatticeLoader";
@@ -1458,7 +1458,8 @@ export function FromCommentThreadCard({ thread, className }: { thread: NonNullab
 			{thread.quote || thread.anchorExcerpt ? (
 				// Under a request, the quote is context: a few lines of it (the message is in the conversation).
 				<div className={cn("border-l-2 border-(--color-comment-quote-edge) pl-2 text-control text-foreground/85", thread.framed && "line-clamp-3")} data-from-comment-quote="">
-					{thread.quote ? `“${thread.quote}”` : thread.anchorExcerpt}
+					{/* The answer's markdown reads as it is drawn: **bold** without its asterisks. */}
+					{thread.quote ? `“${thread.quote}”` : markdownPreviewLines(thread.anchorExcerpt ?? "").join(" ")}
 				</div>
 			) : null}
 			{thread.sinceSent ? (

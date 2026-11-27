@@ -225,6 +225,14 @@ describe("quoted passages", () => {
 		expect(messageExcerpt("```python\ndef retry_delay(attempt):\n    return 2\n```")).toBe("def retry_delay(attempt):");
 		expect(messageExcerpt("x".repeat(250))).toHaveLength(200);
 	});
+
+	it("shows an answer's first line as it reads, without its markdown", () => {
+		expect(messageExcerpt("Run **make test** and do not drop the table.")).toBe("Run make test and do not drop the table.");
+		expect(messageExcerpt("## Plan\n1. Fix it")).toBe("Plan");
+		expect(messageExcerpt("See [the runbook](https://example.test/runbook) and `make test`.")).toBe("See the runbook and make test.");
+		// Code is not markdown: a first line of code stays as written.
+		expect(messageExcerpt("```bash\nrm -rf build/**/cache\n```")).toBe("rm -rf build/**/cache");
+	});
 });
 
 describe("a message Also send to agent sent", () => {
@@ -242,6 +250,14 @@ describe("a message Also send to agent sent", () => {
 		expect(rows[0]).toHaveTextContent("Budget it by repo size?");
 		expect(rows[1]?.querySelector("span")).toHaveTextContent("Mohak");
 		expect(rows[1]).toHaveTextContent("Against the clone cost.");
+	});
+
+	it("shows the message a thread was on as it reads, without its markdown", async () => {
+		const { FromCommentThreadCard } = await import("./ChatTimelineItems");
+		const { container } = render(
+			<FromCommentThreadCard thread={{ asideId: "c-1", framed: true, anchorExcerpt: "Run **make test** and do not drop the table.", commentCount: 1, comments: [{ authorName: "Pritom", text: "Go." }] }} />,
+		);
+		expect(container.querySelector("[data-from-comment-quote]")).toHaveTextContent(/^Run make test and do not drop the table\.$/);
 	});
 
 	it("puts the request first, then the quote, then the comments", async () => {
