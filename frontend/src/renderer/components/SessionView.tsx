@@ -163,7 +163,7 @@ import { isMacPlatform } from "../lib/platform";
 import { useShell } from "../lib/shell-context";
 import { cn } from "../lib/utils";
 import { usesPreviewWorkspaceData } from "../lib/preview-mode";
-import { canArchiveWorkerSession, isOrchestratorSession, sessionAgentExited, sessionIsActive, type SessionArtifact, type WorkspaceSummary } from "../types/workspace";
+import { canArchiveWorkerSession, isOrchestratorSession, sessionAgentExited, sessionIsActive, sessionWorkspaceReady, type SessionArtifact, type WorkspaceSummary } from "../types/workspace";
 import { terminalTargetBelongsToSession, type TerminalTarget } from "../types/terminal";
 import { useCloudSessionPresence } from "../hooks/useCloudSessionPresence";
 import { SessionPeopleControl } from "./SessionPeople";
@@ -3336,6 +3336,7 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 											projectKind={filesKind}
 											sessionId={session.id}
 											split={filesSplit}
+											workspacePending={!sessionWorkspaceReady(session)}
 										/>
 									)
 								) : null
@@ -3430,6 +3431,7 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 										projectKind={filesKind}
 										sessionId={session.id}
 										split={filesSplit}
+										workspacePending={!sessionWorkspaceReady(session)}
 									/>
 								)}
 							</FilesTopbarHostContext.Provider>

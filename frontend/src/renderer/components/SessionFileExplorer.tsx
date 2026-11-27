@@ -20,6 +20,7 @@ import {
 	sessionWorkspaceFilesQueryOptions,
 	clearMissingWorkspace,
 	isMissingWorkspaceError,
+	isWorkspaceNotFoundError,
 	type FilesBranchTarget,
 	type FilesSource,
 	type WorkspaceFilesResponse,
@@ -76,9 +77,22 @@ type SessionFileExplorerProps = {
 	/** The session's branch, shown on the branch picker before its list loads. */
 	checkedOutBranch?: string;
 	split?: boolean;
+	/** The session's worktree is still being made, so there is nothing to read yet. */
+	workspacePending?: boolean;
 };
 
-export function SessionFileExplorer({
+/**
+ * Until a starting session publishes its worktree, every workspace read
+ * answers 404, so the explorer and its queries wait instead of showing it as
+ * a failure. They mount once the worktree exists.
+ */
+export function SessionFileExplorer({ workspacePending = false, ...props }: SessionFileExplorerProps) {
+	const { t } = useTranslation();
+	if (workspacePending) return <PanelMessage>{t("files.workspacePending")}</PanelMessage>;
+	return <SessionFileExplorerContent {...props} />;
+}
+
+function SessionFileExplorerContent({
 	sessionId,
 	hostId,
 	isMaximized = false,
@@ -88,7 +102,7 @@ export function SessionFileExplorer({
 	projectKind,
 	checkedOutBranch,
 	split: controlledSplit,
-}: SessionFileExplorerProps) {
+}: Omit<SessionFileExplorerProps, "workspacePending">) {
 	const { t } = useTranslation();
 	const [filter, setFilter] = useState("");
  const filtersBySource=useRef(new Map<string,string>());
@@ -481,8 +495,9 @@ export function SessionFileExplorer({
 						clearMissingWorkspace(sessionId, hostId);
 						void filesQuery.refetch();
 					}} />}>
-						{isMissingWorkspaceError(filesQuery.error)
-							? t("files.error.workspaceMissing") : filesQuery.error.message || t("files.error.loadWorkspace")}
+						{isMissingWorkspaceError(filesQuery.error) ? t("files.error.workspaceMissing")
+							: isWorkspaceNotFoundError(filesQuery.error) ? t("files.workspaceGone")
+							: filesQuery.error.message || t("files.error.loadWorkspace")}
 					</PanelMessage>
 				) : filesData ? (
 					isMaximized ? (
