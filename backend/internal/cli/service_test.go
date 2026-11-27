@@ -89,8 +89,11 @@ func serviceTestDeps(calls *[]serviceCall, fail map[string]bool) Deps {
 	return Deps{
 		Executable:   func() (string, error) { return "/opt/ao/bin/ao", nil },
 		ProcessAlive: func(int) bool { return false },
-		Now:          func() time.Time { return now },
-		Sleep:        func(d time.Duration) { now = now.Add(d) },
+		// A dead PID is dead: the Linux hidden-PID fallback would otherwise
+		// find a fake daemon whose run file a test removed.
+		PIDMayBeHidden: func() bool { return false },
+		Now:            func() time.Time { return now },
+		Sleep:          func(d time.Duration) { now = now.Add(d) },
 		CommandOutput: func(_ context.Context, name string, args ...string) ([]byte, error) {
 			*calls = append(*calls, serviceCall{name, args})
 			if fail[name+" "+args[0]] || (len(args) > 1 && fail[name+" "+args[0]+" "+args[1]]) {
@@ -503,10 +506,11 @@ func systemdDeps(t *testing.T, outputs map[string]string, fails map[string]bool)
 	t.Helper()
 	now := time.Unix(1000, 0)
 	return Deps{
-		Executable:   func() (string, error) { return "/opt/ao/bin/ao", nil },
-		ProcessAlive: func(int) bool { return false },
-		Now:          func() time.Time { return now },
-		Sleep:        func(d time.Duration) { now = now.Add(d) },
+		PIDMayBeHidden: func() bool { return false },
+		Executable:     func() (string, error) { return "/opt/ao/bin/ao", nil },
+		ProcessAlive:   func(int) bool { return false },
+		Now:            func() time.Time { return now },
+		Sleep:          func(d time.Duration) { now = now.Add(d) },
 		CommandOutput: func(_ context.Context, name string, args ...string) ([]byte, error) {
 			// Match "manager subcommand" (e.g. "loginctl show-user") or, for
 			// systemctl, "systemctl --user verb".
@@ -609,6 +613,9 @@ func TestServiceSystemdStatusSeparatesActiveFromEnabled(t *testing.T) {
 // LaunchAgent and a runner that exports dataDir when it is set.
 func writeSelfHostedService(t *testing.T, agents, dataDir string) string {
 	t.Helper()
+	if runtime.GOOS == "windows" {
+		t.Skip("the self-hosted setup script is bash-only; Windows is not a self-hosted host")
+	}
 	// The setup script may live under a home or install dir with a space.
 	dir := filepath.Join(t.TempDir(), "My Host")
 	if err := os.MkdirAll(dir, 0o700); err != nil {
@@ -1054,6 +1061,9 @@ func TestServiceLaunchdRefusesForeignLoadedLabel(t *testing.T) {
 // The setup script writes its unit under ~/.config/systemd/user even when
 // XDG_CONFIG_HOME points elsewhere; the conflict check must still find it.
 func TestServiceSystemdFindsSelfHostedUnitOutsideXDG(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("the self-hosted setup script is bash-only; Windows is not a self-hosted host")
+	}
 	cfg := setConfigEnv(t)
 	setServiceHome(t)
 	t.Setenv("XDG_CONFIG_HOME", t.TempDir())

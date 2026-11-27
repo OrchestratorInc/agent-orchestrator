@@ -265,11 +265,6 @@ func (c *commandContext) currentServiceSpec(port int) (serviceSpec, error) {
 	if err != nil {
 		return serviceSpec{}, fmt.Errorf("resolve ao executable: %w", err)
 	}
-	if serviceGOOS == "linux" && strings.Contains(exe, "$") {
-		// systemd expands $ in ExecStart, and its ":" prefix that turns
-		// expansion off needs systemd 249+.
-		return serviceSpec{}, fmt.Errorf("the ao binary path %q contains a $, which a systemd unit cannot run reliably; install ao in a path without one", exe)
-	}
 	if abs, err := filepath.Abs(exe); err == nil {
 		exe = abs
 	}
@@ -406,6 +401,11 @@ func (c *commandContext) serviceInstall(ctx context.Context, opts serviceOptions
 	spec, err := c.currentServiceSpec(opts.port)
 	if err != nil {
 		return serviceStatus{}, err
+	}
+	if spec.Manager == serviceManagerSystemd && strings.Contains(spec.Args[0], "$") {
+		// systemd expands $ in ExecStart, and its ":" prefix that turns
+		// expansion off needs systemd 249+. status and uninstall still work.
+		return serviceStatus{}, fmt.Errorf("the ao binary path %q contains a $, which a systemd unit cannot run reliably; install ao in a path without one", spec.Args[0])
 	}
 	if err := refuseSelfHostedConflict(spec); err != nil {
 		return serviceStatus{}, err
