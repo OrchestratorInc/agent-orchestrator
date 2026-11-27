@@ -2,7 +2,8 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { reconcileRows } from "./rowSharing";
 import { ApiError, getNotifications, getSessions, type DashboardSession, type DashboardStats, type OrchestratorLink, type ProjectInfo } from "./api";
 import { sameArchiveSummary, type ArchiveSummary } from "./archive/archiveSummary";
-import { isConfigured, type ServerConfig } from "./config";
+import type { SavedBoard } from "./boardSnapshot";
+import { hostMachineIdentity, isConfigured, type ServerConfig } from "./config";
 import { connectToHost } from "./connectRuntime";
 import { shouldKeepPolling, userFacingError } from "./connectionError";
 import type { Endpoint } from "./endpoints";
@@ -76,6 +77,50 @@ export function emptyHostSnapshot(host: Host): HostSnapshot {
 type Runner = { config: ServerConfig | null; refresh: () => Promise<void>; stop: () => void };
 type Publish = (patch: Partial<HostSnapshot>) => void;
 type RunnerSeed = { config: ServerConfig; connected: true };
+
+/**
+ * Where every other machine's last board is kept on the phone: the same store,
+ * key and saver as the selected machine's (see boardSnapshot), so leaving the
+ * app writes them all and forgetting a machine deletes its board.
+ */
+export type OtherHostBoards = {
+	load(machine: string): Promise<SavedBoard | null>;
+	save(board: Omit<SavedBoard, "v">): void;
+};
+
+/** The board to save for a machine whose poll just answered. */
+function boardToSave(snapshot: HostSnapshot): Omit<SavedBoard, "v"> {
+	return {
+		machine: hostMachineIdentity(snapshot.hostId),
+		savedAt: snapshot.lastSyncAt,
+		sessions: snapshot.sessions,
+		orchestrators: snapshot.orchestrators,
+		projects: snapshot.projectsKnown ? snapshot.projects : null,
+		archive: snapshot.archive ?? null,
+		stats: snapshot.stats,
+		notificationsUnread: snapshot.notificationsUnread,
+	};
+}
+
+/**
+ * A machine's saved board laid under the snapshot of one that has not answered
+ * since launch, so a machine that is off still shows its last rows, its dot
+ * aged by when they were saved. Null once a poll has answered: a saved board
+ * never replaces a live one.
+ */
+export function withSavedBoard(snapshot: HostSnapshot, saved: SavedBoard): HostSnapshot | null {
+	if (snapshot.lastSyncAt > 0) return null;
+	return {
+		...snapshot,
+		sessions: saved.sessions,
+		orchestrators: saved.orchestrators,
+		archive: saved.archive,
+		stats: saved.stats,
+		notificationsUnread: saved.notificationsUnread,
+		...(snapshot.projectsKnown ? {} : { projects: saved.projects ?? [], projectsKnown: saved.projects !== null }),
+		lastSyncAt: saved.savedAt,
+	};
+}
 
 export function verifiedHostSnapshot(hostId: string, snapshot: HostSnapshot | undefined): VerifiedHostSnapshot | null {
 	if (snapshot?.hostId !== hostId || snapshot.connection !== "open" || snapshot.config?.hostId !== hostId) return null;
@@ -192,8 +237,9 @@ function createOtherHostRunner(host: Host, previous: HostSnapshot | undefined, p
 				loading: false,
 				error: null,
 				errorStatus: null,
-				projects: lastProjects,
-				projectsKnown,
+				// With no list known from this machine yet, a failed /projects leaves
+				// the snapshot's (a saved board's) list rather than blanking it.
+				...(projectsKnown ? { projects: lastProjects, projectsKnown } : {}),
 				sessions: answer.sessions,
 				archive: answer.archive ?? null,
 				orchestrators: answer.orchestrators,
@@ -242,15 +288,17 @@ export function startVerifiedOtherHost(host: Host, snapshot: HostSnapshot, publi
 }
 
 /** The selected host keeps its existing store/poll. These runners own every other paired host. */
-export function useOtherHosts(hosts: Host[], selectedHostId: string | null, appActive: boolean) {
+export function useOtherHosts(hosts: Host[], selectedHostId: string | null, appActive: boolean, boards: OtherHostBoards) {
 	const [snapshots, setSnapshots] = useState<Record<string, HostSnapshot>>({});
 	const snapshotsRef = useRef<Record<string, HostSnapshot>>({});
 	const runners = useRef(new Map<string, { generation: number; runner: Runner; host: Host }>());
 	const generations = useRef(new Map<string, number>());
 	const hostsRef = useRef(hosts);
 	const appActiveRef = useRef(appActive);
+	const boardsRef = useRef(boards);
 	hostsRef.current = hosts;
 	appActiveRef.current = appActive;
+	boardsRef.current = boards;
 
 	const commitSnapshots = useCallback((update: (current: Record<string, HostSnapshot>) => Record<string, HostSnapshot>) => {
 		const next = update(snapshotsRef.current);
@@ -281,6 +329,10 @@ export function useOtherHosts(hosts: Host[], selectedHostId: string | null, appA
 				if (Object.keys(patch).every((key) => next[key as keyof HostSnapshot] === previous[key as keyof HostSnapshot])) return current;
 				return { ...current, [host.id]: next };
 			});
+			// A poll that answered (or its unread count after it): kept for the next
+			// launch, when this machine may not answer at all.
+			const saved = snapshotsRef.current[host.id];
+			if (("lastSyncAt" in patch || "notificationsUnread" in patch) && saved?.lastSyncAt) boardsRef.current.save(boardToSave(saved));
 		};
 		const runner = build(publish);
 		if (!runner) return false;
@@ -290,7 +342,22 @@ export function useOtherHosts(hosts: Host[], selectedHostId: string | null, appA
 		return true;
 	}, [commitSnapshots, stopRunner]);
 
+	// Each machine's saved board is read once, for the first runner started
+	// before it has answered.
+	const restoreSavedBoard = useCallback((host: Host) => {
+		void boardsRef.current.load(hostMachineIdentity(host.id)).catch(() => null).then((saved) => {
+			if (!saved) return;
+			commitSnapshots((current) => {
+				// Gone (forgotten, or the selected machine now) or already answered.
+				const snapshot = current[host.id];
+				const restored = snapshot && runners.current.has(host.id) ? withSavedBoard(snapshot, saved) : null;
+				return restored ? { ...current, [host.id]: restored } : current;
+			});
+		});
+	}, [commitSnapshots]);
+
 	const startColdRunner = useCallback((host: Host): boolean => {
+		const neverSynced = !snapshotsRef.current[host.id]?.lastSyncAt;
 		commitSnapshots((current) => ({
 			...current,
 			[host.id]: {
@@ -303,8 +370,10 @@ export function useOtherHosts(hosts: Host[], selectedHostId: string | null, appA
 				loading: true,
 			},
 		}));
-		return installRunner(host, (publish) => startOtherHost(host, snapshotsRef.current[host.id], publish));
-	}, [commitSnapshots, installRunner]);
+		const started = installRunner(host, (publish) => startOtherHost(host, snapshotsRef.current[host.id], publish));
+		if (started && neverSynced) restoreSavedBoard(host);
+		return started;
+	}, [commitSnapshots, installRunner, restoreSavedBoard]);
 
 	const startSeededRunner = useCallback((host: Host, snapshot: VerifiedHostSnapshot): boolean => (
 		installRunner(host, (publish) => startVerifiedOtherHost(host, snapshot, publish))
