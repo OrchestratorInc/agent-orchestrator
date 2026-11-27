@@ -60,6 +60,7 @@ import { useTerminalMux } from "./useTerminalMux";
 import { InterfaceSwitchCard } from "./InterfaceSwitchCard";
 import { createPaintDetector, TERMINAL_PAINT_WAIT_MS } from "./terminalPaint";
 import { useInterfaceHandoff } from "./useInterfaceHandoff";
+import { useSessionContentShown } from "../telemetry/useSessionSurface";
 
 const FONT_SIZE = 12;
 
@@ -385,6 +386,8 @@ export default function TerminalScreen({ session: resolved }: { session?: RouteS
 		restartPaintWait();
 	}, [restartPaintWait, terminalHandleId]);
 	const startLoaderShown = !painted && !paintWaitOver && !dead && !viewGone && !switchCardShown && status !== "error";
+	// Opening the session is timed until its first output is drawn.
+	useSessionContentShown(painted);
 
 	useLayoutEffect(() => {
 		xtermReadyRef.current = false;

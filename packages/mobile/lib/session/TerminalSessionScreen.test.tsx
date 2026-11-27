@@ -72,6 +72,8 @@ vi.mock("expo-router", async () => {
 	});
 	return {
 		Stack: { Toolbar },
+		// Session-open timing only (useSessionContentShown); not exercised here.
+		useFocusEffect: () => {},
 		useLocalSearchParams: () => fixtures.params,
 		useNavigation: () => fixtures.navigation,
 		useRouter: () => fixtures.router,

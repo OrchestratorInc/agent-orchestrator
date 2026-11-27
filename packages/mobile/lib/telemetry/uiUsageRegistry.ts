@@ -24,8 +24,27 @@ export function uiUsage(): UiUsageTracker | null {
 	return tracker;
 }
 
-/** A daemon request's time to an answer (`null`: none came), over the connection kind it used. */
-export function reportRequestTimed(ms: number | null, transport: Transport, ok: boolean): void {
+// Goes up each time the app goes to the background. A request in flight across
+// one measured the time away, or failed because the OS suspended it.
+let backgrounds = 0;
+
+/** The app went to the background. */
+export function noteBackgrounded(): void {
+	backgrounds += 1;
+}
+
+/** Taken when a request starts; hand it back to reportRequestTimed. */
+export function requestStartedIn(): number {
+	return backgrounds;
+}
+
+/**
+ * A daemon request's time to an answer (`null`: none came), over the connection
+ * kind it used. Not counted when the app went to the background since
+ * `startedIn` (requestStartedIn when the request began).
+ */
+export function reportRequestTimed(ms: number | null, transport: Transport, ok: boolean, startedIn: number): void {
+	if (startedIn !== backgrounds) return;
 	tracker?.requestTimed(ms, transport, ok);
 }
 

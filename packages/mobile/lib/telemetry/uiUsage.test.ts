@@ -357,17 +357,82 @@ describe("performance", () => {
 		return t.of(UI_EVENTS.performance)[0]?.props;
 	}
 
-	it("times a session from its route coming up to its first opening", () => {
+	it("times a session from its screen coming up until it shows its content", () => {
 		const t = setup();
 		t.tracker.setRoute("board");
 		t.tracker.setRoute("session");
-		t.advance(700);
+		t.advance(30);
+		// Found on the board: counted at once, but its messages take longer.
 		t.tracker.sessionOpened("h|s1");
+		t.advance(1_170);
+		t.tracker.sessionContentShown();
 		// A return to the same session is not timed again.
 		t.tracker.setRoute("files");
 		t.tracker.setRoute("session");
 		t.tracker.sessionReturned("h|s1");
-		expect(perfAfter(t)).toMatchObject({ session_open_count: 1, session_open_lt1000_count: 1, session_open_p75_ms: 700 });
+		t.tracker.sessionContentShown();
+		const props = perfAfter(t);
+		expect(props).toMatchObject({ session_open_count: 1, session_open_lt3000_count: 1, session_open_p75_ms: 1_200 });
+		expect(props).not.toHaveProperty("session_open_dropped_count");
+	});
+
+	// A cached chat draws in the same commit, before the route counts the opening.
+	it("times content drawn before the opening was counted", () => {
+		const t = setup();
+		t.tracker.setRoute("board");
+		t.tracker.setRoute("session");
+		t.advance(80);
+		t.tracker.sessionContentShown();
+		t.advance(20);
+		t.tracker.sessionOpened("h|s1");
+		expect(perfAfter(t)).toMatchObject({ session_open_count: 1, session_open_p75_ms: 80 });
+	});
+
+	it("drops an opening left, switched away from or backgrounded before its content showed", () => {
+		const t = setup();
+		t.tracker.setRoute("board");
+		t.tracker.setRoute("session");
+		t.tracker.sessionOpened("h|a");
+		t.tracker.setRoute("board");
+		t.tracker.setRoute("session");
+		t.tracker.sessionOpened("h|b");
+		t.tracker.sessionOpened("h|c");
+		t.tracker.sessionContentShown();
+		t.tracker.setRoute("board");
+		t.tracker.setRoute("session");
+		t.tracker.sessionOpened("h|d");
+		t.tracker.setForeground(false);
+		t.advance(60_000);
+		t.tracker.setForeground(true);
+		t.tracker.sessionContentShown();
+		const props = perfAfter(t);
+		expect(props).toMatchObject({ session_open_dropped_count: 3 });
+		expect(props).not.toHaveProperty("session_open_count");
+	});
+
+	// A push looks its session up; the app went to the background meanwhile.
+	it("drops an opening whose screen went to the background before the session was found", () => {
+		const t = setup();
+		t.tracker.setRoute("board");
+		t.tracker.setRoute("session");
+		t.tracker.setForeground(false);
+		t.advance(120_000);
+		t.tracker.setForeground(true);
+		t.tracker.sessionOpened("h|s1");
+		t.tracker.sessionContentShown();
+		const props = perfAfter(t);
+		expect(props).toMatchObject({ session_open_dropped_count: 1 });
+		expect(props).not.toHaveProperty("session_open_count");
+	});
+
+	it("drops an opening slower than 30 s", () => {
+		const t = setup();
+		t.tracker.setRoute("board");
+		t.tracker.setRoute("session");
+		t.tracker.sessionOpened("h|s1");
+		t.advance(31_000);
+		t.tracker.sessionContentShown();
+		expect(perfAfter(t)).toMatchObject({ session_open_dropped_count: 1 });
 	});
 
 	// Back on session A after a detour, then straight to B: a switch, not an opening.
@@ -377,12 +442,17 @@ describe("performance", () => {
 		t.tracker.setRoute("session");
 		t.advance(400);
 		t.tracker.sessionOpened("h|a");
+		t.tracker.sessionContentShown();
 		t.tracker.setRoute("files");
 		t.tracker.setRoute("session");
 		t.tracker.sessionReturned("h|a");
 		t.advance(5_000);
 		t.tracker.sessionOpened("h|b");
-		expect(perfAfter(t)).toMatchObject({ session_open_count: 1, session_open_p75_ms: 400 });
+		t.advance(300);
+		t.tracker.sessionContentShown();
+		const props = perfAfter(t);
+		expect(props).toMatchObject({ session_open_count: 1, session_open_p75_ms: 400 });
+		expect(props).not.toHaveProperty("session_open_dropped_count");
 	});
 
 	it("times a return to the front until fresh data, and counts one that got none", () => {
@@ -409,8 +479,22 @@ describe("performance", () => {
 		t.tracker.requestTimed(null, "tailscale", false);
 		t.tracker.stalled(260);
 		const props = perfAfter(t);
-		expect(props).toMatchObject({ measurement_schema_version: 1, flush_reason: "background", request_count: 1, request_failed_count: 1, request_lan_count: 1, stall_count: 1 });
+		expect(props).toMatchObject({ measurement_schema_version: 1, flush_reason: "background", request_count: 1, request_unanswered_count: 1, request_lan_count: 1, stall_count: 1 });
 		expect(props?.window_seconds).toBeGreaterThan(0);
+	});
+
+	it("tells listeners when counting is switched on or off", () => {
+		const t = setup();
+		const seen: boolean[] = [];
+		const off = t.tracker.onEnabledChange((on) => seen.push(on));
+		expect(t.tracker.isEnabled()).toBe(true);
+		t.tracker.setEnabled(false);
+		t.tracker.setEnabled(false);
+		t.tracker.setEnabled(true);
+		off();
+		t.tracker.setEnabled(false);
+		expect(seen).toEqual([false, true]);
+		expect(t.tracker.isEnabled()).toBe(false);
 	});
 
 	it("counts nothing while opted out", () => {

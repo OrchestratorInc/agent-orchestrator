@@ -20,6 +20,7 @@ import {
 	recordResumeFresh,
 	recordResumeStale,
 	recordSessionOpen,
+	recordSessionOpenDropped,
 	recordStall,
 	restorePerf,
 	type PerfWindow,
@@ -128,6 +129,11 @@ export type UiUsageTracker = {
 	/** The session screen showing `key` is in front again; not a new opening. */
 	sessionReturned(key: string): void;
 	/**
+	 * The session screen in front shows its content: a chat's messages or a
+	 * terminal's first output. Ends the timing of the session's opening.
+	 */
+	sessionContentShown(): void;
+	/**
 	 * A push, a link or the launch's restore is about to open a session, named by
 	 * `target` when known: the source is then credited only to that session (on
 	 * that machine, when named), so a push for the session already on screen, or
@@ -142,6 +148,9 @@ export type UiUsageTracker = {
 	 * counting; on starts a fresh window, so nothing from before is sent.
 	 */
 	setEnabled(enabled: boolean): void;
+	isEnabled(): boolean;
+	/** Calls `listener` each time counting is switched on or off; returns the unsubscribe. */
+	onEnabledChange(listener: (enabled: boolean) => void): () => void;
 	current(): Surface | null;
 	/** A daemon request's time to an answer (`null`: none came), over the connection kind it used. */
 	requestTimed(ms: number | null, transport: Transport, ok: boolean): void;
@@ -270,10 +279,34 @@ export function createUiUsageTracker(deps: UiUsageDeps): UiUsageTracker {
 	let lastSaveAt = start;
 	let enabled = true;
 	// When the session route came up from outside the session screens: its
-	// first counted opening times how long the session took to show.
+	// first counted opening is timed from here until the session shows its
+	// content. `contentShownAt` holds content that showed before the opening was
+	// counted (a cached chat draws in the same commit), and `openWaiting` an
+	// opening counted before its content showed.
 	let sessionRouteAt: number | null = null;
+	let contentShownAt: number | null = null;
+	let openWaiting: { at: number } | null = null;
+	// The session screen came up but went to the background before its session
+	// was found (a push or a link looking it up): that opening is dropped too.
+	let routeInterrupted = false;
+	const enabledListeners = new Set<(enabled: boolean) => void>();
 	// When the app came back to the front, until fresh data arrives.
 	let resumeAt: number | null = null;
+
+	// No opening is being timed any more; one already counted is dropped.
+	const dropOpen = () => {
+		if (openWaiting && enabled) recordSessionOpenDropped(window.perf);
+		openWaiting = null;
+		sessionRouteAt = null;
+		contentShownAt = null;
+	};
+
+	const finishOpen = (from: number, shownAt: number) => {
+		recordSessionOpen(window.perf, shownAt - from);
+		openWaiting = null;
+		sessionRouteAt = null;
+		contentShownAt = null;
+	};
 
 	const save = (now: number) => {
 		if (!enabled) return;
@@ -329,9 +362,15 @@ export function createUiUsageTracker(deps: UiUsageDeps): UiUsageTracker {
 			const entry = window.surfaces[next] ?? { ms: 0, opens: 0 };
 			entry.opens += 1;
 			window.surfaces[next] = entry;
-			if (isSessionSurface(next) && (previous === null || !isSessionSurface(previous))) sessionRouteAt = now;
+			if (isSessionSurface(next) && (previous === null || !isSessionSurface(previous))) {
+				sessionRouteAt = now;
+				contentShownAt = null;
+				routeInterrupted = false;
+			}
 			if (!isSessionSurface(next)) {
-				sessionRouteAt = null;
+				// Left the session screens before the session showed its content.
+				dropOpen();
+				routeInterrupted = false;
 				lastOutsideSession = next;
 				countedSession = null;
 				// Its session screen came and went without the session opening.
@@ -374,6 +413,9 @@ export function createUiUsageTracker(deps: UiUsageDeps): UiUsageTracker {
 				account(now);
 				if (enabled && resumeAt !== null) recordResumeStale(window.perf);
 				resumeAt = null;
+				// Time away is not loading time: an opening in progress is dropped.
+				if (enabled && sessionRouteAt !== null && !openWaiting) routeInterrupted = true;
+				dropOpen();
 				if (enabled) window.activeMs += Math.max(0, now - activeSince);
 				foreground = false;
 				save(now);
@@ -406,15 +448,31 @@ export function createUiUsageTracker(deps: UiUsageDeps): UiUsageTracker {
 					: lastOutsideSession ? SOURCE_BY_SURFACE[lastOutsideSession] ?? "other" : "other";
 			if (marked) pendingSource = null;
 			window.sessionOpens[source] = (window.sessionOpens[source] ?? 0) + 1;
-			// Only an opening from outside the session screens is timed, not a switch.
-			if (sessionRouteAt !== null && !fromSession) recordSessionOpen(window.perf, now - sessionRouteAt);
-			sessionRouteAt = null;
+			// Only an opening from outside the session screens is timed, not a
+			// switch; switching away from one still loading drops it.
+			if (routeInterrupted && !fromSession) recordSessionOpenDropped(window.perf);
+			routeInterrupted = false;
+			if (fromSession || sessionRouteAt === null) dropOpen();
+			else if (contentShownAt !== null) finishOpen(sessionRouteAt, contentShownAt);
+			else {
+				openWaiting = { at: sessionRouteAt };
+				sessionRouteAt = null;
+			}
 		},
 		sessionReturned(key) {
 			if (!enabled) return;
 			countedSession = key;
-			// A return is not an opening, so nothing after it is timed from that route.
+			// A return is not an opening, so nothing after it is timed from that
+			// route. An opening still waiting (a chat/terminal switch mid-load) waits on.
 			sessionRouteAt = null;
+			contentShownAt = null;
+			routeInterrupted = false;
+		},
+		sessionContentShown() {
+			if (!enabled) return;
+			const now = deps.now();
+			if (openWaiting) finishOpen(openWaiting.at, now);
+			else if (sessionRouteAt !== null && contentShownAt === null) contentShownAt = now;
 		},
 		openedBy(source, target) {
 			pendingSource = { source, at: deps.now(), ...(target ? { target } : {}) };
@@ -455,10 +513,21 @@ export function createUiUsageTracker(deps: UiUsageDeps): UiUsageTracker {
 			lastErrorAt.clear();
 			pendingSource = null;
 			sessionRouteAt = null;
+			contentShownAt = null;
+			openWaiting = null;
+			routeInterrupted = false;
 			resumeAt = null;
 			shownAt = now;
 			activeSince = now;
 			if (!next) deps.clear();
+			for (const listener of enabledListeners) listener(next);
+		},
+		isEnabled: () => enabled,
+		onEnabledChange(listener) {
+			enabledListeners.add(listener);
+			return () => {
+				enabledListeners.delete(listener);
+			};
 		},
 		current: () => shown,
 		requestTimed(ms, transport, ok) {

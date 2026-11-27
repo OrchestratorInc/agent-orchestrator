@@ -1113,26 +1113,39 @@ out):
   `session_open_lt500_count`, `session_open_lt1000_count`,
   `session_open_lt3000_count` and `session_open_ge3000_count`, and
   `session_open_p75_ms`: from the session screen coming up after another
-  screen to the session showing its chat or terminal. A return to a session
-  already open, or a switch between sessions, is not timed.
+  screen to the session showing its content, that is the chat's messages
+  drawn or the terminal's first output (for an Orchestrator Cloud session, its
+  conversation or its agent's terminal output). A return to a session already
+  open, or a switch between sessions, is not timed.
+  `session_open_dropped_count` counts openings not timed because the screen
+  was left, another session was opened, or the app went to the background
+  before the content showed, or because it took over 30 seconds, as the
+  desktop's `switch_dropped_count` does.
 - Main-thread stalls: a timer asked to run every 500 ms while the app is in
-  front reports how late it ran. `stall_count` counts runs 100 ms or more late,
+  front and telemetry is on reports how late it ran. `stall_count` counts runs 100 ms or more late,
   `stall_long_count` those 500 ms or more, `stall_total_ms` their lateness and
   `stall_max_ms` the worst. A run 10 seconds or more late is the app having been
   suspended and is not counted.
 - Requests to paired machines, timed to the answer's headers:
-  `request_count`, `request_lt300_count`, `request_lt1000_count`,
-  `request_lt3000_count`, `request_ge3000_count`, `request_p75_ms`,
-  `request_p95_ms`, and `request_failed_count` (an error status, a timeout, or
-  no answer). By connection kind, `request_<kind>_count` and
-  `request_<kind>_p75_ms`, where `<kind>` is `lan`, `tailscale`, `tunnel`,
-  `relay`, or `unknown`. A request the app cancelled because the screen was
-  left is not counted. Orchestrator Cloud requests are not included.
-- Returns to the app with a machine paired: `resume_count`, and the time until
-  a paired machine's data was fresh again in `resume_fresh_lt1000_count`,
+  `request_count` (requests that got an answer), `request_lt300_count`,
+  `request_lt1000_count`, `request_lt3000_count`, `request_ge3000_count`,
+  `request_p75_ms` and `request_p95_ms`. `request_error_count` counts the
+  answers that were an error status; they are included in `request_count`.
+  `request_unanswered_count` counts requests that timed out or got no answer;
+  they are not included in `request_count`. By connection kind,
+  `request_<kind>_count` and `request_<kind>_p75_ms`, where `<kind>` is `lan`,
+  `tailscale`, `tunnel`, `relay`, or `unknown`. A request the app cancelled
+  because the screen was left, or one still in flight when the app went to the
+  background, is not counted. Orchestrator Cloud requests are not included.
+- Returns to the app from the background with a machine paired:
+  `resume_count`, and the time until a paired machine's data was fresh again
+  in `resume_fresh_lt1000_count`,
   `resume_fresh_lt3000_count`, `resume_fresh_ge3000_count` and
   `resume_fresh_p75_ms`. `resume_stale_count` counts returns that went back to
   the background with no fresh data, or got it after 30 seconds or more.
+  Coming back from iOS's `inactive` state (Control Center, Notification
+  Center, the app switcher, Face ID or a system alert) is not a return: the
+  app never left and kept refreshing.
 
 The percentiles come from the last 100 measurements of each kind in the window;
 the counts include every measurement.

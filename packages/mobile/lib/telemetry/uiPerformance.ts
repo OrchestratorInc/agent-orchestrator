@@ -18,6 +18,8 @@ export const STALL_MS = 100;
 export const LONG_STALL_MS = 500;
 /** Back in front without fresh data this long counts as a stale return. */
 export const RESUME_STALE_MS = 30_000;
+/** A session taking longer than this to show its content is dropped, not timed, as the desktop's switches are. */
+export const SESSION_OPEN_MAX_MS = 30_000;
 // The last this many samples of each duration, enough for a p75 or p95.
 const SAMPLES = 100;
 
@@ -31,8 +33,14 @@ type Samples = { values: number[]; next: number; buckets?: number[] };
 
 export type PerfWindow = {
 	sessionOpens: Samples;
+	/** Openings not timed: left, switched away from or backgrounded before the content showed, or too slow. */
+	sessionOpensDropped: number;
 	stalls: { count: number; long: number; totalMs: number; maxMs: number };
-	requests: Samples & { failed: number; byTransport: Partial<Record<Transport, Samples>> };
+	/**
+	 * Answered requests are the samples; `errors` counts those answered with an
+	 * error status, and `unanswered` the requests that got no answer at all.
+	 */
+	requests: Samples & { errors: number; unanswered: number; byTransport: Partial<Record<Transport, Samples>> };
 	resumes: { count: number; stale: number; fresh: Samples };
 };
 
@@ -43,8 +51,9 @@ function emptySamples(edges?: readonly number[]): Samples {
 export function emptyPerf(): PerfWindow {
 	return {
 		sessionOpens: emptySamples(SESSION_OPEN_EDGES),
+		sessionOpensDropped: 0,
 		stalls: { count: 0, long: 0, totalMs: 0, maxMs: 0 },
-		requests: { ...emptySamples(REQUEST_EDGES), failed: 0, byTransport: {} },
+		requests: { ...emptySamples(REQUEST_EDGES), errors: 0, unanswered: 0, byTransport: {} },
 		resumes: { count: 0, stale: 0, fresh: emptySamples(RESUME_EDGES) },
 	};
 }
@@ -84,8 +93,15 @@ function bucketCounts(samples: Samples, prefix: string, edges: readonly number[]
 	return out;
 }
 
+/** A session showed its content `ms` after its screen came up; past SESSION_OPEN_MAX_MS it is dropped. */
 export function recordSessionOpen(perf: PerfWindow, ms: number): void {
-	add(perf.sessionOpens, ms, SESSION_OPEN_EDGES);
+	if (ms > SESSION_OPEN_MAX_MS) perf.sessionOpensDropped += 1;
+	else add(perf.sessionOpens, ms, SESSION_OPEN_EDGES);
+}
+
+/** An opening that was not timed because its content never showed while it was in front. */
+export function recordSessionOpenDropped(perf: PerfWindow): void {
+	perf.sessionOpensDropped += 1;
 }
 
 export function recordStall(perf: PerfWindow, lateMs: number): void {
@@ -98,8 +114,11 @@ export function recordStall(perf: PerfWindow, lateMs: number): void {
 
 /** A daemon request: its time to an answer, or `null` when none came (timeout, offline). */
 export function recordRequest(perf: PerfWindow, ms: number | null, transport: Transport, ok: boolean): void {
-	if (ms === null || !ok) perf.requests.failed += 1;
-	if (ms === null) return;
+	if (ms === null) {
+		perf.requests.unanswered += 1;
+		return;
+	}
+	if (!ok) perf.requests.errors += 1;
 	add(perf.requests, ms, REQUEST_EDGES);
 	const byTransport = perf.requests.byTransport[transport] ?? emptySamples();
 	add(byTransport, ms);
@@ -123,8 +142,8 @@ export function recordResumeStale(perf: PerfWindow): void {
 }
 
 export function hasPerf(perf: PerfWindow): boolean {
-	return count(perf.sessionOpens) > 0 || perf.stalls.count > 0 || count(perf.requests) > 0
-		|| perf.requests.failed > 0 || perf.resumes.count > 0;
+	return count(perf.sessionOpens) > 0 || perf.sessionOpensDropped > 0 || perf.stalls.count > 0 || count(perf.requests) > 0
+		|| perf.requests.unanswered > 0 || perf.resumes.count > 0;
 }
 
 function mergeSamples(a: Samples, b: Samples): Samples {
@@ -147,13 +166,19 @@ export function mergePerf(a: PerfWindow, b: PerfWindow): PerfWindow {
 	}
 	return {
 		sessionOpens: mergeSamples(a.sessionOpens, b.sessionOpens),
+		sessionOpensDropped: a.sessionOpensDropped + b.sessionOpensDropped,
 		stalls: {
 			count: a.stalls.count + b.stalls.count,
 			long: a.stalls.long + b.stalls.long,
 			totalMs: a.stalls.totalMs + b.stalls.totalMs,
 			maxMs: Math.max(a.stalls.maxMs, b.stalls.maxMs),
 		},
-		requests: { ...mergeSamples(a.requests, b.requests), failed: a.requests.failed + b.requests.failed, byTransport },
+		requests: {
+			...mergeSamples(a.requests, b.requests),
+			errors: a.requests.errors + b.requests.errors,
+			unanswered: a.requests.unanswered + b.requests.unanswered,
+			byTransport,
+		},
 		resumes: { count: a.resumes.count + b.resumes.count, stale: a.resumes.stale + b.resumes.stale, fresh: mergeSamples(a.resumes.fresh, b.resumes.fresh) },
 	};
 }
@@ -168,7 +193,7 @@ function isSamples(value: unknown, edges?: readonly number[]): value is Samples 
 export function restorePerf(value: unknown): PerfWindow {
 	const p = value as PerfWindow | null;
 	if (!p || typeof p !== "object" || !isSamples(p.sessionOpens, SESSION_OPEN_EDGES) || !isSamples(p.requests, REQUEST_EDGES) || !isSamples(p.resumes?.fresh, RESUME_EDGES)
-		|| !p.stalls || ![p.stalls.count, p.stalls.long, p.stalls.totalMs, p.stalls.maxMs, p.requests.failed, p.resumes.count, p.resumes.stale].every(Number.isFinite)
+		|| !p.stalls || ![p.sessionOpensDropped, p.stalls.count, p.stalls.long, p.stalls.totalMs, p.stalls.maxMs, p.requests.errors, p.requests.unanswered, p.resumes.count, p.resumes.stale].every(Number.isFinite)
 		|| typeof p.requests.byTransport !== "object" || p.requests.byTransport === null) {
 		return emptyPerf();
 	}
@@ -189,12 +214,14 @@ export function perfProperties(perf: PerfWindow): Record<string, number> {
 	set("session_open_count", count(perf.sessionOpens));
 	Object.assign(props, bucketCounts(perf.sessionOpens, "session_open", SESSION_OPEN_EDGES));
 	set("session_open_p75_ms", percentile(perf.sessionOpens, 75));
+	set("session_open_dropped_count", perf.sessionOpensDropped);
 	set("stall_count", perf.stalls.count);
 	set("stall_long_count", perf.stalls.long);
 	set("stall_total_ms", perf.stalls.totalMs);
 	set("stall_max_ms", perf.stalls.maxMs);
 	set("request_count", count(perf.requests));
-	set("request_failed_count", perf.requests.failed);
+	set("request_error_count", perf.requests.errors);
+	set("request_unanswered_count", perf.requests.unanswered);
 	Object.assign(props, bucketCounts(perf.requests, "request", REQUEST_EDGES));
 	set("request_p75_ms", percentile(perf.requests, 75));
 	set("request_p95_ms", percentile(perf.requests, 95));
@@ -215,9 +242,9 @@ export function perfProperties(perf: PerfWindow): Record<string, number> {
 export function perfPropertyNames(): string[] {
 	const names = [
 		"measurement_schema_version",
-		"session_open_count", "session_open_p75_ms",
+		"session_open_count", "session_open_p75_ms", "session_open_dropped_count",
 		"stall_count", "stall_long_count", "stall_total_ms", "stall_max_ms",
-		"request_count", "request_failed_count", "request_p75_ms", "request_p95_ms",
+		"request_count", "request_error_count", "request_unanswered_count", "request_p75_ms", "request_p95_ms",
 		"resume_count", "resume_stale_count", "resume_fresh_p75_ms",
 	];
 	const buckets = (prefix: string, edges: readonly number[]) => [

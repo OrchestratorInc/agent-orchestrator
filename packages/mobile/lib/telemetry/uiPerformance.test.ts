@@ -10,6 +10,7 @@ import {
 	recordResumeFresh,
 	recordResumeStale,
 	recordSessionOpen,
+	recordSessionOpenDropped,
 	recordStall,
 	restorePerf,
 } from "./uiPerformance";
@@ -38,7 +39,8 @@ describe("perfProperties", () => {
 		const props = perfProperties(perf);
 		expect(props).toMatchObject({
 			request_count: 4,
-			request_failed_count: 2,
+			request_error_count: 1,
+			request_unanswered_count: 1,
 			request_lt300_count: 2,
 			request_lt1000_count: 1,
 			request_lt3000_count: 1,
@@ -49,6 +51,17 @@ describe("perfProperties", () => {
 			request_tunnel_count: 1,
 		});
 		expect(props).not.toHaveProperty("request_relay_count");
+	});
+
+	it("counts dropped openings, and drops one slower than 30 s", () => {
+		const perf = emptyPerf();
+		recordSessionOpen(perf, 900);
+		recordSessionOpen(perf, 31_000);
+		recordSessionOpenDropped(perf);
+		expect(perfProperties(perf)).toMatchObject({ session_open_count: 1, session_open_p75_ms: 900, session_open_dropped_count: 2 });
+		const dropped = emptyPerf();
+		recordSessionOpenDropped(dropped);
+		expect(hasPerf(dropped)).toBe(true);
 	});
 
 	it("counts stalls past 100 ms, long ones past 500 ms", () => {
@@ -96,6 +109,8 @@ describe("perfProperties", () => {
 		}
 		recordStall(perf, 900);
 		recordResume(perf);
+		recordSessionOpenDropped(perf);
+		recordRequest(perf, null, "lan", false);
 		const names = new Set(perfPropertyNames());
 		expect(Object.keys(perfProperties(perf)).filter((name) => !names.has(name))).toEqual([]);
 	});
@@ -109,8 +124,10 @@ describe("mergePerf and restorePerf", () => {
 		recordRequest(b, 300, "lan", true);
 		recordStall(a, 200);
 		recordStall(b, 900);
+		recordSessionOpenDropped(a);
+		recordRequest(b, null, "lan", false);
 		const props = perfProperties(mergePerf(a, b));
-		expect(props).toMatchObject({ request_count: 2, request_lan_count: 2, stall_count: 2, stall_max_ms: 900 });
+		expect(props).toMatchObject({ request_count: 2, request_lan_count: 2, stall_count: 2, stall_max_ms: 900, session_open_dropped_count: 1, request_unanswered_count: 1 });
 	});
 
 	it("survives a save and restore, and ignores anything else", () => {

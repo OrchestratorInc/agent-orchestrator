@@ -64,6 +64,7 @@ import { STARTUP_POLL_MS } from "../session/startupPoll";
 import { useStartupSession } from "../session/useStartupSession";
 import { useSessionPreview } from "../session/useSessionPreview";
 import { useSessionDevice } from "../useSessionDevice";
+import { useSessionContentShown } from "../telemetry/useSessionSurface";
 import { toolbarIcon } from "../toolbarIcon";
 import { useChatViewLease } from "./useChatViewLease";
 import { useOpenPage } from "../pageNavigation";
@@ -129,6 +130,8 @@ export function ChatSessionScreen({ session: boardSession }: { session: MobileCh
 	// mounts its timeline a frame after the push starts, a large cached one once
 	// the slide settles. See useChatPushTiming.
 	const { holdArrivingSnapshot, timelineMounted } = useChatPushTiming(conversation.snapshot);
+	// Opening the session is timed until its messages are drawn.
+	useSessionContentShown(Boolean(conversation.snapshot) && !holdArrivingSnapshot && timelineMounted && !conversation.unavailable);
 	// Opening a hibernated chat wakes it, and only the lease request says when.
 	// The catalog is asked for again too if it has none of its own yet: a page
 	// cached as ready loads it before the wake, and that load can fail unseen.

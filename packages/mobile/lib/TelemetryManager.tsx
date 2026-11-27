@@ -19,6 +19,7 @@ import {
 	telemetryActiveStorage,
 } from "./telemetry/runtime";
 import { surfaceForSegments } from "./telemetry/surfaces";
+import { createAppStateTelemetry } from "./telemetry/appStateTelemetry";
 import { createStallProbe } from "./telemetry/stallProbe";
 import { uiUsage } from "./telemetry/uiUsageRegistry";
 
@@ -89,29 +90,19 @@ export function TelemetryManager() {
 			clearTimer: (handle) => clearTimeout(handle),
 			onLate: (lateMs) => uiUsage()?.stalled(lateMs),
 		});
-		if (uiUsage()) stalls.start();
-
-		const onChange = (state: AppStateStatus) => {
-			if (state === "active") {
-				void mobileTelemetry()?.active(telemetryActiveStorage);
-				uiUsage()?.setForeground(true);
-				// Times how long a paired machine's data takes to be fresh again.
-				if (pairedRef.current) uiUsage()?.resumed();
-				if (uiUsage()) stalls.start();
-			} else {
-				stalls.stop();
-			}
-			if (state === "background") {
-				// iOS passes through `inactive` for the app switcher and Control
-				// Center too; only a real background ends the stint.
-				uiUsage()?.setForeground(false);
-				markLaunchBackgrounded();
-			}
-		};
+		const appState = createAppStateTelemetry({
+			initial: AppState.currentState,
+			tracker: uiUsage,
+			paired: () => pairedRef.current,
+			stalls,
+			onActive: () => void mobileTelemetry()?.active(telemetryActiveStorage),
+			onBackground: markLaunchBackgrounded,
+		});
+		const onChange = (state: AppStateStatus) => appState.change(state);
 		const sub = AppState.addEventListener("change", onChange);
 		return () => {
 			cancelAnimationFrame(frame);
-			stalls.stop();
+			appState.dispose();
 			sub.remove();
 		};
 	}, []);

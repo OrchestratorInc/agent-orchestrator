@@ -71,7 +71,8 @@ vi.mock("react-native", async () => ({
 }));
 vi.mock("expo-router", async () => {
 	const Toolbar = Object.assign(await host("StackToolbar"), { Button: await host("StackToolbarButton") });
-	return { Stack: { Toolbar }, useIsFocused: () => true, useNavigation: () => fixtures.navigation, useRouter: () => fixtures.router };
+	// useFocusEffect: session-open timing only (useSessionContentShown); not exercised here.
+	return { Stack: { Toolbar }, useFocusEffect: () => {}, useIsFocused: () => true, useNavigation: () => fixtures.navigation, useRouter: () => fixtures.router };
 });
 vi.mock("expo-router/react-navigation", () => ({ useHeaderHeight: () => 0 }));
 vi.mock("react-native-reanimated", () => ({ useSharedValue: <T,>(value: T) => ({ value }), runOnJS: <F,>(fn: F) => fn }));

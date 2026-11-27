@@ -62,6 +62,7 @@ import { ARCHIVE_CLOUD_SESSION_CONFIRM, cloudSessionMenuGroups } from "./session
 import { useCloudStartup } from "./startup";
 import { useCloudConversation } from "./useCloudConversation";
 import { useCloudPRSummaries } from "./useCloudPRSummaries";
+import { useSessionContentShown } from "../telemetry/useSessionSurface";
 
 /** A Terminal UI session shows its agent's terminal or its conversation; the sandbox shell is its own page. */
 type SessionView = "chat" | "agent";
@@ -135,6 +136,10 @@ export function CloudSessionScreen({ sessionId }: { sessionId: string }) {
 
 	const tui = session?.interfaceMode === "tui";
 	const current: SessionView = view ?? (tui ? "agent" : "chat");
+	// Opening the session is timed until its conversation or its agent's terminal output shows.
+	const [agentOutputShown, setAgentOutputShown] = useState(false);
+	const showAgentOutput = useCallback(() => setAgentOutputShown(true), []);
+	useSessionContentShown(current === "agent" ? agentOutputShown : Boolean(snapshot));
 	// A switch of interface (from here or the desktop) shows the new one's own view.
 	useEffect(() => { setView(null); }, [tui]);
 	const terminated = Boolean(session?.isTerminated);
@@ -609,7 +614,7 @@ export function CloudSessionScreen({ sessionId }: { sessionId: string }) {
 			<View style={[styles.screen, { paddingTop: headerOverlap }]}>
 				{headerItems}
 				{banners}
-				<CloudTerminalView client={client} orgId={org.id} sessionId={session.id} kind="agent" workerEpoch={session.workerEpoch} onShowChat={() => setView("chat")} />
+				<CloudTerminalView client={client} orgId={org.id} sessionId={session.id} kind="agent" workerEpoch={session.workerEpoch} onShowChat={() => setView("chat")} onOutputShown={showAgentOutput} />
 				{switchCard}
 			</View>
 		);

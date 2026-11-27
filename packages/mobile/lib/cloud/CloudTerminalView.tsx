@@ -71,6 +71,8 @@ export type CloudTerminalViewProps = {
 	 * through `ref`.
 	 */
 	headerMenu?: boolean;
+	/** Called once, when the terminal first draws output from the server. */
+	onOutputShown?: () => void;
 	ref?: Ref<CloudTerminalHandle>;
 };
 
@@ -86,7 +88,7 @@ export type CloudTerminalViewProps = {
  * It reserves the keyboard itself, so it expects to reach the bottom of the
  * screen. It does not inset itself under a clear glass bar: the page does.
  */
-export function CloudTerminalView({ client, orgId, sessionId, kind, workerEpoch, onShowChat, headerMenu = false, ref }: CloudTerminalViewProps) {
+export function CloudTerminalView({ client, orgId, sessionId, kind, workerEpoch, onShowChat, headerMenu = false, onOutputShown, ref }: CloudTerminalViewProps) {
 	const t = useTheme();
 	const { scheme, style } = useThemeState();
 	const styles = useThemedStyles(makeStyles);
@@ -176,6 +178,19 @@ export function CloudTerminalView({ client, orgId, sessionId, kind, workerEpoch,
 		};
 	}, []);
 
+	// Output from the server (not a reset) has arrived, and been drawn once xterm is up.
+	const hasOutputRef = useRef(false);
+	const outputShownRef = useRef(false);
+	const onOutputShownRef = useRef(onOutputShown);
+	useEffect(() => {
+		onOutputShownRef.current = onOutputShown;
+	}, [onOutputShown]);
+	const noteOutputShown = useCallback(() => {
+		if (outputShownRef.current || !hasOutputRef.current || !xtermReadyRef.current) return;
+		outputShownRef.current = true;
+		onOutputShownRef.current?.();
+	}, []);
+
 	const writeOutput = useCallback((bytes: Uint8Array) => {
 		if (!xtermReadyRef.current || !xtermRef.current) {
 			pendingOutputRef.current.push(bytes);
@@ -200,7 +215,10 @@ export function CloudTerminalView({ client, orgId, sessionId, kind, workerEpoch,
 					setStatusNote(note);
 				},
 				onOutput: (bytes) => {
-					if (current) writeOutput(bytes);
+					if (!current) return;
+					if (bytes.length) hasOutputRef.current = true;
+					writeOutput(bytes);
+					noteOutputShown();
 				},
 				onReset: () => {
 					if (!current) return;
@@ -274,6 +292,7 @@ export function CloudTerminalView({ client, orgId, sessionId, kind, workerEpoch,
 		const queued = pendingOutputRef.current;
 		pendingOutputRef.current = [];
 		for (const bytes of queued) xtermRef.current?.write(bytes);
+		noteOutputShown();
 		if (dimsRef.current) xtermRef.current?.resize(dimsRef.current);
 		// A replacement WebView (theme change, reload) starts blank. The server
 		// replays the whole screen on a fresh connection, so ask for one rather
