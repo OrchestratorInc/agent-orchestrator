@@ -1,6 +1,6 @@
 import { render, screen } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
-import { AccountBadge } from "./AccountBadge";
+import { AccountBadge, AccountChip, ProviderMarkWithAccount } from "./AccountBadge";
 
 describe("AccountBadge", () => {
 	it("shows the derived letters and is named by the account", () => {
@@ -26,7 +26,7 @@ describe("AccountBadge", () => {
 		render(<AccountBadge provider="claude" name="Work" />);
 		const letters = screen.getByText("WO");
 		expect(letters.className).not.toContain("--account-color");
-		expect(letters).toHaveClass("bg-foreground/15", "text-foreground");
+		expect(letters).toHaveClass("bg-foreground/20", "text-foreground");
 	});
 
 	it("draws the 14px logo, then the letters in their own square, with no outer frame", () => {
@@ -35,8 +35,33 @@ describe("AccountBadge", () => {
 		expect(badge).not.toHaveClass("border");
 		const [logo, letters] = Array.from(badge.children) as HTMLElement[];
 		expect(logo).toHaveClass("size-3.5");
-		expect(letters).toHaveClass("rounded-[4px]");
+		expect(letters).toHaveClass("rounded-[5px]");
 		expect(letters).not.toHaveClass("border-l");
 		expect(letters).toHaveTextContent("WO");
+	});
+
+	it("marks the agent's logo with the account's first letter, named by the account", () => {
+		render(<ProviderMarkWithAccount provider="claude" name="Work" color="blue" letters="WO" />);
+		const mark = screen.getByRole("img", { name: "Work" });
+		expect(mark).toHaveTextContent("W");
+		expect(mark).not.toHaveTextContent("WO");
+		const circle = screen.getByText("W");
+		expect(circle).toHaveClass("rounded-full");
+		expect(circle.className).toContain("bg-(--account-color-blue)");
+		expect(circle.className).not.toContain("ring");
+	});
+
+	it("shows a chip's name in plain text beside the letters, with no tint behind it", () => {
+		const { container } = render(<AccountChip provider="claude" name="Work" color="blue" label="Work" />);
+		const chip = container.firstElementChild as HTMLElement;
+		expect(chip.className).not.toContain("bg-");
+		expect(screen.getByText("WO").className).toContain("bg-(--account-color-blue)");
+		expect(screen.getByText("Work")).toHaveClass("text-foreground");
+	});
+
+	it("drops a compact chip's name", () => {
+		render(<AccountChip compact provider="claude" name="Work" label="Work" />);
+		expect(screen.getByText("WO")).toBeInTheDocument();
+		expect(screen.queryByText("Work")).not.toBeInTheDocument();
 	});
 });

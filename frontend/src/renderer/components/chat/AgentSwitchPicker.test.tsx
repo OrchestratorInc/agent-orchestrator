@@ -806,10 +806,10 @@ describe("AgentModelPicker", () => {
 		expect(autoCompactKind("agy")).toBeUndefined();
 	});
 
-	it("has no account switch, even with two accounts", async () => {
+	it("has no account switch with only one account", async () => {
 		const user = userEvent.setup();
-		const two = { options: [{ id: "a", label: "me@work" }, { id: "b", label: "me@home" }], value: "a", onPick: vi.fn() };
-		open(undefined, false, "claude-code", {}, false, false, undefined, two);
+		const one = { options: [{ id: "a", label: "me@work" }], value: "a", onPick: vi.fn() };
+		open(undefined, false, "claude-code", {}, false, false, undefined, one);
 		await user.click(screen.getByRole("button", { name: /Agent, model and reasoning effort/ }));
 		expect(screen.queryByRole("menuitem", { name: /^Account/ })).not.toBeInTheDocument();
 		expect(screen.queryByText("me@work")).not.toBeInTheDocument();
@@ -820,7 +820,7 @@ describe("AgentModelPicker", () => {
 		expect(screen.queryByRole("img", { name: "Work" })).not.toBeInTheDocument();
 	});
 
-	it("shows the badge of the account in use on the chip and one beside each account row", async () => {
+	it("marks the chip with the account's first letter and switches accounts from the bottom row", async () => {
 		const user = userEvent.setup();
 		const two = {
 			options: [
@@ -832,12 +832,15 @@ describe("AgentModelPicker", () => {
 		};
 		open(undefined, false, "claude-code", {}, false, false, undefined, two);
 		const chip = screen.getByRole("button", { name: /Agent, model and reasoning effort/ });
-		expect(within(chip).getByRole("img", { name: "Work" })).toHaveTextContent("WO");
+		expect(within(chip).getByRole("img", { name: "Work" })).toHaveTextContent("W");
 		await user.click(chip);
-		const accountRow = screen.getByRole("menuitem", { name: /^Account/ });
-		expect(within(accountRow).getByRole("img", { name: "Work" })).toHaveTextContent("WO");
-		await user.click(accountRow);
-		expect(await screen.findByRole("img", { name: "me@home" })).toHaveTextContent("ME");
-		expect(screen.getAllByRole("img", { name: "Work" })).toHaveLength(3);
+		const switcher = screen.getByRole("menuitem", { name: "Account: Work · me@work" });
+		expect(switcher).toHaveTextContent("WO");
+		await user.click(switcher);
+		expect(await screen.findByRole("menuitemradio", { name: /Work/ })).toHaveAttribute("aria-checked", "true");
+		const home = screen.getByRole("menuitemradio", { name: /me@home/ });
+		expect(home).toHaveTextContent("ME");
+		await user.click(home);
+		expect(two.onPick).toHaveBeenCalledWith("b");
 	});
 });
