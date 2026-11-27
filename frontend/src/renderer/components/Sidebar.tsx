@@ -61,6 +61,7 @@ import {
 import { flushSync } from "react-dom";
 import { artifactCount, groupArtifactsByProject, withKeptArtifacts } from "../lib/artifacts";
 import { useKeptArtifacts } from "../hooks/useKeptArtifacts";
+import { useTitleMarquee } from "../hooks/useTitleMarquee";
 import {
 	newestActiveOrchestrator,
 	openPRs,
@@ -2819,6 +2820,9 @@ const SessionRow = memo(function SessionRow({
 		[setPreviewRow, setSortableNode],
 	);
 	const lastTouchAtRef = useRef(0);
+	const titleRef = useRef<HTMLSpanElement>(null);
+	const titleTrackRef = useRef<HTMLSpanElement>(null);
+	useTitleMarquee(titleRef, titleTrackRef);
 	const suppressTouchOpenRef = useRef(false);
 	const hoverTimerRef = useRef<ReturnType<typeof setTimeout>>(undefined);
 	// A remote chat prefetches its page too; only a local agent can be woken from here.
@@ -3001,7 +3005,9 @@ const SessionRow = memo(function SessionRow({
 							<span className="flex min-w-0 flex-1 items-center gap-1.5">
 								<span
 									className={cn(
-										"min-w-0 flex-1 truncate",
+										// One line that fades at its cut edge instead of an ellipsis and
+										// scrolls to its end while the row is hovered (see .session-title).
+										"session-title min-w-0 flex-1",
 										// Only a session that needs you reads at full brightness; the
 										// rest sit back, so the list has a clear lead.
 										active || isUrgentMarker(marker)
@@ -3010,6 +3016,7 @@ const SessionRow = memo(function SessionRow({
 										shimmer && "relative",
 									)}
 									data-session-name=""
+									ref={titleRef}
 									onPointerUp={(event) => {
 										if (event.pointerType !== "touch") return;
 										const now = Date.now();
@@ -3020,8 +3027,8 @@ const SessionRow = memo(function SessionRow({
 										lastTouchAtRef.current = now;
 									}}
 								>
-									{session.title}
-									{shimmer ? <span aria-hidden="true" className="sidebar-working-shimmer"><span><span>{session.title}</span></span></span> : null}
+									<span className="session-title-track" ref={titleTrackRef}>{session.title}</span>
+									{shimmer ? <span aria-hidden="true" className="sidebar-working-shimmer"><span><span><span className="session-title-track">{session.title}</span></span></span></span> : null}
 								</span>
 								{hostLabel ? <Badge variant="outline" className="h-4 min-w-0 max-w-1/2 shrink justify-start px-1.5 text-2xs"><span className="truncate">{hostLabel}</span></Badge> : null}
 								{cloud ? <CloudMark /> : null}
