@@ -1,4 +1,5 @@
 import type { TurnArtifactChange } from "../../../shared/artifacts/turn-artifacts";
+import type { PullRequestAutomation } from "../../../shared/chat/pull-request-automation";
 import type { SessionMode } from "../api";
 
 export type ControllerState = "connecting" | "ready" | "busy" | "recovering" | "hibernated" | "stopped";
@@ -110,6 +111,8 @@ export type ConversationMessage = {
 	senderSessionId?: string;
 	senderProjectId?: string;
 	senderDisplayName?: string;
+	/** The pull request event an automation message reports, when AO Cloud sent it with the message. */
+	pullRequestEvent?: PullRequestAutomation;
 	/** The daemon can branch before this human prompt and resend it edited. */
 	editAvailable?: boolean;
 	createdAt: string;

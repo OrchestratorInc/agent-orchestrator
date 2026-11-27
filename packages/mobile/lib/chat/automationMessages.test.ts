@@ -165,6 +165,17 @@ describe("reading AO's automation messages", () => {
 		expect(automationOf(message(ciFailing))).toMatchObject({ kind: "ciFailing" });
 	});
 
+	it("reads the pull request event AO Cloud sends with its message, not the text", () => {
+		const pr = { number: 8717, url: "https://github.com/acme/app/pull/8717", title: "fix(settings): keep tabs" };
+		const pullRequestEvent = { kind: "mergeConflict" as const, pr };
+		expect(automationOf(message("Cloud's own wording", { senderLabel: "GitHub", pullRequestEvent }))).toEqual(pullRequestEvent);
+		// A person's message, or an agent's, is never one.
+		expect(automationOf(message("Cloud's own wording", { origin: "human", pullRequestEvent }))).toBeNull();
+		expect(automationOf(message("Cloud's own wording", { senderSessionId: "w-1", pullRequestEvent }))).toBeNull();
+		// Without the event, Cloud's wording is left to the card.
+		expect(automationOf(message("Cloud's own wording", { senderLabel: "GitHub" }))).toBeNull();
+	});
+
 	it("links only to the forges", () => {
 		expect(forgeURL(URL)).toBe(URL);
 		expect(forgeURL("https://evil.example/pull/1")).toBeUndefined();
