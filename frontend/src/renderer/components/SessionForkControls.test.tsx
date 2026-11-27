@@ -195,7 +195,7 @@ describe("session fork controls", () => {
 		expect(screen.queryByTestId("fork-text-copy-notice")).toBeNull();
 	});
 
-	it("greys out the menu's Fork session with the reason when forking isn't possible", async () => {
+	it("greys out the menu's Fork session with the reason as its tooltip when forking isn't possible", async () => {
 		getMock.mockResolvedValue({ data: { allowed: false, refusal: { code: "FORK_ORCHESTRATOR", message: "Orchestrators can't be forked." } } });
 		const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
 		const remote = { ...session, hostId: "host-1", prs: [] } as unknown as WorkspaceSession;
@@ -204,7 +204,9 @@ describe("session fork controls", () => {
 		});
 		await waitFor(() => {
 			const fork = result.current.find((entry) => entry.id === "session-fork");
-			expect(fork).toMatchObject({ disabled: true, description: "Orchestrators can't be forked." });
+			expect(fork).toMatchObject({ disabled: true, title: "Orchestrators can't be forked." });
+			// No second line under the label: it would widen the fixed-width menu.
+			expect(fork).not.toHaveProperty("description");
 		});
 	});
 

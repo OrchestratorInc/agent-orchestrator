@@ -342,6 +342,11 @@ export async function installFakeBridge(page: Page, opts: FakeBridgeOptions = {}
 						activeTabId: "t1",
 						tabs: [{ id: "t1", url: "", title: "", active: true }],
 					}),
+					muteTab: async ({ viewId }: { viewId: string; tabId: string; muted: boolean }) => ({
+						viewId,
+						activeTabId: "t1",
+						tabs: [{ id: "t1", url: "", title: "", active: true }],
+					}),
 					openTab: async ({ viewId }: { viewId: string; url?: string }) => ({
 						viewId,
 						activeTabId: "t1",
@@ -1370,6 +1375,11 @@ export async function installFakeAgent(page: Page, opts: FakeAgentOptions = {}):
 						tabs: [{ id: tabId, url: "", title: "", active: true }],
 					}),
 					closeTab: async ({ viewId }: { viewId: string; tabId: string }) => ({
+						viewId,
+						activeTabId: "t1",
+						tabs: [{ id: "t1", url: "", title: "", active: true }],
+					}),
+					muteTab: async ({ viewId }: { viewId: string; tabId: string; muted: boolean }) => ({
 						viewId,
 						activeTabId: "t1",
 						tabs: [{ id: "t1", url: "", title: "", active: true }],

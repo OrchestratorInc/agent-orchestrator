@@ -2337,7 +2337,7 @@ const ProjectItem = memo(function ProjectItem({
 					/>
 				</li>
 			</ContextMenuTrigger>
-			<ContextMenuContent className="min-w-44">
+			<ContextMenuContent className="w-48">
 				<LazyMenuEntries build={buildMenuEntries} />
 			</ContextMenuContent>
 		</ContextMenu>
@@ -3044,7 +3044,7 @@ const SessionRow = memo(function SessionRow({
 				<SessionPreviewCardAdapter session={session} />
 			</HoverCardContent>
 			</HoverCard>
-			<ContextMenuContent className="min-w-44">
+			<ContextMenuContent className="w-48">
 				{/* Archiving is the owner workspace's; a guest's archive would always be refused. */}
 				<SessionContextMenuItems onArchive={session.cloud?.shared ? undefined : () => setArchiveOpen(true)} onRename={beginRename} session={session} />
 			</ContextMenuContent>

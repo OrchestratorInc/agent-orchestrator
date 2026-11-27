@@ -159,6 +159,44 @@ describe("host store", () => {
 		expect(got[0].token).toBe("pw");
 	});
 
+	it("skips a refresh that read an older revision than the endpoints now stored", async () => {
+		const { saveHost, updateHostEndpoints, hostEndpointRevision, loadHosts } = await mod();
+		await saveHost({
+			id: "h_one", name: "a", platform: "darwin",
+			endpoints: [lan("192.168.1.42")], token: "pw", lastConnected: 1,
+		});
+		const slowRefreshRead = hostEndpointRevision("h_one");
+		await updateHostEndpoints("h_one", [lan("10.0.0.5")], hostEndpointRevision("h_one"));
+		await updateHostEndpoints("h_one", [lan("10.0.0.9")], slowRefreshRead);
+
+		expect((await loadHosts())[0].endpoints).toEqual([lan("10.0.0.5")]);
+	});
+
+	it("hands back the endpoint revision each host was read at", async () => {
+		const { saveHost, updateHostEndpoints, endpointRevisionOf, findHost } = await mod();
+		await saveHost({
+			id: "h_one", name: "a", platform: "darwin",
+			endpoints: [lan("192.168.1.42")], token: "pw", lastConnected: 1,
+		});
+		const before = (await findHost("h_one"))!;
+		await updateHostEndpoints("h_one", [lan("10.0.0.5")]);
+		const after = (await findHost("h_one"))!;
+		expect(endpointRevisionOf(after)).toBe(endpointRevisionOf(before)! + 1);
+		// A refresh merged into the older snapshot is not saved over the newer list.
+		await updateHostEndpoints("h_one", [lan("10.0.0.9")], endpointRevisionOf(before));
+		expect((await findHost("h_one"))!.endpoints).toEqual([lan("10.0.0.5")]);
+	});
+
+	it("does not let a refresh read before a re-pair save over its endpoints", async () => {
+		const { saveHost, updateHostEndpoints, endpointRevisionOf, findHost } = await mod();
+		const paired = { id: "h_one", name: "a", platform: "darwin" as const, endpoints: [lan("192.168.1.42")], token: "pw", lastConnected: 1 };
+		await saveHost(paired);
+		const before = (await findHost("h_one"))!;
+		await saveHost({ ...paired, endpoints: [lan("10.0.0.5")] });
+		await updateHostEndpoints("h_one", [lan("10.0.0.9")], endpointRevisionOf(before));
+		expect((await findHost("h_one"))!.endpoints).toEqual([lan("10.0.0.5")]);
+	});
+
 	it("keeps every paired host available for explicit removal", async () => {
 		const { saveHost, loadHosts } = await mod();
 		for (let i = 0; i < 15; i++) {

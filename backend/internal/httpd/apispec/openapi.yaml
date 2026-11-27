@@ -21517,6 +21517,8 @@ components:
           - Closed without merge
           - Terminated
           type: string
+        effort:
+          type: string
         harness:
           type: string
         hibernatedAt:
@@ -21562,6 +21564,8 @@ components:
           type: string
         model:
           type: string
+        modelPending:
+          type: boolean
         moveStarted:
           type: string
         movedTo:
