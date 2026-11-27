@@ -141,9 +141,13 @@ function CloudApprovalReaderContent() {
 	return null;
 }
 
-/** Requests the viewer can answer first: one they cannot must never hide one they can. */
-export function decidableFirst(requests: PendingApproval[]): PendingApproval[] {
-	return [...requests.filter((request) => !request.waitingFor), ...requests.filter((request) => request.waitingFor)];
+/**
+ * What the app-wide card may show: only requests the viewer can answer. One
+ * that waits for someone else (a teammate's cloud session) shows only in its
+ * own session's dock, so it never takes the corner or hides the viewer's own.
+ */
+export function answerable(requests: PendingApproval[]): PendingApproval[] {
+	return requests.filter((request) => !request.waitingFor);
 }
 
 function GlobalApprovalCardContent() {
@@ -156,7 +160,7 @@ function GlobalApprovalCardContent() {
 	const routed = useRoutedSessionKey();
 	const workspaces = useWorkspaceQuery();
 	const navigateToSession = useNavigateToSession();
-	const elsewhere = decidableFirst([...(pending.data ?? []), ...remote, ...cloud].filter((request) => requestKey(request) !== routed));
+	const elsewhere = answerable([...(pending.data ?? []), ...remote, ...cloud].filter((request) => requestKey(request) !== routed));
 	const request = elsewhere[0];
 	const { decide, busy, error } = useDecide(request);
 	const placement = useCornerPlacement();

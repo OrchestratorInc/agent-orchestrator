@@ -158,6 +158,18 @@ export function useWatchCloudApprovals(orgId: string | undefined, sessionId: str
 	}, [orgId, sessionId]);
 }
 
+/**
+ * Whether this person may decide a listed cloud session's approvals: only the
+ * session's creator, or the person it was started for. A session with neither
+ * on record (from before they were) is decided by org admins; it is kept,
+ * since the list cannot say who those are. Everyone else's are not read
+ * org-wide: they show only in that session's dock, read-only.
+ */
+export function mayDecide(cloud: { createdByUserId?: string; requestedBy?: { userId: string } }, userId: string): boolean {
+	if (!cloud.createdByUserId && !cloud.requestedBy) return true;
+	return cloud.createdByUserId === userId || cloud.requestedBy?.userId === userId;
+}
+
 /** Whether a listed cloud session can have an agent browser waiting. */
 export function mayHaveApprovals(cloud: { desiredState?: string; observedState?: string }): boolean {
 	return cloud.desiredState === "running" || cloud.observedState === "running";
@@ -221,7 +233,7 @@ export function useCloudPendingApprovals(): PendingApproval[] {
  */
 export function useLiveCloudPendingApprovals(): PendingApproval[] {
 	const queryClient = useQueryClient();
-	const { client, ready, baseUrl } = useCloudCp();
+	const { client, ready, baseUrl, userId } = useCloudCp();
 	const workspaces = useWorkspaceQuery();
 	const base = baseUrl.replace(/\/+$/, "");
 	const watchedRefs = useSyncExternalStore(subscribeRefs, getWatched, getWatched);
@@ -235,13 +247,15 @@ export function useLiveCloudPendingApprovals(): PendingApproval[] {
 		};
 		for (const workspace of workspaces.data ?? []) {
 			for (const session of workspace.sessions) {
-				if (session.cloud?.orgId && mayHaveApprovals(session.cloud)) add({ orgId: session.cloud.orgId, sessionId: session.id }, false);
+				if (session.cloud?.orgId && mayHaveApprovals(session.cloud) && mayDecide(session.cloud, userId)) {
+					add({ orgId: session.cloud.orgId, sessionId: session.id }, false);
+				}
 			}
 		}
 		for (const ref of heardRefs) add(ref, false);
 		for (const ref of watchedRefs) add(ref, true);
 		return [...found.values()];
-	}, [base, heardRefs, ready, watchedRefs, workspaces.data]);
+	}, [base, heardRefs, ready, userId, watchedRefs, workspaces.data]);
 
 	useEffect(() => {
 		if (!ready) return;

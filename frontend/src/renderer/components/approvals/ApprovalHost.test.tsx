@@ -199,18 +199,14 @@ describe("approval hosts", () => {
 		expect(screen.getByTestId("approval-action")).toHaveTextContent("(c)");
 	});
 
-	it("shows another session's cloud request read-only app-wide when someone else decides it", () => {
+	it("leaves a teammate's request out of the app-wide card; it shows only in that session", () => {
 		state.cloud = [{ ...request("w", "cloud-2"), cloud: { baseUrl: "https://cp.test", orgId: "org-1" }, waitingFor: { name: "Priya Shah" } }];
 		state.routedSessionId = "ao-1";
-		renderWith(<GlobalApprovalCard />);
-		expect(screen.getByTestId("approval-waiting")).toHaveTextContent("Waiting for Priya Shah to approve");
-		expect(screen.queryByRole("button", { name: /Deny|Allow/ })).toBeNull();
-		expect(screen.queryByRole("checkbox")).toBeNull();
-		fireEvent.keyDown(screen.getByTestId("approval-prompt"), { key: "Escape" });
-		expect(state.decide).not.toHaveBeenCalled();
+		const { container } = renderWith(<GlobalApprovalCard />);
+		expect(container).toBeEmptyDOMElement();
 	});
 
-	it("puts a request the viewer can decide ahead of one waiting for someone else", () => {
+	it("shows the viewer's own request app-wide even behind a teammate's", () => {
 		const cloud = { baseUrl: "https://cp.test", orgId: "org-1" };
 		state.cloud = [
 			{ ...request("theirs", "cloud-2"), cloud, waitingFor: { name: "Priya Shah" } },
@@ -219,7 +215,7 @@ describe("approval hosts", () => {
 		state.routedSessionId = "ao-1";
 		renderWith(<GlobalApprovalCard />);
 		expect(screen.getByTestId("approval-action")).toHaveTextContent("(mine)");
-		expect(screen.queryByTestId("approval-waiting")).toBeNull();
+		expect(screen.queryByText(/more/)).toBeNull();
 	});
 
 	it("reads cloud approvals from a reader of its own, not the approval card", () => {

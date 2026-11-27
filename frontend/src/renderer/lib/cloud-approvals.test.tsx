@@ -4,7 +4,7 @@ import { CloudCpError } from "./cloud-cp/errors";
 
 const hooks = vi.hoisted(() => ({
 	listBrowserApprovals: vi.fn(),
-	sessions: [] as Array<{ id: string; cloud?: { orgId: string; observedState?: string; desiredState?: string } }>,
+	sessions: [] as Array<{ id: string; cloud?: { orgId: string; observedState?: string; desiredState?: string; createdByUserId?: string; requestedBy?: { userId: string } } }>,
 	tap: undefined as undefined | ((target: { baseUrl: string; orgId: string; sessionId: string }, event: { type: string }) => void),
 }));
 vi.mock("./cloud-cp/session-events-hub", () => ({
@@ -16,7 +16,7 @@ vi.mock("./cloud-cp/session-events-hub", () => ({
 	},
 }));
 vi.mock("../hooks/useCloudCp", () => ({
-	useCloudCp: () => ({ ready: true, baseUrl: "https://cp.test/", client: { listBrowserApprovals: hooks.listBrowserApprovals } }),
+	useCloudCp: () => ({ ready: true, baseUrl: "https://cp.test/", userId: "me", client: { listBrowserApprovals: hooks.listBrowserApprovals } }),
 }));
 vi.mock("./telemetry", () => ({ captureRendererException: vi.fn() }));
 vi.mock("../hooks/useWorkspaceQuery", () => ({ useWorkspaceQuery: () => ({ data: [{ id: "p", sessions: hooks.sessions }] }) }));
@@ -152,6 +152,27 @@ describe("cloud approvals", () => {
 		// though the query stays in the cache.
 		await waitFor(() => expect(reader.result.current).toEqual([]));
 		expect(client.getQueryCache().findAll({ queryKey: ["approvals", "pending", "cloud"] }).length).toBeGreaterThan(0);
+		client.clear();
+	});
+
+	it("reads org-wide only the sessions this person may decide", async () => {
+		const running = { orgId: "org-1", desiredState: "running", observedState: "running" };
+		hooks.sessions = [
+			{ id: "s-mine", cloud: { ...running, createdByUserId: "me" } },
+			{ id: "s-for-me", cloud: { ...running, createdByUserId: "bot", requestedBy: { userId: "me" } } },
+			{ id: "s-teammate", cloud: { ...running, createdByUserId: "priya" } },
+			{ id: "s-legacy", cloud: running },
+		];
+		hooks.listBrowserApprovals.mockReset().mockResolvedValue({ pending: [] });
+		const client = new QueryClient();
+		const wrapper = ({ children }: { children: ReactNode }) => <QueryClientProvider client={client}>{children}</QueryClientProvider>;
+		const shell = renderHook(() => useLiveCloudPendingApprovals(), { wrapper });
+		await waitFor(() => expect(hooks.listBrowserApprovals.mock.calls.length).toBeGreaterThanOrEqual(3));
+		await act(async () => { await new Promise((resolve) => setTimeout(resolve, 20)); });
+		const read = new Set(hooks.listBrowserApprovals.mock.calls.map(([, id]) => id));
+		const listed = ["s-mine", "s-for-me", "s-teammate", "s-legacy"];
+		expect(listed.filter((id) => read.has(id)).sort()).toEqual(["s-for-me", "s-legacy", "s-mine"]);
+		shell.unmount();
 		client.clear();
 	});
 
