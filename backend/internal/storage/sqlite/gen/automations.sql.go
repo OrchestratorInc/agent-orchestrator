@@ -316,7 +316,7 @@ INSERT INTO automations (
 
 type InsertAutomationParams struct {
 	ID          domain.AutomationID
-	ProjectID   domain.ProjectID
+	ProjectID   *domain.ProjectID
 	DisplayName string
 	Prompt      string
 	Kind        domain.SessionKind

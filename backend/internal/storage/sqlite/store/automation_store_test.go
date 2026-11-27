@@ -448,3 +448,35 @@ func TestAutomationDeleteCascadesRunsButPreservesSession(t *testing.T) {
 		t.Fatalf("surviving session = %#v ok=%v err=%v", got, ok, err)
 	}
 }
+
+// A Scratchpad automation has no project: it is stored with a NULL project and
+// read back with an empty one, listed with all automations but left out of any
+// project's own list.
+func TestAutomationScratchpadRoundTripsWithoutProject(t *testing.T) {
+	store := newTestStore(t)
+	seedProject(t, store, "alpha")
+	ctx := context.Background()
+	base := time.Date(2026, time.August, 25, 9, 0, 0, 0, time.UTC)
+	scratchpad := domain.Automation{ID: "scratch-1", DisplayName: "Notes digest", Prompt: "Summarize", TemplateID: "custom", UseCase: "unknown", Kind: domain.KindWorker, Harness: domain.HarnessCodex, RRuleText: "FREQ=DAILY", Timezone: "UTC", Enabled: true, NextRunAt: base, CreatedAt: base, UpdatedAt: base}
+	for _, rec := range []domain.Automation{
+		scratchpad,
+		{ID: "alpha-1", ProjectID: "alpha", DisplayName: "Project", Prompt: "Review", Kind: domain.KindWorker, RRuleText: "FREQ=DAILY", Timezone: "UTC", Enabled: true, NextRunAt: base, CreatedAt: base.Add(time.Second), UpdatedAt: base},
+	} {
+		if _, err := store.CreateAutomation(ctx, rec); err != nil {
+			t.Fatalf("CreateAutomation %s: %v", rec.ID, err)
+		}
+	}
+	got, ok, err := store.GetAutomation(ctx, "scratch-1")
+	if err != nil || !ok || !reflect.DeepEqual(got, scratchpad) {
+		t.Fatalf("scratchpad round trip = %#v, want %#v; ok=%v err=%v", got, scratchpad, ok, err)
+	}
+	all, err := store.ListAutomations(ctx, domain.AutomationFilter{Limit: 10})
+	if err != nil || all.Total != 2 || len(all.Items) != 2 {
+		t.Fatalf("all automations = %+v, %v; want both", all, err)
+	}
+	projectID := domain.ProjectID("alpha")
+	alpha, err := store.ListAutomations(ctx, domain.AutomationFilter{ProjectID: &projectID, Limit: 10})
+	if err != nil || alpha.Total != 1 || len(alpha.Items) != 1 || alpha.Items[0].ID != "alpha-1" {
+		t.Fatalf("alpha automations = %+v, %v; want only alpha-1", alpha, err)
+	}
+}

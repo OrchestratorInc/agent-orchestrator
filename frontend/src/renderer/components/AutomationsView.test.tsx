@@ -25,6 +25,7 @@ const mocks = vi.hoisted(() => ({
 	workspaces: [] as Array<Record<string, unknown>>,
 	catalogWarning: "",
 	cachedWarning: "",
+	lookupProjects: [] as string[],
 }));
 
 vi.mock("../lib/telemetry", async (importOriginal) => ({
@@ -41,11 +42,11 @@ const codexSnapshot = { id: "codex", label: "Codex", installation: { state: "ins
 const ampSnapshot = { ...codexSnapshot, id: "amp", label: "Amp" };
 const cursorSnapshot = { id: "cursor", label: "Cursor", installation: { state: "not_installed", freshness: "fresh" }, authentication: { state: "unknown", freshness: "stale" }, effectiveReadiness: "not_ready", usageCount: 0, lastUsedAt: null };
 vi.mock("../hooks/useAgentReadinessQuery", () => ({ useAgentReadinessQuery: () => ({ data: { agents: [mocks.fallbackAmp ? { ...codexSnapshot, effectiveReadiness: "not_ready" } : codexSnapshot, cursorSnapshot, ampSnapshot] } }) }));
-vi.mock("../hooks/useProjectDefaultWorker", () => ({ useProjectWorkerDefaults: () => ({ loaded: mocks.defaultsLoaded, harness: mocks.defaultWorker, agentConfig: mocks.baseTuning, worker: { agent: mocks.defaultWorker, agentConfig: mocks.workerTuning } }) }));
+vi.mock("../hooks/useProjectDefaultWorker", () => ({ useProjectWorkerDefaults: (projectId: string) => (mocks.lookupProjects.push(projectId), { loaded: mocks.defaultsLoaded, harness: mocks.defaultWorker, agentConfig: mocks.baseTuning, worker: { agent: mocks.defaultWorker, agentConfig: mocks.workerTuning } }) }));
 vi.mock("../hooks/useWorkspaceQuery", () => ({ useWorkspaceQuery: () => ({ data: mocks.workspaces }) }));
 vi.mock("../hooks/useAgentModelsQuery", () => ({
 	agentModelsQueryKey: (agentId: string, projectId: string) => ["agent-models", agentId, projectId],
-	agentModelsQueryOptions: (agentId: string, projectId: string) => ({
+	agentModelsQueryOptions: (agentId: string, projectId: string) => (mocks.lookupProjects.push(projectId), {
 		queryKey: ["agent-models", agentId, projectId],
 		queryFn: async () => agentId === "amp" ? ({ models: [{ id: "smart", label: "Smart", isDefault: true }, { id: "rush", label: "Rush" }], allowCustom: false, customModelEntry: "none", selectionMode: "mode" }) : mocks.catalogWarning ? ({ models: [], warning: mocks.catalogWarning, allowCustom: false, customModelEntry: "none", selectionMode: "catalog" }) : ({
 			models: [{ id: "gpt-5", label: "GPT-5", isDefault: true, efforts: ["low", "high"], defaultEffort: "high" }, { id: "capable", label: "Capable", efforts: ["low", "high"], defaultEffort: "high" }, { id: "plain", label: "Plain", efforts: [] }, { id: "project-model", label: "Project model", efforts: ["minimal", "low"], defaultEffort: "low" }],
@@ -60,7 +61,8 @@ vi.mock("../hooks/useAgentModelsQuery", () => ({
 	revalidateAgentModels: vi.fn(),
 }));
 vi.mock("../hooks/useSettings", () => ({ useSettings: () => ({ settings: {} }) }));
-vi.mock("../hooks/useAutomations", () => ({
+vi.mock("../hooks/useAutomations", async (importOriginal) => ({
+	...await importOriginal<typeof import("../hooks/useAutomations")>(),
 	useAutomations: () => ({ data: mocks.automations, isLoading: false, error: null }),
 	useCreateAutomation: () => ({ mutateAsync: mocks.create, isPending: false, error: null }),
 	useUpdateAutomation: () => ({ mutateAsync: mocks.update, isPending: false, error: null }),
@@ -113,7 +115,7 @@ async function choose(user: Clicker, dialog: HTMLElement, row: "Agent" | "Model"
 }
 
 describe("AutomationsView", () => {
-	beforeEach(() => { mocks.workspaces = [{ id: "demo", name: "Demo" }]; mocks.defaultWorker = "codex"; mocks.defaultsLoaded = true; mocks.fallbackAmp = false; mocks.workerTuning = {}; mocks.baseTuning = {}; mocks.automations = []; mocks.runsError = null; mocks.runs = []; mocks.catalogWarning = ""; mocks.cachedWarning = ""; mocks.create.mockReset(); mocks.update.mockReset(); mocks.capture.mockReset(); });
+	beforeEach(() => { mocks.workspaces = [{ id: "demo", name: "Demo" }]; mocks.defaultWorker = "codex"; mocks.defaultsLoaded = true; mocks.fallbackAmp = false; mocks.workerTuning = {}; mocks.baseTuning = {}; mocks.automations = []; mocks.runsError = null; mocks.runs = []; mocks.catalogWarning = ""; mocks.cachedWarning = ""; mocks.lookupProjects = []; mocks.create.mockReset(); mocks.update.mockReset(); mocks.capture.mockReset(); });
 
 	it("shows a discoverable empty state and create action", () => {
 		renderView();
@@ -201,6 +203,42 @@ describe("AutomationsView", () => {
 		expect(await screen.findByRole("menuitem", { name: "Demo" })).toBeInTheDocument();
 		expect(screen.queryByRole("menuitem", { name: "Fix the flaky test" })).not.toBeInTheDocument();
 		expect(screen.queryByRole("menuitem", { name: "Cloud app" })).not.toBeInTheDocument();
+	});
+
+	it("offers Sessions first and creates an automation there", async () => {
+		// The Scratchpad's own grouping in the workspace list is not offered twice.
+		mocks.workspaces = [{ id: "demo", name: "Demo" }, { id: "__standalone__", name: "Sessions", kind: "standalone" }];
+		const user = userEvent.setup();
+		renderView();
+		await openBlankCreate(user);
+		const dialog = screen.getByRole("dialog", { name: "New automation" });
+		await user.click(within(dialog).getByRole("button", { name: /^Project:/ }));
+		expect(screen.getAllByRole("menuitem").map((item) => item.textContent)).toEqual(["Sessions", "Demo"]);
+		await user.click(screen.getByRole("menuitem", { name: "Sessions" }));
+		expect(within(dialog).getByRole("button", { name: /^Project:/ })).toHaveTextContent("Sessions");
+		await user.type(within(dialog).getByRole("textbox", { name: "Name" }), "Notes digest");
+		await user.type(within(dialog).getByRole("textbox", { name: "Prompt" }), "Summarize my notes");
+		await user.click(within(dialog).getByRole("button", { name: "Create automation" }));
+		expect(mocks.create).toHaveBeenCalledWith(expect.objectContaining({ projectId: "__standalone__", harness: "codex", kind: "worker" }));
+		// Project defaults and the model list are read for no project, never for the Scratchpad's id.
+		expect(mocks.lookupProjects).not.toContain("__standalone__");
+	});
+
+	it("names a Sessions automation and edits it there", async () => {
+		const user = userEvent.setup();
+		mocks.automations = [{ id: "automation-1", projectId: "__standalone__", displayName: "Notes digest", prompt: "Summarize", kind: "worker", harness: "codex", rrule: "FREQ=DAILY;BYHOUR=9;BYMINUTE=30;BYSECOND=0", timezone: "UTC", enabled: true, nextRunAt: "2026-08-27T09:00:00Z", createdAt: "2026-08-26T09:00:00Z", updatedAt: "2026-08-26T09:00:00Z" }];
+		renderView();
+		expect(screen.getByText("Sessions")).toBeInTheDocument();
+		await openDetails(user, "Notes digest");
+		await user.click(screen.getByRole("button", { name: "Edit Notes digest" }));
+		const dialog = screen.getByRole("dialog", { name: "Edit automation" });
+		const project = within(dialog).getByRole("button", { name: /^Project:/ });
+		expect(project).toHaveTextContent("Sessions");
+		expect(project).toBeDisabled();
+		await user.type(within(dialog).getByRole("textbox", { name: "Name" }), " renamed");
+		await user.click(within(dialog).getByRole("button", { name: "Save changes" }));
+		expect(mocks.update).toHaveBeenCalledWith({ id: "automation-1", body: { displayName: "Notes digest renamed", prompt: "Summarize" } });
+		expect(mocks.lookupProjects).not.toContain("__standalone__");
 	});
 
 	it("edits an automation from its card action", async () => {
