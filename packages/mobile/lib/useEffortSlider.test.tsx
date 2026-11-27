@@ -47,13 +47,6 @@ describe("effort slider open", () => {
 		expect(onClose).toHaveBeenCalledOnce();
 	});
 
-	it("closes when the keyboard comes up", () => {
-		render();
-		act(() => { for (const listener of [...fixtures.keyboard]) listener(); });
-		expect(slider.open).toBe(false);
-		expect(fixtures.keyboard.size).toBe(0);
-	});
-
 	it("closes after a hard twelve seconds, however busy it has been", () => {
 		const { onClose } = render();
 		act(() => { vi.advanceTimersByTime(EFFORT_SLIDER_TIMEOUT_MS - 1); markTouchInside(); rootTouchStart(); });
@@ -96,16 +89,12 @@ describe("effort slider open", () => {
 	// changes height (its suggestion strip, another keyboard): that closed the
 	// slider mid-drag. Only the keyboard coming up under a slider opened
 	// without it puts the slider away.
-	it("closes when the keyboard comes up, but not when keys already up report again", () => {
-		fixtures.keysUp = true;
+	// A picker opened with the keys down brings them up itself (useKeysWithPickers):
+	// the keyboard arriving must not put it away, nor Android re-reporting it.
+	it("stays up as the keyboard comes up", () => {
 		render();
-		act(() => fixtures.keyboard.forEach((handler) => handler()));
+		expect(fixtures.keyboard.size).toBe(0);
 		expect(slider.open).toBe(true);
-		act(() => slider.toggle());
-		fixtures.keysUp = false;
-		act(() => slider.toggle());
-		act(() => fixtures.keyboard.forEach((handler) => handler()));
-		expect(slider.open).toBe(false);
 	});
 
 	it("listens to nothing once closed", () => {

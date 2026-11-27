@@ -10,6 +10,8 @@ import Animated, { FadeIn, FadeOut, interpolate, measure, useAnimatedReaction, u
 import { useReanimatedFocusedInput, useReanimatedKeyboardAnimation } from "react-native-keyboard-controller";
 import { useComposerDockRise } from "./composerDock";
 import { rememberChatSettings } from "./chatSettingsTemplate";
+import { useHeldModel } from "./useHeldModel";
+import { useKeysWithPickers } from "../useKeysWithPickers";
 import { fastPendingKey, rememberFastModel, usePendingFast } from "./learnedFast";
 import { turnSettingsParts } from "./turnSettingsModel";
 import { KeyboardMotionScope, useKeyboardMotion } from "./keyboardMotion";
@@ -639,7 +641,9 @@ function Composer({
 		setText(next);
 		setCursor(caret);
 	}, []);
-	const settingsProps = { snapshot, models, options: configOptions ?? NO_OPTIONS, disabled: disabled || stopped || pending || submitting, onSettings, onOption: onConfigOption };
+	// A model picked here shows at once, ahead of the agent reporting it (useHeldModel).
+	const heldModel = useHeldModel(snapshot, configOptions ?? NO_OPTIONS, onSettings, onConfigOption);
+	const settingsProps = { snapshot: heldModel.snapshot, models, options: heldModel.options, disabled: disabled || stopped || pending || submitting, onSettings: heldModel.onSettings, onOption: heldModel.onOption };
 	// Ultracode has no field on the daemon: it is kept per conversation here.
 	const effort = useChatEffort({ ...settingsProps, ultracodeKey: machine ? ultracodeKey(machine, sessionId) : null, cloud });
 	// Claude's Fast, learned for New task: the model this chat runs offers it,
@@ -683,6 +687,8 @@ function Composer({
 	// Fast mode is the effort slider's bolt wherever it is offered (the gauge
 	// shows for it with no levels too), so the wheels leave it out.
 	const modelWheel = useChatModelWheel({ ...settingsProps, otherAgents, fastOnEffort: Boolean(effortFast) });
+	// A picker opened with the keyboard down brings it up with it (useKeysWithPickers).
+	useKeysWithPickers(inputRef, [effort.slider, permissions.slider, modelWheel.slider]);
 	const overlays = useMemo(() => [effort.slider, permissions.slider, modelWheel.slider], [effort.slider, permissions.slider, modelWheel.slider]);
 	// Typing is a tap outside the slider and the picker that the keyboard, not
 	// the app, hears.

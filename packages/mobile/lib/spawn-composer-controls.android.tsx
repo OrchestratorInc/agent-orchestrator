@@ -11,7 +11,7 @@ import {
 	TextButton,
 } from "@expo/ui/jetpack-compose";
 import { fillMaxWidth, height, padding, semantics, testID, width } from "@expo/ui/jetpack-compose/modifiers";
-import { Fragment, useState, type ReactNode } from "react";
+import { Fragment, useMemo, useState, type ReactNode } from "react";
 import { StyleSheet, View } from "react-native";
 import { ComposerControlsRow, KEEP_KEYBOARD, MenuRow, ModelCapsuleMenu, useCloseMenuOnBack } from "./composeMenu.android";
 import { effortGaugeToggles } from "./effort-gauge";
@@ -88,6 +88,7 @@ export function SpawnComposerControls({
 	// the keyboard; typing puts them away.
 	const pickers = useSpawnPickers({ agents, agentModels, harness, modelSelection, onSelectAgentModel, approvalModes, approvalMode, onSelectApprovalMode, prompt, settingsTemplate });
 	const effortSlider = pickers.effortSlider;
+	const pickerSwitches = useMemo(() => [effortSlider, pickers.model.slider, pickers.permissions.slider], [effortSlider, pickers.model.slider, pickers.permissions.slider]);
 	useCloseMenuOnBack(Boolean(openMenu), close);
 	const selectedProject = projects.find((project) => project.id === projectId);
 	const hostLabel = hosts.find((host) => host.id === hostId)?.label ?? "Choose machine";
@@ -158,6 +159,7 @@ export function SpawnComposerControls({
 					prompt={prompt}
 					attachments={attachments}
 					onChangePrompt={onChangePrompt}
+					pickers={pickerSwitches}
 					onLoadSkills={onLoadSkills}
 					placeholder={placeholder}
 					onChoosePhoto={onChoosePhoto}

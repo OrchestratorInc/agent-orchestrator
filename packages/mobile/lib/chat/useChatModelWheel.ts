@@ -1,9 +1,10 @@
 import { useCallback, useMemo, useRef } from "react";
+import { priorityOf } from "../agentPicker";
 import { AUTOMATIC_MODEL, repickedSwitch } from "../agentSwitch";
 import { cloudAgentLabel } from "../cloud/agents";
 
 import { useEffortSliderSwitch } from "../useEffortSlider";
-import type { WheelItem } from "../wheel-picker";
+import type { WheelItem } from "../model-list";
 import type { ChatTurnSettingsControlProps } from "./ChatTurnSettingsControl.types";
 import { splitModelChoices, turnSettingsRows, turnSettingTopic, turnSettingWrite, type TurnSettingRow } from "./turnSettingsModel";
 
@@ -56,7 +57,9 @@ export function useChatModelWheel({ snapshot, models, options, disabled, onSetti
 	const current = snapshot.harness;
 
 	const agents = useMemo<WheelAgent[]>(() => {
-		const split = splitModelChoices(modelRow?.choices ?? []);
+		// A fixed order: the model in force stays where it is in the list, so the
+		// rows never move as it changes (a pick showed at once, and jumped).
+		const split = splitModelChoices(modelRow?.choices ?? [], false);
 		const own: WheelAgent = {
 			id: current,
 			label: agentName(current),
@@ -78,7 +81,10 @@ export function useChatModelWheel({ snapshot, models, options, disabled, onSetti
 				],
 			};
 		});
-		return current && own.models.length ? [own, ...others] : others;
+		// The agents in one fixed order, the running one among them where it
+		// ranks rather than first: the row kept moving from chat to chat.
+		const all = current && own.models.length ? [own, ...others] : others;
+		return [...all].sort((a, b) => priorityOf(a.id) - priorityOf(b.id) || a.label.localeCompare(b.label));
 	}, [modelRow, models, current, otherAgents?.agents, otherAgents?.models]);
 
 	// Where the wheels stand: the switch picked, else the running agent's model.

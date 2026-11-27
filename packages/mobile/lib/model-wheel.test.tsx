@@ -27,7 +27,7 @@ vi.mock("./AgentLogo", () => ({ AgentLogo: "AgentLogo" }));
 vi.mock("./effort-slider-host", () => ({ useWarmAfterIdle: () => true }));
 vi.mock("./haptics", () => ({ haptics: { select: () => {} } }));
 vi.mock("./ThemeProvider", () => ({ useThemedStyles: (make: (theme: object) => object) => make(fixtures.theme) }));
-vi.mock("./wheel-picker", () => ({ WheelPicker: "WheelPicker", WHEEL_ROW: 36, WHEEL_ROWS: 3 }));
+vi.mock("./model-list", () => ({ ModelList: "ModelList", LIST_ROW: 46, LIST_ROWS: 6 }));
 
 import type { WheelAgent } from "./chat/useChatModelWheel";
 import { ModelWheelHost } from "./model-wheel";
@@ -64,28 +64,24 @@ function render(over: { chosenAgent?: string; chosenModel?: string; agentsLocked
 	);
 	act(() => { renderer = create(element(over)); });
 	act(() => slider.setOpen(true));
-	const wheel = (testID: string) => renderer!.root.findAll((node) => hostType(node) === "WheelPicker" && node.props.testID === testID)[0];
+	const wheel = (testID: string) => renderer!.root.findAll((node) => hostType(node) === "ModelList" && node.props.testID === testID)[0];
 	return {
 		slider,
 		choose,
 		agentButton: (id: string) => renderer!.root.findAll((node) => hostType(node) === "Pressable" && node.props.testID === `model-wheel-agent-${id}`)[0],
 		pickAgent: (id: string) => act(() => renderer!.root.findAll((node) => hostType(node) === "Pressable" && node.props.testID === `model-wheel-agent-${id}`)[0].props.onPress()),
 		modelsWheel: () => wheel("model-wheel-models"),
-		settle: (testID: string, index: number) => act(() => wheel(testID).props.onSettle(index)),
+		pick: (index: number) => act(() => wheel("model-wheel-models").props.onPick(index)),
 		rerender: (props: { chosenAgent?: string; chosenModel?: string }) => act(() => renderer!.update(element(props))),
 	};
 }
 
 describe("model wheel", () => {
-	// Saving at every stop reset the effort and Fast mode for each model rolled
-	// past, and recorded an agent switch for every agent looked at.
-	it("chooses once, where the wheels stand as they close", () => {
-		const { slider, choose, settle, modelsWheel } = render();
-		settle("model-wheel-models", 1);
-		settle("model-wheel-models", 2);
-		expect(modelsWheel().props.index).toBe(2);
-		expect(choose).not.toHaveBeenCalled();
-		act(() => slider.setOpen(false));
+	// A plain list: a tap is a choice, made once, and puts the list away.
+	it("chooses the model tapped, once, and puts the list away", () => {
+		const { slider, choose, pick } = render();
+		pick(2);
+		expect(slider.isOpen()).toBe(false);
 		expect(choose).toHaveBeenCalledExactlyOnceWith("claude-code", "haiku");
 	});
 
@@ -101,23 +97,22 @@ describe("model wheel", () => {
 		expect(choose).toHaveBeenCalledExactlyOnceWith("claude-code", "opus");
 	});
 
-	it("chooses nothing when the wheels close unturned, and stands where the chat does on the next open", () => {
-		const { slider, choose, settle, modelsWheel } = render();
+	it("chooses nothing when the list closes untouched, and opens where the chat stands next time", () => {
+		const { slider, choose, pick, modelsWheel } = render();
 		act(() => slider.setOpen(false));
 		expect(choose).not.toHaveBeenCalled();
 		act(() => slider.setOpen(true));
-		settle("model-wheel-models", 1);
-		act(() => slider.setOpen(false));
+		pick(1);
 		act(() => slider.setOpen(true));
 		// The save is still on its way: the wheels show the chat's model.
 		expect(modelsWheel().props.index).toBe(0);
 	});
 
-	// A wheel still coasting as the wheels close settles after they are hidden.
-	it("drops a settle that lands after the wheels close", () => {
-		const { slider, choose, settle, modelsWheel } = render();
+	// A tap landing as the list goes is no choice.
+	it("drops a pick that lands after the list closes", () => {
+		const { slider, choose, pick, modelsWheel } = render();
 		act(() => slider.setOpen(false));
-		settle("model-wheel-models", 1);
+		pick(1);
 		expect(modelsWheel().props.index).toBe(0);
 		act(() => slider.setOpen(true));
 		act(() => slider.setOpen(false));
@@ -136,15 +131,15 @@ describe("model wheel", () => {
 
 	// A request card replacing the composer takes the host with it.
 	it("closes its switch, and chooses where it stood, when the host goes away", () => {
-		const { slider, choose, settle } = render();
-		settle("model-wheel-models", 1);
+		const { slider, choose, pickAgent } = render();
+		pickAgent("codex");
 		act(() => renderer!.update(<></>));
 		expect(slider.isOpen()).toBe(false);
-		expect(choose).toHaveBeenCalledExactlyOnceWith("claude-code", "sonnet");
+		expect(choose).toHaveBeenCalledExactlyOnceWith("codex", "gpt");
 	});
 
-	// A settle still pending on the last agent's list must not land on the new one.
-	it("rebuilds the model wheel for each agent", () => {
+	// Each agent's list opens on its own model in force.
+	it("rebuilds the model list for each agent", () => {
 		const { pickAgent, modelsWheel } = render();
 		const before = modelsWheel();
 		pickAgent("codex");

@@ -106,9 +106,13 @@ describe("permission picker", () => {
 		expect(all("Hand")).toHaveLength(1);
 	});
 
-	it("chooses a mode, ticking only on a change", () => {
+	it("chooses a mode, ticking only on a change, and never on the touch that opened it", () => {
 		const onChoose = vi.fn();
 		act(() => { renderer = create(<PermissionPicker choices={modes("auto")} onChoose={onChoose} />); });
+		// The touch that opened it lifts over a tile: no pick.
+		act(() => all("Pressable")[2].props.onPress());
+		expect(onChoose).not.toHaveBeenCalled();
+		act(() => { vi.advanceTimersByTime(300); });
 		act(() => all("Pressable")[2].props.onPress());
 		expect(onChoose).toHaveBeenLastCalledWith("bypass-permissions");
 		expect(fixtures.select).toHaveBeenCalledOnce();

@@ -14,7 +14,7 @@ import {
 	tint,
 	truncationMode,
 } from "@expo/ui/swift-ui/modifiers";
-import { useState, type ReactNode } from "react";
+import { useMemo, useState, type ReactNode } from "react";
 import { StyleSheet, View } from "react-native";
 import { logoKey } from "./harnessLogo";
 import { hasMenuIcon } from "./harnessMenuIcons";
@@ -83,6 +83,7 @@ export function SpawnComposerControls({
 	// the keyboard; typing puts them away.
 	const pickers = useSpawnPickers({ agents, agentModels, harness, modelSelection, onSelectAgentModel, approvalModes, approvalMode, onSelectApprovalMode, prompt, settingsTemplate });
 	const effortSlider = pickers.effortSlider;
+	const pickerSwitches = useMemo(() => [effortSlider, pickers.model.slider, pickers.permissions.slider], [effortSlider, pickers.model.slider, pickers.permissions.slider]);
 	const selectedProject = projects.find((project) => project.id === projectId);
 	const hostLabel = hosts.find((host) => host.id === hostId)?.label ?? "Choose machine";
 	const projectLabel = selectedProject?.label ?? "Choose project";
@@ -155,6 +156,7 @@ export function SpawnComposerControls({
 					prompt={prompt}
 					attachments={attachments}
 					onChangePrompt={onChangePrompt}
+					pickers={pickerSwitches}
 					onLoadSkills={onLoadSkills}
 					placeholder={placeholder}
 					onChoosePhoto={onChoosePhoto}

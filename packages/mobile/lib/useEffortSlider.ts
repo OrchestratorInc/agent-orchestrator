@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
-import { BackHandler, Keyboard } from "react-native";
+import { BackHandler } from "react-native";
 import { onTouchOutside } from "./touchOutside";
 import type { EffortChoice } from "./modelEffort";
 
@@ -70,9 +70,10 @@ export function useEffortChoicesShown<T extends { value: string; selected: boole
 
 /**
  * Whether the effort slider is open. It stays up while the level is adjusted
- * and closes on a tap anywhere outside it (the field included), when the
- * keyboard comes up under a slider opened without it, on Android's back, and
- * after `timeoutMs` where one is given; it also closes when the model takes no
+ * and closes on a tap anywhere outside it (the field included), on Android's
+ * back, and after `timeoutMs` where one is given. The keyboard coming up is no
+ * close: a picker opened with the keys down brings them up itself
+ * (useKeysWithPickers), and lies over them; it also closes when the model takes no
  * effort and the slider carries no switch (`toggles`: Fast mode, Ultracode).
  * Busy keeps it from opening, never shuts one in use: a send, a save or a
  * reconnect flickering busy closed the slider under the finger.
@@ -103,15 +104,9 @@ export function useEffortSliderOpen(
 		wasShown.current = shown;
 		if (!shown) return;
 		const back = BackHandler.addEventListener("hardwareBackPress", () => { close(); return true; });
-		// The keyboard coming up puts away a slider opened without it. One opened
-		// over the keys stays: Android reports the keyboard shown again each time
-		// it changes height (its suggestion strip, another keyboard), and that
-		// closed the slider mid-drag.
-		const keysUp = Keyboard.isVisible?.() ?? false;
-		const keyboard = Keyboard.addListener("keyboardDidShow", () => { if (!keysUp) close(); });
 		const outside = onTouchOutside(close);
 		const timer = timeoutMs === null ? undefined : setTimeout(close, timeoutMs);
-		return () => { back.remove(); keyboard.remove(); outside(); if (timer !== undefined) clearTimeout(timer); };
+		return () => { back.remove(); outside(); if (timer !== undefined) clearTimeout(timer); };
 	}, [shown, close, timeoutMs]);
 	return { open: shown, toggle: () => store.setOpen(!shown), close };
 }

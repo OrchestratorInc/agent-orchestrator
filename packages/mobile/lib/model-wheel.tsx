@@ -10,7 +10,7 @@ import type { Theme } from "./theme";
 import { useThemedStyles } from "./ThemeProvider";
 import { radius, space, type } from "./tokens";
 import { useEffortSliderOpen, type EffortSliderSwitch } from "./useEffortSlider";
-import { WHEEL_ROW, WHEEL_ROWS, WheelPicker } from "./wheel-picker";
+import { LIST_ROW, LIST_ROWS, ModelList } from "./model-list";
 
 /*
  * The model, picked over the keyboard: the agents as a row of buttons, one tap
@@ -21,11 +21,35 @@ import { WHEEL_ROW, WHEEL_ROWS, WheelPicker } from "./wheel-picker";
  * are rows under the wheel.
  */
 
+
+// The agent buttons' height, and each provider setting's row under the wheel.
+const AGENT_ROW = 36;
+const SETTING_ROW = 44;
+// Room above the agent buttons and below the last row, between the agents
+// and the wheel, and how far below the model pill's line the band sits.
+const PANEL_TOP = space.md;
+const PANEL_BOTTOM = space.lg;
+const PANEL_GAP = space.md;
+const PANEL_DROP = space.md + 56;
+// The veil's fade below the wheel, over the keys: long, so the panel melts
+// into the keyboard rather than ending on an edge.
+const WHEEL_VEIL_FALL = 160;
+
+/** The panel's height: the agent buttons, the wheel under them, and a row per setting. */
+function wheelPanelHeight(agents: number, settings: number): number {
+	const rows = [...(agents > 1 ? [AGENT_ROW] : []), LIST_ROW * LIST_ROWS, ...Array.from({ length: settings }, () => SETTING_ROW)];
+	return PANEL_TOP + rows.reduce((sum, row) => sum + row, 0) + (rows.length - 1) * PANEL_GAP + PANEL_BOTTOM;
+}
+
 /**
- * How far the wheel reaches down over the keys for its band to sit on the
- * composer's control row, level with the pill it opens from.
+ * How far the panel reaches down over the keys for its band to lie on the
+ * composer's control row, on the model pill it opens from: the agents then sit
+ * where the input bar is, and the other models cover most of the keyboard.
  */
-const WHEEL_KEYS_OVERLAP = (WHEEL_ROW * WHEEL_ROWS) / 2 - COMPOSER_CONTROL_RISE;
+function wheelKeysOverlap(agents: number, settings: number): number {
+	const aboveBand = PANEL_TOP + (agents > 1 ? AGENT_ROW + PANEL_GAP : 0) + LIST_ROW / 2;
+	return wheelPanelHeight(agents, settings) - (COMPOSER_CONTROL_RISE - PANEL_DROP + aboveBand);
+}
 
 export type ModelWheelProps = {
 	agents: readonly WheelAgent[];
@@ -71,7 +95,10 @@ export const ModelWheelHost = memo(function ModelWheelHost({ slider, busy, ...wh
 	const warm = useWarmAfterIdle();
 	if (!(open || warm) || !wheel.agents.length) return null;
 	return (
-		<ComposerOverlay overKeyboard keysOverlap={WHEEL_KEYS_OVERLAP} visible={open} onDismiss={() => slider.setOpen(false)} fill>
+		// From the input bar's top down over most of the keys, the band on the
+		// model pill it opens from: a model is picked with a thumb, and the keys'
+		// last rows still show below.
+		<ComposerOverlay overKeyboard keysOverlap={wheelKeysOverlap(wheel.agents.length, wheel.settings.length)} veilFall={WHEEL_VEIL_FALL} visible={open} onDismiss={() => slider.setOpen(false)} fill>
 			<ModelWheel {...wheel} visible={open} onMove={onMove} onEmptyTap={() => slider.setOpen(false)} />
 		</ComposerOverlay>
 	);
@@ -120,6 +147,7 @@ export function ModelWheel({ agents, chosenAgent, chosenModel, runningAgent, run
 
 	return (
 		<View style={styles.panel} testID="model-wheel">
+			{/* The agents as buttons, where the input bar is, the chosen model right under them. */}
 			{agents.length > 1 ? (
 				<AgentRail
 					agents={agents}
@@ -137,27 +165,22 @@ export function ModelWheel({ agents, chosenAgent, chosenModel, runningAgent, run
 					}}
 				/>
 			) : null}
-			<View style={styles.wheels}>
-				{/* The band the chosen model sits in. */}
-				<View pointerEvents="none" style={styles.band} />
-				<View style={styles.modelColumn}>
-					{/* Keyed by agent: a settle still pending on the last agent's list
-					    is dropped with it rather than landing on the new agent. */}
-					<WheelPicker
-						key={agent.id}
-						items={agent.models}
-						index={modelIndex}
-						align="center"
-						accessibilityLabel="Model"
-						testID="model-wheel-models"
-						onEmptyTap={onEmptyTap}
-						onSettle={(index) => {
-							const model = agent.models[index];
-							if (model) move({ agent: agent.id, model: model.key });
-						}}
-					/>
-				</View>
-			</View>
+			{/* Keyed by agent: each agent's list opens on its own model in force. */}
+			<ModelList
+				key={agent.id}
+				items={agent.models}
+				index={modelIndex}
+				visible={visible}
+				accessibilityLabel="Model"
+				testID="model-wheel-models"
+				onPick={(index) => {
+					const model = agent.models[index];
+					if (!model) return;
+					// A tap is a choice: it picks the model and puts the list away.
+					move({ agent: agent.id, model: model.key });
+					onEmptyTap?.();
+				}}
+			/>
 			{settings.length ? (
 				<View style={styles.settings}>
 					{settings.map((setting) => (
@@ -250,25 +273,13 @@ const KNOB = TOGGLE_HEIGHT - 6;
 
 const makeStyles = (t: Theme) =>
 	StyleSheet.create({
-		panel: { alignSelf: "stretch", gap: space.sm },
-		wheels: { flexDirection: "row", height: WHEEL_ROW * WHEEL_ROWS, gap: space.md },
-		band: {
-			position: "absolute",
-			left: 0,
-			right: 0,
-			top: WHEEL_ROW * Math.floor(WHEEL_ROWS / 2) - 2,
-			height: WHEEL_ROW + 4,
-			borderRadius: radius.lg,
-			borderCurve: "continuous",
-			backgroundColor: t.bgElevated,
-		},
-		modelColumn: { flex: 1 },
+		panel: { alignSelf: "stretch", gap: PANEL_GAP, paddingTop: PANEL_TOP, paddingBottom: PANEL_BOTTOM },
 		rail: { gap: space.xs, paddingHorizontal: space.xs },
 		agent: {
 			flexDirection: "row",
 			alignItems: "center",
 			gap: space.xs,
-			height: 36,
+			height: AGENT_ROW,
 			paddingHorizontal: space.md,
 			borderRadius: radius.pill,
 			borderCurve: "continuous",
@@ -283,7 +294,7 @@ const makeStyles = (t: Theme) =>
 			flexDirection: "row",
 			alignItems: "center",
 			justifyContent: "space-between",
-			minHeight: 44,
+			minHeight: SETTING_ROW,
 			paddingHorizontal: space.md,
 			borderRadius: radius.lg,
 			borderCurve: "continuous",

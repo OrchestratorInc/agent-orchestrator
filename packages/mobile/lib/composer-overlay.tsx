@@ -108,13 +108,15 @@ export function overlayStages(shown: number): { veil: number; content: number } 
  * Android, which has no such swipe, skips it rather than hold up the first
  * frame.
  */
-export function ComposerOverlay({ bottom, overKeyboard = false, keysOverlap = KEYS_OVERLAP, onDismiss, lift = 0, visible = true, veilRise, fill, children }: {
+export function ComposerOverlay({ bottom, overKeyboard = false, keysOverlap = KEYS_OVERLAP, veilFall = KEYS_FALL, onDismiss, lift = 0, visible = true, veilRise, fill, children }: {
 	/** Where a floating overlay sits in its container; unused over the keyboard. */
 	bottom?: DimensionValue;
 	/** Opens over the keyboard, in a window of its own (see OverKeyboardOverlay). */
 	overKeyboard?: boolean;
 	/** Over the keyboard: how far the content reaches down over the keys' top edge; less, or below zero, sits it higher. */
 	keysOverlap?: number;
+	/** Over the keyboard: how far the veil fades out below the content, over the keys; longer melts it into them. */
+	veilFall?: number;
 	/** Over the keyboard: a tap anywhere but on the content, which only puts the overlay away. */
 	onDismiss?: () => void;
 	/** Room left under the content, inside the veil, so the veil still reaches the composer's bottom edge below it. */
@@ -195,7 +197,7 @@ export function ComposerOverlay({ bottom, overKeyboard = false, keysOverlap = KE
 	});
 	if (overKeyboard) {
 		return (
-			<OverKeyboardOverlay visible={visible} windowUp={windowUp} onFirstLayout={onContentLayout} onDismiss={onDismiss} fill={fill} veilStyle={veilStyle} contentStyle={contentStyle} keysOverlap={keysOverlap}>
+			<OverKeyboardOverlay visible={visible} windowUp={windowUp} onFirstLayout={onContentLayout} onDismiss={onDismiss} fill={fill} veilStyle={veilStyle} contentStyle={contentStyle} keysOverlap={keysOverlap} veilFall={veilFall}>
 				{children}
 			</OverKeyboardOverlay>
 		);
@@ -242,13 +244,14 @@ export function ComposerOverlay({ bottom, overKeyboard = false, keysOverlap = KE
  * gesture handler root, so gestures (the slider's drag) run there on the UI
  * thread as anywhere else.
  */
-function OverKeyboardOverlay({ visible, windowUp, onFirstLayout, onDismiss, fill, veilStyle, contentStyle, keysOverlap, children }: {
+function OverKeyboardOverlay({ visible, windowUp, onFirstLayout, onDismiss, fill, veilStyle, contentStyle, keysOverlap, veilFall, children }: {
 	visible: boolean;
 	/** The window is up: while visible, and through the fade out after. */
 	windowUp: boolean;
 	/** The overlay is laid out in its window, so its reveal can start. */
 	onFirstLayout: () => void;
 	keysOverlap: number;
+	veilFall: number;
 	onDismiss?: () => void;
 	fill?: boolean;
 	/** The veil's stage of the reveal, and the content's after it (see VEIL_LEAD). */
@@ -306,7 +309,7 @@ function OverKeyboardOverlay({ visible, windowUp, onFirstLayout, onDismiss, fill
 						    reaches down to its foot; a tap on it closes the overlay, and the
 						    keys below it stay the keyboard's to tap. */}
 						<Animated.View pointerEvents="none" style={[styles.veil, veilStyle]}>
-							<EffortSliderVeil rise={KEYS_RISE} fall={KEYS_FALL} fallNativeID={Platform.OS === "android" ? FADE_ID : undefined} />
+							<EffortSliderVeil rise={KEYS_RISE} fall={veilFall} fallNativeID={Platform.OS === "android" ? FADE_ID : undefined} />
 						</Animated.View>
 						<Animated.View pointerEvents="box-none" style={[styles.content, fill && styles.fill, contentStyle]}>
 							{/* Its touches are its own. The window is native, but a touch in it

@@ -622,6 +622,15 @@ describe("splitModelChoices", () => {
 		expect(labels(older)).toEqual(["Haiku 4.5", "Sonnet 5"]);
 	});
 
+	// The picker's list shows latest and older both: picking an older model
+	// must not move it up the list, or the rows jump under the finger.
+	it("keeps every model in place for a list, whatever is picked", () => {
+		const names = ["Opus 5.5", "Fable 5.1", "Sonnet 5.5", "Haiku 5.5", "Haiku 4.5", "Sonnet 5", "Opus 4.8"];
+		const order = (picked?: string) => { const { latest, older } = splitModelChoices(list(names, picked), false); return labels([...latest, ...older]); };
+		expect(order("Opus 4.8")).toEqual(order("Opus 5.5"));
+		expect(order("Sonnet 5")).toEqual(order());
+	});
+
 	it("leaves a short menu, or one with no older versions, whole", () => {
 		expect(splitModelChoices(list(["Opus 5.5", "Opus 4.8", "Sonnet 5"])).older).toEqual([]);
 		expect(splitModelChoices(list(["a", "b", "c", "d", "e", "f", "g"])).older).toEqual([]);

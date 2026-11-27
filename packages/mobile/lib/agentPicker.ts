@@ -21,7 +21,7 @@ export type RankedAgent = AgentInfo & {
 // falling back to the label — without it the authorized group is alphabetical
 // and Aider sorts above Claude Code.
 const PRIORITY = ["claude-code", "codex", "cursor", "opencode", "aider"];
-const priorityOf = (id: string) => {
+export const priorityOf = (id: string) => {
 	const i = PRIORITY.indexOf(id);
 	return i === -1 ? Number.MAX_SAFE_INTEGER : i;
 };

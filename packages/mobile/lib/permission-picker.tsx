@@ -2,12 +2,12 @@ import Hand from "lucide-react-native/icons/hand";
 import PencilLine from "lucide-react-native/icons/pencil-line";
 import ShieldAlert from "lucide-react-native/icons/shield-alert";
 import ShieldCheck from "lucide-react-native/icons/shield-check";
-import { memo, useEffect, type ComponentType } from "react";
+import { memo, useEffect, useRef, type ComponentType } from "react";
 import { StyleSheet, Text, View } from "react-native";
 import { Pressable } from "react-native-gesture-handler";
 import { COMPOSER_RADIUS } from "./chat/composerStyles";
 import type { ApprovalMode } from "./chat/types";
-import { COMPOSER_CONTROL_RISE, ComposerOverlay, OverlayHeading } from "./composer-overlay";
+import { ComposerOverlay, OverlayHeading } from "./composer-overlay";
 import { useWarmAfterIdle } from "./effort-slider-host";
 import { haptics } from "./haptics";
 import type { Theme } from "./theme";
@@ -45,8 +45,12 @@ const TILE_GAP = space.xs;
 const LIST_INSET = space.xs;
 const TILE_RADIUS = COMPOSER_RADIUS - LIST_INSET;
 
-// The most the grid may reach down: to just above the keys, as the slider sits.
-const GRID_KEYS_OVERLAP = -space.xs;
+// How far the grid's foot reaches over the keys' top edge.
+const GRID_KEYS_OVERLAP = 34;
+// How long after opening a press still belongs to the touch that opened it.
+const OPENING_TOUCH_MS = 250;
+// The veil's fade under the grid, over the keys: long, as the model list's.
+const GRID_VEIL_FALL = 140;
 
 /** The grid's height for `count` modes, two to a row. */
 export function permissionGridHeight(count: number): number {
@@ -140,18 +144,24 @@ export const PermissionPickerHost = memo(function PermissionPickerHost({ slider,
 });
 
 export function PermissionPickerOverlay({ visible = true, onDismiss, choices, onChoose }: { visible?: boolean; onDismiss?: () => void; choices: readonly PermissionChoice[]; onChoose: (value: string) => void }) {
-	// Low, near the composer's control row where the thumb is, but never over
-	// the keys: centred on that row, a two-row grid's lower row hung over the
-	// keyboard's strip and number row, and its names shrank to nothing there.
-	const keysOverlap = Math.min(permissionGridHeight(choices.length) / 2 - COMPOSER_CONTROL_RISE, GRID_KEYS_OVERLAP);
+	// Low, its foot over the keys' top strip, melting into them below as the
+	// model list does. A tile may come up over the button that opened it: the
+	// grid takes no press from that opening touch (see PermissionPicker).
+	const keysOverlap = GRID_KEYS_OVERLAP;
 	return (
-		<ComposerOverlay overKeyboard keysOverlap={keysOverlap} onDismiss={onDismiss} visible={visible} fill>
-			<PermissionPicker choices={choices} onChoose={onChoose} />
+		<ComposerOverlay overKeyboard keysOverlap={keysOverlap} veilFall={GRID_VEIL_FALL} onDismiss={onDismiss} visible={visible} fill>
+			<PermissionPicker choices={choices} onChoose={onChoose} visible={visible} />
 		</ComposerOverlay>
 	);
 }
 
-export function PermissionPicker({ choices, onChoose }: { choices: readonly PermissionChoice[]; onChoose: (value: string) => void }) {
+export function PermissionPicker({ choices, onChoose, visible = true }: { choices: readonly PermissionChoice[]; onChoose: (value: string) => void; visible?: boolean }) {
+	// The touch that opened the grid is no pick: a tile that comes up under
+	// the finger on the button took that touch's lift as one. A press is taken
+	// only once the grid has been up a moment.
+	const openedAt = useRef(0);
+	useEffect(() => { if (visible) openedAt.current = Date.now(); }, [visible]);
+	const settled = () => Date.now() - openedAt.current >= OPENING_TOUCH_MS;
 	const t = useTheme();
 	const styles = useThemedStyles(makeStyles);
 	const current = choices.find((choice) => choice.selected);
@@ -170,6 +180,7 @@ export function PermissionPicker({ choices, onChoose }: { choices: readonly Perm
 								<Pressable
 									key={choice.value}
 									onPress={() => {
+										if (!settled()) return;
 										if (!choice.selected) haptics.select();
 										onChoose(choice.value);
 									}}

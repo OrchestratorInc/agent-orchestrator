@@ -528,14 +528,19 @@ const SPLIT_MODEL_MENU_OVER = 6;
  * first word is its newest. The running model stays on top wherever it is
  * listed. A short menu, or one with no older versions, is left whole.
  */
-export function splitModelChoices(choices: readonly TurnSettingChoice[]): { latest: TurnSettingChoice[]; older: TurnSettingChoice[] } {
+/**
+ * `liftSelected` lifts the model in force into the latest, so a menu showing
+ * only those still shows it; a list that shows both keeps every model where
+ * it is, and nothing moves as the pick changes.
+ */
+export function splitModelChoices(choices: readonly TurnSettingChoice[], liftSelected = true): { latest: TurnSettingChoice[]; older: TurnSettingChoice[] } {
 	if (choices.length <= SPLIT_MODEL_MENU_OVER) return { latest: [...choices], older: [] };
 	const families = new Set<string>();
 	const latest: TurnSettingChoice[] = [];
 	const older: TurnSettingChoice[] = [];
 	for (const choice of choices) {
 		const family = choice.label.trim().split(/\s+/)[0].toLowerCase();
-		if (!families.has(family) || choice.selected) latest.push(choice);
+		if (!families.has(family) || (liftSelected && choice.selected)) latest.push(choice);
 		else older.push(choice);
 		families.add(family);
 	}
