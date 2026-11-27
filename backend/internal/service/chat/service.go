@@ -1352,6 +1352,12 @@ func (s *Service) startLocked(ctx context.Context, cfg StartConfig) (*Controller
 			return nil, err
 		}
 	}
+	if cfg.Harness == domain.HarnessAgy && providerBoundary == nil && !liveReconnect {
+		if err := s.reconcileAgyOpeningModel(ctx, controller); err != nil {
+			_ = cleanupUnpublishedConversation(conv, cfg.ProviderConversationID == "")
+			return nil, err
+		}
+	}
 	commit, err := notifyControllerReady(
 		cfg, controller, providerBoundary, commitProviderHistory,
 	)
