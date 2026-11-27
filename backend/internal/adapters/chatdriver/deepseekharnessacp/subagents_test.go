@@ -432,3 +432,98 @@ func TestReaderStillReportsAChildWithAnUnreadableLog(t *testing.T) {
 	now = now.Add(endWaitFor)
 	expectLines(t, read(t, r), `call-launch end completed "Done anyway."`)
 }
+
+// A run whose end timed out and whose close lands late must not make the next
+// run's end go out before that run closes.
+func TestReaderPairsEachEndWithItsOwnRun(t *testing.T) {
+	home := t.TempDir()
+	now := time.Unix(100, 0)
+	parent := newDSHLog(t, home, parentSession, nil)
+	parent.prompt("Go.")
+	parent.launch("call-launch", "subagent", "agent-1", childSession)
+	child := newDSHLog(t, home, childSession, childHeader())
+	r := openReader(home)
+	r.now = func() time.Time { return now }
+	child.runStart(1)
+	parent.settled(childSession, "agent-1", "completed", "finished.", "Its closing message:", "First.")
+	read(t, r)
+	now = now.Add(endWaitFor)
+	expectLines(t, read(t, r), `call-launch end completed "First."`)
+	// Run 1's close lands after its end went out, then run 2 starts and its end
+	// is recorded before its own close.
+	child.runEnd(1, "completed")
+	child.runStart(2)
+	child.add("tool/call", map[string]any{"turn": 2, "step": 1, "callId": "late", "name": "bash", "arguments": `{"command":"ls"}`})
+	parent.settled(childSession, "agent-1", "completed", "finished.", "Its closing message:", "Second.")
+	expectLines(t, read(t, r), `call-launch tool_call bash map[command:ls]`)
+	child.add("tool/result", map[string]any{"turn": 2, "step": 1, "message": map[string]any{
+		"id": "r", "role": "tool", "toolCallId": "late", "content": []any{text("ok")}}})
+	child.runEnd(2, "completed")
+	expectLines(t, read(t, r),
+		`call-launch tool_update late completed`,
+		`call-launch end completed "Second."`)
+}
+
+// When one read sees a run close and the next start, the first run's report
+// goes out before anything of the second.
+func TestReaderReportsARunBeforeTheNextRunsWork(t *testing.T) {
+	home := t.TempDir()
+	parent := newDSHLog(t, home, parentSession, nil)
+	parent.prompt("Go.")
+	parent.launch("call-launch", "subagent", "agent-1", childSession)
+	child := newDSHLog(t, home, childSession, childHeader())
+	r := openReader(home)
+	child.runStart(1)
+	read(t, r)
+	parent.settled(childSession, "agent-1", "completed", "finished.", "Its closing message:", "First.")
+	child.runEnd(1, "completed")
+	child.runStart(2)
+	child.add("assistant/message", map[string]any{"turn": 2, "step": 1, "stream": []any{}, "message": map[string]any{
+		"id": "next", "role": "assistant", "content": []any{text("On it.")}}})
+	expectLines(t, read(t, r),
+		`call-launch end completed "First."`,
+		`call-launch said next "On it."`)
+}
+
+// A run still open when the next turn's prompt arrives is the earlier turn's:
+// what it does after that is not filed on the new turn.
+func TestReaderKeepsAnOpenRunOutOfTheNextTurn(t *testing.T) {
+	home := t.TempDir()
+	parent := newDSHLog(t, home, parentSession, nil)
+	parent.prompt("First.")
+	parent.launch("call-launch", "subagent", "agent-1", childSession)
+	child := newDSHLog(t, home, childSession, childHeader())
+	child.runStart(1)
+	r := openReader(home)
+	read(t, r)
+	if !r.Busy() {
+		t.Fatal("the open run is busy in its own turn")
+	}
+	parent.prompt("Second.")
+	child.add("assistant/message", map[string]any{"turn": 1, "step": 1, "stream": []any{}, "message": map[string]any{
+		"id": "stray", "role": "assistant", "content": []any{text("Still going.")}}})
+	if got := read(t, r); len(got) != 0 {
+		t.Fatalf("an earlier turn's run was filed on the new one: %v", got)
+	}
+	if r.Busy() {
+		t.Fatal("an earlier turn's run does not keep the new turn busy")
+	}
+}
+
+// A report still waiting when the next prompt arrives is the earlier turn's.
+func TestReaderDropsAnEarlierTurnsWaitingEnd(t *testing.T) {
+	home := t.TempDir()
+	parent := newDSHLog(t, home, parentSession, nil)
+	parent.prompt("First.")
+	parent.launch("call-launch", "subagent", "agent-1", childSession)
+	child := newDSHLog(t, home, childSession, childHeader())
+	child.runStart(1)
+	parent.settled(childSession, "agent-1", "completed", "finished.", "Its closing message:", "Late.")
+	r := openReader(home)
+	read(t, r)
+	parent.prompt("Second.")
+	child.runEnd(1, "completed")
+	if got := read(t, r); len(got) != 0 {
+		t.Fatalf("an earlier turn's end was filed on the new one: %v", got)
+	}
+}

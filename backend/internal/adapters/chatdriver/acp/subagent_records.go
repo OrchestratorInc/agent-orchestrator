@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"slices"
 	"strings"
+	"sync"
 	"time"
 
 	acpsdk "github.com/coder/acp-go-sdk"
@@ -85,7 +86,9 @@ type RecordedUpdate struct {
 	// Update is a tool_call, tool_call_update, or agent_message_chunk carrying
 	// a messageId. Anything else is ignored.
 	Update *acpsdk.SessionUpdate
-	// End closes one run of the child.
+	// End closes one run of the child and releases what was held for its
+	// messages and calls, so it comes after every update of that run and
+	// before any of the next.
 	End *RecordedEnd
 }
 
@@ -108,25 +111,31 @@ const (
 )
 
 const (
-	subagentRecordPollEvery = 300 * time.Millisecond
-	// subagentRecordDrainFor bounds the last read before a turn completes,
-	// joining the poll and delivering included: the agent writes a child's
-	// records in batches, so its last ones can land just after the prompt
-	// returns.
-	subagentRecordDrainFor   = 3 * time.Second
+	subagentRecordPollEvery  = 300 * time.Millisecond
 	subagentRecordDrainEvery = 100 * time.Millisecond
 	subagentHandbackTool     = "SubagentHandback"
 	subagentResponseSummary  = "Subagent response"
 )
+
+// subagentRecordDrainFor bounds the last read before a turn completes, joining
+// the poll and delivering included: the agent writes a child's records in
+// batches, so its last ones can land just after the prompt returns. A var so
+// tests can shorten it.
+var subagentRecordDrainFor = 3 * time.Second
 
 // recordFollower is what the conversation knows of its recorded subagents. It
 // is created on the first launch, or on reattaching to a running turn, and
 // guarded by conversation.mu except where noted.
 type recordFollower struct {
 	reader SubagentRecordReader
-	// stop and done belong to the running poll, nil when none runs.
-	stop chan struct{}
-	done chan struct{}
+	// stop, cancel and done belong to the running poll, nil when none runs.
+	stop   chan struct{}
+	cancel context.CancelFunc
+	done   chan struct{}
+	// emitMu is held across each record's last check of its context and its
+	// send, so once the last read has cancelled every reader and taken emitMu,
+	// no record of that turn can still go out.
+	emitMu sync.Mutex
 	// readMu serializes reads and Busy, so the poll and the last read never
 	// interleave. Held without mu. The fields below are guarded by it.
 	readMu chan struct{}
@@ -215,9 +224,9 @@ func (c *conversation) pollSubagentRecords() {
 		return
 	}
 	stop, done := make(chan struct{}), make(chan struct{})
-	follower.stop, follower.done = stop, done
-	c.mu.Unlock()
 	ctx, cancel := context.WithCancel(context.Background())
+	follower.stop, follower.cancel, follower.done = stop, cancel, done
+	c.mu.Unlock()
 	go func() {
 		select {
 		case <-stop:
@@ -251,11 +260,21 @@ func (c *conversation) drainSubagentRecords() {
 		c.mu.Unlock()
 		return
 	}
-	stop, done := follower.stop, follower.done
-	follower.stop, follower.done = nil, nil
+	stop, pollCancel, done := follower.stop, follower.cancel, follower.done
+	follower.stop, follower.cancel, follower.done = nil, nil, nil
 	c.mu.Unlock()
 	ctx, cancel := context.WithTimeout(context.Background(), subagentRecordDrainFor)
-	defer cancel()
+	// However the last read ends, every reader of this turn is cancelled and
+	// any send in flight finishes before the turn goes on to settle.
+	defer func() {
+		cancel()
+		if pollCancel != nil {
+			pollCancel()
+		}
+		follower.emitMu.Lock()
+		//nolint:staticcheck // An empty critical section is the barrier.
+		follower.emitMu.Unlock()
+	}()
 	if stop != nil {
 		// Stopping cancels the poll's read and delivery, so it returns promptly.
 		close(stop)
@@ -265,8 +284,22 @@ func (c *conversation) drainSubagentRecords() {
 		}
 	}
 	for {
-		busy, ok := c.readSubagentRecords(ctx, follower)
-		if !ok || !busy {
+		// The read runs apart, so a store that stalls (a hung mount) cannot hold the
+		// turn past the deadline. One left behind is cancelled: what it reads is
+		// held for this turn, never delivered on a later one.
+		type result struct{ busy, ok bool }
+		read := make(chan result, 1)
+		go func() {
+			busy, ok := c.readSubagentRecords(ctx, follower)
+			read <- result{busy, ok}
+		}()
+		var got result
+		select {
+		case got = <-read:
+		case <-ctx.Done():
+			return
+		}
+		if !got.ok || !got.busy {
 			break
 		}
 		select {
@@ -349,7 +382,7 @@ func (c *conversation) emitRecordedUpdate(ctx context.Context, turnID string, fo
 	}
 	launch := c.providerItemID(recorded.Launch)
 	if end := recorded.End; end != nil {
-		if !c.emitWithin(ctx, c.recordedHandback(turnID, launch, recorded.Child, *end)) {
+		if !c.emitRecord(ctx, follower, c.recordedHandback(turnID, launch, recorded.Child, *end)) {
 			return false
 		}
 		// The run is over: what was held for its messages and calls is not
@@ -379,7 +412,7 @@ func (c *conversation) emitRecordedUpdate(ctx context.Context, turnID string, fo
 		}
 		event := c.toolEvent(turnID, tool, toolTerminal(tool.status))
 		event.ProviderItemID = c.providerItemID("subagent-tool:" + lengthPrefixedTuple(recorded.Child, tool.id))
-		if !c.emitWithin(ctx, withParentProviderItem(event, launch)) {
+		if !c.emitRecord(ctx, follower, withParentProviderItem(event, launch)) {
 			return false
 		}
 		tools := follower.tools[recorded.Child]
@@ -405,7 +438,7 @@ func (c *conversation) emitRecordedUpdate(ctx context.Context, turnID string, fo
 		said := follower.said[recorded.Child][*chunk.MessageId] + delta
 		key := lengthPrefixedTuple(recorded.Child, *chunk.MessageId)
 		detail, _ := json.Marshal(map[string]any{"parentProviderItemId": launch, "nestedAgent": true})
-		if !c.emitWithin(ctx, ports.ChatEvent{
+		if !c.emitRecord(ctx, follower, ports.ChatEvent{
 			Kind: ports.ChatEventActivityCompleted, ProviderTurnID: turnID,
 			ProviderItemID: c.providerItemID("subagent-message:" + key),
 			ActivityKind:   domain.ActivityKindMCPTool, ActivityStatus: domain.ActivityStatusCompleted,
@@ -423,15 +456,35 @@ func (c *conversation) emitRecordedUpdate(ctx context.Context, turnID string, fo
 	return true
 }
 
+// emitRecord delivers one recorded event under the follower's emitMu: see
+// recordFollower.emitMu.
+func (c *conversation) emitRecord(ctx context.Context, follower *recordFollower, event ports.ChatEvent) bool {
+	follower.emitMu.Lock()
+	defer follower.emitMu.Unlock()
+	return c.emitWithin(ctx, event)
+}
+
 // emitWithin is emit for work that must not outlast ctx: it waits for the
-// consumer only until ctx ends, and reports whether the event was queued.
+// event lock and the consumer only until ctx ends, and reports whether the
+// event was queued.
 func (c *conversation) emitWithin(ctx context.Context, event ports.ChatEvent) bool {
 	if c.captureHistoryEvent(event) {
 		return true
 	}
-	c.eventMu.RLock()
+	// A writer can hold the event lock while it waits on the consumer itself.
+	for !c.eventMu.TryRLock() {
+		if ctx.Err() != nil {
+			return false
+		}
+		select {
+		case <-ctx.Done():
+			return false
+		case <-time.After(time.Millisecond):
+		}
+	}
 	defer c.eventMu.RUnlock()
-	if c.eventsClosed {
+	// With ctx over, a free slot must not win the select below.
+	if c.eventsClosed || ctx.Err() != nil {
 		return false
 	}
 	var connDone <-chan struct{}

@@ -297,10 +297,26 @@ func TestRecordPollDoesNotStartWhileTheTurnSettles(t *testing.T) {
 func TestRecordDeliveryGivesUpAndRedeliversInTheSameTurn(t *testing.T) {
 	reader := &listReader{updates: []RecordedUpdate{said("child", "m1", "One."), said("child", "m2", "Two.")}}
 	conv, follower := recordTestConversation("turn-1", 1, reader)
-	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
-	defer cancel()
-	if busy, ok := conv.readSubagentRecords(ctx, follower); !ok || !busy {
-		t.Fatalf("read = busy %v, ok %v; want busy with a backlog", busy, ok)
+	ctx, cancel := context.WithCancel(context.Background())
+	type result struct{ busy, ok bool }
+	done := make(chan result, 1)
+	go func() {
+		busy, ok := conv.readSubagentRecords(ctx, follower)
+		done <- result{busy, ok}
+	}()
+	// Cancel only once the first event fills the buffer, so the second is the
+	// one held back.
+	deadline := time.Now().Add(2 * time.Second)
+	for len(conv.events) == 0 {
+		if time.Now().After(deadline) {
+			t.Fatal("the first event never queued")
+		}
+		time.Sleep(time.Millisecond)
+	}
+	cancel()
+	got := <-done
+	if !got.ok || !got.busy {
+		t.Fatalf("read = busy %v, ok %v; want busy with a backlog", got.busy, got.ok)
 	}
 	if len(follower.backlog) != 1 || follower.backlogTurn != "turn-1" {
 		t.Fatalf("backlog = %d for %q", len(follower.backlog), follower.backlogTurn)
@@ -326,13 +342,82 @@ func TestRecordBacklogIsNeverFiledOnALaterTurn(t *testing.T) {
 }
 
 func TestRecordedRunEndReleasesItsMessages(t *testing.T) {
-	reader := &listReader{updates: []RecordedUpdate{
-		said("child", "m1", "Working."),
-		{Launch: "launch", Child: "child", End: &RecordedEnd{ID: "run-1", Status: RecordedCompleted}},
-	}}
+	reader := &listReader{updates: []RecordedUpdate{said("child", "m1", "Working.")}}
 	conv, follower := recordTestConversation("turn-1", 4, reader)
+	conv.readSubagentRecords(context.Background(), follower)
+	if follower.said["child"]["m1"] != "Working." {
+		t.Fatalf("a running child's message must be held, got %v", follower.said)
+	}
+	reader.updates = []RecordedUpdate{{Launch: "launch", Child: "child", End: &RecordedEnd{ID: "run-1", Status: RecordedCompleted}}}
 	conv.readSubagentRecords(context.Background(), follower)
 	if len(follower.said) != 0 {
 		t.Fatalf("an ended run's messages are still held: %v", follower.said)
+	}
+}
+
+// A writer can hold the event lock while it waits on the consumer; a record
+// waiting for that lock still gives up when its context ends.
+func TestRecordDeliveryGivesUpWhileTheEventLockIsHeld(t *testing.T) {
+	conv, _ := recordTestConversation("turn-1", 4, &listReader{})
+	conv.eventMu.Lock()
+	defer conv.eventMu.Unlock()
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+	defer cancel()
+	sent := make(chan bool, 1)
+	go func() { sent <- conv.emitWithin(ctx, ports.ChatEvent{Kind: ports.ChatEventActivityCompleted}) }()
+	select {
+	case ok := <-sent:
+		if ok {
+			t.Fatal("an event was queued while the lock was held")
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("delivery waited on the event lock past its deadline")
+	}
+}
+
+// blockingReader's first Read waits until released, then returns a record: a
+// read stalled in the store past the turn's last read.
+type blockingReader struct {
+	entered chan struct{}
+	release chan struct{}
+	once    sync.Once
+	updates []RecordedUpdate
+}
+
+func (r *blockingReader) Read(context.Context) ([]RecordedUpdate, error) {
+	first := false
+	r.once.Do(func() { first = true })
+	if !first {
+		return nil, nil
+	}
+	close(r.entered)
+	<-r.release
+	return r.updates, nil
+}
+
+func (*blockingReader) Busy() bool { return false }
+
+// Once the turn's last read returns, nothing of that turn goes out, even from
+// a poll whose read only comes back afterwards.
+func TestNoRecordGoesOutAfterTheLastRead(t *testing.T) {
+	old := subagentRecordDrainFor
+	subagentRecordDrainFor = 50 * time.Millisecond
+	t.Cleanup(func() { subagentRecordDrainFor = old })
+	reader := &blockingReader{entered: make(chan struct{}), release: make(chan struct{}),
+		updates: []RecordedUpdate{said("child", "m1", "Late.")}}
+	conv, follower := recordTestConversation("turn-1", 4, reader)
+	conv.pollSubagentRecords()
+	<-reader.entered
+	conv.drainSubagentRecords()
+	close(reader.release)
+	// Give the stalled poll time to try.
+	time.Sleep(50 * time.Millisecond)
+	if len(conv.events) != 0 {
+		t.Fatalf("%d records went out after the turn's last read", len(conv.events))
+	}
+	follower.readMu <- struct{}{}
+	defer func() { <-follower.readMu }()
+	if len(follower.backlog) != 1 || follower.backlogTurn != "turn-1" {
+		t.Fatalf("the late record must be held for its own turn: %d for %q", len(follower.backlog), follower.backlogTurn)
 	}
 }

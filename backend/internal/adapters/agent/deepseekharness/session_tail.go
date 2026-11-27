@@ -142,11 +142,19 @@ func (t *SessionTail) Next(ctx context.Context) ([]NativeHistoryEvent, error) {
 	if t.failed != nil {
 		return nil, t.failed
 	}
-	events, err := t.next(ctx)
-	if err != nil && !errors.Is(err, context.Canceled) && !errors.Is(err, context.DeadlineExceeded) {
-		t.failed = err
+	for {
+		before := t.offset
+		events, err := t.next(ctx)
+		if err != nil && !errors.Is(err, context.Canceled) && !errors.Is(err, context.DeadlineExceeded) {
+			t.failed = err
+		}
+		// A call that moved the cursor without producing an event (a header-only
+		// frame, with the rest past the decoded budget) has more to read: an empty
+		// result means nothing new, not "stopped early".
+		if err != nil || len(events) > 0 || t.offset == before {
+			return events, err
+		}
 	}
-	return events, err
 }
 
 func (t *SessionTail) next(ctx context.Context) ([]NativeHistoryEvent, error) {

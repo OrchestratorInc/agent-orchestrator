@@ -151,6 +151,13 @@ export function readSubagent(
 		.filter((step) => isHandback(step) && launch.providerItemId !== undefined && step.detail?.parentProviderItemId === launch.providerItemId)
 		.at(-1);
 	const steps = allSteps.filter((step) => step !== handback);
+	// A step the child itself took after its latest report means it is on another
+	// run, which will end in a report of its own. A nested child's steps say nothing
+	// about this one: it can keep working after its parent reported.
+	const sinceReport = handback === undefined
+		? []
+		: allSteps.slice(allSteps.indexOf(handback) + 1).filter((step) => step.detail?.parentProviderItemId === launch.providerItemId);
+	const resumed = sinceReport.length > 0;
 	const result = launchResultText(launch);
 	// A background launch settles as soon as the child starts. DeepSeek's driver says
 	// so in the detail; Claude says it in the result note.
@@ -170,6 +177,20 @@ export function readSubagent(
 		return { ...base, state: "failed", error: firstParagraph(result), endedAt: lastStepAt };
 	}
 	if (launch.status === "cancelled") return { ...base, state: "stopped", endedAt: lastStepAt };
+	// That run is working only while it runs. One that ended with no report leaves
+	// the earlier report out of date.
+	if (resumed) {
+		const running = sinceReport.some((step) => step.status === "running" || step.status === "pending");
+		if (!stopped && (live || running)) return { ...base, state: "working" };
+		return { ...base, state: "unknown", endedAt: lastStepAt };
+	}
+	if (handback?.status === "failed") {
+		const report = stringOf(launchInput(handback).message);
+		return { ...base, state: "failed", error: report && firstParagraph(report), report, endedAt: timeOf(handback.createdAt) };
+	}
+	if (handback?.status === "cancelled") {
+		return { ...base, state: "stopped", report: stringOf(launchInput(handback).message), endedAt: timeOf(handback.createdAt) };
+	}
 	if (handback && handback.status === "completed") {
 		return {
 			...base,

@@ -387,6 +387,25 @@ describe("DeepSeek Harness subagents", () => {
 		expect(subagent.steps.map((s) => s.id)).toEqual(["h1", "s2"]);
 	});
 
+	it("is working on a follow-up run, not done with the earlier report", () => {
+		const subagent = readSubagent(
+			deepseekLaunch("a"),
+			[handback("h1", "tool-a", "First pass.", at(5)), step("s2", "tool-a", { status: "running", createdAt: at(6) })],
+			false,
+		);
+		expect(subagent.state).toBe("working");
+	});
+
+	it("reads a failed run as failed with its reason, and a cancelled one as stopped", () => {
+		const failedEnd = { ...handback("h1", "tool-a", "Background subagent agent-1 failed.\n\nrate limited"), status: "failed" as const };
+		expect(readSubagent(deepseekLaunch("a"), [failedEnd], true)).toMatchObject({
+			state: "failed",
+			error: "Background subagent agent-1 failed.",
+		});
+		const stoppedEnd = { ...handback("h1", "tool-a", "Background subagent agent-1 was stopped."), status: "cancelled" as const };
+		expect(readSubagent(deepseekLaunch("a"), [stoppedEnd], true).state).toBe("stopped");
+	});
+
 	it("has no report, rather than its start note, once the turn ends without one", () => {
 		const subagent = readSubagent(deepseekLaunch("a"), [], false);
 		expect(subagent.state).toBe("unknown");

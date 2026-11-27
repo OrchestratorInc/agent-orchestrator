@@ -133,13 +133,17 @@ type childLog struct {
 	inSeed     bool
 	headerRead bool
 	calls      map[string]nativeReplayCall
-	// runOpen is whether the child is mid-run, and current whether that run
-	// is the current turn's, and so filed.
+	// runOpen is whether the child is mid-run, runAt when that run started, and
+	// run its number among the current turn's runs (0 for an earlier turn's).
 	runOpen bool
-	current bool
-	// closed counts the current turn's runs the child's log has closed that
-	// no end has been paired with yet.
-	closed int
+	runAt   int64
+	run     int
+	// Runs and their ends are numbered in order within the turn, so each end
+	// pairs with its own run: runs counts the turn's runs, ends its ends, closed
+	// holds the runs the child's log has closed and released the last run whose
+	// end went out, so a close that comes after its end timed out is ignored.
+	runs, endCount, released int
+	closed                   map[int]bool
 	// ends are runs whose end the parent recorded, waiting for the child's log
 	// to close their run.
 	ends []pendingEnd
@@ -147,7 +151,15 @@ type childLog struct {
 
 type pendingEnd struct {
 	end   acpdriver.RecordedEnd
+	run   int
 	since time.Time
+}
+
+// current reports whether the child's open run is the current turn's: one that
+// started before the turn's prompt belongs to an earlier turn, even if it was
+// the current one when it started.
+func (r *recordReader) current(child *childLog) bool {
+	return child.runOpen && child.run > 0 && child.runAt >= r.turnAt
 }
 
 func (r *recordReader) Busy() bool {
@@ -155,7 +167,7 @@ func (r *recordReader) Busy() bool {
 		if child.launch == "" {
 			continue
 		}
-		if (child.runOpen && child.current && !child.gone) || len(child.ends) > 0 {
+		if (r.current(child) && !child.gone) || len(child.ends) > 0 {
 			return true
 		}
 	}
@@ -176,9 +188,9 @@ func (r *recordReader) Read(ctx context.Context) ([]acpdriver.RecordedUpdate, er
 		}
 		r.parent = deepseekharness.NewSessionTail(path)
 	}
-	// Take everything new first: a later prompt in it moves the turn's start,
-	// and what came before that prompt is an earlier turn's.
-	var events []deepseekharness.NativeHistoryEvent
+	// Each batch the tail hands over is consumed, so it is applied at once: a
+	// later call that is cancelled loses nothing, and the parent's history is
+	// never held whole.
 	for {
 		batch, err := r.parent.Next(ctx)
 		if err != nil {
@@ -187,15 +199,9 @@ func (r *recordReader) Read(ctx context.Context) ([]acpdriver.RecordedUpdate, er
 		if len(batch) == 0 {
 			break
 		}
-		events = append(events, batch...)
-	}
-	for _, event := range events {
-		if isUserPrompt(event) {
-			r.turnSeq, r.turnAt = event.Seq, event.Time
+		for _, event := range batch {
+			r.parentEvent(event)
 		}
-	}
-	for _, event := range events {
-		r.parentEvent(event)
 	}
 	var out []acpdriver.RecordedUpdate
 	for _, child := range r.order {
@@ -203,8 +209,7 @@ func (r *recordReader) Read(ctx context.Context) ([]acpdriver.RecordedUpdate, er
 			continue
 		}
 		if !child.gone {
-			updates, err := r.readChild(ctx, child)
-			out = append(out, updates...)
+			err := r.readChild(ctx, child, &out)
 			if err != nil {
 				if ctx.Err() != nil {
 					return out, err
@@ -215,9 +220,21 @@ func (r *recordReader) Read(ctx context.Context) ([]acpdriver.RecordedUpdate, er
 				child.runOpen = false
 			}
 		}
-		out = append(out, r.dueEnds(child)...)
+		r.releaseEnds(child, &out)
 	}
 	return out, nil
+}
+
+// startTurn moves the turn's start to a new prompt. What was waiting from the
+// turn before is that turn's: it is never filed on this one.
+func (r *recordReader) startTurn(event deepseekharness.NativeHistoryEvent) {
+	r.turnSeq, r.turnAt = event.Seq, event.Time
+	for _, child := range r.order {
+		child.ends = nil
+		child.runs, child.endCount, child.released = 0, 0, 0
+		child.closed = nil
+		child.run = 0
+	}
 }
 
 // isUserPrompt is a prompt the user sent, which starts a turn of the
@@ -236,6 +253,10 @@ func isUserPrompt(event deepseekharness.NativeHistoryEvent) bool {
 }
 
 func (r *recordReader) parentEvent(event deepseekharness.NativeHistoryEvent) {
+	if isUserPrompt(event) {
+		r.startTurn(event)
+		return
+	}
 	switch event.Type {
 	case "tool/call":
 		var call nativeReplayCall
@@ -305,8 +326,10 @@ func (r *recordReader) parentEvent(event deepseekharness.NativeHistoryEvent) {
 			}
 		}
 		status, report := settledRun(message.Source.StopReason, texts)
+		child.endCount++
 		child.ends = append(child.ends, pendingEnd{
 			end:   acpdriver.RecordedEnd{ID: strconv.FormatInt(event.Seq, 10), Status: status, Report: report},
+			run:   child.endCount,
 			since: r.now(),
 		})
 	}
@@ -330,49 +353,38 @@ func settledRun(stopReason string, texts []string) (acpdriver.RecordedEndStatus,
 	}
 }
 
-// dueEnds releases run ends in order: each once the child's log has closed a
-// run to pair it with, so the run's steps go out before its report, or once it
+// releaseEnds releases run ends in order: each once the child's log has
+// closed its own run, so the run's steps go out before its report, or once it
 // has waited endWaitFor for a log that may never close it (or never appear).
-// A timed-out end leaves the child's state alone: a newer run may be open.
-func (r *recordReader) dueEnds(child *childLog) []acpdriver.RecordedUpdate {
-	var out []acpdriver.RecordedUpdate
+func (r *recordReader) releaseEnds(child *childLog, out *[]acpdriver.RecordedUpdate) {
 	for len(child.ends) > 0 {
 		pending := child.ends[0]
-		switch {
-		case child.closed > 0:
-			child.closed--
-		case r.now().Sub(pending.since) >= endWaitFor:
-		default:
-			return out
+		if !child.closed[pending.run] && r.now().Sub(pending.since) < endWaitFor {
+			return
 		}
+		delete(child.closed, pending.run)
+		child.released = pending.run
 		end := pending.end
-		out = append(out, acpdriver.RecordedUpdate{Launch: child.launch, Child: child.id, End: &end})
+		*out = append(*out, acpdriver.RecordedUpdate{Launch: child.launch, Child: child.id, End: &end})
 		child.ends = child.ends[1:]
 	}
-	return out
 }
 
-func (r *recordReader) readChild(ctx context.Context, child *childLog) ([]acpdriver.RecordedUpdate, error) {
+func (r *recordReader) readChild(ctx context.Context, child *childLog, out *[]acpdriver.RecordedUpdate) error {
 	if child.tail == nil {
 		path, err := deepseekharness.FindSessionLog(r.home, child.id)
 		if errors.Is(err, fs.ErrNotExist) {
-			return nil, nil
+			return nil
 		}
 		if err != nil {
-			return nil, err
+			return err
 		}
 		child.tail = deepseekharness.NewSessionTail(path)
-	}
-	var out []acpdriver.RecordedUpdate
-	emit := func(update acpsdk.SessionUpdate) {
-		if child.runOpen && child.current {
-			out = append(out, acpdriver.RecordedUpdate{Launch: child.launch, Child: child.id, Update: &update})
-		}
 	}
 	for {
 		events, err := child.tail.Next(ctx)
 		if err != nil {
-			return out, err
+			return err
 		}
 		if !child.headerRead {
 			if header, ok := child.tail.Header(); ok {
@@ -381,15 +393,15 @@ func (r *recordReader) readChild(ctx context.Context, child *childLog) ([]acpdri
 			}
 		}
 		if len(events) == 0 {
-			return out, nil
+			return nil
 		}
 		for _, event := range events {
-			child.event(event, r.turnAt, emit)
+			r.childEvent(child, event, out)
 		}
 	}
 }
 
-func (child *childLog) event(event deepseekharness.NativeHistoryEvent, turnAt int64, emit func(acpsdk.SessionUpdate)) {
+func (r *recordReader) childEvent(child *childLog, event deepseekharness.NativeHistoryEvent, out *[]acpdriver.RecordedUpdate) {
 	if child.inSeed {
 		var marker struct {
 			Inherited bool `json:"inherited"`
@@ -399,16 +411,30 @@ func (child *childLog) event(event deepseekharness.NativeHistoryEvent, turnAt in
 		}
 		return
 	}
+	emit := func(update acpsdk.SessionUpdate) {
+		if r.current(child) {
+			*out = append(*out, acpdriver.RecordedUpdate{Launch: child.launch, Child: child.id, Update: &update})
+		}
+	}
 	switch event.Type {
 	case "turn/start":
-		child.runOpen = true
+		child.runOpen, child.runAt, child.run = true, event.Time, 0
 		// A run that started before the turn's prompt is an earlier turn's.
-		child.current = event.Time >= turnAt
+		if event.Time >= r.turnAt {
+			child.runs++
+			child.run = child.runs
+		}
 	case "turn/end":
-		if child.runOpen && child.current {
-			child.closed++
+		if r.current(child) && child.run > child.released {
+			if child.closed == nil {
+				child.closed = map[int]bool{}
+			}
+			child.closed[child.run] = true
 		}
 		child.runOpen = false
+		// The run's report, if the parent has it, goes out before anything of
+		// the next run.
+		r.releaseEnds(child, out)
 	case "tool/call":
 		var call nativeReplayCall
 		if json.Unmarshal(event.Data, &call) != nil || call.CallID == "" {
