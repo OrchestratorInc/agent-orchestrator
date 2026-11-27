@@ -87,8 +87,11 @@ or a file path replaces stdin. At most 50 steps.
 - Output is compact and streams as the batch runs: one line per step, printed
   when that step finishes, plus the output of read steps (`get`,
   `snapshot`, `tabs`, `console`, `errors`, `screenshot`, `status`, `network`,
-  `dialog`) and the full output of the failed step. A failed batch ends with an
-  interactive snapshot so you can recover in your next call. Use
+  `dialog`) and the full output of the failed step. On a remote host every
+  step prints its output, since query commands such as `is visible` or `eval`
+  answer there. A failed batch ends with an
+  interactive snapshot so you can recover in your next call, unless the browser
+  did not respond to the failed step (then it says `Final snapshot skipped`). Use
   `--snapshot always` to also get one after success, `--snapshot never` to skip
   it, `--verbose` for every step's output, and `--json` for structured results
   (printed once, at the end). The summary line comes last, and the exit status

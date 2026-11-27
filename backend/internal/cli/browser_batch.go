@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"os"
 	"reflect"
 	"strconv"
@@ -46,6 +47,9 @@ type browserBatchStepResult struct {
 	Summary    string   `json:"summary,omitempty"`
 	Output     string   `json:"output,omitempty"`
 	Error      string   `json:"error,omitempty"`
+	// remote marks a step forwarded to a remote agent browser, whose query
+	// commands (is, eval, cookies, ...) answer only in their output.
+	remote bool
 }
 
 type browserBatchResult struct {
@@ -56,6 +60,8 @@ type browserBatchResult struct {
 	DurationMS int64                    `json:"durationMs"`
 	Steps      []browserBatchStepResult `json:"steps"`
 	Snapshot   string                   `json:"snapshot,omitempty"`
+	// SnapshotSkipped says why no recovery snapshot was taken after a failure.
+	SnapshotSkipped string `json:"snapshotSkipped,omitempty"`
 }
 
 // browserBatchObservation is what one step's runBrowserAction reported back
@@ -358,7 +364,8 @@ func validateBrowserBatchStep(step []string, checkTree bool) error {
 		return err
 	}
 	if target == tree || target.RunE == nil {
-		return fmt.Errorf("unknown browser command %q", strings.Join(step, " "))
+		// Name only the command word: the rest can hold a typed value.
+		return fmt.Errorf("unknown browser command %q", step[0])
 	}
 	// Check the command Cobra resolved, not only the first word.
 	top := target
@@ -381,6 +388,9 @@ func validateBrowserBatchStep(step []string, checkTree bool) error {
 	if target.Flags().Changed("json") {
 		return errors.New("--json is set on the batch, not on a step")
 	}
+	if top.Name() == "screenshot" && target.Flags().Changed("base64") {
+		return errors.New("screenshot --base64 is not available in a batch; use a screenshot path (screenshot /tmp/page.png)")
+	}
 	positional := target.Flags().Args()
 	if target.Args != nil {
 		if err := target.Args(target, positional); err != nil {
@@ -398,6 +408,18 @@ func validateBrowserBatchStep(step []string, checkTree bool) error {
 	return nil
 }
 
+// browserBatchNoResponse reports whether err means the daemon or remote
+// browser never answered (down, unreachable, or timed out), as opposed to an
+// answer that reported a failure.
+func browserBatchNoResponse(err error) bool {
+	var unavailable daemonUnavailableError
+	var netErr net.Error
+	return errors.Is(err, context.DeadlineExceeded) ||
+		errors.As(err, &unavailable) ||
+		(errors.As(err, &netErr) && netErr.Timeout()) ||
+		strings.Contains(err.Error(), "is unreachable")
+}
+
 // browserBatchIsReadStep reports whether a step only returns page state, in
 // either the desktop syntax or the remote agent-browser syntax (`tab list`).
 func browserBatchIsReadStep(step []string) bool {
@@ -413,8 +435,12 @@ func (c *commandContext) runBrowserBatch(ctx context.Context, steps [][]string, 
 	// An `act` with no match already printed the latest snapshot; a second
 	// copy would only cost tokens.
 	failureHasSnapshot := false
+	// A browser that did not answer the failed step would not answer a
+	// recovery snapshot either; asking only doubles the wait.
+	failureNoResponse := false
+	remote, _, _ := remoteBrowserForward(os.Getenv, []string{"browser", "status"})
 	for i, step := range steps {
-		stepResult := browserBatchStepResult{Index: i + 1, Args: browserBatchReportArgs(step), Status: "skipped"}
+		stepResult := browserBatchStepResult{Index: i + 1, Args: browserBatchReportArgs(step), Status: "skipped", remote: remote != nil}
 		if !result.OK {
 			result.Steps = append(result.Steps, stepResult)
 			if onStep != nil {
@@ -444,6 +470,7 @@ func (c *commandContext) runBrowserBatch(ctx context.Context, steps [][]string, 
 		if stepResult.Status == "failed" {
 			result.OK = false
 			result.FailedStep = i + 1
+			failureNoResponse = err != nil && browserBatchNoResponse(err)
 			for _, observation := range observations {
 				if outcome, _ := observation.result["outcome"].(string); observation.action == "act" && outcome == "no-match" {
 					failureHasSnapshot = true
@@ -457,7 +484,12 @@ func (c *commandContext) runBrowserBatch(ctx context.Context, steps [][]string, 
 			}
 		}
 	}
-	if snapshotMode == "always" || (snapshotMode == "auto" && !result.OK && !failureHasSnapshot) {
+	wantSnapshot := snapshotMode == "always" || (snapshotMode == "auto" && !result.OK && !failureHasSnapshot)
+	if wantSnapshot && failureNoResponse {
+		result.SnapshotSkipped = "the browser did not respond to the failed step"
+		wantSnapshot = false
+	}
+	if wantSnapshot {
 		output, _, err := c.runBrowserBatchStep(ctx, []string{"snapshot", "--interactive"})
 		if err != nil {
 			result.Snapshot = "snapshot unavailable: " + err.Error()
@@ -490,7 +522,8 @@ func (c *commandContext) runBrowserBatchStep(ctx context.Context, step []string)
 	}
 	if remote != nil {
 		deps := c.deps
-		deps.Out, deps.Err = &out, &out
+		// The service's error is returned as well as written to Err; keep one copy.
+		deps.Out, deps.Err = &out, io.Discard
 		err := runRemoteBrowserCommand(ctx, deps, *remote, rest)
 		return out.String(), nil, err
 	}
@@ -570,7 +603,7 @@ func writeBrowserBatchStep(w io.Writer, step browserBatchStepResult, verbose boo
 		fmt.Fprintf(&b, "\n    error: %s", step.Error)
 	}
 	b.WriteString("\n")
-	showOutput := step.Status == "failed" || (step.Status == "ok" && (verbose || browserBatchIsReadStep(step.Args)))
+	showOutput := step.Status == "failed" || (step.Status == "ok" && (verbose || step.remote || browserBatchIsReadStep(step.Args)))
 	if output := strings.TrimRight(step.Output, "\n"); showOutput && output != "" {
 		b.WriteString(output + "\n")
 	}
@@ -584,6 +617,9 @@ func writeBrowserBatchSummary(w io.Writer, result browserBatchResult) error {
 	var b strings.Builder
 	if result.Snapshot != "" {
 		b.WriteString("Final snapshot (interactive):\n" + result.Snapshot + "\n")
+	}
+	if result.SnapshotSkipped != "" {
+		b.WriteString("Final snapshot skipped: " + result.SnapshotSkipped + ".\n")
 	}
 	if result.OK {
 		fmt.Fprintf(&b, "Batch completed: %d/%d steps ok (%d ms).\n", result.Completed, result.Total, result.DurationMS)

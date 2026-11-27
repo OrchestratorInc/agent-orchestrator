@@ -494,8 +494,9 @@ func TestBrowserBatchPrintsRemoteTabList(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if strings.Count(out, "t1 Example https://example.com/") != 1 {
-		t.Fatalf("tab list output should print once, tab new not at all:\n%s", out)
+	// Remote steps print any non-empty output, so both steps show theirs.
+	if strings.Count(out, "t1 Example https://example.com/") != 2 {
+		t.Fatalf("each remote step's output should print once:\n%s", out)
 	}
 }
 
@@ -665,5 +666,77 @@ func TestBrowserBatchEchoEscapesControlCharacters(t *testing.T) {
 	got := browserBatchEcho([]string{"get", "text", "a\nb\x1b"})
 	if strings.ContainsAny(got, "\n\x1b") || !strings.Contains(got, `"a\nb\x1b"`) {
 		t.Fatalf("echo = %q", got)
+	}
+}
+
+// Remote query commands (is, eval, cookies, storage, diff, ...) answer in their
+// output; a bare "ok" would hide whether the answer was true or false.
+func TestBrowserBatchRemotePrintsEveryStepOutput(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body remoteBrowserRequest
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, `{"output":"answer-for-`+body.Args[0]+`\n"}`)
+	}))
+	t.Cleanup(srv.Close)
+	t.Setenv(envAgentBrowserURL, srv.URL)
+	t.Setenv(envAgentBrowserToken, "remote-token")
+	out, _, err := executeCLIRoot(t, Deps{HTTPClient: srv.Client()}, "browser", "batch", "--steps", "is visible @e3\neval document.title\ncookies")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"[1] ok: is visible @e3\nanswer-for-is", "[2] ok: eval document.title\nanswer-for-eval", "[3] ok: cookies\nanswer-for-cookies"} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("missing %q:\n%s", want, out)
+		}
+	}
+}
+
+// A failed remote step shows its error once, not again as output.
+func TestBrowserBatchRemoteErrorPrintedOnce(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, `{"output":"","error":"element e7 not found"}`)
+	}))
+	t.Cleanup(srv.Close)
+	t.Setenv(envAgentBrowserURL, srv.URL)
+	t.Setenv(envAgentBrowserToken, "remote-token")
+	out, _, _ := executeCLIRoot(t, Deps{HTTPClient: srv.Client()}, "browser", "batch", "--snapshot", "never", "--steps", "click e7")
+	if n := strings.Count(out, "element e7 not found"); n != 1 {
+		t.Fatalf("error printed %d times:\n%s", n, out)
+	}
+}
+
+func TestBrowserBatchRejectsScreenshotBase64WithDirectHint(t *testing.T) {
+	server := &batchBrowserServer{}
+	deps := startBatchBrowserServer(t, server)
+	for _, args := range [][]string{
+		{"browser", "batch", "--steps", "screenshot --base64"},
+		{"browser", "--json", "batch", "--steps", "screenshot --base64"},
+	} {
+		_, _, err := executeCLI(t, deps, args...)
+		if ExitCode(err) != 2 || !strings.Contains(err.Error(), "screenshot path") {
+			t.Fatalf("%v: err = %v", args, err)
+		}
+	}
+}
+
+func TestBrowserBatchUnknownCommandNamesOnlyTheCommandWord(t *testing.T) {
+	server := &batchBrowserServer{}
+	deps := startBatchBrowserServer(t, server)
+	_, _, err := executeCLI(t, deps, "browser", "batch", "--steps", "actt Password --action fill --value hunter2")
+	if err == nil || strings.Contains(err.Error(), "hunter2") || !strings.Contains(err.Error(), `"actt"`) {
+		t.Fatalf("err = %v", err)
+	}
+}
+
+// When the browser did not answer, asking it again for a snapshot only doubles
+// the wait before the summary line.
+func TestBrowserBatchSkipsRecoverySnapshotWhenBrowserDidNotRespond(t *testing.T) {
+	t.Setenv(envAgentBrowserURL, "http://127.0.0.1:1")
+	t.Setenv(envAgentBrowserToken, "remote-token")
+	out, _, err := executeCLIRoot(t, Deps{}, "browser", "batch", "--steps", "click e1\nclick e2")
+	if err == nil || !strings.Contains(out, "Final snapshot skipped") || strings.Contains(out, "snapshot unavailable") {
+		t.Fatalf("err=%v out:\n%s", err, out)
 	}
 }
