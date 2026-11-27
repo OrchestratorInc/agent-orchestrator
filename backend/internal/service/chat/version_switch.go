@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
+	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
 // versionSwitchStore records a failed move to a new harness release.
@@ -108,6 +109,23 @@ func (s *Service) takeVersionSwitch(id domain.SessionID) (string, bool) {
 func (s *Service) versionSwitchFailed(ctx context.Context, id domain.SessionID, wakeErr error) bool {
 	version, ok := s.takeVersionSwitch(id)
 	if !ok {
+		// A daemon restart loses the in-memory switch/update maps. The durable
+		// intent still protects queued turns from ordinary wake failure handling.
+		if moves, supported := s.sessions.(ports.SessionVersionMoveStore); supported {
+			pending, err := moves.ListSessionVersionMoves(ctx)
+			if err != nil {
+				s.log.Warn("could not read version recovery intent; keeping queued messages", "session", id, "err", err)
+				return true
+			}
+			for _, move := range pending {
+				if move.SessionID == id {
+					version, ok = move.Version, true
+					break
+				}
+			}
+		}
+	}
+	if !ok {
 		return false
 	}
 	s.observeVersionSwitch(id, version, "failed")
@@ -119,4 +137,11 @@ func (s *Service) versionSwitchFailed(ctx context.Context, id domain.SessionID, 
 		}
 	}
 	return true
+}
+
+func (s *Service) recordVersionMoveStopped(ctx context.Context, id domain.SessionID) error {
+	if moves, ok := s.sessions.(ports.SessionVersionMoveStore); ok {
+		return moves.SetSessionVersionMoveStage(ctx, id, domain.VersionMoveRetry)
+	}
+	return nil
 }

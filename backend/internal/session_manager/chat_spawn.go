@@ -633,6 +633,9 @@ func (m *Manager) resumeChatController(
 		awakeTarget = &target
 	}
 	var completionErr error
+	if err := m.versionMoveStage(ctx, rec.ID, domain.VersionMoveStarting); err != nil {
+		return RestoreResult{}, err
+	}
 	_, err = m.chat.StartChat(ctx, ChatStart{
 		AwakeReconnectTarget:    awakeTarget,
 		ReconnectOnly:           reconnectOnly,

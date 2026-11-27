@@ -1466,6 +1466,7 @@ WHERE session_mode = 'chat' AND is_terminated = 0 AND is_task_preparation = 0
     AND trim(provider_conversation_id) <> ''
     AND stale_binary_since IS NOT NULL AND stale_binary_switch_failed_at IS NULL
     AND stale_binary_launch = controller_generation
+    AND NOT EXISTS (SELECT 1 FROM session_version_moves m WHERE m.session_id = sessions.id)
 `
 
 // Idle Chat sessions whose current launch still runs a replaced release.
@@ -1502,6 +1503,7 @@ WHERE session_mode = 'tui' AND is_terminated = 0 AND is_task_preparation = 0
     AND trim(agent_session_id) <> '' AND trim(runtime_handle_id) <> ''
     AND stale_binary_since IS NOT NULL AND stale_binary_switch_failed_at IS NULL
     AND stale_binary_launch = runtime_launch_id
+    AND NOT EXISTS (SELECT 1 FROM session_version_moves m WHERE m.session_id = sessions.id)
 `
 
 // Idle terminal sessions whose current launch still runs a replaced release

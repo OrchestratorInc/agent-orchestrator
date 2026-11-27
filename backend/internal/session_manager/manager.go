@@ -4055,7 +4055,7 @@ func (m *Manager) ResumeAgentWithMode(ctx context.Context, id domain.SessionID) 
 
 // resumeAgentWithMode preserves strict native-history intent for automatic
 // retries, including update stops that have no stale-binary failure marker.
-func (m *Manager) resumeAgentWithMode(ctx context.Context, id domain.SessionID, requireNativeHistory bool) (result RestoreResult, err error) {
+func (m *Manager) resumeAgentWithMode(ctx context.Context, id domain.SessionID, requireNativeHistory bool, expectedMoves ...domain.SessionVersionMove) (result RestoreResult, err error) {
 	defer func() { m.logRelaunchFailure("resume agent", id, err) }()
 	if err := m.beginAgentResume(ctx, id); err != nil {
 		return RestoreResult{}, fmt.Errorf("resume agent %s: %w", id, err)
@@ -4077,6 +4077,13 @@ func (m *Manager) resumeAgentWithMode(ctx context.Context, id domain.SessionID, 
 	}
 	if !ok {
 		return RestoreResult{}, fmt.Errorf("resume agent %s: %w", id, ErrNotFound)
+	}
+	if len(expectedMoves) > 0 {
+		current, expected := domain.NewSessionVersionMove(rec), expectedMoves[0]
+		if current.Mode != expected.Mode || current.Harness != expected.Harness ||
+			current.NativeID != expected.NativeID || current.SourceLaunch != expected.SourceLaunch {
+			return RestoreResult{}, fmt.Errorf("resume agent %s: version move owner changed: %w", id, ErrResumeInProgress)
+		}
 	}
 	if rec.MovedTo != nil {
 		return RestoreResult{}, fmt.Errorf("resume agent %s: %w", id, ErrSessionMoved)
@@ -4534,6 +4541,11 @@ func (m *Manager) relaunchSessionWithPolicyAndGeneration(ctx context.Context, op
 		Env:           env,
 	}
 	var handle ports.RuntimeHandle
+	// A crash after runtime start but before its generation commits must not
+	// leave a journal entry that authorizes a second automatic replacement.
+	if err := m.versionMoveStage(ctx, rec.ID, domain.VersionMoveStarting); err != nil {
+		return RestoreResult{}, err
+	}
 	if restartHandle == nil {
 		handle, err = m.runtime.Create(ctx, runtimeCfg)
 	} else {
@@ -4553,11 +4565,11 @@ func (m *Manager) relaunchSessionWithPolicyAndGeneration(ctx context.Context, op
 			// during the proof is fenced from the old row, so reconcile it here
 			// or Resume and its automatic retry cannot recover the session.
 			// Probe before destroying, which would make any child read dead.
-			if requireNativeHistory && !forceFresh && rec.StaleBinary != nil && domain.NormalizeSessionMode(rec.Mode) == domain.SessionModeTUI {
+			if requireNativeHistory && !forceFresh && domain.NormalizeSessionMode(rec.Mode) == domain.SessionModeTUI {
 				probe := m.runtime.ProbeFencedRuntime(ctx, ports.FencedRuntimeRef{Handle: handle, SessionID: rec.ID, Generation: launchID})
 				if probe.Liveness == ports.FencedDead {
 					_, preserveErr := m.preserveFailedReconcileRelaunch(ctx, rec)
-					err = errors.Join(err, preserveErr)
+					err = errors.Join(err, preserveErr, m.versionMoveStage(ctx, rec.ID, domain.VersionMoveRetry))
 				}
 			}
 			m.destroySpawnRuntimeAfterFailure(ctx, handle)
@@ -4580,7 +4592,7 @@ func (m *Manager) relaunchSessionWithPolicyAndGeneration(ctx context.Context, op
 			}
 		}
 		if startErr != nil {
-			if rec.StaleBinary != nil && domain.NormalizeSessionMode(rec.Mode) == domain.SessionModeTUI {
+			if domain.NormalizeSessionMode(rec.Mode) == domain.SessionModeTUI {
 				// This replacement has not committed its launch ID, so its exit
 				// hook is correctly fenced from the old row. Reconcile a proven
 				// dead child explicitly: otherwise that row stays idle and Resume
@@ -4589,7 +4601,7 @@ func (m *Manager) relaunchSessionWithPolicyAndGeneration(ctx context.Context, op
 				probe := m.runtime.ProbeFencedRuntime(ctx, ports.FencedRuntimeRef{Handle: handle, SessionID: rec.ID, Generation: launchID})
 				if probe.Liveness == ports.FencedDead {
 					_, preserveErr := m.preserveFailedReconcileRelaunch(ctx, rec)
-					startErr = errors.Join(startErr, preserveErr)
+					startErr = errors.Join(startErr, preserveErr, m.versionMoveStage(ctx, rec.ID, domain.VersionMoveRetry))
 				}
 			}
 			return RestoreResult{}, relaunchFailed("agent start check", fmt.Errorf("%s %s: resumed agent did not start: %w", operation, rec.ID, startErr))
