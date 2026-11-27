@@ -178,7 +178,7 @@ func (s Spec) WithProjectEnv(stored, project map[string]string, caseInsensitive 
 			}
 		}
 	}
-	if stored != nil || s.activeIn(env) {
+	if s.activeIn(env) {
 		for _, name := range s.ClearEnv {
 			env[name] = ""
 		}
