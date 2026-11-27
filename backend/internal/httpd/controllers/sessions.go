@@ -49,6 +49,7 @@ import (
 const (
 	maxPromptLen      = 100 << 10
 	maxMessageLen     = 4096
+	maxTaskKeepLen    = 1000
 	maxModelLen       = 256
 	maxDisplayNameLen = 100
 	maxIdempotencyKey = 128
@@ -2473,6 +2474,15 @@ func (c *SessionsController) send(w http.ResponseWriter, r *http.Request) {
 		envelope.WriteAPIError(w, r, http.StatusBadRequest, "bad_request", "MESSAGE_TOO_LONG", "Message is too long", nil)
 		return
 	}
+	keep := strings.TrimSpace(domain.SanitizeControlChars(in.Keep))
+	if keep != "" && !in.Task {
+		envelope.WriteAPIError(w, r, http.StatusBadRequest, "bad_request", "KEEP_REQUIRES_TASK", "keep requires task", nil)
+		return
+	}
+	if utf8.RuneCountInString(keep) > maxTaskKeepLen {
+		envelope.WriteAPIError(w, r, http.StatusBadRequest, "bad_request", "KEEP_TOO_LONG", "keep must be 1000 characters or fewer", nil)
+		return
+	}
 	var attachment *ports.SpawnAttachment
 	if in.Attachment != nil {
 		decoded, attachErr := decodeAttachment(*in.Attachment, 0)
@@ -2484,13 +2494,15 @@ func (c *SessionsController) send(w http.ResponseWriter, r *http.Request) {
 	}
 	message := domain.SanitizeControlChars(in.Message)
 	var err error
-	if in.UserAuthored || in.SenderSessionID != "" {
+	if in.UserAuthored || in.SenderSessionID != "" || in.Task {
 		sender, ok := c.Svc.(sessionMessageOptionsSender)
 		if !ok {
 			apispec.NotImplemented(w, r, "POST", "/api/v1/sessions/{sessionId}/send")
 			return
 		}
-		err = sender.SendWithOptions(r.Context(), sessionID(r), message, attachment, ports.MessageDeliveryOptions{AuthoredByUser: in.UserAuthored, SenderSessionID: in.SenderSessionID})
+		err = sender.SendWithOptions(r.Context(), sessionID(r), message, attachment, ports.MessageDeliveryOptions{
+			AuthoredByUser: in.UserAuthored, SenderSessionID: in.SenderSessionID, NewTask: in.Task, KeepForTask: keep,
+		})
 	} else {
 		err = c.Svc.Send(r.Context(), sessionID(r), message, attachment)
 	}

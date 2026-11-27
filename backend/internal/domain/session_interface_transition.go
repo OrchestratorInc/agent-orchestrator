@@ -154,6 +154,8 @@ func (t SessionInterfaceTransition) AccountMoveAwaitsTarget() bool {
 type SessionInterfaceTransitionMessage struct {
 	SenderSessionID string    `json:"senderSessionId,omitempty"`
 	AuthoredByUser  bool      `json:"authoredByUser,omitempty"`
+	NewTask         bool      `json:"newTask,omitempty"`
+	KeepForTask     string    `json:"keepForTask,omitempty"`
 	ID              int64     `json:"id"`
 	TransitionID    string    `json:"transitionId"`
 	ClientMessageID string    `json:"clientMessageId"`

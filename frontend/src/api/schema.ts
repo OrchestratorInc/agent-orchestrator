@@ -9150,8 +9150,10 @@ export interface components {
         };
         SendSessionMessageRequest: {
             attachment?: components["schemas"]["AttachmentInput"];
+            keep?: string;
             message: string;
             senderSessionId?: string;
+            task?: boolean;
             userAuthored?: boolean;
         };
         SendSessionMessageResponse: {

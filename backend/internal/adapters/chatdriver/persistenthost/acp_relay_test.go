@@ -145,6 +145,33 @@ func TestACPRelayTracksActiveCompactionPrompt(t *testing.T) {
 	}
 }
 
+// A compaction steered by instructions is still a compaction, so a daemon that
+// reattaches mid-way neither steers into it nor settles it as an ordinary turn.
+// Other prompts, including a different command that starts the same way, are not.
+func TestACPRelayRecognisesCompactionWithInstructions(t *testing.T) {
+	tests := []struct {
+		text string
+		want bool
+	}{
+		{"/compact", true},
+		{"  /compact  ", true},
+		{"/compact Keep the loader.\nDrop tool output.", true},
+		{"/compact\tkeep the branch name", true},
+		{"/compactify", false},
+		{"please /compact", false},
+		{"summarize the conversation", false},
+	}
+	for _, tt := range tests {
+		params, err := json.Marshal(map[string]any{"prompt": []map[string]string{{"type": "text", "text": tt.text}}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := isCompactionPrompt(params); got != tt.want {
+			t.Errorf("isCompactionPrompt(%q) = %v, want %v", tt.text, got, tt.want)
+		}
+	}
+}
+
 func TestACPRelayGivesReplayedProviderRequestStableIdentity(t *testing.T) {
 	relay := newTestACPRelay(t)
 	frame := []byte(`{"jsonrpc":"2.0","id":"permission-7","method":"session/request_permission","params":{"sessionId":"s","options":[]}}` + "\n")

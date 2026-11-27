@@ -639,3 +639,68 @@ func TestSendCarriesCooperativeSessionIdentity(t *testing.T) {
 		})
 	}
 }
+
+// An orchestrator hands a worker its next task with --task and says what the
+// task needs with --keep; both reach the daemon beside the message.
+func TestSend_TaskAndKeepReachTheRequest(t *testing.T) {
+	t.Setenv("AO_SESSION_ID", "orch-1")
+	cfg := setConfigEnv(t)
+	srv, capture := sendServer(t, http.StatusOK, `{"ok":true,"sessionId":"demo-1","message":"x"}`)
+	writeRunFileFor(t, cfg, srv)
+
+	_, errOut, err := executeCLI(t, Deps{ProcessAlive: func(int) bool { return true }},
+		"send", "--session", "demo-1", "--task", "--keep", "  the loader and the test command ", "--message", "Phase 7")
+	if err != nil {
+		t.Fatalf("unexpected error: %v\nstderr=%s", err, errOut)
+	}
+	var req struct {
+		Message         string `json:"message"`
+		SenderSessionID string `json:"senderSessionId"`
+		Task            bool   `json:"task"`
+		Keep            string `json:"keep"`
+	}
+	if err := json.Unmarshal([]byte(capture.body), &req); err != nil {
+		t.Fatalf("decode body %q: %v", capture.body, err)
+	}
+	if !req.Task || req.Keep != "the loader and the test command" || req.SenderSessionID != "orch-1" || req.Message != "[from orch-1] Phase 7" {
+		t.Fatalf("request = %+v", req)
+	}
+}
+
+// A plain send carries neither field, so it is a note that never compacts.
+func TestSend_WithoutTaskOmitsTaskFields(t *testing.T) {
+	t.Setenv("AO_SESSION_ID", "orch-1")
+	cfg := setConfigEnv(t)
+	srv, capture := sendServer(t, http.StatusOK, `{"ok":true,"sessionId":"demo-1","message":"x"}`)
+	writeRunFileFor(t, cfg, srv)
+
+	if _, errOut, err := executeCLI(t, Deps{ProcessAlive: func(int) bool { return true }},
+		"send", "--session", "demo-1", "--message", "FYI"); err != nil {
+		t.Fatalf("unexpected error: %v\nstderr=%s", err, errOut)
+	}
+	if strings.Contains(capture.body, `"task"`) || strings.Contains(capture.body, `"keep"`) {
+		t.Fatalf("plain send body carries task fields: %s", capture.body)
+	}
+}
+
+func TestSend_TaskFlagUsageErrors(t *testing.T) {
+	tests := []struct {
+		name string
+		args []string
+		want string
+	}{
+		{"keep without task", []string{"--keep", "x"}, "--keep requires --task"},
+		{"task with steer", []string{"--task", "--steer"}, "--task cannot be combined with --steer"},
+		{"keep too long", []string{"--task", "--keep", strings.Repeat("k", maxSendKeepLen+1)}, "--keep must be 1000 characters or fewer"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			setConfigEnv(t)
+			args := append([]string{"send", "--session", "demo-1", "--message", "hi"}, tt.args...)
+			_, _, err := executeCLI(t, Deps{}, args...)
+			if err == nil || ExitCode(err) != 2 || !strings.Contains(err.Error(), tt.want) {
+				t.Fatalf("err = %v (exit %d), want usage error containing %q", err, ExitCode(err), tt.want)
+			}
+		})
+	}
+}

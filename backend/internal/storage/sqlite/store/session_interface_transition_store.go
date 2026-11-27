@@ -469,6 +469,7 @@ func (s *Store) EnqueueSessionInterfaceTransitionMessage(
 	return s.inTxDB(ctx, "queue interface transition message", func(q *gen.Queries, db gen.DBTX) error {
 		if err := q.EnqueueSessionInterfaceTransitionMessage(ctx, gen.EnqueueSessionInterfaceTransitionMessageParams{
 			SenderSessionID: opts.SenderSessionID, AuthoredByUser: opts.AuthoredByUser,
+			NewTask: boolInt(opts.NewTask), KeepForTask: opts.KeepForTask,
 			TransitionID: transitionID, ClientMessageID: clientMessageID, Message: message, CreatedAt: now,
 		}); err != nil {
 			return err
@@ -498,6 +499,7 @@ func (s *Store) ListPendingSessionInterfaceTransitionMessages(
 		out = append(out, domain.SessionInterfaceTransitionMessage{
 			ID: row.ID, TransitionID: row.TransitionID,
 			SenderSessionID: row.SenderSessionID, AuthoredByUser: row.AuthoredByUser,
+			NewTask: row.NewTask != 0, KeepForTask: row.KeepForTask,
 			ClientMessageID: row.ClientMessageID, Message: row.Message,
 			CreatedAt: row.CreatedAt, DeliveredAt: nullTimeToTime(row.DeliveredAt),
 		})

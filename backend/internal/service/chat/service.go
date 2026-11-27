@@ -3250,6 +3250,7 @@ func (s *Service) relayChatTurn(
 		Text: text, ClientMessageID: clientMessageID,
 		SenderSessionID: options.SenderSessionID, InteractionAt: options.InteractionAt,
 		Origin: domain.MessageOriginAutomation, AuthoredByUser: options.AuthoredByUser,
+		NewTask: options.NewTask, KeepForTask: options.KeepForTask,
 	})
 	// A relay never wakes a sleeping session inline: it queues and wakes in the
 	// background, as a user's send does. Waking here would hold the caller

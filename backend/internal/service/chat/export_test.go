@@ -56,3 +56,16 @@ func (c *Controller) SetPreTaskCompactionDeadline(d time.Duration) {
 	c.preTaskDeadline = d
 	c.mu.Unlock()
 }
+
+// PreTaskCompactionInstructions builds the instructions for tasks with these
+// texts and keep hints, paired by index.
+func PreTaskCompactionInstructions(texts, keeps []string) string {
+	tasks := make([]preTaskBrief, len(texts))
+	for i, text := range texts {
+		tasks[i].text = text
+		if i < len(keeps) {
+			tasks[i].keep = keeps[i]
+		}
+	}
+	return preTaskCompactionInstructions(tasks)
+}

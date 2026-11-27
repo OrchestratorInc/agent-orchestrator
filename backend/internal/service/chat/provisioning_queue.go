@@ -97,6 +97,8 @@ func (s *Service) queueWithoutController(
 		SenderSessionID:     msg.SenderSessionID,
 		SenderProjectID:     msg.SenderProjectID,
 		SenderDisplayName:   msg.SenderDisplayName,
+		NewTask:             msg.NewTask,
+		KeepForTask:         msg.KeepForTask,
 		AuthoredByUser:      msg.AuthoredByUser,
 		SpawnOpeningPrompt:  msg.SpawnOpeningPrompt,
 		Continuation:        msg.Continuation,

@@ -380,6 +380,8 @@ type ConversationMessage struct {
 	SenderDisplayName   string
 	Continuation        int64
 	AuthoredByUser      int64
+	NewTask             int64
+	KeepForTask         string
 }
 
 type ConversationMessagesFt struct {
@@ -953,6 +955,8 @@ type SessionInterfaceTransitionMessage struct {
 	ClientMessageID string
 	SenderSessionID string
 	AuthoredByUser  bool
+	NewTask         int64
+	KeepForTask     string
 }
 
 type SessionNumFloor struct {

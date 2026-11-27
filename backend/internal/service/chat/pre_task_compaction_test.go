@@ -3,8 +3,11 @@ package chat_test
 import (
 	"context"
 	"errors"
+	"strings"
+	"sync"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
@@ -34,8 +37,72 @@ func reportContext(t *testing.T, h *harness, conv *fakeConversation, used int64)
 	})
 }
 
+// orchestratorTask is a new task from the orchestrator (`ao send --task`).
 func orchestratorTask(text string) ports.ChatUserMessage {
+	return ports.ChatUserMessage{Text: text, SenderSessionID: preTaskOrchestrator, Origin: domain.MessageOriginAutomation, NewTask: true}
+}
+
+// orchestratorNote is an orchestrator's message sent without --task.
+func orchestratorNote(text string) ports.ChatUserMessage {
 	return ports.ChatUserMessage{Text: text, SenderSessionID: preTaskOrchestrator, Origin: domain.MessageOriginAutomation}
+}
+
+// guidedCompactingConversation is a provider that also takes instructions for
+// what a compaction keeps, as Claude Code's /compact does.
+type guidedCompactingConversation struct {
+	*compactingConversation
+
+	guidedMu     sync.Mutex
+	instructions []string
+}
+
+func newGuidedCompactingConversation() *guidedCompactingConversation {
+	return &guidedCompactingConversation{compactingConversation: newCompactingConversation()}
+}
+
+func (c *guidedCompactingConversation) CompactWithInstructions(ctx context.Context, instructions string) (ports.ChatCompactionResult, error) {
+	c.guidedMu.Lock()
+	c.instructions = append(c.instructions, instructions)
+	c.guidedMu.Unlock()
+	return c.Compact(ctx)
+}
+
+// guidedInstructions returns the instructions of each guided compaction.
+func (c *guidedCompactingConversation) guidedInstructions() []string {
+	c.guidedMu.Lock()
+	defer c.guidedMu.Unlock()
+	return append([]string(nil), c.instructions...)
+}
+
+// onlyInstructions returns the instructions of the one compaction there was,
+// failing when it was not guided.
+func (c *guidedCompactingConversation) onlyInstructions(t *testing.T) string {
+	t.Helper()
+	got := c.guidedInstructions()
+	if c.compactCalls() != 1 || len(got) != 1 {
+		t.Fatalf("compactions = %d, guided = %d, want one guided compaction", c.compactCalls(), len(got))
+	}
+	return got[0]
+}
+
+func assertContains(t *testing.T, label, got string, want ...string) {
+	t.Helper()
+	for _, w := range want {
+		if !strings.Contains(got, w) {
+			t.Fatalf("%s does not contain %q:\n%s", label, w, got)
+		}
+	}
+}
+
+func awaitCompactCalls(t *testing.T, conv *compactingConversation, n int) {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for conv.compactCalls() < n && time.Now().Before(deadline) {
+		time.Sleep(10 * time.Millisecond)
+	}
+	if conv.compactCalls() != n {
+		t.Fatalf("compactions = %d, want %d", conv.compactCalls(), n)
+	}
 }
 
 // awaitProviderTexts waits until the provider has received want, in order.
@@ -60,9 +127,9 @@ func awaitProviderTexts(t *testing.T, conv *fakeConversation, want ...string) {
 	t.Fatalf("provider messages = %v, want %v", conv.sentTexts(), want)
 }
 
-func newPreTaskHarness(t *testing.T, threshold int64) (*harness, *compactingConversation) {
+func newPreTaskHarness(t *testing.T, threshold int64) (*harness, *guidedCompactingConversation) {
 	t.Helper()
-	conv := newCompactingConversation()
+	conv := newGuidedCompactingConversation()
 	h := newHarnessWithConversation(t, conv)
 	h.ctrl.SetPreTaskCompactionPolicy(orchestratorTasksOver(threshold))
 	return h, conv
@@ -89,11 +156,64 @@ func TestPreTaskCompactionCompactsBeforeAnOrchestratorTask(t *testing.T) {
 	if got := conv.sentTexts(); len(got) != 0 {
 		t.Fatalf("task reached the provider before the compaction settled: %v", got)
 	}
+	assertContains(t, "compaction instructions", conv.onlyInstructions(t), "<task>\nnext task\n</task>")
 
 	conv.emit(ports.ChatEvent{Kind: ports.ChatEventTurnCompleted, ProviderTurnID: "compact-turn", TurnState: domain.TurnStateCompleted})
 	awaitProviderTexts(t, conv.fakeConversation, "next task")
 	if conv.compactCalls() != 1 {
 		t.Fatalf("compactions = %d, want exactly 1", conv.compactCalls())
+	}
+}
+
+// After a compaction a worker re-read files and re-ran tests to rediscover its
+// earlier work: the A/B behind #9124 measured 75% more calls per phase. The
+// orchestrator's --keep hint reaches the compaction, so the summary keeps what
+// the task builds on, and the hint never reaches the agent as message text.
+func TestPreTaskCompactionTellsTheCompactionWhatTheTaskNeeds(t *testing.T) {
+	h, conv := newPreTaskHarness(t, 300_000)
+	ctx := context.Background()
+	reportContext(t, h, conv.fakeConversation, 463_550)
+
+	task := orchestratorTask("Phase 7: a boss level")
+	task.KeepForTask = "the level data format and the test command"
+	if _, err := h.svc.Send(ctx, testSession, task); err != nil {
+		t.Fatalf("Send: %v", err)
+	}
+	assertContains(t, "compaction instructions", conv.onlyInstructions(t),
+		"Phase 7: a boss level", "the level data format and the test command", "re-running commands")
+
+	conv.emit(ports.ChatEvent{Kind: ports.ChatEventTurnCompleted, ProviderTurnID: "compact-turn", TurnState: domain.TurnStateCompleted})
+	awaitProviderTexts(t, conv.fakeConversation, "Phase 7: a boss level")
+}
+
+// A provider that cannot take instructions, such as Codex, still compacts
+// before a new task, plainly.
+func TestPreTaskCompactionWithoutInstructionSupportCompactsPlainly(t *testing.T) {
+	conv := newCompactingConversation()
+	h := newHarnessWithConversation(t, conv)
+	h.ctrl.SetPreTaskCompactionPolicy(orchestratorTasksOver(300_000))
+	reportContext(t, h, conv.fakeConversation, 463_550)
+
+	task := orchestratorTask("next task")
+	task.KeepForTask = "the loader"
+	if _, err := h.svc.Send(context.Background(), testSession, task); err != nil {
+		t.Fatalf("Send: %v", err)
+	}
+	if conv.compactCalls() != 1 {
+		t.Fatalf("compactions = %d, want 1", conv.compactCalls())
+	}
+	conv.emit(ports.ChatEvent{Kind: ports.ChatEventTurnCompleted, ProviderTurnID: "compact-turn", TurnState: domain.TurnStateCompleted})
+	awaitProviderTexts(t, conv.fakeConversation, "next task")
+}
+
+// The user's own Compact carries no instructions: nothing told it what comes next.
+func TestManualCompactionSendsNoInstructions(t *testing.T) {
+	h, conv := newPreTaskHarness(t, 300_000)
+	if _, err := h.svc.Compact(context.Background(), testSession); err != nil {
+		t.Fatalf("Compact: %v", err)
+	}
+	if conv.compactCalls() != 1 || len(conv.guidedInstructions()) != 0 {
+		t.Fatalf("compactions = %d, guided = %v, want one plain compaction", conv.compactCalls(), conv.guidedInstructions())
 	}
 }
 
@@ -148,7 +268,10 @@ func TestPreTaskCompactionBeforeAQueuedTask(t *testing.T) {
 	awaitProviderTexts(t, conv.fakeConversation, "current work")
 	reportContext(t, h, conv.fakeConversation, 463_550)
 
-	turn, err := h.svc.Send(ctx, testSession, orchestratorTask("next task"))
+	// The task waits as a durable queue row; its hint is read back from there.
+	task := orchestratorTask("next task")
+	task.KeepForTask = "the branch name"
+	turn, err := h.svc.Send(ctx, testSession, task)
 	if err != nil || turn.State != domain.TurnStateQueued {
 		t.Fatalf("Send while busy = %+v, %v", turn, err)
 	}
@@ -157,16 +280,11 @@ func TestPreTaskCompactionBeforeAQueuedTask(t *testing.T) {
 	}
 
 	conv.emit(ports.ChatEvent{Kind: ports.ChatEventTurnCompleted, ProviderTurnID: "provider-turn-1", TurnState: domain.TurnStateCompleted})
-	deadline := time.Now().Add(5 * time.Second)
-	for conv.compactCalls() == 0 && time.Now().Before(deadline) {
-		time.Sleep(10 * time.Millisecond)
-	}
-	if conv.compactCalls() != 1 {
-		t.Fatalf("compactions = %d, want 1 once the running turn ended", conv.compactCalls())
-	}
+	awaitCompactCalls(t, conv.compactingConversation, 1)
 	if got := conv.sentTexts(); len(got) != 1 {
 		t.Fatalf("queued task dispatched before its compaction settled: %v", got)
 	}
+	assertContains(t, "compaction instructions", conv.onlyInstructions(t), "next task", "the branch name")
 
 	conv.emit(ports.ChatEvent{Kind: ports.ChatEventTurnCompleted, ProviderTurnID: "compact-turn", TurnState: domain.TurnStateCompleted})
 	awaitProviderTexts(t, conv.fakeConversation, "current work", "next task")
@@ -180,6 +298,7 @@ func TestPreTaskCompactionLeavesOtherTurnsAlone(t *testing.T) {
 		msg     ports.ChatUserMessage
 	}{
 		{"under the threshold", 120_000, orchestratorTask("small task")},
+		{"an orchestrator note, not a new task", 463_550, orchestratorNote("FYI: CI is green")},
 		{"a human message", 463_550, ports.ChatUserMessage{Text: "from a person", Origin: domain.MessageOriginHuman}},
 		{"another sender", 463_550, ports.ChatUserMessage{Text: "from a worker", SenderSessionID: "worker-2", Origin: domain.MessageOriginAutomation}},
 	}
@@ -369,27 +488,66 @@ func TestPreTaskCompactionChecksTheWholeBatch(t *testing.T) {
 	reportContext(t, h, conv.fakeConversation, 463_550)
 
 	notice := ports.ChatUserMessage{Text: "CI failed on your PR", Origin: domain.MessageOriginAutomation}
-	for _, msg := range []ports.ChatUserMessage{notice, orchestratorTask("next task")} {
+	first, second := orchestratorTask("task A"), orchestratorTask("task B")
+	first.KeepForTask, second.KeepForTask = "keep A", "keep B"
+	for _, msg := range []ports.ChatUserMessage{notice, orchestratorNote("note"), first, second} {
 		if turn, err := h.svc.Send(ctx, testSession, msg); err != nil || turn.State != domain.TurnStateQueued {
 			t.Fatalf("Send %q while busy = %+v, %v", msg.Text, turn, err)
 		}
 	}
 
 	conv.emit(ports.ChatEvent{Kind: ports.ChatEventTurnCompleted, ProviderTurnID: "provider-turn-1", TurnState: domain.TurnStateCompleted})
-	deadline := time.Now().Add(5 * time.Second)
-	for conv.compactCalls() == 0 && time.Now().Before(deadline) {
-		time.Sleep(10 * time.Millisecond)
-	}
-	if conv.compactCalls() != 1 {
-		t.Fatalf("compactions = %d, want 1 for a batch holding an orchestrator task", conv.compactCalls())
-	}
+	awaitCompactCalls(t, conv.compactingConversation, 1)
 	if got := conv.sentTexts(); len(got) != 1 {
 		t.Fatalf("batch dispatched before its compaction settled: %v", got)
+	}
+	// One compaction prepares for every task in the batch, and only for tasks.
+	instructions := conv.onlyInstructions(t)
+	assertContains(t, "compaction instructions", instructions, "these new tasks", "task A", "task B", "keep A; keep B")
+	if strings.Contains(instructions, "CI failed") || strings.Contains(instructions, "note") {
+		t.Fatalf("instructions quote a turn that is not a task:\n%s", instructions)
 	}
 
 	conv.emit(ports.ChatEvent{Kind: ports.ChatEventTurnCompleted, ProviderTurnID: "compact-turn", TurnState: domain.TurnStateCompleted})
 	awaitSentCount(t, conv.fakeConversation, 2)
 	if conv.compactCalls() != 1 {
 		t.Fatalf("compactions = %d, want exactly 1", conv.compactCalls())
+	}
+}
+
+// A batch of orchestrator notes, with no new task in it, drains without a
+// compaction however large the context is.
+func TestPreTaskCompactionLeavesABatchWithoutATask(t *testing.T) {
+	h, conv := newPreTaskHarness(t, 300_000)
+	ctx := context.Background()
+	if _, err := h.svc.Send(ctx, testSession, ports.ChatUserMessage{Text: "current work", Origin: domain.MessageOriginHuman}); err != nil {
+		t.Fatalf("Send: %v", err)
+	}
+	awaitProviderTexts(t, conv.fakeConversation, "current work")
+	reportContext(t, h, conv.fakeConversation, 463_550)
+	if turn, err := h.svc.Send(ctx, testSession, orchestratorNote("small follow-up, not a new phase")); err != nil || turn.State != domain.TurnStateQueued {
+		t.Fatalf("Send while busy = %+v, %v", turn, err)
+	}
+
+	conv.emit(ports.ChatEvent{Kind: ports.ChatEventTurnCompleted, ProviderTurnID: "provider-turn-1", TurnState: domain.TurnStateCompleted})
+	awaitSentCount(t, conv.fakeConversation, 2)
+	if conv.compactCalls() != 0 {
+		t.Fatalf("compactions = %d, want 0 for a note", conv.compactCalls())
+	}
+}
+
+// The instructions quote a bounded amount of task text, however many tasks a
+// batch joins, and mark the cut.
+func TestPreTaskCompactionInstructionsAreBounded(t *testing.T) {
+	long := strings.Repeat("x", 5000)
+	got := chatsvc.PreTaskCompactionInstructions([]string{long, long}, []string{strings.Repeat("k", 1500), strings.Repeat("k", 1500)})
+	if n := utf8.RuneCountInString(got); n > 9000 {
+		t.Fatalf("instructions are %d runes, want them bounded", n)
+	}
+	if strings.Count(got, "[cut]") != 2 {
+		t.Fatalf("instructions do not mark both cuts:\n%.200s", got)
+	}
+	if chatsvc.PreTaskCompactionInstructions(nil, nil) != "" {
+		t.Fatal("instructions for no task are not empty")
 	}
 }

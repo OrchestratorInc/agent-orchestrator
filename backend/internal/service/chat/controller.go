@@ -1697,7 +1697,7 @@ func (c *Controller) sendLocked(
 	shouldQueue := queueWhenBusy && (c.busy() || queuedAhead)
 	// An orchestrator's task for a worker over the project's context threshold
 	// waits, queued, behind a compaction started once its row is recorded.
-	compactFirst := queueWhenBusy && !shouldQueue && c.wantsPreTaskCompaction(ctx, turnID, msg.SenderSessionID)
+	compactFirst := queueWhenBusy && !shouldQueue && c.wantsPreTaskCompaction(ctx, turnID, msg.SenderSessionID, msg.NewTask)
 	if compactFirst {
 		shouldQueue = true
 	}
@@ -1733,6 +1733,8 @@ func (c *Controller) sendLocked(
 		SenderSessionID:     msg.SenderSessionID,
 		SenderProjectID:     msg.SenderProjectID,
 		SenderDisplayName:   msg.SenderDisplayName,
+		NewTask:             msg.NewTask,
+		KeepForTask:         msg.KeepForTask,
 		AuthoredByUser:      msg.AuthoredByUser,
 		SpawnOpeningPrompt:  msg.SpawnOpeningPrompt,
 		Continuation:        msg.Continuation,
@@ -1772,7 +1774,8 @@ func (c *Controller) sendLocked(
 			State:              domain.TurnStateQueued,
 			RequestedAt:        now,
 		}
-		if compactFirst && c.startPreTaskCompaction(ctx, turnID) {
+		if compactFirst && c.startPreTaskCompaction(ctx, turnID,
+			preTaskCompactionInstructions([]preTaskBrief{{text: msg.Text, keep: msg.KeepForTask}})) {
 			// The compaction's settlement drains this turn.
 			return queuedTurn, nil
 		}
@@ -2833,7 +2836,7 @@ func (c *Controller) Compact(ctx context.Context) (ports.ChatCompactionResult, e
 
 	c.sendMu.Lock()
 	defer c.sendMu.Unlock()
-	return c.compactLocked(ctx)
+	return c.compactLocked(ctx, "")
 }
 
 // compactor returns the conversation's compaction surface when the provider both
@@ -2846,8 +2849,9 @@ func (c *Controller) compactor() (ports.ChatCompactor, bool) {
 	return compactor, true
 }
 
-// compactLocked is Compact with sendMu already held.
-func (c *Controller) compactLocked(ctx context.Context) (ports.ChatCompactionResult, error) {
+// compactLocked is Compact with sendMu already held. Non-empty instructions
+// steer the summary on a provider that takes them; any other compacts plainly.
+func (c *Controller) compactLocked(ctx context.Context, instructions string) (ports.ChatCompactionResult, error) {
 	compactor, ok := c.compactor()
 	if !ok {
 		return ports.ChatCompactionResult{}, ErrCompactionUnsupported
@@ -2862,7 +2866,13 @@ func (c *Controller) compactLocked(ctx context.Context) (ports.ChatCompactionRes
 	c.mu.Lock()
 	c.compactionPending = true
 	c.mu.Unlock()
-	result, err := compactor.Compact(ctx)
+	var result ports.ChatCompactionResult
+	var err error
+	if guided, ok := compactor.(ports.ChatGuidedCompactor); ok && instructions != "" {
+		result, err = guided.CompactWithInstructions(ctx, instructions)
+	} else {
+		result, err = compactor.Compact(ctx)
+	}
 	if err != nil {
 		c.mu.Lock()
 		c.compactionPending = false

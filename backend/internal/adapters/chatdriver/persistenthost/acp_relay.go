@@ -11,6 +11,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode"
+	"unicode/utf8"
 )
 
 const (
@@ -947,9 +949,20 @@ func isCompactionPrompt(params json.RawMessage) bool {
 		return false
 	}
 	for _, block := range req.Prompt {
-		if block.Type == "text" && strings.TrimSpace(block.Text) == "/compact" {
+		if block.Type == "text" && isCompactCommand(block.Text) {
 			return true
 		}
 	}
 	return false
+}
+
+// isCompactCommand reports "/compact", alone or followed by instructions for
+// what the summary keeps.
+func isCompactCommand(text string) bool {
+	rest, ok := strings.CutPrefix(strings.TrimSpace(text), "/compact")
+	if !ok || rest == "" {
+		return ok
+	}
+	next, _ := utf8.DecodeRuneInString(rest)
+	return unicode.IsSpace(next)
 }
