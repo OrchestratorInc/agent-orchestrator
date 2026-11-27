@@ -148,6 +148,13 @@ vi.mock("../hooks/useSessionRename", async (importOriginal) => {
 });
 vi.mock("../lib/cloud-session", () => ({ useCloudSession: () => cloudSessionState }));
 vi.mock("../hooks/useCloudGate", () => ({ useCloudGate: () => cloudGateState }));
+// Moving a Cloud session here needs its creator and a Cloud that can push its branch.
+const cloudMove = vi.hoisted(() => ({ features: ["session.branch"] as string[] }));
+vi.mock("../hooks/useCloudMeUserId", () => ({ useCloudMeUserId: () => "user-me" }));
+vi.mock("../hooks/useCloudOffering", async (importOriginal) => {
+	const actual = await importOriginal<typeof import("../hooks/useCloudOffering")>();
+	return { ...actual, useCloudOffering: (...args: Parameters<typeof actual.useCloudOffering>) => ({ ...actual.useCloudOffering(...args), features: cloudMove.features }) };
+});
 // Local (dev-only) cloud sign-in is off in these tests; mock it like its cloud
 // siblings so the sign-in row never fires a real settings fetch.
 vi.mock("../hooks/useCloudLocalAuth", () => ({
@@ -565,6 +572,7 @@ beforeEach(() => {
 	cloudSessionState.signOut.mockReset().mockResolvedValue(undefined);
 	useUiStore.setState({
 		developerMode: false,
+		newDesktopUi: false,
 		isCommandPaletteOpen: false,
 		newTaskRequest: null,
 		settingsModal: null,
@@ -1697,8 +1705,18 @@ describe("Sidebar", () => {
 			"opacity-100",
 			"focus-visible-in-session-row:opacity-0",
 		);
+		// Without Interface v2 a project's rows keep their plain indent.
 		expect(openSession).toHaveClass("pl-1.5");
 		expect(openSession.closest("li")).toHaveClass("pl-0.5");
+		expect(openSession.closest(".sidebar-tree")).toBeNull();
+		// Under Interface v2 they sit in its tree: the rail fills the indent and the
+		// pill starts after the arm, with the indent still pressable.
+		act(() => useUiStore.setState({ developerMode: true, newDesktopUi: true }));
+		const treeSession = screen.getByLabelText("Open fix login");
+		expect(treeSession).toHaveClass("pl-0.5", "before:w-(--tree-indent)");
+		expect(treeSession.closest("li")).toHaveClass("sidebar-tree-item");
+		expect(treeSession.closest(".sidebar-tree")).not.toHaveAttribute("data-tree-more");
+		act(() => useUiStore.setState({ newDesktopUi: false }));
 	});
 
 	it("keeps session status and actions stable when an action receives keyboard focus", async () => {
@@ -1887,6 +1905,37 @@ describe("Sidebar", () => {
 		cleanup();
 		renderSidebar({ workspaces: [{ ...workspace, kind: "cloud", cloudOrgId: "org-mine", sessions: [{ ...session, cloud: { orgId: "org-mine" } }] }], expandedProjectIds: ["proj-1"] });
 		expect(screen.getByRole("button", { name: "Archive session" })).toBeTruthy();
+	});
+
+	it("offers to move the owner's Cloud session to this computer, and not a guest's", async () => {
+		const own: WorkspaceSummary = { ...workspace, kind: "cloud", cloudOrgId: "org-mine", sessions: [{ ...session, cloud: { orgId: "org-mine", createdByUserId: "user-me" } }] };
+		renderSidebar({ workspaces: [own], expandedProjectIds: ["proj-1"] });
+		fireEvent.contextMenu(screen.getByRole("button", { name: "Open fix login" }));
+		expect(await screen.findByRole("menuitem", { name: "Move to this computer…" })).toBeTruthy();
+		expect(screen.queryByRole("menuitem", { name: "Move to Orchestrator Cloud…" })).toBeNull();
+		cleanup();
+		// A teammate's session in the same organization is theirs to move.
+		const teammates: WorkspaceSummary = { ...own, sessions: [{ ...session, cloud: { orgId: "org-mine", createdByUserId: "user-other" } }] };
+		renderSidebar({ workspaces: [teammates], expandedProjectIds: ["proj-1"] });
+		fireEvent.contextMenu(screen.getByRole("button", { name: "Open fix login" }));
+		expect((await screen.findAllByRole("menuitem")).length).toBeGreaterThan(0);
+		expect(screen.queryByRole("menuitem", { name: "Move to this computer…" })).toBeNull();
+		cleanup();
+		// A Cloud that cannot push a session's branch cannot move it out.
+		cloudMove.features = [];
+		try {
+			renderSidebar({ workspaces: [own], expandedProjectIds: ["proj-1"] });
+			fireEvent.contextMenu(screen.getByRole("button", { name: "Open fix login" }));
+			expect((await screen.findAllByRole("menuitem")).length).toBeGreaterThan(0);
+			expect(screen.queryByRole("menuitem", { name: "Move to this computer…" })).toBeNull();
+		} finally {
+			cloudMove.features = ["session.branch"];
+		}
+		cleanup();
+		const shared: WorkspaceSummary = { ...workspace, kind: "cloud", cloudOrgId: "org-elsewhere", shared: {}, sessions: [{ ...session, cloud: { orgId: "org-elsewhere", shared: true } }] };
+		renderSidebar({ workspaces: [shared], expandedProjectIds: ["proj-1"] });
+		fireEvent.contextMenu(screen.getByRole("button", { name: "Open fix login" }));
+		expect(screen.queryByRole("menuitem", { name: "Move to this computer…" })).toBeNull();
 	});
 
 	it("keeps the owner's project actions on a project of their own", () => {
@@ -2798,6 +2847,7 @@ describe("Sidebar", () => {
 
 	it("starts the same inline rename from the session context menu", async () => {
 		const user = userEvent.setup();
+		useUiStore.setState({ developerMode: true, newDesktopUi: true });
 		renderSidebar({ workspaces: [{ ...workspace, sessions: [session] }] });
 
 		fireEvent.contextMenu(screen.getByRole("button", { name: "Open fix login" }));
@@ -2805,20 +2855,47 @@ describe("Sidebar", () => {
 		const menu = renameItem.closest('[role="menu"]');
 		if (!menu) throw new Error("Session context menu not found");
 		await within(menu as HTMLElement).findByRole("menuitem", { name: "Open in" });
-		expect(within(menu as HTMLElement).getAllByRole("menuitem").map((item) => item.textContent)).toEqual([
-			"Open in",
-			"Copy path",
-			"Rename",
-			"Pin session",
-			"Fork session",
-			"Archive session",
+		// Each row's label, without its key hint; the hint is the row's letter.
+		const label = (item: Element) =>
+			[...item.childNodes].filter((node) => !(node instanceof Element && node.matches('[data-slot="menu-shortcut"]'))).map((node) => node.textContent).join("");
+		expect(within(menu as HTMLElement).getAllByRole("menuitem").map((item) => [label(item), item.getAttribute("aria-keyshortcuts")])).toEqual([
+			["Open in", null],
+			["Copy path", "C"],
+			["Rename", "R"],
+			["Pin session", "P"],
+			["Fork session", "F"],
+			["Move to Orchestrator Cloud…", null],
+			["Archive session", "A"],
 		]);
-		expect(renameItem).toHaveTextContent(/^Rename$/);
+		expect(label(renameItem)).toBe("Rename");
 		expect(renameItem.querySelector("svg")).toBeInTheDocument();
 		await user.click(renameItem);
 
 		expect(screen.getByRole("textbox", { name: "Rename fix login" })).toHaveFocus();
 		expect(navigateMock).not.toHaveBeenCalled();
+	});
+
+	it("shows no letter keys on menu rows without Interface v2", async () => {
+		renderSidebar({ workspaces: [{ ...workspace, sessions: [session] }] });
+
+		fireEvent.contextMenu(screen.getByRole("button", { name: "Open fix login" }));
+		const rename = await screen.findByRole("menuitem", { name: "Rename fix login" });
+		expect(rename).not.toHaveAttribute("aria-keyshortcuts");
+		expect(rename.closest('[role="menu"]')?.querySelector("[data-menu-accelerator]")).toBeNull();
+	});
+
+	it("runs a session menu row from its letter while the menu is open", async () => {
+		const user = userEvent.setup();
+		useUiStore.setState({ developerMode: true, newDesktopUi: true });
+		renderSidebar({ workspaces: [{ ...workspace, sessions: [session] }] });
+
+		fireEvent.contextMenu(screen.getByRole("button", { name: "Open fix login" }));
+		const menu = (await screen.findByRole("menuitem", { name: "Rename fix login" })).closest('[role="menu"]') as HTMLElement;
+		await waitFor(() => expect(menu).toContainElement(document.activeElement as HTMLElement));
+		await user.keyboard("r");
+
+		expect(await screen.findByRole("textbox", { name: "Rename fix login" })).toBeInTheDocument();
+		expect(screen.queryByRole("menu")).not.toBeInTheDocument();
 	});
 
 	it("lists every open target in the editor row's submenu", async () => {
@@ -3024,6 +3101,13 @@ describe("Sidebar", () => {
 		const list = screen.getByTestId("session-list-proj-1");
 		expect(within(list).getByText("Agent 6")).toBeInTheDocument();
 		expect(screen.queryByText("Agent 7")).not.toBeInTheDocument();
+		expect(screen.getByRole("button", { name: "Show 3 more agents" })).toBeInTheDocument();
+		expect(list.closest(".sidebar-tree")).toBeNull();
+		// Under Interface v2, Show more is the tree's last leaf, so the rail's elbow ends on it.
+		act(() => useUiStore.setState({ developerMode: true, newDesktopUi: true }));
+		expect(list.closest(".sidebar-tree")).toHaveAttribute("data-tree-more", "");
+		expect(screen.getByRole("button", { name: "Show 3 more agents" }).closest(".sidebar-tree-item")).toHaveAttribute("data-tree-more", "");
+		act(() => useUiStore.setState({ newDesktopUi: false }));
 
 		await user.click(screen.getByRole("button", { name: "Show 3 more agents" }));
 
@@ -3354,11 +3438,12 @@ describe("Sidebar", () => {
 		const marker = (title: string) =>
 			screen.getByLabelText(`Open ${title}`).querySelector<SVGElement | HTMLElement>("[data-session-status]");
 
-		expect(marker("input task")).toHaveAttribute("data-session-marker", "attention");
-		expect(marker("input task")).toHaveClass("text-destructive");
+		expect(marker("input task")).toHaveAttribute("data-session-marker", "input");
+		expect(marker("input task")).toHaveClass("icon-question-mark", "text-status-in-review");
+		expect(marker("input task")).not.toHaveClass("text-destructive");
 		expect(marker("input task")).not.toHaveClass("rounded-full");
 		expect(marker("ci task")).toHaveAttribute("data-session-marker", "attention");
-		expect(marker("ci task")).toHaveClass("text-destructive");
+		expect(marker("ci task")).toHaveClass("icon-circle-alert", "text-destructive");
 	});
 
 	it("gives Scratchpad rows the same status icons and age as project rows", () => {
@@ -3381,7 +3466,7 @@ describe("Sidebar", () => {
 
 		expect(dot("idle chat")).toHaveAttribute("data-session-idle", "idle");
 		expect(dot("working chat")).toHaveAttribute("data-session-spinner");
-		expect(dot("input chat")).toHaveAttribute("data-session-marker", "attention");
+		expect(dot("input chat")).toHaveAttribute("data-session-marker", "input");
 		expect(row("idle chat").closest("[data-session-row]")?.querySelector("[data-session-message-age]")).toBeInTheDocument();
 		expect(document.querySelector("[data-scratchpad-section] img")).toBeNull();
 	});
@@ -3403,13 +3488,13 @@ describe("Sidebar", () => {
 		expect(document.querySelector("[data-project-folder-icon] .icon-folder")).toBeInTheDocument();
 	});
 
-	it("replaces the folder with a warning when a collapsed project needs attention", () => {
+	it("replaces the folder with a question mark when a collapsed project waits on the user", () => {
 		useUiStore.setState({ projectAvatars: false });
 		renderSidebar({
 			expandedProjectIds: [],
 			workspaces: [{ ...workspace, sessions: [{ ...session, status: "needs_input" }] }],
 		});
-		expect(document.querySelector('[data-project-folder-icon] [data-project-marker="attention"]')).toHaveClass("icon-circle-alert", "text-destructive");
+		expect(document.querySelector('[data-project-folder-icon] [data-project-marker="input"]')).toHaveClass("icon-question-mark", "text-status-in-review");
 		expect(document.querySelector("[data-project-folder-icon] .icon-folder")).not.toBeInTheDocument();
 	});
 
@@ -3434,7 +3519,7 @@ describe("Sidebar", () => {
 		expect(dot("read task")).not.toHaveClass("bg-muted-foreground/60");
 	});
 
-	it("badges a collapsed project's icon like the orchestrator button: attention, then working, then an unread finished turn", () => {
+	it("badges a collapsed project's icon like the orchestrator button: a question, then working, then an unread finished turn", () => {
 		useUiStore.setState({ projectAvatars: false });
 		useSessionReadStore.setState({ baseline: 0, readAt: {} });
 		const idle = { state: "idle", lastActivityAt: "2026-06-30T00:00:00Z" } as const;
@@ -3457,8 +3542,8 @@ describe("Sidebar", () => {
 
 		cleanup();
 		renderSidebar({ expandedProjectIds: [], workspaces: [{ ...workspace, sessions: [unread, working, input] }] });
-		expect(projectMarker()).toHaveAttribute("data-project-marker", "attention");
-		expect(projectMarker()).toHaveClass("icon-circle-alert", "text-destructive");
+		expect(projectMarker()).toHaveAttribute("data-project-marker", "input");
+		expect(projectMarker()).toHaveClass("icon-question-mark", "text-status-in-review");
 	});
 
 	it("keeps the open session read while its project is collapsed", () => {
@@ -4126,8 +4211,8 @@ describe("Sidebar", () => {
 			],
 		});
 
-		const pinnedList = screen.getByTestId("pinned-session-list");
-		const row = within(pinnedList).getByLabelText("Open pinned task").closest<HTMLElement>("[data-session-row]")!;
+		const projectList = screen.getByTestId("session-list-proj-1");
+		const row = within(projectList).getByLabelText("Open pinned task").closest<HTMLElement>("[data-session-row]")!;
 		await confirmArchiveFromRow(row);
 
 		await waitFor(() =>
@@ -4165,8 +4250,9 @@ describe("Sidebar", () => {
 			],
 		});
 
-		const pinnedList = screen.getByTestId("pinned-session-list");
-		const row = within(pinnedList).getByLabelText("Open Fix the flake").closest<HTMLElement>("[data-session-row]")!;
+		const sessionsList = screen.getByTestId(`session-list-${STANDALONE_WORKSPACE_ID}`);
+		// The Sessions list badges Cloud agents in their label.
+		const row = within(sessionsList).getByLabelText("Open Fix the flake · Cloud").closest<HTMLElement>("[data-session-row]")!;
 		await confirmArchiveFromRow(row);
 
 		await waitFor(() => expect(navigateMock).toHaveBeenCalledWith({ to: "/" }));
@@ -4189,15 +4275,18 @@ describe("Sidebar", () => {
 				{ ...workspace, hostId: "box-b", sessions: [{ ...pinned, hostId: "box-b" }] },
 			],
 		});
-		const list = screen.getByTestId("pinned-session-list");
-		const hostA = within(list).getByText("Host A").closest<HTMLElement>("[data-session-row]")!;
-		const hostB = within(list).getByText("Host B").closest<HTMLElement>("[data-session-row]")!;
-		const local = within(list).getByRole("button", { name: "Open shared task" });
-		expect(within(hostA).getByRole("button", { name: "Open shared task · Host A" })).not.toHaveAttribute("aria-current");
-		expect(within(hostB).getByRole("button", { name: "Open shared task · Host B" })).toHaveAttribute("aria-current", "page");
-		fireEvent.click(within(hostA).getByRole("button", { name: "Open shared task · Host A" }));
+		// Each copy is listed once, at the top of its own host's project.
+		const local = within(screen.getByTestId("session-list-proj-1")).getByRole("button", { name: "Open shared task" });
+		const hostA = within(screen.getByTestId(`session-list-${sessionUiKey("proj-1", "box-a")}`)).getByRole("button", { name: "Open shared task" });
+		const hostB = within(screen.getByTestId(`session-list-${sessionUiKey("proj-1", "box-b")}`)).getByRole("button", { name: "Open shared task" });
+		expect(screen.getAllByRole("button", { name: "Open shared task" })).toHaveLength(3);
+		expect(screen.queryByTestId("pinned-session-list")).not.toBeInTheDocument();
+		expect(local).not.toHaveAttribute("aria-current");
+		expect(hostA).not.toHaveAttribute("aria-current");
+		expect(hostB).toHaveAttribute("aria-current", "page");
+		fireEvent.click(hostA);
 		expect(navigateMock).toHaveBeenLastCalledWith({ to: "/host/$hostId/project/$projectId/session/$sessionId", params: { hostId: "box-a", projectId: "proj-1", sessionId: "shared" } });
-		fireEvent.click(within(hostB).getByRole("button", { name: "Open shared task · Host B" }));
+		fireEvent.click(hostB);
 		expect(navigateMock).toHaveBeenLastCalledWith({ to: "/host/$hostId/project/$projectId/session/$sessionId", params: { hostId: "box-b", projectId: "proj-1", sessionId: "shared" } });
 		fireEvent.click(local);
 		expect(navigateMock).toHaveBeenLastCalledWith({ to: "/projects/$projectId/sessions/$sessionId", params: { projectId: "proj-1", sessionId: "shared" } });
@@ -4219,8 +4308,8 @@ describe("Sidebar", () => {
 			],
 		});
 
-		const pinnedList = screen.getByTestId("pinned-session-list");
-		const row = within(pinnedList).getByLabelText("Open oldest pinned task").closest<HTMLElement>("[data-session-row]")!;
+		const projectList = screen.getByTestId("session-list-proj-1");
+		const row = within(projectList).getByLabelText("Open oldest pinned task").closest<HTMLElement>("[data-session-row]")!;
 		await confirmArchiveFromRow(row);
 
 		await waitFor(() =>
@@ -4232,7 +4321,8 @@ describe("Sidebar", () => {
 		await waitFor(() =>
 			expect(navigateMock).toHaveBeenCalledWith({
 				to: "/projects/$projectId/sessions/$sessionId",
-				params: { projectId: "proj-1", sessionId: "proj-1-2" },
+				// The pin leads the list, so the row below it is the neighbour.
+				params: { projectId: "proj-1", sessionId: "proj-1-3" },
 			}),
 		);
 	});
@@ -5069,10 +5159,12 @@ describe("Memoized Sidebar with unchanged props", () => {
 		const savedHostIds = ["box-a"];
 		const noLocalWorkspaces: WorkspaceSummary[] = [];
 		const pinnedAt = "2026-11-01T00:00:00Z";
-		// The host's own project row may list the same session; look only in Pinned.
+		// A pinned remote row lives in its host project's own list, at the top.
 		const pinnedRow = () => {
-			const list = screen.queryByTestId("pinned-session-list");
-			return list ? within(list).queryByRole("button", { name: "Open remote task · Box A" }) : null;
+			const list = screen.queryByTestId(`session-list-${sessionUiKey("remote-project", "box-a")}`);
+			const row = list?.querySelector<HTMLElement>("[data-session-row]");
+			if (!row || !within(row).queryByRole("button", { name: "Open remote task" })) return null;
+			return within(row).queryByRole("button", { name: "Unpin session" });
 		};
 
 		// The shell's wiring: a saved, offline host's cached lists go through
@@ -5123,5 +5215,238 @@ describe("Memoized Sidebar with unchanged props", () => {
 			}
 			expect(pinnedRow()).toBeInTheDocument();
 		});
+	});
+});
+
+describe("Sidebar pins in their home group", () => {
+	const noop = () => vi.fn().mockResolvedValue(undefined);
+	const worker = (id: string, title: string, minute: number, pinnedMinute?: number, projectId = workspace.id): WorkspaceSession => ({
+		...session,
+		id,
+		title,
+		workspaceId: projectId,
+		updatedAt: `2026-06-30T00:${String(minute).padStart(2, "0")}:00Z`,
+		lastUserMessageAt: `2026-06-30T00:${String(minute).padStart(2, "0")}:00Z`,
+		...(pinnedMinute === undefined ? {} : { isPinned: true, pinnedAt: `2026-06-30T01:${String(pinnedMinute).padStart(2, "0")}:00Z` }),
+	});
+	const project = (id: string, name: string, sessions: WorkspaceSession[]): WorkspaceSummary => ({
+		...workspace,
+		id,
+		name,
+		path: `/repo/${id}`,
+		sessions: sessions.map((item) => ({ ...item, workspaceId: id, workspaceName: name })),
+	});
+	const scratchpad = (sessions: WorkspaceSession[]): WorkspaceSummary => ({
+		id: STANDALONE_WORKSPACE_ID,
+		name: "Sessions",
+		kind: STANDALONE_PROJECT_KIND,
+		path: "",
+		sessions: sessions.map((item) => ({ ...item, workspaceId: STANDALONE_WORKSPACE_ID, workspaceName: "Sessions" })),
+	});
+	const titlesIn = (testId: string) =>
+		Array.from(
+			screen.getByTestId(testId).querySelectorAll<HTMLElement>("[data-session-row] button[aria-label^='Open ']"),
+			(node) => node.getAttribute("aria-label")?.replace(/^Open /, ""),
+		);
+
+	function mount(workspaces: WorkspaceSummary[], expandedProjectIds: string[], remote?: { hosts: RemoteHost[]; workspaces: WorkspaceSummary[] }) {
+		window.localStorage.setItem("ao.sidebar.expanded-projects", JSON.stringify(expandedProjectIds));
+		const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+		const tree = (current: WorkspaceSummary[]) => (
+			<QueryClientProvider client={client}>
+				<TooltipProvider>
+					<SidebarProvider>
+						<Sidebar
+							workspaces={current}
+							remoteHosts={remote?.hosts}
+							remoteWorkspaces={remote?.workspaces}
+							onCloneProject={noop()}
+							onCreateProject={noop()}
+							onInitializeProject={noop()}
+							onRemoveProject={noop()}
+							onCreateRemoteProject={noop()}
+							onInitializeRemoteProject={noop()}
+						/>
+					</SidebarProvider>
+				</TooltipProvider>
+			</QueryClientProvider>
+		);
+		const view = render(tree(workspaces));
+		return { rerender: (next: WorkspaceSummary[]) => view.rerender(tree(next)), unmount: view.unmount };
+	}
+
+	async function settle() {
+		await act(async () => {
+			await new Promise((resolve) => setTimeout(resolve, 50));
+		});
+	}
+
+	it("lists each pin once, at the top of its own project or Sessions, newest pin first, with no Pinned section", () => {
+		mount([
+			scratchpad([worker("adhoc-1", "loose note", 9), worker("adhoc-2", "pinned note", 1, 5)]),
+			project("alpha", "Alpha", [
+				worker("a-1", "alpha recent", 8),
+				worker("a-2", "alpha old pin", 2, 1),
+				worker("a-3", "alpha new pin", 3, 4),
+				worker("a-4", "alpha older", 4),
+			]),
+			project("bravo", "Bravo", [worker("b-1", "bravo recent", 7), worker("b-2", "bravo pin", 1, 2)]),
+		], ["alpha", "bravo"]);
+
+		expect(screen.queryByTestId("pinned-session-list")).not.toBeInTheDocument();
+		expect(screen.queryByText("Pinned", { exact: true })).not.toBeInTheDocument();
+		expect(titlesIn(`session-list-${STANDALONE_WORKSPACE_ID}`)).toEqual(["pinned note", "loose note"]);
+		expect(titlesIn("session-list-alpha")).toEqual(["alpha new pin", "alpha old pin", "alpha recent", "alpha older"]);
+		expect(titlesIn("session-list-bravo")).toEqual(["bravo pin", "bravo recent"]);
+		for (const title of ["pinned note", "alpha new pin", "alpha old pin", "bravo pin"]) {
+			expect(screen.getAllByRole("button", { name: `Open ${title}` })).toHaveLength(1);
+		}
+	});
+
+	it("ignores a drop across the pin boundary and still commits one within the unpinned rows", () => {
+		mount([project("alpha", "Alpha", [
+			worker("a-1", "alpha recent", 8),
+			worker("a-2", "alpha pin", 2, 1),
+			worker("a-3", "alpha older", 4),
+		])], ["alpha"]);
+		const drop = (active: string, over: string) => act(() => dragEnds.get("sidebar-sessions-alpha")?.({ active: { id: active }, over: { id: over } }));
+
+		drop("a-3", "a-2");
+		expect(titlesIn("session-list-alpha")).toEqual(["alpha pin", "alpha recent", "alpha older"]);
+		drop("a-2", "a-3");
+		expect(titlesIn("session-list-alpha")).toEqual(["alpha pin", "alpha recent", "alpha older"]);
+		drop("a-3", "a-1");
+		expect(titlesIn("session-list-alpha")).toEqual(["alpha pin", "alpha older", "alpha recent"]);
+	});
+
+	it("puts a session pinned after a drag on top of the older pins", () => {
+		const before = [worker("a-1", "alpha recent", 8), worker("a-2", "alpha pin", 2, 1), worker("a-3", "alpha older", 4)];
+		const view = mount([project("alpha", "Alpha", before)], ["alpha"]);
+		act(() => dragEnds.get("sidebar-sessions-alpha")?.({ active: { id: "a-3" }, over: { id: "a-1" } }));
+		expect(titlesIn("session-list-alpha")).toEqual(["alpha pin", "alpha older", "alpha recent"]);
+
+		// Pinning the last row makes it the newest pin, so it leads, whatever
+		// slot the drag gave it while it was unpinned.
+		view.rerender([project("alpha", "Alpha", [before[0], before[1], worker("a-3", "alpha older", 4, 9)])]);
+		expect(titlesIn("session-list-alpha")).toEqual(["alpha older", "alpha pin", "alpha recent"]);
+	});
+
+	it("sorts a session unpinned and pinned again after a drag by its new pin time", () => {
+		const plain = worker("r-1", "plain", 9);
+		const view = mount([project("alpha", "Alpha", [worker("p-a", "pin a", 1, 1), worker("p-b", "pin b", 2, 2), plain])], ["alpha"]);
+		// Drag "pin a" above "pin b": the saved pinned order is [a, b].
+		act(() => dragEnds.get("sidebar-sessions-alpha")?.({ active: { id: "p-a" }, over: { id: "p-b" } }));
+		expect(titlesIn("session-list-alpha")).toEqual(["pin a", "pin b", "plain"]);
+
+		view.rerender([project("alpha", "Alpha", [worker("p-a", "pin a", 1, 1), worker("p-b", "pin b", 2), plain])]);
+		expect(titlesIn("session-list-alpha")).toEqual(["pin a", "pin b", "plain"]);
+		view.rerender([project("alpha", "Alpha", [worker("p-a", "pin a", 1, 1), worker("p-b", "pin b", 2, 9), plain])]);
+		expect(titlesIn("session-list-alpha")).toEqual(["pin b", "pin a", "plain"]);
+	});
+
+	it("opens a collapsed remote project to reveal a session opened on that host", async () => {
+		const hosts: RemoteHost[] = [{ hostId: "box-a", label: "Host A", url: "http://box-a:3011", status: "connected" }];
+		const remoteProject = (): WorkspaceSummary => {
+			const base = project("rproj", "Remote Project", [worker("r-1", "remote plain", 9), worker("r-2", "remote pin", 1, 1)]);
+			return { ...base, hostId: "box-a", sessions: base.sessions.map((item) => ({ ...item, hostId: "box-a" })) };
+		};
+		const view = mount([], [], { hosts, workspaces: [remoteProject()] });
+		fireEvent.click(screen.getByLabelText("Toggle Remote Project · Host A sessions"));
+		expect(screen.getByLabelText("Toggle Remote Project · Host A sessions")).toHaveAttribute("aria-expanded", "false");
+		expect(screen.queryByRole("button", { name: /^Open remote pin/ })).not.toBeInTheDocument();
+
+		mockParams.hostId = "box-a";
+		mockParams.projectId = "rproj";
+		mockParams.sessionId = "r-2";
+		view.rerender([]);
+		await settle();
+		expect(screen.getByLabelText("Toggle Remote Project · Host A sessions")).toHaveAttribute("aria-expanded", "true");
+		expect(titlesIn(`session-list-${sessionUiKey("rproj", "box-a")}`).map((title) => title?.split(" · ")[0])).toEqual(["remote pin", "remote plain"]);
+	});
+
+	it("keeps every pin listed past the session cutoff and counts only the rest behind Show more", () => {
+		const pins = Array.from({ length: 8 }, (_, index) => worker(`p-${index}`, `pin ${index}`, index, index));
+		const rest = Array.from({ length: 3 }, (_, index) => worker(`r-${index}`, `rest ${index}`, 30 + index));
+		const loosePins = Array.from({ length: 6 }, (_, index) => worker(`sp-${index}`, `loose pin ${index}`, index, index));
+		mount([scratchpad([...loosePins, worker("sr-0", "loose rest", 40)]), project("alpha", "Alpha", [...rest, ...pins])], ["alpha"]);
+
+		expect(titlesIn("session-list-alpha")).toEqual(["pin 7", "pin 6", "pin 5", "pin 4", "pin 3", "pin 2", "pin 1", "pin 0"]);
+		expect(screen.getByRole("button", { name: "Show 3 more agents" })).toBeInTheDocument();
+		expect(titlesIn(`session-list-${STANDALONE_WORKSPACE_ID}`)).toEqual(["loose pin 5", "loose pin 4", "loose pin 3", "loose pin 2", "loose pin 1", "loose pin 0"]);
+		expect(screen.getByRole("button", { name: "Show 1 more agents" })).toBeInTheDocument();
+	});
+
+	it("keeps a project that holds a pin listed past the project cutoff", () => {
+		const projects = Array.from({ length: 12 }, (_, index) => project(`proj-${index}`, `Project ${index}`, [worker(`s-${index}`, `task ${index}`, index)]));
+		projects[10] = project("proj-10", "Project 10", [worker("s-10", "task 10", 10, 1)]);
+		mount(projects, projects.map(({ id }) => id));
+
+		expect(screen.getByRole("button", { name: "Open task 10" })).toBeInTheDocument();
+		expect(screen.queryByRole("button", { name: "Open task 11" })).not.toBeInTheDocument();
+		expect(screen.getByRole("button", { name: "Show 1 more projects" })).toBeInTheDocument();
+	});
+
+	it("shows nothing under a collapsed project, pins included, and expands it to reveal an opened pin", async () => {
+		const projects = [project("proj-1", "Project One", [worker("proj-1-1", "plain task", 9), worker("proj-1-2", "pinned task", 1, 1)])];
+		const view = mount(projects, []);
+		expect(screen.getByLabelText("Toggle Project One sessions")).toHaveAttribute("aria-expanded", "false");
+		expect(screen.queryByTestId("session-list-proj-1")).not.toBeInTheDocument();
+		expect(screen.queryByRole("button", { name: "Open pinned task" })).not.toBeInTheDocument();
+
+		// Reaching the pin another way (keyboard, Cmd+K) reveals it like any session.
+		mockParams.projectId = "proj-1";
+		mockParams.sessionId = "proj-1-2";
+		view.rerender(projects);
+		await settle();
+		expect(screen.getByLabelText("Toggle Project One sessions")).toHaveAttribute("aria-expanded", "true");
+		expect(titlesIn("session-list-proj-1")).toEqual(["pinned task", "plain task"]);
+	});
+
+	it("still expands a collapsed project to reveal an unpinned session it opens", async () => {
+		const projects = [project("proj-1", "Project One", [worker("proj-1-1", "plain task", 9), worker("proj-1-2", "pinned task", 1, 1)])];
+		const view = mount(projects, []);
+		mockParams.projectId = "proj-1";
+		mockParams.sessionId = "proj-1-1";
+		view.rerender(projects);
+		await settle();
+		expect(screen.getByLabelText("Toggle Project One sessions")).toHaveAttribute("aria-expanded", "true");
+		expect(titlesIn("session-list-proj-1")).toEqual(["pinned task", "plain task"]);
+	});
+
+	it("moves a session out of the pinned top when it is unpinned, and back when pinned again", () => {
+		const pinned = [worker("proj-1-1", "recent task", 9), worker("proj-1-2", "old task", 1, 1)];
+		const view = mount([project("proj-1", "Project One", pinned)], ["proj-1"]);
+		expect(titlesIn("session-list-proj-1")).toEqual(["old task", "recent task"]);
+
+		view.rerender([project("proj-1", "Project One", [pinned[0], { ...pinned[1], isPinned: false, pinnedAt: undefined }])]);
+		expect(titlesIn("session-list-proj-1")).toEqual(["recent task", "old task"]);
+
+		view.rerender([project("proj-1", "Project One", pinned)]);
+		expect(titlesIn("session-list-proj-1")).toEqual(["old task", "recent task"]);
+	});
+
+	it("marks a pinned row with a resting pin in place of its time, in the hover bar's unpin slot", () => {
+		mount([project("proj-1", "Project One", [worker("proj-1-1", "plain task", 9), worker("proj-1-2", "pinned task", 1, 1)])], ["proj-1"]);
+		const rowOf = (title: string) => screen.getByRole("button", { name: `Open ${title}` }).closest<HTMLElement>("[data-session-row]")!;
+		const pinnedRow = rowOf("pinned task");
+		const plainRow = rowOf("plain task");
+
+		expect(pinnedRow.querySelector("[data-session-pin-mark]")).toBeInTheDocument();
+		expect(pinnedRow.querySelector("[data-session-message-age]")).not.toBeInTheDocument();
+		expect(plainRow.querySelector("[data-session-pin-mark]")).not.toBeInTheDocument();
+		expect(plainRow.querySelector("[data-session-message-age]")).toBeInTheDocument();
+
+		// The pin keeps the last slot on a pinned row, so hover does not move it.
+		const actionLabels = (row: HTMLElement) =>
+			Array.from(row.querySelectorAll("[data-session-action-buttons] button"), (button) => button.getAttribute("aria-label"));
+		expect(actionLabels(pinnedRow)).toEqual(["Archive session", "Unpin session"]);
+		expect(actionLabels(plainRow)).toEqual(["Pin session", "Archive session"]);
+	});
+
+	it("shows nothing in a closed Sessions section, pins included", () => {
+		window.localStorage.setItem("ao.sidebar.sections", JSON.stringify({ scratchpad: false }));
+		mount([scratchpad([worker("adhoc-1", "loose note", 9), worker("adhoc-2", "pinned note", 1, 1)])], []);
+		expect(screen.queryByTestId(`session-list-${STANDALONE_WORKSPACE_ID}`)).not.toBeInTheDocument();
+		expect(screen.queryByRole("button", { name: "Open pinned note" })).not.toBeInTheDocument();
 	});
 });

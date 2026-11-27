@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-vi.mock("./bridge", () => ({ aoBridge: { telemetry: {} } }));
+const telemetry = vi.hoisted(() => ({ launchSteps: undefined as undefined | (() => Promise<unknown>) }));
+vi.mock("./bridge", () => ({ aoBridge: { telemetry } }));
 
 let visibility: DocumentVisibilityState = "hidden";
 
@@ -19,6 +20,7 @@ describe("launch timings", () => {
 
 	beforeEach(() => {
 		localStorage.clear();
+		telemetry.launchSteps = undefined;
 		// Main creates the window hidden, so the page starts hidden.
 		visibility = "hidden";
 		vi.spyOn(document, "visibilityState", "get").mockImplementation(() => visibility);
@@ -37,6 +39,33 @@ describe("launch timings", () => {
 		const properties = await launch.launchProperties(start, "1.2.3");
 		expect(properties?.launch_kind).toBe("cold");
 		expect(properties?.to_usable_ms).toBeGreaterThanOrEqual(1_200);
+	});
+
+	it("reports the first run on a data directory with main's launch steps", async () => {
+		telemetry.launchSteps = async () => ({ appReadyMs: 300, windowShownMs: 2_500, serverSpawnMs: 900, serverReadyMs: 18_000, serverReused: false });
+		const launch = await loadLaunchTelemetry();
+		setVisibility("visible");
+		launch.markLaunchUsable();
+
+		expect(await launch.launchProperties({ ...start, firstRun: true }, "1.2.3")).toMatchObject({
+			launch_kind: "first",
+			to_app_ready_ms: 300,
+			to_window_shown_ms: 2_500,
+			to_server_spawn_ms: 900,
+			to_server_ready_ms: 18_000,
+			server_reused: false,
+		});
+	});
+
+	it("sends no main launch steps for a warm launch", async () => {
+		telemetry.launchSteps = async () => ({ appReadyMs: 300, serverReadyMs: 1_000, serverReused: true });
+		const launch = await loadLaunchTelemetry();
+		setVisibility("visible");
+		launch.markLaunchUsable();
+
+		const properties = await launch.launchProperties({ kind: "warm", startedAtMs: start.startedAtMs }, "1.2.3");
+		expect(properties?.launch_kind).toBe("warm");
+		expect(properties).not.toHaveProperty("to_server_ready_ms");
 	});
 
 	it("sends no timings when the window is hidden after it was shown", async () => {

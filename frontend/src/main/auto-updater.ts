@@ -88,6 +88,10 @@ let updaterLoggerWired = false;
 // electron-updater defaults this flag to false on macOS. Override it before
 // any renderer or settings hydration can race an update operation.
 if (process.platform === "darwin") autoUpdater.disableDifferentialDownload = true;
+// The AppImage differential downloader needs blockMapSize in the feed, which
+// scripts/feed.mjs deliberately never publishes, so every Linux attempt fails
+// with a NaN RangeError before falling back to a full download. Skip it.
+if (process.platform === "linux") autoUpdater.disableDifferentialDownload = true;
 
 export function applyUpdaterPolicy(
   settings: UpdateSettings,

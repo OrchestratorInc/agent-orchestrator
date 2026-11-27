@@ -38,7 +38,7 @@ const HOST_ID = "https://h-vm.useao.dev";
 const HOST_PROXY = "http://127.0.0.1:9/proxy-token";
 
 /** A remote host's artifact as its daemon serves it: bytes, and the modification time its tag names. */
-type HostArtifact = { body: string; mtimeNs: bigint; tag?: boolean; shortBy?: number; served?: () => void };
+type HostArtifact = { body: string; mtimeNs: bigint; tag?: boolean; shortBy?: number; served?: () => void; status?: number; resolvesTo?: string; sendsResolved?: false };
 
 function setup(options: { token?: string | null; finalizeStatus?: number; finalizeCode?: string; shareStatus?: number; shareCode?: string; listStatus?: number; unreachable?: boolean; shares?: unknown[]; listGate?: Promise<void>; hostFiles?: Map<string, HostArtifact>; files?: boolean; refuseVideos?: boolean } = {}) {
 	const handlers = new Map<string, (event: unknown, ...args: unknown[]) => unknown>();
@@ -63,14 +63,18 @@ function setup(options: { token?: string | null; finalizeStatus?: number; finali
 			hostRequests.push(`${init.method ?? "GET"} ${parsed.pathname}${parsed.search}`);
 			const prefix = "/proxy-token/api/v1/sessions/";
 			const match = parsed.pathname.startsWith(prefix) ? /^([^/]+)\/preview\/files\/(.+)$/.exec(parsed.pathname.slice(prefix.length)) : null;
-			const artifact = match && parsed.searchParams.get("source") === "artifact" ? hostFiles.get(`${decodeURIComponent(match[1] ?? "")}/${match[2]?.split("/").map(decodeURIComponent).join("/")}`) : undefined;
+			const requested = match?.[2]?.split("/").map(decodeURIComponent).join("/") ?? "";
+			const artifact = match && parsed.searchParams.get("source") === "artifact" ? hostFiles.get(`${decodeURIComponent(match[1] ?? "")}/${requested}`) : undefined;
 			// The real route is GET-only: a HEAD is refused before the file is looked up.
 			if (init.method === "HEAD") return new Response('{"error":"method not allowed"}', { status: 405 });
 			if (!artifact) return new Response("", { status: 404 });
+			if (artifact.status) return new Response("", { status: artifact.status });
 			const bytes = Buffer.from(artifact.body);
 			const headers = new Headers(artifact.tag === false
 				? { "content-length": String(bytes.length), "last-modified": new Date(Number(artifact.mtimeNs / 1_000_000n)).toUTCString() }
 				: { etag: `"${bytes.length}-${artifact.mtimeNs}"` });
+			// The path the file resolves to once its symlinks are followed, as the daemon names it.
+			if (artifact.sendsResolved !== false) headers.set("x-ao-artifact-path", (artifact.resolvesTo ?? requested).split("/").map(encodeURIComponent).join("/"));
 			artifact.served?.();
 			return new Response(bytes.subarray(0, bytes.length - (artifact.shortBy ?? 0)), { headers });
 		}),
@@ -134,7 +138,7 @@ function setup(options: { token?: string | null; finalizeStatus?: number; finali
 			return new Response("", { status: 404 });
 		}),
 	});
-	const invoke = (channel: string, value?: unknown) => handlers.get(channel)!({ sender }, value);
+	const invoke = (channel: string, value?: unknown, ...rest: unknown[]) => handlers.get(channel)!({ sender }, value, ...rest);
 	const file = { baseUrl: "https://cp.test", sessionId: "sess-1", path: "docs/report.html", projectId: "proj-1" };
 	const cloudFile = { source: "cloud", baseUrl: "https://cp.test", orgId: ORG_ID, sessionId: CLOUD_SESSION_ID, path: "reports/q3 plan.md", projectId: "" };
 	// Publishes as the popover does: with the fingerprint of the inspection it shows.
@@ -805,6 +809,193 @@ describe("cloudShare IPC for a remote host's file", () => {
 		}
 		await expect(invoke("cloudShare:publish", { ...hostFile, hostId: "" })).rejects.toThrow("Not a file to share");
 		expect(hostRequests).toEqual([]);
+	});
+
+	// A page on the host and the files it links to, beside it in the host's session artifacts.
+	const hostPage = (html: string, files: Record<string, Partial<HostArtifact> & { body: string }>) => new Map<string, HostArtifact>([
+		["sess-1/docs/deck.html", { body: html, mtimeNs: MTIME_NS }],
+		...Object.entries(files).map(([name, artifact]) => [`sess-1/docs/${name}`, { mtimeNs: MTIME_NS, ...artifact }] as [string, HostArtifact]),
+	]);
+
+	it("uploads the images a host's page links to with it, downloaded through the host's proxy, and says what it left out", async () => {
+		const html = `<img src="img/a.png"><img src="img/b.png"><img src="img/a.png"><img src="gone.png"><img src="../outside.png"><video src="clip.webm"></video><img src="https://cdn.test/x.png">`;
+		const { publish, hostFile, hostRequests, requests, bodies, sent } = setup({
+			files: true,
+			refuseVideos: true,
+			hostFiles: hostPage(html, { "img/a.png": { body: "png-a" }, "img/b.png": { body: "png-bb" }, "clip.webm": { body: "video" } }),
+		});
+		// The missing image and the one outside the page's folder are left out; the video is refused by a control plane that serves none yet.
+		await expect(publish(hostFile)).resolves.toMatchObject({ status: "published", pageFiles: { included: 2, skipped: 3, videos: 1, unsupported: false } });
+		expect(bodies.get("/api/cloud/v1/me/artifact-shares/finalize")).toMatchObject({ files: [{ fileToken: "ft:img/a.png" }, { fileToken: "ft:img/b.png" }] });
+		expect(requests.filter((request) => request.endsWith("/uploads/files"))).toHaveLength(3);
+		// Each file is asked for once by its path on the host; nothing outside the page's folder is asked for.
+		const asked = (name: string) => hostRequests.filter((request) => request.includes(`/preview/files/${name}?`));
+		expect(asked("docs/img/a.png").length).toBeGreaterThan(0);
+		expect(asked("docs/gone.png")).toHaveLength(1);
+		expect(hostRequests.some((request) => request.includes("outside.png"))).toBe(false);
+		// Progress ends at the page's and its files' bytes, downloaded and sent.
+		const total = (html.length + 5 + 6 + 5) * 2;
+		expect(sent.at(-1)).toEqual({ sessionId: "sess-1", path: "docs/deck.html", sentBytes: total, totalBytes: total });
+		expect(await snapshots()).toEqual([]);
+	});
+
+	it("leaves out a host page's file the host refuses to serve, and still publishes the page", async () => {
+		const { publish, hostFile, bodies } = setup({
+			files: true,
+			hostFiles: hostPage(`<img src="a.png"><img src="secret.png">`, { "a.png": { body: "png" }, "secret.png": { body: "png", status: 403 } }),
+		});
+		await expect(publish(hostFile)).resolves.toMatchObject({ status: "published", pageFiles: { included: 1, skipped: 1 } });
+		expect(bodies.get("/api/cloud/v1/me/artifact-shares/finalize")).toMatchObject({ files: [{ fileToken: "ft:a.png" }] });
+	});
+
+	it("leaves out a host page's file removed after it was found, and still publishes the page", async () => {
+		const hostFiles = hostPage(`<img src="a.png"><img src="b.png">`, { "a.png": { body: "png" }, "b.png": { body: "png" } });
+		// Gone once it was looked up, before it is downloaded.
+		hostFiles.get("sess-1/docs/a.png")!.served = () => hostFiles.delete("sess-1/docs/a.png");
+		const { publish, hostFile, bodies } = setup({ files: true, hostFiles });
+		await expect(publish(hostFile)).resolves.toMatchObject({ status: "published", pageFiles: { included: 1, skipped: 1 } });
+		expect(bodies.get("/api/cloud/v1/me/artifact-shares/finalize")).toMatchObject({ files: [{ fileToken: "ft:b.png" }] });
+		expect(await snapshots()).toEqual([]);
+	});
+
+	it("leaves out a host page's file that is a symlink to a file outside the page's folder", async () => {
+		const { publish, hostFile, bodies } = setup({
+			files: true,
+			hostFiles: hostPage(`<img src="a.png"><img src="link.png">`, { "a.png": { body: "png" }, "link.png": { body: "customer", resolvesTo: "private/customer.png" } }),
+		});
+		await expect(publish(hostFile)).resolves.toMatchObject({ status: "published", pageFiles: { included: 1, skipped: 1 } });
+		expect(bodies.get("/api/cloud/v1/me/artifact-shares/finalize")).toMatchObject({ files: [{ fileToken: "ft:a.png" }] });
+	});
+
+	it("leaves out a host page's file whose symlink is pointed elsewhere between its lookup and its download", async () => {
+		const hostFiles = hostPage(`<img src="link.png">`, { "link.png": { body: "png" } });
+		const link = hostFiles.get("sess-1/docs/link.png")!;
+		link.served = () => { link.resolvesTo = "private/customer.png"; };
+		const { publish, hostFile, bodies } = setup({ files: true, hostFiles });
+		await expect(publish(hostFile)).resolves.toMatchObject({ status: "published", pageFiles: { included: 0, skipped: 1 } });
+		expect(bodies.get("/api/cloud/v1/me/artifact-shares/finalize")).toMatchObject({ files: [] });
+		expect(await snapshots()).toEqual([]);
+	});
+
+	it("leaves out a host page's files when the host is too old to say where they resolve", async () => {
+		const { publish, hostFile, bodies } = setup({
+			files: true,
+			hostFiles: hostPage(`<img src="a.png">`, { "a.png": { body: "png", sendsResolved: false } }),
+		});
+		// Said apart, so the panel can say to update the host.
+		await expect(publish(hostFile)).resolves.toMatchObject({ status: "published", pageFiles: { included: 0, skipped: 1, hostOutdated: 1 } });
+		expect(bodies.get("/api/cloud/v1/me/artifact-shares/finalize")).toMatchObject({ files: [] });
+	});
+
+	it("offers to republish a host page whose files an outdated host left out, once it is updated", async () => {
+		const hostFiles = hostPage(`<img src="a.png">`, { "a.png": { body: "png", sendsResolved: false } });
+		const { invoke, publish, hostFile } = setup({ files: true, hostFiles });
+		await expect(publish(hostFile)).resolves.toMatchObject({ status: "published", pageFiles: { included: 0, hostOutdated: 1 } });
+		await expect(invoke("cloudShare:inspect", hostFile)).resolves.not.toHaveProperty("pageFilesChanged");
+		hostFiles.set("sess-1/docs/a.png", { body: "png", mtimeNs: MTIME_NS });
+		await expect(invoke("cloudShare:inspect", hostFile)).resolves.toMatchObject({ pageFilesChanged: true });
+	});
+
+	it("looks up only the link, not the page's files, for a delete that unpublishes it", async () => {
+		const hostFiles = hostPage(`<img src="a.png">`, { "a.png": { body: "png" } });
+		const { invoke, publish, hostFile, hostRequests } = setup({ files: true, hostFiles });
+		await expect(publish(hostFile)).resolves.toMatchObject({ status: "published" });
+		hostFiles.set("sess-1/docs/a.png", { body: "png2", mtimeNs: MTIME_NS + 1_000_000_000n });
+		hostRequests.length = 0;
+		const inspection = await invoke("cloudShare:inspect", hostFile, { linkOnly: true });
+		expect(inspection).toMatchObject({ shareId: expect.any(String) });
+		expect(inspection).not.toHaveProperty("pageFilesChanged");
+		expect(hostRequests.some((request) => request.includes("a.png"))).toBe(false);
+	});
+
+	it("stops checking a host page's files at the first answer about the host, not a file", async () => {
+		const names = Array.from({ length: 40 }, (_, index) => `${index}.png`);
+		const hostFiles = hostPage(names.map((name) => `<img src="${name}">`).join(""), Object.fromEntries(names.map((name) => [name, { body: "png" }])));
+		const { invoke, publish, hostFile, hostRequests } = setup({ files: true, hostFiles });
+		await expect(publish(hostFile)).resolves.toMatchObject({ status: "published", pageFiles: { included: 40 } });
+		for (const name of names) hostFiles.get(`sess-1/docs/${name}`)!.status = 502;
+		hostRequests.length = 0;
+		await expect(invoke("cloudShare:inspect", hostFile)).resolves.not.toHaveProperty("pageFilesChanged");
+		// Only the lookups already started when the first failed.
+		expect(hostRequests.filter((request) => /\/docs\/\d+\.png/.test(request)).length).toBeLessThanOrEqual(8);
+	});
+
+	it("leaves out a host page's file the host refuses once it is downloaded", async () => {
+		const hostFiles = hostPage(`<img src="a.png"><img src="b.png">`, { "a.png": { body: "png" }, "b.png": { body: "png" } });
+		const refused = hostFiles.get("sess-1/docs/a.png")!;
+		// Found, then refused (403) when it is downloaded.
+		refused.served = () => { refused.status = 403; };
+		const { publish, hostFile, bodies } = setup({ files: true, hostFiles });
+		await expect(publish(hostFile)).resolves.toMatchObject({ status: "published", pageFiles: { included: 1, skipped: 1 } });
+		expect(bodies.get("/api/cloud/v1/me/artifact-shares/finalize")).toMatchObject({ files: [{ fileToken: "ft:b.png" }] });
+		expect(await snapshots()).toEqual([]);
+	});
+
+	it("offers to republish a host page when a file it uses changes, is pointed elsewhere or appears, though the page did not", async () => {
+		const hostFiles = hostPage(`<img src="a.png"><img src="later.png">`, { "a.png": { body: "png" } });
+		const { invoke, publish, hostFile, records } = setup({ files: true, hostFiles });
+		await expect(publish(hostFile)).resolves.toMatchObject({ status: "published", pageFiles: { included: 1, skipped: 1 } });
+		const inspect = () => invoke("cloudShare:inspect", hostFile) as Promise<{ pageFilesChanged?: boolean }>;
+		expect((await inspect()).pageFilesChanged).toBeUndefined();
+		// The record names each file by the path the page uses, with where it resolved and its version; a missing one as "".
+		const recorded = await records.publishedPageFiles(artifactRecordKey("https://cp.test", `host:${HOST_ID}/sess-1`, "art-7"));
+		expect(recorded).toEqual({ "docs/a.png": `docs/a.png\n3:${MTIME_NS / 1_000_000n}`, "docs/later.png": "" });
+
+		// The image is rewritten on the host.
+		hostFiles.set("sess-1/docs/a.png", { body: "png2", mtimeNs: MTIME_NS + 1_000_000_000n });
+		expect((await inspect()).pageFilesChanged).toBe(true);
+		hostFiles.set("sess-1/docs/a.png", { body: "png", mtimeNs: MTIME_NS });
+		expect((await inspect()).pageFilesChanged).toBeUndefined();
+		// A symlink is pointed at another file of the same version.
+		hostFiles.set("sess-1/docs/a.png", { body: "png", mtimeNs: MTIME_NS, resolvesTo: "docs/b.png" });
+		expect((await inspect()).pageFilesChanged).toBe(true);
+		hostFiles.set("sess-1/docs/a.png", { body: "png", mtimeNs: MTIME_NS });
+		// A file the page used that was missing appears.
+		hostFiles.set("sess-1/docs/later.png", { body: "png", mtimeNs: MTIME_NS });
+		expect((await inspect()).pageFilesChanged).toBe(true);
+	});
+
+	it("publishes nothing when the host refuses the request, not a file, while a page's files download", async () => {
+		for (const status of [401, 408, 429]) {
+			const hostFiles = hostPage(`<img src="a.png"><img src="b.png">`, { "a.png": { body: "png" }, "b.png": { body: "png" } });
+			// Found, then the host locks this device out or no longer takes its credential.
+			const lockedOut = hostFiles.get("sess-1/docs/b.png")!;
+			lockedOut.served = () => { lockedOut.status = status; };
+			const { publish, hostFile, requests } = setup({ files: true, hostFiles });
+			await expect(publish(hostFile), String(status)).resolves.toMatchObject({ status: "error" });
+			expect(requests).not.toContain("POST /api/cloud/v1/me/artifact-shares/finalize");
+			expect(await snapshots()).toEqual([]);
+		}
+	});
+
+	it("publishes nothing when the host refuses the request while a page's files are looked up", async () => {
+		const { publish, hostFile, requests } = setup({
+			files: true,
+			hostFiles: hostPage(`<img src="a.png">`, { "a.png": { body: "png", status: 401 } }),
+		});
+		await expect(publish(hostFile)).resolves.toMatchObject({ status: "error" });
+		expect(requests).not.toContain("POST /api/cloud/v1/me/artifact-shares/uploads");
+	});
+
+	it("does not offer to republish a host page because the host refused the check, not a file", async () => {
+		const hostFiles = hostPage(`<img src="a.png">`, { "a.png": { body: "png" } });
+		const { invoke, publish, hostFile } = setup({ files: true, hostFiles });
+		await expect(publish(hostFile)).resolves.toMatchObject({ status: "published", pageFiles: { included: 1 } });
+		hostFiles.get("sess-1/docs/a.png")!.status = 429;
+		await expect(invoke("cloudShare:inspect", hostFile)).resolves.not.toHaveProperty("pageFilesChanged");
+		// One the host refuses on its own (403) is gone from the page, so it does offer it.
+		hostFiles.get("sess-1/docs/a.png")!.status = 403;
+		await expect(invoke("cloudShare:inspect", hostFile)).resolves.toMatchObject({ pageFilesChanged: true });
+	});
+
+	it("publishes nothing when the host stops answering while a page's files are found", async () => {
+		const { publish, hostFile, requests } = setup({
+			files: true,
+			hostFiles: hostPage(`<img src="a.png">`, { "a.png": { body: "png", status: 502 } }),
+		});
+		await expect(publish(hostFile)).resolves.toMatchObject({ status: "error" });
+		expect(requests).not.toContain("POST /api/cloud/v1/me/artifact-shares/uploads");
+		expect(await snapshots()).toEqual([]);
 	});
 
 	it("says the file is gone when the host no longer has it", async () => {

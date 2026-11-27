@@ -101,6 +101,19 @@ function setupBridge() {
 				},
 			],
 		})),
+		muteTab: vi.fn(async ({ viewId, tabId, muted }: { viewId: string; tabId: string; muted: boolean }) => ({
+			viewId,
+			activeTabId: "t1",
+			tabs: [
+				{
+					id: tabId,
+					url: "http://localhost:3000/",
+					title: "First",
+					active: true,
+					muted,
+				},
+			],
+		})),
 		openTab: vi.fn(async ({ viewId }: { viewId: string; url?: string }) => ({
 			viewId,
 			activeTabId: "t2",
@@ -190,6 +203,8 @@ function setupBridge() {
 			return () => profileListeners.delete(listener);
 		}),
 		onProfileManage: vi.fn(() => () => undefined),
+		onProfileSwitchConfirm: vi.fn(() => () => undefined),
+		onProfileSwitchFailed: vi.fn(() => () => undefined),
 		onAnnotationSubmit: vi.fn(() => () => undefined),
 		onAnnotationCancel: vi.fn(() => () => undefined),
 		onAnnotationState: vi.fn((listener: AnnotationStateListener) => {
@@ -572,6 +587,28 @@ describe("useBrowserView", () => {
 		expect(bridge.closeTab).toHaveBeenCalledWith({
 			viewId: "42:sess-1",
 			tabId: "t2",
+		});
+	});
+
+	it("mutes and unmutes a tab through the bridge", async () => {
+		const bridge = setupBridge();
+		const { result } = renderHook(() => useBrowserView({ sessionId: "sess-1", active: true, poppedOut: false }));
+		await act(async () => {
+			await result.current.openTab("http://localhost:3000/");
+		});
+
+		await act(() => result.current.muteTab("t1", true));
+		expect(bridge.muteTab).toHaveBeenCalledWith({
+			viewId: "42:sess-1",
+			tabId: "t1",
+			muted: true,
+		});
+
+		await act(() => result.current.muteTab("t1", false));
+		expect(bridge.muteTab).toHaveBeenLastCalledWith({
+			viewId: "42:sess-1",
+			tabId: "t1",
+			muted: false,
 		});
 	});
 

@@ -467,6 +467,38 @@ type ConversationThreadState struct {
 	// the strength of it would be guessing.
 	ClosedAt  *time.Time `json:"closedAt,omitempty"`
 	UpdatedAt time.Time  `json:"updatedAt"`
+	// Harness and ProviderConversationID name the provider thread this report is
+	// about. The conversation outlives its provider: an agent switch keeps the
+	// narrative but starts a new thread, and a report about the old one must not
+	// be read as a report about the new one.
+	Harness                AgentHarness `json:"harness,omitempty"`
+	ProviderConversationID string       `json:"providerConversationId,omitempty"`
+}
+
+// AppliesTo reports whether this state describes the given provider thread.
+//
+// State recorded before reports were stamped can only have come from Codex, the
+// one driver that reports thread state, so it is trusted for Codex alone. An
+// empty thread on either side is unknown rather than different.
+func (s ConversationThreadState) AppliesTo(harness AgentHarness, providerConversationID string) bool {
+	if s.Harness == "" {
+		if harness != HarnessCodex {
+			return false
+		}
+	} else if s.Harness != harness {
+		return false
+	}
+	return s.ProviderConversationID == "" || providerConversationID == "" ||
+		s.ProviderConversationID == providerConversationID
+}
+
+// ThreadStateFor is the conversation's thread state if it describes the given
+// provider thread, and nil otherwise.
+func (r ConversationRecord) ThreadStateFor(harness AgentHarness, providerConversationID string) *ConversationThreadState {
+	if r.ThreadState == nil || !r.ThreadState.AppliesTo(harness, providerConversationID) {
+		return nil
+	}
+	return r.ThreadState
 }
 
 // ConversationMCPServer is one tool server's startup state.
@@ -541,8 +573,9 @@ type ConversationSettings struct {
 	// OpenCodeMode is the provider-owned mode explicitly selected through ACP.
 	// It is separate from approval policy and restored before accepting turns.
 	OpenCodeMode string `json:"openCodeMode,omitempty"`
-	// AutoCompactWindow is where Claude Code compacts on its own: "200k" or
-	// "1m". Empty leaves it to Claude Code. It is read when the agent starts.
+	// AutoCompactWindow is where Claude Code compacts on its own: "200k",
+	// "500k" or "1m". "off" turns OpenCode's compaction off. Empty leaves it to the agent.
+	// It is read when the agent starts.
 	AutoCompactWindow string `json:"autoCompactWindow,omitempty"`
 }
 
@@ -574,6 +607,7 @@ type ConversationTurn struct {
 	HasRetryAttempt bool `json:"hasRetryAttempt,omitempty"`
 	// HasHumanPrompt is a snapshot-only fact independent of timeline pagination.
 	HasHumanPrompt bool      `json:"hasHumanPrompt,omitempty"`
+	HasEventPrompt bool      `json:"hasEventPrompt,omitempty"`
 	State          TurnState `json:"state"`
 	// ErrorMessage is set for failed turns. Interrupted turns are not errors.
 	ErrorMessage string                  `json:"errorMessage,omitempty"`
@@ -707,6 +741,7 @@ type RetryPrompt struct {
 	Text                string
 	ProviderInputText   string
 	Origin              MessageOrigin
+	AuthoredByUser      bool
 	DeliveryContentJSON string
 	ActiveLineage       bool
 }
