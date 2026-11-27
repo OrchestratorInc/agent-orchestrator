@@ -8,6 +8,7 @@ import (
 	"encoding/xml"
 	"errors"
 	"fmt"
+	"html"
 	"io"
 	"os"
 	"os/exec"
@@ -482,9 +483,11 @@ func (c *commandContext) serviceInstall(ctx context.Context, opts serviceOptions
 		if previous, err = os.ReadFile(spec.File); err != nil {
 			return serviceStatus{}, err
 		}
-		previousRunning = c.serviceLoaded(ctx, spec)
-		previousEnabled = spec.Manager != serviceManagerSystemd ||
-			c.serviceCmd(ctx, "systemctl", "--user", "is-enabled", "--quiet", spec.Name+".service") == nil
+		// A failed query is not a state to restore: stop before replacing
+		// anything when the earlier service's state is unknown.
+		if previousRunning, previousEnabled, err = c.serviceState(ctx, spec); err != nil {
+			return serviceStatus{}, fmt.Errorf("cannot tell the state of the installed %s, so it was left as it is: %w", spec.Name, err)
+		}
 	}
 	if err := os.MkdirAll(filepath.Dir(spec.File), 0o700); err != nil {
 		return serviceStatus{}, err
@@ -550,10 +553,6 @@ func (c *commandContext) serviceInstall(ctx context.Context, opts serviceOptions
 	if _, err := c.waitServeReady(ctx, cfg, 0, nil, opts.timeout, false, nil); err != nil {
 		return serviceStatus{}, fmt.Errorf("service installed, but %w", err)
 	}
-	// Ready must mean supervised: the attached serve is still running.
-	if _, err := os.Stat(serveAttachMarker(cfg.RunFilePath, servePID)); err != nil || c.servicePID(ctx, spec) != servePID {
-		return serviceStatus{}, fmt.Errorf("service installed, but its ao serve (pid %d) exited after starting; check it with `ao service status`", servePID)
-	}
 	ds, err := c.inspectDaemon(ctx)
 	if err != nil {
 		return serviceStatus{}, err
@@ -561,6 +560,11 @@ func (c *commandContext) serviceInstall(ctx context.Context, opts serviceOptions
 	st.Daemon = &ds
 	if ds.State != stateReady || checkDaemonDataDir(ds, cfg.DataDir) != nil {
 		return st, fmt.Errorf("service installed, but the daemon is %s now; check it with `ao service status`", ds.State)
+	}
+	// Ready must mean supervised: checked last, after every blocking probe,
+	// that the attached serve is still running.
+	if _, err := os.Stat(serveAttachMarker(cfg.RunFilePath, servePID)); err != nil || c.servicePID(ctx, spec) != servePID {
+		return serviceStatus{}, fmt.Errorf("service installed, but its ao serve (pid %d) exited after starting; check it with `ao service status`", servePID)
 	}
 	return st, nil
 }
@@ -621,9 +625,15 @@ func selfHostedService(spec serviceSpec) (file, dataDir string) {
 	dataDir = filepath.Join(home, ".ao", "data")
 	// The script's runner exports AO_DATA_DIR only when it was set at setup.
 	if runner := selfHostedRunnerRE.Find(data); runner != nil {
-		if body, err := os.ReadFile(string(runner)); err == nil {
+		path := string(runner)
+		if spec.Manager == serviceManagerLaunchd {
+			path = html.UnescapeString(path) // plistlib writes & as &amp;
+		}
+		if body, err := os.ReadFile(path); err == nil {
 			if m := selfHostedDataDirRE.FindSubmatch(body); m != nil {
-				dataDir = shellUnquote(strings.TrimSpace(string(m[1])))
+				// Only a CR may follow the word: trimming spaces would drop
+				// an escaped trailing space that belongs to the path.
+				dataDir = shellUnquote(strings.TrimRight(string(m[1]), "\r"))
 			}
 		}
 	}
@@ -829,6 +839,36 @@ func (c *commandContext) servicePID(ctx context.Context, spec serviceSpec) int {
 		return pid
 	}
 	return 0
+}
+
+// serviceState reports whether the installed service is running and enabled,
+// or an error when the service manager does not give a clear answer.
+func (c *commandContext) serviceState(ctx context.Context, spec serviceSpec) (running, enabled bool, err error) {
+	switch spec.Manager {
+	case serviceManagerLaunchd:
+		running, err = c.launchdJobLoaded(ctx, spec)
+		return running, true, err
+	case serviceManagerSystemd:
+		unit := spec.Name + ".service"
+		active, _ := c.deps.CommandOutput(ctx, "systemctl", "--user", "is-active", unit)
+		switch strings.TrimSpace(string(active)) {
+		case "active", "activating", "reloading", "deactivating":
+			running = true
+		case "inactive", "failed":
+		default:
+			return false, false, fmt.Errorf("systemctl --user is-active %s: %q", unit, strings.TrimSpace(string(active)))
+		}
+		state, _ := c.deps.CommandOutput(ctx, "systemctl", "--user", "is-enabled", unit)
+		switch strings.TrimSpace(string(state)) {
+		case "enabled", "enabled-runtime", "static", "alias", "indirect", "generated", "transient":
+			enabled = true
+		case "disabled", "linked", "linked-runtime", "masked", "masked-runtime":
+		default:
+			return false, false, fmt.Errorf("systemctl --user is-enabled %s: %q", unit, strings.TrimSpace(string(state)))
+		}
+		return running, enabled, nil
+	}
+	return false, false, nil
 }
 
 // launchdJobLoaded asks launchd whether the job is loaded. It tells a job

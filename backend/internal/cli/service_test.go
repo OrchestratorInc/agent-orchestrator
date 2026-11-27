@@ -542,6 +542,15 @@ func systemdDeps(t *testing.T, outputs map[string]string, fails map[string]bool)
 					return []byte(out), nil
 				}
 			}
+			// systemctl answers state queries on stdout.
+			if name == "systemctl" && len(args) > 1 {
+				switch args[1] {
+				case "is-active":
+					return []byte("active\n"), nil
+				case "is-enabled":
+					return []byte("enabled\n"), nil
+				}
+			}
 			return nil, nil
 		},
 	}
@@ -873,6 +882,7 @@ func TestShellUnquoteDecodesPrintfQ(t *testing.T) {
 		`$'/srv/a\nb'`:        "/srv/a\nb",
 		`/srv/it\'s`:          "/srv/it's",
 		`$'/srv/caf\303\251'`: "/srv/café",
+		`/srv/ao\ `:           "/srv/ao ",
 		`$'/srv/\x41é\t'`:     "/srv/Aé\t",
 	} {
 		if got := shellUnquote(in); got != want {
@@ -1027,7 +1037,7 @@ func TestServiceSystemdRollbackRestoresDisabledState(t *testing.T) {
 		t.Fatal(err)
 	}
 	var got []string
-	deps := systemdDeps(t, nil, map[string]bool{"systemctl --user is-enabled": true, "systemctl --user restart": true})
+	deps := systemdDeps(t, map[string]string{"systemctl --user is-enabled": "disabled\n"}, map[string]bool{"systemctl --user restart": true})
 	inner := deps.CommandOutput
 	deps.CommandOutput = func(ctx context.Context, name string, args ...string) ([]byte, error) {
 		got = append(got, name+" "+strings.Join(args, " "))
@@ -1243,5 +1253,73 @@ func TestServiceInstallRefusesDaemonWithUnknownDataDir(t *testing.T) {
 	_, _, err := executeCLI(t, deps, "service", "install", "--no-wait")
 	if err == nil || !strings.Contains(err.Error(), "does not report its data dir") {
 		t.Fatalf("err = %v, want the same refusal as ao serve", err)
+	}
+}
+
+// A reinstall whose earlier unit state cannot be read stops before replacing
+// anything, instead of restoring a guessed state later.
+func TestServiceSystemdReinstallStopsOnUnknownState(t *testing.T) {
+	setConfigEnv(t)
+	setServiceHome(t)
+	t.Setenv("XDG_CONFIG_HOME", "")
+	old := serviceGOOS
+	serviceGOOS = "linux"
+	t.Cleanup(func() { serviceGOOS = old })
+	if _, _, err := executeCLI(t, systemdDeps(t, nil, nil), "service", "install", "--no-wait", "--port", "4100"); err != nil {
+		t.Fatal(err)
+	}
+	spec, _ := (&commandContext{deps: systemdDeps(t, nil, nil).withDefaults()}).currentServiceSpec(4100)
+	before, _ := os.ReadFile(spec.File)
+	deps := systemdDeps(t, map[string]string{"systemctl --user is-enabled": "Failed to connect to bus\n"}, nil)
+	_, _, err := executeCLI(t, deps, "service", "install", "--no-wait", "--port", "4200")
+	if err == nil || !strings.Contains(err.Error(), "cannot tell the state") {
+		t.Fatalf("err = %v, want the reinstall stopped on an unknown state", err)
+	}
+	if after, _ := os.ReadFile(spec.File); string(after) != string(before) {
+		t.Fatal("the unit was replaced although its earlier state was unknown")
+	}
+}
+
+// plistlib XML-escapes the runner path (& as &amp;), and bash can end the
+// data dir with an escaped space; both must still be read exactly.
+func TestServiceSelfHostedRunnerWithXMLEscapesAndTrailingSpace(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("the self-hosted setup script is bash-only; Windows is not a self-hosted host")
+	}
+	setConfigEnv(t)
+	dataDir := filepath.Join(t.TempDir(), "ao ")
+	t.Setenv("AO_DATA_DIR", dataDir)
+	setServiceHome(t)
+	old := serviceGOOS
+	serviceGOOS = "darwin"
+	t.Cleanup(func() { serviceGOOS = old })
+	var calls []serviceCall
+	deps := serviceTestDeps(&calls, nil)
+	spec, err := (&commandContext{deps: deps.withDefaults()}).currentServiceSpec(0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir := filepath.Join(t.TempDir(), "AO & Host")
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	runner := filepath.Join(dir, "run-daemon.sh")
+	escapedDir := strings.ReplaceAll(dataDir, " ", `\ `)
+	if err := os.WriteFile(runner, []byte("#!/usr/bin/env bash\nexport AO_DATA_DIR="+escapedDir+"\nexec /x/ao daemon\n"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	agents := filepath.Dir(spec.File)
+	if err := os.MkdirAll(agents, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	plist := filepath.Join(agents, "dev.aoagents.self-hosted.plist")
+	if err := os.WriteFile(plist, []byte("<plist><dict><key>ProgramArguments</key><array><string>"+xmlEscape(runner)+"</string></array></dict></plist>"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, got := selfHostedService(spec); got != dataDir {
+		t.Fatalf("runner data dir = %q, want %q", got, dataDir)
+	}
+	if _, _, err := executeCLI(t, deps, "service", "install", "--no-wait"); err == nil || !strings.Contains(err.Error(), "self-hosted host service") {
+		t.Fatalf("err = %v, want the conflict found", err)
 	}
 }

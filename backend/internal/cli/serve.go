@@ -110,7 +110,7 @@ func newServeCommand(ctx *commandContext) *cobra.Command {
 	cmd.Flags().BoolVar(&opts.foreground, "foreground", false, "Run (or watch) the daemon in this process until no daemon is left")
 	cmd.Flags().BoolVar(&opts.background, "background", false, "Start the daemon in the background and return once it is ready (the default)")
 	cmd.Flags().BoolVar(&opts.json, "json", false, "Output the result as JSON")
-	cmd.Flags().DurationVar(&opts.timeout, "timeout", defaultServeReadyTimeout, "How long to wait for a new daemon to become ready")
+	cmd.Flags().DurationVar(&opts.timeout, "timeout", defaultServeReadyTimeout, "How long to wait for a background or booting daemon to become ready (a --foreground in-process daemon starts without a deadline)")
 	return cmd
 }
 
@@ -452,6 +452,12 @@ func (c *commandContext) watchDaemon(ctx context.Context, cfg config.Config, pid
 				if err := checkDaemonDataDir(st, cfg.DataDir); err != nil {
 					return err
 				}
+				pid, owner = st.PID, st.owner
+			}
+		case stateNotReady:
+			// A replacement still booting (such as the app's): follow it now,
+			// so its owner decides what its disappearance means.
+			if st.PID != pid && st.workingDirectory != "" && checkDaemonDataDir(st, cfg.DataDir) == nil {
 				pid, owner = st.PID, st.owner
 			}
 		case stateStale:

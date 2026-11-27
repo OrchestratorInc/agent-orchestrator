@@ -51,7 +51,7 @@ func TestServeReusesRunningDaemon(t *testing.T) {
 			started = true
 			return startedProcess{}, nil
 		},
-	}, "serve", "--json", "--port", "4000")
+	}, "serve", "--json", "--port", fmt.Sprint(port+1))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -63,7 +63,7 @@ func TestServeReusesRunningDaemon(t *testing.T) {
 	if res != want {
 		t.Fatalf("serve result = %#v, want %#v", res, want)
 	}
-	if !strings.Contains(errOut, "--port 4000 was ignored") {
+	if !strings.Contains(errOut, fmt.Sprintf("--port %d was ignored", port+1)) {
 		t.Fatalf("serve did not warn that --port was ignored; stderr:\n%s", errOut)
 	}
 }
@@ -916,5 +916,39 @@ func TestServeWarnsWhenRequestedPortIsTaken(t *testing.T) {
 	}
 	if !strings.Contains(errOut, fmt.Sprintf("port %d was not available; the daemon is serving on port %d", got+1, got)) {
 		t.Fatalf("stderr = %q, want a port fallback warning", errOut)
+	}
+}
+
+// The watcher follows an app replacement while it still boots, so if the app
+// quits before it is ready, its owner makes serve exit non-zero.
+func TestServeForegroundFollowsBootingAppReplacement(t *testing.T) {
+	h := newForegroundHarness(t)
+	h.daemon(4242, "")
+	app := fakeBootingDaemon(t, 7070)
+	old := serveForegroundDaemon
+	t.Cleanup(func() { serveForegroundDaemon = old })
+	serveForegroundDaemon = func([]string) error { h.started++; return nil }
+	ticks := 0
+	_, _, err := executeCLI(t, Deps{
+		ProcessAlive:   func(pid int) bool { return h.alive[pid] },
+		PIDMayBeHidden: func() bool { return false },
+		Now:            func() time.Time { return h.now },
+		Sleep: func(d time.Duration) {
+			h.now = h.now.Add(d)
+			ticks++
+			switch ticks {
+			case 1: // the app swaps in its daemon, which is still booting
+				h.alive[4242], h.alive[7070] = false, true
+				if err := runfile.Write(h.cfg.runFile, runfile.Info{PID: 7070, Port: serverPort(t, app.URL), StartedAt: time.Unix(100, 0).UTC(), Owner: "app"}); err != nil {
+					t.Fatal(err)
+				}
+			case 2: // the app quits before its daemon is ready
+				h.alive[7070] = false
+				_ = runfile.Remove(h.cfg.runFile)
+			}
+		},
+	}, "serve", "--foreground")
+	if err == nil || !strings.Contains(err.Error(), "stopped with the app") {
+		t.Fatalf("err = %v, want a restart error for the app's booting replacement", err)
 	}
 }
