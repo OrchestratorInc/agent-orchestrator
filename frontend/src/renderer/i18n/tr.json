@@ -2272,7 +2272,7 @@
 	"settings.project.sandbox.docker": "Docker (Coder sandbox'ları)",
 	"settings.project.sandbox.dockerDescription": "Ajanların projenin Coder sandbox'larında Docker çalıştırmasına izin verir. Yeni sandbox'larda geçerli olur.",
 	"settings.project.sandbox.sudo": "Ajanlar sudo kullanabilir",
-	"settings.project.sandbox.sudoDescription": "Ajanların komutları root olarak çalıştırmasına izin verir. Ajanların sudo kullanabildiği sandbox'larda kayıtlı oturumlar kapatılır.",
+	"settings.project.sandbox.sudoDescription": "Ajanların komutları root olarak çalıştırmasına izin verir. Ajanların sudo kullanabildiği sandbox'larda kayıtlı oturumlar kapatılır. Değişiklikten sonra başlatılan oturumlarda geçerli olur.",
 	"settings.project.sandbox.unsupported": "Bu Cloud sunucusu bunu henüz desteklemiyor.",
 	"settings.project.sandbox.readOnly": "Bunu yalnızca projeyi oluşturan kişi ya da kuruluş sahibi veya yöneticisi değiştirebilir.",
 	"settings.project.cloudBranchRequired": "Varsayılan dal gereklidir.",

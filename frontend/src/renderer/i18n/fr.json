@@ -1931,7 +1931,7 @@
 	"settings.project.sandbox.docker": "Docker (sandboxes Coder)",
 	"settings.project.sandbox.dockerDescription": "Permet aux agents d'exécuter Docker dans les sandboxes Coder du projet. S'applique aux nouvelles sandboxes.",
 	"settings.project.sandbox.sudo": "Les agents peuvent utiliser sudo",
-	"settings.project.sandbox.sudoDescription": "Permet aux agents d'exécuter des commandes en root. Les connexions enregistrées sont désactivées dans les sandboxes où les agents peuvent utiliser sudo.",
+	"settings.project.sandbox.sudoDescription": "Permet aux agents d'exécuter des commandes en root. Les connexions enregistrées sont désactivées dans les sandboxes où les agents peuvent utiliser sudo. S'applique aux sessions démarrées après la modification.",
 	"settings.project.sandbox.unsupported": "Pas encore pris en charge par ce serveur Cloud.",
 	"settings.project.sandbox.readOnly": "Seul le créateur du projet ou un propriétaire ou administrateur de l'organisation peut modifier ce paramètre.",
 	"settings.project.cloudBranchRequired": "La branche par défaut est obligatoire.",

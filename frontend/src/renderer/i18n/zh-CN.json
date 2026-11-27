@@ -1882,7 +1882,7 @@
 	"settings.project.sandbox.docker": "Docker（Coder 沙箱）",
 	"settings.project.sandbox.dockerDescription": "允许智能体在项目的 Coder 沙箱中运行 Docker。对新沙箱生效。",
 	"settings.project.sandbox.sudo": "智能体可以使用 sudo",
-	"settings.project.sandbox.sudoDescription": "允许智能体以 root 身份运行命令。在智能体可以使用 sudo 的沙箱中，已保存的登录会被关闭。",
+	"settings.project.sandbox.sudoDescription": "允许智能体以 root 身份运行命令。在智能体可以使用 sudo 的沙箱中，已保存的登录会被关闭。对更改后启动的会话生效。",
 	"settings.project.sandbox.unsupported": "此 Cloud 服务器尚不支持。",
 	"settings.project.sandbox.readOnly": "只有项目创建者或组织所有者或管理员可以更改此设置。",
 	"settings.project.cloudBranchRequired": "默认分支为必填项。",

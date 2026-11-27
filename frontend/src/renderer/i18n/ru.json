@@ -2346,7 +2346,7 @@
 	"settings.project.sandbox.docker": "Docker (песочницы Coder)",
 	"settings.project.sandbox.dockerDescription": "Позволяет агентам запускать Docker в песочницах Coder проекта. Действует для новых песочниц.",
 	"settings.project.sandbox.sudo": "Агенты могут использовать sudo",
-	"settings.project.sandbox.sudoDescription": "Позволяет агентам выполнять команды от root. В песочницах, где агенты могут использовать sudo, сохранённые входы отключены.",
+	"settings.project.sandbox.sudoDescription": "Позволяет агентам выполнять команды от root. В песочницах, где агенты могут использовать sudo, сохранённые входы отключены. Действует для сессий, запущенных после изменения.",
 	"settings.project.sandbox.unsupported": "Этот сервер Cloud пока не поддерживает эту настройку.",
 	"settings.project.sandbox.readOnly": "Изменить это может только создатель проекта либо владелец или администратор организации.",
 	"settings.project.cloudBranchRequired": "Укажите ветку по умолчанию.",

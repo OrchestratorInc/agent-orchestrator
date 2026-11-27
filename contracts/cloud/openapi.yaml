@@ -6534,7 +6534,9 @@ components:
       description: >-
         The project's agents may run commands as root with sudo. Defaults to
         off. Saved logins are turned off in a sandbox where agents can use
-        sudo. Only the project's creator or an organization owner or admin may
+        sudo. Read when a session's worker launches, so a change applies to
+        sessions started after it; a running session keeps what it started
+        with. Only the project's creator or an organization owner or admin may
         change it (Project.canEditSandbox); anyone else gets 403
         sandbox_settings_forbidden.
     ProjectTrackerIntake:

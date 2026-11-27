@@ -1900,7 +1900,7 @@
 	"settings.project.sandbox.docker": "Docker (Coder 샌드박스)",
 	"settings.project.sandbox.dockerDescription": "에이전트가 프로젝트의 Coder 샌드박스 안에서 Docker를 실행할 수 있습니다. 새 샌드박스부터 적용됩니다.",
 	"settings.project.sandbox.sudo": "에이전트의 sudo 사용 허용",
-	"settings.project.sandbox.sudoDescription": "에이전트가 root로 명령을 실행할 수 있습니다. 에이전트가 sudo를 사용할 수 있는 샌드박스에서는 저장된 로그인이 꺼집니다.",
+	"settings.project.sandbox.sudoDescription": "에이전트가 root로 명령을 실행할 수 있습니다. 에이전트가 sudo를 사용할 수 있는 샌드박스에서는 저장된 로그인이 꺼집니다. 변경 후 시작한 세션부터 적용됩니다.",
 	"settings.project.sandbox.unsupported": "이 Cloud 서버는 아직 지원하지 않습니다.",
 	"settings.project.sandbox.readOnly": "프로젝트 생성자 또는 조직 소유자나 관리자만 변경할 수 있습니다.",
 	"settings.project.cloudBranchRequired": "기본 브랜치는 필수입니다.",

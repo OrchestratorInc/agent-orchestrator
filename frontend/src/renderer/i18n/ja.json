@@ -1900,7 +1900,7 @@
 	"settings.project.sandbox.docker": "Docker（Coder サンドボックス）",
 	"settings.project.sandbox.dockerDescription": "プロジェクトの Coder サンドボックス内でエージェントが Docker を実行できるようにします。新しいサンドボックスに適用されます。",
 	"settings.project.sandbox.sudo": "エージェントが sudo を使用可能",
-	"settings.project.sandbox.sudoDescription": "エージェントが root としてコマンドを実行できるようにします。エージェントが sudo を使用できるサンドボックスでは、保存済みログインはオフになります。",
+	"settings.project.sandbox.sudoDescription": "エージェントが root としてコマンドを実行できるようにします。エージェントが sudo を使用できるサンドボックスでは、保存済みログインはオフになります。変更後に開始したセッションに適用されます。",
 	"settings.project.sandbox.unsupported": "この Cloud サーバーではまだサポートされていません。",
 	"settings.project.sandbox.readOnly": "これを変更できるのは、プロジェクトの作成者または組織のオーナーか管理者だけです。",
 	"settings.project.cloudBranchRequired": "デフォルトブランチは必須です。",

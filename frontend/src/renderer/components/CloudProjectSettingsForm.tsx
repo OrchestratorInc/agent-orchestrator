@@ -155,7 +155,10 @@ export function CloudProjectSandboxSettings({ project, showDocker }: { project: 
 	// false means this user may not change them; absent (an older server) means
 	// unknown, so the switches stay editable and the server's 403 answers. Read
 	// from the current project: a save or refetch puts the server's answer there.
-	const rowProps = { project, readOnly: project.canEditSandbox === false };
+	// A save refused with sandbox_settings_forbidden (a role lowered after the
+	// page loaded) makes both switches read-only too.
+	const [forbidden, setForbidden] = useState(false);
+	const rowProps = { project, readOnly: forbidden || project.canEditSandbox === false, onForbidden: () => setForbidden(true) };
 	return <SettingsGroup title={t("settings.project.sandbox.title")} titleHidden grouped>
 		{showDocker ? <SandboxSwitchRow {...rowProps} configKey="sandboxDocker" id="project-sandbox-docker"
 			label={t("settings.project.sandbox.docker")} description={t("settings.project.sandbox.dockerDescription")}
@@ -171,9 +174,10 @@ export function CloudProjectSandboxSettings({ project, showDocker }: { project: 
  * from before the setting rejects the key; the switch then says so and stays
  * disabled instead of flipping back on every try.
  */
-function SandboxSwitchRow({ project, readOnly, configKey, id, label, description, checkedOf }: {
+function SandboxSwitchRow({ project, readOnly, onForbidden, configKey, id, label, description, checkedOf }: {
 	project: CloudCpProject;
 	readOnly: boolean;
+	onForbidden: () => void;
 	configKey: SandboxConfigKey;
 	id: string;
 	label: string;
@@ -203,11 +207,19 @@ function SandboxSwitchRow({ project, readOnly, configKey, id, label, description
 			queryClient.setQueryData(settingsKey, response.project);
 			void queryClient.invalidateQueries({ queryKey: cloudProjectsQueryKey });
 		},
-		onError: (error) => { if (configKeyUnsupported(error, configKey)) setUnsupported(true); },
+		onError: (error) => {
+			if (configKeyUnsupported(error, configKey)) setUnsupported(true);
+			else if (error instanceof CloudCpError && error.status === 403 && error.code === "sandbox_settings_forbidden") onForbidden();
+		},
 	});
 	// The value being saved shows until the save settles; a failed one goes back.
 	const shown = save.isPending && save.variables !== undefined ? save.variables : saved;
-	const shownDescription = unsupported ? t("settings.project.sandbox.unsupported") : readOnly ? t("settings.project.sandbox.readOnly") : save.isError ? (
+	// The description stays; why the switch cannot change goes under it.
+	const status = unsupported ? t("settings.project.sandbox.unsupported") : readOnly ? t("settings.project.sandbox.readOnly") : undefined;
+	const shownDescription = status ? <>
+		{description}
+		<span className="block">{status}</span>
+	</> : save.isError ? (
 		<span className="text-error" role="alert">
 			{save.error instanceof Error ? save.error.message : t("settings.project.saveFailed")}
 		</span>

@@ -733,6 +733,7 @@ describe("Cloud project sandbox settings", () => {
 		expect(screen.getByRole("switch", { name: "Agents can use sudo" })).not.toBeChecked();
 		expect(screen.getByText(/Takes effect for new sandboxes/)).toBeInTheDocument();
 		expect(screen.getByText(/Saved logins are turned off in sandboxes where agents can use sudo/)).toBeInTheDocument();
+		expect(screen.getByText(/Applies to sessions started after you change it/)).toBeInTheDocument();
 	});
 
 	it("shows Docker off when the project says false", async () => {
@@ -789,16 +790,32 @@ describe("Cloud project sandbox settings", () => {
 		expect(docker).toBeDisabled();
 		expect(sudo).toBeDisabled();
 		expect(screen.getAllByText("Only the project's creator or an org owner or admin can change this.")).toHaveLength(2);
+		// The read-only line adds to each description instead of replacing it.
+		expect(screen.getByText(/Saved logins are turned off in sandboxes where agents can use sudo/)).toBeInTheDocument();
+		expect(screen.getByText(/Takes effect for new sandboxes/)).toBeInTheDocument();
 	});
 
-	it("keeps the switches editable when the server does not say, and shows its 403 inline", async () => {
-		mocks.patch.mockRejectedValueOnce(new CloudCpError("only the project's creator or an organization owner or admin can change Docker or sudo", { status: 403, code: "sandbox_settings_forbidden" }));
+	it("keeps the switches editable when the server does not say, and shows another 403 inline", async () => {
+		mocks.patch.mockRejectedValueOnce(new CloudCpError("Forbidden by policy", { status: 403, code: "forbidden" }));
 		mount("sandbox");
 		const sudo = await screen.findByRole("switch", { name: "Agents can use sudo" });
 		expect(sudo).toBeEnabled();
 		await userEvent.click(sudo);
-		expect(await screen.findByRole("alert")).toHaveTextContent("only the project's creator or an organization owner or admin can change Docker or sudo");
+		expect(await screen.findByRole("alert")).toHaveTextContent("Forbidden by policy");
 		expect(sudo).not.toBeChecked();
+		expect(sudo).toBeEnabled();
+	});
+
+	it("goes read-only when a save is refused with sandbox_settings_forbidden", async () => {
+		mocks.patch.mockRejectedValueOnce(new CloudCpError("only the project's creator or an organization owner or admin can change Docker or sudo", { status: 403, code: "sandbox_settings_forbidden" }));
+		mount("sandbox");
+		const sudo = await screen.findByRole("switch", { name: "Agents can use sudo" });
+		await userEvent.click(sudo);
+		await waitFor(() => expect(sudo).toBeDisabled());
+		expect(sudo).not.toBeChecked();
+		expect(screen.getByRole("switch", { name: "Docker (Coder sandboxes)" })).toBeDisabled();
+		expect(screen.getAllByText("Only the project's creator or an org owner or admin can change this.")).toHaveLength(2);
+		expect(screen.queryByText(/only the project's creator or an organization owner/)).not.toBeInTheDocument();
 	});
 
 	it("goes read-only when a save answers that this user can no longer edit", async () => {
