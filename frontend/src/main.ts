@@ -923,10 +923,8 @@ function setDaemonStatus(nextStatus: DaemonStatus): void {
 	if (nextStatus.state === "ready") void telemetryIdentity.flush();
 	else telemetryIdentity.invalidate();
 	getShellWebContents()?.send("daemon:status", daemonStatus);
-	if (nextStatus.state === "ready" && browserViewHost) {
-		establishBrowserRuntimeLink();
-		establishBrowserStreamLink();
-	}
+	if (nextStatus.state === "ready") establishBrowserRuntimeLink();
+	if (nextStatus.state === "ready" && browserViewHost) establishBrowserStreamLink();
 	const daemonIdentity = nextStatus.pid ?? daemonProcess?.pid;
 	if (sideLaunchRecovery.setAttachment(nextStatus.state === "ready" && nextStatus.port && daemonIdentity
 		? { generation: daemonAttachmentGeneration, pid: daemonIdentity, port: nextStatus.port, appRunId }
@@ -2016,7 +2014,6 @@ function reconnectBrowserRuntimeLink(): void {
 }
 
 function establishBrowserRuntimeLink(): void {
-	if (!browserViewHost) return;
 	const rfp = runFilePath();
 	if (!rfp) {
 		console.warn("AO: browser runtime link skipped; run-file path unavailable");
