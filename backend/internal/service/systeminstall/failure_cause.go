@@ -55,6 +55,8 @@ var (
 		"did not start.",
 		"did not report its version",
 	}
+	// 127: a POSIX shell's command-not-found exit; 9009: cmd.exe's.
+	commandNotFoundExit = regexp.MustCompile(`exit status (?:127|9009)\b`)
 	// managed: "The new X reports 1.2, not 1.3."
 	versionMismatch = regexp.MustCompile(`^the new .+ reports .+, not `)
 	// The program a shell, env or exec could not find, in the forms Go, bash,
@@ -166,8 +168,15 @@ func classifyFailure(status Status, message, output string) FailureCause {
 	case containsAny(lowerMessage, verifyFailedText), versionMismatch.MatchString(lowerMessage):
 		return FailureVerifyFailed
 	}
-	for _, text := range []string{message, output} {
-		if cause := missingCommandCause(text); cause != "" {
+	// The message names a program Go itself could not start. The output is
+	// trusted only when the run ended with the shell's command-not-found
+	// code: installers probe optional tools ("pyenv: command not found") and
+	// then fail for another reason.
+	if cause := missingCommandCause(message); cause != "" {
+		return cause
+	}
+	if commandNotFoundExit.MatchString(lowerMessage) {
+		if cause := missingCommandCause(output); cause != "" {
 			return cause
 		}
 	}
@@ -189,28 +198,33 @@ func classifyFailure(status Status, message, output string) FailureCause {
 	return FailureOther
 }
 
-// missingCommandCause names the missing program text reports, if any.
+// missingCommandCause names the missing program text reports, if any. With
+// several, the last one printed is the one that ended the run.
 func missingCommandCause(text string) FailureCause {
+	last, name := -1, ""
 	for _, pattern := range missingCommandPatterns {
-		match := pattern.FindStringSubmatch(text)
-		if match == nil {
-			continue
+		for _, match := range pattern.FindAllStringSubmatchIndex(text, -1) {
+			if match[0] > last {
+				last, name = match[0], text[match[2]:match[3]]
+			}
 		}
-		name := strings.ToLower(filepath.Base(strings.ReplaceAll(match[1], `\`, "/")))
-		for _, suffix := range []string{".exe", ".cmd", ".bat", ".ps1"} {
-			name = strings.TrimSuffix(name, suffix)
-		}
-		switch name {
-		case "node", "nodejs":
-			return FailureNodeMissing
-		case "npm", "npx":
-			return FailureNPMMissing
-		case "brew":
-			return FailureBrewMissing
-		}
-		return FailureToolMissing
 	}
-	return ""
+	if last < 0 {
+		return ""
+	}
+	name = strings.ToLower(filepath.Base(strings.ReplaceAll(name, `\`, "/")))
+	for _, suffix := range []string{".exe", ".cmd", ".bat", ".ps1"} {
+		name = strings.TrimSuffix(name, suffix)
+	}
+	switch name {
+	case "node", "nodejs":
+		return FailureNodeMissing
+	case "npm", "npx":
+		return FailureNPMMissing
+	case "brew":
+		return FailureBrewMissing
+	}
+	return FailureToolMissing
 }
 
 func containsAny(text string, needles []string) bool {
