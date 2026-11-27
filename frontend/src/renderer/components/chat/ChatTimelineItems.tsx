@@ -976,8 +976,10 @@ function useUserTextRenderer(sessionId: string, body: string, attachments: strin
 }
 
 // A list, quote or code block at either end of a message sits flush with the
-// bubble's padding instead of adding its own outer margin.
-const USER_BODY_CLASS = "break-words text-pretty [&>:first-child]:mt-0 [&>:last-child]:mb-0";
+// bubble's padding instead of adding its own outer margin. Lines wrap normally:
+// `text-wrap: pretty` pulls words down to avoid a short last line after the bubble
+// has already sized itself to the full line, leaving empty room on the right.
+const USER_BODY_CLASS = "break-words [&>:first-child]:mt-0 [&>:last-child]:mb-0";
 
 const collapseWhitespace = (text: string) => text.replace(/\s+/g, "");
 
@@ -1259,15 +1261,12 @@ export function HumanMessage({
 	const renderText = useUserTextRenderer(sessionId, body, attachments, apiBaseUrl);
 	// Attachments carry themselves, so a message of nothing else draws no empty bubble.
 	const showBubble = Boolean(body) || !hasAttachments;
-	// Hover-only actions float under the bubble instead of reserving a blank row;
-	// a branch navigator is always visible, so it keeps its place in the flow.
-	// So does a status: it leads the row, and the time and actions follow it in
-	// view, one line under the bubble.
-	const inFlowActions = Boolean(branchPoint && onActivateBranch);
-	const actionRowClass = cn("flex h-7 items-center gap-1", inFlowActions ? "mt-1" : status ? "-mt-0.5" : "absolute right-0 top-full z-10 mt-1");
-	// The editor's Cancel and Send float too, so starting an edit moves nothing. They
-	// sit on the "Worked for" line the turn reserves one row gap (10px) under the bubble.
-	const editActionRowClass = cn("flex h-7 items-center gap-1", inFlowActions ? "mt-1" : "absolute right-0 top-[calc(100%+0.625rem)] z-10");
+	// The time and actions keep their own line under the bubble, shown on hover, so
+	// they never sit over the reply's "Worked for" line below. A status leads the
+	// row and keeps it in view.
+	const actionRowClass = cn("flex h-7 items-center gap-1", status ? "-mt-0.5" : "mt-1");
+	// The editor's Cancel and Send take that same line, so starting an edit moves nothing.
+	const editActionRowClass = "mt-1 flex h-7 items-center gap-1";
 	return (
 		<div
 			className="group/message relative flex flex-col items-end gap-1"

@@ -196,6 +196,7 @@ Important flags include:
 | `--prompt <text>` | Initial prompt. |
 | `--standalone` | Projectless worker; requires an explicit agent and excludes project, branch, issue, PR, and orchestrator options. |
 | `--model <model>` | Override the selected provider model for this spawn. |
+| `--permission <mode>` | Permission mode for this spawn: `default`, `accept-edits`, `auto`, or `bypass-permissions`. A spawn from a session in the same project may choose an equal or stricter mode than the project's role setting. When the project sets none, an orchestrator cannot exceed its own mode. |
 | `--tracker-provider github\|gitlab` | Select the issue provider for `--issue`. |
 | `--issue <id>` | Associate a tracker issue. |
 | `--claim-pr <ref>` | Claim an existing pull request after spawning. |

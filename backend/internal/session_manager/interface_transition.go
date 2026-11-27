@@ -777,22 +777,23 @@ func (m *Manager) hermesIdentityDegraded(rec domain.SessionRecord, mode domain.S
 	return !declared
 }
 
-// degradedHandoffMarkerText is the boundary turn delivered into the fresh Chat
-// conversation after a degraded identity-reset handoff completes, so the
-// timeline states honestly that native history did not transfer.
+// degradedHandoffMarkerText is the boundary notice shown in the Chat timeline
+// after a degraded identity-reset handoff completes, so the timeline states
+// honestly that native history did not transfer. It is a system row, never a
+// prompt (see deliverTransitionMessages).
 const degradedHandoffMarkerText = "Chat started fresh — the terminal's native history stays in Terminal."
 
 const (
-	// degradedTerminalResumeMarkerText is delivered into the terminal a
-	// degraded hermes Chat→TUI switch resumed through its recorded native
-	// conversation.
+	// degradedTerminalResumeMarkerText marks, in the Chat timeline left behind,
+	// a degraded hermes Chat→TUI switch that resumed the terminal through its
+	// recorded native conversation.
 	degradedTerminalResumeMarkerText = "Resumed your Terminal session."
-	// degradedTerminalFreshMarkerText is delivered when no native terminal
-	// could be resolved and the switch started a fresh TUI instead.
+	// degradedTerminalFreshMarkerText marks one that could resolve no native
+	// terminal and started a fresh TUI instead.
 	degradedTerminalFreshMarkerText = "Terminal started fresh — the Chat conversation stays archived in Chat."
 )
 
-// degradedHandoffMarkerTextFor words the boundary turn for the direction the
+// degradedHandoffMarkerTextFor words the boundary notice for the direction the
 // degraded handoff actually took, so each timeline states honestly what
 // transferred and what stayed behind.
 func degradedHandoffMarkerTextFor(transition domain.SessionInterfaceTransition) string {
@@ -1695,7 +1696,7 @@ func (m *Manager) finishInterfaceTransition(
 func (m *Manager) deliverTransitionMessages(
 	ctx context.Context,
 	transition domain.SessionInterfaceTransition,
-) error {
+) (err error) {
 	m.transitionDeliveryAttemptMu.Lock()
 	defer m.transitionDeliveryAttemptMu.Unlock()
 	store, ok := m.store.(interfaceTransitionStore)
@@ -1704,9 +1705,31 @@ func (m *Manager) deliverTransitionMessages(
 	}
 	ctx, cancel := context.WithTimeout(ctx, interfaceTransitionStepLimit)
 	defer cancel()
-	messages, err := store.ListPendingSessionInterfaceTransitionMessages(ctx, transition.ID)
+	pending, err := store.ListPendingSessionInterfaceTransitionMessages(ctx, transition.ID)
 	if err != nil {
 		return fmt.Errorf("read transition %s messages: %w", transition.ID, err)
+	}
+	// A degraded handoff's boundary notice is for the user's timeline, not the
+	// agent: sending it would spend a model turn on AO's bookkeeping (and type it
+	// into a terminal target). Record it and acknowledge it here; every other
+	// message is input the user queued and is delivered below.
+	//
+	// The notice never holds up that input: a failure leaves it pending for the
+	// next attempt, and is reported once the input has had its turn.
+	boundaryID := domain.SessionInterfaceTransitionBoundaryMessageID(transition.ID)
+	var boundaryErr error
+	defer func() {
+		if boundaryErr != nil {
+			err = errors.Join(err, boundaryErr)
+		}
+	}()
+	var messages []domain.SessionInterfaceTransitionMessage
+	for _, message := range pending {
+		if message.ClientMessageID != boundaryID {
+			messages = append(messages, message)
+			continue
+		}
+		boundaryErr = m.deliverTransitionBoundary(ctx, store, transition, message)
 	}
 	if len(messages) == 0 {
 		return nil
@@ -1737,6 +1760,42 @@ func (m *Manager) deliverTransitionMessages(
 		}
 	}
 	return nil
+}
+
+// transitionBoundaryLimit bounds recording a boundary notice, so one that hangs
+// can't use up the time the user's queued input has.
+const transitionBoundaryLimit = 5 * time.Second
+
+// deliverTransitionBoundary records a degraded handoff's boundary notice and
+// acknowledges it in the outbox.
+func (m *Manager) deliverTransitionBoundary(
+	ctx context.Context,
+	store interfaceTransitionStore,
+	transition domain.SessionInterfaceTransition,
+	message domain.SessionInterfaceTransitionMessage,
+) error {
+	ctx, cancel := context.WithTimeout(ctx, transitionBoundaryLimit)
+	defer cancel()
+	if err := m.recordTransitionBoundary(ctx, transition, message.Message); err != nil {
+		return fmt.Errorf("record transition %s boundary: %w", transition.ID, err)
+	}
+	if err := store.MarkSessionInterfaceTransitionMessageDelivered(ctx, message.ID, m.clock()); err != nil {
+		return fmt.Errorf("acknowledge transition %s message %d: %w", transition.ID, message.ID, err)
+	}
+	return nil
+}
+
+// recordTransitionBoundary puts a degraded handoff's boundary notice in the
+// session's Chat timeline. A Chat service that cannot record it leaves the
+// notice undisplayed; it still must not reach the agent.
+func (m *Manager) recordTransitionBoundary(ctx context.Context, transition domain.SessionInterfaceTransition, summary string) error {
+	recorder, ok := m.chat.(interface {
+		RecordInterfaceTransitionBoundary(context.Context, domain.SessionID, string, string) error
+	})
+	if !ok {
+		return nil
+	}
+	return recorder.RecordInterfaceTransitionBoundary(ctx, transition.SessionID, transition.ID, summary)
 }
 
 func (m *Manager) waitForTransitionDeliveryReady(

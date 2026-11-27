@@ -29,7 +29,7 @@ off its Docker sandbox, so AO leaves it alone.
 
 ## Log in
 
-Settings → Harness → Log in runs `stakpak auth login`: create a Stakpak API key
+Settings → Agents → Log in runs `stakpak auth login`: create a Stakpak API key
 in the browser, or paste an Anthropic, OpenAI or Gemini key. Other
 OpenAI-compatible providers go in `~/.stakpak/config.toml`, for example:
 

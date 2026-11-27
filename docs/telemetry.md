@@ -103,8 +103,16 @@ The sender checks consent both before capture and immediately before network
 send, so an event still queued when opt-out arrives is discarded.
 
 Mobile Sentry sends application codes and applies the same normalized first-line display rule for JavaScript engine errors. Other uncoded errors contribute only a hash of the cleaned-up text. It also receives the error category, safe stack line numbers with generic
-frame names, release version and build number, and the production or preview
-environment. The sender excludes request bodies and account identity. Its `user.id` is the authenticated paired
+frame names, release version and build number, the running OTA update ID
+(`embedded` for the bundle in the binary) as `dist` and `ao.update_id`, the
+daemon's version as `ao.daemon_version`, and the production or preview
+environment. For a failed request that is the version of the desktop the
+request went to; for other errors it is sent only when every connected desktop
+reported its version and they are all the same. A failed daemon request is named by its method and route as
+`ao.operation`, such as `POST /api/v1/sessions/:id/send`: only the app's fixed
+route words are kept, every other path segment becomes `:id`, and a workspace
+file path becomes `*`, so no session, project, branch or file name is sent.
+The request ID is not sent. The sender excludes request bodies and account identity. Its `user.id` is the authenticated paired
 desktop installation ID only. It is absent before pairing, during repair, and
 after unpairing or a failed identity refresh. The phone retains its separate
 PostHog identity across those changes. A paired Sentry error can therefore be
@@ -266,7 +274,19 @@ Orchestrator.inc sends structured events in a few broad categories:
   while its desktop identity is known,
   and one-way hashes of project or session identifiers when an event needs them
 - Coarse mobile-app usage, such as pairing, reconnecting, completing onboarding,
-  opening a notification, or using a core action
+  opening a notification, or using a core action. Phone events also carry the
+  running OTA update as `update_id` (a UUID, or `embedded` for the bundle in the
+  binary) and `update_channel` (`production`, `preview`, `development`, or
+  `other`), and while a desktop is paired its daemon's version as
+  `paired_daemon_version` (the desktop named by `paired_install_id`; with
+  several connected, the one whose identity the phone adopted).
+  `notification_opened` reports its `target` as `session`, `review`, `prs`, or
+  `cloud`. `paired` is sent for every pairing finished from Pair a machine, by
+  scan or manual entry: a new machine, a re-pair, or an edited connection. A
+  manual pairing is reported even if the person left the page while it
+  connected.
+  The phone also reports which of its screens are used and how long its
+  launches take (see "Mobile app screens and launches" below)
 - Coarse geographic location (country, and where available region and city),
   derived by PostHog from the connection's IP address when it receives each
   event. Orchestrator.inc does not resolve or send precise coordinates, and does not store
@@ -1034,6 +1054,86 @@ kill switch control both events. Turning Share usage analytics off stops the
 summary and deletes the window counted so far, so nothing from before is sent
 after it is turned back on.
 
+## Mobile app screens and launches
+
+When mobile telemetry is active, the phone records which of its screens and
+sheets people use, the errors it shows them, and how long it takes to start,
+the mobile counterpart of "UI usage" and "UI responsiveness" above. The
+properties specific to these events are fixed screen names, fixed error kinds,
+counts and durations. Like every phone event they also carry the shared
+context, such as `app_version`. They never include a session, project, PR or
+file name, path, URL, message text, error message, tap position or
+screenshot. There is no session replay.
+
+| Event | When it is sent | Properties |
+| --- | --- | --- |
+| `mobile.surfaces.viewed` | A screen or sheet stays on screen for a second. At most once per surface per UTC day | `surface` |
+| `mobile.ui.usage_summary` | When the app goes to the background at least 15 minutes after its window started, or at the next launch for a window that ran out while the app was closed. Not sent when nothing was counted | Window fields and counters (below) |
+| `mobile.ui.error_shown` | A user-visible error shows: a warning toast, a board failure view, or a screen or sheet that failed to draw. The same error on the same screen within 5 minutes is counted in the summary but not sent again | `presentation`, `error_kind`, `surface` |
+| `mobile.launches.timed` | Once per app start: when a paired machine's live data or Orchestrator Cloud's first list shows, when 60 seconds pass without it, or when the app goes to the background first | `launch_kind`, `outcome`, `landing_surface`, `clock_origin`, `to_js_start_ms`, `to_visible_ms`, `to_usable_ms` |
+
+- `surface` is one of the app's screens or sheets: `board`, `projects`,
+  `project`, `compose`, `spawn`, `prs`, `notifications`, `session` (the session
+  screen while it loads), `session_chat`, `session_tui`, `session_cloud`,
+  `conversation_actions`, `review`, `review_actions`, `reviewer`, `files`,
+  `file_viewer`, `files_review`, `files_branch`, `files_changes`, `artifacts`,
+  `artifact`, `artifact_history`, `render`, `preview`, `browser`, `device`,
+  `shell`, `cloud_terminal`, `cloud_new_project`, `cloud_plan`,
+  `conversation_usage`, `model_picker`, `agent_picker`, `account`,
+  `machine_name`, `onboarding`, `pair`, `connect`, `settings`,
+  `settings_theme`, `settings_machine`, `settings_cloud`, or `other` for a
+  screen added later.
+- `presentation` is `toast`, `screen`, or `sheet`. `error_kind` is
+  `render_crash`, `unreachable`, `auth`, `incompatible_host`, `rate_limited`,
+  `server_error`, `phone_offline`, `cloud_unavailable`, or `action_failed` (a
+  warning toast after an action).
+
+`mobile.ui.usage_summary` properties (a counter that stayed at 0 is left out):
+
+| Property | Meaning |
+| --- | --- |
+| `measurement_schema_version` | `1` |
+| `window_seconds` | Wall time from the window's start to the send, or, for a window sent at the next launch, to its last save while the app was open (time the app was closed is not counted) |
+| `active_seconds` | Time the app was in the foreground |
+| `flush_reason` | `background`, or `startup` for a window that ended while the app was closed |
+| `foreground_count` | Launches and returns to the foreground |
+| `error_shown_count` | User-visible errors, including repeats not sent as their own event |
+| `session_open_count` | Sessions opened, each once while it stays open: a remount or a chat/terminal switch is not a new opening, going straight to another session is |
+| `session_open_from_<source>_count` | Those by where they were opened from: the screen before it (`board`, `project`, `prs`, `spawn`, `notifications_inbox`), another session (`session`), a push tap that opened it (`notification`), a link (`deep_link`), the launch reopening the session the app was left on (`restore`), or `other` |
+| `surface_<surface>_seconds` | Time that screen was on screen while the app was in the foreground |
+| `surface_<surface>_opens` | Times it came on screen, including returning to it |
+
+Properties on `mobile.launches.timed`:
+
+- `launch_kind` is `first` (the first launch of an install with this
+  telemetry), `update` (the first launch on a new app version or OTA update), or
+  `cold`.
+- `outcome` is `usable`, `timeout`, `no_machine` (the 60 seconds passed on a
+  phone with no paired machine and no Orchestrator Cloud, which has nothing to
+  load), or `backgrounded`. A launch that went to the
+  background before it was usable sends only `launch_kind`, `outcome` and
+  `landing_surface`.
+- `landing_surface` is the screen on show when the launch ended, such as
+  `board`, or `onboarding` on a phone that is not paired yet.
+- Times are in milliseconds from the app's start, read from React Native's
+  startup marks; `clock_origin` is `process`, or `runtime` when the app's own
+  start was not recorded and the JavaScript runtime's start is used instead.
+  The app does not record its own start today, so launches report `runtime`.
+  `to_js_start_ms` is the app's JavaScript starting (sent only with `process`:
+  measured from the runtime's start it is always 0), `to_visible_ms` its first
+  frame, and `to_usable_ms` the first frame after a paired machine's data or
+  Cloud's first list arrives. A time outside 0 to 10 minutes is left out.
+
+Counting happens in memory and is saved in the app's storage when it goes to
+the background, and at most once a minute while screens change. The phone's
+analytics opt-out (which follows the paired desktop's) drops everything
+counted so far, removes the saved window, and stops counting; nothing counted
+before an opt-out is sent after opting in again. Development builds do not
+count. The once-per-day screen markers are kept only so the same screen is not
+sent twice in a day. A screen view or shown error that was not sent (rate
+limit, kill switch, or the preference still loading) is tried again on its next
+showing.
+
 ## Chat import
 
 When desktop product telemetry is enabled, Orchestrator.inc records these events
@@ -1349,8 +1449,10 @@ that waitlist as described in the [privacy policy](https://orchestrator.inc/priv
   while the daemon is still starting. HTTP 409 responses are dropped only for
   `POST /api/v1/sessions/:id/workspace/diffs`,
   `GET /api/v1/sessions/:id/conversation/config-options`,
-  `GET /api/v1/sessions/:id/conversation/models`, and
-  `GET /api/v1/sessions/:id/conversation/skills`. Codex
+  `GET /api/v1/sessions/:id/conversation/models`,
+  `GET /api/v1/sessions/:id/conversation/skills`, and
+  `GET /api/v1/agents/:id/skills`; none of these 4xx responses go to Sentry,
+  so a remote host too old to scan skills for the new chat page stays quiet. Codex
   account management being unwired, and an already-closed shell terminal, are
   not analytics events. A GitHub token rejected after refresh still reports
   `GITHUB_AUTH_INVALID` (with that `error_code`). A temporary refresh outage reports
@@ -1664,7 +1766,7 @@ renamed event. Events not listed keep their names.
 | `ao.v2.mobile_app.paired` | `mobile.app.paired` |
 | `ao.v2.mobile_app.onboarding_started` | `mobile.app.onboarding_started` |
 | `ao.v2.mobile_app.onboarding_completed` | `mobile.app.onboarding_completed` |
-| `ao.v2.mobile_app.onboarding_skipped` | `mobile.app.onboarding_skipped` |
+| `ao.v2.mobile_app.onboarding_skipped` | `mobile.app.onboarding_skipped` (retired: onboarding has no skip, so it is not sent) |
 | `ao.v2.mobile_app.feature_used` | `mobile.app.feature_used` |
 | `ao.v2.mobile_app.notification_opened` | `mobile.app.notification_opened` |
 | `ao.usage.*` (`worker_pr_associated`, `worker_pr_merged`, `messages_sent`) | unchanged |

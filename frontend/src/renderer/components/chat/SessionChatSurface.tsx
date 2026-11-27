@@ -308,7 +308,8 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 			.catch(() => undefined);
 	}, [hostId, pendingHarness]);
 	// Ultracode is asked for in each message, so it is kept here, not on the agent.
-	const [ultracodeOn, setUltracodeOn] = useState(false);
+	// A task started with it on, from the new chat page, keeps it on.
+	const [ultracodeOn, setUltracodeOn] = useState(() => Boolean(launchSettings?.ultracode));
 	const ultracode = useMemo(() => ({ on: ultracodeOn, onChange: setUltracodeOn }), [ultracodeOn]);
 	const autoCompactWindow = snapshot?.settings.autoCompactWindow;
 	const [applyingAutoCompact, setApplyingAutoCompact] = useState(false);
@@ -443,7 +444,7 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 		rememberChatSkills(snapshot.harness, hostId, skills, session.workspaceId);
 	}, [hostId, session.kind, session.workspaceId, skills, skillsSettled, snapshot?.harness]);
 	const { paths, truncated, isLoading: filePathsLoading } = useWorkspaceFilePaths(session.id, Boolean(snapshot) && !session.needsResume, hostId);
-	const stageAttachments = useStageAttachments(session.id, hostId);
+	const stageAttachments = useStageAttachments(session.id, hostId, !sessionIsActive(session));
 	// Applied once: the chat below unmounts while the conversation reloads, and
 	// a request still held would scroll it back to the same message on return.
 	const annotationNavigation = useChatNavigationRequest<{ id: string; text: string; snapshot?: import("../../../shared/chat-excerpt").ChatExcerptSnapshot; messageId?: string; revision?: number; activitySequence?: number }>(uiSessionId);
@@ -950,9 +951,7 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 				filePathsTruncated={truncated}
 				filePathsLoading={filePathsLoading}
 				localEchos={localEchos}
-				// An archived session's worktree is gone until the restore its first message
-				// runs, so files are taken once it is back, as an archived Cloud chat does.
-				onStageAttachments={sessionIsActive(session) ? stageAttachments : undefined}
+				onStageAttachments={sessionIsActive(session) || commands.resumingAgent ? stageAttachments : undefined}
 				nativeImages={can(renderSnapshot, "images")}
 				// Gated on what the daemon advertises, so the control is never drawn for a
 				// harness that cannot steer. The refusal check stays as a backstop: it

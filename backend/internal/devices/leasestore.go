@@ -38,35 +38,46 @@ type leaseFile struct {
 	// Owned lists the devices this service booted, which a later session may
 	// reuse (see Service.owned).
 	Owned []string `json:"owned,omitempty"`
+	// Parked lists the owned devices no session holds, each with the session
+	// that last held it (see Service.parked).
+	Parked []storedParked `json:"parked,omitempty"`
+}
+
+type storedParked struct {
+	SessionID string       `json:"sessionId"`
+	Device    storedDevice `json:"device"`
+}
+
+func toStored(d ports.DeviceInfo) storedDevice {
+	return storedDevice{ID: d.ID, Name: d.Name, Platform: string(d.Platform), Version: d.Version}
+}
+
+func fromStored(d storedDevice) ports.DeviceInfo {
+	return ports.DeviceInfo{ID: d.ID, Name: d.Name, Platform: ports.DevicePlatform(d.Platform), Version: d.Version}
 }
 
 func leasesPath(dataDir string) string { return filepath.Join(dataDir, "devices", "leases.json") }
 
 // loadLeases reads the record a previous daemon left. A missing or unreadable
 // file is an empty one: the worst case is the old behaviour.
-func loadLeases(dataDir string) (map[domain.SessionID]Lease, map[string]bool) {
-	leases, owned := map[domain.SessionID]Lease{}, map[string]bool{}
+func loadLeases(dataDir string) (map[domain.SessionID]Lease, map[string]bool, map[string]parkedDevice) {
+	leases, owned, parked := map[domain.SessionID]Lease{}, map[string]bool{}, map[string]parkedDevice{}
 	raw, err := os.ReadFile(leasesPath(dataDir))
 	if err != nil {
-		return leases, owned
+		return leases, owned, parked
 	}
 	var file leaseFile
 	if json.Unmarshal(raw, &file) != nil {
-		return leases, owned
+		return leases, owned, parked
 	}
 	for _, l := range file.Leases {
 		if l.SessionID == "" || l.Device.ID == "" {
 			continue
 		}
 		leases[domain.SessionID(l.SessionID)] = Lease{
-			SessionID: domain.SessionID(l.SessionID),
-			Provider:  l.Provider,
-			Device: ports.DeviceInfo{
-				ID:       l.Device.ID,
-				Name:     l.Device.Name,
-				Platform: ports.DevicePlatform(l.Device.Platform),
-				Version:  l.Device.Version,
-			},
+			SessionID:    domain.SessionID(l.SessionID),
+			Provider:     l.Provider,
+			Device:       fromStored(l.Device),
 			Reason:       l.Reason,
 			AgentControl: ports.DeviceAgentControl{Command: l.Command, Args: l.Args},
 			OpenedAt:     l.OpenedAt,
@@ -75,7 +86,14 @@ func loadLeases(dataDir string) (map[domain.SessionID]Lease, map[string]bool) {
 	for _, id := range file.Owned {
 		owned[id] = true
 	}
-	return leases, owned
+	for _, p := range file.Parked {
+		device := fromStored(p.Device)
+		if p.SessionID == "" || device.ID == "" || !owned[deviceKey(device)] {
+			continue
+		}
+		parked[deviceKey(device)] = parkedDevice{session: domain.SessionID(p.SessionID), device: device}
+	}
+	return leases, owned, parked
 }
 
 // saveLocked writes the current leases. Callers hold s.mu. A failed write is
@@ -86,20 +104,18 @@ func (s *Service) saveLocked() {
 		file.Leases = append(file.Leases, storedLease{
 			SessionID: string(l.SessionID),
 			Provider:  l.Provider,
-			Device: storedDevice{
-				ID:       l.Device.ID,
-				Name:     l.Device.Name,
-				Platform: string(l.Device.Platform),
-				Version:  l.Device.Version,
-			},
-			Reason:   l.Reason,
-			Command:  l.AgentControl.Command,
-			Args:     l.AgentControl.Args,
-			OpenedAt: l.OpenedAt,
+			Device:    toStored(l.Device),
+			Reason:    l.Reason,
+			Command:   l.AgentControl.Command,
+			Args:      l.AgentControl.Args,
+			OpenedAt:  l.OpenedAt,
 		})
 	}
 	for id := range s.owned {
 		file.Owned = append(file.Owned, id)
+	}
+	for _, p := range s.parked {
+		file.Parked = append(file.Parked, storedParked{SessionID: string(p.session), Device: toStored(p.device)})
 	}
 	if err := writeFileAtomic(leasesPath(s.cfg.DataDir), file); err != nil {
 		s.log.Warn("save device leases", "err", err)
