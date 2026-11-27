@@ -4,8 +4,8 @@ import { foregroundStyle, frame } from "@expo/ui/swift-ui/modifiers";
 import { Stack } from "expo-router";
 import { useMemo } from "react";
 import { Platform, Pressable, StyleSheet, View } from "react-native";
-import { AccountUsageAvatar, accountUsageAccessibilityLabel } from "./AccountUsageAvatar";
-import { agentAccountLabel, type AgentAccount } from "./agentAccounts";
+import { AccountUsageAvatar } from "./AccountUsageAvatar";
+import { accountUsageAccessibilityLabel, agentAccountLabel, type AgentAccount } from "./agentAccounts";
 import { glassCircle } from "./glass";
 import { haptics } from "./haptics";
 import { HEADER_PILL_SIZE, HeaderPillButton, PillHeaderRight } from "./headerPill";
@@ -20,23 +20,27 @@ const GLASS_CIRCLE_SIZE = touchTarget;
  * circle as the back button opposite (glass on iOS, the pill on Android),
  * holding the account's letter, with its usage traced around the edge. A tap
  * opens the machine's accounts to pick another. Nothing while the agent has
- * no accounts (cloud, other agents, older machines).
+ * no signed-in account (cloud, other agents, older machines).
  */
 export function SpawnAccountButton({ account, accounts, onPress }: { account?: AgentAccount; accounts: readonly AgentAccount[]; onPress(): void }) {
-	const label = account ? accountUsageAccessibilityLabel(agentAccountLabel(account, accounts), account) : "";
+	const label = accountUsageAccessibilityLabel(account ? agentAccountLabel(account, accounts) : undefined, account);
+	// Offered whenever there is an account to pick, even while the one picked
+	// (a restored draft's, since removed) or a default is missing: the sheet is
+	// the only way to replace it.
+	const shown = Boolean(account) || accounts.some((candidate) => candidate.signedIn);
 	const press = useMemo(() => () => { haptics.tap(); onPress(); }, [onPress]);
-	const pill = useMemo(() => (Platform.OS === "android" && account ? (
+	const pill = useMemo(() => (Platform.OS === "android" && shown ? (
 		<HeaderPillButton label={label} onPress={press} testID="spawn-account">
 			<AccountUsageAvatar account={account} size={HEADER_PILL_SIZE} disc={false} />
 		</HeaderPillButton>
-	) : null), [account, label, press]);
-	const toolbar = useMemo(() => (Platform.OS === "ios" && account ? (
+	) : null), [account, label, press, shown]);
+	const toolbar = useMemo(() => (Platform.OS === "ios" && shown ? (
 		<Stack.Toolbar placement="right">
 			<Stack.Toolbar.View hidesSharedBackground>
 				<GlassAvatarButton account={account} label={label} onPress={press} />
 			</Stack.Toolbar.View>
 		</Stack.Toolbar>
-	) : null), [account, label, press]);
+	) : null), [account, label, press, shown]);
 	return Platform.OS === "android" ? <PillHeaderRight>{pill}</PillHeaderRight> : toolbar;
 }
 
@@ -45,7 +49,7 @@ export function SpawnAccountButton({ account, accounts, onPress }: { account?: A
  * avatar. The touch is React Native's: the SwiftUI layer takes none, so the
  * whole circle is one button with the avatar's label.
  */
-function GlassAvatarButton({ account, label, onPress }: { account: AgentAccount; label: string; onPress(): void }) {
+function GlassAvatarButton({ account, label, onPress }: { account?: AgentAccount; label: string; onPress(): void }) {
 	const { scheme } = useThemeState();
 	return (
 		<Pressable

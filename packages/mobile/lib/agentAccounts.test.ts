@@ -6,7 +6,7 @@ vi.mock("expo/fetch", () => ({ fetch: vi.fn() }));
 
 import { createElement } from "react";
 import { act, create, type ReactTestRenderer } from "react-test-renderer";
-import { agentAccountInitial, agentAccountLabel, agentAccountOptions, agentAccountPeakUsage, agentAccountProvider, agentAccountUsageSeverity, agentAccountUsageSummary, getAgentAccounts, getSessionAgentAccount, moveSessionAgentAccount, useAgentAccounts } from "./agentAccounts";
+import { accountUsageAccessibilityLabel, agentAccountInitial, agentAccountLabel, agentAccountOptions, agentAccountPeakUsage, agentAccountProvider, agentAccountUsageSeverity, agentAccountUsageSummary, getAgentAccounts, getSessionAgentAccount, moveSessionAgentAccount, useAgentAccounts } from "./agentAccounts";
 import { delegateTask, spawnSession } from "./api";
 import type { ServerConfig } from "./config";
 
@@ -37,6 +37,12 @@ describe("agent account usage", () => {
 		expect(agentAccountUsageSeverity(74.9)).toBe("normal");
 		expect(agentAccountUsageSeverity(75)).toBe("warn");
 		expect(agentAccountUsageSeverity(90)).toBe("critical");
+	});
+
+	it("names the account and its use for screen readers, or asks for one", () => {
+		expect(accountUsageAccessibilityLabel("a@x.dev", { signedIn: true, limits })).toBe("Account, a@x.dev, 42% of usage limit used");
+		expect(accountUsageAccessibilityLabel("a@x.dev", { signedIn: true })).toBe("Account, a@x.dev");
+		expect(accountUsageAccessibilityLabel(undefined, undefined)).toBe("Account, choose an account");
 	});
 
 	it("says when a full meter frees up", () => {

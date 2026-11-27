@@ -98,6 +98,13 @@ export function agentAccountUsageSummary(account: Pick<AgentAccount, "limits">, 
 	}).join(" · ");
 }
 
+/** What a screen reader says for the avatar's button. */
+export function accountUsageAccessibilityLabel(name: string | undefined, account: Pick<AgentAccount, "limits" | "signedIn"> | undefined): string {
+	if (!account || !name) return "Account, choose an account";
+	const percent = account.signedIn ? agentAccountPeakUsage(account) : undefined;
+	return percent === undefined ? `Account, ${name}` : `Account, ${name}, ${Math.round(percent)}% of usage limit used`;
+}
+
 export async function getAgentAccounts(cfg: ServerConfig, provider: AgentAccountProvider): Promise<AgentAccount[]> {
 	const res = await apiRequest(cfg, API, undefined, READ_TIMEOUT_MS);
 	const accounts = ((await res.json())?.accounts ?? []) as AgentAccount[];

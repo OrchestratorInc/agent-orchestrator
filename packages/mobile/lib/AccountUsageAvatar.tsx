@@ -1,5 +1,6 @@
 import { StyleSheet, Text, View } from "react-native";
 import Svg, { Circle } from "react-native-svg";
+import { AppSymbol } from "./AppSymbol";
 import { agentAccountInitial, agentAccountPeakUsage, agentAccountUsageSeverity, type AgentAccount } from "./agentAccounts";
 import { useTheme } from "./ThemeProvider";
 import { font } from "./tokens";
@@ -8,16 +9,18 @@ import { font } from "./tokens";
  * An agent account as a letter in a disc, ringed by how much of its fullest
  * usage meter is spent: the accent while there is room, amber from 75%, red
  * from 90%. No ring arc while the machine has not read the meters; a signed
- * out account's letter is dimmed.
+ * out account's letter is dimmed. Without an account (one picked earlier
+ * that the machine no longer has, or no default) it is a bare ring around a
+ * person, so nothing stands in for an account the task would not start on.
  */
 export function AccountUsageAvatar({ account, size = 32, disc: withDisc = true }: {
-	account: Pick<AgentAccount, "email" | "name" | "provider" | "limits" | "signedIn">;
+	account?: Pick<AgentAccount, "email" | "name" | "provider" | "limits" | "signedIn">;
 	size?: number;
 	/** False draws the letter straight on what is behind it, such as a header button's own circle. */
 	disc?: boolean;
 }) {
 	const t = useTheme();
-	const percent = account.signedIn ? agentAccountPeakUsage(account) : undefined;
+	const percent = account?.signedIn ? agentAccountPeakUsage(account) : undefined;
 	const severity = agentAccountUsageSeverity(percent);
 	const stroke = Math.max(2, Math.round(size / 14));
 	const r = (size - stroke) / 2;
@@ -48,21 +51,19 @@ export function AccountUsageAvatar({ account, size = 32, disc: withDisc = true }
 				) : null}
 			</Svg>
 			<View style={[styles.disc, { width: disc, height: disc, borderRadius: disc / 2, top: (size - disc) / 2, left: (size - disc) / 2 }, withDisc && { backgroundColor: t.bgElevated }]}>
-				<Text
-					allowFontScaling={false}
-					style={{ fontFamily: font.semibold, fontSize: letterSize, lineHeight: Math.round(letterSize * 1.25), color: account.signedIn ? t.textPrimary : t.textTertiary }}
-				>
-					{agentAccountInitial(account)}
-				</Text>
+				{account ? (
+					<Text
+						allowFontScaling={false}
+						style={{ fontFamily: font.semibold, fontSize: letterSize, lineHeight: Math.round(letterSize * 1.25), color: account.signedIn ? t.textPrimary : t.textTertiary }}
+					>
+						{agentAccountInitial(account)}
+					</Text>
+				) : (
+					<AppSymbol name={{ ios: "person.fill", android: "person" }} size={letterSize} color={t.textSecondary} />
+				)}
 			</View>
 		</View>
 	);
-}
-
-/** What a screen reader says for the avatar's button. */
-export function accountUsageAccessibilityLabel(name: string, account: Pick<AgentAccount, "limits" | "signedIn">): string {
-	const percent = account.signedIn ? agentAccountPeakUsage(account) : undefined;
-	return percent === undefined ? `Account, ${name}` : `Account, ${name}, ${Math.round(percent)}% of usage limit used`;
 }
 
 const styles = StyleSheet.create({
