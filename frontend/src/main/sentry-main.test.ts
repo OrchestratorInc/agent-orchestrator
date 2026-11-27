@@ -426,6 +426,23 @@ describe("Electron main Sentry configuration", () => {
 		expect(beforeSend(sdk.captureEvent.mock.calls.at(-1)?.[0] as ErrorEvent).tags).not.toHaveProperty("target");
 	});
 
+	it("tags a failed onboarding install with its cause from the closed list only", async () => {
+		const transport = await initMainSentry("1.0.0", dataDir, "/tmp/ao-electron-test");
+		const beforeSend = sdk.init.mock.calls[0]?.[0].beforeSend as (event: ErrorEvent) => ErrorEvent;
+		transport.capture({ consentGeneration: "generation-1", kind: "message", message: "safe", tags: { category: "onboarding", code: "gh_install:install_failed", target: "gh", cause: "brew_missing" } });
+		expect(sdk.captureEvent.mock.calls.at(-1)?.[0].tags).toMatchObject({ "ao.cause": "brew_missing" });
+		const event = beforeSend(sdk.captureEvent.mock.calls.at(-1)?.[0] as ErrorEvent);
+		expect(event.tags).toMatchObject({ action: "gh_install", reason: "install_failed", cause: "brew_missing" });
+		// A tag to filter by: the issue stays grouped by action and reason.
+		expect(event.fingerprint).toEqual(["electron", "onboarding", "gh_install", "install_failed", "renderer"]);
+		transport.capture({ consentGeneration: "generation-1", kind: "message", message: "safe", tags: { category: "onboarding", code: "agent_install:install_failed", target: "codex", cause: "EACCES /Users/alice/.npm" } });
+		expect(sdk.captureEvent.mock.calls.at(-1)?.[0].tags).toMatchObject({ "ao.cause": "other" });
+		expect(JSON.stringify(sdk.captureEvent.mock.calls.at(-1)?.[0])).not.toContain("alice");
+		// Other renderer events don't carry it.
+		transport.capture({ consentGeneration: "generation-1", kind: "message", message: "safe", tags: { category: "http_5xx", code: "CHAT_DELIVERY_FAILED", cause: "network" } });
+		expect(sdk.captureEvent.mock.calls.at(-1)?.[0].tags).not.toHaveProperty("ao.cause");
+	});
+
 	it("drops onboarding codes outside the closed action and reason lists", async () => {
 		const transport = await initMainSentry("1.0.0", dataDir, "/tmp/ao-electron-test");
 		const beforeSend = sdk.init.mock.calls[0]?.[0].beforeSend as (event: ErrorEvent) => ErrorEvent;

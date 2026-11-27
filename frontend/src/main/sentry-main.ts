@@ -12,7 +12,7 @@ import { sentryIdentityTitle, sentryMessageIdentity, sentryExceptionValue } from
 import { loadOrCreateTelemetryInstallId } from "../shared/telemetry";
 import type { DesktopTelemetryTransport } from "./desktop-telemetry-controller";
 import { isSafeMainErrorDetail, MAIN_ERROR_CATEGORIES, MAIN_ERROR_REASONS, sanitizeMainErrorCapture, type MainErrorCapture } from "./main-error-capture";
-import { onboardingSentryTarget, parseOnboardingFailureCode } from "../shared/onboarding-failures";
+import { onboardingFailureCause, onboardingSentryTarget, parseOnboardingFailureCode } from "../shared/onboarding-failures";
 
 export function electronMainSentryDsn(version: string, isDev: boolean): string {
 	return process.env.AO_ELECTRON_SENTRY_DSN ?? (isPublishedSentryBuild(version, isDev) ? DEFAULT_ELECTRON_SENTRY_DSN : "");
@@ -85,6 +85,7 @@ const CAPTURE_KEYS = new Set(["consentGeneration", "kind", "level", "message", "
 const TAG_KEYS = new Set([
 	"apierr_kind",
 	"category",
+	"cause",
 	"code",
 	"domain",
 	"error_code",
@@ -209,6 +210,8 @@ function scrubMainSentryEvent(event: Sentry.ErrorEvent, installId: string, versi
 	const onboarding = renderer && kind === "message" ? parseOnboardingFailureCode(safeCategory === "onboarding" ? safeCode : undefined) : undefined;
 	if (onboarding) {
 		const target = onboardingSentryTarget(event.tags?.["ao.target"]);
+		// Like target, a tag to filter by: the issue stays grouped by action and reason.
+		const cause = onboarding.reason === "install_failed" ? onboardingFailureCause(event.tags?.["ao.cause"]) : undefined;
 		return {
 			type: undefined,
 			platform: "javascript",
@@ -217,7 +220,7 @@ function scrubMainSentryEvent(event: Sentry.ErrorEvent, installId: string, versi
 			level: event.level === "warning" ? "warning" : "error",
 			message: `Onboarding ${onboarding.action} failed (${onboarding.reason})`,
 			fingerprint: ["electron", "onboarding", onboarding.action, onboarding.reason, "renderer"],
-			tags: { surface: "renderer", kind, category: "onboarding", code: safeCode, action: onboarding.action, reason: onboarding.reason, ...(target ? { target } : {}), flow: "onboarding" },
+			tags: { surface: "renderer", kind, category: "onboarding", code: safeCode, action: onboarding.action, reason: onboarding.reason, ...(target ? { target } : {}), ...(cause ? { cause } : {}), flow: "onboarding" },
 			user: { id: installId },
 			release: version,
 			environment,
@@ -383,6 +386,7 @@ export async function initMainSentry(version: string, dataDir: string, cacheRoot
 					...(safe.tags?.operation && SAFE_OPERATION.test(safe.tags.operation) ? { "ao.operation": safe.tags.operation } : {}),
 					...(safe.tags?.flow && SAFE_FLOWS.has(safe.tags.flow) ? { "ao.flow": safe.tags.flow } : {}),
 					...(category === "onboarding" && onboardingSentryTarget(safe.tags?.target) ? { "ao.target": onboardingSentryTarget(safe.tags?.target) as string } : {}),
+					...(category === "onboarding" && onboardingFailureCause(safe.tags?.cause) ? { "ao.cause": onboardingFailureCause(safe.tags?.cause) as string } : {}),
 				},
 			});
 		},
