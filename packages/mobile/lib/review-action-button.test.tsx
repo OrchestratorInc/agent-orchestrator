@@ -123,6 +123,14 @@ describe("ReviewActionButton on iOS", () => {
 		expect(host.props.style).toEqual({ height: touchTarget });
 	});
 
+	// Scrolled under the translucent header or status bar, a Host took their
+	// insets and drew its capsule up to 17pt above its slot, and kept it there
+	// until the next render: Send to agent sat above Reply beside it.
+	it("ignores the safe area, so scrolling under the header never shifts the capsule", async () => {
+		const root = await render(<IOSReviewActionButton label="Reply" icon={symbols.send} tone="outlined" onPress={() => {}} />);
+		expect(root.findByType("Host" as never).props.ignoreSafeArea).toBe("all");
+	});
+
 	it("gives a stopping action the destructive role", async () => {
 		const root = await render(<IOSReviewActionButton label="Cancel review" icon={symbols.close} tone="destructive" onPress={() => {}} />);
 		expect(root.findByType("SwiftButton" as never).props.role).toBe("destructive");

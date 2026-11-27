@@ -19,11 +19,13 @@ export function ReviewActionButton({ label, accessibilityLabel, icon, tone, busy
 	// white label would vanish; the accent's own ink reads on it in both.
 	const ink = tone === "filled" ? [foregroundStyle(t.onAccent)] : [];
 	// The Host's height is the touch target's and only its width follows the
-	// label. Sized to its content both ways, it measured some buttons 52pt tall
-	// with the capsule at the top and others 44pt with it centred, so two buttons
-	// in one row could sit 17pt apart.
+	// label: sized to its content both ways, some came out 52pt tall with the
+	// capsule at the top and others 44pt with it centred. It ignores the safe
+	// area: scrolled under the translucent header or status bar, a Host took
+	// their insets and drew its capsule up to 17pt above its slot until the next
+	// render, so Send to agent could sit above Reply beside it.
 	return (
-		<Host matchContents={HOST_SIZING} colorScheme={scheme} style={HOST_STYLE}>
+		<Host matchContents={HOST_SIZING} colorScheme={scheme} style={HOST_STYLE} ignoreSafeArea="all">
 			<Button
 				role={tone === "destructive" ? "destructive" : undefined}
 				onPress={onPress}
