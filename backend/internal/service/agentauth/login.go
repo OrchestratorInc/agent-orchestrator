@@ -529,7 +529,11 @@ func (s *Service) startHiddenLogin(ctx context.Context, agentID, method string, 
 	op := &loginOperation{
 		snapshot: LoginSnapshot{ID: uuid.NewString(), AgentID: agentID, Method: method, Status: "running", ExpiresAt: expires},
 		cancel:   cancel, done: make(chan struct{}), terminalID: result.Terminal.HandleID,
-		guidedSteps: steps, methodSteps: steps, methodStepsUntouched: len(steps) > 0, keepsRunning: plan.signInKeepsRunning && plan.guidedSupported(),
+		guidedSteps: steps, methodSteps: steps, methodStepsUntouched: len(steps) > 0,
+		// Only a guided method finishes while the CLI runs. Plain native
+		// sign-in runs until the user leaves the CLI, so an existing sign-in
+		// cannot close it before its menu is used (to switch accounts, say).
+		keepsRunning: len(steps) > 0 && plan.signInKeepsRunning && plan.guidedSupported(),
 	}
 	if method == "native" {
 		op.snapshot.NativePrompt = "waiting"

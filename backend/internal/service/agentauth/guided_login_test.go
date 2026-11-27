@@ -557,6 +557,33 @@ func TestAgyWithoutSignInProbeKeepsPlainNativeSignIn(t *testing.T) {
 	}
 }
 
+func TestAgyNativeSignInIsNotEndedByAnExistingSignIn(t *testing.T) {
+	onPlatform(t, "darwin")
+
+	// Agy is already signed in. "Other native sign-in" must stay open for the
+	// user to use Agy's own menu (to switch accounts, say), not finish once
+	// the probe passes.
+	pty := &guidedTerminalFake{output: agyMenuScreen}
+	svc := NewWithAgentResolver(foundExecutable("agy"), &switchableProberFake{state: domain.AgentAuthenticationAuthorized}, pty, "")
+	t.Cleanup(svc.Close)
+
+	started, err := svc.StartLogin(t.Context(), "agy", "native", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(3 * time.Second)
+	current, err := svc.Login(t.Context(), "agy", started.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if current.Status != "running" || pty.isClosed() {
+		t.Fatalf("status = %q closed = %v, want native sign-in still open", current.Status, pty.isClosed())
+	}
+	if _, err := svc.CancelLogin(t.Context(), "agy", started.ID); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestPrintedLoginURL(t *testing.T) {
 	t.Parallel()
 
