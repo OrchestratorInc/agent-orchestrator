@@ -486,7 +486,6 @@ type Manager struct {
 	browser                     BrowserLifecycle
 	browserCapabilities         BrowserCapabilityIssuer
 	agentBrowserURL             string
-	agentBrowserToken           string
 	agentAccounts               ports.AgentAccountLaunchEnv
 	refusedModelRefreshMu       sync.Mutex
 	refusedModelRefreshAt       map[string]time.Time
@@ -977,13 +976,12 @@ type Deps struct {
 	Preview             PreviewLifecycle
 	Browser             BrowserLifecycle
 	BrowserCapabilities BrowserCapabilityIssuer
-	// AgentBrowserURL/Token name the host's self-hosted agent-browser service
-	// (config AO_AGENT_BROWSER_URL/AO_AGENT_BROWSER_TOKEN). When set, session
-	// processes receive both in their environment and the system prompt points
-	// at the remote browser guide, so `ao browser` targets the remote service
+	// AgentBrowserURL names the host's self-hosted agent-browser service
+	// (config AO_AGENT_BROWSER_URL). When set, session processes receive it
+	// (never its token) and the system prompt points at the remote browser
+	// guide, so `ao browser` goes through this daemon's approval gate to it
 	// instead of the desktop browser bridge.
-	AgentBrowserURL   string
-	AgentBrowserToken string
+	AgentBrowserURL string
 	// DataDir owns durable attachment storage and is exported to spawned agents
 	// as AO_DATA_DIR so their hook commands can open the same store.
 	DataDir string
@@ -1054,7 +1052,6 @@ func New(d Deps) *Manager {
 		browser:                        d.Browser,
 		browserCapabilities:            d.BrowserCapabilities,
 		agentBrowserURL:                d.AgentBrowserURL,
-		agentBrowserToken:              d.AgentBrowserToken,
 		attachments:                    attachmentstore.New(d.DataDir),
 		attachmentSuffix:               randomSuffix,
 		dataDir:                        d.DataDir,
@@ -7624,15 +7621,15 @@ func (m *Manager) runtimeEnvChecked(id domain.SessionID, project domain.ProjectI
 	setProtectedEnv(env, EnvBrowserCapability, "", caseInsensitive)
 	setProtectedEnv(env, EnvBrowserRuntimeToken, "", caseInsensitive)
 	setProtectedEnv(env, EnvBrowserRuntimeTokenStdin, "", caseInsensitive)
-	// The agent-browser service credential is host configuration, not a
-	// session secret: every session on a self-hosted host shares that browser,
-	// and `ao browser` inside the session needs both values to route to it.
-	// Unset on desktop hosts, where the desktop bridge remains the target.
+	// On a self-hosted host, sessions learn the agent browser's URL so `ao
+	// browser` uses its command interface, but never its token: the command
+	// goes to this daemon, which asks the user before consequential actions
+	// and forwards with the token it alone holds. Unset on desktop hosts,
+	// where the desktop bridge remains the target.
 	deleteProtectedEnv(env, EnvAgentBrowserURL, caseInsensitive)
-	deleteProtectedEnv(env, EnvAgentBrowserToken, caseInsensitive)
+	setProtectedEnv(env, EnvAgentBrowserToken, "", caseInsensitive)
 	if m.agentBrowserURL != "" {
 		env[EnvAgentBrowserURL] = m.agentBrowserURL
-		env[EnvAgentBrowserToken] = m.agentBrowserToken
 	}
 	accountErr := m.applyAgentAccountEnv(id, accountID, env, caseInsensitive)
 	path, err := hookPATHForOS(m.executable, os.Getenv, projectEnv, m.dataDir, caseInsensitive)

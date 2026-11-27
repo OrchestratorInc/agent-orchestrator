@@ -239,6 +239,21 @@ function PersistentBrowserPanelView({
 	);
 }
 
+/** The panel without a session, as the Settings login browser uses it. */
+function SessionlessBrowserPanelView() {
+	const browserView = useBrowserView({ sessionId: "settings-login", active: true, poppedOut: false });
+	const annotationQueue = useBrowserAnnotationQueue({ sessionId: "settings-login", navUrl: browserView.navState.url });
+	return (
+		<BrowserPanelView
+			active
+			annotationQueue={annotationQueue}
+			browserView={browserView}
+			onTogglePopOut={() => undefined}
+			poppedOut={false}
+		/>
+	);
+}
+
 describe("BrowserPanel", () => {
 	const annotationSubmitListeners = new Set<(payload: BrowserAnnotationSubmitPayload) => void>();
 	const annotationCancelListeners = new Set<(payload: BrowserAnnotationCancelPayload) => void>();
@@ -838,6 +853,18 @@ describe("BrowserPanel", () => {
 		await userEvent.click(screen.getByRole("menuitem", { name: "Device preset" }));
 		expect(screen.getByRole("menuitem", { name: /iPhone SE/ })).toBeInTheDocument();
 		expect(screen.getByRole("menuitem", { name: /iPhone SE/ }).parentElement).toHaveClass("board-scrollbar");
+	});
+
+	it("shows the approval mode for a session's browser and leaves it out without a session", async () => {
+		const { unmount } = render(<BrowserPanel active onTogglePopOut={() => undefined} poppedOut={false} session={session} />);
+		await openBrowserControls();
+		expect(screen.getByRole("menuitem", { name: /^Approvals/ })).toBeInTheDocument();
+		unmount();
+
+		render(<SessionlessBrowserPanelView />);
+		await openBrowserControls();
+		expect(screen.getByRole("menuitem", { name: "Device preset" })).toBeInTheDocument();
+		expect(screen.queryByRole("menuitem", { name: /^Approvals/ })).not.toBeInTheDocument();
 	});
 
 	it("captures the active page from the controls menu and confirms the clipboard copy", async () => {

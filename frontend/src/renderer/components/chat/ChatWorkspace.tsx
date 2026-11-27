@@ -446,6 +446,8 @@ export interface ChatWorkspaceProps {
 	onFindRequestHandled?: (id: string) => void;
 	snapshot: ConversationSnapshot;
 	promptSuggestion?: ComposerPromptSuggestion;
+	/** Drawn after the last turn, above the prompt spacer: the session's pending browser approval. */
+	timelineEnd?: ReactNode;
 	/** Renderer-owned state identity; the snapshot's sessionId remains the daemon wire ID. */
 	uiSessionId?: string;
 	/** Durable draft owner for a conversation that is not a worker session. */
@@ -868,6 +870,7 @@ function ChatWorkspaceContent({
 	onFindRequestHandled,
 	snapshot,
 	promptSuggestion,
+	timelineEnd,
 	sessionTitle,
 	sessionRole = "worker",
 	assetBaseUrl,
@@ -2381,6 +2384,7 @@ function ChatWorkspaceContent({
 								{conversationEmpty ? <ForkTextCopyNotice /> : null}
 								<Timeline
 									shownAt={panelShownAt}
+									timelineEnd={timelineEnd}
 							onAddToSideChat={onAddToSideChat}
 									subagentPanel={subagentPanel}
 									checkingSideChatAvailability={checkingSideChatAvailability}
@@ -3420,6 +3424,7 @@ function minimapCrowdsText(track: HTMLElement, content: HTMLElement): boolean {
  * this behavior while keeping its own composer.
  */
 export function Timeline({
+	timelineEnd,
 	onAddToSideChat,
 	subagentPanel,
 	checkingSideChatAvailability,
@@ -3473,6 +3478,7 @@ export function Timeline({
 	findRequest,
 	onFindRequestHandled,
 }: {
+	timelineEnd?: ReactNode;
 	/** The agent controller is really gone; a turn still marked running settles with an unknown outcome. */
 	controllerStopped?: boolean;
 	/** When the panel holding this transcript was last shown again after being covered (epoch ms). */
@@ -6041,6 +6047,7 @@ export function Timeline({
 							/>
 						</div>
 					) : null}
+					{timelineEnd}
 					{/* Pushes the latest prompt toward the top of the viewport when following,
 					    then shrinks as the reply fills the space below it. */}
 					<div
