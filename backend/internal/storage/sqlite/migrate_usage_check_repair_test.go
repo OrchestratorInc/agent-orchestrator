@@ -11,7 +11,7 @@ import (
 // database that already has the open shape unchanged.
 func TestRepairOpensDriftedUsageChecks(t *testing.T) {
 	for _, drifted := range []bool{true, false} {
-		db := openMigratedDatabaseCopy(t, 20261126154409684)
+		db := openMigratedDatabaseCopy(t, 20261127085740884)
 		if drifted {
 			mustExec(t, db, `PRAGMA writable_schema = ON`)
 			mustExec(t, db, `UPDATE sqlite_master SET sql = replace(sql, 'CHECK (trim(harness) <> '''')',

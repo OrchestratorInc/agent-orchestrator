@@ -74,6 +74,7 @@ type Service struct {
 	// onModelChanged syncs ChatUI's model override (including clearing it) to
 	// session metadata before the next prompt routes or a later TUI rebuild.
 	onModelChanged   func(domain.SessionID, string)
+	onEffortChanged  func(domain.SessionID, string)
 	stopProviderHost func(context.Context, domain.SessionID) error
 	reports          *reportsvc.Coordinator
 	renders          RenderFiles
@@ -206,6 +207,8 @@ type Options struct {
 	// OnModelChanged syncs ChatUI's model override to session metadata before
 	// the next prompt routes. Nil leaves session metadata unchanged.
 	OnModelChanged func(domain.SessionID, string)
+	// OnEffortChanged syncs ChatUI's effort choice to durable session metadata.
+	OnEffortChanged func(domain.SessionID, string)
 	// StopProviderHost destroys current ownership on explicit teardown or failed hibernation,
 	// even if its daemon attachment already failed. Never used by StopAll.
 	StopProviderHost func(context.Context, domain.SessionID) error
@@ -254,6 +257,7 @@ func New(opts Options) *Service {
 		prChanged:              opts.PRChanged,
 		onCodexCapacityChanged: opts.OnCodexCapacityChanged,
 		onModelChanged:         opts.OnModelChanged,
+		onEffortChanged:        opts.OnEffortChanged,
 		stopProviderHost:       opts.StopProviderHost,
 		renders:                opts.Renders,
 		dataDir:                opts.DataDir,
@@ -856,6 +860,13 @@ func (s *Service) startLocked(ctx context.Context, cfg StartConfig) (*Controller
 	if sessionFound && s.accountMoveAwaitingTarget(ctx, cfg.SessionID) {
 		waking = true
 	}
+	if sessionFound && !waking && owner.Kind == domain.ConversationOwnerSession && cfg.ProviderConversationID == sessionRecord.Metadata.ProviderConversationID {
+		move, err := s.ownedVersionMove(ctx, sessionRecord)
+		if err != nil {
+			return nil, fmt.Errorf("read version move before chat start: %w", err)
+		}
+		waking = move != nil
+	}
 	hadProviderHistory := false
 	if sessionFound && (sessionRecord.ProvisionState.IsProvisioning() || waking) {
 		hadProviderHistory = sessionRecord.Metadata.ProviderConversationID != ""
@@ -966,7 +977,7 @@ func (s *Service) startLocked(ctx context.Context, cfg StartConfig) (*Controller
 		conversation.Settings.ReasoningEffort = cfg.Effort
 		conversation.Settings.ApprovalMode = cfg.Permissions
 		// A switch target's settings are saved by the switch's commit.
-		if cfg.ProviderSwitch == nil {
+		if cfg.ProviderSwitch == nil && (cfg.Harness != domain.HarnessAgy || providerBoundaryID == "" || cfg.ControllerReady == nil) {
 			if err := s.store.SetConversationSettings(ctx, conversation.ID, conversation.Settings, s.now()); err != nil {
 				return nil, fmt.Errorf("record initial conversation settings: %w", err)
 			}
@@ -1090,7 +1101,10 @@ func (s *Service) startLocked(ctx context.Context, cfg StartConfig) (*Controller
 			caps[ports.ChatCapabilityResume] = true
 		}
 		if err := chatAdmissionError(driver, cfg.Harness, caps, cfg.Permissions); err != nil {
-			_ = cleanupUnpublishedConversation(conv, false)
+			if cleanupErr := cleanupUnpublishedConversation(conv, false); cleanupErr != nil {
+				return nil, fmt.Errorf("%w: admission rejected and host shutdown failed: %w",
+					ports.ErrChatRecoveryInconclusive, errors.Join(err, cleanupErr))
+			}
 			return nil, err
 		}
 	}
@@ -1353,6 +1367,37 @@ func (s *Service) startLocked(ctx context.Context, cfg StartConfig) (*Controller
 			return nil, err
 		}
 	}
+	var commitModelAfterActivation func(context.Context) error
+	if cfg.Harness == domain.HarnessAgy && cfg.ProviderSwitch == nil && !liveReconnect {
+		commitModel, modelErr := s.prepareAgyOpeningModel(ctx, controller, cfg.Model, providerBoundary)
+		if modelErr != nil {
+			_ = cleanupUnpublishedConversation(conv, cfg.ProviderConversationID == "")
+			return nil, modelErr
+		}
+		if providerBoundary != nil && cfg.ControllerReady != nil {
+			commitHistory := commitProviderHistory
+			commitProviderHistory = func(commitCtx context.Context) error {
+				if commitHistory != nil {
+					if err := commitHistory(commitCtx); err != nil {
+						return err
+					}
+				}
+				if commitModel != nil {
+					return commitModel(commitCtx)
+				}
+				return controller.SetSettings(commitCtx, controller.Settings())
+			}
+		} else if providerBoundary != nil {
+			// Review and other callback-free starts activate their branch below.
+			// Write its notice afterwards so it belongs to the new branch.
+			commitModelAfterActivation = commitModel
+		} else if commitModel != nil {
+			if err := commitModel(ctx); err != nil {
+				_ = cleanupUnpublishedConversation(conv, cfg.ProviderConversationID == "")
+				return nil, err
+			}
+		}
+	}
 	commit, err := notifyControllerReady(
 		cfg, controller, providerBoundary, commitProviderHistory,
 	)
@@ -1382,6 +1427,12 @@ func (s *Service) startLocked(ctx context.Context, cfg StartConfig) (*Controller
 		} else if commit.Conversation.ActiveBranchID != providerBoundary.ID {
 			_ = cleanupUnpublishedConversation(conv, false)
 			return nil, fmt.Errorf("commit chat controller: provider boundary %s was not activated", providerBoundary.ID)
+		}
+	}
+	if commitModelAfterActivation != nil {
+		if err := commitModelAfterActivation(ctx); err != nil {
+			_ = cleanupUnpublishedConversation(conv, cfg.ProviderConversationID == "")
+			return nil, err
 		}
 	}
 	if commit.Conversation.ID != "" {
@@ -2997,7 +3048,7 @@ func (s *Service) SetConfigOption(
 		// The config-options route is how provider-owned pickers (e.g. Claude
 		// Code's model menu) change the model; it must persist the pick the same
 		// way the turn-settings route does.
-		s.persistPickedModel(id, previous, settings)
+		s.persistPickedSelection(id, previous, settings)
 	}
 	return options, nil
 }
@@ -3180,19 +3231,22 @@ func (s *Service) setTurnSettings(ctx context.Context, controller *Controller, o
 		return domain.ConversationSettings{}, err
 	}
 	if owner.Kind == domain.ConversationOwnerSession {
-		s.persistPickedModel(domain.SessionID(owner.ID), previous, settings)
+		s.persistPickedSelection(domain.SessionID(owner.ID), previous, settings)
 	}
 	return controller.Settings(), nil
 }
 
-// persistPickedModel keeps session metadata in sync with the Chat model choice,
-// including clearing an override before a later TUI rebuild.
-func (s *Service) persistPickedModel(id domain.SessionID, previous, next domain.ConversationSettings) {
+// persistPickedSelection keeps session metadata in sync with Chat settings,
+// including cleared overrides before a later TUI rebuild.
+func (s *Service) persistPickedSelection(id domain.SessionID, previous, next domain.ConversationSettings) {
 	model := strings.TrimSpace(next.Model)
-	if model == strings.TrimSpace(previous.Model) || s.onModelChanged == nil {
-		return
+	if model != strings.TrimSpace(previous.Model) && s.onModelChanged != nil {
+		s.onModelChanged(id, model)
 	}
-	s.onModelChanged(id, model)
+	effort := strings.TrimSpace(next.ReasoningEffort)
+	if effort != strings.TrimSpace(previous.ReasoningEffort) && s.onEffortChanged != nil {
+		s.onEffortChanged(id, effort)
+	}
 }
 
 // RelayChatTurn delivers a message AO is carrying for someone else.

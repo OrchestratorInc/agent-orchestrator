@@ -158,6 +158,8 @@ function submittedAnnotationSession(
 function setupHost(agentBrowserRuntime?: import("./agent-browser-runtime").AgentBrowserRuntime) {
 	let currentURL = "";
 	let browserZoomFactor = 1;
+	let audioMuted = false;
+	let audible = false;
 	const webContentsListeners = new Map<string, (...args: never[]) => void>();
 	const shellWebContentsListeners = new Map<string, (...args: never[]) => void>();
 	const addListener = (
@@ -222,6 +224,8 @@ function setupHost(agentBrowserRuntime?: import("./agent-browser-runtime").Agent
 		getZoomFactor: () => browserZoomFactor,
 		goBack: () => undefined,
 		goForward: () => undefined,
+		isAudioMuted: () => audioMuted,
+		isCurrentlyAudible: () => audible,
 		isLoading: () => false,
 		insertCSS,
 		removeInsertedCSS,
@@ -238,6 +242,13 @@ function setupHost(agentBrowserRuntime?: import("./agent-browser-runtime").Agent
 		reload: vi.fn(),
 		send: vi.fn(),
 		sendInputEvent: vi.fn(),
+		setAudioMuted: vi.fn((muted: boolean) => {
+			audioMuted = muted;
+		}),
+		setAudible: vi.fn((value: boolean) => {
+			audible = value;
+			webContentsListeners.get("audio-state-changed")?.();
+		}),
 		setWindowOpenHandler: () => undefined,
 		stop: () => undefined,
 		stopFindInPage,
@@ -1343,6 +1354,8 @@ function setupTabHost(
 			executeJavaScript: vi.fn(async (_script: string) => undefined),
 			reload: () => undefined,
 			send: vi.fn(),
+			setAudioMuted: () => undefined,
+			isAudioMuted: () => false,
 			setWindowOpenHandler: (
 				handler: (details: Electron.HandlerDetails) => Electron.WindowOpenHandlerResponse,
 			) => {
@@ -3563,6 +3576,79 @@ describe("browser:clear", () => {
 
 		expect(webContents.loadURL).toHaveBeenLastCalledWith("about:blank");
 		expect(state.url).toBe("");
+	});
+});
+
+describe("browser:muteTab", () => {
+	it("mutes a tab and reports muted in the tab state", async () => {
+		const { invoke, webContents } = setupHost();
+		const state = await invoke("browser:ensure", "sess-1");
+		const viewId = state.viewId;
+
+		const result = (await invoke("browser:muteTab", { viewId, tabId: "t1", muted: true })) as unknown as BrowserTabsState;
+
+		expect(webContents.setAudioMuted).toHaveBeenCalledWith(true);
+		const tab = result.tabs.find((candidate) => candidate.id === "t1");
+		expect(tab?.muted).toBe(true);
+		// A quiet (not audible) tab carries no audible flag; the muted flag is
+		// the only state the strip needs to keep the control visible.
+		expect(tab?.audible).toBeUndefined();
+	});
+
+	it("unmutes again and reports muted: false", async () => {
+		const { invoke, webContents } = setupHost();
+		const state = await invoke("browser:ensure", "sess-1");
+		const viewId = state.viewId;
+		await invoke("browser:muteTab", { viewId, tabId: "t1", muted: true });
+
+		const result = (await invoke("browser:muteTab", { viewId, tabId: "t1", muted: false })) as unknown as BrowserTabsState;
+
+		expect(webContents.setAudioMuted).toHaveBeenLastCalledWith(false);
+		expect(result.tabs.find((candidate) => candidate.id === "t1")?.muted).toBe(false);
+	});
+
+	it("answers an unknown tab with the session's current tab list", async () => {
+		const { invoke, webContents } = setupHost();
+		const state = await invoke("browser:ensure", "sess-1");
+		const viewId = state.viewId;
+
+		const result = (await invoke("browser:muteTab", { viewId, tabId: "nope", muted: true })) as unknown as BrowserTabsState;
+
+		expect(webContents.setAudioMuted).not.toHaveBeenCalled();
+		expect(result.tabs.map((tab) => tab.id)).toEqual(["t1"]);
+	});
+
+	it("answers a foreign viewId with an empty state and touches no tab", async () => {
+		const { invoke, webContents } = setupHost();
+		await invoke("browser:ensure", "sess-1");
+
+		const result = (await invoke("browser:muteTab", { viewId: "2:sess-1", tabId: "t1", muted: true })) as unknown as BrowserTabsState;
+
+		expect(webContents.setAudioMuted).not.toHaveBeenCalled();
+		expect(result).toMatchObject({ viewId: "2:sess-1", tabs: [] });
+	});
+
+	it("keeps the strip current when a page starts and stops playing sound", async () => {
+		const { invoke, shellSend, webContents } = setupHost();
+		await invoke("browser:ensure", "sess-1");
+		shellSend.mockClear();
+
+		const pushedTabsStates = () =>
+			shellSend.mock.calls
+				.filter(([channel]) => channel === "browser:tabsState")
+				.map(([, payload]) => payload as BrowserTabsState);
+		const tabAudible = () =>
+			pushedTabsStates().at(-1)?.tabs.find((tab) => tab.id === "t1")?.audible;
+
+		webContents.setAudible(true);
+		await vi.waitFor(() => {
+			expect(tabAudible()).toBe(true);
+		});
+
+		webContents.setAudible(false);
+		await vi.waitFor(() => {
+			expect(tabAudible()).toBeUndefined();
+		});
 	});
 });
 
@@ -6226,6 +6312,8 @@ describe("dispose after the window is destroyed", () => {
 				goForward: () => undefined,
 				isLoading: () => false,
 				loadURL: async () => undefined,
+				isAudioMuted: () => false,
+				setAudioMuted: () => undefined,
 				on: () => undefined,
 				reload: () => undefined,
 				send: () => undefined,
@@ -6317,6 +6405,8 @@ describe("getLastFocusedPanelContents", () => {
 			goForward: () => undefined,
 			isLoading: () => false,
 			loadURL: async () => undefined,
+			isAudioMuted: () => false,
+			setAudioMuted: () => undefined,
 			reload: () => undefined,
 			send: () => undefined,
 			setWindowOpenHandler: () => undefined,

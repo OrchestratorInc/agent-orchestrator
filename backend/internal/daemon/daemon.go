@@ -578,6 +578,15 @@ func Run(buildVersion string) (retErr error) {
 					"sessionID", sessionID, "model", model, "error", err)
 			}
 		},
+		OnEffortChanged: func(sessionID domain.SessionID, effort string) {
+			if sessMgr == nil {
+				return
+			}
+			if err := sessMgr.PersistChatEffort(ctx, sessionID, effort); err != nil {
+				log.Warn("persist ChatUI effort on session failed; session selection may be stale",
+					"sessionID", sessionID, "effort", effort, "error", err)
+			}
+		},
 	})
 	chatSvc.SetRenderCheck(renderViaDesktop(browserBroker, "__render-check"))
 	chatSvc.SetRenderMeasure(renderViaDesktop(browserBroker, "__render-measure"))
