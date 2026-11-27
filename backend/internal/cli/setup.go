@@ -16,6 +16,7 @@ import (
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/registry"
 	"github.com/aoagents/agent-orchestrator/backend/internal/config"
+	aoprocess "github.com/aoagents/agent-orchestrator/backend/internal/process"
 )
 
 // `ao setup` takes a machine from "Orchestrator is installed" to "ready to
@@ -154,8 +155,8 @@ func newSetupCommand(ctx *commandContext) *cobra.Command {
 	f.StringVar(&opts.start, "start", "", "Start this task once setup is ready")
 	f.BoolVar(&opts.worker, "worker", false, "With --start, give the task to one worker instead of the orchestrator")
 	f.BoolVar(&opts.yes, "yes", false, "Allow setup to replace agents already saved on a registered project")
-	f.BoolVar(&opts.check, "check", false, "Report what is set up and what is missing; change nothing")
-	f.BoolVar(&opts.dryRun, "dry-run", false, "Show what setup would do; change nothing")
+	f.BoolVar(&opts.check, "check", false, "Report what is set up and what is missing; write nothing and start nothing")
+	f.BoolVar(&opts.dryRun, "dry-run", false, "Show what setup would do; write nothing")
 	f.BoolVar(&opts.json, "json", false, "Print the result as JSON")
 	// Registering Orchestrator with other agents (skill + MCP) is a later
 	// phase and will arrive as --integrate-agents / --remove-integrations,
@@ -179,7 +180,7 @@ func (o *setupOptions) validate(cmd *cobra.Command) error {
 		return usageError{errors.New("--check and --dry-run cannot be used together")}
 	}
 	if o.check && o.start != "" {
-		return usageError{errors.New("--check changes nothing, so it cannot --start a task")}
+		return usageError{errors.New("--check writes nothing, so it cannot --start a task")}
 	}
 	if cmd.Flags().Changed("path") && o.path == "" {
 		return usageError{errors.New("--path must not be empty")}
@@ -865,17 +866,18 @@ func (c *commandContext) setupProjectStep(ctx context.Context, opts setupOptions
 			res.Project = &setupProject{Path: path}
 			// Preview the base-branch rule the real run applies after
 			// registering, so the preview needs the same person the run does.
-			origin, _ := c.deps.CommandOutputInDir(ctx, path, "git", "remote", "get-url", "origin")
-			preview := projectDetails{Path: path, Repo: strings.TrimSpace(string(origin))}
-			if why := c.setupUnresolvedBranch(ctx, preview); why != "" {
-				branch := c.setupCurrentBranch(ctx, path)
-				if branch == "" {
+			preview := projectDetails{Path: path}
+			if origin, err := c.deps.CommandOutputInDir(ctx, path, "git", "remote", "get-url", "origin"); err == nil {
+				preview.Repo = strings.TrimSpace(string(origin))
+			}
+			if plan := c.setupBaseBranch(ctx, preview); plan.why != "" {
+				if plan.branch == "" {
 					step.Status = setupNeedsHuman
-					step.Detail = fmt.Sprintf("%s is not registered; %s, and no branch is checked out, so Orchestrator could not pick a base branch", path, why)
-					step.Fix = fmt.Sprintf("check out the branch new work should start from (git -C %s switch <branch>), then run `ao setup` again", shellQuote(path))
+					step.Detail = fmt.Sprintf("%s is not registered; %s, so Orchestrator could not pick a base branch", path, plan.why)
+					step.Fix = plan.previewFix(path)
 					return step
 				}
-				step.Detail += fmt.Sprintf(", and set its default branch to %s (%s)", branch, why)
+				step.Detail += fmt.Sprintf(", and set its default branch to %s (%s)", plan.branch, plan.why)
 			}
 			return step
 		}
@@ -903,7 +905,7 @@ func (c *commandContext) setupProjectStep(ctx context.Context, opts setupOptions
 		case errors.As(err, &apiErr) && apiErr.ErrorBody.Code == "NOT_A_GIT_REPO":
 			step.Status = setupNeedsHuman
 			step.Detail = fmt.Sprintf("%s is not a git repository", path)
-			step.Fix = fmt.Sprintf("run `git init` in %s and make a first commit, or pass --path <repo>", path)
+			step.Fix = fmt.Sprintf("git -C %s init && git -C %s commit --allow-empty -m \"initial commit\"", shellQuote(path), shellQuote(path))
 			return step
 		case errors.As(err, &apiErr) && apiErr.ErrorBody.Code == "PROJECT_UNBORN":
 			step.Status = setupNeedsHuman
@@ -930,16 +932,15 @@ func (c *commandContext) setupProjectStep(ctx context.Context, opts setupOptions
 	}
 
 	// An "auto" default branch is resolved from origin's HEAD when a session
-	// starts. With no remote, or a remote whose HEAD cannot be resolved (never
-	// fetched, unreachable), that fails, so set the checked-out branch, as
-	// `ao project set-config --default-branch` does.
+	// starts. When that cannot work, setupBaseBranch picks one the way
+	// `ao project set-config --default-branch` would set it, or asks.
 	if project.DefaultBranch == "" || project.DefaultBranch == "auto" {
-		if why := c.setupUnresolvedBranch(ctx, project); why != "" {
-			branch := c.setupCurrentBranch(ctx, project.Path)
+		if plan := c.setupBaseBranch(ctx, project); plan.why != "" {
+			branch, why := plan.branch, plan.why
 			switch {
 			case branch == "":
 				step.Status = setupNeedsHuman
-				step.Detail = fmt.Sprintf("project %s: %s, and no branch is checked out, so Orchestrator cannot pick a base branch", project.ID, why)
+				step.Detail = fmt.Sprintf("project %s: %s, so Orchestrator cannot pick a base branch", project.ID, why)
 				step.Fix = fmt.Sprintf("ao project set-config %s --default-branch <branch>", shellQuote(project.ID))
 				res.Project = setupProjectFrom(project, reused)
 				return step
@@ -1142,7 +1143,7 @@ func (c *commandContext) setupCheckRepo(ctx context.Context, path string) *setup
 	if out, err := c.deps.CommandOutputInDir(ctx, path, "git", "rev-parse", "--show-toplevel"); err != nil || strings.TrimSpace(string(out)) == "" {
 		return &setupStep{Step: setupStepProject, Status: setupNeedsHuman,
 			Detail: fmt.Sprintf("%s is not a git repository", path),
-			Fix:    fmt.Sprintf("run `git init` in %s and make a first commit, or pass --path <repo>", path)}
+			Fix:    fmt.Sprintf("git -C %s init && git -C %s commit --allow-empty -m \"initial commit\"", shellQuote(path), shellQuote(path))}
 	}
 	if _, err := c.deps.CommandOutputInDir(ctx, path, "git", "rev-parse", "--verify", "-q", "HEAD"); err != nil {
 		return &setupStep{Step: setupStepProject, Status: setupNeedsHuman,
@@ -1166,23 +1167,70 @@ func (c *commandContext) setupCurrentBranch(ctx context.Context, path string) st
 // remote's default branch.
 var setupRemoteHeadTimeout = 15 * time.Second
 
-// setupUnresolvedBranch says why an "auto" default branch cannot be resolved
-// the way a session start resolves it (from origin's HEAD), or "" when it can.
-func (c *commandContext) setupUnresolvedBranch(ctx context.Context, project projectDetails) string {
+// setupBranchPlan is what setup does about a project's "auto" default branch:
+// nothing (why is empty), set branch, or ask a person (why set, branch empty).
+type setupBranchPlan struct {
+	branch string
+	why    string
+	remote bool
+}
+
+// previewFix is the command a person runs before setup registers the repo.
+func (p setupBranchPlan) previewFix(path string) string {
+	if p.remote {
+		return fmt.Sprintf("git -C %s remote set-head origin <branch>", shellQuote(path))
+	}
+	return fmt.Sprintf("git -C %s switch <branch>", shellQuote(path))
+}
+
+// setupBaseBranch decides the base branch for an "auto" default branch, which
+// a session start resolves from origin's HEAD.
+//   - No remote: the checked-out branch is the only base there is.
+//   - A remote whose HEAD resolves (cached, or ls-remote answers): nothing to
+//     do, the session start resolves it the same way.
+//   - A remote whose HEAD does not resolve: origin/main, else origin/master,
+//     when the repo has them locally. Never the checked-out branch, which may
+//     be a feature branch every worker would then start from. Otherwise a
+//     person must say.
+func (c *commandContext) setupBaseBranch(ctx context.Context, project projectDetails) setupBranchPlan {
 	if project.Repo == "" {
-		return "the repository has no remote"
+		branch := c.setupCurrentBranch(ctx, project.Path)
+		why := "the repository has no remote"
+		if branch == "" {
+			why += " and no branch is checked out"
+		}
+		return setupBranchPlan{branch: branch, why: why}
 	}
 	if _, err := c.deps.CommandOutputInDir(ctx, project.Path, "git", "rev-parse", "-q", "--verify", "refs/remotes/origin/HEAD"); err == nil {
-		return ""
+		return setupBranchPlan{}
 	}
-	// Not cached locally: ask the remote, never prompting for credentials.
+	if setupRemoteHeadResolves(ctx, project.Path) {
+		return setupBranchPlan{}
+	}
+	for _, candidate := range []string{"main", "master"} {
+		if _, err := c.deps.CommandOutputInDir(ctx, project.Path, "git", "rev-parse", "-q", "--verify", "refs/remotes/origin/"+candidate); err == nil {
+			return setupBranchPlan{branch: candidate, why: "origin's default branch could not be resolved; using origin/" + candidate, remote: true}
+		}
+	}
+	return setupBranchPlan{why: "origin's default branch could not be resolved (the remote was never fetched or is unreachable)", remote: true}
+}
+
+// setupRemoteHeadResolves asks origin for its HEAD without ever prompting:
+// no terminal credential prompt, and SSH in batch mode (unless the person set
+// their own SSH command, which is kept).
+func setupRemoteHeadResolves(ctx context.Context, path string) bool {
 	runCtx, cancel := context.WithTimeout(ctx, setupRemoteHeadTimeout)
 	defer cancel()
-	out, err := c.deps.CommandOutputInDir(runCtx, project.Path, "git", "-c", "core.askPass=true", "ls-remote", "--symref", "--", "origin", "HEAD")
-	if err == nil && strings.Contains(string(out), "ref: refs/heads/") {
-		return ""
+	cmd := aoprocess.CommandContext(runCtx, "git", "-c", "core.askPass=true", "ls-remote", "--symref", "--", "origin", "HEAD")
+	cmd.Dir = path
+	cmd.Env = append(os.Environ(), "GIT_TERMINAL_PROMPT=0")
+	if os.Getenv("GIT_SSH_COMMAND") == "" {
+		if out, err := aoprocess.CommandContext(runCtx, "git", "-C", path, "config", "core.sshCommand").Output(); err != nil || strings.TrimSpace(string(out)) == "" {
+			cmd.Env = append(cmd.Env, "GIT_SSH_COMMAND=ssh -o BatchMode=yes")
+		}
 	}
-	return "origin's default branch could not be resolved (the remote was never fetched or is unreachable)"
+	out, err := cmd.CombinedOutput()
+	return err == nil && strings.Contains(string(out), "ref: refs/heads/")
 }
 
 // findProjectByPath returns the registered project whose path is the same

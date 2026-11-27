@@ -458,7 +458,7 @@ func TestSetupUnbornAndNonGitRepos(t *testing.T) {
 	if got := ExitCode(err); got != setupExitNeedsHuman {
 		t.Fatalf("exit = %d (%v)", got, err)
 	}
-	if fix := stepNamed(t, decodeSetup(t, out), "project").Fix; !strings.Contains(fix, "git init") {
+	if fix := stepNamed(t, decodeSetup(t, out), "project").Fix; fix != fmt.Sprintf("git -C %s init && git -C %s commit --allow-empty -m \"initial commit\"", dir, dir) {
 		t.Fatalf("fix = %q", fix)
 	}
 }
@@ -844,7 +844,7 @@ func TestSetupCheckReportsNonGitAndUnbornPaths(t *testing.T) {
 	if out, err := cmd.CombinedOutput(); err != nil {
 		t.Fatalf("git init: %v\n%s", err, out)
 	}
-	for dir, want := range map[string]string{plain: "git init", unborn: "commit --allow-empty"} {
+	for dir, want := range map[string]string{plain: " init && git -C ", unborn: "commit --allow-empty"} {
 		out, _, err := executeCLI(t, fakeClockDeps(), "setup", "--path", dir, "--check", "--json")
 		if got := ExitCode(err); got != setupExitNeedsHuman {
 			t.Fatalf("%s: exit = %d (%v)", dir, got, err)
@@ -1009,10 +1009,37 @@ func registerAutoBranch(d *taskDaemon, path string) {
 	d.set("PUT /api/v1/projects/calc/config", 200, `{"project":{"id":"calc","defaultBranch":"main"}}`)
 }
 
-func TestSetupRemoteWithUnresolvableHeadGetsCurrentBranch(t *testing.T) {
+func TestSetupRemoteWithUnresolvableHeadNeedsHuman(t *testing.T) {
+	d := newSetupDaemon(t)
+	repo := gitRepo(t, false)
+	// A feature branch is checked out: it must never become the base branch.
+	gitIn(t, repo, "switch", "-q", "-c", "feature/x")
+	gitIn(t, repo, "remote", "add", "origin", filepath.Join(t.TempDir(), "missing.git"))
+	registerAutoBranch(d, repo)
+
+	out, _, err := executeCLI(t, fakeClockDeps(), "setup", "--path", repo, "--agent", "codex", "--json")
+	if got := ExitCode(err); got != setupExitNeedsHuman {
+		t.Fatalf("exit = %d (%v)\n%s", got, err, out)
+	}
+	if d.saw("PUT /api/v1/projects/calc/config") {
+		t.Fatalf("setup saved a default branch for a remote it could not resolve: %s", d.bodies["PUT /api/v1/projects/calc/config"])
+	}
+	res := decodeSetup(t, out)
+	project := stepNamed(t, res, "project")
+	if project.Status != setupNeedsHuman || project.Fix != "ao project set-config calc --default-branch <branch>" || !strings.Contains(project.Detail, "origin's default branch could not be resolved") {
+		t.Fatalf("project step = %+v", project)
+	}
+	if !reflect.DeepEqual(res.NextActions, []string{"ao project set-config calc --default-branch <branch>"}) {
+		t.Fatalf("next_actions = %q", res.NextActions)
+	}
+}
+
+func TestSetupRemoteWithUnresolvableHeadUsesLocalOriginMain(t *testing.T) {
 	d := newSetupDaemon(t)
 	repo := gitRepo(t, false)
 	gitIn(t, repo, "remote", "add", "origin", filepath.Join(t.TempDir(), "missing.git"))
+	gitIn(t, repo, "update-ref", "refs/remotes/origin/main", "HEAD")
+	gitIn(t, repo, "switch", "-q", "-c", "feature/x")
 	registerAutoBranch(d, repo)
 
 	out, _, err := executeCLI(t, fakeClockDeps(), "setup", "--path", repo, "--agent", "codex", "--json")
@@ -1021,9 +1048,9 @@ func TestSetupRemoteWithUnresolvableHeadGetsCurrentBranch(t *testing.T) {
 	}
 	var put setConfigRequest
 	if err := json.Unmarshal([]byte(d.bodies["PUT /api/v1/projects/calc/config"]), &put); err != nil || put.Config.DefaultBranch != "main" {
-		t.Fatalf("set-config body = %s", d.bodies["PUT /api/v1/projects/calc/config"])
+		t.Fatalf("set-config body = %s; want origin/main's branch, not the checked-out feature branch", d.bodies["PUT /api/v1/projects/calc/config"])
 	}
-	if project := stepNamed(t, decodeSetup(t, out), "project"); project.Status != setupFixed || !strings.Contains(project.Detail, "origin's default branch could not be resolved") {
+	if project := stepNamed(t, decodeSetup(t, out), "project"); project.Status != setupFixed || !strings.Contains(project.Detail, "using origin/main") {
 		t.Fatalf("project step = %+v", project)
 	}
 }

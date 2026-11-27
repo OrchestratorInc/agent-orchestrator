@@ -15,7 +15,7 @@ It runs these steps in order. Each one reports `{step, status, detail, fix}`, wi
 1. **daemon:** reuses the running daemon, or starts one in the background the way `ao serve` does.
 2. **agent:** picks an agent for each role, worker and orchestrator. `--worker-agent` and `--orchestrator-agent` set one role each. `--agent` sets every role not named by a role flag. Without those flags, a registered project keeps the agents it already saves. A role that still has no agent gets the coding agent running the command (you), detected from its environment (`AI_AGENT` first, then tags such as `CLAUDECODE` or `CODEX_THREAD_ID`), or else the first ready agent. It checks the agent is installed and signed in, asking the agent's own status command (such as `claude auth status`) when the daemon cannot tell. It never installs an agent or signs one in.
 3. **github:** checks that the GitHub CLI is signed in. It never runs `gh auth login`. For a repository with a `github.com` remote, a missing or signed-out `gh` is `needs_human`. Otherwise it is advisory: `skipped`, with its fix in `next_actions`, and setup can still be ready.
-4. **project:** registers `--path` (default: the git repository around the current directory) with those agents as worker and orchestrator, or reuses its existing registration. On a registered project it fills in a role that has no saved agent, but replaces a saved agent only when you pass an agent flag **and** `--yes`; otherwise it reports `needs_human`. A repository with no remote, or whose remote's default branch cannot be resolved (never fetched, unreachable), gets its checked-out branch as the default branch.
+4. **project:** registers `--path` (default: the git repository around the current directory) with those agents as worker and orchestrator, or reuses its existing registration. On a registered project it fills in a role that has no saved agent, but replaces a saved agent only when you pass an agent flag **and** `--yes`; otherwise it reports `needs_human`. A repository with no remote gets its checked-out branch as the default branch. For a repository with a remote whose default branch cannot be resolved (never fetched, unreachable), setup uses `origin/main` or `origin/master` if the repository has them, and otherwise reports `needs_human` with the `ao project set-config <id> --default-branch <branch>` command. It never picks the checked-out branch there, which may be a feature branch.
 5. **first-run:** a registered project makes the desktop app skip its first-run screens.
 6. **start:** only with `--start "<task>"`. Pass the user's own request as the task. It goes to the project's orchestrator, or to one worker with `--worker`, and setup waits until it has started.
 7. **verify:** `ready` is true when nothing is left to do.
@@ -40,8 +40,8 @@ With `--json` the output is `{ready, agent, project, steps, next_actions, task}`
 | `--start "<task>"` | Start this task once setup is ready. |
 | `--worker` | With `--start`, give the task to one worker instead of the orchestrator. |
 | `--yes` | Replace the agents already saved on a registered project with the ones you passed. Without it, setup keeps them and asks. |
-| `--check` | Report what is set up and what is missing. Changes nothing and starts nothing; exits 10 until setup is complete. |
-| `--dry-run` | Show what setup would do. Changes nothing. |
+| `--check` | Report what is set up and what is missing. Writes nothing and starts nothing (it still runs read-only checks such as the agents' own sign-in status commands); exits 10 until setup is complete. |
+| `--dry-run` | Show what setup would do. Writes nothing. |
 | `--json` | Print the result as JSON. |
 
 ```bash

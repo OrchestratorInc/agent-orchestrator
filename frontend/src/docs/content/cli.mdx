@@ -153,7 +153,7 @@ It runs these steps in order and reports each as `{step, status, detail, fix}`, 
 | `daemon` | Reuses the daemon serving this data directory, or starts one in the background the same way `ao serve` does. |
 | `agent` | Picks an agent for each role. `--worker-agent`/`--orchestrator-agent` set one role each, and `--agent` sets every other role. Without them, a registered project keeps its saved agents. On a registered project, a flag that differs from a saved agent takes effect only with `--yes`; without it, setup reports `needs_human` and changes nothing. A role that still has none gets the coding agent running the command (detected from its environment, `AI_AGENT` first), otherwise the first ready agent. Checks that it is installed and signed in, asking the agent's own status command (such as `claude auth status`) when the daemon cannot tell. It never installs an agent or signs one in. |
 | `github` | Checks that the GitHub CLI is signed in. It never runs `gh auth login`. For a repository with a `github.com` remote, a missing or signed-out `gh` needs you (`needs_human`). Otherwise the step is advisory: `skipped`, with its fix in `next_actions`, and setup can still be ready. |
-| `project` | Registers `--path` (default: the Git repository containing the current directory) with the chosen agent for workers and the orchestrator, or reuses its registration. A repository with no remote, or whose remote's default branch cannot be resolved (never fetched, unreachable), gets its checked-out branch as the default branch, as `ao project set-config --default-branch` would. |
+| `project` | Registers `--path` (default: the Git repository containing the current directory) with the chosen agent for workers and the orchestrator, or reuses its registration. A repository with no remote gets its checked-out branch as the default branch, as `ao project set-config --default-branch` would. With a remote whose default branch cannot be resolved (never fetched, unreachable), setup uses `origin/main` or `origin/master` if present, and otherwise asks for `ao project set-config <id> --default-branch <branch>`; it never picks the checked-out branch there. |
 | `first-run` | Reports that a registered project makes the desktop app skip its first-run screens. |
 | `start` | Only with `--start "<task>"`: starts the task as `ao task start --wait` does, on the project's orchestrator or, with `--worker`, on one worker. |
 | `verify` | Sums up: `ready` is true when nothing is left to do. |
@@ -164,7 +164,7 @@ It runs these steps in order and reports each as `{step, status, detail, fix}`, 
 | `--agent <id>` | Agent to use. `--worker-agent` and `--orchestrator-agent` override one role. |
 | `--start "<task>"` | Start this task once setup is ready. Add `--worker` for a single worker. |
 | `--yes` | Replace agents already saved on a registered project with the ones you passed. Without it, setup keeps them and reports `needs_human`. |
-| `--check` | Report what is set up and what is missing. Changes nothing and never starts the daemon. |
+| `--check` | Report what is set up and what is missing. Writes nothing and never starts the daemon; it still runs read-only checks such as the agents' own sign-in status commands. |
 | `--dry-run` | Show what setup would do, without changing anything. |
 | `--json` | Print one object: `{ready, agent, project, steps, next_actions, task}`. |
 
