@@ -130,8 +130,6 @@ export function ChatSessionScreen({ session: boardSession }: { session: MobileCh
 	// mounts its timeline a frame after the push starts, a large cached one once
 	// the slide settles. See useChatPushTiming.
 	const { holdArrivingSnapshot, timelineMounted } = useChatPushTiming(conversation.snapshot);
-	// Opening the session is timed until its messages are drawn.
-	useSessionContentShown(Boolean(conversation.snapshot) && !holdArrivingSnapshot && timelineMounted && !conversation.unavailable);
 	// Opening a hibernated chat wakes it, and only the lease request says when.
 	// The catalog is asked for again too if it has none of its own yet: a page
 	// cached as ready loads it before the wake, and that load can fail unseen.
@@ -270,6 +268,8 @@ export function ChatSessionScreen({ session: boardSession }: { session: MobileCh
 	// stopping. Until then (`draining` lasts as long as the agent's turn) the
 	// conversation stays readable behind a banner, dismissed requests included.
 	const switchCardShown = mobileInterfaceTransitionStoppingSource(interfaceSwitch.transition) || handoff.pending;
+	// Opening the session is timed until its messages are drawn and not covered by the switch card.
+	useSessionContentShown(Boolean(conversation.snapshot) && !holdArrivingSnapshot && timelineMounted && !conversation.unavailable && !switchCardShown);
 	// The usage sheet follows the conversation while it is up: the numbers move
 	// with every turn.
 	const latestSnapshot = useRef<ConversationSnapshot | undefined>(conversation.snapshot);

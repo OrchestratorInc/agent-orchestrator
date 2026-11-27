@@ -27,6 +27,7 @@ import type { CloudClient } from "./client";
 import { connectCloudTerminal, type CloudTerminalConnection, type CloudTerminalStatus } from "./terminal";
 import { cloudTerminalDisplay, READ_ONLY_COPY } from "./terminalCopy";
 import { TERMINAL_ENHANCE_JS } from "../session/terminalEnhance";
+import { createPaintDetector } from "../session/terminalPaint";
 import type { CloudTerminalKind } from "./types";
 
 // The local terminal's size and glyphs (lib/session/TerminalSessionScreen).
@@ -178,8 +179,10 @@ export function CloudTerminalView({ client, orgId, sessionId, kind, workerEpoch,
 		};
 	}, []);
 
-	// Output from the server (not a reset) has arrived, and been drawn once xterm is up.
+	// Output that draws something (not only control sequences, such as hiding the
+	// cursor) has arrived, and been drawn once xterm is up.
 	const hasOutputRef = useRef(false);
+	const detectPaintRef = useRef(createPaintDetector());
 	const outputShownRef = useRef(false);
 	const onOutputShownRef = useRef(onOutputShown);
 	useEffect(() => {
@@ -216,14 +219,15 @@ export function CloudTerminalView({ client, orgId, sessionId, kind, workerEpoch,
 				},
 				onOutput: (bytes) => {
 					if (!current) return;
-					if (bytes.length) hasOutputRef.current = true;
+					if (!hasOutputRef.current && detectPaintRef.current(bytes)) hasOutputRef.current = true;
 					writeOutput(bytes);
 					noteOutputShown();
 				},
 				onReset: () => {
 					if (!current) return;
-					// Anything still queued is superseded by the replay.
+					// Anything still queued is superseded by the replay, which starts a fresh stream.
 					pendingOutputRef.current = [];
+					detectPaintRef.current = createPaintDetector();
 					writeOutput(RESET_BYTES);
 				},
 				// Someone else holds a shared session's input.
