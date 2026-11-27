@@ -59,6 +59,11 @@ const SUMMARY_LOOKAHEAD = 30;
 // The ended sessions' PRs each filter shows.
 const ARCHIVED_STATES: Record<PRListFilter, readonly ArchivedPRState[]> = { open: [], merged: ["merged"], all: ["merged", "closed"] };
 
+// The ended sessions' PRs read as the page opens, whichever filter is shown.
+// The daemon counts archived sessions, not PRs (a session can own several), so
+// only the read lists give the filter counts the list's own PR identity.
+const READ_ARCHIVED_STATES: readonly ArchivedPRState[] = ["merged", "closed"];
+
 // Its rows share one width (see `MenuRowWidthScope`): a filter mounts a new
 // set of rows, and the ones past the list's first render batch are sized on
 // their first frame.
@@ -85,8 +90,9 @@ function PRList() {
 	const [filter, setFilter] = useState<Filter>("open");
 	const [refreshToken, setRefreshToken] = useState(0);
 	// Each machine that pages its archive is read for the PRs of sessions that
-	// have ended: merged ones once Merged or All is open, closed ones once All
-	// is. A machine with an empty archive has none to read.
+	// have ended, merged and closed, as the page opens: Merged and All show
+	// their real counts before either is opened, and their rows at once when
+	// it is. A machine with an empty archive has none to read.
 	const archivedSources = useMemo<ArchivedPRSource[]>(() => visibleHosts.flatMap((host) => {
 		if (isCloudHost(host.hostId) || !host.archive) return [];
 		const projectId = projectFilter === "all" ? undefined : projectFilter;
@@ -94,7 +100,7 @@ function PRList() {
 		return archived > 0 ? [{ hostId: host.hostId, hostName: host.name, appearance: host.appearance, projectId, archived }] : [];
 	}), [visibleHosts, projectFilter]);
 	const archivedStates = ARCHIVED_STATES[filter];
-	const archived = useArchivedPRs(archivedSources, { states: archivedStates, refreshToken });
+	const archived = useArchivedPRs(archivedSources, { states: READ_ARCHIVED_STATES, refreshToken });
 	const archivedLoading = archivedStates.some((state) => archived.loading[state]);
 	const archivedKeys = useMemo(() => new Set(archived.sessions.map((session) => hostedRowKey(session.hostId, session.id))), [archived.sessions]);
 	const prs = useMemo(() => {
