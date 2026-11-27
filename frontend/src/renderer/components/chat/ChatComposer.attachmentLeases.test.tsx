@@ -49,6 +49,23 @@ describe("draft attachment leases", () => {
 		expect(releasedPaths(leases)).not.toContain(path);
 	});
 
+	it("renews before sending and drops a chip whose file was reclaimed, sending nothing", async () => {
+		const path = ".ao/attachments/attachment-expired01.txt";
+		const stage = vi.fn().mockResolvedValue([path]);
+		const leases = vi.fn().mockResolvedValue([]);
+		const onSend = vi.fn().mockResolvedValue(undefined);
+		render(<ChatComposer onSend={onSend} draftSessionId="leases-expired" onStageAttachments={stage} onUpdateAttachmentLeases={leases} />);
+		fireEvent.paste(screen.getByLabelText("Message the agent"), { clipboardData: clipboardData([textFile("old.txt")]) });
+		await screen.findByRole("button", { name: "Remove old.txt" });
+		await waitFor(() => expect(screen.getByRole("button", { name: "Send message" })).toBeEnabled());
+		// The draft sat past the lease expiry; a later stage reclaimed its file.
+		leases.mockResolvedValue([path]);
+		await userEvent.click(screen.getByRole("button", { name: "Send message" }));
+		await waitFor(() => expect(leases).toHaveBeenCalledWith([], [path]));
+		await waitFor(() => expect(screen.queryByRole("button", { name: "Remove old.txt" })).not.toBeInTheDocument());
+		expect(onSend).not.toHaveBeenCalled();
+	});
+
 	it("renews a restored draft's files and drops the ones already reclaimed", async () => {
 		const sessionId = "leases-restore";
 		const kept = ".ao/attachments/attachment-kept01.txt";

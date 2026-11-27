@@ -2024,6 +2024,22 @@ export const ChatComposer = memo(function ChatComposer({
 			}
 			return;
 		}
+		// A draft left open past the lease expiry can hold a chip whose file was
+		// already reclaimed (by a later stage or the startup pass). Renew right
+		// before sending: a file reported gone loses its chip and nothing is sent,
+		// so the send is not refused, and retried, for a file that no longer exists.
+		const renewPaths = settledPaths.filter((path) => !isCloudAttachmentReference(path));
+		if (onUpdateAttachmentLeases && renewPaths.length > 0 && !recoveringDelivery) {
+			const missing = await onUpdateAttachmentLeases([], renewPaths).catch(() => [] as string[]);
+			if (missing.length > 0) {
+				const gone = new Set(missing);
+				for (const attachment of fileAttachmentsRef.current.getAttachments()) {
+					if (attachment.stagedPath && gone.has(attachment.stagedPath)) fileAttachmentsRef.current.remove(attachment.id);
+				}
+				setSendError({ message: "chat.draft.filesUnavailable", code: "ATTACHMENTS_UNAVAILABLE" });
+				return;
+			}
+		}
 		// Held files carry their bytes, or a large one its handle on disk, to the
 		// send instead of a staged path.
 		const heldPayloads = holdAttachments
