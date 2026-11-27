@@ -63,9 +63,23 @@ type AgentAccount struct {
 	Kind     AgentAccountKind
 	Name     string
 	KeyHint  string
-	// Color is the palette id the app tints the account with; empty means none.
+	// Color is the palette id the app tints the account with. Every account of
+	// a provider gets its own; empty only until the service assigns one.
 	Color     string
 	CreatedAt time.Time
+}
+
+// AgentAccountLabel is the name and color the user gave an account.
+type AgentAccountLabel struct {
+	Name  string
+	Color string
+}
+
+// AgentAccountAutoColors is the order new accounts take colors in: the first
+// one no other account of the provider uses.
+var AgentAccountAutoColors = []string{
+	AgentAccountColorBlue, AgentAccountColorViolet, AgentAccountColorTeal, AgentAccountColorGreen,
+	AgentAccountColorAmber, AgentAccountColorPink, AgentAccountColorOrange, AgentAccountColorRed,
 }
 
 // Account colors: the closed set of palette ids an account can carry. The app
@@ -88,7 +102,7 @@ var AgentAccountColors = []string{
 }
 
 // ValidAgentAccountColor reports whether color is a palette id. The empty
-// string is not one: it is how a caller says "no color", handled separately.
+// string is not one: it is how a caller asks for the first free color.
 func ValidAgentAccountColor(color string) bool {
 	for _, c := range AgentAccountColors {
 		if c == color {
@@ -98,7 +112,8 @@ func ValidAgentAccountColor(color string) bool {
 	return false
 }
 
-// Device reports the "This computer" account.
+// Device reports the "This computer" account. It has no saved account row;
+// its name and color are saved apart, by account id.
 func (a AgentAccount) Device() bool { return strings.TrimSpace(a.Home) == "" }
 
 // APIKey reports an account that launches its CLI with a saved API key.

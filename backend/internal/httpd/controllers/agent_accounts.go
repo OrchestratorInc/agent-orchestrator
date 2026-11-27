@@ -361,6 +361,8 @@ func writeAgentAccountError(w http.ResponseWriter, r *http.Request, err error) {
 		envelope.WriteAPIError(w, r, http.StatusBadRequest, "validation", "AGENT_ACCOUNT_PROVIDER_INVALID", "Accounts are available for Claude Code and Codex only", nil)
 	case errors.Is(err, ports.ErrAgentAccountColorInvalid):
 		envelope.WriteAPIError(w, r, http.StatusBadRequest, "validation", "AGENT_ACCOUNT_COLOR_INVALID", "The color is not one of the account palette ids", nil)
+	case errors.Is(err, ports.ErrAgentAccountColorTaken):
+		envelope.WriteAPIError(w, r, http.StatusConflict, "conflict", "AGENT_ACCOUNT_COLOR_TAKEN", "Another account already uses this color", nil)
 	case errors.Is(err, ports.ErrAgentAccountKeyRejected):
 		envelope.WriteAPIError(w, r, http.StatusBadRequest, "validation", "AGENT_ACCOUNT_KEY_REJECTED", "The provider did not accept this key or token. Check it and try again.", nil)
 	case errors.Is(err, ports.ErrAgentAccountKeyUnchecked):

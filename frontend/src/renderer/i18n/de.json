@@ -4546,7 +4546,7 @@
 	"settings.agentAccounts.editTitle": "Konto bearbeiten",
 	"settings.agentAccounts.editFailed": "Das Konto konnte nicht gespeichert werden.",
 	"settings.agentAccounts.colorLabel": "Farbe",
-	"settings.agentAccounts.colorNone": "Keine",
+	"settings.agentAccounts.colorTaken": "{{color}}, verwendet von {{account}}",
 	"settings.agentAccounts.save": "Speichern",
 	"settings.agentAccounts.saving": "Speichern…",
 	"settings.agentAccounts.color.red": "Rot",

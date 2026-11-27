@@ -4528,7 +4528,7 @@
 	"settings.agentAccounts.editTitle": "编辑账户",
 	"settings.agentAccounts.editFailed": "无法保存账户。",
 	"settings.agentAccounts.colorLabel": "颜色",
-	"settings.agentAccounts.colorNone": "无",
+	"settings.agentAccounts.colorTaken": "{{color}}，{{account}} 正在使用",
 	"settings.agentAccounts.save": "保存",
 	"settings.agentAccounts.saving": "正在保存…",
 	"settings.agentAccounts.color.red": "红色",

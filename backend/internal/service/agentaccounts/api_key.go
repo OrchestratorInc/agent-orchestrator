@@ -68,10 +68,14 @@ func (s *Service) checkKey(ctx context.Context, p domain.AgentAccountProvider, k
 }
 
 // AddAPIKeyAccount saves key as a new account of p, named name and tinted
-// color (empty for none), once the provider accepts it.
+// color, once the provider accepts it. An empty color takes the first free
+// one; a color another account of p uses is ErrAgentAccountColorTaken.
 func (s *Service) AddAPIKeyAccount(ctx context.Context, p domain.AgentAccountProvider, name, key, color string) (AccountView, error) {
 	if color != "" && !domain.ValidAgentAccountColor(color) {
 		return AccountView{}, ports.ErrAgentAccountColorInvalid
+	}
+	if err := s.colorFree(ctx, p, color); err != nil {
+		return AccountView{}, err
 	}
 	provider := s.providers[p]
 	approver, ok := provider.(apiKeyApprover)
@@ -108,9 +112,9 @@ func (s *Service) AddAPIKeyAccount(ctx context.Context, p domain.AgentAccountPro
 	}
 	account := domain.AgentAccount{
 		ID: id, Provider: p, Home: home, Kind: domain.AgentAccountKindAPIKey,
-		Name: cleanAPIKeyName(name), KeyHint: apiKeyHint(key), Color: color, CreatedAt: s.now(),
+		Name: cleanAPIKeyName(name), KeyHint: apiKeyHint(key), CreatedAt: s.now(),
 	}
-	if err := s.store.CreateAgentAccount(ctx, account); err != nil {
+	if err := s.createColored(ctx, &account, color); err != nil {
 		return AccountView{}, err
 	}
 	keep = true
@@ -121,7 +125,8 @@ func (s *Service) AddAPIKeyAccount(ctx context.Context, p domain.AgentAccountPro
 
 // UpdateIdentity renames an account and sets its color. A nil field is left as
 // it is; an empty name falls back to the account's email in the app, and an
-// empty color clears the color.
+// empty color takes the first free one. A color another account of the
+// provider uses is ErrAgentAccountColorTaken.
 func (s *Service) UpdateIdentity(ctx context.Context, id string, name, color *string) (AccountView, error) {
 	if color != nil && *color != "" && !domain.ValidAgentAccountColor(*color) {
 		return AccountView{}, ports.ErrAgentAccountColorInvalid
@@ -138,18 +143,62 @@ func (s *Service) UpdateIdentity(ctx context.Context, id string, name, color *st
 func (s *Service) writeIdentity(ctx context.Context, id string, name, color *string) error {
 	s.identityMu.Lock()
 	defer s.identityMu.Unlock()
-	account, err := s.find(ctx, id)
+	accounts, err := s.accounts(ctx)
 	if err != nil {
 		return err
+	}
+	account, ok := accountByID(accounts, id)
+	if !ok {
+		return ports.ErrAgentAccountUnknown
 	}
 	newName, newColor := account.Name, account.Color
 	if name != nil {
 		newName = cleanAPIKeyName(*name)
 	}
-	if color != nil {
-		newColor = *color
+	if color != nil && *color != account.Color {
+		if newColor, err = pickColor(accounts, account.Provider, id, *color); err != nil {
+			return err
+		}
 	}
-	return s.store.UpdateAgentAccountIdentity(ctx, id, newName, newColor)
+	return s.saveIdentity(ctx, account, newName, newColor)
+}
+
+// colorFree checks a new account of p can take color before any work to add
+// it; createColored checks again as it saves.
+func (s *Service) colorFree(ctx context.Context, p domain.AgentAccountProvider, color string) error {
+	if color == "" {
+		return nil
+	}
+	accounts, err := s.accounts(ctx)
+	if err != nil {
+		return err
+	}
+	_, err = pickColor(accounts, p, "", color)
+	return err
+}
+
+// createColored saves a new account with color, or the first free one when
+// color is empty, under identityMu so no other account takes it meanwhile.
+func (s *Service) createColored(ctx context.Context, account *domain.AgentAccount, color string) error {
+	s.identityMu.Lock()
+	defer s.identityMu.Unlock()
+	accounts, err := s.accounts(ctx)
+	if err != nil {
+		return err
+	}
+	if account.Color, err = pickColor(accounts, account.Provider, account.ID, color); err != nil {
+		return err
+	}
+	return s.store.CreateAgentAccount(ctx, *account)
+}
+
+func accountByID(accounts []domain.AgentAccount, id string) (domain.AgentAccount, bool) {
+	for _, account := range accounts {
+		if account.ID == id {
+			return account, true
+		}
+	}
+	return domain.AgentAccount{}, false
 }
 
 // ReplaceAPIKey saves key in place of an API key account's key, once the

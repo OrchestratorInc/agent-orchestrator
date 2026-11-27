@@ -126,8 +126,9 @@ export interface AgentSwitchProps {
 }
 
 export interface AccountChoice {
-	/** `name`, `email` and `color` feed the account's badge, shown when there are 2 or more accounts. */
-	options: Array<{ id: string; label: string; disabled?: boolean; name?: string; email?: string; color?: AccountColor }>;
+	/** `name`, `email`, `color` and `letters` feed the account's badge, shown when there are 2 or more
+	 * accounts. `letters` comes from accountLetters, so no two accounts show the same ones. */
+	options: Array<{ id: string; label: string; disabled?: boolean; name?: string; email?: string; color?: AccountColor; letters?: string }>;
 	value?: string;
 	onPick: (id: string) => void;
 	disabled?: boolean;
@@ -883,7 +884,7 @@ function AccountSwitcher({ account, provider }: { account: AccountChoice; provid
 				className={cn("h-7 w-auto shrink-0 justify-start gap-0.5 py-0 pr-1 pl-0.5", account.disabled && "opacity-50")}
 			>
 				{/* Letters only: the row also holds fast mode and auto-compact. The name is in the tooltip and the side menu. */}
-				{chosen ? <AccountChip compact provider={provider} name={chosen.name} email={chosen.email} color={chosen.color} label={chosen.label} /> : null}
+				{chosen ? <AccountChip compact provider={provider} name={chosen.name} email={chosen.email} color={chosen.color} letters={chosen.letters} label={chosen.label} /> : null}
 				<ChevronRight aria-hidden="true" className="size-3 shrink-0 text-muted-foreground" />
 			</OptionMenuSubTrigger>
 			<OptionMenuSubContent scrollable className={SUB_CLASS}>
@@ -897,7 +898,7 @@ function AccountSwitcher({ account, provider }: { account: AccountChoice; provid
 							onSelect={() => { if (option.id !== account.value) account.onPick(option.id); }}
 							className="text-xs text-foreground"
 						>
-							<AccountChip provider={provider} name={option.name} email={option.email} color={option.color} label={option.label} className="max-w-44" />
+							<AccountChip provider={provider} name={option.name} email={option.email} color={option.color} letters={option.letters} label={option.label} className="max-w-44" />
 							{option.email && option.email !== option.label ? <span className="min-w-0 truncate text-muted-foreground">{option.email}</span> : null}
 						</OptionMenuItem>
 					))}

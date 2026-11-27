@@ -326,6 +326,35 @@ func (q *Queries) ListAgentAccounts(ctx context.Context) ([]AgentAccount, error)
 	return items, nil
 }
 
+const listDeviceAgentAccountIdentities = `-- name: ListDeviceAgentAccountIdentities :many
+SELECT account_id, name, color FROM device_agent_account_identities ORDER BY account_id
+`
+
+// The "This computer" accounts have no agent_accounts row; their name and
+// color live here, keyed by account id.
+func (q *Queries) ListDeviceAgentAccountIdentities(ctx context.Context) ([]DeviceAgentAccountIdentity, error) {
+	rows, err := q.db.QueryContext(ctx, listDeviceAgentAccountIdentities)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []DeviceAgentAccountIdentity{}
+	for rows.Next() {
+		var i DeviceAgentAccountIdentity
+		if err := rows.Scan(&i.AccountID, &i.Name, &i.Color); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const sessionAgentAccountChangedSince = `-- name: SessionAgentAccountChangedSince :one
 SELECT EXISTS (
     SELECT 1 FROM sessions s
@@ -450,6 +479,22 @@ type SetAgentAccountDefaultParams struct {
 
 func (q *Queries) SetAgentAccountDefault(ctx context.Context, arg SetAgentAccountDefaultParams) error {
 	_, err := q.db.ExecContext(ctx, setAgentAccountDefault, arg.Provider, arg.AccountID)
+	return err
+}
+
+const setDeviceAgentAccountIdentity = `-- name: SetDeviceAgentAccountIdentity :exec
+INSERT INTO device_agent_account_identities (account_id, name, color) VALUES (?, ?, ?)
+ON CONFLICT (account_id) DO UPDATE SET name = excluded.name, color = excluded.color
+`
+
+type SetDeviceAgentAccountIdentityParams struct {
+	AccountID string
+	Name      string
+	Color     sql.NullString
+}
+
+func (q *Queries) SetDeviceAgentAccountIdentity(ctx context.Context, arg SetDeviceAgentAccountIdentityParams) error {
+	_, err := q.db.ExecContext(ctx, setDeviceAgentAccountIdentity, arg.AccountID, arg.Name, arg.Color)
 	return err
 }
 

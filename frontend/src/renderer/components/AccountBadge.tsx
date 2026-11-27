@@ -38,15 +38,18 @@ export interface AccountBadgeProps {
 	name?: string;
 	email?: string;
 	color?: AccountColor;
+	/** The letters from accountLetters, unique among the provider's accounts. Without them the badge
+	 * falls back to this account's own abbreviation, which another account may share. */
+	letters?: string;
 	className?: string;
 }
 
 /** The provider's logo, then a separate square with the account's letters on its color. The letters
  * are always there, so the color is never the only cue. No outer frame: inside a chip or a row, a
  * border around the pair reads as a nested control. */
-export function AccountBadge({ provider, accountProvider, name, email, color, className }: AccountBadgeProps) {
+export function AccountBadge({ provider, accountProvider, name, email, color, letters: given, className }: AccountBadgeProps) {
 	const label = name?.trim() || email || "";
-	const letters = accountAbbreviation({ name, email, provider: accountProvider ?? provider });
+	const letters = given || accountAbbreviation({ name, email, provider: accountProvider ?? provider });
 	return (
 		<span
 			role="img"
@@ -77,12 +80,12 @@ function AccountLetters({ letters, color }: { letters: string; color?: AccountCo
 
 /** An account as one chip: its letters on their color, then its name, all over a wash of that
  * color. Used where the account is the thing being picked, so it reads before any other text. */
-export function AccountChip({ provider, accountProvider, name, email, color, label, compact, className }: AccountBadgeProps & {
+export function AccountChip({ provider, accountProvider, name, email, color, letters: given, label, compact, className }: AccountBadgeProps & {
 	label: string;
 	/** Letters only, for a tight row; the caller names the account in its tooltip and label. */
 	compact?: boolean;
 }) {
-	const letters = accountAbbreviation({ name, email, provider: accountProvider ?? provider });
+	const letters = given || accountAbbreviation({ name, email, provider: accountProvider ?? provider });
 	return (
 		<span className={cn("inline-flex h-[22px] min-w-0 items-center gap-1.5 rounded-md p-0.5", !compact && "pr-2", color ? TINT_CLASS[color] : "bg-foreground/8", className)}>
 			<AccountLetters letters={letters} color={color} />
@@ -94,7 +97,7 @@ export function AccountChip({ provider, accountProvider, name, email, color, lab
 /** The agent's logo with a dot in the account's color on its corner: which account the message runs
  * on, without taking room from the model's name. The account is named on hover and to screen readers;
  * an account with no color gets a neutral dot. */
-export function ProviderMarkWithAccount({ provider, name, email, color, className }: Omit<AccountBadgeProps, "accountProvider">) {
+export function ProviderMarkWithAccount({ provider, name, email, color, className }: Omit<AccountBadgeProps, "accountProvider" | "letters">) {
 	const label = name?.trim() || email || "";
 	return (
 		<span role="img" aria-label={label} title={label || undefined} className={cn("relative mr-0.5 inline-flex shrink-0", className)}>

@@ -667,10 +667,19 @@ const rowOf = async (id: string) => {
 	return document.querySelector<HTMLElement>(`[data-agent-account="${id}"]`)!;
 };
 
-it("offers Edit on a stored account but not on this computer's login", async () => {
+it("offers Edit on every account, this computer's login included", async () => {
 	renderForEdit([device, saved]);
 	expect(within(await rowOf("acct-b")).getByRole("button", { name: "Edit" })).toBeInTheDocument();
-	expect(within(await rowOf("device-claude")).queryByRole("button", { name: "Edit" })).not.toBeInTheDocument();
+	expect(within(await rowOf("device-claude")).getByRole("button", { name: "Edit" })).toBeInTheDocument();
+});
+
+it("gives two accounts whose emails start alike different letters", async () => {
+	renderForEdit([
+		{ ...device, email: "ronish.rohan@gmail.com", color: "blue" },
+		{ ...saved, email: "ronish@untrivial.ai", color: "violet" },
+	]);
+	expect(within(await rowOf("device-claude")).getByRole("img", { name: "ronish.rohan@gmail.com" })).toHaveTextContent("RO");
+	expect(within(await rowOf("acct-b")).getByRole("img", { name: "ronish@untrivial.ai" })).toHaveTextContent("RU");
 });
 
 it("shows an account's name before its email, with a badge once there are two accounts", async () => {
@@ -696,16 +705,26 @@ it("saves a new name and color with PATCH and refreshes the accounts", async () 
 	expect(getMock).toHaveBeenCalled();
 });
 
-it("clears a color by sending an empty string", async () => {
+it("disables a color another account uses, names that account, and offers no None", async () => {
 	const user = userEvent.setup();
-	renderForEdit([device, { ...saved, name: "Work", color: "blue" }]);
-	patchMock.mockResolvedValue({ data: { ...saved, name: "Work" } });
+	renderForEdit([{ ...device, color: "blue" }, { ...saved, name: "Work", color: "teal" }]);
 	await user.click(within(await rowOf("acct-b")).getByRole("button", { name: "Edit" }));
 	const dialog = await screen.findByRole("dialog");
-	expect(within(dialog).getByRole("radio", { name: "Blue" })).toBeChecked();
-	await user.click(within(dialog).getByRole("radio", { name: "None" }));
+	expect(within(dialog).getByRole("radio", { name: "Teal" })).toBeChecked();
+	expect(within(dialog).getByRole("radio", { name: "Blue, used by A · a@example.com" })).toBeDisabled();
+	expect(within(dialog).queryByRole("radio", { name: "None" })).not.toBeInTheDocument();
+	expect(within(dialog).getAllByRole("radio")).toHaveLength(8);
+});
+
+it("renames this computer's own login", async () => {
+	const user = userEvent.setup();
+	renderForEdit([{ ...device, color: "blue" }, { ...saved, color: "violet" }]);
+	patchMock.mockResolvedValue({ data: { ...device, name: "Personal", color: "blue" } });
+	await user.click(within(await rowOf("device-claude")).getByRole("button", { name: "Edit" }));
+	const dialog = await screen.findByRole("dialog");
+	await user.type(within(dialog).getByLabelText("Name"), "Personal");
 	await user.click(within(dialog).getByRole("button", { name: "Save" }));
-	await waitFor(() => expect(patchMock).toHaveBeenCalledWith("/api/v1/agents/accounts/{accountId}", { params: { path: { accountId: "acct-b" } }, body: { name: "Work", color: "" } }));
+	await waitFor(() => expect(patchMock).toHaveBeenCalledWith("/api/v1/agents/accounts/{accountId}", { params: { path: { accountId: "device-claude" } }, body: { name: "Personal", color: "blue" } }));
 });
 
 it("does not save on the Enter that confirms an IME composition", async () => {

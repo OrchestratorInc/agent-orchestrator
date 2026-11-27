@@ -470,6 +470,12 @@ type DeletedSessionAccountUsage struct {
 	EstimatedCostNanos int64
 }
 
+type DeviceAgentAccountIdentity struct {
+	AccountID string
+	Name      string
+	Color     sql.NullString
+}
+
 type KeptArtifact struct {
 	ID            string
 	SessionID     string

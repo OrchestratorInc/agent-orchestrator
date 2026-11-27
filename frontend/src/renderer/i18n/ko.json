@@ -4546,7 +4546,7 @@
 	"settings.agentAccounts.editTitle": "계정 편집",
 	"settings.agentAccounts.editFailed": "계정을 저장하지 못했습니다.",
 	"settings.agentAccounts.colorLabel": "색상",
-	"settings.agentAccounts.colorNone": "없음",
+	"settings.agentAccounts.colorTaken": "{{color}}, {{account}}에서 사용 중",
 	"settings.agentAccounts.save": "저장",
 	"settings.agentAccounts.saving": "저장 중…",
 	"settings.agentAccounts.color.red": "빨강",

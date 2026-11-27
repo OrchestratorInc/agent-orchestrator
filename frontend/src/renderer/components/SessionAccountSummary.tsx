@@ -2,6 +2,7 @@ import { LoaderCircle } from "@/components/app-icons";
 import { type ReactNode, useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { AccountBadge } from "./AccountBadge";
+import { accountLetters } from "../lib/account-identity";
 import { agentAccountChoiceOption, agentAccountProviderFor, oneRowPerLogin, useAgentAccountActions, useAgentAccountLabel, useAgentAccounts, useSessionAgentAccounts } from "../hooks/useAgentAccounts";
 import { cloudAgentAccountName, CLOUD_ACCOUNT_SWITCH_HARNESSES, useCloudAgentAccountActions, useCloudAgentAccounts, useCloudSessionAgentAccount } from "../hooks/useCloudAgentAccounts";
 import { useCloudMeUserId } from "../hooks/useCloudMeUserId";
@@ -43,9 +44,9 @@ export function useSessionAccountSwitch(session: WorkspaceSession, sessionHostId
 	}, [settledPhase, accountMove?.id, session.id]);
 
 	const currentId = provider ? current.data?.[provider] : undefined;
-	const options = useMemo(() => provider
-		? oneRowPerLogin((accounts.data ?? []).filter((account) => account.provider === provider), currentId)
-		: [], [accounts.data, currentId, provider]);
+	const providerAccounts = useMemo(() => provider ? (accounts.data ?? []).filter((account) => account.provider === provider) : [], [accounts.data, provider]);
+	const options = useMemo(() => oneRowPerLogin(providerAccounts, currentId), [currentId, providerAccounts]);
+	const letters = useMemo(() => accountLetters(providerAccounts), [providerAccounts]);
 	const account = options.find((option) => option.id === currentId);
 	const working = session.activity?.state === "active" || session.activity?.state === "blocked";
 	// "Moved from … to …" answers the move; the next message makes it history.
@@ -85,12 +86,12 @@ export function useSessionAccountSwitch(session: WorkspaceSession, sessionHostId
 	const choice = useMemo<AccountChoice | undefined>(() => {
 		if (!shown || !provider) return undefined;
 		return {
-			options: options.map((option) => agentAccountChoiceOption(option, options, t)),
+			options: options.map((option) => agentAccountChoiceOption(option, options, t, letters)),
 			value: currentId,
 			onPick: (id) => void moveRef.current(id),
 			disabled: moving || options.length < 2,
 		};
-	}, [currentId, moving, options, provider, shown, t]);
+	}, [currentId, letters, moving, options, provider, shown, t]);
 
 	const dialog = confirming ? <ConfirmDialog open
 		title={t("settings.agentAccounts.stopAndMoveTitle")}
@@ -129,7 +130,7 @@ function LocalSessionAccountSummary({ session, hostId }: { session: WorkspaceSes
 						<SelectContent align="end">
 							{choice.options.map((option) => <SelectItem key={option.id} value={option.id} textValue={option.label} disabled={option.disabled}>
 								<span className="flex min-w-0 items-center gap-2">
-									<AccountBadge provider={session.provider} accountProvider={agentAccountProviderFor(session.provider) ?? undefined} name={option.name} email={option.email} color={option.color} />
+									<AccountBadge provider={session.provider} accountProvider={agentAccountProviderFor(session.provider) ?? undefined} name={option.name} email={option.email} color={option.color} letters={option.letters} />
 									<span className="truncate">{option.label}</span>
 								</span>
 							</SelectItem>)}

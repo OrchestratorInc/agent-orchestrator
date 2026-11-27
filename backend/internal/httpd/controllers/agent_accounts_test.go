@@ -210,6 +210,10 @@ func TestAgentAccountsUpdateIdentity(t *testing.T) {
 	if rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), "AGENT_ACCOUNT_COLOR_INVALID") || !strings.Contains(rec.Body.String(), `"validation"`) {
 		t.Fatalf("invalid color: status %d body %s", rec.Code, rec.Body)
 	}
+	svc.err = ports.ErrAgentAccountColorTaken
+	if rec := send("/agents/accounts/acct-a", `{"color":"red"}`); rec.Code != http.StatusConflict || !strings.Contains(rec.Body.String(), "AGENT_ACCOUNT_COLOR_TAKEN") {
+		t.Fatalf("taken color: status %d body %s", rec.Code, rec.Body)
+	}
 	svc.err = ports.ErrAgentAccountUnknown
 	if rec := send("/agents/accounts/nope", `{"name":"x"}`); rec.Code != http.StatusNotFound || !strings.Contains(rec.Body.String(), "AGENT_ACCOUNT_NOT_FOUND") {
 		t.Fatalf("unknown id: status %d body %s", rec.Code, rec.Body)

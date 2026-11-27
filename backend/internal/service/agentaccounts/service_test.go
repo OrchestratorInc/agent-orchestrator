@@ -18,21 +18,49 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/service/shellterm"
 )
 
+// memStore guards its fields with mu: listing accounts can save a color, so a
+// List may write while another reads.
 type memStore struct {
+	mu       sync.Mutex
 	accounts []domain.AgentAccount
+	devices  map[string]domain.AgentAccountLabel
 	defaults map[domain.AgentAccountProvider]string
 	bindings map[domain.SessionID]string
 	hintErr  error // fails UpdateAgentAccountKeyHint
 }
 
 func (m *memStore) ListAgentAccounts(context.Context) ([]domain.AgentAccount, error) {
-	return m.accounts, nil
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return append([]domain.AgentAccount(nil), m.accounts...), nil
 }
 func (m *memStore) CreateAgentAccount(_ context.Context, a domain.AgentAccount) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	m.accounts = append(m.accounts, a)
 	return nil
 }
+func (m *memStore) ListDeviceAgentAccountIdentities(context.Context) (map[string]domain.AgentAccountLabel, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	out := make(map[string]domain.AgentAccountLabel, len(m.devices))
+	for id, label := range m.devices {
+		out[id] = label
+	}
+	return out, nil
+}
+func (m *memStore) SetDeviceAgentAccountIdentity(_ context.Context, id, name, color string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.devices == nil {
+		m.devices = map[string]domain.AgentAccountLabel{}
+	}
+	m.devices[id] = domain.AgentAccountLabel{Name: name, Color: color}
+	return nil
+}
 func (m *memStore) UpdateAgentAccountKeyHint(_ context.Context, id, hint string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	if m.hintErr != nil {
 		return m.hintErr
 	}
@@ -45,6 +73,8 @@ func (m *memStore) UpdateAgentAccountKeyHint(_ context.Context, id, hint string)
 	return ports.ErrAgentAccountUnknown
 }
 func (m *memStore) UpdateAgentAccountIdentity(_ context.Context, id, name, color string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	for i := range m.accounts {
 		if m.accounts[i].ID == id {
 			m.accounts[i].Name, m.accounts[i].Color = name, color

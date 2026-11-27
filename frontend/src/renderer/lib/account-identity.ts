@@ -1,6 +1,7 @@
 import type { AgentAccount } from "../hooks/useAgentAccounts";
 
-/** The closed palette an account can be marked with; the backend validates the same ids. */
+/** The closed palette an account can be marked with; the backend validates the same ids, and gives
+ * each account of a provider its own color while one is free. */
 export const ACCOUNT_COLORS = ["red", "orange", "amber", "green", "teal", "blue", "violet", "pink"] as const;
 export type AccountColor = (typeof ACCOUNT_COLORS)[number];
 
@@ -22,4 +23,43 @@ export function accountAbbreviation(account: { name?: string; email?: string; pr
 		letters = local ? first(local, 2) : first(PROVIDER_LABELS[account.provider] ?? account.provider, 2);
 	}
 	return letters.toUpperCase();
+}
+
+type LetterAccount = { id: string; name?: string; email?: string; provider: AgentAccount["provider"] | string };
+
+/** The letters an account could show, best first: its own abbreviation, then the initials of its
+ * email's words (ronish.rohan gives RR), the email's first two characters, and the first characters
+ * of the email's name and domain (ronish@untrivial.ai gives RU). */
+function letterCandidates(account: LetterAccount): string[] {
+	const [local = "", domain = ""] = (account.email ?? "").trim().split("@");
+	const words = local.split(/[._+\-]+/).filter(Boolean);
+	const candidates = [accountAbbreviation(account)];
+	if (words.length >= 2) candidates.push(first(words[0], 1) + first(words[1], 1));
+	if (local) candidates.push(first(local, 2));
+	if (local && domain) candidates.push(first(local, 1) + first(domain, 1));
+	return [...new Set(candidates.map((letters) => letters.toUpperCase()).filter(Boolean))];
+}
+
+/**
+ * The letters each account shows, by account id, so no two accounts of a provider show the same
+ * ones. Accounts take letters in the order given (the daemon lists the computer's own first, then
+ * the rest oldest first), each its first candidate no earlier account of its provider took; when
+ * every candidate is taken, its first letter and a number (R2, R3).
+ */
+export function accountLetters(accounts: readonly LetterAccount[]): Map<string, string> {
+	const taken = new Map<string, Set<string>>();
+	const out = new Map<string, string>();
+	for (const account of accounts) {
+		const used = taken.get(account.provider) ?? new Set<string>();
+		taken.set(account.provider, used);
+		const candidates = letterCandidates(account);
+		let letters = candidates.find((candidate) => !used.has(candidate));
+		if (!letters) {
+			const lead = first(candidates[0] ?? "?", 1);
+			for (let n = 2; !letters; n++) if (!used.has(lead + n)) letters = lead + n;
+		}
+		used.add(letters);
+		out.set(account.id, letters);
+	}
+	return out;
 }

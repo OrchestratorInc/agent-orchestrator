@@ -4529,7 +4529,7 @@
 	"settings.agentAccounts.editTitle": "Edit account",
 	"settings.agentAccounts.editFailed": "Couldn't save the account.",
 	"settings.agentAccounts.colorLabel": "Color",
-	"settings.agentAccounts.colorNone": "None",
+	"settings.agentAccounts.colorTaken": "{{color}}, used by {{account}}",
 	"settings.agentAccounts.save": "Save",
 	"settings.agentAccounts.saving": "Saving…",
 	"settings.agentAccounts.color.red": "Red",

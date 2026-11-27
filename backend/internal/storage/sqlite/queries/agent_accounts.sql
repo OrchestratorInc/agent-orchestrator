@@ -10,6 +10,15 @@ VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
 -- name: UpdateAgentAccountIdentity :execrows
 UPDATE agent_accounts SET name = ?, color = ? WHERE id = ?;
 
+-- The "This computer" accounts have no agent_accounts row; their name and
+-- color live here, keyed by account id.
+-- name: ListDeviceAgentAccountIdentities :many
+SELECT * FROM device_agent_account_identities ORDER BY account_id;
+
+-- name: SetDeviceAgentAccountIdentity :exec
+INSERT INTO device_agent_account_identities (account_id, name, color) VALUES (?, ?, ?)
+ON CONFLICT (account_id) DO UPDATE SET name = excluded.name, color = excluded.color;
+
 -- name: UpdateAgentAccountKeyHint :execrows
 UPDATE agent_accounts SET key_hint = ? WHERE id = ? AND kind IN ('api_key', 'setup_token');
 

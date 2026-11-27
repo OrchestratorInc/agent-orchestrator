@@ -163,3 +163,27 @@ func TestAgentAccountIdentityRoundTrip(t *testing.T) {
 		t.Fatalf("unknown id: err = %v", err)
 	}
 }
+
+// The computer's own accounts keep a name and color by account id; saving
+// again replaces both, and an empty color stores NULL.
+func TestDeviceAgentAccountIdentityRoundTrip(t *testing.T) {
+	s := sqlitetest.MustOpenAt(t, t.TempDir())
+	ctx := context.Background()
+	got, err := s.ListDeviceAgentAccountIdentities(ctx)
+	mustNoError(t, err)
+	if len(got) != 0 {
+		t.Fatalf("fresh store = %+v", got)
+	}
+	mustNoError(t, s.SetDeviceAgentAccountIdentity(ctx, "device-claude", "Personal", "blue"))
+	mustNoError(t, s.SetDeviceAgentAccountIdentity(ctx, "device-codex", "", "teal"))
+	mustNoError(t, s.SetDeviceAgentAccountIdentity(ctx, "device-claude", "Home", ""))
+	got, err = s.ListDeviceAgentAccountIdentities(ctx)
+	mustNoError(t, err)
+	want := map[string]domain.AgentAccountLabel{
+		"device-claude": {Name: "Home"},
+		"device-codex":  {Color: "teal"},
+	}
+	if len(got) != len(want) || got["device-claude"] != want["device-claude"] || got["device-codex"] != want["device-codex"] {
+		t.Fatalf("identities = %+v, want %+v", got, want)
+	}
+}

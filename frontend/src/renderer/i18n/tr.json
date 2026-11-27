@@ -4529,7 +4529,7 @@
 	"settings.agentAccounts.editTitle": "Hesabı düzenle",
 	"settings.agentAccounts.editFailed": "Hesap kaydedilemedi.",
 	"settings.agentAccounts.colorLabel": "Renk",
-	"settings.agentAccounts.colorNone": "Yok",
+	"settings.agentAccounts.colorTaken": "{{color}}, {{account}} kullanıyor",
 	"settings.agentAccounts.save": "Kaydet",
 	"settings.agentAccounts.saving": "Kaydediliyor…",
 	"settings.agentAccounts.color.red": "Kırmızı",

@@ -4736,7 +4736,7 @@
 	"settings.agentAccounts.editTitle": "Изменить аккаунт",
 	"settings.agentAccounts.editFailed": "Не удалось сохранить аккаунт.",
 	"settings.agentAccounts.colorLabel": "Цвет",
-	"settings.agentAccounts.colorNone": "Без цвета",
+	"settings.agentAccounts.colorTaken": "{{color}}, используется: {{account}}",
 	"settings.agentAccounts.save": "Сохранить",
 	"settings.agentAccounts.saving": "Сохранение…",
 	"settings.agentAccounts.color.red": "Красный",

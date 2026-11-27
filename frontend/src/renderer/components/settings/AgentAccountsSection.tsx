@@ -19,6 +19,8 @@ import { TerminalPane } from "../TerminalPane";
 import { AccountBadge } from "../AccountBadge";
 import { Badge } from "../ui/badge";
 import { AccountEditDialog } from "./AccountEditDialog";
+import { takenAccountColors } from "./AccountColorPicker";
+import { accountLetters } from "../../lib/account-identity";
 import { Button } from "../ui/button";
 import { Switch } from "../ui/switch";
 import { Tooltip, TooltipContent, TooltipTrigger } from "../ui/tooltip";
@@ -96,6 +98,9 @@ export function AgentAccountsPanel({ provider, cliLogin: cliLoginControls, hostI
 	const harness = providerHarness[provider];
 	const tokensByAccount = new Map((usage.data ?? []).map((row) => [row.accountId, row.inputTokens + row.outputTokens]));
 	const providerAccounts = (accounts.data ?? []).filter((account) => account.provider === provider);
+	// Letters and colors are unique across all the provider's accounts, hidden twins included.
+	const letters = accountLetters(providerAccounts);
+	const takenBy = (self?: AgentAccount) => takenAccountColors(providerAccounts, { id: self?.id, provider }, (account) => `${letters.get(account.id) ?? ""} · ${agentAccountLabel(account, providerAccounts, t)}`);
 	// Only subscriptions take part in moving at a usage limit.
 	const hasMultipleAccounts = withoutSameLogins(providerAccounts).filter((account) => !perToken(account) && (!account.device || account.signedIn)).length > 1;
 	// The harness's methods that suit adding an account, or account's kind.
@@ -340,7 +345,7 @@ export function AgentAccountsPanel({ provider, cliLogin: cliLoginControls, hostI
 				agentId={harness}
 				methods={methodsFor(signInTarget)}
 				hostId={hostId}
-				account={{ start: startAccountSignIn, named: !signInTarget, colorMethod: API_KEY_METHOD }}
+				account={{ start: startAccountSignIn, named: !signInTarget, colorMethod: API_KEY_METHOD, takenColors: takenBy() }}
 				onVerify={verifyAccountSignIn}
 				onClose={closeSignIn}
 				onTerminal={panelOnly(signInTarget) ? undefined : async () => {
@@ -368,14 +373,16 @@ export function AgentAccountsPanel({ provider, cliLogin: cliLoginControls, hostI
 				onSignInAgain={signInReady(account) ? () => openSignIn(account) : undefined}
 				onReplaceKey={signInReady(account) ? () => openSignIn(account) : undefined}
 				onRemove={() => { setError(""); setNeedsDeveloperMode(false); setRemoving(account); }}
-				onEdit={account.device ? undefined : () => setEditing(account)}
+				onEdit={() => setEditing(account)}
 				badged={rows.length > 1}
+				letters={letters.get(account.id)}
 			/>; })}
 			{!hostId && hasMultipleAccounts ? <AccountHandoffRow /> : null}
 		</HarnessDetailGroup>
 		{editing ? <AccountEditDialog
 			account={editing}
 			label={agentAccountLabel(editing, rows, t)}
+			takenColors={takenBy(editing)}
 			onSave={(change) => actions.update(editing.id, change)}
 			onClose={() => setEditing(null)}
 		/> : null}
@@ -391,7 +398,7 @@ export function AgentAccountsPanel({ provider, cliLogin: cliLoginControls, hostI
 	</>;
 }
 
-function AccountRow({ account, name, aoTokens, busy, cliLogin, onMakeDefault, onUseReset, onSignInAgain, onReplaceKey, onRemove, onEdit, badged }: {
+function AccountRow({ account, name, aoTokens, busy, cliLogin, onMakeDefault, onUseReset, onSignInAgain, onReplaceKey, onRemove, onEdit, badged, letters }: {
 	account: AgentAccount;
 	name: string;
 	aoTokens: number | undefined;
@@ -404,10 +411,11 @@ function AccountRow({ account, name, aoTokens, busy, cliLogin, onMakeDefault, on
 	onSignInAgain?: () => void;
 	onReplaceKey?: () => void;
 	onRemove: () => void;
-	/** Missing for this computer's own login, which AO does not store. */
 	onEdit?: () => void;
 	/** The provider has 2 or more accounts, so each shows its badge. */
 	badged?: boolean;
+	/** The badge's letters, unique among the provider's accounts. */
+	letters?: string;
 }) {
 	const { t, i18n } = useTranslation();
 	const kind = account.kind;
@@ -437,7 +445,7 @@ function AccountRow({ account, name, aoTokens, busy, cliLogin, onMakeDefault, on
 		<div className="flex items-start justify-between gap-3">
 			<div className="min-w-0">
 				<p className="flex min-w-0 items-center gap-1.5 text-sm font-medium text-foreground">
-					{badged ? <AccountBadge provider={providerHarness[account.provider]} accountProvider={account.provider} name={account.name} email={account.email} color={account.color} /> : null}
+					{badged ? <AccountBadge provider={providerHarness[account.provider]} accountProvider={account.provider} name={account.name} email={account.email} color={account.color} letters={letters} /> : null}
 					<span className="truncate">{name}</span>
 					{badge ? <Badge>{badge}</Badge> : null}
 				</p>

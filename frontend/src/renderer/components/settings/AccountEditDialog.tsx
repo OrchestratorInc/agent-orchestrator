@@ -5,10 +5,13 @@ import { ConfirmDialog } from "../ConfirmDialog";
 import { Input } from "../ui/input";
 import { AccountColorPicker } from "./AccountColorPicker";
 
-/** Renames a stored account and sets or clears its color. A failed save stays in the dialog. */
-export function AccountEditDialog({ account, label, onSave, onClose }: {
+/** Renames an account and sets its color, one no other account of the provider uses. A failed save
+ * stays in the dialog. */
+export function AccountEditDialog({ account, label, takenColors, onSave, onClose }: {
 	account: AgentAccount;
 	label: string;
+	/** The colors the provider's other accounts use, each with the account it belongs to. */
+	takenColors: ReadonlyMap<AgentAccountColor, string>;
 	onSave: (change: { name: string; color: AgentAccountColor | "" }) => Promise<unknown>;
 	onClose: () => void;
 }) {
@@ -47,7 +50,7 @@ export function AccountEditDialog({ account, label, onSave, onClose }: {
 			</div>
 			<div className="space-y-1.5">
 				<span id={`${id}-color`} className="block text-xs text-muted-foreground">{t("settings.agentAccounts.colorLabel")}</span>
-				<AccountColorPicker value={color} onChange={setColor} disabled={pending} labelledBy={`${id}-color`} />
+				<AccountColorPicker value={color} onChange={setColor} taken={takenColors} disabled={pending} labelledBy={`${id}-color`} />
 			</div>
 		</div>
 	</ConfirmDialog>;

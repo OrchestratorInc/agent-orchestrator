@@ -67,6 +67,31 @@ func (s *Store) UpdateAgentAccountIdentity(ctx context.Context, id, name, color 
 	return nil
 }
 
+// ListDeviceAgentAccountIdentities returns the saved name and color of each
+// "This computer" account, by account id.
+func (s *Store) ListDeviceAgentAccountIdentities(ctx context.Context) (map[string]domain.AgentAccountLabel, error) {
+	rows, err := s.qr.ListDeviceAgentAccountIdentities(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("list device agent account identities: %w", err)
+	}
+	out := make(map[string]domain.AgentAccountLabel, len(rows))
+	for _, row := range rows {
+		out[row.AccountID] = domain.AgentAccountLabel{Name: row.Name, Color: row.Color.String}
+	}
+	return out, nil
+}
+
+// SetDeviceAgentAccountIdentity saves a "This computer" account's name and
+// color; an empty color stores NULL.
+func (s *Store) SetDeviceAgentAccountIdentity(ctx context.Context, id, name, color string) error {
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
+	if err := s.qw.SetDeviceAgentAccountIdentity(ctx, gen.SetDeviceAgentAccountIdentityParams{AccountID: id, Name: name, Color: nullColor(color)}); err != nil {
+		return fmt.Errorf("set device agent account %s identity: %w", id, err)
+	}
+	return nil
+}
+
 // UpdateAgentAccountKeyHint records the last characters of an API key or
 // setup token account's new key or token. Any other account is unknown here.
 func (s *Store) UpdateAgentAccountKeyHint(ctx context.Context, id, hint string) error {

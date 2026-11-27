@@ -4671,7 +4671,7 @@
 	"settings.agentAccounts.editTitle": "Modifier le compte",
 	"settings.agentAccounts.editFailed": "Impossible d’enregistrer le compte.",
 	"settings.agentAccounts.colorLabel": "Couleur",
-	"settings.agentAccounts.colorNone": "Aucune",
+	"settings.agentAccounts.colorTaken": "{{color}}, utilisée par {{account}}",
 	"settings.agentAccounts.save": "Enregistrer",
 	"settings.agentAccounts.saving": "Enregistrement…",
 	"settings.agentAccounts.color.red": "Rouge",

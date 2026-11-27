@@ -86,8 +86,10 @@ export function agentAccountName(account: Pick<AgentAccount, "email" | "provider
 		: t("settings.agentAccounts.cliLoginOf", { provider: agentAccountProviderNames[account.provider] });
 }
 
-/** An account as the session and new-task pickers list it: its label plus what its badge shows. */
-export function agentAccountChoiceOption(account: AgentAccount, peers: readonly AgentAccount[], t: AccountNameT) {
+/** An account as the session and new-task pickers list it: its label plus what its badge shows.
+ * `letters` is accountLetters over every account of the provider, not only the listed ones, so a
+ * badge shows the same letters here as in Settings. */
+export function agentAccountChoiceOption(account: AgentAccount, peers: readonly AgentAccount[], t: AccountNameT, letters: ReadonlyMap<string, string>) {
 	return {
 		id: account.id,
 		label: agentAccountLabel(account, peers, t),
@@ -95,6 +97,7 @@ export function agentAccountChoiceOption(account: AgentAccount, peers: readonly 
 		name: account.name || undefined,
 		email: account.email || undefined,
 		color: account.color,
+		letters: letters.get(account.id),
 	};
 }
 

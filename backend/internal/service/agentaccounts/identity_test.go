@@ -15,7 +15,7 @@ import (
 func strPtr(s string) *string { return &s }
 
 // A nil field is left as it is; an empty name falls back to the email, and an
-// empty color clears the color.
+// empty color takes the first color no other account uses.
 func TestUpdateIdentityIsAPartialUpdate(t *testing.T) {
 	ctx := context.Background()
 	claude := &fakeClaude{signedInAs: map[string]string{}}
@@ -32,11 +32,12 @@ func TestUpdateIdentityIsAPartialUpdate(t *testing.T) {
 	if view.Account.Name != "Work laptop" || view.Account.Color != "red" {
 		t.Fatalf("name only: %+v", view.Account)
 	}
-	if view, err = svc.UpdateIdentity(ctx, "acct-a", nil, strPtr("blue")); err != nil || view.Account.Name != "Work laptop" || view.Account.Color != "blue" {
+	if view, err = svc.UpdateIdentity(ctx, "acct-a", nil, strPtr("green")); err != nil || view.Account.Name != "Work laptop" || view.Account.Color != "green" {
 		t.Fatalf("color only: %+v, %v", view.Account, err)
 	}
-	if view, err = svc.UpdateIdentity(ctx, "acct-a", nil, strPtr("")); err != nil || view.Account.Color != "" || view.Account.Name != "Work laptop" {
-		t.Fatalf("clear color: %+v, %v", view.Account, err)
+	// The computer's own account took blue when the accounts were first listed.
+	if view, err = svc.UpdateIdentity(ctx, "acct-a", nil, strPtr("")); err != nil || view.Account.Color != "violet" || view.Account.Name != "Work laptop" {
+		t.Fatalf("empty color: %+v, %v", view.Account, err)
 	}
 	if view, err = svc.UpdateIdentity(ctx, "acct-a", strPtr(""), nil); err != nil || view.Account.Name != "" {
 		t.Fatalf("clear name: %+v, %v", view.Account, err)
@@ -130,7 +131,7 @@ func TestUpdateIdentityOverlappingPartialUpdatesKeepBothFields(t *testing.T) {
 
 	colorDone := make(chan error, 1)
 	go func() {
-		_, err := svc.UpdateIdentity(ctx, "acct-a", nil, strPtr("blue"))
+		_, err := svc.UpdateIdentity(ctx, "acct-a", nil, strPtr("green"))
 		colorDone <- err
 	}()
 	// Without serialization the color update finishes while the name update is
@@ -150,7 +151,96 @@ func TestUpdateIdentityOverlappingPartialUpdatesKeepBothFields(t *testing.T) {
 	holding.mu.Lock()
 	got := store.accounts[0]
 	holding.mu.Unlock()
-	if got.Name != "Work" || got.Color != "blue" {
+	if got.Name != "Work" || got.Color != "green" {
 		t.Fatalf("overlapping updates lost a field: name %q color %q", got.Name, got.Color)
+	}
+}
+
+// Listing gives every account without a color, the computer's own included,
+// the first free one in auto order, and a second account that shares a color
+// a new one. Colors already set and unique stay.
+func TestListGivesEveryAccountItsOwnColor(t *testing.T) {
+	ctx := context.Background()
+	svc, store, root := newAPIKeyService(t, &fakeClaude{signedInAs: map[string]string{}})
+	t0 := time.Date(2026, 11, 27, 9, 0, 0, 0, time.UTC)
+	store.accounts = []domain.AgentAccount{
+		{ID: "acct-a", Provider: domain.AgentAccountProviderClaude, Home: root + "/claude/acct-a", Email: "ronish.rohan@gmail.com", CreatedAt: t0},
+		{ID: "acct-b", Provider: domain.AgentAccountProviderClaude, Home: root + "/claude/acct-b", Email: "ronish@untrivial.ai", Color: "blue", CreatedAt: t0.Add(time.Minute)},
+		{ID: "acct-c", Provider: domain.AgentAccountProviderClaude, Home: root + "/claude/acct-c", Email: "c@example.com", Color: "blue", CreatedAt: t0.Add(2 * time.Minute)},
+	}
+	views, err := svc.List(ctx, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := map[string]string{}
+	for _, view := range views {
+		got[view.Account.ID] = view.Account.Color
+	}
+	// In list order: the device account skips the blue two accounts hold and
+	// takes violet, acct-a takes teal, acct-b keeps its blue, and acct-c, the
+	// second blue, moves to green.
+	want := map[string]string{"device-claude": "violet", "acct-a": "teal", "acct-b": "blue", "acct-c": "green"}
+	for id, color := range want {
+		if got[id] != color {
+			t.Fatalf("colors = %v, want %v", got, want)
+		}
+	}
+	// The colors are saved, so a second list shows the same ones.
+	if label := store.devices["device-claude"]; label.Color != "violet" {
+		t.Fatalf("device label = %+v", label)
+	}
+	again, err := svc.List(ctx, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, view := range again {
+		if got[view.Account.ID] != view.Account.Color {
+			t.Fatalf("second list moved %s from %s to %s", view.Account.ID, got[view.Account.ID], view.Account.Color)
+		}
+	}
+}
+
+// A color another account of the provider uses is refused, on an update and
+// on a new API key account; the same color on the account itself is fine.
+func TestAColorTakenByAnotherAccountIsRefused(t *testing.T) {
+	ctx := context.Background()
+	svc, store, root := newAPIKeyService(t, &fakeClaude{signedInAs: map[string]string{}})
+	store.accounts = []domain.AgentAccount{
+		{ID: "acct-a", Provider: domain.AgentAccountProviderClaude, Home: root + "/claude/acct-a", Color: "red"},
+		{ID: "acct-b", Provider: domain.AgentAccountProviderClaude, Home: root + "/claude/acct-b", Color: "pink"},
+	}
+	if _, err := svc.UpdateIdentity(ctx, "acct-a", nil, strPtr("pink")); !errors.Is(err, ports.ErrAgentAccountColorTaken) {
+		t.Fatalf("taken color: err = %v", err)
+	}
+	if got := store.accounts[0]; got.Color != "red" {
+		t.Fatalf("a refused update changed the color: %+v", got)
+	}
+	if view, err := svc.UpdateIdentity(ctx, "acct-a", strPtr("Work"), strPtr("red")); err != nil || view.Account.Color != "red" {
+		t.Fatalf("own color: %+v, %v", view.Account, err)
+	}
+	if _, err := svc.AddAPIKeyAccount(ctx, domain.AgentAccountProviderClaude, "Key", goodKey, "pink"); !errors.Is(err, ports.ErrAgentAccountColorTaken) {
+		t.Fatalf("new account with a taken color: err = %v", err)
+	}
+	view, err := svc.AddAPIKeyAccount(ctx, domain.AgentAccountProviderClaude, "Key", goodKey, "")
+	if err != nil || view.Account.Color == "" || view.Account.Color == "red" || view.Account.Color == "pink" {
+		t.Fatalf("new account without a color: %+v, %v", view.Account, err)
+	}
+}
+
+// The computer's own account has no saved row, but its name and color are
+// saved apart and listed with it.
+func TestUpdateIdentityRenamesTheComputersOwnAccount(t *testing.T) {
+	ctx := context.Background()
+	svc, store, _ := newAPIKeyService(t, &fakeClaude{signedInAs: map[string]string{}})
+	view, err := svc.UpdateIdentity(ctx, "device-claude", strPtr("Personal"), strPtr("amber"))
+	if err != nil || view.Account.Name != "Personal" || view.Account.Color != "amber" || !view.Account.Device() {
+		t.Fatalf("view = %+v, err = %v", view.Account, err)
+	}
+	if label := store.devices["device-claude"]; label != (domain.AgentAccountLabel{Name: "Personal", Color: "amber"}) {
+		t.Fatalf("saved label = %+v", label)
+	}
+	views, err := svc.List(ctx, false)
+	if err != nil || len(views) == 0 || views[0].Account.Name != "Personal" || views[0].Account.Color != "amber" {
+		t.Fatalf("listed = %+v, err = %v", views, err)
 	}
 }

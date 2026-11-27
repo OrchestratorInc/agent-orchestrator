@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { ACCOUNT_COLORS, accountAbbreviation } from "./account-identity";
+import { ACCOUNT_COLORS, accountAbbreviation, accountLetters } from "./account-identity";
 
 describe("accountAbbreviation", () => {
 	it("takes the first letter of the first two words", () => {
@@ -29,5 +29,36 @@ describe("accountAbbreviation", () => {
 describe("ACCOUNT_COLORS", () => {
 	it("lists the eight palette ids", () => {
 		expect(ACCOUNT_COLORS).toEqual(["red", "orange", "amber", "green", "teal", "blue", "violet", "pink"]);
+	});
+});
+
+describe("accountLetters", () => {
+	const claude = (id: string, fields: { name?: string; email?: string } = {}) => ({ id, provider: "claude", ...fields });
+
+	it("keeps each account's own letters when no other account has them", () => {
+		expect(accountLetters([claude("a", { email: "dana@example.com" }), claude("b", { name: "Work laptop" })])).toEqual(new Map([["a", "DA"], ["b", "WL"]]));
+	});
+
+	it("gives a later account with the same letters the next candidate from its email", () => {
+		const letters = accountLetters([claude("device-claude", { email: "ronish.rohan@gmail.com" }), claude("b", { email: "ronish@untrivial.ai" })]);
+		expect(letters).toEqual(new Map([["device-claude", "RO"], ["b", "RU"]]));
+		// Words in the email come before its domain.
+		expect(accountLetters([claude("a", { email: "ronish@untrivial.ai" }), claude("b", { email: "ronish.rohan@gmail.com" })]).get("b")).toBe("RR");
+	});
+
+	it("numbers accounts once every candidate is taken", () => {
+		const letters = accountLetters([claude("a", { name: "Work" }), claude("b", { name: "Work" }), claude("c", { name: "Work" })]);
+		expect([...letters.values()]).toEqual(["WO", "W2", "W3"]);
+	});
+
+	it("gives API keys without an email distinct letters", () => {
+		const letters = accountLetters([claude("a"), claude("b"), claude("c", { name: "Key" })]);
+		expect(new Set(letters.values()).size).toBe(3);
+	});
+
+	it("lets accounts of different providers share letters", () => {
+		const letters = accountLetters([claude("a", { email: "dana@example.com" }), { id: "b", provider: "codex", email: "dana@example.com" }]);
+		expect(letters.get("a")).toBe("DA");
+		expect(letters.get("b")).toBe("DA");
 	});
 });

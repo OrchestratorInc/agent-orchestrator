@@ -4546,7 +4546,7 @@
 	"settings.agentAccounts.editTitle": "アカウントを編集",
 	"settings.agentAccounts.editFailed": "アカウントを保存できませんでした。",
 	"settings.agentAccounts.colorLabel": "色",
-	"settings.agentAccounts.colorNone": "なし",
+	"settings.agentAccounts.colorTaken": "{{color}}（{{account}} が使用中）",
 	"settings.agentAccounts.save": "保存",
 	"settings.agentAccounts.saving": "保存中…",
 	"settings.agentAccounts.color.red": "赤",

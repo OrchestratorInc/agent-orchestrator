@@ -273,7 +273,7 @@ type seenOrg struct{ id, name string }
 // List returns every account, the computer's own first per provider. refresh
 // reads identity and limits again even when the last reading is fresh.
 func (s *Service) List(ctx context.Context, refresh bool) ([]AccountView, error) {
-	accounts, err := s.accounts(ctx)
+	accounts, err := s.coloredAccounts(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -522,12 +522,18 @@ func (s *Service) accounts(ctx context.Context) ([]domain.AgentAccount, error) {
 	if err != nil {
 		return nil, err
 	}
+	devices, err := s.store.ListDeviceAgentAccountIdentities(ctx)
+	if err != nil {
+		return nil, err
+	}
 	out := make([]domain.AgentAccount, 0, len(saved)+len(domain.AgentAccountProviders))
 	for _, p := range domain.AgentAccountProviders {
 		if s.providers[p] == nil {
 			continue
 		}
-		out = append(out, domain.AgentAccount{ID: domain.DeviceAgentAccountID(p), Provider: p})
+		id := domain.DeviceAgentAccountID(p)
+		device := devices[id]
+		out = append(out, domain.AgentAccount{ID: id, Provider: p, Name: device.Name, Color: device.Color})
 		for _, account := range saved {
 			if account.Provider == p {
 				out = append(out, account)
@@ -975,7 +981,7 @@ func (s *Service) VerifyLogin(ctx context.Context, operationID string) (LoginSta
 		return s.finishSignInAgain(ctx, op, identity, views)
 	}
 	account := domain.AgentAccount{ID: op.id, Provider: op.provider, Home: op.home, Email: identity.Email, Plan: identity.Plan, Kind: kind, Name: op.name, CreatedAt: s.now()}
-	if err := s.store.CreateAgentAccount(ctx, account); err != nil {
+	if err := s.createColored(ctx, &account, ""); err != nil {
 		s.releaseLogin(op) // still pending: a later check can save it
 		return "", nil, err
 	}

@@ -4671,7 +4671,7 @@
 	"settings.agentAccounts.editTitle": "Editar conta",
 	"settings.agentAccounts.editFailed": "Não foi possível salvar a conta.",
 	"settings.agentAccounts.colorLabel": "Cor",
-	"settings.agentAccounts.colorNone": "Nenhuma",
+	"settings.agentAccounts.colorTaken": "{{color}}, em uso por {{account}}",
 	"settings.agentAccounts.save": "Salvar",
 	"settings.agentAccounts.saving": "Salvando…",
 	"settings.agentAccounts.color.red": "Vermelho",

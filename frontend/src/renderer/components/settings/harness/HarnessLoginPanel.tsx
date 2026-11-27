@@ -38,6 +38,8 @@ export type AccountLoginMode = {
 	named: boolean;
 	/** The method that saves a key account, which can also be given a color. */
 	colorMethod?: string;
+	/** The colors the provider's accounts already use, which a new one cannot take. */
+	takenColors?: ReadonlyMap<AgentAccountColor, string>;
 };
 
 export function HarnessLoginPanel({ agentId, methods, hostId, providerKeys, providerKeysError, onRetryProviderKeys, onProviderKeysChanged, onVerify, onClose, onTerminal, account }: {
@@ -604,7 +606,7 @@ export function HarnessLoginPanel({ agentId, methods, hostId, providerKeys, prov
 						</>}
 						{account?.named && account.colorMethod === item.id && <>
 							<span id={titleId + "-color"} className={fieldLabelClass}>{t("settings.agentAccounts.colorLabel")}</span>
-							<AccountColorPicker value={accountColor} onChange={setAccountColor} disabled={locked} labelledBy={titleId + "-color"} />
+							<AccountColorPicker value={accountColor} onChange={setAccountColor} taken={account.takenColors} disabled={locked} labelledBy={titleId + "-color"} />
 						</>}
 						<>
 							<label htmlFor={titleId + "-secret"} className={fieldLabelClass}>{secretLabel(item.id)}</label>
