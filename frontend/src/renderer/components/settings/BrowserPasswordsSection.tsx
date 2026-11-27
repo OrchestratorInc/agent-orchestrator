@@ -1,4 +1,4 @@
-import { Pencil, Plus, RefreshCw, Trash2 } from "@/components/app-icons";
+import { Lock, Pencil, Plus, RefreshCw, Trash2 } from "@/components/app-icons";
 import { useQuery } from "@tanstack/react-query";
 import { useCallback, useEffect, useId, useMemo, useRef, useState, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
@@ -142,14 +142,27 @@ export function BrowserPasswordsSection() {
 			>
 				{error ? <div className="settings-row-bar text-xs text-error" role="alert">{error}</div> : null}
 				{keyLost ? (
-					// A bar, not a row: the whole warning wraps, so "reset only if
-					// the key is gone" is always visible next to Reset.
-					<div className="settings-row-bar flex flex-col items-start gap-2" role="alert">
-						<p className="text-pretty text-xs text-error">{t("settings.passwords.keyLost")}</p>
-						<Button onClick={() => setResetting(true)} size="sm" type="button" variant="quiet">
-							{t("settings.passwords.reset")}
-						</Button>
-					</div>
+					// A row like every other: what's wrong on the left (the description
+					// wraps, so "reset only if the key is gone" stays visible), what to
+					// do on the right. Try again re-reads the vault once the keychain is
+					// unlocked; Reset opens its confirmation.
+					<SettingsRow
+						role="alert"
+						data-testid="vault-key-lost"
+						leading={<Lock aria-hidden="true" className="size-icon-lg text-status-needs-you" />}
+						label={t("settings.passwords.keyLostTitle")}
+						description={t("settings.passwords.keyLost")}
+					>
+						<div className="flex shrink-0 items-center gap-1">
+							<Button onClick={() => void refresh()} size="sm" type="button" variant="quiet">
+								<RefreshCw aria-hidden="true" className="size-icon-base" />
+								{t("settings.passwords.retry")}
+							</Button>
+							<Button onClick={() => setResetting(true)} size="sm" type="button" variant="destructive-ghost">
+								{t("settings.passwords.reset")}
+							</Button>
+						</div>
+					</SettingsRow>
 				) : null}
 				{!available ? (
 					<div className="settings-row-bar text-xs text-error" role="alert">{t("settings.passwords.keychainUnavailable")}</div>

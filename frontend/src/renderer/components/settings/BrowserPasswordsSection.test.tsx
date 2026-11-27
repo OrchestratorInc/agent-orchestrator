@@ -190,10 +190,11 @@ describe("BrowserPasswordsSection", () => {
 		const bridge = mockBridge({ list });
 		window.ao!.vault = bridge;
 		renderSection();
-		const message = await screen.findByText(/can't be opened/);
-		// The whole warning, including "reset only if the key is gone", must be
+		const row = await screen.findByTestId("vault-key-lost");
+		expect(row).toHaveTextContent("Saved passwords are locked");
+		// The whole explanation, including "reset only if the key is gone", must be
 		// readable next to Reset: it wraps instead of being cut off.
-		expect(message).toHaveTextContent(/reset only if the key is gone/);
+		const message = screen.getByText(/reset only if the key is gone/);
 		expect(message.closest(".truncate")).toBeNull();
 		expect(message.className).not.toMatch(/\btruncate\b/);
 		// Saved logins exist, they just can't be read: no "No saved passwords".
@@ -203,7 +204,22 @@ describe("BrowserPasswordsSection", () => {
 		expect(bridge.reset).not.toHaveBeenCalled();
 		await userEvent.click(await screen.findByRole("button", { name: "Reset" }));
 		await waitFor(() => expect(bridge.reset).toHaveBeenCalledOnce());
-		await waitFor(() => expect(screen.queryByText(/can't be opened/)).not.toBeInTheDocument());
+		await waitFor(() => expect(screen.queryByTestId("vault-key-lost")).not.toBeInTheDocument());
+	});
+
+	it("reads the vault again on Try again, without resetting, once the keychain unlocks", async () => {
+		const list = vi
+			.fn<AoBridge["vault"]["list"]>()
+			.mockResolvedValueOnce({ available: true, items: [], keyLost: true })
+			.mockResolvedValue({ available: true, items: [] });
+		const bridge = mockBridge({ list });
+		window.ao!.vault = bridge;
+		renderSection();
+		await screen.findByTestId("vault-key-lost");
+		await userEvent.click(screen.getByRole("button", { name: "Try again" }));
+		await waitFor(() => expect(screen.queryByTestId("vault-key-lost")).not.toBeInTheDocument());
+		expect(list).toHaveBeenCalledTimes(2);
+		expect(bridge.reset).not.toHaveBeenCalled();
 	});
 
 	it("disables adding when the keychain is unavailable", async () => {
