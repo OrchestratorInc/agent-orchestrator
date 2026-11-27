@@ -23,5 +23,7 @@ describe("resolveBrowserViewport", () => {
 		expect(resolveBrowserViewport("big-phone")).toBeNull();
 		expect(resolveBrowserViewport("800 x 600")).toBeNull();
 		expect(resolveBrowserViewport("")).toBeNull();
+		expect(resolveBrowserViewport("constructor")).toBeNull();
+		expect(resolveBrowserViewport("__proto__")).toBeNull();
 	});
 });

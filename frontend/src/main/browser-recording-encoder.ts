@@ -99,6 +99,8 @@ export function createElectronRecordingEncoder(
 		let closed = false;
 		let flushTimer: ReturnType<typeof setInterval> | undefined;
 		let work: Promise<unknown> = Promise.resolve();
+		// The first chunk that failed to reach the file: the video has a gap.
+		let writeError: unknown;
 		const close = async () => {
 			if (closed) return;
 			closed = true;
@@ -137,7 +139,10 @@ export function createElectronRecordingEncoder(
 			);
 		}
 		flushTimer = setInterval(() => {
-			void enqueue(async () => append(await contents.executeJavaScript("aoRecorder.take()"))).catch(() => undefined);
+			if (writeError) return;
+			void enqueue(async () => append(await contents.executeJavaScript("aoRecorder.take()"))).catch((error) => {
+				writeError ??= error;
+			});
 		}, FLUSH_INTERVAL_MS);
 		flushTimer.unref?.();
 
@@ -155,6 +160,13 @@ export function createElectronRecordingEncoder(
 			finish: async () => {
 				try {
 					await enqueue(async () => append(await contents.executeJavaScript("aoRecorder.stop()")));
+					if (writeError) {
+						throw new AoError(
+							"BROWSER_RECORDING_FAILED",
+							`The recording could not be written: ${writeError instanceof Error ? writeError.message : String(writeError)}`,
+							{ cause: writeError },
+						);
+					}
 				} finally {
 					await close();
 				}

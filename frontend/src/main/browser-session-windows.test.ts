@@ -7,12 +7,18 @@ function fakeWindow(options: Record<string, unknown> = {}) {
 	let destroyed = false;
 	let contentSize: [number, number] = [Number(options.width ?? 1200), Number(options.height ?? 820)];
 	let resizable = options.resizable !== false;
+	let minimumSize: [number, number] = [Number(options.minWidth ?? 0), Number(options.minHeight ?? 0)];
 	const window = {
 		options,
 		showInactive: vi.fn(),
 		getContentSize: () => contentSize,
 		setContentSize: vi.fn((width: number, height: number) => {
-			contentSize = [width, height];
+			// Like the OS, a window does not go under its minimum size.
+			contentSize = [Math.max(width, minimumSize[0]), Math.max(height, minimumSize[1])];
+		}),
+		getMinimumSize: () => minimumSize,
+		setMinimumSize: vi.fn((width: number, height: number) => {
+			minimumSize = [width, height];
 		}),
 		isResizable: () => resizable,
 		setResizable: vi.fn((value: boolean) => {
@@ -180,5 +186,14 @@ describe("createBrowserSessionWindows", () => {
 		sessionWindows.fitToRecording("1:sess-1", null);
 		expect(window.setResizable).toHaveBeenLastCalledWith(true);
 		expect(window.getContentSize()).toEqual([1200, 820]);
+		expect(window.getMinimumSize()).toEqual([480, 360]);
+	});
+
+	it("fits a phone recording into a window the person opened, under its minimum size", () => {
+		const { open, sessionWindows, windows } = setup();
+		open("1:sess-1");
+		const window = windows[0]!;
+		sessionWindows.fitToRecording("1:sess-1", { width: 320, height: 300 });
+		expect(window.getContentSize()).toEqual([320, 300]);
 	});
 });

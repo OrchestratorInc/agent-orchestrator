@@ -4589,6 +4589,13 @@ export function createBrowserViewHost(
 		const encoder = await recordingOptions.createEncoder(file, (bytes) => {
 			if (bytes > MAX_RECORDING_BYTES && recording) void finishRecording(session, recording, "max-size").catch(() => undefined);
 		});
+		// A finished recording nobody read gives way to the new one.
+		const previous = finishedRecordings.get(session.sessionId);
+		finishedRecordings.delete(session.sessionId);
+		void previous?.then((result) => recordingOptions.store.remove(result.id)).catch(() => undefined);
+		// The page is recorded where the person can watch it: its own window.
+		// The recording (and its time limit) starts once that window is ready.
+		const windowMode = await prepareRecordingWindow(session, viewport);
 		const started = new BrowserRecording(encoder, {
 			id,
 			file,
@@ -4598,27 +4605,23 @@ export function createBrowserViewHost(
 			onLimit: (reason) => void finishRecording(session, started, reason).catch(() => undefined),
 		});
 		recording = started;
-		// A finished recording nobody read gives way to the new one.
-		const previous = finishedRecordings.get(session.sessionId);
-		finishedRecordings.delete(session.sessionId);
-		void previous?.then((result) => recordingOptions.store.remove(result.id)).catch(() => undefined);
-		// The page is recorded where the person can watch it: its own window.
-		const windowMode = await prepareRecordingWindow(session, viewport);
 		recordingWindowModes.set(started, windowMode);
 		if (session.live) {
 			session.live.recording = started;
-			// The recording's size changes the page's layout and the frame size: restart.
-			await retargetLiveStream(session);
 		} else {
 			session.live = { recording: started };
 			syncBackgroundThrottling(session);
-			try {
-				await retargetLiveStream(session);
-			} catch (error) {
-				if (session.live?.recording === started) await stopCapture(session);
-				await started.stop("failed").catch(() => undefined);
-				throw error;
-			}
+		}
+		try {
+			// The recording's size changes the page's layout and the frame size: restart.
+			await retargetLiveStream(session);
+		} catch (error) {
+			// Undo what the recording changed (the capture, the page's size, its
+			// window) and drop the file it began.
+			const failed = finishRecording(session, started, "failed");
+			if (finishedRecordings.get(session.sessionId) === failed) finishedRecordings.delete(session.sessionId);
+			await failed.then((result) => recordingOptions.store.remove(result.id)).catch(() => undefined);
+			throw error;
 		}
 		pushRecordingState(session);
 		return { ...started.status(), window: windowMode, target: agentActionTarget(activeEntry(session)) };
@@ -4755,7 +4758,8 @@ export function createBrowserViewHost(
 		const screencast = live.screencast;
 		live.screencast = undefined;
 		syncBackgroundThrottling(session);
-		if (!session.visible) applySessionBounds(session, activeEntry(session));
+		// The last tab may have closed while the page was captured.
+		if (!session.visible && session.tabs.size) applySessionBounds(session, activeEntry(session));
 		return screencast?.stop();
 	}
 

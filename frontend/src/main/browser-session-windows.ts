@@ -23,6 +23,8 @@ type BaseWindowLike = Pick<
 	| "setContentSize"
 	| "isResizable"
 	| "setResizable"
+	| "getMinimumSize"
+	| "setMinimumSize"
 > & {
 	on(event: "close" | "closed", listener: () => void): unknown;
 };
@@ -68,7 +70,7 @@ export function createBrowserSessionWindows(options: {
 }): BrowserSessionWindows {
 	const windows = new Map<
 		string,
-		{ window: BaseWindowLike; composition: ShellComposition; beforeRecording?: { width: number; height: number; resizable: boolean } }
+		{ window: BaseWindowLike; composition: ShellComposition; beforeRecording?: { width: number; height: number; resizable: boolean; minimumSize: number[] } }
 	>();
 
 	// The largest content size of the viewport's shape that fits the screen.
@@ -179,9 +181,16 @@ export function createBrowserSessionWindows(options: {
 			if (viewport) {
 				if (!entry.beforeRecording) {
 					const [width, height] = window.getContentSize();
-					entry.beforeRecording = { width: width!, height: height!, resizable: window.isResizable() };
+					entry.beforeRecording = {
+						width: width!,
+						height: height!,
+						resizable: window.isResizable(),
+						minimumSize: window.getMinimumSize(),
+					};
 				}
 				const size = fitted(viewport);
+				// A window the person opened has a minimum size a phone page is under.
+				window.setMinimumSize(0, 0);
 				window.setResizable(false);
 				window.setContentSize(size.width, size.height);
 				return;
@@ -191,6 +200,7 @@ export function createBrowserSessionWindows(options: {
 			if (!before) return;
 			window.setResizable(before.resizable);
 			window.setContentSize(before.width, before.height);
+			window.setMinimumSize(before.minimumSize[0] ?? 0, before.minimumSize[1] ?? 0);
 		},
 		closeAll: () => {
 			for (const { window } of [...windows.values()]) {

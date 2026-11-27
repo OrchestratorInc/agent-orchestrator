@@ -638,6 +638,63 @@ describe("browser recording", () => {
 		expect(await record("record-stop")).toMatchObject({ frames: 1 });
 	});
 
+	it("undoes a recording whose capture fails to start", async () => {
+		const sessionWindow = {
+			contentView: { addChildView: vi.fn(), removeChildView: vi.fn() },
+			getContentBounds: () => ({ x: 0, y: 0, width: 1280, height: 800 }),
+			isDestroyed: () => false,
+		};
+		let attach: (() => void) | undefined;
+		const closeSessionWindow = vi.fn();
+		const { debuggerSendCommand, directory, host, invoke, record, sent } = setupRecordingHost({
+			requestSessionWindow: vi.fn(() => attach?.()),
+			closeSessionWindow,
+		});
+		const { viewId } = await invoke("browser:ensure", "sess-1");
+		attach = () => host.attachWindow(viewId, sessionWindow);
+		const send = debuggerSendCommand.getMockImplementation()!;
+		debuggerSendCommand.mockImplementation(async (method, params) => {
+			if (method === "Page.startScreencast") throw new Error("capture refused");
+			return send(method, params);
+		});
+
+		await expect(record("record-start")).rejects.toThrow("capture refused");
+		// The window it opened closes, the page's size goes back, nothing is left recording.
+		expect(closeSessionWindow).toHaveBeenCalledWith(viewId);
+		expect(debuggerSendCommand).toHaveBeenCalledWith("Emulation.clearDeviceMetricsOverride");
+		expect(sent).toContainEqual({ channel: "browser:recordingState", payload: { viewId, recording: false } });
+		expect(await record("record-status")).toEqual({ recording: false });
+		await vi.waitFor(() => expect(readdirSync(directory)).toEqual([]));
+
+		debuggerSendCommand.mockImplementation(send);
+		await expect(record("record-start")).resolves.toMatchObject({ recording: true });
+	});
+
+	it("starts its clock once its window is ready", async () => {
+		const sessionWindow = {
+			contentView: { addChildView: vi.fn(), removeChildView: vi.fn() },
+			getContentBounds: () => ({ x: 0, y: 0, width: 1280, height: 800 }),
+			isDestroyed: () => false,
+		};
+		let attach: (() => void) | undefined;
+		const { host, invoke, record } = setupRecordingHost({ requestSessionWindow: vi.fn(() => setTimeout(() => attach?.(), 80)) });
+		const { viewId } = await invoke("browser:ensure", "sess-1");
+		attach = () => host.attachWindow(viewId, sessionWindow);
+		const started = await record("record-start");
+		expect(started).toMatchObject({ window: "opened" });
+		expect(started.durationMs).toBeLessThan(80);
+	});
+
+	it("stops a recording whose last tab closed", async () => {
+		const { invoke, record, sendFrame } = setupRecordingHost();
+		const { viewId } = await invoke("browser:ensure", "sess-1");
+		await record("record-start");
+		sendFrame();
+		const { activeTabId } = (await invoke("browser:getTabs", viewId)) as unknown as BrowserTabsState;
+		await invoke("browser:closeTab", { viewId, tabId: activeTabId });
+		expect(await record("record-stop")).toMatchObject({ frames: 1, stopReason: "stopped" });
+	});
+
 	it("refuses a size it does not know", async () => {
 		const { invoke, record } = setupRecordingHost();
 		await invoke("browser:ensure", "sess-1");
@@ -4682,7 +4739,7 @@ describe("agent browser runtime", () => {
 		await host.execute("sess-1", "open", { url: "http://localhost:3000" });
 		views[0].webContents.openWindow("http://localhost:3000/__/auth/handler");
 		await vi.waitFor(async () => {
-			const tabs = (await invoke("browser:getTabs", viewId)) as BrowserTabsState;
+			const tabs = (await invoke("browser:getTabs", viewId)) as unknown as BrowserTabsState;
 			expect(tabs.activeTabId).toBe("t2");
 		});
 
@@ -4696,7 +4753,7 @@ describe("agent browser runtime", () => {
 		});
 		destroyed();
 
-		const tabs = (await invoke("browser:getTabs", viewId)) as BrowserTabsState;
+		const tabs = (await invoke("browser:getTabs", viewId)) as unknown as BrowserTabsState;
 		expect(tabs.activeTabId).toBe("t1");
 		expect(tabs.tabs.map((tab) => tab.id)).toEqual(["t1"]);
 		expect(sent).toContainEqual({
@@ -4726,7 +4783,7 @@ describe("agent browser runtime", () => {
 		only.webContents = undefined;
 		destroyed();
 
-		const tabs = (await invoke("browser:getTabs", viewId)) as BrowserTabsState;
+		const tabs = (await invoke("browser:getTabs", viewId)) as unknown as BrowserTabsState;
 		expect(tabs.tabs).toEqual([]);
 		expect(tabs.activeTabId).toBe("");
 		expect(electronSession.webRequest.onCompleted).toHaveBeenLastCalledWith(null);
@@ -5783,7 +5840,7 @@ describe("browser tab lifecycle stress (tabs stop closing regression guard)", ()
 			for (let i = 0; i < stressTabCount - 1; i += 1) {
 				await invoke("browser:openTab", { viewId });
 			}
-			let tabs = (await invoke("browser:getTabs", viewId)) as BrowserTabsState;
+			let tabs = (await invoke("browser:getTabs", viewId)) as unknown as BrowserTabsState;
 			expect(tabs.tabs).toHaveLength(stressTabCount);
 
 			// Interleave the two related failure modes named in the brief: a
@@ -5797,7 +5854,7 @@ describe("browser tab lifecycle stress (tabs stop closing regression guard)", ()
 			// so any corruption introduced by the DevTools/annotation-mode calls
 			// above surfaces here directly, instead of only indirectly on the
 			// next close below.
-			tabs = (await invoke("browser:getTabs", viewId)) as BrowserTabsState;
+			tabs = (await invoke("browser:getTabs", viewId)) as unknown as BrowserTabsState;
 			expect(tabs.tabs).toHaveLength(stressTabCount);
 
 			let closeCount = 0;
@@ -5850,7 +5907,7 @@ describe("browser tab lifecycle stress (tabs stop closing regression guard)", ()
 		expect(reactivatingCloses).toBeGreaterThanOrEqual(5);
 		expect(nonReactivatingCloses).toBeGreaterThanOrEqual(5);
 
-		const final = (await invoke("browser:getTabs", viewId)) as BrowserTabsState;
+		const final = (await invoke("browser:getTabs", viewId)) as unknown as BrowserTabsState;
 		expect(final.tabs).toHaveLength(1);
 		// Every WebContentsView ever created (16 tabs x 20 cycles, plus the
 		// original) must have had its underlying webContents closed except the

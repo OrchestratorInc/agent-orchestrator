@@ -55,7 +55,8 @@ export function resolveBrowserViewport(size: string, mobile = false): BrowserVie
 	const name = size.trim().toLowerCase();
 	const preset = BROWSER_DEVICE_PRESETS.find((device) => device.id === name);
 	if (preset) return { width: preset.width, height: preset.height, mobile: true };
-	const desktop = DESKTOP_VIEWPORTS[name];
+	// Only the table's own names: not "constructor" from its prototype.
+	const desktop = Object.hasOwn(DESKTOP_VIEWPORTS, name) ? DESKTOP_VIEWPORTS[name] : undefined;
 	if (desktop) return { ...desktop, mobile };
 	const match = /^(\d{2,4})x(\d{2,4})$/.exec(name);
 	if (!match) return null;
