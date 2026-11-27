@@ -378,7 +378,7 @@ describe("Cloud harness tab", () => {
 		const panel = (multiAccount: boolean) => <QueryClientProvider client={client}><CloudHarnessModelsPanel agentId="codex" orgId="org-1" connected multiAccount={multiAccount} onOpenAccount={() => undefined} /></QueryClientProvider>;
 		const view = render(panel(false));
 
-		expect(await screen.findByText("Cloud's default list: your account's models appear after its first Cloud task.")).toBeInTheDocument();
+		expect(await screen.findByText("Cloud's default list for Codex. Your account's own models replace it once Cloud has read them.")).toBeInTheDocument();
 		expect(screen.queryByText("Models for your default account.")).toBeNull();
 		view.rerender(panel(true));
 		expect(screen.getByText("Models for your default account.")).toBeInTheDocument();

@@ -2162,7 +2162,7 @@
 	"settings.harness.cloud.updatesAvailableBoth": "{{host}} ve Cloud üzerinde güncellemeler mevcut",
 	"settings.harness.cloud.versionAvailable": "Cloud üzerinde {{version}} mevcut",
 	"settings.harness.cloud.modelsUnavailable": "Cloud üzerinde {{agent}} için model listesi yok. Bir Cloud görevi başlatırken modelini seçin.",
-	"settings.harness.cloud.modelsReleaseList": "Cloud'un varsayılan listesi: hesabınızın modelleri ilk Cloud görevinden sonra görünür.",
+	"settings.harness.cloud.modelsReleaseList": "{{agent}} için Cloud'un varsayılan listesi. Cloud hesabınızın modellerini okuduğunda onlar bunun yerini alır.",
 	"settings.harness.cloud.modelsDefaultAccount": "Varsayılan hesabınızın modelleri.",
 	"settings.harness.cloud.targetBoth": "{{host}} ve Cloud",
 	"settings.harness.cloud.targetVersions": "{{host}}: {{local}} → {{localLatest}}. Cloud: {{cloud}} → {{cloudLatest}}.",

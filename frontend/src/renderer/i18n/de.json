@@ -3237,7 +3237,7 @@
 	"settings.harness.cloud.updatesAvailableBoth": "Updates für {{host}} und Cloud verfügbar",
 	"settings.harness.cloud.versionAvailable": "{{version}} in der Cloud verfügbar",
 	"settings.harness.cloud.modelsUnavailable": "Die Cloud hat keine Modellliste für {{agent}}. Wähle das Modell, wenn du eine Cloud-Aufgabe startest.",
-	"settings.harness.cloud.modelsReleaseList": "Standardliste der Cloud: Die Modelle deines Kontos erscheinen nach seiner ersten Cloud-Aufgabe.",
+	"settings.harness.cloud.modelsReleaseList": "Standardliste der Cloud für {{agent}}. Die eigenen Modelle deines Kontos ersetzen sie, sobald die Cloud sie gelesen hat.",
 	"settings.harness.cloud.modelsDefaultAccount": "Modelle für dein Standardkonto.",
 	"settings.harness.cloud.targetBoth": "{{host}} und Cloud",
 	"settings.harness.cloud.targetVersions": "{{host}}: {{local}} → {{localLatest}}. Cloud: {{cloud}} → {{cloudLatest}}.",

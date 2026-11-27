@@ -54,7 +54,7 @@ export function CloudHarnessModelsPanel({ agentId, orgId, connected, multiAccoun
 		<div className="shrink-0 space-y-0.5">
 			<h3 className="text-xs font-medium leading-4 text-settings-muted">{t("settings.harness.models.title")}</h3>
 			{/* Whose list this is: Cloud's generic one until it has seen the account's, and the default account's among several. */}
-			{catalog?.source === "release" ? <p className="text-xs leading-4 text-settings-muted">{t("settings.harness.cloud.modelsReleaseList")}</p> : null}
+			{catalog?.source === "release" ? <p className="text-xs leading-4 text-settings-muted">{t("settings.harness.cloud.modelsReleaseList", { agent })}</p> : null}
 			{multiAccount && catalog ? <p className="text-xs leading-4 text-settings-muted">{t("settings.harness.cloud.modelsDefaultAccount")}</p> : null}
 		</div>
 		{allModels.length > MODELS_PAGE_SIZE ? <label className="flex h-8 shrink-0 items-center gap-2 rounded-md border border-(--color-border-settings-input) bg-(--color-bg-settings-input) px-2.5">

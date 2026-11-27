@@ -2194,7 +2194,7 @@
 	"settings.harness.cloud.updatesAvailableBoth": "Есть обновления для {{host}} и облака",
 	"settings.harness.cloud.versionAvailable": "В облаке доступна версия {{version}}",
 	"settings.harness.cloud.modelsUnavailable": "В облаке нет списка моделей для {{agent}}. Выберите модель при запуске задачи в облаке.",
-	"settings.harness.cloud.modelsReleaseList": "Стандартный список облака: модели вашего аккаунта появятся после его первой задачи в облаке.",
+	"settings.harness.cloud.modelsReleaseList": "Стандартный список облака для {{agent}}. Его заменят модели вашего аккаунта, как только облако их прочитает.",
 	"settings.harness.cloud.modelsDefaultAccount": "Модели вашего аккаунта по умолчанию.",
 	"settings.harness.cloud.targetBoth": "{{host}} и облако",
 	"settings.harness.cloud.targetVersions": "{{host}}: {{local}} → {{localLatest}}. Облако: {{cloud}} → {{cloudLatest}}.",

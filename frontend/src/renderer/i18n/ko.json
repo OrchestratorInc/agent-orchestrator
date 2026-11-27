@@ -3237,7 +3237,7 @@
 	"settings.harness.cloud.updatesAvailableBoth": "{{host}} 및 클라우드에 업데이트 있음",
 	"settings.harness.cloud.versionAvailable": "클라우드에서 {{version}} 사용 가능",
 	"settings.harness.cloud.modelsUnavailable": "클라우드에 {{agent}}의 모델 목록이 없습니다. 클라우드 작업을 시작할 때 모델을 선택하세요.",
-	"settings.harness.cloud.modelsReleaseList": "클라우드 기본 목록입니다. 계정의 모델은 첫 클라우드 작업 후에 표시됩니다.",
+	"settings.harness.cloud.modelsReleaseList": "{{agent}}의 클라우드 기본 목록입니다. 클라우드가 계정의 모델을 읽으면 해당 목록으로 바뀝니다.",
 	"settings.harness.cloud.modelsDefaultAccount": "기본 계정의 모델입니다.",
 	"settings.harness.cloud.targetBoth": "{{host}} 및 클라우드",
 	"settings.harness.cloud.targetVersions": "{{host}}: {{local}} → {{localLatest}}. 클라우드: {{cloud}} → {{cloudLatest}}.",

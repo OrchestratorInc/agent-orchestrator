@@ -3306,7 +3306,7 @@
 	"settings.harness.cloud.updatesAvailableBoth": "Atualizações disponíveis em {{host}} e na nuvem",
 	"settings.harness.cloud.versionAvailable": "{{version}} disponível na nuvem",
 	"settings.harness.cloud.modelsUnavailable": "A nuvem não tem uma lista de modelos para {{agent}}. Escolha o modelo ao iniciar uma tarefa na nuvem.",
-	"settings.harness.cloud.modelsReleaseList": "Lista padrão da nuvem: os modelos da sua conta aparecem após a primeira tarefa na nuvem.",
+	"settings.harness.cloud.modelsReleaseList": "Lista padrão da nuvem para {{agent}}. Os modelos da sua conta a substituem assim que a nuvem os ler.",
 	"settings.harness.cloud.modelsDefaultAccount": "Modelos da sua conta padrão.",
 	"settings.harness.cloud.targetBoth": "{{host}} e a nuvem",
 	"settings.harness.cloud.targetVersions": "{{host}}: {{local}} → {{localLatest}}. Nuvem: {{cloud}} → {{cloudLatest}}.",
