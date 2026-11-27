@@ -25,7 +25,7 @@ import { useTheme, useThemeState, useThemedStyles } from "./ThemeProvider";
 import { materialDrawable } from "./toolbarIcon.android";
 import { font, iconSize, space } from "./tokens";
 
-type OpenMenu = "host" | "project" | "account" | "approval" | "harness";
+type OpenMenu = "host" | "project" | "approval" | "harness";
 
 type MenuOption = { id: string; label: string; leading?: ReactNode; sectionBreakBefore?: boolean };
 
@@ -46,9 +46,6 @@ export function SpawnComposerControls({
 	projects,
 	projectId,
 	onSelectProject,
-	accounts = [],
-	accountId,
-	onSelectAccount,
 	agents,
 	harness,
 	agentModels,
@@ -92,7 +89,6 @@ export function SpawnComposerControls({
 	const selectedProject = projects.find((project) => project.id === projectId);
 	const hostLabel = hosts.find((host) => host.id === hostId)?.label ?? "Choose machine";
 	const projectLabel = selectedProject?.label ?? "Choose project";
-	const accountLabel = accounts.find((account) => account.id === accountId)?.label ?? "Default account";
 	const harnessLabel = agents.find((agent) => agent.id === harness)?.label ?? "Choose harness";
 	const approvalOption = approvalModes.find((mode) => mode.id === approvalMode);
 	// The model the task runs: the one picked or pinned, else the catalog's own
@@ -148,18 +144,6 @@ export function SpawnComposerControls({
 						onSelect={choose(projectId, onSelectProject)}
 						testTag="spawn-project"
 					/>
-					{accounts.length > 1 && onSelectAccount ? (
-						<SelectorMenu
-							{...menu("account")}
-							label={accountLabel}
-							accessibilityLabel={`Account, ${accountLabel}`}
-							leading={<Icon source={materialDrawable("account_circle")} size={iconSize.lg} tint={t.textSecondary} />}
-							options={accounts}
-							selectedId={accountId ?? null}
-							onSelect={choose(accountId ?? null, onSelectAccount)}
-							testTag="spawn-account"
-						/>
-					) : null}
 				</Column>
 			</Host>
 

@@ -45,7 +45,10 @@ import { Button } from "../lib/ui";
 import { iconSize, radius, space, type } from "../lib/tokens";
 import { approvalOptions, isApprovalMode, resolveApprovalMode, type ApprovalMode } from "../lib/spawnApproval";
 import { modelSheetRoute } from "../lib/sheetResult";
-import { agentAccountLabel, useAgentAccounts } from "../lib/agentAccounts";
+import { agentAccountOptions, useAgentAccounts } from "../lib/agentAccounts";
+import { AccountUsageAvatar } from "../lib/AccountUsageAvatar";
+import { chatSheetRoute } from "../lib/chat/chatSheetRegistry";
+import { SpawnAccountButton } from "../lib/SpawnAccountButton";
 import { useChatKeyboard } from "../lib/chat/useChatKeyboard";
 import { SYSTEM_GLASS_HEADER } from "../lib/stackScreenOptions";
 import { PillHeaderFrame } from "../lib/headerPill";
@@ -273,8 +276,8 @@ function SpawnPage() {
 		const settingUp = restoredAccount && (selectedHostId === null || (selectedHostId === restoredAccount.hostId && !harness));
 		if (restoredAccount && !settingUp) setRestoredAccount(null);
 	}, [restoredAccount, selectedHostId, harness]);
-	const accountOptions = useMemo(() => spawnAccounts.accounts.filter((account) => account.signedIn).map((account) => ({ id: account.id, label: agentAccountLabel(account, spawnAccounts.accounts) })), [spawnAccounts.accounts]);
 	const shownAccountId = accountPick || spawnAccounts.accounts.find((account) => account.default)?.id;
+	const shownAccount = spawnAccounts.accounts.find((account) => account.id === shownAccountId);
 	const [projectDetail, setProjectDetail] = useState<ProjectDetail>();
 	const [projectDetailLoadedFor, setProjectDetailLoadedFor] = useState<string | null>(null);
 	const [modelLoading, setModelLoading] = useState(false);
@@ -1091,6 +1094,22 @@ function SpawnPage() {
 	}, [busy, navigation]);
 
 	const harnessLabel = agents.find((item) => item.id === harness)?.label;
+
+	// The account's avatar in the bar opens the machine's accounts, each with
+	// its usage. Read through a ref so the bar's button stays the same one.
+	const openAccountsRef = useRef<() => void>(() => {});
+	openAccountsRef.current = () => {
+		const machine = hostOptions.find((host) => host.id === selectedHostId)?.label;
+		void spawnAccounts.reload().catch(() => undefined);
+		router.push(chatSheetRoute({
+			kind: "account-picker",
+			subtitle: [harnessLabel, machine].filter(Boolean).join(" on "),
+			options: agentAccountOptions(spawnAccounts.accounts, (account) => <AccountUsageAvatar account={account} size={28} />),
+			selected: shownAccountId ?? "",
+			onSelect: edited(setAccountPick),
+		}));
+	};
+	const openAccounts = useCallback(() => openAccountsRef.current(), []);
 	// Before the list lands the seed can name a project the picker doesn't list
 	// yet. It shows under its id, the name it was created with, so Start never
 	// sends a task somewhere the picker calls "Choose project".
@@ -1104,6 +1123,7 @@ function SpawnPage() {
 			behavior={chatKeyboard.behavior}
 			keyboardVerticalOffset={chatKeyboard.keyboardVerticalOffset}
 		>
+			<SpawnAccountButton account={shownAccount} accounts={spawnAccounts.accounts} onPress={openAccounts} />
 			{/* The room and the dock share one unpadded frame, so the "/" list's
 			    layer below can be measured from the dock's own bottom. */}
 			<View style={styles.stage}>
@@ -1136,9 +1156,6 @@ function SpawnPage() {
 						: [...unlistedProject, ...projects.map((item) => ({ id: item.id, label: item.name, icon: "folder" as const })), { id: STANDALONE_PROJECT, label: "Standalone agent", icon: "message-square-plus" as const, sectionBreakBefore: true }]}
 					projectId={projectId}
 					onSelectProject={edited(changeProject)}
-					accounts={accountOptions}
-					accountId={shownAccountId}
-					onSelectAccount={edited(setAccountPick)}
 					agents={agents.filter((item) => item.selectable).map((item) => ({ id: item.id, label: item.label }))}
 					harness={harness}
 					onSelectHarness={edited(selectAgent)}

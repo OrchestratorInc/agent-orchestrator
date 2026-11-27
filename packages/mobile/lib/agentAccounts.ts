@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { ApiError, apiRequest } from "./api";
 import type { ServerConfig } from "./config";
+import { QUOTA_CRITICAL_PERCENT, QUOTA_WARN_PERCENT, resetLabel } from "./chat/conversationChrome";
 import type { PickerOption } from "./NativePickerList";
 
 const API = "/api/v1/agents/accounts";
@@ -18,7 +19,20 @@ export type AgentAccount = {
 	orgName?: string;
 	signedIn: boolean;
 	default: boolean;
+	/** An API key account's own name. */
+	name?: string;
+	/** The subscription's usage meters, when the machine could read them. */
+	limits?: { windows?: AgentAccountLimitWindow[] };
 };
+
+export type AgentAccountLimitWindow = {
+	id: string;
+	label: string;
+	usedPercent: number;
+	resetsAt?: string;
+};
+
+export type AgentAccountUsageSeverity = "normal" | "warn" | "critical";
 
 export function agentAccountProvider(harness?: string): AgentAccountProvider | undefined {
 	if (harness === "claude-code") return "claude";
@@ -47,6 +61,43 @@ export function agentAccountLabel(account: Pick<AgentAccount, "id" | "email" | "
 	return parts.join(" · ");
 }
 
+/** The letter an account's avatar shows: its email's or name's first, else the provider's. */
+export function agentAccountInitial(account: Pick<AgentAccount, "email" | "name" | "provider">): string {
+	const source = account.email?.trim() || account.name?.trim() || account.provider;
+	return source.charAt(0).toUpperCase();
+}
+
+function reportedWindows(account: Pick<AgentAccount, "limits">): AgentAccountLimitWindow[] {
+	return (account.limits?.windows ?? []).filter((window) => Number.isFinite(window.usedPercent));
+}
+
+/** The fullest meter's use, 0..100, or undefined when the machine reported none. */
+export function agentAccountPeakUsage(account: Pick<AgentAccount, "limits">): number | undefined {
+	const windows = reportedWindows(account);
+	if (!windows.length) return undefined;
+	return Math.min(100, Math.max(0, ...windows.map((window) => window.usedPercent)));
+}
+
+export function agentAccountUsageSeverity(percent: number | undefined): AgentAccountUsageSeverity {
+	if (percent === undefined) return "normal";
+	return percent >= QUOTA_CRITICAL_PERCENT ? "critical" : percent >= QUOTA_WARN_PERCENT ? "warn" : "normal";
+}
+
+/**
+ * Each meter's use on one line, "Session (5h) 42% · Weekly 18%". A full meter
+ * says when it frees up, since that is what decides whether to pick it.
+ */
+export function agentAccountUsageSummary(account: Pick<AgentAccount, "limits">, nowMs = Date.now()): string | undefined {
+	const windows = reportedWindows(account);
+	if (!windows.length) return undefined;
+	return windows.map((window) => {
+		const percent = Math.round(Math.min(100, Math.max(0, window.usedPercent)));
+		const resetsAt = window.resetsAt ? Date.parse(window.resetsAt) : NaN;
+		const reset = percent >= 100 && Number.isFinite(resetsAt) ? resetLabel(Math.max(0, (resetsAt - nowMs) / 1000)) : undefined;
+		return reset ? `${window.label} full, resets in ${reset}` : `${window.label} ${percent}%`;
+	}).join(" · ");
+}
+
 export async function getAgentAccounts(cfg: ServerConfig, provider: AgentAccountProvider): Promise<AgentAccount[]> {
 	const res = await apiRequest(cfg, API, undefined, READ_TIMEOUT_MS);
 	const accounts = ((await res.json())?.accounts ?? []) as AgentAccount[];
@@ -66,13 +117,22 @@ export async function moveSessionAgentAccount(cfg: ServerConfig, sessionId: stri
 	});
 }
 
-export function agentAccountOptions(accounts: readonly AgentAccount[]): PickerOption[] {
-	return accounts.map((account) => ({
-		id: account.id,
-		title: agentAccountLabel(account, accounts),
-		detail: !account.signedIn ? "Signed out" : account.default ? "Default" : undefined,
-		disabled: !account.signedIn,
-	}));
+/** `mark` draws each row's avatar, given the account. */
+export function agentAccountOptions(accounts: readonly AgentAccount[], mark?: (account: AgentAccount) => PickerOption["mark"], nowMs = Date.now()): PickerOption[] {
+	return accounts.map((account) => {
+		const usage = account.signedIn ? agentAccountUsageSummary(account, nowMs) : undefined;
+		const detail = [!account.signedIn ? "Signed out" : account.default ? "Default" : undefined, usage].filter(Boolean).join(" · ");
+		const option: PickerOption = {
+			id: account.id,
+			title: agentAccountLabel(account, accounts),
+			detail: detail || undefined,
+			disabled: !account.signedIn,
+		};
+		if (usage && agentAccountUsageSeverity(agentAccountPeakUsage(account)) !== "normal") option.warn = true;
+		const drawn = mark?.(account);
+		if (drawn) option.mark = drawn;
+		return option;
+	});
 }
 
 function accountReadRetryable(error: unknown): boolean {

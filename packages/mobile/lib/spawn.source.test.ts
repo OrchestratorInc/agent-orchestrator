@@ -273,7 +273,6 @@ describe("spawn draft", () => {
 			for (const prop of [
 				"onSelectHost={edited(chooseHost)}",
 				"onSelectProject={edited(changeProject)}",
-				"onSelectAccount={edited(setAccountPick)}",
 				"onSelectHarness={edited(selectAgent)}",
 				"onSelectModel={edited(selectModel)}",
 				"onSelectAgentModel={edited(selectAgentModel)}",
@@ -296,6 +295,8 @@ describe("spawn draft", () => {
 				expect(value, name).toMatch(/^(busy \? null : )?edited\(/);
 			}
 			expect(spawn).toContain("onSelect: edited((id: string) => selectAgentModel(agentId, id || \"__auto__\")),");
+			// The account sheet, opened from the bar's avatar.
+			expect(spawn).toContain("onSelect: edited(setAccountPick),");
 			// Dictation types into the prompt too.
 			expectBefore(between(spawn, "const voice = useVoiceInput({", "const listening ="), "setError(errorAfterEdit);", "setPrompt((old) =>");
 		});

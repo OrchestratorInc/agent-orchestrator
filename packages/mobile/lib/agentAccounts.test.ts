@@ -6,7 +6,7 @@ vi.mock("expo/fetch", () => ({ fetch: vi.fn() }));
 
 import { createElement } from "react";
 import { act, create, type ReactTestRenderer } from "react-test-renderer";
-import { agentAccountLabel, agentAccountOptions, agentAccountProvider, getAgentAccounts, getSessionAgentAccount, moveSessionAgentAccount, useAgentAccounts } from "./agentAccounts";
+import { agentAccountInitial, agentAccountLabel, agentAccountOptions, agentAccountPeakUsage, agentAccountProvider, agentAccountUsageSeverity, agentAccountUsageSummary, getAgentAccounts, getSessionAgentAccount, moveSessionAgentAccount, useAgentAccounts } from "./agentAccounts";
 import { delegateTask, spawnSession } from "./api";
 import type { ServerConfig } from "./config";
 
@@ -14,6 +14,49 @@ Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
 
 const cfg: ServerConfig = { host: "ao.test", httpPort: "3011", muxPort: "3011", secure: false, password: "secret12" };
 const json = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
+
+describe("agent account usage", () => {
+	const now = Date.parse("2026-11-27T10:00:00Z");
+	const limits = { windows: [
+		{ id: "five_hour", label: "Session (5h)", usedPercent: 42.4 },
+		{ id: "seven_day", label: "Weekly", usedPercent: 18 },
+	] };
+
+	it("names the avatar by email, then name, then provider", () => {
+		expect(agentAccountInitial({ email: "prasad@x.dev", provider: "claude" })).toBe("P");
+		expect(agentAccountInitial({ name: " work key", provider: "claude" })).toBe("W");
+		expect(agentAccountInitial({ provider: "codex" })).toBe("C");
+	});
+
+	it("rings the fullest meter and says each one", () => {
+		expect(agentAccountPeakUsage({ limits })).toBe(42.4);
+		expect(agentAccountPeakUsage({})).toBeUndefined();
+		expect(agentAccountPeakUsage({ limits: { windows: [] } })).toBeUndefined();
+		expect(agentAccountUsageSummary({ limits }, now)).toBe("Session (5h) 42% · Weekly 18%");
+		expect(agentAccountUsageSeverity(undefined)).toBe("normal");
+		expect(agentAccountUsageSeverity(74.9)).toBe("normal");
+		expect(agentAccountUsageSeverity(75)).toBe("warn");
+		expect(agentAccountUsageSeverity(90)).toBe("critical");
+	});
+
+	it("says when a full meter frees up", () => {
+		const full = { windows: [{ id: "five_hour", label: "Session (5h)", usedPercent: 100, resetsAt: "2026-11-27T12:30:00Z" }] };
+		expect(agentAccountUsageSummary({ limits: full }, now)).toBe("Session (5h) full, resets in 3h");
+	});
+
+	it("puts usage on each signed-in row, amber once a meter is nearly spent", () => {
+		const options = agentAccountOptions([
+			{ id: "c1", provider: "claude", email: "a@x.dev", signedIn: true, default: true, limits },
+			{ id: "c2", provider: "claude", email: "b@x.dev", signedIn: true, default: false, limits: { windows: [{ id: "seven_day", label: "Weekly", usedPercent: 91 }] } },
+			{ id: "c3", provider: "claude", email: "c@x.dev", signedIn: false, default: false, limits },
+		], undefined, now);
+		expect(options).toEqual([
+			{ id: "c1", title: "a@x.dev", detail: "Default · Session (5h) 42% · Weekly 18%", disabled: false },
+			{ id: "c2", title: "b@x.dev", detail: "Weekly 91%", disabled: false, warn: true },
+			{ id: "c3", title: "c@x.dev", detail: "Signed out", disabled: true },
+		]);
+	});
+});
 
 describe("agent accounts on mobile", () => {
 	beforeEach(() => vi.stubGlobal("fetch", vi.fn()));
