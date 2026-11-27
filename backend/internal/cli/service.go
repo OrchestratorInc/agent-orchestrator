@@ -551,10 +551,14 @@ func (c *commandContext) serviceInstall(ctx context.Context, opts serviceOptions
 		if err := c.serviceCmd(ctx, "systemctl", "--user", "daemon-reload"); err != nil {
 			return rollback(fmt.Errorf("%w (is a systemd user session running?)", err))
 		}
-		if err := c.serviceCmd(ctx, "systemctl", "--user", "enable", spec.Name+".service"); err != nil {
+		// enable can create its link and then fail (on systemd 255, in its
+		// implicit reload): treat it as possibly done before calling it, so
+		// a rollback always removes the link. The reload above covers
+		// --no-reload.
+		enabled = true
+		if err := c.serviceCmd(ctx, "systemctl", "--user", "enable", "--no-reload", spec.Name+".service"); err != nil {
 			return rollback(err)
 		}
-		enabled = true
 		if err := c.serviceCmd(ctx, "systemctl", "--user", "restart", spec.Name+".service"); err != nil {
 			return rollback(err)
 		}
@@ -785,6 +789,12 @@ func hexVal(c byte) byte {
 	}
 }
 
+// shellQuote quotes s for a POSIX shell so it is taken literally ($, spaces,
+// quotes and all) when a user pastes the command.
+func shellQuote(s string) string {
+	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
+}
+
 // refuseSelfHostedConflict stops an install that would put a second service
 // on the data dir a self-hosted host service already keeps running: the two
 // would fight over one daemon, and the script's service restarts it after
@@ -801,9 +811,9 @@ func refuseSelfHostedConflict(spec serviceSpec) error {
 	if !sameDir(theirs, ours) {
 		return nil
 	}
-	remove := fmt.Sprintf("launchctl bootout %s/dev.aoagents.self-hosted && rm %q", launchdDomain(), file)
+	remove := fmt.Sprintf("launchctl bootout %s/dev.aoagents.self-hosted && rm %s", launchdDomain(), shellQuote(file))
 	if spec.Manager == serviceManagerSystemd {
-		remove = fmt.Sprintf("systemctl --user disable --now ao-self-hosted.service && rm %q", file)
+		remove = fmt.Sprintf("systemctl --user disable --now ao-self-hosted.service && rm %s", shellQuote(file))
 	}
 	return fmt.Errorf("this machine already keeps Orchestrator running with the self-hosted host service %s, on the same data dir %s; a second service would fight it. Keep using that service, or remove it first: %s", file, ours, remove)
 }

@@ -209,7 +209,7 @@ func TestServiceSystemdInstallAndRollback(t *testing.T) {
 		}
 		got = append(got, c.name+" "+strings.Join(c.args, " "))
 	}
-	want := []string{"systemctl --user daemon-reload", "systemctl --user enable " + st.Name + ".service", "systemctl --user restart " + st.Name + ".service"}
+	want := []string{"systemctl --user daemon-reload", "systemctl --user enable --no-reload " + st.Name + ".service", "systemctl --user restart " + st.Name + ".service"}
 	if strings.Join(got, "\n") != strings.Join(want, "\n") {
 		t.Fatalf("systemctl calls:\n%s\nwant:\n%s", strings.Join(got, "\n"), strings.Join(want, "\n"))
 	}
@@ -1036,27 +1036,49 @@ func TestServiceSystemdRollbackRestoresDisabledState(t *testing.T) {
 	if _, _, err := executeCLI(t, systemdDeps(t, nil, nil), "service", "install", "--no-wait"); err != nil {
 		t.Fatal(err)
 	}
+	// The old unit runs but is disabled. Restarting the replacement stops
+	// the unit and fails; the compensating restart of the old one works.
+	running, enabled, restarts := true, false, 0
 	var got []string
-	deps := systemdDeps(t, map[string]string{"systemctl --user is-enabled": "disabled\n"}, map[string]bool{"systemctl --user restart": true})
-	inner := deps.CommandOutput
-	deps.CommandOutput = func(ctx context.Context, name string, args ...string) ([]byte, error) {
+	deps := systemdDeps(t, nil, nil)
+	deps.CommandOutput = func(_ context.Context, name string, args ...string) ([]byte, error) {
 		got = append(got, name+" "+strings.Join(args, " "))
-		return inner(ctx, name, args...)
+		if name != "systemctl" || len(args) < 2 {
+			return nil, nil
+		}
+		switch args[1] {
+		case "is-active":
+			if running {
+				return []byte("active\n"), nil
+			}
+			return []byte("inactive\n"), errors.New("exit status 3")
+		case "is-enabled":
+			if enabled {
+				return []byte("enabled\n"), nil
+			}
+			return []byte("disabled\n"), errors.New("exit status 1")
+		case "enable":
+			enabled = true
+		case "disable":
+			enabled = false
+			if strings.Contains(strings.Join(args, " "), "--now") {
+				running = false
+			}
+		case "restart":
+			restarts++
+			if restarts == 1 {
+				running = false
+				return []byte("Job failed"), errors.New("exit status 1")
+			}
+			running = true
+		}
+		return nil, nil
 	}
 	if _, _, err := executeCLI(t, deps, "service", "install", "--no-wait"); err == nil {
 		t.Fatal("reinstall succeeded although restart failed")
 	}
-	disabled, stopped := false, false
-	for _, c := range got {
-		if strings.HasPrefix(c, "systemctl --user disable ") && !strings.Contains(c, "--now") {
-			disabled = true
-		}
-		if strings.Contains(c, "--now") || strings.HasPrefix(c, "systemctl --user stop") {
-			stopped = true
-		}
-	}
-	if !disabled || stopped {
-		t.Fatalf("rollback calls %v: want a plain disable and no stop", got)
+	if !running || enabled || restarts != 2 {
+		t.Fatalf("after rollback: running=%t enabled=%t restarts=%d (calls %v); want the old unit running, disabled, restarted once more", running, enabled, restarts, got)
 	}
 }
 
@@ -1173,7 +1195,7 @@ func TestServiceLaunchdUninstallWaitsForJobToGo(t *testing.T) {
 	}
 	deps := serviceTestDeps(&calls, nil)
 	inner := deps.CommandOutput
-	lingering := 0
+	lingering, confirmedGone := 0, false
 	deps.CommandOutput = func(ctx context.Context, name string, args ...string) ([]byte, error) {
 		if args[0] == "bootout" {
 			lingering = 3 // launchd still lists the job for a few polls
@@ -1182,13 +1204,17 @@ func TestServiceLaunchdUninstallWaitsForJobToGo(t *testing.T) {
 			lingering--
 			return nil, nil
 		}
-		return inner(ctx, name, args...)
+		out, err := inner(ctx, name, args...)
+		if args[0] == "print" && err != nil && strings.Contains(string(out), "Could not find service") {
+			confirmedGone = true
+		}
+		return out, err
 	}
 	if _, _, err := executeCLI(t, deps, "service", "uninstall"); err != nil {
 		t.Fatal(err)
 	}
-	if lingering != 0 {
-		t.Fatalf("uninstall returned while launchd still listed the job (%d polls left)", lingering)
+	if lingering != 0 || !confirmedGone {
+		t.Fatalf("uninstall returned before launchd confirmed the job absent (lingering=%d, confirmed=%t)", lingering, confirmedGone)
 	}
 	if _, _, err := executeCLI(t, serviceTestDeps(&calls, nil), "service", "install", "--no-wait"); err != nil {
 		t.Fatalf("install right after uninstall failed: %v", err)
@@ -1349,5 +1375,41 @@ func TestCanonicalPathResolvesNearestExistingAncestor(t *testing.T) {
 	}
 	if want, _ := filepath.EvalSymlinks(missing); before != want {
 		t.Fatalf("canonicalPath = %q, want %q", before, want)
+	}
+}
+
+// A failed enable may already have created its link, so a fresh-install
+// rollback disables before it removes the unit.
+func TestServiceSystemdRollbackDisablesAfterFailedEnable(t *testing.T) {
+	setConfigEnv(t)
+	setServiceHome(t)
+	t.Setenv("XDG_CONFIG_HOME", "")
+	old := serviceGOOS
+	serviceGOOS = "linux"
+	t.Cleanup(func() { serviceGOOS = old })
+	var got []string
+	deps := systemdDeps(t, nil, map[string]bool{"systemctl --user enable": true})
+	inner := deps.CommandOutput
+	deps.CommandOutput = func(ctx context.Context, name string, args ...string) ([]byte, error) {
+		got = append(got, name+" "+strings.Join(args, " "))
+		return inner(ctx, name, args...)
+	}
+	if _, _, err := executeCLI(t, deps, "service", "install", "--no-wait"); err == nil {
+		t.Fatal("install succeeded although enable failed")
+	}
+	disabled := false
+	for _, c := range got {
+		if strings.HasPrefix(c, "systemctl --user disable ") {
+			disabled = true
+		}
+	}
+	if !disabled {
+		t.Fatalf("rollback after a failed enable did not disable: %v", got)
+	}
+}
+
+func TestShellQuoteIsLiteral(t *testing.T) {
+	if got := shellQuote(`/x/$HOME/it's`); got != `'/x/$HOME/it'\''s'` {
+		t.Fatalf("shellQuote = %s", got)
 	}
 }
