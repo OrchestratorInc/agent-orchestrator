@@ -113,8 +113,8 @@ export function ExitFeedbackDialog({ version, onDone }: { version: ExitFeedbackV
 				onInteractOutside={(event) => event.preventDefault()}
 			>
 				<div className="flex flex-col gap-3 p-5">
-					<DialogTitle id="exit-feedback-question" className="settings-dialog-title text-base">{question}</DialogTitle>
-					<div role="group" aria-labelledby="exit-feedback-question" className="flex flex-col gap-1.5">
+					<DialogTitle className="settings-dialog-title text-base">{question}</DialogTitle>
+					<div role="group" aria-label={question} className="flex flex-col gap-1.5">
 						{EXIT_FEEDBACK_ANSWERS[version].map((answer) => (
 							<Button
 								key={answer}
