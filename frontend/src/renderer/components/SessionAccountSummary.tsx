@@ -43,7 +43,13 @@ export function useSessionAccountSwitch(session: WorkspaceSession, sessionHostId
 		// eslint-disable-next-line react-hooks/exhaustive-deps
 	}, [settledPhase, accountMove?.id, session.id]);
 
-	const currentId = provider ? current.data?.[provider] : undefined;
+	// The account the session is on, as far as the chat can tell: a move's target from the moment it
+	// starts, and once it completes until the saved binding is read again. Reading only the binding
+	// left the composer's chip on the old account until something else reread it. A failed move falls
+	// back to the binding.
+	const savedId = provider ? current.data?.[provider] : undefined;
+	const completedMoveUnread = settledPhase === "completed" && Date.parse(accountMove?.updatedAt ?? "") > current.dataUpdatedAt;
+	const currentId = (moving || completedMoveUnread) && accountMove?.targetAccountId ? accountMove.targetAccountId : savedId;
 	const providerAccounts = useMemo(() => provider ? (accounts.data ?? []).filter((account) => account.provider === provider) : [], [accounts.data, provider]);
 	const options = useMemo(() => oneRowPerLogin(providerAccounts, currentId), [currentId, providerAccounts]);
 	const letters = useMemo(() => accountLetters(providerAccounts), [providerAccounts]);
