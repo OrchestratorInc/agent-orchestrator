@@ -1137,6 +1137,36 @@ func TestSwitchFromAnAgentThatCannotStartHandsOverFromTheStoredTranscript(t *tes
 	}
 }
 
+// A resume can return without error after recovering only the session's status,
+// starting no agent. The switch must still hand over rather than refuse as if a
+// source controller were ready.
+func TestSwitchAfterAResumeThatStartsNoAgentHandsOverFromTheStoredTranscript(t *testing.T) {
+	h, _, _ := newEditHarness(t, false)
+	ctx := context.Background()
+	if err := h.svc.Stop(ctx, testSession); err != nil {
+		t.Fatal(err)
+	}
+	h.svc.SetResumeAgentCallback(func(context.Context, domain.SessionID) error { return nil })
+	launches := 0
+	h.svc.SetColdSwitchLauncher(func(ctx context.Context, id domain.SessionID, target domain.AgentHarness, start func(context.Context, chatsvc.StartConfig) error) error {
+		launches++
+		return start(ctx, chatsvc.StartConfig{
+			SessionID: id, ProjectID: testProject, Harness: target,
+			WorkspacePath: t.TempDir(), Permissions: ports.PermissionModeAuto,
+		})
+	})
+
+	if _, err := h.svc.SwitchProviderReport(ctx, testSession, domain.ProviderSwitchRequest{TargetHarness: domain.HarnessClaudeCode}); err != nil {
+		t.Fatalf("switch after a resume that started no agent: %v", err)
+	}
+	if launches != 1 {
+		t.Fatalf("cold launches = %d, want 1", launches)
+	}
+	if !h.svc.HasLiveChatController(testSession) {
+		t.Fatal("no controller after the switch")
+	}
+}
+
 // The cold launcher holds the session's agent operation; a resume or another
 // switch already holding it surfaces as a typed busy refusal, not a dead end.
 func TestColdSwitchRefusalFromTheLauncherIsReported(t *testing.T) {

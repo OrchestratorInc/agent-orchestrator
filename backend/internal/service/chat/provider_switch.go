@@ -289,6 +289,11 @@ func (s *Service) switchProviderAgent(ctx context.Context, id domain.SessionID, 
 			err = s.resumeAgent(resumeCtx, id)
 			cancel()
 			resumed = true
+			if err == nil && !s.HasLiveChatController(id) {
+				// A resume can succeed by recovering the session's status alone,
+				// leaving no agent to hand over; that is a start that did not happen.
+				err = errors.New("the resume finished without starting the agent")
+			}
 		}
 		if err != nil && !errors.Is(err, ErrNoController) {
 			if s.coldSwitchLaunch != nil && !stored.IsTerminated && ctx.Err() == nil {
