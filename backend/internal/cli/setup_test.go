@@ -1150,3 +1150,30 @@ func TestSetupUnresolvableHeadOnDetachedHeadNeedsHuman(t *testing.T) {
 		t.Fatalf("project step = %+v", project)
 	}
 }
+
+func TestSetupStartStillQueuedExits4(t *testing.T) {
+	d := newSetupDaemon(t)
+	repo := gitRepo(t, true)
+	registerOnPost(d, repo, "example/calc")
+	d.set("POST /api/v1/orchestrators/delegate", 202, `{"ok":true,"workerId":"calc-1"}`)
+	d.set("GET /api/v1/sessions/calc-1", 200, `{"session":{"id":"calc-1","harness":"claude-code","mode":"chat","provisionState":"ready","activity":{"state":"active"}}}`)
+	d.set("GET /api/v1/sessions/calc-1/conversation", 200, `{"turns":[{"id":"t1","state":"queued"}]}`)
+
+	out, _, err := executeCLI(t, fakeClockDeps(), "setup", "--path", repo, "--start", "fix it", "--worker", "--json")
+	if got := ExitCode(err); got != taskExitStillQueued {
+		t.Fatalf("exit = %d (%v), want 4\n%s", got, err, out)
+	}
+	res := decodeSetup(t, out)
+	if res.Task == nil || res.Task.Status != taskStatusQueued {
+		t.Fatalf("task = %+v", res.Task)
+	}
+	start := stepNamed(t, res, "start")
+	if start.Status != setupFixed || !strings.Contains(start.Detail, "do not start it again") {
+		t.Fatalf("start step = %+v", start)
+	}
+	for _, a := range res.NextActions {
+		if strings.Contains(a, "retry") {
+			t.Fatalf("next_actions tells the agent to retry a queued task: %q", res.NextActions)
+		}
+	}
+}

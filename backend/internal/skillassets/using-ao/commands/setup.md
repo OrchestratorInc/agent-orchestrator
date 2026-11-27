@@ -29,6 +29,7 @@ Exit codes:
 | `1` | A step failed; its `detail` says why. With `--start`, if `task.taskId` is set the task may already exist: check it with `ao task status <taskId>` instead of starting it again (see [task.md](task.md)). |
 | `2` | Usage error: fix the command. |
 | `3` | The task started with `--start` is waiting on the user, for example for an approval. Do not start it again. |
+| `4` | The task started with `--start` is still queued behind the agent's current turn when the wait ends. It is accepted and will run: do not start it again; follow it with `ao task wait <taskId>`. |
 
 With `--json` the output is `{ready, agent, project, steps, next_actions, task}`. `task` is the `ao task start --json` result, or `null` without `--start`.
 

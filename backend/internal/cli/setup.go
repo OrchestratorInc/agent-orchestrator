@@ -27,7 +27,8 @@ import (
 //
 // Exit codes: 0 ready (and the task started, with --start), 10 a person must
 // act first (next_actions says what), 1 failed, 2 usage error, 3 the task
-// started with --start is waiting on the user.
+// started with --start is waiting on the user, 4 that task is still queued
+// when the wait ends (it will run; do not start it again).
 
 // Step names, in the order they run. They are part of the --json contract.
 const (
@@ -135,7 +136,8 @@ func newSetupCommand(ctx *commandContext) *cobra.Command {
 			"With --start \"<task>\" it also starts a task, on the project's orchestrator by default or on\n" +
 			"one worker with --worker, and waits until the task has started.\n\n" +
 			"Exit codes: 0 ready, 10 a person must act first (see next_actions), 1 failed, 2 usage error,\n" +
-			"3 the task started with --start is waiting on the user.\n" +
+			"3 the task started with --start is waiting on the user, 4 that task is still queued when\n" +
+			"the wait ends (it will run; do not start it again).\n" +
 			"With --json, stdout is {ready, agent, project, steps, next_actions, task}; each step is\n" +
 			"{step, status, detail, fix} with status ok, fixed, skipped, needs_human or failed.",
 		Args: noArgs,
@@ -208,6 +210,8 @@ func setupExit(res setupResult, opts setupOptions) error {
 		return taskExitError{code: setupExitFailed, msg: "setup failed: " + strings.Join(failed, "; ")}
 	case res.Task != nil && res.Task.Status == taskStatusNeedsInput:
 		return taskExitError{code: taskExitNeedsInput, msg: "the task is waiting on you: " + res.Task.Reason}
+	case res.Task != nil && res.Task.Status == taskStatusQueued && res.Task.waitTimedOut:
+		return taskExitError{code: taskExitStillQueued, msg: "the task is still queued and will run; do not start it again: " + res.Task.Reason}
 	case len(human) > 0:
 		return taskExitError{code: setupExitNeedsHuman, msg: "setup needs you: " + strings.Join(human, "; ")}
 	case opts.check && !res.Ready:
@@ -1314,7 +1318,7 @@ func (c *commandContext) setupStartStep(ctx context.Context, opts setupOptions, 
 	}
 	topts := taskStartOptions{project: project.ID, worker: opts.worker, wait: true, timeout: defaultTaskTimeout}
 	task := c.createTask(ctx, project, opts.start, topts)
-	if task.Status == taskStatusStarting || task.Status == taskStatusRunning {
+	if task.Status == taskStatusStarting || task.Status == taskStatusQueued || task.Status == taskStatusRunning {
 		task = c.waitTask(ctx, task, topts.timeout)
 	}
 	if task.SessionIDs == nil {
@@ -1341,6 +1345,11 @@ func (c *commandContext) setupStartStep(ctx context.Context, opts setupOptions, 
 			// The task already exists: starting it again would run it twice.
 			step.Fix = fmt.Sprintf("answer the agent in Orchestrator (session %s); do not start the task again", task.SessionIDs[0])
 		}
+	case taskStatusQueued:
+		// Accepted behind the agent's current turn: it will run, so it is
+		// not a failure and must not be started again (exit 4, as ao task).
+		step.Status = setupFixed
+		step.Detail = fmt.Sprintf("task %s is queued on %s behind the agent's current turn and will run; do not start it again (follow it with `ao task wait %s`)", task.TaskID, target, task.TaskID)
 	default:
 		step.Status = setupFixed
 		step.Detail = fmt.Sprintf("started task %s on %s (%s)", task.TaskID, target, task.Status)
