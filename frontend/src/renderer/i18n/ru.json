@@ -3378,6 +3378,8 @@
 	"files.sessionFiles": "Файлы сессии",
 	"files.error.loadWorkspace": "Не удалось загрузить файлы рабочего пространства",
 	"files.error.workspaceMissing": "Эта рабочая область больше не существует. Восстановите её папку и повторите попытку.",
+	"files.workspacePending": "Подготовка рабочей области этой сессии…",
+	"files.workspaceGone": "Папки рабочей области этой сессии нет на диске.",
 	"files.error.searchWorkspace": "Не удалось выполнить поиск по файлам рабочего пространства",
 	"files.browseAll": "Просмотреть все файлы",
 	"files.reviewChanges": "Изменения",

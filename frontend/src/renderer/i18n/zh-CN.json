@@ -2889,6 +2889,8 @@
 	"files.sessionFiles": "会话文件",
 	"files.error.loadWorkspace": "无法加载工作区文件",
 	"files.error.workspaceMissing": "此工作区已不存在。请恢复其文件夹后重试。",
+	"files.workspacePending": "正在准备此会话的工作区…",
+	"files.workspaceGone": "此会话的工作区文件夹不在磁盘上。",
 	"files.error.searchWorkspace": "Unable to search workspace files",
 	"files.browseAll": "Browse all files",
 	"files.reviewChanges": "Changes",
