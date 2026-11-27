@@ -50,7 +50,7 @@ func (c *AutomationsController) RegisterHook(r chi.Router) {
 
 func (c *AutomationsController) call(w http.ResponseWriter, r *http.Request) {
 	if c.Svc == nil {
-		apispec.NotImplemented(w, r, "POST", "/hooks/{hookKey}")
+		envelope.WriteAPIError(w, r, http.StatusNotImplemented, "not_implemented", "NOT_IMPLEMENTED", "Hooks are not available", nil)
 		return
 	}
 	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, maxHookBodyBytes))

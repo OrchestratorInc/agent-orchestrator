@@ -157,7 +157,7 @@ func (q *Queries) CountAutomations(ctx context.Context, arg CountAutomationsPara
 }
 
 const countPendingAutomationRuns = `-- name: CountPendingAutomationRuns :one
-SELECT COUNT(*) FROM automation_runs WHERE automation_id = ? AND status = 'pending'
+SELECT COUNT(*) FROM automation_runs WHERE automation_id = ? AND status IN ('pending', 'spawning')
 `
 
 func (q *Queries) CountPendingAutomationRuns(ctx context.Context, automationID domain.AutomationID) (int64, error) {

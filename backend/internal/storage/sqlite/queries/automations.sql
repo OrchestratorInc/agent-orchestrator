@@ -69,7 +69,7 @@ INSERT INTO automation_runs (
 ON CONFLICT (automation_id, scheduled_for) DO NOTHING;
 
 -- name: CountPendingAutomationRuns :one
-SELECT COUNT(*) FROM automation_runs WHERE automation_id = ? AND status = 'pending';
+SELECT COUNT(*) FROM automation_runs WHERE automation_id = ? AND status IN ('pending', 'spawning');
 
 -- name: AutomationRunDedupeExists :one
 SELECT EXISTS (

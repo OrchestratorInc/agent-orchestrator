@@ -458,6 +458,12 @@ func TestAutomationClaimHoldsLaneUntilRunningOnlyForCalls(t *testing.T) {
 			if _, ok, err := store.ClaimNextAutomationRun(ctx, base, lease); err != nil || ok {
 				t.Fatalf("claim beside a spawning run ok=%v err=%v, want blocked", ok, err)
 			}
+			if tc.trigger == domain.AutomationTriggerCall {
+				extra := domain.AutomationRun{ID: "run-3", AutomationID: "automation-1", ScheduledFor: base, Status: domain.AutomationRunPending, CreatedAt: base, UpdatedAt: base}
+				if status, err := store.InsertCalledAutomationRun(ctx, extra, base.Add(-time.Hour), 2); err != nil || status != domain.AutomationCallQueueFull {
+					t.Fatalf("insert beside one spawning and one pending run = %q %v, want queue full", status, err)
+				}
+			}
 			session, err := store.CreateSession(ctx, sampleRecord("scheduled"))
 			if err != nil {
 				t.Fatal(err)

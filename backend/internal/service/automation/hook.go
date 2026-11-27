@@ -253,21 +253,23 @@ func hookString(v any) string {
 }
 
 func fillHookTemplate(tmpl string, data map[string]any, wrap func(string) string) (string, bool) {
-	complete := true
+	complete, size := true, 0
 	out := hookPlaceholder.ReplaceAllStringFunc(tmpl, func(m string) string {
 		path := hookPlaceholder.FindStringSubmatch(m)[1]
 		if !hookPath.MatchString(path) {
 			return m
 		}
 		v, ok := lookupHookPath(data, path)
-		if !ok {
+		if !ok || size > maxHookPromptBytes {
 			complete = false
 			return ""
 		}
-		if wrap == nil {
-			return hookString(v)
+		s := hookString(v)
+		if wrap != nil && strings.TrimSpace(s) != "" {
+			s = wrap(s)
 		}
-		return wrap(hookString(v))
+		size += len(s)
+		return s
 	})
 	return out, complete
 }

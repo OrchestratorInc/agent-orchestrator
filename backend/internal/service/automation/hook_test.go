@@ -201,7 +201,17 @@ func TestCallReadsFormBodiesAndSkipsDedupeWithoutItsValue(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Create: %v", err)
 	}
-	if res, err := svc.Call(ctx, only.HookKey, CallInput{Body: []byte(`{}`)}); err != nil || res.Status != domain.AutomationCallIgnored {
-		t.Fatalf("empty filled prompt = %#v %v, want ignored", res, err)
+	for _, body := range []string{`{}`, `{"text":"  "}`} {
+		if res, err := svc.Call(ctx, only.HookKey, CallInput{Body: []byte(body)}); err != nil || res.Status != domain.AutomationCallIgnored {
+			t.Fatalf("blank filled prompt from %s = %#v %v, want ignored", body, res, err)
+		}
+	}
+}
+
+func TestFillHookTemplateStopsPastThePromptLimit(t *testing.T) {
+	data := map[string]any{"body": strings.Repeat("x", 40<<10)}
+	out, complete := fillHookTemplate(strings.Repeat("{{body}}", 1000), data, nil)
+	if complete || len(out) <= maxHookPromptBytes || len(out) > 2*maxHookPromptBytes {
+		t.Fatalf("fill = %d bytes complete=%v, want just past the limit and incomplete", len(out), complete)
 	}
 }

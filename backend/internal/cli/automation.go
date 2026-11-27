@@ -33,6 +33,11 @@ type automationDTO struct {
 	LatestRun   *automationRunSummaryDTO `json:"latestRun,omitempty"`
 	Trigger     string                   `json:"trigger,omitempty"`
 	HookKey     string                   `json:"hookKey,omitempty"`
+
+	HookSecretSet       bool     `json:"hookSecretSet,omitempty"`
+	HookSignatureHeader string   `json:"hookSignatureHeader,omitempty"`
+	HookFilters         []string `json:"hookFilters,omitempty"`
+	HookDedupeKey       string   `json:"hookDedupeKey,omitempty"`
 }
 type automationRunSummaryDTO struct {
 	ID           string    `json:"id"`
