@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"net/http"
+	"net/url"
 	"strings"
 	"testing"
 	"time"
@@ -127,10 +128,58 @@ func TestCreateRejectsMixedTriggerSettings(t *testing.T) {
 		"call with schedule":    {Trigger: domain.AutomationTriggerCall, Cron: "0 9 * * *"},
 		"secret without header": {Trigger: domain.AutomationTriggerCall, HookSecret: "s"},
 		"filter outside data":   {Trigger: domain.AutomationTriggerCall, HookFilters: []string{"env.HOME"}},
+		"constant dedupe key":   {Trigger: domain.AutomationTriggerCall, HookDedupeKey: "same"},
 	} {
 		in.ProjectID, in.DisplayName, in.Prompt, in.Kind = "scheduled", "x", "y", domain.KindWorker
 		if _, err := svc.Create(context.Background(), in); !isAPIError(err, apierr.KindInvalid) {
 			t.Errorf("%s: err = %v, want invalid", name, err)
 		}
+	}
+}
+
+func TestCallReadsFormBodiesAndSkipsDedupeWithoutItsValue(t *testing.T) {
+	ctx := context.Background()
+	store := sqlitetest.MustOpen(t)
+	if err := store.UpsertProject(ctx, domain.ProjectRecord{ID: "p1", Path: "/tmp/p1", RegisteredAt: time.Now().UTC()}); err != nil {
+		t.Fatal(err)
+	}
+	svc := New(Deps{Store: store})
+	auto, err := svc.Create(ctx, CreateInput{
+		ProjectID: "p1", DisplayName: "Form", Prompt: "Handle {{body.issue.title}}{{body.text}}", Kind: domain.KindWorker,
+		Trigger: domain.AutomationTriggerCall, HookDedupeKey: "delivery-{{headers.X-Delivery}}",
+	})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	call := func(body, delivery string) (CallResult, string) {
+		h := http.Header{"Content-Type": {"application/x-www-form-urlencoded"}}
+		if delivery != "" {
+			h.Set("X-Delivery", delivery)
+		}
+		res, err := svc.Call(ctx, auto.HookKey, CallInput{Body: []byte(body), Headers: h})
+		if err != nil {
+			t.Fatalf("call %q: %v", body, err)
+		}
+		if res.RunID == "" {
+			return res, ""
+		}
+		run, _, err := store.GetAutomationRun(ctx, res.RunID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return res, run.Prompt
+	}
+	payload := "payload=" + url.QueryEscape(`{"issue":{"title":"Bug"}}`)
+	for _, tc := range []struct{ body, want string }{{payload, ">Bug</hook-data-"}, {"text=hello", ">hello</hook-data-"}} {
+		res, prompt := call(tc.body, "")
+		if res.Status != domain.AutomationCallAccepted || !strings.Contains(prompt, tc.want) {
+			t.Fatalf("%q = %v %q, want accepted with %q", tc.body, res.Status, prompt, tc.want)
+		}
+	}
+	if res, _ := call(payload, "d1"); res.Status != domain.AutomationCallAccepted {
+		t.Fatalf("first delivery = %v", res.Status)
+	}
+	if res, _ := call(payload, "d1"); res.Status != domain.AutomationCallDuplicate {
+		t.Fatalf("redelivery = %v, want duplicate", res.Status)
 	}
 }

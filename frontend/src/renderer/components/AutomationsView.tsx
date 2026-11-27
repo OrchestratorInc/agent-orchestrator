@@ -963,7 +963,6 @@ function AutomationFormDialog({
 	);
 }
 
-/** The public address that starts a "when called" automation, or a way to turn on Remote access. */
 function HookAddress({ hookKey, inForm = false }: { hookKey?: string; inForm?: boolean }) {
 	const { t } = useTranslation();
 	const status = useQuery({ queryKey: mobileStatusQueryKey, queryFn: fetchMobileStatus });

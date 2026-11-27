@@ -26,7 +26,7 @@ import (
 type LANManager struct {
 	handler     http.Handler // shared router, already auth-wrapped
 	tunnel      http.Handler // lanTunnelPath, behind the same auth
-	hooks       http.Handler // lanHookPath, checked by the automation's own key and signature
+	hooks       http.Handler
 	defaultPort int
 	log         *slog.Logger
 	state       *authState // shared with authMiddleware; SetPasswordHash writes through here
@@ -372,7 +372,7 @@ func (m *LANManager) dispatch() http.Handler {
 			m.tunnel.ServeHTTP(w, r)
 			return
 		}
-		if lanHookPath.MatchString(r.URL.Path) {
+		if r.Method == http.MethodPost && lanHookPath.MatchString(r.URL.Path) {
 			m.hooks.ServeHTTP(w, r)
 			return
 		}

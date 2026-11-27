@@ -1,8 +1,4 @@
 -- +goose Up
--- A "call" automation runs when an outside service POSTs to /hooks/<hook_key>
--- instead of on a schedule; its rrule_text and timezone stay empty and it is
--- never due. A called run carries the prompt filled from that request, and a
--- dedupe key so the same delivery does not start a second session.
 ALTER TABLE automations ADD COLUMN trigger_kind TEXT NOT NULL DEFAULT 'schedule'
     CHECK (trigger_kind IN ('schedule', 'call'));
 ALTER TABLE automations ADD COLUMN hook_key TEXT;

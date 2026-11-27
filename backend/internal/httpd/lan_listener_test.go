@@ -168,6 +168,14 @@ func TestLANManagerLetsOnlyHookCallsSkipAuth(t *testing.T) {
 			t.Fatalf("%s: got %d want %d", path, resp.StatusCode, want)
 		}
 	}
+	resp, err := http.Get(fmt.Sprintf("http://127.0.0.1:%d/hooks/Abc_12-x", port))
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("GET hook path: got %d want 401", resp.StatusCode)
+	}
 }
 
 func TestLANManagerServesHTTP2WithoutTLS(t *testing.T) {
