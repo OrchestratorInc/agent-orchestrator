@@ -246,8 +246,13 @@ export async function moveSession(
 			);
 		}
 		// The agent was not running when the move began: the session is as the
-		// user left it, so nothing starts it.
+		// user left it, so nothing starts it. The move is ended here all the
+		// same (resume-agent would have ended it), so the session does not keep
+		// a move in progress whose id a later move would take up.
 		if (state.agentWasRunning === false) {
+			await deps.source
+				.POST("/api/v1/sessions/{sessionId}/move/abandon", { ...path, body: { moveId } })
+				.catch(() => undefined);
 			throw new MoveError(apiErrorMessage(error, fallback), step, apiErrorCode(error), true, pushed);
 		}
 		let resumed: boolean | undefined;

@@ -20,6 +20,7 @@ type SessionMover interface {
 	ImportMove(ctx context.Context, in sessionsvc.MoveImportInput) (sessionsvc.MoveImportOutcome, error)
 	MoveTargets(ctx context.Context, repoKey, branch string) ([]sessionsvc.MoveTarget, error)
 	CompleteMove(ctx context.Context, id domain.SessionID, in sessionsvc.MoveCompleteInput) (domain.Session, error)
+	AbandonMove(ctx context.Context, id domain.SessionID, moveID string) (bool, error)
 }
 
 // maxMoveImportBodyBytes bounds a move/import body, whose transcript is a
@@ -43,6 +44,7 @@ func (c *SessionMovesController) Register(r chi.Router) {
 	r.Get("/sessions/move/targets", c.targets)
 	r.Post("/sessions/move/import", c.importMove)
 	r.Post("/sessions/{sessionId}/move/complete", c.complete)
+	r.Post("/sessions/{sessionId}/move/abandon", c.abandon)
 }
 
 func (c *SessionMovesController) preview(w http.ResponseWriter, r *http.Request) {
@@ -183,6 +185,25 @@ func (c *SessionMovesController) complete(w http.ResponseWriter, r *http.Request
 		return
 	}
 	envelope.WriteJSON(w, http.StatusOK, MoveCompleteResponse{Session: sessionView(r, sess)})
+}
+
+func (c *SessionMovesController) abandon(w http.ResponseWriter, r *http.Request) {
+	if c.Svc == nil {
+		apispec.NotImplemented(w, r, "POST", "/api/v1/sessions/{sessionId}/move/abandon")
+		return
+	}
+	r.Body = http.MaxBytesReader(w, r.Body, maxMoveRequestBodyBytes)
+	var in MoveAbandonRequest
+	if err := decodeJSON(r, &in); err != nil {
+		writeInvalidJSON(w, r)
+		return
+	}
+	ended, err := c.Svc.AbandonMove(r.Context(), sessionID(r), in.MoveID)
+	if err != nil {
+		envelope.WriteError(w, r, err)
+		return
+	}
+	envelope.WriteJSON(w, http.StatusOK, MoveAbandonResponse{Ended: ended})
 }
 
 func writeInvalidJSON(w http.ResponseWriter, r *http.Request) {

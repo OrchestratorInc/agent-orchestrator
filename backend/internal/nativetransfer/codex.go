@@ -11,6 +11,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -88,14 +89,19 @@ type CodexImportOptions struct {
 	Home string
 	// Cwd is the working directory the agent resumes in.
 	Cwd string
+	// BackupDir is where a rollout this machine already has for the
+	// conversation is copied before it is replaced (under ~/.ao). Without
+	// one, an existing rollout is not replaced.
+	BackupDir string
 }
 
 // ImportCodex places the rollout at rolloutPath, from AO Cloud, under
 // <home>/sessions with its working directory replaced by opts.Cwd, and
 // returns its id. A rollout this machine already has for the conversation is
-// replaced at its path, the one Codex's thread index names. Otherwise it gets
-// the dated path and file name Codex gives a new rollout: Codex refuses to
-// resume any other name.
+// replaced at its path, the one Codex's thread index names, once it is copied
+// to opts.BackupDir: it may hold turns the moved one lacks (it went on here
+// after the move). Otherwise it gets the dated path and file name Codex gives
+// a new rollout: Codex refuses to resume any other name.
 func ImportCodex(ctx context.Context, rolloutPath string, opts CodexImportOptions) (string, error) {
 	data, err := os.ReadFile(rolloutPath)
 	if err != nil {
@@ -131,6 +137,9 @@ func ImportCodex(ctx context.Context, rolloutPath string, opts CodexImportOption
 		target = filepath.Join(opts.Home, "sessions", started.Format("2006/01/02"),
 			"rollout-"+started.Format("2006-01-02T15-04-05")+"-"+id+".jsonl")
 	}
+	if err := backUpCodexRollout(target, id, opts.BackupDir); err != nil {
+		return "", err
+	}
 	if err := os.MkdirAll(filepath.Dir(target), 0o700); err != nil {
 		return "", err
 	}
@@ -155,6 +164,55 @@ func ImportCodex(ctx context.Context, rolloutPath string, opts CodexImportOption
 		return "", err
 	}
 	return id, nil
+}
+
+// backUpCodexRollout copies the rollout at target, and its compressed copy,
+// into a folder of its own under backupDir before an import replaces them.
+// It refuses the replacement when there is something to back up and no
+// backupDir, or the copy fails: the moved conversation is then not placed.
+func backUpCodexRollout(target, id, backupDir string) error {
+	var existing []string
+	for _, path := range []string{target, target + ".zst"} {
+		if _, err := os.Lstat(path); err == nil {
+			existing = append(existing, path)
+		} else if !errors.Is(err, fs.ErrNotExist) {
+			return err
+		}
+	}
+	if len(existing) == 0 {
+		return nil
+	}
+	if backupDir == "" {
+		return fmt.Errorf("nativetransfer: a Codex rollout for %s is already here and there is nowhere to back it up, so it was not replaced", id)
+	}
+	dir := filepath.Join(backupDir, id+"-"+strconv.FormatInt(time.Now().UnixNano(), 10))
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return fmt.Errorf("nativetransfer: back up the Codex rollout here: %w", err)
+	}
+	for _, path := range existing {
+		if err := copyFileExclusive(path, filepath.Join(dir, filepath.Base(path))); err != nil {
+			return fmt.Errorf("nativetransfer: back up the Codex rollout here: %w", err)
+		}
+	}
+	return nil
+}
+
+// copyFileExclusive copies the regular file src to dst, which must not exist.
+func copyFileExclusive(src, dst string) error {
+	in, err := os.Open(src)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = in.Close() }()
+	out, err := os.OpenFile(dst, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+	if err != nil {
+		return err
+	}
+	if _, err := io.Copy(out, in); err != nil {
+		_ = out.Close()
+		return err
+	}
+	return out.Close()
 }
 
 type codexMeta struct {

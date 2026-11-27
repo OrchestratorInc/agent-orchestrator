@@ -416,6 +416,8 @@ var schemaNames = map[string]string{ //nolint:gosec // Public OpenAPI type names
 	"ControllersMoveExportResponse":                       "MoveExportResponse",
 	"ControllersMoveImportRequest":                        "MoveImportRequest",
 	"ControllersMoveImportResponse":                       "MoveImportResponse",
+	"ControllersMoveAbandonRequest":                       "MoveAbandonRequest",
+	"ControllersMoveAbandonResponse":                      "MoveAbandonResponse",
 	"ControllersMoveCompleteRequest":                      "MoveCompleteRequest",
 	"ControllersMoveCompleteResponse":                     "MoveCompleteResponse",
 	"SessionMoveManifest":                                 "MoveManifest",
@@ -4463,6 +4465,19 @@ func sessionOperations() []operation {
 			reqBody: controllers.MoveImportRequest{},
 			resps: []respUnit{
 				{http.StatusOK, controllers.MoveImportResponse{}},
+				{http.StatusBadRequest, envelope.APIError{}},
+				{http.StatusNotFound, envelope.APIError{}},
+				{http.StatusConflict, envelope.APIError{}},
+				{http.StatusInternalServerError, envelope.APIError{}},
+			},
+		},
+		{
+			method: http.MethodPost, path: "/api/v1/sessions/{sessionId}/move/abandon", id: "abandonSessionMove", tag: "sessions",
+			summary:    "End a move to AO Cloud that will not finish, leaving the agent stopped",
+			pathParams: []any{controllers.SessionIDParam{}},
+			reqBody:    controllers.MoveAbandonRequest{},
+			resps: []respUnit{
+				{http.StatusOK, controllers.MoveAbandonResponse{}},
 				{http.StatusBadRequest, envelope.APIError{}},
 				{http.StatusNotFound, envelope.APIError{}},
 				{http.StatusConflict, envelope.APIError{}},

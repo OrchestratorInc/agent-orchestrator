@@ -47,6 +47,18 @@ func (m moveStore) SetSessionMoveStarted(_ context.Context, id domain.SessionID,
 	return ok, nil
 }
 
+// EndSessionMoveStarted clears a move in progress unless the session moved, as
+// the SQLite store's conditional write does.
+func (m moveStore) EndSessionMoveStarted(_ context.Context, id domain.SessionID, _ time.Time) (bool, error) {
+	rec, ok := m.sessions[id]
+	if !ok || rec.MovedTo != nil {
+		return false, nil
+	}
+	rec.MoveStarted = ""
+	m.sessions[id] = rec
+	return true, nil
+}
+
 func (m moveStore) SetSessionMoveConversationPlaced(_ context.Context, id domain.SessionID, _ time.Time) (bool, error) {
 	rec, ok := m.sessions[id]
 	rec.MoveConversationPlaced = true
@@ -1103,6 +1115,49 @@ func TestImportMoveKeepsChat(t *testing.T) {
 			}
 			if got := slices.Contains(out.Warnings, movedChatInTerminal); got != tc.wantWarning {
 				t.Fatalf("warnings %q, want the terminal note: %v", out.Warnings, tc.wantWarning)
+			}
+		})
+	}
+}
+
+// A move that will not finish is ended without starting the agent, and only
+// while it is still the session's move in progress: a later move's record
+// stands, and a session that moved stays moved.
+func TestAbandonMoveEndsOnlyThisMove(t *testing.T) {
+	moved := &domain.SessionMove{MoveID: "move-1", OrgID: "org-1", SessionID: "cloud-1"}
+	for _, tc := range []struct {
+		name        string
+		rec         domain.SessionRecord
+		wantEnded   bool
+		wantStarted string
+		wantCode    string
+	}{
+		{"this move", domain.SessionRecord{MoveStarted: "move-1"}, true, "", ""},
+		{"another move", domain.SessionRecord{MoveStarted: "move-2"}, false, "move-2", ""},
+		{"no move", domain.SessionRecord{}, false, "", ""},
+		{"already moved", domain.SessionRecord{MovedTo: moved}, false, "", "SESSION_MOVED"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			rec := tc.rec
+			rec.ID, rec.ProjectID, rec.Kind, rec.Activity = "mer-2", "mer", domain.KindWorker, domain.Activity{State: domain.ActivityExited}
+			st := newFakeStore()
+			st.sessions["mer-2"] = rec
+			fc := &fakeCommander{}
+			svc := NewWithDeps(Deps{Manager: fc, Store: moveStore{st}})
+			ended, err := svc.AbandonMove(context.Background(), "mer-2", "move-1")
+			var apiErr *apierr.Error
+			if tc.wantCode != "" {
+				if !errors.As(err, &apiErr) || apiErr.Code != tc.wantCode {
+					t.Fatalf("err = %v, want %s", err, tc.wantCode)
+				}
+			} else if err != nil {
+				t.Fatal(err)
+			}
+			if ended != tc.wantEnded || st.sessions["mer-2"].MoveStarted != tc.wantStarted {
+				t.Fatalf("ended %v, move_started %q; want %v, %q", ended, st.sessions["mer-2"].MoveStarted, tc.wantEnded, tc.wantStarted)
+			}
+			if len(fc.killed) != 0 || st.sessions["mer-2"].Activity.State != domain.ActivityExited {
+				t.Fatalf("the agent's state changed: killed %v, activity %v", fc.killed, st.sessions["mer-2"].Activity.State)
 			}
 		})
 	}

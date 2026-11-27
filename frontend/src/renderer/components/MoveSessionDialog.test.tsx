@@ -453,7 +453,11 @@ it("moves under the id of a move this computer recorded as pushed", async () => 
 	await user.click(await screen.findByRole("button", { name: "Move to Orchestrator Cloud" }));
 	await waitFor(() => expect(navigate).toHaveBeenCalledWith("cloud-proj", "cloud-9"));
 	expect(daemon.postCalls.find((call) => call.path === "/api/v1/sessions/{sessionId}/move/export")?.body).toMatchObject({ moveId: "m-recorded" });
-	expect(cloud.createSession.mock.calls[0][2]).toEqual({ idempotencyKey: "m-recorded" });
+	// The recorded move left no saved create, so any it sent was refused: the
+	// Cloud request takes a fresh key, never the refused one with a new body.
+	const key = cloud.createSession.mock.calls[0][2].idempotencyKey;
+	expect(key).toBeTruthy();
+	expect(key).not.toBe("m-recorded");
 });
 
 describe("moving a Cloud session to this computer", () => {

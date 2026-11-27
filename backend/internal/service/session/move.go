@@ -534,6 +534,46 @@ func (s *Service) CompleteMove(ctx context.Context, id domain.SessionID, in Move
 	return s.Get(ctx, id)
 }
 
+// AbandonMove ends a move to AO Cloud this machine will not finish, without
+// starting the agent: a rollback when the agent was not running before the
+// move. Restore and resume end a move too, but they start the agent. It
+// clears move_started only while it still names moveID, so a later move's
+// record stands; ended is false when there was nothing of this move to end.
+// A session that already moved stays moved (SESSION_MOVED).
+func (s *Service) AbandonMove(ctx context.Context, id domain.SessionID, moveID string) (bool, error) {
+	if moveID == "" {
+		return false, apierr.Invalid("MOVE_ID_REQUIRED", "moveId is required", nil)
+	}
+	rec, found, err := s.store.GetSession(ctx, id)
+	if err != nil {
+		return false, err
+	}
+	if !found {
+		return false, apierr.NotFound("SESSION_NOT_FOUND", "Session not found")
+	}
+	if rec.MovedTo != nil {
+		return false, apierr.Conflict("SESSION_MOVED", "This session already moved to Orchestrator Cloud.", nil)
+	}
+	if rec.MoveStarted != moveID {
+		return false, nil
+	}
+	store, ok := s.store.(interface {
+		EndSessionMoveStarted(ctx context.Context, id domain.SessionID, updatedAt time.Time) (bool, error)
+	})
+	if !ok {
+		return false, apierr.NotImplemented("MOVE_UNSUPPORTED", "This build cannot record session moves")
+	}
+	ended, err := store.EndSessionMoveStarted(ctx, id, s.clock().UTC())
+	if err != nil {
+		return false, err
+	}
+	if !ended {
+		// The move was marked done in between: the session moved.
+		return false, apierr.Conflict("SESSION_MOVED", "This session already moved to Orchestrator Cloud.", nil)
+	}
+	return true, nil
+}
+
 // moveNoticeTimeout bounds telling the orchestrator, which runs detached from
 // the request.
 const moveNoticeTimeout = 30 * time.Second

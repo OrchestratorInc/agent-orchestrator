@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"strings"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/cursorstore"
@@ -262,7 +263,7 @@ func (m *Manager) placeTransferConversation(ctx context.Context, harness domain.
 		return "", err
 	}
 	if harness == domain.HarnessCodex {
-		return nativetransfer.ImportCodex(ctx, archive, nativetransfer.CodexImportOptions{Home: configDir, Cwd: workspacePath})
+		return nativetransfer.ImportCodex(ctx, archive, nativetransfer.CodexImportOptions{Home: configDir, Cwd: workspacePath, BackupDir: m.moveBackupDir("codex")})
 	}
 	if harness == domain.HarnessCursor {
 		f, err := os.Open(archive)
@@ -319,4 +320,14 @@ func transferRestoreArgv(ctx context.Context, agent ports.Agent, nativeID string
 		return nil, fmt.Errorf("%w: the agent cannot resume conversation %s", ErrCloudTranscriptUnsupported, nativeID)
 	}
 	return cmd, nil
+}
+
+// moveBackupDir is where a move keeps a harness's conversation it replaced
+// here (under the daemon's data dir, ~/.ao), or "" without a data dir: the
+// import then refuses to replace one.
+func (m *Manager) moveBackupDir(harness string) string {
+	if m.dataDir == "" {
+		return ""
+	}
+	return filepath.Join(m.dataDir, "move-backups", harness)
 }

@@ -75,7 +75,8 @@ func TestImportCodexPlacesTheRolloutWhereCodexResumesIt(t *testing.T) {
 			home := t.TempDir()
 			old := filepath.Join(home, "sessions", "2026", "10", "02", "rollout-2026-10-02T09-00-00-"+codexID)
 			writeFile(t, old+ext, "old")
-			if _, err := ImportCodex(context.Background(), from, CodexImportOptions{Home: home, Cwd: cwd}); err != nil {
+			backups := t.TempDir()
+			if _, err := ImportCodex(context.Background(), from, CodexImportOptions{Home: home, Cwd: cwd, BackupDir: backups}); err != nil {
 				t.Fatal(err)
 			}
 			got, err := os.ReadFile(old + ".jsonl")
@@ -85,8 +86,28 @@ func TestImportCodexPlacesTheRolloutWhereCodexResumesIt(t *testing.T) {
 			if _, err := os.Stat(old + ".jsonl.zst"); !os.IsNotExist(err) {
 				t.Errorf("the compressed copy stayed: %v", err)
 			}
+			// The copy it replaced is kept, byte for byte: it may hold turns
+			// taken here after the move.
+			kept, _ := filepath.Glob(filepath.Join(backups, codexID+"-*", filepath.Base(old+ext)))
+			if len(kept) != 1 {
+				t.Fatalf("backups = %q, want the replaced %s", kept, ext)
+			}
+			if data, err := os.ReadFile(kept[0]); err != nil || string(data) != "old" {
+				t.Fatalf("backup = %q, %v; want the replaced copy", data, err)
+			}
 		})
 	}
+	t.Run("refuses to replace without a backup", func(t *testing.T) {
+		home := t.TempDir()
+		old := filepath.Join(home, "sessions", "2026", "10", "02", "rollout-2026-10-02T09-00-00-"+codexID+".jsonl")
+		writeFile(t, old, "old")
+		if _, err := ImportCodex(context.Background(), from, CodexImportOptions{Home: home, Cwd: cwd}); err == nil {
+			t.Fatal("an existing rollout was replaced with nowhere to back it up")
+		}
+		if data, _ := os.ReadFile(old); string(data) != "old" {
+			t.Fatalf("existing rollout = %q, want it unchanged", data)
+		}
+	})
 }
 
 // A thread continued in segment files is refused both ways rather than moved

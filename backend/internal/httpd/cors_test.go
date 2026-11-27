@@ -458,6 +458,8 @@ func TestSessionMoveRoutesAreRendererOnly(t *testing.T) {
 		{http.MethodGet, "/api/v1/sessions/app-1/move/transcript", "http://ao-preview.hostile.localhost:5181", false, http.StatusForbidden},
 		{http.MethodPost, "/api/v1/sessions/app-1/move/export", "http://localhost:3000", false, http.StatusForbidden},
 		{http.MethodPost, "/api/v1/sessions/app-1/move/complete", "http://localhost", true, http.StatusForbidden},
+		{http.MethodPost, "/api/v1/sessions/app-1/move/abandon", "http://localhost", true, http.StatusForbidden},
+		{http.MethodPost, "/api/v1/sessions/app-1/move/abandon", "app://renderer", false, http.StatusNoContent},
 		{http.MethodPost, "/api/v1/sessions/move/import", "http://localhost", true, http.StatusForbidden},
 		{http.MethodPost, "/api/v1/sessions/move/import", "app://renderer", false, http.StatusNoContent},
 		{http.MethodGet, "/api/v1/sessions/app-1/move/preview", "http://localhost", true, http.StatusNoContent},

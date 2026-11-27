@@ -463,10 +463,35 @@ describe("moveSession", () => {
 			"/api/v1/sessions/{sessionId}/exit-agent": fail("AGENT_EXITED"),
 			"/api/v1/sessions/{sessionId}/move/export": fail("MOVE_REMOTE_AHEAD", "origin has commits"),
 			"/api/v1/sessions/{sessionId}/resume-agent": ok(),
+			"/api/v1/sessions/{sessionId}/move/abandon": ok({ ended: true }),
 		}, calls);
 		const error = await moveSession({ sessionId: "app-1", target }, { source, cloud: cloud() }).catch((e: unknown) => e);
 		expect(error).toMatchObject({ step: "export", code: "MOVE_REMOTE_AHEAD", rolledBack: true });
 		expect(calls).not.toContain("/api/v1/sessions/{sessionId}/resume-agent");
+		// The move is ended here all the same, so its id is not left behind.
+		expect(calls).toContain("/api/v1/sessions/{sessionId}/move/abandon");
+	});
+
+	it("ends the move here when Cloud refuses the create and the agent had already exited", async () => {
+		const calls: string[] = [];
+		const source = fakeDaemon({
+			"/api/v1/sessions/{sessionId}/exit-agent": fail("AGENT_EXITED"),
+			"/api/v1/sessions/{sessionId}/move/export": ok(exported),
+			"/api/v1/sessions/{sessionId}/resume-agent": ok(),
+			"/api/v1/sessions/{sessionId}/move/abandon": ok({ ended: true }),
+		}, calls);
+		const refused = new CloudCpError("plan limit", { status: 409, code: "PLAN_LIMIT" });
+		const state: MoveDeps["cloudRequest"] = {};
+		const error = await moveSession({ sessionId: "app-1", target, moveId: "m-1" }, {
+			source, cloud: cloud(async () => { throw refused; }), cloudRequest: state,
+		}).catch((e: unknown) => e);
+		expect(error).toMatchObject({ step: "import", rolledBack: true });
+		expect(calls).not.toContain("/api/v1/sessions/{sessionId}/resume-agent");
+		const abandon = (source.POST as ReturnType<typeof vi.fn>).mock.calls.find(([route]) => route === "/api/v1/sessions/{sessionId}/move/abandon");
+		expect(abandon?.[1]).toMatchObject({ params: { path: { sessionId: "app-1" } }, body: { moveId: "m-1" } });
+		// A retry in this dialog sends a fresh key, since its request differs.
+		expect(state?.key).toBeTruthy();
+		expect(state?.key).not.toBe("m-1");
 	});
 
 	it("starts again an agent that was running when the move began, though Try again finds it stopped", async () => {

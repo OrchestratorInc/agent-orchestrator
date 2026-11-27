@@ -12199,6 +12199,57 @@ paths:
       summary: Configure whether PR completion terminates the session
       tags:
       - sessions
+  /api/v1/sessions/{sessionId}/move/abandon:
+    post:
+      operationId: abandonSessionMove
+      parameters:
+      - description: Session identifier, e.g. project-1.
+        in: path
+        name: sessionId
+        required: true
+        schema:
+          description: Session identifier, e.g. project-1.
+          type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/MoveAbandonRequest'
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MoveAbandonResponse'
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Found
+        "409":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Conflict
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+      summary: End a move to AO Cloud that will not finish, leaving the agent stopped
+      tags:
+      - sessions
   /api/v1/sessions/{sessionId}/move/complete:
     post:
       operationId: completeSessionMove
@@ -24172,6 +24223,24 @@ components:
       - hostname
       - location
       - lastError
+      type: object
+    MoveAbandonRequest:
+      properties:
+        moveId:
+          maxLength: 64
+          minLength: 1
+          type: string
+      required:
+      - moveId
+      type: object
+    MoveAbandonResponse:
+      properties:
+        ended:
+          description: True when the move was in progress and is now over; false when
+            it had already ended or another move is in progress.
+          type: boolean
+      required:
+      - ended
       type: object
     MoveChange:
       properties:

@@ -5155,6 +5155,17 @@ type MoveCompleteRequest struct {
 	SessionID string `json:"sessionId" minLength:"1"`
 }
 
+// MoveAbandonRequest ends a move to AO Cloud that this machine will not
+// finish, without starting the agent.
+type MoveAbandonRequest struct {
+	MoveID string `json:"moveId" minLength:"1" maxLength:"64"`
+}
+
+// MoveAbandonResponse says whether the move was still in progress here.
+type MoveAbandonResponse struct {
+	Ended bool `json:"ended" description:"True when the move was in progress and is now over; false when it had already ended or another move is in progress."`
+}
+
 // MoveCompleteResponse is the archived source session with its movedTo set.
 type MoveCompleteResponse struct {
 	Session SessionView `json:"session"`

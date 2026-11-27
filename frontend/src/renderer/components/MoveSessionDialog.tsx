@@ -107,7 +107,15 @@ function MoveSessionDialogBody({ session, onClose }: { session: WorkspaceSession
 	if (!seed.current && identityKnown) {
 		seed.current = {
 			moveId: saved?.moveId ?? session.moveStarted ?? crypto.randomUUID(),
-			cloudRequest: saved ? { current: saved.request, key: saved.key, pushed: saved.pushed, createUnsettled: true } : {},
+			// A move taken up from session.moveStarted alone has no saved create:
+			// any create it sent was refused (an unsettled one is saved before it
+			// is sent). Its Cloud request gets a fresh key, as a refused create's
+			// retry does, since reusing that key with a new body is refused.
+			cloudRequest: saved
+				? { current: saved.request, key: saved.key, pushed: saved.pushed, createUnsettled: true }
+				: session.moveStarted
+					? { key: crypto.randomUUID() }
+					: {},
 			createdProject: { current: saved?.projectId ?? saved?.request.projectId },
 		};
 	}

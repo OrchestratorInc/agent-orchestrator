@@ -158,7 +158,7 @@ func rendererOnlyArea(path string) string {
 }
 
 // isSessionMoveRoute matches the move routes that read or change a session:
-// /api/v1/sessions/move/import and /api/v1/sessions/{id}/move/{transcript,export,complete}.
+// /api/v1/sessions/move/import and /api/v1/sessions/{id}/move/{transcript,export,complete,abandon}.
 func isSessionMoveRoute(path string) bool {
 	rest, ok := strings.CutPrefix(path, "/api/v1/sessions/")
 	if !ok {
@@ -169,7 +169,7 @@ func isSessionMoveRoute(path string) bool {
 	}
 	parts := strings.Split(rest, "/")
 	return len(parts) == 3 && parts[0] != "" && parts[0] != "move" && parts[1] == "move" &&
-		(parts[2] == "transcript" || parts[2] == "export" || parts[2] == "complete")
+		(parts[2] == "transcript" || parts[2] == "export" || parts[2] == "complete" || parts[2] == "abandon")
 }
 
 // browserRequestAllowed guards browser access to REST routes. Local HTTP
