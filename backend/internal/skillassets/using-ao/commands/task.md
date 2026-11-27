@@ -68,8 +68,11 @@ started for the task, not just its own turn:
 - `failed` if a worker failed after the orchestrator finished its turn;
 - `done` only when the orchestrator's turn and every worker have finished.
 
-Each worker is read at its latest turn, so follow-up work the orchestrator
-sends it (such as review findings) keeps the task `running`. If the
+Each worker is read at the turn it is running now (otherwise its latest), so
+follow-up work the orchestrator sends it (such as review findings) keeps the
+task `running`, and an approval pending on the running turn reads
+`needs_input` even when a follow-up is queued behind it. A worker that cannot
+be read keeps the task `running` rather than letting it read `done`. If the
 orchestrator's turn was retried, only the current attempt's workers can fail
 the task. Workers that already existed before the task are not tracked: nothing
 records which of them the orchestrator messaged for it.

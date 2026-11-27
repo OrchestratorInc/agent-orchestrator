@@ -777,7 +777,14 @@ func (c *commandContext) foldTaskWorkers(ctx context.Context, res taskResult, wo
 	var needs, active, failed []string
 	var failReason, failFix string
 	for _, worker := range workers {
-		w := c.observeTask(ctx, taskID{session: worker, latest: true}).result
+		obs := c.observeTask(ctx, taskID{session: worker, latest: true})
+		w := obs.result
+		if obs.readFailed {
+			// An unread worker may still be working, whichever attempt started
+			// it, so the task cannot be reported done or failed from it.
+			active = append(active, fmt.Sprintf("%s (could not be read: %s)", worker, w.Reason))
+			continue
+		}
 		switch w.Status {
 		case taskStatusNeedsInput:
 			needs = append(needs, worker)
@@ -869,7 +876,16 @@ func evaluateTaskTurn(sess taskSession, conv *taskConversation, turnID string, l
 	case turnID != "":
 		idx = conv.findTurn(turnID)
 	case latest && len(conv.Turns) > 0:
+		// The turn running now is what the worker is doing; a later queued
+		// follow-up waits behind it. Preferring it keeps a pending approval on
+		// it visible as needs_input instead of hiding it behind "queued".
 		idx = len(conv.Turns) - 1
+		for i := len(conv.Turns) - 1; i >= 0; i-- {
+			if conv.Turns[i].State == "running" {
+				idx = i
+				break
+			}
+		}
 	case len(conv.Turns) > 0 && !conv.HasMoreBefore:
 		idx = 0
 	}

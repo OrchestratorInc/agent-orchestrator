@@ -1149,3 +1149,51 @@ func TestTaskStatusRetrySupersedesAnEarlierAttemptsFailedWorker(t *testing.T) {
 		t.Fatalf("sessionIds = %v", res["sessionIds"])
 	}
 }
+
+// An earlier attempt's worker that cannot be read may still be working, so the
+// task is not reported done even though the retry and its worker finished.
+func TestTaskStatusUnreadEarlierWorkerKeepsTheTaskRunning(t *testing.T) {
+	d := newTaskDaemon(t)
+	for _, id := range []string{"repo-orchestrator", "repo-4"} {
+		d.set("GET /api/v1/sessions/"+id, 200, `{"session":{"id":"`+id+`","harness":"claude-code","mode":"chat","provisionState":"ready","activity":{"state":"waiting_input"}}}`)
+	}
+	d.set("GET /api/v1/sessions/repo-3", 503, `{"error":"unavailable","code":"TEMPORARY","message":"try again"}`)
+	d.set("GET /api/v1/sessions/repo-orchestrator/conversation", 200, `{"turns":[
+		{"id":"t1","state":"failed"},
+		{"id":"t2","state":"completed","retryOfTurnId":"t1"}],"activities":[
+		{"id":"a1","turnId":"t1","activityKind":"ao_action","status":"completed","detail":{"action":"session.spawned","targetSessionId":"repo-3"}},
+		{"id":"a2","turnId":"t2","activityKind":"ao_action","status":"completed","detail":{"action":"session.spawned","targetSessionId":"repo-4"}}]}`)
+	d.set("GET /api/v1/sessions/repo-4/conversation", 200, `{"turns":[{"id":"w1","state":"completed"}]}`)
+
+	out, _, err := executeCLI(t, fakeClockDeps(), "task", "status", "repo-orchestrator:t1", "--json")
+	if err != nil {
+		t.Fatalf("exit = %d (%v), want 0", ExitCode(err), err)
+	}
+	res := decodeTaskResult(t, out)
+	if res["status"] != "running" || !strings.Contains(res["reason"].(string), "repo-3 (could not be read") {
+		t.Fatalf("result = %v", res)
+	}
+}
+
+// A worker's running turn with a pending approval is reported as needs_input
+// even when a queued follow-up turn comes after it.
+func TestTaskStatusWorkerApprovalBeforeAQueuedFollowUp(t *testing.T) {
+	d := newTaskDaemon(t)
+	for _, id := range []string{"repo-orchestrator", "repo-3"} {
+		d.set("GET /api/v1/sessions/"+id, 200, `{"session":{"id":"`+id+`","harness":"claude-code","mode":"chat","provisionState":"ready","activity":{"state":"active"}}}`)
+	}
+	d.set("GET /api/v1/sessions/repo-orchestrator/conversation", 200, `{"turns":[{"id":"t2","state":"completed"}],"activities":[
+		{"id":"a1","turnId":"t2","activityKind":"ao_action","status":"completed","detail":{"action":"session.spawned","targetSessionId":"repo-3"}}]}`)
+	d.set("GET /api/v1/sessions/repo-3/conversation", 200, `{"turns":[
+		{"id":"w1","state":"running"},
+		{"id":"w2","state":"queued"}],"activities":[
+		{"id":"p1","turnId":"w1","activityKind":"approval","status":"pending"}]}`)
+
+	out, _, err := executeCLI(t, fakeClockDeps(), "task", "status", "repo-orchestrator:t2", "--json")
+	if got := ExitCode(err); got != 3 {
+		t.Fatalf("exit = %d (%v), want 3", got, err)
+	}
+	if res := decodeTaskResult(t, out); res["status"] != "needs_input" || !strings.Contains(res["reason"].(string), "repo-3") {
+		t.Fatalf("result = %v", res)
+	}
+}
