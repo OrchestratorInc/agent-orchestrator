@@ -297,6 +297,7 @@ var shippedMigrations = map[int64]string{
 	20261126171748993: "20261126171748993_add_session_moved_to.sql",
 	20261126171749183: "20261126171749183_add_session_move_conversation_placed.sql",
 	20261126171749354: "20261126171749354_add_session_move_started.sql",
+	20261127090000000: "20261127090000000_agent_accounts_antigravity.sql",
 }
 
 // burnedVersion reports version numbers that must never be (re)used: they

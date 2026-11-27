@@ -4819,7 +4819,7 @@ type AgentAccountUsageQuery struct {
 // AgentAccountResponse is one account with its latest readings.
 type AgentAccountResponse struct {
 	ID       string                      `json:"id"`
-	Provider domain.AgentAccountProvider `json:"provider" enum:"claude,codex"`
+	Provider domain.AgentAccountProvider `json:"provider" enum:"claude,codex,antigravity"`
 	// Device marks the computer's own login, which AO launches with the CLI's
 	// config folder untouched.
 	Device bool `json:"device"`
@@ -4860,7 +4860,7 @@ type AgentAccountsResponse struct {
 // background and the app follows it as a UI login (its authOperationId). A
 // setup token is saved at once.
 type StartAgentAccountLoginRequest struct {
-	Provider domain.AgentAccountProvider `json:"provider" enum:"claude,codex"`
+	Provider domain.AgentAccountProvider `json:"provider" enum:"claude,codex,antigravity"`
 	// Method is the sign-in method; Secret its credential when it takes one
 	// (a setup token, an OpenAI API key or access token).
 	Method string `json:"method,omitempty" enum:"browser,console,sso,setup_token,device_code,api_key,access_token"`
@@ -4895,7 +4895,7 @@ type ReplaceAgentAccountAPIKeyRequest struct {
 type StartAgentAccountLoginResponse struct {
 	// OperationID verifies or cancels the sign-in; empty when Account is set.
 	OperationID string                      `json:"operationId,omitempty"`
-	Provider    domain.AgentAccountProvider `json:"provider" enum:"claude,codex"`
+	Provider    domain.AgentAccountProvider `json:"provider" enum:"claude,codex,antigravity"`
 	// ShellTerminal is a sign-in running in a terminal. AuthOperationID is one
 	// running in the background, read and answered through the harness's
 	// /auth/operations routes. Account is the account a setup token saved.
@@ -4953,8 +4953,9 @@ type AgentAccountUsageByModel struct {
 
 // SessionAgentAccountsResponse is the account a session uses per provider.
 type SessionAgentAccountsResponse struct {
-	Claude string `json:"claude,omitempty"`
-	Codex  string `json:"codex,omitempty"`
+	Claude      string `json:"claude,omitempty"`
+	Codex       string `json:"codex,omitempty"`
+	Antigravity string `json:"antigravity,omitempty"`
 }
 
 // SwitchSessionAgentAccountRequest moves a session to another account.

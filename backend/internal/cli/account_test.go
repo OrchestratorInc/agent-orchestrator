@@ -112,6 +112,18 @@ func TestAccountListFiltersByAgent(t *testing.T) {
 	}
 }
 
+func TestAccountListFiltersAgyAccounts(t *testing.T) {
+	for _, agent := range []string{"agy", "antigravity"} {
+		out, _, err := runAccountCLI(t, "completed", "account", "ls", "--agent", agent, "--json")
+		if err != nil {
+			t.Fatalf("account ls --agent %s: %v", agent, err)
+		}
+		if strings.Contains(out, "device-claude") || strings.Contains(out, "device-codex") {
+			t.Fatalf("another agent's account listed under --agent %s:\n%s", agent, out)
+		}
+	}
+}
+
 func TestAccountListTellsOrganizationsApart(t *testing.T) {
 	accounts := []agentAccount{
 		{ID: "acme-1", Provider: "claude", Email: "dev@example.com", Plan: "team", SignedIn: true, OrgID: "aaaaaaaa-1111", OrgName: "Acme"},
@@ -183,7 +195,7 @@ func TestAccountShowDefaultsToThisSession(t *testing.T) {
 	if err != nil {
 		t.Fatalf("account show: %v", err)
 	}
-	if out != "claude-code: work\ncodex: device-codex\n" {
+	if out != "claude-code: work\ncodex: device-codex\nagy: -\n" {
 		t.Fatalf("unexpected output:\n%q", out)
 	}
 }

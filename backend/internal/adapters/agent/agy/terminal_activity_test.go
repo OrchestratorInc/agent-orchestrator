@@ -41,6 +41,36 @@ func TestInspectTerminalSurface(t *testing.T) {
 	}
 }
 
+// agyFrame is an Antigravity CLI 1.5 screen: a notice, the composer between
+// its rules, then the footer.
+func agyFrame(composer, footer string) string {
+	return strings.Join([]string{" ┃ Auto is now the default agent mode", " ┃ esc to dismiss", agyTestRule, composer, agyTestRule, footer}, "\n")
+}
+
+// TestInspectTerminalSurfaceReadsAModePlaceholderAsEmpty: Antigravity CLI 1.5
+// shows its agent mode's hint in an empty composer (captured from 1.5.18). It
+// is an idle prompt, so account moves and interface switches can drain to it.
+// A draft that only mentions a mode stays a draft.
+func TestInspectTerminalSurfaceReadsAModePlaceholderAsEmpty(t *testing.T) {
+	p := New()
+	idleFooter := "? for shortcuts                auto · Gemini 3.8 Flash · medium"
+	for _, hint := range []string{
+		"Auto mode: edits & safe commands auto-approved (shift+tab to cycle)",
+		"Plan mode: research & plan only (shift+tab to cycle)",
+		"Accept-edits mode: file edits auto-approved (shift+tab to cycle)",
+		"Best-of-N mode: parallel arms, /model to pick models (shift+tab to cycle)",
+	} {
+		got := p.InspectTerminalSurface(agyFrame("> "+hint, idleFooter))
+		if got.Work != ports.TerminalSurfaceWorkIdle || got.Composer != ports.TerminalComposerEmpty {
+			t.Errorf("%q: work=%v composer=%v, want idle with an empty composer", hint, got.Work, got.Composer)
+		}
+	}
+	draft := p.InspectTerminalSurface(agyFrame("> Plan mode: write the migration first", "                Gemini 3.8 Flash · medium"))
+	if draft.Composer != ports.TerminalComposerDraft {
+		t.Errorf("a draft mentioning a mode read as %v, want a draft", draft.Composer)
+	}
+}
+
 // Message delivery feeds TerminalActivityDetector the raw output stream, which
 // never shows Antigravity's composer. Declaring it would stall delivery.
 func TestPluginDoesNotDeclareTheRawOutputDetector(t *testing.T) {

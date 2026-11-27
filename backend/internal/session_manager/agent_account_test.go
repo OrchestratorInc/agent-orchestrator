@@ -24,6 +24,7 @@ type transitionAccounts struct {
 	bindErr         error
 	launchOverrides []string
 	onLaunchWith    func() // runs as SessionLaunchEnvWith resolves, outside the lock
+	homeKey         string // the folder variable; CLAUDE_CONFIG_DIR when empty
 }
 
 func newTransitionAccounts(log *[]string) *transitionAccounts {
@@ -36,7 +37,11 @@ func newTransitionAccounts(log *[]string) *transitionAccounts {
 
 func (a *transitionAccounts) env(accountID string) map[string]string {
 	if home := a.homes[accountID]; home != "" {
-		return map[string]string{"CLAUDE_CONFIG_DIR": home}
+		key := a.homeKey
+		if key == "" {
+			key = "CLAUDE_CONFIG_DIR"
+		}
+		return map[string]string{key: home}
 	}
 	return map[string]string{}
 }
@@ -264,6 +269,105 @@ func TestAccountTransitionRefusesAnUnusableOrUnchangedAccountBeforeClaiming(t *t
 	}
 	if len(*log) != 0 {
 		t.Fatalf("controllers touched: %v", *log)
+	}
+}
+
+// An imported agy session resumes in the import's own folder whatever the
+// account, so a move to a saved account in another folder is refused before
+// the session is claimed. The computer's own login, which agy uses there, and
+// an account whose folder is the import's stay targets.
+func TestAccountTransitionRefusesMovingAnImportedAgySessionOutOfItsFolder(t *testing.T) {
+	ctx := context.Background()
+	manager, store, _, _, accounts, log := newAccountTransitionManager(t, domain.SessionModeTUI)
+	accounts.homeKey = "GEMINI_HOME"
+	accounts.homes["acct-import"] = "/imports/agy"
+	rec := store.sessions["session-1"]
+	rec.Harness = domain.HarnessAgy
+	rec.Metadata.ProviderConversationID = "native-1"
+	rec.Metadata.ImportSource = &domain.SessionImportSource{NativeID: "native-1", ConfigDir: "/imports/agy"}
+	store.sessions[rec.ID] = rec
+
+	if _, err := manager.StartAccountTransition(ctx, rec.ID, "acct-b", domain.SessionInterfaceTransitionDrain); !errors.Is(err, ports.ErrAgentAccountImportPinned) {
+		t.Fatalf("move out of the import's folder: err = %v, want ErrAgentAccountImportPinned", err)
+	}
+	if _, active, _ := store.GetActiveSessionInterfaceTransition(ctx, rec.ID); active {
+		t.Fatal("a refused move claimed the session")
+	}
+	if len(*log) != 0 {
+		t.Fatalf("controllers touched: %v", *log)
+	}
+	for _, target := range []string{"device-claude", "acct-import"} {
+		if err := manager.refuseImportPinnedMove(ctx, rec, target); err != nil {
+			t.Fatalf("move to %s refused: %v", target, err)
+		}
+	}
+	// A session that left the imported conversation launches in the account's
+	// folder again, so it moves like any other.
+	for _, conversation := range []string{"", "fresh-2"} {
+		rec.Metadata.ProviderConversationID = conversation
+		if err := manager.refuseImportPinnedMove(ctx, rec, "acct-b"); err != nil {
+			t.Fatalf("conversation %q: move refused: %v", conversation, err)
+		}
+	}
+}
+
+// An imported agy launch runs in the import's folder, which holds no account's
+// file sign-in: it signs in with the computer's own login, and the session
+// records that login rather than the account it was bound to. Only a launch
+// records it; building the environment, as a check made while the session's
+// agent still runs does, changes nothing.
+func TestImportedAgyLaunchRunsOnTheComputersLogin(t *testing.T) {
+	ctx := context.Background()
+	manager, store, _, _, accounts, _ := newAccountTransitionManager(t, domain.SessionModeTUI)
+	accounts.homeKey = "GEMINI_HOME"
+	rec := store.sessions["session-1"]
+	rec.Harness = domain.HarnessAgy
+	rec.Metadata.ProviderConversationID = "native-1"
+	rec.Metadata.ImportSource = &domain.SessionImportSource{NativeID: "native-1", ConfigDir: "/imports/agy"}
+	accounts.bound[rec.ID] = "acct-b"
+	accountEnv := func() map[string]string {
+		return map[string]string{"GEMINI_HOME": "/accounts/b", agyFileTokenEnv: "true"}
+	}
+
+	// A check's environment: the import's folder, the record and the account's
+	// sign-in left as they are.
+	env := accountEnv()
+	manager.applyImportedConfigEnv(ctx, rec, env)
+	if env["GEMINI_HOME"] != "/imports/agy" || env[agyFileTokenEnv] != "true" {
+		t.Fatalf("check env = %v, want the import's folder with the account's sign-in", env)
+	}
+	if got := accounts.boundTo(rec.ID); got != "acct-b" {
+		t.Fatalf("building an environment changed the binding to %q", got)
+	}
+
+	// An account move owns the binding while it runs, and commits its own target.
+	manager.setAccountOverride(rec.ID, "device-antigravity")
+	manager.recordImportedComputerLogin(ctx, rec)
+	manager.clearAccountOverride(rec.ID)
+	if got := accounts.boundTo(rec.ID); got != "acct-b" {
+		t.Fatalf("a launch inside an account move changed the binding to %q", got)
+	}
+
+	// A record that cannot change keeps the launch on the account it names.
+	accounts.bindErr = errors.New("store unavailable")
+	manager.recordImportedComputerLogin(ctx, rec)
+	env = accountEnv()
+	manager.applyImportedConfigEnv(ctx, rec, env)
+	if env[agyFileTokenEnv] != "true" || accounts.boundTo(rec.ID) != "acct-b" {
+		t.Fatalf("env = %v binding = %q, want the account it could not leave", env, accounts.boundTo(rec.ID))
+	}
+
+	// A launch records the computer's login first; its environment then drops
+	// the account's sign-in.
+	accounts.bindErr = nil
+	manager.recordImportedComputerLogin(ctx, rec)
+	if got := accounts.boundTo(rec.ID); got != "device-antigravity" {
+		t.Fatalf("binding = %q, want the computer's own login", got)
+	}
+	env = accountEnv()
+	manager.applyImportedConfigEnv(ctx, rec, env)
+	if _, set := env[agyFileTokenEnv]; set || env["GEMINI_HOME"] != "/imports/agy" {
+		t.Fatalf("launch env = %v, want the import's folder on the computer's login", env)
 	}
 }
 

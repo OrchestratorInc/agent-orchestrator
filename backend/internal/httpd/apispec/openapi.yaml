@@ -17449,6 +17449,7 @@ components:
           enum:
           - claude
           - codex
+          - antigravity
           type: string
         sameLoginAs:
           type: string
@@ -26057,6 +26058,8 @@ components:
       type: object
     SessionAgentAccountsResponse:
       properties:
+        antigravity:
+          type: string
         claude:
           type: string
         codex:
@@ -28275,6 +28278,7 @@ components:
           enum:
           - claude
           - codex
+          - antigravity
           type: string
         secret:
           type: string
@@ -28293,6 +28297,7 @@ components:
           enum:
           - claude
           - codex
+          - antigravity
           type: string
         shellTerminal:
           $ref: '#/components/schemas/CodexAccountLoginTerminalResponse'

@@ -21,6 +21,7 @@ import (
 
 	"github.com/google/uuid"
 
+	agyagent "github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/agy"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/binaryutil"
 	claudecodeagent "github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/claudecode"
 	codexagent "github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/codex"
@@ -783,11 +784,7 @@ func Run(buildVersion string) (retErr error) {
 		agentSvc.SetSavedDefaultSignIn(agentAccountSvc.DefaultSignIn)
 		agentSvc.SetSavedDefaultLaunchEnv(agentAccountSvc.DefaultLaunchEnv)
 		agentAccountSvc.SetDefaultChanged(func(p domain.AgentAccountProvider) {
-			harness := map[domain.AgentAccountProvider]domain.AgentHarness{
-				domain.AgentAccountProviderClaude: domain.HarnessClaudeCode,
-				domain.AgentAccountProviderCodex:  domain.HarnessCodex,
-			}[p]
-			if harness != "" {
+			if harness, ok := domain.AgentHarnessFor(p); ok {
 				agentSvc.InvalidateAgentAuthentication(string(harness))
 			}
 		})
@@ -2083,7 +2080,7 @@ func (l accountUILogin) CancelAccountLogin(ctx context.Context, harness domain.A
 	return err
 }
 
-// newAgentAccounts builds the Claude Code and Codex account catalog. Each
+// newAgentAccounts builds the Claude Code, Codex and Antigravity account catalog. Each
 // account is a config folder under the state dir; "This computer" is the CLI's
 // own folder, which AO never changes the login of.
 func newAgentAccounts(cfg config.Config, store *sqlite.Store, codexHome string, codexAccounts ports.CodexAccountClientFactory, log *slog.Logger) *agentaccounts.Service {
@@ -2104,6 +2101,9 @@ func newAgentAccounts(cfg config.Config, store *sqlite.Store, codexHome string, 
 			},
 		},
 		&agentaccount.Codex{Binary: codexagent.New().ResolveBinary, Accounts: codexAccounts, DeviceHome: codexHome},
+	}
+	if geminiHome, err := agyagent.GeminiHome(nil); err == nil {
+		providers = append(providers, &agentaccount.Antigravity{Binary: agyagent.New().ResolveBinary, DeviceHome: geminiHome})
 	}
 	accounts := agentaccounts.New(store, providers, filepath.Join(cfg.StateDir, "agent-accounts"), nil, log)
 	// An account's API key is checked with its provider before it is saved.

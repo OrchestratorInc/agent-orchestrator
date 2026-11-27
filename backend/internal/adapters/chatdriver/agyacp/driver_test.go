@@ -617,6 +617,11 @@ func TestCLISignedInFollowsAgyModelsExitStatus(t *testing.T) {
 	if check(script("out", "echo 'Please sign in' >&2; exit 1")) {
 		t.Error("a failing agy models is no sign-in")
 	}
+	// An account session's folder is checked through agy's own flag.
+	inFolder := script("folder", `[ "$1" = --gemini_dir=/accounts/a1 ] && [ "$2" = models ]`)
+	if !cliSignedIn(func(context.Context) (string, error) { return inFolder, nil })(context.Background(), map[string]string{"GEMINI_HOME": "/accounts/a1"}) {
+		t.Error("the session's GEMINI_HOME was not passed as agy's folder flag")
+	}
 	if cliSignedIn(nil)(context.Background(), nil) {
 		t.Error("no CLI is no sign-in")
 	}

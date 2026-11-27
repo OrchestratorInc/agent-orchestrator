@@ -129,6 +129,14 @@ type Plan struct {
 	// codeRejected is the text the CLI shows when it rejects that code.
 	codePrompt   string
 	codeRejected string
+	// accountLogin lets a guided method add an agent account: for the account
+	// folder's launch environment it gives the arguments that point the CLI at
+	// that folder, and the check that its sign-in landed there (the CLI's own
+	// auth probe reads the computer's login, not the folder's).
+	accountLogin func(env map[string]string) (args []string, signedIn func(context.Context) bool, ok bool)
+	// accountEnv is the account folder's environment a guided account login's
+	// terminal runs with.
+	accountEnv map[string]string
 }
 
 // currentGOOS is the platform guidedPlatforms is checked against; tests
@@ -426,6 +434,10 @@ func (s *Service) startReserved(ctx context.Context, plan Plan) (StartResult, er
 	if plan.AgentID == "prime-agent" && s.dataDir != "" {
 		// Sign in to the profile sessions run with, not ~/.prime/agent.
 		primeagent.New().AugmentRuntimeEnv(env, s.dataDir)
+	}
+	// A guided account login points the CLI at the account's own folder.
+	for key, value := range plan.accountEnv {
+		env[key] = value
 	}
 	if len(env) > 0 {
 		input.Env = env

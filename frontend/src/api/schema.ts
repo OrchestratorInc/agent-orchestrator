@@ -5846,7 +5846,7 @@ export interface components {
             /** @enum {string} */
             problemKind?: "slow" | "rate_limited" | "unavailable" | "cli_missing" | "other_login" | "other_org";
             /** @enum {string} */
-            provider: "claude" | "codex";
+            provider: "claude" | "codex" | "antigravity";
             sameLoginAs?: string;
             signedIn: boolean;
         };
@@ -9170,6 +9170,7 @@ export interface components {
             recent: components["schemas"]["SessionStepResponse"][];
         };
         SessionAgentAccountsResponse: {
+            antigravity?: string;
             claude?: string;
             codex?: string;
         };
@@ -10034,7 +10035,7 @@ export interface components {
             method?: "browser" | "console" | "sso" | "setup_token" | "device_code" | "api_key" | "access_token";
             name?: string;
             /** @enum {string} */
-            provider: "claude" | "codex";
+            provider: "claude" | "codex" | "antigravity";
             secret?: string;
         };
         StartAgentAccountLoginResponse: {
@@ -10042,7 +10043,7 @@ export interface components {
             authOperationId?: string;
             operationId?: string;
             /** @enum {string} */
-            provider: "claude" | "codex";
+            provider: "claude" | "codex" | "antigravity";
             shellTerminal?: components["schemas"]["CodexAccountLoginTerminalResponse"];
         };
         StartAgentAuthResponse: {

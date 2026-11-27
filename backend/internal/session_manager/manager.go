@@ -4332,6 +4332,7 @@ func (m *Manager) relaunchSessionWithPolicyAndGeneration(ctx context.Context, op
 			ctx, operation, rec, project, ws, requireNativeHistory, false, reservedGeneration, historyPolicy,
 		)
 	}
+	m.recordImportedComputerLogin(ctx, rec)
 
 	var env map[string]string
 	preparedImportEnv := rec.Metadata.ImportSource != nil && rec.NeedsImportResume()

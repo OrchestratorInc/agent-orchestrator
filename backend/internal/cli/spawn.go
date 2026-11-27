@@ -281,7 +281,7 @@ func newSpawnCommand(ctx *commandContext) *cobra.Command {
 	f.StringVar(&opts.prompt, "prompt", "", "Initial prompt for the agent")
 	f.StringVar(&opts.model, "model", "", "Agent model override for this session only (e.g. sonnet, gpt-5.6-sol); overrides project/role config without changing it")
 	f.StringVar(&opts.output, "output", "", "Deliverable for the session: artifact asks the agent to write a file in its artifact directory instead of opening a PR (default: ordinary task)")
-	f.StringVar(&opts.account, "account", "", "Claude Code or Codex account id to start on, from ao account ls; empty uses the agent's default account")
+	f.StringVar(&opts.account, "account", "", "Claude Code, Codex or Antigravity (agy) account id to start on, from ao account ls; empty uses the agent's default account")
 	f.StringVar(&opts.effort, "effort", "", "Reasoning effort override for this session only (e.g. low, medium, high); empty defers to the agent/model default")
 	f.StringVar(&opts.permission, "permission", "", "Permission mode for this session only: default, accept-edits, auto, or bypass-permissions; a same-project parent cannot exceed the project's role setting, and an orchestrator cannot exceed its own mode when the project sets none")
 	f.StringVar(&opts.issue, "issue", "", "Issue id to associate with the session")

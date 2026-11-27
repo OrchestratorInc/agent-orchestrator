@@ -13,9 +13,10 @@ export type ProviderAccounts = {
 	checkedAt: string | null;
 };
 
+// Antigravity accounts have no limits AO reads, so they have no section here.
 const PROVIDER_ORDER: AgentAccountProvider[] = ["codex", "claude"];
 
-export const PROVIDER_HARNESS: Record<AgentAccountProvider, string> = { codex: "codex", claude: "claude-code" };
+export const PROVIDER_HARNESS: Record<AgentAccountProvider, string> = { codex: "codex", claude: "claude-code", antigravity: "agy" };
 
 /** Each provider's subscription accounts. A per-token account has no limits, so it is left out. */
 export function groupAccounts(accounts: readonly AgentAccount[]): ProviderAccounts[] {

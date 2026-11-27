@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"sync"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
@@ -68,6 +69,9 @@ func (m *Manager) StartAccountTransition(
 	if err := m.agentAccounts.ValidateAccount(ctx, rec.Harness, accountID); err != nil {
 		return domain.SessionInterfaceTransition{}, err
 	}
+	if err := m.refuseImportPinnedMove(ctx, rec, accountID); err != nil {
+		return domain.SessionInterfaceTransition{}, err
+	}
 	nativeID, err := m.handoffNativeConversationID(ctx, rec)
 	if err != nil {
 		return domain.SessionInterfaceTransition{}, err
@@ -100,6 +104,9 @@ func (m *Manager) preflightAccountTarget(
 	transition domain.SessionInterfaceTransition,
 ) error {
 	if err := m.agentAccounts.ValidateAccount(ctx, rec.Harness, transition.TargetAccountID); err != nil {
+		return err
+	}
+	if err := m.refuseImportPinnedMove(ctx, rec, transition.TargetAccountID); err != nil {
 		return err
 	}
 	agent, ok := m.agents.Agent(rec.Harness)
@@ -143,6 +150,78 @@ func (m *Manager) preflightAccountTarget(
 		return m.chat.PreflightChat(ctx, rec.Harness, config.Permissions)
 	}
 	return m.preflightTerminalLaunch(ctx, agent, rec, project, transition.NativeConversationID, env)
+}
+
+// agyFileTokenEnv makes agy keep its sign-in in a file of its --gemini_dir: an
+// Antigravity account's launch sets it, so agy signs in as the account.
+const agyFileTokenEnv = "AGY_CLI_FORCE_FILE_TOKEN_STORAGE" //nolint:gosec // a variable name, not a credential
+
+// refuseImportPinnedMove refuses moving an imported agy session to a saved
+// account whose folder is not the import's own: agy resumes an import with the
+// import's folder as its --gemini_dir, whatever the account, so the session
+// would record an account its agent never signs in as. A move to the
+// computer's own login is allowed; that login is the one agy uses there. Once
+// the session runs another conversation than the imported one, its launches
+// use the account's folder again, as applyImportedConfigEnv decides.
+func (m *Manager) refuseImportPinnedMove(ctx context.Context, rec domain.SessionRecord, accountID string) error {
+	if rec.Harness != domain.HarnessAgy || rec.Metadata.ImportSource == nil ||
+		rec.Metadata.ProviderConversationID != importedNativeRef(rec.Metadata.ImportSource).NativeSessionID {
+		return nil
+	}
+	env, err := m.agentAccounts.SessionLaunchEnvWith(ctx, rec.ID, accountID)
+	if err != nil {
+		return err
+	}
+	home := strings.TrimSpace(env["GEMINI_HOME"])
+	if home == "" || sameDirectory(home, importedNativeRef(rec.Metadata.ImportSource).ConfigDir) {
+		return nil
+	}
+	return ports.ErrAgentAccountImportPinned
+}
+
+// recordImportedComputerLogin records the computer's own login for an imported
+// agy session whose agent is about to launch in the import's own folder in
+// place of its account's: that folder holds no account's file sign-in, so agy
+// signs in there with the computer's login. Only an agent launch calls it,
+// before it builds the launch's environment; checks made while the session's
+// agent still runs change nothing, and an account move commits its own target
+// once that agent is live. When the record cannot change, the launch keeps the
+// account's sign-in (see dropImportedAccountSignIn) and the next one tries again.
+func (m *Manager) recordImportedComputerLogin(ctx context.Context, rec domain.SessionRecord) {
+	if m.agentAccounts == nil || rec.ID == "" || rec.Harness != domain.HarnessAgy || rec.Metadata.ImportSource == nil || m.accountOverride(rec.ID) != "" {
+		return
+	}
+	device := domain.DeviceAgentAccountID(domain.AgentAccountProviderAntigravity)
+	current, err := m.agentAccounts.SessionAccountID(ctx, rec.ID, rec.Harness)
+	if err == nil && (current == "" || current == device) {
+		return
+	}
+	if err == nil {
+		// Only an account whose folder the import's replaces: refuseImportPinnedMove
+		// is exactly that test.
+		if !errors.Is(m.refuseImportPinnedMove(ctx, rec, current), ports.ErrAgentAccountImportPinned) {
+			return
+		}
+		err = m.agentAccounts.CommitSession(ctx, rec.ID, rec.Harness, device)
+	}
+	if err != nil {
+		m.logger.Warn("imported agy session kept on its account: the computer's login could not be recorded", "session", rec.ID, "error", err)
+	}
+}
+
+// dropImportedAccountSignIn drops the account's file-storage switch from an
+// imported agy launch that runs in the import's own folder, once the session
+// records the computer's login there. While the record still names an account,
+// the switch stays: agy asks for that account's sign-in rather than run on the
+// computer's login unrecorded. It only reads the record.
+func (m *Manager) dropImportedAccountSignIn(ctx context.Context, rec domain.SessionRecord, env map[string]string) {
+	if m.agentAccounts != nil && rec.ID != "" {
+		current, err := m.agentAccounts.SessionAccountID(ctx, rec.ID, rec.Harness)
+		if err != nil || (current != "" && current != domain.DeviceAgentAccountID(domain.AgentAccountProviderAntigravity)) {
+			return
+		}
+	}
+	deleteProtectedEnv(env, agyFileTokenEnv, envKeysCaseInsensitive)
 }
 
 // markAccountSwitch tells the conversation that a move which stopped the turn

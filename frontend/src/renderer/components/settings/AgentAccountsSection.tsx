@@ -3,7 +3,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import type { components } from "../../../api/schema";
 import { getAgentUILogin, type AgentLoginSnapshot } from "../../hooks/useAgentAuth";
-import { agentAccountLabel, agentAccountPerToken as perToken, agentAccountProviderFor, agentAccountProviderNames, agentAccountUsable, describeAccountProblem, useAgentAccountActions, useAgentAccounts, useAgentAccountUsage, withoutSameLogins, type AgentAccount, type AgentAccountLimitWindow, type AgentAccountLogin, type AgentAccountLoginRequest, type AgentAccountProvider } from "../../hooks/useAgentAccounts";
+import { agentAccountLabel, agentAccountPerToken as perToken, agentAccountProviderFor, agentAccountProviderNames, agentAccountProviderReadsLimits, agentAccountUsable, describeAccountProblem, useAgentAccountActions, useAgentAccounts, useAgentAccountUsage, withoutSameLogins, type AgentAccount, type AgentAccountLimitWindow, type AgentAccountLogin, type AgentAccountLoginRequest, type AgentAccountProvider } from "../../hooks/useAgentAccounts";
 import type { TerminalSessionState } from "../../hooks/useTerminalSession";
 import { apiErrorCode, apiErrorDetails } from "../../lib/api-client";
 import { baseUrlForHost } from "../../lib/host-clients";
@@ -28,7 +28,7 @@ type LoginMethod = components["schemas"]["AgentLoginMethod"];
 type AccountKind = AgentAccount["kind"];
 
 /** The harness whose CLI signs in an account of each provider. */
-const providerHarness: Record<AgentAccountProvider, "claude-code" | "codex"> = { claude: "claude-code", codex: "codex" };
+const providerHarness: Record<AgentAccountProvider, "claude-code" | "codex" | "agy"> = { claude: "claude-code", codex: "codex", antigravity: "agy" };
 
 /** Claude Code's API key method, which AO saves as an account's own key. */
 const API_KEY_METHOD = "env_ANTHROPIC_API_KEY";
@@ -44,6 +44,9 @@ const accountMethods: Record<AgentAccountProvider, { add: string[] } & Partial<R
 		add: ["browser", "device_code", "api_key", "access_token"],
 		subscription: ["browser", "device_code", "access_token"], metered: ["api_key"],
 	},
+	// agy's own login menu, walked in the background like its computer login.
+	// Where agy offers only its native sign-in (Linux), accounts use a terminal.
+	antigravity: { add: ["browser", "cloud_project"], subscription: ["browser", "cloud_project"] },
 };
 
 // One sign-in per host and provider, kept outside the page so leaving Settings
@@ -365,7 +368,8 @@ export function AgentAccountsPanel({ provider, cliLogin: cliLoginControls, hostI
 				onReplaceKey={signInReady(account) ? () => openSignIn(account) : undefined}
 				onRemove={() => { setError(""); setNeedsDeveloperMode(false); setRemoving(account); }}
 			/>; })}
-			{!hostId && hasMultipleAccounts ? <AccountHandoffRow /> : null}
+			{/* Moving at a usage limit needs the limits AO reads; it reads no Antigravity limits. */}
+			{!hostId && hasMultipleAccounts && agentAccountProviderReadsLimits(provider) ? <AccountHandoffRow /> : null}
 		</HarnessDetailGroup>
 		{removing ? <ConfirmDialog open destructive
 			title={t("settings.agentAccounts.remove")}

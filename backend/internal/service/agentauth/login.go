@@ -177,6 +177,21 @@ type loginOperation struct {
 	// is never handed it to recover, so its panel cannot show, finish or
 	// cancel another account's sign-in.
 	account bool
+	// accountSignedIn, on a guided account login, is the check that the
+	// account folder holds a sign-in; it stands in for the harness's own auth
+	// probe, which reads the computer's login. plan is the plan the hidden
+	// terminal started with, so a restart opens the same folder.
+	accountSignedIn func(context.Context) bool
+	plan            Plan
+}
+
+// signedIn is the sign-in check of op: its account folder's, or the
+// harness's own login with any AO-saved key held back.
+func (s *Service) signedIn(ctx context.Context, op *loginOperation) bool {
+	if op.accountSignedIn != nil {
+		return op.accountSignedIn(ctx)
+	}
+	return s.probeOwnSignIn(ctx, op.snapshot.AgentID)
 }
 
 // StartLogin runs a fixed native login or saves a reviewed provider key.
@@ -223,6 +238,11 @@ func AccountLoginMethod(agentID, method string) bool {
 	}
 	if _, ok := directKeyWriter(agentID); ok {
 		return false
+	}
+	// A guided method adds an account only where it runs, and only for a
+	// harness that can point it at the account's folder and see it land there.
+	if plan := planByAgentID[agentID]; plan.guidedMethods[method] != nil {
+		return plan.guidedSupported() && plan.accountLogin != nil
 	}
 	args, _, err := loginArgs(agentID, method)
 	return err == nil && len(args) > 0
@@ -271,10 +291,10 @@ func (s *Service) StartLoginWithOptions(ctx context.Context, agentID, method, se
 		return s.startNativeLogin(ctx, agentID)
 	}
 	if steps, ok := planByAgentID[agentID].guidedMethods[method]; ok && planByAgentID[agentID].guidedSupported() {
-		if secret != "" || model != "" || opts.sharesDevice() || account {
+		if secret != "" || model != "" || opts.sharesDevice() {
 			return LoginSnapshot{}, apierr.Invalid("AGENT_AUTH_SECRET_INVALID", "This sign-in method does not accept a credential or setting.", nil)
 		}
-		return s.startHiddenLogin(ctx, agentID, method, steps)
+		return s.startHiddenLogin(ctx, agentID, method, steps, opts.AccountEnv)
 	}
 	args, needsSecret, err := loginArgs(agentID, method)
 	if err != nil {
@@ -496,16 +516,31 @@ type guidedAuthTerminal interface {
 }
 
 func (s *Service) startNativeLogin(ctx context.Context, agentID string) (LoginSnapshot, error) {
-	return s.startHiddenLogin(ctx, agentID, "native", nil)
+	return s.startHiddenLogin(ctx, agentID, "native", nil, nil)
 }
 
 // startHiddenLogin runs the plan's native command in a hidden terminal. The
 // "native" method lets the user answer the CLI's own prompts from the panel;
 // a guided method walks the CLI's menu with its reviewed steps instead.
-func (s *Service) startHiddenLogin(ctx context.Context, agentID, method string, steps []guidedStep) (LoginSnapshot, error) {
+func (s *Service) startHiddenLogin(ctx context.Context, agentID, method string, steps []guidedStep, accountEnv map[string]string) (LoginSnapshot, error) {
 	plan, ok := planByAgentID[agentID]
 	if !ok || len(plan.command) == 0 || plan.LaunchMode != LaunchTerminal {
 		return LoginSnapshot{}, apierr.Invalid("AGENT_AUTH_METHOD_UNSUPPORTED", "This harness has no native login command.", nil)
+	}
+	// An account login runs the CLI in the account's folder and finishes when
+	// its sign-in lands there.
+	var accountSignedIn func(context.Context) bool
+	if accountEnv != nil {
+		var args []string
+		pointed := false
+		if plan.accountLogin != nil {
+			args, accountSignedIn, pointed = plan.accountLogin(accountEnv)
+		}
+		if !pointed {
+			return LoginSnapshot{}, apierr.Invalid("AGENT_AUTH_ACCOUNT_INVALID", "An account login needs its account folder.", nil)
+		}
+		plan.command = append(append([]string(nil), plan.command...), args...)
+		plan.accountEnv = accountEnv
 	}
 	terminal, ok := s.terminals.(guidedAuthTerminal)
 	if !ok {
@@ -546,7 +581,10 @@ func (s *Service) startHiddenLogin(ctx context.Context, agentID, method string, 
 		// Only a guided method finishes while the CLI runs. Plain native
 		// sign-in runs until the user leaves the CLI, so an existing sign-in
 		// cannot close it before its menu is used (to switch accounts, say).
-		keepsRunning: len(steps) > 0 && plan.signInKeepsRunning && plan.guidedSupported(),
+		keepsRunning:    len(steps) > 0 && plan.signInKeepsRunning && plan.guidedSupported(),
+		account:         accountEnv != nil,
+		accountSignedIn: accountSignedIn,
+		plan:            plan,
 	}
 	if method == "native" {
 		op.snapshot.NativePrompt = "waiting"
@@ -600,7 +638,7 @@ func (s *Service) watchNativeLogin(ctx context.Context, terminal guidedAuthTermi
 			// exited before every reviewed step was sent, or after a failed
 			// key send, fails without probing: an earlier sign-in (a Google
 			// account in the Keychain, say) is not the one the user chose.
-			found := len(op.guidedSteps) == 0 && !op.guidedStuck && s.probeOwnSignIn(ctx, op.snapshot.AgentID)
+			found := len(op.guidedSteps) == 0 && !op.guidedStuck && s.signedIn(ctx, op)
 			s.mu.Lock()
 			if op.snapshot.Status == "running" {
 				op.snapshot.Status = "failed"
@@ -740,7 +778,7 @@ func (s *Service) observeHiddenLogin(ctx context.Context, terminal guidedAuthTer
 		return false
 	}
 	op.polls++
-	if op.polls%signInPollTicks != 0 || !s.signInConfirmedWhileRunning(ctx, op.snapshot.AgentID) {
+	if op.polls%signInPollTicks != 0 || !s.signInConfirmedWhileRunning(ctx, op) {
 		return false
 	}
 	s.mu.Lock()
@@ -848,9 +886,14 @@ func (s *Service) restartWhenSignedOut(ctx context.Context, terminal guidedAuthT
 		return false
 	}
 	probeCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
-	state := s.nativeSignInState(probeCtx, op.snapshot.AgentID)
+	var signedIn bool
+	if op.accountSignedIn != nil {
+		signedIn = op.accountSignedIn(probeCtx)
+	} else {
+		signedIn = nativeSignInFound(s.nativeSignInState(probeCtx, op.snapshot.AgentID))
+	}
 	cancel()
-	if nativeSignInFound(state) {
+	if signedIn {
 		op.restartAt = time.Now().Add(restartCheckDelay)
 		return false
 	}
@@ -861,8 +904,8 @@ func (s *Service) restartWhenSignedOut(ctx context.Context, terminal guidedAuthT
 	cancelCleanup()
 	var apiError *apierr.Error
 	if err == nil || (errors.As(err, &apiError) && apiError.Kind == apierr.KindNotFound) {
-		plan := planByAgentID[op.snapshot.AgentID]
-		plan.hiddenTerminal = true
+		// The plan the login started with: an account login restarts in its folder.
+		plan := op.plan
 		var result StartResult
 		if result, err = s.startReserved(ctx, plan); err == nil {
 			s.mu.Lock()
@@ -891,8 +934,13 @@ func sleepCtx(ctx context.Context, d time.Duration) bool {
 
 // signInConfirmedWhileRunning probes a CLI that stays open after signing in.
 // The cheap probe runs first; only once it passes does the full check run,
-// which withholds AO's saved key so the key cannot satisfy it.
-func (s *Service) signInConfirmedWhileRunning(ctx context.Context, agentID string) bool {
+// which withholds AO's saved key so the key cannot satisfy it. An account
+// login checks its account folder instead.
+func (s *Service) signInConfirmedWhileRunning(ctx context.Context, op *loginOperation) bool {
+	if op.accountSignedIn != nil {
+		return op.accountSignedIn(ctx)
+	}
+	agentID := op.snapshot.AgentID
 	probeCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	state := s.nativeSignInState(probeCtx, agentID)
 	cancel()

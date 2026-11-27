@@ -11,12 +11,13 @@ type AgentAccountProvider string
 
 // Account providers and the harness each one launches.
 const (
-	AgentAccountProviderClaude AgentAccountProvider = "claude"
-	AgentAccountProviderCodex  AgentAccountProvider = "codex"
+	AgentAccountProviderClaude      AgentAccountProvider = "claude"
+	AgentAccountProviderCodex       AgentAccountProvider = "codex"
+	AgentAccountProviderAntigravity AgentAccountProvider = "antigravity"
 )
 
 // AgentAccountProviders lists every provider in display order.
-var AgentAccountProviders = []AgentAccountProvider{AgentAccountProviderClaude, AgentAccountProviderCodex}
+var AgentAccountProviders = []AgentAccountProvider{AgentAccountProviderClaude, AgentAccountProviderCodex, AgentAccountProviderAntigravity}
 
 // AgentAccountProviderFor reports the account provider behind a harness, or
 // false when the harness has no accounts.
@@ -26,6 +27,21 @@ func AgentAccountProviderFor(h AgentHarness) (AgentAccountProvider, bool) {
 		return AgentAccountProviderClaude, true
 	case HarnessCodex:
 		return AgentAccountProviderCodex, true
+	case HarnessAgy:
+		return AgentAccountProviderAntigravity, true
+	}
+	return "", false
+}
+
+// AgentHarnessFor is the harness that runs a provider's accounts.
+func AgentHarnessFor(p AgentAccountProvider) (AgentHarness, bool) {
+	switch p {
+	case AgentAccountProviderClaude:
+		return HarnessClaudeCode, true
+	case AgentAccountProviderCodex:
+		return HarnessCodex, true
+	case AgentAccountProviderAntigravity:
+		return HarnessAgy, true
 	}
 	return "", false
 }
@@ -51,7 +67,7 @@ const (
 )
 
 // AgentAccount is one login AO can launch a provider's CLI with. Home is the
-// CLI config folder (CLAUDE_CONFIG_DIR or CODEX_HOME); it is empty for the
+// CLI config folder (CLAUDE_CONFIG_DIR, CODEX_HOME or agy's --gemini_dir); it is empty for the
 // device account, whose folder is the CLI's own default. Name and KeyHint (the
 // key's last four characters) are set only on an API key account.
 type AgentAccount struct {

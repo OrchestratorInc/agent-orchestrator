@@ -1,11 +1,14 @@
 package agentauth
 
 import (
+	"context"
 	"strings"
 
+	agyagent "github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/agy"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/copilot"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/kimi"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/minimaxcode"
+	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agentaccount"
 	"github.com/aoagents/agent-orchestrator/backend/internal/service/shellterm"
 )
 
@@ -172,6 +175,20 @@ func agyLoginPlan() Plan {
 	p.signOutSteps = []guidedStep{
 		{readyText: agyTrustPrompt, keys: []string{"select"}, optional: true},
 		{readyText: agyChatPrompt, command: "/logout", restart: true},
+	}
+	// An Antigravity account is an agy folder whose launch environment names
+	// it (GEMINI_HOME) and keeps its sign-in in a file there. agy reads the
+	// folder from its flag only, and the account's sign-in lands in that file.
+	p.accountLogin = func(env map[string]string) ([]string, func(context.Context) bool, bool) {
+		home := strings.TrimSpace(env["GEMINI_HOME"])
+		if home == "" {
+			return nil, nil, false
+		}
+		signedIn := func(ctx context.Context) bool {
+			identity, err := (&agentaccount.Antigravity{}).Identity(ctx, home)
+			return err == nil && identity.SignedIn
+		}
+		return []string{agyagent.GeminiDirFlag(home)}, signedIn, true
 	}
 	return p
 }

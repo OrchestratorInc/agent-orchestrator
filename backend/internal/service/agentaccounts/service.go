@@ -1,5 +1,5 @@
-// Package agentaccounts manages the Claude Code and Codex accounts AO launches
-// agents with: subscription sign-ins, and Claude Code API keys. An account is a
+// Package agentaccounts manages the Claude Code, Codex and Antigravity accounts
+// AO launches agents with: subscription sign-ins, and Claude Code API keys. An account is a
 // config folder of the provider's own CLI; the computer's own folder is the
 // "This computer" account. A session is pinned to one account per provider and
 // moves by restarting its agent there.
@@ -49,6 +49,22 @@ type Terminals interface {
 // resetCrediter is the Codex-only ability to spend a usage-limit reset.
 type resetCrediter interface {
 	ConsumeResetCredit(ctx context.Context, home, idempotencyKey string) (domain.CodexResetCreditOutcome, error)
+}
+
+// limitless is a provider whose accounts have no usage limits AO reads, such
+// as Antigravity. Its accounts are read for their sign-in only, and a session
+// never moves between them at a limit.
+type limitless interface{ HasLimits() bool }
+
+func hasLimits(provider ports.AgentAccountProviderCLI) bool {
+	l, ok := provider.(limitless)
+	return !ok || l.HasLimits()
+}
+
+// homeLoginArgver is a provider whose CLI reads its folder from its command
+// line, not its environment, so its sign-in names the folder there.
+type homeLoginArgver interface {
+	HomeLoginArgv(ctx context.Context, home string) ([]string, error)
 }
 
 // Service is the account catalog, its cached readings, and the per-session
@@ -428,6 +444,8 @@ func (s *Service) read(ctx context.Context, account domain.AgentAccount) *readin
 		r.mismatch = true
 		r.identityProblem = domain.AgentAccountProblemOtherOrg
 		r.identityErr = fmt.Sprintf("the folder is now signed in to %s, not %s", orgLabel(identity.OrgName, identity.OrgID), orgLabel(known.name, known.id))
+	case !hasLimits(provider):
+		// Signed in as its own login, with no limits to read.
 	default:
 		if limits, limitsErr := provider.Limits(ctx, account.Home); limitsErr != nil {
 			r.limitsErr = limitsErr.Error()
@@ -864,10 +882,18 @@ func (s *Service) startLogin(ctx context.Context, p domain.AgentAccountProvider,
 	}
 	id := uuid.NewString()
 	home := filepath.Join(s.root, string(p), id)
-	title := map[domain.AgentAccountProvider]string{domain.AgentAccountProviderClaude: "Add Claude account", domain.AgentAccountProviderCodex: "Add Codex account"}[p]
+	title := map[domain.AgentAccountProvider]string{
+		domain.AgentAccountProviderClaude:      "Add Claude account",
+		domain.AgentAccountProviderCodex:       "Add Codex account",
+		domain.AgentAccountProviderAntigravity: "Add Antigravity account",
+	}[p]
 	if account != nil {
 		home = account.Home
-		title = map[domain.AgentAccountProvider]string{domain.AgentAccountProviderClaude: "Sign in to Claude account", domain.AgentAccountProviderCodex: "Sign in to Codex account"}[p]
+		title = map[domain.AgentAccountProvider]string{
+			domain.AgentAccountProviderClaude:      "Sign in to Claude account",
+			domain.AgentAccountProviderCodex:       "Sign in to Codex account",
+			domain.AgentAccountProviderAntigravity: "Sign in to Antigravity account",
+		}[p]
 	}
 	// A saved account's folder is never removed here; only a new one is.
 	discard := func() {
@@ -883,7 +909,13 @@ func (s *Service) startLogin(ctx context.Context, p domain.AgentAccountProvider,
 		discard()
 		return LoginStart{}, err
 	}
-	argv, err := provider.LoginArgv(ctx)
+	var argv []string
+	var err error
+	if withHome, ok := provider.(homeLoginArgver); ok {
+		argv, err = withHome.HomeLoginArgv(ctx, home)
+	} else {
+		argv, err = provider.LoginArgv(ctx)
+	}
 	if err != nil {
 		discard()
 		return LoginStart{}, err
@@ -1318,7 +1350,7 @@ func (s *Service) SessionLimits(ctx context.Context, id domain.SessionID, harnes
 	if err != nil {
 		return "", domain.AgentAccountLimits{}, err
 	}
-	if account.PerToken() {
+	if account.PerToken() || !hasLimits(s.providers[p]) {
 		return account.ID, domain.AgentAccountLimits{}, ports.ErrAgentAccountNoLimits
 	}
 	s.mu.Lock()
@@ -1365,6 +1397,9 @@ func (s *Service) HandoffTarget(ctx context.Context, id domain.SessionID, harnes
 	p, ok := domain.AgentAccountProviderFor(harness)
 	if !ok || s.providers[p] == nil {
 		return "", ports.ErrAgentAccountProviderMismatch
+	}
+	if !hasLimits(s.providers[p]) {
+		return "", nil // no limits read, so no account has verified room
 	}
 	current, err := s.boundAccount(ctx, id, p)
 	if err != nil {

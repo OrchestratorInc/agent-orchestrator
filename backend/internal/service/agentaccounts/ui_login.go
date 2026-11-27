@@ -55,6 +55,12 @@ func methodKind(p domain.AgentAccountProvider, method string) (domain.AgentAccou
 		case "api_key":
 			return domain.AgentAccountKindMetered, true
 		}
+	case domain.AgentAccountProviderAntigravity:
+		// agy's own login menu: a Google account, or a Google Cloud project.
+		switch method {
+		case "browser", "cloud_project":
+			return domain.AgentAccountKindSubscription, true
+		}
 	}
 	return "", false
 }
@@ -83,8 +89,8 @@ func loginKind(op *login) domain.AgentAccountKind {
 
 // harnessOf is the harness whose CLI signs in an account of p.
 func harnessOf(p domain.AgentAccountProvider) domain.AgentHarness {
-	if p == domain.AgentAccountProviderCodex {
-		return domain.HarnessCodex
+	if harness, ok := domain.AgentHarnessFor(p); ok {
+		return harness
 	}
 	return domain.HarnessClaudeCode
 }
