@@ -406,20 +406,32 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
+async function openInspectorPanel(id: string) {
+  await userEvent.click(screen.getByTestId("inspector-add-tab"));
+  await userEvent.click(screen.getByTestId(`inspector-launcher-item-${id}`));
+}
+
 describe("SessionInspector tabs", () => {
-  it("gives an orchestrator Summary and Browser, with its account but no branch", () => {
+  it("gives an orchestrator Summary by default and Browser in the + launcher, with its account but no branch", async () => {
     renderWithQuery(<SessionInspector orchestrator session={session([], { kind: "orchestrator" })} />);
-    expect(screen.getAllByRole("tab").map((tab) => tab.textContent)).toEqual(["Summary", "Browser"]);
+    expect(screen.getAllByRole("tab").map((tab) => tab.textContent)).toEqual(["Summary"]);
     expect(screen.getByTestId("session-account-summary")).toBeInTheDocument();
     expect(screen.queryByTestId("inspector-branch")).not.toBeInTheDocument();
+
+    await userEvent.click(screen.getByTestId("inspector-add-tab"));
+    expect(screen.getByTestId("inspector-launcher-item-browser")).toBeInTheDocument();
+    expect(screen.queryByTestId("inspector-launcher-item-files")).not.toBeInTheDocument();
   });
 
-  it("gives a remote orchestrator the same tabs with its host's account", () => {
+  it("gives a remote orchestrator the same modular panels with its host's account", () => {
     renderWithQuery(<SessionInspector orchestrator hostId="box-a" session={session([], { kind: "orchestrator", hostId: "box-a" })} />);
     expect(screen.getByRole("tab", { name: "Summary" })).toBeInTheDocument();
-    expect(screen.getByRole("tab", { name: "Browser" })).toBeInTheDocument();
     expect(screen.queryByRole("tab", { name: "Files" })).not.toBeInTheDocument();
     expect(screen.getByTestId("session-account-summary")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByTestId("inspector-add-tab"));
+    expect(screen.getByTestId("inspector-launcher-item-browser")).toBeInTheDocument();
+    expect(screen.queryByTestId("inspector-launcher-item-files")).not.toBeInTheDocument();
   });
 
   describe("background tasks", () => {
@@ -452,7 +464,7 @@ describe("SessionInspector tabs", () => {
     });
   });
 
-  it("shows an orchestrator's direct and rendered HTML artifacts beside Summary and Browser", async () => {
+  it("shows an orchestrator's direct and rendered HTML artifacts beside Summary and Browser via the + launcher", async () => {
     vi.stubGlobal("IntersectionObserver", class {
       observe() {}
       unobserve() {}
@@ -467,9 +479,10 @@ describe("SessionInspector tabs", () => {
       ],
     })} />);
 
-    expect(screen.getAllByRole("tab").map((tab) => tab.textContent?.trim())).toEqual(["Summary", "Browser", "Artifacts"]);
+    expect(screen.getAllByRole("tab").map((tab) => tab.textContent?.trim())).toEqual(["Summary"]);
     expect(screen.getByRole("tab", { name: "Summary" })).toHaveAttribute("aria-selected", "true");
-    await userEvent.click(screen.getByRole("tab", { name: "Artifacts" }));
+    await openInspectorPanel("artifacts");
+    expect(screen.getAllByRole("tab").map((tab) => tab.textContent?.trim())).toEqual(["Summary", "Artifacts"]);
     expect(screen.getByText("direct.html")).toBeInTheDocument();
     expect(screen.getByText("chart.html")).toBeInTheDocument();
     expect(screen.queryByRole("tab", { name: "Files" })).not.toBeInTheDocument();
@@ -494,7 +507,7 @@ describe("SessionInspector tabs", () => {
         onViewChange={onViewChange}
       />,
     );
-    expect(screen.getAllByRole("tab").map((tab) => tab.textContent?.trim())).toEqual(["Summary", "Browser", "Side chat"]);
+    expect(screen.getAllByRole("tab").map((tab) => tab.textContent?.trim())).toEqual(["Summary", "Side chat"]);
     expect(screen.getByRole("tab", { name: "Side chat" })).toHaveAttribute("aria-selected", "true");
     expect(screen.getByTestId("side-chat-slot")).toBeInTheDocument();
     expect(onViewChange).not.toHaveBeenCalled();
@@ -517,7 +530,7 @@ describe("SessionInspector tabs", () => {
         onViewChange={onViewChange}
       />,
     );
-    expect(screen.getAllByRole("tab").map((tab) => tab.textContent?.trim())).toEqual(["Summary", "Browser", "Subagents"]);
+    expect(screen.getAllByRole("tab").map((tab) => tab.textContent?.trim())).toEqual(["Summary", "Subagents"]);
     expect(screen.getByRole("tab", { name: "Subagents" })).toHaveAttribute("aria-selected", "true");
     expect(screen.getByTestId("subagents-slot")).toBeInTheDocument();
     expect(onViewChange).not.toHaveBeenCalled();
@@ -526,7 +539,7 @@ describe("SessionInspector tabs", () => {
   it("gives the Browser viewport the full inspector body without the default content gutter", async () => {
     renderWithQuery(<SessionInspector session={session([])} />);
 
-    await userEvent.click(screen.getByRole("tab", { name: "Browser" }));
+    await openInspectorPanel("browser");
 
     const body = screen
       .getByRole("complementary", { name: "Session inspector" })
@@ -543,17 +556,20 @@ describe("SessionInspector tabs", () => {
     );
   });
 
-  it("keeps rail tabs square instead of stretching across the inspector", () => {
+  it("keeps modular tabs compact with Summary pinned and added tabs closable", async () => {
     renderWithQuery(<SessionInspector session={session([])} />);
 
     const summaryTab = screen.getByRole("tab", { name: "Summary" });
+    expect(summaryTab).not.toHaveClass("flex-1");
+    expect(summaryTab).toHaveAttribute("title", "Summary");
+    expect(screen.queryByTestId("inspector-close-tab-summary")).not.toBeInTheDocument();
 
-
-		expect(summaryTab).not.toHaveClass("flex-1");
-		expect(summaryTab).toHaveClass("size-control-md", "p-0", "shrink-0");
-		expect(summaryTab).not.toHaveClass("h-control-md", "px-1");
-		expect(summaryTab).toHaveAttribute("title", "Summary");
-	});
+    await openInspectorPanel("files");
+    expect(screen.getByRole("tab", { name: "Files" })).toHaveAttribute("aria-selected", "true");
+    await userEvent.click(screen.getByTestId("inspector-close-tab-files"));
+    expect(screen.queryByRole("tab", { name: "Files" })).not.toBeInTheDocument();
+    expect(screen.getByRole("tab", { name: "Summary" })).toHaveAttribute("aria-selected", "true");
+  });
 
   it("shows the glow only while real browser activity is unseen", () => {
     const currentSession = session([]);
@@ -585,7 +601,7 @@ describe("SessionInspector tabs", () => {
       />,
     );
 
-    await userEvent.click(screen.getByRole("tab", { name: "Files" }));
+    await openInspectorPanel("files");
 
     expect(onOpenFiles).toHaveBeenCalledTimes(1);
     expect(screen.getByText("workspace file review")).toBeInTheDocument();
@@ -594,9 +610,10 @@ describe("SessionInspector tabs", () => {
   it("warms the workspace files cache before the Files tab opens", async () => {
     renderWithQuery(<SessionInspector session={session([])} />);
 
-    const filesTab = screen.getByRole("tab", { name: "Files" });
-    expect(within(filesTab).getByText("Files")).toBeInTheDocument();
-    expect(within(filesTab).getByTestId("files-viewer-icon")).toBeInTheDocument();
+    await userEvent.click(screen.getByTestId("inspector-add-tab"));
+    const filesItem = screen.getByTestId("inspector-launcher-item-files");
+    expect(within(filesItem).getByText("Files")).toBeInTheDocument();
+    expect(within(filesItem).getByTestId("files-viewer-icon")).toBeInTheDocument();
     await waitFor(() =>
       expect(getMock).toHaveBeenCalledWith(
         "/api/v1/sessions/{sessionId}/workspace/manifest",
@@ -646,7 +663,7 @@ describe("SessionInspector tabs", () => {
 
   it("shows a live changed-file count on the Files tab once the shared cache is populated", () => {
     renderWithQuery(
-      <SessionInspector session={session([])} />,
+      <SessionInspector session={session([])} view="files" />,
       undefined,
       (client) => {
         client.setQueryData(sessionWorkspaceFilesQueryKey("sess-1"), {
@@ -682,7 +699,7 @@ describe("SessionInspector tabs", () => {
 
   it("distinguishes a checked-but-clean workspace (0 Files) from an unopened tab (Files)", () => {
     renderWithQuery(
-      <SessionInspector session={session([])} />,
+      <SessionInspector session={session([])} view="files" />,
       undefined,
       (client) => {
         client.setQueryData(sessionWorkspaceFilesQueryKey("sess-1"), {
@@ -2263,7 +2280,7 @@ describe("SessionInspector PR section", () => {
       }),
     ).toBeInTheDocument();
 
-    await userEvent.click(screen.getByRole("tab", { name: "Reviews" }));
+    await openInspectorPanel("reviews");
     expect(
       await screen.findByRole("button", { name: "Review now" }),
     ).toBeInTheDocument();
@@ -2646,10 +2663,11 @@ describe("SessionInspector Artifacts section", () => {
     );
   });
 
-  it("shows the Artifacts tab whenever the session lists artifacts", () => {
+  it("shows Artifacts in the + launcher whenever the session lists artifacts", async () => {
     renderWithQuery(<SessionInspector session={session([], { artifactFiles: [artifact({ path: "notes.md", name: "notes.md", kind: "markdown" })] })} />);
     expect(screen.getByRole("tab", { name: "Summary" })).toHaveAttribute("aria-selected", "true");
-    expect(screen.getByRole("tab", { name: "Artifacts" })).toHaveAttribute("aria-selected", "false");
+    await userEvent.click(screen.getByTestId("inspector-add-tab"));
+    expect(screen.getByTestId("inspector-launcher-item-artifacts")).toBeInTheDocument();
   });
 
   it("keeps the Artifacts tab after leaving it", async () => {
@@ -2660,7 +2678,7 @@ describe("SessionInspector Artifacts section", () => {
     });
     const onViewChange = vi.fn();
     renderWithQuery(<SessionInspector onViewChange={onViewChange} session={session([], { artifactFiles: [artifact({ path: "notes.md", name: "notes.md", kind: "markdown" })] })} />);
-    await userEvent.click(screen.getByRole("tab", { name: "Artifacts" }));
+    await openInspectorPanel("artifacts");
     expect(screen.getByRole("tab", { name: "Artifacts" })).toHaveAttribute("aria-selected", "true");
     await userEvent.click(screen.getByRole("tab", { name: "Summary" }));
     expect(onViewChange).toHaveBeenLastCalledWith("summary");
@@ -3602,29 +3620,30 @@ describe("SessionInspector Activity section", () => {
 });
 
 describe("SessionInspector tabs", () => {
-  it("exposes Reviews after Summary and keeps review content out of Summary", async () => {
+  it("exposes Reviews in the + launcher and keeps review content out of Summary", async () => {
     mockCommonGets([], "", [reviewState(1, "needs_review")]);
     renderWithQuery(<SessionInspector session={session([pr(1, "open")])} sideChatView={<div />} />);
     const tabs = screen.getAllByRole("tab").map((el) => el.textContent?.trim());
-    expect(tabs).toEqual(["Summary", "Files", "Reviews", "Browser", "Side chat"]);
+    expect(tabs).toEqual(["Summary"]);
     expect(screen.queryByRole("button", { name: "Review now" })).not.toBeInTheDocument();
 
-    await userEvent.click(screen.getByRole("tab", { name: "Reviews" }));
+    await openInspectorPanel("reviews");
 
     expect((await screen.findAllByText("Reviewer"))[0]).toBeInTheDocument();
     expect(screen.queryByText("Pull request")).not.toBeInTheDocument();
   });
 
-  it("offers the Device tab to local worker sessions only with Developer mode on", async () => {
+  it("offers the Device panel in the + launcher to local worker sessions only with Developer mode on", async () => {
     mockCommonGets([], "", [reviewState(1, "needs_review")]);
     renderWithQuery(<SessionInspector session={session([pr(1, "open")])} />);
-    expect(screen.queryByRole("tab", { name: "Device" })).not.toBeInTheDocument();
+    await userEvent.click(screen.getByTestId("inspector-add-tab"));
+    expect(screen.queryByTestId("inspector-launcher-item-device")).not.toBeInTheDocument();
 
     act(() => useUiStore.setState({ developerMode: true }));
-    expect(screen.getAllByRole("tab").map((el) => el.textContent?.trim())).toEqual(["Summary", "Files", "Reviews", "Browser", "Device"]);
+    expect(screen.getByTestId("inspector-launcher-item-device")).toBeInTheDocument();
   });
 
-  it("offers a Subagents tab after Side chat while the chat passes its panel", async () => {
+  it("offers Subagents in the + launcher while the chat passes its panel", async () => {
     mockCommonGets([], "", [reviewState(1, "needs_review")]);
     renderWithQuery(
       <SessionInspector
@@ -3633,10 +3652,11 @@ describe("SessionInspector tabs", () => {
         subagentsView={<div data-testid="subagents-slot" />}
       />,
     );
-    const tabs = screen.getAllByRole("tab").map((el) => el.textContent?.trim());
-    expect(tabs).toEqual(["Summary", "Files", "Reviews", "Browser", "Side chat", "Subagents"]);
+    await userEvent.click(screen.getByTestId("inspector-add-tab"));
+    expect(screen.getByTestId("inspector-launcher-item-sideChat")).toBeInTheDocument();
+    expect(screen.getByTestId("inspector-launcher-item-subagents")).toBeInTheDocument();
 
-    await userEvent.click(screen.getByRole("tab", { name: "Subagents" }));
+    await userEvent.click(screen.getByTestId("inspector-launcher-item-subagents"));
 
     expect(screen.getByTestId("subagents-slot")).toBeInTheDocument();
   });
@@ -3668,7 +3688,7 @@ describe("SessionInspector tabs", () => {
     mockCommonGets([], "", [reviewState(1, "needs_review")]);
     renderWithQuery(<SessionInspector session={session([pr(1, "draft")])} />);
 
-    await userEvent.click(screen.getByRole("tab", { name: "Reviews" }));
+    await openInspectorPanel("reviews");
 
     expect(await screen.findByRole("button", { name: "Review now" })).not.toBeDisabled();
   });
@@ -3720,7 +3740,7 @@ describe("SessionInspector summary reviews", () => {
   // Review rows start collapsed. Open the Reviews tab and reveal every row,
   // since these tests are about what a review says.
   const openReviewsSection = async () => {
-    await userEvent.click(screen.getByRole("tab", { name: "Reviews" }));
+    await openInspectorPanel("reviews");
     // Rows arrive with the reviews query, so wait for them before expanding.
     const rows = await screen.findAllByTestId("review-pr-row").catch(() => []);
     for (const row of rows) {
@@ -5726,7 +5746,7 @@ describe("SessionInspector summary reviews", () => {
     );
 
     renderWithQuery(<SessionInspector session={session([pr(3, "open"), pr(4, "open")])} />);
-    await userEvent.click(screen.getByRole("tab", { name: "Reviews" }));
+    await openInspectorPanel("reviews");
 
     await waitFor(() => expect(screen.getAllByTestId("review-pr-row")[0]).toHaveAttribute("aria-expanded", "true"));
     const [withComments, empty] = screen.getAllByTestId("review-pr-row");
@@ -6043,14 +6063,17 @@ describe("SessionInspector summary reviews", () => {
     mockCommonGets();
     renderWithQuery(<SessionInspector session={session([], { outputType: "pr" })} />);
 
-    // No side chat view from the host (side chats off or unsupported): no tab.
     expect(screen.getAllByRole("tab").map((tab) => tab.textContent?.trim())).toEqual([
       "Summary",
-      "Files",
-      "Reviews",
-      "Browser",
     ]);
-    await userEvent.click(screen.getByRole("tab", { name: "Reviews" }));
+    // No side chat view from the host (side chats off or unsupported): launcher omits Side chat.
+    await userEvent.click(screen.getByTestId("inspector-add-tab"));
+    expect(screen.getByTestId("inspector-launcher-item-browser")).toBeInTheDocument();
+    expect(screen.getByTestId("inspector-launcher-item-files")).toBeInTheDocument();
+    expect(screen.getByTestId("inspector-launcher-item-reviews")).toBeInTheDocument();
+    expect(screen.queryByTestId("inspector-launcher-item-sideChat")).not.toBeInTheDocument();
+
+    await userEvent.click(screen.getByTestId("inspector-launcher-item-reviews"));
     expect(await screen.findByText("Reviews start once the worker opens a pull request.")).toBeInTheDocument();
     expect(screen.getByText("Comments from the Orchestrator reviewer and from GitHub will show here.")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Review now" })).toBeDisabled();
@@ -6151,7 +6174,7 @@ describe("SessionInspector Cloud reviews", () => {
       expect(screen.getByText("Session controls")).toBeInTheDocument();
     }
 
-    await userEvent.click(screen.getByRole("tab", { name: "Reviews" }));
+    await openInspectorPanel("reviews");
     await waitFor(() => expect(cloudCpMock.getSessionReviewState).toHaveBeenCalled());
     await screen.findAllByText("Reviewer");
     if (shared) {
@@ -6216,7 +6239,7 @@ describe("SessionInspector Cloud reviews", () => {
       />,
     );
 
-    await userEvent.click(screen.getByRole("tab", { name: "Reviews" }));
+    await openInspectorPanel("reviews");
     await userEvent.click(
       screen.getByRole("button", { name: "Review now" }),
     );
@@ -6273,7 +6296,7 @@ describe("SessionInspector Cloud reviews", () => {
       <SessionInspector session={session([], { cloud: { orgId: "org-1" } })} />,
     );
 
-    await userEvent.click(screen.getByRole("tab", { name: "Reviews" }));
+    await openInspectorPanel("reviews");
     await userEvent.click(
       await screen.findByRole("combobox", { name: /Select reviewer agent/ }),
     );
@@ -6371,7 +6394,7 @@ describe("SessionInspector Cloud reviews", () => {
       <SessionInspector session={session([], { cloud: { orgId: "org-1" } })} />,
     );
 
-    await userEvent.click(screen.getByRole("tab", { name: "Reviews" }));
+    await openInspectorPanel("reviews");
     await waitFor(() => expect(cloudCpMock.getSessionReviewState).toHaveBeenCalled());
     await view.queryClient.refetchQueries({
       queryKey: ["cloud-session-reviews", "https://cloud.example.test", "org-1", "sess-1"],
@@ -6421,7 +6444,7 @@ describe("SessionInspector Cloud reviews", () => {
       />,
     );
 
-    await userEvent.click(screen.getByRole("tab", { name: "Reviews" }));
+    await openInspectorPanel("reviews");
     const autoReview = await screen.findByRole("switch", {
       name: "Auto-review",
     });
@@ -6489,8 +6512,7 @@ describe("SessionInspector Cloud reviews", () => {
       />,
     );
 
-    expect(screen.getByRole("tab", { name: "Reviews" })).toBeInTheDocument();
-    await userEvent.click(screen.getByRole("tab", { name: "Reviews" }));
+    await openInspectorPanel("reviews");
     await userEvent.click(await screen.findByRole("button", { name: "Review now" }));
 
     await waitFor(() =>
@@ -6650,7 +6672,6 @@ describe("SessionInspector branch summary", () => {
     expect(branch().getByText("feat/ns")).toBeInTheDocument();
     expect(branch().getByText("→ main")).toBeInTheDocument();
     expect(branch().getByText("+13")).toBeInTheDocument();
-    expect(within(screen.getByRole("tab", { name: "Files" })).getByText("2")).toBeInTheDocument();
 
     expect(screen.queryByRole("button", { name: /Create PR/ })).not.toBeInTheDocument();
     await userEvent.click(screen.getByRole("button", { name: "Commit & push" }));
@@ -6673,7 +6694,7 @@ describe("SessionInspector branch summary", () => {
     expect(row).toHaveAttribute("aria-expanded", "false");
     await userEvent.click(row);
     expect(row).toHaveAttribute("aria-expanded", "true");
-    expect(screen.getByRole("tab", { name: "Files" })).toHaveAttribute("aria-selected", "false");
+    expect(screen.queryByRole("tab", { name: "Files" })).not.toBeInTheDocument();
 
     const tree = within(screen.getByTestId("changed-files-list"));
     // One flat line per file: repository-qualified path, counts and change.

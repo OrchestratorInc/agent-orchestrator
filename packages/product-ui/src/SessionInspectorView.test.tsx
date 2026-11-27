@@ -219,6 +219,64 @@ describe("SessionInspectorShellView", () => {
     );
     expect(screen.queryByRole("tablist")).not.toBeInTheDocument();
   });
+
+  it("supports modular tabs with a pinned Summary tab, centered + launcher, and closable added tabs", () => {
+    const onViewChange = vi.fn();
+    const onOpenLauncherTab = vi.fn();
+    const onCloseTab = vi.fn();
+    const modularTabs = [
+      { id: "summary" as const, icon: <svg />, label: "Summary", closable: false },
+      { id: "files" as const, icon: <svg />, label: "Files", closable: true, count: 3, displayLabel: "3 Files" },
+    ];
+    const launcherTabs = [
+      { id: "browser" as const, icon: <svg />, label: "Browser", isOpen: false },
+      { id: "files" as const, icon: <svg />, label: "Files", isOpen: true, shortcut: "⌥⇧D", count: 3 },
+    ];
+
+    render(
+      <SessionInspectorShellView
+        activeView="summary"
+        ariaLabel="Session inspector"
+        browserPoppedOut={false}
+        closeTabLabel={(label) => `Close ${label}`}
+        launcherAriaLabel="Open a panel"
+        launcherTabs={launcherTabs}
+        newTabLabel="New tab"
+        onCloseTab={onCloseTab}
+        onOpenLauncherTab={onOpenLauncherTab}
+        onViewChange={onViewChange}
+        summaryView={<div role="tabpanel">summary slot</div>}
+        tabs={modularTabs}
+      />,
+    );
+
+    expect(screen.getByRole("tab", { name: "Summary" })).toHaveAttribute("aria-selected", "true");
+    expect(screen.queryByTestId("inspector-close-tab-summary")).not.toBeInTheDocument();
+    expect(screen.getByTestId("inspector-close-tab-files")).toBeInTheDocument();
+    expect(screen.getByText("summary slot")).toBeInTheDocument();
+
+    // Clicking + opens the centered launcher with available modular panels.
+    fireEvent.click(screen.getByTestId("inspector-add-tab"));
+    expect(screen.getByTestId("inspector-tab-launcher")).toBeInTheDocument();
+    expect(screen.queryByText("summary slot")).not.toBeInTheDocument();
+    expect(screen.getByTestId("inspector-launcher-item-browser")).toHaveTextContent("Browser");
+    expect(screen.getByTestId("inspector-launcher-item-files")).toHaveTextContent("⌥⇧D");
+
+    // Picking a panel from the launcher opens it and dismisses the launcher.
+    fireEvent.click(screen.getByTestId("inspector-launcher-item-browser"));
+    expect(onOpenLauncherTab).toHaveBeenCalledWith("browser");
+    expect(screen.queryByTestId("inspector-tab-launcher")).not.toBeInTheDocument();
+
+    // Escape dismisses the launcher.
+    fireEvent.click(screen.getByTestId("inspector-add-tab"));
+    expect(screen.getByTestId("inspector-tab-launcher")).toBeInTheDocument();
+    fireEvent.keyDown(window, { key: "Escape" });
+    expect(screen.queryByTestId("inspector-tab-launcher")).not.toBeInTheDocument();
+
+    // Closing a modular tab calls onCloseTab without selecting it.
+    fireEvent.click(screen.getByTestId("inspector-close-tab-files"));
+    expect(onCloseTab).toHaveBeenCalledWith("files");
+  });
 });
 
 describe("portable inspector presentations", () => {

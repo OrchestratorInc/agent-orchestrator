@@ -307,6 +307,38 @@ describe("cloud review cleanup", () => {
 		useUiStore.getState().resetFilesSelection("absent");
 		expect(useUiStore.getState()).toBe(state);
 	});
+
+	it("manages modular inspector tabs with Summary always pinned first", () => {
+		useUiStore.setState({ inspectorSessions: {} });
+		const store = useUiStore.getState();
+
+		store.initializeInspectorSession("sess-mod", false, true);
+		expect(useUiStore.getState().inspectorSessions["sess-mod"]?.openTabs).toEqual(["summary"]);
+
+		store.openInspectorTab("sess-mod", "files");
+		store.openInspectorTab("sess-mod", "browser");
+		expect(useUiStore.getState().inspectorSessions["sess-mod"]?.openTabs).toEqual(["summary", "files", "browser"]);
+		expect(useUiStore.getState().inspectorSessions["sess-mod"]?.view).toBe("browser");
+
+		// Re-opening an already open tab focuses it without duplicating.
+		store.openInspectorTab("sess-mod", "files");
+		expect(useUiStore.getState().inspectorSessions["sess-mod"]?.openTabs).toEqual(["summary", "files", "browser"]);
+		expect(useUiStore.getState().inspectorSessions["sess-mod"]?.view).toBe("files");
+
+		// Closing the active tab switches to the previous open tab.
+		store.closeInspectorTab("sess-mod", "files");
+		expect(useUiStore.getState().inspectorSessions["sess-mod"]?.openTabs).toEqual(["summary", "browser"]);
+		expect(useUiStore.getState().inspectorSessions["sess-mod"]?.view).toBe("summary");
+
+		// Summary is pinned and cannot be closed.
+		store.closeInspectorTab("sess-mod", "summary");
+		expect(useUiStore.getState().inspectorSessions["sess-mod"]?.openTabs).toEqual(["summary", "browser"]);
+
+		// setInspectorView also opens the target tab automatically.
+		store.setInspectorView("sess-mod", "artifacts");
+		expect(useUiStore.getState().inspectorSessions["sess-mod"]?.openTabs).toEqual(["summary", "browser", "artifacts"]);
+		expect(useUiStore.getState().inspectorSessions["sess-mod"]?.view).toBe("artifacts");
+	});
 });
 
 // A fresh module sees exactly what a booting renderer sees: only storage.

@@ -145,6 +145,8 @@ export type InspectorSessionState = {
 	/** Compact quick-details panel (docked right rail on wide viewports, popover on narrow ones). */
 	quickDetailsOpen?: boolean;
 	view: InspectorView;
+	/** Open modular inspector tabs for this session; `"summary"` is always pinned first. */
+	openTabs?: InspectorView[];
 	/** The current non-empty browser content lifecycle has already been revealed. */
 	browserContentRevealed?: boolean;
 	/** Real browser activity occurred while Browser was not visible. */
@@ -446,6 +448,8 @@ export type UiState = {
 	syncTaskTabs: (sessionId: string, tasks: BackgroundTask[]) => void;
 	/** Records that a failed task run was shown in its tab, so the composer strip stops raising it. */
 	acknowledgeFailedTask: (sessionId: string, task: BackgroundTask) => void;
+	openInspectorTab: (sessionId: string, view: InspectorView) => void;
+	closeInspectorTab: (sessionId: string, view: InspectorView) => void;
 	/**
 	 * Runs the "entering this session" defaults — Summary tab, baseline browser
 	 * reveal — exactly once per session's lifetime. Backed by persisted store
@@ -575,6 +579,23 @@ function loginTaken(state: UiState, waiting: LoginReturn): Partial<UiState> {
 
 function inspectorState(sessions: Record<string, InspectorSessionState>, sessionId: string): InspectorSessionState {
 	return sessions[sessionId] ?? { isOpen: false, view: "summary" };
+}
+
+/** Ensures `"summary"` is always pinned first in the modular inspector tab list. */
+export function normalizeInspectorOpenTabs(openTabs?: InspectorView[], includeView?: InspectorView): InspectorView[] {
+	const result: InspectorView[] = ["summary"];
+	for (const tab of openTabs ?? []) {
+		if (tab !== "summary" && !result.includes(tab)) result.push(tab);
+	}
+	if (includeView && includeView !== "summary" && !result.includes(includeView)) {
+		result.push(includeView);
+	}
+	return result;
+}
+
+export function inspectorOpenTabs(sessions: Record<string, InspectorSessionState>, sessionId: string): InspectorView[] {
+	const current = sessions[sessionId];
+	return normalizeInspectorOpenTabs(current?.openTabs, current?.view);
 }
 
 /** Opening a session keeps the inspector closed until the user (or a browser
@@ -974,10 +995,42 @@ export const useUiStore = create<UiState>((set, get) => ({
 			const current = inspectorState(state.inspectorSessions, sessionId);
 			const browserUnseen = view === "browser" ? false : current.browserUnseen;
 			const artifactsUnseen = view === "artifacts" ? false : current.artifactsUnseen;
+			const openTabs = normalizeInspectorOpenTabs(current.openTabs, view);
 			return {
 				inspectorSessions: {
 					...state.inspectorSessions,
-					[sessionId]: { ...current, view, browserUnseen, artifactsUnseen },
+					[sessionId]: { ...current, view, openTabs, browserUnseen, artifactsUnseen },
+				},
+			};
+		}),
+	openInspectorTab: (sessionId, view) =>
+		set((state) => {
+			const current = inspectorState(state.inspectorSessions, sessionId);
+			const openTabs = normalizeInspectorOpenTabs(current.openTabs, view);
+			const browserUnseen = view === "browser" ? false : current.browserUnseen;
+			const artifactsUnseen = view === "artifacts" ? false : current.artifactsUnseen;
+			return {
+				inspectorSessions: {
+					...state.inspectorSessions,
+					[sessionId]: { ...current, view, openTabs, browserUnseen, artifactsUnseen },
+				},
+			};
+		}),
+	closeInspectorTab: (sessionId, view) =>
+		set((state) => {
+			if (view === "summary") return state;
+			const current = inspectorState(state.inspectorSessions, sessionId);
+			const prevTabs = normalizeInspectorOpenTabs(current.openTabs);
+			const index = prevTabs.indexOf(view);
+			if (index === -1) return state;
+			const nextTabs = prevTabs.filter((tab) => tab !== view);
+			const nextView = current.view === view
+				? (nextTabs[Math.min(index - 1, nextTabs.length - 1)] ?? "summary")
+				: current.view;
+			return {
+				inspectorSessions: {
+					...state.inspectorSessions,
+					[sessionId]: { ...current, openTabs: nextTabs, view: nextView },
 				},
 			};
 		}),
@@ -988,10 +1041,11 @@ export const useUiStore = create<UiState>((set, get) => ({
 			const taskTabs = tabs.some((tab) => tab.task.id === task.id)
 				? tabs.map((tab) => (tab.task.id === task.id ? { task } : tab))
 				: [...tabs, { task }];
+			const openTabs = normalizeInspectorOpenTabs(current.openTabs, "task");
 			return {
 				inspectorSessions: {
 					...state.inspectorSessions,
-					[sessionId]: { ...current, isOpen: true, view: "task", taskTabs, activeTaskTab: task.id },
+					[sessionId]: { ...current, isOpen: true, view: "task", openTabs, taskTabs, activeTaskTab: task.id },
 				},
 			};
 		}),
@@ -1059,6 +1113,7 @@ export const useUiStore = create<UiState>((set, get) => ({
 						...current,
 						initialized: true,
 						view: "summary",
+						openTabs: normalizeInspectorOpenTabs(current.openTabs),
 						browserContentRevealed: current.browserContentRevealed ?? hasBrowserContent,
 					},
 				},

@@ -8,6 +8,8 @@ import {
 	ChevronIcon,
 	GitPullRequestIcon,
 	MoreHorizontalIcon,
+	PlusIcon,
+	XIcon,
 } from "./icons";
 import {
 	PRCardStatusSummary,
@@ -41,12 +43,26 @@ export type InspectorView = "summary" | "reviews" | "browser" | "device" | "side
 
 export type InspectorTab = {
 	badge?: boolean;
+	/** Modular tabs opened via `+` can be closed; pinned tabs (Summary) cannot. */
+	closable?: boolean;
 	/** Corner badge count, e.g. changed files; hidden at zero. */
 	count?: number;
 	displayLabel?: string;
 	icon: ReactNode;
 	id: InspectorView;
 	label: string;
+};
+
+export type InspectorLauncherItem = {
+	badge?: boolean;
+	count?: number;
+	icon: ReactNode;
+	id: InspectorView;
+	/** Whether this panel is already open as a tab in the bar. */
+	isOpen?: boolean;
+	label: string;
+	/** Optional display shortcut shown on the right, e.g. `⌥⇧D`. */
+	shortcut?: string;
 };
 
 const inspectorShellClass = "@container/inspector flex h-full min-h-0 flex-col overflow-hidden";
@@ -60,38 +76,76 @@ export function SessionInspectorShellView({
 	artifactsView,
 	browserPoppedOut,
 	browserView,
+	closeTabLabel,
 	deviceView,
 	sideChatView,
 	subagentsView,
 	filesView,
 	headerActions,
 	isVisible = true,
+	launcherAriaLabel,
+	launcherOpen: launcherOpenProp,
+	launcherTabs,
 	loadingText,
+	newTabLabel,
+	onCloseTab,
+	onLauncherOpenChange,
+	onOpenLauncherTab,
 	onViewChange,
 	reviewsView,
 	summaryView,
 	tabs,
 	taskView,
+	toolbar,
 }: {
 	activeView: InspectorView;
 	ariaLabel: string;
 	artifactsView?: ReactNode;
 	browserPoppedOut: boolean;
 	browserView?: ReactNode;
+	closeTabLabel?: (label: string) => string;
 	deviceView?: ReactNode;
 	sideChatView?: ReactNode;
 	subagentsView?: ReactNode;
 	filesView?: ReactNode;
 	headerActions?: ReactNode;
 	isVisible?: boolean;
+	launcherAriaLabel?: string;
+	launcherOpen?: boolean;
+	/** Modular panels offered when clicking the `+` new-tab button. */
+	launcherTabs?: InspectorLauncherItem[];
 	loadingText?: string;
+	newTabLabel?: string;
+	onCloseTab?: (view: InspectorView) => void;
+	onLauncherOpenChange?: (open: boolean) => void;
+	onOpenLauncherTab?: (view: InspectorView) => void;
 	onViewChange: (view: InspectorView) => void;
 	reviewsView?: ReactNode;
 	summaryView?: ReactNode;
 	tabs: InspectorTab[];
 	/** The Background tasks tab: its list, or the task it has open. */
 	taskView?: ReactNode;
+	/** Optional second-row toolbar (Browser address bar, Files filter/actions) beneath modular tabs. */
+	toolbar?: ReactNode;
 }) {
+	const [internalLauncherOpen, setInternalLauncherOpen] = useState(false);
+	const modular = launcherTabs !== undefined;
+	const launcherOpen = modular && (launcherOpenProp ?? internalLauncherOpen);
+	const setLauncherOpen = (next: boolean) => {
+		setInternalLauncherOpen(next);
+		onLauncherOpenChange?.(next);
+	};
+
+	useEffect(() => {
+		if (!launcherOpen) return;
+		const onKeyDown = (event: globalThis.KeyboardEvent) => {
+			if (event.key !== "Escape") return;
+			event.preventDefault();
+			setLauncherOpen(false);
+		};
+		window.addEventListener("keydown", onKeyDown);
+		return () => window.removeEventListener("keydown", onKeyDown);
+	}, [launcherOpen]);
 
 	if (loadingText) {
 		return (
@@ -122,23 +176,138 @@ export function SessionInspectorShellView({
 				return;
 		}
 		event.preventDefault();
+		if (launcherOpen) setLauncherOpen(false);
 		onViewChange(tabs[nextIndex].id);
-		event.currentTarget.parentElement
+		event.currentTarget
+			.closest('[role="tablist"]')
 			?.querySelectorAll<HTMLButtonElement>('[role="tab"]')
 			.item(nextIndex)
-			.focus();
+			?.focus();
 	};
+
+	const hasHiddenBadge = modular && launcherTabs.some((item) => item.badge && !item.isOpen);
+	const showToolbar = Boolean(toolbar) && !launcherOpen;
 
 	return (
 		<aside className={inspectorShellClass} aria-label={ariaLabel}>
 			<div
 				className={cn(
-					"session-inspector__topbar flex h-inspector-tabs shrink-0 items-center border-b border-border-strong pl-1",
-					activeView === "browser" && "session-inspector__topbar--browser",
+					"session-inspector__topbar flex h-inspector-tabs shrink-0 items-center border-b border-border-strong",
+					modular ? "session-inspector__topbar--modular px-1.5 gap-1" : "pl-1",
+					!modular && activeView === "browser" && "session-inspector__topbar--browser",
 				)}
 			>
-				{isVisible && tabs.length === 1 ? (
+				{isVisible && !modular && tabs.length === 1 ? (
 					<span className="min-w-0 flex-1 px-2 text-sm text-passive">{tabs[0].label}</span>
+				) : isVisible && modular ? (
+					<div className="flex min-w-0 flex-1 items-center gap-1">
+						<div className="session-inspector__tablist session-inspector__tablist--modular flex min-w-0 items-center gap-1 overflow-x-auto" role="tablist">
+							{tabs.map((tab, index) => {
+								const selected = !launcherOpen && activeView === tab.id;
+								const closable = Boolean(tab.closable && onCloseTab);
+								return (
+									<div
+										className={cn(
+											"session-inspector__modular-tab group/tab relative inline-flex h-control-md max-w-[168px] min-w-0 shrink-0 items-center rounded-md border border-transparent text-xs font-medium",
+											selected
+												? "bg-interactive-active text-foreground"
+												: "text-passive hover:bg-interactive-hover hover:text-foreground",
+										)}
+										data-active={selected ? "true" : "false"}
+										data-testid={`inspector-tab-${tab.id}`}
+										key={tab.id}
+										onAuxClick={(event) => {
+											if (event.button === 1 && closable) {
+												event.preventDefault();
+												onCloseTab?.(tab.id);
+											}
+										}}
+									>
+										<button
+											aria-label={tab.label}
+											aria-selected={selected}
+											data-telemetry-id={`inspector.tab_${INSPECTOR_TELEMETRY_NAMES[tab.id]}`}
+											className={cn(
+												"inline-flex h-full min-w-0 items-center gap-1.5 rounded-md outline-none focus-visible:outline-2 focus-visible:outline-ring focus-visible:outline-offset-[-2px]",
+												closable ? "pl-2 pr-1" : "px-2",
+											)}
+											onClick={() => {
+												if (launcherOpen) setLauncherOpen(false);
+												onViewChange(tab.id);
+											}}
+											onKeyDown={(event) => selectAdjacentTab(event, index)}
+											role="tab"
+											tabIndex={selected ? 0 : -1}
+											title={tab.label}
+											type="button"
+										>
+											<span className="relative inline-flex shrink-0 [&_svg]:size-3.5">
+												{tab.icon}
+												{tab.badge ? (
+													<span
+														aria-hidden="true"
+														className="absolute -right-0.5 -top-0.5 inline-flex size-dot-sm"
+														data-testid="browser-unseen-indicator"
+													>
+														<span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-primary opacity-75" />
+														<span className="relative inline-flex size-dot-sm rounded-full bg-primary ring-2 ring-background" />
+													</span>
+												) : null}
+											</span>
+											<span className="truncate">{tab.displayLabel ?? tab.label}</span>
+											{tab.count && tab.displayLabel === tab.label ? (
+												<span
+													aria-hidden="true"
+													className="shrink-0 font-mono text-[11px] tabular-nums text-passive"
+												>
+													{tab.count > 99 ? "99+" : tab.count}
+												</span>
+											) : null}
+										</button>
+										{closable ? (
+											<button
+												aria-label={closeTabLabel ? closeTabLabel(tab.label) : tab.label}
+												className={cn(
+													"mr-1 inline-flex size-4 shrink-0 items-center justify-center rounded-sm text-passive hover:bg-interactive-hover hover:text-foreground focus-visible:outline-2 focus-visible:outline-ring",
+													selected ? "opacity-80 hover:opacity-100" : "opacity-0 group-hover/tab:opacity-80 focus-visible:opacity-100 hover:opacity-100",
+												)}
+												data-testid={`inspector-close-tab-${tab.id}`}
+												onClick={(event) => {
+													event.stopPropagation();
+													onCloseTab?.(tab.id);
+												}}
+												type="button"
+											>
+												<XIcon className="size-3" />
+											</button>
+										) : null}
+									</div>
+								);
+							})}
+						</div>
+						{launcherTabs.length > 0 ? (
+							<button
+								aria-expanded={launcherOpen}
+								aria-label={newTabLabel ?? "+"}
+								className="session-inspector__add-tab relative inline-flex size-control-md shrink-0 items-center justify-center rounded-md border border-transparent text-passive outline-none hover:bg-interactive-hover hover:text-foreground focus-visible:outline-2 focus-visible:outline-ring focus-visible:outline-offset-[-2px]"
+								data-testid="inspector-add-tab"
+								onClick={() => setLauncherOpen(!launcherOpen)}
+								title={newTabLabel}
+								type="button"
+							>
+								<PlusIcon className="size-icon-md" />
+								{hasHiddenBadge ? (
+									<span
+										aria-hidden="true"
+										className="absolute right-1 top-1 inline-flex size-dot-sm"
+										data-testid="browser-unseen-indicator"
+									>
+										<span className="relative inline-flex size-dot-sm rounded-full bg-primary ring-2 ring-background" />
+									</span>
+								) : null}
+							</button>
+						) : null}
+					</div>
 				) : isVisible ? (
 					<div
 						className={cn(
@@ -193,35 +362,98 @@ export function SessionInspectorShellView({
 						))}
 					</div>
 				) : null}
-				{isVisible ? headerActions : null}
+				{isVisible && !modular ? headerActions : null}
 			</div>
+
+			{isVisible && showToolbar ? (
+				<div
+					className={cn(
+						"session-inspector__toolbar flex h-inspector-tabs shrink-0 items-center gap-1 border-b border-border-strong px-2",
+						activeView === "browser" && "session-inspector__toolbar--browser",
+					)}
+					data-testid="inspector-toolbar"
+				>
+					{toolbar}
+				</div>
+			) : null}
 
 			<div
 				aria-hidden={!isVisible}
 				className={cn(
 					inspectorBodyBaseClass,
 					!isVisible && "invisible pointer-events-none",
-					activeView !== "browser" && activeView !== "files" && activeView !== "sideChat" && activeView !== "subagents" && activeView !== "artifacts" && activeView !== "task" && activeView !== "device" && inspectorScrollableBodyClass,
+					launcherOpen && "flex flex-col overflow-y-auto p-0",
+					!launcherOpen && activeView !== "browser" && activeView !== "files" && activeView !== "sideChat" && activeView !== "subagents" && activeView !== "artifacts" && activeView !== "task" && activeView !== "device" && inspectorScrollableBodyClass,
 					// Read-only details opt out of the app-wide `user-select: none` so they can be copied.
-					(activeView === "summary" || activeView === "reviews") && "select-text",
-					(activeView === "sideChat" || activeView === "subagents" || activeView === "artifacts" || activeView === "task" || activeView === "device") && "p-0 overflow-hidden",
-					activeView === "browser" &&
+					!launcherOpen && (activeView === "summary" || activeView === "reviews") && "select-text",
+					!launcherOpen && (activeView === "sideChat" || activeView === "subagents" || activeView === "artifacts" || activeView === "task" || activeView === "device") && "p-0 overflow-hidden",
+					!launcherOpen && activeView === "browser" &&
 						!browserPoppedOut &&
 						"session-inspector__body--browser p-0 overflow-hidden [&>[role=tabpanel]]:border-0 [&>[role=tabpanel]]:rounded-none",
-					activeView === "files" && "p-0 overflow-hidden [&>[role=tabpanel]]:h-full",
+					!launcherOpen && activeView === "files" && "p-0 overflow-hidden [&>[role=tabpanel]]:h-full",
 				)}
 				inert={!isVisible}
 				data-telemetry-surface={`inspector_${INSPECTOR_TELEMETRY_NAMES[activeView]}`}
 			>
-				{activeView === "summary" ? summaryView : null}
-				{activeView === "reviews" ? reviewsView : null}
-				{activeView === "browser" ? browserView : null}
-				{activeView === "device" ? deviceView : null}
-				{activeView === "sideChat" ? sideChatView : null}
-				{activeView === "subagents" ? subagentsView : null}
-				{activeView === "files" ? filesView : null}
-				{activeView === "artifacts" ? artifactsView : null}
-				{activeView === "task" ? taskView : null}
+				{launcherOpen ? (
+					<div
+						aria-label={launcherAriaLabel}
+						className="flex h-full min-h-0 flex-1 flex-col items-center justify-center px-6 py-8 select-none"
+						data-testid="inspector-tab-launcher"
+						role="region"
+					>
+						<div className="flex w-full max-w-[232px] flex-col gap-0.5">
+							{launcherTabs.map((item) => (
+								<button
+									className="group/launcher flex w-full cursor-pointer items-center justify-between gap-4 rounded-md px-2.5 py-2 text-left text-sm text-foreground/90 outline-none hover:bg-interactive-hover hover:text-foreground focus-visible:outline-2 focus-visible:outline-ring"
+									data-testid={`inspector-launcher-item-${item.id}`}
+									key={item.id}
+									onClick={() => {
+										setLauncherOpen(false);
+										if (onOpenLauncherTab) onOpenLauncherTab(item.id);
+										else onViewChange(item.id);
+									}}
+									type="button"
+								>
+									<span className="inline-flex min-w-0 items-center gap-2.5">
+										<span className="inline-flex size-4 shrink-0 items-center justify-center text-muted-foreground group-hover/launcher:text-foreground [&_svg]:size-4">
+											{item.icon}
+										</span>
+										<span className="truncate">{item.label}</span>
+										{item.badge ? (
+											<span
+												aria-hidden="true"
+												className="inline-flex size-dot-sm shrink-0 rounded-full bg-primary"
+											/>
+										) : null}
+									</span>
+									<span className="inline-flex shrink-0 items-center gap-2 text-xs text-passive">
+										{item.count ? (
+											<span className="font-mono tabular-nums">{item.count > 99 ? "99+" : item.count}</span>
+										) : null}
+										{item.shortcut ? (
+											<span className="tracking-wide">{item.shortcut}</span>
+										) : item.isOpen ? (
+											<CheckIcon className="size-3.5 text-passive" />
+										) : null}
+									</span>
+								</button>
+							))}
+						</div>
+					</div>
+				) : (
+					<>
+						{activeView === "summary" ? summaryView : null}
+						{activeView === "reviews" ? reviewsView : null}
+						{activeView === "browser" ? browserView : null}
+						{activeView === "device" ? deviceView : null}
+						{activeView === "sideChat" ? sideChatView : null}
+						{activeView === "subagents" ? subagentsView : null}
+						{activeView === "files" ? filesView : null}
+						{activeView === "artifacts" ? artifactsView : null}
+						{activeView === "task" ? taskView : null}
+					</>
+				)}
 			</div>
 		</aside>
 	);
