@@ -349,3 +349,70 @@ describe("opt-out", () => {
 		expect(summary).not.toHaveProperty("error_shown_count");
 	});
 });
+
+describe("performance", () => {
+	function perfAfter(t: ReturnType<typeof setup>) {
+		t.advance(UI_WINDOW_MS);
+		t.tracker.setForeground(false);
+		return t.of(UI_EVENTS.performance)[0]?.props;
+	}
+
+	it("times a session from its route coming up to its first opening", () => {
+		const t = setup();
+		t.tracker.setRoute("board");
+		t.tracker.setRoute("session");
+		t.advance(700);
+		t.tracker.sessionOpened("h|s1");
+		// A return to the same session is not timed again.
+		t.tracker.setRoute("files");
+		t.tracker.setRoute("session");
+		t.tracker.sessionReturned("h|s1");
+		expect(perfAfter(t)).toMatchObject({ session_open_count: 1, session_open_lt1000_count: 1, session_open_p75_ms: 700 });
+	});
+
+	it("times a return to the front until fresh data, and counts one that got none", () => {
+		const t = setup();
+		t.tracker.setRoute("board");
+		t.tracker.setForeground(false);
+		t.advance(60_000);
+		t.tracker.setForeground(true);
+		t.tracker.resumed();
+		const back = T0 + 60_000;
+		t.advance(1_800);
+		t.tracker.dataRefreshed(back - 5_000); // the refresh from before the return
+		t.tracker.dataRefreshed(back + 1_800);
+		t.tracker.setForeground(false);
+		t.tracker.setForeground(true);
+		t.tracker.resumed();
+		expect(perfAfter(t)).toMatchObject({ resume_count: 2, resume_fresh_lt3000_count: 1, resume_stale_count: 1 });
+	});
+
+	it("sends request and stall counts with the window's own fields", () => {
+		const t = setup();
+		t.tracker.setRoute("board");
+		t.tracker.requestTimed(140, "lan", true);
+		t.tracker.requestTimed(null, "tailscale", false);
+		t.tracker.stalled(260);
+		const props = perfAfter(t);
+		expect(props).toMatchObject({ measurement_schema_version: 1, flush_reason: "background", request_count: 1, request_failed_count: 1, request_lan_count: 1, stall_count: 1 });
+		expect(props?.window_seconds).toBeGreaterThan(0);
+	});
+
+	it("counts nothing while opted out", () => {
+		const t = setup();
+		t.tracker.setEnabled(false);
+		t.tracker.requestTimed(140, "lan", true);
+		t.tracker.stalled(900);
+		t.tracker.resumed();
+		expect(perfAfter(t)).toBeUndefined();
+	});
+
+	// A window saved by a build before this one has no perf part.
+	it("restores a saved window that has no performance part", () => {
+		const t = setup();
+		const window = { startedAt: T0 - UI_WINDOW_MS - 1, updatedAt: T0 - 1, activeMs: 30_000, foregrounds: 1, surfaces: { board: { ms: 30_000, opens: 1 } }, sessionOpens: {}, errors: 0 };
+		t.tracker.restore({ window, viewedDay: "", viewed: [] } as unknown as PersistedUiUsage);
+		expect(t.of(UI_EVENTS.summary)).toHaveLength(1);
+		expect(t.of(UI_EVENTS.performance)).toHaveLength(0);
+	});
+});

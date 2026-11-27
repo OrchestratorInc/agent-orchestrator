@@ -28,6 +28,7 @@ beforeEach(() => {
 	tracker = {
 		setRoute: vi.fn(), setVariant: vi.fn(), setForeground: vi.fn(), sessionOpened: vi.fn(), sessionReturned: vi.fn(), openedBy: vi.fn(),
 		errorShown: vi.fn(), restore: vi.fn(), setEnabled: vi.fn(), current: vi.fn(),
+		requestTimed: vi.fn(), stalled: vi.fn(), resumed: vi.fn(), dataRefreshed: vi.fn(),
 	};
 	setUiUsageTracker(tracker as unknown as UiUsageTracker);
 });

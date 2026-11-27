@@ -2,6 +2,7 @@
 // No React Native, Expo or SDK import, so any component (and its tests) can call
 // these without loading the telemetry runtime; runtime.ts registers the tracker.
 
+import { TRANSPORTS, type Transport } from "./uiPerformance";
 import { OPENED_BY_MS, type ErrorKind, type ErrorPresentation, type OpenedBySource, type SessionTarget, type UiUsageTracker } from "./uiUsage";
 
 let tracker: UiUsageTracker | null = null;
@@ -21,6 +22,16 @@ export function setUiUsageTracker(next: UiUsageTracker | null, now: () => number
 /** The tracker, or null before telemetry starts and in dev builds. */
 export function uiUsage(): UiUsageTracker | null {
 	return tracker;
+}
+
+/** A daemon request's time to an answer (`null`: none came), over the connection kind it used. */
+export function reportRequestTimed(ms: number | null, transport: Transport, ok: boolean): void {
+	tracker?.requestTimed(ms, transport, ok);
+}
+
+/** The connection kind a machine's endpoint uses, as the performance summary names it. */
+export function transportOf(kind: string | undefined): Transport {
+	return kind && (TRANSPORTS as readonly string[]).includes(kind) ? kind as Transport : "unknown";
 }
 
 /** A user-visible error, by how it was shown and a fixed kind. Never its text. */

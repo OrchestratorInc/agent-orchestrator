@@ -7,6 +7,7 @@ import type { DesktopTelemetryIdentity } from "./telemetry/telemetry";
 import { cachedInstallId, getInstallId } from "./installId";
 import { apiOperation } from "./apiOperation";
 import { captureMobileApiError, httpCategory } from "./sentry";
+import { reportRequestTimed, transportOf } from "./telemetry/uiUsageRegistry";
 import { noteRequestAnswered } from "./answeredRequests";
 import { UnreachableError } from "./connectionError";
 import type { AttentionLevel } from "./theme";
@@ -474,6 +475,8 @@ async function req(cfg: ServerConfig, path: string, init?: RequestInit, timeoutM
 				},
 			});
 			noteRequestAnswered(startedAt);
+			// Time to the answer's headers, by the kind of connection it went over.
+			reportRequestTimed(Date.now() - startedAt, transportOf(cfg.endpointKind), received.ok);
 			// This boundary serves finite JSON responses, not SSE or downloads.
 			// Finish loading here so writes with no body consumer also release their
 			// timer, and /sessions cannot fan out while its body is still stalled.
@@ -489,9 +492,11 @@ async function req(cfg: ServerConfig, path: string, init?: RequestInit, timeoutM
 		} else if ((e as { name?: string })?.name === "AbortError") {
 			// Timed out reaching the host (commonly a sleeping Tailscale peer).
 			captureMobileApiError(apiOperation(init?.method, path), "timeout", undefined, undefined, undefined, cfg.hostId);
+			reportRequestTimed(null, transportOf(cfg.endpointKind), false);
 			throw new UnreachableError("timeout", { cause: e });
 		} else {
 			captureMobileApiError(apiOperation(init?.method, path), "offline", undefined, undefined, undefined, cfg.hostId);
+			reportRequestTimed(null, transportOf(cfg.endpointKind), false);
 			throw new UnreachableError("offline", { cause: e });
 		}
 	} finally {

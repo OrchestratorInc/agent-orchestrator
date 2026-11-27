@@ -9,6 +9,22 @@
 // a count or a duration.
 
 import { isSessionSurface, SURFACES, type Surface } from "./surfaces";
+import {
+	emptyPerf,
+	hasPerf,
+	mergePerf,
+	PERF_EVENT,
+	perfProperties,
+	recordRequest,
+	recordResume,
+	recordResumeFresh,
+	recordResumeStale,
+	recordSessionOpen,
+	recordStall,
+	restorePerf,
+	type PerfWindow,
+	type Transport,
+} from "./uiPerformance";
 
 export const SESSION_OPEN_SOURCES = [
 	"board",
@@ -59,6 +75,7 @@ export const UI_EVENTS = {
 	viewed: "mobile.surfaces.viewed",
 	summary: "mobile.ui.usage_summary",
 	errorShown: "mobile.ui.error_shown",
+	performance: PERF_EVENT,
 } as const;
 type UiEvent = (typeof UI_EVENTS)[keyof typeof UI_EVENTS];
 
@@ -82,6 +99,8 @@ export type UsageWindow = {
 	surfaces: Partial<Record<Surface, { ms: number; opens: number }>>;
 	sessionOpens: Partial<Record<SessionOpenSource, number>>;
 	errors: number;
+	/** Responsiveness, sent as its own event at the same flush (uiPerformance.ts). */
+	perf: PerfWindow;
 };
 
 export type PersistedUiUsage = { window: UsageWindow; viewedDay: string; viewed: Surface[] };
@@ -124,6 +143,14 @@ export type UiUsageTracker = {
 	 */
 	setEnabled(enabled: boolean): void;
 	current(): Surface | null;
+	/** A daemon request's time to an answer (`null`: none came), over the connection kind it used. */
+	requestTimed(ms: number | null, transport: Transport, ok: boolean): void;
+	/** The JS thread ran a timer `lateMs` late. */
+	stalled(lateMs: number): void;
+	/** Back in front with a machine paired: times how long until fresh data. */
+	resumed(): void;
+	/** A machine's data was refreshed at `syncAt` (epoch ms). */
+	dataRefreshed(syncAt: number): void;
 };
 
 function utcDay(ms: number): string {
@@ -131,11 +158,27 @@ function utcDay(ms: number): string {
 }
 
 function emptyWindow(now: number): UsageWindow {
-	return { startedAt: now, updatedAt: now, activeMs: 0, foregrounds: 0, surfaces: {}, sessionOpens: {}, errors: 0 };
+	return { startedAt: now, updatedAt: now, activeMs: 0, foregrounds: 0, surfaces: {}, sessionOpens: {}, errors: 0, perf: emptyPerf() };
 }
 
 function hasActivity(window: UsageWindow): boolean {
 	return window.activeMs > 0 || window.errors > 0 || Object.keys(window.surfaces).length > 0;
+}
+
+// Both of a window's events, as one flush sends them.
+function windowEvents(window: UsageWindow, endedAt: number, reason: "background" | "startup"): Array<[UiEvent, Record<string, unknown>]> {
+	const events: Array<[UiEvent, Record<string, unknown>]> = [];
+	if (hasActivity(window)) events.push([UI_EVENTS.summary, summaryProperties(window, endedAt, reason)]);
+	if (hasPerf(window.perf)) {
+		const summary = summaryProperties(window, endedAt, reason);
+		events.push([UI_EVENTS.performance, {
+			...perfProperties(window.perf),
+			window_seconds: summary.window_seconds,
+			active_seconds: summary.active_seconds,
+			flush_reason: reason,
+		}]);
+	}
+	return events;
 }
 
 /** The summary's properties: counters, durations and the fixed ids above. Zeros are left out. */
@@ -183,6 +226,7 @@ function mergeWindows(earlier: UsageWindow, later: UsageWindow): UsageWindow {
 		surfaces,
 		sessionOpens,
 		errors: earlier.errors + later.errors,
+		perf: mergePerf(earlier.perf, later.perf),
 	};
 }
 
@@ -225,6 +269,11 @@ export function createUiUsageTracker(deps: UiUsageDeps): UiUsageTracker {
 	const lastErrorAt = new Map<string, number>();
 	let lastSaveAt = start;
 	let enabled = true;
+	// When the session route came up from outside the session screens: its
+	// first counted opening times how long the session took to show.
+	let sessionRouteAt: number | null = null;
+	// When the app came back to the front, until fresh data arrives.
+	let resumeAt: number | null = null;
 
 	const save = (now: number) => {
 		if (!enabled) return;
@@ -274,12 +323,15 @@ export function createUiUsageTracker(deps: UiUsageDeps): UiUsageTracker {
 			const base = window.surfaces.session;
 			if (base && base.opens > 0) base.opens -= 1;
 		}
+		const previous = shown;
 		shown = next;
 		if (next && enabled) {
 			const entry = window.surfaces[next] ?? { ms: 0, opens: 0 };
 			entry.opens += 1;
 			window.surfaces[next] = entry;
+			if (isSessionSurface(next) && (previous === null || !isSessionSurface(previous))) sessionRouteAt = now;
 			if (!isSessionSurface(next)) {
+				sessionRouteAt = null;
 				lastOutsideSession = next;
 				countedSession = null;
 				// Its session screen came and went without the session opening.
@@ -299,7 +351,7 @@ export function createUiUsageTracker(deps: UiUsageDeps): UiUsageTracker {
 	const flush = (reason: "background" | "startup", now: number) => {
 		if (!enabled) return;
 		if (now - window.startedAt < UI_WINDOW_MS) return;
-		if (hasActivity(window)) deps.capture(UI_EVENTS.summary, summaryProperties(window, now, reason));
+		for (const [event, properties] of windowEvents(window, now, reason)) deps.capture(event, properties);
 		window = emptyWindow(now);
 		if (foreground) activeSince = now;
 		save(now);
@@ -320,6 +372,8 @@ export function createUiUsageTracker(deps: UiUsageDeps): UiUsageTracker {
 			const now = deps.now();
 			if (!active) {
 				account(now);
+				if (enabled && resumeAt !== null) recordResumeStale(window.perf);
+				resumeAt = null;
 				if (enabled) window.activeMs += Math.max(0, now - activeSince);
 				foreground = false;
 				save(now);
@@ -352,6 +406,10 @@ export function createUiUsageTracker(deps: UiUsageDeps): UiUsageTracker {
 					: lastOutsideSession ? SOURCE_BY_SURFACE[lastOutsideSession] ?? "other" : "other";
 			if (marked) pendingSource = null;
 			window.sessionOpens[source] = (window.sessionOpens[source] ?? 0) + 1;
+			if (sessionRouteAt !== null) {
+				recordSessionOpen(window.perf, now - sessionRouteAt);
+				sessionRouteAt = null;
+			}
 		},
 		sessionReturned(key) {
 			if (enabled) countedSession = key;
@@ -373,14 +431,16 @@ export function createUiUsageTracker(deps: UiUsageDeps): UiUsageTracker {
 		restore(saved) {
 			if (!enabled || !saved || !isWindow(saved.window)) return;
 			const now = deps.now();
+			// A window saved before responsiveness was counted has no perf part.
+			const savedWindow: UsageWindow = { ...saved.window, perf: restorePerf((saved.window as Partial<UsageWindow>).perf) };
 			if (saved.viewedDay === viewedDay && Array.isArray(saved.viewed)) {
 				for (const surface of saved.viewed) if ((SURFACES as readonly string[]).includes(surface)) viewed.add(surface);
 			}
 			if (now - saved.window.startedAt >= UI_WINDOW_MS) {
 				// Its window ran out while the app was closed: send it as it was saved.
-				if (hasActivity(saved.window)) deps.capture(UI_EVENTS.summary, summaryProperties(saved.window, saved.window.updatedAt, "startup"));
+				for (const [event, properties] of windowEvents(savedWindow, savedWindow.updatedAt, "startup")) deps.capture(event, properties);
 			} else {
-				window = mergeWindows(saved.window, window);
+				window = mergeWindows(savedWindow, window);
 			}
 			save(now);
 		},
@@ -392,10 +452,28 @@ export function createUiUsageTracker(deps: UiUsageDeps): UiUsageTracker {
 			viewed.clear();
 			lastErrorAt.clear();
 			pendingSource = null;
+			sessionRouteAt = null;
+			resumeAt = null;
 			shownAt = now;
 			activeSince = now;
 			if (!next) deps.clear();
 		},
 		current: () => shown,
+		requestTimed(ms, transport, ok) {
+			if (enabled) recordRequest(window.perf, ms, transport, ok);
+		},
+		stalled(lateMs) {
+			if (enabled && foreground) recordStall(window.perf, lateMs);
+		},
+		resumed() {
+			if (!enabled) return;
+			recordResume(window.perf);
+			resumeAt = deps.now();
+		},
+		dataRefreshed(syncAt) {
+			if (!enabled || resumeAt === null || syncAt < resumeAt) return;
+			recordResumeFresh(window.perf, syncAt - resumeAt);
+			resumeAt = null;
+		},
 	};
 }
