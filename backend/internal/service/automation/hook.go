@@ -25,6 +25,7 @@ import (
 
 const (
 	maxHookPromptBytes  = 64 << 10
+	maxHookDedupeBytes  = 8 << 20
 	maxPendingCalledRun = 20
 	hookDedupeWindow    = 7 * 24 * time.Hour
 )
@@ -103,7 +104,7 @@ func (s *Service) Call(ctx context.Context, key string, in CallInput) (CallResul
 	nonce := make([]byte, 8)
 	_, _ = rand.Read(nonce)
 	tag := "hook-data-" + hex.EncodeToString(nonce)
-	prompt := fillHookTemplate(rec.Prompt, data, func(v string) string { return "<" + tag + ">" + v + "</" + tag + ">" })
+	prompt := fillHookTemplate(rec.Prompt, data, tag)
 	if strings.TrimSpace(prompt) == "" {
 		return CallResult{Status: domain.AutomationCallIgnored}, nil
 	}
@@ -251,7 +252,7 @@ func hookString(v any) string {
 	return strings.TrimSuffix(b.String(), "\n")
 }
 
-func fillHookTemplate(tmpl string, data map[string]any, wrap func(string) string) string {
+func fillHookTemplate(tmpl string, data map[string]any, tag string) string {
 	size := 0
 	return hookPlaceholder.ReplaceAllStringFunc(tmpl, func(m string) string {
 		path := hookPlaceholder.FindStringSubmatch(m)[1]
@@ -264,7 +265,7 @@ func fillHookTemplate(tmpl string, data map[string]any, wrap func(string) string
 		}
 		s := hookString(v)
 		if strings.TrimSpace(s) != "" {
-			s = wrap(s)
+			s = "<" + tag + ">" + s + "</" + tag + ">"
 		}
 		size += len(s)
 		return s
@@ -277,13 +278,16 @@ func hookDedupeKey(tmpl string, data map[string]any) string {
 		return ""
 	}
 	h := sha256.New()
+	fmt.Fprintf(h, "%d:%s", len(tmpl), tmpl)
+	total := 0
 	for _, m := range matches {
 		v, ok := lookupHookPath(data, m[1])
 		if !ok || v == nil {
 			return ""
 		}
 		s := hookString(v)
-		if strings.TrimSpace(s) == "" {
+		total += len(s)
+		if strings.TrimSpace(s) == "" || total > maxHookDedupeBytes {
 			return ""
 		}
 		fmt.Fprintf(h, "%d:%s", len(s), s)

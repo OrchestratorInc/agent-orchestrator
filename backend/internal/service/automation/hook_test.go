@@ -211,7 +211,7 @@ func TestCallReadsFormBodiesAndSkipsDedupeWithoutItsValue(t *testing.T) {
 
 func TestFillHookTemplateStopsPastThePromptLimit(t *testing.T) {
 	data := map[string]any{"body": strings.Repeat("x", 40<<10)}
-	out := fillHookTemplate(strings.Repeat("{{body}}", 1000), data, func(v string) string { return v })
+	out := fillHookTemplate(strings.Repeat("{{body}}", 1000), data, "t")
 	if len(out) <= maxHookPromptBytes || len(out) > 2*maxHookPromptBytes {
 		t.Fatalf("fill = %d bytes, want just past the limit", len(out))
 	}
@@ -228,8 +228,15 @@ func TestHookDedupeKey(t *testing.T) {
 		data := map[string]any{"body": v, "headers": map[string]any{"x-delivery": "d1"}}
 		return hookDedupeKey(tmpl, data)
 	}
-	if k := hookDedupeKey("{{body}}{{headers.X-Delivery}}", map[string]any{"body": big, "headers": map[string]any{"x-delivery": "d1"}}); k == "" {
+	bigData := map[string]any{"body": big, "headers": map[string]any{"x-delivery": "d1"}}
+	if k := hookDedupeKey("{{body}}{{headers.X-Delivery}}", bigData); k == "" {
 		t.Fatal("large early value turned dedupe off")
+	}
+	if k := hookDedupeKey(strings.Repeat("{{body}}", 512), bigData); k != "" {
+		t.Fatal("dedupe hashed past its byte budget")
+	}
+	if key("v2-{{body.b}}", `{"b":"1"}`) == key("{{body.b}}", `{"b":"1"}`) {
+		t.Fatal("editing the key's fixed text did not change the key")
 	}
 	for _, body := range []string{`{"a":null,"b":"1"}`, `{"a":" ","b":"1"}`, `{"b":"1"}`} {
 		if k := key("{{body.a}}{{body.b}}", body); k != "" {
