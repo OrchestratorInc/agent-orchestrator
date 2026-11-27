@@ -1,14 +1,25 @@
 import { renderHook, waitFor } from "@testing-library/react";
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { useUiStore } from "../stores/ui-store";
 import { CloudCpError } from "./cloud-cp";
-import { MAX_FINISH_AGE_MS, MAX_FINISH_ATTEMPTS, finishExpired, finishMove, useFinishUnfinishedMoves, useUnfinishedMoveStore, type UnfinishedMove } from "./move-finish";
+import { MAX_FINISH_AGE_MS, MAX_FINISH_ATTEMPTS, finishExpired, finishMove, resetFinishLoopForTests, useFinishUnfinishedMoves, useUnfinishedMoveStore, type UnfinishedMove } from "./move-finish";
 
-const { completeReply, cloudCp } = vi.hoisted(() => ({
+const { completeReply, cloudCp, completeCalls, completeGate } = vi.hoisted(() => ({
 	completeReply: { current: {} as { error?: unknown; response?: { status: number } } },
 	cloudCp: { current: { client: null as unknown, userId: "" } },
+	// Each move/complete the hook sends, by session, and a gate that holds them in flight.
+	completeCalls: [] as string[],
+	completeGate: { current: Promise.resolve() },
 }));
-vi.mock("./host-clients", () => ({ clientForSessionHost: () => ({ POST: vi.fn(async () => completeReply.current) }) }));
+vi.mock("./host-clients", () => ({
+	clientForSessionHost: () => ({
+		POST: vi.fn(async (_route: string, init: { params: { path: { sessionId: string } } }) => {
+			completeCalls.push(init.params.path.sessionId);
+			await completeGate.current;
+			return completeReply.current;
+		}),
+	}),
+}));
 vi.mock("../hooks/useCloudCp", () => ({ useCloudCp: () => cloudCp.current }));
 
 const complete: UnfinishedMove = { kind: "complete", sessionId: "app-1", moveId: "m-1", orgId: "org-1", cloudSessionId: "cloud-9" };
@@ -87,6 +98,34 @@ describe("finishExpired", () => {
 });
 
 describe("useFinishUnfinishedMoves", () => {
+	beforeEach(() => {
+		resetFinishLoopForTests();
+		completeCalls.length = 0;
+		completeGate.current = Promise.resolve();
+	});
+
+	it("runs one finishing loop at a time, however often its effect re-runs", async () => {
+		completeReply.current = {};
+		useUnfinishedMoveStore.setState({ moves: [] });
+		const second: UnfinishedMove = { ...complete, sessionId: "app-2", moveId: "m-2" };
+		useUnfinishedMoveStore.getState().add(complete);
+		useUnfinishedMoveStore.getState().add(second);
+		let release = () => {};
+		completeGate.current = new Promise<void>((resolve) => { release = resolve; });
+		cloudCp.current = { client: null, userId: "" };
+		const { rerender, unmount } = renderHook(() => useFinishUnfinishedMoves());
+		await waitFor(() => expect(completeCalls).toEqual(["app-1"]));
+		// The effect re-runs while the first loop still waits on app-1: a new
+		// client, as after a sign-in, re-keys it.
+		cloudCp.current = { client: {}, userId: "user-1" };
+		rerender();
+		release();
+		await waitFor(() => expect(useUnfinishedMoveStore.getState().moves).toEqual([]));
+		expect(completeCalls).toEqual(["app-1", "app-2"]);
+		unmount();
+		cloudCp.current = { client: null, userId: "" };
+	});
+
 	it("says once that it stopped, and drops a move refused for good", async () => {
 		completeReply.current = { error: { code: "MOVE_DESTINATION_INVALID", message: "moveId, orgId and sessionId are required" }, response: { status: 400 } };
 		useUiStore.setState({ globalToast: null });

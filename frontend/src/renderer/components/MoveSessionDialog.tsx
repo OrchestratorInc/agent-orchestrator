@@ -58,6 +58,10 @@ const STEPS: MoveStep[] = ["stop", "export", "import", "complete"];
 /** git status --short letters, so a deleted file does not read as one that moves; ?? is an untracked file. */
 const STATUS_LETTER = { added: "A", modified: "M", deleted: "D" } as const;
 
+// Stand-ins until the move is seeded (MoveSessionDialogBody): no move runs then.
+const NO_CLOUD_REQUEST: NonNullable<MoveDeps["cloudRequest"]> = Object.freeze({});
+const NO_CREATED_PROJECT: { current: string | undefined } = Object.freeze({ current: undefined as string | undefined });
+
 function MoveSessionDialogBody({ session, onClose }: { session: WorkspaceSession; onClose: () => void }) {
 	const { t } = useTranslation();
 	const queryClient = useQueryClient();
@@ -79,21 +83,38 @@ function MoveSessionDialogBody({ session, onClose }: { session: WorkspaceSession
 	// organization or account is left alone.
 	const attemptKey = unsettledMoveKey(session.hostId, session.id);
 	const storedAttempt = useRef(useUnsettledMoveStore.getState().moves[attemptKey]).current;
+	// The saved move counts only once the organization and account are known
+	// and both are its own: while they load, they say nothing.
+	const identityKnown = Boolean(org && userId);
 	const saved =
-		storedAttempt && (!org || storedAttempt.orgId === org.id) && (!storedAttempt.accountId || !userId || storedAttempt.accountId === userId)
+		storedAttempt && identityKnown && storedAttempt.orgId === org?.id && (!storedAttempt.accountId || storedAttempt.accountId === userId)
 			? storedAttempt
 			: undefined;
 	// One move per dialog: Try again reuses its id and Cloud request, so a
 	// Cloud session whose response was lost is returned instead of duplicated.
 	// A move whose export pushed the session and did not finish keeps its id
-	// on this computer too.
-	const moveId = useRef(saved?.moveId ?? session.moveStarted ?? crypto.randomUUID()).current;
-	const cloudRequest = useRef<NonNullable<MoveDeps["cloudRequest"]>>(
-		saved ? { current: saved.request, key: saved.key, pushed: saved.pushed, createUnsettled: true } : {},
-	).current;
-	// A Cloud project the move created; Try again moves into it instead of creating another.
-	// An earlier move being finished goes to the project its request names.
-	const createdProject = useRef<string | undefined>(saved?.projectId ?? saved?.request.projectId);
+	// on this computer too. Seeded once, when the organization and account are
+	// known, so a saved move of another one is never taken up; nothing moves
+	// before then (target waits for it).
+	const seed = useRef<{
+		moveId: string;
+		cloudRequest: NonNullable<MoveDeps["cloudRequest"]>;
+		// A Cloud project the move created; Try again moves into it instead of
+		// creating another. An earlier move being finished goes to the project
+		// its request names.
+		createdProject: { current: string | undefined };
+	}>(undefined);
+	if (!seed.current && identityKnown) {
+		seed.current = {
+			moveId: saved?.moveId ?? session.moveStarted ?? crypto.randomUUID(),
+			cloudRequest: saved ? { current: saved.request, key: saved.key, pushed: saved.pushed, createUnsettled: true } : {},
+			createdProject: { current: saved?.projectId ?? saved?.request.projectId },
+		};
+	}
+	const seeded = seed.current;
+	const moveId = seeded?.moveId ?? "";
+	const cloudRequest = seeded?.cloudRequest ?? NO_CLOUD_REQUEST;
+	const createdProject = seeded?.createdProject ?? NO_CREATED_PROJECT;
 	const [steps, setSteps] = useState<MoveStep[]>(STEPS);
 	// Finishing an earlier move needs neither a new preview nor its checks.
 	const finishing = step !== undefined || Boolean(saved);
@@ -169,7 +190,7 @@ function MoveSessionDialogBody({ session, onClose }: { session: WorkspaceSession
 												: undefined;
 	// An empty projectId has the move create newProject.
 	const target: MoveTarget | undefined =
-		org && (project || newProject || finishing) && !loading && !unavailable
+		org && seeded && (project || newProject || finishing) && !loading && !unavailable
 			? { orgId: org.id, projectId: createdProject.current ?? project?.id ?? "", harness, chat: offering.chatHarnesses.includes(harness) }
 			: undefined;
 	const changes = preview.data?.changes ?? [];

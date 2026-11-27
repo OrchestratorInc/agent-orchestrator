@@ -133,6 +133,13 @@ export interface MoveCloudRequest {
 	key?: string;
 	pushed?: MovePushed;
 	createUnsettled?: boolean;
+	/**
+	 * Whether the agent here was running when this move first stopped it. A
+	 * rollback starts it again only then: an agent that had already exited
+	 * stays as the user left it. Kept across attempts, since a later attempt
+	 * finds the agent stopped by the first.
+	 */
+	agentWasRunning?: boolean;
 }
 
 /** Cloud refused a move's export because it could not save the latest conversation. */
@@ -238,6 +245,11 @@ export async function moveSession(
 				"settle",
 			);
 		}
+		// The agent was not running when the move began: the session is as the
+		// user left it, so nothing starts it.
+		if (state.agentWasRunning === false) {
+			throw new MoveError(apiErrorMessage(error, fallback), step, apiErrorCode(error), true, pushed);
+		}
 		let resumed: boolean | undefined;
 		try {
 			resumed = !(await deps.source.POST("/api/v1/sessions/{sessionId}/resume-agent", path)).error;
@@ -326,6 +338,9 @@ export async function moveSession(
 	if (stopped.error && apiErrorCode(stopped.error) !== "AGENT_EXITED") {
 		throw new MoveError(apiErrorMessage(stopped.error, "Could not stop the agent"), "stop", apiErrorCode(stopped.error), false);
 	}
+	// AGENT_EXITED: it had already stopped. Only this move's first stop says
+	// whether it was running; a Try again finds it stopped by that one.
+	state.agentWasRunning ??= !stopped.error;
 
 	deps.onStep?.("export");
 	// No answer may still mean the branch was pushed, so nothing resumes the agent.

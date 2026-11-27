@@ -97,7 +97,7 @@ func (m pathMap) rewriteValue(v any) (any, bool) {
 		}
 		return t, changed
 	case map[string]any:
-		if kind, _ := t["type"].(string); kind == "thinking" || kind == "redacted_thinking" {
+		if signed(t) {
 			return t, false
 		}
 		changed := false
@@ -111,43 +111,82 @@ func (m pathMap) rewriteValue(v any) (any, bool) {
 	return v, false
 }
 
-func (m pathMap) rewriteString(s string) (string, bool) {
-	changed := false
-	for _, p := range m {
-		if out, c := replacePathPrefix(s, p.old, p.new); c {
-			s, changed = out, true
+// signed reports a block whose text a model provider signs and checks when
+// the conversation resumes, so not a byte of it may change: Claude Code's
+// thinking and redacted_thinking blocks, OpenCode's reasoning parts (whose
+// signature is in metadata.<provider>.signature), and any object that
+// carries a signature itself or in its metadata.
+func signed(t map[string]any) bool {
+	switch kind, _ := t["type"].(string); kind {
+	case "thinking", "redacted_thinking", "reasoning":
+		return true
+	}
+	if _, ok := t["signature"]; ok {
+		return true
+	}
+	if meta, ok := t["metadata"].(map[string]any); ok {
+		for _, provider := range meta {
+			if fields, ok := provider.(map[string]any); ok {
+				if _, ok := fields["signature"]; ok {
+					return true
+				}
+			}
 		}
 	}
-	return s, changed
+	return false
 }
 
-// replacePathPrefix replaces from where it stands as a whole path, so
-// "/w/web-3" matches "/w/web-3/a.go" but not "/w/web-30" or "/x/w/web-3".
-func replacePathPrefix(s, from, to string) (string, bool) {
+// rewriteString replaces every mapped prefix in s in one pass over the
+// original text, so a replacement is never matched again by a later pair
+// (when one pair's new path is another pair's old one). At each position the
+// longest matching prefix wins (m is sorted longest first).
+func (m pathMap) rewriteString(s string) (string, bool) {
 	var b strings.Builder
 	changed := false
 	i := 0
-	for {
-		j := strings.Index(s[i:], from)
-		if j < 0 {
+	for i < len(s) {
+		best, at := -1, len(s)
+		for k, p := range m {
+			if j := indexWholePath(s, i, p.old); j >= 0 && j < at {
+				best, at = k, j
+			}
+		}
+		if best < 0 {
 			break
 		}
-		j += i
-		end := j + len(from)
-		b.WriteString(s[i:j])
-		if (j == 0 || !isPathNameByte(s[j-1])) && (end == len(s) || !isPathNameByte(s[end])) {
-			b.WriteString(to)
-			changed = true
-		} else {
-			b.WriteString(from)
-		}
-		i = end
+		b.WriteString(s[i:at])
+		b.WriteString(m[best].new)
+		i = at + len(m[best].old)
+		changed = true
 	}
 	if !changed {
 		return s, false
 	}
 	b.WriteString(s[i:])
 	return b.String(), true
+}
+
+// replacePathPrefix replaces from wherever it stands as a whole path, so
+// "/w/web-3" matches "/w/web-3/a.go" but not "/w/web-30" or "/x/w/web-3".
+func replacePathPrefix(s, from, to string) (string, bool) {
+	return pathMap{{old: from, new: to}}.rewriteString(s)
+}
+
+// indexWholePath is the first index at or after i where from stands as a whole
+// path, or -1.
+func indexWholePath(s string, i int, from string) int {
+	for {
+		j := strings.Index(s[i:], from)
+		if j < 0 {
+			return -1
+		}
+		j += i
+		end := j + len(from)
+		if (j == 0 || !isPathNameByte(s[j-1])) && (end == len(s) || !isPathNameByte(s[end])) {
+			return j
+		}
+		i = j + 1
+	}
 }
 
 func isPathNameByte(c byte) bool {

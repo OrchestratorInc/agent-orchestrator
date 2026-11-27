@@ -157,15 +157,17 @@ function reportGaveUp(move: UnfinishedMove, reason?: string) {
  */
 export function useFinishUnfinishedMoves() {
 	const { client, userId } = useCloudCp();
-	const pending = useUnfinishedMoveStore((state) => state.moves.length);
+	// Keyed on whether there is anything to finish, not on how much: a loop
+	// that removes a finished move must not start another loop beside it.
+	const hasMoves = useUnfinishedMoveStore((state) => state.moves.length > 0);
 	useEffect(() => {
-		if (pending === 0) return;
-		let running = false;
-		// Said once per move while another account, or none, is signed in.
-		const toldOtherAccount = new Set<string>();
+		if (!hasMoves) return;
 		const run = async () => {
-			if (running) return;
-			running = true;
+			// One loop at a time across effect re-runs (a new account, a new
+			// client): an overlap would repeat move/complete and deleteSession,
+			// count each try twice, and say a give-up twice.
+			if (finishLoopRunning) return;
+			finishLoopRunning = true;
 			try {
 				const store = useUnfinishedMoveStore.getState;
 				for (const move of store().moves) {
@@ -195,13 +197,25 @@ export function useFinishUnfinishedMoves() {
 					}
 				}
 			} finally {
-				running = false;
+				finishLoopRunning = false;
 			}
 		};
 		void run();
 		const timer = window.setInterval(() => void run(), RETRY_MS);
 		return () => window.clearInterval(timer);
-	}, [client, pending, userId]);
+	}, [client, hasMoves, userId]);
+}
+
+/** A finishing loop is running (useFinishUnfinishedMoves): at most one at a time. */
+let finishLoopRunning = false;
+
+/** The moves already said to wait for another account, so that is said once each. */
+const toldOtherAccount = new Set<string>();
+
+/** Resets the loop's module state; tests only. */
+export function resetFinishLoopForTests() {
+	finishLoopRunning = false;
+	toldOtherAccount.clear();
 }
 
 /**

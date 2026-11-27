@@ -281,6 +281,14 @@ func (m *Manager) placeTransferConversation(ctx context.Context, harness domain.
 	if err != nil {
 		return "", err
 	}
+	// ImportClaude keeps a transcript already in place, as a repeated import
+	// should. For a move that copy predates the moved conversation, so
+	// resuming it would drop every turn taken since: the moved one counts as
+	// not placed, and the session starts from the note while the source keeps
+	// the full copy.
+	if res.Existing {
+		return "", fmt.Errorf("a conversation %s is already in place here; the moved one was not placed over it", res.NativeID)
+	}
 	return res.NativeID, nil
 }
 

@@ -292,3 +292,70 @@ func TestMoveToCloudLeavesTheConversationHere(t *testing.T) {
 			archived.IsTerminated, archived.Metadata.AgentSessionID, archived.Metadata.NativeTranscriptPath, transcript)
 	}
 }
+
+// A moved Claude Code conversation is not placed over a copy of the same
+// conversation already in the new worktree's project folder: that copy
+// predates the move, so the session starts from the note instead of resuming
+// it and dropping the turns taken since.
+func TestSpawnTransferDoesNotResumeAStaleCopyHere(t *testing.T) {
+	const id = "0b5a6c1e-3f2d-4c8a-9e7b-1d2c3b4a5f60"
+	inbox := filepath.Join(t.TempDir(), id+".jsonl")
+	if err := os.WriteFile(inbox, []byte(`{"type":"user","cwd":"/workspace/repository","sessionId":"`+id+`","message":{"role":"user","content":"moved"}}`+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	archive := filepath.Join(t.TempDir(), "conversation.tgz")
+	f, err := os.Create(archive)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := nativetransfer.WriteClaudeArchiveFromCloud(context.Background(), f, inbox, "/home/agent/.claude/projects/-workspace-repository"); err != nil {
+		t.Fatal(err)
+	}
+	_ = f.Close()
+
+	configDir, workspace := t.TempDir(), t.TempDir()
+	resolved, err := filepath.EvalSymlinks(workspace)
+	if err != nil {
+		t.Fatal(err)
+	}
+	dirName, err := nativetransfer.ClaudeProjectDirName(resolved)
+	if err != nil {
+		t.Fatal(err)
+	}
+	stale := filepath.Join(configDir, "projects", dirName, id+".jsonl")
+	if err := os.MkdirAll(filepath.Dir(stale), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(stale, []byte(`{"type":"user","sessionId":"`+id+`","message":{"role":"user","content":"stale"}}`+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	st := newFakeStore()
+	st.projects["mer"] = domain.ProjectRecord{ID: "mer", Config: testRoleAgents()}
+	agent := &recordingAgent{}
+	m := New(Deps{
+		Runtime:   &fakeRuntime{},
+		Agents:    singleAgent{agent: nativeConfigAgent{recordingAgent: agent, dir: configDir}},
+		Workspace: &fakeWorkspace{path: workspace},
+		Store:     st,
+		Messenger: &fakeMessenger{},
+		Lifecycle: &fakeLCM{store: st},
+		LookPath:  func(string) (string, error) { return "/bin/true", nil },
+	})
+	rec, _, _, err := m.Spawn(ctx, ports.SpawnConfig{
+		ProjectID: "mer", Kind: domain.KindWorker, Harness: domain.HarnessClaudeCode,
+		Transfer: &ports.SpawnTransfer{NativeArchive: archive, FallbackPrompt: "NOTE"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if agent.restoreCalls != 0 || agent.launchCalls != 1 || agent.lastLaunch.Prompt != "NOTE" {
+		t.Fatalf("restore calls %d, launch calls %d, prompt %q; want a launch from the note", agent.restoreCalls, agent.launchCalls, agent.lastLaunch.Prompt)
+	}
+	if rec.Metadata.AgentSessionID == id {
+		t.Fatalf("recorded the stale conversation %s as resumed", id)
+	}
+	if data, _ := os.ReadFile(stale); !strings.Contains(string(data), "stale") {
+		t.Fatalf("the copy here changed: %s", data)
+	}
+}

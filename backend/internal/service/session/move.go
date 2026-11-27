@@ -168,8 +168,11 @@ func (s *Service) ExportMove(ctx context.Context, id domain.SessionID, in MoveEx
 			return MoveExport{}, err
 		}
 	}
-	// From the push on, AO Cloud may start the session, so restoring at startup
+	// Recorded before the push, since a push cut short may still have reached
+	// origin and AO Cloud may then start the session: restoring at startup
 	// leaves it stopped here until the move finishes or the user resumes it.
+	// A failed push leaves it set too; the app's rollback (resume-agent, or an
+	// explicit restore) ends it, and a later move reuses its id.
 	if store, ok := s.store.(sessionMoveStartedStore); ok {
 		if _, err := store.SetSessionMoveStarted(ctx, id, in.MoveID, s.clock().UTC()); err != nil {
 			return MoveExport{}, err

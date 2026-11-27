@@ -456,6 +456,43 @@ describe("moveSession", () => {
 			expect(cp.createSession.mock.calls[1][1]).toEqual(cp.createSession.mock.calls[0][1]);
 		});
 	});
+
+	it("leaves an agent that had already exited stopped when the move rolls back", async () => {
+		const calls: string[] = [];
+		const source = fakeDaemon({
+			"/api/v1/sessions/{sessionId}/exit-agent": fail("AGENT_EXITED"),
+			"/api/v1/sessions/{sessionId}/move/export": fail("MOVE_REMOTE_AHEAD", "origin has commits"),
+			"/api/v1/sessions/{sessionId}/resume-agent": ok(),
+		}, calls);
+		const error = await moveSession({ sessionId: "app-1", target }, { source, cloud: cloud() }).catch((e: unknown) => e);
+		expect(error).toMatchObject({ step: "export", code: "MOVE_REMOTE_AHEAD", rolledBack: true });
+		expect(calls).not.toContain("/api/v1/sessions/{sessionId}/resume-agent");
+	});
+
+	it("starts again an agent that was running when the move began, though Try again finds it stopped", async () => {
+		const state = {};
+		const first: string[] = [];
+		await moveSession({ sessionId: "app-1", target, moveId: "m-1" }, {
+			source: fakeDaemon({
+				"/api/v1/sessions/{sessionId}/exit-agent": ok(),
+				// No answer from the export: nothing is resumed, and Try again follows.
+			}, first),
+			cloud: cloud(),
+			cloudRequest: state,
+		}).catch(() => undefined);
+		const second: string[] = [];
+		const error = await moveSession({ sessionId: "app-1", target, moveId: "m-1" }, {
+			source: fakeDaemon({
+				"/api/v1/sessions/{sessionId}/exit-agent": fail("AGENT_EXITED"),
+				"/api/v1/sessions/{sessionId}/move/export": fail("MOVE_REMOTE_AHEAD", "origin has commits"),
+				"/api/v1/sessions/{sessionId}/resume-agent": ok(),
+			}, second),
+			cloud: cloud(),
+			cloudRequest: state,
+		}).catch((e: unknown) => e);
+		expect(error).toMatchObject({ step: "export", rolledBack: true });
+		expect(second).toContain("/api/v1/sessions/{sessionId}/resume-agent");
+	});
 });
 
 describe("moveSessionHere", () => {

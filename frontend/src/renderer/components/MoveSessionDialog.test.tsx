@@ -21,6 +21,8 @@ const { daemon, navigate, cloud, uploadCloudTranscript } = vi.hoisted(() => ({
 	navigate: vi.fn(),
 	cloud: {
 		features: [] as string[], projects: [] as unknown[], sessions: [] as unknown[], createSession: vi.fn(), signedIn: true, connections: [] as unknown[],
+		// The signed-in organization (null while it loads) and account.
+		orgId: "org-1" as string | null, userId: "user-1",
 		previewSessionMove: vi.fn(), exportSessionMove: vi.fn(), getSessionMoveExport: vi.fn(), restartSessionAgent: vi.fn(), deleteSession: vi.fn(), createProject: vi.fn(),
 	},
 }));
@@ -45,10 +47,10 @@ vi.mock("../lib/host-clients", () => ({
 }));
 vi.mock("../lib/navigate-to-session", () => ({ useNavigateToSession: () => navigate }));
 vi.mock("../hooks/useCloudCp", () => ({
-	useCloudCp: () => ({ client: cloud.signedIn ? cloud : null, baseUrl: "http://cp.test" }),
+	useCloudCp: () => ({ client: cloud.signedIn ? cloud : null, baseUrl: "http://cp.test", userId: cloud.signedIn ? cloud.userId : "" }),
 }));
 vi.mock("../lib/cloud-attachments", () => ({ uploadCloudTranscript }));
-vi.mock("../hooks/useCloudOrg", () => ({ useCloudOrg: () => ({ org: cloud.signedIn ? { id: "org-1" } : undefined }) }));
+vi.mock("../hooks/useCloudOrg", () => ({ useCloudOrg: () => ({ org: cloud.signedIn && cloud.orgId ? { id: cloud.orgId } : undefined }) }));
 vi.mock("../hooks/useCloudOffering", () => ({ useCloudOffering: () => ({ features: cloud.features, chatHarnesses: ["claude-code"] }) }));
 vi.mock("../hooks/useProviderConnections", () => ({ useProviderConnections: () => ({ data: cloud.connections, isPending: false }) }));
 vi.mock("../hooks/useWorkspaceQuery", () => ({
@@ -73,13 +75,17 @@ const moveReplies = {
 
 function renderDialog(target: WorkspaceSession = session) {
 	useUiStore.setState({ moveSessionTarget: target, globalToast: null });
-	return render(
-		<QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
+	const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+	const tree = () => (
+		<QueryClientProvider client={queryClient}>
 			<TooltipProvider>
 				<MoveSessionDialog />
 			</TooltipProvider>
-		</QueryClientProvider>,
+		</QueryClientProvider>
 	);
+	const rendered = render(tree());
+	// Renders the same dialog again, as a hook's new value would.
+	return { ...rendered, again: () => rendered.rerender(tree()) };
 }
 
 beforeEach(() => {
@@ -93,6 +99,8 @@ beforeEach(() => {
 	uploadCloudTranscript.mockReset();
 	daemon.transcript = { data: { agentSessionId: "aid-1", transcriptGzip: btoa("gz") } };
 	cloud.signedIn = true;
+	cloud.orgId = "org-1";
+	cloud.userId = "user-1";
 	cloud.connections = [{ provider: "claude-code", label: "default", validationState: "valid" }];
 	daemon.defaultBranch = "main";
 	useUnsettledMoveStore.getState().set(":app-1", undefined);
@@ -411,6 +419,30 @@ it("saves the move before Cloud's create, so a relaunch finishes it under the sa
 	expect(b).toEqual(a);
 	expect(a[2]).toEqual({ idempotencyKey: saved?.moveId });
 	expect(daemon.postCalls.map((call) => call.path)).toEqual(["/api/v1/sessions/{sessionId}/move/complete"]);
+});
+
+it("does not take up another organization's saved move while the organization loads", async () => {
+	daemon.posts = moveReplies;
+	cloud.createSession.mockResolvedValue({ session: { id: "cloud-9" } });
+	// A move another organization left unsettled for this session.
+	useUnsettledMoveStore.getState().set(":app-1", {
+		moveId: "m-other", orgId: "org-2", key: "k-other", accountId: "user-1",
+		request: { projectId: "p-other", kind: "worker", harness: "claude-code", displayName: "other", prompt: "other", branch: "feat/other" },
+	});
+	// Cold cache: the organization is not known on the first render.
+	cloud.orgId = null;
+	const dialog = renderDialog();
+	cloud.orgId = "org-1";
+	dialog.again();
+	const user = userEvent.setup();
+	await user.click(await screen.findByRole("button", { name: "Move to Orchestrator Cloud" }));
+	await waitFor(() => expect(navigate).toHaveBeenCalledWith("cloud-proj", "cloud-9"));
+	const [orgId, request, options] = cloud.createSession.mock.calls[0];
+	expect(orgId).toBe("org-1");
+	expect(request).toMatchObject({ projectId: "cloud-proj", branch: "feat/x" });
+	expect(options.idempotencyKey).not.toBe("k-other");
+	expect(options.idempotencyKey).not.toBe("m-other");
+	expect(screen.queryByText("An earlier move may already have started this session in Orchestrator Cloud. Moving finishes that move.")).toBeNull();
 });
 
 it("moves under the id of a move this computer recorded as pushed", async () => {
