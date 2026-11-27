@@ -1,3 +1,4 @@
+import { useTranslation } from "react-i18next";
 import { QueryClientContext, useQueryClient } from "@tanstack/react-query";
 import { useRouterState } from "@tanstack/react-router";
 import { useContext, useState, type CSSProperties } from "react";
@@ -20,6 +21,7 @@ import { ApprovalNoticeCard } from "./ApprovalNoticeCard";
 import { ApprovalPrompt } from "./ApprovalPrompt";
 
 function useDecide(request: PendingApproval | undefined) {
+	const { t } = useTranslation();
 	const queryClient = useQueryClient();
 	const [busyId, setBusyId] = useState<string>();
 	const [error, setError] = useState<{ id: string; message: string }>();
@@ -28,13 +30,15 @@ function useDecide(request: PendingApproval | undefined) {
 		setBusyId(request.id);
 		setError(undefined);
 		try {
-			await decideApproval(
+			const outcome = await decideApproval(
 				request.id,
 				decision,
 				queryClient,
 				request.hostId,
 				request.cloud && { ...request.cloud, sessionId: request.sessionId },
 			);
+			// The card leaves either way; without this it would look as if the answer worked.
+			if (outcome === "ended") useUiStore.getState().showGlobalToast(t("approvals.alreadyEnded"));
 		} catch (reason) {
 			setError({ id: request.id, message: reason instanceof Error ? reason.message : String(reason) });
 		} finally {

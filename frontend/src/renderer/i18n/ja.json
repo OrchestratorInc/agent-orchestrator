@@ -5503,6 +5503,7 @@
 	"approvals.elementAlt": "エージェントが使おうとしている要素",
 	"approvals.region": "承認待ちのエージェント操作",
 	"approvals.decisionFailed": "判断を送信できませんでした: {{message}}",
+	"approvals.alreadyEnded": "このリクエストはすでに終了していたため、回答は使われませんでした",
 	"approvals.category.payment": "支払い",
 	"approvals.category.message": "メッセージ",
 	"approvals.category.publish": "投稿",

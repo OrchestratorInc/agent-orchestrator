@@ -77,15 +77,15 @@ describe("cloud approvals", () => {
 
 	it("sends the decision to the session's decide route", async () => {
 		const decideBrowserApproval = vi.fn(async () => ({ id: "a-1", decision: "allow-site" as const }));
-		await decideCloudApproval({ decideBrowserApproval } as unknown as CloudCpClient, TARGET, "a-1", "allow-site");
+		await expect(decideCloudApproval({ decideBrowserApproval } as unknown as CloudCpClient, TARGET, "a-1", "allow-site")).resolves.toBe("decided");
 		expect(decideBrowserApproval).toHaveBeenCalledWith("org-1", "s-1", "a-1", { decision: "allow-site" });
 	});
 
 	it("treats a request that already ended as answered, and reports other failures", async () => {
 		const failWith = (status: number) =>
 			({ decideBrowserApproval: vi.fn(async () => { throw new CloudCpError("no", { status }); }) }) as unknown as CloudCpClient;
-		await expect(decideCloudApproval(failWith(409), TARGET, "a-1", "deny")).resolves.toBeUndefined();
-		await expect(decideCloudApproval(failWith(404), TARGET, "a-1", "deny")).resolves.toBeUndefined();
+		await expect(decideCloudApproval(failWith(409), TARGET, "a-1", "deny")).resolves.toBe("ended");
+		await expect(decideCloudApproval(failWith(404), TARGET, "a-1", "deny")).resolves.toBe("ended");
 		await expect(decideCloudApproval(failWith(403), TARGET, "a-1", "deny")).rejects.toThrow("no");
 	});
 

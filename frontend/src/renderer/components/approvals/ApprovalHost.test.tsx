@@ -227,6 +227,16 @@ describe("approval hosts", () => {
 		expect(screen.queryByText(/more/)).toBeNull();
 	});
 
+	it("says so when an answer arrives after the request had already ended", async () => {
+		state.cloud = [{ ...request("late", "cloud-5"), cloud: { baseUrl: "https://cp.test", orgId: "org-1" } }];
+		state.routedSessionId = "ao-1";
+		state.decide.mockResolvedValueOnce("ended" as never);
+		useUiStore.setState({ globalToast: null });
+		renderWith(<GlobalApprovalCard />);
+		fireEvent.click(screen.getByRole("button", { name: "Allow once" }));
+		await waitFor(() => expect(useUiStore.getState().globalToast?.title).toBe("This request had already ended, so your answer wasn't used"));
+	});
+
 	it("reads cloud approvals from a reader of its own, not the approval card", () => {
 		state.liveReads = 0;
 		renderWith(<CloudApprovalReader />);

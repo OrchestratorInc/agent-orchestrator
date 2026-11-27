@@ -56,14 +56,14 @@ export async function decideApproval(
 	queryClient: QueryClient,
 	hostId?: string,
 	cloud?: CloudApprovalTarget,
-): Promise<void> {
+): Promise<"decided" | "ended" | void> {
 	if (cloud) {
 		try {
-			await decideCloudApproval(createRendererCloudCpClient(cloud.baseUrl), cloud, id, decision);
+			// "ended": the request had already ended, so the answer was not used.
+			return await decideCloudApproval(createRendererCloudCpClient(cloud.baseUrl), cloud, id, decision);
 		} finally {
 			await queryClient.invalidateQueries({ queryKey: ["approvals"] });
 		}
-		return;
 	}
 	const client = hostId ? clientForHost(hostId) : apiClient;
 	const { error } = await client.POST("/api/v1/approvals/{id}/decision", {

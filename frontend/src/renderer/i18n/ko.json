@@ -5503,6 +5503,7 @@
 	"approvals.elementAlt": "에이전트가 사용하려는 요소",
 	"approvals.region": "승인을 기다리는 에이전트 작업",
 	"approvals.decisionFailed": "결정을 보내지 못했습니다: {{message}}",
+	"approvals.alreadyEnded": "이 요청은 이미 끝나서 응답이 사용되지 않았습니다",
 	"approvals.category.payment": "결제",
 	"approvals.category.message": "메시지",
 	"approvals.category.publish": "게시",

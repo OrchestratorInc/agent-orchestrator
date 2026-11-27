@@ -5786,6 +5786,7 @@
 	"approvals.elementAlt": "Элемент, который агент хочет использовать",
 	"approvals.region": "Действие агента ждёт подтверждения",
 	"approvals.decisionFailed": "Не удалось отправить решение: {{message}}",
+	"approvals.alreadyEnded": "Этот запрос уже завершился, поэтому ваш ответ не был использован",
 	"approvals.category.payment": "Оплата",
 	"approvals.category.message": "Сообщение",
 	"approvals.category.publish": "Публикация",

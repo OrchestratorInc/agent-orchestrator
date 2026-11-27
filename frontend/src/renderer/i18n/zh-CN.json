@@ -5485,6 +5485,7 @@
 	"approvals.elementAlt": "代理想要使用的元素",
 	"approvals.region": "等待批准的代理操作",
 	"approvals.decisionFailed": "无法发送决定：{{message}}",
+	"approvals.alreadyEnded": "此请求已结束，你的回答未被使用",
 	"approvals.category.payment": "付款",
 	"approvals.category.message": "消息",
 	"approvals.category.publish": "发布",

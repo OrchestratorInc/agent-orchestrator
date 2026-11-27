@@ -5523,6 +5523,7 @@
 	"approvals.elementAlt": "Ajanın kullanmak istediği öğe",
 	"approvals.region": "Onay bekleyen ajan eylemi",
 	"approvals.decisionFailed": "Karar gönderilemedi: {{message}}",
+	"approvals.alreadyEnded": "Bu istek zaten sona ermişti, bu yüzden yanıtınız kullanılmadı",
 	"approvals.category.payment": "Ödeme",
 	"approvals.category.message": "Mesaj",
 	"approvals.category.publish": "Gönderi",

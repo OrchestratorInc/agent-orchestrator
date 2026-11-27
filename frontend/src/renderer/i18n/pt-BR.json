@@ -5674,6 +5674,7 @@
 	"approvals.elementAlt": "O elemento que o agente quer usar",
 	"approvals.region": "Ação do agente aguardando aprovação",
 	"approvals.decisionFailed": "Não foi possível enviar a decisão: {{message}}",
+	"approvals.alreadyEnded": "Esta solicitação já tinha terminado, então sua resposta não foi usada",
 	"approvals.category.payment": "Pagamento",
 	"approvals.category.message": "Mensagem",
 	"approvals.category.publish": "Publicação",

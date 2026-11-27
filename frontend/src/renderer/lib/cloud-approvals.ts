@@ -83,11 +83,14 @@ export async function decideCloudApproval(
 	target: CloudApprovalTarget,
 	id: string,
 	decision: ApprovalDecision,
-): Promise<void> {
+): Promise<"decided" | "ended"> {
 	try {
 		await client.decideBrowserApproval(target.orgId, target.sessionId, id, { decision });
+		return "decided";
 	} catch (error) {
-		if (error instanceof CloudCpError && (error.status === 409 || error.status === 404)) return;
+		// The request ended first (timed out, decided elsewhere, or gone): the
+		// answer was not used, and the caller says so.
+		if (error instanceof CloudCpError && (error.status === 409 || error.status === 404)) return "ended";
 		throw error;
 	}
 }

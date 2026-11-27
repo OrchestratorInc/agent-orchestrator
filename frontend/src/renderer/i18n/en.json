@@ -5483,6 +5483,7 @@
 	"approvals.elementAlt": "The element the agent wants to use",
 	"approvals.region": "Agent action waiting for approval",
 	"approvals.decisionFailed": "The decision could not be sent: {{message}}",
+	"approvals.alreadyEnded": "This request had already ended, so your answer wasn't used",
 	"approvals.category.payment": "Payment",
 	"approvals.category.message": "Message",
 	"approvals.category.publish": "Post",

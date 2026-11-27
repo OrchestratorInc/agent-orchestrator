@@ -5503,6 +5503,7 @@
 	"approvals.elementAlt": "Das Element, das der Agent verwenden möchte",
 	"approvals.region": "Agentenaktion wartet auf Freigabe",
 	"approvals.decisionFailed": "Die Entscheidung konnte nicht gesendet werden: {{message}}",
+	"approvals.alreadyEnded": "Diese Anfrage war bereits beendet, deine Antwort wurde nicht verwendet",
 	"approvals.category.payment": "Zahlung",
 	"approvals.category.message": "Nachricht",
 	"approvals.category.publish": "Beitrag",
