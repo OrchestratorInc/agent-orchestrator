@@ -22,8 +22,13 @@ const maxModelsBody = 1 << 20
 const maxListedModels = 500
 
 // ErrKeyRejected reports an endpoint that refused the key in every auth style
-// its harness can send.
+// its harness can send: it answered 401, so the key does not authenticate.
 var ErrKeyRejected = errors.New("the endpoint rejected this key")
+
+// ErrListingForbidden reports an endpoint that recognized the key but does
+// not let it read the model listing (403). The key may still run requests, so
+// this never blocks a save; it only leaves the endpoint without listed models.
+var ErrListingForbidden = errors.New("the endpoint does not let this key list models")
 
 // ErrNoModelListing reports an endpoint, or a harness spec, without a model
 // listing AO can read.
@@ -50,11 +55,13 @@ type Detection struct {
 
 // Detect asks agentID's model listing on the endpoint with each auth style the
 // harness supports, the default first. A 2xx answer picks that style and
-// returns the models it lists; 401 or 403 tries the next style. Any other
-// answer, or no answer, means the endpoint cannot tell (it may not serve the
-// path), so the default style is kept with no models. Only when every style is
-// refused does it fail with ErrKeyRejected. baseURL must already be validated:
-// the key goes to it.
+// returns the models it lists; 401 or 403 tries the next style. A 403 means
+// the endpoint recognized the key but keeps its listing from it, so when no
+// style is accepted the first style answered 403 is kept, with no models: the
+// key may still run requests. Any other answer, or no answer, means the
+// endpoint cannot tell (it may not serve the path), so the default style is
+// kept with no models. Only when every style answers 401 does it fail with
+// ErrKeyRejected. baseURL must already be validated: the key goes to it.
 func Detect(ctx context.Context, client *http.Client, agentID, baseURL, key string) (Detection, error) {
 	spec, ok := specs[agentID]
 	if !ok {
@@ -64,6 +71,7 @@ func Detect(ctx context.Context, client *http.Client, agentID, baseURL, key stri
 	if spec.ModelsPath == "" || !secureEndpoint(baseURL) {
 		return fallback, nil
 	}
+	var forbidden AuthStyle
 	for _, style := range spec.probeOrder() {
 		models, err := listModels(ctx, client, spec, baseURL, style, key)
 		switch {
@@ -71,19 +79,27 @@ func Detect(ctx context.Context, client *http.Client, agentID, baseURL, key stri
 			return Detection{Style: style, Models: models}, nil
 		case errors.Is(err, ErrKeyRejected):
 			continue
+		case errors.Is(err, ErrListingForbidden):
+			if forbidden == "" {
+				forbidden = style
+			}
+			continue
 		case ctx.Err() != nil:
 			return Detection{}, ctx.Err()
 		default:
 			return fallback, nil
 		}
 	}
+	if forbidden != "" {
+		return Detection{Style: forbidden}, nil
+	}
 	return Detection{}, ErrKeyRejected
 }
 
 // ListModels returns the model IDs agentID's endpoint lists for a key sent in
-// style, in the endpoint's order. It fails with ErrKeyRejected on 401 or 403
-// and ErrNoModelListing when the endpoint or spec has no listing. Errors never
-// carry the key.
+// style, in the endpoint's order. It fails with ErrKeyRejected on 401,
+// ErrListingForbidden on 403, and ErrNoModelListing when the endpoint or spec
+// has no listing. Errors never carry the key.
 func ListModels(ctx context.Context, client *http.Client, agentID, baseURL string, style AuthStyle, key string) ([]string, error) {
 	spec, ok := specs[agentID]
 	if !ok {
@@ -138,8 +154,10 @@ func listModels(ctx context.Context, client *http.Client, spec Spec, baseURL str
 	defer func() { _ = response.Body.Close() }()
 	body, readErr := io.ReadAll(io.LimitReader(response.Body, maxModelsBody))
 	switch {
-	case response.StatusCode == http.StatusUnauthorized || response.StatusCode == http.StatusForbidden:
+	case response.StatusCode == http.StatusUnauthorized:
 		return nil, ErrKeyRejected
+	case response.StatusCode == http.StatusForbidden:
+		return nil, ErrListingForbidden
 	case response.StatusCode < 200 || response.StatusCode >= 300:
 		return nil, fmt.Errorf("%w: status %d", ErrNoModelListing, response.StatusCode)
 	case readErr != nil:

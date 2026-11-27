@@ -716,7 +716,9 @@ func (l *agentLauncher) runtimeEnv(ctx context.Context, spec LaunchSpec, argv []
 			}
 		}
 	}
-	// Use the same endpoint snapshot that command construction received.
+	// Use the same endpoint snapshot that command construction received, as
+	// resolved, so the variables it clears stay blank even when the project
+	// sets them.
 	for key, value := range endpointEnv {
 		if runtime.GOOS == "windows" {
 			for existing := range env {

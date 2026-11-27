@@ -113,11 +113,17 @@ func (s *Service) completeEndpointInput(ctx context.Context, agentID string, in 
 		}
 		in.AuthStyle, models = detection.Style, detection.Models
 	case needModel:
-		// The style is known; a listing the endpoint cannot give only leaves
-		// the harness on its own default model.
+		// The style is known, given by the client or kept from a save the
+		// endpoint accepted. The listing is only asked for a default model: a
+		// key may run requests without being allowed to list models, so a
+		// listing the endpoint refuses or cannot give leaves the harness on
+		// its own default model instead of blocking the save.
 		models, err = harnessendpoint.ListModels(ctx, s.endpointProbeClient, agentID, target.BaseURL, in.AuthStyle, target.Key)
-		if errors.Is(err, harnessendpoint.ErrKeyRejected) || ctx.Err() != nil {
-			return endpointProbeError(err)
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return ctxErr
+		}
+		if err != nil {
+			models = nil
 		}
 	}
 	if needModel && len(models) > 0 {

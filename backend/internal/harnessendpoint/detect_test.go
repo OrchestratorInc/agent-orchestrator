@@ -44,8 +44,20 @@ func TestDetect(t *testing.T) {
 		{name: "no model listing keeps the default", want: AuthBearer, probes: 1, handle: func(w http.ResponseWriter, _ *http.Request) {
 			w.WriteHeader(http.StatusNotFound)
 		}},
-		{name: "refused in every style", err: ErrKeyRejected, probes: 2, handle: func(w http.ResponseWriter, _ *http.Request) {
+		// 403 recognizes the key but keeps the listing from it: the key may
+		// still run requests, so the first style answered 403 is kept.
+		{name: "listing forbidden in every style keeps the key", want: AuthBearer, probes: 2, handle: func(w http.ResponseWriter, _ *http.Request) {
 			w.WriteHeader(http.StatusForbidden)
+		}},
+		{name: "listing forbidden for x-api-key only", want: AuthAPIKey, probes: 2, handle: func(w http.ResponseWriter, r *http.Request) {
+			if r.Header.Get("x-api-key") != "" {
+				w.WriteHeader(http.StatusForbidden)
+				return
+			}
+			w.WriteHeader(http.StatusUnauthorized)
+		}},
+		{name: "refused in every style", err: ErrKeyRejected, probes: 2, handle: func(w http.ResponseWriter, _ *http.Request) {
+			w.WriteHeader(http.StatusUnauthorized)
 		}},
 	}
 	for _, tc := range cases {
@@ -110,6 +122,10 @@ func TestListModels(t *testing.T) {
 	status = http.StatusUnauthorized
 	if _, err := ListModels(context.Background(), server.Client(), "claude-code", server.URL, AuthAPIKey, "sk-test"); !errors.Is(err, ErrKeyRejected) {
 		t.Fatalf("401: err = %v, want ErrKeyRejected", err)
+	}
+	status = http.StatusForbidden
+	if _, err := ListModels(context.Background(), server.Client(), "claude-code", server.URL, AuthAPIKey, "sk-test"); !errors.Is(err, ErrListingForbidden) {
+		t.Fatalf("403: err = %v, want ErrListingForbidden", err)
 	}
 	status = http.StatusNotFound
 	_, err = ListModels(context.Background(), server.Client(), "claude-code", server.URL, AuthAPIKey, "sk-test")

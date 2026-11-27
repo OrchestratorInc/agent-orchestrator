@@ -7549,7 +7549,10 @@ func (m *Manager) runtimeEnvChecked(id domain.SessionID, project domain.ProjectI
 		env[EnvAgentBrowserToken] = m.agentBrowserToken
 	}
 	accountErr := m.applyAgentAccountEnv(id, accountID, env, caseInsensitive)
-	// Apply the resolved endpoint after account and provider credentials.
+	// Apply the resolved endpoint after account and provider credentials, as
+	// resolved, never looking project values up again here: the URL that was
+	// checked is the URL the process gets, and the variables it clears stay
+	// blank even when the project sets them.
 	for key, value := range endpointEnv {
 		setProtectedEnv(env, key, value, caseInsensitive)
 	}

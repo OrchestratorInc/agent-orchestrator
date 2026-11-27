@@ -256,3 +256,28 @@ func TestLauncherUsesCompleteProjectGatewayOverride(t *testing.T) {
 		}
 	}
 }
+
+// The reviewer keeps the endpoint's cleared variables blank even when the
+// project sets them, like a worker session.
+func TestLauncherKeepsClearedVariablesBlankOverProjectEnv(t *testing.T) {
+	dataDir := t.TempDir()
+	if _, err := harnessendpoint.ForDataDir(dataDir).Save("claude-code", harnessendpoint.Input{BaseURL: "https://gateway.example.com", APIKey: "sk-endpoint"}, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	rt := &fakeRuntime{}
+	l := NewLauncher(fakeReviewerResolver{reviewer: &fakeReviewer{}, ok: true}, rt, dataDir)
+	spec := launchSpec()
+	spec.ProjectEnv = map[string]string{"CLAUDE_CODE_USE_BEDROCK": "1", "CLAUDE_CODE_OAUTH_TOKEN": "sk-ant-oat-project"}
+	if _, err := l.Spawn(context.Background(), spec); err != nil {
+		t.Fatalf("Spawn: %v", err)
+	}
+	env := rt.createCfg.Env
+	for _, key := range []string{"CLAUDE_CODE_USE_BEDROCK", "CLAUDE_CODE_OAUTH_TOKEN"} {
+		if value, ok := env[key]; !ok || value != "" {
+			t.Fatalf("%s = %q (set=%v), want blank while the custom endpoint is active", key, value, ok)
+		}
+	}
+	if env["ANTHROPIC_AUTH_TOKEN"] != "sk-endpoint" {
+		t.Fatalf("endpoint key = %q, want the saved key", env["ANTHROPIC_AUTH_TOKEN"])
+	}
+}
