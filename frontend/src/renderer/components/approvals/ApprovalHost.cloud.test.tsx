@@ -24,7 +24,7 @@ vi.mock("@tanstack/react-router", () => ({
 }));
 vi.mock("../../lib/navigate-to-session", () => ({ useNavigateToSession: () => vi.fn() }));
 
-import { GlobalApprovalCard, SessionApprovalDock } from "./ApprovalHost";
+import { CloudApprovalReader, GlobalApprovalCard, SessionApprovalDock } from "./ApprovalHost";
 
 describe("a cloud approval on the session on screen (live staging payload)", () => {
 	it("shows the card in the session's dock", async () => {
@@ -38,6 +38,8 @@ describe("a cloud approval on the session on screen (live staging payload)", () 
 		});
 		render(
 			<QueryClientProvider client={new QueryClient()}>
+				{/* As in the shell: the reader fetches, the card and the dock read its cache. */}
+				<CloudApprovalReader />
 				<GlobalApprovalCard />
 				<SessionApprovalDock sessionId={SESSION} cloudOrgId={ORG} />
 			</QueryClientProvider>,
