@@ -177,6 +177,11 @@ export interface CloudShareIpcDeps extends CloudShareApi {
 	hostApiBase: (hostId: string) => string | undefined;
 	/** Requests to a host's loopback proxy, which adds the host's credential. */
 	fetchHost: HostFetch;
+	/**
+	 * Whether a local session's file is a copy of an artifact someone else
+	 * shared: someone else's work, so it is never published as the person's.
+	 */
+	isSharedCopy?: (sessionId: string, relativePath: string) => Promise<boolean>;
 }
 
 /**
@@ -184,6 +189,10 @@ export interface CloudShareIpcDeps extends CloudShareApi {
  * video goes to the control plane, which refuses it (415, shown as coming
  * soon) while it does not serve videos.
  */
+const SHARED_COPY_MESSAGE = "This is a copy of an artifact someone shared with you, so it can't be published as yours.";
+
+const SHARED_COPY_PAGE_MESSAGE = "This page uses files copied from an artifact someone shared with you, so it can't be published as yours.";
+
 const UNPLAYABLE_VIDEO_MESSAGE = "This video format can't be played in a browser. Use MP4, MOV or WebM.";
 
 function accessArgument(value: unknown): CloudShareAccess | undefined {
@@ -749,6 +758,7 @@ export function registerCloudShareIpc(deps: CloudShareIpcDeps): void {
 		const fileSnapshots: ShareSnapshot[] = [];
 		try {
 			const resolved = await resolveShareFile(deps.daemonDataDir(), file.sessionId, file.path);
+			if (await deps.isSharedCopy?.(file.sessionId, resolved.relativePath)) return { status: "error", message: SHARED_COPY_MESSAGE };
 			if (isUnplayableShareVideo(resolved.name)) return { status: "unsupported", message: UNPLAYABLE_VIDEO_MESSAGE };
 			if (!(await deps.getToken())) return { status: "signed_out" };
 			const progress = (sentBytes: number, totalBytes: number) => {
@@ -776,6 +786,10 @@ export function registerCloudShareIpc(deps: CloudShareIpcDeps): void {
 			// what is found is what the copy uses.
 			const html = isSharePage(resolved.name) ? await readShareFileText(resolved, MAX_SCANNED_PAGE) : null;
 			const found = html === null ? undefined : await collectPageFiles(deps.daemonDataDir(), file.sessionId, resolved.relativePath, html);
+			// A page of the person's own that uses a copy's files would publish them with it.
+			for (const used of found?.files ?? []) {
+				if (await deps.isSharedCopy?.(file.sessionId, used.file.relativePath)) return { status: "error", message: SHARED_COPY_PAGE_MESSAGE };
+			}
 			// Preparing the snapshots is the first half of the progress, uploading them the second.
 			const total = (resolved.size + (found?.files.reduce((sum, used) => sum + used.file.size, 0) ?? 0)) * 2;
 			try {

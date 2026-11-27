@@ -188,6 +188,13 @@ export const aoBridge: AoBridge =
 			},
 			onFrameNavigated: () => () => undefined,
 		},
+		sharedArtifact: {
+			copy: async () => ({ ok: false as const, code: "unavailable" as const, message: "Starting a session from a shared artifact needs the desktop app." }),
+			getSession: async () => null,
+			isCopy: async () => false,
+			setSession: async () => undefined,
+			removeSession: async () => undefined,
+		},
 		artifactSnapshot: {
 			request: async () => false,
 		},

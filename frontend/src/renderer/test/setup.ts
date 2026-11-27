@@ -260,6 +260,13 @@ if (typeof window !== "undefined") {
 			openFolder: async () => undefined,
 			onFrameNavigated: () => () => undefined,
 		},
+		sharedArtifact: {
+			copy: async () => ({ ok: false as const, code: "unavailable" as const, message: "" }),
+			getSession: async () => null,
+			isCopy: async () => false,
+			setSession: async () => undefined,
+			removeSession: async () => undefined,
+		},
 		artifactSnapshot: {
 			request: async () => false,
 		},

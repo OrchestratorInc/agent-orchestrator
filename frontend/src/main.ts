@@ -202,6 +202,8 @@ import { createPendingCloudSignIn } from "./main/pending-cloud-sign-in";
 import { installCloudLocalAuthIPC } from "./main/cloud-auth-local";
 import { clearShareSnapshots } from "./main/cloud-share";
 import { registerCloudShareIpc } from "./main/cloud-share-ipc";
+import { registerSharedArtifactIpc } from "./main/shared-artifact-ipc";
+import { SharedArtifactSessions, sharedCopyCheck } from "./main/shared-artifact-sessions";
 import { ShareLinkRecords } from "./main/cloud-share-links";
 import { registerSessionShareUrlsIpc, SessionShareUrls } from "./main/session-share-urls";
 import { createCloudAgentProxy } from "./main/cloud-agent-proxy";
@@ -4062,6 +4064,19 @@ registerCloudArtifactIpc({
 		}
 	},
 });
+// Links someone shared with the person: copied here, where their file host is
+// not cross-origin, to start a session from; the session that works from each
+// is remembered under ~/.ao.
+// Copies of artifacts others shared, which Publish refuses (cloud-share-ipc).
+const sharedArtifactSessions = new SharedArtifactSessions(path.join(desktopDataDir, "shared-artifact-sessions.json"));
+const isSharedArtifactCopy = sharedCopyCheck(sharedArtifactSessions, (sessionId) => path.join(resolvedDaemonDataDir(), "artifacts", sessionId));
+registerSharedArtifactIpc({
+	ipcMain,
+	fetch: (url, init) => net.fetch(url, init),
+	sessions: sharedArtifactSessions,
+	isCopy: isSharedArtifactCopy,
+	allowLocal: !app.isPackaged,
+});
 // Copies made for "Show in" pile up under ~/.ao/cloud-artifacts; drop stale ones.
 void pruneCloudArtifactFolders().catch((error) => console.warn("AO: unable to prune old cloud artifact copies", error));
 
@@ -4080,6 +4095,7 @@ registerCloudShareIpc({
 	// host's credential; Node's fetch sends no Origin, as the proxy requires.
 	hostApiBase: (hostId) => remoteRegistry.apiBase(hostId),
 	fetchHost: (url, init) => fetch(url, init),
+	isSharedCopy: isSharedArtifactCopy,
 });
 // Session and project share links this device made, so Copy link works again
 // later; only the signed-in account's, which the file names.

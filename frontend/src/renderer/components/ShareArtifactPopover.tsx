@@ -42,6 +42,7 @@ import { isPersonalWorkspace, workspaceDisplayName } from "./share/linkAccess";
 import { Button } from "./ui/button";
 import { Popover, PopoverAnchor, PopoverContent, PopoverTrigger } from "./ui/popover";
 import { Tooltip, TooltipContent, TooltipTrigger } from "./ui/tooltip";
+import { useIsSharedArtifactCopy } from "../hooks/useSharedArtifactCopies";
 
 type Phase =
 	| { kind: "loading" }
@@ -368,8 +369,12 @@ export function useShareAccess(): { baseUrl: string; signedIn: boolean; scope: S
  */
 export function useArtifactShareFile(artifact: Pick<ArtifactRow, "id" | "cloud" | "hostId" | "sessionId" | "path" | "projectId" | "sha256" | "shared"> | null): Omit<CloudShareFile, "baseUrl" | "shareId"> | undefined {
 	const cloudUserId = useCloudMeUserId(Boolean(artifact?.cloud));
+	const local = artifact && !artifact.cloud && !artifact.hostId && !artifact.shared;
+	const sharedCopy = useIsSharedArtifactCopy(local ? artifact.sessionId : undefined, local ? artifact.path : undefined);
 	// Someone else's link is theirs to share; it has no file here.
 	if (!artifact || artifact.shared) return undefined;
+	// Nor is a session's copy of it, made to work from.
+	if (sharedCopy) return undefined;
 	// The artifact's ID survives a rename, so the renamed file finds its link.
 	const artifactId = artifact.id ? { artifactId: artifact.id } : {};
 	if (artifact.cloud) {

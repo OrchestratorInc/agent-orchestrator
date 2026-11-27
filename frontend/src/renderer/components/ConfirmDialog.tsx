@@ -43,6 +43,8 @@ type ConfirmDialogProps = {
 	confirmDisabled?: boolean;
 	error?: string | null;
 	onConfirm: () => void;
+	/** The cancel button's own action, when it does more than dismiss (Escape and the close button only dismiss). */
+	onCancel?: () => void;
 	onOpenChange: (open: boolean) => void;
 };
 
@@ -63,6 +65,7 @@ export function ConfirmDialog({
 	confirmDisabled,
 	error,
 	onConfirm,
+	onCancel,
 	onOpenChange,
 }: ConfirmDialogProps) {
 	const { t } = useTranslation();
@@ -130,7 +133,7 @@ export function ConfirmDialog({
 
 				<div className={cn(settingsDialogFooterClass, "gap-2 border-t-0 p-4 pt-1")}>
 					<DialogClose asChild>
-						<Button ref={cancelRef} type="button" variant="secondary" disabled={busy}>
+						<Button ref={cancelRef} type="button" variant="secondary" disabled={busy} onClick={onCancel}>
 							{cancelLabel ?? t("confirm.cancel")}
 						</Button>
 					</DialogClose>

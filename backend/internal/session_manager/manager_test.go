@@ -13628,3 +13628,78 @@ func TestAOSkillPointerNamesDeviceGuideOnlyWhenOffered(t *testing.T) {
 		}
 	}
 }
+
+func TestSpawn_WritesASharedArtifactCopyBeforeTheAgentStarts(t *testing.T) {
+	m, _, rt, _ := newManager()
+	dataDir := t.TempDir()
+	m.dataDir = dataDir
+	rec, _, _, err := m.Spawn(ctx, ports.SpawnConfig{
+		ProjectID: "mer", Kind: domain.KindWorker, Harness: domain.HarnessClaudeCode, Prompt: "work from it",
+		ArtifactImports: []domain.ArtifactImportFile{
+			{Path: "shared/r/page.html", Data: []byte("<img src=a.png>")},
+			{Path: "shared/r/a.png", Data: []byte("png")},
+		},
+		ArtifactImportEntry: "shared/r/page.html",
+	})
+	if err != nil {
+		t.Fatalf("spawn: %v", err)
+	}
+	if rt.created == 0 {
+		t.Fatal("the agent did not start")
+	}
+	if got, _ := os.ReadFile(filepath.Join(dataDir, "artifacts", string(rec.ID), "shared", "r", "a.png")); string(got) != "png" {
+		t.Fatalf("copy = %q, want written into the session's artifact folder", got)
+	}
+	// Marked as a copy in the same step, so it is never publishable.
+	if _, err := os.Stat(filepath.Join(dataDir, "artifacts", string(rec.ID), "shared", "r", ".ao-shared-copy")); err != nil {
+		t.Fatalf("copy not marked: %v", err)
+	}
+}
+
+func TestSpawn_ASharedArtifactCopyThatCannotBeWrittenRollsBack(t *testing.T) {
+	m, st, rt, _ := newManager()
+	dataDir := t.TempDir()
+	m.dataDir = dataDir
+	// A file and a folder by one name cannot both be written.
+	_, _, _, err := m.Spawn(ctx, ports.SpawnConfig{
+		ProjectID: "mer", Kind: domain.KindWorker, Harness: domain.HarnessClaudeCode, Prompt: "p",
+		ArtifactImports: []domain.ArtifactImportFile{
+			{Path: "shared/r/a", Data: []byte("file")},
+			{Path: "shared/r/a/b.png", Data: []byte("png")},
+		},
+	})
+	if !errors.Is(err, ErrSpawnArtifactDir) {
+		t.Fatalf("spawn = %v, want ErrSpawnArtifactDir", err)
+	}
+	if _, ok := st.sessions["mer-1"]; ok || rt.created != 0 {
+		t.Fatal("a session started without its copy")
+	}
+	if _, statErr := os.Stat(filepath.Join(dataDir, "artifacts", "mer-1")); !os.IsNotExist(statErr) {
+		t.Fatalf("artifact dir not cleaned up: stat err = %v", statErr)
+	}
+}
+
+func TestSpawn_KeepsTheImportedCopyAsAVersionBeforeTheAgentStarts(t *testing.T) {
+	m, _, rt, _ := newManager()
+	m.dataDir = t.TempDir()
+	startedBefore := -1
+	var dir string
+	_, _, _, err := m.Spawn(ctx, ports.SpawnConfig{
+		ProjectID: "mer", Kind: domain.KindWorker, Harness: domain.HarnessClaudeCode, Prompt: "p",
+		ArtifactImports:     []domain.ArtifactImportFile{{Path: "shared/r/page.html", Data: []byte("x")}},
+		ArtifactImportEntry: "shared/r/page.html",
+		OnArtifactsImported: func(rec domain.SessionRecord) {
+			startedBefore = rt.created
+			dir = rec.Metadata.ArtifactDir
+		},
+	})
+	if err != nil {
+		t.Fatalf("spawn: %v", err)
+	}
+	if startedBefore != 0 {
+		t.Fatalf("agents started before the copy was kept = %d, want 0", startedBefore)
+	}
+	if dir == "" {
+		t.Fatal("the callback did not get the session's artifact folder")
+	}
+}

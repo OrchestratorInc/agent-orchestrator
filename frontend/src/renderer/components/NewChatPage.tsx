@@ -3,6 +3,8 @@ import { apiErrorException } from "../lib/api-error-exception";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useNavigate, useRouter } from "@tanstack/react-router";
 import { Cloud, Folder, Plus, Smartphone, StickyNote } from "@/components/app-icons";
+import { SharedArtifactDraftChip } from "./SharedArtifactDraftChip";
+import { dropOrphanSharedArtifactPrompt, dropSharedArtifactDraft } from "../lib/shared-artifact-draft";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useRemoteWorkspaces, useWorkspaceQuery, workspaceQueryKeyForHost } from "../hooks/useWorkspaceQuery";
@@ -56,7 +58,14 @@ export function NewChatPage({ projectId, hostId, report }: { projectId: string; 
 	const router = useRouter();
 	const queryClient = useQueryClient();
 	// A Cloud task's session starts spinning up as the page opens (not Coder's).
-	const task = useTaskLaunch({ projectId, hostId });
+	const task = useTaskLaunch({ projectId, hostId, sharedArtifactDraft: true });
+	// A shared artifact's copy goes only with a standalone session on this
+	// computer: reaching another project or host by any route lets it go, and
+	// a prompt whose copy is gone (a reload) leaves the draft.
+	useEffect(() => {
+		if (hostId || projectId !== STANDALONE_WORKSPACE_ID) dropSharedArtifactDraft();
+		dropOrphanSharedArtifactPrompt();
+	}, [hostId, projectId]);
 	const hostAccounts = useAgentAccounts(Boolean(task.account), hostId);
 	const providerRows = task.account ? (hostAccounts.data ?? []).filter((row) => row.provider === task.account?.provider) : [];
 	const accountRows = oneRowPerLogin(providerRows, task.account?.value ?? providerRows.find((row) => row.default)?.id);
@@ -539,7 +548,12 @@ export function NewChatPage({ projectId, hostId, report }: { projectId: string; 
 				skills={skills}
 				composerTray={
 					<>
-						<NewChatProjectPicker projectId={projectId} hostId={hostId} disabled={frozen || report} onChange={(project) => void navigate({ to: "/new", search: { project, host: hostId }, replace: true })} />
+						<NewChatProjectPicker projectId={projectId} hostId={hostId} disabled={frozen || report} onChange={(project) => {
+							// A shared artifact's copy goes only with a standalone session here.
+							if (project !== STANDALONE_WORKSPACE_ID) dropSharedArtifactDraft();
+							void navigate({ to: "/new", search: { project, host: hostId }, replace: true });
+						}} />
+						<SharedArtifactDraftChip projectId={projectId} hostId={hostId} />
 						{hostId ? null : <MobileConnected />}
 					</>
 				}

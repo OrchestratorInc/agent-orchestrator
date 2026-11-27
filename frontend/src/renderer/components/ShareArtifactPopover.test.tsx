@@ -843,11 +843,14 @@ describe("ShareArtifactButton states", () => {
 });
 
 describe("useArtifactShareFile", () => {
-	it("shares a file by its artifact ID, which a rename keeps, so the renamed file finds its link", () => {
+	it("shares a file by its artifact ID, which a rename keeps, so the renamed file finds its link", async () => {
 		const wrapper = ({ children }: { children: ReactNode }) => <QueryClientProvider client={new QueryClient()}>{children}</QueryClientProvider>;
 		const { result } = renderHook(() => useArtifactShareFile({ id: "art-1", sessionId: "sess-1", path: "final/report.html", projectId: "proj-1" }), { wrapper });
+		// A local file is offered once the desktop shell says it is not a shared artifact's copy.
+		await vi.waitFor(() => expect(result.current).toBeDefined());
 		expect(result.current).toEqual({ sessionId: "sess-1", path: "final/report.html", projectId: "proj-1", artifactId: "art-1" });
 		const untracked = renderHook(() => useArtifactShareFile({ sessionId: "sess-1", path: "notes.md", projectId: "proj-1" }), { wrapper });
+		await vi.waitFor(() => expect(untracked.result.current).toBeDefined());
 		expect(untracked.result.current).not.toHaveProperty("artifactId");
 	});
 
