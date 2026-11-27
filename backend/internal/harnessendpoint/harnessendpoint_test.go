@@ -94,12 +94,38 @@ func TestSaveKeepsStoredKeyWhenOmitted(t *testing.T) {
 	if _, err := store.Save("claude-code", Input{BaseURL: "https://a.example.com", APIKey: "sk-keep"}, testNow); err != nil {
 		t.Fatalf("Save: %v", err)
 	}
-	if _, err := store.Save("claude-code", Input{BaseURL: "https://b.example.com"}, testNow); err != nil {
+	// A new path on the same host keeps the key.
+	if _, err := store.Save("claude-code", Input{BaseURL: "https://a.example.com/anthropic"}, testNow); err != nil {
 		t.Fatalf("Save without key: %v", err)
 	}
 	cfg, found, err := store.Load("claude-code")
-	if err != nil || !found || cfg.APIKey != "sk-keep" || cfg.BaseURL != "https://b.example.com" {
+	if err != nil || !found || cfg.APIKey != "sk-keep" || cfg.BaseURL != "https://a.example.com/anthropic" {
 		t.Fatalf("Load = %+v, %v, %v", cfg, found, err)
+	}
+}
+
+// A key saved for one host is never moved to another scheme, host or port
+// unless the user enters it again.
+func TestSaveNeedsTheKeyAgainForANewOrigin(t *testing.T) {
+	store := NewStore(t.TempDir())
+	if _, err := store.Save("claude-code", Input{BaseURL: "https://a.example.com", APIKey: "sk-keep"}, testNow); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+	for _, baseURL := range []string{"https://b.example.com", "https://a.example.com:8443", "http://localhost:4000"} {
+		_, err := store.Save("claude-code", Input{BaseURL: baseURL}, testNow)
+		var validation *ValidationError
+		if !errors.As(err, &validation) || !strings.Contains(validation.Message, "API key again") {
+			t.Fatalf("Save(%s) without key: err = %v, want the key asked again", baseURL, err)
+		}
+		if _, _, err := store.ProbeTarget("claude-code", Input{BaseURL: baseURL}); !errors.As(err, &validation) {
+			t.Fatalf("ProbeTarget(%s) without key: err = %v, want no target for the saved key", baseURL, err)
+		}
+	}
+	if cfg, _, _ := store.Load("claude-code"); cfg.BaseURL != "https://a.example.com" {
+		t.Fatalf("saved URL = %q, want the refused saves to change nothing", cfg.BaseURL)
+	}
+	if _, err := store.Save("claude-code", Input{BaseURL: "https://b.example.com", APIKey: "sk-b"}, testNow); err != nil {
+		t.Fatalf("Save with a new key: %v", err)
 	}
 }
 

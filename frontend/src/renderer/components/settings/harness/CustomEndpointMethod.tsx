@@ -17,6 +17,17 @@ export function endpointHost(baseUrl: string | undefined): string {
 	}
 }
 
+/** The scheme, host and port a key is sent to, or the trimmed value when it
+ * is not a URL yet. */
+export function endpointOrigin(baseUrl: string | undefined): string {
+	const value = baseUrl?.trim() ?? "";
+	try {
+		return new URL(value).origin;
+	} catch {
+		return value;
+	}
+}
+
 /** Whether agentId has a saved custom endpoint, usable or not. */
 export function endpointSaved(endpoint: AgentEndpointStatus | undefined): boolean {
 	return Boolean(endpoint && (endpoint.configured || endpoint.error));
@@ -60,8 +71,12 @@ export function CustomEndpointMethod({ agentId, endpoint, hostId, open, disabled
 		rowRef.current?.querySelector("input")?.focus({ preventScroll: true });
 	}, [open, endpoint.baseUrl]);
 
-	// An unusable endpoint has no key AO can keep, so it needs a new one.
-	const canSave = baseUrl.trim() !== "" && ((endpoint.hasApiKey && !unusable) || apiKey.trim() !== "") && !locked;
+	// An unusable endpoint has no key AO can keep, so it needs a new one. The
+	// saved key belongs to the saved host: moving to another scheme, host or
+	// port needs the key entered again, so it is never sent anywhere else.
+	const newHost = Boolean(endpoint.baseUrl) && baseUrl.trim() !== "" && endpointOrigin(baseUrl) !== endpointOrigin(endpoint.baseUrl);
+	const keepsKey = endpoint.hasApiKey && !unusable && !newHost;
+	const canSave = baseUrl.trim() !== "" && (keepsKey || apiKey.trim() !== "") && !locked;
 
 	const save = async () => {
 		if (!canSave) return;
@@ -127,7 +142,7 @@ export function CustomEndpointMethod({ agentId, endpoint, hostId, open, disabled
 			<Input id={id + "-url"} className={`${KEY_FIELD_CLASS} placeholder:font-sans`} type="url" inputMode="url" value={baseUrl} disabled={locked} autoComplete="off" spellCheck={false} maxLength={2048} placeholder={t("settings.harness.endpoint.baseUrlPlaceholder")} onChange={(event) => { setBaseUrl(event.target.value); setError(""); }} />
 			<label htmlFor={id + "-key"} className={fieldLabelClass}>{t("settings.harness.endpoint.apiKey")}</label>
 			<div className="flex min-w-0 items-center gap-2">
-				<Input id={id + "-key"} className={`${KEY_FIELD_CLASS} min-w-0 flex-1`} type="password" value={apiKey} disabled={locked} autoComplete="off" spellCheck={false} maxLength={16384} aria-invalid={error ? true : undefined} placeholder={endpoint.hasApiKey && !unusable ? t("settings.harness.endpoint.apiKeyKeep") : t("settings.harness.endpoint.apiKeyPlaceholder")} onChange={(event) => { setApiKey(event.target.value); setError(""); }} />
+				<Input id={id + "-key"} className={`${KEY_FIELD_CLASS} min-w-0 flex-1`} type="password" value={apiKey} disabled={locked} autoComplete="off" spellCheck={false} maxLength={16384} aria-invalid={error ? true : undefined} placeholder={keepsKey ? t("settings.harness.endpoint.apiKeyKeep") : endpoint.hasApiKey && newHost ? t("settings.harness.endpoint.apiKeyNewHost") : t("settings.harness.endpoint.apiKeyPlaceholder")} onChange={(event) => { setApiKey(event.target.value); setError(""); }} />
 				<Button type="button" disabled={!canSave} onClick={() => void save()}>
 					{pending === "save" ? <LoaderCircle className="animate-spin" aria-hidden="true" /> : null}
 					{t("settings.harness.endpoint.save")}

@@ -1,7 +1,7 @@
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { AgentEndpointStatus } from "../../../hooks/useAgentEndpoint";
-import { CustomEndpointMethod, endpointHost, endpointSaved } from "./CustomEndpointMethod";
+import { CustomEndpointMethod, endpointHost, endpointOrigin, endpointSaved } from "./CustomEndpointMethod";
 
 const endpointMocks = vi.hoisted(() => ({
 	setAgentEndpoint: vi.fn(),
@@ -87,6 +87,21 @@ describe("CustomEndpointMethod", () => {
 		expect(endpointMocks.setAgentEndpoint.mock.calls[0][1]).not.toHaveProperty("apiKey");
 	});
 
+	it("asks for the key again before moving the endpoint to another host", async () => {
+		endpointMocks.setAgentEndpoint.mockResolvedValue({ ...configured });
+		renderMethod(configured);
+		const save = screen.getByRole("button", { name: "Save" });
+		// A new path on the same host keeps the saved key.
+		fireEvent.change(screen.getByLabelText("Base URL"), { target: { value: "https://gateway.example.com/anthropic" } });
+		expect(save).toBeEnabled();
+		fireEvent.change(screen.getByLabelText("Base URL"), { target: { value: "https://other.example.com" } });
+		expect(save).toBeDisabled();
+		expect(screen.getByLabelText("API key")).toHaveAttribute("placeholder", "Enter the API key for the new host");
+		fireEvent.change(screen.getByLabelText("API key"), { target: { value: "sk-other" } });
+		fireEvent.click(save);
+		await waitFor(() => expect(endpointMocks.setAgentEndpoint).toHaveBeenCalledWith("claude-code", { baseUrl: "https://other.example.com", apiKey: "sk-other" }, "host-a"));
+	});
+
 	it("shows the daemon's error and stays open when saving fails", async () => {
 		endpointMocks.setAgentEndpoint.mockRejectedValue(new Error("Use https for a remote endpoint."));
 		const { onChanged } = renderMethod(configured);
@@ -125,6 +140,8 @@ describe("CustomEndpointMethod", () => {
 		expect(endpointHost("https://gateway.example.com:8443/v1")).toBe("gateway.example.com:8443");
 		expect(endpointHost("not a url")).toBe("not a url");
 		expect(endpointHost(undefined)).toBe("");
+		expect(endpointOrigin("https://Gateway.example.com:443/v1")).toBe("https://gateway.example.com");
+		expect(endpointOrigin(" not a url ")).toBe("not a url");
 		expect(endpointSaved(unconfigured)).toBe(false);
 		expect(endpointSaved({ ...unconfigured, error: "x" })).toBe(true);
 	});

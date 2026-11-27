@@ -379,6 +379,11 @@ func (s *Store) ProbeTarget(agentID string, in Input) (ProbeTarget, bool, error)
 	if !saved {
 		return ProbeTarget{}, false, nil
 	}
+	// The saved key was given for the saved endpoint's host. A new host gets
+	// it only when the user types it again, so nothing is sent to it first.
+	if !sameOrigin(existing.BaseURL, cfg.BaseURL) {
+		return ProbeTarget{}, false, errKeyForNewOrigin()
+	}
 	target := ProbeTarget{BaseURL: cfg.BaseURL, Key: existing.APIKey}
 	if sameURL {
 		target.SavedStyle = existing.AuthStyle
@@ -436,6 +441,11 @@ func (s *Store) Save(agentID string, in Input, now time.Time) (Status, error) {
 	if cfg.APIKey == "" {
 		if !found {
 			return Status{}, &ValidationError{Message: "An API key is required."}
+		}
+		// Checked again under the lock: another save may have changed the
+		// saved endpoint since the caller probed it.
+		if !sameOrigin(existing.BaseURL, cfg.BaseURL) {
+			return Status{}, errKeyForNewOrigin()
 		}
 		cfg.APIKey = existing.APIKey
 	}
@@ -567,6 +577,12 @@ func (s *Store) ProjectEnv(agentID string, projectEnv map[string]string, caseIns
 		}
 	}
 	return override, nil
+}
+
+// errKeyForNewOrigin refuses to move a saved key to another scheme, host or
+// port without the user entering it again.
+func errKeyForNewOrigin() error {
+	return &ValidationError{Message: "Enter the API key again to use it with a different host."}
 }
 
 // sameOrigin reports whether two base URLs reach the same scheme, host and

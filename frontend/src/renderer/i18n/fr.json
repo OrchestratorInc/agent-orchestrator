@@ -3443,6 +3443,7 @@
 	"settings.harness.endpoint.apiKey": "Clé API",
 	"settings.harness.endpoint.apiKeyPlaceholder": "Collez votre clé API",
 	"settings.harness.endpoint.apiKeyKeep": "Laissez vide pour conserver la clé enregistrée",
+	"settings.harness.endpoint.apiKeyNewHost": "Saisissez la clé API pour le nouvel hôte",
 	"settings.harness.endpoint.storageNote": "Stockée dans le dossier de données d'Orchestrator sur l'hôte qui exécute ces sessions, lisible uniquement par son compte propriétaire. La clé n'est plus jamais affichée.",
 	"settings.harness.endpoint.save": "Enregistrer",
 	"settings.harness.endpoint.remove": "Supprimer",
