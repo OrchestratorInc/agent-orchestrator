@@ -9,6 +9,8 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"regexp"
+	"runtime"
 	"slices"
 	"strings"
 	"time"
@@ -121,7 +123,9 @@ type setupResult struct {
 	// than the daemon's own default agent.
 	agentSaveable bool
 	// readOnly is set for --check and --dry-run.
-	readOnly  bool
+	readOnly bool
+	// repoPath is the repository setup works on, once the daemon is up.
+	repoPath  string
 	authPlans map[string]setupAuthPlan
 	// checks are the agent checks this run made, by agent id.
 	checks map[string]setupAgentCheck
@@ -134,7 +138,8 @@ func newSetupCommand(ctx *commandContext) *cobra.Command {
 		Short: "Set up Orchestrator on this machine and project in one command",
 		Long: "Set up Orchestrator so it is ready to take a task: start (or reuse) the daemon, pick and check\n" +
 			"a coding agent, check GitHub access, and register the project.\n\n" +
-			"The agent is --agent if given, otherwise the agents an already registered project runs,\n" +
+			"--worker-agent and --orchestrator-agent set one role each and take priority over --agent,\n" +
+			"which sets the roles they leave. Without them, the agents an already registered project runs,\n" +
 			"otherwise the coding agent running this command (from its environment, AI_AGENT first),\n" +
 			"otherwise the first ready agent. Setup never signs anything in\n" +
 			"and never installs an agent: it prints the exact command for a person to run.\n\n" +
@@ -203,6 +208,9 @@ func (o *setupOptions) validate(cmd *cobra.Command) error {
 func setupExit(res setupResult, opts setupOptions) error {
 	var failed, human []string
 	for _, s := range res.Steps {
+		if s.Step == setupStepVerify {
+			continue // it sums up the others
+		}
 		switch s.Status {
 		case setupFailed:
 			failed = append(failed, s.Step+": "+s.Detail)
@@ -254,14 +262,26 @@ func (c *commandContext) runSetup(ctx context.Context, errOut io.Writer, opts se
 		return res
 	}
 
+	if path, stop := c.setupRepoPath(ctx, opts); stop == nil {
+		res.repoPath = path
+	}
 	agentStep := add(c.setupAgentStep(ctx, opts, &res))
 	// Save the chosen agents even when they still need a sign-in: an
 	// unsupported agent or a failed check is the only reason not to.
 	res.agentSaveable = agentStep.Status == setupOK || agentStep.Status == setupFixed || agentStep.Status == setupNeedsHuman
+	if res.Agent != nil {
+		// Never save an agent that is not installed (or not supported): the
+		// next run would take it as the person's choice.
+		for _, id := range uniqueStrings(res.Agent.Worker, res.Agent.Orchestrator) {
+			if res.checks[id].unusable {
+				res.agentSaveable = false
+			}
+		}
+	}
 	add(c.setupGitHubStep(ctx, opts))
 	projectStep := add(c.setupProjectStep(ctx, opts, &res))
 	setupRecheckAgentStep(&res)
-	add(setupFirstRunStep(projectStep))
+	add(setupFirstRunStep(projectStep, res.Project))
 
 	if opts.start != "" {
 		add(c.setupStartStep(ctx, opts, &res))
@@ -311,6 +331,9 @@ func setupRecheckAgentStep(res *setupResult) {
 	}
 }
 
+// setupSessionInFix finds the session ao task names in a needs-input fix.
+var setupSessionInFix = regexp.MustCompile("in session ([A-Za-z0-9._-]+)")
+
 // setupApplyCommand is the `ao setup` command that applies what a --check
 // found, for the same repository and agent choices.
 func setupApplyCommand(res *setupResult, opts setupOptions) string {
@@ -344,6 +367,11 @@ func finishSetup(res *setupResult, opts setupOptions) {
 		case setupSkipped:
 			// An advisory step (GitHub without a GitHub remote) names a fix
 			// without blocking ready.
+		case setupFixed:
+			// A queued task names how to follow it.
+			if s.Step != setupStepStart {
+				continue
+			}
 		default:
 			continue
 		}
@@ -383,8 +411,10 @@ func finishSetup(res *setupResult, opts setupOptions) {
 		verify.Detail = fmt.Sprintf("not ready: run `%s` to finish", apply)
 		res.NextActions = append(res.NextActions, apply)
 	case res.pending:
+		apply := setupApplyCommand(res, opts)
 		verify.Status = setupSkipped
-		verify.Detail = "dry run: nothing changed; run `ao setup` to apply"
+		verify.Detail = fmt.Sprintf("dry run: nothing changed; run `%s` to apply", apply)
+		res.NextActions = append(res.NextActions, apply)
 	}
 	if opts.start != "" && res.Ready && res.Task != nil {
 		verify.Detail += "; task " + res.Task.Status
@@ -532,11 +562,23 @@ func (c *commandContext) setupAgentStep(ctx context.Context, opts setupOptions, 
 	default:
 		if match, ok := registry.DetectCaller(os.Getenv); ok {
 			id := string(match.Harness)
-			if _, supported := byID[id]; supported {
+			snap, supported := byID[id]
+			switch {
+			case supported && snap.Installation.State != "not_installed":
 				agent.ID, agent.Source, agent.DetectedFrom = id, "caller", match.Env
+			case supported:
+				// The calling agent is known but not installed here: use a
+				// ready one rather than saving an agent nobody can run.
+				callerNote = fmt.Sprintf("the calling agent %s (from %s) is not installed, so it is not used; ", id, match.Env)
+				if ready := firstReadyAgent(readiness.Agents); ready == "" {
+					agent.ID, agent.Source, agent.DetectedFrom = id, "caller", match.Env
+				}
+			default:
+				callerNote = fmt.Sprintf("the calling agent (%s from %s) is not supported by this Orchestrator; ", id, match.Env)
+			}
+			if agent.ID != "" {
 				break
 			}
-			callerNote = fmt.Sprintf("the calling agent (%s from %s) is not supported by this Orchestrator; ", id, match.Env)
 		}
 		if id := firstReadyAgent(readiness.Agents); id != "" {
 			agent.ID, agent.Source = id, "ready"
@@ -544,8 +586,8 @@ func (c *commandContext) setupAgentStep(ctx context.Context, opts setupOptions, 
 	}
 	if agent.ID == "" {
 		step.Status = setupNeedsHuman
-		step.Detail = callerNote + "no installed coding agent was found"
-		step.Fix = "install a supported coding agent CLI (see `ao agent ls`) and sign it in, then run `ao setup` again"
+		step.Detail = callerNote + "no installed coding agent was found; install a supported coding agent CLI and sign it in, then run `ao setup` again"
+		step.Fix = "ao agent ls"
 		return step
 	}
 	agent.Worker = firstNonEmpty(worker, agent.ID)
@@ -608,6 +650,9 @@ func setupAgentSource(a *setupAgent) string {
 
 type setupAgentCheck struct {
 	status, auth, problem, fix, note string
+	// unusable is set when the agent cannot be saved on a project: not
+	// supported, or not installed. A signed-out agent is still saved.
+	unusable bool
 	// alt names a ready agent to use instead, when there is one.
 	alt string
 }
@@ -662,18 +707,21 @@ func (c *commandContext) setupCheckAgent(ctx context.Context, id string, res *se
 	}
 	switch {
 	case !probe.Supported:
+		check.unusable = true
 		check.status = setupFailed
 		check.problem = fmt.Sprintf("agent %q is not supported by this Orchestrator", id)
-		check.fix = "pick a supported agent from `ao agent ls` and pass --agent <id>"
+		check.fix = "ao agent ls"
+		check.problem += "; pick a supported agent from `ao agent ls` and pass --agent <id>"
 	case !probe.Installed:
+		check.unusable = true
 		check.status = setupNeedsHuman
-		check.problem = fmt.Sprintf("agent %s is not installed", id)
-		check.alt = setupAlternative(res.readiness, id)
+		check.problem = fmt.Sprintf("agent %s is not installed; install its CLI, then run `ao setup` again", id)
+		check.alt = setupAlternative(res, id)
 		check.fix = c.setupInstallFix(ctx, id, res)
 	case check.auth == "unauthorized":
 		check.status = setupNeedsHuman
 		check.problem = fmt.Sprintf("agent %s is not signed in", id)
-		check.alt = setupAlternative(res.readiness, id)
+		check.alt = setupAlternative(res, id)
 		check.fix = c.setupSignInFix(ctx, id, res)
 	case check.auth == "authorized" || check.auth == "not_applicable":
 		check.note = fmt.Sprintf("%s is signed in", id)
@@ -713,11 +761,15 @@ func setupReplaceHint(alt string) string {
 }
 
 // setupAlternative names a ready agent the person could use instead.
-func setupAlternative(agents []agentReadinessSnapshot, skip string) string {
-	if alt := firstReadyAgentExcept(agents, skip); alt != "" {
+func setupAlternative(res *setupResult, skip string) string {
+	if alt := firstReadyAgentExcept(res.readiness, skip); alt != "" {
 		// --yes: the project already saves (or will save) the agent
-		// that is not ready.
-		return fmt.Sprintf(" (or use `ao setup --yes --agent %s`)", alt)
+		// that is not ready. --path: so it changes this repository.
+		cmd := "ao setup"
+		if res.repoPath != "" {
+			cmd += " --path " + shellQuote(res.repoPath)
+		}
+		return fmt.Sprintf(" (or use `%s --yes --agent %s`)", cmd, alt)
 	}
 	return ""
 }
@@ -857,14 +909,23 @@ func (c *commandContext) setupInstallFix(ctx context.Context, id string, res *se
 			label = a.Label
 		}
 	}
-	fix := "install the " + label
-	if !strings.HasSuffix(label, " CLI") {
-		fix += " CLI"
-	}
+	// Setup never installs an agent; the action opens its install page.
+	_ = label
 	if doc := strings.TrimSpace(c.setupAuthPlan(ctx, id, res).DocumentationURL); doc != "" {
-		fix += " (see " + doc + ")"
+		return setupOpenURL(doc)
 	}
-	return fix + ", then run `ao setup` again"
+	return "ao agent ls"
+}
+
+// setupOpenURL is the command that opens url in the person's browser.
+func setupOpenURL(u string) string {
+	switch runtime.GOOS {
+	case "darwin":
+		return "open " + shellQuote(u)
+	case "windows":
+		return "start " + u
+	}
+	return "xdg-open " + shellQuote(u)
 }
 
 type setupGitHubAuth struct {
@@ -902,8 +963,11 @@ func (c *commandContext) setupGitHubStep(ctx context.Context, opts setupOptions)
 		why += "; this repository has no GitHub remote, so setup does not need it"
 	}
 	if path, err := c.deps.LookPath("gh"); err != nil || path == "" {
-		step.Detail = "the GitHub CLI (gh) is not installed; " + why
-		step.Fix = "install the GitHub CLI (https://cli.github.com), then run `gh auth login`"
+		step.Detail = "the GitHub CLI (gh) is not installed; " + why + "; install it from https://cli.github.com, then run `gh auth login`"
+		step.Fix = setupOpenURL("https://cli.github.com")
+		if path, err := c.deps.LookPath("brew"); err == nil && path != "" {
+			step.Fix = "brew install gh && gh auth login"
+		}
 		return step
 	}
 	step.Detail = "the GitHub CLI is not signed in; " + why
@@ -924,35 +988,64 @@ func (c *commandContext) setupRepoOnGitHub(ctx context.Context, opts setupOption
 	}
 	for _, line := range strings.Split(string(out), "\n") {
 		fields := strings.Fields(line)
-		if len(fields) >= 2 && isGitHubHost(remoteHost(fields[1])) {
+		if len(fields) < 2 {
+			continue
+		}
+		host, ssh := remoteHost(fields[1])
+		if host == "" {
+			continue
+		}
+		if ssh {
+			// An SSH host may be an alias (github-work) for github.com.
+			resolved, ok := c.setupSSHHostname(ctx, host)
+			if !ok && !strings.Contains(host, ".") {
+				// An alias setup cannot resolve: assume it may be GitHub.
+				return true
+			}
+			if ok {
+				host = resolved
+			}
+		}
+		if isCLIGitHubHost(host) {
 			return true
 		}
 	}
 	return false
 }
 
-// remoteHost returns the host of a git remote URL: scheme URLs
-// (https://host/..., ssh://git@host:22/...) and scp-style ones (git@host:path).
-func remoteHost(remote string) string {
+// setupSSHHostname resolves an SSH host alias through the person's SSH config.
+func (c *commandContext) setupSSHHostname(ctx context.Context, host string) (string, bool) {
+	out, err := c.deps.CommandOutput(ctx, "ssh", "-G", host)
+	if err != nil {
+		return "", false
+	}
+	for _, line := range strings.Split(string(out), "\n") {
+		if name, ok := strings.CutPrefix(strings.TrimSpace(line), "hostname "); ok && strings.TrimSpace(name) != "" {
+			return strings.ToLower(strings.TrimSpace(name)), true
+		}
+	}
+	return "", false
+}
+
+// remoteHost returns the host of a git remote URL and whether it is reached
+// over SSH: scheme URLs (https://host/..., ssh://git@host:22/...) and
+// scp-style ones (git@host:path).
+func remoteHost(remote string) (string, bool) {
 	if strings.Contains(remote, "://") {
 		u, err := url.Parse(remote)
 		if err != nil {
-			return ""
+			return "", false
 		}
-		return strings.ToLower(u.Hostname())
+		return strings.ToLower(u.Hostname()), u.Scheme == "ssh" || strings.HasPrefix(u.Scheme, "git+ssh")
 	}
 	host, _, ok := strings.Cut(remote, ":")
-	if !ok || strings.Contains(host, "/") {
-		return "" // a local path
+	if !ok || strings.Contains(host, "/") || len(host) == 1 {
+		return "", false // a local path (or a Windows drive letter)
 	}
 	if _, after, found := strings.Cut(host, "@"); found {
 		host = after
 	}
-	return strings.ToLower(host)
-}
-
-func isGitHubHost(host string) bool {
-	return host == "github.com" || host == "ssh.github.com" || host == "www.github.com"
+	return strings.ToLower(host), true
 }
 
 // setupProjectStep registers the repository, or reuses its registration, and
@@ -994,7 +1087,7 @@ func (c *commandContext) setupProjectStep(ctx context.Context, opts setupOptions
 				if plan.branch == "" {
 					step.Status = setupNeedsHuman
 					step.Detail = fmt.Sprintf("%s is not registered; %s, so Orchestrator could not pick a base branch", path, plan.why)
-					step.Fix = plan.previewFix(path)
+					step.Fix = c.branchFix(ctx, plan, path, "")
 					return step
 				}
 				step.Detail += fmt.Sprintf(", and set its default branch to %s (%s)", plan.branch, plan.why)
@@ -1018,6 +1111,9 @@ func (c *commandContext) setupProjectStep(ctx context.Context, opts setupOptions
 			existing, found, err = c.findProjectByPath(ctx, path)
 			if err != nil || !found {
 				step.Status, step.Detail = setupFailed, "the path is already registered, but its project could not be found: "+apiErr.Error()
+				if err != nil {
+					step.Detail += "; listing projects failed: " + err.Error()
+				}
 				step.Fix = "ao project ls"
 				return step
 			}
@@ -1060,8 +1156,8 @@ func (c *commandContext) setupProjectStep(ctx context.Context, opts setupOptions
 			switch {
 			case branch == "":
 				step.Status = setupNeedsHuman
-				step.Detail = fmt.Sprintf("project %s: %s, so Orchestrator cannot pick a base branch", project.ID, why)
-				step.Fix = fmt.Sprintf("ao project set-config %s --default-branch <branch>", shellQuote(project.ID))
+				step.Detail = fmt.Sprintf("project %s: %s, so Orchestrator cannot pick a base branch", project.ID, plan.why) + plan.manual(project.ID)
+				step.Fix = c.branchFix(ctx, plan, project.Path, project.ID)
 				res.Project = setupProjectFrom(project, reused)
 				return step
 			case opts.readOnly():
@@ -1190,9 +1286,10 @@ func (c *commandContext) setupReconcileAgents(ctx context.Context, opts setupOpt
 			Step:   setupStepProject,
 			Status: setupNeedsHuman,
 			Detail: fmt.Sprintf("project %s is already registered and %s", project.ID, strings.Join(conflicts, "; ")),
-			Fix:    "run the same `ao setup` command with --yes to replace the saved agents, or leave out the agent flags to keep them",
 		}
 		res.Project = setupProjectFrom(*project, true)
+		step.Fix = setupApplyCommand(res, setupOptions{path: opts.path, agent: opts.agent, workerAgent: opts.workerAgent, orchestratorAgent: opts.orchestratorAgent, yes: true})
+		step.Detail += "; run it with --yes to replace the saved agents, or leave out the agent flags to keep them"
 		return &step, ""
 	}
 	if len(changes) == 0 {
@@ -1217,6 +1314,15 @@ func (c *commandContext) setupReconcileAgents(ctx context.Context, opts setupOpt
 func (c *commandContext) setupRepoPath(ctx context.Context, opts setupOptions) (string, *setupStep) {
 	start := opts.path
 	if start == "" {
+		// Inside an Orchestrator session, AO_PROJECT_ID names the project the
+		// session belongs to: set that one up, not the session's workspace.
+		if id := strings.TrimSpace(os.Getenv("AO_PROJECT_ID")); id != "" {
+			if project, err := c.fetchProjectDetails(ctx, id); err == nil && project.Path != "" {
+				return filepath.Clean(project.Path), nil
+			}
+		}
+	}
+	if start == "" {
 		cwd, err := os.Getwd()
 		if err != nil {
 			return "", &setupStep{Step: setupStepProject, Status: setupFailed, Detail: "could not read the current directory: " + err.Error()}
@@ -1231,7 +1337,8 @@ func (c *commandContext) setupRepoPath(ctx context.Context, opts setupOptions) (
 		return "", &setupStep{Step: setupStepProject, Status: setupNeedsHuman, Detail: fmt.Sprintf("%s is not a directory", abs), Fix: "pass --path <repo> with the repository to set up"}
 	}
 	out, err := c.deps.CommandOutputInDir(ctx, abs, "git", "rev-parse", "--show-toplevel")
-	top := strings.TrimSpace(string(out))
+	// Trim only git's line terminator: a path may end in spaces.
+	top := strings.TrimRight(string(out), "\r\n")
 	if err != nil || top == "" {
 		if opts.path != "" {
 			// Let the daemon decide: it reports NOT_A_GIT_REPO with its own wording.
@@ -1240,11 +1347,16 @@ func (c *commandContext) setupRepoPath(ctx context.Context, opts setupOptions) (
 		return "", &setupStep{
 			Step:   setupStepProject,
 			Status: setupNeedsHuman,
-			Detail: fmt.Sprintf("%s is not inside a git repository", abs),
-			Fix:    "run `ao setup --path <repo>` with the repository to set up, or `git init` and make a first commit here",
+			Detail: fmt.Sprintf("%s is not inside a git repository; make it one, or run `ao setup --path <repo>` with the repository to set up", abs),
+			Fix:    fmt.Sprintf("git -C %s init && git -C %s commit --allow-empty -m \"initial commit\"", shellQuote(abs), shellQuote(abs)),
 		}
 	}
 	top = filepath.Clean(top)
+	// A linked worktree (an agent's workspace, or one made with `git worktree
+	// add`) belongs to its main repository: register that, not the worktree.
+	if main := c.setupMainWorktree(ctx, top); main != "" {
+		top = main
+	}
 	// A repository at the home directory or the filesystem root is almost
 	// always a dotfiles repo around the folder the person meant.
 	if home, err := os.UserHomeDir(); (err == nil && sameDir(top, home)) || top == filepath.Dir(top) {
@@ -1256,6 +1368,24 @@ func (c *commandContext) setupRepoPath(ctx context.Context, opts setupOptions) (
 		}
 	}
 	return top, nil
+}
+
+// setupMainWorktree returns the main repository of a linked worktree at top,
+// or "" when top is the main worktree (or git cannot say).
+func (c *commandContext) setupMainWorktree(ctx context.Context, top string) string {
+	out, err := c.deps.CommandOutputInDir(ctx, top, "git", "rev-parse", "--path-format=absolute", "--git-common-dir", "--absolute-git-dir")
+	if err != nil {
+		return ""
+	}
+	lines := strings.Split(strings.TrimRight(string(out), "\r\n"), "\n")
+	if len(lines) != 2 {
+		return ""
+	}
+	common, gitDir := filepath.Clean(strings.TrimRight(lines[0], "\r")), filepath.Clean(strings.TrimRight(lines[1], "\r"))
+	if sameDir(common, gitDir) || filepath.Base(common) != ".git" {
+		return ""
+	}
+	return filepath.Dir(common)
 }
 
 // setupCheckRepo reports, without registering anything, what the daemon
@@ -1293,37 +1423,60 @@ var setupRemoteHeadTimeout = 15 * time.Second
 type setupBranchPlan struct {
 	branch string
 	why    string
-	remote bool
+	// remote is the remote the base comes from, "" for a repo with none.
+	remote string
 }
 
-// previewFix is the command a person runs before setup registers the repo.
-func (p setupBranchPlan) previewFix(path string) string {
-	if p.remote {
-		// set-head needs the remote-tracking branch, so fetch first. If the
-		// remote is unreachable, register the project and set its default
-		// branch with `ao project set-config` instead.
-		return fmt.Sprintf("git -C %s fetch origin && git -C %s remote set-head origin --auto", shellQuote(path), shellQuote(path))
+// fix is the command a person runs when the plan asks for a branch: fetch
+// the remote and record its default branch, or name a branch for a repo with
+// no remote and no branch checked out.
+func (c *commandContext) branchFix(ctx context.Context, p setupBranchPlan, path, projectID string) string {
+	if p.remote != "" {
+		return fmt.Sprintf("git -C %s fetch %s && git -C %s remote set-head %s --auto", shellQuote(path), shellQuote(p.remote), shellQuote(path), shellQuote(p.remote))
 	}
-	return fmt.Sprintf("git -C %s switch <branch>", shellQuote(path))
+	for _, branch := range []string{"main", "master"} {
+		if _, err := c.deps.CommandOutputInDir(ctx, path, "git", "rev-parse", "-q", "--verify", "refs/heads/"+branch); err == nil {
+			if projectID != "" {
+				return fmt.Sprintf("ao project set-config %s --default-branch %s", shellQuote(projectID), branch)
+			}
+			return fmt.Sprintf("git -C %s switch %s", shellQuote(path), branch)
+		}
+	}
+	return fmt.Sprintf("git -C %s switch -c main", shellQuote(path))
+}
+
+// manual is the hand-set alternative to fix, for when the remote is
+// unreachable.
+func (p setupBranchPlan) manual(projectID string) string {
+	if p.remote == "" || projectID == "" {
+		return ""
+	}
+	return fmt.Sprintf("; if %s is unreachable, set the base yourself with `ao project set-config %s --default-branch <branch>`", p.remote, projectID)
 }
 
 // setupBaseBranch decides the base branch for an "auto" default branch, which
-// a session start resolves from origin's HEAD.
+// a session start resolves from the primary remote's HEAD.
 //   - No remote: the checked-out branch is the only base there is.
-//   - A remote whose HEAD resolves (cached, or ls-remote answers): nothing to
-//     do, the session start resolves it the same way.
-//   - A remote whose HEAD does not resolve: origin/main, else origin/master,
-//     when the repo has them locally. Never the checked-out branch, which may
-//     be a feature branch every worker would then start from. Otherwise a
-//     person must say.
+//   - origin's HEAD resolves (cached, or ls-remote answers): nothing to do,
+//     the session start resolves it the same way.
+//   - Another remote only (upstream): its HEAD's branch, when it resolves.
+//   - Otherwise the remote's main or master, when the repo has them locally.
+//     Never the checked-out branch, which may be a feature branch every worker
+//     would then start from. Otherwise a person must say.
 func (c *commandContext) setupBaseBranch(ctx context.Context, project projectDetails) setupBranchPlan {
-	if project.Repo == "" {
-		// No origin is not the same as no remote: a repository whose only
-		// remote is named otherwise (upstream) still has a base elsewhere, so
-		// the checked-out branch is not a safe default there.
-		if out, err := c.deps.CommandOutputInDir(ctx, project.Path, "git", "remote"); err == nil && strings.TrimSpace(string(out)) != "" {
-			return setupBranchPlan{why: "the repository has a remote but none named origin, so its default branch cannot be resolved", remote: true}
+	remote := ""
+	if out, err := c.deps.CommandOutputInDir(ctx, project.Path, "git", "remote"); err == nil {
+		for _, name := range strings.Fields(string(out)) {
+			if name == "origin" {
+				remote = name
+				break
+			}
+			if remote == "" {
+				remote = name
+			}
 		}
+	}
+	if remote == "" {
 		branch := c.setupCurrentBranch(ctx, project.Path)
 		why := "the repository has no remote"
 		if branch == "" {
@@ -1331,27 +1484,35 @@ func (c *commandContext) setupBaseBranch(ctx context.Context, project projectDet
 		}
 		return setupBranchPlan{branch: branch, why: why}
 	}
-	if _, err := c.deps.CommandOutputInDir(ctx, project.Path, "git", "rev-parse", "-q", "--verify", "refs/remotes/origin/HEAD"); err == nil {
-		return setupBranchPlan{}
-	}
-	if setupRemoteHeadResolves(ctx, project.Path) {
-		return setupBranchPlan{}
-	}
-	for _, candidate := range []string{"main", "master"} {
-		if _, err := c.deps.CommandOutputInDir(ctx, project.Path, "git", "rev-parse", "-q", "--verify", "refs/remotes/origin/"+candidate); err == nil {
-			return setupBranchPlan{branch: candidate, why: "origin's default branch could not be resolved; using origin/" + candidate, remote: true}
+	if out, err := c.deps.CommandOutputInDir(ctx, project.Path, "git", "symbolic-ref", "-q", "refs/remotes/"+remote+"/HEAD"); err == nil {
+		if remote == "origin" {
+			return setupBranchPlan{}
+		}
+		if branch := strings.TrimPrefix(strings.TrimSpace(string(out)), "refs/remotes/"+remote+"/"); branch != "" {
+			return setupBranchPlan{branch: branch, why: fmt.Sprintf("the repository has no origin; using %s's default branch", remote), remote: remote}
 		}
 	}
-	return setupBranchPlan{why: "origin's default branch could not be resolved (the remote was never fetched or is unreachable)", remote: true}
+	if branch, ok := setupRemoteHead(ctx, project.Path, remote); ok {
+		if remote == "origin" {
+			return setupBranchPlan{}
+		}
+		return setupBranchPlan{branch: branch, why: fmt.Sprintf("the repository has no origin; using %s's default branch", remote), remote: remote}
+	}
+	for _, candidate := range []string{"main", "master"} {
+		if _, err := c.deps.CommandOutputInDir(ctx, project.Path, "git", "rev-parse", "-q", "--verify", "refs/remotes/"+remote+"/"+candidate); err == nil {
+			return setupBranchPlan{branch: candidate, why: fmt.Sprintf("%s's default branch could not be resolved; using %s/%s", remote, remote, candidate), remote: remote}
+		}
+	}
+	return setupBranchPlan{why: fmt.Sprintf("%s's default branch could not be resolved (the remote was never fetched or is unreachable)", remote), remote: remote}
 }
 
-// setupRemoteHeadResolves asks origin for its HEAD without ever prompting:
+// setupRemoteHead asks a remote for its HEAD branch without ever prompting:
 // no terminal credential prompt, and SSH in batch mode (unless the person set
 // their own SSH command, which is kept).
-func setupRemoteHeadResolves(ctx context.Context, path string) bool {
+func setupRemoteHead(ctx context.Context, path, remote string) (string, bool) {
 	runCtx, cancel := context.WithTimeout(ctx, setupRemoteHeadTimeout)
 	defer cancel()
-	cmd := aoprocess.CommandContext(runCtx, "git", "-c", "core.askPass=true", "ls-remote", "--symref", "--", "origin", "HEAD")
+	cmd := aoprocess.CommandContext(runCtx, "git", "-c", "core.askPass=true", "ls-remote", "--symref", "--", remote, "HEAD")
 	cmd.Dir = path
 	cmd.Env = append(os.Environ(), "GIT_TERMINAL_PROMPT=0")
 	if os.Getenv("GIT_SSH_COMMAND") == "" {
@@ -1360,7 +1521,16 @@ func setupRemoteHeadResolves(ctx context.Context, path string) bool {
 		}
 	}
 	out, err := cmd.CombinedOutput()
-	return err == nil && strings.Contains(string(out), "ref: refs/heads/")
+	if err != nil {
+		return "", false
+	}
+	for _, line := range strings.Split(string(out), "\n") {
+		if ref, ok := strings.CutPrefix(line, "ref: refs/heads/"); ok {
+			branch, _, _ := strings.Cut(ref, "\t")
+			return strings.TrimSpace(branch), strings.TrimSpace(branch) != ""
+		}
+	}
+	return "", false
 }
 
 // findProjectByPath returns the registered project whose path is the same
@@ -1395,10 +1565,10 @@ func (c *commandContext) findProjectByPath(ctx context.Context, path string) (pr
 // setupFirstRunStep reports the desktop app's first-run state: a registered
 // project makes the app skip its first-run screens, so there is nothing to
 // write.
-func setupFirstRunStep(project setupStep) setupStep {
+func setupFirstRunStep(project setupStep, registered *setupProject) setupStep {
 	step := setupStep{Step: setupStepFirstRun}
-	switch project.Status {
-	case setupOK, setupFixed:
+	switch {
+	case project.Status == setupOK || project.Status == setupFixed || (registered != nil && registered.ID != ""):
 		step.Status = setupOK
 		step.Detail = "a project is registered, so the Orchestrator app skips its first-run screens"
 		if app := darwinApplicationsBundle(); app != "" {
@@ -1455,24 +1625,38 @@ func (c *commandContext) setupStartStep(ctx context.Context, opts setupOptions, 
 		// reused orchestrator may run another agent than the project saves).
 		// Keep that, and show its login command verbatim, as the agent step
 		// does.
-		if cmd, ok := strings.CutPrefix(task.Fix, "run `"); ok {
-			if cmd, ok = strings.CutSuffix(cmd, "`, then retry"); ok && !strings.Contains(cmd, "`") {
-				step.Fix = cmd
+		switch cmd, ok := strings.CutPrefix(task.Fix, "run `"); {
+		case ok && strings.HasSuffix(cmd, "`, then retry") && !strings.Contains(strings.TrimSuffix(cmd, "`, then retry"), "`"):
+			step.Fix = strings.TrimSuffix(cmd, "`, then retry")
+		default:
+			// Keep ao task's guidance in the detail; the action checks the
+			// task (or the sessions) before anything is sent again.
+			if task.Fix != "" {
+				step.Detail += "; " + task.Fix
+			}
+			step.Fix = "ao session ls"
+			if task.TaskID != "" {
+				step.Fix = "ao task status " + task.TaskID
 			}
 		}
 	case taskStatusNeedsInput:
-		step.Status, step.Detail, step.Fix = setupNeedsHuman, "the task is waiting on you: "+task.Reason, task.Fix
-		if step.Fix == "" && len(task.SessionIDs) > 0 {
-			// The task already exists: starting it again would run it twice.
-			// The session waiting may be a worker the orchestrator started;
-			// `ao task status` names it.
-			step.Fix = fmt.Sprintf("answer the agent that is waiting in Orchestrator (`ao task status %s` names it); do not start the task again", task.TaskID)
+		// The task already exists: starting it again would run it twice.
+		// ao task's fix names the session to answer (a worker, for an
+		// orchestrator task); the action opens it.
+		step.Status, step.Detail = setupNeedsHuman, "the task is waiting on you: "+task.Reason
+		if task.Fix != "" {
+			step.Detail += "; " + task.Fix
+		}
+		step.Fix = "ao task status " + task.TaskID
+		if m := setupSessionInFix.FindStringSubmatch(task.Fix); m != nil {
+			step.Fix = "ao session get " + m[1]
 		}
 	case taskStatusQueued:
 		// Accepted behind the agent's current turn: it will run, so it is
 		// not a failure and must not be started again (exit 4, as ao task).
 		step.Status = setupFixed
-		step.Detail = fmt.Sprintf("task %s is queued on %s behind the agent's current turn and will run; do not start it again (follow it with `ao task wait %s`)", task.TaskID, target, task.TaskID)
+		step.Detail = fmt.Sprintf("task %s is queued on %s behind the agent's current turn and will run; do not start it again", task.TaskID, target)
+		step.Fix = "ao task wait " + task.TaskID
 	default:
 		step.Status = setupFixed
 		step.Detail = fmt.Sprintf("started task %s on %s (%s)", task.TaskID, target, task.Status)

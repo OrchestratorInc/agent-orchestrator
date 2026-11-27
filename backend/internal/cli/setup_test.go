@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -274,7 +275,7 @@ func TestSetupSignedOutAgentNeedsHumanWithLoginCommand(t *testing.T) {
 	if agent.Fix != want || !reflect.DeepEqual(res.NextActions, []string{want}) {
 		t.Fatalf("fix = %q, next_actions = %q; want %q", agent.Fix, res.NextActions, want)
 	}
-	if !strings.Contains(agent.Detail, "(or use `ao setup --yes --agent codex`)") {
+	if !strings.Contains(agent.Detail, " --yes --agent codex`)") || !strings.Contains(agent.Detail, "ao setup --path ") {
 		t.Fatalf("detail = %q, want the ready alternative", agent.Detail)
 	}
 	if stepNamed(t, res, "verify").Status != setupNeedsHuman {
@@ -293,7 +294,7 @@ func TestSetupMissingAgentNeedsHumanWithInstallHint(t *testing.T) {
 		t.Fatalf("exit = %d (%v)", got, err)
 	}
 	agent := stepNamed(t, decodeSetup(t, out), "agent")
-	if agent.Fix != "install the Gemini CLI (see https://example.com/gemini), then run `ao setup` again" || !strings.Contains(agent.Detail, "--agent codex") {
+	if agent.Fix != setupOpenURL("https://example.com/gemini") || !strings.Contains(agent.Detail, "--agent codex") || !strings.Contains(agent.Detail, "install its CLI") {
 		t.Fatalf("step = %+v, want the docs link in the fix and the ready alternative in the detail", agent)
 	}
 }
@@ -476,8 +477,10 @@ func TestSetupOutsideAGitRepoNeedsPath(t *testing.T) {
 	if got := ExitCode(err); got != setupExitNeedsHuman {
 		t.Fatalf("exit = %d (%v)", got, err)
 	}
-	if fix := stepNamed(t, decodeSetup(t, out), "project").Fix; !strings.Contains(fix, "--path") {
-		t.Fatalf("fix = %q", fix)
+	project := stepNamed(t, decodeSetup(t, out), "project")
+	// The action is a runnable command; the --path alternative is in the detail.
+	if !strings.Contains(project.Fix, " init && git -C ") || !strings.Contains(project.Detail, "--path") {
+		t.Fatalf("project step = %+v", project)
 	}
 }
 
@@ -618,7 +621,7 @@ func TestSetupStartWaitingOnUserExits3(t *testing.T) {
 		t.Fatalf("task = %+v", res.Task)
 	}
 	// ao task's fix names the session to answer; setup passes it on.
-	if len(res.NextActions) != 1 || !strings.Contains(res.NextActions[0], "answer the pending request in session calc-1") {
+	if !reflect.DeepEqual(res.NextActions, []string{"ao session get calc-1"}) {
 		t.Fatalf("next_actions = %q", res.NextActions)
 	}
 }
@@ -1099,10 +1102,11 @@ func TestSetupRemoteWithUnresolvableHeadNeedsHuman(t *testing.T) {
 	}
 	res := decodeSetup(t, out)
 	project := stepNamed(t, res, "project")
-	if project.Status != setupNeedsHuman || project.Fix != "ao project set-config calc --default-branch <branch>" || !strings.Contains(project.Detail, "origin's default branch could not be resolved") {
+	wantFix := fmt.Sprintf("git -C %s fetch origin && git -C %s remote set-head origin --auto", repo, repo)
+	if project.Status != setupNeedsHuman || project.Fix != wantFix || !strings.Contains(project.Detail, "origin's default branch could not be resolved") || !strings.Contains(project.Detail, "ao project set-config calc --default-branch <branch>") {
 		t.Fatalf("project step = %+v", project)
 	}
-	if !reflect.DeepEqual(res.NextActions, []string{"ao project set-config calc --default-branch <branch>"}) {
+	if !reflect.DeepEqual(res.NextActions, []string{wantFix}) {
 		t.Fatalf("next_actions = %q", res.NextActions)
 	}
 }
@@ -1158,7 +1162,7 @@ func TestSetupUnresolvableHeadOnDetachedHeadNeedsHuman(t *testing.T) {
 	if got := ExitCode(err); got != setupExitNeedsHuman {
 		t.Fatalf("exit = %d (%v)\n%s", got, err, out)
 	}
-	if project := stepNamed(t, decodeSetup(t, out), "project"); project.Fix != "ao project set-config calc --default-branch <branch>" {
+	if project := stepNamed(t, decodeSetup(t, out), "project"); project.Status != setupNeedsHuman || !strings.Contains(project.Fix, "remote set-head origin --auto") {
 		t.Fatalf("project step = %+v", project)
 	}
 }
@@ -1291,8 +1295,10 @@ func TestSetupNeedsInputUsesTheTaskFix(t *testing.T) {
 	out, _, _ := executeCLI(t, fakeClockDeps(), "setup", "--path", repo, "--start", "fix it", "--worker", "--json")
 	res := decodeSetup(t, out)
 	start := stepNamed(t, res, "start")
-	if res.Task == nil || res.Task.Fix == "" || start.Fix != res.Task.Fix {
-		t.Fatalf("start fix = %q, task fix = %q; want the task's own fix (it names the session to answer)", start.Fix, res.Task.Fix)
+	// ao task's fix names the session to answer: setup's action opens that
+	// session, and the fix itself stays in the detail.
+	if res.Task == nil || res.Task.Fix == "" || start.Fix != "ao session get calc-1" || !strings.Contains(start.Detail, res.Task.Fix) {
+		t.Fatalf("start = %+v, task fix = %q", start, res.Task.Fix)
 	}
 }
 
@@ -1357,7 +1363,7 @@ func TestSetupRemoteNotNamedOriginNeedsHuman(t *testing.T) {
 	// The preview says the same before registering.
 	newSetupDaemon(t)
 	out, _, _ = executeCLI(t, fakeClockDeps(), "setup", "--path", repo, "--agent", "codex", "--check", "--json")
-	if project := stepNamed(t, decodeSetup(t, out), "project"); project.Status != setupNeedsHuman || !strings.Contains(project.Detail, "none named origin") {
+	if project := stepNamed(t, decodeSetup(t, out), "project"); project.Status != setupNeedsHuman || !strings.Contains(project.Detail, "upstream's default branch could not be resolved") || !strings.Contains(project.Fix, "fetch upstream") {
 		t.Fatalf("preview project step = %+v", project)
 	}
 }
@@ -1383,5 +1389,169 @@ func TestSetupRechecksWhenSavedRolesChangeBetweenLookups(t *testing.T) {
 	}
 	if res := decodeSetup(t, out); !res.Ready || res.Agent.ID != "codex" {
 		t.Fatalf("ready=%v agent=%+v", res.Ready, res.Agent)
+	}
+}
+
+func TestSetupInsideALinkedWorktreeRegistersTheMainRepo(t *testing.T) {
+	d := newSetupDaemon(t)
+	repo := gitRepo(t, true)
+	wt := filepath.Join(t.TempDir(), "repo-3")
+	gitIn(t, repo, "worktree", "add", "-q", "-b", "agent/task-3", wt)
+	registerOnPost(d, repo, "example/calc")
+	t.Chdir(wt)
+	out, _, err := executeCLI(t, fakeClockDeps(), "setup", "--json")
+	if err != nil {
+		t.Fatalf("err = %v\n%s", err, out)
+	}
+	if !strings.Contains(d.bodies["POST /api/v1/projects"], fmt.Sprintf(`"path":%q`, repo)) {
+		t.Fatalf("registered %s, want the main repository %s", d.bodies["POST /api/v1/projects"], repo)
+	}
+}
+
+func TestSetupUsesAOProjectIDInsideASession(t *testing.T) {
+	d := newSetupDaemon(t)
+	repo := gitRepo(t, true)
+	d.set("GET /api/v1/projects", 200, fmt.Sprintf(`{"projects":[{"id":"calc","path":%q}]}`, repo))
+	d.set("GET /api/v1/projects/calc", 200, fmt.Sprintf(`{"status":"ok","project":{"id":"calc","path":%q,"repo":"example/calc","defaultBranch":"main","config":{"worker":{"agent":"codex"},"orchestrator":{"agent":"codex"}}}}`, repo))
+	t.Setenv("AO_PROJECT_ID", "calc")
+	t.Chdir(t.TempDir()) // a session workspace, not the project's checkout
+	out, _, err := executeCLI(t, fakeClockDeps(), "setup", "--json")
+	if err != nil {
+		t.Fatalf("err = %v\n%s", err, out)
+	}
+	if d.saw("POST /api/v1/projects") {
+		t.Fatal("setup registered the session's directory instead of using AO_PROJECT_ID")
+	}
+	if res := decodeSetup(t, out); res.Project == nil || res.Project.ID != "calc" || !res.Project.Reused {
+		t.Fatalf("project = %+v", res.Project)
+	}
+}
+
+func TestSetupDoesNotSaveAnUninstalledCaller(t *testing.T) {
+	d := newSetupDaemon(t)
+	repo := gitRepo(t, true)
+	registerOnPost(d, repo, "example/calc")
+	t.Setenv("CURSOR_AGENT", "1")
+	d.set("POST /api/v1/agents/readiness/ensure", 200, `{"agents":[
+		{"id":"codex","label":"Codex","installation":{"state":"installed"},"authentication":{"state":"authorized"},"effectiveReadiness":"ready"},
+		{"id":"cursor","label":"Cursor","installation":{"state":"not_installed"},"authentication":{"state":"unknown"},"effectiveReadiness":"not_ready"}]}`)
+	out, _, err := executeCLI(t, fakeClockDeps(), "setup", "--path", repo, "--json")
+	if err != nil {
+		t.Fatalf("err = %v\n%s", err, out)
+	}
+	res := decodeSetup(t, out)
+	if res.Agent.ID != "codex" || res.Agent.Source != "ready" || !strings.Contains(stepNamed(t, res, "agent").Detail, "cursor (from CURSOR_AGENT) is not installed") {
+		t.Fatalf("agent = %+v step = %+v", res.Agent, stepNamed(t, res, "agent"))
+	}
+	if strings.Contains(d.bodies["POST /api/v1/projects"], "cursor") {
+		t.Fatalf("saved the uninstalled caller: %s", d.bodies["POST /api/v1/projects"])
+	}
+}
+
+func TestSetupNeverSavesAnUninstalledAgent(t *testing.T) {
+	d := newSetupDaemon(t)
+	repo := gitRepo(t, true)
+	registerOnPost(d, repo, "example/calc")
+	// --agent gemini: not installed; the project is registered without agents.
+	_, _, _ = executeCLI(t, fakeClockDeps(), "setup", "--path", repo, "--agent", "gemini", "--json")
+	var body addProjectRequest
+	if err := json.Unmarshal([]byte(d.bodies["POST /api/v1/projects"]), &body); err == nil && body.Config != nil {
+		t.Fatalf("saved %+v for an agent that is not installed", body.Config)
+	}
+}
+
+func TestSetupGitHubSSHAliasCountsAsGitHub(t *testing.T) {
+	d := newSetupDaemon(t)
+	repo := gitRepo(t, false)
+	gitIn(t, repo, "remote", "add", "origin", "git@github-work:org/calc.git")
+	gitIn(t, repo, "update-ref", "refs/remotes/origin/main", "HEAD")
+	gitIn(t, repo, "symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/main")
+	registerOnPost(d, repo, "org/calc")
+	d.set("GET /api/v1/system/github-auth", 200, `{"id":"github-auth","satisfied":false}`)
+	deps := fakeClockDeps()
+	deps.LookPath = func(string) (string, error) { return "/usr/bin/gh", nil }
+	deps.CommandOutput = func(_ context.Context, name string, args ...string) ([]byte, error) {
+		if name == "ssh" && len(args) == 2 && args[0] == "-G" && args[1] == "github-work" {
+			return []byte("user git\nhostname github.com\nport 22\n"), nil
+		}
+		return nil, errors.New("unexpected command")
+	}
+	out, _, err := executeCLI(t, deps, "setup", "--path", repo, "--json")
+	if got := ExitCode(err); got != setupExitNeedsHuman {
+		t.Fatalf("exit = %d (%v)\n%s", got, err, out)
+	}
+	if gh := stepNamed(t, decodeSetup(t, out), "github"); gh.Status != setupNeedsHuman {
+		t.Fatalf("github step = %+v; an SSH alias for github.com must count as GitHub", gh)
+	}
+}
+
+func TestSetupUsesANonOriginRemotesDefault(t *testing.T) {
+	d := newSetupDaemon(t)
+	repo := gitRepo(t, false)
+	gitIn(t, repo, "remote", "add", "upstream", filepath.Join(t.TempDir(), "missing.git"))
+	gitIn(t, repo, "update-ref", "refs/remotes/upstream/trunk", "HEAD")
+	gitIn(t, repo, "symbolic-ref", "refs/remotes/upstream/HEAD", "refs/remotes/upstream/trunk")
+	gitIn(t, repo, "switch", "-q", "-c", "feature/x")
+	project := fmt.Sprintf(`{"id":"calc","path":%q,"repo":"","defaultBranch":"auto","config":{"worker":{"agent":"codex"},"orchestrator":{"agent":"codex"}}}`, repo)
+	d.set("POST /api/v1/projects", 201, `{"project":`+project+`}`)
+	d.set("GET /api/v1/projects/calc", 200, `{"status":"ok","project":`+project+`}`)
+	d.set("PUT /api/v1/projects/calc/config", 200, `{"project":{"id":"calc","defaultBranch":"trunk"}}`)
+	out, _, err := executeCLI(t, fakeClockDeps(), "setup", "--path", repo, "--agent", "codex", "--json")
+	if err != nil {
+		t.Fatalf("err = %v\n%s", err, out)
+	}
+	var put setConfigRequest
+	if err := json.Unmarshal([]byte(d.bodies["PUT /api/v1/projects/calc/config"]), &put); err != nil || put.Config.DefaultBranch != "trunk" {
+		t.Fatalf("set-config body = %s, want upstream's default trunk", d.bodies["PUT /api/v1/projects/calc/config"])
+	}
+}
+
+func TestSetupQueuedTaskListsTheWaitCommand(t *testing.T) {
+	d := newSetupDaemon(t)
+	repo := gitRepo(t, true)
+	registerOnPost(d, repo, "example/calc")
+	d.set("POST /api/v1/orchestrators/delegate", 202, `{"ok":true,"workerId":"calc-1"}`)
+	d.set("GET /api/v1/sessions/calc-1", 200, `{"session":{"id":"calc-1","harness":"claude-code","mode":"chat","provisionState":"ready","activity":{"state":"active"}}}`)
+	d.set("GET /api/v1/sessions/calc-1/conversation", 200, `{"turns":[{"id":"t1","state":"queued"}]}`)
+	out, _, _ := executeCLI(t, fakeClockDeps(), "setup", "--path", repo, "--start", "fix it", "--worker", "--json")
+	if res := decodeSetup(t, out); !reflect.DeepEqual(res.NextActions, []string{"ao task wait calc-1"}) {
+		t.Fatalf("next_actions = %q", res.NextActions)
+	}
+}
+
+func TestSetupDryRunWithoutDaemonListsTheApplyCommand(t *testing.T) {
+	setConfigEnv(t)
+	clearCallerEnv(t)
+	repo := gitRepo(t, false)
+	out, _, err := executeCLI(t, Deps{}, "setup", "--path", repo, "--dry-run", "--json")
+	if got := ExitCode(err); got != 0 {
+		t.Fatalf("exit = %d (%v)", got, err)
+	}
+	if res := decodeSetup(t, out); !reflect.DeepEqual(res.NextActions, []string{"ao setup --path " + shellQuote(repo)}) {
+		t.Fatalf("next_actions = %q", res.NextActions)
+	}
+}
+
+func TestSetupErrorSummaryDoesNotRepeatVerify(t *testing.T) {
+	d := newSetupDaemon(t)
+	repo := gitRepo(t, true)
+	t.Setenv("CLAUDECODE", "1")
+	registerOnPost(d, repo, "example/calc")
+	d.set("POST /api/v1/agents/claude-code/probe", 200, `{"agent":{"id":"claude-code","authStatus":"unauthorized"},"supported":true,"installed":true}`)
+	_, _, err := executeCLI(t, fakeClockDeps(), "setup", "--path", repo, "--json")
+	if err == nil || strings.Contains(err.Error(), "verify:") {
+		t.Fatalf("err = %v; the summary must not repeat the verify step", err)
+	}
+}
+
+func TestSetupFirstRunOKOnceTheProjectIsRegistered(t *testing.T) {
+	d := newSetupDaemon(t)
+	repo := gitRepo(t, false)
+	gitIn(t, repo, "remote", "add", "origin", filepath.Join(t.TempDir(), "missing.git"))
+	registerAutoBranch(d, repo)
+	out, _, _ := executeCLI(t, fakeClockDeps(), "setup", "--path", repo, "--agent", "codex", "--json")
+	res := decodeSetup(t, out)
+	if stepNamed(t, res, "project").Status != setupNeedsHuman || stepNamed(t, res, "first-run").Status != setupOK {
+		t.Fatalf("project = %+v first-run = %+v", stepNamed(t, res, "project"), stepNamed(t, res, "first-run"))
 	}
 }
