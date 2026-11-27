@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"sort"
@@ -403,6 +404,8 @@ const unsettledMarker = ".unsettled"
 // the daemon died in the middle of left its mark: the release new launches
 // record is set to the one current points at, the files they run. The mark
 // stays, so launches recorded before this keep every release alive.
+// An unrepairable missing current is logged and left for a later recovery,
+// without preventing other harnesses and durable install jobs from recovering.
 func (s *Service) ReconcileManagedReleases(ctx context.Context) error {
 	if s.managedRoot == "" || s.releases == nil {
 		return nil
@@ -414,6 +417,7 @@ func (s *Service) ReconcileManagedReleases(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+targets:
 	for _, entry := range entries {
 		if !entry.IsDir() || entry.Name() == "bin" {
 			continue
@@ -435,7 +439,8 @@ func (s *Service) ReconcileManagedReleases(ctx context.Context) error {
 			intended := strings.TrimSpace(string(intent))
 			record, ok := s.readManagedRecord(target)
 			if !ok {
-				return fmt.Errorf("recover %s: missing managed record", target)
+				slog.WarnContext(ctx, "managed harness recovery deferred: missing managed record", "target", target)
+				continue
 			}
 			candidates := []string{intended, record.Dir}
 			for _, candidate := range candidates {
@@ -447,15 +452,22 @@ func (s *Service) ReconcileManagedReleases(ctx context.Context) error {
 					continue
 				}
 				if err := s.switchManagedCurrent(ctx, targetDir, candidate); err != nil {
-					return fmt.Errorf("recover %s junction: %w", target, err)
+					if ctx.Err() != nil {
+						return ctx.Err()
+					}
+					slog.WarnContext(ctx, "managed harness recovery deferred: current could not be restored", "target", target, "err", err)
+					continue targets
 				}
 				current = candidate
 				break
 			}
 			if current == "" {
-				return fmt.Errorf("recover %s: no valid release for missing current", target)
+				slog.WarnContext(ctx, "managed harness recovery deferred: no valid release for missing current", "target", target)
+				continue
 			}
 		}
+		// A readable current can serve launches, so failing to record it must
+		// still stop startup rather than let launches record the wrong release.
 		if err := s.releases.SetManagedHarnessRelease(ctx, domain.AgentHarness(entry.Name()), current, time.Now().UTC()); err != nil {
 			return fmt.Errorf("recover %s release: %w", target, err)
 		}

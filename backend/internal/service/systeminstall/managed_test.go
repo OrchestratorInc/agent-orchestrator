@@ -1,9 +1,11 @@
 package systeminstall
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"io"
+	"log/slog"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -425,7 +427,7 @@ func TestCleanupReconcilesUnsettledSwitchBeforeClearingIntent(t *testing.T) {
 				t.Fatalf("cleanup cleared intent before reconciling: recorded=%q, want v2", recorded)
 			}
 			if tt.failRecord {
-				if err := f.s.ReconcileManagedReleases(context.Background()); err == nil {
+				if err := f.s.Recover(context.Background()); err == nil {
 					t.Fatal("recovery succeeded while the release store was unavailable")
 				}
 				if intent := readFile(marker); intent != "v2" {
@@ -783,7 +785,77 @@ func TestStartupRepairsMissingWindowsJunction(t *testing.T) {
 	}
 }
 
-func TestStartupReportsUnrepairableManagedJunction(t *testing.T) {
+func TestRecoverDefersUnrepairableManagedCurrent(t *testing.T) {
+	for _, failure := range []string{"missing record", "missing release", "blocked switch"} {
+		t.Run(failure, func(t *testing.T) {
+			s := newTestService("linux")
+			s.managedRoot = t.TempDir()
+			releases := &releaseStoreStub{current: map[domain.AgentHarness]string{domain.HarnessCodex: "v1"}}
+			s.releases = releases
+			store := newInstallJobStoreFake()
+			started := time.Now().Add(-time.Minute).UTC()
+			store.records[string(TargetCodex)] = ports.AgentInstallJobRecord{
+				Target: string(TargetCodex), Status: string(StatusVerifying), StartedAt: started, UpdatedAt: started,
+			}
+			s.jobStore = store
+			targetDir := s.managedTargetDir(TargetCodex)
+			for _, release := range []string{"v1", "v2"} {
+				binDir := filepath.Join(targetDir, "versions", release, "bin")
+				if err := os.MkdirAll(binDir, 0o755); err != nil {
+					t.Fatal(err)
+				}
+				if failure == "blocked switch" {
+					if err := os.WriteFile(filepath.Join(binDir, "codex"), []byte("fixture"), 0o755); err != nil {
+						t.Fatal(err)
+					}
+				}
+			}
+			if failure != "missing record" {
+				record := managedRecord{Method: "npm", Package: "@openai/codex", CLI: "codex", Dir: "v1", BinRel: filepath.Join("bin", "codex")}
+				if err := writeFileAtomic(filepath.Join(targetDir, "managed.json"), mustJSON(record)); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if err := os.MkdirAll(filepath.Join(targetDir, ".current-v2", "blocked"), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			marker := filepath.Join(targetDir, unsettledMarker)
+			if err := os.WriteFile(marker, []byte("v2"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			var logs bytes.Buffer
+			previousLogger := slog.Default()
+			slog.SetDefault(slog.New(slog.NewTextHandler(&logs, nil)))
+			t.Cleanup(func() { slog.SetDefault(previousLogger) })
+			if err := s.Recover(context.Background()); err != nil {
+				t.Fatalf("one unavailable harness prevented startup recovery: %v", err)
+			}
+			if !strings.Contains(logs.String(), "WARN") || !strings.Contains(logs.String(), "codex") {
+				t.Fatalf("repair failure was not reported: %s", logs.String())
+			}
+			job, err := s.Status(context.Background(), TargetCodex)
+			if err != nil || job.Status != StatusInterrupted {
+				t.Fatalf("durable jobs were not recovered: %+v, %v", job, err)
+			}
+			if intent := readFile(marker); intent != "v2" {
+				t.Fatalf("repair failure discarded recovery intent: %q", intent)
+			}
+			if recorded := releases.current[domain.HarnessCodex]; recorded != "v1" {
+				t.Fatalf("failed repair published a new release: %q", recorded)
+			}
+			if _, err := os.Lstat(filepath.Join(targetDir, "current")); !os.IsNotExist(err) {
+				t.Fatalf("failed repair published current: %v", err)
+			}
+			for _, release := range []string{"v1", "v2"} {
+				if _, err := os.Stat(filepath.Join(targetDir, "versions", release)); err != nil {
+					t.Fatalf("failed repair removed %s: %v", release, err)
+				}
+			}
+		})
+	}
+}
+
+func TestStartupDefersUnrepairableManagedJunction(t *testing.T) {
 	f := newManagedCodexFixture(t, nil)
 	f.update(t, "1.1.0")
 	targetDir := filepath.Join(f.root, "codex")
@@ -793,12 +865,47 @@ func TestStartupReportsUnrepairableManagedJunction(t *testing.T) {
 	if err := os.Remove(filepath.Join(targetDir, "current")); err != nil {
 		t.Fatal(err)
 	}
+	// Cursor sorts after Codex, so its release must still be reconciled when
+	// repairing Codex fails. Both links in this fixture are POSIX symlinks.
+	healthyDir := f.s.managedTargetDir(TargetCursor)
+	if err := os.CopyFS(filepath.Join(healthyDir, "versions", "v1"), os.DirFS(filepath.Join(targetDir, "versions", "v1"))); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(filepath.Join("versions", "v1"), filepath.Join(healthyDir, "current")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(healthyDir, unsettledMarker), []byte("v1"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	commands, goos := f.s.commands, f.s.goos
 	f.s.goos = "windows"
 	f.s.commands = commandRunnerFunc(func(context.Context, []string, io.Writer, io.Writer) error {
 		return errors.New("junction permission denied")
 	})
-	if err := f.s.Recover(context.Background()); err == nil {
-		t.Fatal("startup silently accepted broken managed launcher")
+	if err := f.s.Recover(context.Background()); err != nil {
+		t.Fatalf("one unrepairable launcher prevented startup: %v", err)
+	}
+	if intent := readFile(filepath.Join(targetDir, unsettledMarker)); intent != "v2" {
+		t.Fatalf("unrepairable launcher lost its recovery intent: %q", intent)
+	}
+	if recorded := f.releases.current[domain.HarnessCursor]; recorded != "v1" {
+		t.Fatalf("a failed repair prevented a later target from reconciling: %q", recorded)
+	}
+	if current := f.s.currentManagedRelease(targetDir); current != "" {
+		t.Fatalf("failed repair published current: %q", current)
+	}
+	// A subsequent recovery can retry using the retained marker and fallback
+	// release, and cleanup can settle the target after the repair succeeds.
+	f.s.commands, f.s.goos = commands, goos
+	if err := f.s.Recover(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if current := f.s.currentManagedRelease(targetDir); current != "v1" || f.releases.current[domain.HarnessCodex] != current {
+		t.Fatalf("retry left current=%q, recorded=%q", current, f.releases.current[domain.HarnessCodex])
+	}
+	f.s.RemoveUnusedManagedReleases(context.Background())
+	if _, err := os.Stat(filepath.Join(targetDir, unsettledMarker)); !os.IsNotExist(err) {
+		t.Fatalf("successful retry stayed unsettled: %v", err)
 	}
 }
 
