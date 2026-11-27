@@ -2111,6 +2111,30 @@ func (e *Engine) projectEnv(ctx stdctx.Context, id domain.ProjectID) (map[string
 	return project.Config.Env, nil
 }
 
+func (e *Engine) projectRules(ctx stdctx.Context, id domain.ProjectID) (string, error) {
+	if e.projects == nil {
+		return "", nil
+	}
+	project, ok, err := e.projects.GetProject(ctx, string(id))
+	if err != nil || !ok {
+		return "", err
+	}
+
+	rules := strings.TrimSpace(project.Config.AgentRules)
+	path := strings.TrimSpace(project.Config.AgentRulesFile)
+	if path == "" {
+		return rules, nil
+	}
+	if e.ruleFiles == nil {
+		return "", fmt.Errorf("agentRulesFile %q: no project rules file reader", path)
+	}
+	body, err := e.ruleFiles.ReadDefaultBranchFile(ctx, project.Path, project.Config.WorktreeBaseBranch(), path)
+	if err != nil {
+		return "", fmt.Errorf("agentRulesFile %q: read from the project default branch: %w", path, err)
+	}
+	return strings.TrimSpace(rules + "\n\n" + strings.TrimSpace(body)), nil
+}
+
 func (e *Engine) upsertReview(ctx stdctx.Context, worker domain.SessionRecord, harness domain.ReviewerHarness, handleID, agentSessionID, reviewerLaunchID string, activityState domain.ActivityState, now time.Time) (domain.Review, error) {
 	existing, ok, err := e.store.GetReviewBySessionAndHarness(ctx, worker.ID, harness)
 	if err != nil {

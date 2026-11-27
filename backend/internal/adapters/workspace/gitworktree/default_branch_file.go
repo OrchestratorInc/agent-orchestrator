@@ -42,16 +42,12 @@ func (w *Workspace) ReadDefaultBranchFile(ctx context.Context, repo, branch, pat
 		return "", errors.New("default branch needs a remote-tracking ref")
 	}
 
-	// Pin the ref before walking its tree. Object replacement and recursive
-	// path traversal through symlinks cannot select a different file.
+	// Resolve the ref and path together, then read the selected blob by ID.
+	// Disable replacement objects and accept only regular file entries.
 	git := func(args ...string) ([]byte, error) {
 		return w.run(ctx, w.binary, append([]string{"-C", repo, "--no-replace-objects", "--literal-pathspecs"}, args...)...)
 	}
-	commit, err := git("rev-parse", "--verify", "--end-of-options", ref+"^{commit}")
-	if err != nil {
-		return "", fmt.Errorf("resolve default branch commit: %w", err)
-	}
-	entry, err := git("ls-tree", "-z", "--full-tree", strings.TrimSpace(string(commit)), "--", rel)
+	entry, err := git("ls-tree", "-z", "--full-tree", ref+"^{commit}", "--", rel)
 	if err != nil {
 		return "", fmt.Errorf("find file in default branch: %w", err)
 	}
