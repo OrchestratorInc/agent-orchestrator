@@ -2352,7 +2352,7 @@ func TestSpawnAmpProjectDefaultModePersistsAsModel(t *testing.T) {
 	}
 }
 
-func TestSpawnOMPInheritedEffortReachesLaunchAndStore(t *testing.T) {
+func TestSpawnOMPEffortInheritanceAndExplicitValidation(t *testing.T) {
 	name, contents := "omp", "#!/bin/sh\nif [ \"$1\" = \"--version\" ]; then echo omp/17.1.0; fi\n"
 	if runtime.GOOS == "windows" {
 		name, contents = "omp.cmd", "@echo off\r\nif \"%~1\"==\"--version\" echo omp/17.1.0\r\n"
@@ -2391,6 +2391,19 @@ func TestSpawnOMPInheritedEffortReachesLaunchAndStore(t *testing.T) {
 	}
 	if rec.Metadata.Effort != "high" || initialEffort != "high" {
 		t.Fatalf("OMP effort final=%q initial=%q, want high in both", rec.Metadata.Effort, initialEffort)
+	}
+	for _, effort := range []string{"high", "bogus"} {
+		beforeRows, beforeLaunches := len(st.createdRows), rt.created
+		_, _, _, err := m.Spawn(t.Context(), ports.SpawnConfig{
+			ProjectID: "mer", Kind: domain.KindWorker, RequestedMode: domain.SessionModeTUI,
+			AgentConfig: ports.AgentConfig{Effort: effort}, EffortOverride: true, Prompt: "do the work",
+		})
+		if !errors.Is(err, ports.ErrUnsupportedEffort) {
+			t.Fatalf("explicit OMP effort %q error = %v, want unsupported effort", effort, err)
+		}
+		if len(st.createdRows) != beforeRows || rt.created != beforeLaunches {
+			t.Fatalf("explicit OMP effort %q created session row or runtime", effort)
+		}
 	}
 }
 
