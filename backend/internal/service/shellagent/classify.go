@@ -59,6 +59,9 @@ var executableHarness = map[string]domain.AgentHarness{
 	"hermes":       domain.HarnessHermes,
 	"stakpak":      domain.HarnessStakpak,
 	"tau":          domain.HarnessTau,
+	// Pax installs both entry points; `pydantic-ai-pax` avoids macOS's `pax` archiver.
+	"pax":             domain.HarnessPax,
+	"pydantic-ai-pax": domain.HarnessPax,
 }
 
 // packageDirHarness names harnesses whose launcher runs a generic script from

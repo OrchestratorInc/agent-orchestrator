@@ -63,6 +63,7 @@ func TestPlansMatchAuthenticationMatrix(t *testing.T) {
 		{"hermes", "Set up Hermes Agent", "hermes", "Native provider setup: choose a provider, then paste an API key or finish its OAuth flow", "https://hermes-agent.nousresearch.com/docs", "", ActionSetup, []string{"hermes", "model"}},
 		{"stakpak", "Log in to Stakpak", "stakpak", "Native provider login: create a Stakpak API key in the browser, or paste an Anthropic, OpenAI or Gemini key", "https://github.com/stakpak/agent#authentication", "", ActionLogin, []string{"stakpak", "auth", "login"}},
 		{"open-interpreter", "Log in to Open Interpreter", "interpreter", "Native sign-in for the built-in OpenAI provider; other providers use a saved API key", "https://www.openinterpreter.com/docs/terminal/install", "", ActionLogin, []string{"interpreter", "login"}},
+		{"pax", "Log in to Pax", "pydantic-ai-pax", "Answer Pax's folder trust question if asked, then select Open login to sign in to openai-codex or github-copilot; save other providers' API keys with /keys", "https://github.com/pydantic/pydantic-ai/tree/main/src/pydantic_ai_pax", "/login\r", ActionLogin, []string{"pydantic-ai-pax"}},
 	}
 
 	svc := New(foundExecutables(cases), nil)

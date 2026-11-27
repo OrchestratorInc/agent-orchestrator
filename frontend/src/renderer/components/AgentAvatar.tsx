@@ -63,6 +63,9 @@ import openhandsDarkLogo from "../assets/agents/openhands-dark.svg";
 import openhandsLightLogo from "../assets/agents/openhands-light.svg";
 import opencodeDarkLogo from "../assets/agents/opencode-dark.svg";
 import opencodeLightLogo from "../assets/agents/opencode-light.svg";
+// pydantic/pydantic-ai (MIT): the Pydantic mark from docs/img/logo-white.svg.
+import paxDarkLogo from "../assets/agents/pax-dark.svg";
+import paxLightLogo from "../assets/agents/pax-light.svg";
 import piDarkLogo from "../assets/agents/pi-dark.svg";
 import piLightLogo from "../assets/agents/pi-light.svg";
 import primeAgentDarkLogo from "../assets/agents/prime-agent-dark.svg";
@@ -114,6 +117,7 @@ const LOGOS: AgentLogoSources = {
 	kilocode: { light: kilocodeLightLogo, dark: kilocodeDarkLogo },
 	vibe: vibeLogo,
 	pi: { light: piLightLogo, dark: piDarkLogo },
+	pax: { light: paxLightLogo, dark: paxDarkLogo },
 	kimchi: kimchiLogo,
 	"prime-agent": { light: primeAgentLightLogo, dark: primeAgentDarkLogo },
 	amp: { light: ampLightLogo, dark: ampDarkLogo },

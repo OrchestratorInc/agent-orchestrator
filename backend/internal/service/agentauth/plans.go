@@ -72,6 +72,9 @@ var plans = []Plan{
 	// Open Interpreter in the provider-key catalog, which offers the keys its
 	// generated Anthropic, Gemini, OpenRouter and DeepSeek providers read.
 	plan("open-interpreter", ActionLogin, "Log in to Open Interpreter", []string{"interpreter", "login"}, "Native sign-in for the built-in OpenAI provider; other providers use a saved API key", "https://www.openinterpreter.com/docs/terminal/install"),
+	// Pax signs in only from its own /login; `pydantic-ai-pax` avoids macOS's
+	// unrelated `pax` archiver.
+	terminalInputPlan("pax", ActionLogin, "Log in to Pax", []string{"pydantic-ai-pax"}, "/login\r", "Answer Pax's folder trust question if asked, then select Open login to sign in to openai-codex or github-copilot; save other providers' API keys with /keys", "https://github.com/pydantic/pydantic-ai/tree/main/src/pydantic_ai_pax"),
 }
 
 func terminalInputPlan(agentID string, action Action, title string, command []string, terminalInput, guidance, docs string) Plan {

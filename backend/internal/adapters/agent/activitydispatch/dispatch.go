@@ -34,6 +34,7 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/opencode"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/opencodev2"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/openinterpreter"
+	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/pax"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/pi"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/primeagent"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/tau"
@@ -72,6 +73,7 @@ var Derivers = map[string]DeriveFunc{
 	"amp":              amp.DeriveActivityState,
 	"pi":               pi.DeriveActivityState,
 	"tau":              tau.DeriveActivityState,
+	"pax":              pax.DeriveActivityState,
 	"auggie":           auggie.DeriveActivityState,
 	"goose":            activitystate.StandardDeriveActivityState,
 	"openhands":        activitystate.StandardDeriveActivityState,

@@ -112,6 +112,8 @@ var harnessProbeSpecs = map[string]harnessProbeSpec{
 	// CLI also installs `interpreter`, so the version line must identify it.
 	"open-interpreter": {BinaryName: "interpreter", VersionArg: "--version", ExpectedVersionPrefix: "interpreter 0.0.56"},
 	"tau":              {BinaryName: "tau", VersionArg: "--version", VersionCheck: tau.CheckVersion},
+	// macOS ships an unrelated `pax` archiver; Pax's own entry point is unambiguous.
+	"pax": {BinaryName: "pydantic-ai-pax", VersionArg: "--version", ExpectedVersionPrefix: "pax "},
 }
 
 func newDoctorCommand(ctx *commandContext) *cobra.Command {

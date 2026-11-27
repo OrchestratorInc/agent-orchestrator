@@ -30,6 +30,7 @@ in [gemini-cli.md](gemini-cli.md).
 | [harnesses/command-code.md](harnesses/command-code.md)   | Command Code TUI setup, activity hooks, Chat over `cmd acp`, exact restore, and current limits.                 |
 | [harnesses/mastra-code.md](harnesses/mastra-code.md)     | Mastra Code TUI setup, isolated profile, login, direct model IDs, exact restore, and current limits.             |
 | [harnesses/stakpak.md](harnesses/stakpak.md)             | Stakpak Agent TUI setup, screen-read activity, permissions, exact restore, and current limits.                  |
+| [harnesses/pax.md](harnesses/pax.md)                     | Pax (Pydantic AI) TUI setup, project-file instructions, screen-read activity, exact restore, and current limits. |
 | [harnesses/codewhale.md](harnesses/codewhale.md)         | Codewhale TUI setup, supported versions, and current limits.                                                     |
 | [harnesses/omp.md](harnesses/omp.md)                     | OMP TUI and Chat setup, permissions, and current limits.                                                         |
 | [harnesses/openhands.md](harnesses/openhands.md)         | OpenHands CLI TUI setup and current limits.                                                                      |

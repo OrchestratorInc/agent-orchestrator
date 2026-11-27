@@ -907,3 +907,16 @@ func TestTauInstallUsesLatestRelease(t *testing.T) {
 		t.Fatalf("Tau plan = %+v", plan)
 	}
 }
+
+func TestPaxInstallUsesUVOnEveryPlatform(t *testing.T) {
+	for _, goos := range []string{"darwin", "linux", "windows"} {
+		s := newTestService(goos, "uv")
+		plan := s.planAgent(TargetPax)
+		if plan.Unsupported || plan.Method != "uv" || strings.Join(plan.Command, " ") != "uv tool install pydantic-ai-pax" {
+			t.Fatalf("%s: Pax plan = %+v", goos, plan)
+		}
+	}
+	if plan := newTestService("linux").planAgent(TargetPax); !plan.Unsupported {
+		t.Fatalf("Pax plan without uv = %+v", plan)
+	}
+}

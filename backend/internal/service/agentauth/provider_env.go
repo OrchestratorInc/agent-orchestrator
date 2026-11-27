@@ -63,6 +63,9 @@ var providerEnvironment = map[string][]LoginMethod{
 	// saved under GOOGLE_API_KEY: AO injects it over an inherited value, and
 	// the saved key is the one Mastra uses.
 	"mastra-code": {{"env_OPENAI_API_KEY", "OpenAI API key", true}, {"env_ANTHROPIC_API_KEY", "Anthropic API key", true}, {"env_GOOGLE_API_KEY", "Google API key", true}, {"env_OPENROUTER_API_KEY", "OpenRouter API key", true}, {"env_DEEPSEEK_API_KEY", "DeepSeek API key", true}, {"env_MINIMAX_API_KEY", "MiniMax API key", true}, {"env_ZHIPU_API_KEY", "Z.AI API key", true}},
+	// Pax's Pydantic AI models read these when no saved key or /login account
+	// is used; its default openai-codex model signs in with /login instead.
+	"pax": {{"env_ANTHROPIC_API_KEY", "Anthropic API key", true}, {"env_OPENAI_API_KEY", "OpenAI API key", true}, {"env_GOOGLE_API_KEY", "Google API key", true}, {"env_OPENROUTER_API_KEY", "OpenRouter API key", true}, {"env_GROQ_API_KEY", "Groq API key", true}, {"env_MISTRAL_API_KEY", "Mistral API key", true}},
 }
 
 func environmentMethod(agentID, method string) (string, bool) {
