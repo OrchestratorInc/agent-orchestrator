@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -1193,7 +1194,69 @@ func TestTaskStatusWorkerApprovalBeforeAQueuedFollowUp(t *testing.T) {
 	if got := ExitCode(err); got != 3 {
 		t.Fatalf("exit = %d (%v), want 3", got, err)
 	}
-	if res := decodeTaskResult(t, out); res["status"] != "needs_input" || !strings.Contains(res["reason"].(string), "repo-3") {
+	res := decodeTaskResult(t, out)
+	if res["status"] != "needs_input" || !strings.Contains(res["reason"].(string), "repo-3") {
 		t.Fatalf("result = %v", res)
+	}
+	// The fix names the worker to answer, not the orchestrator in sessionIds[0].
+	if fix := res["fix"].(string); !strings.Contains(fix, "session repo-3") || strings.Contains(fix, "repo-orchestrator") {
+		t.Fatalf("fix = %q; want it to name worker repo-3", fix)
+	}
+}
+
+// A task waiting on its own session's approval names that session in fix.
+func TestTaskNeedsInputFixNamesTheSession(t *testing.T) {
+	d := newTaskDaemon(t)
+	d.set("GET /api/v1/sessions/repo-3", 200, `{"session":{"id":"repo-3","harness":"claude-code","mode":"chat","provisionState":"ready","activity":{"state":"waiting_input"}}}`)
+	d.set("GET /api/v1/sessions/repo-3/conversation", 200, `{"turns":[{"id":"t1","state":"running"}],"activities":[{"turnId":"t1","activityKind":"approval","status":"pending"}]}`)
+
+	out, _, err := executeCLI(t, fakeClockDeps(), "task", "status", "repo-3", "--json")
+	if got := ExitCode(err); got != 3 {
+		t.Fatalf("exit = %d (%v), want 3", got, err)
+	}
+	if res := decodeTaskResult(t, out); !strings.Contains(res["fix"].(string), "session repo-3") {
+		t.Fatalf("result = %v", res)
+	}
+}
+
+// An orchestrator that accepted the message without a turn id may still run
+// the task: the result must not read as "nothing was created".
+func TestTaskStartAcceptedWithoutTurnIDSaysCheckBeforeResending(t *testing.T) {
+	d := newTaskDaemon(t)
+	d.set("POST /api/v1/orchestrators", 201, `{"orchestrator":{"id":"repo-orchestrator","projectId":"repo"}}`)
+	d.set("GET /api/v1/sessions/repo-orchestrator", 200, `{"session":{"id":"repo-orchestrator","harness":"claude-code","mode":"chat","provisionState":"ready","activity":{"state":"active"}}}`)
+	d.set("POST /api/v1/sessions/repo-orchestrator/conversation/messages", 202, `{"state":"queued","duplicate":false}`)
+
+	out, _, err := executeCLI(t, fakeClockDeps(), "task", "start", "fix calc", "--project", "repo", "--json")
+	if got := ExitCode(err); got != 1 {
+		t.Fatalf("exit = %d (%v), want 1", got, err)
+	}
+	res := decodeTaskResult(t, out)
+	if res["taskId"] != "" || !strings.Contains(res["reason"].(string), "may still run") ||
+		res["fix"] != "check `ao session history repo-orchestrator` before starting the task again, so it does not run twice" {
+		t.Fatalf("result = %v", res)
+	}
+}
+
+// Cancelling during the final queued re-read is an interrupted wait, not exit 4
+// from the stale queued observation.
+func TestTaskWaitCancelledDuringTheFinalReadIsInterrupted(t *testing.T) {
+	d := newTaskDaemon(t)
+	deps := fakeClockDeps()
+	start := deps.Now()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	d.set("GET /api/v1/sessions/repo-orchestrator", 200, `{"session":{"id":"repo-orchestrator","harness":"claude-code","mode":"chat","provisionState":"ready","activity":{"state":"active"}}}`)
+	d.setFunc("GET /api/v1/sessions/repo-orchestrator/conversation", func() (int, string) {
+		if deps.Now().Sub(start) >= 5*time.Second {
+			cancel() // the caller gives up during the final read
+		}
+		return 200, `{"turns":[{"id":"t1","state":"running"},{"id":"t2","state":"queued"}]}`
+	})
+
+	c := &commandContext{deps: deps.withDefaults()}
+	res := c.waitTask(ctx, taskResult{TaskID: "repo-orchestrator:t2"}, 5*time.Second)
+	if res.Status != taskStatusFailed || !strings.Contains(res.Reason, "interrupted while waiting") || res.TaskID != "repo-orchestrator:t2" || res.waitTimedOut {
+		t.Fatalf("result = %+v; want an interrupted wait for the known task id", res)
 	}
 }

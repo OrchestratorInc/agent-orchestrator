@@ -428,7 +428,10 @@ func (c *commandContext) createTask(ctx context.Context, project projectDetails,
 		return failedTask("", sessions, fmt.Sprintf("could not confirm that orchestrator %s received the task (client message id %s): %s", orchestratorID, clientMessageID, sendErr.Error()),
 			fmt.Sprintf("check `ao session history %s` before starting the task again, so it is not sent twice", orchestratorID))
 	case strings.TrimSpace(sent.TurnID) == "":
-		return failedTask("", sessions, "daemon accepted the task but returned no turn id", "")
+		// Accepted but unnamed: the task may still run, so this must not read as
+		// "nothing was created".
+		return failedTask("", sessions, fmt.Sprintf("orchestrator %s accepted the task but the daemon returned no turn id, so no task id can be reported; the task may still run (client message id %s)", orchestratorID, clientMessageID),
+			fmt.Sprintf("check `ao session history %s` before starting the task again, so it does not run twice", orchestratorID))
 	}
 	return c.taskStatus(ctx, taskID{session: orchestratorID, turn: strings.TrimSpace(sent.TurnID)})
 }
@@ -756,12 +759,21 @@ func (c *commandContext) observeTask(ctx context.Context, id taskID) taskObserva
 	case "provider_key_missing":
 		res.Fix = fmt.Sprintf("set up the API key that %s needs in the Orchestrator app's Agent Harnesses settings, then retry", sess.Harness)
 	}
+	if res.Status == taskStatusNeedsInput && res.Fix == "" {
+		res.Fix = answerInSessionFix(id.session)
+	}
 	// An orchestrator task is only as finished as the workers its turn started.
 	if id.turn != "" && len(eval.spawned) > 0 && (res.Status == taskStatusRunning || res.Status == taskStatusDone) {
 		res = c.foldTaskWorkers(ctx, res, eval.spawned, eval.spawnedNow)
 	}
 	res.phase = eval.phase
 	return taskObservation{result: res, harness: sess.Harness, turnID: eval.turnID, phase: eval.phase}
+}
+
+// answerInSessionFix names the session whose pending request the user must
+// answer, so a caller opens the right one rather than the orchestrator.
+func answerInSessionFix(session string) string {
+	return fmt.Sprintf("answer the pending request in session %s (open it in the Orchestrator app; `ao session get %s` shows it), then keep waiting with `ao task wait`", session, session)
 }
 
 // foldTaskWorkers combines the orchestrator turn's status with the workers its
@@ -806,7 +818,8 @@ func (c *commandContext) foldTaskWorkers(ctx context.Context, res taskResult, wo
 	case len(needs) > 0:
 		res.Status = taskStatusNeedsInput
 		res.Reason = fmt.Sprintf("worker %s is waiting for your answer or approval", strings.Join(needs, ", "))
-		res.Fix = ""
+		// Name the worker, not the orchestrator, as the session to answer.
+		res.Fix = answerInSessionFix(needs[0])
 	case len(failed) > 0 && turnDone:
 		res.Status, res.Reason, res.Fix = taskStatusFailed, failReason, failFix
 	case len(active) > 0 || len(failed) > 0:
@@ -1066,9 +1079,17 @@ func (c *commandContext) waitTask(ctx context.Context, res taskResult, timeout t
 		// Re-read once, bounded, so the answer matches the task's state now:
 		// the queued turn may have started, failed or been cancelled during
 		// the last sleep.
+		if err := ctx.Err(); err != nil {
+			return failedTask(id.String(), last.SessionIDs, "interrupted while waiting: "+err.Error(), "")
+		}
 		finalCtx, cancel := context.WithTimeout(ctx, taskFinalReadTimeout)
 		final := c.observeTask(finalCtx, id)
 		cancel()
+		// A caller that cancelled during the final read gets an interrupted
+		// wait, not exit 4 from the stale observation.
+		if err := ctx.Err(); err != nil {
+			return failedTask(id.String(), last.SessionIDs, "interrupted while waiting: "+err.Error(), "")
+		}
 		finalReadFailed = final.readFailed
 		if !final.readFailed {
 			switch final.result.Status {

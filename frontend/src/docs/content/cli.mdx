@@ -196,7 +196,9 @@ With `--json`, the command prints one object:
 - a worker task: the worker's session ID;
 - a task sent to a Chat orchestrator: `<orchestrator-session>:<turn>`;
 - a task sent to a terminal (TUI) orchestrator: the orchestrator's session ID, with no `:<turn>`;
-- empty when the command failed before a task existed. There is nothing to look up then.
+- empty when no task id could be reported. That does not prove no task exists: if the reason says the daemon accepted the task without a turn id, or that delivery could not be confirmed, check the session with `ao session history <id>` before starting it again.
+
+For `needs_input`, `fix` names the session whose request you must answer. For an orchestrator task, that is the worker, not the orchestrator.
 
 A terminal session reports no turns. At its prompt, `ao task status` stays `starting`; `ao task wait` reports `done` only if it saw the agent working and then back at its prompt. If the wait times out, the reason says which case it was. `sessionIds` lists the session that runs the task and any workers the orchestrator started for it; their state is part of `status`. When the agent is not signed in, `fix` gives the agent's own login command. `ao spawn`, `ao send`, and the session states are unchanged.
 

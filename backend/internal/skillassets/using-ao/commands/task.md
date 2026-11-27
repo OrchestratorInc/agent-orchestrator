@@ -82,13 +82,18 @@ stays `running`; check that worker with `ao session get <id>`.
 
 ## Reading the result
 
-- `fix` is set when the cause is known. When the agent is not signed in, it is
+- `fix` is set when the cause is known. For `needs_input` it names the session
+  whose request must be answered, which for an orchestrator task is the worker,
+  not the orchestrator. When the agent is not signed in, it is
   the agent's own login command, for example ``run `claude auth login`, then
   retry``. Show it to the user; signing in is theirs to do.
 - `taskId` is the worker's session id, or `<orchestrator-session>:<turn>` for a
   task sent to a Chat orchestrator. A terminal (TUI) orchestrator's task id is
-  its session id alone. `taskId` is empty when the command failed before a task
-  existed.
+  its session id alone. `taskId` is empty when no task id could be reported. That
+  is not proof that no task exists: if the reason says the daemon accepted the
+  task without a turn id, or that delivery could not be confirmed, the task may
+  still run, so check the session (`ao session history <id>`) before starting it
+  again.
 - `sessionIds` lists the session that runs the task and any workers the
   orchestrator started for it; their state is part of `status`.
 - A terminal session reports no turns. `ao task wait` reports `done` only if it
