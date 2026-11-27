@@ -20,7 +20,8 @@ import { UnpairedState } from "../../lib/UnpairedState";
 import { PR_SUMMARY_REUSE_MS, usePRSummaries } from "../../lib/usePRSummaries";
 import { useRefreshActions } from "../../lib/useRefreshActions";
 import { MINUTE_MS, useNow } from "../../lib/useNow";
-import { useBoardFailure } from "../../lib/useBoardFailure";
+import { useBoardFailure, useBoardFailureKind } from "../../lib/useBoardFailure";
+import { useErrorShown } from "../../lib/telemetry/useErrorShown";
 import { TabPageScroll } from "../../lib/TabPageScroll";
 import { ToastHost } from "../../lib/Toast";
 import { useToast } from "../../lib/useToast";
@@ -197,6 +198,10 @@ function PRList() {
 		setRefreshToken((token) => token + 1);
 	}, [summaries.reload, cloudSummaries.reload]));
 	const failure = useBoardFailure();
+	const failureKind = useBoardFailureKind();
+	// The same condition as ListEmptyComponent's failure view below.
+	const listLoading = (loading && prs.length === 0) || (archivedLoading && filtered.length === 0);
+	useErrorShown(!listLoading && filtered.length === 0 && error ? failureKind : null);
 
 	// No haptic of its own: each platform's refresh control gives the feedback
 	// it gives everywhere, and the Retry buttons that run it too buzz once.
