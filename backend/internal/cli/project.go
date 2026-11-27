@@ -136,6 +136,9 @@ type projectConfig struct {
 	TrackerIntake         trackerIntakeConfig  `json:"trackerIntake,omitempty"`
 	AutoReview            bool                 `json:"autoReview,omitempty"`
 	TerminateOnPRMerge    *bool                `json:"terminateOnPrMerge,omitempty"`
+	// The auto-fix defaults for new sessions round-trip so a CLI edit keeps them.
+	AutoInjectCI     *bool `json:"autoInjectCI,omitempty"`
+	AutoInjectReview *bool `json:"autoInjectReview,omitempty"`
 	// WorkersRequestReview must round-trip through set-config so a CLI edit
 	// of another field never silently turns it off.
 	WorkersRequestReview bool             `json:"workersRequestReview,omitempty"`
