@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { DashboardPR, SessionPRSummary } from "./api";
 import { prReviewPromptHeadline } from "./prView";
-import { pullRequestRows, sessionPullRequestModel, sessionPullRequests } from "./sessionPullRequests";
+import { pullRequestMenuAction, pullRequestRows, sessionPullRequestModel, sessionPullRequests } from "./sessionPullRequests";
 
 const pr = (number: number, state: "open" | "merged" | "closed", isDraft = false): DashboardPR =>
 	({ number, url: `https://forge.test/pr/${number}`, state, isDraft }) as DashboardPR;
@@ -57,5 +57,13 @@ describe("sessionPullRequestModel", () => {
 		expect(model.leadSummary).toBe(sum);
 		expect(model.badge).toMatchObject({ more: 4, moreTone: "error" });
 		expect(model.rows.map((row) => row.number)).toEqual([9137, 9140, 9125, 9120, 9001]);
+	});
+});
+
+describe("pullRequestMenuAction", () => {
+	it("menu opens the review for one PR and the list for several", () => {
+		expect(pullRequestMenuAction(0)).toBe("none");
+		expect(pullRequestMenuAction(1)).toBe("review");
+		expect(pullRequestMenuAction(4)).toBe("list");
 	});
 });

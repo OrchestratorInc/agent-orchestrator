@@ -137,7 +137,7 @@ describe("reviewer control integration", () => {
 	it("opens review detail and the reviewer as pages, never inside a sheet", () => {
 		expect(source("./PRCard.tsx")).toContain("openPage(reviewRouteForPR(session.id, pr, hostId))");
 		expect(source("./worker-list-row.tsx")).toContain("if (reviewRoute) openPage(reviewRoute);");
-		expect(source("./chat/ChatSessionScreen.tsx")).toContain("if (route) openPage(route);");
+		expect(source("./chat/ChatSessionScreen.tsx")).toContain("onOpenPullRequest={(pr) => openPage(reviewRouteForPR(session.id, pr, currentHostId))}");
 		expect(source("../app/notifications/index.tsx")).toContain('action.kind === "review") openPage(');
 		expect(source("./PushManager.tsx")).toContain('if (target === "review") openPage(destination as Href);');
 		expect(detail).toContain("openPage(destination);");

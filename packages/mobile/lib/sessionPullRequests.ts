@@ -66,3 +66,8 @@ export function sessionPullRequestModel(session: Pick<DashboardSession, "pr" | "
 	if (prs.length === 0 || !badge) return undefined;
 	return { lead: badge.lead, leadSummary: summaryFor(badge.lead.number), badge, rows: pullRequestRows(prs, summaryFor) };
 }
+
+/** What the session's ⋯ menu "Pull requests" does: one PR's review, or the list. */
+export function pullRequestMenuAction(count: number): "review" | "list" | "none" {
+	return count === 0 ? "none" : count === 1 ? "review" : "list";
+}
