@@ -289,7 +289,7 @@ func hookDedupeKey(tmpl string, data map[string]any) string {
 		if strings.TrimSpace(s) == "" || total > maxHookDedupeBytes {
 			return ""
 		}
-		fmt.Fprintf(h, "%d:%s", len(s), s)
+		_, _ = fmt.Fprintf(h, "%d:%s", len(s), s)
 	}
 	return hex.EncodeToString(h.Sum(nil))
 }

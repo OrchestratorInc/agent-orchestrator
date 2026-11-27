@@ -232,6 +232,9 @@ func TestHookDedupeKey(t *testing.T) {
 	if k := hookDedupeKey("{{body}}{{headers.X-Delivery}}", bigData); k == "" {
 		t.Fatal("large early value turned dedupe off")
 	}
+	if hookDedupeKey(" {{ headers.X-Delivery }} ", bigData) != hookDedupeKey("{{headers.X-Delivery}}", bigData) {
+		t.Fatal("a whitespace-only key edit changed the key")
+	}
 	if k := hookDedupeKey(strings.Repeat("{{body}}", 512), bigData); k != "" {
 		t.Fatal("dedupe hashed past its byte budget")
 	}
