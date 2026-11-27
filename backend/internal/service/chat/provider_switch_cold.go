@@ -167,12 +167,16 @@ func (s *Service) coldSwitchProvider(
 		if err != nil {
 			return err
 		}
+		// As in a live switch, a request that goes away mid-start must not abort
+		// the target's launch or its commit.
+		operationCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), nativeEditHandoffLimit)
+		defer cancel()
 		started := time.Now()
-		noteInput, err := s.handoffNoteInput(ctx, record, request.TargetHarness, strings.TrimSpace(request.IdempotencyKey))
+		noteInput, err := s.handoffNoteInput(operationCtx, record, request.TargetHarness, strings.TrimSpace(request.IdempotencyKey))
 		if err != nil {
 			return err
 		}
-		noteInput.ChangedFiles = handoffChangedFiles(ctx, record.Metadata.WorkspacePath, record.Metadata.DiffBaseSHA)
+		noteInput.ChangedFiles = handoffChangedFiles(operationCtx, record.Metadata.WorkspacePath, record.Metadata.DiffBaseSHA)
 
 		targetCfg := cloneStartConfig(base)
 		targetCfg.Harness = request.TargetHarness
@@ -187,27 +191,33 @@ func (s *Service) coldSwitchProvider(
 		}
 		targetCfg.Model, targetCfg.Effort = request.Model, request.Effort
 		targetCfg.Permissions = permissions
-		targetCfg.ControllerReady = s.commitProviderSwitch(ctx, id, request, providerSwitchSource{
+		targetCfg.ControllerReady = s.commitProviderSwitch(operationCtx, id, request, providerSwitchSource{
 			harness: record.Harness, model: cmp.Or(conversation.Settings.Model, record.Metadata.Model),
 			autoCompactWindow: targetCfg.ProviderSwitch.AutoCompactWindow,
 			permissions:       permissions, chatPermissions: chatPermissions,
 		})
+		// A wake that failed before resume cleared it leaves the sleep marker on
+		// the session; the target must not start behind it, or the next send
+		// would try to wake a chat that already has a live agent.
+		if err := s.clearHibernation(operationCtx, id); err != nil {
+			return fmt.Errorf("clear hibernation before provider switch: %w", err)
+		}
 		// The context reading is the outgoing model's; the target reports its own.
-		if err := s.store.RecordUsage(ctx, conversation.ID, domain.ConversationUsage{}); err != nil {
+		if err := s.store.RecordUsage(operationCtx, conversation.ID, domain.ConversationUsage{}); err != nil {
 			s.log.Warn("clear source usage before provider switch", "session", id, "error", err)
 		}
-		target, err := s.startLocked(ctx, targetCfg)
+		target, err := s.startLocked(operationCtx, targetCfg)
 		if err != nil {
 			return fmt.Errorf("start target provider: %w", err)
 		}
 		result.FailedApprovals = request.Force && pending
 		s.log.Info("provider switch timing", "session", id, "mode", "chat-cold",
 			"source", record.Harness, "target", request.TargetHarness, "total", time.Since(started))
-		s.adoptTargetsLiveModel(ctx, id, target, request.Model)
+		s.adoptTargetsLiveModel(operationCtx, id, target, request.Model)
 		if request.FastMode {
 			settings := target.Settings()
 			settings.FastMode = true
-			if err := target.SetSettings(ctx, settings); err != nil {
+			if err := target.SetSettings(operationCtx, settings); err != nil {
 				s.log.Warn("apply fast mode after provider switch", "session", id, "error", err)
 			}
 		}

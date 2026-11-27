@@ -1167,6 +1167,48 @@ func TestSwitchAfterAResumeThatStartsNoAgentHandsOverFromTheStoredTranscript(t *
 	}
 }
 
+// A wake can fail before the resume clears the sleep marker. The target of a
+// cold switch must not start behind it, or the next send would wake a chat that
+// already has a live agent.
+func TestColdSwitchClearsAStaleHibernationMarker(t *testing.T) {
+	h, _, _ := newEditHarness(t, false)
+	ctx := context.Background()
+	if err := h.svc.Stop(ctx, testSession); err != nil {
+		t.Fatal(err)
+	}
+	rec, _, err := h.st.GetSession(ctx, testSession)
+	if err != nil {
+		t.Fatal(err)
+	}
+	asleep := time.Now()
+	if ok, err := h.st.SetSessionHibernated(ctx, testSession, rec.Revision, &asleep); err != nil || !ok {
+		t.Fatalf("mark hibernated: applied=%v err=%v", ok, err)
+	}
+	h.svc.SetResumeAgentCallback(func(context.Context, domain.SessionID) error {
+		return errors.New("resume agent: hibernation store unavailable")
+	})
+	h.svc.SetColdSwitchLauncher(func(ctx context.Context, id domain.SessionID, target domain.AgentHarness, start func(context.Context, chatsvc.StartConfig) error) error {
+		return start(ctx, chatsvc.StartConfig{
+			SessionID: id, ProjectID: testProject, Harness: target,
+			WorkspacePath: t.TempDir(), Permissions: ports.PermissionModeAuto,
+		})
+	})
+
+	if _, err := h.svc.SwitchProviderReport(ctx, testSession, domain.ProviderSwitchRequest{TargetHarness: domain.HarnessClaudeCode}); err != nil {
+		t.Fatalf("cold switch of a chat still marked hibernated: %v", err)
+	}
+	after, _, err := h.st.GetSession(ctx, testSession)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if after.HibernatedAt != nil {
+		t.Fatalf("hibernation marker %v survived the switch to a live agent", after.HibernatedAt)
+	}
+	if !h.svc.HasLiveChatController(testSession) {
+		t.Fatal("no controller after the switch")
+	}
+}
+
 // The cold launcher holds the session's agent operation; a resume or another
 // switch already holding it surfaces as a typed busy refusal, not a dead end.
 func TestColdSwitchRefusalFromTheLauncherIsReported(t *testing.T) {
