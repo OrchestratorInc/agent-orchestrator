@@ -842,4 +842,29 @@ describe("Cloud project sandbox settings", () => {
 		expect(screen.getByRole("switch", { name: "Docker (Coder sandboxes)" })).not.toBeChecked();
 		expect(mocks.patch).toHaveBeenCalledTimes(1);
 	});
+
+	it("turns editable again when a fresh read says the user can edit after a refused save", async () => {
+		project = { ...project, canEditSandbox: true };
+		mocks.patch.mockRejectedValueOnce(new CloudCpError("only the project's creator or an organization owner or admin can change Docker or sudo", { status: 403, code: "sandbox_settings_forbidden" }));
+		// The read after the refusal answers that the role was restored.
+		let reads = 0;
+		mocks.get.mockImplementation(async () => { reads += 1; return { project: { ...project } }; });
+		mount("sandbox");
+		const sudo = await screen.findByRole("switch", { name: "Agents can use sudo" });
+		await userEvent.click(sudo);
+		await waitFor(() => expect(reads).toBeGreaterThan(1));
+		await waitFor(() => expect(screen.getByRole("switch", { name: "Agents can use sudo" })).toBeEnabled());
+		expect(screen.queryByText("Only the project's creator or an org owner or admin can change this.")).not.toBeInTheDocument();
+	});
+
+	it("stays read-only when the fresh read after a refused save says the user still cannot edit", async () => {
+		mocks.patch.mockRejectedValueOnce(new CloudCpError("only the project's creator or an organization owner or admin can change Docker or sudo", { status: 403, code: "sandbox_settings_forbidden" }));
+		let reads = 0;
+		mocks.get.mockImplementation(async () => { reads += 1; return { project: reads > 1 ? { ...project, canEditSandbox: false } : project }; });
+		mount("sandbox");
+		await userEvent.click(await screen.findByRole("switch", { name: "Agents can use sudo" }));
+		await waitFor(() => expect(reads).toBeGreaterThan(1));
+		await waitFor(() => expect(screen.getAllByText("Only the project's creator or an org owner or admin can change this.")).toHaveLength(2));
+		expect(screen.getByRole("switch", { name: "Agents can use sudo" })).toBeDisabled();
+	});
 });

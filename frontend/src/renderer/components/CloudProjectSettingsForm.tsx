@@ -156,9 +156,20 @@ export function CloudProjectSandboxSettings({ project, showDocker }: { project: 
 	// unknown, so the switches stay editable and the server's 403 answers. Read
 	// from the current project: a save or refetch puts the server's answer there.
 	// A save refused with sandbox_settings_forbidden (a role lowered after the
-	// page loaded) makes both switches read-only too.
+	// page loaded) makes both switches read-only and reads the project again.
+	// Once that read says whether the user may edit (canEditSandbox), it alone
+	// decides, so a role restored later makes them editable again.
+	const { baseUrl } = useCloudCp();
+	const queryClient = useQueryClient();
 	const [forbidden, setForbidden] = useState(false);
-	const rowProps = { project, readOnly: forbidden || project.canEditSandbox === false, onForbidden: () => setForbidden(true) };
+	const onForbidden = () => {
+		setForbidden(true);
+		const queryKey = cloudProjectSettingsQueryKey(baseUrl, project.orgId, project.id);
+		void queryClient.refetchQueries({ queryKey }).then(() => {
+			if (typeof queryClient.getQueryData<CloudCpProject>(queryKey)?.canEditSandbox === "boolean") setForbidden(false);
+		}, () => undefined);
+	};
+	const rowProps = { project, readOnly: forbidden || project.canEditSandbox === false, onForbidden };
 	return <SettingsGroup title={t("settings.project.sandbox.title")} titleHidden grouped>
 		{showDocker ? <SandboxSwitchRow {...rowProps} configKey="sandboxDocker" id="project-sandbox-docker"
 			label={t("settings.project.sandbox.docker")} description={t("settings.project.sandbox.dockerDescription")}
