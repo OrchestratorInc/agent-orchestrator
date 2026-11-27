@@ -617,8 +617,9 @@ func TestSetupStartWaitingOnUserExits3(t *testing.T) {
 	if res.Task == nil || res.Task.Status != taskStatusNeedsInput {
 		t.Fatalf("task = %+v", res.Task)
 	}
-	if want := []string{"answer the agent that is waiting in Orchestrator (`ao task status calc-1` names it); do not start the task again"}; !reflect.DeepEqual(res.NextActions, want) {
-		t.Fatalf("next_actions = %q, want %q", res.NextActions, want)
+	// ao task's fix names the session to answer; setup passes it on.
+	if len(res.NextActions) != 1 || !strings.Contains(res.NextActions[0], "answer the pending request in session calc-1") {
+		t.Fatalf("next_actions = %q", res.NextActions)
 	}
 }
 
@@ -1261,5 +1262,35 @@ func TestSetupReadyHintNamesTheProject(t *testing.T) {
 	}
 	if !strings.Contains(out, `ao task start --project calc "<task>"`) {
 		t.Fatalf("output:\n%s", out)
+	}
+}
+
+func TestSetupFailedStartWarnsBeforeResending(t *testing.T) {
+	d := newSetupDaemon(t)
+	repo := gitRepo(t, true)
+	registerOnPost(d, repo, "example/calc")
+	d.set("POST /api/v1/orchestrators/delegate", 500, `{"code":"INTERNAL","message":"boom"}`)
+	out, _, err := executeCLI(t, fakeClockDeps(), "setup", "--path", repo, "--start", "fix it", "--worker", "--json")
+	if got := ExitCode(err); got != setupExitFailed {
+		t.Fatalf("exit = %d (%v)", got, err)
+	}
+	verify := stepNamed(t, decodeSetup(t, out), "verify")
+	if strings.Contains(verify.Detail, "then run `ao setup` again") || !strings.Contains(verify.Detail, "check `ao session ls` before running `ao setup --start` again") {
+		t.Fatalf("verify = %+v", verify)
+	}
+}
+
+func TestSetupNeedsInputUsesTheTaskFix(t *testing.T) {
+	d := newSetupDaemon(t)
+	repo := gitRepo(t, true)
+	registerOnPost(d, repo, "example/calc")
+	d.set("POST /api/v1/orchestrators/delegate", 202, `{"ok":true,"workerId":"calc-1"}`)
+	d.set("GET /api/v1/sessions/calc-1", 200, `{"session":{"id":"calc-1","harness":"claude-code","mode":"chat","provisionState":"ready","activity":{"state":"active"}}}`)
+	d.set("GET /api/v1/sessions/calc-1/conversation", 200, `{"turns":[{"id":"t1","state":"running"}],"activities":[{"turnId":"t1","activityKind":"approval","status":"pending"}]}`)
+	out, _, _ := executeCLI(t, fakeClockDeps(), "setup", "--path", repo, "--start", "fix it", "--worker", "--json")
+	res := decodeSetup(t, out)
+	start := stepNamed(t, res, "start")
+	if res.Task == nil || res.Task.Fix == "" || start.Fix != res.Task.Fix {
+		t.Fatalf("start fix = %q, task fix = %q; want the task's own fix (it names the session to answer)", start.Fix, res.Task.Fix)
 	}
 }

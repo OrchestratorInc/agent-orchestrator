@@ -297,11 +297,18 @@ func finishSetup(res *setupResult, opts setupOptions) {
 		verify.Status = setupNeedsHuman
 		verify.Detail = "not ready: finish next_actions, then run `ao setup` again"
 		for _, s := range res.Steps {
-			if s.Status == setupFailed {
-				verify.Status = setupFailed
-				verify.Detail = fmt.Sprintf("not ready: the %s step failed; fix what its detail names, then run `ao setup` again", s.Step)
-				break
+			if s.Status != setupFailed {
+				continue
 			}
+			verify.Status = setupFailed
+			verify.Detail = fmt.Sprintf("not ready: the %s step failed; fix what its detail names, then run `ao setup` again", s.Step)
+			if s.Step == setupStepStart {
+				// The task may exist even when start failed (delivery not
+				// confirmed, no turn id yet): rerunning --start could send it
+				// twice.
+				verify.Detail = "setup is done but the task did not start cleanly: fix what the start step names, and check `ao session ls` before running `ao setup --start` again, since the task may already exist"
+			}
+			break
 		}
 	case res.pending && opts.check:
 		verify.Status = setupSkipped
