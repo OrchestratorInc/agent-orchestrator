@@ -80,6 +80,31 @@ describe("createExitFeedbackFacts", () => {
 		expect(clearInterval).toHaveBeenCalledTimes(1);
 	});
 
+	it("does not publish a zero read before a session was created", async () => {
+		let answer!: (facts: { workSessions: number; projectCount: number }) => void;
+		const readDaemon = vi.fn(() => new Promise<{ workSessions: number; projectCount: number }>((resolve) => { answer = resolve; }));
+		const facts = createExitFeedbackFacts({
+			readInstallCreatedMs: async () => NOW - HOUR,
+			markerExists: async () => false,
+			readDaemon,
+			now: () => NOW,
+			override: { force: false },
+			setInterval: () => ({}),
+			clearInterval: () => undefined,
+		});
+		const poll = facts.refresh();
+		await Promise.resolve();
+		// A task is created while the poll still waits on the daemon.
+		const afterCreate = facts.refresh(true);
+		expect(facts.get().workSessions).toBeUndefined();
+		answer({ workSessions: 0, projectCount: 1 });
+		await vi.waitFor(() => expect(readDaemon).toHaveBeenCalledTimes(2));
+		expect(facts.get().workSessions).toBeUndefined();
+		answer({ workSessions: 1, projectCount: 1 });
+		await Promise.all([poll, afterCreate]);
+		expect(facts.get().workSessions).toBe(1);
+	});
+
 	it("reads a failed daemon check as unknown, never as no work", async () => {
 		const facts = createExitFeedbackFacts({
 			readInstallCreatedMs: async () => NOW - HOUR,
@@ -216,6 +241,18 @@ describe("createExitFeedbackGate", () => {
 		expect(quit).toHaveBeenCalledTimes(1);
 	});
 
+	it("lets a forced quit through at once while the events are still flushing", async () => {
+		const { gate, quit } = setup({ flush: () => new Promise<void>(() => undefined) });
+		gate.intercept(quit);
+		gate.rendererState("shown");
+		gate.rendererState("done");
+		await vi.advanceTimersByTimeAsync(0);
+		expect(gate.phase()).toBe("closing");
+		gate.bypass();
+		expect(quit).toHaveBeenCalledTimes(1);
+		expect(gate.intercept(vi.fn())).toBe(false);
+	});
+
 	it("never holds an update restart, shutdown or forced quit", async () => {
 		const { gate, deps, quit } = setup();
 		gate.bypass();
@@ -254,8 +291,34 @@ describe("createExitFeedbackSender", () => {
 		expect(validateExitFeedbackEvent(event(), KEY)).not.toBeNull();
 		expect(validateExitFeedbackEvent(event({ event: "ao.app.loaded" }), KEY)).toBeNull();
 		expect(validateExitFeedbackEvent(event({ properties: { token: "phc_other" } }), KEY)).toBeNull();
-		expect(validateExitFeedbackEvent(event({ properties: { token: KEY, text: "x".repeat(40_000) } }), KEY)).toBeNull();
+		const huge = Object.fromEntries(Array.from({ length: 200 }, (_, i) => [`$k${i}`, "x".repeat(256)]));
+		expect(validateExitFeedbackEvent(event({ properties: { ...event().properties, ...huge } }), KEY)).toBeNull();
+		expect(validateExitFeedbackEvent(event({ timestamp: {} }), KEY)).toBeNull();
+		expect(validateExitFeedbackEvent(event({ timestamp: "yesterday" }), KEY)).toBeNull();
 		expect(validateExitFeedbackEvent("ao.exit_feedback.shown", KEY)).toBeNull();
+	});
+
+	it("rebuilds the event from an allowlist and never trusts the renderer's cleanup", () => {
+		const out = validateExitFeedbackEvent(event({
+			properties: {
+				token: KEY, distinct_id: "ins_1", install_id: "ins_1", app_version: "1.2.3", $os: "Mac OS X",
+				version: "no_project", answer: "not_comfortable", has_text: true, seconds_open: 3.9,
+				text: "lost C:/work/private-repo/file.txt and /Users/alex/x",
+				extra: "rides along", $nested: { path: "/Users/alex" }, how: "skip",
+			},
+			surprise: "top-level",
+		}), KEY)!;
+		expect(out).toEqual({
+			event: "ao.exit_feedback.answered",
+			uuid: "0193",
+			timestamp: "2026-11-27T12:00:00.000Z",
+			properties: {
+				token: KEY, distinct_id: "ins_1", install_id: "ins_1", app_version: "1.2.3", $os: "Mac OS X",
+				// An answer from the other version is dropped; the text is cleaned again here.
+				version: "no_project", has_text: true, seconds_open: 3,
+				text: "lost [redacted-local-path] and [redacted-local-path]",
+			},
+		});
 	});
 
 	it("posts the event from main and waits for it before the quit goes on", async () => {
@@ -276,6 +339,22 @@ describe("createExitFeedbackSender", () => {
 		await Promise.resolve();
 		expect(flushed).toBe(false);
 		deliver();
+		await flush;
+		expect(flushed).toBe(true);
+	});
+
+	it("also waits for an event admitted while the flush is already waiting", async () => {
+		const deliveries: Array<() => void> = [];
+		const fetch = vi.fn(() => new Promise<Response>((resolve) => deliveries.push(() => resolve(new Response("{}")))));
+		const sender = createExitFeedbackSender({ host: "https://ph.test", projectKey: KEY, fetch: fetch as unknown as typeof globalThis.fetch });
+		sender.send(event({ event: "ao.exit_feedback.shown" }));
+		let flushed = false;
+		const flush = sender.flush(EXIT_FEEDBACK_FLUSH_MS).then(() => { flushed = true; });
+		sender.send(event({ event: "ao.exit_feedback.dismissed", properties: { token: KEY, distinct_id: "ins_1", version: "no_project", how: "second_close", seconds_open: 1 } }));
+		deliveries[0]!();
+		await new Promise((resolve) => setTimeout(resolve, 0));
+		expect(flushed).toBe(false);
+		deliveries[1]!();
 		await flush;
 		expect(flushed).toBe(true);
 	});

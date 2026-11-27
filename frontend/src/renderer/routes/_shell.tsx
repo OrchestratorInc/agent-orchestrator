@@ -189,6 +189,8 @@ function ShellLayoutWithSettings() {
 	return (
 		<SettingsProvider>
 			<ShellLayout />
+			{/* Outside ShellLayout, so an open prompt survives the startup readiness swap. */}
+			<ExitFeedbackPrompt />
 			{/* Outside ShellLayout, so links it holds survive every route and the
 			    startup loader that replaces the shell while the daemon restarts. */}
 			<SharedArtifactLinkHost />
@@ -1674,10 +1676,7 @@ const replacementErrorCount = Object.keys(orchestratorReplacementErrors).length;
 	// ⌘Q can arrive at any time, including during startup or a daemon
 	// reconnect, so the quit confirm renders outside the readiness gate.
 	const quitConfirmDialog = (
-		<>
-			<QuitConfirmDialog open={isQuitConfirmOpen} keepsRunning={quitKeepsRunning} onResolve={resolveQuitConfirm} />
-			<ExitFeedbackPrompt />
-		</>
+		<QuitConfirmDialog open={isQuitConfirmOpen} keepsRunning={quitKeepsRunning} onResolve={resolveQuitConfirm} />
 	);
 	if (isStartupLoading) {
 		return (

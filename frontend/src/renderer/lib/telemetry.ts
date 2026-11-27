@@ -8,7 +8,7 @@ import {
 	ARTIFACT_SESSION_SCOPES,
 	ARTIFACT_SIGN_IN_PROMPT_REASONS,
 } from "./artifact-telemetry";
-import { isLoopbackHostname } from "./loopback";
+import { sanitizeSensitiveString } from "../../shared/telemetry-text";
 import { ONBOARDING_EVENTS, onboardingRateLimitKey, sanitizeOnboardingProperties } from "./onboarding-telemetry-schema";
 import { ORCHESTRATOR_SPAWN_SOURCES } from "./orchestrator-spawn-sources";
 import { IMPORTABLE_AGENTS } from "./session-import-agents";
@@ -24,20 +24,18 @@ import { installRendererErrorHandlers } from "../../shared/renderer-error-handle
 import { launchProperties, takeLaunchStart } from "./launch-telemetry";
 import { PERFORMANCE_EVENTS, sanitizePerformanceProperties } from "./performance-telemetry-properties";
 import { DAEMON_EXIT_REASONS } from "../../shared/daemon-exit-reason";
-import { EXIT_FEEDBACK_ANSWERS, EXIT_FEEDBACK_DISMISSALS, EXIT_FEEDBACK_EVENTS, EXIT_FEEDBACK_TEXT_LIMIT, isExitFeedbackVersion } from "../../shared/exit-feedback";
+import { EXIT_FEEDBACK_EVENTS, sanitizeExitFeedbackProperties } from "../../shared/exit-feedback";
+
+export { sanitizeExitFeedbackProperties };
 
 const POSTHOG_KEY = import.meta.env.VITE_AO_POSTHOG_KEY?.trim() || DEFAULT_POSTHOG_PROJECT_KEY;
 const POSTHOG_HOST = import.meta.env.VITE_AO_POSTHOG_HOST?.trim() || DEFAULT_POSTHOG_HOST;
 const RELEASE_TAG = "2026-01-30";
 // 3 marks the renamed events; 2 used the ao.v2.* names. Matches the daemon.
 const TELEMETRY_SCHEMA_VERSION = 3;
-const REDACTED_LOCAL_URL = "[redacted-local-url]";
-const REDACTED_LOCAL_PATH = "[redacted-local-path]";
 const ACTIVE_STORAGE_KEY = "ao.telemetry.activeSlotsByDate";
 const ROUTE_VIEW_STORAGE_KEY = "ao.telemetry.routeViewsByDate";
 const UPDATE_FAILURE_STORAGE_KEY = "ao.telemetry.updateFailures.v1";
-const EMBEDDED_LOCAL_URL_PATTERN =
-	/(?:\bfile:\/\/\/\S+|\bapp:\/\/renderer\/\S+|\bhttps?:\/\/(?:localhost|127\.0\.0\.1|\[::1\])(?::\d+)?\S*)/gi;
 // session_management_summary keeps its shipped exported name; every other
 // event is exported under the name it is captured with.
 const POSTHOG_EVENT_NAME_ALIASES: Record<string, string> = {
@@ -852,36 +850,6 @@ async function hashedTelemetryID(value: unknown): Promise<string | undefined> {
 	return sha256Hex(trimmed);
 }
 
-function isLocalURL(value: string): boolean {
-	try {
-		const url = new URL(value);
-		return (
-			url.protocol === "file:" ||
-			(url.protocol === "app:" && url.host === "renderer") ||
-			isLoopbackHostname(url.hostname)
-		);
-	} catch {
-		return false;
-	}
-}
-
-function redactEmbeddedLocalURLs(value: string): string {
-	return value.replace(EMBEDDED_LOCAL_URL_PATTERN, REDACTED_LOCAL_URL);
-}
-
-function redactEmbeddedAbsolutePaths(value: string): string {
-	return value
-		.replace(/(?:\/Users\/|\/home\/|\/tmp\/|\/private\/var\/|\/var\/folders\/)\S+/g, REDACTED_LOCAL_PATH)
-		.replace(/\b[A-Za-z]:\\[^\s)]+/g, REDACTED_LOCAL_PATH);
-}
-
-function sanitizeSensitiveString(value: string): string {
-	const trimmed = value.trim();
-	if (!trimmed) return trimmed;
-	if (isLocalURL(trimmed)) return REDACTED_LOCAL_URL;
-	return redactEmbeddedAbsolutePaths(redactEmbeddedLocalURLs(trimmed));
-}
-
 function sanitizePostHogValue(value: unknown): unknown {
 	if (typeof value === "string") return sanitizeSensitiveString(value);
 	if (Array.isArray(value)) return value.map((item) => sanitizePostHogValue(item));
@@ -1100,32 +1068,6 @@ function sanitizeArtifactProperties(event: string, properties?: TelemetryPropert
 }
 
 const EXIT_FEEDBACK_EVENT_SET = new Set<string>(EXIT_FEEDBACK_EVENTS);
-const EXIT_FEEDBACK_DISMISSAL_SET = new Set<string>(EXIT_FEEDBACK_DISMISSALS);
-
-/**
- * The exit feedback events: a fixed version, answer and dismissal vocabulary,
- * whole seconds, and the typed text only with an answer. The text is trimmed,
- * stripped of local paths and URLs and capped at 500 characters.
- */
-export function sanitizeExitFeedbackProperties(event: string, properties?: TelemetryProperties): TelemetryProperties {
-	const safe: TelemetryProperties = {};
-	const version = properties?.version;
-	if (!isExitFeedbackVersion(version)) return safe;
-	safe.version = version;
-	if (event === "ao.exit_feedback.shown") return safe;
-	const seconds = properties?.seconds_open;
-	if (typeof seconds === "number" && Number.isFinite(seconds) && seconds >= 0) safe.seconds_open = Math.min(Math.floor(seconds), 86_400);
-	if (event === "ao.exit_feedback.dismissed") {
-		if (typeof properties?.how === "string" && EXIT_FEEDBACK_DISMISSAL_SET.has(properties.how)) safe.how = properties.how;
-		return safe;
-	}
-	if (typeof properties?.answer === "string" && EXIT_FEEDBACK_ANSWERS[version].includes(properties.answer)) safe.answer = properties.answer;
-	const raw = typeof properties?.text === "string" ? properties.text.trim().slice(0, EXIT_FEEDBACK_TEXT_LIMIT) : "";
-	const text = sanitizeSensitiveString(raw).slice(0, EXIT_FEEDBACK_TEXT_LIMIT);
-	safe.has_text = text !== "";
-	if (text) safe.text = text;
-	return safe;
-}
 
 function agentList(value: unknown): string | undefined {
 	if (typeof value !== "string") return undefined;

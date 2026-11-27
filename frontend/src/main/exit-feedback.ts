@@ -1,4 +1,5 @@
-import { EXIT_FEEDBACK_EVENTS, EXIT_FEEDBACK_TIMEOUT_MS, type ExitFeedbackVersion } from "../shared/exit-feedback";
+import { EXIT_FEEDBACK_EVENTS, EXIT_FEEDBACK_TIMEOUT_MS, sanitizeExitFeedbackProperties, type ExitFeedbackVersion } from "../shared/exit-feedback";
+import { sanitizeSensitiveString } from "../shared/telemetry-text";
 
 /** Spent the moment the dialog appears, whatever the outcome. Lives in the AO data dir. */
 export const EXIT_FEEDBACK_MARKER = "exit_feedback_shown";
@@ -89,23 +90,34 @@ export function createExitFeedbackFacts(deps: {
 	let facts: ExitFeedbackFacts = { markerExists: false };
 	let timer: { unref?(): void } | null = null;
 	let refreshing: Promise<void> | null = null;
-	const refresh = (): Promise<void> => {
-		refreshing ??= (async () => {
-			try {
-				const [installCreatedMs, markerExists, daemon] = await Promise.all([
-					deps.readInstallCreatedMs().catch(() => undefined),
-					deps.markerExists().catch(() => true),
-					deps.readDaemon().catch(() => ({})),
-				]);
-				facts = { installCreatedMs, markerExists: markerExists || facts.markerExists, ...daemon };
-				if (timer && exitFeedbackSettled(facts, deps.now(), deps.override)) {
-					deps.clearInterval(timer);
-					timer = null;
-				}
-			} finally {
-				refreshing = null;
-			}
-		})();
+	// Set when work may have started after the in-flight read began: that read's
+	// count is stale, so it is not published and one more read follows.
+	let stale = false;
+	const read = async (): Promise<void> => {
+		do {
+			stale = false;
+			const [installCreatedMs, markerExists, daemon] = await Promise.all([
+				deps.readInstallCreatedMs().catch(() => undefined),
+				deps.markerExists().catch(() => true),
+				deps.readDaemon().catch(() => ({})),
+			]);
+			const next: ExitFeedbackFacts = { installCreatedMs, markerExists: markerExists || facts.markerExists, ...daemon };
+			facts = stale ? { ...next, workSessions: undefined } : next;
+		} while (stale);
+		if (timer && exitFeedbackSettled(facts, deps.now(), deps.override)) {
+			deps.clearInterval(timer);
+			timer = null;
+		}
+	};
+	/** workMayHaveStarted: a session was just created, so the cached count is no longer trusted. */
+	const refresh = (workMayHaveStarted = false): Promise<void> => {
+		if (workMayHaveStarted) {
+			stale = true;
+			facts = { ...facts, workSessions: undefined };
+		}
+		refreshing ??= read().finally(() => {
+			refreshing = null;
+		});
 		return refreshing;
 	};
 	return {
@@ -175,6 +187,7 @@ export function createExitFeedbackGate(deps: Timers & {
 		} catch (error) {
 			deps.log?.("exit feedback flush failed", error);
 		}
+		if (phase !== "closing") return; // bypassed during the flush; already resumed
 		phase = "done";
 		const next = resume;
 		resume = null;
@@ -235,8 +248,16 @@ export function createExitFeedbackGate(deps: Timers & {
 		},
 		/** Marks a quit that must never be held (update restart, shutdown, forced quit). */
 		bypass(): void {
-			if (phase === "idle") phase = "done";
-			else void finish();
+			// No flush wait: the held quit resumes at once and later quits pass.
+			const next = phase === "pending" || phase === "open" || phase === "closing" ? resume : null;
+			clear();
+			phase = "done";
+			resume = null;
+			try {
+				next?.();
+			} catch (error) {
+				deps.log?.("exit feedback resume failed", error);
+			}
 		},
 		rendererState(state: unknown): void {
 			if (state === "shown" && phase === "pending") {
@@ -269,21 +290,52 @@ export function createExitFeedbackGate(deps: Timers & {
 
 const EVENT_NAMES = new Set<string>(EXIT_FEEDBACK_EVENTS);
 
-/** Returns the event to send, or null when it is not a well-formed exit feedback event for this project. */
+// The context every desktop event carries (buildTelemetryContext, the
+// registered super properties and withTelemetryContext). SDK fields start
+// with "$" and are kept only as primitive values.
+const CONTEXT_KEYS = new Set([
+	"token", "distinct_id", "install_id", "app_version", "ao_version", "platform", "client", "surface",
+	"release_channel", "version_channel", "build_mode", "telemetry_schema_version", "experiment_cohort",
+	"arch", "install_source", "installed_at", "is_ci", "is_container", "days_since_install",
+	"lifetime_sessions", "is_signed_in", "github_actor", "ao_cloud_user_id", "cloud_org_kind",
+	"cloud_billing_mode", "cloud_org_id_hash",
+]);
+const MAX_CONTEXT_STRING = 256;
+
+function contextValue(value: unknown): unknown {
+	if (typeof value === "string") return sanitizeSensitiveString(value).slice(0, MAX_CONTEXT_STRING);
+	if (typeof value === "boolean" || (typeof value === "number" && Number.isFinite(value))) return value;
+	return undefined;
+}
+
+/**
+ * Rebuilds a renderer event from an explicit allowlist, or returns null. Main
+ * is the last check before PostHog, so it trusts nothing the renderer sent:
+ * the feedback fields go through the same sanitizer as in the renderer, the
+ * context keeps known keys only, and the timestamp must be ISO text.
+ */
 export function validateExitFeedbackEvent(input: unknown, projectKey: string): Record<string, unknown> | null {
 	if (!input || typeof input !== "object" || Array.isArray(input)) return null;
 	const event = input as Record<string, unknown>;
 	if (typeof event.event !== "string" || !EVENT_NAMES.has(event.event)) return null;
-	const properties = event.properties;
-	if (!properties || typeof properties !== "object" || Array.isArray(properties)) return null;
-	if ((properties as Record<string, unknown>).token !== projectKey) return null;
-	let body: string;
-	try {
-		body = JSON.stringify(event);
-	} catch {
-		return null;
+	const raw = event.properties;
+	if (!raw || typeof raw !== "object" || Array.isArray(raw)) return null;
+	const received = raw as Record<string, unknown>;
+	if (received.token !== projectKey || typeof received.distinct_id !== "string") return null;
+	const timestamp = event.timestamp;
+	if (typeof timestamp !== "string" || Number.isNaN(Date.parse(timestamp)) || new Date(timestamp).toISOString() !== timestamp) return null;
+	const feedback = sanitizeExitFeedbackProperties(event.event, received);
+	if (!("version" in feedback)) return null;
+	const properties: Record<string, unknown> = {};
+	for (const [key, value] of Object.entries(received)) {
+		if (!CONTEXT_KEYS.has(key) && !key.startsWith("$")) continue;
+		const safe = contextValue(value);
+		if (safe !== undefined) properties[key] = safe;
 	}
-	return body.length <= MAX_EVENT_BYTES ? event : null;
+	Object.assign(properties, feedback);
+	const out: Record<string, unknown> = { event: event.event, properties, timestamp };
+	if (typeof event.uuid === "string" && /^[0-9a-f-]{1,64}$/i.test(event.uuid)) out.uuid = event.uuid;
+	return JSON.stringify(out).length <= MAX_EVENT_BYTES ? out : null;
 }
 
 /**
@@ -321,8 +373,12 @@ export function createExitFeedbackSender(deps: {
 		},
 		async flush(capMs: number): Promise<void> {
 			let timeout: ReturnType<typeof setTimeout> | undefined;
+			// Re-checked until empty, so an event admitted during the flush is awaited too.
+			const drained = (async () => {
+				while (inFlight.size > 0) await Promise.allSettled([...inFlight]);
+			})();
 			await Promise.race([
-				Promise.allSettled([...inFlight]),
+				drained,
 				new Promise<void>((resolve) => {
 					timeout = setTimeout(resolve, capMs);
 				}),

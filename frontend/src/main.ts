@@ -601,6 +601,8 @@ function exitFeedbackAnalyticsOn(): boolean {
 }
 function decideExitFeedbackNow() {
 	if (systemSessionEnding || isUpdateRestartRequested() || browserQuitRequested) return null;
+	// Cached facts count only while the daemon that reported them is still up.
+	if (daemonStatus.state !== "ready") return null;
 	// Never pop a window up just to ask.
 	const shell = getShellWebContents();
 	if (!mainWindow || !mainWindow.isVisible() || mainWindow.isMinimized() || !shell || shell.isDestroyed() || shell.isCrashed()) return null;
@@ -1403,9 +1405,9 @@ async function createWindowInternal(): Promise<void> {
 			return;
 		}
 		if (chatDraftRisks.length > 0) chatDraftWindowCloseConfirmed = true;
-		// Windows and Linux: closing the last window quits, so it can ask for exit
-		// feedback first. On macOS only a real quit asks (before-quit).
-		if (process.platform !== "darwin" && BaseWindow.getAllWindows().length === 1 && exitFeedbackGate.intercept(() => mainWindow?.close())) {
+		// Windows and Linux: closing the last visible window quits, so it can ask
+		// for exit feedback first; hidden helper windows do not count. On macOS only a real quit asks (before-quit).
+		if (process.platform !== "darwin" && BaseWindow.getAllWindows().every((other) => other === mainWindow || !other.isVisible()) && exitFeedbackGate.intercept(() => mainWindow?.close())) {
 			event.preventDefault();
 		}
 	});
@@ -1573,7 +1575,8 @@ async function createWindowInternal(): Promise<void> {
 		trayLifecycle.clear();
 		exitFeedbackGate.abort();
 	});
-	shellWebContents.on("did-start-loading", () => exitFeedbackGate.abort());
+	// A main-frame reload drops the dialog; did-navigate ignores artifact iframes.
+	shellWebContents.on("did-navigate", () => exitFeedbackGate.abort());
 
 	mainWindow.on("closed", () => {
 		lifecycleLog("main_window_closed");
@@ -3882,7 +3885,7 @@ ipcMain.handle("telemetry:setCloudUser", (event, userId: unknown) => {
 ipcMain.handle("telemetry:getGithubLogin", () => telemetryIdentity.githubLogin());
 ipcMain.handle("telemetry:getLifetimeSessions", () => {
 	// Asked right after a session was created: work may have started.
-	void exitFeedbackFacts.refresh();
+	void exitFeedbackFacts.refresh(true);
 	return daemonLifetimeSessions();
 });
 // Performance telemetry: the launch start (once per shell page) and the

@@ -121,5 +121,7 @@ describe("sanitizeExitFeedbackProperties", () => {
 		expect((long.text as string).length).toBe(500);
 		const windowsPath = sanitizeExitFeedbackProperties("ao.exit_feedback.answered", { version: "no_project", answer: "not_a_fit", text: "see C:\\Users\\me\\repo now" });
 		expect(windowsPath.text).toBe("see [redacted-local-path] now");
+		const forwardSlash = sanitizeExitFeedbackProperties("ao.exit_feedback.answered", { version: "no_project", answer: "not_a_fit", text: "Could not open C:/work/private-repo/file.txt" });
+		expect(forwardSlash.text).toBe("Could not open [redacted-local-path]");
 	});
 });
