@@ -543,7 +543,11 @@ func (m *Manager) cleanupBeforeDelete(ctx context.Context, id domain.SessionID) 
 	if h := runtimeHandle(rec.Metadata); h.ID != "" {
 		_ = m.runtime.Destroy(ctx, h) // best effort; usually already gone
 	}
-	if _, refusal := m.cleanupWorkspaceUnderGate(ctx, rec, workspaceInfo(rec)); refusal.refused() {
+	// The session is going away, so nothing will restore its agent's
+	// conversation; that state no longer keeps the workspace.
+	info := workspaceInfo(rec)
+	info.ReleaseAgentState = true
+	if _, refusal := m.cleanupWorkspaceUnderGate(ctx, rec, info); refusal.refused() {
 		return &CleanupRefusedError{Code: refusal.code, Reason: refusal.reason}
 	}
 	return nil

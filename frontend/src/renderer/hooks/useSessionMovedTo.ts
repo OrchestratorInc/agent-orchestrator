@@ -6,7 +6,7 @@ import { apiErrorException } from "../lib/api-error-exception";
 import { clientForSessionHost } from "../lib/host-clients";
 import { LOCAL_HOST } from "../lib/hosts";
 import { moveKey, useMoveStore } from "../lib/move-runner";
-import { cancelMove } from "../lib/move-session";
+import { cancelMove } from "../lib/host-move";
 import { sessionNavigateTarget } from "../lib/navigate-to-session";
 import type { WorkspaceSession } from "../types/workspace";
 import { useMoveSession, useMoveTargets } from "./useMoveSession";

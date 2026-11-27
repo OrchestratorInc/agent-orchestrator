@@ -49,6 +49,21 @@ export function downloadArtifact(source: { uri: string; headers?: Record<string,
 }
 
 /**
+ * The URI of an entry already in the cache, read without waiting, so a view
+ * that mounts again (a page swiped back to) draws from the phone at once.
+ * Undefined when it is not there yet, or is still downloading.
+ */
+export function cachedArtifactUri(entry: ArtifactCacheEntry): string | undefined {
+	if (pending.has(entry.name)) return undefined;
+	try {
+		const file = new File(new Directory(Paths.cache, "artifacts"), entry.name);
+		return file.exists && file.size > 0 ? file.uri : undefined;
+	} catch {
+		return undefined;
+	}
+}
+
+/**
  * Deletes the cached copy of an entry, so the next open downloads it again:
  * for a copy the viewer could not read (a cut or corrupt file would otherwise
  * be served from the cache on every Try again). A download in progress stays.

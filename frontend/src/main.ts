@@ -1,5 +1,6 @@
 import { parseSharedArtifactLink } from "../../packages/shared/artifacts/shared-artifact-link";
 import { openSharedArtifact, SHARED_ARTIFACT_VIEWER_ORIGINS } from "./main/shared-artifact-window";
+import { installDevRendererFraming } from "./main/dev-frame-ancestors";
 import type { SideCloseRequest, SideCloseState } from "./shared/side-close";
 import { SideCloseRecovery, type SideSnapshotCoverage } from "./main/side-close";
 import { SideCloseController } from "./main/side-close-controller";
@@ -230,6 +231,7 @@ import { createBrowserCloseDiagnostics } from "./main/browser-close-diagnostics"
 import { repairBrowserProfileCookies } from "./main/browser-cookie-repair";
 import { browserProfilePartition } from "./shared/browser-profiles";
 import { createBrowserProfileStore } from "./main/browser-profile-store";
+import { defaultBrowserProfileName } from "./main/browser-default-profile-name";
 import { BrowserHistoryStore } from "./main/browser-history-store";
 import { createAwakeTrayMonitor } from "./main/awake-tray";
 import { createAwakeDownloadBridge } from "./main/awake-download-bridge";
@@ -246,6 +248,10 @@ import {
 	type BrowserProfileIpc,
 	type BrowserProfileMenuItem,
 } from "./main/browser-profile-ipc";
+import { createCredentialFiller } from "./main/browser-vault-fill";
+import { registerBrowserVaultIpc } from "./main/browser-vault-ipc";
+import { VaultStore } from "./main/browser-vault-store";
+import { vaultPlatformSupported } from "./main/browser-vault";
 import { createWindowComposition, type WindowComposition } from "./main/window-composition";
 import { AgentBrowserRuntime } from "./main/agent-browser-runtime";
 import { sameBrowserRuntimeIdentity, type BrowserRuntimeIdentity } from "./main/browser-runtime-identity";
@@ -382,6 +388,20 @@ const desktopDataDir = resolveDesktopDataDir(process.env, os.homedir(), desktopL
 // Read before the daemon can create it: no database means this launch is the
 // first run on this data directory, which ao.launches.timed reports apart.
 const firstRunAtLaunch = !existsSync(path.join(desktopDataDir, "ao.db"));
+// Only where the keychain keeps other local programs from the key (macOS).
+const browserVaultAvailable = () => vaultPlatformSupported(process.platform) && protectedStorageAvailable();
+// Saved site passwords: the data key is wrapped by the OS keychain, and fills
+// happen in this process so the agent never sees a secret.
+const browserVaultStore = new VaultStore({
+	dir: path.join(desktopDataDir, "vault"),
+	protector: {
+		available: browserVaultAvailable,
+		encrypt: (data) => safeStorage.encryptString(data.toString("base64")),
+		decrypt: (data) => Buffer.from(safeStorage.decryptString(data), "base64"),
+	},
+});
+// Fills are approved in the daemon's approval gate before they reach here.
+const browserCredentialFiller = createCredentialFiller({ store: browserVaultStore });
 initializeDesktopLog(desktopDataDir);
 let telemetryPolicyController: DesktopTelemetryController | null = null;
 // PostHog identity: the user-facing analytics opt-out (marker file shared with the
@@ -495,6 +515,7 @@ let daemonAttachmentGeneration = 0;
 let daemonOutput = "";
 let browserViewHost: BrowserViewHost | null = null;
 let browserProfileIpc: BrowserProfileIpc | null = null;
+let browserVaultIpc: { dispose: () => void } | null = null;
 let browserProfileImporter: BrowserProfileImportService | null = null;
 let windowComposition: WindowComposition | null = null;
 const browserCleanupPromises = new Set<Promise<void>>();
@@ -1025,6 +1046,8 @@ async function disposeBrowserViewHost(): Promise<void> {
 	const profileIpc = browserProfileIpc;
 	browserProfileIpc = null;
 	profileIpc?.dispose();
+	browserVaultIpc?.dispose();
+	browserVaultIpc = null;
 	const profileImporter = browserProfileImporter;
 	browserProfileImporter = null;
 	if (!host && !profileImporter) return;
@@ -1087,6 +1110,15 @@ async function createWindowInternal(): Promise<void> {
 		return;
 	}
 	const browserProfileStore = await createBrowserProfileStore({ stateDir: browserProfileStateDir() });
+	// Agents start in a persistent profile, so a site the user signed in to once
+	// stays signed in for the next session. Temporary stays a per-session choice.
+	const settingsRunFile = runFilePath();
+	const profileLocale = settingsRunFile
+		? (await readUiSettings(path.dirname(settingsRunFile)).catch(() => DEFAULT_UI_SETTINGS)).locale
+		: DEFAULT_UI_SETTINGS.locale;
+	await browserProfileStore.ensureDefaultProfile(defaultBrowserProfileName(profileLocale)).catch((error: unknown) => {
+		console.warn(`AO: could not create the default browser profile: ${(error as Error).message}`);
+	});
 	// In the background: this must never hold up the window.
 	void repairBrowserProfileCookies({
 		stateDir: browserProfileStateDir(),
@@ -1352,6 +1384,7 @@ async function createWindowInternal(): Promise<void> {
 		getKeybindingOverrides: () => keybindingOverrides,
 		isKeybindingRecording: () => keybindingRecordingActive,
 		agentBrowserRuntime,
+		credentialFiller: browserCredentialFiller,
 		isCloseShellTerminalShortcutEnabled: () => closeShellTerminalShortcutEnabled,
 		browserProfileStore,
 		browserHistoryStore,
@@ -1374,6 +1407,12 @@ async function createWindowInternal(): Promise<void> {
 		onNativeViewAdded: () => windowComposition?.restackShell(),
 	});
 	browserProfileImporter = profileImporter;
+	browserVaultIpc = registerBrowserVaultIpc({
+		ipcMain,
+		shellWebContents,
+		store: browserVaultStore,
+		keychainAvailable: browserVaultAvailable,
+	});
 	browserProfileIpc = registerBrowserProfileIpc({
 		ipcMain,
 		shellWebContents,
@@ -4888,52 +4927,16 @@ app.whenReady().then(async () => {
 		console.error("failed to write app-state marker:", err);
 	}
 
-	// A pre-fix bundle cannot be patched retroactively. After the maintained
-	// /Applications build runs, offer to retire older AO copies that can still
-	// overwrite it if Finder, Spotlight, or an old Dock tile launches them.
-	try {
-		const { formatStaleAppCopies, retireStaleMacAppCopies } = await import("./main/stale-app-copies");
-		await retireStaleMacAppCopies({
-			platform: process.platform,
-			isPackaged: app.isPackaged,
-			runningPath: resolveBundlePath(),
-			runningVersion: app.getVersion(),
-			confirm: async (copies) => {
-				const result = await dialog.showMessageBox({
-					type: "warning",
-					buttons: ["Move old copies to Trash", "Not now"],
-					defaultId: 0,
-					cancelId: 1,
-					title: "Remove old Orchestrator copies",
-					message: `Old copies of ${APP_DISPLAY_NAME} can replace your updated app.`,
-					detail: `${formatStaleAppCopies(copies)}\n\nMove these copies to Trash to prevent another downgrade. Your Orchestrator projects and sessions will not be removed.`,
-					noLink: true,
-				});
-				return result.response === 0;
-			},
-			trashItem: (candidate) => shell.trashItem(candidate),
-			reportFailures: async (paths) => {
-				await dialog.showMessageBox({
-					type: "warning",
-					buttons: ["OK"],
-					defaultId: 0,
-					title: "Some old copies could not be removed",
-					message: "Move these copies to Trash manually before launching Orchestrator again.",
-					detail: paths.join("\n"),
-					noLink: true,
-				});
-			},
-		});
-	} catch (err) {
-		console.warn("stale AO copy cleanup failed:", err);
-	}
-
 	const keybindingRunFile = runFilePath();
 	if (keybindingRunFile) {
 		keybindingOverrides = await readKeybindingOverrides(path.dirname(keybindingRunFile));
 	}
 
 	registerRendererProtocol();
+	// A dev build's renderer is http://localhost, which Cloud file hosts refuse to frame; see dev-frame-ancestors.
+	if (!app.isPackaged && typeof MAIN_WINDOW_VITE_DEV_SERVER_URL !== "undefined" && MAIN_WINDOW_VITE_DEV_SERVER_URL) {
+		installDevRendererFraming(session.defaultSession, MAIN_WINDOW_VITE_DEV_SERVER_URL);
+	}
 	registerArtifactSnapshotProtocol({ protocol, store: artifactSnapshotStore });
 	// Which account owns the cached Cloud previews from the last run, so a different or lost one clears them
 	// even if the app quit before it could.
@@ -5007,6 +5010,55 @@ app.whenReady().then(async () => {
 					},
 				}))
 			.catch((err) => console.warn("desktop version floor check failed:", err));
+	}
+	// A pre-fix bundle cannot be patched retroactively. After the maintained
+	// /Applications build runs, offer to retire older AO copies that can still
+	// overwrite it if Finder, Spotlight, or an old Dock tile launches them.
+	// Not awaited, and only once the window exists: looking in Downloads and
+	// Desktop can raise macOS's folder access prompt, and the trash dialog waits
+	// for an answer, so either would hold the window. A first run is skipped: no
+	// earlier install means no old copy to retire, and a new install should not
+	// be asked for access to those folders.
+	if (!firstRunAtLaunch) {
+		void import("./main/stale-app-copies")
+			.then(({ formatStaleAppCopies, retireStaleMacAppCopies }) => {
+				const showMessage = (options: Electron.MessageBoxOptions) => {
+					const parent = mainWindow;
+					return parent && !parent.isDestroyed() ? dialog.showMessageBox(parent, options) : dialog.showMessageBox(options);
+				};
+				return retireStaleMacAppCopies({
+					platform: process.platform,
+					isPackaged: app.isPackaged,
+					runningPath: resolveBundlePath(),
+					runningVersion: app.getVersion(),
+					confirm: async (copies) => {
+						const result = await showMessage({
+							type: "warning",
+							buttons: ["Move old copies to Trash", "Not now"],
+							defaultId: 0,
+							cancelId: 1,
+							title: "Remove old Orchestrator copies",
+							message: `Old copies of ${APP_DISPLAY_NAME} can replace your updated app.`,
+							detail: `${formatStaleAppCopies(copies)}\n\nMove these copies to Trash to prevent another downgrade. Your Orchestrator projects and sessions will not be removed.`,
+							noLink: true,
+						});
+						return result.response === 0;
+					},
+					trashItem: (candidate) => shell.trashItem(candidate),
+					reportFailures: async (paths) => {
+						await showMessage({
+							type: "warning",
+							buttons: ["OK"],
+							defaultId: 0,
+							title: "Some old copies could not be removed",
+							message: "Move these copies to Trash manually before launching Orchestrator again.",
+							detail: paths.join("\n"),
+							noLink: true,
+						});
+					},
+				});
+			})
+			.catch((err) => console.warn("stale AO copy cleanup failed:", err));
 	}
 	if (!daemonStartsWithWindow) void startDaemon();
 	initAutoUpdates();

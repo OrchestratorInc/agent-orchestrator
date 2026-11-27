@@ -31,8 +31,6 @@ var (
 	ErrTransferPreservedMismatch = errors.New("session: the moved uncommitted work does not belong to the moved head")
 	// ErrTransferArchive reports a missing or damaged conversation archive.
 	ErrTransferArchive = errors.New("session: the moved work is missing or damaged")
-	// ErrSessionMoved refuses to run a session that continues on another machine.
-	ErrSessionMoved = errors.New("session: moved to another computer")
 	// ErrSpawnTransfer is the spawn stage that applies moved state.
 	ErrSpawnTransfer = errors.New("transfer")
 	// ErrTransferPending refuses to run a session whose move did not finish.
@@ -247,7 +245,7 @@ func (m *Manager) PrepareTransfer(ctx context.Context, id domain.SessionID, tran
 	t := domain.SessionTransfer{
 		TransferID:      transferID,
 		Source:          domain.SessionTransferSource{SessionID: id},
-		RepoKey:         domain.RepositoryKey(project.RepoOriginURL),
+		RepoKey:         domain.TransferRepoKey(project.RepoOriginURL),
 		Branch:          rec.Metadata.Branch,
 		HeadSHA:         head,
 		PreservedRef:    remoteRef,
@@ -380,18 +378,6 @@ func (m *Manager) exportTransferConversation(ctx context.Context, rec domain.Ses
 	return &domain.SessionTransferNative{NativeID: manifest.NativeID, SourceCwd: manifest.SourceCwd, CLIVersion: manifest.CLIVersion}, nil
 }
 
-func (m *Manager) nativeConfigDir(ctx context.Context, harness domain.AgentHarness, env map[string]string) (string, error) {
-	agent, ok := m.agents.Agent(harness)
-	if !ok {
-		return "", fmt.Errorf("%w: %q", ErrUnknownHarness, harness)
-	}
-	provider, ok := agent.(ports.AgentNativeSessionConfigProvider)
-	if !ok {
-		return "", fmt.Errorf("%w: %s keeps no native conversation AO can move", ErrTransferUnsupported, harness)
-	}
-	return provider.NativeSessionConfigDir(ctx, env)
-}
-
 // TransferArchivePath is the file session id's prepared transfer carries.
 func (m *Manager) TransferArchivePath(id domain.SessionID, transferID string) (string, error) {
 	dir, err := m.transferDir(transferID)
@@ -502,7 +488,7 @@ func (m *Manager) ReceiveTransfer(ctx context.Context, projectID domain.ProjectI
 	if project.Kind.WithDefault() != domain.ProjectKindSingleRepo {
 		return domain.SessionRecord{}, fmt.Errorf("%w: only single-repository projects can receive a session", ErrTransferUnsupported)
 	}
-	if key := domain.RepositoryKey(project.RepoOriginURL); key == "" || key != t.RepoKey {
+	if key := domain.TransferRepoKey(project.RepoOriginURL); key == "" || key != t.RepoKey {
 		return domain.SessionRecord{}, ErrTransferRepoMismatch
 	}
 	if t.Archive == nil && (t.Bundle || t.Native != nil) {
@@ -556,7 +542,8 @@ func (m *Manager) ReceiveTransfer(ctx context.Context, projectID domain.ProjectI
 		Transfer: &ports.SpawnTransfer{
 			PreservedRef:   t.PreservedRef,
 			NativeArchive:  conversation,
-			FallbackPrompt: t.HandoffNote,
+			// The note writes paths under the home folder with a placeholder.
+			FallbackPrompt: nativetransfer.FillCloudHomeText(t.HandoffNote),
 		},
 	})
 	if err != nil {
@@ -651,57 +638,6 @@ func transferArrivalNote(id domain.SessionID, t domain.SessionTransfer) string {
 	}
 	b.WriteString(" It continues the same conversation and reports to you now. Do not respawn its work.")
 	return b.String()
-}
-
-// placeTransferConversation puts a moved conversation where the agent CLI
-// finds it from workspacePath and returns its native id.
-func (m *Manager) placeTransferConversation(ctx context.Context, harness domain.AgentHarness, workspacePath string, env map[string]string, archive string) (string, error) {
-	if harness != domain.HarnessClaudeCode {
-		return "", fmt.Errorf("%w: %s", ErrTransferUnsupported, harness)
-	}
-	configDir, err := m.nativeConfigDir(ctx, harness, env)
-	if err != nil {
-		return "", err
-	}
-	f, err := os.Open(archive)
-	if err != nil {
-		return "", err
-	}
-	defer func() { _ = f.Close() }()
-	res, err := nativetransfer.ImportClaude(ctx, f, nativetransfer.ClaudeImportOptions{ConfigDir: configDir, LaunchCwd: workspacePath})
-	if err != nil {
-		return "", err
-	}
-	return res.NativeID, nil
-}
-
-// transferRestoreArgv builds the command that resumes a placed conversation
-// and submits launchCfg.Prompt as its next turn.
-func transferRestoreArgv(ctx context.Context, agent ports.Agent, nativeID string, launchCfg ports.LaunchConfig) ([]string, error) {
-	cmd, ok, err := agent.GetRestoreCommand(ctx, ports.RestoreConfig{
-		Session: ports.SessionRef{
-			ID:            launchCfg.SessionID,
-			WorkspacePath: launchCfg.WorkspacePath,
-			Metadata: map[string]string{
-				ports.MetadataKeyAgentSessionID: nativeID,
-				ports.MetadataKeySessionMode:    string(domain.SessionModeTUI),
-			},
-		},
-		Kind:             launchCfg.Kind,
-		DataDir:          launchCfg.DataDir,
-		Config:           launchCfg.Config,
-		Permissions:      launchCfg.Permissions,
-		Prompt:           launchCfg.Prompt,
-		SystemPrompt:     launchCfg.SystemPrompt,
-		SystemPromptFile: launchCfg.SystemPromptFile,
-	})
-	if err != nil {
-		return nil, err
-	}
-	if !ok {
-		return nil, fmt.Errorf("%w: the agent cannot resume conversation %s", ErrTransferUnsupported, nativeID)
-	}
-	return cmd, nil
 }
 
 // CommitTransfer marks a prepared session as moved and ends it here. Its

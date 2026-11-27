@@ -197,7 +197,7 @@ func summaryRepoKey(row domain.ProjectRecord) string {
 	if row.Kind.WithDefault() != domain.ProjectKindSingleRepo || row.RepoOriginURL == "" {
 		return ""
 	}
-	return domain.RepositoryKey(row.RepoOriginURL)
+	return domain.TransferRepoKey(row.RepoOriginURL)
 }
 
 // Get returns one active project by id.

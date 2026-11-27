@@ -678,6 +678,29 @@ func (c *SessionsController) previewFile(w http.ResponseWriter, r *http.Request)
 	}
 	// Only artifact files outlive their session; workspace previews need it.
 	fromArtifacts := r.URL.Query().Get("source") == "artifact"
+	if !fromArtifacts {
+		if assetPath, _, pathErr := wildcardPath(r); pathErr == nil {
+			if name, ok := attachmentstore.NameFromWorkspacePath(assetPath); ok {
+				if svc, ok := c.Svc.(attachmentSessionService); ok {
+					rec, err := svc.GetAttachmentRecord(r.Context(), sessionID(r))
+					if err != nil {
+						envelope.WriteError(w, r, err)
+						return
+					}
+					if c.Attachments != nil {
+						file, info, openErr := c.Attachments.Open(r.Context(), rec.ID, name)
+						if openErr == nil {
+							defer func() { _ = file.Close() }()
+							serveOpenedPreviewFile(w, r, file, info, assetPath)
+							return
+						}
+					}
+					c.serveRootedPreviewFile(w, r, rec.Metadata.WorkspacePath, assetPath)
+					return
+				}
+			}
+		}
+	}
 	var sess domain.Session
 	var err error
 	if fromArtifacts {
@@ -3282,6 +3305,10 @@ func sessionView(r *http.Request, s domain.Session) SessionView {
 		PreviewRevision:    s.Metadata.PreviewRevision,
 		Model:              s.Metadata.Model,
 		RoleAgent:          s.Metadata.RoleAgent,
+		Effort:             s.Metadata.Effort,
+		ModelPending: s.Harness == domain.HarnessMemcode && s.Mode == domain.SessionModeTUI && s.Metadata.ImportSource == nil &&
+			s.Metadata.RuntimeLaunchID == "" && s.Metadata.Model == "" && !s.IsTerminated &&
+			s.Activity.State != domain.ActivityExited && s.ProvisionState != domain.SessionProvisionFailed,
 		LastUserMessageAt: func() *time.Time {
 			if s.Metadata.LatestUserPromptAt.IsZero() {
 				return nil
@@ -3636,6 +3663,10 @@ func workspaceSnapshotRequested(query url.Values) bool {
 // reads, including a deleted session whose artifacts were kept.
 type artifactSessionService interface {
 	ArtifactSession(ctx context.Context, id domain.SessionID) (domain.Session, bool, error)
+}
+
+type attachmentSessionService interface {
+	GetAttachmentRecord(ctx context.Context, id domain.SessionID) (domain.SessionRecord, error)
 }
 
 // keptArtifactsService lists and forgets kept artifacts.

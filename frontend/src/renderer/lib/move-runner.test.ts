@@ -1,8 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { MoveError, moveSession, type MoveInput, type MoveResult } from "./move-session";
+import { MoveError, moveSession, type MoveInput, type MoveResult } from "./host-move";
 import { cancelWaitingMove, moveKey, runMove, useMoveStore } from "./move-runner";
 
-vi.mock("./move-session", async (importOriginal) => ({ ...(await importOriginal<typeof import("./move-session")>()), moveSession: vi.fn() }));
+vi.mock("./host-move", async (importOriginal) => ({ ...(await importOriginal<typeof import("./host-move")>()), moveSession: vi.fn() }));
 
 const result: MoveResult = { sessionId: "web-9", warnings: [], committed: true, transferId: "tr1", destination: { hostId: "host-b", label: "MacBook B", projectId: "web" }, resumed: true };
 

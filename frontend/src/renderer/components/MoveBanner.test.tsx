@@ -1,6 +1,6 @@
 import { fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { MoveError } from "../lib/move-session";
+import { MoveError } from "../lib/host-move";
 import { useMoveStore, type MoveState } from "../lib/move-runner";
 import { MoveBanner } from "./MoveBanner";
 

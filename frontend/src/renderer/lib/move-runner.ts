@@ -1,6 +1,6 @@
 import { create } from "zustand";
 import { LOCAL_HOST } from "./hosts";
-import { MoveError, moveSession, type MoveInput, type MoveResult, type MoveStep } from "./move-session";
+import { MoveError, moveSession, type MoveInput, type MoveResult, type MoveStep } from "./host-move";
 
 /**
  * asking: picked while Claude was mid-turn, waiting for the user to choose.

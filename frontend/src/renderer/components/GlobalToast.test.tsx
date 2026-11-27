@@ -33,6 +33,19 @@ describe("GlobalToast", () => {
 		expect(acknowledge).toHaveBeenCalledOnce();
 		expect(screen.queryByText("Paused")).not.toBeInTheDocument();
 	});
+	it("shows a compact notice on one line with its action as the close button", () => {
+		const acknowledge = vi.fn();
+		useUiStore.getState().showGlobalToast("Paused", "Signed out", { tone: "error", durationMs: 0, compact: true, action: { label: "Acknowledge", run: acknowledge } });
+		render(<GlobalToast />);
+		const toast = screen.getByRole("alert");
+		expect(toast).toHaveAttribute("data-compact");
+		expect(screen.getByText("Paused")).toHaveClass("truncate");
+		expect(screen.getByText("Signed out").closest("[data-toast-body]")).toHaveClass("grid-rows-[0fr]", "group-hover:grid-rows-[1fr]", "group-focus-within:grid-rows-[1fr]");
+		expect(toast.querySelector("svg")).toHaveClass("text-error");
+		fireEvent.click(screen.getByRole("button", { name: "Acknowledge" }));
+		expect(acknowledge).toHaveBeenCalledOnce();
+		expect(screen.queryByText("Paused")).not.toBeInTheDocument();
+	});
 	afterEach(() => {
 		vi.useRealTimers();
 		useUiStore.getState().clearGlobalToast();

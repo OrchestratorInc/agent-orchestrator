@@ -111,7 +111,7 @@ func (m pathMap) rewriteValue(v any) (any, bool) {
 		}
 		return t, changed
 	case map[string]any:
-		if kind, _ := t["type"].(string); kind == "thinking" || kind == "redacted_thinking" {
+		if signed(t) {
 			return t, false
 		}
 		changed := false
@@ -125,46 +125,79 @@ func (m pathMap) rewriteValue(v any) (any, bool) {
 	return v, false
 }
 
-func (m pathMap) rewriteString(s string) (string, bool) {
-	changed := false
-	for _, p := range m {
-		if out, c := replacePathPrefix(s, p.old, p.new); c {
-			s, changed = out, true
+// signed reports a block whose text a model provider signs and checks when
+// the conversation resumes, so not a byte of it may change: Claude Code's
+// thinking and redacted_thinking blocks, OpenCode's reasoning parts (whose
+// signature is in metadata.<provider>.signature), and any object that
+// carries a signature itself or in its metadata.
+func signed(t map[string]any) bool {
+	switch kind, _ := t["type"].(string); kind {
+	case "thinking", "redacted_thinking", "reasoning":
+		return true
+	}
+	if _, ok := t["signature"]; ok {
+		return true
+	}
+	if meta, ok := t["metadata"].(map[string]any); ok {
+		for _, provider := range meta {
+			if fields, ok := provider.(map[string]any); ok {
+				if _, ok := fields["signature"]; ok {
+					return true
+				}
+			}
 		}
 	}
-	return s, changed
+	return false
 }
 
-// replacePathPrefix replaces from where it stands as a whole path, so
-// "/w/web-3" matches "/w/web-3/a.go" but not "/w/web-30" or "/x/w/web-3". The
-// rest of a Windows path takes the separators of a POSIX to, and the reverse.
-func replacePathPrefix(s, from, to string) (string, bool) {
-	fromSep, toSep := separator(from), separator(to)
+// rewriteString replaces every mapped prefix in s in one pass over the
+// original text, so a replacement is never matched again by a later pair
+// (when one pair's new path is another pair's old one). At each position the
+// longest matching prefix wins (m is sorted longest first).
+//
+// Each prefix's next match is cached, absence included, and searched again
+// only once the scan has passed it, so every prefix's search moves forward:
+// the text is scanned about once per prefix, not once per replacement, which
+// keeps a long string listing many paths (up to a 64 MiB transcript) linear.
+func (m pathMap) rewriteString(s string) (string, bool) {
 	var b strings.Builder
 	changed := false
 	i := 0
-	for {
-		j := strings.Index(s[i:], from)
-		if j < 0 {
+	// next[k] is prefix k's next whole-path match at or after i; -1 when it
+	// has none left, which stays true for the rest of s.
+	next := make([]int, len(m))
+	for k, p := range m {
+		next[k] = indexWholePath(s, 0, p.old)
+	}
+	for i < len(s) {
+		best, at := -1, len(s)
+		for k, p := range m {
+			if next[k] >= 0 && next[k] < i {
+				// Passed (inside an earlier replacement): look again from i.
+				next[k] = indexWholePath(s, i, p.old)
+			}
+			if j := next[k]; j >= 0 && j < at {
+				best, at = k, j
+			}
+		}
+		if best < 0 {
 			break
 		}
-		j += i
-		end := j + len(from)
-		b.WriteString(s[i:j])
-		if (j == 0 || !isPathNameByte(s[j-1])) && (end == len(s) || !isPathNameByte(s[end])) {
-			b.WriteString(to)
-			changed = true
-			for ; fromSep != toSep && end < len(s) && (s[end] == fromSep || isPathNameByte(s[end])); end++ {
-				if s[end] == fromSep {
+		p := m[best]
+		b.WriteString(s[i:at])
+		b.WriteString(p.new)
+		i = at + len(p.old)
+		changed = true
+		// The rest of a Windows path takes the separators of a POSIX new, and the reverse.
+		if fromSep, toSep := separator(p.old), separator(p.new); fromSep != toSep {
+			for ; i < len(s) && (s[i] == fromSep || isPathNameByte(s[i])); i++ {
+				if s[i] == fromSep {
 					b.WriteByte(toSep)
 				} else {
-					b.WriteByte(s[end])
+					b.WriteByte(s[i])
 				}
 			}
-		} else {
-			b.WriteString(from)
 		}
-		i = end
 	}
 	if !changed {
 		return s, false
@@ -173,13 +206,37 @@ func replacePathPrefix(s, from, to string) (string, bool) {
 	return b.String(), true
 }
 
+// replacePathPrefix replaces from wherever it stands as a whole path, so
+// "/w/web-3" matches "/w/web-3/a.go" but not "/w/web-30" or "/x/w/web-3".
+func replacePathPrefix(s, from, to string) (string, bool) {
+	return pathMap{{old: from, new: to}}.rewriteString(s)
+}
+
+// indexWholePath is the first index at or after i where from stands as a whole
+// path, or -1.
+func indexWholePath(s string, i int, from string) int {
+	for {
+		j := strings.Index(s[i:], from)
+		if j < 0 {
+			return -1
+		}
+		j += i
+		end := j + len(from)
+		if (j == 0 || !isPathNameByte(s[j-1])) && (end == len(s) || !isPathNameByte(s[end])) {
+			return j
+		}
+		i = j + 1
+	}
+}
+
+func isPathNameByte(c byte) bool {
+	return c == '-' || c == '_' || c == '.' || c >= '0' && c <= '9' || c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z'
+}
+
+// separator is the path separator p uses.
 func separator(p string) byte {
 	if windowsPath.MatchString(p) && strings.Contains(p, `\`) {
 		return '\\'
 	}
 	return '/'
-}
-
-func isPathNameByte(c byte) bool {
-	return c == '-' || c == '_' || c == '.' || c >= '0' && c <= '9' || c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z'
 }

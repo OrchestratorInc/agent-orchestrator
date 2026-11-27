@@ -62,6 +62,7 @@ import {
 import { flushSync } from "react-dom";
 import { artifactCount, groupArtifactsByProject, withKeptArtifacts } from "../lib/artifacts";
 import { useKeptArtifacts } from "../hooks/useKeptArtifacts";
+import { useTitleMarquee } from "../hooks/useTitleMarquee";
 import {
 	newestActiveOrchestrator,
 	openPRs,
@@ -216,11 +217,10 @@ const FOOTER_UPDATES_CLASS = "flex flex-col gap-0.5 pt-2 empty:hidden";
 /** The footer's bottom row, under any update rows. */
 const FOOTER_BOTTOM_ROW_CLASS = "flex w-full items-center gap-0.5 pt-2";
 
-/** Expanded footer icon action: a 36px square with the growing highlight. */
-const FOOTER_ICON_BUTTON_CLASS = cn(
-	NAV_ROW_HIGHLIGHT_HOST_CLASS,
-	"inline-flex size-9 shrink-0 items-center justify-center rounded-lg text-muted-foreground hover:text-foreground [&_svg]:size-icon-md",
-);
+// The footer's icon buttons (account, Usage, Mobile, Settings): the quiet
+// Button at 30px, a step larger than the topbar's 28px icon-sm so the bottom
+// bar reads. Paired with size="none", since the size scale has no 30px step.
+const FOOTER_ICON_BUTTON_SIZE = "size-7.5";
 
 // Top-of-sidebar rows (Search, Automations) and project rows: one 32px row with
 // a 10px inset, 8px icon gap, and 14px icons so edges match the section headers
@@ -611,6 +611,9 @@ function useSelection() {
 		goSession,
 	}), [goArtifacts, goAutomations, goUsage, goConnectMobile, goGlobalSettings, goHome, goProject, goSession, goSettings, goStandaloneBoard, params.hostId, params.projectId, params.sessionId, pathname]);
 }
+
+// The sidebar's resize line traces the center panel's left border, wherever its inset puts it.
+const centerPanelEdge = () => document.querySelector(".center-panel-surface");
 
 // A marker that asks the user to act now: the agent's question, or the red alert.
 function isUrgentMarker(marker: ReturnType<typeof getSessionRowIndicator>): boolean {
@@ -1213,15 +1216,6 @@ export const Sidebar = memo(function Sidebar({
 							trailing={artifactTotal > 0 ? String(artifactTotal) : undefined}
 						/>
 					</SidebarMenuItem>
-					<SidebarMenuItem>
-						<SidebarTopNavRow
-							active={selection.isUsage}
-							icon={<Gauge aria-hidden="true" />}
-							label={t("usage.title")}
-							onClick={selection.goUsage}
-							tooltip={isCollapsed ? t("usage.title") : undefined}
-						/>
-					</SidebarMenuItem>
 				</SidebarMenu>
 			</div>
 
@@ -1419,6 +1413,8 @@ export const Sidebar = memo(function Sidebar({
 						<FooterAccountRow
 							onConnectMobile={() => selection.goConnectMobile()}
 							onOpenSettings={() => selection.goGlobalSettings()}
+							onOpenUsage={selection.goUsage}
+							usageActive={selection.isUsage}
 							tabIndex={isCollapsed ? -1 : 0}
 						/>
 					)}
@@ -1440,6 +1436,25 @@ export const Sidebar = memo(function Sidebar({
 						/>
 						<CloudSignInRailButton tabIndex={isCollapsed ? 0 : -1} />
 						<CloudAccountRailButton tabIndex={isCollapsed ? 0 : -1} />
+						<Tooltip>
+							<TooltipTrigger asChild>
+								<Pressable
+									data-telemetry-id="sidebar.usage"
+									aria-current={selection.isUsage ? "page" : undefined}
+									aria-label={t("usage.title")}
+									className={FOOTER_RAIL_BUTTON_CLASS}
+									onClick={selection.goUsage}
+									tabIndex={isCollapsed ? 0 : -1}
+									type="button"
+								>
+									<NavRowHighlight active={selection.isUsage} />
+									<span className="relative z-[1] grid place-items-center [&_svg]:size-icon-base">
+										<Gauge aria-hidden="true" />
+									</span>
+								</Pressable>
+							</TooltipTrigger>
+							<TooltipContent side="right">{t("usage.title")}</TooltipContent>
+						</Tooltip>
 						<Tooltip>
 							<TooltipTrigger asChild>
 								<Pressable
@@ -1510,6 +1525,7 @@ export const Sidebar = memo(function Sidebar({
 			{/* useResizable owns clamp. */}
 			<ResizeHandle
 				className="group-data-[state=collapsed]:hidden"
+				edge={centerPanelEdge}
 				onDoubleClick={onResizeDoubleClick}
 				onPointerDown={onResizePointerDown}
 				side="right"
@@ -2343,7 +2359,7 @@ const ProjectItem = memo(function ProjectItem({
 					/>
 				</li>
 			</ContextMenuTrigger>
-			<ContextMenuContent className="min-w-44">
+			<ContextMenuContent className="w-48">
 				<LazyMenuEntries build={buildMenuEntries} />
 			</ContextMenuContent>
 		</ContextMenu>
@@ -2814,6 +2830,7 @@ const SessionRow = memo(function SessionRow({
 		[setPreviewRow, setSortableNode],
 	);
 	const lastTouchAtRef = useRef(0);
+	const { boxRef: titleRef, textRef: titleTrackRef } = useTitleMarquee();
 	const suppressTouchOpenRef = useRef(false);
 	const hoverTimerRef = useRef<ReturnType<typeof setTimeout>>(undefined);
 	// A remote chat prefetches its page too; only a local agent can be woken from here.
@@ -2996,7 +3013,9 @@ const SessionRow = memo(function SessionRow({
 							<span className="flex min-w-0 flex-1 items-center gap-1.5">
 								<span
 									className={cn(
-										"min-w-0 flex-1 truncate",
+										// One line that fades at its cut edge instead of an ellipsis and
+										// scrolls to its end while the row is hovered (see .session-title).
+										"session-title min-w-0 flex-1",
 										// Only a session that needs you reads at full brightness; the
 										// rest sit back, so the list has a clear lead.
 										active || isUrgentMarker(marker)
@@ -3005,6 +3024,7 @@ const SessionRow = memo(function SessionRow({
 										shimmer && "relative",
 									)}
 									data-session-name=""
+									ref={titleRef}
 									onPointerUp={(event) => {
 										if (event.pointerType !== "touch") return;
 										const now = Date.now();
@@ -3015,8 +3035,8 @@ const SessionRow = memo(function SessionRow({
 										lastTouchAtRef.current = now;
 									}}
 								>
-									{session.title}
-									{shimmer ? <span aria-hidden="true" className="sidebar-working-shimmer"><span><span>{session.title}</span></span></span> : null}
+									<span className="session-title-track" ref={titleTrackRef}>{session.title}</span>
+									{shimmer ? <span aria-hidden="true" className="sidebar-working-shimmer"><span><span><span className="session-title-track">{session.title}</span></span></span></span> : null}
 								</span>
 								{hostLabel ? <Badge variant="outline" className="h-4 min-w-0 max-w-1/2 shrink justify-start px-1.5 text-2xs"><span className="truncate">{hostLabel}</span></Badge> : null}
 								{cloud ? <CloudMark /> : null}
@@ -3050,7 +3070,7 @@ const SessionRow = memo(function SessionRow({
 				<SessionPreviewCardAdapter session={session} />
 			</HoverCardContent>
 			</HoverCard>
-			<ContextMenuContent className="min-w-44">
+			<ContextMenuContent className="w-48">
 				{/* Archiving is the owner workspace's; a guest's archive would always be refused. */}
 				<SessionContextMenuItems onArchive={session.cloud?.shared ? undefined : () => setArchiveOpen(true)} onRename={beginRename} session={session} />
 			</ContextMenuContent>
@@ -3263,26 +3283,32 @@ function CloudSignInRailButton({ tabIndex }: { tabIndex: number }) {
 }
 
 /**
- * The footer's bottom row: the account on the left, then the Mobile menu and
- * Settings as icons. Without AO Cloud the left side is the labelled
+ * The footer's bottom row: the account on the left, then Usage, the Mobile
+ * menu and Settings as icons. Without AO Cloud the left side is the labelled
  * Settings row instead, so Settings never shows twice. While the cloud session
- * is still loading the left side stays empty and the icons hold their place.
+ * is still loading the left side stays empty at full height, so nothing moves.
  */
 function FooterAccountRow({
 	onConnectMobile,
 	onOpenSettings,
+	onOpenUsage,
 	tabIndex,
+	usageActive,
 }: {
 	onConnectMobile: () => void;
 	onOpenSettings: () => void;
+	onOpenUsage: () => void;
 	tabIndex: number;
+	usageActive: boolean;
 }) {
 	const { t } = useTranslation();
 	const { configured } = useCloudSession();
 
 	return (
 		<div className={FOOTER_BOTTOM_ROW_CLASS}>
-			<div className="flex min-w-0 flex-1">
+			{/* Held at the Sign in row's 36px, so signing in, loading and the 30px
+			    avatar all keep the row (and the sidebar above it) still. */}
+			<div className="flex h-9 min-w-0 flex-1 items-center">
 				{configured ? (
 					<>
 						<CloudSignInRow tabIndex={tabIndex} />
@@ -3305,23 +3331,43 @@ function FooterAccountRow({
 					</Pressable>
 				)}
 			</div>
+			<Tooltip>
+				<TooltipTrigger asChild>
+					<Button
+						data-telemetry-id="sidebar.usage"
+						aria-current={usageActive ? "page" : undefined}
+						aria-label={t("usage.title")}
+						onClick={onOpenUsage}
+						tabIndex={tabIndex}
+						data-active={usageActive || undefined}
+						className={FOOTER_ICON_BUTTON_SIZE}
+						size="none"
+						variant="quiet"
+					>
+						<span className="relative z-[1] grid place-items-center">
+							<Gauge aria-hidden="true" />
+						</span>
+					</Button>
+				</TooltipTrigger>
+				<TooltipContent>{t("usage.title")}</TooltipContent>
+			</Tooltip>
 			<FooterMobileMenu onConnectMobile={onConnectMobile} tabIndex={tabIndex} />
 			{configured ? (
 				<Tooltip>
 					<TooltipTrigger asChild>
-						<Pressable
+						<Button
 							data-telemetry-id="sidebar.settings"
 							aria-label={t("shell.settings")}
-							className={FOOTER_ICON_BUTTON_CLASS}
 							onClick={onOpenSettings}
 							tabIndex={tabIndex}
-							type="button"
+							className={FOOTER_ICON_BUTTON_SIZE}
+							size="none"
+							variant="quiet"
 						>
-							<NavRowHighlight />
 							<span className="relative z-[1] grid place-items-center">
 								<Settings aria-hidden="true" />
 							</span>
-						</Pressable>
+						</Button>
 					</TooltipTrigger>
 					<TooltipContent shortcut="open-settings">{t("shell.settings")}</TooltipContent>
 				</Tooltip>
@@ -3360,16 +3406,16 @@ function FooterMobileMenu({ onConnectMobile, tabIndex }: { onConnectMobile: () =
 		return (
 			<Tooltip>
 				<TooltipTrigger asChild>
-					<Pressable
+					<Button
 						aria-label={label}
-						className={FOOTER_ICON_BUTTON_CLASS}
 						onClick={onConnectMobile}
 						tabIndex={tabIndex}
-						type="button"
+						className={FOOTER_ICON_BUTTON_SIZE}
+						size="none"
+						variant="quiet"
 					>
-						<NavRowHighlight />
 						{icon}
-					</Pressable>
+					</Button>
 				</TooltipTrigger>
 				<TooltipContent>{label}</TooltipContent>
 			</Tooltip>
@@ -3381,16 +3427,16 @@ function FooterMobileMenu({ onConnectMobile, tabIndex }: { onConnectMobile: () =
 			<Tooltip>
 				<TooltipTrigger asChild>
 					<DropdownMenuTrigger asChild>
-						<Pressable
+						<Button
 							aria-label={label}
-							className={FOOTER_ICON_BUTTON_CLASS}
 							data-testid="footer-mobile-menu"
 							tabIndex={tabIndex}
-							type="button"
+							className={FOOTER_ICON_BUTTON_SIZE}
+							size="none"
+							variant="quiet"
 						>
-							<NavRowHighlight />
 							{icon}
-						</Pressable>
+						</Button>
 					</DropdownMenuTrigger>
 				</TooltipTrigger>
 				<TooltipContent>{label}</TooltipContent>
@@ -3484,9 +3530,9 @@ function useConfirmedCloudSignOut() {
 	return { requestSignOut: () => setOpen(true), signOutDialog: dialog };
 }
 
-// CloudAccountRow: avatar and name for an existing cloud session (the
-// signed-in state), opening the account menu. One line, no email: the email
-// and plan live in the menu header. At the narrowest sidebar the name truncates.
+// CloudAccountRow: the avatar alone for an existing cloud session (the
+// signed-in state), opening the account menu. The name, email and plan live in
+// the menu header, so the footer row never truncates a name.
 // The sign-in entry point is CloudSignInRow.
 function CloudAccountRow({ tabIndex }: { tabIndex: number }) {
 	const { t } = useTranslation();
@@ -3498,36 +3544,23 @@ function CloudAccountRow({ tabIndex }: { tabIndex: number }) {
 	return (
 		<DropdownMenu>
 			<DropdownMenuTrigger asChild>
-				<Pressable
+				<Button
 					aria-label={t("shell.signedInAs", {
 						email: email ?? "Orchestrator Cloud",
 					})}
-					className={cn(NAV_ROW_HIGHLIGHT_HOST_CLASS, "flex h-9 w-full min-w-0 items-center rounded-lg px-1.5 text-left")}
+					// Centres the avatar under the nav and project row icons.
+					className={cn(FOOTER_ICON_BUTTON_SIZE, "ml-[3px]")}
+					size="none"
 					tabIndex={tabIndex}
-					title={email}
-					type="button"
+					variant="quiet"
 				>
-					<NavRowHighlight />
-					<span className="relative z-[1] flex min-w-0 flex-1 items-center gap-2">
-						<AccountAvatar size="lg" user={session?.user} />
-						<span className="min-w-0 truncate text-sm font-medium tracking-tight text-foreground">
-							{accountShortName(session?.user)}
-						</span>
-					</span>
-				</Pressable>
+					<AccountAvatar size="sm" user={session?.user} />
+				</Button>
 			</DropdownMenuTrigger>
 			<CloudAccountMenuContent side="top" onSignOut={requestSignOut} />
 			{signOutDialog}
 		</DropdownMenu>
 	);
-}
-
-/** The name for the one-line footer row: the display name, else the email's local part. */
-function accountShortName(user: { displayName?: string; email?: string } | undefined): string {
-	const display = user?.displayName?.trim();
-	if (display && display !== user?.email) return display;
-	const local = user?.email?.split("@")[0];
-	return local || "Orchestrator Cloud";
 }
 
 /** The signed-in person's name, falling back to their email. */
@@ -3542,11 +3575,11 @@ function AccountAvatar({
 	size = "md",
 	user,
 }: {
-	size?: "md" | "lg";
+	size?: "md" | "sm" | "lg";
 	user: { displayName?: string; email?: string; avatarUrl?: string } | undefined;
 }) {
 	const [broken, setBroken] = useState(false);
-	const sizeClass = size === "lg" ? "size-6" : "size-icon-md";
+	const sizeClass = size === "lg" ? "size-6" : size === "sm" ? "size-5" : "size-icon-md";
 	if (user?.avatarUrl && !broken) {
 		return (
 			<img

@@ -76,20 +76,15 @@ type SessionMovedTo struct {
 // Pending reports a move that was prepared but not yet finished.
 func (m SessionMovedTo) Pending() bool { return m.SessionID == "" }
 
-// RepositoryKey is host/namespace/name for an origin URL, lower-cased for
-// GitHub, whose names are case-insensitive. Any other origin, such as a local
-// path, keys as itself.
-func RepositoryKey(origin string) string {
-	origin = CloneURL(origin)
-	id, err := ParseRepositoryIdentity(origin)
-	if err != nil {
-		return strings.TrimSuffix(origin, "/")
+// TransferRepoKey names the repository a move must find on the other
+// computer: RepositoryKey, or the remote without credentials when it names no
+// provider repository, such as a local path or a git:// path on the network.
+func TransferRepoKey(origin string) string {
+	clone := CloneURL(origin)
+	if key := RepositoryKey(clone); key != "" {
+		return key
 	}
-	key := id.Host + "/" + id.Namespace + "/" + id.Name
-	if id.Provider == "github" {
-		key = strings.ToLower(key)
-	}
-	return key
+	return strings.TrimSuffix(clone, "/")
 }
 
 // CloneURL is a Git remote without the credentials, query or fragment its URL

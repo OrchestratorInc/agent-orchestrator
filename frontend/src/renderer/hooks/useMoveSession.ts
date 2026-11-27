@@ -4,7 +4,7 @@ import { useTranslation } from "react-i18next";
 import { clientForSessionHost, labelForHost } from "../lib/host-clients";
 import { LOCAL_HOST, type HostId } from "../lib/hosts";
 import { askMove, clearMove, moveKey, moveShown, runMove, useMoveStore, type MoveTarget } from "../lib/move-runner";
-import { cancelMove, commitMove, type MoveResult } from "../lib/move-session";
+import { cancelMove, commitMove, type MoveResult } from "../lib/host-move";
 import { sessionNavigateTarget } from "../lib/navigate-to-session";
 import { projectsWithRepo } from "../lib/repo-hosts";
 import { useUiStore } from "../stores/ui-store";

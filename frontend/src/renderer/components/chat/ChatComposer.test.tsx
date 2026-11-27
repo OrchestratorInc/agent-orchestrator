@@ -4263,4 +4263,39 @@ describe("queue hint while a send waits for its turn", () => {
 		view.rerender(<ChatComposer {...props} />);
 		await waitFor(() => expect(drawnPlaceholder(field)).toBe("Message the agent"));
 	});
+
+	it("previews restored staged images from assetSessionId and skips bogus URLs when assetSessionId is empty", () => {
+		const draftId = "new-chat:local";
+		writeChatAttachments(draftId, [{
+			id: "att-1",
+			path: ".ao/attachments/attachment-1.png",
+			name: "attachment-1.png",
+			mimeType: "image/png",
+			bytes: 123,
+		}]);
+
+		const view = render(
+			<ChatComposer
+				draftSessionId={draftId}
+				assetSessionId=""
+				assetBaseUrl="http://127.0.0.1:4000"
+				onSend={vi.fn()}
+			/>,
+		);
+		expect(view.container.querySelector("img")).toBeNull();
+
+		view.rerender(
+			<ChatComposer
+				draftSessionId={draftId}
+				assetSessionId="proj-1-42"
+				assetBaseUrl="http://127.0.0.1:4000"
+				onSend={vi.fn()}
+			/>,
+		);
+		const img = view.container.querySelector("img");
+		expect(img).not.toBeNull();
+		expect(img?.getAttribute("src")).toBe(
+			"http://127.0.0.1:4000/api/v1/sessions/proj-1-42/preview/files/.ao/attachments/attachment-1.png",
+		);
+	});
 });

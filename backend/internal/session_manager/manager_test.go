@@ -24,6 +24,7 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/claudecode"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/codex"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/memcode"
+	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/omp"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/workspace/gitworktree"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/workspace/scratch"
 	"github.com/aoagents/agent-orchestrator/backend/internal/agentlaunch"
@@ -52,6 +53,8 @@ type fakeStore struct {
 	cleanupMu                          sync.Mutex
 	cleanupFacts                       map[domain.SessionID]domain.SessionCleanupRecord
 	sessions                           map[domain.SessionID]domain.SessionRecord
+	createdRows                        []domain.SessionRecord
+	promotedRows                       []domain.SessionRecord
 	pr                                 map[domain.SessionID]domain.PRFacts
 	projects                           map[string]domain.ProjectRecord
 	conversations                      map[domain.SessionID]domain.ConversationRecord
@@ -154,6 +157,7 @@ func (f *fakeStore) CreateSession(_ context.Context, rec domain.SessionRecord) (
 		prefix = "standalone"
 	}
 	rec.ID = domain.SessionID(fmt.Sprintf("%s-%d", prefix, f.num))
+	f.createdRows = append(f.createdRows, rec)
 	f.sessions[rec.ID] = rec
 	return rec, nil
 }
@@ -273,6 +277,18 @@ func (f *fakeStore) UpdateSessionModel(_ context.Context, id domain.SessionID, m
 	f.sessions[id] = rec
 	return true, nil
 }
+func (f *fakeStore) UpdateSessionEffort(_ context.Context, id domain.SessionID, effort string) (bool, error) {
+	if f.updateSessionErr != nil {
+		return false, f.updateSessionErr
+	}
+	rec, ok := f.sessions[id]
+	if !ok {
+		return false, nil
+	}
+	rec.Metadata.Effort = effort
+	f.sessions[id] = rec
+	return true, nil
+}
 
 func (f *fakeStore) SetSessionProvisionedWorkspace(_ context.Context, id domain.SessionID, branch, workspacePath, workspaceRepoPath string, now time.Time) (bool, error) {
 	rec, ok := f.sessions[id]
@@ -372,6 +388,7 @@ func (f *fakeStore) PromoteTaskPreparation(_ context.Context, id domain.SessionI
 	rec.Metadata.Branch = current.Metadata.Branch
 	rec.Metadata.WorkspacePath = current.Metadata.WorkspacePath
 	rec.Metadata.WorkspaceRepoPath = current.Metadata.WorkspaceRepoPath
+	f.promotedRows = append(f.promotedRows, rec)
 	f.sessions[id] = rec
 	return true, nil
 }
@@ -2330,6 +2347,64 @@ func TestSpawnAmpProjectDefaultModePersistsAsModel(t *testing.T) {
 	if rec.Metadata.Model != "high" {
 		t.Fatalf("persisted metadata model = %q, want high (project default mode should be reported)", rec.Metadata.Model)
 	}
+	if len(st.createdRows) != 1 || st.createdRows[0].Metadata.Model != "high" {
+		t.Fatalf("initial rows = %+v, want one row with model high", st.createdRows)
+	}
+}
+
+func TestSpawnOMPEffortInheritanceAndExplicitValidation(t *testing.T) {
+	name, contents := "omp", "#!/bin/sh\nif [ \"$1\" = \"--version\" ]; then echo omp/17.1.0; fi\n"
+	if runtime.GOOS == "windows" {
+		name, contents = "omp.cmd", "@echo off\r\nif \"%~1\"==\"--version\" echo omp/17.1.0\r\n"
+	}
+	dir := t.TempDir()
+	binary := filepath.Join(dir, name)
+	if err := os.WriteFile(binary, []byte(contents), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", dir+string(filepath.ListSeparator)+os.Getenv("PATH"))
+
+	st := newFakeStore()
+	st.projects["mer"] = domain.ProjectRecord{ID: "mer", Config: domain.ProjectConfig{
+		Worker: domain.RoleOverride{Harness: domain.HarnessOMP, AgentConfig: domain.AgentConfig{Effort: "high"}},
+	}}
+	rt := &fakeRuntime{}
+	m := New(Deps{DataDir: t.TempDir(), Runtime: rt, Agents: singleAgent{agent: omp.New()}, Workspace: &fakeWorkspace{path: t.TempDir()}, Store: st,
+		Messenger: &fakeMessenger{}, Lifecycle: &fakeLCM{store: st}, LookPath: func(string) (string, error) { return binary, nil },
+		Executable: func() (string, error) { return binary, nil }, NewLaunchID: func() string { return "omp-launch" },
+	})
+	rec, _, _, err := m.Spawn(t.Context(), ports.SpawnConfig{ProjectID: "mer", Kind: domain.KindWorker, RequestedMode: domain.SessionModeTUI, Prompt: "do the work"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	args := rt.lastCfg.Argv
+	index := slices.Index(args, "--thinking")
+	if index < 0 || index+1 >= len(args) {
+		t.Fatal("OMP launch is missing --thinking high")
+	}
+	if args[index+1] != "high" {
+		t.Fatalf("OMP --thinking = %q, want high", args[index+1])
+	}
+	initialEffort := ""
+	if len(st.createdRows) == 1 {
+		initialEffort = st.createdRows[0].Metadata.Effort
+	}
+	if rec.Metadata.Effort != "high" || initialEffort != "high" {
+		t.Fatalf("OMP effort final=%q initial=%q, want high in both", rec.Metadata.Effort, initialEffort)
+	}
+	for _, effort := range []string{"high", "bogus"} {
+		beforeRows, beforeLaunches := len(st.createdRows), rt.created
+		_, _, _, err := m.Spawn(t.Context(), ports.SpawnConfig{
+			ProjectID: "mer", Kind: domain.KindWorker, RequestedMode: domain.SessionModeTUI,
+			AgentConfig: ports.AgentConfig{Effort: effort}, EffortOverride: true, Prompt: "do the work",
+		})
+		if !errors.Is(err, ports.ErrUnsupportedEffort) {
+			t.Fatalf("explicit OMP effort %q error = %v, want unsupported effort", effort, err)
+		}
+		if len(st.createdRows) != beforeRows || rt.created != beforeLaunches {
+			t.Fatalf("explicit OMP effort %q created session row or runtime", effort)
+		}
+	}
 }
 
 // TestSpawnModelPersisted asserts the resolved model is stored on the session
@@ -2338,7 +2413,7 @@ func TestSpawnModelPersisted(t *testing.T) {
 	st := newFakeStore()
 	st.projects["mer"] = domain.ProjectRecord{ID: "mer", Config: domain.ProjectConfig{
 		AgentConfig: domain.AgentConfig{Model: "project-model"},
-		Worker:      domain.RoleOverride{Harness: domain.HarnessCodex, AgentConfig: domain.AgentConfig{Model: "role-model"}},
+		Worker:      domain.RoleOverride{Harness: domain.HarnessCodex, AgentConfig: domain.AgentConfig{Model: "role-model", Effort: "high"}},
 	}}
 	agent := &recordingAgent{}
 	rt := &fakeRuntime{}
@@ -2346,7 +2421,7 @@ func TestSpawnModelPersisted(t *testing.T) {
 	lookPath := func(string) (string, error) { return "/bin/true", nil }
 	m := New(Deps{Runtime: rt, Agents: singleAgent{agent: agent}, Workspace: ws, Store: st, Messenger: &fakeMessenger{}, Lifecycle: &fakeLCM{store: st}, LookPath: lookPath})
 
-	rec, _, _, err := m.Spawn(ctx, ports.SpawnConfig{ProjectID: "mer", Kind: domain.KindWorker, AgentConfig: ports.AgentConfig{Model: "spawn-model"}})
+	rec, _, _, err := m.Spawn(ctx, ports.SpawnConfig{ProjectID: "mer", Kind: domain.KindWorker, AgentConfig: ports.AgentConfig{Model: "spawn-model", Effort: "high"}, EffortOverride: true})
 	if err != nil {
 		t.Fatalf("spawn failed: %v", err)
 	}
@@ -2356,6 +2431,12 @@ func TestSpawnModelPersisted(t *testing.T) {
 	if agent.lastConfig.Model != "spawn-model" {
 		t.Fatalf("launch model = %q, want spawn-model", agent.lastConfig.Model)
 	}
+	if rec.Metadata.Effort != "high" || agent.lastConfig.Effort != "high" {
+		t.Fatalf("spawn effort = %q, launch effort = %q; want high", rec.Metadata.Effort, agent.lastConfig.Effort)
+	}
+	if len(st.createdRows) != 1 || st.createdRows[0].Metadata.Model != "spawn-model" || st.createdRows[0].Metadata.Effort != "high" {
+		t.Fatalf("initial rows = %+v, want one row with spawn-model/high", st.createdRows)
+	}
 
 	stored, ok, err := st.GetSession(ctx, rec.ID)
 	if err != nil {
@@ -2364,8 +2445,8 @@ func TestSpawnModelPersisted(t *testing.T) {
 	if !ok {
 		t.Fatalf("session %s not found", rec.ID)
 	}
-	if stored.Metadata.Model != "spawn-model" {
-		t.Fatalf("stored metadata model = %q, want spawn-model", stored.Metadata.Model)
+	if stored.Metadata.Model != rec.Metadata.Model || stored.Metadata.Effort != rec.Metadata.Effort {
+		t.Fatalf("stored selection = %q/%q, spawned selection = %q/%q", stored.Metadata.Model, stored.Metadata.Effort, rec.Metadata.Model, rec.Metadata.Effort)
 	}
 }
 
@@ -3520,6 +3601,9 @@ func TestSpawnMemcodeCustomEndpointClearsOnlyInheritedModels(t *testing.T) {
 				}
 				if err != nil {
 					t.Fatal(err)
+				}
+				if len(st.createdRows) != 1 || st.createdRows[0].Metadata.Model != "" {
+					t.Fatalf("Memcode initial row must wait for endpoint discovery: %+v", st.createdRows)
 				}
 				want := ""
 				if source == "no endpoint" {
@@ -5513,6 +5597,18 @@ func TestPersistChatModel(t *testing.T) {
 	}
 	if st.sessions["mer-1"].Metadata.Model != "" {
 		t.Fatalf("cleared model = %q, want provider default", st.sessions["mer-1"].Metadata.Model)
+	}
+	if err := m.PersistChatEffort(ctx, "mer-1", "high"); err != nil {
+		t.Fatalf("PersistChatEffort: %v", err)
+	}
+	if got := st.sessions["mer-1"].Metadata.Effort; got != "high" {
+		t.Fatalf("persisted effort = %q, want high", got)
+	}
+	if err := m.PersistChatEffort(ctx, "mer-1", ""); err != nil {
+		t.Fatalf("PersistChatEffort(empty): %v", err)
+	}
+	if got := st.sessions["mer-1"].Metadata.Effort; got != "" {
+		t.Fatalf("cleared effort = %q, want provider default", got)
 	}
 }
 
@@ -8872,30 +8968,42 @@ func TestSpawn_TUICodexEffortIsResolvedAndPersisted(t *testing.T) {
 	}
 }
 
-// TestSpawn_TUIPiInheritedEffortIsValidated asserts a Pi or Prime Agent TUI
+// TestSpawn_TUIInheritedEffortIsValidated asserts a Pi, Prime Agent, or Open Interpreter TUI
 // spawn validates an effort inherited from role settings: a level the model
 // advertises reaches the adapter, and a stale one is cleared before --thinking.
-func TestSpawn_TUIPiInheritedEffortIsValidated(t *testing.T) {
-	for _, harness := range []domain.AgentHarness{domain.HarnessPi, domain.HarnessPrimeAgent} {
-		for inherited, want := range map[string]string{"high": "high", "max": ""} {
+func TestSpawn_TUIInheritedEffortIsValidated(t *testing.T) {
+	for _, harness := range []domain.AgentHarness{domain.HarnessPi, domain.HarnessPrimeAgent, domain.HarnessOpenInterpreter} {
+		for _, tc := range []struct {
+			inherited string
+			efforts   []string
+			want      string
+		}{
+			{inherited: "high", efforts: []string{"low", "high"}, want: "high"},
+			{inherited: "max", efforts: []string{"low", "high"}},
+			{inherited: "high"},
+		} {
 			m, st, _, _ := newManager()
 			agent := &recordingAgent{}
 			m.agents = singleAgent{agent: agent}
 			m.SetModelCatalog(tuningCatalog{catalog: ports.AgentModelCatalog{Models: []ports.AgentModelInfo{
-				{ID: "openai/gpt-6.1-sol", IsDefault: true, Efforts: []string{"low", "high"}},
+				{ID: "openai/gpt-6.1-sol", IsDefault: true, Efforts: tc.efforts},
 			}}})
 			project := st.projects["mer"]
-			project.Config.Worker = domain.RoleOverride{AgentConfig: domain.AgentConfig{Model: "openai/gpt-6.1-sol", Effort: inherited}}
+			project.Config.Worker = domain.RoleOverride{AgentConfig: domain.AgentConfig{Model: "openai/gpt-6.1-sol", Effort: tc.inherited}}
 			st.projects["mer"] = project
 
-			if _, _, _, err := m.Spawn(ctx, ports.SpawnConfig{
+			rec, _, _, err := m.Spawn(ctx, ports.SpawnConfig{
 				ProjectID: "mer", Kind: domain.KindWorker, Harness: harness,
 				RequestedMode: domain.SessionModeTUI, Prompt: "do the work",
-			}); err != nil {
-				t.Fatalf("harness %q inherited %q spawn: %v", harness, inherited, err)
+			})
+			if err != nil {
+				t.Fatalf("harness %q inherited %q spawn: %v", harness, tc.inherited, err)
 			}
-			if agent.lastConfig.Effort != want {
-				t.Fatalf("harness %q inherited %q launch effort = %q, want %q", harness, inherited, agent.lastConfig.Effort, want)
+			if agent.lastConfig.Effort != tc.want {
+				t.Fatalf("harness %q inherited %q launch effort = %q, want %q", harness, tc.inherited, agent.lastConfig.Effort, tc.want)
+			}
+			if got := st.sessions[rec.ID].Metadata.Effort; got != tc.want {
+				t.Fatalf("harness %q inherited %q saved effort = %q, want %q", harness, tc.inherited, got, tc.want)
 			}
 		}
 	}
@@ -13293,22 +13401,28 @@ func TestSpawn_PersistsArtifactDirOnSessionRow(t *testing.T) {
 	}
 }
 
-func TestSpawn_PreparedSessionPersistsArtifactDir(t *testing.T) {
+func TestSpawn_PreparedSessionPersistsArtifactDirAndSelection(t *testing.T) {
 	m, st, _, _ := newManager()
 	m.runBackground = func(work func()) { work() }
 	dataDir := t.TempDir()
 	m.dataDir = dataDir
-	token, err := m.PrepareTaskWorkspace(ctx, st.projects["mer"])
+	project := st.projects["mer"]
+	project.Config.Worker = domain.RoleOverride{Harness: domain.HarnessCodex, AgentConfig: domain.AgentConfig{Model: "gpt-5.6-sol", Effort: "high"}}
+	st.projects["mer"] = project
+	token, err := m.PrepareTaskWorkspace(ctx, project)
 	if err != nil {
 		t.Fatal(err)
 	}
-	rec, _, _, err := m.Spawn(ctx, ports.SpawnConfig{ProjectID: "mer", Kind: domain.KindWorker, Harness: domain.HarnessClaudeCode, Prompt: "go", TaskPreparation: token})
+	rec, _, _, err := m.Spawn(ctx, ports.SpawnConfig{ProjectID: "mer", Kind: domain.KindWorker, Harness: domain.HarnessCodex, RequestedMode: domain.SessionModeTUI, Prompt: "go", TaskPreparation: token})
 	if err != nil {
 		t.Fatalf("spawn: %v", err)
 	}
 	want := filepath.Join(dataDir, "artifacts", string(rec.ID))
 	if got := st.sessions[rec.ID].Metadata.ArtifactDir; got != want {
 		t.Fatalf("persisted ArtifactDir = %q, want %q", got, want)
+	}
+	if len(st.promotedRows) != 1 || st.promotedRows[0].Metadata.Model != "gpt-5.6-sol" || st.promotedRows[0].Metadata.Effort != "high" {
+		t.Fatalf("promoted selection = %+v, want model gpt-5.6-sol and effort high", st.promotedRows)
 	}
 }
 
