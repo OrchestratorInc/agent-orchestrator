@@ -76,7 +76,10 @@ the same listeners hand off to its normal reporter. Early captures are not
 replayed through the later renderer boundaries. Chromium's ResizeObserver loop
 notice (`ResizeObserver loop completed with undelivered notifications` or
 `ResizeObserver loop limit exceeded`, raised with no error object) is a browser
-warning, not a failure, and is never reported.
+warning, not a failure, and is never reported. Neither is a bare `Script error.`
+with no error object and no file name, which is how the browser hides a
+cross-origin script's error; one with a file name or an error object still
+reports.
 Router error boundaries and query/mutation cache callbacks also report unexpected
 client failures. The sender excludes query keys, mutation inputs and route
 parameters. API failures retain a local ownership marker through message wrapping,

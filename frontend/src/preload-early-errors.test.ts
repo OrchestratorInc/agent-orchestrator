@@ -126,6 +126,21 @@ it("drops Chromium's ResizeObserver loop notice before and after the renderer ta
 	expect(capture.mock.calls[0][0]).toMatchObject({ tags: { code: "WINDOW_ERROR" }, exception: { type: "TypeError" } });
 });
 
+it("drops a bare cross-origin Script error but reports one with a file name or an error object", async () => {
+	const { controller, capture, resolvePolicy } = await setup(true);
+	resolvePolicy(controller.snapshot());
+	window.dispatchEvent(new ErrorEvent("error", { message: "Script error." }));
+	window.dispatchEvent(new ErrorEvent("error", { message: "Script error" }));
+	window.dispatchEvent(new ErrorEvent("error", { message: "Script error.", filename: "app://renderer/assets/index-A1B2C3D4.js", lineno: 3, colno: 4 }));
+	await vi.waitFor(() => expect(capture).toHaveBeenCalled());
+	expect(capture).toHaveBeenCalledOnce();
+	expect(capture.mock.calls[0][0]).toMatchObject({ message: "Script error.", exception: { frames: [{ filename: "assets/index-A1B2C3D4.js", lineno: 3 }] } });
+	const thrown = new TypeError("Script error.");
+	window.dispatchEvent(new ErrorEvent("error", { error: thrown, message: thrown.message }));
+	await vi.waitFor(() => expect(capture).toHaveBeenCalledTimes(2));
+	expect(capture.mock.calls[1][0]).toMatchObject({ exception: { type: "TypeError" } });
+});
+
 it("keeps an early rejection's minified frame and debug ID", async () => {
 	const { controller, capture, resolvePolicy } = await setup(true);
 	const filename = "assets/index-A1B2C3D4.js";
