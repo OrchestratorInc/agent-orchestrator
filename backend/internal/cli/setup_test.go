@@ -69,13 +69,13 @@ func gitFreeEnv() []string {
 
 const (
 	setupReadinessBoth = `{"agents":[
-		{"id":"codex","label":"Codex","installation":{"state":"installed"},"authentication":{"state":"authorized"},"effectiveReadiness":"ready"},
-		{"id":"claude-code","label":"Claude Code","installation":{"state":"installed"},"authentication":{"state":"configured"},"effectiveReadiness":"unknown"},
-		{"id":"gemini","label":"Gemini CLI","installation":{"state":"not_installed"},"authentication":{"state":"unknown"},"effectiveReadiness":"not_ready"}]}`
+		{"id":"codex","label":"Agent B","installation":{"state":"installed"},"authentication":{"state":"authorized"},"effectiveReadiness":"ready"},
+		{"id":"claude-code","label":"Agent A","installation":{"state":"installed"},"authentication":{"state":"configured"},"effectiveReadiness":"unknown"},
+		{"id":"gemini","label":"Agent C","installation":{"state":"not_installed"},"authentication":{"state":"unknown"},"effectiveReadiness":"not_ready"}]}`
 )
 
-// newSetupDaemon is a ready daemon with a signed-in GitHub CLI, codex ready,
-// claude-code configured, and no projects.
+// newSetupDaemon is a ready daemon with a signed-in GitHub CLI, one agent
+// ready, another with a saved sign-in, a third not installed, and no projects.
 func newSetupDaemon(t *testing.T) *taskDaemon {
 	t.Helper()
 	clearCallerEnv(t)
@@ -97,6 +97,7 @@ func newSetupDaemon(t *testing.T) *taskDaemon {
 	d.set("POST /api/v1/agents/gemini/probe", 200, `{"agent":{"id":"gemini","authStatus":"unknown"},"supported":true,"installed":false}`)
 	d.set("GET /api/v1/system/github-auth", 200, `{"id":"github-auth","label":"GitHub access","satisfied":true}`)
 	d.set("GET /api/v1/projects", 200, `{"projects":[]}`)
+	d.set("GET /api/v1/agents/auth-plans", 200, `{"plans":[{"agentId":"claude-code","displayCommand":"agent-a login"},{"agentId":"codex","displayCommand":"agent-b login"}]}`)
 	return d
 }
 
@@ -271,7 +272,7 @@ func TestSetupSignedOutAgentNeedsHumanWithLoginCommand(t *testing.T) {
 	if res.Ready || agent.Status != setupNeedsHuman {
 		t.Fatalf("ready=%v agent step = %+v", res.Ready, agent)
 	}
-	want := "claude auth login"
+	want := "agent-a login"
 	if agent.Fix != want || !reflect.DeepEqual(res.NextActions, []string{want}) {
 		t.Fatalf("fix = %q, next_actions = %q; want %q", agent.Fix, res.NextActions, want)
 	}
@@ -287,14 +288,14 @@ func TestSetupMissingAgentNeedsHumanWithInstallHint(t *testing.T) {
 	d := newSetupDaemon(t)
 	repo := gitRepo(t, true)
 	registerOnPost(d, repo, "example/calc")
-	d.set("GET /api/v1/agents/auth-plans", 200, `{"plans":[{"agentId":"gemini","documentationUrl":"https://example.com/gemini"}]}`)
+	d.set("GET /api/v1/agents/auth-plans", 200, `{"plans":[{"agentId":"gemini","documentationUrl":"https://example.com/agent-c"}]}`)
 
 	out, _, err := executeCLI(t, fakeClockDeps(), "setup", "--path", repo, "--agent", "gemini", "--json")
 	if got := ExitCode(err); got != setupExitNeedsHuman {
 		t.Fatalf("exit = %d (%v)", got, err)
 	}
 	agent := stepNamed(t, decodeSetup(t, out), "agent")
-	if agent.Fix != setupOpenURL("https://example.com/gemini") || !strings.Contains(agent.Detail, "--agent codex") || !strings.Contains(agent.Detail, "install its CLI") {
+	if agent.Fix != setupOpenURL("https://example.com/agent-c") || !strings.Contains(agent.Detail, "--agent codex") || !strings.Contains(agent.Detail, "install its CLI") {
 		t.Fatalf("step = %+v, want the docs link in the fix and the ready alternative in the detail", agent)
 	}
 }
@@ -668,7 +669,7 @@ func TestSetupHumanOutput(t *testing.T) {
 	d.set("POST /api/v1/agents/claude-code/probe", 200, `{"agent":{"id":"claude-code","authStatus":"unauthorized"},"supported":true,"installed":true}`)
 
 	out, _, _ := executeCLI(t, fakeClockDeps(), "setup", "--path", repo)
-	for _, want := range []string{"[needs_human] agent", "fix: claude auth login", "Not ready yet. Next steps:", "1. claude auth login"} {
+	for _, want := range []string{"[needs_human] agent", "fix: agent-a login", "Not ready yet. Next steps:", "1. agent-a login"} {
 		if !strings.Contains(out, want) {
 			t.Fatalf("output missing %q:\n%s", want, out)
 		}
@@ -711,7 +712,7 @@ func TestSetupChecksAgentsAReusedProjectKeeps(t *testing.T) {
 	}
 	res := decodeSetup(t, out)
 	agent := stepNamed(t, res, "agent")
-	if agent.Status != setupNeedsHuman || !strings.Contains(agent.Detail, "codex is not signed in") || agent.Fix != "codex login" {
+	if agent.Status != setupNeedsHuman || !strings.Contains(agent.Detail, "codex is not signed in") || agent.Fix != "agent-b login" {
 		t.Fatalf("agent step = %+v", agent)
 	}
 	if res.Agent.ID != "codex" || res.Agent.Source != "project" || res.Agent.Worker != "codex" || res.Agent.Orchestrator != "codex" {
@@ -772,7 +773,7 @@ func TestSetupKeepsTheChosenAgentAcrossSignIn(t *testing.T) {
 		if res.Agent == nil || res.Agent.ID != "claude-code" || res.Agent.Worker != "claude-code" || res.Agent.Orchestrator != "claude-code" || res.Agent.Source != want.source {
 			t.Fatalf("run %d: agent = %+v, want claude-code from %s", run+1, res.Agent, want.source)
 		}
-		if run < 2 && !reflect.DeepEqual(res.NextActions, []string{"claude auth login"}) {
+		if run < 2 && !reflect.DeepEqual(res.NextActions, []string{"agent-a login"}) {
 			t.Fatalf("run %d: next_actions = %q", run+1, res.NextActions)
 		}
 		if run == 2 && !res.Ready {
@@ -996,7 +997,7 @@ func TestSetupAgentOwnStatusCommandDecidesUnprovenSignIn(t *testing.T) {
 			if agent.Status != tc.want {
 				t.Fatalf("agent step = %+v, want %s", agent, tc.want)
 			}
-			if tc.want == setupNeedsHuman && (agent.Fix != "claude auth login" || len(res.NextActions) == 0 || res.NextActions[0] != "claude auth login") {
+			if tc.want == setupNeedsHuman && (agent.Fix != "agent-a login" || len(res.NextActions) == 0 || res.NextActions[0] != "agent-a login") {
 				t.Fatalf("agent step = %+v, next_actions = %q; want the verbatim login command", agent, res.NextActions)
 			}
 		})
@@ -1060,7 +1061,7 @@ func TestSetupStartAuthRequiredGivesTheLoginCommand(t *testing.T) {
 		t.Fatalf("exit = %d (%v)", got, err)
 	}
 	res := decodeSetup(t, out)
-	if start := stepNamed(t, res, "start"); start.Fix != "claude auth login" || !reflect.DeepEqual(res.NextActions, []string{"claude auth login"}) {
+	if start := stepNamed(t, res, "start"); start.Fix != "agent-a login" || !reflect.DeepEqual(res.NextActions, []string{"agent-a login"}) {
 		t.Fatalf("start step = %+v, next_actions = %q", start, res.NextActions)
 	}
 }
@@ -1238,7 +1239,7 @@ func TestSetupReconcileUsesTheReReadConfig(t *testing.T) {
 	d := newSetupDaemon(t)
 	repo := gitRepo(t, true)
 	d.set("GET /api/v1/projects", 200, fmt.Sprintf(`{"projects":[{"id":"calc","path":%q}]}`, repo))
-	// The first read carries no config; the re-read shows claude-code saved.
+	// The first read carries no config; the re-read shows saved agents.
 	reads := 0
 	d.setFunc("GET /api/v1/projects/calc", func() (int, string) {
 		reads++
@@ -1373,7 +1374,7 @@ func TestSetupRechecksWhenSavedRolesChangeBetweenLookups(t *testing.T) {
 	repo := gitRepo(t, true)
 	d.set("POST /api/v1/agents/claude-code/probe", 200, `{"agent":{"id":"claude-code","authStatus":"unauthorized"},"supported":true,"installed":true}`)
 	d.set("GET /api/v1/projects", 200, fmt.Sprintf(`{"projects":[{"id":"calc","path":%q}]}`, repo))
-	// The agent step sees claude-code saved; by the project step it is codex.
+	// The agent step sees one saved agent; by the project step it is another.
 	reads := 0
 	d.setFunc("GET /api/v1/projects/calc", func() (int, string) {
 		reads++
@@ -1433,8 +1434,8 @@ func TestSetupDoesNotSaveAnUninstalledCaller(t *testing.T) {
 	registerOnPost(d, repo, "example/calc")
 	t.Setenv("CURSOR_AGENT", "1")
 	d.set("POST /api/v1/agents/readiness/ensure", 200, `{"agents":[
-		{"id":"codex","label":"Codex","installation":{"state":"installed"},"authentication":{"state":"authorized"},"effectiveReadiness":"ready"},
-		{"id":"cursor","label":"Cursor","installation":{"state":"not_installed"},"authentication":{"state":"unknown"},"effectiveReadiness":"not_ready"}]}`)
+		{"id":"codex","label":"Agent B","installation":{"state":"installed"},"authentication":{"state":"authorized"},"effectiveReadiness":"ready"},
+		{"id":"cursor","label":"Agent D","installation":{"state":"not_installed"},"authentication":{"state":"unknown"},"effectiveReadiness":"not_ready"}]}`)
 	out, _, err := executeCLI(t, fakeClockDeps(), "setup", "--path", repo, "--json")
 	if err != nil {
 		t.Fatalf("err = %v\n%s", err, out)
@@ -1452,7 +1453,7 @@ func TestSetupNeverSavesAnUninstalledAgent(t *testing.T) {
 	d := newSetupDaemon(t)
 	repo := gitRepo(t, true)
 	registerOnPost(d, repo, "example/calc")
-	// --agent gemini: not installed; the project is registered without agents.
+	// An agent that is not installed: the project is registered without agents.
 	_, _, _ = executeCLI(t, fakeClockDeps(), "setup", "--path", repo, "--agent", "gemini", "--json")
 	var body addProjectRequest
 	if err := json.Unmarshal([]byte(d.bodies["POST /api/v1/projects"]), &body); err == nil && body.Config != nil {
@@ -1583,11 +1584,11 @@ func TestSetupUninstalledCallerFallsBackOnAFreshDaemon(t *testing.T) {
 	repo := gitRepo(t, true)
 	registerOnPost(d, repo, "example/calc")
 	t.Setenv("CURSOR_AGENT", "1")
-	// A fresh daemon: claude-code is installed but its sign-in is not read yet.
+	// A fresh daemon: an agent is installed but its sign-in is not read yet.
 	d.set("POST /api/v1/agents/readiness/ensure", 200, `{"agents":[
-		{"id":"claude-code","label":"Claude Code","installation":{"state":"installed"},"authentication":{"state":"unknown"},"effectiveReadiness":"unknown"},
-		{"id":"codex","label":"Codex","installation":{"state":"installed"},"authentication":{"state":"unauthorized"},"effectiveReadiness":"not_ready"},
-		{"id":"cursor","label":"Cursor","installation":{"state":"not_installed"},"authentication":{"state":"unknown"},"effectiveReadiness":"not_ready"}]}`)
+		{"id":"claude-code","label":"Agent A","installation":{"state":"installed"},"authentication":{"state":"unknown"},"effectiveReadiness":"unknown"},
+		{"id":"codex","label":"Agent B","installation":{"state":"installed"},"authentication":{"state":"unauthorized"},"effectiveReadiness":"not_ready"},
+		{"id":"cursor","label":"Agent D","installation":{"state":"not_installed"},"authentication":{"state":"unknown"},"effectiveReadiness":"not_ready"}]}`)
 	d.set("POST /api/v1/agents/claude-code/probe", 200, `{"agent":{"id":"claude-code","authStatus":"authorized"},"supported":true,"installed":true}`)
 	out, _, err := executeCLI(t, fakeClockDeps(), "setup", "--path", repo, "--json")
 	if err != nil {

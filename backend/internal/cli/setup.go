@@ -685,7 +685,7 @@ func (c *commandContext) setupCheckAgent(ctx context.Context, id string, res *se
 	res.checked[id] = true
 	var probe setupProbe
 	if res.readOnly {
-		// The daemon's probe can start background work (a Codex account
+		// The daemon's probe can start background work (an account
 		// reconciliation), which --check and --dry-run must not. Read the
 		// readiness the agent step already loaded instead; the agent's own
 		// status command below still checks the sign-in.

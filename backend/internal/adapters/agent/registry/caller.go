@@ -15,7 +15,7 @@ type CallerEnvTag struct {
 }
 
 // CallerAIAgentEnv is the cross-agent convention: AI_AGENT=<name>, sometimes
-// with a version suffix (claude-code_2-1-326_agent). It is checked before the
+// with a version suffix (<id>_<version>_agent). It is checked before the
 // per-agent tags.
 const CallerAIAgentEnv = "AI_AGENT"
 
