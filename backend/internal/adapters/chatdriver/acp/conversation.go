@@ -1849,6 +1849,32 @@ func (c *conversation) settleUnreportedCompaction(open *providerCompaction, emit
 	})
 }
 
+// abandonCycleCompaction returns the events that settle a compaction the agent
+// was running between prompts when it went away. Only the cycle's end settles
+// such a row, as it has no turn, so without this it would read "Compacting
+// conversation" for good.
+func (c *conversation) abandonCycleCompaction() []ports.ChatEvent {
+	c.mu.Lock()
+	open := c.providerCompaction
+	if open == nil || !strings.HasPrefix(open.turnID, providerCyclePrefix) {
+		c.mu.Unlock()
+		return nil
+	}
+	if !open.finished {
+		c.providerCompaction = nil
+	}
+	c.mu.Unlock()
+	var settled []ports.ChatEvent
+	collect := func(event ports.ChatEvent) { settled = append(settled, event) }
+	if open.finished {
+		// It finished and only waited to hear what it freed.
+		c.settleFinishedCompaction(collect)
+	} else {
+		c.settleUnreportedCompaction(open, collect)
+	}
+	return settled
+}
+
 // contextDroppedSince reports whether the agent's context figure, measured in
 // this turn, is already below where the compaction started. c.mu must be held.
 func (c *conversation) contextDroppedSince(open *providerCompaction) bool {
@@ -2247,9 +2273,11 @@ func (c *conversation) watchConnection() {
 	// its ownership lock. Stopping this transport must not terminate the host.
 	_ = c.legacyWire.reader.Close()
 	_ = c.proc.stop()
+	var settled []ports.ChatEvent
 	if !detaching && !preserve {
 		c.failPendingPermissions()
 		c.failPendingInputs()
+		settled = c.abandonCycleCompaction()
 	}
 	event := ports.ChatEvent{Kind: ports.ChatEventControllerState, ControllerState: ports.ChatControllerStopped}
 	if preserve {
@@ -2257,6 +2285,12 @@ func (c *conversation) watchConnection() {
 	}
 	c.eventMu.Lock()
 	if !c.eventsClosed {
+		for _, row := range settled {
+			select {
+			case c.events <- row:
+			case <-c.closing:
+			}
+		}
 		// Deliver the recovery boundary even though conn.Done is already closed;
 		// emit's disconnect select could otherwise drop this ownership signal.
 		select {

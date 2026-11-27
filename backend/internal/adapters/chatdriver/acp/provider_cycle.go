@@ -78,10 +78,18 @@ func (c *conversation) enterProviderCycleLocked(update acpsdk.SessionUpdate) (*p
 		// A tool AO never saw start is output of the cycle it belongs to.
 		output = true
 	}
-	if update.SessionInfoUpdate != nil && compactionStatusMeta(update.SessionInfoUpdate.Meta) != nil {
-		// So is a compaction the agent runs on its own, which it can start
-		// before it writes anything.
-		output = true
+	if update.SessionInfoUpdate != nil {
+		if compaction := compactionStatusMeta(update.SessionInfoUpdate.Meta); compaction != nil {
+			// So is a compaction the agent runs on its own, which it can start
+			// before it writes anything. Only its start, or a step of one under
+			// way, counts: an outcome with nothing open is the late report of a
+			// compaction that already ended, as when Stop cancels AO's own
+			// /compact, and must not leave the agent looking busy.
+			status, _ := compaction["status"].(string)
+			if status == "started" || c.providerCompaction != nil {
+				output = true
+			}
+		}
 	}
 	cycle := c.cycle
 	opened := false

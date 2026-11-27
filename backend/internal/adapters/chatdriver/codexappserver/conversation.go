@@ -125,6 +125,12 @@ type conversation struct {
 	// runs inside a longer turn.
 	compactingItem string
 	compactingFrom int64
+	// endedTurn, endedItem and endedFrom are the compaction its turn ended
+	// before it settled, so the deprecated notification arriving after the turn
+	// settles that row instead of adding a second.
+	endedTurn string
+	endedItem string
+	endedFrom int64
 
 	pumpDone     chan struct{}
 	eventsMu     sync.RWMutex
@@ -297,6 +303,9 @@ func (c *conversation) pump() {
 				unreported, from, window := c.compactingItem, c.compactingFrom, c.contextWindow
 				c.compactingItem = ""
 				c.compactingFrom = 0
+				if unreported != "" {
+					c.endedTurn, c.endedItem, c.endedFrom = ev.ProviderTurnID, unreported, from
+				}
 				c.mu.Unlock()
 				if unreported != "" && ev.Err == nil && ev.TurnState == domain.TurnStateCompleted {
 					// A compaction still under way when its turn ended never said how it
@@ -732,9 +741,18 @@ func (c *conversation) settleCompaction(ev ports.ChatEvent) (ports.ChatEvent, bo
 		ev.Detail = compactionFigures(c.compactingFrom, 0, c.contextWindow)
 		return ev, true
 	}
+	endedFrom := int64(0)
 	if ev.ProviderItemID == "" {
-		// The deprecated notification names no item: it settles the one under way.
+		// The deprecated notification names no item: it settles the one under way,
+		// or, arriving after its turn ended, the one that turn left unsettled.
 		ev.ProviderItemID = c.compactingItem
+		if ev.ProviderItemID == "" && ev.ProviderTurnID != "" && ev.ProviderTurnID == c.endedTurn {
+			ev.ProviderItemID = c.endedItem
+		}
+	}
+	if ev.ProviderItemID != "" && ev.ProviderItemID == c.endedItem {
+		endedFrom = c.endedFrom
+		c.endedTurn, c.endedItem, c.endedFrom = "", "", 0
 	}
 	if ev.ProviderTurnID != "" && ev.ProviderTurnID == c.compactedTurn &&
 		(ev.ProviderItemID == "" || c.compactedItem == "" || ev.ProviderItemID == c.compactedItem) {
@@ -746,6 +764,8 @@ func (c *conversation) settleCompaction(ev ports.ChatEvent) (ports.ChatEvent, bo
 	before, after, window := c.contextAtTurnStart, c.contextTokens, c.contextWindow
 	if c.compactingFrom > 0 && (ev.ProviderItemID == "" || ev.ProviderItemID == c.compactingItem) {
 		before = c.compactingFrom
+	} else if endedFrom > 0 {
+		before = endedFrom
 	}
 	if ev.ProviderItemID == c.compactingItem {
 		c.compactingItem = ""

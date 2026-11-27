@@ -1739,6 +1739,29 @@ func TestCompactionTheTurnLeftOpenSaysNoResult(t *testing.T) {
 	}
 }
 
+// The deprecated notification can arrive after its turn ended and settled the
+// row as unreported. It settles that same row, rather than adding a second.
+func TestLateDeprecatedCompactedNotificationSettlesTheEndedRow(t *testing.T) {
+	d, srv := newTestDriver(t)
+	conv, err := d.Start(context.Background(), ports.ChatStartConfig{WorkspacePath: "/tmp/ws"})
+	if err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	defer func() { _ = conv.Close() }()
+
+	srv.push(`{"method":"turn/started","params":{"threadId":"thread-1","turn":{"id":"turn-1","status":"inProgress","items":[]}}}`)
+	srv.push(`{"method":"item/started","params":{"item":{"type":"contextCompaction","id":"cc-1"},"threadId":"thread-1","turnId":"turn-1"}}`)
+	srv.push(`{"method":"turn/completed","params":{"threadId":"thread-1","turn":{"id":"turn-1","status":"completed","items":[]}}}`)
+	srv.push(`{"method":"thread/compacted","params":{"threadId":"thread-1","turnId":"turn-1"}}`)
+
+	nextEvent(t, conv.Events(), ports.ChatEventCompacted) // running
+	nextEvent(t, conv.Events(), ports.ChatEventCompacted) // no result reported
+	late := nextEvent(t, conv.Events(), ports.ChatEventCompacted)
+	if late.ProviderItemID != "cc-1" || late.ActivityStatus == domain.ActivityStatusFailed {
+		t.Fatalf("late notice = %q on %q, want cc-1 settled as compacted", late.ActivityStatus, late.ProviderItemID)
+	}
+}
+
 // The deprecated notification names no item. It settles the compaction under
 // way, so its running row does not stay running beside a second, settled row.
 func TestDeprecatedCompactedNotificationSettlesTheRunningItem(t *testing.T) {

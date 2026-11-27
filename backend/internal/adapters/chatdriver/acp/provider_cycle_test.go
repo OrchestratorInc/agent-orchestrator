@@ -249,10 +249,13 @@ func TestACPProviderCycleEndsOnTheProvidersOwnIdle(t *testing.T) {
 func TestACPProviderCycleCompactionGetsATurnlessRow(t *testing.T) {
 	for name, test := range map[string]struct {
 		outcome map[string]any
+		exit    bool
 		want    string
 	}{
 		"reported":  {outcome: map[string]any{"status": "completed", "tokensBefore": 120000.0, "tokensAfter": 30000.0}},
 		"left open": {want: "No result reported"},
+		// Nothing else would settle the turn-less row once the agent is gone.
+		"agent exits": {exit: true, want: "No result reported"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			setProviderCycleWaits(t, 50*time.Millisecond, time.Minute)
@@ -278,9 +281,12 @@ func TestACPProviderCycleCompactionGetsATurnlessRow(t *testing.T) {
 			if first.ActivityStatus != domain.ActivityStatusRunning || first.ProviderTurnID != "" {
 				t.Fatalf("first compaction event = %q in turn %q, want a running turn-less row", first.ActivityStatus, first.ProviderTurnID)
 			}
-			if test.outcome != nil {
+			switch {
+			case test.outcome != nil:
 				push(test.outcome)
-			} else {
+			case test.exit:
+				_ = opened.(*conversation).proc.stop()
+			default:
 				startTurn(t, opened, "next")
 			}
 			settled := collectUntil(t, events, isCompacted)
@@ -484,6 +490,20 @@ func TestACPProviderCycleDropsLateCompactionFailure(t *testing.T) {
 		}
 	}
 	push(map[string]any{"status": "failed", "error": map[string]any{"message": "API Error: Request was aborted."}})
+	// The late failure opens no cycle, so the agent never reads as busy: the
+	// next update, a usage report, arrives with no provider state before it.
+	if err := agent.conn.SessionUpdate(context.Background(), acpsdk.SessionNotification{
+		SessionId: acpsdk.SessionId(opened.ProviderConversationID()),
+		Update: acpsdk.SessionUpdate{UsageUpdate: &acpsdk.SessionUsageUpdate{
+			SessionUpdate: "usage_update", Used: 1000, Size: 200000,
+		}},
+	}); err != nil {
+		t.Fatalf("session/update: %v", err)
+	}
+	beforeUsage := collectUntil(t, events, func(e ports.ChatEvent) bool { return e.Kind == ports.ChatEventUsage })
+	if hasEvent(beforeUsage, func(e ports.ChatEvent) bool { return e.Kind == ports.ChatEventProviderState }) {
+		t.Fatalf("late compaction failure changed the provider state: %+v", beforeUsage)
+	}
 	push(map[string]any{"status": "started"})
 	got := collectUntil(t, events, func(e ports.ChatEvent) bool { return e.Kind == ports.ChatEventCompacted })
 	if first := got[len(got)-1]; first.ActivityStatus != domain.ActivityStatusRunning {
