@@ -473,6 +473,8 @@ export interface CloudCpAsideReply {
 	editedAt?: string;
 	/** Its chat.aside_reply event, which orders it among the thread's history entries. */
 	sequence?: number;
+	/** Its newest edit's chat.aside_reply_edited event; absent when it was never edited. */
+	editedSequence?: number;
 }
 
 /** GET /orgs/{orgId}/sessions/{sessionId}/asides/{asideId}: the message and a page of replies, oldest first. */
@@ -496,6 +498,12 @@ export interface CloudCpAsideReplyRequest {
 	clientMessageId: string;
 	/** Also send the whole thread to the agent and resolve it ("Also send to agent"). */
 	sendToAgent?: boolean;
+	/**
+	 * With sendToAgent: the newest comment the sender read (its event, or its
+	 * newest edit's). A thread changed after it is refused with 409
+	 * thread_changed, and the send carries only the comments up to it.
+	 */
+	throughSequence?: number;
 }
 
 export interface CloudCpNotificationEvent {

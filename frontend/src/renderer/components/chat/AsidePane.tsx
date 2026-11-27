@@ -41,7 +41,7 @@ import type {
 } from "../../lib/cloud-cp/types";
 import { AoError } from "../../../../../packages/shared/telemetry/ao-error";
 import { CloudCpError } from "../../lib/cloud-cp/errors";
-import { isPathQuery, MAX_MENTIONS, mentionRefusal, mentionToken, parseEventMentions, type ComposerMention } from "../../lib/cloud-mentions";
+import { isPathQuery, MAX_MENTIONS, mentionRateLimit, mentionRefusal, mentionRefusalKey, mentionToken, parseEventMentions, type ComposerMention } from "../../lib/cloud-mentions";
 import { ASIDE_REPLY, asideReplyMetadata, cloudInboxQueryKey, MENTIONED, mentionMetadata } from "../../lib/cloud-notifications";
 import { formatTimeCompact } from "../../lib/format-time";
 import type { MessageKey } from "../../i18n/messages";
@@ -74,6 +74,10 @@ export interface AsideEntry {
 	own?: boolean;
 	/** Its session event, which orders it among the thread's state changes. */
 	sequence?: number;
+	/** The newest event of the text shown: its own, or its newest edit's. */
+	version?: number;
+	/** Written or edited after the reader last sent the thread, so a send of it was refused (409 thread_changed). */
+	changed?: boolean;
 }
 
 /** Who the reply box's @ menu offers: people who can open the session, and the workspace's teams. */
@@ -153,6 +157,7 @@ export function AsidePaneView({
 	onDelete,
 	replyDisabled,
 	canSendToAgent = false,
+	agentComments = 0,
 	mentionSource,
 	focusKey,
 	firstComment = false,
@@ -184,6 +189,8 @@ export function AsidePaneView({
 	replyDisabled?: string;
 	/** The reader can prompt the agent, so the reply box offers "Also send to agent". */
 	canSendToAgent?: boolean;
+	/** How many comments "Also send to agent" sends besides the reply: those since the thread was last sent. */
+	agentComments?: number;
 	mentionSource?: AsideMentionSource;
 	/** A new value puts the caret in the reply box. */
 	focusKey?: number;
@@ -289,6 +296,7 @@ export function AsidePaneView({
 			) : (
 				<AsideReplyBox
 					canSendToAgent={canSendToAgent && !resolved}
+					agentComments={agentComments}
 					firstComment={firstComment}
 					focusKey={focusKey}
 					initialText={initialText}
@@ -370,6 +378,8 @@ function AsideEntryRow({ entry, onEdit, onDelete }: { entry: AsideEntry; onEdit?
 						{formatTimeCompact(entry.createdAt)}
 					</time>
 					{entry.edited ? <span className="text-caption text-muted-foreground">{t("comment.edited")}</span> : null}
+					{/* Written or edited after this person read the thread, which is why its send was refused. */}
+					{entry.changed ? <span className="text-caption text-status-working" data-comment-changed="">{t("comment.changedSinceRead")}</span> : null}
 					<span className="flex-1" />
 					{canChange && !editing ? (
 						<DropdownMenu>
@@ -439,6 +449,7 @@ function AsideReplyBox({
 	mentionSource,
 	onSend,
 	canSendToAgent,
+	agentComments = 0,
 	firstComment,
 	initialText,
 	reopens = false,
@@ -449,6 +460,8 @@ function AsideReplyBox({
 	mentionSource?: AsideMentionSource;
 	onSend: (text: string, mentions: ComposerMention[], sendToAgent: boolean) => Promise<void>;
 	canSendToAgent: boolean;
+	/** The comments a send to the agent takes besides the reply. */
+	agentComments?: number;
 	firstComment: boolean;
 	/** The thread is resolved: a reply reopens it, and the send button says so. */
 	reopens?: boolean;
@@ -588,6 +601,13 @@ function AsideReplyBox({
 						{t("comment.alsoSendToAgent")}
 					</label>
 				) : null}
+				{toAgent && !disabled && !firstComment ? (
+					// What the send takes, before it goes: the comments since the thread
+					// was last sent, and the reply typed here.
+					<p className="px-1.5 pb-1 text-caption text-muted-foreground" data-comment-send-preview="">
+						{t("comment.sendPreview", { count: agentComments + (hasText ? 1 : 0) })}
+					</p>
+				) : null}
 				<div className="mt-0.5 flex items-center gap-1">
 					{mentionSource && !disabled ? (
 						<Button
@@ -690,14 +710,20 @@ export function CommentThreadListView({
 /** Why a comment was refused, as a message key; nothing was sent. */
 function replyRefusalKey(error: unknown): MessageKey {
 	const reason = mentionRefusal(error);
-	if (reason) {
-		return reason === "too_many" ? "mention.refused.tooMany"
-			: reason === "no_access" ? "mention.refused.noAccess"
-				: reason === "outside_session" ? "mention.refused.outsideSession"
-					: "mention.refused.unknown";
-	}
+	if (reason) return mentionRefusalKey(reason);
 	if (error instanceof CloudCpError && error.status === 403) return "comment.sendToAgentForbidden";
+	if (threadChanged(error)) return "comment.threadChanged";
 	return error instanceof CloudCpError && error.status === 409 ? "comment.ended" : "comment.replyFailed";
+}
+
+/** A new comment's quote the control plane did not find in the message's words (422 not_in_message). */
+function quoteNotInMessage(error: unknown): boolean {
+	return error instanceof CloudCpError && error.status === 422 && error.details?.field === "quote" && error.details.reason === "not_in_message";
+}
+
+/** A send to the agent the control plane refused because the thread changed after the sequence it named. */
+function threadChanged(error: unknown): boolean {
+	return error instanceof CloudCpError && error.status === 409 && error.code === "thread_changed";
 }
 
 /** What a notification said about the thread, shown until it loads (no cache after a restart). */
@@ -873,31 +899,45 @@ export function CloudAsidePane({
 	);
 	// Edits and deletions of this thread's comments on the stream.
 	const liveChanges = useMemo(() => {
-		const edits = new Map<string, { text: string; mentions: CloudCpEventMention[]; editedAt: string }>();
+		const edits = new Map<string, { text: string; mentions: CloudCpEventMention[]; editedAt: string; sequence?: number }>();
 		const deleted = new Set<string>();
 		for (const event of events) {
 			const edit = asideReplyEditOf(event);
-			if (edit?.asideId === asideId) edits.set(edit.replyId, { text: edit.text, mentions: edit.mentions, editedAt: edit.editedAt });
+			if (edit?.asideId === asideId) edits.set(edit.replyId, { text: edit.text, mentions: edit.mentions, editedAt: edit.editedAt, ...(edit.sequence !== undefined ? { sequence: edit.sequence } : {}) });
 			const removal = asideRemovalOf(event);
 			if (removal?.asideId === asideId && removal.replyId) deleted.add(removal.replyId);
 		}
 		return { edits, deleted };
 	}, [asideId, events]);
+	// Set when a send to the agent was refused because the thread changed after
+	// the sequence it named: comments newer than it are marked until a send goes.
+	const [changedAfter, setChangedAfter] = useState<number>();
 	const replies = useMemo<AsideEntry[]>(() => {
-		const stored = mergeAsideReplies(thread.data?.replies ?? [], live, sent.filter((reply) => reply.asideId === asideId));
+		const own = sent.filter((reply) => reply.asideId === asideId);
+		const stored = mergeAsideReplies(thread.data?.replies ?? [], live, own);
+		// The copies read from the thread (and this person's sends), which know their newest edit.
+		const saved = new Map([...(thread.data?.replies ?? []), ...own].map((reply) => [reply.replyId, reply]));
 		const shown: AsideEntry[] = stored
 			.filter((reply) => !liveChanges.deleted.has(reply.replyId) && !removed.has(reply.replyId))
 			.map((reply) => {
-				const edit = liveChanges.edits.get(reply.replyId);
+				const streamed = liveChanges.edits.get(reply.replyId);
+				const read = saved.get(reply.replyId);
+				const readEdit = read?.editedSequence ?? 0;
+				// The newer edit shows: the stream's, or the one the thread was read with.
+				const edit = streamed && (streamed.sequence ?? Number.POSITIVE_INFINITY) >= readEdit ? streamed
+					: read && readEdit > 0 ? { text: read.text, mentions: read.mentions, sequence: readEdit } : undefined;
+				const version = Math.max(reply.sequence ?? read?.sequence ?? 0, edit?.sequence ?? 0);
 				return {
 					id: reply.replyId,
 					text: edit?.text ?? reply.text,
 					mentions: edit?.mentions ?? reply.mentions,
 					authorName: reply.authorName,
 					createdAt: reply.createdAt,
-					edited: Boolean(edit || reply.editedAt),
+					edited: Boolean(streamed || reply.editedAt || read?.editedAt),
 					own: Boolean(userId && reply.authorUserId === userId),
 					...(reply.sequence !== undefined ? { sequence: reply.sequence } : {}),
+					...(version > 0 ? { version } : {}),
+					...(changedAfter !== undefined && version > changedAfter ? { changed: true } : {}),
 				};
 			});
 		// With nothing loaded yet, the comment the notification named stands in.
@@ -905,7 +945,24 @@ export function CloudAsidePane({
 			shown.push({ id: "reply:fallback", text: fallback.body, mentions: [], authorName: fallback.authorName, createdAt: fallback.createdAt });
 		}
 		return [...shown, ...pending];
-	}, [asideId, fallback, live, liveChanges, pending, removed, sent, thread.data, userId]);
+	}, [asideId, changedAfter, fallback, live, liveChanges, pending, removed, sent, thread.data, userId]);
+
+	// "Also send to agent" sends the thread as this person read it: the newest
+	// comment (or edit) shown, else the message the thread is on. The control
+	// plane refuses (409 thread_changed) a thread written or edited after it.
+	const readThrough = useMemo(
+		() => replies.reduce((newest, entry) => Math.max(newest, entry.version ?? 0), aside?.anchor.sequence ?? 0),
+		[aside?.anchor.sequence, replies],
+	);
+	// What a send takes: the comments since the thread was last sent, or all of them.
+	const lastSent = useMemo(
+		() => (aside?.history ?? []).reduce((newest, entry) => (entry.kind === "sent_to_agent" ? Math.max(newest, entry.sequence) : newest), 0),
+		[aside?.history],
+	);
+	const agentComments = useMemo(
+		() => replies.filter((entry) => !entry.pending && entry.sequence !== undefined && entry.sequence > lastSent).length,
+		[lastSent, replies],
+	);
 
 	// Read while the person can see it: on opening, and as others' comments
 	// arrive on the stream after that (not the ones already there when the
@@ -1015,13 +1072,16 @@ export function CloudAsidePane({
 			createdAt: new Date().toISOString(), pending: true,
 		} : undefined;
 		if (shown) setPending((current) => [...current, shown]);
+		// The thread as this person read it when they pressed send.
+		const throughSequence = readThrough;
 		try {
 			const result = await client.replyToSessionAside(orgId, sessionId, asideId, {
 				text,
 				...(mentions.length ? { mentions: mentions.map(mentionToken) } : {}),
 				clientMessageId,
-				...(sendToAgent ? { sendToAgent: true } : {}),
+				...(sendToAgent ? { sendToAgent: true, throughSequence } : {}),
 			});
+			if (sendToAgent) setChangedAfter(undefined);
 			const reply = result.reply;
 			if (reply) setSent((current) => [...current, reply]);
 			queryClient.setQueryData<CloudCpAsideThread>(threadKey, (current) => current && {
@@ -1038,11 +1098,23 @@ export function CloudAsidePane({
 			// the server answers carries its history, and the threads view reads again.
 			invalidateCommentThreads(queryClient, baseUrl, userId);
 		} catch (error) {
-			throw new AoError("COMMENT_REPLY_REFUSED", t(replyRefusalKey(error)), { cause: error });
+			if (sendToAgent && threadChanged(error)) {
+				// Someone wrote or edited a comment after this person read the thread:
+				// nothing was sent. The thread is read again and what changed is marked,
+				// so they can read it and send again (the draft stays).
+				setChangedAfter(throughSequence);
+				void queryClient.invalidateQueries({ queryKey: threadKey });
+			}
+			const seconds = mentions.length > 0 ? mentionRateLimit(error) : undefined;
+			throw new AoError(
+				"COMMENT_REPLY_REFUSED",
+				seconds !== undefined ? t("mention.refused.rateLimited", { seconds }) : t(replyRefusalKey(error)),
+				{ cause: error },
+			);
 		} finally {
 			if (shown) setPending((current) => current.filter((entry) => entry.id !== shown.id));
 		}
-	}, [asideId, baseUrl, client, orgId, queryClient, sessionId, t, threadKey, userId]);
+	}, [asideId, baseUrl, client, orgId, queryClient, readThrough, sessionId, t, threadKey, userId]);
 
 	const onEdit = useCallback(async (replyId: string, text: string) => {
 		const original = replies.find((entry) => entry.id === replyId);
@@ -1096,6 +1168,7 @@ export function CloudAsidePane({
 
 	return (
 		<AsidePaneView
+			agentComments={agentComments}
 			anchor={anchor}
 			canSendToAgent={canPrompt && !ended}
 			focusKey={focusKey}
@@ -1178,15 +1251,20 @@ export function CloudCommentDraftPane({
 	const queryClient = useQueryClient();
 	const [mentionQuery, setMentionQuery] = useState<string>();
 	const mentionSource = useMentionSource(orgId, sessionId, false, mentionQuery, setMentionQuery, workspaceName);
-	const anchor = useMemo<CommentAnchorView>(() => draft.quote
-		? { quote: draft.quote, onJump: () => jumpToCommentAnchor(draft.anchor.sequence) }
+	// A selection the control plane did not take as the message's words (422
+	// not_in_message: it spanned something the message draws, such as a code
+	// block's copy control) moves the comment to the whole message; the draft stays.
+	const [wholeMessage, setWholeMessage] = useState(false);
+	const quote = wholeMessage ? undefined : draft.quote;
+	const anchor = useMemo<CommentAnchorView>(() => quote
+		? { quote, onJump: () => jumpToCommentAnchor(draft.anchor.sequence) }
 		: { label: anchorLabel(t as unknown as AnchorLabelT, draft.anchor.kind, draft.authorName), excerpt: draft.excerpt, onJump: () => jumpToCommentAnchor(draft.anchor.sequence) },
-	[draft, t]);
+	[draft, quote, t]);
 	const onReply = useCallback(async (text: string, mentions: ComposerMention[]) => {
 		try {
 			const { aside, reply } = await client.createSessionAside(orgId, sessionId, {
 				anchor: { sequence: draft.anchor.sequence },
-				...(draft.quote ? { quote: draft.quote } : {}),
+				...(quote ? { quote } : {}),
 				text,
 				...(mentions.length ? { mentions: mentions.map(mentionToken) } : {}),
 				clientMessageId: crypto.randomUUID(),
@@ -1202,9 +1280,15 @@ export function CloudCommentDraftPane({
 			});
 			openAside(sessionId, aside.asideId, { focusReply: false });
 		} catch (error) {
-			throw new AoError("COMMENT_CREATE_REFUSED", t(createRefusalKey(error)), { cause: error });
+			if (quoteNotInMessage(error)) setWholeMessage(true);
+			const seconds = mentions.length > 0 ? mentionRateLimit(error) : undefined;
+			throw new AoError(
+				"COMMENT_CREATE_REFUSED",
+				seconds !== undefined ? t("mention.refused.rateLimited", { seconds }) : t(createRefusalKey(error)),
+				{ cause: error },
+			);
 		}
-	}, [client, draft, orgId, queryClient, sessionId, t]);
+	}, [client, draft, orgId, queryClient, quote, sessionId, t]);
 	return (
 		<AsidePaneView
 			anchor={anchor}
@@ -1226,6 +1310,7 @@ export function CloudCommentDraftPane({
 function createRefusalKey(error: unknown): MessageKey {
 	if (mentionRefusal(error)) return replyRefusalKey(error);
 	if (error instanceof CloudCpError && error.status === 409) return "comment.ended";
+	if (quoteNotInMessage(error)) return "comment.quoteNotInMessage";
 	if (error instanceof CloudCpError && error.status === 422) return "comment.anchorGone";
 	return "comment.createFailed";
 }

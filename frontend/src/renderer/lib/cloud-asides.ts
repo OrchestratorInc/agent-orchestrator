@@ -48,10 +48,12 @@ export interface AsideReplyEdit {
 	text: string;
 	mentions: ReturnType<typeof parseEventMentions>;
 	editedAt: string;
+	/** The edit's event, so a reader knows which version of the comment it shows. */
+	sequence?: number;
 }
 
 /** A chat.aside_reply_edited event as the edit it carries. */
-export function asideReplyEditOf(event: Pick<CloudCpClientEvent, "type" | "payload" | "createdAt">): AsideReplyEdit | undefined {
+export function asideReplyEditOf(event: Pick<CloudCpClientEvent, "type" | "payload" | "createdAt"> & { sequence?: number }): AsideReplyEdit | undefined {
 	if (event.type !== "chat.aside_reply_edited") return undefined;
 	const payload = event.payload as Record<string, unknown> | null | undefined;
 	if (!payload || typeof payload.asideId !== "string" || typeof payload.replyId !== "string") return undefined;
@@ -61,6 +63,7 @@ export function asideReplyEditOf(event: Pick<CloudCpClientEvent, "type" | "paylo
 		text: typeof payload.text === "string" ? payload.text : "",
 		mentions: parseEventMentions(payload.mentions),
 		editedAt: typeof payload.editedAt === "string" ? payload.editedAt : event.createdAt,
+		...(typeof event.sequence === "number" ? { sequence: event.sequence } : {}),
 	};
 }
 

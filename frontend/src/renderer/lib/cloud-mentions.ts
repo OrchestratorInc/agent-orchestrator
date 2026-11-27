@@ -4,6 +4,8 @@ import type {
 	CloudCpMentionTeam,
 	CloudCpMentionToken,
 } from "./cloud-cp/types";
+import type { MessageKey } from "../i18n/messages";
+import { CloudCpError } from "./cloud-cp/errors";
 
 // @mentions in shared Cloud sessions. A mention is a chip in the composer and
 // in the timeline; it travels beside the message's text as a typed token
@@ -92,7 +94,8 @@ export function parseEventMentions(value: unknown): TimelineMention[] {
 /**
  * Whether a send was refused for a mention (422 validation_error on the
  * mentions field): someone who can't open the session, a guest naming someone
- * outside it, an unknown id, or too many. Nothing was sent.
+ * outside it, an unknown id, too many, or teams that reach too many people.
+ * Nothing was sent.
  */
 export function mentionRefusal(error: unknown): string | undefined {
 	if (typeof error !== "object" || error === null) return undefined;
@@ -102,6 +105,25 @@ export function mentionRefusal(error: unknown): string | undefined {
 	if (!details || typeof details !== "object" || (details as { field?: unknown }).field !== "mentions") return undefined;
 	const reason = (details as { reason?: unknown }).reason;
 	return typeof reason === "string" && reason !== "" ? reason : "invalid";
+}
+
+/** A refused mention's reason (mentionRefusal), as the message that says it in the reader's words. */
+export function mentionRefusalKey(reason: string): MessageKey {
+	return reason === "too_many" ? "mention.refused.tooMany"
+		: reason === "no_access" ? "mention.refused.noAccess"
+		: reason === "outside_session" ? "mention.refused.outsideSession"
+		: reason === "team_too_large" ? "mention.refused.teamTooLarge"
+		: "mention.refused.unknown";
+}
+
+/**
+ * A write with mentions the control plane paused (429 rate_limited: too many
+ * in this session lately), as the seconds until it takes mentions again from
+ * its Retry-After (a minute when it names none). Nothing was stored.
+ */
+export function mentionRateLimit(error: unknown): number | undefined {
+	if (!(error instanceof CloudCpError) || error.status !== 429 || error.code !== "rate_limited") return undefined;
+	return Math.max(1, Math.ceil((error.retryAfterMs ?? 60_000) / 1000));
 }
 
 /**

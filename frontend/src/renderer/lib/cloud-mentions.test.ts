@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { CloudCpError } from "./cloud-cp/errors";
-import { isPathQuery, mentionRefusal, mentionSections, mentionToken, parseEventMentions, splitByMentions, uniqueMentions } from "./cloud-mentions";
+import { isPathQuery, mentionRateLimit, mentionRefusal, mentionRefusalKey, mentionSections, mentionToken, parseEventMentions, splitByMentions, uniqueMentions } from "./cloud-mentions";
 
 describe("mention tokens", () => {
 	it("sends a person by userId and a team by teamId, never a name", () => {
@@ -55,6 +55,21 @@ describe("mentionRefusal", () => {
 	it("is undefined for any other validation error or failure", () => {
 		expect(mentionRefusal(new CloudCpError("Bad text.", { status: 422, code: "validation_error", details: { field: "text" } }))).toBeUndefined();
 		expect(mentionRefusal(new CloudCpError("Down.", { status: 503 }))).toBeUndefined();
+	});
+
+	it("has a message for every reason the control plane gives, teams that reach too many people included", () => {
+		expect(mentionRefusalKey("too_many")).toBe("mention.refused.tooMany");
+		expect(mentionRefusalKey("no_access")).toBe("mention.refused.noAccess");
+		expect(mentionRefusalKey("outside_session")).toBe("mention.refused.outsideSession");
+		expect(mentionRefusalKey("team_too_large")).toBe("mention.refused.teamTooLarge");
+		expect(mentionRefusalKey("unknown")).toBe("mention.refused.unknown");
+	});
+
+	it("reads a mention rate limit's wait from its Retry-After, and nothing else as one", () => {
+		expect(mentionRateLimit(new CloudCpError("Slow down.", { status: 429, code: "rate_limited", retryAfterMs: 1_500 }))).toBe(2);
+		expect(mentionRateLimit(new CloudCpError("Slow down.", { status: 429, code: "rate_limited" }))).toBe(60);
+		expect(mentionRateLimit(new CloudCpError("Busy.", { status: 429, code: "tunnel_rate_limited" }))).toBeUndefined();
+		expect(mentionRateLimit(new CloudCpError("Down.", { status: 503 }))).toBeUndefined();
 	});
 });
 

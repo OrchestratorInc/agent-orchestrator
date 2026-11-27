@@ -59,7 +59,7 @@ import type { ApprovalModeLimits } from "./TurnSettingsBar";
 import { SharedComposerNotice } from "./SharedComposerNotice";
 import { MentionTintContext, type MentionTint } from "./MentionChip";
 import type { ComposerMentionSource } from "./ChatComposer";
-import { mentionRefusal, mentionToken, parseEventMentions, type ComposerMention } from "../../lib/cloud-mentions";
+import { mentionRateLimit, mentionRefusal, mentionRefusalKey, mentionToken, parseEventMentions, type ComposerMention } from "../../lib/cloud-mentions";
 import { cloudInboxQueryKey, mentionMetadata, probeCloudInbox } from "../../lib/cloud-notifications";
 import { clearMentionFocus, mentionFallbackEvents, mentionMessageId, useMentionFocus } from "../../lib/cloud-mention-open";
 import { useCloudInboxSupport } from "../../hooks/useCloudNotifications";
@@ -953,17 +953,18 @@ function mentionsOf(payload: EventPayload): { mentions?: ReturnType<typeof parse
 }
 
 /**
- * A send the control plane refused for a mention, said in the reader's words.
- * It keeps the validation code, so the composer hands the draft back unsent.
+ * A send the control plane refused for a mention, or paused because it carried
+ * mentions (429 rate_limited), said in the reader's words. Nothing was stored:
+ * it takes the validation code, so the composer hands the draft back unsent.
  */
-function mentionRefusedError(error: unknown): unknown {
+function mentionRefusedError(error: unknown, withMentions: boolean): unknown {
+	const seconds = withMentions ? mentionRateLimit(error) : undefined;
+	if (seconds !== undefined) {
+		return Object.assign(new AoError("validation_error", appI18n.t("mention.refused.rateLimited", { seconds }), { cause: error }), { status: 429 });
+	}
 	const reason = mentionRefusal(error);
 	if (!reason) return error;
-	const key = reason === "too_many" ? "mention.refused.tooMany"
-		: reason === "no_access" ? "mention.refused.noAccess"
-		: reason === "outside_session" ? "mention.refused.outsideSession"
-		: "mention.refused.unknown";
-	return Object.assign(new AoError("validation_error", appI18n.t(key), { cause: error }), { status: 422 });
+	return Object.assign(new AoError("validation_error", appI18n.t(mentionRefusalKey(reason)), { cause: error }), { status: 422 });
 }
 
 function promptAuthorName(payload: EventPayload, viewerUserId: string | undefined): string | undefined {
@@ -2107,7 +2108,7 @@ export function CloudSessionChatSurface({
 					return await post(request);
 				}
 			} catch (error) {
-				throw mentionRefusedError(error);
+				throw mentionRefusedError(error, Boolean(mentions?.length));
 			}
 		},
 		onSuccess: (data, { sessionId }) => {
@@ -2423,7 +2424,7 @@ export function CloudSessionChatSurface({
 				}, { idempotencyKey: key });
 			} catch (error) {
 				// A refused mention sent nothing: the steer goes back to the draft.
-				const refused = mentionRefusedError(error);
+				const refused = mentionRefusedError(error, Boolean(mentions?.length));
 				if (refused !== error) return { status: "not-accepted" as const, reason: (refused as Error).message };
 				throw error;
 			}

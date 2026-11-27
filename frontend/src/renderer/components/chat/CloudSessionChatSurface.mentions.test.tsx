@@ -216,6 +216,26 @@ describe("sending mentions", () => {
 		await expect(lastProps().onSend("@Cara hi", undefined, "client-3", undefined, undefined, undefined, [{ kind: "person", id: "u-cara", name: "Cara" }]))
 			.rejects.toMatchObject({ message: "Someone you mentioned can't open this session. Nothing was sent.", code: "validation_error" });
 	});
+
+	it("says a send paused for its mentions (429 rate_limited) in the reader's words, and hands the draft back", async () => {
+		cloudMocks.sendSessionMessage.mockRejectedValue(new CloudCpError("rate limited", { status: 429, code: "rate_limited", retryAfterMs: 30_000 }));
+		renderSurface();
+		await waitFor(() => expect(cloudMocks.chatProps).toHaveBeenCalled());
+		await expect(lastProps().onSend("@Priya hi", undefined, "client-5", undefined, undefined, undefined, [{ kind: "person", id: "u-priya", name: "Priya Shah" }]))
+			.rejects.toMatchObject({ message: "Too many mentions in this session for now. Try again in 30 s, or send it without mentions. Nothing was sent.", code: "validation_error" });
+		// A send without mentions is never limited for them: its error stays as it was.
+		await expect(lastProps().onSend("plain", undefined, "client-6")).rejects.toMatchObject({ status: 429, code: "rate_limited" });
+	});
+
+	it("says a refusal for teams that reach too many people in the reader's words", async () => {
+		cloudMocks.sendSessionMessage.mockRejectedValue(new CloudCpError("mentions: too large", {
+			status: 422, code: "validation_error", details: { field: "mentions", reason: "team_too_large" },
+		}));
+		renderSurface();
+		await waitFor(() => expect(cloudMocks.chatProps).toHaveBeenCalled());
+		await expect(lastProps().onSend("@Everyone hi", undefined, "client-4", undefined, undefined, undefined, [{ kind: "team", id: "t-all", name: "Everyone" }]))
+			.rejects.toMatchObject({ message: "Your mentions reach more than 100 people. Mention fewer people or a smaller team. Nothing was sent.", code: "validation_error" });
+	});
 });
 
 describe("the @ menu's source", () => {
