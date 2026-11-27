@@ -608,6 +608,9 @@ function useSelection() {
 	}), [goArtifacts, goAutomations, goUsage, goConnectMobile, goGlobalSettings, goHome, goProject, goSession, goSettings, goStandaloneBoard, params.hostId, params.projectId, params.sessionId, pathname]);
 }
 
+// The sidebar's resize line traces the center panel's left border, wherever its inset puts it.
+const centerPanelEdge = () => document.querySelector(".center-panel-surface");
+
 // A marker that asks the user to act now: the agent's question, or the red alert.
 function isUrgentMarker(marker: ReturnType<typeof getSessionRowIndicator>): boolean {
 	return marker === "input" || marker === "attention";
@@ -1506,6 +1509,7 @@ export const Sidebar = memo(function Sidebar({
 			{/* useResizable owns clamp. */}
 			<ResizeHandle
 				className="group-data-[state=collapsed]:hidden"
+				edge={centerPanelEdge}
 				onDoubleClick={onResizeDoubleClick}
 				onPointerDown={onResizePointerDown}
 				side="right"

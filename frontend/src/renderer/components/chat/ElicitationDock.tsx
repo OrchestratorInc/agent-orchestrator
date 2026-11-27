@@ -745,6 +745,7 @@ function FormField({
 			aria-invalid={invalid || undefined}
 			aria-describedby={invalid ? errorId : undefined}
 			onChange={(event) => onChange(numeric && event.target.value !== "" ? Number(event.target.value) : event.target.value)}
+			data-field={rows ? undefined : "field"}
 			className={cn(
 				"w-full min-w-0 rounded-lg border bg-background/40 px-2.5 text-xs leading-relaxed text-foreground outline-none transition-colors focus-visible:border-border-strong",
 				rows ? "h-7 border-0 bg-transparent px-0 focus-visible:border-transparent" : "mt-1.5 h-8",
