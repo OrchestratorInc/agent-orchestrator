@@ -27,6 +27,8 @@ export type ToastItem = {
 	action?: { label: string; run: () => void; busy?: boolean };
 	/** Pressing anywhere on the card runs this, such as opening the session a notification is about. */
 	onOpen?: () => void;
+	/** One line until hovered or focused: the help opens on hover or keyboard focus, and the action takes the ×'s place. */
+	compact?: boolean;
 	dismissLabel?: string;
 	onDismiss: () => void;
 };
@@ -183,14 +185,17 @@ function ToastCard({ item, muted, front, height, swipe }: { item: ToastItem; mut
 	const leave = useSwipeToDismiss(ref, item.onDismiss, swipe && !muted, { fade: false });
 	const error = item.tone === "error";
 	const action = item.action;
+	// Compact, the action is the × itself: pressing it acknowledges the notice.
+	const actionAsClose = item.compact && action && !action.busy ? action : undefined;
 	return (
 		<article ref={ref} role={error ? "alert" : "status"} aria-label={item.title} data-toast-card="" data-front={front || undefined}
+			data-compact={item.compact || undefined}
 			data-openable={item.onOpen ? "" : undefined}
 			onClick={item.onOpen ? (event) => {
 				if ((event.target as Element).closest("[data-toast-close], [data-toast-action]")) return;
 				item.onOpen?.();
 			} : undefined}
-			className="toast-card toast-enter relative touch-pan-y select-none overflow-hidden border shadow-(--shadow-popover)"
+			className="toast-card toast-enter group relative touch-pan-y select-none overflow-hidden border shadow-(--shadow-popover)"
 			style={height === undefined ? undefined : { height }}>
 			{/* Behind cards show only their edges, so their contents step back once the deck has closed. */}
 			<div className="toast-body flex items-center gap-2.5">
@@ -207,19 +212,29 @@ function ToastCard({ item, muted, front, height, swipe }: { item: ToastItem; mut
 					) : (
 						<p className="truncate text-control leading-4 font-medium">{item.title}</p>
 					)}
-					{item.help ? (
+					{item.help && item.compact ? (
+						<div data-toast-body="" className="grid grid-rows-[0fr] transition-[grid-template-rows] duration-150 group-focus-within:grid-rows-[1fr] group-hover:grid-rows-[1fr] motion-reduce:transition-none">
+							<div className="min-h-0 overflow-hidden">
+								<p aria-live={error ? "assertive" : "polite"} className="mt-0.5 text-caption leading-4 text-pretty text-muted-foreground">{item.help}</p>
+							</div>
+						</div>
+					) : item.help ? (
 						<p aria-live={error ? "assertive" : "polite"} className="mt-0.5 line-clamp-2 text-caption leading-4 text-muted-foreground"
 							title={typeof item.help === "string" ? item.help : undefined}>{item.help}</p>
 					) : null}
 				</div>
-				{action ? (
+				{action && !actionAsClose ? (
 					<Button size="xs" variant="secondary" className="relative z-10" aria-busy={action.busy || undefined} disabled={action.busy}
 						onClick={action.busy ? undefined : action.run} data-toast-action="">
 						{action.busy ? <LoaderCircle className="size-3 animate-spin" aria-hidden="true" /> : null}
 						{action.label}
 					</Button>
 				) : null}
-				<CloseButton aria-label={item.dismissLabel ?? t("shortcut.dismissNotification")} className="relative z-10" data-toast-close="" onClick={leave} size="icon-xs" />
+				{actionAsClose ? (
+					<CloseButton aria-label={actionAsClose.label} className="relative z-10" data-toast-close="" data-toast-action="" onClick={actionAsClose.run} size="icon-xs" />
+				) : (
+					<CloseButton aria-label={item.dismissLabel ?? t("shortcut.dismissNotification")} className="relative z-10" data-toast-close="" onClick={leave} size="icon-xs" />
+				)}
 			</div>
 		</article>
 	);

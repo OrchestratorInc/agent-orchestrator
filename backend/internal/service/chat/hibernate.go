@@ -375,10 +375,25 @@ func (s *Service) hibernateChat(ctx context.Context, id domain.SessionID, opts h
 	}
 	// Persist the intent while intake is fenced. A failed or contested write
 	// leaves the provider alive; a crash during shutdown can finish it on boot.
+	if opts.versionRefresh || opts.forUpdate {
+		if moves, ok := s.sessions.(ports.SessionVersionMoveStore); ok {
+			if err := moves.PutSessionVersionMove(ctx, domain.NewSessionVersionMove(fresh)); err != nil {
+				controller.sendMu.Unlock()
+				return false, err
+			}
+		}
+	}
 	at := s.now()
 	applied, err := marker.SetSessionHibernated(ctx, id, fresh.Revision, &at)
 	if err != nil || !applied {
 		controller.sendMu.Unlock()
+		if opts.versionRefresh || opts.forUpdate {
+			if moves, ok := s.sessions.(ports.SessionVersionMoveStore); ok {
+				cleanup, cancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
+				defer cancel()
+				err = errors.Join(err, moves.DeleteSessionVersionMove(cleanup, id))
+			}
+		}
 		return false, err
 	}
 	controller.mu.Lock()
@@ -419,6 +434,9 @@ func (s *Service) hibernateChat(ctx context.Context, id domain.SessionID, opts h
 		// The wake that follows starts the installed release; remember which
 		// one, so a failed start keeps the user's queued messages.
 		s.noteVersionSwitch(id, fresh.StaleBinary.Version)
+		if err := s.recordVersionMoveStopped(finishCtx, id); err != nil {
+			return true, err
+		}
 		s.log.Info("chat session stopped to move to a new harness release", "session", id, "harness", fresh.Harness, "version", fresh.StaleBinary.Version)
 		return true, nil
 	}
@@ -431,6 +449,9 @@ func (s *Service) hibernateChat(ctx context.Context, id domain.SessionID, opts h
 		}
 		s.updateStops[id] = true
 		s.wakeMu.Unlock()
+		if err := s.recordVersionMoveStopped(finishCtx, id); err != nil {
+			return true, err
+		}
 		s.log.Info("chat session stopped for a harness update", "session", id, "harness", fresh.Harness)
 		return true, nil
 	}

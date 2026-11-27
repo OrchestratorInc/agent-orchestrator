@@ -23,6 +23,7 @@ export function GlobalToast() {
 		help: toast.body,
 		tone: toast.tone,
 		art: toast.art,
+		compact: toast.compact,
 		action: toast.action
 			? {
 					label: toast.action.label,

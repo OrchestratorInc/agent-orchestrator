@@ -192,10 +192,12 @@ export type GlobalToast = {
 	onOpen?: () => void;
 	/** The picture of the data at the toast's start; defaults to a rail in the tone. */
 	art?: ToastArt;
+	/** One line until hovered or focused: the body opens on hover or keyboard focus, and the action is the ✕. */
+	compact?: boolean;
 	nonce: number;
 };
 
-export type GlobalToastOptions = Pick<GlobalToast, "tone" | "placement" | "dismissible" | "durationMs" | "dedupeKey" | "action" | "onOpen" | "art">;
+export type GlobalToastOptions = Pick<GlobalToast, "tone" | "placement" | "dismissible" | "durationMs" | "dedupeKey" | "action" | "onOpen" | "art" | "compact">;
 
 export type WorkspaceFileOpenRequest = {
 	sessionId: string;

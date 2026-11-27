@@ -612,6 +612,26 @@ describe("telemetry sanitizers", () => {
 		);
 	});
 
+	it("keeps the event's Date timestamp while still redacting nested paths and local urls", () => {
+		const timestamp = new Date("2026-11-25T09:00:00.000Z");
+		const event = sanitizePostHogEvent({
+			event: "$identify",
+			timestamp,
+			properties: {
+				$current_url: "app://renderer/index.html#/projects/private",
+				nested: { path: "open /Users/alice/private/plan.md", urls: ["http://localhost:3037/api?token=secret"] },
+			},
+		});
+		expect(event.timestamp).toBe(timestamp);
+		expect(JSON.parse(JSON.stringify(event)).timestamp).toBe("2026-11-25T09:00:00.000Z");
+		const props = event.properties as Record<string, unknown>;
+		expect(props.$current_url).toBe("[redacted-local-url]");
+		expect(props.nested).toEqual({ path: "open [redacted-local-path]", urls: ["[redacted-local-url]"] });
+		// Other class instances are still rebuilt from their own values, so a URL
+		// object never reaches the wire through its toJSON href.
+		expect(JSON.stringify(sanitizePostHogEvent({ properties: { link: new URL("file:///Users/alice/x") } }))).not.toContain("alice");
+	});
+
 	it("redacts replay request names before they leave the renderer", () => {
 		expect(sanitizeReplayRequestName("file:///Users/alice/private/index.html?token=secret")).toBe(
 			"[redacted-local-url]",
