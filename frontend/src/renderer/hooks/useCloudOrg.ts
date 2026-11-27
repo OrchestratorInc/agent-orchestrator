@@ -60,11 +60,11 @@ export function useCloudOrg(enabled = true): UseCloudOrgResult {
 		// Re-resolve the org eagerly: membership CAN change out from under a live
 		// session (a user is moved to their own org, or removed from a shared one),
 		// and a stale selection strands every org-scoped call on a dead org with a
-		// 403. A short staleTime plus refetch-on-focus keeps the selection current;
-		// a 403 anywhere also invalidates this query (see lib/query-client) so the
-		// app self-heals without a restart. /me is a cheap, deduped read.
+		// 403. A short staleTime plus refetch-on-focus (recoverWhileHidden refetches
+		// whenever the window is shown) keeps the selection current; a 403 anywhere
+		// also invalidates this query (see lib/query-client) so the app self-heals
+		// without a restart. /me is a cheap, deduped read.
 		staleTime: 30_000,
-		refetchOnWindowFocus: true,
 		refetchOnReconnect: true,
 		// Every cloud read hangs off the org: it must load in a hidden window too.
 		...recoverWhileHidden(),
