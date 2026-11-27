@@ -738,13 +738,22 @@ func (c *commandContext) setupCheckAgent(ctx context.Context, id string, res *se
 }
 
 // firstReadyAgent returns the first agent the daemon calls ready, else the
-// first installed agent with a saved (unproven) sign-in.
+// first installed agent with a saved (unproven) sign-in, else the first
+// installed one whose sign-in is not known yet.
 func firstReadyAgent(agents []agentReadinessSnapshot) string {
 	if id := firstReadyAgentExcept(agents, ""); id != "" {
 		return id
 	}
 	for _, a := range agents {
 		if a.Installation.State == "installed" && a.Authentication.State == "configured" {
+			return a.ID
+		}
+	}
+	// A fresh daemon may not have read sign-in states yet: an installed agent
+	// whose sign-in is unknown (never one reported signed out). The agent
+	// step checks it right away, with the agent's own status command.
+	for _, a := range agents {
+		if a.Installation.State == "installed" && (a.Authentication.State == "unknown" || a.Authentication.State == "") {
 			return a.ID
 		}
 	}

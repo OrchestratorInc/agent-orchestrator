@@ -1577,3 +1577,23 @@ func TestSetupUnresolvedSSHAliasChecksGitHub(t *testing.T) {
 		t.Fatalf("github step = %+v; an alias setup cannot resolve must be checked like GitHub", gh)
 	}
 }
+
+func TestSetupUninstalledCallerFallsBackOnAFreshDaemon(t *testing.T) {
+	d := newSetupDaemon(t)
+	repo := gitRepo(t, true)
+	registerOnPost(d, repo, "example/calc")
+	t.Setenv("CURSOR_AGENT", "1")
+	// A fresh daemon: claude-code is installed but its sign-in is not read yet.
+	d.set("POST /api/v1/agents/readiness/ensure", 200, `{"agents":[
+		{"id":"claude-code","label":"Claude Code","installation":{"state":"installed"},"authentication":{"state":"unknown"},"effectiveReadiness":"unknown"},
+		{"id":"codex","label":"Codex","installation":{"state":"installed"},"authentication":{"state":"unauthorized"},"effectiveReadiness":"not_ready"},
+		{"id":"cursor","label":"Cursor","installation":{"state":"not_installed"},"authentication":{"state":"unknown"},"effectiveReadiness":"not_ready"}]}`)
+	d.set("POST /api/v1/agents/claude-code/probe", 200, `{"agent":{"id":"claude-code","authStatus":"authorized"},"supported":true,"installed":true}`)
+	out, _, err := executeCLI(t, fakeClockDeps(), "setup", "--path", repo, "--json")
+	if err != nil {
+		t.Fatalf("err = %v\n%s", err, out)
+	}
+	if res := decodeSetup(t, out); res.Agent.ID != "claude-code" || res.Agent.Source != "ready" || !res.Ready {
+		t.Fatalf("ready=%v agent=%+v", res.Ready, res.Agent)
+	}
+}
