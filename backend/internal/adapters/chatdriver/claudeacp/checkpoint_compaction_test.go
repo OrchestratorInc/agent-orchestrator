@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"testing"
 
@@ -151,6 +152,18 @@ func TestNativeCheckpointCompactionKeepsSafetyChecks(t *testing.T) {
 				compactionSummary("summary", "boundary", "prompt-0"))...),
 			events: []domain.NativeCheckpointObservation{submitObservation(0, "A"), stopObservation(0, "answer A")},
 			reason: "no native user prompt since compaction",
+		},
+		{
+			name: "parent dropped at the compaction",
+			transcript: compactionLines(t, slices.Concat(compactionPrompt(0, "", "A"), []map[string]any{
+				compactionAnswer("assistant-0", "submission-attachment-0", "answer A", "end_turn"),
+				compactionBoundary("boundary", "assistant-0", map[string]any{"trigger": "manual"}),
+				compactionSummary("summary", "boundary", "prompt-0"),
+			}, compactionPrompt(1, "assistant-0", "B"), []map[string]any{
+				compactionAnswer("assistant-1", "submission-attachment-1", "answer B", "end_turn"),
+			})...),
+			events: []domain.NativeCheckpointObservation{submitObservation(1, "B"), stopObservation(1, "answer B")},
+			reason: "incomplete native ancestry",
 		},
 	} {
 		t.Run(test.name, func(t *testing.T) {

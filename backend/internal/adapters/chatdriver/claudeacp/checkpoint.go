@@ -341,7 +341,7 @@ func verifyCheckpointTranscript(ctx context.Context, input io.Reader, request po
 	seen := make(map[string]bool)
 	for leaf != "" {
 		record, found := records[leaf]
-		if !found && len(chain) > 0 {
+		if !found && len(chain) > 0 && !uuids[leaf] {
 			break
 		}
 		if !found || seen[leaf] {
