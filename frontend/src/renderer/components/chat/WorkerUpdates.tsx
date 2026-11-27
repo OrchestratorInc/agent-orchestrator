@@ -819,6 +819,18 @@ function cannotAnswer(session: WorkspaceSession | undefined): boolean {
 		|| session.activity?.state === "exited" || session.status === "exited";
 }
 
+const SPAWNS_OF = new WeakMap<ConversationItem, readonly string[]>();
+
+/**
+ * The workers one row started, recorded or named by `ao spawn` output. Cached per row
+ * so a streamed delta, which keeps earlier rows' identity, skips the output regex.
+ */
+function spawnsOf(item: ConversationItem): readonly string[] {
+	let ids = SPAWNS_OF.get(item);
+	if (!ids) SPAWNS_OF.set(item, ids = [spawnedBy(item) ?? [], spawnedSessionIds([item])].flat());
+	return ids;
+}
+
 /**
  * The workers this chat spawned that ended without answering, once a later turn has
  * started. Until then the row under the reply is where the chat says how the worker
@@ -836,14 +848,10 @@ export function useEndedSpawns(items: readonly ConversationItem[] | undefined): 
 		if (!items || !lastOfTurn || workspaces.length === 0) return previous.current = NO_ENDED_SPAWNS;
 		const sessions = new Map(workspaces.flatMap((workspace) => workspace.sessions.map((session) => [session.id, session] as const)));
 		const ended = new Set<string>();
-		const byTurn = new Map<string | undefined, ConversationItem[]>();
 		for (const item of items) {
 			if (item.sequence >= lastOfTurn.sequence) break;
 			if (item.turnId === lastOfTurn.turnId) continue;
-			byTurn.set(item.turnId, [...(byTurn.get(item.turnId) ?? []), item]);
-		}
-		for (const turn of byTurn.values()) {
-			for (const id of [...turn.flatMap((item) => spawnedBy(item) ?? []), ...spawnedSessionIds(turn)]) {
+			for (const id of spawnsOf(item)) {
 				if (cannotAnswer(sessions.get(id))) ended.add(id);
 			}
 		}
