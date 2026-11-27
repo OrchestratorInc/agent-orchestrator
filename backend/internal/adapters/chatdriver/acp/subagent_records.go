@@ -147,6 +147,13 @@ type recordFollower struct {
 	backlogTurn string
 }
 
+// waitForSends returns once no record is mid-send: with every reader's
+// context cancelled, none can start another.
+func (f *recordFollower) waitForSends() {
+	f.emitMu.Lock()
+	defer f.emitMu.Unlock()
+}
+
 func recordedCallView(tool *toolState) RecordedCall {
 	return RecordedCall{Title: tool.title, Kind: tool.kind, RawInput: tool.rawInput}
 }
@@ -271,9 +278,7 @@ func (c *conversation) drainSubagentRecords() {
 		if pollCancel != nil {
 			pollCancel()
 		}
-		follower.emitMu.Lock()
-		//nolint:staticcheck // An empty critical section is the barrier.
-		follower.emitMu.Unlock()
+		follower.waitForSends()
 	}()
 	if stop != nil {
 		// Stopping cancels the poll's read and delivery, so it returns promptly.
