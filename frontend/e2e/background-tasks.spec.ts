@@ -112,10 +112,19 @@ async function setQueue(page: Page, open: boolean) {
 
 test("the board does not show background work on cards @T0", async ({ page }) => {
 	await openWorker(page, { tasks: [{ id: "shell-1", kind: "shell", description: "Start the settings dev server", state: "running", startedAt: ago(3) }] });
+	// A card footer can only come from a reading, and the board would ask for
+	// one when it mounts, before any card shows. So with the card on screen, a
+	// board that never asked cannot render the footer later.
+	const readings: string[] = [];
+	page.on("request", (request) => {
+		const { pathname } = new URL(request.url());
+		if (pathname.endsWith("/background-tasks")) readings.push(pathname);
+	});
 	await page.goto(`/#/projects/${projectId}`);
 	await expect(page.getByTestId("board")).toBeVisible({ timeout: 15_000 });
 	const card = page.locator(`[data-testid="board-session-card"][data-session-id="${sessionId}"]`);
 	await expect(card).toBeVisible();
+	expect(readings).toEqual([]);
 	await expect(card.getByText(/shell still running/)).toHaveCount(0);
 });
 
