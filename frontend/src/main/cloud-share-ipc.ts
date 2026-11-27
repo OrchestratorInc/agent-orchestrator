@@ -512,10 +512,12 @@ export function registerCloudShareIpc(deps: CloudShareIpcDeps): void {
 	// What a file a remote host's page uses is now, as a published page
 	// records it (hostPageFileVersion): "" when the host no longer serves it
 	// there, and undefined when the host could not say, which counts as unchanged.
-	const hostPageFileNow = async (file: CloudHostShareFile, referencedPath: string, signal: AbortSignal): Promise<string | undefined> => {
+	// One that resolves outside the page's folder is "" too: publishing leaves it out.
+	const hostPageFileNow = async (file: CloudHostShareFile, referencedPath: string, folder: string, signal: AbortSignal): Promise<string | undefined> => {
 		try {
 			const info = await inspectHostShareFile(deps.fetchHost, hostFile({ ...file, path: referencedPath }), signal);
-			return info.resolvedPath ? hostPageFileVersion(info.resolvedPath, info.fingerprint) : "";
+			if (!info.resolvedPath || (folder !== "." && !info.resolvedPath.startsWith(`${folder}/`))) return "";
+			return hostPageFileVersion(info.resolvedPath, info.fingerprint);
 		} catch (error) {
 			if (error instanceof CloudShareError && (error.code === "file_missing" || error.code === "invalid_file" || error.code === "host_unsupported" || hostRefusedFile(error))) return "";
 			// The host, not the file: a timeout, a lost connection, a lockout, or the check's own deadline.
@@ -528,7 +530,7 @@ export function registerCloudShareIpc(deps: CloudShareIpcDeps): void {
 	// Each is looked up from its headers alone, a few at a time, until one has.
 	// The check has one deadline and stops at the first answer about the host
 	// rather than a file, which then counts as unchanged: the panel waits on it.
-	const hostPageFilesChanged = async (file: CloudHostShareFile, recorded: Record<string, string>): Promise<boolean> => {
+	const hostPageFilesChanged = async (file: CloudHostShareFile, recorded: Record<string, string>, folder: string): Promise<boolean> => {
 		const entries = Object.entries(recorded);
 		const deadline = AbortSignal.timeout(HOST_PAGE_FILES_DEADLINE_MS);
 		let next = 0;
@@ -537,7 +539,7 @@ export function registerCloudShareIpc(deps: CloudShareIpcDeps): void {
 		const worker = async () => {
 			while (!changed && !stopped && !deadline.aborted && next < entries.length) {
 				const [referencedPath, version] = entries[next++];
-				const now = await hostPageFileNow(file, referencedPath, deadline);
+				const now = await hostPageFileNow(file, referencedPath, folder, deadline);
 				if (now === undefined) stopped = true;
 				else if (now !== version) changed = true;
 			}
@@ -560,7 +562,7 @@ export function registerCloudShareIpc(deps: CloudShareIpcDeps): void {
 			fingerprint: info.fingerprint,
 			...(shareId ? { shareId } : {}),
 			...(publishedFingerprint ? { publishedFingerprint } : {}),
-			...(pageFiles && await hostPageFilesChanged(file, pageFiles) ? { pageFilesChanged: true } : {}),
+			...(pageFiles && await hostPageFilesChanged(file, pageFiles, path.posix.dirname(info.resolvedPath ?? info.relativePath)) ? { pageFilesChanged: true } : {}),
 		};
 	};
 
@@ -608,12 +610,18 @@ export function registerCloudShareIpc(deps: CloudShareIpcDeps): void {
 		// A page's files are found in its downloaded copy, so the progress
 		// starts once they are, when it knows every byte.
 		const page = isSharePage(located.name) && expected.size <= MAX_SCANNED_PAGE;
+		// A page's files are found from the folder the page really is in, as a
+		// local page's are: a symlinked page names its neighbours, not the
+		// link's. A host too old to say where it resolves uses the path asked for.
+		const pageBase = expected.resolvedPath ?? located.relativePath;
 		let snapshot: ShareSnapshot | undefined;
 		const fileSnapshots: ShareSnapshot[] = [];
 		try {
 			try {
 				snapshot = await snapshotHostShareFile(deps.fetchHost, located, deps.snapshotDir(), {
 					expectedSize: expected.size,
+					// The page must still resolve where its files are found from.
+					...(page && expected.resolvedPath ? { expectedResolvedPath: expected.resolvedPath } : {}),
 					signal: controller.signal,
 					...(page ? {} : { onProgress: (copied: number) => progress(copied, expected.size * 2) }),
 				});
@@ -630,7 +638,7 @@ export function registerCloudShareIpc(deps: CloudShareIpcDeps): void {
 			let pageFiles: (PageFilesTaken & { fingerprints: Record<string, string> }) | undefined;
 			if (page) {
 				const html = await fs.readFile(taken.path, "utf8");
-				const found = await findPageFiles(located.relativePath, html, (relative) => hostPageFile(file, relative, controller.signal));
+				const found = await findPageFiles(pageBase, html, (relative) => hostPageFile(file, relative, controller.signal));
 				total = (taken.size + found.files.reduce((sum, used) => sum + used.file.size, 0)) * 2;
 				// What each file was as it downloaded, and what was missing, so a later change shows.
 				pageFiles = { files: [], skipped: [...found.skipped], referenced: new Map(), fingerprints: {} };
@@ -652,7 +660,8 @@ export function registerCloudShareIpc(deps: CloudShareIpcDeps): void {
 								expectedSize: used.file.size,
 								expectedResolvedPath: used.file.relativePath,
 								signal: controller.signal,
-								onProgress: (bytes) => { downloaded[index] = bytes; report(); },
+								// A file that grew since it was listed counts no more than listed, so progress never passes the total.
+								onProgress: (bytes) => { downloaded[index] = Math.min(bytes, used.file.size); report(); },
 							});
 							fileSnapshots.push(copy);
 							results[index] = copy;
@@ -689,7 +698,10 @@ export function registerCloudShareIpc(deps: CloudShareIpcDeps): void {
 					pageFiles?.referenced.set(used.path, used.referencedPath);
 					if (pageFiles) pageFiles.fingerprints[used.referencedPath] = hostPageFileVersion(used.file.relativePath, result.fingerprint);
 				});
-				copied = base + found.files.reduce((sum, used) => sum + used.file.size, 0);
+				// The upload sends the snapshots as they downloaded, which may differ from the listed sizes.
+				const accepted = pageFiles.files.reduce((sum, used) => sum + used.snapshot.size, 0);
+				copied = base + accepted;
+				total = (taken.size + accepted) * 2;
 			}
 			const folder = path.posix.dirname(located.relativePath);
 			const result = await uploadShare(deps, {
@@ -710,8 +722,10 @@ export function registerCloudShareIpc(deps: CloudShareIpcDeps): void {
 			await deps.records.set(key, result.share.id, taken.fingerprint, artifactShareUrl(result.share), shareAccess(result.share), served);
 			return { status: "published", share: result.share, replaced: result.replaced, ...(outcome ? { pageFiles: outcome } : {}) };
 		} finally {
+			// Each copy is removed on its own, and a failed removal never undoes a
+			// publish: a copy left behind is cleared when the app next starts.
 			for (const copy of [snapshot, ...fileSnapshots]) {
-				if (copy) await fs.rm(copy.path, { force: true });
+				if (copy) await fs.rm(copy.path, { force: true }).catch(() => undefined);
 			}
 		}
 	};
@@ -935,8 +949,10 @@ export function registerCloudShareIpc(deps: CloudShareIpcDeps): void {
 			return refusal(error);
 		} finally {
 			inFlight.delete(sender.id);
+			// Each copy is removed on its own, and a failed removal never undoes a
+			// publish: a copy left behind is cleared when the app next starts.
 			for (const copy of [snapshot, ...fileSnapshots]) {
-				if (copy) await fs.rm(copy.path, { force: true });
+				if (copy) await fs.rm(copy.path, { force: true }).catch(() => undefined);
 			}
 		}
 	});

@@ -1034,6 +1034,77 @@ describe("cloudShare IPC for a remote host's file", () => {
 		expect(await snapshots()).toEqual([]);
 	});
 
+	it("finds a symlinked host page's files beside the file it resolves to, as a local page's are", async () => {
+		const hostFiles = hostPage(`<img src="logo.png">`, { "logo.png": { body: "wrong" } });
+		hostFiles.get("sess-1/docs/deck.html")!.resolvesTo = "slides/deck.html";
+		hostFiles.set("sess-1/slides/logo.png", { body: "right", mtimeNs: MTIME_NS });
+		const { publish, hostFile, hostRequests, records } = setup({ files: true, hostFiles });
+		await expect(publish(hostFile)).resolves.toMatchObject({ status: "published", pageFiles: { included: 1, skipped: 0 } });
+		expect(hostRequests.some((request) => request.includes("/preview/files/slides/logo.png?"))).toBe(true);
+		expect(hostRequests.some((request) => request.includes("/preview/files/docs/logo.png?"))).toBe(false);
+		await expect(records.publishedPageFiles(artifactRecordKey("https://cp.test", `host:${HOST_ID}/sess-1`, "art-7"))).resolves.toEqual({
+			"slides/logo.png": `slides/logo.png\n5:${MTIME_NS / 1_000_000n}`,
+		});
+	});
+
+	it("publishes nothing from a symlinked host page pointed elsewhere while it downloads", async () => {
+		const hostFiles = hostPage(`<img src="logo.png">`, { "logo.png": { body: "png" } });
+		const deck = hostFiles.get("sess-1/docs/deck.html")!;
+		deck.resolvesTo = "slides/deck.html";
+		let served = 0;
+		// Checked in slides/ (by the panel, then by publish), downloaded once it points at docs/.
+		deck.served = () => { if (++served === 2) deck.resolvesTo = "docs/deck.html"; };
+		const { publish, hostFile, requests } = setup({ files: true, hostFiles });
+		await expect(publish(hostFile)).resolves.toMatchObject({ status: "changed" });
+		expect(requests).not.toContain("POST /api/cloud/v1/me/artifact-shares/uploads");
+		expect(await snapshots()).toEqual([]);
+	});
+
+	it("does not offer to republish a host page for a file that now resolves outside its folder, until it resolves back", async () => {
+		const hostFiles = hostPage(`<img src="link.png">`, { "link.png": { body: "png" } });
+		const link = hostFiles.get("sess-1/docs/link.png")!;
+		// Pointed out of the folder between its lookup and its download: left out, recorded as "".
+		link.served = () => { link.resolvesTo = "private/customer.png"; link.served = undefined; };
+		const { invoke, publish, hostFile } = setup({ files: true, hostFiles });
+		await expect(publish(hostFile)).resolves.toMatchObject({ status: "published", pageFiles: { included: 0, skipped: 1 } });
+		const inspect = () => invoke("cloudShare:inspect", hostFile) as Promise<{ pageFilesChanged?: boolean }>;
+		// Republishing would leave it out again.
+		expect((await inspect()).pageFilesChanged).toBeUndefined();
+		link.resolvesTo = undefined;
+		expect((await inspect()).pageFilesChanged).toBe(true);
+	});
+
+	it("never reports a host page's progress past its total when a file grew after it was listed", async () => {
+		const hostFiles = hostPage(`<img src="a.png">`, { "a.png": { body: "png" } });
+		const image = hostFiles.get("sess-1/docs/a.png")!;
+		// Looked up at 3 bytes, downloaded at 30.
+		image.served = () => { image.body = "p".repeat(30); image.served = undefined; };
+		const { publish, hostFile, sent } = setup({ files: true, hostFiles });
+		await expect(publish(hostFile)).resolves.toMatchObject({ status: "published", pageFiles: { included: 1 } });
+		const reports = sent as Array<{ sentBytes: number; totalBytes: number }>;
+		expect(reports.every((report) => report.sentBytes <= report.totalBytes)).toBe(true);
+		// The upload's total is the bytes it sent: the page and the file as downloaded.
+		const total = (`<img src="a.png">`.length + 30) * 2;
+		expect(reports.at(-1)).toEqual({ sessionId: "sess-1", path: "docs/deck.html", sentBytes: total, totalBytes: total });
+	});
+
+	it("returns a published host page though a snapshot could not be removed, and still removes the others", async () => {
+		const { publish, hostFile } = setup({ files: true, hostFiles: hostPage(`<img src="a.png"><img src="b.png">`, { "a.png": { body: "png" }, "b.png": { body: "png" } }) });
+		const realRm = fs.rm.bind(fs);
+		let attempts = 0;
+		const rm = vi.spyOn(fs, "rm").mockImplementation(async (target, options) => {
+			if (++attempts === 1) throw Object.assign(new Error("busy"), { code: "EBUSY" });
+			return realRm(target, options);
+		});
+		try {
+			await expect(publish(hostFile)).resolves.toMatchObject({ status: "published", pageFiles: { included: 2 } });
+			expect(attempts).toBe(3);
+		} finally {
+			rm.mockRestore();
+		}
+		expect(await snapshots()).toHaveLength(1);
+	});
+
 	it("offers to republish a host page when a file it uses changes, is pointed elsewhere or appears, though the page did not", async () => {
 		const hostFiles = hostPage(`<img src="a.png"><img src="later.png">`, { "a.png": { body: "png" } });
 		const { invoke, publish, hostFile, records } = setup({ files: true, hostFiles });
