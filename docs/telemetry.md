@@ -541,12 +541,38 @@ New (`historical: false`) PR outcomes add:
   controller).
 - `failed_step` is `model_check`, `branch_fetch`, `worktree`, `setup`,
   `agent_start`, `prompt` or `other`.
-- `cause` is a fixed value, never error text: `timeout`; for git and worktree
-  failures `branch_exists`, `path_exists`, `locked`, `permission`,
-  `path_too_long`, `not_a_repo`, `killed` or `other`, classified from git's
-  stderr inside the daemon; for agent and Chat starts `exited`,
-  `no_response`, `not_logged_in`, `killed` or `other`. Sentry spawn errors
-  carry `failed_step` and `cause` as tags.
+- `cause` is a fixed value from a closed list, never error text, paths or
+  messages. The daemon reads the error inside the process to choose it and
+  sends only the value. Sentry spawn errors carry `failed_step` and `cause`
+  as tags and drop any value not on this list.
+  - Any step: `timeout` (the start ran out of its time budget),
+    `permission` (permission denied, read-only file system), `disk_full`
+    (no space left or quota exceeded), `path_too_long`, `killed` (the process
+    was killed by a signal) and `other` (none of the causes below).
+  - Worktree and branch steps, from AO's own typed refusals first, then git's
+    stderr and exit state, then the operating-system error behind a non-git
+    step: `branch_exists` (the branch exists or is checked out in another
+    worktree), `path_exists` (the worktree folder is already occupied),
+    `locked` (a git lock file or a locked worktree), `not_a_repo` (the project
+    folder is not a Git repository), `unsafe_repo` (git refused a repository
+    it considers of dubious ownership), `repo_missing` (the project folder is
+    gone or not registered), `git_missing` (git is not installed, including
+    the macOS stub that needs the Command Line Tools), `in_use` (a file is held
+    by another process), `repo_corrupt` (a corrupt object or index),
+    `ref_conflict` (the branch name collides with an existing branch folder,
+    such as `a` and `a/b`), `ref_missing` (the start branch or commit does not
+    exist locally), `no_default_branch` (the default branch could not be
+    determined), `invalid_branch` (the branch name is not valid) and
+    `git_error` (git ran and failed with a message not listed here). Only
+    `git worktree` and `git status` run with English messages, so other git
+    commands in a non-English locale can report `git_error`.
+  - Agent and Chat starts: `not_logged_in`, `binary_missing` (the agent is
+    not installed, not on PATH, or not a valid executable), `agent_error` (the
+    agent answered the start request with an error), `host_failed` (AO's
+    background chat host process did not start or could not be reached),
+    `exited` (the agent process exited or disconnected while starting),
+    `no_response` (the agent did not answer in time) and `incompatible` (the
+    agent's version does not speak the protocol AO expects).
 - `mode` is `chat` or `terminal` (absent when the start failed before a mode
   was chosen), `async` is whether the start went on in the background after
   the request was answered, and `model` is a fixed Claude family alias
