@@ -6428,7 +6428,21 @@ const TurnGroup = memo(function TurnGroup({
 	// hands its copy and undo down to the outcome's action row: one row per turn.
 	// An account switch shows its own marker instead of an outcome, so its turn keeps
 	// the answer's row (or the tool-only fallback) like a finished one.
-	const endsWithOutcome = Boolean(group.outcome && group.outcome.state !== "completed" && !group.accountSwitched);
+	// A compaction that could not run says why on its own row ("Couldn't compact
+	// conversation · reason"), so the turn does not tell the same failure again.
+	const compactionToldFailure = group.outcome?.state === "failed" && Boolean(group.outcome.error?.trim()) &&
+		group.items.some((item) =>
+			item.kind === "activity" && isCompaction(item) && item.status === "failed" &&
+			item.detail?.error?.trim() === group.outcome?.error?.trim());
+	// So does a stopped /compact ("Couldn't compact conversation · Stopped"), when
+	// compacting was all the turn did.
+	const compactionToldStop = group.outcome?.state === "interrupted" &&
+		group.items.some((item) => item.kind === "activity" && isCompaction(item) && item.status === "cancelled") &&
+		group.items.every((item) => (item.kind === "activity" && isCompaction(item)) || (item.kind === "message" && item.role === "user"));
+	const compactionToldOutcome = compactionToldFailure || compactionToldStop;
+	const endsWithOutcome = Boolean(group.outcome && group.outcome.state !== "completed" && !group.accountSwitched && !compactionToldOutcome);
+	// Only the failure is told once: the turn can still be retried.
+	const compactionRetry = compactionToldFailure ? retry : undefined;
 	// A message refused for its login, in a turn that did nothing else, says what
 	// happens to it under its own bubble, so the turn needs no outcome of its own.
 	const loginNoteMessageId = login?.align === "end"
@@ -6492,13 +6506,25 @@ const TurnGroup = memo(function TurnGroup({
 						item.activityKind !== "plan" &&
 						item.activityKind !== "approval" &&
 						item.activityKind !== "user_input" &&
-						item.detail?.event !== "provider.failure",
+						item.detail?.event !== "provider.failure" &&
+						!isCompaction(item),
 				)
+		: undefined;
+	// Setup and a provider retry say so on the live row before anything else.
+	const liveRowTaken = Boolean(startup || group.liveStartupLabel || group.liveProviderFailure);
+	// A compaction under way takes over the live row ("Compacting conversation 1m")
+	// instead of drawing a row of its own; its row joins the turn when it settles.
+	// While the live row says something else, it keeps its own running row.
+	const liveCompaction = group.live && !liveRowTaken
+		? [...group.items]
+				.reverse()
+				.find((item): item is ConversationActivity => item.kind === "activity" && isCompaction(item) && item.status === "running")
 		: undefined;
 	// The step in progress shows once, on the live row next to the loader, which
 	// opens onto its command and output; its own row joins the steps above when it
-	// is done and has had its moment on the live row.
-	const liveStep = useLiveRowStep(group, Boolean(startup || group.liveStartupLabel || group.liveProviderFailure));
+	// is done and has had its moment on the live row. While a compaction holds the
+	// live row, the step keeps its own row.
+	const liveStep = useLiveRowStep(group, liveRowTaken || Boolean(liveCompaction));
 	// The live row names a visible step while it runs; between steps it says Thinking.
 	const liveTask = liveStep ?? currentTask;
 	const renderRun = (run: TimelineRun) => {
@@ -6517,6 +6543,7 @@ const TurnGroup = memo(function TurnGroup({
 				/>
 			);
 		}
+		if (run.kind === "single" && liveCompaction && run.items[0]?.id === liveCompaction.id) return null;
 		if (run.kind !== "activities") return renderSingleRun(run);
 		const activities = run.items.filter(
 			(item): item is ConversationActivity => item.kind === "activity" && item.id !== liveStep?.id,
@@ -6571,6 +6598,7 @@ const TurnGroup = memo(function TurnGroup({
 					: undefined
 			}
 			rollbackDisabled={rollbackDisabled}
+			retry={run.items[0]?.id === copyableMessageId ? compactionRetry : undefined}
 			onSelectAnnotation={onSelectAnnotation}
 			status={run.items[0]?.id === loginNoteMessageId && login
 				? <LoginStatusNote status={login.status} {...(login.ownRetry && retry ? { retry } : {})} />
@@ -6639,6 +6667,7 @@ const TurnGroup = memo(function TurnGroup({
 				// writing, so both keep the timer alone.
 				task={liveTask ? liveTaskLabel(liveTask) : group.live && !group.blocked && !tailIsReply ? "Thinking" : undefined}
 				step={liveStep}
+				compaction={liveCompaction}
 				reconnect={group.liveProviderFailure ? reconnectCopy(group.liveProviderFailure) : undefined}
 			>
 				{startup && (startup.steps.length > 0 || startup.failed) ? <SessionStartup {...startup} /> : null}
@@ -6751,14 +6780,17 @@ const TurnGroup = memo(function TurnGroup({
 			{group.live ? <TurnLiveStatus blocked={group.blocked} /> : null}
 			{/* No assistant prose to hang the undo on — still offer it so a tool-only
 			    turn is not stuck without a way back. A stopped or failed turn carries
-			    it on its outcome's row instead. */}
-			{!copyableMessageId && !group.live && !endsWithOutcome && canRollback ? (
+			    it on its outcome's row instead. One whose compaction row already said
+			    why it failed has no outcome, so its Retry is here too, or on its
+			    answer's row when it has one. */}
+			{!copyableMessageId && !group.live && !endsWithOutcome && (canRollback || compactionRetry) ? (
 				<TurnActions
-					onRollback={() => onRollback(group.turnId as string)}
+					retry={compactionRetry}
+					onRollback={canRollback ? () => onRollback(group.turnId as string) : undefined}
 					rollbackDisabled={rollbackDisabled}
 				/>
 			) : null}
-			{group.outcome && group.outcome.state !== "completed" && !group.accountSwitched && !loginNoteMessageId ? (
+			{group.outcome && group.outcome.state !== "completed" && !group.accountSwitched && !loginNoteMessageId && !compactionToldOutcome ? (
 				<TurnOutcome
 					state={group.outcome.state}
 					error={group.outcome.error}
@@ -6821,6 +6853,7 @@ function TimelineItem({
 	live,
 	onRollback,
 	rollbackDisabled,
+	retry,
 	onSelectAnnotation,
 	status,
 	pullRequestBurst,
@@ -6863,6 +6896,8 @@ function TimelineItem({
 	onRollback?: () => void;
 	/** Keep the action row mounted while another turn is running. */
 	rollbackDisabled?: boolean;
+	/** Retry the failed turn from the answer that owns its action row. */
+	retry?: TurnOutcomeRetryControl;
 	onSelectAnnotation?: (annotation: { text: string; snapshot?: ChatExcerptSnapshot; messageId?: string; revision?: number }) => void;
 	/** Where a human message stands, leading the row under its bubble. */
 	status?: ReactNode;
@@ -6878,6 +6913,7 @@ function TimelineItem({
 					live={live}
 					onRollback={onRollback}
 					rollbackDisabled={rollbackDisabled}
+					retry={retry}
 				/>
 			);
 		}
@@ -8292,7 +8328,8 @@ function isNoticeItem(item: ConversationItem | undefined): boolean {
 	// A run holding a failed call stays out of the fold, so the failure shows under it.
 	if (isOrdinaryActivity(item) && isFailedCall(item)) return true;
 	if (item.activityKind === "user_input") return item.status !== "pending";
-	return item.detail?.event !== undefined && !isSteer(item) && !isCompaction(item) && item.activityKind !== "plan";
+	// A compaction stays too: it is where the agent's earlier history was summarized.
+	return item.detail?.event !== undefined && !isSteer(item) && item.activityKind !== "plan";
 }
 
 const NO_BATCHED_REPORTS: BatchedReports = { under: new Map(), moved: new Set() };
