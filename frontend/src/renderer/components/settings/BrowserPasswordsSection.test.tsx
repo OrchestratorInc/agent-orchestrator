@@ -190,7 +190,14 @@ describe("BrowserPasswordsSection", () => {
 		const bridge = mockBridge({ list });
 		window.ao!.vault = bridge;
 		renderSection();
-		expect(await screen.findByText(/can't be opened/)).toBeInTheDocument();
+		const message = await screen.findByText(/can't be opened/);
+		// The whole warning, including "reset only if the key is gone", must be
+		// readable next to Reset: it wraps instead of being cut off.
+		expect(message).toHaveTextContent(/reset only if the key is gone/);
+		expect(message.closest(".truncate")).toBeNull();
+		expect(message.className).not.toMatch(/\btruncate\b/);
+		// Saved logins exist, they just can't be read: no "No saved passwords".
+		expect(screen.queryByText(/No saved passwords/)).not.toBeInTheDocument();
 		expect(screen.getByRole("button", { name: "Add password" })).toBeDisabled();
 		await userEvent.click(screen.getByRole("button", { name: "Reset saved passwords" }));
 		expect(bridge.reset).not.toHaveBeenCalled();

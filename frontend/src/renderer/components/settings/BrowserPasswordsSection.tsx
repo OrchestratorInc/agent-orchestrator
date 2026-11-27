@@ -142,18 +142,21 @@ export function BrowserPasswordsSection() {
 			>
 				{error ? <div className="settings-row-bar text-xs text-error" role="alert">{error}</div> : null}
 				{keyLost ? (
-					<SettingsRow label={<span className="text-error">{t("settings.passwords.keyLost")}</span>} role="alert">
+					// A bar, not a row: the whole warning wraps, so "reset only if
+					// the key is gone" is always visible next to Reset.
+					<div className="settings-row-bar flex flex-col items-start gap-2" role="alert">
+						<p className="text-pretty text-xs text-error">{t("settings.passwords.keyLost")}</p>
 						<Button onClick={() => setResetting(true)} size="sm" type="button" variant="quiet">
 							{t("settings.passwords.reset")}
 						</Button>
-					</SettingsRow>
+					</div>
 				) : null}
 				{!available ? (
 					<div className="settings-row-bar text-xs text-error" role="alert">{t("settings.passwords.keychainUnavailable")}</div>
 				) : null}
 				{loading ? (
 					<div className="settings-row-bar text-sm text-settings-muted">{t("settings.passwords.loading")}</div>
-				) : items.length === 0 ? (
+				) : items.length === 0 && !keyLost ? (
 					<div className="settings-row-bar text-sm text-settings-muted">{t("settings.passwords.empty")}</div>
 				) : (
 					items.map((item) => (
