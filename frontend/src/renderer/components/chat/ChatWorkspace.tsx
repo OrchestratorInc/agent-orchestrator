@@ -3656,6 +3656,9 @@ export function Timeline({
 	const hiddenAway = useRef(false);
 	const initialLayoutAt = useRef(0);
 	const lastScrollTop = useRef(0);
+	// Set by the reader's own wheel, touch, key and scrollbar-drag input. A jump to a
+	// marker or a prompt moves the view without it, and must not be pulled back.
+	const readerIntentAt = useRef(0);
 	const skipRelatchFollow = useRef(false);
 	const reducedMotion = useReducedMotion();
 	const reducedMotionRef = useRef(reducedMotion);
@@ -5331,9 +5334,14 @@ export function Timeline({
 		let held: Element | undefined;
 		if (settle.following) {
 			const end = Math.max(0, node.scrollHeight - node.clientHeight);
-			// A reload that settles the turn can also re-page the history above it, which
-			// the history anchor just moved the view by (it runs first in the commit).
-			const top = Math.min(settle.scrollTop + historyShift.current, end);
+			const readerHeld = performance.now() - readerIntentAt.current < READER_INTENT_HOLD_MS;
+			// When the turn grew past what the prompt spacer can absorb (a long reply
+			// that already scrolled the view), advance scrollTop to the new end before
+			// paint instead of leaving it short for followEnd to glide against the FLIP
+			// slide. Honor an active reader-intent hold (upward wheel/key/touch before
+			// its scroll event clears pinnedRef) so settling never pulls the reader back.
+			if (!readerHeld) cancelScrollFollow();
+			const top = readerHeld ? Math.min(settle.scrollTop + historyShift.current, end) : end;
 			if (Math.abs(node.scrollTop - top) >= 0.5) node.scrollTop = top;
 			markWritten(node.scrollTop);
 			lastScrollTop.current = node.scrollTop;
@@ -5384,7 +5392,7 @@ export function Timeline({
 			}
 			row.animate([{ transform: from }, { transform: "none" }], { duration: SETTLE_SLIDE_MS, easing: SETTLE_EASE });
 		});
-	}, [virtualized, virtualizer, spacerTakes, syncPromptSpacer, markWritten, updateScrollbar, releaseSettleHold]);
+	}, [virtualized, virtualizer, spacerTakes, syncPromptSpacer, cancelScrollFollow, markWritten, updateScrollbar, releaseSettleHold]);
 
 	// Rows above the view come and go: an older page loads in, or a reload re-reads the
 	// chat's pages from its new newest row and drops the oldest ones (every send does
@@ -5574,9 +5582,6 @@ export function Timeline({
 	// open something to read. Only the reader's own scrolling arms it, so streamed
 	// growth while unpinned (which moves nothing) never does.
 	const relatchTimer = useRef<number | undefined>(undefined);
-	// Set by the reader's own wheel, touch, key and scrollbar-drag input. A jump to a
-	// marker or a prompt moves the view without it, and must not be pulled back.
-	const readerIntentAt = useRef(0);
 	const noteReaderIntent = useCallback(() => {
 		readerIntentAt.current = performance.now();
 	}, []);
@@ -6428,7 +6433,21 @@ const TurnGroup = memo(function TurnGroup({
 	// hands its copy and undo down to the outcome's action row: one row per turn.
 	// An account switch shows its own marker instead of an outcome, so its turn keeps
 	// the answer's row (or the tool-only fallback) like a finished one.
-	const endsWithOutcome = Boolean(group.outcome && group.outcome.state !== "completed" && !group.accountSwitched);
+	// A compaction that could not run says why on its own row ("Couldn't compact
+	// conversation · reason"), so the turn does not tell the same failure again.
+	const compactionToldFailure = group.outcome?.state === "failed" && Boolean(group.outcome.error?.trim()) &&
+		group.items.some((item) =>
+			item.kind === "activity" && isCompaction(item) && item.status === "failed" &&
+			item.detail?.error?.trim() === group.outcome?.error?.trim());
+	// So does a stopped /compact ("Couldn't compact conversation · Stopped"), when
+	// compacting was all the turn did.
+	const compactionToldStop = group.outcome?.state === "interrupted" &&
+		group.items.some((item) => item.kind === "activity" && isCompaction(item) && item.status === "cancelled") &&
+		group.items.every((item) => (item.kind === "activity" && isCompaction(item)) || (item.kind === "message" && item.role === "user"));
+	const compactionToldOutcome = compactionToldFailure || compactionToldStop;
+	const endsWithOutcome = Boolean(group.outcome && group.outcome.state !== "completed" && !group.accountSwitched && !compactionToldOutcome);
+	// Only the failure is told once: the turn can still be retried.
+	const compactionRetry = compactionToldFailure ? retry : undefined;
 	// A message refused for its login, in a turn that did nothing else, says what
 	// happens to it under its own bubble, so the turn needs no outcome of its own.
 	const loginNoteMessageId = login?.align === "end"
@@ -6492,13 +6511,25 @@ const TurnGroup = memo(function TurnGroup({
 						item.activityKind !== "plan" &&
 						item.activityKind !== "approval" &&
 						item.activityKind !== "user_input" &&
-						item.detail?.event !== "provider.failure",
+						item.detail?.event !== "provider.failure" &&
+						!isCompaction(item),
 				)
+		: undefined;
+	// Setup and a provider retry say so on the live row before anything else.
+	const liveRowTaken = Boolean(startup || group.liveStartupLabel || group.liveProviderFailure);
+	// A compaction under way takes over the live row ("Compacting conversation 1m")
+	// instead of drawing a row of its own; its row joins the turn when it settles.
+	// While the live row says something else, it keeps its own running row.
+	const liveCompaction = group.live && !liveRowTaken
+		? [...group.items]
+				.reverse()
+				.find((item): item is ConversationActivity => item.kind === "activity" && isCompaction(item) && item.status === "running")
 		: undefined;
 	// The step in progress shows once, on the live row next to the loader, which
 	// opens onto its command and output; its own row joins the steps above when it
-	// is done and has had its moment on the live row.
-	const liveStep = useLiveRowStep(group, Boolean(startup || group.liveStartupLabel || group.liveProviderFailure));
+	// is done and has had its moment on the live row. While a compaction holds the
+	// live row, the step keeps its own row.
+	const liveStep = useLiveRowStep(group, liveRowTaken || Boolean(liveCompaction));
 	// The live row names a visible step while it runs; between steps it says Thinking.
 	const liveTask = liveStep ?? currentTask;
 	const renderRun = (run: TimelineRun) => {
@@ -6517,6 +6548,7 @@ const TurnGroup = memo(function TurnGroup({
 				/>
 			);
 		}
+		if (run.kind === "single" && liveCompaction && run.items[0]?.id === liveCompaction.id) return null;
 		if (run.kind !== "activities") return renderSingleRun(run);
 		const activities = run.items.filter(
 			(item): item is ConversationActivity => item.kind === "activity" && item.id !== liveStep?.id,
@@ -6571,6 +6603,7 @@ const TurnGroup = memo(function TurnGroup({
 					: undefined
 			}
 			rollbackDisabled={rollbackDisabled}
+			retry={run.items[0]?.id === copyableMessageId ? compactionRetry : undefined}
 			onSelectAnnotation={onSelectAnnotation}
 			status={run.items[0]?.id === loginNoteMessageId && login
 				? <LoginStatusNote status={login.status} {...(login.ownRetry && retry ? { retry } : {})} />
@@ -6591,8 +6624,6 @@ const TurnGroup = memo(function TurnGroup({
 			onOpenChange={(open) => onActivityDisclosureChange(key, open)}
 		/>
 	);
-	// Set when a reports line was drawn under a message or steer, so the prompt's action row knows it is taken.
-	let drewReportsUnder = false;
 	const renderWorkerRun = (run: TimelineRun): ReactNode | ReactNode[] => {
 		const item = run.kind === "single" ? run.items[0] : undefined;
 		if (!workerUpdates || !item) return renderRun(run);
@@ -6603,7 +6634,6 @@ const TurnGroup = memo(function TurnGroup({
 			// Reports a worker's steer carried in travel with it, as their own line.
 			const carried = batched?.under.get(item.id) ?? [];
 			if (carried.length === 0) return rows;
-			drewReportsUnder = true;
 			return [rows, reportsLine(`${run.key}:reports`, carried)];
 		}
 		if (updates.length > 0) return reportsLine(run.key, updates);
@@ -6614,14 +6644,11 @@ const TurnGroup = memo(function TurnGroup({
 			? [...piggybackedUpdates(item), ...(batched?.under.get(item.id) ?? [])].filter((update) => needsYouNow(updateIndex, update))
 			: [];
 		if (waiting.length === 0) return renderRun(run);
-		drewReportsUnder = true;
 		return [renderRun(run), reportsLine(`${run.key}:waiting`, waiting)];
 	};
 	const body: ReactNode[] = humanRuns.flatMap(renderWorkerRun);
 	const tail = workedRuns.at(-1);
 	const tailIsReply = group.live && tail?.kind === "single" && tail.items[0].kind === "message" && tail.items[0].role === "assistant";
-	// The reports line under the prompt takes the prompt's action row itself.
-	const reportsUnderPrompt = drewReportsUnder;
 	// The live row sits at the end of the turn, under what the agent has written so
 	// far, where the reader is already looking: orb, current step, timer. A provider
 	// retry shows in the same row. The setup checklist shares it too, so the handoff
@@ -6639,6 +6666,7 @@ const TurnGroup = memo(function TurnGroup({
 				// writing, so both keep the timer alone.
 				task={liveTask ? liveTaskLabel(liveTask) : group.live && !group.blocked && !tailIsReply ? "Thinking" : undefined}
 				step={liveStep}
+				compaction={liveCompaction}
 				reconnect={group.liveProviderFailure ? reconnectCopy(group.liveProviderFailure) : undefined}
 			>
 				{startup && (startup.steps.length > 0 || startup.failed) ? <SessionStartup {...startup} /> : null}
@@ -6647,10 +6675,11 @@ const TurnGroup = memo(function TurnGroup({
 	const outcome = group.outcome;
 	// "Worked for" heads every settled turn with how long it ran. With work to fold it
 	// is the fold, opening onto the steps; a turn that went straight to its answer has
-	// nothing to open, so it is the same words without the chevron. As the turn
-	// settles it fades in where the turn reserved its row, and the reply slides up
-	// into the room its steps left (restoreSettle), so the work reads as collapsing
-	// into its summary. A settled turn loaded from history mounts it without the fade.
+	// nothing to open, so it is the same words without the chevron. No blank row is
+	// reserved for it while the turn runs: as the turn settles it fades in and
+	// restoreSettle FLIP-animates the rows below into their new positions on the
+	// compositor thread, so the space opens smoothly without layout thrashing. A
+	// settled turn loaded from history mounts it without the fade.
 	const disclosureKey = `${group.key}:worked`;
 	const workedDurationMs = outcome?.durationMs !== undefined && outcome.durationMs > 0 ? outcome.durationMs : undefined;
 	// Agents the turn spawned are part of its work, so they fold with its steps.
@@ -6662,19 +6691,6 @@ const TurnGroup = memo(function TurnGroup({
 		// A message refused for its login did no work, so it gets no "Worked for".
 		outcome && !onlyRead && !loginNoteMessageId && (hasFoldedWork || workedDurationMs !== undefined),
 	);
-	// The prompt's hover actions (time, edit, copy) float in the row under its bubble.
-	// "Worked for" fills that row; without it, an empty row of the same height keeps
-	// them off the reply. A branch navigator already reserves the row in the flow.
-	const promptBubble = group.items.some(
-		(item) => item.kind === "message" && item.role === "user" && item.origin === "human" && !item.continuation && !relayedVia(item),
-	);
-	const reservesActionRow = promptBubble && !reportsUnderPrompt && !(group.turnId && onActivateBranch && branchPoints.get(group.turnId));
-	// The empty row is exactly as tall as "Worked for", which takes its place as the
-	// turn settles, so the handover moves nothing. Only one of the two is ever in the
-	// DOM, so the turn's row gap is never counted twice.
-	if (!showsWorked && reservesActionRow) {
-		body.push(<div key="turn-worked-gap" aria-hidden="true" className="h-7 shrink-0" data-turn-worked-gap="" />);
-	}
 	body.push(
 		<AnimatePresence key="turn-worked" initial={false}>
 			{outcome && showsWorked ? (
@@ -6751,14 +6767,17 @@ const TurnGroup = memo(function TurnGroup({
 			{group.live ? <TurnLiveStatus blocked={group.blocked} /> : null}
 			{/* No assistant prose to hang the undo on — still offer it so a tool-only
 			    turn is not stuck without a way back. A stopped or failed turn carries
-			    it on its outcome's row instead. */}
-			{!copyableMessageId && !group.live && !endsWithOutcome && canRollback ? (
+			    it on its outcome's row instead. One whose compaction row already said
+			    why it failed has no outcome, so its Retry is here too, or on its
+			    answer's row when it has one. */}
+			{!copyableMessageId && !group.live && !endsWithOutcome && (canRollback || compactionRetry) ? (
 				<TurnActions
-					onRollback={() => onRollback(group.turnId as string)}
+					retry={compactionRetry}
+					onRollback={canRollback ? () => onRollback(group.turnId as string) : undefined}
 					rollbackDisabled={rollbackDisabled}
 				/>
 			) : null}
-			{group.outcome && group.outcome.state !== "completed" && !group.accountSwitched && !loginNoteMessageId ? (
+			{group.outcome && group.outcome.state !== "completed" && !group.accountSwitched && !loginNoteMessageId && !compactionToldOutcome ? (
 				<TurnOutcome
 					state={group.outcome.state}
 					error={group.outcome.error}
@@ -6821,6 +6840,7 @@ function TimelineItem({
 	live,
 	onRollback,
 	rollbackDisabled,
+	retry,
 	onSelectAnnotation,
 	status,
 	pullRequestBurst,
@@ -6863,6 +6883,8 @@ function TimelineItem({
 	onRollback?: () => void;
 	/** Keep the action row mounted while another turn is running. */
 	rollbackDisabled?: boolean;
+	/** Retry the failed turn from the answer that owns its action row. */
+	retry?: TurnOutcomeRetryControl;
 	onSelectAnnotation?: (annotation: { text: string; snapshot?: ChatExcerptSnapshot; messageId?: string; revision?: number }) => void;
 	/** Where a human message stands, leading the row under its bubble. */
 	status?: ReactNode;
@@ -6878,6 +6900,7 @@ function TimelineItem({
 					live={live}
 					onRollback={onRollback}
 					rollbackDisabled={rollbackDisabled}
+					retry={retry}
 				/>
 			);
 		}
@@ -8292,7 +8315,8 @@ function isNoticeItem(item: ConversationItem | undefined): boolean {
 	// A run holding a failed call stays out of the fold, so the failure shows under it.
 	if (isOrdinaryActivity(item) && isFailedCall(item)) return true;
 	if (item.activityKind === "user_input") return item.status !== "pending";
-	return item.detail?.event !== undefined && !isSteer(item) && !isCompaction(item) && item.activityKind !== "plan";
+	// A compaction stays too: it is where the agent's earlier history was summarized.
+	return item.detail?.event !== undefined && !isSteer(item) && item.activityKind !== "plan";
 }
 
 const NO_BATCHED_REPORTS: BatchedReports = { under: new Map(), moved: new Set() };

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { activityHierarchy, activityNodesRunning, activityStartsExpanded, canRollbackTurn, countActivityNodes, editableHumanTurns, groupConversationByTurn, sameEditableTurns, partitionTurnItems, readableConversationItems, settledTurnItems, summarizeActivities } from "./timelineModel";
+import { activityHierarchy, activityNodesRunning, activityStartsExpanded, canRollbackTurn, compactionLine, countActivityNodes, editableHumanTurns, groupConversationByTurn, sameEditableTurns, partitionTurnItems, readableConversationItems, settledTurnItems, summarizeActivities } from "./timelineModel";
 import * as timelineModel from "./timelineModel";
 import type { ConversationActivity, ConversationItem, ConversationSnapshot, ConversationTurn } from "./types";
 
@@ -379,6 +379,31 @@ describe("settledTurnItems", () => {
 		const status = (state: ConversationTurn["state"]) => (settledTurnItems([command("running")], turn(state))[0] as ConversationActivity).status;
 		expect([status("completed"), status("recovered"), status("interrupted"), status("failed")]).toEqual(["completed", "completed", "cancelled", "failed"]);
 		expect((settledTurnItems([command("failed")], turn("completed"))[0] as ConversationActivity).status).toBe("failed");
+	});
+});
+
+// The daemon writes a compaction's row while it runs, then settles it as done,
+// failed, stopped or "nothing to compact", all under the same event.
+describe("compactionLine", () => {
+	const compaction = (status: ConversationActivity["status"], detail: ConversationActivity["detail"] = {}): ConversationActivity => ({
+		kind: "activity", id: "cc", sequence: 1, revision: 0, activityKind: "system", status, summary: "",
+		detail: { event: "compaction", ...detail }, createdAt: "",
+	});
+
+	it("says a compaction under way is still running", () => {
+		expect(compactionLine(compaction("running", { tokensBefore: 180000, contextWindow: 200000 }))).toBe("Compacting conversation");
+	});
+
+	it("names what a finished compaction freed and how full the context is now", () => {
+		expect(compactionLine(compaction("completed", { tokensBefore: 180000, tokensAfter: 24000, tokensReclaimed: 156000, contextWindow: 200000 })))
+			.toBe("Compacted conversation · −156k · 12% full");
+		expect(compactionLine(compaction("completed"))).toBe("Compacted conversation");
+	});
+
+	it("says why a compaction could not run, or that it was stopped", () => {
+		expect(compactionLine(compaction("failed", { error: "Nothing to compact" }))).toBe("Couldn't compact conversation · Nothing to compact");
+		expect(compactionLine(compaction("cancelled"))).toBe("Couldn't compact conversation · Stopped");
+		expect(compactionLine(compaction("failed"))).toBe("Couldn't compact conversation");
 	});
 });
 

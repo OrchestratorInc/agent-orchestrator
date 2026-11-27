@@ -95,6 +95,7 @@ import type {
 import {
 	activityHierarchy,
 	activityNodesRunning,
+	compactionLine,
 	activityStartsExpanded,
 	canRollbackTurn,
 	conversationTimelineRenderPlan,
@@ -1575,9 +1576,7 @@ function UserInputCard({ activity, busy, onResolve, handledBelow }: { activity: 
 function CompactionMarker({ activity }: { activity: ConversationActivity }) {
 	const t = useTheme();
 	const styles = useThemedStyles(makeStyles);
-	const after = activity.detail?.tokensAfter;
-	const window = activity.detail?.contextWindow;
-	return <View style={styles.compaction}><Feather name="archive" size={iconSize.xs} color={t.textFaint} /><Text style={styles.compactionText}>History compacted{activity.detail?.tokensReclaimed ? ` · −${formatTokens(activity.detail.tokensReclaimed)}` : ""}{after && window ? ` · ${Math.round((after / window) * 100)}% full` : ""}</Text></View>;
+	return <View style={styles.compaction}><Feather name="archive" size={iconSize.xs} color={t.textFaint} /><Text style={styles.compactionText}>{compactionLine(activity)}</Text></View>;
 }
 
 function ErrorActivity({ activity }: { activity: ConversationActivity }) {
@@ -1651,7 +1650,6 @@ function activityMeta(activity: ConversationActivity): { icon: keyof typeof Feat
 }
 
 function elapsed(start?: string, end?: string): string | undefined { if (!start || !end) return undefined; const ms = Date.parse(end) - Date.parse(start); if (!Number.isFinite(ms) || ms < 0) return undefined; const seconds = Math.round(ms / 1000); return seconds < 60 ? `${seconds}s` : `${Math.floor(seconds / 60)}m ${seconds % 60}s`; }
-function formatTokens(value: number): string { return value >= 1_000 ? `${(value / 1_000).toFixed(value >= 10_000 ? 0 : 1)}k` : String(value); }
 /** The Review pill's drawn height; its hit slop makes up the rest of a touch target. */
 const REVIEW_PILL_HEIGHT = 32;
 
