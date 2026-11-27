@@ -850,3 +850,14 @@ func TestServeForegroundStopRightAfterBootingObservation(t *testing.T) {
 		t.Fatal("serve started a daemon in place of the stopped one")
 	}
 }
+
+// The in-process daemon chdirs into its data dir, so relative state paths
+// are made absolute first.
+func TestAbsoluteStatePaths(t *testing.T) {
+	cfg := config.Config{DataDir: "/work/data", RunFilePath: "/work/running.json"}
+	got := absoluteStatePaths([]string{"AO_DATA_DIR=data", "AO_RUN_FILE=running.json", "PATH=/bin"}, cfg)
+	want := []string{"AO_DATA_DIR=/work/data", "AO_RUN_FILE=/work/running.json", "PATH=/bin"}
+	if strings.Join(got, "|") != strings.Join(want, "|") {
+		t.Fatalf("absoluteStatePaths = %v, want %v", got, want)
+	}
+}

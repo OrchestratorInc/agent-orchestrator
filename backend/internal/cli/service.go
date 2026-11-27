@@ -265,6 +265,11 @@ func (c *commandContext) currentServiceSpec(port int) (serviceSpec, error) {
 	if err != nil {
 		return serviceSpec{}, fmt.Errorf("resolve ao executable: %w", err)
 	}
+	if serviceGOOS == "linux" && strings.Contains(exe, "$") {
+		// systemd expands $ in ExecStart, and its ":" prefix that turns
+		// expansion off needs systemd 249+.
+		return serviceSpec{}, fmt.Errorf("the ao binary path %q contains a $, which a systemd unit cannot run reliably; install ao in a path without one", exe)
+	}
 	if abs, err := filepath.Abs(exe); err == nil {
 		exe = abs
 	}
@@ -412,6 +417,15 @@ func (c *commandContext) serviceInstall(ctx context.Context, opts serviceOptions
 	if exists && !owned {
 		return serviceStatus{}, fmt.Errorf("%s exists and was not written by `ao service install`; leaving it alone", spec.File)
 	}
+	if !exists && spec.Manager == serviceManagerLaunchd {
+		// The label is loaded but not from our file: another definition owns
+		// it, and booting it out could stop something that isn't ours.
+		if loaded, err := c.launchdJobLoaded(ctx, spec); err != nil {
+			return serviceStatus{}, err
+		} else if loaded {
+			return serviceStatus{}, fmt.Errorf("a launchd job named %s is already loaded, but not from %s; leaving it alone. If it is a leftover of ours, remove it with: launchctl bootout %s/%s", spec.Name, spec.File, launchdDomain(), spec.Name)
+		}
+	}
 	before, err := c.inspectDaemon(ctx)
 	if err != nil {
 		return serviceStatus{}, err
@@ -437,12 +451,14 @@ func (c *commandContext) serviceInstall(ctx context.Context, opts serviceOptions
 	// A reinstall replaces our earlier definition; keep it, and whether that
 	// service was running, so a failed reinstall can put it back.
 	var previous []byte
-	previousRunning := false
+	previousRunning, previousEnabled := false, false
 	if exists {
 		if previous, err = os.ReadFile(spec.File); err != nil {
 			return serviceStatus{}, err
 		}
 		previousRunning = c.serviceLoaded(ctx, spec)
+		previousEnabled = spec.Manager != serviceManagerSystemd ||
+			c.serviceCmd(ctx, "systemctl", "--user", "is-enabled", "--quiet", spec.Name+".service") == nil
 	}
 	if err := os.MkdirAll(filepath.Dir(spec.File), 0o700); err != nil {
 		return serviceStatus{}, err
@@ -455,7 +471,7 @@ func (c *commandContext) serviceInstall(ctx context.Context, opts serviceOptions
 	enabled := false
 	rollback := func(cause error) (serviceStatus, error) {
 		if exists {
-			if err := c.restorePreviousService(ctx, spec, previous, previousRunning); err != nil {
+			if err := c.restorePreviousService(ctx, spec, previous, previousRunning, previousEnabled); err != nil {
 				return serviceStatus{}, fmt.Errorf("%w; restoring the previous service also failed: %w", cause, err)
 			}
 			return serviceStatus{}, cause
@@ -472,8 +488,9 @@ func (c *commandContext) serviceInstall(ctx context.Context, opts serviceOptions
 	}
 	switch spec.Manager {
 	case serviceManagerLaunchd:
-		if exists || c.serviceLoaded(ctx, spec) {
-			// Reload so a changed binary path, port or env takes effect.
+		if exists {
+			// Reload our earlier install so a changed binary, port or env
+			// takes effect.
 			_ = c.serviceCmd(ctx, "launchctl", "bootout", launchdDomain()+"/"+spec.Name)
 		}
 		if err := c.launchdBootstrap(ctx, spec); err != nil {
@@ -516,6 +533,9 @@ func (c *commandContext) serviceInstall(ctx context.Context, opts serviceOptions
 		return serviceStatus{}, err
 	}
 	st.Daemon = &ds
+	if ds.State != stateReady || checkDaemonDataDir(ds, cfg.DataDir) != nil {
+		return st, fmt.Errorf("service installed, but the daemon is %s now; check it with `ao service status`", ds.State)
+	}
 	return st, nil
 }
 
@@ -555,12 +575,23 @@ func selfHostedService(spec serviceSpec) (file, dataDir string) {
 	if name == "" {
 		return "", ""
 	}
-	file = filepath.Join(filepath.Dir(spec.File), name)
-	data, err := os.ReadFile(file)
-	if err != nil {
+	home, _ := os.UserHomeDir()
+	// Next to our file, and where the setup script itself writes: it ignores
+	// XDG_CONFIG_HOME and always uses ~/.config/systemd/user.
+	candidates := []string{filepath.Join(filepath.Dir(spec.File), name)}
+	if spec.Manager == serviceManagerSystemd && home != "" {
+		candidates = append(candidates, filepath.Join(home, ".config", "systemd", "user", name))
+	}
+	var data []byte
+	for _, candidate := range candidates {
+		if b, err := os.ReadFile(candidate); err == nil {
+			file, data = candidate, b
+			break
+		}
+	}
+	if file == "" {
 		return "", ""
 	}
-	home, _ := os.UserHomeDir()
 	dataDir = filepath.Join(home, ".ao", "data")
 	// The script's runner exports AO_DATA_DIR only when it was set at setup.
 	if runner := selfHostedRunnerRE.Find(data); runner != nil {
@@ -794,7 +825,7 @@ func (c *commandContext) launchdJobLoaded(ctx context.Context, spec serviceSpec)
 
 // restorePreviousService puts back the definition a failed reinstall
 // replaced, and starts it again if it was running before.
-func (c *commandContext) restorePreviousService(ctx context.Context, spec serviceSpec, previous []byte, wasRunning bool) error {
+func (c *commandContext) restorePreviousService(ctx context.Context, spec serviceSpec, previous []byte, wasRunning, wasEnabled bool) error {
 	if err := writeFileAtomic(spec.File, previous); err != nil {
 		return err
 	}
@@ -806,6 +837,12 @@ func (c *commandContext) restorePreviousService(ctx context.Context, spec servic
 	case serviceManagerSystemd:
 		if err := c.serviceCmd(ctx, "systemctl", "--user", "daemon-reload"); err != nil {
 			return err
+		}
+		if !wasEnabled {
+			// The failed install enabled it; a running unit keeps running.
+			if err := c.serviceCmd(ctx, "systemctl", "--user", "disable", spec.Name+".service"); err != nil {
+				return err
+			}
 		}
 		if wasRunning {
 			return c.serviceCmd(ctx, "systemctl", "--user", "restart", spec.Name+".service")

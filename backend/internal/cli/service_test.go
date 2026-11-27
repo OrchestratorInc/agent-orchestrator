@@ -96,6 +96,14 @@ func serviceTestDeps(calls *[]serviceCall, fail map[string]bool) Deps {
 			if fail[name+" "+args[0]] || (len(args) > 1 && fail[name+" "+args[0]+" "+args[1]]) {
 				return []byte("refused"), errors.New("exit status 1")
 			}
+			// launchd knows a label while our plist for it is installed.
+			if name == "launchctl" && args[0] == "print" {
+				home, _ := os.UserHomeDir()
+				label := args[1][strings.LastIndex(args[1], "/")+1:]
+				if _, err := os.Stat(filepath.Join(home, "Library", "LaunchAgents", label+".plist")); err != nil {
+					return []byte("Could not find service"), errors.New("exit status 113")
+				}
+			}
 			return nil, nil
 		},
 	}
@@ -125,7 +133,8 @@ func TestServiceLaunchdInstallStatusUninstall(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(string(data), "<string>/opt/ao/bin/ao</string>") {
+	exe, _ := filepath.Abs("/opt/ao/bin/ao") // a native path on every OS
+	if !strings.Contains(string(data), "<string>"+xmlEscape(exe)+"</string>") {
 		t.Fatalf("plist does not run this ao:\n%s", data)
 	}
 	last := calls[len(calls)-1]
@@ -450,6 +459,12 @@ func TestServiceReinstallDoesNotReportItsOwnDaemon(t *testing.T) {
 		t.Fatal(err)
 	}
 	var calls []serviceCall
+	// A first install, whose job runs daemon 4242 in process.
+	first := serviceTestDeps(&calls, nil)
+	first.ProcessAlive = func(pid int) bool { return pid == 4242 }
+	if _, _, err := executeCLI(t, first, "service", "install", "--no-wait"); err != nil {
+		t.Fatal(err)
+	}
 	deps := serviceTestDeps(&calls, nil)
 	deps.ProcessAlive = func(pid int) bool { return pid == 4242 }
 	deps.CommandOutput = func(_ context.Context, name string, args ...string) ([]byte, error) {
@@ -668,7 +683,11 @@ func TestServiceInstallAllowsSelfHostedServiceOnOtherDataDir(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	writeSelfHostedService(t, filepath.Dir(spec.File), t.TempDir())
+	other := t.TempDir()
+	writeSelfHostedService(t, filepath.Dir(spec.File), other)
+	if _, got := selfHostedService(spec); got != other {
+		t.Fatalf("runner data dir = %q, want %q read from the runner", got, other)
+	}
 	if _, _, err := executeCLI(t, deps, "service", "install", "--no-wait"); err != nil {
 		t.Fatalf("install refused although the self-hosted service uses another data dir: %v", err)
 	}
@@ -950,5 +969,156 @@ func TestWriteFileAtomic(t *testing.T) {
 	}
 	if got, _ := os.ReadFile(path); string(got) != "new" {
 		t.Fatalf("failed write damaged the file: %q", got)
+	}
+}
+
+// systemd expands $ in ExecStart, so an ao path with one is refused up front.
+func TestServiceSystemdRefusesDollarInBinaryPath(t *testing.T) {
+	setConfigEnv(t)
+	setServiceHome(t)
+	old := serviceGOOS
+	serviceGOOS = "linux"
+	t.Cleanup(func() { serviceGOOS = old })
+	var calls []serviceCall
+	deps := serviceTestDeps(&calls, nil)
+	deps.Executable = func() (string, error) { return "/opt/AO$dev/ao", nil }
+	_, _, err := executeCLI(t, deps, "service", "install", "--no-wait")
+	if err == nil || !strings.Contains(err.Error(), "contains a $") {
+		t.Fatalf("err = %v, want a refusal for $ in the binary path", err)
+	}
+	if len(calls) != 0 {
+		t.Fatalf("service manager called: %#v", calls)
+	}
+}
+
+// A failed reinstall of a unit that was disabled undoes the enable it did,
+// without stopping a unit that was running.
+func TestServiceSystemdRollbackRestoresDisabledState(t *testing.T) {
+	setConfigEnv(t)
+	setServiceHome(t)
+	t.Setenv("XDG_CONFIG_HOME", "")
+	old := serviceGOOS
+	serviceGOOS = "linux"
+	t.Cleanup(func() { serviceGOOS = old })
+	if _, _, err := executeCLI(t, systemdDeps(t, nil, nil), "service", "install", "--no-wait"); err != nil {
+		t.Fatal(err)
+	}
+	var got []string
+	deps := systemdDeps(t, nil, map[string]bool{"systemctl --user is-enabled": true, "systemctl --user restart": true})
+	inner := deps.CommandOutput
+	deps.CommandOutput = func(ctx context.Context, name string, args ...string) ([]byte, error) {
+		got = append(got, name+" "+strings.Join(args, " "))
+		return inner(ctx, name, args...)
+	}
+	if _, _, err := executeCLI(t, deps, "service", "install", "--no-wait"); err == nil {
+		t.Fatal("reinstall succeeded although restart failed")
+	}
+	disabled, stopped := false, false
+	for _, c := range got {
+		if strings.HasPrefix(c, "systemctl --user disable ") && !strings.Contains(c, "--now") {
+			disabled = true
+		}
+		if strings.Contains(c, "--now") || strings.HasPrefix(c, "systemctl --user stop") {
+			stopped = true
+		}
+	}
+	if !disabled || stopped {
+		t.Fatalf("rollback calls %v: want a plain disable and no stop", got)
+	}
+}
+
+// Install never boots out a label that is loaded from some other file.
+func TestServiceLaunchdRefusesForeignLoadedLabel(t *testing.T) {
+	setConfigEnv(t)
+	setServiceHome(t)
+	old := serviceGOOS
+	serviceGOOS = "darwin"
+	t.Cleanup(func() { serviceGOOS = old })
+	var calls []serviceCall
+	deps := serviceTestDeps(&calls, nil)
+	deps.CommandOutput = func(_ context.Context, name string, args ...string) ([]byte, error) {
+		calls = append(calls, serviceCall{name, args})
+		return nil, nil // every label is loaded, from somewhere else
+	}
+	_, _, err := executeCLI(t, deps, "service", "install", "--no-wait")
+	if err == nil || !strings.Contains(err.Error(), "already loaded, but not from") {
+		t.Fatalf("err = %v, want a refusal for a foreign loaded label", err)
+	}
+	for _, c := range calls {
+		if c.args[0] == "bootout" || c.args[0] == "bootstrap" {
+			t.Fatalf("install touched the foreign job: %#v", c)
+		}
+	}
+}
+
+// The setup script writes its unit under ~/.config/systemd/user even when
+// XDG_CONFIG_HOME points elsewhere; the conflict check must still find it.
+func TestServiceSystemdFindsSelfHostedUnitOutsideXDG(t *testing.T) {
+	cfg := setConfigEnv(t)
+	setServiceHome(t)
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	old := serviceGOOS
+	serviceGOOS = "linux"
+	t.Cleanup(func() { serviceGOOS = old })
+	home, _ := os.UserHomeDir()
+	runner := filepath.Join(t.TempDir(), "run-daemon.sh")
+	if err := os.WriteFile(runner, []byte("#!/usr/bin/env bash\nexport AO_DATA_DIR="+cfg.dataDir+"\nexec /x/ao daemon\n"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	unitDir := filepath.Join(home, ".config", "systemd", "user")
+	if err := os.MkdirAll(unitDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(unitDir, "ao-self-hosted.service"), []byte("[Service]\nExecStart=\""+runner+"\"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	_, _, err := executeCLI(t, systemdDeps(t, nil, nil), "service", "install", "--no-wait")
+	if err == nil || !strings.Contains(err.Error(), "self-hosted host service") {
+		t.Fatalf("err = %v, want the script's unit found under ~/.config", err)
+	}
+}
+
+// Install reports failure when the daemon is no longer ready at the end.
+func TestServiceInstallFailsWhenDaemonNotReadyAtEnd(t *testing.T) {
+	cfg := setConfigEnv(t)
+	setServiceHome(t)
+	old := serviceGOOS
+	serviceGOOS = "darwin"
+	t.Cleanup(func() { serviceGOOS = old })
+	srv := fakeServeDaemon(t, 4242)
+	if err := runfile.Write(cfg.runFile, runfile.Info{PID: 4242, Port: serverPort(t, srv.URL), StartedAt: time.Unix(100, 0).UTC()}); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(serveAttachMarker(cfg.runFile, 777), nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var calls []serviceCall
+	deps := serviceTestDeps(&calls, nil)
+	loaded, afterBootstrap := false, 0
+	deps.ProcessAlive = func(pid int) bool {
+		if loaded {
+			afterBootstrap++
+			if afterBootstrap >= 2 { // the desktop daemon exits after readiness
+				_ = runfile.Remove(cfg.runFile)
+				return false
+			}
+		}
+		return pid == 4242
+	}
+	deps.CommandOutput = func(_ context.Context, _ string, args ...string) ([]byte, error) {
+		switch args[0] {
+		case "print":
+			if !loaded {
+				return []byte("Could not find service"), errors.New("exit status 113")
+			}
+			return []byte("\tpid = 777\n"), nil
+		case "bootstrap":
+			loaded = true
+		}
+		return nil, nil
+	}
+	_, _, err := executeCLI(t, deps, "service", "install")
+	if err == nil || !strings.Contains(err.Error(), "service installed, but the daemon is") {
+		t.Fatalf("err = %v, want install to report the daemon is no longer ready", err)
 	}
 }

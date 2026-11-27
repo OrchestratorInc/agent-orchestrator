@@ -19,6 +19,7 @@ import (
 	telemetryadapter "github.com/aoagents/agent-orchestrator/backend/internal/adapters/telemetry"
 	"github.com/aoagents/agent-orchestrator/backend/internal/config"
 	"github.com/aoagents/agent-orchestrator/backend/internal/daemon"
+	"github.com/aoagents/agent-orchestrator/backend/internal/runfile"
 	"github.com/aoagents/agent-orchestrator/backend/internal/sessionenv"
 )
 
@@ -294,10 +295,31 @@ func (c *commandContext) serveForegroundLoop(ctx context.Context, out, errOut io
 	}
 	defer func() { _ = os.Remove(marker) }()
 	if res == nil {
-		env := serveEnv(os.Environ(), opts.port, telemetryOptedOut(cfg.DataDir), Version)
+		env := absoluteStatePaths(serveEnv(os.Environ(), opts.port, telemetryOptedOut(cfg.DataDir), Version), cfg)
 		noteAnalyticsOnce(errOut, cfg, env)
-		if err := serveForegroundDaemon(env); err != nil {
+		// daemon.Run installs its own SIGINT/SIGTERM handler only after the
+		// data-dir lock and store setup; until then serveForeground's handler
+		// alone sees a stop. A stop before the daemon has published its run
+		// file ends the process at once; after that, the daemon's handler
+		// shuts it down and the stop is not mistaken for an app swap.
+		running := make(chan struct{})
+		go func() {
+			select {
+			case <-ctx.Done():
+				if info, err := runfile.Read(cfg.RunFilePath); err != nil || info == nil || info.PID != os.Getpid() {
+					_ = os.Remove(marker)
+					os.Exit(0)
+				}
+			case <-running:
+			}
+		}()
+		err := serveForegroundDaemon(env)
+		close(running)
+		if err != nil {
 			return err
+		}
+		if ctx.Err() != nil {
+			return nil // stopped by a signal: no replacement to wait for
 		}
 		// A clean exit is `ao stop`, or the app replacing this daemon.
 		res, err = c.waitForReplacement(ctx, cfg)
@@ -635,6 +657,24 @@ func runForegroundDaemon(env []string) error {
 		return err
 	}
 	return daemon.Run(Version)
+}
+
+// absoluteStatePaths rewrites AO_DATA_DIR and AO_RUN_FILE in env to the
+// absolute paths cfg resolved. The in-process daemon chdirs into its data
+// dir, after which a relative value would resolve somewhere else.
+func absoluteStatePaths(env []string, cfg config.Config) []string {
+	out := make([]string, 0, len(env))
+	for _, kv := range env {
+		k, _, _ := strings.Cut(kv, "=")
+		switch sessionenv.NormalizeKey(k) {
+		case "AO_DATA_DIR":
+			kv = k + "=" + cfg.DataDir
+		case "AO_RUN_FILE":
+			kv = k + "=" + cfg.RunFilePath
+		}
+		out = append(out, kv)
+	}
+	return out
 }
 
 // applyProcessEnv makes this process's environment exactly env: it sets
