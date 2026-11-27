@@ -165,6 +165,19 @@ func (s *Service) HasChatView(id domain.SessionID) bool {
 	return len(views) != 0
 }
 
+// OpenChats lists the sessions a renderer has open now, without the close grace.
+func (s *Service) OpenChats() []domain.SessionID {
+	s.viewMu.Lock()
+	defer s.viewMu.Unlock()
+	var ids []domain.SessionID
+	for id := range s.viewLeases {
+		if s.liveViewLeasesLocked(id) != nil {
+			ids = append(ids, id)
+		}
+	}
+	return ids
+}
+
 // Callers hold viewMu. Expired leases cannot keep a provider alive after a
 // renderer crash or a missed release request.
 func (s *Service) liveViewLeasesLocked(id domain.SessionID) map[string]time.Time {
@@ -376,10 +389,25 @@ func (s *Service) hibernateChat(ctx context.Context, id domain.SessionID, opts h
 	}
 	// Persist the intent while intake is fenced. A failed or contested write
 	// leaves the provider alive; a crash during shutdown can finish it on boot.
+	if opts.versionRefresh || opts.forUpdate {
+		if moves, ok := s.sessions.(ports.SessionVersionMoveStore); ok {
+			if err := moves.PutSessionVersionMove(ctx, domain.NewSessionVersionMove(fresh)); err != nil {
+				controller.sendMu.Unlock()
+				return false, err
+			}
+		}
+	}
 	at := s.now()
 	applied, err := marker.SetSessionHibernated(ctx, id, fresh.Revision, &at)
 	if err != nil || !applied {
 		controller.sendMu.Unlock()
+		if opts.versionRefresh || opts.forUpdate {
+			if moves, ok := s.sessions.(ports.SessionVersionMoveStore); ok {
+				cleanup, cancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
+				defer cancel()
+				err = errors.Join(err, moves.DeleteSessionVersionMove(cleanup, id))
+			}
+		}
 		return false, err
 	}
 	controller.mu.Lock()
@@ -420,6 +448,9 @@ func (s *Service) hibernateChat(ctx context.Context, id domain.SessionID, opts h
 		// The wake that follows starts the installed release; remember which
 		// one, so a failed start keeps the user's queued messages.
 		s.noteVersionSwitch(id, fresh.StaleBinary.Version)
+		if err := s.recordVersionMoveStopped(finishCtx, id); err != nil {
+			return true, err
+		}
 		s.log.Info("chat session stopped to move to a new harness release", "session", id, "harness", fresh.Harness, "version", fresh.StaleBinary.Version)
 		return true, nil
 	}
@@ -432,6 +463,9 @@ func (s *Service) hibernateChat(ctx context.Context, id domain.SessionID, opts h
 		}
 		s.updateStops[id] = true
 		s.wakeMu.Unlock()
+		if err := s.recordVersionMoveStopped(finishCtx, id); err != nil {
+			return true, err
+		}
 		s.log.Info("chat session stopped for a harness update", "session", id, "harness", fresh.Harness)
 		return true, nil
 	}

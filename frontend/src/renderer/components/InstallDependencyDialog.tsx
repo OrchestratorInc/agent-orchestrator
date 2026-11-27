@@ -94,15 +94,15 @@ export function useInstallRunner(onSucceeded: () => void, telemetry?: () => Inst
 	telemetryRef.current = telemetry;
 	// The action the install in flight reports as; undefined when it reports nothing.
 	const reportingRef = useRef<InstallTelemetry | undefined>(undefined);
-	const settleTelemetry = (doneTarget: InstallTarget, status: string | undefined, startFailed?: { errorCode?: string }) => {
+	const settleTelemetry = (doneTarget: InstallTarget, job: Pick<InstallJob, "status" | "failureCause"> | undefined, startFailed?: { errorCode?: string }) => {
 		const reporting = reportingRef.current;
 		if (!reporting) return;
 		if (startFailed) {
 			finishOnboardingAction(reporting.action, "failed", { target: doneTarget, reason: "start_failed", errorCode: startFailed.errorCode });
 			return;
 		}
-		const end = installJobOutcome(status);
-		if (end) finishOnboardingAction(reporting.action, end.outcome, { target: doneTarget, reason: end.reason });
+		const end = installJobOutcome(job?.status, job?.failureCause);
+		if (end) finishOnboardingAction(reporting.action, end.outcome, { target: doneTarget, reason: end.reason, failureCause: end.failureCause });
 	};
 	const markSucceeded = (doneTarget: InstallTarget) => {
 		setSucceededTargets((current) => new Set(current).add(doneTarget));
@@ -130,7 +130,7 @@ export function useInstallRunner(onSucceeded: () => void, telemetry?: () => Inst
 				setJob(data as InstallJobWithNotice);
 				if (isActiveInstallJob(data)) return;
 				stopPolling();
-				settleTelemetry(polledTarget, data.status);
+				settleTelemetry(polledTarget, data);
 				if (data.status === "succeeded") markSucceeded(polledTarget);
 			})();
 		}, POLL_INTERVAL_MS);
@@ -181,7 +181,7 @@ export function useInstallRunner(onSucceeded: () => void, telemetry?: () => Inst
 			setJob(data as InstallJobWithNotice);
 			if (isActiveInstallJob(data)) poll(nextTarget);
 			else {
-				settleTelemetry(nextTarget, data.status);
+				settleTelemetry(nextTarget, data);
 				if (data.status === "succeeded") markSucceeded(nextTarget);
 			}
 		} catch (err) {

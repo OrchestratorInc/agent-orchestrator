@@ -1,5 +1,7 @@
 import type { GitHubIssueArtifact, GitHubIssueArtifactResult, GitHubIssueChoice } from "./shared/github-issue-artifact";
 import type { TriageResult } from "./main/triage-launch";
+import type { VaultListResult } from "./main/browser-vault-ipc";
+import type { VaultAuditEntry, VaultItemInput, VaultItemSummary } from "./main/browser-vault-store";
 import { contextBridge, ipcRenderer, webUtils } from "electron";
 import { installRendererErrorHandlers } from "./shared/renderer-error-handlers";
 import { APP_MENU_ACTION_CHANNEL, SET_APP_MENU_AVAILABILITY_CHANNEL, type AppMenuActionId, type AppMenuAvailability, APP_SHORTCUT_CHANNEL, APP_SHORTCUT_PRESSED_CHANNEL, type AppShortcutId, CLOSE_SHELL_TERMINAL_SHORTCUT_CHANNEL, KEYBOARD_SHORTCUTS_HELP_CHANNEL, NEXT_SESSION_SHORTCUT_CHANNEL, NEXT_TAB_SHORTCUT_CHANNEL, NEW_SESSION_SHORTCUT_CHANNEL, NEW_SHELL_TERMINAL_SHORTCUT_CHANNEL, OPEN_SETTINGS_SHORTCUT_CHANNEL, PREVIOUS_SESSION_SHORTCUT_CHANNEL, PREVIOUS_TAB_SHORTCUT_CHANNEL, QUIT_CONFIRM_REQUEST_CHANNEL, QUIT_CONFIRM_RESULT_CHANNEL, SET_CLOSE_SHELL_TERMINAL_SHORTCUT_ENABLED_CHANNEL, SET_TERMINAL_FOCUSED_CHANNEL, TERMINAL_FONT_SIZE_SHORTCUT_CHANNEL, SET_ARTIFACT_ZOOM_ENGAGED_CHANNEL, ARTIFACT_ZOOM_SHORTCUT_CHANNEL, type ArtifactZoomAction, type AppShortcutEvent, type KeybindingOverrides, type QuitConfirmRequest } from "./shared/shortcuts";
@@ -530,6 +532,9 @@ const api = {
 		// the translucent shell blurs the desktop behind it.
 		setWindowTranslucent: (enabled: boolean) =>
 			ipcRenderer.invoke("theme:set-window-translucent", enabled) as Promise<void>,
+		// macOS only: Interface v2 moves the native window buttons with its wider
+		// edge spacing.
+		setInterfaceV2: (enabled: boolean) => ipcRenderer.invoke("theme:set-interface-v2", enabled) as Promise<void>,
 	},
 	menu: {
 		action: (action: string) => ipcRenderer.invoke("menu:action", action) as Promise<void>,
@@ -563,7 +568,9 @@ const api = {
 	// The main process reads and uploads the file; the renderer never sees
 	// the file or the token. See shared/cloud-share.ts.
 	cloudShare: {
-		inspect: (file: CloudShareFile) => ipcRenderer.invoke("cloudShare:inspect", file) as Promise<CloudShareInspection>,
+		// linkOnly reads the link alone, without looking up whether the page's files changed.
+		inspect: (file: CloudShareFile, options?: { linkOnly?: boolean }) =>
+			ipcRenderer.invoke("cloudShare:inspect", file, options) as Promise<CloudShareInspection>,
 		available: (baseUrl: string) => ipcRenderer.invoke("cloudShare:available", { baseUrl }) as Promise<boolean | null>,
 		list: (baseUrl: string) => ipcRenderer.invoke("cloudShare:list", { baseUrl }) as Promise<CloudShareLinks>,
 		/** The links this computer published remote hosts' files to; their daemons list none. */
@@ -739,6 +746,8 @@ const api = {
 			ipcRenderer.invoke("browser:selectTab", input) as Promise<BrowserTabsState>,
 		closeTab: (input: { viewId: string; tabId: string }) =>
 			ipcRenderer.invoke("browser:closeTab", input) as Promise<BrowserTabsState>,
+		muteTab: (input: { viewId: string; tabId: string; muted: boolean }) =>
+			ipcRenderer.invoke("browser:muteTab", input) as Promise<BrowserTabsState>,
 		openTab: (input: { viewId: string; url?: string }) =>
 			ipcRenderer.invoke("browser:openTab", input) as Promise<BrowserTabsState>,
 		getProfile: (viewId: string) =>
@@ -900,6 +909,14 @@ const api = {
 				ipcRenderer.off("browser:annotation:state", wrapped);
 			};
 		},
+	},
+	// Saved site passwords. Write-only for secrets: nothing here returns one.
+	vault: {
+		list: () => ipcRenderer.invoke("vault:list") as Promise<VaultListResult>,
+		save: (input: VaultItemInput) => ipcRenderer.invoke("vault:save", input) as Promise<VaultItemSummary>,
+		delete: (id: string) => ipcRenderer.invoke("vault:delete", { id }) as Promise<void>,
+		audit: () => ipcRenderer.invoke("vault:audit") as Promise<VaultAuditEntry[]>,
+		reset: () => ipcRenderer.invoke("vault:reset") as Promise<void>,
 	},
 	browserProfiles: {
 		list: () => ipcRenderer.invoke("browserProfiles:list") as Promise<BrowserProfileListState>,

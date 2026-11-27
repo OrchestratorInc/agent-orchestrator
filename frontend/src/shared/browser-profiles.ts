@@ -40,6 +40,17 @@ export type BrowserProfileRegistry = {
 	 * saved without it get that default on load, so a later unset stays unset.
 	 */
 	defaultProfileSeeded: true;
+	/**
+	 * Set once AO has created the first-run default profile, so sessions start
+	 * in a persistent, signed-in profile. Deleting every profile afterwards is a
+	 * deliberate choice of Temporary and must not bring it back.
+	 */
+	defaultProfileCreated?: true;
+	/**
+	 * Set when the user picked the default (or turned it off) in Settings. A
+	 * completed import then leaves the default alone; otherwise it takes it.
+	 */
+	defaultProfileChosen?: true;
 };
 
 export type BrowserProfileStoreError = {

@@ -95,6 +95,7 @@ export const aoBridge: AoBridge =
 			persistTerminal: async () => undefined,
 			setWindowBackground: async () => undefined,
 			setWindowTranslucent: async () => undefined,
+			setInterfaceV2: async () => undefined,
 		},
 		menu: {
 			action: async () => undefined,
@@ -355,6 +356,7 @@ export const aoBridge: AoBridge =
 			getTabs: async (viewId: string) => ({ viewId, activeTabId: "t1", tabs: [] }),
 			selectTab: async ({ viewId, tabId }) => ({ viewId, activeTabId: tabId, tabs: [] }),
 			closeTab: async ({ viewId }) => ({ viewId, activeTabId: "", tabs: [] }),
+			muteTab: async ({ viewId, tabId }) => ({ viewId, activeTabId: tabId, tabs: [] }),
 			openTab: async ({ viewId }) => ({ viewId, activeTabId: "", tabs: [] }),
 			getProfile: async (viewId) => ({ viewId, profileId: null, temporary: true }),
 			showProfileMenu: async () => undefined,
@@ -389,6 +391,15 @@ export const aoBridge: AoBridge =
 			onAnnotationSubmit: () => () => undefined,
 			onAnnotationCancel: () => () => undefined,
 			onAnnotationState: () => () => undefined,
+		},
+		vault: {
+			list: async () => ({ available: false, items: [] }),
+			save: async () => {
+				throw new AoError("VAULT_DESKTOP_REQUIRED", "Saved passwords need the desktop app");
+			},
+			delete: async () => undefined,
+			audit: async () => [],
+			reset: async () => undefined,
 		},
 		browserProfiles: {
 			list: async () => ({ profiles: [], defaultProfileId: null }),

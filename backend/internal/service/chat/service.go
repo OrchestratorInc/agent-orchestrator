@@ -15,6 +15,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
+	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/apierr"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 	reportsvc "github.com/aoagents/agent-orchestrator/backend/internal/service/report"
 )
@@ -73,6 +74,7 @@ type Service struct {
 	// onModelChanged syncs ChatUI's model override (including clearing it) to
 	// session metadata before the next prompt routes or a later TUI rebuild.
 	onModelChanged   func(domain.SessionID, string)
+	onEffortChanged  func(domain.SessionID, string)
 	stopProviderHost func(context.Context, domain.SessionID) error
 	reports          *reportsvc.Coordinator
 	renders          RenderFiles
@@ -85,6 +87,7 @@ type Service struct {
 	sides              *sideManager
 	wakeChat           func(context.Context, domain.SessionID) error
 	resumeAgent        func(context.Context, domain.SessionID) error
+	coldSwitchLaunch   ColdSwitchLauncher
 	hibernationEnabled func() bool
 	// versionRefresh reports whether open sessions move to a newly installed
 	// harness release, and how long they must be quiet first.
@@ -142,6 +145,7 @@ type Service struct {
 	prewarming         sync.Map // domain.AgentHarness -> struct{}
 	providerSwitches   sync.Map // domain.SessionID -> chan struct{}, one switch at a time
 	terminalSwitcher   TerminalProviderSwitcher
+	agentChoices       AgentChoiceRecorder
 }
 
 // SetReportCoordinator installs the report piggyback hook after daemon wiring
@@ -203,6 +207,8 @@ type Options struct {
 	// OnModelChanged syncs ChatUI's model override to session metadata before
 	// the next prompt routes. Nil leaves session metadata unchanged.
 	OnModelChanged func(domain.SessionID, string)
+	// OnEffortChanged syncs ChatUI's effort choice to durable session metadata.
+	OnEffortChanged func(domain.SessionID, string)
 	// StopProviderHost destroys current ownership on explicit teardown or failed hibernation,
 	// even if its daemon attachment already failed. Never used by StopAll.
 	StopProviderHost func(context.Context, domain.SessionID) error
@@ -251,6 +257,7 @@ func New(opts Options) *Service {
 		prChanged:              opts.PRChanged,
 		onCodexCapacityChanged: opts.OnCodexCapacityChanged,
 		onModelChanged:         opts.OnModelChanged,
+		onEffortChanged:        opts.OnEffortChanged,
 		stopProviderHost:       opts.StopProviderHost,
 		renders:                opts.Renders,
 		dataDir:                opts.DataDir,
@@ -368,6 +375,71 @@ func notifyControllerReady(
 
 // claudeAutoCompactWindowEnv is the token count at which Claude Code compacts on its own.
 const claudeAutoCompactWindowEnv = "CLAUDE_CODE_AUTO_COMPACT_WINDOW"
+
+// openCodeConfigContentEnv is OpenCode's inline config, merged over its config files.
+const openCodeConfigContentEnv = "OPENCODE_CONFIG_CONTENT"
+
+// withOpenCodeAutoCompactOff returns a copy of env whose inline OpenCode config
+// turns compaction off.
+func withOpenCodeAutoCompactOff(env map[string]string) (map[string]string, error) {
+	content, err := openCodeConfigWithoutAutoCompact(env[openCodeConfigContentEnv])
+	if err != nil {
+		return nil, fmt.Errorf("turn off OpenCode auto-compaction: %w", err)
+	}
+	out := make(map[string]string, len(env)+1)
+	for key, value := range env {
+		out[key] = value
+	}
+	out[openCodeConfigContentEnv] = content
+	return out, nil
+}
+
+// openCodeConfigWithoutAutoCompact returns the project's inline OpenCode config
+// with compaction.auto set false, keeping everything else it sets.
+func openCodeConfigWithoutAutoCompact(content string) (string, error) {
+	config := map[string]any{}
+	if strings.TrimSpace(content) != "" {
+		if err := json.Unmarshal([]byte(content), &config); err != nil {
+			return "", fmt.Errorf("%s must be a JSON object: %w", openCodeConfigContentEnv, err)
+		}
+		if config == nil {
+			config = map[string]any{}
+		}
+	}
+	compaction, ok := config["compaction"].(map[string]any)
+	if !ok {
+		compaction = map[string]any{}
+	}
+	compaction["auto"] = false
+	config["compaction"] = compaction
+	out, err := json.Marshal(config)
+	if err != nil {
+		return "", err
+	}
+	return string(out), nil
+}
+
+// openCodeConfigWithAutoCompactRestored undoes openCodeConfigWithoutAutoCompact,
+// leaving OpenCode's own default. Content it cannot read is returned unchanged.
+func openCodeConfigWithAutoCompactRestored(content string) string {
+	var config map[string]any
+	if err := json.Unmarshal([]byte(content), &config); err != nil || config == nil {
+		return content
+	}
+	compaction, ok := config["compaction"].(map[string]any)
+	if !ok || compaction["auto"] != false {
+		return content
+	}
+	delete(compaction, "auto")
+	if len(compaction) == 0 {
+		delete(config, "compaction")
+	}
+	out, err := json.Marshal(config)
+	if err != nil {
+		return content
+	}
+	return string(out)
+}
 
 func cloneStartConfig(cfg StartConfig) StartConfig {
 	cloned := cfg
@@ -788,6 +860,13 @@ func (s *Service) startLocked(ctx context.Context, cfg StartConfig) (*Controller
 	if sessionFound && s.accountMoveAwaitingTarget(ctx, cfg.SessionID) {
 		waking = true
 	}
+	if sessionFound && !waking && owner.Kind == domain.ConversationOwnerSession && cfg.ProviderConversationID == sessionRecord.Metadata.ProviderConversationID {
+		move, err := s.ownedVersionMove(ctx, sessionRecord)
+		if err != nil {
+			return nil, fmt.Errorf("read version move before chat start: %w", err)
+		}
+		waking = move != nil
+	}
 	hadProviderHistory := false
 	if sessionFound && (sessionRecord.ProvisionState.IsProvisioning() || waking) {
 		hadProviderHistory = sessionRecord.Metadata.ProviderConversationID != ""
@@ -827,15 +906,30 @@ func (s *Service) startLocked(ctx context.Context, cfg StartConfig) (*Controller
 				ports.ErrChatResumeFailed, activeBranch.ProviderConversationID, cfg.ProviderConversationID)
 		}
 	}
-	// A switch to Claude Code sets the window, Auto (empty) included.
-	if cfg.ProviderSwitch != nil && cfg.Harness == domain.HarnessClaudeCode {
-		// The switch's config is the source's, which may still carry the window
-		// AO set for an earlier Claude Code start. Drop that value so the new
-		// choice, Auto included, is what starts; a project's own value stays.
+	// A new conversation starts with the Fast mode and auto-compaction picked
+	// for it; the block below that records its first settings saves them.
+	if cfg.ProviderConversationID == "" && cfg.ProviderSwitch == nil {
+		if cfg.FastMode {
+			conversation.Settings.FastMode = true
+		}
+		if cfg.AutoCompactWindow != "" {
+			conversation.Settings.AutoCompactWindow = cfg.AutoCompactWindow
+		}
+	}
+	// A switch to Claude Code or OpenCode sets its auto-compaction, Auto (empty) included.
+	if cfg.ProviderSwitch != nil && (cfg.Harness == domain.HarnessClaudeCode || domain.CanTurnOffAutoCompact(cfg.Harness)) {
+		// The switch's config is the source's, which may still carry what AO set
+		// for an earlier start: Claude Code's window, or OpenCode's compaction
+		// turned off. Drop that so the new choice, Auto included, is what starts;
+		// a project's own window stays.
 		if previous := domain.AutoCompactTokens[conversation.Settings.AutoCompactWindow]; previous > 0 &&
 			cfg.Env[claudeAutoCompactWindowEnv] == fmt.Sprint(previous) {
 			cfg.Env = cloneStartConfig(cfg).Env
 			delete(cfg.Env, claudeAutoCompactWindowEnv)
+		}
+		if content, ok := cfg.Env[openCodeConfigContentEnv]; ok && conversation.Settings.AutoCompactWindow == domain.AutoCompactOff {
+			cfg.Env = cloneStartConfig(cfg).Env
+			cfg.Env[openCodeConfigContentEnv] = openCodeConfigWithAutoCompactRestored(content)
 		}
 		conversation.Settings.AutoCompactWindow = cfg.ProviderSwitch.AutoCompactWindow
 	}
@@ -845,6 +939,18 @@ func (s *Service) startLocked(ctx context.Context, cfg StartConfig) (*Controller
 	if tokens := domain.AutoCompactTokens[conversation.Settings.AutoCompactWindow]; cfg.Harness == domain.HarnessClaudeCode && tokens > 0 {
 		cfg.Env = cloneStartConfig(cfg).Env
 		cfg.Env[claudeAutoCompactWindowEnv] = fmt.Sprint(tokens)
+	}
+	// OpenCode reads its compaction setting from its config when it starts; Auto
+	// leaves whatever the project's config says.
+	// The environment a persistent host prepares at launch replaces this one, so it
+	// is turned off there too.
+	compactionOff := conversation.Settings.AutoCompactWindow == domain.AutoCompactOff && domain.CanTurnOffAutoCompact(cfg.Harness)
+	if compactionOff {
+		env, err := withOpenCodeAutoCompactOff(cfg.Env)
+		if err != nil {
+			return nil, err
+		}
+		cfg.Env = env
 	}
 	// A fork's first start resumes the provider conversation copied for it,
 	// into a conversation with no settings saved yet: it starts with the
@@ -871,7 +977,7 @@ func (s *Service) startLocked(ctx context.Context, cfg StartConfig) (*Controller
 		conversation.Settings.ReasoningEffort = cfg.Effort
 		conversation.Settings.ApprovalMode = cfg.Permissions
 		// A switch target's settings are saved by the switch's commit.
-		if cfg.ProviderSwitch == nil {
+		if cfg.ProviderSwitch == nil && (cfg.Harness != domain.HarnessAgy || providerBoundaryID == "" || cfg.ControllerReady == nil) {
 			if err := s.store.SetConversationSettings(ctx, conversation.ID, conversation.Settings, s.now()); err != nil {
 				return nil, fmt.Errorf("record initial conversation settings: %w", err)
 			}
@@ -884,6 +990,9 @@ func (s *Service) startLocked(ctx context.Context, cfg StartConfig) (*Controller
 			env, prepareErr := cfg.PrepareControllerEnv(prepareCtx, cfg.ExpectedControllerOwner)
 			if prepareErr != nil {
 				return nil, fmt.Errorf("prepare chat controller environment: %w", prepareErr)
+			}
+			if compactionOff {
+				return withOpenCodeAutoCompactOff(env)
 			}
 			return env, nil
 		}
@@ -992,7 +1101,10 @@ func (s *Service) startLocked(ctx context.Context, cfg StartConfig) (*Controller
 			caps[ports.ChatCapabilityResume] = true
 		}
 		if err := chatAdmissionError(driver, cfg.Harness, caps, cfg.Permissions); err != nil {
-			_ = cleanupUnpublishedConversation(conv, false)
+			if cleanupErr := cleanupUnpublishedConversation(conv, false); cleanupErr != nil {
+				return nil, fmt.Errorf("%w: admission rejected and host shutdown failed: %w",
+					ports.ErrChatRecoveryInconclusive, errors.Join(err, cleanupErr))
+			}
 			return nil, err
 		}
 	}
@@ -1255,6 +1367,37 @@ func (s *Service) startLocked(ctx context.Context, cfg StartConfig) (*Controller
 			return nil, err
 		}
 	}
+	var commitModelAfterActivation func(context.Context) error
+	if cfg.Harness == domain.HarnessAgy && cfg.ProviderSwitch == nil && !liveReconnect {
+		commitModel, modelErr := s.prepareAgyOpeningModel(ctx, controller, cfg.Model, providerBoundary)
+		if modelErr != nil {
+			_ = cleanupUnpublishedConversation(conv, cfg.ProviderConversationID == "")
+			return nil, modelErr
+		}
+		if providerBoundary != nil && cfg.ControllerReady != nil {
+			commitHistory := commitProviderHistory
+			commitProviderHistory = func(commitCtx context.Context) error {
+				if commitHistory != nil {
+					if err := commitHistory(commitCtx); err != nil {
+						return err
+					}
+				}
+				if commitModel != nil {
+					return commitModel(commitCtx)
+				}
+				return controller.SetSettings(commitCtx, controller.Settings())
+			}
+		} else if providerBoundary != nil {
+			// Review and other callback-free starts activate their branch below.
+			// Write its notice afterwards so it belongs to the new branch.
+			commitModelAfterActivation = commitModel
+		} else if commitModel != nil {
+			if err := commitModel(ctx); err != nil {
+				_ = cleanupUnpublishedConversation(conv, cfg.ProviderConversationID == "")
+				return nil, err
+			}
+		}
+	}
 	commit, err := notifyControllerReady(
 		cfg, controller, providerBoundary, commitProviderHistory,
 	)
@@ -1284,6 +1427,12 @@ func (s *Service) startLocked(ctx context.Context, cfg StartConfig) (*Controller
 		} else if commit.Conversation.ActiveBranchID != providerBoundary.ID {
 			_ = cleanupUnpublishedConversation(conv, false)
 			return nil, fmt.Errorf("commit chat controller: provider boundary %s was not activated", providerBoundary.ID)
+		}
+	}
+	if commitModelAfterActivation != nil {
+		if err := commitModelAfterActivation(ctx); err != nil {
+			_ = cleanupUnpublishedConversation(conv, cfg.ProviderConversationID == "")
+			return nil, err
 		}
 	}
 	if commit.Conversation.ID != "" {
@@ -1322,6 +1471,9 @@ func (s *Service) startLocked(ctx context.Context, cfg StartConfig) (*Controller
 	cfg.ProviderScopeID = ""
 	cfg.AwakeReconnectTarget = nil
 	cfg.HistoryMode = ports.ChatHistoryImport
+	// The starting Fast mode and auto-compaction are saved with the
+	// conversation now; a restart must not put them back over a later change.
+	cfg.FastMode, cfg.AutoCompactWindow = false, ""
 	s.startConfigs[owner] = cloneStartConfig(cfg)
 	delete(s.awakeInterrupted, owner)
 	controller.start()
@@ -2873,9 +3025,10 @@ func (s *Service) SetConfigOption(
 	options = permissionConfigOptions(record.Harness, options)
 	settings, _ := settingsFromConfigOptions(previous, options)
 	if record.Harness == domain.HarnessClaudeCode {
-		// Provider-owned defaults stay implicit so future Claude defaults still apply.
-		if settings.Model == "default" {
-			settings.Model = ""
+		// A picked "default" is saved so a relaunch passes --model default and gets
+		// the model the picker showed; without it Claude uses settings.json's model.
+		if settings.Model == "default" && configID != "model" {
+			settings.Model = previous.Model
 		}
 		if settings.ReasoningEffort == "default" {
 			settings.ReasoningEffort = ""
@@ -2895,7 +3048,7 @@ func (s *Service) SetConfigOption(
 		// The config-options route is how provider-owned pickers (e.g. Claude
 		// Code's model menu) change the model; it must persist the pick the same
 		// way the turn-settings route does.
-		s.persistPickedModel(id, previous, settings)
+		s.persistPickedSelection(id, previous, settings)
 	}
 	return options, nil
 }
@@ -3064,23 +3217,36 @@ func (s *Service) setTurnSettings(ctx context.Context, controller *Controller, o
 		return domain.ConversationSettings{}, ErrReviewerPermissionsFixed
 	}
 	settings.OpenCodeMode = previous.OpenCodeMode
+	// A choice the agent cannot take is refused. Only a change is checked, so a
+	// value saved before this check existed does not block every later change.
+	if settings.AutoCompactWindow != previous.AutoCompactWindow {
+		if problem := domain.AutoCompactWindowProblem(controller.harness, settings.AutoCompactWindow); problem != "" {
+			return domain.ConversationSettings{}, apierr.Invalid("AUTO_COMPACT_WINDOW_UNSUPPORTED", problem, nil)
+		}
+	}
+	if settings.FastMode && !previous.FastMode && !domain.CanUseFastMode(controller.harness) {
+		return domain.ConversationSettings{}, apierr.Invalid("FAST_MODE_UNSUPPORTED", fmt.Sprintf("%s has no Fast mode", controller.harness), nil)
+	}
 	if err := controller.SetSettings(ctx, settings); err != nil {
 		return domain.ConversationSettings{}, err
 	}
 	if owner.Kind == domain.ConversationOwnerSession {
-		s.persistPickedModel(domain.SessionID(owner.ID), previous, settings)
+		s.persistPickedSelection(domain.SessionID(owner.ID), previous, settings)
 	}
 	return controller.Settings(), nil
 }
 
-// persistPickedModel keeps session metadata in sync with the Chat model choice,
-// including clearing an override before a later TUI rebuild.
-func (s *Service) persistPickedModel(id domain.SessionID, previous, next domain.ConversationSettings) {
+// persistPickedSelection keeps session metadata in sync with Chat settings,
+// including cleared overrides before a later TUI rebuild.
+func (s *Service) persistPickedSelection(id domain.SessionID, previous, next domain.ConversationSettings) {
 	model := strings.TrimSpace(next.Model)
-	if model == strings.TrimSpace(previous.Model) || s.onModelChanged == nil {
-		return
+	if model != strings.TrimSpace(previous.Model) && s.onModelChanged != nil {
+		s.onModelChanged(id, model)
 	}
-	s.onModelChanged(id, model)
+	effort := strings.TrimSpace(next.ReasoningEffort)
+	if effort != strings.TrimSpace(previous.ReasoningEffort) && s.onEffortChanged != nil {
+		s.onEffortChanged(id, effort)
+	}
 }
 
 // RelayChatTurn delivers a message AO is carrying for someone else.

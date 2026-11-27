@@ -392,7 +392,7 @@ func ConnectOrStart(ctx context.Context, cfg Config) (*Transport, error) {
 		return nil, errors.New("chat host start requires provider argv")
 	}
 	if err := spawnDetached(ctx, cfg); err != nil {
-		return nil, err
+		return nil, hostStartError{err: err}
 	}
 	deadline := time.Now().Add(startupTimeout)
 	var lastErr error
@@ -418,8 +418,17 @@ func ConnectOrStart(ctx context.Context, cfg Config) (*Transport, error) {
 	if d, readErr := readDescriptor(cfg.DataDir, cfg.SessionID); readErr == nil && processalive.Alive(d.PID) {
 		return nil, fmt.Errorf("%w: %w", ErrOwnershipInconclusive, lastErr)
 	}
-	return nil, fmt.Errorf("start chat host: %w", lastErr)
+	return nil, hostStartError{err: fmt.Errorf("start chat host: %w", lastErr)}
 }
+
+// hostStartError marks a detached chat host that could not be launched or
+// never published a reachable descriptor. Spawn telemetry reads FailureCause;
+// the error reads and unwraps like err.
+type hostStartError struct{ err error }
+
+func (e hostStartError) Error() string        { return e.err.Error() }
+func (e hostStartError) Unwrap() error        { return e.err }
+func (e hostStartError) FailureCause() string { return "host_failed" }
 
 // Reconcile terminates compatible authenticated hosts whose durable session no
 // longer exists. Live-session hosts, incompatible hosts, and inconclusive probes

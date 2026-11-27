@@ -18,6 +18,7 @@ vi.mock("react-native", () => ({
 vi.mock("../haptics", () => ({ haptics: { tap: vi.fn(), select: vi.fn() } }));
 vi.mock("./deviceProvider", () => ({ getDeviceVoiceProvider: () => { throw new Error("tests inject a provider"); } }));
 
+import { activateKeepAwakeAsync, deactivateKeepAwake } from "expo-keep-awake";
 import type { VoiceCallbacks, VoiceMode, VoiceProvider } from "./types";
 import { DENIED_MESSAGE, DENIED_NOTICE_MS, useVoiceInput, type UseVoiceInput } from "./useVoiceInput";
 
@@ -256,4 +257,57 @@ describe("when microphone access is off", () => {
 		expect(provider.checkPermission).not.toHaveBeenCalled();
 		expect(voice.current.state).toBe("idle");
 	});
+});
+
+// The OS idle timer only resets on touch, so hands-free dictation would lock the
+// screen mid-sentence, and the lock backgrounds the app and aborts the mic.
+it("keeps the screen awake only while the mic is open", async () => {
+	const { provider, started } = fakeProvider();
+	const onTranscript = vi.fn();
+	const voice = mount(provider, onTranscript);
+	expect(activateKeepAwakeAsync).not.toHaveBeenCalled();
+
+	await act(async () => voice.current.toggleLatched());
+	expect(activateKeepAwakeAsync).toHaveBeenCalledExactlyOnceWith("dictation");
+	// Warming up to listening is one hold, not a release and a fresh one.
+	act(() => started[0].callbacks.onReady());
+	expect(activateKeepAwakeAsync).toHaveBeenCalledOnce();
+	expect(deactivateKeepAwake).not.toHaveBeenCalled();
+
+	// Stopping waits for the final result, and the screen stays awake until it lands.
+	act(() => voice.current.toggleLatched());
+	expect(deactivateKeepAwake).not.toHaveBeenCalled();
+	act(() => started[0].callbacks.onFinal("ship it"));
+	expect(deactivateKeepAwake).toHaveBeenCalledExactlyOnceWith("dictation");
+	expect(onTranscript).toHaveBeenCalledWith("ship it");
+});
+
+it("releases the screen when dictation fails", async () => {
+	const { provider, started } = fakeProvider();
+	const voice = mount(provider);
+	await act(async () => voice.current.toggleLatched());
+	act(() => started[0].callbacks.onReady());
+	act(() => started[0].callbacks.onError("Recogniser went away"));
+	expect(voice.current.state).toBe("idle");
+	expect(deactivateKeepAwake).toHaveBeenCalledExactlyOnceWith("dictation");
+});
+
+it("releases the screen when the app leaves the foreground mid-dictation", async () => {
+	const { provider, started } = fakeProvider();
+	const voice = mount(provider);
+	await act(async () => voice.current.toggleLatched());
+	act(() => started[0].callbacks.onReady());
+	act(() => { for (const listener of [...fixtures.appState]) listener("background"); });
+	expect(provider.abort).toHaveBeenCalledOnce();
+	expect(deactivateKeepAwake).toHaveBeenCalledExactlyOnceWith("dictation");
+});
+
+it("releases the screen when the composer unmounts mid-dictation", async () => {
+	const { provider, started } = fakeProvider();
+	const voice = mount(provider);
+	await act(async () => voice.current.toggleLatched());
+	act(() => started[0].callbacks.onReady());
+	act(() => renderer!.unmount());
+	renderer = undefined;
+	expect(deactivateKeepAwake).toHaveBeenCalledExactlyOnceWith("dictation");
 });

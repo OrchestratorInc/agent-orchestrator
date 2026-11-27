@@ -4,9 +4,9 @@ import { describe, expect, it, vi } from "vitest";
 import { useSwipeToDismiss } from "./useSwipeToDismiss";
 import { resetSwipeClaim, swipeClaimed } from "../lib/swipe-ownership";
 
-function Card({ label, onDismiss }: { label: string; onDismiss: () => void }) {
+function Card({ label, onDismiss, fade }: { label: string; onDismiss: () => void; fade?: boolean }) {
 	const ref = useRef<HTMLDivElement>(null);
-	useSwipeToDismiss(ref, onDismiss);
+	useSwipeToDismiss(ref, onDismiss, true, { fade });
 	return <div ref={ref}>{label}</div>;
 }
 
@@ -45,5 +45,27 @@ describe("useSwipeToDismiss", () => {
 		resetSwipeClaim();
 		for (let i = 0; i < 3; i++) wheel(screen.getByText("Other"), -10);
 		expect(swipeClaimed()).toBe(true);
+	});
+	it("fades a swiped element by default, and with fade off keeps it opaque while it follows the fingers and slides out", async () => {
+		const faded = vi.fn();
+		const { unmount } = render(<Card label="Faded" onDismiss={faded} />);
+		const fadedCard = screen.getByText("Faded");
+		for (const deltaX of [-10, -20]) wheel(fadedCard, deltaX);
+		expect(fadedCard.style.transform).toContain("translate3d(30px");
+		expect(fadedCard.style.opacity).not.toBe("");
+		unmount();
+
+		const solid = vi.fn();
+		render(<Card label="Solid" fade={false} onDismiss={solid} />);
+		const card = screen.getByText("Solid");
+		for (const deltaX of [-10, -20]) wheel(card, deltaX);
+		expect(card.style.transform).toContain("translate3d(30px");
+		expect(card.style.opacity).toBe("");
+		expect(card.style.transition).not.toContain("opacity");
+
+		// Past the dismiss point, released into momentum: it slides out, still opaque.
+		for (const deltaX of [-30, -25, -20, -15, -10]) wheel(card, deltaX);
+		await waitFor(() => expect(solid).toHaveBeenCalledOnce());
+		expect(card.style.opacity).toBe("");
 	});
 });

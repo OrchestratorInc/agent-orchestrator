@@ -79,11 +79,13 @@ installed with the setup script it runs as the
 `~/.ao/host/logs/update.log`. A remote Mac running the Orchestrator desktop
 app updates after you confirm: your desktop first asks that Mac which version
 its own update channel installs and names it in the confirm, then the app there
-downloads the update, closes and relaunches. Its window has to be open, and it refuses while a draft there isn't
-saved yet; auto update leaves these computers alone. A host on a
-release from before desktop updates has to be updated by hand once. A release
-without `ao remote-host link` prints an address and password instead of the
-sign-in link; pair it by hand, or install nightly. A release without
+downloads the update, closes and relaunches. It refuses while a chat there has
+an unsent message that Orchestrator couldn't save, or files still attaching to
+one, so the relaunch doesn't lose them. Auto update updates these computers
+too, without the confirm.
+A host on a release from before desktop updates has to be updated by hand
+once. A release without `ao remote-host link` prints an address and password
+instead of the sign-in link; pair it by hand, or install nightly. A release without
 `ao remote-host pair` prints the pairing password where a newer one prints a
 pairing code.
 
@@ -157,7 +159,7 @@ session.
 
 Then make the VM ready for work, as in [Use the VM](#use-the-vm). Over SSH,
 `~/.local/bin/ao agent ls --refresh` must show the user's coding agent installed
-and signed in (they do that in **Settings → Harness** with the VM selected), and
+and signed in (they do that in **Settings → Agents** with the VM selected), and
 `gh auth status` must show GitHub signed in (they run `gh auth login` and
 `gh auth setup-git` themselves). Then clone the project on the VM and add it
 with `~/.local/bin/ao project add`.
@@ -208,7 +210,7 @@ Pairing does not copy GitHub credentials from your laptop.
    projects, and sessions load automatically. A running client may take up to
    30 seconds to find a newly linked host.
 3. Use **Projects +** to clone or import a project on the VM. In desktop
-   **Settings → Harness**, select the VM to install/sign in to an agent there.
+   **Settings → Agents**, select the VM to install/sign in to an agent there.
 
 The host publishes a changed quick-tunnel address to AO Cloud automatically.
 Desktop connections saved before account linking keep their own credential

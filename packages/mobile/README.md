@@ -1,8 +1,8 @@
 # Agent Orchestrator — Mobile
 
-Expo (expo-router) mobile supervisor for Agent Orchestrator. Three native tabs — Workers,
-Projects, Pull Requests — with Settings and Notifications in their headers, plus a
-Chat-first spawn flow, a native conversation surface, the existing live terminal, and a
+Expo (expo-router) mobile supervisor for Agent Orchestrator. Two native tabs, Workers and
+Projects, with Pull Requests, Settings, and Notifications in their headers and a **New task**
+button in the tab bar, plus a Chat-first spawn flow, a native conversation surface, the existing live terminal, and a
 preview browser. Chat sessions expose durable history,
 streaming activity, approvals, provider controls, attachments, voice input, and a plain
 worktree-shell escape hatch. It is a **thin client**: it talks to the Orchestrator daemon running on your
@@ -132,7 +132,7 @@ Nothing on the phone works until the desktop opens the LAN bridge. Do this first
 cd frontend && npm run dev      # Electron supervisor + daemon
 ```
 
-**2. Open the pairing modal:** in the desktop app, **Settings → Connect Mobile**.
+**2. Open the pairing page:** in the desktop app, **Settings → Mobile**.
 
 **3. Choose **Generate**.** The bridge binds immediately and the panel reveals the pairing
 details:
@@ -141,10 +141,10 @@ details:
   and `secure`, plus the bearer `token` in the link fragment. The QR or copied link is a
   secret;
 - the current address and port, for example `192.168.1.84:3011`;
-- the 8-character **connection password** (copyable);
-- **Regenerate password**, which rotates the secret and invalidates every old token.
+- a one-time **pairing code** for one device, and the **connection password** (both copyable);
+- **Revoke all devices**, which rotates the secret and invalidates every old token.
 
-Leave the modal open — you scan that QR in step 3. Toggling **off** tears the bridge down,
+Leave the page open — you scan that QR in step 3. Toggling **off** tears the bridge down,
 so the phone goes offline until you turn it back on.
 
 **Headless (daemon only, no Electron UI)?** Start the daemon and drive the same routes over

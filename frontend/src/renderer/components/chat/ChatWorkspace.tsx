@@ -180,15 +180,21 @@ import {
 	piggybackedUpdates,
 	senderOf,
 	FromAgent,
+	indexWorkerUpdates,
 	isTaskTitleUpdate,
 	isWorkerLead,
-	isDuplicateSpawnAction,
 	relayedVia,
 	renamedTitle,
+	EndedSpawnsContext,
 	SpawnedAgents,
+	spawnedBy,
 	spawnedSessionIds,
+	spawnedWorker,
 	TaskNamedLine,
+	terminatedBy,
+	useEndedSpawns,
 	useWorkerUpdateIndex,
+	waitingSpawns,
 	WorkerUpdateIndexContext,
 	BatchedReportsContext,
 	type BatchedReports,
@@ -199,12 +205,12 @@ import {
 	WorkerUpdateRows,
 	workerUpdatesOf,
 } from "./WorkerUpdates";
-import { AutomationMessage, ReplacedNotice, reviewBursts, SteeredBrowserFeedback, steeredBrowserFeedback } from "./AutomationMessage";
+import { AutomationMessage, pullRequestBursts, pullRequestFeedbackNumber, ReplacedNotice, reviewBursts, SteeredBrowserFeedback, steeredBrowserFeedback } from "./AutomationMessage";
 import { accountFailure, turnStanding, turnUpdates } from "./background-turns";
 import { HumanMessageEditor } from "./HumanMessageEditor";
 import { ChatLinkProvider } from "./ChatMarkdown";
 import { admitArrivals, ChatEntrance, createChatEntranceGate } from "./chat-entrance";
-import { pageHidden } from "../../lib/page-hidden";
+import { notRendered, pageHidden } from "../../lib/page-hidden";
 import { ChatImageSourceProvider } from "./chat-image-source";
 import type { AgentSwitchProps } from "./AgentSwitchPicker";
 import type { ComposerPromptSuggestion } from "./ComposerEditor";
@@ -220,7 +226,7 @@ import { ActivityRun } from "./ActivityRun";
 import { SubagentPanel, type SubagentPanelHost } from "./SubagentPanel";
 import { OpenSubagentContext, SubagentTeam } from "./SubagentTeam";
 import { isSubagentLaunch, partitionSubagentSteps, readSubagent, type SubagentRef } from "./subagent-team";
-import { aoActionName, isOrdinaryActivity } from "./activity-action";
+import { aoActionName, isFailedSpawn, isOrdinaryActivity, mergeFailedSpawns } from "./activity-action";
 import { isFailedCall } from "./activity-command";
 import { TurnPlan } from "./TurnPlan";
 import { ComposerModeItems, TurnSettingsBar, type ApprovalModeLimits } from "./TurnSettingsBar";
@@ -268,12 +274,8 @@ import {
 
 const NO_SKILLS: ChatSkill[] = [];
 
-const EMPTY_CHAT_PLACEHOLDERS = [
-	"Fix a failing test in this project",
-	"Explain how this project is structured",
-	"Plan the next step for this feature",
-	"Find and fix a bug in this project",
-] as const;
+// The empty composer teaches its two shortcuts: "/" opens skills, "@" adds context.
+const EMPTY_CHAT_PLACEHOLDER = "Ask anything, / for skills, @ for context";
 
 /**
  * The newest pending approval or question the live turn is waiting on.
@@ -450,6 +452,8 @@ export interface ChatWorkspaceProps {
 	onFindRequestHandled?: (id: string) => void;
 	snapshot: ConversationSnapshot;
 	promptSuggestion?: ComposerPromptSuggestion;
+	/** Drawn after the last turn, above the prompt spacer: the session's pending browser approval. */
+	timelineEnd?: ReactNode;
 	/** Renderer-owned state identity; the snapshot's sessionId remains the daemon wire ID. */
 	uiSessionId?: string;
 	/** Durable draft owner for a conversation that is not a worker session. */
@@ -460,6 +464,8 @@ export interface ChatWorkspaceProps {
 	sessionRole?: SessionKind;
 	/** Host-specific proxy origin for images and staged attachments. */
 	assetBaseUrl?: string;
+	/** Session ID used to load staged attachment previews when different from snapshot.sessionId (e.g. a prepared worktree). */
+	assetSessionId?: string;
 	/** Selected remote host, even while its connection has no proxy origin. */
 	remoteHostId?: string;
 	/** Session-level actions owned above the conversation surface. */
@@ -872,9 +878,11 @@ function ChatWorkspaceContent({
 	onFindRequestHandled,
 	snapshot,
 	promptSuggestion,
+	timelineEnd,
 	sessionTitle,
 	sessionRole = "worker",
 	assetBaseUrl,
+	assetSessionId,
 	remoteHostId,
 	headerActions,
 	sessionTabAction,
@@ -1674,6 +1682,22 @@ function ChatWorkspaceContent({
 	const surfaceRef = useRef<HTMLElement | null>(null);
 	const ownComposerRef = useRef<ChatComposerHandle>(null);
 	const composerFocusRef = composerRef ?? ownComposerRef;
+	// Coming back to the Chat tab (Ctrl+Tab or a tab click) puts the caret back in the
+	// composer, as the conversation panel stays mounted and nothing else refocuses it.
+	// Only take focus that nothing else holds: the body, or the tab strip that switched.
+	const chatTabInFront = !workspaceActiveTabKey && !reviewerActive && !shellActive;
+	const chatTabWasInFront = useRef(chatTabInFront);
+	useEffect(() => {
+		const returned = chatTabInFront && !chatTabWasInFront.current;
+		chatTabWasInFront.current = chatTabInFront;
+		if (!returned) return;
+		const active = document.activeElement;
+		const unclaimed = !active || active === document.body ||
+			(active.closest("[role='tab'], [role='tablist']") !== null && !active.closest("[role='dialog']"));
+		if (!unclaimed) return;
+		const composer = surfaceRef.current?.querySelector<HTMLElement>('[aria-label="Message the agent"]');
+		if (composer?.getAttribute("aria-disabled") !== "true") composerFocusRef.current?.focus();
+	}, [chatTabInFront, composerFocusRef]);
 	const artifactSession = session?.requestedOutput === "artifact";
 	// The sample prompts show only while the composer is empty: picking one hides
 	// them, and clearing the draft brings them back. A saved draft hides them from
@@ -1858,6 +1882,18 @@ function ChatWorkspaceContent({
 	const stableSettings = useStableValue(snapshot.settings);
 	// Claude Code compacts at the window picked for it, well before its model's full context.
 	const compactsAt = snapshot.harness === "claude-code" ? snapshot.settings?.autoCompactWindow : undefined;
+	// The last compact's refusal. "A turn is running" holds only while one is: once it ends,
+	// compacting can be tried again from the meter or with /compact.
+	const compactRefusal = compactUnavailable === "Stop the current turn before compacting" && !durableTurn ? undefined : compactUnavailable;
+	// The meter's compact button: the same action and refusals as typing /compact.
+	const meterCompact = newWorkDisabled || snapshot.controller.state === "hibernated" || compactRefusal === "This agent cannot compact its history"
+		? undefined
+		: onCompact;
+	const meterCompactBlocked = durableTurn
+		? "Stop the current turn before compacting."
+		: compacting
+			? "Conversation history is already being compacted."
+			: compactRefusal;
 	const stableUsage = useStableValue(snapshot.usage);
 	const { t } = useTranslation();
 	// Near the account's usage limit, a warning sign sits right of the model; its tooltip says why.
@@ -1882,7 +1918,7 @@ function ChatWorkspaceContent({
 			settingsReady && (onChooseSettings || onChooseConfigOption) ? (
 				<TurnSettingsBar
 					agentSwitch={agentSwitch}
-					beforePicker={agentSwitch ? <ContextMeter usage={stableUsage} compactsAt={compactsAt} /> : undefined}
+					beforePicker={agentSwitch ? <ContextMeter usage={stableUsage} compactsAt={compactsAt} onCompact={meterCompact} compactBlockedReason={meterCompactBlocked} /> : undefined}
 					afterPicker={quotaSign}
 					// While the agent wakes or starts; a chat reads "hibernated" until ready.
 					modelsLoading={settingsLoading}
@@ -1930,6 +1966,8 @@ function ChatWorkspaceContent({
 			models,
 			agentSwitch,
 			stableUsage,
+			meterCompact,
+			meterCompactBlocked,
 			nearQuota,
 			newWorkDisabled,
 			session?.provisionState,
@@ -2100,11 +2138,6 @@ function ChatWorkspaceContent({
 	if (settledDocked === undefined && !shellActive) setSettledDocked(historyUnread);
 	const openedDocked = settledDocked !== false;
 	const conversationEmpty = !openedDocked && !arrivingWithHistory && snapshot.items.length === 0 && !turn && (localEchos?.length ?? 0) === 0 && (!hasStartup || sessionRole === "orchestrator");
-	const [emptyChatPlaceholder] = useState(
-		() => sessionRole === "orchestrator"
-			? "Ask anything about this project"
-			: EMPTY_CHAT_PLACEHOLDERS[Math.floor(Math.random() * EMPTY_CHAT_PLACEHOLDERS.length)],
-	);
 	const composerDockRef = useRef<HTMLDivElement>(null);
 	// The composer itself, not the dock: the dock also holds the welcome heading, which
 	// disappears on the first send, and sliding from the dock's top would make the
@@ -2112,6 +2145,8 @@ function ChatWorkspaceContent({
 	const composerBoxRef = useRef<HTMLDivElement>(null);
 	const wasConversationEmpty = useRef(conversationEmpty);
 	const [welcomeLeaving, setWelcomeLeaving] = useState(false);
+	// The open welcome stack's height, so wrapped sample prompts get their room too.
+	const [welcomeRoom, setWelcomeRoom] = useState(0);
 	const composerCenteredTopRef = useRef<number | null>(null);
 	const composerFlipDyRef = useRef<number | null>(null);
 	const composerSessionRef = useRef(uiSessionId);
@@ -2351,13 +2386,14 @@ function ChatWorkspaceContent({
 							sessionLinkSourceKind={session?.cloud ? "cloud" : undefined}
 							workspacePaths={filePaths}
 						>
-							<ChatImageSourceProvider sessionId={snapshot.sessionId} assetBaseUrl={assetBaseUrl} remoteHost={Boolean(activeRemoteHostId)} hostId={activeRemoteHostId} artifacts={session?.artifactFiles} cloud={session?.cloud}>
+							<ChatImageSourceProvider sessionId={assetSessionId ?? snapshot.sessionId} assetBaseUrl={assetBaseUrl} remoteHost={Boolean(activeRemoteHostId)} hostId={activeRemoteHostId} artifacts={session?.artifactFiles} cloud={session?.cloud}>
 							<ChatHostId.Provider value={activeRemoteHostId}>
 							<ChatTokenSkills.Provider value={skills ?? NO_SKILLS}>
 
 								{conversationEmpty ? <ForkTextCopyNotice /> : null}
 								<Timeline
 									shownAt={panelShownAt}
+									timelineEnd={timelineEnd}
 							onAddToSideChat={onAddToSideChat}
 									subagentPanel={subagentPanel}
 									checkingSideChatAvailability={checkingSideChatAvailability}
@@ -2416,7 +2452,15 @@ function ChatWorkspaceContent({
 							</ChatImageSourceProvider>
 						</ChatLinkProvider>
 
-						<div ref={composerDockRef} className="cursor-chat-composer-dock shrink-0 px-4 pb-3">
+						{/* An empty chat centers the composer on its own; the heading and sample
+						    prompts stand in a stack above it. The top padding is that stack's
+						    room, measured with the prompts shown so it holds while they come and
+						    go, and so the composer sits where the centered group used to put it. */}
+						<div
+							ref={composerDockRef}
+							className="cursor-chat-composer-dock shrink-0 px-4 pb-3"
+							style={conversationEmpty ? { paddingTop: `max(6.5rem, ${welcomeRoom}px)` } : undefined}
+						>
 							<div
 								data-empty={conversationEmpty || undefined}
 								className="mx-auto flex w-full max-w-3xl flex-col gap-2 transition-[max-width] duration-500 ease-out data-[empty]:max-w-2xl"
@@ -2437,19 +2481,6 @@ function ChatWorkspaceContent({
 											(retryControl.autoResumeTurnId === limitedTurn.id ? retryControl.autoResumeError : undefined)}
 									/>
 								) : null}
-								{conversationEmpty ? (
-									<h1 className="mb-5 text-center text-2xl font-normal tracking-tight text-foreground sm:text-3xl">
-										{welcomeHeading ?? t(artifactSession ? "chat.welcome.artifactHeading" : "chat.welcome.heading")}
-									</h1>
-								) : null}
-								<WelcomePromptSuggestions
-									// While an orchestrator starts the prompts stay put, disabled, so they don't
-									// pop in at the handoff. Other fenced chats keep them hidden.
-									open={conversationEmpty && composerEmpty && (!newWorkDisabled || pendingInPlaceStart || orchestratorStarting)}
-									artifact={artifactSession}
-									unavailable={newWorkDisabled || pendingInPlaceStart}
-									onPick={(text) => { if (!newWorkDisabled && !pendingInPlaceStart) composerFocusRef.current?.setDraft(text); }}
-								/>
 								{/* The guided tour's last stop (GuidedTour). */}
 								<div
 									ref={composerBoxRef}
@@ -2457,6 +2488,18 @@ function ChatWorkspaceContent({
 									data-composer-tray={conversationEmpty && composerTray ? "" : undefined}
 									data-tour="composer"
 								>
+									{conversationEmpty ? (
+										<WelcomeStack
+											heading={welcomeHeading ?? t(artifactSession ? "chat.welcome.artifactHeading" : "chat.welcome.heading")}
+											// While an orchestrator starts the prompts stay put, disabled, so they don't
+											// pop in at the handoff. Other fenced chats keep them hidden.
+											promptsOpen={composerEmpty && (!newWorkDisabled || pendingInPlaceStart || orchestratorStarting)}
+											artifact={artifactSession}
+											unavailable={newWorkDisabled || pendingInPlaceStart}
+											onPick={(text) => { if (!newWorkDisabled && !pendingInPlaceStart) composerFocusRef.current?.setDraft(text); }}
+											onRoom={setWelcomeRoom}
+										/>
+									) : null}
 									{welcomeLeaving ? (
 										<h1
 											aria-hidden="true"
@@ -2516,7 +2559,7 @@ function ChatWorkspaceContent({
 										onContinue={canContinue && !queueEdit && !openingStarting ? onContinueTurn : undefined}
 										commandError={queueDraftError ?? (queueEdit && !queueEdit.clientMessageId && !queuedMessages.some((entry) => entry.turnId === queueEdit.turnId) ? "chat.draft.queueMissing" : commandError)}
 										settings={draftSettings ?? <>
-											{agentSwitch ? null : <ContextMeter usage={snapshot.usage} compactsAt={compactsAt} />}
+											{agentSwitch ? null : <ContextMeter usage={snapshot.usage} compactsAt={compactsAt} onCompact={meterCompact} compactBlockedReason={meterCompactBlocked} />}
 											{/* Normally right of the model control; with no settings bar, beside the ring. */}
 											{composerSettings ? null : quotaSign}
 											<QuotaStatus quota={runningQuota} />
@@ -2527,7 +2570,6 @@ function ChatWorkspaceContent({
 											<ComposerModeItems
 												configOptions={configOptions ?? []}
 												settings={stableSettings}
-												models={models}
 												nativePlan={can(snapshot, "plan_mode")}
 												onChange={newWorkDisabled ? undefined : onChooseSettings}
 												onChangeConfigOption={newWorkDisabled ? undefined : onChooseConfigOption}
@@ -2542,6 +2584,7 @@ function ChatWorkspaceContent({
 												: undefined
 										}
 										starting={orchestratorStarting || arrivingInChat || cloudStarting || composerStarting || restoring}
+										restoring={restoring}
 										disabled={(orchestratorBlocksComposer || (openingStarting && !session && !followUpWhileOpening) || loadingQuietly || (snapshot.controller.state === "stopped" && !suppressStopped && !accountMoveQueues && !terminated && (!resumingAgent || session?.provisionState === "failed")) || (controllerTransitioning && !accountMoveQueues) || (newWorkDisabled && sendBlockedReason === undefined) || composerLockedPlaceholder !== undefined) && !queueEdit?.clientMessageId}
 										sendBlockedReason={sendBlockedReason}
 										// Signed out: nothing typed could be sent until the login takes. The box
@@ -2577,7 +2620,7 @@ function ChatWorkspaceContent({
 										// task can have non-message activity before its first visible chat
 										// message, and the generic placeholder makes a still-empty composer
 										// look like a regression.
-										emptyPlaceholder={conversationEmpty ? (artifactSession ? t("chat.welcome.artifactPlaceholder") : emptyChatPlaceholder) : undefined}
+										emptyPlaceholder={conversationEmpty ? (artifactSession ? t("chat.welcome.artifactPlaceholder") : EMPTY_CHAT_PLACEHOLDER) : undefined}
 										skills={skills}
 										skillsLoading={skillsLoading}
 										filePaths={filePaths}
@@ -2602,14 +2645,14 @@ function ChatWorkspaceContent({
 										steerRefusal={steerRefusal}
 										onCompact={newWorkDisabled || snapshot.controller.state === "hibernated" ? undefined : onCompact}
 										compacting={compacting}
-										compactUnavailable={compactUnavailable}
+										compactUnavailable={compactRefusal}
 										compactBlocked={Boolean(durableTurn)}
 										draftSessionId={draftPersistenceAvailable && !queueEdit ? draftScope.sessionId : undefined}
 										draftSessionIncarnation={draftPersistenceAvailable ? draftScope.incarnation : undefined}
 										// Kept when drafts cannot be saved, so a follow-up from the new chat page still arrives.
 										handoffSessionId={queueEdit ? undefined : draftScope.sessionId}
 										assetBaseUrl={assetBaseUrl}
-										assetSessionId={snapshot.sessionId}
+										assetSessionId={assetSessionId ?? snapshot.sessionId}
 										remoteHost={Boolean(activeRemoteHostId)}
 										acceptedClientMessageIds={acceptedClientMessageIds}
 										parkUnsentSends={parkUnsentSends}
@@ -3390,6 +3433,7 @@ function minimapCrowdsText(track: HTMLElement, content: HTMLElement): boolean {
  * this behavior while keeping its own composer.
  */
 export function Timeline({
+	timelineEnd,
 	onAddToSideChat,
 	subagentPanel,
 	checkingSideChatAvailability,
@@ -3443,6 +3487,7 @@ export function Timeline({
 	findRequest,
 	onFindRequestHandled,
 }: {
+	timelineEnd?: ReactNode;
 	/** The agent controller is really gone; a turn still marked running settles with an unknown outcome. */
 	controllerStopped?: boolean;
 	/** When the panel holding this transcript was last shown again after being covered (epoch ms). */
@@ -3614,8 +3659,15 @@ export function Timeline({
 	// instead of snapping. Opening a chat never animates, so the first layout snaps.
 	const glideRequested = useRef(false);
 	const initialLayoutDone = useRef(false);
+	// Set while the scroller is not rendered (Settings hides the page with display:
+	// none and leaves it mounted). Nothing is laid out or measured meanwhile; the
+	// resize that shows it again lays it out once, before it is painted.
+	const hiddenAway = useRef(false);
 	const initialLayoutAt = useRef(0);
 	const lastScrollTop = useRef(0);
+	// Set by the reader's own wheel, touch, key and scrollbar-drag input. A jump to a
+	// marker or a prompt moves the view without it, and must not be pulled back.
+	const readerIntentAt = useRef(0);
 	const skipRelatchFollow = useRef(false);
 	const reducedMotion = useReducedMotion();
 	const reducedMotionRef = useRef(reducedMotion);
@@ -4539,7 +4591,9 @@ export function Timeline({
 		[snapshot.batchedDeliveries, snapshot.items, workerUpdates],
 	);
 	const workerUpdateIndex = useWorkerUpdateIndex(workerUpdates ? snapshot.items : undefined);
+	const endedSpawns = useEndedSpawns(workerUpdates ? snapshot.items : undefined);
 	const runKeys = useRef<ReadonlyMap<string, string>>(new Map());
+	const developerMode = useUiStore((state) => state.developerMode);
 	const grouped = useMemo(() => {
 		const hiddenTurns = hiddenTimelineTurnIds(snapshot);
 		if (openingTurnId) hiddenTurns.delete(openingTurnId);
@@ -4550,8 +4604,9 @@ export function Timeline({
 		const kept = dropped.size > 0 ? timelineItems.map((item) => outlivingAction(item, dropped)) : timelineItems;
 		const items = atCarrier(kept, snapshot.batchedDeliveries ?? [], batchedReports.moved);
 		const pendingTurns = new Set(snapshot.turns.filter((turn) => turn.agentPending).map((turn) => turn.id));
-		const groups = groupByTurn({ ...snapshot, items }, { controllerStopped })
-			.filter((group) => !group.turnId || !hiddenTurns.has(group.turnId))
+		const visible = groupByTurn({ ...snapshot, items }, { controllerStopped }).filter((group) => !group.turnId || !hiddenTurns.has(group.turnId));
+		// The user's own queued prompts sit in the dock, so feedback queued around one still merges.
+		const groups = (developerMode ? mergeQueuedPullRequestFeedback(visible, queuedTurnIds(snapshot)) : visible)
 			.map((group, index) => openingPending && (firstTurn ? group.turnId === firstTurn.id : index === 0 && group.turnId?.startsWith("local:"))
 				? { ...group, live: true, liveStartedAt: openingStartedAt, liveStartupLabel: openingStartupLabel }
 				: group)
@@ -4560,14 +4615,26 @@ export function Timeline({
 				: group);
 		if (!workerUpdates) return groups;
 		const placed = batchedReports.moved.size > 0 ? groups.filter((group) => !group.turnId || !batchedReports.moved.has(group.turnId)) : groups;
-		const spawnedIds = new Set(placed.flatMap((group) => spawnedSessionIds(group.items)));
-		const cleaned = spawnedIds.size === 0 ? placed : placed
-			.map((group) => ({ ...group, items: group.items.filter((item) => !isDuplicateSpawnAction(item, spawnedIds)) }))
-			.filter((group) => group.items.length > 0);
-		const folded = foldBackground(cleaned, workerUpdateIndex, new Set(snapshot.turns.map((turn) => turn.id)), runKeys.current, batchedReports.under, find.gapBeforeSequence);
+		// A worker this chat spawned is drawn by its spawn tree row and then by its reports,
+		// so the daemon's records of it would only repeat them: its termination while the row
+		// is still up, and its spawn once it has answered and the row is gone. Dropped here,
+		// before they can leave an empty group behind. One that ended without answering loses
+		// its row at the next turn, and both records then stand for it.
+		const spawned = new Set(snapshot.items.flatMap((item) => spawnedBy(item) ?? []));
+		const answered = (workerUpdateIndex ?? indexWorkerUpdates(snapshot.items)).latest;
+		const repeats = (item: ConversationItem) => {
+			const started = spawnedBy(item);
+			if (started) return answered.has(started);
+			const ended = terminatedBy(item);
+			return ended !== undefined && spawned.has(ended) && !answered.has(ended) && !endedSpawns.has(ended);
+		};
+		const cleaned = spawned.size === 0 || !placed.some((group) => group.items.some(repeats)) ? placed : placed
+			.map((group) => group.items.some(repeats) ? { ...group, items: group.items.filter((item) => !repeats(item)) } : group)
+			.filter((group) => group.live || group.items.length > 0);
+		const folded = foldBackground(cleaned, workerUpdateIndex, endedSpawns, new Set(snapshot.turns.map((turn) => turn.id)), runKeys.current, batchedReports.under, find.gapBeforeSequence);
 		runKeys.current = new Map(folded.flatMap((group) => group.folded ? group.folded.members.map((member) => [member.key, group.key] as const) : []));
 		return folded;
-	}, [batchedReports, controllerStopped, find.gapBeforeSequence, openingPending, openingStartedAt, openingStartupLabel, openingTurnId, pendingTurnLabel, snapshot, timelineItems, workerUpdateIndex, workerUpdates]);
+	}, [batchedReports, controllerStopped, developerMode, endedSpawns, find.gapBeforeSequence, openingPending, openingStartedAt, openingStartupLabel, openingTurnId, pendingTurnLabel, snapshot, timelineItems, workerUpdateIndex, workerUpdates]);
 	const groups = useStableList(grouped, groupKey, sameGroup);
 	// Read from every group, not the mounted ones: the timeline is virtualized, and the
 	// panel lists a child whose turn has scrolled far out of view.
@@ -4621,7 +4688,8 @@ export function Timeline({
 	const virtualItemKey = useCallback((index: number) => groups[index]!.key, [groups]);
 	const captureViewportResize = useCallback((instance: Virtualizer<HTMLDivElement, Element>) => {
 		const node = instance.scrollElement;
-		if (!node) return;
+		// Hidden (Settings over the page) is not a resize: keep the size it left with.
+		if (!node || notRendered(node)) return;
 		const previous = viewportSize.current;
 		const next = { width: node.clientWidth, height: node.clientHeight };
 		if (previous && (previous.width !== next.width || previous.height !== next.height) && !viewportResize.current) {
@@ -4661,6 +4729,8 @@ export function Timeline({
 		followOnAppend: false,
 		// Bootstrap unmeasurable panels until their real geometry is available.
 		observeElementRect: (instance, callback) => observeElementRect(instance, (rect) => {
+			// A hidden chat keeps the viewport it had; one never shown yet still bootstraps.
+			if (instance.scrollElement && notRendered(instance.scrollElement) && viewportSize.current) return;
 			captureViewportResize(instance);
 			callback(rect.height ? rect : { width: rect.width, height: CHAT_INITIAL_VIEWPORT_HEIGHT });
 		}),
@@ -4668,6 +4738,9 @@ export function Timeline({
 			// Capture the old row positions before the first width remeasurement.
 			captureViewportResize(instance);
 			const index = Number(element.getAttribute("data-index"));
+			// Hidden, every row reads 0 tall. Keep the size it had, so the chat comes back
+			// at the height it left with instead of re-laying out from estimates.
+			if (notRendered(element)) return instance.measurementsCache[index]?.size ?? CHAT_ESTIMATED_TURN_HEIGHT;
 			const group = groups[index];
 			if (group && !measuredVirtualGroups.current.has(group)) {
 				measuredVirtualGroups.current.add(group);
@@ -4944,7 +5017,7 @@ export function Timeline({
 	const updateScrollbar = useCallback(() => {
 		const node = scroller.current;
 		const track = scrollTrack.current;
-		if (!node || !track) return;
+		if (!node || !track || notRendered(node)) return;
 
 		const maxScroll = Math.max(0, node.scrollHeight - node.clientHeight);
 		const visible = maxScroll > 1;
@@ -5033,7 +5106,7 @@ export function Timeline({
 	const syncPromptSpacer = useCallback(() => {
 		const node = scroller.current;
 		const pad = promptSpacer.current;
-		if (!node || !pad) return;
+		if (!node || !pad || notRendered(node)) return;
 
 		const anchors = scrollContent.current?.querySelectorAll<HTMLElement>(
 			"[data-chat-scroll-anchor]",
@@ -5097,6 +5170,10 @@ export function Timeline({
 	}, [followEnd, markWritten, cancelScrollFollow, isFlying, isGliding, reaim]);
 
 	const syncScrollLayout = useCallback(() => {
+		if (scroller.current && notRendered(scroller.current)) {
+			hiddenAway.current = true;
+			return;
+		}
 		anchorGeometry.current = null;
 		syncPromptSpacer();
 		const node = scroller.current;
@@ -5153,8 +5230,9 @@ export function Timeline({
 	// end smoothly once the reply is taller than the viewport.
 	const syncStreamedGrowth = useCallback(() => {
 		if (!pinnedRef.current || !initialLayoutDone.current) return;
-		anchorGeometry.current = null;
 		const node = scroller.current;
+		if (node && notRendered(node)) return;
+		anchorGeometry.current = null;
 		// Something at the end shrank on its own (a finished plan folding away). The
 		// browser has already clamped scrollTop by the time this observer runs, before
 		// the spacer could grow back, so put the view back now, before paint, instead
@@ -5180,7 +5258,7 @@ export function Timeline({
 	followVirtualHeight.current = () => {
 		const node = scroller.current;
 		const content = virtualContent.current;
-		if (!virtualized || !node || !content || viewportResize.current || !initialLayoutDone.current) return;
+		if (!virtualized || !node || !content || viewportResize.current || !initialLayoutDone.current || notRendered(node)) return;
 		const total = virtualizer.getTotalSize();
 		const shrink = renderedVirtualHeight.current - total;
 		if (shrink === 0) return;
@@ -5220,7 +5298,7 @@ export function Timeline({
 	// rows were on screen just before the fold...
 	const captureSettle = useCallback((key: string): SettleAnchor | undefined => {
 		const node = scroller.current;
-		if (!node || !initialLayoutDone.current) return undefined;
+		if (!node || !initialLayoutDone.current || notRendered(node)) return undefined;
 		const folded = !groups.some((group) => group.key === key && !group.live);
 		if (folded && !(pinnedRef.current && groups.some((group) => group.folded?.members.some((member) => member.key === key)))) return undefined;
 		const wrapper = Array.from(virtualContent.current?.children ?? [])
@@ -5278,9 +5356,14 @@ export function Timeline({
 		let held: Element | undefined;
 		if (settle.following) {
 			const end = Math.max(0, node.scrollHeight - node.clientHeight);
-			// A reload that settles the turn can also re-page the history above it, which
-			// the history anchor just moved the view by (it runs first in the commit).
-			const top = Math.min(settle.scrollTop + historyShift.current, end);
+			const readerHeld = performance.now() - readerIntentAt.current < READER_INTENT_HOLD_MS;
+			// When the turn grew past what the prompt spacer can absorb (a long reply
+			// that already scrolled the view), advance scrollTop to the new end before
+			// paint instead of leaving it short for followEnd to glide against the FLIP
+			// slide. Honor an active reader-intent hold (upward wheel/key/touch before
+			// its scroll event clears pinnedRef) so settling never pulls the reader back.
+			if (!readerHeld) cancelScrollFollow();
+			const top = readerHeld ? Math.min(settle.scrollTop + historyShift.current, end) : end;
 			if (Math.abs(node.scrollTop - top) >= 0.5) node.scrollTop = top;
 			markWritten(node.scrollTop);
 			lastScrollTop.current = node.scrollTop;
@@ -5331,7 +5414,7 @@ export function Timeline({
 			}
 			row.animate([{ transform: from }, { transform: "none" }], { duration: SETTLE_SLIDE_MS, easing: SETTLE_EASE });
 		});
-	}, [virtualized, virtualizer, spacerTakes, syncPromptSpacer, markWritten, updateScrollbar, releaseSettleHold]);
+	}, [virtualized, virtualizer, spacerTakes, syncPromptSpacer, cancelScrollFollow, markWritten, updateScrollbar, releaseSettleHold]);
 
 	// Rows above the view come and go: an older page loads in, or a reload re-reads the
 	// chat's pages from its new newest row and drops the oldest ones (every send does
@@ -5403,7 +5486,13 @@ export function Timeline({
 		entranceGate.catchUpAt = performance.now();
 		if (isFlying()) cancelScrollFollow();
 		const node = scroller.current;
-		if (!node || !initialLayoutDone.current) return;
+		// Still hidden under Settings: the resize that shows it runs this again.
+		if (!node || notRendered(node)) return;
+		// Opened while hidden: this is its first layout, which lands at the end.
+		if (!initialLayoutDone.current) {
+			syncScrollLayout();
+			return;
+		}
 		if (pinnedRef.current) {
 			syncPromptSpacer();
 			followOrSnapToEnd(node);
@@ -5481,9 +5570,26 @@ export function Timeline({
 	useEffect(() => loadOlderToFill(), [loadOlderToFill, oldestRow, hasOlder, loadingOlder]);
 
 	useEffect(() => {
+		// Setting up means this chat runs effects: a hidden <Activity> (a kept session)
+		// runs none, and showing it runs this again, laid out. Only a chat still under
+		// Settings is away, and syncScrollLayout marks it so again.
+		hiddenAway.current = false;
 		syncScrollLayout();
 		if (typeof ResizeObserver === "undefined") return;
 		const observer = new ResizeObserver(() => {
+			const node = scroller.current;
+			if (node && notRendered(node)) {
+				hiddenAway.current = true;
+				return;
+			}
+			// Shown again. Observers report before paint, so the chat is put back here,
+			// in the frame it reappears: what it had stays where the browser restored it,
+			// and what landed while it was hidden is history (as for a hidden window),
+			// with a reader at the end snapped to the new end rather than gliding there.
+			if (hiddenAway.current) {
+				hiddenAway.current = false;
+				onPageShown.current();
+			}
 			captureViewportResize(virtualizer);
 			onContentResize.current();
 			loadOlderToFill();
@@ -5498,9 +5604,6 @@ export function Timeline({
 	// open something to read. Only the reader's own scrolling arms it, so streamed
 	// growth while unpinned (which moves nothing) never does.
 	const relatchTimer = useRef<number | undefined>(undefined);
-	// Set by the reader's own wheel, touch, key and scrollbar-drag input. A jump to a
-	// marker or a prompt moves the view without it, and must not be pulled back.
-	const readerIntentAt = useRef(0);
 	const noteReaderIntent = useCallback(() => {
 		readerIntentAt.current = performance.now();
 	}, []);
@@ -5596,6 +5699,12 @@ export function Timeline({
 	function onViewportKeyDown(event: ReactKeyboardEvent<HTMLDivElement>) {
 		const target = event.target as HTMLElement;
 		if (event.defaultPrevented || target.closest("input, textarea, select, [contenteditable='true'], [contenteditable=''], [role='menu'], [role='listbox'], [role='textbox']")) return;
+		// A disclosure opened from the keyboard, as onViewportPointerDown does for a pointer.
+		if ((event.key === "Enter" || (event.key === " " && !event.shiftKey)) && target.closest("[aria-expanded]:not([aria-haspopup])")) {
+			clearRelatch();
+			releaseFollow();
+			return;
+		}
 		if (event.key === "ArrowUp" || event.key === "PageUp" || event.key === "Home" || (event.key === " " && event.shiftKey)) {
 			noteReaderIntent();
 			holdScrollFollow(READER_INTENT_HOLD_MS);
@@ -5907,6 +6016,7 @@ export function Timeline({
 							>
 								{group.key === findGapGroupKey ? <div role="note" className="py-3 text-center text-caption text-muted-foreground">{t("chat.find.gap")}</div> : null}
 								<WorkerUpdateIndexContext.Provider value={workerUpdateIndex}>
+								<EndedSpawnsContext.Provider value={endedSpawns}>
 								<BatchedReportsContext.Provider value={batchedReports}>
 								<LatestForkTurnContext.Provider value={latestForkTurnId}>
 								{group.folded ? (
@@ -5919,6 +6029,7 @@ export function Timeline({
 								) : renderTurn(group)}
 								</LatestForkTurnContext.Provider>
 								</BatchedReportsContext.Provider>
+								</EndedSpawnsContext.Provider>
 								</WorkerUpdateIndexContext.Provider>
 							</div>
 						);
@@ -5965,6 +6076,7 @@ export function Timeline({
 							/>
 						</div>
 					) : null}
+					{timelineEnd}
 					{/* Pushes the latest prompt toward the top of the viewport when following,
 					    then shrinks as the reply fills the space below it. */}
 					<div
@@ -6316,16 +6428,27 @@ const TurnGroup = memo(function TurnGroup({
 	const hostId = useContext(ChatHostId);
 	const batched = useContext(BatchedReportsContext);
 	const updateIndex = useContext(WorkerUpdateIndexContext);
+	const endedSpawns = useContext(EndedSpawnsContext);
 	const { t } = useTranslation();
 	const reducedMotion = useReducedMotion();
 	const { steps: subagentSteps, live: subagentsLive, stopped: subagentsStopped } = groupSubagents(group);
 	const runs = useMemo(
-		() => runsOf(turnFlowItems(group)),
+		() =>
+			runsOf(
+				// A worker the turn spawned draws under the turn as its own row, not as a step,
+				// until it has ended without answering and the row is gone.
+				workerUpdates ? turnFlowItems(group).filter((item) => endedSpawns.has(spawnedBy(item) ?? "") || !spawnedBy(item)) : turnFlowItems(group),
+			),
 		// eslint-disable-next-line react-hooks/exhaustive-deps -- turnFlowItems reads only these fields of the group.
-		[group.items, group.subagents, group.liveProviderFailure, group.outcome?.state, group.outcome?.error],
+		[group.items, group.subagents, group.liveProviderFailure, group.outcome?.state, group.outcome?.error, workerUpdates, endedSpawns],
 	);
-	// A review round arrives as one message per comment; it draws as one event.
-	const bursts = useMemo(() => reviewBursts(runs.map((run) => (run.kind === "single" ? run.items[0] : undefined))), [runs]);
+	// A review round arrives as one message per comment; it draws as one event, or in
+	// Developer Mode, a PR's comments and failing CI draw as one line.
+	const developerMode = useUiStore((state) => state.developerMode);
+	const bursts = useMemo(() => {
+		const singles = runs.map((run) => (run.kind === "single" ? run.items[0] : undefined));
+		return developerMode ? pullRequestBursts(singles) : reviewBursts(singles);
+	}, [developerMode, runs]);
 	const lastAssistantId = [...group.items]
 		.reverse()
 		.find((item) => item.kind === "message" && item.role === "assistant" && item.text.trim() !== "")?.id;
@@ -6340,7 +6463,21 @@ const TurnGroup = memo(function TurnGroup({
 	// hands its copy and undo down to the outcome's action row: one row per turn.
 	// An account switch shows its own marker instead of an outcome, so its turn keeps
 	// the answer's row (or the tool-only fallback) like a finished one.
-	const endsWithOutcome = Boolean(group.outcome && group.outcome.state !== "completed" && !group.accountSwitched);
+	// A compaction that could not run says why on its own row ("Couldn't compact
+	// conversation · reason"), so the turn does not tell the same failure again.
+	const compactionToldFailure = group.outcome?.state === "failed" && Boolean(group.outcome.error?.trim()) &&
+		group.items.some((item) =>
+			item.kind === "activity" && isCompaction(item) && item.status === "failed" &&
+			item.detail?.error?.trim() === group.outcome?.error?.trim());
+	// So does a stopped /compact ("Couldn't compact conversation · Stopped"), when
+	// compacting was all the turn did.
+	const compactionToldStop = group.outcome?.state === "interrupted" &&
+		group.items.some((item) => item.kind === "activity" && isCompaction(item) && item.status === "cancelled") &&
+		group.items.every((item) => (item.kind === "activity" && isCompaction(item)) || (item.kind === "message" && item.role === "user"));
+	const compactionToldOutcome = compactionToldFailure || compactionToldStop;
+	const endsWithOutcome = Boolean(group.outcome && group.outcome.state !== "completed" && !group.accountSwitched && !compactionToldOutcome);
+	// Only the failure is told once: the turn can still be retried.
+	const compactionRetry = compactionToldFailure ? retry : undefined;
 	// A message refused for its login, in a turn that did nothing else, says what
 	// happens to it under its own bubble, so the turn needs no outcome of its own.
 	const loginNoteMessageId = login?.align === "end"
@@ -6404,13 +6541,25 @@ const TurnGroup = memo(function TurnGroup({
 						item.activityKind !== "plan" &&
 						item.activityKind !== "approval" &&
 						item.activityKind !== "user_input" &&
-						item.detail?.event !== "provider.failure",
+						item.detail?.event !== "provider.failure" &&
+						!isCompaction(item),
 				)
+		: undefined;
+	// Setup and a provider retry say so on the live row before anything else.
+	const liveRowTaken = Boolean(startup || group.liveStartupLabel || group.liveProviderFailure);
+	// A compaction under way takes over the live row ("Compacting conversation 1m")
+	// instead of drawing a row of its own; its row joins the turn when it settles.
+	// While the live row says something else, it keeps its own running row.
+	const liveCompaction = group.live && !liveRowTaken
+		? [...group.items]
+				.reverse()
+				.find((item): item is ConversationActivity => item.kind === "activity" && isCompaction(item) && item.status === "running")
 		: undefined;
 	// The step in progress shows once, on the live row next to the loader, which
 	// opens onto its command and output; its own row joins the steps above when it
-	// is done and has had its moment on the live row.
-	const liveStep = useLiveRowStep(group, Boolean(startup || group.liveStartupLabel || group.liveProviderFailure));
+	// is done and has had its moment on the live row. While a compaction holds the
+	// live row, the step keeps its own row.
+	const liveStep = useLiveRowStep(group, liveRowTaken || Boolean(liveCompaction));
 	// The live row names a visible step while it runs; between steps it says Thinking.
 	const liveTask = liveStep ?? currentTask;
 	const renderRun = (run: TimelineRun) => {
@@ -6429,6 +6578,7 @@ const TurnGroup = memo(function TurnGroup({
 				/>
 			);
 		}
+		if (run.kind === "single" && liveCompaction && run.items[0]?.id === liveCompaction.id) return null;
 		if (run.kind !== "activities") return renderSingleRun(run);
 		const activities = run.items.filter(
 			(item): item is ConversationActivity => item.kind === "activity" && item.id !== liveStep?.id,
@@ -6444,11 +6594,11 @@ const TurnGroup = memo(function TurnGroup({
 			/>
 		);
 	};
-	const renderSingleRun = (run: TimelineRun) => (
+	const renderSingleRun = (run: TimelineRun, beforeActions?: ReactNode) => (
 		<TimelineItem
 			key={run.key}
 			item={run.items[0]!}
-			reviewBurst={bursts.get(run.items[0]!.id)}
+			pullRequestBurst={bursts.get(run.items[0]!.id)}
 			harness={harness}
 			sessionId={sessionId}
 			apiBaseUrl={apiBaseUrl}
@@ -6483,10 +6633,12 @@ const TurnGroup = memo(function TurnGroup({
 					: undefined
 			}
 			rollbackDisabled={rollbackDisabled}
+			retry={run.items[0]?.id === copyableMessageId ? compactionRetry : undefined}
 			onSelectAnnotation={onSelectAnnotation}
 			status={run.items[0]?.id === loginNoteMessageId && login
 				? <LoginStatusNote status={login.status} {...(login.ownRetry && retry ? { retry } : {})} />
 				: undefined}
+			beforeActions={beforeActions}
 		/>
 	);
 	// One flat keyed list rather than a slot per section, so a run keeps its element
@@ -6503,8 +6655,6 @@ const TurnGroup = memo(function TurnGroup({
 			onOpenChange={(open) => onActivityDisclosureChange(key, open)}
 		/>
 	);
-	// Set when a reports line was drawn under a message or steer, so the prompt's action row knows it is taken.
-	let drewReportsUnder = false;
 	const renderWorkerRun = (run: TimelineRun): ReactNode | ReactNode[] => {
 		const item = run.kind === "single" ? run.items[0] : undefined;
 		if (!workerUpdates || !item) return renderRun(run);
@@ -6515,7 +6665,6 @@ const TurnGroup = memo(function TurnGroup({
 			// Reports a worker's steer carried in travel with it, as their own line.
 			const carried = batched?.under.get(item.id) ?? [];
 			if (carried.length === 0) return rows;
-			drewReportsUnder = true;
 			return [rows, reportsLine(`${run.key}:reports`, carried)];
 		}
 		if (updates.length > 0) return reportsLine(run.key, updates);
@@ -6526,14 +6675,11 @@ const TurnGroup = memo(function TurnGroup({
 			? [...piggybackedUpdates(item), ...(batched?.under.get(item.id) ?? [])].filter((update) => needsYouNow(updateIndex, update))
 			: [];
 		if (waiting.length === 0) return renderRun(run);
-		drewReportsUnder = true;
 		return [renderRun(run), reportsLine(`${run.key}:waiting`, waiting)];
 	};
 	const body: ReactNode[] = humanRuns.flatMap(renderWorkerRun);
 	const tail = workedRuns.at(-1);
 	const tailIsReply = group.live && tail?.kind === "single" && tail.items[0].kind === "message" && tail.items[0].role === "assistant";
-	// The reports line under the prompt takes the prompt's action row itself.
-	const reportsUnderPrompt = drewReportsUnder;
 	// The live row sits at the end of the turn, under what the agent has written so
 	// far, where the reader is already looking: orb, current step, timer. A provider
 	// retry shows in the same row. The setup checklist shares it too, so the handoff
@@ -6551,6 +6697,7 @@ const TurnGroup = memo(function TurnGroup({
 				// writing, so both keep the timer alone.
 				task={liveTask ? liveTaskLabel(liveTask) : group.live && !group.blocked && !tailIsReply ? "Thinking" : undefined}
 				step={liveStep}
+				compaction={liveCompaction}
 				reconnect={group.liveProviderFailure ? reconnectCopy(group.liveProviderFailure) : undefined}
 			>
 				{startup && (startup.steps.length > 0 || startup.failed) ? <SessionStartup {...startup} /> : null}
@@ -6559,34 +6706,28 @@ const TurnGroup = memo(function TurnGroup({
 	const outcome = group.outcome;
 	// "Worked for" heads every settled turn with how long it ran. With work to fold it
 	// is the fold, opening onto the steps; a turn that went straight to its answer has
-	// nothing to open, so it is the same words without the chevron. As the turn
-	// settles it fades in where the turn reserved its row, and the reply slides up
-	// into the room its steps left (restoreSettle), so the work reads as collapsing
-	// into its summary. A settled turn loaded from history mounts it without the fade.
+	// nothing to open, so it is the same words without the chevron. No blank row is
+	// reserved for it while the turn runs: as the turn settles it fades in and
+	// restoreSettle FLIP-animates the rows below into their new positions on the
+	// compositor thread, so the space opens smoothly without layout thrashing. A
+	// settled turn loaded from history mounts it without the fade.
 	const disclosureKey = `${group.key}:worked`;
 	const workedDurationMs = outcome?.durationMs !== undefined && outcome.durationMs > 0 ? outcome.durationMs : undefined;
-	// Agents the turn spawned are part of its work, so they fold with its steps.
-	const spawned = workerUpdates && outcome ? spawnedSessionIds(group.items) : [];
-	const spawnedLine = spawned.length > 0 ? <SpawnedAgents key="spawned" sessionIds={spawned} /> : null;
-	const hasFoldedWork = foldedRuns.length > 0 || spawnedLine !== null;
-	const foldedWork = (): ReactNode[] => [...foldedRuns.flatMap(renderWorkerRun), ...(spawnedLine ? [spawnedLine] : [])];
+	// Each worker the turn spawned is a row in the spawn tree under it, from the moment
+	// the daemon records the spawn until the worker answers, so it stays out of the fold.
+	// One that ended without answering keeps its row only until the next turn.
+	// `ao spawn` output still names the workers a daemon too old to record the spawn started.
+	const recordedSpawns = workerUpdates ? group.items.flatMap((item) => spawnedWorker(item) ?? []) : [];
+	const commandSpawns = workerUpdates && outcome ? spawnedSessionIds(group.items) : [];
+	// The tree goes with its last waiting worker, so the reply keeps no empty space for it.
+	const waitingWorkers = waitingSpawns(recordedSpawns, commandSpawns, updateIndex, endedSpawns);
+	const spawnTree = waitingWorkers.length > 0 ? <SpawnedAgents key="spawned" spawns={waitingWorkers} /> : null;
+	const hasFoldedWork = foldedRuns.length > 0;
+	const foldedWork = (): ReactNode[] => foldedRuns.flatMap(renderWorkerRun);
 	const showsWorked = Boolean(
 		// A message refused for its login did no work, so it gets no "Worked for".
 		outcome && !onlyRead && !loginNoteMessageId && (hasFoldedWork || workedDurationMs !== undefined),
 	);
-	// The prompt's hover actions (time, edit, copy) float in the row under its bubble.
-	// "Worked for" fills that row; without it, an empty row of the same height keeps
-	// them off the reply. A branch navigator already reserves the row in the flow.
-	const promptBubble = group.items.some(
-		(item) => item.kind === "message" && item.role === "user" && item.origin === "human" && !item.continuation && !relayedVia(item),
-	);
-	const reservesActionRow = promptBubble && !reportsUnderPrompt && !(group.turnId && onActivateBranch && branchPoints.get(group.turnId));
-	// The empty row is exactly as tall as "Worked for", which takes its place as the
-	// turn settles, so the handover moves nothing. Only one of the two is ever in the
-	// DOM, so the turn's row gap is never counted twice.
-	if (!showsWorked && reservesActionRow) {
-		body.push(<div key="turn-worked-gap" aria-hidden="true" className="h-7 shrink-0" data-turn-worked-gap="" />);
-	}
 	body.push(
 		<AnimatePresence key="turn-worked" initial={false}>
 			{outcome && showsWorked ? (
@@ -6617,7 +6758,11 @@ const TurnGroup = memo(function TurnGroup({
 	if (!outcome) body.push(...workedRuns.flatMap(renderWorkerRun));
 	// Settled steers still carry the reports they delivered.
 	if (outcome) body.push(...noticeRuns.flatMap(renderWorkerRun));
-	if (finalRun) body.push(renderRun(finalRun));
+	// Under the reply, so the reply streams in above the tree, and above the reply's
+	// copy and undo row, which belongs to the whole turn.
+	const finalReply = finalRun?.kind === "single" && finalRun.items[0]?.kind === "message" && finalRun.items[0].role === "assistant";
+	if (finalRun) body.push(finalReply && spawnTree ? renderSingleRun(finalRun, spawnTree) : renderRun(finalRun));
+	if (spawnTree && !finalReply) body.push(spawnTree);
 	return (
 		// Positioned, so the live row that popLayout lifts out of the flow as the turn
 		// settles fades where it was rather than against some outer ancestor.
@@ -6663,14 +6808,17 @@ const TurnGroup = memo(function TurnGroup({
 			{group.live ? <TurnLiveStatus blocked={group.blocked} /> : null}
 			{/* No assistant prose to hang the undo on — still offer it so a tool-only
 			    turn is not stuck without a way back. A stopped or failed turn carries
-			    it on its outcome's row instead. */}
-			{!copyableMessageId && !group.live && !endsWithOutcome && canRollback ? (
+			    it on its outcome's row instead. One whose compaction row already said
+			    why it failed has no outcome, so its Retry is here too, or on its
+			    answer's row when it has one. */}
+			{!copyableMessageId && !group.live && !endsWithOutcome && (canRollback || compactionRetry) ? (
 				<TurnActions
-					onRollback={() => onRollback(group.turnId as string)}
+					retry={compactionRetry}
+					onRollback={canRollback ? () => onRollback(group.turnId as string) : undefined}
 					rollbackDisabled={rollbackDisabled}
 				/>
 			) : null}
-			{group.outcome && group.outcome.state !== "completed" && !group.accountSwitched && !loginNoteMessageId ? (
+			{group.outcome && group.outcome.state !== "completed" && !group.accountSwitched && !loginNoteMessageId && !compactionToldOutcome ? (
 				<TurnOutcome
 					state={group.outcome.state}
 					error={group.outcome.error}
@@ -6733,9 +6881,11 @@ function TimelineItem({
 	live,
 	onRollback,
 	rollbackDisabled,
+	retry,
 	onSelectAnnotation,
 	status,
-	reviewBurst,
+	beforeActions,
+	pullRequestBurst,
 }: {
 	item: ConversationItem;
 	harness?: string;
@@ -6775,11 +6925,15 @@ function TimelineItem({
 	onRollback?: () => void;
 	/** Keep the action row mounted while another turn is running. */
 	rollbackDisabled?: boolean;
+	/** Retry the failed turn from the answer that owns its action row. */
+	retry?: TurnOutcomeRetryControl;
 	onSelectAnnotation?: (annotation: { text: string; snapshot?: ChatExcerptSnapshot; messageId?: string; revision?: number }) => void;
 	/** Where a human message stands, leading the row under its bubble. */
 	status?: ReactNode;
-	/** This message's review burst (see `reviewBursts`): the messages it draws for, or null when another draws it. */
-	reviewBurst?: readonly ConversationMessage[] | null;
+	/** What an answer introduced, between its prose and its action row. */
+	beforeActions?: ReactNode;
+	/** This message's PR feedback burst (see `pullRequestBursts` and `reviewBursts`): the messages it draws for, or null when another draws it. */
+	pullRequestBurst?: readonly ConversationMessage[] | null;
 }) {
 	if (item.kind === "message") {
 		if (item.role === "assistant") {
@@ -6790,6 +6944,8 @@ function TimelineItem({
 					live={live}
 					onRollback={onRollback}
 					rollbackDisabled={rollbackDisabled}
+					beforeActions={beforeActions}
+					retry={retry}
 				/>
 			);
 		}
@@ -6835,11 +6991,11 @@ function TimelineItem({
 				/>
 			);
 		}
-		// An earlier message of its review burst draws this one.
-		if (reviewBurst === null) return null;
+		// An earlier message of its PR feedback burst draws this one.
+		if (pullRequestBurst === null) return null;
 		return (
 			<FromAgent item={item} queued={queued}>
-				<AutomationMessage message={item} queued={queued} burst={reviewBurst} fallback={<OriginMessage message={item} />} />
+				<AutomationMessage message={item} queued={queued} burst={pullRequestBurst} fallback={<OriginMessage message={item} />} />
 			</FromAgent>
 		);
 	}
@@ -7077,7 +7233,7 @@ function bannerOf(group: TimelineGroup): TimelineGroup | undefined {
 	return last && isAccountFailure(last) ? last : undefined;
 }
 
-function foldBackground(groups: readonly TimelineGroup[], index: WorkerUpdateIndex | null, known: ReadonlySet<string>, prior: ReadonlyMap<string, string>, carried: ReadonlyMap<string, readonly WorkerUpdate[]>, gap?: number): TimelineGroup[] {
+function foldBackground(groups: readonly TimelineGroup[], index: WorkerUpdateIndex | null, endedSpawns: ReadonlySet<string>, known: ReadonlySet<string>, prior: ReadonlyMap<string, string>, carried: ReadonlyMap<string, readonly WorkerUpdate[]>, gap?: number): TimelineGroup[] {
 	const out: TimelineGroup[] = [];
 	const used = new Set<string>();
 	const held: TimelineGroup[] = [];
@@ -7110,7 +7266,12 @@ function foldBackground(groups: readonly TimelineGroup[], index: WorkerUpdateInd
 			: undefined;
 		const { steps, live, stopped } = groupSubagents(group);
 		const teamWorking = group.items.some((item) => isSubagentLaunch(item) && readSubagent(item, steps.get(item.id) ?? [], live.has(item.id), stopped).state === "working");
-		const standing = outcome && !teamWorking ? turnStanding(group.items, outcome, index, carried) : "yours";
+		// A turn stays in view while a worker it spawned has not answered, as one does while
+		// a subagent it launched works: the worker's line is under the reply until then. One
+		// that ended before it answered keeps it until the next turn, since that line is where
+		// the chat says so, and then lets the turn go.
+		const spawnWaiting = waitingSpawns(group.items.flatMap((item) => spawnedWorker(item) ?? []), spawnedSessionIds(group.items), index, endedSpawns).length > 0;
+		const standing = outcome && !teamWorking && !spawnWaiting ? turnStanding(group.items, outcome, index, carried) : "yours";
 		if (standing !== "background" && standing !== "failed") {
 			close();
 			out.push(standing === "replaced"
@@ -7466,7 +7627,10 @@ function retryableFailedTurns(snapshot: ConversationSnapshot, consumed: Readonly
 	// still makes the final failed group retryable, even when it is in an earlier one.
 	// A usage limit and a refused login are offered on their own (the limit's notice,
 	// the login band), so the daemon's word that the turn has a prompt is enough
-	// for them, even when history paging left that prompt out.
+	// for them, even when history paging left that prompt out. So is a turn an event
+	// started (a review comment, a CI failure) that failed for another reason, such
+	// as a timeout: such a turn often runs long enough to page its prompt out, and
+	// the daemon sends the event again as it was.
 	const humanPromptTurnIds = new Set(snapshot.items.flatMap((item) =>
 		item.kind === "message" && item.role === "user" && item.origin === "human" && item.turnId
 			? [item.turnId]
@@ -7480,7 +7644,8 @@ function retryableFailedTurns(snapshot: ConversationSnapshot, consumed: Readonly
 					Boolean(turn.providerTurnId) &&
 					!consumed.has(turn.id) &&
 					(humanPromptTurnIds.has(turn.id) ||
-						Boolean((turn.usageLimit || turn.failureCode === "auth_required") && turn.hasHumanPrompt)),
+						Boolean((turn.usageLimit || turn.failureCode === "auth_required") && turn.hasHumanPrompt) ||
+						Boolean(!turn.usageLimit && turn.hasEventPrompt)),
 			)
 			.map((turn) => [turn.id, turn]),
 	);
@@ -7829,6 +7994,36 @@ function openingTurnSettled(snapshot: ConversationSnapshot, controllerStopped: b
 }
 
 /**
+ * In Developer Mode, queued turns that hold only one PR's review comments or
+ * failing CI, back to back, as one group. The daemon queues each comment that
+ * arrives while the agent works as its own turn, so a review round stacked one
+ * row per comment under the working row; as one group its messages draw as one
+ * line, and the count grows in place as more arrive. The group keeps the first
+ * turn's key and id, so the line stays where it is.
+ */
+function mergeQueuedPullRequestFeedback(groups: TimelineGroup[], queued: ReadonlySet<string>): TimelineGroup[] {
+	const pullRequestOf = (group: TimelineGroup) => {
+		if (!group.turnId || !queued.has(group.turnId) || group.items.length === 0) return undefined;
+		const numbers = new Set(group.items.map((item) => pullRequestFeedbackNumber(item)));
+		const [number] = numbers;
+		return numbers.size === 1 ? number : undefined;
+	};
+	const merged: TimelineGroup[] = [];
+	let runPullRequest: number | undefined;
+	for (const group of groups) {
+		const pullRequest = pullRequestOf(group);
+		const previous = merged.at(-1);
+		if (pullRequest !== undefined && pullRequest === runPullRequest && previous) {
+			merged[merged.length - 1] = { ...previous, items: [...previous.items, ...group.items] };
+			continue;
+		}
+		merged.push(group);
+		runPullRequest = pullRequest;
+	}
+	return merged.length === groups.length ? groups : merged;
+}
+
+/**
  * Group items by the turn that produced them, so a completed turn can be closed
  * off with its outcome.
  *
@@ -7951,9 +8146,11 @@ function groupByTurn(snapshot: ConversationSnapshot, { controllerStopped = false
 	}
 
 	const conversation = subagentsOfConversation(snapshot.items, groups, controllerStopped);
-	if (!conversation) return groups.flatMap(splitAtSteers);
-	return groups.flatMap((group) =>
-		splitAtSteers(group)
+	const beside = turnsBeside(groups, byTurn);
+	const parts = groups.flatMap((group) => {
+		const segments = splitTurn(group, beside.get(group) ?? []);
+		if (!conversation) return segments;
+		return segments
 			.map((segment) => withSubagentSteps(segment, conversation))
 			// A part made only of steps that moved under a launch elsewhere has nothing
 			// left to draw. A live one keeps its Working row, and one whose turn did not
@@ -7961,8 +8158,74 @@ function groupByTurn(snapshot: ConversationSnapshot, { controllerStopped = false
 			.filter((segment) =>
 				segment.live
 				|| (segment.outcome !== undefined && segment.outcome.state !== "completed")
-				|| segment.items.some((item) => !conversation.stepIds.has(item.id))),
-	);
+				|| segment.items.some((item) => !conversation.stepIds.has(item.id)));
+	});
+	return inDrawOrder(parts, groups, byTurn);
+}
+
+/**
+ * The turns that started inside each turn with no message of their own, such as the
+ * turns of a Codex agent's subagents. Turns that run beside each other inside one belong
+ * to it alone, so each of them stays whole.
+ */
+function turnsBeside(groups: readonly TimelineGroup[], byTurn: ReadonlyMap<string, ConversationTurn>): Map<TimelineGroup, TimelineGroup[]> {
+	const beside = new Map<TimelineGroup, TimelineGroup[]>();
+	const runs = groups
+		.flatMap((group) => {
+			const turn = group.turnId ? byTurn.get(group.turnId) : undefined;
+			const startedAt = Date.parse(turn?.startedAt ?? "");
+			const endedAt = turn?.state === "running" ? Infinity : Date.parse(turn?.completedAt ?? "");
+			return Number.isFinite(startedAt) ? [{ group, startedAt, endedAt }] : [];
+		})
+		.sort((a, b) => a.startedAt - b.startedAt);
+	let outer: (typeof runs)[number] | undefined;
+	for (const run of runs) {
+		const prompted = run.group.items.some((item) => item.kind === "message" && item.role === "user");
+		if (outer && !prompted && run.startedAt > outer.startedAt && run.startedAt < outer.endedAt) {
+			beside.set(outer.group, [...(beside.get(outer.group) ?? []), run.group]);
+		} else outer = run;
+	}
+	for (const inner of beside.values()) inner.sort((a, b) => a.anchor - b.anchor);
+	return beside;
+}
+
+/**
+ * The parts of every turn in the order they happened. A part sorts by its first row. A
+ * queued prompt is recorded when it is sent but runs later, so a turn also sorts no
+ * earlier than the last row of every turn that ended before it started.
+ */
+function inDrawOrder(parts: TimelineGroup[], turns: readonly TimelineGroup[], byTurn: ReadonlyMap<string, ConversationTurn>): TimelineGroup[] {
+	const time = (turnId: string | undefined, field: "startedAt" | "completedAt") =>
+		Date.parse((turnId && byTurn.get(turnId)?.[field]) || "");
+	const ended = turns
+		.map((turn) => {
+			const last = turn.items.at(-1)!.sequence;
+			return { at: time(turn.turnId, "completedAt"), startedAt: time(turn.turnId, "startedAt"), last, lastSoFar: last };
+		})
+		.filter(({ at, startedAt }) => Number.isFinite(at) && !(startedAt > at))
+		.sort((a, b) => a.at - b.at);
+	for (let index = 1; index < ended.length; index += 1) ended[index]!.lastSoFar = Math.max(ended[index]!.last, ended[index - 1]!.lastSoFar);
+	const position = (part: TimelineGroup) => {
+		const startedAt = time(part.turnId, "startedAt");
+		let low = 0;
+		let high = ended.length;
+		while (low < high) {
+			const middle = (low + high) >> 1;
+			if (ended[middle]!.at < startedAt) low = middle + 1;
+			else high = middle;
+		}
+		let before = ended[low - 1]?.lastSoFar ?? -Infinity;
+		// Timestamps parse to the millisecond, so a turn that ended as this one started
+		// still ran first if it started earlier. That also leaves this turn out.
+		for (let index = low; ended[index]?.at === startedAt; index += 1) {
+			if (ended[index]!.startedAt < startedAt) before = Math.max(before, ended[index]!.last);
+		}
+		return before > part.anchor ? before + 0.001 : part.anchor;
+	};
+	return parts
+		.map((part) => ({ part, at: position(part) }))
+		.sort((a, b) => a.at - b.at)
+		.map(({ part }) => part);
 }
 
 type ConversationSubagents = {
@@ -8021,30 +8284,42 @@ function withSubagentSteps(segment: TimelineGroup, conversation: ConversationSub
 /**
  * A steer is the user speaking, so it opens a new visual turn even though the
  * provider keeps running the same one: everything before it settles into its own
- * "Worked for" row, and the steer starts a fresh Working row and reply. Only the
- * last segment carries the live state, outcome, diff and plan of the real turn.
+ * "Worked for" row, and the steer starts a fresh Working row and reply. A turn that
+ * starts beside this one cuts it the same way, so this turn's later rows draw below it,
+ * and so does a live turn's Working row before it has any. Only the last segment carries
+ * the live state, outcome, diff and plan of the real turn.
  */
-function splitAtSteers(group: TimelineGroup): TimelineGroup[] {
-	const starts = group.items.flatMap((item, index) =>
-		index > 0 && item.kind === "activity" && isSteer(item) && !item.detail?.senderSessionId ? [index] : [],
-	);
-	if (starts.length === 0) return [group];
-	const bounds = [0, ...starts, group.items.length];
-	const segmentStarts = bounds.slice(0, -1).map((from, index) =>
-		index === 0 ? Date.parse(group.liveStartedAt ?? "") : Date.parse(group.items[from]!.createdAt),
-	);
-	const lastIndex = starts.length;
-	return starts.concat(group.items.length).map((_end, index) => {
+function splitTurn(group: TimelineGroup, beside: readonly TimelineGroup[]): TimelineGroup[] {
+	const startedBetween = (from: number, to: number) => beside.findLast((turn) => turn.anchor > from && turn.anchor < to);
+	const cutAt = (index: number, turn: TimelineGroup) =>
+		({ index, key: `beside:${turn.turnId}`, startedAt: turn.liveStartedAt ?? "", anchor: turn.anchor + 0.0005 });
+	const cuts = group.items.flatMap((item, index) => {
+		if (index === 0) return [];
+		if (item.kind === "activity" && isSteer(item) && !item.detail?.senderSessionId) {
+			return [{ index, key: `steer:${item.id}`, startedAt: item.createdAt, anchor: item.sequence }];
+		}
+		const turn = startedBetween(group.items[index - 1]!.sequence, item.sequence);
+		return turn ? [{ ...cutAt(index, turn), anchor: item.sequence }] : [];
+	});
+	const waitingOn = group.live ? startedBetween(group.items.at(-1)!.sequence, Infinity) : undefined;
+	if (waitingOn) cuts.push(cutAt(group.items.length, waitingOn));
+	if (cuts.length === 0) return [group];
+	const bounds = [0, ...cuts.map((cut) => cut.index), group.items.length];
+	const segmentStarts = [group.liveStartedAt ?? "", ...cuts.map((cut) => cut.startedAt)].map((time) => Date.parse(time));
+	const lastIndex = cuts.length;
+	return segmentStarts.map((_start, index) => {
 		const items = group.items.slice(bounds[index], bounds[index + 1]);
-		const first = items[0]!;
-		const key = index === 0 ? group.key : `${group.key}:steer:${first.id}`;
+		const cut = cuts[index - 1];
+		const key = cut ? `${group.key}:${cut.key}` : group.key;
+		// The first part keeps where the turn began, which may be above the loaded history.
+		const anchor = cut ? cut.anchor : group.anchor;
 		const startedAt = segmentStarts[index]!;
 		if (index === lastIndex) {
 			const priorMs = Number.isFinite(startedAt) ? startedAt - segmentStarts[0]! : 0;
 			return {
 				...group,
 				key,
-				anchor: first.sequence,
+				anchor,
 				items,
 				liveStartedAt: Number.isFinite(startedAt) ? new Date(startedAt).toISOString() : group.liveStartedAt,
 				outcome: group.outcome
@@ -8062,7 +8337,7 @@ function splitAtSteers(group: TimelineGroup): TimelineGroup[] {
 		return {
 			key,
 			turnId: group.turnId,
-			anchor: first.sequence,
+			anchor,
 			items,
 			outcome: {
 				state: "completed" as const,
@@ -8081,16 +8356,22 @@ function isHumanRun(item: ConversationItem | undefined): boolean {
 
 /** Conversation records that stay readable outside a settled turn's folded work. */
 function isNoticeRun(run: TimelineRun): boolean {
-	return run.items.some(isNoticeItem);
+	// Read as the run draws them: a failed spawn's call carries the daemon's reason once merged.
+	const items: readonly ConversationItem[] = run.items;
+	return mergeFailedSpawns(items.filter((item) => item.kind === "activity")).some(isNoticeItem);
 }
 
 function isNoticeItem(item: ConversationItem | undefined): boolean {
 	if (item?.kind !== "activity") return false;
 	if (item.activityKind === "error") return true;
 	// A run holding a failed call stays out of the fold, so the failure shows under it.
-	if (isOrdinaryActivity(item) && isFailedCall(item)) return true;
+	// A spawn that failed folds into Worked for with the rest of the work: its step
+	// says why there, and the reply above the fold already tells the reader. One the
+	// daemon gave no reason for stays out like any failed call.
+	if (isOrdinaryActivity(item) && isFailedCall(item) && !isFailedSpawn(item)) return true;
 	if (item.activityKind === "user_input") return item.status !== "pending";
-	return item.detail?.event !== undefined && !isSteer(item) && !isCompaction(item) && item.activityKind !== "plan";
+	// A compaction stays too: it is where the agent's earlier history was summarized.
+	return item.detail?.event !== undefined && !isSteer(item) && item.activityKind !== "plan";
 }
 
 const NO_BATCHED_REPORTS: BatchedReports = { under: new Map(), moved: new Set() };
@@ -8199,57 +8480,105 @@ const CHAT_PROMPTS = [
 	{ prompt: "chat.welcome.prompt.simplify", chip: "chat.welcome.chip.simplify", icon: WandSparkles },
 ] as const;
 
+/** The heading settling into the space the sample prompts leave: a soft deceleration. */
+const WELCOME_SETTLE = { duration: 0.34, ease: [0.32, 0.72, 0, 1] } as const;
+
 /**
- * Sample requests above an empty chat's composer; picking one fills the composer.
- * The list collapses its height, and the gap below it, on the way in and out so the
- * centered composer glides instead of jumping.
+ * An empty chat's heading and sample requests, standing on the composer's top
+ * edge. Picking a request fills the composer.
+ *
+ * The stack hangs from the composer instead of sharing its centered column, so the
+ * composer never moves while the prompts come and go: typing fades them where they
+ * stand and the heading glides down into their place. Every frame is a transform or
+ * an opacity, so the animation that starts on the first keystroke never relays out
+ * the page while the user types.
  */
-function WelcomePromptSuggestions({ open, artifact, unavailable = false, onPick }: { open: boolean; artifact: boolean; unavailable?: boolean; onPick: (text: string) => void }) {
+function WelcomeStack({ heading, promptsOpen, artifact, unavailable = false, onPick, onRoom }: { heading: string; promptsOpen: boolean; artifact: boolean; unavailable?: boolean; onPick: (text: string) => void; onRoom: (height: number) => void }) {
 	const { t } = useTranslation();
 	const reducedMotion = useReducedMotion();
 	const prompts = artifact ? ARTIFACT_PROMPTS : CHAT_PROMPTS;
+	// The prompts sit out of the flow, pinned to the composer's top edge, and this
+	// spacer holds their room. When they leave, the spacer closes at once and the
+	// prompts travel down with the heading, tucking behind the composer's top edge
+	// (the stack clips below it) as they fade; coming back, they rise out of it.
+	//
+	// Their height comes from an invisible copy that is always laid out, so the
+	// stack's full room is known from the first frame even when a restored draft
+	// keeps the prompts hidden, and it never changes as typing hides or shows them.
+	// The composer keeps that room above it, so it stays put.
+	const headingRef = useRef<HTMLHeadingElement>(null);
+	const ghostRef = useRef<HTMLUListElement>(null);
+	const [promptsHeight, setPromptsHeight] = useState(0);
+	useLayoutEffect(() => {
+		const heading = headingRef.current;
+		const ghost = ghostRef.current;
+		if (!heading || !ghost) return;
+		const measure = () => {
+			setPromptsHeight(ghost.offsetHeight);
+			onRoom(heading.offsetHeight + (Number.parseFloat(getComputedStyle(heading).marginBottom) || 0) + ghost.offsetHeight);
+		};
+		measure();
+		const observer = new ResizeObserver(measure);
+		observer.observe(heading);
+		observer.observe(ghost);
+		return () => observer.disconnect();
+	}, [onRoom]);
+	const chips = (onClick?: (text: string) => void) => prompts.map(({ prompt, chip, icon: Icon }) => (
+		<li key={prompt}>
+			<Button
+				type="button"
+				variant="quiet"
+				shape="pill"
+				title={onClick ? t(prompt) : undefined}
+				tabIndex={onClick ? undefined : -1}
+				className="welcome-prompt-suggestion border-border"
+				disabled={unavailable}
+				onClick={onClick ? () => onClick(t(prompt)) : undefined}
+			>
+				<Icon aria-hidden="true" className="size-icon-sm shrink-0" />
+				<span className="whitespace-nowrap">{t(chip)}</span>
+			</Button>
+		</li>
+	));
 	return (
-		<AnimatePresence initial={false}>
-			{open ? (
-				<motion.div
-					key="welcome-prompts"
-					initial={{ height: 0, opacity: 0 }}
-					animate={{ height: "auto", opacity: 1, transition: { duration: reducedMotion ? 0 : 0.2, ease: [0.22, 1, 0.36, 1] } }}
-					// The chips fade first, then the row folds away with a soft ease in and out,
-					// so the composer below settles instead of being yanked up.
-					exit={{
-						height: 0,
-						opacity: 0,
-						transition: reducedMotion ? { duration: 0 } : {
-							height: { duration: 0.32, ease: [0.65, 0, 0.35, 1] },
-							opacity: { duration: 0.14, ease: "easeOut" },
-						},
-					}}
-					// The dock's gap-2 sits outside this box. Cancel it and put the space back as
-					// padding inside, so it collapses with the height instead of snapping.
-					className="-mb-2 overflow-hidden"
-				>
-					{/* Lit with the composer on the guided tour's last stop (GuidedTour). */}
-					<ul aria-label={t(artifact ? "chat.welcome.artifactPrompts" : "chat.welcome.prompts")} className="flex flex-wrap justify-center gap-2 pb-4" data-tour="composer-prompts">
-						{prompts.map(({ prompt, chip, icon: Icon }) => (
-							<li key={prompt}>
-								<Button
-									type="button"
-									variant="quiet"
-									shape="pill"
-									title={t(prompt)}
-									className="welcome-prompt-suggestion border-border"
-									disabled={unavailable}
-									onClick={() => onPick(t(prompt))}
-								>
-									<Icon aria-hidden="true" className="size-icon-sm shrink-0" />
-									<span className="whitespace-nowrap">{t(chip)}</span>
-								</Button>
-							</li>
-						))}
-					</ul>
-				</motion.div>
-			) : null}
-		</AnimatePresence>
+		<div className="pointer-events-none absolute inset-x-0 bottom-full flex flex-col items-center [clip-path:inset(-100vh_-100vw_0_-100vw)]">
+			<motion.h1
+				ref={headingRef}
+				layout={reducedMotion ? false : "position"}
+				// Glide only when the prompts come or go. The first measurement fills the
+				// spacer on mount, and a resize can change it; neither is a move to animate,
+				// or every new chat would open with the heading rising into place.
+				layoutDependency={promptsOpen}
+				transition={{ layout: WELCOME_SETTLE }}
+				// The `/` and `@` menus open where the heading stands, so it steps aside for them.
+				// Anchored on the composer box alone: a group-has variant would restyle the app
+				// on every DOM change (style-invalidation.test.ts).
+				className="mb-5 text-center text-2xl font-normal tracking-tight text-foreground transition-opacity duration-150 ease-out motion-reduce:transition-none [[data-tour=composer]:has([data-composer-suggest-menu])>*>&]:opacity-0 sm:text-3xl"
+			>
+				{heading}
+			</motion.h1>
+			<div aria-hidden="true" className="w-full shrink-0" style={{ height: promptsOpen ? promptsHeight : 0 }} />
+			<ul ref={ghostRef} aria-hidden="true" className="invisible absolute inset-x-0 bottom-0 flex flex-wrap justify-center gap-2 pb-4">
+				{chips()}
+			</ul>
+			<AnimatePresence initial={false}>
+				{promptsOpen ? (
+					<motion.div
+						key="welcome-prompts"
+						className="pointer-events-auto absolute inset-x-0 bottom-0"
+						initial={{ opacity: 0, y: promptsHeight }}
+						// Rise with the heading, on the heading's curve, fading in a little behind it.
+						animate={{ opacity: 1, y: 0, transition: reducedMotion ? { duration: 0 } : { y: WELCOME_SETTLE, opacity: { duration: 0.24, delay: 0.06, ease: [0.23, 1, 0.32, 1] } } }}
+						// Sink with the heading; the fade finishes before they reach the composer.
+						exit={{ opacity: 0, y: promptsHeight, transition: reducedMotion ? { duration: 0 } : { y: WELCOME_SETTLE, opacity: { duration: 0.2, ease: [0.4, 0, 1, 1] } } }}
+					>
+						{/* Lit with the composer on the guided tour's last stop (GuidedTour). */}
+						<ul aria-label={t(artifact ? "chat.welcome.artifactPrompts" : "chat.welcome.prompts")} className="flex flex-wrap justify-center gap-2 pb-4" data-tour="composer-prompts">
+							{chips(onPick)}
+						</ul>
+					</motion.div>
+				) : null}
+			</AnimatePresence>
+		</div>
 	);
 }

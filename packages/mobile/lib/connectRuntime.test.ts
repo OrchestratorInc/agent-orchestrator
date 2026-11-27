@@ -6,6 +6,7 @@ vi.mock("./config", () => ({}));
 vi.mock("./hosts", () => ({
 	findHost: vi.fn(),
 	updateHostEndpoints: vi.fn(),
+	endpointRevisionOf: vi.fn(() => 0),
 	adoptHostIdentity: vi.fn(),
 	touchHost: vi.fn(),
 }));

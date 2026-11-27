@@ -47,8 +47,29 @@ func (m *Manager) recordTerminalTurn(ctx context.Context, rec domain.SessionReco
 		if s.SubagentID == "" && !staleTerminalStop(rec, s) {
 			err = recorder.RecordTerminalTurnResponse(ctx, rec.ID, strings.TrimSpace(s.FinalAssistantMessage), at)
 		}
+	case "stop-failure":
+		// A provider error (an invalid API key, a rate limit) ended the turn
+		// without an answer. Closing it unanswered keeps the user's retry from
+		// joining the failed request.
+		if s.SubagentID == "" && !staleTerminalStop(rec, s) {
+			err = recorder.RecordTerminalTurnResponse(ctx, rec.ID, "", at)
+		}
 	}
 	if err != nil {
+		slog.Default().Warn("lifecycle: record terminal turn", "session", rec.ID, "event", s.Event, "error", err)
+	}
+}
+
+// closeFailedTerminalTurn closes the open terminal turn unanswered once the
+// screen proves a StopFailure, taken for a child's when it arrived, ended the
+// parent's turn instead. Without it the user's retry would join the failed
+// request.
+func (m *Manager) closeFailedTerminalTurn(ctx context.Context, rec domain.SessionRecord, s ports.ActivitySignal, now time.Time) {
+	recorder, ok := m.store.(terminalTurnRecorder)
+	if !ok {
+		return
+	}
+	if err := recorder.RecordTerminalTurnResponse(ctx, rec.ID, "", timeOr(s.Timestamp, now)); err != nil {
 		slog.Default().Warn("lifecycle: record terminal turn", "session", rec.ID, "event", s.Event, "error", err)
 	}
 }
