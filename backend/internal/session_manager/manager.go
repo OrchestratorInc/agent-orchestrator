@@ -1292,9 +1292,14 @@ func (m *Manager) Spawn(ctx context.Context, cfg ports.SpawnConfig) (result doma
 		}
 		if model != "" {
 			cfg.AgentConfig.Model = model
-			if !cfg.EffortOverride && cfg.AgentConfig.Effort == "" && effort != "" {
+			if !cfg.EffortOverride && cfg.AgentConfig.Effort == "" {
+				// The orchestrator's level comes with its model, the provider
+				// default (empty) included: a level the project or role sets was
+				// not chosen for this launch, so this spawn drops it.
+				project.Config.AgentConfig.Effort = ""
+				project.Config.Worker.AgentConfig.Effort, project.Config.Orchestrator.AgentConfig.Effort = "", ""
 				cfg.AgentConfig.Effort = effort
-				cfg.EffortInherited = true
+				cfg.EffortInherited = effort != ""
 			}
 		}
 	}

@@ -378,17 +378,20 @@ func TestChatWorkerKeepsOrchestratorEffort(t *testing.T) {
 	models := map[domain.AgentHarness]string{
 		domain.HarnessOpenCodeV2: "opencode/deepseek-v4.1-flash-free",
 		domain.HarnessGrok:       "grok-4.5",
+		domain.HarnessCodex:      "gpt-5.5",
 	}
 	for _, tt := range []struct {
 		name       string
 		harness    domain.AgentHarness
 		withParent bool
-		mode       domain.SessionMode
-		roleEffort string
-		requested  ports.AgentConfig
-		override   bool
-		wantEffort string
-		wantErr    error
+		// parentDefault leaves the orchestrator on the provider's default level.
+		parentDefault bool
+		mode          domain.SessionMode
+		roleEffort    string
+		requested     ports.AgentConfig
+		override      bool
+		wantEffort    string
+		wantErr       error
 	}{
 		{name: "OpenCode 2 Chat worker gets the orchestrator's level", harness: domain.HarnessOpenCodeV2, withParent: true, mode: domain.SessionModeChat, wantEffort: "high"},
 		{name: "OpenCode 2 terminal worker starts without it", harness: domain.HarnessOpenCodeV2, withParent: true, mode: domain.SessionModeTUI},
@@ -397,6 +400,8 @@ func TestChatWorkerKeepsOrchestratorEffort(t *testing.T) {
 			requested: ports.AgentConfig{Effort: "low"}, override: true, wantErr: ports.ErrUnsupportedEffort},
 		{name: "Grok Chat worker gets the orchestrator's level", harness: domain.HarnessGrok, withParent: true, mode: domain.SessionModeChat, wantEffort: "high"},
 		{name: "Grok role level is still not applied", harness: domain.HarnessGrok, mode: domain.SessionModeChat, roleEffort: "max"},
+		{name: "Codex Chat worker takes the orchestrator's provider default", harness: domain.HarnessCodex, withParent: true, parentDefault: true,
+			mode: domain.SessionModeChat, roleEffort: "xhigh"},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			model := models[tt.harness]
@@ -413,8 +418,12 @@ func TestChatWorkerKeepsOrchestratorEffort(t *testing.T) {
 			if tt.withParent {
 				st.sessions[parent] = domain.SessionRecord{ID: parent, ProjectID: chatTestProject, Kind: domain.KindOrchestrator,
 					Harness: tt.harness, Mode: domain.SessionModeChat, Metadata: domain.SessionMetadata{Model: model}}
+				level := "high"
+				if tt.parentDefault {
+					level = ""
+				}
 				st.conversations[parent] = domain.ConversationRecord{SessionID: parent,
-					Settings: domain.ConversationSettings{Model: model, ReasoningEffort: "high"}}
+					Settings: domain.ConversationSettings{Model: model, ReasoningEffort: level}}
 				cfg.ParentSessionID = parent
 			}
 

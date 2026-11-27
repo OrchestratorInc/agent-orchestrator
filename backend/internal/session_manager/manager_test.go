@@ -2135,13 +2135,17 @@ func TestSpawn_WorkerParentCannotExceedProjectPermission(t *testing.T) {
 func TestSpawn_InheritsOrchestratorModel(t *testing.T) {
 	const parent domain.SessionID = "mer-0"
 	type spawnResult struct{ model, effort string }
-	spawnWorker := func(t *testing.T, parentRec *domain.SessionRecord, chat *domain.ConversationSettings, cfg ports.SpawnConfig) spawnResult {
+	spawnWorker := func(t *testing.T, parentRec *domain.SessionRecord, chat *domain.ConversationSettings, cfg ports.SpawnConfig, configure func(*domain.ProjectConfig)) spawnResult {
 		t.Helper()
 		st := newFakeStore()
-		st.projects["mer"] = domain.ProjectRecord{ID: "mer", Config: domain.ProjectConfig{
+		project := domain.ProjectConfig{
 			Worker:       domain.RoleOverride{Harness: domain.HarnessCodex, AgentConfig: domain.AgentConfig{Model: "project-worker-model"}},
 			Orchestrator: domain.RoleOverride{Harness: domain.HarnessCodex},
-		}}
+		}
+		if configure != nil {
+			configure(&project)
+		}
+		st.projects["mer"] = domain.ProjectRecord{ID: "mer", Config: project}
 		if parentRec != nil {
 			st.sessions[parentRec.ID] = *parentRec
 		}
@@ -2166,14 +2170,36 @@ func TestSpawn_InheritsOrchestratorModel(t *testing.T) {
 	}
 	chatPick := &domain.ConversationSettings{Model: "orchestrator-chat-model", ReasoningEffort: "xhigh"}
 	explicitEffort := "low"
+	// An empty level is the provider's default, chosen like any other.
+	chatDefault := &domain.ConversationSettings{Model: "orchestrator-chat-model"}
+	launchedOnDefault := orchestrator(domain.HarnessCodex, domain.KindOrchestrator, "mer")
+	launchedOnDefault.Metadata.Effort = ""
+	roleLevel := func(c *domain.ProjectConfig) { c.Worker.AgentConfig.Effort = "xhigh" }
 
 	for _, tc := range []struct {
-		name   string
-		parent *domain.SessionRecord
-		chat   *domain.ConversationSettings
-		cfg    ports.SpawnConfig
-		want   spawnResult
+		name      string
+		parent    *domain.SessionRecord
+		chat      *domain.ConversationSettings
+		cfg       ports.SpawnConfig
+		configure func(*domain.ProjectConfig)
+		want      spawnResult
 	}{
+		{name: "orchestrator's provider default beats the role's level", parent: orchestrator(domain.HarnessCodex, domain.KindOrchestrator, "mer"), chat: chatDefault,
+			cfg: ports.SpawnConfig{ParentSessionID: parent}, configure: roleLevel, want: spawnResult{"orchestrator-chat-model", ""}},
+		{name: "provider default beats the role's level for the same model", parent: orchestrator(domain.HarnessCodex, domain.KindOrchestrator, "mer"), chat: chatDefault,
+			cfg: ports.SpawnConfig{ParentSessionID: parent}, configure: func(c *domain.ProjectConfig) {
+				c.Worker.AgentConfig = domain.AgentConfig{Model: "orchestrator-chat-model", Effort: "xhigh"}
+			}, want: spawnResult{"orchestrator-chat-model", ""}},
+		{name: "provider default beats a project-wide level", parent: orchestrator(domain.HarnessCodex, domain.KindOrchestrator, "mer"), chat: chatDefault,
+			cfg: ports.SpawnConfig{ParentSessionID: parent}, configure: func(c *domain.ProjectConfig) { c.AgentConfig.Effort = "xhigh" },
+			want: spawnResult{"orchestrator-chat-model", ""}},
+		{name: "launch on the provider default beats the role's level", parent: launchedOnDefault,
+			cfg: ports.SpawnConfig{ParentSessionID: parent}, configure: roleLevel, want: spawnResult{"orchestrator-launch-model", ""}},
+		{name: "explicit effort beats an inherited default", parent: orchestrator(domain.HarnessCodex, domain.KindOrchestrator, "mer"), chat: chatDefault,
+			cfg: ports.SpawnConfig{ParentSessionID: parent, AgentConfig: ports.AgentConfig{Effort: explicitEffort}, EffortOverride: true}, configure: roleLevel,
+			want: spawnResult{"orchestrator-chat-model", "low"}},
+		{name: "role level applies when nothing is inherited", parent: orchestrator(domain.HarnessClaudeCode, domain.KindOrchestrator, "mer"), chat: chatDefault,
+			cfg: ports.SpawnConfig{ParentSessionID: parent}, configure: roleLevel, want: spawnResult{"project-worker-model", "xhigh"}},
 		{name: "orchestrator's Chat pick", parent: orchestrator(domain.HarnessCodex, domain.KindOrchestrator, "mer"), chat: chatPick,
 			cfg: ports.SpawnConfig{ParentSessionID: parent}, want: spawnResult{"orchestrator-chat-model", "xhigh"}},
 		{name: "orchestrator's launch model without a Chat pick", parent: orchestrator(domain.HarnessCodex, domain.KindOrchestrator, "mer"),
@@ -2195,7 +2221,7 @@ func TestSpawn_InheritsOrchestratorModel(t *testing.T) {
 		{name: "no parent", cfg: ports.SpawnConfig{}, want: spawnResult{"project-worker-model", ""}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			if got := spawnWorker(t, tc.parent, tc.chat, tc.cfg); got != tc.want {
+			if got := spawnWorker(t, tc.parent, tc.chat, tc.cfg, tc.configure); got != tc.want {
 				t.Fatalf("worker launched with %+v, want %+v", got, tc.want)
 			}
 		})
