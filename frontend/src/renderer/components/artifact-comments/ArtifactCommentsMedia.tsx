@@ -1,7 +1,10 @@
-import { Maximize, Minimize, Volume2, VolumeX } from "lucide-react";
-import { useEffect, useLayoutEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type PointerEvent as ReactPointerEvent } from "react";
+import { Check, Maximize2, Minimize2, Pause, Play, Repeat, Volume2, VolumeX } from "@/components/app-icons";
 import { useTranslation } from "react-i18next";
 import { useMainViewVisible } from "../../lib/main-view-visibility";
+import { OptionMenu, OptionMenuContent, OptionMenuItem, OptionMenuTrigger } from "../ui/option-menu";
+import { TooltipProvider } from "../ui/tooltip";
+import { COMPACT_HIDDEN, ControlButton, DEFAULT_VOLUME, MediaSlider, PLAYBACK_SPEEDS, SKIP_SECONDS, VOLUME_STEP } from "../VideoPlayer";
 import { cn } from "../../lib/utils";
 import {
 	artifactCommentAnchorKey,
@@ -33,8 +36,6 @@ const PIN = "pointer-events-auto absolute flex h-5 min-w-5 -translate-x-1/2 -tra
 
 /** How long a media URL is used for seeking before a fresh one is fetched (its view token lasts 10 minutes). */
 const URL_FRESH_FOR = 8 * 60_000;
-/** An autoplaying video starts at half volume, as the app's VideoPlayer does, so loud audio doesn't blast. */
-const AUTOPLAY_VOLUME = 0.5;
 
 /** Comments closer than this share one point on the seek bar (a fraction of its length). */
 const SAME_POINT = 0.012;
@@ -182,9 +183,23 @@ export function ArtifactCommentsMedia({ active = true, autoPlay = false, crossOr
 			if (!video.paused) video.pause();
 		} else if (shown && mayAutoplayRef.current && video.paused && (video.played?.length ?? 0) === 0) void Promise.resolve(video.play()).catch(() => {});
 	}, [kind, shownNow]);
+	// The app's VideoPlayer controls: half volume to start (loud audio doesn't
+	// blast when it autoplays), loop and playback speed.
+	const [volume, setVolume] = useState(DEFAULT_VOLUME);
+	const [loop, setLoop] = useState(false);
+	const [speed, setSpeed] = useState(1);
 	useEffect(() => {
-		if (kind === "video" && autoPlay && videoRef.current) videoRef.current.volume = AUTOPLAY_VOLUME;
-	}, [autoPlay, kind, src]);
+		const video = videoRef.current;
+		if (kind !== "video" || !video) return;
+		video.volume = volume;
+	}, [kind, volume, src]);
+	// Loading resets the element's rate to its default, so set both.
+	useEffect(() => {
+		const video = videoRef.current;
+		if (kind !== "video" || !video) return;
+		video.defaultPlaybackRate = speed;
+		video.playbackRate = speed;
+	}, [kind, speed, src]);
 
 	useLayoutEffect(() => {
 		const element = kind === "image" ? imageRef.current : videoRef.current;
@@ -433,11 +448,55 @@ export function ArtifactCommentsMedia({ active = true, autoPlay = false, crossOr
 		);
 	}
 
+	const level = muted ? 0 : volume;
+	// Menus and tooltips portal to <body>, which a fullscreen element hides.
+	const portal = fullscreen ? rootRef.current : undefined;
+	const setLevel = (next: number) => {
+		const video = videoRef.current;
+		if (!video) return;
+		video.volume = Math.min(Math.max(next, 0), 1);
+		video.muted = video.volume === 0;
+	};
+	const toggleMute = () => {
+		const video = videoRef.current;
+		if (!video) return;
+		if (video.muted || video.volume === 0) {
+			if (video.volume === 0) video.volume = DEFAULT_VOLUME;
+			video.muted = false;
+		} else video.muted = true;
+	};
+	const toggleFullscreen = () => {
+		if (document.fullscreenElement) void document.exitFullscreen?.()?.catch(() => undefined);
+		else void rootRef.current?.requestFullscreen?.()?.catch(() => undefined);
+	};
+	// The app's VideoPlayer keys: space or K plays and pauses, ←/→ skip 5 s, M mutes, F goes full screen.
+	const onKeyDown = (event: ReactKeyboardEvent<HTMLDivElement>) => {
+		if (event.defaultPrevented || event.metaKey || event.ctrlKey || event.altKey) return;
+		const target = event.target as HTMLElement;
+		// Keys typed in the speed menu bubble here through its portal while full screen; leave them to the menu.
+		if (!rootRef.current?.contains(target) || target.closest('[role="menu"]')) return;
+		const onButton = target.closest("button") !== null;
+		const onVolume = target.dataset.videoVolume !== undefined;
+		const key = event.key.toLowerCase();
+		const video = videoRef.current;
+		if ((key === " " && !onButton) || key === "k") togglePlay();
+		else if (key === "arrowleft" && !onVolume && video) seek(Math.max(0, video.currentTime - SKIP_SECONDS));
+		else if (key === "arrowright" && !onVolume && video) seek(Math.min(duration || video.currentTime + SKIP_SECONDS, video.currentTime + SKIP_SECONDS));
+		else if (key === "m") toggleMute();
+		else if (key === "f") toggleFullscreen();
+		else return;
+		event.preventDefault();
+	};
 	const seekTo = (fraction: number) => {
 		if (duration > 0) seek(Math.min(duration, Math.max(0, fraction * duration)));
 	};
 	return (
-		<div className="flex h-full w-full flex-col bg-background" ref={rootRef}>
+		<div
+			className="@container flex h-full w-full flex-col bg-background"
+			data-video-player=""
+			onKeyDown={onKeyDown}
+			ref={rootRef}
+		>
 			<div
 				className="relative min-h-0 flex-1"
 				data-testid="artifact-comments-video-stage"
@@ -479,7 +538,11 @@ export function ArtifactCommentsMedia({ active = true, autoPlay = false, crossOr
 					onPlay={() => setPlaying(true)}
 					onSeeked={(event) => noteTime(event.currentTarget.currentTime)}
 					onTimeUpdate={(event) => noteTime(event.currentTarget.currentTime)}
-					onVolumeChange={(event) => setMuted(event.currentTarget.muted)}
+					loop={loop}
+					onVolumeChange={(event) => {
+						setMuted(event.currentTarget.muted);
+						setVolume(event.currentTarget.volume);
+					}}
 					playsInline
 					preload="metadata"
 					ref={videoRef}
@@ -487,87 +550,103 @@ export function ArtifactCommentsMedia({ active = true, autoPlay = false, crossOr
 				/>
 				{overlay}
 			</div>
-			<div className="flex h-10 shrink-0 items-center gap-2 border-t border-border px-3 text-caption text-muted-foreground" data-testid="artifact-comments-timeline">
-				<button
-					aria-label={playing ? t("artifactComments.pause") : t("artifactComments.play")}
-					className="grid size-7 place-items-center rounded-md text-foreground hover:bg-muted"
-					onClick={togglePlay}
-					type="button"
-				>
-					<svg aria-hidden="true" className="size-4" fill="currentColor" viewBox="0 0 24 24">
-						<path d={playing ? "M6 4h4v16H6zM14 4h4v16h-4z" : "M7 4.5v15l13-7.5z"} />
-					</svg>
-				</button>
-				<span className="shrink-0 tabular-nums">{formatArtifactCommentTime(time)} / {formatArtifactCommentTime(duration)}</span>
-				<div
-					aria-label={t("artifactComments.seek")}
-					aria-valuemax={Math.round(duration)}
-					aria-valuemin={0}
-					aria-valuenow={Math.round(time)}
-					aria-valuetext={formatArtifactCommentTime(time)}
-					className="relative h-1.5 min-w-0 flex-1 cursor-pointer rounded-full bg-muted focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-foreground"
-					onKeyDown={(event) => {
-						if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return;
-						event.preventDefault();
-						const video = videoRef.current;
-						if (video) seek(Math.max(0, video.currentTime + (event.key === "ArrowLeft" ? -5 : 5)));
-					}}
-					onPointerDown={(event) => {
-						if ((event.target as HTMLElement).closest("button")) return;
-						const rect = event.currentTarget.getBoundingClientRect();
-						if (rect.width > 0) seekTo((event.clientX - rect.left) / rect.width);
-					}}
-					role="slider"
-					tabIndex={0}
-				>
-					<span className="pointer-events-none absolute inset-y-0 left-0 rounded-full bg-muted-foreground/50" style={{ width: duration > 0 ? percent(Math.min(1, time / duration)) : 0 }} />
-					{duration > 0
-						? artifactCommentTimelinePoints(groups, duration).map((point) => {
-							const isSelected = !pickedHere && point.groups.some((group) => highlighted.has(group.path));
-							const first = point.groups[0]!;
-							return (
-								<button
-									aria-label={t("artifactComments.timelinePoint", { time: formatArtifactCommentTime(point.time), n: point.count })}
-									className={cn(PIN, "top-1/2", isSelected && "ring-2 ring-logo-accent ring-offset-1")}
-									data-selected={isSelected ? "" : undefined}
-									data-selection-target={isSelected ? "" : undefined}
-									data-testid="artifact-comments-timeline-point"
-									key={first.path}
-									onClick={() => onSelect(first.path, point.groups.map((group) => group.path))}
-									style={{ left: percent(Math.min(1, point.time / duration)) }}
-									title={formatArtifactCommentTime(point.time)}
-									type="button"
-								>
-									{/* Like a text page's marker: how many comments are at this moment. */}
-									{point.count > 99 ? "99+" : point.count}
-								</button>
-							);
-						})
-						: null}
+			<TooltipProvider>
+				{/* The seek bar, with a badge at each commented moment, over the
+				    app's VideoPlayer controls row. Narrow views (a 300 px inspector)
+				    drop the volume slider; mute still covers it. */}
+				<div className="flex shrink-0 flex-col gap-1 border-t border-border px-3 py-2 text-caption text-muted-foreground" data-testid="artifact-comments-timeline">
+					<div className="flex h-5 items-center">
+						<div
+							aria-label={t("artifactComments.seek")}
+							aria-valuemax={Math.round(duration)}
+							aria-valuemin={0}
+							aria-valuenow={Math.round(time)}
+							aria-valuetext={formatArtifactCommentTime(time)}
+							className="relative h-1.5 min-w-0 flex-1 cursor-pointer rounded-full bg-muted focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-foreground"
+							onKeyDown={(event) => {
+								if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return;
+								event.preventDefault();
+								const video = videoRef.current;
+								if (video) seek(Math.max(0, video.currentTime + (event.key === "ArrowLeft" ? -5 : 5)));
+							}}
+							onPointerDown={(event) => {
+								if ((event.target as HTMLElement).closest("button")) return;
+								const rect = event.currentTarget.getBoundingClientRect();
+								if (rect.width > 0) seekTo((event.clientX - rect.left) / rect.width);
+							}}
+							role="slider"
+							tabIndex={0}
+						>
+							<span className="pointer-events-none absolute inset-y-0 left-0 rounded-full bg-muted-foreground/50" style={{ width: duration > 0 ? percent(Math.min(1, time / duration)) : 0 }} />
+							{duration > 0
+								? artifactCommentTimelinePoints(groups, duration).map((point) => {
+									const isSelected = !pickedHere && point.groups.some((group) => highlighted.has(group.path));
+									const first = point.groups[0]!;
+									return (
+										<button
+											aria-label={t("artifactComments.timelinePoint", { time: formatArtifactCommentTime(point.time), n: point.count })}
+											className={cn(PIN, "top-1/2", isSelected && "ring-2 ring-logo-accent ring-offset-1")}
+											data-selected={isSelected ? "" : undefined}
+											data-selection-target={isSelected ? "" : undefined}
+											data-testid="artifact-comments-timeline-point"
+											key={first.path}
+											onClick={() => onSelect(first.path, point.groups.map((group) => group.path))}
+											style={{ left: percent(Math.min(1, point.time / duration)) }}
+											title={formatArtifactCommentTime(point.time)}
+											type="button"
+										>
+											{/* Like a text page's marker: how many comments are at this moment. */}
+											{point.count > 99 ? "99+" : point.count}
+										</button>
+									);
+								})
+								: null}
+						</div>
+					</div>
+					<div className="flex min-w-0 flex-wrap items-center gap-1">
+						<ControlButton label={playing ? t("artifactComments.pause") : t("artifactComments.play")} onClick={togglePlay} portal={portal}>
+							{playing ? <Pause /> : <Play />}
+						</ControlButton>
+						<ControlButton label={level === 0 ? t("artifactComments.unmute") : t("artifactComments.mute")} onClick={toggleMute} portal={portal}>
+							{level === 0 ? <VolumeX /> : <Volume2 />}
+						</ControlButton>
+						<MediaSlider
+							className={cn("w-16 shrink-0", COMPACT_HIDDEN)}
+							label={t("files.video.volume")}
+							max={1}
+							onChange={setLevel}
+							step={VOLUME_STEP}
+							value={level}
+							valueText={`${Math.round(level * 100)}%`}
+							volume
+						/>
+						<span className="ml-auto min-w-0 truncate pr-1 tabular-nums">{formatArtifactCommentTime(time)} / {formatArtifactCommentTime(duration)}</span>
+						<OptionMenu>
+							<OptionMenuTrigger
+								aria-label={t("files.video.speed")}
+								className="h-7 shrink-0 gap-1 rounded-md px-2 text-caption text-muted-foreground tabular-nums hover:text-foreground data-[state=open]:text-foreground"
+								variant="ghost"
+							>
+								{t("files.video.speedValue", { speed })}
+							</OptionMenuTrigger>
+							<OptionMenuContent align="end" className="min-w-0 w-28" container={portal} side="top">
+								{PLAYBACK_SPEEDS.map((choice) => (
+									<OptionMenuItem active={choice === speed} key={choice} onSelect={() => setSpeed(choice)} radio>
+										<span className="flex-1 tabular-nums">{t("files.video.speedValue", { speed: choice })}</span>
+										<Check aria-hidden="true" className={cn("size-3 shrink-0", choice !== speed && "invisible")} />
+									</OptionMenuItem>
+								))}
+							</OptionMenuContent>
+						</OptionMenu>
+						<ControlButton label={t("files.video.loop")} onClick={() => setLoop((on) => !on)} portal={portal} pressed={loop}>
+							<Repeat />
+						</ControlButton>
+						<ControlButton label={fullscreen ? t("artifactComments.exitFullscreen") : t("artifactComments.fullscreen")} onClick={toggleFullscreen} portal={portal}>
+							{fullscreen ? <Minimize2 /> : <Maximize2 />}
+						</ControlButton>
+					</div>
 				</div>
-				<button
-					aria-label={muted ? t("artifactComments.unmute") : t("artifactComments.mute")}
-					className="grid size-7 shrink-0 place-items-center rounded-md text-foreground hover:bg-muted"
-					onClick={() => {
-						const video = videoRef.current;
-						if (video) video.muted = !video.muted;
-					}}
-					type="button"
-				>
-					{muted ? <VolumeX aria-hidden="true" className="size-4" /> : <Volume2 aria-hidden="true" className="size-4" />}
-				</button>
-				<button
-					aria-label={fullscreen ? t("artifactComments.exitFullscreen") : t("artifactComments.fullscreen")}
-					className="grid size-7 shrink-0 place-items-center rounded-md text-foreground hover:bg-muted"
-					onClick={() => {
-						if (document.fullscreenElement) void document.exitFullscreen?.()?.catch(() => undefined);
-						else void rootRef.current?.requestFullscreen?.()?.catch(() => undefined);
-					}}
-					type="button"
-				>
-					{fullscreen ? <Minimize aria-hidden="true" className="size-4" /> : <Maximize aria-hidden="true" className="size-4" />}
-				</button>
-			</div>
+			</TooltipProvider>
 		</div>
 	);
 }
