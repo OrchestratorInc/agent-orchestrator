@@ -1078,6 +1078,87 @@ func TestSwitchFromAnExitedAgentStartsItToHandOver(t *testing.T) {
 	}
 }
 
+// An exited agent that cannot start (agent-orchestrator-222: its native history
+// failed to import on every resume) must not trap the chat on that agent. The
+// switch hands over from the stored transcript instead.
+func TestSwitchFromAnAgentThatCannotStartHandsOverFromTheStoredTranscript(t *testing.T) {
+	h, _, driver := newEditHarness(t, false)
+	ctx := context.Background()
+	before, _, err := h.st.GetSession(ctx, testSession)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := h.svc.Stop(ctx, testSession); err != nil {
+		t.Fatal(err)
+	}
+	resumeErr := errors.New("resume chat: import native history event message.user.completed")
+	h.svc.SetResumeAgentCallback(func(context.Context, domain.SessionID) error { return resumeErr })
+	var launched []domain.AgentHarness
+	h.svc.SetColdSwitchLauncher(func(ctx context.Context, id domain.SessionID, target domain.AgentHarness, start func(context.Context, chatsvc.StartConfig) error) error {
+		launched = append(launched, target)
+		return start(ctx, chatsvc.StartConfig{
+			SessionID: id, ProjectID: testProject, Harness: target,
+			WorkspacePath: t.TempDir(), Permissions: ports.PermissionModeAuto,
+		})
+	})
+
+	if _, err := h.svc.SwitchProviderReport(ctx, testSession, domain.ProviderSwitchRequest{TargetHarness: domain.HarnessClaudeCode}); err != nil {
+		t.Fatalf("switch from an agent that cannot start: %v", err)
+	}
+	if !slices.Equal(launched, []domain.AgentHarness{domain.HarnessClaudeCode}) {
+		t.Fatalf("cold launches = %v, want one for the target", launched)
+	}
+	after, _, err := h.st.GetSession(ctx, testSession)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if after.Harness != domain.HarnessClaudeCode || after.Harness == before.Harness {
+		t.Fatalf("harness = %s (was %s), want the target", after.Harness, before.Harness)
+	}
+	if !h.svc.HasLiveChatController(testSession) {
+		t.Fatal("no controller after the switch")
+	}
+	if got := lastStart(driver).Permissions; got != ports.PermissionModeAuto {
+		t.Fatalf("target started fresh with permissions %q, want the chat's auto", got)
+	}
+	conversation, err := h.st.ConversationForSession(ctx, testSession)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rows, err := h.st.LoadConversationSnapshot(ctx, conversation.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.ContainsFunc(rows.Activities, func(activity domain.ConversationActivity) bool {
+		return strings.HasSuffix(activity.ID, ":provider-switch") &&
+			strings.Contains(activity.Summary, "to "+string(domain.HarnessClaudeCode))
+	}) {
+		t.Fatal("no provider switch marker recorded")
+	}
+}
+
+// The cold launcher holds the session's agent operation; a resume or another
+// switch already holding it surfaces as a typed busy refusal, not a dead end.
+func TestColdSwitchRefusalFromTheLauncherIsReported(t *testing.T) {
+	h, _, _ := newEditHarness(t, false)
+	ctx := context.Background()
+	if err := h.svc.Stop(ctx, testSession); err != nil {
+		t.Fatal(err)
+	}
+	h.svc.SetResumeAgentCallback(func(context.Context, domain.SessionID) error { return errors.New("agent will not start") })
+	h.svc.SetColdSwitchLauncher(func(context.Context, domain.SessionID, domain.AgentHarness, func(context.Context, chatsvc.StartConfig) error) error {
+		return &domain.ProviderSwitchError{Kind: domain.ProviderSwitchRefusalBusy, Detail: "another session operation is in progress"}
+	})
+	_, err := h.svc.SwitchProviderReport(ctx, testSession, domain.ProviderSwitchRequest{TargetHarness: domain.HarnessClaudeCode})
+	var refusal *domain.ProviderSwitchError
+	if !errors.As(err, &refusal) || refusal.Kind != domain.ProviderSwitchRefusalBusy {
+		t.Fatalf("err = %v, want the launcher's busy refusal", err)
+	}
+	if h.svc.HasLiveChatController(testSession) {
+		t.Fatal("a refused cold switch started a controller")
+	}
+}
+
 func TestSwitchToTheRunningAgentRefusesAModelItsChatDoesNotOffer(t *testing.T) {
 	h, _, driver := newEditHarness(t, false)
 	ctx := context.Background()

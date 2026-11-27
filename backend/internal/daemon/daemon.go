@@ -826,9 +826,25 @@ func Run(buildVersion string) (retErr error) {
 	if resume, ok := sessMgr.(interface {
 		ResumeAgentWithMode(context.Context, domain.SessionID) (sessionmanager.RestoreResult, error)
 	}); ok {
+		join, joins := sessMgr.(interface {
+			WakeHibernatedChat(context.Context, domain.SessionID) error
+		})
 		chatSvc.SetResumeAgentCallback(func(ctx context.Context, id domain.SessionID) error {
+			if joins {
+				// Waits for a resume the user already started (Resume clicked while
+				// the switch runs) and resumes only if that left no controller, so
+				// the two never refuse each other as "already in progress".
+				return join.WakeHibernatedChat(ctx, id)
+			}
 			_, err := resume.ResumeAgentWithMode(ctx, id)
 			return err
+		})
+	}
+	if cold, ok := sessMgr.(interface {
+		LaunchColdChatSwitch(context.Context, domain.SessionID, domain.AgentHarness, func(context.Context, sessionmanager.ChatStart) error) error
+	}); ok {
+		chatSvc.SetColdSwitchLauncher(func(ctx context.Context, id domain.SessionID, target domain.AgentHarness, start func(context.Context, chatsvc.StartConfig) error) error {
+			return cold.LaunchColdChatSwitch(ctx, id, target, start)
 		})
 	}
 	if tunable, ok := sessMgr.(interface {
