@@ -1,4 +1,4 @@
-import { type RefObject, useEffect } from "react";
+import { useCallback, useMemo, useRef } from "react";
 
 // How fast an overflowing title slides while hovered, and the share of each
 // pass spent moving (the rest holds at either end so both can be read).
@@ -12,7 +12,7 @@ const HOLD_SHARE = 0.12;
 // the pass. The motion reads about 0.2s after it starts.
 const START_AFTER_S = 1.3;
 
-type Watched = { box: HTMLElement; boxWidth: number; textWidth: number; distance: number };
+type Watched = { box: HTMLElement; text: HTMLElement; boxWidth: number; textWidth: number; distance: number };
 
 // One observer for every title in the sidebar. Widths come from the observer's
 // own entries, so measuring never forces a layout, and a row only writes when
@@ -57,29 +57,53 @@ function onResize(entries: ResizeObserverEntry[]) {
 	}
 }
 
+function watch(box: HTMLElement, text: HTMLElement): Watched {
+	observer ??= new ResizeObserver(onResize);
+	const record: Watched = { box, text, boxWidth: 0, textWidth: 0, distance: 0 };
+	watched.set(box, record);
+	watched.set(text, record);
+	observer.observe(box);
+	observer.observe(text);
+	return record;
+}
+
+function unwatch({ box, text }: Watched) {
+	observer?.unobserve(box);
+	observer?.unobserve(text);
+	watched.delete(box);
+	watched.delete(text);
+}
+
 /**
  * Marks a one-line title that doesn't fit so CSS can fade its cut edge instead
  * of an ellipsis, and scroll it on hover. Sets `data-overflow` on the box plus
- * `--marquee-distance` (how far the text must move to show its end) and
+ * `--marquee-distance` (how far the text must move to show its end),
  * `--marquee-duration` (one pass) and `--marquee-delay`, straight on the
- * element so a resize never re-renders the row. `textRef` is the inline-block holding the text.
+ * element so a resize never re-renders the row.
+ *
+ * Returns callback refs for the box and the inline-block holding the text.
+ * They follow the elements themselves, so a title that unmounts and comes
+ * back (inline rename swaps it for an input) is observed again.
  */
-export function useTitleMarquee(boxRef: RefObject<HTMLElement | null>, textRef: RefObject<HTMLElement | null>) {
-	useEffect(() => {
-		const box = boxRef.current;
-		const text = textRef.current;
-		if (!box || !text || typeof ResizeObserver === "undefined") return;
-		observer ??= new ResizeObserver(onResize);
-		const record: Watched = { box, boxWidth: 0, textWidth: 0, distance: 0 };
-		watched.set(box, record);
-		watched.set(text, record);
-		observer.observe(box);
-		observer.observe(text);
-		return () => {
-			observer?.unobserve(box);
-			observer?.unobserve(text);
-			watched.delete(box);
-			watched.delete(text);
-		};
-	}, [boxRef, textRef]);
+export function useTitleMarquee() {
+	const nodes = useRef<{ box: HTMLElement | null; text: HTMLElement | null; record: Watched | null }>({ box: null, text: null, record: null });
+	const sync = useCallback(() => {
+		const current = nodes.current;
+		if (current.record && (current.record.box !== current.box || current.record.text !== current.text)) {
+			unwatch(current.record);
+			current.record = null;
+		}
+		if (!current.record && current.box && current.text && typeof ResizeObserver !== "undefined") {
+			current.record = watch(current.box, current.text);
+		}
+	}, []);
+	const boxRef = useCallback((element: HTMLElement | null) => {
+		nodes.current.box = element;
+		sync();
+	}, [sync]);
+	const textRef = useCallback((element: HTMLElement | null) => {
+		nodes.current.text = element;
+		sync();
+	}, [sync]);
+	return useMemo(() => ({ boxRef, textRef }), [boxRef, textRef]);
 }

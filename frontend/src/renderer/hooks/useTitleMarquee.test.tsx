@@ -1,5 +1,5 @@
-import { cleanup, render } from "@testing-library/react";
-import { useRef } from "react";
+import { act, cleanup, render } from "@testing-library/react";
+import { useState } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useTitleMarquee } from "./useTitleMarquee";
 
@@ -15,7 +15,8 @@ class FakeResizeObserver {
 		observed.push(target);
 	}
 	unobserve(target: Element) {
-		observed.splice(observed.indexOf(target), 1);
+		const index = observed.indexOf(target);
+		if (index !== -1) observed.splice(index, 1);
 	}
 	disconnect() {}
 }
@@ -25,13 +26,17 @@ function entry(target: Element, width: number): ResizeObserverEntry {
 	return { target, borderBoxSize: size, contentBoxSize: size } as unknown as ResizeObserverEntry;
 }
 
+let setEditing: (editing: boolean) => void = () => {};
+
 function Title() {
-	const box = useRef<HTMLSpanElement>(null);
-	const text = useRef<HTMLSpanElement>(null);
-	useTitleMarquee(box, text);
+	const { boxRef, textRef } = useTitleMarquee();
+	const [editing, setEditingState] = useState(false);
+	setEditing = setEditingState;
+	// Like SessionRow, renaming swaps the title for an input.
+	if (editing) return <input aria-label="Rename" />;
 	return (
-		<span data-testid="box" ref={box}>
-			<span data-testid="text" ref={text}>A long session title</span>
+		<span data-testid="box" ref={boxRef}>
+			<span data-testid="text" ref={textRef}>A long session title</span>
 		</span>
 	);
 }
@@ -55,6 +60,25 @@ describe("useTitleMarquee", () => {
 		expect(box.style.getPropertyValue("--marquee-duration")).toBe("5.26s");
 		// The first movement lands at the same time for every length.
 		expect(box.style.getPropertyValue("--marquee-delay")).toBe("0.67s");
+	});
+
+	it("observes the new title after a rename swaps it out and back", () => {
+		const { getByTestId } = render(<Title />);
+		const oldBox = getByTestId("box");
+		const oldText = getByTestId("text");
+
+		act(() => setEditing(true));
+		expect(observed).not.toContain(oldBox);
+		expect(observed).not.toContain(oldText);
+
+		act(() => setEditing(false));
+		const box = getByTestId("box");
+		const text = getByTestId("text");
+		expect(box).not.toBe(oldBox);
+		expect(observed).toEqual(expect.arrayContaining([box, text]));
+
+		fire([entry(box, 132), entry(text, 292)]);
+		expect(box).toHaveAttribute("data-overflow");
 	});
 
 	it("clears the marks once the title fits and stops observing on unmount", () => {

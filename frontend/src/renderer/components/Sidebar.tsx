@@ -2820,9 +2820,7 @@ const SessionRow = memo(function SessionRow({
 		[setPreviewRow, setSortableNode],
 	);
 	const lastTouchAtRef = useRef(0);
-	const titleRef = useRef<HTMLSpanElement>(null);
-	const titleTrackRef = useRef<HTMLSpanElement>(null);
-	useTitleMarquee(titleRef, titleTrackRef);
+	const { boxRef: titleRef, textRef: titleTrackRef } = useTitleMarquee();
 	const suppressTouchOpenRef = useRef(false);
 	const hoverTimerRef = useRef<ReturnType<typeof setTimeout>>(undefined);
 	// A remote chat prefetches its page too; only a local agent can be woken from here.
