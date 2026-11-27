@@ -54,6 +54,7 @@ type fakeStore struct {
 	cleanupFacts                       map[domain.SessionID]domain.SessionCleanupRecord
 	sessions                           map[domain.SessionID]domain.SessionRecord
 	createdRows                        []domain.SessionRecord
+	promotedRows                       []domain.SessionRecord
 	pr                                 map[domain.SessionID]domain.PRFacts
 	projects                           map[string]domain.ProjectRecord
 	conversations                      map[domain.SessionID]domain.ConversationRecord
@@ -276,6 +277,18 @@ func (f *fakeStore) UpdateSessionModel(_ context.Context, id domain.SessionID, m
 	f.sessions[id] = rec
 	return true, nil
 }
+func (f *fakeStore) UpdateSessionEffort(_ context.Context, id domain.SessionID, effort string) (bool, error) {
+	if f.updateSessionErr != nil {
+		return false, f.updateSessionErr
+	}
+	rec, ok := f.sessions[id]
+	if !ok {
+		return false, nil
+	}
+	rec.Metadata.Effort = effort
+	f.sessions[id] = rec
+	return true, nil
+}
 
 func (f *fakeStore) SetSessionProvisionedWorkspace(_ context.Context, id domain.SessionID, branch, workspacePath, workspaceRepoPath string, now time.Time) (bool, error) {
 	rec, ok := f.sessions[id]
@@ -375,6 +388,7 @@ func (f *fakeStore) PromoteTaskPreparation(_ context.Context, id domain.SessionI
 	rec.Metadata.Branch = current.Metadata.Branch
 	rec.Metadata.WorkspacePath = current.Metadata.WorkspacePath
 	rec.Metadata.WorkspaceRepoPath = current.Metadata.WorkspaceRepoPath
+	f.promotedRows = append(f.promotedRows, rec)
 	f.sessions[id] = rec
 	return true, nil
 }
@@ -5571,6 +5585,18 @@ func TestPersistChatModel(t *testing.T) {
 	if st.sessions["mer-1"].Metadata.Model != "" {
 		t.Fatalf("cleared model = %q, want provider default", st.sessions["mer-1"].Metadata.Model)
 	}
+	if err := m.PersistChatEffort(ctx, "mer-1", "high"); err != nil {
+		t.Fatalf("PersistChatEffort: %v", err)
+	}
+	if got := st.sessions["mer-1"].Metadata.Effort; got != "high" {
+		t.Fatalf("persisted effort = %q, want high", got)
+	}
+	if err := m.PersistChatEffort(ctx, "mer-1", ""); err != nil {
+		t.Fatalf("PersistChatEffort(empty): %v", err)
+	}
+	if got := st.sessions["mer-1"].Metadata.Effort; got != "" {
+		t.Fatalf("cleared effort = %q, want provider default", got)
+	}
 }
 
 func TestRestore_ForwardsManagerDataDir(t *testing.T) {
@@ -8909,20 +8935,28 @@ func TestSpawn_TUICodexEffortIsResolvedAndPersisted(t *testing.T) {
 	}
 }
 
-// TestSpawn_TUIPiInheritedEffortIsValidated asserts a Pi or Prime Agent TUI
+// TestSpawn_TUIInheritedEffortIsValidated asserts a Pi, Prime Agent, or Open Interpreter TUI
 // spawn validates an effort inherited from role settings: a level the model
 // advertises reaches the adapter, and a stale one is cleared before --thinking.
-func TestSpawn_TUIPiInheritedEffortIsValidated(t *testing.T) {
-	for _, harness := range []domain.AgentHarness{domain.HarnessPi, domain.HarnessPrimeAgent} {
-		for inherited, want := range map[string]string{"high": "high", "max": ""} {
+func TestSpawn_TUIInheritedEffortIsValidated(t *testing.T) {
+	for _, harness := range []domain.AgentHarness{domain.HarnessPi, domain.HarnessPrimeAgent, domain.HarnessOpenInterpreter} {
+		for _, tc := range []struct {
+			inherited string
+			efforts   []string
+			want      string
+		}{
+			{inherited: "high", efforts: []string{"low", "high"}, want: "high"},
+			{inherited: "max", efforts: []string{"low", "high"}},
+			{inherited: "high"},
+		} {
 			m, st, _, _ := newManager()
 			agent := &recordingAgent{}
 			m.agents = singleAgent{agent: agent}
 			m.SetModelCatalog(tuningCatalog{catalog: ports.AgentModelCatalog{Models: []ports.AgentModelInfo{
-				{ID: "openai/gpt-6.1-sol", IsDefault: true, Efforts: []string{"low", "high"}},
+				{ID: "openai/gpt-6.1-sol", IsDefault: true, Efforts: tc.efforts},
 			}}})
 			project := st.projects["mer"]
-			project.Config.Worker = domain.RoleOverride{AgentConfig: domain.AgentConfig{Model: "openai/gpt-6.1-sol", Effort: inherited}}
+			project.Config.Worker = domain.RoleOverride{AgentConfig: domain.AgentConfig{Model: "openai/gpt-6.1-sol", Effort: tc.inherited}}
 			st.projects["mer"] = project
 
 			rec, _, _, err := m.Spawn(ctx, ports.SpawnConfig{
@@ -8930,13 +8964,13 @@ func TestSpawn_TUIPiInheritedEffortIsValidated(t *testing.T) {
 				RequestedMode: domain.SessionModeTUI, Prompt: "do the work",
 			})
 			if err != nil {
-				t.Fatalf("harness %q inherited %q spawn: %v", harness, inherited, err)
+				t.Fatalf("harness %q inherited %q spawn: %v", harness, tc.inherited, err)
 			}
-			if agent.lastConfig.Effort != want {
-				t.Fatalf("harness %q inherited %q launch effort = %q, want %q", harness, inherited, agent.lastConfig.Effort, want)
+			if agent.lastConfig.Effort != tc.want {
+				t.Fatalf("harness %q inherited %q launch effort = %q, want %q", harness, tc.inherited, agent.lastConfig.Effort, tc.want)
 			}
-			if got := st.sessions[rec.ID].Metadata.Effort; got != want {
-				t.Fatalf("harness %q inherited %q saved effort = %q, want %q", harness, inherited, got, want)
+			if got := st.sessions[rec.ID].Metadata.Effort; got != tc.want {
+				t.Fatalf("harness %q inherited %q saved effort = %q, want %q", harness, tc.inherited, got, tc.want)
 			}
 		}
 	}
@@ -13334,22 +13368,28 @@ func TestSpawn_PersistsArtifactDirOnSessionRow(t *testing.T) {
 	}
 }
 
-func TestSpawn_PreparedSessionPersistsArtifactDir(t *testing.T) {
+func TestSpawn_PreparedSessionPersistsArtifactDirAndSelection(t *testing.T) {
 	m, st, _, _ := newManager()
 	m.runBackground = func(work func()) { work() }
 	dataDir := t.TempDir()
 	m.dataDir = dataDir
-	token, err := m.PrepareTaskWorkspace(ctx, st.projects["mer"])
+	project := st.projects["mer"]
+	project.Config.Worker = domain.RoleOverride{Harness: domain.HarnessCodex, AgentConfig: domain.AgentConfig{Model: "gpt-5.6-sol", Effort: "high"}}
+	st.projects["mer"] = project
+	token, err := m.PrepareTaskWorkspace(ctx, project)
 	if err != nil {
 		t.Fatal(err)
 	}
-	rec, _, _, err := m.Spawn(ctx, ports.SpawnConfig{ProjectID: "mer", Kind: domain.KindWorker, Harness: domain.HarnessClaudeCode, Prompt: "go", TaskPreparation: token})
+	rec, _, _, err := m.Spawn(ctx, ports.SpawnConfig{ProjectID: "mer", Kind: domain.KindWorker, Harness: domain.HarnessCodex, RequestedMode: domain.SessionModeTUI, Prompt: "go", TaskPreparation: token})
 	if err != nil {
 		t.Fatalf("spawn: %v", err)
 	}
 	want := filepath.Join(dataDir, "artifacts", string(rec.ID))
 	if got := st.sessions[rec.ID].Metadata.ArtifactDir; got != want {
 		t.Fatalf("persisted ArtifactDir = %q, want %q", got, want)
+	}
+	if len(st.promotedRows) != 1 || st.promotedRows[0].Metadata.Model != "gpt-5.6-sol" || st.promotedRows[0].Metadata.Effort != "high" {
+		t.Fatalf("promoted selection = %+v, want model gpt-5.6-sol and effort high", st.promotedRows)
 	}
 }
 

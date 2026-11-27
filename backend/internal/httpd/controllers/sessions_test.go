@@ -919,17 +919,23 @@ func TestSessionsAPI_MemcodeModelPendingUntilLaunch(t *testing.T) {
 	srv := newSessionTestServer(t, svc)
 
 	for _, tc := range []struct {
-		name    string
-		model   string
-		launch  string
-		pending bool
+		name     string
+		model    string
+		launch   string
+		pending  bool
+		imported bool
 	}{
 		{name: "resolving", pending: true},
 		{name: "selected model", model: "opus", launch: "launch-1"},
 		{name: "custom endpoint default", launch: "launch-1"},
+		{name: "imported idle session", imported: true},
 	} {
 		sess.Metadata.Model = tc.model
 		sess.Metadata.RuntimeLaunchID = tc.launch
+		sess.Metadata.ImportSource = nil
+		if tc.imported {
+			sess.Metadata.ImportSource = &domain.SessionImportSource{}
+		}
 		svc.sessions["ao-1"] = sess
 		body, status, _ := doRequest(t, srv, "GET", "/api/v1/sessions/ao-1", "")
 		if status != http.StatusOK {

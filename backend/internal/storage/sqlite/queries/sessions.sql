@@ -71,6 +71,11 @@ UPDATE sessions
 SET model = sqlc.arg(model)
 WHERE id = sqlc.arg(id);
 
+-- name: UpdateSessionEffort :execrows
+UPDATE sessions
+SET effort = sqlc.arg(effort)
+WHERE id = sqlc.arg(id);
+
 -- name: SetSessionHibernated :execrows
 -- Revision fencing keeps an idle decision from overwriting a later send,
 -- controller change, or lifecycle write. Generic updates leave this fact alone.
