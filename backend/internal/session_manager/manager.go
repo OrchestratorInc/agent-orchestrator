@@ -1350,7 +1350,9 @@ func (m *Manager) Spawn(ctx context.Context, cfg ports.SpawnConfig) (result doma
 	}
 	// Resolve inherited effort too, so a harness that cannot use it stores the
 	// provider default instead of advertising a level it never launched with.
-	if mode == domain.SessionModeTUI && (cfg.Harness == domain.HarnessClaudeCode || cfg.Harness == domain.HarnessCodex || strings.TrimSpace(agentConfig.Effort) != "") {
+	// OMP already accepts --thinking in its TUI adapter, but does not yet expose
+	// effort in the model catalog; resolving it here would discard that setting.
+	if mode == domain.SessionModeTUI && (cfg.Harness == domain.HarnessClaudeCode || cfg.Harness == domain.HarnessCodex || (cfg.Harness != domain.HarnessOMP && strings.TrimSpace(agentConfig.Effort) != "")) {
 		checked := BeginSpawnStep(ctx, SpawnStepModelCheck)
 		resolved, err := m.resolveTUIAgentConfig(ctx, cfg, project.Config, agentConfig)
 		checked(err)

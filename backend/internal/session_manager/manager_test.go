@@ -24,6 +24,7 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/claudecode"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/codex"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/memcode"
+	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/omp"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/workspace/gitworktree"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/workspace/scratch"
 	"github.com/aoagents/agent-orchestrator/backend/internal/agentlaunch"
@@ -2334,6 +2335,48 @@ func TestSpawnAmpProjectDefaultModePersistsAsModel(t *testing.T) {
 	}
 	if len(st.createdRows) != 1 || st.createdRows[0].Metadata.Model != "high" {
 		t.Fatalf("initial rows = %+v, want one row with model high", st.createdRows)
+	}
+}
+
+func TestSpawnOMPInheritedEffortReachesLaunchAndStore(t *testing.T) {
+	name, contents := "omp", "#!/bin/sh\nif [ \"$1\" = \"--version\" ]; then echo omp/17.1.0; fi\n"
+	if runtime.GOOS == "windows" {
+		name, contents = "omp.cmd", "@echo off\r\nif \"%~1\"==\"--version\" echo omp/17.1.0\r\n"
+	}
+	dir := t.TempDir()
+	binary := filepath.Join(dir, name)
+	if err := os.WriteFile(binary, []byte(contents), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", dir+string(filepath.ListSeparator)+os.Getenv("PATH"))
+
+	st := newFakeStore()
+	st.projects["mer"] = domain.ProjectRecord{ID: "mer", Config: domain.ProjectConfig{
+		Worker: domain.RoleOverride{Harness: domain.HarnessOMP, AgentConfig: domain.AgentConfig{Effort: "high"}},
+	}}
+	rt := &fakeRuntime{}
+	m := New(Deps{DataDir: t.TempDir(), Runtime: rt, Agents: singleAgent{agent: omp.New()}, Workspace: &fakeWorkspace{path: t.TempDir()}, Store: st,
+		Messenger: &fakeMessenger{}, Lifecycle: &fakeLCM{store: st}, LookPath: func(string) (string, error) { return binary, nil },
+		Executable: func() (string, error) { return binary, nil }, NewLaunchID: func() string { return "omp-launch" },
+	})
+	rec, _, _, err := m.Spawn(t.Context(), ports.SpawnConfig{ProjectID: "mer", Kind: domain.KindWorker, RequestedMode: domain.SessionModeTUI, Prompt: "do the work"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	args := rt.lastCfg.Argv
+	index := slices.Index(args, "--thinking")
+	if index < 0 || index+1 >= len(args) {
+		t.Fatal("OMP launch is missing --thinking high")
+	}
+	if args[index+1] != "high" {
+		t.Fatalf("OMP --thinking = %q, want high", args[index+1])
+	}
+	initialEffort := ""
+	if len(st.createdRows) == 1 {
+		initialEffort = st.createdRows[0].Metadata.Effort
+	}
+	if rec.Metadata.Effort != "high" || initialEffort != "high" {
+		t.Fatalf("OMP effort final=%q initial=%q, want high in both", rec.Metadata.Effort, initialEffort)
 	}
 }
 
