@@ -1561,15 +1561,19 @@ func Run(buildVersion string) (retErr error) {
 			// Reviewer-owned Chat controllers wait for persistent host reconciliation.
 			// Recover them only after the listener is ready and the gate is closed, or
 			// startup can deadlock before the daemon binds its port.
-			if reconcileErr := reviewSvc.RecoverChatReviewers(ctx); reconcileErr != nil {
-				log.Warn("reviewer chat recovery deferred", "err", reconcileErr)
-			}
-			restore.done(stepReviewerRecovery)
-			close(reviewerChatsRecovered)
+			go func() {
+				defer sentryobs.RecoverBackground()
+				defer close(reviewerChatsRecovered)
+				if reconcileErr := reviewSvc.RecoverChatReviewers(ctx); reconcileErr != nil {
+					log.Warn("reviewer chat recovery deferred", "err", reconcileErr)
+				}
+			}()
 			if reconcileErr := sessMgr.ReconcileBackground(ctx); reconcileErr != nil {
 				log.Error("background session reconciliation on boot failed", "err", reconcileErr)
 			}
 			restore.done(stepSessions)
+			<-reviewerChatsRecovered
+			restore.done(stepReviewerRecovery)
 			if reconcileErr := lcStack.ReconcileRuntime(ctx); reconcileErr != nil {
 				log.Error("background agent-process reconciliation on boot failed", "err", reconcileErr)
 				sentryobs.CaptureBackground(ctx, reconcileErr, "lifecycle", "reconcile", map[string]string{"reason": "runtime"})
