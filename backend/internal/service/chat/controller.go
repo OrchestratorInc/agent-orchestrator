@@ -3930,20 +3930,26 @@ func (c *Controller) apply(ctx context.Context, event ports.ChatEvent) error {
 		// row: after a restart the reclaim figures are gone from memory, and a
 		// conversation that silently lost half its history with nothing to mark where
 		// reads as if the agent simply forgot.
+		status := compactionStatus(event)
 		if err := c.store.UpsertActivity(ctx, c.conversation.ID, event.ProviderTurnID,
 			domain.ConversationActivity{
 				ID:     c.newID(),
 				Kind:   domain.ActivityKindSystem,
-				Status: domain.ActivityStatusCompleted,
+				Status: status,
 				// Falls back to a plain label rather than an empty row: a driver that
 				// reports a compaction without a summary still happened.
-				Summary: firstNonEmpty(event.Summary, "Compacted the conversation history"),
+				Summary: compactionSummary(event, status),
 				Detail:  compactionDetail(event),
 				// The provider's own item id, so a compaction replayed across a
-				// reconnect updates the existing row instead of adding a second.
+				// reconnect, or settling after it was reported running, updates the
+				// existing row instead of adding a second.
 				ProviderItemID: event.ProviderItemID,
 			}, now); err != nil {
 			return err
+		}
+		if status != domain.ActivityStatusCompleted {
+			// Running or failed: the history is still what it was.
+			return nil
 		}
 		return c.store.MarkCompacted(ctx, c.conversation.ID, now)
 
@@ -4117,6 +4123,10 @@ func (c *Controller) afterProject(ctx context.Context, event ports.ChatEvent, pr
 		c.reportInteractionResolved(ctx, "chat.input.resolved", now)
 	case ports.ChatEventCompacted:
 		if event.ProviderConversationID != "" && event.ProviderConversationID != c.conv.ProviderConversationID() {
+			return
+		}
+		if compactionStatus(event) == domain.ActivityStatusRunning {
+			// Under way, not settled: sends stay queued behind it.
 			return
 		}
 		c.mu.Lock()
@@ -4662,12 +4672,44 @@ func normalizeOrigin(origin domain.MessageOrigin) domain.MessageOrigin {
 // because the choice of kind is this projection's, not the provider's — and a
 // compaction rendered as a generic notice would lose the one thing that matters
 // about it: that the history above it is no longer what the agent sees.
+// compactionStatus is where a reported compaction stands. Drivers that only see
+// the finished compaction leave the status empty, which has always meant done.
+func compactionStatus(event ports.ChatEvent) domain.ActivityStatus {
+	switch event.ActivityStatus {
+	case domain.ActivityStatusRunning, domain.ActivityStatusFailed:
+		return event.ActivityStatus
+	default:
+		return domain.ActivityStatusCompleted
+	}
+}
+
+// compactionSummary is the row's one-line label. A failed compaction's Summary
+// is the provider's reason, which reads only after the label it explains.
+func compactionSummary(event ports.ChatEvent, status domain.ActivityStatus) string {
+	switch status {
+	case domain.ActivityStatusRunning:
+		return firstNonEmpty(event.Summary, "Compacting the conversation history")
+	case domain.ActivityStatusFailed:
+		if reason := strings.TrimSpace(event.Summary); reason != "" {
+			return "Could not compact the conversation history: " + reason
+		}
+		return "Could not compact the conversation history"
+	default:
+		return firstNonEmpty(event.Summary, "Compacted the conversation history")
+	}
+}
+
 func compactionDetail(event ports.ChatEvent) []byte {
 	merged := map[string]any{}
 	if len(event.Detail) > 0 {
 		_ = json.Unmarshal(event.Detail, &merged)
 	}
 	merged["event"] = "compaction"
+	if reason := strings.TrimSpace(event.Summary); compactionStatus(event) == domain.ActivityStatusFailed && reason != "" {
+		// The provider's reason, apart from the summary, so a client can show it
+		// under its own label.
+		merged["error"] = reason
+	}
 	encoded, err := json.Marshal(merged)
 	if err != nil {
 		return event.Detail
