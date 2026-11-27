@@ -252,6 +252,20 @@ func TestComputerUseOriginBoundaryBlocksPreviewAndAllowsRenderers(t *testing.T) 
 			wantStatus: http.StatusForbidden,
 		},
 		{
+			name:       "preview cannot call a tool for another computer",
+			method:     http.MethodPost,
+			path:       "/api/v1/remote-computer-use/call",
+			origin:     preview,
+			wantStatus: http.StatusForbidden,
+		},
+		{
+			name:       "preview cannot choose where computer use runs",
+			method:     http.MethodPut,
+			path:       "/api/v1/computer-use/remote/target",
+			origin:     preview,
+			wantStatus: http.StatusForbidden,
+		},
+		{
 			name:       "preview cannot turn on agent computer use",
 			method:     http.MethodPatch,
 			path:       "/api/v1/settings/computer-use",

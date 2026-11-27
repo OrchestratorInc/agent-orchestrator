@@ -2718,11 +2718,49 @@ type ComputerUseAgentToolsResponse struct {
 	Tools []computeruse.AgentTool `json:"tools"`
 }
 
+// ComputerUseRemoteSettings is the body of GET /api/v1/computer-use/remote and
+// of every change to it. It never carries the stored credential.
+type ComputerUseRemoteSettings = computeruse.RemoteSettings
+
+// UpdateComputerUseRemoteAllowRequest turns "Let agents on your other
+// computers use this computer" on or off.
+type UpdateComputerUseRemoteAllowRequest struct {
+	Enabled *bool `json:"enabled"`
+}
+
+// SetComputerUseRemoteTargetRequest is the body of PUT
+// /api/v1/computer-use/remote/target.
+type SetComputerUseRemoteTargetRequest = computeruse.SetRemoteTargetRequest
+
+// ClearComputerUseRemoteTargetQuery names the session computer use was moved
+// back to this computer from, for DELETE /api/v1/computer-use/remote/target.
+type ClearComputerUseRemoteTargetQuery struct {
+	SessionID string `query:"sessionId,omitempty" description:"The AO session the change was made from. That session's calls run on this computer from now on, though it started with computer use elsewhere."`
+}
+
+// RemoteComputerUseOfferResponse is the body of GET
+// /api/v1/remote-computer-use/status.
+type RemoteComputerUseOfferResponse = computeruse.RemoteOffer
+
+// RemoteComputerUseCallRequest is the body of POST
+// /api/v1/remote-computer-use/call.
+type RemoteComputerUseCallRequest = computeruse.RemoteCallRequest
+
+// RemoteComputerUseCallResponse is the body of POST
+// /api/v1/remote-computer-use/call.
+type RemoteComputerUseCallResponse = computeruse.RemoteCallResult
+
 // ComputerUseTimelineResponse is the body of
 // GET /api/v1/computer-use/sessions/{sessionId}/timeline: the session's
 // computer-use calls, oldest first.
 type ComputerUseTimelineResponse struct {
 	Entries []computeruse.TimelineEntry `json:"entries"`
+}
+
+// ComputerUseSessionTargetResponse is the body of
+// GET /api/v1/computer-use/sessions/{sessionId}/target.
+type ComputerUseSessionTargetResponse struct {
+	Target string `json:"target,omitempty" description:"Where the session's computer-use calls run: \"local\" or the remote host ID. A session that started before \"Run computer use on\" changed keeps its own, unless the user moved it from its panel. Absent when the daemon has not seen the session start or call since it started."`
 }
 
 // ComputerUseScreenshotParam names one saved screenshot.

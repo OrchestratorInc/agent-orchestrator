@@ -1314,7 +1314,7 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** Run one Cua Driver tool; screenshots are saved to files and returned as paths */
+        /** Run one Cua Driver tool, here or on the computer chosen under Run computer use on; screenshots are saved to files and returned as paths */
         post: operations["callComputerUseTool"];
         delete?: never;
         options?: never;
@@ -1373,6 +1373,58 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/computer-use/remote": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Read whether other computers may use this one and which computer this one's agents run computer use on */
+        get: operations["getComputerUseRemote"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/computer-use/remote/allow": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /** Let agents on the user's other computers use this computer's Cua Driver, or stop */
+        put: operations["setComputerUseRemoteAllow"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/computer-use/remote/target": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /** Run this computer's agents' computer use on another computer; the desktop app sends the credential it holds for it */
+        put: operations["setComputerUseRemoteTarget"];
+        post?: never;
+        /** Run this computer's agents' computer use on this computer again */
+        delete: operations["clearComputerUseRemoteTarget"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/computer-use/sessions/{sessionId}/screenshots/{name}": {
         parameters: {
             query?: never;
@@ -1382,6 +1434,23 @@ export interface paths {
         };
         /** Read one screenshot an AO session's computer-use call saved */
         get: operations["getComputerUseScreenshot"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/computer-use/sessions/{sessionId}/target": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Report where an AO session's computer-use calls run */
+        get: operations["getComputerUseSessionTarget"];
         put?: never;
         post?: never;
         delete?: never;
@@ -2639,6 +2708,57 @@ export interface paths {
         post?: never;
         /** Unpair this phone from the daemon, removing it from the roster */
         delete: operations["unpairPushDevice"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/remote-computer-use/agent-tools": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List the computer-use tools agents on other computers get here */
+        get: operations["listRemoteComputerUseAgentTools"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/remote-computer-use/call": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Run one Cua Driver tool for an agent on another computer; screenshots come back inline */
+        post: operations["callRemoteComputerUseTool"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/remote-computer-use/status": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Report whether agents on other computers can use this computer now */
+        get: operations["getRemoteComputerUseOffer"];
+        put?: never;
+        post?: never;
+        delete?: never;
         options?: never;
         head?: never;
         patch?: never;
@@ -6866,12 +6986,16 @@ export interface components {
             };
             /** @description AO session the call is made for. Screenshots are saved under it, and calls for the same AO session share one Cua Driver session unless arguments.session names another. */
             sessionId?: string;
+            /** @description Where the calling session was told computer use runs: "local" or the remote host ID chosen under Run computer use on. When it no longer matches, the call is refused. Empty skips the check. */
+            target?: string;
             /** @description Driver tool name, e.g. list_windows or get_window_state. */
             tool: string;
         };
         ComputerUseCallResult: {
             /** @description Screenshots this call saved. Open them with an image viewer. */
             images: components["schemas"]["ComputerUseImage"][];
+            /** @description Set when the user moved this session's computer use to another computer than the one it started with: which computer the call ran on. */
+            notice?: string;
             /** @description The tool's JSON output. Inline images are replaced by *_file_path fields. After an action, observation holds AO's read of the window: the tree diff and a screenshot file. */
             result: unknown;
             tool: string;
@@ -6899,6 +7023,42 @@ export interface components {
              * @enum {string}
              */
             screenRecording: "granted" | "missing" | "unknown";
+        };
+        ComputerUseRemoteActivity: {
+            /** @description The other computer's random ID. */
+            caller: string;
+            /**
+             * Format: date-time
+             * @description When its latest call arrived.
+             */
+            lastAt: string;
+            /** @description The other computer's name, when it sent one. */
+            name?: string;
+            /**
+             * Format: date-time
+             * @description When this run of calls began.
+             */
+            started: string;
+        };
+        ComputerUseRemoteSettings: {
+            /** @description Other computers whose agents used this computer in the last two minutes, most recent first. */
+            activity: components["schemas"]["ComputerUseRemoteActivity"][];
+            /** @description Agents on the user's other computers may use this computer's Cua Driver. */
+            allowRemote: boolean;
+            /** @description The other computer this computer's agents run computer use on; absent runs it here. */
+            target?: components["schemas"]["ComputerUseRemoteTarget"];
+        };
+        ComputerUseRemoteTarget: {
+            /** @description The other computer's Orchestrator host ID. */
+            hostId: string;
+            /** @description The name this computer lists it under. */
+            label: string;
+            /** @description The other computer's remote-host address. */
+            url: string;
+        };
+        ComputerUseSessionTargetResponse: {
+            /** @description Where the session's computer-use calls run: "local" or the remote host ID. A session that started before "Run computer use on" changed keeps its own, unless the user moved it from its panel. Absent when the daemon has not seen the session start or call since it started. */
+            target?: string;
         };
         ComputerUseStatus: {
             /** @description The cua-driver executable AO runs. */
@@ -6931,6 +7091,8 @@ export interface components {
             error?: string;
             id: string;
             ok: boolean;
+            /** @description The other computer the call ran on, chosen under Run computer use on; absent when it ran on this computer. */
+            ranOn?: string;
             /** @description Screenshot file names, served by GET /api/v1/computer-use/sessions/{sessionId}/screenshots/{name}. */
             screenshots: string[];
             tool: string;
@@ -8932,6 +9094,38 @@ export interface components {
         ReloadConversationMCPServersResponse: {
             servers: components["schemas"]["ConversationMCPServerPayload"][];
         };
+        RemoteComputerUseCallRequest: {
+            arguments?: {
+                [key: string]: unknown;
+            };
+            /** @description A random ID the calling computer keeps, so sessions with the same ID on two computers stay apart. */
+            caller?: string;
+            /** @description The calling computer's name, shown here while its agents use this computer. */
+            callerName?: string;
+            /** @description The calling computer's AO session; with caller it names this computer's screenshot folder and Cua Driver session for the calls. */
+            sessionId?: string;
+            tool: string;
+        };
+        RemoteComputerUseCallResult: {
+            images: components["schemas"]["RemoteComputerUseImage"][];
+            result: unknown;
+            /** @description Which run_steps step failed and why; the batch's report is still in result. */
+            stepError?: string;
+            tool: string;
+        };
+        RemoteComputerUseImage: {
+            /** @description The image, base64-encoded. */
+            data: string;
+            mimeType: string;
+            /** @description Where this computer saved it; the result's fields name this path. */
+            path: string;
+        };
+        RemoteComputerUseOffer: {
+            /** @description Agents on other computers can run computer use here now: Cua Driver is installed and both "Let agents use this computer" and "Let agents on your other computers use this computer" are on. */
+            offered: boolean;
+            /** @description Operating system this computer runs: darwin, linux, or windows. */
+            platform: string;
+        };
         RemoteHostUpdateResponse: {
             error?: string;
             /** @enum {string} */
@@ -9725,6 +9919,17 @@ export interface components {
             active: boolean;
             viewId: string;
         };
+        SetComputerUseRemoteTargetRequest: {
+            /** @description This computer's name, shown on the other computer while this computer's agents use it. */
+            callerName?: string;
+            /** @description The bearer credential this computer uses for the remote host. Stored with mode 0600 and never returned. */
+            credential: string;
+            hostId: string;
+            label: string;
+            /** @description The AO session the computer was chosen from. That session's calls run on it from now on, though the session started with computer use elsewhere; other sessions that started elsewhere are refused. */
+            sessionId?: string;
+            url: string;
+        };
         SetConversationConfigOptionRequest: {
             enabled?: null | boolean;
             value?: string;
@@ -10365,6 +10570,9 @@ export interface components {
             enabled: null | boolean;
         };
         UpdateCommitAttributionRequest: {
+            enabled: null | boolean;
+        };
+        UpdateComputerUseRemoteAllowRequest: {
             enabled: null | boolean;
         };
         UpdateComputerUseRequest: {
@@ -15385,6 +15593,205 @@ export interface operations {
             };
         };
     };
+    getComputerUseRemote: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ComputerUseRemoteSettings"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    setComputerUseRemoteAllow: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["UpdateComputerUseRemoteAllowRequest"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ComputerUseRemoteSettings"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    setComputerUseRemoteTarget: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SetComputerUseRemoteTargetRequest"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ComputerUseRemoteSettings"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    clearComputerUseRemoteTarget: {
+        parameters: {
+            query?: {
+                /** @description The AO session the change was made from. That session's calls run on this computer from now on, though it started with computer use elsewhere. */
+                sessionId?: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ComputerUseRemoteSettings"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
     getComputerUseScreenshot: {
         parameters: {
             query?: never;
@@ -15419,6 +15826,56 @@ export interface operations {
             };
             /** @description Not Found */
             404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    getComputerUseSessionTarget: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Session identifier, e.g. project-1. */
+                sessionId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ComputerUseSessionTargetResponse"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -19660,6 +20117,178 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content?: never;
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    listRemoteComputerUseAgentTools: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ComputerUseAgentToolsResponse"];
+                };
+            };
+            /** @description Forbidden */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    callRemoteComputerUseTool: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RemoteComputerUseCallRequest"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RemoteComputerUseCallResult"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Forbidden */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Service Unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    getRemoteComputerUseOffer: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RemoteComputerUseOffer"];
+                };
             };
             /** @description Internal Server Error */
             500: {

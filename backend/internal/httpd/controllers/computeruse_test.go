@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -21,11 +22,17 @@ type timelineComputerUse struct {
 	entries     []computeruse.TimelineEntry
 	screenshots map[string]string
 	gotSession  string
+	target      string
 }
 
 func (f *timelineComputerUse) Timeline(_ context.Context, sessionID string) ([]computeruse.TimelineEntry, error) {
 	f.gotSession = sessionID
 	return f.entries, nil
+}
+
+func (f *timelineComputerUse) SessionTarget(_ context.Context, sessionID string) (string, error) {
+	f.gotSession = sessionID
+	return f.target, nil
 }
 
 func (f *timelineComputerUse) ScreenshotPath(_ context.Context, _ string, name string) (string, error) {
@@ -83,5 +90,14 @@ func TestComputerUseScreenshotServesTheFile(t *testing.T) {
 	handler.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/computer-use/sessions/ao-1/screenshots/gone.png", nil))
 	if recorder.Code != http.StatusNotFound {
 		t.Fatalf("missing screenshot status = %d", recorder.Code)
+	}
+}
+
+func TestComputerUseSessionTargetReportsWhereTheChatRuns(t *testing.T) {
+	svc := &timelineComputerUse{target: "host-mac"}
+	recorder := httptest.NewRecorder()
+	computerUseRouter(svc).ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/computer-use/sessions/ao-1/target", nil))
+	if recorder.Code != http.StatusOK || svc.gotSession != "ao-1" || !strings.Contains(recorder.Body.String(), `"target":"host-mac"`) {
+		t.Fatalf("status = %d, session = %q, body = %s", recorder.Code, svc.gotSession, recorder.Body)
 	}
 }

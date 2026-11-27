@@ -53,12 +53,21 @@ export type RemotesIpcDeps = {
 	cloudRequest: (method: string, path: string, options?: { body?: unknown; signal?: AbortSignal }) => Promise<{ status: number; body: string }>;
 	/** How long reading the account's machines from AO Cloud may take. */
 	accountDirectoryTimeoutMs?: number;
+	/** The local daemon's loopback address, or null while it is not ready. */
+	localDaemonBase?: () => string | null;
+	/** Sends a request to the local daemon; injectable for tests. */
+	daemonFetch?: typeof fetch;
 	probe?: (entry: RemoteEntry) => Promise<RemoteHealth>;
 	identity?: (entry: Pick<RemoteEntry, "url">) => Promise<string>;
 	pair?: (entry: Pick<RemoteEntry, "url" | "hostId">, secret: string, device: { name: string; platform: string }) => Promise<PairDeviceResult>;
 	authErrorCode?: (entry: RemoteEntry) => Promise<string | undefined>;
 	deviceName?: () => Promise<string>;
 	hostUpdate?: { read: (entry: RemoteEntry) => Promise<HostUpdateView | null>; start: (entry: RemoteEntry, version?: string) => Promise<HostUpdateView | null>; check: (entry: RemoteEntry) => Promise<string> };
+};
+
+export type RemotesIpc = {
+	/** Clears the daemon's computer-use target when it is not one of the signed-in account's hosts; call when the account changes. */
+	reconcileComputerUseTarget: () => Promise<void>;
 };
 
 export class LocalIdentityUnavailableError extends ExpectedIpcError {
@@ -78,9 +87,10 @@ export function registerRemotesIpc(
 	{
 		file, registry, requireAccount, getAccountId, localIdentity, cloudRequest, accountDirectoryTimeoutMs = 10_000,
 		probe = probeRemote, identity = readRemoteIdentity, pair = pairDevice, authErrorCode = readAuthErrorCode, deviceName = computerName,
+		localDaemonBase = () => null, daemonFetch = fetch,
 		hostUpdate = { read: readHostUpdate, start: startHostUpdate, check: checkHostUpdate },
 	}: RemotesIpcDeps,
-): void {
+): RemotesIpc {
 	const disconnect = (url: string) => registry.disconnect(url);
 	const refuseSelf = (hostId: string | undefined, localHostId: string | null) => {
 		if (localHostId && hostId === localHostId) throw new ExpectedIpcError("This Orchestrator installation is already available locally; a remote connection to itself is not allowed.");
@@ -167,6 +177,55 @@ export function registerRemotesIpc(
 		return entries.filter((item) => !item.accountUserId || item.accountUserId === account);
 	};
 
+	const savedHost = async (hostId: string | undefined) =>
+		hostId ? (await readRemotes(file)).find((entry) => entry.hostId === hostId) : undefined;
+	// The local daemon keeps its own copy of the chosen computer's credential
+	// for "Run computer use on". Removing that host, changing its address or
+	// credential, or losing the account must not leave agents driving it with
+	// the old one, so each of those updates or clears the daemon's copy.
+	const putComputerUseTarget = async (base: string, entry: RemoteEntry, sessionId?: string) => daemonFetch(`${base}/api/v1/computer-use/remote/target`, {
+		method: "PUT",
+		redirect: "error",
+		headers: { "Content-Type": "application/json" },
+		body: JSON.stringify({ hostId: entry.hostId, label: entry.label, url: entry.url, credential: entry.password, callerName: await deviceName(), ...(sessionId ? { sessionId } : {}) }),
+		signal: AbortSignal.timeout(8_000),
+	});
+	const clearComputerUseTarget = async (base: string) => {
+		const response = await daemonFetch(`${base}/api/v1/computer-use/remote/target`, { method: "DELETE", redirect: "error", signal: AbortSignal.timeout(8_000) });
+		if (!response.ok) throw new Error(`clearing the computer-use target failed (${response.status})`);
+	};
+	const daemonComputerUseTarget = async (base: string): Promise<string | undefined> => {
+		const response = await daemonFetch(`${base}/api/v1/computer-use/remote`, { redirect: "error", signal: AbortSignal.timeout(8_000) });
+		if (!response.ok) return undefined;
+		const body = await response.json().catch(() => ({})) as { target?: { hostId?: string } };
+		return body.target?.hostId;
+	};
+	/** Sends entry's credential to the daemon, or clears its target without one, when its target is hostId. Best effort. */
+	const refreshComputerUseTarget = async (hostId: string | undefined, entry?: RemoteEntry) => {
+		const base = localDaemonBase();
+		if (!hostId || !base) return;
+		try {
+			if (await daemonComputerUseTarget(base) !== hostId) return;
+			if (entry?.password && (await putComputerUseTarget(base, entry)).ok) return;
+			await clearComputerUseTarget(base);
+		} catch (error) {
+			console.warn("[remotes] could not update the computer-use target", error);
+		}
+	};
+	/** Clears the daemon's target when it names a host the signed-in account does not have, or no one is signed in. */
+	const reconcileComputerUseTarget = async () => {
+		const base = localDaemonBase();
+		if (!base) return;
+		try {
+			const hostId = await daemonComputerUseTarget(base);
+			if (!hostId) return;
+			const entries = await owned().catch(() => [] as RemoteEntry[]);
+			if (!entries.some((entry) => entry.hostId === hostId)) await clearComputerUseTarget(base);
+		} catch (error) {
+			console.warn("[remotes] could not check the computer-use target", error);
+		}
+	};
+
 	ipcMain.handle("remotes:list", (_event, includeErrorCode?: true) => ordered(async () => {
 		try {
 			await accountID();
@@ -235,13 +294,18 @@ export function registerRemotesIpc(
 			editable.fallbackPassword = paired.entry.fallbackPassword;
 			const health = await updateSavedRemote(file, url, editable, disconnect, (entry) => checkedProbe(entry, account));
 			remember(account, typed, paired, health);
+			if (health === "online") await refreshComputerUseTarget(current.hostId, await savedHost(current.hostId));
 			return health;
 		}
-		return updateSavedRemote(file, url, editable, disconnect, (entry) => checkedProbe(entry, account));
+		const health = await updateSavedRemote(file, url, editable, disconnect, (entry) => checkedProbe(entry, account));
+		if (health === "online" && current) await refreshComputerUseTarget(current.hostId, await savedHost(current.hostId));
+		return health;
 	}));
 	ipcMain.handle("remotes:remove", async (_event, url: string) => ordered(async () => {
-		if (!(await owned()).some((entry) => entry.url === url)) throw new ExpectedIpcError("Host does not belong to this account.");
-		return removeSavedRemote(file, url, disconnect);
+		const removed = (await owned()).find((entry) => entry.url === url);
+		if (!removed) throw new ExpectedIpcError("Host does not belong to this account.");
+		await removeSavedRemote(file, url, disconnect);
+		await refreshComputerUseTarget(removed.hostId);
 	}));
 	ipcMain.handle("remotes:connect", async (_event, url: string, hostId?: string) => ordered(async () => {
 		const account = await accountID();
@@ -282,6 +346,7 @@ export function registerRemotesIpc(
 				current = await updateRemote(file, url, { password: paired.entry.password, fallbackPassword: paired.entry.fallbackPassword });
 			}
 		}
+		if (current.password !== entry.password) await refreshComputerUseTarget(current.hostId, current);
 		return registry.connect(current);
 	}));
 	// AO Cloud calls run outside the ordered queue: a slow answer must not hold
@@ -372,6 +437,33 @@ export function registerRemotesIpc(
 		// take more than a minute.
 		await accountHosts("PUT", `/${encodeURIComponent(issued.hostId)}`, { body: issued.registration });
 	});
+	// "Run computer use on": the local daemon forwards this computer's
+	// computer-use calls to the chosen machine, so it needs the credential this
+	// desktop holds for it. It goes from here straight to the daemon's
+	// loopback-only route; the renderer only ever names the machine. A session
+	// ID names the chat it was chosen from, which moves to it.
+	ipcMain.handle("remotes:setComputerUseTarget", async (_event, hostId: string, sessionId?: unknown) => ordered(async () => {
+		const account = await accountID();
+		const entry = (await owned()).find((saved) => saved.hostId === hostId);
+		if (!entry?.hostId) throw new ExpectedIpcError("That computer is not one of your remote hosts.");
+		if (!entry.password) throw new ExpectedIpcError(`Connect to ${entry.label} again before running computer use on it.`);
+		const localHostId = await requireLocalIdentity();
+		refuseSelf(entry.hostId, localHostId);
+		let actual: string;
+		try {
+			actual = await identity(entry);
+		} catch {
+			throw new ExpectedIpcError(`${entry.label} did not answer. Check that it is on and Orchestrator is running there.`);
+		}
+		if (actual !== entry.hostId) throw new ExpectedIpcError(`Another computer now answers at ${entry.label}'s address; connection refused.`);
+		await checkConnectionContext(localHostId, account);
+		const base = localDaemonBase();
+		if (!base) throw new LocalIdentityUnavailableError();
+		const response = await putComputerUseTarget(base, entry, typeof sessionId === "string" && sessionId ? sessionId : undefined);
+		const body = await response.json().catch(() => ({})) as { message?: string };
+		if (!response.ok) throw new ExpectedIpcError(body.message || `Orchestrator could not save the computer (${response.status}).`);
+		return body;
+	}));
 	const updatableHost = async (url: string) => {
 		const account = await accountID();
 		const entry = (await owned()).find((saved) => saved.url === url);
@@ -428,4 +520,5 @@ export function registerRemotesIpc(
 		if (await accountID() !== account) throw new ExpectedIpcError("Account changed during remote connection.");
 		return registry.externalUrl(hostId, url);
 	});
+	return { reconcileComputerUseTarget: () => ordered(reconcileComputerUseTarget) };
 }

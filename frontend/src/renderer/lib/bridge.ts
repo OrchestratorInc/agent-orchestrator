@@ -485,6 +485,7 @@ export const aoBridge: AoBridge =
 			checkHostUpdate: async () => { throw new AoError("REMOTE_HOSTS_NEED_DESKTOP", "remote hosts need the desktop app"); },
 			startHostUpdate: async () => { throw new AoError("REMOTE_HOSTS_NEED_DESKTOP", "remote hosts need the desktop app"); },
 			computerName: async () => { throw new Error("remote hosts need the desktop app"); },
+			setComputerUseTarget: async () => { throw new Error("remote hosts need the desktop app"); },
 			previewUrl: async (_hostId: string, _sessionId: string, sourceUrl: string) => sourceUrl,
 			resolvePreviewUrl: async (_hostId: string, _sessionId: string, viewedUrl: string) => viewedUrl,
 			agentBrowserUrl: async () => "",

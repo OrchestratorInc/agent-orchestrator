@@ -380,6 +380,11 @@ func (c *timeoutProbeComputerUse) Call(ctx context.Context, _ computeruse.CallRe
 	return computeruse.CallResult{}, nil
 }
 
+func (c *timeoutProbeComputerUse) ServeRemoteCall(ctx context.Context, _ computeruse.RemoteCallRequest) (computeruse.RemoteCallResult, error) {
+	c.budget <- remainingRequestBudget(ctx)
+	return computeruse.RemoteCallResult{}, nil
+}
+
 // A run_steps batch has the driver's 60 s plus its report and closing read;
 // the one-minute REST budget cut it off with a 503 and no step report.
 func TestComputerUseCallUsesExtendedTimeout(t *testing.T) {
@@ -391,17 +396,20 @@ func TestComputerUseCallUsesExtendedTimeout(t *testing.T) {
 		APIDeps{ComputerUse: svc},
 		ControlDeps{},
 	)
-	req := httptest.NewRequest(http.MethodPost, "/api/v1/computer-use/call", bytes.NewBufferString(`{"tool":"run_steps","arguments":{"steps":[]}}`))
-	req.Header.Set("Content-Type", "application/json")
-	response := httptest.NewRecorder()
-	router.ServeHTTP(response, req)
-	select {
-	case budget := <-svc.budget:
-		if budget < 119*time.Second || budget > 2*time.Minute {
-			t.Fatalf("computer-use call budget = %s, want about 2 minutes", budget)
+	// A call from another computer runs the same batch, so it gets the same budget.
+	for _, path := range []string{"/api/v1/computer-use/call", "/api/v1/remote-computer-use/call"} {
+		req := httptest.NewRequest(http.MethodPost, path, bytes.NewBufferString(`{"tool":"run_steps","arguments":{"steps":[]}}`))
+		req.Header.Set("Content-Type", "application/json")
+		response := httptest.NewRecorder()
+		router.ServeHTTP(response, req)
+		select {
+		case budget := <-svc.budget:
+			if budget < 119*time.Second || budget > 2*time.Minute {
+				t.Fatalf("%s budget = %s, want about 2 minutes", path, budget)
+			}
+		case <-time.After(time.Second):
+			t.Fatalf("%s never reached the service: status=%d body=%s", path, response.Code, response.Body.String())
 		}
-	case <-time.After(time.Second):
-		t.Fatalf("the route never reached Call: status=%d body=%s", response.Code, response.Body.String())
 	}
 }
 

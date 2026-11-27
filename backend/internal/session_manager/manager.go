@@ -617,8 +617,14 @@ type Manager struct {
 	versionPolicyMu sync.Mutex
 	versionPolicy   func() VersionRefreshPolicy
 	// computerUse reports the "Let agents use this computer" setting; nil is off.
-	computerUseMu sync.Mutex
-	computerUse   func(context.Context) bool
+	computerUseMu     sync.Mutex
+	computerUse       func(context.Context) bool
+	computerUseRemote func(context.Context) (hostID, label string)
+	// computerUseBind reports a starting session's computer-use target.
+	computerUseBind func(sessionID, target string)
+	// computerUseSpawns holds the target each starting session saw, so its
+	// prompt and its tool server are bound to the same computer.
+	computerUseSpawns map[domain.SessionID]computerUseSnapshot
 	// devicesOffered reports whether devices are on (Developer mode) and the
 	// user opted in; nil is off.
 	devicesMu      sync.Mutex
@@ -7236,7 +7242,9 @@ func (m *Manager) buildSystemPrompt(ctx context.Context, kind domain.SessionKind
 		cfg.AdditionalSections = append(cfg.AdditionalSections, pointer)
 	}
 	if chat && m.computerUseEnabled(ctx) {
-		cfg.AdditionalSections = append(cfg.AdditionalSections, computerUsePrompt(skillassets.Dir(m.dataDir)))
+		cfg.AdditionalSections = append(cfg.AdditionalSections, computerUsePrompt(skillassets.Dir(m.dataDir), m.computerUseRemoteLabel(ctx, sessionID)))
+	} else if chat {
+		m.dropComputerUseTarget(sessionID)
 	}
 	if privacy := macPrivacyPromptFor(chat, desktopOwnedDaemon()); privacy != "" {
 		cfg.AdditionalSections = append(cfg.AdditionalSections, privacy)

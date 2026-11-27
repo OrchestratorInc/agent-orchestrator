@@ -3654,7 +3654,7 @@ describe("SessionInspector tabs", () => {
     const tabs = screen.getAllByRole("tab").map((el) => el.textContent?.trim());
     expect(tabs).toEqual(["Summary", "Files", "Reviews", "Browser", "Computer use", "Side chat"]);
     expect(screen.getByTestId("computer-use-panel")).toBeInTheDocument();
-    expect(screen.getByText("This machine")).toBeInTheDocument();
+    expect(await screen.findByRole("button", { name: "Runs on" })).toHaveTextContent("This computer");
   });
 
   it("leaves the Computer Use tab out until the session makes a computer-use call", async () => {

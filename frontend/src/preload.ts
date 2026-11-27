@@ -1067,6 +1067,10 @@ const api = {
 		startHostUpdate: (url: string, version?: string) => ipcRenderer.invoke("remotes:startHostUpdate", url, version) as Promise<HostUpdateView | null>,
 		// The name this machine is listed under on the account's other devices.
 		computerName: () => ipcRenderer.invoke("remotes:computerName") as Promise<string>,
+		// Runs this computer's agents' computer use on a saved host. Main hands
+		// the daemon the host's credential; the renderer never sees it.
+		// A session ID names the chat it was chosen from, which moves with it.
+		setComputerUseTarget: (hostId: string, sessionId?: string) => ipcRenderer.invoke("remotes:setComputerUseTarget", hostId, sessionId) as Promise<unknown>,
 		previewUrl: (hostId: string, sessionId: string, sourceUrl: string) =>
 			ipcRenderer.invoke("remotes:previewUrl", hostId, sessionId, sourceUrl) as Promise<string>,
 		resolvePreviewUrl: (hostId: string, sessionId: string, viewedUrl: string) =>

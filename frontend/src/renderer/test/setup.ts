@@ -531,6 +531,7 @@ if (typeof window !== "undefined") {
 			checkHostUpdate: async () => { throw new Error("no remote hosts in test bridge"); },
 			startHostUpdate: async () => { throw new Error("no remote hosts in test bridge"); },
 			computerName: async () => "Test computer",
+			setComputerUseTarget: async () => ({}),
 			previewUrl: async (_hostId: string, _sessionId: string, sourceUrl: string) => sourceUrl,
 			resolvePreviewUrl: async (_hostId: string, _sessionId: string, viewedUrl: string) => viewedUrl,
 		agentBrowserUrl: async () => "",

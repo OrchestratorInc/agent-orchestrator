@@ -13,9 +13,11 @@ package computeruse
 import (
 	"bytes"
 	"context"
+	"crypto/tls"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/http"
 	"regexp"
 	"runtime"
 	"strings"
@@ -77,7 +79,12 @@ type CallRequest struct {
 	// SessionID groups saved screenshots by AO session and names the driver
 	// session the call runs in; empty uses a shared folder and session.
 	SessionID string `json:"sessionId,omitempty" description:"AO session the call is made for. Screenshots are saved under it, and calls for the same AO session share one Cua Driver session unless arguments.session names another."`
+	// Target is where the calling session was told computer use runs.
+	Target string `json:"target,omitempty" description:"Where the calling session was told computer use runs: \"local\" or the remote host ID chosen under Run computer use on. When it no longer matches, the call is refused. Empty skips the check."`
 }
+
+// LocalTarget is CallRequest.Target for computer use on this computer.
+const LocalTarget = "local"
 
 // Image is a screenshot a call saved to disk.
 type Image struct {
@@ -90,6 +97,9 @@ type CallResult struct {
 	Tool   string  `json:"tool"`
 	Result any     `json:"result" description:"The tool's JSON output. Inline images are replaced by *_file_path fields. After an action, observation holds AO's read of the window: the tree diff and a screenshot file."`
 	Images []Image `json:"images" description:"Screenshots this call saved. Open them with an image viewer."`
+	// Notice tells the agent the user moved its computer use to another
+	// computer than its instructions name.
+	Notice string `json:"notice,omitempty" description:"Set when the user moved this session's computer use to another computer than the one it started with: which computer the call ran on."`
 }
 
 const (
@@ -163,8 +173,29 @@ type Service struct {
 	sessionless map[string]bool
 	snapshots   snapshotWindows
 	agentTools  agentToolCache
+	// agentToolScans are the tool reads running now, by driver key.
+	agentToolScans map[string]*agentToolScan
 	// enabled reports "Let agents use this computer"; nil is off.
 	enabled func(context.Context) bool
+	// remote holds the remote computer-use settings (remote.go), guarded by mu.
+	remote remoteStore
+	// remoteClients holds the client for the current target (remote.go),
+	// guarded by mu; remoteTLS overrides its TLS settings in tests.
+	remoteClients map[string]*http.Client
+	remoteTLS     *tls.Config
+	// activity is which other computers' agents used this one recently, by
+	// caller ID; guarded by mu.
+	activity map[string]RemoteActivity
+	// remoteCalls cancels the calls from other computers running now, by a
+	// sequence number; guarded by mu, as is remoteSweptAt, when other
+	// computers' screenshot folders were last swept.
+	remoteCalls   map[uint64]context.CancelCauseFunc
+	remoteCallSeq uint64
+	remoteSweptAt time.Time
+	// bindings is where each session's computer use was set up to run, by
+	// session ID: from its start, or from its latest call's target; guarded
+	// by mu.
+	bindings map[string]string
 }
 
 // SetEnabled supplies the "Let agents use this computer" setting, which Call
@@ -193,6 +224,7 @@ func New(driver Driver, dataDir string) *Service {
 		stop:        stop,
 		sessionless: map[string]bool{},
 		snapshots:   snapshotWindows{windows: map[string]window{}},
+		remote:      newRemoteStore(dataDir),
 	}
 }
 
@@ -322,20 +354,84 @@ func (s *Service) Doctor(ctx context.Context) (string, error) {
 }
 
 // Call runs one driver tool and returns its output with images saved to
-// files. A stopped service is started once and the call retried.
+// files. With "Run computer use on" set to another computer, the call runs
+// there instead (remote.go). A stopped service is started once and the call
+// retried.
 func (s *Service) Call(ctx context.Context, request CallRequest) (CallResult, error) {
 	tool := strings.TrimSpace(request.Tool)
 	if !toolNamePattern.MatchString(tool) {
 		return CallResult{}, invalidTool(tool)
 	}
+	to, err := s.forwarding(request.SessionID)
+	if err != nil {
+		return CallResult{}, err
+	}
+	s.BindSession(request.SessionID, request.Target)
+	notice, err := checkTarget(request.Target, to.target, to.adopted)
+	if err != nil {
+		return CallResult{}, err
+	}
+	var result CallResult
+	if to.target != nil {
+		result, err = s.callRemote(ctx, *to.target, to.credential, to.caller, to.callerName, request)
+	} else {
+		result, err = s.callHere(ctx, request)
+	}
+	if err == nil {
+		result.Notice = notice
+	}
+	return result, err
+}
+
+// checkTarget refuses a call from a session that started with computer use on
+// another computer than the one chosen now: its instructions name that
+// computer, so its actions must not silently land elsewhere. A session the
+// user moved to the current computer from its own panel (adopted) runs there,
+// and the returned notice tells its agent so. An empty expected target (a
+// terminal, curl) is not checked.
+func checkTarget(expected string, target *RemoteTarget, adopted string) (string, error) {
+	expected = strings.TrimSpace(expected)
+	if expected == "" {
+		return "", nil
+	}
+	current, label := LocalTarget, "this computer"
+	if target != nil {
+		current, label = target.HostID, target.Label
+	}
+	if expected == current {
+		return "", nil
+	}
+	if adopted == current {
+		if target == nil {
+			return "The user moved computer use for this chat to the computer you run on. You are operating this computer's screen now, not the one your instructions name.", nil
+		}
+		return fmt.Sprintf("The user moved computer use for this chat to %s. You are operating %s's screen now, not the computer your instructions name.", label, label), nil
+	}
+	return "", apierr.Conflict("COMPUTER_USE_TARGET_CHANGED", fmt.Sprintf("Computer use for this chat was set up on another computer; it now runs on %s. Start a new chat to use computer use there, or the user can choose %s in this chat's Computer use panel.", label, label), nil)
+}
+
+// callHere runs one driver tool on this computer.
+func (s *Service) callHere(ctx context.Context, request CallRequest) (CallResult, error) {
+	result, _, err := s.callHereAdmitted(ctx, request, nil)
+	return result, err
+}
+
+// callHereAdmitted is callHere with admitted run once the call has passed
+// every check, just before the driver runs it. Its middle result is a
+// run_steps step's failure that the returned report already describes.
+func (s *Service) callHereAdmitted(ctx context.Context, request CallRequest, admitted func()) (CallResult, error, error) {
+	tool := strings.TrimSpace(request.Tool)
+	if !toolNamePattern.MatchString(tool) {
+		return CallResult{}, nil, invalidTool(tool)
+	}
 	if !s.computerUseEnabled(ctx) {
-		return CallResult{}, errDisabled
+		return CallResult{}, nil, errDisabled
 	}
 	if !offeredTool(tool) {
-		return CallResult{}, toolNotOffered(tool)
+		return CallResult{}, nil, toolNotOffered(tool)
 	}
 	if err := checkActions(tool, request.Arguments); err != nil {
-		return CallResult{}, err
+		return CallResult{}, nil, err
 	}
 	arguments := make(map[string]any, len(request.Arguments)+1)
 	for key, value := range request.Arguments {
@@ -343,11 +439,14 @@ func (s *Service) Call(ctx context.Context, request CallRequest) (CallResult, er
 	}
 	scope, err := s.images.scope(request.SessionID)
 	if err != nil {
-		return CallResult{}, err
+		return CallResult{}, nil, err
 	}
 	binary, err := s.locate(ctx)
 	if err != nil {
-		return CallResult{}, err
+		return CallResult{}, nil, err
+	}
+	if admitted != nil {
+		admitted()
 	}
 	result, stepErr, err := s.run(ctx, binary, scope, tool, request.SessionID, arguments)
 	// A run_steps batch whose step failed still returns its report to the
@@ -357,7 +456,7 @@ func (s *Service) Call(ctx context.Context, request CallRequest) (CallResult, er
 		recorded = stepErr
 	}
 	s.recordCall(scope, tool, request.Arguments, result.Images, recorded)
-	return result, err
+	return result, stepErr, err
 }
 
 // run makes one driver call for Call, which has checked the request. stepErr

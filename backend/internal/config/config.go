@@ -23,6 +23,12 @@ import (
 // the CLI reads it.
 const EnvComputerUse = "AO_COMPUTER_USE"
 
+// EnvComputerUseTarget is set beside EnvComputerUse to where the session was
+// told computer use runs: "local" or the remote host ID chosen under "Run
+// computer use on". `ao mcp` sends it with each call, so a session whose
+// target changed is refused instead of acting on another computer.
+const EnvComputerUseTarget = "AO_COMPUTER_USE_TARGET"
+
 // EnvTerminateOnPRMerge sets the daemon-wide default for whether sessions
 // auto-terminate when their PR is merged.
 const EnvTerminateOnPRMerge = "AO_TERMINATE_ON_PR_MERGE"

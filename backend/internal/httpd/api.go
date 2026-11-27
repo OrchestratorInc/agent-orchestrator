@@ -273,7 +273,7 @@ func newAPIWithLogger(cfg config.Config, deps APIDeps, log *slog.Logger) *API {
 		hostUpdate:    &controllers.HostUpdateController{Updater: deps.HostUpdate},
 		telemetryID:   &controllers.TelemetryIdentityController{Source: deps.TelemetryIdentity, LifetimeSessions: deps.LifetimeSessions, DaemonVersion: deps.DaemonVersion},
 		systemInstall: &controllers.SystemInstallController{Installer: deps.Installer},
-		computerUse:   &controllers.ComputerUseController{Svc: deps.ComputerUse},
+		computerUse:   &controllers.ComputerUseController{Svc: deps.ComputerUse, DeviceName: accessDeviceName(deps.AccessDevices)},
 		agentAuth:     &controllers.AgentAuthController{Svc: deps.AgentAuth},
 		linkPreview:   &controllers.LinkPreviewController{Svc: deps.LinkPreview},
 		prPreview:     &controllers.PRPreviewController{Svc: deps.PRPreview},
@@ -367,7 +367,8 @@ func (a *API) Register(root chi.Router) {
 					// A run_steps batch may run for the driver's full 60 s before
 					// its step report and closing window read, and an action is
 					// followed by its own read: either outlasts the REST budget.
-					if chi.RouteContext(req.Context()).RoutePattern() == "/api/v1/computer-use/call" {
+					if pattern := chi.RouteContext(req.Context()).RoutePattern(); pattern == "/api/v1/computer-use/call" ||
+						pattern == "/api/v1/remote-computer-use/call" {
 						computerUse.ServeHTTP(w, req)
 						return
 					}
@@ -574,4 +575,20 @@ func deviceCommandRoute(req *http.Request) bool {
 		return true
 	}
 	return false
+}
+
+// accessDeviceName looks a paired device's name up by ID, or nil without a
+// device registry.
+func accessDeviceName(devices *mobilebridge.AccessDevices) func(id string) (string, bool) {
+	if devices == nil {
+		return nil
+	}
+	return func(id string) (string, bool) {
+		for _, device := range devices.List() {
+			if device.ID == id {
+				return device.Name, true
+			}
+		}
+		return "", false
+	}
 }

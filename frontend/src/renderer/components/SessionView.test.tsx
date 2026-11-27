@@ -6280,14 +6280,34 @@ describe("SessionView", () => {
 		}
 	});
 
-	it("does not open Computer use for a session that already had steps when entered", () => {
+	it("opens Computer use when a new run starts after a quiet gap, though the session had steps when entered", () => {
 		computerUseTimelineState.steps = [stepBefore("1")];
 		try {
 			const view = render(<SessionView sessionId="sess-1" />);
+			expect(useUiStore.getState().inspectorSessions["sess-1"]?.view).not.toBe("computerUse");
 			computerUseTimelineState.steps = [stepBefore("1"), stepNow("2")];
 			view.rerender(<SessionView sessionId="sess-1" />);
 
-			expect(useUiStore.getState().inspectorSessions["sess-1"]?.view).not.toBe("computerUse");
+			expect(useUiStore.getState().inspectorSessions["sess-1"]?.view).toBe("computerUse");
+		} finally {
+			computerUseTimelineState.steps = undefined;
+		}
+	});
+
+	it("only badges Computer use for later steps of a run the user moved away from", () => {
+		computerUseTimelineState.steps = undefined;
+		const view = render(<SessionView sessionId="sess-1" />);
+		try {
+			const first = stepNow("1");
+			computerUseTimelineState.steps = [first];
+			view.rerender(<SessionView sessionId="sess-1" />);
+			expect(useUiStore.getState().inspectorSessions["sess-1"]?.view).toBe("computerUse");
+
+			act(() => useUiStore.getState().setInspectorView("sess-1", "summary"));
+			computerUseTimelineState.steps = [first, stepNow("2")];
+			view.rerender(<SessionView sessionId="sess-1" />);
+
+			expect(useUiStore.getState().inspectorSessions["sess-1"]?.view).toBe("summary");
 			expect(useUiStore.getState().inspectorSessions["sess-1"]?.computerUseUnseen).toBe(true);
 		} finally {
 			computerUseTimelineState.steps = undefined;
@@ -6306,14 +6326,20 @@ describe("SessionView", () => {
 		}
 	});
 
-	it("does not reopen Computer use once the session's earlier steps leave the timeline window", () => {
-		computerUseTimelineState.steps = [stepBefore("1")];
+	it("does not take a run's next step for a new run once the window drops the step before it", () => {
+		computerUseTimelineState.steps = undefined;
+		const view = render(<SessionView sessionId="sess-1" />);
 		try {
-			const view = render(<SessionView sessionId="sess-1" />);
-			// Later calls push the pre-entry step out of the window.
+			computerUseTimelineState.steps = [stepNow("1")];
+			view.rerender(<SessionView sessionId="sess-1" />);
+			expect(useUiStore.getState().inspectorSessions["sess-1"]?.view).toBe("computerUse");
+
+			act(() => useUiStore.getState().setInspectorView("sess-1", "summary"));
+			// Later calls of the same run push step 1 out of the window.
 			computerUseTimelineState.steps = [stepNow("2")];
 			view.rerender(<SessionView sessionId="sess-1" />);
-			expect(useUiStore.getState().inspectorSessions["sess-1"]?.view).not.toBe("computerUse");
+
+			expect(useUiStore.getState().inspectorSessions["sess-1"]?.view).toBe("summary");
 			expect(useUiStore.getState().inspectorSessions["sess-1"]?.computerUseUnseen).toBe(true);
 		} finally {
 			computerUseTimelineState.steps = undefined;

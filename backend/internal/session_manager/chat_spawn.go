@@ -432,6 +432,12 @@ func (m *Manager) aoMCPServers(ctx context.Context, harness domain.AgentHarness,
 	}
 	if m.computerUseEnabled(ctx) {
 		serverEnv[envComputerUse] = "1"
+		target := "local"
+		if hostID, _ := m.takeComputerUseTarget(ctx, domain.SessionID(env[EnvSessionID])); hostID != "" {
+			target = hostID
+		}
+		serverEnv[envComputerUseTarget] = target
+		m.bindComputerUse(domain.SessionID(env[EnvSessionID]), target)
 	}
 	command, args := mcpServerCommand(executable)
 	return []ports.ChatMCPServerConfig{{

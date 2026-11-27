@@ -46,6 +46,8 @@ type TimelineEntry struct {
 	Arguments map[string]any `json:"arguments,omitempty" description:"The arguments the agent passed, without the ones AO sets itself."`
 	OK        bool           `json:"ok"`
 	Error     string         `json:"error,omitempty"`
+	// RanOn names the other computer the call ran on; empty is this computer.
+	RanOn string `json:"ranOn,omitempty" description:"The other computer the call ran on, chosen under Run computer use on; absent when it ran on this computer."`
 	// Screenshots are file names in the session's screenshot folder, oldest
 	// first; ones already pruned are left out on read.
 	Screenshots []string `json:"screenshots" description:"Screenshot file names, served by GET /api/v1/computer-use/sessions/{sessionId}/screenshots/{name}."`
@@ -67,11 +69,16 @@ type timelineRead struct {
 	entries     []TimelineEntry
 }
 
-// recordCall appends one call to its session's timeline, dated when the call
-// finished: a long batch that started before the user opened the session
-// still counts as news there. Best effort: a failure to log never fails the
-// call.
+// recordCall appends one call to its session's timeline. Best effort: a
+// failure to log never fails the call.
 func (s *Service) recordCall(scope, tool string, arguments map[string]any, images []Image, callErr error) {
+	s.recordCallOn(scope, "", tool, arguments, images, callErr)
+}
+
+// recordCallOn is recordCall for a call that ran on another computer, named
+// ranOn. The entry is dated when the call finished: a long batch that started
+// before the user opened the session still counts as news there.
+func (s *Service) recordCallOn(scope, ranOn, tool string, arguments map[string]any, images []Image, callErr error) {
 	finished := time.Now()
 	entry := TimelineEntry{
 		ID:          timelineID(finished),
@@ -79,6 +86,7 @@ func (s *Service) recordCall(scope, tool string, arguments map[string]any, image
 		Tool:        tool,
 		Arguments:   timelineArguments(tool, arguments),
 		OK:          callErr == nil,
+		RanOn:       ranOn,
 		Screenshots: []string{},
 	}
 	if callErr != nil {

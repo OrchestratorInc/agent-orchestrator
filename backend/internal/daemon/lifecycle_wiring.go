@@ -286,6 +286,8 @@ type sessionLifecycle interface {
 	SetVersionTelemetry(sink ports.EventSink)
 	SetVersionRefreshPolicy(policy func() sessionmanager.VersionRefreshPolicy)
 	SetComputerUseEnabled(enabled func(context.Context) bool)
+	SetComputerUseRemote(target func(context.Context) (hostID, label string))
+	SetComputerUseBinding(bind func(sessionID, target string))
 	SetDevicesOffered(offered func() bool)
 	SetCommitAttributionEnabled(enabled func(context.Context) bool)
 	RetryVersionMoves(ctx context.Context) error
