@@ -1,0 +1,45 @@
+
+ ╭────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╮
+ │                                                                                                                                                            │
+ │  ▐█▛█▛█▌  Welcome to Kimi Code!                                                                                                                            │
+ │  ▐█████▌  Send /help for help information.                                                                                                                 │
+ │                                                                                                                                                            │
+ │  Directory: /home/dev/project                                                                                                                              │
+ │  Session:   session_00000000-0000-0000-0000-000000000000                                                                                                   │
+ │  Model:     lab-model                                                                                                                                      │
+ │  Version:   2.4.1                                                                                                                                          │
+ │                                                                                                                                                            │
+ ╰────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
+
+ ✦ Kimi K3.1 Pro is ready - use the model in a fresh session for the best results
+   Standard: Plus/Moderato and above; Highspeed: Pro/Allegretto and above
+
+   No session yet — one will be created on your first message.
+
+ ❯ explain the repo
+
+ ● Working through the request step by step. Working
+
+  ⠧ Working… · Tip: ctrl-s to add guidance without waiting for the turn to finish
+ ╭────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╮
+ │ >                                                                                                                                                          │
+ ╰────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
+ lab-model  ~/project                                                                                                                            ctrl+c: cancel
+                                                                                                                                           context: 0% (0/128k)
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

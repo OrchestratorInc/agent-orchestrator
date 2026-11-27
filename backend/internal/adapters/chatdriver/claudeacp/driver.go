@@ -90,6 +90,7 @@ type claudeLaunchAuthenticator interface {
 // plugin. The plugin remains the canonical discovery/auth implementation for
 // both Chat and TUI modes.
 func New(plugin claudePlugin, log *slog.Logger, onAuthRejected func()) ports.ChatDriver {
+	aliases := newClaudeAliasCatalog()
 	return &checkpointDriver{plugin: plugin, ChatDriver: acpdriver.New(acpdriver.Config{
 		Harness:     domain.HarnessClaudeCode,
 		HideCommand: hiddenCommands,
@@ -166,6 +167,7 @@ func New(plugin claudePlugin, log *slog.Logger, onAuthRejected func()) ports.Cha
 				log.Debug("Claude launch prepared", "sessionID", cfg.SessionID,
 					"authDuration", authDuration, "modelsDuration", time.Since(modelsStarted))
 			}
+			aliases.record(cfg.SessionID, models)
 			env := claudeACPLaunchEnv(cfg.Env, claudeBinary, cfg.Model, models)
 			return acpdriver.Launch{
 				Command: runtimeLaunch.command,
@@ -173,7 +175,7 @@ func New(plugin claudePlugin, log *slog.Logger, onAuthRejected func()) ports.Cha
 				Env:     env,
 			}, nil
 		},
-		ServedModel:    claudeServedModel,
+		ServedModel:    aliases.servedModel,
 		SessionMeta:    claudeSessionMeta,
 		SessionMode:    claudeSessionMode,
 		SessionOptions: claudeSessionOptions,
@@ -355,20 +357,6 @@ func claudeValidateModel(ctx context.Context, plugin claudePlugin, model string)
 		}
 	}
 	return nil
-}
-
-// claudeServedModel reports what a Claude alias actually resolved to. The ACP
-// adapter does not surface the answering model, but Claude's own transcript
-// records it on every assistant message.
-func claudeServedModel(ctx context.Context, cfg acpdriver.LaunchConfig, sessionID, selected string) (string, string) {
-	if !isClaudeNativeModelAlias(selected) {
-		return "", ""
-	}
-	served, err := claudecode.LastAssistantModel(ctx, cfg.Env, sessionID)
-	if err != nil || served == "" {
-		return "", ""
-	}
-	return served, fmt.Sprintf("The installed Claude Code resolves %q to %s", selected, served)
 }
 
 func claudeNestedMap(meta map[string]any, key string) map[string]any {

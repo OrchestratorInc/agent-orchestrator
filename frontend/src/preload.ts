@@ -105,6 +105,8 @@ import type {
 	BrowserProfileDeleteResult,
 	BrowserProfileMenuInput,
 	BrowserProfileSelectInput,
+	BrowserProfileSwitchConfirmRequest,
+	BrowserProfileSwitchFailure,
 	BrowserProfileViewState,
 } from "./shared/browser-profiles";
 import type {
@@ -528,6 +530,9 @@ const api = {
 		// the translucent shell blurs the desktop behind it.
 		setWindowTranslucent: (enabled: boolean) =>
 			ipcRenderer.invoke("theme:set-window-translucent", enabled) as Promise<void>,
+		// macOS only: Interface v2 moves the native window buttons with its wider
+		// edge spacing.
+		setInterfaceV2: (enabled: boolean) => ipcRenderer.invoke("theme:set-interface-v2", enabled) as Promise<void>,
 	},
 	menu: {
 		action: (action: string) => ipcRenderer.invoke("menu:action", action) as Promise<void>,
@@ -561,7 +566,9 @@ const api = {
 	// The main process reads and uploads the file; the renderer never sees
 	// the file or the token. See shared/cloud-share.ts.
 	cloudShare: {
-		inspect: (file: CloudShareFile) => ipcRenderer.invoke("cloudShare:inspect", file) as Promise<CloudShareInspection>,
+		// linkOnly reads the link alone, without looking up whether the page's files changed.
+		inspect: (file: CloudShareFile, options?: { linkOnly?: boolean }) =>
+			ipcRenderer.invoke("cloudShare:inspect", file, options) as Promise<CloudShareInspection>,
 		available: (baseUrl: string) => ipcRenderer.invoke("cloudShare:available", { baseUrl }) as Promise<boolean | null>,
 		list: (baseUrl: string) => ipcRenderer.invoke("cloudShare:list", { baseUrl }) as Promise<CloudShareLinks>,
 		/** The links this computer published remote hosts' files to; their daemons list none. */
@@ -849,6 +856,32 @@ const api = {
 			ipcRenderer.on("browser:profileManage", wrapped);
 			return () => {
 				ipcRenderer.off("browser:profileManage", wrapped);
+			};
+		},
+		/** The main process needs the user to accept a profile switch that reloads loaded pages. */
+		onProfileSwitchConfirm: (listener: (request: BrowserProfileSwitchConfirmRequest) => void) => {
+			const wrapped = (_event: Electron.IpcRendererEvent, payload: { viewId?: unknown; profileId?: unknown }) => {
+				if (typeof payload?.viewId !== "string") return;
+				if (payload.profileId !== null && typeof payload.profileId !== "string") return;
+				listener({ viewId: payload.viewId, profileId: payload.profileId });
+			};
+			ipcRenderer.on("browser:profileSwitchConfirm", wrapped);
+			return () => {
+				ipcRenderer.off("browser:profileSwitchConfirm", wrapped);
+			};
+		},
+		onProfileSwitchFailed: (listener: (failure: BrowserProfileSwitchFailure) => void) => {
+			const wrapped = (_event: Electron.IpcRendererEvent, payload: { viewId?: unknown; message?: unknown; reason?: unknown }) => {
+				if (typeof payload?.viewId !== "string" || typeof payload.message !== "string") return;
+				listener({
+					viewId: payload.viewId,
+					message: payload.message,
+					...(payload.reason === "agent-active" ? { reason: "agent-active" as const } : {}),
+				});
+			};
+			ipcRenderer.on("browser:profileSwitchFailed", wrapped);
+			return () => {
+				ipcRenderer.off("browser:profileSwitchFailed", wrapped);
 			};
 		},
 		onAnnotationSubmit: (listener: (payload: BrowserAnnotationSubmitPayload) => void) => {
