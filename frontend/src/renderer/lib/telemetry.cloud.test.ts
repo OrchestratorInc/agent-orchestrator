@@ -1,12 +1,14 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import {
 	resetCloudTelemetryContextForTest,
+	setTelemetryHashSaltForTest,
 	sanitizeRendererExceptionProperties,
 	sanitizeRendererProperties,
 	setCloudTelemetryContext,
 	withTelemetryContext,
 } from "./telemetry";
 
+beforeAll(() => setTelemetryHashSaltForTest("0".repeat(64)));
 afterEach(() => resetCloudTelemetryContextForTest());
 
 describe("cloud funnel event allowlist", () => {
@@ -75,14 +77,32 @@ describe("cloud funnel event allowlist", () => {
 		});
 	});
 
-	it("keeps only a well-formed website visitor id on the visit link event", async () => {
-		const event = "ao.renderer.cloud_web_visitor_link_requested";
+	it("no longer accepts the website visit link event or its visitor id", async () => {
 		const visitor = "019a3f5e-8c2b-7d41-b6f0-3e2d1c0b9a87";
-		expect(await sanitizeRendererProperties(event, { website_distinct_id: visitor, email: "a@b.c", user_id: "user_A" })).toEqual({
-			website_distinct_id: visitor,
-		});
-		for (const invalid of ["", "has space", "/Users/me/secret", "a".repeat(201), "undefined", 7, null]) {
-			expect(await sanitizeRendererProperties(event, { website_distinct_id: invalid })).toEqual({});
+		const safe = await sanitizeRendererProperties("ao.renderer.cloud_web_visitor_link_requested", { website_distinct_id: visitor });
+		expect(JSON.stringify(safe)).not.toContain(visitor);
+	});
+
+	it("keys the cloud org hash with the install salt", async () => {
+		const orgId = "22222222-2222-2222-2222-222222222222";
+		const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(orgId));
+		const unkeyed = Array.from(new Uint8Array(digest), (b) => b.toString(16).padStart(2, "0")).join("");
+		setCloudTelemetryContext({ orgId });
+		await vi.waitFor(() => expect(withTelemetryContext({}).cloud_org_id_hash).toMatch(/^[0-9a-f]{64}$/));
+		expect(withTelemetryContext({}).cloud_org_id_hash).not.toBe(unkeyed);
+		setTelemetryHashSaltForTest("1".repeat(64));
+		try {
+			resetCloudTelemetryContextForTest();
+			setCloudTelemetryContext({ orgId });
+			await vi.waitFor(() => expect(withTelemetryContext({}).cloud_org_id_hash).toMatch(/^[0-9a-f]{64}$/));
+			const other = withTelemetryContext({}).cloud_org_id_hash;
+			resetCloudTelemetryContextForTest();
+			setTelemetryHashSaltForTest("0".repeat(64));
+			setCloudTelemetryContext({ orgId });
+			await vi.waitFor(() => expect(withTelemetryContext({}).cloud_org_id_hash).toMatch(/^[0-9a-f]{64}$/));
+			expect(withTelemetryContext({}).cloud_org_id_hash).not.toBe(other);
+		} finally {
+			setTelemetryHashSaltForTest("0".repeat(64));
 		}
 	});
 

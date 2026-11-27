@@ -3373,12 +3373,16 @@ type RemoteHostUpdateCheckResponse struct {
 // phone honors OptedOut. This response carries no email. DaemonVersion is the
 // daemon's release (the same value its own Sentry events use), sent even when
 // opted out so the phone can tell which daemon a failure came from.
+// CloudUserID and GitHubLogin are present only when the user turned on
+// "Include my account identity"; DistinctID is always anonymous; GitHubSignedIn
+// says whether a GitHub login was resolved at all, without naming it.
 type TelemetryIdentityResponse struct {
 	DistinctID       string `json:"distinctId"`
 	InstallID        string `json:"installId,omitempty"`
 	CloudUserID      string `json:"cloudUserId,omitempty"`
 	IsSignedIn       *bool  `json:"isSignedIn,omitempty"`
 	GitHubLogin      string `json:"githubLogin,omitempty"`
+	GitHubSignedIn   bool   `json:"githubSignedIn,omitempty"`
 	OptedOut         bool   `json:"optedOut"`
 	LifetimeSessions *int64 `json:"lifetimeSessions,omitempty"`
 	DaemonVersion    string `json:"daemonVersion,omitempty"`

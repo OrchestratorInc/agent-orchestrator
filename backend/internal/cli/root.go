@@ -17,6 +17,7 @@ import (
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/claudecode"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/codex"
+	"github.com/aoagents/agent-orchestrator/backend/internal/config"
 	"github.com/aoagents/agent-orchestrator/backend/internal/daemon"
 	"github.com/aoagents/agent-orchestrator/backend/internal/datadirlock"
 	aoprocess "github.com/aoagents/agent-orchestrator/backend/internal/process"
@@ -237,6 +238,7 @@ func NewRootCommand(deps Deps) *cobra.Command {
 		SilenceErrors: true,
 		PersistentPreRunE: func(cmd *cobra.Command, _ []string) error {
 			if shouldEmitCLIInvocation(cmd) {
+				maybeShowTelemetryNotice(cmd.ErrOrStderr(), os.Getenv, telemetryNoticeDataDir(), stderrIsTerminal(cmd.ErrOrStderr()))
 				ctx.emitCLIInvoked(cmd.Context(), cmd)
 			}
 			return nil
@@ -292,6 +294,7 @@ func NewRootCommand(deps Deps) *cobra.Command {
 	root.AddCommand(newSearchCommand(ctx))
 	root.AddCommand(newCompletionCommand())
 	root.AddCommand(newVersionCommand())
+	root.AddCommand(newTelemetryCommand(ctx))
 
 	return root
 }
@@ -303,6 +306,9 @@ type commandContext struct {
 func shouldEmitCLIInvocation(cmd *cobra.Command) bool {
 	commandPath := telemetrymeta.NormalizeCommandPath(cmd.CommandPath())
 	if telemetrymeta.IsRoutineInternalCLICommand(commandPath) {
+		return false
+	}
+	if isTelemetryCommandPath(commandPath) {
 		return false
 	}
 	switch commandPath {
@@ -317,7 +323,19 @@ func shouldEmitCLIInvocation(cmd *cobra.Command) bool {
 	}
 }
 
+// isTelemetryCommandPath reports `ao telemetry` and its subcommands. Inspecting
+// or switching telemetry is never itself reported, as an invocation or as a
+// usage error: `ao telemetry off` must not send an event on its way to opting out.
+func isTelemetryCommandPath(commandPath string) bool {
+	return commandPath == "ao telemetry" || strings.HasPrefix(commandPath, "ao telemetry ")
+}
+
 func (c *commandContext) emitCLIInvoked(ctx context.Context, cmd *cobra.Command) {
+	// DO_NOT_TRACK in this shell keeps the command out of the daemon's
+	// telemetry even when the daemon itself was started without it.
+	if config.DoNotTrack(os.Getenv) {
+		return
+	}
 	reqCtx, cancel := context.WithTimeout(ctx, probeTimeout)
 	defer cancel()
 	_ = c.postLoopbackJSON(reqCtx, "/internal/telemetry/cli-invoked", map[string]string{
@@ -338,7 +356,13 @@ func cliInvocationActorType(cmd *cobra.Command) string {
 }
 
 func (c *commandContext) emitCLIUsageError(ctx context.Context, args []string, err error) {
+	if config.DoNotTrack(os.Getenv) {
+		return
+	}
 	command, commandPath := usageErrorCommand(args)
+	if isTelemetryCommandPath(commandPath) {
+		return
+	}
 	reqCtx, cancel := context.WithTimeout(ctx, probeTimeout)
 	defer cancel()
 	_ = c.postLoopbackJSON(reqCtx, "/internal/telemetry/cli-usage-error", map[string]string{

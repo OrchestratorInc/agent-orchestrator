@@ -74,8 +74,17 @@ func TestTelemetryIdentityRoutes(t *testing.T) {
 		t.Fatalf("valid sign-in = %d, want 204", c)
 	}
 	got := get()
-	if got["distinctId"] != "user_01H" || got["cloudUserId"] != "user_01H" || got["installId"] != ident.InstallID() || got["isSignedIn"] != true {
+	// Account identity is opt-in: signed in, the phone learns only that, and the
+	// distinct ID stays anonymous.
+	if got["distinctId"] != ident.InstallID() || got["cloudUserId"] != nil || got["installId"] != ident.InstallID() || got["isSignedIn"] != true {
 		t.Fatalf("signed-in identity = %#v", got)
+	}
+	if err := os.WriteFile(filepath.Join(dir, telemetryadapter.ShareIdentityFile), []byte("1\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	got = get()
+	if got["distinctId"] != ident.InstallID() || got["cloudUserId"] != "user_01H" {
+		t.Fatalf("shared identity = %#v", got)
 	}
 	if _, ok := got["email"]; ok {
 		t.Fatal("identity response leaks email")

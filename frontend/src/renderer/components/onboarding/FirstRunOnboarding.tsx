@@ -866,10 +866,26 @@ function WelcomeStep({ point, onNext }: { point: number; onNext: () => void }) {
 					);
 				})}
 			</ol>
+			<TelemetryNotice />
 			<StepAction>
 				<NextButton onClick={onNext} autoFocus>{t("firstRun.getStarted")}</NextButton>
 			</StepAction>
 		</StepSplit>
+	);
+}
+
+const TELEMETRY_DOCS_URL = "https://github.com/Untrivial-ai/agent-orchestrator/blob/main/docs/telemetry.md";
+
+/** First-run disclosure: what telemetry is sent and where to turn it off. */
+function TelemetryNotice() {
+	const { t } = useTranslation();
+	return (
+		<p className="-mt-4 max-w-sm pb-8 text-pretty text-xs leading-relaxed text-muted-foreground">
+			{t("firstRun.telemetryNotice")}{" "}
+			<Button type="button" variant="link" className="h-auto p-0 text-xs" onClick={() => void aoBridge.app.openExternal(TELEMETRY_DOCS_URL)}>
+				{t("firstRun.telemetryNoticeLink")}
+			</Button>
+		</p>
 	);
 }
 

@@ -9,6 +9,7 @@ import { useSoundNotificationsStore } from "../../stores/sound-notifications-sto
 import { useUiStore, type ChatSendKeyMode } from "../../stores/ui-store";
 import { useTelemetryPolicyStore } from "../../stores/telemetry-policy-store";
 import { useAnalyticsOptOutStore } from "../../stores/analytics-opt-out-store";
+import { useShareIdentityStore } from "../../stores/share-identity-store";
 import { CliLinkSettings } from "./CliLinkSettingsRow";
 import { CliShadowSettingsRow } from "./CliShadowSettingsRow";
 import { openChromeAgentsSettings } from "./BrowserChromeSection";
@@ -508,6 +509,7 @@ export function GeneralSettingsSection({
 			<SettingsSection title={t("settings.privacy")} grouped>
 				<TelemetryEventsRow />
 				<AnalyticsRow />
+				<ShareIdentityRow />
 			</SettingsSection>
 
 			{/* Advanced */}
@@ -566,6 +568,45 @@ function AnalyticsRow() {
 				disabled={saving || !loaded}
 				onCheckedChange={(share) => {
 					void setOptedOut(!share);
+				}}
+			/>
+		</SettingsRow>
+	);
+}
+
+/**
+ * Opt-in account identity on analytics events (github_actor, github_org,
+ * ao_cloud_user_id). Off by default, and moot while usage analytics is off, so
+ * the switch is disabled then.
+ */
+function ShareIdentityRow() {
+	const { t } = useTranslation();
+	const share = useShareIdentityStore((state) => state.share);
+	const loaded = useShareIdentityStore((state) => state.loaded);
+	const saving = useShareIdentityStore((state) => state.saving);
+	const loadError = useShareIdentityStore((state) => state.loadError);
+	const saveError = useShareIdentityStore((state) => state.saveError);
+	const load = useShareIdentityStore((state) => state.load);
+	const setShare = useShareIdentityStore((state) => state.setShare);
+	const analyticsOptedOut = useAnalyticsOptOutStore((state) => state.optedOut);
+	useEffect(() => {
+		void load();
+	}, [load]);
+	return (
+		<SettingsRow
+			label={t("settings.shareIdentity.label")}
+			description={
+				<span className={cn((loadError || saveError) && "text-error")} role={loadError || saveError ? "alert" : undefined}>
+					{t(loadError ? "settings.shareIdentity.loadFailed" : saveError ? "settings.shareIdentity.saveFailed" : "settings.shareIdentity.description")}
+				</span>
+			}
+		>
+			<Switch
+				aria-label={t("settings.shareIdentity.label")}
+				checked={share && !analyticsOptedOut}
+				disabled={saving || !loaded || analyticsOptedOut}
+				onCheckedChange={(next) => {
+					void setShare(next);
 				}}
 			/>
 		</SettingsRow>

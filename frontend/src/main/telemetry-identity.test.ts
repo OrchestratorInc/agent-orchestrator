@@ -1,8 +1,8 @@
-import { mkdtemp, readFile, stat } from "node:fs/promises";
+import { mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { TELEMETRY_OPT_OUT_FILE, TelemetryIdentityController } from "./telemetry-identity";
+import { TELEMETRY_OPT_OUT_FILE, TELEMETRY_SHARE_IDENTITY_FILE, TelemetryIdentityController } from "./telemetry-identity";
 
 const ORIGIN = "http://127.0.0.1:4010";
 
@@ -209,21 +209,43 @@ describe("TelemetryIdentityController cloud user hand-off", () => {
 		const { ctl, fetcher } = await controller(undefined, "http://example.com:4010");
 		await ctl.setCloudUser("user_1");
 		expect(fetcher).not.toHaveBeenCalled();
-		expect(await ctl.githubLogin()).toBeNull();
+		expect(await ctl.githubIdentity()).toEqual({ login: null, signedIn: false });
 	});
 });
 
-describe("TelemetryIdentityController githubLogin", () => {
-	it("reads the daemon-resolved login", async () => {
-		const fetcher = vi.fn(async () => new Response(JSON.stringify({ githubLogin: "octocat" }), { status: 200 }));
+describe("TelemetryIdentityController githubIdentity", () => {
+	it("reads the daemon-resolved login when sharing is on", async () => {
+		const fetcher = vi.fn(async () => new Response(JSON.stringify({ githubLogin: "octocat", githubSignedIn: true }), { status: 200 }));
 		const { ctl } = await controller(fetcher);
-		expect(await ctl.githubLogin()).toBe("octocat");
+		expect(await ctl.githubIdentity()).toEqual({ login: "octocat", signedIn: true });
 		expect((fetcher.mock.calls[0] as unknown as [string])[0]).toBe(`${ORIGIN}/api/v1/telemetry/identity`);
 	});
 
-	it("is null when unresolved or the daemon is down", async () => {
-		expect(await (await controller(vi.fn(async () => new Response("{}", { status: 200 })))).ctl.githubLogin()).toBeNull();
-		expect(await (await controller(vi.fn(async () => { throw new Error("down"); }))).ctl.githubLogin()).toBeNull();
+	it("reports sign-in without a login while sharing is off", async () => {
+		const fetcher = vi.fn(async () => new Response(JSON.stringify({ githubSignedIn: true }), { status: 200 }));
+		expect(await (await controller(fetcher)).ctl.githubIdentity()).toEqual({ login: null, signedIn: true });
+	});
+
+	it("is empty when unresolved or the daemon is down", async () => {
+		const none = { login: null, signedIn: false };
+		expect(await (await controller(vi.fn(async () => new Response("{}", { status: 200 })))).ctl.githubIdentity()).toEqual(none);
+		expect(await (await controller(vi.fn(async () => { throw new Error("down"); }))).ctl.githubIdentity()).toEqual(none);
+	});
+});
+
+describe("TelemetryIdentityController GitHub username sharing", () => {
+	it("is off by default and writes and clears the marker the daemon reads", async () => {
+		const dir = await mkdtemp(path.join(os.tmpdir(), "ao-telemetry-"));
+		const broadcastShare = vi.fn();
+		const ctl = new TelemetryIdentityController(dir, () => ORIGIN, vi.fn() as never, vi.fn(), broadcastShare);
+		expect(ctl.isSharingIdentity()).toBe(false);
+		expect(await ctl.setShareIdentity(true)).toBe(true);
+		expect(ctl.isSharingIdentity()).toBe(true);
+		await expect(stat(path.join(dir, TELEMETRY_SHARE_IDENTITY_FILE))).resolves.toBeTruthy();
+		await ctl.setShareIdentity(false);
+		expect(ctl.isSharingIdentity()).toBe(false);
+		await expect(readFile(path.join(dir, TELEMETRY_SHARE_IDENTITY_FILE))).rejects.toThrow();
+		expect(broadcastShare.mock.calls).toEqual([[true], [false]]);
 	});
 });
 
@@ -417,4 +439,57 @@ describe("TelemetryIdentityController after the app quit mid sign-out", () => {
     await expect(access(path.join(dir, "telemetry_bound_user"))).rejects.toThrow();
     expect((await readFile(path.join(dir, "telemetry_anonymous_id"), "utf8")).trim()).not.toBe("anon_linked");
   });
+});
+
+describe("TelemetryIdentityController marker write ordering", () => {
+	it("lets the last of overlapping identity requests decide the marker and the broadcast", async () => {
+		const dir = await mkdtemp(path.join(os.tmpdir(), "ao-telemetry-"));
+		const share = vi.fn();
+		const ctl = new TelemetryIdentityController(dir, () => ORIGIN, vi.fn() as never, vi.fn(), share);
+		// Enable then disable without awaiting: the enable's mkdir must not let it land last.
+		await Promise.all([ctl.setShareIdentity(true), ctl.setShareIdentity(false)]);
+		expect(ctl.isSharingIdentity()).toBe(false);
+		expect(share.mock.calls).toEqual([[true], [false]]);
+		await Promise.all([ctl.setShareIdentity(false), ctl.setShareIdentity(true)]);
+		expect(ctl.isSharingIdentity()).toBe(true);
+		expect(share.mock.calls.at(-1)).toEqual([true]);
+	});
+
+	it("orders opt-out writes the same way", async () => {
+		const { ctl, broadcast } = await controller();
+		await Promise.all([ctl.setOptedOut(true), ctl.setOptedOut(false)]);
+		expect(ctl.isOptedOut()).toBe(false);
+		expect(broadcast.mock.calls).toEqual([[true], [false]]);
+	});
+});
+
+describe("TelemetryIdentityController local telemetry log", () => {
+	it("forwards a renderer event to the daemon's exported log, and nothing while opted out", async () => {
+		const { ctl, fetcher } = await controller();
+		await ctl.recordExported({ event: "ao.routes.viewed", distinctId: "ins_x", properties: { surface: "board" } });
+		const [url, init] = fetcher.mock.calls[0] as unknown as [string, RequestInit];
+		expect(url).toBe(`${ORIGIN}/internal/telemetry/exported`);
+		expect(JSON.parse(init.body as string)).toEqual({ event: "ao.routes.viewed", distinctId: "ins_x", properties: { surface: "board" } });
+		await ctl.setOptedOut(true);
+		await ctl.recordExported({ event: "ao.routes.viewed", distinctId: "ins_x", properties: {} });
+		expect(fetcher).toHaveBeenCalledTimes(1);
+	});
+
+	it("broadcasts an opt-out or identity change written outside the app", async () => {
+		const dir = await mkdtemp(path.join(os.tmpdir(), "ao-telemetry-"));
+		const optOut = vi.fn();
+		const share = vi.fn();
+		const ctl = new TelemetryIdentityController(dir, () => ORIGIN, vi.fn() as never, optOut, share);
+		const stop = ctl.watchMarkers();
+		try {
+			await writeFile(path.join(dir, TELEMETRY_OPT_OUT_FILE), "1\n");
+			await vi.waitFor(() => expect(optOut).toHaveBeenCalledWith(true));
+			await writeFile(path.join(dir, TELEMETRY_SHARE_IDENTITY_FILE), "1\n");
+			await vi.waitFor(() => expect(share).toHaveBeenCalledWith(true));
+			await rm(path.join(dir, TELEMETRY_OPT_OUT_FILE));
+			await vi.waitFor(() => expect(optOut).toHaveBeenLastCalledWith(false));
+		} finally {
+			stop();
+		}
+	});
 });

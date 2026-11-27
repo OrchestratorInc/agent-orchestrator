@@ -22,6 +22,7 @@ func (f fakeTelemetryIdentity) MarkInstalledEvent(context.Context) (bool, error)
 	return false, nil
 }
 func (f fakeTelemetryIdentity) SetGitHubLogin(string) {}
+func (f fakeTelemetryIdentity) SharesIdentity() bool  { return false }
 
 func getTelemetryIdentity(t *testing.T, c *TelemetryIdentityController) map[string]any {
 	t.Helper()

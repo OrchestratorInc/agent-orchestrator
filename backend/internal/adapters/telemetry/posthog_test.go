@@ -3,7 +3,6 @@ package telemetry
 import (
 	"context"
 	"encoding/json"
-	"io"
 	"log/slog"
 	"maps"
 	"net/http"
@@ -84,8 +83,8 @@ func TestPostHogSinkCapturesEvent(t *testing.T) {
 		if props["$process_person_profile"] != false {
 			t.Fatalf("properties.$process_person_profile = %#v, want false", props["$process_person_profile"])
 		}
-		if props["$geoip_disable"] != false {
-			t.Fatalf("properties.$geoip_disable = %#v, want false so PostHog derives coarse location", props["$geoip_disable"])
+		if props["$geoip_disable"] != true {
+			t.Fatalf("properties.$geoip_disable = %#v, want true: no IP-derived location", props["$geoip_disable"])
 		}
 		if _, ok := props["$set"]; ok {
 			t.Fatalf("$set should be absent for an anonymous event: %#v", props["$set"])
@@ -623,53 +622,6 @@ func TestDaemonStartupPayloadAllowlistCoversEveryStep(t *testing.T) {
 	}
 }
 
-// properties is pure, so the person-property derivation is exercised directly
-// rather than through the HTTP fixture. When the sanitized payload carries the
-// operator's GitHub handle, the sink mirrors it into $set and flips this one
-// event to identified so a breakdown by github_actor is possible.
-func TestPropertiesDerivesPersonSetFromGithubActor(t *testing.T) {
-	sink, err := NewPostHogSink(t.TempDir(), "phc_test", "https://us.i.posthog.com", "", "", roundTripClient(func(*http.Request) (*http.Response, error) {
-		return &http.Response{StatusCode: http.StatusOK, Body: http.NoBody}, nil
-	}), nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer func() { _ = sink.Close(context.Background()) }()
-	event := ports.TelemetryEvent{
-		Name:    "ao.sessions.spawned",
-		Source:  "session_service",
-		Payload: map[string]any{"kind": "worker", "github_actor": "octocat"},
-	}
-	props := sink.properties(event)
-	if props["github_actor"] != "octocat" {
-		t.Fatalf("properties.github_actor = %#v, want octocat", props["github_actor"])
-	}
-	if props["$process_person_profile"] != true {
-		t.Fatalf("properties.$process_person_profile = %#v, want true", props["$process_person_profile"])
-	}
-	set, ok := props["$set"].(map[string]any)
-	if !ok {
-		t.Fatalf("properties.$set type = %T, want map[string]any", props["$set"])
-	}
-	if set["github_actor"] != "octocat" {
-		t.Fatalf("$set.github_actor = %#v, want octocat", set["github_actor"])
-	}
-
-	// A successful send records the identity. The next event carries the
-	// handle but does not repeat its person properties.
-	sink.send(context.Background(), event)
-	next := sink.properties(event)
-	if next["github_actor"] != "octocat" {
-		t.Fatalf("second properties.github_actor = %#v, want octocat", next["github_actor"])
-	}
-	if _, ok := next["$set"]; ok {
-		t.Fatalf("second event set a person profile again: %#v", next["$set"])
-	}
-	if next["$process_person_profile"] != false {
-		t.Fatalf("second properties.$process_person_profile = %#v, want false", next["$process_person_profile"])
-	}
-}
-
 func TestSanitizeRemotePayloadDropsUnlistedReviewKeys(t *testing.T) {
 	got := sanitizeRemotePayload("ao.reviews.submitted", map[string]any{
 		"verdict": "changes_requested",
@@ -699,68 +651,6 @@ func TestSanitizeRemotePayloadKeepsWriteLockHolder(t *testing.T) {
 	}
 	if _, ok := got["session_id"]; ok {
 		t.Fatalf("session_id survived sanitization: %#v", got)
-	}
-}
-
-// Older renderer builds wrote per-build values to person profiles, and nothing
-// refreshed them, so a profile kept showing a months-old version. The one
-// identified update clears them on the wire; later events stay anonymous.
-func TestPostHogSinkClearsStalePersonProperties(t *testing.T) {
-	requests := make(chan map[string]any, 2)
-	sink, err := NewPostHogSink(t.TempDir(), "phc_test", "https://us.i.posthog.com", "0.13.1-nightly.202609232348", "", roundTripClient(func(req *http.Request) (*http.Response, error) {
-		defer req.Body.Close()
-		var body map[string]any
-		if err := json.NewDecoder(req.Body).Decode(&body); err != nil {
-			t.Errorf("decode body: %v", err)
-		}
-		requests <- body
-		return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(`{"status":1}`))}, nil
-	}), nil)
-	if err != nil {
-		t.Fatalf("NewPostHogSink: %v", err)
-	}
-	for range 2 {
-		sink.Emit(context.Background(), ports.TelemetryEvent{
-			Name:    "ao.sessions.spawned",
-			Source:  "session_service",
-			Payload: map[string]any{"github_actor": "octocat"},
-		})
-	}
-	if err := sink.Close(context.Background()); err != nil {
-		t.Fatalf("Close: %v", err)
-	}
-	close(requests)
-
-	var bodies []map[string]any
-	for body := range requests {
-		bodies = append(bodies, body)
-	}
-	if len(bodies) != 2 {
-		t.Fatalf("sent %d requests, want 2", len(bodies))
-	}
-	first, _ := bodies[0]["properties"].(map[string]any)
-	unset, ok := first["$unset"].([]any)
-	if !ok {
-		t.Fatalf("first event $unset = %#v, want a list", first["$unset"])
-	}
-	got := map[string]bool{}
-	for _, k := range unset {
-		got[k.(string)] = true
-	}
-	for _, want := range []string{"ao_version", "app_version", "build_mode", "platform", "surface"} {
-		if !got[want] {
-			t.Errorf("$unset missing %q: %v", want, unset)
-		}
-	}
-	if first["ao_version"] != "0.13.1-nightly.202609232348" {
-		t.Errorf("event ao_version = %#v, want the running build", first["ao_version"])
-	}
-	second, _ := bodies[1]["properties"].(map[string]any)
-	if _, ok := second["$unset"]; ok {
-		t.Errorf("second event touched the profile again: %#v", second["$unset"])
-	}
-	if second["$process_person_profile"] != false {
-		t.Errorf("second event $process_person_profile = %#v, want false", second["$process_person_profile"])
 	}
 }
 

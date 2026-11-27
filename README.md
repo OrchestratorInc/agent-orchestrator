@@ -243,7 +243,7 @@ Join [Discord](https://discord.com/invite/UZv7JjxbwG) for help and contributor d
 
 ## Product telemetry
 
-Orchestrator.inc collects limited usage and reliability telemetry, never your code, prompts, agent conversations, or credentials. It includes an installation ID and your GitHub username; if you sign in to AO Cloud it also includes your AO Cloud user ID and the email address of that account, set once as a PostHog person property (never read from git config). Turn it all off in Settings > General > Privacy > Share usage analytics, which covers the desktop, the daemon, and a paired phone. [Learn exactly what we collect and how to opt out](docs/telemetry.md).
+Orchestrator.inc collects limited, anonymous usage and reliability telemetry, never your code, prompts, agent conversations, credentials, or email address. Events carry a random installation ID, with no PostHog person profiles and no IP-based location; your GitHub username and AO Cloud user ID are sent only if you turn on Settings > General > Privacy > Include my account identity (off by default). Run `ao telemetry log` to see, with their properties, the events this desktop and its daemon sent: daemon and CLI events PostHog acknowledged, and desktop events as they were handed to PostHog. Phone events, and events whose delivery was never confirmed, can be missing. There are two separate switches in Settings > General > Privacy: Share usage analytics (PostHog, also `ao telemetry off`) covers the desktop, the daemon, and a paired phone, and Share error events covers Sentry error reports. `DO_NOT_TRACK=1` turns off both. [Learn exactly what we collect and how to opt out](docs/telemetry.md).
 
 ## License
 

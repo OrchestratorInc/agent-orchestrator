@@ -1,10 +1,19 @@
 import { randomUUID } from "node:crypto";
-import { existsSync } from "node:fs";
+import { existsSync, watch, type FSWatcher } from "node:fs";
 import { lstat, mkdir, rename, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 
 /** Same file the daemon's telemetry Identity reads (adapters/telemetry/identity.go). */
 export const TELEMETRY_OPT_OUT_FILE = "telemetry_opt_out";
+/**
+ * Present only while "Include my account identity" is on (off by default). The
+ * daemon reads it before attaching github_actor or github_org to any export
+ * (adapters/telemetry.ShareIdentityFile).
+ */
+export const TELEMETRY_SHARE_IDENTITY_FILE = "telemetry_share_identity";
+
+/** What the daemon resolved about GitHub: the login only when sharing is on. */
+export type TelemetryGithubIdentity = { login: string | null; signedIn: boolean };
 
 type Fetcher = (input: string, init: RequestInit) => Promise<Response>;
 
@@ -22,10 +31,10 @@ async function daemonSequence(response: Response): Promise<number | null> {
 const CLOUD_USER_ID_PATTERN = /^[A-Za-z0-9_-]{1,64}$/;
 
 /**
- * Desktop side of the PostHog identity: the opt-out switch (a marker file the
- * daemon also reads) and the loopback hand-off of the signed-in AO Cloud user ID
- * to the daemon. The email never goes through here; it is set by the renderer at
- * identify time and the daemon never sees it.
+ * Desktop side of the PostHog identity: the opt-out and account-identity
+ * switches (marker files the daemon also reads) and the loopback hand-off of the
+ * signed-in AO Cloud user ID to the daemon. The email never goes through here and
+ * is never sent to PostHog.
  */
 export class TelemetryIdentityController {
 	private cloudUserId: string | null = null;
@@ -47,38 +56,69 @@ export class TelemetryIdentityController {
 	// Stamped on every POST so the daemon can refuse one that was delayed in
 	// transit (a client timeout cannot recall it) until after a newer one landed.
 	private sequence = 0;
+	// Marker writes (opt-out, account identity) run one at a time in request
+	// order, so an earlier request still awaiting mkdir cannot land after a
+	// later one: the file and the broadcast always match the last request.
+	private markerQueue: Promise<unknown> = Promise.resolve();
 
 	constructor(
 		private readonly dataDir: string,
 		private readonly origin: () => string | null,
 		private readonly fetcher: Fetcher = fetch,
 		private readonly broadcast: (optedOut: boolean) => void = () => undefined,
+		private readonly broadcastShareIdentity: (share: boolean) => void = () => undefined,
 	) {}
+
+	isSharingIdentity(): boolean {
+		return existsSync(path.join(this.dataDir, TELEMETRY_SHARE_IDENTITY_FILE));
+	}
+
+	setShareIdentity(share: boolean): Promise<boolean> {
+		return this.serializeMarkerWrite(async () => {
+			const file = path.join(this.dataDir, TELEMETRY_SHARE_IDENTITY_FILE);
+			if (share) {
+				await mkdir(this.dataDir, { recursive: true });
+				await writeFile(file, "1\n", { mode: 0o600 });
+			} else {
+				await rm(file, { force: true });
+			}
+			this.broadcastShareIdentity(share);
+			return share;
+		});
+	}
+
+	private serializeMarkerWrite<T>(write: () => Promise<T>): Promise<T> {
+		const run = this.markerQueue.then(write, write);
+		this.markerQueue = run.catch(() => undefined);
+		return run;
+	}
 
 	isOptedOut(): boolean {
 		return existsSync(path.join(this.dataDir, TELEMETRY_OPT_OUT_FILE));
 	}
 
-	async setOptedOut(optedOut: boolean): Promise<boolean> {
-		const file = path.join(this.dataDir, TELEMETRY_OPT_OUT_FILE);
-		if (optedOut) {
-			await mkdir(this.dataDir, { recursive: true });
-			await writeFile(file, "1\n", { mode: 0o600 });
-			await rm(path.join(this.dataDir, "telemetry", "cli-usage-daily.json"), { force: true });
-		} else {
-			await rm(file, { force: true });
-		}
-		this.broadcast(optedOut);
-		return optedOut;
+	setOptedOut(optedOut: boolean): Promise<boolean> {
+		return this.serializeMarkerWrite(async () => {
+			const file = path.join(this.dataDir, TELEMETRY_OPT_OUT_FILE);
+			if (optedOut) {
+				await mkdir(this.dataDir, { recursive: true });
+				await writeFile(file, "1\n", { mode: 0o600 });
+				await rm(path.join(this.dataDir, "telemetry", "cli-usage-daily.json"), { force: true });
+			} else {
+				await rm(file, { force: true });
+			}
+			this.broadcast(optedOut);
+			return optedOut;
+		});
 	}
 
 	/**
 	 * Records the signed-in user (null on sign-out) and pushes it to the daemon.
-	 * Resolves true only when the daemon acknowledged exactly this state: the
-	 * renderer identifies with PostHog only then, because identify() links the
-	 * install ID to the account for good and the daemon must already have recorded
-	 * that binding, or a later sign-out could not retire the ID. Unreachable
-	 * daemon, an error response or a superseding call all resolve false.
+	 * Resolves true only when the daemon acknowledged exactly this state; the
+	 * renderer notes the user only then. The daemon's record of the binding lets a
+	 * sign-out or account switch rotate the anonymous install-scoped ID. Nothing
+	 * is identified to PostHog. Unreachable daemon, an error response or a
+	 * superseding call all resolve false.
 	 */
 	async setCloudUser(userId: string | null): Promise<boolean | "unsupported"> {
 		if (userId !== null && !CLOUD_USER_ID_PATTERN.test(userId)) throw new Error("invalid cloud user id");
@@ -201,18 +241,71 @@ export class TelemetryIdentityController {
 		}
 	}
 
-	/** The GitHub login the daemon resolved from the authenticated account, or null. */
-	async githubLogin(): Promise<string | null> {
+	/**
+	 * What the daemon resolved from the authenticated GitHub account. The daemon
+	 * returns the login only while sharing it is on; signedIn alone tells
+	 * onboarding that GitHub sign-in is done.
+	 */
+	async githubIdentity(): Promise<TelemetryGithubIdentity> {
+		const none = { login: null, signedIn: false };
 		const base = this.origin();
-		if (!base) return null;
+		if (!base) return none;
 		try {
 			const response = await this.request(base, "/api/v1/telemetry/identity", { method: "GET" });
-			if (!response.ok) return null;
-			const body = (await response.json()) as { githubLogin?: unknown };
-			return typeof body.githubLogin === "string" && body.githubLogin !== "" ? body.githubLogin : null;
+			if (!response.ok) return none;
+			const body = (await response.json()) as { githubLogin?: unknown; githubSignedIn?: unknown };
+			const login = typeof body.githubLogin === "string" && body.githubLogin !== "" ? body.githubLogin : null;
+			return { login, signedIn: login !== null || body.githubSignedIn === true };
 		} catch {
-			return null;
+			return none;
 		}
+	}
+
+	/**
+	 * Records one renderer event, as handed to PostHog, in the daemon's local
+	 * telemetry log (`ao telemetry log`). Best effort: a down daemon loses the
+	 * log line, never the event.
+	 */
+	async recordExported(entry: { event: string; distinctId: string; properties: Record<string, unknown> }): Promise<void> {
+		const base = this.origin();
+		if (!base || this.isOptedOut()) return;
+		try {
+			await this.request(base, "/internal/telemetry/exported", { method: "POST", body: entry });
+		} catch {
+			// The log is a convenience; the export path does not depend on it.
+		}
+	}
+
+	/**
+	 * Watches the opt-out and account-identity markers, so a change made outside
+	 * this app (`ao telemetry off` in a terminal) reaches the renderer at once,
+	 * not on the next launch. Returns a stop function.
+	 */
+	watchMarkers(): () => void {
+		let optedOut = this.isOptedOut();
+		let share = this.isSharingIdentity();
+		let watcher: FSWatcher | null = null;
+		const check = () => {
+			const nextOptedOut = this.isOptedOut();
+			const nextShare = this.isSharingIdentity();
+			if (nextOptedOut !== optedOut) {
+				optedOut = nextOptedOut;
+				this.broadcast(nextOptedOut);
+			}
+			if (nextShare !== share) {
+				share = nextShare;
+				this.broadcastShareIdentity(nextShare);
+			}
+		};
+		try {
+			watcher = watch(this.dataDir, (_event, filename) => {
+				if (filename === null || filename === TELEMETRY_OPT_OUT_FILE || filename === TELEMETRY_SHARE_IDENTITY_FILE) check();
+			});
+			watcher.on("error", () => watcher?.close());
+		} catch {
+			// No watcher (missing dir, platform limit): the switch still applies at the next launch.
+		}
+		return () => watcher?.close();
 	}
 
 	private async request(base: string, pathname: string, init: { method: string; body?: object }): Promise<Response> {

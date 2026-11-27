@@ -24,6 +24,7 @@ func (i *usageTestIdentity) ExportSuppressed() bool                         { re
 func (*usageTestIdentity) SetCloudUserID(context.Context, string) error     { return nil }
 func (*usageTestIdentity) MarkInstalledEvent(context.Context) (bool, error) { return false, nil }
 func (*usageTestIdentity) SetGitHubLogin(string)                            {}
+func (*usageTestIdentity) SharesIdentity() bool                             { return false }
 
 type usageTestSink struct{ events []ports.TelemetryEvent }
 

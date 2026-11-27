@@ -59,6 +59,21 @@ func (s *Store) ListTelemetryEventsSince(ctx context.Context, since time.Time, l
 	return rows, nil
 }
 
+// ListExportedTelemetryEventsSince returns the rows recorded when an event was
+// exported to PostHog, newest first, capped by limit. A non-empty event keeps
+// only that event name, filtered before the limit applies.
+func (s *Store) ListExportedTelemetryEventsSince(ctx context.Context, since time.Time, limit int64, event string) ([]gen.TelemetryEvent, error) {
+	rows, err := s.qr.ListExportedTelemetryEventsSince(ctx, gen.ListExportedTelemetryEventsSinceParams{
+		OccurredAt: since.UTC(),
+		EventName:  event,
+		RowLimit:   limit,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("list exported telemetry events since %s: %w", since.UTC().Format(time.RFC3339), err)
+	}
+	return rows, nil
+}
+
 // PruneTelemetryEventsBefore deletes at most limit rows older than before and
 // returns how many rows were removed.
 func (s *Store) PruneTelemetryEventsBefore(ctx context.Context, before time.Time, limit int64) (int64, error) {

@@ -150,7 +150,7 @@ vi.mock("../lib/bridge", () => ({
 		},
 		featureBuilds: { list: featListBuilds, getActive: featGetActive },
 		editorHandoff: { getEditors, setPreferredEditor },
-		telemetry: { getPolicy: getTelemetryPolicy, setEventsEnabled: setTelemetryEvents, onPolicy: onTelemetryPolicy, getBootstrap: vi.fn(), capture: vi.fn(), getAnalyticsOptOut, setAnalyticsOptOut },
+		telemetry: { getPolicy: getTelemetryPolicy, setEventsEnabled: setTelemetryEvents, onPolicy: onTelemetryPolicy, getBootstrap: vi.fn(), capture: vi.fn(), getAnalyticsOptOut, setAnalyticsOptOut, getShareIdentity: vi.fn(async () => false), setShareIdentity: vi.fn(async (share: boolean) => share) },
 	},
 }));
 
@@ -492,7 +492,8 @@ describe("GlobalSettingsForm", () => {
 		const toggle = await screen.findByRole("switch", { name: "Share usage analytics" });
 		await waitFor(() => expect(toggle).toBeEnabled());
 		expect(toggle).toBeChecked();
-		expect(screen.getByText(/your email is used only as a person property/)).toBeInTheDocument();
+		expect(screen.getByText(/your email is never sent/)).toBeInTheDocument();
+		expect(screen.getByRole("switch", { name: "Include my account identity" })).not.toBeChecked();
 
 		await user.click(toggle);
 

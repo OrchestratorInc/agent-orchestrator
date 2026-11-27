@@ -7,7 +7,6 @@ const hooks = vi.hoisted(() => ({
 	setCloudUser: vi.fn(async (_id: string | null): Promise<boolean | "unsupported"> => true),
 	identifyCloudUser: vi.fn(async () => undefined),
 	clearCloudUser: vi.fn(),
-	noteCloudSignInWebVisitor: vi.fn(),
 	noteCloudSignInCompleted: vi.fn(),
 	sessionListeners: [] as ((account: unknown) => void)[],
 	unsubscribe: vi.fn(),
@@ -31,7 +30,6 @@ vi.mock("../lib/bridge", () => ({
 vi.mock("../lib/telemetry", () => ({
 	identifyCloudUser: hooks.identifyCloudUser,
 	clearCloudUser: hooks.clearCloudUser,
-	noteCloudSignInWebVisitor: hooks.noteCloudSignInWebVisitor,
 }));
 
 vi.mock("../lib/cloud-telemetry", () => ({ noteCloudSignInCompleted: hooks.noteCloudSignInCompleted }));
@@ -64,10 +62,11 @@ describe("TelemetryIdentityRuntime", () => {
 		expect(hooks.clearCloudUser).not.toHaveBeenCalled();
 	});
 
-	it("hands the user id (not the email) to main and identifies once the daemon acknowledged it", async () => {
+	it("hands the user id (never the email) to main and to telemetry once the daemon acknowledged it", async () => {
 		hooks.session = account("workos");
 		render(<TelemetryIdentityRuntime />);
-		await vi.waitFor(() => expect(hooks.identifyCloudUser).toHaveBeenCalledWith({ id: "user_01H", email: "dev@example.com" }));
+		await vi.waitFor(() => expect(hooks.identifyCloudUser).toHaveBeenCalledWith({ id: "user_01H" }));
+		expect(JSON.stringify(hooks.identifyCloudUser.mock.calls)).not.toContain("dev@example.com");
 		expect(hooks.setCloudUser).toHaveBeenCalledWith("user_01H");
 		expect(JSON.stringify(hooks.setCloudUser.mock.calls)).not.toContain("dev@example.com");
 	});
@@ -203,7 +202,7 @@ describe("TelemetryIdentityRuntime", () => {
 		expect(hooks.setCloudUser).toHaveBeenCalledWith(null);
 	});
 
-	it("takes a sign-in's website visitor id on each session notification, once, and hands it to telemetry", async () => {
+	it("takes each completed sign-in once and never passes its website visitor id on", async () => {
 		hooks.session = account("workos");
 		const view = render(<TelemetryIdentityRuntime />);
 		await act(async () => {});
@@ -217,10 +216,6 @@ describe("TelemetryIdentityRuntime", () => {
 		await notifyWith({ account: account("workos"), signIn: { webDistinctId: "019a3f5e-8c2b" } });
 		await notifyWith(null);
 		await notifyWith({ account: account("local"), signIn: { webDistinctId: "019a3f5e-8c2b" } });
-		expect(hooks.noteCloudSignInWebVisitor.mock.calls).toEqual([
-			["user_01H", "019a3f5e-8c2b"],
-			[null, "019a3f5e-8c2b"],
-		]);
 		// Each completed sign-in is reported to the sign-in count too, once.
 		expect(hooks.noteCloudSignInCompleted.mock.calls).toEqual([[account("workos")], [account("local")]]);
 
@@ -235,6 +230,6 @@ describe("TelemetryIdentityRuntime", () => {
 		hooks.session = account("workos");
 		render(<TelemetryIdentityRuntime />);
 		await act(async () => {});
-		expect(hooks.noteCloudSignInWebVisitor.mock.calls).toEqual([["user_01H", "019a3f5e-8c2b"]]);
+		expect(hooks.noteCloudSignInCompleted.mock.calls).toEqual([[account("workos")]]);
 	});
 });

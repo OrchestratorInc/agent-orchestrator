@@ -133,6 +133,62 @@ func TestVersionEmitsCLIInvocationBestEffort(t *testing.T) {
 	}
 }
 
+func TestDoNotTrackSkipsCLITelemetry(t *testing.T) {
+	t.Setenv("AO_SESSION_ID", "")
+	t.Setenv("DO_NOT_TRACK", "1")
+	cfg := setConfigEnv(t)
+	if err := runfile.Write(cfg.runFile, runfile.Info{PID: os.Getpid(), Port: 3001, StartedAt: time.Unix(100, 0).UTC()}); err != nil {
+		t.Fatal(err)
+	}
+	var telemetryCalls int
+	deps := Deps{
+		HTTPClient: &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+			if strings.HasPrefix(req.URL.Path, "/internal/telemetry/") {
+				telemetryCalls++
+			}
+			return jsonResponse(http.StatusNotFound, ""), nil
+		})},
+		ProcessAlive: func(pid int) bool { return pid == os.Getpid() },
+	}
+	if _, _, err := executeCLI(t, deps, "version"); err != nil {
+		t.Fatal(err)
+	}
+	_, _, _ = executeCLIRoot(t, deps, "version", "--no-such-flag")
+	if telemetryCalls != 0 {
+		t.Fatalf("DO_NOT_TRACK=1 still sent %d CLI telemetry requests", telemetryCalls)
+	}
+}
+
+func TestTelemetryCommandUsageErrorsAreNotReported(t *testing.T) {
+	t.Setenv("AO_SESSION_ID", "")
+	t.Setenv("DO_NOT_TRACK", "")
+	cfg := setConfigEnv(t)
+	if err := runfile.Write(cfg.runFile, runfile.Info{PID: os.Getpid(), Port: 3001, StartedAt: time.Unix(100, 0).UTC()}); err != nil {
+		t.Fatal(err)
+	}
+	var reported []string
+	deps := Deps{
+		HTTPClient: &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+			if strings.HasPrefix(req.URL.Path, "/internal/telemetry/cli-") {
+				reported = append(reported, req.URL.Path)
+			}
+			return jsonResponse(http.StatusNotFound, ""), nil
+		})},
+		ProcessAlive: func(pid int) bool { return pid == os.Getpid() },
+	}
+	if _, _, err := executeCLIRoot(t, deps, "telemetry", "off", "--unknown"); ExitCode(err) != 2 {
+		t.Fatalf("err = %v, want a usage error", err)
+	}
+	if len(reported) != 0 {
+		t.Fatalf("ao telemetry usage error was reported: %v", reported)
+	}
+	// Other commands still report their usage errors.
+	_, _, _ = executeCLIRoot(t, deps, "version", "--unknown")
+	if len(reported) != 1 || reported[0] != "/internal/telemetry/cli-usage-error" {
+		t.Fatalf("version usage error reports = %v, want one", reported)
+	}
+}
+
 func TestShouldEmitCLIInvocationSkipsNonUsageAndRoutineInternalCommands(t *testing.T) {
 	byName := map[string]*cobra.Command{}
 	for _, cmd := range NewRootCommand(Deps{}).Commands() {

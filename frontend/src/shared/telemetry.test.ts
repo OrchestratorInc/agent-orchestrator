@@ -14,6 +14,8 @@ import {
 	parseDisabledEvents,
 	readTelemetryInstallContext,
 	rendererTelemetryEnabled,
+	doNotTrack,
+	loadOrCreateTelemetryHashSalt,
 } from "./telemetry";
 
 const tempDirs: string[] = [];
@@ -293,4 +295,29 @@ test("boundCloudUserId reads only a plain, well-formed binding file", async () =
 	await writeFile(path.join(dir, "target"), "user_01H\n");
 	await symlink(path.join(dir, "target"), file);
 	expect(await boundCloudUserId(dir)).toBeNull();
+});
+
+test("DO_NOT_TRACK turns the renderer off even when AO_TELEMETRY_RENDERER=on", () => {
+	for (const value of ["1", "true", " YES ", "on"]) {
+		expect(doNotTrack({ DO_NOT_TRACK: value })).toBe(true);
+		expect(rendererTelemetryEnabled({ DO_NOT_TRACK: value, AO_TELEMETRY_RENDERER: "on" }, true)).toBe(false);
+	}
+	for (const value of [undefined, "", "0", "false", "maybe"]) {
+		expect(doNotTrack({ DO_NOT_TRACK: value })).toBe(false);
+	}
+	expect(rendererTelemetryEnabled({ DO_NOT_TRACK: "0" }, true)).toBe(true);
+});
+
+test("the hash salt is created once, private to the file, and reread", async () => {
+	const dir = await mkdtemp(path.join(os.tmpdir(), "ao-hash-salt-"));
+	try {
+		const [first, second] = await Promise.all([loadOrCreateTelemetryHashSalt(dir), loadOrCreateTelemetryHashSalt(dir)]);
+		expect(first).toMatch(/^[0-9a-f]{64}$/);
+		expect(second).toBe(first);
+		expect((await readFile(path.join(dir, "telemetry_hash_salt"), "utf8")).trim()).toBe(first);
+		await writeFile(path.join(dir, "telemetry_hash_salt"), "not-a-salt\n");
+		expect(await loadOrCreateTelemetryHashSalt(dir)).toBeUndefined();
+	} finally {
+		await rm(dir, { recursive: true, force: true });
+	}
 });

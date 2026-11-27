@@ -270,6 +270,7 @@ func (c Config) Addr() string {
 //	AO_TELEMETRY_POSTHOG_KEY   PostHog project key
 //	AO_TELEMETRY_POSTHOG_HOST  PostHog host (default DefaultTelemetryPostHogHost)
 //	AO_TELEMETRY_RETENTION     local event retention (Go duration or days, default 30 days, min 1 day)
+//	DO_NOT_TRACK               1|true|yes|on forces remote telemetry off and clears AO_SENTRY_DSN
 //	AO_GITLAB_ALLOWED_HOSTS    comma-separated self-managed GitLab hosts (each may include :port)
 //	AO_GITLAB_HOST_TOKENS      host=token,host=token per-host token overrides
 //	AO_CLIENT                  client identity reported to clients (trimmed, default empty)
@@ -490,6 +491,13 @@ func Load() (Config, error) {
 		}
 		cfg.Telemetry.LocalRetention = d
 	}
+	// DO_NOT_TRACK (consoledonottrack.com) wins over every AO_TELEMETRY_* and
+	// AO_SENTRY_DSN value: nothing is exported to PostHog or Sentry. Local event
+	// storage stays, since it never leaves the machine.
+	if DoNotTrack(os.Getenv) {
+		cfg.Telemetry.Remote = TelemetryRemoteOff
+		cfg.Telemetry.SentryDSN = ""
+	}
 
 	if raw, ok := os.LookupEnv("AO_GITLAB_ALLOWED_HOSTS"); ok && raw != "" {
 		hosts := make([]string, 0, 4)
@@ -595,6 +603,14 @@ func ScrubTelemetryEnv() {
 	for _, key := range telemetryEnvKeys {
 		_ = os.Unsetenv(key)
 	}
+}
+
+// DoNotTrack reports whether DO_NOT_TRACK asks for no telemetry. Truthy toggle
+// values (1, true, yes, on) count; anything else, including an unparsable
+// value, does not, so a typo never fails daemon startup.
+func DoNotTrack(getenv func(string) string) bool {
+	v, err := parseToggleEnv("DO_NOT_TRACK", getenv("DO_NOT_TRACK"))
+	return err == nil && v
 }
 
 // ParseToggle parses boolean toggle strings (on/true/1/yes vs off/false/0/no).

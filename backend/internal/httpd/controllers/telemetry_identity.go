@@ -35,9 +35,16 @@ func (c *TelemetryIdentityController) get(w http.ResponseWriter, r *http.Request
 	snap := c.Source.Snapshot()
 	resp := TelemetryIdentityResponse{OptedOut: snap.OptedOut, DaemonVersion: c.DaemonVersion}
 	if !snap.OptedOut {
-		resp.DistinctID = snap.DistinctID()
+		// Account identifiers leave the daemon only while the user shares them
+		// (Snapshot already withholds the GitHub login otherwise). The distinct
+		// ID is always the anonymous install-scoped one.
+		resp.DistinctID = ports.TelemetryIdentity{InstallID: snap.InstallID, AnonymousID: snap.AnonymousID}.DistinctID()
 		resp.InstallID = snap.InstallID
-		resp.CloudUserID, resp.GitHubLogin = snap.CloudUserID, snap.GitHubLogin
+		if c.Source.SharesIdentity() {
+			resp.CloudUserID = snap.CloudUserID
+		}
+		resp.GitHubLogin = snap.GitHubLogin
+		resp.GitHubSignedIn = snap.GitHubSignedIn
 		if snap.CloudUserKnown {
 			signedIn := snap.CloudUserID != ""
 			resp.IsSignedIn = &signedIn

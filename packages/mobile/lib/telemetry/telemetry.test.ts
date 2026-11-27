@@ -46,7 +46,7 @@ describe("createMobileTelemetry", () => {
 		expect(captures).toEqual([
 			{
 				event: MOBILE_EVENTS.featureUsed,
-				props: { feature: "spawn", outcome: "succeeded", ao_cloud_user_id: null, github_actor: null, $process_person_profile: false },
+				props: { feature: "spawn", outcome: "succeeded", ao_cloud_user_id: null, github_actor: null, $process_person_profile: false, $geoip_disable: true },
 			},
 		]);
 	});
@@ -397,5 +397,117 @@ describe("createMobileTelemetry", () => {
 			t.capture(MOBILE_EVENTS.paired, { method: "qr" });
 			expect(captures).toEqual([]);
 		});
+	});
+});
+
+describe("the phone's own analytics opt-out", () => {
+	it("works on a phone that was never paired and stops capture at once", () => {
+		const { client, captures, calls } = fakeClient();
+		const t = createMobileTelemetry(client, {}, { awaitPreference: true });
+		t.setUserOptedOut(false);
+		t.restoreOptOut(false);
+		t.capture(MOBILE_EVENTS.paired, { method: "qr" });
+		expect(captures).toHaveLength(1);
+		t.setUserOptedOut(true);
+		expect(calls).toContain("optOut");
+		t.capture(MOBILE_EVENTS.paired, { method: "qr" });
+		expect(captures).toHaveLength(1);
+	});
+
+	it("cannot be lifted by an opted-in desktop, and is not persisted as the desktop's choice", () => {
+		const { client, captures } = fakeClient();
+		const desktop: boolean[] = [];
+		const effective: boolean[] = [];
+		const t = createMobileTelemetry(client, {}, { onOptOutChange: (v) => effective.push(v), onDesktopOptOutChange: (v) => desktop.push(v) });
+		t.setUserOptedOut(true);
+		t.adoptDesktopIdentity({ distinctId: "ins_a", optedOut: false });
+		t.capture(MOBILE_EVENTS.paired, { method: "qr" });
+		expect(captures).toEqual([]);
+		expect(desktop).toEqual([false]);
+		expect(effective).toEqual([true]);
+		// Turning the phone's switch back on resumes, since the desktop is opted in.
+		t.setUserOptedOut(false);
+		t.capture(MOBILE_EVENTS.paired, { method: "qr" });
+		expect(captures).toHaveLength(1);
+		expect(effective).toEqual([true, false]);
+	});
+
+	it("leaves a desktop opt-out in force when the phone's switch is on", () => {
+		const { client, captures } = fakeClient();
+		const t = createMobileTelemetry(client, {});
+		t.adoptDesktopIdentity({ optedOut: true });
+		t.setUserOptedOut(false);
+		t.capture(MOBILE_EVENTS.paired, { method: "qr" });
+		expect(captures).toEqual([]);
+	});
+});
+
+describe("mobile event flags", () => {
+	it("sends every event without a person profile and without GeoIP", () => {
+		const { client, captures } = fakeClient();
+		const t = createMobileTelemetry(client, {});
+		t.capture(MOBILE_EVENTS.paired, { method: "qr" });
+		expect(captures[0]?.props).toMatchObject({ $process_person_profile: false, $geoip_disable: true });
+	});
+});
+
+describe("waiting for the phone's own saved switch", () => {
+	it("does not let a desktop that answers first release capture or consent", () => {
+		const { client, captures, calls } = fakeClient();
+		const effective: boolean[] = [];
+		const desktop: boolean[] = [];
+		const t = createMobileTelemetry(client, {}, { awaitPreference: true, awaitUserPreference: true, onOptOutChange: (v) => effective.push(v), onDesktopOptOutChange: (v) => desktop.push(v) });
+		t.adoptDesktopIdentity({ distinctId: "ins_a", optedOut: false });
+		t.capture(MOBILE_EVENTS.paired, { method: "qr" });
+		expect(captures).toEqual([]);
+		expect(effective).toEqual([]);
+		expect(calls).not.toContain("optIn");
+		// The desktop's value is still recorded for persistence.
+		expect(desktop).toEqual([false]);
+
+		// The saved phone opt-out then arrives and holds.
+		t.setUserOptedOut(true);
+		t.restoreOptOut(false);
+		t.capture(MOBILE_EVENTS.paired, { method: "qr" });
+		expect(captures).toEqual([]);
+		expect(effective).toEqual([true]);
+	});
+
+	it("releases capture once the phone's switch is known to be on", () => {
+		const { client, captures } = fakeClient();
+		const t = createMobileTelemetry(client, {}, { awaitPreference: true, awaitUserPreference: true });
+		t.adoptDesktopIdentity({ distinctId: "ins_a", optedOut: false });
+		t.setUserOptedOut(false);
+		t.restoreOptOut(true); // stale saved desktop opt-out loses to the live desktop
+		t.capture(MOBILE_EVENTS.paired, { method: "qr" });
+		expect(captures).toHaveLength(1);
+	});
+});
+
+describe("waiting for the saved desktop opt-out", () => {
+	it("does not let a phone opt-in release capture before the saved desktop opt-out is applied", () => {
+		const { client, captures, calls } = fakeClient();
+		const effective: boolean[] = [];
+		const t = createMobileTelemetry(client, {}, { awaitPreference: true, awaitUserPreference: true, onOptOutChange: (v) => effective.push(v) });
+		// A Settings opt-in lands while the startup reads are still pending.
+		t.setUserOptedOut(false);
+		t.capture(MOBILE_EVENTS.paired, { method: "qr" });
+		expect(captures).toEqual([]);
+		expect(effective).toEqual([]);
+		expect(calls).not.toContain("optIn");
+		// The saved desktop opt-out then applies and keeps capture off.
+		t.restoreOptOut(true);
+		t.capture(MOBILE_EVENTS.paired, { method: "qr" });
+		expect(captures).toEqual([]);
+		expect(effective).toEqual([true]);
+	});
+
+	it("keeps the phone's newer choice once the desktop value is known", () => {
+		const { client, captures } = fakeClient();
+		const t = createMobileTelemetry(client, {}, { awaitPreference: true, awaitUserPreference: true });
+		t.setUserOptedOut(false);
+		t.restoreOptOut(false);
+		t.capture(MOBILE_EVENTS.paired, { method: "qr" });
+		expect(captures).toHaveLength(1);
 	});
 });

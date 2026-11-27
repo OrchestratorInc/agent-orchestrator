@@ -20,6 +20,12 @@ import (
 // app and (via the identity route) the phone all read one switch.
 const OptOutFile = "telemetry_opt_out"
 
+// ShareIdentityFile is the marker the desktop app writes when the user turns
+// on "Include my account identity" in Settings. Absent (the default) means the
+// GitHub login, the repositories' GitHub org and the AO Cloud user ID never
+// leave the machine on exported events or to a paired phone.
+const ShareIdentityFile = "telemetry_share_identity"
+
 const (
 	installIDFile      = "telemetry_install_id"
 	anonymousIDFile    = "telemetry_anonymous_id"
@@ -39,7 +45,11 @@ var (
 type Identity struct {
 	dataDir    string
 	optOutPath string
+	sharePath  string
 	fresh      bool
+	// hashSalt keys hashed IDs; empty when it could not be loaded, and hashed
+	// IDs are then omitted.
+	hashSalt string
 
 	// File operations are fields so tests can fail them.
 	writeFile  func(path string, data []byte) error
@@ -79,7 +89,10 @@ func NewIdentity(dataDir string) (*Identity, error) {
 			return nil, fmt.Errorf("record telemetry anonymous id: %w", err)
 		}
 	}
-	ident := &Identity{writeFile: writeFileAtomic, removeFile: os.Remove, dataDir: dataDir, installID: id, anonymousID: anon, optOutPath: filepath.Join(dataDir, OptOutFile), fresh: freshInstall(dataDir)}
+	ident := &Identity{writeFile: writeFileAtomic, removeFile: os.Remove, dataDir: dataDir, installID: id, anonymousID: anon, optOutPath: filepath.Join(dataDir, OptOutFile), sharePath: filepath.Join(dataDir, ShareIdentityFile), fresh: freshInstall(dataDir)}
+	if salt, ok := loadOrCreateHashSalt(dataDir); ok {
+		ident.hashSalt = salt
+	}
 	// The bound user is the last sign-in the desktop handed off and the daemon
 	// recorded; a sign-out removes it. Restoring it lets a restarted or
 	// CLI-started daemon report under the signed-in Cloud ID without waiting
@@ -152,6 +165,26 @@ func freshInstall(dataDir string) bool {
 func (i *Identity) OptedOut() bool {
 	_, err := os.Stat(i.optOutPath)
 	return err == nil
+}
+
+// SharesIdentity reports whether the user opted in to sending their account
+// identifiers (GitHub username and org, AO Cloud user ID). Read from the marker on every call, like OptedOut, so a change in
+// Settings applies to the next export without a restart.
+func (i *Identity) SharesIdentity() bool {
+	if i.sharePath == "" {
+		return false
+	}
+	_, err := os.Stat(i.sharePath)
+	return err == nil
+}
+
+// HashID keys value with the install's private salt. ok is false when the salt
+// is unavailable; callers then omit the hash rather than send it unsalted.
+func (i *Identity) HashID(value string) (string, bool) {
+	if i == nil || i.hashSalt == "" || value == "" {
+		return "", false
+	}
+	return hashTelemetryID(i.hashSalt, value), true
 }
 
 // InstallID is the durable installation attribution key.
@@ -272,18 +305,24 @@ func (i *Identity) SetGitHubLogin(login string) {
 }
 
 // Snapshot implements ports.TelemetryIdentityStore. Opted-out installs report
-// no user attributes at all. An identity that could not be persisted reports the
+// no user attributes at all, and the GitHub login is reported only when the
+// user opted in to sharing it. An identity that could not be persisted reports the
 // same way, so a paired phone resets and stops capturing until a later
 // SetCloudUserID succeeds, instead of adopting an install ID that is still
 // linked to the previous account.
 func (i *Identity) Snapshot() ports.TelemetryIdentity {
 	optedOut := i.OptedOut()
+	share := i.SharesIdentity()
 	i.mu.RLock()
 	defer i.mu.RUnlock()
 	snap := ports.TelemetryIdentity{InstallID: i.installID, AnonymousID: i.anonymousID, OptedOut: optedOut || i.persistFailed}
 	if !snap.OptedOut {
-		snap.CloudUserID, snap.GitHubLogin = i.cloudUserID, i.githubLogin
+		snap.CloudUserID = i.cloudUserID
 		snap.CloudUserKnown = i.cloudUserKnown
+		snap.GitHubSignedIn = i.githubLogin != ""
+		if share {
+			snap.GitHubLogin = i.githubLogin
+		}
 	}
 	return snap
 }
@@ -291,9 +330,13 @@ func (i *Identity) Snapshot() ports.TelemetryIdentity {
 // eventAttributes avoids another marker read while constructing an export.
 // The sender checks ExportSuppressed immediately before each HTTP attempt.
 func (i *Identity) eventAttributes() (cloudUserID, githubLogin string) {
+	share := i.SharesIdentity()
 	i.mu.RLock()
 	defer i.mu.RUnlock()
 	if i.persistFailed {
+		return "", ""
+	}
+	if !share {
 		return "", ""
 	}
 	return i.cloudUserID, i.githubLogin

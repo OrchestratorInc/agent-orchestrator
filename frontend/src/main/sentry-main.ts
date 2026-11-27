@@ -9,12 +9,14 @@ import type { RendererTelemetryCapture } from "../shared/telemetry-policy";
 import { DEFAULT_ELECTRON_SENTRY_DSN, isPublishedSentryBuild, SAFE_APP_ASSET, SAFE_FUNCTION, safeSentryExceptionType, safeSentryFunctionName, sentryEnvironment } from "../shared/sentry-config";
 import { AoError, safeSentryCode, sentryErrorCode } from "../../../packages/shared/telemetry/ao-error";
 import { sentryIdentityTitle, sentryMessageIdentity, sentryExceptionValue } from "../../../packages/shared/telemetry/sentry-message";
-import { loadOrCreateTelemetryInstallId } from "../shared/telemetry";
+import { doNotTrack, loadOrCreateTelemetryInstallId } from "../shared/telemetry";
 import type { DesktopTelemetryTransport } from "./desktop-telemetry-controller";
 import { isSafeMainErrorDetail, MAIN_ERROR_CATEGORIES, MAIN_ERROR_REASONS, sanitizeMainErrorCapture, type MainErrorCapture } from "./main-error-capture";
 import { onboardingSentryTarget, parseOnboardingFailureCode } from "../shared/onboarding-failures";
 
 export function electronMainSentryDsn(version: string, isDev: boolean): string {
+	// DO_NOT_TRACK wins over AO_ELECTRON_SENTRY_DSN: no Electron Sentry client.
+	if (doNotTrack(process.env)) return "";
 	return process.env.AO_ELECTRON_SENTRY_DSN ?? (isPublishedSentryBuild(version, isDev) ? DEFAULT_ELECTRON_SENTRY_DSN : "");
 }
 

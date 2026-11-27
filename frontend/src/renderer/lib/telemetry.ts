@@ -14,7 +14,6 @@ import { ORCHESTRATOR_SPAWN_SOURCES } from "./orchestrator-spawn-sources";
 import { IMPORTABLE_AGENTS } from "./session-import-agents";
 import { TOPBAR_ACTIONS, TOPBAR_VIEWS } from "./topbar-actions";
 import { isUiUsageEvent, sanitizeUiUsageProperties } from "./ui-usage-registry";
-import { isWebDistinctId } from "../../shared/cloud-account";
 import { DEFAULT_POSTHOG_HOST, DEFAULT_POSTHOG_PROJECT_KEY } from "../../shared/posthog-config";
 import { EDITOR_IDS } from "../../shared/editor-handoff";
 import type { TelemetryInstallContext } from "../../shared/telemetry";
@@ -84,6 +83,8 @@ let errorHandlersBound = false;
 let telemetryContext: TelemetryProperties = {};
 let installTimestampMs: number | undefined;
 let installId = "";
+// Private per-install key for hashed IDs, from the bootstrap. Never sent.
+let hashSalt = "";
 let fallbackActiveDate = "";
 let fallbackRouteViewDate = "";
 let fallbackRouteViewSurfaces = new Set<string>();
@@ -367,22 +368,20 @@ async function readUpdateSettingsForTelemetry(): Promise<{ channel?: unknown; fe
 }
 
 export function withTelemetryContext(properties: TelemetryProperties): TelemetryProperties {
-	// Anonymous until an AO Cloud sign-in identifies this install. Once signed in
-	// the flag is left to the SDK, which processes the identified person.
 	const currentAge = installTimestampMs === undefined ? undefined : Math.floor((Date.now() - installTimestampMs) / 86_400_000);
-	return { ...telemetryContext, ...cloudContext, ...properties, ...(currentAge === undefined || currentAge < 0 ? {} : { days_since_install: currentAge }), is_signed_in: cloudUser !== null, ...(cloudUser ? {} : { $process_person_profile: false }), install_id: installId };
+	return { ...telemetryContext, ...cloudContext, ...properties, ...(currentAge === undefined || currentAge < 0 ? {} : { days_since_install: currentAge }), is_signed_in: cloudUser !== null, ...ANONYMOUS_EVENT_FLAGS, install_id: installId };
 }
 
-// Who this install is. The GitHub login and AO Cloud user ID ride every event as
-// super properties; email is only ever a person property set at identify time.
-let cloudUser: { id: string; email: string } | null = null;
-let signInKnown = false;
+// Every renderer event, SDK-generated ones included (before_send stamps them
+// too): no PostHog person profile and no IP-derived location.
+const ANONYMOUS_EVENT_FLAGS = { $process_person_profile: false, $geoip_disable: true } as const;
+
+// Who this install is. The SDK is never identify()-ed or alias()-ed: events go
+// out under the anonymous install-scoped ID. The GitHub login and AO Cloud user
+// ID ride as super properties only while "Include my account identity" is on;
+// the email never leaves the app.
+let cloudUser: { id: string } | null = null;
 let githubLogin: string | null = null;
-// The ID the SDK is identified as, and the account identify() last ran for.
-// A launch that boots identified (bootstrap.cloudUserId) has the first but not
-// the second, so the person properties are still set once that launch.
-let identifiedId: string | null = null;
-let identifyCalledFor: string | null = null;
 let posthogReady = false;
 let analyticsOptedOut = false;
 /** Counts opt-outs, so work measured before one is never sent after a later opt-in. */
@@ -397,90 +396,28 @@ function registerBaseProperties(): void {
 	posthog.register({
 		...telemetryContext,
 		surface: "renderer",
-		...(githubLogin ? { github_actor: githubLogin } : {}),
-		...(cloudUser ? { ao_cloud_user_id: cloudUser.id } : {}),
+		...ANONYMOUS_EVENT_FLAGS,
+		...(shareIdentity && githubLogin ? { github_actor: githubLogin } : {}),
+		...(shareIdentity && cloudUser ? { ao_cloud_user_id: cloudUser.id } : {}),
 	});
+	if (!shareIdentity || !githubLogin) posthog.unregister("github_actor");
+	if (!shareIdentity || !cloudUser) posthog.unregister("ao_cloud_user_id");
 }
 
 /**
- * Identifies the signed-in AO Cloud user with the AO Cloud user ID. Email is a
- * person property only. An unlinked install starts with its ins_ ID and can be
- * merged into the Cloud person; a linked install starts with a fresh anon_ ID.
- * The signed-in daemon sends events under the Cloud user ID directly.
+ * Notes the signed-in AO Cloud user. Nothing is sent to PostHog about the
+ * account: no identify(), no person properties and never the email. The user
+ * ID becomes an event property only while sharing account identity is on.
  */
-export async function identifyCloudUser(user: { id: string; email: string }): Promise<void> {
-	cloudUser = user;
-	signInKnown = true;
-	if (analyticsOptedOut || identifyCalledFor === user.id || !(await initTelemetry())) return;
-	// A sign-out, a different account or an opt-out may have landed while init
-	// was pending; this continuation must not identify who is no longer current.
-	if (analyticsOptedOut || cloudUser?.id !== user.id) return;
-	// Switching accounts without a sign-out: never layer B onto A's person.
-	if (identifiedId !== null && identifiedId !== user.id) posthog.reset();
-	registerBaseProperties();
-	posthog.identify(user.id, {
-		email: user.email,
-		ao_cloud_user_id: user.id,
-		...(githubLogin ? { github_login: githubLogin } : {}),
-	});
-	identifiedId = user.id;
-	identifyCalledFor = user.id;
-	linkPendingWebVisitor(user.id);
+export async function identifyCloudUser(user: { id: string; email?: string }): Promise<void> {
+	cloudUser = { id: user.id };
+	if (posthogReady && !analyticsOptedOut) registerBaseProperties();
 }
 
-// A website visit to link to the account a sign-in just completed. The
-// orchestrator.inc return page adds the visitor's website PostHog id only for
-// visitors who accepted analytics there, and main hands it over once, with that
-// sign-in's notification. Held in memory only, and spent by the first identify
-// of that account, or at once when the account is already identified.
-let pendingWebVisitor: { userId: string; webDistinctId: string } | null = null;
-// alias() queues $create_alias; PostHog can still refuse the merge (the
-// website id already belongs to an identified person), so this records that
-// the link was asked for, not that it happened.
-const WEB_VISITOR_LINK_REQUESTED_EVENT = "ao.renderer.cloud_web_visitor_link_requested";
-
-/**
- * Notes a cloud session notification: the signed-in WorkOS user (null when
- * signed out or local) and the website visitor id a new sign-in carried. Another
- * account or a sign-out drops a visit not yet linked; a token refresh of the
- * same account keeps it.
- */
-export function noteCloudSignInWebVisitor(userId: string | null, webDistinctId?: unknown): void {
-	if (pendingWebVisitor && pendingWebVisitor.userId !== userId) pendingWebVisitor = null;
-	if (!userId || webDistinctId === undefined) return;
-	pendingWebVisitor = null;
-	if (analyticsOptedOut || !isWebDistinctId(webDistinctId) || webDistinctId === userId) return;
-	pendingWebVisitor = { userId, webDistinctId };
-	if (identifiedId === userId) linkPendingWebVisitor(userId);
-}
-
-function linkPendingWebVisitor(userId: string): void {
-	const pending = pendingWebVisitor;
-	if (!pending || pending.userId !== userId) return;
-	pendingWebVisitor = null;
-	if (analyticsOptedOut || !posthogReady) return;
-	if (isDeniedEvent("$create_alias") || isDeniedEvent(WEB_VISITOR_LINK_REQUESTED_EVENT)) return;
-	// alias(alias, original) sends $create_alias, which merges the website
-	// visitor's distinct id into the person already identified as this user.
-	const aliased = posthog.alias(pending.webDistinctId, userId);
-	if (typeof aliased !== "object" || aliased === null) return;
-	void captureRendererEvent(WEB_VISITOR_LINK_REQUESTED_EVENT, { website_distinct_id: pending.webDistinctId });
-}
-
-/**
- * Sign-out: stop attributing renderer events to the user.
- * ponytail: reset() mints a random anonymous ID that lasts until the next
- * launch, when the bootstrap restores the ins_ install ID.
- */
+/** Sign-out: stop attributing renderer events to the user. */
 export function clearCloudUser(): void {
 	cloudUser = null;
-	signInKnown = true;
-	pendingWebVisitor = null;
-	identifyCalledFor = null;
-	if (!posthogReady || identifiedId === null) return;
-	identifiedId = null;
-	posthog.reset();
-	registerBaseProperties();
+	if (posthogReady) registerBaseProperties();
 }
 
 /**
@@ -516,8 +453,6 @@ export async function applyAnalyticsOptOut(optedOut: boolean): Promise<void> {
 	setAnalyticsOptedOut(optedOut);
 	if (optedOut) {
 		optOutGeneration += 1;
-		// A website visit not linked yet is dropped, not kept for a later opt-in.
-		pendingWebVisitor = null;
 		// Updater failures counted before the opt-out must not be exported
 		// after a later opt-in, so the streak and pending daily counts go too.
 		try {
@@ -526,8 +461,6 @@ export async function applyAnalyticsOptOut(optedOut: boolean): Promise<void> {
 			// Storage is best-effort; capture is already gated on the flag.
 		}
 		if (posthogReady) stopPostHogForOptOut(posthog);
-		identifiedId = null;
-		identifyCalledFor = null;
 		return;
 	}
 	if (posthogReady) {
@@ -537,29 +470,52 @@ export async function applyAnalyticsOptOut(optedOut: boolean): Promise<void> {
 		initPromise = null;
 		await initTelemetry();
 	}
-	if (cloudUser) await identifyCloudUser(cloudUser);
 }
 
 // A fresh install often has no GitHub token yet, so the daemon-resolved login is
 // polled on a short bounded schedule rather than read once.
 const GITHUB_LOGIN_RETRY_MS = [2_000, 30_000, 120_000, 600_000];
+// "Include my account identity" (Settings > General > Privacy), off by default.
+// The daemon withholds the login while it is off; this flag also covers a
+// toggle that lands while a read is in flight.
+let shareIdentity = false;
+let githubSyncRunning = false;
 
 async function syncGithubLogin(): Promise<void> {
-	for (const delay of GITHUB_LOGIN_RETRY_MS) {
-		await new Promise((resolve) => setTimeout(resolve, delay));
-		if (analyticsOptedOut) return;
-		const login = await Promise.resolve()
-			.then(() => aoBridge.telemetry.getGithubLogin())
-			.catch(() => null);
-		if (!login) continue;
-		githubLogin = login;
-		// A resolved login means GitHub sign-in is done, even when it happened
-		// outside the app or after the onboarding step was closed.
-		void import("./onboarding-telemetry").then((onboarding) => onboarding.completeOnboardingStepIfViewed("github_auth"));
-		registerBaseProperties();
-		if (identifiedId) posthog.setPersonProperties({ github_login: login });
-		return;
+	if (githubSyncRunning) return;
+	githubSyncRunning = true;
+	try {
+		for (const delay of GITHUB_LOGIN_RETRY_MS) {
+			await new Promise((resolve) => setTimeout(resolve, delay));
+			if (analyticsOptedOut) return;
+			const identity = await Promise.resolve()
+				.then(() => aoBridge.telemetry.getGithubIdentity())
+				.catch(() => null);
+			if (!identity?.signedIn) continue;
+			// A resolved account means GitHub sign-in is done, even when it happened
+			// outside the app or after the onboarding step was closed.
+			void import("./onboarding-telemetry").then((onboarding) => onboarding.completeOnboardingStepIfViewed("github_auth"));
+			if (!identity.login || !shareIdentity || analyticsOptedOut) return;
+			githubLogin = identity.login;
+			registerBaseProperties();
+			return;
+		}
+	} finally {
+		githubSyncRunning = false;
 	}
+}
+
+/**
+ * Applies "Include my account identity". Off drops github_actor and
+ * ao_cloud_user_id from every later renderer event at once; on adds the Cloud
+ * user ID and resolves the GitHub login again.
+ */
+export function applyShareIdentity(share: boolean): void {
+	shareIdentity = share;
+	if (!share) githubLogin = null;
+	if (!posthogReady) return;
+	registerBaseProperties();
+	if (share && !analyticsOptedOut) void syncGithubLogin();
 }
 
 // The bootstrap usually runs before the daemon is ready, which leaves
@@ -622,7 +578,19 @@ export function setCloudTelemetryContext(context: { orgId?: string; orgKind?: st
 		cloud_billing_mode: enumValue(context.billingMode, CLOUD_BILLING_MODES),
 	};
 	cloudContext = { ...cloudContext, ...next };
-	void hashedTelemetryID(context.orgId).then((hash) => {
+	cloudOrgId = typeof context.orgId === "string" ? context.orgId : undefined;
+	refreshCloudOrgHash();
+}
+
+// The org ID is keyed with the install's private salt like project and session
+// IDs, so it groups one install's events but cannot be matched across installs
+// or to an org. It is re-keyed once the bootstrap delivers the salt.
+let cloudOrgId: string | undefined;
+
+function refreshCloudOrgHash(): void {
+	const orgId = cloudOrgId;
+	void hashedTelemetryID(orgId).then((hash) => {
+		if (cloudOrgId !== orgId) return;
 		cloudContext = hash ? { ...cloudContext, cloud_org_id_hash: hash } : omitKey(cloudContext, "cloud_org_id_hash");
 	});
 }
@@ -635,6 +603,7 @@ function omitKey(properties: TelemetryProperties, key: string): TelemetryPropert
 /** Test seam. */
 export function resetCloudTelemetryContextForTest(): void {
 	cloudContext = {};
+	cloudOrgId = undefined;
 }
 
 export function postHogEventName(event: string): string {
@@ -666,6 +635,11 @@ export function isDeniedEvent(event: string, denied: string[] = disabledEventMat
 		}
 		return candidates.includes(rule);
 	});
+}
+
+/** Test seam: the real salt arrives with the bootstrap in initTelemetry. */
+export function setTelemetryHashSaltForTest(salt: string): void {
+	hashSalt = salt;
 }
 
 /** Test seam: the real value arrives with the bootstrap in initTelemetry. */
@@ -836,19 +810,28 @@ export function automationPromptLengthBucket(prompt: string): string {
 	return "xl";
 }
 
-async function sha256Hex(raw: string): Promise<string> {
+/**
+ * HMAC-SHA256(salt, value) in hex, the same keyed hash the daemon computes
+ * (adapters/telemetry/hashsalt.go), so a project hashes identically on renderer
+ * and daemon events.
+ */
+export async function hmacTelemetryID(salt: string, value: string): Promise<string | undefined> {
 	const subtle = globalThis.crypto?.subtle;
-	if (!subtle) return "redacted";
-	const bytes = new TextEncoder().encode(raw);
-	const digest = await subtle.digest("SHA-256", bytes);
-	return Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, "0")).join("");
+	if (!subtle) return undefined;
+	const encoder = new TextEncoder();
+	const key = await subtle.importKey("raw", encoder.encode(salt), { name: "HMAC", hash: "SHA-256" }, false, ["sign"]);
+	const signature = await subtle.sign("HMAC", key, encoder.encode(value));
+	return Array.from(new Uint8Array(signature), (byte) => byte.toString(16).padStart(2, "0")).join("");
 }
 
+// Project IDs are lowercased folder names and session IDs embed them, so an
+// unkeyed hash (or one keyed with the exported install_id) could be reversed
+// from a list of repo names. Without the private salt the hash is omitted.
 async function hashedTelemetryID(value: unknown): Promise<string | undefined> {
-	if (typeof value !== "string") return undefined;
+	if (typeof value !== "string" || !hashSalt) return undefined;
 	const trimmed = value.trim();
 	if (!trimmed) return undefined;
-	return sha256Hex(trimmed);
+	return hmacTelemetryID(hashSalt, trimmed);
 }
 
 function isLocalURL(value: string): boolean {
@@ -901,8 +884,28 @@ export function sanitizeReplayRequestName(name: string): string {
 
 function sanitizePostHogCaptureResult<T>(event: T): T {
 	const safe = sanitizePostHogEvent(event as unknown as Record<string, unknown>);
-	if (installId) safe.properties = { ...((safe.properties as Record<string, unknown>) ?? {}), install_id: installId };
+	// The final gate for every event, including SDK-generated ones: anonymous
+	// and without GeoIP, whatever the call site passed.
+	const properties: Record<string, unknown> = { ...((safe.properties as Record<string, unknown>) ?? {}), ...ANONYMOUS_EVENT_FLAGS };
+	delete properties.$set;
+	delete properties.$set_once;
+	safe.properties = installId ? { ...properties, install_id: installId } : properties;
+	delete safe.$set;
+	delete safe.$set_once;
+	recordExportedLocally(safe);
 	return safe as T;
+}
+
+// Hands each event, exactly as it goes to PostHog, to the daemon's local log
+// (`ao telemetry log`). Never throws and never delays the send.
+function recordExportedLocally(event: Record<string, unknown>): void {
+	if (analyticsOptedOut || typeof event.event !== "string") return;
+	try {
+		const distinctId = posthogReady ? posthog.get_distinct_id() : "";
+		aoBridge.telemetry.recordExported?.({ event: event.event, distinctId: typeof distinctId === "string" ? distinctId : "", properties: (event.properties as Record<string, unknown>) ?? {} });
+	} catch {
+		// The local log is best effort.
+	}
 }
 
 async function sanitizeRendererContextProperties(properties?: TelemetryProperties): Promise<TelemetryProperties> {
@@ -963,10 +966,6 @@ async function sanitizeCloudFunnelProperties(event: string, properties?: Telemet
 			// Signing in again as the account already signed in; absent on events sent before it was counted.
 			if (typeof properties?.same_account === "boolean") safe.same_account = properties.same_account;
 			break;
-		case "ao.renderer.cloud_web_visitor_link_requested":
-			// The website's own pseudonymous PostHog id, never anything typed.
-			if (isWebDistinctId(properties?.website_distinct_id)) safe.website_distinct_id = properties.website_distinct_id;
-			break;
 		case "ao.renderer.cloud_offering_resolved": {
 			safe.org_kind = enumValue(properties?.org_kind, CLOUD_ORG_KINDS);
 			safe.billing_mode = enumValue(properties?.billing_mode, CLOUD_BILLING_MODES);
@@ -1020,7 +1019,6 @@ async function sanitizeCloudFunnelProperties(event: string, properties?: Telemet
 
 const CLOUD_FUNNEL_EVENTS = new Set([
 	"ao.renderer.cloud_signed_in",
-	"ao.renderer.cloud_web_visitor_link_requested",
 	"ao.renderer.cloud_offering_resolved",
 	"ao.renderer.cloud_project_created",
 	"ao.renderer.cloud_session_create_requested",
@@ -1442,7 +1440,7 @@ async function loadPostHog(): Promise<PostHogClient> {
 	return (await import("posthog-js/dist/module.full.no-external")).default;
 }
 
-export function buildPostHogConfig(distinctId: string, identified = false): PostHogInitOptions {
+export function buildPostHogConfig(distinctId: string): PostHogInitOptions {
 	return {
 		api_host: POSTHOG_HOST,
 		defaults: RELEASE_TAG,
@@ -1476,16 +1474,16 @@ export function buildPostHogConfig(distinctId: string, identified = false): Post
 		// an upgrade; the AO-owned heartbeat and route reservations continue to
 		// use window.localStorage independently.
 		persistence: "memory",
-		// Anonymous (no profile) until identifyCloudUser() runs on an AO Cloud
-		// sign-in; only then does PostHog process a person.
-		person_profiles: "identified_only",
+		// Never a PostHog person profile, signed in or not; identify() and
+		// alias() are never called.
+		person_profiles: "never",
 		// The SDK flags a localhost page as an internal user, which turns person
 		// processing on for every event; a dev build driving the real export path
 		// would otherwise bill anonymous events as identified.
 		internal_or_test_user_hostname: null,
 		bootstrap: {
 			distinctID: distinctId,
-			isIdentifiedID: identified,
+			isIdentifiedID: false,
 		},
 		before_send: (event) => (event ? sanitizePostHogCaptureResult(event) : event),
 		session_recording: {
@@ -1508,6 +1506,8 @@ export async function initTelemetry(): Promise<boolean> {
 		// unpackaged build that has not opted in. The client is never created.
 		if (!bootstrap) return false;
 		installId = bootstrap.installId;
+		hashSalt = bootstrap.hashSalt ?? "";
+		if (cloudOrgId) refreshCloudOrgHash();
 		disabledEventMatchers = bootstrap.disabledEvents ?? [];
 		const channel = releaseChannelFrom(await readUpdateSettingsForTelemetry());
 		// The user may have opted out while the awaits above were pending; applyAnalyticsOptOut
@@ -1521,21 +1521,20 @@ export async function initTelemetry(): Promise<boolean> {
 		// Loading the SDK is asynchronous; an opt-out in that gap must prevent
 		// both SDK initialization and the unconditional opt-in below.
 		if (analyticsOptedOut) return false;
-		// Boot as the signed-in Cloud user main verified against the daemon's
-		// binding, unless this launch already learned of a sign-out or a
-		// different account (the runtime can resolve while init is pending).
-		const bootCloudId = bootstrap.cloudUserId && !(signInKnown && cloudUser?.id !== bootstrap.cloudUserId) ? bootstrap.cloudUserId : null;
-		if (bootCloudId) {
-			cloudUser ??= { id: bootCloudId, email: "" };
-			signInKnown = true;
-			identifiedId = bootCloudId;
-		}
-		posthog.init(POSTHOG_KEY, buildPostHogConfig(bootCloudId ?? bootstrap.distinctId, bootCloudId !== null));
+		// Always the anonymous install-scoped ID: the client is never identified
+		// as the Cloud user (no person profiles).
+		posthog.init(POSTHOG_KEY, buildPostHogConfig(bootstrap.distinctId));
 		// A previous launch's opt-out is remembered by the SDK; the AO marker is the
 		// source of truth and the bootstrap is only handed out when it is absent.
 		posthog.opt_in_capturing({ captureEventName: false });
 		posthogReady = true;
 		registerBaseProperties();
+		shareIdentity = await Promise.resolve()
+			.then(() => aoBridge.telemetry.getShareIdentity())
+			.catch(() => false);
+		// The first registration ran with sharing assumed off; apply the loaded
+		// preference, so a Cloud user noted before init is attached when shared.
+		if (!analyticsOptedOut) registerBaseProperties();
 		void syncGithubLogin();
 		if (bootstrap.lifetimeSessions === undefined) void syncLifetimeSessions();
 		// Typed renderer fault intake has its own main-owned policy gate. PostHog

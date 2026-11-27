@@ -216,6 +216,12 @@ var legacyActorlessUserCLICommands = map[string]struct{}{
 	"ao spawn":                {},
 	"ao stop":                 {},
 	"ao version":              {},
+	// Never reported (see shouldEmitCLIInvocation); classified for completeness.
+	"ao telemetry":        {},
+	"ao telemetry log":    {},
+	"ao telemetry off":    {},
+	"ao telemetry on":     {},
+	"ao telemetry status": {},
 
 	// Legacy commands observed in PostHog's current billing-period data.
 	"ao handoff":                   {},

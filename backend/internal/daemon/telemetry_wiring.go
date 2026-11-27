@@ -2,6 +2,7 @@ package daemon
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -9,6 +10,7 @@ import (
 
 	telemetryadapter "github.com/aoagents/agent-orchestrator/backend/internal/adapters/telemetry"
 	"github.com/aoagents/agent-orchestrator/backend/internal/config"
+	"github.com/aoagents/agent-orchestrator/backend/internal/httpd"
 	"github.com/aoagents/agent-orchestrator/backend/internal/observe/sentryobs"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 	"github.com/aoagents/agent-orchestrator/backend/internal/storage/sqlite"
@@ -34,23 +36,38 @@ var aggregatedEventNames = []string{
 	"ao.daemon.panic",
 }
 
+// telemetryLocalParts are the pieces `ao telemetry` needs from the sink chain:
+// the local SQLite sink that records exported events (nil when local events are
+// off), and the daily CLI usage summary's Discard (nil when nothing exports), so
+// an opt-out clears counts held in memory, not only the file.
+type telemetryLocalParts struct {
+	local        ports.EventSink
+	discardDaily func()
+}
+
 // newTelemetrySink also returns the live telemetry identity (nil when the data
 // dir is unknown), shared with the remote sink so a sign-in or opt-out seen by
-// the identity routes is what the exporter stamps and honors.
-func newTelemetrySink(cfg config.Config, store *sqlite.Store, log *slog.Logger) (ports.EventSink, ports.TelemetryIdentityStore, bool) {
+// the identity routes is what the exporter stamps and honors, and the parts
+// `ao telemetry` uses.
+func newTelemetrySink(cfg config.Config, store *sqlite.Store, log *slog.Logger) (ports.EventSink, ports.TelemetryIdentityStore, telemetryLocalParts, bool) {
 	if !cfg.Telemetry.Events {
-		return telemetryadapter.NoopSink{}, standaloneIdentity(cfg, log), false
+		return telemetryadapter.NoopSink{}, standaloneIdentity(cfg, log), telemetryLocalParts{}, false
 	}
 	local := telemetryadapter.NewLocalSQLiteSink(store, log, cfg.Telemetry.LocalRetention)
 	if cfg.Telemetry.Remote != config.TelemetryRemotePostHog {
-		return local, standaloneIdentity(cfg, log), false
+		return local, standaloneIdentity(cfg, log), telemetryLocalParts{local: local}, false
 	}
 	remote, err := telemetryadapter.NewPostHogSink(cfg.DataDir, cfg.Telemetry.PostHogKey, cfg.Telemetry.PostHogHost,
 		cfg.Telemetry.AppVersion, cfg.Agent, nil, log)
 	if err != nil {
 		log.Warn("telemetry remote sink disabled", "remote", cfg.Telemetry.Remote, "error", err)
-		return local, standaloneIdentity(cfg, log), false
+		return local, standaloneIdentity(cfg, log), telemetryLocalParts{local: local}, false
 	}
+	// Every event PostHog accepted is written locally exactly as sent, so
+	// `ao telemetry log` shows what left the machine, not the raw local stream.
+	remote.OnExported(func(name, distinctID string, props map[string]any) {
+		telemetryadapter.RecordExported(context.Background(), local, telemetryadapter.ExportedEvent{Event: name, Surface: "daemon", DistinctID: distinctID, Properties: props})
+	})
 	// app-state.json and update-settings.json live beside running.json.
 	if cfg.RunFilePath != "" {
 		remote.SetInstallStateDir(filepath.Dir(cfg.RunFilePath))
@@ -82,7 +99,83 @@ func newTelemetrySink(cfg config.Config, store *sqlite.Store, log *slog.Logger) 
 	// costs nothing downstream: no aggregation window, no rate-limit slot, no
 	// export. Local storage is unaffected, so silenced events stay debuggable.
 	denied := telemetryadapter.NewDenylistSink(gated, cfg.Telemetry.DisabledEvents)
-	return telemetryadapter.NewOnboardingSink(telemetryadapter.NewFanoutSink(local, denied), remote.Identity()), remote.Identity(), true
+	return telemetryadapter.NewOnboardingSink(telemetryadapter.NewFanoutSink(local, denied), remote.Identity()), remote.Identity(), telemetryLocalParts{local: local, discardDaily: daily.Discard}, true
+}
+
+// newTelemetryLocal backs `ao telemetry log|status|on|off`. The log reads the
+// exported rows in the local event store; renderer events forwarded by Electron
+// main are recorded there too. The opt-out writes the same marker Settings
+// writes, which the desktop, the daemon and a paired phone all honor.
+func newTelemetryLocal(cfg config.Config, store *sqlite.Store, parts telemetryLocalParts, ident ports.TelemetryIdentityStore, remoteActive bool, errorReports func(context.Context) bool) *httpd.TelemetryLocal {
+	local := parts.local
+	retentionDays := int(telemetryadapter.DefaultRetention / (24 * time.Hour))
+	if cfg.Telemetry.LocalRetention >= telemetryadapter.MinRetention {
+		retentionDays = int(cfg.Telemetry.LocalRetention / (24 * time.Hour))
+	}
+	doNotTrack := config.DoNotTrack(os.Getenv)
+	status := func(ctx context.Context) httpd.TelemetryStatus {
+		st := httpd.TelemetryStatus{
+			DoNotTrack:       doNotTrack,
+			RemoteConfigured: remoteActive,
+			LocalLog:         local != nil && store != nil,
+			RetentionDays:    retentionDays,
+		}
+		if ident != nil {
+			st.OptedOut = ident.OptedOut()
+			st.ShareIdentity = ident.SharesIdentity()
+			if !st.OptedOut {
+				st.InstallID = ident.Snapshot().InstallID
+			}
+		}
+		st.AnalyticsSending = remoteActive && !doNotTrack && ident != nil && !ident.ExportSuppressed()
+		st.ErrorReports = !doNotTrack && errorReports != nil && errorReports(ctx)
+		return st
+	}
+	return &httpd.TelemetryLocal{
+		Status: status,
+		List: func(ctx context.Context, since time.Time, limit int, event string) ([]telemetryadapter.ExportedEvent, error) {
+			if store == nil {
+				return nil, nil
+			}
+			rows, err := store.ListExportedTelemetryEventsSince(ctx, since, int64(limit), event)
+			if err != nil {
+				return nil, err
+			}
+			return telemetryadapter.DecodeExported(rows), nil
+		},
+		Record: func(ctx context.Context, ev telemetryadapter.ExportedEvent) {
+			if local == nil || (ident != nil && ident.OptedOut()) {
+				return
+			}
+			telemetryadapter.RecordExported(ctx, local, ev)
+		},
+		SetOptedOut: func(_ context.Context, optedOut bool) error {
+			if cfg.DataDir == "" {
+				return errors.New("telemetry data dir unknown")
+			}
+			marker := filepath.Join(cfg.DataDir, telemetryadapter.OptOutFile)
+			if !optedOut {
+				if err := os.Remove(marker); err != nil && !os.IsNotExist(err) {
+					return err
+				}
+				return nil
+			}
+			if err := os.MkdirAll(cfg.DataDir, 0o700); err != nil {
+				return err
+			}
+			if err := os.WriteFile(marker, []byte("1\n"), 0o600); err != nil {
+				return err
+			}
+			// Counts held for the daily CLI summary are dropped at the opt-out,
+			// in memory and on disk, so a later opt-in cannot send them.
+			if parts.discardDaily != nil {
+				parts.discardDaily()
+			} else {
+				_ = os.Remove(filepath.Join(cfg.DataDir, "telemetry", "cli-usage-daily.json"))
+			}
+			return nil
+		},
+	}
 }
 
 const writeLockHeldEvent = "ao.daemon.write_lock_held"
@@ -129,9 +222,11 @@ func standaloneIdentity(cfg config.Config, log *slog.Logger) ports.TelemetryIden
 var gitHubLoginRetryDelays = []time.Duration{0, 30 * time.Second, 2 * time.Minute, 10 * time.Minute}
 
 // startGitHubLoginResolver resolves the authenticated human GitHub login in the
-// background and stores it on the telemetry identity, so every exported daemon
-// event carries github_actor, not just ao.sessions.spawned. The provider is
-// rebuilt per attempt because it reads the token at construction. Only the
+// background and stores it on the telemetry identity. The login is exported as
+// github_actor only when the user turned on "Include my account identity"
+// (off by default); otherwise it only tells onboarding that GitHub sign-in is
+// done. No lookup runs while telemetry is opted out. The provider is rebuilt
+// per attempt because it reads the token at construction. Only the
 // authenticated GitHub account is used, never git config.
 func startGitHubLoginResolver(ctx context.Context, cfg config.Config, ident ports.TelemetryIdentityStore, log *slog.Logger) {
 	if ident == nil || !cfg.Telemetry.Events || cfg.Telemetry.Remote != config.TelemetryRemotePostHog {
@@ -144,6 +239,9 @@ func startGitHubLoginResolver(ctx context.Context, cfg config.Config, ident port
 			case <-ctx.Done():
 				return
 			case <-time.After(delay):
+			}
+			if ident.OptedOut() {
+				continue
 			}
 			scm := newMultiSCMProvider(cfg.GitLab, log)
 			if scm == nil {

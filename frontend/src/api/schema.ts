@@ -9938,6 +9938,7 @@ export interface components {
             daemonVersion?: string;
             distinctId: string;
             githubLogin?: string;
+            githubSignedIn?: boolean;
             installId?: string;
             isSignedIn?: null | boolean;
             lifetimeSessions?: null | number;

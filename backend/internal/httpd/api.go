@@ -76,7 +76,10 @@ type APIDeps struct {
 	// TelemetryIdentity is the live telemetry identity, served to the phone by
 	// GET /api/v1/telemetry/identity and updated by the desktop over loopback.
 	TelemetryIdentity ports.TelemetryIdentityStore
-	LifetimeSessions  func(context.Context) (int64, error)
+	// TelemetryLocal serves `ao telemetry log|status|on|off` over loopback. Nil
+	// leaves those routes unmounted.
+	TelemetryLocal   *TelemetryLocal
+	LifetimeSessions func(context.Context) (int64, error)
 	// DaemonVersion is this daemon's release, reported to a paired phone.
 	DaemonVersion string
 	Mobile        *controllers.MobileController
