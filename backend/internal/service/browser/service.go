@@ -23,6 +23,7 @@ var actions = map[string]struct{}{
 	"console": {}, "errors": {}, "frame": {}, "dialog": {},
 	"devtools-open": {}, "devtools-close": {}, "target": {}, "profile": {},
 	"fill-secret": {}, "login": {},
+	"record-start": {}, "record-status": {}, "record-stop": {}, "record-read": {},
 }
 
 type sessionReader interface {

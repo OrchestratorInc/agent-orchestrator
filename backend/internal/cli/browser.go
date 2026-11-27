@@ -664,6 +664,7 @@ func newBrowserCommand(ctx *commandContext) *cobra.Command {
 		})
 	}
 	cmd.AddCommand(networkCmd)
+	cmd.AddCommand(newBrowserRecordCommand(ctx, &jsonOutput))
 
 	cmd.AddCommand(&cobra.Command{
 		Use:   "frame <ref|main>",
