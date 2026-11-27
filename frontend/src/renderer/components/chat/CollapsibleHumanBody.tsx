@@ -172,7 +172,11 @@ export function CollapsibleHumanBody({ stateKey, scrollWhenFolded = false, child
 					aria-expanded={open}
 					aria-controls={clipId}
 					onClick={toggle}
-					className="-mx-2 -mb-1 mt-1"
+					// Its own block, not on a text line whose strut adds space below it. The
+					// label lines up with the message text (the bubble's 12px less the pill's
+					// 8px), so the pill sits 4px in from the bubble's left edge; at the bottom
+					// it sits 4px from the edge too (the bubble's 10px less 6px).
+					className="-mx-2 mt-1 flex w-fit last:-mb-1.5"
 				>
 					{t(open ? "shell.showLess" : "shell.showMore")}
 					<ChevronDown

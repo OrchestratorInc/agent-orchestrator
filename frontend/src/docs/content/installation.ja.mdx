@@ -80,7 +80,7 @@ cask を使わずに、macOS または `.deb`・`.rpm` でインストールし�
 | 外部のコーディングエージェント（Orchestrator ではハーネスと呼びます） | インストール済みの CLI を使うエージェントセッション | Claude Code、Codex、Cursor、Aider、OpenCode など、対応しているツールをインストールします。最新の一覧とインターフェースの対応状況は[エージェント一覧](/plugins/agents)を参照してください。Unreal Agent は、macOS と Linux の Chat 用に Orchestrator に組み込まれています。 |
 | tmux | macOS の事前チェックと、旧来またはフォールバックのターミナルセッション | macOS・Linux のデスクトップパッケージに同梱されています。ソースから起動する場合は、システムの tmux が必要になることがあります。[Runtime](/plugins/runtimes) を参照してください。 |
 
-Orchestrator は、コンピューターにすでにインストールされ、サインイン済みのコーディングエージェントを使います。**Settings → Harness** には、対応エージェントごとの準備状況が表示され、対応しているエージェントでは **Install** と **Login** を使えます。Unreal Agent は例外で、Chat 専用の組み込みエージェントです。対応プラットフォームと権限には独自の制限があります。[エージェント一覧](/plugins/agents)を参照してください。
+Orchestrator は、コンピューターにすでにインストールされ、サインイン済みのコーディングエージェントを使います。**Settings → Agents** には、対応エージェントごとの準備状況が表示され、対応しているエージェントでは **Install** と **Login** を使えます。Unreal Agent は例外で、Chat 専用の組み込みエージェントです。対応プラットフォームと権限には独自の制限があります。[エージェント一覧](/plugins/agents)を参照してください。
 
 <span id="set-up-ao" />
 <span id="set-up-orchestrator" />
@@ -119,7 +119,7 @@ GitLab の場合は、GitLab のトークンまたは `glab` でサインイン�
 <span id="install-and-sign-in-to-an-external-agent" />
 ### 外部エージェントをインストールしてサインインする
 
-**Settings → Harness** を開き、使いたいエージェントを選びます。インストールされていない場合は **Install**（または **Open installation guide**）を選びます。サインインしていない場合は **Login** を選び、開いたサインインを完了してください。Settings にインストール済みかつサインイン済みと表示されれば準備完了です。すでに使っていてサインイン済みのエージェントは自動で検出されます。
+**Settings → Agents** を開き、使いたいエージェントを選びます。インストールされていない場合は **Install**（または **Open installation guide**）を選びます。サインインしていない場合は **Login** を選び、開いたサインインを完了してください。Settings にインストール済みかつサインイン済みと表示されれば準備完了です。すでに使っていてサインイン済みのエージェントは自動で検出されます。
 
 ターミナルを使う場合は、エージェント自身のコマンドでサインインします。たとえば `codex login` を実行するか、`claude` を起動して `/login` を使います。その後 `ao agent ls --refresh` を実行して、Orchestrator にもう一度確認させます。
 
@@ -177,7 +177,7 @@ Orchestrator のアプリケーションの状態は、既定ですべて `~/.ao
 
 <Accordions>
 	<Accordion title="使えるエージェントがない">
-		**Settings → Harness** を開き、エージェントを選んで **Install** または **Login** を使ってください。ターミナルからは、エージェント自身のログインコマンドでサインインしてから `ao agent ls --refresh` を実行します。新しくインストールしたエージェントがまだ表示されない場合は、Orchestrator を終了して開き直し、デーモンに更新後のシェルの `PATH` を読み込ませてください。Unreal Agent は、対応する macOS と Linux の Chat 用に Orchestrator に組み込まれています。CLI をインストールせずに、そのまま選んでください。
+		**Settings → Agents** を開き、エージェントを選んで **Install** または **Login** を使ってください。ターミナルからは、エージェント自身のログインコマンドでサインインしてから `ao agent ls --refresh` を実行します。新しくインストールしたエージェントがまだ表示されない場合は、Orchestrator を終了して開き直し、デーモンに更新後のシェルの `PATH` を読み込ませてください。Unreal Agent は、対応する macOS と Linux の Chat 用に Orchestrator に組み込まれています。CLI をインストールせずに、そのまま選んでください。
 	</Accordion>
 	<Accordion title="GitHub のデータが表示されない">
 		`gh auth status` を実行してください。有効なアカウントが、リポジトリとそのプルリクエストにアクセスできることを確認します。

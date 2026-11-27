@@ -35,13 +35,13 @@ import {
 	type ConversationPage,
 } from "./api";
 import type { ChatConfigOption, ChatExcerpt, ChatImage, ChatModel, ChatResource, ChatSkill, ConversationSnapshot, TurnSettings } from "./types";
-import { cachedConversationState, createMobileConversationPageCache, discardHistoricalPages, olderPageFits, withLivePage } from "./snapshot";
+import { cacheConversationPages, cachedConversationState, createMobileConversationPageCache, discardHistoricalPages, olderPageFits, withLivePage } from "./snapshot";
 import { conversationActionError, conversationErrorCode, conversationErrorIsPermanent, ignoreStaleApproval } from "./conversationErrors";
 import { subscribeConversationEvents } from "./conversationEvents";
 import { conversationPollIntervalFor } from "./conversationPoll";
 import { createAsyncValueCache } from "./asyncValueCache";
-import { createRequestGate } from "./requestGate";
-import { createRefreshScheduler } from "./refreshScheduler";
+import { createRefreshQueue } from "./refreshQueue";
+import { conversationSaver, loadSavedConversation } from "./savedConversations";
 import { withAttachmentReferences } from "./messageAttachments";
 import { isEmptyTurnOptionCatalog, loadTurnOptionCatalog } from "./turnOptionsCatalog";
 import { rememberedTurnOptions, rememberTurnOptions, type TurnOptions } from "./lastTurnOptions";
@@ -49,10 +49,18 @@ import { NOT_PAIRED_ACTION_COPY, RECONNECTING_ACTION_COPY } from "../connectionE
 import { excerptDraftText } from "./responseQuotes";
 import { clearPendingSend, needsAttachmentRecovery, pendingSendKey, readPendingSend, reservePendingSend } from "./pendingSend";
 
-const REFRESH_WINDOW_MS = 120;
+/**
+ * The most often a changing chat is re-read. The daemon reports a change
+ * about every 100 ms while an agent writes; the first one is read at once and
+ * the rest at this pace, so a steady reply shows a few times a second rather
+ * than waiting for a pause that never comes (a debounce that restarted on
+ * every change held a streaming reply back until it stopped).
+ */
+export const REFRESH_INTERVAL_MS = 250;
 const conversationPageCache = createMobileConversationPageCache();
 const turnOptionsCache = createAsyncValueCache<string, TurnOptions>(16, 30_000);
 const skillsCache = createAsyncValueCache<string, ChatSkill[]>(16, 30_000);
+const NO_SKILLS: ChatSkill[] = [];
 
 export type PendingSend = {
 	id: string;
@@ -88,8 +96,12 @@ export type ConversationAction =
 
 export type MobileConversation = {
 	snapshot?: ConversationSnapshot;
+	/**
+	 * The snapshot is the page saved on the phone (see savedPageView), shown
+	 * read-only until the first live read replaces it.
+	 */
+	saved?: boolean;
 	loading: boolean;
-	refreshing: boolean;
 	loadingOlder: boolean;
 	error?: string;
 	unavailable?: { code?: string; message: string };
@@ -162,7 +174,9 @@ export function useMobileConversation(
 		: { pages: [] as ConversationPage[], loading: true });
 	const [pages, setPages] = useState<ConversationPage[]>(initialState.pages);
 	const [loading, setLoading] = useState(initialState.loading);
-	const [refreshing, setRefreshing] = useState(false);
+	// The page loaded from the phone, and whether no live read has answered since.
+	const [savedShown, setSavedShown] = useState(false);
+	const savedPage = useRef<ConversationPage | undefined>(undefined);
 	const [loadingOlder, setLoadingOlder] = useState(false);
 	const [error, setError] = useState<string>();
 	const [unavailable, setUnavailable] = useState<{ code?: string; message: string }>();
@@ -171,7 +185,8 @@ export function useMobileConversation(
 	const [initialCatalog] = useState(() => rememberedTurnOptions(cacheKey, initialState.pages.length ? mergeConversationPages(initialState.pages)?.harness : undefined));
 	const [models, setModels] = useState<ChatModel[]>(() => initialCatalog?.models ?? []);
 	const [configOptions, setConfigOptions] = useState<ChatConfigOption[]>(() => initialCatalog?.configOptions ?? []);
-	const [skills, setSkills] = useState<ChatSkill[]>([]);
+	// With the agent that reported them: see `skills` below.
+	const [reportedSkills, setReportedSkills] = useState<{ harness?: string; skills: ChatSkill[] }>({ skills: NO_SKILLS });
 	const [pendingSends, setPendingSends] = useState<PendingSend[]>([]);
 	const [completedRetry, setCompletedRetry] = useState<{ id: string; draftText: string }>();
 	const [pendingActions, setPendingActions] = useState<ConversationAction[]>([]);
@@ -185,7 +200,9 @@ export function useMobileConversation(
 	// lands late must not undo it. `ifMissing` waits on the one in flight.
 	const turnOptionsRequest = useRef(0);
 	const turnOptionsInFlight = useRef<Promise<unknown> | undefined>(undefined);
-	const refreshGate = useRef(createRequestGate()).current;
+	const refreshTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+	const lastRefreshAt = useRef(0);
+	const refreshQueue = useRef(createRefreshQueue()).current;
 
 	const snapshot = useMemo(() => mergeConversationPages(pages), [pages]);
 	// The agent the chat runs, for a retried switch's send (see deliver).
@@ -198,6 +215,10 @@ export function useMobileConversation(
 	// clearConversationProviderCatalogs).
 	const harnessShown = useRef<{ cacheKey: string; harness: string } | undefined>(undefined);
 	const snapshotHarness = snapshot?.harness;
+	// Only the chat's current agent's: in the render that first names a new agent
+	// the outgoing agent's list would otherwise still be here, and the screen
+	// would remember it for the new agent (rememberedSkills).
+	const skills = reportedSkills.harness === snapshotHarness ? reportedSkills.skills : NO_SKILLS;
 	useEffect(() => {
 		if (!snapshotHarness) return;
 		const previous = harnessShown.current;
@@ -217,42 +238,54 @@ export function useMobileConversation(
 		turnOptionsCache.delete(cacheKey);
 		setModels([]);
 		setConfigOptions([]);
+		// Its "/" list too, which the New task page reuses (rememberedSkills).
+		skillsCache.delete(cacheKey);
+		setReportedSkills({ skills: NO_SKILLS });
 	}, [cacheKey, snapshotHarness]);
 
 	const refresh = useCallback(async () => {
 		if (!cfg) return;
-		const request = refreshGate.begin();
-		setRefreshing(true);
-		try {
-			const live = options?.reviewId
-				? await getReviewerConversationPage(cfg, options.reviewId)
-				: await getConversationPage(cfg, sessionId);
-			if (!mounted.current || !refreshGate.isCurrent(request)) return;
-			setPages((old) => {
-				const next = withLivePage(old, live);
-				conversationPageCache.set(cacheKey, next);
-				return next;
-			});
-			setUnavailable(undefined);
-			setError(undefined);
-		} catch (cause) {
-			if (!mounted.current || !refreshGate.isCurrent(request)) return;
-			const classified = classifyConversationError(cause, Boolean(options?.reviewId));
-			if (classified.permanent) setUnavailable({ code: classified.code, message: classified.message });
-			else setError(classified.message);
-		} finally {
-			if (mounted.current && refreshGate.isCurrent(request)) {
-				setLoading(false);
-				setRefreshing(false);
+		// One read at a time, at most one more queued (see refreshQueue): every
+		// answer is shown, where a newer request used to discard the older one's.
+		// On a slow link that left the transcript still for the whole reply.
+		await refreshQueue.run(async (isCurrent) => {
+			try {
+				const live = options?.reviewId
+					? await getReviewerConversationPage(cfg, options.reviewId)
+					: await getConversationPage(cfg, sessionId);
+				if (!mounted.current || !isCurrent()) return;
+				setPages((old) => {
+					const next = withLivePage(old, live);
+					cacheConversationPages(conversationPageCache, cacheKey, old, next);
+					// Also on the phone, for after the app is closed (see savedConversations).
+					if (next !== old) conversationSaver.schedule(cacheKey, next[0]);
+					return next;
+				});
+				setSavedShown(false);
+				setUnavailable(undefined);
+				setError(undefined);
+			} catch (cause) {
+				if (!mounted.current || !isCurrent()) return;
+				const classified = classifyConversationError(cause, Boolean(options?.reviewId));
+				if (classified.permanent) setUnavailable({ code: classified.code, message: classified.message });
+				else setError(classified.message);
+			} finally {
+				if (mounted.current && isCurrent()) setLoading(false);
 			}
-		}
-	}, [cacheKey, cfg, options?.reviewId, refreshGate, sessionId]);
+		});
+	}, [cacheKey, cfg, options?.reviewId, refreshQueue, sessionId]);
 
-	// Event-driven reads always run the current refresh (connection, chat).
-	const refreshRef = useRef(refresh);
-	refreshRef.current = refresh;
-	const [refreshScheduler] = useState(() => createRefreshScheduler(() => refreshRef.current(), REFRESH_WINDOW_MS));
-	const scheduleRefresh = useCallback(() => refreshScheduler.request(), [refreshScheduler]);
+	// The first change is read at once; changes after it at most every
+	// REFRESH_INTERVAL_MS. One timer covers every change made while it waits.
+	const scheduleRefresh = useCallback(() => {
+		if (refreshTimer.current) return;
+		const wait = Math.max(0, lastRefreshAt.current + REFRESH_INTERVAL_MS - Date.now());
+		refreshTimer.current = setTimeout(() => {
+			refreshTimer.current = null;
+			lastRefreshAt.current = Date.now();
+			void refresh();
+		}, wait);
+	}, [refresh]);
 
 	const loadOlder = useCallback(async () => {
 		if (!cfg || !snapshot?.hasMoreBefore || loadingOlder) return;
@@ -279,6 +312,19 @@ export function useMobileConversation(
 		setPages(cached.pages);
 		setLoading(cached.loading);
 		setUnavailable(undefined);
+		setSavedShown(false);
+		// Nothing in memory (the app was closed since): the page saved on the phone
+		// shows, read-only, until the first read answers, which replaces it.
+		if (!cacheKey || cached.pages.length) return;
+		let active = true;
+		void loadSavedConversation(cacheKey).then((saved) => {
+			if (!active || !saved) return;
+			savedPage.current = saved;
+			setPages((current) => current.length ? current : [saved]);
+			setSavedShown(true);
+			setLoading(false);
+		});
+		return () => { active = false; };
 	}, [cacheKey]);
 
 	// Asks the machine whenever a verified connection to it is (again) available.
@@ -287,10 +333,11 @@ export function useMobileConversation(
 		void refresh();
 		return () => {
 			mounted.current = false;
-			refreshGate.invalidate();
-			refreshScheduler.cancel();
+			refreshQueue.invalidate();
+			if (refreshTimer.current) clearTimeout(refreshTimer.current);
+			refreshTimer.current = null;
 		};
-	}, [refresh, refreshGate, refreshScheduler]);
+	}, [refresh, refreshQueue]);
 
 	useEffect(() => {
 		setPendingSends([]);
@@ -352,9 +399,15 @@ export function useMobileConversation(
 
 	const loadSkills = useCallback(async () => {
 		if (!cfg || unavailable || !hasConversation) return skills;
+		const harness = harnessRef.current;
 		try {
 			const next = await skillsCache.load(cacheKey, () => getConversationSkills(cfg, sessionId));
-			if (mounted.current) setSkills(next);
+			// A list read for the agent the chat has since switched from is not this one's.
+			if (harnessRef.current !== harness) {
+				skillsCache.delete(cacheKey);
+				return [];
+			}
+			if (mounted.current) setReportedSkills({ harness, skills: next });
 			return next;
 		} catch {
 			return skills;
@@ -590,7 +643,7 @@ export function useMobileConversation(
 		async () => {
 			await runAction("mcp", () => requireConfig(cfg, offline, (c) => reloadMcpServers(c, sessionId)));
 			skillsCache.delete(cacheKey);
-			setSkills([]);
+			setReportedSkills({ skills: NO_SKILLS });
 		},
 		[cacheKey, cfg, offline, runAction, sessionId],
 	);
@@ -601,8 +654,8 @@ export function useMobileConversation(
 
 	return {
 		snapshot,
+		saved: savedShown && pages[0] !== undefined && pages[0] === savedPage.current,
 		loading,
-		refreshing,
 		loadingOlder,
 		error,
 		unavailable,

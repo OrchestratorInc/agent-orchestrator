@@ -76,7 +76,7 @@ Run `ao status` to confirm it works. Commands that act on projects and sessions 
 | External coding agent (called a harness in Orchestrator) | Agent sessions that use an installed CLI | Install a supported tool such as Claude Code, Codex, Cursor, Aider, or OpenCode. See the [agent catalog](/plugins/agents) for the current list and interface support. Unreal Agent is built into Orchestrator for Chat on macOS and Linux. |
 | tmux | macOS preflight and legacy/fallback terminal sessions | Desktop macOS/Linux packages include it. Source launches may need system tmux; see [Runtime](/plugins/runtimes). |
 
-Orchestrator uses the coding agents and sign-ins already installed on your computer. **Settings → Harness** shows each supported agent's readiness and offers **Install** and **Login** for agents that support them. Unreal Agent is a built-in Chat-only exception with its own platform and permission limits. See the [agent catalog](/plugins/agents).
+Orchestrator uses the coding agents and sign-ins already installed on your computer. **Settings → Agents** shows each supported agent's readiness and offers **Install** and **Login** for agents that support them. Unreal Agent is a built-in Chat-only exception with its own platform and permission limits. See the [agent catalog](/plugins/agents).
 
 <span id="set-up-ao" />
 ## Set up Orchestrator
@@ -111,7 +111,7 @@ For GitLab, sign in with a GitLab token or `glab`. See [source-control setup](/p
 
 ### Install and sign in to an external agent
 
-Open **Settings → Harness** and select the agent you want to use. If it isn't installed, choose **Install** (or **Open installation guide**). If it isn't signed in, choose **Login** and finish the sign-in that opens. The agent is ready when Settings shows it installed and signed in. An agent you already use and are signed in to is detected automatically.
+Open **Settings → Agents** and select the agent you want to use. If it isn't installed, choose **Install** (or **Open installation guide**). If it isn't signed in, choose **Login** and finish the sign-in that opens. The agent is ready when Settings shows it installed and signed in. An agent you already use and are signed in to is detected automatically.
 
 If you prefer the terminal, sign in with the agent's own command instead, for example `codex login`, or run `claude` and use `/login`. Then run `ao agent ls --refresh` so Orchestrator checks again.
 
@@ -165,7 +165,7 @@ All Orchestrator application state lives under `~/.ao` by default, including the
 
 <Accordions>
 	<Accordion title="No agent is available">
-		Open **Settings → Harness**, select the agent, and use **Install** or **Login**. From a terminal, sign in with the agent's own login command, then run `ao agent ls --refresh`. If a newly installed agent still doesn't appear, quit and reopen Orchestrator so its daemon picks up your updated shell `PATH`. Unreal Agent is built into Orchestrator for Chat on supported macOS and Linux; choose it directly instead of installing a CLI.
+		Open **Settings → Agents**, select the agent, and use **Install** or **Login**. From a terminal, sign in with the agent's own login command, then run `ao agent ls --refresh`. If a newly installed agent still doesn't appear, quit and reopen Orchestrator so its daemon picks up your updated shell `PATH`. Unreal Agent is built into Orchestrator for Chat on supported macOS and Linux; choose it directly instead of installing a CLI.
 	</Accordion>
 	<Accordion title="GitHub data is missing">
 		Run `gh auth status`. Confirm the active account can access the repository and its pull requests.

@@ -299,7 +299,7 @@ function ProjectCuesSettings({ projectId, cloudOrgId, onBusyChange, createOnly =
 					value={draft.name}
 					onChange={(event) => setDraft((d) => ({ ...d, name: event.target.value }))}
 					placeholder={t("cues.namePlaceholder")}
-					className="settings-field-control h-(--size-settings-action-height) rounded-md!"
+					className="settings-field-control h-(--size-settings-action-height) rounded-[var(--field-radius,var(--radius-md))]!"
 					autoFocus
 				/>
 			</div>
@@ -331,7 +331,7 @@ function ProjectCuesSettings({ projectId, cloudOrgId, onBusyChange, createOnly =
 						setDraft((d) => command ? { ...d, command: value } : { ...d, prompt: value });
 					}}
 					placeholder={t(command ? "cues.commandPlaceholder" : "cues.promptPlaceholder")}
-					className="settings-field-control min-h-(--size-textarea-min) resize-none overflow-y-auto py-2.5 rounded-md! disabled:cursor-not-allowed disabled:opacity-50"
+					className="settings-field-control min-h-(--size-textarea-min) resize-none overflow-y-auto py-2.5 rounded-[var(--field-radius,var(--radius-md))]! disabled:cursor-not-allowed disabled:opacity-50"
 				/>
 			</div>
 

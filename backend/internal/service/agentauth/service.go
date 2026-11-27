@@ -9,12 +9,15 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
+	"slices"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/mastracode"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/opencodev2"
+	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/primeagent"
 	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/apierr"
 	"github.com/aoagents/agent-orchestrator/backend/internal/process"
 	"github.com/aoagents/agent-orchestrator/backend/internal/providerkeys"
@@ -98,6 +101,44 @@ type Plan struct {
 	launcher         string
 	launcherArgs     []string
 	hiddenTerminal   bool
+	// guidedMethods are background login methods for a CLI whose sign-in
+	// exists only in its interactive menu: each runs the plan's command in a
+	// hidden terminal and walks the menu with the reviewed steps.
+	guidedMethods map[string][]guidedStep
+	// signInKeepsRunning marks a CLI that stays open after signing in, so a
+	// background sign-in finishes once the harness's auth probe passes.
+	signInKeepsRunning bool
+	// loginURLRules allow the sign-in link printed in the hidden terminal to
+	// be shown in the panel.
+	loginURLRules []loginURLRule
+	// guidedPlatforms limits guidedMethods and signInKeepsRunning to the
+	// operating systems where the harness's auth probe can confirm a sign-in
+	// while the CLI runs. Empty means every platform.
+	guidedPlatforms []string
+	// signedInScreens are texts the CLI shows only once it is signed in, and
+	// signOutSteps lead from them back to its login menu. A CLI that shows the
+	// menu only when signed out would otherwise leave a guided login waiting
+	// for a menu that never appears: seen before the method's first step is
+	// sent, the sign-out steps run first, so the login replaces the existing
+	// sign-in.
+	signedInScreens []string
+	signOutSteps    []guidedStep
+	// codePrompt is the text a guided login's CLI shows when it waits for the
+	// authorization code the browser page displays; while it shows, the panel
+	// offers its code box and SubmitLoginCode types the code into the CLI.
+	// codeRejected is the text the CLI shows when it rejects that code.
+	codePrompt   string
+	codeRejected string
+}
+
+// currentGOOS is the platform guidedPlatforms is checked against; tests
+// replace it.
+var currentGOOS = runtime.GOOS
+
+// guidedSupported reports whether this plan's guided methods and
+// keep-running completion apply on this platform.
+func (p Plan) guidedSupported() bool {
+	return len(p.guidedPlatforms) == 0 || slices.Contains(p.guidedPlatforms, currentGOOS)
 }
 
 // TerminalOpener opens the daemon-trusted terminal used for a native
@@ -381,6 +422,10 @@ func (s *Service) startReserved(ctx context.Context, plan Plan) (StartResult, er
 			return StartResult{}, apierr.Internal("AGENT_AUTH_DATA_HOME_UNAVAILABLE", err.Error())
 		}
 		env["XDG_DATA_HOME"] = dataHome
+	}
+	if plan.AgentID == "prime-agent" && s.dataDir != "" {
+		// Sign in to the profile sessions run with, not ~/.prime/agent.
+		primeagent.New().AugmentRuntimeEnv(env, s.dataDir)
 	}
 	if len(env) > 0 {
 		input.Env = env

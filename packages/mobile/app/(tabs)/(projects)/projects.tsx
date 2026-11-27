@@ -23,7 +23,8 @@ import type { Theme } from "../../../lib/theme";
 import { useTheme, useThemedStyles } from "../../../lib/ThemeProvider";
 import { useOrchestratorLauncher } from "../../../lib/useOrchestratorLauncher";
 import { useRefreshActions } from "../../../lib/useRefreshActions";
-import { useBoardFailure } from "../../../lib/useBoardFailure";
+import { useBoardFailure, useBoardFailureKind } from "../../../lib/useBoardFailure";
+import { useErrorShown } from "../../../lib/telemetry/useErrorShown";
 import { TabPageScroll } from "../../../lib/TabPageScroll";
 import { space } from "../../../lib/tokens";
 import { Button, EmptyState } from "../../../lib/ui";
@@ -101,6 +102,14 @@ export default function ProjectsScreen() {
 		[cloud, hostStates],
 	);
 	const failure = useBoardFailure();
+	const failureKind = useBoardFailureKind();
+	// The same guards as the render below: nothing while unpaired or while the
+	// spinner stands in for the list.
+	const spinnerShown = (fleetLoading || cloudPending || cloudLoading) && allProjects.length === 0 && !cloudReady;
+	useErrorShown(unpaired || spinnerShown || rows.length > 0 ? null
+		: cloudFailed ? "cloud_unavailable"
+			: fleetError && !cloud ? (hostStates.length > 1 ? "unreachable" : failureKind)
+				: null);
 
 	const openProject = (row: OrchestratorProjectRow) => {
 		const hostId = "hostId" in row.project && typeof row.project.hostId === "string" ? row.project.hostId : undefined;

@@ -468,6 +468,10 @@ async function fetchConversationPage(sessionId: string, hostId?: string, beforeS
 	return toSnapshot(await fetchConversationWire(sessionId, hostId, conversationPageQuery(hostId, beforeSequence)));
 }
 
+export async function fetchRecentConversation(sessionId: string, hostId?: string): Promise<ConversationSnapshot> {
+	return toSnapshot(await fetchConversationWire(sessionId, hostId, { limit: 200, outputLimit: 64 }));
+}
+
 /** The whole output of one activity, for a page that carries only its head and tail. */
 export async function fetchActivityOutput(sessionId: string, hostId: string | undefined, sequence: number, activityId: string): Promise<string | undefined> {
 	const wire = await fetchConversationWire(sessionId, hostId, { beforeSequence: sequence + 1, afterSequence: sequence > 1 ? sequence - 1 : undefined, limit: 1 });
@@ -2414,10 +2418,16 @@ export function useWorkspaceFilePaths(sessionId: string | undefined, enabled: bo
  * paths in the message it sends, which is how an image reaches an agent whose
  * conversation carries text: the same thing spawn does for the opening brief.
  */
-export function useStageAttachments(sessionId: string | undefined, hostId?: string) {
+export function useStageAttachments(sessionId: string | undefined, hostId?: string, archived = false) {
+	const queryClient = useQueryClient();
 	return useCallback(
 		async (attachments: OutgoingAttachment[], signal?: AbortSignal): Promise<string[]> => {
 			if (!sessionId || attachments.length === 0) return [];
+			if (archived) {
+				const restores = queryClient.getMutationCache().findAll({ mutationKey: ["resume-agent", hostId ?? "local", sessionId], status: "pending" });
+				await Promise.all(restores.map((restore) => restore.continue()));
+				signal?.throwIfAborted();
+			}
 			// A file too large to inline is streamed from disk to this session's
 			// daemon first, and the request names the upload.
 			const wire = await toWireAttachments(attachments, hostId, signal);
@@ -2429,7 +2439,7 @@ export function useStageAttachments(sessionId: string | undefined, hostId?: stri
 			if (error) throw error;
 			return data?.paths ?? [];
 		},
-		[hostId, sessionId],
+		[archived, hostId, queryClient, sessionId],
 	);
 }
 
@@ -2549,6 +2559,7 @@ export function toSnapshot(wire: WireSnapshot): ConversationSnapshot {
 			retryOfTurnId: turn.retryOfTurnId,
 			hasRetryAttempt: turn.hasRetryAttempt,
 			hasHumanPrompt: turn.hasHumanPrompt,
+			hasEventPrompt: turn.hasEventPrompt,
 			errorMessage: turn.errorMessage,
 			failureCode: turn.failureCode,
 			usageLimit: turn.usageLimit ? {
