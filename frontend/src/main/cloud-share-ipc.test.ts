@@ -41,7 +41,7 @@ const HOST_PROXY = "http://127.0.0.1:9/proxy-token";
 /** A remote host's artifact as its daemon serves it: bytes, and the modification time its tag names. */
 type HostArtifact = { body: string; mtimeNs: bigint; tag?: boolean; shortBy?: number; served?: () => void; status?: number; resolvesTo?: string; sendsResolved?: false };
 
-function setup(options: { token?: string | null; finalizeStatus?: number; finalizeCode?: string; shareStatus?: number; shareCode?: string; listStatus?: number; unreachable?: boolean; shares?: unknown[]; listGate?: Promise<void>; hostFiles?: Map<string, HostArtifact>; files?: boolean; refuseVideos?: boolean; cloudFiles?: Map<string, string>; sharePredatesFiles?: boolean; sharePageFiles?: unknown } = {}) {
+function setup(options: { token?: string | null; finalizeStatus?: number; finalizeCode?: string; shareStatus?: number; shareCode?: string; listStatus?: number; unreachable?: boolean; shares?: unknown[]; listGate?: Promise<void>; hostFiles?: Map<string, HostArtifact>; files?: boolean; refuseVideos?: boolean; cloudFiles?: Map<string, string>; cloudListStatus?: number; sharePredatesFiles?: boolean; sharePageFiles?: unknown } = {}) {
 	const handlers = new Map<string, (event: unknown, ...args: unknown[]) => unknown>();
 	const requests: string[] = [];
 	const bodies = new Map<string, unknown>();
@@ -118,6 +118,7 @@ function setup(options: { token?: string | null; finalizeStatus?: number; finali
 			}
 			if (pathname.endsWith("/uploads/abort")) return new Response(null, { status: 204 });
 			if (pathname === `${CLOUD_SESSION_PATH}/artifacts`) {
+				if (options.cloudListStatus) return json({ code: "unavailable", message: "Try again later." }, options.cloudListStatus);
 				// A session's committed files: the plan, and any the test names, each with its SHA-256.
 				const listed = [...(options.cloudFiles ?? [])].map(([name, body]) => ({ path: name, name: name.split("/").pop(), kind: "file", size: Buffer.byteLength(body), sha256: createHash("sha256").update(body).digest("hex") }));
 				return json({ artifacts: [{ path: "reports/q3 plan.md", name: "q3 plan.md", kind: "markdown", size: 4096, sha256: "0".repeat(64) }, ...listed] });
@@ -463,6 +464,16 @@ describe("cloudShare IPC", () => {
 			expect((await inspect()).pageFilesChanged).toBe(true);
 			// A delete that unpublishes the link reads the link alone.
 			await expect(invoke("cloudShare:inspect", page, { linkOnly: true })).resolves.not.toHaveProperty("pageFilesChanged");
+		});
+
+		it("still shows the page's link when its files cannot be looked up", async () => {
+			const options: Parameters<typeof setup>[0] = { cloudFiles: session(), sharePageFiles: { included: 3, refusedVideos: [], tooLargeVideos: [], missing: [] } };
+			const { invoke } = setup(options);
+			await expect(invoke("cloudShare:publish", page)).resolves.toMatchObject({ status: "published" });
+			options.cloudListStatus = 503;
+			const inspection = await invoke("cloudShare:inspect", page);
+			expect(inspection).toMatchObject({ shareId: SHARE_ID, fingerprint: sha(HTML), publishedFingerprint: sha(HTML) });
+			expect(inspection).not.toHaveProperty("pageFilesChanged");
 		});
 
 		it("publishes the page alone, and says so, to a control plane that predates a page's files", async () => {

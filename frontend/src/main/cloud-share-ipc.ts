@@ -392,8 +392,20 @@ export function registerCloudShareIpc(deps: CloudShareIpcDeps): void {
 			fingerprint: listed?.sha256 ?? file.fingerprint ?? "",
 			...(shareId ? { shareId } : {}),
 			...(publishedFingerprint ? { publishedFingerprint } : {}),
-			...(pageFiles && await cloudPageFilesChanged(file, pageFiles) ? { pageFilesChanged: true } : {}),
+			...(pageFiles && await cloudPageFilesChangedOrUnknown(file, pageFiles) ? { pageFilesChanged: true } : {}),
 		};
+	};
+
+	// The link and fingerprint are already known: a list that fails or times
+	// out leaves only the page's files unknown, which counts as unchanged, as a
+	// remote host that stops answering does.
+	const cloudPageFilesChangedOrUnknown = async (file: CloudSessionShareFile, recorded: Record<string, string>): Promise<boolean> => {
+		try {
+			return await cloudPageFilesChanged(file, recorded);
+		} catch (error) {
+			if (error instanceof CloudShareError) return false;
+			throw error;
+		}
 	};
 
 	// Whether any file a published cloud page used changed since: committed
