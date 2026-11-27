@@ -145,3 +145,55 @@ func TestVersionMoveSuccessfulServiceRecoveryKeepsQueuedTurn(t *testing.T) {
 		})
 	}
 }
+
+type versionAdmissionConversation struct {
+	*fakeConversation
+	cleanupErr error
+	stops      int
+}
+
+func (c *versionAdmissionConversation) Terminate() error {
+	c.stops++
+	return c.cleanupErr
+}
+
+func TestVersionMoveAdmissionCleanupFailureWithholdsRetry(t *testing.T) {
+	for _, fails := range []bool{false, true} {
+		t.Run(fmt.Sprintf("cleanup_fails=%v", fails), func(t *testing.T) {
+			conv := &versionAdmissionConversation{fakeConversation: newFakeConversation()}
+			conv.setCapabilities(ports.ChatCapabilities{})
+			if fails {
+				conv.cleanupErr = errors.New("provider host shutdown failed")
+			}
+			st := openStore(t)
+			next := 0
+			svc := chatsvc.New(chatsvc.Options{
+				Store: st, Sessions: st,
+				Drivers: fakeRegistry{driver: fakeDriver{conv: conv}},
+				Log:     slog.New(slog.DiscardHandler),
+				NewID: func() string {
+					next++
+					return fmt.Sprintf("admission-%d", next)
+				},
+			})
+			_, err := svc.Start(context.Background(), chatsvc.StartConfig{
+				SessionID: testSession, ProjectID: testProject, Harness: domain.HarnessCodex,
+				WorkspacePath: t.TempDir(), ProviderConversationID: conv.ProviderConversationID(),
+			})
+			var admissionErr *ports.ChatCapabilityError
+			if !errors.As(err, &admissionErr) || conv.stops != 1 {
+				t.Fatalf("admission rejection = %v, host stops = %d", err, conv.stops)
+			}
+			if fails {
+				if !errors.Is(err, ports.ErrChatRecoveryInconclusive) || !errors.Is(err, conv.cleanupErr) {
+					t.Fatalf("uncertain provider host permits retry: %v", err)
+				}
+			} else if err != admissionErr {
+				t.Fatalf("successful cleanup changed admission error: %v", err)
+			}
+			if _, err := svc.Controller(testSession); !errors.Is(err, chatsvc.ErrNoController) {
+				t.Fatalf("rejected controller was published: %v", err)
+			}
+		})
+	}
+}

@@ -1096,7 +1096,10 @@ func (s *Service) startLocked(ctx context.Context, cfg StartConfig) (*Controller
 			caps[ports.ChatCapabilityResume] = true
 		}
 		if err := chatAdmissionError(driver, cfg.Harness, caps, cfg.Permissions); err != nil {
-			_ = cleanupUnpublishedConversation(conv, false)
+			if cleanupErr := cleanupUnpublishedConversation(conv, false); cleanupErr != nil {
+				return nil, fmt.Errorf("%w: admission rejected and host shutdown failed: %w",
+					ports.ErrChatRecoveryInconclusive, errors.Join(err, cleanupErr))
+			}
 			return nil, err
 		}
 	}
