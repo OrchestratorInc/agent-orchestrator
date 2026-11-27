@@ -3307,6 +3307,8 @@
 	"files.sessionFiles": "Session files",
 	"files.error.loadWorkspace": "Unable to load workspace files",
 	"files.error.workspaceMissing": "This workspace no longer exists. Restore its folder, then retry.",
+	"files.workspacePending": "Setting up this session's workspace…",
+	"files.workspaceGone": "This session's workspace folder isn't on disk.",
 	"files.error.searchWorkspace": "Unable to search workspace files",
 	"files.browseAll": "Browse all files",
 	"files.reviewChanges": "Changes",

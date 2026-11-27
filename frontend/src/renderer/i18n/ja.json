@@ -2819,6 +2819,8 @@
 	"files.sessionFiles": "セッションファイル",
 	"files.error.loadWorkspace": "ワークスペースファイルを読み込めません",
 	"files.error.workspaceMissing": "このワークスペースはもう存在しません。フォルダーを復元してから再試行してください。",
+	"files.workspacePending": "このセッションのワークスペースを準備しています…",
+	"files.workspaceGone": "このセッションのワークスペースフォルダーがディスク上にありません。",
 	"files.error.searchWorkspace": "Unable to search workspace files",
 	"files.browseAll": "Browse all files",
 	"files.reviewChanges": "Changes",
