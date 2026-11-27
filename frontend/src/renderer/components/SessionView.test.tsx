@@ -1,4 +1,5 @@
 import { StrictMode, useEffect, type ReactNode } from "react";
+import type { ChatFileReference, FileAnnotationResolution } from "../../shared/chat-file-reference";
 import { noPRDetails } from "../lib/pr-display";
 import { queryShown } from "../lib/dom-selectors";
 import type { SessionPRSummary } from "../hooks/useSessionScmSummary";
@@ -84,6 +85,10 @@ const inspectorVisibilityRenders = vi.hoisted(() => [] as boolean[]);
 const chatSurfaceRenders = vi.hoisted(() => [] as string[]);
 const artifactFeedbackConsumes = vi.hoisted(() => [] as number[]);
 const chatSurfaceTransitionRenders = vi.hoisted(() => [] as boolean[]);
+const cloudChip = vi.hoisted(() => ({
+	reference: undefined as unknown as ChatFileReference,
+	resolution: { state: "unchanged" } as FileAnnotationResolution,
+}));
 const chatSurfaceWorkState = vi.hoisted(() => ({
 	controllerBusy: false,
 	hasRunningTurn: false,
@@ -481,12 +486,13 @@ vi.mock("./chat/SessionChatSurface", async () => {
 
 vi.mock("./chat/CloudSessionChatSurface", async (importOriginal) => ({
 	...await importOriginal<typeof import("./chat/CloudSessionChatSurface")>(),
-	CloudSessionChatSurface: ({ headerActions, sessionTabAction, controllerTransitioning, newWorkDisabled, onConversationWorkChange, reviewerTerminal, reviewerTarget, onOpenReviewerTerminal, onSelectChat, shellTarget }: { sessionTabAction?: ReactNode; controllerTransitioning?: boolean; newWorkDisabled?: boolean; onConversationWorkChange?: (state: typeof chatSurfaceWorkState) => void; reviewerTerminal?: { handleId: string; harness: string }; reviewerTarget?: { handleId: string; harness: string }; onOpenReviewerTerminal?: (target: { handleId: string; harness: string }) => void; onSelectChat?: () => void; shellTarget?: { handleId: string }; headerActions?: ReactNode }) => (
+	CloudSessionChatSurface: ({ headerActions, sessionTabAction, controllerTransitioning, newWorkDisabled, onConversationWorkChange, onOpenFileAnnotation, reviewerTerminal, reviewerTarget, onOpenReviewerTerminal, onSelectChat, shellTarget }: { onOpenFileAnnotation?: (reference: ChatFileReference, resolution: FileAnnotationResolution) => void; sessionTabAction?: ReactNode; controllerTransitioning?: boolean; newWorkDisabled?: boolean; onConversationWorkChange?: (state: typeof chatSurfaceWorkState) => void; reviewerTerminal?: { handleId: string; harness: string }; reviewerTarget?: { handleId: string; harness: string }; onOpenReviewerTerminal?: (target: { handleId: string; harness: string }) => void; onSelectChat?: () => void; shellTarget?: { handleId: string }; headerActions?: ReactNode }) => (
 		<div data-testid="cloud-chat-surface" data-transitioning={controllerTransitioning ? "true" : "false"} data-new-work-disabled={newWorkDisabled ? "true" : "false"}>
 			<div data-testid="cloud-chat-header-actions">{headerActions}</div>
 			{sessionTabAction}
 			<button type="button" onClick={() => onConversationWorkChange?.({ ...chatSurfaceWorkState })}>report cloud chat work</button>
 			<button type="button" onClick={() => onSelectChat?.()}>cloud chat tab</button>
+			<button type="button" onClick={() => onOpenFileAnnotation?.(cloudChip.reference, cloudChip.resolution)}>open cloud chip</button>
 			{reviewerTerminal ? <button type="button" onClick={() => onOpenReviewerTerminal?.(reviewerTerminal)}>cloud reviewer tab</button> : null}
 			<span data-testid="cloud-chat-target">{reviewerTarget ? `reviewer:${reviewerTarget.handleId}:${reviewerTarget.harness}` : shellTarget ? `shell:${shellTarget.handleId}` : "chat"}</span>
 		</div>
@@ -698,7 +704,9 @@ vi.mock("./SessionFileWorkspace", () => ({
 	},
 }));
 vi.mock("./CloudWorkspaceDiff", () => ({
-	CloudFileContentPane: ({ path }: { path: string }) => <div data-testid="cloud-file-workspace">{path}</div>,
+	CloudFileContentPane: ({ annotationRange, commitSha, initialMode, path, scope, source }: { annotationRange?: { line: number; endLine: number; lines: Array<{ newNo: number | null }> }; commitSha?: string; initialMode?: string; path: string; scope?: string; source?: { kind: string; view?: { prNumber?: number }; commitShas?: string[] } }) => (
+		<div data-commit={commitSha ?? ""} data-mode={initialMode} data-range={annotationRange ? `${annotationRange.line}-${annotationRange.endLine}:${annotationRange.lines.map((row) => row.newNo).join(",")}` : ""} data-scope={scope ?? ""} data-source={source ? `${source.kind}:${source.view?.prNumber ?? ""}:${source.commitShas?.join(",") ?? ""}` : ""} data-testid="cloud-file-workspace">{path}</div>
+	),
 	CloudWorkspaceDiff: ({ onOpenFile }: { onOpenFile?: (path: string) => void }) => (
 		<>
 			<button onClick={() => onOpenFile?.("src/cloud.ts")} type="button">open cloud file</button>
@@ -1497,6 +1505,38 @@ describe("SessionView", () => {
 		workspaceQueryState.data = workspaces;
 		render(<SessionView projectId="proj-1" sessionId="sess-orch" />);
 		expect(screen.queryByTestId("shared-project-control")).toBeNull();
+	});
+
+	it("opens a sent Cloud chat chip's file at its resolved lines, reading a PR's chip from that PR", () => {
+		const cloudSession: WorkspaceSession = { ...workerSession("sess-1"), workspaceId: "cloud-project", workspaceName: "Cloud project", mode: "chat", cloud: { orgId: "cloud-org" } };
+		workspaceQueryState.data = [...workspaces, { id: "cloud-project", name: "Cloud project", kind: "cloud", path: "", sessions: [cloudSession] }];
+		const sha = "c".repeat(40);
+		const base = { referenceFormat: "numbered-v1" as const, id: "r1", order: 1, sessionId: "sess-1", path: "src/a.ts", side: "new" as const, line: 2, endLine: 3, truncated: false, lines: [{ kind: "add" as const, side: "new" as const, oldNo: null, newNo: 2, text: "a" }, { kind: "add" as const, side: "new" as const, oldNo: null, newNo: 3, text: "b" }] };
+		cloudChip.reference = { ...base, scope: "staged", source: { kind: "workspace" } } as ChatFileReference;
+		cloudChip.resolution = { state: "moved", path: "src/b.ts", line: 4, endLine: 5, newLineOffset: 2 };
+		render(<SessionView cloudOrgId="cloud-org" projectId="cloud-project" sessionId="sess-1" />);
+
+		fireEvent.click(screen.getByRole("button", { name: "open cloud chip" }));
+		const moved = screen.getByTestId("cloud-file-workspace");
+		expect(moved).toHaveTextContent("src/b.ts");
+		expect(moved).toHaveAttribute("data-mode", "diff");
+		expect(moved).toHaveAttribute("data-scope", "staged");
+		expect(moved).toHaveAttribute("data-range", "4-5:4,5");
+		expect(moved).toHaveAttribute("data-source", "");
+
+		cloudChip.reference = { ...base, id: "r2", path: "src/pr.ts", scope: "committed", commitSha: sha, source: { kind: "pull_request", number: 42, url: "https://github.com/acme/app/pull/42", snapshot: "t" } } as ChatFileReference;
+		cloudChip.resolution = { state: "unchanged" };
+		fireEvent.click(screen.getByRole("button", { name: "open cloud chip" }));
+		const pr = screen.getAllByTestId("cloud-file-workspace").find((view) => view.textContent === "src/pr.ts");
+		expect(pr).toHaveAttribute("data-source", `snapshot:42:${sha}`);
+		expect(pr).toHaveAttribute("data-commit", "");
+		expect(pr).toHaveAttribute("data-range", "2-3:2,3");
+
+		// An unavailable reference has nothing to open.
+		cloudChip.reference = { ...base, id: "r3", path: "src/gone.ts", source: { kind: "workspace" } } as ChatFileReference;
+		cloudChip.resolution = { state: "unavailable" };
+		fireEvent.click(screen.getByRole("button", { name: "open cloud chip" }));
+		expect(screen.getAllByTestId("cloud-file-workspace").some((view) => view.textContent === "src/gone.ts")).toBe(false);
 	});
 
 	it("uses the project route to distinguish local and Cloud sessions with the same ID", () => {

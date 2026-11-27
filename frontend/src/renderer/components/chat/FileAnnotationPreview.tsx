@@ -1,15 +1,30 @@
 import { createContext, useContext, useEffect, useRef, useState } from "react";
 import { QueryClientContext, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
-import type { ChatFileReference, OpenFileAnnotation } from "../../../shared/chat-file-reference";
+import { FILE_REFERENCE_RESOLVE_UNSUPPORTED, type ChatFileReference, type FileAnnotationResolution, type OpenFileAnnotation } from "../../../shared/chat-file-reference";
 import { CapturedFileAnnotation } from "./CapturedFileAnnotation";
 import { Button } from "../ui/button";
 import { clientForSessionHost } from "../../lib/host-clients";
 import { subscribeWorkspaceFileChanges } from "../../lib/workspace-file-events";
 
-export const FileAnnotationContext = createContext<
-	{ sessionId: string; hostId?: string; onOpen?: OpenFileAnnotation; generation?: { current: number } } | undefined
->(undefined);
+export type FileAnnotationContextValue = {
+	sessionId: string;
+	hostId?: string;
+	onOpen?: OpenFileAnnotation;
+	generation?: { current: number };
+	/**
+	 * Resolves a reference somewhere other than the session's daemon (a Cloud
+	 * session's control plane). Its caller refreshes `queryKey` when the
+	 * workspace changes. Throwing FILE_REFERENCE_RESOLVE_UNSUPPORTED shows the
+	 * capture alone, as without a resolver.
+	 */
+	resolver?: {
+		queryKey: readonly unknown[];
+		resolve: (reference: ChatFileReference, signal?: AbortSignal) => Promise<FileAnnotationResolution>;
+	};
+};
+
+export const FileAnnotationContext = createContext<FileAnnotationContextValue | undefined>(undefined);
 
 export function FileAnnotationPreview({ reference, index, onNavigate }: { reference: ChatFileReference; index?: number; onNavigate?: () => void }) {
 	const context = useContext(FileAnnotationContext);
@@ -59,12 +74,15 @@ function ResolvedPreview({
 		};
 	}, []);
 	const queryClient = useQueryClient();
+	const resolver = context.resolver;
 	const query = useQuery({
-		queryKey: context.hostId
+		queryKey: resolver ? [...resolver.queryKey, reference.id]
+			: context.hostId
 			? ["file-annotation-source", context.hostId, context.sessionId, reference.id]
 			: ["file-annotation-source", context.sessionId, reference.id],
-		queryFn: async ({ signal }) => {
+		queryFn: async ({ signal }): Promise<FileAnnotationResolution> => {
 			if (reference.sessionId !== context.sessionId) throw new Error("CHAT_FILE_REFERENCE_INVALID");
+			if (resolver) return resolver.resolve(reference, signal);
 			const { data, error } = await clientForSessionHost(context.hostId).POST("/api/v1/sessions/{sessionId}/conversation/file-references/resolve", {
 				params: { path: { sessionId: context.sessionId } },
 				body: reference,
@@ -77,7 +95,8 @@ function ResolvedPreview({
 		staleTime: 0,
 		refetchOnWindowFocus: false,
 	});
-	useEffect(() => subscribeWorkspaceFileChanges(context.sessionId, queryClient, context.hostId), [context.sessionId, context.hostId, queryClient]);
+	useEffect(() => (resolver ? undefined : subscribeWorkspaceFileChanges(context.sessionId, queryClient, context.hostId)), [context.sessionId, context.hostId, queryClient, resolver]);
+	if (query.error?.message === FILE_REFERENCE_RESOLVE_UNSUPPORTED) return <CapturedPreview reference={reference} index={index} />;
 	const invalid = query.error?.message === "CHAT_FILE_REFERENCE_INVALID";
 	const state = query.isError ? undefined : query.data?.state;
 	return (

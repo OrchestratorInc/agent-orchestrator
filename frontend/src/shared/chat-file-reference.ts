@@ -105,3 +105,5 @@ export interface FileAnnotationResolution {
 	newLineOffset?: number;
 }
 export type OpenFileAnnotation = (reference: ChatFileReference, resolution: FileAnnotationResolution) => void;
+/** A resolver that cannot resolve references at all (an older Cloud control plane); the chip then shows its capture alone. */
+export const FILE_REFERENCE_RESOLVE_UNSUPPORTED = "FILE_REFERENCE_RESOLVE_UNSUPPORTED";

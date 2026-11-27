@@ -555,6 +555,67 @@ describe("cloud control-plane session lifecycle", () => {
 		}) }));
 	});
 
+	it("calls the review view routes and threads a view through the existing review routes", async () => {
+		const fetchMock = vi.fn(async () => new Response("{}", { status: 200, headers: { "Content-Type": "application/json" } }));
+		const client = createCloudCpClient({ baseUrl: "https://cloud.example.test", getToken: async () => "token", fetchImpl: fetchMock as typeof fetch });
+		const tip = "a".repeat(40);
+		const base = "b".repeat(40);
+		const view = { prNumber: 12, sourceUrl: "https://github.com/acme/app/pull/12", expectedTipSha: tip, expectedBaseSha: base, commitShas: ["c1", "c2"] };
+
+		await client.getWorkspaceBranches("org", "s", { repository: "docs" });
+		await client.getWorkspaceHistory("org", "s", { branch: "origin/feat/x" });
+		await client.getWorkspaceHistory("org", "s", { prNumber: 12, sourceUrl: view.sourceUrl }, { repository: "docs" });
+		await client.getWorkspaceCommitSelection("org", "s", { branch: "feat/x", expectedTipSha: tip, commitShas: [] });
+		await client.getWorkspaceReviewDiffs("org", "s", { scope: "committed", paths: ["a.ts"], contextLines: 3, ignoreWhitespace: false, ...view });
+		await client.getWorkspaceReviewRevision("org", "s", { path: "a.ts", scope: "committed", side: "after", ...view });
+		await client.getWorkspaceReviewFile("org", "s", { path: "a.ts", scope: "committed", ...view });
+		await client.resolveFileReference("org", "s", { repository: "docs" } as Parameters<typeof client.resolveFileReference>[2]);
+
+		const calls = fetchMock.mock.calls as unknown as Array<[string, RequestInit]>;
+		const prefix = "https://cloud.example.test/api/cloud/v1/orgs/org/sessions/s";
+		const viewQuery = `prNumber=12&sourceUrl=${encodeURIComponent(view.sourceUrl).replace(/%20/g, "+")}&expectedTipSha=${tip}&expectedBaseSha=${base}&commitShas=c1&commitShas=c2`;
+		expect(calls.map(([url]) => url)).toEqual([
+			`${prefix}/workspace/branches?repository=docs`,
+			`${prefix}/workspace/history?branch=origin%2Ffeat%2Fx`,
+			`${prefix}/workspace/history?prNumber=12&sourceUrl=${encodeURIComponent(view.sourceUrl)}&repository=docs`,
+			`${prefix}/workspace/history/selection`,
+			`${prefix}/workspace/review/diffs`,
+			`${prefix}/workspace/review/revision?path=a.ts&scope=committed&side=after&${viewQuery}`,
+			`${prefix}/workspace/review/file?path=a.ts&scope=committed&${viewQuery}`,
+			`${prefix}/conversation/file-references/resolve`,
+		]);
+		expect(calls[3][1]).toMatchObject({ method: "POST" });
+		expect(JSON.parse(calls[3][1].body as string)).toEqual({ branch: "feat/x", expectedTipSha: tip, commitShas: [] });
+		expect(JSON.parse(calls[4][1].body as string)).toEqual({ scope: "committed", paths: ["a.ts"], contextLines: 3, ignoreWhitespace: false, ...view });
+		expect(calls[7][1]).toMatchObject({ method: "POST" });
+		expect(JSON.parse(calls[7][1].body as string)).toEqual({ repository: "docs" });
+	});
+
+	it("surfaces a worker without views as a typed 501", async () => {
+		const fetchMock = vi.fn(async () => new Response(JSON.stringify({ code: "WORKSPACE_VIEW_UNSUPPORTED", message: "unsupported" }), { status: 501, headers: { "Content-Type": "application/json" } }));
+		const client = createCloudCpClient({ baseUrl: "https://cloud.example.test", getToken: async () => "token", fetchImpl: fetchMock as typeof fetch });
+		await expect(client.getWorkspaceBranches("org", "s")).rejects.toMatchObject({ status: 501, code: "WORKSPACE_VIEW_UNSUPPORTED" });
+	});
+
+	// A first pull request fetch can outlast the load balancer: the control
+	// plane answers WORKSPACE_VIEW_PREPARING and keeps fetching, so the view is
+	// asked again after Retry-After.
+	it("asks again for a view the control plane is still preparing", async () => {
+		const preparing = () => new Response(JSON.stringify({ code: "WORKSPACE_VIEW_PREPARING", message: "preparing" }), { status: 503, headers: { "Content-Type": "application/json", "Retry-After": "0" } });
+		const history = { view: { kind: "pull_request", name: "#12", tipSha: "a", baseSha: "b", baseRef: "origin/main", rangeMode: "since_base" }, commits: [], commitsTruncated: false, rangeSummary: { files: 0, additions: 0, deletions: 0 } };
+		const fetchMock = vi.fn()
+			.mockResolvedValueOnce(preparing())
+			.mockResolvedValueOnce(new Response(JSON.stringify(history), { status: 200, headers: { "Content-Type": "application/json" } }));
+		const client = createCloudCpClient({ baseUrl: "https://cloud.example.test", getToken: async () => "token", fetchImpl: fetchMock as typeof fetch });
+		await expect(client.getWorkspaceHistory("org", "s", { prNumber: 12 })).resolves.toEqual(history);
+		expect(fetchMock).toHaveBeenCalledTimes(2);
+
+		const stillPreparing = vi.fn(async () => preparing());
+		const giveUp = createCloudCpClient({ baseUrl: "https://cloud.example.test", getToken: async () => "token", fetchImpl: stillPreparing as typeof fetch });
+		await expect(giveUp.getWorkspaceBranches("org", "s")).rejects.toMatchObject({ status: 503, code: "WORKSPACE_VIEW_PREPARING" });
+		expect(stillPreparing).toHaveBeenCalledTimes(4);
+	});
+
 	it("posts restore intent for one deleted, encoded session", async () => {
 		const fetchMock = vi.fn(async () =>
 			new Response(

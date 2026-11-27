@@ -1,4 +1,4 @@
-import { branchKey } from "../lib/files-review-selection";
+import { annotationSource, branchKey } from "../lib/files-review-selection";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
@@ -20,7 +20,6 @@ import {
 	sessionWorkspaceFilesQueryOptions,
 	clearMissingWorkspace,
 	isMissingWorkspaceError,
-	type FilesBranchTarget,
 	type FilesSource,
 	type WorkspaceFilesResponse,
 	useWorkspaceFileConnectionState,
@@ -50,13 +49,6 @@ import { isSvgPath } from "../lib/image-files";
 import type { ProjectKind } from "../types/workspace";
 
 const WORKSPACE_SOURCE: FilesSource = { kind: "workspace" };
-
-// The agent reads which branch a comment is about from this.
-function annotationSource(branch: FilesBranchTarget): string {
-	if (branch.kind === "branch") return `Branch ${branch.name}`;
-	if (branch.kind === "pull_request") return `PR #${branch.number} (${branch.url})`;
-	return "Workspace";
-}
 
 function hasReviewableChanges(manifest: WorkspaceFilesResponse): boolean {
 	const { sections } = manifest;

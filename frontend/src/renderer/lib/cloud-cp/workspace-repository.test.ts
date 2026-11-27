@@ -18,6 +18,19 @@ describe("workspace repository scoping", () => {
 		expect(getWorkspaceReviewTree).toHaveBeenCalledWith("org", "s", "src", { repository: "11x" });
 	});
 
+	it("scopes the branch, history and selection calls of a review view", async () => {
+		const getWorkspaceBranches = vi.fn().mockResolvedValue({});
+		const getWorkspaceHistory = vi.fn().mockResolvedValue({});
+		const getWorkspaceCommitSelection = vi.fn().mockResolvedValue({});
+		const scoped = withWorkspaceRepository({ getWorkspaceBranches, getWorkspaceHistory, getWorkspaceCommitSelection } as unknown as CloudCpClient, "docs");
+		await scoped.getWorkspaceBranches("org", "s");
+		await scoped.getWorkspaceHistory("org", "s", { branch: "main" });
+		await scoped.getWorkspaceCommitSelection("org", "s", { branch: "main", commitShas: [] });
+		expect(getWorkspaceBranches).toHaveBeenCalledWith("org", "s", { repository: "docs" });
+		expect(getWorkspaceHistory).toHaveBeenCalledWith("org", "s", { branch: "main" }, { repository: "docs" });
+		expect(getWorkspaceCommitSelection).toHaveBeenCalledWith("org", "s", { branch: "main", commitShas: [] }, { repository: "docs" });
+	});
+
 	it("addresses sibling files as ../<repository>/<path>", () => {
 		expect(joinWorkspaceRepositoryPath("11x", "src/a.ts")).toBe("../11x/src/a.ts");
 		expect(joinWorkspaceRepositoryPath(undefined, "src/a.ts")).toBe("src/a.ts");

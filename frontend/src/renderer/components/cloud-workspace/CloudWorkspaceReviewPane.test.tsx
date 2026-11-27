@@ -5,13 +5,14 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { CloudCpClient, CloudCpWorkspaceReviewFileSummary, CloudCpWorkspaceReviewResponse } from "../../lib/cloud-cp";
+import { CloudCpError, type CloudCpClient, type CloudCpWorkspaceReviewFileSummary, type CloudCpWorkspaceReviewResponse } from "../../lib/cloud-cp";
+import type { FilesReviewSelection } from "../../hooks/useFilesReviewSelection";
 import { useUiStore } from "../../stores/ui-store";
 import type { FileAnnotationModel } from "../WorkspaceDiffView";
 import { TooltipProvider } from "../ui/tooltip";
 import { CloudWorkspaceReviewPane } from "./CloudWorkspaceReviewPane";
 
-vi.mock("./CloudDiffFile", () => ({ CloudDiffFile: ({ file, split }: { file: CloudCpWorkspaceReviewFileSummary; split: boolean }) => <div data-split={String(split)} data-testid={`diff:${file.path}`} /> }));
+vi.mock("./CloudDiffFile", () => ({ CloudDiffFile: ({ chatReferences, file, split, surface }: { chatReferences?: boolean; file: CloudCpWorkspaceReviewFileSummary; split: boolean; surface: string }) => <div data-chat={String(chatReferences)} data-split={String(split)} data-surface={surface} data-testid={`diff:${file.path}`} /> }));
 
 const changed = (path: string): CloudCpWorkspaceReviewFileSummary => ({ path, status: "modified", additions: 2, deletions: 1, size: 20, binary: false, editable: true, fileFingerprint: `fp:${path}` });
 const annotation: FileAnnotationModel = { targets: [], status: "idle", error: "", begin: vi.fn(), draftFor: () => "", statusFor: () => "idle", setDraft: vi.fn(), cancel: vi.fn(), submit: vi.fn() };
@@ -29,9 +30,11 @@ function data(): CloudCpWorkspaceReviewResponse {
 	};
 }
 
-function renderPane(client: CloudCpClient) {
-	return render(<QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}><TooltipProvider><CloudWorkspaceReviewPane annotation={annotation} baseUrl="https://cloud.test" client={client} data={data()} filter="" onBrowseAll={vi.fn()} orgId="org-1" sessionId="session-1" split /></TooltipProvider></QueryClientProvider>);
+function renderPane(client: CloudCpClient, props: Partial<React.ComponentProps<typeof CloudWorkspaceReviewPane>> = {}) {
+	return render(<QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}><TooltipProvider><CloudWorkspaceReviewPane annotation={annotation} baseUrl="https://cloud.test" client={client} data={data()} filter="" onBrowseAll={vi.fn()} orgId="org-1" sessionId="session-1" split {...props} /></TooltipProvider></QueryClientProvider>);
 }
+
+const oneDiff = () => ({ getWorkspaceReviewDiffs: vi.fn().mockResolvedValue({ workspaceVersion: "v1", groups: [{ patch: "diff", truncated: false, includedPaths: ["src/App.tsx"], deferred: [], errors: [] }] }) }) as unknown as CloudCpClient;
 
 describe("CloudWorkspaceReviewPane", () => {
 	beforeEach(() => {
@@ -71,5 +74,66 @@ describe("CloudWorkspaceReviewPane", () => {
 		expect(screen.getByText("1 of 1 viewed")).toBeInTheDocument();
 		expect(screen.queryByTestId("diff:src/App.tsx")).not.toBeInTheDocument();
 		expect(screen.getByRole("button", { name: "Expand src/App.tsx" })).toBeInTheDocument();
+	});
+
+	// A whole-file comment opens under the file's header, as in a local review.
+	it("opens a whole-file comment box under the file's header", async () => {
+		const begin = vi.fn();
+		const { rerender } = renderPane(oneDiff(), { annotation: { ...annotation, begin } });
+		await screen.findByTestId("diff:src/App.tsx");
+		await userEvent.click(screen.getByRole("button", { name: "Add feedback" }));
+		expect(begin).toHaveBeenCalledWith(expect.objectContaining({ path: "src/App.tsx", side: "file", surface: "review", fileFingerprint: "fp:src/App.tsx" }));
+		const open: FileAnnotationModel = { ...annotation, begin, targets: [{ path: "src/App.tsx", side: "file", scope: "unstaged", surface: "review" }] };
+		rerender(<QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}><TooltipProvider><CloudWorkspaceReviewPane annotation={open} baseUrl="https://cloud.test" client={oneDiff()} data={data()} filter="" onBrowseAll={vi.fn()} orgId="org-1" sessionId="session-1" split /></TooltipProvider></QueryClientProvider>);
+		expect(await screen.findByPlaceholderText("Describe what the agent should change")).toBeInTheDocument();
+		expect(screen.getByRole("button", { name: "Add feedback" })).toHaveAttribute("aria-pressed", "true");
+	});
+
+	it("leaves a whole-file comment opened in the focused tab to that tab", async () => {
+		renderPane(oneDiff(), { annotation: { ...annotation, targets: [{ path: "src/App.tsx", side: "file", scope: "unstaged", surface: "focused" }] } });
+		await screen.findByTestId("diff:src/App.tsx");
+		expect(screen.queryByPlaceholderText("Describe what the agent should change")).not.toBeInTheDocument();
+	});
+
+	it("shows its diffs on the review surface, with Add to chat only for the main repository", async () => {
+		const { unmount } = renderPane(oneDiff());
+		expect(await screen.findByTestId("diff:src/App.tsx")).toHaveAttribute("data-surface", "review");
+		expect(screen.getByTestId("diff:src/App.tsx")).toHaveAttribute("data-chat", "true");
+		unmount();
+		renderPane(oneDiff(), { repository: "api" });
+		expect(await screen.findByTestId("diff:src/App.tsx")).toHaveAttribute("data-chat", "false");
+	});
+
+	describe("reviewing another branch or a PR", () => {
+		const branchMenu = { trigger: { kind: "branch" as const, name: "feat/x" }, state: "ready" as const, rows: [], truncated: false, onSelect: vi.fn(), onRetry: vi.fn() };
+		const changesMenu = { mode: "view" as const, value: { kind: "commits" as const, shas: ["a".repeat(40), "c".repeat(40)] }, scopes: [], onSelectScope: vi.fn(), commits: { state: "ready" as const, rows: [], truncated: false, onToggleAll: vi.fn(), onToggle: vi.fn(), onRetry: vi.fn() } };
+		function review(target: Partial<FilesReviewSelection["target"]>): FilesReviewSelection {
+			return {
+				branchMenu, changesMenu, hasPullRequest: false, notice: "", sourcePending: false, retryTarget: vi.fn(), includeCommitsBetween: vi.fn(), showAllCommits: vi.fn(),
+				target: { key: "branch:feat/x:all", branch: { kind: "branch", name: "feat/x" }, changes: { kind: "commits", shas: [] }, scope: "committed", selectionKey: "", openable: true, state: "ready", view: { branch: "feat/x", expectedTipSha: "t" }, ...target },
+			};
+		}
+
+		it("explains picks that do not combine and offers the ways out", async () => {
+			const selection = review({ state: "not_combinable", commitShas: ["a".repeat(40), "c".repeat(40)], conflict: { commitSha: "c".repeat(40), paths: ["x.ts"], reason: "conflict", subject: "Fix it" } });
+			const getWorkspaceReviewDiffs = vi.fn();
+			renderPane({ getWorkspaceReviewDiffs } as unknown as CloudCpClient, { review: selection });
+			expect(screen.getByText(/"Fix it" depends on changes/)).toBeInTheDocument();
+			await userEvent.click(screen.getByRole("button", { name: "Include commits in between" }));
+			expect(selection.includeCommitsBetween).toHaveBeenCalled();
+			// The worktree's scopes give way to the view's changes menu, and nothing is diffed yet.
+			expect(screen.queryByRole("button", { name: /Staged/ })).not.toBeInTheDocument();
+			expect(screen.getByRole("button", { name: /Changes to review/ })).toBeInTheDocument();
+			expect(getWorkspaceReviewDiffs).not.toHaveBeenCalled();
+		});
+
+		it("reads the branch list again when a view's diff says its tip moved", async () => {
+			const getWorkspaceReviewDiffs = vi.fn().mockRejectedValue(new CloudCpError("moved", { status: 409, code: "WORKSPACE_REF_MOVED" }));
+			const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+			const invalidate = vi.spyOn(queryClient, "invalidateQueries");
+			render(<QueryClientProvider client={queryClient}><TooltipProvider><CloudWorkspaceReviewPane annotation={annotation} baseUrl="https://cloud.test" client={{ getWorkspaceReviewDiffs } as unknown as CloudCpClient} data={data()} filter="" onBrowseAll={vi.fn()} orgId="org-1" review={review({ files: [changed("src/x.ts")] as unknown as FilesReviewSelection["target"]["files"] })} sessionId="session-1" split /></TooltipProvider></QueryClientProvider>);
+			await waitFor(() => expect(invalidate).toHaveBeenCalledWith({ queryKey: ["cloud-workspace-review", "https://cloud.test", "org-1", "session-1", "branches"] }));
+			expect(getWorkspaceReviewDiffs).toHaveBeenCalledWith("org-1", "session-1", expect.objectContaining({ scope: "committed", branch: "feat/x", expectedTipSha: "t", paths: ["src/x.ts"] }));
+		});
 	});
 });
