@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"net/url"
+	"slices"
 	"strconv"
 	"strings"
 	"text/tabwriter"
@@ -165,7 +166,7 @@ func newAutomationCreateCommand(ctx *commandContext) *cobra.Command {
 func addHookFlags(cmd *cobra.Command, secret, header *string, filters *[]string, dedupeKey *string) {
 	cmd.Flags().StringVar(secret, "hook-secret", "", "HMAC-SHA256 secret that signs each call's body")
 	cmd.Flags().StringVar(header, "hook-signature-header", "", "Header that carries the body signature, such as X-Hub-Signature-256")
-	cmd.Flags().StringArrayVar(filters, "filter", nil, "Run only when the call matches, such as body.action=opened (repeatable)")
+	cmd.Flags().StringArrayVar(filters, "filter", nil, "Run only when the call matches, such as body.action=opened (repeatable; --filter \"\" on update clears them)")
 	cmd.Flags().StringVar(dedupeKey, "dedupe-key", "", "Template that names one delivery, such as {{headers.X-GitHub-Delivery}}")
 }
 
@@ -277,6 +278,7 @@ func newAutomationUpdateCommand(ctx *commandContext) *cobra.Command {
 		stringFlag("hook-signature-header", hookHeader, &body.HookSignatureHeader)
 		stringFlag("dedupe-key", dedupeKey, &body.HookDedupeKey)
 		if cmd.Flags().Changed("filter") {
+			filters = slices.DeleteFunc(filters, func(f string) bool { return strings.TrimSpace(f) == "" })
 			body.HookFilters = &filters
 			changed = true
 		}

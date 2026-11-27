@@ -324,13 +324,20 @@ func TestRequestLoggerCapturesRegisteredFaultCodes(t *testing.T) {
 	}
 }
 
-func TestRequestLoggerHidesHookKey(t *testing.T) {
-	var buf bytes.Buffer
-	handler := requestLoggerWithCapture(slog.New(slog.NewTextHandler(&buf, nil)), nil, nil)(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		w.WriteHeader(http.StatusAccepted)
-	}))
-	handler.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodPost, "/hooks/secretKey123", nil))
-	if strings.Contains(buf.String(), "secretKey123") || !strings.Contains(buf.String(), "path=/hooks/{hookKey}") {
-		t.Fatalf("log = %q, want the hook key hidden", buf.String())
+func TestLoggersHideHookKey(t *testing.T) {
+	for name, wrap := range map[string]func(*slog.Logger) func(http.Handler) http.Handler{
+		"request": func(l *slog.Logger) func(http.Handler) http.Handler { return requestLoggerWithCapture(l, nil, nil) },
+		"panic":   func(l *slog.Logger) func(http.Handler) http.Handler { return recoverTelemetry(l, nil) },
+	} {
+		var buf bytes.Buffer
+		handler := wrap(slog.New(slog.NewTextHandler(&buf, nil)))(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
+			if name == "panic" {
+				panic("boom")
+			}
+		}))
+		handler.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodPost, "/hooks/secretKey123", nil))
+		if strings.Contains(buf.String(), "secretKey123") || !strings.Contains(buf.String(), "path=/hooks/{hookKey}") {
+			t.Fatalf("%s log = %q, want the hook key hidden", name, buf.String())
+		}
 	}
 }

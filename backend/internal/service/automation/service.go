@@ -161,7 +161,7 @@ func (s *Service) Create(ctx context.Context, input CreateInput) (domain.Automat
 			return domain.Automation{}, apierr.Invalid("INVALID_AUTOMATION_SCHEDULE", err.Error(), nil)
 		}
 	case domain.AutomationTriggerCall:
-		if input.RRule != "" || input.Cron != "" {
+		if input.RRule != "" || input.Cron != "" || input.Timezone != "" {
 			return domain.Automation{}, apierr.Invalid("INVALID_AUTOMATION_SCHEDULE", "An automation that runs when called has no schedule", nil)
 		}
 		input.HookSecret, input.HookSignatureHeader = strings.TrimSpace(input.HookSecret), strings.TrimSpace(input.HookSignatureHeader)

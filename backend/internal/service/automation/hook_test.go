@@ -130,6 +130,7 @@ func TestCreateRejectsMixedTriggerSettings(t *testing.T) {
 	for name, in := range map[string]CreateInput{
 		"schedule with hook":    {Cron: "0 9 * * *", Timezone: "UTC", HookDedupeKey: "{{body.id}}"},
 		"call with schedule":    {Trigger: domain.AutomationTriggerCall, Cron: "0 9 * * *"},
+		"call with timezone":    {Trigger: domain.AutomationTriggerCall, Timezone: "UTC"},
 		"secret without header": {Trigger: domain.AutomationTriggerCall, HookSecret: "s"},
 		"filter outside data":   {Trigger: domain.AutomationTriggerCall, HookFilters: []string{"env.HOME"}},
 		"constant dedupe key":   {Trigger: domain.AutomationTriggerCall, HookDedupeKey: "same"},

@@ -37,6 +37,13 @@ func requestLogger(log *slog.Logger, sink ports.EventSink) func(http.Handler) ht
 
 type captureHTTPErrorFunc func(context.Context, error, map[string]string, string, telemetrymeta.SafeRoute, telemetrymeta.FailureSite)
 
+func logPath(r *http.Request) string {
+	if strings.HasPrefix(r.URL.Path, "/hooks/") {
+		return "/hooks/{hookKey}"
+	}
+	return r.URL.Path
+}
+
 func requestLoggerWithCapture(log *slog.Logger, sink ports.EventSink, captureHTTPError captureHTTPErrorFunc) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -44,14 +51,10 @@ func requestLoggerWithCapture(log *slog.Logger, sink ports.EventSink, captureHTT
 			r, capturedErr := envelope.WithErrorCapture(r)
 			start := time.Now()
 			defer func() {
-				path := r.URL.Path
-				if strings.HasPrefix(path, "/hooks/") {
-					path = "/hooks/{hookKey}"
-				}
 				attrs := []any{
 					"id", middleware.GetReqID(r.Context()),
 					"method", r.Method,
-					"path", path,
+					"path", logPath(r),
 					"status", ww.Status(),
 					"bytes", ww.BytesWritten(),
 					"duration", time.Since(start),

@@ -33,7 +33,7 @@ func recoverTelemetry(log *slog.Logger, sink ports.EventSink) func(http.Handler)
 					log.Error("http handler panic",
 						"id", middleware.GetReqID(r.Context()),
 						"method", r.Method,
-						"path", r.URL.Path,
+						"path", logPath(r),
 						"panic", fmt.Sprint(rec),
 						"stack", stack,
 					)

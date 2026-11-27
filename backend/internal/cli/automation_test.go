@@ -215,6 +215,18 @@ func TestAutomationCreateWhenCalledPostsHookSettings(t *testing.T) {
 	}
 }
 
+func TestAutomationUpdateEmptyFilterClearsFilters(t *testing.T) {
+	cfg := setConfigEnv(t)
+	server, capture := automationServer(t, http.StatusOK, `{"automation":{"id":"automation-1","displayName":"Triage","trigger":"call","hookKey":"k1"}}`)
+	writeRunFileFor(t, cfg, server)
+	if _, stderr, err := executeCLI(t, Deps{ProcessAlive: func(int) bool { return true }}, "automation", "update", "automation-1", "--filter", ""); err != nil {
+		t.Fatalf("update: %v stderr=%s", err, stderr)
+	}
+	if !strings.Contains(string(capture.body), `"hookFilters":[]`) {
+		t.Fatalf("body=%s", capture.body)
+	}
+}
+
 func TestAutomationDeleteRequiresMatchingConfirmation(t *testing.T) {
 	setConfigEnv(t)
 	out, _, err := executeCLI(t, Deps{In: strings.NewReader("wrong\n")}, "automation", "delete", "automation-1")
