@@ -340,8 +340,16 @@ WHERE pr.head_sha != ''
   )));
 
 -- name: FailUnsubmittedReviewBatchForChatTurn :exec
-UPDATE review_run SET status = 'failed', failure_reason = 'turn_ended_without_submit', ended_at = sqlc.arg(ended_at)
-WHERE status IN ('launching', 'running') AND batch_id != ''
+UPDATE review_run SET
+    status = 'failed',
+    failure_reason = 'turn_ended_without_submit',
+    ended_at = sqlc.arg(ended_at),
+    body = COALESCE(
+        (SELECT NULLIF(CAST(sqlc.arg(error_summary) AS TEXT), '') FROM conversation_turns AS turn
+         WHERE turn.id = sqlc.arg(turn_id) AND turn.state = 'failed'),
+        'reviewer Chat turn ended without submitting a result'
+    )
+WHERE status IN ('launching', 'running') AND verdict = '' AND batch_id != ''
   AND EXISTS (
     SELECT 1 FROM conversation_turns AS turn
     JOIN conversation_messages AS message ON message.turn_id = turn.id AND message.conversation_id = turn.conversation_id
