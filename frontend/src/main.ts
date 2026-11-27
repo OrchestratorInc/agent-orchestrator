@@ -231,6 +231,7 @@ import { createBrowserCloseDiagnostics } from "./main/browser-close-diagnostics"
 import { repairBrowserProfileCookies } from "./main/browser-cookie-repair";
 import { browserProfilePartition } from "./shared/browser-profiles";
 import { createBrowserProfileStore } from "./main/browser-profile-store";
+import { defaultBrowserProfileName } from "./main/browser-default-profile-name";
 import { BrowserHistoryStore } from "./main/browser-history-store";
 import { createAwakeTrayMonitor } from "./main/awake-tray";
 import { createAwakeDownloadBridge } from "./main/awake-download-bridge";
@@ -943,7 +944,7 @@ function setDaemonStatus(nextStatus: DaemonStatus): void {
 	if (nextStatus.state === "ready") void telemetryIdentity.flush();
 	else telemetryIdentity.invalidate();
 	getShellWebContents()?.send("daemon:status", daemonStatus);
-	if (nextStatus.state === "ready" && browserViewHost) {
+	if (nextStatus.state === "ready") {
 		establishBrowserRuntimeLink();
 		establishBrowserStreamLink();
 	}
@@ -1109,6 +1110,15 @@ async function createWindowInternal(): Promise<void> {
 		return;
 	}
 	const browserProfileStore = await createBrowserProfileStore({ stateDir: browserProfileStateDir() });
+	// Agents start in a persistent profile, so a site the user signed in to once
+	// stays signed in for the next session. Temporary stays a per-session choice.
+	const settingsRunFile = runFilePath();
+	const profileLocale = settingsRunFile
+		? (await readUiSettings(path.dirname(settingsRunFile)).catch(() => DEFAULT_UI_SETTINGS)).locale
+		: DEFAULT_UI_SETTINGS.locale;
+	await browserProfileStore.ensureDefaultProfile(defaultBrowserProfileName(profileLocale)).catch((error: unknown) => {
+		console.warn(`AO: could not create the default browser profile: ${(error as Error).message}`);
+	});
 	// In the background: this must never hold up the window.
 	void repairBrowserProfileCookies({
 		stateDir: browserProfileStateDir(),
@@ -1492,7 +1502,6 @@ async function createWindowInternal(): Promise<void> {
 		chatDraftDialog = undefined;
 		chatDraftQuitConfirmed = false;
 		chatDraftWindowCloseConfirmed = false;
-		disposeBrowserRuntimeLink();
 		keybindingRecordingActive = false;
 		if (windowComposition === composition) windowComposition = null;
 		void disposeBrowserViewHost()
@@ -2046,7 +2055,6 @@ function reconnectBrowserRuntimeLink(): void {
 }
 
 function establishBrowserRuntimeLink(): void {
-	if (!browserViewHost) return;
 	const rfp = runFilePath();
 	if (!rfp) {
 		console.warn("AO: browser runtime link skipped; run-file path unavailable");
@@ -2077,15 +2085,6 @@ function establishBrowserRuntimeLink(): void {
 	browserRuntimeLink = connectBrowserRuntime(address, {
 		token,
 		execute: (command, signal) => {
-			// A render check or measure uses its own hidden offscreen window,
-			// never the main window or the session's Browser panel, so it does
-			// not need (or disturb) the view host.
-			if (command.action === "__render-check") {
-				return checkRender({ BrowserWindow }, command.args ?? {}, signal);
-			}
-			if (command.action === "__render-measure") {
-				return measureRender({ BrowserWindow }, command.args ?? {}, signal);
-			}
 			if (command.action === REMOTE_APP_UPDATE_ACTION) {
 				return runRemoteAppUpdate({
 					packaged: app.isPackaged,
@@ -2102,6 +2101,14 @@ function establishBrowserRuntimeLink(): void {
 				throw Object.assign(new Error("Browser target owner is unavailable"), {
 					code: "BROWSER_TARGET_UNAVAILABLE",
 				});
+			}
+			// A render check or measure uses its own hidden offscreen window,
+			// never the main window or the session's Browser panel.
+			if (command.action === "__render-check") {
+				return checkRender({ BrowserWindow }, command.args ?? {}, signal);
+			}
+			if (command.action === "__render-measure") {
+				return measureRender({ BrowserWindow }, command.args ?? {}, signal);
 			}
 			return host.execute(command.sessionId, command.action, command.args, signal);
 		},

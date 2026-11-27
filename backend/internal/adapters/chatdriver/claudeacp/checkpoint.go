@@ -2,6 +2,7 @@ package claudeacp
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -192,10 +193,10 @@ func relinkCompactedTranscript(records map[string]checkpointRecord, boundaries [
 type checkpointTurn struct {
 	promptID, userID, user, assistant string
 	complete, notice                  bool
-	// interrupted is a turn Esc ended: Claude records the interrupt marker in
-	// the prompt's own cycle and fires no Stop, so the turn never gets an
-	// end_turn reply. The marker is its settled boundary.
-	interrupted bool
+	// interrupted is a turn that ended without an end_turn reply: Esc, whose
+	// marker Claude records in the prompt's own cycle, or no reply at all
+	// (replied is false) once the source stopped. Neither fires a Stop.
+	interrupted, replied bool
 	// carried is the turn a compaction summary starts. The summary keeps the
 	// prompt ID of the turn that was running or had just ended. resumed means
 	// Claude answered in it after the boundary, so that turn ran on through the
@@ -227,40 +228,6 @@ func claudeTranscriptNotice(text string) bool {
 		strings.HasPrefix(text, "[Request interrupted by user") && strings.HasSuffix(text, "]")
 }
 
-// claudeLocalCommandMarkers wrap what Claude Code writes for a local slash
-// command such as /compact: its name, arguments and output. claude-agent-acp
-// strips them on replay and skips a message with nothing left.
-var claudeLocalCommandMarkers = []string{"command-name", "command-message", "command-args", "local-command-stdout", "local-command-stderr"}
-
-// claudeLocalCommandMetadata reports text that replay skips because it holds
-// only local command markers. Like the adapter, a marker ends at the nearest
-// closing tag of the same name, and an unclosed one is kept as prose.
-func claudeLocalCommandMetadata(text string) bool {
-	var rest strings.Builder
-	stripped := false
-	for i := 0; i < len(text); {
-		matched := false
-		if text[i] == '<' {
-			for _, marker := range claudeLocalCommandMarkers {
-				open, closing := "<"+marker+">", "</"+marker+">"
-				if !strings.HasPrefix(text[i:], open) {
-					continue
-				}
-				if end := strings.Index(text[i+len(open):], closing); end >= 0 {
-					i += len(open) + end + len(closing)
-					matched, stripped = true, true
-				}
-				break
-			}
-		}
-		if !matched {
-			rest.WriteByte(text[i])
-			i++
-		}
-	}
-	return stripped && strings.TrimSpace(rest.String()) == ""
-}
-
 // Native logs are append-only graphs, not a list of alternating text messages.
 // Follow the last main-chain leaf's parent UUIDs; never use a matching sidechain,
 // an earlier repeated answer, or file stability to discharge a hook witness.
@@ -272,9 +239,13 @@ func verifyCheckpointTranscript(ctx context.Context, input io.Reader, request po
 	}
 	records := make(map[string]checkpointRecord)
 	wantedSubmissions := make(map[string]bool)
+	stopped := make(map[string]bool)
 	for _, observation := range evidence.Events {
 		if observation.Submission && observation.SubmissionID != "" {
 			wantedSubmissions[domain.NativeSubmissionContext(observation.SubmissionID)] = true
+		}
+		if !observation.Submission {
+			stopped[observation.PromptID] = true
 		}
 	}
 	leaf := ""
@@ -295,6 +266,9 @@ func verifyCheckpointTranscript(ctx context.Context, input io.Reader, request po
 	for scanner.Scan() {
 		if err := ctx.Err(); err != nil {
 			return ports.NativeCheckpointBoundary{}, err
+		}
+		if len(bytes.TrimSpace(scanner.Bytes())) == 0 {
+			continue
 		}
 		var record checkpointRecord
 		if json.Unmarshal(scanner.Bytes(), &record) != nil {
@@ -337,6 +311,9 @@ func verifyCheckpointTranscript(ctx context.Context, input io.Reader, request po
 	seen := make(map[string]bool)
 	for leaf != "" {
 		record, found := records[leaf]
+		if !found && len(chain) > 0 && !uuids[leaf] {
+			break
+		}
 		if !found || seen[leaf] {
 			return ports.NativeCheckpointBoundary{}, checkpointUnsettled("incomplete native ancestry")
 		}
@@ -377,7 +354,7 @@ func verifyCheckpointTranscript(ctx context.Context, input io.Reader, request po
 			// record, which getSessionMessages drops. A note inside its prompt's
 			// cycle, such as an interrupt marker, adds no turn. One that starts a
 			// cycle keeps its prompt for Stop evidence; the boundary skips it.
-			notice := record.Meta || claudeTranscriptNotice(text) || claudeLocalCommandMetadata(text)
+			notice := record.Meta || claudeTranscriptNotice(text) || claudecode.IsLocalCommandMetadata(text)
 			if notice && len(turns) > 0 && turns[len(turns)-1].promptID == record.PromptID {
 				// Esc settles the turn it interrupts, whether Claude was replying
 				// or running a tool (its tool_use may have no result). Only the
@@ -434,8 +411,7 @@ func verifyCheckpointTranscript(ctx context.Context, input io.Reader, request po
 			if turn.carried && position[record.UUID] > compacted.boundary {
 				turn.resumed = true
 			}
-			if turn.interrupted && record.Message.Model == claudeSyntheticModel {
-				// Claude's own filler after the marker does not reopen the turn.
+			if record.Message.Model == claudeSyntheticModel {
 				break
 			}
 			text, err := checkpointContent(record.Message.Content)
@@ -444,6 +420,7 @@ func verifyCheckpointTranscript(ctx context.Context, input io.Reader, request po
 			}
 			// A real reply after the marker means the turn is running again.
 			turn.interrupted = false
+			turn.replied = true
 			turn.assistant = text
 			turn.complete = record.Message.StopReason == "end_turn"
 		case "system":
@@ -455,6 +432,19 @@ func verifyCheckpointTranscript(ctx context.Context, input io.Reader, request po
 	}
 	if len(turns) == 0 {
 		return ports.NativeCheckpointBoundary{}, checkpointUnsettled("no native user boundary")
+	}
+	newest := position[turns[len(turns)-1].userID]
+	for id, record := range records {
+		if !seen[id] && position[id] < newest {
+			compacted.fold(record, wantedSubmissions)
+		}
+	}
+	unansweredTail := false
+	for i := range turns {
+		if !turns[i].replied && !turns[i].complete && !stopped[turns[i].promptID] {
+			turns[i].interrupted, turns[i].complete = true, true
+			unansweredTail = i == len(turns)-1
+		}
 	}
 	byPrompt := make(map[string]int)
 	for i, turn := range turns {
@@ -478,7 +468,7 @@ func verifyCheckpointTranscript(ctx context.Context, input io.Reader, request po
 			}
 			submitted := ""
 			if found {
-				submitted = turns[index].user
+				submitted, _ = claudecode.TypedPrompt(turns[index].user)
 				if text, ok := queuedTexts[submission]; ok {
 					submitted = text
 				}
@@ -518,19 +508,42 @@ func verifyCheckpointTranscript(ctx context.Context, input io.Reader, request po
 		}
 		return ports.NativeCheckpointBoundary{}, checkpointUnsettled("no native user boundary")
 	}
-	return ports.NativeCheckpointBoundary{
+	boundary := ports.NativeCheckpointBoundary{
 		UserMessageID: turns[owner].userID, UserText: turns[owner].user,
 		AssistantText: latest.assistant, Interrupted: latest.interrupted,
-	}, nil
+	}
+	if unansweredTail {
+		return ports.NativeCheckpointBoundary{}, &ports.UnansweredNativeTailError{Boundary: boundary}
+	}
+	return boundary, nil
 }
 
 // compactedWitnesses names the prompts and AO submissions Claude flushed
-// before its latest compaction. Replay cannot show them, so an observation of
-// one is settled by the boundary that follows it rather than by a turn.
+// before its latest compaction or on a branch it left. Replay cannot show
+// them, so an observation of one is settled by the boundary that follows it
+// rather than by a turn.
 type compactedWitnesses struct {
 	prompts, submissions map[string]bool
 	// boundary is the latest compaction's file position, or -1.
 	boundary int
+}
+
+func (c *compactedWitnesses) fold(record checkpointRecord, wanted map[string]bool) {
+	switch {
+	case record.Type == "user" && record.PromptID != "":
+		c.prompts[record.PromptID] = true
+	case record.Type == "attachment" && record.Attachment.Type == "hook_additional_context" &&
+		record.Attachment.HookEvent == "UserPromptSubmit":
+		var contents []string
+		if json.Unmarshal(record.Attachment.Content, &contents) != nil {
+			return // Unreadable: an observation of it stays unproven.
+		}
+		for _, content := range contents {
+			if wanted[content] {
+				c.submissions[content] = true
+			}
+		}
+	}
 }
 
 // compactNativeRecords folds every record before boundary into compacted and
@@ -538,21 +551,7 @@ type compactedWitnesses struct {
 // still shows after the summary. It returns the bytes still held.
 func compactNativeRecords(records map[string]checkpointRecord, recordBytes map[string]int64, wanted map[string]bool, compacted *compactedWitnesses, boundary checkpointRecord) int64 {
 	for _, record := range records {
-		switch {
-		case record.Type == "user" && record.PromptID != "":
-			compacted.prompts[record.PromptID] = true
-		case record.Type == "attachment" && record.Attachment.Type == "hook_additional_context" &&
-			record.Attachment.HookEvent == "UserPromptSubmit":
-			var contents []string
-			if json.Unmarshal(record.Attachment.Content, &contents) != nil {
-				continue // Unreadable: an observation of it stays unproven.
-			}
-			for _, content := range contents {
-				if wanted[content] {
-					compacted.submissions[content] = true
-				}
-			}
-		}
+		compacted.fold(record, wanted)
 	}
 	keep := make(map[string]bool)
 	if kept := boundary.CompactMetadata.PreservedMessages; kept != nil {

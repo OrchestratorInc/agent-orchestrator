@@ -24,7 +24,7 @@ var browserTelemetryActions = map[string]struct{}{
 	"tab-select": {}, "tab-close": {}, "scroll": {}, "select": {}, "check": {}, "uncheck": {}, "get": {}, "wait": {},
 	"screenshot": {}, "network-start": {}, "network-status": {}, "network-list": {}, "network-stop": {}, "network-clear": {},
 	"console": {}, "errors": {}, "frame": {}, "dialog": {}, "devtools-open": {}, "devtools-close": {},
-	"target": {}, "fill-secret": {}, "login": {},
+	"target": {}, "profile": {}, "fill-secret": {}, "login": {},
 }
 
 // BrowserService authorizes and executes session-scoped browser operations.

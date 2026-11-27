@@ -657,6 +657,7 @@
 	"browser.pickElement": "요소 선택",
 	"browser.pinTabs": "탭 목록 고정",
 	"browser.popOut": "새 창으로 열기",
+	"browser.profile.defaultName": "개인",
 	"browser.profile.temporary": "임시",
 	"browser.profile.label": "프로필",
 	"browser.profile.manage": "프로필 관리",

@@ -657,6 +657,7 @@
 	"browser.pickElement": "Element auswählen",
 	"browser.pinTabs": "Tableiste anheften",
 	"browser.popOut": "Auskoppeln",
+	"browser.profile.defaultName": "Persönlich",
 	"browser.profile.temporary": "Temporär",
 	"browser.profile.label": "Profil",
 	"browser.profile.manage": "Profile verwalten",

@@ -661,6 +661,7 @@
 	"browser.pickElement": "Seleccionar elemento",
 	"browser.pinTabs": "Anclar lista de pestañas",
 	"browser.popOut": "Abrir en ventana",
+	"browser.profile.defaultName": "Personal",
 	"browser.profile.temporary": "Temporal",
 	"browser.profile.label": "Perfil",
 	"browser.profile.manage": "Gestionar perfiles",

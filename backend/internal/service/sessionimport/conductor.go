@@ -16,6 +16,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/OrchestratorInc/agent-orchestrator/backend/internal/adapters/agent/claudecode"
 	"github.com/OrchestratorInc/agent-orchestrator/backend/internal/adapters/agent/opencode"
 	"github.com/OrchestratorInc/agent-orchestrator/backend/internal/domain"
 )
@@ -429,7 +430,7 @@ func readConductorTranscript(ctx context.Context, root string, paths ...string) 
 		text := visibleText(r.message["content"])
 		if r.role == "user" {
 			var command bool
-			text, command = claudePrompt(text)
+			text, command = claudecode.TypedPrompt(text)
 			prompted = prompted || !command && strings.TrimSpace(text) != ""
 		}
 		if strings.TrimSpace(text) == "" {

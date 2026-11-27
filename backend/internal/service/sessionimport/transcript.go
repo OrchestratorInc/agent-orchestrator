@@ -17,6 +17,7 @@ import (
 
 	"github.com/klauspost/compress/zstd"
 
+	"github.com/OrchestratorInc/agent-orchestrator/backend/internal/adapters/agent/claudecode"
 	"github.com/OrchestratorInc/agent-orchestrator/backend/internal/adapters/agent/nativeconfig"
 	"github.com/OrchestratorInc/agent-orchestrator/backend/internal/domain"
 )
@@ -161,35 +162,6 @@ func codexPrompt(text string) string {
 		}
 	}
 	return text
-}
-
-// claudePrompt shows a slash command as typed and drops its local output.
-func claudePrompt(text string) (string, bool) {
-	trimmed := strings.TrimSpace(text)
-	if strings.HasPrefix(trimmed, "<local-command-stdout>") || strings.HasPrefix(trimmed, "<local-command-stderr>") {
-		return "", true
-	}
-	between := func(start, end string) string {
-		_, rest, ok := strings.Cut(trimmed, start)
-		value, _, _ := strings.Cut(rest, end)
-		if !ok {
-			return ""
-		}
-		return strings.TrimSpace(value)
-	}
-	// Claude writes a command record that starts with its tags; a prompt that
-	// merely quotes them is still a prompt.
-	if !strings.HasPrefix(trimmed, "<command-name>") && !strings.HasPrefix(trimmed, "<command-message>") {
-		return text, false
-	}
-	name := between("<command-name>", "</command-name>")
-	if name == "" {
-		return text, false
-	}
-	if args := between("<command-args>", "</command-args>"); args != "" {
-		name += " " + args
-	}
-	return name, true
 }
 
 // eachRecord streams JSONL. A record too large to decode is rewritten as it
@@ -602,7 +574,7 @@ func readJSONLTranscript(ctx context.Context, harness domain.AgentHarness, root 
 		text := node.text
 		if role == "user" {
 			var command bool
-			text, command = claudePrompt(text)
+			text, command = claudecode.TypedPrompt(text)
 			prompted = prompted || !command && strings.TrimSpace(text) != ""
 		}
 		add("claude", id, role, text, node.at)
