@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/OrchestratorInc/agent-orchestrator/backend/internal/domain"
+	"github.com/OrchestratorInc/agent-orchestrator/backend/internal/ports"
 )
 
 // staleBinaryStore is the durable stale-release mark. It is optional so stores
@@ -104,6 +105,9 @@ func (m *Manager) refreshStaleChat(ctx context.Context, refresher ChatVersionRef
 	defer cancel()
 	if err := waiter.WaitForWake(waitCtx, id); err != nil {
 		return fmt.Errorf("wait for the provider to start: %w", err)
+	}
+	if m.chat.HasLiveChatController(id) {
+		return m.completeVersionMove(ctx, id)
 	}
 	return nil
 }
@@ -234,11 +238,28 @@ func (r *versionRetries) done(id domain.SessionID) {
 // start again. A session that came back on its own, was resumed by the user,
 // or was ended no longer needs it.
 func (m *Manager) RetryVersionMoves(ctx context.Context) error {
+	moves, err := m.recoverVersionMoves(ctx)
+	if err != nil {
+		return err
+	}
 	var errs []error
 	for _, id := range m.versionRetries.pending() {
+		if moves != nil {
+			if _, ok := moves[id]; !ok {
+				m.versionRetries.done(id)
+				continue
+			}
+		}
 		rec, err := m.getRecord(ctx, id)
+		if err != nil && !errors.Is(err, ErrNotFound) {
+			errs = append(errs, err)
+			continue
+		}
 		if err != nil || rec.IsTerminated {
 			m.versionRetries.done(id)
+			if err := m.completeVersionMove(ctx, id); err != nil {
+				errs = append(errs, err)
+			}
 			continue
 		}
 		if !versionMoveStopped(rec, m.chat) {
@@ -251,19 +272,50 @@ func (m *Manager) RetryVersionMoves(ctx context.Context) error {
 				continue
 			}
 			m.versionRetries.done(id)
+			if err := m.completeVersionMove(ctx, id); err != nil {
+				errs = append(errs, err)
+			}
 			continue
 		}
 		release, err := m.versionMoves.acquire(ctx)
 		if err != nil {
 			return errors.Join(append(errs, err)...)
 		}
-		if !m.versionRetries.attempt(id) {
+		// Update-stop journals exist while installation still owns the harness.
+		// Reserve it without waiting, before spending budget or claiming resume.
+		var releaseHarness func()
+		if gate, ok := m.harnessUseGate.(interface {
+			TryBeginHarnessUseNow(domain.AgentHarness) (func(), bool)
+		}); ok {
+			var available bool
+			releaseHarness, available = gate.TryBeginHarnessUseNow(rec.Harness)
+			if !available {
+				release()
+				continue
+			}
+		} else {
+			releaseHarness, err = m.beginHarnessUse(rec.Harness)
+			if err != nil {
+				release()
+				continue
+			}
+		}
+		allowed, err := m.attemptVersionMove(ctx, id, moves)
+		if err != nil || !allowed {
+			releaseHarness()
 			release()
+			if err != nil {
+				errs = append(errs, err)
+			}
 			continue
 		}
 		// Automatic terminal restarts must never replace missing native history
 		// with a fresh task, even when an update stop has no stale-binary mark.
-		if _, err := m.resumeAgentWithMode(ctx, id, domain.NormalizeSessionMode(rec.Mode) == domain.SessionModeTUI); err != nil {
+		var expected []domain.SessionVersionMove
+		if move, ok := moves[id]; ok {
+			expected = []domain.SessionVersionMove{move}
+		}
+		if _, err := m.resumeAgentWithMode(ctx, id, true, releaseHarness, expected...); err != nil {
 			release()
 			errs = append(errs, fmt.Errorf("resume %s after a failed version move: %w", id, err))
 			continue
@@ -280,11 +332,22 @@ func (m *Manager) RetryVersionMoves(ctx context.Context) error {
 				}
 			}
 			// Messages sent while it was stopped stayed queued for this start.
+			if !m.chat.HasLiveChatController(id) {
+				release()
+				errs = append(errs, fmt.Errorf("retry %s has no published chat controller: %w", id, ports.ErrChatRecoveryInconclusive))
+				continue
+			}
 			if err := m.chat.DrainChatQueue(ctx, id); err != nil {
 				m.logger.Warn("could not deliver messages queued while the session was stopped", "sessionID", id, "error", err)
+				release()
+				errs = append(errs, fmt.Errorf("deliver retry queue for %s: %w", id, err))
+				continue
 			}
 		}
 		release()
+		if err := m.completeVersionMove(ctx, id); err != nil {
+			errs = append(errs, err)
+		}
 		m.versionRetries.done(id)
 	}
 	return errors.Join(errs...)

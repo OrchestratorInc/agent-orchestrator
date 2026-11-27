@@ -104,6 +104,7 @@ func TestResumeAfterUpdateDeliversWhatQueuedWhileStopped(t *testing.T) {
 func TestFailedResumeAfterUpdateIsRetriedWithoutTheUser(t *testing.T) {
 	providerErr := errors.New("provider failed to start")
 	launcher := &recordingLauncher{startErr: providerErr}
+	launcher.afterReady = func() { launcher.live = true }
 	mgr, store, _ := newChatManager(launcher)
 	seedChatResumeSession(store, domain.ActivityIdle)
 	rec := store.sessions["mer-1"]

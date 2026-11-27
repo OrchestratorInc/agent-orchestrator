@@ -993,6 +993,13 @@ type SessionTerminalTurn struct {
 	RespondedAt     sql.NullTime
 }
 
+type SessionVersionMove struct {
+	SessionID string
+	Intent    string
+	Stage     string
+	Attempts  int64
+}
+
 type SessionWorktree struct {
 	SessionID    domain.SessionID
 	RepoName     string

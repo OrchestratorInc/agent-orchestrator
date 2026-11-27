@@ -2,9 +2,11 @@ package chat
 
 import (
 	"context"
+	"errors"
 	"time"
 
 	"github.com/OrchestratorInc/agent-orchestrator/backend/internal/domain"
+	"github.com/OrchestratorInc/agent-orchestrator/backend/internal/ports"
 )
 
 // versionSwitchStore records a failed move to a new harness release.
@@ -108,15 +110,67 @@ func (s *Service) takeVersionSwitch(id domain.SessionID) (string, bool) {
 func (s *Service) versionSwitchFailed(ctx context.Context, id domain.SessionID, wakeErr error) bool {
 	version, ok := s.takeVersionSwitch(id)
 	if !ok {
+		// A daemon restart loses the in-memory switch/update maps. The durable
+		// intent still protects queued turns from ordinary wake failure handling.
+		if moves, supported := s.sessions.(ports.SessionVersionMoveStore); supported {
+			pending, err := moves.ListSessionVersionMoves(ctx)
+			if err != nil {
+				s.log.Warn("could not read version recovery intent; keeping queued messages", "session", id, "err", err)
+				return true
+			}
+			for _, move := range pending {
+				if move.SessionID == id {
+					version, ok = move.Version, true
+					break
+				}
+			}
+		}
+	}
+	if !ok {
 		return false
 	}
 	s.observeVersionSwitch(id, version, "failed")
 	s.log.Warn("version_switch_failed: chat session could not start on the new harness release; queued messages kept",
 		"session", id, "version", version, "err", wakeErr)
-	if store, ok := s.sessions.(versionSwitchStore); ok {
+	if store, ok := s.sessions.(versionSwitchStore); ok && version != "" {
 		if err := store.SetSessionVersionSwitchFailed(ctx, id, version, s.now()); err != nil {
 			s.log.Warn("could not record version switch failure", "session", id, "err", err)
 		}
 	}
+	if !errors.Is(wakeErr, ports.ErrChatRecoveryInconclusive) && !s.HasLiveChatController(id) {
+		if err := s.recordVersionMoveStopped(ctx, id); err != nil {
+			s.log.Warn("could not retain automatic version retry", "session", id, "err", err)
+		}
+	}
 	return true
+}
+
+// A generation claim can precede publication, so native identity, harness and
+// mode identify the move's queue even while its controller epoch is changing.
+func (s *Service) ownedVersionMove(ctx context.Context, rec domain.SessionRecord) (*domain.SessionVersionMove, error) {
+	if domain.NormalizeSessionMode(rec.Mode) != domain.SessionModeChat {
+		return nil, nil
+	}
+	store, ok := s.sessions.(ports.SessionVersionMoveStore)
+	if !ok {
+		return nil, nil
+	}
+	moves, err := store.ListSessionVersionMoves(ctx)
+	if err != nil {
+		return nil, err
+	}
+	current := domain.NewSessionVersionMove(rec)
+	for _, move := range moves {
+		if move.SessionID == rec.ID && move.Mode == current.Mode && move.Harness == current.Harness && move.NativeID == current.NativeID {
+			return &move, nil
+		}
+	}
+	return nil, nil
+}
+
+func (s *Service) recordVersionMoveStopped(ctx context.Context, id domain.SessionID) error {
+	if moves, ok := s.sessions.(ports.SessionVersionMoveStore); ok {
+		return moves.SetSessionVersionMoveStage(ctx, id, domain.VersionMoveRetry)
+	}
+	return nil
 }
