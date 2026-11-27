@@ -674,6 +674,23 @@ describe("each agent's settings", () => {
 		expect(rows.find((row) => row.id === "option:fast")).toMatchObject({ kind: "boolean", enabled: true });
 	});
 
+	// The bolt shows when, and only when, the agent has Fast mode: a boolean, an
+	// On/Off or true/false select, or a native model that supports it. A select
+	// that only mentions "fast" is a setting like any other.
+	it("finds Fast mode only where the agent has it", () => {
+		const fastModel: ChatConfigOption = { id: "fast_model", name: "Fast model", type: "select", currentValue: "haiku", choices: [{ value: "haiku", name: "Haiku 4.5" }, { value: "sonnet", name: "Sonnet 5.5" }] };
+		const rows = rowsFor("droid", [fastModel]);
+		expect(rows.some((row) => turnSettingTopic(row) === "fast")).toBe(false);
+		expect(rows.find((row) => row.id === "option:fast_model")).toMatchObject({ kind: "select" });
+		const onOff: ChatConfigOption = { id: "fast", name: "Fast mode", type: "select", currentValue: "default", choices: [{ value: "on", name: "On" }, { value: "default", name: "Default" }] };
+		expect(rowsFor("claude-code", [onOff]).filter((row) => turnSettingTopic(row) === "fast")).toHaveLength(1);
+		const native: ChatModel[] = [{ id: "a", displayName: "A", default: true, supportsFast: false }, { id: "b", displayName: "B", default: false, supportsFast: true }];
+		expect(rowsFor("codex", [], native).some((row) => turnSettingTopic(row) === "fast")).toBe(false);
+		expect(rowsFor("codex", [], native, { model: "b" }).some((row) => turnSettingTopic(row) === "fast")).toBe(true);
+		// Claude drops the option for a model without Fast mode: no bolt.
+		expect(rowsFor("claude-code", [{ id: "model", name: "Model", category: "model", type: "select", currentValue: "haiku", choices: [{ value: "haiku", name: "Haiku 4.5" }] }]).some((row) => turnSettingTopic(row) === "fast")).toBe(false);
+	});
+
 	it("Antigravity: the effort drawn out of its model ids, each model listed once", () => {
 		const options: ChatConfigOption[] = [
 			{ id: "model", name: "Model", category: "model", type: "select", currentValue: "gemini-3.8-flash-high", choices: [

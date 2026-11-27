@@ -74,8 +74,21 @@ export function isThinkingToggle(option: ConfigOption): boolean {
 	return option.id === "thinking" && option.choices.length === 2 && option.choices.some(choiceIsEnabled);
 }
 
+/**
+ * A select that reads as an on/off: some choice is on and some is off
+ * (Claude Code's Fast mode as On/Off, Cursor's as true/false).
+ */
+export function isOnOffSelect(option: ConfigOption): boolean {
+	return option.type === "select" && option.choices.some(choiceIsEnabled) && option.choices.some((choice) => !choiceIsEnabled(choice));
+}
+
+/**
+ * An on/off setting: a boolean, Cursor's thinking, or Fast mode. A select that
+ * merely mentions "fast" (a "Fast model" listing models) is no on/off: turning
+ * it "on" would pick whichever choice came first.
+ */
 export function isInlineToggleOption(option: ConfigOption): boolean {
-	return option.type === "boolean" || isThinkingToggle(option) || isFastOption(option);
+	return option.type === "boolean" || isThinkingToggle(option) || (isFastOption(option) && isOnOffSelect(option));
 }
 
 export function optionIsEnabled(option: ConfigOption): boolean {
