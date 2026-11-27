@@ -445,53 +445,86 @@ func (s *Store) Env(agentID string) (map[string]string, error) {
 // credential, to that gateway.
 var ErrIncompleteOverride = errors.New("project overrides the custom endpoint's base URL without an API key")
 
-// ProjectEnv is Env for a launch that also carries projectEnv. A base URL and
-// its key stay paired. A project URL on the saved endpoint's origin keeps the
-// saved key. A project that sets the base URL to another origin (or blanks it)
-// gets none of the saved endpoint: when it also sets a key, ProjectEnv returns
-// that project gateway and key in the saved endpoint's place, with the other
-// key variables and ClearEnv blank, so the caller applies them over any bound
-// account's credential; when it sets no key, ProjectEnv returns
-// ErrIncompleteOverride and the launch must stop. Callers still let every
-// project value win key by key. caseInsensitive matches project keys the way
-// Windows environments do.
+// ProjectEnv returns the complete endpoint environment a launch of agentID
+// receives with the project's env, already resolved: callers apply it as is,
+// over everything else, and never look the project's values up again. That
+// way the URL validated here is the URL the process runs with.
+//
+// The project may set the endpoint's own variables (URL, key, model). Another
+// origin than the saved one needs a key of its own, so the saved key never
+// reaches a gateway it was not given for; without one the launch stops with
+// ErrIncompleteOverride. ClearEnv variables stay blank whatever the project
+// sets, so a provider switch such as CLAUDE_CODE_USE_BEDROCK cannot route the
+// harness away from the endpoint. With caseInsensitive (Windows), two
+// spellings of one variable with different values stop the launch too, since
+// the process could receive either.
 func (s *Store) ProjectEnv(agentID string, projectEnv map[string]string, caseInsensitive bool) (map[string]string, error) {
 	env, err := s.Env(agentID)
 	if err != nil || len(env) == 0 {
 		return env, err
 	}
 	spec := specs[agentID]
-	lookup := func(name string) (string, bool) {
-		for key, value := range projectEnv {
-			if key == name || caseInsensitive && strings.EqualFold(key, name) {
-				return value, true
+	lookup := func(name string) (string, bool, error) {
+		value, set := "", false
+		for key, configured := range projectEnv {
+			if key != name && (!caseInsensitive || !strings.EqualFold(key, name)) {
+				continue
 			}
+			if set && configured != value {
+				return "", false, fmt.Errorf("%w: the project sets %s more than once with different letter case; keep one spelling", ErrIncompleteOverride, name)
+			}
+			value, set = configured, true
 		}
-		return "", false
+		return value, set, nil
 	}
-	projectURL, set := lookup(spec.BaseURLEnv)
-	if !set || sameOrigin(projectURL, env[spec.BaseURLEnv]) {
-		return env, nil
+	projectURL, urlSet, err := lookup(spec.BaseURLEnv)
+	if err != nil {
+		return nil, err
 	}
-	override := map[string]string{spec.BaseURLEnv: projectURL}
+	keys := make(map[string]string, len(spec.KeyEnv))
 	hasKey := false
 	for _, name := range spec.KeyEnv {
-		value, _ := lookup(name)
-		hasKey = hasKey || strings.TrimSpace(value) != ""
-		override[name] = value
-	}
-	if !hasKey {
-		return nil, fmt.Errorf("%w: set %s for %s or remove %s from the project", ErrIncompleteOverride, keyEnvNames(spec), agentID, spec.BaseURLEnv)
-	}
-	for _, name := range spec.ClearEnv {
-		override[name] = ""
-	}
-	if spec.ModelEnv != "" {
-		if model, ok := lookup(spec.ModelEnv); ok {
-			override[spec.ModelEnv] = model
+		value, set, err := lookup(name)
+		if err != nil {
+			return nil, err
+		}
+		if set {
+			keys[name] = value
+			hasKey = hasKey || strings.TrimSpace(value) != ""
 		}
 	}
-	return override, nil
+	if urlSet && !sameOrigin(projectURL, env[spec.BaseURLEnv]) {
+		if !hasKey {
+			return nil, fmt.Errorf("%w: set %s for %s or remove %s from the project", ErrIncompleteOverride, keyEnvNames(spec), agentID, spec.BaseURLEnv)
+		}
+		// Another gateway: only the project's own key goes with it, and the
+		// saved endpoint's model, which names a model of the saved gateway.
+		for _, name := range spec.KeyEnv {
+			env[name] = ""
+		}
+		if spec.ModelEnv != "" {
+			delete(env, spec.ModelEnv)
+		}
+	}
+	for name, value := range keys {
+		env[name] = value
+	}
+	if urlSet {
+		env[spec.BaseURLEnv] = projectURL
+	}
+	if spec.ModelEnv != "" {
+		model, set, err := lookup(spec.ModelEnv)
+		if err != nil {
+			return nil, err
+		}
+		if set {
+			env[spec.ModelEnv] = model
+		}
+	}
+	for _, name := range spec.ClearEnv {
+		env[name] = ""
+	}
+	return env, nil
 }
 
 // errKeyForNewOrigin refuses to move a saved key to another scheme, host or

@@ -331,3 +331,57 @@ func writeBrokenEndpoint(t *testing.T, dataDir string) string {
 	}
 	return path
 }
+
+// A project that sets a provider switch or a competing credential cannot use
+// it while the custom endpoint is active: the endpoint's cleared variables are
+// applied after the project's env and stay blank.
+func TestRuntimeEnvKeepsClearedVariablesBlankOverProjectEnv(t *testing.T) {
+	dir := t.TempDir()
+	if _, err := harnessendpoint.ForDataDir(dir).Save("claude-code", harnessendpoint.Input{BaseURL: "https://gateway.example.com", APIKey: "sk-endpoint"}, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	manager := &Manager{
+		dataDir:    dir,
+		executable: func() (string, error) { return filepath.Join(dir, "ao"), nil },
+		logger:     slog.New(slog.NewTextHandler(io.Discard, nil)),
+	}
+	env, err := manager.runtimeEnvChecked("session", "project", "", map[string]string{
+		"CLAUDE_CODE_USE_BEDROCK": "1",
+		"CLAUDE_CODE_OAUTH_TOKEN": "sk-ant-oat-project",
+	}, "", "claude-code")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, key := range []string{"CLAUDE_CODE_USE_BEDROCK", "CLAUDE_CODE_OAUTH_TOKEN"} {
+		if value, ok := env[key]; !ok || value != "" {
+			t.Fatalf("%s = %q (set=%v), want blank while the custom endpoint is active", key, value, ok)
+		}
+	}
+	if env["ANTHROPIC_AUTH_TOKEN"] != "sk-endpoint" {
+		t.Fatalf("endpoint key = %q, want the saved key", env["ANTHROPIC_AUTH_TOKEN"])
+	}
+}
+
+// With both spellings of the base URL set to different values on Windows, the
+// launch stops instead of validating one URL and running with the other.
+func TestRuntimeEnvStopsOnConflictingCaseVariantsOfTheEndpointURL(t *testing.T) {
+	previous := envKeysCaseInsensitive
+	envKeysCaseInsensitive = true
+	t.Cleanup(func() { envKeysCaseInsensitive = previous })
+	dir := t.TempDir()
+	if _, err := harnessendpoint.ForDataDir(dir).Save("claude-code", harnessendpoint.Input{BaseURL: "https://gateway.example.com", APIKey: "sk-endpoint"}, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	manager := &Manager{
+		dataDir:    dir,
+		executable: func() (string, error) { return filepath.Join(dir, "ao"), nil },
+		logger:     slog.New(slog.NewTextHandler(io.Discard, nil)),
+	}
+	_, err := manager.runtimeEnvChecked("session", "project", "", map[string]string{
+		"ANTHROPIC_BASE_URL": "https://gateway.example.com",
+		"anthropic_base_url": "https://other.example.net",
+	}, "", "claude-code")
+	if !errors.Is(err, harnessendpoint.ErrIncompleteOverride) {
+		t.Fatalf("err = %v, want the launch stopped on conflicting spellings", err)
+	}
+}

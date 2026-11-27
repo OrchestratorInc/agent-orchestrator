@@ -392,3 +392,50 @@ func TestSaveChecksTheVersionSegmentPerHarness(t *testing.T) {
 		t.Fatalf("claude-code with /v1: err = %v, want a message naming /v1", err)
 	}
 }
+
+// On Windows two spellings of one variable are one variable, and the process
+// could receive either. ProjectEnv refuses a conflicting pair rather than
+// validating one URL while the launch runs with the other.
+func TestProjectEnvRefusesConflictingCaseVariants(t *testing.T) {
+	store := NewStore(t.TempDir())
+	if _, err := store.Save("claude-code", Input{BaseURL: "https://gateway.example.com", APIKey: "sk-endpoint"}, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	conflicting := map[string]string{
+		"ANTHROPIC_BASE_URL": "https://gateway.example.com",
+		"anthropic_base_url": "https://other.example.net",
+	}
+	if _, err := store.ProjectEnv("claude-code", conflicting, true); !errors.Is(err, ErrIncompleteOverride) || !strings.Contains(err.Error(), "letter case") {
+		t.Fatalf("conflicting spellings: err = %v, want the launch stopped", err)
+	}
+	// Off Windows they are two variables and only the exact one counts.
+	env, err := store.ProjectEnv("claude-code", conflicting, false)
+	if err != nil || env["ANTHROPIC_BASE_URL"] != "https://gateway.example.com" || env["ANTHROPIC_AUTH_TOKEN"] != "sk-endpoint" {
+		t.Fatalf("case-sensitive: env = %v, err = %v", env, err)
+	}
+	same := map[string]string{"ANTHROPIC_BASE_URL": "https://gateway.example.com/v2", "Anthropic_Base_Url": "https://gateway.example.com/v2"}
+	if env, err := store.ProjectEnv("claude-code", same, true); err != nil || env["ANTHROPIC_BASE_URL"] != "https://gateway.example.com/v2" {
+		t.Fatalf("identical spellings: env = %v, err = %v", env, err)
+	}
+}
+
+// The resolved environment is complete: the project's endpoint values are
+// folded in, and the variables the endpoint clears stay blank even when the
+// project sets them.
+func TestProjectEnvKeepsClearedVariablesBlank(t *testing.T) {
+	store := NewStore(t.TempDir())
+	if _, err := store.Save("claude-code", Input{BaseURL: "https://gateway.example.com", APIKey: "sk-endpoint"}, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	env, err := store.ProjectEnv("claude-code", map[string]string{
+		"CLAUDE_CODE_USE_BEDROCK": "1",
+		"CLAUDE_CODE_OAUTH_TOKEN": "sk-ant-oat-project",
+		"ANTHROPIC_MODEL":         "project-model",
+	}, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if env["CLAUDE_CODE_USE_BEDROCK"] != "" || env["CLAUDE_CODE_OAUTH_TOKEN"] != "" || env["ANTHROPIC_MODEL"] != "project-model" || env["ANTHROPIC_AUTH_TOKEN"] != "sk-endpoint" {
+		t.Fatalf("env = %v, want cleared variables blank and the project model kept", env)
+	}
+}

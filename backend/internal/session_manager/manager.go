@@ -7542,13 +7542,13 @@ func (m *Manager) runtimeEnvChecked(id domain.SessionID, project domain.ProjectI
 		env[EnvAgentBrowserToken] = m.agentBrowserToken
 	}
 	accountErr := m.applyAgentAccountEnv(id, accountID, env, caseInsensitive)
-	// The custom endpoint replaces any stored or account credential. Only
-	// the endpoint's own variables can be restored from the project, including
-	// Codex's AO-prefixed keys that the general project env filter strips.
+	// The custom endpoint replaces any stored or account credential. It is
+	// applied as ProjectEnv resolved it, with the project's endpoint values
+	// already folded in and validated, and never looked up again here: the
+	// URL that was checked is the URL the process gets, and the variables it
+	// clears (competing credentials, provider switches) stay blank even when
+	// the project sets them.
 	for key, value := range endpointEnv {
-		if override, ok := projectValue(key); ok {
-			value = override
-		}
 		setProtectedEnv(env, key, value, caseInsensitive)
 	}
 	path, err := hookPATHForOS(m.executable, os.Getenv, projectEnv, m.dataDir, caseInsensitive)

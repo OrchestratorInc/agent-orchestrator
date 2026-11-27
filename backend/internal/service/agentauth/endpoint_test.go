@@ -213,7 +213,7 @@ func TestSetEndpointWithoutAModelListingSavesNoModel(t *testing.T) {
 func TestSetEndpointRejectsAKeyTheEndpointRefuses(t *testing.T) {
 	t.Parallel()
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		w.WriteHeader(http.StatusForbidden)
+		w.WriteHeader(http.StatusUnauthorized)
 	}))
 	t.Cleanup(server.Close)
 	svc, resolver := newEndpointService(t)
@@ -259,5 +259,27 @@ func TestSetEndpointNeverSendsTheSavedKeyToANewHost(t *testing.T) {
 	}
 	if status := claudePlan(t, svc).CustomEndpoint; status == nil || status.BaseURL != saved.URL {
 		t.Fatalf("CustomEndpoint = %+v, want the saved endpoint unchanged", status)
+	}
+}
+
+// A key may run requests without being allowed to list models. An endpoint
+// that keeps its listing from the key (403) still saves, with no model picked,
+// and a client that names the auth style is never blocked by the listing.
+func TestSetEndpointSavesAKeyWithoutModelListAccess(t *testing.T) {
+	t.Parallel()
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusForbidden)
+	}))
+	t.Cleanup(server.Close)
+	svc, _ := newEndpointService(t)
+	svc.endpointProbeClient = server.Client()
+
+	status, err := svc.SetEndpoint(context.Background(), "claude-code", harnessendpoint.Input{BaseURL: server.URL, APIKey: "sk-inference-only"})
+	if err != nil || !status.Configured || status.AuthStyle != harnessendpoint.AuthBearer || status.Model != "" {
+		t.Fatalf("detected save = %+v, %v; want it saved with the default style and no model", status, err)
+	}
+	status, err = svc.SetEndpoint(context.Background(), "claude-code", harnessendpoint.Input{BaseURL: server.URL, APIKey: "sk-inference-only", AuthStyle: harnessendpoint.AuthAPIKey})
+	if err != nil || status.AuthStyle != harnessendpoint.AuthAPIKey || status.Model != "" {
+		t.Fatalf("explicit style save = %+v, %v; want it saved without asking the listing to agree", status, err)
 	}
 }
