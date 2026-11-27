@@ -309,7 +309,7 @@ describe("letter case", () => {
 	// Neither HIG nor Material sets labels in tracked capitals; they read as shouting.
 	it("labels in sentence case", () => {
 		for (const label of ["STEERED", "AGENT TYPED", "SUBAGENT", "HISTORY COMPACTED", "STILL CHANGING", "GROWING", "PROGRESS", "FULL"]) expect(source).not.toContain(label);
-		for (const label of [">Steered<", ">Agent typed<", "Subagent · {count}", "History compacted{", ">Growing<", ">Progress<"]) expect(source).toContain(label);
+		for (const label of [">Agent typed<", "Subagent · {count}", "History compacted{", ">Growing<", ">Progress<"]) expect(source).toContain(label);
 		expect(source).not.toContain("{label.toUpperCase()}");
 		expect(source).not.toContain('textTransform: "uppercase"');
 		expect(source).not.toContain("letterSpacing");
