@@ -360,11 +360,11 @@ func setupApplyCommand(res *setupResult, opts setupOptions) string {
 		path = res.Project.Path
 	}
 	if path != "" {
-		cmd += " --path " + shellQuote(path)
+		cmd += " --path " + setupShellQuote(path)
 	}
 	for _, f := range []struct{ flag, value string }{{"--agent", opts.agent}, {"--worker-agent", opts.workerAgent}, {"--orchestrator-agent", opts.orchestratorAgent}} {
 		if f.value != "" {
-			cmd += " " + f.flag + " " + shellQuote(f.value)
+			cmd += " " + f.flag + " " + setupShellQuote(f.value)
 		}
 	}
 	if opts.yes {
@@ -372,7 +372,7 @@ func setupApplyCommand(res *setupResult, opts setupOptions) string {
 	}
 	// Not yet submitted: the rerun should start the task too.
 	if opts.start != "" && res.Task == nil {
-		cmd += " --start " + shellQuote(opts.start)
+		cmd += " --start " + setupShellQuote(opts.start)
 		if opts.worker {
 			cmd += " --worker"
 		}
@@ -815,7 +815,7 @@ func setupAlternative(res *setupResult, skip string) string {
 		// that is not ready. --path: so it changes this repository.
 		cmd := "ao setup"
 		if res.repoPath != "" {
-			cmd += " --path " + shellQuote(res.repoPath)
+			cmd += " --path " + setupShellQuote(res.repoPath)
 		}
 		return fmt.Sprintf(" (or use `%s --yes --agent %s`)", cmd, alt)
 	}
@@ -969,11 +969,11 @@ func (c *commandContext) setupInstallFix(ctx context.Context, id string, res *se
 func setupOpenURL(u string) string {
 	switch runtime.GOOS {
 	case "darwin":
-		return "open " + shellQuote(u)
+		return "open " + setupShellQuote(u)
 	case "windows":
 		return "start " + u
 	}
-	return "xdg-open " + shellQuote(u)
+	return "xdg-open " + setupShellQuote(u)
 }
 
 type setupGitHubAuth struct {
@@ -1178,12 +1178,12 @@ func (c *commandContext) setupProjectStep(ctx context.Context, opts setupOptions
 		case errors.As(err, &apiErr) && apiErr.ErrorBody.Code == "NOT_A_GIT_REPO":
 			step.Status = setupNeedsHuman
 			step.Detail = fmt.Sprintf("%s is not a git repository", path)
-			step.Fix = fmt.Sprintf("git -C %s init && git -C %s commit --allow-empty -m \"initial commit\"", shellQuote(path), shellQuote(path))
+			step.Fix = fmt.Sprintf("git -C %s init && git -C %s commit --allow-empty -m \"initial commit\"", setupShellQuote(path), setupShellQuote(path))
 			return step
 		case errors.As(err, &apiErr) && apiErr.ErrorBody.Code == "PROJECT_UNBORN":
 			step.Status = setupNeedsHuman
 			step.Detail = fmt.Sprintf("%s has no commits yet; Orchestrator needs one to create agent workspaces", path)
-			step.Fix = fmt.Sprintf("git -C %s commit --allow-empty -m \"initial commit\"", shellQuote(path))
+			step.Fix = fmt.Sprintf("git -C %s commit --allow-empty -m \"initial commit\"", setupShellQuote(path))
 			return step
 		case err != nil:
 			step.Status, step.Detail = setupFailed, "could not register the project: "+err.Error()
@@ -1227,14 +1227,14 @@ func (c *commandContext) setupProjectStep(ctx context.Context, opts setupOptions
 			cfg, err := c.currentProjectConfig(ctx, project.ID)
 			if err != nil {
 				step.Status, step.Detail = setupFailed, "could not read the project config: "+err.Error()
-				step.Fix = fmt.Sprintf("ao project set-config %s --default-branch %s", shellQuote(project.ID), shellQuote(branch))
+				step.Fix = fmt.Sprintf("ao project set-config %s --default-branch %s", setupShellQuote(project.ID), setupShellQuote(branch))
 				return step
 			}
 			cfg.DefaultBranch = branch
 			var updated projectResult
 			if err := c.putJSON(ctx, "projects/"+url.PathEscape(project.ID)+"/config", setConfigRequest{Config: cfg}, &updated); err != nil {
 				step.Status, step.Detail = setupFailed, "could not set the default branch: "+err.Error()
-				step.Fix = fmt.Sprintf("ao project set-config %s --default-branch %s", shellQuote(project.ID), shellQuote(branch))
+				step.Fix = fmt.Sprintf("ao project set-config %s --default-branch %s", setupShellQuote(project.ID), setupShellQuote(branch))
 				return step
 			}
 			project.DefaultBranch = branch
@@ -1431,7 +1431,7 @@ func (c *commandContext) setupRepoPath(ctx context.Context, opts setupOptions) (
 			Step:   setupStepProject,
 			Status: setupNeedsHuman,
 			Detail: fmt.Sprintf("%s is not inside a git repository; make it one, or run `ao setup --path <repo>` with the repository to set up", abs),
-			Fix:    fmt.Sprintf("git -C %s init && git -C %s commit --allow-empty -m \"initial commit\"", shellQuote(abs), shellQuote(abs)),
+			Fix:    fmt.Sprintf("git -C %s init && git -C %s commit --allow-empty -m \"initial commit\"", setupShellQuote(abs), setupShellQuote(abs)),
 		}
 	}
 	top = filepath.Clean(top)
@@ -1477,12 +1477,12 @@ func (c *commandContext) setupCheckRepo(ctx context.Context, path string) *setup
 	if out, err := c.deps.CommandOutputInDir(ctx, path, "git", "rev-parse", "--show-toplevel"); err != nil || strings.TrimSpace(string(out)) == "" {
 		return &setupStep{Step: setupStepProject, Status: setupNeedsHuman,
 			Detail: fmt.Sprintf("%s is not a git repository", path),
-			Fix:    fmt.Sprintf("git -C %s init && git -C %s commit --allow-empty -m \"initial commit\"", shellQuote(path), shellQuote(path))}
+			Fix:    fmt.Sprintf("git -C %s init && git -C %s commit --allow-empty -m \"initial commit\"", setupShellQuote(path), setupShellQuote(path))}
 	}
 	if _, err := c.deps.CommandOutputInDir(ctx, path, "git", "rev-parse", "--verify", "-q", "HEAD"); err != nil {
 		return &setupStep{Step: setupStepProject, Status: setupNeedsHuman,
 			Detail: fmt.Sprintf("%s has no commits yet; Orchestrator needs one to create agent workspaces", path),
-			Fix:    fmt.Sprintf("git -C %s commit --allow-empty -m \"initial commit\"", shellQuote(path))}
+			Fix:    fmt.Sprintf("git -C %s commit --allow-empty -m \"initial commit\"", setupShellQuote(path))}
 	}
 	return nil
 }
@@ -1517,20 +1517,20 @@ type setupBranchPlan struct {
 // no remote and no branch checked out.
 func (c *commandContext) branchFix(ctx context.Context, p setupBranchPlan, path, projectID string) string {
 	if p.lookupFailed {
-		return fmt.Sprintf("git -C %s remote -v", shellQuote(path))
+		return fmt.Sprintf("git -C %s remote -v", setupShellQuote(path))
 	}
 	if p.remote != "" {
-		return fmt.Sprintf("git -C %s fetch %s && git -C %s remote set-head %s --auto", shellQuote(path), shellQuote(p.remote), shellQuote(path), shellQuote(p.remote))
+		return fmt.Sprintf("git -C %s fetch %s && git -C %s remote set-head %s --auto", setupShellQuote(path), setupShellQuote(p.remote), setupShellQuote(path), setupShellQuote(p.remote))
 	}
 	for _, branch := range []string{"main", "master"} {
 		if _, err := c.deps.CommandOutputInDir(ctx, path, "git", "rev-parse", "-q", "--verify", "refs/heads/"+branch); err == nil {
 			if projectID != "" {
-				return fmt.Sprintf("ao project set-config %s --default-branch %s", shellQuote(projectID), branch)
+				return fmt.Sprintf("ao project set-config %s --default-branch %s", setupShellQuote(projectID), branch)
 			}
-			return fmt.Sprintf("git -C %s switch %s", shellQuote(path), branch)
+			return fmt.Sprintf("git -C %s switch %s", setupShellQuote(path), branch)
 		}
 	}
-	return fmt.Sprintf("git -C %s switch -c main", shellQuote(path))
+	return fmt.Sprintf("git -C %s switch -c main", setupShellQuote(path))
 }
 
 // manual is the hand-set alternative to fix, for when the remote is
@@ -1783,7 +1783,7 @@ func writeSetupResult(w io.Writer, res setupResult, opts setupOptions) error {
 		b.WriteString("\nOrchestrator is ready.")
 		if opts.start == "" {
 			if res.Project != nil && res.Project.ID != "" {
-				fmt.Fprintf(&b, " Start a task with: ao task start --project %s \"<task>\"", shellQuote(res.Project.ID))
+				fmt.Fprintf(&b, " Start a task with: ao task start --project %s \"<task>\"", setupShellQuote(res.Project.ID))
 			} else {
 				b.WriteString(" Start a task with: ao task start \"<task>\"")
 			}
@@ -1839,8 +1839,9 @@ func firstNonEmpty(values ...string) string {
 	return ""
 }
 
-// shellQuote quotes a path for a command a person will paste.
-func shellQuote(s string) string {
+// setupShellQuote quotes a path for a command a person will paste, leaving a
+// plain path bare so the command stays readable.
+func setupShellQuote(s string) string {
 	if s != "" && !strings.ContainsAny(s, " \t\n'\"\\$`!*?[]{}()<>|&;#~") {
 		return s
 	}

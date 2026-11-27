@@ -467,7 +467,7 @@ func TestSetupUnbornAndNonGitRepos(t *testing.T) {
 	if got := ExitCode(err); got != setupExitNeedsHuman {
 		t.Fatalf("exit = %d (%v)", got, err)
 	}
-	if fix := stepNamed(t, decodeSetup(t, out), "project").Fix; fix != fmt.Sprintf("git -C %s init && git -C %s commit --allow-empty -m \"initial commit\"", shellQuote(dir), shellQuote(dir)) {
+	if fix := stepNamed(t, decodeSetup(t, out), "project").Fix; fix != fmt.Sprintf("git -C %s init && git -C %s commit --allow-empty -m \"initial commit\"", setupShellQuote(dir), setupShellQuote(dir)) {
 		t.Fatalf("fix = %q", fix)
 	}
 }
@@ -690,11 +690,11 @@ func TestSetupRegistered(t *testing.T) {
 	t.Fatal("setup not registered")
 }
 
-func TestShellQuote(t *testing.T) {
+func TestSetupShellQuote(t *testing.T) {
 	cases := map[string]string{"/tmp/repo": "/tmp/repo", "/tmp/my repo": "'/tmp/my repo'", "/tmp/it's": `'/tmp/it'\''s'`}
 	for in, want := range cases {
-		if got := shellQuote(in); got != want {
-			t.Errorf("shellQuote(%q) = %q, want %q", in, got, want)
+		if got := setupShellQuote(in); got != want {
+			t.Errorf("setupShellQuote(%q) = %q, want %q", in, got, want)
 		}
 	}
 }
@@ -1104,7 +1104,7 @@ func TestSetupRemoteWithUnresolvableHeadNeedsHuman(t *testing.T) {
 	}
 	res := decodeSetup(t, out)
 	project := stepNamed(t, res, "project")
-	wantFix := fmt.Sprintf("git -C %s fetch origin && git -C %s remote set-head origin --auto", shellQuote(repo), shellQuote(repo))
+	wantFix := fmt.Sprintf("git -C %s fetch origin && git -C %s remote set-head origin --auto", setupShellQuote(repo), setupShellQuote(repo))
 	if project.Status != setupNeedsHuman || project.Fix != wantFix || !strings.Contains(project.Detail, "origin's default branch could not be resolved") || !strings.Contains(project.Detail, "ao project set-config calc --default-branch <branch>") {
 		t.Fatalf("project step = %+v", project)
 	}
@@ -1339,7 +1339,7 @@ func TestSetupCheckApplyCommandKeepsPathAndFlags(t *testing.T) {
 	repo := gitRepo(t, false)
 	out, _, _ := executeCLI(t, fakeClockDeps(), "setup", "--path", repo, "--agent", "codex", "--check", "--json")
 	res := decodeSetup(t, out)
-	want := "ao setup --path " + shellQuote(repo) + " --agent codex"
+	want := "ao setup --path " + setupShellQuote(repo) + " --agent codex"
 	if len(res.NextActions) == 0 || res.NextActions[len(res.NextActions)-1] != want {
 		t.Fatalf("next_actions = %q, want the last one %q", res.NextActions, want)
 	}
@@ -1529,7 +1529,7 @@ func TestSetupDryRunWithoutDaemonListsTheApplyCommand(t *testing.T) {
 	if got := ExitCode(err); got != 0 {
 		t.Fatalf("exit = %d (%v)", got, err)
 	}
-	if res := decodeSetup(t, out); !reflect.DeepEqual(res.NextActions, []string{"ao setup --path " + shellQuote(repo)}) {
+	if res := decodeSetup(t, out); !reflect.DeepEqual(res.NextActions, []string{"ao setup --path " + setupShellQuote(repo)}) {
 		t.Fatalf("next_actions = %q", res.NextActions)
 	}
 }
@@ -1631,7 +1631,7 @@ func TestSetupRerunInstructionNamesTheTarget(t *testing.T) {
 	registerOnPost(d, repo, "example/calc")
 	d.set("POST /api/v1/agents/claude-code/probe", 200, `{"agent":{"id":"claude-code","authStatus":"unauthorized"},"supported":true,"installed":true}`)
 	out, _, _ := executeCLI(t, fakeClockDeps(), "setup", "--path", repo, "--json")
-	if v := stepNamed(t, decodeSetup(t, out), "verify"); !strings.Contains(v.Detail, "then run `ao setup --path "+shellQuote(repo)+"`") {
+	if v := stepNamed(t, decodeSetup(t, out), "verify"); !strings.Contains(v.Detail, "then run `ao setup --path "+setupShellQuote(repo)+"`") {
 		t.Fatalf("verify = %+v", v)
 	}
 }
