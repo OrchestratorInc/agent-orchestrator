@@ -1017,6 +1017,13 @@ func Run(buildVersion string) (retErr error) {
 	} else {
 		browserService.UseApprovals(gate, 0)
 		approvals = gate
+		// Modes of sessions deleted since the last start are dropped.
+		if err := gate.PruneSessions(func(id string) (bool, error) {
+			_, ok, err := store.GetSession(ctx, domain.SessionID(id))
+			return ok, err
+		}); err != nil {
+			log.Warn("browser approvals: could not prune deleted sessions' modes", "err", err)
+		}
 		// Each waiting approval is a notification, so a paired phone is pushed
 		// and the row closes when the approval ends.
 		approvalNotifier := approvalnotify.New(notificationWriter, func(id string) (string, domain.ProjectID) {

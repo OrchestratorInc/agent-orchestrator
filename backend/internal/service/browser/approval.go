@@ -284,42 +284,12 @@ func unidentifiedSummary(action string, args map[string]interface{}, pageURL str
 // mayActConsequentially filters out actions that can never need approval
 // before paying for a describe round trip.
 func mayActConsequentially(action string, args map[string]interface{}) bool {
-	if typesLineBreak(action, args) || action == "drag" {
-		// A drag is judged by where it drops ("Delete forever", "Trash").
-		return true
-	}
-	if _, ok := approval.GatedActions[action]; !ok {
-		return false
-	}
-	switch action {
-	case "press":
-		key, _ := args["key"].(string)
-		return approval.IsActivationKey(key)
-	case "act":
-		verb, _ := args["action"].(string)
-		verb = strings.ToLower(strings.TrimSpace(verb))
-		return verb == "" || verb == "click" || verb == "dblclick"
-	case "check", "uncheck", "select":
-		// Only every-submit mode could care, and only on submit; a value
-		// change alone never submits.
-		return false
-	}
-	return true
+	return approval.MayNeedApproval(action, args)
 }
 
-// typesLineBreak reports a type (or act's type verb) whose text holds a line
-// break: runtimes that type key by key press Enter for it.
+// typesLineBreak reports a type whose text presses Enter.
 func typesLineBreak(action string, args map[string]interface{}) bool {
-	switch action {
-	case "type":
-		text, _ := args["text"].(string)
-		return approval.HasLineBreak(text)
-	case "act":
-		verb, _ := args["action"].(string)
-		value, _ := args["value"].(string)
-		return strings.EqualFold(strings.TrimSpace(verb), "type") && approval.HasLineBreak(value)
-	}
-	return false
+	return approval.TypesLineBreak(action, args)
 }
 
 // describedTarget is what a runtime reported about an action's target.

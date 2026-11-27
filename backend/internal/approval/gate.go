@@ -388,6 +388,34 @@ func (g *Gate) SetSessionMode(sessionID string, mode Mode) error {
 	return g.updatePolicyLocked(func(p *policyFile) { p.Sessions[sessionID] = mode })
 }
 
+// PruneSessions forgets the modes of sessions that no longer exist, so the
+// policy file does not grow with every session ever tuned. exists is asked
+// outside the lock; a session it cannot answer for (an error) is kept.
+func (g *Gate) PruneSessions(exists func(sessionID string) (bool, error)) error {
+	g.mu.Lock()
+	ids := make([]string, 0, len(g.policy.Sessions))
+	for id := range g.policy.Sessions {
+		ids = append(ids, id)
+	}
+	g.mu.Unlock()
+	var gone []string
+	for _, id := range ids {
+		if ok, err := exists(id); err == nil && !ok {
+			gone = append(gone, id)
+		}
+	}
+	if len(gone) == 0 {
+		return nil
+	}
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	return g.updatePolicyLocked(func(p *policyFile) {
+		for _, id := range gone {
+			delete(p.Sessions, id)
+		}
+	})
+}
+
 // SiteRules lists "always allow on this site" choices.
 func (g *Gate) SiteRules() []SiteRule {
 	g.mu.Lock()

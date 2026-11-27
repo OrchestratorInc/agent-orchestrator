@@ -503,6 +503,53 @@ func Truncate(s string, limit int) (string, int) {
 	return string(runes[:limit]) + "…", len(runes) - limit
 }
 
+// MayNeedApproval reports the browser actions the gate may hold for the
+// user, before anything about the page is read: clicks and act clicks, a key
+// that activates the focused control, typing a line break (an Enter), a drag
+// (judged by where it drops) and accepting a dialog. The daemon's preflight
+// and the CLI's "waiting for approval" hint share it.
+func MayNeedApproval(action string, args map[string]any) bool {
+	if TypesLineBreak(action, args) || action == "drag" {
+		return true
+	}
+	if action == "dialog" {
+		operation, _ := args["operation"].(string)
+		return strings.EqualFold(strings.TrimSpace(operation), "accept")
+	}
+	if _, ok := GatedActions[action]; !ok {
+		return false
+	}
+	switch action {
+	case "press":
+		key, _ := args["key"].(string)
+		return IsActivationKey(key)
+	case "act":
+		verb, _ := args["action"].(string)
+		verb = strings.ToLower(strings.TrimSpace(verb))
+		return verb == "" || verb == "click" || verb == "dblclick"
+	case "check", "uncheck", "select":
+		// Only every-submit mode could care, and only on submit; a value
+		// change alone never submits.
+		return false
+	}
+	return true
+}
+
+// TypesLineBreak reports a type (or act's type verb) whose text holds a line
+// break: runtimes that type key by key press Enter for it.
+func TypesLineBreak(action string, args map[string]any) bool {
+	switch action {
+	case "type":
+		text, _ := args["text"].(string)
+		return HasLineBreak(text)
+	case "act":
+		verb, _ := args["action"].(string)
+		value, _ := args["value"].(string)
+		return strings.EqualFold(strings.TrimSpace(verb), "type") && HasLineBreak(value)
+	}
+	return false
+}
+
 // HasLineBreak reports whether typed text contains a line break. Runtimes
 // that type key by key turn it into a real Enter keypress.
 func HasLineBreak(text string) bool {
