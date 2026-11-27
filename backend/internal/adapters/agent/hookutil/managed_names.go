@@ -66,6 +66,12 @@ var restorableStateDirs = []string{
 	".memcode/sessions",
 }
 
+// RestorableStateDirs returns every registered restorable state directory,
+// slash-separated and relative to the workspace root.
+func RestorableStateDirs() []string {
+	return append([]string(nil), restorableStateDirs...)
+}
+
 // IsRestorableStateDir reports whether rel, slash-separated and relative to
 // the workspace root, holds an agent's restorable conversation state.
 func IsRestorableStateDir(rel string) bool {

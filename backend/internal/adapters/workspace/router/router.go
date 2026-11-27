@@ -43,6 +43,7 @@ var _ ports.WorkspaceProject = (*Workspace)(nil)
 var _ ports.WorkspaceObserver = (*Workspace)(nil)
 var _ ports.WorkspaceReclaimer = (*Workspace)(nil)
 var _ ports.WorkspacePreparationBranchCleaner = (*Workspace)(nil)
+var _ ports.WorkspaceAgentStateStager = (*Workspace)(nil)
 
 // New returns a router over git and scratch workspace implementations.
 func New(deps Deps) *Workspace {
@@ -143,6 +144,32 @@ func (w *Workspace) DeletePreparedBranch(ctx context.Context, info ports.Workspa
 	}
 	if cleaner, ok := adapter.(ports.WorkspacePreparationBranchCleaner); ok {
 		return cleaner.DeletePreparedBranch(ctx, info)
+	}
+	return nil
+}
+
+// RestoreAgentState delegates to adapters that stage agent state on a
+// deleting teardown; the others never staged anything.
+func (w *Workspace) RestoreAgentState(ctx context.Context, info ports.WorkspaceInfo) (bool, error) {
+	adapter, err := w.adapterForProject(ctx, info.ProjectID)
+	if err != nil {
+		return false, err
+	}
+	if stager, ok := adapter.(ports.WorkspaceAgentStateStager); ok {
+		return stager.RestoreAgentState(ctx, info)
+	}
+	return false, nil
+}
+
+// DiscardAgentState delegates to adapters that stage agent state on a
+// deleting teardown; the others never staged anything.
+func (w *Workspace) DiscardAgentState(ctx context.Context, info ports.WorkspaceInfo) error {
+	adapter, err := w.adapterForProject(ctx, info.ProjectID)
+	if err != nil {
+		return err
+	}
+	if stager, ok := adapter.(ports.WorkspaceAgentStateStager); ok {
+		return stager.DiscardAgentState(ctx, info)
 	}
 	return nil
 }

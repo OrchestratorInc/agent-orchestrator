@@ -466,9 +466,16 @@ func (m *Manager) DeleteSession(ctx context.Context, id domain.SessionID, cleanu
 	if !ok {
 		return fmt.Errorf("delete %s: session deletion is not supported by this store", id)
 	}
+	rowDeleted := false
 	if cleanup {
-		if err := m.cleanupBeforeDelete(ctx, id); err != nil {
+		tornDown, err := m.cleanupBeforeDelete(ctx, id)
+		if err != nil {
 			return fmt.Errorf("delete %s: %w", id, err)
+		}
+		if tornDown != nil {
+			// The teardown staged the agent's conversation rather than
+			// deleting it: discard it once the row is gone, or put it back.
+			defer func() { m.settleStagedAgentState(ctx, *tornDown, rowDeleted) }()
 		}
 	}
 	if err := m.beginAgentOperation(ctx, id, agentOperationKill); err != nil {
@@ -524,6 +531,7 @@ func (m *Manager) DeleteSession(ctx context.Context, id domain.SessionID, cleanu
 	if !deleted {
 		return fmt.Errorf("delete %s: %w", id, ErrNotFound)
 	}
+	rowDeleted = true
 	if isFork {
 		m.cleanupForkLeftovers(rec, forkNative)
 	}
@@ -534,21 +542,65 @@ func (m *Manager) DeleteSession(ctx context.Context, id domain.SessionID, cleanu
 
 // cleanupBeforeDelete releases a terminated session's worktree the way Cleanup
 // does. Anything else (a live or missing session) is left for the delete's own
-// checks to refuse under the operation guard.
-func (m *Manager) cleanupBeforeDelete(ctx context.Context, id domain.SessionID) error {
+// checks to refuse under the operation guard. After a teardown it returns the
+// session and workspace it tore down, whose staged agent state the delete must
+// settle.
+func (m *Manager) cleanupBeforeDelete(ctx context.Context, id domain.SessionID) (*stagedTeardown, error) {
 	rec, ok, err := m.store.GetSession(ctx, id)
 	if err != nil || !ok || !rec.IsTerminated || rec.Metadata.WorkspacePath == "" || m.workspaceCleanupSettled(ctx, rec) {
-		return err
+		return nil, err
 	}
 	if h := runtimeHandle(rec.Metadata); h.ID != "" {
 		_ = m.runtime.Destroy(ctx, h) // best effort; usually already gone
 	}
-	// The session is going away, so nothing will restore its agent's
-	// conversation; that state no longer keeps the workspace.
+	// The session is going away, so its agent's conversation no longer keeps
+	// the workspace. Teardown stages it, so a delete that fails after this
+	// can still put it back.
 	info := workspaceInfo(rec)
 	info.ReleaseAgentState = true
 	if _, refusal := m.cleanupWorkspaceUnderGate(ctx, rec, info); refusal.refused() {
-		return &CleanupRefusedError{Code: refusal.code, Reason: refusal.reason}
+		return nil, &CleanupRefusedError{Code: refusal.code, Reason: refusal.reason}
 	}
-	return nil
+	return &stagedTeardown{rec: rec, info: info}, nil
+}
+
+// stagedTeardown is a delete's successful teardown, whose workspace may hold
+// staged agent state until the delete commits.
+type stagedTeardown struct {
+	rec  domain.SessionRecord
+	info ports.WorkspaceInfo
+}
+
+// settleStagedAgentState discards the agent state a delete's teardown staged
+// once the session row is gone, or puts it back when the delete failed, so the
+// session keeps a conversation it can still restore. Put back, the workspace
+// is on disk again, so its cleanup is re-recorded as kept rather than
+// released, unless the session moved on (a restore) in the meantime.
+func (m *Manager) settleStagedAgentState(ctx context.Context, t stagedTeardown, deleted bool) {
+	stager, ok := m.workspace.(ports.WorkspaceAgentStateStager)
+	if !ok {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), terminalIntentBudget)
+	defer cancel()
+	if deleted {
+		if err := stager.DiscardAgentState(ctx, t.info); err != nil {
+			m.logger.Warn("delete: discard staged agent state", "sessionID", t.rec.ID, "error", err)
+		}
+		return
+	}
+	restored, err := stager.RestoreAgentState(ctx, t.info)
+	if err != nil {
+		m.logger.Error("delete: restore staged agent state", "sessionID", t.rec.ID, "error", err)
+	}
+	if !restored {
+		return
+	}
+	cur, ok, err := m.store.GetSession(ctx, t.rec.ID)
+	if err != nil || !ok || !cur.IsTerminated || cur.CleanupGeneration != t.rec.CleanupGeneration {
+		return
+	}
+	if err := m.recordWorkspaceCleanup(ctx, cur, domain.DispositionPreservedDirty, "WORKSPACE_DIRTY", false); err != nil {
+		m.logger.Warn("delete: record restored agent state", "sessionID", t.rec.ID, "error", err)
+	}
 }

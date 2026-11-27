@@ -514,3 +514,74 @@ func TestReconcileWorkspaceCleanup_LeavesPathSharedWithLiveSuccessor(t *testing.
 		t.Fatalf("facts = %+v (found %v), want report-only pending while a live session shares the path", facts, ok)
 	}
 }
+
+// stagingWorkspace is a fakeWorkspace whose deleting teardown staged agent
+// state, recording how the delete settled it.
+type stagingWorkspace struct {
+	*fakeWorkspace
+	restores, discards int
+}
+
+func (w *stagingWorkspace) RestoreAgentState(context.Context, ports.WorkspaceInfo) (bool, error) {
+	w.restores++
+	return true, nil
+}
+
+func (w *stagingWorkspace) DiscardAgentState(context.Context, ports.WorkspaceInfo) error {
+	w.discards++
+	return nil
+}
+
+// A delete's teardown stages the agent's conversation instead of deleting it.
+// It is discarded only once the session row is gone; a delete that fails
+// after the teardown puts it back and records the workspace as kept, so the
+// session can still be restored and a later delete cleans it up again.
+func TestDeleteSession_SettlesStagedAgentState(t *testing.T) {
+	setup := func(t *testing.T) (*Manager, *fakeStore, *stagingWorkspace) {
+		m, st, _, ws := newManager()
+		staging := &stagingWorkspace{fakeWorkspace: ws}
+		m.workspace = staging
+		seedTerminal(st, "mer-1", domain.SessionMetadata{WorkspacePath: "/ws/mer-1"})
+		return m, st, staging
+	}
+
+	t.Run("deleted", func(t *testing.T) {
+		m, _, ws := setup(t)
+		if err := m.DeleteSession(ctx, "mer-1", true); err != nil {
+			t.Fatalf("DeleteSession = %v", err)
+		}
+		if ws.discards != 1 || ws.restores != 0 {
+			t.Fatalf("discards = %d, restores = %d; want the staged state discarded once", ws.discards, ws.restores)
+		}
+	})
+
+	t.Run("row delete fails", func(t *testing.T) {
+		m, st, ws := setup(t)
+		st.deleteErr = errors.New("database is locked")
+		if err := m.DeleteSession(ctx, "mer-1", true); err == nil {
+			t.Fatal("DeleteSession succeeded although the row delete failed")
+		}
+		if ws.restores != 1 || ws.discards != 0 {
+			t.Fatalf("restores = %d, discards = %d; want the staged state put back", ws.restores, ws.discards)
+		}
+		if _, ok := st.sessions["mer-1"]; !ok {
+			t.Fatal("session row is gone although its delete failed")
+		}
+		if facts, ok := cleanupFacts(t, st, "mer-1"); !ok || facts.WorkspaceDisposition != domain.DispositionPreservedDirty {
+			t.Fatalf("facts = %+v (found %v), want the restored workspace recorded as kept", facts, ok)
+		}
+	})
+
+	t.Run("cleanup refused", func(t *testing.T) {
+		m, _, ws := setup(t)
+		ws.destroyErr = ports.ErrWorkspaceDirty
+		var refused *CleanupRefusedError
+		if err := m.DeleteSession(ctx, "mer-1", true); !errors.As(err, &refused) {
+			t.Fatalf("DeleteSession = %v, want a cleanup refusal", err)
+		}
+		// A failed teardown restores what it staged itself.
+		if ws.restores != 0 || ws.discards != 0 {
+			t.Fatalf("restores = %d, discards = %d; want neither after a refused teardown", ws.restores, ws.discards)
+		}
+	})
+}

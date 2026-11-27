@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -314,8 +315,9 @@ func TestWorkspaceDestroyIgnoresOversizedAOGitignore(t *testing.T) {
 
 // memcode keeps its native transcript under a directory its AO .gitignore
 // lists. Restore reads it back, so archiving keeps the folder once it holds
-// one, and still removes an empty transcript directory. Deleting the session
-// releases the transcript; only other files keep the folder then.
+// one, and still removes an empty transcript directory. A delete's teardown
+// stages the transcript instead: the delete discards it once the session row
+// is gone, or puts it back when the delete fails.
 func TestWorkspaceDestroyKeepsRestorableAgentState(t *testing.T) {
 	setup := func(t *testing.T) (*scratch.Workspace, ports.WorkspaceInfo, string) {
 		ws, info := createStandaloneScratch(t)
@@ -329,8 +331,26 @@ func TestWorkspaceDestroyKeepsRestorableAgentState(t *testing.T) {
 		}
 		return ws, info, filepath.Join(dir, "sessions", "native-1", "messages.json")
 	}
+	// The managed root holds standalone/sessions/<id> and the staging root.
+	stagingRoot := func(info ports.WorkspaceInfo) string {
+		return filepath.Join(filepath.Dir(filepath.Dir(filepath.Dir(info.Path))), ".ao-staged-agent-state")
+	}
+	assertGone := func(t *testing.T, path, what string) {
+		t.Helper()
+		if _, err := os.Stat(path); !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("%s still exists or stat failed differently: %v", what, err)
+		}
+	}
+	deleteTeardown := func(t *testing.T, ws *scratch.Workspace, info ports.WorkspaceInfo) {
+		t.Helper()
+		info.ReleaseAgentState = true
+		if err := ws.Destroy(context.Background(), info); err != nil {
+			t.Fatalf("deleting Destroy: %v", err)
+		}
+		assertGone(t, info.Path, "scratch dir of a deleting teardown")
+	}
 
-	t.Run("with a transcript", func(t *testing.T) {
+	t.Run("archived with a transcript", func(t *testing.T) {
 		ws, info, transcript := setup(t)
 		writeScratchFile(t, transcript, "[]\n")
 		if err := ws.Destroy(context.Background(), info); !errors.Is(err, ports.ErrWorkspaceDirty) {
@@ -341,19 +361,55 @@ func TestWorkspaceDestroyKeepsRestorableAgentState(t *testing.T) {
 		}
 	})
 
-	t.Run("session deleted", func(t *testing.T) {
+	t.Run("deleted", func(t *testing.T) {
 		ws, info, transcript := setup(t)
 		writeScratchFile(t, transcript, "[]\n")
+		deleteTeardown(t, ws, info)
+		if err := ws.DiscardAgentState(context.Background(), info); err != nil {
+			t.Fatalf("DiscardAgentState: %v", err)
+		}
+		assertGone(t, stagingRoot(info), "staging root after the discard")
+	})
+
+	t.Run("delete failed", func(t *testing.T) {
+		ws, info, transcript := setup(t)
+		writeScratchFile(t, transcript, "[]\n")
+		deleteTeardown(t, ws, info)
+		restored, err := ws.RestoreAgentState(context.Background(), info)
+		if err != nil || !restored {
+			t.Fatalf("RestoreAgentState = %v, %v; want the transcript put back", restored, err)
+		}
+		if data, err := os.ReadFile(transcript); err != nil || string(data) != "[]\n" {
+			t.Fatalf("restored transcript = %q, %v", data, err)
+		}
+		assertGone(t, stagingRoot(info), "staging root after the restore")
+		// The restored transcript is still AO's agent state: archiving keeps
+		// the folder for it rather than treating it as user work or deleting it.
+		if err := ws.Destroy(context.Background(), info); !errors.Is(err, ports.ErrWorkspaceDirty) {
+			t.Fatalf("archive after restore err = %v, want ErrWorkspaceDirty", err)
+		}
+		if _, err := os.Stat(transcript); err != nil {
+			t.Fatalf("restored transcript was not preserved by the archive: %v", err)
+		}
 		info.ReleaseAgentState = true
 		if err := ws.Destroy(context.Background(), info); err != nil {
-			t.Fatalf("Destroy: %v", err)
-		}
-		if _, err := os.Stat(info.Path); !errors.Is(err, os.ErrNotExist) {
-			t.Fatalf("scratch dir of a deleted session still exists or stat failed differently: %v", err)
+			t.Fatalf("retried delete teardown: %v", err)
 		}
 	})
 
-	t.Run("session deleted with user work", func(t *testing.T) {
+	t.Run("session restored after an interrupted delete", func(t *testing.T) {
+		ws, info, transcript := setup(t)
+		writeScratchFile(t, transcript, "[]\n")
+		deleteTeardown(t, ws, info)
+		if _, err := ws.Restore(context.Background(), ports.WorkspaceConfig{Path: info.Path, SessionID: info.SessionID}); err != nil {
+			t.Fatalf("Restore: %v", err)
+		}
+		if _, err := os.Stat(transcript); err != nil {
+			t.Fatalf("Restore did not put the staged transcript back: %v", err)
+		}
+	})
+
+	t.Run("deleted with user work", func(t *testing.T) {
 		ws, info, transcript := setup(t)
 		writeScratchFile(t, transcript, "[]\n")
 		writeScratchFile(t, filepath.Join(info.Path, "notes.md"), "mine\n")
@@ -366,6 +422,7 @@ func TestWorkspaceDestroyKeepsRestorableAgentState(t *testing.T) {
 				t.Fatalf("%s was not preserved: %v", kept, err)
 			}
 		}
+		assertGone(t, stagingRoot(info), "staging root of a refused teardown")
 	})
 
 	t.Run("empty", func(t *testing.T) {
@@ -373,8 +430,42 @@ func TestWorkspaceDestroyKeepsRestorableAgentState(t *testing.T) {
 		if err := ws.Destroy(context.Background(), info); err != nil {
 			t.Fatalf("Destroy: %v", err)
 		}
-		if _, err := os.Stat(info.Path); !errors.Is(err, os.ErrNotExist) {
-			t.Fatalf("scratch dir with an empty transcript directory still exists or stat failed differently: %v", err)
-		}
+		assertGone(t, info.Path, "scratch dir with an empty transcript directory")
 	})
+}
+
+// A deleting teardown that fails after staging the transcript puts it back
+// itself, so the session keeps a conversation it can restore.
+func TestWorkspaceDestroyRestoresStagedAgentStateWhenTeardownFails(t *testing.T) {
+	if runtime.GOOS == "windows" || os.Geteuid() == 0 {
+		t.Skip("needs POSIX directory permissions that bind the test user")
+	}
+	ws, info := createStandaloneScratch(t)
+	if err := (&claudecode.Plugin{}).GetAgentHooks(context.Background(), ports.WorkspaceHookConfig{WorkspacePath: info.Path}); err != nil {
+		t.Fatalf("install claude hooks: %v", err)
+	}
+	memcode := filepath.Join(info.Path, ".memcode")
+	if err := hookutil.EnsureWorkspaceGitignore(memcode, "sessions/"); err != nil {
+		t.Fatalf("EnsureWorkspaceGitignore: %v", err)
+	}
+	transcript := filepath.Join(memcode, "sessions", "native-1", "messages.json")
+	writeScratchFile(t, transcript, "[]\n")
+	// AO's hook file can no longer be removed, so teardown fails after the
+	// transcript was staged.
+	locked := filepath.Join(info.Path, ".claude")
+	if err := os.Chmod(locked, 0o500); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(locked, 0o750) })
+
+	info.ReleaseAgentState = true
+	if err := ws.Destroy(context.Background(), info); err == nil {
+		t.Fatal("Destroy succeeded although an AO file could not be removed")
+	}
+	if data, err := os.ReadFile(transcript); err != nil || string(data) != "[]\n" {
+		t.Fatalf("transcript after a failed teardown = %q, %v; want it put back", data, err)
+	}
+	if restored, err := ws.RestoreAgentState(context.Background(), info); err != nil || restored {
+		t.Fatalf("RestoreAgentState = %v, %v; want nothing left staged", restored, err)
+	}
 }

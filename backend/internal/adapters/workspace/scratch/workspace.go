@@ -27,6 +27,7 @@ type Workspace struct {
 var _ ports.Workspace = (*Workspace)(nil)
 var _ ports.WorkspaceObserver = (*Workspace)(nil)
 var _ ports.WorkspaceReclaimer = (*Workspace)(nil)
+var _ ports.WorkspaceAgentStateStager = (*Workspace)(nil)
 
 // New validates ManagedRoot and returns a scratch workspace adapter.
 func New(opts Options) (*Workspace, error) {
@@ -60,7 +61,9 @@ func (w *Workspace) Create(_ context.Context, cfg ports.WorkspaceConfig) (ports.
 	return ports.WorkspaceInfo{Path: path, SessionID: cfg.SessionID, ProjectID: cfg.ProjectID}, nil
 }
 
-// Restore ensures the preserved scratch directory exists and returns it.
+// Restore ensures the preserved scratch directory exists and returns it. Agent
+// state a delete staged and never settled (the daemon stopped mid-delete) is
+// put back first, so the session resumes its conversation.
 func (w *Workspace) Restore(_ context.Context, cfg ports.WorkspaceConfig) (ports.WorkspaceInfo, error) {
 	path, err := w.restorePath(cfg)
 	if err != nil {
@@ -68,6 +71,9 @@ func (w *Workspace) Restore(_ context.Context, cfg ports.WorkspaceConfig) (ports
 	}
 	if err := os.MkdirAll(path, 0o750); err != nil {
 		return ports.WorkspaceInfo{}, fmt.Errorf("scratch workspace: restore %q: %w", path, err)
+	}
+	if err := w.restoreStagedAgentState(path); err != nil {
+		return ports.WorkspaceInfo{}, err
 	}
 	return ports.WorkspaceInfo{Path: path, SessionID: cfg.SessionID, ProjectID: cfg.ProjectID}, nil
 }
@@ -107,8 +113,14 @@ func (w *Workspace) destroy(_ context.Context, info ports.WorkspaceInfo) (ports.
 	if contents.userWork {
 		return reclaim, fmt.Errorf("scratch workspace: preserve non-empty %q: %w", path, ports.ErrWorkspaceDirty)
 	}
+	// A deleting teardown moves agent state aside rather than deleting it, so
+	// the conversation survives until the session row is gone. Any failure
+	// from here puts it back before returning.
+	if err := w.stageAgentState(path, contents.stateDirs); err != nil {
+		return reclaim, errors.Join(err, w.restoreStagedAgentState(path))
+	}
 	if err := contents.remove(path); err != nil {
-		return reclaim, err
+		return reclaim, errors.Join(err, w.restoreStagedAgentState(path))
 	}
 	return reclaim, nil
 }
@@ -124,6 +136,9 @@ type scratchContents struct {
 	// dirs are every directory under the root, AO's or not, parents before
 	// children. Each is removed only once it is empty.
 	dirs []string
+	// stateDirs are restorable agent state directories a deleting teardown
+	// stages instead of removing.
+	stateDirs []string
 }
 
 type managedFile struct {
@@ -137,8 +152,9 @@ type managedFile struct {
 // so the names such a .gitignore lists, and AO's Copilot profiles, are read
 // directly, with the parser the session Files surfaces use. A listed directory
 // is AO's whole, except one holding an agent's restorable conversation
-// (hookutil.IsRestorableStateDir), which keeps the folder once it has files
-// unless releaseAgentState says the session is being deleted.
+// (hookutil.IsRestorableStateDir), which keeps the folder once it has files.
+// When releaseAgentState says the session is being deleted, such a directory
+// is recorded in stateDirs for teardown to stage instead.
 // Everything else, a symlink or a folder the user ran git init in included,
 // is user work.
 func scanScratchContents(root string, releaseAgentState bool) (scratchContents, error) {
@@ -172,7 +188,11 @@ func scanScratchContents(root string, releaseAgentState bool) (scratchContents, 
 					if err != nil {
 						return err
 					}
-					state = !releaseAgentState && hookutil.IsRestorableStateDir(rel)
+					state = hookutil.IsRestorableStateDir(rel)
+					if state && releaseAgentState {
+						contents.stateDirs = append(contents.stateDirs, fullPath)
+						return filepath.SkipDir
+					}
 				}
 			}
 		}

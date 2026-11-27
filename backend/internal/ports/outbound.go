@@ -404,6 +404,19 @@ type WorkspacePreparationBranchCleaner interface {
 	DeletePreparedBranch(ctx context.Context, info WorkspaceInfo) error
 }
 
+// WorkspaceAgentStateStager holds the agent state a ReleaseAgentState teardown
+// moved aside until the delete that asked for it commits. Teardown that fails
+// restores the state itself; after a successful teardown the caller calls
+// exactly one of these.
+type WorkspaceAgentStateStager interface {
+	// RestoreAgentState puts staged state back into the workspace, recreating
+	// its directories, for a delete that did not go through. It reports
+	// whether anything was staged to put back.
+	RestoreAgentState(ctx context.Context, info WorkspaceInfo) (bool, error)
+	// DiscardAgentState removes staged state once the session is deleted.
+	DiscardAgentState(ctx context.Context, info WorkspaceInfo) error
+}
+
 // Workspace is the isolated checkout an agent works in (a git worktree or clone).
 type Workspace interface {
 	Create(ctx context.Context, cfg WorkspaceConfig) (WorkspaceInfo, error)
@@ -685,10 +698,12 @@ type WorkspaceInfo struct {
 	// when the normal workspace lifecycle primitives operate on one child repo
 	// inside a workspace project.
 	RepoPath string
-	// ReleaseAgentState is set when the session is being deleted, so it can no
-	// longer be restored. Teardown may then remove an agent's restorable
-	// conversation kept in the workspace (see hookutil.IsRestorableStateDir),
-	// which an archive keeps so a later restore can resume it.
+	// ReleaseAgentState is set when the session is being deleted. An agent's
+	// restorable conversation in the workspace (see
+	// hookutil.IsRestorableStateDir), which an archive keeps so a later restore
+	// can resume it, then no longer keeps the workspace: a workspace that
+	// implements WorkspaceAgentStateStager moves it aside instead, and the
+	// delete discards or restores it once the session row's fate is known.
 	ReleaseAgentState bool
 }
 
