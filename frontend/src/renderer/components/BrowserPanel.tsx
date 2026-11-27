@@ -1972,6 +1972,7 @@ const SortableBrowserTopTab = memo(function SortableBrowserTopTab({
 					)
 				}
 				actionPinned
+				actionWide={showMute}
 				active={selected}
 				buttonProps={{
 					...attributes,

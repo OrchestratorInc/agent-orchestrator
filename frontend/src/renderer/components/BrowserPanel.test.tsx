@@ -14,6 +14,7 @@ import { useBrowserView, type BrowserNavState } from "../hooks/useBrowserView";
 import { useUiStore } from "../stores/ui-store";
 import { aoBridge } from "../lib/bridge";
 import type { WorkspaceSession } from "../types/workspace";
+import { tabFadeClassName, tabWideActionTitleClassName } from "./TerminalTabFrame";
 import { TooltipProvider } from "./ui/tooltip";
 import type {
 	BrowserAnnotationCancelPayload,
@@ -1404,6 +1405,22 @@ describe("BrowserPanel", () => {
 		render(<BrowserPanel active onTogglePopOut={() => undefined} poppedOut session={session} />);
 
 		expect(screen.getByRole("button", { name: "Unmute tab" })).toBeInTheDocument();
+	});
+
+	it("truncates the title before both controls when a tab shows mute and close", () => {
+		hookState.tabs = [
+			{ id: "t1", url: "http://localhost:3000/", title: "Loud app with a long title", active: true, audible: true },
+			{ id: "t2", url: "http://localhost:4000/", title: "Quiet app with a long title", active: false },
+		];
+		hookState.activeTabId = "t1";
+		render(<BrowserPanel active onTogglePopOut={() => undefined} poppedOut session={session} />);
+
+		const tabList = screen.getByRole("tablist", { name: "Browser tabs" });
+		const [loud, quiet] = within(tabList).getAllByRole("tab");
+		expect(loud).toHaveClass(tabWideActionTitleClassName);
+		expect(loud).not.toHaveClass(tabFadeClassName);
+		expect(quiet).toHaveClass(tabFadeClassName);
+		expect(quiet).not.toHaveClass(tabWideActionTitleClassName);
 	});
 
 	it("hides the mute control on a quiet tab", () => {

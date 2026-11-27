@@ -18,6 +18,8 @@ type TerminalTabFrameProps = {
 	action?: ReactNode;
 	/** Show the action at rest on unselected tabs too (unsaved dot, Browser pages). */
 	actionPinned?: boolean;
+	/** The action holds two controls side by side (a Browser page's mute and close): the title stops short of them with an ellipsis. */
+	actionWide?: boolean;
 	/** Give the action its own room after the title, always showing: the session tab's ⋮. */
 	actionInline?: boolean;
 	/** Closes the tab; a middle-click runs it, as the close button does. */
@@ -43,6 +45,15 @@ export const tabFadeClassName = "[mask-image:linear-gradient(to_left,transparent
 /** The same fade for a hover-only control, with its triggers. */
 export const tabHoverFadeClassName =
 	"group-hover:[mask-image:linear-gradient(to_left,transparent_24px,black_36px)] focus-visible-in-group:[mask-image:linear-gradient(to_left,transparent_24px,black_36px)] in-data-dragging:[mask-image:linear-gradient(to_left,transparent_24px,black_36px)]";
+
+/**
+ * Room for two controls side by side (a Browser page's mute and close): two
+ * 16px boxes 4px apart, 8px from the edge, plus 4px clear. The title ends
+ * there with an ellipsis instead of running under a fade, which two controls
+ * leave too little of to read.
+ */
+export const tabWideActionTitleClassName =
+	"pr-[calc(2*var(--size-icon-base)+var(--space-2)+2*var(--space-1))]";
 
 /** A tab's close button or menu, shared so they match. A pure ghost: hover only brightens the glyph, never a fill. */
 export const terminalTabActionClassName =
@@ -88,6 +99,7 @@ export function TerminalTabFrame({
 	label,
 	action,
 	actionPinned = false,
+	actionWide = false,
 	actionInline = false,
 	onClose,
 	buttonRef,
@@ -138,7 +150,10 @@ export function TerminalTabFrame({
 					className={cn(
 						"inline-flex h-full min-w-0 flex-1 cursor-pointer items-center gap-2 text-control leading-none in-data-dragging:cursor-grabbing!",
 						slotted ? "pl-2 pr-1.5" : "px-2",
-						overlaid && (shownAtRest ? tabFadeClassName : tabHoverFadeClassName),
+						overlaid &&
+							(actionWide
+								? tabWideActionTitleClassName
+								: shownAtRest ? tabFadeClassName : tabHoverFadeClassName),
 					)}
 					{...buttonProps}
 				>
@@ -149,7 +164,9 @@ export function TerminalTabFrame({
 			{action ? (
 				<span
 					className={cn(
-						"grid h-icon-base w-auto min-w-icon-base shrink-0 place-items-center",
+						"grid shrink-0 place-items-center",
+						// One control is a fixed box; two grow it to fit them side by side.
+						actionWide ? "h-icon-base w-auto" : "size-icon-base",
 						slotted ? "mr-2" : cn("absolute right-2 top-1/2 -translate-y-1/2", !shownAtRest && tabHoverRevealClassName),
 						// Renaming hides the control (keeping the ⋮'s room, so the tab holds its width).
 						editingContent && "invisible",
