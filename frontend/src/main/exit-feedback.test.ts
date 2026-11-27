@@ -302,7 +302,7 @@ describe("createExitFeedbackSender", () => {
 		const out = validateExitFeedbackEvent(event({
 			properties: {
 				token: KEY, distinct_id: "ins_1", install_id: "ins_1", app_version: "1.2.3", $os: "Mac OS X",
-				version: "no_project", answer: "not_comfortable", has_text: true, seconds_open: 3.9,
+				version: "no_project", answer: "not_a_fit", has_text: true, seconds_open: 3.9,
 				text: "lost C:/work/private-repo/file.txt and /Users/alex/x",
 				extra: "rides along", $nested: { path: "/Users/alex" }, how: "skip",
 			},
@@ -314,11 +314,16 @@ describe("createExitFeedbackSender", () => {
 			timestamp: "2026-11-27T12:00:00.000Z",
 			properties: {
 				token: KEY, distinct_id: "ins_1", install_id: "ins_1", app_version: "1.2.3", $os: "Mac OS X",
-				// An answer from the other version is dropped; the text is cleaned again here.
-				version: "no_project", has_text: true, seconds_open: 3,
+				// The text is cleaned again here; how belongs to dismissals only.
+				version: "no_project", answer: "not_a_fit", has_text: true, seconds_open: 3,
 				text: "lost [redacted-local-path] and [redacted-local-path]",
 			},
 		});
+	});
+
+	it("drops an answered event whose answer is not one of its version's", () => {
+		const properties = { token: KEY, distinct_id: "ins_1", version: "no_project", answer: "not_comfortable", text: "orphaned" };
+		expect(validateExitFeedbackEvent(event({ properties }), KEY)).toBeNull();
 	});
 
 	it("posts the event from main and waits for it before the quit goes on", async () => {

@@ -52,7 +52,9 @@ export function sanitizeExitFeedbackProperties(event: string, properties?: Recor
 		if (typeof properties?.how === "string" && EXIT_FEEDBACK_DISMISSAL_SET.has(properties.how)) safe.how = properties.how;
 		return safe;
 	}
-	if (typeof properties?.answer === "string" && EXIT_FEEDBACK_ANSWERS[version].includes(properties.answer)) safe.answer = properties.answer;
+	// Typed text rides only with an accepted answer.
+	if (typeof properties?.answer !== "string" || !EXIT_FEEDBACK_ANSWERS[version].includes(properties.answer)) return safe;
+	safe.answer = properties.answer;
 	const raw = typeof properties?.text === "string" ? properties.text.trim().slice(0, EXIT_FEEDBACK_TEXT_LIMIT) : "";
 	const text = sanitizeSensitiveString(raw).slice(0, EXIT_FEEDBACK_TEXT_LIMIT);
 	safe.has_text = text !== "";

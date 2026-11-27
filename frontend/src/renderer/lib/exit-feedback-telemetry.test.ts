@@ -114,8 +114,10 @@ describe("sanitizeExitFeedbackProperties", () => {
 		expect(sanitizeExitFeedbackProperties("ao.exit_feedback.shown", { version: "other" })).toEqual({});
 		expect(sanitizeExitFeedbackProperties("ao.exit_feedback.shown", { version: "project_no_work", answer: "x" })).toEqual({ version: "project_no_work" });
 		// An answer from the other version is not accepted.
-		expect(sanitizeExitFeedbackProperties("ao.exit_feedback.answered", { version: "project_no_work", answer: "just_looking", text: "   " }))
-			.toEqual({ version: "project_no_work", has_text: false });
+		expect(sanitizeExitFeedbackProperties("ao.exit_feedback.answered", { version: "project_no_work", answer: "just_looking", text: "kept out" }))
+			.toEqual({ version: "project_no_work" });
+		expect(sanitizeExitFeedbackProperties("ao.exit_feedback.answered", { version: "project_no_work", answer: "not_comfortable", text: "   " }))
+			.toEqual({ version: "project_no_work", answer: "not_comfortable", has_text: false });
 		expect(sanitizeExitFeedbackProperties("ao.exit_feedback.dismissed", { version: "no_project", how: "closed", seconds_open: -1 })).toEqual({ version: "no_project" });
 		const long = sanitizeExitFeedbackProperties("ao.exit_feedback.answered", { version: "no_project", answer: "not_a_fit", text: "a".repeat(900) });
 		expect((long.text as string).length).toBe(500);

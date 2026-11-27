@@ -326,6 +326,7 @@ export function validateExitFeedbackEvent(input: unknown, projectKey: string): R
 	if (typeof timestamp !== "string" || Number.isNaN(Date.parse(timestamp)) || new Date(timestamp).toISOString() !== timestamp) return null;
 	const feedback = sanitizeExitFeedbackProperties(event.event, received);
 	if (!("version" in feedback)) return null;
+	if (event.event === "ao.exit_feedback.answered" && !("answer" in feedback)) return null;
 	const properties: Record<string, unknown> = {};
 	for (const [key, value] of Object.entries(received)) {
 		if (!CONTEXT_KEYS.has(key) && !key.startsWith("$")) continue;
