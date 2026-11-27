@@ -255,6 +255,36 @@ describe("BrowserProfileStore", () => {
 		expect(store.getDefaultProfileId()).toBe(imported.id);
 	});
 
+	describe("a registry saved before this version", () => {
+		const legacyStore = async (defaultIndex: number | null) => {
+			const stateDir = await makeStateDir();
+			const registry = registryWithProfiles(2);
+			registry.defaultProfileId = defaultIndex === null ? null : profileId(defaultIndex);
+			await writeFile(path.join(stateDir, "browser-profiles.json"), JSON.stringify(registry));
+			const store = new BrowserProfileStore({ stateDir });
+			await store.load();
+			await store.ensureDefaultProfile("Personal");
+			const imported = await store.createProfile("Firefox", { claimDefault: false });
+			await store.claimDefaultForImport(imported.id);
+			return { store, imported };
+		};
+
+		it("keeps a default the user picked (not the oldest profile) through an import", async () => {
+			const { store } = await legacyStore(2);
+			expect(store.getDefaultProfileId()).toBe(profileId(2));
+		});
+
+		it("keeps a default the user turned off through an import", async () => {
+			const { store } = await legacyStore(null);
+			expect(store.getDefaultProfileId()).toBeNull();
+		});
+
+		it("lets an import replace a default the app set (the oldest profile)", async () => {
+			const { store, imported } = await legacyStore(1);
+			expect(store.getDefaultProfileId()).toBe(imported.id);
+		});
+	});
+
 	it("creates one persistent default profile on first run so sessions start signed in", async () => {
 		const stateDir = await makeStateDir();
 		const store = new BrowserProfileStore({ stateDir });
