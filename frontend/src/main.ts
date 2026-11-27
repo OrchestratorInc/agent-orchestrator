@@ -553,7 +553,8 @@ const desktopQuit = createDesktopQuitController({
 // there is nowhere to show the dialog, so the shortcut quits directly.
 const quitConfirm = createQuitConfirmController({
 	canConfirm: () => {
-		// The exit feedback dialog replaces "Quit AO?" for this quit.
+		// The exit feedback dialog replaces "Quit AO?" for this quit, including a
+		// second ⌘Q while it is open.
 		if (exitFeedbackWouldShow()) return false;
 		const shell = getShellWebContents();
 		return Boolean(mainWindow?.isVisible() && !mainWindow.isMinimized() && shell && !shell.isDestroyed());
@@ -605,9 +606,13 @@ function decideExitFeedbackNow() {
 	if (!mainWindow || !mainWindow.isVisible() || mainWindow.isMinimized() || !shell || shell.isDestroyed() || shell.isCrashed()) return null;
 	return decideExitFeedback(exitFeedbackFacts.get(), { nowMs: Date.now(), launchedAtMs: exitFeedbackLaunchedAtMs, analyticsOn: exitFeedbackAnalyticsOn(), override: exitFeedbackOverride });
 }
+/** Whether a quit now belongs to the exit feedback gate: it is about to show, or already holds a quit. */
 function exitFeedbackWouldShow(): boolean {
 	try {
-		return exitFeedbackGate.phase() === "idle" && decideExitFeedbackNow() !== null;
+		const phase = exitFeedbackGate.phase();
+		// A second ⌘Q while the dialog is up must reach the gate as second_close.
+		if (phase === "pending" || phase === "open" || phase === "closing") return true;
+		return phase === "idle" && decideExitFeedbackNow() !== null;
 	} catch {
 		return false;
 	}
