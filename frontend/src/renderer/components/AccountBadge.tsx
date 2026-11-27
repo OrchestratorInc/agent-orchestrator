@@ -94,24 +94,24 @@ export function AccountChip({ provider, accountProvider, name, email, color, let
 	);
 }
 
-/** The agent's logo with a small circle in the account's color on its corner, holding the account's
- * letters: which account the message runs on, without taking room from the model's name. The text is
+/** The agent's logo with a small circle in the account's color on its corner, holding the first of
+ * the account's letters: which account the message runs on, without taking room from the model's name. The text is
  * the dark badge foreground, which holds >= 4.5:1 on every palette color in both themes (white does
  * not). The account is named on hover and to screen readers. */
 export function ProviderMarkWithAccount({ provider, accountProvider, name, email, color, letters: given, className }: AccountBadgeProps) {
 	const label = name?.trim() || email || "";
-	const letters = given || accountAbbreviation({ name, email, provider: accountProvider ?? provider });
+	const initial = Array.from(given || accountAbbreviation({ name, email, provider: accountProvider ?? provider }))[0] ?? "";
 	return (
-		<span role="img" aria-label={label} title={label || undefined} className={cn("relative mr-2 inline-flex shrink-0", className)}>
+		<span role="img" aria-label={label} title={label || undefined} className={cn("relative mr-1.5 inline-flex shrink-0", className)}>
 			<ProviderMark provider={provider} className="size-3.5" />
 			<span
 				aria-hidden="true"
 				className={cn(
-					"absolute -right-2 -bottom-1 inline-flex size-[15px] items-center justify-center rounded-full text-[length:7px] font-bold leading-none tracking-[-0.02em] shadow-[0_0_0_1.5px_var(--composer-bg,var(--color-bg-tertiary))]",
+					"absolute -right-1.5 -bottom-1 inline-flex size-[11px] items-center justify-center rounded-full text-[length:7px] font-bold leading-none shadow-[0_0_0_1.5px_var(--composer-bg,var(--color-bg-tertiary))]",
 					color ? `${COLOR_CLASS[color]} text-(color:--account-badge-foreground)` : "bg-foreground/45 text-background",
 				)}
 			>
-				{letters}
+				{initial}
 			</span>
 		</span>
 	);
