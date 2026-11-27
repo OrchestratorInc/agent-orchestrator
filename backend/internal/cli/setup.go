@@ -69,6 +69,15 @@ type setupOptions struct {
 	check             bool
 	dryRun            bool
 	json              bool
+	// target is the repository resolved once per run.
+	target *resolvedTarget
+}
+
+// resolvedTarget caches the repository setup works on, so every step uses
+// the same one (set once the daemon is up).
+type resolvedTarget struct {
+	path string
+	stop *setupStep
 }
 
 // readOnly reports whether setup must not change anything.
@@ -124,6 +133,9 @@ type setupResult struct {
 	agentSaveable bool
 	// readOnly is set for --check and --dry-run.
 	readOnly bool
+	// extraActions are further runnable actions of the agent step (one
+	// login command per agent that needs one).
+	extraActions []string
 	// repoPath is the repository setup works on, once the daemon is up.
 	repoPath  string
 	authPlans map[string]setupAuthPlan
@@ -265,7 +277,9 @@ func (c *commandContext) runSetup(ctx context.Context, errOut io.Writer, opts se
 		return res
 	}
 
-	if path, stop := c.setupRepoPath(ctx, opts); stop == nil {
+	path, stop := c.setupRepoPath(ctx, opts)
+	opts.target = &resolvedTarget{path: path, stop: stop}
+	if stop == nil {
 		res.repoPath = path
 	}
 	agentStep := add(c.setupAgentStep(ctx, opts, &res))
@@ -356,6 +370,13 @@ func setupApplyCommand(res *setupResult, opts setupOptions) string {
 	if opts.yes {
 		cmd += " --yes"
 	}
+	// Not yet submitted: the rerun should start the task too.
+	if opts.start != "" && res.Task == nil {
+		cmd += " --start " + shellQuote(opts.start)
+		if opts.worker {
+			cmd += " --worker"
+		}
+	}
 	return cmd
 }
 
@@ -378,9 +399,15 @@ func finishSetup(res *setupResult, opts setupOptions) {
 		default:
 			continue
 		}
-		if s.Fix != "" && !seen[s.Fix] {
-			seen[s.Fix] = true
-			res.NextActions = append(res.NextActions, s.Fix)
+		actions := []string{s.Fix}
+		if s.Step == setupStepAgent {
+			actions = append(actions, res.extraActions...)
+		}
+		for _, a := range actions {
+			if a != "" && !seen[a] {
+				seen[a] = true
+				res.NextActions = append(res.NextActions, a)
+			}
 		}
 	}
 	res.Ready = !blocked && !res.pending
@@ -393,13 +420,13 @@ func finishSetup(res *setupResult, opts setupOptions) {
 		verify.Detail = fmt.Sprintf("setup is done and task %s is waiting on you: answer it in Orchestrator and follow it with `ao task wait %s`; do not run `ao setup --start` again", res.Task.TaskID, res.Task.TaskID)
 	case blocked:
 		verify.Status = setupNeedsHuman
-		verify.Detail = "not ready: finish next_actions, then run `ao setup` again"
+		verify.Detail = fmt.Sprintf("not ready: finish next_actions, then run `%s`", setupApplyCommand(res, opts))
 		for _, s := range res.Steps {
 			if s.Status != setupFailed {
 				continue
 			}
 			verify.Status = setupFailed
-			verify.Detail = fmt.Sprintf("not ready: the %s step failed; fix what its detail names, then run `ao setup` again", s.Step)
+			verify.Detail = fmt.Sprintf("not ready: the %s step failed; fix what its detail names, then run `%s`", s.Step, setupApplyCommand(res, opts))
 			if s.Step == setupStepStart {
 				// The task may exist even when start failed (delivery not
 				// confirmed, no turn id yet): rerunning --start could send it
@@ -530,7 +557,15 @@ func (c *commandContext) setupAgentStep(ctx context.Context, opts setupOptions, 
 	step := setupStep{Step: setupStepAgent}
 	// The display policy is enough to choose; the chosen agents are probed
 	// fresh below.
-	readiness, err := c.ensureAgentReadiness(ctx, nil, "display")
+	var readiness agentReadinessResponse
+	var err error
+	if res.readOnly {
+		// Previews read the cached readiness: an ensure can start agent
+		// account checks, which --check and --dry-run must not.
+		err = c.getJSON(ctx, "agents/readiness", &readiness)
+	} else {
+		readiness, err = c.ensureAgentReadiness(ctx, nil, "display")
+	}
 	if err != nil {
 		step.Status, step.Detail = setupFailed, "could not read agent readiness: "+err.Error()
 		return step
@@ -625,7 +660,8 @@ func (c *commandContext) setupAgentStep(ctx context.Context, opts setupOptions, 
 	}
 	if len(problems) > 0 {
 		step.Detail = callerNote + chosen + ": " + strings.Join(problems, "; ")
-		step.Fix = strings.Join(fixes, "; then ")
+		step.Fix = fixes[0]
+		res.extraActions = append(res.extraActions, fixes[1:]...)
 		return step
 	}
 	step.Detail = callerNote + chosen + "; " + strings.Join(notes, "; ")
@@ -1107,6 +1143,14 @@ func (c *commandContext) setupProjectStep(ctx context.Context, opts setupOptions
 			}
 			return step
 		}
+		if res.Agent != nil && !res.agentSaveable && (res.Agent.Source == "flag" || res.Agent.Source == "roles") {
+			// The agent the person named is not usable yet. Registering now
+			// would save the daemon's default instead, and the rerun after
+			// installing would then need --yes to replace it.
+			step.Status = setupSkipped
+			step.Detail = fmt.Sprintf("%s is not registered yet: setup registers it with the agents you chose once they are installed", path)
+			return step
+		}
 		req := addProjectRequest{Path: path}
 		if res.Agent != nil && res.agentSaveable {
 			req.Config = &projectConfig{
@@ -1150,7 +1194,7 @@ func (c *commandContext) setupProjectStep(ctx context.Context, opts setupOptions
 		}
 	}
 
-	if reused && res.agentSaveable {
+	if reused {
 		agentStep, changed := c.setupReconcileAgents(ctx, opts, res, &project)
 		if agentStep != nil {
 			return *agentStep
@@ -1247,6 +1291,21 @@ func (c *commandContext) setupReconcileAgents(ctx context.Context, opts setupOpt
 		saved = cfg
 		project.Config = &cfg
 	}
+	if !res.agentSaveable {
+		// The chosen agents cannot be saved (not installed, not supported):
+		// keep the project's own roles and check those instead.
+		res.Agent.Worker = firstNonEmpty(saved.Worker.Agent, res.Agent.Worker)
+		res.Agent.Orchestrator = firstNonEmpty(saved.Orchestrator.Agent, res.Agent.Orchestrator)
+		for _, id := range uniqueStrings(res.Agent.Worker, res.Agent.Orchestrator) {
+			if !res.checked[id] {
+				if _, err := c.setupCheckAgent(ctx, id, res); err != nil {
+					step := setupStep{Step: setupStepProject, Status: setupFailed, Detail: err.Error()}
+					return &step, ""
+				}
+			}
+		}
+		return nil, ""
+	}
 	explicitWorker := opts.workerAgent != "" || opts.agent != ""
 	explicitOrch := opts.orchestratorAgent != "" || opts.agent != ""
 	want := saved
@@ -1325,14 +1384,25 @@ func (c *commandContext) setupReconcileAgents(ctx context.Context, opts setupOpt
 // setupRepoPath resolves --path, or the git repository around the current
 // directory, to an absolute repository root.
 func (c *commandContext) setupRepoPath(ctx context.Context, opts setupOptions) (string, *setupStep) {
+	if opts.target != nil {
+		return opts.target.path, opts.target.stop
+	}
 	start := opts.path
 	if start == "" {
 		// Inside an Orchestrator session, AO_PROJECT_ID names the project the
 		// session belongs to: set that one up, not the session's workspace.
 		if id := strings.TrimSpace(os.Getenv("AO_PROJECT_ID")); id != "" {
-			if project, err := c.fetchProjectDetails(ctx, id); err == nil && project.Path != "" {
-				return filepath.Clean(project.Path), nil
+			project, err := c.fetchProjectDetails(ctx, id)
+			if err != nil || project.Path == "" {
+				// Never fall back to the current checkout: it may be another
+				// project's.
+				detail := fmt.Sprintf("AO_PROJECT_ID names project %s, which could not be read", id)
+				if err != nil {
+					detail += ": " + err.Error()
+				}
+				return "", &setupStep{Step: setupStepProject, Status: setupFailed, Detail: detail + "; pass --path to choose the repository", Fix: "ao project ls"}
 			}
+			return filepath.Clean(project.Path), nil
 		}
 	}
 	if start == "" {
@@ -1438,12 +1508,17 @@ type setupBranchPlan struct {
 	why    string
 	// remote is the remote the base comes from, "" for a repo with none.
 	remote string
+	// lookupFailed is set when git could not list the remotes.
+	lookupFailed bool
 }
 
 // fix is the command a person runs when the plan asks for a branch: fetch
 // the remote and record its default branch, or name a branch for a repo with
 // no remote and no branch checked out.
 func (c *commandContext) branchFix(ctx context.Context, p setupBranchPlan, path, projectID string) string {
+	if p.lookupFailed {
+		return fmt.Sprintf("git -C %s remote -v", shellQuote(path))
+	}
 	if p.remote != "" {
 		return fmt.Sprintf("git -C %s fetch %s && git -C %s remote set-head %s --auto", shellQuote(path), shellQuote(p.remote), shellQuote(path), shellQuote(p.remote))
 	}
@@ -1478,15 +1553,18 @@ func (p setupBranchPlan) manual(projectID string) string {
 //     would then start from. Otherwise a person must say.
 func (c *commandContext) setupBaseBranch(ctx context.Context, project projectDetails) setupBranchPlan {
 	remote := ""
-	if out, err := c.deps.CommandOutputInDir(ctx, project.Path, "git", "remote"); err == nil {
-		for _, name := range strings.Fields(string(out)) {
-			if name == "origin" {
-				remote = name
-				break
-			}
-			if remote == "" {
-				remote = name
-			}
+	out, err := c.deps.CommandOutputInDir(ctx, project.Path, "git", "remote")
+	if err != nil {
+		// Unknown is not "no remote": never save the checked-out branch.
+		return setupBranchPlan{why: "the repository's remotes could not be listed (" + strings.TrimSpace(err.Error()) + ")", lookupFailed: true}
+	}
+	for _, name := range strings.Fields(string(out)) {
+		if name == "origin" {
+			remote = name
+			break
+		}
+		if remote == "" {
+			remote = name
 		}
 	}
 	if remote == "" {

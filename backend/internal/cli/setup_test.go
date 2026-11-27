@@ -93,6 +93,7 @@ func newSetupDaemon(t *testing.T) *taskDaemon {
 	d.setFunc("GET /healthz", health("ok"))
 	d.setFunc("GET /readyz", health("ready"))
 	d.set("POST /api/v1/agents/readiness/ensure", 200, setupReadinessBoth)
+	d.set("GET /api/v1/agents/readiness", 200, setupReadinessBoth)
 	d.set("POST /api/v1/agents/codex/probe", 200, `{"agent":{"id":"codex","authStatus":"authorized"},"supported":true,"installed":true}`)
 	d.set("POST /api/v1/agents/gemini/probe", 200, `{"agent":{"id":"gemini","authStatus":"unknown"},"supported":true,"installed":false}`)
 	d.set("GET /api/v1/system/github-auth", 200, `{"id":"github-auth","label":"GitHub access","satisfied":true}`)
@@ -1103,7 +1104,7 @@ func TestSetupRemoteWithUnresolvableHeadNeedsHuman(t *testing.T) {
 	}
 	res := decodeSetup(t, out)
 	project := stepNamed(t, res, "project")
-	wantFix := fmt.Sprintf("git -C %s fetch origin && git -C %s remote set-head origin --auto", repo, repo)
+	wantFix := fmt.Sprintf("git -C %s fetch origin && git -C %s remote set-head origin --auto", shellQuote(repo), shellQuote(repo))
 	if project.Status != setupNeedsHuman || project.Fix != wantFix || !strings.Contains(project.Detail, "origin's default branch could not be resolved") || !strings.Contains(project.Detail, "ao project set-config calc --default-branch <branch>") {
 		t.Fatalf("project step = %+v", project)
 	}
@@ -1225,8 +1226,8 @@ func TestSetupCheckDoesNotProbeAgents(t *testing.T) {
 	for _, mode := range []string{"--check", "--dry-run"} {
 		out, _, _ := executeCLI(t, fakeClockDeps(), "setup", "--path", repo, "--agent", "codex", mode, "--json")
 		for _, r := range d.requests {
-			if strings.HasSuffix(r, "/probe") {
-				t.Fatalf("%s called %s; the probe can start background work", mode, r)
+			if strings.HasSuffix(r, "/probe") || r == "POST /api/v1/agents/readiness/ensure" {
+				t.Fatalf("%s called %s; it can start background agent work", mode, r)
 			}
 		}
 		if agent := stepNamed(t, decodeSetup(t, out), "agent"); agent.Status != setupOK {
@@ -1608,5 +1609,111 @@ func TestSetupInterruptedStartExits4(t *testing.T) {
 	}
 	if !reflect.DeepEqual(res.NextActions, []string{"ao task wait calc-1"}) {
 		t.Fatalf("next_actions = %q", res.NextActions)
+	}
+}
+
+func TestSetupListsEachSignInSeparately(t *testing.T) {
+	d := newSetupDaemon(t)
+	repo := gitRepo(t, true)
+	registerOnPost(d, repo, "example/calc")
+	d.set("POST /api/v1/agents/claude-code/probe", 200, `{"agent":{"id":"claude-code","authStatus":"unauthorized"},"supported":true,"installed":true}`)
+	d.set("POST /api/v1/agents/codex/probe", 200, `{"agent":{"id":"codex","authStatus":"unauthorized"},"supported":true,"installed":true}`)
+	out, _, _ := executeCLI(t, fakeClockDeps(), "setup", "--path", repo, "--worker-agent", "claude-code", "--orchestrator-agent", "codex", "--json")
+	if res := decodeSetup(t, out); !reflect.DeepEqual(res.NextActions, []string{"agent-a login", "agent-b login"}) {
+		t.Fatalf("next_actions = %q, want one runnable login command each", res.NextActions)
+	}
+}
+
+func TestSetupRerunInstructionNamesTheTarget(t *testing.T) {
+	d := newSetupDaemon(t)
+	repo := gitRepo(t, true)
+	t.Setenv("CLAUDECODE", "1")
+	registerOnPost(d, repo, "example/calc")
+	d.set("POST /api/v1/agents/claude-code/probe", 200, `{"agent":{"id":"claude-code","authStatus":"unauthorized"},"supported":true,"installed":true}`)
+	out, _, _ := executeCLI(t, fakeClockDeps(), "setup", "--path", repo, "--json")
+	if v := stepNamed(t, decodeSetup(t, out), "verify"); !strings.Contains(v.Detail, "then run `ao setup --path "+shellQuote(repo)+"`") {
+		t.Fatalf("verify = %+v", v)
+	}
+}
+
+func TestSetupDefersRegistrationForAnUninstalledExplicitAgent(t *testing.T) {
+	d := newSetupDaemon(t)
+	repo := gitRepo(t, true)
+	registerOnPost(d, repo, "example/calc")
+	out, _, _ := executeCLI(t, fakeClockDeps(), "setup", "--path", repo, "--agent", "gemini", "--json")
+	if d.saw("POST /api/v1/projects") {
+		t.Fatal("registered the project although the chosen agent is not installed")
+	}
+	if p := stepNamed(t, decodeSetup(t, out), "project"); p.Status != setupSkipped || !strings.Contains(p.Detail, "not registered yet") {
+		t.Fatalf("project step = %+v", p)
+	}
+}
+
+func TestSetupChecksSavedRolesWhenTheChoiceCannotBeSaved(t *testing.T) {
+	d := newSetupDaemon(t)
+	repo := gitRepo(t, true)
+	t.Setenv("CURSOR_AGENT", "1")
+	d.set("POST /api/v1/agents/readiness/ensure", 200, `{"agents":[{"id":"cursor","label":"Agent D","installation":{"state":"not_installed"},"authentication":{"state":"unknown"},"effectiveReadiness":"not_ready"}]}`)
+	d.set("POST /api/v1/agents/cursor/probe", 200, `{"agent":{"id":"cursor"},"supported":true,"installed":false}`)
+	// The first lookup misses the project; the project step finds it with ready agents.
+	project := fmt.Sprintf(`{"id":"calc","path":%q,"repo":"example/calc","defaultBranch":"main","config":{"worker":{"agent":"codex"},"orchestrator":{"agent":"codex"}}}`, repo)
+	lists := 0
+	d.setFunc("GET /api/v1/projects", func() (int, string) {
+		lists++
+		if lists == 1 {
+			return 200, `{"projects":[]}`
+		}
+		return 200, fmt.Sprintf(`{"projects":[{"id":"calc","path":%q}]}`, repo)
+	})
+	d.set("GET /api/v1/projects/calc", 200, `{"status":"ok","project":`+project+`}`)
+	out, _, err := executeCLI(t, fakeClockDeps(), "setup", "--path", repo, "--json")
+	if err != nil {
+		t.Fatalf("err = %v\n%s", err, out)
+	}
+	if res := decodeSetup(t, out); !res.Ready || res.Agent.ID != "codex" {
+		t.Fatalf("ready=%v agent=%+v; the project's own ready agents should be used", res.Ready, res.Agent)
+	}
+}
+
+func TestSetupUnreadableAOProjectIDStops(t *testing.T) {
+	d := newSetupDaemon(t)
+	repo := gitRepo(t, true)
+	registerOnPost(d, repo, "example/calc")
+	t.Setenv("AO_PROJECT_ID", "missing")
+	t.Chdir(repo)
+	out, _, err := executeCLI(t, fakeClockDeps(), "setup", "--json")
+	if got := ExitCode(err); got != setupExitFailed {
+		t.Fatalf("exit = %d (%v)", got, err)
+	}
+	if d.saw("POST /api/v1/projects") {
+		t.Fatal("fell back to the current checkout although AO_PROJECT_ID could not be read")
+	}
+	if p := stepNamed(t, decodeSetup(t, out), "project"); !strings.Contains(p.Detail, "pass --path") {
+		t.Fatalf("project step = %+v", p)
+	}
+}
+
+func TestSetupRemoteLookupFailureSavesNoBranch(t *testing.T) {
+	d := newSetupDaemon(t)
+	repo := gitRepo(t, false)
+	gitIn(t, repo, "switch", "-q", "-c", "feature/x")
+	registerOnPost(d, repo, "")
+	d.set("PUT /api/v1/projects/calc/config", 200, `{"project":{"id":"calc"}}`)
+	deps := fakeClockDeps()
+	deps.CommandOutputInDir = func(ctx context.Context, dir, name string, args ...string) ([]byte, error) {
+		if name == "git" && len(args) == 1 && args[0] == "remote" {
+			return nil, errors.New("git remote: exit status 128")
+		}
+		return commandOutputInDir(ctx, dir, name, args...)
+	}
+	out, _, err := executeCLI(t, deps, "setup", "--path", repo, "--agent", "codex", "--json")
+	if got := ExitCode(err); got != setupExitNeedsHuman {
+		t.Fatalf("exit = %d (%v)\n%s", got, err, out)
+	}
+	if d.saw("PUT /api/v1/projects/calc/config") {
+		t.Fatal("saved the checked-out branch although the remotes could not be listed")
+	}
+	if p := stepNamed(t, decodeSetup(t, out), "project"); !strings.Contains(p.Fix, "remote -v") {
+		t.Fatalf("project step = %+v", p)
 	}
 }

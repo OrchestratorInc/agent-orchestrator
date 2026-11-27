@@ -4,7 +4,7 @@ Use this when the user asks you to set up Orchestrator, add their first project,
 
 ## One command: `ao setup`
 
-Choose the repository first, as in manual step 3. `ao project ls` needs a running daemon, so start one with `ao serve` (it reuses a running one, and `ao setup` reuses it too), then run `ao project ls`; if the user named no repository, offer a few recent ones. Then run `ao setup --path <repo> --json`. It does manual steps 1, 2 and 4 for you (daemon, agent, registration) and lists what needs a person. Without `--path` it registers the git repository around the current directory, so pass `--path` unless that is the one the user wants. If `ao setup` isn't available, follow the manual steps.
+Choose the repository first, as in manual step 3. `ao project ls` needs a running daemon, so start one with `ao serve` (it reuses a running one, and `ao setup` reuses it too), then run `ao project ls`; if the user named no repository, offer a few recent ones. Then run `ao setup --path <repo> --json`. It does manual steps 1, 2 and 4 for you (daemon, agent, registration) and lists what needs a person. Without `--path` it uses `AO_PROJECT_ID`'s project when you run inside an Orchestrator session, and otherwise the git repository around the current directory, so pass `--path` whenever you mean a different repository. If `ao setup` isn't available, follow the manual steps.
 
 ```bash
 ao setup --path <repo> --json
@@ -35,7 +35,7 @@ With `--json` the output is `{ready, agent, project, steps, next_actions, task}`
 
 | Flag | Meaning |
 |---|---|
-| `--path <repo>` | Repository to register. Default: the git repository containing the current directory. |
+| `--path <repo>` | Repository to register. Default: `AO_PROJECT_ID`'s project inside an Orchestrator session, otherwise the git repository containing the current directory (a linked worktree resolves to its main repository). |
 | `--agent <id>` | Agent to use, from `ao agent ls`. Default: a registered project's saved agents, then the calling agent, then the first ready agent. |
 | `--worker-agent <id>` / `--orchestrator-agent <id>` | Use a different agent for one role. |
 | `--start "<task>"` | Start this task once setup is ready. |
