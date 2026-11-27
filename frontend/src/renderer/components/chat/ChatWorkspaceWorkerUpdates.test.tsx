@@ -1243,8 +1243,10 @@ describe("agent messages around the user's turns", () => {
 			human("h", 1, "Ship the shop changes."),
 			{ ...command("h", 1, "ao status"), sequence: 11 },
 			steer("s1", 20, "Please continue\n\n<ao-worker-reports>\nReports since your previous turn:\n\n[checkpoint] [Menus](ao://sessions/proj/proj-285)\nMenus render.\n</ao-worker-reports>\n"),
+			steer("v1", 30, "[via Slack #c1] Is the shop live?\n\n<ao-worker-reports>\nReports since your previous turn:\n\n[checkpoint] [Menus](ao://sessions/proj/proj-285)\nMenus render.\n</ao-worker-reports>\n"),
 		], { h: "running" }));
 		expect(screen.getByText("Please continue")).toBeInTheDocument();
+		expect(screen.getByText(/Is the shop live\?/)).toBeInTheDocument();
 		expect(screen.queryByText(/ao-worker-reports/)).not.toBeInTheDocument();
 	});
 });

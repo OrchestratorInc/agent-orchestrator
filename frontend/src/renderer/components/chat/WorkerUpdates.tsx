@@ -131,7 +131,7 @@ export const relayedVia = cachedBy((item): { name: string; body: string } | null
 	// A message's piggybacked reports draw as their own rows, as under a human message.
 	const text = item.kind === "message"
 		? item.role === "user" && !item.senderSessionId ? humanVisibleText(item.text) : undefined
-		: isSteer(item) && !item.detail?.senderSessionId?.trim() ? item.detail?.text ?? item.summary : undefined;
+		: isSteer(item) && !item.detail?.senderSessionId?.trim() ? humanVisibleText(item.detail?.text ?? item.summary) : undefined;
 	if (text === undefined) return null;
 	const via = VIA_PREFIX.exec(text);
 	const name = via?.[1]?.trim();
@@ -169,7 +169,7 @@ export function finalReply(items: readonly ConversationItem[]): string {
 export const piggybackedUpdates = cachedBy((item): WorkerUpdate[] => {
 	const text = item.kind === "message"
 		? item.role === "user" && item.origin === "human" ? item.text : undefined
-		: isSteer(item) && !item.detail?.senderSessionId?.trim() ? item.detail?.text : undefined;
+		: isSteer(item) && !item.detail?.senderSessionId?.trim() ? item.detail?.text ?? item.summary : undefined;
 	if (text === undefined) return [];
 	const visible = humanVisibleText(text);
 	if (visible === text) return [];

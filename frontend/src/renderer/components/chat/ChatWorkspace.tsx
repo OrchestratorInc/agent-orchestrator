@@ -4631,10 +4631,10 @@ export function Timeline({
 		const cleaned = spawned.size === 0 || !placed.some((group) => group.items.some(repeats)) ? placed : placed
 			.map((group) => group.items.some(repeats) ? { ...group, items: group.items.filter((item) => !repeats(item)) } : group)
 			.filter((group) => group.live || group.items.length > 0);
-		const folded = foldBackground(cleaned, workerUpdateIndex, endedSpawns, new Set(snapshot.turns.map((turn) => turn.id)), runKeys.current, batchedReports.under, find.gapBeforeSequence, queuedTurnIds(snapshot));
+		const folded = foldBackground(cleaned, workerUpdateIndex, endedSpawns, new Set(snapshot.turns.map((turn) => turn.id)), runKeys.current, batchedReports.under, find.gapBeforeSequence, queued);
 		runKeys.current = new Map(folded.flatMap((group) => group.folded ? group.folded.members.map((member) => [member.key, group.key] as const) : []));
 		return folded;
-	}, [batchedReports, controllerStopped, developerMode, endedSpawns, find.gapBeforeSequence, openingPending, openingStartedAt, openingStartupLabel, openingTurnId, pendingTurnLabel, snapshot, timelineItems, workerUpdateIndex, workerUpdates]);
+	}, [batchedReports, controllerStopped, developerMode, endedSpawns, find.gapBeforeSequence, openingPending, openingStartedAt, openingStartupLabel, openingTurnId, pendingTurnLabel, queued, snapshot, timelineItems, workerUpdateIndex, workerUpdates]);
 	const groups = useStableList(grouped, groupKey, sameGroup);
 	// Read from every group, not the mounted ones: the timeline is virtualized, and the
 	// panel lists a child whose turn has scrolled far out of view.
