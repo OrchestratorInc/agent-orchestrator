@@ -1274,7 +1274,7 @@ and `project_source` on its `step_completed` says which it was.
 | Event | When it is sent | Onboarding-specific properties |
 | --- | --- | --- |
 | `ao.onboarding.action_started` | An install or sign-in starts, by a click or (`auto`) by the page, as the GitHub CLI login does once | `action`, `target`, `step`, `step_index`, `attempt`, `auto` |
-| `ao.onboarding.action_finished` | That attempt ends, once, or onboarding ends while it still runs (`left`) | `action`, `target`, `step`, `step_index`, `attempt`, `outcome`, `reason`, `error_code`, `duration_ms` |
+| `ao.onboarding.action_finished` | That attempt ends, once, or onboarding ends while it still runs (`left`) | `action`, `target`, `step`, `step_index`, `attempt`, `outcome`, `reason`, `failure_cause`, `error_code`, `duration_ms` |
 
 `attempt` counts from 1 for each action and target in a launch, so a value
 above 1 is a retry. The existing `ao.projects.clone_failed`,
@@ -1304,8 +1304,10 @@ sampling.
   `<action>:<reason>`, `action`, `reason`, `target` and `flow` `onboarding`.
   `target` is what the action was for, from a fixed list in
   `shared/onboarding-failures.ts` (`gh`, `tmux`, `claude-code`, `codex` and
-  the other registry agents), or `other` for any id not on it. It is a tag to
-  filter by, not part of the grouping. Only these
+  the other registry agents), or `other` for any id not on it. An
+  `install_failed` issue also carries `cause`, the same closed-list value as
+  PostHog's `failure_cause` (below). Both are tags to filter by, not part of
+  the grouping. Only these
   reasons are sent: `start_failed`, `install_failed`, `interrupted`,
   `lost_contact`, `cleanup_failed`, `request_failed` and `other`. A login the
   person did not finish (`not_signed_in`), a platform with no installer
@@ -1372,6 +1374,34 @@ sampling.
   `interrupted`, `unsupported`, `lost_contact`, `not_signed_in`,
   `cleanup_failed`, `request_failed`, `documentation` or `other`.
   `error_code` is the API's error code, never its message.
+- `failure_cause` on `action_finished` comes only with `reason`
+  `install_failed` (`dependency_install`, `gh_install` and `agent_install`).
+  The daemon reads it from the failed install job's error and installer
+  output (`InstallJob.failureCause`, `systeminstall/failure_cause.go`); the
+  error and output themselves never leave the machine. It is one of:
+  - `timeout`: the install, or the check after it, ran past its deadline.
+  - `not_found_after_install`: the command finished but the program could
+    not be found afterwards (not on the daemon's PATH, or its adapter cannot
+    resolve it).
+  - `verify_failed`: the program was found but did not start or report the
+    expected version.
+  - `node_missing`, `npm_missing`, `brew_missing`: Node.js, npm or Homebrew
+    is not installed or not on PATH.
+  - `tool_missing`: another program the installer runs (`curl`, `bash`,
+    `winget`, `apt-get` and so on) is missing.
+  - `xcode_tools_missing`: macOS Command Line Tools are missing or broken.
+  - `disk_full`: no space left on the disk.
+  - `permission_denied`: the installer could not write where it installs
+    (`EACCES`, `EPERM`, a `sudo` password prompt, Windows "Access is denied").
+  - `network`: a download or registry request failed (DNS, connection,
+    proxy, TLS or an HTTP error status).
+  - `locked`: the package manager or the agent was busy with another install
+    (a held Homebrew or dpkg lock, an install already running).
+  - `exit_nonzero`: the installer exited with an error none of the above
+    explains.
+  - `other`: anything else, including a cause this build does not know.
+
+  A daemon too old to report a cause sends none, so the property is absent.
 
 `ao.renderer.cloud_signed_in` also carries `source` `onboarding` when the
 sign-in finished within 30 minutes of clicking Sign in on onboarding's account
