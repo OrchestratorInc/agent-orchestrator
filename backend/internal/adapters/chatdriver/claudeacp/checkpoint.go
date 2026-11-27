@@ -89,6 +89,7 @@ type checkpointRecord struct {
 	Subtype               string `json:"subtype"`
 	Sidechain             bool   `json:"isSidechain"`
 	Meta                  bool   `json:"isMeta"`
+	APIErrorMessage       bool   `json:"isApiErrorMessage"`
 	TurnCompanion         bool   `json:"turnCompanion"`
 	PreventedContinuation bool   `json:"preventedContinuation"`
 	Attachment            struct {
@@ -196,6 +197,8 @@ type checkpointTurn struct {
 	// the prompt's own cycle and fires no Stop, so the turn never gets an
 	// end_turn reply. The marker is its settled boundary.
 	interrupted bool
+	// An explicit API error ends a submission but is not a model reply.
+	apiError bool
 	// carried is the turn a compaction summary starts. The summary keeps the
 	// prompt ID of the turn that was running or had just ended. resumed means
 	// Claude answered in it after the boundary, so that turn ran on through the
@@ -359,10 +362,14 @@ func verifyCheckpointTranscript(ctx context.Context, input io.Reader, request po
 				continue
 			}
 			if checkpointToolResults(record.Message.Content) {
-				// A tool result after an interrupt marker means the turn went on.
-				if len(turns) > 0 && turns[len(turns)-1].interrupted {
-					turns[len(turns)-1].interrupted = false
-					turns[len(turns)-1].complete = false
+				// A tool result after an interrupt or API error means the turn went on.
+				if len(turns) > 0 {
+					turn := &turns[len(turns)-1]
+					if turn.interrupted || turn.apiError {
+						turn.interrupted = false
+						turn.apiError = false
+						turn.complete = false
+					}
 				}
 				continue
 			}
@@ -386,6 +393,7 @@ func verifyCheckpointTranscript(ctx context.Context, input io.Reader, request po
 				if !record.Meta && claudecode.IsInterruptMarker(record.Message.Content) {
 					turns[len(turns)-1].interrupted = true
 					turns[len(turns)-1].complete = true
+					turns[len(turns)-1].apiError = false
 				}
 				continue
 			}
@@ -434,6 +442,11 @@ func verifyCheckpointTranscript(ctx context.Context, input io.Reader, request po
 			if turn.carried && position[record.UUID] > compacted.boundary {
 				turn.resumed = true
 			}
+			if record.APIErrorMessage && record.Message.Model == claudeSyntheticModel && record.Message.StopReason == "stop_sequence" {
+				// Preserve any real reply and its completion status for Stop evidence.
+				turn.apiError = true
+				break
+			}
 			if turn.interrupted && record.Message.Model == claudeSyntheticModel {
 				// Claude's own filler after the marker does not reopen the turn.
 				break
@@ -442,13 +455,15 @@ func verifyCheckpointTranscript(ctx context.Context, input io.Reader, request po
 			if err != nil {
 				return ports.NativeCheckpointBoundary{}, err
 			}
-			// A real reply after the marker means the turn is running again.
+			// A real reply after an interrupt or API error resumes the turn.
 			turn.interrupted = false
+			turn.apiError = false
 			turn.assistant = text
 			turn.complete = record.Message.StopReason == "end_turn"
 		case "system":
 			if record.Subtype == "stop_hook_summary" && record.PreventedContinuation {
 				turn.interrupted = false
+				turn.apiError = false
 				turn.complete = false
 			}
 		}
@@ -497,12 +512,15 @@ func verifyCheckpointTranscript(ctx context.Context, input io.Reader, request po
 		} else if observation.Text != "" && !domain.NativeCheckpointTextMatches(observation.Text, turns[index].assistant) {
 			return ports.NativeCheckpointBoundary{}, checkpointUnsettled("Stop answer does not match its native prompt")
 		}
-		if !turns[index].complete {
+		failedSubmission := observation.Submission && turns[index].apiError
+		if !turns[index].complete && !failedSubmission {
 			return ports.NativeCheckpointBoundary{}, checkpointUnsettled("observed native turn not completed")
 		}
 	}
 	latest := turns[len(turns)-1]
-	if !latest.complete {
+	// ACP may replay an API error as a failure notification without an
+	// assistant message, so the error itself cannot anchor replay.
+	if !latest.complete || latest.apiError {
 		return ports.NativeCheckpointBoundary{}, checkpointUnsettled("native tail still pending")
 	}
 	// Chat replay skips notes, so their output belongs to the turn before.
