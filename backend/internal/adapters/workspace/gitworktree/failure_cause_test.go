@@ -11,10 +11,23 @@ import (
 	"testing"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
+	"github.com/aoagents/agent-orchestrator/backend/internal/telemetrymeta"
 )
 
+// realExitError returns a genuine *exec.ExitError on every platform: the test
+// binary rejects an unknown flag with a non-zero exit.
+func realExitError(t *testing.T) error {
+	t.Helper()
+	err := exec.Command(os.Args[0], "-test.no-such-flag").Run()
+	var exitErr *exec.ExitError
+	if !errors.As(err, &exitErr) {
+		t.Fatalf("expected an exit error, got %v", err)
+	}
+	return err
+}
+
 func TestCommandErrorFailureCause(t *testing.T) {
-	exitErr := errors.New("exit status 128")
+	exitErr := realExitError(t)
 	for _, tc := range []struct {
 		output string
 		err    error
@@ -24,11 +37,29 @@ func TestCommandErrorFailureCause(t *testing.T) {
 		{"fatal: 'ao/w-1' is already used by worktree at '/x'", exitErr, "branch_exists"},
 		{"fatal: '/tmp/w-1' already exists", exitErr, "path_exists"},
 		{"fatal: Unable to create '/r/.git/index.lock': File exists.", exitErr, "locked"},
+		{"error: could not lock config file /r/.git/config: File exists", exitErr, "locked"},
+		{"fatal: '/tmp/w-1' is a missing but locked worktree;", exitErr, "locked"},
 		{"error: could not lock config file .git/config: Permission denied", exitErr, "permission"},
+		{"error: unable to create file a.txt: Access is denied.", exitErr, "permission"},
+		{"fatal: could not create work tree dir '/x': Read-only file system", exitErr, "permission"},
 		{"fatal: cannot create directory at 'a/b': Filename too long", exitErr, "path_too_long"},
 		{"fatal: not a git repository (or any of the parent directories): .git", exitErr, "not_a_repo"},
+		{"fatal: detected dubious ownership in repository at '/r'", exitErr, "unsafe_repo"},
+		{"fatal: cannot change to '/gone': No such file or directory", exitErr, "repo_missing"},
+		{"error: unable to write file: No space left on device", exitErr, "disk_full"},
+		{"error: unable to unlink old 'a.txt': Device or resource busy", exitErr, "in_use"},
+		{"error: object file .git/objects/ab/cd is empty\nfatal: loose object abcd is corrupt", exitErr, "repo_corrupt"},
+		{"fatal: index file corrupt", exitErr, "repo_corrupt"},
+		{"fatal: a branch named 'fix-corrupt-cache' already exists", exitErr, "branch_exists"},
+		{"fatal: cannot lock ref 'refs/heads/ao/w-1': 'refs/heads/ao' exists; cannot create 'refs/heads/ao/w-1'", exitErr, "ref_conflict"},
+		{"fatal: invalid reference: origin/main", exitErr, "ref_missing"},
+		{"fatal: Needed a single revision", exitErr, "ref_missing"},
+		{"xcrun: error: invalid active developer path (/Library/Developer/CommandLineTools)", exitErr, "git_missing"},
+		{"", &exec.Error{Name: "git", Err: exec.ErrNotFound}, "git_missing"},
+		{"", &os.PathError{Op: "fork/exec", Path: "/opt/git", Err: os.ErrNotExist}, "git_missing"},
 		{"", errors.New("signal: killed"), "killed"},
-		{"fatal: unable to access 'https://x/': Could not resolve host", exitErr, "other"},
+		{"fatal: unable to access 'https://x/': Could not resolve host", exitErr, "git_error"},
+		{"fatal: unable to access 'https://x/': Could not resolve host", errors.New("exit status 128"), "other"},
 	} {
 		err := fmt.Errorf("spawn: %w", commandError{args: []string{"git"}, output: tc.output, err: tc.err})
 		var classified interface{ FailureCause() string }
@@ -37,6 +68,9 @@ func TestCommandErrorFailureCause(t *testing.T) {
 		}
 		if got := classified.FailureCause(); got != tc.want {
 			t.Errorf("FailureCause(%q, %v) = %q, want %q", tc.output, tc.err, got, tc.want)
+		}
+		if !telemetrymeta.IsSpawnFailureCause(tc.want) {
+			t.Errorf("cause %q is not in the closed vocabulary Sentry accepts", tc.want)
 		}
 	}
 }
