@@ -1,6 +1,7 @@
 package agy
 
 import (
+	"regexp"
 	"strings"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/terminalui"
@@ -68,11 +69,16 @@ func agyComposer(top, middle, bottom string) ports.TerminalComposerState {
 	if !ok {
 		return ports.TerminalComposerUnknown
 	}
-	if strings.TrimSpace(rest) == "" {
+	if strings.TrimSpace(rest) == "" || agyPlaceholder.MatchString(strings.TrimSpace(rest)) {
 		return ports.TerminalComposerEmpty
 	}
 	return ports.TerminalComposerDraft
 }
+
+// agyPlaceholder matches the hint Antigravity CLI 1.5 shows in an empty
+// composer for its agent mode, such as "Auto mode: edits & safe commands
+// auto-approved (shift+tab to cycle)". It is not a draft.
+var agyPlaceholder = regexp.MustCompile(`^[A-Z][A-Za-z-]*( [A-Za-z-]+)? mode: .*shift\+tab`)
 
 func agyRule(line string) bool {
 	line = strings.TrimSpace(line)
