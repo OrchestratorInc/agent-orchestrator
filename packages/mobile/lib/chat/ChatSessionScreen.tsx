@@ -36,8 +36,7 @@ import { useComposerSnapshot } from "./composerSnapshot";
 import { useChatPushTiming } from "./chatPushTiming";
 import { useKeepUnchanged } from "../keepUnchanged";
 import { useStableFunctionProps } from "../useStableFunctionProps";
-import { KeyboardFollower } from "./KeyboardFollower";
-import { KeyboardMotionScope } from "./keyboardMotion";
+import { FloatingComposerLayout } from "./FloatingComposerLayout";
 import { ChatLinkProvider } from "./ChatMarkdown";
 import { ChatTimeline } from "./ChatTimeline";
 import { useFlag } from "./flag";
@@ -972,12 +971,17 @@ export function ChatSessionScreen({ session: boardSession }: { session: MobileCh
 
 	// One keyboard handler for the composer, its follower and the conversation
 	// (see KeyboardMotionScope).
+	// The composer floats over the conversation, which scrolls on under its
+	// glass; the timeline leaves its measured height clear at the end. The
+	// conversation is not padded for the keyboard: the timeline moves its
+	// content with the keys on the UI thread (ChatTimeline's `keyboardOffset`),
+	// and the composer rides them by a transform (FloatingComposerLayout).
 	return (
-		<KeyboardMotionScope>
-		<View style={styles.screen}>
-		{/* Not padded for the keyboard: the timeline moves its content with the
-		    keyboard on the UI thread (ChatTimeline's `keyboardOffset`). */}
-		<View style={[styles.screen, chatKeyboard.floatingRootStyle]}>
+		<FloatingComposerLayout
+			keyboard={chatKeyboard}
+			style={styles.screen}
+			onComposerLayout={measureComposer}
+			content={<>
 			{headerItems}
 			{CLEAR_HEADER ? null : banners}
 			<View style={styles.conversation}>
@@ -1054,12 +1058,8 @@ export function ChatSessionScreen({ session: boardSession }: { session: MobileCh
 			) : null}
 			</View>
 			{editingMessage ? <View style={{ height: chatKeyboard.restingInset }} /> : null}
-		</View>
-		{/* The composer floats over the conversation, which scrolls on under its
-		    glass; the timeline leaves its measured height clear at the end. It is
-		    out of the padded root above and rides the keyboard by a transform: the
-		    padding is layout, which waited on a busy JS thread (KeyboardFollower). */}
-		<KeyboardFollower lift={chatKeyboard.composerLift} style={styles.floatingComposer} onLayout={measureComposer}>
+			</>}
+			composer={<>
 			{switchCardShown ? null : <McpServerNotice key={noticeKey} noticeKey={noticeKey} servers={brokenServers} visible={chatFocused} />}
 			{/* While a send carries an agent switch, the line desktop draws in the
 			    transcript; the daemon's own marker replaces it once it lands. */}
@@ -1116,9 +1116,8 @@ export function ChatSessionScreen({ session: boardSession }: { session: MobileCh
 					startingAgentName={startupShown && !startupView?.failed ? startupView?.agentName : undefined}
 				/>
 			</View>
-		</KeyboardFollower>
-		</View>
-		</KeyboardMotionScope>
+			</>}
+		/>
 	);
 }
 
@@ -1218,7 +1217,6 @@ const makeStyles = (t: Theme) => StyleSheet.create({
 	conversation: { flex: 1 },
 	// The page's colour, so the conversation scrolling up passes under the
 	// banners rather than showing between them.
-	floatingComposer: { position: "absolute", left: 0, right: 0, bottom: 0 },
 	switchingLine: { paddingHorizontal: space.xl },
 	floatingBanners: { position: "absolute", left: 0, right: 0, backgroundColor: t.bgBase },
 	headerFrost: { position: "absolute", top: 0, left: 0, right: 0 },

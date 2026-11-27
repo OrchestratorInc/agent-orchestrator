@@ -4,10 +4,13 @@ import * as DocumentPicker from "expo-document-picker";
 import * as ImagePicker from "expo-image-picker";
 import { useCallback, useEffect, useMemo, useRef, useState, type ComponentProps, type ReactNode } from "react";
 import { switchOffersFast } from "../agentSwitch";
-import { ActivityIndicator, Keyboard, Platform, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from "react-native";
+import { ActivityIndicator, Keyboard, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from "react-native";
 import Svg, { Defs, LinearGradient, Rect, Stop } from "react-native-svg";
 import Animated, { FadeIn, FadeOut, interpolate, measure, useAnimatedReaction, useAnimatedRef, useAnimatedStyle, useFrameCallback, useSharedValue, withSpring, withTiming, type SharedValue } from "react-native-reanimated";
 import { useReanimatedFocusedInput, useReanimatedKeyboardAnimation } from "react-native-keyboard-controller";
+import { useComposerDockRise } from "./composerDock";
+import { fastPendingKey, rememberFastModel, usePendingFast } from "./learnedFast";
+import { turnSettingsParts } from "./turnSettingsModel";
 import { KeyboardMotionScope, useKeyboardMotion } from "./keyboardMotion";
 import { AppSymbol } from "../AppSymbol";
 import { rowDividerWidth } from "../divider";
@@ -18,7 +21,6 @@ import { useTheme, useThemedStyles } from "../ThemeProvider";
 import { fontScaleCap, iconSize, radius, space, stateOpacity, touchTarget, type } from "../tokens";
 import { Button } from "../ui";
 import { useReducedMotion } from "../useReducedMotion";
-import { KEYBOARD_DOCK_GAP } from "../session/keyboardInset";
 import { DictationField } from "../voice/DictationField";
 import { useVoiceInput } from "../voice/useVoiceInput";
 import { activeTurn, type ChatConfigOption, type ChatExcerpt, type ChatImage, type ChatModel, type ChatResource, type ChatSkill, type ConversationSnapshot, type TurnSettings } from "./types";
@@ -256,15 +258,8 @@ function Composer({
 	// keyboard is animating with, so the dock moves in lockstep with it.
 	const keyboard = useReanimatedKeyboardAnimation();
 	const reviewPromptAvailable = Boolean(reviewPR && onOpenReview);
-	// The dock gives back its resting inset as the keyboard goes. Android's
-	// keyboard height spans the navigation bar, so there it gives the inset back
-	// over that hidden last stretch alone and rests as soon as the keys are gone.
-	const dockRise = useAnimatedStyle(() => {
-		const inset = restingInset - KEYBOARD_DOCK_GAP;
-		if (dockRiseOverride !== undefined) return { transform: [{ translateY: inset * dockRiseOverride }] };
-		if (Platform.OS === "android") return { transform: [{ translateY: Math.min(-keyboard.height.value, inset) }] };
-		return { transform: [{ translateY: inset * keyboard.progress.value }] };
-	});
+	// Every docked composer rides the keyboard the same way (see composerDock).
+	const dockRise = useComposerDockRise(restingInset, dockRiseOverride);
 	const [text, setText] = useState("");
 	const [quotes, setQuotes] = useState<ResponseQuote[]>([]);
 	const inputRef = useRef<TextInput>(null);
@@ -646,6 +641,14 @@ function Composer({
 	const settingsProps = { snapshot, models, options: configOptions ?? NO_OPTIONS, disabled: disabled || stopped || pending || submitting, onSettings, onOption: onConfigOption };
 	// Ultracode has no field on the daemon: it is kept per conversation here.
 	const effort = useChatEffort({ ...settingsProps, ultracodeKey: machine ? ultracodeKey(machine, sessionId) : null, cloud });
+	// Claude's Fast, learned for New task: the model this chat runs offers it,
+	// so New task offers the bolt for it; and a task started there with Fast on
+	// has it turned on here, once Claude reports it (see learnedFast).
+	const fastModelLabel = useMemo(() => (effort.fast ? turnSettingsParts(snapshot, models, configOptions ?? NO_OPTIONS).model : ""), [effort.fast, snapshot, models, configOptions]);
+	useEffect(() => {
+		if (machine && !cloud && fastModelLabel) void rememberFastModel(machine, snapshot.harness, fastModelLabel);
+	}, [machine, cloud, fastModelLabel, snapshot.harness]);
+	usePendingFast(machine && !cloud ? fastPendingKey(machine, sessionId) : null, effort.fast, Boolean(configOptions?.length));
 	// Read as the message goes.
 	ultracodeOn.current = effort.sendsUltracode;
 	keepUltracode.current = effort.keepUltracode;

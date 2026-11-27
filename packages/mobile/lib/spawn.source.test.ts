@@ -180,8 +180,9 @@ describe("spawn Fast mode", () => {
 	// Where desktop's New chat offers it: a machine's own task whose starting
 	// model has a faster tier. Sent only then, and only when on.
 	it("offers Fast mode only for a machine's task on a model that has it, and sends it only when on", () => {
-		expect(spawn).toContain("const fastOffered = !cloudSelected && Boolean(runningModel?.supportsFast);");
-		expect(spawn).toContain("const fastToSend = fastOffered && fast;");
+		expect(spawn).toContain("const fastOffered = !cloudSelected && (Boolean(runningModel?.supportsFast) || fastLearned);");
+		// Only a model with a faster tier starts in it; the daemon refuses it for Claude.
+		expect(spawn).toContain("const fastToSend = fastOffered && fast && Boolean(runningModel?.supportsFast);");
 		expectBefore(between(spawn, "const request = {", "const { attachments: _, ...requestFields } = request;"), "effort: chosenEffort,", "...(fastToSend ? { fastMode: true } : {}),");
 		expect(spawn).toContain("fast={fastToggle}");
 		for (const controls of platformControls) expect(controls).toContain("fast={fast} ultracode={ultracode} overKeyboard />");
@@ -221,11 +222,22 @@ describe("spawn Ultracode", () => {
 
 	// The chat the task becomes keeps Ultracode on: its key, under the machine
 	// as the store names it for that host, is written before the chat opens.
+	// Claude's Fast is its own setting, which the daemon cannot start in: New
+	// task offers it for a model seen offering it in a chat, and leaves the chat
+	// it opens a note to turn it on (learnedFast).
+	it("offers Claude's Fast for a model seen with it, and hands it to the chat", () => {
+		expect(spawn).toContain("const learnedFast = useLearnedFastModels(chatMachine, harness);");
+		expect(spawn).toContain("const fastAfterLaunch = fastOffered && fast && !runningModel?.supportsFast;");
+		const started = between(spawn, "const session = await spawn(", "router.replace({");
+		expect(started).toContain("if (fastAfterLaunch) await AsyncStorage.setItem(fastPendingKey(chatMachine, session.id), \"1\").catch(() => {});");
+		expectBefore(started, "if (fastAfterLaunch)", "if (!navigation.isFocused()) {");
+	});
+
 	it("keeps Ultracode on for the chat the task opens", () => {
 		const started = between(spawn, "const session = await spawn(", "router.replace({");
-		expect(started).toContain("const chatMachine = viewMachine({ config, selectedHostId, configResolved: true }).machine;");
-		expect(started).toContain("await AsyncStorage.setItem(ultracodeKey(chatMachine, session.id), \"1\").catch(() => {});");
-		expectBefore(started, "if (ultracodeToSend) {", "if (!navigation.isFocused()) {");
+		expect(spawn).toContain("const chatMachine = viewMachine({ config, selectedHostId, configResolved: true }).machine;");
+		expect(started).toContain("if (ultracodeToSend) await AsyncStorage.setItem(ultracodeKey(chatMachine, session.id), \"1\").catch(() => {});");
+		expectBefore(started, "if (ultracodeToSend)", "if (!navigation.isFocused()) {");
 	});
 
 	// The chat reads it under the store's `machine`, which viewMachine names

@@ -6,8 +6,7 @@ import { File } from "expo-file-system";
 import { attachmentsKey, clearStartedSpawnDraft, createSpawnDraftSaver, loadSpawnDraft, requestMatches, saveBeforeStart, startRefused, type SpawnDraft, type SpawnDraftRequest, type SpawnDraftSelections } from "../lib/spawnDraft";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { AppState, Keyboard, Pressable, StyleSheet, Text, View } from "react-native";
-import Animated, { useAnimatedStyle } from "react-native-reanimated";
-import { KeyboardAvoidingView, useReanimatedKeyboardAnimation } from "react-native-keyboard-controller";
+import Animated from "react-native-reanimated";
 import { agentErrorCopy } from "../lib/agentError";
 import { AppSymbol } from "../lib/AppSymbol";
 import { defaultAgent, rankAgents } from "../lib/agentPicker";
@@ -31,6 +30,7 @@ import { loadSpawnSkills } from "../lib/spawnSkills";
 import { spawnEffortChoices, spawnEffortToSend } from "../lib/modelEffort";
 import { useApp } from "../lib/store";
 import { viewMachine } from "../lib/viewMachine";
+import { fastModelName, fastPendingKey, useLearnedFastModels } from "../lib/chat/learnedFast";
 import { offersUltracode, ultracodeKey, withUltracode } from "../lib/chat/ultracode";
 import { useCloud } from "../lib/cloud/CloudProvider";
 import { connectedAgents } from "../lib/cloud/agents";
@@ -49,11 +49,12 @@ import { iconSize, radius, space, type } from "../lib/tokens";
 import { approvalOptions, isApprovalMode, resolveApprovalMode, type ApprovalMode } from "../lib/spawnApproval";
 import { modelSheetRoute } from "../lib/sheetResult";
 import { agentAccountLabel, useAgentAccounts } from "../lib/agentAccounts";
+import { useComposerDockRise } from "../lib/chat/composerDock";
+import { FloatingComposerLayout } from "../lib/chat/FloatingComposerLayout";
 import { useChatKeyboard } from "../lib/chat/useChatKeyboard";
 import { SYSTEM_GLASS_HEADER } from "../lib/stackScreenOptions";
 import { PillHeaderFrame } from "../lib/headerPill";
 import { useGlassBarInset } from "../lib/useHeaderOverlap";
-import { KEYBOARD_DOCK_GAP } from "../lib/session/keyboardInset";
 
 export { RouteErrorBoundary as ErrorBoundary } from "../lib/RouteErrorBoundary";
 
@@ -420,17 +421,15 @@ function SpawnPage() {
 		setPrompt((old) => old ? `${old} ${spoken}` : spoken);
 	}, []) });
 	const listening = voice.state === "starting" || voice.state === "recording";
-	// The composer docks to the bottom as the chat's does, on the same keyboard
-	// avoidance: its resting inset closes to the keyboard gap as the keys rise.
-	// On iOS the page sits below the stack's bar, so the avoider counts it; on
-	// Android it runs under the clear pill bar, and the offset is iOS's alone.
-	const chatKeyboard = useChatKeyboard({ underHeader: SYSTEM_GLASS_HEADER });
+	// The composer floats at the foot and meets the keyboard exactly as the
+	// chat's does (FloatingComposerLayout, useChatKeyboard's floating mode): its
+	// resting inset closes to the keyboard gap as the keys rise.
+	const chatKeyboard = useChatKeyboard({ underHeader: SYSTEM_GLASS_HEADER, floating: true });
 	const glassInset = useGlassBarInset();
-	const keyboard = useReanimatedKeyboardAnimation();
 	const { restingInset, dockRiseOverride } = chatKeyboard;
-	const dockRise = useAnimatedStyle(() => ({
-		transform: [{ translateY: (restingInset - KEYBOARD_DOCK_GAP) * (dockRiseOverride ?? keyboard.progress.value) }],
-	}));
+	// The chat composer's own ride on the keyboard (see composerDock), so New
+	// task moves with the keys exactly as the chat does.
+	const dockRise = useComposerDockRise(restingInset, dockRiseOverride);
 	// A started request can't be called back, so the page holds while it runs.
 	// A ref, not state, so the success path can let go and replace the page in
 	// the same tick.
@@ -561,11 +560,18 @@ function SpawnPage() {
 	// names no default. Not a stand-in's fallback: no model is sent with it.
 	const usingStandIn = !runningModel && effortModel !== undefined;
 	const chosenEffort = spawnEffortToSend(effortChoices, effort, effortModel, usingStandIn);
-	// Fast mode where desktop's New chat offers it: a machine's own task whose
-	// starting model has a faster tier. In practice that is Codex; the daemon
-	// refuses it at launch for any other agent, and a Cloud worker has none.
-	const fastOffered = !cloudSelected && Boolean(runningModel?.supportsFast);
-	const fastToSend = fastOffered && fast;
+	// Fast mode on a machine's own task (a Cloud worker has none). A model with
+	// a faster tier (Codex) starts in it: the daemon takes `fastMode` at launch.
+	// Claude Code's Fast is its own setting, which no catalog names and the
+	// daemon cannot start in: it is offered for the models this phone has seen
+	// offer it in a chat, and turned on in the chat the task opens (learnedFast).
+	const chatMachine = viewMachine({ config, selectedHostId, configResolved: true }).machine;
+	const learnedFast = useLearnedFastModels(chatMachine, harness);
+	const fastModel = aliasModel ?? runningModel;
+	const fastLearned = Boolean(fastModel && learnedFast.has(fastModelName(menuModelName(fastModel.label))));
+	const fastOffered = !cloudSelected && (Boolean(runningModel?.supportsFast) || fastLearned);
+	const fastToSend = fastOffered && fast && Boolean(runningModel?.supportsFast);
+	const fastAfterLaunch = fastOffered && fast && !runningModel?.supportsFast;
 	// One object while nothing changes: the slider's host is memoised. A flip is
 	// a change to the form, as `edited` counts one.
 	const fastToggle = useMemo(() => (fastOffered
@@ -1093,10 +1099,9 @@ function SpawnPage() {
 			// kept where its composer reads it, under the machine as the store
 			// names it for that host (viewMachine). Before the chat opens, so it
 			// reads it on; a failed write only leaves it off there.
-			if (ultracodeToSend) {
-				const chatMachine = viewMachine({ config, selectedHostId, configResolved: true }).machine;
-				await AsyncStorage.setItem(ultracodeKey(chatMachine, session.id), "1").catch(() => {});
-			}
+			if (ultracodeToSend) await AsyncStorage.setItem(ultracodeKey(chatMachine, session.id), "1").catch(() => {});
+			// Claude's Fast, the same way: the chat turns it on once Claude reports it.
+			if (fastAfterLaunch) await AsyncStorage.setItem(fastPendingKey(chatMachine, session.id), "1").catch(() => {});
 			holding.current = false;
 			// Covered while the request ran (a notification or link can still
 			// open a page over this one): the worker shows up on the board, and
@@ -1146,19 +1151,15 @@ function SpawnPage() {
 		: [];
 
 	return (
-		<KeyboardAvoidingView
-			style={[styles.screen, { paddingTop: glassInset }, chatKeyboard.rootStyle]}
-			behavior={chatKeyboard.behavior}
-			keyboardVerticalOffset={chatKeyboard.keyboardVerticalOffset}
-		>
-			{/* The room and the dock share one unpadded frame, so the "/" list's
-			    layer below can be measured from the dock's own bottom. */}
-			<View style={styles.stage}>
-			{/* The empty conversation the task will become. A tap there puts the
-			    keyboard away, as it does over a conversation. */}
-			<Pressable accessible={false} style={styles.room} onPress={Keyboard.dismiss} />
-
-			<SpawnSuggestionHost.Provider value={setSuggestionOverlay}>
+		// The chat's own layout (FloatingComposerLayout): the composer floats at
+		// the foot and rides the keyboard on the UI thread, as the chat's does.
+		<FloatingComposerLayout
+			keyboard={chatKeyboard}
+			style={[styles.screen, { paddingTop: glassInset }]}
+			// The empty conversation the task will become. A tap there puts the
+			// keyboard away, as it does over a conversation.
+			content={<Pressable accessible={false} style={styles.room} onPress={Keyboard.dismiss} />}
+			composer={<SpawnSuggestionHost.Provider value={setSuggestionOverlay}>
 			<Animated.View style={[styles.dock, { paddingBottom: restingInset }, dockRise]}>
 				{hasComposerMessage ? <View style={styles.messages}>
 					{notices.map((notice) => <Text key={notice} style={styles.warn}>{notice}</Text>)}
@@ -1226,22 +1227,20 @@ function SpawnPage() {
 					disabled={!selectedHostId || (!config && !cloudSelected) || !projectId || !harness || busy || modelLoading || projectDetailsPending || loading || listening || voice.state === "transcribing" || Boolean(planBlock)}
 				/>
 			</Animated.View>
-			</SpawnSuggestionHost.Provider>
-
-			{/* The "/" list floats over the page, just above the composer, rather
-			    than taking room in the dock: the machine and project rows stay put
-			    under it. It rises with the dock over the keyboard, and only the list
-			    itself takes touches. It stands on the page's own colour, as the
-			    chat's list stands on its dock's fade, so the rows under it don't
-			    show through its glass. */}
-			{suggestionOverlay ? <Animated.View
+			</SpawnSuggestionHost.Provider>}
+			// The "/" list floats over the page, just above the composer, rather
+			// than taking room in the dock: the machine and project rows stay put
+			// under it. It rides the keys with the composer, and only the list
+			// itself takes touches. It stands on the page's own colour, as the
+			// chat's list stands on its dock's fade, so the rows under it don't
+			// show through its glass.
+			riding={suggestionOverlay ? <Animated.View
 				pointerEvents="box-none"
 				style={[styles.suggestionLayer, { paddingBottom: restingInset + suggestionOverlay.composerHeight + space.xs }, dockRise]}
 			>
 				<View style={styles.suggestionBackdrop}>{suggestionOverlay.panel}</View>
 			</Animated.View> : null}
-			</View>
-		</KeyboardAvoidingView>
+		/>
 	);
 }
 
@@ -1259,9 +1258,8 @@ const makeStyles = (t: Theme) =>
 	StyleSheet.create({
 		// The page a conversation is drawn on, since this is where one begins.
 		screen: { flex: 1, backgroundColor: t.bgBase },
-		stage: { flex: 1 },
 		room: { flex: 1 },
-		// Spans the stage, the list at its foot: in the dock's side margin, and
+		// Spans the screen, the list at its foot: in the dock's side margin, and
 		// over the composer by the composer's height and the dock's gap.
 		suggestionLayer: { position: "absolute", top: 0, right: 0, bottom: 0, left: 0, paddingHorizontal: space.sm, justifyContent: "flex-end" },
 		// The list's own corners (ComposerSuggestionPanel), filled with the page.

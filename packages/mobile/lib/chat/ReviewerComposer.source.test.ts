@@ -44,8 +44,7 @@ describe("reviewer attachment composer", () => {
 	});
 
 	it("rides the keyboard like the session composer", () => {
-		expect(source).toContain("useReanimatedKeyboardAnimation()");
-		expect(source).toContain("(restingInset - KEYBOARD_DOCK_GAP) * (dockRiseOverride ?? keyboard.progress.value)");
+		expect(source).toContain("useComposerDockRise(restingInset, dockRiseOverride)");
 		expect(source).toContain("paddingBottom: restingInset");
 	});
 });
