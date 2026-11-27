@@ -3,7 +3,7 @@ import { KeyRound } from "@/components/app-icons";
 import { useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useCloudCp } from "../../../hooks/useCloudCp";
-import { describeCloudHarness, useCloudHarnessVersions } from "../../../hooks/useCloudHarnessVersions";
+import { describeCloudHarness, isCloudVersionedHarness, useCloudHarnessVersions } from "../../../hooks/useCloudHarnessVersions";
 import { versionLabel } from "../../../hooks/useHarnessUpdates";
 import { useCloudOffering } from "../../../hooks/useCloudOffering";
 import { useCloudOrg } from "../../../hooks/useCloudOrg";
@@ -56,6 +56,8 @@ export function CloudHarnessContent({ focusAgentId, search }: { focusAgentId?: s
 				{rows.map((agentId) => {
 					const connected = isCloudHarnessConnected(connections.data, agentId);
 					const cloudVersion = describeCloudHarness(versions.data, agentId)?.currentVersion;
+					// A harness whose release the cloud does not manage runs whatever its image ships: no version to report.
+					const versioned = isCloudVersionedHarness(versions.data, agentId);
 					const expanded = expandedAgentId === agentId;
 					const openLogin = () => {
 						// With accounts the list logs in: it opens on adding one while there is none.
@@ -74,7 +76,7 @@ export function CloudHarnessContent({ focusAgentId, search }: { focusAgentId?: s
 							<AgentAvatar className="size-7 shrink-0" decorative provider={agentId} />
 							<span className="min-w-0 flex-1">
 								<span className="block text-sm font-medium text-settings-label" id={`harness-agent-${agentId}`}>{agentLabel(agentId)}</span>
-								<span className="mt-0.5 flex flex-wrap gap-x-1.5 text-xs text-settings-muted"><span>{connected ? t("settings.harness.loggedIn") : t("settings.harness.cloudNotConnected")}</span><span aria-hidden="true">·</span><span>{cloudVersion ? versionLabel(cloudVersion) : t("settings.harness.apiVersionNotReported")}</span></span>
+								<span className="mt-0.5 flex flex-wrap gap-x-1.5 text-xs text-settings-muted"><span>{connected ? t("settings.harness.loggedIn") : t("settings.harness.cloudNotConnected")}</span>{versioned ? <><span aria-hidden="true">·</span><span>{cloudVersion ? versionLabel(cloudVersion) : t("settings.harness.apiVersionNotReported")}</span></> : null}</span>
 							</span>
 						</Pressable>
 						{!connected && loginAgent !== agentId ? <Button type="button" data-harness-primary-action="" size="default" className="min-w-20" onClick={openLogin}>{t("settings.harness.login")}</Button> : null}
