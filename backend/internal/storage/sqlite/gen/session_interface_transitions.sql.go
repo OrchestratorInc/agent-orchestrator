@@ -116,9 +116,10 @@ func (q *Queries) AdvanceSessionInterfaceTransition(ctx context.Context, arg Adv
 
 const enqueueSessionInterfaceTransitionMessage = `-- name: EnqueueSessionInterfaceTransitionMessage :exec
 INSERT INTO session_interface_transition_messages (
-    transition_id, client_message_id, message, created_at, sender_session_id, authored_by_user
+    transition_id, client_message_id, message, created_at, sender_session_id, authored_by_user,
+    new_task, keep_for_task
 )
-VALUES (?, ?, ?, ?, ?, ?)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?)
 `
 
 type EnqueueSessionInterfaceTransitionMessageParams struct {
@@ -128,6 +129,8 @@ type EnqueueSessionInterfaceTransitionMessageParams struct {
 	CreatedAt       time.Time
 	SenderSessionID string
 	AuthoredByUser  bool
+	NewTask         int64
+	KeepForTask     string
 }
 
 func (q *Queries) EnqueueSessionInterfaceTransitionMessage(ctx context.Context, arg EnqueueSessionInterfaceTransitionMessageParams) error {
@@ -138,6 +141,8 @@ func (q *Queries) EnqueueSessionInterfaceTransitionMessage(ctx context.Context, 
 		arg.CreatedAt,
 		arg.SenderSessionID,
 		arg.AuthoredByUser,
+		arg.NewTask,
+		arg.KeepForTask,
 	)
 	return err
 }
@@ -548,7 +553,8 @@ func (q *Queries) ListDeliverableSessionInterfaceTransitions(ctx context.Context
 }
 
 const listPendingSessionInterfaceTransitionMessages = `-- name: ListPendingSessionInterfaceTransitionMessages :many
-SELECT id, transition_id, client_message_id, message, created_at, delivered_at, sender_session_id, authored_by_user
+SELECT id, transition_id, client_message_id, message, created_at, delivered_at, sender_session_id, authored_by_user,
+       new_task, keep_for_task
 FROM session_interface_transition_messages
 WHERE transition_id = ? AND delivered_at IS NULL
 ORDER BY id
@@ -563,6 +569,8 @@ type ListPendingSessionInterfaceTransitionMessagesRow struct {
 	DeliveredAt     sql.NullTime
 	SenderSessionID string
 	AuthoredByUser  bool
+	NewTask         int64
+	KeepForTask     string
 }
 
 func (q *Queries) ListPendingSessionInterfaceTransitionMessages(ctx context.Context, transitionID string) ([]ListPendingSessionInterfaceTransitionMessagesRow, error) {
@@ -583,6 +591,8 @@ func (q *Queries) ListPendingSessionInterfaceTransitionMessages(ctx context.Cont
 			&i.DeliveredAt,
 			&i.SenderSessionID,
 			&i.AuthoredByUser,
+			&i.NewTask,
+			&i.KeepForTask,
 		); err != nil {
 			return nil, err
 		}

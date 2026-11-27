@@ -1461,6 +1461,8 @@ func (s *Store) appendUserMessage(
 			SenderSessionID:     msg.SenderSessionID,
 			SenderProjectID:     msg.SenderProjectID,
 			SenderDisplayName:   msg.SenderDisplayName,
+			NewTask:             boolInt(msg.NewTask),
+			KeepForTask:         msg.KeepForTask,
 			CreatedAt:           now,
 			UpdatedAt:           now,
 		}); err != nil {
@@ -2732,6 +2734,8 @@ func (s *Store) NextQueuedTurn(ctx context.Context, conversationID string) (doma
 		SenderSessionID:     row.SenderSessionID,
 		SenderProjectID:     row.SenderProjectID,
 		SenderDisplayName:   row.SenderDisplayName,
+		NewTask:             row.NewTask != 0,
+		KeepForTask:         row.KeepForTask,
 	}, nil
 }
 
@@ -2754,6 +2758,7 @@ func (s *Store) ListQueuedBatch(ctx context.Context, conversationID string, limi
 			Origin: row.Origin, DeliveryContentJSON: row.DeliveryContentJson,
 			SenderSessionID: row.SenderSessionID, SenderProjectID: row.SenderProjectID,
 			SenderDisplayName: row.SenderDisplayName,
+			NewTask:           row.NewTask != 0, KeepForTask: row.KeepForTask,
 		})
 	}
 	return batch, nil
@@ -2786,6 +2791,7 @@ func (s *Store) ClaimQueuedBatch(ctx context.Context, conversationID string, dis
 				Origin: row.Origin, DeliveryContentJSON: row.DeliveryContentJson,
 				SenderSessionID: row.SenderSessionID, SenderProjectID: row.SenderProjectID,
 				SenderDisplayName: row.SenderDisplayName,
+				NewTask:           row.NewTask != 0, KeepForTask: row.KeepForTask,
 			})
 		}
 		if dispatch && len(batch) > 0 {

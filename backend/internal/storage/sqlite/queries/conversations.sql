@@ -1143,7 +1143,9 @@ SELECT conversation_turns.id,
        conversation_messages.delivery_content_json,
        conversation_messages.sender_session_id,
        conversation_messages.sender_project_id,
-       conversation_messages.sender_display_name
+       conversation_messages.sender_display_name,
+       conversation_messages.new_task,
+       conversation_messages.keep_for_task
 FROM conversation_turns
 JOIN conversation_messages
     ON conversation_messages.turn_id = conversation_turns.id
@@ -1162,7 +1164,9 @@ SELECT conversation_turns.id,
        conversation_messages.delivery_content_json,
        conversation_messages.sender_session_id,
        conversation_messages.sender_project_id,
-       conversation_messages.sender_display_name
+       conversation_messages.sender_display_name,
+       conversation_messages.new_task,
+       conversation_messages.keep_for_task
 FROM conversation_turns
 JOIN conversation_messages
     ON conversation_messages.turn_id = conversation_turns.id
@@ -1347,8 +1351,8 @@ INSERT INTO conversation_messages (
     id, conversation_id, turn_id, sequence, revision, role, origin,
     text, streaming, provider_item_id, client_message_id, client_payload_hash,
     delivery_content_json, continuation, authored_by_user, sender_session_id, sender_project_id, sender_display_name,
-    created_at, updated_at
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+    new_task, keep_for_task, created_at, updated_at
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
 
 -- name: IncrementUsageMessageSummary :exec
 -- Adds one human message: a direct Chat message (pending_count), a steer, or

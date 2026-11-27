@@ -13,6 +13,10 @@ func TestProjectConfigValidate(t *testing.T) {
 		{"good agent mode", ProjectConfig{AgentConfig: AgentConfig{Mode: "ultra"}}, false},
 		{"bad agent mode", ProjectConfig{AgentConfig: AgentConfig{Mode: "turbo"}}, true},
 		{"bad permission", ProjectConfig{AgentConfig: AgentConfig{Permissions: "yolo"}}, true},
+		{"worker compaction default", ProjectConfig{WorkerCompaction: WorkerCompactionConfig{}}, false},
+		{"worker compaction in range", ProjectConfig{WorkerCompaction: WorkerCompactionConfig{ThresholdTokens: 200_000}}, false},
+		{"worker compaction too low", ProjectConfig{WorkerCompaction: WorkerCompactionConfig{ThresholdTokens: 99_999}}, true},
+		{"worker compaction too high", ProjectConfig{WorkerCompaction: WorkerCompactionConfig{ThresholdTokens: 1_000_001}}, true},
 		{"good session prefix", ProjectConfig{SessionPrefix: "ao"}, false},
 		{"session prefix with slash", ProjectConfig{SessionPrefix: "ao/project"}, true},
 		{"session prefix with backslash", ProjectConfig{SessionPrefix: `ao\project`}, true},
@@ -224,5 +228,26 @@ func TestProjectConfigIsZero(t *testing.T) {
 	tTrue := true
 	if (ProjectConfig{TerminateOnPRMerge: &tTrue}).IsZero() {
 		t.Fatal("config with terminateOnPrMerge enabled should not be zero")
+	}
+}
+
+func TestWorkerCompactionThreshold(t *testing.T) {
+	tests := []struct {
+		name        string
+		cfg         WorkerCompactionConfig
+		wantTokens  int64
+		wantEnabled bool
+	}{
+		{"zero value is on at the default", WorkerCompactionConfig{}, DefaultWorkerCompactionThreshold, true},
+		{"explicit threshold", WorkerCompactionConfig{ThresholdTokens: 200_000}, 200_000, true},
+		{"disabled wins over a threshold", WorkerCompactionConfig{Disabled: true, ThresholdTokens: 200_000}, 0, false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			tokens, enabled := tt.cfg.Threshold()
+			if tokens != tt.wantTokens || enabled != tt.wantEnabled {
+				t.Fatalf("Threshold() = (%d, %v), want (%d, %v)", tokens, enabled, tt.wantTokens, tt.wantEnabled)
+			}
+		})
 	}
 }

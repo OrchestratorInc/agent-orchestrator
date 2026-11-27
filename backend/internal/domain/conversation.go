@@ -731,6 +731,10 @@ type QueuedTurn struct {
 	// DeliveryContentJSON carries provider-neutral native prompt blocks through
 	// the durable queue. It is not rendered and never contains provider DTOs.
 	DeliveryContentJSON string
+	// NewTask and KeepForTask are ConversationMessage's, read back with the
+	// queued turn so a task that waited keeps them.
+	NewTask     bool
+	KeepForTask string
 }
 
 // RetryPrompt is the durable human-authored content of a failed turn that may
@@ -786,6 +790,14 @@ type ConversationMessage struct {
 	SenderDisplayName string    `json:"senderDisplayName,omitempty"`
 	CreatedAt         time.Time `json:"createdAt"`
 	UpdatedAt         time.Time `json:"updatedAt"`
+
+	// NewTask marks an orchestrator's message as a new task for the worker
+	// (`ao send --task`), as opposed to a note about the current one. Only a new
+	// task can compact the worker before it runs. KeepForTask is the sender's
+	// hint about what the task needs from the worker's earlier work, used to
+	// steer that compaction's summary. Neither is sent to the provider as text.
+	NewTask     bool   `json:"-"`
+	KeepForTask string `json:"-"`
 }
 
 // ConversationActivity is one non-message timeline entry: a command, a diff, a

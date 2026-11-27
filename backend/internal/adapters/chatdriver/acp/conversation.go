@@ -139,6 +139,10 @@ type conversation struct {
 	// compactAdvertised is whether the agent's own list, before HideCommand,
 	// named compact; start derives compaction from it, not from the shown skills.
 	compactAdvertised bool
+	// compactTakesInput is whether that compact command declares input: the
+	// agent takes instructions for what its summary keeps, as Claude Code's
+	// "/compact <optional custom summarization instructions>" does.
+	compactTakesInput bool
 	closed            bool
 	// sessionLost records that the agent stopped holding this conversation's
 	// session and the provider was stopped for it. See providerSessionLost.
@@ -332,6 +336,7 @@ var _ ports.ChatLiveReconnector = (*conversation)(nil)
 var _ ports.ChatLiveReconnectActivator = (*conversation)(nil)
 var _ ports.ChatProviderEventAcknowledger = (*conversation)(nil)
 var _ ports.ChatCompactor = (*conversation)(nil)
+var _ ports.ChatGuidedCompactor = (*conversation)(nil)
 var _ acpsdk.Client = (*conversation)(nil)
 var _ acpsdk.ClientExperimental = (*conversation)(nil)
 var _ acpsdk.ExtensionMethodHandler = (*conversation)(nil)
@@ -1376,6 +1381,17 @@ func (c *conversation) finishPrompt(
 }
 
 func (c *conversation) Compact(ctx context.Context) (ports.ChatCompactionResult, error) {
+	return c.compact(ctx, "")
+}
+
+// CompactWithInstructions compacts with instructions for what the summary
+// keeps, sent as the compact command's input. An agent whose compact command
+// declares no input compacts plainly: it might read the text as a prompt.
+func (c *conversation) CompactWithInstructions(ctx context.Context, instructions string) (ports.ChatCompactionResult, error) {
+	return c.compact(ctx, instructions)
+}
+
+func (c *conversation) compact(ctx context.Context, instructions string) (ports.ChatCompactionResult, error) {
 	if err := ctx.Err(); err != nil {
 		return ports.ChatCompactionResult{}, err
 	}
@@ -1398,6 +1414,10 @@ func (c *conversation) Compact(ctx context.Context) (ports.ChatCompactionResult,
 		return ports.ChatCompactionResult{}, errors.New("ACP session is not open")
 	}
 	before := c.contextTokens
+	command := "/compact"
+	if instructions = strings.TrimSpace(instructions); instructions != "" && c.compactTakesInput {
+		command += " " + instructions
+	}
 	id := uuid.NewString()
 	cycle := c.detachProviderCycleLocked()
 	c.activeTurn = id
@@ -1427,23 +1447,25 @@ func (c *conversation) Compact(ctx context.Context) (ports.ChatCompactionResult,
 	}
 	if cycle == nil {
 		start()
-		go c.runCompactionTurn(turnCtx, sessionID, id)
+		go c.runCompactionTurn(turnCtx, sessionID, id, command)
 	} else {
 		// The ended cycle settles off this call, as in runTurn: its settle can
 		// wait on an update blocked emitting, and the caller may hold a lock the
 		// event drain needs. Its items still settle before the turn starts.
 		go func() {
 			start()
-			c.runCompactionTurn(turnCtx, sessionID, id)
+			c.runCompactionTurn(turnCtx, sessionID, id, command)
 		}()
 	}
 	return ports.ChatCompactionResult{TokensBefore: before}, nil
 }
 
-func (c *conversation) runCompactionTurn(ctx context.Context, sessionID, turnID string) {
+// runCompactionTurn sends command, "/compact" with or without instructions, as
+// the turn's prompt.
+func (c *conversation) runCompactionTurn(ctx context.Context, sessionID, turnID, command string) {
 	messageID := uuid.NewString()
 	prompt := []acpsdk.ContentBlock{
-		acpsdk.TextBlock("/compact"),
+		acpsdk.TextBlock(command),
 	}
 	resp, err := c.conn.Prompt(ctx, acpsdk.PromptRequest{
 		SessionId: acpsdk.SessionId(sessionID),

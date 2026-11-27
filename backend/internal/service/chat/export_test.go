@@ -1,6 +1,10 @@
 package chat
 
-import "time"
+import (
+	"time"
+
+	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
+)
 
 // SetNativeHistoryLoadAttemptLimit shortens the per-attempt provider load bound
 // for tests and returns a restore function.
@@ -37,4 +41,31 @@ func SetForcedHandoffInterruptLimit(limit time.Duration) (restore func()) {
 	previous := forcedHandoffInterruptLimit
 	forcedHandoffInterruptLimit = limit
 	return func() { forcedHandoffInterruptLimit = previous }
+}
+
+// PreTaskCompactionPolicyFor exposes the service's compact-before-task rule for
+// a Chat session, so tests can check who it applies to without a provider.
+func (s *Service) PreTaskCompactionPolicyFor(target domain.SessionID) PreTaskCompactionPolicy {
+	return s.preTaskCompactionPolicy(target)
+}
+
+// SetPreTaskCompactionDeadline shortens how long a queued task waits for a
+// compaction whose turn never starts.
+func (c *Controller) SetPreTaskCompactionDeadline(d time.Duration) {
+	c.mu.Lock()
+	c.preTaskDeadline = d
+	c.mu.Unlock()
+}
+
+// PreTaskCompactionInstructions builds the instructions for tasks with these
+// texts and keep hints, paired by index.
+func PreTaskCompactionInstructions(texts, keeps []string) string {
+	tasks := make([]preTaskBrief, len(texts))
+	for i, text := range texts {
+		tasks[i].text = text
+		if i < len(keeps) {
+			tasks[i].keep = keeps[i]
+		}
+	}
+	return preTaskCompactionInstructions(tasks)
 }

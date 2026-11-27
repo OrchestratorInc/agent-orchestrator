@@ -68,6 +68,27 @@ func TestClientPayloadHashDistinguishesContinuation(t *testing.T) {
 	}
 }
 
+// A retry under the same client message id that changes only the task marker or
+// keep hint is a different request, not a duplicate to drop.
+func TestClientPayloadHashDistinguishesTaskFacts(t *testing.T) {
+	note := ports.ChatUserMessage{ClientMessageID: "c1", Text: "Phase 7", SenderSessionID: "orch-1"}
+	task := note
+	task.NewTask = true
+	hinted := task
+	hinted.KeepForTask = "the loader"
+	seen := map[string]string{}
+	for name, msg := range map[string]ports.ChatUserMessage{"note": note, "task": task, "task with keep": hinted} {
+		hash, err := clientPayloadHash(msg)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if other, dup := seen[hash]; dup {
+			t.Fatalf("%s and %s share a client payload hash", name, other)
+		}
+		seen[hash] = name
+	}
+}
+
 func TestClientPayloadFileFormattingPreservesLegacyRetryIdentity(t *testing.T) {
 	ref := testFileReference()
 	msg := ports.ChatUserMessage{ClientMessageID: "receipt", Text: "question", Content: []ports.ChatContent{{Type: "file_reference", FileReference: &ref}}}

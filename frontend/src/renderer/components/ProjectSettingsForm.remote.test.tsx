@@ -154,6 +154,15 @@ it("replaces and retries the orchestrator on the selected host", async () => {
 	expect(mocks.localPost).not.toHaveBeenCalled();
 });
 
+// A host on an older daemon rejects the unknown workerCompaction key, so the row
+// stays local until hosts report support.
+it("hides the worker compaction setting for a remote host's project", async () => {
+	connect("box-b");
+	renderForm("box-b", "agents");
+	expect(await screen.findByRole("button", { name: "Orchestrator agent" })).toBeInTheDocument();
+	expect(screen.queryByRole("button", { name: "Compact before orchestrator tasks" })).not.toBeInTheDocument();
+});
+
 it("shows offline state without contacting the local daemon", () => {
 	renderForm("box-b");
 	expect(screen.getByRole("alert")).toHaveTextContent("Host is offline");

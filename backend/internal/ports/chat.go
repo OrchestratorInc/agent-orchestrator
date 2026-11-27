@@ -489,6 +489,11 @@ type ChatUserMessage struct {
 	// the renderer can show a stable label and safe AO session link.
 	SenderProjectID   string
 	SenderDisplayName string
+	// NewTask and KeepForTask are domain.ConversationMessage's: whether this is a
+	// new task, which may compact the worker first, and what the compaction
+	// should keep for it. Metadata only, never sent to the provider as text.
+	NewTask     bool
+	KeepForTask string
 	// Content carries native images and resources for providers that negotiated
 	// them. Drivers must reject an unsupported block rather than silently discard
 	// context the user believed they sent.
@@ -522,6 +527,10 @@ type MessageDeliveryOptions struct {
 	// SenderSessionID is cooperative local identity, resolved from stored metadata.
 	SenderSessionID string
 	AuthoredByUser  bool
+	// NewTask and KeepForTask are ChatUserMessage's. A terminal session ignores
+	// them.
+	NewTask     bool
+	KeepForTask string
 }
 
 // ChatTurnSettings are the per-turn choices a provider accepts alongside the
@@ -793,6 +802,12 @@ type (
 	// long conversation eventually cannot accept another turn at all.
 	ChatCompactor interface {
 		Compact(ctx context.Context) (ChatCompactionResult, error)
+	}
+	// ChatGuidedCompactor is a ChatCompactor that can also be told what the
+	// summary should keep. A provider whose agent takes no instructions for this
+	// compaction compacts as Compact does; empty instructions are Compact.
+	ChatGuidedCompactor interface {
+		CompactWithInstructions(ctx context.Context, instructions string) (ChatCompactionResult, error)
 	}
 	// ChatRollbacker discards history back to a turn, provider-side. This is undo:
 	// it changes what the agent remembers, which is why it is a provider call and

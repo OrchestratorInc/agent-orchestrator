@@ -5563,6 +5563,43 @@ func TestSessionsAPI_SendCarriesCooperativeSenderWithoutHumanAuthorship(t *testi
 	}
 }
 
+// A new task and its keep hint reach the session service as delivery facts.
+func TestSessionsAPI_SendCarriesNewTaskAndKeep(t *testing.T) {
+	svc := newFakeSessionService()
+	srv := newSessionTestServer(t, svc)
+	body, status, _ := doRequest(t, srv, "POST", "/api/v1/sessions/ao-1/send",
+		`{"message":"Phase 7","senderSessionId":"ao-orchestrator","task":true,"keep":"  the loader\u0007 "}`)
+	if status != http.StatusOK {
+		t.Fatalf("status=%d body=%s", status, body)
+	}
+	got := svc.sentDeliveryOptions
+	if !got.NewTask || got.KeepForTask != "the loader" || got.SenderSessionID != "ao-orchestrator" {
+		t.Fatalf("options=%+v", got)
+	}
+}
+
+func TestSessionsAPI_SendRejectsInvalidKeep(t *testing.T) {
+	tests := []struct {
+		name, body, code string
+	}{
+		{"keep without task", `{"message":"FYI","keep":"the loader"}`, "KEEP_REQUIRES_TASK"},
+		{"keep too long", `{"message":"Phase 7","task":true,"keep":"` + strings.Repeat("k", 1001) + `"}`, "KEEP_TOO_LONG"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			svc := newFakeSessionService()
+			srv := newSessionTestServer(t, svc)
+			body, status, _ := doRequest(t, srv, "POST", "/api/v1/sessions/ao-1/send", tt.body)
+			if status != http.StatusBadRequest || !strings.Contains(string(body), tt.code) {
+				t.Fatalf("status=%d body=%s, want 400 %s", status, body, tt.code)
+			}
+			if svc.sent != "" {
+				t.Fatalf("rejected send was delivered: %q", svc.sent)
+			}
+		})
+	}
+}
+
 func TestSessionsAPI_InteractionRecencyKeepsHumanTimestampSeparate(t *testing.T) {
 	svc := newFakeSessionService()
 	srv := newSessionTestServer(t, svc)

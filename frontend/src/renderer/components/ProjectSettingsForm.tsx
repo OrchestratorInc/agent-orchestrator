@@ -23,7 +23,7 @@ import { type OrchestratorReplacementFailure, useUiStore } from "../stores/ui-st
 import { RequiredAgentField } from "./CreateProjectAgentSheet";
 import { buildIntake } from "./IntakeFields";
 import { ReviewerSelect, reviewerTrustWarning } from "./ReviewerSelect";
-import { ProjectSettingsEditor, type ProjectAgentPickerProps, type ProjectSettingsDraft } from "./ProjectSettingsEditor";
+import { ProjectSettingsEditor, WORKER_COMPACTION_DEFAULT_TOKENS, type ProjectAgentPickerProps, type ProjectSettingsDraft } from "./ProjectSettingsEditor";
 import { CloudProjectSettingsAdapter } from "./CloudProjectSettingsForm";
 import { SettingsRow } from "./settings/SettingsRow";
 import { Button } from "./ui/button";
@@ -169,6 +169,7 @@ function SettingsBody({ project, projectId, hostId, hostConnected, onSaved, sect
 		reviewerPermissions: config.reviewers?.[0]?.agentConfig?.permissions ?? config.agentConfig?.permissions ?? "",
 		autoReview: config.autoReview ?? false,
 		workersRequestReview: config.workersRequestReview ?? false,
+		workerCompaction: workerCompactionDraft(config.workerCompaction),
 		attributionCommitTrailer: !config.attribution?.disableCommitTrailer,
 		attributionPRFooter: !config.attribution?.disablePRFooter,
 		intakeEnabled: intake.enabled ?? false,
@@ -257,6 +258,10 @@ function SettingsBody({ project, projectId, hostId, hostConnected, onSaved, sect
 					),
 					autoReview: values.autoReview,
 					workersRequestReview: values.workersRequestReview || undefined,
+					// Unset means on at the daemon's default threshold.
+					workerCompaction: values.workerCompaction === "off"
+						? { disabled: true }
+						: values.workerCompaction ? { thresholdTokens: Number(values.workerCompaction) } : undefined,
 					// Opt-outs: an unset field means on, so only a switched-off part is stored.
 					attribution: blankToUndefined({
 						disableCommitTrailer: values.attributionCommitTrailer === false || undefined,
@@ -333,7 +338,7 @@ function SettingsBody({ project, projectId, hostId, hostConnected, onSaved, sect
 		}
 	};
 	return <ProjectSettingsEditor initialValues={initialValues} section={section} disabled={!hostConnected}
-		capabilities={{ workflow: !isScratchProject, sessionPrefix: !isScratchProject, sessionPrefixPlaceholder: "orchestrator", intake: intakeVisible, reviewer: !isScratchProject, requiredAgents: true, workersRequestReview: !isScratchProject, attribution: !isScratchProject && !hostId && !!settings?.commitAttribution }}
+		capabilities={{ workflow: !isScratchProject, sessionPrefix: !isScratchProject, sessionPrefixPlaceholder: "orchestrator", intake: intakeVisible, reviewer: !isScratchProject, requiredAgents: true, workersRequestReview: !isScratchProject, workerCompaction: !isScratchProject && !hostId, attribution: !isScratchProject && !hostId && !!settings?.commitAttribution }}
 		details={[{ label: t("settings.project.path"), value: project.path, href: hostId ? undefined : `file://${encodeURI(project.path)}` }, { label: t("settings.project.repo"), value: project.repo || "—", href: project.repo ? repositoryHref(project.repo) : undefined }]}
 		workspaceRepos={project.kind === "workspace" ? project.workspaceRepos ?? [] : undefined} repository={project.repo}
 		modelScope={() => ""} defaultReviewer={(draft) => WORKER_DEFAULT_REVIEWERS[draft.workerAgent] ?? "claude-code"}
@@ -384,6 +389,13 @@ function scratchSupportedConfig(config: ProjectConfig): ProjectConfig {
 		...supported
 	} = config as ProjectConfig;
 	return supported;
+}
+
+/** The worker compaction menu value: "" follows the daemon's default threshold. */
+function workerCompactionDraft(config: ProjectConfig["workerCompaction"]): string {
+	if (config?.disabled) return "off";
+	const tokens = config?.thresholdTokens;
+	return tokens && tokens !== WORKER_COMPACTION_DEFAULT_TOKENS ? String(tokens) : "";
 }
 
 function blankToUndefined<T extends object>(obj: T): T | undefined {

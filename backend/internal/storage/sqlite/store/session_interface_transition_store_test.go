@@ -143,7 +143,7 @@ func TestSessionInterfaceTransitionClaimModeCASAndOutbox(t *testing.T) {
 	}
 
 	if err := st.EnqueueSessionInterfaceTransitionMessage(
-		ctx, transition.ID, "transition-message-1", "CI finished", now.Add(6*time.Second), ports.MessageDeliveryOptions{SenderSessionID: "known-sender", AuthoredByUser: true},
+		ctx, transition.ID, "transition-message-1", "CI finished", now.Add(6*time.Second), ports.MessageDeliveryOptions{SenderSessionID: "known-sender", AuthoredByUser: true, NewTask: true, KeepForTask: "the loader"},
 	); err != nil {
 		t.Fatalf("enqueue transition message: %v", err)
 	}
@@ -153,6 +153,10 @@ func TestSessionInterfaceTransitionClaimModeCASAndOutbox(t *testing.T) {
 	}
 	if messages[0].SenderSessionID != "known-sender" || !messages[0].AuthoredByUser {
 		t.Fatalf("lost queued attribution: %+v", messages[0])
+	}
+	// A task waiting out the transition stays a task, with its hint.
+	if !messages[0].NewTask || messages[0].KeepForTask != "the loader" {
+		t.Fatalf("lost queued task facts: %+v", messages[0])
 	}
 	if messages[0].ClientMessageID != "transition-message-1" {
 		t.Fatalf("client message id = %q", messages[0].ClientMessageID)

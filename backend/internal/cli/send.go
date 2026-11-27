@@ -7,10 +7,14 @@ import (
 	"net/url"
 	"os"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/google/uuid"
 	"github.com/spf13/cobra"
 )
+
+// maxSendKeepLen mirrors the daemon's limit on --keep.
+const maxSendKeepLen = 1000
 
 type sendOptions struct {
 	session         string
@@ -18,6 +22,8 @@ type sendOptions struct {
 	steer           bool
 	clientMessageID string
 	recoverOnly     bool
+	task            bool
+	keep            string
 }
 
 // sendAPIRequest mirrors the daemon's SendSessionMessageRequest body for
@@ -27,6 +33,8 @@ type sendAPIRequest struct {
 	UserAuthored    bool   `json:"userAuthored,omitempty"`
 	SenderSessionID string `json:"senderSessionId,omitempty"`
 	Message         string `json:"message"`
+	Task            bool   `json:"task,omitempty"`
+	Keep            string `json:"keep,omitempty"`
 }
 
 // The steering DTOs mirror the daemon conversation API without coupling the
@@ -66,6 +74,8 @@ func newSendCommand(ctx *commandContext) *cobra.Command {
 	cmd.Flags().BoolVar(&opts.steer, "steer", false, "Steer an active Chat turn, or start the next turn when idle")
 	cmd.Flags().StringVar(&opts.clientMessageID, "client-message-id", "", "Stable steering delivery handle")
 	cmd.Flags().BoolVar(&opts.recoverOnly, "recover-only", false, "Recover a steering result without contacting the provider")
+	cmd.Flags().BoolVar(&opts.task, "task", false, "Mark the message as a new task, not a note about the current work; only a new task can compact a worker first")
+	cmd.Flags().StringVar(&opts.keep, "keep", "", "What the new task needs from the session's earlier work, kept by that compaction (requires --task)")
 	return cmd
 }
 
@@ -82,6 +92,16 @@ func (c *commandContext) sendMessage(ctx context.Context, opts sendOptions) erro
 	if !opts.recoverOnly && strings.TrimSpace(opts.message) == "" {
 		return usageError{errors.New("usage: --message is required")}
 	}
+	if opts.task && opts.steer {
+		return usageError{errors.New("usage: --task cannot be combined with --steer; a steer joins the current turn")}
+	}
+	keep := strings.TrimSpace(opts.keep)
+	if keep != "" && !opts.task {
+		return usageError{errors.New("usage: --keep requires --task")}
+	}
+	if utf8.RuneCountInString(keep) > maxSendKeepLen {
+		return usageError{fmt.Errorf("usage: --keep must be %d characters or fewer", maxSendKeepLen)}
+	}
 	message := opts.message
 	if sender := strings.TrimSpace(os.Getenv("AO_SESSION_ID")); !opts.recoverOnly && sender != "" {
 		message = "[from " + sender + "] " + message
@@ -96,7 +116,10 @@ func (c *commandContext) sendMessage(ctx context.Context, opts sendOptions) erro
 	path := "sessions/" + url.PathEscape(session)
 	if !opts.steer {
 		return c.retryWhileCode(ctx, []string{"CHAT_INTERFACE_TRANSITION"}, func() error {
-			return c.postJSON(ctx, path+"/send", sendAPIRequest{Message: message, SenderSessionID: strings.TrimSpace(os.Getenv("AO_SESSION_ID")), UserAuthored: strings.TrimSpace(os.Getenv("AO_SESSION_ID")) == ""}, nil)
+			return c.postJSON(ctx, path+"/send", sendAPIRequest{
+				Message: message, SenderSessionID: strings.TrimSpace(os.Getenv("AO_SESSION_ID")),
+				UserAuthored: strings.TrimSpace(os.Getenv("AO_SESSION_ID")) == "", Task: opts.task, Keep: keep,
+			}, nil)
 		})
 	}
 	return c.steerMessage(ctx, path, message, strings.TrimSpace(opts.clientMessageID), opts.recoverOnly)

@@ -22,6 +22,26 @@ ao send [flags]
 | `--steer` | Add guidance to the active Chat turn, or start a normal turn when idle | Optional |
 | `--client-message-id string` | Stable delivery handle for steering and safe retries | Generated automatically with `--steer` |
 | `--recover-only` | Recover the outcome for an existing delivery handle without resending | Requires `--steer` and `--client-message-id` |
+| `--task` | Mark the message as a new task, not a note about the current work | Optional; not with `--steer` |
+| `--keep string` | What the new task needs from the session's earlier work (up to 1000 characters) | Requires `--task` |
+
+## New tasks for a reused worker
+
+An orchestrator that hands an existing worker its next task should send it
+with `--task`. When the worker's context is over its project's compaction
+threshold, Orchestrator compacts the worker before the task runs, so every
+call of the task re-reads less history. Add `--keep` to say what the task needs
+from the worker's earlier work; the compaction's summary keeps it, so the
+worker does not spend calls rediscovering files, commands, and decisions.
+
+```bash
+ao send --session mer-3 --task \
+  --keep "the level file format and loader, the test command, the open bug in collision" \
+  --message "Phase 4: add moving platforms. Follow the existing level format."
+```
+
+Send notes, answers, and follow-ups about the current work without `--task`;
+they never compact the worker.
 
 ## Steering and recovery
 

@@ -187,6 +187,8 @@ ao send --session <session-id> --steer --recover-only --client-message-id <handl
 
 `--recover-only` requires `--steer` and a handle; it does not require a new message or contact the provider. A receipt confirms acceptance state, not that the agent completed the instruction.
 
+`--task` marks the message as a new task for the session rather than a note about its current work. When an orchestrator sends a Chat worker a new task and the worker's context is over the project's `workerCompaction` threshold, the worker compacts first. `--keep "<what the task needs>"` (requires `--task`, up to 1000 characters) tells that compaction what to keep from the worker's earlier work. `--task` cannot be combined with `--steer`.
+
 ### `ao orchestrator ls`
 
 Lists orchestrator sessions. Add `--json` for structured output.

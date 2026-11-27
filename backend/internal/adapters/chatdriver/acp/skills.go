@@ -23,13 +23,14 @@ func (c *conversation) ListSkills(ctx context.Context) ([]ports.ChatSkill, error
 
 func (c *conversation) replaceAvailableCommands(commands []acpsdk.AvailableCommand) {
 	skills := make([]ports.ChatSkill, 0, len(commands))
-	hasCompact := false
+	hasCompact, compactTakesInput := false, false
 	for _, command := range commands {
 		if command.Name == "" {
 			continue
 		}
 		if command.Name == "compact" {
 			hasCompact = true
+			compactTakesInput = command.Input != nil && command.Input.Unstructured != nil
 		}
 		// Hiding is presentation only, so it runs after the capability checks:
 		// an agent's compaction still works when its command stays off the menu.
@@ -55,6 +56,7 @@ func (c *conversation) replaceAvailableCommands(commands []acpsdk.AvailableComma
 	c.skills = skills
 	c.skillsKnown = true
 	c.compactAdvertised = hasCompact
+	c.compactTakesInput = compactTakesInput
 	if c.capabilities != nil {
 		c.capabilities[ports.ChatCapabilitySkills] = true
 		c.capabilities[ports.ChatCapabilityCompaction] = hasCompact

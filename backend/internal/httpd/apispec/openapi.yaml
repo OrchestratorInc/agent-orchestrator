@@ -24981,6 +24981,8 @@ components:
           $ref: '#/components/schemas/TrackerIntakeConfig'
         worker:
           $ref: '#/components/schemas/RoleOverride'
+        workerCompaction:
+          $ref: '#/components/schemas/WorkerCompactionConfig'
         workersRequestReview:
           type: boolean
       type: object
@@ -25998,12 +26000,17 @@ components:
       properties:
         attachment:
           $ref: '#/components/schemas/AttachmentInput'
+        keep:
+          maxLength: 1000
+          type: string
         message:
           maxLength: 4096
           minLength: 1
           type: string
         senderSessionId:
           type: string
+        task:
+          type: boolean
         userAuthored:
           type: boolean
       required:
@@ -29433,6 +29440,14 @@ components:
           type: string
       required:
       - status
+      type: object
+    WorkerCompactionConfig:
+      properties:
+        disabled:
+          type: boolean
+        thresholdTokens:
+          format: int64
+          type: integer
       type: object
     WorkspaceBranchResponse:
       properties:

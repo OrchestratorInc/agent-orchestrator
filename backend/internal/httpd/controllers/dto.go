@@ -1529,6 +1529,13 @@ type SendSessionMessageRequest struct {
 	// snapshot) delivered alongside the message. The daemon writes it into the
 	// session worktree and appends a path reference to the message.
 	Attachment *AttachmentInput `json:"attachment,omitempty"`
+	// Task marks the message as a new task for the session rather than a note
+	// about its current work. Only a new task from an orchestrator can compact a
+	// worker over its project's context threshold before the task runs.
+	Task bool `json:"task,omitempty"`
+	// Keep says what the new task needs from the session's earlier work. It
+	// steers that compaction's summary and requires task.
+	Keep string `json:"keep,omitempty" maxLength:"1000"`
 }
 
 // SendSessionMessageResponse is the body of POST /api/v1/sessions/{sessionId}/send.

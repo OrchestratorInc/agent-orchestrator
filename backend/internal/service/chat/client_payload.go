@@ -31,7 +31,9 @@ func clientPayloadHash(msg ports.ChatUserMessage) (string, error) {
 		AuthoredByUser  bool
 		Continuation    bool `json:",omitempty"`
 		Settings        ports.ChatTurnSettings
-	}{msg.Excerpts, msg.Text, content, normalizeOrigin(msg.Origin), msg.SenderSessionID, msg.AuthoredByUser, msg.Continuation, msg.Settings})
+		NewTask         bool   `json:",omitempty"`
+		KeepForTask     string `json:",omitempty"`
+	}{msg.Excerpts, msg.Text, content, normalizeOrigin(msg.Origin), msg.SenderSessionID, msg.AuthoredByUser, msg.Continuation, msg.Settings, msg.NewTask, msg.KeepForTask})
 	if err != nil {
 		return "", fmt.Errorf("encode client message payload: %w", err)
 	}

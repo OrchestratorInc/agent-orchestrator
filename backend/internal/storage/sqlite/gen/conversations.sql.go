@@ -1160,8 +1160,8 @@ INSERT INTO conversation_messages (
     id, conversation_id, turn_id, sequence, revision, role, origin,
     text, streaming, provider_item_id, client_message_id, client_payload_hash,
     delivery_content_json, continuation, authored_by_user, sender_session_id, sender_project_id, sender_display_name,
-    created_at, updated_at
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    new_task, keep_for_task, created_at, updated_at
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 `
 
 type InsertConversationMessageParams struct {
@@ -1183,6 +1183,8 @@ type InsertConversationMessageParams struct {
 	SenderSessionID     string
 	SenderProjectID     string
 	SenderDisplayName   string
+	NewTask             int64
+	KeepForTask         string
 	CreatedAt           time.Time
 	UpdatedAt           time.Time
 }
@@ -1207,6 +1209,8 @@ func (q *Queries) InsertConversationMessage(ctx context.Context, arg InsertConve
 		arg.SenderSessionID,
 		arg.SenderProjectID,
 		arg.SenderDisplayName,
+		arg.NewTask,
+		arg.KeepForTask,
 		arg.CreatedAt,
 		arg.UpdatedAt,
 	)
@@ -3325,7 +3329,7 @@ func (q *Queries) SelectConversationEditDelivery(ctx context.Context, arg Select
 }
 
 const selectConversationMessageByClientID = `-- name: SelectConversationMessageByClientID :one
-SELECT id, conversation_id, turn_id, sequence, revision, role, origin, text, streaming, provider_item_id, client_message_id, created_at, updated_at, delivery_content_json, branch_id, client_payload_hash, sender_session_id, sender_project_id, sender_display_name, continuation, authored_by_user FROM conversation_messages
+SELECT id, conversation_id, turn_id, sequence, revision, role, origin, text, streaming, provider_item_id, client_message_id, created_at, updated_at, delivery_content_json, branch_id, client_payload_hash, sender_session_id, sender_project_id, sender_display_name, continuation, authored_by_user, new_task, keep_for_task FROM conversation_messages
 WHERE conversation_id = ? AND client_message_id = ? AND client_message_id <> ''
 LIMIT 1
 `
@@ -3360,12 +3364,14 @@ func (q *Queries) SelectConversationMessageByClientID(ctx context.Context, arg S
 		&i.SenderDisplayName,
 		&i.Continuation,
 		&i.AuthoredByUser,
+		&i.NewTask,
+		&i.KeepForTask,
 	)
 	return i, err
 }
 
 const selectConversationMessageByProviderItem = `-- name: SelectConversationMessageByProviderItem :one
-SELECT id, conversation_id, turn_id, sequence, revision, role, origin, text, streaming, provider_item_id, client_message_id, created_at, updated_at, delivery_content_json, branch_id, client_payload_hash, sender_session_id, sender_project_id, sender_display_name, continuation, authored_by_user FROM conversation_messages
+SELECT id, conversation_id, turn_id, sequence, revision, role, origin, text, streaming, provider_item_id, client_message_id, created_at, updated_at, delivery_content_json, branch_id, client_payload_hash, sender_session_id, sender_project_id, sender_display_name, continuation, authored_by_user, new_task, keep_for_task FROM conversation_messages
 WHERE conversation_id = ? AND provider_item_id = ? AND provider_item_id <> ''
 LIMIT 1
 `
@@ -3400,6 +3406,8 @@ func (q *Queries) SelectConversationMessageByProviderItem(ctx context.Context, a
 		&i.SenderDisplayName,
 		&i.Continuation,
 		&i.AuthoredByUser,
+		&i.NewTask,
+		&i.KeepForTask,
 	)
 	return i, err
 }
@@ -3420,7 +3428,7 @@ WITH RECURSIVE active_path(branch_id, max_sequence) AS (
     JOIN conversation_branches AS branch ON branch.id = path.branch_id
     WHERE branch.parent_branch_id IS NOT NULL
 )
-SELECT conversation_messages.id, conversation_messages.conversation_id, conversation_messages.turn_id, conversation_messages.sequence, conversation_messages.revision, conversation_messages.role, conversation_messages.origin, conversation_messages.text, conversation_messages.streaming, conversation_messages.provider_item_id, conversation_messages.client_message_id, conversation_messages.created_at, conversation_messages.updated_at, conversation_messages.delivery_content_json, conversation_messages.branch_id, conversation_messages.client_payload_hash, conversation_messages.sender_session_id, conversation_messages.sender_project_id, conversation_messages.sender_display_name, conversation_messages.continuation, conversation_messages.authored_by_user FROM conversation_messages
+SELECT conversation_messages.id, conversation_messages.conversation_id, conversation_messages.turn_id, conversation_messages.sequence, conversation_messages.revision, conversation_messages.role, conversation_messages.origin, conversation_messages.text, conversation_messages.streaming, conversation_messages.provider_item_id, conversation_messages.client_message_id, conversation_messages.created_at, conversation_messages.updated_at, conversation_messages.delivery_content_json, conversation_messages.branch_id, conversation_messages.client_payload_hash, conversation_messages.sender_session_id, conversation_messages.sender_project_id, conversation_messages.sender_display_name, conversation_messages.continuation, conversation_messages.authored_by_user, conversation_messages.new_task, conversation_messages.keep_for_task FROM conversation_messages
 JOIN active_path AS path ON path.branch_id = conversation_messages.branch_id
 WHERE conversation_messages.conversation_id = ?1
   AND (path.max_sequence IS NULL OR conversation_messages.sequence <= path.max_sequence)
@@ -3479,6 +3487,8 @@ func (q *Queries) SelectConversationMessages(ctx context.Context, conversationID
 			&i.SenderDisplayName,
 			&i.Continuation,
 			&i.AuthoredByUser,
+			&i.NewTask,
+			&i.KeepForTask,
 		); err != nil {
 			return nil, err
 		}
@@ -3533,7 +3543,7 @@ LIMIT ?4
            ROW_NUMBER() OVER (ORDER BY sequence DESC) AS row_position
     FROM page_candidates
 )
-SELECT conversation_messages.id, conversation_messages.conversation_id, conversation_messages.turn_id, conversation_messages.sequence, conversation_messages.revision, conversation_messages.role, conversation_messages.origin, conversation_messages.text, conversation_messages.streaming, conversation_messages.provider_item_id, conversation_messages.client_message_id, conversation_messages.created_at, conversation_messages.updated_at, conversation_messages.delivery_content_json, conversation_messages.branch_id, conversation_messages.client_payload_hash, conversation_messages.sender_session_id, conversation_messages.sender_project_id, conversation_messages.sender_display_name, conversation_messages.continuation, conversation_messages.authored_by_user FROM conversation_messages
+SELECT conversation_messages.id, conversation_messages.conversation_id, conversation_messages.turn_id, conversation_messages.sequence, conversation_messages.revision, conversation_messages.role, conversation_messages.origin, conversation_messages.text, conversation_messages.streaming, conversation_messages.provider_item_id, conversation_messages.client_message_id, conversation_messages.created_at, conversation_messages.updated_at, conversation_messages.delivery_content_json, conversation_messages.branch_id, conversation_messages.client_payload_hash, conversation_messages.sender_session_id, conversation_messages.sender_project_id, conversation_messages.sender_display_name, conversation_messages.continuation, conversation_messages.authored_by_user, conversation_messages.new_task, conversation_messages.keep_for_task FROM conversation_messages
 JOIN page_budget AS budget ON conversation_messages.id = budget.id
 WHERE budget.total_bytes <= CAST(?1 AS INTEGER) OR budget.row_position = 1
 ORDER BY budget.sequence DESC
@@ -3584,6 +3594,8 @@ func (q *Queries) SelectConversationMessagesPage(ctx context.Context, arg Select
 			&i.SenderDisplayName,
 			&i.Continuation,
 			&i.AuthoredByUser,
+			&i.NewTask,
+			&i.KeepForTask,
 		); err != nil {
 			return nil, err
 		}
@@ -4222,7 +4234,7 @@ func (q *Queries) SelectConversationTurnsPage(ctx context.Context, arg SelectCon
 }
 
 const selectConversationUserMessageByTurn = `-- name: SelectConversationUserMessageByTurn :one
-SELECT conversation_messages.id, conversation_messages.conversation_id, conversation_messages.turn_id, conversation_messages.sequence, conversation_messages.revision, conversation_messages.role, conversation_messages.origin, conversation_messages.text, conversation_messages.streaming, conversation_messages.provider_item_id, conversation_messages.client_message_id, conversation_messages.created_at, conversation_messages.updated_at, conversation_messages.delivery_content_json, conversation_messages.branch_id, conversation_messages.client_payload_hash, conversation_messages.sender_session_id, conversation_messages.sender_project_id, conversation_messages.sender_display_name, conversation_messages.continuation, conversation_messages.authored_by_user
+SELECT conversation_messages.id, conversation_messages.conversation_id, conversation_messages.turn_id, conversation_messages.sequence, conversation_messages.revision, conversation_messages.role, conversation_messages.origin, conversation_messages.text, conversation_messages.streaming, conversation_messages.provider_item_id, conversation_messages.client_message_id, conversation_messages.created_at, conversation_messages.updated_at, conversation_messages.delivery_content_json, conversation_messages.branch_id, conversation_messages.client_payload_hash, conversation_messages.sender_session_id, conversation_messages.sender_project_id, conversation_messages.sender_display_name, conversation_messages.continuation, conversation_messages.authored_by_user, conversation_messages.new_task, conversation_messages.keep_for_task
 FROM conversation_messages
 JOIN conversation_turns ON conversation_turns.id = conversation_messages.turn_id
 WHERE conversation_messages.conversation_id = ?
@@ -4264,6 +4276,8 @@ func (q *Queries) SelectConversationUserMessageByTurn(ctx context.Context, arg S
 		&i.SenderDisplayName,
 		&i.Continuation,
 		&i.AuthoredByUser,
+		&i.NewTask,
+		&i.KeepForTask,
 	)
 	return i, err
 }
@@ -4489,7 +4503,9 @@ SELECT conversation_turns.id,
        conversation_messages.delivery_content_json,
        conversation_messages.sender_session_id,
        conversation_messages.sender_project_id,
-       conversation_messages.sender_display_name
+       conversation_messages.sender_display_name,
+       conversation_messages.new_task,
+       conversation_messages.keep_for_task
 FROM conversation_turns
 JOIN conversation_messages
     ON conversation_messages.turn_id = conversation_turns.id
@@ -4510,6 +4526,8 @@ type SelectNextQueuedConversationTurnRow struct {
 	SenderSessionID     string
 	SenderProjectID     string
 	SenderDisplayName   string
+	NewTask             int64
+	KeepForTask         string
 }
 
 // The head of the send queue: the oldest message recorded while the agent was
@@ -4530,6 +4548,8 @@ func (q *Queries) SelectNextQueuedConversationTurn(ctx context.Context, conversa
 		&i.SenderSessionID,
 		&i.SenderProjectID,
 		&i.SenderDisplayName,
+		&i.NewTask,
+		&i.KeepForTask,
 	)
 	return i, err
 }
@@ -4631,7 +4651,9 @@ SELECT conversation_turns.id,
        conversation_messages.delivery_content_json,
        conversation_messages.sender_session_id,
        conversation_messages.sender_project_id,
-       conversation_messages.sender_display_name
+       conversation_messages.sender_display_name,
+       conversation_messages.new_task,
+       conversation_messages.keep_for_task
 FROM conversation_turns
 JOIN conversation_messages
     ON conversation_messages.turn_id = conversation_turns.id
@@ -4651,6 +4673,8 @@ type SelectQueuedConversationBatchRow struct {
 	SenderSessionID     string
 	SenderProjectID     string
 	SenderDisplayName   string
+	NewTask             int64
+	KeepForTask         string
 }
 
 func (q *Queries) SelectQueuedConversationBatch(ctx context.Context, conversationID string) ([]SelectQueuedConversationBatchRow, error) {
@@ -4671,6 +4695,8 @@ func (q *Queries) SelectQueuedConversationBatch(ctx context.Context, conversatio
 			&i.SenderSessionID,
 			&i.SenderProjectID,
 			&i.SenderDisplayName,
+			&i.NewTask,
+			&i.KeepForTask,
 		); err != nil {
 			return nil, err
 		}
@@ -4686,7 +4712,7 @@ func (q *Queries) SelectQueuedConversationBatch(ctx context.Context, conversatio
 }
 
 const selectQueuedConversationMessage = `-- name: SelectQueuedConversationMessage :one
-SELECT conversation_messages.id, conversation_messages.conversation_id, conversation_messages.turn_id, conversation_messages.sequence, conversation_messages.revision, conversation_messages.role, conversation_messages.origin, conversation_messages.text, conversation_messages.streaming, conversation_messages.provider_item_id, conversation_messages.client_message_id, conversation_messages.created_at, conversation_messages.updated_at, conversation_messages.delivery_content_json, conversation_messages.branch_id, conversation_messages.client_payload_hash, conversation_messages.sender_session_id, conversation_messages.sender_project_id, conversation_messages.sender_display_name, conversation_messages.continuation, conversation_messages.authored_by_user
+SELECT conversation_messages.id, conversation_messages.conversation_id, conversation_messages.turn_id, conversation_messages.sequence, conversation_messages.revision, conversation_messages.role, conversation_messages.origin, conversation_messages.text, conversation_messages.streaming, conversation_messages.provider_item_id, conversation_messages.client_message_id, conversation_messages.created_at, conversation_messages.updated_at, conversation_messages.delivery_content_json, conversation_messages.branch_id, conversation_messages.client_payload_hash, conversation_messages.sender_session_id, conversation_messages.sender_project_id, conversation_messages.sender_display_name, conversation_messages.continuation, conversation_messages.authored_by_user, conversation_messages.new_task, conversation_messages.keep_for_task
 FROM conversation_messages
 JOIN conversation_turns ON conversation_turns.id = conversation_messages.turn_id
 WHERE conversation_messages.conversation_id = ?
@@ -4728,6 +4754,8 @@ func (q *Queries) SelectQueuedConversationMessage(ctx context.Context, arg Selec
 		&i.SenderDisplayName,
 		&i.Continuation,
 		&i.AuthoredByUser,
+		&i.NewTask,
+		&i.KeepForTask,
 	)
 	return i, err
 }

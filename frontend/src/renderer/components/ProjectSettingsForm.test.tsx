@@ -1190,6 +1190,47 @@ describe("ProjectSettingsForm", () => {
 		expect(request?.body.config.reviewers).toBeUndefined();
 	});
 
+	it("keeps a worker compaction threshold set elsewhere and can turn it off", async () => {
+		mockProject({
+			id: "proj-1", name: "Project One", kind: "single_repo", path: "/repo/project-one",
+			repo: "", defaultBranch: "main", config: {
+				worker: { agent: "claude-code" },
+				orchestrator: { agent: "claude-code" },
+				workerCompaction: { thresholdTokens: 250_000 },
+			},
+		});
+		renderSettings("proj-1", undefined, "agents");
+		const menu = await screen.findByRole("button", { name: "Compact before orchestrator tasks" });
+		expect(menu).toHaveTextContent("Over 250k tokens");
+		await userEvent.click(menu);
+		expect(screen.getAllByRole("menuitem").map((item) => item.textContent)).toEqual([
+			"Over 200k tokens", "Over 250k tokens", "Over 300k tokens", "Over 500k tokens", "Off",
+		]);
+		await userEvent.click(screen.getByRole("menuitem", { name: "Off" }));
+		submitSettings();
+		await waitFor(() => expect(putMock).toHaveBeenCalledTimes(1));
+		expect(putMock.mock.calls[0][1].body.config.workerCompaction).toEqual({ disabled: true });
+	});
+
+	it("stores no worker compaction config at the default threshold", async () => {
+		mockProject({
+			id: "proj-1", name: "Project One", kind: "single_repo", path: "/repo/project-one",
+			repo: "", defaultBranch: "main", config: {
+				worker: { agent: "claude-code" },
+				orchestrator: { agent: "claude-code" },
+				workerCompaction: { thresholdTokens: 200_000 },
+			},
+		});
+		renderSettings("proj-1", undefined, "agents");
+		const menu = await screen.findByRole("button", { name: "Compact before orchestrator tasks" });
+		await userEvent.click(menu);
+		await userEvent.click(screen.getByRole("menuitem", { name: "Over 300k tokens" }));
+		expect(menu).toHaveTextContent("Over 300k tokens");
+		submitSettings();
+		await waitFor(() => expect(putMock).toHaveBeenCalledTimes(1));
+		expect(putMock.mock.calls[0][1].body.config.workerCompaction).toBeUndefined();
+	});
+
 	it("hides the attribution switches while the beta is off", async () => {
 		mockProject({
 			id: "proj-1",

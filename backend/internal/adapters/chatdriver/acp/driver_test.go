@@ -6961,3 +6961,78 @@ func TestACPAsyncTasksRequiresBindingOptIn(t *testing.T) {
 		_ = conv.Close()
 	}
 }
+
+// An orchestrator's hint about the next task steers the compaction's summary,
+// sent as the compact command's input. Only an agent whose compact command
+// declares input gets it: another might read the text as a prompt.
+func TestACPCompactWithInstructionsSendsThemOnlyWhenCompactTakesInput(t *testing.T) {
+	tests := []struct {
+		name  string
+		input *acpsdk.AvailableCommandInput
+		want  string
+	}{
+		{
+			name:  "compact takes instructions",
+			input: &acpsdk.AvailableCommandInput{Unstructured: &acpsdk.UnstructuredCommandInput{Hint: "<optional custom summarization instructions>"}},
+			want:  "/compact Keep the loader.\nDrop tool output.",
+		},
+		{name: "compact takes none", want: "/compact"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			agent := &fakeAgent{}
+			driver := New(Config{
+				Harness:      domain.HarnessClaudeCode,
+				Capabilities: ports.ChatCapabilities{ports.ChatCapabilityStreaming: true},
+				Probe:        func(context.Context) error { return nil },
+				Launch:       func(context.Context, LaunchConfig) (Launch, error) { return Launch{Command: "fake"}, nil },
+			}, slog.New(slog.NewTextHandler(io.Discard, nil)))
+			driver.useTestProcess(fakeSpawn(agent))
+			opened, err := driver.Start(context.Background(), ports.ChatStartConfig{WorkspacePath: t.TempDir()})
+			if err != nil {
+				t.Fatalf("Start: %v", err)
+			}
+			defer opened.Close()
+
+			if err := agent.conn.SessionUpdate(context.Background(), acpsdk.SessionNotification{
+				SessionId: acpsdk.SessionId(opened.ProviderConversationID()),
+				Update: acpsdk.SessionUpdate{AvailableCommandsUpdate: &acpsdk.SessionAvailableCommandsUpdate{
+					AvailableCommands: []acpsdk.AvailableCommand{{Name: "compact", Description: "Compact history", Input: tt.input}},
+				}},
+			}); err != nil {
+				t.Fatalf("SessionUpdate available commands: %v", err)
+			}
+			awaitSkillCount(t, opened.(ports.ChatSkillLister), 1)
+
+			prompts := make(chan string, 1)
+			agent.mu.Lock()
+			agent.customPrompt = func(_ context.Context, params acpsdk.PromptRequest) (acpsdk.PromptResponse, error) {
+				text := ""
+				for _, block := range params.Prompt {
+					if block.Text != nil {
+						text += block.Text.Text
+					}
+				}
+				prompts <- text
+				return acpsdk.PromptResponse{StopReason: acpsdk.StopReasonEndTurn}, nil
+			}
+			agent.mu.Unlock()
+
+			guided, ok := opened.(ports.ChatGuidedCompactor)
+			if !ok {
+				t.Fatal("conversation does not implement ChatGuidedCompactor")
+			}
+			if _, err := guided.CompactWithInstructions(context.Background(), "  Keep the loader.\nDrop tool output.\n"); err != nil {
+				t.Fatalf("CompactWithInstructions: %v", err)
+			}
+			select {
+			case got := <-prompts:
+				if got != tt.want {
+					t.Fatalf("prompt sent = %q, want %q", got, tt.want)
+				}
+			case <-time.After(2 * time.Second):
+				t.Fatal("timed out waiting for the compaction prompt")
+			}
+		})
+	}
+}
