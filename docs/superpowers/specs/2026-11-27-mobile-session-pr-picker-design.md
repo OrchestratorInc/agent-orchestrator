@@ -1,7 +1,7 @@
 # Mobile: every pull request a session raised, from its PR chip
 
 Status: design and mockup approved in conversation
-Stacks on: #8944 (`feat/mobile-permission-picker`), itself on `fix/mobile-effort-slider`
+Base: `main`. Deliberately not stacked on #8944 (see Approaches); one PR carries the Workers badge toning and the session chip and list.
 
 ## Intent
 
@@ -44,12 +44,17 @@ state, and let the user pick any of them and land on its review page.
 
 ## Approaches
 
-1. **New `PullRequestPicker` on #8944's `ComposerOverlay`. Chosen.** Reuses the
-   overlay (veil, reveal, outside-tap and back dismissal, iOS back-swipe guard)
-   and the same open switch (`useEffortSliderSwitch`), so only one floating
-   list is up at a time. Copies the row metrics. Leaves #8944's files alone, so
-   the stack stays easy to review and survives changes to #8944. Cost: about 40
-   lines of row styling duplicated.
+1. **New `PullRequestPicker` on #8944's `ComposerOverlay`.** First chosen. Then
+   dropped for its base: #8944 and #8934 branched before #8829 (the Workers
+   badge), so one PR stacked on them cannot carry the badge change, and they
+   are another contributor's branches. The user chose not to depend on #8944.
+1b. **Chosen: the same list, built on main's own composer overlay pattern.**
+   Main's effort slider floats `pillHeight` above the composer, fades in and
+   out, closes on a touch outside, the keyboard or Android back, and turns the
+   iOS back swipe off while up. The PR list does the same, with a copy of
+   #8944's veil (about 30 lines of SVG) and #8944's row metrics. Cost: when
+   #8944 lands, this list should move onto its `ComposerOverlay` and switch;
+   whichever lands second reconciles them.
 2. **Extract a shared `ComposerPickerList` from `PermissionPicker`.** No
    duplication, but it rewrites part of #8944 inside a PR stacked on it, so
    every #8944 change becomes a conflict. Better as a follow-up once #8944
@@ -60,7 +65,7 @@ state, and let the user pick any of them and land on its review page.
 ## Decided
 
 - Chip shows whenever the worker has any PR (option (a) in conversation).
-- Stack on #8944 and build on its overlay (approach 1).
+- Base on main, with main's overlay pattern (approach 1b); not stacked on #8944.
 - One PR: the chip and the ⋯ menu open its review directly.
 - Several PRs, chip content: the lead PR (open first, then draft, merged,
   closed; newest within each, the Workers badge's order) as today's
@@ -68,10 +73,9 @@ state, and let the user pick any of them and land on its review page.
   closed, purple if all are merged, green if one is still open, quiet for
   drafts (the rule from the Workers badge branch).
 - Several PRs, ⋯ menu → Pull requests: opens the same list instead of `/prs`.
-- One PR for both: the Workers board badge's `+N` toning (local commit
-  `359ded9b41` on `mobile-pr-pill-extra-tone`) is cherry-picked as the first
-  commit of this branch, and the session chip uses the same helper. The badge
-  fix ships with this stack, after #8944 and its base.
+- One PR for both: the Workers board badge's `+N` toning is the first commit
+  of this branch (cherry-picked from the local `mobile-pr-pill-extra-tone`),
+  and the session chip uses the same helper.
 
 ## Design
 
@@ -104,30 +108,34 @@ state, and let the user pick any of them and land on its review page.
 
 ### List (`pull-request-picker.tsx`, new)
 
-- Hosted beside `EffortSliderHost` and `PermissionPickerHost` in the composer,
-  on its own `useEffortSliderSwitch`, positioned by the same pill height. It
-  floats over the chips row on the veil, like the permission list.
-- Opening it closes the effort slider and permission picker, and opening either
-  of those closes it (their buttons' `onPress` already close "whatever else is
-  open"; the PR switch joins that set).
+- `PullRequestPickerOverlay`: like `EffortSliderOverlay`, positioned
+  `pillHeight` above the composer pill, `FadeIn`/`FadeOut`, `markTouchInside`
+  on touch start, iOS back swipe off while shown. Behind the list, a copy of
+  #8944's arch veil (`pr-picker-veil`, radial gradient in `bgBase`) so the
+  list reads over a busy conversation and covers the chips row.
+- Open state: `usePullRequestPickerOpen(count, busy)`, modelled on
+  `useEffortSliderOpen` but with no twelve-second timeout (it is a list to
+  read). Closes on a touch outside, the keyboard showing, Android back, a pick,
+  or when the session drops to fewer than two PRs.
+- The composer owns both open states: opening the PR list closes the effort
+  slider and the reverse.
 - Rows: 58 pt, the icon column, then `#9137 Title` on the first line (number in
   the secondary colour, title in primary, one line, truncated) and the status
   headline on the second, in its tone. No selected wash: nothing is "in force".
   Pressed rows take `bgSubtle`.
-- Width: 360 pt like the permission list, capped to the composer.
+- Width: 360 pt, capped to the composer.
 - More than five PRs: the list scrolls inside a height of five and a half rows,
   so the half row says there is more.
 - Order: lead order (open, draft, merged, closed; newest first within each).
 - Pick: haptic select, close the list, `openPage(route)`.
-- Accessibility: the list is a `menu`/list of buttons, not a radiogroup; each
-  row's label is "Pull request 9137, Create brand and design guidelines doc,
-  CI passing".
+- Accessibility: a list of buttons, not a radiogroup; each row's label is
+  "Pull request 9137, Create brand and design guidelines doc, Mergeable".
 
 ### ⋯ menu (`ChatSessionScreen.tsx`)
 
-- `pull_requests` with several PRs opens the list: the PR switch moves up to
-  the screen and is passed to the composer, so the menu action can call
-  `setOpen(true)` once the actions sheet has closed.
+- `pull_requests` with several PRs opens the list: the screen bumps a
+  `pullRequestListRequest` counter prop on the composer (the `quoteRequest`
+  pattern) once the actions sheet has closed, and the composer opens the list.
 
 ### Cloud sessions
 
@@ -140,9 +148,14 @@ It gets the same chip and list, with `CLOUD_HOST_ID` routes.
   tones and routes; the `+N` tone rule; accessibility labels.
 - Component: chip shows for merged-only and closed-only workers; one PR opens
   the review; several open the list; a row press opens that PR's route; the
-  list closes the effort slider and permission picker and vice versa.
+  list and the effort slider close each other; the ⋯ menu request opens it.
 - Simulator: before/after on iOS (bundle swap) for one PR, several mixed, and
   all merged, dark and light; the list opened over the composer.
+
+## Follow-up
+
+When #8944 lands, move the list onto `ComposerOverlay` and its switch, and
+drop the copied veil.
 
 ## Left to the builder
 
