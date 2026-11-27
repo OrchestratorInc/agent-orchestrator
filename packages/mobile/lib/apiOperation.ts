@@ -11,7 +11,7 @@ const ROUTE_WORDS = new Set([
 	"accounts", "agents", "approvals", "artifact-files", "artifact-versions", "artifacts", "attachments", "auto-inject-ci",
 	"auto-inject-review", "auto-review", "blob", "branches", "browser", "button", "cancel", "chat",
 	"chat-view", "cleanup", "clone", "close", "codex", "comments", "config-options",
-	"conversation", "delegate", "device", "devices", "diffs", "dirs", "endpoints",
+	"conversation", "decision", "delegate", "device", "devices", "diffs", "dirs", "endpoints",
 	"file", "files", "fork", "fork-options", "fs", "github-availability", "github-owners",
 	"history", "identity", "imports", "initialize", "inputs", "interface-transition",
 	"interrupt", "kill", "live", "manifest", "merge", "messages", "models", "notice-acknowledgement",
