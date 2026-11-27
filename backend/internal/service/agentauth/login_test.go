@@ -34,6 +34,7 @@ type guidedTerminalFake struct {
 	closed     bool
 	closeErr   error
 	closeCalls int
+	opens      int
 }
 
 func (f *guidedTerminalFake) OpenCommandTerminal(_ context.Context, input shellterm.OpenCommandTerminalInput) (shellterm.ShellTerminal, error) {
@@ -41,6 +42,10 @@ func (f *guidedTerminalFake) OpenCommandTerminal(_ context.Context, input shellt
 	defer f.mu.Unlock()
 	f.input = input
 	f.alive = true
+	if f.opens > 0 {
+		f.output = "" // A reopened terminal starts without the old output.
+	}
+	f.opens++
 	return shellterm.ShellTerminal{HandleID: "private-auth-pty"}, nil
 }
 func (f *guidedTerminalFake) ObserveAuthTerminal(_ context.Context, _ string) (shellterm.AuthTerminalObservation, error) {
@@ -261,7 +266,7 @@ func (f *signInProberFake) ResolveAgentBinary(_ context.Context, agentID string)
 }
 func (f *signInProberFake) InvalidateAgentAuthentication(string) {}
 func (f *signInProberFake) EnsureAgentReadiness(context.Context, string, domain.AgentReadinessPurpose) (domain.AgentReadinessSnapshot, error) {
-	return domain.AgentReadinessSnapshot{Authentication: domain.AgentAuthenticationObservation{State: f.state}}, nil
+	return domain.AgentReadinessSnapshot{Authentication: domain.AgentAuthenticationObservation{State: f.state, Freshness: domain.AgentReadinessFresh}}, nil
 }
 
 // The hidden PTY reports no exit status: Esc, Ctrl+C or a CLI error also end

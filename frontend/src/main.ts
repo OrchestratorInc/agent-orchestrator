@@ -1,5 +1,6 @@
 import { parseSharedArtifactLink } from "../../packages/shared/artifacts/shared-artifact-link";
 import { openSharedArtifact, SHARED_ARTIFACT_VIEWER_ORIGINS } from "./main/shared-artifact-window";
+import { installDevRendererFraming } from "./main/dev-frame-ancestors";
 import type { SideCloseRequest, SideCloseState } from "./shared/side-close";
 import { SideCloseRecovery, type SideSnapshotCoverage } from "./main/side-close";
 import { SideCloseController } from "./main/side-close-controller";
@@ -4934,6 +4935,10 @@ app.whenReady().then(async () => {
 	}
 
 	registerRendererProtocol();
+	// A dev build's renderer is http://localhost, which Cloud file hosts refuse to frame; see dev-frame-ancestors.
+	if (!app.isPackaged && typeof MAIN_WINDOW_VITE_DEV_SERVER_URL !== "undefined" && MAIN_WINDOW_VITE_DEV_SERVER_URL) {
+		installDevRendererFraming(session.defaultSession, MAIN_WINDOW_VITE_DEV_SERVER_URL);
+	}
 	registerArtifactSnapshotProtocol({ protocol, store: artifactSnapshotStore });
 	// Which account owns the cached Cloud previews from the last run, so a different or lost one clears them
 	// even if the app quit before it could.

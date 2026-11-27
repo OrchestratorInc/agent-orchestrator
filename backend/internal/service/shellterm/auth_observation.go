@@ -2,6 +2,7 @@ package shellterm
 
 import (
 	"context"
+	"regexp"
 
 	"github.com/OrchestratorInc/agent-orchestrator/backend/internal/httpd/apierr"
 	"github.com/OrchestratorInc/agent-orchestrator/backend/internal/ports"
@@ -45,6 +46,48 @@ func (s *Service) ObserveAuthTerminal(ctx context.Context, handleID string) (Aut
 		return AuthTerminalObservation{}, err
 	}
 	return AuthTerminalObservation{Output: output, Alive: alive}, nil
+}
+
+// authTerminalCommand is the only text a guided login may type: a plain
+// slash command from a reviewed login plan, such as /logout.
+var authTerminalCommand = regexp.MustCompile(`^/[a-z][a-z-]{0,31}$`)
+
+// SendAuthTerminalCommand types a reviewed slash command into a trusted
+// authentication terminal, without pressing Enter. It is daemon-internal:
+// only login plans call it, never the HTTP API.
+func (s *Service) SendAuthTerminalCommand(ctx context.Context, handleID, command string) error {
+	if !authTerminalCommand.MatchString(command) {
+		return apierr.Invalid("AGENT_AUTH_ACTION_INVALID", "Choose a supported login command.", nil)
+	}
+	rec, found, err := s.store.SelectShellTerminalByHandleID(ctx, handleID)
+	if err != nil {
+		return err
+	}
+	if !found || !rec.Transient || rec.AppRunID != s.appRunID {
+		return apierr.NotFound("AGENT_AUTH_TERMINAL_NOT_FOUND", "Authentication terminal not found.")
+	}
+	return s.runtime.SendInput(ctx, ports.RuntimeHandle{ID: handleID}, command)
+}
+
+// authTerminalCode is an OAuth authorization code a user pastes back into a
+// guided login: URL-safe characters on one line, nothing a terminal treats as
+// a control sequence.
+var authTerminalCode = regexp.MustCompile(`^[A-Za-z0-9/_.~+=%-]+$`)
+
+// SendAuthTerminalCode types a user's authorization code into a trusted
+// authentication terminal, without pressing Enter.
+func (s *Service) SendAuthTerminalCode(ctx context.Context, handleID, code string) error {
+	if len(code) < 8 || len(code) > 2048 || !authTerminalCode.MatchString(code) {
+		return apierr.Invalid("AGENT_AUTH_CODE_INVALID", "Paste the authorization code exactly as shown.", nil)
+	}
+	rec, found, err := s.store.SelectShellTerminalByHandleID(ctx, handleID)
+	if err != nil {
+		return err
+	}
+	if !found || !rec.Transient || rec.AppRunID != s.appRunID {
+		return apierr.NotFound("AGENT_AUTH_TERMINAL_NOT_FOUND", "Authentication terminal not found.")
+	}
+	return s.runtime.SendInput(ctx, ports.RuntimeHandle{ID: handleID}, code)
 }
 
 // SendAuthTerminalKey accepts only the fixed menu actions exposed by guided
