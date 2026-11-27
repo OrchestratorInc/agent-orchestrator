@@ -19,14 +19,41 @@ func TestScrubForDaemon(t *testing.T) {
 	}
 }
 
-// Every session variable is either scrubbed or deliberately kept as daemon
+// Every session variable is either scrubbed or kept unchanged as daemon
 // configuration.
 func TestEverySessionVarIsHandled(t *testing.T) {
 	for _, k := range SessionVars {
 		out := ScrubForDaemon([]string{k + "=v"})
-		if len(out) == 1 && !daemonConfigVars[k] {
-			t.Errorf("%s survives the scrub but is not daemon configuration", k)
+		switch {
+		case daemonConfigVars[k]:
+			if !slices.Equal(out, []string{k + "=v"}) {
+				t.Errorf("daemon setting %s = %v after the scrub, want it kept", k, out)
+			}
+		case len(out) != 0:
+			t.Errorf("session variable %s survives the scrub: %v", k, out)
 		}
+	}
+	for k := range daemonConfigVars {
+		if out := ScrubForDaemon([]string{k + "=v"}); !slices.Equal(out, []string{k + "=v"}) {
+			t.Errorf("daemon setting %s = %v after the scrub, want it kept", k, out)
+		}
+	}
+}
+
+// Windows environment names are case-insensitive: a mixed-case marker is the
+// same variable. Elsewhere names are compared exactly.
+func TestScrubForDaemonCaseInsensitiveOnWindows(t *testing.T) {
+	old := caseInsensitiveEnv
+	t.Cleanup(func() { caseInsensitiveEnv = old })
+	in := []string{"Ao_Owner=app", "ClaudeCode=1", "Claude_Code_Session_Id=s", "Ao_Data_Dir=/d", "Path=C:\\bin"}
+
+	caseInsensitiveEnv = true
+	if got, want := ScrubForDaemon(in), []string{"Ao_Data_Dir=/d", "Path=C:\\bin"}; !slices.Equal(got, want) {
+		t.Fatalf("case-insensitive: %v, want %v", got, want)
+	}
+	caseInsensitiveEnv = false
+	if got := ScrubForDaemon(in); !slices.Equal(got, in) {
+		t.Fatalf("case-sensitive: %v, want all kept (different names)", got)
 	}
 }
 

@@ -34,7 +34,7 @@ ao serve [flags]
 
 - Stop the daemon with `ao stop`.
 - If the run file names a daemon that serves a different data directory (only `AO_DATA_DIR` was changed), `ao serve` exits 1. Set `AO_RUN_FILE` and `AO_PORT` too for a separate daemon.
-- When the desktop app opens, it swaps in its own daemon on the same data directory, which keeps running after the app quits.
+- When the desktop app opens while this daemon runs, it swaps in its own daemon on the same data directory and keeps that one running after it quits. A daemon the app starts on its own, with no `ao serve` daemon running, quits with the app.
 - Usage analytics follow the app's **Share usage analytics** setting. `DO_NOT_TRACK=1` or `AO_TELEMETRY_REMOTE=off` turns them off.
 - To keep the daemon running across reboots, use [`ao service install`](service.md).
 

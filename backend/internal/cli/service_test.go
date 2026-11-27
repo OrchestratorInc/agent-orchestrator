@@ -68,6 +68,10 @@ func TestRenderServiceFilesEscapeValues(t *testing.T) {
 			t.Fatalf("unit missing %q:\n%s", want, unit)
 		}
 	}
+	nl := renderSystemdUnit(serviceSpec{Name: "x", Args: []string{"/ao"}, Env: map[string]string{"PATH": "/a\nb:/c"}})
+	if !strings.Contains(nl, `Environment="PATH=/a\nb:/c"`) || strings.Contains(nl, "/a\nb") {
+		t.Fatalf("a line break in a value must be escaped, not written raw:\n%s", nl)
+	}
 	if strings.Contains(unit, "StandardOutput=") || strings.Contains(unit, "StandardError=") {
 		t.Fatalf("unit discards output; journalctl must show early failures:\n%s", unit)
 	}
@@ -588,7 +592,12 @@ func TestServiceSystemdStatusSeparatesActiveFromEnabled(t *testing.T) {
 // LaunchAgent and a runner that exports dataDir when it is set.
 func writeSelfHostedService(t *testing.T, agents, dataDir string) string {
 	t.Helper()
-	runner := filepath.Join(t.TempDir(), "run-daemon.sh")
+	// The setup script may live under a home or install dir with a space.
+	dir := filepath.Join(t.TempDir(), "My Host")
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	runner := filepath.Join(dir, "run-daemon.sh")
 	body := "#!/usr/bin/env bash\nexport PATH=/usr/bin\n"
 	if dataDir != "" {
 		body += "export AO_DATA_DIR=" + dataDir + "\n"
@@ -636,8 +645,12 @@ func TestServiceInstallRefusesSelfHostedServiceOnSameDataDir(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(out, `"selfHostedService": "`+plist+`"`) {
-		t.Fatalf("status does not report the self-hosted service:\n%s", out)
+	var status serviceStatus
+	if err := json.Unmarshal([]byte(out), &status); err != nil {
+		t.Fatal(err)
+	}
+	if status.SelfHostedService != plist {
+		t.Fatalf("selfHostedService = %q, want %q", status.SelfHostedService, plist)
 	}
 }
 
@@ -656,5 +669,153 @@ func TestServiceInstallAllowsSelfHostedServiceOnOtherDataDir(t *testing.T) {
 	writeSelfHostedService(t, filepath.Dir(spec.File), t.TempDir())
 	if _, _, err := executeCLI(t, deps, "service", "install", "--no-wait"); err != nil {
 		t.Fatalf("install refused although the self-hosted service uses another data dir: %v", err)
+	}
+}
+
+// Install checks the run file's daemon serves this data dir before it writes
+// anything: the service's serve would refuse it.
+func TestServiceInstallRefusesDaemonOfAnotherDataDir(t *testing.T) {
+	cfg := setConfigEnv(t)
+	setServiceHome(t)
+	old := serviceGOOS
+	serviceGOOS = "darwin"
+	t.Cleanup(func() { serviceGOOS = old })
+	srv := fakeServeDaemonIn(t, 4242, t.TempDir())
+	if err := runfile.Write(cfg.runFile, runfile.Info{PID: 4242, Port: serverPort(t, srv.URL), StartedAt: time.Unix(100, 0).UTC()}); err != nil {
+		t.Fatal(err)
+	}
+	var calls []serviceCall
+	deps := serviceTestDeps(&calls, nil)
+	deps.ProcessAlive = func(pid int) bool { return pid == 4242 }
+	_, _, err := executeCLI(t, deps, "service", "install", "--no-wait")
+	if err == nil || !strings.Contains(err.Error(), "serves data dir") {
+		t.Fatalf("err = %v, want a data-dir conflict before install", err)
+	}
+	spec, _ := (&commandContext{deps: deps.withDefaults()}).currentServiceSpec(0)
+	if _, err := os.Stat(spec.File); !os.IsNotExist(err) {
+		t.Fatalf("install wrote %s despite the conflict", spec.File)
+	}
+}
+
+// A failed reinstall puts the earlier definition back and starts it again.
+func TestServiceLaunchdReinstallRestoresPreviousOnFailure(t *testing.T) {
+	setConfigEnv(t)
+	setServiceHome(t)
+	old := serviceGOOS
+	serviceGOOS = "darwin"
+	t.Cleanup(func() { serviceGOOS = old })
+	var calls []serviceCall
+	if _, _, err := executeCLI(t, serviceTestDeps(&calls, nil), "service", "install", "--no-wait", "--port", "4100"); err != nil {
+		t.Fatal(err)
+	}
+	deps := serviceTestDeps(&calls, nil)
+	spec, _ := (&commandContext{deps: deps.withDefaults()}).currentServiceSpec(0)
+	previous, err := os.ReadFile(spec.File)
+	if err != nil {
+		t.Fatal(err)
+	}
+	bootstraps := 0
+	fake := deps.CommandOutput
+	deps.CommandOutput = func(ctx context.Context, name string, args ...string) ([]byte, error) {
+		if args[0] == "bootstrap" {
+			bootstraps++
+			if bootstraps <= 4 { // every attempt for the new definition
+				return []byte("Bootstrap failed: 5: Input/output error"), errors.New("exit status 5")
+			}
+		}
+		return fake(ctx, name, args...)
+	}
+	_, _, err = executeCLI(t, deps, "service", "install", "--no-wait", "--port", "4200")
+	if err == nil || !strings.Contains(err.Error(), "Bootstrap failed") {
+		t.Fatalf("err = %v, want the bootstrap failure", err)
+	}
+	now, _ := os.ReadFile(spec.File)
+	if string(now) != string(previous) {
+		t.Fatalf("previous definition not restored:\n%s", now)
+	}
+	if bootstraps != 5 {
+		t.Fatalf("bootstraps = %d, want 4 refused + 1 restoring the previous job", bootstraps)
+	}
+}
+
+// Uninstall keeps the plist when launchd cannot say whether the job is loaded.
+func TestServiceLaunchdUninstallKeepsPlistWhenStateUnknown(t *testing.T) {
+	setConfigEnv(t)
+	setServiceHome(t)
+	old := serviceGOOS
+	serviceGOOS = "darwin"
+	t.Cleanup(func() { serviceGOOS = old })
+	var calls []serviceCall
+	if _, _, err := executeCLI(t, serviceTestDeps(&calls, nil), "service", "install", "--no-wait"); err != nil {
+		t.Fatal(err)
+	}
+	deps := serviceTestDeps(&calls, map[string]bool{"launchctl print": true})
+	_, _, err := executeCLI(t, deps, "service", "uninstall")
+	if err == nil || !strings.Contains(err.Error(), "before removing") {
+		t.Fatalf("err = %v, want uninstall to stop on an unknown launchd state", err)
+	}
+	spec, _ := (&commandContext{deps: deps.withDefaults()}).currentServiceSpec(0)
+	if _, err := os.Stat(spec.File); err != nil {
+		t.Fatalf("plist removed although the job may still be loaded: %v", err)
+	}
+	// A job launchd confirms it does not know is removed as before.
+	gone := serviceTestDeps(&calls, nil)
+	gone.CommandOutput = func(_ context.Context, _ string, args ...string) ([]byte, error) {
+		if args[0] == "print" {
+			return []byte("Could not find service"), errors.New("exit status 113")
+		}
+		return nil, nil
+	}
+	if _, _, err := executeCLI(t, gone, "service", "uninstall"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(spec.File); !os.IsNotExist(err) {
+		t.Fatalf("plist kept after a confirmed absence: %v", err)
+	}
+}
+
+// Install reports success only while the attached serve is still running.
+func TestServiceInstallFailsWhenAttachedServeExits(t *testing.T) {
+	cfg := setConfigEnv(t)
+	setServiceHome(t)
+	old := serviceGOOS
+	serviceGOOS = "darwin"
+	t.Cleanup(func() { serviceGOOS = old })
+	srv := fakeServeDaemon(t, 4242)
+	if err := runfile.Write(cfg.runFile, runfile.Info{PID: 4242, Port: serverPort(t, srv.URL), StartedAt: time.Unix(100, 0).UTC()}); err != nil {
+		t.Fatal(err)
+	}
+	marker := serveAttachMarker(cfg.runFile, 777)
+	if err := os.WriteFile(marker, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var calls []serviceCall
+	deps := serviceTestDeps(&calls, nil)
+	loaded, inspected := false, 0
+	deps.ProcessAlive = func(pid int) bool {
+		inspected++
+		if inspected == 3 { // the readiness check: the serve exits meanwhile
+			_ = os.Remove(marker)
+		}
+		return pid == 4242
+	}
+	deps.CommandOutput = func(_ context.Context, _ string, args ...string) ([]byte, error) {
+		switch args[0] {
+		case "print":
+			if !loaded {
+				return nil, errors.New("exit status 113")
+			}
+			if _, statErr := os.Stat(marker); os.IsNotExist(statErr) {
+				return []byte("\tstate = not running\n"), nil // the serve exited
+			}
+			return []byte("\tpid = 777\n"), nil
+		case "bootstrap":
+			loaded = true
+		}
+		return nil, nil
+	}
+	_, _, err := executeCLI(t, deps, "service", "install")
+	if err == nil || !strings.Contains(err.Error(), "exited after starting") {
+		t.Fatalf("err = %v, want install to fail when its serve is gone", err)
 	}
 }

@@ -640,3 +640,81 @@ func TestServeAnalyticsNoticeShownOnce(t *testing.T) {
 		t.Fatalf("notice printed twice: %q", second.String())
 	}
 }
+
+// An explicit --port wins over an invalid inherited AO_PORT.
+func TestServePortFlagOverridesInvalidEnvPort(t *testing.T) {
+	cfg := setConfigEnv(t)
+	srv := fakeServeDaemon(t, 4242)
+	port := serverPort(t, srv.URL)
+	if err := runfile.Write(cfg.runFile, runfile.Info{PID: 4242, Port: port, StartedAt: time.Unix(100, 0).UTC()}); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("AO_PORT", "not-a-port")
+	out, _, err := executeCLI(t, Deps{ProcessAlive: func(pid int) bool { return pid == 4242 }}, "serve", "--json", "--port", fmt.Sprint(port))
+	if err != nil {
+		t.Fatalf("--port did not override the invalid AO_PORT: %v", err)
+	}
+	if res := decodeServeResult(t, out); res.PID != 4242 {
+		t.Fatalf("result = %#v", res)
+	}
+	t.Setenv("AO_PORT", "not-a-port")
+	if _, _, err := executeCLI(t, Deps{}, "serve"); err == nil || !strings.Contains(err.Error(), "invalid AO_PORT") {
+		t.Fatalf("err = %v, want the invalid AO_PORT rejected without --port", err)
+	}
+}
+
+// A daemon seen ready at startup that then stops cleanly is an `ao stop`:
+// serve must not start one in its place.
+func TestServeForegroundReadyThenStoppedDuringStartup(t *testing.T) {
+	h := newForegroundHarness(t)
+	h.daemon(4242, "")
+	checks := 0
+	old := serveForegroundDaemon
+	t.Cleanup(func() { serveForegroundDaemon = old })
+	serveForegroundDaemon = func([]string) error { h.started++; return nil }
+	_, _, err := executeCLI(t, Deps{
+		ProcessAlive: func(pid int) bool {
+			checks++
+			if checks == 1 {
+				return true // settleStartup: ready
+			}
+			_ = runfile.Remove(h.cfg.runFile) // `ao stop` lands before the next look
+			return false
+		},
+		PIDMayBeHidden: func() bool { return false },
+		Now:            func() time.Time { return h.now },
+		Sleep:          func(d time.Duration) { h.now = h.now.Add(d) },
+	}, "serve", "--foreground")
+	if err != nil {
+		t.Fatalf("a stop during startup should exit 0: %v", err)
+	}
+	if h.started != 0 {
+		t.Fatal("serve started a daemon in place of one that was just stopped")
+	}
+}
+
+// A child that lost the data-dir lock to a concurrent start is not a failure
+// when that winner serves this data dir.
+func TestServeAcceptsConcurrentWinnerAfterChildExit(t *testing.T) {
+	cfg := setConfigEnv(t)
+	srv := fakeServeDaemon(t, 5151)
+	exited := make(chan error, 1)
+	exited <- errors.New("exit status 75")
+	out, _, err := executeCLI(t, Deps{
+		Executable:   func() (string, error) { return "/opt/ao/bin/ao", nil },
+		ProcessAlive: func(pid int) bool { return pid == 5151 },
+		StartDetached: func(processStartConfig) (startedProcess, error) {
+			// The winner is ready by the time the child's exit is seen.
+			if err := runfile.Write(cfg.runFile, runfile.Info{PID: 5151, Port: serverPort(t, srv.URL), StartedAt: time.Unix(100, 0).UTC()}); err != nil {
+				t.Fatal(err)
+			}
+			return startedProcess{PID: 9, Exited: exited}, nil
+		},
+	}, "serve", "--json")
+	if err != nil {
+		t.Fatalf("serve failed although a same-dir daemon is ready: %v", err)
+	}
+	if res := decodeServeResult(t, out); res.PID != 5151 || !res.Reused {
+		t.Fatalf("result = %#v, want the winner, reused", res)
+	}
+}

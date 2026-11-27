@@ -19,7 +19,6 @@ import (
 	telemetryadapter "github.com/aoagents/agent-orchestrator/backend/internal/adapters/telemetry"
 	"github.com/aoagents/agent-orchestrator/backend/internal/config"
 	"github.com/aoagents/agent-orchestrator/backend/internal/daemon"
-	"github.com/aoagents/agent-orchestrator/backend/internal/runfile"
 	"github.com/aoagents/agent-orchestrator/backend/internal/sessionenv"
 )
 
@@ -56,6 +55,8 @@ type serveResult struct {
 	Reused  bool   `json:"reused"`
 	RunFile string `json:"runFile"`
 	DataDir string `json:"dataDir"`
+	// owner is the daemon's run-file owner, from the same read as PID.
+	owner string
 }
 
 // startedProcess is a detached child the CLI launched. Exited delivers the
@@ -88,6 +89,9 @@ func newServeCommand(ctx *commandContext) *cobra.Command {
 			if opts.background && opts.foreground {
 				return usageError{errors.New("--background and --foreground cannot be used together")}
 			}
+			if err := applyPortFlag(opts.port); err != nil {
+				return err
+			}
 			res, err := ctx.serve(cmd.Context(), cmd.OutOrStdout(), cmd.ErrOrStderr(), opts)
 			if err != nil {
 				return err
@@ -117,6 +121,16 @@ func writeServeResult(w io.Writer, res serveResult, asJSON bool) error {
 	}
 	_, err := fmt.Fprintf(w, "Orchestrator daemon %s at %s (pid %d)\n  data dir: %s\n  stop it with: ao stop\n", verb, res.URL, res.PID, res.DataDir)
 	return err
+}
+
+// applyPortFlag makes an explicit --port the effective AO_PORT before the
+// configuration is loaded, so an invalid inherited AO_PORT does not fail a
+// command that overrides it. Without the flag, AO_PORT is validated as usual.
+func applyPortFlag(port int) error {
+	if port == 0 {
+		return nil
+	}
+	return os.Setenv("AO_PORT", strconv.Itoa(port))
 }
 
 // serve reuses a daemon that already serves this data dir, or starts one. In
@@ -229,13 +243,21 @@ func (c *commandContext) serveForeground(parent context.Context, out, errOut io.
 }
 
 func (c *commandContext) serveForegroundLoop(ctx context.Context, out, errOut io.Writer, cfg config.Config, opts serveOptions) error {
-	stopped, err := c.settleStartup(ctx, opts.timeout)
+	sawDaemon, stopped, err := c.settleStartup(ctx, opts.timeout)
 	if err != nil || stopped {
 		return err
 	}
 	res, err := c.existingDaemon(ctx, errOut, cfg, opts)
 	if err != nil {
 		return err
+	}
+	if res == nil && sawDaemon {
+		// The daemon seen a moment ago went away cleanly, as under an
+		// `ao stop`: follow a replacement if one comes, and do not start a
+		// daemon in its place.
+		if res, err = c.waitForReplacement(ctx, cfg); err != nil || res == nil {
+			return err
+		}
 	}
 	// Tell `ao service install` that this serve has decided what to run, so
 	// an `ao stop` after install returns reaches a watcher, not a starting
@@ -263,7 +285,7 @@ func (c *commandContext) serveForegroundLoop(ctx context.Context, out, errOut io
 	if err := writeServeResult(out, *res, opts.json); err != nil {
 		return err
 	}
-	return c.watchDaemon(ctx, cfg, res.PID)
+	return c.watchDaemon(ctx, cfg, res.PID, res.owner)
 }
 
 // serveAttachMarker is the file a foreground serve with this PID keeps next to
@@ -273,29 +295,32 @@ func serveAttachMarker(runFile string, pid int) string {
 }
 
 // settleStartup waits out a daemon that is alive but not answering, as one
-// that `ao stop` is shutting down while this serve starts. It reports true
-// when that daemon then stopped cleanly: the stop was meant to stick.
-func (c *commandContext) settleStartup(ctx context.Context, timeout time.Duration) (bool, error) {
+// that `ao stop` is shutting down while this serve starts. It reports whether
+// it saw a live daemon at all, and stopped=true when that daemon then stopped
+// cleanly: the stop was meant to stick.
+func (c *commandContext) settleStartup(ctx context.Context, timeout time.Duration) (sawDaemon, stopped bool, err error) {
 	deadline := c.deps.Now().Add(timeout)
 	settling := false
 	for {
 		st, err := c.inspectDaemon(ctx)
 		if err != nil {
-			return false, err
+			return false, false, err
 		}
 		switch st.State {
 		case stateUnhealthy:
 			settling = true
 		case stateStopped:
-			return settling, nil
+			return settling, settling, nil
+		case stateReady, stateNotReady:
+			return true, false, nil
 		default:
-			return false, nil
+			return false, false, nil
 		}
 		if !c.deps.Now().Before(deadline) {
-			return false, nil // existingDaemon reports the unhealthy daemon
+			return true, false, nil // existingDaemon reports the unhealthy daemon
 		}
 		if err := ctx.Err(); err != nil {
-			return false, err
+			return false, false, err
 		}
 		c.deps.Sleep(250 * time.Millisecond)
 	}
@@ -334,8 +359,7 @@ func (c *commandContext) waitForReplacement(ctx context.Context, cfg config.Conf
 }
 
 // watchDaemon follows the daemon serving this data dir until none is left.
-func (c *commandContext) watchDaemon(ctx context.Context, cfg config.Config, pid int) error {
-	owner := runFileOwner(cfg.RunFilePath, pid)
+func (c *commandContext) watchDaemon(ctx context.Context, cfg config.Config, pid int, owner string) error {
 	for {
 		if err := ctx.Err(); err != nil {
 			return err
@@ -351,7 +375,7 @@ func (c *commandContext) watchDaemon(ctx context.Context, cfg config.Config, pid
 				if err := checkDaemonDataDir(st, cfg.DataDir); err != nil {
 					return err
 				}
-				pid, owner = st.PID, runFileOwner(cfg.RunFilePath, st.PID)
+				pid, owner = st.PID, st.owner
 			}
 		case stateStale:
 			// The run file outlived its daemon: it did not shut down cleanly.
@@ -362,7 +386,7 @@ func (c *commandContext) watchDaemon(ctx context.Context, cfg config.Config, pid
 				return err
 			}
 			if next != nil {
-				pid, owner = next.PID, runFileOwner(cfg.RunFilePath, next.PID)
+				pid, owner = next.PID, next.owner
 				continue
 			}
 			if owner == "app" {
@@ -371,14 +395,6 @@ func (c *commandContext) watchDaemon(ctx context.Context, cfg config.Config, pid
 			return nil
 		}
 	}
-}
-
-func runFileOwner(path string, pid int) string {
-	info, err := runfile.Read(path)
-	if err != nil || info == nil || info.PID != pid {
-		return ""
-	}
-	return info.Owner
 }
 
 // waitServeReady polls the run file and /readyz until a daemon for this data
@@ -393,6 +409,12 @@ func (c *commandContext) waitServeReady(ctx context.Context, cfg config.Config, 
 		case <-ctx.Done():
 			return nil, ctx.Err()
 		case exitErr := <-exited:
+			// The child may have lost the data-dir lock to a concurrent
+			// start; that winner serves this data dir just as well.
+			if st, err := c.inspectDaemon(ctx); err == nil && st.State == stateReady && checkDaemonDataDir(st, cfg.DataDir) == nil {
+				res := newServeResult(st, true)
+				return &res, nil
+			}
 			return nil, daemonExitedError(exitErr, cfg.DataDir, logPath)
 		default:
 		}
@@ -441,6 +463,7 @@ func newServeResult(st daemonStatus, reused bool) serveResult {
 		Reused:  reused,
 		RunFile: st.RunFile,
 		DataDir: st.DataDir,
+		owner:   st.owner,
 	}
 }
 

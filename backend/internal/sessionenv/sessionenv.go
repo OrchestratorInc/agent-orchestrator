@@ -6,7 +6,10 @@
 // that agent.
 package sessionenv
 
-import "strings"
+import (
+	"runtime"
+	"strings"
+)
 
 // SessionVars are exported by Orchestrator, or by Claude Code, into the shell
 // of an agent session, a reviewer, a side chat, or a session terminal tab.
@@ -147,13 +150,14 @@ func ScrubForDaemon(env []string) []string {
 	}
 	insideClaude := false
 	for _, kv := range env {
-		if k, v, _ := strings.Cut(kv, "="); k == "CLAUDECODE" && v != "" {
+		if k, v, _ := strings.Cut(kv, "="); normalizeKey(k) == "CLAUDECODE" && v != "" {
 			insideClaude = true
 		}
 	}
 	out := make([]string, 0, len(env))
 	for _, kv := range env {
-		k, _, _ := strings.Cut(kv, "=")
+		raw, _, _ := strings.Cut(kv, "=")
+		k := normalizeKey(raw)
 		if drop[k] || hasCallerSessionPrefix(k) {
 			continue
 		}
@@ -163,6 +167,18 @@ func ScrubForDaemon(env []string) []string {
 		out = append(out, kv)
 	}
 	return out
+}
+
+// caseInsensitiveEnv is true where environment names are case-insensitive, so
+// Ao_Owner is AO_OWNER. A variable so tests can pick one.
+var caseInsensitiveEnv = runtime.GOOS == "windows"
+
+// normalizeKey makes a variable name comparable with the upper-case lists.
+func normalizeKey(k string) string {
+	if caseInsensitiveEnv {
+		return strings.ToUpper(k)
+	}
+	return k
 }
 
 func hasCallerSessionPrefix(k string) bool {

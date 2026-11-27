@@ -110,7 +110,7 @@ With `--json`, `ao serve` prints one object. Scripts can rely on these fields; n
 
 `reused` is `true` when an existing daemon was found. With `--foreground`, the object is printed only when `ao serve` reuses or follows a daemon. When it runs its own daemon in the process it prints nothing, so scripts should read the result from the default background mode. A failure exits 1 with the reason on stderr. With `--foreground`, a daemon that cannot take the data-directory lock because another Orchestrator process holds it exits 75. A bad flag exits 2.
 
-When you open the desktop app, it swaps in its own daemon on the same data directory, which keeps running after the app quits. Stop it with `ao stop`.
+When you open the desktop app while this daemon runs, the app swaps in its own daemon on the same data directory. Because it replaced a headless daemon, the app keeps that one running after it quits. A daemon the app starts when no `ao serve` daemon is running quits with the app, and the service section below covers that case. Stop either with `ao stop`.
 
 With `--foreground`, `ao serve` stays running for as long as a daemon serves the data directory, following the app's swap. It exits 0 after a clean stop such as `ao stop`, and 1 when the daemon crashed or was the desktop app's own and quit with the app, so a service manager starts a new one.
 

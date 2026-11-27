@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/exec"
 	"os/user"
 	"path/filepath"
 	"regexp"
@@ -119,6 +120,9 @@ func newServiceInstallCommand(ctx *commandContext) *cobra.Command {
 			}
 			if opts.timeout <= 0 {
 				return usageError{fmt.Errorf("invalid --timeout %s: must be positive", opts.timeout)}
+			}
+			if err := applyPortFlag(opts.port); err != nil {
+				return err
 			}
 			st, err := ctx.serviceInstall(cmd.Context(), opts)
 			if err != nil {
@@ -335,6 +339,10 @@ func systemdQuote(s string) string {
 	s = strings.ReplaceAll(s, `\`, `\\`)
 	s = strings.ReplaceAll(s, `"`, `\"`)
 	s = strings.ReplaceAll(s, "%", "%%")
+	// A raw line break would end the directive; systemd decodes C escapes in
+	// quoted values.
+	s = strings.ReplaceAll(s, "\n", `\n`)
+	s = strings.ReplaceAll(s, "\r", `\r`)
 	return `"` + s + `"`
 }
 
@@ -408,6 +416,17 @@ func (c *commandContext) serviceInstall(ctx context.Context, opts serviceOptions
 	if err != nil {
 		return serviceStatus{}, err
 	}
+	if before.State == stateReady {
+		// The run file may name a daemon for another data dir, as when only
+		// AO_DATA_DIR changed: the service's serve would refuse it.
+		_, dataDir, _, err := config.ResolvePaths()
+		if err != nil {
+			return serviceStatus{}, err
+		}
+		if err := checkDaemonDataDir(before, dataDir); err != nil {
+			return serviceStatus{}, err
+		}
+	}
 	// The daemon a previous install of this service runs is not "existing":
 	// the reinstall replaces it.
 	oldJobPID := c.servicePID(ctx, spec)
@@ -415,26 +434,40 @@ func (c *commandContext) serviceInstall(ctx context.Context, opts serviceOptions
 	if spec.Manager == serviceManagerSystemd {
 		content = renderSystemdUnit(spec)
 	}
+	// A reinstall replaces our earlier definition; keep it, and whether that
+	// service was running, so a failed reinstall can put it back.
+	var previous []byte
+	previousRunning := false
+	if exists {
+		if previous, err = os.ReadFile(spec.File); err != nil {
+			return serviceStatus{}, err
+		}
+		previousRunning = c.serviceLoaded(ctx, spec)
+	}
 	if err := os.MkdirAll(filepath.Dir(spec.File), 0o700); err != nil {
 		return serviceStatus{}, err
 	}
 	if err := os.WriteFile(spec.File, []byte(content), 0o600); err != nil {
 		return serviceStatus{}, err
 	}
-	// Leave nothing behind when the service manager refuses the file, unless
-	// it replaced an earlier install of ours.
+	// Leave nothing behind when the service manager refuses the file; after
+	// a failed reinstall, restore the earlier definition and its state.
 	enabled := false
 	rollback := func(cause error) (serviceStatus, error) {
-		if !exists {
-			if enabled {
-				// Keep the unit when its enablement links cannot be removed,
-				// so `ao service uninstall` can still clean them up.
-				if err := c.serviceCmd(ctx, "systemctl", "--user", "disable", spec.Name+".service"); err != nil {
-					return serviceStatus{}, fmt.Errorf("%w; rollback also failed, so %s was kept for `ao service uninstall`: %w", cause, spec.File, err)
-				}
+		if exists {
+			if err := c.restorePreviousService(ctx, spec, previous, previousRunning); err != nil {
+				return serviceStatus{}, fmt.Errorf("%w; restoring the previous service also failed: %w", cause, err)
 			}
-			_ = os.Remove(spec.File)
+			return serviceStatus{}, cause
 		}
+		if enabled {
+			// Keep the unit when its enablement links cannot be removed, so
+			// `ao service uninstall` can still clean them up.
+			if err := c.serviceCmd(ctx, "systemctl", "--user", "disable", spec.Name+".service"); err != nil {
+				return serviceStatus{}, fmt.Errorf("%w; rollback also failed, so %s was kept for `ao service uninstall`: %w", cause, spec.File, err)
+			}
+		}
+		_ = os.Remove(spec.File)
 		return serviceStatus{}, cause
 	}
 	switch spec.Manager {
@@ -467,11 +500,16 @@ func (c *commandContext) serviceInstall(ctx context.Context, opts serviceOptions
 	if err != nil {
 		return serviceStatus{}, err
 	}
-	if err := c.waitServiceAttached(ctx, spec, cfg, opts.timeout); err != nil {
+	servePID, err := c.waitServiceAttached(ctx, spec, cfg, opts.timeout)
+	if err != nil {
 		return serviceStatus{}, fmt.Errorf("service installed, but %w", err)
 	}
 	if _, err := c.waitServeReady(ctx, cfg, 0, nil, opts.timeout, false); err != nil {
 		return serviceStatus{}, fmt.Errorf("service installed, but %w", err)
+	}
+	// Ready must mean supervised: the attached serve is still running.
+	if _, err := os.Stat(serveAttachMarker(cfg.RunFilePath, servePID)); err != nil || c.servicePID(ctx, spec) != servePID {
+		return serviceStatus{}, fmt.Errorf("service installed, but its ao serve (pid %d) exited after starting; check it with `ao service status`", servePID)
 	}
 	ds, err := c.inspectDaemon(ctx)
 	if err != nil {
@@ -484,19 +522,19 @@ func (c *commandContext) serviceInstall(ctx context.Context, opts serviceOptions
 // waitServiceAttached waits until the service's serve has started running or
 // watching a daemon, so a command run right after install (such as `ao stop`)
 // reaches it and is not mistaken for a missing daemon.
-func (c *commandContext) waitServiceAttached(ctx context.Context, spec serviceSpec, cfg config.Config, timeout time.Duration) error {
+func (c *commandContext) waitServiceAttached(ctx context.Context, spec serviceSpec, cfg config.Config, timeout time.Duration) (int, error) {
 	deadline := c.deps.Now().Add(timeout)
 	for {
 		if pid := c.servicePID(ctx, spec); pid > 0 {
 			if _, err := os.Stat(serveAttachMarker(cfg.RunFilePath, pid)); err == nil {
-				return nil
+				return pid, nil
 			}
 		}
 		if !c.deps.Now().Before(deadline) {
-			return fmt.Errorf("the service did not start within %s; check it with `ao service status`", timeout)
+			return 0, fmt.Errorf("the service did not start within %s; check it with `ao service status`", timeout)
 		}
 		if err := ctx.Err(); err != nil {
-			return err
+			return 0, err
 		}
 		c.deps.Sleep(250 * time.Millisecond)
 	}
@@ -536,7 +574,7 @@ func selfHostedService(spec serviceSpec) (file, dataDir string) {
 }
 
 var (
-	selfHostedRunnerRE  = regexp.MustCompile(`/[^"<>\s]*run-daemon\.sh`)
+	selfHostedRunnerRE  = regexp.MustCompile(`/[^"<>\n]*run-daemon\.sh`)
 	selfHostedDataDirRE = regexp.MustCompile(`(?m)^export AO_DATA_DIR=(.+)$`)
 )
 
@@ -618,6 +656,46 @@ func (c *commandContext) servicePID(ctx context.Context, spec serviceSpec) int {
 	return 0
 }
 
+// launchdJobLoaded asks launchd whether the job is loaded. It tells a job
+// launchd does not know (exit 113, "Could not find service") from a query
+// that failed, which it returns as an error.
+func (c *commandContext) launchdJobLoaded(ctx context.Context, spec serviceSpec) (bool, error) {
+	out, err := c.deps.CommandOutput(ctx, "launchctl", "print", launchdDomain()+"/"+spec.Name)
+	if err == nil {
+		return true, nil
+	}
+	var exitErr *exec.ExitError
+	if (errors.As(err, &exitErr) && exitErr.ExitCode() == 113) || strings.Contains(err.Error(), "exit status 113") || strings.Contains(string(out), "Could not find service") {
+		return false, nil
+	}
+	if msg := strings.TrimSpace(string(out)); msg != "" {
+		return false, fmt.Errorf("launchctl print: %w: %s", err, msg)
+	}
+	return false, fmt.Errorf("launchctl print: %w", err)
+}
+
+// restorePreviousService puts back the definition a failed reinstall
+// replaced, and starts it again if it was running before.
+func (c *commandContext) restorePreviousService(ctx context.Context, spec serviceSpec, previous []byte, wasRunning bool) error {
+	if err := os.WriteFile(spec.File, previous, 0o600); err != nil {
+		return err
+	}
+	switch spec.Manager {
+	case serviceManagerLaunchd:
+		if wasRunning {
+			return c.launchdBootstrap(ctx, spec)
+		}
+	case serviceManagerSystemd:
+		if err := c.serviceCmd(ctx, "systemctl", "--user", "daemon-reload"); err != nil {
+			return err
+		}
+		if wasRunning {
+			return c.serviceCmd(ctx, "systemctl", "--user", "restart", spec.Name+".service")
+		}
+	}
+	return nil
+}
+
 // launchdServiceGoneWait bounds how long install waits for launchd to tear a
 // booted-out job down; launchd allows a job 20 s to exit before killing it.
 const launchdServiceGoneWait = 30 * time.Second
@@ -690,7 +768,12 @@ func (c *commandContext) serviceUninstall(ctx context.Context) (serviceStatus, e
 	}
 	switch spec.Manager {
 	case serviceManagerLaunchd:
-		if c.serviceLoaded(ctx, spec) {
+		loaded, err := c.launchdJobLoaded(ctx, spec)
+		if err != nil {
+			// Keep the plist so a retry can still stop the job.
+			return serviceStatus{}, fmt.Errorf("check whether %s is loaded before removing %s: %w", spec.Name, spec.File, err)
+		}
+		if loaded {
 			if err := c.serviceCmd(ctx, "launchctl", "bootout", launchdDomain()+"/"+spec.Name); err != nil {
 				return serviceStatus{}, err
 			}
