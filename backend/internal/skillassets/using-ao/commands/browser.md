@@ -231,7 +231,7 @@ silently search the web and does not allow `file://` or local filesystem paths.
 ## Signing in with saved credentials
 
 Never ask the user to paste a password or code into the chat, and never type one
-with `fill`/`type`. The user saves sites in Settings > Passwords; use them with:
+with `fill`/`type`. The user saves sites in Settings › Browser › Saved passwords; use them with:
 
 ```bash
 ao browser open https://app.example.com/login
@@ -246,7 +246,9 @@ with `--item <id>`. For a field `login` cannot find, use
 `ao browser fill-secret <ref> --item <id> [--field username|--totp]`.
 
 Output only ever shows `••••`. `press` is refused while focus is in a filled
-password or code field (`BROWSER_SECRET_FIELD_LOCKED`); click elsewhere or submit. Filled passwords and codes are also masked in
+password or code field (`BROWSER_SECRET_FIELD_LOCKED`); click elsewhere or submit.
+While a page holds a filled password, selectors or raw refs that test a `value`
+(for example `input[value^="a"]`) are refused; use snapshot refs. Filled passwords and codes are also masked in
 later `snapshot`, `get value`, console and network output. The first fill of each
 saved login on a site waits for the user to approve it in Orchestrator's
 approval prompt; if they

@@ -202,7 +202,7 @@ describe("BrowserPasswordsSection", () => {
 	it("disables adding when the keychain is unavailable", async () => {
 		window.ao!.vault = mockBridge({ list: vi.fn(async () => ({ available: false, items: [] })) });
 		renderSection();
-		expect(await screen.findByText(/system keychain is unavailable/)).toBeInTheDocument();
+		expect(await screen.findByText(/keeps other programs, agents included/)).toBeInTheDocument();
 		expect(screen.getByRole("button", { name: "Add password" })).toBeDisabled();
 	});
 });

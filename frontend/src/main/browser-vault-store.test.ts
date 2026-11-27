@@ -152,6 +152,25 @@ describe("VaultStore", () => {
     await expect(reopened.list()).rejects.toBeInstanceOf(VaultKeyLostError);
   });
 
+  it("treats a keychain that cannot unwrap the key (reset or locked) as a lost key, without resetting", async () => {
+    await addDemo();
+    const sealed = await readFile(path.join(dir, "items.sealed"), "utf8");
+    const resetKeychain: VaultKeyProtector = {
+      ...fakeProtector,
+      decrypt: () => {
+        throw new Error("Error while decrypting the ciphertext provided to safeStorage.decryptString.");
+      },
+    };
+    const reopened = new VaultStore({ dir, protector: resetKeychain });
+    await expect(reopened.list()).rejects.toBeInstanceOf(VaultKeyLostError);
+    await expect(
+      reopened.save({ origins: ["https://b.test"], username: "b", password: "pw-bbbb-1", allowedProjects: [] }),
+    ).rejects.toBeInstanceOf(VaultKeyLostError);
+    // Nothing was reset on its own: a keychain that was only locked still opens them later.
+    expect(await readFile(path.join(dir, "items.sealed"), "utf8")).toBe(sealed);
+    expect((await new VaultStore({ dir, protector: fakeProtector }).list()).map((i) => i.username)).toEqual(["alice"]);
+  });
+
   it("deletes an item", async () => {
     const item = await addDemo();
     await store.delete(item.id);

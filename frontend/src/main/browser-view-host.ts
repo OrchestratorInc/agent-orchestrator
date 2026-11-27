@@ -4489,6 +4489,22 @@ export function createBrowserViewHost(
         );
       }
       if (!session.tabs.size && action === "tabs") return agentTabsResult(session);
+      // While the shown document holds a filled secret, a selector that tests
+      // a value would leak it one match at a time; refuse it up front.
+      if (
+        options.credentialFiller &&
+        session.tabs.size &&
+        action !== "fill-secret" &&
+        action !== "login" &&
+        action !== "vault-describe"
+      ) {
+        const probed = options.credentialFiller.selectorProbeBlocked(
+          sessionId,
+          vaultDocumentKey(activeEntry(session)),
+          args,
+        );
+        if (probed) throw browserError("BROWSER_SECRET_FIELD_LOCKED", probed);
+      }
       const commandId = randomUUID();
       setAgentBrowserActivity(session, action, true, commandId, "started");
       // Branches return pending work (runNative, network capture setup). The
@@ -4510,6 +4526,9 @@ export function createBrowserViewHost(
           nativeAction: string,
           nativeArgs: Record<string, unknown> = {},
           nativeSignal: AbortSignal | undefined = signal,
+          // Runs in the queued operation right before dispatch, against the
+          // tab the action will reach; throw to refuse it.
+          beforeDispatch?: (target: BrowserEntry) => Promise<void>,
         ): Promise<
           Record<string, unknown> & {
             target: { tabId: string; url: string; origin: string };
@@ -4528,6 +4547,7 @@ export function createBrowserViewHost(
               const targetEntry = activeEntry(session);
               const targetTabId = targetEntry.tabId;
               await targetEntry.ready;
+              await beforeDispatch?.(targetEntry);
               // An approved action may only land on the tab, document, and (for
               // act) element the user approved; checked in the same queued
               // operation that dispatches it.
@@ -4965,21 +4985,30 @@ export function createBrowserViewHost(
           case "press": {
             // Backspace or Delete in a filled field would leave a value the
             // redactor no longer recognises; such keys never reach it.
-            const pressed = activeEntry(session);
-            const locked = await options.credentialFiller?.keyPressBlocked(
-              sessionId,
-              vaultDocumentKey(pressed),
-              vaultCdp(pressed),
+            // Checked now as a fast failure, and again in the queue right
+            // before the key goes out: a queued focus can move into the field.
+            const refuseIfFilledFieldFocused = async (pressed: BrowserEntry) => {
+              const locked = await options.credentialFiller?.keyPressBlocked(
+                sessionId,
+                vaultDocumentKey(pressed),
+                vaultCdp(pressed),
+              );
+              if (locked) throw browserError("BROWSER_SECRET_FIELD_LOCKED", locked);
+            };
+            await refuseIfFilledFieldFocused(activeEntry(session));
+            return runNative(
+              action,
+              {
+                key: stringArg(
+                  args,
+                  "key",
+                  "INVALID_ARGUMENT",
+                  "key is required",
+                ),
+              },
+              signal,
+              refuseIfFilledFieldFocused,
             );
-            if (locked) throw browserError("BROWSER_SECRET_FIELD_LOCKED", locked);
-            return runNative(action, {
-              key: stringArg(
-                args,
-                "key",
-                "INVALID_ARGUMENT",
-                "key is required",
-              ),
-            });
           }
           case "drag":
             if (args.human === true) assertPanelPainted(session);

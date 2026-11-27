@@ -7042,7 +7042,7 @@ describe("browser view host credential fills", () => {
 			dispose: vi.fn(async () => undefined),
 		} as unknown as import("./agent-browser-runtime").AgentBrowserRuntime;
 		const screenshotBlocked = vi.fn(async (_sessionId: string, _documentKey: string, _cdp: unknown) => "A 2FA code is on screen" as string | undefined);
-		const filler = { screenshotBlocked, scrub: <T,>(_s: string, v: T) => v, scrubLive: async <T,>(_s: string, _d: string, _c: unknown, v: T) => v, keyPressBlocked: async () => undefined, forget: () => undefined };
+		const filler = { screenshotBlocked, scrub: <T,>(_s: string, v: T) => v, scrubLive: async <T,>(_s: string, _d: string, _c: unknown, v: T) => v, keyPressBlocked: async () => undefined, selectorProbeBlocked: () => undefined, forget: () => undefined };
 		const page = setupHost(runtime, { credentialFiller: filler as never });
 		await page.host.execute("sess-1", "tabs");
 		page.setCurrentURL(`${ORIGIN}/2fa`);
@@ -7064,7 +7064,7 @@ describe("browser view host credential fills", () => {
 			.fn<(sessionId: string, documentKey: string, cdp: unknown) => Promise<string | undefined>>()
 			.mockResolvedValueOnce(undefined)
 			.mockResolvedValue("A 2FA code is on screen");
-		const filler = { screenshotBlocked, scrub: <T,>(_s: string, v: T) => v, scrubLive: async <T,>(_s: string, _d: string, _c: unknown, v: T) => v, keyPressBlocked: async () => undefined, forget: () => undefined };
+		const filler = { screenshotBlocked, scrub: <T,>(_s: string, v: T) => v, scrubLive: async <T,>(_s: string, _d: string, _c: unknown, v: T) => v, keyPressBlocked: async () => undefined, selectorProbeBlocked: () => undefined, forget: () => undefined };
 		const page = setupHost(runtime, { credentialFiller: filler as never });
 		await page.host.execute("sess-1", "tabs");
 		await expect(page.host.execute("sess-1", "screenshot", {})).rejects.toMatchObject({ code: "BROWSER_SECRET_ON_SCREEN" });
@@ -7079,7 +7079,7 @@ describe("browser view host credential fills", () => {
 			dispose: vi.fn(async () => undefined),
 		} as unknown as import("./agent-browser-runtime").AgentBrowserRuntime;
 		const keyPressBlocked = vi.fn(async () => "Keys cannot be sent to a filled field" as string | undefined);
-		const filler = { keyPressBlocked, scrub: <T,>(_s: string, v: T) => v, scrubLive: async <T,>(_s: string, _d: string, _c: unknown, v: T) => v, forget: () => undefined };
+		const filler = { keyPressBlocked, scrub: <T,>(_s: string, v: T) => v, scrubLive: async <T,>(_s: string, _d: string, _c: unknown, v: T) => v, selectorProbeBlocked: () => undefined, forget: () => undefined };
 		const page = setupHost(runtime, { credentialFiller: filler as never });
 		await page.host.execute("sess-1", "tabs");
 		await expect(page.host.execute("sess-1", "press", { key: "Backspace" })).rejects.toMatchObject({ code: "BROWSER_SECRET_FIELD_LOCKED" });
@@ -7087,6 +7087,49 @@ describe("browser view host credential fills", () => {
 		keyPressBlocked.mockResolvedValue(undefined);
 		await page.host.execute("sess-1", "press", { key: "Tab" });
 		expect(vi.mocked(runtime.runAction).mock.calls.map((call) => call[1])).toContain("press");
+	});
+
+	it("re-checks the key-press guard inside the queue, right before the key is sent", async () => {
+		const runtime = {
+			runAction: vi.fn(async () => ({})),
+			closeSession: vi.fn(async () => undefined),
+			dispose: vi.fn(async () => undefined),
+		} as unknown as import("./agent-browser-runtime").AgentBrowserRuntime;
+		// Admitted while focus is elsewhere; a queued "focus <password ref>"
+		// then puts focus in the filled field before the key goes out.
+		const keyPressBlocked = vi
+			.fn<() => Promise<string | undefined>>()
+			.mockResolvedValueOnce(undefined)
+			.mockResolvedValue("Keys cannot be sent to a filled field");
+		const filler = { keyPressBlocked, scrub: <T,>(_s: string, v: T) => v, scrubLive: async <T,>(_s: string, _d: string, _c: unknown, v: T) => v, selectorProbeBlocked: () => undefined, forget: () => undefined };
+		const page = setupHost(runtime, { credentialFiller: filler as never });
+		await page.host.execute("sess-1", "tabs");
+		await expect(page.host.execute("sess-1", "press", { key: "Backspace" })).rejects.toMatchObject({ code: "BROWSER_SECRET_FIELD_LOCKED" });
+		expect(keyPressBlocked).toHaveBeenCalledTimes(2);
+		expect(vi.mocked(runtime.runAction).mock.calls.map((call) => call[1])).not.toContain("press");
+	});
+
+	it("refuses value-testing selectors before any action runs while a field is filled", async () => {
+		const runtime = {
+			runAction: vi.fn(async () => ({})),
+			closeSession: vi.fn(async () => undefined),
+			dispose: vi.fn(async () => undefined),
+		} as unknown as import("./agent-browser-runtime").AgentBrowserRuntime;
+		const selectorProbeBlocked = vi.fn((_s: string, _d: string, args: Record<string, unknown>) =>
+			String(args.selector ?? args.ref ?? "").includes("value") ? "Selectors that test a value are refused" : undefined,
+		);
+		const filler = { selectorProbeBlocked, keyPressBlocked: async () => undefined, scrub: <T,>(_s: string, v: T) => v, scrubLive: async <T,>(_s: string, _d: string, _c: unknown, v: T) => v, forget: () => undefined };
+		const page = setupHost(runtime, { credentialFiller: filler as never });
+		await page.host.execute("sess-1", "tabs");
+		await expect(
+			page.host.execute("sess-1", "wait", { selector: 'input[type=password][value^="a"]', timeoutMs: 50 }),
+		).rejects.toMatchObject({ code: "BROWSER_SECRET_FIELD_LOCKED" });
+		await expect(page.host.execute("sess-1", "click", { ref: "form:has(input[value$='9'])" })).rejects.toMatchObject({ code: "BROWSER_SECRET_FIELD_LOCKED" });
+		const actions = () => vi.mocked(runtime.runAction).mock.calls.map((call) => call[1]);
+		expect(actions()).not.toContain("wait");
+		expect(actions()).not.toContain("click");
+		await page.host.execute("sess-1", "click", { ref: "e3" });
+		expect(actions()).toContain("click");
 	});
 
 	it("masks a filled field's edited value in get value", async () => {
@@ -7116,6 +7159,7 @@ describe("browser view host credential fills", () => {
 			keyPressBlocked: async () => undefined,
 			scrub: <T,>(_s: string, v: T) => v,
 			scrubLive: async <T,>(_s: string, _d: string, _c: unknown, v: T) => v,
+			selectorProbeBlocked: () => undefined,
 			forget: () => undefined,
 		};
 		const page = setupHost(runtime, { credentialFiller: filler as never });

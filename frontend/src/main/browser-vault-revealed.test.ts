@@ -125,3 +125,26 @@ describe("focus probe", () => {
     expect((0, eval)(probeFocus("t"))).toMatchObject({ tag: "INPUT", type: "password" });
   });
 });
+
+describe("value attribute of a filled field", () => {
+  afterEach(() => {
+    document.body.innerHTML = "";
+  });
+
+  it("is removed after the fill and stays removed when the page mirrors it back", async () => {
+    const { afterInsert } = await import("./browser-vault-fill");
+    document.body.innerHTML = `<input id="pw" type="password">`;
+    const pw = document.getElementById("pw") as Filled & { __aoVaultToken?: string };
+    pw.__aoVaultToken = "t1";
+    pw.focus();
+    // React mirrors a controlled input's value into the attribute.
+    pw.setAttribute("value", "Secret-pass-1");
+    expect((0, eval)(afterInsert("t1"))).toBe(true);
+    expect(pw.hasAttribute("value")).toBe(false);
+    expect(document.querySelector('input[value^="S"]')).toBeNull();
+    pw.setAttribute("value", "Secret-pass-1");
+    await Promise.resolve();
+    expect(pw.hasAttribute("value")).toBe(false);
+    expect(document.querySelector('input[value^="S"]')).toBeNull();
+  });
+});

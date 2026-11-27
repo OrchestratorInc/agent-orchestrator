@@ -9,6 +9,7 @@ import {
   originAllowed,
   seal,
   totpCode,
+  vaultPlatformSupported,
 } from "./browser-vault";
 
 describe("vault sealing", () => {
@@ -123,5 +124,17 @@ describe("redactor", () => {
     r.add("ab");
     const value = { text: "ab cab" };
     expect(r.scrub(value)).toEqual(value);
+  });
+});
+
+describe("platform support", () => {
+  // Only the macOS Keychain stops another program in the session (an agent's
+  // shell) from unwrapping the key without a prompt.
+  it.each([
+    ["darwin", true],
+    ["linux", false],
+    ["win32", false],
+  ] as const)("%s -> %s", (platform, supported) => {
+    expect(vaultPlatformSupported(platform)).toBe(supported);
   });
 });

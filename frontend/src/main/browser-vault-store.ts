@@ -71,7 +71,7 @@ const AUDIT_READ_LIMIT = 500;
 export class VaultKeyLostError extends Error {
   readonly code = "VAULT_KEY_LOST";
   constructor() {
-    super("Saved passwords can't be opened: the key that protects them is missing or has changed. Reset saved passwords to start again.");
+    super("Saved passwords can't be opened: the system keychain can't unlock their key. Unlock the keychain if it is locked; reset saved passwords only if the key is gone.");
   }
 }
 
@@ -224,11 +224,21 @@ export class VaultStore {
       throw new Error("The OS keychain is unavailable, so credentials cannot be stored safely");
     }
     const file = path.join(this.dir, "key.bin");
+    let wrapped: Buffer | undefined;
     try {
-      this.key = this.protector.decrypt(await readFile(file));
-      return this.key;
+      wrapped = await readFile(file);
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+    }
+    if (wrapped) {
+      try {
+        this.key = this.protector.decrypt(wrapped);
+        return this.key;
+      } catch {
+        // The keychain cannot unwrap it: reset, or just locked. Report a lost
+        // key and leave everything in place; only the user's reset clears it.
+        throw new VaultKeyLostError();
+      }
     }
     if (!create) return undefined;
     // Never start a new key over items sealed with the old one: they would be

@@ -323,28 +323,30 @@ func TestAlwaysAllowCoversOnlyTheApprovedSavedLogin(t *testing.T) {
 	}
 }
 
-func TestLoopbackHTTPLoginsAskEveryTime(t *testing.T) {
-	rt := &vaultRuntime{describe: map[string]interface{}{
-		"origin": "http://localhost:4173", "pageUrl": "http://localhost:4173/login", "pageTitle": "Sign in",
-		"item": map[string]interface{}{"id": "i1", "label": "Demo app", "username": "alice@example.test"},
-	}}
-	svc, gate, token := gatedVaultService(t, rt)
-
-	// Even "always allow" is not remembered for plain HTTP on this computer:
-	// any local process (the agent's own server, say) can answer there.
-	asked := answerNext(t, gate, approval.DecisionAllowSite)
-	if _, _, err := svc.Execute(context.Background(), "s1", token, "login", nil); err != nil {
-		t.Fatal(err)
+func TestLoopbackLoginsAskEveryTimeWithoutAlwaysAllow(t *testing.T) {
+	for _, origin := range []string{"http://localhost:4173", "https://localhost:8443", "https://127.0.0.1:9443", "http://app.localhost"} {
+		t.Run(origin, func(t *testing.T) {
+			rt := &vaultRuntime{describe: map[string]interface{}{
+				"origin": origin, "pageUrl": origin + "/login", "pageTitle": "Sign in",
+				"item": map[string]interface{}{"id": "i1", "label": "Demo app", "username": "alice@example.test"},
+			}}
+			svc, gate, token := gatedVaultService(t, rt)
+			for round := 0; round < 2; round++ {
+				// Any local program (one an agent starts, even with a dev
+				// certificate) can answer there: no "Always allow" is offered
+				// (no site), so nothing can be remembered.
+				asked := answerNext(t, gate, approval.DecisionAllowSite)
+				if _, _, err := svc.Execute(context.Background(), "s1", token, "login", nil); err != nil {
+					t.Fatal(err)
+				}
+				prompt := <-asked
+				if prompt.Site != "" || !strings.Contains(prompt.Reason, "this computer") || prompt.URL != origin+"/login" {
+					t.Fatalf("round %d prompt = %+v", round, prompt.Request)
+				}
+			}
+			if rules := gate.SiteRules(); len(rules) != 0 {
+				t.Fatalf("a loopback rule was stored: %+v", rules)
+			}
+		})
 	}
-	if prompt := <-asked; !strings.Contains(prompt.Reason, "this computer") {
-		t.Fatalf("reason = %q", prompt.Reason)
-	}
-	if rules := gate.SiteRules(); len(rules) != 0 {
-		t.Fatalf("loopback rule was remembered: %+v", rules)
-	}
-	asked = answerNext(t, gate, approval.DecisionDeny)
-	if _, _, err := svc.Execute(context.Background(), "s1", token, "login", nil); apiErrorCode(err) != "BROWSER_ACTION_DENIED" {
-		t.Fatalf("second login err = %v", err)
-	}
-	<-asked
 }

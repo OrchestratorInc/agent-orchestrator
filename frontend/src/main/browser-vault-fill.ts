@@ -100,9 +100,21 @@ export const revealedSecretsCheck = (ignore: string[]) => `/*ao-vault:revealed $
 
 // Right after typing: the verified element must still hold focus. If a page
 // script moved focus mid-insert, clear the field that took the text.
-const afterInsert = (token: string) => `/*ao-vault:after-insert*/(() => {
+// It also keeps the field's value out of its "value" attribute: frameworks
+// such as React mirror a controlled input's value there, and a CSS selector
+// like input[value^="a"] would then reveal the secret a character at a time.
+export const afterInsert = (token: string) => `/*ao-vault:after-insert*/(() => {
   const el = document.activeElement;
-  if (el && el.__aoVaultToken === ${JSON.stringify(token)}) return true;
+  if (el && el.__aoVaultToken === ${JSON.stringify(token)}) {
+    el.removeAttribute("value");
+    if (!el.__aoVaultValueGuard) {
+      el.__aoVaultValueGuard = new MutationObserver(() => {
+        if (el.hasAttribute("value")) el.removeAttribute("value");
+      });
+      el.__aoVaultValueGuard.observe(el, { attributes: true, attributeFilter: ["value"] });
+    }
+    return true;
+  }
   if (el && (el.tagName === "INPUT" || el.tagName === "TEXTAREA")) el.value = "";
   return false;
 })()`;
@@ -568,6 +580,24 @@ export function createCredentialFiller(options: { store: VaultStore; now?: () =>
         return item;
       };
       return walk(scrubbed) as T;
+    },
+
+    /**
+     * Why an agent selector must not run against this document, if it must
+     * not: while a field holds a filled secret, a selector or raw ref that
+     * tests a value (input[value^="a"], :has(...[value$="9"])) would turn
+     * match / no match into the secret one character at a time.
+     */
+    selectorProbeBlocked(sessionId: string, documentKey: string, args: Record<string, unknown>): string | undefined {
+      if (!filledDocuments.get(sessionId)?.has(documentKey)) return undefined;
+      for (const key of ["selector", "ref", "targetRef", "target"]) {
+        const text = args[key];
+        if (typeof text !== "string" || /^@?e\d+$/.test(text.trim())) continue;
+        if (/value/i.test(text)) {
+          return "Selectors that test a value are refused while this page holds a password Orchestrator filled. Use a snapshot ref instead.";
+        }
+      }
+      return undefined;
     },
 
     scrub<T>(sessionId: string, value: T): T {

@@ -94,6 +94,17 @@ export function secureCredentialOrigin(origin: string): boolean {
   return url.protocol === "http:" && (host === "localhost" || host.endsWith(".localhost") || host === "[::1]" || /^127(\.\d{1,3}){3}$/.test(host));
 }
 
+/**
+ * Saved passwords are only offered where the OS keychain keeps other programs
+ * in the user's session from unwrapping the vault key: the macOS Keychain
+ * asks before another app reads an item. Linux's Secret Service and Windows
+ * DPAPI give any process running as the user the key, so a local agent could
+ * decrypt the vault there.
+ */
+export function vaultPlatformSupported(platform: NodeJS.Platform): boolean {
+  return platform === "darwin";
+}
+
 /** Exact origin match: scheme, host and port. No subdomain or suffix matching. */
 export function originAllowed(itemOrigins: readonly string[], pageURL: string): boolean {
   let origin: string;

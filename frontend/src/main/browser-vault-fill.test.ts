@@ -385,6 +385,20 @@ describe("credential filler", () => {
     expect(t.inserted).toEqual([]);
   });
 
+  it("refuses selectors that test a value while the document has a filled field", async () => {
+    const frames: FakeFrame[] = [{ id: "top", url: `${ORIGIN}/login`, focused: { tag: "INPUT", type: "password" } }];
+    const filler = createCredentialFiller({ store });
+    const t = { ...target(frames), documentKey: () => "tab1:0" };
+    const probe = { selector: 'input[type=password][value^="a"]' };
+    expect(filler.selectorProbeBlocked("s1", "tab1:0", probe)).toBeUndefined();
+    await filler.fillSecret(t, { itemId, field: "password" });
+    expect(filler.selectorProbeBlocked("s1", "tab1:0", probe)).toMatch(/value/);
+    expect(filler.selectorProbeBlocked("s1", "tab1:0", { ref: "form:has(input[value$='9'])" })).toMatch(/value/);
+    expect(filler.selectorProbeBlocked("s1", "tab1:0", { ref: "e12" })).toBeUndefined();
+    expect(filler.selectorProbeBlocked("s1", "tab1:0", { selector: "#submit", text: "value" })).toBeUndefined();
+    expect(filler.selectorProbeBlocked("s1", "tab2:0", probe)).toBeUndefined();
+  });
+
   it("refuses a project the item is not allowed in", async () => {
     const filler = createCredentialFiller({ store });
     const t = { ...target([{ id: "top", url: `${ORIGIN}/`, focused: { tag: "INPUT", type: "password" } }]), projectId: "other" };
