@@ -2,6 +2,7 @@ package claudeacp
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -296,6 +297,9 @@ func verifyCheckpointTranscript(ctx context.Context, input io.Reader, request po
 		if err := ctx.Err(); err != nil {
 			return ports.NativeCheckpointBoundary{}, err
 		}
+		if len(bytes.TrimSpace(scanner.Bytes())) == 0 {
+			continue
+		}
 		var record checkpointRecord
 		if json.Unmarshal(scanner.Bytes(), &record) != nil {
 			if limited.N == 0 {
@@ -337,6 +341,9 @@ func verifyCheckpointTranscript(ctx context.Context, input io.Reader, request po
 	seen := make(map[string]bool)
 	for leaf != "" {
 		record, found := records[leaf]
+		if !found && len(chain) > 0 {
+			break
+		}
 		if !found || seen[leaf] {
 			return ports.NativeCheckpointBoundary{}, checkpointUnsettled("incomplete native ancestry")
 		}
@@ -478,7 +485,7 @@ func verifyCheckpointTranscript(ctx context.Context, input io.Reader, request po
 			}
 			submitted := ""
 			if found {
-				submitted = turns[index].user
+				submitted, _ = claudecode.TypedPrompt(turns[index].user)
 				if text, ok := queuedTexts[submission]; ok {
 					submitted = text
 				}

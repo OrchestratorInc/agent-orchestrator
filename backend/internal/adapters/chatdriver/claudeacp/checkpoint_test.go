@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"testing"
 
@@ -244,6 +245,28 @@ func TestNativeCheckpointRejectsUnprovenAncestry(t *testing.T) {
 				ports.NativeCheckpointRequest{ProviderConversationID: "native", Evidence: evidence})
 			if !errors.Is(err, ports.ErrChatHistoryUnsettled) {
 				t.Fatalf("error=%v", err)
+			}
+		})
+	}
+}
+
+func TestNativeCheckpointSettlesDamagedTranscriptsAndSlashCommands(t *testing.T) {
+	command := "<command-message>review</command-message>\n<command-name>/review</command-name>\n<command-args>PR 12</command-args>"
+	source := checkpointFixture(t, []string{"A", "B"}, []string{"answer A", "answer B"})
+	lines := strings.SplitAfter(source, "\n")
+	for name, test := range map[string]struct{ transcript, typed, owner string }{
+		"blank lines":         {strings.Replace(source, "\n", "\n\n", 4), "B", "user-1"},
+		"lost parent record":  {strings.Join(slices.Delete(slices.Clone(lines), 2, 3), ""), "B", "user-1"},
+		"typed slash command": {checkpointFixture(t, []string{"A", command}, []string{"answer A", "answer B"}), "/review PR 12", "user-0"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			evidence := checkpointEvidence(
+				domain.NativeCheckpointObservation{Submission: true, PromptID: "prompt-1", SubmissionID: "submission-1", Text: test.typed},
+				domain.NativeCheckpointObservation{PromptID: "prompt-1", Text: "answer B"})
+			got, err := verifyCheckpointTranscript(context.Background(), strings.NewReader(test.transcript),
+				ports.NativeCheckpointRequest{ProviderConversationID: "native", Evidence: evidence})
+			if err != nil || got.UserMessageID != test.owner || got.AssistantText != "answer B" {
+				t.Fatalf("boundary=%+v error=%v", got, err)
 			}
 		})
 	}

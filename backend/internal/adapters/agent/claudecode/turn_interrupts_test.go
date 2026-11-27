@@ -107,3 +107,18 @@ func TestLastTurnFailureReadsOnlyTranscripts(t *testing.T) {
 		}
 	}
 }
+
+func TestTypedPromptOnlyStripsCommandRecords(t *testing.T) {
+	for input, want := range map[string]string{
+		"<command-name>/review</command-name>\n<command-message>review</command-message>\n<command-args>PR 12</command-args>": "/review PR 12",
+		"<command-message>review</command-message>\n<command-name>/review</command-name>":                                     "/review",
+	} {
+		if got, command := TypedPrompt(input); got != want || !command {
+			t.Errorf("TypedPrompt(%q) = %q, %v", input, got, command)
+		}
+	}
+	quoted := "why does my log show <command-name>/model</command-name> here?"
+	if got, command := TypedPrompt(quoted); got != quoted || command {
+		t.Fatalf("a prompt quoting command tags became %q, %v", got, command)
+	}
+}
