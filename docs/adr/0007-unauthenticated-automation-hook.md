@@ -28,11 +28,12 @@ Exempt exactly one more route from `authMiddleware` on the LAN listener:
 - **Optional signature.** When the automation has a secret, the request must
   carry an HMAC-SHA256 of the raw body in the configured header, compared in
   constant time, or it answers 403.
-- **Bounded work.** The body is capped at 1 MiB, the filled prompt at
-  64 KiB, and the values hashed for a dedupe key at 8 MiB. At most 20 calls wait per automation before the route answers 429.
-  A dedupe key, when set, drops repeat deliveries for seven days. A called run
-  holds the automation only until its session launches, so the queue bounds the
-  backlog, not how many sessions run at once; pausing drops calls not started.
+- **Bounded work.** The body is capped at 1 MiB, the filled prompt at 64 KiB,
+  and the values hashed for a dedupe key at 8 MiB. At most 20 calls wait per
+  automation before the route answers 429. A dedupe key, when set, drops
+  repeat deliveries for seven days. A called run holds the automation only
+  until its session launches, so the queue bounds the backlog, not how many
+  sessions run at once; pausing drops calls not started.
 - **Request data is data.** Values copied from the request into the prompt are
   wrapped in a random tag and the prompt says to treat them as data.
 

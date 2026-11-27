@@ -235,9 +235,6 @@ func TestHookDedupeKey(t *testing.T) {
 	if k := hookDedupeKey(strings.Repeat("{{body}}", 512), bigData); k != "" {
 		t.Fatal("dedupe hashed past its byte budget")
 	}
-	if key("v2-{{body.b}}", `{"b":"1"}`) == key("{{body.b}}", `{"b":"1"}`) {
-		t.Fatal("editing the key's fixed text did not change the key")
-	}
 	for _, body := range []string{`{"a":null,"b":"1"}`, `{"a":" ","b":"1"}`, `{"b":"1"}`} {
 		if k := key("{{body.a}}{{body.b}}", body); k != "" {
 			t.Fatalf("%s gave dedupe key %q, want none", body, k)

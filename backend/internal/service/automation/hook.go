@@ -278,7 +278,6 @@ func hookDedupeKey(tmpl string, data map[string]any) string {
 		return ""
 	}
 	h := sha256.New()
-	fmt.Fprintf(h, "%d:%s", len(tmpl), tmpl)
 	total := 0
 	for _, m := range matches {
 		v, ok := lookupHookPath(data, m[1])

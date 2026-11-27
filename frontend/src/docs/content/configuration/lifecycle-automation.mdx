@@ -84,7 +84,7 @@ ao automation create --project my-app --name "Issue triage" \
 - **Prompt**: `{{body.path}}`, `{{headers.Name}}`, and `{{query.name}}` fill in values from the call. A JSON body is read as JSON, and a form body as its fields; a form `payload` field that holds JSON, which GitHub sends by default, is read as the body. Each filled value is wrapped in tags, and the prompt tells the agent to treat it as data, not instructions.
 - **Secret** and **Signature header**: Orchestrator checks the HMAC-SHA256 signature of the raw body in that header, in hex or base64, with or without `sha256=`, and rejects a call that does not match. Without a secret, anyone who has the address can start a run.
 - **Filters**, one per line: `path=a,b` runs only when the value is one of those, `path!=a,b` skips them, and a bare `path` needs the field to exist.
-- **Dedupe key**: a call whose key matches one from the last seven days is ignored, so a service's retries start one run. A run that failed does not count, so a retry after a failure starts a new run. The key must use at least one value from the call, and a call missing any of those values, or with one that is null or blank, is not checked.
+- **Dedupe key**: a call whose key matches one from the last seven days is ignored, so a service's retries start one run. A run that failed does not count, so a retry after a failure starts a new run. The key must use at least one value from the call, and a call missing any of those values, or with one that is null or blank, is not checked; nor is one whose values add up to more than 8 MiB.
 
 | Response | When |
 | --- | --- |
