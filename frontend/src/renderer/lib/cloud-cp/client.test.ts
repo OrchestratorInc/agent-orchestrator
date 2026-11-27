@@ -785,3 +785,34 @@ describe("Cloud control-plane artifact share comments", () => {
 		expect(onForbidden).not.toHaveBeenCalled();
 	});
 });
+
+describe("move export", () => {
+	const json = (body: unknown, status: number, headers: Record<string, string> = {}) =>
+		new Response(JSON.stringify(body), { status, headers: { "Content-Type": "application/json", ...headers } });
+
+	it("answers a still-running export (202) with its moveId and Retry-After, and waits on it by id", async () => {
+		const fetchImpl = vi.fn()
+			.mockResolvedValueOnce(json({ moveId: "exp-1", status: "running", branchMayBePushed: true, message: "still moving" }, 202, {
+				"Retry-After": "5", Location: "/api/cloud/v1/orgs/org/sessions/s/move/export/exp-1",
+			}))
+			.mockResolvedValueOnce(json({ moveId: "exp-1", manifest: { branch: "feat/x" }, handoffNote: "note" }, 200));
+		const client = createCloudCpClient({ baseUrl: "https://cloud.example.test", getToken: async () => "token", fetchImpl });
+		expect(await client.exportSessionMove("org", "s")).toEqual({ moveId: "exp-1", status: "running", branchMayBePushed: true, message: "still moving", retryAfterMs: 5_000 });
+		expect(await client.getSessionMoveExport("org", "s", "exp-1")).toMatchObject({ moveId: "exp-1", handoffNote: "note" });
+		const calls = fetchImpl.mock.calls as Array<[string, RequestInit]>;
+		expect(calls[0]?.[0]).toBe("https://cloud.example.test/api/cloud/v1/orgs/org/sessions/s/move/export");
+		expect([calls[1]?.[0], calls[1]?.[1].method]).toEqual(["https://cloud.example.test/api/cloud/v1/orgs/org/sessions/s/move/export/exp-1", "GET"]);
+		await client.exportSessionMove("org", "s", { moveId: "exp-1" }).catch(() => undefined);
+		expect(fetchImpl.mock.calls[2]?.[0]).toBe("https://cloud.example.test/api/cloud/v1/orgs/org/sessions/s/move/export?moveId=exp-1");
+	});
+
+	it("keeps a timed-out export's details", async () => {
+		const fetchImpl = vi.fn().mockResolvedValue(json({
+			error: "Gateway Timeout", code: "MOVE_EXPORT_TIMED_OUT", message: "did not finish", requestId: "r", details: { moveId: "exp-1", branchMayBePushed: true },
+		}, 504));
+		const client = createCloudCpClient({ baseUrl: "https://cloud.example.test", getToken: async () => "token", fetchImpl });
+		const error = await client.getSessionMoveExport("org", "s", "exp-1").catch((e: unknown) => e);
+		expect(error).toBeInstanceOf(CloudCpError);
+		expect(error).toMatchObject({ status: 504, code: "MOVE_EXPORT_TIMED_OUT", details: { moveId: "exp-1", branchMayBePushed: true } });
+	});
+});
