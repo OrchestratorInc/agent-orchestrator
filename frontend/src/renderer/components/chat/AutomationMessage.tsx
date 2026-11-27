@@ -802,7 +802,8 @@ function PullRequestFeedbackLine({ messages, queued }: { messages: readonly Conv
 	if (!last) return null;
 	// The newest message carries the PR's current title and link.
 	const { pr } = last.feedback;
-	const at = each.map((entry) => entry.at).sort().at(-1)!;
+	// The newest instant: a forge time and a delivery time differ in their fractional seconds, so strings do not sort.
+	const at = each.reduce((newest, entry) => (Date.parse(entry.at) > Date.parse(newest) ? entry.at : newest), last.at);
 	const comments = each.flatMap(({ feedback }) => (feedback.kind === "reviewComments" ? feedback.comments : []));
 	const checks = uniqueChecks(each.flatMap(({ feedback }) => (feedback.kind === "ciFailing" ? feedback.checks : [])));
 	const authors = reviewersOf(comments);

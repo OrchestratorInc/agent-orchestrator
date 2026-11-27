@@ -618,6 +618,14 @@ describe("drawing PR feedback in Developer Mode", () => {
 		expect(screen.getByTestId("pull-request-feedback").querySelector("time")).toHaveAttribute("datetime", "2026-11-16T08:26:00Z");
 	});
 
+	it("ends a line in its newest instant when a forge time and a delivery time differ in fractional seconds", () => {
+		const review = message(reviewComment.replace("need additional context.\n", "need additional context. Newest comment posted at 2026-11-26T12:00:00Z.\n"), { id: "m1" });
+		const checks = message(ciFailing, { id: "m2", sequence: 2, createdAt: "2026-11-26T12:00:00.500Z" });
+		const bursts = pullRequestBursts([review, checks]);
+		render(<TooltipProvider><AutomationMessage message={review} burst={bursts.get("m1")} fallback={<p>card</p>} /></TooltipProvider> as ReactElement);
+		expect(screen.getByTestId("pull-request-feedback").querySelector("time")).toHaveAttribute("datetime", "2026-11-26T12:00:00.500Z");
+	});
+
 	it("draws a review comment as who said what, and where", async () => {
 		draw(reviewComment);
 
