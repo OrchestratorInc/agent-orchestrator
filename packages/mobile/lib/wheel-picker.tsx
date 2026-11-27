@@ -107,6 +107,12 @@ export function WheelPicker({ items, index, onSettle, disabled = false, align = 
 			decelerationRate="fast"
 			scrollEnabled={!disabled}
 			overScrollMode="never"
+			// The wheels sit over a focused composer. A scroll view's default
+			// ("never") blurs the focused field on a tap that lands on it, so a
+			// tap on a wheel, or on the empty rows above or below its first and
+			// last items, dropped the keyboard (and the tap never reached the
+			// overlay to put it away).
+			keyboardShouldPersistTaps="always"
 			scrollEventThrottle={16}
 			onScroll={onScroll}
 			onContentSizeChange={rest}

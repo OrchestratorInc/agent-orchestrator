@@ -57,6 +57,15 @@ describe("wheel picker", () => {
 		expect(onSettle).toHaveBeenLastCalledWith(1);
 	});
 
+	// Regression guard: the wheels sit over a focused composer. A scroll view's
+	// default blurred the field on any tap on a wheel (its empty rows included,
+	// right where a tap to put the picker away lands), dropping the keyboard.
+	it("keeps the composer focused when a wheel is tapped", () => {
+		act(() => { renderer = create(<WheelPicker items={items} index={0} onSettle={() => {}} />); });
+		const wheel = renderer!.root.findAll((node) => hostType(node) === "AnimatedScrollView")[0];
+		expect(wheel.props.keyboardShouldPersistTaps).toBe("always");
+	});
+
 	it("takes no screen reader steps while locked", () => {
 		const onSettle = vi.fn();
 		act(() => { renderer = create(<WheelPicker items={items} index={0} onSettle={onSettle} disabled />); });
