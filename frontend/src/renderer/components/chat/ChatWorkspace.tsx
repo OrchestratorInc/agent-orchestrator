@@ -6679,7 +6679,7 @@ const TurnGroup = memo(function TurnGroup({
 	};
 	const sentUpdates = (run: TimelineRun) => {
 		const item = run.kind === "single" ? run.items[0] : undefined;
-		const updates = workerUpdates && item ? workerUpdatesOf(item) : [];
+		const updates = workerUpdates && item && !isUserQueuePrompt(item) ? workerUpdatesOf(item) : [];
 		return updates.length > 0 && updates[0]?.state === undefined && !batched?.under.get(item!.id)?.length ? updates : undefined;
 	};
 	const renderWorkerRuns = (list: readonly TimelineRun[]): ReactNode[] => {

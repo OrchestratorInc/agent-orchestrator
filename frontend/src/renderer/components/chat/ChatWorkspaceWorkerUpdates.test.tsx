@@ -1175,6 +1175,20 @@ describe("agent messages around the user's turns", () => {
 		expect(screen.getByText(/Draft PR created/)).toBeInTheDocument();
 	});
 
+	it("keeps a message the user wrote in view between agent messages in their turn", () => {
+		const mine = (id: string, sequence: number, text: string, authoredByUser?: boolean): ConversationMessage => ({
+			...automation("h", 2, text), id, sequence, ...(authoredByUser ? { authoredByUser } : {}),
+		});
+		renderSnapshot(withStates([
+			human("h", 1, "Ship the shop changes."),
+			mine("a1", 20, "[from proj-7] Design checkpoint verified."),
+			mine("a2", 21, "[from proj-8] Fix the footer too.", true),
+			mine("a3", 22, "[from proj-7] Draft PR created."),
+		], { h: "running" }));
+		expect(screen.queryAllByTestId("background-updates")).toHaveLength(0);
+		expect(screen.getByText(/Fix the footer too/)).toBeInTheDocument();
+	});
+
 	it("opens the line holding a message the user navigates to", async () => {
 		render(orchestratorView()(withStates(turnItems(), { h: "running" }), { id: "quote:1", text: "Draft PR created.", messageId: "s2" }));
 		await waitFor(() => expect(within(screen.getAllByTestId("background-updates")[0]!).getAllByRole("button")[0]).toHaveAttribute("aria-expanded", "true"));
