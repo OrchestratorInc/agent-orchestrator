@@ -670,12 +670,14 @@ export async function listCloudSessionArtifacts(api: CloudShareApi, baseUrl: str
  * A cloud session's file's text, read through a short-lived access prefix,
  * when it is still the committed version sha256; null when the session has
  * committed another version since. Only a page's text is read, to find the
- * files it uses.
+ * files it uses. A body over limit bytes is another version than the one
+ * listed: it is stopped there, never held whole, and is null too.
  */
 export async function readCloudSessionArtifactText(
 	api: CloudShareApi,
 	baseUrl: string,
 	ref: CloudSessionArtifactRef & { sha256: string },
+	limit: number,
 	signal?: AbortSignal,
 ): Promise<string | null> {
 	const { filesPrefix } = await callApi<{ filesPrefix: string }>(api, baseUrl, "POST", `${sessionApiPath(ref)}/artifacts/access`, undefined, signal);
@@ -693,8 +695,23 @@ export async function readCloudSessionArtifactText(
 			await response.body?.cancel().catch(() => undefined);
 			throw new CloudShareError(`http_${response.status}`, `Request failed (${response.status})`, response.status);
 		}
-		return Buffer.from(await response.arrayBuffer());
+		if (!response.body) return Buffer.alloc(0);
+		const reader = response.body.getReader();
+		const chunks: Uint8Array[] = [];
+		let total = 0;
+		for (;;) {
+			const { done, value } = await reader.read();
+			if (done) break;
+			total += value.byteLength;
+			if (total > limit) {
+				await reader.cancel().catch(() => undefined);
+				return null;
+			}
+			chunks.push(value);
+		}
+		return Buffer.concat(chunks);
 	});
+	if (bytes === null) return null;
 	if (createHash("sha256").update(bytes).digest("hex") !== ref.sha256) return null;
 	return bytes.toString("utf8");
 }

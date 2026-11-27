@@ -427,7 +427,7 @@ export function registerCloudShareIpc(deps: CloudShareIpcDeps): void {
 		const page = listed.find((artifact) => artifact.path === file.path);
 		if (!page || page.sha256 !== file.fingerprint) return null;
 		if (page.size > MAX_SCANNED_PAGE) return undefined;
-		const html = await readCloudSessionArtifactText(deps, file.baseUrl, { ...file, sha256: file.fingerprint }, signal);
+		const html = await readCloudSessionArtifactText(deps, file.baseUrl, { ...file, sha256: file.fingerprint }, MAX_SCANNED_PAGE, signal);
 		if (html === null) return null;
 		const byPath = new Map(listed.map((artifact) => [artifact.path, artifact]));
 		const found = await findPageFiles(file.path, html, async (relative): Promise<CloudSessionArtifact & { relativePath: string }> => {

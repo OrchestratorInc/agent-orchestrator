@@ -17,6 +17,7 @@ import {
 	snapshotShareFile,
 	statShareFile,
 	listShareLinks,
+	readCloudSessionArtifactText,
 	SHARE_TIMEOUTS,
 	shareLinksAvailable,
 	uploadShare,
@@ -253,6 +254,46 @@ function silentControlPlane(): CloudShareApi {
 		})),
 	};
 }
+
+describe("readCloudSessionArtifactText", () => {
+	const ORG = "11111111-1111-4111-8111-111111111111";
+	const SESSION = "22222222-2222-4222-8222-222222222222";
+	const ref = (body: string) => ({ orgId: ORG, sessionId: SESSION, path: "site/index.html", sha256: sha(body) });
+
+	// The page's bytes arrive in chunks, and cancelling the body is seen.
+	function session(chunks: string[]) {
+		const cancelled = { value: false };
+		let pulled = 0;
+		const api: CloudShareApi = {
+			getToken: async () => "token-1",
+			fetch: vi.fn(async (url: string) => {
+				if (url.endsWith("/artifacts/access")) return new Response(JSON.stringify({ filesPrefix: "/api/cloud/v1/artifact-files/acc-tok/" }));
+				return new Response(new ReadableStream<Uint8Array>({
+					pull(controller) {
+						const next = chunks[pulled++];
+						if (next === undefined) controller.close();
+						else controller.enqueue(new TextEncoder().encode(next));
+					},
+					cancel() { cancelled.value = true; },
+				}));
+			}),
+		};
+		return { api, cancelled, pulled: () => pulled };
+	}
+
+	it("reads a page within the limit that is still the committed version", async () => {
+		const { api } = session(["<img ", "src=a.png>"]);
+		await expect(readCloudSessionArtifactText(api, "https://cp.test", ref("<img src=a.png>"), 64)).resolves.toBe("<img src=a.png>");
+	});
+
+	it("stops a page that grew past the limit since it was listed, without reading the rest", async () => {
+		const chunks = ["0123456789", "0123456789", "0123456789", "never read"];
+		const { api, cancelled, pulled } = session(chunks);
+		await expect(readCloudSessionArtifactText(api, "https://cp.test", ref(chunks.join("")), 15)).resolves.toBeNull();
+		expect(cancelled.value).toBe(true);
+		expect(pulled()).toBeLessThan(chunks.length);
+	});
+});
 
 describe("share request time limits", () => {
 	const saved = { ...SHARE_TIMEOUTS };
