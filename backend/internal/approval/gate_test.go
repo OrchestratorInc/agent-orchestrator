@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -408,5 +409,26 @@ func TestScriptCategoryCannotBeAllowedForASite(t *testing.T) {
 	req.Timeout = 20 * time.Millisecond
 	if outcome, _ := reopened.Request(context.Background(), req); outcome.Decision != DecisionTimeout {
 		t.Fatalf("old script rule honoured: %+v", outcome)
+	}
+}
+
+func TestAuditReadsOnlyTheNewestEntries(t *testing.T) {
+	dir := t.TempDir()
+	g, _ := Open(dir)
+	path := filepath.Join(dir, "audit.jsonl")
+	f, _ := os.Create(path)
+	// An old record larger than any line buffer, then many ordinary ones.
+	_, _ = f.WriteString(`{"id":"apr_huge","action":"` + strings.Repeat("x", 2<<20) + `"}` + "\n")
+	for i := range 20000 {
+		_, _ = fmt.Fprintf(f, `{"id":"apr_%05d","action":"Click","decision":"deny"}`+"\n", i)
+	}
+	_, _ = f.WriteString("not json\n")
+	_ = f.Close()
+	entries, err := g.Audit(3)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 3 || entries[0].ID != "apr_19999" || entries[2].ID != "apr_19997" {
+		t.Fatalf("entries = %+v", entries)
 	}
 }
