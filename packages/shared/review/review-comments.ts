@@ -614,9 +614,12 @@ function buildReviewers(pr: ReviewPRFacts | undefined, aoState: ReviewStateFacts
 		});
 	}
 	for (const requested of pr.requestedReviewers ?? []) {
-		// GitHub lists apps here too (a re-requested Copilot), and the request does
-		// not say which it is: a person who reviewed is matched first, then an app.
-		const known = [reviewerKey(requested.login, false), reviewerKey(requested.login, true)].find((key) => seen.has(key));
+		// GitHub lists apps here too (a re-requested Copilot). A "[bot]" login is an
+		// app's; otherwise the request does not say which it is, so a person who
+		// reviewed is matched first, then an app.
+		const namesBot = /\[bot\]$/i.test(requested.login.trim());
+		const candidates = namesBot ? [reviewerKey(requested.login, true)] : [reviewerKey(requested.login, false), reviewerKey(requested.login, true)];
+		const known = candidates.find((key) => seen.has(key));
 		if (known) {
 			// Asked again after reviewing: the provider now waits on them.
 			const existing = reviewers.find((reviewer) => !reviewer.orchestrator && reviewerRowKey(reviewer) === known);
@@ -626,9 +629,8 @@ function buildReviewers(pr: ReviewPRFacts | undefined, aoState: ReviewStateFacts
 			}
 			continue;
 		}
-		const isBot = /\[bot\]$/i.test(requested.login.trim());
-		seen.add(reviewerKey(requested.login, isBot));
-		reviewers.push({ id: requested.login, orchestrator: false, isBot, isTeam: requested.isTeam, status: "pending", canRerequest: false });
+		seen.add(reviewerKey(requested.login, namesBot));
+		reviewers.push({ id: requested.login, orchestrator: false, isBot: namesBot, isTeam: requested.isTeam, status: "pending", canRerequest: false });
 	}
 	return reviewers;
 }
