@@ -367,11 +367,9 @@ func (c *commandContext) createTask(ctx context.Context, project projectDetails,
 		return c.createdTaskStatus(ctx, taskID{session: out.WorkerID})
 	}
 
-	if project.Config != nil {
-		if res := preflight(strings.TrimSpace(project.Config.Orchestrator.Agent)); res != nil {
-			return *res
-		}
-	}
+	// The orchestrator's own agent is checked after POST /orchestrators names
+	// the session that will run the brief: an existing orchestrator may run a
+	// different agent than the one the project now saves.
 	if res := preflight(workerAgent); res != nil {
 		return *res
 	}
@@ -619,7 +617,8 @@ func (c *commandContext) fetchTaskSession(ctx context.Context, id string) (taskS
 	if err := c.getJSON(ctx, "sessions/"+url.PathEscape(id), &res); err != nil {
 		var apiErr apiResponseError
 		if errors.As(err, &apiErr) && apiErr.StatusCode == http.StatusNotFound {
-			return taskSession{}, fmt.Errorf("session %s not found", id)
+			// Keep the daemon's envelope (message, code, request id).
+			return taskSession{}, fmt.Errorf("session %s not found: %w", id, err)
 		}
 		return taskSession{}, fmt.Errorf("read session %s: %w", id, err)
 	}
@@ -1068,6 +1067,9 @@ func (c *commandContext) waitTask(ctx context.Context, res taskResult, timeout t
 			break
 		}
 		readCtx, cancel := context.WithTimeout(ctx, remaining)
+		// The reading describes the task as of when it began, so settle time is
+		// measured from there and cannot count time spent after the deadline.
+		readAt := c.deps.Now()
 		obs := c.observeTask(readCtx, id)
 		readErr := readCtx.Err()
 		cancel()
@@ -1112,9 +1114,9 @@ func (c *commandContext) waitTask(ctx context.Context, res taskResult, timeout t
 			return last
 		case taskStatusRunning:
 			if runningSince.IsZero() || obs.turnID != runningTurn {
-				runningTurn, runningSince = obs.turnID, now
+				runningTurn, runningSince = obs.turnID, readAt
 			}
-			if now.Sub(runningSince) >= taskRunningSettle {
+			if readAt.Sub(runningSince) >= taskRunningSettle && readAt.Before(deadline) {
 				return last
 			}
 		default:

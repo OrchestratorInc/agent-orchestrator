@@ -516,7 +516,8 @@ func TestTaskStatusUnknownSessionFails(t *testing.T) {
 	if got := ExitCode(err); got != 1 {
 		t.Fatalf("exit = %d (%v), want 1", got, err)
 	}
-	if res := decodeTaskResult(t, out); res["reason"] != "session repo-9 not found" {
+	// The daemon's envelope (message and code) is kept after the summary.
+	if res := decodeTaskResult(t, out); !strings.HasPrefix(res["reason"].(string), "session repo-9 not found: ") || !strings.Contains(res["reason"].(string), "(NOT_FOUND)") {
 		t.Fatalf("result = %v", res)
 	}
 }
@@ -1311,7 +1312,7 @@ func TestTaskWaitTransientVersusPermanentReadFailures(t *testing.T) {
 	if got := ExitCode(err); got != 1 {
 		t.Fatalf("permanent: exit = %d (%v), want 1", got, err)
 	}
-	if res := decodeTaskResult(t, out); res["reason"] != "session repo-9 not found" {
+	if res := decodeTaskResult(t, out); !strings.HasPrefix(res["reason"].(string), "session repo-9 not found: ") {
 		t.Fatalf("permanent: result = %v", res)
 	}
 }
@@ -1381,6 +1382,61 @@ func TestTaskStartLostReplyThenAPIErrorKeepsTheRecoveryHandle(t *testing.T) {
 	res := decodeTaskResult(t, out)
 	if !strings.Contains(res["reason"].(string), "could not confirm that the worker started (client request id ao-task-") ||
 		res["fix"] != "check `ao session ls` before starting the task again, so it does not run twice" {
+		t.Fatalf("result = %v", res)
+	}
+}
+
+// The project's saved orchestrator agent is not probed before the daemon names
+// the running orchestrator: an existing orchestrator on a ready agent gets the
+// brief even when the newly saved agent is signed out.
+func TestTaskStartChecksTheRunningOrchestratorsAgentNotTheSavedOne(t *testing.T) {
+	d := newTaskDaemon(t)
+	d.set("GET /api/v1/projects/repo", 200, `{"project":{"id":"repo","path":"/tmp/repo","config":{"worker":{"agent":"claude-code"},"orchestrator":{"agent":"codex"}}}}`)
+	d.set("POST /api/v1/agents/codex/probe", 200, `{"agent":{"id":"codex","authStatus":"unauthorized"},"supported":true,"installed":true}`)
+	d.set("POST /api/v1/orchestrators", 201, `{"orchestrator":{"id":"repo-orchestrator","projectId":"repo"}}`)
+	d.set("GET /api/v1/sessions/repo-orchestrator", 200, `{"session":{"id":"repo-orchestrator","harness":"claude-code","mode":"chat","provisionState":"ready","activity":{"state":"active"}}}`)
+	d.set("POST /api/v1/sessions/repo-orchestrator/conversation/messages", 202, `{"turnId":"t2","state":"running"}`)
+	d.set("GET /api/v1/sessions/repo-orchestrator/conversation", 200, `{"turns":[{"id":"t2","state":"running"}]}`)
+
+	out, _, err := executeCLI(t, fakeClockDeps(), "task", "start", "fix calc", "--project", "repo", "--json")
+	if err != nil {
+		t.Fatalf("exit = %d (%v), want 0", ExitCode(err), err)
+	}
+	if res := decodeTaskResult(t, out); res["taskId"] != "repo-orchestrator:t2" {
+		t.Fatalf("result = %v", res)
+	}
+	if d.saw("POST /api/v1/agents/codex/probe") {
+		t.Fatal("the saved orchestrator agent must not be probed before the running session is known")
+	}
+}
+
+// Settle time is measured from when the reading was taken: a running reading
+// that started before the deadline but had not yet run for 5 s does not become
+// settled because the read itself finished after the deadline.
+func TestTaskWaitSettleCannotPassAfterTheDeadline(t *testing.T) {
+	d := newTaskDaemon(t)
+	deps := fakeClockDeps()
+	start := deps.Now()
+	d.set("GET /api/v1/sessions/repo-orchestrator", 200, `{"session":{"id":"repo-orchestrator","harness":"claude-code","mode":"chat","provisionState":"ready","activity":{"state":"active"}}}`)
+	var mu sync.Mutex
+	d.setFunc("GET /api/v1/sessions/repo-orchestrator/conversation", func() (int, string) {
+		mu.Lock()
+		defer mu.Unlock()
+		elapsed := deps.Now().Sub(start)
+		if elapsed < time.Second {
+			return 200, `{"turns":[{"id":"t0","state":"running"},{"id":"t2","state":"queued"}]}`
+		}
+		if elapsed >= 5*time.Second {
+			deps.Sleep(time.Second) // this read itself runs past the 5.5 s deadline
+		}
+		return 200, `{"turns":[{"id":"t0","state":"completed"},{"id":"t2","state":"running"}]}`
+	})
+
+	out, _, err := executeCLI(t, deps, "task", "wait", "repo-orchestrator:t2", "--timeout", "5500ms", "--json")
+	if got := ExitCode(err); got != 1 {
+		t.Fatalf("exit = %d (%v), want 1: the turn ran only 4 s before the deadline", got, err)
+	}
+	if res := decodeTaskResult(t, out); res["status"] != "failed" || !strings.Contains(res["reason"].(string), "only just started") {
 		t.Fatalf("result = %v", res)
 	}
 }

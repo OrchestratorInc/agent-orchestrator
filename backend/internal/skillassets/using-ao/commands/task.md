@@ -38,7 +38,7 @@ project's defaults with `ao project set-config <id> --worker-agent <agent>
 | Code | Meaning |
 |---|---|
 | `0` | With `--wait` or `ao task wait`: the task started (`running` or `done`). A one-shot read (`ao task status`, or `start` without `--wait`) also exits `0` while the task is `starting` or `queued`, so read `status` before treating it as started. |
-| `1` | The task failed, or `--timeout` ran out before it started. |
+| `1` | The task failed, `--timeout` ran out before it started, or a status read failed. A failed status read (for example a 503 on the final check) does not mean the task failed or never started: if `taskId` is set, check that id with `ao task status <task-id>` before submitting again. |
 | `2` | Usage error: fix the command (for example pass `--project`). Prints no JSON. |
 | `3` | The task is waiting on the user, such as for an approval. Ask the user; do not start the task again. |
 | `4` | `--wait` ran out while the task was still `queued` behind the agent's current turn. It is accepted and will run: do not start it again. Wait longer with `ao task wait <task-id>`. |
