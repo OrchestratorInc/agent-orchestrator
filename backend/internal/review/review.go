@@ -100,6 +100,11 @@ type Projects interface {
 	GetProject(ctx stdctx.Context, id string) (domain.ProjectRecord, bool, error)
 }
 
+// ProjectRuleFiles reads a file from a registered project's trusted default branch.
+type ProjectRuleFiles interface {
+	ReadDefaultBranchFile(ctx stdctx.Context, repo, branch, path string) (string, error)
+}
+
 // Deps wires the engine.
 type Deps struct {
 	// HarnessUse, when set, is held across each reviewer launch.
@@ -108,6 +113,7 @@ type Deps struct {
 	Sessions   Sessions
 	PRs        PRs
 	Projects   Projects
+	RuleFiles  ProjectRuleFiles
 	Launcher   Launcher
 	// ChatRecoveryDone gates operations that could mistake a recovering reviewer for an exited one.
 	ChatRecoveryDone <-chan struct{}
@@ -132,6 +138,7 @@ type Engine struct {
 	sessions   Sessions
 	prs        PRs
 	projects   Projects
+	ruleFiles  ProjectRuleFiles
 	launcher   Launcher
 	clock      func() time.Time
 	newID      func() string
@@ -165,6 +172,7 @@ func New(d Deps) *Engine {
 		sessions:     d.Sessions,
 		prs:          d.PRs,
 		projects:     d.Projects,
+		ruleFiles:    d.RuleFiles,
 		launcher:     d.Launcher,
 		clock:        clock,
 		newID:        newID,
@@ -652,6 +660,10 @@ func (e *Engine) TriggerWithOptions(ctx stdctx.Context, workerID domain.SessionI
 		return failRunsWithContext(ctx, reason, err)
 	}
 
+	projectRules, err := e.projectRules(ctx, worker.ProjectID)
+	if err != nil {
+		return TriggerResult{}, failRuns(domain.ReviewFailurePreflightFailed, err)
+	}
 	previousHandleID := reviewRow.ReviewerHandleID
 	previousAgentSessionID := reviewRow.AgentSessionID
 	previousLaunchID := reviewRow.ReviewerLaunchID
@@ -757,7 +769,7 @@ func (e *Engine) TriggerWithOptions(ctx stdctx.Context, workerID domain.SessionI
 		if err != nil {
 			return TriggerResult{}, rollbackReplacement(err)
 		}
-		launchSpec := reviewLaunchSpec(worker, harness, config, launchRun, queue, 0, launchAgentSessionID, launchID)
+		launchSpec := reviewLaunchSpec(worker, harness, config, projectRules, launchRun, queue, 0, launchAgentSessionID, launchID)
 		launchSpec.ProjectEnv = projectEnv
 		launchSpec.InterfaceMode = selectedMode
 		launchSpec.DeferInitialMessage = deferInitialMessage
@@ -780,7 +792,7 @@ func (e *Engine) TriggerWithOptions(ctx stdctx.Context, workerID domain.SessionI
 		if err := e.markRunsLaunching(ctx, created, reviewRow.ReviewerLaunchID); err != nil {
 			return TriggerResult{}, failRuns(domain.ReviewFailureLaunchFailed, err)
 		}
-		launchSpec := reviewLaunchSpec(worker, harness, config, launchRun, queue, 0, reviewRow.AgentSessionID, reviewRow.ReviewerLaunchID)
+		launchSpec := reviewLaunchSpec(worker, harness, config, projectRules, launchRun, queue, 0, reviewRow.AgentSessionID, reviewRow.ReviewerLaunchID)
 		launchSpec.InterfaceMode = selectedMode
 		if err := e.launcher.Notify(ctx, handleID, launchSpec); err != nil {
 			return TriggerResult{}, failRuns(domain.ReviewFailureLaunchFailed, fmt.Errorf("notify reviewer: %w", err))
@@ -835,7 +847,7 @@ func (e *Engine) TriggerWithOptions(ctx stdctx.Context, workerID domain.SessionI
 		}
 		previousStopped = true
 		if deferInitialMessage {
-			launchSpec := reviewLaunchSpec(worker, harness, config, launchRun, queue, 0, persistedAgentSessionID, reviewRow.ReviewerLaunchID)
+			launchSpec := reviewLaunchSpec(worker, harness, config, projectRules, launchRun, queue, 0, persistedAgentSessionID, reviewRow.ReviewerLaunchID)
 			launchSpec.InterfaceMode = selectedMode
 			if err := e.launcher.Notify(ctx, handleID, launchSpec); err != nil {
 				return TriggerResult{}, rollbackReplacement(fmt.Errorf("notify replacement reviewer: %w", err))
@@ -1497,6 +1509,7 @@ func reviewLaunchSpec(
 	worker domain.SessionRecord,
 	harness domain.ReviewerHarness,
 	config domain.AgentConfig,
+	projectRules string,
 	run domain.ReviewRun,
 	queue []ports.ReviewTask,
 	index int,
@@ -1510,6 +1523,7 @@ func reviewLaunchSpec(
 		LaunchID:        launchID,
 		WorkerID:        worker.ID,
 		ProjectID:       worker.ProjectID,
+		ProjectRules:    projectRules,
 		Harness:         harness,
 		AgentConfig:     config,
 		WorkspacePath:   worker.Metadata.WorkspacePath,

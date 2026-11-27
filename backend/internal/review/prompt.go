@@ -11,7 +11,7 @@ import (
 // reviewTexts returns the user-facing prompt and the system prompt to deliver to
 // a reviewer, authored in one place — the reviewer analogue of
 // session_manager.buildSpawnTexts. The standing reviewer role lives in the
-// system prompt; the per-pass task (which PR/commit, and the exact submit
+// system prompt; the per-pass task (PR/commit, project rules, and the submit
 // command carrying the ids) lives in the prompt, so it is also what AO injects
 // into an already-running reviewer to review a new commit.
 //
@@ -58,6 +58,14 @@ Do these steps in order for each PR:
 If step 2 reports that the run was superseded, skip it without retrying and continue with the next queued PR.
 Do not retry a failing submit command more than twice. If step 1 still fails, go on to step 2 without --review-id. If step 2 still fails, stop and report the command's error output in your final message instead of trying again.`,
 		spec.WorkerID, queueText, post, record, rules)
+	prompt += "\n\nUse the project rules provided in this review task for this pass. Earlier review tasks do not set rules for this pass."
+	if spec.ProjectRules != "" {
+		prompt += "\n\n## Configured Project Rules\n\n" +
+			"Orchestrator loaded these rules from the registered project's configuration and trusted default branch. " +
+			"Check the proposed changes against applicable rules and report concrete violations using the finding format above. " +
+			"The reviewer's read-only role and execution restrictions take precedence. Keep the rule text private when publishing findings.\n\n" +
+			spec.ProjectRules
+	}
 	return prompt, systemPrompt
 }
 
@@ -100,7 +108,7 @@ Read the changed code in context. Trace affected callers, callees, error paths, 
 Before posting each candidate, verify all of these:
 - The change causes the issue. Identify the changed line and the affected execution path.
 - A concrete input or condition reaches it. Name that trigger rather than inventing unsupported assumptions about callers or deployment.
-- The consequence matters to correctness, security, reliability, or performance. Missing tests, style preferences, speculative hardening, conventions, and mechanical checks already enforced by CI alone are not required changes.
+- The consequence matters to correctness, security, reliability, or performance, or the changed code concretely violates a rule Orchestrator provided in this review task. Missing tests, style preferences, speculative hardening, conventions, and mechanical checks already enforced by CI alone are not required changes.
 - Existing guards, callers, tests, or documented behavior do not already make the code safe. Look for a counterexample to your claim and discard candidates that the evidence contradicts.
 
 Merge candidates with the same root cause into one finding per review. Recheck available earlier findings against the current task's target; conversation history is not proof. Include confirmed unresolved defects in this review so the worker receives them, and discard findings the target commit fixed or the evidence disproves. Do not limit a new review to the latest commit if the full PR introduces another defect.

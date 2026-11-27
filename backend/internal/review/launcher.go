@@ -73,6 +73,7 @@ type LaunchSpec struct {
 	WorkerID        domain.SessionID
 	ProjectID       domain.ProjectID
 	ProjectEnv      map[string]string
+	ProjectRules    string
 	Harness         domain.ReviewerHarness
 	AgentConfig     domain.AgentConfig
 	WorkspacePath   string

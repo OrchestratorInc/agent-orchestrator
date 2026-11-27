@@ -145,6 +145,8 @@ For a reusable manual action, use a project **Cue**. An agent Cue sends a prompt
 
 <span id="choose-a-reviewer" />
 
+Native reviewers check proposed changes against applicable `agentRules` and `agentRulesFile` rules. For reviews, Orchestrator reads the configured file from the registered repository's default remote-tracking branch. Commit the file to that branch and fetch it locally before reviewing. If Orchestrator cannot read the file there, the review reports a preflight error.
+
 Choose reviewers separately in Project Settings. The [agent catalog](/plugins/agents) lists reviewer support and its limits. If you do not choose one, Orchestrator reviews with the project's default worker agent, using that worker's model and effort, when it is Claude Code, Codex, OpenCode, Muse, or Kimchi. Without a default worker agent, Orchestrator uses the session's worker harness when it is one of those, and Claude Code otherwise. Worker permissions never carry over to a reviewer. Select another reviewer harness explicitly.
 
 These configuration fields choose a reviewer and enable automatic review for new workers. The JSON is a fragment, so keep other fields when using the API:

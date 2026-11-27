@@ -414,10 +414,13 @@ func (f fakePRs) ListPRsBySession(_ context.Context, _ domain.SessionID) ([]doma
 	return f.prs, nil
 }
 
-type fakeProjects struct{ cfg domain.ProjectConfig }
+type fakeProjects struct {
+	cfg  domain.ProjectConfig
+	path string
+}
 
 func (f fakeProjects) GetProject(_ context.Context, id string) (domain.ProjectRecord, bool, error) {
-	return domain.ProjectRecord{ID: id, Config: f.cfg}, true, nil
+	return domain.ProjectRecord{ID: id, Path: f.path, Config: f.cfg}, true, nil
 }
 
 type chatReviewAdapter struct{}

@@ -466,6 +466,7 @@ func startSession(ctx context.Context, cfg config.Config, runtime runtimeselect.
 		Sessions:   store,
 		PRs:        store,
 		Projects:   store,
+		RuleFiles:  gitWS,
 		Launcher: reviewcore.NewLauncher(reviewers, runtime, cfg.DataDir,
 			reviewcore.WithRunFilePath(cfg.RunFilePath),
 			reviewcore.WithAgentAuth(reviewerAgentAuth{readiness: agentReadiness}),
