@@ -693,11 +693,14 @@ func TestAccountHandoffSkippedRetryReleasesTheHeldQueue(t *testing.T) {
 		t.Fatal("handoff finished although its queue release failed")
 	}
 	assertTurnStaysQueued(t, hh.harness, "queued note")
+	if err := hh.st.BindSessionAgentAccount(ctx, testSession, hh.provider, handoffTarget, hh.now().Add(2*time.Second)); err != nil {
+		t.Fatal(err)
+	}
 	hh.advance(16 * time.Second)
 	hh.tick(t)
 
 	if _, found, _ := hh.st.RetryTurnIDForSource(ctx, source.ConversationID, source.ID); found {
-		t.Fatal("retried after the session left the target account")
+		t.Fatal("retried a prompt the handoff had already skipped")
 	}
 	hh.awaitSnapshot(t, func(s store.ConversationSnapshot) bool {
 		return turnStateByText(t, s)["queued note"] == domain.TurnStateRunning

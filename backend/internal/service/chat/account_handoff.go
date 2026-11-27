@@ -54,10 +54,11 @@ type accountHandoff struct {
 	conversationID string
 	sessionID      domain.SessionID
 
-	busy    bool
-	done    bool
-	retryAt time.Time
-	moved   atomic.Bool
+	busy      bool
+	done      bool
+	releasing bool
+	retryAt   time.Time
+	moved     atomic.Bool
 
 	targetAccount string
 	transitionID  string
@@ -206,6 +207,8 @@ func (s *Service) claimAccountHandoffs(ctx context.Context, store accountHandoff
 
 func (s *Service) stepAccountHandoff(ctx context.Context, store accountHandoffStore, deps accountHandoffDeps, h *accountHandoff) (bool, error) {
 	switch {
+	case h.releasing:
+		return s.releaseAccountHandoffQueue(ctx, h)
 	case h.transitionID == "":
 		return s.selectAccountHandoff(ctx, store, deps, h)
 	case !h.moved.Load():
@@ -347,6 +350,7 @@ func (s *Service) recordAccountHandoffRetry(ctx context.Context, h *accountHando
 }
 
 func (s *Service) releaseAccountHandoffQueue(ctx context.Context, h *accountHandoff) (bool, error) {
+	h.releasing = true
 	if holds, ok := s.store.(queueHoldStore); ok {
 		if err := holds.ReleaseConversationQueueHeldBy(ctx, h.conversationID, h.turnID); err != nil {
 			return false, err
