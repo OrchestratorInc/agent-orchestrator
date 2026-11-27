@@ -6,6 +6,10 @@ vi.mock("./ThemeProvider", () => ({
 	useThemeState: () => ({ scheme: "dark" }),
 }));
 vi.mock("./toolbarIcon.android", () => ({ materialDrawable: (name: string) => `drawable:${name}` }));
+vi.mock("react-native", async () => {
+	const React = await import("react");
+	return { View: ({ children, ...props }: { children?: React.ReactNode }) => React.createElement("View", props, children) };
+});
 vi.mock("@expo/ui", async () => {
 	const React = await import("react");
 	return { Host: ({ children, ...props }: { children?: React.ReactNode }) => React.createElement("Host", props, children) };
@@ -129,6 +133,21 @@ describe("ReviewActionButton on iOS", () => {
 	it("ignores the safe area, so scrolling under the header never shifts the capsule", async () => {
 		const root = await render(<IOSReviewActionButton label="Reply" icon={symbols.send} tone="outlined" onPress={() => {}} />);
 		expect(root.findByType("Host" as never).props.ignoreSafeArea).toBe("all");
+	});
+
+	// A Host sized to its content is zero wide on its first frame, and the capsule
+	// drawn centred on that point hung off to the left until the width arrived: a
+	// "slide in from the left" each time a button mounted (Open after Resolved, a
+	// row opening). The button stays hidden until its Host has a width.
+	it("stays hidden until its Host has been given a width", async () => {
+		const root = await render(<IOSReviewActionButton label="Send 7 open to agent" icon={symbols.send} tone="filled" onPress={() => {}} />);
+		const frame = root.findByType("View" as never);
+		const opacity = () => [root.findByType("View" as never).props.style].flat().reduce((value: number, style?: { opacity?: number }) => style?.opacity ?? value, 1);
+		expect(opacity()).toBe(0);
+		await act(async () => { frame.props.onLayout({ nativeEvent: { layout: { x: 0, y: 0, width: 0, height: 44 } } }); });
+		expect(opacity()).toBe(0);
+		await act(async () => { root.findByType("View" as never).props.onLayout({ nativeEvent: { layout: { x: 0, y: 0, width: 173, height: 44 } } }); });
+		expect(opacity()).toBe(1);
 	});
 
 	it("gives a stopping action the destructive role", async () => {
