@@ -39,7 +39,9 @@ const BASE = "https://cp.test";
 vi.mock("../../hooks/useCloudCp", () => ({
 	useCloudCp: () => ({ ready: true, client: cloudMocks, baseUrl: BASE, userId: "u-priya" }),
 }));
-vi.mock("../../hooks/useCloudOffering", () => ({ useCloudOffering: () => ({ features: [] }) }));
+// The control plane offers mentions and comment threads unless a test says it does not.
+const offering = vi.hoisted(() => ({ features: ["mentions"] as string[] }));
+vi.mock("../../hooks/useCloudOffering", () => ({ useCloudOffering: () => offering }));
 vi.mock("../../hooks/useCloudOrg", () => ({ useCloudOrg: () => ({ org: { id: "org-1", displayName: "Northwind", slug: "northwind", role: "member" } }) }));
 // The chat itself is stood in for: it shows the aside pane it is handed, and
 // reports the aside icons' state the surface gives the timeline.
@@ -113,6 +115,7 @@ function renderSurface(queryClient = new QueryClient({ defaultOptions: { queries
 
 beforeEach(() => {
 	localStorage.clear();
+	offering.features = ["mentions"];
 	resetCloudInboxSupport();
 	resetOpenAsides();
 	const pending = peekMentionFocus();
@@ -176,6 +179,19 @@ describe("the conversation", () => {
 		await waitFor(() => expect(cloudMocks.markers?.forMessage(42, "a-1")?.state).toBe("unread"));
 		expect(cloudMocks.listSessionAsides).toHaveBeenCalledWith("org-1", session.id, expect.anything());
 		expect(cloudMocks.markers?.forMessage(40)).toBeUndefined();
+	});
+
+	it("reads no threads and draws no comments, margin icons, highlights or pane while mentions are not offered", async () => {
+		offering.features = [];
+		openAside(session.id, "a-1");
+		renderSurface();
+		await waitFor(() => expect(cloudMocks.chatProps).toHaveBeenCalled());
+		await new Promise((resolve) => setTimeout(resolve, 20));
+		expect(cloudMocks.listSessionAsides).not.toHaveBeenCalled();
+		// No markers: no comment icons, highlights, hover or selection Comment.
+		expect(cloudMocks.markers).toBeUndefined();
+		expect(lastProps().sidePane).toBeUndefined();
+		expect(screen.queryByTestId("aside-pane")).toBeNull();
 	});
 
 	it("draws no comments on a control plane without them", async () => {

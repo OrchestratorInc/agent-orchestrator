@@ -211,7 +211,7 @@ export function NotificationRuntime() {
 	// Whose Cloud inbox is loaded; a new account or organization is a new inbox.
 	const cloudScope = cloudAll.data ? `${cloudUserId}:${cloudOrg?.id ?? ""}` : undefined;
 	// The same count as the bell's.
-	const unreadCount = getCachedUnreadCount(unreadQuery.data) + remoteUnread.totalUnreadCount + (cloudAll.data?.unreadCount ?? 0);
+	const unreadCount = getCachedUnreadCount(unreadQuery.data) + remoteUnread.totalUnreadCount + cloudAll.unreadCount;
 	const params = useParams({ strict: false }) as { hostId?: string; sessionId?: string };
 	const routeRef = useRef(params);
 	routeRef.current = params;
@@ -428,7 +428,7 @@ export function NotificationCenter({ style }: NotificationCenterProps) {
 			hostId: host.hostId, label: host.label, notification,
 		}))),
 	].sort((a, b) => b.notification.createdAt.localeCompare(a.notification.createdAt)), [notifications, remoteItems]);
-	const unreadCount = getCachedUnreadCount(unreadQuery.data) + remoteUnread.totalUnreadCount + (cloudAll.data?.unreadCount ?? 0);
+	const unreadCount = getCachedUnreadCount(unreadQuery.data) + remoteUnread.totalUnreadCount + cloudAll.unreadCount;
 	const confirmedClearSnapshot = isNotificationsCacheFromClear(queryClient);
 	const { openSession } = useNotificationTargetNavigation();
 	const navigateToSession = useNavigateToSession();

@@ -11,6 +11,9 @@ vi.mock("../hooks/useCloudCp", () => ({
 	useCloudCp: () => ({ ready: true, client: mocks, baseUrl: BASE, userId: "u-priya" }),
 }));
 vi.mock("../hooks/useWindowAttention", () => ({ useWindowAttention: () => true }));
+// Mentions and comment threads are offered unless a test says they are not.
+const offered = vi.hoisted(() => ({ mentions: true }));
+vi.mock("../hooks/useMentionsOffered", () => ({ useMentionsOffered: () => offered.mentions }));
 vi.mock("../hooks/useCloudNotifications", async (importOriginal) => ({
 	...(await importOriginal<typeof import("../hooks/useCloudNotifications")>()),
 	useCloudInboxSupport: () => "supported",
@@ -27,6 +30,7 @@ const page = (items: CloudCpNotification[]): CloudCpNotificationListResponse =>
 let errors: ReturnType<typeof vi.spyOn>;
 beforeEach(() => {
 	mocks.changeMyNotificationState.mockReset().mockResolvedValue(undefined);
+	offered.mentions = true;
 	errors = vi.spyOn(console, "error").mockImplementation(() => undefined);
 });
 afterEach(() => errors.mockRestore());
@@ -56,5 +60,20 @@ describe("CloudSessionNotificationReader", () => {
 		expect(queryClient.getQueryState(key)?.status).toBe("success");
 		await waitFor(() => expect(mocks.changeMyNotificationState).toHaveBeenCalledWith({ orgId: "org-1", sessionId: "session-1", read: true }));
 		expect(errors.mock.calls.flat().map(String).join(" ")).not.toMatch(/skipToken|Missing queryFn/);
+	});
+});
+
+describe("CloudSessionNotificationReader behind the mentions feature", () => {
+	it("reads nothing while the control plane does not offer mentions", async () => {
+		offered.mentions = false;
+		const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+		queryClient.setQueryData(cloudInboxQueryKey(BASE, "u-priya"), page([mention]));
+		render(
+			<QueryClientProvider client={queryClient}>
+				<CloudSessionNotificationReader orgId="org-1" sessionId="session-1" />
+			</QueryClientProvider>,
+		);
+		await act(async () => undefined);
+		expect(mocks.changeMyNotificationState).not.toHaveBeenCalled();
 	});
 });

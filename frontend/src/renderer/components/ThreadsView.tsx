@@ -1,11 +1,14 @@
 import { useCallback, useEffect, useId, useMemo, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { useNavigate } from "@tanstack/react-router";
 import { useTranslation } from "react-i18next";
 import { BellOff, Loader2, MessagesSquare } from "@/components/app-icons";
 import { useCloudCp } from "../hooks/useCloudCp";
+import { useCloudOffering } from "../hooks/useCloudOffering";
 import { useCommentThreadList, useUnreadCommentThreads } from "../hooks/useCommentThreads";
 import { useWindowAttention } from "../hooks/useWindowAttention";
 import { closeThreadInView, cloudCommentThreadsRootKey, openThreadInView, useThreadInView, type ThreadInView } from "../lib/cloud-asides";
+import { MENTIONS_FEATURE } from "../lib/cloud-offering";
 import type { CloudCpCommentThread, CloudCpSession } from "../lib/cloud-cp/types";
 import { formatTimeCompact } from "../lib/format-time";
 import { cn } from "../lib/utils";
@@ -27,7 +30,22 @@ import { Switch } from "./ui/switch";
 
 type ThreadStatus = "open" | "resolved";
 
+/**
+ * The Threads page, only while the offering lists mentions (MENTIONS_FEATURE).
+ * Without it the sidebar has no Threads item; a route that still lands here (a
+ * restored or typed address) goes home once the offering has loaded.
+ */
 export function ThreadsView() {
+	const offering = useCloudOffering();
+	const offered = offering.features?.includes(MENTIONS_FEATURE) === true;
+	const navigate = useNavigate();
+	useEffect(() => {
+		if (offering.loaded && !offered) void navigate({ to: "/" });
+	}, [navigate, offered, offering.loaded]);
+	return offered ? <ThreadsPage /> : null;
+}
+
+function ThreadsPage() {
 	const { t } = useTranslation();
 	const [status, setStatus] = useState<ThreadStatus>("open");
 	const [unreadOnly, setUnreadOnly] = useState(false);

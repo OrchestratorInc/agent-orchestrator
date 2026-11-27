@@ -96,7 +96,7 @@ vi.mock("../hooks/useWorkspaceQuery", () => ({
 	workspaceQueryKey: ["workspaces"],
 }));
 vi.mock("../hooks/useCloudNotifications", () => ({
-	useCloudNotifications: () => ({ data: { items: [], unreadCount: 0 }, isLoading: false, markAllRead: vi.fn() }),
+	useCloudNotifications: () => ({ data: { items: [], unreadCount: 0 }, unreadCount: 0, isLoading: false, markAllRead: vi.fn() }),
 }));
 vi.mock("../hooks/useRestoreSession", () => ({ useRestoreSession: () => vi.fn() }));
 vi.mock("../lib/host-clients", () => ({ clientForHost: (hostId: string) => mocks.clientForHost(hostId) }));

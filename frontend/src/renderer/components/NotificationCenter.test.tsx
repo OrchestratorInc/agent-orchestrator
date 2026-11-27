@@ -134,6 +134,7 @@ function cloudNotificationsResult(items: CloudCpNotification[]) {
 	return {
 		data: { items, unreadCount: items.filter((item) => item.status === "unread").length },
 		items,
+		unreadCount: items.filter((item) => item.status === "unread").length,
 		isLoading: false,
 		markAllRead: cloudMarkAllReadMock,
 		markRead: cloudMarkReadMock,

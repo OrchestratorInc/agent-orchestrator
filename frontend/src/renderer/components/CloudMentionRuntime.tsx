@@ -3,6 +3,7 @@ import { useQueryClient } from "@tanstack/react-query";
 import { useNavigate, useParams } from "@tanstack/react-router";
 import { useUnreadCommentThreads } from "../hooks/useCommentThreads";
 import { useCloudCp } from "../hooks/useCloudCp";
+import { useMentionsOffered } from "../hooks/useMentionsOffered";
 import { useNotificationPreferences } from "../hooks/useNotificationPreferences";
 import { aoBridge } from "../lib/bridge";
 import {
@@ -100,12 +101,17 @@ export function useOpenThreadInSession(): (target: ThreadSessionTarget) => void 
  * opening it is instant), and a desktop alert shows when the person's
  * preference allows it, unless that session is on screen in the focused
  * window. It alerts even while AO is focused on another session. A newer one
- * in the same session replaces its alert. Lives in the shell, beside
+ * in the same session replaces its alert. Nothing alerts while the offering
+ * does not list mentions (MENTIONS_FEATURE). Lives in the shell, beside
  * NotificationRuntime.
  */
 export function CloudMentionRuntime() {
 	const queryClient = useQueryClient();
 	const { client, ready, baseUrl, userId } = useCloudCp();
+	// Mentions and comment threads are on only while the offering lists them.
+	const offered = useMentionsOffered(ready);
+	const offeredRef = useRef(offered);
+	offeredRef.current = offered;
 	const { preferences } = useNotificationPreferences(ready);
 	const openMention = useOpenMention();
 	const params = useParams({ strict: false }) as { hostId?: string; sessionId?: string };
@@ -117,6 +123,7 @@ export function CloudMentionRuntime() {
 	const shown = useRef(new Map<string, MentionOpenTarget>());
 
 	useEffect(() => subscribeLiveCloudNotificationEvents((event) => {
+		if (!offeredRef.current) return;
 		const target = mentionOpenTarget(event.notification);
 		if (!target) return;
 		// A mention or reply in a thread: the threads view and its badge change.

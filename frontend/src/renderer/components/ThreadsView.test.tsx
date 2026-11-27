@@ -20,12 +20,17 @@ const mocks = vi.hoisted(() => ({
 	listMentionCandidates: vi.fn(),
 	getSession: vi.fn(),
 	openInSession: vi.fn(),
+	navigate: vi.fn(),
 }));
 vi.mock("../hooks/useCloudCp", () => ({
 	useCloudCp: () => ({ ready: true, client: mocks, baseUrl: "https://cp.test", userId: "u-priya" }),
 }));
 vi.mock("../hooks/useWindowAttention", () => ({ useWindowAttention: () => true }));
 vi.mock("./CloudMentionRuntime", () => ({ useOpenThreadInSession: () => mocks.openInSession }));
+// The control plane offers mentions and comment threads unless a test says it does not.
+const offering = vi.hoisted(() => ({ features: ["mentions"] as string[], loaded: true }));
+vi.mock("../hooks/useCloudOffering", () => ({ useCloudOffering: () => offering }));
+vi.mock("@tanstack/react-router", async (original) => ({ ...(await original<typeof import("@tanstack/react-router")>()), useNavigate: () => mocks.navigate }));
 
 const at = "2026-11-24T10:00:00Z";
 
@@ -82,12 +87,30 @@ function renderView() {
 
 beforeEach(() => {
 	for (const mock of Object.values(mocks)) mock.mockReset();
+	offering.features = ["mentions"];
 	closeThreadInView();
 	mocks.listMyCommentThreads.mockResolvedValue(page([]));
 	mocks.countMyUnreadCommentThreads.mockResolvedValue({ count: 0 });
 	mocks.getSessionAside.mockImplementation(async (_org: string, _session: string, asideId: string) => thread(asideId));
 	mocks.markSessionAsideRead.mockImplementation(async (_org: string, _session: string, asideId: string) => ({ ...thread(asideId).aside, unread: false }));
 	mocks.listMentionCandidates.mockResolvedValue({ people: [], teams: [] });
+});
+
+describe("the threads view behind the mentions feature", () => {
+	it("reads no threads and goes home while the control plane does not offer mentions", async () => {
+		offering.features = [];
+		renderView();
+		await waitFor(() => expect(mocks.navigate).toHaveBeenCalledWith({ to: "/" }));
+		expect(screen.queryByTestId("threads-view")).toBeNull();
+		expect(mocks.listMyCommentThreads).not.toHaveBeenCalled();
+		expect(mocks.countMyUnreadCommentThreads).not.toHaveBeenCalled();
+	});
+
+	it("shows the page while it does", async () => {
+		renderView();
+		expect(await screen.findByTestId("threads-view")).toBeInTheDocument();
+		expect(mocks.navigate).not.toHaveBeenCalled();
+	});
 });
 
 describe("the threads view's tabs and filter", () => {

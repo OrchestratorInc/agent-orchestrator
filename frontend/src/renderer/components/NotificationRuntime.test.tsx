@@ -49,7 +49,7 @@ const { setBadge, show, clickListeners, navigateToSession, cloud } = vi.hoisted(
 vi.mock("@tanstack/react-router", () => ({ useNavigate: () => vi.fn(), useParams: () => ({}) }));
 vi.mock("../lib/navigate-to-session", () => ({ useNavigateToSession: () => navigateToSession }));
 vi.mock("../hooks/useCloudNotifications", () => ({
-	useCloudNotifications: () => ({ data: cloud.data, items: cloud.data?.items }),
+	useCloudNotifications: () => ({ data: cloud.data, items: cloud.data?.items, unreadCount: cloud.data?.unreadCount ?? 0 }),
 }));
 // The whole shape: the runtime also mounts CloudMentionRuntime, which reads the
 // base URL and client. Not ready, so it loads no notification settings.

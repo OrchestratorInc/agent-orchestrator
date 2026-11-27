@@ -7,7 +7,7 @@ import { useCloudCp } from "../../hooks/useCloudCp";
 import { useCachedQueryData } from "../../hooks/useCloudScriptRuns";
 import { invalidateCloudModelCatalogs } from "../../hooks/useCloudModelCatalog";
 import { useCloudOffering } from "../../hooks/useCloudOffering";
-import { QUEUED_DELETE_FEATURE, QUEUED_EDIT_FEATURE, QUEUED_STEER_FEATURE } from "../../lib/cloud-offering";
+import { MENTIONS_FEATURE, QUEUED_DELETE_FEATURE, QUEUED_EDIT_FEATURE, QUEUED_STEER_FEATURE } from "../../lib/cloud-offering";
 import type { ShellTerminal } from "../../hooks/useShellTerminals";
 import { useRestoreSession } from "../../hooks/useRestoreSession";
 import { useCloudSessionStartRequestInFlight, useCloudWorkspaceReady } from "../../hooks/useCloudWorkspaceReady";
@@ -2633,8 +2633,11 @@ export function CloudSessionChatSurface({
 	// The @ menu: people who can open this session and the workspace's teams, as
 	// the control plane lists them, on a control plane that has mentions.
 	const { org: activeOrg } = useCloudOrg();
+	// Mentions and comment threads show only while the control plane offers
+	// them; without the feature this session draws as it did before them.
+	const mentionsOffered = offering.features.includes(MENTIONS_FEATURE);
 	const inboxSupport = useCloudInboxSupport(baseUrl);
-	const mentionsOn = Boolean(cloud && ready && inboxSupport === "supported" && session.isTerminated !== true && !readOnly);
+	const mentionsOn = Boolean(cloud && ready && mentionsOffered && inboxSupport === "supported" && session.isTerminated !== true && !readOnly);
 	const [mentionQuery, setMentionQuery] = useState<string>();
 	const [settledMentionQuery, setSettledMentionQuery] = useState<string>();
 	useEffect(() => {
@@ -2673,7 +2676,7 @@ export function CloudSessionChatSurface({
 	// state and the passages to highlight; a control plane without comments
 	// answers it with an error, and then every message draws as before.
 	const chatEvents = eventsQuery.data ?? fallbackEvents;
-	const asidesOn = Boolean(cloud && ready);
+	const asidesOn = Boolean(cloud && ready && mentionsOffered);
 	const asides = useQuery<CloudCpAsideListResponse>({
 		queryKey: cloudAsidesKey(cloud?.orgId ?? "", session.id),
 		enabled: asidesOn,
@@ -2695,7 +2698,7 @@ export function CloudSessionChatSurface({
 		void queryClient.invalidateQueries({ queryKey: cloudAsidesKey(cloud?.orgId ?? "", session.id) });
 	}, [asidesOn, cloud?.orgId, newestAsideEvent, queryClient, session.id]);
 	const openAsideState = useOpenAside(session.id);
-	const shownAside = cloud && chatInFront ? openAsideState : undefined;
+	const shownAside = cloud && chatInFront && mentionsOffered ? openAsideState : undefined;
 	const commentMarkers = useMemo<CommentMarkers | undefined>(() => {
 		if (!asidesOn || !asides.isSuccess) return undefined;
 		const open = (asides.data?.items ?? []).filter(asideIsOpen);

@@ -157,6 +157,11 @@ export function activeCloudNotification(row: Pick<CloudCpNotification, "type" | 
 	return !row.resolvedAt || (row.type !== MENTIONED && row.type !== ASIDE_REPLY);
 }
 
+/** A mention or comment thread row, shown only while the offering lists mentions (MENTIONS_FEATURE). */
+export function mentionsNotification(row: Pick<CloudCpNotification, "type">): boolean {
+	return row.type === MENTIONED || row.type === ASIDE_REPLY;
+}
+
 /** An aside reply notification's metadata, read defensively like a mention's. */
 export function asideReplyMetadata(row: Pick<CloudCpNotification, "type" | "metadata">): CloudCpAsideReplyNotificationMetadata | undefined {
 	if (row.type !== ASIDE_REPLY) return undefined;

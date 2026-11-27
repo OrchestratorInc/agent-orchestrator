@@ -42,6 +42,13 @@ export const QUEUED_STEER_FEATURE = "queued-steer";
  * Coder and Freestyle, and the org may run Coder as its own.
  */
 export const ORCHESTRATOR_ON_CODER_FEATURE = "orchestrator-on-coder";
+/**
+ * Offering feature the control plane sends while @mentions and comment threads
+ * are on for its deployment: the @ menu's people and teams, comments
+ * on messages and passages, "Also send to agent", the Threads view, and the
+ * mention and thread notifications. Without it none of them show.
+ */
+export const MENTIONS_FEATURE = "mentions";
 /** The largest Cloud attachment when the control plane takes files but names no limit. */
 export const CLOUD_MAX_ATTACHMENT_BYTES = 25 * 1024 * 1024;
 

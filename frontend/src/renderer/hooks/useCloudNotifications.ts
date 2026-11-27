@@ -10,6 +10,7 @@ import {
 	cloudInboxUnavailable,
 	cloudNotificationsQueryKey,
 	MENTIONED,
+	mentionsNotification,
 	probeCloudInbox,
 	publishLiveCloudNotificationEvent,
 	subscribeCloudInboxSupport,
@@ -20,6 +21,7 @@ import type { CloudCpClient } from "../lib/cloud-cp/client";
 import type { CloudCpNotification, CloudCpNotificationListResponse } from "../lib/cloud-cp/types";
 import { useCloudCp } from "./useCloudCp";
 import { useCloudOrg } from "./useCloudOrg";
+import { useMentionsOffered } from "./useMentionsOffered";
 import { cloudSessionsQueryKey, sharedCloudWorkspacesQueryKey } from "./useWorkspaceQuery";
 import { orchestratorChildrenQueryKey } from "./useOrchestratorChildren";
 
@@ -68,6 +70,8 @@ export function useCloudNotifications(
 	const support = useCloudInboxSupport(base);
 	const confirmed = useSyncExternalStore(subscribeCloudInboxSupport, () => cloudInboxSupportConfirmed(base));
 	const signedIn = ready && base !== "" && userId !== "";
+	// Mention and comment thread rows show only while the offering lists mentions.
+	const mentionsOffered = useMentionsOffered(ready);
 	const mode: CloudNotificationsMode = !signedIn ? "pending" : support === "supported" ? "inbox" : support === "unsupported" ? "legacy" : "pending";
 
 	// The inbox read doubles as the probe that tells the two lists apart. A
@@ -100,8 +104,12 @@ export function useCloudNotifications(
 	const items = useMemo(() => {
 		const state = parseClears(clears);
 		// A resolved mention or aside reply is done: it leaves the bell.
-		return (loaded ?? EMPTY).filter((item) => !isCleared(item, state) && activeCloudNotification(item));
-	}, [clears, loaded]);
+		return (loaded ?? EMPTY).filter((item) => !isCleared(item, state) && activeCloudNotification(item) && (mentionsOffered || !mentionsNotification(item)));
+	}, [clears, loaded, mentionsOffered]);
+	// The server's unread total, less the unread mention and thread rows it lists
+	// while mentions are not offered (they are not shown, so they are not counted).
+	const hiddenUnread = mentionsOffered ? 0 : (loaded ?? EMPTY).filter((item) => item.status === "unread" && mentionsNotification(item)).length;
+	const unreadCount = Math.max(0, (mode === "pending" ? 0 : active.data?.unreadCount ?? 0) - hiddenUnread);
 
 	// A cleared row the control plane re-raises (in place: status back to unread,
 	// updated_at bumped, as a repeated mention does) is revived for good, so
@@ -192,6 +200,7 @@ export function useCloudNotifications(
 		isLoading: signedIn && (mode === "pending" ? inboxQuery.isLoading : active.isLoading),
 		mode,
 		items,
+		unreadCount,
 		markAllRead,
 		markRead,
 		clearAll,

@@ -18,6 +18,9 @@ const noInbox = () => vi.fn().mockRejectedValue(new CloudCpError("Not found.", {
 
 vi.mock("./useCloudCp", () => ({ useCloudCp: () => cloudCpMock() }));
 vi.mock("./useCloudOrg", () => ({ useCloudOrg: () => ({ org: { id: "org-1" } }) }));
+// Mentions and comment threads are offered unless a test says they are not.
+const offered = vi.hoisted(() => ({ mentions: true }));
+vi.mock("./useMentionsOffered", () => ({ useMentionsOffered: () => offered.mentions }));
 vi.mock("./useWorkspaceQuery", () => ({ cloudSessionsQueryKey: ["cloud-sessions"], sharedCloudWorkspacesQueryKey: ["cloud-shared-workspaces"] }));
 vi.mock("./useOrchestratorChildren", () => ({ orchestratorChildrenQueryKey: ["orchestrator-children"] }));
 vi.mock("../lib/cloud-cp/stream-bridge", () => ({ subscribeNotificationEventsBridged: subscribeNotificationsMock, subscribeMyNotificationEventsBridged: subscribeMyNotificationsMock }));
@@ -264,6 +267,25 @@ describe("the personal inbox (/me)", () => {
 		resetCloudInboxSupport();
 		subscribeMyNotificationsMock.mockReset().mockResolvedValue(undefined);
 		subscribeNotificationsMock.mockClear();
+		offered.mentions = true;
+	});
+
+	it("hides mention and thread rows, and leaves them out of the unread count, while mentions are not offered", async () => {
+		offered.mentions = false;
+		const reply = mention({ id: "cntf_reply", type: "aside_reply", title: "Dana Kim replied", metadata: { asideId: "a-1", replyId: "r-1", authorName: "Dana Kim", sequence: 42 } });
+		const ready = cloudRow({ id: "cntf_ready", status: "unread" });
+		const listMyNotifications = vi.fn(async () => ({ ...page([mention(), reply, ready]), unreadCount: 3 }));
+		const { result } = renderInbox({ listMyNotifications });
+		await waitFor(() => expect(result.current.items.map((row) => row.id)).toEqual(["cntf_ready"]));
+		expect(result.current.unreadCount).toBe(1);
+	});
+
+	it("shows them and counts them while mentions are offered", async () => {
+		const ready = cloudRow({ id: "cntf_ready", status: "unread" });
+		const listMyNotifications = vi.fn(async () => ({ ...page([mention(), ready]), unreadCount: 2 }));
+		const { result } = renderInbox({ listMyNotifications });
+		await waitFor(() => expect(result.current.items.map((row) => row.id)).toEqual(["cntf_mention", "cntf_ready"]));
+		expect(result.current.unreadCount).toBe(2);
 	});
 
 	it("lists the caller's notifications from every organization, a guest's mention included", async () => {

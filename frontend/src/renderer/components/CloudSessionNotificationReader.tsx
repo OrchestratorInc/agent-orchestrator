@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { readCloudSessionMentions, useCloudInboxSupport } from "../hooks/useCloudNotifications";
 import { useCloudCp } from "../hooks/useCloudCp";
+import { useMentionsOffered } from "../hooks/useMentionsOffered";
 import { useCachedQueryData } from "../hooks/useCloudScriptRuns";
 import { ASIDE_REPLY, cloudInboxQueryKey, MENTIONED } from "../lib/cloud-notifications";
 import type { CloudCpNotificationListResponse } from "../lib/cloud-cp/types";
@@ -15,13 +16,15 @@ import { useWindowAttention } from "../hooks/useWindowAttention";
  * badge shows; a reply's aside icon keeps its dot). Settings covering the
  * session does not count. It only reads the
  * inbox the shell keeps live, and is its own component, so the inbox and
- * window focus it watches never re-render the session view.
+ * window focus it watches never re-render the session view. Nothing is read
+ * while the offering does not list mentions (the bell does not show those rows).
  */
 export function CloudSessionNotificationReader({ orgId, sessionId }: { orgId: string; sessionId: string }) {
 	const settingsOpen = useUiStore((state) => state.settingsModal?.scope === "global");
 	const queryClient = useQueryClient();
 	const { client, ready, baseUrl, userId } = useCloudCp();
-	const supported = useCloudInboxSupport(baseUrl) === "supported";
+	const offered = useMentionsOffered(ready, orgId);
+	const supported = useCloudInboxSupport(baseUrl) === "supported" && offered;
 	// Read from the cache, never as an observer: an observer's options become the
 	// query's, and a skipToken one would leave the bell's next refresh nothing to fetch with.
 	const inbox = useCachedQueryData<CloudCpNotificationListResponse>(cloudInboxQueryKey(baseUrl, userId), true);

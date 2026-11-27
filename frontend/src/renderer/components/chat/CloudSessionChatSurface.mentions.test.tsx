@@ -23,7 +23,9 @@ const BASE = "https://cp.test";
 vi.mock("../../hooks/useCloudCp", () => ({
 	useCloudCp: () => ({ ready: true, client: cloudMocks, baseUrl: BASE, userId: "u-priya" }),
 }));
-vi.mock("../../hooks/useCloudOffering", () => ({ useCloudOffering: () => ({ features: [] }) }));
+// The control plane offers mentions and comment threads unless a test says it does not.
+const offering = vi.hoisted(() => ({ features: ["mentions"] as string[] }));
+vi.mock("../../hooks/useCloudOffering", () => ({ useCloudOffering: () => offering }));
 vi.mock("../../hooks/useCloudOrg", () => ({ useCloudOrg: () => ({ org: { id: "org-1", displayName: "Northwind", slug: "northwind", role: "member" } }) }));
 vi.mock("./ChatWorkspace", () => ({
 	ChatWorkspace: (props: unknown) => {
@@ -96,6 +98,7 @@ function renderSurface(queryClient = new QueryClient({ defaultOptions: { queries
 
 beforeEach(() => {
 	localStorage.clear();
+	offering.features = ["mentions"];
 	resetCloudInboxSupport();
 	const pending = peekMentionFocus();
 	if (pending) clearMentionFocus(pending.sessionId, pending.nonce);
@@ -216,6 +219,16 @@ describe("sending mentions", () => {
 });
 
 describe("the @ menu's source", () => {
+	it("offers no people or teams while the control plane does not offer mentions, and files stay", async () => {
+		recordCloudInboxSupport(BASE, "supported");
+		offering.features = [];
+		renderSurface();
+		await waitFor(() => expect(cloudMocks.chatProps).toHaveBeenCalled());
+		await new Promise((resolve) => setTimeout(resolve, 20));
+		expect(lastProps().composerMentions).toBeUndefined();
+		expect(cloudMocks.listMentionCandidates).not.toHaveBeenCalled();
+	});
+
 	it("offers no people or teams on a control plane without mentions", async () => {
 		recordCloudInboxSupport(BASE, "unsupported");
 		renderSurface();

@@ -1,17 +1,22 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { render, screen, waitFor } from "@testing-library/react";
+import { act, render, renderHook, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { CloudCpError } from "../../lib/cloud-cp/errors";
 import { recordCloudInboxSupport, resetCloudInboxSupport } from "../../lib/cloud-notifications";
 import { visibleGlobalSettings } from "./settingsCatalog";
 import { NotificationsSection } from "./NotificationsSection";
+import { useNotificationPreferences } from "../../hooks/useNotificationPreferences";
+import type { ReactNode } from "react";
 
 const client = vi.hoisted(() => ({
 	getMyNotificationPreferences: vi.fn(),
 	setMyNotificationPreferences: vi.fn(),
 }));
 vi.mock("../../hooks/useCloudCp", () => ({ useCloudCp: () => ({ ready: true, client, baseUrl: "https://cp.test", userId: "u-1" }) }));
+// Mentions and comment threads are offered unless a test says they are not.
+const offered = vi.hoisted(() => ({ mentions: true }));
+vi.mock("../../hooks/useMentionsOffered", () => ({ useMentionsOffered: () => offered.mentions }));
 
 function renderSection() {
 	const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
@@ -20,6 +25,7 @@ function renderSection() {
 
 beforeEach(() => {
 	localStorage.clear();
+	offered.mentions = true;
 	resetCloudInboxSupport();
 	recordCloudInboxSupport("https://cp.test", "supported");
 	client.getMyNotificationPreferences.mockReset().mockResolvedValue({ mentions: true, teamMentions: true });
@@ -103,5 +109,27 @@ describe("the Notifications page in the rail", () => {
 		await new Promise((resolve) => setTimeout(resolve, 20));
 		expect(client.getMyNotificationPreferences).not.toHaveBeenCalled();
 		expect(screen.queryByRole("switch")).toBeNull();
+	});
+});
+
+describe("the Notifications page behind the mentions feature", () => {
+	function renderPreferences() {
+		const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+		const wrapper = ({ children }: { children: ReactNode }) => <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>;
+		return renderHook(() => useNotificationPreferences(), { wrapper });
+	}
+
+	it("is not listed, and reads nothing, while the control plane does not offer mentions", async () => {
+		offered.mentions = false;
+		const { result } = renderPreferences();
+		await act(async () => undefined);
+		expect(result.current.available).toBe(false);
+		expect(client.getMyNotificationPreferences).not.toHaveBeenCalled();
+	});
+
+	it("is listed once read while it does", async () => {
+		const { result } = renderPreferences();
+		await waitFor(() => expect(result.current.available).toBe(true));
+		expect(client.getMyNotificationPreferences).toHaveBeenCalledTimes(1);
 	});
 });

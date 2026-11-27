@@ -33,6 +33,9 @@ vi.mock("../lib/bridge", () => ({
 vi.mock("@tanstack/react-router", () => ({ useNavigate: () => mocks.navigate, useParams: () => mocks.params }));
 vi.mock("../hooks/useCloudCp", () => ({ useCloudCp: () => ({ ready: true, client: mocks.client, baseUrl: "https://cp.test", userId: "u-priya" }) }));
 vi.mock("../hooks/useNotificationPreferences", () => ({ useNotificationPreferences: () => ({ preferences: mocks.preferences }) }));
+// Mentions and comment threads are offered unless a test says they are not.
+const offered = vi.hoisted(() => ({ mentions: true }));
+vi.mock("../hooks/useMentionsOffered", () => ({ useMentionsOffered: () => offered.mentions }));
 vi.mock("../lib/cloud-mention-open", async (original) => ({
 	...await original<typeof import("../lib/cloud-mention-open")>(),
 	prefetchMentionedSession: mocks.prefetch,
@@ -68,6 +71,7 @@ function renderRuntime() {
 
 beforeEach(() => {
 	mocks.show.mockReset();
+	offered.mentions = true;
 	mocks.navigate.mockReset();
 	mocks.prefetch.mockClear();
 	mocks.params = { sessionId: undefined, hostId: undefined };
@@ -91,6 +95,15 @@ const replyRow = (overrides: Partial<CloudCpNotification> = {}) => row({
 });
 
 describe("CloudMentionRuntime", () => {
+	it("neither alerts nor reads anything for a mention or reply while mentions are not offered", () => {
+		offered.mentions = false;
+		renderRuntime();
+		act(() => publishLiveCloudNotificationEvent(event(row())));
+		act(() => publishLiveCloudNotificationEvent(event(replyRow())));
+		expect(mocks.show).not.toHaveBeenCalled();
+		expect(mocks.prefetch).not.toHaveBeenCalled();
+	});
+
 	it("alerts on the desktop for a mention, one alert per session, and reads the session into the cache", () => {
 		renderRuntime();
 		act(() => publishLiveCloudNotificationEvent(event(row())));
