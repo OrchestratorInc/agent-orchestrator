@@ -1351,7 +1351,8 @@ export function XtermTerminal(props: XtermTerminalProps) {
 			event.preventDefault();
 		};
 		const copyShortcut = (event: KeyboardEvent) => {
-			if (isTerminalSearchEvent(event) || !isTerminalCopyShortcut(event) || !terminalHasFocus(shell) || !copySelection()) return;
+			// A Find binding on a copy chord (e.g. Ctrl+Shift+C) opens search instead.
+			if (isTerminalSearchEvent(event) || isTerminalSearchShortcut(event) || !isTerminalCopyShortcut(event) || !terminalHasFocus(shell) || !copySelection()) return;
 			event.preventDefault();
 			event.stopPropagation();
 		};

@@ -1180,6 +1180,25 @@ describe("XtermTerminal", () => {
 		expect(window.ao!.clipboard.writeText).toHaveBeenCalledWith("focused copied selection");
 	});
 
+	it("leaves a Find binding on the copy chord to terminal search", () => {
+		useKeybindingsStore.setState({ overrides: { "find-in-chat": [{ key: "c", ctrl: true, meta: false, shift: true, alt: false }] } });
+		const { container } = render(<XtermTerminal theme="dark" />);
+		state.lastTerminal!.selection = "selected text";
+		container.querySelector("textarea")!.focus();
+
+		const event = new KeyboardEvent("keydown", {
+			bubbles: true,
+			cancelable: true,
+			key: "C",
+			ctrlKey: true,
+			shiftKey: true,
+		});
+		window.dispatchEvent(event);
+
+		expect(event.defaultPrevented).toBe(false);
+		expect(window.ao!.clipboard.writeText).not.toHaveBeenCalled();
+	});
+
 	it("opens a themed context menu on right-click and disables Copy without a selection", async () => {
 		const { container } = render(<XtermTerminal theme="dark" />);
 		const host = container.firstElementChild!;
