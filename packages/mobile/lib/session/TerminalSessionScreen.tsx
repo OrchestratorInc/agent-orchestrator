@@ -195,7 +195,9 @@ export default function TerminalScreen({ session: resolved }: { session?: RouteS
 				if (!switchingRef.current) showNotice(terminalExitedCopy(code), code === 0 ? "info" : "error");
 				setNotFound(true);
 			},
-			onOutput: (bytes) => {
+			// Only output that reached a ready xterm: a chunk held while the
+			// WebView is replaced is not on screen yet.
+			onDrawn: (bytes) => {
 				if (paintedRef.current || !detectPaintRef.current(bytes)) return;
 				paintedRef.current = true;
 				setPainted(true);

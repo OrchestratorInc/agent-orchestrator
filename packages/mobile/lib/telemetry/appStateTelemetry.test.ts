@@ -73,6 +73,34 @@ describe("returns to the app", () => {
 	});
 });
 
+describe("the state at launch", () => {
+	// A push woke the app: nothing counts as on screen until it comes to the front.
+	it("starts in the background without a return or a stall probe", () => {
+		const before = requestStartedIn();
+		const t = setup({ initial: "background" });
+		expect(t.tracker.setForeground).toHaveBeenCalledWith(false);
+		expect(t.stalls.start).not.toHaveBeenCalled();
+		expect(requestStartedIn()).not.toBe(before);
+		t.app.change("active");
+		expect(t.tracker.resumed).toHaveBeenCalledTimes(1);
+		expect(t.stalls.start).toHaveBeenCalledTimes(1);
+	});
+
+	it("starting inactive runs no stall probe and is not a return", () => {
+		const t = setup({ initial: "inactive" });
+		expect(t.stalls.start).not.toHaveBeenCalled();
+		expect(t.tracker.setForeground).not.toHaveBeenCalled();
+		t.app.change("active");
+		expect(t.stalls.start).toHaveBeenCalledTimes(1);
+		expect(t.tracker.resumed).not.toHaveBeenCalled();
+	});
+
+	it("treats no state yet as in front", () => {
+		const t = setup({ initial: "unknown" });
+		expect(t.stalls.start).toHaveBeenCalledTimes(1);
+	});
+});
+
 describe("stall probe", () => {
 	it("runs only while in front", () => {
 		const t = setup();
@@ -99,6 +127,23 @@ describe("stall probe", () => {
 		t.app.dispose();
 		expect(t.stalls.stop).toHaveBeenCalled();
 		expect(t.listeners.size).toBe(0);
+	});
+});
+
+describe("requests across a consent change", () => {
+	// Opting out discards the window; a request from before it must not land in the next one.
+	it("are not timed", () => {
+		const t = setup();
+		setUiUsageTracker(t.tracker as unknown as UiUsageTracker);
+		try {
+			const before = requestStartedIn();
+			t.setEnabled(false);
+			t.setEnabled(true);
+			reportRequestTimed(300, "lan", true, before);
+			expect(t.tracker.requestTimed).not.toHaveBeenCalled();
+		} finally {
+			setUiUsageTracker(null);
+		}
 	});
 });
 

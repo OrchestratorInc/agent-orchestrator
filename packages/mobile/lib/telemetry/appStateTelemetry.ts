@@ -25,12 +25,14 @@ export type AppStateTelemetry = {
 };
 
 export function createAppStateTelemetry(deps: AppStateTelemetryDeps): AppStateTelemetry {
-	let inFront = deps.initial !== "background";
+	// In front unless it started in the background or `inactive`. Android can
+	// report no state yet at launch (null or "unknown"), which is in front.
+	let inFront = deps.initial !== "background" && deps.initial !== "inactive";
 	// Set only when the app really went to the background. iOS also passes
 	// through `inactive` for Control Center, Notification Center, the app
 	// switcher, Face ID and system alerts: the app never left and polling kept
 	// running, so coming back from those is not a return.
-	let wasBackground = !inFront;
+	let wasBackground = deps.initial === "background";
 
 	// The stall probe runs only while the app is in front and telemetry is on.
 	const syncStalls = () => {
@@ -38,6 +40,12 @@ export function createAppStateTelemetry(deps: AppStateTelemetryDeps): AppStateTe
 		else deps.stalls.stop();
 	};
 	syncStalls();
+	// A launch in the background (a push woke the app): the tracker starts out
+	// in front, and time before the first `active` is not time on screen.
+	if (wasBackground) {
+		noteBackgrounded();
+		deps.tracker()?.setForeground(false);
+	}
 	const offEnabled = deps.tracker()?.onEnabledChange(syncStalls);
 
 	return {
