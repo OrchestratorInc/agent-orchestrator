@@ -170,6 +170,34 @@ describe("settling under a reader who scrolled up", () => {
 		expect(log.scrollTop).toBe(100);
 	});
 
+	it("does not pull the reader to the bottom when a turn settles during an upward wheel hold", () => {
+		let now = 0;
+		const nowSpy = vi.spyOn(performance, "now").mockImplementation(() => now);
+		const { rerender } = render(<ChatWorkspace snapshot={snapshot("running", items)} />);
+		const log = screen.getByRole("log", { name: "Conversation" });
+		const bounds = HTMLElement.prototype.getBoundingClientRect;
+		const spy = vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(function (this: HTMLElement) {
+			if (this === log) return { ...bounds.call(this), top: 0, bottom: 800, height: 800 } as DOMRect;
+			return bounds.call(this);
+		});
+		restoreLayout = () => {
+			spy.mockRestore();
+			nowSpy.mockRestore();
+		};
+		Object.defineProperty(log, "scrollHeight", { configurable: true, value: 3000 });
+		Object.defineProperty(log, "clientHeight", { configurable: true, value: 800 });
+		Object.defineProperty(log, "scrollTop", { configurable: true, writable: true, value: 2100 });
+
+		// Move past the opening snap window so followOrSnapToEnd uses followEnd.
+		now = 2000;
+		// Upward wheel arms the reader-intent hold before the scroll event clears pinnedRef.
+		fireEvent.wheel(log, { deltaY: -120 });
+		settle(rerender);
+
+		// Settling must not pull scrollTop to the new end (2200) while the hold is active.
+		expect(log.scrollTop).toBe(2100);
+	});
+
 	it("holds the view still when the turn starts partway down it", () => {
 		const { rerender } = render(<ChatWorkspace snapshot={snapshot("running", handedOff)} />);
 		const log = screen.getByRole("log", { name: "Conversation" });

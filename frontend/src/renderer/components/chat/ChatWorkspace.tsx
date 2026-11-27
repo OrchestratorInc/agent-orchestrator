@@ -3650,6 +3650,9 @@ export function Timeline({
 	const hiddenAway = useRef(false);
 	const initialLayoutAt = useRef(0);
 	const lastScrollTop = useRef(0);
+	// Set by the reader's own wheel, touch, key and scrollbar-drag input. A jump to a
+	// marker or a prompt moves the view without it, and must not be pulled back.
+	const readerIntentAt = useRef(0);
 	const skipRelatchFollow = useRef(false);
 	const reducedMotion = useReducedMotion();
 	const reducedMotionRef = useRef(reducedMotion);
@@ -5323,12 +5326,15 @@ export function Timeline({
 		let held: Element | undefined;
 		if (settle.following) {
 			const end = Math.max(0, node.scrollHeight - node.clientHeight);
+			const readerHeld = performance.now() - readerIntentAt.current < READER_INTENT_HOLD_MS;
 			// When the turn grew past what the prompt spacer can absorb (a long reply
 			// that already scrolled the view), advance scrollTop to the new end before
 			// paint instead of leaving it short for followEnd to glide against the FLIP
-			// slide. When the spacer absorbed the change, end is unchanged.
-			cancelScrollFollow();
-			if (Math.abs(node.scrollTop - end) >= 0.5) node.scrollTop = end;
+			// slide. Honor an active reader-intent hold (upward wheel/key/touch before
+			// its scroll event clears pinnedRef) so settling never pulls the reader back.
+			if (!readerHeld) cancelScrollFollow();
+			const top = readerHeld ? Math.min(settle.scrollTop + historyShift.current, end) : end;
+			if (Math.abs(node.scrollTop - top) >= 0.5) node.scrollTop = top;
 			markWritten(node.scrollTop);
 			lastScrollTop.current = node.scrollTop;
 		} else {
@@ -5568,9 +5574,6 @@ export function Timeline({
 	// open something to read. Only the reader's own scrolling arms it, so streamed
 	// growth while unpinned (which moves nothing) never does.
 	const relatchTimer = useRef<number | undefined>(undefined);
-	// Set by the reader's own wheel, touch, key and scrollbar-drag input. A jump to a
-	// marker or a prompt moves the view without it, and must not be pulled back.
-	const readerIntentAt = useRef(0);
 	const noteReaderIntent = useCallback(() => {
 		readerIntentAt.current = performance.now();
 	}, []);
