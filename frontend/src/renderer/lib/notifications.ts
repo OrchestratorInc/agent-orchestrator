@@ -505,6 +505,8 @@ export function createNotificationsTransport(
 	queryClient: QueryClient,
 	/** The session whose agent terminal is currently on screen, if any. */
 	getVisibleAgentSessionId: () => string | undefined = () => undefined,
+	/** Called once per notification that arrives live, after the OS has been told about it. */
+	onArrived?: (notification: NotificationDTO, watched: boolean) => void,
 ) {
 	return {
 		connect() {
@@ -554,6 +556,7 @@ export function createNotificationsTransport(
 						type: event.notification.type,
 						watched: event.watched,
 					});
+					onArrived?.(event.notification, event.watched);
 				}
 			};
 

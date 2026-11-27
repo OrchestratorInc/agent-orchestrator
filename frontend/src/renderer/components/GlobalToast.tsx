@@ -1,110 +1,71 @@
 import { uiUsage, useTelemetrySurface } from "../lib/ui-usage-telemetry";
 import { useEffect, useState } from "react";
-import { Check } from "@/components/app-icons";
 import { useTranslation } from "react-i18next";
 import { type GlobalToast as Toast, useUiStore } from "../stores/ui-store";
-import { CloseButton } from "./ui/close-button";
-import { Button } from "./ui/button";
+import { type ToastItem, ToastStack } from "./ui/toast-stack";
 
 const TOAST_DISMISS_MS = 3_500;
 const ERROR_TOAST_DISMISS_MS = 8_000;
 
+/** Every app toast, in the one deck in the center panel's top-right corner. */
 export function GlobalToast() {
+	const { t } = useTranslation();
 	const toasts = useUiStore((state) => state.globalToasts);
+	const dismissGlobalToast = useUiStore((state) => state.dismissGlobalToast);
+	// A deck being read (pointed at or open) does not time out meanwhile.
+	const [paused, setPaused] = useState(false);
 
 	if (toasts.length === 0) return null;
 
+	const items: ToastItem[] = toasts.map((toast) => ({
+		id: toast.dedupeKey ?? String(toast.nonce),
+		title: toast.title,
+		help: toast.body,
+		tone: toast.tone,
+		art: toast.art,
+		action: toast.action
+			? {
+					label: toast.action.label,
+					busy: toast.action.busy,
+					run: () => {
+						toast.action?.run();
+						if (!toast.action?.keepOpen) dismissGlobalToast(toast.nonce);
+					},
+				}
+			: undefined,
+		onOpen: toast.onOpen
+			? () => {
+					toast.onOpen?.();
+					dismissGlobalToast(toast.nonce);
+				}
+			: undefined,
+		onDismiss: () => {
+			uiUsage.dismissed("toast");
+			dismissGlobalToast(toast.nonce);
+		},
+	}));
+
 	return (
 		<>
-			<GlobalToastStack placement="top-center" toasts={toasts.filter((toast) => toast.placement === "top-center")} />
-			<GlobalToastStack placement="bottom-center" toasts={toasts.filter((toast) => toast.placement === "bottom-center")} />
-			<GlobalToastStack placement="bottom-right" toasts={toasts.filter((toast) => !toast.placement || toast.placement === "bottom-right")} />
+			{toasts.map((toast) => <ToastTimer key={toast.nonce} toast={toast} paused={paused} />)}
+			<ToastStack items={items} label={t("shortcut.notifications", { defaultValue: "Notifications" })} onPausedChange={setPaused}
+				onDismissAll={() => {
+					uiUsage.dismissed("toast");
+					for (const toast of toasts) dismissGlobalToast(toast.nonce);
+				}} />
 		</>
 	);
 }
 
-function GlobalToastStack({ placement, toasts }: { placement: NonNullable<Toast["placement"]>; toasts: Toast[] }) {
-	if (toasts.length === 0) return null;
-	return (
-		<div
-			className={`pointer-events-none fixed z-[calc(var(--z-overlay)+1)] flex max-w-[calc(100vw-24px)] gap-2 ${
-				placement === "top-center" ? "w-[min(360px,calc(100vw-24px))] items-stretch left-1/2 top-12 max-h-[184px] -translate-x-1/2 flex-col overflow-y-auto overscroll-contain" : placement === "bottom-center" ? "left-1/2 bottom-3 -translate-x-1/2 w-max items-center flex-col-reverse" : "w-[min(360px,calc(100vw-24px))] items-stretch right-3 bottom-3 flex-col-reverse"
-			}`}
-			data-browser-native-overlay="true"
-			data-state="open"
-		>
-			{toasts.slice().reverse().map((toast) => <GlobalToastItem key={toast.nonce} toast={toast} />)}
-		</div>
-	);
-}
-
-function GlobalToastItem({ toast }: { toast: Toast }) {
-	const { t } = useTranslation();
-	const [exiting, setExiting] = useState(false);
+/** Times one toast out, unless the deck is open. Renders nothing. */
+function ToastTimer({ toast, paused }: { toast: Toast; paused: boolean }) {
 	const dismissGlobalToast = useUiStore((state) => state.dismissGlobalToast);
 	useTelemetrySurface("toast");
-	const isError = toast.tone === "error";
-	const isSuccess = toast.tone === "success";
-	const dismissMs = toast.durationMs ?? (isError ? ERROR_TOAST_DISMISS_MS : TOAST_DISMISS_MS);
-	// Hovering or focusing a toast pauses its timer so it can be read and acted on.
-	const [paused, setPaused] = useState(false);
-
+	const dismissMs = toast.durationMs ?? (toast.tone === "error" ? ERROR_TOAST_DISMISS_MS : TOAST_DISMISS_MS);
 	useEffect(() => {
 		if (paused || dismissMs === 0) return;
-		const exitTimer = window.setTimeout(() => setExiting(true), Math.max(0, dismissMs - 180));
-		const dismissTimer = window.setTimeout(() => dismissGlobalToast(toast.nonce), dismissMs);
-		return () => {
-			window.clearTimeout(exitTimer);
-			window.clearTimeout(dismissTimer);
-		};
+		const timer = window.setTimeout(() => dismissGlobalToast(toast.nonce), dismissMs);
+		return () => window.clearTimeout(timer);
 	}, [dismissGlobalToast, dismissMs, paused, toast.nonce]);
-
-	return (
-		<section
-			aria-live={isError ? "assertive" : "polite"}
-			className={`${exiting ? "toast-exit" : "toast-enter"} pointer-events-auto flex rounded-welcome-panel ${isSuccess ? "items-center gap-2 px-3 py-2" : "items-start gap-3 px-3.5 py-3"} text-xs shadow-[var(--shadow-import-modal)] ${
-				isError ? "border border-destructive/40 bg-destructive/10" : "border border-(--color-border-overlay) bg-[var(--color-bg-import-modal)]"
-			}`}
-			role={isError ? "alert" : "status"}
-			data-global-toast=""
-			data-telemetry-surface="toast"
-			onMouseEnter={() => setPaused(true)}
-			onMouseLeave={() => setPaused(false)}
-			onFocus={() => setPaused(true)}
-			onBlur={() => setPaused(false)}
-		>
-			{isSuccess && <Check aria-hidden="true" className="size-4 shrink-0 text-green-500" />}
-			<div className="min-w-0 flex-1">
-				<p className={`wrap-break-word font-medium ${isError ? "text-destructive" : "text-(--color-text-import-title)"}`}>{toast.title}</p>
-				{toast.body ? <p className="mt-0.5 wrap-break-word text-pretty text-[var(--color-text-import-muted)]">{toast.body}</p> : null}
-			</div>
-			{toast.action ? (
-				<Button
-					type="button"
-					variant="ghost"
-					size="xs"
-					onClick={() => {
-						toast.action?.run();
-						dismissGlobalToast(toast.nonce);
-					}}
-					className="-my-1 font-medium"
-					data-telemetry-id="toast.action"
-					data-toast-action=""
-				>
-					{toast.action.label}
-				</Button>
-			) : null}
-			{toast.dismissible ? (
-				<CloseButton
-					aria-label={t("shortcut.dismissNotification")}
-					data-telemetry-id="toast.dismiss"
-					onClick={() => {
-						uiUsage.dismissed("toast");
-						dismissGlobalToast(toast.nonce);
-					}}
-					size="icon-xs"
-				/>
-			) : null}
-		</section>
-	);
+	return null;
 }
