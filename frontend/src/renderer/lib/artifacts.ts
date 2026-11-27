@@ -380,7 +380,11 @@ export function artifactSharing(row: Pick<ArtifactRow, "shareUrl" | "shareAccess
 /**
  * Whether this person published a link to an artifact: a file of theirs with
  * a share link, whoever it opens for. A link someone else published to them
- * is not theirs to list as published.
+ * is not theirs to list as published. Only files whose link is known count: a
+ * local or remote-host file's, from this computer's publish records. A cloud
+ * session's file list says nothing about publishing (see artifactSharing), and
+ * the link list does not name each link's file, so a published cloud file is
+ * not listed until the control plane reports it.
  */
 export function isPublishedArtifact(row: Pick<ArtifactRow, "shareUrl" | "shared">): boolean {
 	return !row.shared && Boolean(row.shareUrl);
