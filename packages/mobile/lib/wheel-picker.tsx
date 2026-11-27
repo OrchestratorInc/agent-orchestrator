@@ -36,12 +36,17 @@ export type WheelItem = {
 	mark?: string;
 };
 
-export function WheelPicker({ items, index, onSettle, disabled = false, align = "center", accessibilityLabel, testID }: {
+export function WheelPicker({ items, index, onSettle, onEmptyTap, disabled = false, align = "center", accessibilityLabel, testID }: {
 	items: readonly WheelItem[];
 	/** The row chosen; the wheel rests on it whenever no finger turns it. */
 	index: number;
 	/** The row the wheel came to rest on, once it is still. */
 	onSettle: (index: number) => void;
+	/**
+	 * A tap on the empty rows above the first item or below the last: they look
+	 * like the chat around the picker, so a tap there puts it away.
+	 */
+	onEmptyTap?: () => void;
 	disabled?: boolean;
 	align?: "center" | "left" | "right";
 	/** What the wheel picks, for a screen reader ("Model"). */
@@ -58,6 +63,14 @@ export function WheelPicker({ items, index, onSettle, disabled = false, align = 
 		settleTimer.current = undefined;
 	};
 	useEffect(() => clear, []);
+	// A tap on the empty rows: one whose touch ends where it began. A drag
+	// turns the wheel and cancels the touch instead; a tap that stops a wheel
+	// still coasting stops it and nothing more.
+	const stillAtTouch = useRef(false);
+	const emptyRows = onEmptyTap ? {
+		onTouchStart: () => { stillAtTouch.current = !turning.current; },
+		onTouchEnd: () => { if (stillAtTouch.current && !turning.current) onEmptyTap(); },
+	} : null;
 
 	// Resting on the chosen row whenever no finger turns it: on open, and when
 	// the choice changes from outside (another column picked a new list).
@@ -100,8 +113,7 @@ export function WheelPicker({ items, index, onSettle, disabled = false, align = 
 			ref={scroller}
 			testID={testID}
 			style={styles.wheel}
-			contentContainerStyle={styles.content}
-			contentOffset={{ x: 0, y: Math.max(index, 0) * WHEEL_ROW }}
+						contentOffset={{ x: 0, y: Math.max(index, 0) * WHEEL_ROW }}
 			showsVerticalScrollIndicator={false}
 			snapToInterval={WHEEL_ROW}
 			decelerationRate="fast"
@@ -134,9 +146,11 @@ export function WheelPicker({ items, index, onSettle, disabled = false, align = 
 			accessibilityActions={[{ name: "increment" }, { name: "decrement" }]}
 			onAccessibilityAction={(event) => step(event.nativeEvent.actionName === "increment" ? 1 : -1)}
 		>
+			<View testID={testID ? `${testID}-empty-above` : undefined} style={styles.empty} {...emptyRows} />
 			{items.map((item, i) => (
 				<WheelRow key={item.key} label={item.label} starred={item.starred} mark={item.mark} at={i} offset={offset} align={align} />
 			))}
+			<View testID={testID ? `${testID}-empty-below` : undefined} style={styles.empty} {...emptyRows} />
 		</Animated.ScrollView>
 	);
 }
@@ -173,7 +187,8 @@ function WheelRow({ label, starred, mark, at, offset, align }: { label: string; 
 const makeStyles = (t: Theme) =>
 	StyleSheet.create({
 		wheel: { height: WHEEL_ROW * WHEEL_ROWS, flexGrow: 0 },
-		content: { paddingVertical: PAD },
+		// The empty rows that let the first and last items reach the band.
+		empty: { height: PAD },
 		row: { height: WHEEL_ROW, justifyContent: "center", paddingHorizontal: 6 },
 		// One face for every row, as iOS's picker: regular weight at a size of its
 		// own, no tightened tracking. Only brightness and the tilt set the chosen

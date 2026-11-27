@@ -66,6 +66,26 @@ describe("wheel picker", () => {
 		expect(wheel.props.keyboardShouldPersistTaps).toBe("always");
 	});
 
+	// The empty rows above the first item and below the last read as the chat
+	// around the picker, so a tap there puts it away.
+	it("puts the picker away on a tap on its empty rows, not on a drag or a tap that stops a coasting wheel", () => {
+		const onEmptyTap = vi.fn();
+		act(() => { renderer = create(<WheelPicker items={items} index={0} onSettle={() => {}} onEmptyTap={onEmptyTap} testID="w" />); });
+		const empty = (where: "above" | "below") => renderer!.root.findAll((node) => hostType(node) === "View" && node.props.testID === `w-empty-${where}`)[0];
+		const wheel = () => renderer!.root.findAll((node) => hostType(node) === "AnimatedScrollView")[0];
+		act(() => { empty("above").props.onTouchStart(); empty("above").props.onTouchEnd(); });
+		expect(onEmptyTap).toHaveBeenCalledOnce();
+		act(() => { empty("below").props.onTouchStart(); empty("below").props.onTouchEnd(); });
+		expect(onEmptyTap).toHaveBeenCalledTimes(2);
+		// A drag cancels the touch rather than ending it.
+		act(() => { empty("above").props.onTouchStart(); wheel().props.onScrollBeginDrag(); });
+		expect(empty("above").props.onTouchCancel).toBeUndefined();
+		expect(onEmptyTap).toHaveBeenCalledTimes(2);
+		// A tap while the wheel coasts only stops it.
+		act(() => { wheel().props.onMomentumScrollBegin(); empty("above").props.onTouchStart(); empty("above").props.onTouchEnd(); });
+		expect(onEmptyTap).toHaveBeenCalledTimes(2);
+	});
+
 	it("takes no screen reader steps while locked", () => {
 		const onSettle = vi.fn();
 		act(() => { renderer = create(<WheelPicker items={items} index={0} onSettle={onSettle} disabled />); });

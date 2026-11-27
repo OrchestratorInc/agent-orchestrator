@@ -63,7 +63,7 @@ export const ModelWheelHost = memo(function ModelWheelHost({ slider, busy, ...wh
 	if (!(open || warm) || !wheel.agents.length) return null;
 	return (
 		<ComposerOverlay overKeyboard visible={open} onDismiss={() => slider.setOpen(false)} fill>
-			<ModelWheel {...wheel} visible={open} onMove={onMove} />
+			<ModelWheel {...wheel} visible={open} onMove={onMove} onEmptyTap={() => slider.setOpen(false)} />
 		</ComposerOverlay>
 	);
 });
@@ -73,10 +73,12 @@ function defaultModel(agent: WheelAgent): string | undefined {
 	return (agent.models.find((model) => model.starred) ?? agent.models[0])?.key;
 }
 
-export function ModelWheel({ agents, chosenAgent, chosenModel, runningAgent, runningModel, settings, toggleSetting, agentsLocked, visible = true, onMove }: Omit<ModelWheelProps, "choose"> & {
+export function ModelWheel({ agents, chosenAgent, chosenModel, runningAgent, runningModel, settings, toggleSetting, agentsLocked, visible = true, onMove, onEmptyTap }: Omit<ModelWheelProps, "choose"> & {
 	visible?: boolean;
 	/** The wheels came to rest here. */
 	onMove: (at: WheelPosition) => void;
+	/** A tap on a wheel's empty rows, which read as the chat around the wheels. */
+	onEmptyTap?: () => void;
 }) {
 	const styles = useThemedStyles(makeStyles);
 	const chosen = { agent: chosenAgent, model: chosenModel ?? "" };
@@ -121,6 +123,7 @@ export function ModelWheel({ agents, chosenAgent, chosenModel, runningAgent, run
 							align="right"
 							accessibilityLabel="Agent"
 							testID="model-wheel-agents"
+							onEmptyTap={onEmptyTap}
 							onSettle={(index) => {
 								const next = agents[index];
 								if (!next || next.id === agent.id) return;
@@ -144,6 +147,7 @@ export function ModelWheel({ agents, chosenAgent, chosenModel, runningAgent, run
 						align={agents.length > 1 ? "left" : "center"}
 						accessibilityLabel="Model"
 						testID="model-wheel-models"
+						onEmptyTap={onEmptyTap}
 						onSettle={(index) => {
 							const model = agent.models[index];
 							if (model) move({ agent: agent.id, model: model.key });
