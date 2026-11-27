@@ -6,6 +6,7 @@ import { AgentAvatar, type AgentAvatarProps } from "../AgentAvatar";
 import { Button } from "../ui/button";
 import { Checkbox } from "../ui/checkbox";
 import { approvalTimeLeft, useNow } from "./ApprovalPrompt";
+import { offersSiteRule } from "../../lib/approval-site-rule";
 
 /** "shop.example" for "https://shop.example"; the value itself when it is not a URL. */
 function siteHost(site: string): string {
@@ -134,7 +135,7 @@ export function ApprovalNoticeCard({
 				</div>
 			) : null}
 
-			{request.site ? (
+			{offersSiteRule(request) ? (
 				<label className="mt-2 flex items-center gap-2 text-caption text-muted-foreground">
 					<Checkbox checked={always} disabled={busy} onCheckedChange={(value) => setAlways(value === true)} />
 					{t("approvals.allowSite", { site: host })}

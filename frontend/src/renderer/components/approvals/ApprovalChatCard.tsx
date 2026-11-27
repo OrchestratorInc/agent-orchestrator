@@ -5,6 +5,7 @@ import type { ApprovalDecision, PendingApproval } from "../../lib/approvals";
 import { Button } from "../ui/button";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "../ui/dropdown-menu";
 import { approvalTimeLeft, useNow } from "./ApprovalPrompt";
+import { offersSiteRule } from "../../lib/approval-site-rule";
 
 /** "shop.example" for "https://shop.example"; the value itself when it is not a URL. */
 function siteHost(site: string): string {
@@ -136,14 +137,14 @@ export function ApprovalChatCard({
 						type="button"
 						variant="primary"
 						size="sm"
-						className={request.site ? "rounded-none" : "rounded-full"}
+						className={offersSiteRule(request) ? "rounded-none" : "rounded-full"}
 						disabled={busy}
 						data-approval-allow=""
 						onClick={() => onDecide("allow-once")}
 					>
 						{t("approvals.allowOnce")}
 					</Button>
-					{request.site ? (
+					{offersSiteRule(request) ? (
 						<DropdownMenu>
 							<DropdownMenuTrigger asChild>
 								<Button
