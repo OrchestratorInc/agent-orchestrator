@@ -25,6 +25,7 @@ import (
 
 const (
 	maxHookPromptBytes  = 64 << 10
+	maxHookDedupeBytes  = 4 << 20
 	maxPendingCalledRun = 20
 	hookDedupeWindow    = 7 * 24 * time.Hour
 )
@@ -103,7 +104,7 @@ func (s *Service) Call(ctx context.Context, key string, in CallInput) (CallResul
 	nonce := make([]byte, 8)
 	_, _ = rand.Read(nonce)
 	tag := "hook-data-" + hex.EncodeToString(nonce)
-	prompt, _ := fillHookTemplate(rec.Prompt, data, func(v string) string { return "<" + tag + ">" + v + "</" + tag + ">" })
+	prompt, _ := fillHookTemplate(rec.Prompt, data, maxHookPromptBytes, func(v string) string { return "<" + tag + ">" + v + "</" + tag + ">" })
 	if strings.TrimSpace(prompt) == "" {
 		return CallResult{Status: domain.AutomationCallIgnored}, nil
 	}
@@ -114,7 +115,7 @@ func (s *Service) Call(ctx context.Context, key string, in CallInput) (CallResul
 		return CallResult{}, apierr.Invalid("HOOK_PROMPT_TOO_LARGE", "The filled prompt is larger than 64 KiB", nil)
 	}
 	dedupe := ""
-	if d, complete := fillHookTemplate(rec.HookDedupeKey, data, nil); complete && strings.TrimSpace(d) != "" {
+	if d, complete := fillHookTemplate(rec.HookDedupeKey, data, maxHookDedupeBytes, nil); complete && strings.TrimSpace(d) != "" {
 		sum := sha256.Sum256([]byte(d))
 		dedupe = hex.EncodeToString(sum[:])
 	}
@@ -252,7 +253,7 @@ func hookString(v any) string {
 	return string(b)
 }
 
-func fillHookTemplate(tmpl string, data map[string]any, wrap func(string) string) (string, bool) {
+func fillHookTemplate(tmpl string, data map[string]any, limit int, wrap func(string) string) (string, bool) {
 	complete, size := true, 0
 	out := hookPlaceholder.ReplaceAllStringFunc(tmpl, func(m string) string {
 		path := hookPlaceholder.FindStringSubmatch(m)[1]
@@ -260,7 +261,7 @@ func fillHookTemplate(tmpl string, data map[string]any, wrap func(string) string
 			return m
 		}
 		v, ok := lookupHookPath(data, path)
-		if !ok || size > maxHookPromptBytes {
+		if !ok || size > limit {
 			complete = false
 			return ""
 		}

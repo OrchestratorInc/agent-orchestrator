@@ -210,8 +210,11 @@ func TestCallReadsFormBodiesAndSkipsDedupeWithoutItsValue(t *testing.T) {
 
 func TestFillHookTemplateStopsPastThePromptLimit(t *testing.T) {
 	data := map[string]any{"body": strings.Repeat("x", 40<<10)}
-	out, complete := fillHookTemplate(strings.Repeat("{{body}}", 1000), data, nil)
+	out, complete := fillHookTemplate(strings.Repeat("{{body}}", 1000), data, maxHookPromptBytes, nil)
 	if complete || len(out) <= maxHookPromptBytes || len(out) > 2*maxHookPromptBytes {
 		t.Fatalf("fill = %d bytes complete=%v, want just past the limit and incomplete", len(out), complete)
+	}
+	if _, complete := fillHookTemplate("{{body}}{{body}}", data, maxHookDedupeBytes, nil); !complete {
+		t.Fatal("dedupe fill of two large values is incomplete, want complete")
 	}
 }

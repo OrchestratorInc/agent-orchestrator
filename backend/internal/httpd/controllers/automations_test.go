@@ -81,6 +81,11 @@ func TestHookCallStatusAndBodyLimit(t *testing.T) {
 	if string(service.called.Body) != `{"a":1}` || service.called.Query.Get("x") != "1" {
 		t.Fatalf("call input=%+v", service.called)
 	}
+	rec := httptest.NewRecorder()
+	(&AutomationsController{}).call(rec, httptest.NewRequest(http.MethodPost, "/hooks/key", strings.NewReader(`{}`)))
+	if rec.Code != http.StatusNotImplemented {
+		t.Fatalf("no service: status=%d want 501", rec.Code)
+	}
 }
 
 func TestAutomationResponseHidesHookSecret(t *testing.T) {
