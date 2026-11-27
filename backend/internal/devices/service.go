@@ -138,6 +138,9 @@ type Service struct {
 	watches map[domain.SessionID]leaseWatch
 	// stopReaper ends the loop that frees ended sessions' devices.
 	stopReaper context.CancelFunc
+	// reaperDone closes when that loop has returned, so Shutdown can wait for
+	// a pass in flight to stop writing the lease file.
+	reaperDone chan struct{}
 	// available is the Developer mode gate, off on every daemon boot until the
 	// desktop app turns it on.
 	available atomic.Bool
@@ -292,7 +295,12 @@ func New(cfg Config) *Service {
 		// even when nobody opens the Device tab or another device.
 		ctx, stop := context.WithCancel(context.Background())
 		s.stopReaper = stop
-		go s.reap(ctx, reapEvery)
+		s.reaperDone = make(chan struct{})
+		every := reapEvery
+		go func() {
+			defer close(s.reaperDone)
+			s.reap(ctx, every)
+		}()
 	}
 	return s
 }
@@ -1377,6 +1385,7 @@ func (s *Service) HubTarget(ctx context.Context, id domain.SessionID) (ports.Dev
 func (s *Service) Shutdown() error {
 	if s.stopReaper != nil {
 		s.stopReaper()
+		<-s.reaperDone
 	}
 	return s.cfg.Provider.Close()
 }
