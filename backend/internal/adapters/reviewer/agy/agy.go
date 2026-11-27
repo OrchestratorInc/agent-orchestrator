@@ -34,6 +34,7 @@ var requiredFlags = []string{"--agent", "--conversation", "--prompt-interactive"
 type Reviewer struct {
 	resolveBinary func(context.Context) (string, error)
 	run           func(context.Context, map[string]string, string, ...string) ([]byte, error)
+	hostHome      func() (string, error)
 }
 
 // New returns the experimental host-trusted adapter.
@@ -45,6 +46,7 @@ func New() *Reviewer {
 			cmd.Env = appendEnvironment(os.Environ(), env)
 			return cmd.CombinedOutput()
 		},
+		hostHome: os.UserHomeDir,
 	}
 }
 
@@ -80,12 +82,13 @@ func (r *Reviewer) ReviewCommand(ctx context.Context, inv ports.ReviewInvocation
 	if err := seedTrustedWorkspace(env.ConfigRoot, inv.WorkspacePath); err != nil {
 		return ports.ReviewCommandSpec{}, fmt.Errorf("agy reviewer: seed workspace trust: %w", err)
 	}
+	r.seedHostAuth(env.ConfigRoot)
 	if err := r.verifyCompatibility(ctx, binary, envVars); err != nil {
 		return ports.ReviewCommandSpec{}, err
 	}
 	// Probe with the pane's environment: project env under the reviewer roots,
 	// as the launcher merges it, so project-level gateway settings count.
-	if err := r.verifySignedIn(ctx, binary, env.ConfigRoot, agentlaunch.MergeEnv(inv.ProjectEnv, envVars)); err != nil {
+	if err := r.verifySignedIn(ctx, binary, agentlaunch.MergeEnv(inv.ProjectEnv, envVars)); err != nil {
 		return ports.ReviewCommandSpec{}, err
 	}
 	prompt := inv.Prompt
@@ -143,15 +146,14 @@ const signInProbeTimeout = 20 * time.Second
 // `agy models` starts no login. It exits 0 even when signed out, so only its
 // sign-in message counts as signed out; any other result, including a probe
 // error, is inconclusive and the launch proceeds as before.
-func (r *Reviewer) verifySignedIn(ctx context.Context, binary, configRoot string, env map[string]string) error {
+func (r *Reviewer) verifySignedIn(ctx context.Context, binary string, env map[string]string) error {
 	probeCtx, cancel := context.WithTimeout(ctx, signInProbeTimeout)
 	defer cancel()
 	out, _ := r.run(probeCtx, env, binary, "models")
 	if !strings.Contains(strings.ToLower(string(out)), "please sign in") {
 		return nil
 	}
-	home := shellQuote(configRoot)
-	return &ports.ReviewerAuthRequiredError{Guidance: fmt.Sprintf("Agy is not signed in for reviews. Sign in in this worker session's reviewer home by running `HOME=%s XDG_CONFIG_HOME=%s %s` and choosing a login method, then retry the review. The sign-in applies to this worker session's reviewer only.", home, home, shellQuote(binary))}
+	return &ports.ReviewerAuthRequiredError{Guidance: fmt.Sprintf("Agy is not signed in for reviews. Sign in once by running `%s` and choosing a login method, then retry the review. Reviewer sessions reuse your Agy sign-in.", shellQuote(binary))}
 }
 
 // shellQuote single-quotes a value for a POSIX shell, so paths with spaces or
@@ -269,6 +271,82 @@ func seedTrustedWorkspace(configRoot, workspacePath string) error {
 	}
 	settings[trustedWorkspacesKey] = raw
 	return writePrivateJSON(path, settings)
+}
+
+// oauthTokenFile is the file where Agy stores its OAuth token on Linux and
+// other file-backed installs.
+const oauthTokenFile = "antigravity-oauth-token" //nolint:gosec // filename only, not a credential
+
+// seedHostAuth best-effort links the host user's existing Agy sign-in into the
+// isolated reviewer home so unattended reviews do not prompt for sign-in on
+// every new worker session (#8962). Link failures never block launch (matching
+// commandcode.linkRealDotfiles): gateway-backed or Windows Credential Manager
+// reviews keep working, and signed-out launches still surface a clear sign-in
+// error from verifySignedIn.
+func (r *Reviewer) seedHostAuth(configRoot string) {
+	homeFn := r.hostHome
+	if homeFn == nil {
+		homeFn = os.UserHomeDir
+	}
+	hostHome, err := homeFn()
+	if err != nil || strings.TrimSpace(hostHome) == "" {
+		return
+	}
+	seedHostAuthFrom(configRoot, hostHome)
+}
+
+func seedHostAuthFrom(configRoot, hostHome string) {
+	hostHome = strings.TrimSpace(hostHome)
+	if hostHome == "" || filepath.Clean(hostHome) == filepath.Clean(configRoot) {
+		return
+	}
+	// File-backed OAuth token (Linux and any install that writes it).
+	tokenSrc := filepath.Join(hostHome, ".gemini", agentagy.CLIStorageDir, oauthTokenFile)
+	tokenDst := filepath.Join(configRoot, ".gemini", agentagy.CLIStorageDir, oauthTokenFile)
+	_ = linkFileIfPresent(tokenSrc, tokenDst)
+	// On macOS, Agy stores its OAuth token in the user's Login Keychain under
+	// ~/Library/Keychains/login.keychain-db. Link only the login keychain file
+	// rather than the whole Keychains directory so Local Items / iCloud
+	// Keychain directories stay outside the reviewer home.
+	for _, name := range []string{"login.keychain-db", "login.keychain"} {
+		kcSrc := filepath.Join(hostHome, "Library", "Keychains", name)
+		kcDst := filepath.Join(configRoot, "Library", "Keychains", name)
+		if linkFileIfPresent(kcSrc, kcDst) {
+			break
+		}
+	}
+}
+
+// linkFileIfPresent best-effort symlinks dst to src when src exists as a
+// non-directory file. Existing regular files and valid symlinks at dst are
+// preserved; dangling symlinks are replaced. Returns true when src was found
+// (and either linked or already satisfied at dst).
+func linkFileIfPresent(src, dst string) bool {
+	info, err := os.Stat(src)
+	if err != nil || info.IsDir() {
+		return false
+	}
+	if dstInfo, err := os.Lstat(dst); err == nil {
+		if dstInfo.Mode()&os.ModeSymlink == 0 {
+			return true
+		}
+		if _, statErr := os.Stat(dst); statErr == nil {
+			return true
+		}
+		// Broken/dangling symlink: replace it so the live host credential is used.
+		if rmErr := os.Remove(dst); rmErr != nil && !errors.Is(rmErr, os.ErrNotExist) {
+			return false
+		}
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return false
+	}
+	if err := os.MkdirAll(filepath.Dir(dst), 0o700); err != nil {
+		return false
+	}
+	if err := os.Symlink(src, dst); err != nil && !errors.Is(err, os.ErrExist) {
+		return false
+	}
+	return true
 }
 
 // writePrivateJSON writes value through a private temp file renamed into

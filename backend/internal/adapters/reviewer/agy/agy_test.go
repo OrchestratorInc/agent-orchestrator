@@ -22,6 +22,7 @@ func testReviewer(help, version string) *Reviewer {
 			}
 			return []byte(version), nil
 		},
+		hostHome: func() (string, error) { return "", nil },
 	}
 }
 
@@ -45,15 +46,14 @@ func TestReviewCommandSignInProbe(t *testing.T) {
 
 	dataDir := t.TempDir()
 	_, err := signInReviewer("Fetching available models... Error: Please sign in to view available models.", nil).ReviewCommand(context.Background(), inv(dataDir))
-	home := filepath.Join(dataDir, "reviewer-runtime", "review-worker-1", "config")
-	if err == nil || !strings.Contains(err.Error(), "not signed in") || !strings.Contains(err.Error(), home) {
-		t.Fatalf("signed-out err = %v, want sign-in guidance naming %s", err, home)
+	if err == nil || !strings.Contains(err.Error(), "not signed in") {
+		t.Fatalf("signed-out err = %v, want sign-in guidance", err)
 	}
 	var authErr *ports.ReviewerAuthRequiredError
-	if !errors.Is(err, ports.ErrChatAuthRequired) || !errors.As(err, &authErr) || !strings.Contains(authErr.Guidance, home) {
+	if !errors.Is(err, ports.ErrChatAuthRequired) || !errors.As(err, &authErr) {
 		t.Fatalf("signed-out err = %#v, want ReviewerAuthRequiredError matching ErrChatAuthRequired", err)
 	}
-	if !strings.Contains(authErr.Guidance, "HOME="+shellQuote(home)+" XDG_CONFIG_HOME="+shellQuote(home)+" '/opt/agy/bin/agy'") {
+	if !strings.Contains(authErr.Guidance, "`'/opt/agy/bin/agy'`") {
 		t.Fatalf("guidance = %q, want single-quoted sign-in command", authErr.Guidance)
 	}
 
@@ -108,6 +108,161 @@ func TestShellQuoteKeepsPathsLiteral(t *testing.T) {
 		if got := shellQuote(in); got != want {
 			t.Errorf("shellQuote(%q) = %s, want %s", in, got, want)
 		}
+	}
+}
+
+func TestSeedHostAuthLinksOAuthTokenAndPreservesExisting(t *testing.T) {
+	hostHome := t.TempDir()
+	configRoot := t.TempDir()
+
+	// No host token yet: no-op.
+	seedHostAuthFrom(configRoot, hostHome)
+	dst := filepath.Join(configRoot, ".gemini", "antigravity-cli", oauthTokenFile)
+	if _, err := os.Lstat(dst); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("dst should not exist when host has no token, got err=%v", err)
+	}
+
+	// Host has token: symlink created.
+	src := filepath.Join(hostHome, ".gemini", "antigravity-cli", oauthTokenFile)
+	if err := os.MkdirAll(filepath.Dir(src), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(src, []byte("host-token"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	seedHostAuthFrom(configRoot, hostHome)
+	target, err := os.Readlink(dst)
+	if err != nil || target != src {
+		t.Fatalf("dst symlink = %q (err=%v), want %q", target, err, src)
+	}
+
+	// Idempotent on second call.
+	seedHostAuthFrom(configRoot, hostHome)
+
+	// Existing reviewer-local token is preserved.
+	configRoot2 := t.TempDir()
+	dst2 := filepath.Join(configRoot2, ".gemini", "antigravity-cli", oauthTokenFile)
+	if err := os.MkdirAll(filepath.Dir(dst2), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(dst2, []byte("local-token"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	seedHostAuthFrom(configRoot2, hostHome)
+	got, err := os.ReadFile(dst2)
+	if err != nil || string(got) != "local-token" {
+		t.Fatalf("existing local token = %q (err=%v), want local-token", string(got), err)
+	}
+
+	// Dangling symlink is replaced with the live host token.
+	configRoot3 := t.TempDir()
+	dst3 := filepath.Join(configRoot3, ".gemini", "antigravity-cli", oauthTokenFile)
+	if err := os.MkdirAll(filepath.Dir(dst3), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(filepath.Join(hostHome, "nonexistent-old-token"), dst3); err != nil {
+		t.Fatal(err)
+	}
+	seedHostAuthFrom(configRoot3, hostHome)
+	if target, err := os.Readlink(dst3); err != nil || target != src {
+		t.Fatalf("replaced symlink = %q (err=%v), want %q", target, err, src)
+	}
+}
+
+func TestSeedHostAuthLinksLoginKeychainOnly(t *testing.T) {
+	hostHome := t.TempDir()
+	kcDir := filepath.Join(hostHome, "Library", "Keychains")
+	if err := os.MkdirAll(filepath.Join(kcDir, "local-items-uuid"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	kcSrc := filepath.Join(kcDir, "login.keychain-db")
+	if err := os.WriteFile(kcSrc, []byte("keychain"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	// Links only login.keychain-db, not the whole Keychains directory.
+	configRoot := t.TempDir()
+	seedHostAuthFrom(configRoot, hostHome)
+	target, err := os.Readlink(filepath.Join(configRoot, "Library", "Keychains", "login.keychain-db"))
+	if err != nil || target != kcSrc {
+		t.Fatalf("login.keychain-db symlink = %q (err=%v), want %q", target, err, kcSrc)
+	}
+	if _, err := os.Lstat(filepath.Join(configRoot, "Library", "Keychains", "local-items-uuid")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("should not expose sibling Keychains entries, got err=%v", err)
+	}
+}
+
+func TestReviewCommandBestEffortLinkFailureDoesNotBlockLaunch(t *testing.T) {
+	hostHome := t.TempDir()
+	kcSrc := filepath.Join(hostHome, "Library", "Keychains", "login.keychain-db")
+	if err := os.MkdirAll(filepath.Dir(kcSrc), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(kcSrc, []byte("keychain"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	// Place a regular file at configRoot/Library so MkdirAll(Library/Keychains)
+	// fails during seedHostAuth. Launch must still fall through to verifySignedIn.
+	dataDir := t.TempDir()
+	configRoot := filepath.Join(dataDir, "reviewer-runtime", "review-worker-1", "config")
+	if err := os.MkdirAll(configRoot, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(configRoot, "Library"), []byte("blocker"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	r := signInReviewer("gateway-model\tGateway Model\n", nil)
+	r.hostHome = func() (string, error) { return hostHome, nil }
+	inv := ports.ReviewInvocation{
+		DataDir:        dataDir,
+		ReviewerID:     "review-worker-1",
+		TaskPromptRoot: "/ao/prompts",
+		WorkspacePath:  "/worker",
+		Prompt:         "p",
+	}
+	if _, err := r.ReviewCommand(context.Background(), inv); err != nil {
+		t.Fatalf("ReviewCommand should not fail when best-effort host auth link fails: %v", err)
+	}
+}
+
+func TestReviewCommandReusesHostAuthBeforeSignInProbe(t *testing.T) {
+	hostHome := t.TempDir()
+	src := filepath.Join(hostHome, ".gemini", "antigravity-cli", oauthTokenFile)
+	if err := os.MkdirAll(filepath.Dir(src), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(src, []byte("host-token"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	r := testReviewer(strings.Join(requiredFlags, "\n"), "1.1.9")
+	r.hostHome = func() (string, error) { return hostHome, nil }
+	base := r.run
+	r.run = func(ctx context.Context, env map[string]string, binary string, args ...string) ([]byte, error) {
+		if slices.Equal(args, []string{"models"}) {
+			tokenPath := filepath.Join(env["HOME"], ".gemini", "antigravity-cli", oauthTokenFile)
+			_, statErr := os.Stat(tokenPath)
+			signedIn := statErr == nil
+			if !signedIn {
+				// `agy models` exits 0 even when signed out.
+				return []byte("Error: Please sign in to view available models."), nil
+			}
+			return []byte("gemini-4-neon-high\tGemini 4 Neon (High)\n"), nil
+		}
+		return base(ctx, env, binary, args...)
+	}
+
+	inv := ports.ReviewInvocation{
+		DataDir:        t.TempDir(),
+		ReviewerID:     "review-worker-1",
+		TaskPromptRoot: "/ao/prompts",
+		WorkspacePath:  "/worker",
+		Prompt:         "p",
+	}
+	if _, err := r.ReviewCommand(context.Background(), inv); err != nil {
+		t.Fatalf("ReviewCommand should succeed using linked host token: %v", err)
 	}
 }
 
