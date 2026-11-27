@@ -1110,7 +1110,7 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** @description Fork the session into a new session as one of its finished turns left it: the conversation up to that turn, the files as that turn left them, and the agent's memory of the conversation, copied natively by Claude Code and Codex and as text for other agents. Without turnId the latest finished turn is forked; a chat session with no finished turn is refused with FORK_TURN_NOT_FINISHED. A terminal session has no turns, so it is forked as it is now: its files and the agent's conversation at the moment of the fork. The original is never changed. The fork is named "Fork of <title>", or "Fork N of <title>" counted against the first session forked. It belongs to the caller and runs on the caller's default account for the session's agent; a fork of a standalone agent is the caller's own standalone agent, with no access to the original's repositories. A fork never owns, pushes to or comments on the original's pull requests. The fork is returned while its files and conversation are still being copied; a copy that fails becomes its startupError (fork_capture_failed or fork_seed_apply_failed for clients that send X-AO-Client-Features with session-fork), and startup-retry copies again. Anyone who may create a session in the original's project may fork it; for a standalone agent only its owner and those it is shared with for writing. Replaying the same Idempotency-Key returns the same fork with 200. Offered when offering.features lists session-fork; 404 otherwise. */
+        /** @description Fork the session into a new session as one of its finished turns left it: the conversation up to that turn, the files as that turn left them, and the agent's memory of the conversation, copied natively by Claude Code and Codex and as text for other agents. Without turnId the latest finished turn is forked; a chat session with no finished turn is refused with FORK_TURN_NOT_FINISHED. A terminal session has no turns, so it is forked as it is now: its files and the agent's conversation at the moment of the fork. The original is never changed. The fork is named "Fork of <title>", or "Fork N of <title>" counted against the first session forked. It belongs to the caller and runs on the caller's default account for the session's agent; a fork of a standalone agent is the caller's own standalone agent, with no access to the original's repositories. A fork never owns, pushes to or comments on the original's pull requests. The fork is returned while its files and conversation are still being copied; a copy that fails becomes its startupError (fork_capture_failed or fork_seed_apply_failed for clients that send X-AO-Client-Features with session-fork), and startup-retry copies again. Anyone who may create a session in the original's project may fork it; for a standalone agent only its owner and those it is shared with for writing. Replaying the same Idempotency-Key returns the same fork with 200, as it is now rather than as it was created, so a copy that failed since shows in its startupError. Offered when offering.features lists session-fork; 404 otherwise. */
         post: operations["forkSession"];
         delete?: never;
         options?: never;
@@ -1210,7 +1210,7 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** @description Retries a session whose worker never started (its startupError explains why). The startup window, repair count and startup error are reset and the worker bootstrap runs again against the existing sandbox; a bring-your-own workspace is never recreated. Returns 409 startup_retry_unavailable when the worker has already checked in or the session is not meant to be running. While the session's work is moving to another machine (SESSION_MOVING), its terminal agent is not started again; agent/restart abandons the move. */
+        /** @description Retries a session whose worker never started (its startupError explains why). The startup window, repair count and startup error are reset and the worker bootstrap runs again against the existing sandbox; a bring-your-own workspace is never recreated. Returns 409 startup_retry_unavailable when the worker has already checked in or the session is not meant to be running, except for a fork whose startupError is fork_capture_failed or fork_seed_apply_failed (or repository_checkout_failed reported for one of them): its worker may have checked in, and the retry copies the original's files and conversation again. While the session's work is moving to another machine (SESSION_MOVING), its terminal agent is not started again; agent/restart abandons the move. */
         post: operations["retrySessionStartup"];
         delete?: never;
         options?: never;
@@ -2058,7 +2058,7 @@ export interface paths {
         /** @description What rolling the session back to before turnId would do: the turns it discards (turnId and every later turn) and, when the files from before turnId were saved and can be restored, each file it would change. When they can't, available is false and unavailable says why in words a person can act on; rolling back then changes only the conversation. Nothing changes. Offered when offering.features lists session-rollback; 404 otherwise. */
         get: operations["previewTurnRollback"];
         put?: never;
-        /** @description Roll the session back to before turnId: discard turnId and every later turn from the agent's memory, and with filePlanId from the preview restore the files as they were before turnId. Ignored files and dependency folders are never touched. The files are restored only if they still match the preview (409 ROLLBACK_FILES_CHANGED otherwise: preview again); what a restore overwrites is kept so the rollback doesn't lose it. The rolled-back turns get rolledBackAt and the session's stream gets session.rolled_back. Refused with 409 SESSION_BUSY while a turn runs, a fork is copying the session, or an interface transition is under way. Offered when offering.features lists session-rollback; 404 otherwise. */
+        /** @description Roll the session back to before turnId: discard turnId and every later turn from the agent's memory, and with filePlanId from the preview restore the files as they were before turnId. latestTurnId from the preview binds the request to the turns the preview listed: when a turn finished since, nothing changes and the answer is 409 ROLLBACK_TURNS_CHANGED (preview again), so the rollback discards exactly the preview's turns. Ignored files and dependency folders are never touched. The files are restored only if they still match the preview (409 ROLLBACK_FILES_CHANGED otherwise: preview again); what a restore overwrites is kept so the rollback doesn't lose it. The rolled-back turns get rolledBackAt and the session's stream gets session.rolled_back. Refused with 409 SESSION_BUSY while a turn runs, a fork is copying the session, or an interface transition is under way. Anyone who may write in the session may roll it back; a viewer is refused. Offered when offering.features lists session-rollback; 404 otherwise. */
         post: operations["rollbackTurn"];
         delete?: never;
         options?: never;
@@ -5216,18 +5216,39 @@ export interface components {
         ForkSessionResult: {
             session: components["schemas"]["Session"];
         };
-        /** @description What rolling back to before a turn would do (previewTurnRollback). */
-        RollbackPreview: {
-            /** @description The files from before the turn can be restored. */
-            available: boolean;
-            /** @description Why they can't, in words a person can act on, when available is false: for example that the files from before the turn weren't saved, or that the workspace holds too many or too large files to restore safely. The conversation can still be rolled back. */
-            unavailable?: string;
+        /** @description What rolling back to before a turn would do (previewTurnRollback): with available true the files can be restored too, with filePlanId; with available false only the conversation can, and unavailable says why. */
+        RollbackPreview: components["schemas"]["RollbackPreviewWithFiles"] | components["schemas"]["RollbackPreviewWithoutFiles"];
+        /** @description A rollback preview whose files can be restored. */
+        RollbackPreviewWithFiles: {
+            /**
+             * @description The files from before the turn can be restored.
+             * @constant
+             */
+            available: true;
             /** @description Each file restoring would change, by path within the workspace. */
             files: components["schemas"]["RollbackFileChange"][];
-            /** @description Pass to rollbackTurn to restore the files. It stops matching as soon as the files change, so nothing the preview didn't list is ever overwritten. */
-            filePlanId?: string;
+            /** @description Pass to rollbackTurn to restore the files. It stops matching as soon as the files change, so nothing the preview didn't list is ever overwritten. Omitted from rollbackTurn, only the conversation is rolled back. */
+            filePlanId: string;
             /** @description How many turns the rollback discards. */
             turns: number;
+            /** @description The newest turn the rollback discards; pass to rollbackTurn. */
+            latestTurnId: string;
+        };
+        /** @description A rollback preview that can roll back only the conversation. */
+        RollbackPreviewWithoutFiles: {
+            /**
+             * @description The files from before the turn can't be restored.
+             * @constant
+             */
+            available: false;
+            /** @description Why they can't, in words a person can act on: for example that the files from before the turn weren't saved, or that the workspace holds too many or too large files to restore safely. The conversation can still be rolled back. */
+            unavailable: string;
+            /** @description Empty; rolling back changes no files. */
+            files: components["schemas"]["RollbackFileChange"][];
+            /** @description How many turns the rollback discards. */
+            turns: number;
+            /** @description The newest turn the rollback discards; pass to rollbackTurn. */
+            latestTurnId: string;
         };
         RollbackFileChange: {
             path: string;
@@ -5238,6 +5259,8 @@ export interface components {
             change: "restored" | "reverted" | "removed";
         };
         RollbackTurnInput: {
+            /** @description The preview's latestTurnId. A turn that finished since the preview makes the request 409 ROLLBACK_TURNS_CHANGED. */
+            latestTurnId: string;
             /** @description The preview's filePlanId, to restore the files too. Omitted, only the conversation is rolled back. */
             filePlanId?: string;
         };
@@ -9222,6 +9245,8 @@ export interface operations {
                  *     Reusing it with a different command returns an IDEMPOTENCY_CONFLICT.
                  *      */
                 "Idempotency-Key": components["parameters"]["IdempotencyKey"];
+                /** @description Features this client understands, comma separated. With session-fork the control plane reports a fork's startup errors with their own codes, fork_capture_failed and fork_seed_apply_failed; without it, as repository_checkout_failed with the same message. */
+                "X-AO-Client-Features"?: components["parameters"]["ClientFeatures"];
             };
             path: {
                 orgId: components["parameters"]["OrgId"];
@@ -10879,7 +10904,16 @@ export interface operations {
                     "application/json": components["schemas"]["RollbackTurnResult"];
                 };
             };
-            /** @description ROLLBACK_FILES_CHANGED: the files changed since the preview. SESSION_BUSY: a turn, a fork's copy or an interface transition is running. SESSION_TERMINATED: the session ended. */
+            /** @description forbidden. The caller only views the session. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description ROLLBACK_FILES_CHANGED: the files changed since the preview. ROLLBACK_TURNS_CHANGED: a turn finished since the preview, so it would discard more turns than the preview listed. Either way nothing changed: preview again. SESSION_BUSY: a turn, a fork's copy or an interface transition is running. SESSION_TERMINATED: the session ended. */
             409: {
                 headers: {
                     [name: string]: unknown;

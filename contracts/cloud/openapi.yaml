@@ -2133,10 +2133,13 @@ paths:
         session-fork), and startup-retry copies again. Anyone who may create a
         session in the original's project may fork it; for a standalone agent
         only its owner and those it is shared with for writing. Replaying the
-        same Idempotency-Key returns the same fork with 200. Offered when
-        offering.features lists session-fork; 404 otherwise.
+        same Idempotency-Key returns the same fork with 200, as it is now
+        rather than as it was created, so a copy that failed since shows in
+        its startupError. Offered when offering.features lists session-fork;
+        404 otherwise.
       parameters:
         - $ref: "#/components/parameters/IdempotencyKey"
+        - $ref: "#/components/parameters/ClientFeatures"
       requestBody:
         required: true
         content:
@@ -2353,7 +2356,11 @@ paths:
         the worker bootstrap runs again against the existing sandbox; a
         bring-your-own workspace is never recreated. Returns 409
         startup_retry_unavailable when the worker has already checked in or the
-        session is not meant to be running. While the session's work is moving
+        session is not meant to be running, except for a fork whose
+        startupError is fork_capture_failed or fork_seed_apply_failed (or
+        repository_checkout_failed reported for one of them): its worker may
+        have checked in, and the retry copies the original's files and
+        conversation again. While the session's work is moving
         to another machine (SESSION_MOVING), its terminal agent is not started
         again; agent/restart abandons the move.
       responses:
@@ -3670,14 +3677,19 @@ paths:
       description: >-
         Roll the session back to before turnId: discard turnId and every later
         turn from the agent's memory, and with filePlanId from the preview
-        restore the files as they were before turnId. Ignored files and
+        restore the files as they were before turnId. latestTurnId from the
+        preview binds the request to the turns the preview listed: when a turn
+        finished since, nothing changes and the answer is 409
+        ROLLBACK_TURNS_CHANGED (preview again), so the rollback discards
+        exactly the preview's turns. Ignored files and
         dependency folders are never touched. The files are restored only if
         they still match the preview (409 ROLLBACK_FILES_CHANGED otherwise:
         preview again); what a restore overwrites is kept so the rollback
         doesn't lose it. The rolled-back turns get rolledBackAt and the
         session's stream gets session.rolled_back. Refused with 409
         SESSION_BUSY while a turn runs, a fork is copying the session, or an
-        interface transition is under way. Offered when offering.features
+        interface transition is under way. Anyone who may write in the session
+        may roll it back; a viewer is refused. Offered when offering.features
         lists session-rollback; 404 otherwise.
       parameters:
         - $ref: "#/components/parameters/IdempotencyKey"
@@ -3694,11 +3706,20 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/RollbackTurnResult"
+        "403":
+          description: forbidden. The caller only views the session.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
         "409":
           description: >-
             ROLLBACK_FILES_CHANGED: the files changed since the preview.
-            SESSION_BUSY: a turn, a fork's copy or an interface transition is
-            running. SESSION_TERMINATED: the session ended.
+            ROLLBACK_TURNS_CHANGED: a turn finished since the preview, so it
+            would discard more turns than the preview listed. Either way
+            nothing changed: preview again. SESSION_BUSY: a turn, a fork's
+            copy or an interface transition is running. SESSION_TERMINATED:
+            the session ended.
           content:
             application/json:
               schema:
@@ -10134,21 +10155,23 @@ components:
         session:
           $ref: "#/components/schemas/Session"
     RollbackPreview:
+      description: >-
+        What rolling back to before a turn would do (previewTurnRollback):
+        with available true the files can be restored too, with filePlanId;
+        with available false only the conversation can, and unavailable says
+        why.
+      oneOf:
+        - $ref: "#/components/schemas/RollbackPreviewWithFiles"
+        - $ref: "#/components/schemas/RollbackPreviewWithoutFiles"
+    RollbackPreviewWithFiles:
       type: object
       additionalProperties: false
-      required: [available, files, turns]
-      description: What rolling back to before a turn would do (previewTurnRollback).
+      required: [available, files, filePlanId, turns, latestTurnId]
+      description: A rollback preview whose files can be restored.
       properties:
         available:
-          type: boolean
+          const: true
           description: The files from before the turn can be restored.
-        unavailable:
-          type: string
-          description: >-
-            Why they can't, in words a person can act on, when available is
-            false: for example that the files from before the turn weren't
-            saved, or that the workspace holds too many or too large files to
-            restore safely. The conversation can still be rolled back.
         files:
           type: array
           description: Each file restoring would change, by path within the workspace.
@@ -10156,14 +10179,51 @@ components:
             $ref: "#/components/schemas/RollbackFileChange"
         filePlanId:
           type: string
+          minLength: 1
           description: >-
             Pass to rollbackTurn to restore the files. It stops matching as soon
             as the files change, so nothing the preview didn't list is ever
-            overwritten.
+            overwritten. Omitted from rollbackTurn, only the conversation is
+            rolled back.
         turns:
           type: integer
           minimum: 1
           description: How many turns the rollback discards.
+        latestTurnId:
+          type: string
+          minLength: 1
+          description: The newest turn the rollback discards; pass to rollbackTurn.
+    RollbackPreviewWithoutFiles:
+      type: object
+      additionalProperties: false
+      required: [available, unavailable, files, turns, latestTurnId]
+      description: A rollback preview that can roll back only the conversation.
+      properties:
+        available:
+          const: false
+          description: The files from before the turn can't be restored.
+        unavailable:
+          type: string
+          minLength: 1
+          description: >-
+            Why they can't, in words a person can act on: for example that the
+            files from before the turn weren't saved, or that the workspace
+            holds too many or too large files to restore safely. The
+            conversation can still be rolled back.
+        files:
+          type: array
+          maxItems: 0
+          description: Empty; rolling back changes no files.
+          items:
+            $ref: "#/components/schemas/RollbackFileChange"
+        turns:
+          type: integer
+          minimum: 1
+          description: How many turns the rollback discards.
+        latestTurnId:
+          type: string
+          minLength: 1
+          description: The newest turn the rollback discards; pass to rollbackTurn.
     RollbackFileChange:
       type: object
       additionalProperties: false
@@ -10180,7 +10240,14 @@ components:
     RollbackTurnInput:
       type: object
       additionalProperties: false
+      required: [latestTurnId]
       properties:
+        latestTurnId:
+          type: string
+          minLength: 1
+          description: >-
+            The preview's latestTurnId. A turn that finished since the preview
+            makes the request 409 ROLLBACK_TURNS_CHANGED.
         filePlanId:
           type: string
           description: >-
@@ -13231,6 +13298,7 @@ components:
           properties:
             turnIds:
               type: array
+              minItems: 1
               description: The turns discarded, oldest first; the first is the turn rolled back to before.
               items:
                 type: string
