@@ -45,6 +45,9 @@ const TILE_GAP = space.xs;
 const LIST_INSET = space.xs;
 const TILE_RADIUS = COMPOSER_RADIUS - LIST_INSET;
 
+// The most the grid may reach down: to just above the keys, as the slider sits.
+const GRID_KEYS_OVERLAP = -space.xs;
+
 /** The grid's height for `count` modes, two to a row. */
 export function permissionGridHeight(count: number): number {
 	const rows = Math.max(1, Math.ceil(count / 2));
@@ -137,8 +140,10 @@ export const PermissionPickerHost = memo(function PermissionPickerHost({ slider,
 });
 
 export function PermissionPickerOverlay({ visible = true, onDismiss, choices, onChoose }: { visible?: boolean; onDismiss?: () => void; choices: readonly PermissionChoice[]; onChoose: (value: string) => void }) {
-	// The grid's middle on the composer's control row, the heading above it.
-	const keysOverlap = permissionGridHeight(choices.length) / 2 - COMPOSER_CONTROL_RISE;
+	// Low, near the composer's control row where the thumb is, but never over
+	// the keys: centred on that row, a two-row grid's lower row hung over the
+	// keyboard's strip and number row, and its names shrank to nothing there.
+	const keysOverlap = Math.min(permissionGridHeight(choices.length) / 2 - COMPOSER_CONTROL_RISE, GRID_KEYS_OVERLAP);
 	return (
 		<ComposerOverlay overKeyboard keysOverlap={keysOverlap} onDismiss={onDismiss} visible={visible} fill>
 			<PermissionPicker choices={choices} onChoose={onChoose} />
@@ -176,7 +181,7 @@ export function PermissionPicker({ choices, onChoose }: { choices: readonly Perm
 									style={({ pressed }) => [styles.tile, choice.selected ? styles.tileSelected : pressed && styles.tilePressed]}
 								>
 									<Icon size={iconSize.md} strokeWidth={2} color={warning ? t.amber : choice.selected ? t.textPrimary : t.textSecondary} />
-									<Text style={[styles.title, !choice.selected && styles.titleIdle, warning && styles.warning]} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.85}>{choice.label}</Text>
+									<Text style={[styles.title, !choice.selected && styles.titleIdle, warning && styles.warning]} numberOfLines={1}>{choice.label}</Text>
 								</Pressable>
 							);
 						})}
