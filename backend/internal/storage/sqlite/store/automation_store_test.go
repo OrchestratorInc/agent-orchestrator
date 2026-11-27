@@ -386,7 +386,7 @@ func TestAutomationDueScanSkipsArchivedProjects(t *testing.T) {
 
 // The claim transaction is the non-overlap boundary. Once one occurrence is
 // spawning, later pending work for that definition cannot be leased.
-func TestAutomationClaimLeasesOldestPendingWithoutOverlap(t *testing.T) {
+func TestAutomationClaimSupersedesStalePendingWithoutOverlap(t *testing.T) {
 	store := newTestStore(t)
 	seedProject(t, store, "scheduled")
 	ctx := context.Background()
@@ -407,15 +407,55 @@ func TestAutomationClaimLeasesOldestPendingWithoutOverlap(t *testing.T) {
 		}
 	}
 	lease := base.Add(time.Minute)
-	claimed, ok, err := store.ClaimNextAutomationRun(ctx, base, lease)
-	if err != nil || !ok || claimed.ID != "run-1" || claimed.Status != domain.AutomationRunSpawning || claimed.AttemptCount != 1 {
+	claimed, ok, err := store.ClaimNextAutomationRun(ctx, base.Add(time.Hour), lease)
+	if err != nil || !ok || claimed.ID != "run-2" || claimed.Status != domain.AutomationRunSpawning || claimed.AttemptCount != 1 {
 		t.Fatalf("first claim = %#v ok=%v err=%v", claimed, ok, err)
+	}
+	stale, ok, err := store.GetAutomationRun(ctx, "run-1")
+	if err != nil || !ok || stale.Status != domain.AutomationRunFailed || stale.AttemptCount != 0 || stale.FinishedAt == nil || stale.ErrorMessage != "Superseded by a newer scheduled occurrence" {
+		t.Fatalf("stale run=%+v ok=%v err=%v", stale, ok, err)
 	}
 	if claimed.LeaseExpiresAt == nil || !claimed.LeaseExpiresAt.Equal(lease) {
 		t.Fatalf("lease = %v, want %s", claimed.LeaseExpiresAt, lease)
 	}
-	if second, ok, err := store.ClaimNextAutomationRun(ctx, base, lease); err != nil || ok {
+	if second, ok, err := store.ClaimNextAutomationRun(ctx, base.Add(time.Hour), lease); err != nil || ok {
 		t.Fatalf("overlapping claim = %#v ok=%v err=%v", second, ok, err)
+	}
+}
+
+// A running run keeps the outcome recorded before its session is closed, so a
+// later pass can end it correctly. Only a running run accepts one.
+func TestAutomationRunRecordsOutcomeWhileRunning(t *testing.T) {
+	store := newTestStore(t)
+	seedProject(t, store, "scheduled")
+	ctx := context.Background()
+	base := time.Date(2026, time.August, 25, 9, 0, 0, 0, time.UTC)
+	if _, err := store.CreateAutomation(ctx, domain.Automation{
+		ID: "automation-1", ProjectID: "scheduled", DisplayName: "Triage", Prompt: "Review",
+		Kind: domain.KindOrchestrator, RRuleText: "FREQ=DAILY", Timezone: "UTC", Enabled: true,
+		NextRunAt: base.Add(24 * time.Hour), CreatedAt: base, UpdatedAt: base,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	for i, status := range []domain.AutomationRunStatus{domain.AutomationRunRunning, domain.AutomationRunPending} {
+		if _, _, err := store.CreateAutomationRun(ctx, domain.AutomationRun{
+			ID: domain.AutomationRunID("run-" + string(status)), AutomationID: "automation-1",
+			ScheduledFor: base.Add(time.Duration(i) * time.Hour), Status: status, CreatedAt: base, UpdatedAt: base,
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, failure := range []string{"Did not finish before the next scheduled run", ""} {
+		if ok, err := store.RecordAutomationRunOutcome(ctx, "run-running", failure, base); err != nil || !ok {
+			t.Fatalf("record %q: ok=%v err=%v", failure, ok, err)
+		}
+		run, _, err := store.GetAutomationRun(ctx, "run-running")
+		if err != nil || run.Status != domain.AutomationRunRunning || run.ErrorMessage != failure {
+			t.Fatalf("run=%+v err=%v, want running with %q", run, err, failure)
+		}
+	}
+	if ok, err := store.RecordAutomationRunOutcome(ctx, "run-pending", "unused", base); err != nil || ok {
+		t.Fatalf("record on pending run: ok=%v err=%v", ok, err)
 	}
 }
 
