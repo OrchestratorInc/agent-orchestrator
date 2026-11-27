@@ -18,8 +18,8 @@ import {
 	unknownAgentReadiness,
 } from "../lib/agent-select-options";
 import { cn } from "../lib/utils";
-import { aoBridge } from "../lib/bridge";
 import { readProjectDefaults } from "../lib/project-defaults";
+import { getGitHubStatus } from "../lib/github-daemon";
 import { useAgentManagementMenu } from "../hooks/useAgentManagementMenu";
 import { AgentAvatar } from "./AgentAvatar";
 import { FieldDefaultHint } from "./FieldDefaultHint";
@@ -157,17 +157,24 @@ export function CreateProjectAgentSheet({
 		? projectSheetError(displayedError.current, displayedAction.current)
 		: null;
 	const wasOpen = useRef(false);
+	// Each opening, so a login answered after the sheet closed and opened again is dropped.
+	const openCount = useRef(0);
 
 	useEffect(() => {
 		if (open && !wasOpen.current) {
 			setIntake(EMPTY_INTAKE);
-			// Onboarding's "Start work on issues assigned to me" starts it on,
-			// for the signed-in GitHub user when the app knows who that is.
+			// Onboarding's "Start work on issues assigned to me" turns intake on
+			// for the GitHub user AO is signed in as, once the daemon says who that
+			// is. Without a login it stays off: on with no assignee would hold
+			// Create until the person filled a rule in.
 			if (readProjectDefaults()?.assignedIssues) {
-				setIntake({ ...EMPTY_INTAKE, enabled: true });
-				void Promise.resolve()
-					.then(() => aoBridge.telemetry.getGithubLogin())
-					.then((login) => { if (login) setIntake((current) => (current.assignee ? current : { ...current, assignee: login })); })
+				const opening = ++openCount.current;
+				void getGitHubStatus()
+					.then(({ login }) => {
+						if (!login || openCount.current !== opening) return;
+						// Unless the person set intake up themselves meanwhile.
+						setIntake((current) => (current.enabled || current.assignee ? current : { ...EMPTY_INTAKE, enabled: true, assignee: login }));
+					})
 					.catch(() => undefined);
 			}
 		}

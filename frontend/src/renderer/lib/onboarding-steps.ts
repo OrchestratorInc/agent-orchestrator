@@ -17,8 +17,6 @@
  * - work_defaults: what new projects start with (their agent, and how agents
  *   finish their work), the last page
  *   (appended, so its index comes after the steps that follow it in the flow)
- * - default_agents: the agents page that sat between Your tools and
- *   work_defaults (not sent since the agent moved onto work_defaults)
  */
 export const ONBOARDING_STEPS = [
 	"dependencies",
@@ -32,7 +30,6 @@ export const ONBOARDING_STEPS = [
 	"first_task",
 	"finish",
 	"work_defaults",
-	"default_agents",
 ] as const;
 export type OnboardingStep = (typeof ONBOARDING_STEPS)[number];
 

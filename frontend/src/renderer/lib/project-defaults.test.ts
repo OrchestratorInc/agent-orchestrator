@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it } from "vitest";
-import { projectDefaultsConfig, readProjectDefaults, saveProjectDefaults, withChosenAgents } from "./project-defaults";
+import { projectDefaultsConfig, readProjectDefaults, remoteProjectDefaults, saveProjectDefaults, withChosenAgents } from "./project-defaults";
 
 describe("project defaults", () => {
 	beforeEach(() => window.localStorage.clear());
@@ -39,5 +39,12 @@ describe("project defaults", () => {
 		expect(withChosenAgents(ranked, agents, null)).toEqual(ranked);
 		expect(withChosenAgents(ranked, agents, { ...chosen, orchestratorAgent: "codex", workerAgent: "amp" }))
 			.toEqual({ orchestratorAgent: "codex", workerAgent: "claude-code", reviewerAgent: "claude-code" });
+	});
+
+	it("keeps a remote project on its host's reviewer, carrying over the rest", () => {
+		const local = { archiveOnMerge: false, review: true, reviewerAgent: "codex", assignedIssues: false, fixChecks: false, fixReviewComments: true, orchestratorAgent: "codex", workerAgent: "codex" };
+		expect(remoteProjectDefaults(null)).toBeNull();
+		expect(projectDefaultsConfig(remoteProjectDefaults(local), "claude-code"))
+			.toEqual({ terminateOnPrMerge: false, autoInjectCI: false, autoInjectReview: true, autoReview: true, reviewers: [{ harness: "claude-code" }] });
 	});
 });

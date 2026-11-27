@@ -42,9 +42,9 @@ describe("onboarding telemetry allowlist", () => {
 			.toEqual({ step: "work_defaults", step_index: 10, archive_on_merge: true, auto_review: false, fix_checks: true });
 	});
 
-	it("keeps the agents page's picks only as agent ids", () => {
-		expect(sanitizeOnboardingProperties("ao.onboarding.step_completed", { step: "default_agents", orchestrator_agent: "claude-code", worker_agent: "/Users/me/bin/codex" }))
-			.toEqual({ step: "default_agents", step_index: 11, orchestrator_agent: "claude-code" });
+	it("keeps the work defaults page's agent only as an agent id", () => {
+		expect(sanitizeOnboardingProperties("ao.onboarding.step_completed", { step: "work_defaults", orchestrator_agent: "claude-code", worker_agent: "/Users/me/bin/codex" }))
+			.toEqual({ step: "work_defaults", step_index: 10, orchestrator_agent: "claude-code" });
 	});
 
 	it("keeps only closed values on step events", () => {

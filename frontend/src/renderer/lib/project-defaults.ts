@@ -84,6 +84,13 @@ export function projectDefaultsConfig(defaults: ProjectDefaults | null, fallback
 	};
 }
 
+/** The choices for a project on another machine (a remote host): how agents
+ * finish their work carries over, but the agents picked were this machine's,
+ * so the host's own ranking (the create request's reviewer) stands. */
+export function remoteProjectDefaults(defaults: ProjectDefaults | null): ProjectDefaults | null {
+	return defaults && { ...defaults, reviewerAgent: undefined, orchestratorAgent: undefined, workerAgent: undefined };
+}
+
 /** The agents a new project starts on: the ones chosen during onboarding
  * while they are still ready here, otherwise the ranked pick. */
 export function withChosenAgents(

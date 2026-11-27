@@ -143,6 +143,40 @@ describe("FirstTaskFunnel", () => {
 		}
 	});
 
+	it("expires while the app stays open on one step", () => {
+		vi.useFakeTimers();
+		try {
+			act(() => startFirstTaskFunnel());
+			render(<FirstTaskFunnel />);
+			capture.mockClear();
+			act(() => vi.advanceTimersByTime(8 * 24 * 60 * 60_000));
+			expect(capture.mock.calls.find(([event]) => event === "ao.onboarding.step_skipped")?.[1]).toMatchObject({ step: "tour_project", reason: "expired" });
+			expect(onboardingInProgress()).toBe(false);
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
+	it("doesn't count a message after the window as the first task", () => {
+		vi.useFakeTimers();
+		try {
+			act(() => startFirstTaskFunnel());
+			const view = render(<FirstTaskFunnel />);
+			route.pathname = "/projects/old";
+			view.rerender(<FirstTaskFunnel />);
+			route.pathname = "/projects/old/sessions/old-orchestrator";
+			view.rerender(<FirstTaskFunnel />);
+			// The timer slept with the machine: the clock moved on without it firing.
+			vi.setSystemTime(Date.now() + 8 * 24 * 60 * 60_000);
+			capture.mockClear();
+			act(() => notifyComposerSent());
+			expect(funnel()).not.toContainEqual(["ao.onboarding.step_completed", "first_task"]);
+			expect(capture.mock.calls.find(([event]) => event === "ao.onboarding.step_skipped")?.[1]).toMatchObject({ step: "first_task", reason: "expired" });
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
 	it("counts opening a remote host's project board", () => {
 		act(() => startFirstTaskFunnel());
 		const view = render(<FirstTaskFunnel />);

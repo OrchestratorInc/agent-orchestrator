@@ -25,7 +25,7 @@ import { TrayRuntime } from "../components/TrayRuntime";
 import { SharedWithYouNotifier } from "../components/teams/SharedWithYouNotifier";
 import { NewTaskNavigator } from "../components/NewTaskNavigator";
 import { FirstRunOnboarding } from "../components/onboarding/FirstRunOnboarding";
-import { projectDefaultsConfig, readProjectDefaults, type ProjectDefaults } from "../lib/project-defaults";
+import { projectDefaultsConfig, readProjectDefaults, remoteProjectDefaults, type ProjectDefaults } from "../lib/project-defaults";
 import { FirstTaskFunnel } from "../components/onboarding/FirstTaskFunnel";
 import { ArchiveModalHost } from "../components/ArchiveModalHost";
 import { GlobalToast } from "../components/GlobalToast";
@@ -1117,7 +1117,7 @@ const replacementErrorCount = Object.keys(orchestratorReplacementErrors).length;
 			path: input.path,
 			asWorkspace: input.asWorkspace || undefined,
 			clonePreparationId: input.clonePreparationId,
-			config: createProjectConfig(input, readProjectDefaults()),
+			config: createProjectConfig(input, remoteProjectDefaults(readProjectDefaults())),
 		} });
 		let projectId = error ? undefined : data?.project.id;
 		if (input.clonePreparationId && apiErrorCode(error) === "PATH_ALREADY_REGISTERED") {

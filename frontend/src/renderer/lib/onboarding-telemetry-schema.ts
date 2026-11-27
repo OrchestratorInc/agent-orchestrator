@@ -164,7 +164,7 @@ export function sanitizeOnboardingProperties(event: string, properties?: Propert
 			for (const key of ["archive_on_merge", "auto_review", "assigned_issues", "fix_checks", "fix_review_comments"] as const) {
 				if (typeof p?.[key] === "boolean") safe[key] = p[key];
 			}
-			// The agents picked on default_agents: registry ids, nothing else.
+			// The agent picked on work_defaults: registry ids, nothing else.
 			for (const key of ["orchestrator_agent", "worker_agent"] as const) {
 				if (typeof p?.[key] === "string" && TARGET_PATTERN.test(p[key])) safe[key] = p[key];
 			}

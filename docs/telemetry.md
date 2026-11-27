@@ -1186,8 +1186,7 @@ GitHub CLI is signed in and `ao_cloud_user_id` when signed in to AO Cloud.
 The funnel to read is the pages and then the app: `welcome` → `sign_in` →
 `tools` → `work_defaults` → `tour_project` → `tour_orchestrator` →
 `first_task`. `work_defaults` was added after the others, so its `step_index`
-(10) is out of flow order; `default_agents` (11) was a page between `tools`
-and `work_defaults` and is no longer sent. The `tour_*`
+(10) is out of flow order. The `tour_*`
 names are from the guided tour that used to cover those steps, but the steps
 now complete on different signals (below), so they do not read the same across
 versions: every event the unguided funnel sends for `tour_project`,
@@ -1223,7 +1222,6 @@ Every step is identified by `step` and its position in the flow,
 | 8 | `first_task` | The first message is sent from a chat while the funnel is on this step |
 | 9 | `finish` | The guided tour's closing note. Not sent since the tour was removed |
 | 10 | `work_defaults` | What new projects start with: the agent their orchestrator and workers run on, and how agents finish their work: review every PR, fix failing checks and merge conflicts, fix review comments, archive chats on merge, work on assigned issues |
-| 11 | `default_agents` | The agents new projects run their orchestrator and workers on. Not sent since that choice moved onto `work_defaults` |
 
 | Event | When it is sent | Onboarding-specific properties |
 | --- | --- | --- |

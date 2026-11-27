@@ -148,6 +148,11 @@ function endEarly(reason: "activated" | "expired") {
 	finishRun();
 }
 
+/** Whether the activation window since setup finished has passed. */
+function expired(run: FunnelState) {
+	return Date.now() - run.startedAt > ONBOARDING_ACTIVATION_WINDOW_MS;
+}
+
 /** Starts measuring from the first step. */
 export function startFirstTaskFunnel({ replay = false, addProjectOpen = false }: { replay?: boolean; addProjectOpen?: boolean } = {}) {
 	setState({ step: "project", known: null, startedAt: Date.now(), ...(replay ? { replay } : {}), ...(addProjectOpen ? { addProjectOpen } : {}) });
@@ -185,9 +190,18 @@ export function FirstTaskFunnel() {
 		if (step) reportOnboardingStep(FUNNEL_STEP[step], "viewed", VARIANT);
 	}, [step]);
 	// Past the activation window the run is over, even if the person never
-	// came back to it.
+	// came back to it: checked as the funnel shows (a relaunch, a new step) and
+	// again when the window ends while the app stays open on one step.
 	useEffect(() => {
-		if (step && state && Date.now() - state.startedAt > ONBOARDING_ACTIVATION_WINDOW_MS) endEarly("expired");
+		if (!step || !state) return;
+		if (expired(state)) {
+			endEarly("expired");
+			return;
+		}
+		const timer = window.setTimeout(() => {
+			if (state && expired(state)) endEarly("expired");
+		}, state.startedAt + ONBOARDING_ACTIVATION_WINDOW_MS - Date.now() + 1);
+		return () => window.clearTimeout(timer);
 	}, [step]);
 	// The first message after onboarding (activation). It runs before the
 	// listener below, so a message sent on the first-task step counts as sent
@@ -228,7 +242,9 @@ export function FirstTaskFunnel() {
 	useEffect(() => {
 		if (!step) return;
 		return onComposerSent(() => {
-			if (state?.step === "task") moveOn("task");
+			// A message after the window (a timer that slept with the machine) isn't the first task.
+			if (state && expired(state)) endEarly("expired");
+			else if (state?.step === "task") moveOn("task");
 			else endEarly("activated");
 		});
 	}, [step]);
