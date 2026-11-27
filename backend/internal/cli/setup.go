@@ -9,6 +9,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"time"
 
@@ -122,6 +123,8 @@ type setupResult struct {
 	// readOnly is set for --check and --dry-run.
 	readOnly  bool
 	authPlans map[string]setupAuthPlan
+	// checks are the agent checks this run made, by agent id.
+	checks map[string]setupAgentCheck
 }
 
 func newSetupCommand(ctx *commandContext) *cobra.Command {
@@ -257,6 +260,7 @@ func (c *commandContext) runSetup(ctx context.Context, errOut io.Writer, opts se
 	res.agentSaveable = agentStep.Status == setupOK || agentStep.Status == setupFixed || agentStep.Status == setupNeedsHuman
 	add(c.setupGitHubStep(ctx, opts))
 	projectStep := add(c.setupProjectStep(ctx, opts, &res))
+	setupRecheckAgentStep(&res)
 	add(setupFirstRunStep(projectStep))
 
 	if opts.start != "" {
@@ -264,6 +268,46 @@ func (c *commandContext) runSetup(ctx context.Context, errOut io.Writer, opts se
 	}
 	finishSetup(&res, opts)
 	return res
+}
+
+// setupRecheckAgentStep redoes the agent verdict when the project step found
+// a registered project whose saved agents replace the ones the agent step
+// picked (another run registered it in between). A blocked agent the project
+// does not run no longer blocks; one it still runs keeps blocking.
+func setupRecheckAgentStep(res *setupResult) {
+	if res.Agent == nil || (res.Agent.Source != "caller" && res.Agent.Source != "ready") {
+		return
+	}
+	idx := -1
+	for i, s := range res.Steps {
+		if s.Step == setupStepAgent {
+			idx = i
+		}
+	}
+	if idx < 0 || (res.Steps[idx].Status != setupNeedsHuman && res.Steps[idx].Status != setupFailed) {
+		return
+	}
+	roles := uniqueStrings(res.Agent.Worker, res.Agent.Orchestrator)
+	if slices.Contains(roles, res.Agent.ID) {
+		return
+	}
+	var notes []string
+	for _, id := range roles {
+		check, ok := res.checks[id]
+		if !ok || check.problem != "" {
+			return
+		}
+		notes = append(notes, check.note)
+	}
+	res.Steps[idx] = setupStep{
+		Step:   setupStepAgent,
+		Status: setupOK,
+		Detail: fmt.Sprintf("the project is registered with worker %s and orchestrator %s, so %s (%s) is not used; %s", res.Agent.Worker, res.Agent.Orchestrator, res.Agent.ID, setupAgentSource(res.Agent), strings.Join(notes, "; ")),
+	}
+	res.Agent.ID, res.Agent.Source, res.Agent.DetectedFrom = res.Agent.Worker, "project", ""
+	if check, ok := res.checks[res.Agent.ID]; ok {
+		res.Agent.AuthStatus = check.auth
+	}
 }
 
 // finishSetup adds the verify step, the verdict and the next actions.
@@ -614,6 +658,10 @@ func (c *commandContext) setupCheckAgent(ctx context.Context, id string, res *se
 	default:
 		check.note = fmt.Sprintf("%s is installed; its sign-in could not be checked, so the first task will confirm it", id)
 	}
+	if res.checks == nil {
+		res.checks = map[string]setupAgentCheck{}
+	}
+	res.checks[id] = check
 	return check, nil
 }
 

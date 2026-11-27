@@ -800,6 +800,7 @@ func TestSetupRefusesARepositoryAtHome(t *testing.T) {
 	d := newSetupDaemon(t)
 	repo := gitRepo(t, true)
 	t.Setenv("HOME", repo)
+	t.Setenv("USERPROFILE", repo) // os.UserHomeDir reads it on Windows
 	sub := filepath.Join(repo, "scratch")
 	if err := os.Mkdir(sub, 0o755); err != nil {
 		t.Fatal(err)
@@ -1292,5 +1293,35 @@ func TestSetupNeedsInputUsesTheTaskFix(t *testing.T) {
 	start := stepNamed(t, res, "start")
 	if res.Task == nil || res.Task.Fix == "" || start.Fix != res.Task.Fix {
 		t.Fatalf("start fix = %q, task fix = %q; want the task's own fix (it names the session to answer)", start.Fix, res.Task.Fix)
+	}
+}
+
+// Another run registers the project with ready agents between this run's
+// agent step and its project step: the caller's sign-in no longer blocks.
+func TestSetupRechecksAgentsWhenTheProjectAppearsLate(t *testing.T) {
+	d := newSetupDaemon(t)
+	repo := gitRepo(t, true)
+	t.Setenv("CLAUDECODE", "1")
+	d.set("POST /api/v1/agents/claude-code/probe", 200, `{"agent":{"id":"claude-code","authStatus":"unauthorized"},"supported":true,"installed":true}`)
+	project := fmt.Sprintf(`{"id":"calc","path":%q,"repo":"example/calc","defaultBranch":"main","config":{"worker":{"agent":"codex"},"orchestrator":{"agent":"codex"}}}`, repo)
+	d.setFunc("GET /api/v1/projects", func() (int, string) {
+		if !d.saw("POST /api/v1/projects") {
+			return 200, `{"projects":[]}`
+		}
+		return 200, fmt.Sprintf(`{"projects":[{"id":"calc","path":%q}]}`, repo)
+	})
+	d.set("GET /api/v1/projects/calc", 200, `{"status":"ok","project":`+project+`}`)
+	d.set("POST /api/v1/projects", 409, `{"code":"PATH_ALREADY_REGISTERED","message":"already registered"}`)
+
+	out, _, err := executeCLI(t, fakeClockDeps(), "setup", "--path", repo, "--json")
+	if err != nil {
+		t.Fatalf("err = %v\n%s", err, out)
+	}
+	res := decodeSetup(t, out)
+	if !res.Ready || res.Agent.ID != "codex" || res.Agent.Source != "project" {
+		t.Fatalf("ready=%v agent=%+v", res.Ready, res.Agent)
+	}
+	if agent := stepNamed(t, res, "agent"); agent.Status != setupOK || !strings.Contains(agent.Detail, "is not used") {
+		t.Fatalf("agent step = %+v", agent)
 	}
 }
