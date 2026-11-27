@@ -49,7 +49,7 @@ func (s *Store) ListSessionVersionMoves(ctx context.Context) ([]domain.SessionVe
 func (s *Store) SetSessionVersionMoveStage(ctx context.Context, id domain.SessionID, stage string) error {
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()
-	return s.qw.SetSessionVersionMoveStage(ctx, gen.SetSessionVersionMoveStageParams{SessionID: string(id), Stage: stage})
+	return s.qw.SetSessionVersionMoveStage(ctx, gen.SetSessionVersionMoveStageParams{SessionID: id, Stage: stage})
 }
 
 // AttemptSessionVersionMove durably consumes one retry, up to limit.

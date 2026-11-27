@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
+	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
 // staleBinaryStore is the durable stale-release mark. It is optional so stores
@@ -311,8 +312,16 @@ func (m *Manager) RetryVersionMoves(ctx context.Context) error {
 				}
 			}
 			// Messages sent while it was stopped stayed queued for this start.
+			if !m.chat.HasLiveChatController(id) {
+				release()
+				errs = append(errs, fmt.Errorf("retry %s has no published chat controller: %w", id, ports.ErrChatRecoveryInconclusive))
+				continue
+			}
 			if err := m.chat.DrainChatQueue(ctx, id); err != nil {
 				m.logger.Warn("could not deliver messages queued while the session was stopped", "sessionID", id, "error", err)
+				release()
+				errs = append(errs, fmt.Errorf("deliver retry queue for %s: %w", id, err))
+				continue
 			}
 		}
 		release()

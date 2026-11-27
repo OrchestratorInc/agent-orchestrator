@@ -145,6 +145,9 @@ func (s *versionRecoveryStore) PutSessionVersionMove(_ context.Context, move dom
 	if s.moves == nil {
 		s.moves = make(map[domain.SessionID]domain.SessionVersionMove)
 	}
+	if _, exists := s.moves[move.SessionID]; exists {
+		return errors.New("version move already exists")
+	}
 	s.moves[move.SessionID] = move
 	return nil
 }
@@ -163,6 +166,9 @@ func (s *versionRecoveryStore) ListSessionVersionMoves(context.Context) ([]domai
 func (s *versionRecoveryStore) SetSessionVersionMoveStage(_ context.Context, id domain.SessionID, stage string) error {
 	if move, ok := s.moves[id]; ok {
 		move.Stage = stage
+		if stage == domain.VersionMoveRetry {
+			move.SourceLaunch = domain.NewSessionVersionMove(s.sessions[id]).SourceLaunch
+		}
 		s.moves[id] = move
 	}
 	return nil
@@ -176,7 +182,10 @@ func (s *versionRecoveryStore) AttemptSessionVersionMove(_ context.Context, id d
 	s.moves[id] = move
 	return true, nil
 }
-func (s *versionRecoveryStore) DeleteSessionVersionMove(_ context.Context, id domain.SessionID) error {
+func (s *versionRecoveryStore) DeleteSessionVersionMove(ctx context.Context, id domain.SessionID) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	delete(s.moves, id)
 	return nil
 }
@@ -252,6 +261,8 @@ func TestUpdateStopRecoversChatAcrossManagerRecreation(t *testing.T) {
 		t.Fatal(err)
 	}
 	launcher := &recordingLauncher{}
+	launcher.providerConversationID = rec.Metadata.ProviderConversationID
+	launcher.afterReady = func() { launcher.live = true }
 	after, _, _ := newChatManager(launcher)
 	after.store, after.lcm = store, &fakeLCM{store: base}
 	if err := after.RetryVersionMoves(ctx); err != nil {

@@ -7,7 +7,16 @@ ON CONFLICT(session_id) DO NOTHING;
 SELECT session_id, intent, stage, attempts FROM session_version_moves ORDER BY session_id;
 
 -- name: SetSessionVersionMoveStage :exec
-UPDATE session_version_moves SET stage = ? WHERE session_id = ?;
+-- A confirmed failed Chat start can claim a generation before publication.
+-- Retry fences the next attempt to that stopped epoch without resetting budget.
+UPDATE session_version_moves
+SET stage = sqlc.arg(stage),
+    intent = CASE WHEN sqlc.arg(stage) = 'retry'
+        THEN json_set(intent, '$.SourceLaunch',
+            (SELECT CASE WHEN session_mode = 'chat' THEN controller_generation ELSE runtime_launch_id END
+             FROM sessions WHERE id = sqlc.arg(session_id)))
+        ELSE intent END
+WHERE session_id = sqlc.arg(session_id);
 
 -- name: AttemptSessionVersionMove :execrows
 UPDATE session_version_moves SET attempts = attempts + 1

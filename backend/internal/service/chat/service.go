@@ -855,6 +855,13 @@ func (s *Service) startLocked(ctx context.Context, cfg StartConfig) (*Controller
 	if sessionFound && s.accountMoveAwaitingTarget(ctx, cfg.SessionID) {
 		waking = true
 	}
+	if sessionFound && !waking && owner.Kind == domain.ConversationOwnerSession && cfg.ProviderConversationID == sessionRecord.Metadata.ProviderConversationID {
+		move, err := s.ownedVersionMove(ctx, sessionRecord)
+		if err != nil {
+			return nil, fmt.Errorf("read version move before chat start: %w", err)
+		}
+		waking = move != nil
+	}
 	hadProviderHistory := false
 	if sessionFound && (sessionRecord.ProvisionState.IsProvisioning() || waking) {
 		hadProviderHistory = sessionRecord.Metadata.ProviderConversationID != ""

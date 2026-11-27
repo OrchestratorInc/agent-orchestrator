@@ -106,17 +106,18 @@ func (m *Manager) refreshStaleTerminal(ctx context.Context, store staleTerminalS
 		return err
 	}
 	if err := m.releaseTerminalRuntime(operationCtx, current); err != nil {
-		return err
+		return errors.Join(err, m.cancelUnstartedVersionMove(ctx, current, false))
 	}
 	if _, err := m.resumeAgentRecordWithPolicy(operationCtx, "version refresh", current, true); err != nil {
 		m.logger.Warn("version_switch_failed: terminal session could not restart on the new harness release",
 			"sessionID", id, "harness", current.Harness, "version", version, "error", err)
 		m.emitVersionSwitch(current, "tui", "failed")
 		m.versionRetries.note(id)
+		cleanupErr := m.cancelUnstartedVersionMove(ctx, current, false)
 		if recordErr := store.SetSessionVersionSwitchFailed(context.WithoutCancel(ctx), id, version, m.clock()); recordErr != nil {
-			return errors.Join(err, recordErr)
+			return errors.Join(err, recordErr, cleanupErr)
 		}
-		return err
+		return errors.Join(err, cleanupErr)
 	}
 	if err := m.completeVersionMove(operationCtx, id); err != nil {
 		return err

@@ -59,6 +59,14 @@ func TestVersionMoveJournalSurvivesSQLiteReopen(t *testing.T) {
 		if allowed, err := s.AttemptSessionVersionMove(ctx, id, 1); err != nil || !allowed {
 			t.Fatalf("first attempt = %v, %v", allowed, err)
 		}
+		if rec.Mode == domain.SessionModeChat {
+			if err := s.ClaimLiveChatControllerGeneration(ctx, id, "failed-claim"); err != nil {
+				t.Fatal(err)
+			}
+			if err := s.SetSessionVersionMoveStage(ctx, id, domain.VersionMoveRetry); err != nil {
+				t.Fatal(err)
+			}
+		}
 	}
 	if err := s.Close(); err != nil {
 		t.Fatal(err)
@@ -72,6 +80,9 @@ func TestVersionMoveJournalSurvivesSQLiteReopen(t *testing.T) {
 		t.Fatalf("reopened moves = %+v, %v", moves, err)
 	}
 	for _, move := range moves {
+		if move.Mode == domain.SessionModeChat && move.SourceLaunch != "failed-claim" {
+			t.Fatalf("retry lost the failed claim epoch: %+v", move)
+		}
 		if move.Attempts != 1 || move.Stage != domain.VersionMoveRetry || move.Version != "new" || move.SourceLaunch == "" || move.NativeID == "" {
 			t.Fatalf("lost recovery identity or budget: %+v", move)
 		}

@@ -757,6 +757,11 @@ func (m *Manager) resumeChatController(
 		if rec.Metadata.ImportSource != nil && providerRefusedImportOwnership(err) {
 			return RestoreResult{}, ErrSessionOpenElsewhere
 		}
+		if !errors.Is(err, ports.ErrChatRecoveryInconclusive) && !m.chat.HasLiveChatController(rec.ID) {
+			cleanup, cancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
+			defer cancel()
+			err = errors.Join(err, m.versionMoveStage(cleanup, rec.ID, domain.VersionMoveRetry))
+		}
 		m.requireChatLogin(ctx, rec.ID, err)
 		return RestoreResult{}, relaunchFailed("chat start", fmt.Errorf("%s %s: resume chat: %w", operation, rec.ID, agentlaunch.RedactError(err, project.Config.Env)))
 	}

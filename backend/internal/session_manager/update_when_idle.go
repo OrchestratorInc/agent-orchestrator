@@ -219,16 +219,22 @@ func (m *Manager) stopForUpdate(ctx context.Context, rec domain.SessionRecord) (
 	// recorded as released before the runtime goes, so the reaper never reads
 	// the dead runtime as a crash and terminates the session while the update
 	// installs.
+	moveRecorded, stopAttempted := false, false
 	if err == nil {
 		err = m.beginVersionMove(ctx, current)
+		moveRecorded = err == nil
 	}
 	if err == nil {
 		err = m.releaseTerminalRuntime(ctx, current)
 	}
 	if err == nil {
+		stopAttempted = true
 		err = m.stopSourceControllerConclusive(current)
 	}
 	if err != nil {
+		if moveRecorded {
+			err = errors.Join(err, m.cancelUnstartedVersionMove(ctx, current, stopAttempted))
+		}
 		if releaseInput != nil {
 			releaseInput()
 		}

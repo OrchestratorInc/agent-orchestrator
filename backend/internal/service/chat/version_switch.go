@@ -2,6 +2,7 @@ package chat
 
 import (
 	"context"
+	"errors"
 	"time"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
@@ -136,7 +137,35 @@ func (s *Service) versionSwitchFailed(ctx context.Context, id domain.SessionID, 
 			s.log.Warn("could not record version switch failure", "session", id, "err", err)
 		}
 	}
+	if !errors.Is(wakeErr, ports.ErrChatRecoveryInconclusive) && !s.HasLiveChatController(id) {
+		if err := s.recordVersionMoveStopped(ctx, id); err != nil {
+			s.log.Warn("could not retain automatic version retry", "session", id, "err", err)
+		}
+	}
 	return true
+}
+
+// A generation claim can precede publication, so native identity, harness and
+// mode identify the move's queue even while its controller epoch is changing.
+func (s *Service) ownedVersionMove(ctx context.Context, rec domain.SessionRecord) (*domain.SessionVersionMove, error) {
+	if domain.NormalizeSessionMode(rec.Mode) != domain.SessionModeChat {
+		return nil, nil
+	}
+	store, ok := s.sessions.(ports.SessionVersionMoveStore)
+	if !ok {
+		return nil, nil
+	}
+	moves, err := store.ListSessionVersionMoves(ctx)
+	if err != nil {
+		return nil, err
+	}
+	current := domain.NewSessionVersionMove(rec)
+	for _, move := range moves {
+		if move.SessionID == rec.ID && move.Mode == current.Mode && move.Harness == current.Harness && move.NativeID == current.NativeID {
+			return &move, nil
+		}
+	}
+	return nil, nil
 }
 
 func (s *Service) recordVersionMoveStopped(ctx context.Context, id domain.SessionID) error {

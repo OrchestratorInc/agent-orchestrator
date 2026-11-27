@@ -7,6 +7,8 @@ package gen
 
 import (
 	"context"
+
+	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 )
 
 const attemptSessionVersionMove = `-- name: AttemptSessionVersionMove :execrows
@@ -88,14 +90,23 @@ func (q *Queries) PutSessionVersionMove(ctx context.Context, arg PutSessionVersi
 }
 
 const setSessionVersionMoveStage = `-- name: SetSessionVersionMoveStage :exec
-UPDATE session_version_moves SET stage = ? WHERE session_id = ?
+UPDATE session_version_moves
+SET stage = ?1,
+    intent = CASE WHEN ?1 = 'retry'
+        THEN json_set(intent, '$.SourceLaunch',
+            (SELECT CASE WHEN session_mode = 'chat' THEN controller_generation ELSE runtime_launch_id END
+             FROM sessions WHERE id = ?2))
+        ELSE intent END
+WHERE session_id = ?2
 `
 
 type SetSessionVersionMoveStageParams struct {
 	Stage     string
-	SessionID string
+	SessionID domain.SessionID
 }
 
+// A confirmed failed Chat start can claim a generation before publication.
+// Retry fences the next attempt to that stopped epoch without resetting budget.
 func (q *Queries) SetSessionVersionMoveStage(ctx context.Context, arg SetSessionVersionMoveStageParams) error {
 	_, err := q.db.ExecContext(ctx, setSessionVersionMoveStage, arg.Stage, arg.SessionID)
 	return err

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
@@ -57,9 +58,23 @@ func (m *Manager) recoverVersionMoves(ctx context.Context) (map[domain.SessionID
 			return nil, err
 		}
 		current := domain.NewSessionVersionMove(rec)
-		if errors.Is(err, ErrNotFound) || rec.IsTerminated || rec.MovedTo != nil ||
-			current.Mode != move.Mode || current.Harness != move.Harness || current.NativeID != move.NativeID ||
-			current.SourceLaunch != move.SourceLaunch && rec.StaleBinary == nil {
+		obsolete := errors.Is(err, ErrNotFound) || rec.IsTerminated || rec.MovedTo != nil ||
+			current.Mode != move.Mode || current.Harness != move.Harness || current.NativeID != move.NativeID
+		completedGeneration := !obsolete && current.SourceLaunch != move.SourceLaunch && rec.StaleBinary == nil
+		if current.Mode == domain.SessionModeChat {
+			// A claim can precede history import and publication. A live owned
+			// controller and a successful drain establish completion, not the
+			// changed generation alone. Keep queued work after a failed drain.
+			completedGeneration = completedGeneration && m.chat != nil && m.chat.HasLiveChatController(rec.ID)
+			if completedGeneration {
+				if err := m.chat.DrainChatQueue(ctx, rec.ID); err != nil {
+					m.logger.Warn("version move queue delivery still pending", "sessionID", rec.ID, "error", err)
+					m.versionRetries.done(rec.ID)
+					continue
+				}
+			}
+		}
+		if obsolete || completedGeneration {
 			if err := store.DeleteSessionVersionMove(ctx, move.SessionID); err != nil {
 				return nil, err
 			}
@@ -113,23 +128,9 @@ func (m *Manager) recoverStoppingTerminal(ctx context.Context, original domain.S
 		return false, err
 	}
 	defer m.endAgentOperation(original.ID, agentOperationResume)
-	store, ok := m.store.(ports.SessionVersionMoveStore)
-	if !ok {
-		return false, nil
-	}
-	moves, err := store.ListSessionVersionMoves(ctx)
-	if err != nil {
+	store, err := m.versionMoveStoreForOwner(ctx, original, domain.VersionMoveStopping)
+	if err != nil || store == nil {
 		return false, err
-	}
-	stopping := false
-	for _, move := range moves {
-		if move.SessionID == original.ID && move.Stage == domain.VersionMoveStopping &&
-			move.SourceLaunch == original.Metadata.RuntimeLaunchID && move.NativeID == original.Metadata.AgentSessionID {
-			stopping = true
-		}
-	}
-	if !stopping {
-		return false, nil
 	}
 	rec, err := m.getRecord(ctx, original.ID)
 	if err != nil {
@@ -155,11 +156,80 @@ func (m *Manager) recoverStoppingTerminal(ctx context.Context, original domain.S
 
 func (m *Manager) attemptVersionMove(ctx context.Context, id domain.SessionID, moves map[domain.SessionID]domain.SessionVersionMove) (bool, error) {
 	if _, ok := moves[id]; ok {
-		allowed, err := m.store.(ports.SessionVersionMoveStore).AttemptSessionVersionMove(ctx, id, maxVersionResumeAttempts)
+		store, ok := m.store.(ports.SessionVersionMoveStore)
+		if !ok {
+			return false, errors.New("version move store unavailable")
+		}
+		allowed, err := store.AttemptSessionVersionMove(ctx, id, maxVersionResumeAttempts)
 		if err != nil {
 			return false, fmt.Errorf("record retry for %s: %w", id, err)
 		}
 		return allowed, nil
 	}
 	return m.versionRetries.attempt(id), nil
+}
+
+// A preflight error has not started a replacement. If shutdown was attempted,
+// require proof that the source still owns its runtime before discarding intent.
+func (m *Manager) cancelUnstartedVersionMove(ctx context.Context, rec domain.SessionRecord, requireLiveSource bool) error {
+	cleanup, cancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
+	defer cancel()
+	store, err := m.versionMoveStoreForOwner(cleanup, rec, domain.VersionMoveStopping)
+	if err != nil || store == nil {
+		return err
+	}
+	if requireLiveSource {
+		probe := m.runtime.ProbeFencedRuntime(cleanup, ports.FencedRuntimeRef{Handle: runtimeHandle(rec.Metadata), SessionID: rec.ID, Generation: rec.Metadata.RuntimeLaunchID})
+		if probe.Liveness != ports.FencedAlive {
+			return nil
+		}
+	}
+	return store.DeleteSessionVersionMove(cleanup, rec.ID)
+}
+
+// Runtime errors may follow a partial restart. An exact probe distinguishes an
+// untouched source, a dead replacement, and uncertain ownership; an error alone
+// never authorizes another launch.
+func (m *Manager) recoverFailedVersionMoveStart(ctx context.Context, rec domain.SessionRecord, handle ports.RuntimeHandle, launchID string) error {
+	cleanup, cancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
+	defer cancel()
+	store, err := m.versionMoveStoreForOwner(cleanup, rec, domain.VersionMoveStarting)
+	if err != nil || store == nil {
+		return err
+	}
+	source := runtimeHandle(rec.Metadata)
+	probe := m.runtime.ProbeFencedRuntime(cleanup, ports.FencedRuntimeRef{Handle: source, SessionID: rec.ID, Generation: rec.Metadata.RuntimeLaunchID})
+	if probe.Liveness == ports.FencedAlive {
+		return store.DeleteSessionVersionMove(cleanup, rec.ID)
+	}
+	if handle.ID == "" {
+		handle = source
+	}
+	probe = m.runtime.ProbeFencedRuntime(cleanup, ports.FencedRuntimeRef{Handle: handle, SessionID: rec.ID, Generation: launchID})
+	if probe.Liveness == ports.FencedDead {
+		if _, err := m.preserveFailedReconcileRelaunch(cleanup, rec); err != nil {
+			return err
+		}
+		return store.SetSessionVersionMoveStage(cleanup, rec.ID, domain.VersionMoveRetry)
+	}
+	return nil
+}
+
+func (m *Manager) versionMoveStoreForOwner(ctx context.Context, rec domain.SessionRecord, stage string) (ports.SessionVersionMoveStore, error) {
+	store, ok := m.store.(ports.SessionVersionMoveStore)
+	if !ok {
+		return nil, nil
+	}
+	moves, err := store.ListSessionVersionMoves(ctx)
+	if err != nil {
+		return nil, err
+	}
+	current := domain.NewSessionVersionMove(rec)
+	for _, move := range moves {
+		if move.SessionID == rec.ID && move.Stage == stage && move.SourceLaunch == current.SourceLaunch &&
+			move.Mode == current.Mode && move.Harness == current.Harness && move.NativeID == current.NativeID {
+			return store, nil
+		}
+	}
+	return nil, nil
 }
