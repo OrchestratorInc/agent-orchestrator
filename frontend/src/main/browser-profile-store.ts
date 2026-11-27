@@ -354,6 +354,13 @@ export class BrowserProfileStore {
 			// a user who deleted every profile keeps Temporary after upgrading.
 			if (current.profiles.length > 0 || this.registryExisted) {
 				current.defaultProfileCreated = true;
+				// Older versions only ever set the oldest profile as the default
+				// (first create, first import, promotion after a delete). A default
+				// that is off, or any other profile, was the user's choice, so a
+				// later import must keep it.
+				if (current.profiles.length > 0 && current.defaultProfileId !== current.profiles[0]?.id) {
+					current.defaultProfileChosen = true;
+				}
 				return { registry: current, result: current.defaultProfileId };
 			}
 			const now = this.now().toISOString();
