@@ -1963,12 +1963,12 @@ func (m *Manager) resolveTUIAgentConfig(ctx context.Context, cfg ports.SpawnConf
 // validates the resulting effort against the harness. Harnesses without effort
 // support clear it (or reject a flagged explicit override); command-code and
 // hermes forward the level raw for the CLI to check; the catalog-backed
-// harnesses (codex, claude-code, pi, prime-agent) confirm the selected model
-// advertises the level. It returns ErrUnsupportedEffort when a model does not
-// offer an explicitly requested level and ErrModelCapabilitiesUnavailable when
-// the catalog cannot confirm the launch. Unsupported inherited Pi or Prime
-// Agent effort is cleared. Terminals leave unconfirmed inherited levels to the
-// CLI; chat clears them.
+// harnesses (codex, claude-code, pi, prime-agent, open-interpreter, omp) check
+// the selected model's levels. It returns ErrUnsupportedEffort when a listed
+// model does not offer a requested level. Claude Code also requires access to
+// the catalog to validate an explicit model. Unsupported inherited Pi, Prime
+// Agent, or OMP effort is cleared. Pi and Prime Agent terminals leave unconfirmed
+// inherited levels to the CLI unless the request changes the model.
 func (m *Manager) resolveAgentConfig(ctx context.Context, cfg ports.SpawnConfig, project domain.ProjectConfig) (ports.AgentConfig, error) {
 	resolved, err := m.resolveAgentConfigOnce(ctx, cfg, project)
 	if err != nil && cfg.Fork != nil && cfg.AgentConfig.Model != "" && errors.Is(err, ErrUnsupportedModel) {
@@ -1989,16 +1989,15 @@ func (m *Manager) resolveAgentConfigOnce(ctx context.Context, cfg ports.SpawnCon
 	resolved := applySpawnAgentConfig(base, requested)
 	modelChangedWithoutExplicitEffort := requested.Model != "" && requested.Model != base.Model &&
 		!cfg.EffortOverride && requested.Effort == ""
-	// Role or project settings may carry a stale Pi or Prime Agent effort that
-	// the selected model does not advertise. Clear that level instead of failing
-	// the launch; terminals let the CLI judge levels the catalog cannot confirm.
-	// A level the request carries itself (a flagged override, or a nonempty effort
-	// in the spawn request) is explicit and still validated, so an unsupported
-	// choice is rejected rather than silently dropped.
-	inheritedPiEffort := !cfg.EffortOverride && strings.TrimSpace(requested.Effort) == "" &&
-		(cfg.Harness == domain.HarnessPi || cfg.Harness == domain.HarnessPrimeAgent)
-	clearUnconfirmedPiEffort := inheritedPiEffort &&
-		(cfg.RequestedMode != domain.SessionModeTUI || modelChangedWithoutExplicitEffort)
+	// Do not fail a launch because role or project settings inherited an effort
+	// the model does not advertise. Request-carried choices are still validated.
+	inheritedEffort := !cfg.EffortOverride && strings.TrimSpace(requested.Effort) == ""
+	inheritedPiEffort := inheritedEffort && (cfg.Harness == domain.HarnessPi || cfg.Harness == domain.HarnessPrimeAgent)
+	inheritedOMPEffort := inheritedEffort && cfg.Harness == domain.HarnessOMP
+	// OMP used to clear all inherited levels. Keep one only if the catalog
+	// confirms it; Pi and Prime Agent terminals can leave that to the CLI.
+	clearUnconfirmedEffort := inheritedOMPEffort || (inheritedPiEffort &&
+		(cfg.RequestedMode != domain.SessionModeTUI || modelChangedWithoutExplicitEffort))
 	if cfg.EffortOverride {
 		resolved.Effort = requested.Effort
 	}
@@ -2011,13 +2010,13 @@ func (m *Manager) resolveAgentConfigOnce(ctx context.Context, cfg ports.SpawnCon
 		}
 		return resolved, nil
 	}
-	if cfg.Harness != domain.HarnessCodex && cfg.Harness != domain.HarnessClaudeCode && cfg.Harness != domain.HarnessCommandCode && cfg.Harness != domain.HarnessHermes && cfg.Harness != domain.HarnessPi && cfg.Harness != domain.HarnessPrimeAgent && cfg.Harness != domain.HarnessOpenInterpreter {
+	if cfg.Harness != domain.HarnessCodex && cfg.Harness != domain.HarnessClaudeCode && cfg.Harness != domain.HarnessCommandCode && cfg.Harness != domain.HarnessHermes && cfg.Harness != domain.HarnessPi && cfg.Harness != domain.HarnessPrimeAgent && cfg.Harness != domain.HarnessOpenInterpreter && cfg.Harness != domain.HarnessOMP {
 		// Only a flagged explicit override (the spawn API and delegation mark
 		// request-carried effort) fails loudly: the caller asked for something
 		// the harness cannot honor. Unflagged or inherited effort still clears
 		// silently so role/project defaults keep working for every harness.
 		if cfg.EffortOverride && strings.TrimSpace(requested.Effort) != "" {
-			return ports.AgentConfig{}, fmt.Errorf("%w for harness %q: effort is only supported for codex, claude-code, command-code, hermes, pi, prime-agent, and open-interpreter agents, or Grok Chat", ports.ErrUnsupportedEffort, cfg.Harness)
+			return ports.AgentConfig{}, fmt.Errorf("%w for harness %q: effort is only supported for codex, claude-code, command-code, hermes, pi, prime-agent, open-interpreter, and omp agents, or Grok Chat", ports.ErrUnsupportedEffort, cfg.Harness)
 		}
 		resolved.Effort = ""
 		return resolved, nil
@@ -2044,7 +2043,7 @@ func (m *Manager) resolveAgentConfigOnce(ctx context.Context, cfg ports.SpawnCon
 		if validateClaudeModel {
 			return ports.AgentConfig{}, fmt.Errorf("%w: model catalog is unavailable", ports.ErrModelCapabilitiesUnavailable)
 		}
-		if clearUnconfirmedPiEffort {
+		if clearUnconfirmedEffort {
 			resolved.Effort = ""
 		}
 		return resolved, nil
@@ -2067,7 +2066,7 @@ func (m *Manager) resolveAgentConfigOnce(ctx context.Context, cfg ports.SpawnCon
 			return ports.AgentConfig{}, fmt.Errorf("model catalog: %w", ctxErr)
 		}
 		NoteSpawnModel(ctx, modelID, false)
-		if modelChangedWithoutExplicitEffort || clearUnconfirmedPiEffort {
+		if modelChangedWithoutExplicitEffort || clearUnconfirmedEffort {
 			resolved.Effort = ""
 		}
 		return resolved, nil
@@ -2113,9 +2112,8 @@ func (m *Manager) resolveAgentConfigOnce(ctx context.Context, cfg ports.SpawnCon
 	if selected == nil {
 		// The saved catalog does not list the model, so the CLI owns its
 		// capabilities, including its default model when none was selected.
-		// Terminals preserve inherited effort for the CLI to validate.
 		// A level no Claude model accepts is still certain.
-		if clearUnconfirmedPiEffort {
+		if clearUnconfirmedEffort {
 			resolved.Effort = ""
 			return resolved, nil
 		}
@@ -2125,7 +2123,7 @@ func (m *Manager) resolveAgentConfigOnce(ctx context.Context, cfg ports.SpawnCon
 		return resolved, nil
 	}
 	if !containsString(selected.Efforts, resolved.Effort) {
-		if inheritedPiEffort {
+		if inheritedPiEffort || inheritedOMPEffort {
 			resolved.Effort = ""
 			return resolved, nil
 		}
