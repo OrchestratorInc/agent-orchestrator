@@ -5591,5 +5591,9 @@ it("keeps expected update outages out of handled captures and reports genuine fa
     expect(sink).toHaveBeenCalledWith(expect.objectContaining({ category: "update", reason: "stage", detail: "kind:invalid-signature" }));
     module.reportUpdateFailure(new Error("unexpected staging failure"), "install");
     expect(sink).toHaveBeenCalledTimes(2);
+    // A timed-out check reports as neither its cancelled request nor the rethrown deadline error.
+    module.reportUpdateFailure(new Error("cancelled"), "check");
+    module.reportUpdateFailure(new Error("Update check timed out. The update service did not respond in time. Try again."), "check");
+    expect(sink).toHaveBeenCalledTimes(2);
   } finally { resetMainErrorCaptureForTests(); }
 });

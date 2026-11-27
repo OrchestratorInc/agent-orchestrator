@@ -159,15 +159,18 @@ export class WorkspaceRequestError extends Error {
 		message: string,
 		readonly code?: string,
 		readonly status?: number,
+		options?: ErrorOptions,
 	) {
-		super(message);
+		super(message, options);
 		this.name = "WorkspaceRequestError";
 		this.expected = code !== undefined && status !== undefined && EXPECTED_WORKSPACE_ANSWERS.get(code) === status;
 	}
 }
 
+// The cause keeps API ownership: the API client already reported (or chose
+// not to report) this response, so the query cache must not report it again.
 function workspaceRequestError(error: unknown, response: Response | undefined, fallback: string): WorkspaceRequestError {
-	return new WorkspaceRequestError(apiErrorMessage(error, fallback), apiErrorCode(error), response?.status);
+	return new WorkspaceRequestError(apiErrorMessage(error, fallback), apiErrorCode(error), response?.status, error === undefined ? undefined : { cause: error });
 }
 
 export function workspaceErrorCode(error: unknown): string | undefined {

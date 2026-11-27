@@ -1758,7 +1758,15 @@ function clearUnrecoverableRememberedBuild(): void {
 // failures, unrecognized errors) is reported under a fixed phase and kind.
 const UNREPORTED_UPDATE_KINDS = new Set(["timeout", "unreachable", "rate-limited", "not-found", "unavailable"]);
 
+// A check that hit AO's deadline: the cancelled metadata request (only the
+// deadline cancels those) and the rethrown deadline error. Both are a timeout.
+function isUpdateCheckDeadline(err: unknown, phase: UpdateErrorPhase): boolean {
+  if (!(err instanceof Error)) return false;
+  return err.message === UPDATE_CHECK_TIMEOUT_MESSAGE || ((phase === "check" || phase === "return") && err.message === "cancelled");
+}
+
 export function reportUpdateFailure(err: unknown, phase: UpdateErrorPhase, reason?: MainErrorReason): void {
+  if (isUpdateCheckDeadline(err, phase)) return;
   const kind = describeUpdateFailure(err, phase).info?.kind;
   if (kind && UNREPORTED_UPDATE_KINDS.has(kind)) return;
   captureMainError({ category: "update", reason: reason ?? phase, error: err, ...(kind ? { detail: `kind:${kind}` } : {}) });

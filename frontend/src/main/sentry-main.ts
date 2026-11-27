@@ -185,12 +185,18 @@ function isExpectedNoise(event: Sentry.ErrorEvent): boolean {
 	return values.some((value) => typeof value === "string" && EXPECTED_NOISE.test(value));
 }
 
-function errorFingerprint(identity: ReturnType<typeof sentryMessageIdentity>, fallback: string[]): string[] {
+function messageHash(identity: ReturnType<typeof sentryMessageIdentity>): string | undefined {
+	return identity.code || identity.hashInput === undefined ? undefined
+		: createHash("sha256").update(identity.hashInput).digest("hex").slice(0, 10);
+}
+
+// codeFallback groups a coded error without build-specific parts (a minified
+// chunk:line:col), so a stable code keeps one issue across builds.
+function errorFingerprint(identity: ReturnType<typeof sentryMessageIdentity>, fallback: string[], codeFallback = fallback): string[] {
 	const prefix = identity.channel ? ["electron", "ipc", createHash("sha256").update(identity.channel).digest("hex").slice(0, 10)] : undefined;
-	if (identity.code) return [...(prefix ?? fallback), "code", identity.code];
-	const message = identity.hashInput === undefined ? []
-		: ["sha256", createHash("sha256").update(identity.hashInput).digest("hex").slice(0, 10)];
-	return [...(prefix ?? fallback), ...message];
+	if (identity.code) return [...(prefix ?? codeFallback), "code", identity.code];
+	const hash = messageHash(identity);
+	return [...(prefix ?? fallback), ...(hash ? ["sha256", hash] : [])];
 }
 
 function scrubMainSentryEvent(event: Sentry.ErrorEvent, installId: string, version: string, environment: string, originalException?: unknown): Sentry.ErrorEvent | null {
@@ -244,6 +250,7 @@ function scrubMainSentryEvent(event: Sentry.ErrorEvent, installId: string, versi
 		kind === "process_exit" ? undefined : event.exception?.values?.[0]?.value ?? event.message,
 		event.tags?.["ao.error_code"] ?? sentryErrorCode(originalException) ?? (renderer && !sourceLabel ? safeCode : undefined),
 		exceptionType,
+		renderer && sourceLabel,
 	);
 	const frames = event.exception?.values?.flatMap((value) => value.stacktrace?.frames ?? [])
 		.filter((frame) => frame.in_app !== false && typeof frame.function === "string" && frame.function.length <= 128 && SAFE_FUNCTION.test(frame.function))
@@ -277,8 +284,12 @@ function scrubMainSentryEvent(event: Sentry.ErrorEvent, installId: string, versi
 		timestamp: event.timestamp,
 		level: event.level === "fatal" || event.level === "error" || event.level === "warning" ? event.level : "error",
 		message: ipcChannel && identity.text ? title + ": " + identity.text : sentryIdentityTitle(identity, title),
-		fingerprint: errorFingerprint(identity, ["electron", kind, renderer ? rendererLabel : processReason ?? safeCode, ...(processType ? [processType] : []), exceptionType, topFunction, renderer ? "renderer" : "electron-main", ...(safeOperation ? [safeOperation] : [])]),
-		tags: { surface: renderer ? "renderer" : "electron-main", kind, ...(renderer ? { category: safeCategory, code: safeCode, ...(safeOperation ? { operation: safeOperation } : {}), ...(safeFlow ? { flow: safeFlow } : {}), ...(ipcChannel ? { ipc_channel: ipcChannel } : {}) } : {}), ...(processReason ? { reason: processReason, process: processType } : {}), ...(identity.code ? { error_code: identity.code } : {}) },
+		fingerprint: errorFingerprint(
+			identity,
+			["electron", kind, renderer ? rendererLabel : processReason ?? safeCode, ...(processType ? [processType] : []), exceptionType, topFunction, renderer ? "renderer" : "electron-main", ...(safeOperation ? [safeOperation] : [])],
+			renderer ? ["electron", kind, rendererLabel, exceptionType, "renderer", ...(safeOperation ? [safeOperation] : [])] : undefined,
+		),
+		tags: { surface: renderer ? "renderer" : "electron-main", kind, ...(messageHash(identity) ? { message_hash: messageHash(identity) as string } : {}), ...(renderer ? { category: safeCategory, code: safeCode, ...(safeOperation ? { operation: safeOperation } : {}), ...(safeFlow ? { flow: safeFlow } : {}), ...(ipcChannel ? { ipc_channel: ipcChannel } : {}) } : {}), ...(processReason ? { reason: processReason, process: processType } : {}), ...(identity.code ? { error_code: identity.code } : {}) },
 		user: { id: installId },
 		release: version,
 		environment,
@@ -306,7 +317,7 @@ function scrubMainHandledEvent(event: Sentry.ErrorEvent, installId: string, vers
 		level: event.level === "fatal" || event.level === "warning" ? event.level : "error",
 		message: sentryIdentityTitle(identity, title),
 		fingerprint: errorFingerprint(identity, ["electron", "handled", category, reason, "electron-main"]),
-		tags: { surface: "electron-main", kind: "handled", category, reason, ...(isSafeMainErrorDetail(detail) ? { detail } : {}), ...(identity.code ? { error_code: identity.code } : {}) },
+		tags: { surface: "electron-main", kind: "handled", category, reason, ...(messageHash(identity) ? { message_hash: messageHash(identity) as string } : {}), ...(isSafeMainErrorDetail(detail) ? { detail } : {}), ...(identity.code ? { error_code: identity.code } : {}) },
 		user: { id: installId },
 		release: version,
 		environment,
