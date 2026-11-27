@@ -171,11 +171,13 @@ func classifyFailure(status Status, message, output string) FailureCause {
 	// The message names a program Go itself could not start. The output is
 	// trusted only when the run ended with the shell's command-not-found
 	// code: installers probe optional tools ("pyenv: command not found") and
-	// then fail for another reason.
+	// then fail for another reason. A managed install keeps only a summary
+	// in the message and writes the exit status as the output's last line;
+	// only that line counts, so an installer's own nested output cannot.
 	if cause := missingCommandCause(message); cause != "" {
 		return cause
 	}
-	if commandNotFoundExit.MatchString(lowerMessage) {
+	if commandNotFoundExit.MatchString(lowerMessage) || commandNotFoundExit.MatchString(strings.ToLower(lastOutputLine(output))) {
 		if cause := missingCommandCause(output); cause != "" {
 			return cause
 		}
