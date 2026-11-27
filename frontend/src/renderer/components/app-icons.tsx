@@ -161,8 +161,10 @@ import {
 	Edit as MynaEdit,
 } from "@mynaui/icons-react";
 import {
+	AlignLeft as LucideAlignLeft,
 	ArrowDownUp as LucideArrowDownUp,
 	Bot as LucideBot,
+	Braces as LucideBraces,
 	Brain as LucideBrain,
 	CalendarClock as LucideCalendarClock,
 	CaseSensitive as LucideCaseSensitive,
@@ -297,6 +299,10 @@ export const BellRing = fromMyna(MynaBellOn, "bell-ring");
 export const Bold = fromMyna(MynaTypeBold, "bold", "full");
 export const BookOpen = fromMyna(MynaBookOpen, "book-open");
 export const Bot = fromLucide(LucideBot, "bot");
+
+// Marks on a chat tool box's header: a call's JSON (arguments, result) and its text output.
+export const ToolBoxJson = fromLucide(LucideBraces, "tool-box-json");
+export const ToolBoxText = fromLucide(LucideAlignLeft, "tool-box-text");
 export const Box = fromMyna(MynaBox, "box");
 export const Brain = fromLucide(LucideBrain, "brain");
 export const Bug = fromMyna(MynaBug, "bug");

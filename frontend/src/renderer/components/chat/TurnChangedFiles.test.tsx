@@ -370,10 +370,11 @@ describe("ActivityRow command output", () => {
 		expect(container.querySelector("pre")).toBeNull();
 
 		await userEvent.click(screen.getByRole("button"));
-		expect(screen.getByRole("button")).toHaveAttribute("aria-expanded", "true");
-		// Read off the <pre> rather than via getByText, which normalizes the runs of
-		// whitespace that real command output is full of.
-		expect(container.querySelector("pre")?.textContent).toBe("ok  pkg/a\n");
+		// Opened, the `$` line adds its own copy button, so the row is found by its state.
+		expect(screen.getByRole("button", { expanded: true })).toBeInTheDocument();
+		// Read off the Shell box's <pre> rather than via getByText, which normalizes the
+		// runs of whitespace that real command output is full of.
+		expect(container.querySelector("[data-command-shell] pre")?.textContent).toBe("ok  pkg/a\n");
 	});
 
 	it("does not add provider provenance below streamed output", async () => {

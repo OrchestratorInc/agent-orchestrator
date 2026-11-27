@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render as rtlRender, screen, waitFor, type RenderOptions } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { ReactElement, ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -10,6 +10,16 @@ import { findBlocks, findRange, findTextOccurrences, renderedFindBlocks } from "
 import { setApiBaseUrl } from "../../lib/api-client";
 import { renderMermaidDiagram } from "../../lib/mermaid-diagram";
 import { useUiStore } from "../../stores/ui-store";
+import { TooltipProvider } from "../ui/tooltip";
+
+/** Code blocks carry icon buttons, whose tooltips need the app's provider. */
+function render(ui: ReactElement, options?: RenderOptions) {
+	const Outer = options?.wrapper;
+	return rtlRender(ui, {
+		...options,
+		wrapper: ({ children }) => <TooltipProvider>{Outer ? <Outer>{children}</Outer> : children}</TooltipProvider>,
+	});
+}
 import { ActivityTitle, ArtifactPathCode, ChatLinkProvider, ChatMarkdown } from "./ChatMarkdown";
 import { WorkerUpdateRows } from "./WorkerUpdates";
 import { ChatImageSourceProvider } from "./chat-image-source";

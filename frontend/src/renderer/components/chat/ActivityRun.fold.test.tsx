@@ -4,6 +4,7 @@ import { describe, expect, it } from "vitest";
 import type { ConversationActivity } from "../../types/conversation";
 import { ActivityRun } from "./ActivityRun";
 import { ChatLinkProvider } from "./ChatMarkdown";
+import { TooltipProvider } from "../ui/tooltip";
 
 function command(id: string, text: string, status: ConversationActivity["status"] = "completed"): ConversationActivity {
 	return {
@@ -22,9 +23,11 @@ function command(id: string, text: string, status: ConversationActivity["status"
 async function openRun(activities: ConversationActivity[]) {
 	const user = userEvent.setup();
 	render(
-		<ChatLinkProvider>
-			<ActivityRun activities={activities} />
-		</ChatLinkProvider>,
+		<TooltipProvider>
+			<ChatLinkProvider>
+				<ActivityRun activities={activities} />
+			</ChatLinkProvider>
+		</TooltipProvider>,
 	);
 	await user.click(screen.getByRole("button", { name: new RegExp(`Ran ${activities.length} tool calls`) }));
 	return user;
