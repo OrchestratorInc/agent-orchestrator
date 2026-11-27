@@ -113,6 +113,7 @@
 	"chat.annotation.next": "Próxima anotação",
 	"chat.removeAnnotation": "Remove annotation {{count}}",
 	"chat.startup.queuePlaceholder": "Adicione uma mensagem enquanto {{agent}} se prepara",
+	"chat.accountSwitching": "Trocando de conta…",
 	"chat.controller.openElsewhere": "Está aberto em outro lugar",
 	"chat.controller.couldNotConnect": "Não foi possível conectar ao agente",
 	"chat.draft.openElsewhere": "Este chat está aberto em outra sessão do Claude Code, como um terminal ou uma IDE. Feche-a lá e envie sua mensagem novamente.",

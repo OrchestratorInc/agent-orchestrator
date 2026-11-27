@@ -113,6 +113,7 @@
 	"chat.annotation.next": "Annotation suivante",
 	"chat.removeAnnotation": "Remove annotation {{count}}",
 	"chat.startup.queuePlaceholder": "Ajoutez un message pendant que {{agent}} se prépare",
+	"chat.accountSwitching": "Changement de compte…",
 	"chat.controller.openElsewhere": "Ouverte ailleurs",
 	"chat.controller.couldNotConnect": "Impossible de se connecter à l’agent",
 	"chat.draft.openElsewhere": "Cette conversation est ouverte dans une autre session Claude Code, par exemple un terminal ou un IDE. Quittez-la là-bas, puis renvoyez votre message.",

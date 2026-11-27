@@ -2589,6 +2589,8 @@ function ChatWorkspaceContent({
 												? t("chat.startup.queuePlaceholder", { agent: agentLabel(snapshot.harness) })
 												: orchestratorBlocksComposer
 												? setupPlaceholder
+												: accountMoving
+												? t("chat.accountSwitching")
 												: controllerTransitioning || newWorkDisabled
 												? ""
 												: restoring

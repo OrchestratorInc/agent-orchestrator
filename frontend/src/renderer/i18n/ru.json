@@ -106,6 +106,7 @@
 	"chat.annotation.next": "Следующая аннотация",
 	"chat.removeAnnotation": "Удалить аннотацию {{count}}",
 	"chat.startup.queuePlaceholder": "Добавьте следующее сообщение в очередь, пока {{agent}} готовится",
+	"chat.accountSwitching": "Переключение аккаунта…",
 	"chat.controller.openElsewhere": "Открыт в другом месте",
 	"chat.controller.couldNotConnect": "Не удалось подключиться к агенту",
 	"chat.draft.openElsewhere": "Этот чат открыт в другом сеансе Claude Code, например в терминале или IDE. Завершите его там, затем отправьте сообщение ещё раз.",

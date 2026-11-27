@@ -112,6 +112,7 @@
 	"chat.annotation.next": "Sonraki not",
 	"chat.removeAnnotation": "{{count}} numaralı açıklama notunu kaldır",
 	"chat.startup.queuePlaceholder": "{{agent}} hazırlanırken sonraki mesajınızı sıraya ekleyin",
+	"chat.accountSwitching": "Hesap değiştiriliyor…",
 	"chat.controller.openElsewhere": "Başka bir yerde açık",
 	"chat.controller.couldNotConnect": "Aracıya bağlanılamadı",
 	"chat.draft.openElsewhere": "Bu sohbet, terminal veya IDE gibi başka bir yerdeki Claude Code oturumunda açık. Orada kapatıp mesajınızı yeniden gönderin.",

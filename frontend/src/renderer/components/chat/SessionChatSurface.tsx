@@ -393,7 +393,8 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 	// An archived chat has no agent until a message restores it; meanwhile its bar
 	// shows the saved settings too, as a sleeping one does.
 	const archivedAgent = !sessionIsActive(session) && snapshot?.harness === session.provider && snapshot.controller?.state === "stopped";
-	const savedSettingsOnly = waking || archivedAgent;
+	// An account move restarts the agent under the other login; its bar keeps the saved settings meanwhile.
+	const savedSettingsOnly = waking || archivedAgent || Boolean(accountMoving);
 	const controllerCatalogsEnabled = !hostUnreachable && targetChatControllerReady && !controllerTransitioning && !newWorkDisabled;
 	const configOptions = useConversationConfigOptions(
 		session.id,

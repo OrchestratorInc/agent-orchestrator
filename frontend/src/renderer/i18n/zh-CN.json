@@ -112,6 +112,7 @@
 	"chat.annotation.next": "下一条批注",
 	"chat.removeAnnotation": "Remove annotation {{count}}",
 	"chat.startup.queuePlaceholder": "{{agent}} 准备期间可先排队发送消息",
+	"chat.accountSwitching": "正在切换账号…",
 	"chat.controller.openElsewhere": "已在其他地方打开",
 	"chat.controller.couldNotConnect": "无法连接到代理",
 	"chat.draft.openElsewhere": "此聊天已在另一个 Claude Code 会话中打开，例如终端或 IDE。请在那里退出，然后重新发送你的消息。",
