@@ -48,7 +48,7 @@ func TestAntigravityAccountsMigrationAcceptsTheProvider(t *testing.T) {
 // login, so the upgrade records that, as 0210 did for Claude and Codex, and a
 // default picked later does not move it. The rollback removes those records.
 func TestAntigravityAccountsMigrationKeepsExistingSessionsOnTheComputersLogin(t *testing.T) {
-	const before, version = 20261124180938781, 20261126090000000
+	const before, version = 20261126171749354, 20261127090000000
 	db := openMigratedDatabaseCopy(t, before)
 	created := time.Date(2026, 11, 20, 8, 0, 0, 0, time.UTC)
 	mustExec(t, db, `INSERT INTO projects(id,path,registered_at) VALUES ('p1','/tmp/p1',?)`, created)
@@ -78,7 +78,7 @@ func TestAntigravityAccountsMigrationKeepsExistingSessionsOnTheComputersLogin(t 
 // account refuses the rollback before it removes anything, so the computer's
 // own bindings and the provider stay as they were.
 func TestAntigravityAccountsRollbackRefusalChangesNothing(t *testing.T) {
-	const before, version = 20261124180938781, 20261126090000000
+	const before, version = 20261126171749354, 20261127090000000
 	db := openMigratedDatabaseCopy(t, before)
 	created := time.Date(2026, 11, 20, 8, 0, 0, 0, time.UTC)
 	mustExec(t, db, `INSERT INTO projects(id,path,registered_at) VALUES ('p1','/tmp/p1',?)`, created)
