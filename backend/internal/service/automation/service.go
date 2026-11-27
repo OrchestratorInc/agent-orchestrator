@@ -362,9 +362,11 @@ func (s *Service) Update(ctx context.Context, id domain.AutomationID, input Upda
 		}
 		rec.RRuleText, rec.Timezone, rec.NextRunAt = schedule.RRuleText, schedule.Timezone, schedule.NextRunAt
 	}
+	paused := false
 	if input.Enabled != nil {
 		wasEnabled := rec.Enabled
 		rec.Enabled = *input.Enabled
+		paused = called && wasEnabled && !rec.Enabled
 		if !wasEnabled && rec.Enabled && !scheduleChanged && !called {
 			next, nextErr := NextOccurrence(rec.RRuleText, rec.Timezone, now)
 			if nextErr != nil {
@@ -380,6 +382,11 @@ func (s *Service) Update(ctx context.Context, id domain.AutomationID, input Upda
 	}
 	if !ok {
 		return domain.Automation{}, apierr.NotFound("AUTOMATION_NOT_FOUND", "Unknown automation")
+	}
+	if store, ok := s.store.(callStore); ok && paused {
+		if err := store.FailPendingAutomationRuns(ctx, id, "The automation was paused before this call ran", now); err != nil {
+			return domain.Automation{}, apierr.Internal("AUTOMATION_UPDATE_FAILED", "Failed to update automation")
+		}
 	}
 	return s.Get(ctx, id)
 }

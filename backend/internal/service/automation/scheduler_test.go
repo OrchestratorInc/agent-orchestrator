@@ -49,7 +49,7 @@ func (f *schedulerMemoryStore) MaterializeAutomationRuns(_ context.Context, id d
 func (f *schedulerMemoryStore) ClaimNextAutomationRun(_ context.Context, now, lease time.Time) (domain.AutomationRun, bool, error) {
 	active := map[domain.AutomationID]bool{}
 	for _, run := range f.runs {
-		if run.Status == domain.AutomationRunSpawning || run.Status == domain.AutomationRunRunning {
+		if run.Status == domain.AutomationRunSpawning || (run.Status == domain.AutomationRunRunning && f.automations[run.AutomationID].Trigger != domain.AutomationTriggerCall) {
 			active[run.AutomationID] = true
 		}
 	}

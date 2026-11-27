@@ -49,7 +49,7 @@ ao automation create --project my-app --name "Morning triage" --prompt "Review o
 ao automation create --project my-app --name "Issue triage" --prompt "Triage {{body.issue.title}}" --when-called --hook-secret "$SECRET" --hook-signature-header X-Hub-Signature-256 --filter body.action=opened
 ```
 
-`{{body.*}}`, `{{headers.*}}`, and `{{query.*}}` in a called automation's prompt fill in values from the call, wrapped in tags the agent treats as data. The hook answers 202 when it queues a run and 200 when a filter or the dedupe key drops the call.
+`{{body.*}}`, `{{headers.*}}`, and `{{query.*}}` in a called automation's prompt fill in values from the call, wrapped in tags the agent treats as data. The hook answers 202 when it queues a run and 200 when a filter or the dedupe key drops the call. Each queued call launches once the previous one has launched; disabling the automation drops calls that have not started.
 
 ---
 

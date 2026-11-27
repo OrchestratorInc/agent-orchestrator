@@ -115,13 +115,22 @@ func TestCallChecksSignatureFiltersDedupesAndCaps(t *testing.T) {
 	if _, err := svc.Update(ctx, auto.ID, UpdateInput{Enabled: &on}); err != nil {
 		t.Fatalf("enable: %v", err)
 	}
+	var queued domain.AutomationRunID
 	for i := range maxPendingCalledRun {
-		if res, err := call(auto.HookKey, "q"+string(rune('a'+i)), opened, true); err != nil || res.Status != domain.AutomationCallAccepted {
+		res, err := call(auto.HookKey, "q"+string(rune('a'+i)), opened, true)
+		if err != nil || res.Status != domain.AutomationCallAccepted {
 			t.Fatalf("queued call %d = %#v %v", i, res, err)
 		}
+		queued = res.RunID
 	}
 	if _, err := call(auto.HookKey, "overflow", opened, true); !isAPIError(err, apierr.KindTooManyRequests) {
 		t.Fatalf("overflow = %v, want too many requests", err)
+	}
+	if _, err := svc.Update(ctx, auto.ID, UpdateInput{Enabled: &off}); err != nil {
+		t.Fatalf("disable: %v", err)
+	}
+	if run, _, err := store.GetAutomationRun(ctx, queued); err != nil || run.Status != domain.AutomationRunFailed {
+		t.Fatalf("queued run after pause = %s %v, want failed", run.Status, err)
 	}
 }
 

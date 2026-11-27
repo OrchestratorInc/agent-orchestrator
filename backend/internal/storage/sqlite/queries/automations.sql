@@ -141,7 +141,7 @@ WHERE r.status = 'pending'
   AND NOT EXISTS (
       SELECT 1 FROM automation_runs active
       WHERE active.automation_id = r.automation_id
-        AND active.status IN ('spawning', 'running')
+        AND (active.status = 'spawning' OR (active.status = 'running' AND a.trigger_kind <> 'call'))
   )
 ORDER BY r.scheduled_for, r.id
 LIMIT 1;
@@ -155,7 +155,9 @@ WHERE automation_runs.id = ? AND automation_runs.status = 'pending'
       SELECT 1 FROM automation_runs active
       WHERE active.automation_id = automation_runs.automation_id
         AND active.id <> automation_runs.id
-        AND active.status IN ('spawning', 'running')
+        AND (active.status = 'spawning' OR (active.status = 'running' AND NOT EXISTS (
+            SELECT 1 FROM automations c WHERE c.id = active.automation_id AND c.trigger_kind = 'call'
+        )))
   );
 
 -- name: MarkAutomationRunRunning :execrows
@@ -175,6 +177,11 @@ UPDATE automation_runs
 SET status = 'failed', finished_at = ?, claimed_at = NULL,
     lease_expires_at = NULL, error_message = ?, updated_at = ?
 WHERE id = ? AND status IN ('pending', 'spawning', 'running');
+
+-- name: FailPendingAutomationRuns :execrows
+UPDATE automation_runs
+SET status = 'failed', finished_at = ?, error_message = ?, updated_at = ?
+WHERE automation_id = ? AND status = 'pending';
 
 -- name: ReleaseAutomationRun :execrows
 UPDATE automation_runs

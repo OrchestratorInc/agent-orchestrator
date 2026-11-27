@@ -71,7 +71,9 @@ WHERE automation_runs.id = ? AND automation_runs.status = 'pending'
       SELECT 1 FROM automation_runs active
       WHERE active.automation_id = automation_runs.automation_id
         AND active.id <> automation_runs.id
-        AND active.status IN ('spawning', 'running')
+        AND (active.status = 'spawning' OR (active.status = 'running' AND NOT EXISTS (
+            SELECT 1 FROM automations c WHERE c.id = active.automation_id AND c.trigger_kind = 'call'
+        )))
   )
 `
 
@@ -197,6 +199,32 @@ func (q *Queries) FailAutomationRun(ctx context.Context, arg FailAutomationRunPa
 		arg.ErrorMessage,
 		arg.UpdatedAt,
 		arg.ID,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
+const failPendingAutomationRuns = `-- name: FailPendingAutomationRuns :execrows
+UPDATE automation_runs
+SET status = 'failed', finished_at = ?, error_message = ?, updated_at = ?
+WHERE automation_id = ? AND status = 'pending'
+`
+
+type FailPendingAutomationRunsParams struct {
+	FinishedAt   sql.NullTime
+	ErrorMessage sql.NullString
+	UpdatedAt    time.Time
+	AutomationID domain.AutomationID
+}
+
+func (q *Queries) FailPendingAutomationRuns(ctx context.Context, arg FailPendingAutomationRunsParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, failPendingAutomationRuns,
+		arg.FinishedAt,
+		arg.ErrorMessage,
+		arg.UpdatedAt,
+		arg.AutomationID,
 	)
 	if err != nil {
 		return 0, err
@@ -362,7 +390,7 @@ WHERE r.status = 'pending'
   AND NOT EXISTS (
       SELECT 1 FROM automation_runs active
       WHERE active.automation_id = r.automation_id
-        AND active.status IN ('spawning', 'running')
+        AND (active.status = 'spawning' OR (active.status = 'running' AND a.trigger_kind <> 'call'))
   )
 ORDER BY r.scheduled_for, r.id
 LIMIT 1

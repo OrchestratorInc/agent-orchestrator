@@ -97,7 +97,7 @@ ao automation create --project my-app --name "Issue triage" \
 | 413 | The body is larger than 1 MiB |
 | 429 | 20 runs are already waiting for this automation |
 
-Called runs start one at a time, like scheduled runs. The computer must be awake with Orchestrator running; a call sent while it sleeps is lost unless the sending service retries.
+Called runs launch one at a time, but each starts as soon as the previous one has launched, so several sessions can work at once. Pausing the automation drops calls that have not started yet. The computer must be awake with Orchestrator running; a call sent while it sleeps is lost unless the sending service retries.
 
 Project **Cues** save reusable instructions or exact shell commands for manual use. They do not run on a schedule. An agent Cue sends a prompt to an eligible session or starts a worker. A command Cue opens a fresh local terminal. Manage Cues in the project dialog and choose **Run a cue** from a session.
 

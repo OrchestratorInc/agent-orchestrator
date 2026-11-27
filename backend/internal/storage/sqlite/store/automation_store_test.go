@@ -421,6 +421,58 @@ func TestAutomationClaimLeasesOldestPendingWithoutOverlap(t *testing.T) {
 	}
 }
 
+func TestAutomationClaimHoldsLaneUntilRunningOnlyForCalls(t *testing.T) {
+	for _, tc := range []struct {
+		trigger     string
+		nextClaimed bool
+	}{{domain.AutomationTriggerSchedule, false}, {domain.AutomationTriggerCall, true}} {
+		t.Run(tc.trigger, func(t *testing.T) {
+			store := newTestStore(t)
+			seedProject(t, store, "scheduled")
+			ctx := context.Background()
+			base := time.Date(2026, time.August, 25, 9, 0, 0, 0, time.UTC)
+			auto := domain.Automation{
+				ID: "automation-1", ProjectID: "scheduled", DisplayName: "Triage", Prompt: "Review",
+				Kind: domain.KindWorker, Trigger: tc.trigger, Enabled: true, CreatedAt: base, UpdatedAt: base,
+			}
+			if tc.trigger == domain.AutomationTriggerCall {
+				auto.HookKey = "key-1"
+			} else {
+				auto.RRuleText, auto.Timezone, auto.NextRunAt = "FREQ=HOURLY", "UTC", base.Add(3*time.Hour)
+			}
+			if _, err := store.CreateAutomation(ctx, auto); err != nil {
+				t.Fatal(err)
+			}
+			for i, scheduled := range []time.Time{base, base.Add(time.Hour)} {
+				if _, _, err := store.CreateAutomationRun(ctx, domain.AutomationRun{
+					ID: domain.AutomationRunID("run-" + string(rune('1'+i))), AutomationID: "automation-1",
+					ScheduledFor: scheduled, Status: domain.AutomationRunPending, CreatedAt: base, UpdatedAt: base,
+				}); err != nil {
+					t.Fatal(err)
+				}
+			}
+			lease := base.Add(time.Minute)
+			if _, ok, err := store.ClaimNextAutomationRun(ctx, base, lease); err != nil || !ok {
+				t.Fatalf("first claim ok=%v err=%v", ok, err)
+			}
+			if _, ok, err := store.ClaimNextAutomationRun(ctx, base, lease); err != nil || ok {
+				t.Fatalf("claim beside a spawning run ok=%v err=%v, want blocked", ok, err)
+			}
+			session, err := store.CreateSession(ctx, sampleRecord("scheduled"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if ok, err := store.MarkAutomationRunRunning(ctx, "run-1", session.ID, base); err != nil || !ok {
+				t.Fatalf("mark running ok=%v err=%v", ok, err)
+			}
+			next, ok, err := store.ClaimNextAutomationRun(ctx, base, lease)
+			if err != nil || ok != tc.nextClaimed || (ok && next.ID != "run-2") {
+				t.Fatalf("claim beside a running run = %s ok=%v err=%v, want claimed=%v", next.ID, ok, err, tc.nextClaimed)
+			}
+		})
+	}
+}
+
 // Deleting a definition removes history while preserving linked sessions and
 // clearing their origin link through ON DELETE SET NULL.
 func TestAutomationDeleteCascadesRunsButPreservesSession(t *testing.T) {

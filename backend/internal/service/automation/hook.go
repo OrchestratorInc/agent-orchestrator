@@ -38,6 +38,7 @@ var (
 type callStore interface {
 	GetAutomationByHookKey(context.Context, string) (domain.Automation, bool, error)
 	InsertCalledAutomationRun(context.Context, domain.AutomationRun, time.Time, int64) (domain.AutomationCallStatus, error)
+	FailPendingAutomationRuns(context.Context, domain.AutomationID, string, time.Time) error
 }
 
 // CallInput is one request that reached /hooks/<key>.

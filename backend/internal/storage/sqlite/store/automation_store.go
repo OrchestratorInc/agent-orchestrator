@@ -441,6 +441,18 @@ func (s *Store) FailAutomationRun(ctx context.Context, id domain.AutomationRunID
 	return rows > 0, nil
 }
 
+// FailPendingAutomationRuns fails every queued run of one automation.
+func (s *Store) FailPendingAutomationRuns(ctx context.Context, id domain.AutomationID, message string, now time.Time) error {
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
+	if _, err := s.qw.FailPendingAutomationRuns(ctx, gen.FailPendingAutomationRunsParams{
+		FinishedAt: timePtrToNullTime(&now), ErrorMessage: nullableString(message), UpdatedAt: now, AutomationID: id,
+	}); err != nil {
+		return fmt.Errorf("fail pending runs of automation %s: %w", id, err)
+	}
+	return nil
+}
+
 // ReleaseAutomationRun returns a transiently failed claim to pending.
 func (s *Store) ReleaseAutomationRun(ctx context.Context, id domain.AutomationRunID, message string, now time.Time) (bool, error) {
 	s.writeMu.Lock()
