@@ -108,31 +108,45 @@ func (s *Store) ListLatestAutomationRuns(ctx context.Context, ids []domain.Autom
 	return out, nil
 }
 
-// UpdateAutomation persists a complete validated mutable definition.
+// UpdateAutomation persists a complete validated mutable definition. Turning
+// off an automation that runs when called fails its queued calls in the same
+// transaction.
 func (s *Store) UpdateAutomation(ctx context.Context, rec domain.Automation) (bool, error) {
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()
-	rows, err := s.qw.UpdateAutomation(ctx, gen.UpdateAutomationParams{
-		DisplayName: rec.DisplayName,
-		Prompt:      rec.Prompt,
-		UseCase:     rec.UseCase,
-		Kind:        rec.Kind,
-		Harness:     rec.Harness,
-		Model:       rec.Model,
-		Mode:        rec.Mode,
-		Effort:      rec.Effort,
-		RruleText:   rec.RRuleText,
-		Timezone:    rec.Timezone,
-		Enabled:     rec.Enabled,
-		NextRunAt:   rec.NextRunAt,
-		LastRunAt:   timePtrToNullTime(rec.LastRunAt),
-		UpdatedAt:   rec.UpdatedAt,
-		ID:          rec.ID,
+	var rows int64
+	err := s.inTx(ctx, "update automation", func(q *gen.Queries) error {
+		var err error
+		rows, err = q.UpdateAutomation(ctx, gen.UpdateAutomationParams{
+			DisplayName: rec.DisplayName,
+			Prompt:      rec.Prompt,
+			UseCase:     rec.UseCase,
+			Kind:        rec.Kind,
+			Harness:     rec.Harness,
+			Model:       rec.Model,
+			Mode:        rec.Mode,
+			Effort:      rec.Effort,
+			RruleText:   rec.RRuleText,
+			Timezone:    rec.Timezone,
+			Enabled:     rec.Enabled,
+			NextRunAt:   rec.NextRunAt,
+			LastRunAt:   timePtrToNullTime(rec.LastRunAt),
+			UpdatedAt:   rec.UpdatedAt,
+			ID:          rec.ID,
 
-		HookSecret:          rec.HookSecret,
-		HookSignatureHeader: rec.HookSignatureHeader,
-		HookFilters:         strings.Join(rec.HookFilters, "\n"),
-		HookDedupeKey:       rec.HookDedupeKey,
+			HookSecret:          rec.HookSecret,
+			HookSignatureHeader: rec.HookSignatureHeader,
+			HookFilters:         strings.Join(rec.HookFilters, "\n"),
+			HookDedupeKey:       rec.HookDedupeKey,
+		})
+		if err != nil || rows == 0 || rec.Enabled || rec.Trigger != domain.AutomationTriggerCall {
+			return err
+		}
+		_, err = q.FailPendingAutomationRuns(ctx, gen.FailPendingAutomationRunsParams{
+			FinishedAt: timePtrToNullTime(&rec.UpdatedAt), ErrorMessage: nullableString("The automation was paused before this call ran"),
+			UpdatedAt: rec.UpdatedAt, AutomationID: rec.ID,
+		})
+		return err
 	})
 	if err != nil {
 		return false, fmt.Errorf("update automation %s: %w", rec.ID, err)
@@ -447,18 +461,6 @@ func (s *Store) FailAutomationRun(ctx context.Context, id domain.AutomationRunID
 		return false, fmt.Errorf("fail automation run %s: %w", id, err)
 	}
 	return rows > 0, nil
-}
-
-// FailPendingAutomationRuns fails every queued run of one automation.
-func (s *Store) FailPendingAutomationRuns(ctx context.Context, id domain.AutomationID, message string, now time.Time) error {
-	s.writeMu.Lock()
-	defer s.writeMu.Unlock()
-	if _, err := s.qw.FailPendingAutomationRuns(ctx, gen.FailPendingAutomationRunsParams{
-		FinishedAt: timePtrToNullTime(&now), ErrorMessage: nullableString(message), UpdatedAt: now, AutomationID: id,
-	}); err != nil {
-		return fmt.Errorf("fail pending runs of automation %s: %w", id, err)
-	}
-	return nil
 }
 
 // ReleaseAutomationRun returns a transiently failed claim to pending.

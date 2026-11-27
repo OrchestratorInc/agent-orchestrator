@@ -90,6 +90,8 @@ func (s *Service) Tick(ctx context.Context, at time.Time) error {
 	for _, run := range claims {
 		if err := s.dispatch(ctx, store, run, now); err != nil {
 			problems = append(problems, fmt.Errorf("automation run %s: %w", run.ID, err))
+		} else {
+			s.wake()
 		}
 	}
 	if ctx.Err() != nil {

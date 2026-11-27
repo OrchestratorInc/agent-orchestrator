@@ -38,7 +38,6 @@ var (
 type callStore interface {
 	GetAutomationByHookKey(context.Context, string) (domain.Automation, bool, error)
 	InsertCalledAutomationRun(context.Context, domain.AutomationRun, time.Time, int64) (domain.AutomationCallStatus, error)
-	FailPendingAutomationRuns(context.Context, domain.AutomationID, string, time.Time) error
 }
 
 // CallInput is one request that reached /hooks/<key>.
@@ -54,8 +53,15 @@ type CallResult struct {
 	RunID  domain.AutomationRunID
 }
 
-// Kicks fires after a hook call queues a run.
+// Kicks fires after a hook call queues a run or a run launches.
 func (s *Service) Kicks() <-chan struct{} { return s.kick }
+
+func (s *Service) wake() {
+	select {
+	case s.kick <- struct{}{}:
+	default:
+	}
+}
 
 // Call checks a hook request against its automation and queues a run with the
 // prompt filled from the request.
@@ -128,10 +134,7 @@ func (s *Service) Call(ctx context.Context, key string, in CallInput) (CallResul
 	case domain.AutomationCallQueueFull:
 		return CallResult{}, apierr.TooManyRequests("QUEUE_FULL", "Too many runs are already waiting for this automation")
 	case domain.AutomationCallAccepted:
-		select {
-		case s.kick <- struct{}{}:
-		default:
-		}
+		s.wake()
 		return CallResult{Status: status, RunID: run.ID}, nil
 	}
 	return CallResult{Status: status}, nil

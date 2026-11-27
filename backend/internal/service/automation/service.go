@@ -381,11 +381,6 @@ func (s *Service) Update(ctx context.Context, id domain.AutomationID, input Upda
 	if !ok {
 		return domain.Automation{}, apierr.NotFound("AUTOMATION_NOT_FOUND", "Unknown automation")
 	}
-	if store, ok := s.store.(callStore); ok && called && input.Enabled != nil && !rec.Enabled {
-		if err := store.FailPendingAutomationRuns(ctx, id, "The automation was paused before this call ran", now); err != nil {
-			return domain.Automation{}, apierr.Internal("AUTOMATION_UPDATE_FAILED", "Failed to update automation")
-		}
-	}
 	return s.Get(ctx, id)
 }
 
