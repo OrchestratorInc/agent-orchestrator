@@ -38,6 +38,7 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/systemexec"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/telemetry/policyauthority"
 	"github.com/aoagents/agent-orchestrator/backend/internal/agentlaunch"
+	"github.com/aoagents/agent-orchestrator/backend/internal/approval"
 	"github.com/aoagents/agent-orchestrator/backend/internal/attachmentstore"
 	"github.com/aoagents/agent-orchestrator/backend/internal/autoreview"
 	"github.com/aoagents/agent-orchestrator/backend/internal/browserruntime"
@@ -578,6 +579,15 @@ func Run(buildVersion string) (retErr error) {
 					"sessionID", sessionID, "model", model, "error", err)
 			}
 		},
+		OnEffortChanged: func(sessionID domain.SessionID, effort string) {
+			if sessMgr == nil {
+				return
+			}
+			if err := sessMgr.PersistChatEffort(ctx, sessionID, effort); err != nil {
+				log.Warn("persist ChatUI effort on session failed; session selection may be stale",
+					"sessionID", sessionID, "effort", effort, "error", err)
+			}
+		},
 	})
 	chatSvc.SetRenderCheck(renderViaDesktop(browserBroker, "__render-check"))
 	chatSvc.SetRenderMeasure(renderViaDesktop(browserBroker, "__render-measure"))
@@ -704,7 +714,7 @@ func Run(buildVersion string) (retErr error) {
 	// pass (ReconcileRuntime, after Chat reviewer recovery) settles runs a
 	// previous daemon left in progress.
 	lcStack.runtimeReaper.BindReviewers(reviewSvc.ReviewerObserver())
-
+	sessionSvc.SetMoveNoter(chatSvc)
 	if usage != nil {
 		sessionSvc.SetUsageArchiveFlush(func(context.Context) { usage.requestArchiveFlush() })
 	}
@@ -735,11 +745,14 @@ func Run(buildVersion string) (retErr error) {
 	if switcher, ok := wiredSessMgr.(chatsvc.TerminalProviderSwitcher); ok {
 		chatSvc.SetTerminalProviderSwitcher(switcher)
 	}
+	if recorder, ok := wiredSessMgr.(chatsvc.AgentChoiceRecorder); ok {
+		chatSvc.SetAgentChoiceRecorder(recorder)
+	}
 	agentAccountSvc = newAgentAccounts(cfg, store, codexHome, agentDeps.CodexAccounts, log)
 	agentAccountSvc.SetLimitLog(store)
 	go agentAccountSvc.KeepReadingLimits(ctx, time.Minute)
 	// The mode-aware messenger, so a Chat original is told as a chat message.
-	sessionForkSvc := wireSessionFork(store, sessionSvc, wiredSessMgr, chatSvc, chatDrivers, agentAccountSvc, lcStack.ArtifactVersions, lifecycleMessenger, log)
+	sessionForkSvc := wireSessionFork(cfg.DataDir, store, sessionSvc, wiredSessMgr, chatSvc, chatDrivers, agentAccountSvc, lcStack.ArtifactVersions, lifecycleMessenger, log)
 	chatSvc.SetUsageLimitAccounts(agentAccountSvc)
 	if mover, ok := wiredSessMgr.(chatsvc.AccountHandoffMover); ok {
 		chatSvc.SetAccountHandoff(settingsSvc.AccountHandoffEnabled, agentAccountSvc, mover)
@@ -823,9 +836,25 @@ func Run(buildVersion string) (retErr error) {
 	if resume, ok := sessMgr.(interface {
 		ResumeAgentWithMode(context.Context, domain.SessionID) (sessionmanager.RestoreResult, error)
 	}); ok {
+		join, joins := sessMgr.(interface {
+			WakeHibernatedChat(context.Context, domain.SessionID) error
+		})
 		chatSvc.SetResumeAgentCallback(func(ctx context.Context, id domain.SessionID) error {
+			if joins {
+				// Waits for a resume the user already started (Resume clicked while
+				// the switch runs) and resumes only if that left no controller, so
+				// the two never refuse each other as "already in progress".
+				return join.WakeHibernatedChat(ctx, id)
+			}
 			_, err := resume.ResumeAgentWithMode(ctx, id)
 			return err
+		})
+	}
+	if cold, ok := sessMgr.(interface {
+		LaunchColdChatSwitch(context.Context, domain.SessionID, domain.AgentHarness, func(context.Context, sessionmanager.ChatStart) error) error
+	}); ok {
+		chatSvc.SetColdSwitchLauncher(func(ctx context.Context, id domain.SessionID, target domain.AgentHarness, start func(context.Context, chatsvc.StartConfig) error) error {
+			return cold.LaunchColdChatSwitch(ctx, id, target, start)
 		})
 	}
 	if tunable, ok := sessMgr.(interface {
@@ -996,6 +1025,30 @@ func Run(buildVersion string) (retErr error) {
 	// delay the daemon's first response.
 	sessionSearchSvc := startSessionSearch(ctx, store, cfg.StateDir, log)
 	browserService := browsersvc.New(sessionSvc, browserBroker, browserAuthority)
+	// Consequential agent browser actions wait for the user; the policy and
+	// audit log live under the data dir.
+	var approvals controllers.ApprovalService
+	// A self-hosted host's agent browser is reached only through the gate:
+	// agents send their commands to this daemon, which holds the token.
+	if cfg.AgentBrowserURL != "" {
+		browserService.UseRemoteBrowser(browsersvc.NewHTTPRemoteBrowser(cfg.AgentBrowserURL, cfg.AgentBrowserToken))
+	}
+	if gate, err := approval.Open(filepath.Join(cfg.DataDir, "approvals")); err != nil {
+		// Fail closed: without the gate, actions that may need approval are
+		// refused, never run unasked.
+		log.Error("browser approvals unavailable; consequential browser actions are refused until it loads", "err", err)
+		browserService.ApprovalsUnavailable(err)
+	} else {
+		browserService.UseApprovals(gate, 0)
+		approvals = gate
+		// Modes of sessions deleted since the last start are dropped.
+		if err := gate.PruneSessions(func(id string) (bool, error) {
+			_, ok, err := store.GetSession(ctx, domain.SessionID(id))
+			return ok, err
+		}); err != nil {
+			log.Warn("browser approvals: could not prune deleted sessions' modes", "err", err)
+		}
+	}
 	var browserChrome controllers.BrowserChromeService
 	if chrome != nil {
 		browserService.UseChrome(chrome.broker, chrome.targets, log)
@@ -1353,6 +1406,7 @@ func Run(buildVersion string) (retErr error) {
 		Installer:          systemInstall,
 		ComputerUse:        computerUse,
 		Sessions:           sessionSvc,
+		SessionMoves:       sessionSvc,
 		Automations:        automationSvc,
 		DesktopWorkspaces:  sessionSvc,
 		PRs:                prActions,
@@ -1395,6 +1449,7 @@ func Run(buildVersion string) (retErr error) {
 		Telemetry:          telemetrySink,
 		TelemetryIdentity:  telemetryIdentity,
 		LifetimeSessions:   store.LifetimeSessions,
+		DaemonVersion:      cfg.Telemetry.AppVersion,
 		UsageFlush: func(ctx context.Context) {
 			if usage != nil {
 				usage.flush(ctx, false)
@@ -1411,6 +1466,7 @@ func Run(buildVersion string) (retErr error) {
 		}),
 		Browser:                  browserService,
 		BrowserChrome:            browserChrome,
+		Approvals:                approvals,
 		Panes:                    paneBroker,
 		LinkPreview:              linkpreviewsvc.New(nil),
 		PRPreview:                prPreview,
@@ -1610,7 +1666,7 @@ func Run(buildVersion string) (retErr error) {
 				if err := sessMgr.ReconcileWorkspaceCleanup(ctx); err != nil && ctx.Err() == nil {
 					log.Warn("workspace cleanup reconcile failed", "err", err)
 				}
-				reapForkSeeds(ctx, store, log)
+				reapForkSeeds(ctx, cfg.DataDir, store, log)
 				if settings, err := settingsSvc.Get(ctx); err != nil {
 					log.Warn("read session retention", "err", err)
 				} else if err := sessionSvc.DeleteExpired(ctx, settings.SessionRetentionDays); err != nil && ctx.Err() == nil {

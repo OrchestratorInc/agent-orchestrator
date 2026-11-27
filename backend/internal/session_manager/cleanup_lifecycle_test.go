@@ -97,6 +97,10 @@ func TestCleanup_RecordsReleaseAndSkipsItOnTheNextRun(t *testing.T) {
 			if ws.destroyed != 1 {
 				t.Fatalf("destroyed = %d, want 1", ws.destroyed)
 			}
+			// The session can still be restored, so its agent's conversation stays.
+			if ws.lastDestroyInfo.ReleaseAgentState {
+				t.Fatal("cleanup released the agent's restorable state of a session that can still be restored")
+			}
 		})
 	}
 }
@@ -438,6 +442,9 @@ func TestDeleteSession_CleansUpFirst(t *testing.T) {
 			if tc.wantCode == "" {
 				if err != nil || ws.destroyed != 1 {
 					t.Fatalf("delete with cleanup = %v, destroyed = %d; want deleted after one teardown", err, ws.destroyed)
+				}
+				if !ws.lastDestroyInfo.ReleaseAgentState {
+					t.Fatal("delete teardown kept the agent's restorable state; nothing can restore it after the delete")
 				}
 				if _, ok := st.sessions["mer-1"]; ok {
 					t.Fatal("session survived its delete")

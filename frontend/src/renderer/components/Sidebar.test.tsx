@@ -148,6 +148,13 @@ vi.mock("../hooks/useSessionRename", async (importOriginal) => {
 });
 vi.mock("../lib/cloud-session", () => ({ useCloudSession: () => cloudSessionState }));
 vi.mock("../hooks/useCloudGate", () => ({ useCloudGate: () => cloudGateState }));
+// Moving a Cloud session here needs its creator and a Cloud that can push its branch.
+const cloudMove = vi.hoisted(() => ({ features: ["session.branch"] as string[] }));
+vi.mock("../hooks/useCloudMeUserId", () => ({ useCloudMeUserId: () => "user-me" }));
+vi.mock("../hooks/useCloudOffering", async (importOriginal) => {
+	const actual = await importOriginal<typeof import("../hooks/useCloudOffering")>();
+	return { ...actual, useCloudOffering: (...args: Parameters<typeof actual.useCloudOffering>) => ({ ...actual.useCloudOffering(...args), features: cloudMove.features }) };
+});
 // Local (dev-only) cloud sign-in is off in these tests; mock it like its cloud
 // siblings so the sign-in row never fires a real settings fetch.
 vi.mock("../hooks/useCloudLocalAuth", () => ({
@@ -565,6 +572,7 @@ beforeEach(() => {
 	cloudSessionState.signOut.mockReset().mockResolvedValue(undefined);
 	useUiStore.setState({
 		developerMode: false,
+		newDesktopUi: false,
 		isCommandPaletteOpen: false,
 		newTaskRequest: null,
 		settingsModal: null,
@@ -757,7 +765,7 @@ describe("Sidebar", () => {
 		expect(screen.getAllByLabelText("Signed in as user@example.com")).toHaveLength(2);
 	});
 
-	it("shows only the name in the footer row and the email in the account menu", async () => {
+	it("shows only the avatar in the footer row and the name and email in the account menu", async () => {
 		const user = userEvent.setup();
 		cloudSessionState.configured = true;
 		cloudSessionState.status = "authenticated";
@@ -765,7 +773,8 @@ describe("Sidebar", () => {
 		renderSidebar();
 
 		const account = screen.getAllByLabelText("Signed in as ada@example.com").find((el) => el.tabIndex === 0)!;
-		expect(account).toHaveTextContent("Ada Park");
+		// The avatar alone: initials for a person without a picture, no name or email.
+		expect(account).not.toHaveTextContent("Ada Park");
 		expect(account).not.toHaveTextContent("ada@example.com");
 
 		await user.click(account);
@@ -900,6 +909,29 @@ describe("Sidebar", () => {
 		expect(artifacts.textContent).toBe("Artifacts");
 	});
 
+	it("opens Usage from the footer, not the top nav, and marks it active on its route", async () => {
+		const user = userEvent.setup();
+		renderSidebar();
+
+		const footer = document.querySelector('[data-sidebar="footer"]')!;
+		const usage = within(footer as HTMLElement).getAllByRole("button", { name: "Usage" }).find((el) => el.tabIndex === 0)!;
+		expect(usage).toHaveClass("size-7.5");
+		expect(usage).not.toHaveAttribute("aria-current");
+		expect(screen.getAllByRole("button", { name: "Usage" }).every((el) => footer.contains(el))).toBe(true);
+
+		await user.click(usage);
+		expect(navigateMock).toHaveBeenCalledWith({ to: "/usage" });
+	});
+
+	it("marks the footer Usage button as the current page on /usage", () => {
+		mockLocation.pathname = "/usage";
+		renderSidebar();
+
+		const usage = screen.getAllByRole("button", { name: "Usage" }).find((el) => el.tabIndex === 0)!;
+		expect(usage).toHaveAttribute("aria-current", "page");
+		expect(usage).toHaveAttribute("data-active", "true");
+	});
+
 	it("navigates home from the brand row", async () => {
 		const user = userEvent.setup();
 		mockParams.projectId = "proj-1";
@@ -925,7 +957,7 @@ describe("Sidebar", () => {
 		expect(footer).not.toHaveClass("border-t");
 		expect(footer?.querySelector(".border-t")).toBeNull();
 		expect(screen.getAllByRole("button", { name: "Settings" })[0]).toHaveClass("h-9");
-		expect(screen.getAllByRole("button", { name: "Mobile" })[0]).toHaveClass("size-9");
+		expect(screen.getAllByRole("button", { name: "Mobile" })[0]).toHaveClass("size-7.5");
 		expect(footer?.className).not.toContain("--size-center-panel-bottom-inset");
 		expect(footer?.className).not.toContain("--size-center-panel-inset-mac");
 	});
@@ -1675,7 +1707,10 @@ describe("Sidebar", () => {
 			"group-hover/session-row:pr-sidebar-project-actions",
 			"focus-visible-in-session-row:pr-sidebar-project-actions",
 		);
-		expect(label).toHaveClass("min-w-0", "flex-1", "truncate");
+		// The text rides a track inside the title box, which fades (not ellipsizes) its cut edge.
+		expect(label).toHaveClass("session-title-track");
+		expect(label.parentElement).toHaveClass("session-title", "min-w-0", "flex-1");
+		expect(label.parentElement).not.toHaveClass("truncate");
 		expect(actions).toHaveAttribute("data-session-actions");
 		expect(actionButtons).toHaveClass(
 			"absolute",
@@ -1697,8 +1732,18 @@ describe("Sidebar", () => {
 			"opacity-100",
 			"focus-visible-in-session-row:opacity-0",
 		);
+		// Without Interface v2 a project's rows keep their plain indent.
 		expect(openSession).toHaveClass("pl-1.5");
 		expect(openSession.closest("li")).toHaveClass("pl-0.5");
+		expect(openSession.closest(".sidebar-tree")).toBeNull();
+		// Under Interface v2 they sit in its tree: the rail fills the indent and the
+		// pill starts after the arm, with the indent still pressable.
+		act(() => useUiStore.setState({ developerMode: true, newDesktopUi: true }));
+		const treeSession = screen.getByLabelText("Open fix login");
+		expect(treeSession).toHaveClass("pl-0.5", "before:w-(--tree-indent)");
+		expect(treeSession.closest("li")).toHaveClass("sidebar-tree-item");
+		expect(treeSession.closest(".sidebar-tree")).not.toHaveAttribute("data-tree-more");
+		act(() => useUiStore.setState({ newDesktopUi: false }));
 	});
 
 	it("keeps session status and actions stable when an action receives keyboard focus", async () => {
@@ -1887,6 +1932,37 @@ describe("Sidebar", () => {
 		cleanup();
 		renderSidebar({ workspaces: [{ ...workspace, kind: "cloud", cloudOrgId: "org-mine", sessions: [{ ...session, cloud: { orgId: "org-mine" } }] }], expandedProjectIds: ["proj-1"] });
 		expect(screen.getByRole("button", { name: "Archive session" })).toBeTruthy();
+	});
+
+	it("offers to move the owner's Cloud session to this computer, and not a guest's", async () => {
+		const own: WorkspaceSummary = { ...workspace, kind: "cloud", cloudOrgId: "org-mine", sessions: [{ ...session, cloud: { orgId: "org-mine", createdByUserId: "user-me" } }] };
+		renderSidebar({ workspaces: [own], expandedProjectIds: ["proj-1"] });
+		fireEvent.contextMenu(screen.getByRole("button", { name: "Open fix login" }));
+		expect(await screen.findByRole("menuitem", { name: "Move to this computer…" })).toBeTruthy();
+		expect(screen.queryByRole("menuitem", { name: "Move to Orchestrator Cloud…" })).toBeNull();
+		cleanup();
+		// A teammate's session in the same organization is theirs to move.
+		const teammates: WorkspaceSummary = { ...own, sessions: [{ ...session, cloud: { orgId: "org-mine", createdByUserId: "user-other" } }] };
+		renderSidebar({ workspaces: [teammates], expandedProjectIds: ["proj-1"] });
+		fireEvent.contextMenu(screen.getByRole("button", { name: "Open fix login" }));
+		expect((await screen.findAllByRole("menuitem")).length).toBeGreaterThan(0);
+		expect(screen.queryByRole("menuitem", { name: "Move to this computer…" })).toBeNull();
+		cleanup();
+		// A Cloud that cannot push a session's branch cannot move it out.
+		cloudMove.features = [];
+		try {
+			renderSidebar({ workspaces: [own], expandedProjectIds: ["proj-1"] });
+			fireEvent.contextMenu(screen.getByRole("button", { name: "Open fix login" }));
+			expect((await screen.findAllByRole("menuitem")).length).toBeGreaterThan(0);
+			expect(screen.queryByRole("menuitem", { name: "Move to this computer…" })).toBeNull();
+		} finally {
+			cloudMove.features = ["session.branch"];
+		}
+		cleanup();
+		const shared: WorkspaceSummary = { ...workspace, kind: "cloud", cloudOrgId: "org-elsewhere", shared: {}, sessions: [{ ...session, cloud: { orgId: "org-elsewhere", shared: true } }] };
+		renderSidebar({ workspaces: [shared], expandedProjectIds: ["proj-1"] });
+		fireEvent.contextMenu(screen.getByRole("button", { name: "Open fix login" }));
+		expect(screen.queryByRole("menuitem", { name: "Move to this computer…" })).toBeNull();
 	});
 
 	it("keeps the owner's project actions on a project of their own", () => {
@@ -2798,6 +2874,7 @@ describe("Sidebar", () => {
 
 	it("starts the same inline rename from the session context menu", async () => {
 		const user = userEvent.setup();
+		useUiStore.setState({ developerMode: true, newDesktopUi: true });
 		renderSidebar({ workspaces: [{ ...workspace, sessions: [session] }] });
 
 		fireEvent.contextMenu(screen.getByRole("button", { name: "Open fix login" }));
@@ -2805,20 +2882,47 @@ describe("Sidebar", () => {
 		const menu = renameItem.closest('[role="menu"]');
 		if (!menu) throw new Error("Session context menu not found");
 		await within(menu as HTMLElement).findByRole("menuitem", { name: "Open in" });
-		expect(within(menu as HTMLElement).getAllByRole("menuitem").map((item) => item.textContent)).toEqual([
-			"Open in",
-			"Copy path",
-			"Rename",
-			"Pin session",
-			"Fork session",
-			"Archive session",
+		// Each row's label, without its key hint; the hint is the row's letter.
+		const label = (item: Element) =>
+			[...item.childNodes].filter((node) => !(node instanceof Element && node.matches('[data-slot="menu-shortcut"]'))).map((node) => node.textContent).join("");
+		expect(within(menu as HTMLElement).getAllByRole("menuitem").map((item) => [label(item), item.getAttribute("aria-keyshortcuts")])).toEqual([
+			["Open in", null],
+			["Copy path", "C"],
+			["Rename", "R"],
+			["Pin session", "P"],
+			["Fork session", "F"],
+			["Move to Orchestrator Cloud…", null],
+			["Archive session", "A"],
 		]);
-		expect(renameItem).toHaveTextContent(/^Rename$/);
+		expect(label(renameItem)).toBe("Rename");
 		expect(renameItem.querySelector("svg")).toBeInTheDocument();
 		await user.click(renameItem);
 
 		expect(screen.getByRole("textbox", { name: "Rename fix login" })).toHaveFocus();
 		expect(navigateMock).not.toHaveBeenCalled();
+	});
+
+	it("shows no letter keys on menu rows without Interface v2", async () => {
+		renderSidebar({ workspaces: [{ ...workspace, sessions: [session] }] });
+
+		fireEvent.contextMenu(screen.getByRole("button", { name: "Open fix login" }));
+		const rename = await screen.findByRole("menuitem", { name: "Rename fix login" });
+		expect(rename).not.toHaveAttribute("aria-keyshortcuts");
+		expect(rename.closest('[role="menu"]')?.querySelector("[data-menu-accelerator]")).toBeNull();
+	});
+
+	it("runs a session menu row from its letter while the menu is open", async () => {
+		const user = userEvent.setup();
+		useUiStore.setState({ developerMode: true, newDesktopUi: true });
+		renderSidebar({ workspaces: [{ ...workspace, sessions: [session] }] });
+
+		fireEvent.contextMenu(screen.getByRole("button", { name: "Open fix login" }));
+		const menu = (await screen.findByRole("menuitem", { name: "Rename fix login" })).closest('[role="menu"]') as HTMLElement;
+		await waitFor(() => expect(menu).toContainElement(document.activeElement as HTMLElement));
+		await user.keyboard("r");
+
+		expect(await screen.findByRole("textbox", { name: "Rename fix login" })).toBeInTheDocument();
+		expect(screen.queryByRole("menu")).not.toBeInTheDocument();
 	});
 
 	it("lists every open target in the editor row's submenu", async () => {
@@ -3024,6 +3128,13 @@ describe("Sidebar", () => {
 		const list = screen.getByTestId("session-list-proj-1");
 		expect(within(list).getByText("Agent 6")).toBeInTheDocument();
 		expect(screen.queryByText("Agent 7")).not.toBeInTheDocument();
+		expect(screen.getByRole("button", { name: "Show 3 more agents" })).toBeInTheDocument();
+		expect(list.closest(".sidebar-tree")).toBeNull();
+		// Under Interface v2, Show more is the tree's last leaf, so the rail's elbow ends on it.
+		act(() => useUiStore.setState({ developerMode: true, newDesktopUi: true }));
+		expect(list.closest(".sidebar-tree")).toHaveAttribute("data-tree-more", "");
+		expect(screen.getByRole("button", { name: "Show 3 more agents" }).closest(".sidebar-tree-item")).toHaveAttribute("data-tree-more", "");
+		act(() => useUiStore.setState({ newDesktopUi: false }));
 
 		await user.click(screen.getByRole("button", { name: "Show 3 more agents" }));
 

@@ -408,6 +408,42 @@ describe("ChatWorkspace retry", () => {
 		expect(retry).toHaveTextContent("Retrying…");
 	});
 
+	/** turn-1 as an event started it: a review comment relayed by Orchestrator. */
+	function eventFailedSnapshot(hasEventPrompt: boolean): ConversationSnapshot {
+		const snapshot = failedSnapshot();
+		snapshot.turns = snapshot.turns.map((turn) => turn.id === "turn-1"
+			? { ...turn, hasEventPrompt, errorMessage: "Request timed out. If the API is slow to answer, set API_TIMEOUT_MS." }
+			: turn);
+		snapshot.items = snapshot.items.map((item): ConversationItem => item.kind === "message" && item.role === "user" && item.turnId === "turn-1"
+			? { ...item, origin: "automation" } : item);
+		return snapshot;
+	}
+
+	it("offers a retry on a timed-out turn an event started", async () => {
+		const onRetryTurn = vi.fn();
+		render(<ChatWorkspace snapshot={eventFailedSnapshot(true)} retryControl={{ retry: onRetryTurn }} />);
+
+		await userEvent.click(screen.getByRole("button", { name: "Retry this turn" }));
+		expect(onRetryTurn).toHaveBeenCalledWith("turn-1");
+	});
+
+	it("keeps an event turn's retry when its prompt is paged out", async () => {
+		const snapshot = eventFailedSnapshot(true);
+		snapshot.items = snapshot.items.filter((item) => !(item.kind === "message" && item.role === "user" && item.turnId === "turn-1"));
+		snapshot.hasMoreBefore = true;
+		const onRetryTurn = vi.fn();
+		render(<ChatWorkspace snapshot={snapshot} retryControl={{ retry: onRetryTurn }} hasOlder onLoadOlder={vi.fn()} />);
+
+		await userEvent.click(screen.getByRole("button", { name: "Retry this turn" }));
+		expect(onRetryTurn).toHaveBeenCalledWith("turn-1");
+	});
+
+	it("offers no retry on an event turn the daemon does not confirm a prompt for", () => {
+		render(<ChatWorkspace snapshot={eventFailedSnapshot(false)} retryControl={{ retry: vi.fn() }} />);
+
+		expect(screen.queryByRole("button", { name: "Retry this turn" })).toBeNull();
+	});
+
 	it("hides retry when delivery was never provider-confirmed", () => {
 		const snapshot = failedSnapshot();
 		snapshot.turns = snapshot.turns.map((turn) =>

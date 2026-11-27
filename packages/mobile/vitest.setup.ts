@@ -13,3 +13,10 @@ vi.mock("expo-symbols", () => ({
 // expo-device cannot load under node either. The connect path names this
 // phone when it pairs, so the module is reached from most connection tests.
 vi.mock("expo-device", () => ({ deviceName: "Test phone", osName: "iOS" }));
+
+// expo-keep-awake reaches expo-modules-core too. Dictation holds it while the
+// mic is open, so every composer that carries a mic key loads it.
+vi.mock("expo-keep-awake", () => ({
+	activateKeepAwakeAsync: vi.fn(async () => {}),
+	deactivateKeepAwake: vi.fn(async () => {}),
+}));

@@ -128,7 +128,7 @@ export function autoUpdateHosts(): void {
 	try { attempts = JSON.parse(localStorage.getItem(AUTO_ATTEMPTS_KEY) ?? "{}") ?? {}; } catch { attempts = {}; }
 	for (const [url, state] of Object.entries(byUrl)) {
 		const host = hostIds[url];
-		if (!host || !localVersion || state.view?.method === "app" || hostUpdateAction(state, localVersion)?.kind !== "update" || attempts[host] === localVersion) continue;
+		if (!host || !localVersion || hostUpdateAction(state, localVersion)?.kind !== "update" || attempts[host] === localVersion) continue;
 		attempts[host] = localVersion;
 		localStorage.setItem(AUTO_ATTEMPTS_KEY, JSON.stringify(attempts));
 		void startHostUpdate(url);

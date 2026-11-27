@@ -2,6 +2,7 @@ import { appI18n } from "../../i18n/instance";
 import { isSessionLink } from "../../lib/session-links";
 import { isWebLink } from "../../lib/external-link-policy";
 import type { ActivityStatus, ConversationActivity, ConversationItem } from "../../types/conversation";
+import { runsAOSpawn } from "./activity-step";
 
 export type ActivityDisplayState = "running" | "success" | "failed" | "cancelled" | "recovered" | "pending";
 
@@ -182,3 +183,64 @@ function safeActionHref(value: unknown): string | undefined {
 function text(value: unknown): string {
 	return typeof value === "string" ? value.trim() : "";
 }
+
+function isFailedSpawnRecord(activity: ConversationActivity): boolean {
+	return activity.activityKind === "ao_action" && activity.status === "failed" && activity.detail?.action === "session.spawned";
+}
+
+function isFailedSpawnCommand(activity: ConversationActivity): boolean {
+	return activity.activityKind === "command" && activity.status === "failed" && runsAOSpawn(activity.detail?.command ?? activity.summary);
+}
+
+/** A failed `ao spawn` call that carries the daemon's reason, as {@link mergeFailedSpawns} leaves it. */
+export function isSpawnFailure(activity: ConversationActivity): boolean {
+	return isFailedSpawnCommand(activity) && Boolean(text(activity.detail?.error));
+}
+
+/**
+ * A failed spawn whose own step says why: the daemon's record of it, or the `ao spawn`
+ * call once it carries that record's reason. A failed call with no record beside it (an
+ * older daemon, or the record landed in another run) has only its exit code to show.
+ */
+export function isFailedSpawn(activity: ConversationActivity): boolean {
+	return isFailedSpawnRecord(activity) || isSpawnFailure(activity);
+}
+
+/**
+ * A spawn that failed reads as one step: its `ao spawn` call, carrying the reason
+ * the daemon gave. The daemon's failed spawn record would repeat it as a row of
+ * its own, and the call's exit code would count it again as "exited" beside the
+ * "failed" record. A call starts before the daemon records how it ended, so each
+ * failed record, in sequence order, joins the last failed call before it that no
+ * earlier record took, or the nearest one when none started before it. Two failed
+ * spawns in one run so keep their own reasons. A record with no call beside it keeps
+ * its own row.
+ */
+export function mergeFailedSpawns(activities: ConversationActivity[]): ConversationActivity[] {
+	const records = activities.filter(isFailedSpawnRecord).sort(bySequence);
+	if (records.length === 0) return activities;
+	const calls = activities.filter(isFailedSpawnCommand).sort(bySequence);
+	const reasons = new Map<string, string>();
+	const merged = new Set<string>();
+	for (const record of records) {
+		const open = calls.filter((call) => !reasons.has(call.id));
+		const call = open.findLast((candidate) => candidate.sequence < record.sequence)
+			?? open.reduce<ConversationActivity | undefined>((nearest, candidate) =>
+				!nearest || Math.abs(candidate.sequence - record.sequence) < Math.abs(nearest.sequence - record.sequence) ? candidate : nearest, undefined);
+		if (!call) continue;
+		reasons.set(call.id, text(record.detail?.error));
+		merged.add(record.id);
+	}
+	if (merged.size === 0) return activities;
+	return activities
+		.filter((activity) => !merged.has(activity.id))
+		.map((activity) => {
+			const reason = reasons.get(activity.id);
+			if (reason === undefined) return activity;
+			// The daemon's reason replaces the bare exit code, so the call reads and counts as failed.
+			// A record with no reason leaves the call's own error in place.
+			return { ...activity, detail: { ...activity.detail, exitCode: undefined, error: reason || text(activity.detail?.error) || undefined } };
+		});
+}
+
+const bySequence = (a: ConversationActivity, b: ConversationActivity) => a.sequence - b.sequence;

@@ -745,13 +745,8 @@ html[data-ao-platform="darwin"] .settings-dialog-body :is(button, a, input, sele
 	background: transparent;
 }
 
-/* The rail's line is drawn by the session column, one pixel left of the rail,
- * so the rail's own edge pixel is empty. The resize handle's hover line (which
- * the rail clips to its own box) steps onto that pixel, so it continues the
- * divider instead of floating 1px off it. */
-.center-panel-shell--floating-topbar [data-slot="inspector-container"] [data-resize-line] {
-	transform: translateX(-1px);
-}
+/* The resize handle's hover line finds that line itself (SessionInspectorRail's
+ * `edge`), so no nudge here: a fixed offset drifts as soon as the layout does. */
 
 /* Page roots (board, session, automations, …) fill the whole surface, band
  * included; the panel fill comes from the surface's ::before instead. */
@@ -2146,7 +2141,6 @@ textarea,
 	width: calc(100% / 1.8);
 	margin-left: calc(100% * 0.775 / 1.8);
 	overflow: hidden;
-	text-overflow: ellipsis;
 	white-space: nowrap;
 	/* Tinted toward the working blue at low strength, like the row's spinner, so a
 	   working title reads apart from an idle one without a row fill. */
@@ -2167,6 +2161,238 @@ textarea,
 	.sidebar-working-shimmer {
 		display: none;
 	}
+}
+
+/* Sidebar session titles: one line with no ellipsis. A title that doesn't fit
+   (useTitleMarquee sets data-overflow) fades out at its right edge; while the
+   row is hovered, after about 1.5s, it slides to its end and back in a
+   loop, fading the left edge once the start has moved out. Leaving the row
+   drops the animation, so the title snaps straight back to its start. The
+   working shimmer's copy carries its own track and moves in step. */
+@property --session-title-fade-start {
+	syntax: "<length>";
+	inherits: false;
+	initial-value: 0px;
+}
+
+@property --session-title-fade-end {
+	syntax: "<length>";
+	inherits: false;
+	initial-value: 24px;
+}
+
+.session-title {
+	overflow: hidden;
+	white-space: nowrap;
+}
+
+.session-title-track {
+	display: inline-block;
+	white-space: nowrap;
+}
+
+.session-title[data-overflow] {
+	/* A soft ease that is already moving at the start, so the slide reads at
+	   once instead of creeping out of a full ease-in. */
+	--session-title-ease: cubic-bezier(0.35, 0.15, 0.65, 0.85);
+	mask-image: linear-gradient(to right, transparent 0, #000 var(--session-title-fade-start), #000 calc(100% - var(--session-title-fade-end)), transparent 100%);
+}
+
+/* Only with motion allowed: under reduced motion the title keeps its static
+   fade and never slides. */
+@media (prefers-reduced-motion: no-preference) {
+	.group\/session-row:is(:hover, :has(:focus-visible)) .session-title[data-overflow] {
+		animation: session-title-fade var(--marquee-duration) var(--session-title-ease) var(--marquee-delay) infinite alternate both;
+	}
+
+	.group\/session-row:is(:hover, :has(:focus-visible)) .session-title[data-overflow] .session-title-track {
+		animation: session-title-scroll var(--marquee-duration) var(--session-title-ease) var(--marquee-delay) infinite alternate both;
+	}
+}
+
+@keyframes session-title-scroll {
+	0%, 12% { translate: 0; }
+	88%, 100% { translate: calc(-1 * var(--marquee-distance)); }
+}
+
+@keyframes session-title-fade {
+	0%, 12% { --session-title-fade-start: 0px; --session-title-fade-end: 24px; }
+	24% { --session-title-fade-start: 16px; }
+	76% { --session-title-fade-end: 24px; }
+	88%, 100% { --session-title-fade-start: 16px; --session-title-fade-end: 0px; }
+}
+
+/* Project → session tree rail. A muted spine drops from under the project
+   icon; each child row branches off it with a short arm into its centre (a T
+   with small filleted joins), and the last child ends the spine in a rounded
+   elbow, so nothing dangles below it. The list paints the spine once, so it
+   stays whole while a row is dragged; each row paints its own arm from its
+   indent. The row's pill starts just past the arm. */
+.sidebar-tree {
+	/* Project icon centre: the row's 10px inset plus half the 14px icon. */
+	--tree-x: calc(var(--spacing) * 2.5 + var(--size-icon-md) / 2);
+	--tree-stroke: 1.5px;
+	/* Spine centre to arm tip, then a 2px gap before the pill. */
+	--tree-arm: 8px;
+	--tree-indent: calc(var(--tree-x) + var(--tree-arm) + 2px);
+	--tree-fillet: 2px;
+	--tree-elbow: 5px;
+	/* The last row's centre above the list's bottom edge: its 4px bottom
+	   space (the list's pb-1, or Show more's mb-1) plus half the 32px row. */
+	--tree-tail: calc(var(--spacing) * 5);
+	--tree-line: color-mix(in srgb, var(--color-text-muted) 15%, transparent);
+	position: relative;
+}
+
+.sidebar-tree-item {
+	position: relative;
+	padding-left: var(--tree-indent);
+}
+
+.sidebar-tree::before,
+.sidebar-tree-item::before,
+.sidebar-tree-item::after {
+	content: "";
+	position: absolute;
+	pointer-events: none;
+}
+
+/* The spine: from the list's top edge, 8px under the icon, down to where the
+   last child's elbow takes over. */
+.sidebar-tree::before {
+	top: 0;
+	bottom: calc(var(--tree-tail) + var(--tree-elbow));
+	left: calc(var(--tree-x) - var(--tree-stroke) / 2);
+	width: var(--tree-stroke);
+	border-top-left-radius: calc(var(--tree-stroke) / 2);
+	border-top-right-radius: calc(var(--tree-stroke) / 2);
+	background: var(--tree-line);
+}
+
+/* The arm, with a concave fillet above and below where it leaves the spine. */
+.sidebar-tree-item::before {
+	top: 0;
+	bottom: 0;
+	left: calc(var(--tree-x) + var(--tree-stroke) / 2);
+	width: calc(var(--tree-arm) - var(--tree-stroke) / 2);
+	background:
+		radial-gradient(circle at 100% 0, transparent calc(var(--tree-fillet) - 0.5px), var(--tree-line) var(--tree-fillet))
+			0 calc(50% - (var(--tree-stroke) + var(--tree-fillet)) / 2) / var(--tree-fillet) var(--tree-fillet) no-repeat,
+		radial-gradient(circle at 100% 100%, transparent calc(var(--tree-fillet) - 0.5px), var(--tree-line) var(--tree-fillet))
+			0 calc(50% + (var(--tree-stroke) + var(--tree-fillet)) / 2) / var(--tree-fillet) var(--tree-fillet) no-repeat,
+		linear-gradient(var(--tree-line), var(--tree-line)) 0 50% / 100% var(--tree-stroke) no-repeat;
+}
+
+.sidebar-tree-item::after {
+	display: none;
+}
+
+/* The last child (Show more when the list is capped): the spine turns into its
+   arm through one rounded elbow and stops there. */
+.sidebar-tree:not([data-tree-more]) [data-slot="sidebar-menu-sub"] > .sidebar-tree-item:last-child::before,
+.sidebar-tree-item[data-tree-more]::before {
+	display: none;
+}
+
+.sidebar-tree:not([data-tree-more]) [data-slot="sidebar-menu-sub"] > .sidebar-tree-item:last-child::after,
+.sidebar-tree-item[data-tree-more]::after {
+	display: block;
+	top: calc(50% - var(--tree-elbow));
+	left: calc(var(--tree-x) - var(--tree-stroke) / 2);
+	width: calc(var(--tree-arm) + var(--tree-stroke) / 2);
+	height: calc(var(--tree-elbow) + var(--tree-stroke) / 2);
+	border-left: var(--tree-stroke) solid var(--tree-line);
+	border-bottom: var(--tree-stroke) solid var(--tree-line);
+	border-bottom-left-radius: var(--tree-elbow);
+}
+
+/* The same tree rail for nested lists in the chat (Interface v2): the calls in
+   an open tool-call group, related-call subgroups, a subagent's steps and the
+   background updates list. Rows there open in place, so the rail cannot be
+   painted once by the list like the sidebar's: each direct child paints its own
+   piece of the spine (bridging the gap above it) and its arm at its header's
+   centre, and the last child turns the spine into its arm with one rounded
+   elbow. The list sets where the spine sits (--chat-tree-x, from its left
+   edge), its children's header centre (--chat-tree-head) and their gap. */
+html[data-new-desktop-ui] .chat-tree {
+	--chat-tree-x: 4px;
+	--chat-tree-head: calc(var(--spacing) * 0.5 + var(--text-xs) * 2 / 3);
+	--chat-tree-gap: calc(var(--spacing) * 1);
+	--chat-tree-stroke: 1.5px;
+	--chat-tree-arm: 8px;
+	--chat-tree-fillet: 2px;
+	--chat-tree-elbow: 5px;
+	--chat-tree-indent: calc(var(--chat-tree-x) + var(--chat-tree-arm) + 4px);
+	--chat-tree-line: color-mix(in srgb, var(--color-text-muted) 15%, transparent);
+	margin-left: 0;
+	border-left: 0;
+	padding-left: var(--chat-tree-indent);
+}
+
+html[data-new-desktop-ui] .chat-tree > * {
+	position: relative;
+}
+
+html[data-new-desktop-ui] .chat-tree > *::before,
+html[data-new-desktop-ui] .chat-tree > *::after {
+	content: "";
+	position: absolute;
+	pointer-events: none;
+}
+
+/* The spine beside a child that has siblings below it. */
+html[data-new-desktop-ui] .chat-tree > :not(:last-child)::before {
+	top: calc(-1 * var(--chat-tree-gap));
+	bottom: 0;
+	left: calc(var(--chat-tree-x) - var(--chat-tree-indent) - var(--chat-tree-stroke) / 2);
+	width: var(--chat-tree-stroke);
+	background: var(--chat-tree-line);
+}
+
+/* Its arm, with a concave fillet above and below where it leaves the spine. */
+html[data-new-desktop-ui] .chat-tree > :not(:last-child)::after {
+	top: calc(var(--chat-tree-head) - var(--chat-tree-stroke) / 2 - var(--chat-tree-fillet));
+	left: calc(var(--chat-tree-x) - var(--chat-tree-indent) + var(--chat-tree-stroke) / 2);
+	width: calc(var(--chat-tree-arm) - var(--chat-tree-stroke) / 2);
+	height: calc(var(--chat-tree-stroke) + var(--chat-tree-fillet) * 2);
+	background:
+		radial-gradient(circle at 100% 0, transparent calc(var(--chat-tree-fillet) - 0.5px), var(--chat-tree-line) var(--chat-tree-fillet))
+			0 0 / var(--chat-tree-fillet) var(--chat-tree-fillet) no-repeat,
+		radial-gradient(circle at 100% 100%, transparent calc(var(--chat-tree-fillet) - 0.5px), var(--chat-tree-line) var(--chat-tree-fillet))
+			0 100% / var(--chat-tree-fillet) var(--chat-tree-fillet) no-repeat,
+		linear-gradient(var(--chat-tree-line), var(--chat-tree-line)) 0 50% / 100% var(--chat-tree-stroke) no-repeat;
+}
+
+/* The last child: the spine runs down to its header and turns into its arm. */
+html[data-new-desktop-ui] .chat-tree > :last-child::before {
+	top: calc(-1 * var(--chat-tree-gap));
+	left: calc(var(--chat-tree-x) - var(--chat-tree-indent) - var(--chat-tree-stroke) / 2);
+	width: calc(var(--chat-tree-arm) + var(--chat-tree-stroke) / 2);
+	height: calc(var(--chat-tree-gap) + var(--chat-tree-head) + var(--chat-tree-stroke) / 2);
+	border-left: var(--chat-tree-stroke) solid var(--chat-tree-line);
+	border-bottom: var(--chat-tree-stroke) solid var(--chat-tree-line);
+	border-bottom-left-radius: var(--chat-tree-elbow);
+}
+
+html[data-new-desktop-ui] .chat-tree > :last-child::after {
+	display: none;
+}
+
+/* The first child's spine starts at the list's top edge, not above it. */
+html[data-new-desktop-ui] .chat-tree > :first-child::before {
+	top: 0;
+}
+
+html[data-new-desktop-ui] .chat-tree > :first-child:last-child::before {
+	height: calc(var(--chat-tree-head) + var(--chat-tree-stroke) / 2);
+}
+
+/* Background updates: the spine drops from the header's 14px icon, and each
+   row's 28px header takes the arm. */
+html[data-new-desktop-ui] .chat-tree.chat-tree-updates {
+	--chat-tree-x: 7px;
+	--chat-tree-head: calc(var(--spacing) * 3.5);
+	--chat-tree-gap: 0px;
 }
 
 /* The live row's label (current step, retry chip, setup label) fades in once when the
@@ -3103,6 +3329,30 @@ html.sidebar-reordering * {
 	}
 }
 
+/* A composer attachment's corner remove button: a solid disc with a ring in the
+   composer's own fill, so it cuts cleanly out of the tile under it. Solid copies
+   because a translucent window clears the composer and button fills, which let
+   the picture show through. */
+.cursor-chat-composer {
+	--composer-bg-solid: var(--solid-bg-secondary, var(--color-bg-secondary));
+}
+
+:root[data-theme="light"] .cursor-chat-composer {
+	--composer-bg-solid: var(--color-bg-elevated);
+}
+
+.composer-tile-remove {
+	background: color-mix(in oklch, var(--foreground) 18%, var(--composer-bg-solid, var(--color-bg-elevated)));
+	color: color-mix(in oklch, var(--foreground) 88%, transparent);
+	box-shadow: 0 0 0 2px var(--composer-bg-solid, var(--color-bg-elevated));
+	transition: background-color 150ms ease-out, color 150ms ease-out;
+}
+
+.composer-tile-remove:hover {
+	background: color-mix(in oklch, var(--foreground) 26%, var(--composer-bg-solid, var(--color-bg-elevated)));
+	color: var(--foreground);
+}
+
 /* The composer has no border; it is told apart from the canvas by its fill alone.
    Focus remains visible on the keyboard-focusable controls inside it. */
 .cursor-chat-composer {
@@ -3503,7 +3753,6 @@ html[data-window-translucent="true"] :is(.queue-dock, .queue-dock-toggle, .queue
 	visibility: hidden;
 	white-space: pre-wrap;
 	overflow-wrap: break-word;
-	text-wrap: pretty;
 }
 
 .chat-human-edit-field::after,
@@ -3880,6 +4129,26 @@ html[data-window-translucent="true"] :is(.queue-dock, .queue-dock-toggle, .queue
 	min-width: var(--size-topbar-control);
 	font-size: var(--font-size-sm-md);
 	transition-property: background-color, border-color, color, box-shadow, opacity, gap, padding-inline;
+}
+
+/* A page's top bar (board, artifacts, automations, usage, settings) spaces its
+ * controls 8px apart, the panel's trailing controls included, so filled pills
+ * don't crowd each other; a session's tab strip keeps its tighter 4px. The
+ * reserve for the trailing controls is their width, that 8px, and the panel
+ * edge's own inset (one 4px gap, less its 1px edge). */
+.center-panel-titlebar > .workspace-topbar-actions {
+	gap: var(--space-2);
+}
+
+.center-panel-shell--floating-topbar.center-panel-shell .has-topbar-controls .center-panel-titlebar {
+	padding-right: calc(var(--topbar-trailing-width, 0px) + var(--space-2) + var(--gap-topbar-control) - 1px);
+}
+
+/* A search field in the bar (board, artifacts, automations) stands as tall as
+ * the buttons beside it. */
+.workspace-topbar-actions [data-slot="input"] {
+	-webkit-app-region: no-drag;
+	height: var(--size-topbar-control);
 }
 
 .workspace-topbar-actions .group\/button:disabled {
@@ -7187,4 +7456,1000 @@ body.is-pane-dragging webview {
 	.pane-split-junction::after {
 		transition: none;
 	}
+}
+
+/* ---------------------------------------------------------------------------
+ * Interface v2 (Developer mode preview, off by default; Settings >
+ * General). Every rule below is scoped under html[data-new-desktop-ui], which
+ * `lib/new-desktop-ui.ts` sets before first paint, so with the flag off the
+ * app is exactly the UI above. It sits last so it wins ties without
+ * !important, except where a hammer has to beat explicit utility durations.
+ * ------------------------------------------------------------------------- */
+
+/* Centre panel edge: a whisper, 30% of the strong hairline; 15% with the
+ * sidebar closed. */
+html[data-new-desktop-ui] .center-panel-surface {
+	--center-panel-edge: color-mix(in srgb, var(--color-border-strong) 30%, transparent);
+	border-color: var(--center-panel-edge);
+}
+
+html[data-new-desktop-ui] .center-panel-shell--floating-topbar > .center-panel-surface::after {
+	border-color: var(--center-panel-edge);
+}
+
+html[data-new-desktop-ui] .sidebar-hidden .center-panel-shell--mac:not(.center-panel-shell--fullscreen) > .center-panel-surface,
+html[data-new-desktop-ui] .sidebar-hidden .center-panel-shell--floating-topbar > .center-panel-surface::after {
+	border-color: color-mix(in srgb, var(--color-border-strong) 15%, transparent);
+}
+
+/* In dark the strong hairline at 30% all but vanishes against the frame, so
+ * the edge is a slight text tint instead, a step lighter than the frame it
+ * meets: 3%, 2% with the sidebar closed. */
+html[data-new-desktop-ui]:not([data-theme="light"]) .center-panel-surface {
+	--center-panel-edge: color-mix(in srgb, var(--color-text-primary) 3%, transparent);
+}
+
+html[data-new-desktop-ui]:not([data-theme="light"]) .sidebar-hidden .center-panel-shell--mac:not(.center-panel-shell--fullscreen) > .center-panel-surface,
+html[data-new-desktop-ui]:not([data-theme="light"]) .sidebar-hidden .center-panel-shell--floating-topbar > .center-panel-surface::after {
+	border-color: color-mix(in srgb, var(--color-text-primary) 2%, transparent);
+}
+
+/* A page with no top bar (new chat) keeps the floating frame with its top at
+ * the window inset. Closing the sidebar reserves the bar's band for the
+ * traffic lights, so the top edge slides down to it, in step with the sidebar,
+ * instead of the panel swapping frames in one frame. */
+html[data-new-desktop-ui] {
+	/* SHELL_PANEL_DRAWER, the sidebar's slide under Interface v2. */
+	--ease-shell-panel: 450ms cubic-bezier(0.32, 0.72, 0, 1);
+}
+
+/* The animated top is a separate, non-inherited property that only the
+ * frame reads (the surface's mask, its fill and its edge), so a sidebar
+ * toggle restyles three boxes per frame, not everything in the panel. The
+ * inherited --floating-panel-top that the rest of the panel reads switches
+ * once. */
+@property --floating-panel-edge {
+	syntax: "<length>";
+	inherits: false;
+	initial-value: 0px;
+}
+
+html[data-new-desktop-ui] .center-panel-shell--floating-topbar > .center-panel-surface {
+	--floating-panel-edge: var(--floating-panel-top);
+	transition: --floating-panel-edge var(--ease-shell-panel);
+	-webkit-mask:
+		linear-gradient(#000 0 0) 0 0 / 100% var(--floating-panel-edge) no-repeat,
+		linear-gradient(#000 0 0) 0 calc(var(--floating-panel-edge) + var(--floating-panel-radius)) / 100% calc(100% - var(--floating-panel-edge) - 2 * var(--floating-panel-radius)) no-repeat,
+		linear-gradient(#000 0 0) var(--floating-panel-radius) var(--floating-panel-edge) / calc(100% - 2 * var(--floating-panel-radius)) calc(100% - var(--floating-panel-edge)) no-repeat,
+		radial-gradient(circle, #000 70%, transparent 71%) 0 var(--floating-panel-edge) / calc(2 * var(--floating-panel-radius)) calc(2 * var(--floating-panel-radius)) no-repeat,
+		radial-gradient(circle, #000 70%, transparent 71%) 100% var(--floating-panel-edge) / calc(2 * var(--floating-panel-radius)) calc(2 * var(--floating-panel-radius)) no-repeat,
+		radial-gradient(circle, #000 70%, transparent 71%) 0 100% / calc(2 * var(--floating-panel-radius)) calc(2 * var(--floating-panel-radius)) no-repeat,
+		radial-gradient(circle, #000 70%, transparent 71%) 100% 100% / calc(2 * var(--floating-panel-radius)) calc(2 * var(--floating-panel-radius)) no-repeat;
+}
+
+/* The fill and edge run the same transition themselves: an inherited value
+ * that is animating on the surface does not reach its pseudo-elements frame
+ * by frame. */
+html[data-new-desktop-ui] .center-panel-shell--floating-topbar > .center-panel-surface::before,
+html[data-new-desktop-ui] .center-panel-shell--floating-topbar > .center-panel-surface::after {
+	--floating-panel-edge: var(--floating-panel-top);
+	inset: var(--floating-panel-edge) 0 0;
+	transition: --floating-panel-edge var(--ease-shell-panel);
+}
+
+html[data-new-desktop-ui] .center-panel-shell--floating-topbar > .center-panel-surface::after {
+	transition: --floating-panel-edge var(--ease-shell-panel), border-color var(--ease-shell-panel);
+}
+
+/* The panel stays mounted across pages, so moving between a page with a top
+ * bar and one without (new chat) would slide the edge too. Only a sidebar
+ * toggle slides it; a page change lands at once (CenterPanelShell's
+ * edge-snap, held for one frame). */
+html[data-new-desktop-ui] .center-panel-shell--edge-snap > .center-panel-surface,
+html[data-new-desktop-ui] .center-panel-shell--edge-snap > .center-panel-surface::before,
+html[data-new-desktop-ui] .center-panel-shell--edge-snap > .center-panel-surface::after {
+	transition: none;
+}
+
+/* The open sidebar overlaps the panel's left inset by a negative margin. On
+ * its own 280ms curve that margin outran the sidebar's spring, so the panel
+ * slid flush to the window edge before the sidebar pushed it back; on the
+ * same spring the panel's left edge moves in one line. */
+html[data-new-desktop-ui][data-ao-platform="darwin"] .app-shell-root:not(.native-fullscreen) [data-slot="sidebar"] {
+	transition: margin-right var(--ease-shell-panel);
+}
+
+html[data-new-desktop-ui] .center-panel-shell--floating-topbar.center-panel-shell--bare {
+	--size-inspector-tabs: 0px;
+	--spacing-inspector-tabs: 0px;
+}
+
+html[data-new-desktop-ui] .center-panel-shell--floating-topbar.center-panel-shell--bare > .center-panel-surface {
+	--floating-panel-top: var(--size-center-panel-inset-mac);
+}
+
+@media (prefers-reduced-motion: reduce) {
+	html[data-new-desktop-ui] .center-panel-shell--floating-topbar > .center-panel-surface,
+	html[data-new-desktop-ui] .center-panel-shell--floating-topbar > .center-panel-surface::after,
+	html[data-new-desktop-ui][data-ao-platform="darwin"] .app-shell-root:not(.native-fullscreen) [data-slot="sidebar"] {
+		transition: none;
+	}
+}
+
+/* Collapsed sidebar (Interface v2): a rail of the nav buttons instead of
+ * hiding. The container keeps its full width and layout and is clipped to the
+ * rail on the sidebar's spring, so no icon moves; each nav button's pill
+ * narrows to a square around its icon as its label fades, the project and
+ * session lists fade out, and the footer swaps to its rail icons. */
+/* Registered so the sidebar geometry hook reads it back as pixels. */
+@property --sidebar-width-rail {
+	syntax: "<length>";
+	inherits: true;
+	initial-value: 0px;
+}
+html[data-new-desktop-ui] {
+	/* The nav rows' height, so a collapsed row is square. */
+	--sidebar-rail-button: 32px;
+	/* 12px from the window edge to a button and 12px from it to the panel,
+	 * whose own 8px inset sits inside that. */
+	--sidebar-width-rail: calc(var(--sidebar-rail-button) + 16px);
+}
+
+/* Open, 2px past the right edge stay painted: the resize line is centered on
+ * the panel's border, which starts where the sidebar ends. */
+html[data-new-desktop-ui] .sidebar-rail-clip {
+	clip-path: inset(0 -2px 0 0);
+	transition: clip-path var(--ease-shell-panel);
+}
+
+html[data-new-desktop-ui] [data-collapsible="rail"] .sidebar-rail-clip {
+	clip-path: inset(0 calc(100% - var(--sidebar-width-rail)) 0 0);
+}
+
+html[data-new-desktop-ui] .sidebar-rail-clip :is([data-sidebar-topnav], [data-sidebar-settings-nav]) [data-sidebar="menu-button"] {
+	max-width: 100%;
+	transition:
+		max-width var(--ease-shell-panel),
+		margin-left var(--ease-shell-panel),
+		padding-left var(--ease-shell-panel);
+}
+
+/* The first nav row (Search) starts on the centre panel's top line: the
+ * sidebar starts just under the 50px band, whose last pixel is the panel's
+ * top edge, so the header drops its padding and rises that 1px. */
+html[data-new-desktop-ui][data-ao-platform="darwin"] .app-shell-root:not(.native-fullscreen) [data-slot="sidebar"] [data-slot="sidebar-header"] {
+	margin-top: -1px;
+	padding-top: 0;
+}
+
+/* The sidebar's button icons are 16px. */
+html[data-new-desktop-ui] [data-slot="sidebar"] :is(:is([data-sidebar-topnav], [data-sidebar-settings-nav]) [data-sidebar="menu-button"], [data-sidebar-rail-footer], [data-sidebar-footer-expanded]) svg.icon {
+	width: var(--size-icon-base);
+	height: var(--size-icon-base);
+}
+
+/* A 32px square: 8px either side of the 16px icon. The row moves 2px right as
+ * its padding drops 2px, on the same curve, so the icon never moves. */
+html[data-new-desktop-ui] [data-collapsible="rail"] :is([data-sidebar-topnav], [data-sidebar-settings-nav]) [data-sidebar="menu-button"] {
+	max-width: var(--sidebar-rail-button);
+	margin-left: 2px;
+	padding-left: 8px;
+}
+
+html[data-new-desktop-ui] .sidebar-rail-clip :is(:is([data-sidebar-topnav], [data-sidebar-settings-nav]) .sidebar-expanded-chrome, [data-sidebar-settings-nav] [role="status"], [data-sidebar-sections], [data-sidebar-footer-expanded]) {
+	transition: opacity 150ms ease-out;
+}
+
+html[data-new-desktop-ui] [data-collapsible="rail"] :is(:is([data-sidebar-topnav], [data-sidebar-settings-nav]) .sidebar-expanded-chrome, [data-sidebar-settings-nav] [role="status"], [data-sidebar-sections], [data-sidebar-footer-expanded]) {
+	opacity: 0;
+	pointer-events: none;
+}
+
+/* The rail's footer icons stack upward from the bottom, in the rail's column. */
+html[data-new-desktop-ui] [data-collapsible="rail"] [data-slot="sidebar-footer"] {
+	overflow: visible;
+}
+
+html[data-new-desktop-ui] [data-collapsible="rail"] [data-sidebar-rail-footer] {
+	/* The footer starts 3px in; this lands the column on the rail rows' x (12px). */
+	/* In the nav squares' column, so every rail icon sits at the same x. */
+	left: 10px;
+	right: auto;
+	/* Matches the 12px from the window's left edge to the buttons. */
+	bottom: 12px;
+	width: var(--sidebar-rail-button);
+	opacity: 1;
+	pointer-events: auto;
+}
+
+/* Page titles clear the fixed titlebar cluster. Open, the padding is the usual
+ * 18px; at the rail it is the cluster's reach less the rail. In between it
+ * blends on the sidebar's live rail progress (PageTopbar's clearance ref), so
+ * the title's x moves on the sidebar's own spring for the whole slide instead
+ * of riding the panel edge and then stopping dead partway through. */
+html[data-new-desktop-ui] .center-panel-shell--mac .center-panel-titlebar {
+	padding-left: max(
+		var(--space-4_5),
+		calc(var(--ao-titlebar-content-left) - var(--ao-sidebar-layout-width, 0px)),
+		calc(
+			var(--space-4_5) + (var(--ao-titlebar-content-left) - var(--space-4_5) - var(--sidebar-width-rail)) *
+				var(--ao-sidebar-rail-progress, 0)
+		)
+	);
+}
+
+html[data-new-desktop-ui] [data-collapsible="rail"] [data-sidebar-rail-footer] :is(button, a) {
+	width: var(--sidebar-rail-button);
+	height: var(--sidebar-rail-button);
+}
+
+@media (prefers-reduced-motion: reduce) {
+	html[data-new-desktop-ui] .sidebar-rail-clip,
+	html[data-new-desktop-ui] .sidebar-rail-clip :is([data-sidebar-topnav], [data-sidebar-settings-nav]) [data-sidebar="menu-button"] {
+		transition: none;
+	}
+}
+
+/* Selected tabs are flat: a plain fill, no edge or bevel. Tabs are places,
+ * not buttons. */
+html[data-new-desktop-ui] .session-inspector__tab-button[aria-selected="true"],
+html[data-new-desktop-ui] :is(.center-panel-shell--tab-pills, .browser-popout-overlay--tab-pills) [data-terminal-tab-frame][data-active]::before {
+	border-color: transparent;
+	box-shadow: none;
+}
+
+/* The selected tab is where you already are, so hovering it changes nothing. */
+html[data-new-desktop-ui] .session-inspector__tab-button[aria-selected="true"]:hover,
+html[data-new-desktop-ui] :is(.center-panel-shell--tab-pills, .browser-popout-overlay--tab-pills) [data-terminal-tab-frame][data-active]:hover::before {
+	background-color: var(--secondary);
+}
+
+html[data-new-desktop-ui][data-theme="light"] :is(.center-panel-shell--tab-pills, .browser-popout-overlay--tab-pills) [data-terminal-tab-frame][data-active]:hover::before {
+	background-color: color-mix(in oklab, var(--color-bg-primary), var(--secondary));
+}
+
+/* Edges (macOS): everything sits 2px further from the window edges. The
+ * shared panel inset goes from 6px to 8px, and the shell derives the rest
+ * from it: the centre panel's left, right and bottom gaps, the right rail
+ * inside the panel, and the panel corners, which drop to 10px to stay
+ * concentric with the 18px window corner. The top bar keeps its 50px band
+ * (the traffic-light row): its controls are 32px, the sidebar rows' height,
+ * with 8.5px above and below, and their centre line stays put. The sidebar's content moves 2px right and its footer 2px
+ * up, and main moves the native window buttons 2px right to match
+ * (MAC_INTERFACE_V2_EDGE_EXTRA in shared/window-chrome.ts). */
+html[data-new-desktop-ui][data-ao-platform="darwin"] {
+	--size-center-panel-inset-mac: 8px;
+	--size-titlebar-cluster-left: calc(86px / var(--ao-window-zoom, 1));
+	/* The original band: the bar plus the 6px inset and its 1px border twice. */
+	--size-traffic-light-clearance: calc(var(--size-toolbar) + 14px);
+}
+
+html[data-new-desktop-ui][data-ao-platform="darwin"] .center-panel-shell.center-panel-shell--floating-topbar {
+	--floating-topbar-height: calc(var(--size-topbar-primary) + 14px);
+	--floating-topbar-gap: calc(var(--space-2) + 0.5px);
+}
+
+html[data-new-desktop-ui][data-ao-platform="darwin"] [data-slot="sidebar-container"] {
+	padding-left: 3px;
+}
+
+/* The sidebar footer's bottom inset grows by the same 2px (8px to 10px). Its
+ * own padding is an important utility (`!pb-2`), and a layered important rule
+ * beats an unlayered one, so this sits in the utilities layer, where the more
+ * specific selector wins. */
+@layer utilities {
+	html[data-new-desktop-ui][data-ao-platform="darwin"] [data-slot="sidebar-footer"] {
+		padding-bottom: 10px !important;
+	}
+}
+
+/* Dropdown triggers (selects, option menus, any button that opens a menu) are
+ * flat: no bevel and a very slight edge. The face paints under the border, so
+ * the edge is a bare 2% tint of the text colour, not a mix with the face.
+ * Hover and press still deepen the face. */
+html[data-new-desktop-ui] .button-raised:is(.settings-option-trigger, [data-slot="select-trigger"], [aria-haspopup="menu"], [aria-haspopup="listbox"], [role="combobox"]) {
+	border-color: color-mix(in oklch, var(--color-text-primary) 2%, transparent);
+	background-image: none;
+	box-shadow: none;
+}
+
+/* In dark, a dropdown trigger brightens under the pointer and a step more
+ * while pressed or open, like every other hover on a dark surface; darkening
+ * read as the control sinking. Light keeps the deepening face. */
+html[data-new-desktop-ui]:not([data-theme="light"]) .button-raised:is(.settings-option-trigger, [data-slot="select-trigger"], [aria-haspopup="menu"], [aria-haspopup="listbox"], [role="combobox"]):hover:not(:disabled, [aria-disabled="true"]) {
+	--button-face: color-mix(in oklab, var(--button-color), #fff 6%);
+}
+
+html[data-new-desktop-ui]:not([data-theme="light"]) .button-raised:is(.settings-option-trigger, [data-slot="select-trigger"], [aria-haspopup="menu"], [aria-haspopup="listbox"], [role="combobox"]):is(:active, [aria-pressed="true"], [data-state="open"], [data-active="true"]):not(:disabled, [aria-disabled="true"]) {
+	--button-face: color-mix(in oklab, var(--button-color), #fff 10%);
+}
+
+/*!
+ * The classic button rules below are adapted from Radix Themes, with values
+ * from Radix Colors.
+ * https://github.com/radix-ui/themes/blob/main/packages/radix-ui-themes/src/components/_internal/base-button.css
+ * https://github.com/radix-ui/colors
+ *
+ * Radix Themes: MIT License, Copyright (c) 2023 WorkOS
+ * Radix Colors: MIT License, Copyright (c) 2021 Radix
+ *
+ * Permission is hereby granted, free of charge, to any person obtaining a copy
+ * of this software and associated documentation files (the "Software"), to deal
+ * in the Software without restriction, including without limitation the rights
+ * to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+ * copies of the Software, and to permit persons to whom the Software is
+ * furnished to do so, subject to the following conditions:
+ *
+ * The above copyright notice and this permission notice shall be included in all
+ * copies or substantial portions of the Software.
+ *
+ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+ * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+ * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+ * AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+ * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+ * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+ * SOFTWARE.
+ */
+
+/* Filled buttons. Primary and accent (`button-classic`) are the Radix Themes
+ * classic button (@radix-ui/themes 3.3.0,
+ * src/components/_internal/base-button.css; licence above), with its slate,
+ * black and white alpha scales (@radix-ui/colors 3.0.0) inlined. Accent is
+ * the plain classic button with its fill as `--accent-9`; primary (near white in dark, near black in
+ * light) is its high-contrast form, with the fill as `--accent-12`. Radix's
+ * one-step hover colour (`--accent-10`) is the fill 6% towards the contrast
+ * end. The 1px border is dropped (the classic button draws its edge as an
+ * inset ring); heights are fixed, so only the width loses 2px. Every other
+ * filled button (secondary, destructive, triggers, ad hoc raised controls) is
+ * flat: its face and a faint edge. */
+html[data-new-desktop-ui] .button-raised:not(.button-classic) {
+	border-color: color-mix(in oklch, var(--color-text-primary) 4%, transparent);
+	box-shadow: none;
+}
+
+/* Dropdown triggers keep their quieter 2% edge: this repeats the trigger rule
+ * above so it lands after the general one, which otherwise wins on order. */
+html[data-new-desktop-ui] .button-raised:not(.button-classic):is(.settings-option-trigger, [data-slot="select-trigger"], [aria-haspopup="menu"], [aria-haspopup="listbox"], [role="combobox"]) {
+	border-color: color-mix(in oklch, var(--color-text-primary) 2%, transparent);
+}
+
+/* In dark the trigger's face is itself a light tint, and any edge on top of it
+ * adds up into a ring, so the face alone draws the shape. */
+html[data-new-desktop-ui]:not([data-theme="light"]) .button-raised:not(.button-classic):is(.settings-option-trigger, [aria-haspopup="menu"], [aria-haspopup="listbox"], [role="combobox"]):not([data-slot="select-trigger"]) {
+	border-color: transparent;
+}
+
+html[data-new-desktop-ui] .button-classic {
+	--accent-9: var(--button-color);
+	--accent-10: color-mix(in oklab, var(--button-color), #000 6%);
+	--gray-a2: #00005506;
+	--gray-a3: #0000330f;
+	--gray-a4: #00002d17;
+	--gray-a5: #0009321f;
+	--gray-a7: #00062e32;
+	--rx-classic-after-inset: 2px;
+	--rx-classic-shadow-top:
+		inset 0 0 0 1px var(--gray-a4),
+		inset 0 -2px 1px var(--gray-a3);
+	--rx-classic-shadow-bottom:
+		inset 0 4px 2px -2px #ffffffb3,
+		inset 0 2px 1px -1px #ffffffb3;
+	--rx-classic-hc-hover-filter: contrast(0.88) saturate(1.1) brightness(1.1);
+	position: relative;
+	z-index: 0;
+	border-width: 0;
+	background-color: var(--accent-9);
+	background-image:
+		linear-gradient(to bottom, transparent 50%, var(--gray-a4)),
+		linear-gradient(to bottom, transparent 50%, var(--accent-9) 80%);
+	box-shadow:
+		var(--rx-classic-shadow-top),
+		inset 0 0 0 1px var(--accent-9),
+		var(--rx-classic-shadow-bottom);
+}
+
+html[data-new-desktop-ui]:not([data-theme="light"]) .button-classic {
+	--accent-10: color-mix(in oklab, var(--button-color), #fff 6%);
+	--gray-a2: #d8f4f609;
+	--gray-a3: #ddeaf814;
+	--gray-a4: #d3edf81d;
+	--gray-a5: #d9edfe25;
+	--gray-a7: #d9edff40;
+	--rx-classic-after-inset: 1px;
+	--rx-classic-shadow-top:
+		inset 0 0 0 1px #ffffff1a,
+		inset 0 4px 2px -2px #ffffff26,
+		inset 0 1px 1px #fff6,
+		inset 0 -1px 1px #0006;
+	--rx-classic-shadow-bottom: 0 0 transparent;
+	--rx-classic-hc-hover-filter: contrast(0.88) saturate(1.3) brightness(1.14);
+}
+
+html[data-new-desktop-ui] .button-classic::after {
+	content: "";
+	position: absolute;
+	inset: 0;
+	z-index: -1;
+	border-radius: inherit;
+	pointer-events: none;
+	border: var(--rx-classic-after-inset) solid transparent;
+	background-clip: content-box;
+	background-color: inherit;
+	background-image: linear-gradient(#0000000d, transparent, #ffffff1a);
+	box-shadow: inset 0 2px 3px -1px #fff3;
+}
+
+html[data-new-desktop-ui] .button-classic-contrast::after {
+	background-image: linear-gradient(#00000026, transparent, #ffffff1a);
+}
+
+@media (hover: hover) {
+	html[data-new-desktop-ui] .button-classic:not(.button-classic-contrast):hover:not(:disabled, [aria-disabled="true"])::after {
+		background-color: var(--accent-10);
+		background-image: linear-gradient(#0000001a -15%, transparent, #ffffff26);
+	}
+
+	html[data-new-desktop-ui] .button-classic-contrast:hover:not(:disabled, [aria-disabled="true"]) {
+		filter: var(--rx-classic-hc-hover-filter);
+	}
+
+	html[data-new-desktop-ui] .button-classic-contrast:hover:not(:disabled, [aria-disabled="true"])::after {
+		background-color: var(--accent-9);
+		background-image: linear-gradient(#0000004d, transparent, #ffffff1a);
+	}
+}
+
+html[data-new-desktop-ui] .button-classic:not(.button-classic-contrast)[data-state="open"]::after {
+	background-color: var(--accent-10);
+	background-image: linear-gradient(#0000001a -15%, transparent, #ffffff26);
+}
+
+/* Pressed is softer than Radix's: the resting edge stays, the top highlight
+ * goes and a light shade settles over the face. The high-contrast primary
+ * dims or lifts 4% instead of Radix's contrast filter. */
+html[data-new-desktop-ui] .button-classic:is(:active, [aria-pressed="true"], [data-active="true"]):not([data-state="open"], :disabled, [aria-disabled="true"]) {
+	box-shadow:
+		var(--rx-classic-shadow-top),
+		inset 0 0 0 1px var(--accent-9);
+}
+
+html[data-new-desktop-ui] .button-classic:is(:active, [aria-pressed="true"], [data-active="true"]):not([data-state="open"], :disabled, [aria-disabled="true"])::after {
+	box-shadow: none;
+	background-image: linear-gradient(#0000000f, transparent 70%);
+}
+
+html[data-new-desktop-ui] .button-classic-contrast:is(:active, [aria-pressed="true"], [data-active="true"]):not([data-state="open"], :disabled, [aria-disabled="true"]) {
+	filter: brightness(0.96);
+}
+
+html[data-new-desktop-ui]:not([data-theme="light"]) .button-classic-contrast:is(:active, [aria-pressed="true"], [data-active="true"]):not([data-state="open"], :disabled, [aria-disabled="true"]) {
+	filter: brightness(0.94);
+}
+
+html[data-new-desktop-ui] .button-classic:is(:disabled, [aria-disabled="true"]) {
+	background-image: none;
+	box-shadow: var(--rx-classic-shadow-top), var(--rx-classic-shadow-bottom);
+}
+
+html[data-new-desktop-ui] .button-classic:is(:disabled, [aria-disabled="true"])::after {
+	content: none;
+}
+
+/* The composer: an 18px corner (20px with the flag off) and 10px of padding
+ * (12px). Its controls take its radius less that padding (18 - 10 = 8px), so
+ * their corners run concentric with its own. */
+html[data-new-desktop-ui] {
+	--radius-chat-composer: 18px;
+}
+
+html[data-new-desktop-ui] .cursor-chat-composer {
+	--composer-inset: 10px;
+	padding: var(--composer-inset);
+}
+
+/* The user's message bubble tightens by 1px on every side: 9px above and
+ * below and 11px at the sides (10px and 12px with the flag off). */
+html[data-new-desktop-ui] .cursor-chat-human-message {
+	padding: 9px 11px;
+}
+
+/* Dark composer: its fill plus one visible, even hairline (a ring, so it takes
+ * no layout space and follows the corners). Light keeps its own ring and
+ * shadow. */
+html[data-new-desktop-ui]:not([data-theme="light"]) .cursor-chat-composer {
+	box-shadow: 0 0 0 1px color-mix(in srgb, var(--color-text-primary) 6%, transparent);
+	transition: none;
+}
+
+/* With the New Chat tray under it, the composer and the tray read as one
+ * shape with one edge: the composer's bottom edge breaks where the tray
+ * hangs, and the tray's sides flow out of the break through two small
+ * fillets. The tray sits one fillet lower and far enough in that the fillets
+ * start where the composer's corners end; its total height is unchanged. */
+html[data-new-desktop-ui]:not([data-theme="light"]) :is([data-composer-tray], .chat-composer-tray) {
+	--composer-merge-fillet: 6px;
+	--composer-merge-edge: color-mix(in srgb, var(--color-text-primary) 6%, transparent);
+	--composer-merge-fill: color-mix(in srgb, var(--color-text-primary) 3%, transparent);
+}
+
+html[data-new-desktop-ui]:not([data-theme="light"]) [data-composer-tray] .cursor-chat-composer {
+	box-shadow: none;
+}
+
+/* The outline, with the break in its bottom edge. */
+html[data-new-desktop-ui]:not([data-theme="light"]) [data-composer-tray] .cursor-chat-composer::after {
+	content: "";
+	position: absolute;
+	inset: -1px;
+	border: 1px solid var(--composer-merge-edge);
+	border-radius: calc(var(--radius-chat-composer) + 1px);
+	pointer-events: none;
+	mask:
+		linear-gradient(#000 0 0),
+		linear-gradient(#000 0 0) 50% 100% / calc(100% - 2px - 2 * var(--radius-chat-composer)) 1px no-repeat;
+	mask-composite: exclude;
+}
+
+/* The fillets, and the tray's fill between them, in the one-fillet band
+ * between the composer and the tray. */
+html[data-new-desktop-ui]:not([data-theme="light"]) [data-composer-tray] .cursor-chat-composer::before {
+	--f: var(--composer-merge-fillet);
+	content: "";
+	position: absolute;
+	top: 100%;
+	left: var(--radius-chat-composer);
+	right: var(--radius-chat-composer);
+	height: var(--f);
+	pointer-events: none;
+	background:
+		radial-gradient(circle at 0 100%, transparent calc(var(--f) - 1.25px), var(--composer-merge-edge) calc(var(--f) - 0.75px), var(--composer-merge-edge) calc(var(--f) - 0.25px), var(--composer-merge-fill) calc(var(--f) + 0.25px)) 0 0 / var(--f) var(--f) no-repeat,
+		radial-gradient(circle at 100% 100%, transparent calc(var(--f) - 1.25px), var(--composer-merge-edge) calc(var(--f) - 0.75px), var(--composer-merge-edge) calc(var(--f) - 0.25px), var(--composer-merge-fill) calc(var(--f) + 0.25px)) 100% 0 / var(--f) var(--f) no-repeat,
+		linear-gradient(var(--composer-merge-fill), var(--composer-merge-fill)) var(--f) 0 / calc(100% - 2 * var(--f)) var(--f) no-repeat;
+}
+
+html[data-new-desktop-ui]:not([data-theme="light"]) .chat-composer-tray {
+	margin: calc(-0.5rem + var(--composer-merge-fillet)) calc(var(--radius-chat-composer) + var(--composer-merge-fillet) - 1px) 0;
+	border: 1px solid var(--composer-merge-edge);
+	border-top: 0;
+	padding: calc(var(--tray-inset) - var(--composer-merge-fillet)) calc(var(--tray-inset) - 1px) calc(var(--tray-inset) - 1px);
+	background: var(--composer-merge-fill);
+	background-clip: padding-box;
+}
+
+/* Controls share the centre panel's corner radius: buttons, inputs, select
+ * triggers, top-bar tab pills and split buttons, and the composer's pickers
+ * and icon buttons (add, dictate, send; circles otherwise). */
+html[data-new-desktop-ui] {
+	--radius-control: var(--radius-center-panel);
+	--radius-topbar-control: var(--radius-center-panel);
+}
+
+html[data-new-desktop-ui] :is(.center-panel-shell--tab-pills, .browser-popout-overlay--tab-pills) [data-terminal-tab-frame]::before {
+	border-radius: var(--radius-control);
+}
+
+/* The composer's add, picker, dictate and send controls, one padding inside its corner. */
+html[data-new-desktop-ui] .cursor-chat-composer button:is(.rounded-full, .rounded-lg) {
+	border-radius: calc(var(--radius-chat-composer) - var(--composer-inset));
+}
+
+/* Sidebar row actions (project and session rows, section "+") keep their
+ * hover fill. They sit 4px inside their row, so their corners are the row's
+ * radius less that inset and the two curves stay concentric. */
+html[data-new-desktop-ui] [data-slot="sidebar"] .sidebar-icon-action {
+	border-radius: calc(var(--radius-control) - var(--space-1));
+}
+
+/* Translucent window: the shell tint is 5 points more opaque than above
+ * (75%, 77% light). */
+html[data-new-desktop-ui]:root[data-window-translucent="true"] {
+	--ao-shell-tint: color-mix(in srgb, var(--sidebar) 75%, transparent);
+	/* Dark centre panel: one step darker than the shell, so the frame around
+	 * it reads as the lighter surface. */
+	--ao-center-plate: color-mix(in srgb, black 15%, transparent);
+}
+
+html[data-new-desktop-ui]:root[data-theme="light"][data-window-translucent="true"] {
+	--ao-shell-tint: color-mix(in srgb, color-mix(in srgb, var(--sidebar), white 75%) 77%, transparent);
+}
+
+html[data-new-desktop-ui]:root[data-style-theme][data-window-translucent="true"] {
+	--ao-shell-tint: color-mix(in srgb, var(--background) 75%, transparent);
+}
+
+html[data-new-desktop-ui]:root[data-style-theme][data-theme="light"][data-window-translucent="true"] {
+	--ao-shell-tint: color-mix(in srgb, var(--sidebar) 75%, transparent);
+}
+
+html[data-new-desktop-ui][data-window-translucent="true"] .first-run-onboarding {
+	background-color: color-mix(in srgb, var(--sidebar) 75%, transparent);
+}
+
+/* Dark: the centre panel is darker than the sidebar and frame around it.
+ * Translucent, only the panel's own plate paints the shade (the floating
+ * bar's ::before on macOS, the surface elsewhere), never the clear surfaces
+ * inside it, so it cannot stack; it clears over a live browser page. */
+html[data-new-desktop-ui][data-window-translucent="true"]:not([data-theme="light"]):not([data-browser-native-live]) .center-panel-surface {
+	background-color: var(--ao-center-plate);
+}
+
+html[data-new-desktop-ui][data-window-translucent="true"]:not([data-theme="light"]):not([data-browser-native-live]) .center-panel-shell--floating-topbar > .center-panel-surface {
+	background-color: transparent;
+}
+
+html[data-new-desktop-ui][data-window-translucent="true"]:not([data-theme="light"]):not([data-browser-native-live]) .center-panel-shell--floating-topbar > .center-panel-surface::before {
+	background-color: var(--ao-center-plate);
+}
+
+/* Translucent dark: the centre is darker than the theme's canvas, so a menu
+ * at the theme's popover colour sinks into it. Floating menus and popovers
+ * lift 6% toward white to stay a step above whatever they open over. The
+ * lifted fill is resolved on the root, where the theme declares --popover. */
+html[data-new-desktop-ui][data-window-translucent="true"]:not([data-theme="light"]) {
+	--ao-float-fill: color-mix(in oklab, var(--popover), white 6%);
+}
+
+html[data-new-desktop-ui][data-window-translucent="true"]:not([data-theme="light"]) :is([data-radix-popper-content-wrapper], [role="menu"], [role="listbox"]) {
+	--popover: var(--ao-float-fill);
+	--color-bg-elevated: var(--ao-float-fill);
+}
+
+/* Opaque, the frame and the panel swap colours: the frame (sidebar, top band)
+ * takes the theme's page colour and the panel takes its sidebar colour, so the
+ * contrast between them is the theme's own, just inverted. The theme's values
+ * are captured on the root, where it defines them, and swapped below it. */
+html[data-new-desktop-ui]:not([data-window-translucent="true"]):not([data-theme="light"]) {
+	--ao-opaque-frame: var(--background);
+	--ao-opaque-center: var(--sidebar);
+}
+
+html[data-new-desktop-ui]:not([data-window-translucent="true"]):not([data-theme="light"]) body {
+	--sidebar: var(--ao-opaque-frame);
+	--color-bg-sidebar: var(--ao-opaque-frame);
+}
+
+html[data-new-desktop-ui]:not([data-window-translucent="true"]):not([data-theme="light"]) .center-panel-surface {
+	--background: var(--ao-opaque-center);
+	--color-bg-primary: var(--ao-opaque-center);
+}
+
+/* Motion: hovers are instant and nothing fades. Dialogs, backdrops, tooltips
+ * and hover cards open and close with no animation. A menu or popover opening
+ * only grows from its trigger side, fully opaque from the first frame, on an
+ * expo ease-out; closing is instant. Content motion (streaming, toasts,
+ * loaders, panel slides) is untouched. */
+@keyframes new-ui-menu-in {
+	from {
+		scale: 0.96;
+	}
+	to {
+		scale: 1;
+	}
+}
+
+html[data-new-desktop-ui] [class*="animate-popover-in"]:not([data-state="closed"]) {
+	animation: new-ui-menu-in 160ms cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+html[data-new-desktop-ui] :is([class*="animate-popover-out"], [class*="animate-overlay-out"], [class*="animate-modal-out"])[data-state="closed"],
+html[data-new-desktop-ui] :is([class*="animate-overlay-in"], [class*="animate-modal-in"]),
+html[data-new-desktop-ui] :is([data-slot="tooltip-content"], [data-slot="hover-card-content"]) {
+	animation: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+	html[data-new-desktop-ui] [class*="animate-popover-in"]:not([data-state="closed"]) {
+		animation: none;
+	}
+}
+
+/* Hover, focus and pressed changes land on the same frame. The selector
+ * covers the controls and anything styled with a hover: utility, and their
+ * pseudo-elements (the quiet Button's pill, resize grips). Icons keep
+ * theirs: a disclosure chevron's turn is a state change, not a hover. */
+html[data-new-desktop-ui] :is(button, a, input, select, textarea, [role="menuitem"], [role="menuitemcheckbox"], [role="menuitemradio"], [role="option"], [role="tab"], [class*="hover:"], [class*="group-hover"]):not(svg),
+html[data-new-desktop-ui] :is(button, a, [role="menuitem"], [role="option"], [role="tab"], [class*="hover:"], [class*="group-hover"])::before,
+html[data-new-desktop-ui] :is(button, a, [role="menuitem"], [role="option"], [role="tab"], [class*="hover:"], [class*="group-hover"])::after,
+html[data-new-desktop-ui] :is(.session-inspector__resize-handle, .pane-split-junction, .pane-split-divider)::after {
+	transition-duration: 0s !important;
+}
+
+/* The quiet Button's pill rests at full size, so a hover only shows it. */
+html[data-new-desktop-ui] [class*="before:bg-interactive-hover"]::before {
+	inset: 0;
+}
+
+/* Menus: compact rows that read at full strength and sit on whole pixels: a
+ * 20px line in 4px of padding makes every row 28px, so no label lands on a
+ * half pixel. Icons and chevrons take the label's colour, red rows stay red,
+ * and key hints sit at the right edge in the label's size, muted. Dividers
+ * stop at the row text's inset and sit a step quieter. */
+html[data-new-desktop-ui] [role="menu"] :is([role="menuitem"], [role="menuitemcheckbox"], [role="menuitemradio"]) {
+	padding-block: 4px;
+	line-height: 20px;
+}
+
+html[data-new-desktop-ui] [role="menu"] :is([role="menuitem"], [role="menuitemcheckbox"], [role="menuitemradio"]):not(.text-destructive) {
+	color: var(--foreground);
+}
+
+html[data-new-desktop-ui] [role="menu"] :is([role="menuitem"], [role="menuitemcheckbox"], [role="menuitemradio"]) > svg {
+	color: currentColor;
+}
+
+/* Action menus are words only: a row's leading icon is dropped, so labels
+ * start on one edge and the letter keys carry the scanning. A submenu's
+ * chevron (pushed right with ml-auto) stays, and so does an app's logo
+ * ("Open in" and its apps), which names the row faster than its word. A
+ * menu that lists apps keeps every row's icon, so "Copy path" lines up. */
+html[data-new-desktop-ui] [role="menu"]:not(:has(> [role="menuitem"]:not([aria-haspopup]) > .open-target-icon)) .action-menu-item > svg:not(.ml-auto, .open-target-icon) {
+	display: none;
+}
+
+/* Stay Awake's switch row wraps its icon in a span, which the rule above
+ * doesn't reach; drop it too so the Mobile menu is words only. Its paused
+ * warning still shows as the row's red second line and on the footer icon. */
+html[data-new-desktop-ui] [role="menu"] [data-awake-menu-icon] {
+	display: none;
+}
+
+/* The menu's edge: a slight hairline so the panel holds its shape over any
+ * surface; the overlay border token is too faint to read on its own. */
+html[data-new-desktop-ui] [role="menu"] {
+	border-color: color-mix(in oklab, var(--foreground) 5%, transparent);
+}
+
+/* The row under the pointer or keyboard, and an open submenu's row, take a
+ * clear fill: the theme's hover tint was too faint on the menu surface.
+ * Option-menu rows that paint theirs on a rounded ::before (their row boxes
+ * stay square for the dividers) keep the box itself clear; settings rows have
+ * no ::before and keep the box fill. */
+html[data-new-desktop-ui] [role="menu"] :is([role="menuitem"], [role="menuitemcheckbox"], [role="menuitemradio"]):is(:focus, [data-highlighted], [data-state="open"]):not([data-disabled], .settings-menu-surface [class*="before:absolute"]) {
+	background-color: color-mix(in oklab, var(--foreground) 12%, transparent);
+}
+
+/* A destructive row under the pointer takes a soft red fill instead, so the
+ * row reads as a warning before it runs. */
+/* Same selector shape as the fill rule above, so this one outranks it. */
+html[data-new-desktop-ui] [role="menu"] :is([role="menuitem"], [role="menuitemcheckbox"], [role="menuitemradio"]).text-destructive:is(:focus, [data-highlighted]):not([data-disabled], .settings-menu-surface [class*="before:absolute"]) {
+	background-color: color-mix(in oklab, var(--destructive) 22%, transparent);
+	color: color-mix(in oklab, var(--destructive) 75%, var(--foreground));
+}
+
+html[data-new-desktop-ui] [role="menu"] [data-slot="menu-shortcut"] {
+	padding-left: 16px;
+	font-size: inherit;
+	letter-spacing: normal;
+	color: var(--muted-foreground);
+}
+
+html[data-new-desktop-ui] [role="menu"] > [role="separator"] {
+	margin: 4px 8px;
+	background-color: color-mix(in oklab, var(--border), transparent 35%);
+}
+
+/* Overlays nest their corners by R = r + d: an outer corner is the inner
+ * corner plus the gap between them, the only radius that keeps the gap even
+ * round the curve. Rows (a highlight, a search field) keep an 8px corner
+ * (`--radius-md`); a menu, select or option panel has a 1px edge and 4px of
+ * padding, so the gap is 5px and the panel takes 8 + 5 = 13px. Cmd+K's rows
+ * sit 7px in (a 1px edge and a 6px margin), so its panel takes 15px. */
+html[data-new-desktop-ui] {
+	--radius-overlay-row: var(--radius-md);
+	--radius-overlay: calc(var(--radius-overlay-row) + 5px);
+	--radius-command-palette: calc(var(--radius-overlay-row) + 1px + var(--size-command-item-inset));
+}
+
+html[data-new-desktop-ui] :is([role="menu"], [data-slot="select-content"], .settings-menu-surface) {
+	border-radius: var(--radius-overlay);
+}
+
+html[data-new-desktop-ui] :is([role="menu"], [data-slot="select-content"], .settings-menu-surface) :is([role="menuitem"], [role="menuitemcheckbox"], [role="menuitemradio"], [role="option"], [data-slot="select-item"]),
+html[data-new-desktop-ui] :is([role="menu"], [data-slot="select-content"], .settings-menu-surface) :is([role="menuitem"], [role="menuitemcheckbox"], [role="menuitemradio"], [role="option"])::before,
+html[data-new-desktop-ui] .settings-menu-surface [role="radio"].size-7::before,
+html[data-new-desktop-ui] .menu-search-input {
+	border-radius: var(--radius-overlay-row);
+}
+
+/* Option-menu rows draw their highlight on ::before, so the row box itself
+ * stays square: a row that opens a group draws the divider as its top edge,
+ * which a rounded box would curl at both ends. Rows without a ::before box
+ * (settings menus) paint the box itself, so they keep the row corner. */
+html[data-new-desktop-ui] .settings-menu-surface :is([role="menuitem"], [role="menuitemcheckbox"], [role="menuitemradio"], [role="option"])[class*="before:absolute"] {
+	border-radius: 0;
+}
+
+/* A segmented switch inside an overlay (the model picker's Auto/200k/1M):
+ * its 8px track has 2px of padding, so each segment takes 6px. */
+html[data-new-desktop-ui] .settings-menu-surface [role="radiogroup"].rounded-md > [role="radio"] {
+	border-radius: calc(var(--radius-md) - 2px);
+}
+
+/* One overlay family. Selects, option menus, popovers and hover cards take
+ * the action menu's edge, and select rows its rows: 28px, full-strength
+ * labels and the same 12% highlight. Cmd+K's edge and highlight follow. */
+html[data-new-desktop-ui] :is([data-slot="select-content"], .settings-menu-surface, [data-slot="popover-content"], [data-slot="hover-card-content"], [role="dialog"]:has(> [data-slot="command"])) {
+	border-color: color-mix(in oklab, var(--foreground) 5%, transparent);
+}
+
+html[data-new-desktop-ui] [data-slot="select-item"] {
+	padding-block: 4px;
+	line-height: 20px;
+	color: var(--foreground);
+}
+
+html[data-new-desktop-ui] [data-slot="command"] [role="option"][aria-selected="true"] {
+	background-color: color-mix(in oklab, var(--foreground) 12%, transparent);
+}
+
+html[data-new-desktop-ui] .settings-menu-surface :is([role="menuitem"], [role="menuitemcheckbox"], [role="menuitemradio"], [role="option"]):is(:focus, [data-highlighted], [data-state="open"]):not([data-disabled])::before {
+	background-color: color-mix(in oklab, var(--foreground) 12%, transparent);
+}
+
+/* An option menu's dividers sit like an action menu's: inset to the row
+ * text and a step quieter than the strong hairline. */
+html[data-new-desktop-ui] .settings-menu-surface > .border-t,
+html[data-new-desktop-ui] .settings-menu-surface > [role="separator"] {
+	border-color: color-mix(in oklab, var(--border), transparent 35%);
+}
+
+/* Controls share one corner. Settings and select triggers, and inspector
+ * and board fields, take the control radius like every button; a trigger's
+ * 18px line in 4px of padding and a 1px edge makes it 28px, so its label
+ * sits on a whole pixel (it was 29.5px). The composer's pickers keep their
+ * own size and corner, concentric with the composer. */
+html[data-new-desktop-ui] :is(.settings-option-trigger, .inspector-field-input, .settings-inline-input, .settings-inline-edit-input, [data-slot="input"], [data-slot="textarea"]):not(.cursor-chat-composer *) {
+	border-radius: var(--radius-control);
+}
+
+html[data-new-desktop-ui] .settings-option-trigger:not(.cursor-chat-composer *, .border-0) {
+	line-height: 18px;
+}
+
+/* Settings groups round with the controls they hold, and in dark the
+ * dividers between their rows drop to the menu dividers' quieter tint. */
+html[data-new-desktop-ui] .settings-grouped-rows {
+	border-radius: var(--radius-control);
+}
+
+html[data-new-desktop-ui]:not([data-theme="light"]) .settings-grouped-rows > * + * {
+	border-top-color: color-mix(in srgb, var(--color-text-primary) 5%, transparent);
+}
+
+/* Chat blocks (code, tables, tool output, plans, queued and unsent
+ * messages) take the composer's 6% hairline in dark instead of the strong
+ * 9% edge, so the transcript reads as text with quiet frames. A table's
+ * header row takes a faint fill and its rows a quieter divider. */
+html[data-new-desktop-ui]:not([data-theme="light"]) .cursor-chat-surface :is(.border-border, [class*="border-border/"]) {
+	border-color: color-mix(in srgb, var(--color-text-primary) 6%, transparent);
+}
+
+html[data-new-desktop-ui]:not([data-theme="light"]) .cursor-chat-surface .chat-md table th {
+	background-color: color-mix(in srgb, var(--color-text-primary) 3%, transparent);
+}
+
+html[data-new-desktop-ui]:not([data-theme="light"]) .cursor-chat-surface .chat-md table td {
+	border-color: color-mix(in srgb, var(--color-text-primary) 4%, transparent);
+}
+
+/* Board cards. In dark the card's fill draws it: a 9% edge on the 5% face
+ * added up into a ring, so the edge drops to 4% and the footer line with
+ * it; under the pointer the face brightens (the hover tint replaced it
+ * with a fainter one, so the card sank). A selected, needs-you or ended
+ * card keeps its own edge and tint. No card shrinks on press. */
+html[data-new-desktop-ui]:not([data-theme="light"]) [data-testid="board-session-card"]:not([data-selected], .border-status-needs-you, .session-card-terminated) {
+	border-color: color-mix(in srgb, var(--color-text-primary) 4%, transparent);
+}
+
+html[data-new-desktop-ui]:not([data-theme="light"]) [data-testid="board-session-card"] .border-t {
+	border-color: color-mix(in srgb, var(--color-text-primary) 4%, transparent);
+}
+
+html[data-new-desktop-ui]:not([data-theme="light"]) [data-testid="board-session-card"]:not([data-selected], .border-status-needs-you, .session-card-terminated):is(:hover, :focus-within) {
+	background-color: color-mix(in srgb, var(--color-text-primary) 8%, transparent);
+}
+
+html[data-new-desktop-ui] [data-testid="board-session-card"] {
+	scale: none;
+}
+
+/* Switches are flat like every v2 control: no inset bevel on the track or
+ * the thumb. In dark the track brightens under the pointer and a step more
+ * while pressed, as dropdown triggers do; light keeps the deepening. */
+html[data-new-desktop-ui] .switch-inset,
+html[data-new-desktop-ui] .switch-inset:active:not(:disabled),
+html[data-new-desktop-ui] .switch-inset [data-slot="switch-thumb"] {
+	box-shadow: none;
+}
+
+html[data-new-desktop-ui] .switch-inset {
+	border-color: transparent;
+}
+
+@media (hover: hover) {
+	html[data-new-desktop-ui]:not([data-theme="light"]) .switch-inset:hover:not(:disabled) {
+		--switch-face: color-mix(in oklab, var(--switch-color), #fff 8%);
+	}
+}
+
+html[data-new-desktop-ui]:not([data-theme="light"]) .switch-inset:active:not(:disabled) {
+	--switch-face: color-mix(in oklab, var(--switch-color), #fff 14%);
+}
+
+/* Fields share one recipe: the input fill, a 3% edge (the theme's settings
+ * input edge), the control corner and 13px text, and focus brings the edge up
+ * to a soft ring. Only the height and a leading icon tell the shapes apart:
+ * field 32px, compact 28px (in menus and rows), search (compact with an icon;
+ * a top bar's takes the bar's control height), dropdown (a 32px field with
+ * a chevron at every size, so it lines up with the inputs beside it), text
+ * area and inline edit. A self-styled field
+ * joins with `data-field` (field, compact, search, textarea, inline); the
+ * browser's address bar and the chat composer keep their own. The lists sit
+ * in :where() so a field's own state rules (a dropdown's hover face, the
+ * overlay search corner) still win. */
+html[data-new-desktop-ui] {
+	--field-fill: var(--color-bg-settings-input);
+	--field-edge: var(--color-border-settings-input);
+	--field-edge-focus: color-mix(in oklab, var(--ring) 55%, transparent);
+	/* A caller that pins its own corner (`rounded-[var(--field-radius,…)]!`) follows this. */
+	--field-radius: var(--radius-control);
+}
+
+html[data-new-desktop-ui] :where([data-slot="input"], [data-slot="textarea"], [data-slot="select-trigger"], .settings-field-control, .settings-inline-input, .settings-inline-edit-input, .inspector-field-input, .menu-search-input, [data-field]:not([data-field="inline"])):where(:not(.cursor-chat-composer *, .browser-panel__url-input, [data-field="none"])) {
+	border-width: 1px;
+	border-style: solid;
+	border-color: var(--field-edge);
+	background-color: var(--field-fill);
+	border-radius: var(--radius-control);
+}
+
+html[data-new-desktop-ui] :where([data-slot="input"], [data-slot="textarea"], [data-slot="select-trigger"], .settings-field-control, .settings-inline-input, .settings-inline-edit-input, .inspector-field-input, .menu-search-input, [data-field]:not([data-field="inline"])):where(:not(.cursor-chat-composer *, .browser-panel__url-input, [data-field="none"], .font-mono)) {
+	font-size: var(--font-size-base);
+}
+
+html[data-new-desktop-ui] :where([data-slot="input"], [data-slot="textarea"], .settings-field-control, .settings-inline-input, .settings-inline-edit-input, .inspector-field-input, .menu-search-input, [data-field]:not([data-field="inline"])):where(:not(.cursor-chat-composer *, .browser-panel__url-input, [data-field="none"])):is(:focus-visible, :focus-within) {
+	border-color: var(--field-edge-focus);
+	outline: none;
+}
+
+/* Heights: 32px fields, 28px compact and search fields. */
+html[data-new-desktop-ui] :is(.settings-field-control:not(textarea), [data-slot="select-trigger"]:not([data-size="auto"], [data-field]), [data-field="field"]) {
+	height: var(--size-control-form);
+}
+
+html[data-new-desktop-ui] :is(.menu-search-input, [data-field="compact"], [data-field="search"]) {
+	height: var(--size-control-md);
+}
+
+/* Text areas pad like a field's line and grow from their own minimum. */
+html[data-new-desktop-ui] :is([data-slot="textarea"], textarea.settings-field-control, [data-field="textarea"]) {
+	padding: var(--space-2) var(--space-3);
+}
+
+/* A dropdown field is a field, not a raised button: its face is the field
+ * fill, so hover and open still brighten it from there, and it takes the
+ * field edge over the dropdown triggers' 2% one. */
+html[data-new-desktop-ui] .button-raised:not(.button-classic)[data-slot="select-trigger"] {
+	--button-color: var(--field-fill);
+	border-color: var(--field-edge);
+	color: var(--foreground);
+	font-weight: var(--font-weight-normal);
+}
+
+html[data-new-desktop-ui] .button-raised:not(.button-classic)[data-slot="select-trigger"]:focus-visible {
+	border-color: var(--field-edge-focus);
+	outline: none;
+}
+
+/* An inline edit (a tab or title being renamed) keeps its own box and draws
+ * the field's focus ring instead of the accent. */
+html[data-new-desktop-ui] [data-field="inline"] {
+	--tw-ring-color: var(--field-edge-focus);
+}
+
+/* A wrapper field (search with an icon, a form around an input) owns the box;
+ * the input inside it uses the field's text size. */
+html[data-new-desktop-ui] :is([data-field="field"], [data-field="compact"], [data-field="search"]) :where(input:not(.font-mono)) {
+	font-size: var(--font-size-base);
 }

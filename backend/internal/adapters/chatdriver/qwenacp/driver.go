@@ -29,6 +29,8 @@ func newDriver(plugin nativeacp.Plugin, probe nativeacp.VersionProbe, log *slog.
 		SessionOptions: sessionOptions,
 		VersionProbe:   probe,
 		SteerDrain:     steerDrain,
+		// Qwen reports compression as reply text; one row says it instead.
+		CompactionMessage: compactionMessage,
 		Capabilities: ports.ChatCapabilities{
 			// Qwen enforces approval modes over session/request_permission.
 			ports.ChatCapabilityApprovals: true,

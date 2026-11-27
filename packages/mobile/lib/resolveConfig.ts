@@ -27,7 +27,12 @@ export type ResolveDeps = {
  * reusing a cached address would send its credential without a fresh identity
  * check, possibly to a different machine now holding that address.
  */
-export async function resolveActiveConfig(deps: ResolveDeps): Promise<ServerConfig | null> {
+export async function resolveActiveConfig(
+	deps: ResolveDeps,
+	/** Called when a late fallback to the kept password left the returned config
+	 * with a refused token (see ConnectResult's credentialRepair). */
+	onCredentialRepaired?: (stale: ServerConfig) => void,
+): Promise<ServerConfig | null> {
 	let host: Host | null;
 	try {
 		// Before looking for machines, bring any pre-existing single-server
@@ -49,6 +54,8 @@ export async function resolveActiveConfig(deps: ResolveDeps): Promise<ServerConf
 				// losing Wi-Fi would leave them pointed at the dead LAN address:
 				// REST recovers, the terminal does not.
 				if (await deps.persist(result.config) === false) return null;
+				const stale = result.config;
+				void result.credentialRepair?.then((repaired) => { if (repaired) onCredentialRepaired?.(stale); });
 				return result.config;
 			}
 			if (result.reason === "incompatible") throw new IncompatibleHostVersionError(host.id);

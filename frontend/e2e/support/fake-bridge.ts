@@ -157,6 +157,7 @@ export async function installFakeBridge(page: Page, opts: FakeBridgeOptions = {}
 					persistTerminal: async () => undefined,
 					setWindowBackground: async () => undefined,
 					setWindowTranslucent: async () => undefined,
+					setInterfaceV2: async () => undefined,
 				},
 				menu: { action: async () => undefined, notifyShellFocus: () => undefined },
 				clipboard: {
@@ -341,6 +342,11 @@ export async function installFakeBridge(page: Page, opts: FakeBridgeOptions = {}
 						activeTabId: "t1",
 						tabs: [{ id: "t1", url: "", title: "", active: true }],
 					}),
+					muteTab: async ({ viewId }: { viewId: string; tabId: string; muted: boolean }) => ({
+						viewId,
+						activeTabId: "t1",
+						tabs: [{ id: "t1", url: "", title: "", active: true }],
+					}),
 					openTab: async ({ viewId }: { viewId: string; url?: string }) => ({
 						viewId,
 						activeTabId: "t1",
@@ -385,6 +391,15 @@ export async function installFakeBridge(page: Page, opts: FakeBridgeOptions = {}
 					onProfileSwitchConfirm: unsubscribe,
 					onProfileSwitchFailed: unsubscribe,
 					onPageFocus: unsubscribe,
+				},
+				vault: {
+					list: async () => ({ available: false, items: [] }),
+					save: async () => {
+						throw new Error("Saved passwords need the desktop app");
+					},
+					delete: async () => undefined,
+					audit: async () => [],
+					reset: async () => undefined,
 				},
 				browserProfiles: {
 					list: async () => ({ profiles: [], defaultProfileId: null }),
@@ -1191,6 +1206,7 @@ export async function installFakeAgent(page: Page, opts: FakeAgentOptions = {}):
 					persistTerminal: async () => undefined,
 					setWindowBackground: async () => undefined,
 					setWindowTranslucent: async () => undefined,
+					setInterfaceV2: async () => undefined,
 				},
 				menu: { action: async () => undefined, notifyShellFocus: () => undefined },
 				clipboard: { writeText: async () => undefined, readText: async () => "", writeImage: async () => undefined },
@@ -1372,6 +1388,11 @@ export async function installFakeAgent(page: Page, opts: FakeAgentOptions = {}):
 						activeTabId: "t1",
 						tabs: [{ id: "t1", url: "", title: "", active: true }],
 					}),
+					muteTab: async ({ viewId }: { viewId: string; tabId: string; muted: boolean }) => ({
+						viewId,
+						activeTabId: "t1",
+						tabs: [{ id: "t1", url: "", title: "", active: true }],
+					}),
 					openTab: async ({ viewId }: { viewId: string; url?: string }) => ({
 						viewId,
 						activeTabId: "t1",
@@ -1416,6 +1437,15 @@ export async function installFakeAgent(page: Page, opts: FakeAgentOptions = {}):
 					onProfileSwitchConfirm: unsubscribe,
 					onProfileSwitchFailed: unsubscribe,
 					onPageFocus: unsubscribe,
+				},
+				vault: {
+					list: async () => ({ available: false, items: [] }),
+					save: async () => {
+						throw new Error("Saved passwords need the desktop app");
+					},
+					delete: async () => undefined,
+					audit: async () => [],
+					reset: async () => undefined,
 				},
 				browserProfiles: {
 					list: async () => ({ profiles: [], defaultProfileId: null }),

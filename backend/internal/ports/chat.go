@@ -580,6 +580,15 @@ type ChatModelLister interface {
 	ListModels(ctx context.Context) ([]ChatModel, error)
 }
 
+// ChatModelVariantResolver is implemented by conversations whose model option
+// lists base models with the reasoning level in a separate option, so a model
+// id that folds the level in (gemini-3.8-flash-low) runs as its base model plus
+// that level. ModelVariantBase reports the offered base model such an id runs
+// as. Optional: without it, a model id runs only as itself.
+type ChatModelVariantResolver interface {
+	ModelVariantBase(model string) (base string, ok bool)
+}
+
 // ChatConfigOptionType is the interaction an advertised provider setting needs.
 // ACP currently standardizes selects and is incubating booleans; keeping both in
 // AO's vocabulary prevents protocol DTOs from leaking out of the adapter.
@@ -1008,6 +1017,12 @@ const (
 	ChatEventTurnDiff ChatEventKind = "turn.diff"
 	// ChatEventCompacted reports that the provider summarized earlier history to
 	// reclaim context. It is a fact about the conversation, not a turn.
+	//
+	// ActivityStatus carries where the compaction is: running while the provider
+	// summarizes, failed (Summary holds the provider's reason) when it gave up,
+	// and empty or completed once the history was replaced. A driver that can see
+	// a compaction start reports it running and then settles the same
+	// ProviderItemID, so the timeline shows one row that changes in place.
 	ChatEventCompacted ChatEventKind = "thread.compacted"
 	// ChatEventUsage is a token accounting update for the conversation.
 	ChatEventUsage ChatEventKind = "usage"

@@ -1622,7 +1622,14 @@ func TestCompactionReportsWhatItReclaimed(t *testing.T) {
 	srv.push(`{"method":"thread/tokenUsage/updated","params":{"threadId":"thread-1","turnId":"compact-turn","tokenUsage":{"total":{"totalTokens":15650},"last":{"totalTokens":4632},"modelContextWindow":258400}}}`)
 	srv.push(`{"method":"item/completed","params":{"item":{"type":"contextCompaction","id":"cc-1"},"threadId":"thread-1","turnId":"compact-turn"}}`)
 
+	running := nextEvent(t, conv.Events(), ports.ChatEventCompacted)
+	if running.ActivityStatus != domain.ActivityStatusRunning || running.ProviderItemID != "cc-1" {
+		t.Fatalf("first compaction event = %q on %q, want running on cc-1", running.ActivityStatus, running.ProviderItemID)
+	}
 	ev := nextEvent(t, conv.Events(), ports.ChatEventCompacted)
+	if ev.ActivityStatus == domain.ActivityStatusRunning {
+		t.Fatal("the compaction never settled")
+	}
 	if ev.ProviderItemID != "cc-1" {
 		t.Errorf("provider item id = %q, want cc-1", ev.ProviderItemID)
 	}
@@ -1666,6 +1673,115 @@ func TestCompactionIsReportedOncePerTurn(t *testing.T) {
 	srv.push(`{"method":"turn/completed","params":{"threadId":"thread-1","turn":{"id":"compact-turn","status":"completed","items":[]}}}`)
 
 	nextEvent(t, conv.Events(), ports.ChatEventCompacted)
+	for {
+		ev, ok := <-conv.Events()
+		if !ok {
+			t.Fatal("stream closed before the marker arrived")
+		}
+		if ev.Kind == ports.ChatEventCompacted {
+			t.Fatal("one compaction was reported twice")
+		}
+		if ev.Kind == ports.ChatEventTurnCompleted {
+			return
+		}
+	}
+}
+
+// A compaction Codex runs inside a long turn reclaims from where the context
+// stood when it started, not from where the turn started.
+func TestMidTurnCompactionReclaimsFromItsOwnStart(t *testing.T) {
+	d, srv := newTestDriver(t)
+	conv, err := d.Start(context.Background(), ports.ChatStartConfig{WorkspacePath: "/tmp/ws"})
+	if err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	defer func() { _ = conv.Close() }()
+
+	srv.push(`{"method":"thread/tokenUsage/updated","params":{"threadId":"thread-1","turnId":"turn-1","tokenUsage":{"total":{"totalTokens":50000},"last":{"totalTokens":50000},"modelContextWindow":258400}}}`)
+	srv.push(`{"method":"turn/started","params":{"threadId":"thread-1","turn":{"id":"turn-1","status":"inProgress","items":[]}}}`)
+	srv.push(`{"method":"thread/tokenUsage/updated","params":{"threadId":"thread-1","turnId":"turn-1","tokenUsage":{"total":{"totalTokens":240000},"last":{"totalTokens":240000},"modelContextWindow":258400}}}`)
+	srv.push(`{"method":"item/started","params":{"item":{"type":"contextCompaction","id":"cc-1"},"threadId":"thread-1","turnId":"turn-1"}}`)
+	srv.push(`{"method":"thread/tokenUsage/updated","params":{"threadId":"thread-1","turnId":"turn-1","tokenUsage":{"total":{"totalTokens":240000},"last":{"totalTokens":30000},"modelContextWindow":258400}}}`)
+	srv.push(`{"method":"item/completed","params":{"item":{"type":"contextCompaction","id":"cc-1"},"threadId":"thread-1","turnId":"turn-1"}}`)
+
+	nextEvent(t, conv.Events(), ports.ChatEventCompacted) // running
+	ev := nextEvent(t, conv.Events(), ports.ChatEventCompacted)
+	var detail struct {
+		TokensBefore    int64 `json:"tokensBefore"`
+		TokensReclaimed int64 `json:"tokensReclaimed"`
+	}
+	if err := json.Unmarshal(ev.Detail, &detail); err != nil {
+		t.Fatalf("compaction detail: %v", err)
+	}
+	if detail.TokensBefore != 240000 || detail.TokensReclaimed != 210000 {
+		t.Fatalf("detail = %+v, want 240000 before and 210000 reclaimed", detail)
+	}
+}
+
+// A compaction still under way when its turn ends normally never said how it
+// went: its row says so, rather than settling as a finished compaction.
+func TestCompactionTheTurnLeftOpenSaysNoResult(t *testing.T) {
+	d, srv := newTestDriver(t)
+	conv, err := d.Start(context.Background(), ports.ChatStartConfig{WorkspacePath: "/tmp/ws"})
+	if err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	defer func() { _ = conv.Close() }()
+
+	srv.push(`{"method":"turn/started","params":{"threadId":"thread-1","turn":{"id":"turn-1","status":"inProgress","items":[]}}}`)
+	srv.push(`{"method":"item/started","params":{"item":{"type":"contextCompaction","id":"cc-1"},"threadId":"thread-1","turnId":"turn-1"}}`)
+	srv.push(`{"method":"turn/completed","params":{"threadId":"thread-1","turn":{"id":"turn-1","status":"completed","items":[]}}}`)
+
+	nextEvent(t, conv.Events(), ports.ChatEventCompacted) // running
+	settled := nextEvent(t, conv.Events(), ports.ChatEventCompacted)
+	if settled.ProviderItemID != "cc-1" || settled.ActivityStatus != domain.ActivityStatusFailed || settled.Summary != "No result reported" {
+		t.Fatalf("settled = %q %q on %q, want cc-1 failed with \"No result reported\"", settled.ActivityStatus, settled.Summary, settled.ProviderItemID)
+	}
+}
+
+// The deprecated notification can arrive after its turn ended and settled the
+// row as unreported. It settles that same row, rather than adding a second.
+func TestLateDeprecatedCompactedNotificationSettlesTheEndedRow(t *testing.T) {
+	d, srv := newTestDriver(t)
+	conv, err := d.Start(context.Background(), ports.ChatStartConfig{WorkspacePath: "/tmp/ws"})
+	if err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	defer func() { _ = conv.Close() }()
+
+	srv.push(`{"method":"turn/started","params":{"threadId":"thread-1","turn":{"id":"turn-1","status":"inProgress","items":[]}}}`)
+	srv.push(`{"method":"item/started","params":{"item":{"type":"contextCompaction","id":"cc-1"},"threadId":"thread-1","turnId":"turn-1"}}`)
+	srv.push(`{"method":"turn/completed","params":{"threadId":"thread-1","turn":{"id":"turn-1","status":"completed","items":[]}}}`)
+	srv.push(`{"method":"thread/compacted","params":{"threadId":"thread-1","turnId":"turn-1"}}`)
+
+	nextEvent(t, conv.Events(), ports.ChatEventCompacted) // running
+	nextEvent(t, conv.Events(), ports.ChatEventCompacted) // no result reported
+	late := nextEvent(t, conv.Events(), ports.ChatEventCompacted)
+	if late.ProviderItemID != "cc-1" || late.ActivityStatus == domain.ActivityStatusFailed {
+		t.Fatalf("late notice = %q on %q, want cc-1 settled as compacted", late.ActivityStatus, late.ProviderItemID)
+	}
+}
+
+// The deprecated notification names no item. It settles the compaction under
+// way, so its running row does not stay running beside a second, settled row.
+func TestDeprecatedCompactedNotificationSettlesTheRunningItem(t *testing.T) {
+	d, srv := newTestDriver(t)
+	conv, err := d.Start(context.Background(), ports.ChatStartConfig{WorkspacePath: "/tmp/ws"})
+	if err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	defer func() { _ = conv.Close() }()
+
+	srv.push(`{"method":"item/started","params":{"item":{"type":"contextCompaction","id":"cc-1"},"threadId":"thread-1","turnId":"compact-turn"}}`)
+	srv.push(`{"method":"thread/compacted","params":{"threadId":"thread-1","turnId":"compact-turn"}}`)
+	srv.push(`{"method":"item/completed","params":{"item":{"type":"contextCompaction","id":"cc-1"},"threadId":"thread-1","turnId":"compact-turn"}}`)
+	srv.push(`{"method":"turn/completed","params":{"threadId":"thread-1","turn":{"id":"compact-turn","status":"completed","items":[]}}}`)
+
+	nextEvent(t, conv.Events(), ports.ChatEventCompacted) // running
+	settled := nextEvent(t, conv.Events(), ports.ChatEventCompacted)
+	if settled.ProviderItemID != "cc-1" || settled.ActivityStatus == domain.ActivityStatusRunning {
+		t.Fatalf("settled = %q on %q, want cc-1 settled", settled.ActivityStatus, settled.ProviderItemID)
+	}
 	for {
 		ev, ok := <-conv.Events()
 		if !ok {

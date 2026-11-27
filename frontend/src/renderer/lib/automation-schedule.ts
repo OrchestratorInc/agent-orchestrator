@@ -1,4 +1,4 @@
-export type SchedulePreset = "daily" | "weekly" | "custom";
+export type SchedulePreset = "daily" | "weekdays" | "weekly" | "custom";
 export type CustomFrequency = "daily" | "weekly" | "weekdays" | "monthly";
 export type WeekdayCode = "MO" | "TU" | "WE" | "TH" | "FR" | "SA" | "SU";
 
@@ -145,7 +145,7 @@ export function scheduleFieldsFromRRule(rruleText: string): ScheduleFields {
 		Object.keys(parts).sort().join(",") === "BYDAY,BYHOUR,BYMINUTE,BYSECOND,FREQ"
 	) {
 		return {
-			preset: "custom", time, customFrequency: "weekdays", monthDay: "1",
+			preset: "weekdays", time, customFrequency: "weekdays", monthDay: "1",
 			weekday: "MO", hour, minute, legacyRaw,
 		};
 	}
@@ -179,14 +179,15 @@ export function scheduleFieldsFromRRule(rruleText: string): ScheduleFields {
 
 export function buildRRuleFromSchedule(fields: ScheduleFields): string {
 	if (fields.legacyRaw) return fields.legacyRaw;
-	if (fields.preset === "daily" || fields.preset === "weekly") {
+	if (fields.preset !== "custom") {
 		const parsed = parseTimeValue(fields.time);
 		const hour = parsed?.hour ?? 0;
 		const minute = parsed?.minute ?? 0;
 		if (fields.preset === "daily") {
 			return `FREQ=DAILY;BYHOUR=${hour};BYMINUTE=${minute};BYSECOND=0`;
 		}
-		return `FREQ=WEEKLY;BYDAY=${fields.weekday};BYHOUR=${hour};BYMINUTE=${minute};BYSECOND=0`;
+		const days = fields.preset === "weekdays" ? "MO,TU,WE,TH,FR" : fields.weekday;
+		return `FREQ=WEEKLY;BYDAY=${days};BYHOUR=${hour};BYMINUTE=${minute};BYSECOND=0`;
 	}
 	const parsed = parseHourMinute(fields.hour, fields.minute);
 	const hour = parsed?.hour ?? 0;
@@ -328,4 +329,25 @@ export function describeSchedule(rruleText: string): ScheduleSummary {
 		return { kind: "monthly", day: Number(parts.BYMONTHDAY), time };
 	}
 	return { kind: "other", frequency, time };
+}
+
+/** The next local wall-clock time a form schedule fires, or null when it cannot be read. */
+export function nextScheduledRun(fields: ScheduleFields, from: Date = new Date()): Date | null {
+	// An unfinished time would serialize as midnight, so a draft clock shows no preview.
+	const clock = fields.preset === "custom" ? parseHourMinute(fields.hour, fields.minute) : parseTimeValue(fields.time);
+	if (!clock) return null;
+	const summary = describeSchedule(buildRRuleFromSchedule(fields));
+	if (!summary.time || summary.kind === "other") return null;
+	for (let offset = 0; offset <= 366; offset += 1) {
+		const day = new Date(from.getFullYear(), from.getMonth(), from.getDate() + offset, summary.time.hour, summary.time.minute);
+		if (day <= from) continue;
+		const code = WEEKDAY_CODES[(day.getDay() + 6) % 7];
+		const matches =
+			summary.kind === "daily" ||
+			(summary.kind === "weekdays" && day.getDay() !== 0 && day.getDay() !== 6) ||
+			(summary.kind === "weekly" && summary.days.includes(code)) ||
+			(summary.kind === "monthly" && day.getDate() === summary.day);
+		if (matches) return day;
+	}
+	return null;
 }

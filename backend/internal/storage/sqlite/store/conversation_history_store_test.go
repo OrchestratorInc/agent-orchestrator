@@ -1974,6 +1974,41 @@ func TestCleanupOwnedControllerWorkIsGenerationFenced(t *testing.T) {
 	assertCleanupState(domain.TurnStateFailed, domain.ActivityStatusFailed)
 }
 
+func TestSettleOrphanedTurnsFailsTurnlessCompaction(t *testing.T) {
+	s, session, conversation := conversationFixture(t)
+	ctx := context.Background()
+	for _, activity := range []domain.ConversationActivity{
+		{ID: "cycle-compaction", Kind: domain.ActivityKindSystem, Status: domain.ActivityStatusRunning,
+			Summary: "Compacting conversation", Detail: []byte(`{"event":"compaction"}`), ProviderItemID: "cycle-compaction-item"},
+		{ID: "cycle-tool", Kind: domain.ActivityKindCommand, Status: domain.ActivityStatusRunning,
+			Summary: "Run", ProviderItemID: "cycle-tool-item"},
+	} {
+		if err := s.UpsertActivity(ctx, conversation, "", activity, histClock); err != nil {
+			t.Fatalf("UpsertActivity(%s): %v", activity.ID, err)
+		}
+	}
+
+	if err := s.SettleOrphanedTurns(ctx, session, histClock.Add(time.Minute)); err != nil {
+		t.Fatalf("SettleOrphanedTurns: %v", err)
+	}
+	snapshot, err := s.LoadConversationSnapshot(ctx, conversation)
+	if err != nil {
+		t.Fatalf("LoadConversationSnapshot: %v", err)
+	}
+	states := map[string]domain.ActivityStatus{}
+	for _, activity := range snapshot.Activities {
+		states[activity.ID] = activity.Status
+	}
+	// Nothing settles a compaction row with no turn once its controller is gone.
+	if states["cycle-compaction"] != domain.ActivityStatusFailed {
+		t.Errorf("turn-less compaction = %q, want failed", states["cycle-compaction"])
+	}
+	// Other turn-less rows settle by their own updates, as before.
+	if states["cycle-tool"] != domain.ActivityStatusRunning {
+		t.Errorf("turn-less tool = %q, want running", states["cycle-tool"])
+	}
+}
+
 func TestCleanupOwnedControllerWorkOnlySettlesReboundSessionWork(t *testing.T) {
 	s := newTestStore(t)
 	ctx := context.Background()

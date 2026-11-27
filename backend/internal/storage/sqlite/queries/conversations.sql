@@ -803,10 +803,23 @@ WHERE conversation_activities.conversation_id = sqlc.arg(conversation_id)
 UPDATE conversation_activities
 SET status = 'failed', revision = revision + 1, updated_at = sqlc.arg(updated_at)
 WHERE status = 'running'
-  AND turn_id IN (
-      SELECT id FROM conversation_turns
-      WHERE handled_by_session_id = sqlc.arg(handled_by_session_id)
-        AND state IN ('queued', 'running')
+  AND (
+      turn_id IN (
+          SELECT id FROM conversation_turns
+          WHERE handled_by_session_id = sqlc.arg(handled_by_session_id)
+            AND state IN ('queued', 'running')
+      )
+      -- A compaction the agent ran between prompts has no turn; only the dead
+      -- controller's cycle would have settled it.
+      OR (
+          turn_id IS NULL
+          AND kind = 'system'
+          AND json_extract(detail_json, '$.event') = 'compaction'
+          AND conversation_id IN (
+              SELECT id FROM conversations
+              WHERE current_session_id = sqlc.arg(handled_by_session_id)
+          )
+      )
   );
 
 -- Restart reconciliation: a turn left running by a dead controller is not
