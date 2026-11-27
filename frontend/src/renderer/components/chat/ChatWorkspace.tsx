@@ -204,7 +204,7 @@ import { accountFailure, turnStanding, turnUpdates } from "./background-turns";
 import { HumanMessageEditor } from "./HumanMessageEditor";
 import { ChatLinkProvider } from "./ChatMarkdown";
 import { admitArrivals, ChatEntrance, createChatEntranceGate } from "./chat-entrance";
-import { pageHidden } from "../../lib/page-hidden";
+import { notRendered, pageHidden } from "../../lib/page-hidden";
 import { ChatImageSourceProvider } from "./chat-image-source";
 import type { AgentSwitchProps } from "./AgentSwitchPicker";
 import type { ComposerPromptSuggestion } from "./ComposerEditor";
@@ -1870,6 +1870,18 @@ function ChatWorkspaceContent({
 	const stableSettings = useStableValue(snapshot.settings);
 	// Claude Code compacts at the window picked for it, well before its model's full context.
 	const compactsAt = snapshot.harness === "claude-code" ? snapshot.settings?.autoCompactWindow : undefined;
+	// The last compact's refusal. "A turn is running" holds only while one is: once it ends,
+	// compacting can be tried again from the meter or with /compact.
+	const compactRefusal = compactUnavailable === "Stop the current turn before compacting" && !durableTurn ? undefined : compactUnavailable;
+	// The meter's compact button: the same action and refusals as typing /compact.
+	const meterCompact = newWorkDisabled || snapshot.controller.state === "hibernated" || compactRefusal === "This agent cannot compact its history"
+		? undefined
+		: onCompact;
+	const meterCompactBlocked = durableTurn
+		? "Stop the current turn before compacting."
+		: compacting
+			? "Conversation history is already being compacted."
+			: compactRefusal;
 	const stableUsage = useStableValue(snapshot.usage);
 	const { t } = useTranslation();
 	// Near the account's usage limit, a warning sign sits right of the model; its tooltip says why.
@@ -1894,7 +1906,7 @@ function ChatWorkspaceContent({
 			settingsReady && (onChooseSettings || onChooseConfigOption) ? (
 				<TurnSettingsBar
 					agentSwitch={agentSwitch}
-					beforePicker={agentSwitch ? <ContextMeter usage={stableUsage} compactsAt={compactsAt} /> : undefined}
+					beforePicker={agentSwitch ? <ContextMeter usage={stableUsage} compactsAt={compactsAt} onCompact={meterCompact} compactBlockedReason={meterCompactBlocked} /> : undefined}
 					afterPicker={quotaSign}
 					// While the agent wakes or starts; a chat reads "hibernated" until ready.
 					modelsLoading={settingsLoading}
@@ -1942,6 +1954,8 @@ function ChatWorkspaceContent({
 			models,
 			agentSwitch,
 			stableUsage,
+			meterCompact,
+			meterCompactBlocked,
 			nearQuota,
 			newWorkDisabled,
 			session?.provisionState,
@@ -2532,7 +2546,7 @@ function ChatWorkspaceContent({
 										onContinue={canContinue && !queueEdit && !openingStarting ? onContinueTurn : undefined}
 										commandError={queueDraftError ?? (queueEdit && !queueEdit.clientMessageId && !queuedMessages.some((entry) => entry.turnId === queueEdit.turnId) ? "chat.draft.queueMissing" : commandError)}
 										settings={draftSettings ?? <>
-											{agentSwitch ? null : <ContextMeter usage={snapshot.usage} compactsAt={compactsAt} />}
+											{agentSwitch ? null : <ContextMeter usage={snapshot.usage} compactsAt={compactsAt} onCompact={meterCompact} compactBlockedReason={meterCompactBlocked} />}
 											{/* Normally right of the model control; with no settings bar, beside the ring. */}
 											{composerSettings ? null : quotaSign}
 											<QuotaStatus quota={runningQuota} />
@@ -2543,7 +2557,6 @@ function ChatWorkspaceContent({
 											<ComposerModeItems
 												configOptions={configOptions ?? []}
 												settings={stableSettings}
-												models={models}
 												nativePlan={can(snapshot, "plan_mode")}
 												onChange={newWorkDisabled ? undefined : onChooseSettings}
 												onChangeConfigOption={newWorkDisabled ? undefined : onChooseConfigOption}
@@ -2558,6 +2571,7 @@ function ChatWorkspaceContent({
 												: undefined
 										}
 										starting={orchestratorStarting || arrivingInChat || cloudStarting || composerStarting || restoring}
+										restoring={restoring}
 										disabled={(orchestratorBlocksComposer || (openingStarting && !session && !followUpWhileOpening) || loadingQuietly || (snapshot.controller.state === "stopped" && !suppressStopped && !accountMoveQueues && !terminated && (!resumingAgent || session?.provisionState === "failed")) || (controllerTransitioning && !accountMoveQueues) || (newWorkDisabled && sendBlockedReason === undefined) || composerLockedPlaceholder !== undefined) && !queueEdit?.clientMessageId}
 										sendBlockedReason={sendBlockedReason}
 										// Signed out: nothing typed could be sent until the login takes. The box
@@ -2618,7 +2632,7 @@ function ChatWorkspaceContent({
 										steerRefusal={steerRefusal}
 										onCompact={newWorkDisabled || snapshot.controller.state === "hibernated" ? undefined : onCompact}
 										compacting={compacting}
-										compactUnavailable={compactUnavailable}
+										compactUnavailable={compactRefusal}
 										compactBlocked={Boolean(durableTurn)}
 										draftSessionId={draftPersistenceAvailable && !queueEdit ? draftScope.sessionId : undefined}
 										draftSessionIncarnation={draftPersistenceAvailable ? draftScope.incarnation : undefined}
@@ -3630,6 +3644,10 @@ export function Timeline({
 	// instead of snapping. Opening a chat never animates, so the first layout snaps.
 	const glideRequested = useRef(false);
 	const initialLayoutDone = useRef(false);
+	// Set while the scroller is not rendered (Settings hides the page with display:
+	// none and leaves it mounted). Nothing is laid out or measured meanwhile; the
+	// resize that shows it again lays it out once, before it is painted.
+	const hiddenAway = useRef(false);
 	const initialLayoutAt = useRef(0);
 	const lastScrollTop = useRef(0);
 	const skipRelatchFollow = useRef(false);
@@ -4579,7 +4597,7 @@ export function Timeline({
 		const spawnedIds = new Set(placed.flatMap((group) => spawnedSessionIds(group.items)));
 		const cleaned = spawnedIds.size === 0 ? placed : placed
 			.map((group) => ({ ...group, items: group.items.filter((item) => !isDuplicateSpawnAction(item, spawnedIds)) }))
-			.filter((group) => group.items.length > 0);
+			.filter((group) => group.live || group.items.length > 0);
 		const folded = foldBackground(cleaned, workerUpdateIndex, new Set(snapshot.turns.map((turn) => turn.id)), runKeys.current, batchedReports.under, find.gapBeforeSequence);
 		runKeys.current = new Map(folded.flatMap((group) => group.folded ? group.folded.members.map((member) => [member.key, group.key] as const) : []));
 		return folded;
@@ -4637,7 +4655,8 @@ export function Timeline({
 	const virtualItemKey = useCallback((index: number) => groups[index]!.key, [groups]);
 	const captureViewportResize = useCallback((instance: Virtualizer<HTMLDivElement, Element>) => {
 		const node = instance.scrollElement;
-		if (!node) return;
+		// Hidden (Settings over the page) is not a resize: keep the size it left with.
+		if (!node || notRendered(node)) return;
 		const previous = viewportSize.current;
 		const next = { width: node.clientWidth, height: node.clientHeight };
 		if (previous && (previous.width !== next.width || previous.height !== next.height) && !viewportResize.current) {
@@ -4677,6 +4696,8 @@ export function Timeline({
 		followOnAppend: false,
 		// Bootstrap unmeasurable panels until their real geometry is available.
 		observeElementRect: (instance, callback) => observeElementRect(instance, (rect) => {
+			// A hidden chat keeps the viewport it had; one never shown yet still bootstraps.
+			if (instance.scrollElement && notRendered(instance.scrollElement) && viewportSize.current) return;
 			captureViewportResize(instance);
 			callback(rect.height ? rect : { width: rect.width, height: CHAT_INITIAL_VIEWPORT_HEIGHT });
 		}),
@@ -4684,6 +4705,9 @@ export function Timeline({
 			// Capture the old row positions before the first width remeasurement.
 			captureViewportResize(instance);
 			const index = Number(element.getAttribute("data-index"));
+			// Hidden, every row reads 0 tall. Keep the size it had, so the chat comes back
+			// at the height it left with instead of re-laying out from estimates.
+			if (notRendered(element)) return instance.measurementsCache[index]?.size ?? CHAT_ESTIMATED_TURN_HEIGHT;
 			const group = groups[index];
 			if (group && !measuredVirtualGroups.current.has(group)) {
 				measuredVirtualGroups.current.add(group);
@@ -4960,7 +4984,7 @@ export function Timeline({
 	const updateScrollbar = useCallback(() => {
 		const node = scroller.current;
 		const track = scrollTrack.current;
-		if (!node || !track) return;
+		if (!node || !track || notRendered(node)) return;
 
 		const maxScroll = Math.max(0, node.scrollHeight - node.clientHeight);
 		const visible = maxScroll > 1;
@@ -5049,7 +5073,7 @@ export function Timeline({
 	const syncPromptSpacer = useCallback(() => {
 		const node = scroller.current;
 		const pad = promptSpacer.current;
-		if (!node || !pad) return;
+		if (!node || !pad || notRendered(node)) return;
 
 		const anchors = scrollContent.current?.querySelectorAll<HTMLElement>(
 			"[data-chat-scroll-anchor]",
@@ -5113,6 +5137,10 @@ export function Timeline({
 	}, [followEnd, markWritten, cancelScrollFollow, isFlying, isGliding, reaim]);
 
 	const syncScrollLayout = useCallback(() => {
+		if (scroller.current && notRendered(scroller.current)) {
+			hiddenAway.current = true;
+			return;
+		}
 		anchorGeometry.current = null;
 		syncPromptSpacer();
 		const node = scroller.current;
@@ -5169,8 +5197,9 @@ export function Timeline({
 	// end smoothly once the reply is taller than the viewport.
 	const syncStreamedGrowth = useCallback(() => {
 		if (!pinnedRef.current || !initialLayoutDone.current) return;
-		anchorGeometry.current = null;
 		const node = scroller.current;
+		if (node && notRendered(node)) return;
+		anchorGeometry.current = null;
 		// Something at the end shrank on its own (a finished plan folding away). The
 		// browser has already clamped scrollTop by the time this observer runs, before
 		// the spacer could grow back, so put the view back now, before paint, instead
@@ -5196,7 +5225,7 @@ export function Timeline({
 	followVirtualHeight.current = () => {
 		const node = scroller.current;
 		const content = virtualContent.current;
-		if (!virtualized || !node || !content || viewportResize.current || !initialLayoutDone.current) return;
+		if (!virtualized || !node || !content || viewportResize.current || !initialLayoutDone.current || notRendered(node)) return;
 		const total = virtualizer.getTotalSize();
 		const shrink = renderedVirtualHeight.current - total;
 		if (shrink === 0) return;
@@ -5236,7 +5265,7 @@ export function Timeline({
 	// rows were on screen just before the fold...
 	const captureSettle = useCallback((key: string): SettleAnchor | undefined => {
 		const node = scroller.current;
-		if (!node || !initialLayoutDone.current) return undefined;
+		if (!node || !initialLayoutDone.current || notRendered(node)) return undefined;
 		const folded = !groups.some((group) => group.key === key && !group.live);
 		if (folded && !(pinnedRef.current && groups.some((group) => group.folded?.members.some((member) => member.key === key)))) return undefined;
 		const wrapper = Array.from(virtualContent.current?.children ?? [])
@@ -5419,7 +5448,13 @@ export function Timeline({
 		entranceGate.catchUpAt = performance.now();
 		if (isFlying()) cancelScrollFollow();
 		const node = scroller.current;
-		if (!node || !initialLayoutDone.current) return;
+		// Still hidden under Settings: the resize that shows it runs this again.
+		if (!node || notRendered(node)) return;
+		// Opened while hidden: this is its first layout, which lands at the end.
+		if (!initialLayoutDone.current) {
+			syncScrollLayout();
+			return;
+		}
 		if (pinnedRef.current) {
 			syncPromptSpacer();
 			followOrSnapToEnd(node);
@@ -5497,9 +5532,26 @@ export function Timeline({
 	useEffect(() => loadOlderToFill(), [loadOlderToFill, oldestRow, hasOlder, loadingOlder]);
 
 	useEffect(() => {
+		// Setting up means this chat runs effects: a hidden <Activity> (a kept session)
+		// runs none, and showing it runs this again, laid out. Only a chat still under
+		// Settings is away, and syncScrollLayout marks it so again.
+		hiddenAway.current = false;
 		syncScrollLayout();
 		if (typeof ResizeObserver === "undefined") return;
 		const observer = new ResizeObserver(() => {
+			const node = scroller.current;
+			if (node && notRendered(node)) {
+				hiddenAway.current = true;
+				return;
+			}
+			// Shown again. Observers report before paint, so the chat is put back here,
+			// in the frame it reappears: what it had stays where the browser restored it,
+			// and what landed while it was hidden is history (as for a hidden window),
+			// with a reader at the end snapped to the new end rather than gliding there.
+			if (hiddenAway.current) {
+				hiddenAway.current = false;
+				onPageShown.current();
+			}
 			captureViewportResize(virtualizer);
 			onContentResize.current();
 			loadOlderToFill();
@@ -7971,9 +8023,11 @@ function groupByTurn(snapshot: ConversationSnapshot, { controllerStopped = false
 	}
 
 	const conversation = subagentsOfConversation(snapshot.items, groups, controllerStopped);
-	if (!conversation) return groups.flatMap(splitAtSteers);
-	return groups.flatMap((group) =>
-		splitAtSteers(group)
+	const beside = turnsBeside(groups, byTurn);
+	const parts = groups.flatMap((group) => {
+		const segments = splitTurn(group, beside.get(group) ?? []);
+		if (!conversation) return segments;
+		return segments
 			.map((segment) => withSubagentSteps(segment, conversation))
 			// A part made only of steps that moved under a launch elsewhere has nothing
 			// left to draw. A live one keeps its Working row, and one whose turn did not
@@ -7981,8 +8035,74 @@ function groupByTurn(snapshot: ConversationSnapshot, { controllerStopped = false
 			.filter((segment) =>
 				segment.live
 				|| (segment.outcome !== undefined && segment.outcome.state !== "completed")
-				|| segment.items.some((item) => !conversation.stepIds.has(item.id))),
-	);
+				|| segment.items.some((item) => !conversation.stepIds.has(item.id)));
+	});
+	return inDrawOrder(parts, groups, byTurn);
+}
+
+/**
+ * The turns that started inside each turn with no message of their own, such as the
+ * turns of a Codex agent's subagents. Turns that run beside each other inside one belong
+ * to it alone, so each of them stays whole.
+ */
+function turnsBeside(groups: readonly TimelineGroup[], byTurn: ReadonlyMap<string, ConversationTurn>): Map<TimelineGroup, TimelineGroup[]> {
+	const beside = new Map<TimelineGroup, TimelineGroup[]>();
+	const runs = groups
+		.flatMap((group) => {
+			const turn = group.turnId ? byTurn.get(group.turnId) : undefined;
+			const startedAt = Date.parse(turn?.startedAt ?? "");
+			const endedAt = turn?.state === "running" ? Infinity : Date.parse(turn?.completedAt ?? "");
+			return Number.isFinite(startedAt) ? [{ group, startedAt, endedAt }] : [];
+		})
+		.sort((a, b) => a.startedAt - b.startedAt);
+	let outer: (typeof runs)[number] | undefined;
+	for (const run of runs) {
+		const prompted = run.group.items.some((item) => item.kind === "message" && item.role === "user");
+		if (outer && !prompted && run.startedAt > outer.startedAt && run.startedAt < outer.endedAt) {
+			beside.set(outer.group, [...(beside.get(outer.group) ?? []), run.group]);
+		} else outer = run;
+	}
+	for (const inner of beside.values()) inner.sort((a, b) => a.anchor - b.anchor);
+	return beside;
+}
+
+/**
+ * The parts of every turn in the order they happened. A part sorts by its first row. A
+ * queued prompt is recorded when it is sent but runs later, so a turn also sorts no
+ * earlier than the last row of every turn that ended before it started.
+ */
+function inDrawOrder(parts: TimelineGroup[], turns: readonly TimelineGroup[], byTurn: ReadonlyMap<string, ConversationTurn>): TimelineGroup[] {
+	const time = (turnId: string | undefined, field: "startedAt" | "completedAt") =>
+		Date.parse((turnId && byTurn.get(turnId)?.[field]) || "");
+	const ended = turns
+		.map((turn) => {
+			const last = turn.items.at(-1)!.sequence;
+			return { at: time(turn.turnId, "completedAt"), startedAt: time(turn.turnId, "startedAt"), last, lastSoFar: last };
+		})
+		.filter(({ at, startedAt }) => Number.isFinite(at) && !(startedAt > at))
+		.sort((a, b) => a.at - b.at);
+	for (let index = 1; index < ended.length; index += 1) ended[index]!.lastSoFar = Math.max(ended[index]!.last, ended[index - 1]!.lastSoFar);
+	const position = (part: TimelineGroup) => {
+		const startedAt = time(part.turnId, "startedAt");
+		let low = 0;
+		let high = ended.length;
+		while (low < high) {
+			const middle = (low + high) >> 1;
+			if (ended[middle]!.at < startedAt) low = middle + 1;
+			else high = middle;
+		}
+		let before = ended[low - 1]?.lastSoFar ?? -Infinity;
+		// Timestamps parse to the millisecond, so a turn that ended as this one started
+		// still ran first if it started earlier. That also leaves this turn out.
+		for (let index = low; ended[index]?.at === startedAt; index += 1) {
+			if (ended[index]!.startedAt < startedAt) before = Math.max(before, ended[index]!.last);
+		}
+		return before > part.anchor ? before + 0.001 : part.anchor;
+	};
+	return parts
+		.map((part) => ({ part, at: position(part) }))
+		.sort((a, b) => a.at - b.at)
+		.map(({ part }) => part);
 }
 
 type ConversationSubagents = {
@@ -8041,30 +8161,42 @@ function withSubagentSteps(segment: TimelineGroup, conversation: ConversationSub
 /**
  * A steer is the user speaking, so it opens a new visual turn even though the
  * provider keeps running the same one: everything before it settles into its own
- * "Worked for" row, and the steer starts a fresh Working row and reply. Only the
- * last segment carries the live state, outcome, diff and plan of the real turn.
+ * "Worked for" row, and the steer starts a fresh Working row and reply. A turn that
+ * starts beside this one cuts it the same way, so this turn's later rows draw below it,
+ * and so does a live turn's Working row before it has any. Only the last segment carries
+ * the live state, outcome, diff and plan of the real turn.
  */
-function splitAtSteers(group: TimelineGroup): TimelineGroup[] {
-	const starts = group.items.flatMap((item, index) =>
-		index > 0 && item.kind === "activity" && isSteer(item) && !item.detail?.senderSessionId ? [index] : [],
-	);
-	if (starts.length === 0) return [group];
-	const bounds = [0, ...starts, group.items.length];
-	const segmentStarts = bounds.slice(0, -1).map((from, index) =>
-		index === 0 ? Date.parse(group.liveStartedAt ?? "") : Date.parse(group.items[from]!.createdAt),
-	);
-	const lastIndex = starts.length;
-	return starts.concat(group.items.length).map((_end, index) => {
+function splitTurn(group: TimelineGroup, beside: readonly TimelineGroup[]): TimelineGroup[] {
+	const startedBetween = (from: number, to: number) => beside.findLast((turn) => turn.anchor > from && turn.anchor < to);
+	const cutAt = (index: number, turn: TimelineGroup) =>
+		({ index, key: `beside:${turn.turnId}`, startedAt: turn.liveStartedAt ?? "", anchor: turn.anchor + 0.0005 });
+	const cuts = group.items.flatMap((item, index) => {
+		if (index === 0) return [];
+		if (item.kind === "activity" && isSteer(item) && !item.detail?.senderSessionId) {
+			return [{ index, key: `steer:${item.id}`, startedAt: item.createdAt, anchor: item.sequence }];
+		}
+		const turn = startedBetween(group.items[index - 1]!.sequence, item.sequence);
+		return turn ? [{ ...cutAt(index, turn), anchor: item.sequence }] : [];
+	});
+	const waitingOn = group.live ? startedBetween(group.items.at(-1)!.sequence, Infinity) : undefined;
+	if (waitingOn) cuts.push(cutAt(group.items.length, waitingOn));
+	if (cuts.length === 0) return [group];
+	const bounds = [0, ...cuts.map((cut) => cut.index), group.items.length];
+	const segmentStarts = [group.liveStartedAt ?? "", ...cuts.map((cut) => cut.startedAt)].map((time) => Date.parse(time));
+	const lastIndex = cuts.length;
+	return segmentStarts.map((_start, index) => {
 		const items = group.items.slice(bounds[index], bounds[index + 1]);
-		const first = items[0]!;
-		const key = index === 0 ? group.key : `${group.key}:steer:${first.id}`;
+		const cut = cuts[index - 1];
+		const key = cut ? `${group.key}:${cut.key}` : group.key;
+		// The first part keeps where the turn began, which may be above the loaded history.
+		const anchor = cut ? cut.anchor : group.anchor;
 		const startedAt = segmentStarts[index]!;
 		if (index === lastIndex) {
 			const priorMs = Number.isFinite(startedAt) ? startedAt - segmentStarts[0]! : 0;
 			return {
 				...group,
 				key,
-				anchor: first.sequence,
+				anchor,
 				items,
 				liveStartedAt: Number.isFinite(startedAt) ? new Date(startedAt).toISOString() : group.liveStartedAt,
 				outcome: group.outcome
@@ -8082,7 +8214,7 @@ function splitAtSteers(group: TimelineGroup): TimelineGroup[] {
 		return {
 			key,
 			turnId: group.turnId,
-			anchor: first.sequence,
+			anchor,
 			items,
 			outcome: {
 				state: "completed" as const,

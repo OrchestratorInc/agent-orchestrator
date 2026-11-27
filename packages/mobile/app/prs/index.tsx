@@ -27,6 +27,7 @@ import { useToast } from "../../lib/useToast";
 import { Button, EmptyState } from "../../lib/ui";
 import { useTheme, useThemedStyles } from "../../lib/ThemeProvider";
 import { space } from "../../lib/tokens";
+import { useGlassBarInset } from "../../lib/useHeaderOverlap";
 import type { DashboardPR } from "../../lib/api";
 import { hostedRowKey, type HostedSession } from "../../lib/hostedRows";
 import { useArchivedPRs, withArchivedPRSessions, type ArchivedPRSource } from "../../lib/archivedPRs";
@@ -58,6 +59,11 @@ const SUMMARY_LOOKAHEAD = 30;
 // The ended sessions' PRs each filter shows.
 const ARCHIVED_STATES: Record<PRListFilter, readonly ArchivedPRState[]> = { open: [], merged: ["merged"], all: ["merged", "closed"] };
 
+// The ended sessions' PRs read as the page opens, whichever filter is shown.
+// The daemon counts archived sessions, not PRs (a session can own several), so
+// only the read lists give the filter counts the list's own PR identity.
+const READ_ARCHIVED_STATES: readonly ArchivedPRState[] = ["merged", "closed"];
+
 // Its rows share one width (see `MenuRowWidthScope`): a filter mounts a new
 // set of rows, and the ones past the list's first render batch are sized on
 // their first frame.
@@ -67,6 +73,9 @@ export default function PRsScreen() {
 
 function PRList() {
 	const t = useTheme();
+	// Android's clear pill bar: the list starts below it (iOS insets itself).
+	const glassInset = useGlassBarInset();
+	const barInset = Platform.OS === "android" ? glassInset : 0;
 	const styles = useThemedStyles(makeStyles);
 	const { hostId: routeHostId, projectId: routeProjectId } = useLocalSearchParams<PRsParams>();
 	const { hostStates, allSessions, configForHost, refreshAll, activeProjectId, cloud } = useApp();
@@ -81,8 +90,9 @@ function PRList() {
 	const [filter, setFilter] = useState<Filter>("open");
 	const [refreshToken, setRefreshToken] = useState(0);
 	// Each machine that pages its archive is read for the PRs of sessions that
-	// have ended: merged ones once Merged or All is open, closed ones once All
-	// is. A machine with an empty archive has none to read.
+	// have ended, merged and closed, as the page opens: Merged and All show
+	// their real counts before either is opened, and their rows at once when
+	// it is. A machine with an empty archive has none to read.
 	const archivedSources = useMemo<ArchivedPRSource[]>(() => visibleHosts.flatMap((host) => {
 		if (isCloudHost(host.hostId) || !host.archive) return [];
 		const projectId = projectFilter === "all" ? undefined : projectFilter;
@@ -90,7 +100,7 @@ function PRList() {
 		return archived > 0 ? [{ hostId: host.hostId, hostName: host.name, appearance: host.appearance, projectId, archived }] : [];
 	}), [visibleHosts, projectFilter]);
 	const archivedStates = ARCHIVED_STATES[filter];
-	const archived = useArchivedPRs(archivedSources, { states: archivedStates, refreshToken });
+	const archived = useArchivedPRs(archivedSources, { states: READ_ARCHIVED_STATES, refreshToken });
 	const archivedLoading = archivedStates.some((state) => archived.loading[state]);
 	const archivedKeys = useMemo(() => new Set(archived.sessions.map((session) => hostedRowKey(session.hostId, session.id))), [archived.sessions]);
 	const prs = useMemo(() => {
@@ -203,7 +213,7 @@ function PRList() {
 		return (
 			<View style={styles.screen} collapsable={false}>
 				<StackRootBack />
-				<TabPageScroll>
+				<TabPageScroll topInset={barInset}>
 					<UnpairedState />
 				</TabPageScroll>
 			</View>
@@ -236,10 +246,10 @@ function PRList() {
 				keyExtractor={listKey}
 				onViewableItemsChanged={onViewableItemsChanged}
 				contentInsetAdjustmentBehavior="automatic"
-				contentContainerStyle={{ flexGrow: 1, paddingBottom: space.xxl }}
+				contentContainerStyle={{ flexGrow: 1, paddingTop: barInset, paddingBottom: space.xxl }}
 				stickySectionHeadersEnabled={false}
 				ListHeaderComponent={listHeader}
-				refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} {...refreshControlColors(t)} />}
+				refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} progressViewOffset={barInset} {...refreshControlColors(t)} />}
 				renderSectionHeader={({ section }) => <PRSectionHeader label={section.label} count={section.data.length} />}
 				renderItem={({ item: { pr, session }, index, section }) => {
 					const config = summaryConfigFor(session.hostId);

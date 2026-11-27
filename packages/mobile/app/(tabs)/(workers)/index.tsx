@@ -158,7 +158,7 @@ export default function FleetScreen() {
 		: inlineFinishedAt;
 	const selectEnvironment = useCallback((environmentId: string) => {
 		// Resolve both selectors in one React event. Letting the project reset in the
-		// effect below creates an intermediate empty board and a second remount.
+		// effect below creates an intermediate empty board and a second board change.
 		setWorkerEnvironmentId(environmentId);
 		setWorkerProjectId((projectId) => workerProjectForEnvironment(allProjects, environmentId, projectId));
 	}, [allProjects]);
@@ -241,9 +241,8 @@ export default function FleetScreen() {
 		? null
 		: <FreshnessLine hostId={boardEmpty ? undefined : lineHostId} onRetry={retry} />;
 	// The title's accessory: under the large title on iOS, pinned under the bar
-	// on Android. The Android bar is solid rather than frosted: the frost's tail
-	// lay over the machine chips and dimmed them at rest.
-	const largeTitle = useLargeTitle(boardTitle("(workers)"), undefined, { accessory: unpaired ? null : freshnessLine, backdrop: "solid", resetKey: boardIdentityKey });
+	// on Android.
+	const largeTitle = useLargeTitle(boardTitle("(workers)"), undefined, { accessory: unpaired ? null : freshnessLine, resetKey: boardIdentityKey });
 	const listHeader = unpaired ? largeTitle.header : (
 		<>
 			{largeTitle.header}
@@ -266,9 +265,10 @@ export default function FleetScreen() {
 			    tracking a view that was gone, so it stayed expanded over the rows. */}
 			<WorkerBoardList
 				onScroll={largeTitle.onScroll}
-				key={boardIdentityKey}
-				// Held here, above the key, so the board rebuilt for a new filter
-				// starts its rows at the width the last board's rows measured.
+				// Not keyed by the filters: rows on both boards stay as they are,
+				// and the board starts over for a new identity (see identityKey).
+				// Held here so the rows a new filter adds start at the width the
+				// board's rows measured.
 				rowWidths={rowWidths}
 				sessions={projectSessions}
 				archiveSources={archiveSources}
