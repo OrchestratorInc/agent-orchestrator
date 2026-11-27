@@ -95,6 +95,13 @@ afterEach(() => {
 });
 
 describe("native runtime resources", () => {
+	it("declares macOS local-network access for browser pages", () => {
+		expect(config.packagerConfig?.extendInfo).toMatchObject({
+			NSLocalNetworkUsageDescription: expect.stringContaining("local network"),
+			NSBonjourServices: ["_http._tcp", "_https._tcp"],
+		});
+	});
+
 	it("fails packaging when the macOS helper was not copied into Resources", async () => {
 		mkdirSync(join(fixtureDir, "AO.app", "Contents", "Resources"), { recursive: true });
 		const hook = config.hooks?.postPackage;

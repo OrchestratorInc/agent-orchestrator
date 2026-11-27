@@ -209,6 +209,11 @@ const config: ForgeConfig = {
 			// agents, which macOS attributes to this app.
 			NSSpeechRecognitionUsageDescription: "Orchestrator turns your speech into message text.",
 			NSMicrophoneUsageDescription: "Orchestrator uses the microphone for dictation and for tools you run in it.",
+			// Chromium's local-network permission (allowed for pages in the
+			// Browser panel) still needs macOS app-level consent in signed builds.
+			NSLocalNetworkUsageDescription:
+				"Orchestrator opens development servers on your local network in its browser.",
+			NSBonjourServices: ["_http._tcp", "_https._tcp"],
 		},
 		protocols: [AUTH_PROTOCOL],
 		appCategoryType: "public.app-category.developer-tools",
