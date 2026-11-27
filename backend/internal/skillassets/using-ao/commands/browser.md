@@ -265,6 +265,11 @@ ao browser target panel    # switch back
 - A click that opens `alert`/`confirm`/`prompt` returns at once; answer it with
   `ao browser dialog accept|dismiss` before other commands, which otherwise fail
   with `BROWSER_DIALOG_OPEN`.
+- Trusted input fails with `BROWSER_DEBUGGER_UNAVAILABLE` when Chrome's
+  debugging channel is taken: close DevTools on the tab, or disable other
+  extensions that automate or inspect pages (translators, other agents), then
+  retry. A click can also fail with `ELEMENT_COVERED` when another element sits
+  over the target; scroll or close the overlay and retry.
 - The user's site policy is enforced: denied sites (sign-in, payment, and
   password-manager sites by default) fail with `BROWSER_SITE_BLOCKED`. Do not
   try to work around it; tell the user.

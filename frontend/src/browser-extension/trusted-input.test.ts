@@ -52,6 +52,32 @@ function fakeDebugger() {
 
 const tick = () => new Promise((resolve) => setTimeout(resolve, 0));
 
+describe("TrustedInput debugger availability", () => {
+	it("names the remedy when another extension holds the Chrome debugger", async () => {
+		const fake = fakeDebugger();
+		fake.chrome.debugger.attach = async () => {
+			throw new Error("Cannot access a chrome-extension:// URL of different extension");
+		};
+		const input = new TrustedInput(fake.chrome);
+		await expect(input.click(1, { x: 10, y: 20 }, {})).rejects.toMatchObject({
+			code: "BROWSER_DEBUGGER_UNAVAILABLE",
+			message: expect.stringContaining("disable other extensions"),
+		});
+	});
+
+	it("keeps pointing at DevTools when another debugger is attached", async () => {
+		const fake = fakeDebugger();
+		fake.chrome.debugger.attach = async () => {
+			throw new Error("Another debugger is already attached to the tab with id: 1.");
+		};
+		const input = new TrustedInput(fake.chrome);
+		await expect(input.click(1, { x: 10, y: 20 }, {})).rejects.toMatchObject({
+			code: "BROWSER_DEBUGGER_UNAVAILABLE",
+			message: expect.stringContaining("Another debugger"),
+		});
+	});
+});
+
 describe("TrustedInput cancellation", () => {
 	it("sweeps the observed pointer ID into frames whose observers saw no event", async () => {
 		const fake = fakeDebugger();

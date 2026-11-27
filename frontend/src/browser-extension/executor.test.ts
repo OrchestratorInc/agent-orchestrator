@@ -551,6 +551,38 @@ describe("Executor", () => {
 		expect(synthetic).toBe(1);
 	});
 
+	it("fails a trusted click with ELEMENT_COVERED when another element covers the target", async () => {
+		const { run, approve } = setup();
+		await approve();
+		await run("open", { url: "https://shop.test/" });
+		const { refs } = (await run("snapshot", { interactive: true })) as { refs: Record<string, { name: string }> };
+		const buy = Object.entries(refs).find(([, info]) => info.name === "Buy now")![0];
+		const overlay = document.createElement("div");
+		overlay.id = "consent-overlay";
+		document.body.appendChild(overlay);
+		(document as { elementFromPoint?: unknown }).elementFromPoint = () => overlay;
+		try {
+			await expect(run("click", { ref: buy })).rejects.toMatchObject({ code: "ELEMENT_COVERED" });
+		} finally {
+			delete (document as { elementFromPoint?: unknown }).elementFromPoint;
+		}
+	});
+
+	it("still clicks when the hit test reaches the target's own content", async () => {
+		const { fake, run, approve } = setup();
+		await approve();
+		await run("open", { url: "https://shop.test/" });
+		const { refs } = (await run("snapshot", { interactive: true })) as { refs: Record<string, { name: string }> };
+		const buy = Object.entries(refs).find(([, info]) => info.name === "Buy now")![0];
+		(document as { elementFromPoint?: unknown }).elementFromPoint = () => document.getElementById("buy");
+		try {
+			expect(await run("click", { ref: buy })).toMatchObject({ inputTier: "trusted", clicked: true });
+			expect(fake.debuggerCalls.some((call) => call.method === "Input.dispatchMouseEvent")).toBe(true);
+		} finally {
+			delete (document as { elementFromPoint?: unknown }).elementFromPoint;
+		}
+	});
+
 	it("resolves act instructions and reports unmatched ones with the snapshot", async () => {
 		const { run, approve } = setup();
 		await approve("s1", false);
@@ -752,6 +784,24 @@ describe("Executor", () => {
 		const { run, approve } = setup();
 		await approve();
 		expect(await run("open", { url: "https://shop.test/" })).toMatchObject({ isLoading: false });
+	});
+
+	it("fails open with NAVIGATION_FAILED when the tab never starts navigating", async () => {
+		const { fake, run, approve } = setup();
+		await approve();
+		await run("open", { url: "https://shop.test/" });
+		// tabs.update accepts the URL but no navigation ever commits: the old URL
+		// must not come back as a silent success.
+		fake.holdCommit = true;
+		vi.useFakeTimers();
+		try {
+			const opening = run("open", { url: "https://shop.test/down" });
+			const assertion = expect(opening).rejects.toMatchObject({ code: "NAVIGATION_FAILED" });
+			await vi.advanceTimersByTimeAsync(31_000);
+			await assertion;
+		} finally {
+			vi.useRealTimers();
+		}
 	});
 
 	it("applies the site policy to frames, not just the tab", async () => {
