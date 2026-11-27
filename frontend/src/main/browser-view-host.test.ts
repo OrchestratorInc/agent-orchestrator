@@ -4936,6 +4936,15 @@ describe("agent browser runtime", () => {
 			expect(tabs[0]?.preview).toBeUndefined();
 		});
 
+		it("keeps the preview tab when a typed address is rejected", async () => {
+			const { invoke } = setupTabHost();
+			const { viewId } = (await invoke("browser:ensure", "remote:h_box:ao-1", false)) as { viewId: string };
+			await invoke("browser:openTab", { viewId, url: "http://localhost:3000/", preview: true });
+			await expect(invoke("browser:navigate", { viewId, url: "http://localhost:99999/" })).rejects.toThrow();
+			const { tabs } = (await invoke("browser:getTabs", viewId)) as { tabs: Tab[] };
+			expect(tabs[0]?.preview).toBe(true);
+		});
+
 		it("leaves Cmd+F in an agent tab to its viewer, whose find searches the agent's page", async () => {
 			const { invoke, views, viewId, sent } = await openAgent();
 			await invoke("browser:selectTab", { viewId, tabId: "a1" });

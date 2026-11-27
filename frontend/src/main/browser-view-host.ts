@@ -2972,10 +2972,19 @@ export function createBrowserViewHost(
         return pushNavState(options, entry);
       }
       const entry = activeEntry(session);
+      checkedBrowserURL(url);
       if (preview) session.previewTabId = entry.tabId;
       else if (session.previewTabId === entry.tabId) session.previewTabId = undefined;
       return navigateEntry(entry, url);
     });
+  };
+
+  const checkedBrowserURL = (url: string): string => {
+    const normalized = normalizeBrowserURL(url);
+    if (!isAllowedBrowserURL(normalized.href, options.rendererOrigin)) {
+      throw new Error("Unsupported browser URL");
+    }
+    return normalized.href;
   };
 
   const navigateEntry = async (
@@ -2984,11 +2993,7 @@ export function createBrowserViewHost(
     loadOptions?: Electron.LoadURLOptions,
   ): Promise<BrowserNavState> => {
     await entry.ready;
-    const normalized = normalizeBrowserURL(url);
-    if (!isAllowedBrowserURL(normalized.href, options.rendererOrigin)) {
-      throw new Error("Unsupported browser URL");
-    }
-    return entry.driver().navigate(normalized.href, loadOptions);
+    return entry.driver().navigate(checkedBrowserURL(url), loadOptions);
   };
 
   // Loads a checked address into the tab's own view (navigateEntry).
