@@ -298,8 +298,6 @@ func TestNativeCheckpointSettlesTurnsClaudeNeverAnswered(t *testing.T) {
 	noticeCutShort := prompt("note-n", "prompt-n", "assistant-0", "<task-notification>done</task-notification>") +
 		`{"type":"user","sessionId":"native","uuid":"marker-n","parentUuid":"note-n","promptId":"prompt-n","message":{"content":[{"type":"text","text":"[Request interrupted by user]"}]}}` + "\n" +
 		synthetic("marker-n", "", "No response requested.")
-	cutOffMidTool := prompt("user-1", "prompt-1", "assistant-0", "P1") +
-		`{"type":"assistant","sessionId":"native","uuid":"tool-1","parentUuid":"user-1","message":{"content":[{"type":"text","text":"running it"}],"stop_reason":"tool_use"}}` + "\n"
 	stray := `{"type":"system","sessionId":"native","uuid":"stray","parentUuid":"assistant-0"}` + "\n"
 	submitP := domain.NativeCheckpointObservation{Submission: true, PromptID: "prompt-p", SubmissionID: "submission-9", Text: "P"}
 	submitB := domain.NativeCheckpointObservation{Submission: true, PromptID: "prompt-b", SubmissionID: "submission-8", Text: "B"}
@@ -320,8 +318,6 @@ func TestNativeCheckpointSettlesTurnsClaudeNeverAnswered(t *testing.T) {
 			later: []domain.NativeCheckpointObservation{submitP}, wantUser: "user-p", interrupted: true, afterWindow: true},
 		{name: "local command after an answered turn", transcript: answered + localCommand("assistant-0"), wantUser: "user-0", interrupted: true, afterWindow: true},
 		{name: "notice cut short after an answered turn", transcript: answered + noticeCutShort, wantUser: "user-0", interrupted: true},
-		{name: "local command after a turn cut off mid-tool", transcript: answered + cutOffMidTool + localCommand("tool-1"),
-			wantError: "native tail still pending"},
 		{name: "filler, then a normal turn", transcript: answered + cancelled + filler + next("filler"),
 			later: []domain.NativeCheckpointObservation{submitP, submitB, stopB}, wantUser: "user-b", wantAnswer: "answer B"},
 		{name: "cancelled on a dead branch", transcript: answered + cancelled + next("assistant-0"),

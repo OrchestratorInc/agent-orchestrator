@@ -22,9 +22,10 @@ type NativeCheckpointBoundary struct {
 	UserMessageID string
 	UserText      string
 	AssistantText string
-	// Interrupted is a boundary turn with no settled answer: Esc, or no reply
-	// at all. Its replayed text is not compared: what was cut short, and any
-	// filler the provider adds after it, varies with timing.
+	// Interrupted means the newest turn, the boundary's or a note after it, has
+	// no settled answer: Esc, or no reply at all. Replayed text is not
+	// compared: what was cut short, and any filler the provider adds after it,
+	// varies with timing.
 	Interrupted bool
 }
 
