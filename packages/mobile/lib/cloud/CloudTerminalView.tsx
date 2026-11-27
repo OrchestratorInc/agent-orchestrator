@@ -179,17 +179,18 @@ export function CloudTerminalView({ client, orgId, sessionId, kind, workerEpoch,
 		};
 	}, []);
 
-	// Output that draws something (not only control sequences, such as hiding the
-	// cursor) has arrived, and been drawn once xterm is up.
-	const hasOutputRef = useRef(false);
+	// Whether output that draws something (not only control sequences, such as
+	// hiding the cursor) has been written to a ready xterm. Watched on the write
+	// itself, so output held for the xterm and then discarded never counts.
 	const detectPaintRef = useRef(createPaintDetector());
 	const outputShownRef = useRef(false);
 	const onOutputShownRef = useRef(onOutputShown);
 	useEffect(() => {
 		onOutputShownRef.current = onOutputShown;
 	}, [onOutputShown]);
-	const noteOutputShown = useCallback(() => {
-		if (outputShownRef.current || !hasOutputRef.current || !xtermReadyRef.current) return;
+	const draw = useCallback((bytes: Uint8Array) => {
+		xtermRef.current?.write(bytes);
+		if (outputShownRef.current || !detectPaintRef.current(bytes)) return;
 		outputShownRef.current = true;
 		onOutputShownRef.current?.();
 	}, []);
@@ -199,8 +200,8 @@ export function CloudTerminalView({ client, orgId, sessionId, kind, workerEpoch,
 			pendingOutputRef.current.push(bytes);
 			return;
 		}
-		xtermRef.current.write(bytes);
-	}, []);
+		draw(bytes);
+	}, [draw]);
 
 	useEffect(() => {
 		// Events from a connection this effect has closed (on the way out, or for
@@ -218,10 +219,7 @@ export function CloudTerminalView({ client, orgId, sessionId, kind, workerEpoch,
 					setStatusNote(note);
 				},
 				onOutput: (bytes) => {
-					if (!current) return;
-					if (!hasOutputRef.current && detectPaintRef.current(bytes)) hasOutputRef.current = true;
-					writeOutput(bytes);
-					noteOutputShown();
+					if (current) writeOutput(bytes);
 				},
 				onReset: () => {
 					if (!current) return;
@@ -295,15 +293,14 @@ export function CloudTerminalView({ client, orgId, sessionId, kind, workerEpoch,
 		xtermReadyRef.current = true;
 		const queued = pendingOutputRef.current;
 		pendingOutputRef.current = [];
-		for (const bytes of queued) xtermRef.current?.write(bytes);
-		noteOutputShown();
+		for (const bytes of queued) draw(bytes);
 		if (dimsRef.current) xtermRef.current?.resize(dimsRef.current);
 		// A replacement WebView (theme change, reload) starts blank. The server
 		// replays the whole screen on a fresh connection, so ask for one rather
 		// than leaving the grid empty until the next output.
 		if (initializedOnceRef.current) connectionRef.current?.reconnect();
 		initializedOnceRef.current = true;
-	}, []);
+	}, [draw]);
 
 	const send = useCallback(
 		(data: string) => {
