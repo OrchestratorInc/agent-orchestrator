@@ -505,6 +505,15 @@ function CloudPausedStatus({ stage }: { stage: "paused" | "paused_by_coder" }) {
 	);
 }
 
+// Open requests are numbered across the app's life, not per mounted view: the
+// Artifacts view remembers the last one it acted on per session, and a remote
+// host's session view mounts afresh for each session.
+let artifactRequestSeq = 0;
+function nextArtifactRequestKey(): number {
+	artifactRequestSeq += 1;
+	return artifactRequestSeq;
+}
+
 export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: SessionViewProps) {
 	const { t } = useTranslation();
 	const queryClient = useQueryClient();
@@ -2499,7 +2508,7 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 			setInspectorOpenForSession(uiSessionId, true);
 			setArtifactRequestsBySession((current) => ({
 				...current,
-				[uiSessionId]: { feedback: target.feedback, path: target.path, key: (current[uiSessionId]?.key ?? 0) + 1 },
+				[uiSessionId]: { feedback: target.feedback, path: target.path, key: nextArtifactRequestKey() },
 			}));
 		},
 		[sessionId, setInspectorOpenForSession, transitionInspectorView, uiSessionId],

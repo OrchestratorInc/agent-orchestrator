@@ -606,6 +606,12 @@ type SessionView struct {
 	// setting that differs from it changed afterwards. Omitted for sessions
 	// from before AO recorded it. Pulled from the json:"-" domain Metadata.
 	RoleAgent domain.AgentHarness `json:"roleAgent,omitempty"`
+	// ModelPending distinguishes Memcode endpoint discovery during a TUI spawn
+	// from a completed launch that selected the provider default model.
+	ModelPending bool `json:"modelPending,omitempty"`
+	// Effort is the reasoning level resolved for this session at spawn time.
+	// Empty means the provider default.
+	Effort string `json:"effort,omitempty"`
 	// LastUserMessageAt is the latest real user-authored task direction time.
 	// Lifecycle and internal automation updates do not advance it.
 	LastUserMessageAt *time.Time `json:"lastUserMessageAt,omitempty"`

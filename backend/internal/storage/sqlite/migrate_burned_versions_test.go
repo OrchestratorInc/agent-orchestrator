@@ -298,6 +298,8 @@ var shippedMigrations = map[int64]string{
 	20261126171748993: "20261126171748993_add_session_moved_to.sql",
 	20261126171749183: "20261126171749183_add_session_move_conversation_placed.sql",
 	20261126171749354: "20261126171749354_add_session_move_started.sql",
+	20261127085740884: "20261127085740884_session_version_moves.sql",
+	20261127183058106: "20261127183058106_repair_open_usage_harness_checks.sql",
 }
 
 // burnedVersion reports version numbers that must never be (re)used: they
@@ -328,7 +330,10 @@ func burnedVersion(v int64) bool {
 		v == 20261107221212658 || v == 20261121170116818 || v == 20261121170942121 ||
 		// 20261125063907001-003 were the session move numbers before main's
 		// 20261126154409684 landed below them.
-		v == 20261125063907001 || v == 20261125063907002 || v == 20261125063907003
+		v == 20261125063907001 || v == 20261125063907002 || v == 20261125063907003 ||
+		// 20261127064704491 was the usage CHECK repair's number before main's
+		// 20261127085740884 landed below it.
+		v == 20261127064704491
 }
 
 // TestMigrationVersionLedger enforces the append-only migration ledger: every

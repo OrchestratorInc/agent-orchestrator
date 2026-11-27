@@ -5138,6 +5138,23 @@ describe("ChatWorkspace timeline", () => {
 		expect(log.scrollTop).toBe(4000);
 	});
 
+	it("stops following the end when the reader opens a disclosure from the keyboard", () => {
+		const snapshot = chatFixtureLongHistory(8);
+		const { rerender } = render(<ChatWorkspace snapshot={snapshot} />);
+		const log = screen.getByRole("log");
+		stubGeometry(log, { scrollHeight: 4000, clientHeight: 800, scrollTop: 3200 });
+		fireEvent.scroll(log);
+
+		const fold = document.createElement("button");
+		fold.setAttribute("aria-expanded", "false");
+		log.firstElementChild!.appendChild(fold);
+		fireEvent.keyDown(fold, { key: "Enter" });
+		// What the disclosure opens must not be pulled away by the end it grew past.
+		stubGeometry(log, { scrollHeight: 4400, clientHeight: 800, scrollTop: 3200 });
+		rerender(<ChatWorkspace snapshot={{ ...poll(snapshot), latestSequence: 999 }} />);
+		expect(log.scrollTop).toBe(3200);
+	});
+
 	it("keeps a trailing spacer so a dropped prompt can sit near the top", async () => {
 		const snapshot = chatFixtureSettled;
 		const { rerender } = render(<ChatWorkspace snapshot={snapshot} />);
@@ -5291,6 +5308,64 @@ describe("automation reports", () => {
 		expect(feedback).toHaveTextContent("Example");
 		expect(feedback).toHaveTextContent("Make this clearer.");
 		expect(feedback).toHaveTextContent("Queued · sends when the agent finishes");
+	});
+
+	it("draws review comments queued one turn each as one line in Developer Mode, and one row each outside it", () => {
+		const comment = (path: string, body: string) => [
+			'The following 1 unresolved review comment(s) are on PR #9120 "feat(ui): legible tabs" (ao/tabs → main) as of just now. You should not need to re-fetch this data unless you need additional context.',
+			"",
+			`1. ${path} (@coderabbitai):`,
+			body,
+			"   Thread ID: PRRT_1",
+			"",
+			"Address each comment and push fixes.",
+			"PR: https://github.com/o/r/pull/9120",
+		].join("\n");
+		const queued = [
+			comment("TabStrip.tsx:42", "Contrast is too low."),
+			comment("TabStrip.tsx:88", "Reserve the dot's width."),
+			comment("styles.css:12", "Duplicate selector."),
+		];
+		const snapshot: ConversationSnapshot = {
+			...chatFixture,
+			turns: [
+				...chatFixture.turns,
+				...queued.map((_, index) => ({ id: `queued-review-${index}`, state: "queued" as const, requestedAt: `2026-09-28T12:00:0${index}Z` })),
+			],
+			items: [
+				...chatFixture.items,
+				...queued.map((text, index): ConversationMessage => ({
+					kind: "message",
+					id: `queued-review-message-${index}`,
+					turnId: `queued-review-${index}`,
+					sequence: 15 + index,
+					revision: 0,
+					role: "user",
+					origin: "automation",
+					text,
+					streaming: false,
+					createdAt: `2026-09-28T12:00:0${index}Z`,
+				})),
+			],
+		};
+
+		// Outside Developer Mode each queued comment keeps its own PR row.
+		const { unmount } = render(<ChatWorkspace snapshot={snapshot} />);
+		expect(screen.getAllByTestId("pull-request-event")).toHaveLength(3);
+		expect(screen.queryByTestId("pull-request-feedback")).toBeNull();
+		unmount();
+
+		useUiStore.setState({ developerMode: true });
+		try {
+			render(<ChatWorkspace snapshot={snapshot} />);
+			const lines = screen.getAllByTestId("pull-request-feedback");
+			expect(lines).toHaveLength(1);
+			expect(lines[0]).toHaveTextContent("3 comments from coderabbitai on #9120");
+			expect(lines[0]).toHaveTextContent("after this turn");
+			expect(screen.queryByTestId("pull-request-event")).toBeNull();
+		} finally {
+			useUiStore.setState({ developerMode: false });
+		}
 	});
 
 	it("renders browser annotation transport as the user's feedback, without its transport details", () => {

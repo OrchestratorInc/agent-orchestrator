@@ -110,6 +110,7 @@ export type BrowserViewModel = {
 	tabNotice: string;
 	selectTab: (tabId: string) => Promise<void>;
 	closeTab: (tabId: string) => Promise<void>;
+	muteTab: (tabId: string, muted: boolean) => Promise<void>;
 	openTab: (url?: string) => Promise<void>;
 	openLink: (url: string) => Promise<void>;
 	reorderTabs: (orderedIds: string[]) => void;
@@ -1035,6 +1036,23 @@ export function useBrowserView({
 		[hasNativeBrowser, showTabNotice, updateClosedTabs],
 	);
 
+	const muteTab = useCallback(
+		async (tabId: string, muted: boolean) => {
+			const viewId = viewIdRef.current;
+			if (!viewId || !hasNativeBrowser) return;
+			try {
+				const state = await window.ao!.browser.muteTab({ viewId, tabId, muted });
+				if (viewIdRef.current === state.viewId) setTabsState(state);
+			} catch {
+				// Mute is a toggle, so a stale push is self-correcting on the next
+				// click; resync quietly rather than showing a failure notice.
+				const state = await window.ao!.browser.getTabs(viewId).catch(() => undefined);
+				if (state && viewIdRef.current === state.viewId) setTabsState(state);
+			}
+		},
+		[hasNativeBrowser],
+	);
+
 	const openTab = useCallback(
 		async (url?: string) => {
 			if (!hasNativeBrowser || transientClosedRef.current) return;
@@ -1393,6 +1411,7 @@ export function useBrowserView({
 			tabNotice: modelTabNotice,
 			selectTab,
 			closeTab,
+			muteTab,
 			openTab,
 			openLink,
 			reorderTabs,
@@ -1414,7 +1433,7 @@ export function useBrowserView({
 		[
 			modelViewId, modelNavState, slotRef, navigate, goBack, goForward, reload, stop, modelFindState,
 			modelFindOpenRequest, findInPage, stopFindInPage, modelTabs, modelActiveTabId, modelTabNotice, selectTab,
-			closeTab, openTab, openLink, reorderTabs, modelClosedTabs, reopenClosedTab, modelDevtoolsState,
+			closeTab, muteTab, openTab, openLink, reorderTabs, modelClosedTabs, reopenClosedTab, modelDevtoolsState,
 			modelProfileState, openDevTools, closeDevTools, setDevToolsPlacement, modelAgentBrowserActive,
 			modelAgentBrowserActivity, destroy, annotationMode, annotationState, setAnnotationMode, annotationAction,
 		],

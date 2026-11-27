@@ -11,6 +11,7 @@ describe("useAutoSpawnPauseNotice", () => {
   const { rerender } = renderHook(({ list }) => useAutoSpawnPauseNotice(list), { initialProps: { list: projects } });
   const toast = useUiStore.getState().globalToasts[0];
   expect(toast.durationMs).toBe(0);
+  expect(toast.compact).toBe(true);
   expect(toast.body).toContain("30-minute cooldown");
   act(() => useUiStore.setState({ globalToasts: [] }));
   rerender({ list: [...projects] });
