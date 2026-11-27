@@ -5,6 +5,7 @@ import type { ArchiveSummary } from "./archive/archiveSummary";
 import { authHeaders, httpBase, normalizeServerHost, type ServerConfig } from "./config";
 import type { DesktopTelemetryIdentity } from "./telemetry/telemetry";
 import { cachedInstallId, getInstallId } from "./installId";
+import { apiOperation } from "./apiOperation";
 import { captureMobileApiError, httpCategory } from "./sentry";
 import { noteRequestAnswered } from "./answeredRequests";
 import { UnreachableError } from "./connectionError";
@@ -487,10 +488,10 @@ async function req(cfg: ServerConfig, path: string, init?: RequestInit, timeoutM
 			// error envelope stalls. Never turn a 401 into a retryable timeout.
 		} else if ((e as { name?: string })?.name === "AbortError") {
 			// Timed out reaching the host (commonly a sleeping Tailscale peer).
-			captureMobileApiError(path, "timeout");
+			captureMobileApiError(apiOperation(init?.method, path), "timeout", undefined, undefined, undefined, cfg.hostId);
 			throw new UnreachableError("timeout", { cause: e });
 		} else {
-			captureMobileApiError(path, "offline");
+			captureMobileApiError(apiOperation(init?.method, path), "offline", undefined, undefined, undefined, cfg.hostId);
 			throw new UnreachableError("offline", { cause: e });
 		}
 	} finally {
@@ -512,9 +513,10 @@ async function req(cfg: ServerConfig, path: string, init?: RequestInit, timeoutM
 		} catch {
 			/* ignore */
 		}
-		// Server answered with an error: classify by status + daemon code, and tag
-		// the requestId so a mobile event pivots to the daemon's own capture.
-		captureMobileApiError(path, httpCategory(res.status), res.status, code, requestId, detail);
+		// Server answered with an error: classify by status + daemon code, named
+		// by its route. The requestId stays on ApiError; the daemon's Sentry does
+		// not tag it, so sending it would correlate with nothing.
+		captureMobileApiError(apiOperation(init?.method, path), httpCategory(res.status), res.status, code, detail, cfg.hostId);
 		throw new ApiError(
 			res.status,
 			`${res.status} ${res.statusText}${detail ? ` - ${detail}` : ""}`,
@@ -1049,6 +1051,9 @@ export async function getTelemetryIdentity(cfg: ServerConfig): Promise<DesktopTe
 		cloudUserId: str(data?.cloudUserId),
 		githubLogin: str(data?.githubLogin),
 		optedOut: data?.optedOut === true,
+		...(typeof data?.isSignedIn === "boolean" ? { isSignedIn: data.isSignedIn } : {}),
+		...(typeof data?.lifetimeSessions === "number" ? { lifetimeSessions: data.lifetimeSessions } : {}),
+		daemonVersion: str(data?.daemonVersion),
 	};
 }
 

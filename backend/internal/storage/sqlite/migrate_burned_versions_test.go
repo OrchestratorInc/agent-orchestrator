@@ -294,6 +294,9 @@ var shippedMigrations = map[int64]string{
 	20261124180709139: "20261124180709139_review_reviewer_handle_index.sql",
 	20261124180938781: "20261124180938781_review_chat_active_index.sql",
 	20261126154409684: "20261126154409684_session_role_agent.sql",
+	20261126171748993: "20261126171748993_add_session_moved_to.sql",
+	20261126171749183: "20261126171749183_add_session_move_conversation_placed.sql",
+	20261126171749354: "20261126171749354_add_session_move_started.sql",
 }
 
 // burnedVersion reports version numbers that must never be (re)used: they
@@ -317,7 +320,14 @@ func burnedVersion(v int64) bool {
 		v == 216 || v == 20261114174124485 ||
 		// 0207, 20261023182047274 and 20261114174310512 were Mastra Code draft
 		// numbers before its migration moved above main's latest version.
-		v == 207 || v == 20261023182047274 || v == 20261114174310512
+		v == 207 || v == 20261023182047274 || v == 20261114174310512 ||
+		// 20261107221212658, 20261121170116818 and 20261121170942121 were the
+		// session move draft numbers before its migrations moved above main's
+		// latest version.
+		v == 20261107221212658 || v == 20261121170116818 || v == 20261121170942121 ||
+		// 20261125063907001-003 were the session move numbers before main's
+		// 20261126154409684 landed below them.
+		v == 20261125063907001 || v == 20261125063907002 || v == 20261125063907003
 }
 
 // TestMigrationVersionLedger enforces the append-only migration ledger: every

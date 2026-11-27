@@ -747,6 +747,86 @@ func (s *Store) SetSessionPinned(ctx context.Context, id domain.SessionID, isPin
 	return rows > 0, nil
 }
 
+// MarkSessionMoved records the AO Cloud session a session moved to and ends
+// its move in progress, in one write that holds only while move_started still
+// names move.MoveID and the agent is stopped. It returns ok=false otherwise,
+// such as for a session the user resumed here after the move pushed it.
+func (s *Store) MarkSessionMoved(ctx context.Context, id domain.SessionID, move domain.SessionMove, updatedAt time.Time) (bool, error) {
+	data, err := json.Marshal(move)
+	if err != nil {
+		return false, fmt.Errorf("encode session move %s: %w", id, err)
+	}
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
+	rows, err := s.qw.MarkSessionMoved(ctx, gen.MarkSessionMovedParams{ID: id, MovedTo: string(data), UpdatedAt: updatedAt, MoveStarted: move.MoveID})
+	if err != nil {
+		return false, fmt.Errorf("mark session %s moved: %w", id, err)
+	}
+	return rows > 0, nil
+}
+
+// EndSessionMoveStarted clears a session's move in progress unless it has
+// been marked moved. It returns ok=false when it was, or the id does not exist.
+func (s *Store) EndSessionMoveStarted(ctx context.Context, id domain.SessionID, updatedAt time.Time) (bool, error) {
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
+	rows, err := s.qw.EndSessionMoveStarted(ctx, gen.EndSessionMoveStartedParams{UpdatedAt: updatedAt, ID: id})
+	if err != nil {
+		return false, fmt.Errorf("end session move %s: %w", id, err)
+	}
+	return rows > 0, nil
+}
+
+// EndSessionMoveStartedFor clears a session's move in progress in one
+// conditional write that holds only while move_started still names moveID
+// and the session is not marked moved. It returns ok=false otherwise, such as
+// when a later move has since been recorded.
+func (s *Store) EndSessionMoveStartedFor(ctx context.Context, id domain.SessionID, moveID string, updatedAt time.Time) (bool, error) {
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
+	rows, err := s.qw.EndSessionMoveStartedFor(ctx, gen.EndSessionMoveStartedForParams{UpdatedAt: updatedAt, ID: id, MoveStarted: moveID})
+	if err != nil {
+		return false, fmt.Errorf("end session move %s: %w", id, err)
+	}
+	return rows > 0, nil
+}
+
+// SetSessionMoveConversationPlaced records that a session moved here placed
+// its whole conversation. It returns ok=false when the session id does not exist.
+func (s *Store) SetSessionMoveConversationPlaced(ctx context.Context, id domain.SessionID, updatedAt time.Time) (bool, error) {
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
+	rows, err := s.qw.SetSessionMoveConversationPlaced(ctx, gen.SetSessionMoveConversationPlacedParams{UpdatedAt: updatedAt, ID: id})
+	if err != nil {
+		return false, fmt.Errorf("set session move conversation placed %s: %w", id, err)
+	}
+	return rows > 0, nil
+}
+
+// SetSessionMoveStarted records, or with an empty moveID clears, a move to AO
+// Cloud in progress. It returns ok=false when the session id does not exist.
+func (s *Store) SetSessionMoveStarted(ctx context.Context, id domain.SessionID, moveID string, updatedAt time.Time) (bool, error) {
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
+	rows, err := s.qw.SetSessionMoveStarted(ctx, gen.SetSessionMoveStartedParams{MoveStarted: moveID, UpdatedAt: updatedAt, ID: id})
+	if err != nil {
+		return false, fmt.Errorf("set session move started %s: %w", id, err)
+	}
+	return rows > 0, nil
+}
+
+// sessionMoveFromJSON reads the moved_to column. An empty or unreadable value is no move.
+func sessionMoveFromJSON(raw string) *domain.SessionMove {
+	if raw == "" {
+		return nil
+	}
+	var move domain.SessionMove
+	if err := json.Unmarshal([]byte(raw), &move); err != nil {
+		return nil
+	}
+	return &move
+}
+
 // SetSessionPreviewURL updates only the browser preview URL for an existing
 // session. It returns ok=false when the session id does not exist. The
 // sessions_cdc_update trigger fans out a session_updated CDC event when the
@@ -1260,16 +1340,19 @@ func rowToRecord(row gen.GetSessionRow) domain.SessionRecord {
 			State:          row.ActivityState,
 			LastActivityAt: row.ActivityLastAt,
 		},
-		FirstSignalAt:      nullTimeToTime(row.FirstSignalAt),
-		IsTerminated:       row.IsTerminated,
-		HibernatedAt:       nullTimeToTimePtr(row.HibernatedAt),
-		StaleBinary:        staleBinaryFromRow(row),
-		IsPinned:           row.IsPinned,
-		PinnedAt:           nullTimeToTimePtr(row.PinnedAt),
-		TerminateOnPRMerge: row.TerminateOnPRMerge,
-		AutoInjectReview:   row.AutoInjectReview,
-		AutoInjectCI:       row.AutoInjectCI,
-		OutputType:         normalizeSessionOutputType(domain.SessionOutputType(row.SessionOutputType)),
+		FirstSignalAt:          nullTimeToTime(row.FirstSignalAt),
+		IsTerminated:           row.IsTerminated,
+		HibernatedAt:           nullTimeToTimePtr(row.HibernatedAt),
+		MovedTo:                sessionMoveFromJSON(row.MovedTo),
+		MoveConversationPlaced: row.MoveConversationPlaced != 0,
+		MoveStarted:            row.MoveStarted,
+		StaleBinary:            staleBinaryFromRow(row),
+		IsPinned:               row.IsPinned,
+		PinnedAt:               nullTimeToTimePtr(row.PinnedAt),
+		TerminateOnPRMerge:     row.TerminateOnPRMerge,
+		AutoInjectReview:       row.AutoInjectReview,
+		AutoInjectCI:           row.AutoInjectCI,
+		OutputType:             normalizeSessionOutputType(domain.SessionOutputType(row.SessionOutputType)),
 		Metadata: domain.SessionMetadata{
 			ImportSource:                     unmarshalImportSource(row.ImportSource),
 			Branch:                           row.Branch,

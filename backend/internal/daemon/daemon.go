@@ -705,7 +705,7 @@ func Run(buildVersion string) (retErr error) {
 	// pass (ReconcileRuntime, after Chat reviewer recovery) settles runs a
 	// previous daemon left in progress.
 	lcStack.runtimeReaper.BindReviewers(reviewSvc.ReviewerObserver())
-
+	sessionSvc.SetMoveNoter(chatSvc)
 	if usage != nil {
 		sessionSvc.SetUsageArchiveFlush(func(context.Context) { usage.requestArchiveFlush() })
 	}
@@ -1359,6 +1359,7 @@ func Run(buildVersion string) (retErr error) {
 		Installer:          systemInstall,
 		ComputerUse:        computerUse,
 		Sessions:           sessionSvc,
+		SessionMoves:       sessionSvc,
 		Automations:        automationSvc,
 		DesktopWorkspaces:  sessionSvc,
 		PRs:                prActions,
@@ -1402,6 +1403,7 @@ func Run(buildVersion string) (retErr error) {
 		Telemetry:          telemetrySink,
 		TelemetryIdentity:  telemetryIdentity,
 		LifetimeSessions:   store.LifetimeSessions,
+		DaemonVersion:      cfg.Telemetry.AppVersion,
 		UsageFlush: func(ctx context.Context) {
 			if usage != nil {
 				usage.flush(ctx, false)
