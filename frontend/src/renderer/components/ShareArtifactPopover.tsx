@@ -528,7 +528,7 @@ function usePublishedShare(file: CloudShareFile | null, scope: ShareScope, revis
  * click puts the newer version on the same link and opens the popover on it.
  * For a video the button is disabled and says why.
  */
-export function ShareArtifactButton({ file, name, className, iconOnly = false, revision = "", published = false }: {
+export function ShareArtifactButton({ file, name, className, iconOnly = false, revision = "", published = false, onOutdatedChange }: {
 	file: Omit<CloudShareFile, "baseUrl" | "shareId">;
 	name: string;
 	className?: string;
@@ -537,6 +537,8 @@ export function ShareArtifactButton({ file, name, className, iconOnly = false, r
 	revision?: string;
 	/** Whether the artifact list has the file published: the label until the button's own check answers. */
 	published?: boolean;
+	/** Told whether the link serves an older version of the file (the amber dot), as each check answers. */
+	onOutdatedChange?: (outdated: boolean) => void;
 }) {
 	const { t } = useTranslation();
 	const [open, setOpen] = useState(false);
@@ -550,6 +552,7 @@ export function ShareArtifactButton({ file, name, className, iconOnly = false, r
 	const video = isUnplayableShareVideo(file.path);
 	const publishing = usePublishing(pendingKey(baseUrl, file));
 	const { share, outdated, checked } = usePublishedShare(available && signedIn && !video ? { ...file, baseUrl } : null, scope, `${revision}:${checks}:${publishing}`);
+	useEffect(() => onOutdatedChange?.(outdated), [onOutdatedChange, outdated]);
 	// What the panel does on opening is fixed when it opens, so a check that
 	// lands while it is open never starts a second publish.
 	const [republishOnOpen, setRepublishOnOpen] = useState(false);
@@ -1087,7 +1090,11 @@ function SharePanel({
 		if (files?.unsupported) return status(t("artifacts.share.pageFiles.unsupported"), "status");
 		if (!files?.skipped) return null;
 		const left = t("artifacts.share.pageFiles.skipped", { count: files.skipped });
-		return status(files.videos > 0 ? `${left} ${t("artifacts.share.pageFiles.videos")}` : left, "status");
+		const why = [
+			files.videos > 0 ? t("artifacts.share.pageFiles.videos") : "",
+			files.hostOutdated ? t("artifacts.share.pageFiles.hostOutdated") : "",
+		].filter(Boolean);
+		return status([left, ...why].join(" "), "status");
 	};
 	const note = (text: string) => (
 		<p role="status" className="rounded-md bg-status-in-review/10 px-2.5 py-2 text-caption leading-4 text-status-in-review" data-share-note="">{text}</p>

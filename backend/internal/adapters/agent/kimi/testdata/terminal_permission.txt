@@ -1,0 +1,48 @@
+
+ [38;2;79;168;255m╭────────────────────────────────────────────────────────────────────────────╮[39m
+ [38;2;79;168;255m│[39m                                                                            [38;2;79;168;255m│[39m
+ [38;2;79;168;255m│[39m  [38;2;79;168;255m▐█▛█▛█▌[39m  [1m[38;2;79;168;255mWelcome to Kimi Code![0m                                            [38;2;79;168;255m│[39m
+ [38;2;79;168;255m│[39m  [38;2;79;168;255m▐█████▌[39m  [38;2;136;136;136mSend /help for help information.[39m                                 [38;2;79;168;255m│[39m
+ [38;2;79;168;255m│[39m                                                                            [38;2;79;168;255m│[39m
+ [38;2;79;168;255m│[39m  [1m[38;2;136;136;136mDirectory: [0m/home/dev/project                                              [38;2;79;168;255m│[39m
+ [38;2;79;168;255m│[39m  [1m[38;2;136;136;136mSession:   [0msession_00000000-0000-0000-0000-000000000000                   [38;2;79;168;255m│[39m
+ [38;2;79;168;255m│[39m  [1m[38;2;136;136;136mModel:     [0mlab-model                                                      [38;2;79;168;255m│[39m
+ [38;2;79;168;255m│[39m  [1m[38;2;136;136;136mVersion:   [0m2.4.1                                                          [38;2;79;168;255m│[39m
+ [38;2;79;168;255m│[39m                                                                            [38;2;79;168;255m│[39m
+ [38;2;79;168;255m╰────────────────────────────────────────────────────────────────────────────╯[39m
+
+ [1m[38;2;79;168;255m✦ Kimi K3.1 Pro is ready[0m [1m[38;2;245;245;245m- use the model in a fresh session for the best[0m
+                          [1m[38;2;245;245;245mresults[0m
+   [38;2;136;136;136mStandard: Plus/Moderato and above; Highspeed: Pro/Allegretto and above[39m
+
+   [38;2;136;136;136mNo session yet — one will be created on your first message.[39m
+
+ [1m[38;2;255;203;107m❯ explain the repo[0m
+
+ [38;2;224;224;224m● [39mWorking through the request step by step. Working
+   [38;2;232;84;84mInterrupted by user[39m
+
+ [1m[38;2;255;203;107m❯ fix the importer[0m
+   [38;2;232;84;84mError: [provider.auth_error] 401 The API Key appears to be invalid or may   [39m
+ [38;2;232;84;84mhave expired.[39m
+   [38;2;136;136;136mIf this persists, run `/export-debug-zip` and share the file with us for    [39m
+ [38;2;136;136;136mdiagnosis. Please don't share it publicly.[39m
+
+ [1m[38;2;255;203;107m❯ wait a bit[0m
+
+ [38;2;224;224;224m● [1m[38;2;79;168;255mRunning a command[0;2m · $ sleep 15[0m
+ [38;2;232;168;56m──────────────────────────────────────────────────────────────────────────────[39m
+   [1m[38;2;232;168;56m▶[0m [1m[38;2;232;168;56mRun this command?[0m
+
+   [38;2;136;136;136mcwd: /home/dev/project                                                   [39m...
+   [38;2;91;192;190m$[39m [38;2;245;245;245msleep 15[39m
+
+   [1m[38;2;91;192;190m▶[0m [1m[38;2;91;192;190m1. Approve once
+[0m     [38;2;245;245;245m2. Approve for this session[39m
+     [38;2;245;245;245m3. Reject[39m
+     [38;2;245;245;245m4. Reject with feedback[39m
+
+   [38;2;136;136;136m↑/↓ select · 1/2/3/4 choose · ↵ confirm[39m
+ [38;2;232;168;56m──────────────────────────────────────────────────────────────────────────────[39m
+ [38;2;224;224;224mlab-model[39m  [38;2;136;136;136m~/project                 [39m     [38;2;136;136;136mctrl+o expand[38;2;107;107;107m | shift+enter: newline[39m
+                                                         [38;2;224;224;224mcontext: 1% (141/128k)[39m

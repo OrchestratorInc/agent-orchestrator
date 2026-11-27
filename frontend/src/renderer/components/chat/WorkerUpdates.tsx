@@ -524,7 +524,7 @@ export function BackgroundUpdates({ turns, tally, failed = false, open, onOpenCh
 				</span>
 				<ChevronRight aria-hidden="true" className={cn("size-3.5 shrink-0 transition-transform motion-reduce:transition-none", open && "rotate-90")} />
 			</Pressable>
-			{open ? <div className="ml-1.5 mt-1 flex min-w-0 flex-col border-l border-border pl-3">{children}</div> : null}
+			{open ? <div className="chat-tree chat-tree-updates ml-1.5 mt-1 flex min-w-0 flex-col border-l border-border pl-3">{children}</div> : null}
 		</div>
 	);
 }
