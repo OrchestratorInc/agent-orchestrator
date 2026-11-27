@@ -34,6 +34,10 @@ vi.mock("../lib/platform", async (importOriginal) => ({
 }));
 
 vi.mock("@tanstack/react-router", () => ({ useNavigate: () => vi.fn() }));
+vi.mock("./settings/ConnectMobileContent", async (importOriginal) => ({
+	...await importOriginal<typeof import("./settings/ConnectMobileContent")>(),
+	fetchMobileStatus: async () => ({ endpoints: [{ kind: "tunnel", secure: true, host: "box.example.com", port: 443 }] }),
+}));
 const codexSnapshot = { id: "codex", label: "Codex", installation: { state: "installed", freshness: "fresh" }, authentication: { state: "authorized", freshness: "fresh" }, effectiveReadiness: "ready", usageCount: 3, lastUsedAt: null };
 const ampSnapshot = { ...codexSnapshot, id: "amp", label: "Amp" };
 const cursorSnapshot = { id: "cursor", label: "Cursor", installation: { state: "not_installed", freshness: "fresh" }, authentication: { state: "unknown", freshness: "stale" }, effectiveReadiness: "not_ready", usageCount: 0, lastUsedAt: null };
@@ -425,6 +429,36 @@ describe("AutomationsView", () => {
 				rrule: "FREQ=WEEKLY;BYDAY=FR;BYHOUR=9;BYMINUTE=30;BYSECOND=0",
 			}),
 		);
+	});
+
+	it("creates a when-called automation without a schedule and shows its address", async () => {
+		const user = userEvent.setup();
+		renderView();
+		await openBlankCreate(user);
+
+		const dialog = screen.getByRole("dialog", { name: "Create automation" });
+		await user.click(within(dialog).getByRole("combobox", { name: "Project" }));
+		await user.click(screen.getByRole("option", { name: "Demo" }));
+		await user.type(within(dialog).getByRole("textbox", { name: "Name" }), "Issue triage");
+		await user.type(within(dialog).getByRole("textbox", { name: "Prompt" }), "Triage the issue");
+		await user.click(within(dialog).getByRole("combobox", { name: "Schedule" }));
+		await user.click(screen.getByRole("option", { name: "When called" }));
+		expect(within(dialog).queryByLabelText("Time")).not.toBeInTheDocument();
+		await user.type(within(dialog).getByLabelText("Signature header"), "X-Hub-Signature-256");
+		await user.type(within(dialog).getByLabelText("Secret"), "s3cret");
+		await user.type(within(dialog).getByLabelText("Filters"), "body.action=opened");
+		await user.click(within(dialog).getByRole("button", { name: "Create automation" }));
+
+		const body = mocks.create.mock.calls[0]?.[0];
+		expect(body).toMatchObject({ trigger: "call", hookSecret: "s3cret", hookSignatureHeader: "X-Hub-Signature-256", hookFilters: ["body.action=opened"] });
+		expect(body).not.toHaveProperty("rrule");
+		expect(body).not.toHaveProperty("timezone");
+
+		mocks.automations = [{ id: "called", projectId: "demo", displayName: "Issue triage", prompt: "Triage", kind: "worker", harness: "codex", trigger: "call", hookKey: "hk_abc", rrule: "", timezone: "", enabled: true }];
+		renderView();
+		expect(screen.getByText("When called")).toBeInTheDocument();
+		await user.click(screen.getByRole("button", { name: /Show run history/ }));
+		expect(await screen.findByText("https://box.example.com:443/hooks/hk_abc")).toBeInTheDocument();
 	});
 
 	it("reports the create funnel from dialog open through success", async () => {

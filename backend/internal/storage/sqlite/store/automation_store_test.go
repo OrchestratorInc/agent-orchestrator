@@ -33,6 +33,7 @@ func TestAutomationCreateAndGetRoundTripsDefinition(t *testing.T) {
 		RRuleText:   "FREQ=DAILY;BYHOUR=9;BYMINUTE=0",
 		Timezone:    "Asia/Calcutta",
 		Enabled:     true,
+		Trigger:     domain.AutomationTriggerSchedule,
 		NextRunAt:   now.Add(24 * time.Hour),
 		LastRunAt:   &lastRun,
 		CreatedAt:   now,
@@ -258,6 +259,7 @@ func TestAutomationUpdatePersistsAllMutableFields(t *testing.T) {
 		t.Fatalf("CreateAutomation: %v", err)
 	}
 	lastRun := now.Add(time.Hour)
+	rec.Trigger = domain.AutomationTriggerSchedule
 	rec.DisplayName = "Weekly triage"
 	rec.Prompt = "Review the weekly queue"
 	rec.UseCase = "repo_digest"
@@ -416,6 +418,84 @@ func TestAutomationClaimLeasesOldestPendingWithoutOverlap(t *testing.T) {
 	}
 	if second, ok, err := store.ClaimNextAutomationRun(ctx, base, lease); err != nil || ok {
 		t.Fatalf("overlapping claim = %#v ok=%v err=%v", second, ok, err)
+	}
+}
+
+func TestAutomationClaimHoldsLaneUntilRunningOnlyForCalls(t *testing.T) {
+	for _, tc := range []struct {
+		trigger     string
+		nextClaimed bool
+	}{{domain.AutomationTriggerSchedule, false}, {domain.AutomationTriggerCall, true}} {
+		t.Run(tc.trigger, func(t *testing.T) {
+			store := newTestStore(t)
+			seedProject(t, store, "scheduled")
+			ctx := context.Background()
+			base := time.Date(2026, time.August, 25, 9, 0, 0, 0, time.UTC)
+			auto := domain.Automation{
+				ID: "automation-1", ProjectID: "scheduled", DisplayName: "Triage", Prompt: "Review",
+				Kind: domain.KindWorker, Trigger: tc.trigger, Enabled: true, CreatedAt: base, UpdatedAt: base,
+			}
+			if tc.trigger == domain.AutomationTriggerCall {
+				auto.HookKey = "key-1"
+			} else {
+				auto.RRuleText, auto.Timezone, auto.NextRunAt = "FREQ=HOURLY", "UTC", base.Add(3*time.Hour)
+			}
+			if _, err := store.CreateAutomation(ctx, auto); err != nil {
+				t.Fatal(err)
+			}
+			for i, scheduled := range []time.Time{base, base.Add(time.Hour)} {
+				if _, _, err := store.CreateAutomationRun(ctx, domain.AutomationRun{
+					ID: domain.AutomationRunID("run-" + string(rune('1'+i))), AutomationID: "automation-1",
+					ScheduledFor: scheduled, Status: domain.AutomationRunPending, CreatedAt: base, UpdatedAt: base,
+				}); err != nil {
+					t.Fatal(err)
+				}
+			}
+			lease := base.Add(time.Minute)
+			if _, ok, err := store.ClaimNextAutomationRun(ctx, base, lease); err != nil || !ok {
+				t.Fatalf("first claim ok=%v err=%v", ok, err)
+			}
+			if _, ok, err := store.ClaimNextAutomationRun(ctx, base, lease); err != nil || ok {
+				t.Fatalf("claim beside a spawning run ok=%v err=%v, want blocked", ok, err)
+			}
+			if tc.trigger == domain.AutomationTriggerCall {
+				extra := domain.AutomationRun{ID: "run-3", AutomationID: "automation-1", ScheduledFor: base, Status: domain.AutomationRunPending, CreatedAt: base, UpdatedAt: base}
+				if status, err := store.InsertCalledAutomationRun(ctx, extra, base.Add(-time.Hour), 2); err != nil || status != domain.AutomationCallQueueFull {
+					t.Fatalf("insert beside one spawning and one pending run = %q %v, want queue full", status, err)
+				}
+			}
+			session, err := store.CreateSession(ctx, sampleRecord("scheduled"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if ok, err := store.MarkAutomationRunRunning(ctx, "run-1", session.ID, base); err != nil || !ok {
+				t.Fatalf("mark running ok=%v err=%v", ok, err)
+			}
+			next, ok, err := store.ClaimNextAutomationRun(ctx, base, lease)
+			if err != nil || ok != tc.nextClaimed || (ok && next.ID != "run-2") {
+				t.Fatalf("claim beside a running run = %s ok=%v err=%v, want claimed=%v", next.ID, ok, err, tc.nextClaimed)
+			}
+		})
+	}
+}
+
+func TestInsertCalledAutomationRunRefusesAPausedAutomation(t *testing.T) {
+	store := newTestStore(t)
+	seedProject(t, store, "scheduled")
+	ctx := context.Background()
+	now := time.Date(2026, time.August, 25, 9, 0, 0, 0, time.UTC)
+	if _, err := store.CreateAutomation(ctx, domain.Automation{
+		ID: "automation-1", ProjectID: "scheduled", DisplayName: "Triage", Prompt: "Review", Kind: domain.KindWorker,
+		Trigger: domain.AutomationTriggerCall, HookKey: "key-1", CreatedAt: now, UpdatedAt: now,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	run := domain.AutomationRun{ID: "run-1", AutomationID: "automation-1", ScheduledFor: now, Status: domain.AutomationRunPending, CreatedAt: now, UpdatedAt: now}
+	if status, err := store.InsertCalledAutomationRun(ctx, run, now.Add(-time.Hour), 20); err != nil || status != domain.AutomationCallDisabled {
+		t.Fatalf("insert into a paused automation = %q %v, want disabled", status, err)
+	}
+	if _, ok, err := store.GetAutomationRun(ctx, "run-1"); err != nil || ok {
+		t.Fatalf("paused automation got run ok=%v err=%v", ok, err)
 	}
 }
 

@@ -27,28 +27,53 @@ const (
 // Automation is the durable user-authored recurring definition. RRuleText is
 // canonical; Timezone preserves the wall-clock intent used to advance it.
 type Automation struct {
-	ID          AutomationID `json:"id"`
-	ProjectID   ProjectID    `json:"projectId"`
-	DisplayName string       `json:"displayName"`
-	Prompt      string       `json:"prompt"`
-	TemplateID  string       `json:"templateId"`
-	UseCase     string       `json:"useCase"`
-	Kind        SessionKind  `json:"kind"`
-	Harness     AgentHarness `json:"harness,omitempty"`
-	Model       string       `json:"model,omitempty"`
-	Mode        string       `json:"mode,omitempty"`
-	Effort      string       `json:"effort,omitempty"`
-	RRuleText   string       `json:"rrule"`
-	Timezone    string       `json:"timezone"`
-	Enabled     bool         `json:"enabled"`
-	NextRunAt   time.Time    `json:"nextRunAt"`
-	LastRunAt   *time.Time   `json:"lastRunAt,omitempty"`
-	CreatedAt   time.Time    `json:"createdAt"`
-	UpdatedAt   time.Time    `json:"updatedAt"`
+	ID                  AutomationID `json:"id"`
+	ProjectID           ProjectID    `json:"projectId"`
+	DisplayName         string       `json:"displayName"`
+	Prompt              string       `json:"prompt"`
+	TemplateID          string       `json:"templateId"`
+	UseCase             string       `json:"useCase"`
+	Kind                SessionKind  `json:"kind"`
+	Harness             AgentHarness `json:"harness,omitempty"`
+	Model               string       `json:"model,omitempty"`
+	Mode                string       `json:"mode,omitempty"`
+	Effort              string       `json:"effort,omitempty"`
+	RRuleText           string       `json:"rrule"`
+	Timezone            string       `json:"timezone"`
+	Enabled             bool         `json:"enabled"`
+	NextRunAt           time.Time    `json:"nextRunAt"`
+	LastRunAt           *time.Time   `json:"lastRunAt,omitempty"`
+	CreatedAt           time.Time    `json:"createdAt"`
+	UpdatedAt           time.Time    `json:"updatedAt"`
+	Trigger             string       `json:"trigger"`
+	HookKey             string       `json:"hookKey,omitempty"`
+	HookSecret          string       `json:"-"`
+	HookSignatureHeader string       `json:"hookSignatureHeader,omitempty"`
+	HookFilters         []string     `json:"hookFilters,omitempty"`
+	HookDedupeKey       string       `json:"hookDedupeKey,omitempty"`
 	// LatestRun is populated by list/get service reads for API projection. It is
 	// derived from automation_runs and never persisted on the definition row.
 	LatestRun *AutomationRun `json:"-"`
 }
+
+// AutomationTriggerSchedule runs on its schedule; AutomationTriggerCall runs
+// when a request reaches /hooks/<HookKey>.
+const (
+	AutomationTriggerSchedule = "schedule"
+	AutomationTriggerCall     = "call"
+)
+
+// AutomationCallStatus is the outcome of one hook call.
+type AutomationCallStatus string
+
+// Hook call outcomes.
+const (
+	AutomationCallAccepted  AutomationCallStatus = "accepted"
+	AutomationCallIgnored   AutomationCallStatus = "ignored"
+	AutomationCallDuplicate AutomationCallStatus = "duplicate"
+	AutomationCallQueueFull AutomationCallStatus = "queue_full"
+	AutomationCallDisabled  AutomationCallStatus = "disabled"
+)
 
 // AutomationTemplateCustom and AutomationUseCaseUnknown preserve compatibility
 // for definitions created before optional origin and purpose metadata existed.
@@ -107,6 +132,8 @@ type AutomationRun struct {
 	ErrorMessage   string              `json:"errorMessage,omitempty"`
 	CreatedAt      time.Time           `json:"createdAt"`
 	UpdatedAt      time.Time           `json:"updatedAt"`
+	Prompt         string              `json:"-"`
+	DedupeKey      string              `json:"-"`
 }
 
 // AutomationRunFilter selects a stable page of one automation's history.

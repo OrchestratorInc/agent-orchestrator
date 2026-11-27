@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState, type FormEvent } from "react";
 import { useNavigate } from "@tanstack/react-router";
+import { useQuery } from "@tanstack/react-query";
 import { ScrollArea } from "radix-ui";
 import { useTranslation } from "react-i18next";
 import { ArrowDownUp, CalendarClock, ChevronDown, ChevronRight, Clock, Clock3, History, GitPullRequest, ListChecks, FileText, Filter, Pencil, Plus, Trash2, TriangleAlert } from "@/components/app-icons";
@@ -31,6 +32,9 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from ".
 import { Switch } from "./ui/switch";
 import { Tooltip, TooltipContent, TooltipTrigger } from "./ui/tooltip";
 import { ConfirmDialog } from "./ConfirmDialog";
+import { CopyButton } from "./chat/CopyButton";
+import { fetchMobileStatus, mobileStatusQueryKey, tunnelUrl } from "./settings/ConnectMobileContent";
+import { useUiStore } from "../stores/ui-store";
 import { AgentModelField } from "./settings/ProjectAgentRoleControls";
 import { RequiredAgentField } from "./CreateProjectAgentSheet";
 import { useAgentReadinessQuery, type AgentReadinessSnapshot } from "../hooks/useAgentReadinessQuery";
@@ -103,8 +107,9 @@ function sortAutomations(items: Automation[], order: SortOrder) {
 		if (order === "name") return byName(left, right);
 		if (order === "created") return timestamp(right.createdAt) - timestamp(left.createdAt) || byName(left, right);
 		if (left.enabled !== right.enabled) return left.enabled ? -1 : 1;
-		const leftNext = timestamp(left.nextRunAt) || Number.POSITIVE_INFINITY;
-		const rightNext = timestamp(right.nextRunAt) || Number.POSITIVE_INFINITY;
+		const next = (item: Automation) => item.trigger === "call" ? Number.POSITIVE_INFINITY : timestamp(item.nextRunAt) || Number.POSITIVE_INFINITY;
+		const leftNext = next(left);
+		const rightNext = next(right);
 		return leftNext === rightNext ? byName(left, right) : leftNext - rightNext;
 	});
 }
@@ -368,6 +373,7 @@ function AutomationRow({ item, projectName, busy, expanded, onExpand, onEdit, on
 	const reduceMotion = useReducedMotion();
 	const scheduleLabel = useScheduleLabel();
 	const historyId = `automation-history-${item.id}`;
+	const nextRun = !item.enabled ? t("automations.paused") : item.trigger === "call" ? null : t("automations.nextRunAt", { time: displayTime(item.nextRunAt, i18n.resolvedLanguage) });
 	return <article className="group">
 		<div className={cn("flex items-center gap-3 rounded-md px-2 py-2.5", expanded ? "bg-interactive-hover" : "hover:bg-interactive-hover")}>
 			<Pressable className="flex min-w-0 flex-1 items-center gap-2.5 rounded-sm" aria-label={t(expanded ? "automations.runs.hide" : "automations.runs.show", { name: item.displayName })} aria-expanded={expanded} aria-controls={historyId} onClick={onExpand}>
@@ -376,16 +382,14 @@ function AutomationRow({ item, projectName, busy, expanded, onExpand, onEdit, on
 					<h2 className="truncate text-control font-medium leading-5 text-foreground">{item.displayName}</h2>
 					<p className="flex min-w-0 items-center gap-1.5 text-caption leading-5 text-muted-foreground">
 						<Clock aria-hidden="true" className="size-icon-xs shrink-0 text-passive" />
-						<span className="truncate">{scheduleLabel(item.rrule)}</span>
+						<span className="truncate">{item.trigger === "call" ? t("automations.whenCalled") : scheduleLabel(item.rrule)}</span>
 						<span aria-hidden="true" className="text-passive">·</span>
 						<span className="truncate">{projectName}</span>
 					</p>
 				</div>
 			</Pressable>
 			<div className="hidden shrink-0 text-end text-caption leading-5 @lg:block">
-				<p className={cn("tabular-nums", item.enabled ? "text-foreground" : "text-muted-foreground")}>
-					{item.enabled ? t("automations.nextRunAt", { time: displayTime(item.nextRunAt, i18n.resolvedLanguage) }) : t("automations.paused")}
-				</p>
+				{nextRun ? <p className={cn("tabular-nums", item.enabled ? "text-foreground" : "text-muted-foreground")}>{nextRun}</p> : null}
 				{item.latestRun ? <p className="text-muted-foreground">{t("automations.lastRun", { status: t(`automations.runStatus.${item.latestRun.status}`, { defaultValue: item.latestRun.status }) })}</p> : null}
 			</div>
 			<div className="flex shrink-0 items-center gap-1">
@@ -399,8 +403,8 @@ function AutomationRow({ item, projectName, busy, expanded, onExpand, onEdit, on
 			{expanded ? <motion.div id={historyId} initial={{ height: 0, opacity: 0 }} animate={{ height: "auto", opacity: 1 }} exit={{ height: 0, opacity: 0 }} transition={{ duration: reduceMotion ? 0 : 0.18, ease: "easeOut" }} className="overflow-hidden">
 				<div className="px-2 pt-3 pb-4 pl-8">
 					<div className="mb-4 flex flex-wrap items-center gap-x-4 gap-y-1 text-caption text-muted-foreground">
-						<span className="@lg:hidden tabular-nums">{item.enabled ? t("automations.nextRunAt", { time: displayTime(item.nextRunAt, i18n.resolvedLanguage) }) : t("automations.paused")}</span>
-						<span>{t("automations.timezone", { timezone: item.timezone })}</span>
+						{nextRun ? <span className="@lg:hidden tabular-nums">{nextRun}</span> : null}
+						{item.trigger === "call" ? <HookAddress hookKey={item.hookKey} /> : <span>{t("automations.timezone", { timezone: item.timezone })}</span>}
 						<span>{t("automations.agent")}: <span className="text-foreground">{item.harness || t("automations.projectDefault")}</span></span>
 					</div>
 					<p className="mb-1 text-caption font-medium text-muted-foreground">{t("automations.field.prompt")}</p>
@@ -428,6 +432,11 @@ type AutomationFormSubmit = {
 	effort?: string;
 	timezone?: string;
 	rrule?: string;
+	trigger?: "schedule" | "call";
+	hookSecret?: string;
+	hookSignatureHeader?: string;
+	hookFilters?: string[];
+	hookDedupeKey?: string;
 };
 type AutomationFormDialogProps = {
 	open: boolean;
@@ -491,6 +500,11 @@ function AutomationFormDialog({
 		legacyRaw: null,
 	}));
 	const [initialSchedule, setInitialSchedule] = useState<ScheduleFields | null>(null);
+	const [calling, setCalling] = useState(false);
+	const [hookSecret, setHookSecret] = useState("");
+	const [hookHeader, setHookHeader] = useState("");
+	const [hookFilters, setHookFilters] = useState("");
+	const [hookDedupeKey, setHookDedupeKey] = useState("");
 	const [validationErrors, setValidationErrors] = useState<AutomationValidationErrors>({});
 
 	function patchSchedule(patch: Partial<ScheduleFields>) {
@@ -515,6 +529,11 @@ function AutomationFormDialog({
 		setMode(automation?.mode ?? "");
 		setEffort(automation?.effort ?? "");
 		setModelValid(true);
+		setCalling(automation?.trigger === "call");
+		setHookSecret("");
+		setHookHeader(automation?.hookSignatureHeader ?? "");
+		setHookFilters((automation?.hookFilters ?? []).join("\n"));
+		setHookDedupeKey(automation?.hookDedupeKey ?? "");
 		const defaultTime = nowLocalHHMM();
 		const [defaultHour, defaultMinute] = defaultTime.split(":");
 		const nextSchedule = automation
@@ -600,9 +619,9 @@ function AutomationFormDialog({
 		if (!name.trim()) nextErrors.name = t("automations.validation.name");
 		if (!prompt.trim()) nextErrors.prompt = t("automations.validation.prompt");
 		else if (new TextEncoder().encode(prompt.trim()).length > 4096) nextErrors.prompt = t("automations.validation.promptBytes");
-		if (schedule.preset === "daily" || schedule.preset === "weekly") {
+		if (!calling && (schedule.preset === "daily" || schedule.preset === "weekly")) {
 			if (!parseTimeValue(schedule.time)) nextErrors.time = t("automations.validation.time");
-		} else {
+		} else if (!calling) {
 			if (!parseHourMinute(schedule.hour, schedule.minute)) {
 				nextErrors.hour = t("automations.validation.hour");
 				nextErrors.minute = t("automations.validation.minute");
@@ -629,20 +648,27 @@ function AutomationFormDialog({
 			? null
 			: {
 					project_id: projectId,
-					schedule_preset: schedule.preset,
+					...(calling ? {} : { schedule_preset: schedule.preset }),
 					prompt_length_bucket: automationPromptLengthBucket(prompt.trim()),
 				};
 		try {
 			await onSubmit({
 				// Kind is not a form choice: automations are workers, and editing
 				// leaves the stored kind untouched.
-				...(editing ? {} : { projectId, timezone, templateId, useCase: template?.useCase ?? "unknown", kind: "worker" as const }),
+				...(editing ? {} : { projectId, ...(calling ? { trigger: "call" as const } : { timezone }), templateId, useCase: template?.useCase ?? "unknown", kind: "worker" as const }),
 				displayName: name,
 				prompt,
 				...tuning,
 				// A new pin resets omitted backend fields, so persist the complete tuple.
 				...(harnessChanged && selectedHarness ? { harness: selectedHarness, model, mode, effort } : {}),
-				...(scheduleChanged ? { rrule: nextRRule } : {}),
+				...(calling
+					? {
+							hookSignatureHeader: hookHeader.trim(),
+							hookFilters: hookFilters.split("\n").map((line) => line.trim()).filter(Boolean),
+							hookDedupeKey: hookDedupeKey.trim(),
+							...(hookSecret || !hookHeader.trim() ? { hookSecret } : {}),
+						}
+					: scheduleChanged ? { rrule: nextRRule } : {}),
 			});
 		} catch (error) {
 			if (!funnel) throw error;
@@ -742,9 +768,11 @@ function AutomationFormDialog({
 							<Field label={t("automations.field.schedule")}>
 								<AutomationSelect
 									label={t("automations.field.schedule")}
-									value={schedule.preset}
+									value={calling ? "call" : schedule.preset}
+									disabled={editing && calling}
 									onValueChange={(value) => {
-										patchSchedule({ preset: value as ScheduleFields["preset"] });
+										setCalling(value === "call");
+										if (value !== "call") patchSchedule({ preset: value as ScheduleFields["preset"] });
 										clearValidationError("time");
 										clearValidationError("hour");
 										clearValidationError("minute");
@@ -754,10 +782,11 @@ function AutomationFormDialog({
 										{ value: "daily", label: t("automations.schedule.daily") },
 										{ value: "weekly", label: t("automations.schedule.weekly") },
 										{ value: "custom", label: t("automations.schedule.custom") },
+										{ value: "call", label: t("automations.whenCalled"), disabled: editing },
 									]}
 								/>
 							</Field>
-							{schedule.preset === "weekly" ? (
+							{!calling && schedule.preset === "weekly" ? (
 								<Field label={t("automations.field.weekday")}>
 									<AutomationSelect
 										label={t("automations.field.weekday")}
@@ -770,7 +799,7 @@ function AutomationFormDialog({
 									/>
 								</Field>
 							) : null}
-							{schedule.preset === "daily" || schedule.preset === "weekly" ? (
+							{!calling && (schedule.preset === "daily" || schedule.preset === "weekly") ? (
 								<Field label={t("automations.field.localTime")} id={AUTOMATION_FIELD_IDS.time} error={validationErrors.time}>
 									<Input
 										id={AUTOMATION_FIELD_IDS.time}
@@ -793,7 +822,36 @@ function AutomationFormDialog({
 								</Field>
 							) : null}
 						</div>
-						{schedule.preset === "custom" ? (
+						{calling ? (
+							<>
+								<Field label={t("automations.hook.address")}>
+									<HookAddress hookKey={automation?.hookKey} inForm />
+								</Field>
+								<p className={onboardingFieldHintClass}>{t("automations.hook.promptHint", { example: "{{body.issue.title}}" })}</p>
+								<div className="grid grid-cols-2 gap-3">
+									<Field label={t("automations.hook.secret")} id="automation-hook-secret">
+										<Input id="automation-hook-secret" type="password" autoComplete="off" value={hookSecret} placeholder={automation?.hookSecretSet ? t("automations.hook.secretKept") : undefined} onChange={(event) => setHookSecret(event.target.value)} />
+									</Field>
+									<Field label={t("automations.hook.signatureHeader")} id="automation-hook-header">
+										<Input id="automation-hook-header" autoComplete="off" spellCheck={false} className="font-mono" placeholder="X-Hub-Signature-256" value={hookHeader} onChange={(event) => setHookHeader(event.target.value)} />
+									</Field>
+								</div>
+								<Field label={t("automations.hook.filters")} id="automation-hook-filters">
+									<textarea
+										id="automation-hook-filters"
+										spellCheck={false}
+										placeholder="body.action=opened"
+										value={hookFilters}
+										onChange={(event) => setHookFilters(event.target.value)}
+										data-field="textarea"
+										className="min-h-16 w-full resize-y rounded-md border border-transparent bg-input/50 px-3 py-2 font-mono text-[13px] leading-5 outline-none focus-visible:border-ring focus-visible:ring-2 focus-visible:ring-ring/30"
+									/>
+								</Field>
+								<Field label={t("automations.hook.dedupeKey")} id="automation-hook-dedupe">
+									<Input id="automation-hook-dedupe" autoComplete="off" spellCheck={false} className="font-mono" placeholder="{{headers.X-GitHub-Delivery}}" value={hookDedupeKey} onChange={(event) => setHookDedupeKey(event.target.value)} />
+								</Field>
+							</>
+						) : schedule.preset === "custom" ? (
 							<div className="grid grid-cols-2 gap-3">
 								<Field label={t("automations.field.frequency")}>
 									<AutomationSelect
@@ -886,7 +944,7 @@ function AutomationFormDialog({
 								</Field>
 							</div>
 						) : null}
-						<p className={onboardingFieldHintClass}>{t("automations.timezone", { timezone })}</p>
+						{calling ? null : <p className={onboardingFieldHintClass}>{t("automations.timezone", { timezone })}</p>}
 						{templateId !== "custom" ? <p className="text-xs leading-5 text-muted-foreground">{t("automations.templates.setup")}</p> : null}
 						{error ? <p role="alert" className={onboardingFieldErrorClass}>{error}</p> : null}
 					</div>
@@ -902,6 +960,29 @@ function AutomationFormDialog({
 				</form>
 			</DialogContent>
 		</Dialog>
+	);
+}
+
+function HookAddress({ hookKey, inForm = false }: { hookKey?: string; inForm?: boolean }) {
+	const { t } = useTranslation();
+	const status = useQuery({ queryKey: mobileStatusQueryKey, queryFn: fetchMobileStatus });
+	if (!status.data) return null;
+	const base = tunnelUrl(status.data);
+	if (!base) {
+		return (
+			<span className="flex flex-wrap items-center gap-x-2 text-caption text-muted-foreground">
+				{t("automations.hook.needsRemote")}
+				{inForm ? null : <Button type="button" size="sm" variant="quiet" onClick={() => useUiStore.getState().openGlobalSettings("mobile", { preserveProject: true })}>{t("automations.hook.turnOnRemote")}</Button>}
+			</span>
+		);
+	}
+	if (!hookKey) return <span className="text-caption text-muted-foreground">{t("automations.hook.addressAfterCreate")}</span>;
+	const url = `${base}/hooks/${hookKey}`;
+	return (
+		<span className="flex min-w-0 items-center gap-1">
+			<code className="truncate font-mono text-caption text-foreground">{url}</code>
+			<CopyButton compact text={url} label={t("automations.hook.copyAddress")} copiedLabel={t("automations.hook.copied")} />
+		</span>
 	);
 }
 

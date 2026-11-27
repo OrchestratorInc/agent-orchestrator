@@ -48,6 +48,7 @@ type Service struct {
 	spawner   SessionSpawner
 	clock     func() time.Time
 	newID     func() string
+	kick      chan struct{}
 }
 
 // New constructs the daemon-owned automation service.
@@ -58,7 +59,7 @@ func New(deps Deps) *Service {
 	if deps.NewID == nil {
 		deps.NewID = uuid.NewString
 	}
-	return &Service{store: deps.Store, telemetry: deps.Telemetry, spawner: deps.Spawner, clock: deps.Clock, newID: deps.NewID}
+	return &Service{store: deps.Store, telemetry: deps.Telemetry, spawner: deps.Spawner, clock: deps.Clock, newID: deps.NewID, kick: make(chan struct{}, 1)}
 }
 
 // CreateInput is the validated user intent for one recurring definition.
@@ -77,6 +78,12 @@ type CreateInput struct {
 	Cron        string
 	Timezone    string
 	Enabled     *bool
+
+	Trigger             string
+	HookSecret          string
+	HookSignatureHeader string
+	HookFilters         []string
+	HookDedupeKey       string
 }
 
 // UpdateInput distinguishes omitted fields from explicit false/empty values.
@@ -94,6 +101,11 @@ type UpdateInput struct {
 	Cron        *string
 	Timezone    *string
 	Enabled     *bool
+
+	HookSecret          *string
+	HookSignatureHeader *string
+	HookFilters         *[]string
+	HookDedupeKey       *string
 }
 
 // Create validates, canonicalizes, and persists an automation definition.
@@ -135,11 +147,30 @@ func (s *Service) Create(ctx context.Context, input CreateInput) (domain.Automat
 		return domain.Automation{}, apierr.Invalid("INVALID_AUTOMATION_HARNESS", "Unknown automation harness", nil)
 	}
 	now := s.clock().UTC()
-	schedule, err := CanonicalizeSchedule(ScheduleInput{
-		RRule: input.RRule, Cron: input.Cron, Timezone: input.Timezone,
-	}, now)
-	if err != nil {
-		return domain.Automation{}, apierr.Invalid("INVALID_AUTOMATION_SCHEDULE", err.Error(), nil)
+	schedule := Schedule{NextRunAt: now}
+	hookKey := ""
+	switch input.Trigger {
+	case "", domain.AutomationTriggerSchedule:
+		input.Trigger = domain.AutomationTriggerSchedule
+		if input.HookSecret != "" || input.HookSignatureHeader != "" || len(input.HookFilters) > 0 || input.HookDedupeKey != "" {
+			return domain.Automation{}, apierr.Invalid("INVALID_AUTOMATION_HOOK", "Hook settings only apply to an automation that runs when called", nil)
+		}
+		if schedule, err = CanonicalizeSchedule(ScheduleInput{
+			RRule: input.RRule, Cron: input.Cron, Timezone: input.Timezone,
+		}, now); err != nil {
+			return domain.Automation{}, apierr.Invalid("INVALID_AUTOMATION_SCHEDULE", err.Error(), nil)
+		}
+	case domain.AutomationTriggerCall:
+		if input.RRule != "" || input.Cron != "" || input.Timezone != "" {
+			return domain.Automation{}, apierr.Invalid("INVALID_AUTOMATION_SCHEDULE", "An automation that runs when called has no schedule", nil)
+		}
+		input.HookSecret, input.HookSignatureHeader = strings.TrimSpace(input.HookSecret), strings.TrimSpace(input.HookSignatureHeader)
+		if err := validateHook(input.HookSecret, input.HookSignatureHeader, input.HookFilters, input.HookDedupeKey); err != nil {
+			return domain.Automation{}, apierr.Invalid("INVALID_AUTOMATION_HOOK", err.Error(), nil)
+		}
+		hookKey = newHookKey()
+	default:
+		return domain.Automation{}, apierr.Invalid("INVALID_AUTOMATION_TRIGGER", "Trigger must be schedule or call", nil)
 	}
 	enabled := true
 	if input.Enabled != nil {
@@ -163,6 +194,13 @@ func (s *Service) Create(ctx context.Context, input CreateInput) (domain.Automat
 		NextRunAt:   schedule.NextRunAt,
 		CreatedAt:   now,
 		UpdatedAt:   now,
+
+		Trigger:             input.Trigger,
+		HookKey:             hookKey,
+		HookSecret:          input.HookSecret,
+		HookSignatureHeader: input.HookSignatureHeader,
+		HookFilters:         input.HookFilters,
+		HookDedupeKey:       input.HookDedupeKey,
 	}
 	created, err := s.store.CreateAutomation(ctx, rec)
 	if err != nil {
@@ -278,6 +316,31 @@ func (s *Service) Update(ctx context.Context, id domain.AutomationID, input Upda
 	}
 	now := s.clock().UTC()
 	scheduleChanged := input.RRule != nil || input.Cron != nil || input.Timezone != nil
+	hookChanged := input.HookSecret != nil || input.HookSignatureHeader != nil || input.HookFilters != nil || input.HookDedupeKey != nil
+	called := rec.Trigger == domain.AutomationTriggerCall
+	if called && scheduleChanged {
+		return domain.Automation{}, apierr.Invalid("INVALID_AUTOMATION_SCHEDULE", "An automation that runs when called has no schedule", nil)
+	}
+	if !called && hookChanged {
+		return domain.Automation{}, apierr.Invalid("INVALID_AUTOMATION_HOOK", "Hook settings only apply to an automation that runs when called", nil)
+	}
+	if hookChanged {
+		if input.HookSecret != nil {
+			rec.HookSecret = strings.TrimSpace(*input.HookSecret)
+		}
+		if input.HookSignatureHeader != nil {
+			rec.HookSignatureHeader = strings.TrimSpace(*input.HookSignatureHeader)
+		}
+		if input.HookFilters != nil {
+			rec.HookFilters = *input.HookFilters
+		}
+		if input.HookDedupeKey != nil {
+			rec.HookDedupeKey = *input.HookDedupeKey
+		}
+		if err := validateHook(rec.HookSecret, rec.HookSignatureHeader, rec.HookFilters, rec.HookDedupeKey); err != nil {
+			return domain.Automation{}, apierr.Invalid("INVALID_AUTOMATION_HOOK", err.Error(), nil)
+		}
+	}
 	if scheduleChanged {
 		rruleText, cronText, timezone := "", "", rec.Timezone
 		if input.RRule != nil {
@@ -302,7 +365,7 @@ func (s *Service) Update(ctx context.Context, id domain.AutomationID, input Upda
 	if input.Enabled != nil {
 		wasEnabled := rec.Enabled
 		rec.Enabled = *input.Enabled
-		if !wasEnabled && rec.Enabled && !scheduleChanged {
+		if !wasEnabled && rec.Enabled && !scheduleChanged && !called {
 			next, nextErr := NextOccurrence(rec.RRuleText, rec.Timezone, now)
 			if nextErr != nil {
 				return domain.Automation{}, apierr.Invalid("INVALID_AUTOMATION_SCHEDULE", nextErr.Error(), nil)

@@ -49,7 +49,7 @@ func (f *schedulerMemoryStore) MaterializeAutomationRuns(_ context.Context, id d
 func (f *schedulerMemoryStore) ClaimNextAutomationRun(_ context.Context, now, lease time.Time) (domain.AutomationRun, bool, error) {
 	active := map[domain.AutomationID]bool{}
 	for _, run := range f.runs {
-		if run.Status == domain.AutomationRunSpawning || run.Status == domain.AutomationRunRunning {
+		if run.Status == domain.AutomationRunSpawning || (run.Status == domain.AutomationRunRunning && f.automations[run.AutomationID].Trigger != domain.AutomationTriggerCall) {
 			active[run.AutomationID] = true
 		}
 	}
@@ -180,6 +180,11 @@ func TestTickMaterializesBoundedCatchupAndDispatchesOldest(t *testing.T) {
 	}
 	if len(store.runs) != 3 || len(spawner.calls) != 1 {
 		t.Fatalf("runs=%d spawns=%d, want 3 and 1", len(store.runs), len(spawner.calls))
+	}
+	select {
+	case <-svc.Kicks():
+	default:
+		t.Fatal("a launch did not kick the next pass")
 	}
 	if got := store.automations["automation-1"].NextRunAt; !got.Equal(base.Add(6 * time.Hour)) {
 		t.Fatalf("next run = %s, want %s", got, base.Add(6*time.Hour))

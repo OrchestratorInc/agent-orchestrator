@@ -323,3 +323,21 @@ func TestRequestLoggerCapturesRegisteredFaultCodes(t *testing.T) {
 		}
 	}
 }
+
+func TestLoggersHideHookKey(t *testing.T) {
+	for name, wrap := range map[string]func(*slog.Logger) func(http.Handler) http.Handler{
+		"request": func(l *slog.Logger) func(http.Handler) http.Handler { return requestLoggerWithCapture(l, nil, nil) },
+		"panic":   func(l *slog.Logger) func(http.Handler) http.Handler { return recoverTelemetry(l, nil) },
+	} {
+		var buf bytes.Buffer
+		handler := wrap(slog.New(slog.NewTextHandler(&buf, nil)))(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
+			if name == "panic" {
+				panic("boom")
+			}
+		}))
+		handler.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodPost, "/hooks/secretKey123", nil))
+		if strings.Contains(buf.String(), "secretKey123") || !strings.Contains(buf.String(), "path=/hooks/{hookKey}") {
+			t.Fatalf("%s log = %q, want the hook key hidden", name, buf.String())
+		}
+	}
+}

@@ -90,6 +90,8 @@ func (s *Service) Tick(ctx context.Context, at time.Time) error {
 	for _, run := range claims {
 		if err := s.dispatch(ctx, store, run, now); err != nil {
 			problems = append(problems, fmt.Errorf("automation run %s: %w", run.ID, err))
+		} else {
+			s.wake()
 		}
 	}
 	if ctx.Err() != nil {
@@ -144,11 +146,15 @@ func (s *Service) dispatch(ctx context.Context, store schedulerStore, run domain
 		_, releaseErr := store.ReleaseAutomationRun(context.WithoutCancel(ctx), run.ID, runError(err), now)
 		return errors.Join(err, releaseErr)
 	}
+	prompt := definition.Prompt
+	if run.Prompt != "" {
+		prompt = run.Prompt
+	}
 	session, _, _, spawnErr := s.spawner.Spawn(ctx, ports.SpawnConfig{
 		ProjectID: definition.ProjectID, Kind: definition.Kind, Harness: definition.Harness,
 		AgentConfig:    ports.AgentConfig{Model: definition.Model, Mode: definition.Mode, Effort: definition.Effort},
 		EffortOverride: definition.Model != "" || definition.Effort != "",
-		Prompt:         definition.Prompt, DisplayName: definition.DisplayName, DisplayNameExplicit: definition.DisplayName != "", AutomationRunID: &run.ID,
+		Prompt:         prompt, DisplayName: definition.DisplayName, DisplayNameExplicit: definition.DisplayName != "", AutomationRunID: &run.ID,
 	})
 	if spawnErr != nil {
 		var apiError *apierr.Error

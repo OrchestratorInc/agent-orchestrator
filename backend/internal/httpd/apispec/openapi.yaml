@@ -18346,6 +18346,18 @@ components:
           type: boolean
         harness:
           type: string
+        hookDedupeKey:
+          type: string
+        hookFilters:
+          items:
+            type: string
+          type: array
+        hookKey:
+          type: string
+        hookSecretSet:
+          type: boolean
+        hookSignatureHeader:
+          type: string
         id:
           type: string
         kind:
@@ -18382,6 +18394,11 @@ components:
           type: string
         timezone:
           type: string
+        trigger:
+          enum:
+          - schedule
+          - call
+          type: string
         updatedAt:
           format: date-time
           type: string
@@ -18412,6 +18429,7 @@ components:
       - nextRunAt
       - createdAt
       - updatedAt
+      - trigger
       type: object
     AutomationRunResponse:
       properties:
@@ -22171,6 +22189,16 @@ components:
           - boolean
         harness:
           type: string
+        hookDedupeKey:
+          type: string
+        hookFilters:
+          items:
+            type: string
+          type: array
+        hookSecret:
+          type: string
+        hookSignatureHeader:
+          type: string
         kind:
           enum:
           - worker
@@ -22195,6 +22223,11 @@ components:
           type: string
         timezone:
           type: string
+        trigger:
+          enum:
+          - schedule
+          - call
+          type: string
         useCase:
           enum:
           - pr_review
@@ -22213,7 +22246,6 @@ components:
       - displayName
       - prompt
       - kind
-      - timezone
       type: object
     CreateConversationSideChatRequest:
       properties:
@@ -28921,6 +28953,24 @@ components:
           - "null"
           - boolean
         harness:
+          type:
+          - "null"
+          - string
+        hookDedupeKey:
+          type:
+          - "null"
+          - string
+        hookFilters:
+          items:
+            type: string
+          type:
+          - "null"
+          - array
+        hookSecret:
+          type:
+          - "null"
+          - string
+        hookSignatureHeader:
           type:
           - "null"
           - string

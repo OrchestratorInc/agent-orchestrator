@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"net/url"
+	"slices"
 	"strconv"
 	"strings"
 	"text/tabwriter"
@@ -30,6 +31,13 @@ type automationDTO struct {
 	NextRunAt   time.Time                `json:"nextRunAt"`
 	LastRunAt   *time.Time               `json:"lastRunAt,omitempty"`
 	LatestRun   *automationRunSummaryDTO `json:"latestRun,omitempty"`
+	Trigger     string                   `json:"trigger,omitempty"`
+	HookKey     string                   `json:"hookKey,omitempty"`
+
+	HookSecretSet       bool     `json:"hookSecretSet,omitempty"`
+	HookSignatureHeader string   `json:"hookSignatureHeader,omitempty"`
+	HookFilters         []string `json:"hookFilters,omitempty"`
+	HookDedupeKey       string   `json:"hookDedupeKey,omitempty"`
 }
 type automationRunSummaryDTO struct {
 	ID           string    `json:"id"`
@@ -70,8 +78,14 @@ type automationCreateDTO struct {
 	Harness     string `json:"harness,omitempty"`
 	RRule       string `json:"rrule,omitempty"`
 	Cron        string `json:"cron,omitempty"`
-	Timezone    string `json:"timezone"`
+	Timezone    string `json:"timezone,omitempty"`
 	Enabled     *bool  `json:"enabled,omitempty"`
+
+	Trigger             string   `json:"trigger,omitempty"`
+	HookSecret          string   `json:"hookSecret,omitempty"`
+	HookSignatureHeader string   `json:"hookSignatureHeader,omitempty"`
+	HookFilters         []string `json:"hookFilters,omitempty"`
+	HookDedupeKey       string   `json:"hookDedupeKey,omitempty"`
 }
 type automationUpdateDTO struct {
 	DisplayName *string `json:"displayName,omitempty"`
@@ -83,6 +97,11 @@ type automationUpdateDTO struct {
 	Cron        *string `json:"cron,omitempty"`
 	Timezone    *string `json:"timezone,omitempty"`
 	Enabled     *bool   `json:"enabled,omitempty"`
+
+	HookSecret          *string   `json:"hookSecret,omitempty"`
+	HookSignatureHeader *string   `json:"hookSignatureHeader,omitempty"`
+	HookFilters         *[]string `json:"hookFilters,omitempty"`
+	HookDedupeKey       *string   `json:"hookDedupeKey,omitempty"`
 }
 
 func newAutomationCommand(ctx *commandContext) *cobra.Command {
@@ -92,23 +111,31 @@ func newAutomationCommand(ctx *commandContext) *cobra.Command {
 }
 
 func newAutomationCreateCommand(ctx *commandContext) *cobra.Command {
-	var project, name, prompt, rrule, cron, timezone, kind, harness, templateID, useCase string
-	var disabled, jsonOutput bool
-	cmd := &cobra.Command{Use: "create", Short: "Create a recurring automation", Args: usageArgs(cobra.NoArgs), RunE: func(cmd *cobra.Command, _ []string) error {
+	var project, name, prompt, rrule, cron, timezone, kind, harness, templateID, useCase, hookSecret, hookHeader, dedupeKey string
+	var filters []string
+	var disabled, whenCalled, jsonOutput bool
+	cmd := &cobra.Command{Use: "create", Short: "Create a recurring or called automation", Args: usageArgs(cobra.NoArgs), RunE: func(cmd *cobra.Command, _ []string) error {
 		if strings.TrimSpace(project) == "" || strings.TrimSpace(name) == "" || strings.TrimSpace(prompt) == "" {
 			return usageError{errors.New("--project, --name, and --prompt are required")}
 		}
-		if (strings.TrimSpace(rrule) == "") == (strings.TrimSpace(cron) == "") {
-			return usageError{errors.New("exactly one of --rrule or --cron is required")}
+		trigger := ""
+		if whenCalled {
+			if rrule != "" || cron != "" || timezone != "" {
+				return usageError{errors.New("--when-called cannot be used with --rrule, --cron or --timezone")}
+			}
+			trigger = "call"
+		} else if (strings.TrimSpace(rrule) == "") == (strings.TrimSpace(cron) == "") {
+			return usageError{errors.New("exactly one of --rrule, --cron or --when-called is required")}
 		}
-		if timezone == "" {
+		if !whenCalled && timezone == "" {
 			timezone = ctx.deps.Now().Location().String()
 			if timezone == "Local" || timezone == "" {
 				return usageError{errors.New("--timezone is required when the local IANA timezone cannot be resolved")}
 			}
 		}
 		enabled := !disabled
-		body := automationCreateDTO{TemplateID: templateID, UseCase: useCase, ProjectID: project, DisplayName: name, Prompt: prompt, Kind: kind, Harness: harness, RRule: rrule, Cron: cron, Timezone: timezone, Enabled: &enabled}
+		body := automationCreateDTO{TemplateID: templateID, UseCase: useCase, ProjectID: project, DisplayName: name, Prompt: prompt, Kind: kind, Harness: harness, RRule: rrule, Cron: cron, Timezone: timezone, Enabled: &enabled,
+			Trigger: trigger, HookSecret: hookSecret, HookSignatureHeader: hookHeader, HookFilters: filters, HookDedupeKey: dedupeKey}
 		var response automationEnvelopeDTO
 		if err := ctx.postJSON(cmd.Context(), "automations", body, &response); err != nil {
 			return err
@@ -116,7 +143,12 @@ func newAutomationCreateCommand(ctx *commandContext) *cobra.Command {
 		if jsonOutput {
 			return writeJSON(cmd.OutOrStdout(), response)
 		}
-		_, err := fmt.Fprintf(cmd.OutOrStdout(), "created automation %s (%s), next run %s\n", response.Automation.ID, response.Automation.DisplayName, formatAutomationTime(response.Automation.NextRunAt))
+		a := response.Automation
+		if a.Trigger == "call" {
+			_, err := fmt.Fprintf(cmd.OutOrStdout(), "created automation %s (%s), runs on POST /hooks/%s at this machine's Remote access address\n", a.ID, a.DisplayName, a.HookKey)
+			return err
+		}
+		_, err := fmt.Fprintf(cmd.OutOrStdout(), "created automation %s (%s), next run %s\n", a.ID, a.DisplayName, formatAutomationTime(a.NextRunAt))
 		return err
 	}}
 	cmd.Flags().StringVar(&templateID, "template-id", "custom", "Starter template origin")
@@ -130,8 +162,24 @@ func newAutomationCreateCommand(ctx *commandContext) *cobra.Command {
 	cmd.Flags().StringVar(&kind, "kind", "worker", "Session kind: worker or orchestrator")
 	cmd.Flags().StringVar(&harness, "harness", "", "Agent harness (empty uses project default)")
 	cmd.Flags().BoolVar(&disabled, "disabled", false, "Create disabled")
+	addHookFlags(cmd, &hookSecret, &hookHeader, &filters, &dedupeKey)
+	cmd.Flags().BoolVar(&whenCalled, "when-called", false, "Run when a POST reaches /hooks/<key> instead of on a schedule")
 	cmd.Flags().BoolVar(&jsonOutput, "json", false, "Print JSON")
 	return cmd
+}
+
+func addHookFlags(cmd *cobra.Command, secret, header *string, filters *[]string, dedupeKey *string) {
+	cmd.Flags().StringVar(secret, "hook-secret", "", "HMAC-SHA256 secret that signs each call's body")
+	cmd.Flags().StringVar(header, "hook-signature-header", "", "Header that carries the body signature, such as X-Hub-Signature-256")
+	cmd.Flags().StringArrayVar(filters, "filter", nil, "Run only when the call matches, such as body.action=opened (repeatable; --filter \"\" on update clears them)")
+	cmd.Flags().StringVar(dedupeKey, "dedupe-key", "", "Template that names one delivery, such as {{headers.X-GitHub-Delivery}}")
+}
+
+func automationWhen(a automationDTO) string {
+	if a.Trigger == "call" {
+		return "when called"
+	}
+	return formatAutomationTime(a.NextRunAt)
 }
 
 func newAutomationListCommand(ctx *commandContext) *cobra.Command {
@@ -177,7 +225,7 @@ func newAutomationListCommand(ctx *commandContext) *cobra.Command {
 			if item.LatestRun != nil {
 				latest = item.LatestRun.Status
 			}
-			_, _ = fmt.Fprintf(writer, "%s\t%s\t%s\t%t\t%s\t%s\n", item.ID, item.DisplayName, item.ProjectID, item.Enabled, formatAutomationTime(item.NextRunAt), latest)
+			_, _ = fmt.Fprintf(writer, "%s\t%s\t%s\t%t\t%s\t%s\n", item.ID, item.DisplayName, item.ProjectID, item.Enabled, automationWhen(item), latest)
 		}
 		return writer.Flush()
 	}}
@@ -198,6 +246,10 @@ func newAutomationGetCommand(ctx *commandContext) *cobra.Command {
 			return writeJSON(cmd.OutOrStdout(), response)
 		}
 		a := response.Automation
+		if a.Trigger == "call" {
+			_, err := fmt.Fprintf(cmd.OutOrStdout(), "%s\nProject: %s\nRuns: when called at POST /hooks/%s\nEnabled: %t\nPrompt: %s\n", a.DisplayName, a.ProjectID, a.HookKey, a.Enabled, a.Prompt)
+			return err
+		}
 		_, err := fmt.Fprintf(cmd.OutOrStdout(), "%s\nProject: %s\nSchedule: %s (%s)\nEnabled: %t\nNext run: %s\nPrompt: %s\n", a.DisplayName, a.ProjectID, a.RRule, a.Timezone, a.Enabled, formatAutomationTime(a.NextRunAt), a.Prompt)
 		return err
 	}}
@@ -206,7 +258,8 @@ func newAutomationGetCommand(ctx *commandContext) *cobra.Command {
 }
 
 func newAutomationUpdateCommand(ctx *commandContext) *cobra.Command {
-	var name, prompt, rrule, cron, timezone, kind, harness, useCase string
+	var name, prompt, rrule, cron, timezone, kind, harness, useCase, hookSecret, hookHeader, dedupeKey string
+	var filters []string
 	var enabled, jsonOutput bool
 	cmd := &cobra.Command{Use: "update <id>", Short: "Update an automation", Args: usageArgs(cobra.ExactArgs(1)), RunE: func(cmd *cobra.Command, args []string) error {
 		body := automationUpdateDTO{}
@@ -226,6 +279,14 @@ func newAutomationUpdateCommand(ctx *commandContext) *cobra.Command {
 		stringFlag("timezone", timezone, &body.Timezone)
 		stringFlag("kind", kind, &body.Kind)
 		stringFlag("harness", harness, &body.Harness)
+		stringFlag("hook-secret", hookSecret, &body.HookSecret)
+		stringFlag("hook-signature-header", hookHeader, &body.HookSignatureHeader)
+		stringFlag("dedupe-key", dedupeKey, &body.HookDedupeKey)
+		if cmd.Flags().Changed("filter") {
+			filters = slices.DeleteFunc(filters, func(f string) bool { return strings.TrimSpace(f) == "" })
+			body.HookFilters = &filters
+			changed = true
+		}
 		if cmd.Flags().Changed("enabled") {
 			body.Enabled = &enabled
 			changed = true
@@ -255,6 +316,7 @@ func newAutomationUpdateCommand(ctx *commandContext) *cobra.Command {
 	cmd.Flags().StringVar(&kind, "kind", "", "Session kind")
 	cmd.Flags().StringVar(&harness, "harness", "", "Harness; empty uses project default")
 	cmd.Flags().BoolVar(&enabled, "enabled", true, "Enable or disable future dispatch")
+	addHookFlags(cmd, &hookSecret, &hookHeader, &filters, &dedupeKey)
 	cmd.Flags().BoolVar(&jsonOutput, "json", false, "Print JSON")
 	return cmd
 }

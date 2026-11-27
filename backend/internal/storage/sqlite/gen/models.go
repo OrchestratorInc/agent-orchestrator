@@ -195,24 +195,30 @@ type AppSetting struct {
 }
 
 type Automation struct {
-	ID          domain.AutomationID
-	ProjectID   domain.ProjectID
-	DisplayName string
-	Prompt      string
-	Kind        domain.SessionKind
-	Harness     domain.AgentHarness
-	RruleText   string
-	Timezone    string
-	Enabled     bool
-	NextRunAt   time.Time
-	LastRunAt   sql.NullTime
-	CreatedAt   time.Time
-	UpdatedAt   time.Time
-	Model       string
-	Mode        string
-	Effort      string
-	TemplateID  string
-	UseCase     string
+	ID                  domain.AutomationID
+	ProjectID           domain.ProjectID
+	DisplayName         string
+	Prompt              string
+	Kind                domain.SessionKind
+	Harness             domain.AgentHarness
+	RruleText           string
+	Timezone            string
+	Enabled             bool
+	NextRunAt           time.Time
+	LastRunAt           sql.NullTime
+	CreatedAt           time.Time
+	UpdatedAt           time.Time
+	Model               string
+	Mode                string
+	Effort              string
+	TemplateID          string
+	UseCase             string
+	TriggerKind         string
+	HookKey             sql.NullString
+	HookSecret          string
+	HookSignatureHeader string
+	HookFilters         string
+	HookDedupeKey       string
 }
 
 type AutomationRun struct {
@@ -229,6 +235,8 @@ type AutomationRun struct {
 	ErrorMessage   sql.NullString
 	CreatedAt      time.Time
 	UpdatedAt      time.Time
+	Prompt         sql.NullString
+	DedupeKey      sql.NullString
 }
 
 type AwakeState struct {

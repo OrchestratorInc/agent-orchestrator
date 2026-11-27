@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
@@ -18,6 +19,9 @@ func (s *Store) CreateAutomation(ctx context.Context, rec domain.Automation) (do
 	}
 	if rec.UseCase == "" {
 		rec.UseCase = domain.AutomationUseCaseUnknown
+	}
+	if rec.Trigger == "" {
+		rec.Trigger = domain.AutomationTriggerSchedule
 	}
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()
@@ -35,6 +39,18 @@ func (s *Store) GetAutomation(ctx context.Context, id domain.AutomationID) (doma
 	}
 	if err != nil {
 		return domain.Automation{}, false, fmt.Errorf("get automation %s: %w", id, err)
+	}
+	return automationFromGen(row), true, nil
+}
+
+// GetAutomationByHookKey returns the call automation that owns key.
+func (s *Store) GetAutomationByHookKey(ctx context.Context, key string) (domain.Automation, bool, error) {
+	row, err := s.qr.GetAutomationByHookKey(ctx, nullableString(key))
+	if errors.Is(err, sql.ErrNoRows) {
+		return domain.Automation{}, false, nil
+	}
+	if err != nil {
+		return domain.Automation{}, false, fmt.Errorf("get automation by hook key: %w", err)
 	}
 	return automationFromGen(row), true, nil
 }
@@ -92,26 +108,45 @@ func (s *Store) ListLatestAutomationRuns(ctx context.Context, ids []domain.Autom
 	return out, nil
 }
 
-// UpdateAutomation persists a complete validated mutable definition.
+// UpdateAutomation persists a complete validated mutable definition. Turning
+// off an automation that runs when called fails its queued calls in the same
+// transaction.
 func (s *Store) UpdateAutomation(ctx context.Context, rec domain.Automation) (bool, error) {
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()
-	rows, err := s.qw.UpdateAutomation(ctx, gen.UpdateAutomationParams{
-		DisplayName: rec.DisplayName,
-		Prompt:      rec.Prompt,
-		UseCase:     rec.UseCase,
-		Kind:        rec.Kind,
-		Harness:     rec.Harness,
-		Model:       rec.Model,
-		Mode:        rec.Mode,
-		Effort:      rec.Effort,
-		RruleText:   rec.RRuleText,
-		Timezone:    rec.Timezone,
-		Enabled:     rec.Enabled,
-		NextRunAt:   rec.NextRunAt,
-		LastRunAt:   timePtrToNullTime(rec.LastRunAt),
-		UpdatedAt:   rec.UpdatedAt,
-		ID:          rec.ID,
+	var rows int64
+	err := s.inTx(ctx, "update automation", func(q *gen.Queries) error {
+		var err error
+		rows, err = q.UpdateAutomation(ctx, gen.UpdateAutomationParams{
+			DisplayName: rec.DisplayName,
+			Prompt:      rec.Prompt,
+			UseCase:     rec.UseCase,
+			Kind:        rec.Kind,
+			Harness:     rec.Harness,
+			Model:       rec.Model,
+			Mode:        rec.Mode,
+			Effort:      rec.Effort,
+			RruleText:   rec.RRuleText,
+			Timezone:    rec.Timezone,
+			Enabled:     rec.Enabled,
+			NextRunAt:   rec.NextRunAt,
+			LastRunAt:   timePtrToNullTime(rec.LastRunAt),
+			UpdatedAt:   rec.UpdatedAt,
+			ID:          rec.ID,
+
+			HookSecret:          rec.HookSecret,
+			HookSignatureHeader: rec.HookSignatureHeader,
+			HookFilters:         strings.Join(rec.HookFilters, "\n"),
+			HookDedupeKey:       rec.HookDedupeKey,
+		})
+		if err != nil || rows == 0 || rec.Enabled || rec.Trigger != domain.AutomationTriggerCall {
+			return err
+		}
+		_, err = q.FailPendingAutomationRuns(ctx, gen.FailPendingAutomationRunsParams{
+			FinishedAt: timePtrToNullTime(&rec.UpdatedAt), ErrorMessage: nullableString("The automation was paused before this call ran"),
+			UpdatedAt: rec.UpdatedAt, AutomationID: rec.ID,
+		})
+		return err
 	})
 	if err != nil {
 		return false, fmt.Errorf("update automation %s: %w", rec.ID, err)
@@ -241,6 +276,13 @@ func automationToInsert(rec domain.Automation) gen.InsertAutomationParams {
 		LastRunAt:   timePtrToNullTime(rec.LastRunAt),
 		CreatedAt:   rec.CreatedAt,
 		UpdatedAt:   rec.UpdatedAt,
+
+		TriggerKind:         rec.Trigger,
+		HookKey:             nullableString(rec.HookKey),
+		HookSecret:          rec.HookSecret,
+		HookSignatureHeader: rec.HookSignatureHeader,
+		HookFilters:         strings.Join(rec.HookFilters, "\n"),
+		HookDedupeKey:       rec.HookDedupeKey,
 	}
 }
 
@@ -264,7 +306,72 @@ func automationFromGen(row gen.Automation) domain.Automation {
 		LastRunAt:   nullTimeToTimePtr(row.LastRunAt),
 		CreatedAt:   row.CreatedAt,
 		UpdatedAt:   row.UpdatedAt,
+
+		Trigger:             row.TriggerKind,
+		HookKey:             row.HookKey.String,
+		HookSecret:          row.HookSecret,
+		HookSignatureHeader: row.HookSignatureHeader,
+		HookFilters:         splitLines(row.HookFilters),
+		HookDedupeKey:       row.HookDedupeKey,
 	}
+}
+
+func splitLines(s string) []string {
+	if s == "" {
+		return nil
+	}
+	return strings.Split(s, "\n")
+}
+
+// InsertCalledAutomationRun queues one hook-called run unless a run with the
+// same dedupe key was created since dedupeSince, maxPending runs already
+// wait, or the automation is off.
+func (s *Store) InsertCalledAutomationRun(ctx context.Context, run domain.AutomationRun, dedupeSince time.Time, maxPending int64) (domain.AutomationCallStatus, error) {
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
+	status := domain.AutomationCallAccepted
+	err := s.inTx(ctx, "insert called automation run", func(q *gen.Queries) error {
+		a, err := q.GetAutomation(ctx, run.AutomationID)
+		if err != nil {
+			return err
+		}
+		if !a.Enabled {
+			status = domain.AutomationCallDisabled
+			return nil
+		}
+		if run.DedupeKey != "" {
+			dup, err := q.AutomationRunDedupeExists(ctx, gen.AutomationRunDedupeExistsParams{
+				AutomationID: run.AutomationID, DedupeKey: nullableString(run.DedupeKey), CreatedAt: dedupeSince,
+			})
+			if err != nil {
+				return err
+			}
+			if dup {
+				status = domain.AutomationCallDuplicate
+				return nil
+			}
+		}
+		pending, err := q.CountPendingAutomationRuns(ctx, run.AutomationID)
+		if err != nil {
+			return err
+		}
+		if pending >= maxPending {
+			status = domain.AutomationCallQueueFull
+			return nil
+		}
+		for range 8 {
+			rows, err := q.InsertAutomationRun(ctx, automationRunToInsert(run))
+			if err != nil || rows > 0 {
+				return err
+			}
+			run.ScheduledFor = run.ScheduledFor.Add(time.Microsecond)
+		}
+		return fmt.Errorf("no free occurrence slot near %s", run.ScheduledFor)
+	})
+	if err != nil {
+		return "", fmt.Errorf("insert called automation run %s: %w", run.AutomationID, err)
+	}
+	return status, nil
 }
 
 // CreateAutomationRun inserts one logical occurrence. When the occurrence was
@@ -382,6 +489,8 @@ func automationRunToInsert(rec domain.AutomationRun) gen.InsertAutomationRunPara
 		ErrorMessage:   nullableString(rec.ErrorMessage),
 		CreatedAt:      rec.CreatedAt,
 		UpdatedAt:      rec.UpdatedAt,
+		Prompt:         nullableString(rec.Prompt),
+		DedupeKey:      nullableString(rec.DedupeKey),
 	}
 }
 
@@ -400,6 +509,8 @@ func automationRunFromGen(row gen.AutomationRun) domain.AutomationRun {
 		ErrorMessage:   row.ErrorMessage.String,
 		CreatedAt:      row.CreatedAt,
 		UpdatedAt:      row.UpdatedAt,
+		Prompt:         row.Prompt.String,
+		DedupeKey:      row.DedupeKey.String,
 	}
 }
 

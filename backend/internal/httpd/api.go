@@ -470,6 +470,7 @@ func (a *API) Register(root chi.Router) {
 		a.sessions.RegisterStreams(r)
 		a.events.Register(r)
 	})
+	root.With(middleware.Timeout(timeout)).Group(a.automations.RegisterHook)
 }
 
 // sessionImportRoute covers the scan and the import: both read every chosen history.

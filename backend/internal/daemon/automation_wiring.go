@@ -19,6 +19,6 @@ func startAutomations(ctx context.Context, store *sqlite.Store, sessions *sessio
 	if err := service.Reconcile(ctx); err != nil {
 		logger.Warn("automation startup reconciliation completed with errors", "err", err)
 	}
-	observer := automationobserver.New(service, automationobserver.Config{Logger: logger})
+	observer := automationobserver.New(service, automationobserver.Config{Logger: logger, Trigger: service.Kicks()})
 	return service, observer.Start(ctx)
 }
