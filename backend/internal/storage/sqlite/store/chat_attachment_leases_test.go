@@ -132,9 +132,10 @@ func TestChatAttachmentLeaseAcceptanceRescuesReleasedFile(t *testing.T) {
 	}
 }
 
-// Once reclamation has claimed a released file, any acceptance that names it
-// is refused, through the conversation tables and the explicit commit alike,
-// and keeps being refused after the file is gone until the tombstone is pruned.
+// While reclamation is deleting a claimed file, any acceptance that names it
+// is refused, through the conversation tables and the explicit commit alike.
+// Once the file is gone the refusal ends: a later message that only mentions
+// the name (say, pasted command output) is accepted.
 func TestChatAttachmentLeaseClaimRefusesAcceptance(t *testing.T) {
 	s, session, conversation := conversationFixture(t)
 	ctx := context.Background()
@@ -168,15 +169,23 @@ func TestChatAttachmentLeaseClaimRefusesAcceptance(t *testing.T) {
 	if claimed, err := s.ClaimChatAttachmentLease(ctx, session, leasedDropped, histClock.Add(5*time.Second)); err != nil || claimed {
 		t.Fatalf("claim after reclaim = %v, %v", claimed, err)
 	}
-	if _, err := s.HoldChatAttachmentLeases(ctx, session, []string{leasedDropped}); !errors.Is(err, sqlite.ErrChatAttachmentDiscarded) {
-		t.Fatalf("commit against tombstone = %v, want ErrChatAttachmentDiscarded", err)
+	mention := domain.ConversationMessage{ID: "m2", Text: "why did git status list .ao/attachments/" + leasedDropped + "?", Origin: domain.MessageOriginHuman}
+	if _, err := s.AppendUserMessage(ctx, conversation, session, "gen-1", mention, "turn-2", histClock.Add(6*time.Second)); err != nil {
+		t.Fatalf("a mention of a reclaimed file was refused: %v", err)
+	}
+	if held, err := s.HoldChatAttachmentLeases(ctx, session, []string{leasedDropped}); err != nil || len(held) != 0 {
+		t.Fatalf("hold naming a reclaimed file = %v, %v; want nothing held, no error", held, err)
+	}
+	// The tombstone outlives the mention, so a renewal still reports the file gone.
+	if gone, err := s.RenewChatAttachmentLeases(ctx, session, []string{leasedDropped}, histClock.Add(7*time.Second)); err != nil || len(gone) != 1 {
+		t.Fatalf("renew after reclaim = %v, %v; want the file reported gone", gone, err)
 	}
 	// A tombstone reclaimed after the cutoff stays; one before it goes.
 	if err := s.PruneChatAttachmentTombstones(ctx, histClock); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.HoldChatAttachmentLeases(ctx, session, []string{leasedDropped}); !errors.Is(err, sqlite.ErrChatAttachmentDiscarded) {
-		t.Fatalf("tombstone pruned too early: %v", err)
+	if err := s.LeaseChatAttachment(ctx, session, leasedDropped, histClock.Add(time.Minute)); err == nil {
+		t.Fatal("tombstone pruned before its cutoff")
 	}
 	if err := s.PruneChatAttachmentTombstones(ctx, histClock.Add(time.Minute)); err != nil {
 		t.Fatal(err)

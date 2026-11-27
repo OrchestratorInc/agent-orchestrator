@@ -18,8 +18,8 @@ import (
 // the result) is reclaimed after it.
 const ChatAttachmentLeaseTTL = 7 * 24 * time.Hour
 
-// chatAttachmentTombstoneTTL is how long a reclaimed file's row is kept so a
-// message that still names it is refused rather than accepted.
+// chatAttachmentTombstoneTTL is how long a reclaimed file's row is kept, so a
+// draft renewed after its file went still learns it is gone.
 const chatAttachmentTombstoneTTL = 30 * 24 * time.Hour
 
 // chatAttachmentCleanupTimeout bounds cleanup that must outlive a cancelled

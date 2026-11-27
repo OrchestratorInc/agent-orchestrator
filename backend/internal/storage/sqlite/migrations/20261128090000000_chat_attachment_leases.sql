@@ -12,13 +12,16 @@
 --   reclaiming reclaiming_at_ms set: reclamation claimed it and is deleting
 --              both stored copies
 --   reclaimed  reclaimed_at_ms set: both copies are gone; the row stays as a
---              tombstone so a late reference is refused, and is pruned later
+--              tombstone (renewal reports the file gone without a disk check)
+--              and is pruned later
 --
 -- Accepting a message that names a file (the triggers below run inside the
 -- write that accepts it) deletes a live or released row, which commits the
--- file for good: a release that lost the race to acceptance is undone. Once
--- reclamation has claimed a row, acceptance is refused instead, so an
--- accepted message can never name a file that is being or has been deleted.
+-- file for good: a release that lost the race to acceptance is undone. While
+-- reclamation is deleting a claimed file, acceptance is refused instead, so an
+-- accepted message never names a file whose deletion it raced. Once the file
+-- is gone the refusal ends: a later mention of the name (pasted command
+-- output, an excerpt) is just text and is accepted.
 --
 -- A side question is recorded outside the conversation tables, so it commits
 -- in two steps: it holds its files (accepting counts the holds in flight)
@@ -50,7 +53,7 @@ BEGIN
     SELECT RAISE(ABORT, 'chat attachment was discarded')
     WHERE EXISTS (
         SELECT 1 FROM chat_attachment_leases
-        WHERE reclaiming_at_ms IS NOT NULL
+        WHERE reclaiming_at_ms IS NOT NULL AND reclaimed_at_ms IS NULL
           AND (instr(NEW.text, name) > 0 OR instr(NEW.delivery_content_json, name) > 0)
     );
     DELETE FROM chat_attachment_leases
@@ -67,7 +70,7 @@ BEGIN
     SELECT RAISE(ABORT, 'chat attachment was discarded')
     WHERE EXISTS (
         SELECT 1 FROM chat_attachment_leases
-        WHERE reclaiming_at_ms IS NOT NULL
+        WHERE reclaiming_at_ms IS NOT NULL AND reclaimed_at_ms IS NULL
           AND (instr(NEW.text, name) > 0 OR instr(NEW.delivery_content_json, name) > 0)
           AND instr(OLD.text, name) = 0 AND instr(OLD.delivery_content_json, name) = 0
     );
@@ -87,7 +90,7 @@ BEGIN
     SELECT RAISE(ABORT, 'chat attachment was discarded')
     WHERE EXISTS (
         SELECT 1 FROM chat_attachment_leases
-        WHERE reclaiming_at_ms IS NOT NULL AND instr(NEW.request_json, name) > 0
+        WHERE reclaiming_at_ms IS NOT NULL AND reclaimed_at_ms IS NULL AND instr(NEW.request_json, name) > 0
     );
     DELETE FROM chat_attachment_leases
     WHERE reclaiming_at_ms IS NULL
@@ -102,7 +105,7 @@ BEGIN
     SELECT RAISE(ABORT, 'chat attachment was discarded')
     WHERE EXISTS (
         SELECT 1 FROM chat_attachment_leases
-        WHERE reclaiming_at_ms IS NOT NULL AND instr(NEW.request_json, name) > 0
+        WHERE reclaiming_at_ms IS NOT NULL AND reclaimed_at_ms IS NULL AND instr(NEW.request_json, name) > 0
     );
     DELETE FROM chat_attachment_leases
     WHERE reclaiming_at_ms IS NULL

@@ -14,8 +14,9 @@ import (
 // draft. Accepting a message that names a file deletes its lease inside the
 // accepting write (see the chat_attachment_leases migration triggers), so a
 // file named by history never has one. Only a leased file is ever reclaimed,
-// and only after reclamation has claimed its row; acceptance of a claimed file
-// is refused, so an accepted message never names a deleted file.
+// and only after reclamation has claimed its row; acceptance is refused while
+// a claimed file is being deleted, so an accepted message never names a file
+// whose deletion it raced.
 
 // ErrChatAttachmentDiscarded reports a message naming a staged file that was
 // discarded and is being or has been deleted.
@@ -39,8 +40,9 @@ VALUES (?, ?, ?, ?)`, string(id), name, at, at); err != nil {
 // the unclaimed leases of id whose names appear in any of texts, including one
 // a racing release already released, so reclamation cannot claim them while
 // the message is being recorded, and returns their names for
-// SettleChatAttachmentHolds. If any named file has already been claimed for
-// reclamation it holds nothing and returns ErrChatAttachmentDiscarded.
+// SettleChatAttachmentHolds. If any named file is being deleted (claimed and
+// not yet reclaimed) it holds nothing and returns ErrChatAttachmentDiscarded.
+// A file already gone is not refused: its name is just text by then.
 func (s *Store) HoldChatAttachmentLeases(ctx context.Context, id domain.SessionID, texts []string) ([]string, error) {
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()
@@ -58,7 +60,7 @@ func (s *Store) HoldChatAttachmentLeases(ctx context.Context, id domain.SessionI
 		var claimed int
 		if err := tx.QueryRowContext(ctx, `
 SELECT COUNT(*) FROM chat_attachment_leases
-WHERE session_id = ? AND reclaiming_at_ms IS NOT NULL AND instr(?, name) > 0`, string(id), text).Scan(&claimed); err != nil {
+WHERE session_id = ? AND reclaiming_at_ms IS NOT NULL AND reclaimed_at_ms IS NULL AND instr(?, name) > 0`, string(id), text).Scan(&claimed); err != nil {
 			return nil, fmt.Errorf("hold chat attachment leases %s: %w", id, err)
 		}
 		if claimed > 0 {
@@ -249,8 +251,8 @@ ORDER BY session_id, name`, string(id), string(id))
 // ClaimChatAttachmentLease takes a released lease for reclamation and reports
 // whether its files may now be deleted. It is false when an accepted message
 // rescued the file after the list of released leases was read, or while a
-// side question holding the file is being recorded. From the claim
-// on, any acceptance naming the file is refused. Re-claiming a row a previous
+// side question holding the file is being recorded. From the claim until the
+// file is marked reclaimed, any acceptance naming the file is refused. Re-claiming a row a previous
 // run claimed but did not finish succeeds.
 func (s *Store) ClaimChatAttachmentLease(ctx context.Context, id domain.SessionID, name string, now time.Time) (bool, error) {
 	s.writeMu.Lock()
@@ -271,7 +273,8 @@ WHERE session_id = ? AND name = ? AND released_at_ms IS NOT NULL AND reclaimed_a
 }
 
 // MarkChatAttachmentReclaimed records that both copies of a claimed file are
-// gone. The row stays as a tombstone so a late reference is still refused.
+// gone, which ends the refusal of messages naming it. The row stays as a
+// tombstone so renewal reports the file gone, and is pruned later.
 func (s *Store) MarkChatAttachmentReclaimed(ctx context.Context, id domain.SessionID, name string, now time.Time) error {
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()
