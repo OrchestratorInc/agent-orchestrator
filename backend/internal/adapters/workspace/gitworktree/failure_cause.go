@@ -2,6 +2,7 @@ package gitworktree
 
 import (
 	"errors"
+	"os"
 	"os/exec"
 	"strings"
 
@@ -9,8 +10,7 @@ import (
 )
 
 // FailureCause classifies a failed git command into the fixed vocabulary spawn
-// telemetry reports (branch_exists, path_exists, locked, permission,
-// path_too_long, not_a_repo, killed, other). It reads only git's stderr and
+// telemetry reports (see classifyGitFailure). It reads only git's stderr and
 // exit state; nothing from the output leaves the daemon.
 func (e commandError) FailureCause() string {
 	return classifyGitFailure(e.output, e.err)
@@ -29,29 +29,78 @@ func notARepoAt(repo string, err error) error {
 	return err
 }
 
+// classifyGitFailure names why a git command failed, from a closed list:
+// killed, git_missing, not_a_repo, unsafe_repo, repo_missing, path_too_long,
+// disk_full, permission, in_use, repo_corrupt, ref_conflict, locked,
+// branch_exists, path_exists, ref_missing, git_error (git ran and failed with
+// a message not recognised here) or other (git did not run). Only messages
+// from `git worktree` and `git status` are forced to English, so matching
+// leans on fragments that also survive in commands run in the user's locale
+// (quoted paths, errno text from the OS).
 func classifyGitFailure(output string, err error) string {
 	var exitErr *exec.ExitError
-	if errors.As(err, &exitErr) && !exitErr.Exited() {
+	ran := errors.As(err, &exitErr)
+	if ran && !exitErr.Exited() {
 		return "killed"
 	}
 	if err != nil && strings.Contains(err.Error(), "signal: killed") {
 		return "killed"
 	}
+	// The binary could not be started at all: not on PATH, or a configured
+	// path that no longer exists.
+	if !ran && (errors.Is(err, exec.ErrNotFound) || errors.Is(err, os.ErrNotExist)) {
+		return "git_missing"
+	}
 	text := strings.ToLower(output)
+	has := func(fragments ...string) bool {
+		for _, fragment := range fragments {
+			if strings.Contains(text, fragment) {
+				return true
+			}
+		}
+		return false
+	}
 	switch {
-	case strings.Contains(text, "not a git repository"):
+	// macOS ships a /usr/bin/git stub that fails until the Command Line
+	// Tools are installed.
+	case has("xcrun: error", "no developer tools were found", "requires the command line developer tools"):
+		return "git_missing"
+	case has("not a git repository"):
 		return "not_a_repo"
-	case strings.Contains(text, "file name too long") || strings.Contains(text, "filename too long"):
+	case has("dubious ownership", "unsafe repository", "safe.directory"):
+		return "unsafe_repo"
+	case has("file name too long", "filename too long"):
 		return "path_too_long"
-	case strings.Contains(text, "permission denied") || strings.Contains(text, "operation not permitted"):
+	case has("no space left on device", "disk quota exceeded", "not enough space on the disk"):
+		return "disk_full"
+	case has("permission denied", "operation not permitted", "access is denied", "read-only file system"):
 		return "permission"
-	case strings.Contains(text, ".lock") || strings.Contains(text, "is locked") || strings.Contains(text, "locked working tree"):
+	case has("device or resource busy", "being used by another process"):
+		return "in_use"
+	// After the permission and disk checks: git cannot enter a folder that
+	// exists but is unreadable either, and that is not a missing repository.
+	case has("cannot change to"):
+		return "repo_missing"
+	// git's own phrasings, with spaces no branch name can contain, so a
+	// quoted branch such as 'fix-corrupt-cache' is not read as corruption.
+	case has(" is corrupt", "index file corrupt", "bad object ", "bad signature"):
+		return "repo_corrupt"
+	// A ref whose name is a directory of another ref (refs/heads/a vs
+	// refs/heads/a/b) can never be created.
+	case has("exists; cannot create"):
+		return "ref_conflict"
+	case has(".lock", "is locked", "locked working tree", "locked worktree", "could not lock"):
 		return "locked"
-	case strings.Contains(text, "branch") && strings.Contains(text, "already exists"),
-		strings.Contains(text, "is already checked out"), strings.Contains(text, "is already used by worktree"):
+	case has("is already checked out", "is already used by worktree"),
+		strings.Contains(text, "branch") && strings.Contains(text, "already exists"):
 		return "branch_exists"
-	case strings.Contains(text, "already exists"):
+	case has("already exists"):
 		return "path_exists"
+	case has("invalid reference", "not a valid object name", "unknown revision", "is not a commit", "needed a single revision", "couldn't find remote ref"):
+		return "ref_missing"
+	}
+	if ran {
+		return "git_error"
 	}
 	return "other"
 }
