@@ -1,6 +1,6 @@
 import { render, screen } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
-import { MenuEntries } from "./menu-model";
+import { dropdownMenuKit, MenuEntries, MenuKitContext } from "./menu-model";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuTrigger } from "./ui/dropdown-menu";
 
 function renderMenu(entries: Parameters<typeof MenuEntries>[0]["entries"]) {
@@ -8,7 +8,10 @@ function renderMenu(entries: Parameters<typeof MenuEntries>[0]["entries"]) {
 		<DropdownMenu open>
 			<DropdownMenuTrigger>Menu</DropdownMenuTrigger>
 			<DropdownMenuContent className="w-48">
-				<MenuEntries entries={entries} />
+				{/* Entries default to the right-click menu's parts; a dropdown supplies its own. */}
+				<MenuKitContext.Provider value={dropdownMenuKit}>
+					<MenuEntries entries={entries} />
+				</MenuKitContext.Provider>
 			</DropdownMenuContent>
 		</DropdownMenu>,
 	);
