@@ -210,6 +210,28 @@ describe("StandaloneArchiveView with Cloud standalone agents", () => {
 	});
 });
 
+describe("an archived Cloud session that moved to another computer", () => {
+	it("offers no Restore and says where it continues", () => {
+		workspaceQueryMock.mockReturnValue({
+			data: [{
+				id: "agent-1", name: "Fix the flake", kind: "cloud", cloudOrgId: "org-1", standaloneAgent: true, path: "",
+				sessions: [terminatedSession({
+					id: "cloud-agent", title: "Fix the flake", workspaceId: "agent-1", workspaceName: "Fix the flake",
+					branch: undefined, cloud: { orgId: "org-1", movedAway: true },
+				})],
+			}],
+			isError: false,
+			isSuccess: true,
+		});
+
+		renderArchive();
+		const list = screen.getByRole("list", { name: "Archived sessions" });
+		expect(within(list).getByText("Fix the flake")).toBeInTheDocument();
+		expect(screen.queryByRole("button", { name: "Restore Fix the flake" })).toBeNull();
+		expect(screen.getByTestId("moved-away")).toHaveTextContent("This session moved to another computer and continues there.");
+	});
+});
+
 describe("archived session card accessible labels", () => {
 	const branchSession = () =>
 		standaloneWorkspaceWithSessions([

@@ -1,7 +1,7 @@
 // The warnings above the spawn controls, decided in one place so a single cause
 // produces a single line. Pure, so it is unit-testable.
 
-import { isDesktopUnreachable } from "./connectionError";
+import { classifyConnectionFailure, isDesktopUnreachable } from "./connectionError";
 import { machineState, rejectedMachineLine, type MachineState } from "./hostRoute";
 import { classifyLink, EMPTY_LINK_TRACKER, type LinkTracker, type PhoneNetwork } from "./linkHealth";
 
@@ -13,6 +13,11 @@ import { classifyLink, EMPTY_LINK_TRACKER, type LinkTracker, type PhoneNetwork }
  * the poll for good. A connection closed on purpose (the app going to the
  * background drops it every time) is neither: reading it as offline flashed
  * the notice after every app switch, into the app-switcher snapshot too.
+ *
+ * New task's one addition: a connection closed on a server error is offline
+ * too. A tunnel whose desktop is off answers 502, and an answered failure
+ * never counts as unanswered, so the tracker never gives up on it; New task
+ * can't use the machine, says so, and its machine choice falls back.
  */
 export function spawnHostState(
 	host: { linkTracker?: LinkTracker; connection: string; error: string | null; errorStatus: number | null } | undefined,
@@ -22,7 +27,8 @@ export function spawnHostState(
 	if (!host) return "ok";
 	const unreachable = classifyLink(host.linkTracker ?? EMPTY_LINK_TRACKER, phone, now) === "unreachable"
 		&& isDesktopUnreachable({ connection: host.connection, error: host.error, errorStatus: host.errorStatus });
-	return machineState({ unreachable, paired: true, connection: host.connection, error: host.error, errorStatus: host.errorStatus });
+	const serverError = host.connection === "closed" && host.error !== null && classifyConnectionFailure(host.errorStatus ?? undefined) === "server-error";
+	return machineState({ unreachable: unreachable || serverError, paired: true, connection: host.connection, error: host.error, errorStatus: host.errorStatus });
 }
 
 export const SPAWN_OFFLINE_NOTICE = "This machine is offline. You can start a worker once it reconnects.";

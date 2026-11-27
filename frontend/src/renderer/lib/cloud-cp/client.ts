@@ -139,6 +139,10 @@ import type {
 	CloudCpTerminalTicketResponse,
 	CloudCpUpdateProjectRequest,
 	CloudCpUpdateSessionPreferencesRequest,
+	CloudCpMovePreviewResponse,
+	CloudCpMoveExportResponse,
+	CloudCpMoveExportResult,
+	CloudCpMoveExportRunning,
 } from "./types";
 
 const API_PREFIX = "/api/cloud/v1";
@@ -286,6 +290,16 @@ export interface CloudCpClient {
 	restoreSessionArtifactVersion(orgId: string, sessionId: string, path: string, version: number, options?: CloudCpRequestOptions): Promise<{ artifact: CloudCpSessionArtifact }>;
 	/** Starts the agent again in a live session whose terminal agent exited. */
 	restartSessionAgent(orgId: string, sessionId: string, options?: CloudCpRequestOptions): Promise<{ requested: boolean }>;
+	/** What exportSessionMove would push now. Changes nothing. */
+	previewSessionMove(orgId: string, sessionId: string, options?: CloudCpRequestOptions): Promise<CloudCpMovePreviewResponse>;
+	/**
+	 * Stops the session's agent, commits its uncommitted work and pushes its
+	 * branch, for an AO daemon's move/import. An export still running after
+	 * about 50 s answers running, with its moveId; moveId waits on that export.
+	 */
+	exportSessionMove(orgId: string, sessionId: string, options?: CloudCpRequestOptions & { moveId?: string }): Promise<CloudCpMoveExportResult>;
+	/** Waits on an export exportSessionMove started and answers as it does. */
+	getSessionMoveExport(orgId: string, sessionId: string, moveId: string, options?: CloudCpRequestOptions): Promise<CloudCpMoveExportResult>;
 	/** Chat messages across the organization's sessions the caller can see that contain query. */
 	searchChats(orgId: string, query: { query: string; limit?: number }, options?: CloudCpRequestOptions): Promise<CloudCpChatSearchResponse>;
 	/** Deletes one artifact file from cloud storage and the session's worker. */
@@ -438,7 +452,8 @@ export interface CloudCpClient {
 	deleteSession(
 		orgId: string,
 		sessionId: string,
-		options?: CloudCpRequestOptions & { deleteArtifacts?: boolean },
+		/** moveId deletes the session only as the copy that move's export left (409 MOVE_COPY_IN_USE otherwise). */
+		options?: CloudCpRequestOptions & { deleteArtifacts?: boolean; moveId?: string },
 	): Promise<CloudCpSessionDeletedResponse>;
 	resumeSession(
 		orgId: string,
@@ -753,6 +768,14 @@ export const PLAN_REFUSAL_CODES: ReadonlySet<string> = new Set([
 	"WEEKLY_LIMIT_REACHED",
 ]);
 
+/** A move export's answer: the move, or (202) the export still running with when to ask again. */
+async function moveExportResult(answer: Promise<Response>): Promise<CloudCpMoveExportResult> {
+	const response = await answer;
+	const body = (await response.json()) as CloudCpMoveExportResponse | Omit<CloudCpMoveExportRunning, "retryAfterMs">;
+	if (response.status !== 202) return body as CloudCpMoveExportResponse;
+	return { ...(body as Omit<CloudCpMoveExportRunning, "retryAfterMs">), status: "running", retryAfterMs: retryAfterMs(response.headers.get("retry-after")) };
+}
+
 /** A Retry-After header (seconds, or an HTTP date) as milliseconds from `now`. */
 export function retryAfterMs(value: string | null, now = Date.now()): number | undefined {
 	const header = value?.trim();
@@ -766,6 +789,7 @@ async function errorFromResponse(response: Response): Promise<CloudCpError> {
 	let message = `Cloud control plane request failed with status ${response.status}.`;
 	let code: string | undefined;
 	let requestId: string | undefined;
+	let details: Record<string, unknown> | undefined;
 	try {
 		const body = (await response.json()) as Partial<CloudCpErrorEnvelope> | null;
 		if (typeof body?.message === "string" && body.message !== "") {
@@ -775,10 +799,11 @@ async function errorFromResponse(response: Response): Promise<CloudCpError> {
 		}
 		if (typeof body?.code === "string" && body.code !== "") code = body.code;
 		if (typeof body?.requestId === "string" && body.requestId !== "") requestId = body.requestId;
+		if (body?.details && typeof body.details === "object" && !Array.isArray(body.details)) details = body.details;
 	} catch {
 		// Non-JSON or empty body: keep the status-derived message.
 	}
-	const options = { status: response.status, code, requestId, retryAfterMs: retryAfterMs(response.headers.get("retry-after")) };
+	const options = { status: response.status, code, requestId, details, retryAfterMs: retryAfterMs(response.headers.get("retry-after")) };
 	return response.status === 401 ? new CloudCpAuthError(message, options) : new CloudCpError(message, options);
 }
 
@@ -1031,6 +1056,12 @@ export function createCloudCpClient(options: CloudCpClientOptions): CloudCpClien
 			requestJson("POST", `/orgs/${seg(orgId)}/sessions/${seg(sessionId)}/artifacts/versions/restore`, { body: { path, version }, signal: o?.signal }),
 		restartSessionAgent: (orgId, sessionId, o) =>
 			requestJson("POST", `/orgs/${seg(orgId)}/sessions/${seg(sessionId)}/agent/restart`, { signal: o?.signal }),
+		previewSessionMove: (orgId, sessionId, o) =>
+			requestJson("GET", `/orgs/${seg(orgId)}/sessions/${seg(sessionId)}/move/preview`, { signal: o?.signal }),
+		exportSessionMove: (orgId, sessionId, o) =>
+			moveExportResult(send("POST", `/orgs/${seg(orgId)}/sessions/${seg(sessionId)}/move/export`, { query: { moveId: o?.moveId }, signal: o?.signal })),
+		getSessionMoveExport: (orgId, sessionId, moveId, o) =>
+			moveExportResult(send("GET", `/orgs/${seg(orgId)}/sessions/${seg(sessionId)}/move/export/${seg(moveId)}`, { signal: o?.signal })),
 		searchChats: (orgId, query, o) =>
 			requestJson("GET", `/orgs/${seg(orgId)}/chat-search`, { query: { q: query.query, limit: query.limit }, signal: o?.signal }),
 		deleteSessionArtifact: (orgId, sessionId, path, o) =>
@@ -1137,7 +1168,8 @@ export function createCloudCpClient(options: CloudCpClientOptions): CloudCpClien
 		cancelSessionReviews: (orgId, sessionId, o) =>
 			requestJson("POST", `/orgs/${seg(orgId)}/sessions/${seg(sessionId)}/reviews/cancel`, { signal: o?.signal }),
 		deleteSession: (orgId, sessionId, o) =>
-			requestJson("DELETE", `/orgs/${seg(orgId)}/sessions/${seg(sessionId)}${o?.deleteArtifacts ? "?deleteArtifacts=true" : ""}`, {
+			requestJson("DELETE", `/orgs/${seg(orgId)}/sessions/${seg(sessionId)}`, {
+				query: { deleteArtifacts: o?.deleteArtifacts ? "true" : undefined, moveId: o?.moveId },
 				signal: o?.signal,
 			}),
 		resumeSession: (orgId, sessionId, o) =>
