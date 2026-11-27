@@ -1,3 +1,4 @@
+import { sameSentence } from "../../../shared/chat/usage-limit";
 import type { ConversationActivity } from "./types";
 
 /**
@@ -114,8 +115,8 @@ export function turnErrorCopy(errorMessage: string, replyText?: string): TurnErr
 	const raw = errorMessage.trim();
 	const unwrapped = unwrapProviderErrorJson(raw);
 	// A bare "Internal error" names nothing; the agent's reason, when it gives
-	// one, is in data.details.
-	const message = (unwrapped ? stripRpcErrorPrefix(unwrapped.headline) : "") || readJsonStringField(raw, "details");
+	// one, is in additionalDetails or data.details.
+	const message = (unwrapped ? stripRpcErrorPrefix(unwrapped.headline) || unwrapped.detail?.trim() : "") || readJsonStringField(raw, "details");
 	if (!message || message === raw) return { raw, folded: false };
 	const reply = (replyText ?? "").trim();
 	return { headline: sameSentence(reply, message) ? undefined : message, raw, folded: true };
@@ -126,8 +127,5 @@ export function turnErrorCopy(errorMessage: string, replyText?: string): TurnErr
 function stripRpcErrorPrefix(message: string): string {
 	return message.replace(/^internal error(?::\s*|\s*$)/i, "").trim();
 }
-
-
-import { sameSentence } from "../../../shared/chat/usage-limit";
 
 export { sameSentence, usageLimitSentence } from "../../../shared/chat/usage-limit";

@@ -119,6 +119,11 @@ describe("turnErrorCopy", () => {
 		expect(turnErrorCopy(raw)).toEqual({ headline: "Mode auto is not available in this session", raw, folded: true });
 	});
 
+	it("uses additionalDetails when the message is a bare Internal error", () => {
+		const raw = 'ACP session/prompt: {"message":"Internal error","additionalDetails":"Insufficient balance. Please recharge."}';
+		expect(turnErrorCopy(raw)).toEqual({ headline: "Insufficient balance. Please recharge.", raw, folded: true });
+	});
+
 	it("shows a plain error as it is", () => {
 		expect(turnErrorCopy("  The agent process exited  ")).toEqual({ raw: "The agent process exited", folded: false });
 	});
