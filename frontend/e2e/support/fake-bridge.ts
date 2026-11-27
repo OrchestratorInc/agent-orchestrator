@@ -1,5 +1,6 @@
 import type { Page } from "@playwright/test";
 
+import type { components } from "../../src/api/schema";
 import type { UpdateSettings, UpdateStatus } from "../../src/main/update-settings";
 import type { AoBridge } from "../../src/preload";
 import type { DaemonStatus } from "../../src/shared/daemon-status";
@@ -576,6 +577,7 @@ export type FakeWorker = {
 	activity?: "active" | "idle" | "waiting_input" | "exited";
 	previewUrl?: string;
 	previewRevision?: number;
+	artifactFiles?: components["schemas"]["SessionArtifact"][];
 };
 
 export type FakeAgentOptions = {
@@ -729,6 +731,7 @@ export async function installFakeAgent(page: Page, opts: FakeAgentOptions = {}):
 				activity: { state: w.activity ?? "active", lastActivityAt: new Date().toISOString() },
 				previewUrl: w.previewUrl,
 				previewRevision: w.previewRevision,
+				artifactFiles: w.artifactFiles,
 				prs: [],
 			});
 

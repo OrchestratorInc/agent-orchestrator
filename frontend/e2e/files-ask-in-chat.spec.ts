@@ -1,4 +1,5 @@
 import type { ChatFileReference } from "../src/shared/chat-file-reference";
+import type { components } from "../src/api/schema";
 import path from "node:path";
 import { _electron as electron, expect, test as base, type ElectronApplication, type Locator, type Page } from "@playwright/test";
 import { agentReadiness } from "../src/renderer/test/agent-readiness-fixtures";
@@ -66,6 +67,8 @@ async function stubWorkspace(page: Page, id: string, fullText = after, selectedP
 		if (route.request().headers().accept?.includes("text/event-stream")) return quietEventStream(route);
 		const url = new URL(route.request().url());
 		const endpoint = url.pathname.replace(`/api/v1/sessions/${id}`, "");
+		if (endpoint === "/workspace/paths") return route.fulfill({ json: { paths: [selectedPath] } });
+		if (endpoint === "/workspace/files") return route.fulfill({ json: { files: [file] } });
 		if (endpoint === "/workspace/manifest") {
 			return route.fulfill({ json: { sessionId: id, workspaceVersion: "workspace-1", files: [file], sections: { committed: [], staged: [], unstaged: [file], untracked: [] }, commits: [], summary: { additions: 2, deletions: 1, files: 1 }, truncated: false } });
 		}
@@ -89,8 +92,8 @@ async function stubWorkspace(page: Page, id: string, fullText = after, selectedP
 }
 
 /** A Chat-mode worker with one changed file, opened on its Files tab. */
-async function openChatSession(page: Page, fullText = after, selectedPath = filePath, text = "", files = true) {
-	await installFakeAgent(page, { projectId, projectName: projectId, workers: [{ id: chatSession, provider: "codex", title: "Add to chat", mode: "chat" }] });
+async function openChatSession(page: Page, fullText = after, selectedPath = filePath, text = "", files = true, artifact?: components["schemas"]["SessionArtifact"]) {
+	await installFakeAgent(page, { projectId, projectName: projectId, workers: [{ id: chatSession, provider: "codex", title: "Add to chat", mode: "chat", artifactFiles: artifact ? [artifact] : undefined }] });
 	await page.route("http://127.0.0.1:8080/api/v1/**", async (route) => {
 		if (route.request().headers().accept?.includes("text/event-stream")) return quietEventStream(route);
 		const pathname = new URL(route.request().url()).pathname;
@@ -100,7 +103,8 @@ async function openChatSession(page: Page, fullText = after, selectedPath = file
   if (pathname === "/api/v1/agents/readiness" || pathname === "/api/v1/agents/readiness/ensure") return route.fulfill({ json: { agents: [agentReadiness("codex", "Codex")] } });
 		if (pathname === `/api/v1/projects/${projectId}`) return route.fulfill({ json: { status: "ok", project: { id: projectId, agent: "codex", config: { worker: { agent: "codex" } } } } });
 		if (pathname === `/api/v1/sessions/${chatSession}/conversation`) {
-			return route.fulfill({ json: { conversationId: "conversation-ask-in-chat", sessionId: chatSession, harness: "codex", mode: "chat", controller: "ready", supportsFileReferences: true, latestSequence: 0, oldestSequence: 0, hasMoreBefore: false, turns: text ? [{ id: "parent-turn", state: "completed", requestedAt: "2026-10-27T00:00:00Z", completedAt: "2026-10-27T00:00:01Z" }] : [], messages: text ? [{ id: "parent-message", turnId: "parent-turn", sequence: 1, revision: 0, role: "assistant", text, streaming: false, createdAt: "2026-10-27T00:00:01Z" }] : [], activities: [], settings: {} } });
+			const artifacts = artifact ? { files: [{ path: artifact.path, status: "added" }] } : undefined;
+			return route.fulfill({ json: { conversationId: "conversation-ask-in-chat", sessionId: chatSession, harness: "codex", mode: "chat", controller: "ready", supportsFileReferences: true, latestSequence: 0, oldestSequence: 0, hasMoreBefore: false, turns: text ? [{ id: "parent-turn", state: "completed", requestedAt: "2026-10-27T00:00:00Z", completedAt: "2026-10-27T00:00:01Z", artifacts }] : [], messages: text ? [{ id: "parent-message", turnId: "parent-turn", sequence: 1, revision: 0, role: "assistant", text, streaming: false, createdAt: "2026-10-27T00:00:01Z" }] : [], activities: [], settings: {} } });
 		}
 		if (pathname === `/api/v1/sessions/${chatSession}/conversation/models`) return route.fulfill({ json: { models: [], selected: {} } });
 		if (pathname === `/api/v1/sessions/${chatSession}/conversation/skills`) return route.fulfill({ json: { skills: [] } });
@@ -114,6 +118,25 @@ async function openChatSession(page: Page, fullText = after, selectedPath = file
 	await expect(composer).toBeVisible();
 	return { inspector, composer, sentToChat };
 }
+
+test("a Markdown artifact thumbnail hides behind a file tab @T0", async ({ page }) => {
+	const name = "report.md";
+	const rawUrl = `http://127.0.0.1:8080/artifact-fixture/${name}`;
+	const markdown = "# Draft artifact preview\n\nA Markdown report from this turn.";
+	await page.route(rawUrl, (route) => route.fulfill({ contentType: "text/plain", body: markdown }));
+	await openChatSession(page, after, filePath, `See \`${filePath}\`.`, false, {
+		kind: "markdown", name, path: name, rawUrl, size: markdown.length, updatedAt: "2026-10-27T00:00:01Z",
+	});
+	const preview = page.getByText("Draft artifact preview", { exact: true });
+	await expect(preview).toBeVisible();
+	await page.getByRole("button", { name: `Open ${filePath} in Files` }).click();
+	const file = page.getByTestId("session-file-workspace");
+	await expect(file.getByText("value1", { exact: true })).toBeVisible();
+	await expect(preview).toBeAttached();
+	await expect(preview).toBeHidden();
+	await page.getByRole("tab", { name: /^Add to chat/ }).click();
+	await expect(preview).toBeVisible();
+});
 
 async function openFilesTab(page: Page, id: string, project: string, selectedPath = filePath) {
 	await page.goto(`${origin}/#/projects/${project}/sessions/${id}`, { waitUntil: "domcontentloaded" });

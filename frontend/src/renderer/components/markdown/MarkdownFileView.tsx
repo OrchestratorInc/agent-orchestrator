@@ -200,8 +200,9 @@ export function MarkdownFileView({
 				) : null}
 				{/* github-markdown-css hangs each heading's `.anchor` link icon 20px
 				    into the left gutter (`margin-left: -20px`), so the inline padding
-				    must be wider than that or the scroll container clips the icon. */}
-				<div className={cn("markdown-body ao-markdown", thumbnail && "min-h-full")} ref={bodyRef} style={{ visibility: fontsReady ? "visible" : "hidden" }}>
+				    must be wider than that or the scroll container clips the icon.
+				    Once the fonts are ready, inherit the surrounding pane's visibility. */}
+				<div className={cn("markdown-body ao-markdown", thumbnail && "min-h-full")} ref={bodyRef} style={fontsReady ? undefined : { visibility: "hidden" }}>
 					<Markdown remarkPlugins={renderMath ? MATH_REMARK_PLUGINS : REMARK_PLUGINS} rehypePlugins={REHYPE_PLUGINS} components={components}>
 						{thumbnail ? body.slice(0, 4000) : body}
 					</Markdown>
