@@ -78,10 +78,12 @@ type APIDeps struct {
 	// GET /api/v1/telemetry/identity and updated by the desktop over loopback.
 	TelemetryIdentity ports.TelemetryIdentityStore
 	LifetimeSessions  func(context.Context) (int64, error)
-	Mobile            *controllers.MobileController
-	BrowserLive       *BrowserLiveHub
-	Browser           controllers.BrowserService
-	BrowserChrome     controllers.BrowserChromeService
+	// DaemonVersion is this daemon's release, reported to a paired phone.
+	DaemonVersion string
+	Mobile        *controllers.MobileController
+	BrowserLive   *BrowserLiveHub
+	Browser       controllers.BrowserService
+	BrowserChrome controllers.BrowserChromeService
 	// Panes relays split-pane requests from agents to the desktop window.
 	Panes controllers.PaneService
 	// PaneTerminals lets an agent type into and read its session's shell terminals.
@@ -269,7 +271,7 @@ func newAPIWithLogger(cfg config.Config, deps APIDeps, log *slog.Logger) *API {
 		identity:      &controllers.IdentityController{HostID: deps.HostID},
 		endpoints:     &controllers.EndpointsController{Source: deps.Endpoints},
 		hostUpdate:    &controllers.HostUpdateController{Updater: deps.HostUpdate},
-		telemetryID:   &controllers.TelemetryIdentityController{Source: deps.TelemetryIdentity, LifetimeSessions: deps.LifetimeSessions},
+		telemetryID:   &controllers.TelemetryIdentityController{Source: deps.TelemetryIdentity, LifetimeSessions: deps.LifetimeSessions, DaemonVersion: deps.DaemonVersion},
 		systemInstall: &controllers.SystemInstallController{Installer: deps.Installer},
 		computerUse:   &controllers.ComputerUseController{Svc: deps.ComputerUse},
 		agentAuth:     &controllers.AgentAuthController{Svc: deps.AgentAuth},

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { isFullSwipe, WORKER_ACTION_REVEAL_WIDTH } from "./worker-row-swipe-model";
+import { isFullSwipe, swipeOffset, swipeReleaseTarget, WORKER_ACTION_REVEAL_WIDTH } from "./worker-row-swipe-model";
 
 describe("isFullSwipe", () => {
 	it("never archives a drag that only opens the rail", () => {
@@ -25,5 +25,41 @@ describe("isFullSwipe", () => {
 	it("ignores rightward drags and a row that has not been measured", () => {
 		expect(isFullSwipe(300, 390)).toBe(false);
 		expect(isFullSwipe(-300, 0)).toBe(false);
+	});
+});
+
+// The row's own swipe follows Gesture Handler's swipeable, which it replaced
+// to keep a resting row cheap: the same reach, the same toss and threshold.
+describe("swipeOffset", () => {
+	it("follows the finger leftward from where the drag began, never rightward past rest", () => {
+		expect(swipeOffset(0, -40, true)).toBe(-40);
+		expect(swipeOffset(-WORKER_ACTION_REVEAL_WIDTH, 30, true)).toBe(-42);
+		expect(swipeOffset(0, 50, true)).toBe(0);
+		expect(swipeOffset(-WORKER_ACTION_REVEAL_WIDTH, 120, true)).toBe(0);
+	});
+
+	it("stops at the rail unless the row can be swiped away", () => {
+		expect(swipeOffset(0, -300, false)).toBe(-WORKER_ACTION_REVEAL_WIDTH);
+		expect(swipeOffset(0, -300, true)).toBe(-300);
+	});
+});
+
+describe("swipeReleaseTarget", () => {
+	it("opens a row let go past half the rail, and settles a shorter drag back", () => {
+		expect(swipeReleaseTarget(-37, 0)).toBe(-WORKER_ACTION_REVEAL_WIDTH);
+		expect(swipeReleaseTarget(-35, 0)).toBe(0);
+	});
+
+	it("counts a flick's speed, as a toss of a twentieth of it", () => {
+		expect(swipeReleaseTarget(-20, -400)).toBe(-WORKER_ACTION_REVEAL_WIDTH);
+		expect(swipeReleaseTarget(-40, 200)).toBe(0);
+	});
+
+	// From the open rail (-72) the swipeable kept a row open unless the drag
+	// carried it back more than half the rail: the same line, measured from rest.
+	it("keeps an open row open unless the drag carries it back past half the rail", () => {
+		expect(swipeReleaseTarget(-WORKER_ACTION_REVEAL_WIDTH + 30, 0)).toBe(-WORKER_ACTION_REVEAL_WIDTH);
+		expect(swipeReleaseTarget(-WORKER_ACTION_REVEAL_WIDTH + 37, 0)).toBe(0);
+		expect(swipeReleaseTarget(-WORKER_ACTION_REVEAL_WIDTH + 10, 600)).toBe(0);
 	});
 });

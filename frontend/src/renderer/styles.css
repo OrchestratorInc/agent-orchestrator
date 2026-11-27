@@ -7761,7 +7761,7 @@ html[data-new-desktop-ui] .button-raised:not(.button-classic):is(.settings-optio
 
 /* In dark the trigger's face is itself a light tint, and any edge on top of it
  * adds up into a ring, so the face alone draws the shape. */
-html[data-new-desktop-ui]:not([data-theme="light"]) .button-raised:not(.button-classic):is(.settings-option-trigger, [data-slot="select-trigger"], [aria-haspopup="menu"], [aria-haspopup="listbox"], [role="combobox"]) {
+html[data-new-desktop-ui]:not([data-theme="light"]) .button-raised:not(.button-classic):is(.settings-option-trigger, [aria-haspopup="menu"], [aria-haspopup="listbox"], [role="combobox"]):not([data-slot="select-trigger"]) {
 	border-color: transparent;
 }
 
@@ -8193,7 +8193,7 @@ html[data-new-desktop-ui] .menu-search-input {
  * stays square: a row that opens a group draws the divider as its top edge,
  * which a rounded box would curl at both ends. Rows without a ::before box
  * (settings menus) paint the box itself, so they keep the row corner. */
-html[data-new-desktop-ui] .settings-menu-surface :is([role="menuitem"], [role="menuitemcheckbox"], [role="menuitemradio"])[class*="before:absolute"] {
+html[data-new-desktop-ui] .settings-menu-surface :is([role="menuitem"], [role="menuitemcheckbox"], [role="menuitemradio"], [role="option"])[class*="before:absolute"] {
 	border-radius: 0;
 }
 
@@ -8216,12 +8216,11 @@ html[data-new-desktop-ui] [data-slot="select-item"] {
 	color: var(--foreground);
 }
 
-html[data-new-desktop-ui] [data-slot="select-item"]:is(:focus, [data-highlighted]):not([data-disabled]),
 html[data-new-desktop-ui] [data-slot="command"] [role="option"][aria-selected="true"] {
 	background-color: color-mix(in oklab, var(--foreground) 12%, transparent);
 }
 
-html[data-new-desktop-ui] .settings-menu-surface :is([role="menuitem"], [role="menuitemcheckbox"], [role="menuitemradio"]):is(:focus, [data-highlighted], [data-state="open"]):not([data-disabled])::before {
+html[data-new-desktop-ui] .settings-menu-surface :is([role="menuitem"], [role="menuitemcheckbox"], [role="menuitemradio"], [role="option"]):is(:focus, [data-highlighted], [data-state="open"]):not([data-disabled])::before {
 	background-color: color-mix(in oklab, var(--foreground) 12%, transparent);
 }
 
@@ -8313,4 +8312,81 @@ html[data-new-desktop-ui] .switch-inset {
 
 html[data-new-desktop-ui]:not([data-theme="light"]) .switch-inset:active:not(:disabled) {
 	--switch-face: color-mix(in oklab, var(--switch-color), #fff 14%);
+}
+
+/* Fields share one recipe: the input fill, a 3% edge (the theme's settings
+ * input edge), the control corner and 13px text, and focus brings the edge up
+ * to a soft ring. Only the height and a leading icon tell the shapes apart:
+ * field 32px, compact 28px (in menus and rows), search (compact with an icon;
+ * a top bar's takes the bar's control height), dropdown (a 32px field with
+ * a chevron at every size, so it lines up with the inputs beside it), text
+ * area and inline edit. A self-styled field
+ * joins with `data-field` (field, compact, search, textarea, inline); the
+ * browser's address bar and the chat composer keep their own. The lists sit
+ * in :where() so a field's own state rules (a dropdown's hover face, the
+ * overlay search corner) still win. */
+html[data-new-desktop-ui] {
+	--field-fill: var(--color-bg-settings-input);
+	--field-edge: var(--color-border-settings-input);
+	--field-edge-focus: color-mix(in oklab, var(--ring) 55%, transparent);
+	/* A caller that pins its own corner (`rounded-[var(--field-radius,…)]!`) follows this. */
+	--field-radius: var(--radius-control);
+}
+
+html[data-new-desktop-ui] :where([data-slot="input"], [data-slot="textarea"], [data-slot="select-trigger"], .settings-field-control, .settings-inline-input, .settings-inline-edit-input, .inspector-field-input, .menu-search-input, [data-field]:not([data-field="inline"])):where(:not(.cursor-chat-composer *, .browser-panel__url-input, [data-field="none"])) {
+	border-width: 1px;
+	border-style: solid;
+	border-color: var(--field-edge);
+	background-color: var(--field-fill);
+	border-radius: var(--radius-control);
+}
+
+html[data-new-desktop-ui] :where([data-slot="input"], [data-slot="textarea"], [data-slot="select-trigger"], .settings-field-control, .settings-inline-input, .settings-inline-edit-input, .inspector-field-input, .menu-search-input, [data-field]:not([data-field="inline"])):where(:not(.cursor-chat-composer *, .browser-panel__url-input, [data-field="none"], .font-mono)) {
+	font-size: var(--font-size-base);
+}
+
+html[data-new-desktop-ui] :where([data-slot="input"], [data-slot="textarea"], .settings-field-control, .settings-inline-input, .settings-inline-edit-input, .inspector-field-input, .menu-search-input, [data-field]:not([data-field="inline"])):where(:not(.cursor-chat-composer *, .browser-panel__url-input, [data-field="none"])):is(:focus-visible, :focus-within) {
+	border-color: var(--field-edge-focus);
+	outline: none;
+}
+
+/* Heights: 32px fields, 28px compact and search fields. */
+html[data-new-desktop-ui] :is(.settings-field-control:not(textarea), [data-slot="select-trigger"]:not([data-size="auto"], [data-field]), [data-field="field"]) {
+	height: var(--size-control-form);
+}
+
+html[data-new-desktop-ui] :is(.menu-search-input, [data-field="compact"], [data-field="search"]) {
+	height: var(--size-control-md);
+}
+
+/* Text areas pad like a field's line and grow from their own minimum. */
+html[data-new-desktop-ui] :is([data-slot="textarea"], textarea.settings-field-control, [data-field="textarea"]) {
+	padding: var(--space-2) var(--space-3);
+}
+
+/* A dropdown field is a field, not a raised button: its face is the field
+ * fill, so hover and open still brighten it from there, and it takes the
+ * field edge over the dropdown triggers' 2% one. */
+html[data-new-desktop-ui] .button-raised:not(.button-classic)[data-slot="select-trigger"] {
+	--button-color: var(--field-fill);
+	border-color: var(--field-edge);
+	color: var(--foreground);
+	font-weight: var(--font-weight-normal);
+}
+
+html[data-new-desktop-ui] .button-raised:not(.button-classic)[data-slot="select-trigger"]:focus-visible {
+	border-color: var(--field-edge-focus);
+	outline: none;
+}
+
+/* An inline edit (a tab or title being renamed) keeps its own box and draws
+ * the field's focus ring instead of the accent. */
+html[data-new-desktop-ui] [data-field="inline"] {
+	--tw-ring-color: var(--field-edge-focus);
+}
+
+/* A wrapper field (search with an icon, a form around an input) owns the box;
+ * the input inside it uses the field's text size. */
+html[data-new-desktop-ui] :is([data-field="field"], [data-field="compact"], [data-field="search"]) :where(input:not(.font-mono)) {
+	font-size: var(--font-size-base);
 }

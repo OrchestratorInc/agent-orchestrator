@@ -4,6 +4,7 @@ import { useGlobalSearchParams, usePathname, useRootNavigationState, useRouter, 
 import { useEffect, useRef } from "react";
 import { AppState } from "react-native";
 import { launchNotificationResponse } from "./launchNotification";
+import { reportOpenedBy, sessionTargetInPath } from "./telemetry/uiUsageRegistry";
 import { LAST_ROUTE_KEY, parseLastRoute, restorableHref, routeHref, routeToRestore, type LastRoute } from "./lastRoute";
 
 /**
@@ -73,7 +74,12 @@ export function RouteRestorer() {
 				if (!active) return;
 				const launchedElsewhere = Boolean(url || response) || navigated.current || latest.current.pathname !== "/";
 				reopen = launchedElsewhere ? null : routeToRestore(parseLastRoute(raw), Date.now());
-				if (reopen) router.push(reopen as Href);
+				if (reopen) {
+					// A session reopened here counts as restored, not opened from the board.
+					const target = sessionTargetInPath(reopen);
+					if (target) reportOpenedBy("restore", target);
+					router.push(reopen as Href);
+				}
 			} catch {
 				// A launch check that failed reopens nothing: the app stays where it is.
 				reopen = null;
