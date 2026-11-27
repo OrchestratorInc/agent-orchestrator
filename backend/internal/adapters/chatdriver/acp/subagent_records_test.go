@@ -301,7 +301,7 @@ func TestRecordDeliveryGivesUpAndRedeliversInTheSameTurn(t *testing.T) {
 	type result struct{ busy, ok bool }
 	done := make(chan result, 1)
 	go func() {
-		busy, ok := conv.readSubagentRecords(ctx, follower)
+		busy, ok := conv.readSubagentRecords(ctx, follower, "turn-1")
 		done <- result{busy, ok}
 	}()
 	// Cancel only once the first event fills the buffer, so the second is the
@@ -324,7 +324,7 @@ func TestRecordDeliveryGivesUpAndRedeliversInTheSameTurn(t *testing.T) {
 	if first := <-conv.events; first.Text != "One." {
 		t.Fatalf("first = %q", first.Text)
 	}
-	if busy, _ := conv.readSubagentRecords(context.Background(), follower); busy {
+	if busy, _ := conv.readSubagentRecords(context.Background(), follower, conv.activeTurn); busy {
 		t.Fatal("still busy after the backlog went out")
 	}
 	if second := <-conv.events; second.Text != "Two." {
@@ -335,7 +335,7 @@ func TestRecordDeliveryGivesUpAndRedeliversInTheSameTurn(t *testing.T) {
 func TestRecordBacklogIsNeverFiledOnALaterTurn(t *testing.T) {
 	conv, follower := recordTestConversation("turn-2", 4, &listReader{})
 	follower.backlog, follower.backlogTurn = []RecordedUpdate{said("child", "m1", "Late.")}, "turn-1"
-	conv.readSubagentRecords(context.Background(), follower)
+	conv.readSubagentRecords(context.Background(), follower, conv.activeTurn)
 	if len(follower.backlog) != 0 || len(conv.events) != 0 {
 		t.Fatalf("turn-1's backlog must be dropped, not filed on turn-2: %d left, %d sent", len(follower.backlog), len(conv.events))
 	}
@@ -344,12 +344,12 @@ func TestRecordBacklogIsNeverFiledOnALaterTurn(t *testing.T) {
 func TestRecordedRunEndReleasesItsMessages(t *testing.T) {
 	reader := &listReader{updates: []RecordedUpdate{said("child", "m1", "Working.")}}
 	conv, follower := recordTestConversation("turn-1", 4, reader)
-	conv.readSubagentRecords(context.Background(), follower)
+	conv.readSubagentRecords(context.Background(), follower, conv.activeTurn)
 	if follower.said[lengthPrefixedTuple("child", "")]["m1"] != "Working." {
 		t.Fatalf("a running child's message must be held, got %v", follower.said)
 	}
 	reader.updates = []RecordedUpdate{{Launch: "launch", Child: "child", End: &RecordedEnd{ID: "run-1", Status: RecordedCompleted}}}
-	conv.readSubagentRecords(context.Background(), follower)
+	conv.readSubagentRecords(context.Background(), follower, conv.activeTurn)
 	if len(follower.said) != 0 {
 		t.Fatalf("an ended run's messages are still held: %v", follower.said)
 	}
@@ -436,7 +436,7 @@ func TestRecordedRunEndKeepsTheNextRunsMessage(t *testing.T) {
 		part("run-2", " Part two."),
 	}}
 	conv, follower := recordTestConversation("turn-1", 8, reader)
-	conv.readSubagentRecords(context.Background(), follower)
+	conv.readSubagentRecords(context.Background(), follower, conv.activeTurn)
 	var last ports.ChatEvent
 	for len(conv.events) > 0 {
 		last = <-conv.events
@@ -480,5 +480,40 @@ func TestCancelledRecordIsNotCapturedIntoHistory(t *testing.T) {
 	if !conv.emitWithin(context.Background(), ports.ChatEvent{Kind: ports.ChatEventActivityCompleted, ProviderItemID: "live"}) ||
 		len(conv.history.events) != 1 {
 		t.Fatal("a live record is still captured while history is being replayed")
+	}
+}
+
+// An old read that only comes back once the next turn runs keeps its records
+// for its own turn: they are never delivered on the new one.
+func TestALateReadNeverFilesOnTheNextTurn(t *testing.T) {
+	old := subagentRecordDrainFor
+	subagentRecordDrainFor = 50 * time.Millisecond
+	t.Cleanup(func() { subagentRecordDrainFor = old })
+	reader := &blockingReader{entered: make(chan struct{}), release: make(chan struct{}),
+		updates: []RecordedUpdate{said("child", "m1", "Late.")}}
+	conv, follower := recordTestConversation("turn-1", 4, reader)
+	conv.pollSubagentRecords()
+	<-reader.entered
+	conv.drainSubagentRecords()
+	conv.mu.Lock()
+	conv.activeTurn = "turn-2"
+	conv.mu.Unlock()
+	close(reader.release)
+	time.Sleep(50 * time.Millisecond)
+	conv.readSubagentRecords(context.Background(), follower, "turn-2")
+	if len(conv.events) != 0 {
+		t.Fatalf("turn-1's record was filed on turn-2: %d events", len(conv.events))
+	}
+}
+
+// A read started for a turn that is no longer running does nothing.
+func TestAReadForAnEndedTurnDoesNothing(t *testing.T) {
+	reader := &listReader{updates: []RecordedUpdate{said("child", "m1", "Stale.")}}
+	conv, follower := recordTestConversation("turn-2", 4, reader)
+	if _, ok := conv.readSubagentRecords(context.Background(), follower, "turn-1"); ok {
+		t.Fatal("a read for turn-1 ran while turn-2 is active")
+	}
+	if len(conv.events) != 0 || reader.updates == nil {
+		t.Fatal("a read for an ended turn must not read or deliver")
 	}
 }

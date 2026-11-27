@@ -134,10 +134,11 @@ type recordFollower struct {
 	stop   chan struct{}
 	cancel context.CancelFunc
 	done   chan struct{}
-	// emitMu is held across each record's last check of its context and its
-	// send, so once the last read has cancelled every reader and taken emitMu,
-	// no record of that turn can still go out.
-	emitMu sync.Mutex
+	// emitMu is held across each record's last checks and its send. The last
+	// read of a turn marks it closed under emitMu, so once it has, no record
+	// of that turn can still go out, however late its read comes back.
+	emitMu     sync.Mutex
+	closedTurn string
 	// readMu serializes reads and Busy, so the poll and the last read never
 	// interleave. Held without mu. The fields below are guarded by it.
 	readMu chan struct{}
@@ -150,11 +151,12 @@ type recordFollower struct {
 	backlogTurn string
 }
 
-// waitForSends returns once no record is mid-send: with every reader's
-// context cancelled, none can start another.
-func (f *recordFollower) waitForSends() {
+// closeTurn ends delivery for turnID: it waits for a send in flight, and no
+// record of that turn is sent after it returns.
+func (f *recordFollower) closeTurn(turnID string) {
 	f.emitMu.Lock()
-	defer f.emitMu.Unlock()
+	f.closedTurn = turnID
+	f.emitMu.Unlock()
 }
 
 func recordedCallView(tool *toolState) RecordedCall {
@@ -229,7 +231,8 @@ func (c *conversation) followRecordsOnReattachLocked() {
 func (c *conversation) pollSubagentRecords() {
 	c.mu.Lock()
 	follower := c.recordFollower
-	if follower == nil || follower.stop != nil || c.activeTurn == "" || c.settlingTurn == c.activeTurn {
+	turnID := c.activeTurn
+	if follower == nil || follower.stop != nil || turnID == "" || c.settlingTurn == turnID {
 		c.mu.Unlock()
 		return
 	}
@@ -250,7 +253,7 @@ func (c *conversation) pollSubagentRecords() {
 		defer ticker.Stop()
 		// The first read is at once: a child can start, and finish, within a tick.
 		for {
-			c.readSubagentRecords(ctx, follower)
+			c.readSubagentRecords(ctx, follower, turnID)
 			select {
 			case <-ctx.Done():
 				return
@@ -270,6 +273,7 @@ func (c *conversation) drainSubagentRecords() {
 		c.mu.Unlock()
 		return
 	}
+	turnID := c.activeTurn
 	stop, pollCancel, done := follower.stop, follower.cancel, follower.done
 	follower.stop, follower.cancel, follower.done = nil, nil, nil
 	c.mu.Unlock()
@@ -281,7 +285,7 @@ func (c *conversation) drainSubagentRecords() {
 		if pollCancel != nil {
 			pollCancel()
 		}
-		follower.waitForSends()
+		follower.closeTurn(turnID)
 	}()
 	if stop != nil {
 		// Stopping cancels the poll's read and delivery, so it returns promptly.
@@ -298,7 +302,7 @@ func (c *conversation) drainSubagentRecords() {
 		type result struct{ busy, ok bool }
 		read := make(chan result, 1)
 		go func() {
-			busy, ok := c.readSubagentRecords(ctx, follower)
+			busy, ok := c.readSubagentRecords(ctx, follower, turnID)
 			read <- result{busy, ok}
 		}()
 		var got result
@@ -321,21 +325,27 @@ func (c *conversation) drainSubagentRecords() {
 	c.dropRecordBacklog(follower)
 }
 
-// readSubagentRecords reads and delivers what is new, and reports whether a
-// child is still mid-run. ok is false when ctx ended before the read could
-// take its turn.
-func (c *conversation) readSubagentRecords(ctx context.Context, follower *recordFollower) (busy, ok bool) {
+// readSubagentRecords reads and delivers what is new for turnID, the turn the
+// read was started for, and reports whether a child is still mid-run. ok is
+// false when the read could not run for that turn: ctx ended, or another turn
+// is running by the time it got readMu.
+func (c *conversation) readSubagentRecords(ctx context.Context, follower *recordFollower, turnID string) (busy, ok bool) {
 	select {
 	case follower.readMu <- struct{}{}:
 	case <-ctx.Done():
 		return false, false
 	}
 	defer func() { <-follower.readMu }()
+	// Both cases above can be ready at once: a cancelled read that won readMu
+	// must not read for whatever turn runs now.
+	if ctx.Err() != nil {
+		return false, false
+	}
 	c.mu.Lock()
-	turnID := c.activeTurn
+	active := c.activeTurn
 	c.mu.Unlock()
-	if turnID == "" {
-		return false, true
+	if turnID == "" || active != turnID {
+		return false, false
 	}
 	if len(follower.backlog) > 0 && follower.backlogTurn != turnID {
 		// Held for a turn that has ended: it is that turn's, not this one's.
@@ -465,11 +475,14 @@ func (c *conversation) emitRecordedUpdate(ctx context.Context, turnID string, fo
 	return true
 }
 
-// emitRecord delivers one recorded event under the follower's emitMu: see
-// recordFollower.emitMu.
+// emitRecord delivers one recorded event under the follower's emitMu, unless
+// its turn has closed: see recordFollower.emitMu.
 func (c *conversation) emitRecord(ctx context.Context, follower *recordFollower, event ports.ChatEvent) bool {
 	follower.emitMu.Lock()
 	defer follower.emitMu.Unlock()
+	if event.ProviderTurnID != "" && event.ProviderTurnID == follower.closedTurn {
+		return false
+	}
 	return c.emitWithin(ctx, event)
 }
 
