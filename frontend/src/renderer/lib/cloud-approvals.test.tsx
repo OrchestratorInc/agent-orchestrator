@@ -148,9 +148,29 @@ describe("cloud approvals", () => {
 		await waitFor(() => expect(reader.result.current.map((request) => request.id)).toEqual(["a-1"]));
 		expect(hooks.listBrowserApprovals.mock.calls).toEqual([["org-1", "s-1"]]);
 		shell.unmount();
-		// The reader follows the shared cache, not the shell's lifetime.
-		act(() => client.removeQueries({ queryKey: ["approvals", "pending", "cloud"] }));
+		// Nothing reads it any more (signed out, say): its last list is not shown,
+		// though the query stays in the cache.
 		await waitFor(() => expect(reader.result.current).toEqual([]));
+		expect(client.getQueryCache().findAll({ queryKey: ["approvals", "pending", "cloud"] }).length).toBeGreaterThan(0);
+		client.clear();
+	});
+
+	it("drops a session's request once the live reader stops reading that session", async () => {
+		const future = new Date(Date.now() + 60_000).toISOString();
+		hooks.sessions = [{ id: "s-stop", cloud: { orgId: "org-1", desiredState: "running", observedState: "running" } }];
+		hooks.listBrowserApprovals.mockReset().mockImplementation(async (_org: string, sessionId: string) => ({
+			pending: sessionId === "s-stop" ? [cloudRequest({ id: "stopping", sessionId: "s-stop", expiresAt: future })] : [],
+		}));
+		const client = new QueryClient();
+		const wrapper = ({ children }: { children: ReactNode }) => <QueryClientProvider client={client}>{children}</QueryClientProvider>;
+		const reader = renderHook(() => useCloudPendingApprovals(), { wrapper });
+		const shell = renderHook(() => useLiveCloudPendingApprovals(), { wrapper });
+		await waitFor(() => expect(reader.result.current.map((request) => request.id)).toEqual(["stopping"]));
+		// Stopped from the sidebar: it leaves the running sessions the reader reads.
+		hooks.sessions = [{ id: "s-stop", cloud: { orgId: "org-1", desiredState: "stopped", observedState: "stopped" } }];
+		shell.rerender();
+		await waitFor(() => expect(reader.result.current).toEqual([]));
+		shell.unmount();
 		client.clear();
 	});
 

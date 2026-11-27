@@ -186,9 +186,16 @@ function traceRead(sessionId: string, count: number) {
 
 const CLOUD_PENDING_PREFIX = ["approvals", "pending", "cloud"] as const;
 
-/** Every cloud session's pending requests in the query cache, as the control plane last listed them. */
+/**
+ * The pending requests of every cloud session the live reader still reads, as
+ * the control plane last listed them. A session it stopped reading (stopped,
+ * gone, or another account's after a sign-out or org switch) keeps its query
+ * in the cache for a while with no observer; its list is not shown.
+ */
 export function cachedCloudPendingApprovals(queryClient: QueryClient): PendingApproval[] {
-	return queryClient.getQueriesData<PendingApproval[]>({ queryKey: CLOUD_PENDING_PREFIX }).flatMap(([, data]) => data ?? []);
+	return queryClient
+		.getQueriesData<PendingApproval[]>({ queryKey: CLOUD_PENDING_PREFIX, type: "active" })
+		.flatMap(([, data]) => data ?? []);
 }
 
 /**
