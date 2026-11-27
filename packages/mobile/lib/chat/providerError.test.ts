@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { errorActivityDuplicatesTurn, providerErrorCopy } from "./providerError";
+import { errorActivityDuplicatesTurn, providerErrorCopy, turnErrorCopy } from "./providerError";
 import type { ConversationActivity } from "./types";
 
 const activity = (over: Partial<ConversationActivity>): ConversationActivity =>
@@ -84,5 +84,42 @@ describe("errorActivityDuplicatesTurn", () => {
 	it("only ever drops error activities", () => {
 		const a = activity({ activityKind: "command", summary: text });
 		expect(errorActivityDuplicatesTurn(a, text)).toBe(false);
+	});
+});
+
+describe("turnErrorCopy", () => {
+	// The failure in the bug report: Claude over ACP, its usage limit wrapped in
+	// a JSON-RPC error and followed by the adapter's stderr.
+	const acpUsageLimit = 'ACP prompt: {"code":-32603,"message":"Internal error: You\'ve hit your 5-hour limit · resets 11am (UTC)","data":{"errorKind":"rate_limit"}}: [session/query] sessionId=c8cf34f2 resume=none apiType=native baseUrl=native (node:9482) [CLAUDE_SDK_CAN_USE_TOOL_SHADOWED] Warning: canUseTool will not be invoked';
+
+	it("leads with the provider's sentence and folds the transport dump", () => {
+		expect(turnErrorCopy(acpUsageLimit)).toEqual({
+			headline: "You've hit your 5-hour limit · resets 11am (UTC)",
+			raw: acpUsageLimit,
+			folded: true,
+		});
+	});
+
+	it("drops the sentence when the reply already said it", () => {
+		const copy = turnErrorCopy(acpUsageLimit, "You’ve hit your 5-hour limit · resets 11am (UTC)");
+		expect(copy.headline).toBeUndefined();
+		expect(copy).toMatchObject({ raw: acpUsageLimit, folded: true });
+	});
+
+	// Failures stored on a local daemon.
+	it("reads the reason out of a local ACP prompt failure", () => {
+		const raw = 'ACP session/prompt: {"code":-32603,"message":"Internal error: Insufficient balance or no resource package. Please recharge.","data":{"providerData":{"errorName":"APIError"}}}';
+		expect(turnErrorCopy(raw)).toEqual({ headline: "Insufficient balance or no resource package. Please recharge.", raw, folded: true });
+		const cancelled = 'ACP session/prompt: {"code":-32800,"message":"Request cancelled","data":{"error":"context canceled"}}';
+		expect(turnErrorCopy(cancelled).headline).toBe("Request cancelled");
+	});
+
+	it("uses data.details when the message is a bare Internal error", () => {
+		const raw = 'set ACP session mode "auto": {"code":-32603,"message":"Internal error","data":{"details":"Mode auto is not available in this session"}}';
+		expect(turnErrorCopy(raw)).toEqual({ headline: "Mode auto is not available in this session", raw, folded: true });
+	});
+
+	it("shows a plain error as it is", () => {
+		expect(turnErrorCopy("  The agent process exited  ")).toEqual({ raw: "The agent process exited", folded: false });
 	});
 });

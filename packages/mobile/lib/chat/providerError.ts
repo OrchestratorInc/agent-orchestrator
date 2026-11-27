@@ -47,7 +47,7 @@ function unwrapProviderErrorJson(raw: string): ProviderErrorCopy | undefined {
 	return { headline: message || additional };
 }
 
-function readJsonStringField(raw: string, field: "message" | "additionalDetails"): string {
+function readJsonStringField(raw: string, field: "message" | "additionalDetails" | "details"): string {
 	const match = new RegExp(`"${field}"\\s*:\\s*("(?:\\\\.|[^"\\\\])*")`).exec(raw);
 	if (!match?.[1]) return "";
 	try {
@@ -95,4 +95,39 @@ export function errorActivityDuplicatesTurn(activity: ConversationActivity, turn
 	const summary = String(activity.summary ?? "").trim();
 	const raw = String(activity.detail?.error ?? "").trim();
 	return [headline.trim(), detail?.trim(), summary, raw].some((value) => Boolean(value) && value === turnError);
+}
+
+/**
+ * How a failed turn's error reads under the turn.
+ *
+ * A turn's errorMessage is often the transport's whole failure, not the
+ * provider's sentence: Claude over ACP reports a usage limit as
+ * `ACP prompt: {"code":-32603,"message":"Internal error: You've hit your…"}`
+ * followed by the adapter's stderr. When the provider's message can be read
+ * out of it, that message leads and the raw text folds away as detail. The
+ * message is dropped when the turn's reply already said it, so one failure
+ * is not printed twice.
+ */
+export type TurnErrorCopy = { headline?: string; raw: string; folded: boolean };
+
+export function turnErrorCopy(errorMessage: string, replyText?: string): TurnErrorCopy {
+	const raw = errorMessage.trim();
+	const unwrapped = unwrapProviderErrorJson(raw);
+	// A bare "Internal error" names nothing; the agent's reason, when it gives
+	// one, is in data.details.
+	const message = (unwrapped ? stripRpcErrorPrefix(unwrapped.headline) : "") || readJsonStringField(raw, "details");
+	if (!message || message === raw) return { raw, folded: false };
+	const reply = (replyText ?? "").trim();
+	return { headline: sameSentence(reply, message) ? undefined : message, raw, folded: true };
+}
+
+// JSON-RPC -32603 answers carry "Internal error: " ahead of the provider's
+// text, or say only "Internal error".
+function stripRpcErrorPrefix(message: string): string {
+	return message.replace(/^internal error(?::\s*|\s*$)/i, "").trim();
+}
+
+function sameSentence(a: string, b: string): boolean {
+	const norm = (value: string) => value.replace(/[’]/g, "'").replace(/\s+/g, " ").trim().toLowerCase();
+	return Boolean(a) && norm(a) === norm(b);
 }
