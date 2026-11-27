@@ -60,7 +60,7 @@ func TestClassifySpawnFailureNamesTheUnderlyingCause(t *testing.T) {
 		{"agent signed out", agent(ports.ErrChatAuthRequired), "agent_start", "not_logged_in"},
 		{"agent binary missing inside host start", agent(adapterFailure{cause: "host_failed", err: ports.ErrAgentBinaryNotFound}), "agent_start", "binary_missing"},
 		{"agent not on PATH", agent(&exec.Error{Name: "opencode", Err: exec.ErrNotFound}), "agent_start", "binary_missing"},
-		{"windows binary unusable", agent(errors.New(`start C:\a\agent.exe: %1 is not a valid Win32 application.`)), "agent_start", "binary_missing"},
+		{"windows binary unusable", agent(errors.New(`start C:\a\agent.exe: %1 is not a valid Win32 application`)), "agent_start", "binary_missing"},
 		{"host could not write its files", agent(adapterFailure{cause: "host_failed", err: &os.PathError{Op: "open", Path: "/d", Err: syscall.EACCES}}), "agent_start", "permission"},
 		{"agent refused session/new", agent(adapterFailure{cause: "agent_error", err: errors.New(`ACP session/new: {"code":-32603,"message":"Internal error"}`)}), "agent_start", "agent_error"},
 		{"agent refused initialize", agent(adapterFailure{cause: "agent_error", err: fmt.Errorf("%w: ACP initialize: %w", ports.ErrChatDriverIncompatible, errors.New(`{"code":-32602,"message":"Invalid params"}`))}), "agent_start", "incompatible"},
