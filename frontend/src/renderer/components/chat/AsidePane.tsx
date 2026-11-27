@@ -897,6 +897,7 @@ export function CloudAsidePane({
 
 	// The tagged message (a thread its tags started): from the conversation
 	// when it is loaded, else from the thread, else from the notification.
+	// Its author comes from the thread first: a steer's events carry none.
 	const message = useMemo<AsideEntry | undefined>(() => {
 		if (comment) return undefined;
 		const event = events.find((candidate) => asideIdOf(candidate) === asideId);
@@ -906,7 +907,7 @@ export function CloudAsidePane({
 				id: `message:${event.sequence}`,
 				text: typeof payload.displayText === "string" && payload.displayText !== "" ? payload.displayText : typeof payload.text === "string" ? payload.text : "",
 				mentions: parseEventMentions(payload.mentions),
-				authorName: typeof payload.authorName === "string" ? payload.authorName : undefined,
+				authorName: thread.data?.message.authorName || (typeof payload.authorName === "string" && payload.authorName !== "" ? payload.authorName : undefined) || aside?.startedBy?.name,
 				createdAt: event.createdAt,
 			};
 		}

@@ -194,6 +194,25 @@ describe("the conversation", () => {
 		expect(screen.queryByTestId("aside-pane")).toBeNull();
 	});
 
+	it("names a tagged steer's author from its thread, as steer events carry none", async () => {
+		const steerAside = { asideId: "a-9", anchor: { sequence: 44, turnId: "turn-2", kind: "steer" as const }, replyCount: 0, unread: false, muted: false, origin: "tag" as const };
+		cloudMocks.listChatEvents.mockResolvedValue({
+			events: [...events, { sessionId: session.id, sequence: 44, type: "chat.turn_steer_requested", payload: { turnId: "turn-2", text: "Check this too", clientMessageId: "c-9", mentions: [rootMentions[0]], asideId: "a-9" }, createdAt: at }],
+			hasMore: false, nextAfter: 44, hasOlder: false,
+		});
+		cloudMocks.listSessionAsides.mockResolvedValue({ items: [thread.aside, steerAside] });
+		cloudMocks.getSessionAside.mockImplementation(async (_o: string, _s: string, asideId: string) => (asideId === "a-9"
+			? { aside: steerAside, message: { kind: "steer", sequence: 44, turnId: "turn-2", text: "Check this too", mentions: [rootMentions[0]], authorUserId: "u-ben", authorName: "Ben Synth", createdAt: at }, replies: [], hasMore: false }
+			: thread));
+		cloudMocks.markSessionAsideRead.mockImplementation(async (_o: string, _s: string, asideId: string) => (asideId === "a-9" ? steerAside : { ...thread.aside, unread: false }));
+		openAside(session.id, "a-9");
+		renderSurface();
+		const pane = await screen.findByTestId("aside-pane");
+		await waitFor(() => expect(pane.querySelector("[data-aside-entry]")).toHaveTextContent("Check this too"));
+		await waitFor(() => expect(pane.querySelector("[data-aside-entry]")).toHaveTextContent("Ben Synth"));
+		expect(pane.querySelector("[data-aside-entry] [data-person-avatar]")).not.toHaveTextContent("?");
+	});
+
 	it("goes to a tagged message from its thread, as from a comment thread", async () => {
 		const user = userEvent.setup();
 		const scroll = vi.fn();
