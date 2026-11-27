@@ -5,7 +5,7 @@
 export const REDACTED_LOCAL_URL = "[redacted-local-url]";
 export const REDACTED_LOCAL_PATH = "[redacted-local-path]";
 const EMBEDDED_LOCAL_URL_PATTERN =
-	/(?:\bfile:\/\/\/\S+|\bapp:\/\/renderer\/\S+|\bhttps?:\/\/(?:localhost|127\.0\.0\.1|\[::1\])(?::\d+)?\S*)/gi;
+	/(?:\bfile:\/\/\/\S+|\bapp:\/\/renderer\/\S+|\bhttps?:\/\/(?:(?:[a-z0-9-]+\.)*localhost|127\.0\.0\.1|\[::1\])(?::\d+)?\S*)/gi;
 
 export function isLoopbackHostname(value: string): boolean {
 	const hostname = value.toLowerCase().replace(/^\[(.*)\]$/, "$1");

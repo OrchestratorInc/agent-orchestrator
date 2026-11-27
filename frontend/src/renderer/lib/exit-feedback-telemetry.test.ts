@@ -125,5 +125,7 @@ describe("sanitizeExitFeedbackProperties", () => {
 		expect(windowsPath.text).toBe("see [redacted-local-path] now");
 		const forwardSlash = sanitizeExitFeedbackProperties("ao.exit_feedback.answered", { version: "no_project", answer: "not_a_fit", text: "Could not open C:/work/private-repo/file.txt" });
 		expect(forwardSlash.text).toBe("Could not open [redacted-local-path]");
+		const subdomain = sanitizeExitFeedbackProperties("ao.exit_feedback.answered", { version: "no_project", answer: "not_a_fit", text: "Cannot open http://workspace.localhost:3001/private-repo today" });
+		expect(subdomain.text).toBe("Cannot open [redacted-local-url] today");
 	});
 });
