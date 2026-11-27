@@ -6693,13 +6693,13 @@ const TurnGroup = memo(function TurnGroup({
 				continue;
 			}
 			const sent = list.slice(start, end);
-			const key = `${group.key}:sent:${sent[0]!.key}`;
+			const keys = sent.map((run) => `${group.key}:sent:${run.key}`);
 			out.push(
 				<BackgroundUpdates
-					key={key}
+					key={keys[0]}
 					turns={sent.map((run) => ({ at: run.items[0]!.createdAt, updates: sentUpdates(run)! }))}
-					open={Boolean(activityDisclosureOverrides[key])}
-					onOpenChange={(open) => onActivityDisclosureChange(key, open)}
+					open={keys.some((key) => activityDisclosureOverrides[key])}
+					onOpenChange={(open) => keys.forEach((key) => onActivityDisclosureChange(key, open))}
 				>
 					<WorkerUpdateRows updates={sent.flatMap((run) => sentUpdates(run)!)} />
 				</BackgroundUpdates>,
@@ -7236,7 +7236,8 @@ const turnsIn = (group: TimelineGroup): TimelineGroup[] => group.folded?.members
 function revealKeys(group: TimelineGroup, holds: (item: ConversationItem) => boolean): string[] {
 	const member = group.folded?.members.find((candidate) => candidate.items.some(holds));
 	const turn = member ?? group;
-	const inside = [`${turn.key}:worked`];
+	const target = turn.items.find(holds);
+	const inside = [`${turn.key}:worked`, ...(target ? [`${turn.key}:sent:${itemKey(target)}`] : [])];
 	if (!member) return inside;
 	const { kind } = group.folded!;
 	if (member === bannerOf(group) && (kind === "failed" || !holds(member.items[0]!))) return inside;

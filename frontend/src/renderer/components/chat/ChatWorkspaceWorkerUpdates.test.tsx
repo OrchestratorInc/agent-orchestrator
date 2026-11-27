@@ -1175,6 +1175,12 @@ describe("agent messages around the user's turns", () => {
 		expect(screen.getByText(/Draft PR created/)).toBeInTheDocument();
 	});
 
+	it("opens the line holding a message the user navigates to", async () => {
+		render(orchestratorView()(withStates(turnItems(), { h: "running" }), { id: "quote:1", text: "Draft PR created.", messageId: "s2" }));
+		await waitFor(() => expect(within(screen.getAllByTestId("background-updates")[0]!).getAllByRole("button")[0]).toHaveAttribute("aria-expanded", "true"));
+		expect(screen.getByText(/Draft PR created/)).toBeInTheDocument();
+	});
+
 	it("keeps those lines once the user's turn settles, joining what an answered approval no longer splits", () => {
 		renderSnapshot(snapshot([...turnItems(), reply("h", 3, "Shipped.")]));
 		expect(lines()).toEqual(["2 background updates · 2 workers", "3 background updates · 1 worker"]);
