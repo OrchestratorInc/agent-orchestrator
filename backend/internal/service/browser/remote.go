@@ -90,17 +90,70 @@ var remoteBenign = map[string]struct{}{
 	"help": {}, "version": {}, "record": {}, "trace": {}, "cookies": {}, "storage": {},
 }
 
+// agent-browser 0.38.1's global flags, as its --help lists them.
+var (
+	// remoteValueFlags take the next word as their value.
+	remoteValueFlags = setOf("-d", "--depth", "-s", "--selector", "--session", "--session-name", "--namespace",
+		"--screenshot-dir", "--screenshot-quality", "--screenshot-format", "--input-mode", "--color-scheme",
+		"--download-path", "--max-output", "--idle-timeout", "--model", "--restore-save", "--restore-check-url",
+		"--restore-check-text", "--device", "--user-agent", "--proxy-bypass", "--allowed-domains", "--confirm-actions")
+	// remoteBoolFlags take no value; remoteOptionalBoolFlags may be followed
+	// by an explicit true or false.
+	remoteBoolFlags = setOf("--json", "-i", "--interactive", "-c", "--compact", "--annotate", "--webgpu",
+		"--no-webmcp", "--pin-tab", "--no-pin-tab", "--content-boundaries", "--confirm-interactive",
+		"--no-auto-dialog", "-v", "--verbose", "-q", "--quiet", "--debug", "--no-ca-cert", "--help", "-h", "--version", "-V")
+	remoteOptionalBoolFlags = setOf("--headed", "--hide-scrollbars")
+	// remoteTrustFlags run script in pages or change what the browser trusts,
+	// and mean only that wherever they appear: they always ask.
+	remoteTrustFlags = setOf("--init-script", "--restore-check-fn", "--extension", "--executable-path",
+		"--allow-file-access", "--cdp", "--auto-connect", "--config", "--action-policy", "--ca-cert", "--ignore-https-errors")
+	// remoteLeadingTrustFlags do the same as global flags, but some share a
+	// name with a command option (wait --state), so they ask only up front.
+	remoteLeadingTrustFlags = setOf("--enable", "--args", "--profile", "--state", "--restore", "--headers",
+		"-p", "--provider", "--engine", "--proxy")
+)
+
+func setOf(words ...string) map[string]struct{} {
+	set := make(map[string]struct{}, len(words))
+	for _, word := range words {
+		set[word] = struct{}{}
+	}
+	return set
+}
+
 // classifyRemoteArgs reads an agent-browser command line the way the service
-// will: leading flags (and their values) are skipped, the first word is the
-// command.
+// will: leading global flags (and the values of those that take one) are
+// skipped, and the first word after them is the command. A leading flag it
+// does not know, or one that runs script or changes the browser's trust,
+// asks.
 func classifyRemoteArgs(args []string) remoteGate {
+	for _, arg := range args {
+		name, _, _ := strings.Cut(arg, "=")
+		if _, ok := remoteTrustFlags[name]; ok {
+			return remoteGate{kind: remoteAsk, action: name}
+		}
+	}
 	words := make([]string, 0, len(args))
 	for i := 0; i < len(args); i++ {
 		arg := args[i]
 		if len(words) == 0 && strings.HasPrefix(arg, "-") {
-			// A leading "--flag value" pair: skip the value too.
-			if !strings.Contains(arg, "=") && i+1 < len(args) && !strings.HasPrefix(args[i+1], "-") && arg != "--help" && arg != "-h" {
+			name, _, hasValue := strings.Cut(arg, "=")
+			if _, ok := remoteLeadingTrustFlags[name]; ok {
+				return remoteGate{kind: remoteAsk, action: name}
+			}
+			switch {
+			case hasValue:
+			case contains(remoteValueFlags, name):
 				i++
+			case contains(remoteOptionalBoolFlags, name):
+				if i+1 < len(args) && (args[i+1] == "true" || args[i+1] == "false") {
+					i++
+				}
+			case contains(remoteBoolFlags, name):
+			default:
+				// An unknown flag might take the next word as its value or not:
+				// either way the command cannot be read, so ask.
+				return remoteGate{kind: remoteAsk, action: name}
 			}
 			continue
 		}
@@ -450,6 +503,11 @@ func remoteSummary(gate remoteGate, args []string) string {
 		return "Double-click " + target
 	}
 	return "Click " + target
+}
+
+func contains(set map[string]struct{}, word string) bool {
+	_, ok := set[word]
+	return ok
 }
 
 // remoteSelectorLabel shortens a selector or ref for a prompt.
