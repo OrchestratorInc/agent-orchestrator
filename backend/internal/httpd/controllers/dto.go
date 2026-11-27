@@ -601,6 +601,11 @@ type SessionView struct {
 	// Model is the agent model this session resolved to at spawn time. Empty
 	// means the agent's default model. Pulled from the json:"-" domain Metadata.
 	Model string `json:"model,omitempty"`
+	// RoleAgent is the agent the project named for this session's role when the
+	// session's agent was last chosen, at spawn or by a switch. A project
+	// setting that differs from it changed afterwards. Omitted for sessions
+	// from before AO recorded it. Pulled from the json:"-" domain Metadata.
+	RoleAgent domain.AgentHarness `json:"roleAgent,omitempty"`
 	// LastUserMessageAt is the latest real user-authored task direction time.
 	// Lifecycle and internal automation updates do not advance it.
 	LastUserMessageAt *time.Time `json:"lastUserMessageAt,omitempty"`
@@ -650,7 +655,8 @@ type SessionArtifactView struct {
 // RegisterArtifactsRequest is the body of POST
 // /api/v1/sessions/{sessionId}/artifact-registrations.
 type RegisterArtifactsRequest struct {
-	Paths []string `json:"paths" description:"Files or bundle directories in the session's artifact directory: absolute paths, or paths relative to it."`
+	Paths      []string `json:"paths" description:"Files or bundle directories in the session's artifact directory: absolute paths, or paths relative to it."`
+	WorkingDir string   `json:"workingDir,omitempty" description:"The absolute folder the command ran in. When it is inside the artifact directory, a relative path is read from it if the file is there."`
 }
 
 // RegisterArtifactsResponse reports what a registration did, so the agent can
@@ -725,6 +731,11 @@ type SpawnSessionRequest struct {
 	// AccountID is the subscription account the agent starts on. Empty uses the
 	// provider's default account.
 	AccountID string `json:"accountId,omitempty" maxLength:"128"`
+	// FastMode and AutoCompactWindow are a Chat session's starting Fast mode
+	// and auto-compaction, saved with its new conversation. A terminal session
+	// ignores them.
+	FastMode          bool   `json:"fastMode,omitempty"`
+	AutoCompactWindow string `json:"autoCompactWindow,omitempty" enum:"200k,500k,1m,off"`
 
 	// RequestedOutput asks for a specific deliverable. artifact tells the worker to
 	// write a file in its artifact directory instead of opening a PR. Omitted is
@@ -1551,6 +1562,11 @@ type DelegateTaskRequest struct {
 	// AccountID is the subscription account the worker starts on. Empty uses
 	// the provider's default account.
 	AccountID string `json:"accountId,omitempty" maxLength:"128"`
+	// FastMode and AutoCompactWindow are a Chat session's starting Fast mode
+	// and auto-compaction, saved with its new conversation. A terminal session
+	// ignores them.
+	FastMode          bool   `json:"fastMode,omitempty"`
+	AutoCompactWindow string `json:"autoCompactWindow,omitempty" enum:"200k,500k,1m,off"`
 	// Attachments are files pasted, dropped, or picked into the delegated task
 	// brief. Each carries bytes as standard base64 (no data: URL prefix). The
 	// daemon writes them into the spawned worker worktree and appends path
@@ -2349,6 +2365,12 @@ type AgentModelsQuery struct {
 	ProjectID   string `query:"projectId,omitempty" description:"Optional cloud credential scope. Any other value, including a project identifier, is ignored: model catalogs are cached per device, not per project."`
 }
 
+// AgentSkillsQuery names the project whose own skill folders are scanned
+// alongside the user's.
+type AgentSkillsQuery struct {
+	ProjectID string `query:"projectId,omitempty" description:"Project whose skill folders are read before the user's. Omitted scans only the user's own skills."`
+}
+
 // AgentModelsRefreshQuery controls forced refresh versus cheap background
 // revalidation for a device-wide model catalog.
 type AgentModelsRefreshQuery struct {
@@ -2518,6 +2540,11 @@ type BackgroundTaskOutputResponse struct {
 	Output       string           `json:"output" description:"The most recent output: at most the last 200 lines and 64 KB, with terminal escapes and control characters removed."`
 	Truncated    bool             `json:"truncated,omitempty" description:"True when older output was left out or is missing."`
 	Stale        bool             `json:"stale,omitempty" description:"True when the provider stopped sending this task's output, so anything it printed since is missing."`
+	// LogOutsideWorkspace explains an output without the task's log.
+	LogOutsideWorkspace bool `json:"logOutsideWorkspace,omitempty" description:"True when the task's command writes its output to a log file outside the session's workspace, which is not read."`
+	// LogOmitted marks output without the task's log, which can't be shown as this run's.
+	LogOmitted bool   `json:"logOmitted,omitempty" description:"True when the task's command writes a log that output leaves out because it can't be shown as this run's: a later run writes the same file, the file was written after the run ended, or the run's final log isn't kept yet and no earlier read of it was saved. Output then holds only what the task printed itself."`
+	RunID      string `json:"runId,omitempty" description:"The run this output belongs to, when the provider gives runs their own ID. Output for another run of a reused task ID is not the requested run's."`
 }
 
 // BackgroundTaskIDParam names one provider-owned background task.
@@ -3314,10 +3341,38 @@ type IdentityResponse struct {
 	APIVersion int    `json:"apiVersion"`
 }
 
+// RemoteHostUpdateResponse is the body of GET and POST /api/v1/remote-host/update.
+// Supported is false for a host that cannot be updated from another computer.
+// Method says how a supported host updates: its self-hosted service, or the
+// desktop app on it, which closes and relaunches. Version is empty for an
+// unversioned build.
+type RemoteHostUpdateResponse struct {
+	Version   string `json:"version"`
+	Supported bool   `json:"supported"`
+	Method    string `json:"method,omitempty" enum:"service,app"`
+	State     string `json:"state" enum:"idle,updating,failed"`
+	Error     string `json:"error,omitempty"`
+}
+
+// RemoteHostUpdateRequest is the optional body of POST /api/v1/remote-host/update.
+// Version is the release the caller confirmed. A host that runs the desktop
+// app installs only that version; a self-hosted host ignores it.
+type RemoteHostUpdateRequest struct {
+	Version string `json:"version,omitempty"`
+}
+
+// RemoteHostUpdateCheckResponse is the body of POST /api/v1/remote-host/update/check:
+// the version a host that runs the desktop app installs next.
+type RemoteHostUpdateCheckResponse struct {
+	Version string `json:"version"`
+}
+
 // TelemetryIdentityResponse is the body of GET /api/v1/telemetry/identity. A
 // phone paired to this desktop identifies only a signed-in AO Cloud user ID.
 // Without one, DistinctID is the desktop install ID and stays anonymous. The
-// phone honors OptedOut. This response carries no email.
+// phone honors OptedOut. This response carries no email. DaemonVersion is the
+// daemon's release (the same value its own Sentry events use), sent even when
+// opted out so the phone can tell which daemon a failure came from.
 type TelemetryIdentityResponse struct {
 	DistinctID       string `json:"distinctId"`
 	InstallID        string `json:"installId,omitempty"`
@@ -3326,6 +3381,7 @@ type TelemetryIdentityResponse struct {
 	GitHubLogin      string `json:"githubLogin,omitempty"`
 	OptedOut         bool   `json:"optedOut"`
 	LifetimeSessions *int64 `json:"lifetimeSessions,omitempty"`
+	DaemonVersion    string `json:"daemonVersion,omitempty"`
 }
 
 // LinkPreviewQuery selects the external page to unfurl.
@@ -3621,7 +3677,7 @@ type ProviderSwitchRequest struct {
 	Effort            string `json:"effort,omitempty" maxLength:"64"`
 	FastMode          bool   `json:"fastMode,omitempty"`
 	Ultracode         bool   `json:"ultracode,omitempty"`
-	AutoCompactWindow string `json:"autoCompactWindow,omitempty" enum:"200k,1m"`
+	AutoCompactWindow string `json:"autoCompactWindow,omitempty" enum:"200k,500k,1m,off"`
 	// PermissionMode is the mode picked for the new agent; empty keeps the chat's.
 	PermissionMode string `json:"permissionMode,omitempty" enum:"default,accept-edits,auto,bypass-permissions"`
 	Force          bool   `json:"force,omitempty"`
@@ -3889,7 +3945,7 @@ type ConversationTurnSettingsPayload struct {
 	// The rest are described on domain.ConversationSettings.
 	FastMode          bool   `json:"fastMode,omitempty"`
 	PlanMode          bool   `json:"planMode,omitempty"`
-	AutoCompactWindow string `json:"autoCompactWindow,omitempty" enum:"200k,1m"`
+	AutoCompactWindow string `json:"autoCompactWindow,omitempty" enum:"200k,500k,1m,off"`
 }
 
 // InterruptConversationRequest is the optional body of a chat Stop. TurnID is
@@ -3942,6 +3998,7 @@ type ConversationTurnResponse struct {
 	HasRetryAttempt bool `json:"hasRetryAttempt,omitempty"`
 	// HasHumanPrompt includes durable human prompts outside this timeline page.
 	HasHumanPrompt bool                            `json:"hasHumanPrompt,omitempty"`
+	HasEventPrompt bool                            `json:"hasEventPrompt,omitempty"`
 	ErrorMessage   string                          `json:"errorMessage,omitempty"`
 	FailureCode    string                          `json:"failureCode,omitempty" enum:"provider_key_missing,auth_required"`
 	UsageLimit     *ConversationUsageLimitResponse `json:"usageLimit,omitempty"`
@@ -4501,6 +4558,8 @@ type SettingsResponse struct {
 	// ComputerUse gives new chat sessions the computer-use tools.
 	ComputerUse    bool `json:"computerUse" description:"New chat sessions get tools to drive desktop apps through Cua Driver (Settings, Computer use agents)."`
 	AccountHandoff bool `json:"accountHandoff" description:"A Chat turn refused for a usage limit moves its session to another signed-in account of the same agent with room, and the prompt is retried there once (Settings, Agent accounts)."`
+	// CommitAttribution is the Orchestrator attribution beta.
+	CommitAttribution bool `json:"commitAttribution" description:"Beta: new sessions add a Co-authored-by: orchestrator-inc[bot] trailer to commits and an Generated by Orchestrator line to PR bodies, unless the project turns them off."`
 	// SessionRetentionDays is how long an archived session is kept.
 	SessionRetentionDays int `json:"sessionRetentionDays" description:"Days an archived session whose worktree is released is kept before the daemon deletes it permanently; 0 keeps it."`
 	// CloudEnabled reports whether the cloud offering is available: on for
@@ -4549,6 +4608,11 @@ type UpdateComputerUseRequest struct {
 
 // UpdateAccountHandoffRequest turns the usage-limit account handoff on or off.
 type UpdateAccountHandoffRequest struct {
+	Enabled *bool `json:"enabled"`
+}
+
+// UpdateCommitAttributionRequest switches the Orchestrator attribution beta.
+type UpdateCommitAttributionRequest struct {
 	Enabled *bool `json:"enabled"`
 }
 
@@ -4971,4 +5035,97 @@ type ForkSessionRequest struct {
 type ForkSessionResponse struct {
 	SessionID   domain.SessionID `json:"sessionId"`
 	DisplayName string           `json:"displayName"`
+}
+
+// DevicePlatformStatus says whether this machine can run a platform's
+// simulators or emulators, and why not.
+type DevicePlatformStatus struct {
+	Platform  string `json:"platform" enum:"ios,android"`
+	Available bool   `json:"available"`
+	Reason    string `json:"reason,omitempty"`
+}
+
+// DeviceSummary is one iOS Simulator or Android Emulator.
+type DeviceSummary struct {
+	ID       string `json:"id" description:"Simulator UDID or emulator serial (AVD name while stopped)."`
+	Name     string `json:"name"`
+	Platform string `json:"platform" enum:"ios,android"`
+	Version  string `json:"version,omitempty"`
+	Booted   bool   `json:"booted"`
+}
+
+// DeviceAgentControl is the agent-device invocation pinned to a session's
+// device: run Command with a subcommand, then Args.
+type DeviceAgentControl struct {
+	Command string   `json:"command"`
+	Args    []string `json:"args"`
+}
+
+// DeviceLease is the device a session holds.
+type DeviceLease struct {
+	SessionID   domain.SessionID   `json:"sessionId"`
+	Provider    string             `json:"provider" description:"Provider serving the device, e.g. local."`
+	Device      DeviceSummary      `json:"device"`
+	Reason      string             `json:"reason" description:"Why the resolver picked this provider."`
+	AgentDevice DeviceAgentControl `json:"agentDevice"`
+	OpenedAt    time.Time          `json:"openedAt"`
+}
+
+// DeviceStatusResponse is the body of GET /api/v1/devices.
+type DeviceStatusResponse struct {
+	Available bool                   `json:"available" description:"Whether devices are available: the desktop app's Developer mode is on. While false, only status, a session's lease and releasing a device are served."`
+	Enabled   bool                   `json:"enabled" description:"Whether the user turned device support on."`
+	State     string                 `json:"state" enum:"off,installing,ready,error"`
+	Error     string                 `json:"error,omitempty"`
+	Platforms []DevicePlatformStatus `json:"platforms"`
+	Devices   []DeviceSummary        `json:"devices"`
+	Leases    []DeviceLease          `json:"leases"`
+}
+
+// DeviceAvailabilityRequest turns devices on or off; the desktop app sends its
+// Developer mode.
+type DeviceAvailabilityRequest struct {
+	Enabled *bool `json:"enabled"`
+}
+
+// DeviceAvailabilityResponse is whether devices are now available.
+type DeviceAvailabilityResponse struct {
+	Enabled bool `json:"enabled"`
+}
+
+// SessionDeviceResponse carries a session's lease, null when it has none.
+type SessionDeviceResponse struct {
+	Lease *DeviceLease `json:"lease"`
+}
+
+// OpenSessionDeviceRequest narrows the device a session wants. Both fields
+// are optional: the resolver picks from the project and this machine.
+type OpenSessionDeviceRequest struct {
+	Platform string `json:"platform,omitempty" enum:"ios,android"`
+	DeviceID string `json:"deviceId,omitempty" description:"Simulator UDID, emulator serial, or device name."`
+}
+
+// InstallSessionDeviceRequest installs a built app on the session's device.
+type InstallSessionDeviceRequest struct {
+	Path string `json:"path" minLength:"1" description:"Absolute path to a .app bundle (iOS) or .apk (Android)."`
+}
+
+// LaunchSessionDeviceRequest starts an installed app.
+type LaunchSessionDeviceRequest struct {
+	AppID string `json:"appId" minLength:"1" description:"Bundle identifier (iOS) or package name (Android)."`
+}
+
+// SetSessionDeviceQualityRequest sets how much the session's device stream costs the link.
+type SetSessionDeviceQualityRequest struct {
+	Quality string `json:"quality" description:"high, balanced or low."`
+}
+
+// PressSessionDeviceButtonRequest presses a hardware button on the session's device.
+type PressSessionDeviceButtonRequest struct {
+	Button string `json:"button" description:"home, back or recents."`
+}
+
+// CloseSessionDeviceRequest releases the session's device.
+type CloseSessionDeviceRequest struct {
+	Shutdown bool `json:"shutdown,omitempty" description:"Also power the simulator or emulator off."`
 }

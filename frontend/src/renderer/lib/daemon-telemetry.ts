@@ -29,6 +29,7 @@ function reportStatus(status: DaemonStatus): void {
 		code: status.code,
 		exit_code: typeof status.exitCode === "number" ? status.exitCode : undefined,
 		signal: status.signal ?? undefined,
+		exit_reason: status.exitReason,
 	});
 }
 

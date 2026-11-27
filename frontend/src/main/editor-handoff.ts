@@ -352,11 +352,15 @@ function resolveTerminal(
 		};
 	}
 	if (deps.platform === "win32") {
+		// The launcher detaches with null stdio, so a bare cmd.exe exits at once.
+		// start gives the prompt its own console; it inherits the launch cwd, so
+		// the workspace path never passes through cmd.exe parsing (e.g. %TEMP%).
+		const spec = terminalCommand([deps.env.ComSpec || deps.env.COMSPEC || "cmd.exe"], deps.platform, deps.env, isExecutable)!;
 		return {
 			target: { id: "terminal", name: "Command Prompt", kind: "terminal" },
 			command: {
-				command: deps.env.ComSpec || deps.env.COMSPEC || "cmd.exe",
-				argsForWorkspace: () => [],
+				command: spec.command,
+				argsForWorkspace: () => spec.args,
 			},
 		};
 	}

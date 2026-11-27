@@ -2541,6 +2541,54 @@ describe("TaskComposer", () => {
 		);
 	});
 
+	// #5679: Codex lists only the models an account offers, so a project can pin
+	// one the list lacks. It stays a selectable row, noted, and the task runs it.
+	it("lists a project-pinned model the account's catalog lacks, with a note", async () => {
+		h.get.mockImplementation(async (path: string) => {
+			if (path.includes("/models")) {
+				return {
+					data: {
+						agent: "codex",
+						selectionMode: "catalog",
+						models: [{ id: "gpt-5.1", label: "GPT-5.1", isDefault: true }],
+						allowCustom: false,
+						refreshRecommended: false,
+					},
+				};
+			}
+			return {
+				data: {
+					status: "ok",
+					project: { config: { worker: { agent: "codex", agentConfig: { model: "gpt-5.4-mini" } } } },
+				},
+			};
+		});
+		h.post.mockResolvedValueOnce({ data: { workerId: "sess-2" } });
+
+		render(
+			<Wrap>
+				<TaskComposer projectId="proj-1" onCreated={vi.fn()} />
+			</Wrap>,
+		);
+
+		const model = await screen.findByRole("button", { name: "Model" });
+		await waitFor(() => expect(model).toHaveTextContent("gpt-5.4-mini"));
+		await userEvent.click(model);
+		const pinned = screen.getByRole("menuitem", { name: /gpt-5\.4-mini/ });
+		expect(pinned).toHaveTextContent("Set for this project · Codex doesn't list it for this account");
+		expect(pinned).not.toHaveAttribute("aria-disabled", "true");
+		expect(screen.getByRole("menuitem", { name: /GPT-5\.1/ })).not.toHaveTextContent("Set for this project");
+		await userEvent.keyboard("{Escape}");
+		fireEvent.change(task(), { target: { value: "Run on the pinned model" } });
+		fireEvent.click(screen.getByText("Start task"));
+
+		// The project's model applies on the daemon, as for any inherited model;
+		// the composer sends no override that could replace it.
+		await waitFor(() => expect(h.post).toHaveBeenCalledOnce());
+		expect(h.post.mock.calls[0][1].body).toEqual(expect.objectContaining({ agent: "codex" }));
+		expect(h.post.mock.calls[0][1].body).not.toHaveProperty("model");
+	});
+
 	function mockDisabledModels(disabledModels: string[]) {
 		h.get.mockImplementation(async (path: string) => {
 			if (path === "/api/v1/settings") {
@@ -4308,6 +4356,31 @@ describe("useTaskLaunch agent choices", () => {
 		await waitFor(() => expect(screen.getAllByRole("listitem").map((item) => item.textContent).sort())
 			.toEqual(["claude-code", "codex: Not installed", "goose: Not signed in"]));
 	});
+
+	it("passes a not-installed Antigravity to the picker with its setup reason instead of dropping it (#7640)", async () => {
+		h.get.mockResolvedValue({ data: { status: "ok", project: { agent: "claude-code", config: {} } } });
+		h.agentCatalog = { agents: [
+			agentReadiness("claude-code", "Claude Code"),
+			agentReadiness("agy", "Antigravity", { installation: "not_installed" }),
+		] };
+		render(<Wrap><Choices /></Wrap>);
+		await waitFor(() => expect(screen.getAllByRole("listitem").map((item) => item.textContent).sort())
+			.toEqual(["agy: Not installed", "claude-code"]));
+	});
+
+	it("offers any agent the host has a Chat driver for, not installed, dimmed for setup", async () => {
+		h.get.mockImplementation(async (path: string) => path === "/api/v1/settings"
+			? { data: { defaultSessionMode: "chat", chatHarnesses: ["claude-code", "agy"] } }
+			: { data: { status: "ok", project: { agent: "claude-code", config: {} } } });
+		h.agentCatalog = { agents: [
+			agentReadiness("claude-code", "Claude Code"),
+			agentReadiness("agy", "Antigravity", { installation: "not_installed" }),
+			agentReadiness("aider", "Aider", { installation: "not_installed" }),
+		] };
+		render(<Wrap><Choices /></Wrap>);
+		await waitFor(() => expect(screen.getAllByRole("listitem").map((item) => item.textContent).sort())
+			.toEqual(["agy: Not installed", "claude-code"]));
+	});
 });
 
 describe("useTaskLaunch Cloud start on send", () => {
@@ -4664,6 +4737,29 @@ describe("useTaskLaunch on the new chat page", () => {
 		},
 	);
 
+	it("gives the new chat page a project-pinned model the catalog lacks, noted, and never as its default", async () => {
+		h.get.mockImplementation(async (path: string) => {
+			if (path.includes("/models")) {
+				return { data: { agent: "codex", selectionMode: "catalog", models: [{ id: "gpt-5.1", label: "GPT-5.1", isDefault: true }], allowCustom: false, refreshRecommended: false } };
+			}
+			return { data: { status: "ok", project: { config: { worker: { agent: "codex", agentConfig: { model: "gpt-5.4-mini" } } } } } };
+		});
+		let task!: ReturnType<typeof useTaskLaunch>;
+		function Launcher() {
+			task = useTaskLaunch({ projectId: "proj-1" });
+			return null;
+		}
+		render(<Wrap><Launcher /></Wrap>);
+		const pinned = { id: "gpt-5.4-mini", displayName: "gpt-5.4-mini", default: false, hint: "Set for this project · Codex doesn't list it for this account" };
+		await waitFor(() => expect(task.chatModels).toEqual([expect.objectContaining({ id: "gpt-5.1", default: true }), pinned]));
+		await waitFor(() => expect(task.turnSettings.model).toBe("gpt-5.4-mini"));
+		act(() => task.chooseTurnSettings({ ...task.turnSettings, model: "gpt-5.1" }));
+		await waitFor(() => expect(task.turnSettings.model).toBe("gpt-5.1"));
+		expect(task.chatModels).toContainEqual(pinned);
+		act(() => task.chooseTurnSettings({ ...task.turnSettings, model: "gpt-5.4-mini" }));
+		await waitFor(() => expect(task.turnSettings.model).toBe("gpt-5.4-mini"));
+	});
+
 	it("says at once that Scratchpad has no ready agent", async () => {
 		h.agentCatalog = { agents: [agentReadiness("goose", "Goose", { authentication: "unauthorized" })] };
 		render(<Wrap><LoadError /></Wrap>);
@@ -4913,6 +5009,60 @@ describe("Chat launch permission capability boundary", () => {
 		act(() => task.chooseTurnSettings({ ...task.turnSettings, approvalMode: "auto" }));
 		await act(async () => { await task.launch("back on auto"); });
 		expect(h.post).toHaveBeenCalledWith(path, expect.objectContaining({ body: expect.objectContaining({ approvalMode: "auto" }) }));
+	});
+});
+
+describe("Chat launch starting settings", () => {
+	it.each(["proj-1", "__standalone__"])("starts a Claude Code chat with the Fast mode and auto-compaction picked in %s", async (projectId) => {
+		h.get.mockImplementation(async (path: string) => {
+			if (path === "/api/v1/settings") return { data: { defaultSessionMode: "chat", chatHarnesses: ["claude-code", "codex"], agent: "claude-code" } };
+			if (path.includes("/models")) {
+				return { data: { agent: "claude-code", selectionMode: "catalog", allowCustom: true, models: [
+					{ id: "opus", label: "Opus", isDefault: true, supportsFast: true },
+					{ id: "sonnet", label: "Sonnet" },
+				] } };
+			}
+			return { data: { status: "ok", project: { id: "proj-1", config: { worker: { agent: "claude-code" } } } } };
+		});
+		h.post.mockResolvedValue({ data: { session: { id: "standalone-1" }, workerId: "proj-1-1" } });
+		let task!: ReturnType<typeof useTaskLaunch>;
+		function Launcher() { task = useTaskLaunch({ projectId }); return null; }
+		render(<Wrap><Launcher /></Wrap>);
+		await waitFor(() => expect(task.canSubmit).toBe(true));
+		act(() => task.switchAgent("claude-code"));
+		await waitFor(() => expect(task.chatModels.find((model) => model.id === "opus")?.supportsFast).toBe(true));
+		expect(task.autoCompact).toEqual(expect.objectContaining({ value: undefined, beforeStart: true }));
+		const path = projectId === "__standalone__" ? "/api/v1/sessions" : "/api/v1/orchestrators/delegate";
+
+		// Nothing picked sends nothing: the agent's own defaults apply.
+		await act(async () => { await task.launch("defaults"); });
+		const plain = h.post.mock.calls.filter(([route]) => route === path).at(-1)?.[1];
+		expect(plain?.body).not.toHaveProperty("fastMode");
+		expect(plain?.body).not.toHaveProperty("autoCompactWindow");
+
+		act(() => task.chooseTurnSettings({ ...task.turnSettings, fastMode: true }));
+		act(() => task.autoCompact?.onChange("1m"));
+		expect(task.turnSettings.fastMode).toBe(true);
+		expect(task.autoCompact?.value).toBe("1m");
+		const replay = task.launchSnapshot();
+		expect(replay).toEqual(expect.objectContaining({ fastMode: true, autoCompactWindow: "1m" }));
+		await act(async () => { await task.launch("picked"); });
+		expect(h.post).toHaveBeenLastCalledWith(path, expect.objectContaining({ body: expect.objectContaining({ fastMode: true, autoCompactWindow: "1m" }) }));
+
+		// A model without Fast mode drops it; a retry repeats what was sent.
+		act(() => task.chooseTurnSettings({ ...task.turnSettings, model: "sonnet", fastMode: undefined }));
+		expect(task.turnSettings.fastMode).toBeUndefined();
+		await act(async () => { await task.launch("retry", { replay }); });
+		expect(h.post).toHaveBeenLastCalledWith(path, expect.objectContaining({ body: expect.objectContaining({ fastMode: true, autoCompactWindow: "1m" }) }));
+
+		// Another agent starts with its own defaults.
+		act(() => task.switchAgent("codex"));
+		await waitFor(() => expect(task.agent.value).toBe("codex"));
+		expect(task.autoCompact).toBeUndefined();
+		await act(async () => { await task.launch("codex"); });
+		const codex = h.post.mock.calls.filter(([route]) => route === path).at(-1)?.[1];
+		expect(codex?.body).not.toHaveProperty("fastMode");
+		expect(codex?.body).not.toHaveProperty("autoCompactWindow");
 	});
 });
 

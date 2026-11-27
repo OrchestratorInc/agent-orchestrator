@@ -69,6 +69,12 @@ describe("route builders", () => {
 		expect(fn).toHaveBeenCalled();
 	});
 
+	// The page reports the pairing itself, so it needs to know it is onboarding.
+	it("carries onboarding to the connect page only when it is", () => {
+		expect(connectRoute(vi.fn(), undefined, true).params).toMatchObject({ from: "onboarding" });
+		expect(connectRoute(vi.fn(), "h_dev").params).not.toHaveProperty("from");
+	});
+
 	it("builds the machine-name route and reports a nullable choice", () => {
 		const fn = vi.fn();
 		const route = machineNameSheetRoute({ suggested: "studio-mac", appearance: { symbol: "laptop" }, hostId: "h_new", onSelect: fn });

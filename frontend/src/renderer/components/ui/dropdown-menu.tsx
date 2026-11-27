@@ -211,7 +211,7 @@ export function DropdownMenuSeparator({
 }
 
 export function DropdownMenuShortcut({ className, ...props }: React.ComponentProps<"span">) {
-	return <span className={cn("ml-auto text-micro tracking-wide-md text-passive", className)} {...props} />;
+	return <span data-slot="menu-shortcut" className={cn("ml-auto text-micro tracking-wide-md text-passive", className)} {...props} />;
 }
 
 export const DropdownMenuSub = DropdownMenuPrimitive.Sub;
