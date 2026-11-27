@@ -4,6 +4,8 @@ import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { Settings } from "../../hooks/useSettings";
 import { useUiStore } from "../../stores/ui-store";
+import { aoBridge } from "../../lib/bridge";
+import { THEMES } from "../../lib/theme-palettes";
 
 const { settingsMock, updateRetentionMock, updateCommitAttributionMock } = vi.hoisted(() => ({
 	settingsMock: vi.fn(),
@@ -87,6 +89,46 @@ describe("archived session retention", () => {
 		renderSection();
 
 		expect(screen.queryByRole("button", { name: "Delete archived sessions" })).not.toBeInTheDocument();
+	});
+});
+
+describe("custom themes", () => {
+	const [, vercel] = THEMES;
+	const faint = { id: "custom:faint" as const, label: "Faint", file: "faint.json", dark: vercel.dark, light: vercel.light, lowContrast: ["dark.muted", "light.red"] };
+
+	it("lists custom themes in the theme menu and says what is wrong with the files it could not load", async () => {
+		settingsMock.mockReturnValue(settings({}));
+		useUiStore.getState().setCustomThemes({
+			directory: "/home/me/.ao/themes",
+			themes: [faint],
+			errors: [
+				{ file: "broken.json", problem: { code: "json" } },
+				{ file: "half.json", problem: { code: "color", mode: "light", role: "accent" } },
+			],
+		});
+		const openFolder = vi.spyOn(aoBridge.themes, "openFolder").mockResolvedValue();
+		renderSection();
+
+		expect(screen.getByText(/Theme files in \/home\/me\/\.ao\/themes appear in the theme list\./)).toBeInTheDocument();
+		expect(screen.getAllByRole("alert").map((alert) => alert.textContent)).toEqual([
+			"broken.json: not a valid JSON object.",
+			"half.json: light.accent must be a hex color such as #1a2b3c.",
+		]);
+		expect(screen.getByText("Faint: low contrast for dark.muted, light.red.")).toBeInTheDocument();
+
+		await userEvent.click(screen.getByRole("button", { name: "Open folder" }));
+		expect(openFolder).toHaveBeenCalledOnce();
+
+		await userEvent.click(screen.getByRole("button", { name: "Color Theme" }));
+		await userEvent.click(await screen.findByRole("menuitem", { name: /Faint/ }));
+		expect(useUiStore.getState().themeStyle).toBe("custom:faint");
+	});
+
+	it("has no row where there is no themes folder, as in the web preview", () => {
+		settingsMock.mockReturnValue(settings({}));
+		useUiStore.getState().setCustomThemes({ directory: "", themes: [], errors: [] });
+		renderSection();
+		expect(screen.queryByText("Custom themes")).not.toBeInTheDocument();
 	});
 });
 

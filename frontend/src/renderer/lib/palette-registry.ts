@@ -10,6 +10,7 @@ import { useSoundNotificationsStore } from "../stores/sound-notifications-store"
 import { useUiStore, type ChatSendKeyMode } from "../stores/ui-store";
 import type { ThemePreference, ThemeStyle } from "./theme";
 import { THEMES } from "./theme-palettes";
+import { getCustomThemes } from "./custom-themes";
 import type { TerminalClickMode } from "./terminal-mouse";
 
 // What the palette can find by name beyond projects, sessions and PRs:
@@ -184,7 +185,7 @@ const CHOICES: Record<string, { options: (t: TFunction) => Choice[]; current: (p
 		apply: (value) => useUiStore.getState().setThemePreference(value as ThemePreference),
 	},
 	"color-theme": {
-		options: () => THEMES.map(({ id, label }) => ({ value: id, label })),
+		options: () => [...THEMES, ...getCustomThemes()].map(({ id, label }) => ({ value: id, label })),
 		current: (prefs) => prefs.themeStyle,
 		apply: (value) => useUiStore.getState().setThemeStyle(value as ThemeStyle),
 	},

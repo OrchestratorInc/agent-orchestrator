@@ -2,8 +2,11 @@ import { useQueryClient } from "@tanstack/react-query";
 import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { previewDocumentThemeStyle, type ThemePreference, type ThemeStyle } from "../../lib/theme";
-import { THEMES, getThemeDefinition } from "../../lib/theme-palettes";
+import { THEMES } from "../../lib/theme-palettes";
+import { themeDefinition } from "../../lib/custom-themes";
+import { aoBridge } from "../../lib/bridge";
 import type { AppLocale } from "../../i18n";
+import { customThemeProblemKeys } from "../../i18n/key-maps";
 import { useLocaleStore } from "../../stores/locale-store";
 import { useSoundNotificationsStore } from "../../stores/sound-notifications-store";
 import { useUiStore, type ChatSendKeyMode } from "../../stores/ui-store";
@@ -324,7 +327,37 @@ function TerminalShellRows() {
 	);
 }
 
-const COLOR_THEME_OPTIONS = THEMES.map(({ id, label }) => ({ value: id, label })) satisfies SettingsOption<ThemeStyle>[];
+/** Where theme files go, and what is wrong with the ones that did not load cleanly. */
+function CustomThemesRow() {
+	const { t } = useTranslation();
+	const { directory, themes, errors } = useUiStore((state) => state.customThemes);
+	if (!directory) return null;
+	const lowContrast = themes.filter((theme) => theme.lowContrast.length > 0);
+	return (
+		<SettingsRow
+			label={t("settings.customThemes")}
+			description={
+				<>
+					{t("settings.customThemes.description", { folder: directory })}
+					{errors.map(({ file, problem }) => (
+						<span key={file} role="alert" className="block text-error">
+							{t(customThemeProblemKeys[problem.code], { file, role: problem.code === "color" ? `${problem.mode}.${problem.role}` : undefined })}
+						</span>
+					))}
+					{lowContrast.map((theme) => (
+						<span key={theme.id} className="block text-warning">
+							{t("settings.customThemes.lowContrast", { name: theme.label, roles: theme.lowContrast.join(", ") })}
+						</span>
+					))}
+				</>
+			}
+		>
+			<Button onClick={() => void aoBridge.themes.openFolder().catch(() => undefined)} size="sm" type="button" variant="ghost">
+				{t("settings.customThemes.openFolder")}
+			</Button>
+		</SettingsRow>
+	);
+}
 
 export function GeneralSettingsSection({
 	titleHidden,
@@ -336,6 +369,8 @@ export function GeneralSettingsSection({
 	const setThemePreference = useUiStore((state) => state.setThemePreference);
 	const themeStyle = useUiStore((state) => state.themeStyle);
 	const setThemeStyle = useUiStore((state) => state.setThemeStyle);
+	const customThemes = useUiStore((state) => state.customThemes.themes);
+	const colorThemeOptions = [...THEMES, ...customThemes].map(({ id, label }) => ({ value: id, label })) satisfies SettingsOption<ThemeStyle>[];
 	const resolvedTheme = useUiStore((state) => state.resolvedTheme);
 	const locale = useLocaleStore((state) => state.locale);
 	const setLocale = useLocaleStore((state) => state.setLocale);
@@ -373,7 +408,7 @@ export function GeneralSettingsSection({
 		option ? (
 			<>
 				<span className="min-w-0 flex-1 truncate">{option.label}</span>
-				<ThemePaletteSwatch palette={getThemeDefinition(option.value)[resolvedTheme]} compact={compact} />
+				<ThemePaletteSwatch palette={themeDefinition(option.value)[resolvedTheme]} compact={compact} />
 			</>
 		) : null;
 
@@ -405,7 +440,7 @@ export function GeneralSettingsSection({
 						<SettingsOptionMenu
 							aria-label={t("settings.colorTheme")}
 							value={themeStyle}
-							options={COLOR_THEME_OPTIONS}
+							options={colorThemeOptions}
 							onChange={setThemeStyle}
 							onHighlight={(previewed) => previewDocumentThemeStyle(previewed, useUiStore.getState().themeStyle)}
 							menuClassName="min-w-60"
@@ -420,6 +455,7 @@ export function GeneralSettingsSection({
 						/>
 					</div>
 				</SettingsRow>
+				<CustomThemesRow />
 				{isMacPlatform() && <WindowTranslucencyRow />}
 				<SettingsRow label={t("settings.projectAvatars")} description={t("settings.projectAvatars.description")}>
 					<Switch aria-label={t("settings.projectAvatars")} checked={projectAvatars} onCheckedChange={setProjectAvatars} />

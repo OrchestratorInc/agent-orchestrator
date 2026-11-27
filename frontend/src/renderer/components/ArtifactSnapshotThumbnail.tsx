@@ -23,14 +23,17 @@ let themeObserver: MutationObserver | undefined;
 function subscribeToTheme(onChange: () => void) {
 	themeListeners.add(onChange);
 	themeObserver ??= new MutationObserver(() => themeListeners.forEach((listener) => listener()));
-	if (themeListeners.size === 1) themeObserver.observe(document.documentElement, { attributes: true, attributeFilter: ["data-theme", "data-style-theme"] });
+	if (themeListeners.size === 1) themeObserver.observe(document.documentElement, { attributes: true, attributeFilter: ["data-theme", "data-style-theme", "data-style-theme-revision"] });
 	return () => {
 		themeListeners.delete(onChange);
 		if (themeListeners.size === 0) themeObserver?.disconnect();
 	};
 }
 
-const themeSnapshot = () => `${document.documentElement.dataset.theme === "light" ? "light" : "dark"}|${document.documentElement.dataset.styleTheme ?? ""}`;
+const themeSnapshot = () => {
+	const { theme, styleTheme = "", styleThemeRevision } = document.documentElement.dataset;
+	return `${theme === "light" ? "light" : "dark"}|${styleTheme}${styleThemeRevision ? `@${styleThemeRevision}` : ""}`;
+};
 
 /**
  * The job the hidden window renders for a card. Another host's artifact is read through its proxy's

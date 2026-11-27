@@ -73,6 +73,39 @@ Project `agentConfig.mode` selects a provider execution mode. It does not select
 
 Manage recurring tasks in **Automations**, reusable project actions in **Cues**, installed provider readiness in **Settings → Agents**, and persistent profiles/imports in **Settings → Browser**. These features have their own settings/resources rather than legacy YAML keys.
 
+## Custom themes
+
+The desktop app lists every JSON file in `~/.ao/themes` (`$AO_DATA_DIR/themes` when that is set) beside the built-in color themes in **Settings → General → Theme**. **Open folder** on the **Custom themes** row creates and opens the folder. Saving, adding or deleting a file updates the app at once, with no restart.
+
+A theme file has a `name` and a `dark` and a `light` palette. Each palette sets the same 14 roles as a built-in theme, plus an optional `primary`, as `#rgb` or `#rrggbb` colors:
+
+```json title="~/.ao/themes/sunset.json"
+{
+  "name": "Sunset",
+  "dark": {
+    "bg": "#1b1420", "sidebar": "#150f19", "panel": "#231a29", "element": "#30243a",
+    "text": "#f3e9f5", "muted": "#b3a2b8", "accent": "#ff8a5c",
+    "red": "#ff6b7a", "orange": "#ff9e64", "yellow": "#f2c66d", "green": "#8fd694",
+    "blue": "#7cb7ff", "purple": "#c79bf2", "cyan": "#6fd3d0"
+  },
+  "light": {
+    "bg": "#fff8f3", "sidebar": "#f7ece4", "panel": "#ffffff", "element": "#f0e2d8",
+    "text": "#2a1a24", "muted": "#6e5a66", "accent": "#c2410c",
+    "red": "#c81e3a", "orange": "#b45309", "yellow": "#8a6100", "green": "#2f7d32",
+    "blue": "#1d5fd0", "purple": "#7c3aed", "cyan": "#0f766e"
+  }
+}
+```
+
+| Role | Used for |
+| --- | --- |
+| `bg`, `sidebar`, `panel`, `element` | Main canvas, sidebar, raised cards, and hover, selected and input surfaces |
+| `text`, `muted` | Primary and secondary text |
+| `accent`, `primary` | Links, focus ring and brand mark; `primary` is the main button fill when it differs from `accent` |
+| `red`, `orange`, `yellow`, `green`, `blue`, `purple`, `cyan` | Status colors and the terminal's ANSI palette |
+
+The file name (letters, numbers, hyphens and underscores) identifies the theme, so renaming a file makes a new theme. A file that cannot be loaded is listed with its reason on the **Custom themes** row, and a theme that was already loaded keeps its last valid colors until the file is fixed. Themes with hard-to-read text or status colors still load, with a low-contrast note naming the roles. Custom themes apply to the desktop app only; the mobile app keeps the built-in themes.
+
 <Cards>
 	<Card title="Projects" href="/configuration/projects" description="Configure one project and its session roles." />
 	<Card title="Automation reference" href="/configuration/lifecycle-automation" description="Understand built-in CI, review, and merge-conflict handling." />

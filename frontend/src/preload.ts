@@ -4,6 +4,7 @@ import { contextBridge, ipcRenderer, webUtils } from "electron";
 import { installRendererErrorHandlers } from "./shared/renderer-error-handlers";
 import { APP_MENU_ACTION_CHANNEL, SET_APP_MENU_AVAILABILITY_CHANNEL, type AppMenuActionId, type AppMenuAvailability, APP_SHORTCUT_CHANNEL, APP_SHORTCUT_PRESSED_CHANNEL, type AppShortcutId, CLOSE_SHELL_TERMINAL_SHORTCUT_CHANNEL, KEYBOARD_SHORTCUTS_HELP_CHANNEL, NEXT_SESSION_SHORTCUT_CHANNEL, NEXT_TAB_SHORTCUT_CHANNEL, NEW_SESSION_SHORTCUT_CHANNEL, NEW_SHELL_TERMINAL_SHORTCUT_CHANNEL, OPEN_SETTINGS_SHORTCUT_CHANNEL, PREVIOUS_SESSION_SHORTCUT_CHANNEL, PREVIOUS_TAB_SHORTCUT_CHANNEL, QUIT_CONFIRM_REQUEST_CHANNEL, QUIT_CONFIRM_RESULT_CHANNEL, SET_CLOSE_SHELL_TERMINAL_SHORTCUT_ENABLED_CHANNEL, SET_TERMINAL_FOCUSED_CHANNEL, TERMINAL_FONT_SIZE_SHORTCUT_CHANNEL, SET_ARTIFACT_ZOOM_ENGAGED_CHANNEL, ARTIFACT_ZOOM_SHORTCUT_CHANNEL, type ArtifactZoomAction, type AppShortcutEvent, type KeybindingOverrides, type QuitConfirmRequest } from "./shared/shortcuts";
 import { SCROLL_PHASE_CHANNEL, type ScrollPhase } from "./shared/scroll-phase";
+import { CUSTOM_THEMES_CHANGED_CHANNEL, CUSTOM_THEMES_LIST_CHANNEL, CUSTOM_THEMES_OPEN_FOLDER_CHANNEL, type CustomThemeList } from "./shared/custom-themes";
 import { SIDE_CLOSE_PROTOCOL_VERSION, type SideCloseRequest, type SideCloseState } from "./shared/side-close";
 import {
 	SET_CHAT_DRAFT_RISK_CHANNEL,
@@ -533,6 +534,18 @@ const api = {
 		// macOS only: Interface v2 moves the native window buttons with its wider
 		// edge spacing.
 		setInterfaceV2: (enabled: boolean) => ipcRenderer.invoke("theme:set-interface-v2", enabled) as Promise<void>,
+	},
+	themes: {
+		// Theme files in ~/.ao/themes; onChanged fires when the folder changes.
+		list: () => ipcRenderer.invoke(CUSTOM_THEMES_LIST_CHANNEL) as Promise<CustomThemeList>,
+		onChanged: (listener: (list: CustomThemeList) => void) => {
+			const wrapped = (_event: Electron.IpcRendererEvent, list: CustomThemeList) => listener(list);
+			ipcRenderer.on(CUSTOM_THEMES_CHANGED_CHANNEL, wrapped);
+			return () => {
+				ipcRenderer.off(CUSTOM_THEMES_CHANGED_CHANNEL, wrapped);
+			};
+		},
+		openFolder: () => ipcRenderer.invoke(CUSTOM_THEMES_OPEN_FOLDER_CHANNEL) as Promise<void>,
 	},
 	menu: {
 		action: (action: string) => ipcRenderer.invoke("menu:action", action) as Promise<void>,

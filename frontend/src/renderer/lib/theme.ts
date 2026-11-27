@@ -1,4 +1,5 @@
-import { DEFAULT_THEME_STYLE, isThemeStyle, type ThemeStyle } from "./theme-palettes";
+import { customThemeRevision, findCustomTheme, installCustomThemeStylesheet, type ThemeStyle } from "./custom-themes";
+import { DEFAULT_THEME_STYLE, isThemeStyle } from "./theme-palettes";
 import { installThemeStylesheet } from "./theme-tokens";
 
 export type Theme = "light" | "dark";
@@ -38,6 +39,8 @@ export function readStoredThemeStyle(): ThemeStyle {
 	try {
 		const stored = getLocalStorage()?.getItem(themeStyleStorageKey);
 		if (isThemeStyle(stored)) return stored;
+		const custom = findCustomTheme(stored);
+		if (custom) return custom.id;
 	} catch {
 		// ignore
 	}
@@ -52,12 +55,19 @@ export function applyDocumentTheme(theme: Theme): void {
 
 export function applyDocumentThemeStyle(style: ThemeStyle): void {
 	if (typeof document === "undefined") return;
+	const root = document.documentElement;
+	const custom = findCustomTheme(style);
 	if (style === DEFAULT_THEME_STYLE) {
-		delete document.documentElement.dataset.styleTheme;
+		delete root.dataset.styleTheme;
 	} else {
-		installThemeStylesheet();
-		document.documentElement.dataset.styleTheme = style;
+		if (custom) installCustomThemeStylesheet();
+		else installThemeStylesheet();
+		root.dataset.styleTheme = style;
 	}
+	// A custom theme keeps its id when its file is edited, so what was drawn
+	// with its colors (artifact snapshots) is keyed by this as well.
+	if (custom) root.dataset.styleThemeRevision = customThemeRevision(custom);
+	else delete root.dataset.styleThemeRevision;
 }
 
 /** True when the document already shows `style`, e.g. because it is being previewed. */

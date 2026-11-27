@@ -15,6 +15,7 @@ import {
 	applyDocumentTheme,
 	applyDocumentThemeStyle,
 	isDocumentThemeStyle,
+	isThemeStylePreviewActive,
 	readStoredThemePreference,
 	readStoredThemeStyle,
 	resolveTheme,
@@ -26,6 +27,9 @@ import {
 	type ThemePreference,
 	type ThemeStyle,
 } from "../lib/theme";
+import { findCustomTheme, getCustomThemes, replaceCustomThemes } from "../lib/custom-themes";
+import { DEFAULT_THEME_STYLE } from "../lib/theme-palettes";
+import { isCustomThemeId, type CustomThemeList } from "../../shared/custom-themes";
 
 export type { Theme, ThemePreference, ThemeStyle } from "../lib/theme";
 export { readStoredThemePreference, readStoredThemeStyle, resolveTheme } from "../lib/theme";
@@ -312,6 +316,8 @@ export type UiState = {
 	resolvedTheme: Theme;
 	/** Named color style theme (e.g. "catppuccin", "nord") — independent of light/dark mode. */
 	themeStyle: ThemeStyle;
+	/** Theme files in ~/.ao/themes, as main last read them. */
+	customThemes: CustomThemeList;
 	/** When true, developer-only release controls are available. Default off. */
 	developerMode: boolean;
 	/** Experimental: connect to AO daemons on other machines. Default off. */
@@ -410,6 +416,7 @@ export type UiState = {
 	/** Flip light/dark; landing on the OS appearance picks System instead. */
 	toggleThemePreference: () => void;
 	setThemeStyle: (style: ThemeStyle) => void;
+	setCustomThemes: (list: CustomThemeList) => void;
 	setDeveloperMode: (enabled: boolean) => void;
 	setRemoteHosts: (enabled: boolean) => void;
 	setAutoUpdateRemoteHosts: (enabled: boolean) => void;
@@ -674,6 +681,7 @@ export const useUiStore = create<UiState>((set, get) => ({
 	themePreference: initialThemePreference,
 	resolvedTheme: resolveTheme(initialThemePreference),
 	themeStyle: initialThemeStyle,
+	customThemes: { directory: "", themes: getCustomThemes(), errors: [] },
 	developerMode: initialDeveloperModeValue,
 	remoteHosts: initialRemoteHosts(),
 	autoUpdateRemoteHosts: getLocalStorage()?.getItem(autoUpdateRemoteHostsStorageKey) === "true",
@@ -795,6 +803,25 @@ export const useUiStore = create<UiState>((set, get) => ({
 			applyDocumentThemeStyle(themeStyle);
 			set({ themeStyle });
 		});
+	},
+	setCustomThemes: (list) => {
+		// A file that stops parsing mid-edit keeps the theme it last held.
+		const kept = get().customThemes.themes.filter(
+			(theme) => list.errors.some((error) => error.file === theme.file) && !list.themes.some((next) => next.id === theme.id),
+		);
+		const customThemes = { ...list, themes: [...list.themes, ...kept] };
+		replaceCustomThemes(customThemes.themes);
+		const { themeStyle } = get();
+		if (isCustomThemeId(themeStyle)) {
+			if (!findCustomTheme(themeStyle)) {
+				getLocalStorage()?.setItem(themeStyleStorageKey, DEFAULT_THEME_STYLE);
+				applyDocumentThemeStyle(DEFAULT_THEME_STYLE);
+				set({ customThemes, themeStyle: DEFAULT_THEME_STYLE });
+				return;
+			}
+			if (!isThemeStylePreviewActive()) applyDocumentThemeStyle(themeStyle);
+		}
+		set({ customThemes });
 	},
 	setDeveloperMode: (developerMode) => {
 		getLocalStorage()?.setItem(developerModeStorageKey, String(developerMode));

@@ -15,6 +15,7 @@ import { appI18n } from "./i18n";
 import { refreshDaemonStatus } from "./lib/daemon-status";
 import { applyDocumentTheme, applyDocumentThemeStyle } from "./lib/theme";
 import { isThemeStyle, DEFAULT_THEME_STYLE } from "./lib/theme-palettes";
+import { findCustomTheme, reloadStoredCustomThemes } from "./lib/custom-themes";
 import type { ArtifactRow } from "./lib/artifacts";
 import { ARTIFACT_SNAPSHOT_HEIGHT, ARTIFACT_SNAPSHOT_WIDTH, type ArtifactSnapshotJob } from "../shared/artifact-snapshot";
 
@@ -62,7 +63,10 @@ function reset(): void {
 async function start(job: ArtifactSnapshotJob): Promise<void> {
 	reset();
 	applyDocumentTheme(job.theme);
-	applyDocumentThemeStyle(isThemeStyle(job.styleTheme) ? job.styleTheme : DEFAULT_THEME_STYLE);
+	// A custom theme arrives as `custom:<id>@<revision>`; its colors are in the cache the shell wrote.
+	reloadStoredCustomThemes();
+	const styleTheme = job.styleTheme.split("@")[0];
+	applyDocumentThemeStyle(isThemeStyle(styleTheme) ? styleTheme : (findCustomTheme(styleTheme)?.id ?? DEFAULT_THEME_STYLE));
 	await refreshDaemonStatus();
 	await document.fonts.ready;
 	const row: ArtifactRow = {

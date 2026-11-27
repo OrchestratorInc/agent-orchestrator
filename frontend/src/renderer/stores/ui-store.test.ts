@@ -1,7 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { FINISHED_TASK_TABS_KEPT, failedTaskKey, rememberedFileDisplayMode, sidebarIsVisible, sidebarOccupiesLayout, useUiStore } from "./ui-store";
 import { sessionUiKey } from "../lib/hosts";
-import { previewDocumentThemeStyle } from "../lib/theme";
+import { previewDocumentThemeStyle, readStoredThemeStyle } from "../lib/theme";
+import { THEMES, type ThemePalette } from "../lib/theme-palettes";
+import type { CustomTheme, CustomThemeList } from "../../shared/custom-themes";
 import { aoBridge } from "../lib/bridge";
 
 describe("sidebar visibility", () => {
@@ -225,6 +227,65 @@ describe("color theme selection", () => {
 			Reflect.deleteProperty(document, "startViewTransition");
 			delete document.documentElement.dataset.styleTheme;
 		}
+	});
+});
+
+describe("custom themes", () => {
+	const [, vercel, github] = THEMES;
+	const sunset = (dark: ThemePalette = vercel.dark): CustomTheme => ({ id: "custom:sunset", label: "Sunset", file: "sunset.json", dark, light: vercel.light, lowContrast: [] });
+	const list = (themes: CustomTheme[], errors: CustomThemeList["errors"] = []): CustomThemeList => ({ directory: "/themes", themes, errors });
+	const customStylesheet = () => document.getElementById("ao-custom-themes")?.textContent ?? "";
+
+	beforeEach(() => {
+		window.localStorage.clear();
+		useUiStore.setState({ themeStyle: "orchestrate" });
+		useUiStore.getState().setCustomThemes(list([]));
+		delete document.documentElement.dataset.styleTheme;
+	});
+
+	it("applies a selected custom theme and repaints it when its file changes", () => {
+		useUiStore.getState().setCustomThemes(list([sunset()]));
+		useUiStore.getState().setThemeStyle("custom:sunset");
+		const { styleTheme, styleThemeRevision } = document.documentElement.dataset;
+		expect(styleTheme).toBe("custom:sunset");
+		expect(customStylesheet()).toContain(`:root[data-style-theme="custom:sunset"] {\n\tcolor-scheme: dark;\n\t--background: ${vercel.dark.bg};`);
+		expect(readStoredThemeStyle()).toBe("custom:sunset");
+
+		useUiStore.getState().setCustomThemes(list([sunset(github.dark)]));
+
+		expect(customStylesheet()).toContain(`--background: ${github.dark.bg};`);
+		expect(document.documentElement.dataset.styleThemeRevision).not.toBe(styleThemeRevision);
+		expect(useUiStore.getState().themeStyle).toBe("custom:sunset");
+	});
+
+	it("keeps the last good colors while a theme's file does not parse", () => {
+		useUiStore.getState().setCustomThemes(list([sunset()]));
+		useUiStore.getState().setThemeStyle("custom:sunset");
+
+		useUiStore.getState().setCustomThemes(list([], [{ file: "sunset.json", problem: { code: "json" } }]));
+
+		expect(useUiStore.getState().themeStyle).toBe("custom:sunset");
+		expect(useUiStore.getState().customThemes.themes).toEqual([sunset()]);
+		expect(useUiStore.getState().customThemes.errors).toHaveLength(1);
+		expect(customStylesheet()).toContain(`--background: ${vercel.dark.bg};`);
+	});
+
+	it("goes back to the default theme when the selected theme's file is deleted", () => {
+		useUiStore.getState().setCustomThemes(list([sunset()]));
+		useUiStore.getState().setThemeStyle("custom:sunset");
+
+		useUiStore.getState().setCustomThemes(list([], [{ file: "other.json", problem: { code: "json" } }]));
+
+		expect(useUiStore.getState().themeStyle).toBe("orchestrate");
+		expect(window.localStorage.getItem("ao.theme-style")).toBe("orchestrate");
+		expect(document.documentElement.dataset.styleTheme).toBeUndefined();
+		expect(document.documentElement.dataset.styleThemeRevision).toBeUndefined();
+		expect(customStylesheet()).toBe("");
+	});
+
+	it("ignores a stored custom theme that is not in the cache", () => {
+		window.localStorage.setItem("ao.theme-style", "custom:gone");
+		expect(readStoredThemeStyle()).toBe("orchestrate");
 	});
 });
 

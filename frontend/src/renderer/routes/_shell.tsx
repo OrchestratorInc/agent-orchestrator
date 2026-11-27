@@ -450,6 +450,8 @@ function ShellLayout() {
 	const themePreference = useUiStore((state) => state.themePreference);
 	const resolvedTheme = useUiStore((state) => state.resolvedTheme);
 	const themeStyle = useUiStore((state) => state.themeStyle);
+	const customThemes = useUiStore((state) => state.customThemes.themes);
+	const setCustomThemes = useUiStore((state) => state.setCustomThemes);
 	const windowTranslucency = useUiStore((state) => state.windowTranslucency);
 	const developerMode = useUiStore((state) => state.developerMode);
 	const firstRunOnboardingOpen = useUiStore((state) => state.firstRunOnboardingOpen);
@@ -1263,6 +1265,11 @@ const replacementErrorCount = Object.keys(orchestratorReplacementErrors).length;
 		applyDocumentThemeStyle(themeStyle);
 	}, [themeStyle]);
 
+	useEffect(() => {
+		void aoBridge.themes.list().then(setCustomThemes).catch(() => undefined);
+		return aoBridge.themes.onChanged(setCustomThemes);
+	}, [setCustomThemes]);
+
 	// The renderer owns Developer Mode; the daemon must know its value before
 	// either the view-close path or the idle sweep can hibernate a provider,
 	// and devices (a Developer mode preview) stay off in the daemon until it does.
@@ -1379,7 +1386,7 @@ const replacementErrorCount = Object.keys(orchestratorReplacementErrors).length;
 			if (color) void aoBridge.theme?.setWindowBackground(color);
 		});
 		return () => cancelAnimationFrame(frame);
-	}, [resolvedTheme, themeStyle, windowTranslucent]);
+	}, [resolvedTheme, themeStyle, customThemes, windowTranslucent]);
 	useEffect(() => {
 		if (!isMac) return;
 		applyWindowTranslucency(windowTranslucent);

@@ -289,6 +289,7 @@ import { buildLinuxAppMenuTemplate, buildMacAppMenuTemplate, buildWindowsAppMenu
 import { ancestorRepositorySetupWarning, resolveCheckedOutBranch, scanImportFolder } from "./main/import-folder-scan";
 import { parseOpenFolderPathArg } from "./main/open-folder-arg";
 import { registerRemotesIpc, remotesFilePath } from "./main/remotes-main";
+import { customThemesDir, registerCustomThemesIpc } from "./main/custom-themes";
 import { sealSavedPasswords, setPasswordCipher } from "./main/remotes-store";
 import { createLocalHostIdentity } from "./main/remote-request";
 import { RemoteRegistry } from "./main/remote-registry";
@@ -3836,6 +3837,13 @@ setPasswordCipher(() => protectedStorageAvailable() ? {
 } : null);
 void app.whenReady().then(() => sealSavedPasswords(remotesFilePath())).catch((error: unknown) => {
 	console.warn("[remotes] could not encrypt saved host passwords", error);
+});
+registerCustomThemesIpc(ipcMain, {
+	directory: customThemesDir(),
+	broadcast: (channel, list) => {
+		for (const shellContents of trustedShellWebContents.values()) if (!shellContents.isDestroyed()) shellContents.send(channel, list);
+	},
+	openPath: (target) => shell.openPath(target),
 });
 registerRemotesIpc(ipcMain, {
 	file: remotesFilePath(),
