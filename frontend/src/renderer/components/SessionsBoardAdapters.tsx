@@ -474,7 +474,7 @@ function DesktopSessionCard({
 						{card}
 					</div>
 				</ContextMenuTrigger>
-				<ContextMenuContent className="min-w-44">
+				<ContextMenuContent className="w-48">
 					<SessionContextMenuItems
 						onArchive={showTerminate ? () => {
 							clearTerminateSessionState(queryClient, session.id, session.hostId);
