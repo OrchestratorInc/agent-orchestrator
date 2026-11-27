@@ -1968,7 +1968,15 @@ func (m *Manager) markAutomationLaunchCompleted(ctx context.Context, id domain.S
 		return nil
 	}
 	rec.AutomationLaunchCompleted = true
-	rec.UpdatedAt = m.clock()
+	now := m.clock()
+	// The prompt time was recorded when the launch built the prompt; an
+	// after-start launch delivers it only later. A run adopted after a restart
+	// starts at this time, so move it to the completion, which follows
+	// delivery, in the same write that marks the launch complete.
+	if promptAt := rec.Metadata.LatestUserPromptAt; !promptAt.IsZero() && promptAt.Before(now) {
+		rec.Metadata.LatestUserPromptAt = now
+	}
+	rec.UpdatedAt = now
 	return m.store.UpdateSession(ctx, rec)
 }
 
@@ -3314,7 +3322,36 @@ func (m *Manager) RequestKill(ctx context.Context, id domain.SessionID) (KillRes
 	return m.kill(ctx, id, true)
 }
 
+// ErrSessionActivityChanged reports a KillIfSettled refused because the
+// session started work after the caller's reading.
+var ErrSessionActivityChanged = errors.New("session: activity changed since it was read")
+
+// KillIfSettled kills a session the caller read as finished (idle or exited)
+// only if it still is once input admission is closed. The check runs after
+// the kill operation has drained every admitted pane write and refuses new
+// ones, so a prompt delivered after the caller's reading is either recorded
+// (a newer prompt time, or activity no longer idle) and refuses the kill, or
+// is not delivered at all. A refused kill returns ErrSessionActivityChanged
+// and leaves the session untouched.
+func (m *Manager) KillIfSettled(ctx context.Context, read domain.SessionRecord) (bool, error) {
+	result, err := m.killWith(ctx, read.ID, false, func(current domain.SessionRecord) bool {
+		if current.IsTerminated {
+			return true
+		}
+		state := current.Activity.State
+		return (state == domain.ActivityIdle || state == domain.ActivityExited) &&
+			!current.Metadata.LatestUserPromptAt.After(read.Metadata.LatestUserPromptAt)
+	})
+	return result.Freed, err
+}
+
 func (m *Manager) kill(ctx context.Context, id domain.SessionID, backgroundCleanup bool) (KillResult, error) {
+	return m.killWith(ctx, id, backgroundCleanup, nil)
+}
+
+// killWith is kill with an optional settled check, evaluated against the
+// record read once the kill operation holds input admission.
+func (m *Manager) killWith(ctx context.Context, id domain.SessionID, backgroundCleanup bool, settled func(domain.SessionRecord) bool) (KillResult, error) {
 	// Teardown deliberately stops riding the caller's context. Kill runs a
 	// sequence (stop the agent, tear the controller down, mark the row
 	// terminated, drop the worktree) where being cancelled partway leaves a session
@@ -3358,6 +3395,9 @@ func (m *Manager) kill(ctx context.Context, id domain.SessionID, backgroundClean
 	}
 	if !ok {
 		return KillResult{}, nil // already gone: benign race
+	}
+	if settled != nil && !settled(rec) {
+		return KillResult{}, fmt.Errorf("kill %s: %w", id, ErrSessionActivityChanged)
 	}
 	m.stopPreviewBestEffort(ctx, id)
 	m.destroyBrowserBestEffort(ctx, id)

@@ -26,6 +26,10 @@ type SessionSpawner interface {
 	// HibernateChatForAutomation stops a finished Chat session's provider while
 	// keeping it resumable. False without an error means it still has work.
 	HibernateChatForAutomation(context.Context, domain.SessionID) (bool, error)
+	// KillSettledForAutomation kills a session read as finished unless, once
+	// input admission is closed, it has started work since that reading.
+	// False without an error means it has.
+	KillSettledForAutomation(context.Context, domain.SessionRecord) (bool, error)
 }
 
 // schedulerStore is deliberately separate from CRUD Store so focused CRUD
@@ -313,9 +317,11 @@ func automationSessionSettled(session domain.SessionRecord, startedAt time.Time)
 // recoveredStart is the start recorded for a run adopted after a restart,
 // whose launch completed without the scheduler seeing Spawn return. The
 // recovery time would hide a turn that finished while the daemon was down, so
-// use the session's latest prompt time instead: the launch sets it when it
-// builds the prompt and the agent's prompt-submit hook moves it forward. A
-// session without one falls back to its creation time.
+// use the session's latest prompt time instead. Marking the launch complete
+// moves that time to the completion, after the prompt was delivered, in the
+// same write, and the agent's prompt-submit hook only moves it later; so it
+// never predates delivery. Only rows from earlier builds lack it, and fall
+// back to their creation time.
 func recoveredStart(session domain.SessionRecord) time.Time {
 	if at := session.Metadata.LatestUserPromptAt; !at.IsZero() {
 		return at.UTC()
@@ -341,7 +347,7 @@ func (s *Service) finishSettledRun(ctx context.Context, store schedulerStore, id
 
 // stopSettledSession hibernates a Chat session, keeping its conversation
 // resumable, and kills a terminal one or a Chat session whose provider cannot
-// resume. Killing keeps the transcript and any uncommitted work; only a clean
+// resume, unless it has started work since it was read as settled. Killing keeps the transcript and any uncommitted work; only a clean
 // worktree is removed. A Chat session already marked hibernated still goes
 // through hibernation: its provider is gone unless an earlier shutdown failed,
 // and that call finishes such a shutdown.
@@ -362,10 +368,13 @@ func (s *Service) stopSettledSession(ctx context.Context, session domain.Session
 			return hibernated, nil
 		}
 	}
-	if _, err := s.spawner.Kill(ctx, session.ID); err != nil {
+	// The kill rechecks the session under input admission: a prompt delivered
+	// after the settlement reading keeps the session and its run.
+	killed, err := s.spawner.KillSettledForAutomation(ctx, session)
+	if err != nil {
 		return false, fmt.Errorf("kill settled automation session %s: %w", session.ID, err)
 	}
-	return true, nil
+	return killed, nil
 }
 
 func (s *Service) rollbackIncompleteLaunch(ctx context.Context, store schedulerStore, run domain.AutomationRun, session domain.SessionRecord, now time.Time) error {

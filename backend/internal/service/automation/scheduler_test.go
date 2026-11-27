@@ -174,6 +174,7 @@ type recordingSpawner struct {
 	onSpawn        func()
 	killErr        error
 	killFreed      bool
+	killRefused    bool
 	spawnErr       error
 	leaveSeedOnErr bool
 }
@@ -204,6 +205,17 @@ func (s *recordingSpawner) HibernateChatForAutomation(_ context.Context, id doma
 	at := time.Now()
 	rec.HibernatedAt = &at
 	s.store.sessions[id] = rec
+	return true, nil
+}
+
+func (s *recordingSpawner) KillSettledForAutomation(ctx context.Context, read domain.SessionRecord) (bool, error) {
+	if s.killRefused {
+		s.kills = append(s.kills, read.ID)
+		return false, nil
+	}
+	if _, err := s.Kill(ctx, read.ID); err != nil {
+		return false, err
+	}
 	return true, nil
 }
 
@@ -429,6 +441,29 @@ func TestTickKeepsRunWhileSettledChatCannotHibernateYet(t *testing.T) {
 	}
 	if store.runs[runID].Status != domain.AutomationRunRunning || store.runs["run-2"].Status != domain.AutomationRunPending || len(spawner.calls) != 0 || len(spawner.kills) != 0 {
 		t.Fatalf("runs=%#v calls=%d kills=%v", store.runs, len(spawner.calls), spawner.kills)
+	}
+}
+
+// A terminal session that starts work after it was read as settled (a prompt
+// delivered before the kill closed input) refuses the kill. Its run stays
+// running and the next occurrence waits.
+func TestTickKeepsRunWhenSettledSessionStartsWorkBeforeTheKill(t *testing.T) {
+	now := time.Date(2026, time.August, 25, 12, 0, 0, 0, time.UTC)
+	firstSignal := now.Add(-30 * time.Minute)
+	store := newSchedulerStore()
+	store.automations["automation-1"] = domain.Automation{ID: "automation-1", ProjectID: "scheduled", Enabled: true, NextRunAt: now.Add(time.Hour)}
+	runID, sessionID := domain.AutomationRunID("run-1"), domain.SessionID("session-1")
+	store.runs[runID] = domain.AutomationRun{ID: runID, AutomationID: "automation-1", ScheduledFor: now.Add(-time.Hour), SessionID: &sessionID, Status: domain.AutomationRunRunning}
+	store.runs["run-2"] = domain.AutomationRun{ID: "run-2", AutomationID: "automation-1", ScheduledFor: now, Status: domain.AutomationRunPending}
+	store.sessions[sessionID] = domain.SessionRecord{ID: sessionID, Mode: domain.SessionModeTUI, AutomationRunID: &runID, FirstSignalAt: firstSignal, Activity: domain.Activity{State: domain.ActivityIdle, LastActivityAt: firstSignal.Add(10 * time.Minute)}}
+	spawner := &recordingSpawner{store: store, killRefused: true}
+	svc := New(Deps{Store: store, Spawner: spawner, Clock: func() time.Time { return now }})
+
+	if err := svc.Tick(context.Background(), now); err != nil {
+		t.Fatal(err)
+	}
+	if store.runs[runID].Status != domain.AutomationRunRunning || store.runs["run-2"].Status != domain.AutomationRunPending || len(spawner.calls) != 0 || store.sessions[sessionID].IsTerminated {
+		t.Fatalf("runs=%#v calls=%d session=%#v", store.runs, len(spawner.calls), store.sessions[sessionID])
 	}
 }
 

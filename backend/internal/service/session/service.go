@@ -1415,6 +1415,40 @@ func (s *Service) HibernateChatForAutomation(ctx context.Context, id domain.Sess
 	return hibernator.HibernateChatForAutomation(ctx, id)
 }
 
+// automationSettledKiller is an optional command capability: the manager
+// kills a finished automation's session only if it is still finished once
+// input admission is closed.
+type automationSettledKiller interface {
+	KillIfSettled(ctx context.Context, read domain.SessionRecord) (bool, error)
+}
+
+// KillSettledForAutomation ends a scheduled session whose run has finished,
+// as Kill does, unless it started work after the caller read it as settled.
+// False without an error means it did, and the caller re-checks later.
+func (s *Service) KillSettledForAutomation(ctx context.Context, read domain.SessionRecord) (bool, error) {
+	killer, ok := s.manager.(automationSettledKiller)
+	if !ok {
+		return false, errors.New("conditional kill is unavailable")
+	}
+	before, live := s.liveSessionBeforeEnd(ctx, read.ID)
+	_, err := killer.KillIfSettled(ctx, read)
+	if errors.Is(err, sessionmanager.ErrSessionActivityChanged) {
+		return false, nil
+	}
+	s.cancelTitleRefinement(read.ID)
+	s.recordKillOutcome(ctx, before, live, err)
+	if err != nil {
+		apiErr := toAPIError(err)
+		s.recordTerminated(ctx, read.ID, actionStatusForError(err), apiErr)
+		return false, apiErr
+	}
+	s.recordTerminated(ctx, read.ID, domain.ActivityStatusCompleted, nil)
+	if s.usageArchiveFlush != nil {
+		s.usageArchiveFlush(ctx)
+	}
+	return true, nil
+}
+
 // Kill delegates terminal intent and teardown to the internal manager.
 func (s *Service) Kill(ctx context.Context, id domain.SessionID) (bool, error) {
 	s.cancelTitleRefinement(id)
