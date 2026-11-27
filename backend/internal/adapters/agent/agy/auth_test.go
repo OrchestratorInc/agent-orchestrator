@@ -169,14 +169,19 @@ func TestAuthStatusADCModeAuthorizedWithGcloudCredentials(t *testing.T) {
 	}
 }
 
-func TestAuthStatusADCModeUnauthorizedWithoutCredentials(t *testing.T) {
+func TestAuthStatusADCModeUnknownWithoutCredentialsFile(t *testing.T) {
+	// ADC can still come from a Google Cloud host's metadata server, so a
+	// missing file must not block launches as unauthorized.
 	f := newAuthProbeFixture(t)
 	f.keychainHit = true // a Google sign-in does not satisfy ADC mode
 	f.env[adcAuthEnv] = "true"
 	f.install(t)
 
-	if got := authStatus(t); got != ports.AgentAuthStatusUnauthorized {
-		t.Fatalf("status = %q, want unauthorized", got)
+	if got := authStatus(t); got != ports.AgentAuthStatusUnknown {
+		t.Fatalf("status = %q, want unknown", got)
+	}
+	if f.keychainHits != 0 {
+		t.Fatal("ADC mode must not consult the Google account keychain entry")
 	}
 }
 

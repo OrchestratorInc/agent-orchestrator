@@ -46,8 +46,11 @@ var (
 // method leaves behind:
 //
 //   - ADC (AGY_ADC_AUTH inherited by the daemon, so every Agy launch uses
-//     it): authorized when Application Default Credentials exist,
-//     unauthorized when they do not.
+//     it): authorized when an ADC credentials file exists. Unauthorized only
+//     when GOOGLE_APPLICATION_CREDENTIALS names a file that is missing or
+//     empty, which ADC uses without falling back. Without either file it
+//     stays unknown, because ADC can still come from the metadata server of
+//     a Google Cloud host (Compute Engine, GKE, Cloud Run, Workstations).
 //   - Google sign-in on macOS and Windows (Google account or Google Cloud
 //     project, both from Agy's own login menu): authorized when Agy's
 //     Keychain or Credential Manager entry exists. A missing entry stays
@@ -69,10 +72,7 @@ func localAuthStatus(ctx context.Context) (ports.AgentAuthStatus, error) {
 		return ports.AgentAuthStatusUnknown, err
 	}
 	if strings.TrimSpace(authGetenv(adcAuthEnv)) != "" {
-		if adcCredentialsConfigured() {
-			return ports.AgentAuthStatusAuthorized, nil
-		}
-		return ports.AgentAuthStatusUnauthorized, nil
+		return adcAuthStatus(), nil
 	}
 	if authGOOS != "darwin" && authGOOS != "windows" {
 		return ports.AgentAuthStatusAuthorized, nil
@@ -87,15 +87,21 @@ func localAuthStatus(ctx context.Context) (ports.AgentAuthStatus, error) {
 	return ports.AgentAuthStatusUnknown, nil
 }
 
-// adcCredentialsConfigured reports whether Google Application Default
-// Credentials are available, following the standard lookup order:
-// GOOGLE_APPLICATION_CREDENTIALS, then gcloud's well-known file.
-func adcCredentialsConfigured() bool {
+// adcAuthStatus follows Google's Application Default Credentials lookup
+// order: GOOGLE_APPLICATION_CREDENTIALS, gcloud's well-known file, then the
+// metadata server. The metadata server is not probed, so an absent file is
+// not proof of a missing sign-in.
+func adcAuthStatus() ports.AgentAuthStatus {
 	if path := strings.TrimSpace(authGetenv("GOOGLE_APPLICATION_CREDENTIALS")); path != "" {
-		return nonEmptyRegularFile(path)
+		if nonEmptyRegularFile(path) {
+			return ports.AgentAuthStatusAuthorized
+		}
+		return ports.AgentAuthStatusUnauthorized
 	}
-	path := gcloudADCPath()
-	return path != "" && nonEmptyRegularFile(path)
+	if path := gcloudADCPath(); path != "" && nonEmptyRegularFile(path) {
+		return ports.AgentAuthStatusAuthorized
+	}
+	return ports.AgentAuthStatusUnknown
 }
 
 func gcloudADCPath() string {
