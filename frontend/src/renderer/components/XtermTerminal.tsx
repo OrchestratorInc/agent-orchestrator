@@ -27,7 +27,7 @@ import { FitAddon } from "@xterm/addon-fit";
 import { SearchAddon } from "@xterm/addon-search";
 import { Unicode11Addon } from "@xterm/addon-unicode11";
 import { WebLinksAddon } from "@xterm/addon-web-links";
-import { terminalFontSizeDelta as shortcutFontSizeDelta } from "../../shared/shortcuts";
+import { matchesAppShortcut, terminalFontSizeDelta as shortcutFontSizeDelta } from "../../shared/shortcuts";
 import type {
 	AttachableTerminal,
 	TerminalUserInputSource,
@@ -61,6 +61,7 @@ import {
 } from "../lib/osc-color-report";
 import { buildTerminalThemes } from "../lib/terminal-themes";
 import { leaseWebglRenderer, type WebglLease } from "../lib/terminal-webgl-pool";
+import { useKeybindingsStore } from "../stores/keybindings-store";
 import { useUiStore, type Theme, type ThemeStyle } from "../stores/ui-store";
 import { TerminalSearch } from "./TerminalSearch";
 import { useLinkPreview } from "../hooks/useLinkPreview";
@@ -222,11 +223,17 @@ function isTerminalPasteShortcut(event: KeyboardEvent): boolean {
 	return isWindowsPlatform() && event.ctrlKey && !event.shiftKey && !event.altKey && !event.metaKey;
 }
 
+// Find is contextual: a focused terminal searches itself with the user's
+// Find binding (default Cmd/Ctrl+F), so a rebound chord works here too.
 function isTerminalSearchShortcut(event: KeyboardEvent): boolean {
-	if (event.altKey || event.shiftKey || event.key.toLowerCase() !== "f") return false;
-	return isMacPlatform()
-		? event.metaKey && !event.ctrlKey
-		: event.ctrlKey && !event.metaKey;
+	return matchesAppShortcut("find-in-chat", {
+		key: event.key,
+		code: event.code,
+		ctrl: event.ctrlKey,
+		meta: event.metaKey,
+		shift: event.shiftKey,
+		alt: event.altKey,
+	}, isMacPlatform(), useKeybindingsStore.getState().overrides);
 }
 
 function consumeTerminalShortcut(event: KeyboardEvent): void {

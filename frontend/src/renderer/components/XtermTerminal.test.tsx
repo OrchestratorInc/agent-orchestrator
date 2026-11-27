@@ -5,6 +5,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type { TerminalMux } from "../lib/terminal-mux";
 import { markTerminalHandleFresh } from "../lib/fresh-terminal-handles";
 import { useTerminalSession, type AttachableTerminal } from "../hooks/useTerminalSession";
+import { useKeybindingsStore } from "../stores/keybindings-store";
 import { useUiStore } from "../stores/ui-store";
 import { contrastRatio, mixColor } from "../lib/theme-color";
 import { safeTerminalFind } from "./TerminalSearch";
@@ -386,6 +387,7 @@ describe("XtermTerminal", () => {
 		state.searchAddon = null;
 		state.mouseMoveListener.mockClear();
 		setNavigatorPlatform("Linux x86_64");
+		useKeybindingsStore.setState({ overrides: {} });
 		window.ao!.clipboard.writeText = vi.fn().mockResolvedValue(undefined);
 		window.ao!.clipboard.readText = vi.fn().mockResolvedValue("");
 		window.ao!.terminal.setFocused = vi.fn();
@@ -1228,6 +1230,39 @@ describe("XtermTerminal", () => {
 		expect(allowed).toBe(false);
 		expect(event.preventDefault).toHaveBeenCalledOnce();
 		expect(event.stopPropagation).toHaveBeenCalledOnce();
+		expect(await screen.findByRole("searchbox", { name: "Search terminal" })).toHaveFocus();
+	});
+
+	it("opens search with a rebound Find shortcut and leaves the old chord to the shell", async () => {
+		setNavigatorPlatform("Win32");
+		useKeybindingsStore.setState({ overrides: { "find-in-chat": [{ key: "f", ctrl: true, meta: false, shift: true, alt: false }] } });
+		render(<XtermTerminal theme="dark" />);
+		const keydown = (shiftKey: boolean) => ({
+			altKey: false,
+			ctrlKey: true,
+			key: shiftKey ? "F" : "f",
+			metaKey: false,
+			preventDefault: vi.fn(),
+			shiftKey,
+			stopPropagation: vi.fn(),
+			type: "keydown",
+		}) as unknown as KeyboardEvent;
+
+		const plain = keydown(false);
+		let allowed = false;
+		act(() => {
+			allowed = state.lastTerminal!.keyHandler!(plain);
+		});
+		expect(allowed).toBe(true);
+		expect(plain.preventDefault).not.toHaveBeenCalled();
+		expect(screen.queryByRole("searchbox", { name: "Search terminal" })).not.toBeInTheDocument();
+
+		const rebound = keydown(true);
+		act(() => {
+			allowed = state.lastTerminal!.keyHandler!(rebound);
+		});
+		expect(allowed).toBe(false);
+		expect(rebound.stopPropagation).toHaveBeenCalledOnce();
 		expect(await screen.findByRole("searchbox", { name: "Search terminal" })).toHaveFocus();
 	});
 
