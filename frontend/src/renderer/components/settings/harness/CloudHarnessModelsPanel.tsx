@@ -48,8 +48,11 @@ export function CloudHarnessModelsPanel({ agentId, orgId, connected, onOpenAccou
 				className="min-w-0 flex-1 bg-transparent text-sm text-settings-label outline-none placeholder:text-settings-muted"
 				placeholder={t("settings.models.searchPlaceholder")} value={modelSearch} onChange={(event) => { setModelSearch(event.target.value); setPage(0); }} />
 		</label> : null}
-		{gap ? <p role="alert" className="text-xs text-error">{t("settings.harness.models.loadFailed")}</p> : null}
+		{gap === "failed" ? <p role="alert" className="text-xs text-error">{t("settings.harness.models.loadFailed")}</p> : null}
 		{loading ? <p role="status" className="flex items-center justify-center gap-2 px-3 py-6 text-sm text-settings-muted"><LoaderCircle className="size-3.5 shrink-0 animate-spin" aria-hidden="true" />{t("settings.models.loading")}</p>
+			// No Cloud list for this harness (OpenCode has no pinned CLI) or an older
+			// control plane: not an error, New Task offers its models another way.
+			: gap === "unavailable" || gap === "legacy" ? <p className="px-3 py-6 text-center text-sm text-settings-muted">{t("settings.harness.cloud.modelsUnavailable", { agent })}</p>
 			: gap ? null
 			: !models.length ? <p className="px-3 py-6 text-center text-sm text-settings-muted">{t(normalizedModelSearch ? "settings.options.noMatches" : "settings.harness.models.empty", { agent })}</p>
 			: <ul className={cn(HARNESS_CARD_CLASS, "settings-thin-scrollbar min-h-0 flex-initial overflow-y-auto overscroll-contain")} tabIndex={0} aria-label={t("settings.harness.models.title")}>

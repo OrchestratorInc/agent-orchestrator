@@ -2161,6 +2161,7 @@
 	"settings.harness.cloud.updatesAvailableBothLocal": "Bu bilgisayar ve Cloud üzerinde güncellemeler mevcut",
 	"settings.harness.cloud.updatesAvailableBoth": "{{host}} ve Cloud üzerinde güncellemeler mevcut",
 	"settings.harness.cloud.versionAvailable": "Cloud üzerinde {{version}} mevcut",
+	"settings.harness.cloud.modelsUnavailable": "Cloud üzerinde {{agent}} için model listesi yok. Bir Cloud görevi başlatırken modelini seçin.",
 	"settings.harness.cloud.targetBoth": "{{host}} ve Cloud",
 	"settings.harness.cloud.targetVersions": "{{host}}: {{local}} → {{localLatest}}. Cloud: {{cloud}} → {{cloudLatest}}.",
 	"settings.harness.updateFailed": "Güncelleme başlatılamadı.",

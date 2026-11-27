@@ -340,6 +340,34 @@ describe("Cloud harness tab", () => {
 		expect(listUserAgentModels).toHaveBeenCalledWith("org-1", "codex", expect.anything());
 	});
 
+	it("explains, without an error, that Cloud keeps no model list for OpenCode", async () => {
+		providerConnections.value = [{ id: "oc-1", provider: "opencode", label: "default", validationState: "valid" }];
+		// Cloud pins no OpenCode CLI, so it has no list to give.
+		listUserAgentModels.mockRejectedValue(new CloudCpError("no catalog", { status: 409, code: "MODEL_CATALOG_UNAVAILABLE" }));
+		const { CloudHarnessContent } = await import("./harness/CloudHarnessContent");
+		const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+		render(<QueryClientProvider client={client}><TooltipProvider><CloudHarnessContent search="" /></TooltipProvider></QueryClientProvider>);
+
+		const page = await openHarness("opencode");
+		await userEvent.click(within(page).getByRole("tab", { name: "Models" }));
+		expect(await within(page).findByText("Cloud has no model list for OpenCode. Choose its model when you start a Cloud task.")).toBeInTheDocument();
+		expect(within(page).queryByRole("alert")).toBeNull();
+		expect(within(page).queryByText("Could not load models.")).toBeNull();
+	});
+
+	it("still reports a Cloud model list that failed to load", async () => {
+		providerConnections.value = [{ id: "cx-1", provider: "codex", label: "default", validationState: "valid" }];
+		listUserAgentModels.mockRejectedValue(new CloudCpError("unavailable", { status: 503, code: "unavailable" }));
+		const { CloudHarnessContent } = await import("./harness/CloudHarnessContent");
+		const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+		render(<QueryClientProvider client={client}><TooltipProvider><CloudHarnessContent search="" /></TooltipProvider></QueryClientProvider>);
+
+		const page = await openHarness("codex");
+		await userEvent.click(within(page).getByRole("tab", { name: "Models" }));
+		expect(await within(page).findByRole("alert")).toHaveTextContent("Could not load models.");
+		expect(within(page).queryByText(/Cloud has no model list/)).toBeNull();
+	});
+
 	it("asks to log in before listing a harness's Cloud models", async () => {
 		// Cloud answers any account with its release list; it must not stand in for a login.
 		listUserAgentModels.mockResolvedValue({ source: "release", models: [{ id: "opus", displayName: "Opus", default: true }] });

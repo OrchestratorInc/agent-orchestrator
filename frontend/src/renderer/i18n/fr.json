@@ -3305,6 +3305,7 @@
 	"settings.harness.cloud.updatesAvailableBothLocal": "Mises à jour disponibles sur cet ordinateur et le Cloud",
 	"settings.harness.cloud.updatesAvailableBoth": "Mises à jour disponibles sur {{host}} et le Cloud",
 	"settings.harness.cloud.versionAvailable": "{{version}} disponible dans le Cloud",
+	"settings.harness.cloud.modelsUnavailable": "Le Cloud n'a pas de liste de modèles pour {{agent}}. Choisissez le modèle au lancement d'une tâche Cloud.",
 	"settings.harness.cloud.targetBoth": "{{host}} et le Cloud",
 	"settings.harness.cloud.targetVersions": "{{host}} : {{local}} → {{localLatest}}. Cloud : {{cloud}} → {{cloudLatest}}.",
 	"settings.harness.updateFailed": "Impossible de lancer la mise à jour.",
