@@ -342,6 +342,12 @@ func verifyCheckpointTranscript(ctx context.Context, input io.Reader, request po
 	for leaf != "" {
 		record, found := records[leaf]
 		if !found && len(chain) > 0 && !uuids[leaf] {
+			first := position[chain[len(chain)-1].UUID]
+			for id, earlier := range records {
+				if position[id] < first {
+					compacted.fold(earlier, wantedSubmissions)
+				}
+			}
 			break
 		}
 		if !found || seen[leaf] {
@@ -543,26 +549,30 @@ type compactedWitnesses struct {
 	boundary int
 }
 
+func (c *compactedWitnesses) fold(record checkpointRecord, wanted map[string]bool) {
+	switch {
+	case record.Type == "user" && record.PromptID != "":
+		c.prompts[record.PromptID] = true
+	case record.Type == "attachment" && record.Attachment.Type == "hook_additional_context" &&
+		record.Attachment.HookEvent == "UserPromptSubmit":
+		var contents []string
+		if json.Unmarshal(record.Attachment.Content, &contents) != nil {
+			return // Unreadable: an observation of it stays unproven.
+		}
+		for _, content := range contents {
+			if wanted[content] {
+				c.submissions[content] = true
+			}
+		}
+	}
+}
+
 // compactNativeRecords folds every record before boundary into compacted and
 // drops it, keeping only the messages the compaction preserved, which replay
 // still shows after the summary. It returns the bytes still held.
 func compactNativeRecords(records map[string]checkpointRecord, recordBytes map[string]int64, wanted map[string]bool, compacted *compactedWitnesses, boundary checkpointRecord) int64 {
 	for _, record := range records {
-		switch {
-		case record.Type == "user" && record.PromptID != "":
-			compacted.prompts[record.PromptID] = true
-		case record.Type == "attachment" && record.Attachment.Type == "hook_additional_context" &&
-			record.Attachment.HookEvent == "UserPromptSubmit":
-			var contents []string
-			if json.Unmarshal(record.Attachment.Content, &contents) != nil {
-				continue // Unreadable: an observation of it stays unproven.
-			}
-			for _, content := range contents {
-				if wanted[content] {
-					compacted.submissions[content] = true
-				}
-			}
-		}
+		compacted.fold(record, wanted)
 	}
 	keep := make(map[string]bool)
 	if kept := boundary.CompactMetadata.PreservedMessages; kept != nil {

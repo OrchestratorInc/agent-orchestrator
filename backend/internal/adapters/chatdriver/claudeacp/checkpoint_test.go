@@ -263,6 +263,8 @@ func TestNativeCheckpointSettlesDamagedTranscriptsAndSlashCommands(t *testing.T)
 	} {
 		t.Run(name, func(t *testing.T) {
 			evidence := checkpointEvidence(
+				domain.NativeCheckpointObservation{Submission: true, PromptID: "prompt-0", SubmissionID: "submission-0", Text: "A"},
+				domain.NativeCheckpointObservation{PromptID: "prompt-0", Text: "answer A"},
 				domain.NativeCheckpointObservation{Submission: true, PromptID: "prompt-1", SubmissionID: "submission-1", Text: test.typed},
 				domain.NativeCheckpointObservation{PromptID: "prompt-1", Text: "answer B"})
 			got, err := verifyCheckpointTranscript(context.Background(), strings.NewReader(test.transcript),
