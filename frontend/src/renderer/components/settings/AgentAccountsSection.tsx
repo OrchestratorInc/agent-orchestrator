@@ -44,8 +44,9 @@ const accountMethods: Record<AgentAccountProvider, { add: string[] } & Partial<R
 		add: ["browser", "device_code", "api_key", "access_token"],
 		subscription: ["browser", "device_code", "access_token"], metered: ["api_key"],
 	},
-	// agy signs in only in its own screen, so its accounts sign in in a terminal.
-	antigravity: { add: [] },
+	// agy's own login menu, walked in the background like its computer login.
+	// Where agy offers only its native sign-in (Linux), accounts use a terminal.
+	antigravity: { add: ["browser", "cloud_project"], subscription: ["browser", "cloud_project"] },
 };
 
 // One sign-in per host and provider, kept outside the page so leaving Settings
