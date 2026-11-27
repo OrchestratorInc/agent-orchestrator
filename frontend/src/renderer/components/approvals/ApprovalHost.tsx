@@ -122,9 +122,9 @@ const requestKey = (request: PendingApproval) => `${request.hostId ?? ""}/${requ
  * Approval requests from sessions the user is not looking at, so one is never
  * left to time out unseen. It names the session and can open it.
  */
-export function GlobalApprovalCard() {
+export function GlobalApprovalCard({ localReady = true }: { localReady?: boolean } = {}) {
 	// Shell hosts without a query client (some test harnesses) have nothing to show.
-	return useContext(QueryClientContext) ? <GlobalApprovalCardContent /> : null;
+	return useContext(QueryClientContext) ? <GlobalApprovalCardContent localReady={localReady} /> : null;
 }
 
 /**
@@ -150,17 +150,25 @@ export function answerable(requests: PendingApproval[]): PendingApproval[] {
 	return requests.filter((request) => !request.waitingFor);
 }
 
-function GlobalApprovalCardContent() {
+/**
+ * localReady: this machine's daemon is up. While it is not, the card reads
+ * nothing from it (nor from remote hosts, which it reaches) and shows only
+ * AO Cloud's requests, which do not depend on it.
+ */
+function GlobalApprovalCardContent({ localReady }: { localReady: boolean }) {
 	// The shell's card holds the one live stream every approval reader shares.
-	const pending = usePendingApprovals({ live: true });
+	const pendingQuery = usePendingApprovals({ live: localReady });
 	// Self-hosted remote hosts gate their agent browsers the same way.
-	const remote = useRemotePendingApprovals({ live: true });
+	const remoteRequests = useRemotePendingApprovals({ live: localReady });
+	// Nothing cached from before the daemon went away is shown as pending.
+	const pending = localReady ? pendingQuery.data ?? [] : [];
+	const remote = localReady ? remoteRequests : [];
 	// AO Cloud gates cloud sessions' agent browsers; CloudApprovalReader reads them.
 	const cloud = useCloudPendingApprovals();
 	const routed = useRoutedSessionKey();
 	const workspaces = useWorkspaceQuery();
 	const navigateToSession = useNavigateToSession();
-	const elsewhere = answerable([...(pending.data ?? []), ...remote, ...cloud].filter((request) => requestKey(request) !== routed));
+	const elsewhere = answerable([...pending, ...remote, ...cloud].filter((request) => requestKey(request) !== routed));
 	const request = elsewhere[0];
 	const { decide, busy, error } = useDecide(request);
 	const placement = useCornerPlacement();

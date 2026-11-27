@@ -218,6 +218,15 @@ describe("approval hosts", () => {
 		expect(screen.queryByText(/more/)).toBeNull();
 	});
 
+	it("shows a cloud request app-wide while this machine's daemon is down, and nothing cached from it", () => {
+		state.pending = [request("local", "ao-2")];
+		state.cloud = [{ ...request("cloudy", "cloud-4"), cloud: { baseUrl: "https://cp.test", orgId: "org-1" } }];
+		state.routedSessionId = "ao-1";
+		renderWith(<GlobalApprovalCard localReady={false} />);
+		expect(screen.getByTestId("approval-action")).toHaveTextContent("(cloudy)");
+		expect(screen.queryByText(/more/)).toBeNull();
+	});
+
 	it("reads cloud approvals from a reader of its own, not the approval card", () => {
 		state.liveReads = 0;
 		renderWith(<CloudApprovalReader />);

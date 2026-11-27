@@ -1713,7 +1713,8 @@ const replacementErrorCount = Object.keys(orchestratorReplacementErrors).length;
 				<GuidedTour />
 				<ArchiveModalHost />
 				<GlobalToast />
-				{daemonStatus.state === "ready" ? <GlobalApprovalCard /> : null}
+				{/* Cloud requests show while this machine's daemon is down too. */}
+				<GlobalApprovalCard localReady={daemonStatus.state === "ready"} />
 				{/* Cloud approvals do not wait for this machine's daemon. */}
 				<CloudApprovalReader />
 				<RestartToUpdateDialog />
