@@ -392,6 +392,15 @@ export async function installFakeBridge(page: Page, opts: FakeBridgeOptions = {}
 					onProfileSwitchFailed: unsubscribe,
 					onPageFocus: unsubscribe,
 				},
+				vault: {
+					list: async () => ({ available: false, items: [] }),
+					save: async () => {
+						throw new Error("Saved passwords need the desktop app");
+					},
+					delete: async () => undefined,
+					audit: async () => [],
+					reset: async () => undefined,
+				},
 				browserProfiles: {
 					list: async () => ({ profiles: [], defaultProfileId: null }),
 					create: async (name: string) => {
@@ -1428,6 +1437,15 @@ export async function installFakeAgent(page: Page, opts: FakeAgentOptions = {}):
 					onProfileSwitchConfirm: unsubscribe,
 					onProfileSwitchFailed: unsubscribe,
 					onPageFocus: unsubscribe,
+				},
+				vault: {
+					list: async () => ({ available: false, items: [] }),
+					save: async () => {
+						throw new Error("Saved passwords need the desktop app");
+					},
+					delete: async () => undefined,
+					audit: async () => [],
+					reset: async () => undefined,
 				},
 				browserProfiles: {
 					list: async () => ({ profiles: [], defaultProfileId: null }),

@@ -3,8 +3,11 @@ package sessionmanager
 import (
 	"context"
 	"errors"
+	"os"
+	"os/exec"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	"github.com/OrchestratorInc/agent-orchestrator/backend/internal/domain"
@@ -137,10 +140,9 @@ func SpawnTraceFrom(ctx context.Context) *SpawnTrace { return spawnTraceFrom(ctx
 
 // ClassifySpawnFailure names the step a spawn failed in and why, from closed
 // vocabularies only: failed_step is a SpawnStep* value, "prompt" or "other";
-// cause is timeout, a git cause (branch_exists, path_exists, locked,
-// permission, path_too_long, not_a_repo, killed), an agent cause (exited,
-// no_response, not_logged_in, killed) or other. Error text is read here and
-// never leaves the daemon.
+// cause is timeout, a worktree cause (workspaceCause), an agent cause
+// (agentStartCause), binary_missing for an agent that is not installed, or
+// other. Error text is read here and never leaves the daemon.
 func ClassifySpawnFailure(err error, facts SpawnTraceFacts) (step, cause string) {
 	step = facts.FailedStep
 	if step == "" {
@@ -165,16 +167,86 @@ func ClassifySpawnFailure(err error, facts SpawnTraceFacts) (step, cause string)
 	}
 	switch step {
 	case SpawnStepBranchFetch, SpawnStepWorktree:
-		var git interface{ FailureCause() string }
-		if errors.As(err, &git) {
-			return step, git.FailureCause()
-		}
+		return step, workspaceCause(err)
 	case SpawnStepAgentStart:
 		return step, agentStartCause(err)
+	}
+	if errors.Is(err, ports.ErrAgentBinaryNotFound) {
+		return step, "binary_missing"
 	}
 	return step, "other"
 }
 
+// workspaceCause names why a worktree could not be created: a typed refusal
+// AO raised itself, then git's own failure (the adapter's FailureCause, see
+// gitworktree.classifyGitFailure), then the operating-system error behind a
+// non-git step such as creating the managed folder.
+func workspaceCause(err error) string {
+	switch {
+	case errors.Is(err, ports.ErrWorkspacePathOccupied):
+		return "path_exists"
+	case errors.Is(err, ports.ErrWorkspaceBranchCheckedOutElsewhere), errors.Is(err, ports.ErrWorkspaceBranchAlreadyExists):
+		return "branch_exists"
+	case errors.Is(err, ports.ErrWorkspaceLocked):
+		return "locked"
+	case errors.Is(err, ports.ErrWorkspaceNotARepo):
+		return "not_a_repo"
+	case errors.Is(err, ports.ErrWorkspaceDefaultBranchUnresolved):
+		return "no_default_branch"
+	case errors.Is(err, ports.ErrWorkspaceBranchNotFetched):
+		return "ref_missing"
+	case errors.Is(err, ports.ErrWorkspaceBranchInvalid):
+		return "invalid_branch"
+	case errors.Is(err, ErrProjectNotResolvable):
+		return "repo_missing"
+	}
+	var git interface{ FailureCause() string }
+	if errors.As(err, &git) {
+		if cause := git.FailureCause(); cause != "other" {
+			return cause
+		}
+	}
+	if cause := osErrorCause(err); cause != "" {
+		return cause
+	}
+	if errors.Is(err, exec.ErrNotFound) {
+		return "git_missing"
+	}
+	return "other"
+}
+
+// osErrorCause names an operating-system failure shared by worktree and agent
+// starts: disk_full, permission, path_too_long, or "" for none of them. Typed
+// errors decide first, so a path in the message cannot override the real
+// errno; message text is only the fallback for errors that lost their type.
+func osErrorCause(err error) string {
+	switch {
+	case errors.Is(err, syscall.ENOSPC):
+		return "disk_full"
+	case errors.Is(err, os.ErrPermission):
+		return "permission"
+	case errors.Is(err, syscall.ENAMETOOLONG):
+		return "path_too_long"
+	}
+	text := strings.ToLower(err.Error())
+	switch {
+	case strings.Contains(text, "no space left on device"), strings.Contains(text, "not enough space on the disk"),
+		strings.Contains(text, "disk quota exceeded"):
+		return "disk_full"
+	case strings.Contains(text, "permission denied"), strings.Contains(text, "access is denied"),
+		strings.Contains(text, "operation not permitted"), strings.Contains(text, "read-only file system"):
+		return "permission"
+	case strings.Contains(text, "file name too long"), strings.Contains(text, "filename too long"):
+		return "path_too_long"
+	}
+	return ""
+}
+
+// agentStartCause names why a terminal agent or Chat controller did not start:
+// not_logged_in, killed, binary_missing, disk_full, permission, path_too_long,
+// a cause the chat adapter attached itself (agent_error: the agent answered
+// the start with an error; host_failed: AO's chat host process did not come
+// up), exited, no_response, incompatible or other.
 func agentStartCause(err error) string {
 	if errors.Is(err, ports.ErrChatAuthRequired) {
 		return "not_logged_in"
@@ -185,12 +257,35 @@ func agentStartCause(err error) string {
 		return "killed"
 	case strings.Contains(text, "not logged in"), strings.Contains(text, "please run /login"), strings.Contains(text, "authentication required"):
 		return "not_logged_in"
+	// Checked before the adapter's own cause: a binary resolved while AO's
+	// chat host prepares the launch fails inside the host start.
+	case errors.Is(err, ports.ErrAgentBinaryNotFound), errors.Is(err, exec.ErrNotFound),
+		strings.Contains(text, "executable file not found"), strings.Contains(text, "not a valid win32 application"):
+		return "binary_missing"
+	}
+	if cause := osErrorCause(err); cause != "" {
+		return cause
+	}
+	var adapter interface{ FailureCause() string }
+	if errors.As(err, &adapter) {
+		switch cause := adapter.FailureCause(); {
+		// An agent that refuses the ACP initialize handshake answered, but the
+		// useful label is that it does not speak AO's protocol.
+		case cause == "agent_error" && errors.Is(err, ports.ErrChatDriverIncompatible):
+			return "incompatible"
+		case cause == "agent_error" || cause == "host_failed":
+			return cause
+		}
+	}
+	switch {
 	case errors.Is(err, ports.ErrChatHostNotRunning), strings.Contains(text, "peer disconnected"),
 		strings.Contains(text, "exit status"), strings.Contains(text, "exited"),
 		strings.Contains(text, "broken pipe"), strings.Contains(text, "closed pipe"):
 		return "exited"
 	case strings.Contains(text, "timed out"), strings.Contains(text, "timeout"), strings.Contains(text, "no response"), strings.Contains(text, "did not respond"):
 		return "no_response"
+	case errors.Is(err, ports.ErrChatDriverIncompatible):
+		return "incompatible"
 	}
 	return "other"
 }

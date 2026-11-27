@@ -2902,6 +2902,62 @@ func TestSessionsAPI_PreviewFileDoesNotCrossSessionThroughCanonicalSymlink(t *te
 	}
 }
 
+type preparationAttachmentSessionService struct {
+	*fakeSessionService
+	preparations map[domain.SessionID]domain.SessionRecord
+}
+
+func (s *preparationAttachmentSessionService) GetAttachmentRecord(ctx context.Context, id domain.SessionID) (domain.SessionRecord, error) {
+	if rec, ok := s.preparations[id]; ok {
+		return rec, nil
+	}
+	return s.GetRecord(ctx, id)
+}
+
+func TestSessionsAPI_PreviewFileServesPreparedSessionAttachmentsOnly(t *testing.T) {
+	dataDir := t.TempDir()
+	workspace := t.TempDir()
+	want := []byte("\x89PNG\r\n\x1a\nprepared-image")
+	store := attachmentstore.New(dataDir)
+	if err := store.Put(context.Background(), "ao-prep", workspace, "attachment-1.png", want); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(workspace, "secret.txt"), []byte("nope"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	svc := &preparationAttachmentSessionService{
+		fakeSessionService: newFakeSessionService(),
+		preparations: map[domain.SessionID]domain.SessionRecord{
+			"ao-prep": {
+				ID:                "ao-prep",
+				IsTaskPreparation: true,
+				Metadata:          domain.SessionMetadata{WorkspacePath: workspace},
+			},
+		},
+	}
+	log := slog.New(slog.NewTextHandler(io.Discard, nil))
+	srv := httptest.NewServer(httpd.NewRouterWithControl(
+		config.Config{DataDir: dataDir}, log, nil, httpd.APIDeps{Sessions: svc}, httpd.ControlDeps{},
+	))
+	t.Cleanup(srv.Close)
+
+	body, status, _ := doRequest(t, srv, http.MethodGet,
+		"/api/v1/sessions/ao-prep/preview/files/.ao/attachments/attachment-1.png", "")
+	if status != http.StatusOK {
+		t.Fatalf("prepared attachment preview = %d, body=%s", status, body)
+	}
+	if !bytes.Equal(body, want) {
+		t.Fatalf("prepared attachment body = %q, want %q", body, want)
+	}
+
+	otherBody, otherStatus, _ := doRequest(t, srv, http.MethodGet,
+		"/api/v1/sessions/ao-prep/preview/files/secret.txt", "")
+	if otherStatus != http.StatusNotFound || !bytes.Contains(otherBody, []byte(`"code":"SESSION_NOT_FOUND"`)) {
+		t.Fatalf("non-attachment file on preparation = %d, %s; want SESSION_NOT_FOUND", otherStatus, otherBody)
+	}
+}
+
 func TestSessionsAPI_PreviewOriginErrorContract(t *testing.T) {
 	svc := newFakeSessionService()
 	workspace := t.TempDir()

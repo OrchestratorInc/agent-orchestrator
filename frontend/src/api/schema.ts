@@ -8317,6 +8317,11 @@ export interface components {
             /** @description Expected or adapter-resolved executable destination. */
             expectedDestination?: string;
             /**
+             * @description Set only when status is failed: why, from a closed list read from the error and output.
+             * @enum {string}
+             */
+            failureCause?: "timeout" | "not_found_after_install" | "verify_failed" | "node_missing" | "npm_missing" | "brew_missing" | "tool_missing" | "xcode_tools_missing" | "disk_full" | "permission_denied" | "network" | "locked" | "exit_nonzero" | "other";
+            /**
              * Format: date-time
              * @description Absent until the job finishes.
              */

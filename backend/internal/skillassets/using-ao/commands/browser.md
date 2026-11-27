@@ -100,6 +100,8 @@ ao browser click <ref> [--human] [--json]
 ao browser dblclick <ref> [--json]
 ao browser focus <ref> [--json]
 ao browser fill <ref> <text> [--json]
+ao browser login [origin] [--item <id>] [--json]
+ao browser fill-secret <ref> --item <id> [--field username|password|totp | --totp] [--json]
 ao browser type <ref> <text> [--json]
 ao browser press <key> [--json]
 ao browser hover <ref> [--json]
@@ -225,6 +227,34 @@ instead, omit the path and explicitly combine `--base64` with `--json`.
 
 `ao browser open` requires an explicit HTTP(S) URL or hostname. It does not
 silently search the web and does not allow `file://` or local filesystem paths.
+
+## Signing in with saved credentials
+
+Never ask the user to paste a password or code into the chat, and never type one
+with `fill`/`type`. The user saves sites in Settings › Browser › Saved passwords; use them with:
+
+```bash
+ao browser open https://app.example.com/login
+ao browser login                 # types username + password; on a 2FA page, the TOTP code
+ao browser click e7              # submit the form yourself
+```
+
+`login` fills only on an exact origin match (scheme, host and port) and only in
+this project. Pass the origin you expect (`ao browser login https://app.example.com`)
+to refuse a page that redirected somewhere else. When several saved credentials match it lists their ids; rerun
+with `--item <id>`. For a field `login` cannot find, use
+`ao browser fill-secret <ref> --item <id> [--field username|--totp]`.
+
+Output only ever shows `••••`. `press` is refused while focus is in a filled
+password or code field (`BROWSER_SECRET_FIELD_LOCKED`); click elsewhere or submit.
+While a page holds a filled password, selectors or raw refs that test a `value`
+(for example `input[value^="a"]`) are refused; use snapshot refs. Filled passwords and codes are also masked in
+later `snapshot`, `get value`, console and network output. The first fill of each
+saved login on a site waits for the user to approve it in Orchestrator's
+approval prompt; if they
+decline or do not answer, the command fails, so ask them in chat instead of
+retrying. Saved credentials work
+in the Browser panel only, not in Chrome mode yet.
 
 ## Chrome mode: the user's own Chrome
 

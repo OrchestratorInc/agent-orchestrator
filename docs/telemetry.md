@@ -73,7 +73,13 @@ and reads the consent policy itself. An import failure can therefore report even
 when the renderer never starts. Early reports use the same error codes and message rules, with a standard
 exception type and validated asset locations. Once the renderer starts,
 the same listeners hand off to its normal reporter. Early captures are not
-replayed through the later renderer boundaries.
+replayed through the later renderer boundaries. Chromium's ResizeObserver loop
+notice (`ResizeObserver loop completed with undelivered notifications` or
+`ResizeObserver loop limit exceeded`, raised with no error object) is a browser
+warning, not a failure, and is never reported. Neither is a bare `Script error.`
+with no error object and no file name, which is how the browser hides a
+cross-origin script's error; one with a file name or an error object still
+reports.
 Router error boundaries and query/mutation cache callbacks also report unexpected
 client failures. The sender excludes query keys, mutation inputs and route
 parameters. API failures retain a local ownership marker through message wrapping,
@@ -151,7 +157,11 @@ sampled by install rather than by event:
   of its processes, and the rest send none. An install whose identifier cannot
   be read is outside the sample.
 - Fatal events send from every install: Electron main uncaught exceptions,
-  Electron process crashes (`process_exit`), and daemon panics. Renderer errors,
+  Electron process crashes (`process_exit`), and daemon panics. A process
+  crash is titled, tagged and grouped by its `reason` (`abnormal-exit`,
+  `crashed`, `oom`, `launch-failed`, `integrity-failure`) and its `process`
+  type: `renderer`, `gpu`, `utility`, `zygote`, `sandbox_helper`,
+  `pepper_plugin`, `pepper_plugin_broker`, or `unknown` for any other name. Renderer errors,
   including unhandled window errors and rejections, are non-fatal and sampled.
   Failed onboarding installs and sign-ins also send from every install (see
   "Onboarding errors in Sentry"): they are rare and block a new user's first
@@ -195,6 +205,16 @@ Orchestrator.inc sends structured events in a few broad categories:
   (`duration_ms`) and the names and line numbers of the four innermost code
   functions that held it (`caller`). It never includes file paths, database
   contents, or message text
+- Daemon exits: when the desktop app's daemon stops on its own,
+  `ao.daemon.failed` sends the failure `code`, the numeric `exit_code` or
+  `signal`, and `exit_reason`, one of `already_running`, `data_dir_locked`,
+  `store_open_failed`, `run_file_unreadable`, `working_dir_failed`,
+  `port_in_use`, `disk_full`, `permission_denied`, `panic`, `crashed`, or
+  `unknown`. `crashed` is a Windows native crash, read from its NTSTATUS exit
+  code (for example `3221225477`, access violation). The reason is read from
+  the exit code and the daemon's last output line on the device; the output
+  itself is never sent. The handled Sentry report for the exit carries the
+  same code and reason as its `detail` (`code:3221225477:crashed`)
 - Daemon startup time: once the daemon's API starts listening,
   `ao.daemon.ready` sends `startup_ms`, the milliseconds from the daemon
   process starting, split into back-to-back steps that add up to it:
@@ -521,12 +541,38 @@ New (`historical: false`) PR outcomes add:
   controller).
 - `failed_step` is `model_check`, `branch_fetch`, `worktree`, `setup`,
   `agent_start`, `prompt` or `other`.
-- `cause` is a fixed value, never error text: `timeout`; for git and worktree
-  failures `branch_exists`, `path_exists`, `locked`, `permission`,
-  `path_too_long`, `not_a_repo`, `killed` or `other`, classified from git's
-  stderr inside the daemon; for agent and Chat starts `exited`,
-  `no_response`, `not_logged_in`, `killed` or `other`. Sentry spawn errors
-  carry `failed_step` and `cause` as tags.
+- `cause` is a fixed value from a closed list, never error text, paths or
+  messages. The daemon reads the error inside the process to choose it and
+  sends only the value. Sentry spawn errors carry `failed_step` and `cause`
+  as tags and drop any value not on this list.
+  - Any step: `timeout` (the start ran out of its time budget),
+    `permission` (permission denied, read-only file system), `disk_full`
+    (no space left or quota exceeded), `path_too_long`, `killed` (the process
+    was killed by a signal) and `other` (none of the causes below).
+  - Worktree and branch steps, from AO's own typed refusals first, then git's
+    stderr and exit state, then the operating-system error behind a non-git
+    step: `branch_exists` (the branch exists or is checked out in another
+    worktree), `path_exists` (the worktree folder is already occupied),
+    `locked` (a git lock file or a locked worktree), `not_a_repo` (the project
+    folder is not a Git repository), `unsafe_repo` (git refused a repository
+    it considers of dubious ownership), `repo_missing` (the project folder is
+    gone or not registered), `git_missing` (git is not installed, including
+    the macOS stub that needs the Command Line Tools), `in_use` (a file is held
+    by another process), `repo_corrupt` (a corrupt object or index),
+    `ref_conflict` (the branch name collides with an existing branch folder,
+    such as `a` and `a/b`), `ref_missing` (the start branch or commit does not
+    exist locally), `no_default_branch` (the default branch could not be
+    determined), `invalid_branch` (the branch name is not valid) and
+    `git_error` (git ran and failed with a message not listed here). Only
+    `git worktree` and `git status` run with English messages, so other git
+    commands in a non-English locale can report `git_error`.
+  - Agent and Chat starts: `not_logged_in`, `binary_missing` (the agent is
+    not installed, not on PATH, or not a valid executable), `agent_error` (the
+    agent answered the start request with an error), `host_failed` (AO's
+    background chat host process did not start or could not be reached),
+    `exited` (the agent process exited or disconnected while starting),
+    `no_response` (the agent did not answer in time) and `incompatible` (the
+    agent's version does not speak the protocol AO expects).
 - `mode` is `chat` or `terminal` (absent when the start failed before a mode
   was chosen), `async` is whether the start went on in the background after
   the request was answered, and `model` is a fixed Claude family alias
@@ -1254,7 +1300,7 @@ and `project_source` on its `step_completed` says which it was.
 | Event | When it is sent | Onboarding-specific properties |
 | --- | --- | --- |
 | `ao.onboarding.action_started` | An install or sign-in starts, by a click or (`auto`) by the page, as the GitHub CLI login does once | `action`, `target`, `step`, `step_index`, `attempt`, `auto` |
-| `ao.onboarding.action_finished` | That attempt ends, once, or onboarding ends while it still runs (`left`) | `action`, `target`, `step`, `step_index`, `attempt`, `outcome`, `reason`, `error_code`, `duration_ms` |
+| `ao.onboarding.action_finished` | That attempt ends, once, or onboarding ends while it still runs (`left`) | `action`, `target`, `step`, `step_index`, `attempt`, `outcome`, `reason`, `failure_cause`, `error_code`, `duration_ms` |
 
 `attempt` counts from 1 for each action and target in a launch, so a value
 above 1 is a retry. The existing `ao.projects.clone_failed`,
@@ -1284,8 +1330,10 @@ sampling.
   `<action>:<reason>`, `action`, `reason`, `target` and `flow` `onboarding`.
   `target` is what the action was for, from a fixed list in
   `shared/onboarding-failures.ts` (`gh`, `tmux`, `claude-code`, `codex` and
-  the other registry agents), or `other` for any id not on it. It is a tag to
-  filter by, not part of the grouping. Only these
+  the other registry agents), or `other` for any id not on it. An
+  `install_failed` issue also carries `cause`, the same closed-list value as
+  PostHog's `failure_cause` (below). Both are tags to filter by, not part of
+  the grouping. Only these
   reasons are sent: `start_failed`, `install_failed`, `interrupted`,
   `lost_contact`, `cleanup_failed`, `request_failed` and `other`. A login the
   person did not finish (`not_signed_in`), a platform with no installer
@@ -1352,6 +1400,34 @@ sampling.
   `interrupted`, `unsupported`, `lost_contact`, `not_signed_in`,
   `cleanup_failed`, `request_failed`, `documentation` or `other`.
   `error_code` is the API's error code, never its message.
+- `failure_cause` on `action_finished` comes only with `reason`
+  `install_failed` (`dependency_install`, `gh_install` and `agent_install`).
+  The daemon reads it from the failed install job's error and installer
+  output (`InstallJob.failureCause`, `systeminstall/failure_cause.go`); the
+  error and output themselves never leave the machine. It is one of:
+  - `timeout`: the install, or the check after it, ran past its deadline.
+  - `not_found_after_install`: the command finished but the program could
+    not be found afterwards (not on the daemon's PATH, or its adapter cannot
+    resolve it).
+  - `verify_failed`: the program was found but did not start or report the
+    expected version.
+  - `node_missing`, `npm_missing`, `brew_missing`: Node.js, npm or Homebrew
+    is not installed or not on PATH.
+  - `tool_missing`: another program the installer runs (`curl`, `bash`,
+    `winget`, `apt-get` and so on) is missing.
+  - `xcode_tools_missing`: macOS Command Line Tools are missing or broken.
+  - `disk_full`: no space left on the disk.
+  - `permission_denied`: the installer could not write where it installs
+    (`EACCES`, `EPERM`, a `sudo` password prompt, Windows "Access is denied").
+  - `network`: a download or registry request failed (DNS, connection,
+    proxy, TLS or an HTTP error status).
+  - `locked`: the package manager or the agent was busy with another install
+    (a held Homebrew or dpkg lock, an install already running).
+  - `exit_nonzero`: the installer exited with an error none of the above
+    explains.
+  - `other`: anything else, including a cause this build does not know.
+
+  A daemon too old to report a cause sends none, so the property is absent.
 
 `ao.renderer.cloud_signed_in` also carries `source` `onboarding` when the
 sign-in finished within 30 minutes of clicking Sign in on onboarding's account

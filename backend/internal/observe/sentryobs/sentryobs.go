@@ -457,8 +457,7 @@ func safeSentryTag(key, value string) bool {
 		_, ok := spawnFailedSteps[value]
 		return ok
 	case "cause":
-		_, ok := spawnFailureCauses[value]
-		return ok
+		return telemetrymeta.IsSpawnFailureCause(value)
 	}
 	if ok, handled := safeBackgroundTag(key, value); handled {
 		return ok

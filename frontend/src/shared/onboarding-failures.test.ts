@@ -1,5 +1,5 @@
 import { expect, it } from "vitest";
-import { ONBOARDING_ACTIONS, ONBOARDING_SENTRY_REASONS, onboardingFailureCode, onboardingSentryTarget, parseOnboardingFailureCode } from "./onboarding-failures";
+import { ONBOARDING_ACTIONS, ONBOARDING_FAILURE_CAUSES, ONBOARDING_SENTRY_REASONS, onboardingFailureCause, onboardingFailureCode, onboardingSentryTarget, parseOnboardingFailureCode } from "./onboarding-failures";
 
 it("round-trips every reported action and reason", () => {
 	for (const action of ONBOARDING_ACTIONS) {
@@ -33,4 +33,12 @@ it("tags only listed targets, and anything else as other", () => {
 	expect(onboardingSentryTarget("")).toBeUndefined();
 	expect(onboardingSentryTarget(undefined)).toBeUndefined();
 	expect(onboardingSentryTarget(42)).toBeUndefined();
+});
+
+it("keeps only listed failure causes, and any other text as other", () => {
+	for (const cause of ONBOARDING_FAILURE_CAUSES) expect(onboardingFailureCause(cause)).toBe(cause);
+	expect(onboardingFailureCause("EACCES: permission denied, mkdir '/Users/someone'")).toBe("other");
+	expect(onboardingFailureCause("")).toBeUndefined();
+	expect(onboardingFailureCause(undefined)).toBeUndefined();
+	expect(onboardingFailureCause(42)).toBeUndefined();
 });
