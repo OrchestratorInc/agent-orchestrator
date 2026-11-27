@@ -236,7 +236,7 @@ export function ProjectSettingsEditor({ initialValues, section, capabilities, de
 					</ProjectSettingsSection>}
 				</>}
 				{capabilities.browserTemporary && <ProjectSettingsSection title={t("settings.project.browser")} grouped>
-					<ProjectBrowserStartSelect temporary={draft.browserTemporary ?? false} onChange={(browserTemporary) => patch({ browserTemporary })} />
+					{settingRow("browserTemporary", ["browserTemporary"], <ProjectBrowserStartSelect temporary={draft.browserTemporary ?? false} onChange={(browserTemporary) => patch({ browserTemporary })} />)}
 				</ProjectSettingsSection>}
 				{generalExtra}
 			</> : <>

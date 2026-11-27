@@ -68,4 +68,40 @@ describe("createProjectBrowserTemporaryLookup", () => {
 		expect(await lookup("s")).toBe(false);
 		expect(fetchMock).not.toHaveBeenCalled();
 	});
+
+	it("retries a failed lookup once, so a busy daemon does not skip the setting", async () => {
+		let sessionCalls = 0;
+		const lookup = createProjectBrowserTemporaryLookup({
+			daemonPort: () => 4321,
+			retryDelayMs: 1,
+			log: vi.fn(),
+			fetch: (async (url: string) => {
+				if (url.includes("/sessions/")) {
+					sessionCalls += 1;
+					return sessionCalls === 1 ? jsonResponse({}, 503) : jsonResponse({ session: { projectId: "p" } });
+				}
+				return jsonResponse({ status: "ok", project: { config: { browserTemporary: true } } });
+			}) as unknown as typeof fetch,
+		});
+		expect(await lookup("s")).toBe(true);
+		expect(sessionCalls).toBe(2);
+	});
+
+	it("warns when the lookup still fails, then falls back to the default profile", async () => {
+		const log = vi.fn();
+		const fetchMock = vi.fn(async () => { throw new Error("timed out"); });
+		const lookup = createProjectBrowserTemporaryLookup({ daemonPort: () => 4321, retryDelayMs: 1, log, fetch: fetchMock as unknown as typeof fetch });
+		expect(await lookup("s")).toBe(false);
+		expect(fetchMock).toHaveBeenCalledTimes(2);
+		expect(log).toHaveBeenCalledWith(expect.stringContaining("project browser setting"));
+	});
+
+	it("does not retry or warn for a session the daemon does not know", async () => {
+		const log = vi.fn();
+		const fetchMock = vi.fn(async () => jsonResponse({ error: { code: "NOT_FOUND" } }, 404));
+		const lookup = createProjectBrowserTemporaryLookup({ daemonPort: () => 4321, retryDelayMs: 1, log, fetch: fetchMock as unknown as typeof fetch });
+		expect(await lookup("s")).toBe(false);
+		expect(fetchMock).toHaveBeenCalledTimes(1);
+		expect(log).not.toHaveBeenCalled();
+	});
 });

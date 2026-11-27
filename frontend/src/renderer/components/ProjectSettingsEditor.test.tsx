@@ -243,3 +243,23 @@ describe.each([false, true])("shared settings page, Cloud=%s", (cloud) => {
 		await waitFor(() => expect(onSaveState).toHaveBeenLastCalledWith(expect.objectContaining({ phase: "saved", dirty: false, error: undefined })));
 	});
 });
+
+describe("Browser start setting", () => {
+	it("shows a refused save inline next to the changed browser setting", async () => {
+		const save = vi.fn().mockRejectedValue(new Error("Could not save."));
+		const onSaveState = vi.fn();
+		const client = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
+		render(<QueryClientProvider client={client}><TooltipProvider>
+			<ProjectSettingsEditor initialValues={initialValues} section="general"
+				capabilities={{ workflow: true, sessionPrefix: true, intake: false, reviewer: true, requiredAgents: true, browserTemporary: true }}
+				details={[]} modelScope={() => ""} renderAgent={() => null} save={save} onSaveState={onSaveState} />
+		</TooltipProvider></QueryClientProvider>);
+
+		await userEvent.click(screen.getByRole("button", { name: "Sessions start in" }));
+		await userEvent.click(await screen.findByRole("menuitem", { name: /Temporary browser/ }));
+		fireEvent.submit(document.getElementById("project-settings-form")!);
+
+		await waitFor(() => expect(onSaveState).toHaveBeenLastCalledWith(expect.objectContaining({ phase: "failed" })));
+		expect(within(screen.getByTestId("setting-browserTemporary")).getByText(/Unsaved changes.*Could not save/)).toBeInTheDocument();
+	});
+});
