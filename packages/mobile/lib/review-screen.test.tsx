@@ -1,6 +1,7 @@
 import { act, create, type ReactTestRenderer } from "react-test-renderer";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { DashboardSession, SessionReviews } from "./api";
+import { RECONNECTING_ACTION_COPY } from "./connectionError";
 
 const fixtures = vi.hoisted(() => ({
 	config: { host: "dev.local", httpPort: "3011", muxPort: "3012", secure: false, password: "secret", hostId: "dev" },
@@ -13,6 +14,10 @@ const fixtures = vi.hoisted(() => ({
 	theme: new Proxy({}, { get: () => "#000000" }),
 	getSessionPR: vi.fn(async (): Promise<unknown[]> => []),
 	loadPRDetails: vi.fn(async (): Promise<void> => {}),
+	sendMessage: vi.fn(async () => {}),
+	runs: [] as object[],
+	// The machine's verified connection; false while it is being re-raced (after an app switch).
+	connected: true,
 }));
 
 vi.mock("react-native", async () => {
@@ -59,18 +64,18 @@ vi.mock("expo-router", async () => {
 vi.mock("./api", () => ({
 	getSessionReviews: vi.fn(async (): Promise<SessionReviews> => ({
 		reviews: [{ prUrl: "https://github.com/acme/repo/pull/12", prNumber: 12, title: "Improve mobile review", targetSha: "abcdef123456", status: "needs_review" }],
-		runs: [],
+		runs: fixtures.runs,
 		reviewerSurface: fixtures.reviewerSurface,
 	} as unknown as SessionReviews)),
 	getSessionPR: fixtures.getSessionPR,
 	loadPRDetails: fixtures.loadPRDetails,
 	getSession: fixtures.getSession,
 	sessionTitle: (session: DashboardSession) => session.displayName ?? session.id,
-	cancelSessionReview: vi.fn(), killSessionReviewer: vi.fn(), mergeSessionPR: vi.fn(), restoreSessionReviewer: vi.fn(), sendMessage: vi.fn(), triggerSessionReview: vi.fn(),
+	cancelSessionReview: vi.fn(), killSessionReviewer: vi.fn(), mergeSessionPR: vi.fn(), restoreSessionReviewer: vi.fn(), sendMessage: fixtures.sendMessage, triggerSessionReview: vi.fn(),
 }));
 vi.mock("./store", () => ({
 	HostScope: ({ children }: { children: unknown }) => children,
-	useApp: () => ({ config: fixtures.hostId === "dev" ? fixtures.config : null, sessions: fixtures.sessions, currentHostId: fixtures.hostId, restore: fixtures.restore }),
+	useApp: () => ({ config: fixtures.hostId === "dev" && fixtures.connected ? fixtures.config : null, sessions: fixtures.sessions, currentHostId: fixtures.hostId, restore: fixtures.restore }),
 }));
 vi.mock("./ThemeProvider", () => ({ useTheme: () => fixtures.theme, useThemedStyles: (factory: (theme: object) => object) => factory(fixtures.theme) }));
 vi.mock("./ui", () => ({ Button: "Button", Dot: "Dot", EmptyState: "EmptyState", ListSectionHeader: "ListSectionHeader" }));
@@ -100,6 +105,9 @@ beforeEach(() => {
 	fixtures.restore.mockReset();
 	fixtures.reviewerSurface = undefined;
 	fixtures.hostId = "dev";
+	fixtures.sendMessage.mockReset().mockResolvedValue(undefined);
+	fixtures.runs = [];
+	fixtures.connected = true;
 	cloudState.client = {};
 	cloudState.org = null;
 	cloudState.status = "signed-out";
@@ -254,6 +262,45 @@ it("finishes the details read even when the page reloads while it is out", async
 	expect(spinner()).toHaveLength(0);
 	expect(text("No comments yet.")).toHaveLength(1);
 	expect(fixtures.getSessionPR.mock.calls.length).toBeGreaterThan(reads);
+});
+
+// Leaving the app (Home, the app switcher, an "Open in…?" prompt) drops the
+// machine's verified connection until its endpoints answer again. The section is
+// about the machine, not that connection: it stays, keeps its Open/Resolved
+// choice, and an action asks to wait instead of the section vanishing.
+it("keeps the Comments section and its view while the machine reconnects", async () => {
+	fixtures.getSession.mockRejectedValue(new Error("not found"));
+	fixtures.runs = [{
+		id: "run-1", prUrl: "https://github.com/acme/repo/pull/12", status: "completed", body: "Fix the sum.", createdAt: "2026-11-08T21:00:00Z",
+		harness: "claude-code", verdict: "changes_requested", githubReviewId: "", autoInjectReview: false, triggerSource: "manual", targetSha: "abcdef123456",
+	}];
+	const filter = () => renderer!.root.findAll((node) => (node.type as unknown) === "ReviewCommentFilter");
+	const reconnecting = () => renderer!.root.findAll((node) => (node.type as unknown) === "Text" && node.props.children === RECONNECTING_ACTION_COPY);
+	await render();
+	expect(filter()).toHaveLength(1);
+	await act(async () => { filter()[0]!.props.onChange("resolved"); });
+
+	fixtures.connected = false;
+	await act(async () => { renderer!.update(<ReviewDetailScreen />); });
+	expect(filter()).toHaveLength(1);
+	expect(filter()[0]!.props.view).toBe("resolved");
+
+	// Back on Open, Send to agent says it is still reconnecting and sends nothing.
+	await act(async () => { filter()[0]!.props.onChange("open"); });
+	const send = renderer!.root.find((node) => (node.type as unknown) === "ReviewActionButton" && node.props.label === "Send to agent");
+	await act(async () => { send.props.onPress(); });
+	expect(fixtures.sendMessage).not.toHaveBeenCalled();
+	expect(reconnecting()).toHaveLength(1);
+
+	// Connected again: the note goes at once rather than claiming a reconnect that is over.
+	fixtures.connected = true;
+	await act(async () => { renderer!.update(<ReviewDetailScreen />); });
+	expect(filter()[0]!.props.view).toBe("open");
+	expect(reconnecting()).toHaveLength(0);
+	const again = renderer!.root.find((node) => (node.type as unknown) === "ReviewActionButton" && node.props.label === "Send to agent");
+	await act(async () => { again.props.onPress(); });
+	expect(fixtures.sendMessage).toHaveBeenCalledTimes(1);
+	expect(reconnecting()).toHaveLength(0);
 });
 
 describe("a Cloud worker's pull request", () => {

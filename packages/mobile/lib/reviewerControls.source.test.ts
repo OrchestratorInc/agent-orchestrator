@@ -166,7 +166,7 @@ describe("reviewer control integration", () => {
 	// mapping turns those into copy that says what to do, as other screens do.
 	it("shows failures through userFacingError, never a raw error message", () => {
 		for (const screen of [detail, actions]) {
-			expect(screen).toContain('import { userFacingError } from "../../lib/connectionError";');
+			expect(screen).toMatch(/import \{[^}]*\buserFacingError\b[^}]*\} from "\.\.\/\.\.\/lib\/connectionError";/);
 			expect(screen).not.toMatch(/\.message\s*:/);
 		}
 		expect(detail).toContain('setError(userFacingError(value, "Could not load this review."))');

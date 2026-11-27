@@ -8,7 +8,7 @@ import { AgentLogo } from "./AgentLogo";
 import type { ReviewRun } from "./api";
 import { AppSymbol } from "./AppSymbol";
 import { GitHubComment, WorkerSessionsProvider } from "./chat/AutomationMessage";
-import { userFacingError } from "./connectionError";
+import { RECONNECTING_ACTION_COPY, userFacingError } from "./connectionError";
 import { rowDividerWidth } from "./divider";
 import { haptics } from "./haptics";
 import { ItemActionsMenu } from "./item-actions-menu";
@@ -65,7 +65,12 @@ export function ReviewCommentsSection({
 	onViewInFile,
 }: {
 	block: MobileReviewBlock;
-	backend: ReviewBackend;
+	/**
+	 * The machine's live connection, or null while the app re-races its
+	 * endpoints (after an app switch). The section stays on screen through that;
+	 * only its requests wait for the connection.
+	 */
+	backend: ReviewBackend | null;
 	sessionId: string;
 	/** Where this session's hand-sent comments are remembered. */
 	sentScope: string;
@@ -94,12 +99,25 @@ export function ReviewCommentsSection({
 	// Asked to review again from here: not offered again, so a second tap cannot send another request.
 	const [asked, setAsked] = useState<ReadonlySet<string>>(() => new Set());
 	const providerUrl = block.provider?.url ?? block.prUrl;
+	// What this machine can do (resolve, reply, ask again), from its last connection,
+	// so a reconnect does not take actions out of the menus. Never sent a request.
+	const knownBackend = useRef(backend);
+	if (backend) knownBackend.current = backend;
+	const can = backend ?? knownBackend.current;
+	// The connection as of now, not as of the render that made a handler: a
+	// Resolve confirmation can stay open across a reconnect.
+	const liveBackend = useRef(backend);
+	liveBackend.current = backend;
+	const live = (): ReviewBackend => {
+		if (!liveBackend.current) throw new Error(RECONNECTING_ACTION_COPY);
+		return liveBackend.current;
+	};
 
 	// The SCM observer reads a PR's threads only for the open PRs it follows; ask once for the rest.
 	const [details, setDetails] = useState<"idle" | "loading" | "failed">("idle");
 	const [detailsAttempt, retryDetails] = useReducer((count: number) => count + 1, 0);
 	const askedDetails = useRef(new Set<string>());
-	const loadDetails = backend.loadDetails;
+	const loadDetails = backend?.loadDetails;
 	// Keyed on the PR, not its summary object: every quiet reload (the page polls
 	// while a review runs) hands over a new object for the same PR, and a re-run
 	// for that must not throw away the read already out.
@@ -125,6 +143,15 @@ export function ReviewCommentsSection({
 		);
 	}, [detailsAttempt, detailsNumber, detailsRead, detailsUrl, loadDetails, onChanged]);
 
+	// Back on the machine: a "still reconnecting" note is no longer true. Other failures stay.
+	const connected = Boolean(backend);
+	useEffect(() => {
+		if (!connected) return;
+		setSectionError((current) => current === RECONNECTING_ACTION_COPY ? "" : current);
+		setErrors((current) => [...current.values()].includes(RECONNECTING_ACTION_COPY)
+			? new Map([...current].filter(([, message]) => message !== RECONNECTING_ACTION_COPY))
+			: current);
+	}, [connected]);
 	const setError = useCallback((key: string, message?: string) => setErrors((current) => {
 		if (!message && !current.has(key)) return current;
 		const next = new Map(current);
@@ -150,9 +177,10 @@ export function ReviewCommentsSection({
 
 	// Cloud delivers an Orchestrator review it stored through its own queue; everything else is a message to the worker.
 	const deliver = async (comment: ReviewComment) => {
-		const run = backend.cloud && comment.source === "orchestrator" && comment.kind === "summary" ? runs.find((item) => item.id === comment.runId) : undefined;
-		if (run) await backend.sendRun(sessionId, run);
-		else await backend.sendToWorker(sessionId, reviewCommentWorkerMessage(comment, block));
+		const connection = live();
+		const run = connection.cloud && comment.source === "orchestrator" && comment.kind === "summary" ? runs.find((item) => item.id === comment.runId) : undefined;
+		if (run) await connection.sendRun(sessionId, run);
+		else await connection.sendToWorker(sessionId, reviewCommentWorkerMessage(comment, block));
 	};
 	const sendOne = async (comment: ReviewComment) => {
 		if (sending.current.has(comment.sentKey) || commentIsSent(comment, sent)) return;
@@ -178,14 +206,15 @@ export function ReviewCommentsSection({
 		setSendingAll(true);
 		setSectionError("");
 		try {
-			if (backend.cloud) {
+			const connection = live();
+			if (connection.cloud) {
 				// One delivery each, marked as it lands: a failure partway leaves only the rest to send again.
 				for (const comment of batch) {
 					await deliver(comment);
 					markReviewCommentsSent(sentScope, [comment.sentKey]);
 				}
 			} else {
-				await backend.sendToWorker(sessionId, reviewCommentsWorkerMessage(block, batch));
+				await connection.sendToWorker(sessionId, reviewCommentsWorkerMessage(block, batch));
 				markReviewCommentsSent(sentScope, keys);
 			}
 			haptics.success();
@@ -197,15 +226,16 @@ export function ReviewCommentsSection({
 		}
 	};
 	const resolve = (comment: ReviewComment) => {
-		const resolveComment = backend.resolveComment;
 		const url = comment.url;
-		if (!resolveComment || !url || resolving) return;
+		if (!can?.resolveComment || !url || resolving) return;
 		Alert.alert("Resolve comment?", "Marks the thread resolved on GitHub.", [
 			{ text: "Cancel", style: "cancel" },
 			{ text: "Resolve", onPress: () => void (async () => {
 				setResolving(comment.key);
 				setError(comment.key);
 				try {
+					const resolveComment = live().resolveComment;
+					if (!resolveComment) return;
 					await resolveComment(sessionId, providerUrl, url);
 					setResolvedHere((current) => new Set(current).add(comment.key));
 					setExpanded(comment, false);
@@ -220,10 +250,12 @@ export function ReviewCommentsSection({
 		]);
 	};
 	const askAgain = async (comment: ReviewComment, reviewerId: string) => {
-		if (!backend.rerequest) return;
+		if (!can?.rerequest) return;
 		setError(comment.key);
 		try {
-			await backend.rerequest(sessionId, providerUrl, reviewerId);
+			const rerequest = live().rerequest;
+			if (!rerequest) return;
+			await rerequest(sessionId, providerUrl, reviewerId);
 			setAsked((current) => new Set(current).add(rerequestKey(reviewerId)));
 			haptics.success();
 			await onChanged();
@@ -275,9 +307,9 @@ export function ReviewCommentsSection({
 								resolving={resolving === comment.key}
 								error={errors.get(comment.key)}
 								onSend={commentCanSend(comment) ? () => void sendOne(comment) : undefined}
-								onResolve={backend.resolveComment && commentCanResolve(comment) ? () => resolve(comment) : undefined}
-								onReply={onReply && backend.reply && commentReplyOffered(comment, block) ? () => onReply({ comment, block }) : undefined}
-								onAskAgain={backend.rerequest && reviewerId && !asked.has(rerequestKey(reviewerId)) ? () => void askAgain(comment, reviewerId) : undefined}
+								onResolve={can?.resolveComment && commentCanResolve(comment) ? () => resolve(comment) : undefined}
+								onReply={onReply && can?.reply && commentReplyOffered(comment, block) ? () => onReply({ comment, block }) : undefined}
+								onAskAgain={can?.rerequest && reviewerId && !asked.has(rerequestKey(reviewerId)) ? () => void askAgain(comment, reviewerId) : undefined}
 								onViewInFile={onViewInFile && comment.file ? () => onViewInFile(comment.file!, comment.line) : undefined}
 								t={t}
 							/>

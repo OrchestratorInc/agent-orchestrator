@@ -4,7 +4,7 @@ import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } fr
 import { Alert, Pressable, RefreshControl, ScrollView, StyleSheet, Text, View } from "react-native";
 import { buildReviewBlocks } from "../../../shared/review/review-comments";
 import { sessionTitle, type DashboardSession, type SessionPRSummary, type SessionReviews } from "../../lib/api";
-import { userFacingError } from "../../lib/connectionError";
+import { RECONNECTING_ACTION_COPY, userFacingError } from "../../lib/connectionError";
 import { AppSymbol } from "../../lib/AppSymbol";
 import { haptics } from "../../lib/haptics";
 import { Feather } from "../../lib/icons";
@@ -253,7 +253,9 @@ function ReviewDetailContent() {
 	};
 	const providerPR = observedPR ?? { number: review.prNumber, url: review.prUrl };
 	const reply = async (target: ReviewReplyTarget, body: string) => {
-		const post = backend?.reply;
+		// Thrown, not skipped: the dock keeps the text and says why it did not post.
+		if (!backend) throw new Error(RECONNECTING_ACTION_COPY);
+		const post = backend.reply;
 		if (!post) return;
 		const { comment } = target;
 		await post({ number: providerPR.number, url: providerPR.url }, body, comment.kind === "inline" ? comment.threadId : undefined);
@@ -342,13 +344,14 @@ function ReviewDetailContent() {
 						<Text style={styles.eyebrowText} numberOfLines={1}>Orchestrator reviewer</Text>
 					</View>
 					<Text style={styles.title} numberOfLines={1}>{reviewerName(reviewerHarness)}</Text>
-					<View accessibilityRole={status.kind === "working" ? "text" : undefined} style={styles.statusLine}>
-						<Dot color={statusColor} size={6} breathing={status.kind === "working"} />
-						{/* One text, so the commit and time wrap under the label beside Review now rather than truncate. */}
-						<Text style={[styles.statusStrong, styles.statusWrap, { color: status.kind === "quiet" ? t.textSecondary : statusColor }]} numberOfLines={2}>
-							{status.label}
-							{status.facts.length ? <Text style={[styles.statusFacts, styles.mono]}>{` · ${status.facts.join(" · ")}`}</Text> : null}
-						</Text>
+					{/* The label beside its dot, and the commit and time on a line of their own
+					    under it: beside Review now there is no room for both on one line. */}
+					<View accessibilityRole={status.kind === "working" ? "text" : undefined}>
+						<View style={styles.statusLine}>
+							<Dot color={statusColor} size={STATUS_DOT} breathing={status.kind === "working"} />
+							<Text style={[styles.statusStrong, styles.statusWrap, { color: status.kind === "quiet" ? t.textSecondary : statusColor }]} numberOfLines={1}>{status.label}</Text>
+						</View>
+						{status.facts.length ? <Text style={[styles.detail, styles.mono, styles.statusFacts]} numberOfLines={1}>{status.facts.join(" · ")}</Text> : null}
 					</View>
 				</View>
 			</Pressable>
@@ -372,15 +375,17 @@ function ReviewDetailContent() {
 			</View> : null}
 			{error ? <Text accessibilityRole="alert" style={[styles.note, styles.noteError]}>{error}</Text> : null}
 
-			{block && backend ? <ReviewCommentsSection
+			{/* On while the machine reconnects (backend null after an app switch), so
+			    its Open/Resolved choice and open rows survive; requests wait for it. */}
+			{block ? <ReviewCommentsSection
 				block={block}
 				backend={backend}
 				sessionId={sessionId}
 				sentScope={sentScope(hostKey, sessionId)}
 				runs={data.runs ?? []}
 				onChanged={reload}
-				onReply={backend.reply ? setReplyTarget : undefined}
-				onViewInFile={backend.cloud ? undefined : (file, line) => openPage(fileRoute(sessionId, file, routeHostId, undefined, line))}
+				onReply={setReplyTarget}
+				onViewInFile={isCloudHost(currentHostId) ? undefined : (file, line) => openPage(fileRoute(sessionId, file, routeHostId, undefined, line))}
 			/> : null}
 		</ScrollView>
 		{/* The reply dock takes the bottom while it is open; otherwise the merge bar,
@@ -442,6 +447,8 @@ const PLAY = { ios: "play.fill", android: "play_arrow" } as const;
 // Where the reviewer row's button and menu sit, and the room the row keeps for
 // them until their width is known.
 const OVERLAY_INSET = space.lg - space.xxs;
+/** The status dot's size; the facts line under the label is indented past it. */
+const STATUS_DOT = 6;
 const OVERLAY_RESERVE = 150;
 // The worker row has its button only, no menu.
 const WORKER_RESERVE = 110;
@@ -482,7 +489,7 @@ const makeStyles = (t: Theme) => StyleSheet.create({
 	statusLine: { flexDirection: "row", alignItems: "center", gap: space.xs, minWidth: 0 },
 	statusStrong: { fontFamily: "DMSans_600SemiBold", fontSize: type.footnote.fontSize, lineHeight: type.footnote.lineHeight, fontWeight: "600" },
 	statusWrap: { flexShrink: 1 },
-	statusFacts: { fontWeight: "400", color: t.textTertiary },
+	statusFacts: { paddingLeft: STATUS_DOT + space.xs },
 	statusDetail: { fontFamily: "DMSans_400Regular", flexShrink: 1, marginLeft: -space.xs, color: t.textTertiary, fontSize: type.footnote.fontSize, lineHeight: type.footnote.lineHeight },
 	detail: { fontFamily: "DMSans_400Regular", color: t.textTertiary, fontSize: type.footnote.fontSize, lineHeight: type.footnote.lineHeight },
 	mono: { fontFamily: t.fontMono },
