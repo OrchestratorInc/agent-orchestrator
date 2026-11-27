@@ -371,6 +371,42 @@ describe("other machines' saved boards", () => {
 		} finally { act(() => renderer.unmount()); }
 	});
 
+	it("keeps the saved project list when the board loads after a first poll whose /projects failed", async () => {
+		const { getSessions } = await import("./api");
+		let projects: Array<{ id: string; name: string }> | null = null;
+		vi.mocked(getSessions).mockImplementation(async (config) => ({
+			projects, sessions: [worker(`${config.hostId}-live`, "Live")], orchestrators: [], orchestratorId: null, stats: {},
+		}));
+		let release!: () => void;
+		boards.load.mockImplementation(async (machine: string) => {
+			const saved = savedBoards.get(machine) ?? null;
+			if (machine === "host.b") await new Promise<void>((resolve) => { release = resolve; });
+			return saved;
+		});
+		savedBoards.set("host.b", savedBoard("b", Date.now() - 60_000));
+		const renderer = await renderHarness();
+		try {
+			await act(async () => { await Promise.resolve(); });
+			// The live poll answered first, with no project list.
+			expect(current.snapshots.b.sessions.map((row) => row.id)).toEqual(["b-live"]);
+			expect(current.snapshots.b.projectsKnown).toBe(false);
+			await act(async () => { release(); await Promise.resolve(); await Promise.resolve(); });
+			// The live rows stay; only the list the poll could not send comes from the saved board.
+			expect(current.snapshots.b.sessions.map((row) => row.id)).toEqual(["b-live"]);
+			expect(current.snapshots.b).toMatchObject({ projects: [{ id: "project", name: "Project" }], projectsKnown: true });
+			expect(savedBoards.get("host.b")).toMatchObject({ sessions: [{ id: "b-live" }], projects: [{ id: "project", name: "Project" }] });
+
+			// A list the machine does send, even an empty one, is what it has.
+			projects = [];
+			await act(async () => { await current.refreshHost("b"); });
+			expect(current.snapshots.b).toMatchObject({ projects: [], projectsKnown: true });
+			expect(savedBoards.get("host.b")?.projects).toEqual([]);
+		} finally {
+			boards.load.mockImplementation(async (machine: string) => savedBoards.get(machine) ?? null);
+			act(() => renderer.unmount());
+		}
+	});
+
 	it("does not bring back a machine removed while its saved board was loading", async () => {
 		let release!: () => void;
 		boards.load.mockImplementationOnce(async (machine: string) => {

@@ -105,11 +105,16 @@ function boardToSave(snapshot: HostSnapshot): Omit<SavedBoard, "v"> {
 /**
  * A machine's saved board laid under the snapshot of one that has not answered
  * since launch, so a machine that is off still shows its last rows, its dot
- * aged by when they were saved. Null once a poll has answered: a saved board
- * never replaces a live one.
+ * aged by when they were saved. Once a poll has answered, a saved board never
+ * replaces its rows: it only stands in for a project list that poll could not
+ * send (a list it did send, even an empty one, is what the machine has). Null
+ * when there is nothing to take from it.
  */
 export function withSavedBoard(snapshot: HostSnapshot, saved: SavedBoard): HostSnapshot | null {
-	if (snapshot.lastSyncAt > 0) return null;
+	if (snapshot.lastSyncAt > 0) {
+		if (snapshot.projectsKnown || saved.projects === null) return null;
+		return { ...snapshot, projects: saved.projects, projectsKnown: true };
+	}
 	return {
 		...snapshot,
 		sessions: saved.sessions,
@@ -347,12 +352,17 @@ export function useOtherHosts(hosts: Host[], selectedHostId: string | null, appA
 	const restoreSavedBoard = useCallback((host: Host) => {
 		void boardsRef.current.load(hostMachineIdentity(host.id)).catch(() => null).then((saved) => {
 			if (!saved) return;
+			const outcome: { restored: HostSnapshot | null; live: boolean } = { restored: null, live: false };
 			commitSnapshots((current) => {
-				// Gone (forgotten, or the selected machine now) or already answered.
+				// Gone (forgotten, or the selected machine now), or nothing to take.
 				const snapshot = current[host.id];
-				const restored = snapshot && runners.current.has(host.id) ? withSavedBoard(snapshot, saved) : null;
-				return restored ? { ...current, [host.id]: restored } : current;
+				outcome.restored = snapshot && runners.current.has(host.id) ? withSavedBoard(snapshot, saved) : null;
+				outcome.live = Boolean(snapshot?.lastSyncAt);
+				return outcome.restored ? { ...current, [host.id]: outcome.restored } : current;
 			});
+			// A poll answered first and saved its board without the project list it
+			// could not send: saved again, with the list, for the next launch.
+			if (outcome.restored && outcome.live) boardsRef.current.save(boardToSave(outcome.restored));
 		});
 	}, [commitSnapshots]);
 
