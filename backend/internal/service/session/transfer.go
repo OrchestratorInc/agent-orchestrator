@@ -241,7 +241,7 @@ func transferError(err error) error {
 		return apierr.Conflict("TRANSFER_FETCH_FAILED", "Could not bring in the moved work: "+transferDetail(err, ports.ErrTransferFetch), nil)
 	case errors.Is(err, ports.ErrDetachedHead):
 		return apierr.Conflict("TRANSFER_DETACHED_HEAD", fmt.Sprintf("The session's folder is not on its branch %s. Switch back to it, then move the session.", transferDetail(err, ports.ErrDetachedHead)), nil)
-	case errors.Is(err, sessionmanager.ErrSessionMoved):
+	case errors.Is(err, sessionmanager.ErrSessionMovedToHost), errors.Is(err, sessionmanager.ErrSessionMoved):
 		return apierr.Conflict("SESSION_MOVED", msg, nil)
 	case errors.Is(err, sessionmanager.ErrTransferPending):
 		return apierr.Conflict("TRANSFER_PENDING", msg, nil)

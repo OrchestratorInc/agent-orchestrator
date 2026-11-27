@@ -31,6 +31,8 @@ var (
 	ErrTransferPreservedMismatch = errors.New("session: the moved uncommitted work does not belong to the moved head")
 	// ErrTransferArchive reports a missing or damaged conversation archive.
 	ErrTransferArchive = errors.New("session: the moved work is missing or damaged")
+	// ErrSessionMovedToHost refuses to run a session that continues on another computer.
+	ErrSessionMovedToHost = errors.New("session: moved to another computer")
 	// ErrSpawnTransfer is the spawn stage that applies moved state.
 	ErrSpawnTransfer = errors.New("transfer")
 	// ErrTransferPending refuses to run a session whose move did not finish.
@@ -171,7 +173,7 @@ func (m *Manager) PrepareTransfer(ctx context.Context, id domain.SessionID, tran
 	if _, moved, err := m.sessionMovedTo(ctx, id); err != nil {
 		return domain.SessionTransfer{}, err
 	} else if moved {
-		return domain.SessionTransfer{}, ErrSessionMoved
+		return domain.SessionTransfer{}, ErrSessionMovedToHost
 	}
 	git, ok := m.workspace.(ports.WorkspaceTransfer)
 	if !ok {
@@ -540,8 +542,8 @@ func (m *Manager) ReceiveTransfer(ctx context.Context, projectID domain.ProjectI
 		ClientRequestID:   clientRequestID,
 		ClientRequestHash: transferRequestHash(t),
 		Transfer: &ports.SpawnTransfer{
-			PreservedRef:   t.PreservedRef,
-			NativeArchive:  conversation,
+			PreservedRef:  t.PreservedRef,
+			NativeArchive: conversation,
 			// The note writes paths under the home folder with a placeholder.
 			FallbackPrompt: nativetransfer.FillCloudHomeText(t.HandoffNote),
 		},
@@ -718,7 +720,7 @@ func (m *Manager) refuseMoved(ctx context.Context, id domain.SessionID) error {
 	case state.Pending():
 		return fmt.Errorf("%w: the move to %s is not finished; use Finish move or Keep it here on the session", ErrTransferPending, state.Label)
 	default:
-		return fmt.Errorf("%w: continues on %s as %s", ErrSessionMoved, state.Label, state.SessionID)
+		return fmt.Errorf("%w: continues on %s as %s", ErrSessionMovedToHost, state.Label, state.SessionID)
 	}
 }
 

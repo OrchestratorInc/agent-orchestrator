@@ -45,8 +45,8 @@ var (
 	ErrNotRestorable                 = errors.New("session: not restorable (not terminal)")
 	ErrTerminated                    = errors.New("session: terminated")
 	ErrAgentExited                   = errors.New("session: agent exited")
-	// ErrSessionMoved refuses to run a session that moved to another computer or AO Cloud.
-	ErrSessionMoved        = errors.New("session: moved to another computer or AO Cloud")
+	// ErrSessionMoved refuses to run a session that moved to AO Cloud.
+	ErrSessionMoved        = errors.New("session: moved to AO Cloud")
 	ErrAgentNotExited      = errors.New("session: agent has not exited")
 	ErrAgentExitInProgress = errors.New("session: agent exit is already in progress")
 	ErrIncompleteHandle    = errors.New("session: incomplete teardown handle")
