@@ -840,7 +840,7 @@ describe("AgentModelPicker", () => {
 		expect(await screen.findByRole("menuitemradio", { name: /Work/ })).toHaveAttribute("aria-checked", "true");
 		const home = screen.getByRole("menuitemradio", { name: /me@home/ });
 		expect(home).toHaveTextContent("ME");
-		await user.click(home);
+		fireEvent.click(home);
 		expect(two.onPick).toHaveBeenCalledWith("b");
 	});
 });
