@@ -268,6 +268,9 @@ vi.mock("../hooks/useCloudCp", () => ({
 	useCloudCp: () => ({ client: {}, ready: false, baseUrl: "" }),
 }));
 
+// Holds Cloud model lists through react-query, which this provider-free harness stubs out.
+vi.mock("../components/CloudModelCatalogWarmer", () => ({ CloudModelCatalogWarmer: () => null }));
+
 vi.mock("../hooks/useCloudOrg", () => ({
 	useCloudOrg: () => ({ org: undefined, isLoading: false, error: undefined, ready: false }),
 }));
