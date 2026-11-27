@@ -45,9 +45,11 @@ var (
 	ErrNotRestorable                 = errors.New("session: not restorable (not terminal)")
 	ErrTerminated                    = errors.New("session: terminated")
 	ErrAgentExited                   = errors.New("session: agent exited")
-	ErrAgentNotExited                = errors.New("session: agent has not exited")
-	ErrAgentExitInProgress           = errors.New("session: agent exit is already in progress")
-	ErrIncompleteHandle              = errors.New("session: incomplete teardown handle")
+	// ErrSessionMoved refuses to run a session that moved to AO Cloud.
+	ErrSessionMoved        = errors.New("session: moved to AO Cloud")
+	ErrAgentNotExited      = errors.New("session: agent has not exited")
+	ErrAgentExitInProgress = errors.New("session: agent exit is already in progress")
+	ErrIncompleteHandle    = errors.New("session: incomplete teardown handle")
 	// ErrProjectNotResolvable means the spawn's project has no usable repo
 	// (unregistered, archived, or missing a path). The API maps it to a 400.
 	ErrProjectNotResolvable = errors.New("session: project repo not resolvable")
@@ -1138,6 +1140,10 @@ func (m *Manager) Spawn(ctx context.Context, cfg ports.SpawnConfig) (result doma
 	defer func() {
 		resultErr = RelabelSpawnTimeout(resultErr, requestCtx, budget)
 	}()
+	if cfg.Transfer != nil {
+		// A moved conversation resumes in its CLI's terminal.
+		cfg.RequestedMode = domain.SessionModeTUI
+	}
 	if cfg.RequestedOutput == domain.RequestedOutputArtifact && m.artifactDir("") == "" {
 		return domain.SessionRecord{}, 0, 0, fmt.Errorf("spawn: %w", ErrArtifactOutputUnavailable)
 	}
@@ -1470,6 +1476,13 @@ func (m *Manager) Spawn(ctx context.Context, cfg ports.SpawnConfig) (result doma
 	// spawnTexts also decides attribution for this spawn; the spawn carries
 	// that decision to its workspace setup.
 	prompt, systemPrompt, spawnAttr, err := m.spawnTexts(ctx, cfg, id)
+	if cfg.Transfer != nil {
+		// The resumed conversation already holds the task; the prompt is a note about the move.
+		prompt = cfg.Prompt
+		if note := strings.TrimSpace(cfg.Transfer.SystemNote); note != "" && err == nil {
+			systemPrompt = strings.TrimSpace(systemPrompt + "\n\n" + note)
+		}
+	}
 	if err != nil {
 		m.cleanupArtifactDir(id)
 		if prep != nil {
@@ -1747,6 +1760,19 @@ func (m *Manager) Spawn(ctx context.Context, cfg ports.SpawnConfig) (result doma
 		m.rollbackSeedSpawnWorkspace(ctx, rec, ws, workspaceProject, false, false)
 		return domain.SessionRecord{}, 0, 0, wrapSpawnStage(id, ErrSpawnPrepare, err)
 	}
+	transferNativeID := ""
+	if cfg.Transfer != nil {
+		if cfg.Transfer.NativeArchive != "" {
+			transferNativeID, err = m.placeTransferConversation(ctx, cfg.Harness, ws.Path, env, cfg.Transfer.NativeArchive)
+			if err != nil {
+				m.logger.Warn("spawn: moved conversation cannot be resumed; starting from the handoff note", "sessionID", id, "error", err)
+				transferNativeID = ""
+			}
+		}
+		if transferNativeID == "" {
+			prompt = cfg.Transfer.FallbackPrompt
+		}
+	}
 	// A text-handoff fork's agent starts with the original's conversation as
 	// its first message. It is not the session's task, so it isn't saved as one.
 	launchPrompt := prompt
@@ -1785,7 +1811,12 @@ func (m *Manager) Spawn(ctx context.Context, cfg ports.SpawnConfig) (result doma
 		}
 		launchCfg.Prompt = ""
 	}
-	argv, err := agent.GetLaunchCommand(ctx, launchCfg)
+	var argv []string
+	if transferNativeID != "" {
+		argv, err = transferRestoreArgv(ctx, agent, transferNativeID, launchCfg)
+	} else {
+		argv, err = agent.GetLaunchCommand(ctx, launchCfg)
+	}
 	if err != nil {
 		m.rollbackSeedSpawnWorkspace(ctx, rec, ws, workspaceProject, true, false)
 		return domain.SessionRecord{}, 0, 0, wrapSpawnStage(id, ErrSpawnLaunchCommand, err)
@@ -1864,6 +1895,17 @@ func (m *Manager) Spawn(ctx context.Context, cfg ports.SpawnConfig) (result doma
 		// Model override exists it wins; otherwise fall back to the resolved Mode.
 		Model:  resolvedModelForMetadata(cfg.Harness, agentConfig, adapterConfig),
 		Effort: agentConfig.Effort,
+	}
+	if transferNativeID != "" {
+		metadata.AgentSessionID = transferNativeID
+		// The launch resumes that exact conversation (its restore command names
+		// it), as a native restore does, so the id is bound to this launch at
+		// once, under the same harnesses: a moved session can switch to Chat
+		// without waiting for the agent's SessionStart hook.
+		if cfg.Harness == domain.HarnessCodex || cfg.Harness == domain.HarnessClaudeCode || cfg.Harness == domain.HarnessAgy ||
+			m.terminalVersionRefreshSupported(cfg.Harness) {
+			metadata.AgentSessionIDLaunchID = launchID
+		}
 	}
 	if prompt != "" {
 		metadata.LatestUserPromptAt = m.clock()
@@ -3682,6 +3724,12 @@ func (m *Manager) RestoreWithMode(ctx context.Context, id domain.SessionID) (res
 	if !ok {
 		return RestoreResult{}, fmt.Errorf("restore %s: %w", id, ErrNotFound)
 	}
+	if rec.MovedTo != nil {
+		return RestoreResult{}, fmt.Errorf("restore %s: %w", id, ErrSessionMoved)
+	}
+	if err := m.endMoveHere(ctx, rec); err != nil {
+		return RestoreResult{}, fmt.Errorf("restore %s: %w", id, err)
+	}
 	releaseHarness, err := m.beginHarnessUse(rec.Harness)
 	if err != nil {
 		return RestoreResult{}, fmt.Errorf("restore %s: %w", id, err)
@@ -4029,6 +4077,12 @@ func (m *Manager) resumeAgentWithMode(ctx context.Context, id domain.SessionID, 
 	}
 	if !ok {
 		return RestoreResult{}, fmt.Errorf("resume agent %s: %w", id, ErrNotFound)
+	}
+	if rec.MovedTo != nil {
+		return RestoreResult{}, fmt.Errorf("resume agent %s: %w", id, ErrSessionMoved)
+	}
+	if err := m.endMoveHere(ctx, rec); err != nil {
+		return RestoreResult{}, fmt.Errorf("resume agent %s: %w", id, err)
 	}
 	if rec.HibernatedAt != nil && m.persistentHostReconcileDone != nil {
 		select {
@@ -5201,7 +5255,39 @@ func (m *Manager) RestoreAll(ctx context.Context) error {
 		if !rec.IsTerminated {
 			continue
 		}
+		// A session that moved, or whose move to AO Cloud pushed its branch and
+		// did not finish, may be running in AO Cloud: it stays stopped here
+		// until the move finishes or the user restores it.
+		if rec.MovedTo != nil || rec.MoveStarted != "" {
+			m.logger.Info("restore-all: leaving a moved or moving session stopped", "sessionID", rec.ID, "moveID", rec.MoveStarted)
+			continue
+		}
 		m.restoreAllSession(ctx, rec)
+	}
+	return nil
+}
+
+// endMoveHere ends a session's unfinished move to AO Cloud: an explicit
+// restore or resume (including a failed move's rollback) runs it here, so the
+// move is over. The store clears it only while the session is not marked
+// moved, so a move/complete that lands first wins with ErrSessionMoved and
+// the session never runs here and in AO Cloud both.
+func (m *Manager) endMoveHere(ctx context.Context, rec domain.SessionRecord) error {
+	if rec.MoveStarted == "" {
+		return nil
+	}
+	store, ok := m.store.(interface {
+		EndSessionMoveStarted(ctx context.Context, id domain.SessionID, updatedAt time.Time) (bool, error)
+	})
+	if !ok {
+		return nil
+	}
+	ended, err := store.EndSessionMoveStarted(ctx, rec.ID, m.clock().UTC())
+	if err != nil {
+		return fmt.Errorf("end the unfinished move: %w", err)
+	}
+	if !ended {
+		return ErrSessionMoved
 	}
 	return nil
 }
@@ -6785,8 +6871,11 @@ func seedRecordWithDefault(cfg ports.SpawnConfig, projectConfig domain.ProjectCo
 		Activity:            domain.Activity{State: domain.ActivityIdle, LastActivityAt: now},
 		// Resolved before this point and persisted here. There is no UPDATE
 		// statement that can change it afterwards.
-		Mode:               domain.NormalizeSessionMode(cfg.RequestedMode),
-		Metadata:           domain.SessionMetadata{Permissions: applySpawnAgentConfig(effectiveAgentConfig(cfg.Harness, cfg.Kind, projectConfig), cfg.AgentConfig).Permissions},
+		Mode: domain.NormalizeSessionMode(cfg.RequestedMode),
+		Metadata: domain.SessionMetadata{
+			Permissions: applySpawnAgentConfig(effectiveAgentConfig(cfg.Harness, cfg.Kind, projectConfig), cfg.AgentConfig).Permissions,
+			RoleAgent:   roleOverride(cfg.Kind, projectConfig).Harness,
+		},
 		RequestedOutput:    cfg.RequestedOutput,
 		OutputType:         domain.SessionOutputNone,
 		TerminateOnPRMerge: resolveTerminateOnPRMerge(cfg, projectConfig, defaultPolicy),

@@ -18,6 +18,55 @@ function deferred<T>() {
 }
 
 describe("createDesktopIdentitySync", () => {
+	// Only one identity is adopted, but every desktop's version is kept by host.
+	it("reports each connected desktop's daemon version by host", async () => {
+		const versions: Record<string, string>[] = [];
+		const sync = createDesktopIdentitySync(
+			(c) => Promise.resolve(c.hostId === "a"
+				? { distinctId: "ins_a", optedOut: false, daemonVersion: "1.9.0" }
+				: { distinctId: "ins_b", optedOut: false, daemonVersion: "1.7.2" }),
+			() => {},
+			(byHost, complete) => versions.push({ ...byHost, complete: String(complete) }),
+		);
+		await sync([cfg("a"), cfg("b")]);
+		expect(versions.at(-1)).toEqual({ a: "1.9.0", b: "1.7.2", complete: "true" });
+		await sync([]);
+		expect(versions.at(-1)).toEqual({ complete: "false" });
+	});
+
+	// A desktop that is no longer connected must not name an error's daemon
+	// while the new set's answers are still on their way.
+	it("clears the versions as soon as the connected desktops change", async () => {
+		const versions: Array<Record<string, string>> = [];
+		const slow = deferred<DesktopTelemetryIdentity>();
+		const sync = createDesktopIdentitySync(
+			(c) => c.hostId === "a" ? Promise.resolve({ distinctId: "ins_a", optedOut: false, daemonVersion: "1.9.0" }) : slow.promise,
+			() => {},
+			(byHost) => versions.push(byHost),
+		);
+		await sync([cfg("a")]);
+		expect(versions.at(-1)).toEqual({ a: "1.9.0" });
+		const pending = sync([cfg("b")]);
+		expect(versions.at(-1)).toEqual({});
+		slow.resolve({ distinctId: "ins_b", optedOut: false, daemonVersion: "1.7.2" });
+		await pending;
+		expect(versions.at(-1)).toEqual({ b: "1.7.2" });
+	});
+
+	// An older daemon sends no version, and a fetch can fail: the set is incomplete.
+	it("says when a connected desktop reported no version", async () => {
+		const versions: Array<[Record<string, string>, boolean]> = [];
+		const sync = createDesktopIdentitySync(
+			(c) => c.hostId === "a"
+				? Promise.resolve({ distinctId: "ins_a", optedOut: false, daemonVersion: "1.9.0" })
+				: Promise.reject(new Error("unreachable")),
+			() => {},
+			(byHost, complete) => versions.push([byHost, complete]),
+		);
+		await sync([cfg("a"), cfg("b")]);
+		expect(versions.at(-1)).toEqual([{ a: "1.9.0" }, false]);
+	});
+
 	it("discards a slow response from an obsolete connection set", async () => {
 		const a = deferred<DesktopTelemetryIdentity>();
 		const adopted: (DesktopTelemetryIdentity | null)[] = [];

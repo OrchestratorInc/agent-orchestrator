@@ -464,6 +464,7 @@ export function NewChatPage({ projectId, hostId, report }: { projectId: string; 
 					aria-label={task.errorAction.input.label}
 					value={task.errorAction.input.value}
 					onChange={(event) => task.errorAction?.input?.onChange(event.target.value)}
+					data-field="compact"
 					className="min-w-0 max-w-40 rounded border border-current bg-background px-2 py-1 text-foreground"
 				/> : null}
 				<Button size="sm" variant="ghost" disabled={Boolean(task.errorAction.input && !task.errorAction.input.value.trim())} onClick={task.errorAction.onClick}>{task.errorAction.label}</Button>
