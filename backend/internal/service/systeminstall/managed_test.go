@@ -368,6 +368,97 @@ func TestFailedRecordSwitchesBackToThePreviousRelease(t *testing.T) {
 	}
 }
 
+func TestCleanupReconcilesUnsettledSwitchBeforeClearingIntent(t *testing.T) {
+	for _, tt := range []struct {
+		name           string
+		failRecord     bool
+		missingCurrent bool
+	}{
+		{name: "recording recovers"},
+		{name: "recording still fails", failRecord: true},
+		{name: "current is missing", missingCurrent: true},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			f := newManagedCodexFixture(t, nil)
+			if job := f.update(t, "1.1.0"); job.Status != StatusSucceeded {
+				t.Fatalf("seed update = %+v", job)
+			}
+			targetDir := f.s.managedTargetDir(TargetCodex)
+			// Leave current at v2 and the durable record at v1 by failing both
+			// the release write and rollback through the real update path.
+			if err := os.MkdirAll(filepath.Join(targetDir, ".current-v1", "blocked"), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			f.releases.failSet = true
+			if job := f.update(t, "1.2.0"); job.Status != StatusFailed {
+				t.Fatalf("update with failed record and rollback = %+v", job)
+			}
+			if current := f.s.currentManagedRelease(targetDir); current != "v2" || f.releases.current[domain.HarnessCodex] != "v1" {
+				t.Fatalf("failed switch: current=%q recorded=%q", current, f.releases.current[domain.HarnessCodex])
+			}
+			marker := filepath.Join(targetDir, unsettledMarker)
+			if intent := readFile(marker); intent != "v2" {
+				t.Fatalf("recovery intent = %q, want v2", intent)
+			}
+			// An otherwise unused release must also survive while unresolved.
+			unused := filepath.Join(targetDir, "versions", "v0")
+			if err := os.Mkdir(unused, 0o755); err != nil {
+				t.Fatal(err)
+			}
+			if tt.missingCurrent {
+				if err := os.Remove(filepath.Join(targetDir, "current")); err != nil {
+					t.Fatal(err)
+				}
+			}
+			f.releases.failSet = tt.failRecord
+			f.s.RemoveUnusedManagedReleases(context.Background())
+			if tt.failRecord || tt.missingCurrent {
+				if intent := readFile(marker); intent != "v2" {
+					t.Fatalf("cleanup discarded unresolved recovery intent: %q", intent)
+				}
+				for _, name := range []string{"v0", "v1", "v2"} {
+					if _, err := os.Stat(filepath.Join(targetDir, "versions", name)); err != nil {
+						t.Fatalf("cleanup removed %s before recovery: %v", name, err)
+					}
+				}
+			} else if recorded := f.releases.current[domain.HarnessCodex]; recorded != "v2" {
+				t.Fatalf("cleanup cleared intent before reconciling: recorded=%q, want v2", recorded)
+			}
+			if tt.failRecord {
+				if err := f.s.ReconcileManagedReleases(context.Background()); err == nil {
+					t.Fatal("recovery succeeded while the release store was unavailable")
+				}
+				if intent := readFile(marker); intent != "v2" {
+					t.Fatalf("failed recovery discarded intent: %q", intent)
+				}
+			}
+
+			f.releases.failSet = false
+			if err := f.s.ReconcileManagedReleases(context.Background()); err != nil {
+				t.Fatal(err)
+			}
+			if current := f.s.currentManagedRelease(targetDir); current != "v2" || f.releases.current[domain.HarnessCodex] != current {
+				t.Fatalf("after recovery: current=%q recorded=%q", current, f.releases.current[domain.HarnessCodex])
+			}
+			launcher := filepath.Join(f.s.ManagedBinDir(), "codex")
+			binary, err := filepath.EvalSymlinks(launcher)
+			if want := filepath.Join(targetDir, "versions", "v2", "bin", "codex"); err != nil || binary != want {
+				t.Fatalf("resolved launcher = %q, %v; want %q", binary, err, want)
+			}
+			if version, err := f.s.probeManagedVersion(context.Background(), TargetCodex, "codex", launcher); err != nil || version != "1.2.0" {
+				t.Fatalf("launcher version = %q, %v; want 1.2.0", version, err)
+			}
+			f.s.RemoveUnusedManagedReleases(context.Background())
+			if _, err := os.Stat(marker); !os.IsNotExist(err) {
+				t.Fatalf("reconciled switch with no live sessions kept its marker: %v", err)
+			}
+			if _, err := os.Stat(unused); !os.IsNotExist(err) {
+				t.Fatalf("cleanup did not resume after recovery: %v", err)
+			}
+		})
+	}
+}
+
 func TestUnsettledSwitchKeepsEveryReleaseWhileSessionsRun(t *testing.T) {
 	live := []domain.SessionRecord{{ID: "codex-1", Harness: domain.HarnessCodex}}
 	f := newManagedCodexFixture(t, live)
