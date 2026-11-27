@@ -64,7 +64,8 @@ export function agentAccountLabel(account: Pick<AgentAccount, "id" | "email" | "
 /** The letter an account's avatar shows: its email's or name's first, else the provider's. */
 export function agentAccountInitial(account: Pick<AgentAccount, "email" | "name" | "provider">): string {
 	const source = account.email?.trim() || account.name?.trim() || account.provider;
-	return source.charAt(0).toUpperCase();
+	// By code point: a name led by an emoji keeps both halves of its surrogate pair.
+	return (Array.from(source)[0] ?? "").toUpperCase();
 }
 
 function reportedWindows(account: Pick<AgentAccount, "limits">): AgentAccountLimitWindow[] {

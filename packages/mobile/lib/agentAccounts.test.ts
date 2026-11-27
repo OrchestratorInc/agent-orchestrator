@@ -26,6 +26,8 @@ describe("agent account usage", () => {
 		expect(agentAccountInitial({ email: "prasad@x.dev", provider: "claude" })).toBe("P");
 		expect(agentAccountInitial({ name: " work key", provider: "claude" })).toBe("W");
 		expect(agentAccountInitial({ provider: "codex" })).toBe("C");
+		// A leading emoji stays whole rather than half a surrogate pair.
+		expect(agentAccountInitial({ name: "🚀 launch key", provider: "claude" })).toBe("🚀");
 	});
 
 	it("rings the fullest meter and says each one", () => {

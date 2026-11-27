@@ -47,7 +47,8 @@ import { approvalOptions, isApprovalMode, resolveApprovalMode, type ApprovalMode
 import { modelSheetRoute } from "../lib/sheetResult";
 import { agentAccountOptions, useAgentAccounts } from "../lib/agentAccounts";
 import { AccountUsageAvatar } from "../lib/AccountUsageAvatar";
-import { chatSheetRoute } from "../lib/chat/chatSheetRegistry";
+import { chatSheetRoute, type AccountPickerState } from "../lib/chat/chatSheetRegistry";
+import { useValueFeed } from "../lib/useValueFeed";
 import { SpawnAccountButton } from "../lib/SpawnAccountButton";
 import { useChatKeyboard } from "../lib/chat/useChatKeyboard";
 import { SYSTEM_GLASS_HEADER } from "../lib/stackScreenOptions";
@@ -1097,6 +1098,13 @@ function SpawnPage() {
 
 	// The account's avatar in the bar opens the machine's accounts, each with
 	// its usage. Read through a ref so the bar's button stays the same one.
+	// The sheet follows the accounts while it is up, so the reload it starts
+	// (fresh usage, an account signed out) reaches the rows it shows.
+	const accountPicker = useMemo<AccountPickerState>(() => ({
+		options: agentAccountOptions(spawnAccounts.accounts, (account) => <AccountUsageAvatar account={account} size={28} />),
+		selected: shownAccountId ?? "",
+	}), [shownAccountId, spawnAccounts.accounts]);
+	const subscribeAccountPicker = useValueFeed(accountPicker);
 	const openAccountsRef = useRef<() => void>(() => {});
 	openAccountsRef.current = () => {
 		const machine = hostOptions.find((host) => host.id === selectedHostId)?.label;
@@ -1104,8 +1112,8 @@ function SpawnPage() {
 		router.push(chatSheetRoute({
 			kind: "account-picker",
 			subtitle: [harnessLabel, machine].filter(Boolean).join(" on "),
-			options: agentAccountOptions(spawnAccounts.accounts, (account) => <AccountUsageAvatar account={account} size={28} />),
-			selected: shownAccountId ?? "",
+			...accountPicker,
+			subscribe: subscribeAccountPicker,
 			onSelect: edited(setAccountPick),
 		}));
 	};
