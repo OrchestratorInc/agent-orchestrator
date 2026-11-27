@@ -22,27 +22,41 @@ function api(over: Partial<UpdatesApi> = {}): UpdatesApi {
 describe("onForeground", () => {
 	const t0 = 1_000_000_000;
 	const idle = { pending: false, lastCheckAt: t0, lastOfferedAt: null };
+	const NONE = { prompt: false, check: false };
+	const CHECK = { prompt: false, check: true };
 
 	it("checks again once the last check is stale, however short the absence", () => {
-		expect(onForeground({ ...idle, now: t0 + CHECK_STALE_MS - 1 })).toBe("none");
-		expect(onForeground({ ...idle, now: t0 + CHECK_STALE_MS })).toBe("check");
+		expect(onForeground({ ...idle, now: t0 + CHECK_STALE_MS - 1 })).toEqual(NONE);
+		expect(onForeground({ ...idle, now: t0 + CHECK_STALE_MS })).toEqual(CHECK);
 	});
 
 	it("checks when nothing has checked yet this run", () => {
-		expect(onForeground({ ...idle, lastCheckAt: null, now: t0 })).toBe("check");
+		expect(onForeground({ ...idle, lastCheckAt: null, now: t0 })).toEqual(CHECK);
 	});
 
 	it("offers a put-off update again once a day, not on every return", () => {
 		const offered = { pending: true, lastCheckAt: t0, lastOfferedAt: t0 };
-		expect(onForeground({ ...offered, now: t0 + 60_000 })).toBe("none");
+		expect(onForeground({ ...offered, now: t0 + 60_000 })).toEqual(NONE);
 		// A stale check still runs in between: a newer update may be out.
-		expect(onForeground({ ...offered, now: t0 + CHECK_STALE_MS })).toBe("check");
-		expect(onForeground({ ...offered, now: t0 + REOFFER_MS - 1 })).toBe("check");
-		expect(onForeground({ ...offered, lastCheckAt: t0 + REOFFER_MS - 1, now: t0 + REOFFER_MS })).toBe("prompt");
+		expect(onForeground({ ...offered, now: t0 + CHECK_STALE_MS })).toEqual(CHECK);
+		expect(onForeground({ ...offered, now: t0 + REOFFER_MS - 1 })).toEqual(CHECK);
+		expect(onForeground({ ...offered, lastCheckAt: t0 + REOFFER_MS - 1, now: t0 + REOFFER_MS })).toEqual({
+			prompt: true,
+			check: false,
+		});
+	});
+
+	it("still checks on the day it offers a put-off update again", () => {
+		// The re-offer and a due check are independent: returning once a day must
+		// still find an update newer than the one being offered.
+		expect(onForeground({ pending: true, lastCheckAt: t0, lastOfferedAt: t0, now: t0 + REOFFER_MS })).toEqual({
+			prompt: true,
+			check: true,
+		});
 	});
 
 	it("leaves a pending update that was never offered to shouldOfferUpdate", () => {
-		expect(onForeground({ pending: true, lastCheckAt: t0, lastOfferedAt: null, now: t0 + REOFFER_MS })).toBe("check");
+		expect(onForeground({ pending: true, lastCheckAt: t0, lastOfferedAt: null, now: t0 + REOFFER_MS })).toEqual(CHECK);
 	});
 });
 

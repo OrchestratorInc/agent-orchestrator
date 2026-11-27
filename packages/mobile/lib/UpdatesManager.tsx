@@ -43,17 +43,18 @@ export function UpdatesManager(): null {
 		const sub = AppState.addEventListener("change", (state) => {
 			if (state !== "active") return;
 			const now = Date.now();
-			const action = onForeground({
+			const { prompt, check } = onForeground({
 				pending: pending.current,
 				lastCheckAt: latestTime(lastCheckStarted.current, nativeLastCheck.current),
 				lastOfferedAt: lastOfferedAt.current,
 				now,
 			});
-			if (action === "prompt") {
-				if (isSetupRoute(pathnameRef.current)) return;
+			if (prompt && !isSetupRoute(pathnameRef.current)) {
 				lastOfferedAt.current = now;
 				showUpdateReady();
-			} else if (action === "check") {
+			}
+			// Independent of the prompt: a held-back offer must not hold back the check.
+			if (check) {
 				lastCheckStarted.current = now;
 				// A new download flips `isUpdatePending` or changes `updateId`, and the
 				// effect above offers it.

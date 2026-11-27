@@ -123,11 +123,19 @@ describe("UpdatesManager offers", () => {
 		expect(env.show).toHaveBeenCalledTimes(2);
 	});
 
-	it("never re-offers over onboarding or pairing", () => {
+	it("never re-offers over onboarding or pairing, but still checks there", () => {
 		download("u1");
 		env.pathname = "/pair";
 		rerender();
 		returnAfter(REOFFER_MS);
 		expect(env.show).toHaveBeenCalledTimes(1);
+		expect(env.check).toHaveBeenCalledTimes(1);
+	});
+
+	it("checks for a newer update on the return that re-offers a put-off one", () => {
+		download("u1");
+		returnAfter(REOFFER_MS);
+		expect(env.show).toHaveBeenCalledTimes(2);
+		expect(env.check).toHaveBeenCalledTimes(1);
 	});
 });

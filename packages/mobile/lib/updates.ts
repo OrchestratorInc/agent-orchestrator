@@ -41,16 +41,18 @@ export type ForegroundInput = {
 };
 
 /**
- * What a return to the foreground does. A put-off update comes back once a day;
- * otherwise a stale check runs again, silently, and a new download is offered
- * by `shouldOfferUpdate` like any other. A pending update never offered yet
- * (one that landed during onboarding) is left to `shouldOfferUpdate` as well.
+ * What a return to the foreground does; the two parts are independent. A
+ * put-off update comes back once a day (`prompt`). A stale check runs again,
+ * silently (`check`), also while an update is pending, since a newer one may
+ * have been published; a new download is offered by `shouldOfferUpdate` like
+ * any other. A pending update never offered yet (one that landed during
+ * onboarding) is left to `shouldOfferUpdate` as well.
  */
-export function onForeground({ pending, lastCheckAt, lastOfferedAt, now }: ForegroundInput): "prompt" | "check" | "none" {
-	if (pending && lastOfferedAt !== null && now - lastOfferedAt >= REOFFER_MS) return "prompt";
-	// Also while an update is pending: a newer one may have been published since.
-	if (lastCheckAt === null || now - lastCheckAt >= CHECK_STALE_MS) return "check";
-	return "none";
+export function onForeground({ pending, lastCheckAt, lastOfferedAt, now }: ForegroundInput): { prompt: boolean; check: boolean } {
+	return {
+		prompt: pending && lastOfferedAt !== null && now - lastOfferedAt >= REOFFER_MS,
+		check: lastCheckAt === null || now - lastCheckAt >= CHECK_STALE_MS,
+	};
 }
 
 /** The later of two optional times (ms); null when neither is known. */
