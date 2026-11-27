@@ -1216,7 +1216,7 @@ func TestSetupCheckWithoutDaemonReportsRoleFlags(t *testing.T) {
 
 func TestSetupCheckDoesNotProbeAgents(t *testing.T) {
 	d := newSetupDaemon(t)
-	repo := gitRepo(t, true)
+	repo := gitRepo(t, false) // no remote: the preview makes no network call
 	for _, mode := range []string{"--check", "--dry-run"} {
 		out, _, _ := executeCLI(t, fakeClockDeps(), "setup", "--path", repo, "--agent", "codex", mode, "--json")
 		for _, r := range d.requests {
@@ -1323,5 +1323,65 @@ func TestSetupRechecksAgentsWhenTheProjectAppearsLate(t *testing.T) {
 	}
 	if agent := stepNamed(t, res, "agent"); agent.Status != setupOK || !strings.Contains(agent.Detail, "is not used") {
 		t.Fatalf("agent step = %+v", agent)
+	}
+}
+
+func TestSetupCheckApplyCommandKeepsPathAndFlags(t *testing.T) {
+	newSetupDaemon(t)
+	repo := gitRepo(t, false)
+	out, _, _ := executeCLI(t, fakeClockDeps(), "setup", "--path", repo, "--agent", "codex", "--check", "--json")
+	res := decodeSetup(t, out)
+	want := "ao setup --path " + shellQuote(repo) + " --agent codex"
+	if len(res.NextActions) == 0 || res.NextActions[len(res.NextActions)-1] != want {
+		t.Fatalf("next_actions = %q, want the last one %q", res.NextActions, want)
+	}
+}
+
+func TestSetupRemoteNotNamedOriginNeedsHuman(t *testing.T) {
+	d := newSetupDaemon(t)
+	repo := gitRepo(t, false)
+	gitIn(t, repo, "remote", "add", "upstream", filepath.Join(t.TempDir(), "missing.git"))
+	gitIn(t, repo, "switch", "-q", "-c", "feature/x")
+	project := fmt.Sprintf(`{"id":"calc","path":%q,"repo":"","defaultBranch":"auto","config":{"worker":{"agent":"codex"},"orchestrator":{"agent":"codex"}}}`, repo)
+	d.set("POST /api/v1/projects", 201, `{"project":`+project+`}`)
+	d.set("GET /api/v1/projects/calc", 200, `{"status":"ok","project":`+project+`}`)
+	d.set("PUT /api/v1/projects/calc/config", 200, `{"project":{"id":"calc"}}`)
+
+	out, _, err := executeCLI(t, fakeClockDeps(), "setup", "--path", repo, "--agent", "codex", "--json")
+	if got := ExitCode(err); got != setupExitNeedsHuman {
+		t.Fatalf("exit = %d (%v)\n%s", got, err, out)
+	}
+	if d.saw("PUT /api/v1/projects/calc/config") {
+		t.Fatal("setup saved the checked-out feature branch for a repository with a non-origin remote")
+	}
+	// The preview says the same before registering.
+	newSetupDaemon(t)
+	out, _, _ = executeCLI(t, fakeClockDeps(), "setup", "--path", repo, "--agent", "codex", "--check", "--json")
+	if project := stepNamed(t, decodeSetup(t, out), "project"); project.Status != setupNeedsHuman || !strings.Contains(project.Detail, "none named origin") {
+		t.Fatalf("preview project step = %+v", project)
+	}
+}
+
+func TestSetupRechecksWhenSavedRolesChangeBetweenLookups(t *testing.T) {
+	d := newSetupDaemon(t)
+	repo := gitRepo(t, true)
+	d.set("POST /api/v1/agents/claude-code/probe", 200, `{"agent":{"id":"claude-code","authStatus":"unauthorized"},"supported":true,"installed":true}`)
+	d.set("GET /api/v1/projects", 200, fmt.Sprintf(`{"projects":[{"id":"calc","path":%q}]}`, repo))
+	// The agent step sees claude-code saved; by the project step it is codex.
+	reads := 0
+	d.setFunc("GET /api/v1/projects/calc", func() (int, string) {
+		reads++
+		agent := "codex"
+		if reads == 1 {
+			agent = "claude-code"
+		}
+		return 200, fmt.Sprintf(`{"status":"ok","project":{"id":"calc","path":%q,"repo":"example/calc","defaultBranch":"main","config":{"worker":{"agent":%q},"orchestrator":{"agent":%q}}}}`, repo, agent, agent)
+	})
+	out, _, err := executeCLI(t, fakeClockDeps(), "setup", "--path", repo, "--json")
+	if err != nil {
+		t.Fatalf("err = %v\n%s", err, out)
+	}
+	if res := decodeSetup(t, out); !res.Ready || res.Agent.ID != "codex" {
+		t.Fatalf("ready=%v agent=%+v", res.Ready, res.Agent)
 	}
 }

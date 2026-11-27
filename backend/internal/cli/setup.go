@@ -275,7 +275,8 @@ func (c *commandContext) runSetup(ctx context.Context, errOut io.Writer, opts se
 // picked (another run registered it in between). A blocked agent the project
 // does not run no longer blocks; one it still runs keeps blocking.
 func setupRecheckAgentStep(res *setupResult) {
-	if res.Agent == nil || (res.Agent.Source != "caller" && res.Agent.Source != "ready") {
+	// Explicit agent flags keep their own conflict handling (needs --yes).
+	if res.Agent == nil || res.Agent.Source == "flag" || res.Agent.Source == "roles" {
 		return
 	}
 	idx := -1
@@ -308,6 +309,28 @@ func setupRecheckAgentStep(res *setupResult) {
 	if check, ok := res.checks[res.Agent.ID]; ok {
 		res.Agent.AuthStatus = check.auth
 	}
+}
+
+// setupApplyCommand is the `ao setup` command that applies what a --check
+// found, for the same repository and agent choices.
+func setupApplyCommand(res *setupResult, opts setupOptions) string {
+	cmd := "ao setup"
+	path := opts.path
+	if res.Project != nil && res.Project.Path != "" {
+		path = res.Project.Path
+	}
+	if path != "" {
+		cmd += " --path " + shellQuote(path)
+	}
+	for _, f := range []struct{ flag, value string }{{"--agent", opts.agent}, {"--worker-agent", opts.workerAgent}, {"--orchestrator-agent", opts.orchestratorAgent}} {
+		if f.value != "" {
+			cmd += " " + f.flag + " " + shellQuote(f.value)
+		}
+	}
+	if opts.yes {
+		cmd += " --yes"
+	}
+	return cmd
 }
 
 // finishSetup adds the verify step, the verdict and the next actions.
@@ -356,8 +379,9 @@ func finishSetup(res *setupResult, opts setupOptions) {
 		}
 	case res.pending && opts.check:
 		verify.Status = setupSkipped
-		verify.Detail = "not ready: run `ao setup` to finish"
-		res.NextActions = append(res.NextActions, "ao setup")
+		apply := setupApplyCommand(res, opts)
+		verify.Detail = fmt.Sprintf("not ready: run `%s` to finish", apply)
+		res.NextActions = append(res.NextActions, apply)
 	case res.pending:
 		verify.Status = setupSkipped
 		verify.Detail = "dry run: nothing changed; run `ao setup` to apply"
@@ -1294,6 +1318,12 @@ func (p setupBranchPlan) previewFix(path string) string {
 //     person must say.
 func (c *commandContext) setupBaseBranch(ctx context.Context, project projectDetails) setupBranchPlan {
 	if project.Repo == "" {
+		// No origin is not the same as no remote: a repository whose only
+		// remote is named otherwise (upstream) still has a base elsewhere, so
+		// the checked-out branch is not a safe default there.
+		if out, err := c.deps.CommandOutputInDir(ctx, project.Path, "git", "remote"); err == nil && strings.TrimSpace(string(out)) != "" {
+			return setupBranchPlan{why: "the repository has a remote but none named origin, so its default branch cannot be resolved", remote: true}
+		}
 		branch := c.setupCurrentBranch(ctx, project.Path)
 		why := "the repository has no remote"
 		if branch == "" {
