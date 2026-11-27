@@ -43,15 +43,15 @@ func TestEverySessionVarIsHandled(t *testing.T) {
 // Windows environment names are case-insensitive: a mixed-case marker is the
 // same variable. Elsewhere names are compared exactly.
 func TestScrubForDaemonCaseInsensitiveOnWindows(t *testing.T) {
-	old := caseInsensitiveEnv
-	t.Cleanup(func() { caseInsensitiveEnv = old })
+	old := CaseInsensitiveEnv
+	t.Cleanup(func() { CaseInsensitiveEnv = old })
 	in := []string{"Ao_Owner=app", "ClaudeCode=1", "Claude_Code_Session_Id=s", "Ao_Data_Dir=/d", "Path=C:\\bin"}
 
-	caseInsensitiveEnv = true
+	CaseInsensitiveEnv = true
 	if got, want := ScrubForDaemon(in), []string{"Ao_Data_Dir=/d", "Path=C:\\bin"}; !slices.Equal(got, want) {
 		t.Fatalf("case-insensitive: %v, want %v", got, want)
 	}
-	caseInsensitiveEnv = false
+	CaseInsensitiveEnv = false
 	if got := ScrubForDaemon(in); !slices.Equal(got, in) {
 		t.Fatalf("case-sensitive: %v, want all kept (different names)", got)
 	}
@@ -60,8 +60,8 @@ func TestScrubForDaemonCaseInsensitiveOnWindows(t *testing.T) {
 // Inside a Claude Code session, the host's per-session CLAUDE_* settings go;
 // documented user settings stay. Outside one, CLAUDE_* settings are the user's.
 func TestScrubForDaemonClaudeHostSettings(t *testing.T) {
-	host := []string{"CLAUDECODE=1", "CLAUDE_CODE_TERMINAL_MCP_TOOLS=x", "CLAUDE_CODE_SIMPLE=0", "CLAUDE_EFFORT=medium", "CLAUDE_PREVIEW_CLASSIFIER_FLOOR=1", "CLAUDE_CODE_USE_BEDROCK=1", "CLAUDE_CONFIG_DIR=/c", "CLAUDE_CODE_OAUTH_TOKEN=tok", "PATH=/bin"}
-	if got, want := ScrubForDaemon(host), []string{"CLAUDE_CODE_USE_BEDROCK=1", "CLAUDE_CONFIG_DIR=/c", "CLAUDE_CODE_OAUTH_TOKEN=tok", "PATH=/bin"}; !slices.Equal(got, want) {
+	host := []string{"CLAUDECODE=1", "CLAUDE_CODE_TERMINAL_MCP_TOOLS=x", "CLAUDE_CODE_SIMPLE=0", "CLAUDE_EFFORT=medium", "CLAUDE_PREVIEW_CLASSIFIER_FLOOR=1", "CLAUDE_CODE_USE_BEDROCK=1", "CLAUDE_CONFIG_DIR=/c", "CLAUDE_CODE_OAUTH_TOKEN=tok", "CLAUDE_CODE_SKIP_PROMPT_HISTORY=1", "PATH=/bin"}
+	if got, want := ScrubForDaemon(host), []string{"CLAUDE_CODE_USE_BEDROCK=1", "CLAUDE_CONFIG_DIR=/c", "CLAUDE_CODE_OAUTH_TOKEN=tok", "CLAUDE_CODE_SKIP_PROMPT_HISTORY=1", "PATH=/bin"}; !slices.Equal(got, want) {
 		t.Fatalf("inside Claude Code: %v, want %v", got, want)
 	}
 	plain := []string{"CLAUDE_CODE_DISABLE_TERMINAL_TITLE=1", "CLAUDE_EFFORT=high", "PATH=/bin"}

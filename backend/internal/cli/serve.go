@@ -248,7 +248,22 @@ func (c *commandContext) serveForegroundLoop(ctx context.Context, out, errOut io
 		return err
 	}
 	res, err := c.existingDaemon(ctx, errOut, cfg, opts)
-	if err != nil {
+	var stoppedErr daemonStoppedError
+	if errors.As(err, &stoppedErr) {
+		// Gone while it booted: follow a replacement if one comes (an app
+		// swap); otherwise the stop sticks, unless it was the app's own
+		// daemon quitting with the app, when the service manager should
+		// start one.
+		if res, err = c.waitForReplacement(ctx, cfg); err != nil {
+			return err
+		}
+		if res == nil {
+			if stoppedErr.owner == "app" {
+				return errors.New("the desktop app's daemon stopped with the app while it was starting; exiting so the service manager starts one")
+			}
+			return nil
+		}
+	} else if err != nil {
 		return err
 	}
 	if res == nil && sawDaemon {
@@ -419,6 +434,7 @@ func (c *commandContext) waitServeReady(ctx context.Context, cfg config.Config, 
 	deadline := c.deps.Now().Add(timeout)
 	logPath := filepath.Join(cfg.DataDir, "daemon.log")
 	var last daemonStatus
+	var seen *daemonStatus
 	for {
 		select {
 		case <-ctx.Done():
@@ -438,6 +454,18 @@ func (c *commandContext) waitServeReady(ctx context.Context, cfg config.Config, 
 			return nil, err
 		}
 		last = st
+		switch st.State {
+		case stateNotReady, stateUnhealthy:
+			if st.PID != 0 {
+				seen = &st
+			}
+		case stateStopped:
+			// A daemon seen booting whose run file is now gone was stopped
+			// cleanly, as by `ao stop`: report that, not a timeout.
+			if seen != nil {
+				return nil, daemonStoppedError{pid: seen.PID, owner: seen.owner}
+			}
+		}
 		// Another daemon that won a concurrent start is just as good: it
 		// serves the same data dir.
 		if st.State == stateReady {
@@ -456,6 +484,17 @@ func (c *commandContext) waitServeReady(ctx context.Context, cfg config.Config, 
 		}
 		c.deps.Sleep(200 * time.Millisecond)
 	}
+}
+
+// daemonStoppedError is a daemon that was seen starting and then stopped
+// cleanly before it became ready.
+type daemonStoppedError struct {
+	pid   int
+	owner string
+}
+
+func (e daemonStoppedError) Error() string {
+	return fmt.Sprintf("the daemon (pid %d) was stopped while it was starting", e.pid)
 }
 
 func daemonExitedError(exitErr error, dataDir, logPath string) error {
@@ -507,7 +546,12 @@ func serveEnv(base []string, port int, optedOut bool, version string) []string {
 	// sessions they run under the desktop app
 	// (session_manager.desktopOwnedDaemon), which would send macOS permission
 	// prompts to the wrong app.
-	env := envMap(sessionenv.ScrubForDaemon(base))
+	env := map[string]string{}
+	for k, v := range envMap(sessionenv.ScrubForDaemon(base)) {
+		// On Windows Do_Not_Track is DO_NOT_TRACK: compare names as the OS
+		// does, so an opt-out spelled in any case is honoured.
+		env[sessionenv.NormalizeKey(k)] = v
+	}
 	if port != 0 {
 		env["AO_PORT"] = strconv.Itoa(port)
 	}

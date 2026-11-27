@@ -897,3 +897,58 @@ func TestShellUnquoteRoundTripsBashNonASCII(t *testing.T) {
 		}
 	}
 }
+
+// A booting daemon (healthz answers, readyz not yet) for another data dir is
+// refused before install writes anything.
+func TestServiceInstallRefusesBootingDaemonOfAnotherDataDir(t *testing.T) {
+	cfg := setConfigEnv(t)
+	setServiceHome(t)
+	old := serviceGOOS
+	serviceGOOS = "darwin"
+	t.Cleanup(func() { serviceGOOS = old })
+	t.Setenv("AO_DATA_DIR", t.TempDir()) // the daemon below reports this one
+	srv := fakeBootingDaemon(t, 4242)
+	t.Setenv("AO_DATA_DIR", cfg.dataDir)
+	if err := runfile.Write(cfg.runFile, runfile.Info{PID: 4242, Port: serverPort(t, srv.URL), StartedAt: time.Unix(100, 0).UTC()}); err != nil {
+		t.Fatal(err)
+	}
+	var calls []serviceCall
+	deps := serviceTestDeps(&calls, nil)
+	deps.ProcessAlive = func(pid int) bool { return pid == 4242 }
+	_, _, err := executeCLI(t, deps, "service", "install", "--no-wait")
+	if err == nil || !strings.Contains(err.Error(), "serves data dir") {
+		t.Fatalf("err = %v, want a data-dir conflict for the booting daemon", err)
+	}
+}
+
+func TestWriteFileAtomic(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "x.plist")
+	if err := os.WriteFile(path, []byte("old"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := writeFileAtomic(path, []byte("new")); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := os.ReadFile(path); string(got) != "new" {
+		t.Fatalf("content = %q", got)
+	}
+	entries, _ := os.ReadDir(dir)
+	if len(entries) != 1 {
+		t.Fatalf("left temp files behind: %v", entries)
+	}
+	if runtime.GOOS == "windows" {
+		return
+	}
+	// A write that cannot happen leaves the old definition intact.
+	if err := os.Chmod(dir, 0o500); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(dir, 0o700) })
+	if err := writeFileAtomic(path, []byte("broken")); err == nil {
+		t.Skip("directory still writable (running as root?)")
+	}
+	if got, _ := os.ReadFile(path); string(got) != "new" {
+		t.Fatalf("failed write damaged the file: %q", got)
+	}
+}

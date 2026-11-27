@@ -111,6 +111,8 @@ var claudeUserSettings = map[string]bool{
 	"CLAUDE_CONFIG_DIR":                        true,
 	// A long-lived token the user creates for unattended runs.
 	"CLAUDE_CODE_OAUTH_TOKEN": true,
+	// Privacy choice: no prompt history on disk.
+	"CLAUDE_CODE_SKIP_PROMPT_HISTORY": true,
 }
 
 // daemonConfigVars are session variables that are also the daemon's own
@@ -152,14 +154,14 @@ func ScrubForDaemon(env []string) []string {
 	}
 	insideClaude := false
 	for _, kv := range env {
-		if k, v, _ := strings.Cut(kv, "="); normalizeKey(k) == "CLAUDECODE" && v != "" {
+		if k, v, _ := strings.Cut(kv, "="); NormalizeKey(k) == "CLAUDECODE" && v != "" {
 			insideClaude = true
 		}
 	}
 	out := make([]string, 0, len(env))
 	for _, kv := range env {
 		raw, _, _ := strings.Cut(kv, "=")
-		k := normalizeKey(raw)
+		k := NormalizeKey(raw)
 		if drop[k] || hasCallerSessionPrefix(k) {
 			continue
 		}
@@ -171,13 +173,13 @@ func ScrubForDaemon(env []string) []string {
 	return out
 }
 
-// caseInsensitiveEnv is true where environment names are case-insensitive, so
-// Ao_Owner is AO_OWNER. A variable so tests can pick one.
-var caseInsensitiveEnv = runtime.GOOS == "windows"
+// CaseInsensitiveEnv is true where environment names are case-insensitive, so
+// Ao_Owner is AO_OWNER. A variable so tests (here and in callers) can pick one.
+var CaseInsensitiveEnv = runtime.GOOS == "windows"
 
-// normalizeKey makes a variable name comparable with the upper-case lists.
-func normalizeKey(k string) string {
-	if caseInsensitiveEnv {
+// NormalizeKey makes a variable name comparable with the upper-case lists.
+func NormalizeKey(k string) string {
+	if CaseInsensitiveEnv {
 		return strings.ToUpper(k)
 	}
 	return k

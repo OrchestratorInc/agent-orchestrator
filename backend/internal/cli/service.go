@@ -416,7 +416,7 @@ func (c *commandContext) serviceInstall(ctx context.Context, opts serviceOptions
 	if err != nil {
 		return serviceStatus{}, err
 	}
-	if before.State == stateReady {
+	if (before.State == stateReady || before.State == stateNotReady) && before.workingDirectory != "" {
 		// The run file may name a daemon for another data dir, as when only
 		// AO_DATA_DIR changed: the service's serve would refuse it.
 		_, dataDir, _, err := config.ResolvePaths()
@@ -447,7 +447,7 @@ func (c *commandContext) serviceInstall(ctx context.Context, opts serviceOptions
 	if err := os.MkdirAll(filepath.Dir(spec.File), 0o700); err != nil {
 		return serviceStatus{}, err
 	}
-	if err := os.WriteFile(spec.File, []byte(content), 0o600); err != nil {
+	if err := writeFileAtomic(spec.File, []byte(content)); err != nil {
 		return serviceStatus{}, err
 	}
 	// Leave nothing behind when the service manager refuses the file; after
@@ -795,7 +795,7 @@ func (c *commandContext) launchdJobLoaded(ctx context.Context, spec serviceSpec)
 // restorePreviousService puts back the definition a failed reinstall
 // replaced, and starts it again if it was running before.
 func (c *commandContext) restorePreviousService(ctx context.Context, spec serviceSpec, previous []byte, wasRunning bool) error {
-	if err := os.WriteFile(spec.File, previous, 0o600); err != nil {
+	if err := writeFileAtomic(spec.File, previous); err != nil {
 		return err
 	}
 	switch spec.Manager {
@@ -812,6 +812,33 @@ func (c *commandContext) restorePreviousService(ctx context.Context, spec servic
 		}
 	}
 	return nil
+}
+
+// writeFileAtomic replaces path with data through a temporary file in the same
+// directory, owner-only like the files install writes, so a failed write never leaves a truncated service definition
+// (whose missing ownership marker would then block a retry).
+func writeFileAtomic(path string, data []byte) error {
+	tmp, err := os.CreateTemp(filepath.Dir(path), "."+filepath.Base(path)+".*.tmp")
+	if err != nil {
+		return err
+	}
+	name := tmp.Name()
+	defer func() { _ = os.Remove(name) }() // a no-op once renamed
+	if _, err := tmp.Write(data); err != nil {
+		_ = tmp.Close()
+		return err
+	}
+	if err := tmp.Sync(); err != nil {
+		_ = tmp.Close()
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		return err
+	}
+	if err := os.Chmod(name, 0o600); err != nil {
+		return err
+	}
+	return os.Rename(name, path)
 }
 
 // launchdServiceGoneWait bounds how long install waits for launchd to tear a

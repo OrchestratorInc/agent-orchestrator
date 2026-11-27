@@ -18,6 +18,7 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/config"
 	"github.com/aoagents/agent-orchestrator/backend/internal/daemonmeta"
 	"github.com/aoagents/agent-orchestrator/backend/internal/runfile"
+	"github.com/aoagents/agent-orchestrator/backend/internal/sessionenv"
 )
 
 // fakeServeDaemon answers /healthz and /readyz as the Orchestrator daemon
@@ -746,5 +747,73 @@ func TestServeForegroundAppDaemonQuitsDuringStartup(t *testing.T) {
 	}
 	if h.started != 0 {
 		t.Fatal("serve started a daemon itself; the service manager restart should")
+	}
+}
+
+// fakeBootingDaemon answers /healthz but not yet /readyz, like a daemon that
+// is still starting.
+func fakeBootingDaemon(t *testing.T, pid int) *httptest.Server {
+	t.Helper()
+	dataDir := os.Getenv("AO_DATA_DIR")
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		status := map[string]string{"/healthz": "ok", "/readyz": "starting"}[r.URL.Path]
+		if status == "" {
+			http.NotFound(w, r)
+			return
+		}
+		_, _ = fmt.Fprintf(w, `{"status":%q,"service":%q,"pid":%d,"workingDirectory":%q}`, status, daemonmeta.ServiceName, pid, dataDir)
+	}))
+	t.Cleanup(srv.Close)
+	return srv
+}
+
+// `ao stop` while the daemon a foreground serve waits on is still booting
+// sticks: serve exits 0 (or non-zero for the app's own daemon) instead of
+// timing out into a restart.
+func TestServeForegroundStopWhileDaemonBoots(t *testing.T) {
+	for _, tc := range []struct {
+		owner   string
+		wantErr string
+	}{{owner: ""}, {owner: "app", wantErr: "stopped with the app while it was starting"}} {
+		t.Run("owner="+tc.owner, func(t *testing.T) {
+			h := newForegroundHarness(t)
+			srv := fakeBootingDaemon(t, 4242)
+			if err := runfile.Write(h.cfg.runFile, runfile.Info{PID: 4242, Port: serverPort(t, srv.URL), StartedAt: time.Unix(100, 0).UTC(), Owner: tc.owner}); err != nil {
+				t.Fatal(err)
+			}
+			h.alive[4242] = true
+			h.atTick = 2
+			h.onTick = func() {
+				h.alive[4242] = false
+				_ = runfile.Remove(h.cfg.runFile)
+			}
+			_, err := h.run()
+			if tc.wantErr == "" && err != nil {
+				t.Fatalf("a stop while booting should exit 0: %v", err)
+			}
+			if tc.wantErr != "" && (err == nil || !strings.Contains(err.Error(), tc.wantErr)) {
+				t.Fatalf("err = %v, want %q", err, tc.wantErr)
+			}
+			if h.started != 0 {
+				t.Fatal("serve started a daemon in place of the stopped one")
+			}
+		})
+	}
+}
+
+// On Windows environment names are case-insensitive, so a mixed-case
+// opt-out must still turn analytics off.
+func TestServeEnvHonoursMixedCaseOptOutOnWindows(t *testing.T) {
+	old := sessionenv.CaseInsensitiveEnv
+	t.Cleanup(func() { sessionenv.CaseInsensitiveEnv = old })
+	sessionenv.CaseInsensitiveEnv = true
+	env := envMap(serveEnv([]string{"Do_Not_Track=1", "Ao_Telemetry_Remote=posthog", "Path=C:\\bin"}, 0, false, "1.2.3"))
+	if env["AO_TELEMETRY_REMOTE"] != "off" {
+		t.Fatalf("AO_TELEMETRY_REMOTE = %q, want off for Do_Not_Track=1 (env %v)", env["AO_TELEMETRY_REMOTE"], env)
+	}
+	for k := range env {
+		if strings.EqualFold(k, "AO_TELEMETRY_REMOTE") && k != "AO_TELEMETRY_REMOTE" {
+			t.Fatalf("mixed-case %s survives next to AO_TELEMETRY_REMOTE", k)
+		}
 	}
 }
