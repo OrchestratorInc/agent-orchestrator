@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"sync"
 	"testing"
 	"time"
@@ -92,6 +93,58 @@ func TestStartupHealthChecksOpenChatFirst(t *testing.T) {
 		if got := launcher.checks[0].SessionID; got != viewed {
 			t.Fatalf("first check = %s, want the viewed chat %s", got, viewed)
 		}
+	}
+}
+
+type lateViewLauncher struct {
+	healthCheckLauncher
+	mu      sync.Mutex
+	viewed  domain.SessionID
+	started chan struct{}
+	release chan struct{}
+}
+
+func (l *lateViewLauncher) HasChatView(id domain.SessionID) bool {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return id == l.viewed
+}
+
+func (l *lateViewLauncher) StartChat(ctx context.Context, cfg ChatStart) (ChatStarted, error) {
+	if len(l.checks) == 0 {
+		close(l.started)
+		<-l.release
+	}
+	return l.healthCheckLauncher.StartChat(ctx, cfg)
+}
+
+func TestStartupHealthChecksAChatOpenedMidPassNext(t *testing.T) {
+	m, st, _, _ := newLifecycleManager()
+	launcher := &lateViewLauncher{healthCheckLauncher: healthCheckLauncher{err: ports.ErrChatHostNotRunning},
+		started: make(chan struct{}), release: make(chan struct{})}
+	m.chat = launcher
+	m.reconcileWorkers = 1
+	for _, id := range []domain.SessionID{"mer-a", "mer-b", "mer-c", "mer-d"} {
+		rec := startupChatRecord()
+		rec.ID = id
+		st.sessions[id] = rec
+	}
+	done := make(chan error, 1)
+	go func() { done <- m.ReconcileBackground(context.Background()) }()
+	<-launcher.started
+	launcher.mu.Lock()
+	launcher.viewed = "mer-d"
+	launcher.mu.Unlock()
+	close(launcher.release)
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+	var got []domain.SessionID
+	for _, check := range launcher.checks {
+		got = append(got, check.SessionID)
+	}
+	if want := []domain.SessionID{"mer-a", "mer-d", "mer-b", "mer-c"}; !slices.Equal(got, want) {
+		t.Fatalf("checks = %v, want %v", got, want)
 	}
 }
 

@@ -5189,7 +5189,19 @@ func (m *Manager) reconcileLivePass(ctx context.Context, recs []domain.SessionRe
 	if workers > len(live) {
 		workers = len(live)
 	}
-	jobs := make(chan domain.SessionRecord)
+	var pendingMu sync.Mutex
+	pending := live
+	take := func() (domain.SessionRecord, bool) {
+		pendingMu.Lock()
+		defer pendingMu.Unlock()
+		if len(pending) == 0 {
+			return domain.SessionRecord{}, false
+		}
+		next := m.nextStartupCheck(pending)
+		rec := pending[next]
+		pending = slices.Delete(pending, next, next+1)
+		return rec, true
+	}
 	var wg sync.WaitGroup
 	var retryMu sync.Mutex
 	var retryChats []domain.SessionID
@@ -5197,7 +5209,7 @@ func (m *Manager) reconcileLivePass(ctx context.Context, recs []domain.SessionRe
 	for range workers {
 		go func() {
 			defer wg.Done()
-			for rec := range jobs {
+			for rec, ok := take(); ok; rec, ok = take() {
 				m.beginStatusRecovery(rec.ID)
 				err := func() error {
 					defer m.endAgentOperation(rec.ID, agentOperationReconcile)
@@ -5225,12 +5237,6 @@ func (m *Manager) reconcileLivePass(ctx context.Context, recs []domain.SessionRe
 			}
 		}()
 	}
-	for pending := live; len(pending) > 0; {
-		next := m.nextStartupCheck(pending)
-		jobs <- pending[next]
-		pending = slices.Delete(pending, next, next+1)
-	}
-	close(jobs)
 	wg.Wait()
 	if len(retryChats) > 0 && ctx.Err() == nil {
 		go m.retryStartupChatChecks(ctx, retryChats)
