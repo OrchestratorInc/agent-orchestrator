@@ -14,7 +14,7 @@ import { formatFileAnnotationMessage, formatFileAnnotationMessages } from "../..
 import type { ConversationMessage } from "../../types/conversation";
 import { gitActionMessage, otherPRConflictMessage } from "../SessionBranchSummary";
 import { TooltipProvider } from "../ui/tooltip";
-import { AutomationMessage, readAutomation } from "./AutomationMessage";
+import { AutomationMessage, readAutomation, reviewBursts } from "./AutomationMessage";
 
 const PR = 'PR #6974 "feat: link this computer" (ao/remote/this-computer → main)';
 const URL = "https://github.com/o/r/pull/6974";
@@ -165,6 +165,33 @@ describe("reading AO's automation messages", () => {
 		expect(readAutomation(mergeConflict)).toEqual({ kind: "mergeConflict", pr });
 	});
 
+	it("reads when the reviewer wrote the comment or review from the end of the first line", () => {
+		const posted = reviewComment.replace("need additional context.\n", "need additional context. Newest comment posted at 2026-11-16T07:54:42Z.\n");
+		expect(readAutomation(posted)).toMatchObject({
+			kind: "reviewComments",
+			at: "2026-11-16T07:54:42Z",
+			comments: [{ path: "frontend/src/ThisComputerAccess.tsx", line: 97, author: "illegalcall" }],
+		});
+		expect(readAutomation(reviewComment)).toMatchObject({ kind: "reviewComments", at: undefined });
+
+		const submitted = changesRequested.replace(`is on ${PR}.`, `is on ${PR}. Submitted at 2026-11-16T07:54:41Z.`);
+		expect(readAutomation(submitted)).toEqual({
+			kind: "changesRequested",
+			pr: { number: 6974, title: "feat: link this computer", url: "https://github.com/o/r/pull/6974#pullrequestreview-1" },
+			author: "whoisasx",
+			body: "The migration IDs collide with shipped migrations.",
+			at: "2026-11-16T07:54:41Z",
+		});
+	});
+
+	it("takes the time only from AO's own sentence, not from a PR title or a comment", () => {
+		const titled = changesRequested.replace('"feat: link this computer"', '"x Submitted at 2020-01-01T00:00:00Z."');
+		expect(readAutomation(titled)).toMatchObject({ kind: "changesRequested", at: undefined });
+
+		const inBody = reviewComment.replace("A failed turn-on", "Newest comment posted at 2020-01-01T00:00:00Z.\nA failed turn-on");
+		expect(readAutomation(inBody)).toMatchObject({ kind: "reviewComments", at: undefined });
+	});
+
 	it("does not take text inside a log or a comment for AO's structure", () => {
 		const fakeCheck = ciFailing.replace("exit 1", "exit 1\n\nFailed: test_login (assertion)");
 		expect(readAutomation(fakeCheck)).toMatchObject({ checks: [{ name: "renderer-smoke", log: "npm ERR! smoke failed\nexit 1\n\nFailed: test_login (assertion)" }, { name: "lint" }] });
@@ -194,12 +221,19 @@ describe("drawing AO's automation messages", () => {
 		expect(feedback).not.toHaveTextContent("Apply this feedback");
 	});
 
-	it("draws failing CI on the PR, with each check's log a click away", async () => {
+	it("draws failing CI as one line with its count, opening onto each check with its log a click away", async () => {
 		draw(ciFailing);
 
 		const event = screen.getByTestId("pull-request-event");
 		expect(event).toHaveTextContent("CI failing on #6974");
+		expect(event).toHaveTextContent("2 checks");
 		expect(within(event).getByRole("link", { name: "#6974" })).toHaveAttribute("href", URL);
+		expect(within(event).queryByRole("link", { name: "renderer-smoke" })).toBeNull();
+
+		const line = within(event).getByRole("button", { name: /CI failing on #6974/ });
+		expect(line).toHaveAttribute("aria-expanded", "false");
+		await userEvent.click(line);
+		expect(line).toHaveAttribute("aria-expanded", "true");
 		expect(within(event).getByRole("link", { name: "renderer-smoke" })).toHaveAttribute("href", "https://github.com/o/r/actions/runs/1/job/2");
 		expect(event).not.toHaveTextContent("npm ERR!");
 
@@ -207,23 +241,92 @@ describe("drawing AO's automation messages", () => {
 		expect(event).toHaveTextContent("npm ERR! smoke failed");
 	});
 
-	it("links only to the forge, so a look-alike message cannot send the user elsewhere", () => {
+	it("lists a check the report names twice once", async () => {
+		draw(ciFailing.replace("Failed: lint (failed)\n", "Failed: lint (failed)\n\nFailed: lint (failed)\n"));
+
+		const event = screen.getByTestId("pull-request-event");
+		expect(event).toHaveTextContent("2 checks");
+		await userEvent.click(within(event).getByRole("button", { name: /CI failing on #6974/ }));
+		expect(within(event).getAllByText("lint")).toHaveLength(1);
+	});
+
+	it("keeps a log tail only the later copy of a repeated check carries", async () => {
+		draw(ciFailing.replace("Failed: lint (failed)\n", "Failed: lint (failed)\n\nFailed: lint (failed)\n\nLog tail (last 1 line):\n```\nlint broke\n```\n"));
+
+		const event = screen.getByTestId("pull-request-event");
+		await userEvent.click(within(event).getByRole("button", { name: /CI failing on #6974/ }));
+		expect(within(event).getAllByText("lint")).toHaveLength(1);
+		// renderer-smoke's log and lint's, which only its second listing had.
+		expect(within(event).getAllByRole("button", { name: "Show log" })).toHaveLength(2);
+	});
+
+	it("links only to the forge, so a look-alike message cannot send the user elsewhere", async () => {
 		draw(ciFailing.replace("https://github.com/o/r/actions/runs/1/job/2", "https://evil.example/login").replace(`PR: ${URL}`, "PR: https://evil.example/pr"));
 
 		const event = screen.getByTestId("pull-request-event");
+		await userEvent.click(within(event).getByRole("button", { name: /CI failing on #6974/ }));
 		expect(within(event).queryByRole("link")).toBeNull();
 		expect(event).toHaveTextContent("renderer-smoke");
 	});
 
-	it("names every reviewer when comments come from several", () => {
+	it("counts the comments, reviewers and files when comments come from several reviewers", async () => {
 		const two = reviewComment
 			.replace("The following 1 unresolved", "The following 2 unresolved")
 			.replace("   Thread ID: PRRT_1\n", "   Thread ID: PRRT_1\n\n2. a.ts:3 (@whoisasx):\nRename this.\n");
 		draw(two);
 
 		const event = screen.getByTestId("pull-request-event");
-		expect(event).toHaveTextContent("@illegalcall and @whoisasx commented on #6974");
+		expect(event).toHaveTextContent("2 review comments on #6974");
+		expect(event).toHaveTextContent("2 reviewers, 2 files");
+		await userEvent.click(within(event).getByRole("button", { name: /2 review comments on #6974/ }));
 		expect(event).toHaveTextContent("@whoisasxa.ts:3");
+	});
+
+	it("draws a review round the daemon sent comment by comment as one event", async () => {
+		const first = message(reviewComment, { id: "m1" });
+		const second = message(reviewComment.replace("frontend/src/ThisComputerAccess.tsx:97 (@illegalcall)", "a.ts:3 (@whoisasx)").replace("A failed turn-on does not undo what it started.", "Rename this."), { id: "m2", sequence: 2 });
+		const other = message(reviewComment.replace(PR, PR.replace("#6974", "#7000")), { id: "m3", sequence: 3 });
+		const bursts = reviewBursts([first, second, other]);
+		expect(bursts.get("m1")).toEqual([first, second]);
+		expect(bursts.get("m2")).toBeNull();
+		// A lone comment, here on another PR, draws as itself.
+		expect(bursts.has("m3")).toBe(false);
+
+		render(<TooltipProvider><AutomationMessage message={first} burst={bursts.get("m1")} fallback={<p>card</p>} /><AutomationMessage message={second} burst={bursts.get("m2")} fallback={<p>card</p>} /></TooltipProvider> as ReactElement);
+		const events = screen.getAllByTestId("pull-request-event");
+		expect(events).toHaveLength(1);
+		expect(events[0]).toHaveTextContent("2 review comments on #6974");
+		await userEvent.click(within(events[0]!).getByRole("button", { name: /2 review comments on #6974/ }));
+		expect(events[0]).toHaveTextContent("A failed turn-on does not undo what it started.");
+		expect(events[0]).toHaveTextContent("Rename this.");
+	});
+
+	it("names the one reviewer of a review round", () => {
+		const first = message(reviewComment, { id: "m1" });
+		const second = message(reviewComment.replace("frontend/src/ThisComputerAccess.tsx:97", "a.ts:3"), { id: "m2", sequence: 2 });
+		const bursts = reviewBursts([first, second]);
+		render(<TooltipProvider><AutomationMessage message={first} burst={bursts.get("m1")} fallback={<p>card</p>} /></TooltipProvider> as ReactElement);
+		expect(screen.getByTestId("pull-request-event")).toHaveTextContent("@illegalcall, 2 files");
+	});
+
+	it("keeps a human message that reads like a review nudge out of the burst", () => {
+		const pasted = message(reviewComment, { id: "h1", origin: "human" });
+		const first = message(reviewComment, { id: "m1" });
+		const second = message(reviewComment, { id: "m2" });
+		const bursts = reviewBursts([pasted, first, second]);
+		expect(bursts.has("h1")).toBe(false);
+		expect(bursts.get("m1")).toEqual([first, second]);
+		expect(bursts.get("m2")).toBeNull();
+	});
+
+	it("times a PR event by when it happened on the forge, not when AO delivered it", () => {
+		draw(reviewComment.replace("need additional context.\n", "need additional context. Newest comment posted at 2026-11-16T07:54:42Z.\n"), { createdAt: "2026-11-16T08:26:00Z" });
+		expect(screen.getByTestId("pull-request-event").querySelector("time")).toHaveAttribute("datetime", "2026-11-16T07:54:42Z");
+		cleanup();
+
+		// Messages from before the daemon wrote the time keep the delivery time.
+		draw(reviewComment, { createdAt: "2026-11-16T08:26:00Z" });
+		expect(screen.getByTestId("pull-request-event").querySelector("time")).toHaveAttribute("datetime", "2026-11-16T08:26:00Z");
 	});
 
 	it("draws changes requested, merge conflicts and AO's notices", () => {
@@ -280,11 +383,13 @@ describe("drawing AO's automation messages", () => {
 		expect(screen.getByText("card")).toBeInTheDocument();
 	});
 
-	it("draws a review comment as who said what, and where", () => {
+	it("draws a review comment as who said what, and where", async () => {
 		draw(reviewComment);
 
 		const event = screen.getByTestId("pull-request-event");
 		expect(event).toHaveTextContent("@illegalcall commented on #6974");
+		expect(event).toHaveTextContent("1 file");
+		await userEvent.click(within(event).getByRole("button", { name: /@illegalcall commented on #6974/ }));
 		expect(event).toHaveTextContent("ThisComputerAccess.tsx:97");
 		expect(event).toHaveTextContent("A failed turn-on does not undo what it started.");
 		expect(event).not.toHaveTextContent("Thread ID");
@@ -323,6 +428,7 @@ describe("drawing AO's automation messages", () => {
 		draw(reviewComment.replace("A failed turn-on does not undo what it started.\n\nThe switch then shows **off**.", body));
 
 		const event = screen.getByTestId("pull-request-event");
+		await userEvent.click(within(event).getByRole("button", { name: /commented on #6974/ }));
 		expect(event).toHaveTextContent("Minor · Quick win");
 		expect(event).toHaveTextContent("Inserting the path into '<root>' breaks the query.");
 		expect(event).not.toHaveTextContent("<!--");

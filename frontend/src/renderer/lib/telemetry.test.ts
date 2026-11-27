@@ -38,17 +38,10 @@ function memoryStorage(initial: Record<string, string> = {}) {
 }
 
 describe("telemetry sanitizers", () => {
-	it("allows only the first run experiment variants and prompt actions", async () => {
-		for (const variant of ["prompt", "control"]) {
-			expect(await sanitizeRendererProperties("ao.onboarding.first_run_experiment_exposed", { variant, path: "/private/repo" })).toEqual({ variant });
-		}
-		for (const action of ["clone", "local_folder", "standalone", "import", "dismissed"]) {
-			expect(await sanitizeRendererProperties("ao.onboarding.first_run_prompt_action", { action, url: "https://private/repo" })).toEqual({ action });
-		}
-		for (const value of ["unknown", "/private/repo", 0, null, undefined]) {
-			expect(await sanitizeRendererProperties("ao.onboarding.first_run_experiment_exposed", { variant: value })).toEqual({});
-			expect(await sanitizeRendererProperties("ao.onboarding.first_run_prompt_action", { action: value })).toEqual({});
-		}
+	it("keeps no properties on the retired first-run prompt events", async () => {
+		// No longer sent since #7767; any properties they carried are dropped.
+		expect(await sanitizeRendererProperties("ao.onboarding.first_run_experiment_exposed", { variant: "prompt", path: "/private/repo" })).toEqual({});
+		expect(await sanitizeRendererProperties("ao.onboarding.first_run_prompt_action", { action: "clone", url: "https://private/repo" })).toEqual({});
 	});
 	it("keeps the v2 aliases for api errors and the session summary", () => {
 		expect(postHogEventName("ao.requests.failed")).toBe("ao.requests.failed");
@@ -122,8 +115,10 @@ describe("telemetry sanitizers", () => {
 
 	it("allows only the closed onboarding step vocabulary", async () => {
 		for (const event of ["ao.onboarding.step_viewed", "ao.onboarding.step_completed", "ao.onboarding.step_abandoned"]) {
-			expect(await sanitizeRendererProperties(event, { step: "github_auth", email: "a@b.co", path: "/Users/x" })).toEqual({
+			// step_index is derived from the step (onboarding-telemetry-schema.ts), never passed through.
+			expect(await sanitizeRendererProperties(event, { step: "github_auth", step_index: 99, email: "a@b.co", path: "/Users/x" })).toEqual({
 				step: "github_auth",
+				step_index: 4,
 			});
 			expect(await sanitizeRendererProperties(event, { step: "/Users/x/secret" })).toEqual({});
 		}
@@ -331,6 +326,8 @@ describe("telemetry sanitizers", () => {
 		expect(config.capture_pageview).toBe(false);
 		expect(config.capture_exceptions).toBe(false);
 		expect(config.capture_performance).toBe(false);
+		// No window-wide scroll listener measuring scroll depth for pageviews AO never sends.
+		expect(config.disable_scroll_properties).toBe(true);
 	});
 
 	it("emits the stable AO installation id without creating a person profile", () => {
@@ -647,15 +644,55 @@ describe("telemetry sanitizers", () => {
 		});
 	});
 
-	it("keeps only the scope enum on artifact_create events", async () => {
-		for (const event of [
-			"ao.renderer.artifact_create_succeeded",
-			"ao.renderer.artifact_create_failed",
-		]) {
-			expect(await sanitizeRendererProperties(event, { scope: "project", project_id: "demo-project", name: "plan.md" })).toEqual({ scope: "project" });
-			expect(await sanitizeRendererProperties(event, { scope: "standalone" })).toEqual({ scope: "standalone" });
-			expect(await sanitizeRendererProperties(event, { scope: "/Users/alice/secret" })).toEqual({});
-		}
+	it("keeps only the scope, error code and status on artifact session starts", async () => {
+		expect(await sanitizeRendererProperties("ao.artifacts.session_started", { scope: "project", project_id: "demo-project", name: "plan.md" })).toEqual({ scope: "project" });
+		expect(await sanitizeRendererProperties("ao.artifacts.session_started", { scope: "cloud" })).toEqual({ scope: "cloud" });
+		expect(await sanitizeRendererProperties("ao.artifacts.session_started", { scope: "/Users/alice/secret" })).toEqual({});
+		expect(await sanitizeRendererProperties("ao.artifacts.session_start_failed", {
+			scope: "standalone", error_code: "AGENT_NOT_READY", http_status: 409, message: "Agent is not ready",
+		})).toEqual({ scope: "standalone", error_code: "AGENT_NOT_READY", http_status: 409 });
+		// The control plane's codes are lower case.
+		expect(await sanitizeRendererProperties("ao.artifacts.session_start_failed", {
+			scope: "cloud", error_code: "validation_error", http_status: 422,
+		})).toEqual({ scope: "cloud", error_code: "validation_error", http_status: 422 });
+		expect(await sanitizeRendererProperties("ao.artifacts.session_start_failed", {
+			scope: "standalone", error_code: "agent not ready at /Users/alice", http_status: 200,
+		})).toEqual({ scope: "standalone" });
+	});
+
+	it("keeps only enums and booleans on the artifact publish funnel", async () => {
+		const leaks = { path: "/Users/alice/report.html", name: "report.html", url: "https://share.example/abc", title: "Q3 plan", session: "alice-session", emails: ["bob@example.com"] };
+		expect(await sanitizeRendererProperties("ao.artifacts.publish_clicked", { ...leaks, already_published: false, signed_in: true }))
+			.toEqual({ already_published: false, signed_in: true });
+		expect(await sanitizeRendererProperties("ao.artifacts.sign_in_prompt_shown", { ...leaks, reason: "session_expired" })).toEqual({ reason: "session_expired" });
+		expect(await sanitizeRendererProperties("ao.artifacts.sign_in_clicked", leaks)).toEqual({});
+		expect(await sanitizeRendererProperties("ao.artifacts.published", { ...leaks, is_republish: true })).toEqual({ is_republish: true });
+		expect(await sanitizeRendererProperties("ao.artifacts.publish_failed", { ...leaks, is_republish: false, reason: "too_large" }))
+			.toEqual({ is_republish: false, reason: "too_large" });
+		expect(await sanitizeRendererProperties("ao.artifacts.publish_cancelled", { ...leaks, is_republish: true })).toEqual({ is_republish: true });
+		expect(await sanitizeRendererProperties("ao.artifacts.publish_blocked", { ...leaks, reason: "unsupported", is_republish: false }))
+			.toEqual({ reason: "unsupported", is_republish: false });
+		expect(await sanitizeRendererProperties("ao.artifacts.link_copied", { ...leaks, surface: "menu" })).toEqual({ surface: "menu" });
+		expect(await sanitizeRendererProperties("ao.artifacts.unpublished", leaks)).toEqual({});
+	});
+
+	it("drops artifact funnel values outside their vocabulary, and properties on events they do not belong to", async () => {
+		expect(await sanitizeRendererProperties("ao.artifacts.publish_clicked", { already_published: "yes", signed_in: 1 })).toEqual({});
+		expect(await sanitizeRendererProperties("ao.artifacts.sign_in_prompt_shown", { reason: "Token expired for bob@example.com" })).toEqual({});
+		expect(await sanitizeRendererProperties("ao.artifacts.publish_failed", { reason: "limit" })).toEqual({});
+		// Cancelling is its own event, not a failure reason.
+		expect(await sanitizeRendererProperties("ao.artifacts.publish_failed", { reason: "cancelled" })).toEqual({});
+		expect(await sanitizeRendererProperties("ao.artifacts.publish_blocked", { reason: "refused" })).toEqual({});
+		expect(await sanitizeRendererProperties("ao.artifacts.publish_cancelled", { reason: "other" })).toEqual({});
+		expect(await sanitizeRendererProperties("ao.artifacts.link_copied", { surface: "email" })).toEqual({});
+		expect(await sanitizeRendererProperties("ao.artifacts.published", { reason: "refused", scope: "project" })).toEqual({});
+		expect(await sanitizeRendererProperties("ao.artifacts.unpublished", { is_republish: true, surface: "panel" })).toEqual({});
+	});
+
+	it("silences the renamed artifact session events by their old names", () => {
+		expect(isDeniedEvent("ao.artifacts.session_started", ["ao.renderer.artifact_create_succeeded"])).toBe(true);
+		expect(isDeniedEvent("ao.artifacts.session_start_failed", ["ao.renderer.artifact_create_*"])).toBe(true);
+		expect(isDeniedEvent("ao.artifacts.published", ["ao.renderer.artifact_create_*"])).toBe(false);
 	});
 
 	it("keeps bounded spawn source and typed failure fields", async () => {
@@ -795,6 +832,8 @@ describe("telemetry sanitizers", () => {
 			message: "spawn /Users/alice/ao failed",
 		});
 		expect(props).toEqual({ daemon_state: "error", code: "spawn_failed", exit_code: 1, signal: "SIGKILL" });
+		expect(await sanitizeRendererProperties("ao.daemon.failed", { code: "exited", exit_reason: "store_open_failed" })).toEqual({ code: "exited", exit_reason: "store_open_failed" });
+		expect(await sanitizeRendererProperties("ao.daemon.failed", { code: "exited", exit_reason: "open store: /Users/alice/.ao/ao.db" })).toEqual({ code: "exited" });
 	});
 
 	it("whitelists normalized api_error fields", async () => {

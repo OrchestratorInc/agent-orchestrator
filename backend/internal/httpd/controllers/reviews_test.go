@@ -52,6 +52,8 @@ type fakeReviewService struct {
 
 func (*fakeReviewService) RecoverChatReviewers(context.Context) error { return nil }
 
+func (*fakeReviewService) ReviewerObserver() ports.ReviewerObserver { return nil }
+
 func (f *fakeReviewService) runTrigger(
 	_ context.Context,
 	_ domain.SessionID,
@@ -199,6 +201,22 @@ func TestReviewsTrigger_UnauthenticatedReviewerReturns409(t *testing.T) {
 	mustJSON(t, body, &got)
 	if got.Message != "The reviewer agent is installed but not authenticated" {
 		t.Fatalf("message = %q", got.Message)
+	}
+}
+
+func TestReviewsTrigger_ReviewerSignInGuidanceReachesResponse(t *testing.T) {
+	guidance := "Agy is not signed in for reviews. Sign in once in the reviewer home by running `HOME=\"/ao/config\" agy`, then retry the review."
+	err := fmt.Errorf("launch reviewer: reviewer command: %w", &ports.ReviewerAuthRequiredError{Guidance: guidance})
+	srv := newReviewTestServer(t, &fakeReviewService{triggerErr: err})
+
+	body, status, headers := doRequest(t, srv, "POST", "/api/v1/sessions/mer-1/reviews/trigger", "")
+	assertJSON(t, headers)
+	assertErrorCode(t, body, status, http.StatusConflict, "REVIEWER_AUTH_REQUIRED")
+
+	var got errorBody
+	mustJSON(t, body, &got)
+	if got.Message != guidance {
+		t.Fatalf("message = %q, want sign-in guidance %q", got.Message, guidance)
 	}
 }
 

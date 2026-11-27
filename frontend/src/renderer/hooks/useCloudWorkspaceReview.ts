@@ -13,8 +13,10 @@ import type {
 	CloudCpWorkspaceReviewSearchQuery,
 	CloudCpWorkspaceReviewView,
 } from "../lib/cloud-cp";
+import { AoError } from "../../../../packages/shared/telemetry/ao-error";
 import { CloudCpError, joinWorkspaceRepositoryPath, splitWorkspaceRepositoryPath, workspaceRepositoryOf } from "../lib/cloud-cp";
 import { FILE_REFERENCE_RESOLVE_UNSUPPORTED, type ChatFileReference, type FileAnnotationResolution } from "../../shared/chat-file-reference";
+import { cloudWorkerReadRetry, cloudWorkerRequest, recordCloudWorkspaceStartupEvent } from "../lib/cloud-worker-starting";
 import { workspaceSelectionKey } from "../lib/files-review-selection";
 import { useCloudSessionEventListener } from "./useCloudSessionEvents";
 import type { FilesReviewDataSource } from "./useFilesReviewSelection";
@@ -83,10 +85,16 @@ export function cloudWorkspaceReviewSummaryQueryOptions(args: {
 	const { client, baseUrl, orgId, sessionId } = args;
 	return {
 		queryKey: [...repositoryKey(client, baseUrl, orgId, sessionId), "summary"] as const,
-		queryFn: () => client.getWorkspaceReview(orgId, sessionId),
+		// The summary is the session's first workspace read, so its answer tells
+		// every other read whether the worker is still preparing the workspace.
+		queryFn: () => cloudWorkerRequest(orgId, sessionId, () => client.getWorkspaceReview(orgId, sessionId)),
 		enabled: args.enabled ?? true,
 		refetchInterval: args.visible === false ? false as const : 5_000,
-		retry: cloudWorkspaceReviewRetry,
+		// A worker still preparing its workspace is asked again after its
+		// Retry-After (or a growing wait) while the panel keeps loading, not
+		// every poll, for as long as the session's starting budget lasts
+		// (cloud-worker-starting).
+		...cloudWorkerReadRetry(orgId, sessionId, cloudWorkspaceReviewRetry),
 	};
 }
 
@@ -96,11 +104,14 @@ export function cloudWorkspaceReviewTreeQueryOptions(args: {
 	orgId: string;
 	sessionId: string;
 	path?: string;
+	/** False while the session's workspace cannot answer (useCloudWorkspaceReady): what was read before stays. */
+	enabled?: boolean;
 }) {
 	return {
 		queryKey: [...repositoryKey(args.client, args.baseUrl, args.orgId, args.sessionId), "tree", args.path ?? ""] as const,
-		queryFn: () => args.client.getWorkspaceReviewTree(args.orgId, args.sessionId, args.path),
-		retry: cloudWorkspaceReviewRetry,
+		queryFn: () => cloudWorkerRequest(args.orgId, args.sessionId, () => args.client.getWorkspaceReviewTree(args.orgId, args.sessionId, args.path)),
+		enabled: args.enabled ?? true,
+		...cloudWorkerReadRetry(args.orgId, args.sessionId, cloudWorkspaceReviewRetry),
 	};
 }
 
@@ -110,12 +121,15 @@ export function cloudWorkspaceReviewSearchQueryOptions(args: {
 	orgId: string;
 	sessionId: string;
 	query: CloudCpWorkspaceReviewSearchQuery;
+	/** False while the session's workspace cannot answer (useCloudWorkspaceReady): what was read before stays. */
+	enabled?: boolean;
 }) {
 	return {
 		queryKey: [...repositoryKey(args.client, args.baseUrl, args.orgId, args.sessionId), "search", args.query.query, args.query.cursor ?? "", args.query.limit ?? 50] as const,
 		queryFn: ({ signal }: { signal?: AbortSignal } = {}) =>
-			args.client.searchWorkspaceReview(args.orgId, args.sessionId, args.query, { signal }),
-		retry: cloudWorkspaceReviewRetry,
+			cloudWorkerRequest(args.orgId, args.sessionId, () => args.client.searchWorkspaceReview(args.orgId, args.sessionId, args.query, { signal })),
+		enabled: args.enabled ?? true,
+		...cloudWorkerReadRetry(args.orgId, args.sessionId, cloudWorkspaceReviewRetry),
 	};
 }
 
@@ -129,12 +143,15 @@ export function cloudWorkspaceReviewFileQueryOptions(args: {
 	commitSha?: string;
 	/** Reads the file from another branch or a PR (and its picked commits) instead of the worktree. */
 	view?: CloudCpWorkspaceReviewView;
+	/** False while the session's workspace cannot answer (useCloudWorkspaceReady): what was read before stays. */
+	enabled?: boolean;
 }) {
 	const query: CloudCpWorkspaceReviewFileQuery = { path: args.path, scope: args.scope, commitSha: args.commitSha, ...viewFields(args.view) };
 	return {
 		queryKey: [...repositoryKey(args.client, args.baseUrl, args.orgId, args.sessionId), "file", args.scope ?? "combined", args.commitSha ?? "", args.path, ...viewKey(args.view)] as const,
-		queryFn: () => args.client.getWorkspaceReviewFile(args.orgId, args.sessionId, query),
-		retry: cloudWorkspaceReviewRetry,
+		queryFn: () => cloudWorkerRequest(args.orgId, args.sessionId, () => args.client.getWorkspaceReviewFile(args.orgId, args.sessionId, query)),
+		enabled: args.enabled ?? true,
+		...cloudWorkerReadRetry(args.orgId, args.sessionId, cloudWorkspaceReviewRetry),
 	};
 }
 
@@ -151,6 +168,8 @@ export function cloudWorkspaceReviewDiffsQueryOptions(args: {
 	commitSha?: string;
 	/** Diffs another branch or a PR (and its picked commits) instead of the worktree. */
 	view?: CloudCpWorkspaceReviewView;
+	/** False while the session's workspace cannot answer (useCloudWorkspaceReady): what was read before stays. */
+	enabled?: boolean;
 }) {
 	const body: CloudCpWorkspaceReviewDiffsRequest = {
 		scope: args.scope,
@@ -166,8 +185,9 @@ export function cloudWorkspaceReviewDiffsQueryOptions(args: {
 			...repositoryKey(args.client, args.baseUrl, args.orgId, args.sessionId), "diffs", args.scope,
 			args.commitSha ?? "", [...args.paths], body.contextLines, body.ignoreWhitespace, args.workspaceVersion ?? "", ...viewKey(args.view),
 		] as const,
-		queryFn: () => args.client.getWorkspaceReviewDiffs(args.orgId, args.sessionId, body),
-		retry: cloudWorkspaceReviewRetry,
+		queryFn: () => cloudWorkerRequest(args.orgId, args.sessionId, () => args.client.getWorkspaceReviewDiffs(args.orgId, args.sessionId, body)),
+		enabled: args.enabled ?? true,
+		...cloudWorkerReadRetry(args.orgId, args.sessionId, cloudWorkspaceReviewRetry),
 	};
 }
 
@@ -177,6 +197,8 @@ export function cloudWorkspaceReviewRevisionQueryOptions(args: {
 	orgId: string;
 	sessionId: string;
 	query: CloudCpWorkspaceReviewRevisionQuery;
+	/** False while the session's workspace cannot answer (useCloudWorkspaceReady): what was read before stays. */
+	enabled?: boolean;
 }) {
 	return {
 		queryKey: [
@@ -184,8 +206,9 @@ export function cloudWorkspaceReviewRevisionQueryOptions(args: {
 			args.query.commitSha ?? "", args.query.side ?? "after", args.query.path, args.query.workspaceVersion ?? "", args.query.expectedRevision ?? "",
 			...viewKey(args.query),
 		] as const,
-		queryFn: () => args.client.getWorkspaceReviewRevision(args.orgId, args.sessionId, args.query),
-		retry: cloudWorkspaceReviewRetry,
+		queryFn: () => cloudWorkerRequest(args.orgId, args.sessionId, () => args.client.getWorkspaceReviewRevision(args.orgId, args.sessionId, args.query)),
+		enabled: args.enabled ?? true,
+		...cloudWorkerReadRetry(args.orgId, args.sessionId, cloudWorkspaceReviewRetry),
 	};
 }
 
@@ -340,7 +363,7 @@ export const cloudFileReferenceQueryKey = (baseUrl: string, orgId: string, sessi
  */
 export function resolveCloudFileReference(client: CloudCpClient, orgId: string, unsupported: { current: boolean }) {
 	return async (reference: ChatFileReference, signal?: AbortSignal): Promise<FileAnnotationResolution> => {
-		if (unsupported.current) throw new Error(FILE_REFERENCE_RESOLVE_UNSUPPORTED);
+		if (unsupported.current) throw new AoError(FILE_REFERENCE_RESOLVE_UNSUPPORTED, FILE_REFERENCE_RESOLVE_UNSUPPORTED);
 		const target = splitWorkspaceRepositoryPath(reference.path);
 		const previous = reference.previousPath ? splitWorkspaceRepositoryPath(reference.previousPath) : undefined;
 		const { hostId: _hostId, ...portable } = reference;
@@ -357,10 +380,11 @@ export function resolveCloudFileReference(client: CloudCpClient, orgId: string, 
 		} catch (error) {
 			if (isWorkspaceViewUnsupported(error)) {
 				unsupported.current = true;
-				throw new Error(FILE_REFERENCE_RESOLVE_UNSUPPORTED);
+				throw new AoError(FILE_REFERENCE_RESOLVE_UNSUPPORTED, FILE_REFERENCE_RESOLVE_UNSUPPORTED);
 			}
-			if (error instanceof CloudCpError && error.status === 400) throw new Error("CHAT_FILE_REFERENCE_INVALID");
-			throw new Error(error instanceof CloudCpError && error.code ? error.code : "FILE_REFERENCE_CHECK_FAILED");
+			if (error instanceof CloudCpError && error.status === 400) throw new AoError("CHAT_FILE_REFERENCE_INVALID", "CHAT_FILE_REFERENCE_INVALID");
+			const code = error instanceof CloudCpError && error.code ? error.code : "FILE_REFERENCE_CHECK_FAILED";
+			throw new AoError(code, code, { cause: error });
 		}
 	};
 }
@@ -408,6 +432,7 @@ export function useCloudWorkspaceReviewEvents(args: {
 		enabled: args.enabled,
 		onEvent: (event) => {
 			if (!args.orgId) return;
+			recordCloudWorkspaceStartupEvent(args.orgId, args.sessionId, event);
 			void invalidateCloudWorkspaceReviewEvent(queryClient, cloudWorkspaceReviewQueryKey(args.baseUrl, args.orgId, args.sessionId), event);
 		},
 	});

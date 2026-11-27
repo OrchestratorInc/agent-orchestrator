@@ -519,10 +519,10 @@ describe("BrowserProfileImportService", () => {
 		});
 
 		expect((await createService("win32").discover()).sources).toEqual([]);
-		const darwinService = createService("darwin");
-		const shallow = await darwinService.discover();
+		const darservice = createService("darwin");
+		const shallow = await darservice.discover();
 		expect(shallow.sources).toEqual([expect.objectContaining({ name: "Safari", profilesDeferred: true, profiles: [] })]);
-		const discovery = await darwinService.discover({ sourceId: shallow.sources[0]!.id });
+		const discovery = await darservice.discover({ sourceId: shallow.sources[0]!.id });
 		expect(discovery.sources).toEqual([expect.objectContaining({
 			name: "Safari",
 			family: "safari",
@@ -705,7 +705,7 @@ describe("BrowserProfileImportService", () => {
 		expect(await readdir(path.join(stateDir, "browser-import-staging"))).toEqual([]);
 	});
 
-	it("retries when a Chromium SQLite backup rejects before succeeding", async () => {
+	it("falls back to copying the database files when a Chromium SQLite backup rejects", async () => {
 		const root = await fixtureRoot();
 		const { localAppData } = await createChromeFixture(root);
 		const stateDir = path.join(root, "ao-state");
@@ -794,9 +794,60 @@ describe("BrowserProfileImportService", () => {
 			includeHistory: true,
 			destination: { mode: "merge", name: "Busy Chrome Snapshot" },
 		}, vi.fn())).rejects.toThrow("Orchestrator couldn't create a temporary copy of Google Chrome's profile database");
-		expect(backup).toHaveBeenCalledTimes(2);
+		// One live backup, then one per file-copy attempt.
+		expect(backup).toHaveBeenCalledTimes(4);
 		expect(profileStore.profiles).toEqual([]);
 		expect(await readdir(path.join(stateDir, "browser-import-staging"))).toEqual([]);
+	});
+
+	it("imports from a running Chromium browser that holds its databases in exclusive locking mode", async () => {
+		const root = await fixtureRoot();
+		const { localAppData, profileRoot } = await createChromeFixture(root);
+		// Chromium opens History and Cookies with locking_mode=EXCLUSIVE, so no
+		// other SQLite connection can read them until the browser exits.
+		const locks = ["History", path.join("Network", "Cookies")].map((relative) => {
+			const database = new Database(path.join(profileRoot, relative));
+			database.pragma("locking_mode = EXCLUSIVE");
+			database.exec("BEGIN IMMEDIATE; COMMIT;");
+			return database;
+		});
+		try {
+			const probe = new Database(path.join(profileRoot, "History"), { readonly: true, timeout: 0 });
+			expect(() => probe.prepare("SELECT COUNT(*) FROM urls").get()).toThrow(/locked/);
+			probe.close();
+
+			const stateDir = path.join(root, "ao-state");
+			const profileStore = new BrowserProfileStore({ stateDir });
+			await profileStore.load();
+			const cookies = vi.fn(async () => undefined);
+			const service = new BrowserProfileImportService({
+				stateDir,
+				profileStore,
+				historyStore: new BrowserHistoryStore({ stateDir }),
+				platform: "win32",
+				homeDir: root,
+				env: { LOCALAPPDATA: localAppData },
+				now: () => new Date("2026-01-01T00:00:00.000Z"),
+				fromPartition: () => ({ cookies: { set: cookies }, clearStorageData: async () => undefined, clearCache: async () => undefined }),
+			});
+			const source = (await service.discover()).sources[0]!;
+
+			const result = await service.import({
+				requestId: "23232323-2323-4323-8323-232323232323",
+				sourceId: source.id,
+				profileIds: [source.profiles[0]!.id],
+				includeCookies: true,
+				includeHistory: true,
+				destination: { mode: "merge", name: "Running Chrome" },
+			}, vi.fn());
+
+			expect(result.entries[0]).toMatchObject({ importedHistoryEntries: 2 });
+			expect(result.entries[0]!.importedCookies).toBeGreaterThan(0);
+			expect(cookies).toHaveBeenCalledWith(expect.objectContaining({ name: "session", value: "usable" }));
+			expect(await readdir(path.join(stateDir, "browser-import-staging"))).toEqual([]);
+		} finally {
+			for (const lock of locks) lock.close();
+		}
 	});
 
 	it("removes Chromium v24's domain hash from decrypted Windows cookie values", () => {

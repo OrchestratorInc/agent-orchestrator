@@ -69,6 +69,23 @@ describe("usePaletteSessionSearch", () => {
 		await waitFor(() => expect(result.current.isError).toBe(true));
 	});
 
+	// QA: "orbit" rows stayed on screen under "deploy" until its answer landed,
+	// and Enter opened one of them.
+	it("keeps the previous rows only while a query that refines it loads", async () => {
+		const page = (query: string) => ({ data: { query, results: [{ sessionId: query }], total: 1, limit: 8, offset: 0, sort: "relevance", coverage: { state: "ready" } } });
+		const pending = new Promise(() => {});
+		getMock.mockImplementation((_path: string, init: { params: { query: { q: string } } }) =>
+			init.params.query.q === "orb" ? Promise.resolve(page("orb")) : pending);
+		const { result, rerender } = renderHook(({ query }) => usePaletteSessionSearch(query), { wrapper, initialProps: { query: "orb" } });
+		await waitFor(() => expect(result.current.isSuccess).toBe(true));
+		rerender({ query: "orbit" });
+		await waitFor(() => expect(result.current.isPlaceholderData).toBe(true));
+		expect(result.current.data?.query).toBe("orb");
+		rerender({ query: "deploy" });
+		await waitFor(() => expect(result.current.data).toBeUndefined());
+		expect(result.current.isPlaceholderData).toBe(false);
+	});
+
 	it("does nothing while disabled", () => {
 		const { result } = renderHook(() => usePaletteSessionSearch("flaky", undefined, false), { wrapper });
 		expect(result.current.fetchStatus).toBe("idle");

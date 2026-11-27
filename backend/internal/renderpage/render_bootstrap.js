@@ -4,8 +4,8 @@
 // zooms the page (the artifact viewer) gets its pinch and Cmd+=/-/0 forwarded,
 // hears when the pointer nears the bottom edge where its zoom controls float,
 // and sets the page zoom.
-// The messages are the MCP Apps postMessage methods T3 Code also uses, so this
-// host could later show upstream MCP apps.
+// The messages are the MCP Apps postMessage methods, so this host could later
+// show upstream MCP apps.
 (function () {
   var theme = document.getElementById("ao-theme");
   // Created now, so it precedes the page's own styles and they win over it.
@@ -48,19 +48,21 @@
       : scrollable ? showScrollbar : "";
     wrap.textContent = wrapContent ? wrapCSS : "";
   }
-  function apply(t) {
-    if (!theme || !t || typeof t !== "object" || !t.variables || typeof t.variables !== "object") return;
-    var css = ":root{color-scheme:" + (t.appearance === "light" ? "light" : "dark") + ";";
-    for (var k in t.variables) {
-      if (/^--[a-z0-9-]+$/.test(k)) css += k + ":" + String(t.variables[k]).replace(/[;{}<>]/g, "") + ";";
-    }
-    theme.textContent = css + "}";
+  function applyTheme(context) {
+    if (!theme || !context || typeof context.variables !== "object" || !context.variables) return;
+    theme.textContent = ":root{}";
+    if (!theme.sheet) return;
+    var declarations = theme.sheet.cssRules[0].style;
+    declarations.setProperty("color-scheme", context.appearance === "light" ? "light" : "dark");
+    Object.keys(context.variables).forEach(function (name) {
+      if (/^--[a-z0-9-]+$/.test(name)) declarations.setProperty(name, String(context.variables[name]));
+    });
   }
   try {
-    var m = /[#&]ao-theme=([^&]*)/.exec(location.hash);
-    if (m) {
-      var initial = JSON.parse(decodeURIComponent(m[1]));
-      apply(initial);
+    var fragment = new URLSearchParams(location.hash.slice(1));
+    if (fragment.has("ao-theme")) {
+      var initial = JSON.parse(fragment.get("ao-theme"));
+      applyTheme(initial);
       if (initial) {
         setDisplay(initial.displayMode, initial.scrollable, initial.wrapContent);
         setOpenImages(initial.openImages);
@@ -97,14 +99,19 @@
     // MCP Apps context updates may be partial; an absent field is unchanged.
     setDisplay(p.displayMode, p.scrollable, p.wrapContent);
     if (p.openImages !== undefined) setOpenImages(p.openImages);
-    if (p.styles) apply({ appearance: p.theme, variables: p.styles.variables });
+    if (p.styles) applyTheme({ appearance: p.theme, variables: p.styles.variables });
     if (p.zoomable !== undefined) zoomable = p.zoomable === true;
     if (typeof p.zoomRevealPx === "number" && p.zoomRevealPx >= 0) revealPx = p.zoomRevealPx;
     if (p.zoom !== undefined) setZoom(p.zoom, p.zoomAnchor);
   });
   if (!framed) return;
+  function notify(method, params, id) {
+    var message = { jsonrpc: "2.0", method: method, params: params };
+    if (id !== undefined) message.id = id;
+    window.parent.postMessage(message, "*");
+  }
   function zoomRequest(params) {
-    window.parent.postMessage({ jsonrpc: "2.0", method: "ao/zoom", params: params }, "*");
+    notify("ao/zoom", params);
   }
   // A trackpad pinch arrives as a wheel event with ctrlKey.
   window.addEventListener("wheel", function (e) {
@@ -129,36 +136,53 @@
     e.preventDefault();
     zoomRequest({ action: action });
   }, true);
-  document.addEventListener("click", function (e) {
-    if (!e.isTrusted) return;
-    var link = e.composedPath().find(function (n) { return n && n.matches && n.matches("a[href]"); });
-    if (!link) return;
-    var url;
-    try { url = new URL(link.getAttribute("href"), document.baseURI); } catch (x) { return; }
-    if (!/^https?:$/.test(url.protocol) || url.href.split("#")[0] === location.href.split("#")[0]) return;
-    e.preventDefault();
-    window.parent.postMessage({ jsonrpc: "2.0", id: "ao-link-" + (++seq), method: "ui/open-link", params: { url: url.href } }, "*");
+  document.addEventListener("click", function (event) {
+    if (!event.isTrusted) return;
+    for (var node of event.composedPath()) {
+      if (!node || node.nodeType !== 1 || node.localName !== "a" || !node.hasAttribute("href")) continue;
+      try {
+        var destination = new URL(node.getAttribute("href"), document.baseURI);
+        if (destination.protocol !== "http:" && destination.protocol !== "https:") return;
+        var href = destination.href;
+        var currentPage = new URL(location.href);
+        destination.hash = "";
+        currentPage.hash = "";
+        if (destination.href === currentPage.href) return;
+        event.preventDefault();
+        notify("ui/open-link", { url: href }, "ao-link-" + (++seq));
+      } catch (error) {}
+      return;
+    }
   }, true);
   window.addEventListener("click", function (e) {
     var img = e.target;
     if (!openImages || !e.isTrusted || e.defaultPrevented || !img || img.tagName !== "IMG" || img.closest("a[href],button")) return;
     var src = img.currentSrc || img.src;
     if (!/^data:image\//i.test(src)) return;
-    window.parent.postMessage({ jsonrpc: "2.0", method: "ao/open-image", params: { src: src, alt: img.alt } }, "*");
+    notify("ao/open-image", { src: src, alt: img.alt });
   });
-  var last;
-  function report() {
-    var r = document.documentElement;
-    var h = Math.ceil(r.scrollHeight > r.clientHeight ? r.scrollHeight : r.getBoundingClientRect().height);
-    if (h === last) return;
-    last = h;
-    window.parent.postMessage({ jsonrpc: "2.0", method: "ui/notifications/size-changed", params: { height: h } }, "*");
+  var reportedHeight, scheduled = false;
+  function scheduleHeight() {
+    if (scheduled) return;
+    scheduled = true;
+    window.requestAnimationFrame(function () {
+      scheduled = false;
+      var root = document.documentElement;
+      var overflowing = root.scrollHeight > root.clientHeight;
+      var height = Math.ceil(overflowing ? root.scrollHeight : root.getBoundingClientRect().height);
+      if (height !== reportedHeight) {
+        reportedHeight = height;
+        notify("ui/notifications/size-changed", { height: height });
+      }
+    });
   }
-  var observer = window.ResizeObserver ? new ResizeObserver(report) : null;
-  if (observer) observer.observe(document.documentElement);
-  document.addEventListener("DOMContentLoaded", function () {
-    if (observer && document.body) observer.observe(document.body);
-    report();
-  });
-  window.addEventListener("load", report);
+  var sizeObserver = window.ResizeObserver ? new window.ResizeObserver(scheduleHeight) : null;
+  if (sizeObserver) sizeObserver.observe(document.documentElement);
+  function pageReady() {
+    if (sizeObserver && document.body) sizeObserver.observe(document.body);
+    scheduleHeight();
+  }
+  if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", pageReady, { once: true });
+  else pageReady();
+  window.addEventListener("load", scheduleHeight, { once: true });
 })();

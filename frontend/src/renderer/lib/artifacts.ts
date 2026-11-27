@@ -6,9 +6,12 @@ import {
 	type WorkspaceSummary,
 	type WorkspaceSession,
 } from "../types/workspace";
-import type { ArtifactBundle } from "../../../../packages/shared/artifacts/deliverables";
+import { deliverableArtifacts, type ArtifactBundle } from "../../../../packages/shared/artifacts/deliverables";
+import type { KeptArtifactSet } from "../hooks/useKeptArtifacts";
+import type { TFunction } from "i18next";
 import type { CloudShareAccess, HostShareLink } from "../../shared/cloud-share";
 import { CloudCpError } from "./cloud-cp/errors";
+import type { CloudCpSharedArtifact } from "./cloud-cp/types";
 import { fileMediaKind } from "./file-media";
 import { isSvgPath } from "./image-files";
 import { sessionUiKey } from "./hosts";
@@ -44,7 +47,69 @@ export type ArtifactRow = {
 	 * invited, or anyone. Unset while not known.
 	 */
 	shareAccess?: CloudShareAccess;
+	/**
+	 * Set on a row from an archived session. Its files are view only: they can
+	 * be previewed, shared, downloaded or deleted, not edited or sent feedback.
+	 */
+	archived?: boolean;
+	/**
+	 * Set on a row no session lists any more, archived as well: its session was
+	 * deleted with its artifacts kept, or its project was removed. It opens no
+	 * session; a new one can start from it.
+	 */
+	kept?: "session-deleted" | "project-removed";
+	/**
+	 * Set on a link someone else published and shared with this person, by
+	 * their email or a team they are in, or one they opened from its page. It
+	 * has no session; it opens through the link's viewer access.
+	 */
+	shared?: { linkId: string; viewerUrl?: string; access: CloudShareAccess };
 };
+
+/** The group ID of the links shared with this person. */
+export const SHARED_WITH_ME_GROUP_ID = "shared-with-me";
+
+/** What a shared link's row is made from: a listed link, or one opened from its page. */
+export type SharedArtifactLink = Pick<CloudCpSharedArtifact, "linkId" | "name" | "contentType" | "updatedAt" | "access" | "viewerUrl">
+	& Partial<Pick<CloudCpSharedArtifact, "via" | "teams" | "workspaces">>;
+
+/**
+ * The team or workspace a link reached this person through, for its row: a
+ * link shared with their email names neither.
+ */
+export function sharedThrough(item: SharedArtifactLink): string {
+	if (item.via === "team") return item.teams?.[0]?.name ?? "";
+	if (item.via === "workspace") return item.workspaces?.[0]?.name ?? "";
+	return "";
+}
+
+/** A shared link's row; see ArtifactRow.shared. */
+export function sharedArtifactRow(item: SharedArtifactLink): ArtifactRow {
+	const name = item.name;
+	const kind: ArtifactKind = /^text\/html\b/i.test(item.contentType) || /\.html?$/i.test(name)
+		? "html"
+		: /^text\/markdown\b/i.test(item.contentType) || /\.(md|markdown)$/i.test(name) ? "markdown" : "file";
+	return {
+		id: `shared:${item.linkId}`,
+		path: name,
+		name,
+		kind,
+		updatedAt: item.updatedAt,
+		sessionId: `shared:${item.linkId}`,
+		// Where a session's file names its session, a team's link names the team.
+		sessionTitle: sharedThrough(item),
+		shared: { linkId: item.linkId, ...(item.viewerUrl ? { viewerUrl: item.viewerUrl } : {}), access: item.access },
+	};
+}
+
+/**
+ * The links shared with this person as one Cloud group, newest change first,
+ * or undefined when there are none.
+ */
+export function sharedArtifactGroup(items: readonly CloudCpSharedArtifact[] | undefined, name: string): ArtifactGroup | undefined {
+	const rows = (items ?? []).map(sharedArtifactRow).sort(newestFirst);
+	return rows.length > 0 ? { id: SHARED_WITH_ME_GROUP_ID, name, isScratchpad: false, cloud: true, rows } : undefined;
+}
 
 /**
  * Whether this person may change or take a copy of a session's artifact files:
@@ -99,12 +164,13 @@ export type ArtifactGroup = {
 };
 
 /**
- * Groups the listed artifacts of live local, remote-host and cloud sessions by
+ * Groups the listed artifacts of local, remote-host and cloud sessions by
  * project, orchestrators included: they get the same artifact directory and
- * listing rule as workers. Archived sessions and projects without artifacts
- * are left out; rows sort newest first and groups by their newest row. A
- * remote host's group ID names the host, since its project IDs can equal this
- * computer's. An orchestrator's rows carry `orchestratorTitle` as their session title
+ * listing rule as workers. An archived session's rows are kept, marked
+ * archived: artifacts are deleted only when the person deletes them. Projects
+ * without artifacts are left out; rows sort newest first and groups by their
+ * newest row. A remote host's group ID names the host, since its project IDs
+ * can equal this computer's. An orchestrator's rows carry `orchestratorTitle` as their session title
  * when given, since its own title is only its session ID.
  */
 export function groupArtifactsByProject(workspaces: readonly WorkspaceSummary[], orchestratorTitle?: string): ArtifactGroup[] {
@@ -113,7 +179,6 @@ export function groupArtifactsByProject(workspaces: readonly WorkspaceSummary[],
 		const { hostId } = workspace;
 		const isScratchpad = workspace.id === STANDALONE_WORKSPACE_ID;
 		const rows = workspace.sessions
-			.filter((session) => !isArchivedSession(session))
 			.flatMap((session) =>
 				sessionDeliverables(session).map((artifact): ArtifactRow => ({
 					...(artifact.id ? { id: artifact.id } : {}),
@@ -133,6 +198,7 @@ export function groupArtifactsByProject(workspaces: readonly WorkspaceSummary[],
 					...(artifact.shareUrl ? { shareUrl: artifact.shareUrl } : {}),
 					...(artifact.shareUrl && artifact.shareAccess ? { shareAccess: artifact.shareAccess } : {}),
 					...(artifact.sha256 ? { sha256: artifact.sha256 } : {}),
+					...(isArchivedSession(session) ? { archived: true } : {}),
 				})),
 			)
 			.sort(newestFirst);
@@ -140,6 +206,80 @@ export function groupArtifactsByProject(workspaces: readonly WorkspaceSummary[],
 		groups.push({ id: sessionUiKey(workspace.id, hostId), name: workspace.name, isScratchpad, cloud: workspace.kind === "cloud", ...(hostId ? { hostId } : {}), rows });
 	}
 	return groups.sort((left, right) => newestFirst(left.rows[0], right.rows[0]));
+}
+
+/** The group of kept artifacts whose project is gone, or that never had one. */
+export const NO_PROJECT_GROUP_ID = "__no-project__";
+
+/**
+ * Adds this computer's kept artifacts to the groups. A set whose project is
+ * still listed joins that project's group, made if the project has no other
+ * artifacts; every other set joins one group with no project, `noProjectName`.
+ * Rows are view only and sort with the rest, newest first.
+ */
+export function withKeptArtifacts(
+	groups: readonly ArtifactGroup[],
+	kept: readonly KeptArtifactSet[] | undefined,
+	projects: readonly Pick<WorkspaceSummary, "id" | "name" | "kind" | "hostId">[],
+	noProjectName: string,
+): ArtifactGroup[] {
+	if (!kept?.length) return [...groups];
+	const out = [...groups];
+	const touched = new Set<number>();
+	for (const set of kept) {
+		const project = set.projectId
+			? projects.find((candidate) => candidate.id === set.projectId && !candidate.hostId && candidate.kind !== "cloud" && candidate.id !== STANDALONE_WORKSPACE_ID)
+			: undefined;
+		const rows = keptArtifactRows(set, project?.id);
+		if (rows.length === 0) continue;
+		const groupId = project ? sessionUiKey(project.id) : NO_PROJECT_GROUP_ID;
+		let index = out.findIndex((group) => group.id === groupId);
+		if (index === -1) {
+			index = out.push({ id: groupId, name: project?.name ?? noProjectName, isScratchpad: false, cloud: false, rows: [] }) - 1;
+		} else if (!touched.has(index)) {
+			out[index] = { ...out[index], rows: [...out[index].rows] };
+		}
+		touched.add(index);
+		out[index].rows.push(...rows);
+	}
+	for (const index of touched) out[index].rows.sort(newestFirst);
+	return out.sort((left, right) => newestFirst(left.rows[0], right.rows[0]));
+}
+
+function keptArtifactRows(set: KeptArtifactSet, projectId: string | undefined): ArtifactRow[] {
+	const files = [...set.artifactFiles].sort(
+		(a, b) => (Date.parse(b.updatedAt) || 0) - (Date.parse(a.updatedAt) || 0) || a.path.localeCompare(b.path),
+	);
+	return deliverableArtifacts(files).map((artifact): ArtifactRow => ({
+		...(artifact.id ? { id: artifact.id } : {}),
+		path: artifact.path,
+		name: artifact.name,
+		kind: artifact.kind,
+		previewUrl: artifact.previewUrl,
+		inlineUrl: artifact.inlineUrl,
+		rawUrl: artifact.rawUrl,
+		updatedAt: artifact.updatedAt,
+		sessionId: set.sessionId,
+		sessionTitle: set.title,
+		...(projectId ? { projectId } : {}),
+		bundle: artifact.bundle,
+		...(artifact.shareUrl ? { shareUrl: artifact.shareUrl } : {}),
+		...(artifact.shareUrl && artifact.shareAccess ? { shareAccess: artifact.shareAccess } : {}),
+		archived: true,
+		kept: set.sessionDeleted ? "session-deleted" : "project-removed",
+	}));
+}
+
+/**
+ * What a card says after its name: the machine it is on, whose it is, and why
+ * it is view only. An archived session's files stay listed, and so do those
+ * of a deleted session or removed project that were kept.
+ */
+export function artifactContext(t: TFunction, row: Pick<ArtifactRow, "archived" | "kept">, placeName: string, owner: ArtifactOwner): string {
+	const reason = row.kept === "session-deleted"
+		? t("artifacts.deletedSession")
+		: row.kept === "project-removed" ? t("artifacts.removedProject") : row.archived ? t("artifacts.archivedSession") : "";
+	return [placeName, t(`artifacts.owner.${owner}`), reason].filter(Boolean).join(" · ");
 }
 
 /** Total artifacts across groups, for the sidebar badge. */
@@ -181,11 +321,35 @@ export function artifactLocation(row: Pick<ArtifactRow, "cloud" | "hostId">, gro
 export type ArtifactFilters = {
 	query: string;
 	projectIds?: readonly string[];
-	/** Undefined for both locations. */
+	/** Undefined for every location. */
 	location?: ArtifactLocation;
 	types?: readonly ArtifactType[];
 	sharings?: readonly ArtifactSharing[];
+	/** Undefined for anyone's. */
+	owner?: ArtifactOwner;
+	/** The control-plane user ID that owner compares a cloud session's creator with. */
+	cloudUserId?: string;
+	/** Keys (artifactKey) of the only rows to keep, for the Pinned filter; undefined keeps every row. */
+	onlyKeys?: ReadonlySet<string>;
 };
+
+/** Whether an artifact is this person's ("mine") or someone else's they can see ("shared"). */
+export type ArtifactOwner = "mine" | "shared";
+
+export const ARTIFACT_OWNERS: readonly ArtifactOwner[] = ["mine", "shared"];
+
+/**
+ * Whose an artifact is. A file on this machine or a remote host is this
+ * person's; a cloud session's belongs to whoever started it. A session with
+ * no creator on record, or one read before this person's control-plane ID is
+ * known, counts as theirs, as canChangeSessionArtifacts first treats it. A
+ * link someone else published is always shared.
+ */
+export function artifactOwner(row: Pick<ArtifactRow, "cloud" | "shared">, cloudUserId: string | undefined): ArtifactOwner {
+	if (row.shared) return "shared";
+	const creator = row.cloud?.createdByUserId;
+	return creator && cloudUserId && creator !== cloudUserId ? "shared" : "mine";
+}
 
 /**
  * Whether an artifact has a public link ("public"), a private one, open only
@@ -205,7 +369,8 @@ export const ARTIFACT_SHARINGS: readonly ArtifactSharing[] = ["public", "shared"
  * link list says who its link opens for: until then, or when the list cannot
  * be read, it is neither called public nor counted as such.
  */
-export function artifactSharing(row: Pick<ArtifactRow, "shareUrl" | "shareAccess" | "cloud">): ArtifactSharing | undefined {
+export function artifactSharing(row: Pick<ArtifactRow, "shareUrl" | "shareAccess" | "cloud" | "shared">): ArtifactSharing | undefined {
+	if (row.shared) return row.shared.access === "restricted" ? "shared" : "public";
 	if (row.shareUrl) return row.shareAccess === "restricted" ? "shared" : row.shareAccess === "anyone" ? "public" : undefined;
 	return row.cloud ? undefined : "private";
 }
@@ -256,9 +421,9 @@ export function withHostShareLinks(groups: readonly ArtifactGroup[], links: read
 }
 
 /**
- * Keeps groups matching the project filter, and rows matching the location
- * and type filters whose project, file name or session title contains the
- * query. Groups left without rows are dropped.
+ * Keeps groups matching the project filter, and rows matching the location,
+ * type, sharing, owner and pinned filters whose project, file name or session
+ * title contains the query. Groups left without rows are dropped.
  */
 export function filterArtifactGroups(groups: readonly ArtifactGroup[], filters: ArtifactFilters, scratchpadName?: string): ArtifactGroup[] {
 	const { location } = filters;
@@ -275,6 +440,8 @@ export function filterArtifactGroups(groups: readonly ArtifactGroup[], filters: 
 				...group,
 				rows: group.rows.filter((row) =>
 					(!location || artifactLocation(row, group) === location)
+					&& (!filters.owner || artifactOwner(row, filters.cloudUserId) === filters.owner)
+					&& (!filters.onlyKeys || filters.onlyKeys.has(artifactKey(row)))
 					&& (types.length === 0 || types.includes(artifactType(row)))
 					&& (sharings.length === 0 || matchesSharing(sharings, artifactSharing(row)))
 					&& (groupMatches
@@ -284,6 +451,22 @@ export function filterArtifactGroups(groups: readonly ArtifactGroup[], filters: 
 			};
 		})
 		.filter((group) => group.rows.length > 0);
+}
+
+/**
+ * How many artifacts each location holds under every other filter, for the
+ * location chips; "all" counts every location together.
+ */
+export function artifactLocationCounts(groups: readonly ArtifactGroup[], filters: ArtifactFilters, scratchpadName?: string): ReadonlyMap<ArtifactLocation | "all", number> {
+	const counts = new Map<ArtifactLocation | "all", number>([["all", 0]]);
+	for (const group of filterArtifactGroups(groups, { ...filters, location: undefined }, scratchpadName)) {
+		for (const row of group.rows) {
+			const location = artifactLocation(row, group);
+			counts.set(location, (counts.get(location) ?? 0) + 1);
+			counts.set("all", (counts.get("all") ?? 0) + 1);
+		}
+	}
+	return counts;
 }
 
 /** A sharing filter keeps only rows whose state is known and chosen. */

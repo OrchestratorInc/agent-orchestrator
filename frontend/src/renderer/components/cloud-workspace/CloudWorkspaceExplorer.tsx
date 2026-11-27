@@ -3,6 +3,7 @@ import { Columns2, Maximize2, Minimize2, Rows3, Search } from "@/components/app-
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useCloudCp } from "../../hooks/useCloudCp";
+import { useCloudSessionStartRequestInFlight, useCloudWorkspaceReady } from "../../hooks/useCloudWorkspaceReady";
 import { cloudFilesManifest, cloudFilesReviewDataSource, cloudWorkspaceReviewSummaryQueryOptions, useCloudWorkspaceReviewEvents } from "../../hooks/useCloudWorkspaceReview";
 import { useFileAnnotation } from "../../hooks/useFileAnnotation";
 import { useFilesReviewSelection, type FilesSelectionStore } from "../../hooks/useFilesReviewSelection";
@@ -51,6 +52,10 @@ export function CloudWorkspaceExplorer({ annotation = noAnnotation, session, isM
 	// refuses every request, so the summary is not polled until it is back.
 	// What was read before stays on screen meanwhile.
 	const workerConnected = session.runtimeConnected === true;
+	// A worker that has just connected can still be preparing the workspace (a
+	// slow checkout takes minutes): the summary waits until it answers, and
+	// the panel keeps loading meanwhile.
+	const workspaceReady = useCloudWorkspaceReady(session);
 	// A worker that will not come back (the session was deleted, or AO gave up
 	// starting it) never answers. With nothing read before, the panel says so,
 	// with Retry to start the session again, instead of loading forever.
@@ -59,8 +64,10 @@ export function CloudWorkspaceExplorer({ annotation = noAnnotation, session, isM
 		(session.isTerminated === true || startupProblem?.phase === "failed" || startupProblem?.phase === "unavailable");
 	const queryClient = useQueryClient();
 	const [restartError, setRestartError] = useState<string>();
+	// One start at a time: Retry waits while this session's resume is in flight.
+	const restarting = useCloudSessionStartRequestInFlight(orgId, session.id);
 	const restart = () => {
-		if (!orgId) return;
+		if (!orgId || restarting) return;
 		setRestartError(undefined);
 		void resumeCloudSession(client, orgId, session.id)
 			.then(() => refreshCloudSessionLifecycle(queryClient))
@@ -71,7 +78,7 @@ export function CloudWorkspaceExplorer({ annotation = noAnnotation, session, isM
 	const repository = useUiStore((state) => state.inspectorSessions[session.id]?.cloudReviewRepository ?? "");
 	const setRepository = useUiStore((state) => state.setCloudReviewRepository);
 	const mainSummaryQuery = useQuery({
-		...cloudWorkspaceReviewSummaryQueryOptions({ client, baseUrl, orgId: orgId ?? "", sessionId: session.id, enabled: enabled && workerConnected, visible: true }),
+		...cloudWorkspaceReviewSummaryQueryOptions({ client, baseUrl, orgId: orgId ?? "", sessionId: session.id, enabled: enabled && workspaceReady, visible: true }),
 	});
 	const repositories = mainSummaryQuery.data?.repositories ?? [];
 	const switchable = repositories.length > 1;
@@ -85,7 +92,7 @@ export function CloudWorkspaceExplorer({ annotation = noAnnotation, session, isM
 	const setFilter = (value: string) => setReviewUi(session.id, activeRepository, { filter: value });
 	const scopedClient = withWorkspaceRepository(client, activeRepository || undefined);
 	const siblingSummaryQuery = useQuery({
-		...cloudWorkspaceReviewSummaryQueryOptions({ client: scopedClient, baseUrl, orgId: orgId ?? "", sessionId: session.id, enabled: enabled && workerConnected && activeRepository !== "", visible: true }),
+		...cloudWorkspaceReviewSummaryQueryOptions({ client: scopedClient, baseUrl, orgId: orgId ?? "", sessionId: session.id, enabled: enabled && workspaceReady && activeRepository !== "", visible: true }),
 	});
 	const summaryQuery = activeRepository !== "" ? siblingSummaryQuery : mainSummaryQuery;
 	// The branch or PR under review, picked from the same menus and rules as a
@@ -158,10 +165,10 @@ export function CloudWorkspaceExplorer({ annotation = noAnnotation, session, isM
 				})}
 			</div> : null}
 			{!enabled || (summaryQuery.isPending && !workerGone) ? <PanelMessage>{t("files.loading")}</PanelMessage> : summaryQuery.isPending ? (
-				<PanelMessage action={session.isTerminated ? undefined : <RetryButton onClick={restart} />}>{restartError ?? startupProblem?.message ?? t("inspector.filesUnavailable")}</PanelMessage>
+				<PanelMessage action={session.isTerminated ? undefined : <RetryButton disabled={restarting} onClick={restart} />}>{restartError ?? startupProblem?.message ?? t("inspector.filesUnavailable")}</PanelMessage>
 			) : summaryQuery.isError ? <PanelMessage action={<RetryButton onClick={() => void summaryQuery.refetch()} />}>{summaryQuery.error.message}</PanelMessage> : showChanges ? (
-				<CloudWorkspaceReviewPane annotation={scopedAnnotation} baseUrl={baseUrl} client={scopedClient} data={summaryQuery.data} filter={filter} key={activeRepository} onBrowseAll={() => setShowChanges(false)} onOpenFile={open} orgId={orgId!} repository={activeRepository || undefined} review={review} sessionId={session.id} split={split} />
-			) : <CloudFileTree baseUrl={baseUrl} client={scopedClient} filterText={filter} key={activeRepository} onOpenFile={(path) => open(path, { mode: "file" })} orgId={orgId!} selectedPath={selectedInRepository} sessionId={session.id} />}
+				<CloudWorkspaceReviewPane annotation={scopedAnnotation} baseUrl={baseUrl} client={scopedClient} data={summaryQuery.data} filter={filter} key={activeRepository} onBrowseAll={() => setShowChanges(false)} onOpenFile={open} orgId={orgId!} ready={workspaceReady} repository={activeRepository || undefined} review={review} sessionId={session.id} split={split} />
+			) : <CloudFileTree baseUrl={baseUrl} client={scopedClient} filterText={filter} key={activeRepository} onOpenFile={(path) => open(path, { mode: "file" })} orgId={orgId!} ready={workspaceReady} selectedPath={selectedInRepository} sessionId={session.id} />}
 		</section>
 	);
 }

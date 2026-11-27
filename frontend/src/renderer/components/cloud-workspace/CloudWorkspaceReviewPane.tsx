@@ -26,7 +26,7 @@ const statusLabel: Record<CloudCpWorkspaceReviewFileSummary["status"], string> =
 };
 const statusTone: Record<CloudCpWorkspaceReviewFileSummary["status"], string> = {
 	unmodified: "text-passive", modified: "text-warning", added: "text-success", deleted: "text-error",
-	renamed: "text-logo-accent", copied: "text-logo-accent", untracked: "text-success",
+	renamed: "text-logo-accent-text", copied: "text-logo-accent-text", untracked: "text-success",
 };
 
 function chunk<T>(items: readonly T[]): T[][] {
@@ -68,7 +68,7 @@ function isViewedRecord(file: CloudCpWorkspaceReviewFileSummary, records: Viewed
 }
 
 export function CloudWorkspaceReviewPane({
-	annotation, baseUrl, client, data, filter, onBrowseAll, onOpenFile, orgId, repository, review, sessionId, split,
+	annotation, baseUrl, client, data, filter, onBrowseAll, onOpenFile, orgId, ready = true, repository, review, sessionId, split,
 }: {
 	annotation: FileAnnotationModel;
 	baseUrl: string;
@@ -78,6 +78,8 @@ export function CloudWorkspaceReviewPane({
 	onBrowseAll: () => void;
 	onOpenFile?: (path: string, options?: CloudFileOpenOptions) => void;
 	orgId: string;
+	/** False while the session's workspace cannot answer yet (useCloudWorkspaceReady): diffs wait, and those read before stay. */
+	ready?: boolean;
 	/** The sibling repository under review in a multi-repository session; undefined for the main one. */
 	repository?: string;
 	/**
@@ -155,7 +157,7 @@ export function CloudWorkspaceReviewPane({
 	const batches = chunk(requested.map((file) => file.path));
 	const diffQueries = useQueries({ queries: batches.map((paths) => ({
 		...cloudWorkspaceReviewDiffsQueryOptions({ client, baseUrl, orgId, sessionId, paths, scope: reviewScope, commitSha: selectedCommit?.sha, workspaceVersion: viewing ? undefined : data.workspaceVersion, ignoreWhitespace: false, view }),
-		enabled: !viewing || target.state === "ready",
+		enabled: ready && (!viewing || target.state === "ready"),
 		staleTime: Infinity,
 	})) });
 	// A view's diffs come from its commits, fenced to the tip and base its

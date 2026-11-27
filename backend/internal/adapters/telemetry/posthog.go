@@ -107,6 +107,12 @@ var remotePayloadAllowlist = map[string]map[string]struct{}{
 	"ao.automation.created":     {"use_case": {}, "template_id": {}},
 	"ao.daemon.write_lock_held": {"caller": {}, "duration_ms": {}},
 
+	// Artifact registrations: where they came from, their content category and
+	// size band and how many, or why the daemon refused one. Never a name,
+	// path or session.
+	"ao.artifacts.registered":      {"source": {}, "content_category": {}, "size_bucket": {}, "count": {}},
+	"ao.artifacts.register_failed": {"source": {}, "reason": {}},
+
 	// count is direct human Chat messages; steer_count and send_count are the
 	// other human sends; the surface counts split all three by client.
 	"ao.usage.messages_sent": {
@@ -212,6 +218,29 @@ var remotePayloadAllowlist = map[string]map[string]struct{}{
 	"ao.daemon.started": {
 		"agent": {},
 		"port":  {},
+	},
+	// Daemon startup split into back-to-back steps, in milliseconds. The step
+	// names match backend/internal/daemon/startup_timing.go.
+	"ao.daemon.ready": {
+		"prepare_ms":           {},
+		"lock_wait_ms":         {},
+		"store_open_ms":        {},
+		"lifecycle_setup_ms":   {},
+		"chat_setup_ms":        {},
+		"session_setup_ms":     {},
+		"install_recovery_ms":  {},
+		"services_setup_ms":    {},
+		"codex_recovery_ms":    {},
+		"startup_reconcile_ms": {},
+		"listen_ms":            {},
+		"startup_ms":           {},
+	},
+	"ao.daemon.startup_reconciled": {
+		"chat_hosts_ms":        {},
+		"reviewer_recovery_ms": {},
+		"sessions_ms":          {},
+		"runtime_ms":           {},
+		"reconcile_ms":         {},
 	},
 	"ao.http.5xx": {
 		"count":        {},
@@ -809,6 +838,30 @@ var stalePersonProperties = []string{"ao_version", "app_version", "build_mode", 
 
 func personSetKey(actor, uid string) string { return actor + "|" + uid }
 
+// validArtifactValue reports whether value is allowed for the artifact
+// telemetry property key: a closed vocabulary, or a count.
+func validArtifactValue(key string, value any) bool {
+	if key == "count" {
+		count, ok := value.(int)
+		return ok && count > 0
+	}
+	text, ok := value.(string)
+	if !ok {
+		return false
+	}
+	switch key {
+	case "source":
+		return domain.ValidArtifactSource(text)
+	case "content_category":
+		return domain.ValidArtifactContentCategory(text)
+	case "size_bucket":
+		return domain.ValidArtifactSizeBucket(text)
+	case "reason":
+		return domain.ValidArtifactRegisterFailure(text)
+	}
+	return false
+}
+
 func sanitizeRemotePayload(name string, payload map[string]any) map[string]any {
 	allowed := remotePayloadAllowlist[name]
 	if len(allowed) == 0 || len(payload) == 0 {
@@ -818,6 +871,9 @@ func sanitizeRemotePayload(name string, payload map[string]any) map[string]any {
 	for key := range allowed {
 		value, ok := payload[key]
 		if !ok {
+			continue
+		}
+		if (name == "ao.artifacts.registered" || name == "ao.artifacts.register_failed") && !validArtifactValue(key, value) {
 			continue
 		}
 		if name == "ao.automation.created" {

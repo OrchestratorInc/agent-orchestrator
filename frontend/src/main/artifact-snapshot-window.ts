@@ -62,7 +62,9 @@ async function paintedFrame(window: BrowserWindow): Promise<NativeImage> {
 }
 
 /** A preview that failed to load, as opposed to one with nothing to show: asked again after the retry delay. */
-class PreviewLoadError extends Error {}
+class PreviewLoadError extends Error {
+	readonly code: string = "PREVIEW_LOAD_ERROR";
+}
 
 /** The window stays warm between artifacts, so a screen of cards does not start a renderer process for each. */
 const WINDOW_IDLE_MS = 30_000;

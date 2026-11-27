@@ -20,8 +20,8 @@ import { Copy, Download } from "@/components/app-icons";
 import { cn } from "../../lib/utils";
 import { useUiStore } from "../../stores/ui-store";
 import { ContextMenu, ContextMenuContent, ContextMenuItem, ContextMenuTrigger } from "../ui/context-menu";
-import { Dialog, DialogContent, DialogTitle } from "../ui/dialog";
 import { Pressable } from "../ui/pressable";
+import { AttachmentLightbox } from "./AttachmentLightbox";
 import { copyChatImage, saveChatImage } from "./chat-image-actions";
 import { useChatImageSrc } from "./chat-image-source";
 import { ATTACHMENT_TILE_CLASS } from "./messageAttachments";
@@ -209,21 +209,13 @@ export function ChatImage({ src, alt, inline, onError: onLoadError }: {
 export function ChatImageDialog({ open, onOpenChange, url, label }: { open: boolean; onOpenChange: (open: boolean) => void; url: string; label: string }) {
 	const { t } = useTranslation();
 	return (
-		<Dialog open={open} onOpenChange={onOpenChange}>
-			<DialogContent
-				aria-describedby={undefined}
-				className="z-overlay w-max max-w-[calc(100vw-4rem)] gap-0 bg-popover p-2 pt-10"
-			>
-				<DialogTitle className="sr-only">{label || t("chat.image.untitled")}</DialogTitle>
-				<ChatImageMenu url={url} label={label}>
-					<img
-						crossOrigin={mediaCrossOrigin(url)}
-						src={url}
-						alt={label}
-						className="block max-h-[calc(100svh-8rem)] max-w-full rounded-md object-contain"
-					/>
-				</ChatImageMenu>
-			</DialogContent>
-		</Dialog>
+		<AttachmentLightbox
+			open={open}
+			onOpenChange={onOpenChange}
+			kind="image"
+			src={url}
+			name={label || t("chat.image.untitled")}
+			wrapMedia={(media) => <ChatImageMenu url={url} label={label}>{media}</ChatImageMenu>}
+		/>
 	);
 }

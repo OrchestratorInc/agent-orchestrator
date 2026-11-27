@@ -53,6 +53,27 @@ func TestPRMergeOmitsMissingMethodFromOutput(t *testing.T) {
 	}
 }
 
+func TestPRMergeReportsMergeQueue(t *testing.T) {
+	for name, tc := range map[string]struct{ body, want string }{
+		"with position":    {`{"ok":true,"prNumber":42,"method":"squash","state":"open","queue":{"state":"queued","position":3}}`, "added PR #42 to the merge queue at position 3\n"},
+		"without position": {`{"ok":true,"prNumber":42,"method":"squash","state":"open","queue":{"state":"queued","position":0}}`, "added PR #42 to the merge queue\n"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			cfg := setConfigEnv(t)
+			srv, _ := reviewServer(t, http.StatusOK, tc.body)
+			writeRunFileFor(t, cfg, srv)
+
+			out, errOut, err := executeCLI(t, aliveDeps(), "pr", "merge", "42", "--url", prMergeTestURL, "--expected-head-sha", prMergeTestHeadSHA)
+			if err != nil {
+				t.Fatalf("unexpected error: %v\nstderr=%s", err, errOut)
+			}
+			if out != tc.want {
+				t.Fatalf("stdout = %q, want %q", out, tc.want)
+			}
+		})
+	}
+}
+
 func TestPRMergeRejectsInvalidNumber(t *testing.T) {
 	setConfigEnv(t)
 

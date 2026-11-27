@@ -397,6 +397,12 @@ type SessionMetadata struct {
 	// means the provider default, including an explicit task-level reset. The
 	// resolved value is pinned so project-default changes cannot alter resume.
 	Effort string `json:"effort,omitempty"`
+	// RoleAgent is the agent the project named for this session's role when
+	// the session's agent was last chosen: at spawn, or by switching to another
+	// agent. A project setting that differs from it changed afterwards. A
+	// session's own agent differing from the setting is not drift: a spawn or
+	// switch may pick any agent. Empty for sessions from before it was recorded.
+	RoleAgent AgentHarness `json:"-"`
 	// ArtifactDir is the session-owned artifact directory under AO's data dir.
 	// It is outside the git workspace and is never exposed directly on the API.
 	ArtifactDir string `json:"-"`
@@ -729,7 +735,7 @@ type Session struct {
 	// important current fact about the session at the stage it sits in. It is
 	// derived after the column, from the facts that column reads, and ships in
 	// renderable form so clients print it without a mapping table of their own.
-	DisplayStatus    DisplayStatus `json:"displayStatus" enum:"Working,Blocked,Needs input,Exited,No signal,Interrupted,Idle,Fixing CI failures,Addressing comments,Review scheduled,Reviewing,Retrying review,Draft,Awaiting review,Review failed,Review cancelled,CI failing,Merge conflicts,Commented,Changes requested,Mergeable,Approved,Merged,Closed without merge,Terminated"`
+	DisplayStatus    DisplayStatus `json:"displayStatus" enum:"Working,Blocked,Needs input,Exited,No signal,Interrupted,Idle,Fixing CI failures,Addressing comments,Review scheduled,Reviewing,Retrying review,Draft,Awaiting review,Review failed,Review cancelled,CI failing,Merge conflicts,Commented,Changes requested,Waiting on base PR,Mergeable,Approved,Merged,Closed without merge,Terminated"`
 	TerminalHandleID string        `json:"terminalHandleId,omitempty"`
 	// TerminalTitle is the title the session's terminal program set, present
 	// only when it should label the session: it is meaningful and no explicit

@@ -8,6 +8,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { daemonExitWasUngraceful, planDaemonAutoRestart } from "./daemon-auto-restart";
 import { keepDaemonAlive } from "./daemon-owner";
 import { createListenPortScanner, parseRunFile } from "../shared/daemon-discovery";
+import { daemonExitReason } from "../shared/daemon-exit-reason";
+import { bundledDaemonMissingMessage } from "../shared/daemon-launch";
+import { childStdioDrained } from "./child-stdio-drained";
 import { browserDaemonOwnershipDecision, browserRuntimeRecoveryDecision, keepAliveForReplacement, portHolderPidToReplace, shouldReplaceDaemonForStartup } from "../shared/daemon-takeover";
 
 const source = ts.createSourceFile("main.ts", readFileSync(new URL("../main.ts", import.meta.url), "utf8"), ts.ScriptTarget.Latest, true);
@@ -86,12 +89,14 @@ function setup() {
 		runFilePath: () => "/owned/running.json", parseRunFile, readFile: read, rm: unlink,
 		portHolderPidToReplace, readProcessStartMs: async () => null, processAlive: () => false,
 		existsSync: () => true, ensureBundledTmuxStaged: stage, keepDaemonAlive,
+		waitForFile: async () => true, BUNDLED_DAEMON_WAIT_MS: 10_000, bundledDaemonMissingMessage, daemonExitReason,
+		childStdioDrained, DAEMON_EXIT_DRAIN_MS: 250,
 		spawn, daemonEnv, browserRuntimeToken: "test-only", createListenPortScanner,
 		RUN_FILE_FRESHNESS_SKEW_MS: 1000, RUN_FILE_POLL_MS: 100, PORT_DISCOVERY_TIMEOUT_MS: 5000,
 		DAEMON_RESTART_STOP_TIMEOUT_MS: 5000, appendDaemonOutput: vi.fn(), slowDaemonStartupStatus: () => ({ state: "starting" }),
 		planDaemonAutoRestart, daemonExitWasUngraceful, disposeBrowserRuntimeLink: vi.fn(), captureSideChatState: async () => undefined,
 		desktopQuit: { handleBeforeQuit: () => false }, chatDraftRisks: [], browserCleanupComplete: true,
-		disposeBrowserStreamLink: vi.fn(), trayLifecycle: { dispose: vi.fn() },
+		disposeBrowserStreamLink: vi.fn(), trayLifecycle: { dispose: vi.fn() }, launchTiming: { mark: vi.fn() },
 		agentQuitCleanupComplete: false, agentQuitCleanupPromise: null, shutdownDaemonForDesktopQuit: async () => undefined,
 	});
 	vm.runInContext(`${controller}\nfunction setDaemonStatus(status) { daemonStatus = status; }`, context);
@@ -329,6 +334,18 @@ describe("main.ts daemon lifecycle wiring with controlled I/O", () => {
 		expect(h.lifecycleLog).toHaveBeenCalledWith("daemon_restart_decision", expect.objectContaining({
 			code: 1, decision: "no_restart", cause: "nonzero_exit_without_run_file",
 		}));
+	});
+
+	it("waits for the daemon's stderr to close before reporting its exit", async () => {
+		const h = setup();
+		await h.start();
+		h.setMarker(Object.assign(new Error("missing"), { code: "ENOENT" }));
+		const stderr = Object.assign(h.children.at(-1)!.stderr, { readableEnded: false });
+		h.crash(1, null);
+		expect(h.status()).not.toMatchObject({ code: "exited" });
+		stderr.emit("close");
+		await vi.advanceTimersByTimeAsync(0);
+		expect(h.status()).toMatchObject({ state: "stopped", code: "exited", exitCode: 1, exitReason: "unknown" });
 	});
 
 	it("records a graceful exit as no restart", async () => {

@@ -2052,6 +2052,24 @@ describe("HarnessSettingsSection", () => {
 		expect(within(row).queryByText("Credentials not verified")).toBeNull();
 	});
 
+	it("shows Open Interpreter's local provider configuration as configured, not connected", async () => {
+		const interpreterCatalog = { agents: [agentReadiness("open-interpreter", "Open Interpreter", { authentication: "configured" })] };
+		vi.mocked(apiClient.GET).mockImplementation(async (path) => {
+			if (path === "/api/v1/agents/readiness") return { data: interpreterCatalog } as never;
+			if (path === "/api/v1/agents/auth-plans") return { data: { plans: [{ agentId: "open-interpreter", action: "setup", launchMode: "terminal", available: true }] } } as never;
+			if (path === "/api/v1/agents/installers") return { data: { agents: [] } } as never;
+			if (path === "/api/v1/agents/install-jobs") return { data: { jobs: [] } } as never;
+			return { data: undefined } as never;
+		});
+		vi.mocked(apiClient.POST).mockResolvedValue({ data: interpreterCatalog } as never);
+
+		renderSection();
+		const row = await findAgentRow("open-interpreter");
+		expect(await within(row).findByText("Configured")).toBeInTheDocument();
+		expect(within(row).queryByText("Connected")).toBeNull();
+		expect(within(row).queryByRole("button", { name: "Set up" })).not.toBeInTheDocument();
+	});
+
 	it.each(["unknown", "configured", "unauthorized"] as const)("keeps Docker configuration guidance reachable with %s authentication", async (authentication) => {
 		const dockerCatalog = { agents: [agentReadiness("docker-agent", "Docker Agent", { authentication })] };
 		const documentationUrl = "https://example.test/docker-agent/setup";
@@ -2870,6 +2888,74 @@ describe("HarnessSettingsSection", () => {
 		expect(screen.getByTestId("originating-selector")).toBe(selector);
 	});
 
+	it("keeps a succeeded install verifying until readiness confirms it, then shows Done", async () => {
+		const initial = { agents: [
+			agentReadiness("claude-code", "Claude Code"),
+			agentReadiness("codex", "Codex", { installation: "not_installed", authentication: "unknown" }),
+		] };
+		const installed = { agents: [initial.agents[0], agentReadiness("codex", "Codex", { authentication: "unauthorized" })] };
+		let probed = false;
+		let releaseProbe = () => {};
+		const probeHeld = new Promise<void>((resolve) => { releaseProbe = resolve; });
+		vi.mocked(apiClient.GET).mockImplementation(async (path) => {
+			if (path === "/api/v1/agents/readiness") return { data: initial } as never;
+			if (path === "/api/v1/agents/installers") return { data: plans } as never;
+			if (path === "/api/v1/agents/install-jobs") return { data: { jobs: [] } } as never;
+			return { data: undefined } as never;
+		});
+		vi.mocked(apiClient.POST).mockImplementation(async (path) => {
+			if (path === "/api/v1/agents/readiness/ensure") return { data: probed ? installed : initial } as never;
+			if (path === "/api/v1/agents/{agent}/install") return { data: { target: "codex", status: "succeeded", method: "homebrew", startedAt: "2026-09-19T00:00:00Z", updatedAt: "2026-09-19T00:00:00Z" } } as never;
+			if (path === "/api/v1/agents/{agent}/probe") {
+				await probeHeld;
+				probed = true;
+				return { data: { agent: { id: "codex", authStatus: "unauthorized" }, installed: true } } as never;
+			}
+			return { data: undefined } as never;
+		});
+		renderSection(undefined, "codex");
+		const row = await findAgentRow("codex");
+		await userEvent.click(await within(row).findByRole("button", { name: "Install" }));
+
+		// The job succeeded, but readiness has not answered yet: no Done beside Not installed.
+		await waitFor(() => expect(within(row).getByRole("progressbar", { name: "Verifying…" })).toBeInTheDocument());
+		expect(within(row).queryByText("Done")).not.toBeInTheDocument();
+		expect(within(row).queryByRole("button", { name: "Install" })).not.toBeInTheDocument();
+
+		act(() => releaseProbe());
+		await waitFor(() => expect(within(row).getByRole("progressbar", { name: "Done" })).toBeInTheDocument());
+		expect(within(row).queryByText("Not installed")).not.toBeInTheDocument();
+	});
+
+	it("says why a succeeded install still reads not installed and offers a retry", async () => {
+		const notInstalled = agentReadiness("codex", "Codex", { installation: "not_installed", authentication: "unknown" });
+		const initial = { agents: [agentReadiness("claude-code", "Claude Code"), notInstalled] };
+		const timedOut = { agents: [{ ...notInstalled, installation: { ...notInstalled.installation, freshness: "stale" as const, reasonCode: "install_check_timeout", reason: "Installation check timed out." } }] };
+		vi.mocked(apiClient.GET).mockImplementation(async (path) => {
+			if (path === "/api/v1/agents/readiness") return { data: initial } as never;
+			if (path === "/api/v1/agents/installers") return { data: plans } as never;
+			if (path === "/api/v1/agents/install-jobs") return { data: { jobs: [] } } as never;
+			return { data: undefined } as never;
+		});
+		let probed = false;
+		vi.mocked(apiClient.POST).mockImplementation(async (path) => {
+			if (path === "/api/v1/agents/readiness/ensure") return { data: probed ? timedOut : initial } as never;
+			if (path === "/api/v1/agents/{agent}/install") return { data: { target: "codex", status: "succeeded", method: "homebrew", startedAt: "2026-09-19T00:00:00Z" } } as never;
+			if (path === "/api/v1/agents/{agent}/probe") {
+				probed = true;
+				return { data: { agent: { id: "codex", authStatus: "unknown" }, installed: false } } as never;
+			}
+			return { data: undefined } as never;
+		});
+		renderSection(undefined, "codex");
+		const row = await findAgentRow("codex");
+		await userEvent.click(await within(row).findByRole("button", { name: "Install" }));
+
+		await waitFor(() => expect(within(row).getByRole("alert")).toHaveTextContent("Installation check timed out."));
+		expect(within(row).getByRole("button", { name: "Retry install" })).toBeInTheDocument();
+		expect(within(row).queryByRole("progressbar", { name: "Done" })).not.toBeInTheDocument();
+	});
+
 	it("updates a mounted readiness consumer when the Harness authentication terminal completes", async () => {
 		const initial = { agents: [
 			agentReadiness("claude-code", "Claude Code"),
@@ -3026,6 +3112,28 @@ describe("HarnessSettingsSection", () => {
 		await waitFor(() => expect(row).toHaveTextContent("Verifying…"));
 	});
 
+	it("does not show Done when readiness cannot be refreshed after a job succeeds", async () => {
+		vi.mocked(apiClient.GET).mockImplementation(async (path) => {
+			if (path === "/api/v1/agents/readiness") return { data: { agents: [agentReadiness("codex", "Codex", { authentication: "unauthorized" })] } } as never;
+			if (path === "/api/v1/agents/installers") return { data: plans } as never;
+			if (path === "/api/v1/agents/install-jobs") return { data: { jobs: [{ target: "codex", status: "interrupted", method: "npm", error: "AO restarted", startedAt: "2026-09-19T00:00:00Z" }] } } as never;
+			return { data: undefined } as never;
+		});
+		vi.mocked(apiClient.POST).mockImplementation(async (path) => {
+			if (path === "/api/v1/agents/{agent}/verify") return { data: { target: "codex", status: "succeeded", method: "npm", startedAt: "2026-09-19T00:00:00Z" } } as never;
+			if (path === "/api/v1/agents/{agent}/probe") return { error: { message: "probe failed" }, response: { status: 500 } } as never;
+			return { data: undefined } as never;
+		});
+		const user = userEvent.setup();
+		renderSection();
+		const row = await findAgentRow("codex");
+		await user.click(await within(row).findByRole("button", { name: "Verify again" }));
+
+		// The earlier snapshot already reads installed; that is not a confirmation.
+		await waitFor(() => expect(row).toHaveTextContent("Could not complete the check. Try again or copy diagnostics."));
+		expect(within(row).queryByRole("progressbar", { name: "Done" })).not.toBeInTheDocument();
+	});
+
 	it("shows Autohand component repair after verified CLI success", async () => {
 		const warning = "Computer control needs a separate repair: autohand computer install";
 		vi.mocked(apiClient.GET).mockImplementation(async (path) => {
@@ -3072,6 +3180,9 @@ describe("HarnessSettingsSection", () => {
 		expect(copied).toContain("Memory: Orchestrator 2.0 GB · available 4.0 GB of 32.0 GB");
 		expect(copied).toContain("CPU: 30% of 8 cores · load 1.25");
 		expect(copied).toContain("Live sessions: 1 · 612 MB");
+		// The button confirms the copy, then goes back to its own label.
+		expect(await within(row).findByRole("button", { name: "Copied" })).toBeInTheDocument();
+		await waitFor(() => expect(within(row).getByRole("button", { name: "Copy diagnostics" })).toBeInTheDocument(), { timeout: 3_000 });
 	});
 
 	it("copies the remote host's machine numbers, not this computer's", async () => {

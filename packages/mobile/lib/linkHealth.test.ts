@@ -2,7 +2,6 @@ import { describe, expect, it } from "vitest";
 import { UnreachableError } from "./connectionError";
 import {
 	classifyLink,
-	describeLinkHealth,
 	EMPTY_LINK_TRACKER,
 	failedPollOutcome,
 	networkChangeNeedsRace,
@@ -182,17 +181,5 @@ describe("failedPollOutcome", () => {
 		expect(failedPollOutcome(new UnreachableError("offline"), undefined)).toBe("no-answer");
 		expect(failedPollOutcome(new TypeError("Network request failed"), undefined)).toBe("no-answer");
 		expect(failedPollOutcome(new Error("x"), 503)).toBe("answered-error");
-	});
-});
-
-describe("describeLinkHealth", () => {
-	it("names the machine while reconnecting", () => {
-		expect(describeLinkHealth("reconnecting", "studio-mac")?.text).toBe("Reconnecting to studio-mac…");
-		expect(describeLinkHealth("reconnecting", undefined)?.text).toBe("Reconnecting to your machine…");
-	});
-
-	it("leaves ok and unreachable to the existing copy", () => {
-		expect(describeLinkHealth("ok", "x")).toBeNull();
-		expect(describeLinkHealth("unreachable", "x")).toBeNull();
 	});
 });

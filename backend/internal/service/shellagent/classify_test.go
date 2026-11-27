@@ -24,6 +24,7 @@ func TestClassifyArgv(t *testing.T) {
 		{"muse versioned binary", []string{"/Users/me/.local/bin/muse-bin-1.4.14-R7309.1"}, domain.HarnessMuse},
 		{"versioned binary of an unknown tool", []string{"/usr/local/bin/tool-bin-2.0"}, ""},
 		{"aider under python", []string{"python3.12", "/Users/me/.local/bin/aider"}, domain.HarnessAider},
+		{"tau console script under python", []string{"/Users/me/.local/share/uv/tools/tau-ai/bin/python", "/Users/me/.local/bin/tau"}, domain.HarnessTau},
 		{"login shell", []string{"-zsh"}, ""},
 		{"plain shell", []string{"/bin/zsh", "-l"}, ""},
 		{"editor opening a file named after an agent", []string{"vim", "codex.md"}, ""},

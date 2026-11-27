@@ -7,7 +7,7 @@ const fixtures = vi.hoisted(() => ({
 	platform: { OS: "ios" },
 	findHost: vi.fn<(id: string) => Promise<Host | null>>(async () => null),
 	activeHost: vi.fn<() => Promise<Host | null>>(async () => null),
-	save: vi.fn(async () => ({ routeChanged: false })),
+	save: vi.fn(async (): Promise<{ routeChanged: boolean; appearanceError?: Error }> => ({ routeChanged: false })),
 	reloadConfig: vi.fn(async () => {}),
 	reloadHostMetadata: vi.fn(async () => {}),
 	alert: vi.fn(),
@@ -22,6 +22,13 @@ const fixtures = vi.hoisted(() => ({
 	theme: { accent: "accent", bgBase: "base", bgElevated: "card", green: "green", highlight: "caret", red: "red", textPrimary: "ink", textSecondary: "gray", textTertiary: "dim" },
 }));
 
+vi.mock("./headerPill", async () => {
+	const React = await import("react");
+	return {
+		PillHeaderRight: ({ children }: { children?: React.ReactNode }) => children ?? null,
+		HeaderPillButton: ({ children, ...props }: { children?: React.ReactNode }) => React.createElement("HeaderPillButton", props, children),
+	};
+});
 vi.mock("expo-router", async () => {
 	const React = await import("react");
 	const host = (name: string) => ({ children, ...props }: { children?: React.ReactNode }) => React.createElement(name, props, children);
@@ -97,6 +104,8 @@ beforeEach(() => {
 	for (const mock of [fixtures.findHost, fixtures.activeHost, fixtures.save, fixtures.reloadConfig, fixtures.reloadHostMetadata, fixtures.alert, fixtures.back, fixtures.setSheetOptions, fixtures.setPageOptions, fixtures.dispatch, fixtures.announce]) mock.mockReset();
 	fixtures.findHost.mockResolvedValue(a);
 	fixtures.activeHost.mockResolvedValue(a);
+	// Counted per test: a save that fails in one must not count in the next.
+	for (const fn of Object.values(fixtures.haptics)) fn.mockClear();
 	fixtures.save.mockResolvedValue({ routeChanged: false });
 	fixtures.reloadHostMetadata.mockResolvedValue(undefined);
 	fixtures.reloadConfig.mockResolvedValue(undefined);
@@ -139,7 +148,8 @@ describe("editing a machine", () => {
 		expect(field("environment-port-a").props.text.value).toBe("3011");
 		expect(field("environment-password-a").type).toBe("SecureField");
 		expect(field("environment-password-a").props.text.value).toBe("secret");
-		expect(field("environment-tls-a").props).toMatchObject({ label: "Use TLS", isOn: true });
+		// The address decides TLS when the route is saved; there is nothing to switch.
+		expect(renderer!.root.findAll((node) => node.props.testID === "environment-tls-a" || node.props.label === "Use TLS")).toEqual([]);
 		expect(renderer!.root.findByType("Picker" as never).props.selection).toBe("laptop");
 		for (const [testID, label] of [["environment-name-a", "Name"], ["environment-host-a", "Host"], ["environment-port-a", "API port"], ["environment-password-a", "Password"]]) {
 			expect(modifiersOf(field(testID))).toContainEqual({ $type: "accessibilityLabel", args: [label] });
@@ -179,6 +189,20 @@ describe("editing a machine", () => {
 		await type("environment-port-a", "3012");
 		await act(async () => save().props.onPress());
 		expect(fixtures.reloadConfig).toHaveBeenCalledOnce();
+	});
+
+	// A local storage failure on the icon is not the machine being offline, and
+	// the route that did save still reconnects the default machine.
+	it("reconnects over a saved route and stays open when only the icon failed to save", async () => {
+		const message = "The connection was saved, but the icon couldn't be. Try Save again.";
+		fixtures.save.mockResolvedValue({ routeChanged: true, appearanceError: new MachineSaveError(message, "host") });
+		await open();
+		await type("environment-port-a", "3012");
+		await act(async () => save().props.onPress());
+		expect(fixtures.reloadHostMetadata).toHaveBeenCalledOnce();
+		expect(fixtures.reloadConfig).toHaveBeenCalledOnce();
+		expect(fixtures.back).not.toHaveBeenCalled();
+		expect(connectionSection().props.footer.props).toMatchObject({ error: true, children: message });
 	});
 
 	it("keeps the editor and says what failed under the connection fields", async () => {
@@ -274,9 +298,12 @@ describe("an account machine", () => {
 });
 
 describe("saving on Android", () => {
-	it("labels the top app bar's icon-only save for TalkBack", async () => {
+	// A pill of its own over the clear bar, not a bare check on the frost.
+	it("saves from a labelled pill over the clear bar", async () => {
 		fixtures.platform.OS = "android";
 		await open();
-		expect(save().props).toMatchObject({ accessibilityLabel: "Save machine changes", disabled: true });
+		const pill = () => renderer!.root.findByType("HeaderPillButton" as never);
+		expect(pill().props).toMatchObject({ icon: "checkmark", label: "Save machine changes", disabled: true });
+		expect(renderer!.root.findAllByType("StackToolbarButton" as never)).toHaveLength(0);
 	});
 });

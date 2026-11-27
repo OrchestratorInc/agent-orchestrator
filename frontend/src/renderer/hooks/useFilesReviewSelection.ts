@@ -99,6 +99,8 @@ export type FilesReviewSelection = {
 	/** The session has a pull request the branch menu offers; undefined while the branch list is loading. */
 	hasPullRequest: boolean | undefined;
 	target: ReviewTarget;
+	/** The target's snapshot source still waits for the history that fences it to the listed tip; a failed history read stops the wait. */
+	sourcePending: boolean;
 	/** Reads again what a failed target read: the picked branch's history or the combined commits. */
 	retryTarget: () => void;
 	/** Explains a fall back to the checked-out branch; "" otherwise. */
@@ -202,6 +204,10 @@ export function useFilesReviewSelection({
 	});
 
 	const settledKey = changesKey(settledChanges);
+	// The checked-out branch's whole range lists its files in the manifest, so
+	// its review doesn't wait a round trip for the history. Ticked commits do:
+	// the history drops SHAs it no longer lists and fences another branch.
+	const awaitsHistory = settledChanges.kind === "commits" && !history && !(branch.kind === "checked_out" && settledChanges.shas.length === 0);
 	const target = useMemo(
 		() => {
 			const built = buildReviewTarget({
@@ -213,9 +219,10 @@ export function useFilesReviewSelection({
 				historyError: historyQuery.error,
 				selection: request ? { data: selectionQuery.data, error: selectionQuery.error, pending: selectionQuery.isPending } : undefined,
 			});
-			return settledChanges.kind === "commits" && !history
-				? { ...built, state: historyQuery.error ? ("error" as const) : ("pending" as const), files: undefined, error: historyQuery.error ?? undefined }
-				: built;
+			if (awaitsHistory) return { ...built, state: historyQuery.error ? ("error" as const) : ("pending" as const), files: undefined, error: historyQuery.error ?? undefined };
+			// Until the history fences the range's tip, a file opened from it would
+			// read whatever the branch points at by then, not what the list shows.
+			return built.source && !history ? { ...built, openable: false } : built;
 		},
 		// eslint-disable-next-line react-hooks/exhaustive-deps -- settledChanges and branch are read through their keys: normalizing rebuilds equal values on every render.
 		[branchKey(branch), settledKey, manifest, legacy, history, historyQuery.error, request?.selectionKey, selectionQuery.data, selectionQuery.error, selectionQuery.isPending],
@@ -355,6 +362,7 @@ export function useFilesReviewSelection({
 		branchMenu,
 		hasPullRequest,
 		target,
+		sourcePending: settledChanges.kind === "commits" && !history && !historyQuery.isError,
 		retryTarget: () => {
 			if (historyQuery.isError) void historyQuery.refetch();
 			if (selectionQuery.isError) void selectionQuery.refetch();

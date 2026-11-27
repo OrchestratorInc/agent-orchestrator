@@ -109,7 +109,7 @@ describe("CloudWorkspaceReviewPane", () => {
 		const changesMenu = { mode: "view" as const, value: { kind: "commits" as const, shas: ["a".repeat(40), "c".repeat(40)] }, scopes: [], onSelectScope: vi.fn(), commits: { state: "ready" as const, rows: [], truncated: false, onToggleAll: vi.fn(), onToggle: vi.fn(), onRetry: vi.fn() } };
 		function review(target: Partial<FilesReviewSelection["target"]>): FilesReviewSelection {
 			return {
-				branchMenu, changesMenu, hasPullRequest: false, notice: "", retryTarget: vi.fn(), includeCommitsBetween: vi.fn(), showAllCommits: vi.fn(),
+				branchMenu, changesMenu, hasPullRequest: false, notice: "", sourcePending: false, retryTarget: vi.fn(), includeCommitsBetween: vi.fn(), showAllCommits: vi.fn(),
 				target: { key: "branch:feat/x:all", branch: { kind: "branch", name: "feat/x" }, changes: { kind: "commits", shas: [] }, scope: "committed", selectionKey: "", openable: true, state: "ready", view: { branch: "feat/x", expectedTipSha: "t" }, ...target },
 			};
 		}

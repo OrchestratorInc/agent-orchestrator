@@ -25,6 +25,7 @@ export function AgentModelField({
 	projectId,
 	hostId,
 	model,
+	savedModel = "",
 	mode,
 	effort,
 	onModelChange,
@@ -38,6 +39,7 @@ export function AgentModelField({
 	independentMode = false,
 	cloudOrgId,
 	warningClassName,
+	pinCatalogDefaults = false,
 }: {
 	role: "worker" | "orchestrator" | "reviewer";
 	variant?: "settings" | "task";
@@ -45,6 +47,8 @@ export function AgentModelField({
 	projectId: string;
 	hostId?: string;
 	model: string;
+	/** The model the project has saved, offered until a replacement is saved. */
+	savedModel?: string;
 	mode: string;
 	effort: string;
 	onModelChange: (value: string) => void;
@@ -67,6 +71,11 @@ export function AgentModelField({
 	 * Cloud has no list for the agent (an older control plane, opencode).
 	 */
 	cloudOrgId?: string;
+	/**
+	 * Saves a pick of the agent's default model or effort as a pin instead of
+	 * as "follow the agent" (#8008), and offers "Use agent model" to undo it.
+	 */
+	pinCatalogDefaults?: boolean;
 }) {
 	const { t } = useTranslation();
 	const queryClient = useQueryClient();
@@ -93,7 +102,7 @@ export function AgentModelField({
 		await cloud.query.refetch();
 	};
 	// Settings → Harness → Models picks which local models are offered; Cloud keeps its own catalog.
-	const { models: offeredModels } = useOfferedModels(agentId, catalog?.models, { hostId, keep: [model, mode], skip: !followCatalogDefaults });
+	const { models: offeredModels } = useOfferedModels(agentId, catalog?.models, { hostId, keep: [model, mode, savedModel], skip: !followCatalogDefaults });
 	const revalidationQuery = useQuery({
 		queryKey: ["agent-model-revalidation", hostId ?? LOCAL_HOST, agentId, projectId, catalog?.validatedAt ?? ""],
 		queryFn: () => revalidateAgentModels(agentId, projectId, hostId),
@@ -195,6 +204,15 @@ export function AgentModelField({
 	}));
 	if (supportedEfforts && isConcreteModelID(model) && !models.some((item) => item.id === model)) {
 		models.push({ id: model, label: model, efforts: [...supportedEfforts] });
+	} else if (followCatalogDefaults && catalog) {
+		// A pinned model the account's list lacks stays a row, noted, rather than
+		// a bare id with nothing to re-pick (#5679). The saved pin stays too until
+		// its replacement is saved, so a failed save can still return to it.
+		for (const pin of [savedModel, model]) {
+			if (!isConcreteModelID(pin) || models.some((item) => item.id === pin)) continue;
+			const pinned = { id: pin, label: pin, note: t("settings.models.pinnedNotListed", { agent: agentLabel(agentId) }) };
+			models.push(pinned);
+		}
 	}
 	// Cloud saves only explicit picks, but an unset model still names the one the
 	// agent uses by default rather than a generic placeholder.
@@ -215,6 +233,14 @@ export function AgentModelField({
 	};
 	const selectCustomModel = (value: string) => {
 		onModelChange(value);
+		if (!independentMode) onModeChange("");
+	};
+	// Only a local catalog marks defaults; Cloud saves every explicit pick.
+	const pinDefaults = pinCatalogDefaults && followCatalogDefaults;
+	const pinned = pinDefaults && (isConcreteModelID(model) || effort !== "");
+	const followAgentDefault = () => {
+		onModelChange("");
+		onEffortChange("");
 		if (!independentMode) onModeChange("");
 	};
 	// No wrapper: the pickers and the effort warning join the caller's row, so the
@@ -238,6 +264,9 @@ export function AgentModelField({
 				disabled={catalogFetching || agentId === ""}
 				onChange={selectCatalogModel}
 				onCustom={selectCustomModel}
+				preserveDefaultSelection={pinDefaults}
+				onUseDefault={pinned ? followAgentDefault : undefined}
+				useDefaultLabel={pinDefaults ? t("settings.models.useAgentModel") : undefined}
 				triggerClassName={cn(MENU_TRIGGER_CHROME, "w-fit")}
 				compact
 				recentScope={agentId}
@@ -270,6 +299,15 @@ export function ProjectWorkersRequestReviewToggle({ checked, onCheckedChange }: 
 export function ProjectCoAuthorCommitsToggle({ checked, onCheckedChange }: { checked: boolean; onCheckedChange: (checked: boolean) => void }) {
 	const { t } = useTranslation();
 	return <ProjectToggleRow id="project-co-author-commits" label={t("settings.project.coAuthorCommitsToggle")} description={t("settings.project.coAuthorCommitsDescription")} checked={checked} onCheckedChange={onCheckedChange} />;
+}
+
+/** The Orchestrator attribution beta's per-project switches. Both are on by default. */
+export function ProjectAttributionToggles({ commitTrailer, prFooter, onChange }: { commitTrailer: boolean; prFooter: boolean; onChange: (values: { attributionCommitTrailer?: boolean; attributionPRFooter?: boolean }) => void }) {
+	const { t } = useTranslation();
+	return <>
+		<ProjectToggleRow id="project-attribution-commit-trailer" label={t("settings.project.attributionCommitTrailer")} description={t("settings.project.attributionCommitTrailerDescription")} checked={commitTrailer} onCheckedChange={(attributionCommitTrailer) => onChange({ attributionCommitTrailer })} />
+		<ProjectToggleRow id="project-attribution-pr-footer" label={t("settings.project.attributionPRFooter")} description={t("settings.project.attributionPRFooterDescription")} checked={prFooter} onCheckedChange={(attributionPRFooter) => onChange({ attributionPRFooter })} />
+	</>;
 }
 
 function ProjectToggleRow({ id, label, description, checked, onCheckedChange }: { id: string; label: string; description: string; checked: boolean; onCheckedChange: (checked: boolean) => void }) {

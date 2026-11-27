@@ -1439,6 +1439,75 @@ func TestUnrealSpawnDefaultsToChatWithBypassPermissions(t *testing.T) {
 	}
 }
 
+func TestUnrealSpawnRejectsImplicitBypassAboveProjectCeiling(t *testing.T) {
+	for _, tc := range []struct {
+		name             string
+		permission       domain.PermissionMode
+		parentKind       domain.SessionKind
+		parentPermission domain.PermissionMode
+		projectHarness   bool
+	}{
+		{"orchestrator parent with default project mode", domain.PermissionModeDefault, domain.KindOrchestrator, domain.PermissionModeBypassPermissions, false},
+		{"orchestrator parent with auto project mode", domain.PermissionModeAuto, domain.KindOrchestrator, domain.PermissionModeBypassPermissions, false},
+		{"orchestrator parent with default parent mode", "", domain.KindOrchestrator, domain.PermissionModeDefault, false},
+		{"worker parent with default project mode", domain.PermissionModeDefault, domain.KindWorker, domain.PermissionModeBypassPermissions, false},
+		{"direct spawn with default project mode", domain.PermissionModeDefault, "", "", false},
+		{"project-selected Unreal with default project mode", domain.PermissionModeDefault, domain.KindOrchestrator, domain.PermissionModeBypassPermissions, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			launcher := &recordingLauncher{}
+			mgr, st, runtime := newChatManager(launcher)
+			project := st.projects[string(chatTestProject)]
+			project.Config.Worker.AgentConfig.Permissions = tc.permission
+			harness := domain.HarnessUnreal
+			if tc.projectHarness {
+				project.Config.Worker.Harness = domain.HarnessUnreal
+				harness = ""
+			}
+			st.projects[string(chatTestProject)] = project
+			var parentID domain.SessionID
+			if tc.parentKind != "" {
+				parentID = "mer-0"
+				st.sessions[parentID] = domain.SessionRecord{ID: parentID, ProjectID: chatTestProject, Kind: tc.parentKind}
+				st.conversations[parentID] = domain.ConversationRecord{
+					SessionID: parentID, Settings: domain.ConversationSettings{ApprovalMode: tc.parentPermission},
+				}
+			}
+			_, _, _, err := mgr.Spawn(context.Background(), ports.SpawnConfig{
+				ProjectID: chatTestProject, Kind: domain.KindWorker, Harness: harness,
+				ParentSessionID: parentID,
+			})
+			if !errors.Is(err, ErrSpawnPermissionExceedsPolicy) {
+				t.Fatalf("spawn error = %v, want project permission ceiling refusal", err)
+			}
+			if tc.parentKind == "" && !strings.Contains(err.Error(), "Unreal Agent requires bypass-permissions") {
+				t.Fatalf("direct Unreal spawn error = %q, want actionable bypass guidance", err)
+			}
+			if runtime.created != 0 || len(launcher.preflighted) != 0 || len(launcher.started) != 0 {
+				t.Fatal("a refused Unreal spawn created a runtime or chat controller")
+			}
+		})
+	}
+}
+
+func TestUnrealDirectSpawnCanChooseBypassAboveProjectDefault(t *testing.T) {
+	launcher := &recordingLauncher{}
+	mgr, st, _ := newChatManager(launcher)
+	project := st.projects[string(chatTestProject)]
+	project.Config.Worker.AgentConfig.Permissions = domain.PermissionModeDefault
+	st.projects[string(chatTestProject)] = project
+	_, _, _, err := mgr.Spawn(context.Background(), ports.SpawnConfig{
+		ProjectID: chatTestProject, Kind: domain.KindWorker, Harness: domain.HarnessUnreal,
+		AgentConfig: ports.AgentConfig{Permissions: ports.PermissionModeBypassPermissions},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(launcher.started) != 1 || launcher.started[0].Permissions != ports.PermissionModeBypassPermissions {
+		t.Fatalf("started controllers = %#v, want one bypass-permissions controller", launcher.started)
+	}
+}
+
 // A TUI spawn must never reach the chat launcher, even when one is wired.
 func TestTUISpawnNeverTouchesTheChatLauncher(t *testing.T) {
 	launcher := &recordingLauncher{}
@@ -1881,6 +1950,15 @@ func TestSendRoutesIntoTheChatConversation(t *testing.T) {
 		}
 	}
 
+	// A lifecycle notice names its delivery attempt so it can later read
+	// whether that exact message reached the agent.
+	if err := mgr.SendWithClientMessageID(ctx, rec.ID, "AO review done: approved", "review-done:run-1:0"); err != nil {
+		t.Fatalf("SendWithClientMessageID: %v", err)
+	}
+	last := len(launcher.relayed) - 1
+	if launcher.relayed[last] != "AO review done: approved" || launcher.relayIDs[last] != "review-done:run-1:0" {
+		t.Fatalf("relay = %q under %q, want the notice under its attempt id", launcher.relayed[last], launcher.relayIDs[last])
+	}
 }
 
 // A terminated chat session cannot receive a message, matching the terminal path.
