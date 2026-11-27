@@ -61,6 +61,7 @@ export async function moveSession(input: MoveInput): Promise<MoveResult> {
 	let sessionId: string;
 	let warnings: string[];
 	let resumed: boolean;
+	let transfer: Transfer | undefined;
 	input.onStep?.("prepare");
 	await checkDestination(target);
 	const destination = await recordedDestination(target);
@@ -76,7 +77,7 @@ export async function moveSession(input: MoveInput): Promise<MoveResult> {
 			},
 		}));
 		if (prepared.error || !prepared.data) throw apiErrorException(prepared.error, "Could not prepare the move");
-		const transfer: Transfer = prepared.data.transfer;
+		transfer = prepared.data.transfer;
 		// An unfinished earlier move to this destination comes back instead of a new one.
 		const earlier = transfer.transferId !== transferId;
 		transferId = transfer.transferId;
@@ -99,7 +100,12 @@ export async function moveSession(input: MoveInput): Promise<MoveResult> {
 		// The destination may have started the session before it stopped answering.
 		// Leave the move pending so Retry finishes it instead of running it twice.
 		if (step === "receive" && (error instanceof Unreachable || code === "TRANSFER_UNCONFIRMED")) throw new MoveError(message, step, false, "RECEIVE_UNCONFIRMED", transferId);
-		throw new MoveError(message, step, await cancelMove(source, transferId), code, transferId);
+		// Another app moving this session may have delivered it while this copy failed.
+		const delivered = step === "copy" && transfer && !(error instanceof Unreachable)
+			? await receiveUnlessNotCopied(target.client, target.projectId, transfer, target.label).catch(() => undefined)
+			: undefined;
+		if (!delivered) throw new MoveError(message, step, await cancelMove(source, transferId), code, transferId);
+		({ sessionId, warnings, resumed } = delivered);
 	}
 	input.onStep?.("commit");
 	const commitError = await commitMove(source, destination, transferId, sessionId);

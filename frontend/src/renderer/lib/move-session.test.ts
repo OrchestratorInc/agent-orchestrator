@@ -258,6 +258,21 @@ describe("moveSession", () => {
 		expect(source.calls).toContain("POST /api/v1/sessions/{sessionId}/resume-agent");
 	});
 
+	it("takes the session another app delivered while this copy failed, and cancels when there is none", async () => {
+		const failedCopy = { error: { code: "TRANSFER_FAILED", message: "The move failed: rename" } };
+		const delivered = hosts();
+		(delivered.target.client as unknown as { PUT: () => Promise<unknown> }).PUT = async () => failedCopy;
+		const result = await moveSession(delivered.input);
+		expect([result.sessionId, result.committed]).toEqual(["web-9", true]);
+		expect(delivered.source.calls).not.toContain("POST /api/v1/sessions/{sessionId}/transfer/cancel");
+
+		const missing = hosts(undefined, () => ({ error: { code: "TRANSFER_ARCHIVE_INVALID", message: "not uploaded" } }));
+		(missing.target.client as unknown as { PUT: () => Promise<unknown> }).PUT = async () => failedCopy;
+		const error = (await moveSession(missing.input).catch((e: unknown) => e)) as MoveError;
+		expect(error.step).toBe("copy");
+		expect(missing.source.calls).toContain("POST /api/v1/sessions/{sessionId}/transfer/cancel");
+	});
+
 	it("keeps the move when only marking the source fails", async () => {
 		const { source, input } = hosts();
 		const sourceClient = source.client as unknown as { POST: (path: string, options?: unknown) => Promise<unknown> };
