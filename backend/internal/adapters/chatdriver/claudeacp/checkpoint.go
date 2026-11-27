@@ -239,9 +239,13 @@ func verifyCheckpointTranscript(ctx context.Context, input io.Reader, request po
 	}
 	records := make(map[string]checkpointRecord)
 	wantedSubmissions := make(map[string]bool)
+	stopped := make(map[string]bool)
 	for _, observation := range evidence.Events {
 		if observation.Submission && observation.SubmissionID != "" {
 			wantedSubmissions[domain.NativeSubmissionContext(observation.SubmissionID)] = true
+		}
+		if !observation.Submission {
+			stopped[observation.PromptID] = true
 		}
 	}
 	leaf := ""
@@ -435,7 +439,7 @@ func verifyCheckpointTranscript(ctx context.Context, input io.Reader, request po
 		return ports.NativeCheckpointBoundary{}, checkpointUnsettled("no native user boundary")
 	}
 	for i := range turns {
-		if !turns[i].replied && !turns[i].complete {
+		if !turns[i].replied && !turns[i].complete && !stopped[turns[i].promptID] {
 			turns[i].interrupted, turns[i].complete = true, true
 		}
 	}
@@ -501,9 +505,13 @@ func verifyCheckpointTranscript(ctx context.Context, input io.Reader, request po
 		}
 		return ports.NativeCheckpointBoundary{}, checkpointUnsettled("no native user boundary")
 	}
+	answer := len(turns) - 1
+	for answer > owner && !turns[answer].replied {
+		answer--
+	}
 	return ports.NativeCheckpointBoundary{
 		UserMessageID: turns[owner].userID, UserText: turns[owner].user,
-		AssistantText: latest.assistant, Interrupted: latest.interrupted,
+		AssistantText: turns[answer].assistant, Interrupted: turns[answer].interrupted,
 	}, nil
 }
 

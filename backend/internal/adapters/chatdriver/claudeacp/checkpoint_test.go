@@ -276,39 +276,47 @@ func TestNativeCheckpointSettlesDamagedTranscriptsAndSlashCommands(t *testing.T)
 	}
 }
 
-// Stop, Esc or "Cancel request and switch" before Claude's first token: Claude
-// writes the prompt and its hook, then nothing, and puts the prompt back in its
-// input. A later prompt branches from the turn before; a resume adds filler.
-func TestNativeCheckpointSettlesPromptsCancelledBeforeAReply(t *testing.T) {
+func TestNativeCheckpointSettlesTurnsClaudeNeverAnswered(t *testing.T) {
 	answered := checkpointFixture(t, []string{"A"}, []string{"answer A"})
 	prompt := func(id, promptID, parent, text string) string {
 		return fmt.Sprintf(`{"type":"user","sessionId":"native","uuid":%q,"parentUuid":%q,"promptId":%q,"message":{"content":%q}}`, id, parent, promptID, text) + "\n"
 	}
+	synthetic := func(fields, text string) string {
+		return `{"type":"assistant","sessionId":"native","uuid":"filler","parentUuid":"hook-p",` + fields + `"message":{"model":"<synthetic>","content":[{"type":"text","text":` +
+			jsonString(text) + `}],"stop_reason":"stop_sequence"}}` + "\n"
+	}
 	cancelled := prompt("user-p", "prompt-p", "assistant-0", "P") + submissionHookRecord("hook-p", "user-p", 9)
-	filler := `{"type":"assistant","sessionId":"native","uuid":"filler","parentUuid":"hook-p","message":{"model":"<synthetic>","content":[{"type":"text","text":"No response requested."}],"stop_reason":"stop_sequence"}}` + "\n"
+	filler := synthetic("", "No response requested.")
 	next := func(parent string) string {
 		return prompt("user-b", "prompt-b", parent, "B") + submissionHookRecord("hook-b", "user-b", 8) +
 			`{"type":"assistant","sessionId":"native","uuid":"answer-b","parentUuid":"hook-b","message":{"content":[{"type":"text","text":"answer B"}],"stop_reason":"end_turn"}}` + "\n"
 	}
+	localCommand := prompt("user-c", "prompt-c", "assistant-0", "<command-name>/cost</command-name>\n<command-message>cost</command-message>\n<command-args></command-args>") +
+		prompt("stdout-c", "prompt-c", "user-c", "<local-command-stdout>Total cost: $0.01</local-command-stdout>")
 	submitP := domain.NativeCheckpointObservation{Submission: true, PromptID: "prompt-p", SubmissionID: "submission-9", Text: "P"}
-	turnB := []domain.NativeCheckpointObservation{
+	turnB := []domain.NativeCheckpointObservation{submitP,
 		{Submission: true, PromptID: "prompt-b", SubmissionID: "submission-8", Text: "B"}, {PromptID: "prompt-b", Text: "answer B"}}
 	for _, test := range []struct {
-		name, transcript    string
-		later               []domain.NativeCheckpointObservation
-		wantUser, wantError string
+		name, transcript     string
+		later                []domain.NativeCheckpointObservation
+		wantUser, wantAnswer string
+		interrupted          bool
+		wantError            string
 	}{
-		{name: "cancelled tail", transcript: answered + cancelled, wantUser: "user-p"},
-		{name: "cancelled tail resumed with filler", transcript: answered + cancelled + filler, wantUser: "user-p"},
-		{name: "filler, then a normal turn", transcript: answered + cancelled + filler + next("filler"), later: turnB, wantUser: "user-b"},
-		{name: "cancelled on a dead branch", transcript: answered + cancelled + next("assistant-0"), later: turnB, wantUser: "user-b"},
-		{name: "Stop still owed", transcript: answered + cancelled, later: []domain.NativeCheckpointObservation{{PromptID: "prompt-p", Text: "answer P"}},
-			wantError: "Stop answer does not match its native prompt"},
+		{name: "cancelled tail", transcript: answered + cancelled, later: []domain.NativeCheckpointObservation{submitP}, wantUser: "user-p", interrupted: true},
+		{name: "cancelled tail resumed with filler", transcript: answered + cancelled + filler, later: []domain.NativeCheckpointObservation{submitP}, wantUser: "user-p", interrupted: true},
+		{name: "filler, then a normal turn", transcript: answered + cancelled + filler + next("filler"), later: turnB, wantUser: "user-b", wantAnswer: "answer B"},
+		{name: "cancelled on a dead branch", transcript: answered + cancelled + next("assistant-0"), later: turnB, wantUser: "user-b", wantAnswer: "answer B"},
+		{name: "usage limit before a reply", transcript: answered + cancelled + synthetic(`"isApiErrorMessage":true,"error":"rate_limit",`, "You've hit your 5-hour limit · resets 7pm (Asia/Calcutta)"),
+			later: []domain.NativeCheckpointObservation{submitP}, wantUser: "user-p", interrupted: true},
+		{name: "local command after an answered turn", transcript: answered + localCommand, wantUser: "user-0", wantAnswer: "answer A"},
+		{name: "Stop still owed", transcript: answered + cancelled, later: []domain.NativeCheckpointObservation{submitP, {PromptID: "prompt-p"}},
+			wantError: "observed native turn not completed"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			evidence := checkpointEvidence(slices.Concat([]domain.NativeCheckpointObservation{
 				{Submission: true, PromptID: "prompt-0", SubmissionID: "submission-0", Text: "A"},
-				{PromptID: "prompt-0", Text: "answer A"}, submitP}, test.later)...)
+				{PromptID: "prompt-0", Text: "answer A"}}, test.later)...)
 			got, err := verifyCheckpointTranscript(context.Background(), strings.NewReader(test.transcript),
 				ports.NativeCheckpointRequest{ProviderConversationID: "native", Evidence: evidence})
 			if test.wantError != "" {
@@ -317,10 +325,8 @@ func TestNativeCheckpointSettlesPromptsCancelledBeforeAReply(t *testing.T) {
 				}
 				return
 			}
-			cancelledTail := test.wantUser == "user-p"
-			if err != nil || got.UserMessageID != test.wantUser || got.Interrupted != cancelledTail ||
-				(!cancelledTail && got.AssistantText != "answer B") {
-				t.Fatalf("boundary=%+v error=%v, want user %s", got, err, test.wantUser)
+			if err != nil || got.UserMessageID != test.wantUser || got.AssistantText != test.wantAnswer || got.Interrupted != test.interrupted {
+				t.Fatalf("boundary=%+v error=%v, want user %s answer %q interrupted=%v", got, err, test.wantUser, test.wantAnswer, test.interrupted)
 			}
 		})
 	}
