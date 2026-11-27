@@ -1,6 +1,6 @@
 # Mobile: every pull request a session raised, from its PR chip
 
-Status: design approved in conversation, mockup pending review
+Status: design and mockup approved in conversation
 Stacks on: #8944 (`feat/mobile-permission-picker`), itself on `fix/mobile-effort-slider`
 
 ## Intent
@@ -68,6 +68,10 @@ state, and let the user pick any of them and land on its review page.
   closed, purple if all are merged, green if one is still open, quiet for
   drafts (the rule from the Workers badge branch).
 - Several PRs, ⋯ menu → Pull requests: opens the same list instead of `/prs`.
+- One PR for both: the Workers board badge's `+N` toning (local commit
+  `359ded9b41` on `mobile-pr-pill-extra-tone`) is cherry-picked as the first
+  commit of this branch, and the session chip uses the same helper. The badge
+  fix ships with this stack, after #8944 and its base.
 
 ## Design
 
@@ -147,8 +151,10 @@ It gets the same chip and list, with `CLOUD_HOST_ID` routes.
   colour (mockup shows secondary; the icon carries the tone).
 - Haptics beyond the pick.
 
-## Open
+## Shared helper
 
-- The `+N` tone rule lives on the Workers badge branch
-  (`mobile-pr-pill-extra-tone`, not yet a PR). This stack needs the same
-  helper; see the hand-off question.
+`workerRowPullRequest` (from the badge commit) already computes the lead PR,
+`more`, `moreTone` and `moreLifecycles` in lead order. The session chip and the
+list reuse it rather than a second ordering: the chip reads the lead and
+`moreTone` from it, and `sessionPullRequests` returns the same lead-ordered
+list the badge counts.
