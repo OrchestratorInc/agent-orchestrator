@@ -1,7 +1,6 @@
 package approval
 
 import (
-	"bufio"
 	"bytes"
 	"context"
 	"crypto/rand"
@@ -556,6 +555,9 @@ func auditBoundary(f *os.File) (int64, error) {
 
 // Audit returns up to limit entries, newest first.
 func (g *Gate) Audit(limit int) ([]AuditEntry, error) {
+	if limit <= 0 {
+		return []AuditEntry{}, nil
+	}
 	g.auditMu.Lock()
 	defer g.auditMu.Unlock()
 	f, err := os.Open(g.auditPath())
@@ -566,21 +568,37 @@ func (g *Gate) Audit(limit int) ([]AuditEntry, error) {
 		return nil, err
 	}
 	defer func() { _ = f.Close() }()
-	var all []AuditEntry
-	scanner := bufio.NewScanner(f)
-	scanner.Buffer(make([]byte, 64*1024), 1024*1024)
-	for scanner.Scan() {
-		var entry AuditEntry
-		if json.Unmarshal(scanner.Bytes(), &entry) == nil {
-			all = append(all, entry)
-		}
-	}
-	if err := scanner.Err(); err != nil {
+	info, err := f.Stat()
+	if err != nil {
 		return nil, err
 	}
-	out := make([]AuditEntry, 0, min(len(all), max(limit, 0)))
-	for i := len(all) - 1; i >= 0 && len(out) < limit; i-- {
-		out = append(out, all[i])
+	// Read back from the end only as far as the newest limit entries, so a
+	// long log costs no more than a short one (and the lock that audit
+	// writes wait on is held briefly). Lines that do not parse are skipped.
+	const chunk = 64 * 1024
+	out := make([]AuditEntry, 0, limit)
+	var carry []byte
+	for end := info.Size(); end > 0 && len(out) < limit; {
+		start := max(end-chunk, 0)
+		buf := make([]byte, end-start, int(end-start)+len(carry))
+		if _, err := f.ReadAt(buf, start); err != nil {
+			return nil, err
+		}
+		buf = append(buf, carry...)
+		lines := bytes.Split(buf, []byte("\n"))
+		// The first piece may be the end of a line that begins earlier.
+		carry = lines[0]
+		if start == 0 {
+			carry = nil
+			lines = append([][]byte{nil}, lines...)
+		}
+		for i := len(lines) - 1; i >= 1 && len(out) < limit; i-- {
+			var entry AuditEntry
+			if len(lines[i]) > 0 && json.Unmarshal(lines[i], &entry) == nil {
+				out = append(out, entry)
+			}
+		}
+		end = start
 	}
 	return out, nil
 }

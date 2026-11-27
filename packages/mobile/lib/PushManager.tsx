@@ -20,9 +20,11 @@ import { notificationTarget } from "./notificationView";
 import { announcePairedDevice, configurePushHandler, ensureAndroidChannel, ensureApprovalCategory, onManualPushRegistration, registerForPush, retryPendingUnpairs } from "./push";
 import { useApp } from "./store";
 import { useCloud } from "./cloud/CloudProvider";
+import { CLOUD_HOST_ID } from "./cloud/mapping";
 import { cloudPushTarget, foreignCloudPushOrganization } from "./cloud/pushTarget";
 import { MOBILE_EVENTS } from "./telemetry/events";
 import { mobileTelemetry } from "./telemetry/runtime";
+import { reportOpenedBy, sessionTargetInPath } from "./telemetry/uiUsageRegistry";
 
 /** How long a Deny from the notification waits for its machine or organization. */
 const DENY_WAIT_MS = 2 * 60_000;
@@ -200,6 +202,8 @@ export function PushManager(): null {
 				return;
 			}
 			if (org && data.notificationId && (!data.orgId || data.orgId === org.id)) void client.markNotificationRead(org.id, data.notificationId).catch(() => {});
+			// Only a tap that opens a session credits the notification for it.
+			if (data.sessionId) reportOpenedBy("notification", { sessionId: data.sessionId, hostId: CLOUD_HOST_ID });
 			router.navigate(cloudTarget);
 			return;
 		}
@@ -223,6 +227,8 @@ export function PushManager(): null {
 			markNotificationRead(source.config, data.notificationId).catch(() => {});
 		}
 		// A review opens as a page even when a sheet is up when the tap arrives.
+		// The route it opens names the session and machine the session screen keys by.
+		if (target === "session") reportOpenedBy("notification", sessionTargetInPath(destination));
 		if (target === "review") openPage(destination as Href);
 		else router.navigate(destination);
 	}

@@ -1915,6 +1915,7 @@ export function useIndependentSideChats(
 											<input
 												autoFocus
 												aria-label={t("sideChat.renameSideChat")}
+												data-field="inline"
 												className={terminalTabRenameInputClassName}
 												maxLength={MAX_SESSION_DISPLAY_NAME_LEN}
 												onFocus={(event) => event.currentTarget.select()}
@@ -2050,6 +2051,7 @@ export function useIndependentSideChats(
 					<label key={key} className="block">
 						{key}
 						<input
+							data-field="compact"
 							className="ml-2 rounded border border-border bg-background p-1"
 							value={inputAnswers[activeId]?.[requestId]?.[key] ?? ""}
 							onChange={(event) => {
@@ -2257,6 +2259,7 @@ export function useIndependentSideChats(
 												<p className="mb-1 text-muted-foreground">{t("sideChat.editingQueuedMessage")}</p>
 												<textarea
 													aria-label={t("sideChat.editQueuedSideQuestion")}
+													data-field="textarea"
 													className="w-full rounded border border-border bg-background p-2"
 													value={editingText}
 													onChange={(event) => { const text = event.target.value; if (operationCurrent(activeId)()) setQueuedEditors(current => ({ ...current, [activeId]: { turnId: editingTurnId!, text } })); }}

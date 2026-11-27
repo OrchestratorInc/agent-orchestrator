@@ -329,9 +329,9 @@ export function CloudSessionScreen({ sessionId }: { sessionId: string }) {
 			headerTitle: () => (
 				<ConversationTitle
 					title={title || "Cloud session"}
-					// The project and the agent, as a local chat's bar reads; the state
-					// is the dot's alone (the sandbox's own steps are banners below).
-					subtitle={[standaloneAgent ? "Standalone" : project?.displayName ?? "Cloud", harness ? cloudAgentLabel(harness) : ""].filter(Boolean).join(" · ")}
+					// The project, as a local chat's bar reads; the logo names the agent
+					// and the dot its state (the sandbox's own steps are banners below).
+					subtitle={standaloneAgent ? "Standalone" : project?.displayName ?? "Cloud"}
 					harness={harness || undefined}
 					state={headerState}
 				/>

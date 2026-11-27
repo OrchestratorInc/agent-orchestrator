@@ -110,6 +110,13 @@ func (s *Service) preflight(ctx context.Context, sessionID domain.SessionID, rt 
 	if !verdict.NeedsApproval {
 		return args, nil
 	}
+	if described.binding == nil {
+		// Without a binding the runtime cannot confirm, at dispatch, that the
+		// action still lands on what the user would approve, so an approval
+		// could never run: refuse before showing a prompt nobody can use.
+		return nil, apierr.Conflict("BROWSER_APPROVAL_UNBOUND",
+			"This action needs the user's approval, but this browser could not identify the page it targets, so it was not run and the user was not asked. Update the Orchestrator browser extension, or take a new snapshot and try again.", nil)
+	}
 	// The element's picture is read only now that the user will be asked:
 	// capturing can bring a tab forward and wait for a frame. It is shown
 	// only if it is of the same target the facts were read from.
@@ -137,12 +144,6 @@ func (s *Service) preflight(ctx context.Context, sessionID domain.SessionID, rt 
 	}
 	if !outcome.Allowed() {
 		return nil, approvalRefusal(outcome.Decision, verdict.Summary, s.approvalTimeout)
-	}
-	if described.binding == nil {
-		// Without a binding the runtime cannot confirm, at dispatch, that the
-		// action still lands on what the user approved.
-		return nil, apierr.Conflict("BROWSER_APPROVAL_UNBOUND",
-			"The user approved this action, but this browser could not identify the page it targets, so it was not run. Update the Orchestrator browser extension, or take a new snapshot and try again.", nil)
 	}
 	bound := make(map[string]interface{}, len(args)+1)
 	for key, value := range args {
@@ -175,11 +176,15 @@ func (s *Service) preflightDialog(ctx context.Context, sessionID domain.SessionI
 	// An unread dialog has no type, so it is never taken for an alert: ask.
 	dialog, read := s.readDialog(ctx, sessionID, rt)
 	verdict := approval.ClassifyDialog(dialog.kind, dialog.message, mode)
+	if host := approval.Host(dialog.url); host != "" && verdict.NeedsApproval {
+		verdict.Summary += " on " + host
+	}
 	if !verdict.NeedsApproval {
 		return args, nil
 	}
 	outcome, err := s.approvals.Request(ctx, approval.Request{
 		Kind: approval.KindBrowserAction, SessionID: string(sessionID),
+		Site: approval.Site(dialog.url), URL: dialog.url, PageTitle: dialog.title,
 		Action: verdict.Summary, Category: verdict.Category, Reason: verdict.Reason, Timeout: s.approvalTimeout,
 	})
 	if err != nil {
@@ -210,6 +215,8 @@ func (s *Service) preflightDialog(ctx context.Context, sessionID domain.SessionI
 // openDialog is what a runtime reported about a page's open dialog.
 type openDialog struct {
 	kind, message, tab string
+	// url and title are the dialog's page, for the prompt and the audit.
+	url, title string
 }
 
 // readDialog returns the open dialog's type, message and tab; read is false
@@ -229,6 +236,8 @@ func (s *Service) readDialog(ctx context.Context, sessionID domain.SessionID, rt
 	var dialog openDialog
 	if target, ok := status["target"].(map[string]interface{}); ok {
 		dialog.tab, _ = target["tabId"].(string)
+		dialog.url, _ = target["url"].(string)
+		dialog.title, _ = target["title"].(string)
 	}
 	if nested, ok := status["dialog"].(map[string]interface{}); ok {
 		status = nested
