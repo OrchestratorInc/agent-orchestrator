@@ -441,8 +441,12 @@ func TestCleanupReconcilesUnsettledSwitchBeforeClearingIntent(t *testing.T) {
 				t.Fatalf("after recovery: current=%q recorded=%q", current, f.releases.current[domain.HarnessCodex])
 			}
 			launcher := filepath.Join(f.s.ManagedBinDir(), "codex")
+			want, err := filepath.EvalSymlinks(filepath.Join(targetDir, "versions", "v2", "bin", "codex"))
+			if err != nil {
+				t.Fatal(err)
+			}
 			binary, err := filepath.EvalSymlinks(launcher)
-			if want := filepath.Join(targetDir, "versions", "v2", "bin", "codex"); err != nil || binary != want {
+			if err != nil || binary != want {
 				t.Fatalf("resolved launcher = %q, %v; want %q", binary, err, want)
 			}
 			if version, err := f.s.probeManagedVersion(context.Background(), TargetCodex, "codex", launcher); err != nil || version != "1.2.0" {
