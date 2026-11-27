@@ -107,7 +107,7 @@ export function ProviderMarkWithAccount({ provider, accountProvider, name, email
 			<span
 				aria-hidden="true"
 				className={cn(
-					"absolute -right-1.5 -bottom-px inline-flex size-[10px] items-center justify-center rounded-full text-[length:6.5px] font-bold leading-none shadow-[0_0_0_1.5px_var(--composer-bg,var(--color-bg-tertiary))]",
+					"absolute -right-1.5 -bottom-px inline-flex size-[10px] items-center justify-center rounded-full text-[length:6.5px] font-bold leading-none",
 					color ? `${COLOR_CLASS[color]} text-(color:--account-badge-foreground)` : "bg-foreground/45 text-background",
 				)}
 			>
