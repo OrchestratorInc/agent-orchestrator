@@ -73,7 +73,13 @@ and reads the consent policy itself. An import failure can therefore report even
 when the renderer never starts. Early reports use the same error codes and message rules, with a standard
 exception type and validated asset locations. Once the renderer starts,
 the same listeners hand off to its normal reporter. Early captures are not
-replayed through the later renderer boundaries.
+replayed through the later renderer boundaries. Chromium's ResizeObserver loop
+notice (`ResizeObserver loop completed with undelivered notifications` or
+`ResizeObserver loop limit exceeded`, raised with no error object) is a browser
+warning, not a failure, and is never reported. Neither is a bare `Script error.`
+with no error object and no file name, which is how the browser hides a
+cross-origin script's error; one with a file name or an error object still
+reports.
 Router error boundaries and query/mutation cache callbacks also report unexpected
 client failures. The sender excludes query keys, mutation inputs and route
 parameters. API failures retain a local ownership marker through message wrapping,
@@ -151,7 +157,11 @@ sampled by install rather than by event:
   of its processes, and the rest send none. An install whose identifier cannot
   be read is outside the sample.
 - Fatal events send from every install: Electron main uncaught exceptions,
-  Electron process crashes (`process_exit`), and daemon panics. Renderer errors,
+  Electron process crashes (`process_exit`), and daemon panics. A process
+  crash is titled, tagged and grouped by its `reason` (`abnormal-exit`,
+  `crashed`, `oom`, `launch-failed`, `integrity-failure`) and its `process`
+  type: `renderer`, `gpu`, `utility`, `zygote`, `sandbox_helper`,
+  `pepper_plugin`, `pepper_plugin_broker`, or `unknown` for any other name. Renderer errors,
   including unhandled window errors and rejections, are non-fatal and sampled.
   Failed onboarding installs and sign-ins also send from every install (see
   "Onboarding errors in Sentry"): they are rare and block a new user's first
@@ -195,6 +205,16 @@ Orchestrator.inc sends structured events in a few broad categories:
   (`duration_ms`) and the names and line numbers of the four innermost code
   functions that held it (`caller`). It never includes file paths, database
   contents, or message text
+- Daemon exits: when the desktop app's daemon stops on its own,
+  `ao.daemon.failed` sends the failure `code`, the numeric `exit_code` or
+  `signal`, and `exit_reason`, one of `already_running`, `data_dir_locked`,
+  `store_open_failed`, `run_file_unreadable`, `working_dir_failed`,
+  `port_in_use`, `disk_full`, `permission_denied`, `panic`, `crashed`, or
+  `unknown`. `crashed` is a Windows native crash, read from its NTSTATUS exit
+  code (for example `3221225477`, access violation). The reason is read from
+  the exit code and the daemon's last output line on the device; the output
+  itself is never sent. The handled Sentry report for the exit carries the
+  same code and reason as its `detail` (`code:3221225477:crashed`)
 - Daemon startup time: once the daemon's API starts listening,
   `ao.daemon.ready` sends `startup_ms`, the milliseconds from the daemon
   process starting, split into back-to-back steps that add up to it:
