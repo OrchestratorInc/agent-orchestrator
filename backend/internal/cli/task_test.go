@@ -769,7 +769,9 @@ func TestTaskWaitTimeoutWhileProvisioningDoesNotBlameSignIn(t *testing.T) {
 	}
 }
 
-func TestTaskWaitTerminalWorkThenPromptIsDone(t *testing.T) {
+// Work then the prompt is reported as started, never done: the work may predate
+// the brief, and a terminal session cannot confirm completion.
+func TestTaskWaitTerminalWorkThenPromptIsStartedNotDone(t *testing.T) {
 	d := newTaskDaemon(t)
 	deps := fakeClockDeps()
 	start := deps.Now()
@@ -785,7 +787,7 @@ func TestTaskWaitTerminalWorkThenPromptIsDone(t *testing.T) {
 	if err != nil {
 		t.Fatalf("exit = %d: %v", ExitCode(err), err)
 	}
-	if res := decodeTaskResult(t, out); res["status"] != "done" {
+	if res := decodeTaskResult(t, out); res["status"] != "running" || !strings.Contains(res["reason"].(string), "does not report whether this task is done") {
 		t.Fatalf("result = %v", res)
 	}
 }
@@ -870,7 +872,7 @@ func TestTaskStartWaitKeepsTheTerminalWorkSeenAtStart(t *testing.T) {
 	if err != nil {
 		t.Fatalf("exit = %d: %v\n%s", ExitCode(err), err, out)
 	}
-	if res := decodeTaskResult(t, out); res["status"] != "done" {
+	if res := decodeTaskResult(t, out); res["status"] != "running" || !strings.Contains(res["reason"].(string), "does not report whether this task is done") {
 		t.Fatalf("result = %v", res)
 	}
 }
@@ -1311,5 +1313,74 @@ func TestTaskWaitTransientVersusPermanentReadFailures(t *testing.T) {
 	}
 	if res := decodeTaskResult(t, out); res["reason"] != "session repo-9 not found" {
 		t.Fatalf("permanent: result = %v", res)
+	}
+}
+
+// Exit 4 needs a successful final read that still says queued; a failed final
+// read is a status-read failure for the known task id.
+func TestTaskWaitFailedFinalReadIsNotExitFour(t *testing.T) {
+	d := newTaskDaemon(t)
+	deps := fakeClockDeps()
+	start := deps.Now()
+	d.set("GET /api/v1/sessions/repo-orchestrator", 200, `{"session":{"id":"repo-orchestrator","harness":"claude-code","mode":"chat","provisionState":"ready","activity":{"state":"active"}}}`)
+	d.setFunc("GET /api/v1/sessions/repo-orchestrator/conversation", func() (int, string) {
+		if deps.Now().Sub(start) >= 5*time.Second {
+			return 503, `{"error":"unavailable","code":"TEMPORARY","message":"try again"}`
+		}
+		return 200, `{"turns":[{"id":"t1","state":"running"},{"id":"t2","state":"queued"}]}`
+	})
+
+	out, _, err := executeCLI(t, deps, "task", "wait", "repo-orchestrator:t2", "--timeout", "5s", "--json")
+	if got := ExitCode(err); got != 1 {
+		t.Fatalf("exit = %d (%v), want 1", got, err)
+	}
+	res := decodeTaskResult(t, out)
+	if res["status"] != "failed" || res["taskId"] != "repo-orchestrator:t2" || !strings.Contains(res["reason"].(string), "final status read failed") ||
+		res["fix"] != "check `ao task status repo-orchestrator:t2` before starting the task again, so it does not run twice" {
+		t.Fatalf("result = %v", res)
+	}
+}
+
+// A cancel during the last sleep is an interruption, not a timeout.
+func TestTaskWaitCancelledDuringSleepIsInterrupted(t *testing.T) {
+	d := newTaskDaemon(t)
+	deps := fakeClockDeps()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	sleep := deps.Sleep
+	deps.Sleep = func(dur time.Duration) {
+		sleep(dur)
+		cancel() // the caller gives up while the wait sleeps
+	}
+	d.set("GET /api/v1/sessions/repo-1", 200, `{"session":{"id":"repo-1","harness":"claude-code","mode":"chat","provisionState":"provisioning"}}`)
+
+	c := &commandContext{deps: deps.withDefaults()}
+	res := c.waitTask(ctx, taskResult{TaskID: "repo-1"}, time.Second)
+	if res.Status != taskStatusFailed || !strings.Contains(res.Reason, "interrupted while waiting") {
+		t.Fatalf("result = %+v; want an interrupted wait, not a timeout", res)
+	}
+}
+
+// After a lost reply, an API error on the retry leaves the outcome unknown,
+// so the result keeps the recovery handle instead of a plain failure.
+func TestTaskStartLostReplyThenAPIErrorKeepsTheRecoveryHandle(t *testing.T) {
+	d := newTaskDaemon(t)
+	calls := 0
+	d.setFunc("POST /api/v1/orchestrators/delegate", func() (int, string) {
+		calls++
+		if calls == 1 {
+			return -1, "" // reply lost
+		}
+		return 409, `{"error":"conflict","code":"CLIENT_REQUEST_INCOMPLETE","message":"request still being recorded"}`
+	})
+
+	out, _, err := executeCLI(t, fakeClockDeps(), "task", "start", "fix calc", "--project", "repo", "--worker", "--json")
+	if got := ExitCode(err); got != 1 {
+		t.Fatalf("exit = %d (%v), want 1", got, err)
+	}
+	res := decodeTaskResult(t, out)
+	if !strings.Contains(res["reason"].(string), "could not confirm that the worker started (client request id ao-task-") ||
+		res["fix"] != "check `ao session ls` before starting the task again, so it does not run twice" {
+		t.Fatalf("result = %v", res)
 	}
 }

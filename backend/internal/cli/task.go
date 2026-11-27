@@ -341,13 +341,20 @@ func (c *commandContext) createTask(ctx context.Context, project projectDetails,
 		// The desktop's new-task route: one worker, named from the brief.
 		err := c.postSetupJSON(ctx, "orchestrators/delegate", req, &out)
 		var apiErr apiResponseError
-		if err != nil && !errors.As(err, &apiErr) && ctx.Err() == nil {
+		lostReply := err != nil && !errors.As(err, &apiErr)
+		if lostReply && ctx.Err() == nil {
 			// The daemon may have started the worker before the reply was
 			// lost. The same client request id returns that worker instead of
 			// starting a second one.
 			err = c.postSetupJSON(ctx, "orchestrators/delegate", req, &out)
 		}
 		switch {
+		case err != nil && lostReply:
+			// After a lost reply, even an API error on the retry (such as a
+			// request record not yet committed) leaves it unknown whether the
+			// worker started, so keep the recovery handle.
+			return failedTask("", nil, fmt.Sprintf("could not confirm that the worker started (client request id %s): %s", req.ClientRequestID, err.Error()),
+				"check `ao session ls` before starting the task again, so it does not run twice")
 		case errors.As(err, &apiErr):
 			return c.taskAPIFailure(ctx, nil, workerAgent, "start worker", err)
 		case err != nil:
@@ -403,7 +410,8 @@ func (c *commandContext) createTask(ctx context.Context, project projectDetails,
 	body := conversationMessageAPIRequest{Text: message, ClientMessageID: clientMessageID}
 	sendErr := c.postJSON(ctx, messagePath, body, &sent)
 	var apiErr apiResponseError
-	if sendErr != nil && !errors.As(sendErr, &apiErr) && ctx.Err() == nil {
+	lostReply := sendErr != nil && !errors.As(sendErr, &apiErr)
+	if lostReply && ctx.Err() == nil {
 		// The daemon may have accepted the message before the reply was lost.
 		// The same client message id makes this retry idempotent: it returns
 		// the turn the first attempt created instead of starting a second one.
@@ -421,7 +429,7 @@ func (c *commandContext) createTask(ctx context.Context, project projectDetails,
 		return c.createdTaskStatus(ctx, taskID{session: orchestratorID})
 	}
 	switch {
-	case errors.As(sendErr, &apiErr):
+	case errors.As(sendErr, &apiErr) && !lostReply:
 		return c.taskAPIFailure(ctx, sessions, sess.Harness, "send task to orchestrator", sendErr)
 	case sendErr != nil:
 		// No task id: a bare session id would name the orchestrator's other turns.
@@ -1051,6 +1059,10 @@ func (c *commandContext) waitTask(ctx context.Context, res taskResult, timeout t
 	var runningTurn string
 	var runningSince time.Time
 	for {
+		// A cancel during the last sleep is an interruption, not a timeout.
+		if err := ctx.Err(); err != nil {
+			return failedTask(id.String(), last.SessionIDs, "interrupted while waiting: "+err.Error(), "")
+		}
 		remaining := deadline.Sub(c.deps.Now())
 		if remaining <= 0 {
 			break
@@ -1087,9 +1099,12 @@ func (c *commandContext) waitTask(ctx context.Context, res taskResult, timeout t
 			sawTerminalWork = true
 		}
 		if obs.phase == taskPhaseTerminalPrompt && sawTerminalWork {
-			// This wait saw the terminal agent working and then return to its
-			// prompt, so it took the task and finished it.
-			last.Status, last.Reason = taskStatusDone, "the agent worked on the task and is back at its prompt (terminal session)"
+			// The agent worked and is back at its prompt. That work may predate
+			// the brief, so this is never "done": report it as started, and say
+			// that a terminal session cannot confirm completion.
+			last.Status = taskStatusRunning
+			last.Reason = "the terminal agent worked and is back at its prompt; a terminal session does not report whether this task is done"
+			last.Fix = fmt.Sprintf("check the session with `ao session get %s` or open it in the Orchestrator app", id.session)
 			return last
 		}
 		switch last.Status {
@@ -1143,12 +1158,16 @@ func (c *commandContext) waitTask(ctx context.Context, res taskResult, timeout t
 			}
 		}
 	}
+	if last.Status == taskStatusQueued && finalReadFailed {
+		// Exit 4 promises the task will run, which only a successful read can
+		// back: it may have been cancelled since the last queued reading.
+		return failedTask(id.String(), last.SessionIDs,
+			fmt.Sprintf("timed out after %s; the task was queued at the last check, but the final status read failed, so its state is unknown", timeout),
+			fmt.Sprintf("check `ao task status %s` before starting the task again, so it does not run twice", id))
+	}
 	if last.Status == taskStatusQueued {
 		last.waitTimedOut = true
 		last.Reason = fmt.Sprintf("timed out after %s while still queued behind the agent's current turn; the task is accepted and will run, so do not start it again", timeout)
-		if finalReadFailed {
-			last.Reason = fmt.Sprintf("timed out after %s; the task was queued behind the agent's current turn at the last check, and a final check could not be read; check `ao task status %s` before starting it again", timeout, id)
-		}
 		last.Fix = fmt.Sprintf("wait longer with `ao task wait %s`, or check `ao session get %s`", id, id.session)
 		return last
 	}

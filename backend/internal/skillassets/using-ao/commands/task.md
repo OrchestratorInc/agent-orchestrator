@@ -86,8 +86,9 @@ stays `running`; check that worker with `ao session get <id>`.
 ## Reading the result
 
 - `fix` is set when the cause is known. For `needs_input` it names the session
-  whose request must be answered, which for an orchestrator task is the worker,
-  not the orchestrator. When the agent is not signed in, it is
+  that owns the pending request: the orchestrator when its own turn asks, or
+  the worker when a tracked worker asks. Answer in the session `fix` names;
+  don't assume it is a worker. When the agent is not signed in, it is
   the agent's own login command, for example ``run `claude auth login`, then
   retry``. Show it to the user; signing in is theirs to do.
 - `taskId` is the worker's session id, or `<orchestrator-session>:<turn>` for a
@@ -99,8 +100,10 @@ stays `running`; check that worker with `ao session get <id>`.
   again.
 - `sessionIds` lists the session that runs the task and any workers the
   orchestrator started for it; their state is part of `status`.
-- A terminal session reports no turns. `ao task wait` reports `done` only if it
-  saw the agent working and then back at its prompt.
+- A terminal session reports no turns and is never `done`. If `ao task wait`
+  sees the agent working and then back at its prompt, it reports `running`
+  (started), because that work may predate the task; check the session itself
+  with `ao session get <id>` to see what it did.
 - If the reason says delivery could not be confirmed, check `ao session ls` or
   `ao session history <id>` before starting the task again, so it does not run
   twice.
