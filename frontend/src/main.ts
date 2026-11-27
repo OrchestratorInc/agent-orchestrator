@@ -4889,46 +4889,6 @@ app.whenReady().then(async () => {
 		console.error("failed to write app-state marker:", err);
 	}
 
-	// A pre-fix bundle cannot be patched retroactively. After the maintained
-	// /Applications build runs, offer to retire older AO copies that can still
-	// overwrite it if Finder, Spotlight, or an old Dock tile launches them.
-	try {
-		const { formatStaleAppCopies, retireStaleMacAppCopies } = await import("./main/stale-app-copies");
-		await retireStaleMacAppCopies({
-			platform: process.platform,
-			isPackaged: app.isPackaged,
-			runningPath: resolveBundlePath(),
-			runningVersion: app.getVersion(),
-			confirm: async (copies) => {
-				const result = await dialog.showMessageBox({
-					type: "warning",
-					buttons: ["Move old copies to Trash", "Not now"],
-					defaultId: 0,
-					cancelId: 1,
-					title: "Remove old Orchestrator copies",
-					message: `Old copies of ${APP_DISPLAY_NAME} can replace your updated app.`,
-					detail: `${formatStaleAppCopies(copies)}\n\nMove these copies to Trash to prevent another downgrade. Your Orchestrator projects and sessions will not be removed.`,
-					noLink: true,
-				});
-				return result.response === 0;
-			},
-			trashItem: (candidate) => shell.trashItem(candidate),
-			reportFailures: async (paths) => {
-				await dialog.showMessageBox({
-					type: "warning",
-					buttons: ["OK"],
-					defaultId: 0,
-					title: "Some old copies could not be removed",
-					message: "Move these copies to Trash manually before launching Orchestrator again.",
-					detail: paths.join("\n"),
-					noLink: true,
-				});
-			},
-		});
-	} catch (err) {
-		console.warn("stale AO copy cleanup failed:", err);
-	}
-
 	const keybindingRunFile = runFilePath();
 	if (keybindingRunFile) {
 		keybindingOverrides = await readKeybindingOverrides(path.dirname(keybindingRunFile));
@@ -5012,6 +4972,55 @@ app.whenReady().then(async () => {
 					},
 				}))
 			.catch((err) => console.warn("desktop version floor check failed:", err));
+	}
+	// A pre-fix bundle cannot be patched retroactively. After the maintained
+	// /Applications build runs, offer to retire older AO copies that can still
+	// overwrite it if Finder, Spotlight, or an old Dock tile launches them.
+	// Not awaited, and only once the window exists: looking in Downloads and
+	// Desktop can raise macOS's folder access prompt, and the trash dialog waits
+	// for an answer, so either would hold the window. A first run is skipped: no
+	// earlier install means no old copy to retire, and a new install should not
+	// be asked for access to those folders.
+	if (!firstRunAtLaunch) {
+		void import("./main/stale-app-copies")
+			.then(({ formatStaleAppCopies, retireStaleMacAppCopies }) => {
+				const showMessage = (options: Electron.MessageBoxOptions) => {
+					const parent = mainWindow;
+					return parent && !parent.isDestroyed() ? dialog.showMessageBox(parent, options) : dialog.showMessageBox(options);
+				};
+				return retireStaleMacAppCopies({
+					platform: process.platform,
+					isPackaged: app.isPackaged,
+					runningPath: resolveBundlePath(),
+					runningVersion: app.getVersion(),
+					confirm: async (copies) => {
+						const result = await showMessage({
+							type: "warning",
+							buttons: ["Move old copies to Trash", "Not now"],
+							defaultId: 0,
+							cancelId: 1,
+							title: "Remove old Orchestrator copies",
+							message: `Old copies of ${APP_DISPLAY_NAME} can replace your updated app.`,
+							detail: `${formatStaleAppCopies(copies)}\n\nMove these copies to Trash to prevent another downgrade. Your Orchestrator projects and sessions will not be removed.`,
+							noLink: true,
+						});
+						return result.response === 0;
+					},
+					trashItem: (candidate) => shell.trashItem(candidate),
+					reportFailures: async (paths) => {
+						await showMessage({
+							type: "warning",
+							buttons: ["OK"],
+							defaultId: 0,
+							title: "Some old copies could not be removed",
+							message: "Move these copies to Trash manually before launching Orchestrator again.",
+							detail: paths.join("\n"),
+							noLink: true,
+						});
+					},
+				});
+			})
+			.catch((err) => console.warn("stale AO copy cleanup failed:", err));
 	}
 	if (!daemonStartsWithWindow) void startDaemon();
 	initAutoUpdates();
