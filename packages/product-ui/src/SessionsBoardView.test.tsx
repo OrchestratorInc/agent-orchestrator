@@ -1,6 +1,7 @@
 import { fireEvent, render, screen, within } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import {
+	limitBoardPullRequests,
 	SessionCardView,
 	SessionsBoardGridView,
 	type BoardPullRequestLabels,
@@ -486,11 +487,14 @@ describe("SessionsBoardView", () => {
 			/>,
 		);
 
-		// Ten open PRs share one state, so they share one row. The row has to wrap
-		// them; the alternative it must never fall back to is squeezing them into
-		// a single line, where the numbers paint over each other and past the card.
+		// Ten open PRs share one state, so they share one row. The card caps
+		// them initially and wraps the full row once expanded; it must never
+		// squeeze entries into a single line past the card edge.
 		const row = screen.getByRole("link", { name: "PR #5146 open" }).parentElement;
 		expect(row).toHaveClass("flex", "flex-wrap");
+
+		expect(screen.getAllByRole("link", { name: /^PR #\d+ open$/ })).toHaveLength(6);
+		fireEvent.click(screen.getByTestId("session-pr-overflow-toggle"));
 
 		const links = screen.getAllByRole("link", { name: /^PR #\d+ open$/ });
 		expect(links).toHaveLength(10);
@@ -864,5 +868,136 @@ describe("SessionsBoardView", () => {
 		const status = container.querySelector('[data-kanban-column="ready"]');
 		expect(status).toHaveClass("text-status-merged");
 		expect(status).not.toHaveClass("text-status-ready");
+	});
+
+	it("caps merged PRs to the most recent entries and expands on demand without opening the card", () => {
+		const onOpen = vi.fn();
+		const mergedNumbers = [8853, 8947, 9001, 9120, 9125, 9137, 9155, 9157, 9162, 9202, 9218, 9220];
+		const prs: BoardPullRequestPresentation[] = [
+			{ number: 9203, state: "draft", url: "https://example.com/pull/9203" },
+			...mergedNumbers.map((number) => ({
+				number,
+				state: "merged" as const,
+				url: `https://example.com/pull/${number}`,
+			})),
+		];
+		render(
+			<SessionCardView
+				externalLink={ExternalLink}
+				labels={{
+					formatTime: () => "1m ago",
+					intakeIssue: (id) => `Issue ${id}`,
+					pr: progressLabels,
+					updatedAt: (timestamp) => `Updated ${timestamp}`,
+				}}
+				onOpen={onOpen}
+				prs={prs}
+				renderAvatar={(provider) => <span role="img" aria-label={provider}>C</span>}
+				session={{ ...baseSession, status: "terminated", isTerminated: true }}
+			/>,
+		);
+
+		expect(screen.getByRole("link", { name: "PR #9203 draft" })).toBeInTheDocument();
+		expect(screen.getByRole("link", { name: "PR #9202 merged" })).toBeInTheDocument();
+		expect(screen.getByRole("link", { name: "PR #9218 merged" })).toBeInTheDocument();
+		expect(screen.getByRole("link", { name: "PR #9220 merged" })).toBeInTheDocument();
+		expect(screen.queryByRole("link", { name: "PR #8853 merged" })).not.toBeInTheDocument();
+		expect(screen.getByTestId("session-pr-progress")).toHaveTextContent("12 of 13 PRs merged");
+
+		const toggle = screen.getByTestId("session-pr-overflow-toggle");
+		expect(toggle).toHaveTextContent("+9 more");
+		expect(toggle).toHaveAttribute("aria-expanded", "false");
+
+		fireEvent.click(toggle);
+		expect(onOpen).not.toHaveBeenCalled();
+		expect(toggle).toHaveTextContent("Show less");
+		expect(toggle).toHaveAttribute("aria-expanded", "true");
+		expect(screen.getByRole("link", { name: "PR #8853 merged" })).toBeInTheDocument();
+
+		fireEvent.click(toggle);
+		expect(onOpen).not.toHaveBeenCalled();
+		expect(toggle).toHaveTextContent("+9 more");
+		expect(screen.queryByRole("link", { name: "PR #8853 merged" })).not.toBeInTheDocument();
+	});
+
+	it("caps total PRs while prioritizing open and draft PRs over merged ones", () => {
+		const openNumbers = [101, 102, 103, 104, 105, 106, 107];
+		const prs: BoardPullRequestPresentation[] = [
+			...openNumbers.map((number) => ({
+				number,
+				state: "open" as const,
+				url: `https://example.com/pull/${number}`,
+			})),
+			{ number: 90, state: "merged", url: "https://example.com/pull/90" },
+			{ number: 91, state: "merged", url: "https://example.com/pull/91" },
+		];
+		render(
+			<SessionCardView
+				externalLink={ExternalLink}
+				labels={{
+					formatTime: () => "1m ago",
+					intakeIssue: (id) => `Issue ${id}`,
+					pr: {
+						more: (count) => `+${count} extra`,
+						short: "PR",
+						showLess: "Collapse",
+						states: { closed: "closed", draft: "draft", merged: "merged", open: "open" },
+					},
+					updatedAt: (timestamp) => `Updated ${timestamp}`,
+				}}
+				prs={prs}
+				renderAvatar={(provider) => <span role="img" aria-label={provider}>C</span>}
+				session={baseSession}
+			/>,
+		);
+
+		for (const number of [101, 102, 103, 104, 105, 106]) {
+			expect(screen.getByRole("link", { name: `PR #${number} open` })).toBeInTheDocument();
+		}
+		expect(screen.queryByRole("link", { name: "PR #107 open" })).not.toBeInTheDocument();
+		expect(screen.queryByRole("link", { name: "PR #91 merged" })).not.toBeInTheDocument();
+
+		const toggle = screen.getByTestId("session-pr-overflow-toggle");
+		expect(toggle).toHaveTextContent("+3 extra");
+		fireEvent.click(toggle);
+		expect(toggle).toHaveTextContent("Collapse");
+		expect(screen.getByRole("link", { name: "PR #107 open" })).toBeInTheDocument();
+		expect(screen.getByRole("link", { name: "PR #91 merged" })).toBeInTheDocument();
+	});
+});
+
+describe("limitBoardPullRequests", () => {
+	const pr = (number: number, state: BoardPullRequestPresentation["state"]): BoardPullRequestPresentation => ({
+		number,
+		state,
+		url: `https://example.com/pull/${number}`,
+	});
+
+	it("returns all PRs unchanged when within both merged and total limits", () => {
+		const prs = [pr(1, "open"), pr(2, "draft"), pr(3, "merged"), pr(4, "merged"), pr(5, "closed")];
+		expect(limitBoardPullRequests(prs)).toEqual({ hiddenCount: 0, visible: prs });
+	});
+
+	it("caps merged and closed PRs to the latest 3 even when there are no open PRs", () => {
+		const prs = [1, 2, 3, 4, 5].map((n) => pr(n, "merged"));
+		const result = limitBoardPullRequests(prs);
+		expect(result.hiddenCount).toBe(2);
+		expect(result.visible.map((p) => p.number)).toEqual([3, 4, 5]);
+	});
+
+	it("shrinks settled PR slots when open PRs use most of the total budget", () => {
+		const prs = [
+			pr(1, "open"),
+			pr(2, "open"),
+			pr(3, "open"),
+			pr(4, "open"),
+			pr(5, "open"),
+			pr(10, "merged"),
+			pr(11, "merged"),
+			pr(12, "merged"),
+		];
+		const result = limitBoardPullRequests(prs);
+		expect(result.hiddenCount).toBe(2);
+		expect(result.visible.map((p) => p.number)).toEqual([1, 2, 3, 4, 5, 12]);
 	});
 });
