@@ -1609,6 +1609,11 @@ func (s *Store) AppendImportedUserMessage(
 			ConversationID: conversationID,
 			ProviderTurnID: providerTurnID,
 		})
+	if errors.Is(err, sql.ErrNoRows) {
+		// Nothing was written yet, so a caller may skip this message inside a
+		// shared projection transaction.
+		return fmt.Errorf("lookup imported provider turn %s: %w", providerTurnID, domain.ErrNoConversationTurn)
+	}
 	if err != nil {
 		return fmt.Errorf("lookup imported provider turn %s: %w", providerTurnID, err)
 	}
