@@ -13,6 +13,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"runtime"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -5224,14 +5225,33 @@ func (m *Manager) reconcileLivePass(ctx context.Context, recs []domain.SessionRe
 			}
 		}()
 	}
-	for _, rec := range live {
-		jobs <- rec
+	for pending := live; len(pending) > 0; {
+		next := m.nextStartupCheck(pending)
+		jobs <- pending[next]
+		pending = slices.Delete(pending, next, next+1)
 	}
 	close(jobs)
 	wg.Wait()
 	if len(retryChats) > 0 && ctx.Err() == nil {
 		go m.retryStartupChatChecks(ctx, retryChats)
 	}
+}
+
+type chatViews interface {
+	HasChatView(id domain.SessionID) bool
+}
+
+func (m *Manager) nextStartupCheck(pending []domain.SessionRecord) int {
+	views, ok := m.chat.(chatViews)
+	if !ok {
+		return 0
+	}
+	for i, rec := range pending {
+		if views.HasChatView(rec.ID) {
+			return i
+		}
+	}
+	return 0
 }
 
 // RestoreAll relaunches every terminated session that was saved by the last

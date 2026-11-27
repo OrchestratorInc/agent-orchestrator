@@ -101,7 +101,7 @@ func (s *Service) SetChatView(ctx context.Context, id domain.SessionID, viewID s
 	// Renewing a lease keeps the view open; only a newly opened view wakes a
 	// sleeping provider. A failed resume must not spawn another process on
 	// every heartbeat. Explicit sends and newly opened views can still retry.
-	if !newView || !s.hasChatView(id) {
+	if !newView || !s.HasChatView(id) {
 		return nil
 	}
 	if rec.ProvisionState.WithDefault() != domain.SessionProvisionReady ||
@@ -153,7 +153,8 @@ func (s *Service) setViewLease(id domain.SessionID, viewID string, active bool) 
 	return newView
 }
 
-func (s *Service) hasChatView(id domain.SessionID) bool {
+// HasChatView reports whether a renderer has the session's chat open.
+func (s *Service) HasChatView(id domain.SessionID) bool {
 	s.viewMu.Lock()
 	defer s.viewMu.Unlock()
 	views := s.liveViewLeasesLocked(id)
@@ -227,7 +228,7 @@ func (o hibernateOptions) eligible(s *Service, rec domain.SessionRecord) bool {
 }
 
 func (o hibernateOptions) viewed(s *Service, id domain.SessionID) bool {
-	return !o.ignoreViews && s.hasChatView(id)
+	return !o.ignoreViews && s.HasChatView(id)
 }
 
 // HibernateChat stops a quiescent provider without ending its AO session. A

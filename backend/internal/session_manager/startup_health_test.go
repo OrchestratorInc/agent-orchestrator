@@ -65,6 +65,36 @@ func TestStartupHealthNeverLaunchesStoppedSessions(t *testing.T) {
 	}
 }
 
+type viewedHealthCheckLauncher struct {
+	healthCheckLauncher
+	viewed domain.SessionID
+}
+
+func (l *viewedHealthCheckLauncher) HasChatView(id domain.SessionID) bool { return id == l.viewed }
+
+func TestStartupHealthChecksOpenChatFirst(t *testing.T) {
+	for _, viewed := range []domain.SessionID{"mer-a", "mer-b", "mer-c"} {
+		m, st, _, _ := newLifecycleManager()
+		launcher := &viewedHealthCheckLauncher{healthCheckLauncher: healthCheckLauncher{err: ports.ErrChatHostNotRunning}, viewed: viewed}
+		m.chat = launcher
+		m.reconcileWorkers = 1
+		for _, id := range []domain.SessionID{"mer-a", "mer-b", "mer-c"} {
+			rec := startupChatRecord()
+			rec.ID = id
+			st.sessions[id] = rec
+		}
+		if err := m.ReconcileBackground(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+		if len(launcher.checks) != 3 {
+			t.Fatalf("checks = %d, want 3", len(launcher.checks))
+		}
+		if got := launcher.checks[0].SessionID; got != viewed {
+			t.Fatalf("first check = %s, want the viewed chat %s", got, viewed)
+		}
+	}
+}
+
 func TestStartupHealthInconclusiveChatProbePreservesSession(t *testing.T) {
 	m, st, rt, ws := newLifecycleManager()
 	launcher := &healthCheckLauncher{err: ports.ErrChatRecoveryInconclusive}
