@@ -10,6 +10,7 @@ import { useEffect } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { OPEN_BROWSER_OVERLAY_SELECTOR } from "../lib/dom-selectors";
 import { aoBridge } from "../lib/bridge";
+import { useAutomaticBrowserStore } from "../stores/automatic-browser-store";
 
 type Listener = (state: BrowserNavState) => void;
 type TabsListener = (state: import("../../main/browser-view-host").BrowserTabsState) => void;
@@ -246,6 +247,7 @@ function setFullscreenElement(element: Element | null): void {
 
 describe("useBrowserView", () => {
 	afterEach(() => {
+		useAutomaticBrowserStore.setState({ mode: "internal", loaded: true, saving: false, error: false, loadError: false });
 		vi.restoreAllMocks();
 		setFullscreenElement(null);
 		document.body.replaceChildren();
@@ -1821,6 +1823,65 @@ describe("useBrowserView", () => {
 			}),
 		);
 		expect(bridge.navigate).toHaveBeenCalledTimes(3);
+	});
+
+	it.each(["external", "blocked"] as const)("routes automatic previews in %s mode without navigating the built-in browser", async (mode) => {
+		useAutomaticBrowserStore.setState({ mode, loaded: true, loadError: false });
+		const bridge = setupBridge();
+		const external = vi.spyOn(aoBridge.app, "openExternal").mockResolvedValue(undefined);
+		renderHook(() => useBrowserView({ sessionId: "policy-session", active: true, poppedOut: false, previewUrl: "http://localhost:5173/", previewRevision: 1 }));
+		await waitFor(() => expect(bridge.ensure).toHaveBeenCalled());
+		if (mode === "external") await waitFor(() => expect(external).toHaveBeenCalledWith("http://localhost:5173/"));
+		else await act(async () => {});
+		expect(bridge.navigate).not.toHaveBeenCalled();
+		if (mode === "blocked") expect(external).not.toHaveBeenCalled();
+	});
+
+	it("converts a remote preview address before opening it externally", async () => {
+		useAutomaticBrowserStore.setState({ mode: "external", loaded: true, loadError: false });
+		setupBridge();
+		vi.spyOn(aoBridge.remotes, "previewUrl").mockResolvedValue("https://ao-preview-abc.localhost:/");
+		const externalUrl = vi.spyOn(aoBridge.remotes, "externalUrl").mockResolvedValue("http://127.0.0.1:5173/");
+		const openExternal = vi.spyOn(aoBridge.app, "openExternal").mockResolvedValue(undefined);
+		renderHook(() => useBrowserView({
+			sessionId: "remote:box-a:ao-1",
+			origin: { hostId: "box-a", sessionId: "ao-1", proxyBase: "https://proxy.example/token" },
+			active: true,
+			poppedOut: false,
+			previewUrl: "http://localhost:5173/",
+			previewRevision: 1,
+		}));
+		await waitFor(() => expect(openExternal).toHaveBeenCalledWith("http://127.0.0.1:5173/"));
+		expect(externalUrl).toHaveBeenCalledWith("box-a", "https://ao-preview-abc.localhost:/");
+	});
+
+	it("routes an unresolved remote preview using the current browser mode", async () => {
+		useAutomaticBrowserStore.setState({ mode: "internal", loaded: true, loadError: false });
+		const bridge = setupBridge();
+		let resolveInitial!: (url: string) => void;
+		const initialResolution = new Promise<string>((resolve) => { resolveInitial = resolve; });
+		const resolvePreview = vi.spyOn(aoBridge.remotes, "previewUrl")
+			.mockReturnValueOnce(initialResolution)
+			.mockResolvedValueOnce("https://ao-preview-abc.localhost:/");
+		vi.spyOn(aoBridge.remotes, "externalUrl").mockResolvedValue("http://127.0.0.1:5173/");
+		const openExternal = vi.spyOn(aoBridge.app, "openExternal").mockResolvedValue(undefined);
+		renderHook(() => useBrowserView({
+			sessionId: "remote:box-a:ao-1",
+			origin: { hostId: "box-a", sessionId: "ao-1", proxyBase: "https://proxy.example/token" },
+			active: true,
+			poppedOut: false,
+			previewUrl: "http://localhost:5173/",
+			previewRevision: 1,
+		}));
+		await waitFor(() => expect(resolvePreview).toHaveBeenCalledTimes(1));
+
+		act(() => useAutomaticBrowserStore.setState({ mode: "external" }));
+		await waitFor(() => expect(resolvePreview).toHaveBeenCalledTimes(2));
+		await waitFor(() => expect(openExternal).toHaveBeenCalledWith("http://127.0.0.1:5173/"));
+
+		await act(async () => { resolveInitial("https://ao-preview-abc.localhost:/"); });
+		expect(bridge.navigate).not.toHaveBeenCalled();
+		expect(openExternal).toHaveBeenCalledTimes(1);
 	});
 
 	it("never opens a disconnected remote localhost preview on this machine", async () => {
