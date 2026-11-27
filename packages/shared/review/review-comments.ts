@@ -207,9 +207,10 @@ const loginKey = (login: string) => login.trim().replace(/^@+/, "").toLowerCase(
 /**
  * Who a reviewer is: their login, and whether they are an app. A bot and a
  * person can share a base login ("dana[bot]" beside "dana"), and must not
- * stand in for each other.
+ * stand in for each other. Both are prefixed, so neither can equal the
+ * Orchestrator reviewer's row key, even for a person named "orchestrator".
  */
-const reviewerKey = (login: string, isBot: boolean) => `${isBot ? "bot:" : ""}${loginKey(login)}`;
+const reviewerKey = (login: string, isBot: boolean) => `${isBot ? "bot:" : "user:"}${loginKey(login)}`;
 
 /**
  * One reviewer row's identity, unique within a PR's reviewers: their ids alone

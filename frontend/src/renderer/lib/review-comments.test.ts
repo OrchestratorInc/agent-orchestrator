@@ -374,6 +374,26 @@ describe("buildReviewBlocks", () => {
 		expect(new Set(keys).size).toBe(keys.length);
 	});
 
+	// A GitHub user may be called "orchestrator": their row and the Orchestrator reviewer's must still differ.
+	it("keeps a person named orchestrator apart from the Orchestrator reviewer", () => {
+		const block = blockFor({
+			runs: [run({ verdict: "changes_requested" })],
+			provider: summary({
+				review: {
+					decision: "changes_requested",
+					hasUnresolvedHumanComments: false,
+					unresolvedBy: [],
+					reviews: [
+						{ reviewerId: "orchestrator", verdict: "changes_requested", submittedAt: "2026-06-15T11:00:00Z", reviewUrl: `${PR_URL}#pullrequestreview-41`, body: "Rename this.", autoInjectReview: false },
+					],
+				},
+			}),
+		});
+		expect(block.reviewers.map((reviewer) => [reviewer.id, reviewer.orchestrator])).toEqual([["orchestrator", true], ["orchestrator", false]]);
+		const keys = block.reviewers.map(reviewerRowKey);
+		expect(new Set(keys).size).toBe(keys.length);
+	});
+
 	it("titles a PR from its review state, then the provider, then its number", () => {
 		expect(blockFor({ states: [state({ title: "From state" })], provider: summary() }).title).toBe("From state");
 		expect(blockFor({ provider: summary({ title: "From provider" }) }).title).toBe("From provider");
