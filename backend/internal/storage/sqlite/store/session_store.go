@@ -777,6 +777,20 @@ func (s *Store) EndSessionMoveStarted(ctx context.Context, id domain.SessionID, 
 	return rows > 0, nil
 }
 
+// EndSessionMoveStartedFor clears a session's move in progress in one
+// conditional write that holds only while move_started still names moveID
+// and the session is not marked moved. It returns ok=false otherwise, such as
+// when a later move has since been recorded.
+func (s *Store) EndSessionMoveStartedFor(ctx context.Context, id domain.SessionID, moveID string, updatedAt time.Time) (bool, error) {
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
+	rows, err := s.qw.EndSessionMoveStartedFor(ctx, gen.EndSessionMoveStartedForParams{UpdatedAt: updatedAt, ID: id, MoveStarted: moveID})
+	if err != nil {
+		return false, fmt.Errorf("end session move %s: %w", id, err)
+	}
+	return rows > 0, nil
+}
+
 // SetSessionMoveConversationPlaced records that a session moved here placed
 // its whole conversation. It returns ok=false when the session id does not exist.
 func (s *Store) SetSessionMoveConversationPlaced(ctx context.Context, id domain.SessionID, updatedAt time.Time) (bool, error) {

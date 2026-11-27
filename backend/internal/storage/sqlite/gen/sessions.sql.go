@@ -209,6 +209,27 @@ func (q *Queries) EndSessionMoveStarted(ctx context.Context, arg EndSessionMoveS
 	return result.RowsAffected()
 }
 
+const endSessionMoveStartedFor = `-- name: EndSessionMoveStartedFor :execrows
+UPDATE sessions SET move_started = '', updated_at = ? WHERE id = ? AND moved_to = '' AND move_started = ?
+`
+
+type EndSessionMoveStartedForParams struct {
+	UpdatedAt   time.Time
+	ID          domain.SessionID
+	MoveStarted string
+}
+
+// Clears the move in progress only while it is still this move and the
+// session has not been marked moved: abandoning an old move never clears a
+// newer one recorded in between.
+func (q *Queries) EndSessionMoveStartedFor(ctx context.Context, arg EndSessionMoveStartedForParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, endSessionMoveStartedFor, arg.UpdatedAt, arg.ID, arg.MoveStarted)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
 const getClientRequestSession = `-- name: GetClientRequestSession :one
 SELECT id, client_request_hash, client_request_committed FROM sessions WHERE client_request_id = ?
 `

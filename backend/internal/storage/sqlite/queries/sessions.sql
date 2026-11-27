@@ -496,6 +496,12 @@ WHERE id = ? AND moved_to = '' AND move_started = ?
 -- Clears a move in progress unless the session has been marked moved.
 UPDATE sessions SET move_started = '', updated_at = ? WHERE id = ? AND moved_to = '';
 
+-- name: EndSessionMoveStartedFor :execrows
+-- Clears the move in progress only while it is still this move and the
+-- session has not been marked moved: abandoning an old move never clears a
+-- newer one recorded in between.
+UPDATE sessions SET move_started = '', updated_at = ? WHERE id = ? AND moved_to = '' AND move_started = ?;
+
 -- name: SetSessionMoveConversationPlaced :execrows
 UPDATE sessions SET move_conversation_placed = 1, updated_at = ? WHERE id = ?;
 

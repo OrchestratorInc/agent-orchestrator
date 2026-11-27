@@ -127,3 +127,39 @@ func TestSessionMoveStartedRoundTrips(t *testing.T) {
 		t.Fatalf("cleared MoveStarted = %q", got.MoveStarted)
 	}
 }
+
+// Abandoning a move clears move_started only while it is still that move: an
+// abandon of m-1 after m-2 was recorded leaves m-2, and a session marked moved
+// is never touched.
+func TestEndSessionMoveStartedForComparesTheMove(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+	r := stoppedMovingSession(t, s) // m-1 in progress
+	if _, err := s.SetSessionMoveStarted(ctx, r.ID, "m-2", time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	if ok, err := s.EndSessionMoveStartedFor(ctx, r.ID, "m-1", time.Now()); err != nil || ok {
+		t.Fatalf("abandon m-1 = %v, %v; want refused", ok, err)
+	}
+	if got, _, _ := s.GetSession(ctx, r.ID); got.MoveStarted != "m-2" {
+		t.Fatalf("move_started = %q, want m-2 kept", got.MoveStarted)
+	}
+	if ok, err := s.EndSessionMoveStartedFor(ctx, r.ID, "m-2", time.Now()); err != nil || !ok {
+		t.Fatalf("abandon m-2 = %v, %v; want it ended", ok, err)
+	}
+	if got, _, _ := s.GetSession(ctx, r.ID); got.MoveStarted != "" {
+		t.Fatalf("move_started = %q, want it cleared", got.MoveStarted)
+	}
+
+	s2 := newTestStore(t)
+	m := stoppedMovingSession(t, s2)
+	if ok, err := s2.MarkSessionMoved(ctx, m.ID, domain.SessionMove{MoveID: "m-1", OrgID: "org-1", SessionID: "cloud-1"}, time.Now()); err != nil || !ok {
+		t.Fatalf("mark moved = %v, %v", ok, err)
+	}
+	if _, err := s2.SetSessionMoveStarted(ctx, m.ID, "m-1", time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	if ok, err := s2.EndSessionMoveStartedFor(ctx, m.ID, "m-1", time.Now()); err != nil || ok {
+		t.Fatalf("abandon a moved session = %v, %v; want refused", ok, err)
+	}
+}

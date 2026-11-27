@@ -558,20 +558,27 @@ func (s *Service) AbandonMove(ctx context.Context, id domain.SessionID, moveID s
 		return false, nil
 	}
 	store, ok := s.store.(interface {
-		EndSessionMoveStarted(ctx context.Context, id domain.SessionID, updatedAt time.Time) (bool, error)
+		EndSessionMoveStartedFor(ctx context.Context, id domain.SessionID, moveID string, updatedAt time.Time) (bool, error)
 	})
 	if !ok {
 		return false, apierr.NotImplemented("MOVE_UNSUPPORTED", "This build cannot record session moves")
 	}
-	ended, err := store.EndSessionMoveStarted(ctx, id, s.clock().UTC())
+	// The read above is only a shortcut: the write itself holds only while
+	// move_started still names moveID, so an abandon racing a newer export
+	// never clears that export's move.
+	ended, err := store.EndSessionMoveStartedFor(ctx, id, moveID, s.clock().UTC())
+	if err != nil || ended {
+		return ended, err
+	}
+	// Nothing changed: the session moved in between, or a newer move took over.
+	now, found, err := s.store.GetSession(ctx, id)
 	if err != nil {
 		return false, err
 	}
-	if !ended {
-		// The move was marked done in between: the session moved.
+	if found && now.MovedTo != nil {
 		return false, apierr.Conflict("SESSION_MOVED", "This session already moved to Orchestrator Cloud.", nil)
 	}
-	return true, nil
+	return false, nil
 }
 
 // moveNoticeTimeout bounds telling the orchestrator, which runs detached from

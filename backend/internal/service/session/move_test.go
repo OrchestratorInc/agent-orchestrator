@@ -26,7 +26,10 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/sessionmove"
 )
 
-type moveStore struct{ *fakeStore }
+type moveStore struct {
+	*fakeStore
+	beforeEnd func()
+}
 
 // MarkSessionMoved holds only while the move is the session's move in
 // progress and its agent is stopped, as the SQLite store's conditional write does.
@@ -47,11 +50,15 @@ func (m moveStore) SetSessionMoveStarted(_ context.Context, id domain.SessionID,
 	return ok, nil
 }
 
-// EndSessionMoveStarted clears a move in progress unless the session moved, as
-// the SQLite store's conditional write does.
-func (m moveStore) EndSessionMoveStarted(_ context.Context, id domain.SessionID, _ time.Time) (bool, error) {
+// EndSessionMoveStartedFor clears the move in progress only while it is still
+// moveID and the session has not moved, as the SQLite store's conditional
+// write does. beforeEnd, when set, runs first: a test's racing export.
+func (m moveStore) EndSessionMoveStartedFor(_ context.Context, id domain.SessionID, moveID string, _ time.Time) (bool, error) {
+	if m.beforeEnd != nil {
+		m.beforeEnd()
+	}
 	rec, ok := m.sessions[id]
-	if !ok || rec.MovedTo != nil {
+	if !ok || rec.MovedTo != nil || rec.MoveStarted != moveID {
 		return false, nil
 	}
 	rec.MoveStarted = ""
@@ -88,7 +95,7 @@ func TestCompleteMoveDoesNotWaitForTheOrchestrator(t *testing.T) {
 		told <- string(id) + " " + message
 		return nil
 	}}
-	svc := NewWithDeps(Deps{Manager: fc, Store: moveStore{st}})
+	svc := NewWithDeps(Deps{Manager: fc, Store: moveStore{fakeStore: st}})
 
 	dest := domain.SessionMove{MoveID: "move-1", OrgID: "org-1", SessionID: "cloud-1"}
 	if _, err := svc.CompleteMove(context.Background(), "mer-2", MoveCompleteInput{Destination: dest}); err != nil {
@@ -120,7 +127,7 @@ func TestCompleteMoveRefusesASessionResumedHere(t *testing.T) {
 			st := newFakeStore()
 			st.sessions["mer-2"] = rec
 			fc := &fakeCommander{}
-			svc := NewWithDeps(Deps{Manager: fc, Store: moveStore{st}})
+			svc := NewWithDeps(Deps{Manager: fc, Store: moveStore{fakeStore: st}})
 			_, err := svc.CompleteMove(context.Background(), "mer-2", MoveCompleteInput{Destination: domain.SessionMove{MoveID: "move-1", OrgID: "org-1", SessionID: "cloud-1"}})
 			var apiErr *apierr.Error
 			if !errors.As(err, &apiErr) || apiErr.Code != "MOVE_NOT_IN_PROGRESS" {
@@ -141,7 +148,7 @@ func TestCompleteMoveRepeatsSafely(t *testing.T) {
 	st.sessions["mer-2"] = domain.SessionRecord{ID: "mer-2", ProjectID: "mer", Kind: domain.KindWorker, MovedTo: &dest,
 		Activity: domain.Activity{State: domain.ActivityExited}}
 	fc := &fakeCommander{}
-	svc := NewWithDeps(Deps{Manager: fc, Store: moveStore{st}})
+	svc := NewWithDeps(Deps{Manager: fc, Store: moveStore{fakeStore: st}})
 	if _, err := svc.CompleteMove(context.Background(), "mer-2", MoveCompleteInput{Destination: dest}); err != nil {
 		t.Fatalf("CompleteMove: %v", err)
 	}
@@ -387,7 +394,7 @@ func TestImportMoveRefusesAnotherRepository(t *testing.T) {
 	st := newFakeStore()
 	st.projects["mer"] = domain.ProjectRecord{ID: "mer", RepoOriginURL: "https://github.com/acme/other"}
 	fc := &fakeCommander{}
-	_, err := NewWithDeps(Deps{Manager: fc, Store: moveStore{st}}).ImportMove(context.Background(), MoveImportInput{
+	_, err := NewWithDeps(Deps{Manager: fc, Store: moveStore{fakeStore: st}}).ImportMove(context.Background(), MoveImportInput{
 		ProjectID: "mer", MoveID: "m-1", Manifest: importManifest(strings.Repeat("a", 40)),
 	})
 	var got *apierr.Error
@@ -401,7 +408,7 @@ func TestImportMoveRefusesATipThatIsNotACommitID(t *testing.T) {
 	st.projects["mer"] = domain.ProjectRecord{ID: "mer", RepoOriginURL: "https://github.com/acme/app"}
 	for _, tip := range []string{"HEAD", "origin/other", "--output=x", strings.Repeat("A", 40), strings.Repeat("a", 39)} {
 		fc := &fakeCommander{}
-		_, err := NewWithDeps(Deps{Manager: fc, Store: moveStore{st}}).ImportMove(context.Background(), MoveImportInput{
+		_, err := NewWithDeps(Deps{Manager: fc, Store: moveStore{fakeStore: st}}).ImportMove(context.Background(), MoveImportInput{
 			ProjectID: "mer", MoveID: "m-1", Manifest: importManifest(tip),
 		})
 		var got *apierr.Error
@@ -420,7 +427,7 @@ func TestImportMoveReplaysTheSameMove(t *testing.T) {
 		ClientRequestID: "m-1", ClientRequestHash: moveRequestHash(in), ClientRequestCommitted: true,
 	}
 	fc := &fakeCommander{}
-	out, err := NewWithDeps(Deps{Manager: fc, Store: moveStore{st}}).ImportMove(context.Background(), in)
+	out, err := NewWithDeps(Deps{Manager: fc, Store: moveStore{fakeStore: st}}).ImportMove(context.Background(), in)
 	if err != nil || out.Session.ID != "mer-1" || fc.spawnCalls != 0 {
 		t.Fatalf("ImportMove = %q, %v, spawns = %d; want mer-1 without a spawn", out.Session.ID, err, fc.spawnCalls)
 	}
@@ -477,7 +484,7 @@ func TestImportMoveRunsCloudOpenCodeAsOpenCodeV2(t *testing.T) {
 	}}
 	manifest := importManifest(tip)
 	manifest.Harness = domain.HarnessOpenCode
-	if _, err := NewWithDeps(Deps{Manager: fc, Store: moveStore{st}}).ImportMove(context.Background(), MoveImportInput{
+	if _, err := NewWithDeps(Deps{Manager: fc, Store: moveStore{fakeStore: st}}).ImportMove(context.Background(), MoveImportInput{
 		ProjectID: "mer", MoveID: "m-opencode", Manifest: manifest, HandoffNote: "NOTE",
 		Transcript: &MoveImportTranscript{AgentSessionID: id, ProjectDir: "/workspace/.ao/home", Gzip: gz.Bytes()},
 	}); err != nil {
@@ -519,7 +526,7 @@ func TestImportMoveStartsFromTheNoteWhenTheConversationCannotBeRead(t *testing.T
 				}
 				return rec
 			}}
-			out, err := NewWithDeps(Deps{Manager: fc, Store: moveStore{st}}).ImportMove(context.Background(), MoveImportInput{
+			out, err := NewWithDeps(Deps{Manager: fc, Store: moveStore{fakeStore: st}}).ImportMove(context.Background(), MoveImportInput{
 				ProjectID: "mer", MoveID: "m-" + strings.ReplaceAll(tc.name, " ", "-"), Manifest: importManifest(tip), HandoffNote: "NOTE",
 				Transcript: &MoveImportTranscript{AgentSessionID: id, ProjectDir: "/home/agent/.claude/projects/-workspace-repository", Gzip: tc.gzip, SidecarGzip: tc.sidecar},
 			})
@@ -575,7 +582,7 @@ func TestImportMoveReplayKeepsAnIncompleteConversation(t *testing.T) {
 		st.sessions[rec.ID] = rec
 		return rec
 	}}
-	svc := NewWithDeps(Deps{Manager: fc, Store: moveStore{st}})
+	svc := NewWithDeps(Deps{Manager: fc, Store: moveStore{fakeStore: st}})
 	in := MoveImportInput{
 		ProjectID: "mer", MoveID: "m-1", Manifest: importManifest(tip), HandoffNote: "NOTE",
 		Transcript: &MoveImportTranscript{AgentSessionID: id, ProjectDir: "/home/agent/.claude/projects/-workspace-repository", Gzip: gz.Bytes(), SidecarGzip: []byte("plain")},
@@ -627,7 +634,7 @@ func TestImportMoveReplayNeedsTheRecordedPlacement(t *testing.T) {
 				st.sessions[rec.ID] = rec
 				return rec
 			}}
-			svc := NewWithDeps(Deps{Manager: fc, Store: tc.store(moveStore{st})})
+			svc := NewWithDeps(Deps{Manager: fc, Store: tc.store(moveStore{fakeStore: st})})
 			in := MoveImportInput{
 				ProjectID: "mer", MoveID: "m-1", Manifest: importManifest(tip), HandoffNote: "NOTE",
 				Transcript: &MoveImportTranscript{AgentSessionID: id, ProjectDir: "/home/agent/.claude/projects/-workspace-repository", Gzip: gz.Bytes()},
@@ -681,7 +688,7 @@ func TestExportMoveWritesTheNoteBeforePushing(t *testing.T) {
 		ID: "mer-2", ProjectID: "mer", Kind: domain.KindWorker, Harness: domain.HarnessClaudeCode,
 		Activity: domain.Activity{State: domain.ActivityExited}, Metadata: domain.SessionMetadata{WorkspacePath: wt},
 	}
-	svc := NewWithDeps(Deps{Manager: &fakeCommander{}, Store: moveStore{st}})
+	svc := NewWithDeps(Deps{Manager: &fakeCommander{}, Store: moveStore{fakeStore: st}})
 	svc.SetMoveNoter(failingMoveNoter{})
 	if _, err := svc.ExportMove(context.Background(), "mer-2", MoveExportInput{MoveID: "m-1", SourceLabel: "Mac"}); err == nil {
 		t.Fatal("export succeeded with a failing note")
@@ -726,7 +733,7 @@ func TestExportMoveRefusesTheDefaultBranch(t *testing.T) {
 		ID: "mer-2", ProjectID: "mer", Kind: domain.KindWorker, Harness: domain.HarnessClaudeCode,
 		Activity: domain.Activity{State: domain.ActivityExited}, Metadata: domain.SessionMetadata{WorkspacePath: wt},
 	}
-	svc := NewWithDeps(Deps{Manager: &fakeCommander{}, Store: moveStore{st}})
+	svc := NewWithDeps(Deps{Manager: &fakeCommander{}, Store: moveStore{fakeStore: st}})
 	var refusal *apierr.Error
 	if _, err := svc.PreviewMove(context.Background(), "mer-2"); !errors.As(err, &refusal) || refusal.Code != "MOVE_DEFAULT_BRANCH" {
 		t.Fatalf("PreviewMove err = %v, want MOVE_DEFAULT_BRANCH", err)
@@ -783,7 +790,7 @@ func TestExportMoveRecordsTheMoveBeforePushing(t *testing.T) {
 		ID: "mer-2", ProjectID: "mer", Kind: domain.KindWorker, Harness: domain.HarnessClaudeCode,
 		Activity: domain.Activity{State: domain.ActivityExited}, Metadata: domain.SessionMetadata{WorkspacePath: wt},
 	}
-	svc := NewWithDeps(Deps{Manager: &fakeCommander{}, Store: moveStore{st}})
+	svc := NewWithDeps(Deps{Manager: &fakeCommander{}, Store: moveStore{fakeStore: st}})
 	if preview, err := svc.PreviewMove(context.Background(), "mer-2"); err != nil || preview.DefaultBranch != "main" {
 		t.Fatalf("PreviewMove = %+v, %v; want default branch main", preview, err)
 	}
@@ -830,7 +837,7 @@ func TestImportMoveKeepsTheNameAndApprovalMode(t *testing.T) {
 			}}
 			manifest := importManifest(tip)
 			manifest.SourceSessionID, manifest.DisplayName, manifest.Permissions = "cloud-7", tc.displayName, tc.permissions
-			if _, err := NewWithDeps(Deps{Manager: fc, Store: moveStore{st}}).ImportMove(context.Background(), MoveImportInput{
+			if _, err := NewWithDeps(Deps{Manager: fc, Store: moveStore{fakeStore: st}}).ImportMove(context.Background(), MoveImportInput{
 				ProjectID: "mer", MoveID: "m-back-" + strings.ReplaceAll(tc.name, " ", "-"), Manifest: manifest,
 			}); err != nil {
 				t.Fatal(err)
@@ -867,7 +874,7 @@ func TestImportMoveTellsTheAgentAboutTheWIPCommit(t *testing.T) {
 			_ = zw.Close()
 			in.Transcript = &MoveImportTranscript{AgentSessionID: id, ProjectDir: "/home/agent/.claude/projects/-workspace-repository", Gzip: gz.Bytes()}
 		}
-		if _, err := NewWithDeps(Deps{Manager: fc, Store: moveStore{st}}).ImportMove(context.Background(), in); err != nil {
+		if _, err := NewWithDeps(Deps{Manager: fc, Store: moveStore{fakeStore: st}}).ImportMove(context.Background(), in); err != nil {
 			t.Fatal(err)
 		}
 		want := "as commit " + tip + " on branch feat/move. Orchestrator made that commit, not you or the user."
@@ -896,7 +903,7 @@ func TestImportMoveTakesCloudsIssueAsATrackerID(t *testing.T) {
 	}}
 	manifest := importManifest(tip)
 	manifest.IssueID = "acme/app#42"
-	if _, err := NewWithDeps(Deps{Manager: fc, Store: moveStore{st}}).ImportMove(context.Background(), MoveImportInput{ProjectID: "mer", MoveID: "m-issue", Manifest: manifest}); err != nil {
+	if _, err := NewWithDeps(Deps{Manager: fc, Store: moveStore{fakeStore: st}}).ImportMove(context.Background(), MoveImportInput{ProjectID: "mer", MoveID: "m-issue", Manifest: manifest}); err != nil {
 		t.Fatal(err)
 	}
 	if spawned.IssueID != "github:acme/app#42" {
@@ -925,7 +932,7 @@ func TestImportMoveKeepsTheIssueAndPullRequests(t *testing.T) {
 	}}
 	manifest := importManifest(tip)
 	manifest.SourceSessionID = "cloud-7"
-	out, err := NewWithDeps(Deps{Manager: fc, Store: moveStore{st}}).ImportMove(context.Background(), MoveImportInput{ProjectID: "mer", MoveID: "m-back", Manifest: manifest})
+	out, err := NewWithDeps(Deps{Manager: fc, Store: moveStore{fakeStore: st}}).ImportMove(context.Background(), MoveImportInput{ProjectID: "mer", MoveID: "m-back", Manifest: manifest})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1095,7 +1102,7 @@ func TestImportMoveKeepsChat(t *testing.T) {
 			if tc.conversation {
 				in.Transcript = &MoveImportTranscript{AgentSessionID: id, ProjectDir: "/home/agent/.claude/projects/-workspace-repository", Gzip: gz.Bytes()}
 			}
-			out, err := NewWithDeps(Deps{Manager: fc, Store: moveStore{st}}).ImportMove(context.Background(), in)
+			out, err := NewWithDeps(Deps{Manager: fc, Store: moveStore{fakeStore: st}}).ImportMove(context.Background(), in)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -1143,7 +1150,7 @@ func TestAbandonMoveEndsOnlyThisMove(t *testing.T) {
 			st := newFakeStore()
 			st.sessions["mer-2"] = rec
 			fc := &fakeCommander{}
-			svc := NewWithDeps(Deps{Manager: fc, Store: moveStore{st}})
+			svc := NewWithDeps(Deps{Manager: fc, Store: moveStore{fakeStore: st}})
 			ended, err := svc.AbandonMove(context.Background(), "mer-2", "move-1")
 			var apiErr *apierr.Error
 			if tc.wantCode != "" {
@@ -1160,5 +1167,28 @@ func TestAbandonMoveEndsOnlyThisMove(t *testing.T) {
 				t.Fatalf("the agent's state changed: killed %v, activity %v", fc.killed, st.sessions["mer-2"].Activity.State)
 			}
 		})
+	}
+}
+
+// An abandon of move A that overlaps a newer export recording move B, after
+// A was read and before the write, leaves B in progress: the write itself
+// compares the move id, so B's completion still finds its move.
+func TestAbandonMoveDoesNotClearANewerMove(t *testing.T) {
+	st := newFakeStore()
+	st.sessions["mer-2"] = domain.SessionRecord{ID: "mer-2", ProjectID: "mer", Kind: domain.KindWorker, MoveStarted: "move-a",
+		Activity: domain.Activity{State: domain.ActivityExited}}
+	store := moveStore{fakeStore: st}
+	store.beforeEnd = func() {
+		rec := st.sessions["mer-2"]
+		rec.MoveStarted = "move-b"
+		st.sessions["mer-2"] = rec
+	}
+	svc := NewWithDeps(Deps{Manager: &fakeCommander{}, Store: store})
+	ended, err := svc.AbandonMove(context.Background(), "mer-2", "move-a")
+	if err != nil || ended {
+		t.Fatalf("AbandonMove = %v, %v; want not ended, no error", ended, err)
+	}
+	if got := st.sessions["mer-2"].MoveStarted; got != "move-b" {
+		t.Fatalf("move_started = %q, want the newer move-b kept", got)
 	}
 }
