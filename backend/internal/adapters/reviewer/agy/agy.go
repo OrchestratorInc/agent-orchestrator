@@ -88,7 +88,7 @@ func (r *Reviewer) ReviewCommand(ctx context.Context, inv ports.ReviewInvocation
 	}
 	// Probe with the pane's environment: project env under the reviewer roots,
 	// as the launcher merges it, so project-level gateway settings count.
-	if err := r.verifySignedIn(ctx, binary, agentlaunch.MergeEnv(inv.ProjectEnv, envVars)); err != nil {
+	if err := r.verifySignedIn(ctx, binary, env.ConfigRoot, agentlaunch.MergeEnv(inv.ProjectEnv, envVars)); err != nil {
 		return ports.ReviewCommandSpec{}, err
 	}
 	prompt := inv.Prompt
@@ -146,12 +146,25 @@ const signInProbeTimeout = 20 * time.Second
 // `agy models` starts no login. It exits 0 even when signed out, so only its
 // sign-in message counts as signed out; any other result, including a probe
 // error, is inconclusive and the launch proceeds as before.
-func (r *Reviewer) verifySignedIn(ctx context.Context, binary string, env map[string]string) error {
+func (r *Reviewer) verifySignedIn(ctx context.Context, binary, configRoot string, env map[string]string) error {
 	probeCtx, cancel := context.WithTimeout(ctx, signInProbeTimeout)
 	defer cancel()
 	out, _ := r.run(probeCtx, env, binary, "models")
 	if !strings.Contains(strings.ToLower(string(out)), "please sign in") {
 		return nil
+	}
+	if localPaths := localCredentialPaths(configRoot); len(localPaths) > 0 {
+		quoted := make([]string, len(localPaths))
+		for i, p := range localPaths {
+			quoted[i] = shellQuote(p)
+		}
+		home := shellQuote(configRoot)
+		return &ports.ReviewerAuthRequiredError{Guidance: fmt.Sprintf(
+			"Agy is not signed in for reviews. A reviewer-local credential (%s) is overriding your host sign-in; remove it with `rm %s` to reuse your host Agy login, or sign in inside this reviewer home by running `HOME=%s XDG_CONFIG_HOME=%s %s`, then retry the review.",
+			strings.Join(quoted, ", "),
+			strings.Join(quoted, " "),
+			home, home, shellQuote(binary),
+		)}
 	}
 	return &ports.ReviewerAuthRequiredError{Guidance: fmt.Sprintf("Agy is not signed in for reviews. Sign in once by running `%s` and choosing a login method, then retry the review. Reviewer sessions reuse your Agy sign-in.", shellQuote(binary))}
 }
@@ -277,6 +290,30 @@ func seedTrustedWorkspace(configRoot, workspacePath string) error {
 // other file-backed installs.
 const oauthTokenFile = "antigravity-oauth-token" //nolint:gosec // filename only, not a credential
 
+var (
+	oauthTokenRelPath = filepath.Join(".gemini", agentagy.CLIStorageDir, oauthTokenFile)
+	keychainRelPaths  = []string{
+		filepath.Join("Library", "Keychains", "login.keychain-db"),
+		filepath.Join("Library", "Keychains", "login.keychain"),
+	}
+)
+
+// localCredentialPaths returns any non-symlink credential files already present
+// inside configRoot (for example from an earlier per-worker sign-in) that
+// shadow the host Agy login.
+func localCredentialPaths(configRoot string) []string {
+	var paths []string
+	candidates := append([]string{oauthTokenRelPath}, keychainRelPaths...)
+	for _, rel := range candidates {
+		p := filepath.Join(configRoot, rel)
+		info, err := os.Lstat(p)
+		if err == nil && info.Mode()&os.ModeSymlink == 0 && !info.IsDir() {
+			paths = append(paths, p)
+		}
+	}
+	return paths
+}
+
 // seedHostAuth best-effort links the host user's existing Agy sign-in into the
 // isolated reviewer home so unattended reviews do not prompt for sign-in on
 // every new worker session (#8962). Link failures never block launch (matching
@@ -301,17 +338,13 @@ func seedHostAuthFrom(configRoot, hostHome string) {
 		return
 	}
 	// File-backed OAuth token (Linux and any install that writes it).
-	tokenSrc := filepath.Join(hostHome, ".gemini", agentagy.CLIStorageDir, oauthTokenFile)
-	tokenDst := filepath.Join(configRoot, ".gemini", agentagy.CLIStorageDir, oauthTokenFile)
-	_ = linkFileIfPresent(tokenSrc, tokenDst)
+	_ = linkFileIfPresent(filepath.Join(hostHome, oauthTokenRelPath), filepath.Join(configRoot, oauthTokenRelPath))
 	// On macOS, Agy stores its OAuth token in the user's Login Keychain under
 	// ~/Library/Keychains/login.keychain-db. Link only the login keychain file
 	// rather than the whole Keychains directory so Local Items / iCloud
 	// Keychain directories stay outside the reviewer home.
-	for _, name := range []string{"login.keychain-db", "login.keychain"} {
-		kcSrc := filepath.Join(hostHome, "Library", "Keychains", name)
-		kcDst := filepath.Join(configRoot, "Library", "Keychains", name)
-		if linkFileIfPresent(kcSrc, kcDst) {
+	for _, rel := range keychainRelPaths {
+		if linkFileIfPresent(filepath.Join(hostHome, rel), filepath.Join(configRoot, rel)) {
 			break
 		}
 	}

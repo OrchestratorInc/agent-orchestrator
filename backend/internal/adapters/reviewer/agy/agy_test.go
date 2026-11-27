@@ -68,6 +68,37 @@ func TestReviewCommandSignInProbe(t *testing.T) {
 	}
 }
 
+func TestReviewCommandSignInProbeReportsLocalCredentialOverride(t *testing.T) {
+	dataDir := t.TempDir()
+	configRoot := filepath.Join(dataDir, "reviewer-runtime", "review-worker-1", "config")
+	localToken := filepath.Join(configRoot, oauthTokenRelPath)
+	if err := os.MkdirAll(filepath.Dir(localToken), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(localToken, []byte("stale-local-token"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	inv := ports.ReviewInvocation{
+		DataDir:        dataDir,
+		ReviewerID:     "review-worker-1",
+		TaskPromptRoot: "/ao/prompts",
+		WorkspacePath:  "/worker",
+		Prompt:         "p",
+	}
+	_, err := signInReviewer("Error: Please sign in to view available models.", nil).ReviewCommand(context.Background(), inv)
+	var authErr *ports.ReviewerAuthRequiredError
+	if !errors.As(err, &authErr) {
+		t.Fatalf("err = %#v, want ReviewerAuthRequiredError", err)
+	}
+	if !strings.Contains(authErr.Guidance, "rm "+shellQuote(localToken)) {
+		t.Fatalf("guidance = %q, want rm command naming %s", authErr.Guidance, localToken)
+	}
+	if !strings.Contains(authErr.Guidance, "HOME="+shellQuote(configRoot)+" XDG_CONFIG_HOME="+shellQuote(configRoot)+" '/opt/agy/bin/agy'") {
+		t.Fatalf("guidance = %q, want reviewer-home sign-in fallback", authErr.Guidance)
+	}
+}
+
 func TestReviewCommandSignInProbeUsesProjectEnv(t *testing.T) {
 	const gateway = "AGY_LLM_GATEWAY_URL"
 	var probeEnv map[string]string
