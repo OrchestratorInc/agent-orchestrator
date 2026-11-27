@@ -2,6 +2,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { act, renderHook, waitFor } from "@testing-library/react";
 import { createElement, type ReactNode } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { CloudCpError } from "../lib/cloud-cp/errors";
 import { useCommentThreadList, useUnreadCommentThreads } from "./useCommentThreads";
 
 const client = vi.hoisted(() => ({ countMyUnreadCommentThreads: vi.fn(), listMyCommentThreads: vi.fn() }));
@@ -25,6 +26,16 @@ describe("the sidebar's Threads item (useUnreadCommentThreads)", () => {
 	it("shows with its unread count while mentions are offered", async () => {
 		const { result } = renderHook(() => useUnreadCommentThreads(), { wrapper });
 		await waitFor(() => expect(result.current).toEqual({ count: 2, supported: true }));
+	});
+
+	it.each([404, 405, 501])("hides once the control plane answers %i (no view, or mentions turned off there)", async (status) => {
+		client.countMyUnreadCommentThreads.mockResolvedValueOnce({ count: 1 }).mockRejectedValue(new CloudCpError("Not here.", { status }));
+		const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+		const ownWrapper = ({ children }: { children: ReactNode }) => createElement(QueryClientProvider, { client: queryClient }, children);
+		const { result } = renderHook(() => useUnreadCommentThreads(), { wrapper: ownWrapper });
+		await waitFor(() => expect(result.current).toEqual({ count: 1, supported: true }));
+		await act(() => queryClient.refetchQueries());
+		await waitFor(() => expect(result.current.supported).toBe(false));
 	});
 
 	it("is hidden, and reads nothing, while mentions are not offered", async () => {
