@@ -115,10 +115,17 @@ describe("ArtifactFileView", () => {
 		expect(fetchMock).toHaveBeenCalledExactlyOnceWith(contentUrl);
 		expect(cancel).toHaveBeenCalledOnce();
 		expect(screen.queryByRole("button", { name: "Edit file" })).not.toBeInTheDocument();
+		if (tag === "video") {
+			// The comment workspace's player, so opening comments keeps it: its own controls, not the native ones.
+			expect(media).not.toHaveAttribute("controls");
+			expect(screen.getByRole("button", { name: "Play" })).toBeInTheDocument();
+			expect(screen.getByRole("button", { name: "Full screen" })).toBeInTheDocument();
+		} else if (tag === "audio") expect(media).toHaveAttribute("controls");
 		if (tag !== "img") {
-			expect(media).toHaveAttribute("controls");
 			expect(media).toHaveAttribute("preload", "metadata");
-			expect(media).not.toHaveAttribute("autoplay");
+			// Videos start on their own in the app's player; audio waits for a press.
+			if (tag === "video") expect(media).toHaveAttribute("autoplay");
+			else expect(media).not.toHaveAttribute("autoplay");
 		}
 	});
 
@@ -168,6 +175,29 @@ describe("ArtifactFileView", () => {
 		expect(screen.getByText("Unable to load this file.")).toBeInTheDocument();
 		await userEvent.click(screen.getByRole("button", { name: "Retry" }));
 		expect(screen.getByLabelText("clip.mp4")).toBeInTheDocument();
+	});
+
+	it("pauses a playing video when the view is hidden, as when the inspector closes", async () => {
+		const pause = vi.spyOn(HTMLMediaElement.prototype, "pause").mockImplementation(() => {});
+		try {
+			fetchMock.mockResolvedValue(new Response(null));
+			const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+			const view = renderWithQuery(<ArtifactFileView active artifactName="clip.mp4" path="clip.mp4" rawUrl={RAW_URL} sessionId="sess-1" />, client);
+			const player = await screen.findByLabelText<HTMLVideoElement>("clip.mp4");
+			expect(player).toHaveAttribute("autoplay");
+			Object.defineProperty(player, "paused", { configurable: true, value: false });
+
+			view.rerender(
+				<QueryClientProvider client={client}>
+					<TooltipProvider><ArtifactFileView active={false} artifactName="clip.mp4" path="clip.mp4" rawUrl={RAW_URL} sessionId="sess-1" /></TooltipProvider>
+				</QueryClientProvider>,
+			);
+
+			expect(screen.getByLabelText("clip.mp4")).toBe(player);
+			expect(pause).toHaveBeenCalledTimes(1);
+		} finally {
+			pause.mockRestore();
+		}
 	});
 
 	it("fetches a local artifact through the explicit loopback artifact API and renders its content", async () => {

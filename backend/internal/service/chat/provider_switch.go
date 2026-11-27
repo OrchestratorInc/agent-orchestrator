@@ -24,6 +24,17 @@ func (s *Service) SetTerminalProviderSwitcher(switcher TerminalProviderSwitcher)
 	s.terminalSwitcher = switcher
 }
 
+// AgentChoiceRecorder notes that a session's agent was chosen by a switch, so
+// the board never reads the switch as the project's agent setting drifting.
+type AgentChoiceRecorder interface {
+	RecordAgentChoice(context.Context, domain.SessionID) error
+}
+
+// SetAgentChoiceRecorder gives the service where to record a switch's choice.
+func (s *Service) SetAgentChoiceRecorder(recorder AgentChoiceRecorder) {
+	s.agentChoices = recorder
+}
+
 type providerSwitchActivityDetail struct {
 	Event         string              `json:"event"`
 	SourceHarness domain.AgentHarness `json:"sourceHarness"`
@@ -32,7 +43,7 @@ type providerSwitchActivityDetail struct {
 	SourceModel  string `json:"sourceModel,omitempty"`
 	TargetModel  string `json:"targetModel,omitempty"`
 	TargetEffort string `json:"targetEffort,omitempty"`
-	// TargetAutoCompactWindow is the Claude Code compaction window the target started with.
+	// TargetAutoCompactWindow is the auto-compaction the target started with: Claude Code's window, or OpenCode's "off".
 	TargetAutoCompactWindow string `json:"targetAutoCompactWindow,omitempty"`
 	BranchID                string `json:"branchId"`
 	// PermissionMode is the mode the target started in. ChatPermissionMode is the
@@ -212,7 +223,25 @@ func (s *Service) messageDelivered(ctx context.Context, id domain.SessionID, cli
 	return found, err
 }
 
+// switchProvider moves the session to request's agent and, when that changed
+// the agent, records the choice. A failed record is logged, not the switch's error.
 func (s *Service) switchProvider(ctx context.Context, id domain.SessionID, request domain.ProviderSwitchRequest, result *domain.ProviderSwitchResult) error {
+	var before domain.AgentHarness
+	if stored, found, err := s.sessions.GetSession(ctx, id); err == nil && found {
+		before = stored.Harness
+	}
+	if err := s.switchProviderAgent(ctx, id, request, result); err != nil {
+		return err
+	}
+	if s.agentChoices != nil && before != request.TargetHarness {
+		if err := s.agentChoices.RecordAgentChoice(context.WithoutCancel(ctx), id); err != nil {
+			s.log.Warn("record agent choice after provider switch", "session", id, "error", err)
+		}
+	}
+	return nil
+}
+
+func (s *Service) switchProviderAgent(ctx context.Context, id domain.SessionID, request domain.ProviderSwitchRequest, result *domain.ProviderSwitchResult) error {
 	if request.TargetHarness == "" {
 		return &domain.ProviderSwitchError{Kind: domain.ProviderSwitchRefusalUnsupported, Detail: "target provider is required"}
 	}
@@ -394,7 +423,7 @@ func (s *Service) switchProvider(ctx context.Context, id domain.SessionID, reque
 		ConversationID: conversation.ID, SourceBranchID: activeBranch.ID,
 		SourceSequence: conversation.LatestSequence, Bootstrap: handoffNote,
 	}
-	if request.TargetHarness == domain.HarnessClaudeCode {
+	if request.TargetHarness == domain.HarnessClaudeCode || domain.CanTurnOffAutoCompact(request.TargetHarness) {
 		targetCfg.ProviderSwitch.AutoCompactWindow = request.AutoCompactWindow
 	}
 	targetCfg.Model, targetCfg.Effort = request.Model, request.Effort
@@ -528,7 +557,8 @@ func (s *Service) sourcePermissions(source *Controller) ports.PermissionMode {
 
 // adoptTargetsLiveModel saves the model the target runs when its chat does not
 // offer the picked one (Claude Code's lists the newest of each family by alias),
-// or the chat would show one model and save another.
+// or the chat would show one model and save another. A pick the chat runs as a
+// base model plus a reasoning level is offered, so it stays as picked.
 func (s *Service) adoptTargetsLiveModel(ctx context.Context, id domain.SessionID, target *Controller, picked string) {
 	configurer, ok := target.conv.(ports.ChatConfigOptionController)
 	if picked == "" || !ok {
@@ -545,6 +575,14 @@ func (s *Service) adoptTargetsLiveModel(ctx context.Context, id domain.SessionID
 		live := option.Current.Select
 		if live == "" || live == picked || slices.ContainsFunc(option.Choices, func(choice ports.ChatConfigOptionChoice) bool { return choice.Value == picked }) {
 			return
+		}
+		// A pick that folds its reasoning level into the model id (Antigravity's
+		// gemini-3.8-flash-low) runs as the base model plus that level. The
+		// picked id is kept, or a restart would apply the base at its default level.
+		if resolver, ok := target.conv.(ports.ChatModelVariantResolver); ok {
+			if base, split := resolver.ModelVariantBase(picked); split && base == live {
+				return
+			}
 		}
 		settings := target.Settings()
 		settings.Model = live

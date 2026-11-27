@@ -44,7 +44,7 @@ vi.mock("expo-file-system", () => {
 	return { Directory, File, Paths: { cache: { uri: "cache" } } };
 });
 
-import { ArtifactTooLargeError, discardArtifact, downloadArtifact } from "./artifactDownload";
+import { ArtifactTooLargeError, cachedArtifactUri, discardArtifact, downloadArtifact } from "./artifactDownload";
 import { artifactCacheEntry } from "./artifacts";
 
 beforeEach(() => {
@@ -83,5 +83,28 @@ describe("discardArtifact", () => {
 	it("does nothing when there is no cached copy", () => {
 		expect(() => discardArtifact(artifactCacheEntry("host.a", "ao-1", "spec.pdf", "v1"))).not.toThrow();
 		expect(disk.deleted).toEqual([]);
+	});
+});
+
+describe("cachedArtifactUri", () => {
+	const source = { uri: "http://machine/shot.png", headers: {} };
+
+	it("finds a downloaded version at once, and nothing for one not downloaded", async () => {
+		const v1 = artifactCacheEntry("host.a", "ao-1", "shot.png", "v1");
+		const v2 = artifactCacheEntry("host.a", "ao-1", "shot.png", "v2");
+		expect(cachedArtifactUri(v1)).toBeUndefined();
+		await downloadArtifact(source, v1);
+		expect(cachedArtifactUri(v1)).toBe(`cache/artifacts/${v1.name}`);
+		// A rewritten file is another version: it is not served from the old copy.
+		expect(cachedArtifactUri(v2)).toBeUndefined();
+	});
+
+	it("says nothing while the download is still running, nor for an empty file", async () => {
+		const entry = artifactCacheEntry("host.a", "ao-1", "shot.png", "v1");
+		const running = downloadArtifact(source, entry);
+		expect(cachedArtifactUri(entry)).toBeUndefined();
+		await running;
+		disk.downloadSize = 0;
+		expect(cachedArtifactUri(entry)).toBeUndefined();
 	});
 });

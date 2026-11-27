@@ -1,9 +1,13 @@
 import { useNavigation, type NativeStackNavigationProp } from "expo-router";
-import { useEffect, useRef, type ReactNode } from "react";
+import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { ActivityIndicator, Keyboard, Platform, Pressable, StyleSheet, TextInput, View } from "react-native";
 import { AppSymbol } from "./AppSymbol";
 import { ChatAttachmentMenu } from "./chat/ChatAttachmentMenu";
 import { ComposerGlass } from "./chat/composer-glass";
+import { ComposerSuggestionPanel } from "./chat/ComposerSuggestionPanel";
+import { findComposerSuggestion, rankComposerSkills, replaceComposerSuggestion } from "./chat/composerSuggestions";
+import { createRequestGate } from "./chat/requestGate";
+import type { ChatSkill } from "./chat/types";
 import type { ComposerImageAsset, PasteOverflow } from "./chat/composerImages";
 import { COMPOSER_DISC, COMPOSER_FIELD_HEIGHT, COMPOSER_FONT_SCALE_CAP, COMPOSER_RADIUS, composerStyleRules, useComposerFieldSize } from "./chat/composerStyles";
 import { usePressFeedback } from "./pressFeedback";
@@ -33,10 +37,25 @@ export type SpawnComposerProps = {
 	/** Takes images pasted into the field; null while they can't be attached. */
 	onPasteImages?: ((assets: ComposerImageAsset[], overflow?: PasteOverflow) => void) | null;
 	voice: SpawnComposerVoice;
+	/**
+	 * The agent's skills for a `/` at the start of the prompt, read when the list
+	 * opens; absent where the task's agent has none to offer (Cloud).
+	 */
+	onLoadSkills?: () => Promise<ChatSkill[]>;
 	onSpawn: () => void;
 	busy: boolean;
 	disabled: boolean;
 };
+
+/** The `/` list, and how tall the composer it stands over is. */
+export type SpawnSuggestionOverlay = { panel: ReactNode; composerHeight: number };
+
+/**
+ * Where the page draws the composer's `/` list: over the page above the
+ * composer, so the machine and project rows stay where they are. Without a
+ * host the list sits in the composer's own column, over the pill.
+ */
+export const SpawnSuggestionHost = createContext<((overlay: SpawnSuggestionOverlay | null) => void) | null>(null);
 
 /**
  * The new task's composer, drawn as the chat's open card (`ChatComposer`):
@@ -45,7 +64,7 @@ export type SpawnComposerProps = {
  * page is for choosing who runs the task, so the model, effort and approval
  * stay in sight while the field is empty and unfocused.
  */
-export function SpawnComposer({ prompt, onChangePrompt, placeholder, attachments, settings, onChoosePhoto, onChooseFile, onPasteImages, voice, onSpawn, busy, disabled }: SpawnComposerProps) {
+export function SpawnComposer({ prompt, onChangePrompt, placeholder, attachments, settings, onChoosePhoto, onChooseFile, onPasteImages, voice, onLoadSkills, onSpawn, busy, disabled }: SpawnComposerProps) {
 	const t = useTheme();
 	const styles = useThemedStyles(makeStyles);
 	const sendFeedback = usePressFeedback("button", { tone: "onAccent" });
@@ -75,6 +94,11 @@ export function SpawnComposer({ prompt, onChangePrompt, placeholder, attachments
 	// button: no attach, no settings row, so the trace gets the whole width.
 	const dictating = listening || transcribing;
 	const promptEmpty = !prompt.trim();
+	const skills = useSkillSuggestions({ prompt, onChangePrompt, onLoadSkills, enabled: !dictating && !busy });
+	const overlayHost = useContext(SpawnSuggestionHost);
+	const [composerHeight, setComposerHeight] = useState(0);
+	useEffect(() => { overlayHost?.(skills.panel ? { panel: skills.panel, composerHeight } : null); }, [composerHeight, overlayHost, skills.panel]);
+	useEffect(() => () => overlayHost?.(null), [overlayHost]);
 
 	// One round button that follows the prompt, as the chat's: it stops the mic
 	// while it is open, starts the task once there is something written, and
@@ -117,7 +141,9 @@ export function SpawnComposer({ prompt, onChangePrompt, placeholder, attachments
 		</Pressable>;
 
 	return (
-		<View style={styles.composer}>
+		<>
+		{overlayHost ? null : skills.panel}
+		<View style={styles.composer} onLayout={(event) => setComposerHeight(event.nativeEvent.layout.height)}>
 			<ComposerGlass radius={COMPOSER_RADIUS} />
 			{attachments}
 			<View style={[styles.composerRow, dictating ? styles.dictationInsets : styles.fieldInsets]}>
@@ -130,6 +156,9 @@ export function SpawnComposer({ prompt, onChangePrompt, placeholder, attachments
 					accessibilityLabel="Task prompt"
 					value={prompt}
 					onChangeText={onChangePrompt}
+					onSelectionChange={skills.onSelectionChange}
+					onFocus={skills.onFocus}
+					onBlur={skills.onBlur}
 					placeholder={placeholder}
 					placeholderTextColor={t.textFaint}
 					maxFontSizeMultiplier={COMPOSER_FONT_SCALE_CAP}
@@ -153,7 +182,75 @@ export function SpawnComposer({ prompt, onChangePrompt, placeholder, attachments
 			</>}
 			<View style={[styles.corner, styles.cornerTrailing]}>{roundButton}</View>
 		</View>
+		</>
 	);
+}
+
+/**
+ * The chat composer's `/` list (see `ChatComposer`) for a task's first prompt:
+ * a `/` at its start, while the field has focus, lists the agent's skills over
+ * the composer and what follows filters them; a choice replaces the token.
+ * Only skills: an `@` file needs the worktree the task has not made yet.
+ */
+function useSkillSuggestions({ prompt, onChangePrompt, onLoadSkills, enabled }: {
+	prompt: string;
+	onChangePrompt: (value: string) => void;
+	onLoadSkills?: () => Promise<ChatSkill[]>;
+	enabled: boolean;
+}) {
+	const [focused, setFocused] = useState(false);
+	const [cursor, setCursor] = useState<number>();
+	const latest = useRef({ prompt, cursor });
+	latest.current = { prompt, cursor };
+	const found = focused && enabled && onLoadSkills ? findComposerSuggestion(prompt, cursor) : undefined;
+	const suggestion = found?.kind === "skills" ? found : undefined;
+	const open = Boolean(suggestion);
+	// Kept with the loader that read it: another agent's or project's list is
+	// never shown for this one, while this one's stays up as it is read again.
+	const [loaded, setLoaded] = useState<{ from: () => Promise<ChatSkill[]>; skills: ChatSkill[] }>();
+	const gate = useRef(createRequestGate()).current;
+	useEffect(() => () => gate.invalidate(), [gate]);
+	// Read each time the list opens, and again for another agent or project
+	// (a new loader); the loader's own cache spares the machine the repeats.
+	useEffect(() => {
+		if (!open || !onLoadSkills) { gate.invalidate(); return; }
+		const request = gate.begin();
+		onLoadSkills()
+			.then((skills) => { if (gate.isCurrent(request)) setLoaded({ from: onLoadSkills, skills }); })
+			.catch(() => { if (gate.isCurrent(request)) setLoaded({ from: onLoadSkills, skills: [] }); });
+	}, [gate, onLoadSkills, open]);
+	const query = suggestion?.query;
+	const catalog = loaded && loaded.from === onLoadSkills ? loaded.skills : undefined;
+	const items = useMemo(() => query !== undefined && catalog ? rankComposerSkills(catalog, query) : undefined, [catalog, query]);
+	// Text that only looks like a command (`/usr/bin`, an unknown name) gets no
+	// list rather than an empty one in the way.
+	const show = Boolean(suggestion && !(items?.length === 0 && suggestion.query.trim()));
+	// Read at the pick, not a dependency: the page hands a new `onChangePrompt`
+	// every render, and a new `select` would make a new panel, which the page
+	// stores (SpawnSuggestionHost) and so renders again, without end.
+	const changePrompt = useRef(onChangePrompt);
+	changePrompt.current = onChangePrompt;
+	const select = useCallback((value: string) => {
+		const { prompt: text, cursor: caret } = latest.current;
+		const trigger = findComposerSuggestion(text, caret);
+		if (trigger?.kind !== "skills") return;
+		const next = replaceComposerSuggestion(text, trigger, value);
+		// After the separator, so the caret no longer reads as the trigger.
+		const tokenEnd = next.length - (text.length - trigger.end);
+		const nextCaret = /\s/.test(next[tokenEnd] ?? "") ? tokenEnd + 1 : tokenEnd;
+		latest.current = { prompt: next, cursor: nextCaret };
+		setCursor(nextCaret);
+		changePrompt.current(next);
+	}, []);
+	// The same element while nothing in it changes: the page holds it in its own
+	// state (see SpawnSuggestionHost), so a new one each render would loop.
+	const panel = useMemo(() => show ? <ComposerSuggestionPanel kind="skills" items={items} onSelect={select} /> : null, [items, select, show]);
+	return {
+		panel,
+		onSelectionChange: (event: { nativeEvent: { selection: { start: number } } }) => setCursor(event.nativeEvent.selection.start),
+		onFocus: () => setFocused(true),
+		onBlur: () => setFocused(false),
+	};
 }
 
 // The chat composer's own rules for its corners, controls row and round

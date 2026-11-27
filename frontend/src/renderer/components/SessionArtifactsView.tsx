@@ -22,12 +22,15 @@ import { isMacPlatform, isWindowsPlatform } from "../lib/platform";
 import { artifactChangeError, canChangeSessionArtifacts, findHostShareLink, type ArtifactRow } from "../lib/artifacts";
 import { isArchivedSession } from "../lib/standalone-archive";
 import { LOCAL_HOST, sessionUiKey } from "../lib/hosts";
+import { mediaPlaybackKey } from "../lib/media-playback";
 import { cn } from "../lib/utils";
 import type { SessionArtifact, WorkspaceSession } from "../types/workspace";
 import { AppBrowserLinkContext } from "./AppLink";
 import { ArtifactActionsMenu, openCloudArtifactsFolder } from "./ArtifactActionsMenu";
 import { artifactAtPath, deliverableArtifacts } from "../../../../packages/shared/artifacts/deliverables";
-import { ShareArtifactButton, useHostShareLinks, useReconciledShareLinks } from "./ShareArtifactPopover";
+import { ShareArtifactButton, useHostShareLinks, useReconciledShareLinks, useShareAvailable } from "./ShareArtifactPopover";
+import { ArtifactCommentsButton, ArtifactCommentsWorkspace, artifactCommentsKind } from "./artifact-comments/ArtifactComments";
+import { sharedArtifactLinkId } from "../../../../packages/shared/artifacts/shared-artifact-link";
 import { ArtifactGalleryCard } from "./ArtifactGalleryCard";
 import { ArtifactFileView } from "./ArtifactFileView";
 import { CloudArtifactFrame } from "./CloudArtifactFrame";
@@ -409,6 +412,7 @@ function ArtifactViewerFrame({
  * an edit in progress survives a look at an earlier version.
  */
 function ArtifactViewerBody({
+	active,
 	artifact,
 	artifactRoot,
 	cloud = false,
@@ -431,6 +435,8 @@ function ArtifactViewerBody({
 	menuActions,
 	zoomController,
 }: {
+	/** False while the view is hidden: a video pauses then. */
+	active: boolean;
 	artifact: SessionArtifact;
 	/** A cloud file's access prefix, which relative links resolve against. */
 	artifactRoot?: string;
@@ -486,6 +492,7 @@ function ArtifactViewerBody({
 				{previewing && media ? null : <div className={cn("h-full", (previewing || showingPage) && "hidden")}>
 					<ArtifactZoomContext.Provider value={previewing || showingPage ? null : zoomController}>
 					<ArtifactFileView
+						active={active}
 						artifactName={artifact.name}
 						initialEditing={initialEditing}
 						artifactRoot={artifactRoot}
@@ -537,6 +544,7 @@ function ArtifactViewerBody({
 				) : null}
 				{previewing ? (
 					<ArtifactVersionPreview
+						active={active}
 						artifactOrigin={artifactOrigin}
 						cloud={cloudVersions}
 						hostId={hostId}
@@ -664,11 +672,14 @@ function CloudHtmlArtifactView({
  * with isolated inline HTML previews and an optional full-screen view.
  */
 export function SessionArtifactsView({
+	active = true,
 	hostId,
 	onRequestConsumed,
 	request,
 	session,
 }: {
+	/** False while the inspector is closed or on another tab: a video pauses then. */
+	active?: boolean;
 	hostId?: string;
 	onRequestConsumed?: (key: number) => void;
 	request?: ArtifactOpenRequest | null;
@@ -709,6 +720,13 @@ export function SessionArtifactsView({
 	const [toolbarHost, setToolbarHost] = useState<HTMLElement | null>(null);
 	const [fullscreen, setFullscreen] = useState(false);
 	const [previewVersion, setPreviewVersion] = useState<number | null>(null);
+	// Comments show the published page in place of the local file, and close with the file.
+	const [commentsOpen, setCommentsOpen] = useState(false);
+	// The published link whose page has appeared: until then the local file
+	// stays in view while the page loads, unseen, over it.
+	const [commentsShownFor, setCommentsShownFor] = useState<string | null>(null);
+	const [publishedOutdated, setPublishedOutdated] = useState(false);
+	const shareAvailable = useShareAvailable();
 	const [zoomController] = useState(() => new ArtifactZoomController());
 	// The shown file view's actions, which its name menu lists.
 	const fileMenuActions = useRef<ArtifactMenuAction[]>([]);
@@ -754,6 +772,7 @@ export function SessionArtifactsView({
 	useEffect(() => { setSelectedPath(null); setAwaitedPath(null); setEditingPath(null); setHtmlSourcePath(null); }, [uiKey]);
 	// History is per file: opening another one starts on its live content.
 	useEffect(() => setPreviewVersion(null), [selectedPath, uiKey]);
+	useEffect(() => { setCommentsOpen(false); setCommentsShownFor(null); setPublishedOutdated(false); }, [selectedPath, uiKey]);
 	// Every file, and each look at its page or source, opens at fit.
 	useEffect(() => zoomController.reset(), [htmlSourcePath, previewVersion, selectedPath, uiKey, zoomController]);
 	const onViewerKeyDown = useCallback((event: KeyboardEvent) => {
@@ -891,6 +910,13 @@ export function SessionArtifactsView({
 		// The page also opens in the session's Browser, the same target as
 		// `ao preview` on its path; full screen is left first since it covers it.
 		const browserUrl = openInBrowser && !cloud && previewVersion === null ? selected.previewUrl : undefined;
+		// Comments: a published Markdown or HTML file, for whoever sees its Publish button (its owner).
+		const shareOwner = !editingFile && !session.cloud?.shared && (!session.cloud || cloudOwner);
+		const publishedUrl = cloud || !hostId ? selected.shareUrl : findHostShareLink(hostShareLinks, hostId, session.id, selected)?.url;
+		const commentsKind = artifactCommentsKind(selected.path);
+		const commentsSlug = shareOwner && shareAvailable && commentsKind && publishedUrl ? sharedArtifactLinkId(publishedUrl) : null;
+		const showingComments = commentsOpen && commentsSlug !== null && commentsKind !== null && previewVersion === null && !showingHtmlSource;
+		const commentsCover = showingComments && commentsShownFor === commentsSlug;
 		return (
 			<ArtifactViewerFrame fullscreen={fullscreen} label={selected.name} onEngagedChange={onViewerEngagedChange} onExitFullscreen={exitFullscreen} onKeyDown={onViewerKeyDown}>
 				{/* One header row: back, the file's name menu (its view and file actions), an edit's Save, Share, and full screen. */}
@@ -926,6 +952,7 @@ export function SessionArtifactsView({
 								name={selected.name}
 								published={Boolean(selected.shareUrl)}
 								revision={listed?.updatedAt}
+								onOutdatedChange={setPublishedOutdated}
 							/>
 						)) : !hostId ? (
 							<ShareArtifactButton
@@ -933,6 +960,7 @@ export function SessionArtifactsView({
 								name={selected.name}
 								published={Boolean(selected.shareUrl)}
 								revision={listed?.updatedAt}
+								onOutdatedChange={setPublishedOutdated}
 							/>
 						) : (
 							// Downloaded from the host through its proxy, then uploaded from here.
@@ -941,8 +969,21 @@ export function SessionArtifactsView({
 								name={selected.name}
 								published={Boolean(findHostShareLink(hostShareLinks, hostId, session.id, selected))}
 								revision={listed?.updatedAt}
+								onOutdatedChange={setPublishedOutdated}
 							/>
 						)}
+						{commentsSlug ? (
+							<ArtifactCommentsButton
+								onToggle={() => {
+									setPreviewVersion(null);
+									setHtmlSourcePath(null);
+									setCommentsOpen(!showingComments);
+									setCommentsShownFor(null);
+								}}
+								open={showingComments}
+								slug={commentsSlug}
+							/>
+						) : null}
 						<Tooltip>
 							<TooltipTrigger asChild>
 								<Button
@@ -961,7 +1002,7 @@ export function SessionArtifactsView({
 					</div>
 				</div>
 				<div className="relative min-h-0 flex-1" ref={contentRef}>
-					{cloud && !selected.rawUrl ? (
+					{commentsCover ? null : cloud && !selected.rawUrl ? (
 						cloudAccess.isError ? (
 							<PanelMessage action={<RetryButton onClick={() => void cloudAccess.refetch()} />}>{t("artifacts.accessError")}</PanelMessage>
 						) : (
@@ -983,6 +1024,7 @@ export function SessionArtifactsView({
 						</ArtifactZoomContext.Provider>
 					) : (
 						<ArtifactViewerBody
+							active={active}
 							artifact={selected}
 							htmlSource={showingHtmlSource}
 							initialEditing={editingPath === selected.path && Boolean(selectedFile.data?.editable && selectedFile.data?.fileFingerprint) && !selectedFile.data?.binary && !selectedFile.data?.contentTruncated}
@@ -1006,6 +1048,20 @@ export function SessionArtifactsView({
 							menuActions={fileMenuActions}
 						/>
 					)}
+					{showingComments && commentsSlug && commentsKind ? (
+						<div className={cn("absolute inset-0 bg-background", !commentsCover && "invisible")} data-testid="artifact-comments-layer">
+							<ArtifactCommentsWorkspace
+								kind={commentsKind}
+								mediaKey={mediaPlaybackKey(session.id, selected.path, hostId)}
+								onClose={() => { setCommentsOpen(false); setCommentsShownFor(null); }}
+								onShown={() => setCommentsShownFor(commentsSlug)}
+								outdated={publishedOutdated}
+								sendTarget={{ session, hostId, path: selected.path, name: selected.name }}
+								slug={commentsSlug}
+								title={selected.name}
+							/>
+						</div>
+					) : null}
 					<ArtifactZoomControls controller={zoomController} />
 				</div>
 			</ArtifactViewerFrame>

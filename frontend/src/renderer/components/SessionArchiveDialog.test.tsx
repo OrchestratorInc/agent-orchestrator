@@ -59,7 +59,7 @@ test("looks a cloud session's links up on this computer, since its file list doe
 	render(withQueries(<SessionArchiveDialog open onOpenChange={vi.fn()} onConfirm={vi.fn()} session={cloudSession} trigger={<span />} />));
 
 	expect(await screen.findByText(/is published; its link will stop working/)).toBeInTheDocument();
-	expect(inspect).toHaveBeenCalledWith(expect.objectContaining({ source: "cloud", orgId: "org-1", sessionId: "session-1", path: "report.html", baseUrl: "https://cp.test" }));
+	expect(inspect).toHaveBeenCalledWith(expect.objectContaining({ source: "cloud", orgId: "org-1", sessionId: "session-1", path: "report.html", baseUrl: "https://cp.test" }), { linkOnly: true });
 	inspect.mockRestore();
 });
 

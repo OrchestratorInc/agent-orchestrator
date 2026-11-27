@@ -3192,6 +3192,8 @@ type harness struct {
 	accountRechecks atomic.Int32
 	renders         *attachmentstore.Store
 	rendersDir      string
+	// workspace is the directory the controller was started in.
+	workspace string
 	// reconciled lists the sessions whose output type a save asked to update;
 	// reconcileErr is what that update returns.
 	reconciled   []domain.SessionID
@@ -3327,6 +3329,7 @@ func newHarnessInWorkspace(
 		},
 	})
 
+	h.workspace = workspace
 	ctrl, err := svc.Start(context.Background(), chatsvc.StartConfig{
 		SessionID:     testSession,
 		ProjectID:     testProject,
@@ -7478,5 +7481,38 @@ func TestStartRejectsProviderPermissionBeforeDriverLaunch(t *testing.T) {
 	}
 	if launched {
 		t.Fatal("unsupported permission reached provider launch")
+	}
+}
+
+func TestStartTurnsOpenCodeCompactionOffInThePreparedEnvironment(t *testing.T) {
+	st := openStore(t)
+	ctx := context.Background()
+	now := time.Date(2026, 11, 24, 12, 0, 0, 0, time.UTC)
+	conversation, err := st.CreateConversation(ctx, "opencode-compaction-off", domain.ConversationScopeProject, testProject, testSession, now)
+	if err != nil {
+		t.Fatalf("CreateConversation: %v", err)
+	}
+	if err := st.SetConversationSettings(ctx, conversation.ID, domain.ConversationSettings{AutoCompactWindow: domain.AutoCompactOff}, now); err != nil {
+		t.Fatalf("SetConversationSettings: %v", err)
+	}
+	var started ports.ChatStartConfig
+	svc := chatsvc.New(chatsvc.Options{
+		Store: st, Sessions: st,
+		Drivers: fakeRegistry{driver: fakeDriver{conv: newFakeConversation(), startCfg: &started}},
+		Log:     slog.New(slog.DiscardHandler),
+		NewID:   func() string { return "opencode-compaction-off-start" },
+	})
+	t.Cleanup(func() { _ = svc.Stop(context.Background(), testSession) })
+	// A persistent host launches with the environment prepared here, not the one passed to Start.
+	if _, err := svc.Start(ctx, chatsvc.StartConfig{
+		SessionID: testSession, ProjectID: testProject, Harness: domain.HarnessOpenCodeV2, WorkspacePath: t.TempDir(),
+		PrepareControllerEnv: func(context.Context, domain.SessionControllerOwner) (map[string]string, error) {
+			return map[string]string{"OPENCODE_CONFIG_CONTENT": `{"model":"a/b"}`}, nil
+		},
+	}); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	if got, want := started.Env["OPENCODE_CONFIG_CONTENT"], `{"compaction":{"auto":false},"model":"a/b"}`; got != want {
+		t.Fatalf("OpenCode config = %s, want %s", got, want)
 	}
 }

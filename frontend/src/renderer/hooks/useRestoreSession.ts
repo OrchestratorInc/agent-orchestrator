@@ -5,6 +5,7 @@ import { apiClient, apiErrorMessage } from "../lib/api-client";
 import { clientForHost } from "../lib/host-clients";
 import { aoBridge } from "../lib/bridge";
 import { CloudCpError, type CloudCpSession } from "../lib/cloud-cp";
+import { restoreCloudSession } from "../lib/cloud-lifecycle";
 import { createRendererCloudCpClient } from "./useCloudCp";
 import { settingsQueryKey, type Settings } from "./useSettings";
 import { cloudSessionsQueryKey, workspaceQueryKey, workspaceQueryKeyForHost } from "./useWorkspaceQuery";
@@ -67,7 +68,8 @@ export function useRestoreSession(): (sessionId: string, hostId?: string) => Pro
 					return { status: "error", message: "The cloud control plane is not configured." };
 				}
 				try {
-					await createRendererCloudCpClient(baseUrl).restoreSession(cloudOrgId, sessionId);
+					// One restore per session at a time: a second ask joins the one in flight.
+					await restoreCloudSession(createRendererCloudCpClient(baseUrl), cloudOrgId, sessionId);
 					// The session flips to reviving on the next fetch; refresh the cloud
 					// listing (and the merged board) so the UI reflects it immediately.
 					await queryClient.invalidateQueries({ queryKey: cloudSessionsQueryKey });
@@ -87,6 +89,12 @@ export function useRestoreSession(): (sessionId: string, hostId?: string) => Pro
 					if (err instanceof CloudCpError && err.code === "SESSION_CONTENT_EXPIRED") {
 						useContentExpiredSessionsStore.getState().mark(sessionId);
 						return { status: "error", message: t("restoreUnavailable.contentExpired") };
+					}
+					// It moved to another computer and continues there: the listing's
+					// next read marks it moved away, which stops offering Restore.
+					if (err instanceof CloudCpError && err.code === "SESSION_MOVED_AWAY") {
+						await queryClient.invalidateQueries({ queryKey: cloudSessionsQueryKey });
+						return { status: "error", message: t("restoreUnavailable.movedAway"), code: err.code };
 					}
 					return {
 						status: "error",
