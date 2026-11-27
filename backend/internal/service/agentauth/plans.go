@@ -116,12 +116,14 @@ func kimiLoginPlan() Plan {
 // terminal's reviewed actions ("previous", "next", "select") and commands to
 // plain slash commands written in the plan, so no free-form or UI-supplied
 // input ever reaches the CLI. An optional step is skipped when the next
-// step's screen shows without it.
+// step's screen shows without it. After a restart step the CLI is closed and
+// started afresh once a fresh auth check no longer finds the old sign-in.
 type guidedStep struct {
 	readyText string
 	command   string
 	keys      []string
 	optional  bool
+	restart   bool
 }
 
 // loginURLRule allows a sign-in link the CLI prints in its hidden terminal to
@@ -154,9 +156,10 @@ func agyLoginPlan() Plan {
 	p.guidedPlatforms = []string{"darwin", "windows"}
 	// Signed in, Agy skips its login menu: it signs in silently, asks whether
 	// to trust the (fresh, empty) working folder, then opens its chat. It has
-	// /logout but no /login, and /logout returns straight to the login menu,
-	// so a login over an existing sign-in replaces it: trust the folder, sign
-	// out, then walk the menu as usual.
+	// /logout but no /login, and after /logout it flashes its login menu and
+	// returns to the chat signed out. So a login over an existing sign-in
+	// replaces it: trust the folder, sign out, start a fresh agy (which shows
+	// the menu and waits), then walk the menu as usual.
 	p.signedInScreens = []string{agyTrustPrompt, agyChatPrompt}
 	// Google's callback page shows an authorization code to paste back into
 	// Agy, which waits for it under the sign-in link.
@@ -164,7 +167,7 @@ func agyLoginPlan() Plan {
 	p.codeRejected = "Got an error:"
 	p.signOutSteps = []guidedStep{
 		{readyText: agyTrustPrompt, keys: []string{"select"}, optional: true},
-		{readyText: agyChatPrompt, command: "/logout"},
+		{readyText: agyChatPrompt, command: "/logout", restart: true},
 	}
 	return p
 }

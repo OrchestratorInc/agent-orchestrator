@@ -81,6 +81,12 @@ func (f *guidedTerminalFake) pressed() []string {
 	return append([]string(nil), f.keys...)
 }
 
+func (f *guidedTerminalFake) openCount() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.opens
+}
+
 func (f *guidedTerminalFake) isClosed() bool {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -255,9 +261,7 @@ const agyChatScreen = "Antigravity CLI 1.5.18\n> \n? for shortcuts              
 
 func TestGuidedLoginReplacesAnExistingSignIn(t *testing.T) {
 	onPlatform(t, "darwin")
-	previous := commandSettleDelay
-	commandSettleDelay = 10 * time.Millisecond
-	t.Cleanup(func() { commandSettleDelay = previous })
+	fastGuidedDelays(t)
 
 	// Signed in, Agy skips its menu and asks about the fresh folder.
 	pty := &guidedTerminalFake{output: agyTrustScreen}
@@ -275,17 +279,21 @@ func TestGuidedLoginReplacesAnExistingSignIn(t *testing.T) {
 	if got := pty.pressed(); !reflect.DeepEqual(got, []string{"select", "type:/logout", "select"}) {
 		t.Fatalf("keys = %v, want [select type:/logout select]", got)
 	}
-	// The old sign-in must not finish the login before its menu is walked.
+	// Until the sign-out lands, Agy is not restarted and the old sign-in
+	// does not finish the login.
 	time.Sleep(2500 * time.Millisecond)
 	current, err := svc.Login(t.Context(), "agy", started.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if current.Status != "running" {
-		t.Fatalf("status = %q while signing out, want running", current.Status)
+	if current.Status != "running" || pty.openCount() != 1 {
+		t.Fatalf("status = %q opens = %d while signing out, want running in the first agy", current.Status, pty.openCount())
 	}
 
+	// Signed out, Agy returns to its chat; a fresh agy shows the menu.
+	pty.setOutput(agyChatScreen)
 	prober.set(domain.AgentAuthenticationUnknown)
+	waitFor(t, "a fresh agy", 5*time.Second, func() bool { return pty.openCount() == 2 })
 	pty.setOutput(agyMenuScreen)
 	waitFor(t, "Google OAuth to be chosen", 5*time.Second, func() bool { return len(pty.pressed()) >= 4 })
 	prober.set(domain.AgentAuthenticationAuthorized)
@@ -303,9 +311,7 @@ func TestGuidedLoginReplacesAnExistingSignIn(t *testing.T) {
 
 func TestGuidedLoginSkipsTrustWhenAgyOpensItsChat(t *testing.T) {
 	onPlatform(t, "darwin")
-	previous := commandSettleDelay
-	commandSettleDelay = 10 * time.Millisecond
-	t.Cleanup(func() { commandSettleDelay = previous })
+	fastGuidedDelays(t)
 
 	pty := &guidedTerminalFake{output: agyChatScreen}
 	svc := NewWithAgentResolver(foundExecutable("agy"), &switchableProberFake{state: domain.AgentAuthenticationUnknown}, pty, "")
@@ -316,6 +322,7 @@ func TestGuidedLoginSkipsTrustWhenAgyOpensItsChat(t *testing.T) {
 		t.Fatal(err)
 	}
 	waitFor(t, "the sign-out", 5*time.Second, func() bool { return len(pty.pressed()) >= 2 })
+	waitFor(t, "a fresh agy", 5*time.Second, func() bool { return pty.openCount() == 2 })
 	pty.setOutput(agyMenuScreen)
 	waitFor(t, "the project entry", 5*time.Second, func() bool { return len(pty.pressed()) >= 4 })
 	if got := pty.pressed(); !reflect.DeepEqual(got, []string{"type:/logout", "select", "next", "select"}) {
@@ -470,6 +477,15 @@ func TestGuidedLoginIgnoresAStaleSignIn(t *testing.T) {
 	if _, err := svc.CancelLogin(t.Context(), "agy", started.ID); err != nil {
 		t.Fatal(err)
 	}
+}
+
+// fastGuidedDelays shortens the waits around typed commands and restarts.
+// Tests using it must not run in parallel.
+func fastGuidedDelays(t *testing.T) {
+	t.Helper()
+	command, restart := commandSettleDelay, restartCheckDelay
+	commandSettleDelay, restartCheckDelay = 10*time.Millisecond, 50*time.Millisecond
+	t.Cleanup(func() { commandSettleDelay, restartCheckDelay = command, restart })
 }
 
 func (f *guidedTerminalFake) SendAuthTerminalCommand(_ context.Context, _ string, command string) error {

@@ -34,6 +34,7 @@ type guidedTerminalFake struct {
 	closed     bool
 	closeErr   error
 	closeCalls int
+	opens      int
 }
 
 func (f *guidedTerminalFake) OpenCommandTerminal(_ context.Context, input shellterm.OpenCommandTerminalInput) (shellterm.ShellTerminal, error) {
@@ -41,6 +42,7 @@ func (f *guidedTerminalFake) OpenCommandTerminal(_ context.Context, input shellt
 	defer f.mu.Unlock()
 	f.input = input
 	f.alive = true
+	f.opens++
 	return shellterm.ShellTerminal{HandleID: "private-auth-pty"}, nil
 }
 func (f *guidedTerminalFake) ObserveAuthTerminal(_ context.Context, _ string) (shellterm.AuthTerminalObservation, error) {
