@@ -47,6 +47,11 @@ var (
 	ClassifyDialog = rules.ClassifyDialog
 	// Truncate cuts text to at most max characters, never splitting one.
 	Truncate = rules.Truncate
+	// MayNeedApproval reports whether a browser command can ask the user,
+	// before anything about the page is read.
+	MayNeedApproval = rules.MayNeedApproval
+	// TypesLineBreak reports a type whose text holds a line break (an Enter).
+	TypesLineBreak = rules.TypesLineBreak
 	// ValidMode reports whether m is a known mode.
 	ValidMode = rules.ValidMode
 	// Site returns the host a page URL belongs to.
