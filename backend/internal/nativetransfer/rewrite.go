@@ -140,14 +140,29 @@ func signed(t map[string]any) bool {
 // original text, so a replacement is never matched again by a later pair
 // (when one pair's new path is another pair's old one). At each position the
 // longest matching prefix wins (m is sorted longest first).
+//
+// Each prefix's next match is cached, absence included, and searched again
+// only once the scan has passed it, so every prefix's search moves forward:
+// the text is scanned about once per prefix, not once per replacement, which
+// keeps a long string listing many paths (up to a 64 MiB transcript) linear.
 func (m pathMap) rewriteString(s string) (string, bool) {
 	var b strings.Builder
 	changed := false
 	i := 0
+	// next[k] is prefix k's next whole-path match at or after i; -1 when it
+	// has none left, which stays true for the rest of s.
+	next := make([]int, len(m))
+	for k, p := range m {
+		next[k] = indexWholePath(s, 0, p.old)
+	}
 	for i < len(s) {
 		best, at := -1, len(s)
 		for k, p := range m {
-			if j := indexWholePath(s, i, p.old); j >= 0 && j < at {
+			if next[k] >= 0 && next[k] < i {
+				// Passed (inside an earlier replacement): look again from i.
+				next[k] = indexWholePath(s, i, p.old)
+			}
+			if j := next[k]; j >= 0 && j < at {
 				best, at = k, j
 			}
 		}

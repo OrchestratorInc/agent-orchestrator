@@ -2,7 +2,9 @@ package nativetransfer
 
 import (
 	"encoding/json"
+	"strings"
 	"testing"
+	"time"
 )
 
 func TestReplacePathPrefix(t *testing.T) {
@@ -97,5 +99,32 @@ func TestRewriteOpenCodeExportLeavesSignedReasoningAlone(t *testing.T) {
 	}
 	if got.Info.Location.Directory != CloudCwdPlaceholder {
 		t.Errorf("directory = %q, want it rewritten", got.Info.Location.Directory)
+	}
+}
+
+// A long string that lists many paths for one prefix and none for another
+// (a tool result listing the workspace, with no transcript-folder path) is
+// rewritten in linear time: the absent prefix is not searched for again after
+// every replacement.
+func TestRewriteStringIsLinearInTheListedPaths(t *testing.T) {
+	m, err := newPathMap(map[string]string{
+		"/Users/me/ao/worktrees/app-3":                            "/ao-moved/cwd",
+		"/Users/me/.claude/projects/-Users-me-ao-worktrees-app-3": "/ao-moved/claude-project",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	const n = 200_000
+	s := strings.Repeat("/Users/me/ao/worktrees/app-3/a.go\n", n)
+	start := time.Now()
+	got, changed := m.rewriteString(s)
+	elapsed := time.Since(start)
+	if !changed || strings.Count(got, "/ao-moved/cwd/a.go") != n {
+		t.Fatalf("rewrote %d of %d paths", strings.Count(got, "/ao-moved/cwd/a.go"), n)
+	}
+	// Linear takes milliseconds; rescanning the rest of the string for the
+	// absent prefix after each of the n replacements takes minutes.
+	if elapsed > 5*time.Second {
+		t.Fatalf("rewriting %d listed paths took %v", n, elapsed)
 	}
 }
