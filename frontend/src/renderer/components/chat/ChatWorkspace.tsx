@@ -3656,6 +3656,9 @@ export function Timeline({
 	const hiddenAway = useRef(false);
 	const initialLayoutAt = useRef(0);
 	const lastScrollTop = useRef(0);
+	// Set by the reader's own wheel, touch, key and scrollbar-drag input. A jump to a
+	// marker or a prompt moves the view without it, and must not be pulled back.
+	const readerIntentAt = useRef(0);
 	const skipRelatchFollow = useRef(false);
 	const reducedMotion = useReducedMotion();
 	const reducedMotionRef = useRef(reducedMotion);
@@ -5331,9 +5334,14 @@ export function Timeline({
 		let held: Element | undefined;
 		if (settle.following) {
 			const end = Math.max(0, node.scrollHeight - node.clientHeight);
-			// A reload that settles the turn can also re-page the history above it, which
-			// the history anchor just moved the view by (it runs first in the commit).
-			const top = Math.min(settle.scrollTop + historyShift.current, end);
+			const readerHeld = performance.now() - readerIntentAt.current < READER_INTENT_HOLD_MS;
+			// When the turn grew past what the prompt spacer can absorb (a long reply
+			// that already scrolled the view), advance scrollTop to the new end before
+			// paint instead of leaving it short for followEnd to glide against the FLIP
+			// slide. Honor an active reader-intent hold (upward wheel/key/touch before
+			// its scroll event clears pinnedRef) so settling never pulls the reader back.
+			if (!readerHeld) cancelScrollFollow();
+			const top = readerHeld ? Math.min(settle.scrollTop + historyShift.current, end) : end;
 			if (Math.abs(node.scrollTop - top) >= 0.5) node.scrollTop = top;
 			markWritten(node.scrollTop);
 			lastScrollTop.current = node.scrollTop;
@@ -5384,7 +5392,7 @@ export function Timeline({
 			}
 			row.animate([{ transform: from }, { transform: "none" }], { duration: SETTLE_SLIDE_MS, easing: SETTLE_EASE });
 		});
-	}, [virtualized, virtualizer, spacerTakes, syncPromptSpacer, markWritten, updateScrollbar, releaseSettleHold]);
+	}, [virtualized, virtualizer, spacerTakes, syncPromptSpacer, cancelScrollFollow, markWritten, updateScrollbar, releaseSettleHold]);
 
 	// Rows above the view come and go: an older page loads in, or a reload re-reads the
 	// chat's pages from its new newest row and drops the oldest ones (every send does
@@ -5574,9 +5582,6 @@ export function Timeline({
 	// open something to read. Only the reader's own scrolling arms it, so streamed
 	// growth while unpinned (which moves nothing) never does.
 	const relatchTimer = useRef<number | undefined>(undefined);
-	// Set by the reader's own wheel, touch, key and scrollbar-drag input. A jump to a
-	// marker or a prompt moves the view without it, and must not be pulled back.
-	const readerIntentAt = useRef(0);
 	const noteReaderIntent = useCallback(() => {
 		readerIntentAt.current = performance.now();
 	}, []);
@@ -6619,8 +6624,6 @@ const TurnGroup = memo(function TurnGroup({
 			onOpenChange={(open) => onActivityDisclosureChange(key, open)}
 		/>
 	);
-	// Set when a reports line was drawn under a message or steer, so the prompt's action row knows it is taken.
-	let drewReportsUnder = false;
 	const renderWorkerRun = (run: TimelineRun): ReactNode | ReactNode[] => {
 		const item = run.kind === "single" ? run.items[0] : undefined;
 		if (!workerUpdates || !item) return renderRun(run);
@@ -6631,7 +6634,6 @@ const TurnGroup = memo(function TurnGroup({
 			// Reports a worker's steer carried in travel with it, as their own line.
 			const carried = batched?.under.get(item.id) ?? [];
 			if (carried.length === 0) return rows;
-			drewReportsUnder = true;
 			return [rows, reportsLine(`${run.key}:reports`, carried)];
 		}
 		if (updates.length > 0) return reportsLine(run.key, updates);
@@ -6642,14 +6644,11 @@ const TurnGroup = memo(function TurnGroup({
 			? [...piggybackedUpdates(item), ...(batched?.under.get(item.id) ?? [])].filter((update) => needsYouNow(updateIndex, update))
 			: [];
 		if (waiting.length === 0) return renderRun(run);
-		drewReportsUnder = true;
 		return [renderRun(run), reportsLine(`${run.key}:waiting`, waiting)];
 	};
 	const body: ReactNode[] = humanRuns.flatMap(renderWorkerRun);
 	const tail = workedRuns.at(-1);
 	const tailIsReply = group.live && tail?.kind === "single" && tail.items[0].kind === "message" && tail.items[0].role === "assistant";
-	// The reports line under the prompt takes the prompt's action row itself.
-	const reportsUnderPrompt = drewReportsUnder;
 	// The live row sits at the end of the turn, under what the agent has written so
 	// far, where the reader is already looking: orb, current step, timer. A provider
 	// retry shows in the same row. The setup checklist shares it too, so the handoff
@@ -6676,10 +6675,11 @@ const TurnGroup = memo(function TurnGroup({
 	const outcome = group.outcome;
 	// "Worked for" heads every settled turn with how long it ran. With work to fold it
 	// is the fold, opening onto the steps; a turn that went straight to its answer has
-	// nothing to open, so it is the same words without the chevron. As the turn
-	// settles it fades in where the turn reserved its row, and the reply slides up
-	// into the room its steps left (restoreSettle), so the work reads as collapsing
-	// into its summary. A settled turn loaded from history mounts it without the fade.
+	// nothing to open, so it is the same words without the chevron. No blank row is
+	// reserved for it while the turn runs: as the turn settles it fades in and
+	// restoreSettle FLIP-animates the rows below into their new positions on the
+	// compositor thread, so the space opens smoothly without layout thrashing. A
+	// settled turn loaded from history mounts it without the fade.
 	const disclosureKey = `${group.key}:worked`;
 	const workedDurationMs = outcome?.durationMs !== undefined && outcome.durationMs > 0 ? outcome.durationMs : undefined;
 	// Agents the turn spawned are part of its work, so they fold with its steps.
@@ -6691,19 +6691,6 @@ const TurnGroup = memo(function TurnGroup({
 		// A message refused for its login did no work, so it gets no "Worked for".
 		outcome && !onlyRead && !loginNoteMessageId && (hasFoldedWork || workedDurationMs !== undefined),
 	);
-	// The prompt's hover actions (time, edit, copy) float in the row under its bubble.
-	// "Worked for" fills that row; without it, an empty row of the same height keeps
-	// them off the reply. A branch navigator already reserves the row in the flow.
-	const promptBubble = group.items.some(
-		(item) => item.kind === "message" && item.role === "user" && item.origin === "human" && !item.continuation && !relayedVia(item),
-	);
-	const reservesActionRow = promptBubble && !reportsUnderPrompt && !(group.turnId && onActivateBranch && branchPoints.get(group.turnId));
-	// The empty row is exactly as tall as "Worked for", which takes its place as the
-	// turn settles, so the handover moves nothing. Only one of the two is ever in the
-	// DOM, so the turn's row gap is never counted twice.
-	if (!showsWorked && reservesActionRow) {
-		body.push(<div key="turn-worked-gap" aria-hidden="true" className="h-7 shrink-0" data-turn-worked-gap="" />);
-	}
 	body.push(
 		<AnimatePresence key="turn-worked" initial={false}>
 			{outcome && showsWorked ? (
