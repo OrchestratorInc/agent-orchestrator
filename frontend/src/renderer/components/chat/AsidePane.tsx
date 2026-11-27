@@ -114,6 +114,12 @@ export interface CommentThreadCard {
 	unread: boolean;
 }
 
+/** A second way to post a refused draft, offered as one click beside the error (a refused quote: on the whole message). */
+export interface CommentFallback {
+	label: string;
+	send: (text: string, mentions: ComposerMention[], sendToAgent: boolean) => Promise<void>;
+}
+
 /** How a resolved thread reads in the pane, collapsed to one status line. */
 export interface ResolvedThreadView {
 	/** Who resolved it (or sent it to the agent, which resolves it). */
@@ -162,6 +168,7 @@ export function AsidePaneView({
 	focusKey,
 	firstComment = false,
 	initialText,
+	replyFallback,
 }: {
 	/** The pane's accessible name ("Comment", "New comment"); its header shows only the session's title. */
 	label: string;
@@ -198,6 +205,8 @@ export function AsidePaneView({
 	firstComment?: boolean;
 	/** Text the reply box starts with when focusKey puts the caret there. */
 	initialText?: string;
+	/** Offered beside an error from onReply: posts the kept draft another way. */
+	replyFallback?: CommentFallback;
 }) {
 	const { t } = useTranslation();
 	const list = useRef<HTMLDivElement>(null);
@@ -302,6 +311,7 @@ export function AsidePaneView({
 					initialText={initialText}
 					mentionSource={mentionSource}
 					onSend={onReply}
+					fallback={replyFallback}
 					reopens={Boolean(resolved)}
 				/>
 			)}
@@ -453,12 +463,15 @@ function AsideReplyBox({
 	firstComment,
 	initialText,
 	reopens = false,
+	fallback,
 }: {
 	disabled?: string;
 	focusKey?: number;
 	initialText?: string;
 	mentionSource?: AsideMentionSource;
 	onSend: (text: string, mentions: ComposerMention[], sendToAgent: boolean) => Promise<void>;
+	/** Another way to post the kept draft, offered beside the error that refused it. */
+	fallback?: CommentFallback;
 	canSendToAgent: boolean;
 	/** The comments a send to the agent takes besides the reply. */
 	agentComments?: number;
@@ -520,7 +533,8 @@ function AsideReplyBox({
 		editor.current?.focus();
 	}, [suggestions, trigger]);
 
-	const submit = useCallback(async () => {
+	// Sends the box's draft through `send` (onSend, or a fallback the error offers).
+	const submitWith = useCallback(async (send: (text: string, mentions: ComposerMention[], sendToAgent: boolean) => Promise<void>) => {
 		const snapshot = editor.current?.getSnapshot();
 		if (!snapshot || sending || disabled) return;
 		const text = snapshot.text.trim();
@@ -535,7 +549,7 @@ function AsideReplyBox({
 		setSending(true);
 		editor.current?.clear();
 		try {
-			await onSend(text, mentions, toAgent);
+			await send(text, mentions, toAgent);
 			setSendToAgent(false);
 		} catch (reason) {
 			// Nothing was sent: the draft comes back, with its chips.
@@ -544,7 +558,8 @@ function AsideReplyBox({
 		} finally {
 			setSending(false);
 		}
-	}, [disabled, onSend, sending, t, toAgent]);
+	}, [disabled, sending, t, toAgent]);
+	const submit = useCallback(() => submitWith(onSend), [onSend, submitWith]);
 
 	const onComplete = useCallback((_snapshot: ComposerEditorSnapshot) => (menuOpen ? suggestions[active]?.mention : undefined), [active, menuOpen, suggestions]);
 	const onEnter = useCallback((_snapshot: ComposerEditorSnapshot, event: globalThis.KeyboardEvent) => {
@@ -653,6 +668,12 @@ function AsideReplyBox({
 				</div>
 			</div>
 			{error ? <p className="mt-1.5 px-1 text-xs text-error" role="alert">{error}</p> : null}
+			{error && fallback ? (
+				// One click posts the kept draft another way (a refused quote: on the whole message).
+				<Button className="mt-1 px-1" data-comment-fallback="" disabled={sending} onClick={() => void submitWith(fallback.send)} size="xs" type="button" variant="link">
+					{fallback.label}
+				</Button>
+			) : null}
 		</div>
 	);
 }
@@ -1252,15 +1273,15 @@ export function CloudCommentDraftPane({
 	const [mentionQuery, setMentionQuery] = useState<string>();
 	const mentionSource = useMentionSource(orgId, sessionId, false, mentionQuery, setMentionQuery, workspaceName);
 	// A selection the control plane did not take as the message's words (422
-	// not_in_message: it spanned something the message draws, such as a code
-	// block's copy control) moves the comment to the whole message; the draft stays.
-	const [wholeMessage, setWholeMessage] = useState(false);
-	const quote = wholeMessage ? undefined : draft.quote;
-	const anchor = useMemo<CommentAnchorView>(() => quote
-		? { quote, onJump: () => jumpToCommentAnchor(draft.anchor.sequence) }
+	// not_in_message: it spanned something the message draws, such as a formula,
+	// a diagram or a code block's controls) keeps the draft and offers, as one
+	// click beside the error, to post it on the whole message instead.
+	const [quoteRefused, setQuoteRefused] = useState(false);
+	const anchor = useMemo<CommentAnchorView>(() => draft.quote
+		? { quote: draft.quote, onJump: () => jumpToCommentAnchor(draft.anchor.sequence) }
 		: { label: anchorLabel(t as unknown as AnchorLabelT, draft.anchor.kind, draft.authorName), excerpt: draft.excerpt, onJump: () => jumpToCommentAnchor(draft.anchor.sequence) },
-	[draft, quote, t]);
-	const onReply = useCallback(async (text: string, mentions: ComposerMention[]) => {
+	[draft, t]);
+	const create = useCallback(async (text: string, mentions: ComposerMention[], quote: string | undefined) => {
 		try {
 			const { aside, reply } = await client.createSessionAside(orgId, sessionId, {
 				anchor: { sequence: draft.anchor.sequence },
@@ -1280,7 +1301,7 @@ export function CloudCommentDraftPane({
 			});
 			openAside(sessionId, aside.asideId, { focusReply: false });
 		} catch (error) {
-			if (quoteNotInMessage(error)) setWholeMessage(true);
+			setQuoteRefused(quoteNotInMessage(error));
 			const seconds = mentions.length > 0 ? mentionRateLimit(error) : undefined;
 			throw new AoError(
 				"COMMENT_CREATE_REFUSED",
@@ -1288,7 +1309,11 @@ export function CloudCommentDraftPane({
 				{ cause: error },
 			);
 		}
-	}, [client, draft, orgId, queryClient, quote, sessionId, t]);
+	}, [client, draft, orgId, queryClient, sessionId, t]);
+	const onReply = useCallback((text: string, mentions: ComposerMention[]) => create(text, mentions, draft.quote), [create, draft.quote]);
+	const replyFallback = useMemo<CommentFallback | undefined>(() => quoteRefused
+		? { label: t("comment.postOnWholeMessage"), send: (text, mentions) => create(text, mentions, undefined) }
+		: undefined, [create, quoteRefused, t]);
 	return (
 		<AsidePaneView
 			anchor={anchor}
@@ -1302,6 +1327,7 @@ export function CloudCommentDraftPane({
 			sessionTitle={sessionTitle}
 			label={t("comment.newTitle")}
 			initialText={draft.initialText}
+			replyFallback={replyFallback}
 		/>
 	);
 }

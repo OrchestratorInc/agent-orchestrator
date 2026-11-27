@@ -662,7 +662,7 @@ describe("comment threads", () => {
 		await waitFor(() => expect(box).toHaveTextContent("Everyone, look."));
 	});
 
-	it("moves a comment whose quote isn't words of its message to the whole message, keeping the draft", async () => {
+	it("keeps a comment whose quote isn't words of its message, and posts it on the whole message in one click", async () => {
 		const user = userEvent.setup();
 		const { CloudCpError } = await import("../../lib/cloud-cp/errors");
 		cloudMocks.createSessionAside.mockRejectedValue(new CloudCpError("quote", { status: 422, code: "validation_error", details: { field: "quote", reason: "not_in_message" } }));
@@ -674,18 +674,18 @@ describe("comment threads", () => {
 		await waitFor(() => expect(document.activeElement).toBe(box));
 		await typeInLexicalEditor(box, "Should this use jitter?");
 		await user.keyboard("{Enter}");
-		expect(await within(pane).findByText("That selection isn't the message's own text, so this comment is now on the whole message. Send it again.")).toBeInTheDocument();
+		expect(await within(pane).findByText("Part of that selection isn't the message's own text (a formula, a diagram or a code block's controls), so it can't be quoted. Your comment is kept.")).toBeInTheDocument();
 		await waitFor(() => expect(box).toHaveTextContent("Should this use jitter?"));
-		// The pane says what the comment is on now, and the next send carries no quote.
-		expect(pane.querySelector("[data-comment-anchor-block]")).toHaveTextContent("On the agent's answer");
-		expect(pane.querySelector("[data-comment-anchor-block]")).not.toHaveTextContent("“real backoff”");
+		// The quote stays until the person chooses: they may select again instead.
+		expect(pane.querySelector("[data-comment-anchor-block]")).toHaveTextContent("“real backoff”");
 		cloudMocks.createSessionAside.mockResolvedValue({ aside: { ...commentAside, quote: undefined }, reply: commentThread.replies[0] });
-		await user.click(box);
-		await user.keyboard("{Enter}");
+		await user.click(within(pane).getByRole("button", { name: "Post it on the whole message" }));
 		await waitFor(() => expect(cloudMocks.createSessionAside).toHaveBeenLastCalledWith("org-1", session.id, {
 			anchor: { sequence: 41 }, text: "Should this use jitter?", clientMessageId: expect.any(String),
 		}));
+		await waitFor(() => expect(peekOpenAside(session.id)?.asideId).toBe("c-1"));
 	});
+
 	it("never offers Also send to agent to a viewer", async () => {
 		withCommentThread();
 		openAside(session.id, "c-1");
