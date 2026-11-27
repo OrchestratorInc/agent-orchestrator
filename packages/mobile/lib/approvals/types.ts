@@ -67,6 +67,16 @@ export function approvalCardText(raw: string): string {
 	return chars.length > MAX_APPROVAL_TEXT ? `${chars.slice(0, MAX_APPROVAL_TEXT - 1).join("").trimEnd()}…` : line;
 }
 
+// Categories whose effect cannot be read in advance: "script" and AO Cloud's
+// "unknown". The daemon refuses an "always allow on this site" rule for them,
+// so no card offers one (same rule as the desktop's approval-site-rule.ts).
+const CATCH_ALL = new Set(["script", "unknown"]);
+
+/** Whether a card may offer "Always on <site>" for this request. */
+export function offersSiteRule(site: string, category: string): boolean {
+	return Boolean(site) && !CATCH_ALL.has(category);
+}
+
 function siteHost(site: string): string {
 	try {
 		return new URL(site).host;
@@ -79,6 +89,6 @@ export function localApprovalCard(a: LocalApproval): ApprovalCard {
 	const site = siteHost(a.site);
 	return {
 		id: a.id, sessionId: a.sessionId, summary: approvalCardText(a.action), site: approvalCardText(site),
-		reason: approvalCardText(a.reason), expiresAt: a.expiresAt, canDecide: true, canAllowSite: Boolean(site),
+		reason: approvalCardText(a.reason), expiresAt: a.expiresAt, canDecide: true, canAllowSite: offersSiteRule(site, a.category),
 	};
 }

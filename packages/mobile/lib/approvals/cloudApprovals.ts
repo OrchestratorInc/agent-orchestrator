@@ -1,5 +1,5 @@
 import { CloudError } from "../cloud/errors";
-import { approvalCardText, type ApprovalCard, type ApprovalDecision, type CloudApproval, type DecisionResult } from "./types";
+import { approvalCardText, offersSiteRule, type ApprovalCard, type ApprovalDecision, type CloudApproval, type DecisionResult } from "./types";
 
 type Client = {
 	listBrowserApprovals(orgId: string, sessionId: string): Promise<{ pending: CloudApproval[] }>;
@@ -13,7 +13,7 @@ export function cloudApprovalCard(a: CloudApproval): ApprovalCard {
 		id: a.id, sessionId: a.sessionId, summary: approvalCardText(a.summary || a.action), site: approvalCardText(a.site),
 		reason: approvalCardText(a.reason), expiresAt: a.expiresAt, canDecide,
 		deciderName: canDecide ? undefined : approvalCardText(a.decider?.name ?? "") || undefined,
-		canAllowSite: Boolean(a.site),
+		canAllowSite: offersSiteRule(a.site, a.category),
 	};
 }
 

@@ -55,6 +55,20 @@ describe("local approvals", () => {
 	});
 });
 
+describe("Always on <site>", () => {
+	const local = { id: "a1", kind: "browser-action", sessionId: "s1", site: "https://shop.example", action: "Run script", category: "payment", reason: "", createdAt: "x", expiresAt: "y" };
+	const cloud = { id: "a1", sessionId: "s1", action: "eval", category: "payment", reason: "", site: "shop.example", summary: "", createdAt: "x", expiresAt: "y" };
+
+	it("no card offers it for the catch-all script and unknown categories", () => {
+		for (const category of ["script", "unknown"]) {
+			expect(localApprovalCard({ ...local, category }).canAllowSite).toBe(false);
+			expect(cloudApprovalCard({ ...cloud, category }).canAllowSite).toBe(false);
+		}
+		expect(localApprovalCard(local).canAllowSite).toBe(true);
+		expect(cloudApprovalCard(cloud).canAllowSite).toBe(true);
+	});
+});
+
 describe("cloud approvals", () => {
 	const row = { id: "a1", sessionId: "s1", action: "click", category: "pay", reason: "Pays", site: "shop.example", summary: "Click Buy on shop.example", createdAt: "x", expiresAt: "2026-11-23T10:01:30Z" };
 
