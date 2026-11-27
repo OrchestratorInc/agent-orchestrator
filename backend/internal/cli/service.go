@@ -566,7 +566,7 @@ func selfHostedService(spec serviceSpec) (file, dataDir string) {
 	if runner := selfHostedRunnerRE.Find(data); runner != nil {
 		if body, err := os.ReadFile(string(runner)); err == nil {
 			if m := selfHostedDataDirRE.FindSubmatch(body); m != nil {
-				dataDir = strings.Trim(strings.ReplaceAll(string(m[1]), `\ `, " "), `'"`)
+				dataDir = shellUnquote(strings.TrimSpace(string(m[1])))
 			}
 		}
 	}
@@ -577,6 +577,57 @@ var (
 	selfHostedRunnerRE  = regexp.MustCompile(`/[^"<>\n]*run-daemon\.sh`)
 	selfHostedDataDirRE = regexp.MustCompile(`(?m)^export AO_DATA_DIR=(.+)$`)
 )
+
+// shellUnquote decodes one word as bash wrote it with printf %q, without
+// running anything: backslash escapes, 'single', "double" and $'ANSI-C'
+// quoting. Plain words come back unchanged.
+func shellUnquote(word string) string {
+	var b strings.Builder
+	for i := 0; i < len(word); i++ {
+		ch := word[i]
+		switch {
+		case ch == '\\' && i+1 < len(word):
+			i++
+			b.WriteByte(word[i])
+		case ch == '\'':
+			end := strings.IndexByte(word[i+1:], '\'')
+			if end < 0 {
+				b.WriteString(word[i+1:])
+				return b.String()
+			}
+			b.WriteString(word[i+1 : i+1+end])
+			i += end + 1
+		case ch == '"':
+			for i++; i < len(word) && word[i] != '"'; i++ {
+				if word[i] == '\\' && i+1 < len(word) && strings.IndexByte("$`\"\\\n", word[i+1]) >= 0 {
+					i++
+				}
+				b.WriteByte(word[i])
+			}
+		case ch == '$' && i+1 < len(word) && word[i+1] == '\'':
+			for i += 2; i < len(word) && word[i] != '\''; i++ {
+				if word[i] != '\\' || i+1 >= len(word) {
+					b.WriteByte(word[i])
+					continue
+				}
+				i++
+				switch word[i] {
+				case 'n':
+					b.WriteByte('\n')
+				case 't':
+					b.WriteByte('\t')
+				case 'r':
+					b.WriteByte('\r')
+				default:
+					b.WriteByte(word[i])
+				}
+			}
+		default:
+			b.WriteByte(ch)
+		}
+	}
+	return b.String()
+}
 
 // refuseSelfHostedConflict stops an install that would put a second service
 // on the data dir a self-hosted host service already keeps running: the two

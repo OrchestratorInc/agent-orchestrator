@@ -109,6 +109,8 @@ var claudeUserSettings = map[string]bool{
 	"CLAUDE_CODE_MAX_OUTPUT_TOKENS":            true,
 	"CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": true,
 	"CLAUDE_CONFIG_DIR":                        true,
+	// A long-lived token the user creates for unattended runs.
+	"CLAUDE_CODE_OAUTH_TOKEN": true,
 }
 
 // daemonConfigVars are session variables that are also the daemon's own

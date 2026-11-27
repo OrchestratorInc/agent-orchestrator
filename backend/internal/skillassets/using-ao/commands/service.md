@@ -37,7 +37,7 @@ ao service uninstall [--json]
 - `install` and `uninstall` only touch a file that `ao service install` wrote. `uninstall` stops the service and removes that file.
 - On Linux a user service starts when you log in and stops when you log out, unless lingering is on. `install` and `status` report it (`"linger"` in `--json`) with the command to turn it on, `loginctl enable-linger <user>`. On a headless server, turn it on so the service runs from boot.
 - On Linux, `journalctl --user -u agent-orchestrator-serve` shows early `ao serve` failures; the daemon's own log is `daemon.log` in the data directory.
-- Stopping or uninstalling the service stops the daemon but leaves running session processes alone, as `ao stop` does, so the next daemon can adopt them.
+- Stopping or uninstalling the service stops the daemon only when the service runs it itself; it leaves running session processes alone, as `ao stop` does, so the next daemon can adopt them. A daemon the service only watches (the desktop app's, or one started by `ao serve`) keeps running after `ao service uninstall`: stop it with `ao stop`, using the same `AO_DATA_DIR`, `AO_RUN_FILE` and `AO_PORT`.
 
 ## Examples
 

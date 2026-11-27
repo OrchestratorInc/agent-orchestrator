@@ -5,7 +5,9 @@ import (
 	"encoding/json"
 	"errors"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -816,5 +818,57 @@ func TestServiceInstallFailsWhenAttachedServeExits(t *testing.T) {
 	_, _, err := executeCLI(t, deps, "service", "install")
 	if err == nil || !strings.Contains(err.Error(), "exited after starting") {
 		t.Fatalf("err = %v, want install to fail when its serve is gone", err)
+	}
+}
+
+func TestShellUnquoteDecodesPrintfQ(t *testing.T) {
+	for in, want := range map[string]string{
+		`/srv/ao/data`:        "/srv/ao/data",
+		`/srv/ao\$state`:      "/srv/ao$state",
+		`/opt/AO\ Host/data`:  "/opt/AO Host/data",
+		`'/opt/AO Host/data'`: "/opt/AO Host/data",
+		`"/srv/ao\$x \"q\""`:  `/srv/ao$x "q"`,
+		`$'/srv/a\nb'`:        "/srv/a\nb",
+		`/srv/it\'s`:          "/srv/it's",
+	} {
+		if got := shellUnquote(in); got != want {
+			t.Errorf("shellUnquote(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
+// The setup script writes the data dir with bash printf %q, so a dir with $
+// or a space is stored escaped; the conflict check must still see it.
+func TestServiceInstallRefusesSelfHostedWithShellQuotedDataDir(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("needs bash")
+	}
+	bash, err := exec.LookPath("bash")
+	if err != nil {
+		t.Skip("bash not found")
+	}
+	setConfigEnv(t)
+	dataDir := filepath.Join(t.TempDir(), "ao $state x", "data")
+	t.Setenv("AO_DATA_DIR", dataDir)
+	setServiceHome(t)
+	old := serviceGOOS
+	serviceGOOS = "darwin"
+	t.Cleanup(func() { serviceGOOS = old })
+	quoted, err := exec.Command(bash, "-c", `printf %q "$1"`, "_", dataDir).Output()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(quoted) == dataDir {
+		t.Fatalf("test needs a path printf %%q escapes, got %q", quoted)
+	}
+	var calls []serviceCall
+	deps := serviceTestDeps(&calls, nil)
+	spec, err := (&commandContext{deps: deps.withDefaults()}).currentServiceSpec(0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeSelfHostedService(t, filepath.Dir(spec.File), string(quoted))
+	if _, _, err := executeCLI(t, deps, "service", "install", "--no-wait"); err == nil || !strings.Contains(err.Error(), "self-hosted host service") {
+		t.Fatalf("err = %v, want the conflict seen through %%q quoting (%s)", err, quoted)
 	}
 }
