@@ -2839,6 +2839,7 @@ function ReviewPanel({
 									>
 										<SelectTrigger
 											aria-label={t("inspector.selectReviewerAgent")}
+											data-field="compact"
 											className="h-control-md max-w-[11rem] text-xs"
 											size="sm"
 										>

@@ -39,6 +39,8 @@ import { SessionTopbarProvider } from "../components/SessionTopbarPortal";
 import { OrchestratorReplacementDialog } from "../components/OrchestratorReplacementDialog";
 import { RestartToUpdateDialog } from "../components/RestartToUpdateDialog";
 import { SessionImportDialog } from "../components/SessionImportDialog";
+import { MoveSessionDialog } from "../components/MoveSessionDialog";
+import { useFinishUnfinishedMoves } from "../lib/move-finish";
 import { Sidebar } from "../components/Sidebar";
 import type { CreateProjectInput } from "../components/CreateProjectFlow";
 import { useRemoteHosts } from "../hooks/useRemoteHosts";
@@ -1719,6 +1721,8 @@ const replacementErrorCount = Object.keys(orchestratorReplacementErrors).length;
 				<CloudApprovalReader />
 				<RestartToUpdateDialog />
 				<SessionImportDialog />
+				<MoveSessionDialog />
+				<UnfinishedMoves />
 				{quitConfirmDialog}
 				<KeyboardShortcutsDialog
 					open={isKeyboardShortcutsOpen}
@@ -1892,4 +1896,10 @@ const replacementErrorCount = Object.keys(orchestratorReplacementErrors).length;
 			</AppBrowserLinkContext.Provider>
 		</ShellProvider>
 	);
+}
+
+/** Retries the last step of moves that failed after their session started elsewhere. */
+function UnfinishedMoves() {
+	useFinishUnfinishedMoves();
+	return null;
 }

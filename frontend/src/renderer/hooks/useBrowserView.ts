@@ -262,9 +262,9 @@ function publishBrowserHole(viewId: string, rect: BrowserRect | null): void {
 }
 
 // ResizeHandle.tsx sits at the inspector panel's left edge with a
-// `--size-resize-handle-offset` (6px) negative inset, so only its right half
-// (0 to 6px, inside the panel) survives the panel's `overflow-hidden` — the
-// left half is clipped away. That surviving 6px is inside `[data-panel]`, the
+// `--size-resize-handle-offset` (6px) negative inset. The panel clips to its
+// box plus 2px on the left (room for the hover line), so the handle's right half
+// (0 to 6px, inside the panel) is what the pointer reaches. That 6px is inside `[data-panel]`, the
 // same territory the browser view fills, so without this reserve the native
 // view covers the handle at rest and a drag can never start once a page is
 // loaded (only continuing an already-started drag is handled elsewhere, via

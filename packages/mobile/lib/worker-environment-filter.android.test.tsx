@@ -78,8 +78,38 @@ describe("WorkerEnvironmentFilter on Android", () => {
 		act(() => chips()[2].props.onClick());
 		expect(onSelect).toHaveBeenLastCalledWith("dev");
 		act(() => chips()[1].props.onClick());
+		expect(onSelect).toHaveBeenLastCalledWith("mac");
+		act(() => renderer!.update(<WorkerEnvironmentFilter environments={environments} selectedEnvironmentId="mac" onSelectEnvironment={onSelect} />));
+		act(() => chips()[1].props.onClick());
 		expect(onSelect).toHaveBeenLastCalledWith("all");
-		expect(select).toHaveBeenCalledTimes(2);
+		expect(select).toHaveBeenCalledTimes(3);
+	});
+
+	// The board behind the chips is rebuilt for the new machine, which takes a
+	// while on a phone; the tap must not wait on it to show where it went.
+	it("checks the tapped machine at once, and follows the board once it has moved", async () => {
+		const onSelect = vi.fn();
+		await render("all", onSelect);
+		act(() => chips()[2].props.onClick());
+		expect(onSelect).toHaveBeenCalledWith("dev");
+		expect(chips().map((chip) => chip.props.selected)).toEqual([false, false, true]);
+		expect(chips()[2].findAllByType("LeadingIconSlot" as never)).toHaveLength(1);
+		// The board settles somewhere else (that machine went away meanwhile).
+		act(() => renderer!.update(<WorkerEnvironmentFilter environments={environments} selectedEnvironmentId="mac" onSelectEnvironment={onSelect} />));
+		expect(chips().map((chip) => chip.props.selected)).toEqual([false, true, false]);
+	});
+
+	// The chips stay mounted across board changes, so a tap from long ago must
+	// not come back when the board returns to where that tap started.
+	it("forgets a tap once the board has moved, even when it moves back", async () => {
+		const onSelect = vi.fn();
+		await render("all", onSelect);
+		act(() => chips()[2].props.onClick());
+		const board = (selected: string) => <WorkerEnvironmentFilter environments={environments} selectedEnvironmentId={selected} onSelectEnvironment={onSelect} />;
+		act(() => renderer!.update(board("dev")));
+		// Dev went away, and the board fell back to every machine.
+		act(() => renderer!.update(board("all")));
+		expect(chips().map((chip) => chip.props.selected)).toEqual([true, false, false]);
 	});
 
 	it("does nothing when every environment is chosen again", async () => {

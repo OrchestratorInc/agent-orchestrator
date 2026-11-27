@@ -3,6 +3,7 @@ import { Platform } from "react-native";
 import { classifyConnectionFailure, describeConnectionFailure, type ConnectionErrorCopy } from "./connectionError";
 import { tunnelMayHaveRotated } from "./staleTunnel";
 import { useApp } from "./store";
+import type { ErrorKind } from "./telemetry/uiUsage";
 
 /**
  * The board poll's failure as human copy, shared by every tab so the same
@@ -46,4 +47,21 @@ export function useBoardFailure(): ConnectionErrorCopy {
 			{ host: config?.host ?? "", port: config?.httpPort ?? "", platform: Platform.OS },
 		);
 	}, [errorStatus, config?.host, config?.httpPort, config?.endpointKind, activeEndpoints, connection, linkHealth, selectedHostName]);
+}
+
+/**
+ * The board failure as a fixed telemetry kind, never its copy. Null while it
+ * only says the machine is reconnecting, which is not shown as a failure.
+ */
+export function useBoardFailureKind(): ErrorKind | null {
+	const { errorStatus, linkHealth } = useApp();
+	if (linkHealth === "phone-offline") return "phone_offline";
+	if (linkHealth === "reconnecting") return null;
+	switch (classifyConnectionFailure(errorStatus ?? undefined)) {
+		case "incompatible-host": return "incompatible_host";
+		case "auth": return "auth";
+		case "rate-limited": return "rate_limited";
+		case "server-error": return "server_error";
+		default: return "unreachable";
+	}
 }

@@ -491,6 +491,18 @@ export interface CloudCpCreateSessionRequest {
 	 * field (see createCloudSession).
 	 */
 	defaultInterfaceMode?: CloudCpInterfaceMode;
+	/**
+	 * Branch to continue: one already on the repository is checked out from its
+	 * commits. Only sent when offering.features lists session.branch; an older
+	 * control plane rejects the whole create.
+	 */
+	branch?: string;
+	/**
+	 * A conversation uploaded to transcript-imports/{id}, which the session
+	 * resumes instead of starting from prompt. Only sent when
+	 * offering.features lists session.transcriptImport.
+	 */
+	transcriptImportId?: string;
 }
 
 export interface CloudCpSessionRepo {
@@ -718,6 +730,12 @@ export interface CloudCpSession {
 	 */
 	coderWorkspaceUrl?: string;
 	isTerminated: boolean;
+	/**
+	 * The session moved to another computer: the delete that finished its move
+	 * ended it, and it continues there, so it cannot be restored here. Absent
+	 * from an older control plane.
+	 */
+	movedAway?: boolean;
 	autoInjectCI?: boolean;
 	autoInjectReview?: boolean;
 	terminateOnPrMerge?: boolean;
@@ -862,6 +880,33 @@ export interface CloudCpArtifactShareView {
 	/** The link's viewer page; absent where the control plane has no viewer. */
 	viewerUrl?: string;
 }
+
+import type {
+	ArtifactComment,
+	ArtifactCommentEditInput,
+	ArtifactCommentsSnapshot,
+	ArtifactCommentThread,
+	ArtifactReplyInput,
+	ArtifactThreadCreateInput,
+	ArtifactCommentThreadStatus,
+} from "../../../../../packages/shared/artifact-comments/types";
+
+/** GET /artifact-shares/{linkId}/comments: every thread on one version of a link. */
+export type CloudCpArtifactCommentsSnapshot = ArtifactCommentsSnapshot;
+export type CloudCpArtifactCommentThread = ArtifactCommentThread;
+export type CloudCpArtifactComment = ArtifactComment;
+export type CloudCpArtifactThreadCreateRequest = ArtifactThreadCreateInput;
+export type CloudCpArtifactReplyRequest = ArtifactReplyInput;
+export type CloudCpArtifactCommentEditRequest = ArtifactCommentEditInput;
+export type CloudCpArtifactCommentThreadStatus = ArtifactCommentThreadStatus;
+
+/**
+ * listArtifactShareComments: the snapshot with the ETag to send next time, or
+ * notModified when the If-None-Match ETag still matches (HTTP 304).
+ */
+export type CloudCpArtifactCommentsResult =
+	| { notModified: true; etag: string }
+	| { notModified: false; etag: string | null; snapshot: CloudCpArtifactCommentsSnapshot };
 
 /** POST /orgs/{orgId}/sessions/{sessionId}/artifacts/access */
 export interface CloudCpArtifactAccessResponse {
@@ -1497,6 +1542,56 @@ export interface CloudCpListSessionsQuery extends CloudCpListQuery {
 	/** Restrict the listing to one project. */
 	projectId?: string;
 }
+
+/** GET /orgs/{orgId}/sessions/{sessionId}/move/preview: what move/export would push now. */
+export interface CloudCpMovePreviewResponse {
+	branch: string;
+	/** untracked marks a file git did not track in the sandbox; absent from a control plane that does not say. */
+	changes: { path: string; status: "added" | "modified" | "deleted"; untracked?: boolean }[];
+	/** The Claude Code conversation the move would carry; bytes count its sidecar folder too. */
+	transcript?: { bytes: number; subagents?: number };
+}
+
+/** POST /orgs/{orgId}/sessions/{sessionId}/move/export: the pushed branch, in the shape an AO daemon's move/import takes. */
+export interface CloudCpMoveExportResponse {
+	/** The export this answers. */
+	moveId?: string;
+	manifest: {
+		sourceSessionId: string;
+		sourceLabel: string;
+		repoKey: string;
+		branch: string;
+		tip: string;
+		wip: boolean;
+		harness: string;
+		model?: string;
+		displayName?: string;
+		/** The session's approval mode (in Chat, its last turn's); absent from a control plane that does not carry it. */
+		permissions?: "default" | "accept-edits" | "auto" | "bypass-permissions";
+		/** The interface the session was in; absent from an older control plane. */
+		interface?: "chat" | "terminal";
+		/** The GitHub issue intake started the session for, as owner/repo#N. */
+		issueId?: string;
+		/** URLs of the session's open pull requests. */
+		pullRequests?: string[];
+	};
+	handoffNote: string;
+	/** Base64 gzip, as move/import takes it. Absent for another agent or when none was captured. */
+	transcript?: { agentSessionId: string; projectDir: string; transcriptGzip: string; sidecarGzip?: string };
+}
+
+/** A move export AO Cloud's worker is still on (202): ask again with moveId after retryAfterMs. */
+export interface CloudCpMoveExportRunning {
+	status: "running";
+	moveId: string;
+	/** The agent is stopped and the branch may already be pushed. */
+	branchMayBePushed?: boolean;
+	message?: string;
+	retryAfterMs?: number;
+}
+
+/** What move/export, or its GET, answers: the move, or the export still running. */
+export type CloudCpMoveExportResult = CloudCpMoveExportResponse | CloudCpMoveExportRunning;
 
 /** DELETE /orgs/{orgId}/sessions/{sessionId} responds 202: teardown is reconciler-owned. */
 export interface CloudCpSessionDeletedResponse {
