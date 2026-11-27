@@ -116,11 +116,20 @@ export async function findHost(id: string): Promise<Host | null> {
 }
 
 /** Adds or replaces a machine. Re-pairing the same machine updates it in place
- * rather than adding a second entry for it. */
-export async function saveHost(host: Host): Promise<void> {
+ * rather than adding a second entry for it. replaceLegacy is only for an
+ * explicitly selected id-less pairing after its replacement has verified. */
+export async function saveHost(host: Host, options: { replaceLegacy?: boolean } = {}): Promise<void> {
 	const { token, fallbackToken, ...rest } = host;
-	await mutateStored((stored) => [rest, ...stored.filter((h) => h.id !== host.id)]);
-	await writeSecret(tokenKey(host.id), token);
+	if (options.replaceLegacy && !host.id) throw new Error("A legacy replacement needs a verified host id");
+	// Keep the legacy pairing usable if writing the new credential fails.
+	if (options.replaceLegacy && token) await writeSecret(tokenKey(host.id), token);
+	await mutateStored((stored) => [rest, ...stored.filter((h) => h.id !== host.id && !(options.replaceLegacy && h.id === ""))]);
+	if (token) {
+		if (!options.replaceLegacy) await writeSecret(tokenKey(host.id), token);
+	} else {
+		await writeSecret(tokenKey(host.id), undefined);
+	}
+	if (options.replaceLegacy) await writeSecret(tokenKey(""), undefined);
 	await writeSecret(fallbackTokenKey(host.id), fallbackToken);
 	// Paired (again): its chats may be saved on the phone, even if it was forgotten before.
 	pairSavedChatMachines(savedConversationMachines(host));
