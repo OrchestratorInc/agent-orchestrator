@@ -31,6 +31,7 @@ import { openGitHub } from "../openGitHub";
 import { useOpenPage } from "../pageNavigation";
 import { reviewRouteForPR } from "../reviewView";
 import { pullRequestMenuAction } from "../sessionPullRequests";
+import { usePullRequestListRequest } from "../usePullRequestListRequest";
 import { useSessionPullRequests } from "../useSessionPullRequests";
 import { InterfaceSwitchCard } from "../session/InterfaceSwitchCard";
 import { startupVisible } from "../session/sessionStartup";
@@ -353,8 +354,10 @@ export function CloudSessionScreen({ sessionId }: { sessionId: string }) {
 	const hasPullRequests = Boolean(sessionRow && (sessionRow.prs?.length || sessionRow.pr));
 	const reviewSummaries = useCloudPRSummaries(hasPullRequests && session ? [session.id] : NO_IDS);
 	const pullRequests = useSessionPullRequests(sessionRow, (number) => session ? reviewSummaries.summaryFor(session.id, number) : undefined);
-	// The ⋯ menu's "Pull requests" asks the composer for the list by bumping this.
-	const [pullRequestListRequest, setPullRequestListRequest] = useState(0);
+	// The ⋯ menu's "Pull requests" asks the composer for the list. From the
+	// agent's terminal, where there is no composer, it shows the chat first.
+	const showChat = useCallback(() => setView("chat"), []);
+	const pullRequestList = usePullRequestListRequest(current === "chat" && Boolean(snapshot), showChat);
 	const hasSession = Boolean(session);
 	// Its artifact files open from "⋯" where the organization has artifacts.
 	const artifactsOffered = Boolean((org?.offering ?? cloud.me?.offering)?.artifacts);
@@ -405,7 +408,7 @@ export function CloudSessionScreen({ sessionId }: { sessionId: string }) {
 		pull_requests: () => {
 			const action = pullRequestMenuAction(pullRequests?.rows.length ?? 0);
 			if (action === "review" && pullRequests) openPage(reviewRouteForPR(sessionId, pullRequests.lead, CLOUD_HOST_ID));
-			else if (action === "list") setPullRequestListRequest((request) => request + 1);
+			else if (action === "list") pullRequestList.ask();
 		},
 		delete: archive,
 		restore,
@@ -732,7 +735,7 @@ export function CloudSessionScreen({ sessionId }: { sessionId: string }) {
 					changes={changeSummary?.files ? { ...changeSummary, onOpen: filesNavigation.openChanges } : undefined}
 					pullRequests={pullRequests}
 					onOpenPullRequest={(pr) => openPage(reviewRouteForPR(session.id, pr, CLOUD_HOST_ID))}
-					pullRequestListRequest={pullRequestListRequest}
+					pullRequestListRequest={pullRequestList.request}
 				/>
 			</KeyboardFollower>
 			{switchCard}
