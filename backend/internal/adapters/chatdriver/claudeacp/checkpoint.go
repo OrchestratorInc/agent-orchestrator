@@ -228,40 +228,6 @@ func claudeTranscriptNotice(text string) bool {
 		strings.HasPrefix(text, "[Request interrupted by user") && strings.HasSuffix(text, "]")
 }
 
-// claudeLocalCommandMarkers wrap what Claude Code writes for a local slash
-// command such as /compact: its name, arguments and output. claude-agent-acp
-// strips them on replay and skips a message with nothing left.
-var claudeLocalCommandMarkers = []string{"command-name", "command-message", "command-args", "local-command-stdout", "local-command-stderr"}
-
-// claudeLocalCommandMetadata reports text that replay skips because it holds
-// only local command markers. Like the adapter, a marker ends at the nearest
-// closing tag of the same name, and an unclosed one is kept as prose.
-func claudeLocalCommandMetadata(text string) bool {
-	var rest strings.Builder
-	stripped := false
-	for i := 0; i < len(text); {
-		matched := false
-		if text[i] == '<' {
-			for _, marker := range claudeLocalCommandMarkers {
-				open, closing := "<"+marker+">", "</"+marker+">"
-				if !strings.HasPrefix(text[i:], open) {
-					continue
-				}
-				if end := strings.Index(text[i+len(open):], closing); end >= 0 {
-					i += len(open) + end + len(closing)
-					matched, stripped = true, true
-				}
-				break
-			}
-		}
-		if !matched {
-			rest.WriteByte(text[i])
-			i++
-		}
-	}
-	return stripped && strings.TrimSpace(rest.String()) == ""
-}
-
 // Native logs are append-only graphs, not a list of alternating text messages.
 // Follow the last main-chain leaf's parent UUIDs; never use a matching sidechain,
 // an earlier repeated answer, or file stability to discharge a hook witness.
@@ -390,7 +356,7 @@ func verifyCheckpointTranscript(ctx context.Context, input io.Reader, request po
 			// record, which getSessionMessages drops. A note inside its prompt's
 			// cycle, such as an interrupt marker, adds no turn. One that starts a
 			// cycle keeps its prompt for Stop evidence; the boundary skips it.
-			notice := record.Meta || claudeTranscriptNotice(text) || claudeLocalCommandMetadata(text)
+			notice := record.Meta || claudeTranscriptNotice(text) || claudecode.IsLocalCommandMetadata(text)
 			if notice && len(turns) > 0 && turns[len(turns)-1].promptID == record.PromptID {
 				// Esc settles the turn it interrupts, whether Claude was replying
 				// or running a tool (its tool_use may have no result). Only the
@@ -491,10 +457,7 @@ func verifyCheckpointTranscript(ctx context.Context, input io.Reader, request po
 			}
 			submitted := ""
 			if found {
-				submitted = turns[index].user
-				if turns[index].notice {
-					submitted, _ = claudecode.TypedPrompt(submitted)
-				}
+				submitted, _ = claudecode.TypedPrompt(turns[index].user)
 				if text, ok := queuedTexts[submission]; ok {
 					submitted = text
 				}

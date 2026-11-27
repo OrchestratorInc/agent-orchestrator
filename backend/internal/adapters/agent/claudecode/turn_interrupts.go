@@ -133,6 +133,9 @@ func IsInterruptMarker(content json.RawMessage) bool {
 // TypedPrompt shows a slash command as typed and drops its local output.
 func TypedPrompt(text string) (string, bool) {
 	trimmed := strings.TrimSpace(text)
+	if !IsLocalCommandMetadata(trimmed) {
+		return text, false
+	}
 	if strings.HasPrefix(trimmed, "<local-command-stdout>") || strings.HasPrefix(trimmed, "<local-command-stderr>") {
 		return "", true
 	}
@@ -144,11 +147,6 @@ func TypedPrompt(text string) (string, bool) {
 		}
 		return strings.TrimSpace(value)
 	}
-	// Claude writes a command record that starts with its tags; a prompt that
-	// merely quotes them is still a prompt.
-	if !strings.HasPrefix(trimmed, "<command-name>") && !strings.HasPrefix(trimmed, "<command-message>") {
-		return text, false
-	}
 	name := between("<command-name>", "</command-name>")
 	if name == "" {
 		return text, false
@@ -157,4 +155,38 @@ func TypedPrompt(text string) (string, bool) {
 		name += " " + args
 	}
 	return name, true
+}
+
+// claudeLocalCommandMarkers wrap what Claude Code writes for a local slash
+// command such as /compact: its name, arguments and output. claude-agent-acp
+// strips them on replay and skips a message with nothing left.
+var claudeLocalCommandMarkers = []string{"command-name", "command-message", "command-args", "local-command-stdout", "local-command-stderr"}
+
+// IsLocalCommandMetadata reports text that replay skips because it holds
+// only local command markers. Like the adapter, a marker ends at the nearest
+// closing tag of the same name, and an unclosed one is kept as prose.
+func IsLocalCommandMetadata(text string) bool {
+	var rest strings.Builder
+	stripped := false
+	for i := 0; i < len(text); {
+		matched := false
+		if text[i] == '<' {
+			for _, marker := range claudeLocalCommandMarkers {
+				open, closing := "<"+marker+">", "</"+marker+">"
+				if !strings.HasPrefix(text[i:], open) {
+					continue
+				}
+				if end := strings.Index(text[i+len(open):], closing); end >= 0 {
+					i += len(open) + end + len(closing)
+					matched, stripped = true, true
+				}
+				break
+			}
+		}
+		if !matched {
+			rest.WriteByte(text[i])
+			i++
+		}
+	}
+	return stripped && strings.TrimSpace(rest.String()) == ""
 }

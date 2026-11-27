@@ -356,23 +356,6 @@ func TestNativeCheckpointManualCompactCommand(t *testing.T) {
 	}
 }
 
-func TestClaudeLocalCommandMetadata(t *testing.T) {
-	for text, want := range map[string]bool{
-		"<command-name>/compact</command-name>\n<command-message>compact</command-message>\n<command-args></command-args>": true,
-		"<local-command-stdout>Compacted </local-command-stdout>":                                                          true,
-		"<local-command-stderr>failed</local-command-stderr>":                                                              true,
-		"<command-name>/review</command-name> please look at auth":                                                         false,
-		"<command-name>unclosed":         false,
-		"what does <command-name> mean?": false,
-		"plain prompt":                   false,
-		"":                               false,
-	} {
-		if got := claudeLocalCommandMetadata(text); got != want {
-			t.Errorf("claudeLocalCommandMetadata(%q) = %v", text, got)
-		}
-	}
-}
-
 // Long sessions are the ones that compact. History before the latest
 // compaction is dropped as it is read, so the size bound applies to each
 // stretch between compactions, not to the whole file.

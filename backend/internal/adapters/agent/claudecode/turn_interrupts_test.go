@@ -117,8 +117,30 @@ func TestTypedPromptOnlyStripsCommandRecords(t *testing.T) {
 			t.Errorf("TypedPrompt(%q) = %q, %v", input, got, command)
 		}
 	}
-	quoted := "why does my log show <command-name>/model</command-name> here?"
-	if got, command := TypedPrompt(quoted); got != quoted || command {
-		t.Fatalf("a prompt quoting command tags became %q, %v", got, command)
+	for _, quoted := range []string{
+		"why does my log show <command-name>/model</command-name> here?",
+		"<command-name>/model</command-name> why is this in my log?",
+		"<local-command-stdout>ok</local-command-stdout> what did that print?",
+	} {
+		if got, command := TypedPrompt(quoted); got != quoted || command {
+			t.Errorf("a prompt quoting command tags became %q, %v", got, command)
+		}
+	}
+}
+
+func TestIsLocalCommandMetadata(t *testing.T) {
+	for text, want := range map[string]bool{
+		"<command-name>/compact</command-name>\n<command-message>compact</command-message>\n<command-args></command-args>": true,
+		"<local-command-stdout>Compacted </local-command-stdout>":                                                          true,
+		"<local-command-stderr>failed</local-command-stderr>":                                                              true,
+		"<command-name>/review</command-name> please look at auth":                                                         false,
+		"<command-name>unclosed":         false,
+		"what does <command-name> mean?": false,
+		"plain prompt":                   false,
+		"":                               false,
+	} {
+		if got := IsLocalCommandMetadata(text); got != want {
+			t.Errorf("IsLocalCommandMetadata(%q) = %v", text, got)
+		}
 	}
 }
