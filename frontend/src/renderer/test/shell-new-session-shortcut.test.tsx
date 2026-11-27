@@ -317,6 +317,11 @@ vi.mock("../components/SessionTopbarActions", () => ({ SessionTopbarActions: () 
 vi.mock("../components/DaemonStartupLoader", () => ({
 	DaemonStartupLoader: () => <div data-testid="daemon-startup-loader" />,
 }));
+vi.mock("../components/approvals/ApprovalHost", async (importOriginal) => ({
+	...(await importOriginal<typeof import("../components/approvals/ApprovalHost")>()),
+	GlobalApprovalCard: ({ localReady }: { localReady?: boolean }) => <div data-local-ready={String(localReady)} data-testid="global-approval-host" />,
+	CloudApprovalReader: () => <div data-testid="cloud-approval-reader" />,
+}));
 vi.mock("../components/CommandPalette", () => ({ CommandPalette: () => null }));
 vi.mock("../components/OrchestratorReplacementDialog", () => ({ OrchestratorReplacementDialog: () => null }));
 vi.mock("../components/OpenShareLinkDialog", () => ({ ShareLinkHost: () => null }));
@@ -579,6 +584,23 @@ describe("shell workspace startup", () => {
 		expect(screen.getByTestId("daemon-startup-loader")).toBeInTheDocument();
 		await new Promise((resolve) => setTimeout(resolve, 100));
 		expect(shellMocks.reportSessionsShown).not.toHaveBeenCalled();
+	});
+
+	it("keeps Cloud approvals mounted while the daemon starts or reconnects", async () => {
+		shellMocks.state.daemonStatus = { state: "starting", port: 4777 };
+		await renderShell();
+		expect(screen.getByTestId("daemon-startup-loader")).toBeInTheDocument();
+		expect(screen.getAllByTestId("cloud-approval-reader")).toHaveLength(1);
+		expect(screen.getAllByTestId("global-approval-host")).toHaveLength(1);
+		expect(screen.getByTestId("global-approval-host")).toHaveAttribute("data-local-ready", "false");
+	});
+
+	it("mounts the Cloud approvals once in the ready shell, told the daemon is ready", async () => {
+		shellMocks.state.daemonStatus = { state: "ready", port: 4777 };
+		await renderShell();
+		expect(screen.getAllByTestId("cloud-approval-reader")).toHaveLength(1);
+		expect(screen.getAllByTestId("global-approval-host")).toHaveLength(1);
+		expect(screen.getByTestId("global-approval-host")).toHaveAttribute("data-local-ready", "true");
 	});
 
 	it("opens the shared Project settings dialog for the selected remote host", async () => {

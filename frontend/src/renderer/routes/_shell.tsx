@@ -1675,11 +1675,20 @@ const replacementErrorCount = Object.keys(orchestratorReplacementErrors).length;
 	const quitConfirmDialog = (
 		<QuitConfirmDialog open={isQuitConfirmOpen} keepsRunning={quitKeepsRunning} onResolve={resolveQuitConfirm} />
 	);
+	// Cloud approvals do not wait for this machine's daemon, so they mount
+	// while it starts or reconnects too, not only in the ready shell below.
+	const cloudApprovalHosts = (
+		<>
+			<GlobalApprovalCard localReady={daemonStatus.state === "ready"} />
+			<CloudApprovalReader />
+		</>
+	);
 	if (isStartupLoading) {
 		return (
 			<>
 				<div className="flex h-full min-h-0 flex-col"><PageTopbar /><DaemonStartupLoader /></div>
 				{quitConfirmDialog}
+				{cloudApprovalHosts}
 			</>
 		);
 	}
@@ -1715,10 +1724,7 @@ const replacementErrorCount = Object.keys(orchestratorReplacementErrors).length;
 				<GuidedTour />
 				<ArchiveModalHost />
 				<GlobalToast />
-				{/* Cloud requests show while this machine's daemon is down too. */}
-				<GlobalApprovalCard localReady={daemonStatus.state === "ready"} />
-				{/* Cloud approvals do not wait for this machine's daemon. */}
-				<CloudApprovalReader />
+				{cloudApprovalHosts}
 				<RestartToUpdateDialog />
 				<SessionImportDialog />
 				<MoveSessionDialog />
