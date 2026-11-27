@@ -1,7 +1,8 @@
-// Package agentaccounts manages the Claude Code and Codex subscription accounts
-// AO launches agents with. An account is a config folder of the provider's own
-// CLI; the computer's own folder is the "This computer" account. A session is
-// pinned to one account per provider and moves by restarting its agent there.
+// Package agentaccounts manages the Claude Code and Codex accounts AO launches
+// agents with: subscription sign-ins, and Claude Code API keys. An account is a
+// config folder of the provider's own CLI; the computer's own folder is the
+// "This computer" account. A session is pinned to one account per provider and
+// moves by restarting its agent there.
 package agentaccounts
 
 import (
@@ -73,6 +74,12 @@ type Service struct {
 	lastOrg        map[string]seenOrg
 	defaultChanged func(domain.AgentAccountProvider)
 	loginConfirmed func(domain.AgentAccount, time.Time)
+	keyCheck       KeyCheck
+	uiLogin        UILogin
+
+	// keyMu serializes changes to an API key account's key with each other and
+	// with removing an account, apart from mu so a key check never holds it.
+	keyMu sync.Mutex
 }
 
 // reading is the last identity and limits read for one account.
@@ -92,6 +99,9 @@ type reading struct {
 	seq          uint64
 	confirmed    *domain.AgentAccountIdentityCheck
 	confirmedSeq uint64
+	// renewalPending: the check was skipped for a login waiting on its token's
+	// renewal (ports.ErrAgentAccountRenewalPending). It is still signed in.
+	renewalPending bool
 }
 
 // failedOnItsOwn reports a reading whose check failed in a way the next check
@@ -141,6 +151,11 @@ type login struct {
 	terminal string
 	// account is the saved account a sign-in again runs in; nil for a new one.
 	account *domain.AgentAccount
+	// method and authOp are a sign-in run through the CLI in the background
+	// (the in-app sign-in) instead of a terminal; name labels the new account.
+	method string
+	authOp string
+	name   string
 }
 
 // New builds the service. root must be absolute; the account folders' paths
@@ -343,6 +358,9 @@ func (s *Service) read(ctx context.Context, account domain.AgentAccount) *readin
 	if provider == nil {
 		return nil
 	}
+	if account.APIKey() {
+		return s.readAPIKeyAccount(ctx, account)
+	}
 	caller := ctx
 	ctx, cancel := context.WithTimeout(ctx, 45*time.Second)
 	defer cancel()
@@ -357,17 +375,46 @@ func (s *Service) read(ctx context.Context, account domain.AgentAccount) *readin
 		r.identityProblem = problemKind(err)
 		// A failed check (a timeout under load) says nothing about the login:
 		// keep what the last good one found, so it does not read as signed out.
+		r.renewalPending = errors.Is(err, ports.ErrAgentAccountRenewalPending)
 		s.mu.Lock()
-		if prev := s.readings[account.ID]; prev != nil && prev.identityErr == "" {
+		prev := s.readings[account.ID]
+		// A failed reading already carries what the last good one found, so
+		// copying the previous reading keeps it across checks that fail in a row.
+		if prev != nil {
 			r.identity, r.limits = prev.identity, prev.limits
 		}
 		s.mu.Unlock()
+		switch {
+		case prev != nil && prev.mismatch:
+			// A failed check, a pending renewal included, says nothing about
+			// whose login the folder holds, so one last found holding another
+			// login stays refused until a check confirms its own.
+			r.identity, r.mismatch = prev.identity, true
+			r.identityProblem, r.identityErr = prev.identityProblem, prev.identityErr
+		case r.renewalPending:
+			// A login waiting on its token's renewal is signed in, even before
+			// any reading said who it is (#8724).
+			r.identity.SignedIn, r.identity.LoggedIn = true, true
+		}
 	}
 	s.mu.Lock()
 	known := s.lastOrg[account.ID]
 	s.mu.Unlock()
+	// A per-token sign-in is never a subscription, so it is checked for the
+	// login and organization it was added with here, before it skips limits.
+	perToken := account.PerToken() && identity.LoggedIn
 	switch {
 	case err != nil:
+	case perToken && account.Email != "" && !strings.EqualFold(identity.Email, account.Email):
+		r.mismatch = true
+		r.identityProblem = domain.AgentAccountProblemOtherLogin
+		r.identityErr = fmt.Sprintf("the folder is now signed in as %s, not %s", identity.Email, account.Email)
+	case perToken && !sameOrg(known.id, identity.OrgID):
+		r.mismatch = true
+		r.identityProblem = domain.AgentAccountProblemOtherOrg
+		r.identityErr = fmt.Sprintf("the folder is now signed in to %s, not %s", orgLabel(identity.OrgName, identity.OrgID), orgLabel(known.name, known.id))
+	case perToken:
+		// A metered sign-in bills per token: there are no limits to read.
 	case !identity.SignedIn:
 		r.limitsErr = "signed out"
 	case !account.Device() && account.Email != "" && !strings.EqualFold(identity.Email, account.Email):
@@ -420,6 +467,15 @@ func (s *Service) read(ctx context.Context, account domain.AgentAccount) *readin
 		}
 		if err != nil {
 			r.confirmed, r.confirmedSeq = prev.confirmed, prev.confirmedSeq
+			// Another read may have recorded a wrong login after this failed
+			// read copied its earlier snapshot. A failed check cannot clear that
+			// refusal, including when the login is waiting for renewal.
+			if prev.mismatch {
+				r.identity, r.limits = prev.identity, prev.limits
+				r.identity.SignedIn, r.identity.LoggedIn = false, false
+				r.mismatch = true
+				r.identityProblem, r.identityErr = prev.identityProblem, prev.identityErr
+			}
 		}
 	}
 	if r.failedOnItsOwn() {
@@ -429,7 +485,7 @@ func (s *Service) read(ctx context.Context, account domain.AgentAccount) *readin
 		}
 	}
 	s.readings[account.ID] = r
-	if err == nil && r.identity.SignedIn && !r.mismatch && r.identity.OrgID != "" && !account.Device() {
+	if err == nil && usable(account, r) && r.identity.OrgID != "" && !account.Device() {
 		s.lastOrg[account.ID] = seenOrg{id: r.identity.OrgID, name: r.identity.OrgName}
 	}
 	confirmed := s.loginConfirmed
@@ -542,7 +598,7 @@ func (s *Service) DefaultSignIn(ctx context.Context, harness domain.AgentHarness
 	if r == nil || (r.identityErr != "" && !r.mismatch) {
 		return identity, false // not known: leave it to the CLI's own readiness
 	}
-	if !r.identity.SignedIn {
+	if !usable(account, r) {
 		// New sessions start on another signed-in account instead, if there is one.
 		next, err := s.newSessionAccount(ctx, p)
 		switch {
@@ -556,11 +612,41 @@ func (s *Service) DefaultSignIn(ctx context.Context, harness domain.AgentHarness
 		}
 	}
 	identity = r.identity
+	// A per-token account that is logged in is ready, though not a subscription.
+	if account.PerToken() {
+		identity.SignedIn = identity.LoggedIn
+	}
 	// A mismatched folder names another login; the account is still its own.
 	if account.Email != "" {
 		identity.Email = account.Email
 	}
 	return identity, true
+}
+
+// AccountHome is the home a session of harness runs its CLI under on
+// accountID, or, when accountID is empty, on the account BindSession would
+// start a new session on: the default, or another signed-in account when the
+// default is known to be unusable. It binds nothing. "" is the computer's own
+// login.
+func (s *Service) AccountHome(ctx context.Context, harness domain.AgentHarness, accountID string) (string, error) {
+	p, ok := domain.AgentAccountProviderFor(harness)
+	if !ok || s.providers[p] == nil {
+		return "", nil
+	}
+	var account domain.AgentAccount
+	var err error
+	if id := strings.TrimSpace(accountID); id == "" {
+		account, err = s.newSessionAccount(ctx, p)
+	} else {
+		account, err = s.find(ctx, id)
+	}
+	if err != nil {
+		return "", err
+	}
+	if account.Device() {
+		return "", nil
+	}
+	return account.Home, nil
 }
 
 // DefaultLaunchEnv gives discovery the account a new task would use, without binding a session.
@@ -573,7 +659,7 @@ func (s *Service) DefaultLaunchEnv(ctx context.Context, harness domain.AgentHarn
 	if err != nil {
 		return nil, err
 	}
-	return s.providers[p].LaunchEnv(account.Home), nil
+	return s.accountLaunchEnv(s.providers[p], account)
 }
 
 // SetDefaultChanged late-binds what must hear that the account new sessions of
@@ -623,7 +709,8 @@ func (s *Service) RunsOnComputerLogin(ctx context.Context, harness domain.AgentH
 
 // newSessionAccount is the account a new session of p starts on: the default,
 // or, when the default is known to be signed out or to hold another login, the
-// first other account that is signed in. The session's account shows which.
+// first other subscription account that is signed in. The session's account
+// shows which.
 // Only a bad default costs CLI calls; a good one is answered from the cache.
 func (s *Service) newSessionAccount(ctx context.Context, p domain.AgentAccountProvider) (domain.AgentAccount, error) {
 	def, err := s.defaultID(ctx, p)
@@ -653,7 +740,8 @@ func (s *Service) newSessionAccount(ctx context.Context, p domain.AgentAccountPr
 		return domain.AgentAccount{}, err
 	}
 	for _, other := range accounts {
-		if other.Provider != p || other.ID == account.ID || s.beingRemoved(other.ID) {
+		// An API key account bills per token, so it is used only when chosen.
+		if other.Provider != p || other.ID == account.ID || other.PerToken() || s.beingRemoved(other.ID) {
 			continue
 		}
 		r := s.cachedReading(other.ID)
@@ -708,18 +796,34 @@ func (s *Service) SetDefault(ctx context.Context, accountID string) error {
 type LoginStart struct {
 	OperationID string
 	Provider    domain.AgentAccountProvider
-	Terminal    shellterm.ShellTerminal
+	// Terminal is a sign-in run in a terminal; AuthOperationID one run through
+	// the CLI in the background, which the app follows as a UI login. Account
+	// is set when the sign-in finished at once (a setup token).
+	Terminal        shellterm.ShellTerminal
+	AuthOperationID string
+	Account         *AccountView
+}
+
+// LoginRequest picks how a sign-in runs. An empty Method opens the CLI's own
+// sign-in in a terminal. Secret is the credential of a method that takes one
+// (a setup token, an OpenAI API key); Name labels a new account without an
+// email of its own.
+type LoginRequest struct {
+	Method string
+	Secret string
+	Name   string
 }
 
 // StartLogin creates a new account folder and runs the provider's own sign-in
-// for it in a terminal.
-func (s *Service) StartLogin(ctx context.Context, p domain.AgentAccountProvider) (LoginStart, error) {
-	return s.startLogin(ctx, p, nil)
+// for it.
+func (s *Service) StartLogin(ctx context.Context, p domain.AgentAccountProvider, req LoginRequest) (LoginStart, error) {
+	return s.startLogin(ctx, p, nil, req)
 }
 
 // StartSignInAgain runs the provider's sign-in in a saved account's own folder,
 // so a signed-out account comes back with its sessions, history and settings.
-func (s *Service) StartSignInAgain(ctx context.Context, accountID string) (LoginStart, error) {
+// The method must sign in the same kind of account.
+func (s *Service) StartSignInAgain(ctx context.Context, accountID string, req LoginRequest) (LoginStart, error) {
 	account, err := s.find(ctx, accountID)
 	if err != nil {
 		return LoginStart{}, err
@@ -727,10 +831,30 @@ func (s *Service) StartSignInAgain(ctx context.Context, accountID string) (Login
 	if account.Device() {
 		return LoginStart{}, ports.ErrAgentAccountDeviceFixed
 	}
-	return s.startLogin(ctx, account.Provider, &account)
+	if account.APIKey() {
+		return LoginStart{}, ports.ErrAgentAccountKindMismatch
+	}
+	// A terminal sign-in can pick any login, so its kind is unknown: a Console
+	// account signed in there as a subscription would keep its metered kind.
+	if req.Method == "" && (account.SetupToken() || account.Kind == domain.AgentAccountKindMetered) {
+		return LoginStart{}, ports.ErrAgentAccountKindMismatch
+	}
+	if req.Method != "" {
+		kind, ok := methodKind(account.Provider, req.Method)
+		if !ok {
+			return LoginStart{}, ports.ErrAgentAccountMethodInvalid
+		}
+		if kind != accountKind(account) {
+			return LoginStart{}, ports.ErrAgentAccountKindMismatch
+		}
+	}
+	return s.startLogin(ctx, account.Provider, &account, req)
 }
 
-func (s *Service) startLogin(ctx context.Context, p domain.AgentAccountProvider, account *domain.AgentAccount) (LoginStart, error) {
+func (s *Service) startLogin(ctx context.Context, p domain.AgentAccountProvider, account *domain.AgentAccount, req LoginRequest) (LoginStart, error) {
+	if req.Method != "" {
+		return s.startUILogin(ctx, p, account, req)
+	}
 	provider := s.providers[p]
 	s.mu.Lock()
 	terminals := s.terminals
@@ -805,10 +929,19 @@ func (s *Service) VerifyLogin(ctx context.Context, operationID string) (LoginSta
 	if err != nil {
 		return "", nil, fmt.Errorf("check sign-in: %w", err)
 	}
-	if !identity.SignedIn {
-		if identity.LoggedIn {
-			return LoginNotSubscription, nil, nil
+	// A per-token method (Anthropic Console, an OpenAI API key) makes a
+	// metered account; any other sign-in must be a subscription. A metered
+	// sign-in that turned out to be a subscription is kept as one.
+	kind := loginKind(op)
+	switch {
+	case identity.SignedIn:
+		if kind == domain.AgentAccountKindMetered {
+			kind = domain.AgentAccountKindSubscription
 		}
+	case identity.LoggedIn && kind == domain.AgentAccountKindMetered:
+	case identity.LoggedIn:
+		return LoginNotSubscription, nil, nil
+	default:
 		return LoginWaiting, nil, nil
 	}
 	s.read(ctx, domain.AgentAccount{ID: domain.DeviceAgentAccountID(op.provider), Provider: op.provider})
@@ -827,7 +960,9 @@ func (s *Service) VerifyLogin(ctx context.Context, operationID string) (LoginSta
 			continue
 		}
 		heldBy := view.SignedIn || (op.account == nil && !view.Account.Device() && view.Account.Email != "")
-		if view.Account.Provider == op.provider && heldBy && strings.EqualFold(view.Account.Email, identity.Email) && sameOrg(view.OrgID, identity.OrgID) {
+		// One login is one account of its kind: a Console login of the same
+		// email as a subscription is a different account.
+		if view.Account.Provider == op.provider && accountKind(view.Account) == kind && heldBy && strings.EqualFold(view.Account.Email, identity.Email) && sameOrg(view.OrgID, identity.OrgID) {
 			s.endLogin(ctx, op, true)
 			return LoginDuplicate, &view, nil
 		}
@@ -835,7 +970,7 @@ func (s *Service) VerifyLogin(ctx context.Context, operationID string) (LoginSta
 	if op.account != nil {
 		return s.finishSignInAgain(ctx, op, identity, views)
 	}
-	account := domain.AgentAccount{ID: op.id, Provider: op.provider, Home: op.home, Email: identity.Email, Plan: identity.Plan, CreatedAt: s.now()}
+	account := domain.AgentAccount{ID: op.id, Provider: op.provider, Home: op.home, Email: identity.Email, Plan: identity.Plan, Kind: kind, Name: op.name, CreatedAt: s.now()}
 	if err := s.store.CreateAgentAccount(ctx, account); err != nil {
 		s.releaseLogin(op) // still pending: a later check can save it
 		return "", nil, err
@@ -917,8 +1052,24 @@ func (s *Service) CancelLogin(ctx context.Context, operationID string) error {
 	if op == nil || !s.claimLogin(op) {
 		return ports.ErrAgentAccountLoginUnknown
 	}
+	// A saved account's folder stays, but its background sign-in still stops:
+	// left running, it holds the harness's sign-in and a late approval would
+	// still write into the folder. endLogin stops a new folder's itself.
+	if op.account != nil {
+		s.stopUILogin(ctx, op)
+	}
 	s.endLogin(ctx, op, op.account == nil)
 	return nil
+}
+
+// stopUILogin cancels op's sign-in running in the background, if any.
+func (s *Service) stopUILogin(ctx context.Context, op *login) {
+	s.mu.Lock()
+	ui := s.uiLogin
+	s.mu.Unlock()
+	if op.authOp != "" && ui != nil {
+		_ = ui.CancelAccountLogin(context.WithoutCancel(ctx), harnessOf(op.provider), op.authOp)
+	}
 }
 
 // endLogin closes a sign-in. discard signs its folder out, so a refused login's
@@ -933,6 +1084,10 @@ func (s *Service) endLogin(ctx context.Context, op *login, discard bool) {
 	s.mu.Unlock()
 	if op.terminal != "" && terminals != nil {
 		_ = terminals.CloseShellTerminal(context.WithoutCancel(ctx), op.terminal)
+	}
+	// A sign-in still running in the background stops with its folder.
+	if discard {
+		s.stopUILogin(ctx, op)
 	}
 	if discard {
 		// A refused duplicate is signed in; signing out first keeps its token
@@ -994,8 +1149,14 @@ func (s *Service) Remove(ctx context.Context, accountID string) error {
 			return fmt.Errorf("%w: %w", ports.ErrAgentAccountInUse, err)
 		}
 	}
-	if err := s.providers[account.Provider].Logout(ctx, account.Home); err != nil {
-		s.log.Warn("sign out removed account", "account", accountID, "error", err)
+	// A key change under way finishes first; any later one sees the removal.
+	s.keyMu.Lock()
+	defer s.keyMu.Unlock()
+	// An API key account has no sign-in; removing its folder removes its key.
+	if !account.APIKey() {
+		if err := s.providers[account.Provider].Logout(ctx, account.Home); err != nil {
+			s.log.Warn("sign out removed account", "account", accountID, "error", err)
+		}
 	}
 	if err := s.store.DeleteAgentAccount(ctx, accountID); err != nil {
 		return err
@@ -1109,7 +1270,7 @@ func (s *Service) pick(ctx context.Context, harness domain.AgentHarness, account
 		r = s.readings[account.ID]
 		s.mu.Unlock()
 	}
-	if r == nil || !r.identity.SignedIn {
+	if !usable(account, r) {
 		return domain.AgentAccount{}, ports.ErrAgentAccountSignedOut
 	}
 	if err := s.prepare(s.providers[p], account.Home); err != nil {
@@ -1157,6 +1318,9 @@ func (s *Service) SessionLimits(ctx context.Context, id domain.SessionID, harnes
 	if err != nil {
 		return "", domain.AgentAccountLimits{}, err
 	}
+	if account.PerToken() {
+		return account.ID, domain.AgentAccountLimits{}, ports.ErrAgentAccountNoLimits
+	}
 	s.mu.Lock()
 	r := s.readings[account.ID]
 	s.mu.Unlock()
@@ -1194,7 +1358,9 @@ func (s *Service) SessionLimits(ctx context.Context, id domain.SessionID, harnes
 	return account.ID, *r.limits, nil
 }
 
-// HandoffTarget picks the account with the most verified room for a usage-limited session, or "" when none has room.
+// HandoffTarget picks the account with the most verified room for a
+// usage-limited session, or "" when none has room. Per-token accounts have no
+// usage limits: a session never moves to one, nor away from one.
 func (s *Service) HandoffTarget(ctx context.Context, id domain.SessionID, harness domain.AgentHarness, model string) (string, error) {
 	p, ok := domain.AgentAccountProviderFor(harness)
 	if !ok || s.providers[p] == nil {
@@ -1204,6 +1370,10 @@ func (s *Service) HandoffTarget(ctx context.Context, id domain.SessionID, harnes
 	if err != nil {
 		return "", err
 	}
+	if current.PerToken() {
+		s.log.Info("account handoff: session is on an API key account", "session", id)
+		return "", nil
+	}
 	accounts, err := s.accounts(ctx)
 	if err != nil {
 		return "", err
@@ -1211,7 +1381,7 @@ func (s *Service) HandoffTarget(ctx context.Context, id domain.SessionID, harnes
 	headroom := make([]float64, len(accounts))
 	var wg sync.WaitGroup
 	for i, account := range accounts {
-		if account.Provider != p || account.ID == current.ID || s.beingRemoved(account.ID) {
+		if account.Provider != p || account.ID == current.ID || account.Device() || account.PerToken() || s.beingRemoved(account.ID) {
 			continue
 		}
 		wg.Go(func() {
@@ -1354,7 +1524,11 @@ func (s *Service) launchEnv(ctx context.Context, id domain.SessionID, override d
 		if err := s.prepare(provider, account.Home); err != nil {
 			errs = append(errs, err)
 		}
-		for key, value := range provider.LaunchEnv(account.Home) {
+		accountEnv, err := s.accountLaunchEnv(provider, account)
+		if err != nil {
+			errs = append(errs, err)
+		}
+		for key, value := range accountEnv {
 			env[key] = value
 		}
 	}

@@ -1,10 +1,11 @@
 import { Stack, useLocalSearchParams, useNavigation, useRouter } from "expo-router";
 import * as Clipboard from "expo-clipboard";
-import { forwardRef, useCallback, useEffect, useImperativeHandle, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { forwardRef, memo, useCallback, useEffect, useImperativeHandle, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { AccessibilityInfo, ActivityIndicator, FlatList, Image, Keyboard, Platform, Pressable, ScrollView, StyleSheet, Text, useWindowDimensions, View, type LayoutChangeEvent, type NativeScrollEvent, type NativeSyntheticEvent, type ViewToken } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { WebView } from "react-native-webview";
 import { ArtifactTextTooLargeError } from "../../lib/api";
+import { cachedArtifactUri, discardArtifact, downloadArtifact } from "../../lib/artifactDownload";
 import { ArtifactMedia } from "../../lib/ArtifactMedia";
 import { ArtifactPdf } from "../../lib/ArtifactPdf";
 import { ArtifactTable } from "../../lib/ArtifactTable";
@@ -12,7 +13,7 @@ import { ArtifactThumbnail, hasContentThumbnail } from "../../lib/ArtifactThumbn
 import { artifactVisual } from "../../lib/artifactVisual";
 import { headerTitleWidth } from "../../lib/pagerTitle";
 import { useArtifactActions } from "../../lib/artifact-menu";
-import { ARTIFACT_PROBE_BYTES, artifactCommentTarget, artifactFormatLabel, OPEN_CLOUD_FILE_HINT, openOnMachineHint, artifactLanguage, artifactPageAt, artifactViewerPages, artifactViewKind, canShowArtifactHistory, looksBinary, MAX_ARTIFACT_TEXT_BYTES, shownText, type SessionArtifact } from "../../lib/artifacts";
+import { ARTIFACT_PROBE_BYTES, artifactCacheEntry, artifactCommentTarget, artifactFormatLabel, OPEN_CLOUD_FILE_HINT, openOnMachineHint, artifactLanguage, artifactPageAt, artifactViewerPages, artifactViewKind, canShowArtifactHistory, looksBinary, MAX_ARTIFACT_TEXT_BYTES, shownText, type SessionArtifact } from "../../lib/artifacts";
 import { backOr } from "../../lib/backNavigation";
 import { HighlightedCodeText } from "../../lib/chat/HighlightedCodeText";
 import { useRenderTheme } from "../../lib/chat/RenderFrame";
@@ -27,10 +28,12 @@ import { addReviewComment, reviewKey } from "../../lib/files/reviewStore";
 import { useReviewSender } from "../../lib/files/useReviewSender";
 import { useFilesBackend } from "../../lib/files/useFilesBackend";
 import { haptics } from "../../lib/haptics";
+import { sourceKey, useRetryAfterVerified, useVerifiedFor, useVerifiedOnMount } from "../../lib/heldBackend";
 import { findHost } from "../../lib/hosts";
-import { hostRouteMatches } from "../../lib/hostRoute";
+import { hostRouteMatches, machineState } from "../../lib/hostRoute";
 import { Feather } from "../../lib/icons";
 import { imageSourceForPlatform } from "../../lib/imageSource";
+import { MachineRejectedState } from "../../lib/MachineRejectedState";
 import { MermaidDiagram } from "../../lib/MermaidDiagram";
 import { HostScope, useApp } from "../../lib/store";
 import type { Theme } from "../../lib/theme";
@@ -42,6 +45,7 @@ import { Button, EmptyState } from "../../lib/ui";
 import { useInlinedArtifactPage } from "../../lib/useInlinedArtifactPage";
 import { useSessionArtifacts } from "../../lib/useSessionArtifacts";
 import { ViewModeControl, type ViewMode } from "../../lib/view-mode-control";
+import { ARTIFACT_MEDIA_PLAYBACK, artifactMediaActiveScript, artifactMediaGateScript } from "../../lib/artifactMediaPlayback";
 
 // Above this, a text file shows as plain text: a full grammar pass over it
 // would stall the JS thread.
@@ -85,7 +89,8 @@ function ArtifactViewerContent() {
 	const path = String(rawPath ?? "");
 	const navigation = useNavigation();
 	const router = useRouter();
-	const { currentHostId, connection } = useApp();
+	const app = useApp();
+	const { currentHostId } = app;
 	const hostMatches = hostRouteMatches(routeHostId, currentHostId);
 	// The paired machine's daemon, or Orchestrator Cloud for a cloud session.
 	const { backend, cloud, unavailable } = useArtifactsBackend(hostMatches ? sessionId : "");
@@ -105,10 +110,16 @@ function ArtifactViewerContent() {
 	// The pages keep the order they had on open: the list is newest first, so a
 	// file the agent rewrites would otherwise jump to the front and remount.
 	const pageOrder = useRef<string[]>(undefined);
+	// A swipe changes the current path but rarely the pages: the same list then
+	// stays, so the pager and the strip are not handed new data on every swipe.
+	const shownPages = useRef<SessionArtifact[]>(undefined);
 	const pages = useMemo(() => {
 		if (!artifacts) return undefined;
 		const next = artifactViewerPages(pageOrder.current, artifacts, currentPath);
 		pageOrder.current = next.map((page) => page.path);
+		const previous = shownPages.current;
+		if (previous && previous.length === next.length && previous.every((page, at) => page === next[at])) return previous;
+		shownPages.current = next;
 		return next;
 	}, [artifacts, currentPath]);
 	const artifact = pages?.find((candidate) => candidate.path === currentPath);
@@ -136,13 +147,16 @@ function ArtifactViewerContent() {
 		setCurrentPath(next.path);
 	}, [closeAsk]);
 	const pagerRef = useRef<PagerHandle>(null);
+	// Read at tap time, so the strip's tiles keep one handler across swipes.
+	const pagesRef = useRef(pages);
+	pagesRef.current = pages;
 	// A tap on the strip moves the pager there with an animation, then shows that page.
 	const pageTo = useCallback((target: number) => {
-		const next = pages?.[target];
+		const next = pagesRef.current?.[target];
 		if (!next) return;
 		pagerRef.current?.scrollToPage(target);
 		showPage(next);
-	}, [pages, showPage]);
+	}, [showPage]);
 	const askedOnOpen = useRef(false);
 	useEffect(() => {
 		if (askParam !== "1" || askedOnOpen.current || !artifact) return;
@@ -228,10 +242,18 @@ function ArtifactViewerContent() {
 	const openReview = useCallback(() => {
 		router.push({ pathname: "/files/[sessionId]/review", params: { sessionId, hostId: routeHostId } });
 	}, [routeHostId, router, sessionId]);
+	// Stable across swipes: a page re-renders only when it becomes, or stops being, the page on screen.
+	const renderPage = useCallback((page: SessionArtifact, active: boolean) => backend
+		? <ArtifactBody backend={backend} sessionId={sessionId} artifact={page} active={active} versionOf={versionOf} onAsk={askAbout} />
+		: null, [askAbout, backend, sessionId, versionOf]);
 
 	if (!hostMatches) return <View style={styles.center}><EmptyState icon={{ ios: "doc.text", android: "description" }} title="This artifact belongs to another machine" message="Open it from that machine's session." action={<Button title="Open board" icon={{ ios: "square.grid.2x2", android: "dashboard" }} onPress={() => router.navigate("/")} />} /></View>;
 	if (unavailable) return <View style={styles.center}><EmptyState icon="cloud" title="Artifact unavailable" message={unavailable} /></View>;
-	if (!backend && !cloud && connection === "closed") return <View style={styles.center}><EmptyState icon="wifi-off" title="Machine offline" message="The artifact loads once the app reconnects." /></View>;
+	// Not for a connection an app switch closed: that one reconnects. A machine
+	// that refused this phone says so rather than spinning (see machineState).
+	const machine = !backend && !cloud ? machineState(app) : "ok";
+	if (machine === "rejected") return <View style={styles.center}><MachineRejectedState /></View>;
+	if (machine === "offline") return <View style={styles.center}><EmptyState icon="wifi-off" title="Machine offline" message="The artifact loads once the app reconnects." /></View>;
 	if (!backend || (!artifacts && loading)) return <View style={styles.center}><ActivityIndicator color={t.accent} /></View>;
 	if (!artifact || !pages) {
 		// A file the session does not list (a worker report's link): media, a PDF,
@@ -242,7 +264,7 @@ function ArtifactViewerContent() {
 		if (UNLISTED_VIEWERS.has(unlistedKind)) return <ArtifactBody backend={backend} sessionId={sessionId} artifact={unlisted} active versionOf={versionOf} onAsk={() => {}} />;
 		if (UNLISTED_SIZED_VIEWERS.has(unlistedKind)) return <UnlistedSized backend={backend} sessionId={sessionId} artifact={unlisted} versionOf={versionOf} />;
 		const source = backend.webSource(sessionId, currentPath);
-		return source ? <ArtifactWeb backend={backend} source={source} version="" page={/\.html?$/i.test(currentPath) ? { sessionId, path: currentPath } : undefined} /> : <Unavailable title="This artifact can't be opened" message="Its path isn't one the phone can request." />;
+		return source ? <ArtifactWeb backend={backend} file={{ sessionId, path: currentPath }} version="" page={/\.html?$/i.test(currentPath) ? { sessionId, path: currentPath } : undefined} /> : <Unavailable title="This artifact can't be opened" message="Its path isn't one the phone can request." />;
 	}
 	// The strip shows the session's artifacts when there is more than one. It leaves while a comment is open.
 	const filmstrip = !ask && pages.length > 1;
@@ -253,10 +275,11 @@ function ArtifactViewerContent() {
 				ref={pagerRef}
 				pages={pages}
 				index={pageIndex}
+				currentPath={currentPath}
 				// A comment belongs to the file it was opened on; paging waits until it is sent or closed.
 				scrollEnabled={!ask}
 				onPage={showPage}
-				renderPage={(page) => <ArtifactBody backend={backend} sessionId={sessionId} artifact={page} active={page.path === currentPath} versionOf={versionOf} onAsk={page.path === currentPath ? askAbout : () => {}} />}
+				renderPage={renderPage}
 			/>
 			{filmstrip ? <ArtifactFilmstrip backend={backend} sessionId={sessionId} artifacts={pages} index={pageIndex} versionOf={versionOf} onSelect={pageTo} /> : null}
 			{notice ? <View pointerEvents="none" style={[styles.notice, { top: glassInset + space.md }]}><Text style={styles.noticeText}>{notice}</Text></View> : null}
@@ -288,10 +311,12 @@ type PagerHandle = { scrollToPage(index: number): void };
 const ArtifactPager = forwardRef<PagerHandle, {
 	pages: readonly SessionArtifact[];
 	index: number;
+	/** The page on screen, told to each page as `active`. */
+	currentPath: string;
 	scrollEnabled: boolean;
 	onPage(artifact: SessionArtifact): void;
-	renderPage(artifact: SessionArtifact): ReactNode;
-}>(function ArtifactPager({ pages, index, scrollEnabled, onPage, renderPage }, handle) {
+	renderPage(artifact: SessionArtifact, active: boolean): ReactNode;
+}>(function ArtifactPager({ pages, index, currentPath, scrollEnabled, onPage, renderPage }, handle) {
 	const styles = useThemedStyles(makeStyles);
 	const list = useRef<FlatList<SessionArtifact>>(null);
 	// The page the list is on. A move the list made itself (a swipe, a tap on the
@@ -327,6 +352,11 @@ const ArtifactPager = forwardRef<PagerHandle, {
 		shownIndex.current = pages.indexOf(next);
 		onPage(next);
 	}, [index, onPage, pages, width]);
+	const pageWidth = size?.width ?? 0;
+	const pageHeight = size?.height ?? 0;
+	const renderItem = useCallback(({ item }: { item: SessionArtifact }) => (
+		<View style={{ width: pageWidth, height: pageHeight }}>{renderPage(item, item.path === currentPath)}</View>
+	), [currentPath, pageHeight, pageWidth, renderPage]);
 	return (
 		<View style={styles.screen} onLayout={onLayout}>
 			{size ? (
@@ -344,7 +374,7 @@ const ArtifactPager = forwardRef<PagerHandle, {
 					maxToRenderPerBatch={1}
 					windowSize={3}
 					onMomentumScrollEnd={onSettled}
-					renderItem={({ item }) => <View style={{ width: size.width, height: size.height }}>{renderPage(item)}</View>}
+					renderItem={renderItem}
 				/>
 			) : null}
 		</View>
@@ -370,7 +400,6 @@ function ArtifactFilmstrip({ backend, sessionId, artifacts, index, versionOf, on
 	versionOf(path: string): string | undefined;
 	onSelect(index: number): void;
 }) {
-	const t = useTheme();
 	const styles = useThemedStyles(makeStyles);
 	const insets = useSafeAreaInsets();
 	const list = useRef<FlatList<SessionArtifact>>(null);
@@ -410,37 +439,83 @@ function ArtifactFilmstrip({ backend, sessionId, artifacts, index, versionOf, on
 				// No initialScrollIndex: when the tiles fit without scrolling, the list
 				// would render from that tile on and never draw (or preview) the ones before
 				// it. The effect above places the strip instead.
-				renderItem={({ item, index: position }) => {
-					const selected = position === index;
-					const visual = artifactVisual(item, t);
-					const failed = previewFailed[item.path] === item.updatedAt;
-					// An image that cannot load (a format the phone can't decode, a 404) shows the glyph instead.
-					const picture = artifactViewKind(item) === "image" && !failed ? backend.imageSource(sessionId, item.path, item.updatedAt) : undefined;
-					// A text, markdown or HTML file shows a peek at its contents, as its gallery card does.
-					const previewing = !picture && hasContentThumbnail(item) && !failed;
-					return (
-						<View style={{ marginLeft: position > 0 ? STRIP_GAP : 0 }}>
-							<Pressable
-								accessibilityRole="button"
-								accessibilityLabel={`${item.name}, ${position + 1} of ${artifacts.length}`}
-								accessibilityState={{ selected }}
-								onPress={() => { haptics.tap(); onSelect(position); }}
-								style={[styles.tile, { backgroundColor: visual.tint }, selected ? styles.tileSelected : { opacity: 0.6 }]}
-							>
-								{picture ? (
-									<Image accessibilityIgnoresInvertColors source={imageSourceForPlatform(picture)} resizeMode="cover" onError={() => markPreviewFailed(item.path, item.updatedAt)} style={StyleSheet.absoluteFill} />
-								) : previewing ? (
-									<ArtifactThumbnail backend={backend} sessionId={sessionId} artifact={item} visible={visiblePaths.has(item.path)} versionOf={versionOf} onFailed={() => markPreviewFailed(item.path, item.updatedAt)} />
-								) : (
-									<Feather name={visual.icon} size={18} color={visual.color} />
-								)}
-							</Pressable>
-						</View>
-					);
-				}}
+				renderItem={({ item, index: position }) => (
+					<StripTile
+						backend={backend}
+						sessionId={sessionId}
+						artifact={item}
+						position={position}
+						count={artifacts.length}
+						selected={position === index}
+						failed={previewFailed[item.path] === item.updatedAt}
+						visible={visiblePaths.has(item.path)}
+						versionOf={versionOf}
+						onSelect={onSelect}
+						onFailed={markPreviewFailed}
+					/>
+				)}
 			/>
 		</View>
 	);
+}
+
+/** One tile of the strip. A swipe re-draws only the two tiles whose selection changed. */
+const StripTile = memo(function StripTile({ backend, sessionId, artifact, position, count, selected, failed, visible, versionOf, onSelect, onFailed }: {
+	backend: ArtifactsBackend;
+	sessionId: string;
+	artifact: SessionArtifact;
+	position: number;
+	count: number;
+	selected: boolean;
+	failed: boolean;
+	visible: boolean;
+	versionOf(path: string): string | undefined;
+	onSelect(index: number): void;
+	onFailed(path: string, updatedAt: string): void;
+}) {
+	const t = useTheme();
+	const styles = useThemedStyles(makeStyles);
+	const visual = artifactVisual(artifact, t);
+	return (
+		<View style={{ marginLeft: position > 0 ? STRIP_GAP : 0 }}>
+			<Pressable
+				accessibilityRole="button"
+				accessibilityLabel={`${artifact.name}, ${position + 1} of ${count}`}
+				accessibilityState={{ selected }}
+				onPress={() => { haptics.tap(); onSelect(position); }}
+				style={[styles.tile, { backgroundColor: visual.tint }, selected ? styles.tileSelected : { opacity: 0.6 }]}
+			>
+				<StripPreview backend={backend} sessionId={sessionId} artifact={artifact} failed={failed} visible={visible} versionOf={versionOf} onFailed={onFailed} />
+			</Pressable>
+		</View>
+	);
+});
+
+/**
+ * What a strip tile draws: an image's own picture, a peek at a text, markdown or
+ * HTML file's contents (as its gallery card does), or the kind's glyph. The
+ * strip mounts tiles as it scrolls, so each checks for a verified connection
+ * when its picture would first load (see heldBackend), not when the strip did.
+ */
+function StripPreview({ backend, sessionId, artifact, failed, visible, versionOf, onFailed }: {
+	backend: ArtifactsBackend;
+	sessionId: string;
+	artifact: SessionArtifact;
+	failed: boolean;
+	visible: boolean;
+	versionOf(path: string): string | undefined;
+	onFailed(path: string, updatedAt: string): void;
+}) {
+	const t = useTheme();
+	const visual = artifactVisual(artifact, t);
+	// An image that cannot load (a format the phone can't decode, a 404) shows the glyph instead.
+	const wanted = artifactViewKind(artifact) === "image" && !failed ? backend.imageSource(sessionId, artifact.path, artifact.updatedAt) : undefined;
+	const picture = useVerifiedFor(backend, sourceKey(wanted)) ? wanted : undefined;
+	const verified = useVerifiedOnMount(backend);
+	const previewing = verified && !wanted && hasContentThumbnail(artifact) && !failed;
+	if (picture) return <Image accessibilityIgnoresInvertColors source={imageSourceForPlatform(picture)} resizeMode="cover" onError={() => onFailed(artifact.path, artifact.updatedAt)} style={StyleSheet.absoluteFill} />;
+	if (previewing) return <ArtifactThumbnail backend={backend} sessionId={sessionId} artifact={artifact} visible={visible} versionOf={versionOf} onFailed={() => onFailed(artifact.path, artifact.updatedAt)} />;
+	return <Feather name={visual.icon} size={18} color={visual.color} />;
 }
 
 /** The header of a gallery page: the file's name over where it sits in the list. */
@@ -456,30 +531,47 @@ function PagerTitle({ title, position, actions }: { title: string; position: str
 	);
 }
 
-function ArtifactBody({ backend, sessionId, artifact, active, versionOf, onAsk }: { backend: ArtifactsBackend; sessionId: string; artifact: SessionArtifact; active: boolean; versionOf: (path: string) => string | undefined; onAsk: (quote?: string) => void }) {
+const ArtifactBody = memo(function ArtifactBody({ backend, sessionId, artifact, active, versionOf, onAsk }: { backend: ArtifactsBackend; sessionId: string; artifact: SessionArtifact; active: boolean; versionOf: (path: string) => string | undefined; onAsk: (quote?: string) => void }) {
+	const styles = useThemedStyles(makeStyles);
+	const t = useTheme();
+	// Only the page on screen opens a comment. Checked when asked, not passed as
+	// a new handler, so a long document is not drawn again each time it moves
+	// on or off screen.
+	const activeRef = useRef(active);
+	activeRef.current = active;
+	const askHere = useCallback((quote?: string) => { if (activeRef.current) onAsk(quote); }, [onAsk]);
 	// Said where the phone gives up on a file (a format it cannot play).
 	const hint = useOpenOnMachineHint(backend.cloud);
+	// A page swiped back to while the app reconnects waits for the machine to
+	// answer as itself before it loads with the credential (see heldBackend).
+	const verified = useVerifiedOnMount(backend);
 	const kind = artifactViewKind(artifact);
+	// A neighbouring page's player gets its file only once swiped to, so that is
+	// when it checks for a verified connection, not when the page mounted; this
+	// page then builds the stream again from the verified connection.
+	const playable = useVerifiedFor(backend, active && (kind === "video" || kind === "audio") ? "play" : null);
+	if (!verified) return <View style={styles.center}><ActivityIndicator color={t.accent} /></View>;
 	const source = backend.webSource(sessionId, artifact.path);
 	if (!source) return <Unavailable title="This artifact can't be opened" message="Its path isn't one the phone can request." />;
+	const file = { sessionId, path: artifact.path };
 	switch (kind) {
 		case "html":
-			return <ArtifactWeb backend={backend} source={source} version={artifact.updatedAt} page={{ sessionId, path: artifact.path }} />;
+			return <ArtifactWeb backend={backend} file={file} version={artifact.updatedAt} page={file} active={active} />;
 		case "svg":
-			return <ArtifactWeb backend={backend} source={source} version={artifact.updatedAt} />;
+			return <ArtifactWeb backend={backend} file={file} version={artifact.updatedAt} />;
 		case "video":
 		case "audio": {
 			const stream = backend.streamSource(sessionId, artifact.path, artifact.updatedAt);
-			return stream ? <ArtifactMedia source={stream} kind={kind} active={active} name={artifact.name} label={artifactFormatLabel(artifact)} hint={hint} renew={backend.renew} /> : <NoPreview artifact={artifact} cloud={backend.cloud} />;
+			return stream ? <ArtifactMedia source={stream} kind={kind} active={active && playable} name={artifact.name} label={artifactFormatLabel(artifact)} hint={hint} renew={backend.renew} /> : <NoPreview artifact={artifact} cloud={backend.cloud} />;
 		}
 		case "pdf":
 			// Android's WebView has no PDF viewer: the platform's renderer draws it instead.
-			return Platform.OS === "android" ? <ArtifactPdf backend={backend} sessionId={sessionId} artifact={artifact} active={active} label={artifactFormatLabel(artifact)} hint={hint} /> : <ArtifactWeb backend={backend} source={source} version={artifact.updatedAt} />;
+			return Platform.OS === "android" ? <ArtifactPdf backend={backend} sessionId={sessionId} artifact={artifact} active={active} label={artifactFormatLabel(artifact)} hint={hint} /> : <ArtifactWeb backend={backend} file={file} version={artifact.updatedAt} />;
 		case "binary":
 			return <NoPreview artifact={artifact} cloud={backend.cloud} />;
 		case "image": {
 			const image = backend.imageSource(sessionId, artifact.path, artifact.updatedAt);
-			return image ? <ArtifactImage source={image} name={artifact.name} /> : <NoPreview artifact={artifact} cloud={backend.cloud} />;
+			return image ? <ArtifactImage backend={backend} sessionId={sessionId} artifact={artifact} source={image} /> : <NoPreview artifact={artifact} cloud={backend.cloud} />;
 		}
 		case "markdown":
 		case "text":
@@ -487,10 +579,10 @@ function ArtifactBody({ backend, sessionId, artifact, active, versionOf, onAsk }
 		case "diagram":
 			// A text file too large to load into the app still shows, as the page the
 			// daemon serves, unless its start shows it is not text.
-			if (artifact.size > MAX_ARTIFACT_TEXT_BYTES) return <LargeArtifact backend={backend} sessionId={sessionId} artifact={artifact} source={source} />;
-			return <ArtifactText backend={backend} sessionId={sessionId} artifact={artifact} kind={kind} versionOf={versionOf} onAsk={onAsk} />;
+			if (artifact.size > MAX_ARTIFACT_TEXT_BYTES) return <LargeArtifact backend={backend} sessionId={sessionId} artifact={artifact} />;
+			return <ArtifactText backend={backend} sessionId={sessionId} artifact={artifact} kind={kind} versionOf={versionOf} onAsk={askHere} />;
 	}
-}
+});
 
 /** A file the phone has no viewer for, said as the desktop says it, with what the file is. */
 function NoPreview({ artifact, cloud }: { artifact: Pick<SessionArtifact, "path" | "size">; cloud: boolean }) {
@@ -545,7 +637,7 @@ function UnlistedSized({ backend, sessionId, artifact, versionOf }: { backend: A
 	if (size?.key !== key) return <View style={styles.center}><ActivityIndicator color={t.accent} /></View>;
 	if (size.bytes === undefined) {
 		const source = backend.webSource(sessionId, artifact.path);
-		return source ? <ArtifactWeb backend={backend} source={source} version="" /> : <Unavailable title="This artifact can't be opened" message="Its path isn't one the phone can request." />;
+		return source ? <ArtifactWeb backend={backend} file={{ sessionId, path: artifact.path }} version="" /> : <Unavailable title="This artifact can't be opened" message="Its path isn't one the phone can request." />;
 	}
 	return <ArtifactBody backend={backend} sessionId={sessionId} artifact={{ ...artifact, size: size.bytes }} active versionOf={versionOf} onAsk={() => {}} />;
 }
@@ -556,7 +648,7 @@ function UnlistedSized({ backend, sessionId, artifact, versionOf }: { backend: A
  * show nothing (or start a download); text opens as a page. A backend that
  * cannot read a file's start (Cloud) opens it as a page.
  */
-function LargeArtifact({ backend, sessionId, artifact, source }: { backend: ArtifactsBackend; sessionId: string; artifact: SessionArtifact; source: ArtifactSource }) {
+function LargeArtifact({ backend, sessionId, artifact }: { backend: ArtifactsBackend; sessionId: string; artifact: SessionArtifact }) {
 	const t = useTheme();
 	const styles = useThemedStyles(makeStyles);
 	const key = `${sessionId}|${artifact.path}|${artifact.updatedAt}`;
@@ -575,21 +667,36 @@ function LargeArtifact({ backend, sessionId, artifact, source }: { backend: Arti
 	}, [artifact.path, backend, key, sessionId]);
 	if (probe?.key !== key) return <View style={styles.center}><ActivityIndicator color={t.accent} /></View>;
 	if (probe.binary) return <NoPreview artifact={artifact} cloud={backend.cloud} />;
-	return <ArtifactWeb backend={backend} source={source} version={artifact.updatedAt} />;
+	return <ArtifactWeb backend={backend} file={{ sessionId, path: artifact.path }} version={artifact.updatedAt} />;
 }
 
-function ArtifactWeb({ backend, source, version, page }: {
+function ArtifactWeb({ backend, file, version, page, active = true }: {
 	backend: ArtifactsBackend;
-	/** Where the web view loads the file by itself. */
-	source: ArtifactSource;
+	/** The file the web view loads by itself, from its source on the live connection. */
+	file: { sessionId: string; path: string };
 	version: string;
 	/** An HTML page, loaded with the files it links inlined. */
 	page?: { sessionId: string; path: string };
+	/** The pager's page on screen; a neighbour's media is held until it is shown. */
+	active?: boolean;
 }) {
 	const t = useTheme();
 	const styles = useThemedStyles(makeStyles);
 	const web = useRef<WebView>(null);
 	const [error, setError] = useState<string>();
+	// Built here, not handed down: a page that waited for a verified connection
+	// then loads from the address the machine answered on, never one a parent
+	// built from the last connection.
+	const source = backend.webSource(file.sessionId, file.path);
+	// Loaded only with a verified connection, when it mounts and when its file
+	// changes: the page loads with the machine's credential (see heldBackend).
+	// The page already showing stays through a reconnect.
+	const verified = useVerifiedFor(backend, source ? sourceKey(source) : "unresolved");
+	// Retry loads the page again as a fresh view, from the source built then.
+	const [attempt, setAttempt] = useState(0);
+	// Bound to this file: a link to another file reuses this view, and a Retry
+	// still waiting must not reload (and scroll back up) that file's page.
+	const retryAfterVerified = useRetryAfterVerified(backend, `${file.sessionId}\n${file.path}`);
 	// A machine's page is drawn with the files it links inlined. Cloud's loads
 	// from its signed address, as the desktop frames it: that keeps the control
 	// plane's sandbox on it, and its own links work.
@@ -605,17 +712,31 @@ function ArtifactWeb({ backend, source, version, page }: {
 	useEffect(() => {
 		if (inlined.html && loaded.current) web.current?.injectJavaScript(renderThemeScript(theme));
 	}, [inlined.html, theme]);
+	// An HTML page plays its media inline, and a neighbour in the pager holds it
+	// (see artifactMediaGateScript) without reloading, so its scroll and form
+	// state stay. The gate is written for the page as it is now, so a view
+	// created after a swipe starts right (a new script only reaches the next
+	// load; it never reloads the page); changes reach a loaded page as posts.
+	const pageView = Boolean(page);
+	const mediaGate = pageView ? artifactMediaGateScript(active) : undefined;
+	useEffect(() => {
+		if (pageView) web.current?.injectJavaScript(artifactMediaActiveScript(active));
+	}, [active, pageView]);
 	// One fresh signed address per version: refused again with it, the page
 	// says so and offers Retry rather than renewing forever.
 	const renewed = useRef(false);
 	useEffect(() => { renewed.current = false; }, [version]);
 	// Inlining failed: the page still opens from its URL.
-	if (inline && !inlined.html && !inlined.failed) return <View style={styles.center}><ActivityIndicator color={t.accent} /></View>;
+	if (!source || !verified || (inline && !inlined.html && !inlined.failed)) return <View style={styles.center}><ActivityIndicator color={t.accent} /></View>;
 	return (
 		<View style={styles.screen}>
 			<WebView
-				// A new version of the file reloads the page.
-				key={`${version}|${inlined.html ? "inline" : "url"}`}
+				{...(pageView ? ARTIFACT_MEDIA_PLAYBACK : undefined)}
+				injectedJavaScriptBeforeContentLoaded={mediaGate}
+				// The relaxed policy covers the page's frames too, so the gate goes into each.
+				injectedJavaScriptBeforeContentLoadedForMainFrameOnly={!pageView}
+				// A new version of the file reloads the page, and so does Retry.
+				key={`${version}|${inlined.html ? "inline" : "url"}|${attempt}`}
 				ref={web}
 				// Inlined, the page loads from memory with no origin: it needs no
 				// cookie, and it cannot reach the daemon.
@@ -635,6 +756,8 @@ function ArtifactWeb({ backend, source, version, page }: {
 				onLoadEnd={() => {
 					loaded.current = true;
 					if (inlined.html) web.current?.injectJavaScript(renderThemeScript(theme));
+					// A change while the page was loading was posted before the gate could take it.
+					if (pageView) web.current?.injectJavaScript(artifactMediaActiveScript(active));
 				}}
 				onHttpError={(event) => {
 					const status = event.nativeEvent.statusCode;
@@ -652,33 +775,102 @@ function ArtifactWeb({ backend, source, version, page }: {
 				<View accessibilityRole="alert" style={styles.webError}>
 					<Feather name="alert-triangle" size={iconSize.sm} color={t.red} />
 					<Text style={styles.webErrorText}>{error}</Text>
-					<Pressable onPress={() => { renewed.current = false; setError(undefined); web.current?.reload(); }}><Text style={styles.retryText}>Retry</Text></Pressable>
+					<Pressable onPress={() => {
+						renewed.current = false;
+						// Not a reload of the address on screen: once verified, the page is
+						// built again from the address the machine answered on. The error
+						// and its Retry stay up until then, since nothing reloads before.
+						retryAfterVerified(() => {
+							setError(undefined);
+							setAttempt((n) => n + 1);
+						});
+					}}><Text style={styles.retryText}>Retry</Text></Pressable>
 				</View>
 			) : null}
 		</View>
 	);
 }
 
-function ArtifactImage({ source, name }: { source: ArtifactSource; name: string }) {
+/**
+ * Each image's shape, by its address (which carries the file's version). A page
+ * the pager mounts again, swiped back to, is laid out at its shape at once,
+ * without measuring the image again.
+ */
+const imageRatios = new Map<string, number>();
+const MAX_IMAGE_RATIOS = 200;
+
+/** Larger images are drawn from the machine each time rather than kept on the phone. */
+const MAX_CACHED_IMAGE_BYTES = 25 * 1024 * 1024;
+
+/**
+ * A full-size artifact image. The machine marks artifact files no-cache, and
+ * React Native keeps no image that is, so without a copy on the phone every
+ * page swiped back to downloaded and decoded its image again: megabytes per
+ * swipe for screenshots, queuing behind each other on a slow connection. The
+ * image is downloaded once per version into the artifact cache (the one PDFs
+ * use) and drawn from there; if that fails it loads from the machine as before.
+ */
+function ArtifactImage({ backend, sessionId, artifact, source }: { backend: ArtifactsBackend; sessionId: string; artifact: SessionArtifact; source: ArtifactSource }) {
 	const styles = useThemedStyles(makeStyles);
+	const t = useTheme();
 	const [failed, setFailed] = useState(false);
-	const [ratio, setRatio] = useState(1);
+	const entry = useMemo(() => artifactCacheEntry(backend.key, sessionId, artifact.path, artifact.updatedAt), [artifact.path, artifact.updatedAt, backend.key, sessionId]);
+	// Only a listed size is trusted: an unlisted file says 0 (unknown), and could be
+	// any size, so it loads from the machine instead of being downloaded to check.
+	const cacheable = artifact.size > 0 && artifact.size <= MAX_CACHED_IMAGE_BYTES;
+	// The copy on the phone, or `network` once it cannot be had.
+	const [local, setLocal] = useState<{ name: string; uri?: string; network?: boolean }>(() => ({ name: entry.name, uri: cacheable ? cachedArtifactUri(entry) : undefined, network: !cacheable }));
+	const current = local.name === entry.name ? local : { name: entry.name, uri: cacheable ? cachedArtifactUri(entry) : undefined, network: !cacheable };
+	const settled = Boolean(current.uri || current.network);
 	useEffect(() => {
+		if (settled) return;
 		let live = true;
-		Image.getSizeWithHeaders(source.uri, source.headers ?? {}).then(({ width, height }) => { if (live && width > 0 && height > 0) setRatio(width / height); }).catch(() => {});
+		downloadArtifact(source, entry, { maxBytes: MAX_CACHED_IMAGE_BYTES }).then(
+			(uri) => { if (live) setLocal({ name: entry.name, uri }); },
+			() => { if (live) setLocal({ name: entry.name, network: true }); },
+		);
 		return () => { live = false; };
-		// The source is rebuilt on each render; its URI (with the file's version) is what changes.
+		// The source is rebuilt on each render; the entry (the file's version) is what changes.
 		// eslint-disable-next-line react-hooks/exhaustive-deps
-	}, [source.uri]);
+	}, [entry, settled]);
+	const [ratio, setRatio] = useState(() => imageRatios.get(source.uri) ?? 1);
+	const shownUri = current.uri ?? (current.network ? source.uri : undefined);
+	useEffect(() => {
+		if (!shownUri) return;
+		const known = imageRatios.get(source.uri);
+		if (known !== undefined) {
+			setRatio(known);
+			return;
+		}
+		let live = true;
+		// A copy on the phone is measured there; otherwise the machine is asked.
+		(current.uri ? Image.getSize(current.uri) : Image.getSizeWithHeaders(source.uri, source.headers ?? {})).then(({ width, height }) => {
+			if (width <= 0 || height <= 0) return;
+			if (imageRatios.size >= MAX_IMAGE_RATIOS) imageRatios.delete(imageRatios.keys().next().value!);
+			imageRatios.set(source.uri, width / height);
+			if (live) setRatio(width / height);
+		}).catch(() => {});
+		return () => { live = false; };
+		// eslint-disable-next-line react-hooks/exhaustive-deps
+	}, [shownUri, source.uri]);
 	if (failed) return <Unavailable title="This image didn't load" message="The phone may not support its format. Open it on the machine instead." />;
+	if (!shownUri) return <View style={styles.center}><ActivityIndicator color={t.accent} /></View>;
 	return (
 		<ScrollView style={styles.screen} contentInsetAdjustmentBehavior="automatic" contentContainerStyle={styles.imageContent} maximumZoomScale={4} minimumZoomScale={1} centerContent>
 			<Image
-				source={imageSourceForPlatform(source)}
-				accessibilityLabel={name}
+				source={current.uri ? { uri: current.uri } : imageSourceForPlatform(source)}
+				accessibilityLabel={artifact.name}
 				accessibilityIgnoresInvertColors
 				resizeMode="contain"
-				onError={() => setFailed(true)}
+				onError={() => {
+					// A copy that cannot be drawn (cut or corrupt) goes, and the machine's is tried.
+					if (current.uri) {
+						discardArtifact(entry);
+						setLocal({ name: entry.name, network: true });
+						return;
+					}
+					setFailed(true);
+				}}
 				style={[styles.image, { aspectRatio: ratio }]}
 			/>
 		</ScrollView>
@@ -716,8 +908,7 @@ function ArtifactText({ backend, sessionId, artifact, kind, versionOf, onAsk }: 
 	// The previous version stays up while the next one loads.
 	const text = state?.text;
 	if (state?.key === key && state.tooLarge) {
-		const source = backend.webSource(sessionId, artifact.path);
-		if (source) return <LargeArtifact backend={backend} sessionId={sessionId} artifact={artifact} source={source} />;
+		if (backend.webSource(sessionId, artifact.path)) return <LargeArtifact backend={backend} sessionId={sessionId} artifact={artifact} />;
 	}
 	if (text === undefined) {
 		if (state?.key === key && state.error) return <Unavailable title="Couldn't load the artifact" message={state.error} action={<Button title="Try again" icon="refresh-cw" onPress={() => setAttempt((n) => n + 1)} />} />;

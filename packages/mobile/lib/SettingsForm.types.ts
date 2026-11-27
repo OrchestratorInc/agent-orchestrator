@@ -29,6 +29,7 @@ export const settingsIcons = {
 	update: symbols.update,
 	report: { ios: "ladybug", android: "bug_report" },
 	emulateMachines: symbols.devices,
+	device: symbols.phone,
 	feature: { ios: "lightbulb", android: "lightbulb" },
 	// Orchestrator Cloud's page and its coding agents' pages.
 	organization: { ios: "building.2", android: "group" },

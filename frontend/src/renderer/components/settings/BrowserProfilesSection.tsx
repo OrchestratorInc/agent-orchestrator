@@ -210,6 +210,7 @@ export function BrowserProfilesSection({ titleHidden }: { titleHidden?: boolean 
 				>
 					{/* One field with its submit embedded at the trailing edge. */}
 					<form
+						data-field="field"
 						className="flex h-control-form w-52 min-w-0 items-center gap-1 rounded-md border border-(--color-border-settings-input) bg-(--color-bg-settings-input) pl-3 pr-1"
 						onSubmit={(event) => {
 							event.preventDefault();
@@ -363,6 +364,7 @@ function BrowserProfileRow({
 				{renaming ? (
 					<input
 						aria-label={t("settings.browserProfiles.renameInput", { profile: profile.name })}
+						data-field="compact"
 						className="-ml-2 h-control-md w-full max-w-52 rounded-md border border-(--color-border-settings-input) bg-(--color-bg-settings-input) px-2 text-sm text-settings-label outline-none"
 						data-settings-inline-edit=""
 						maxLength={64}

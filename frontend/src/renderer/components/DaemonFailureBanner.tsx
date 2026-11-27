@@ -1,3 +1,4 @@
+import { uiUsage } from "../lib/ui-usage-telemetry";
 import { AlertTriangle, Clock3 } from "@/components/app-icons";
 import { useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
@@ -36,10 +37,16 @@ function DaemonFailureContent({ status }: { status: DaemonStatus }) {
 	const canRestart =
 		!slowStartup &&
 		(status.code === "not_ready" ||
+			// The binary can come back (an installer finishing, antivirus restoring it).
+			status.code === "binary_missing" ||
 			status.code === "spawn_failed" ||
 			status.code === "exited" ||
 			status.code === "identity_mismatch" ||
 			status.code === "daemon_unreachable");
+	// One count per failure shown, keyed on its code; a slow start is not an error.
+	useEffect(() => {
+		if (!slowStartup) uiUsage.errorShown("daemon_unavailable", "banner", undefined, status.code ? status.code.toUpperCase() : undefined);
+	}, [slowStartup, status.code]);
 	useEffect(() => {
 		setCopied(false);
 		return () => {
@@ -101,6 +108,7 @@ function DaemonFailureContent({ status }: { status: DaemonStatus }) {
 							type="button"
 							className="mt-2"
 							disabled={restarting}
+							data-telemetry-id="daemon_banner.retry"
 							onClick={() => void restartDaemon()}
 							size="sm"
 							variant="primary"

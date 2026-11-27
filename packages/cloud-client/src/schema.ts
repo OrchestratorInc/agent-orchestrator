@@ -20,6 +20,24 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/cloud/v1/me/data-retention": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** @description How long the caller's Cloud sessions and their conversation content are kept. The setting is the signed-in user's own and covers every Cloud session they started, in any organization, team sessions included; a child session an orchestrator started follows the orchestrator session's creator. The clock runs from a session's creation: once a session is older than retentionDays and has ended (a session still running is never ended for it; it waits until someone ends it), its sandbox is deleted and its content (chat timeline, harness transcripts, terminal output, commands, agent-switch handoffs and prompts) is deleted for good. The session itself remains, without its content, for billing and audit. A user follows defaultDays (followsDefault) until they choose another period, and can go back to it. */
+        get: operations["getDataRetention"];
+        /** @description Choose how long the caller's Cloud sessions and their conversation content are kept: one of options, or null to follow the deployment's default again (defaultDays, and any later change to it). Both modes answer sessionsToDelete, the number of the caller's sessions, across all organizations, older than the requested period whose content has not been deleted yet: what this change deletes (a session still running once it has ended). With dryRun true nothing changes, so a client can show that number and ask for confirmation before it sends the same request with dryRun false. Every change is written to the audit log with the old and new period. */
+        put: operations["putDataRetention"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/cloud/v1/me/providers": {
         parameters: {
             query?: never;
@@ -175,10 +193,10 @@ export interface paths {
             };
             cookie?: never;
         };
-        /** @description Lists the emails an active link of the caller's is shared with, oldest first. Only the link's owner may list them; anyone else, and a revoked link, gets 404. */
+        /** @description Lists who an active link of the caller's is shared with, oldest first: people by email in grants, and, on a team workspace, its teams and the whole workspace. Only the link's owner may list them; anyone else, and a revoked link, gets 404. */
         get: operations["listArtifactShareGrants"];
         put?: never;
-        /** @description Shares an active link of the caller's with emails, at once, and lists everyone it is shared with now. Each gets view access once they sign in with that verified email; nobody is emailed. Emails are matched case-insensitively; one already listed, and the owner's own, change nothing. 400 for a value that is not a bare email address or more than 50 at once; 409 artifact_share_grant_limit past 200 emails on one link; 409 artifact_share_private_unavailable where links cannot be private. Only the link's owner may invite; anyone else gets 404. */
+        /** @description Shares an active link of the caller's with emails and, on a team workspace, with its teams or everyone in it, at once, and lists everyone it is shared with now. Each person gets view access once they sign in with that verified email; each member of a team or the workspace gets it while they are one, and the link is listed in their Artifacts. A team or workspace grant works only while the link's owner is an active member of that workspace too: if the owner leaves or is removed, it stays, dormant (listed to the owner unnamed, to remove), and works again if they are added back. Email grants do not depend on it. Nobody is emailed. Emails are matched case-insensitively; one already listed, the owner's own, and a team or workspace already listed change nothing. 400 for a value that is not a bare email address, more than 50 at once, nothing to share with, or teams or workspace without orgId; 403 when the caller is not an active member of orgId, and 403 team_workspace_required when orgId is a personal workspace: teams and workspaces are for team workspaces on a paid Cloud plan; 404 for a team that is not one of orgId's; 409 artifact_share_grant_limit past 200 emails, or 50 teams and workspaces, on one link; 409 artifact_share_private_unavailable where links cannot be private. Only the link's owner may invite; anyone else gets 404. */
         post: operations["addArtifactShareGrants"];
         delete?: never;
         options?: never;
@@ -199,7 +217,7 @@ export interface paths {
         get?: never;
         put?: never;
         post?: never;
-        /** @description Stops a link being shared with one email. Their next request for the file is refused, even with a view token they already hold; a page they have open keeps showing until it is refreshed. Only the link's owner may remove someone; anyone else gets 404. */
+        /** @description Stops a link being shared with one email, team or workspace, by the grant's id. Their next request for the file is refused, even with a view token they already hold; a page they have open keeps showing until it is refreshed. Only the link's owner may remove someone; anyone else gets 404. */
         delete: operations["removeArtifactShareGrant"];
         options?: never;
         head?: never;
@@ -215,7 +233,7 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** @description Starts uploading one file from a local session straight to storage, for a new document (project, feature, name), a revoked document to restore, or an update of an active link (shareId). An update may give the link a new name, after the file was renamed: the link keeps its address and serves the file under that name. The file goes in partCount parts of partSize bytes, the last one shorter: presign them with presignArtifactShareParts, PUT each, then finalizeArtifactShare. There is no file size limit. Nothing reaches storage when the upload is refused: 415 artifact_share_type_unsupported for video, 409 artifact_share_limit_reached for a new or restored document over the free plan's link limit. Paid plans have no link limit. An older control plane refuses an update with another name with 409 artifact_share_name_changed. The images and other files an HTML page refers to by relative path are uploaded under this upload with createArtifactShareFileUpload and listed when finalizing. */
+        /** @description Starts uploading one file from a local session straight to storage, for a new document (project, feature, name), a revoked document to restore, or an update of an active link (shareId). An update may give the link a new name, after the file was renamed: the link keeps its address and serves the file under that name. The file goes in partCount parts of partSize bytes, the last one shorter: presign them with presignArtifactShareParts, PUT each, then finalizeArtifactShare. There is no file size limit but for video. Nothing reaches storage when the upload is refused: 415 artifact_share_type_unsupported for a video the control plane does not serve (any video while it serves none; .ogv, .avi and .mkv, which browsers do not play, always), 413 artifact_share_video_too_large for a video over its size limit (1 GiB by default; the message names it), 409 artifact_share_limit_reached for a new or restored document over the free plan's link limit. A video's contentUrl answers 302 to a signed URL on a separate video host, which the browser's player follows; with the control plane's video host turned off, a video already published answers 503 artifact_share_video_unavailable. Paid plans have no link limit. An older control plane refuses an update with another name with 409 artifact_share_name_changed. The images and other files an HTML page refers to by relative path are uploaded under this upload with createArtifactShareFileUpload and listed when finalizing. */
         post: operations["createArtifactShareUpload"];
         delete?: never;
         options?: never;
@@ -266,7 +284,7 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** @description Starts uploading one file the page being uploaded (uploadToken, from createArtifactShareUpload) refers to by relative path, such as an image. The link serves it at path under its root, so <img src="images/a.png"> in the page loads the file whose path is images/a.png. Any file type but video may be included, and there is no file size limit. Its parts go as the page's do (presignArtifactShareParts, PUT each, abortArtifactShareUpload to cancel); finish it with completeArtifactShareFileUpload. 400 invalid_request for a path that is absolute, has an empty, "." or ".." segment, a backslash or a control character, or is reserved (raw, or under _ao/ or a first segment starting with ~); 429 artifact_share_rate_limited past the hourly allowance. A control plane that predates included files answers 404. 415 artifact_share_type_unsupported for video (.mp4, .m4v, .mov, .webm, .ogv, .avi, .mkv), as for a link's own file. */
+        /** @description Starts uploading one file the page being uploaded (uploadToken, from createArtifactShareUpload) refers to by relative path, such as an image. The link serves it at path under its root, so <img src="images/a.png"> in the page loads the file whose path is images/a.png. Any file type may be included, and there is no file size limit but for video, as for a link's own file. Its parts go as the page's do (presignArtifactShareParts, PUT each, abortArtifactShareUpload to cancel); finish it with completeArtifactShareFileUpload. 400 invalid_request for a path that is absolute, has an empty, "." or ".." segment, a backslash or a control character, or is reserved (raw, or under _ao/ or a first segment starting with ~); 429 artifact_share_rate_limited past the hourly allowance. A control plane that predates included files answers 404. 415 artifact_share_type_unsupported for a video the control plane does not serve, and 413 artifact_share_video_too_large for one over its size limit, as for a link's own file: a client leaves that file out and publishes the page with the rest, naming them in finalizeArtifactShare's files (an empty list when none uploaded), since an update without files keeps the files the link served. */
         post: operations["createArtifactShareFileUpload"];
         delete?: never;
         options?: never;
@@ -342,6 +360,23 @@ export interface paths {
         put?: never;
         /** @description Returns what the viewer page shows a signed-in person for a link: the same details as getPublicArtifactShare, for a public link, a link they own, or a private link shared with their verified email. For a private link contentUrl carries a view token (?vt=) that opens the file for 10 minutes; the file host checks the token and the link's grants on every request, so removing someone or unpublishing takes effect at once. Any other link, private or not there at all, returns 404, so the answer never says that a private link exists. For the link's owner the answer adds you, with the link's ID, so they can unpublish it from the viewer page. Rate-limited per person (429 rate_limited). */
         post: operations["viewArtifactShare"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/cloud/v1/me/shared-artifacts": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** @description Lists the active links other people published and shared with the signed-in person, newest change first: links shared with their verified email, and links shared with a team they are in, private or public. They are listed without being opened; opening a link never lists it. A link shared both ways is listed once. An unpublished link is no longer listed; their own links never are. No owner is named. A link's file opens through viewArtifactShare. Available only when artifact share links are on; otherwise 404. */
+        get: operations["listSharedArtifacts"];
+        put?: never;
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -894,6 +929,26 @@ export interface paths {
         patch: operations["updateSession"];
         trace?: never;
     };
+    "/api/cloud/v1/orgs/{orgId}/sessions/{sessionId}/restore": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                sessionId: components["parameters"]["SessionId"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** @description Restores a deleted session under the same id: it is no longer terminated and a new sandbox is provisioned, which resumes the conversation and work captured before the delete. The provisioning happens after the response. */
+        post: operations["restoreSession"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/cloud/v1/orgs/{orgId}/sessions/{sessionId}/pin": {
         parameters: {
             query?: never;
@@ -986,8 +1041,110 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** @description Retries a session whose worker never started (its startupError explains why). The startup window, repair count and startup error are reset and the worker bootstrap runs again against the existing sandbox; a bring-your-own workspace is never recreated. Returns 409 startup_retry_unavailable when the worker has already checked in or the session is not meant to be running. */
+        /** @description Retries a session whose worker never started (its startupError explains why). The startup window, repair count and startup error are reset and the worker bootstrap runs again against the existing sandbox; a bring-your-own workspace is never recreated. Returns 409 startup_retry_unavailable when the worker has already checked in or the session is not meant to be running. While the session's work is moving to another machine (SESSION_MOVING), its terminal agent is not started again; agent/restart abandons the move. */
         post: operations["retrySessionStartup"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/cloud/v1/orgs/{orgId}/sessions/{sessionId}/move/preview": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                sessionId: components["parameters"]["SessionId"];
+            };
+            cookie?: never;
+        };
+        /** @description What move/export would push now: the branch, the uncommitted paths it would commit and the conversation it would carry. Changes nothing. */
+        get: operations["previewSessionMove"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/cloud/v1/orgs/{orgId}/sessions/{sessionId}/move/export": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                sessionId: components["parameters"]["SessionId"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** @description Stops the session's agent, then commits the session's uncommitted work, ignored files aside, as one commit on its branch and pushes the branch, so an AO daemon's move/import can continue the session from it. Delete the session once the import succeeds; if the move fails, agent/restart starts its terminal agent again. Viewers get 403. A branch the remote has commits for that the session lacks fails the push. Asked again while a move holds the session (its export running, or answered and the move neither ended nor abandoned), it answers with that move, under the same moveId (200 once answered, 202 while it runs), instead of starting another. */
+        post: operations["exportSessionMove"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/cloud/v1/orgs/{orgId}/sessions/{sessionId}/move/export/{moveId}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                sessionId: components["parameters"]["SessionId"];
+                moveId: string;
+            };
+            cookie?: never;
+        };
+        /** @description Waits up to about 50 s on an export move/export started and answers as it does: the move once done (a late answer is adopted, no second export runs), 202 while its worker is still on it, 504 MOVE_EXPORT_TIMED_OUT once it can no longer finish. */
+        get: operations["getSessionMoveExport"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/cloud/v1/orgs/{orgId}/transcript-imports/{importId}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                /** @description Chosen by the caller; createSession names it as transcriptImportId. */
+                importId: string;
+            };
+            cookie?: never;
+        };
+        get?: never;
+        /** @description Uploads a coding agent's conversation, gzipped, for a session moving here from another machine, before createSession starts it. The transcript names the source's working directory as /ao-moved/cwd and, for Claude Code, its project folder as /ao-moved/claude-project; the worker replaces them with its own. Uploading again under the same id replaces it; another user's id is 409. An upload no create uses is dropped after a day. */
+        put: operations["putSessionTranscriptImport"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/cloud/v1/orgs/{orgId}/transcript-imports/{importId}/sidecar": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                importId: string;
+            };
+            cookie?: never;
+        };
+        get?: never;
+        /** @description Adds the uploaded conversation's sidecar folder (subagent transcripts, saved tool output) to its upload, which must exist and be the caller's. The worker places it beside the transcript, filling in the same placeholders. Uploading the transcript again clears it. */
+        put: operations["putSessionTranscriptImportSidecar"];
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -1148,7 +1305,7 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** @description Starts a live session's terminal agent again in its worker after it exited (Ctrl+C, /exit, a crash), resuming its conversation where the agent keeps one, and reads the session as idle rather than exited. requested is false when the agent is still running or starting. A session in Chat starts its agent with its next message instead; a session viewer cannot restart it. */
+        /** @description Starts a live session's terminal agent again in its worker after it exited (Ctrl+C, /exit, a crash), resuming its conversation where the agent keeps one, and reads the session as idle rather than exited. requested is false when the agent is still running or starting, and for a session in Chat, which starts its agent with its next message instead (a move that holds it is still abandoned, so Chat takes messages again); a session viewer cannot restart it. On a session whose work is moving to another machine (SESSION_MOVING), once its export answered, it abandons the move: the session stays here and its agent starts again. While the export still runs it answers 409 MOVE_IN_PROGRESS. */
         post: operations["restartSessionAgent"];
         delete?: never;
         options?: never;
@@ -1168,7 +1325,7 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** @description Publishes one of this session's committed artifact files as a share link, as finalizeArtifactShare publishes a local file: the same link limit (409 artifact_share_limit_reached), one link per file, and shareId to point an existing link at the file's current version. The link serves a copy of the file, so it outlives the session's file; unpublishing deletes only the copy. 404 when the caller is not a member of the organization or the session holds no file at path; 409 artifact_share_source_changed when the session's file is no longer the sha256 the caller was shown (inspect it again); 415 artifact_share_type_unsupported for a video.
+        /** @description Publishes one of this session's committed artifact files as a share link, as finalizeArtifactShare publishes a local file: the same link limit (409 artifact_share_limit_reached), one link per file, and shareId to point an existing link at the file's current version. The link serves a copy of the file, so it outlives the session's file; unpublishing deletes only the copy. 404 when the caller is not a member of the organization or the session holds no file at path; 409 artifact_share_source_changed when the session's file is no longer the sha256 the caller was shown (inspect it again); 415 artifact_share_type_unsupported for a video the control plane does not serve, 413 artifact_share_video_too_large for one over its size limit, as for a local file (createArtifactShareUpload).
          *     Only a person publishes: the route accepts only a signed-in account session, the bearer token of every user route. Worker, sandbox and host credentials get 401, so a cloud session's agent cannot publish its own files. Only the person who created the session shares its files, under their own link limit: another member of the organization, who may read them, gets 403 artifact_share_not_owner, as does anyone for a session with no creator on record; a guest of a shared project gets 404. */
         post: operations["shareSessionArtifact"];
         delete?: never;
@@ -1872,6 +2029,7 @@ export interface paths {
         };
         get?: never;
         put?: never;
+        /** @description While a session's work is moving to another machine (while a move's export is in flight and after it answered, until the session is deleted or agent/restart abandons the move), the ticket opens its terminal but its agent is not started again; a message is refused with 409 SESSION_MOVING. */
         post: operations["createTerminalTicket"];
         delete?: never;
         options?: never;
@@ -2959,6 +3117,67 @@ export interface paths {
 export type webhooks = Record<string, never>;
 export interface components {
     schemas: {
+        /** @description A finished move export: the pushed branch, in the shape an AO daemon's move/import takes. */
+        SessionMoveExport: {
+            /**
+             * Format: uuid
+             * @description The export this answers, as GET .../move/export/{moveId} names it.
+             */
+            moveId?: string;
+            manifest: {
+                /** Format: uuid */
+                sourceSessionId: string;
+                sourceLabel: string;
+                /** @description Lower-case github.com/<owner>/<name>. */
+                repoKey: string;
+                branch: string;
+                /** @description The pushed commit. */
+                tip: string;
+                /** @description The tip is the commit of the uncommitted work. */
+                wip: boolean;
+                harness: string;
+                model?: string;
+                displayName?: string;
+                /**
+                 * @description The session's approval mode, which the moved session keeps; for a session in Chat, the mode its last turn ran with. Absent when the session has none of its own.
+                 * @enum {string}
+                 */
+                permissions?: "default" | "accept-edits" | "auto" | "bypass-permissions";
+                /**
+                 * @description The interface the session was in. The daemon starts the moved session in it when its agent supports Chat there, else in the terminal (and says so). Absent from an older control plane: the daemon's default.
+                 * @enum {string}
+                 */
+                interface?: "chat" | "terminal";
+                /** @description The GitHub issue issue intake started the session for, as owner/repo#N; absent for a session intake did not start. */
+                issueId?: string;
+                /** @description URLs of the session's open pull requests (its own or claimed by it; not merged or closed); absent when it has none. */
+                pullRequests?: string[];
+            };
+            handoffNote: string;
+            /** @description The agent's conversation, checkpointed after the push, for the daemon to resume: a Claude Code, Codex, OpenCode or Cursor conversation, as that agent stores it (for OpenCode, its session export document). Absent for another agent or when none was captured. */
+            transcript?: {
+                agentSessionId: string;
+                /** @description The folder the conversation was in: for Claude Code the sandbox's Claude project folder. */
+                projectDir: string;
+                /** Format: byte */
+                transcriptGzip: string;
+                /**
+                 * Format: byte
+                 * @description The sidecar folder (subagent transcripts, saved tool output) as a gzipped tar, when there is one.
+                 */
+                sidecarGzip?: string;
+            };
+        };
+        /** @description An export AO Cloud's worker is still on. Ask again with its moveId (GET .../move/export/{moveId}, or POST .../move/export?moveId=) for its result; do not start another move. */
+        SessionMoveExportRunning: {
+            /** Format: uuid */
+            moveId: string;
+            /** @enum {string} */
+            status: "running";
+            /** @description The session's agent is stopped and its branch may already be pushed. */
+            branchMayBePushed?: boolean;
+            message?: string;
+        };
         RemoteHost: {
             hostId: string;
             label: string;
@@ -3198,6 +3417,40 @@ export interface components {
             /** @description A provider from the organization's offering, or empty to clear the choice. */
             defaultProvider: string;
         };
+        /** @description How long the caller's Cloud sessions and their conversation content are kept. */
+        DataRetention: {
+            /** @description Days the caller's sessions and their conversation content are kept, counted from each session's creation: defaultDays while followsDefault, otherwise the period the caller chose. */
+            retentionDays: number;
+            /** @description The deployment's default period, in days. Always one of options. */
+            defaultDays: number;
+            /** @description True while the caller has no period of their own and keeps defaultDays, following any later change to it. False once they chose a period, even one equal to defaultDays. */
+            followsDefault: boolean;
+            /** @description The periods the caller may choose, in days, ascending. */
+            options: number[];
+            /** @description When the caller last chose the period, going back to the default included; null while they have never chosen one. */
+            updatedAt: string | null;
+        };
+        PutDataRetentionInput: {
+            /** @description The new period in days, one of options, or null to follow the deployment's default again (400 invalid_retention otherwise). */
+            retentionDays: number | null;
+            /** @description Only count the sessions the period would delete and change nothing. Absent means false. */
+            dryRun?: boolean;
+        };
+        /** @description The caller's retention period as stored after a PUT (unchanged by a dry run), and how many of their sessions the requested period deletes. */
+        DataRetentionChange: {
+            /** @description Days the caller's sessions and their conversation content are kept, counted from each session's creation: defaultDays while followsDefault, otherwise the period the caller chose. */
+            retentionDays: number;
+            /** @description The deployment's default period, in days. Always one of options. */
+            defaultDays: number;
+            /** @description True while the caller has no period of their own and keeps defaultDays, following any later change to it. False once they chose a period, even one equal to defaultDays. */
+            followsDefault: boolean;
+            /** @description The periods the caller may choose, in days, ascending. */
+            options: number[];
+            /** @description When the caller last chose the period, going back to the default included; null while they have never chosen one. */
+            updatedAt: string | null;
+            /** @description The caller's sessions, across all organizations, created longer ago than the requested period whose content has not been deleted yet: the sessions the period makes due for deletion. A dry run deletes nothing. */
+            sessionsToDelete: number;
+        };
         CloudHarnessVersions: {
             /** @description The caller administers the organization, so may change the versions. */
             editable: boolean;
@@ -3297,7 +3550,7 @@ export interface components {
              * @enum {string}
              */
             kind: "b2b" | "b2c" | "both" | "none";
-            /** @description The organization's product features (share lets it share sessions) and the deployment's own: attachments when the session attachment routes are on, queued-edit when a queued message can be edited (editQueuedMessage), queued-delete when a queued message can be deleted without stopping a started turn (deleteQueuedMessage), queued-steer when a queued message can be steered into the running turn (steerQueuedMessage). Empty when none apply. */
+            /** @description The organization's product features (share lets it share sessions) and the deployment's own: attachments when the session attachment routes are on, queued-edit when a queued message can be edited (editQueuedMessage), queued-delete when a queued message can be deleted without stopping a started turn (deleteQueuedMessage), queued-steer when a queued message can be steered into the running turn (steerQueuedMessage), orchestrator-on-coder when a project whose sessions run on Coder may run its orchestrator on Coder too (ProjectOrchestratorSandboxProvider): the deployment offers coder and freestyle, and the organization may run Coder as its own (customCoder), session.branch and session.transcriptImport for sessions moving here from another machine. Empty when none apply. */
             features: string[];
             /**
              * Format: int64
@@ -3416,6 +3669,7 @@ export interface components {
             orchestratorRules?: components["schemas"]["ProjectRules"];
             workersRequestReview?: components["schemas"]["ProjectWorkersRequestReview"];
             coAuthorCommits?: components["schemas"]["ProjectCoAuthorCommits"];
+            orchestratorSandboxProvider?: components["schemas"]["ProjectOrchestratorSandboxProvider"];
             trackerIntake?: components["schemas"]["ProjectTrackerIntake"];
             /** @description "standalone" for a project created without a repository; "scratch" for one whose repository AO created. */
             source?: string;
@@ -3603,8 +3857,14 @@ export interface components {
             orchestratorRules?: components["schemas"]["ProjectRules"];
             workersRequestReview?: components["schemas"]["ProjectWorkersRequestReview"];
             coAuthorCommits?: components["schemas"]["ProjectCoAuthorCommits"];
+            orchestratorSandboxProvider?: components["schemas"]["ProjectOrchestratorSandboxProvider"];
             trackerIntake?: components["schemas"]["ProjectTrackerIntake"];
         };
+        /**
+         * @description Where the orchestrator of a project whose sessions run on Coder runs. freestyle, the default and the same as absent, runs it on an instant VM; coder runs it on the organization's Coder exactly as the project's workers run (the project's template and the organization's own Coder deployment and workspace rules). The project's workers run on Coder either way. Setting coder needs a project whose sessions run on Coder and an organization whose offering lists orchestrator-on-coder; otherwise the write is refused with 422 provider_unavailable. It is read when an orchestrator session is created, so an orchestrator that is running, paused or restored stays where it was created. When the organization can no longer run orchestrators on Coder, a new orchestrator runs on an instant VM. It has no effect on a project on any other provider, or on a deployment without instant VMs, where the orchestrator of a Coder project already runs on Coder.
+         * @enum {string}
+         */
+        ProjectOrchestratorSandboxProvider: "freestyle" | "coder";
         /** @description Workers request AO's review of their own pull request once it is pushed and ready, instead of waiting to be asked. Defaults to off. */
         ProjectWorkersRequestReview: boolean;
         /** @description Commits a session's agent makes carry a Co-authored-by trailer naming the AO GitHub App's bot account, so GitHub shows the App as a co-author beside the person the commit is authored as. Defaults to on. */
@@ -4282,7 +4542,7 @@ export interface components {
              * @description Required when status is failed.
              * @enum {string}
              */
-            code?: "repository_checkout_failed" | "working_directory_unusable" | "project_setup_failed" | "working_directory_occupied" | "agent_start_failed";
+            code?: "repository_checkout_failed" | "working_directory_unusable" | "project_setup_failed" | "working_directory_occupied" | "agent_start_failed" | "conversation_restore_failed";
             /** @description User-facing explanation; required when status is failed. */
             message?: string;
             /** @description Redacted excerpt, for Setup the failed command's output tail. */
@@ -4749,6 +5009,8 @@ export interface components {
             coderWorkspaceUrl?: string;
             activeTurn?: components["schemas"]["Turn"];
             isTerminated: boolean;
+            /** @description The session moved to another computer: it was deleted by the conditional delete (?moveId=) that finished its move, and continues there. It cannot be restored (restoreSession answers 409 SESSION_MOVED_AWAY). Absent or false for any other session. */
+            movedAway?: boolean;
             requestedOutput?: components["schemas"]["RequestedOutput"];
             /**
              * Format: uuid
@@ -4937,11 +5199,46 @@ export interface components {
             createdAt: string;
         };
         ArtifactShareGrantList: {
+            /** @description The people the link is shared with, by email. */
             grants: components["schemas"]["ArtifactShareGrant"][];
+            /** @description The teams the link is shared with. */
+            teams: components["schemas"]["ArtifactShareSubjectGrant"][];
+            /** @description The workspaces the link is shared with, everyone in each. */
+            workspaces: components["schemas"]["ArtifactShareSubjectGrant"][];
         };
+        ArtifactShareSubjectGrant: {
+            /**
+             * Format: uuid
+             * @description The grant's id, for removeArtifactShareGrant.
+             */
+            id: string;
+            /** Format: uuid */
+            orgId: string;
+            /**
+             * Format: uuid
+             * @description The team; absent for a workspace.
+             */
+            teamId?: string;
+            /** @description The team's or workspace's name; empty when the owner is no longer a member of the workspace. */
+            name: string;
+            /** @description Its members now; 0 when the owner is no longer one of the workspace. */
+            memberCount: number;
+            /** Format: date-time */
+            createdAt: string;
+        };
+        /** @description At least one of emails, teamIds and workspace. */
         ArtifactShareGrantsInput: {
             /** @description Bare email addresses to share the link with. */
-            emails: string[];
+            emails?: string[];
+            /**
+             * Format: uuid
+             * @description The team workspace teamIds and workspace belong to; required with either.
+             */
+            orgId?: string;
+            /** @description Teams of orgId to share the link with. */
+            teamIds?: string[];
+            /** @description Share the link with everyone in orgId. */
+            workspace?: boolean;
         };
         ArtifactSharePublishResult: {
             share: components["schemas"]["ArtifactShare"];
@@ -5075,9 +5372,49 @@ export interface components {
             /** @description Emails to share the link with as it is published, as addArtifactShareGrants does. */
             emails?: string[];
         };
+        /** @description A link someone else published and shared with the signed-in person, as their Artifacts list shows it. */
+        SharedArtifact: {
+            /** @description The link's public ID, for viewArtifactShare. */
+            linkId: string;
+            name: string;
+            contentType: string;
+            /** Format: int64 */
+            size: number;
+            /**
+             * Format: date-time
+             * @description When the link last served a new version.
+             */
+            updatedAt: string;
+            /** @enum {string} */
+            access: "restricted" | "anyone";
+            /** @description The viewer page of the link; absent without a viewer. */
+            viewerUrl?: string;
+            /**
+             * @description How it reached them, the first that holds: direct, shared with their email; team, with a team they are in; workspace, with a workspace they are a member of.
+             * @enum {string}
+             */
+            via: "direct" | "team" | "workspace";
+            /** @description Every team of theirs the link is shared with; empty when none. */
+            teams: {
+                id: string;
+                name: string;
+            }[];
+            /** @description Every workspace of theirs the link is shared with; empty when none. */
+            workspaces: {
+                id: string;
+                name: string;
+            }[];
+            /**
+             * Format: date-time
+             * @description When it was first shared with them.
+             */
+            sharedAt: string;
+        };
         PublicArtifactShare: {
             linkId: string;
             name: string;
+            /** @description The document title when available, otherwise the filename without its extension. */
+            title?: string;
             contentType: string;
             /** Format: int64 */
             size: number;
@@ -5090,11 +5427,18 @@ export interface components {
             /** @description Where the link's file is served; the viewer frames it. For a private link (viewArtifactShare) it carries a short-lived view token in its vt query parameter. */
             contentUrl: string;
             access?: components["schemas"]["ArtifactShareAccess"];
+            /** @description The link's viewer page; absent where the control plane has no viewer. The desktop app opens a link sent from a viewer page only when it came from this origin. */
+            viewerUrl?: string;
             /** @description Only from viewArtifactShare, and only for the link's owner: what the viewer page needs to manage the link. shareId unpublishes it (deleteArtifactShare); grantCount is how many emails it is shared with. Absent for everyone else. */
             you?: {
                 owner: boolean;
                 /** Format: uuid */
                 shareId: string;
+                /**
+                 * Format: date-time
+                 * @description When you first created this artifact link.
+                 */
+                createdAt?: string;
                 grantCount: number;
             };
         };
@@ -5141,9 +5485,9 @@ export interface components {
             /** @description Every file the session has registered. */
             registered: string[];
         };
-        /** @description The latest user-facing reason the session's sandbox has not started. Present until the worker first checks in or the user retries. While runtimeState is "terminated" AO has stopped retrying; otherwise it is still trying in the background. The worker-reported codes repository_checkout_failed, working_directory_unusable, working_directory_occupied, project_setup_failed and agent_start_failed are the exception: the worker has checked in but could not prepare the workspace or start the terminal agent, so the agent does not start; they stay until the worker reports the workspace ready (or the agent started) after the user retries or reopens the session (a workspace checkout request). */
+        /** @description The latest user-facing reason the session's sandbox has not started. Present until the worker first checks in or the user retries. While runtimeState is "terminated" AO has stopped retrying; otherwise it is still trying in the background. The worker-reported codes repository_checkout_failed, working_directory_unusable, working_directory_occupied, project_setup_failed, agent_start_failed and conversation_restore_failed are the exception: the worker has checked in but could not prepare the workspace, restore the session's conversation or start the terminal agent, so the agent does not start; they stay until the worker reports the workspace ready (or the agent started) after the user retries or reopens the session (a workspace checkout request). */
         SessionStartupError: {
-            /** @description Stable reason code: workspace_not_ready, terminal_unavailable, unsupported_architecture, durable_root_unavailable, worker_never_started, bootstrap_failed, workspace_setup_not_ready (a Coder connection's workspace ready check never passed), working_directory_not_durable (the project's working folder is outside the Coder connection's durable root), repository_checkout_failed, working_directory_unusable (also reported when the Coder bootstrap cannot prepare the project's working folder), working_directory_occupied, project_setup_failed or agent_start_failed (the terminal agent could not start in the ready workspace), all reported by the worker. Clients must tolerate codes added later. */
+            /** @description Stable reason code: workspace_not_ready, terminal_unavailable, unsupported_architecture, durable_root_unavailable, worker_never_started, bootstrap_failed, workspace_setup_not_ready (a Coder connection's workspace ready check never passed), working_directory_not_durable (the project's working folder is outside the Coder connection's durable root), repository_checkout_failed, working_directory_unusable (also reported when the Coder bootstrap cannot prepare the project's working folder), working_directory_occupied, project_setup_failed, agent_start_failed (the terminal agent could not start in the ready workspace) or conversation_restore_failed (a session woken on a new sandbox could not get back its conversation, so its agent does not start without it), all reported by the worker. Clients must tolerate codes added later. */
             code: string;
             /** @description Human-readable explanation suitable for display as-is. */
             message: string;
@@ -5189,6 +5533,13 @@ export interface components {
             interfaceMode?: components["schemas"]["SessionInterfaceMode"];
             /** @description The user's default session interface, for a create without interfaceMode. The control plane resolves the session's interface from it as the local daemon resolves a spawn: an orchestrator starts in chat, a worker in this default, and chat only for a harness listed in chatHarnesses (any other starts in tui without an error). A create with neither field (from a desktop that predates them) starts in tui, an orchestrator too. An orchestrator keeps it for the workers it spawns, which resolve from the default stored when the orchestrator was created, unlike local spawns, which read the user's default at spawn time; a changed default reaches them once a new orchestrator is created. */
             defaultInterfaceMode?: components["schemas"]["SessionInterfaceMode"];
+            /** @description Git branch to continue. A branch that exists on the repository is checked out from its commits; any other name starts a new branch from the default branch. The default branch, the session prefix and a name git refuses get 422 invalid_branch; a branch a live session of the project holds gets 409 branch_in_use. Send it only when /me offering.features lists session.branch: an older control plane rejects the whole create. */
+            branch?: string;
+            /**
+             * Format: uuid
+             * @description A conversation uploaded to transcript-imports/{importId}. The session resumes it instead of starting from prompt, which it uses only if the conversation cannot be placed. The upload must be the caller's and for this harness, else 422 transcript_import_not_found; a create uses it up. Send it only when /me offering.features lists session.transcriptImport.
+             */
+            transcriptImportId?: string;
         };
         /** @description A session create's body without projectId and kind (POST /standalone-agents). */
         CreateStandaloneAgentInput: {
@@ -6211,6 +6562,79 @@ export interface operations {
             default: components["responses"]["Error"];
         };
     };
+    getDataRetention: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The caller's retention period. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DataRetention"];
+                };
+            };
+            /** @description unauthorized. The caller is not signed in. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    putDataRetention: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PutDataRetentionInput"];
+            };
+        };
+        responses: {
+            /** @description The caller's retention period as stored (unchanged by a dry run) and how many of their sessions the requested period deletes. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DataRetentionChange"];
+                };
+            };
+            /** @description invalid_retention. retentionDays is missing, or neither one of options nor null. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description unauthorized. The caller is not signed in. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
     listUserProviderConnections: {
         parameters: {
             query?: never;
@@ -6569,7 +6993,7 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description The email no longer has access. */
+            /** @description The email, team or workspace no longer has access. */
             204: {
                 headers: {
                     [name: string]: unknown;
@@ -6779,6 +7203,29 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["PublicArtifactShare"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    listSharedArtifacts: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The links shared with the signed-in person. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        artifacts: components["schemas"]["SharedArtifact"][];
+                    };
                 };
             };
             default: components["responses"]["Error"];
@@ -7853,6 +8300,8 @@ export interface operations {
             query?: {
                 /** @description Also delete the session's artifact files. A restored session comes back without them. */
                 deleteArtifacts?: boolean;
+                /** @description Deletes the session only as the copy a move to an AO daemon left: the move/export with this moveId. Refused (409 MOVE_COPY_IN_USE) when the session was restarted or has activity after that export. */
+                moveId?: string;
             };
             header?: never;
             path: {
@@ -7870,6 +8319,15 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["DeleteSessionResponse"];
+                };
+            };
+            /** @description MOVE_COPY_IN_USE: the session was used again after the move's export (moveId), so it is kept. Retrying will not delete it. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
             default: components["responses"]["Error"];
@@ -7900,6 +8358,64 @@ export interface operations {
                     "application/json": {
                         session: components["schemas"]["Session"];
                     };
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    restoreSession: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                sessionId: components["parameters"]["SessionId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The session was restored; its sandbox is being provisioned. */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        session: {
+                            /** Format: uuid */
+                            id: string;
+                            /** @constant */
+                            restored: true;
+                        };
+                    };
+                };
+            };
+            /** @description not_found. No such session, a session of a deleted project, or one whose content was deleted for its creator's data retention. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description SESSION_MOVED_AWAY. The session moved to another computer (its movedAway is true) and continues there; to use AO Cloud again, move it from that computer. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description SESSION_CONTENT_EXPIRED. The session is older than its creator's data retention period (GET /me/data-retention), so its content is being deleted, and it cannot be restored. */
+            410: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
             default: components["responses"]["Error"];
@@ -8058,6 +8574,15 @@ export interface operations {
                     };
                 };
             };
+            /** @description SESSION_MOVING: the session's work is moving to another machine. While a move's export is in flight, and after it answered, AO Cloud refuses this until the move ends (the session deleted) or is abandoned (agent/restart): the session takes no messages, its worker claims no queued turn, its terminal agent is not started again and its interface does not switch. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
             default: components["responses"]["Error"];
         };
     };
@@ -8132,6 +8657,246 @@ export interface operations {
                         session: components["schemas"]["Session"];
                     };
                 };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    previewSessionMove: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                sessionId: components["parameters"]["SessionId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The move as it stands. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        branch: string;
+                        changes: {
+                            path: string;
+                            /** @enum {string} */
+                            status: "added" | "modified" | "deleted";
+                            /** @description An added file git did not track in the sandbox, which the user may not expect the move to commit and push. */
+                            untracked?: boolean;
+                        }[];
+                        /** @description The agent's conversation the move would carry: a Claude Code, Codex, OpenCode or Cursor conversation. Absent for another agent or when there is none. */
+                        transcript?: {
+                            /**
+                             * Format: int64
+                             * @description The transcript and its sidecar folder.
+                             */
+                            bytes: number;
+                            subagents?: number;
+                        };
+                    };
+                };
+            };
+            /** @description MOVE_WORKER_TOO_OLD: the session's worker is too old to move it; restarting the session updates it. Refused before the worker is asked, so nothing stopped, committed or pushed. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    exportSessionMove: {
+        parameters: {
+            query?: {
+                /** @description An export already started (from a 202): wait on it and answer with its result instead of starting another. */
+                moveId?: string;
+            };
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                sessionId: components["parameters"]["SessionId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The pushed branch, in the shape an AO daemon's move/import takes. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SessionMoveExport"];
+                };
+            };
+            /** @description The export is still running after about 50 s. Its request lives for five minutes; ask again with its moveId (Location) after Retry-After. */
+            202: {
+                headers: {
+                    /** @description The GET route that answers for this export. */
+                    Location?: string;
+                    /** @description Seconds to wait before asking again. */
+                    "Retry-After"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SessionMoveExportRunning"];
+                };
+            };
+            /** @description MOVE_WORKER_TOO_OLD: the session's worker is too old to move it; restarting the session updates it. Refused before the worker is asked, so nothing stopped, committed or pushed. MOVE_AGENT_STILL_RUNNING: some of the agent's processes could not be confirmed stopped, so nothing was committed or pushed; trying again is safe (it ends them first). MOVE_TURNS_QUEUED: messages are still queued for the session in AO Cloud; let them run or remove them, then move. INTERFACE_TRANSITION_IN_PROGRESS: an interface or agent switch is in progress for the session; try again once it finishes. These two are refused before the worker is asked, so nothing stopped, committed or pushed. Other refusals of the move (such as MOVE_WRONG_BRANCH or MOVE_DEFAULT_BRANCH) answer 409 too, with their code. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description MOVE_TRANSCRIPT_NOT_CAPTURED: the branch was pushed, but the session's latest conversation could not be saved to AO Cloud, so the move stopped; ask again. details.branch names the branch and details.pushedTip the commit origin now has. Another refusal of the worker's answers here too, with its code. */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description MOVE_EXPORT_TIMED_OUT: the export can no longer finish. details.branchMayBePushed says whether its branch may already be pushed (only when a worker took it); details.moveId names it. Try again with a new export, which reuses a pushed WIP commit, or restart the agent to stay in AO Cloud. */
+            504: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    getSessionMoveExport: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                sessionId: components["parameters"]["SessionId"];
+                moveId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The pushed branch, in the shape an AO daemon's move/import takes. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SessionMoveExport"];
+                };
+            };
+            /** @description The export is still running after about 50 s. Its request lives for five minutes; ask again with its moveId (Location) after Retry-After. */
+            202: {
+                headers: {
+                    /** @description The GET route that answers for this export. */
+                    Location?: string;
+                    /** @description Seconds to wait before asking again. */
+                    "Retry-After"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SessionMoveExportRunning"];
+                };
+            };
+            /** @description MOVE_WORKER_TOO_OLD: the session's worker is too old to move it; restarting the session updates it. Refused before the worker is asked, so nothing stopped, committed or pushed. MOVE_AGENT_STILL_RUNNING: some of the agent's processes could not be confirmed stopped, so nothing was committed or pushed; trying again is safe (it ends them first). Other refusals of the move (such as MOVE_WRONG_BRANCH or MOVE_DEFAULT_BRANCH) answer 409 too, with their code. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description MOVE_TRANSCRIPT_NOT_CAPTURED: the branch was pushed, but the session's latest conversation could not be saved to AO Cloud, so the move stopped; ask again. details.branch names the branch and details.pushedTip the commit origin now has. Another refusal of the worker's answers here too, with its code. */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description MOVE_EXPORT_TIMED_OUT: the export can no longer finish. details.branchMayBePushed says whether its branch may already be pushed (only when a worker took it); details.moveId names it. Try again with a new export, which reuses a pushed WIP commit, or restart the agent to stay in AO Cloud. */
+            504: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    putSessionTranscriptImport: {
+        parameters: {
+            query: {
+                harness: "claude-code" | "codex" | "cursor" | "opencode";
+                /** @description The conversation's id, which the agent resumes: a UUID, or for OpenCode a session id such as ses_e34d0cd52ffeMzGW05mHN4RIm7. */
+                agentSessionId: string;
+            };
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                /** @description Chosen by the caller; createSession names it as transcriptImportId. */
+                importId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/gzip": string;
+            };
+        };
+        responses: {
+            /** @description Stored. */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    putSessionTranscriptImportSidecar: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                importId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/gzip": string;
+            };
+        };
+        responses: {
+            /** @description Stored. */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
             default: components["responses"]["Error"];
         };
@@ -8369,6 +9134,15 @@ export interface operations {
                     "application/json": {
                         requested: boolean;
                     };
+                };
+            };
+            /** @description MOVE_IN_PROGRESS: the session's move export is still running, so the move is not abandoned and its agent is not started. Restart it once the move has finished or failed. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
             default: components["responses"]["Error"];
@@ -8773,6 +9547,15 @@ export interface operations {
                     "application/json": {
                         event: components["schemas"]["UserMessageEvent"];
                     };
+                };
+            };
+            /** @description SESSION_MOVING: the session's work is moving to another machine. While a move's export is in flight, and after it answered, AO Cloud refuses this until the move ends (the session deleted) or is abandoned (agent/restart): the session takes no messages, its worker claims no queued turn, its terminal agent is not started again and its interface does not switch. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
             default: components["responses"]["Error"];

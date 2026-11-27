@@ -76,11 +76,8 @@ export function BuildInfoTooltip({ children }: { children: React.ReactNode }) {
       </TooltipTrigger>
       <TooltipContent
         align="start"
-        className={cn(
-          // Grows to fit the dev branch name, up to 32rem and never past the window edge.
-          "relative min-w-52 max-w-[min(32rem,var(--radix-tooltip-content-available-width))] overflow-hidden px-3 py-2.5",
-          isNightly && "build-info-nightly",
-        )}
+        // Grows to fit the dev branch name, up to 32rem and never past the window edge.
+        className="relative min-w-52 max-w-[min(32rem,var(--radix-tooltip-content-available-width))] overflow-hidden px-3 py-2.5"
         hideArrow
         side="bottom"
         sideOffset={6}
@@ -94,7 +91,7 @@ export function BuildInfoTooltip({ children }: { children: React.ReactNode }) {
               {channelLabel}
             </span>
             {version ? (
-              <span className={cn("truncate font-mono text-[11px]", isNightly ? "text-white/70" : "text-muted-foreground")}>
+              <span className="truncate font-mono text-[11px] text-muted-foreground">
                 v{version}
               </span>
             ) : null}

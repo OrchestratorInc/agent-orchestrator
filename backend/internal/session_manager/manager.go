@@ -20,10 +20,12 @@ import (
 
 	"github.com/google/uuid"
 
+	codexagent "github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/codex"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/memcode"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/modelcatalog"
 	"github.com/aoagents/agent-orchestrator/backend/internal/agentlaunch"
 	"github.com/aoagents/agent-orchestrator/backend/internal/attachmentstore"
+	"github.com/aoagents/agent-orchestrator/backend/internal/config"
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 	aoprocess "github.com/aoagents/agent-orchestrator/backend/internal/process"
@@ -43,9 +45,11 @@ var (
 	ErrNotRestorable                 = errors.New("session: not restorable (not terminal)")
 	ErrTerminated                    = errors.New("session: terminated")
 	ErrAgentExited                   = errors.New("session: agent exited")
-	ErrAgentNotExited                = errors.New("session: agent has not exited")
-	ErrAgentExitInProgress           = errors.New("session: agent exit is already in progress")
-	ErrIncompleteHandle              = errors.New("session: incomplete teardown handle")
+	// ErrSessionMoved refuses to run a session that moved to AO Cloud.
+	ErrSessionMoved        = errors.New("session: moved to AO Cloud")
+	ErrAgentNotExited      = errors.New("session: agent has not exited")
+	ErrAgentExitInProgress = errors.New("session: agent exit is already in progress")
+	ErrIncompleteHandle    = errors.New("session: incomplete teardown handle")
 	// ErrProjectNotResolvable means the spawn's project has no usable repo
 	// (unregistered, archived, or missing a path). The API maps it to a 400.
 	ErrProjectNotResolvable = errors.New("session: project repo not resolvable")
@@ -65,6 +69,9 @@ var (
 	// selected harness's catalog and the harness does not accept arbitrary model
 	// ids. The API maps it to a 400.
 	ErrUnsupportedModel = errors.New("session: model is not supported by the selected harness")
+	// ErrSpawnPermissionExceedsPolicy rejects a worker mode more permissive than
+	// the project's role setting or an orchestrator parent's mode.
+	ErrSpawnPermissionExceedsPolicy = errors.New("session: spawn permission exceeds the project or parent permission ceiling")
 	// ErrTerminalUnsupported means a terminal launch was requested for a
 	// harness that runs in Chat only. Unlike ports.ErrChatUnsupported it must
 	// not prompt a terminal retry. The API maps it to a 400.
@@ -145,7 +152,7 @@ var (
 	// harness never confirmed that the agent became active before the
 	// confirmation budget was exhausted (e.g. trailing Enter absorbed or dropped).
 	// The API maps it to a 409; the caller retries or inspects the terminal.
-	ErrDeliveryUnconfirmed = errors.New("session: message delivery was not acknowledged")
+	ErrDeliveryUnconfirmed = ports.ErrDeliveryUnconfirmed
 
 	// Spawn-stage sentinels. Each is the existing log word after "spawn" /
 	// "spawn <id>:" so wrapping them does not change daemon-log wording, while
@@ -270,8 +277,13 @@ type lifecycleRecorder interface {
 // Late-bound via SetShellTerminalCloser: shellterm.Service is built after
 // Session Manager during boot (see daemon.startShellTerminals), mirroring why
 // lifecycle.Manager takes its completion terminator the same way.
+//
+// SuspendSessionShells is the app-quit variant with the same contract: the
+// session and its worktree stay, and its user shells are kept to be restored
+// at the next launch instead of being forgotten.
 type ShellTerminalCloser interface {
 	BeginSessionTeardown(ctx context.Context, id domain.SessionID) (release func(), err error)
+	SuspendSessionShells(ctx context.Context, id domain.SessionID) (release func(), err error)
 }
 
 // HarnessUseGate coordinates session lifecycle operations with harness binary
@@ -366,6 +378,10 @@ type Store interface {
 	// config into the launch command. ok=false means the project is unknown.
 	GetProject(ctx context.Context, id string) (domain.ProjectRecord, bool, error)
 	ListWorkspaceRepos(ctx context.Context, projectID string) ([]domain.WorkspaceRepoRecord, error)
+	SetSessionCommitAttribution(ctx context.Context, id domain.SessionID, coAuthor string) error
+	SessionCommitAttribution(ctx context.Context, id domain.SessionID) (string, error)
+	SetSessionPRFooter(ctx context.Context, id domain.SessionID, footer bool) error
+	SessionPRFooter(ctx context.Context, id domain.SessionID) (footer, recorded bool, err error)
 	CreateSession(ctx context.Context, rec domain.SessionRecord) (domain.SessionRecord, error)
 	CreateAutomationSession(ctx context.Context, rec domain.SessionRecord) (domain.SessionRecord, bool, error)
 	CreateClientRequestSession(ctx context.Context, rec domain.SessionRecord) (domain.SessionRecord, bool, error)
@@ -471,6 +487,8 @@ type Manager struct {
 	agentBrowserURL             string
 	agentBrowserToken           string
 	agentAccounts               ports.AgentAccountLaunchEnv
+	refusedModelRefreshMu       sync.Mutex
+	refusedModelRefreshAt       map[string]time.Time
 	accountOverrideMu           sync.Mutex
 	accountOverrides            map[domain.SessionID]string
 	attachments                 *attachmentstore.Store
@@ -482,6 +500,7 @@ type Manager struct {
 	defaultBranchRefreshTimeout time.Duration
 	defaultBranchFetchMu        sync.Mutex
 	defaultBranchFetchedAt      map[string]time.Time
+	defaultBranchFreshAt        map[string]time.Time // last successful fetch, per repository and base ref
 	taskPreparationsMu          sync.Mutex
 	taskPreparations            map[domain.TaskPreparationToken]*taskPreparation
 	taskNamingSlots             chan struct{}
@@ -489,6 +508,7 @@ type Manager struct {
 	// Snapshot before the listener binds; background cleanup must never reclaim
 	// a preparation opened in this daemon after the listener is live.
 	startupTaskPreparations []domain.SessionRecord
+	startupHealthCutoff     time.Time
 	// Only pre-listener provisioning writes that failed may be retried after
 	// bind; scanning then would also sweep tasks created by this daemon.
 	startupProvisioningRetries []domain.SessionRecord
@@ -503,6 +523,9 @@ type Manager struct {
 	// killTeardown bounds Kill's detached teardown. Zero means
 	// killTeardownBudget; tests shrink it to prove what survives its expiry.
 	killTeardown time.Duration
+	// killResumeWait bounds Kill's wait for an in-flight resume. Zero means
+	// killResumeWaitBudget; tests shrink it to prove Kill still gives up.
+	killResumeWait time.Duration
 	// openTranscriptFile is os.Open in production. The narrow seam lets tests
 	// deterministically prove that a post-stop transcript read failure falls
 	// back without advertising the provider path.
@@ -532,11 +555,14 @@ type Manager struct {
 	agentOpMu                   sync.Mutex
 	agentOperations             map[domain.SessionID]agentOperationKind
 	// launchStartWait bounds the wait to see a new supervised launch alive.
-	launchStartWait           time.Duration
+	launchStartWait time.Duration
+	// nativeRestoreProofWait bounds a native restore's identity proof.
+	nativeRestoreProofWait    time.Duration
 	interfaceRecoveryMu       sync.Mutex
 	deferredInterfaceRecovery map[domain.SessionID]string
 	inputLeases               map[domain.SessionID]int
 	inputDrained              map[domain.SessionID]chan struct{}
+	serializedInput           map[domain.SessionID]bool
 	// inputLeaseSince is when a session's current run of input leases began,
 	// for diagnosing an operation that cannot drain them.
 	inputLeaseSince map[domain.SessionID]time.Time
@@ -567,8 +593,9 @@ type Manager struct {
 	sendConfirm sendConfirmConfig
 	// interfaceTransition bounds only contradictory stale-idle proof. Turns and
 	// user-paced waits reported through the activity boundary remain unbounded.
-	interfaceTransition interfaceTransitionConfig
-	logger              *slog.Logger
+	interfaceTransition       interfaceTransitionConfig
+	logger                    *slog.Logger
+	terminateOnPRMergeDefault *bool
 
 	// shellTerminalsMu guards shellTerminals: it is late-bound (see
 	// ShellTerminalCloser) after Manager already exists, so a setter mutates it
@@ -591,6 +618,13 @@ type Manager struct {
 	// computerUse reports the "Let agents use this computer" setting; nil is off.
 	computerUseMu sync.Mutex
 	computerUse   func(context.Context) bool
+	// devicesOffered reports whether devices are on (Developer mode) and the
+	// user opted in; nil is off.
+	devicesMu      sync.Mutex
+	devicesOffered func() bool
+	// commitAttribution reports the Orchestrator attribution beta; nil is off.
+	commitAttributionMu sync.Mutex
+	commitAttribution   func(context.Context) bool
 	// versionTelemetry receives version-move events; nil drops them.
 	versionTelemetryMu sync.Mutex
 	versionTelemetry   ports.EventSink
@@ -819,6 +853,16 @@ func (m *Manager) beginShellTerminalTeardown(ctx context.Context, id domain.Sess
 	return closer.BeginSessionTeardown(ctx, id)
 }
 
+func (m *Manager) suspendShellTerminals(ctx context.Context, id domain.SessionID) (release func(), err error) {
+	m.shellTerminalsMu.Lock()
+	closer := m.shellTerminals
+	m.shellTerminalsMu.Unlock()
+	if closer == nil {
+		return nil, nil
+	}
+	return closer.SuspendSessionShells(ctx, id)
+}
+
 // SetReviewerTerminator wires worker lifecycle paths to the worker's reviewer
 // pane. Safe to leave unset: a nil terminator is a no-op.
 func (m *Manager) SetReviewerTerminator(terminator ReviewerTerminator) {
@@ -969,6 +1013,9 @@ type Deps struct {
 	// Logger receives spawn-time diagnostics (e.g. when the session PATH
 	// cannot be pinned to the daemon binary). Nil defaults to slog.Default().
 	Logger *slog.Logger
+	// TerminateOnPRMerge is the daemon-wide default for whether sessions auto-terminate
+	// when their PR is merged. Nil falls back to env var / hardcoded false.
+	TerminateOnPRMerge *bool
 }
 
 func (m *Manager) beginAgentSwitchAttempt() error {
@@ -1027,6 +1074,7 @@ func New(d Deps) *Manager {
 		startupBackgroundReconcileDone: make(chan struct{}),
 		agentOperations:                make(map[domain.SessionID]agentOperationKind),
 		launchStartWait:                3 * time.Second,
+		nativeRestoreProofWait:         60 * time.Second,
 		inputLeases:                    make(map[domain.SessionID]int),
 		inputDrained:                   make(map[domain.SessionID]chan struct{}),
 		transitions:                    make(map[domain.SessionID]*interfaceTransitionRun),
@@ -1041,8 +1089,9 @@ func New(d Deps) *Manager {
 			idleSettle:     interfaceTransitionIdleSettle,
 			staleIdleLimit: interfaceTransitionStaleIdleLimit,
 		},
-		logger:         d.Logger,
-		workspaceGates: make(map[domain.ProjectID]*sync.Mutex),
+		logger:                    d.Logger,
+		terminateOnPRMergeDefault: d.TerminateOnPRMerge,
+		workspaceGates:            make(map[domain.ProjectID]*sync.Mutex),
 	}
 	if m.clock == nil {
 		// UTC so spawn-stamped CreatedAt/UpdatedAt match every other session
@@ -1091,6 +1140,10 @@ func (m *Manager) Spawn(ctx context.Context, cfg ports.SpawnConfig) (result doma
 	defer func() {
 		resultErr = RelabelSpawnTimeout(resultErr, requestCtx, budget)
 	}()
+	if cfg.Transfer != nil {
+		// A moved conversation resumes in its CLI's terminal.
+		cfg.RequestedMode = domain.SessionModeTUI
+	}
 	if cfg.RequestedOutput == domain.RequestedOutputArtifact && m.artifactDir("") == "" {
 		return domain.SessionRecord{}, 0, 0, fmt.Errorf("spawn: %w", ErrArtifactOutputUnavailable)
 	}
@@ -1136,16 +1189,56 @@ func (m *Manager) Spawn(ctx context.Context, cfg ports.SpawnConfig) (result doma
 			cfg.RequireNewBranch = true
 		}
 	}
-	if cfg.ParentSessionID != "" && cfg.AgentConfig.Permissions == "" {
-		permissions, err := m.inheritedSpawnPermissions(ctx, cfg.ProjectID, cfg.ParentSessionID)
+	// An orchestrator's worker inherits its approval mode only when the project
+	// sets none for the role (#4898, #5954). A spawn from any session in the
+	// project may request a stricter mode, but cannot exceed the project ceiling.
+	resolvedHarness := effectiveHarness(cfg.Harness, cfg.Kind, project.Config)
+	// Only saved project/role permissions form a ceiling. Harness defaults such
+	// as Mastra Code's native "default" mode are applied later at launch.
+	projectPermission := project.Config.AgentConfig.Permissions
+	if rolePermission := roleOverride(cfg.Kind, project.Config).AgentConfig.Permissions; rolePermission != "" {
+		projectPermission = rolePermission
+	}
+	if cfg.ParentSessionID != "" {
+		parentPermission, isOrchestrator, sameProject, err := m.inheritedSpawnPermissions(ctx, cfg.ProjectID, cfg.ParentSessionID)
 		if err != nil {
 			return domain.SessionRecord{}, 0, 0, fmt.Errorf("spawn: %w", err)
 		}
-		cfg.AgentConfig.Permissions = permissions
+		if sameProject {
+			ceiling := projectPermission
+			if ceiling == "" && isOrchestrator {
+				ceiling = parentPermission
+				if ceiling == "" {
+					ceiling = ports.PermissionModeAuto
+				}
+			}
+			requested := cfg.AgentConfig.Permissions
+			if requested == "" && resolvedHarness == domain.HarnessUnreal {
+				requested = ports.PermissionModeBypassPermissions
+			}
+			if requested != "" && ceiling != "" {
+				allowed := false
+				for _, mode := range ports.PermissionModesStrictestFirst {
+					if mode == requested {
+						allowed = true
+						break
+					}
+					if mode == ceiling {
+						break
+					}
+				}
+				if !allowed {
+					return domain.SessionRecord{}, 0, 0, fmt.Errorf("spawn: %w: requested %q exceeds %q", ErrSpawnPermissionExceedsPolicy, requested, ceiling)
+				}
+			}
+			if isOrchestrator && cfg.AgentConfig.Permissions == "" && projectPermission == "" {
+				cfg.AgentConfig.Permissions = parentPermission
+			}
+		}
 	}
 	// A per-project role override picks the harness when the spawn names none,
 	// so a project can default workers to one agent and orchestrators to another.
-	cfg.Harness = effectiveHarness(cfg.Harness, cfg.Kind, project.Config)
+	cfg.Harness = resolvedHarness
 	if cfg.Harness == "" {
 		return domain.SessionRecord{}, 0, 0, fmt.Errorf("spawn: %w: configure project %s.agent or pass --harness", ErrMissingHarness, roleConfigName(cfg.Kind))
 	}
@@ -1172,14 +1265,23 @@ func (m *Manager) Spawn(ctx context.Context, cfg ports.SpawnConfig) (result doma
 		}
 		cfg.RequestedMode = domain.SessionModeChat
 	}
-	// Unreal Agent has no interactive approval channel either, so selecting it
-	// supplies bypass permissions by default; an explicit caller-supplied
-	// permission remains authoritative and is rejected normally when the
-	// harness cannot honor it.
+	// Unreal Agent has no interactive approval channel. Its implicit bypass mode
+	// must not replace a stricter project setting; an explicit caller-supplied
+	// permission remains authoritative and is rejected if the harness cannot honor it.
 	if cfg.Harness == domain.HarnessUnreal {
 		if cfg.AgentConfig.Permissions == "" {
+			if projectPermission != "" && projectPermission != ports.PermissionModeBypassPermissions {
+				return domain.SessionRecord{}, 0, 0, fmt.Errorf("spawn: %w: Unreal Agent requires bypass-permissions; choose it explicitly to start this session with project permission %q", ErrSpawnPermissionExceedsPolicy, projectPermission)
+			}
 			cfg.AgentConfig.Permissions = ports.PermissionModeBypassPermissions
 		}
+	}
+
+	// Keep the caller's policy separate from inherited settings. The merge below
+	// and the TUI and chat resolvers copy project and role values into cfg.AgentConfig.
+	if cfg.TerminateOnPRMerge == nil && cfg.AgentConfig.TerminateOnPRMerge != nil {
+		explicit := *cfg.AgentConfig.TerminateOnPRMerge
+		cfg.TerminateOnPRMerge = &explicit
 	}
 
 	// Resolve the effective agent config (project base + role override + spawn
@@ -1288,7 +1390,7 @@ func (m *Manager) Spawn(ctx context.Context, cfg ports.SpawnConfig) (result doma
 	if prep != nil {
 		rec = prep.record
 	} else {
-		seed := seedRecord(cfg, project.Config, m.clock())
+		seed := m.seedRecord(cfg, project.Config, m.clock())
 		if mode == domain.SessionModeChat {
 			seed.Metadata.Model = cfg.AgentConfig.Model
 			seed.Metadata.Effort = cfg.AgentConfig.Effort
@@ -1371,7 +1473,16 @@ func (m *Manager) Spawn(ctx context.Context, cfg ports.SpawnConfig) (result doma
 			return domain.SessionRecord{}, 0, 0, wrapSpawnStage(id, ErrSpawnArtifactDir, err)
 		}
 	}
-	prompt, systemPrompt, err := m.buildSpawnTexts(ctx, cfg, id)
+	// spawnTexts also decides attribution for this spawn; the spawn carries
+	// that decision to its workspace setup.
+	prompt, systemPrompt, spawnAttr, err := m.spawnTexts(ctx, cfg, id)
+	if cfg.Transfer != nil {
+		// The resumed conversation already holds the task; the prompt is a note about the move.
+		prompt = cfg.Prompt
+		if note := strings.TrimSpace(cfg.Transfer.SystemNote); note != "" && err == nil {
+			systemPrompt = strings.TrimSpace(systemPrompt + "\n\n" + note)
+		}
+	}
 	if err != nil {
 		m.cleanupArtifactDir(id)
 		if prep != nil {
@@ -1410,7 +1521,7 @@ func (m *Manager) Spawn(ctx context.Context, cfg ports.SpawnConfig) (result doma
 				return domain.SessionRecord{}, 0, 0, wrapSpawnStage(id, ErrWorkspaceCreate, err)
 			}
 		}
-		seed := seedRecord(cfg, project.Config, m.clock())
+		seed := m.seedRecord(cfg, project.Config, m.clock())
 		seed.ID = id
 		seed.Metadata.ArtifactDir = artifactDir
 		if mode == domain.SessionModeChat {
@@ -1477,6 +1588,7 @@ func (m *Manager) Spawn(ctx context.Context, cfg ports.SpawnConfig) (result doma
 	// from disk) so the opening prompt is complete before the files land.
 	if asyncChat {
 		started, promptBytes, systemPromptBytes, err := m.beginAsyncChatSpawn(ctx, asyncChatSpawn{
+			attribution:       spawnAttr,
 			cfg:               cfg,
 			project:           project,
 			projectKind:       projectKind,
@@ -1536,10 +1648,11 @@ func (m *Manager) Spawn(ctx context.Context, cfg ports.SpawnConfig) (result doma
 		}
 		return domain.SessionRecord{}, 0, 0, wrapSpawnStage(id, ErrWorkspaceCreate, err)
 	}
-	// Per-project workspace provisioning: symlink shared files, then run any
-	// post-create commands (e.g. `pnpm install`) before the agent launches.
+	// Per-project workspace provisioning: symlink shared files, copy the files
+	// .worktreeinclude names, then run any post-create commands (e.g.
+	// `pnpm install`) before the agent launches.
 	provisioned := BeginSpawnStep(ctx, SpawnStepSetup)
-	err = m.provisionWorkspace(ctx, project, ws.Path)
+	err = m.provisionSpawnWorkspace(ctx, project, id, ws.Path, spawnAttr)
 	provisioned(err)
 	if err != nil {
 		m.rollbackSeedSpawnWorkspace(ctx, rec, ws, workspaceProject, false, false)
@@ -1643,9 +1756,22 @@ func (m *Manager) Spawn(ctx context.Context, cfg ports.SpawnConfig) (result doma
 			return domain.SessionRecord{}, 0, 0, fmt.Errorf("spawn %s: %w", id, ports.ErrAgentAuthRequired)
 		}
 	}
-	if err := m.prepareWorkspace(ctx, agent, id, ws.Path, systemPrompt, systemPromptFile, adapterConfig, env); err != nil {
+	if err := m.prepareWorkspace(ctx, agent, id, ws.Path, systemPrompt, systemPromptFile, adapterConfig, env, workspaceRestoreContext{}); err != nil {
 		m.rollbackSeedSpawnWorkspace(ctx, rec, ws, workspaceProject, false, false)
 		return domain.SessionRecord{}, 0, 0, wrapSpawnStage(id, ErrSpawnPrepare, err)
+	}
+	transferNativeID := ""
+	if cfg.Transfer != nil {
+		if cfg.Transfer.NativeArchive != "" {
+			transferNativeID, err = m.placeTransferConversation(ctx, cfg.Harness, ws.Path, env, cfg.Transfer.NativeArchive)
+			if err != nil {
+				m.logger.Warn("spawn: moved conversation cannot be resumed; starting from the handoff note", "sessionID", id, "error", err)
+				transferNativeID = ""
+			}
+		}
+		if transferNativeID == "" {
+			prompt = cfg.Transfer.FallbackPrompt
+		}
 	}
 	// A text-handoff fork's agent starts with the original's conversation as
 	// its first message. It is not the session's task, so it isn't saved as one.
@@ -1685,7 +1811,12 @@ func (m *Manager) Spawn(ctx context.Context, cfg ports.SpawnConfig) (result doma
 		}
 		launchCfg.Prompt = ""
 	}
-	argv, err := agent.GetLaunchCommand(ctx, launchCfg)
+	var argv []string
+	if transferNativeID != "" {
+		argv, err = transferRestoreArgv(ctx, agent, transferNativeID, launchCfg)
+	} else {
+		argv, err = agent.GetLaunchCommand(ctx, launchCfg)
+	}
 	if err != nil {
 		m.rollbackSeedSpawnWorkspace(ctx, rec, ws, workspaceProject, true, false)
 		return domain.SessionRecord{}, 0, 0, wrapSpawnStage(id, ErrSpawnLaunchCommand, err)
@@ -1764,6 +1895,17 @@ func (m *Manager) Spawn(ctx context.Context, cfg ports.SpawnConfig) (result doma
 		// Model override exists it wins; otherwise fall back to the resolved Mode.
 		Model:  resolvedModelForMetadata(cfg.Harness, agentConfig, adapterConfig),
 		Effort: agentConfig.Effort,
+	}
+	if transferNativeID != "" {
+		metadata.AgentSessionID = transferNativeID
+		// The launch resumes that exact conversation (its restore command names
+		// it), as a native restore does, so the id is bound to this launch at
+		// once, under the same harnesses: a moved session can switch to Chat
+		// without waiting for the agent's SessionStart hook.
+		if cfg.Harness == domain.HarnessCodex || cfg.Harness == domain.HarnessClaudeCode || cfg.Harness == domain.HarnessAgy ||
+			m.terminalVersionRefreshSupported(cfg.Harness) {
+			metadata.AgentSessionIDLaunchID = launchID
+		}
 	}
 	if prompt != "" {
 		metadata.LatestUserPromptAt = m.clock()
@@ -1930,6 +2072,11 @@ func (m *Manager) resolveAgentConfigOnce(ctx context.Context, cfg ports.SpawnCon
 		// let the CLI reject unknown values at launch.
 		return resolved, nil
 	}
+	if cfg.Harness == domain.HarnessCodex {
+		if err := m.refuseUnavailableCodexModel(ctx, cfg, project, strings.TrimSpace(resolved.Model)); err != nil {
+			return ports.AgentConfig{}, err
+		}
+	}
 	modelID := strings.TrimSpace(resolved.Model)
 	validateClaudeModel := cfg.Harness == domain.HarnessClaudeCode && modelID != ""
 	if resolved.Effort == "" && !validateClaudeModel {
@@ -2029,6 +2176,117 @@ func (m *Manager) resolveAgentConfigOnce(ctx context.Context, cfg ports.SpawnCon
 	return resolved, nil
 }
 
+// codexAccountHomes resolves the CODEX_HOME a Codex session runs under on an
+// account. The agent-accounts service implements it.
+type codexAccountHomes interface {
+	AccountHome(ctx context.Context, harness domain.AgentHarness, accountID string) (string, error)
+}
+
+// refusedModelRefreshInterval bounds how often a spawn refused on a Codex
+// model may start catalog rediscovery for its harness and project.
+const refusedModelRefreshInterval = 10 * time.Minute
+
+// Codex exposes no account-specific catalog for saved accounts or a project's
+// CODEX_HOME. Retry their refused models after a day so a plan or rollout change
+// cannot leave an account blocked indefinitely.
+const codexRefusalRetryInterval = 24 * time.Hour
+
+// refuseUnavailableCodexModel refuses a Codex session on a model Codex already
+// refused for the account the session runs on, instead of starting a worker
+// whose first turn fails (#4518). Another account is never refused for it. On
+// the computer's own account, a model a fresh saved catalog lists again is
+// allowed and forgotten; a stale catalog's listing proves nothing, so the
+// refusal stays. A home without its own catalog gets a retry after one day.
+func (m *Manager) refuseUnavailableCodexModel(ctx context.Context, cfg ports.SpawnConfig, project domain.ProjectConfig, model string) error {
+	if model == "" {
+		return nil
+	}
+	home, ok := m.codexAccountHome(ctx, cfg, project)
+	unavailable := codexagent.DefaultUnavailableModels()
+	if !ok || !unavailable.Unavailable(home, model) {
+		return nil
+	}
+	if strings.TrimSpace(home) != "" {
+		expired, err := unavailable.ForgetExpired(home, model, time.Now(), codexRefusalRetryInterval)
+		if err != nil && m.logger != nil {
+			m.logger.Warn("spawn: could not persist an expired Codex model refusal", "error", err)
+		}
+		if expired {
+			return nil
+		}
+	}
+	var available []string
+	// Codex's catalog is discovered under the computer's own login only, never
+	// a saved account's or a project's CODEX_HOME, so it says nothing about
+	// another account's models: that account's refusal stays until expiry,
+	// without borrowing another account's list.
+	if m.modelCatalog != nil && strings.TrimSpace(home) == "" {
+		if catalog, err := m.modelCatalog.Models(ctx, string(cfg.Harness), string(cfg.ProjectID), false); err == nil {
+			for _, item := range catalog.Models {
+				if item.ID == model {
+					// The listing counts only as of when it was observed: a
+					// refusal recorded since then is newer and stays.
+					observed := catalog.ValidatedAt
+					if observed.IsZero() {
+						observed = catalog.FetchedAt
+					}
+					if catalog.Stale || observed.IsZero() {
+						continue
+					}
+					_ = unavailable.Forget(home, model, observed)
+					if !unavailable.Unavailable(home, model) {
+						return nil
+					}
+					continue
+				}
+				available = append(available, item.ID)
+			}
+		}
+		// The account may list the model again; look, at most once per interval.
+		if m.claimRefusedModelRefresh(cfg.Harness, cfg.ProjectID) {
+			m.refreshModelCatalogInBackground(cfg.Harness, cfg.ProjectID)
+		}
+	}
+	return fmt.Errorf("%w: %s", ErrUnsupportedModel, codexagent.UnavailableModelMessage(model, available))
+}
+
+// codexAccountHome is the CODEX_HOME the spawn's Codex session will run under:
+// the selected saved account's, or the default account's. ok is false when the
+// account cannot be resolved, and then no refusal applies.
+func (m *Manager) codexAccountHome(ctx context.Context, cfg ports.SpawnConfig, project domain.ProjectConfig) (string, bool) {
+	if homes, ok := m.agentAccounts.(codexAccountHomes); ok {
+		home, err := homes.AccountHome(ctx, cfg.Harness, cfg.AgentAccountID)
+		if err != nil {
+			return "", false
+		}
+		if home != "" {
+			return home, true
+		}
+	} else if cfg.AgentAccountID != "" {
+		return "", false
+	}
+	// The computer's own account: a project may still point Codex elsewhere.
+	return project.Env["CODEX_HOME"], true
+}
+
+// claimRefusedModelRefresh reports whether a refused spawn may start catalog
+// rediscovery for its harness and project now, at most once per
+// refusedModelRefreshInterval (refusedModelRefreshAt).
+func (m *Manager) claimRefusedModelRefresh(harness domain.AgentHarness, project domain.ProjectID) bool {
+	key := string(harness) + "\x00" + string(project)
+	now := time.Now()
+	m.refusedModelRefreshMu.Lock()
+	defer m.refusedModelRefreshMu.Unlock()
+	if last, ok := m.refusedModelRefreshAt[key]; ok && now.Sub(last) < refusedModelRefreshInterval {
+		return false
+	}
+	if m.refusedModelRefreshAt == nil {
+		m.refusedModelRefreshAt = map[string]time.Time{}
+	}
+	m.refusedModelRefreshAt[key] = now
+	return true
+}
+
 // refreshModelCatalogInBackground rediscovers a harness's catalog without
 // holding up the spawn that found it stale. The catalog service coalesces
 // concurrent loads, so a burst of spawns starts one discovery.
@@ -2122,32 +2380,38 @@ func containsString(values []string, value string) bool {
 	return false
 }
 
-// inheritedSpawnPermissions derives a worker override from its requesting chat
-// orchestrator. The request supplies identity only: the stored conversation
-// settings remain the authority for the permission policy.
-func (m *Manager) inheritedSpawnPermissions(ctx context.Context, projectID domain.ProjectID, parentID domain.SessionID) (domain.PermissionMode, error) {
+// inheritedSpawnPermissions identifies an in-project parent and derives a
+// worker override only from an orchestrator. Saved Chat settings take precedence
+// over the orchestrator's starting permission mode.
+func (m *Manager) inheritedSpawnPermissions(ctx context.Context, projectID domain.ProjectID, parentID domain.SessionID) (domain.PermissionMode, bool, bool, error) {
 	parent, ok, err := m.store.GetSession(ctx, parentID)
 	if err != nil {
-		return "", fmt.Errorf("load parent session %s: %w", parentID, err)
+		return "", false, false, fmt.Errorf("load parent session %s: %w", parentID, err)
 	}
-	if !ok || parent.ProjectID != projectID || parent.Kind != domain.KindOrchestrator {
+	if !ok || parent.ProjectID != projectID {
+		return "", false, false, nil
+	}
+	if parent.Kind != domain.KindOrchestrator {
 		// AO_SESSION_ID is available in every session, not only orchestrators.
-		// A worker (or a stale/cross-project value) must preserve the historical
-		// project-default spawn behavior rather than gain an inherited policy.
-		return "", nil
+		// Workers do not provide an inherited mode, but the project's ceiling
+		// still applies to a worker-initiated spawn.
+		return "", false, true, nil
 	}
 	conversations, ok := m.store.(conversationSettingsStore)
 	if !ok {
-		return "", nil
+		return parent.Metadata.Permissions, true, true, nil
 	}
 	conversation, err := conversations.ConversationForSession(ctx, parentID)
 	if errors.Is(err, domain.ErrNoConversation) {
-		return "", nil
+		return parent.Metadata.Permissions, true, true, nil
 	}
 	if err != nil {
-		return "", fmt.Errorf("load parent conversation %s: %w", parentID, err)
+		return "", false, false, fmt.Errorf("load parent conversation %s: %w", parentID, err)
 	}
-	return conversation.Settings.ApprovalMode, nil
+	if conversation.Settings.ApprovalMode != "" {
+		return conversation.Settings.ApprovalMode, true, true, nil
+	}
+	return parent.Metadata.Permissions, true, true, nil
 }
 
 // loadProject loads the project record so spawn can resolve its per-project
@@ -2211,11 +2475,25 @@ func (m *Manager) refreshDefaultBranchesBestEffort(ctx context.Context, project 
 		}
 	}
 
-	// Resolve every canonical ref before starting network I/O. This preserves
+	// One deadline covers the complete workspace refresh, resolution and fetch
+	// alike. A slow or offline repository cannot multiply spawn latency by the
+	// number of child repos.
+	fetchCtx, cancel := context.WithTimeout(ctx, m.defaultBranchRefreshTimeout)
+	defer cancel()
+	resolve := refresher.ResolveDefaultBranch
+	if budgeted, ok := refresher.(ports.WorkspaceDefaultBranchBudgetedResolver); ok {
+		resolve = func(ctx context.Context, repoPath, configuredBranch string) (ports.WorkspaceDefaultBranch, error) {
+			return budgeted.ResolveDefaultBranchWithin(ctx, fetchCtx, repoPath, configuredBranch)
+		}
+	}
+
+	// Resolve every canonical ref before the fetches below. This preserves
 	// each repository's own inferred origin/HEAD even if an earlier fetch uses
-	// the entire shared refresh budget.
+	// the entire shared refresh budget. Resolution is local except for an
+	// automatic default's live remote HEAD lookup when Git has none cached,
+	// which stops at the shared deadline.
 	for i := range targets {
-		resolved, err := refresher.ResolveDefaultBranch(ctx, targets[i].repoPath, targets[i].configuredBranch)
+		resolved, err := resolve(ctx, targets[i].repoPath, targets[i].configuredBranch)
 		if err != nil {
 			m.logger.Warn("spawn: default branch resolution failed; continuing with adapter fallback",
 				"projectID", project.ID,
@@ -2231,12 +2509,14 @@ func (m *Manager) refreshDefaultBranchesBestEffort(ctx context.Context, project 
 		}
 	}
 
-	// One deadline covers the complete workspace refresh. A slow or offline
-	// repository cannot multiply spawn latency by the number of child repos.
-	fetchCtx, cancel := context.WithTimeout(ctx, m.defaultBranchRefreshTimeout)
-	defer cancel()
 	for _, target := range targets {
 		if target.resolved.BaseRef == "" {
+			continue
+		}
+		// Resolving an automatic default can itself fetch the branch; fetching
+		// it again straight after would only repeat the download.
+		if target.resolved.Fetched {
+			m.recordDefaultBranchFetch(target.repoPath, target.resolved.BaseRef)
 			continue
 		}
 		// A base fetched moments ago for another start of the same project is
@@ -2244,23 +2524,59 @@ func (m *Manager) refreshDefaultBranchesBestEffort(ctx context.Context, project 
 		if m.defaultBranchFetchedRecently(target.repoPath, target.resolved.BaseRef) {
 			continue
 		}
-		if err := refresher.FetchDefaultBranch(fetchCtx, target.repoPath, target.resolved); err != nil {
-			m.logger.Warn("spawn: default branch refresh failed; continuing with local refs",
-				"projectID", project.ID,
-				"repoPath", target.repoPath,
-				"remote", target.resolved.Remote,
-				"branch", target.resolved.Branch,
-				"baseRef", target.resolved.BaseRef,
-				"error", err,
-			)
+		// A base fetched within the fresh window starts this session as it is;
+		// the download runs in the background for the starts after it.
+		if m.defaultBranchFresh(target.repoPath, target.resolved.BaseRef) {
+			m.fetchDefaultBranchInBackground(project.ID, refresher, target)
+			continue
 		}
+		if err := refresher.FetchDefaultBranch(fetchCtx, target.repoPath, target.resolved); err != nil {
+			m.logDefaultBranchFetchFailure(project.ID, target, err)
+			continue
+		}
+		m.recordDefaultBranchFresh(target.repoPath, target.resolved.BaseRef)
 	}
 	return baseRefs
+}
+
+// fetchDefaultBranchInBackground refreshes a base off the spawn's path. It has
+// a longer limit than a fetch a spawn waits for, since nobody waits for it.
+func (m *Manager) fetchDefaultBranchInBackground(projectID string, refresher ports.WorkspaceDefaultBranchRefresher, target defaultBranchRefreshTarget) {
+	m.runInBackground(func() {
+		ctx, cancel := context.WithTimeout(m.backgroundContext, defaultBranchBackgroundFetchTimeout)
+		defer cancel()
+		if err := refresher.FetchDefaultBranch(ctx, target.repoPath, target.resolved); err != nil {
+			m.logDefaultBranchFetchFailure(projectID, target, err)
+			return
+		}
+		m.recordDefaultBranchFresh(target.repoPath, target.resolved.BaseRef)
+	})
+}
+
+func (m *Manager) logDefaultBranchFetchFailure(projectID string, target defaultBranchRefreshTarget, err error) {
+	m.logger.Warn("spawn: default branch refresh failed; continuing with local refs",
+		"projectID", projectID,
+		"repoPath", target.repoPath,
+		"remote", target.resolved.Remote,
+		"branch", target.resolved.Branch,
+		"baseRef", target.resolved.BaseRef,
+		"error", err,
+	)
 }
 
 // defaultBranchFetchWindow is how long a fetched base ref counts as current for
 // the next start of the same project.
 const defaultBranchFetchWindow = 30 * time.Second
+
+// defaultBranchFreshWindow is how old a base may be, since its last successful
+// fetch, for a start to use it without waiting and refresh it in the
+// background. A start after a longer gap, or after a daemon restart, waits for
+// the fetch as before.
+const defaultBranchFreshWindow = 10 * time.Minute
+
+// defaultBranchBackgroundFetchTimeout bounds a background base refresh. Nobody
+// waits for it, so it can outlast the budget of a fetch a start waits for.
+const defaultBranchBackgroundFetchTimeout = time.Minute
 
 // defaultBranchFetchedRecently reports whether baseRef of repoPath was fetched
 // within defaultBranchFetchWindow, and otherwise records this fetch.
@@ -2277,6 +2593,46 @@ func (m *Manager) defaultBranchFetchedRecently(repoPath, baseRef string) bool {
 	}
 	m.defaultBranchFetchedAt[key] = now
 	return false
+}
+
+// recordDefaultBranchFetch notes a successful fetch of baseRef that happened
+// elsewhere, so starts within defaultBranchFetchWindow skip their own.
+func (m *Manager) recordDefaultBranchFetch(repoPath, baseRef string) {
+	key := filepath.Clean(repoPath) + "\x00" + baseRef
+	now := m.clock()
+	m.defaultBranchFetchMu.Lock()
+	defer m.defaultBranchFetchMu.Unlock()
+	if m.defaultBranchFetchedAt == nil {
+		m.defaultBranchFetchedAt = make(map[string]time.Time)
+	}
+	m.defaultBranchFetchedAt[key] = now
+	if m.defaultBranchFreshAt == nil {
+		m.defaultBranchFreshAt = make(map[string]time.Time)
+	}
+	m.defaultBranchFreshAt[key] = now
+}
+
+// recordDefaultBranchFresh notes that a fetch of baseRef succeeded.
+func (m *Manager) recordDefaultBranchFresh(repoPath, baseRef string) {
+	key := filepath.Clean(repoPath) + "\x00" + baseRef
+	now := m.clock()
+	m.defaultBranchFetchMu.Lock()
+	defer m.defaultBranchFetchMu.Unlock()
+	if m.defaultBranchFreshAt == nil {
+		m.defaultBranchFreshAt = make(map[string]time.Time)
+	}
+	m.defaultBranchFreshAt[key] = now
+}
+
+// defaultBranchFresh reports whether a fetch of baseRef succeeded within
+// defaultBranchFreshWindow.
+func (m *Manager) defaultBranchFresh(repoPath, baseRef string) bool {
+	key := filepath.Clean(repoPath) + "\x00" + baseRef
+	now := m.clock()
+	m.defaultBranchFetchMu.Lock()
+	defer m.defaultBranchFetchMu.Unlock()
+	at, ok := m.defaultBranchFreshAt[key]
+	return ok && now.Sub(at) < defaultBranchFreshWindow
 }
 
 func (m *Manager) createSessionWorkspace(ctx context.Context, project domain.ProjectRecord, cfg ports.SpawnConfig, id domain.SessionID, branch string, baseRefs map[string]string) (ports.WorkspaceInfo, *ports.WorkspaceProjectInfo, error) {
@@ -2326,17 +2682,8 @@ func (m *Manager) createSessionWorkspaceAt(ctx context.Context, project domain.P
 		return ports.WorkspaceInfo{}, nil, err
 	}
 	childRepos := make([]ports.WorkspaceProjectRepoConfig, 0, len(repos))
-	assets := make([]ports.WorkspaceProjectAssetConfig, 0)
 	for _, repo := range repos {
 		if repo.GitStatus == domain.GitStatusNeedsInit {
-			repoPath := filepath.Join(project.Path, filepath.FromSlash(repo.RelativePath))
-			if _, err := os.Stat(filepath.Join(repoPath, ".git")); err == nil {
-				continue
-			}
-			assets = append(assets, ports.WorkspaceProjectAssetConfig{
-				RelativePath: repo.RelativePath,
-				SourcePath:   repoPath,
-			})
 			continue
 		}
 		repoPath := filepath.Join(project.Path, filepath.FromSlash(repo.RelativePath))
@@ -2364,7 +2711,6 @@ func (m *Manager) createSessionWorkspaceAt(ctx context.Context, project domain.P
 		BaseRef:          baseRefs[filepath.Clean(project.Path)],
 		StartRef:         startRef,
 		Repos:            childRepos,
-		Assets:           assets,
 	})
 	if err != nil && (cfg.TaskPreparation == "" || len(info.Worktrees) == 0) {
 		return ports.WorkspaceInfo{}, nil, err
@@ -2650,11 +2996,19 @@ func effectiveAgentConfig(harness domain.AgentHarness, kind domain.SessionKind, 
 	if override.Permissions != "" {
 		merged.Permissions = override.Permissions
 	}
+	if override.TerminateOnPRMerge != nil {
+		merged.TerminateOnPRMerge = override.TerminateOnPRMerge
+	}
 	// A project may carry a model from its previous worker harness. Memcode
 	// accepts only its native catalog; leave an incompatible inherited choice
 	// to the TUI instead of making every launch and restore fail.
 	if harness == domain.HarnessMemcode && validateSpawnModel(harness, merged.Model) != nil {
 		merged.Model = ""
+	}
+	// Mastra Code uses native interactive permissions unless a project, role, or
+	// request explicitly chooses another policy. Do not synthesize Auto.
+	if harness == domain.HarnessMastraCode && merged.Permissions == "" {
+		merged.Permissions = ports.PermissionModeDefault
 	}
 	return merged
 }
@@ -2717,6 +3071,9 @@ func applySpawnAgentConfig(base, override ports.AgentConfig) ports.AgentConfig {
 	}
 	if override.Permissions != "" {
 		base.Permissions = override.Permissions
+	}
+	if override.TerminateOnPRMerge != nil {
+		base.TerminateOnPRMerge = override.TerminateOnPRMerge
 	}
 	if base.Permissions == "" {
 		base.Permissions = ports.PermissionModeAuto
@@ -2827,6 +3184,7 @@ func (m *Manager) markSpawnFailedTerminatedWithoutWorkspace(ctx context.Context,
 // fails, fall back to parking it terminated so a phantom row never looks live.
 func (m *Manager) rollbackSpawnSeedRow(ctx context.Context, id domain.SessionID) {
 	if deleted, err := m.store.DeleteSession(ctx, id); err == nil && deleted {
+		m.forgetSerializedInput(id)
 		m.cleanupSystemPromptDir(id)
 		m.cleanupAttachments(ctx, id)
 		return
@@ -2851,6 +3209,7 @@ func (m *Manager) rollbackSpawn(ctx context.Context, id domain.SessionID) (delet
 		return false, false, fmt.Errorf("rollback %s: %w", id, err)
 	}
 	if deleted {
+		m.forgetSerializedInput(id)
 		m.cleanupSystemPromptDir(id)
 		m.cleanupAttachments(ctx, id)
 		return true, false, nil
@@ -2929,6 +3288,7 @@ func (m *Manager) recordTermination(ctx context.Context, id domain.SessionID, dr
 	if err := m.lcm.MarkTerminated(ctx, id); err != nil {
 		return fmt.Errorf("kill %s: %w", id, errors.Join(err, markerErr))
 	}
+	m.forgetSerializedInput(id)
 	m.cleanupSystemPromptDir(id)
 	if markerErr != nil {
 		return fmt.Errorf("kill %s: clear restore marker: %w", id, markerErr)
@@ -2974,7 +3334,7 @@ func (m *Manager) kill(ctx context.Context, id domain.SessionID, backgroundClean
 		return KillResult{}, fmt.Errorf("kill %s: cancel provisioning: %w", id, err)
 	}
 
-	if err := m.beginAgentOperation(ctx, id, agentOperationKill); err != nil {
+	if err := m.beginKillOperation(ctx, id); err != nil {
 		if errors.Is(err, errAgentOperationInProgress) {
 			err = ErrOperationInProgress
 		}
@@ -3364,6 +3724,12 @@ func (m *Manager) RestoreWithMode(ctx context.Context, id domain.SessionID) (res
 	if !ok {
 		return RestoreResult{}, fmt.Errorf("restore %s: %w", id, ErrNotFound)
 	}
+	if rec.MovedTo != nil {
+		return RestoreResult{}, fmt.Errorf("restore %s: %w", id, ErrSessionMoved)
+	}
+	if err := m.endMoveHere(ctx, rec); err != nil {
+		return RestoreResult{}, fmt.Errorf("restore %s: %w", id, err)
+	}
 	releaseHarness, err := m.beginHarnessUse(rec.Harness)
 	if err != nil {
 		return RestoreResult{}, fmt.Errorf("restore %s: %w", id, err)
@@ -3712,6 +4078,12 @@ func (m *Manager) resumeAgentWithMode(ctx context.Context, id domain.SessionID, 
 	if !ok {
 		return RestoreResult{}, fmt.Errorf("resume agent %s: %w", id, ErrNotFound)
 	}
+	if rec.MovedTo != nil {
+		return RestoreResult{}, fmt.Errorf("resume agent %s: %w", id, ErrSessionMoved)
+	}
+	if err := m.endMoveHere(ctx, rec); err != nil {
+		return RestoreResult{}, fmt.Errorf("resume agent %s: %w", id, err)
+	}
 	if rec.HibernatedAt != nil && m.persistentHostReconcileDone != nil {
 		select {
 		case <-m.persistentHostReconcileDone:
@@ -3892,7 +4264,7 @@ func (m *Manager) resumeAgentRecordWithReservedGeneration(
 		if err != nil {
 			return RestoreResult{}, err
 		}
-		if !m.hasFingerprintImportPreparer(rec) {
+		if rec.Harness != domain.HarnessKilocode && rec.Harness != domain.HarnessCodewhale && !m.hasFingerprintImportPreparer(rec) {
 			m.refreshImportArchive(ctx, rec)
 		}
 		requireNativeHistory = true
@@ -4041,12 +4413,12 @@ func (m *Manager) relaunchSessionWithPolicyAndGeneration(ctx context.Context, op
 			return RestoreResult{}, fmt.Errorf("%s %s: %w", operation, rec.ID, ports.ErrAgentAuthRequired)
 		}
 	}
-	if err := m.prepareWorkspace(ctx, agent, rec.ID, launchPath, systemPrompt, systemPromptFile, agentConfig, env); err != nil {
+	if err := m.prepareWorkspace(ctx, agent, rec.ID, launchPath, systemPrompt, systemPromptFile, agentConfig, env, restoredWorkspaceContext(rec, forceFresh)); err != nil {
 		return RestoreResult{}, relaunchFailed("agent hooks", fmt.Errorf("%s %s: %w", operation, rec.ID, err))
 	}
 	if requireNativeHistory && !forceFresh {
 		if probe, ok := agent.(ports.AgentInterfaceHandoffHistoryProbe); ok {
-			ref := ports.SessionRef{ID: string(rec.ID), WorkspacePath: launchPath, Metadata: nativeRestoreMetadata(rec)}
+			ref := ports.SessionRef{ID: string(rec.ID), WorkspacePath: launchPath, DataDir: m.dataDir, Metadata: nativeRestoreMetadata(rec)}
 			exists, probeErr := probe.NativeConversationExists(ctx, ref, rec.Metadata.AgentSessionID, env)
 			if probeErr != nil || !exists {
 				return RestoreResult{}, fmt.Errorf("%s %s: native history could not be verified: %w", operation, rec.ID,
@@ -4171,6 +4543,29 @@ func (m *Manager) relaunchSessionWithPolicyAndGeneration(ctx context.Context, op
 		m.cleanupSystemPromptDir(rec.ID)
 		return RestoreResult{}, relaunchFailed("runtime", fmt.Errorf("%s %s: runtime: %w", operation, rec.ID, agentlaunch.RedactError(err, project.Config.Env)))
 	}
+	verifiedNativeIdentity := false
+	if verifier, requiresProof := agent.(ports.NativeRestoreVerifier); requiresProof && mode == RestoreModeNative {
+		proofCfg := ports.RestoreConfig{DataDir: m.dataDir, Config: agentConfig, Session: ports.SessionRef{
+			ID: string(rec.ID), WorkspacePath: launchPath, Metadata: nativeRestoreMetadata(rec),
+		}}
+		if err := m.verifyNativeRestore(ctx, verifier, proofCfg, launchID, handle); err != nil {
+			// Same as the start check below: a stale TUI replacement that died
+			// during the proof is fenced from the old row, so reconcile it here
+			// or Resume and its automatic retry cannot recover the session.
+			// Probe before destroying, which would make any child read dead.
+			if requireNativeHistory && !forceFresh && rec.StaleBinary != nil && domain.NormalizeSessionMode(rec.Mode) == domain.SessionModeTUI {
+				probe := m.runtime.ProbeFencedRuntime(ctx, ports.FencedRuntimeRef{Handle: handle, SessionID: rec.ID, Generation: launchID})
+				if probe.Liveness == ports.FencedDead {
+					_, preserveErr := m.preserveFailedReconcileRelaunch(ctx, rec)
+					err = errors.Join(err, preserveErr)
+				}
+			}
+			m.destroySpawnRuntimeAfterFailure(ctx, handle)
+			m.cleanupSystemPromptDir(rec.ID)
+			return RestoreResult{}, relaunchFailed("native identity", fmt.Errorf("%s %s: native identity: %w", operation, rec.ID, err))
+		}
+		verifiedNativeIdentity = true
+	}
 	// A runtime accepting Restart only proves that its supervisor was created.
 	// Keep the previous launch (and stale/release references) until the exact
 	// resumed child is observable. A failed native resume remains recoverable.
@@ -4223,7 +4618,7 @@ func (m *Manager) relaunchSessionWithPolicyAndGeneration(ctx context.Context, op
 	// The interface coordinator provides the same guarantee after it freezes Chat
 	// and transfers the required native history. Fresh and fallback launches
 	// still require current-generation identity proof from their hooks.
-	bindNativeIdentity := mode == RestoreModeNative &&
+	bindNativeIdentity := verifiedNativeIdentity || mode == RestoreModeNative &&
 		(rec.Harness == domain.HarnessCodex || rec.Harness == domain.HarnessClaudeCode || rec.Harness == domain.HarnessAgy || m.terminalVersionRefreshSupported(rec.Harness))
 	if initialization == nil && (bindNativeIdentity || (requireNativeHistory && !forceFresh)) && strings.TrimSpace(metadata.AgentSessionID) != "" {
 		metadata.AgentSessionIDLaunchID = launchID
@@ -4654,6 +5049,7 @@ func (m *Manager) ReconcileStartupSafety(ctx context.Context) error {
 	}
 	// Capture only rows that predate the listener. Git cleanup belongs in the
 	// background, where a slow or unavailable repository cannot delay boot.
+	m.startupHealthCutoff = m.clock()
 	m.startupTaskPreparations = []domain.SessionRecord{}
 	m.startupProvisioningRetries = nil
 	// No branch naming survives a restart; clients show the branch it left.
@@ -4747,6 +5143,11 @@ func (m *Manager) reconcileLivePass(ctx context.Context, recs []domain.SessionRe
 	candidates := make([]domain.SessionRecord, 0, len(recs))
 	ids := make([]domain.SessionID, 0, len(recs))
 	for _, rec := range recs {
+		// A spawn accepted after the listener opened can still be between
+		// inserting its seed row and creating its workspace.
+		if !m.startupHealthCutoff.IsZero() && !rec.CreatedAt.Before(m.startupHealthCutoff) {
+			continue
+		}
 		if rec.IsTerminated || rec.IsTaskPreparation || rec.HibernatedAt != nil || rec.ProvisionState.WithDefault() != domain.SessionProvisionReady {
 			continue
 		}
@@ -4854,7 +5255,39 @@ func (m *Manager) RestoreAll(ctx context.Context) error {
 		if !rec.IsTerminated {
 			continue
 		}
+		// A session that moved, or whose move to AO Cloud pushed its branch and
+		// did not finish, may be running in AO Cloud: it stays stopped here
+		// until the move finishes or the user restores it.
+		if rec.MovedTo != nil || rec.MoveStarted != "" {
+			m.logger.Info("restore-all: leaving a moved or moving session stopped", "sessionID", rec.ID, "moveID", rec.MoveStarted)
+			continue
+		}
 		m.restoreAllSession(ctx, rec)
+	}
+	return nil
+}
+
+// endMoveHere ends a session's unfinished move to AO Cloud: an explicit
+// restore or resume (including a failed move's rollback) runs it here, so the
+// move is over. The store clears it only while the session is not marked
+// moved, so a move/complete that lands first wins with ErrSessionMoved and
+// the session never runs here and in AO Cloud both.
+func (m *Manager) endMoveHere(ctx context.Context, rec domain.SessionRecord) error {
+	if rec.MoveStarted == "" {
+		return nil
+	}
+	store, ok := m.store.(interface {
+		EndSessionMoveStarted(ctx context.Context, id domain.SessionID, updatedAt time.Time) (bool, error)
+	})
+	if !ok {
+		return nil
+	}
+	ended, err := store.EndSessionMoveStarted(ctx, rec.ID, m.clock().UTC())
+	if err != nil {
+		return fmt.Errorf("end the unfinished move: %w", err)
+	}
+	if !ended {
+		return ErrSessionMoved
 	}
 	return nil
 }
@@ -4976,8 +5409,8 @@ func (m *Manager) restoreAllSession(ctx context.Context, rec domain.SessionRecor
 		}
 	}
 	if recreated {
-		m.restoreForkStartingFiles(ctx, rec.ID, ws.Path)
-		if err := m.provisionWorkspace(ctx, project, ws.Path); err != nil {
+		m.restoreForkStartingFiles(ctx, project, rec, ws.Path)
+		if err := m.provisionWorkspaceWith(ctx, project, rec.ID, ws.Path, attributionRecorded, ""); err != nil {
 			m.logger.Error("restore-all: setup recreated workspace failed", "sessionID", rec.ID, "error", err)
 			captureBackgroundFault(ctx, err, "boot_restore", "restore_workspace")
 			return
@@ -5069,8 +5502,8 @@ func (m *Manager) restoreSessionWorkspace(ctx context.Context, project domain.Pr
 			return ports.WorkspaceInfo{}, fmt.Errorf("restore attachments: %w", err)
 		}
 		if recreated {
-			m.restoreForkStartingFiles(ctx, rec.ID, ws.Path)
-			if err := m.provisionRecreatedWorkspace(ctx, project, ws.Path); err != nil {
+			m.restoreForkStartingFiles(ctx, project, rec, ws.Path)
+			if err := m.provisionRecreatedWorkspace(ctx, project, rec.ID, ws.Path); err != nil {
 				return ports.WorkspaceInfo{}, fmt.Errorf("setup recreated workspace: %w", err)
 			}
 		}
@@ -5102,7 +5535,7 @@ func (m *Manager) restoreSessionWorkspace(ctx context.Context, project domain.Pr
 		return ports.WorkspaceInfo{}, fmt.Errorf("restore attachments: %w", err)
 	}
 	if recreated {
-		if err := m.provisionRecreatedWorkspace(ctx, project, ws.Path); err != nil {
+		if err := m.provisionRecreatedWorkspace(ctx, project, rec.ID, ws.Path); err != nil {
 			return ports.WorkspaceInfo{}, fmt.Errorf("setup recreated workspace: %w", err)
 		}
 	}
@@ -5113,10 +5546,10 @@ func (m *Manager) restoreSessionWorkspace(ctx context.Context, project domain.Pr
 // worktree was reclaimed. Only such a restore runs Setup, so only it extends
 // a REST restore's budget, from now, by the Setup steps' limits; any other
 // restore keeps the request's ordinary budget.
-func (m *Manager) provisionRecreatedWorkspace(ctx context.Context, project domain.ProjectRecord, workspacePath string) error {
+func (m *Manager) provisionRecreatedWorkspace(ctx context.Context, project domain.ProjectRecord, sessionID domain.SessionID, workspacePath string) error {
 	ctx, cancel := ports.ExtendSpawnRequestBudget(ctx, postCreateBudget(0, project.Config.PostCreate))
 	defer cancel()
-	return m.provisionWorkspace(ctx, project, workspacePath)
+	return m.provisionWorkspaceWith(ctx, project, sessionID, workspacePath, attributionRecorded, "")
 }
 
 func workspacePathMissing(path string) (bool, error) {
@@ -5426,9 +5859,21 @@ func (m *Manager) SendWithOptions(ctx context.Context, id domain.SessionID, mess
 	return m.send(ctx, id, message, "", options)
 }
 
+// SendWithClientMessageID delivers an automated message under a caller-chosen
+// client message id. A Chat session records the id with the message, so the
+// caller can later read whether that exact message reached the agent, was
+// queued for a sleeping session, or failed. Terminal sessions deliver as Send.
+func (m *Manager) SendWithClientMessageID(ctx context.Context, id domain.SessionID, message, clientMessageID string) error {
+	return m.send(ctx, id, message, clientMessageID, ports.MessageDeliveryOptions{InteractionAt: m.clock()})
+}
+
 type semanticDeliveryStore interface {
 	SemanticDeliveryAccepted(ctx context.Context, id domain.SessionID, runtimeLaunchID, deliveryID string) (bool, error)
 }
+
+// ErrPromptSubmissionUnobserved reports a prompt that was submitted to the agent,
+// but whose acceptance confirmation was never observed before the deadline.
+var ErrPromptSubmissionUnobserved = errors.New("prompt submission was not observed")
 
 // SendSemantic delivers an internal message and returns only after the target
 // agent has accepted that exact message. Chat uses its native accepted-turn
@@ -5511,7 +5956,7 @@ func (m *Manager) SendSemantic(ctx context.Context, id domain.SessionID, message
 		case <-ctx.Done():
 			return ctx.Err()
 		case <-deadline.C:
-			return fmt.Errorf("%w: prompt submission was not observed", ErrSemanticAcceptanceUnsupported)
+			return fmt.Errorf("%w: %w", ErrSemanticAcceptanceUnsupported, ErrPromptSubmissionUnobserved)
 		case <-ticker.C:
 		}
 	}
@@ -5551,8 +5996,30 @@ func (m *Manager) InterruptTUI(ctx context.Context, id domain.SessionID) error {
 	if domain.NormalizeSessionMode(rec.Mode) == domain.SessionModeChat || !m.harnessSemanticAcceptance(rec.Harness) {
 		return ErrSemanticAcceptanceUnsupported
 	}
+	if rec.Metadata.RuntimeHandleID == "" {
+		return ErrSemanticAcceptanceUnsupported
+	}
+	return m.interruptTerminal(ctx, rec)
+}
+
+// interruptTerminal preserves each harness's native cancel key across direct
+// cancellation and controller handoffs. It never appends a submission key.
+func (m *Manager) interruptTerminal(ctx context.Context, rec domain.SessionRecord) error {
+	if m.agents != nil {
+		if agent, found := m.agents.Agent(rec.Harness); found {
+			if native, supported := agent.(ports.AgentInterruptInputProvider); supported {
+				sender, supported := m.runtime.(interface {
+					SendInput(context.Context, ports.RuntimeHandle, string) error
+				})
+				if !supported {
+					return ErrSemanticAcceptanceUnsupported
+				}
+				return sender.SendInput(ctx, ports.RuntimeHandle{ID: rec.Metadata.RuntimeHandleID}, native.InterruptInput())
+			}
+		}
+	}
 	interrupter, ok := m.runtime.(runtimeInterrupter)
-	if !ok || rec.Metadata.RuntimeHandleID == "" {
+	if !ok {
 		return ErrSemanticAcceptanceUnsupported
 	}
 	return interrupter.Interrupt(ctx, ports.RuntimeHandle{ID: rec.Metadata.RuntimeHandleID})
@@ -6352,7 +6819,43 @@ func normalizeWorkspacePath(p string) string {
 
 // ---- helpers ----
 
-func seedRecord(cfg ports.SpawnConfig, projectConfig domain.ProjectConfig, now time.Time) domain.SessionRecord {
+// resolveTerminateOnPRMerge resolves whether a newly created session should auto-terminate
+// when its PR merges. The precedence order is:
+// explicit per-session value > project default > user/global default > hardcoded FALSE.
+// Once created, the per-session toggle in the UI/API overrides.
+func resolveTerminateOnPRMerge(cfg ports.SpawnConfig, projectConfig domain.ProjectConfig, defaultPolicy *bool) bool {
+	// 1. Explicit per-session value
+	if cfg.TerminateOnPRMerge != nil {
+		return *cfg.TerminateOnPRMerge
+	}
+
+	// 2. Project default
+	role := roleOverride(cfg.Kind, projectConfig)
+	if role.AgentConfig.TerminateOnPRMerge != nil {
+		return *role.AgentConfig.TerminateOnPRMerge
+	}
+	if projectConfig.TerminateOnPRMerge != nil {
+		return *projectConfig.TerminateOnPRMerge
+	}
+	if projectConfig.AgentConfig.TerminateOnPRMerge != nil {
+		return *projectConfig.AgentConfig.TerminateOnPRMerge
+	}
+
+	// 3. User / global default
+	if defaultPolicy != nil {
+		return *defaultPolicy
+	}
+	if raw, present := os.LookupEnv(config.EnvTerminateOnPRMerge); present && strings.TrimSpace(raw) != "" {
+		if v, err := config.ParseToggle(config.EnvTerminateOnPRMerge, raw); err == nil {
+			return v
+		}
+	}
+
+	// 4. Hardcoded FALSE
+	return false
+}
+
+func seedRecordWithDefault(cfg ports.SpawnConfig, projectConfig domain.ProjectConfig, defaultPolicy *bool, now time.Time) domain.SessionRecord {
 	return domain.SessionRecord{
 		ProjectID:           cfg.ProjectID,
 		IssueID:             cfg.IssueID,
@@ -6368,14 +6871,30 @@ func seedRecord(cfg ports.SpawnConfig, projectConfig domain.ProjectConfig, now t
 		Activity:            domain.Activity{State: domain.ActivityIdle, LastActivityAt: now},
 		// Resolved before this point and persisted here. There is no UPDATE
 		// statement that can change it afterwards.
-		Mode:              domain.NormalizeSessionMode(cfg.RequestedMode),
-		Metadata:          domain.SessionMetadata{Permissions: applySpawnAgentConfig(effectiveAgentConfig(cfg.Harness, cfg.Kind, projectConfig), cfg.AgentConfig).Permissions},
-		RequestedOutput:   cfg.RequestedOutput,
-		OutputType:        domain.SessionOutputNone,
-		AutoReviewEnabled: projectConfig.AutoReview,
-		AutoInjectReview:  true,
-		AutoInjectCI:      true,
+		Mode: domain.NormalizeSessionMode(cfg.RequestedMode),
+		Metadata: domain.SessionMetadata{
+			Permissions: applySpawnAgentConfig(effectiveAgentConfig(cfg.Harness, cfg.Kind, projectConfig), cfg.AgentConfig).Permissions,
+			RoleAgent:   roleOverride(cfg.Kind, projectConfig).Harness,
+		},
+		RequestedOutput:    cfg.RequestedOutput,
+		OutputType:         domain.SessionOutputNone,
+		TerminateOnPRMerge: resolveTerminateOnPRMerge(cfg, projectConfig, defaultPolicy),
+		AutoReviewEnabled:  projectConfig.AutoReview,
+		AutoInjectReview:   true,
+		AutoInjectCI:       true,
 	}
+}
+
+func seedRecord(cfg ports.SpawnConfig, projectConfig domain.ProjectConfig, now time.Time) domain.SessionRecord {
+	return seedRecordWithDefault(cfg, projectConfig, nil, now)
+}
+
+func (m *Manager) seedRecord(cfg ports.SpawnConfig, projectConfig domain.ProjectConfig, now time.Time) domain.SessionRecord {
+	var globalDefault *bool
+	if m != nil {
+		globalDefault = m.terminateOnPRMergeDefault
+	}
+	return seedRecordWithDefault(cfg, projectConfig, globalDefault, now)
 }
 
 func defaultSessionBranch(id domain.SessionID, kind domain.SessionKind, prefix, branchNamespace string) string {
@@ -6385,7 +6904,7 @@ func defaultSessionBranch(id domain.SessionID, kind domain.SessionKind, prefix, 
 	// A fresh, unique branch per worker session: gitworktree can't add a worktree
 	// on a branch already checked out elsewhere (e.g. main). Put the root work
 	// branch under a session namespace so sibling PR branches such as
-	// ao/<session>/<topic> remain valid Git refs.
+	// orchestrator/<session>/<topic> remain valid Git refs.
 	return aoBranch(branchNamespace, string(id), "root")
 }
 
@@ -6408,8 +6927,17 @@ func DefaultOrchestratorBranch(prefix, dataDir string) string {
 	return defaultSessionBranch("", domain.KindOrchestrator, prefix, generatedBranchNamespace(dataDir))
 }
 
+// LegacyOrchestratorBranch is the orchestrator branch a session created before
+// the "orchestrator/" rename recorded, still accepted where branches are checked.
+func LegacyOrchestratorBranch(prefix, dataDir string) string {
+	return strings.Replace(DefaultOrchestratorBranch(prefix, dataDir), domain.SessionBranchPrefix+"/", domain.LegacySessionBranchPrefix+"/", 1)
+}
+
+// aoBranch builds a generated session branch under the "orchestrator/" prefix.
+// Sessions created before the rename keep their recorded "ao/" branches, which
+// PR attribution still matches.
 func aoBranch(namespace string, parts ...string) string {
-	all := []string{"ao"}
+	all := []string{domain.SessionBranchPrefix}
 	if namespace != "" {
 		all = append(all, namespace)
 	}
@@ -6577,17 +7105,26 @@ func appendAttachmentReferences(prompt string, refs []string) string {
 // promptless spawn delivers no user prompt at all: the agent simply lands at an
 // empty input box rather than receiving an auto-generated kickoff turn.
 func (m *Manager) buildSpawnTexts(ctx context.Context, cfg ports.SpawnConfig, sessionID domain.SessionID) (prompt, systemPrompt string, err error) {
+	prompt, systemPrompt, _, err = m.spawnTexts(ctx, cfg, sessionID)
+	return prompt, systemPrompt, err
+}
+
+// spawnTexts is buildSpawnTexts that also returns the spawn's attribution
+// decision, made before the first prompt asks for the footer.
+func (m *Manager) spawnTexts(ctx context.Context, cfg ports.SpawnConfig, sessionID domain.SessionID) (prompt, systemPrompt string, attr spawnAttribution, err error) {
 	prompt = buildPrompt(cfg)
 	if cfg.Fork != nil {
 		// The lineage row is written after spawn returns, so name the
 		// original here; restores read it from the lineage.
-		ctx = withForkOrigin(ctx, cfg.Fork.SourceSessionID, cfg.Fork.SourceTitle, cfg.Fork.SourceWorkspace)
+		ctx = withForkOrigin(ctx, cfg.Fork.SourceSessionID, cfg.Fork.SourceTitle, cfg.Fork.SourceWorkspace, cfg.Fork.SeedDir != "")
 	}
+	// Decide attribution once, before the first prompt asks for the footer.
+	attr = m.recordSpawnAttribution(ctx, cfg.ProjectID, sessionID)
 	systemPrompt, err = m.buildSystemPrompt(ctx, cfg.Kind, cfg.ProjectID, sessionID, cfg.RequestedOutput, domain.NormalizeSessionMode(cfg.RequestedMode) == domain.SessionModeChat)
 	if err != nil {
-		return "", "", err
+		return "", "", spawnAttribution{}, err
 	}
-	return prompt, systemPrompt, nil
+	return prompt, systemPrompt, attr, nil
 }
 
 // buildSystemPrompt derives the standing instructions for a session of the
@@ -6667,6 +7204,9 @@ func (m *Manager) buildSystemPrompt(ctx context.Context, kind domain.SessionKind
 	if privacy := macPrivacyPromptFor(chat, desktopOwnedDaemon()); privacy != "" {
 		cfg.AdditionalSections = append(cfg.AdditionalSections, privacy)
 	}
+	if projectID != "" && m.sessionPRFooter(ctx, project, sessionID) {
+		cfg.AdditionalSections = append(cfg.AdditionalSections, prAttributionPrompt())
+	}
 	if artifactPrompt := strings.TrimSpace(m.artifactPrompt(sessionID, chat)); artifactPrompt != "" {
 		cfg.AdditionalSections = append(cfg.AdditionalSections, artifactPrompt)
 	}
@@ -6675,6 +7215,21 @@ func (m *Manager) buildSystemPrompt(ctx context.Context, kind domain.SessionKind
 	}
 	cfg.TimeZone = userTimeZone(ctx, m.dataDir)
 	return buildSystemPromptText(cfg), nil
+}
+
+// SetDevicesOffered supplies whether new sessions are told about `ao device`.
+// Sessions already running keep the prompt they started with.
+func (m *Manager) SetDevicesOffered(offered func() bool) {
+	m.devicesMu.Lock()
+	defer m.devicesMu.Unlock()
+	m.devicesOffered = offered
+}
+
+func (m *Manager) devicesAreOffered() bool {
+	m.devicesMu.Lock()
+	offered := m.devicesOffered
+	m.devicesMu.Unlock()
+	return offered != nil && offered()
 }
 
 // aoSkillPointer is appended to every agent system prompt. It points the agent
@@ -6711,6 +7266,17 @@ func (m *Manager) aoSkillPointer(chat bool) string {
 	pointer := "\n\n" + "## Using the ao CLI\n\n" +
 		"When using `ao`, read `" + skillFile + "` and only the relevant file under `" + commandsGlob + "`. To report Orchestrator bugs, read `" + bugTriageFile + "`.\n\n" +
 		browserSection
+	// Device tools are described only while devices are on (the desktop's
+	// Developer mode) and the user turned device support on: describing tools
+	// that refuse every call would steer the agent away from the simctl/adb it
+	// still has.
+	if m.devicesAreOffered() {
+		deviceFile := filepath.ToSlash(filepath.Join(dir, "commands", "device.md"))
+		pointer += "\n\n## AO Device panel\n\n" +
+			"For mobile app work, read `" + deviceFile + "` and use `ao device open` to get an iOS Simulator or Android Emulator for this session; the user watches and taps it in the Device tab. " +
+			"Build with the project's own tools, then drive the device with the agent-device command `ao device open` prints; it is already bound to this session's device, so run it with a subcommand and nothing else. " +
+			"Do not boot simulators or emulators directly with `xcrun simctl boot` or `emulator`: a device opened outside `ao device` is invisible to the user and may belong to another session."
+	}
 	if !chat {
 		return pointer
 	}
@@ -7234,12 +7800,43 @@ func HookPATH(executable func() (string, error), getenv func(string) string, pro
 }
 
 // provisionWorkspace applies the project's per-workspace setup after the
-// worktree exists: symlink shared files from the project repo, then run any
-// post-create commands. Either failing aborts the spawn so a half-provisioned
-// workspace never launches an agent.
-func (m *Manager) provisionWorkspace(ctx context.Context, project domain.ProjectRecord, workspacePath string) error {
+// worktree exists: symlink shared files from the project repo, copy the files
+// .worktreeinclude names, then run any post-create commands. Symlinks go first
+// so the explicit project setting wins over the repository's file. Any step
+// failing aborts the spawn so a half-provisioned workspace never launches an
+// agent.
+func (m *Manager) provisionWorkspace(ctx context.Context, project domain.ProjectRecord, sessionID domain.SessionID, workspacePath string) error {
+	return m.provisionWorkspaceWith(ctx, project, sessionID, workspacePath, attributionFromSettings, "")
+}
+
+// provisionSpawnWorkspace sets up a spawn's workspace with the attribution
+// decision the spawn made before its first prompt, or decides now when it
+// made none.
+func (m *Manager) provisionSpawnWorkspace(ctx context.Context, project domain.ProjectRecord, sessionID domain.SessionID, workspacePath string, attr spawnAttribution) error {
+	if !attr.decided {
+		return m.provisionWorkspace(ctx, project, sessionID, workspacePath)
+	}
+	return m.provisionWorkspaceWith(ctx, project, sessionID, workspacePath, attributionDecided, attr.coAuthor)
+}
+
+// provisionWorkspaceWith is provisionWorkspace with the attribution choice
+// made explicit: a recreated worktree of an existing session keeps the choice
+// that session started with.
+func (m *Manager) provisionWorkspaceWith(ctx context.Context, project domain.ProjectRecord, sessionID domain.SessionID, workspacePath string, choice attributionChoice, decided string) error {
+	// Before post-create commands, so commits they make are credited too.
+	var coAuthor string
+	if choice == attributionDecided {
+		coAuthor = m.configureAttribution(ctx, project, workspacePath, decided)
+	} else {
+		coAuthor = m.applyCommitAttribution(ctx, project, sessionID, workspacePath, choice)
+	}
 	if err := applySymlinks(project.Path, workspacePath, project.Config.Symlinks); err != nil {
 		return err
+	}
+	if project.Kind.WithDefault() != domain.ProjectKindScratch {
+		if err := copyWorktreeInclude(ctx, project, workspacePath, m.workspace); err != nil {
+			return err
+		}
 	}
 	var aoEnv map[string]string
 	if m.takeForkWorkspace(workspacePath) {
@@ -7247,7 +7844,12 @@ func (m *Manager) provisionWorkspace(ctx context.Context, project domain.Project
 		// from what its cloned dependencies were installed from.
 		aoEnv = map[string]string{"AO_FORK": "1"}
 	}
-	return runPostCreate(ctx, workspacePath, project.Path, project.Config.PostCreate, project.Config.Env, aoEnv)
+	if err := runPostCreate(ctx, workspacePath, project.Path, project.Config.PostCreate, project.Config.Env, aoEnv); err != nil {
+		return err
+	}
+	// Setup may have installed a repository hook that needs a dispatcher.
+	m.refreshAttributionHooks(ctx, project, workspacePath, coAuthor)
+	return nil
 }
 
 // applySymlinks links each repo-relative path into the workspace. A source that
@@ -7457,9 +8059,10 @@ func (m *Manager) augmentAgentRuntimeEnv(agent ports.Agent, env map[string]strin
 // prepareWorkspace runs the per-session pre-launch steps before the runtime
 // starts the agent: installing the workspace-local activity hooks (so early
 // startup hooks can update the already-created session row), then any optional
-// PreLaunch step. Shared by Spawn and Restore.
-func (m *Manager) prepareWorkspace(ctx context.Context, agent ports.Agent, id domain.SessionID, workspacePath, systemPrompt, systemPromptFile string, agentConfig ports.AgentConfig, env map[string]string) error {
-	if err := agent.GetAgentHooks(ctx, ports.WorkspaceHookConfig{
+// PreLaunch step. Shared by Spawn and Restore. A restore passes the native
+// identity it continues, so hooks can apply an import's workspace rules.
+func (m *Manager) prepareWorkspace(ctx context.Context, agent ports.Agent, id domain.SessionID, workspacePath, systemPrompt, systemPromptFile string, agentConfig ports.AgentConfig, env map[string]string, restore workspaceRestoreContext) error {
+	hookCfg := ports.WorkspaceHookConfig{
 		SessionID:        string(id),
 		WorkspacePath:    workspacePath,
 		DataDir:          m.dataDir,
@@ -7467,7 +8070,9 @@ func (m *Manager) prepareWorkspace(ctx context.Context, agent ports.Agent, id do
 		SystemPrompt:     systemPrompt,
 		SystemPromptFile: systemPromptFile,
 		Config:           agentConfig,
-	}); err != nil {
+	}
+	restore.apply(&hookCfg)
+	if err := agent.GetAgentHooks(ctx, hookCfg); err != nil {
 		m.cleanupPreparedAgentWorkspace(ctx, agent, id, workspacePath, env)
 		return fmt.Errorf("install hooks: %w", err)
 	}
@@ -7488,6 +8093,9 @@ func (m *Manager) prepareWorkspace(ctx context.Context, agent ports.Agent, id do
 }
 
 func (m *Manager) prepareRuntimeLaunch(ctx context.Context, agent ports.Agent, id domain.SessionID, workspacePath, systemPrompt, systemPromptFile string, agentConfig ports.AgentConfig, env map[string]string, restore workspaceRestoreContext) error {
+	if _, guarded := agent.(ports.TerminalMessageInputGuard); guarded {
+		m.enableSerializedInput(id)
+	}
 	preparer, ok := agent.(runtimeLaunchPreparer)
 	if !ok {
 		return nil
@@ -7671,6 +8279,9 @@ func (m *Manager) waitForPromptReadiness(ctx context.Context, agent ports.Agent,
 	callerDeadline, hasCallerDeadline := ctx.Deadline()
 	if hints.InitialDelay > 0 {
 		if hasCallerDeadline && time.Until(callerDeadline)-promptDeliveryDeadlineReserve <= hints.InitialDelay {
+			if hints.RequireReady {
+				return fmt.Errorf("prompt readiness: %w", context.DeadlineExceeded)
+			}
 			m.logger.Warn("prompt readiness skipped to preserve caller deadline for fallback delivery",
 				"sessionID", cfg.SessionID,
 				"kind", string(cfg.Kind),
@@ -7683,6 +8294,9 @@ func (m *Manager) waitForPromptReadiness(ctx context.Context, agent ports.Agent,
 		}
 	}
 	if len(hints.Patterns) == 0 || hints.Timeout <= 0 {
+		if hints.RequireReady {
+			return fmt.Errorf("prompt readiness: required readiness markers and timeout are missing")
+		}
 		return m.promptReadinessSkipped(ctx, handle, lines, hints)
 	}
 	poll := hints.PollInterval
@@ -7692,6 +8306,9 @@ func (m *Manager) waitForPromptReadiness(ctx context.Context, agent ports.Agent,
 
 	waitTimeout, hasReadinessBudget := promptReadinessWaitTimeout(hints.Timeout, callerDeadline, hasCallerDeadline)
 	if !hasReadinessBudget {
+		if hints.RequireReady {
+			return fmt.Errorf("prompt readiness: %w", context.DeadlineExceeded)
+		}
 		m.logger.Warn("prompt readiness skipped to preserve caller deadline for fallback delivery",
 			"sessionID", cfg.SessionID,
 			"kind", string(cfg.Kind),
@@ -7711,7 +8328,14 @@ func (m *Manager) waitForPromptReadiness(ctx context.Context, agent ports.Agent,
 		if err == nil {
 			blocked = promptOutputContainsWrapped(output, hints.BlockingPatterns)
 			if !blocked && promptOutputContains(output, hints.Patterns) {
-				return nil
+				currentLaunchReady := true
+				if hints.RequireCurrentLaunchSignal {
+					rec, ok, getErr := m.store.GetSession(ctx, domain.SessionID(cfg.SessionID))
+					currentLaunchReady = getErr == nil && ok && !rec.FirstSignalAt.IsZero()
+				}
+				if currentLaunchReady {
+					return nil
+				}
 			}
 		}
 		select {
@@ -7723,6 +8347,9 @@ func (m *Manager) waitForPromptReadiness(ctx context.Context, agent ports.Agent,
 				// the terminal. Typing the prompt there would answer the dialog
 				// with arbitrary keys, so fail delivery instead.
 				return fmt.Errorf("prompt readiness: %w", errPromptBlockedByDialog)
+			}
+			if hints.RequireReady {
+				return fmt.Errorf("prompt readiness: required composer was not observed: %w", context.DeadlineExceeded)
 			}
 			// Prompt readiness is best-effort: a missing terminal marker must not
 			// block spawn forever or be treated as confirmed readiness. Fall back
@@ -7859,6 +8486,7 @@ func restoreArgv(ctx context.Context, agent ports.Agent, id domain.SessionID, wo
 	ref := ports.SessionRef{
 		ID:            string(id),
 		WorkspacePath: workspacePath,
+		DataDir:       dataDir,
 		Metadata:      metadata,
 	}
 	cfg := ports.RestoreConfig{Session: ref, Kind: kind, DataDir: dataDir, SystemPrompt: systemPrompt, SystemPromptFile: systemPromptFile, Config: agentConfig, Permissions: agentConfig.Permissions, Env: env}
@@ -7987,6 +8615,7 @@ func (m *Manager) validateAgentBinary(argv []string) error {
 }
 
 func launchBinary(argv []string) (string, bool) {
+	argv = agentlaunch.UnwrapProviderEnv(argv)
 	if len(argv) == 0 {
 		return "", false
 	}

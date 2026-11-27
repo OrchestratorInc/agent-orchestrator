@@ -7,6 +7,8 @@ const fixtures = vi.hoisted(() => {
 		mac: { host: "mac.local", httpPort: "3011", muxPort: "3012", secure: false, password: "secret", hostId: "mac" },
 	};
 	return {
+		os: "ios" as "ios" | "android",
+		navigation: { setOptions: vi.fn() },
 		configs,
 		offline: new Set<string>(),
 		clearNotification: vi.fn(async () => {}),
@@ -37,13 +39,14 @@ const fixtures = vi.hoisted(() => {
 	};
 });
 
+vi.mock("./useHeaderOverlap", () => ({ useGlassBarInset: () => 0, useHeaderOverlap: () => 0 }));
 vi.mock("react-native", async () => {
 	const React = await import("react");
 	const host = (name: string) => ({ children, ...props }: { children?: React.ReactNode }) => React.createElement(name, props, children);
 	return {
 		ActivityIndicator: host("ActivityIndicator"),
 		Alert: { alert: fixtures.alert },
-		Platform: { OS: "ios" },
+		Platform: { get OS() { return fixtures.os; } },
 		Pressable: host("Pressable"),
 		RefreshControl: host("RefreshControl"),
 		ScrollView: host("ScrollView"),
@@ -80,6 +83,7 @@ vi.mock("expo-router", async () => {
 	return {
 		Stack: { Toolbar: Object.assign(host("StackToolbar"), { Button: host("StackToolbarButton"), View: host("StackToolbarView") }) },
 		useRouter: () => fixtures.router,
+		useNavigation: () => fixtures.navigation,
 		// Runs the effect while focused and its cleanup on blur, like react-navigation.
 		useFocusEffect: (effect: () => (() => void) | void) => {
 			const focused = React.useSyncExternalStore(fixtures.focus.subscribe, () => fixtures.focus.value);
@@ -390,10 +394,103 @@ describe("NotificationsScreen", () => {
 		expect(fixtures.getNotifications).toHaveBeenCalledWith(fixtures.configs.dev, expect.objectContaining({ cursor: "cursor-1" }));
 	});
 
+	// Android's bar is the chat's clear pill bar: a bare toolbar icon would
+	// float over a frost that thins to nearly clear by the bar's end.
+	it("puts Clear all on a pill of its own on Android", async () => {
+		fixtures.os = "android";
+		fixtures.navigation.setOptions.mockClear();
+		try {
+			await act(async () => { renderer = create(<NotificationsScreen />); });
+			expect(renderer!.root.findAll((node) => node.type === ("StackToolbarButton" as never))).toHaveLength(0);
+			const set = fixtures.navigation.setOptions.mock.calls.map(([options]) => options as { headerRight?: () => React.ReactElement<{ icon: string; label: string; onPress(): void }> });
+			const pill = set.filter((options) => options.headerRight).at(-1)!.headerRight!();
+			expect(pill.props).toMatchObject({ icon: "delete", label: "Clear all" });
+			act(() => pill.props.onPress());
+			expect(fixtures.alert).toHaveBeenCalledOnce();
+		} finally {
+			fixtures.os = "ios";
+		}
+	});
+
 	it("hides Clear all when there is nothing to clear", async () => {
 		fixtures.getNotifications.mockImplementation(async () => ({ notifications: [], nextCursor: undefined, unreadCount: 0 }));
 		await act(async () => { renderer = create(<NotificationsScreen />); });
 		expect(renderer!.root.findAll((node) => node.type === ("StackToolbarButton" as never) && node.props.accessibilityLabel === "Clear all")).toHaveLength(0);
+	});
+
+	// iOS's refresh control scrolls the list down by its spinner's height when
+	// `refreshing` turns on without a pull, and never scrolls it back, so each
+	// Retry dropped the page ~60 pt. Only a pull may turn the spinner on.
+	describe("pull-to-refresh spinner", () => {
+		const refreshing = () => renderer!.root.findByType("SectionList" as never).props.refreshControl.props.refreshing;
+		/** The next load's requests, held until `answer`. */
+		function holdNextLoad() {
+			const base = fixtures.getNotifications.getMockImplementation()!;
+			const held: (() => void)[] = [];
+			fixtures.getNotifications.mockImplementation((config: { hostId: "dev" | "mac" }) => new Promise((resolve) => { held.push(() => resolve(base(config))); }));
+			return { answer: async () => { fixtures.getNotifications.mockImplementation(base); await act(async () => { for (const release of held) release(); }); } };
+		}
+
+		it("retries offline machines with Retry's own spinner, never the pull-to-refresh one", async () => {
+			fixtures.offline.add("dev");
+			fixtures.offline.add("mac");
+			await act(async () => { renderer = create(<NotificationsScreen />); });
+			const offlineState = () => renderer!.root.findAll((node) => node.type === ("EmptyState" as never) && node.props.title === "Machines are offline");
+			// The empty state's action, which this file's EmptyState stand-in holds as a prop.
+			const retry = () => offlineState()[0].props.action as { props: { title: string; loading?: boolean; onPress(): void } };
+			expect(retry().props.title).toBe("Retry");
+			fixtures.offline.clear();
+			const load = holdNextLoad();
+			await act(async () => { retry().props.onPress(); });
+			expect(fixtures.getNotifications).toHaveBeenCalled();
+			expect(refreshing()).toBe(false);
+			expect(retry().props.loading).toBe(true);
+			await load.answer();
+			expect(refreshing()).toBe(false);
+			expect(offlineState()).toHaveLength(0);
+		});
+
+		// The newer load owns the indicators: a pull's load that a Retry cut off
+		// returns without clearing anything.
+		it("hands the spinner to Retry when Retry cuts off a pull", async () => {
+			fixtures.offline.add("dev");
+			fixtures.offline.add("mac");
+			await act(async () => { renderer = create(<NotificationsScreen />); });
+			const retry = () => renderer!.root.findAll((node) => node.type === ("EmptyState" as never) && node.props.title === "Machines are offline")[0].props.action as { props: { loading?: boolean; onPress(): void } };
+			fixtures.offline.clear();
+			const load = holdNextLoad();
+			await act(async () => { void renderer!.root.findByType("SectionList" as never).props.refreshControl.props.onRefresh(); });
+			expect(refreshing()).toBe(true);
+			await act(async () => { retry().props.onPress(); });
+			expect(refreshing()).toBe(false);
+			expect(retry().props.loading).toBe(true);
+			await load.answer();
+			expect(refreshing()).toBe(false);
+		});
+
+		it("reloads after Clear all without turning on the pull-to-refresh spinner", async () => {
+			await act(async () => { renderer = create(<NotificationsScreen />); });
+			const clearAll = renderer!.root.find((node) => node.type === ("StackToolbarButton" as never) && node.props.accessibilityLabel === "Clear all");
+			act(() => { clearAll.props.onPress(); });
+			const [, , buttons] = fixtures.alert.mock.calls[0] as [string, string, { text: string; onPress?: () => void }[]];
+			const load = holdNextLoad();
+			// The mount fetched already: only calls after Clear all prove its reload ran.
+			const fetchesBefore = fixtures.getNotifications.mock.calls.length;
+			await act(async () => { buttons.find((button) => button.text === "Clear all")!.onPress!(); });
+			expect(fixtures.getNotifications.mock.calls.length).toBeGreaterThan(fetchesBefore);
+			expect(refreshing()).toBe(false);
+			await load.answer();
+			expect(refreshing()).toBe(false);
+		});
+
+		it("shows the pull-to-refresh spinner for a pull until the refresh lands", async () => {
+			await act(async () => { renderer = create(<NotificationsScreen />); });
+			const load = holdNextLoad();
+			await act(async () => { void renderer!.root.findByType("SectionList" as never).props.refreshControl.props.onRefresh(); });
+			expect(refreshing()).toBe(true);
+			await load.answer();
+			expect(refreshing()).toBe(false);
+		});
 	});
 
 	// Through openPage, like every page this one opens.

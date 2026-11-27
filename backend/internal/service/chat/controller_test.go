@@ -3192,6 +3192,8 @@ type harness struct {
 	accountRechecks atomic.Int32
 	renders         *attachmentstore.Store
 	rendersDir      string
+	// workspace is the directory the controller was started in.
+	workspace string
 	// reconciled lists the sessions whose output type a save asked to update;
 	// reconcileErr is what that update returns.
 	reconciled   []domain.SessionID
@@ -3327,6 +3329,7 @@ func newHarnessInWorkspace(
 		},
 	})
 
+	h.workspace = workspace
 	ctrl, err := svc.Start(context.Background(), chatsvc.StartConfig{
 		SessionID:     testSession,
 		ProjectID:     testProject,
@@ -5018,7 +5021,9 @@ func TestChatHandoffInterruptAbortAfterPreflightFailureResumesFencedQueue(t *tes
 	// queue; there may be no later completion event to trigger this drain.
 	h.svc.AbortChatHandoff(testSession)
 	h.awaitSnapshot(t, func(s store.ConversationSnapshot) bool {
-		return turnStateByText(t, s)["queued work survives preflight"] == domain.TurnStateRunning
+		// The asynchronous drain reserves the running turn before sending it.
+		return turnStateByText(t, s)["queued work survives preflight"] == domain.TurnStateRunning &&
+			len(h.conv.sentTexts()) >= 2
 	})
 	if got := h.conv.sentTexts(); len(got) != 2 || got[1] != "queued work survives preflight" {
 		t.Fatalf("provider received %v after abort, want preserved queue to resume", got)
@@ -5139,13 +5144,13 @@ func (s *failFirstQueueCancellationStore) CancelAllQueuedTurns(
 	ctx context.Context,
 	conversationID string,
 	now time.Time,
-) error {
+) (int, error) {
 	s.mu.Lock()
 	s.calls++
 	call := s.calls
 	s.mu.Unlock()
 	if call == 1 {
-		return errors.New("injected queue cancellation failure")
+		return 0, errors.New("injected queue cancellation failure")
 	}
 	return s.Store.CancelAllQueuedTurns(ctx, conversationID, now)
 }
@@ -7476,5 +7481,38 @@ func TestStartRejectsProviderPermissionBeforeDriverLaunch(t *testing.T) {
 	}
 	if launched {
 		t.Fatal("unsupported permission reached provider launch")
+	}
+}
+
+func TestStartTurnsOpenCodeCompactionOffInThePreparedEnvironment(t *testing.T) {
+	st := openStore(t)
+	ctx := context.Background()
+	now := time.Date(2026, 11, 24, 12, 0, 0, 0, time.UTC)
+	conversation, err := st.CreateConversation(ctx, "opencode-compaction-off", domain.ConversationScopeProject, testProject, testSession, now)
+	if err != nil {
+		t.Fatalf("CreateConversation: %v", err)
+	}
+	if err := st.SetConversationSettings(ctx, conversation.ID, domain.ConversationSettings{AutoCompactWindow: domain.AutoCompactOff}, now); err != nil {
+		t.Fatalf("SetConversationSettings: %v", err)
+	}
+	var started ports.ChatStartConfig
+	svc := chatsvc.New(chatsvc.Options{
+		Store: st, Sessions: st,
+		Drivers: fakeRegistry{driver: fakeDriver{conv: newFakeConversation(), startCfg: &started}},
+		Log:     slog.New(slog.DiscardHandler),
+		NewID:   func() string { return "opencode-compaction-off-start" },
+	})
+	t.Cleanup(func() { _ = svc.Stop(context.Background(), testSession) })
+	// A persistent host launches with the environment prepared here, not the one passed to Start.
+	if _, err := svc.Start(ctx, chatsvc.StartConfig{
+		SessionID: testSession, ProjectID: testProject, Harness: domain.HarnessOpenCodeV2, WorkspacePath: t.TempDir(),
+		PrepareControllerEnv: func(context.Context, domain.SessionControllerOwner) (map[string]string, error) {
+			return map[string]string{"OPENCODE_CONFIG_CONTENT": `{"model":"a/b"}`}, nil
+		},
+	}); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	if got, want := started.Env["OPENCODE_CONFIG_CONTENT"], `{"compaction":{"auto":false},"model":"a/b"}`; got != want {
+		t.Fatalf("OpenCode config = %s, want %s", got, want)
 	}
 }

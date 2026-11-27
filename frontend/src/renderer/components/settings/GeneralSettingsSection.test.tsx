@@ -6,10 +6,12 @@ import type { Settings } from "../../hooks/useSettings";
 import * as platform from "../../lib/platform";
 import { aoBridge } from "../../lib/bridge";
 import { DEFAULT_UI_SETTINGS } from "../../../shared/ui-locale";
+import { useUiStore } from "../../stores/ui-store";
 
-const { settingsMock, updateRetentionMock } = vi.hoisted(() => ({
+const { settingsMock, updateRetentionMock, updateCommitAttributionMock } = vi.hoisted(() => ({
 	settingsMock: vi.fn(),
 	updateRetentionMock: vi.fn(),
+	updateCommitAttributionMock: vi.fn(),
 }));
 
 const idle = { update: vi.fn(), saving: false, error: undefined };
@@ -18,6 +20,7 @@ vi.mock("../../hooks/useSettings", () => ({
 	useUpdateSessionInterface: () => idle,
 	useUpdateVersionRefresh: () => idle,
 	useUpdateSessionRetention: () => ({ update: updateRetentionMock, saving: false, error: undefined }),
+	useUpdateCommitAttribution: () => ({ update: updateCommitAttributionMock, saving: false, error: undefined }),
 }));
 
 vi.mock("../../hooks/useEditorHandoff", () => ({
@@ -27,6 +30,7 @@ vi.mock("../../hooks/useEditorHandoff", () => ({
 
 // The real rows read the cloud gate and the CLI link; this file covers retention.
 vi.mock("./DefaultCloudSandboxRow", () => ({ DefaultCloudSandboxSection: () => null }));
+vi.mock("./DataRetentionSection", () => ({ DataRetentionSection: () => null }));
 vi.mock("./CliLinkSettingsRow", () => ({ CliLinkSettings: () => null }));
 
 import { GeneralSettingsSection } from "./GeneralSettingsSection";
@@ -101,5 +105,25 @@ describe("Linux Alt menu setting", () => {
 		await userEvent.click(toggle);
 		expect(set).toHaveBeenCalledWith({ altMenuEnabled: false });
 		get.mockRestore(); set.mockRestore(); vi.restoreAllMocks();
+	});
+});
+
+describe("Orchestrator attribution beta switch", () => {
+	it("only appears in Developer Mode", () => {
+		settingsMock.mockReturnValue(settings({}));
+		useUiStore.setState({ developerMode: false });
+		renderSection();
+		expect(screen.queryByRole("switch", { name: "Orchestrator attribution (beta)" })).not.toBeInTheDocument();
+	});
+
+	it("reflects the daemon setting and saves a change to it", async () => {
+		updateCommitAttributionMock.mockReset();
+		settingsMock.mockReturnValue(settings({ commitAttribution: false }));
+		useUiStore.setState({ developerMode: true });
+		renderSection();
+		const toggle = screen.getByRole("switch", { name: "Orchestrator attribution (beta)" });
+		expect(toggle).not.toBeChecked();
+		await userEvent.click(toggle);
+		expect(updateCommitAttributionMock).toHaveBeenCalledWith(true);
 	});
 });

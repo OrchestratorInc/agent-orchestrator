@@ -3,13 +3,14 @@ import { fillMaxWidth } from "@expo/ui/jetpack-compose/modifiers";
 import { ScrollView, StyleSheet, Text, View } from "react-native";
 import { KeyboardAvoidingView } from "react-native-keyboard-controller";
 import { ACCOUNT_MANAGED_NOTE } from "./environmentView";
-import { FormPasswordField, FormTextField, FormToggle } from "./formFields";
+import { FormPasswordField, FormTextField } from "./formFields";
 import type { Host as PairedHost } from "./hosts";
 import { MachineSymbolPicker } from "./MachineSymbolPicker";
 import type { Theme } from "./theme";
 import { useThemeState, useThemedStyles } from "./ThemeProvider";
 import { space, type } from "./tokens";
 import type { MachineEditor } from "./useMachineEditor";
+import { useGlassBarInset } from "./useHeaderOverlap";
 
 export type MachineEditorFormProps = { host: PairedHost; editor: MachineEditor };
 
@@ -23,10 +24,11 @@ export type MachineEditorFormProps = { host: PairedHost; editor: MachineEditor }
 export function MachineEditorForm({ host, editor }: MachineEditorFormProps) {
 	const { scheme } = useThemeState();
 	const styles = useThemedStyles(makeStyles);
+	const barInset = useGlassBarInset();
 	const { draft, saving, failure } = editor;
 	return (
 		<KeyboardAvoidingView behavior="padding" automaticOffset style={styles.screen}>
-			<ScrollView style={styles.scroll} contentContainerStyle={styles.content} keyboardShouldPersistTaps="handled">
+			<ScrollView style={styles.scroll} contentContainerStyle={[styles.content, barInset > 0 ? { paddingTop: space.lg + barInset } : null]} keyboardShouldPersistTaps="handled">
 				<Host matchContents={{ vertical: true }} colorScheme={scheme}>
 					<FormTextField
 						label="Name"
@@ -84,13 +86,6 @@ export function MachineEditorForm({ host, editor }: MachineEditorFormProps) {
 									editable={!saving}
 									error={failure?.field === "password" ? failure.message : undefined}
 									testID={`environment-password-${host.id}`}
-								/>
-								<FormToggle
-									label="Use TLS"
-									value={Boolean(draft.config.secure)}
-									onValueChange={editor.setSecure}
-									disabled={saving}
-									testID={`environment-tls-${host.id}`}
 								/>
 							</Column>
 						</Host>

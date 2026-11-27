@@ -270,6 +270,11 @@ export type CloudCpCue = Cue;
 export type CloudCpCueDefinition = CueDefinitionInput;
 export type CloudCpInvokeCueResult = InvokeCueResult;
 export type CloudCpProjectRoleConfig = ProjectRoleConfig;
+/**
+ * Where a Coder project's orchestrator runs (config.orchestratorSandboxProvider):
+ * "freestyle", the default and the same as absent, or "coder".
+ */
+export type CloudCpOrchestratorSandboxProvider = NonNullable<ProjectConfig["orchestratorSandboxProvider"]>;
 export type CloudCpProjectReviewer = ProjectReviewer;
 /**
  * PATCH /orgs/{orgId}/projects/{projectId}/settings. `config.coder` accepts
@@ -479,6 +484,18 @@ export interface CloudCpCreateSessionRequest {
 	 * field (see createCloudSession).
 	 */
 	defaultInterfaceMode?: CloudCpInterfaceMode;
+	/**
+	 * Branch to continue: one already on the repository is checked out from its
+	 * commits. Only sent when offering.features lists session.branch; an older
+	 * control plane rejects the whole create.
+	 */
+	branch?: string;
+	/**
+	 * A conversation uploaded to transcript-imports/{id}, which the session
+	 * resumes instead of starting from prompt. Only sent when
+	 * offering.features lists session.transcriptImport.
+	 */
+	transcriptImportId?: string;
 }
 
 export interface CloudCpSessionRepo {
@@ -706,6 +723,12 @@ export interface CloudCpSession {
 	 */
 	coderWorkspaceUrl?: string;
 	isTerminated: boolean;
+	/**
+	 * The session moved to another computer: the delete that finished its move
+	 * ended it, and it continues there, so it cannot be restored here. Absent
+	 * from an older control plane.
+	 */
+	movedAway?: boolean;
 	autoInjectCI?: boolean;
 	autoInjectReview?: boolean;
 	terminateOnPrMerge?: boolean;
@@ -813,6 +836,42 @@ export interface CloudCpChatSearchHit {
 /** GET /orgs/{orgId}/chat-search */
 export interface CloudCpChatSearchResponse {
 	results: CloudCpChatSearchHit[];
+}
+
+/**
+ * A link someone else published and shared with the signed-in person
+ * (listSharedArtifacts), by their email, a team they are in, or a workspace
+ * they are a member of. It names no owner.
+ */
+export interface CloudCpSharedArtifact {
+	linkId: string;
+	name: string;
+	contentType: string;
+	size: number;
+	updatedAt: string;
+	access: "restricted" | "anyone";
+	viewerUrl?: string;
+	/** The first that holds: direct, shared with their email; team, with a team they are in; workspace, with their workspace. */
+	via: "direct" | "team" | "workspace";
+	/** Every team of theirs the link is shared with; empty when none. */
+	teams: { id: string; name: string }[];
+	/** Every workspace of theirs the link is shared with; empty when none (and on an older control plane). */
+	workspaces?: { id: string; name: string }[];
+	sharedAt: string;
+}
+
+/** What viewArtifactShare returns for a link that opens for the signed-in person. */
+export interface CloudCpArtifactShareView {
+	linkId: string;
+	name: string;
+	contentType: string;
+	size: number;
+	updatedAt: string;
+	/** Where the file is served; a private link's carries a short-lived view token. */
+	contentUrl: string;
+	access?: "restricted" | "anyone";
+	/** The link's viewer page; absent where the control plane has no viewer. */
+	viewerUrl?: string;
 }
 
 /** POST /orgs/{orgId}/sessions/{sessionId}/artifacts/access */
@@ -1405,10 +1464,100 @@ export interface CloudCpHarnessVersionsResponse {
 	editable: boolean;
 	agents: CloudCpHarnessVersion[];
 }
+
+// ---------------------------------------------------------------------------
+// Data retention (GET/PUT /me/data-retention)
+// ---------------------------------------------------------------------------
+
+/**
+ * How long the signed-in user's Cloud sessions and their conversation content
+ * are kept: every session they started, in any organization, team sessions
+ * included. A session older than `retentionDays`, counted from its creation,
+ * has its content deleted once it has ended (a running session is never ended
+ * for it). Each user sets their own.
+ */
+export interface CloudCpDataRetention {
+	retentionDays: number;
+	/** The deployment's default period; always one of `options`. */
+	defaultDays: number;
+	/**
+	 * True while the user has no period of their own and follows `defaultDays`.
+	 * Absent from a control plane that predates going back to the default.
+	 */
+	followsDefault?: boolean;
+	/** The periods the user may choose, in days, ascending. */
+	options: number[];
+	/** When the user last chose the period; null while they never chose one. */
+	updatedAt: string | null;
+}
+
+/** PUT /me/data-retention. */
+export interface CloudCpPutDataRetentionRequest {
+	/** One of `options`, or null to follow the deployment's default again. */
+	retentionDays: number | null;
+	/** Only count the sessions the period would delete; change nothing. */
+	dryRun?: boolean;
+}
+
+/** The retention as stored (unchanged by a dry run) and what the requested period deletes. */
+export interface CloudCpDataRetentionChange extends CloudCpDataRetention {
+	/** The user's sessions older than the requested period whose content is not deleted yet. */
+	sessionsToDelete: number;
+}
 export interface CloudCpListSessionsQuery extends CloudCpListQuery {
 	/** Restrict the listing to one project. */
 	projectId?: string;
 }
+
+/** GET /orgs/{orgId}/sessions/{sessionId}/move/preview: what move/export would push now. */
+export interface CloudCpMovePreviewResponse {
+	branch: string;
+	/** untracked marks a file git did not track in the sandbox; absent from a control plane that does not say. */
+	changes: { path: string; status: "added" | "modified" | "deleted"; untracked?: boolean }[];
+	/** The Claude Code conversation the move would carry; bytes count its sidecar folder too. */
+	transcript?: { bytes: number; subagents?: number };
+}
+
+/** POST /orgs/{orgId}/sessions/{sessionId}/move/export: the pushed branch, in the shape an AO daemon's move/import takes. */
+export interface CloudCpMoveExportResponse {
+	/** The export this answers. */
+	moveId?: string;
+	manifest: {
+		sourceSessionId: string;
+		sourceLabel: string;
+		repoKey: string;
+		branch: string;
+		tip: string;
+		wip: boolean;
+		harness: string;
+		model?: string;
+		displayName?: string;
+		/** The session's approval mode (in Chat, its last turn's); absent from a control plane that does not carry it. */
+		permissions?: "default" | "accept-edits" | "auto" | "bypass-permissions";
+		/** The interface the session was in; absent from an older control plane. */
+		interface?: "chat" | "terminal";
+		/** The GitHub issue intake started the session for, as owner/repo#N. */
+		issueId?: string;
+		/** URLs of the session's open pull requests. */
+		pullRequests?: string[];
+	};
+	handoffNote: string;
+	/** Base64 gzip, as move/import takes it. Absent for another agent or when none was captured. */
+	transcript?: { agentSessionId: string; projectDir: string; transcriptGzip: string; sidecarGzip?: string };
+}
+
+/** A move export AO Cloud's worker is still on (202): ask again with moveId after retryAfterMs. */
+export interface CloudCpMoveExportRunning {
+	status: "running";
+	moveId: string;
+	/** The agent is stopped and the branch may already be pushed. */
+	branchMayBePushed?: boolean;
+	message?: string;
+	retryAfterMs?: number;
+}
+
+/** What move/export, or its GET, answers: the move, or the export still running. */
+export type CloudCpMoveExportResult = CloudCpMoveExportResponse | CloudCpMoveExportRunning;
 
 /** DELETE /orgs/{orgId}/sessions/{sessionId} responds 202: teardown is reconciler-owned. */
 export interface CloudCpSessionDeletedResponse {

@@ -13,51 +13,9 @@ import (
 	"time"
 
 	"github.com/spf13/cobra"
+
+	"github.com/aoagents/agent-orchestrator/backend/internal/mcpserver"
 )
-
-const (
-	maxRenderFileBytes  = 1 << 20
-	defaultRenderHeight = 400
-	defaultRenderWidth  = 720
-)
-
-type renderAPIRequest struct {
-	HTML     string `json:"html"`
-	Title    string `json:"title"`
-	Height   int    `json:"height"`
-	Artifact bool   `json:"artifact,omitempty"`
-}
-
-type renderAPIResponse struct {
-	RenderID      string `json:"renderId"`
-	ActivityID    string `json:"activityId"`
-	Path          string `json:"path"`
-	ArtifactPath  string `json:"artifactPath"`
-	ArtifactError string `json:"artifactError"`
-}
-
-type renderCheckAPIRequest struct {
-	HTML  string `json:"html"`
-	Width int    `json:"width"`
-}
-
-type renderCheckAPIResponse struct {
-	Screenshot struct {
-		Data   string `json:"data"`
-		Width  int    `json:"width"`
-		Height int    `json:"height"`
-	} `json:"screenshot"`
-	ContentHeight   int `json:"contentHeight"`
-	ConsoleMessages []struct {
-		Level string `json:"level"`
-		Text  string `json:"text"`
-	} `json:"consoleMessages"`
-	Network string `json:"network"`
-}
-
-// renderCheckOfflineNote tells the agent why remote resources did not load
-// in a check that ran without network.
-const renderCheckOfflineNote = "The check ran without network access, as your sandbox has none. Remote resources did not load."
 
 func newRenderCommand(ctx *commandContext) *cobra.Command {
 	var title string
@@ -102,10 +60,10 @@ func newRenderCommand(ctx *commandContext) *cobra.Command {
 		},
 	}
 	cmd.Flags().StringVar(&title, "title", "", "short name for the page (required unless --check)")
-	cmd.Flags().IntVar(&height, "height", defaultRenderHeight, "first-paint frame height in CSS pixels, 80-2000; the frame then fits the page")
+	cmd.Flags().IntVar(&height, "height", mcpserver.DefaultRenderHeight, "first-paint frame height in CSS pixels, 80-2000; the frame then fits the page")
 	cmd.Flags().BoolVar(&check, "check", false, "screenshot the page in the Orchestrator desktop app instead of publishing it")
 	cmd.Flags().BoolVar(&artifact, "artifact", false, "also keep the page as a session artifact; only when the user asks to keep it")
-	cmd.Flags().IntVar(&width, "width", defaultRenderWidth, "with --check: viewport width in CSS pixels, 240-1600; use 390 for phones")
+	cmd.Flags().IntVar(&width, "width", mcpserver.DefaultRenderWidth, "with --check: viewport width in CSS pixels, 240-1600; use 390 for phones")
 	cmd.Flags().StringVar(&out, "out", "", "with --check: PNG path to write (default: a new file in the temp directory)")
 	return cmd
 }
@@ -123,8 +81,8 @@ func readRenderFile(file string) (string, error) {
 	if err != nil {
 		return "", usageError{fmt.Errorf("read %s: %w", file, err)}
 	}
-	if info.Size() > maxRenderFileBytes {
-		return "", usageError{fmt.Errorf("%s is %d bytes; ao render accepts at most %d", file, info.Size(), maxRenderFileBytes)}
+	if info.Size() > mcpserver.MaxRenderFileBytes {
+		return "", usageError{fmt.Errorf("%s is %d bytes; ao render accepts at most %d", file, info.Size(), mcpserver.MaxRenderFileBytes)}
 	}
 	html, err := os.ReadFile(file)
 	if err != nil {
@@ -146,10 +104,10 @@ func (c *commandContext) publishRender(cmd *cobra.Command, file, title string, h
 	if err != nil {
 		return err
 	}
-	if _, err := fmt.Fprintln(cmd.OutOrStdout(), renderShownText(resp.RenderID)); err != nil {
+	if _, err := fmt.Fprintln(cmd.OutOrStdout(), mcpserver.ShownText(resp.RenderID)); err != nil {
 		return err
 	}
-	line := renderArtifactLine(resp)
+	line := mcpserver.ArtifactLine(resp)
 	if line == "" {
 		return nil
 	}
@@ -163,55 +121,30 @@ func (c *commandContext) publishRender(cmd *cobra.Command, file, title string, h
 
 // postRender inlines a page's local images and shows it in the session's
 // thread. ao render and the html_render MCP tool both publish through it.
-func (c *commandContext) postRender(ctx context.Context, sessionID, html, title string, height int, artifact bool) (renderAPIResponse, error) {
-	var resp renderAPIResponse
-	html, missing, err := inlineLocalImages(html)
+func (c *commandContext) postRender(ctx context.Context, sessionID, html, title string, height int, artifact bool) (mcpserver.RenderResponse, error) {
+	var resp mcpserver.RenderResponse
+	html, missing, err := mcpserver.InlineLocalImages(html)
 	if err != nil {
 		return resp, usageError{err}
 	}
 	if len(missing) > 0 {
-		return resp, usageError{missingImagesError(missing)}
+		return resp, usageError{mcpserver.MissingImagesError(missing)}
 	}
 	path := "sessions/" + url.PathEscape(sessionID) + "/renders"
-	err = c.postJSON(ctx, path, renderAPIRequest{HTML: html, Title: title, Height: height, Artifact: artifact}, &resp)
+	err = c.postJSON(ctx, path, mcpserver.RenderRequest{HTML: html, Title: title, Height: height, Artifact: artifact}, &resp)
 	return resp, err
-}
-
-func renderShownText(renderID string) string {
-	return fmt.Sprintf("Shown above your reply (render %s). Do not describe the page; add only what it does not say.", renderID)
-}
-
-// renderArtifactLine reports where a publish kept the page as an artifact, or
-// why it did not; it is empty when no artifact was asked for. A kept page is not
-// registered, and in a session that registered anything else it is not listed,
-// so the line gives the agent the command while it is still acting on the render.
-func renderArtifactLine(resp renderAPIResponse) string {
-	switch {
-	case resp.ArtifactPath != "":
-		return "saved as artifact: " + resp.ArtifactPath + "\nto list it as an artifact, run: ao artifact add " + quoteShellArg(resp.ArtifactPath)
-	case resp.ArtifactError != "":
-		return "warning: not saved as artifact: " + resp.ArtifactError
-	}
-	return ""
-}
-
-// quoteShellArg single-quotes value for a POSIX shell. The path it quotes holds
-// the page title, which can repeat text from a document, and the agent runs what
-// it is given, so double quotes would leave "$(...)" and backticks live.
-func quoteShellArg(value string) string {
-	return "'" + strings.ReplaceAll(value, "'", `'\''`) + "'"
 }
 
 // postRenderCheck inlines a page's local images and has the desktop app
 // screenshot it. A check shows what an unreadable image does to the page
 // instead of refusing it, so missing lists those images.
-func (c *commandContext) postRenderCheck(ctx context.Context, sessionID, html string, width int) (resp renderCheckAPIResponse, missing []string, err error) {
-	html, missing, err = inlineLocalImages(html)
+func (c *commandContext) postRenderCheck(ctx context.Context, sessionID, html string, width int) (resp mcpserver.RenderCheckResponse, missing []string, err error) {
+	html, missing, err = mcpserver.InlineLocalImages(html)
 	if err != nil {
 		return resp, nil, usageError{err}
 	}
 	path := "sessions/" + url.PathEscape(sessionID) + "/renders/check"
-	err = c.postJSON(ctx, path, renderCheckAPIRequest{HTML: html, Width: width}, &resp)
+	err = c.postJSON(ctx, path, mcpserver.RenderCheckRequest{HTML: html, Width: width}, &resp)
 	return resp, missing, err
 }
 
@@ -243,7 +176,7 @@ func (c *commandContext) checkRender(cmd *cobra.Command, file string, width int,
 		return err
 	}
 	if resp.Network == "none" {
-		if _, err := fmt.Fprintln(w, renderCheckOfflineNote); err != nil {
+		if _, err := fmt.Fprintln(w, mcpserver.CheckOfflineNote); err != nil {
 			return err
 		}
 	}

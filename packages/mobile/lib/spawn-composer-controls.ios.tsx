@@ -1,5 +1,4 @@
 import { Host } from "@expo/ui";
-import { Asset } from "expo-asset";
 import { Button, Divider, HStack, Image, Label, Menu, RNHostView, Section, Spacer, Text, VStack } from "@expo/ui/swift-ui";
 import {
 	accessibilityIdentifier,
@@ -15,14 +14,14 @@ import {
 	tint,
 	truncationMode,
 } from "@expo/ui/swift-ui/modifiers";
-import { useEffect, useMemo, useState, type ReactNode } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import { StyleSheet, View } from "react-native";
-import { hasLogo, logoKey } from "./harnessLogo";
-import { logoFor } from "./harnessLogoAssets";
+import { logoKey } from "./harnessLogo";
+import { hasMenuIcon } from "./harnessMenuIcons";
 import { EffortGaugeButton } from "./effort-gauge";
 import { EffortSliderOverlay } from "./effort-slider";
 import { useEffortSliderOpen } from "./useEffortSlider";
-import { ApprovalMenu, Choice, ModelCapsuleLabel, useTriggerModifiers } from "./model-controls.ios";
+import { ApprovalMenu, Choice, controlsRowTypeSize, ModelCapsuleLabel, useTriggerModifiers } from "./model-controls.ios";
 import { SpawnComposer } from "./spawn-composer";
 import type { SpawnComposerControlsProps, SpawnComposerOption } from "./spawn-composer-controls.types";
 import { defaultModelChoice, listedModels } from "./spawnModel";
@@ -69,6 +68,7 @@ export function SpawnComposerControls({
 	voice,
 	prompt,
 	onChangePrompt,
+	onLoadSkills,
 	placeholder,
 	attachments,
 	onSpawn,
@@ -174,6 +174,7 @@ export function SpawnComposerControls({
 					prompt={prompt}
 					attachments={attachments}
 					onChangePrompt={onChangePrompt}
+					onLoadSkills={onLoadSkills}
 					placeholder={placeholder}
 					onChoosePhoto={onChoosePhoto}
 					onChooseFile={onChooseFile}
@@ -187,7 +188,7 @@ export function SpawnComposerControls({
 						// and its effort at the start beside attach, how freely at the
 						// end beside the round button; the space between gives way first.
 						<Host ignoreSafeArea="all" colorScheme={scheme} style={styles.settingsHost}>
-							<HStack spacing={space.none}>
+							<HStack spacing={space.none} modifiers={[controlsRowTypeSize()]}>
 								{/* The harness's mark and the model it runs (the harness's
 								    name only when the catalog names no default). Each agent in
 								    its menu opens one level down onto its models, so this is
@@ -276,37 +277,19 @@ const styles = StyleSheet.create({
 
 /**
  * A harness's mark in its own colours, from the app's asset catalog: a 20pt
- * image set with its chip baked in where it needs one (see
- * scripts/generate-harness-menu-icons.mjs). Drawn by name, it keeps its size
+ * image set whose dark appearance is the brand's dark mark, where it ships one
+ * (see scripts/sync-harness-logos.mjs). Drawn by name, it keeps its size
  * wherever SwiftUI puts it, an open submenu's header included, which ignores
- * any frame. `uri` is the bundled PNG a caller may still pass; the asset wins.
+ * any frame. Only marks the installed binary's catalog has are drawn by name
+ * (see harnessMenuIcons.ts); a missing asset would draw an empty slot.
  */
-export function HarnessImage({ harness }: { uri?: string; harness: string }) {
+export function HarnessImage({ harness }: { harness: string }) {
 	// One slot for every harness, so switching to one without a mark (drawn as
 	// the terminal symbol) never resizes the row it sits in.
 	const slot = frame({ width: HARNESS_MARK, height: HARNESS_MARK });
-	if (!hasLogo(harness)) return <Image systemName="terminal" modifiers={[font({ textStyle: "subheadline" }), slot]} />;
+	if (!hasMenuIcon(harness)) return <Image systemName="terminal" modifiers={[font({ textStyle: "subheadline" }), slot]} />;
 	return <Image assetName={`HarnessLogo-${logoKey(harness)}`} modifiers={[slot]} />;
 }
 
 /** The marks' image sets are drawn at this many points. */
 const HARNESS_MARK = 20;
-
-export function useHarnessLogoUris(agents: readonly SpawnComposerOption[]) {
-	const ids = useMemo(() => agents.map((agent) => agent.id), [agents]);
-	const [uris, setUris] = useState<Record<string, string>>({});
-	useEffect(() => {
-		let cancelled = false;
-		void Promise.all(ids.map(async (id) => {
-			const source = logoFor(id);
-			if (!source) return [id, ""] as const;
-			const asset = Asset.fromModule(source);
-			await asset.downloadAsync();
-			return [id, asset.localUri ?? asset.uri] as const;
-		})).then((entries) => {
-			if (!cancelled) setUris(Object.fromEntries(entries.filter(([, uri]) => Boolean(uri))));
-		});
-		return () => { cancelled = true; };
-	}, [ids]);
-	return uris;
-}

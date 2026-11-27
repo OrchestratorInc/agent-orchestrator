@@ -1,5 +1,6 @@
 import { aoBridge } from "./bridge";
 import { applyDocumentTheme, applyDocumentThemeStyle, readStoredThemePreference, readStoredThemeStyle, resolveTheme } from "./theme";
+import { applyNewDesktopUi, readStoredNewDesktopUi } from "./new-desktop-ui";
 import { applyWindowTranslucency, readStoredWindowTranslucency } from "./window-translucency";
 
 // Runs as the first main.tsx import, before styles.css, so data-theme and
@@ -13,4 +14,5 @@ const themePreference = readStoredThemePreference();
 applyDocumentTheme(resolveTheme(themePreference));
 applyDocumentThemeStyle(readStoredThemeStyle());
 applyWindowTranslucency(readStoredWindowTranslucency());
+applyNewDesktopUi(readStoredNewDesktopUi());
 void aoBridge.theme?.set(themePreference)?.catch(() => undefined);

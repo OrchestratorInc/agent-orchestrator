@@ -61,6 +61,7 @@ func TestTimestampObsoleteAuditSidecarDoesNotBlockOpen(t *testing.T) {
 
 type repairScanCounts struct {
 	connections, writer, reader               atomic.Int64
+	excludeTable                              string
 	expireAfterBatch, sessionBatch, committed atomic.Bool
 	fenceRows                                 atomic.Int64
 	checkpointOutcome                         string
@@ -120,7 +121,8 @@ func (c repairScanConn) QueryContext(ctx context.Context, query string, args []d
 		c.counts.fenceRows.Store(n)
 		return nil, context.DeadlineExceeded
 	}
-	if strings.Contains(query, "GLOB") && (strings.HasPrefix(query, "SELECT rowid,") || strings.HasPrefix(query, "SELECT min(rowid),max(rowid)")) {
+	if strings.Contains(query, "GLOB") && (strings.HasPrefix(query, "SELECT rowid,") || strings.HasPrefix(query, "SELECT min(rowid),max(rowid)")) &&
+		(c.counts.excludeTable == "" || !strings.Contains(query, " FROM "+quoteIdentifier(c.counts.excludeTable)+" ")) {
 		if c.writer {
 			c.counts.writer.Add(1)
 		} else {

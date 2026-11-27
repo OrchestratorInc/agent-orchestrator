@@ -8,13 +8,13 @@ package fx
 import (
 	"context"
 	"os"
-	"path/filepath"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/agentbase"
+	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/nativeconfig"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
@@ -112,15 +112,7 @@ func (p *Plugin) NativeSessionConfigDir(ctx context.Context, env map[string]stri
 	if err := ctx.Err(); err != nil {
 		return "", err
 	}
-	home := strings.TrimSpace(env["HOME"])
-	if home == "" {
-		var err error
-		home, err = os.UserHomeDir()
-		if err != nil {
-			return "", err
-		}
-	}
-	return filepath.Join(home, ".fx"), nil
+	return nativeconfig.FXHome(env, "")
 }
 
 // GetAgentHooks is intentionally a no-op. fx lifecycle integration uses its
@@ -143,7 +135,29 @@ func (p *Plugin) GetRestoreCommand(ctx context.Context, cfg ports.RestoreConfig)
 		return nil, false, err
 	}
 	cmd := commandWithOverrides(binary, cfg.Config, cfg.Permissions)
-	return append(cmd, "--resume", agentSessionID), true, nil
+	cmd = append(cmd, "--resume", agentSessionID)
+	if cfg.Session.Metadata[ports.MetadataKeyImportSourceNativeID] != "" {
+		cmd, err = fxHomeCommand(cmd, cfg.Env)
+		if err != nil {
+			return nil, false, err
+		}
+	}
+	return cmd, true, nil
+}
+
+func fxHomeCommand(cmd []string, env map[string]string) ([]string, error) {
+	value, explicit := env["FX_HOME"]
+	if !explicit {
+		value = os.Getenv("FX_HOME")
+	}
+	if value == "" {
+		return cmd, nil
+	}
+	root, err := nativeconfig.FXHome(env, "")
+	if err != nil {
+		return nil, err
+	}
+	return append([]string{"env", "FX_HOME=" + root}, cmd...), nil
 }
 
 // SessionInfo surfaces metadata reported by fx's lifecycle integration.

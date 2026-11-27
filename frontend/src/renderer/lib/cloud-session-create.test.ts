@@ -1,7 +1,7 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { CloudCpError } from "./cloud-cp";
 import type { CloudCpCreateSessionRequest } from "./cloud-cp";
-import { CloudTaskFilesNeedChatError, CloudTaskFilesUncertainError, CloudTaskFilesUndeliveredError, cloudDefaultInterfaceMode, createCloudChatSessionWithFiles, createCloudSession } from "./cloud-session-create";
+import { CloudTaskFilesNeedChatError, CloudTaskFilesUncertainError, CloudTaskFilesUndeliveredError, cloudDefaultInterfaceMode, createCloudChatAgentWithFiles, createCloudChatSessionWithFiles, createCloudSession } from "./cloud-session-create";
 
 const body: CloudCpCreateSessionRequest = {
 	projectId: "project-1",
@@ -65,6 +65,7 @@ describe("createCloudSession", () => {
 });
 
 describe("createCloudChatSessionWithFiles", () => {
+	afterEach(() => window.localStorage.clear());
 	const chatBody = { ...body, interfaceMode: "chat" as const, model: "opus", reasoningEffort: "high", approvalMode: "auto" as const };
 	const files = [{ mimeType: "image/png", data: "aGk=", name: "screen.png" }, { mimeType: "image/jpeg", data: "aGk=", name: "photo.jpg" }];
 	const clientFor = (interfaceMode = "chat") => ({
@@ -131,6 +132,25 @@ describe("createCloudChatSessionWithFiles", () => {
 		expect(second).toBe(first);
 		expect(upload).toHaveBeenCalledTimes(files.length);
 		expect(client.sendSessionMessage.mock.calls[1]).toEqual(client.sendSessionMessage.mock.calls[0]);
+	});
+
+	// The page that retries may be a reloaded one, with the request id from its
+	// pending launch: the attempt it continues is kept across the reload.
+	it("continues an unsettled attempt after a reload", async () => {
+		const client = clientFor();
+		client.sendSessionMessage.mockRejectedValueOnce(new TypeError("Failed to fetch"));
+		client.deleteSession.mockRejectedValueOnce(new TypeError("Failed to fetch"));
+		const upload = vi.fn(async (_sessionId: string, file: { name?: string }) => ({ id: `id-${file.name}` }));
+		await expect(createCloudChatSessionWithFiles(client, "org-1", chatBody, files, upload, { idempotencyKey: "req-reload" })).rejects.toBeInstanceOf(CloudTaskFilesUncertainError);
+		vi.resetModules();
+		const reloaded = await import("./cloud-session-create");
+		await reloaded.createCloudChatSessionWithFiles(client, "org-1", chatBody, files, upload, { idempotencyKey: "req-reload" });
+		const [first, second] = client.createSession.mock.calls.map((call) => call[2].idempotencyKey);
+		expect(second).toBe(first);
+		expect(upload).toHaveBeenCalledTimes(files.length);
+		expect(client.sendSessionMessage.mock.calls[1]).toEqual(client.sendSessionMessage.mock.calls[0]);
+		// Settled, it is no longer kept.
+		expect(window.localStorage.getItem("ao.newTask.unsettledFileStarts.v1")).toBe("{}");
 	});
 
 	// Nothing was made by a refused create or is left of a deleted session.
@@ -219,6 +239,43 @@ describe("createCloudChatSessionWithFiles", () => {
 		await expect(createCloudChatSessionWithFiles(client, "org-1", chatBody, files, upload)).rejects.toBeInstanceOf(CloudTaskFilesNeedChatError);
 		expect(upload).not.toHaveBeenCalled();
 		expect(client.sendSessionMessage).not.toHaveBeenCalled();
+		expect(client.deleteSession).toHaveBeenCalledWith("org-1", "s1");
+	});
+});
+
+describe("createCloudChatAgentWithFiles", () => {
+	const { projectId: _projectId, kind: _kind, ...agentBody } = body;
+	const chatBody = { ...agentBody, interfaceMode: "chat" as const };
+	const files = [{ mimeType: "image/png", data: "aGk=", name: "screen.png" }];
+	const project = { id: "agent-1", standaloneAgent: true };
+
+	// A Cloud session of its own starts as a project's task does, and its
+	// project comes back with it.
+	it("creates the agent without its prompt and sends the brief with the uploaded files", async () => {
+		const client = {
+			createStandaloneAgent: vi.fn().mockResolvedValue({ project, session: { id: "s1", interfaceMode: "chat" } }),
+			sendSessionMessage: vi.fn().mockResolvedValue({ event: {} }),
+			deleteSession: vi.fn().mockResolvedValue({}),
+		};
+		const upload = vi.fn().mockResolvedValue({ id: "file-1" });
+		await expect(createCloudChatAgentWithFiles(client, "org-1", chatBody, files, upload, { idempotencyKey: "req-1" }))
+			.resolves.toEqual({ project, session: { id: "s1", interfaceMode: "chat" } });
+		const [, created, createOptions] = client.createStandaloneAgent.mock.calls[0]!;
+		expect(created).toEqual({ ...chatBody, prompt: "" });
+		expect(created).not.toHaveProperty("projectId");
+		expect(createOptions.idempotencyKey).toMatch(/^req-1:files:/);
+		expect(client.sendSessionMessage).toHaveBeenCalledWith("org-1", "s1", { text: "do the work", attachmentIds: ["file-1"] },
+			{ idempotencyKey: `${createOptions.idempotencyKey}:brief` });
+	});
+
+	it("deletes the agent's session when the brief does not reach it", async () => {
+		const client = {
+			createStandaloneAgent: vi.fn().mockResolvedValue({ project, session: { id: "s1", interfaceMode: "chat" } }),
+			sendSessionMessage: vi.fn().mockRejectedValue(new CloudCpError("refused", { status: 409, code: "ATTACHMENTS_UNSUPPORTED" })),
+			deleteSession: vi.fn().mockResolvedValue({}),
+		};
+		await expect(createCloudChatAgentWithFiles(client, "org-1", chatBody, files, vi.fn().mockResolvedValue({ id: "file-1" }), { idempotencyKey: "req-2" }))
+			.rejects.toMatchObject({ code: "ATTACHMENTS_UNSUPPORTED" });
 		expect(client.deleteSession).toHaveBeenCalledWith("org-1", "s1");
 	});
 });

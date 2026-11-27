@@ -123,7 +123,6 @@ const SETTINGS_ENTRIES: SettingsEntry[] = [
 	{ id: "error-events", section: "general", label: "settings.telemetryEvents.label", keywords: ["crash reports", "sentry", "telemetry"] },
 	{ id: "developer-mode", section: "general", label: "settings.developerMode", keywords: ["advanced", "debug", "experimental"] },
 	{ id: "cli-link", section: "general", label: "settings.cliLink.label", keywords: ["cli", "terminal command", "install"], when: "developerMode" },
-	{ id: "side-chats", section: "general", label: "settings.sideChats", keywords: ["side chat", "secondary chat"], when: "developerMode" },
 	{ id: "split-panes", section: "general", label: "settings.splitPanes", keywords: ["split", "side by side", "panes", "drag tabs"], when: "developerMode" },
 	{ id: "harness", section: "harness", label: "settings.harness", keywords: [] },
 	{ id: "harness-logins", section: "harness", label: "settings.harness.viewLabel", keywords: ["login", "agent login", "api key", "provider key", "environment variable", "anthropic", "openai", "openrouter"] },
@@ -171,7 +170,6 @@ const TOGGLES = {
 	"copy-on-select": (on: boolean) => useUiStore.getState().setTerminalCopyOnSelect(on),
 	sound: (on: boolean) => void useSoundNotificationsStore.getState().setEnabled(on),
 	"developer-mode": (on: boolean) => useUiStore.getState().setDeveloperMode(on),
-	"side-chats": (on: boolean) => useUiStore.getState().setSideChats(on),
 	"split-panes": (on: boolean) => useUiStore.getState().setSplitPanes(on),
 } satisfies Record<string, (on: boolean) => void>;
 export type ToggleId = keyof typeof TOGGLES;

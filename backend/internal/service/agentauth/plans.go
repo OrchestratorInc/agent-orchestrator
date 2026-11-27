@@ -17,6 +17,7 @@ import (
 const qwenAuthInput = "i\x7f/auth\r"
 
 var plans = []Plan{
+	plan("mastra-code", ActionLogin, "Log in to Mastra Code", []string{"mastracode", "login"}, "Choose an OAuth account or Add an API key in Mastra's native provider chooser. After adding a key, open Mastra Code in build mode and use /model or /setup in the same AO profile to select a build model.", "https://github.com/mastra-ai/mastra/tree/8a0fd46222d8737e4c369291a3efa59e632aadbd/mastracode"),
 	plan("docker-agent", ActionSetup, "Set up Docker Agent", []string{"docker-agent", "setup"}, "Native model setup: connect Anthropic, OpenAI or Google and Docker Agent saves the key in its own env file, which Orchestrator's default configuration uses. To use your own YAML, set AO_DOCKER_AGENT_CONFIG to its absolute path. Authorization is checked by the provider on a live turn.", "https://docs.docker.com/ai/docker-agent/getting-started/quickstart/"),
 	loginMenuPlan("claude-code", "claude-login", nil, "Log in to Claude Code", []string{"claude", "auth", "login"}, "Choose Claude subscription, Anthropic Console, SSO, or setup token", "https://code.claude.com/docs/en/installation"),
 	loginMenuPlan("codex", "codex-login", []string{"--use-default-credential-store"}, "Log in to Codex", []string{"codex", "login"}, "Choose ChatGPT, device code, API key, or access token", "https://github.com/openai/codex"),
@@ -33,6 +34,7 @@ var plans = []Plan{
 	plan("grok", ActionLogin, "Log in to Grok", []string{"grok", "login"}, "Native login; device-auth remains available inside the CLI", "https://docs.x.ai/build/overview"),
 	kimiLoginPlan(),
 	piLoginPlan(),
+	tauLoginPlan(),
 	plan("amp", ActionLogin, "Log in to Amp", []string{"amp", "login"}, "Native browser flow", "https://ampcode.com/manual"),
 	plan("auggie", ActionLogin, "Log in to Auggie", []string{"auggie", "login"}, "Native browser flow", "https://docs.augmentcode.com/cli/overview"),
 	terminalInputPlan("droid", ActionLogin, "Log in to Droid", []string{"droid"}, "/login\r", "Select Open login after Droid finishes starting", "https://docs.factory.ai/droid-cli/cli-reference"),
@@ -123,6 +125,19 @@ func piLoginPlan() Plan {
 		{Text: "0.0%/"},
 		{Text: "Pi can explain its own features"},
 	}
+	p.sendInitialInputOnReadyTimeout = true
+	return p
+}
+
+// tauLoginPlan opens Tau's TUI and injects /login, which opens Tau's native
+// login-method picker (subscription OAuth, provider API key, or a custom
+// provider); Tau has no login subcommand. The input is sent once the composer
+// placeholder renders, the same marker Tau's adapter waits on before typing a
+// task, or after the bounded ready wait if a future Tau renames it.
+func tauLoginPlan() Plan {
+	p := plan("tau", ActionLogin, "Log in to Tau", []string{"tau"}, "Tau opens its login picker automatically", "https://twotimespi.dev/guides/providers-and-models/")
+	p.initialInput = "/login"
+	p.initialInputReadyStates = []shellterm.InitialInputReadyState{{Text: "Ask Tau…"}}
 	p.sendInitialInputOnReadyTimeout = true
 	return p
 }
