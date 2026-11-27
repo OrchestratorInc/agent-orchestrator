@@ -86,7 +86,7 @@ func TestEvaluateTask(t *testing.T) {
 		{name: "tui exited", sess: tui("exited"), wantStatus: taskStatusFailed},
 		{name: "tui idle", sess: tui("idle"), wantStatus: taskStatusStarting},
 		{name: "no turns yet", sess: chat, conv: `{"turns":[]}`, wantStatus: taskStatusStarting},
-		{name: "first turn queued", sess: chat, conv: `{"turns":[{"id":"t1","state":"queued"}]}`, wantStatus: taskStatusStarting},
+		{name: "first turn queued", sess: chat, conv: `{"turns":[{"id":"t1","state":"queued"}]}`, wantStatus: taskStatusQueued},
 		{name: "first turn running", sess: chat, conv: `{"turns":[{"id":"t1","state":"running"}]}`, wantStatus: taskStatusRunning},
 		{name: "first turn completed", sess: chat, conv: `{"turns":[{"id":"t1","state":"completed"}]}`, wantStatus: taskStatusDone},
 		{
@@ -901,5 +901,44 @@ func TestTaskUnknownSubcommandIsAUsageError(t *testing.T) {
 	out, _, err := executeCLI(t, fakeClockDeps(), "task")
 	if err != nil || !strings.Contains(out, "Exit codes: 0 started") {
 		t.Fatalf("bare `ao task`: err = %v, out = %q", err, out)
+	}
+}
+
+// A wait that runs out while the task is still queued must not look like a
+// failure: the task is accepted and will run, and a retry would send it twice.
+func TestTaskWaitTimeoutWhileQueuedExitsFour(t *testing.T) {
+	const usageEvent = "POST /internal/telemetry/cli-usage-error"
+	d := newTaskDaemon(t)
+	d.set(usageEvent, 204, ``)
+	d.set("GET /api/v1/sessions/repo-orchestrator", 200, `{"session":{"id":"repo-orchestrator","harness":"claude-code","mode":"chat","provisionState":"ready","activity":{"state":"active"}}}`)
+	d.set("GET /api/v1/sessions/repo-orchestrator/conversation", 200, `{"turns":[{"id":"t1","state":"running"},{"id":"t2","state":"queued"}]}`)
+
+	out, _, err := executeCLIRoot(t, fakeClockDeps(), "task", "wait", "repo-orchestrator:t2", "--timeout", "30s", "--json")
+	if got := ExitCode(err); got != 4 {
+		t.Fatalf("exit = %d (%v), want 4", got, err)
+	}
+	res := decodeTaskResult(t, out)
+	if res["status"] != "queued" || !strings.Contains(res["reason"].(string), "do not start it again") ||
+		res["fix"] != "wait longer with `ao task wait repo-orchestrator:t2`, or check `ao session get repo-orchestrator`" {
+		t.Fatalf("result = %v", res)
+	}
+	if d.saw(usageEvent) {
+		t.Fatal("a queued timeout was reported as a CLI usage error")
+	}
+}
+
+// A one-shot read of a queued task is not a failure either; like any other
+// unfinished status it exits 0.
+func TestTaskStatusQueuedExitsZero(t *testing.T) {
+	d := newTaskDaemon(t)
+	d.set("GET /api/v1/sessions/repo-orchestrator", 200, `{"session":{"id":"repo-orchestrator","harness":"claude-code","mode":"chat","provisionState":"ready","activity":{"state":"active"}}}`)
+	d.set("GET /api/v1/sessions/repo-orchestrator/conversation", 200, `{"turns":[{"id":"t1","state":"running"},{"id":"t2","state":"queued"}]}`)
+
+	out, _, err := executeCLI(t, fakeClockDeps(), "task", "status", "repo-orchestrator:t2", "--json")
+	if err != nil {
+		t.Fatalf("exit = %d: %v", ExitCode(err), err)
+	}
+	if res := decodeTaskResult(t, out); res["status"] != "queued" {
+		t.Fatalf("result = %v", res)
 	}
 }

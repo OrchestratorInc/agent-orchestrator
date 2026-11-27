@@ -39,10 +39,16 @@ orchestrator as instructions for the workers it starts.
 | `1` | The task failed, or `--timeout` ran out before it started. |
 | `2` | Usage error: fix the command (for example pass `--project`). Prints no JSON. |
 | `3` | The task is waiting on the user, such as for an approval. Ask the user; do not start the task again. |
+| `4` | `--wait` ran out while the task was still `queued` behind the agent's current turn. It is accepted and will run: do not start it again. Wait longer with `ao task wait <task-id>`. |
 
-`status` in the JSON is `starting`, `running`, `done`, `failed`, or
-`needs_input`. A task counts as started once its turn has finished, or has
-stayed running for 5 seconds. Use a `--timeout` of at least `10s`.
+`status` in the JSON is `starting`, `queued` (accepted; the agent runs it after
+its current turn), `running`, `done`, `failed`, or `needs_input`. A task counts
+as started once its turn has finished, or has stayed running for 5 seconds. Use
+a `--timeout` of at least `10s`.
+
+`--wait` and `ao task wait` confirm that the task **started**, not that it
+finished. To learn when it is done, poll `ao task status <task-id>` until
+`status` is `done` (or `failed` / `needs_input`).
 
 ## Reading the result
 

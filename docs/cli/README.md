@@ -121,7 +121,7 @@ the report. Re-running skips rows that already exist.
 | `ao session switch <id> [agent]` / `--from <agent> [agent]` `[--model <m>] [--effort <e>] [--permission <p>] [--force] [-m <text>]` | `--from` lists via `GET /api/v1/sessions?active=true`; each switch is `POST /api/v1/sessions/{id}/provider-switch`, then `POST /api/v1/sessions/{id}/send` for `-m` |
 | `ao orchestrator ls`                | `GET /api/v1/orchestrators`                    |
 | `ao send`                           | `POST /api/v1/sessions/{id}/send`              |
-| `ao task start "<brief>"`           | `POST /api/v1/agents/{id}/probe`, then `POST /api/v1/orchestrators` and `POST /api/v1/sessions/{id}/conversation/messages` (or `/send` for a TUI orchestrator); `--worker` uses `POST /api/v1/orchestrators/delegate`. Exit 0 started, 1 failed or timed out, 2 usage error, 3 waiting on the user. |
+| `ao task start "<brief>"`           | `POST /api/v1/agents/{id}/probe`, then `POST /api/v1/orchestrators` and `POST /api/v1/sessions/{id}/conversation/messages` (or `/send` for a TUI orchestrator); `--worker` uses `POST /api/v1/orchestrators/delegate`. Exit 0 started, 1 failed or timed out, 2 usage error, 3 waiting on the user, 4 `--wait` ran out while still queued (do not resend). |
 | `ao task status/wait <task-id>`     | `GET /api/v1/sessions/{id}` and `GET /api/v1/sessions/{id}/conversation` (paged with `beforeSequence`); a sign-in fix comes from `GET /api/v1/agents/auth-plans`. |
 | `ao report ...`                     | `POST /api/v1/reports`                         |
 | `ao preview [url]`                  | `POST /api/v1/sessions/{id}/preview`           |

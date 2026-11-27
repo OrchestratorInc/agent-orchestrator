@@ -167,7 +167,7 @@ By default the project's orchestrator receives the task, plans it, and starts wo
 | `ao task status <task-id>` | Report the task's status once. Supports `--json`. |
 | `ao task wait <task-id>` | Wait until the task has started, failed, or needs you. Supports `--timeout` and `--json`. |
 
-`start --wait` behaves like `start` followed by `wait`. A task has started once its turn has finished, or has stayed running for a few seconds before `--timeout` ends. Before starting, Orchestrator checks that each agent involved is signed in, and stops if one definitely is not. With the orchestrator, `--agent` and `--base` are passed on as instructions for the workers it starts.
+`start --wait` behaves like `start` followed by `wait`. A task has started once its turn has finished, or has stayed running for a few seconds before `--timeout` ends. `wait` confirms that the task started, not that it finished: poll `ao task status` until it reports `done`. Before starting, Orchestrator checks that each agent involved is signed in, and stops if one definitely is not. With the orchestrator, `--agent` and `--base` are passed on as instructions for the workers it starts.
 
 | Exit code | Meaning |
 | --- | --- |
@@ -175,6 +175,7 @@ By default the project's orchestrator receives the task, plans it, and starts wo
 | `1` | The task failed: the session could not start, the agent's turn failed, or `--timeout` ran out first. |
 | `2` | Usage error: the command itself needs fixing. It prints no JSON. |
 | `3` | The task is waiting on you, for example for an approval. Answer it in Orchestrator; starting the task again would run it twice. |
+| `4` | `--wait` ran out while the task was still `queued` behind the agent's current turn. It is accepted and will run, so don't start it again; wait longer with `ao task wait`. |
 
 With `--json`, the command prints one object:
 
@@ -188,7 +189,7 @@ With `--json`, the command prints one object:
 }
 ```
 
-`status` is `starting`, `running`, `done`, `failed`, or `needs_input`. `taskId` is what you pass to `ao task status` or `ao task wait`:
+`status` is `starting`, `queued` (accepted; runs after the agent's current turn), `running`, `done`, `failed`, or `needs_input`. `taskId` is what you pass to `ao task status` or `ao task wait`:
 
 - a worker task: the worker's session ID;
 - a task sent to a Chat orchestrator: `<orchestrator-session>:<turn>`;

@@ -23,9 +23,10 @@ import (
 // `ao send` and the session states unchanged.
 //
 // Exit codes: 0 the task started (running or done), 1 it failed or timed out,
-// 2 usage error only (the CLI-wide meaning), 3 it is waiting on the user. A
-// task outcome never goes through usageError, so needs_input is not counted
-// as a usage error.
+// 2 usage error only (the CLI-wide meaning), 3 it is waiting on the user, 4 a
+// wait ran out while the task was still queued (it will run; do not resend).
+// A task outcome never goes through usageError, so these are not counted as
+// usage errors.
 
 // Task statuses reported in the `status` field of --json output.
 const (
@@ -34,12 +35,18 @@ const (
 	taskStatusDone       = "done"
 	taskStatusFailed     = "failed"
 	taskStatusNeedsInput = "needs_input"
+	// taskStatusQueued: the agent accepted the task and will run it after its
+	// current turn.
+	taskStatusQueued = "queued"
 )
 
 // Exit codes for task statuses that are not success.
 const (
 	taskExitFailed     = 1
 	taskExitNeedsInput = 3
+	// taskExitStillQueued: a wait timed out while the task was queued. It is
+	// accepted and will run, so a caller must not start it again.
+	taskExitStillQueued = 4
 )
 
 const defaultTaskTimeout = 120 * time.Second
@@ -62,6 +69,8 @@ type taskResult struct {
 	// phase is the reading behind Status (not printed), so `start --wait`
 	// carries what the start already saw into the wait.
 	phase string
+	// waitTimedOut marks a result a wait gave up on (not printed).
+	waitTimedOut bool
 }
 
 // taskExitError carries a task outcome's exit code to the process entrypoint.
@@ -94,9 +103,11 @@ func newTaskCommand(ctx *commandContext) *cobra.Command {
 		Long: "Start a task on a project and check whether the agent really picked it up.\n\n" +
 			"By default the project's orchestrator receives the task, plans it, and starts workers.\n" +
 			"With --worker a single worker session takes it directly.\n\n" +
-			"Exit codes: 0 started (running or done), 1 failed or timed out, 2 usage error, 3 waiting on the user.\n" +
+			"Exit codes: 0 started (running or done), 1 failed or timed out, 2 usage error, 3 waiting on the user,\n" +
+			"4 a wait ran out while the task was still queued (it will run; do not start it again).\n" +
+			"--wait and `ao task wait` confirm the task started; poll `ao task status` for completion.\n" +
 			"With --json, stdout is {status, taskId, sessionIds, reason, fix}; status is one of\n" +
-			"starting, running, done, failed, needs_input.",
+			"starting, queued, running, done, failed, needs_input.",
 		// Runnable so a mistyped subcommand (`ao task statuz`) is a usage
 		// error, exit 2, instead of help with exit 0. Bare `ao task` shows help.
 		Args: cobra.ArbitraryArgs,
@@ -131,7 +142,7 @@ func newTaskStartCommand(ctx *commandContext) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			if opts.wait && (res.Status == taskStatusStarting || res.Status == taskStatusRunning) {
+			if opts.wait && (res.Status == taskStatusStarting || res.Status == taskStatusQueued || res.Status == taskStatusRunning) {
 				res = ctx.waitTask(cmd.Context(), res, opts.timeout)
 			}
 			return writeTaskResult(cmd, res, opts.json)
@@ -253,6 +264,10 @@ func writeTaskResult(cmd *cobra.Command, res taskResult, asJSON bool) error {
 		return taskExitError{code: taskExitFailed, msg: "task failed: " + msg}
 	case taskStatusNeedsInput:
 		return taskExitError{code: taskExitNeedsInput, msg: "task is waiting on you: " + msg}
+	case taskStatusQueued:
+		if res.waitTimedOut {
+			return taskExitError{code: taskExitStillQueued, msg: "task is still queued: " + msg}
+		}
 	}
 	return nil
 }
@@ -828,7 +843,7 @@ func evaluateTask(sess taskSession, conv *taskConversation, turnID string) taskE
 
 	switch turn.State {
 	case "queued":
-		res := eval(taskStatusStarting, "queued behind the agent's current turn")
+		res := eval(taskStatusQueued, "queued behind the agent's current turn")
 		res.phase = taskPhaseQueued
 		return res
 	case "running":
@@ -939,7 +954,15 @@ func (c *commandContext) waitTask(ctx context.Context, res taskResult, timeout t
 		c.deps.Sleep(min(taskPollInterval, remaining))
 	}
 
-	// Nothing settled in time. Name the likely cause from the last reading.
+	// Nothing settled in time. A queued task is accepted and will still run,
+	// so it is reported apart from a failure: retrying it would send it twice.
+	if last.Status == taskStatusQueued {
+		last.waitTimedOut = true
+		last.Reason = fmt.Sprintf("timed out after %s while still queued behind the agent's current turn; the task is accepted and will run, so do not start it again", timeout)
+		last.Fix = fmt.Sprintf("wait longer with `ao task wait %s`, or check `ao session get %s`", id, id.session)
+		return last
+	}
+	// Otherwise name the likely cause from the last reading.
 	reason := fmt.Sprintf("timed out after %s: the task has not started", timeout)
 	if last.Status == taskStatusRunning {
 		reason = fmt.Sprintf("timed out after %s: the agent had only just started the task", timeout)
@@ -954,8 +977,6 @@ func (c *commandContext) waitTask(ctx context.Context, res taskResult, timeout t
 		fix = fmt.Sprintf("the agent is working; wait longer with `ao task wait %s`, or check %s", id, check)
 	case phase == taskPhaseProvisioning:
 		fix = "workspace setup had not finished; check the project's setup steps and " + check
-	case phase == taskPhaseQueued:
-		fix = "the agent was still busy with an earlier turn; wait longer, or check " + check
 	case phase == taskPhaseTerminalPrompt:
 		reason = fmt.Sprintf("timed out after %s: a terminal session does not report whether it took this task (%s)", timeout, last.Reason)
 		fix = "this wait never saw the agent working, so it may have finished quickly or not started; check " + check + " or open the session in the Orchestrator app"
