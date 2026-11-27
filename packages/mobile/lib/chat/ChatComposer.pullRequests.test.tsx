@@ -143,6 +143,22 @@ it("a menu request opens the list after the sheet's touch", async () => {
 	expect(picker()).toHaveLength(1);
 });
 
+// A handled menu request is consumed: the PRs changing afterwards must not replay it.
+it("does not reopen the list for a menu request it already handled", async () => {
+	const two = model(pr(9137, "open"), pr(9125, "merged"));
+	const p = props({ pullRequests: two, pullRequestListRequest: 0 });
+	await act(async () => { renderer = create(<ChatComposer {...p} />); });
+	layOut();
+	act(() => renderer.update(<ChatComposer {...p} pullRequestListRequest={1} />));
+	expect(picker()).toHaveLength(1);
+	act(() => rootTouchStart());
+	expect(picker()).toHaveLength(0);
+	act(() => renderer.update(<ChatComposer {...p} pullRequests={model(pr(9137, "open"), pr(9125, "merged"), pr(9001, "closed"))} pullRequestListRequest={1} />));
+	expect(picker()).toHaveLength(0);
+	act(() => renderer.update(<ChatComposer {...p} pullRequests={model(pr(9137, "open"), pr(9125, "merged"), pr(9001, "closed"))} pullRequestListRequest={2} />));
+	expect(picker()).toHaveLength(1);
+});
+
 // Review Focus 4: a chip tap with the keyboard up closes the keyboard, not the list.
 it("pressing the chip with the keyboard up keeps the list open", async () => {
 	const dismiss = vi.fn(() => { for (const listener of [...(keyboard.listeners.get("keyboardDidHide") ?? [])]) listener(); });

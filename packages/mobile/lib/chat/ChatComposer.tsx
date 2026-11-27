@@ -639,10 +639,12 @@ function Composer({
 		showPRList();
 	};
 	// The screen's ⋯ menu asks for the list by bumping the request; the value it
-	// starts at asks for nothing.
-	const firstListRequest = useRef(pullRequestListRequest);
+	// starts at asks for nothing. Each request is consumed as it is handled, so
+	// the PRs or the busy state changing later (a new showPRList) never replays it.
+	const handledListRequest = useRef(pullRequestListRequest);
 	useEffect(() => {
-		if (pullRequestListRequest === undefined || pullRequestListRequest === firstListRequest.current) return;
+		if (pullRequestListRequest === undefined || pullRequestListRequest === handledListRequest.current) return;
+		handledListRequest.current = pullRequestListRequest;
 		closeEffort();
 		showPRList();
 	}, [pullRequestListRequest, closeEffort, showPRList]);
