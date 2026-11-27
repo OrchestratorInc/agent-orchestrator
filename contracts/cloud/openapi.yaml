@@ -2117,7 +2117,10 @@ paths:
         it: the conversation up to that turn, the files as that turn left them,
         and the agent's memory of the conversation, copied natively by Claude
         Code and Codex and as text for other agents. Without turnId the latest
-        finished turn is forked. The original is never changed. The fork is
+        finished turn is forked; a chat session with no finished turn is
+        refused with FORK_TURN_NOT_FINISHED. A terminal session has no turns,
+        so it is forked as it is now: its files and the agent's conversation
+        at the moment of the fork. The original is never changed. The fork is
         named "Fork of <title>", or "Fork N of <title>" counted against the
         first session forked. It belongs to the caller and runs on the
         caller's default account for the session's agent; a fork of a
