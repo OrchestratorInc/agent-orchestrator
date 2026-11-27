@@ -21,7 +21,7 @@ ao spawn [flags]
 | `--model string` | Agent model override for this session only; overrides project/role config | - |
 | `--effort string` | Reasoning effort override for this session only (for example `low`, `medium`, `high`); overrides project/role config | - |
 | `--permission string` | Permission mode for this session only: `default`, `accept-edits`, `auto`, or `bypass-permissions`; a spawn from a session in the same project cannot exceed the project's role setting, and an orchestrator cannot exceed its own mode when the project sets none | The project's role setting; when the project sets none, a worker spawned from an orchestrator takes the orchestrator's mode |
-| `--account string` | Claude Code or Codex account id to start on (from `ao account ls`); the account must be signed in | The agent's default account |
+| `--account string` | Claude Code, Codex or Antigravity (agy) account id to start on (from `ao account ls`); the account must be signed in | The agent's default account |
 | `--name string` | Display name shown in the sidebar (max 100 characters) | Required |
 | `--mode chat\|tui` | Initial session interface; Chat requires harness support (including Grok Build via native ACP) | Daemon default, otherwise Terminal UI |
 | `--output artifact` | Ask the worker for a file in its artifact directory instead of a PR | Ordinary task |

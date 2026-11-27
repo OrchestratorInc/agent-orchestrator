@@ -58,6 +58,13 @@ export function useAgentAccounts(enabled = true, hostId?: HostId) {
 
 export const agentAccountProviderNames: Record<AgentAccountProvider, string> = { claude: "Claude Code", codex: "Codex", antigravity: "Antigravity" };
 
+/** Whether AO reads the provider's usage limits, so a session can move to
+ * another of its accounts at a limit. AO reads no Antigravity limits: its
+ * sessions move only when the user moves them. */
+export function agentAccountProviderReadsLimits(provider: AgentAccountProvider): boolean {
+	return provider !== "antigravity";
+}
+
 type AccountNameT = (key: "settings.agentAccounts.cliLoginOf" | "settings.agentAccounts.oauthToken" | "settings.agentAccounts.apiKeyDefaultName", options?: { provider: string }) => string;
 
 /** Whether an account bills per token (an API key, or a metered sign-in such

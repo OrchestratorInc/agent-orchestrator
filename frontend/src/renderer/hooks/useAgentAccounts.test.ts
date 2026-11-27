@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { agentAccountLabel, agentAccountName, agentAccountProviderFor, oneRowPerLogin, withoutSameLogins } from "./useAgentAccounts";
+import { agentAccountLabel, agentAccountName, agentAccountProviderFor, agentAccountProviderReadsLimits, oneRowPerLogin, withoutSameLogins } from "./useAgentAccounts";
 
 describe("agentAccountProviderFor", () => {
 	it("names the account provider of each harness with accounts", () => {
@@ -7,6 +7,14 @@ describe("agentAccountProviderFor", () => {
 		expect(agentAccountProviderFor("codex")).toBe("codex");
 		expect(agentAccountProviderFor("agy")).toBe("antigravity");
 		expect(agentAccountProviderFor("gemini")).toBeNull();
+	});
+});
+
+describe("agentAccountProviderReadsLimits", () => {
+	it("offers moving at a usage limit only where AO reads the limits", () => {
+		expect(agentAccountProviderReadsLimits("claude")).toBe(true);
+		expect(agentAccountProviderReadsLimits("codex")).toBe(true);
+		expect(agentAccountProviderReadsLimits("antigravity")).toBe(false);
 	});
 });
 

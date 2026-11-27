@@ -3,7 +3,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import type { components } from "../../../api/schema";
 import { getAgentUILogin, type AgentLoginSnapshot } from "../../hooks/useAgentAuth";
-import { agentAccountLabel, agentAccountPerToken as perToken, agentAccountProviderFor, agentAccountProviderNames, agentAccountUsable, describeAccountProblem, useAgentAccountActions, useAgentAccounts, useAgentAccountUsage, withoutSameLogins, type AgentAccount, type AgentAccountLimitWindow, type AgentAccountLogin, type AgentAccountLoginRequest, type AgentAccountProvider } from "../../hooks/useAgentAccounts";
+import { agentAccountLabel, agentAccountPerToken as perToken, agentAccountProviderFor, agentAccountProviderNames, agentAccountProviderReadsLimits, agentAccountUsable, describeAccountProblem, useAgentAccountActions, useAgentAccounts, useAgentAccountUsage, withoutSameLogins, type AgentAccount, type AgentAccountLimitWindow, type AgentAccountLogin, type AgentAccountLoginRequest, type AgentAccountProvider } from "../../hooks/useAgentAccounts";
 import type { TerminalSessionState } from "../../hooks/useTerminalSession";
 import { apiErrorCode, apiErrorDetails } from "../../lib/api-client";
 import { baseUrlForHost } from "../../lib/host-clients";
@@ -368,7 +368,8 @@ export function AgentAccountsPanel({ provider, cliLogin: cliLoginControls, hostI
 				onReplaceKey={signInReady(account) ? () => openSignIn(account) : undefined}
 				onRemove={() => { setError(""); setNeedsDeveloperMode(false); setRemoving(account); }}
 			/>; })}
-			{!hostId && hasMultipleAccounts ? <AccountHandoffRow /> : null}
+			{/* Moving at a usage limit needs the limits AO reads; it reads no Antigravity limits. */}
+			{!hostId && hasMultipleAccounts && agentAccountProviderReadsLimits(provider) ? <AccountHandoffRow /> : null}
 		</HarnessDetailGroup>
 		{removing ? <ConfirmDialog open destructive
 			title={t("settings.agentAccounts.remove")}
