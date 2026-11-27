@@ -12,6 +12,7 @@ export const DAEMON_EXIT_REASONS = [
 	"disk_full",
 	"permission_denied",
 	"panic",
+	"crashed",
 	"unknown",
 ] as const;
 
@@ -19,6 +20,19 @@ export type DaemonExitReason = (typeof DAEMON_EXIT_REASONS)[number];
 
 // The daemon's exit code for "another AO process holds the data dir" (cli.exitDataDirLocked).
 const EXIT_DATA_DIR_LOCKED = 75;
+
+// Windows NTSTATUS codes for a process the OS ended on an unhandled native
+// exception. Node reports them as unsigned 32-bit exit codes (0xC0000005 is
+// 3221225477). STATUS_CONTROL_C_EXIT (0xC000013A) is a console close, not a crash.
+const WINDOWS_CRASH_CODES = new Set([
+	0xC0000005, // access violation
+	0xC000001D, // illegal instruction
+	0xC0000094, // integer divide by zero
+	0xC00000FD, // stack overflow
+	0xC0000374, // heap corruption
+	0xC0000409, // stack buffer overrun or fail-fast
+	0xC0000420, // assertion failure
+]);
 
 // Checked in order against the last line of output; the first match wins.
 const LAST_LINE_REASONS: readonly [RegExp, DaemonExitReason][] = [
@@ -37,6 +51,8 @@ export function daemonExitReason(output: string | undefined, exitCode: number | 
 	if (exitCode === EXIT_DATA_DIR_LOCKED) return "data_dir_locked";
 	const text = output ?? "";
 	if (/(?:^|\n)(?:panic: |fatal error: )/.test(text)) return "panic";
+	// A signed reading of the same code (-1073741819) maps to the same value.
+	if (typeof exitCode === "number" && Number.isSafeInteger(exitCode) && WINDOWS_CRASH_CODES.has(exitCode >>> 0)) return "crashed";
 	// Only the last line: earlier lines are routine logs, and a warning that
 	// mentions a path or permission is not why the process stopped.
 	const lastLine = text.trimEnd().split(/\r?\n/).at(-1) ?? "";

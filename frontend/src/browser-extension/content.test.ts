@@ -134,4 +134,35 @@ describe("content operations", () => {
 		);
 		expect(() => handleContentRequest(document, registry, request("eval"))).toThrow(expect.objectContaining({ code: "INVALID_ARGUMENT" }));
 	});
+
+	it("describes with the document's own address, so a frame is scoped to its site", () => {
+		document.body.innerHTML = `<button id="b">Pay</button>`;
+		const registry = new RefRegistry();
+		const value = handleContentRequest(document, registry, { aoBridge: 1, op: "describe" }) as { url: string; documentId: string };
+		expect(value.url).toBe(document.location.href);
+		expect(value.documentId).toEqual(expect.any(String));
+	});
+
+	it("stops guarding a trusted key on its own after a short time", () => {
+		vi.useFakeTimers();
+		try {
+			const email = document.getElementById("email") as HTMLInputElement;
+			email.focus();
+			const { documentId, focusId } = handleContentRequest(document, registry, request("describe")) as { documentId: string; focusId: string };
+			handleContentRequest(document, registry, request("arm-press", { expectDocument: documentId, expectFocus: focusId }));
+			// While armed, a key that lands elsewhere is held back.
+			const stray = new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true });
+			document.getElementById("save")!.dispatchEvent(stray);
+			expect(stray.defaultPrevented).toBe(true);
+			// No disarm arrives (the executor lost the page); the guard ends anyway.
+			vi.advanceTimersByTime(2000);
+			const later = new KeyboardEvent("keydown", { key: "a", bubbles: true, cancelable: true });
+			document.getElementById("save")!.dispatchEvent(later);
+			expect(later.defaultPrevented).toBe(false);
+			// The mismatch it recorded is still reported.
+			expect(handleContentRequest(document, registry, request("disarm-press"))).toEqual({ mismatch: true });
+		} finally {
+			vi.useRealTimers();
+		}
+	});
 });

@@ -22,6 +22,13 @@ const fixtures = vi.hoisted(() => ({
 	theme: { accent: "accent", bgBase: "base", bgElevated: "card", green: "green", highlight: "caret", red: "red", textPrimary: "ink", textSecondary: "gray", textTertiary: "dim" },
 }));
 
+vi.mock("./headerPill", async () => {
+	const React = await import("react");
+	return {
+		PillHeaderRight: ({ children }: { children?: React.ReactNode }) => children ?? null,
+		HeaderPillButton: ({ children, ...props }: { children?: React.ReactNode }) => React.createElement("HeaderPillButton", props, children),
+	};
+});
 vi.mock("expo-router", async () => {
 	const React = await import("react");
 	const host = (name: string) => ({ children, ...props }: { children?: React.ReactNode }) => React.createElement(name, props, children);
@@ -291,9 +298,12 @@ describe("an account machine", () => {
 });
 
 describe("saving on Android", () => {
-	it("labels the top app bar's icon-only save for TalkBack", async () => {
+	// A pill of its own over the clear bar, not a bare check on the frost.
+	it("saves from a labelled pill over the clear bar", async () => {
 		fixtures.platform.OS = "android";
 		await open();
-		expect(save().props).toMatchObject({ accessibilityLabel: "Save machine changes", disabled: true });
+		const pill = () => renderer!.root.findByType("HeaderPillButton" as never);
+		expect(pill().props).toMatchObject({ icon: "checkmark", label: "Save machine changes", disabled: true });
+		expect(renderer!.root.findAllByType("StackToolbarButton" as never)).toHaveLength(0);
 	});
 });

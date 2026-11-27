@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { activityHierarchy, activityNodesRunning, activityStartsExpanded, canRollbackTurn, countActivityNodes, editableHumanTurns, groupConversationByTurn, sameEditableTurns, partitionTurnItems, readableConversationItems, settledTurnItems, summarizeActivities } from "./timelineModel";
+import { activityHierarchy, activityNodesRunning, activityStartsExpanded, canRollbackTurn, compactionLine, countActivityNodes, editableHumanTurns, groupConversationByTurn, sameEditableTurns, partitionTurnItems, readableConversationItems, settledTurnItems, summarizeActivities } from "./timelineModel";
 import * as timelineModel from "./timelineModel";
 import type { ConversationActivity, ConversationItem, ConversationSnapshot, ConversationTurn } from "./types";
 
@@ -379,5 +379,112 @@ describe("settledTurnItems", () => {
 		const status = (state: ConversationTurn["state"]) => (settledTurnItems([command("running")], turn(state))[0] as ConversationActivity).status;
 		expect([status("completed"), status("recovered"), status("interrupted"), status("failed")]).toEqual(["completed", "completed", "cancelled", "failed"]);
 		expect((settledTurnItems([command("failed")], turn("completed"))[0] as ConversationActivity).status).toBe("failed");
+	});
+});
+
+// The daemon writes a compaction's row while it runs, then settles it as done,
+// failed, stopped or "nothing to compact", all under the same event.
+describe("compactionLine", () => {
+	const compaction = (status: ConversationActivity["status"], detail: ConversationActivity["detail"] = {}): ConversationActivity => ({
+		kind: "activity", id: "cc", sequence: 1, revision: 0, activityKind: "system", status, summary: "",
+		detail: { event: "compaction", ...detail }, createdAt: "",
+	});
+
+	it("says a compaction under way is still running", () => {
+		expect(compactionLine(compaction("running", { tokensBefore: 180000, contextWindow: 200000 }))).toBe("Compacting conversation");
+	});
+
+	it("names what a finished compaction freed and how full the context is now", () => {
+		expect(compactionLine(compaction("completed", { tokensBefore: 180000, tokensAfter: 24000, tokensReclaimed: 156000, contextWindow: 200000 })))
+			.toBe("Compacted conversation · −156k · 12% full");
+		expect(compactionLine(compaction("completed"))).toBe("Compacted conversation");
+	});
+
+	it("says why a compaction could not run, or that it was stopped", () => {
+		expect(compactionLine(compaction("failed", { error: "Nothing to compact" }))).toBe("Couldn't compact conversation · Nothing to compact");
+		expect(compactionLine(compaction("cancelled"))).toBe("Couldn't compact conversation · Stopped");
+		expect(compactionLine(compaction("failed"))).toBe("Couldn't compact conversation");
+	});
+});
+
+describe("steers split a turn", () => {
+	const at = (second: number) => `2026-08-05T00:00:${String(second).padStart(2, "0")}Z`;
+	const user = (id: string, sequence: number, text: string): ConversationItem => ({ kind: "message", id, turnId: "t", sequence, revision: 1, role: "user", origin: "human", text, streaming: false, createdAt: at(sequence) });
+	const reply = (id: string, sequence: number, text: string): ConversationItem => ({ kind: "message", id, turnId: "t", sequence, revision: 1, role: "assistant", origin: "provider", text, streaming: false, createdAt: at(sequence) });
+	const command = (id: string, sequence: number): ConversationItem => ({ kind: "activity", id, turnId: "t", sequence, revision: 1, activityKind: "command", status: "completed", summary: id, createdAt: at(sequence) } as ConversationActivity);
+	const steer = (id: string, sequence: number, detail: Record<string, unknown> = {}): ConversationItem => ({ kind: "activity", id, turnId: "t", sequence, revision: 1, activityKind: "system", status: "completed", summary: id, createdAt: at(sequence), detail: { event: "steer", text: id, ...detail } } as ConversationActivity);
+	const chat = (state: ConversationTurn["state"], items: ConversationItem[]): ConversationSnapshot => ({
+		...snapshot(),
+		turns: [{ id: "t", state, providerTurnId: "p", requestedAt: at(0), startedAt: at(1), ...(state === "running" ? {} : { completedAt: at(50) }), plan: { steps: [{ text: "Fix", status: "completed" }] } }],
+		items,
+	});
+	const ids = (group: { items: ConversationItem[] }) => group.items.map((item) => item.id);
+
+	it("starts a new segment at each steer the person typed, so it never folds into Worked for", () => {
+		const value = chat("completed", [user("u", 1, "go"), command("ls", 2), reply("r1", 3, "Looking"), steer("s1", 10), command("cat", 11), steer("s2", 20), reply("r2", 21, "Done")]);
+		const groups = groupConversationByTurn(value);
+		expect(groups.map(ids)).toEqual([["u", "ls", "r1"], ["s1", "cat"], ["s2", "r2"]]);
+		expect(groups.map((group) => group.key)).toEqual(["turn-t", "turn-t:steer:s1", "turn-t:steer:s2"]);
+		expect(groups.every((group) => group.turnId === "t")).toBe(true);
+		// Each earlier segment settles as worked up to the steer; the last keeps the turn's own outcome.
+		expect(groups.map((group) => [group.turn?.state, group.turn?.startedAt, group.turn?.completedAt])).toEqual([
+			["completed", at(1), at(10)],
+			["completed", at(10), at(20)],
+			["completed", at(20), at(50)],
+		]);
+		expect(groups.map((group) => group.continuesTurn ?? false)).toEqual([false, true, true]);
+		expect(groups.map((group) => group.endsTurn)).toEqual([false, false, true]);
+		// The plan, diff and actions belong to the real turn, drawn under its last segment.
+		expect(groups.map((group) => Boolean(group.plan))).toEqual([false, false, true]);
+		expect(partitionTurnItems(groups[1].items, groups[1].turn)!.prompt.map((item) => item.id)).toEqual(["s1"]);
+	});
+
+	it("settles the work before a steer while the turn keeps running after it", () => {
+		const groups = groupConversationByTurn(chat("running", [user("u", 1, "go"), command("ls", 2), steer("s1", 10), command("cat", 11)]));
+		expect(groups.map((group) => group.turn?.state)).toEqual(["completed", "running"]);
+		expect(groups[1].turn?.startedAt).toBe(at(10));
+	});
+
+	it("keeps a steer another session sent inside the work", () => {
+		const groups = groupConversationByTurn(chat("completed", [user("u", 1, "go"), steer("s1", 10, { senderSessionId: "worker-1" }), reply("r", 11, "ok")]));
+		expect(groups.map(ids)).toEqual([["u", "s1", "r"]]);
+		expect(groups[0].endsTurn).toBe(true);
+	});
+
+	it("keeps each part's turn view while its turn is unchanged, so a settled part keeps its memo", () => {
+		const value = chat("running", [user("u", 1, "go"), command("ls", 2), steer("s1", 10), command("cat", 11)]);
+		const first = groupConversationByTurn(value);
+		const streamed = { ...value, items: [...value.items, reply("r", 12, "Work")] };
+		const second = groupConversationByTurn(streamed);
+		expect(second.map((group) => group.turn)).toEqual(first.map((group) => group.turn));
+		expect(second[0].turn).toBe(first[0].turn);
+		expect(second[1].turn).toBe(first[1].turn);
+		// A new turn record from the daemon gives new views.
+		const settled = groupConversationByTurn({ ...streamed, turns: [{ ...streamed.turns[0], state: "completed", completedAt: at(50) }] });
+		expect(settled[1].turn).not.toBe(first[1].turn);
+		expect(settled[1].turn?.state).toBe("completed");
+	});
+
+	it("keys a page that opens on a steer by that steer, so loading the prompt above keeps each part's key", () => {
+		const page = chat("completed", [steer("s1", 10), command("cat", 11), reply("r2", 12, "Done")]);
+		const partial = groupConversationByTurn(page);
+		expect(partial.map((group) => group.key)).toEqual(["turn-t:steer:s1"]);
+		expect(partial[0]).toMatchObject({ continuesTurn: true, endsTurn: true });
+		expect(partial[0].turn?.startedAt).toBe(at(10));
+		const full = groupConversationByTurn({ ...page, items: [user("u", 1, "go"), command("ls", 2), ...page.items] });
+		expect(full.map((group) => group.key)).toEqual(["turn-t", "turn-t:steer:s1"]);
+	});
+
+	it("gives every part the real turn for its rows, so a command still running is not drawn finished", () => {
+		const value = chat("running", [user("u", 1, "go"), command("ls", 2), steer("s1", 10)]);
+		const groups = groupConversationByTurn(value);
+		expect(groups[0].turn?.state).toBe("completed");
+		expect(groups.map((group) => group.sourceTurn)).toEqual([value.turns[0], value.turns[0]]);
+	});
+
+	it("leaves a queued turn whole", () => {
+		const value = chat("queued", [user("u", 1, "go"), steer("s1", 10)]);
+		const groups = groupConversationByTurn(value, value.items);
+		expect(groups.map(ids)).toEqual([["u", "s1"]]);
 	});
 });

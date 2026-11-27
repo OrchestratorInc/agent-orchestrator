@@ -3987,6 +3987,7 @@ func TestToAPIErrorMapsWorkspaceBranchSentinels(t *testing.T) {
 		{"missing harness", fmt.Errorf("spawn: %w: configure project worker.agent or pass --harness", sessionmanager.ErrMissingHarness), apierr.KindInvalid, "AGENT_REQUIRED"},
 		{"artifact output unavailable", fmt.Errorf("spawn: %w", sessionmanager.ErrArtifactOutputUnavailable), apierr.KindInvalid, "ARTIFACT_OUTPUT_UNAVAILABLE"},
 		{"harness install active", fmt.Errorf("spawn: %w", sessionmanager.ErrHarnessInstallActive), apierr.KindConflict, "HARNESS_INSTALL_ACTIVE"},
+		{"orchestrator permission ceiling", fmt.Errorf("spawn: %w", sessionmanager.ErrSpawnPermissionExceedsPolicy), apierr.KindInvalid, "SPAWN_PERMISSION_EXCEEDS_POLICY"},
 		{"awaiting decision", fmt.Errorf("send mer-1: %w", sessionmanager.ErrAwaitingDecision), apierr.KindConflict, "SESSION_AWAITING_DECISION"},
 		{"delivery unconfirmed", fmt.Errorf("send mer-1: %w", sessionmanager.ErrDeliveryUnconfirmed), apierr.KindConflict, "SESSION_DELIVERY_UNCONFIRMED"},
 		{"startup pending", fmt.Errorf("send mer-1: %w", sessionmanager.ErrStartupPending), apierr.KindConflict, "SESSION_STARTUP_PENDING"},
@@ -6828,6 +6829,28 @@ func TestWorkspaceFileReadsRenewAHeldPreparation(t *testing.T) {
 	}
 	if _, err := svc.ListWorkspaceFiles(context.Background(), "mer-2"); err == nil {
 		t.Fatal("listed files of a session with no worktree")
+	}
+	if want := []domain.TaskPreparationToken{"mer-1"}; !slices.Equal(commander.renewed, want) {
+		t.Fatalf("renewed = %v, want only the preparation %v", commander.renewed, want)
+	}
+}
+
+func TestGetAttachmentRecordAllowsAndRenewsHeldPreparation(t *testing.T) {
+	st := newFakeStore()
+	st.sessions["mer-1"] = domain.SessionRecord{ID: "mer-1", IsTaskPreparation: true}
+	st.sessions["mer-2"] = domain.SessionRecord{ID: "mer-2"}
+	commander := &renewingCommander{fakeCommander: &fakeCommander{}}
+	svc := &Service{store: st, manager: commander}
+
+	if _, err := svc.Get(context.Background(), "mer-1"); err == nil {
+		t.Fatal("Get returned a held preparation")
+	}
+	rec, err := svc.GetAttachmentRecord(context.Background(), "mer-1")
+	if err != nil || rec.ID != "mer-1" {
+		t.Fatalf("GetAttachmentRecord(mer-1) = %+v, %v; want mer-1", rec, err)
+	}
+	if _, err := svc.GetAttachmentRecord(context.Background(), "mer-2"); err != nil {
+		t.Fatalf("GetAttachmentRecord(mer-2) err = %v", err)
 	}
 	if want := []domain.TaskPreparationToken{"mer-1"}; !slices.Equal(commander.renewed, want) {
 		t.Fatalf("renewed = %v, want only the preparation %v", commander.renewed, want)

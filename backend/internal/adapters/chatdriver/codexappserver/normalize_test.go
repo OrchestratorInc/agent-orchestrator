@@ -434,12 +434,17 @@ func TestNormalizeContextCompactionItem(t *testing.T) {
 	}
 }
 
-// The reclaim is unknown until the item settles: the reduced token figure arrives
-// between start and completion. A row emitted on start would have to be rewritten
-// with the real numbers.
-func TestNormalizeContextCompactionStartIsIgnored(t *testing.T) {
-	normalizeNone(t, "item/started",
+// A compaction in flight is reported running, on the item its completion settles,
+// so the timeline can say it is under way.
+func TestNormalizeContextCompactionStartIsRunning(t *testing.T) {
+	ev := normalizeOne(t, "item/started",
 		`{"item":{"type":"contextCompaction","id":"cc-1"},"threadId":"th1","turnId":"t1"}`)
+	if ev.Kind != ports.ChatEventCompacted || ev.ActivityStatus != domain.ActivityStatusRunning {
+		t.Fatalf("event = %q/%q, want a running compaction", ev.Kind, ev.ActivityStatus)
+	}
+	if ev.ProviderItemID != "cc-1" || ev.ProviderTurnID != "t1" {
+		t.Fatalf("ids = %q/%q, want cc-1/t1", ev.ProviderItemID, ev.ProviderTurnID)
+	}
 }
 
 // The deprecated spelling, for a provider old enough to send it. It carries only
