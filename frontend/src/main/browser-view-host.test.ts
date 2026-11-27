@@ -4921,6 +4921,21 @@ describe("agent browser runtime", () => {
 			expect(await previewOf("t2")).toBeUndefined();
 		});
 
+		it("lets a typed address release a preview tab whose first load has not finished", async () => {
+			let release!: () => void;
+			const { invoke } = setupTabHost(undefined, false, async (_view, url) => {
+				if (url.startsWith("http://localhost:3000")) await new Promise<void>((resolve) => (release = resolve));
+			});
+			const { viewId } = (await invoke("browser:ensure", "remote:h_box:ao-1", false)) as { viewId: string };
+			const opening = invoke("browser:openTab", { viewId, url: "http://localhost:3000/", preview: true });
+			await settle();
+			await invoke("browser:navigate", { viewId, url: "http://localhost:4001/" });
+			release();
+			await opening;
+			const { tabs } = (await invoke("browser:getTabs", viewId)) as { tabs: Tab[] };
+			expect(tabs[0]?.preview).toBeUndefined();
+		});
+
 		it("leaves Cmd+F in an agent tab to its viewer, whose find searches the agent's page", async () => {
 			const { invoke, views, viewId, sent } = await openAgent();
 			await invoke("browser:selectTab", { viewId, tabId: "a1" });

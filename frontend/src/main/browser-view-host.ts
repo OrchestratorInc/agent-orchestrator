@@ -1962,6 +1962,7 @@ export function createBrowserViewHost(
     // otherwise the runtime keeps issuing further actions against the tab the
     // agent was on before the link, not the one it's actually looking at now.
     syncNativeOnActivate = false,
+    preview = false,
   ): Promise<BrowserEntry> => {
     assertTabsNotReplacing(session);
     return withBrowserOperation(session, async () => {
@@ -1974,6 +1975,7 @@ export function createBrowserViewHost(
         normalizedURL = normalized.href;
       }
       const entry = createTab(session, activate, syncNativeOnActivate);
+      if (preview) session.previewTabId = entry.tabId;
       registerBrowserSignalWatcher(session);
       await entry.ready;
       if (normalizedURL) {
@@ -2376,8 +2378,7 @@ export function createBrowserViewHost(
     preview = false,
   ): Promise<BrowserTabsState> => {
     if (!options.agentBrowserRuntime) {
-      const entry = await openTab(session, url, true);
-      if (preview) session.previewTabId = entry.tabId;
+      await openTab(session, url, true, "opened", false, preview);
       return listTabs(session);
     }
     return queueNativeOperation(session, async () => {
@@ -2390,8 +2391,7 @@ export function createBrowserViewHost(
       // CDP identity first (ensureNativeActiveTab), as after a person closes a
       // tab. Creating it directly also keeps a first tab from racing the
       // bootstrap page agent-browser makes when it connects to zero targets.
-      const entry = await openTab(session, url, true);
-      if (preview) session.previewTabId = entry.tabId;
+      await openTab(session, url, true, "opened", false, preview);
       session.nativeActiveTabId = undefined;
       session.snapshotDeltaBaseline = undefined;
       options.agentBrowserRuntime!.reconcileTargets(session.sessionId);
@@ -2968,8 +2968,7 @@ export function createBrowserViewHost(
     assertProfileStable(session);
     return withBrowserOperation(session, async () => {
       if (!session.tabs.size) {
-        const entry = await openTab(session, url, true);
-        if (preview) session.previewTabId = entry.tabId;
+        const entry = await openTab(session, url, true, "opened", false, preview);
         return pushNavState(options, entry);
       }
       const entry = activeEntry(session);
