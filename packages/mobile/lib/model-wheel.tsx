@@ -1,14 +1,16 @@
 import { memo, useCallback, useEffect, useRef, useState } from "react";
-import { ScrollView, StyleSheet, Text, View } from "react-native";
+import { Platform, ScrollView, StyleSheet, Text, TextInput, View } from "react-native";
 import { Pressable } from "react-native-gesture-handler";
 import { AgentLogo } from "./AgentLogo";
+import { AppSymbol } from "./AppSymbol";
 import type { WheelAgent, WheelSetting } from "./chat/useChatModelWheel";
 import { COMPOSER_CONTROL_RISE, ComposerOverlay } from "./composer-overlay";
 import { useWarmAfterIdle } from "./effort-slider-host";
 import { haptics } from "./haptics";
+import { ModelSearchSheet } from "./model-search";
 import type { Theme } from "./theme";
-import { useThemedStyles } from "./ThemeProvider";
-import { radius, space, type } from "./tokens";
+import { useTheme, useThemedStyles } from "./ThemeProvider";
+import { iconSize, radius, space, type } from "./tokens";
 import { useEffortSliderOpen, type EffortSliderSwitch } from "./useEffortSlider";
 import { LIST_ROW, LIST_ROWS, ModelList } from "./model-list";
 
@@ -22,7 +24,9 @@ import { LIST_ROW, LIST_ROWS, ModelList } from "./model-list";
  */
 
 
-// The agent buttons' height, and each provider setting's row under the wheel.
+// The search row's height, where the input bar is; the agent buttons', and
+// each provider setting's row under the wheel.
+const SEARCH_ROW = 40;
 const AGENT_ROW = 36;
 const SETTING_ROW = 44;
 // Room above the agent buttons and below the last row, between the agents
@@ -35,9 +39,9 @@ const PANEL_DROP = space.md + 56;
 // into the keyboard rather than ending on an edge.
 const WHEEL_VEIL_FALL = 160;
 
-/** The panel's height: the agent buttons, the wheel under them, and a row per setting. */
+/** The panel's height: the search row, the agent buttons, the wheel under them, and a row per setting. */
 function wheelPanelHeight(agents: number, settings: number): number {
-	const rows = [...(agents > 1 ? [AGENT_ROW] : []), LIST_ROW * LIST_ROWS, ...Array.from({ length: settings }, () => SETTING_ROW)];
+	const rows = [SEARCH_ROW, ...(agents > 1 ? [AGENT_ROW] : []), LIST_ROW * LIST_ROWS, ...Array.from({ length: settings }, () => SETTING_ROW)];
 	return PANEL_TOP + rows.reduce((sum, row) => sum + row, 0) + (rows.length - 1) * PANEL_GAP + PANEL_BOTTOM;
 }
 
@@ -47,7 +51,7 @@ function wheelPanelHeight(agents: number, settings: number): number {
  * where the input bar is, and the other models cover most of the keyboard.
  */
 function wheelKeysOverlap(agents: number, settings: number): number {
-	const aboveBand = PANEL_TOP + (agents > 1 ? AGENT_ROW + PANEL_GAP : 0) + LIST_ROW / 2;
+	const aboveBand = PANEL_TOP + SEARCH_ROW + PANEL_GAP + (agents > 1 ? AGENT_ROW + PANEL_GAP : 0) + LIST_ROW / 2;
 	return wheelPanelHeight(agents, settings) - (COMPOSER_CONTROL_RISE - PANEL_DROP + aboveBand);
 }
 
@@ -92,15 +96,50 @@ export const ModelWheelHost = memo(function ModelWheelHost({ slider, busy, ...wh
 	// not leave the wheels to reopen by themselves when the card goes.
 	useEffect(() => () => slider.setOpen(false), [slider]);
 	const onMove = useCallback((at: WheelPosition) => { moved.current = at; }, []);
+	// The search, a page of its own: the panel goes, and the field that had the
+	// keys gets them back once the page has gone.
+	const [searching, setSearching] = useState(false);
+	const field = useRef<{ focus: () => void } | null>(null);
+	const openSearch = useCallback(() => {
+		field.current = TextInput.State?.currentlyFocusedInput?.() ?? null;
+		// The search picks; an agent tapped on the panel on the way is no choice.
+		moved.current = undefined;
+		slider.setOpen(false);
+		setSearching(true);
+	}, [slider]);
+	const refocus = useCallback(() => {
+		const input = field.current;
+		field.current = null;
+		input?.focus();
+	}, []);
+	const closeSearch = useCallback(() => {
+		setSearching(false);
+		// iOS says when the page has gone (onDismissed); Android has no such call.
+		if (Platform.OS !== "ios") refocus();
+	}, [refocus]);
 	const warm = useWarmAfterIdle();
-	if (!(open || warm) || !wheel.agents.length) return null;
+	if (!wheel.agents.length) return null;
 	return (
-		// From the input bar's top down over most of the keys, the band on the
-		// model pill it opens from: a model is picked with a thumb, and the keys'
-		// last rows still show below.
-		<ComposerOverlay overKeyboard keysOverlap={wheelKeysOverlap(wheel.agents.length, wheel.settings.length)} veilFall={WHEEL_VEIL_FALL} visible={open} onDismiss={() => slider.setOpen(false)} fill>
-			<ModelWheel {...wheel} visible={open} onMove={onMove} onEmptyTap={() => slider.setOpen(false)} />
-		</ComposerOverlay>
+		<>
+			{open || warm ? (
+				// From the input bar's top down over most of the keys, the band on the
+				// model pill it opens from: a model is picked with a thumb, and the keys'
+				// last rows still show below.
+				<ComposerOverlay overKeyboard keysOverlap={wheelKeysOverlap(wheel.agents.length, wheel.settings.length)} veilFall={WHEEL_VEIL_FALL} visible={open} onDismiss={() => slider.setOpen(false)} fill>
+					<ModelWheel {...wheel} visible={open} onMove={onMove} onEmptyTap={() => slider.setOpen(false)} onSearch={openSearch} />
+				</ComposerOverlay>
+			) : null}
+			<ModelSearchSheet
+				visible={searching}
+				agents={wheel.agents}
+				chosenAgent={wheel.chosenAgent}
+				chosenModel={wheel.chosenModel}
+				agentsLocked={wheel.agentsLocked}
+				onPick={(agent, model) => { chooseRef.current(agent, model); closeSearch(); }}
+				onClose={closeSearch}
+				onDismissed={refocus}
+			/>
+		</>
 	);
 });
 
@@ -109,13 +148,16 @@ function defaultModel(agent: WheelAgent): string | undefined {
 	return (agent.models.find((model) => model.starred) ?? agent.models[0])?.key;
 }
 
-export function ModelWheel({ agents, chosenAgent, chosenModel, runningAgent, runningModel, settings, toggleSetting, agentsLocked, visible = true, onMove, onEmptyTap }: Omit<ModelWheelProps, "choose"> & {
+export function ModelWheel({ agents, chosenAgent, chosenModel, runningAgent, runningModel, settings, toggleSetting, agentsLocked, visible = true, onMove, onEmptyTap, onSearch }: Omit<ModelWheelProps, "choose"> & {
 	visible?: boolean;
+	/** The search row tapped: the search opens, a page of its own. */
+	onSearch?: () => void;
 	/** The wheels came to rest here. */
 	onMove: (at: WheelPosition) => void;
 	/** A tap on a wheel's empty rows, which read as the chat around the wheels. */
 	onEmptyTap?: () => void;
 }) {
+	const t = useTheme();
 	const styles = useThemedStyles(makeStyles);
 	const chosen = { agent: chosenAgent, model: chosenModel ?? "" };
 	const [at, setAt] = useState<WheelPosition>(chosen);
@@ -147,6 +189,17 @@ export function ModelWheel({ agents, chosenAgent, chosenModel, runningAgent, run
 
 	return (
 		<View style={styles.panel} testID="model-wheel">
+			{/* The search, where the input bar is: a tap opens it full screen, typing at once. */}
+			<Pressable
+				onPress={() => { haptics.select(); onSearch?.(); }}
+				accessibilityRole="search"
+				accessibilityLabel="Search models"
+				testID="model-wheel-search"
+				style={({ pressed }) => [styles.search, pressed && styles.searchPressed]}
+			>
+				<AppSymbol name="search" size={iconSize.sm} color={t.textTertiary} />
+				<Text style={styles.searchLabel} numberOfLines={1}>Search models</Text>
+			</Pressable>
 			{/* The agents as buttons, where the input bar is, the chosen model right under them. */}
 			{agents.length > 1 ? (
 				<AgentRail
@@ -275,6 +328,19 @@ const makeStyles = (t: Theme) =>
 	StyleSheet.create({
 		panel: { alignSelf: "stretch", gap: PANEL_GAP, paddingTop: PANEL_TOP, paddingBottom: PANEL_BOTTOM },
 		rail: { gap: space.xs, paddingHorizontal: space.xs },
+		search: {
+			flexDirection: "row",
+			alignItems: "center",
+			gap: space.xs,
+			height: SEARCH_ROW,
+			marginHorizontal: space.xs,
+			paddingHorizontal: space.md,
+			borderRadius: radius.md,
+			borderCurve: "continuous",
+			backgroundColor: t.bgElevated,
+		},
+		searchPressed: { backgroundColor: t.bgElevatedHover },
+		searchLabel: { ...type.callout, color: t.textTertiary, flexShrink: 1 },
 		agent: {
 			flexDirection: "row",
 			alignItems: "center",

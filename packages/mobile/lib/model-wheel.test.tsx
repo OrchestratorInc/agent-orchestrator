@@ -1,7 +1,7 @@
 import { act, create, type ReactTestInstance, type ReactTestRenderer } from "react-test-renderer";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-const fixtures = vi.hoisted(() => ({ theme: new Proxy({}, { get: (_target, key) => `#${String(key)}` }) }));
+const fixtures = vi.hoisted(() => ({ theme: new Proxy({}, { get: (_target, key) => `#${String(key)}` }), focused: { current: null as { focus: () => void } | null } }));
 
 vi.mock("react-native", async () => {
 	const React = await import("react");
@@ -9,6 +9,8 @@ vi.mock("react-native", async () => {
 	return {
 		BackHandler: { addEventListener: () => ({ remove: () => {} }) },
 		Keyboard: { addListener: () => ({ remove: () => {} }) },
+		Platform: { OS: "ios" },
+		TextInput: { State: { currentlyFocusedInput: () => fixtures.focused.current } },
 		ScrollView: host("ScrollView"),
 		StyleSheet: { create: (styles: object) => styles },
 		Text: host("Text"),
@@ -24,9 +26,11 @@ vi.mock("./composer-overlay", async () => {
 	return { COMPOSER_CONTROL_RISE: 37, ComposerOverlay: ({ children, ...props }: { children?: React.ReactNode }) => React.createElement("ComposerOverlay", props, children) };
 });
 vi.mock("./AgentLogo", () => ({ AgentLogo: "AgentLogo" }));
+vi.mock("./AppSymbol", () => ({ AppSymbol: "AppSymbol" }));
+vi.mock("./model-search", () => ({ ModelSearchSheet: "ModelSearchSheet" }));
 vi.mock("./effort-slider-host", () => ({ useWarmAfterIdle: () => true }));
 vi.mock("./haptics", () => ({ haptics: { select: () => {} } }));
-vi.mock("./ThemeProvider", () => ({ useThemedStyles: (make: (theme: object) => object) => make(fixtures.theme) }));
+vi.mock("./ThemeProvider", () => ({ useTheme: () => fixtures.theme, useThemedStyles: (make: (theme: object) => object) => make(fixtures.theme) }));
 vi.mock("./model-list", () => ({ ModelList: "ModelList", LIST_ROW: 46, LIST_ROWS: 6 }));
 
 import type { WheelAgent } from "./chat/useChatModelWheel";
@@ -73,6 +77,8 @@ function render(over: { chosenAgent?: string; chosenModel?: string; agentsLocked
 		modelsWheel: () => wheel("model-wheel-models"),
 		pick: (index: number) => act(() => wheel("model-wheel-models").props.onPick(index)),
 		rerender: (props: { chosenAgent?: string; chosenModel?: string }) => act(() => renderer!.update(element(props))),
+		openSearch: () => act(() => renderer!.root.findAll((node) => hostType(node) === "Pressable" && node.props.testID === "model-wheel-search")[0].props.onPress()),
+		search: () => renderer!.root.findAll((node) => hostType(node) === "ModelSearchSheet")[0],
 	};
 }
 
@@ -162,5 +168,39 @@ describe("model wheel", () => {
 		const { agentButton } = render({ agentsLocked: true });
 		expect(agentButton("codex").props.disabled).toBe(true);
 		expect(agentButton("claude-code").props.disabled).toBe(false);
+	});
+
+	// The search row opens a page of its own, typing at once: the panel goes.
+	it("opens the search in place of the panel, and drops an agent only looked at", () => {
+		const { slider, choose, pickAgent, openSearch, search } = render();
+		expect(search().props.visible).toBe(false);
+		pickAgent("codex");
+		openSearch();
+		expect(slider.isOpen()).toBe(false);
+		expect(search().props.visible).toBe(true);
+		// The agent tapped on the way to the search is no choice.
+		expect(choose).not.toHaveBeenCalled();
+	});
+
+	it("chooses what the search picks and gives the field the keys back once it has gone", () => {
+		const field = { focus: vi.fn() };
+		fixtures.focused.current = field;
+		const { choose, openSearch, search } = render();
+		openSearch();
+		act(() => search().props.onPick("codex", "gpt-old"));
+		expect(choose).toHaveBeenCalledExactlyOnceWith("codex", "gpt-old");
+		expect(search().props.visible).toBe(false);
+		expect(field.focus).not.toHaveBeenCalled();
+		act(() => search().props.onDismissed());
+		expect(field.focus).toHaveBeenCalledOnce();
+		fixtures.focused.current = null;
+	});
+
+	it("chooses nothing when the search is cancelled", () => {
+		const { choose, openSearch, search } = render();
+		openSearch();
+		act(() => search().props.onClose());
+		expect(search().props.visible).toBe(false);
+		expect(choose).not.toHaveBeenCalled();
 	});
 });
