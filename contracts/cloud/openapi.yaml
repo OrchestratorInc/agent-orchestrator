@@ -61,7 +61,8 @@ paths:
         (a session still running is never ended for it; it waits until
         someone ends it), its sandbox is deleted and its content (chat
         timeline, harness transcripts, terminal output, commands,
-        agent-switch handoffs and prompts) is deleted for good. The session
+        agent-switch handoffs and prompts, and its comment threads: quotes,
+        comments and history) is deleted for good. The session
         itself remains, without its content, for billing and audit. A user
         follows defaultDays (followsDefault) until they choose another
         period, and can go back to it.
@@ -3180,9 +3181,27 @@ paths:
             is `mentions` and details.reason says why: `unknown` (no such
             person or team in the workspace), `no_access` (the person can't
             open the session), `outside_session` (a guest named someone who
-            isn't in the session, or a team), or `too_many` (more than 20).
-            Nothing is appended.
+            isn't in the session, or a team), `too_many` (more than 20), or
+            `team_too_large` (the teams named, with the people named, reach
+            more than 100 people, counted before access is checked). Nothing
+            is appended.
           $ref: "#/components/responses/ValidationError"
+        "429":
+          description: >-
+            `rate_limited`: the request carries mentions and the caller sent
+            20 messages, steers and comments with mentions in this session
+            within 10 minutes. Retry-After says when to try again. Nothing is
+            stored. Requests without mentions are not limited.
+          headers:
+            Retry-After:
+              description: Seconds until the caller may send mentions in this session again.
+              schema:
+                type: integer
+                minimum: 1
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
         default:
           $ref: "#/components/responses/Error"
   /api/cloud/v1/orgs/{orgId}/sessions/{sessionId}/mention-candidates:
@@ -3222,6 +3241,11 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/MentionCandidates"
+        "501":
+          description: >-
+            `not_implemented`: this control plane does not offer mentions
+            (offering.features lacks `mentions`). Nothing is read or stored.
+          $ref: "#/components/responses/Error"
         default:
           $ref: "#/components/responses/Error"
   /api/cloud/v1/orgs/{orgId}/sessions/{sessionId}/asides:
@@ -3262,6 +3286,11 @@ paths:
                       $ref: "#/components/schemas/Aside"
         "404":
           description: The caller can't open the session.
+          $ref: "#/components/responses/Error"
+        "501":
+          description: >-
+            `not_implemented`: this control plane does not offer mentions
+            (offering.features lacks `mentions`). Nothing is read or stored.
           $ref: "#/components/responses/Error"
         default:
           $ref: "#/components/responses/Error"
@@ -3315,11 +3344,33 @@ paths:
             `validation_error`: details.field `anchor` with details.reason
             `invalid_anchor` when anchor.sequence is not a message, steer or
             agent answer of this session; details.field `quote` with
-            details.reason `quote_too_long` past 2000 characters, or `blank`;
-            details.field `text` when the comment is blank or longer than
-            65536 characters; details.field `mentions` as on sendMessage.
-            Nothing is stored.
+            details.reason `quote_too_long` past 2000 characters, `blank`, or
+            `not_in_message` when it is not words of the anchored message
+            (AsideCreateInput.quote); details.field `text` when the comment is
+            blank or longer than 65536 characters; details.field `mentions` as
+            on sendMessage. Nothing is stored.
           $ref: "#/components/responses/ValidationError"
+        "429":
+          description: >-
+            `rate_limited`: the request carries mentions and the caller sent
+            20 messages, steers and comments with mentions in this session
+            within 10 minutes. Retry-After says when to try again. Nothing is
+            stored. Requests without mentions are not limited.
+          headers:
+            Retry-After:
+              description: Seconds until the caller may send mentions in this session again.
+              schema:
+                type: integer
+                minimum: 1
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+        "501":
+          description: >-
+            `not_implemented`: this control plane does not offer mentions
+            (offering.features lacks `mentions`). Nothing is read or stored.
+          $ref: "#/components/responses/Error"
         default:
           $ref: "#/components/responses/Error"
   /api/cloud/v1/orgs/{orgId}/sessions/{sessionId}/asides/{asideId}:
@@ -3359,6 +3410,11 @@ paths:
         "404":
           description: The caller can't open the session, or the session has no such aside.
           $ref: "#/components/responses/Error"
+        "501":
+          description: >-
+            `not_implemented`: this control plane does not offer mentions
+            (offering.features lacks `mentions`). Nothing is read or stored.
+          $ref: "#/components/responses/Error"
         default:
           $ref: "#/components/responses/Error"
   /api/cloud/v1/orgs/{orgId}/sessions/{sessionId}/asides/{asideId}/replies:
@@ -3386,7 +3442,10 @@ paths:
         framing line, the thread verbatim (the anchor and the comments, with
         their authors and times) and the reply apart from it as the request,
         within size limits (FromAside describes the text). A thread sent
-        before carries only the comments written since. That message goes
+        before carries only the comments written since. The send is
+        pinned to the thread as the caller read it (throughSequence): a
+        comment it would carry that was written or edited after that answers
+        409 thread_changed, and nothing is stored. That message goes
         through sendMessage's path (it queues behind a running turn like any
         message) and its chat.user_message event carries fromAside, from
         which a client draws the card. The thread gets a `sent_to_agent`
@@ -3425,16 +3484,39 @@ paths:
           description: The caller can't open the session, or the session has no such aside.
           $ref: "#/components/responses/Error"
         "409":
-          description: "`SESSION_TERMINATED`: the session ended or was deleted. Nothing is stored."
+          description: "`SESSION_TERMINATED`: the session ended or was deleted. `thread_changed`: with sendToAgent, a comment the send would carry was written or edited after throughSequence; read the thread again and resend. Nothing is stored."
           $ref: "#/components/responses/Error"
         "422":
           description: >-
             `validation_error`: details.field `text` when the text is blank
             (allowed only with sendToAgent) or longer than 65536 characters;
+            details.field `throughSequence` when sendToAgent comes without it
+            (or below 0);
             details.field `mentions` with a
             details.reason as on sendMessage (`unknown`, `no_access`,
-            `outside_session`, `too_many`). Nothing is stored.
+            `outside_session`, `too_many`, `team_too_large`). Nothing is stored.
           $ref: "#/components/responses/ValidationError"
+        "429":
+          description: >-
+            `rate_limited`: the request carries mentions and the caller sent
+            20 messages, steers and comments with mentions in this session
+            within 10 minutes. Retry-After says when to try again. Nothing is
+            stored. Requests without mentions are not limited.
+          headers:
+            Retry-After:
+              description: Seconds until the caller may send mentions in this session again.
+              schema:
+                type: integer
+                minimum: 1
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+        "501":
+          description: >-
+            `not_implemented`: this control plane does not offer mentions
+            (offering.features lacks `mentions`). Nothing is read or stored.
+          $ref: "#/components/responses/Error"
         default:
           $ref: "#/components/responses/Error"
   /api/cloud/v1/orgs/{orgId}/sessions/{sessionId}/asides/{asideId}/replies/{replyId}:
@@ -3498,6 +3580,27 @@ paths:
         "422":
           description: "`validation_error` on `text` or `mentions`, as on replyToSessionAside."
           $ref: "#/components/responses/ValidationError"
+        "429":
+          description: >-
+            `rate_limited`: the request carries mentions and the caller sent
+            20 messages, steers and comments with mentions in this session
+            within 10 minutes. Retry-After says when to try again. Nothing is
+            stored. Requests without mentions are not limited.
+          headers:
+            Retry-After:
+              description: Seconds until the caller may send mentions in this session again.
+              schema:
+                type: integer
+                minimum: 1
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+        "501":
+          description: >-
+            `not_implemented`: this control plane does not offer mentions
+            (offering.features lacks `mentions`). Nothing is read or stored.
+          $ref: "#/components/responses/Error"
         default:
           $ref: "#/components/responses/Error"
     delete:
@@ -3520,6 +3623,11 @@ paths:
           $ref: "#/components/responses/Error"
         "409":
           description: "`SESSION_TERMINATED`: the session ended or was deleted."
+          $ref: "#/components/responses/Error"
+        "501":
+          description: >-
+            `not_implemented`: this control plane does not offer mentions
+            (offering.features lacks `mentions`). Nothing is read or stored.
           $ref: "#/components/responses/Error"
         default:
           $ref: "#/components/responses/Error"
@@ -3548,6 +3656,11 @@ paths:
                 $ref: "#/components/schemas/Aside"
         "404":
           description: The caller can't open the session, or the session has no such aside.
+          $ref: "#/components/responses/Error"
+        "501":
+          description: >-
+            `not_implemented`: this control plane does not offer mentions
+            (offering.features lacks `mentions`). Nothing is read or stored.
           $ref: "#/components/responses/Error"
         default:
           $ref: "#/components/responses/Error"
@@ -3578,6 +3691,11 @@ paths:
                 $ref: "#/components/schemas/Aside"
         "404":
           description: The caller can't open the session, or the session has no such aside.
+          $ref: "#/components/responses/Error"
+        "501":
+          description: >-
+            `not_implemented`: this control plane does not offer mentions
+            (offering.features lacks `mentions`). Nothing is read or stored.
           $ref: "#/components/responses/Error"
         default:
           $ref: "#/components/responses/Error"
@@ -3616,6 +3734,11 @@ paths:
         "404":
           description: The caller can't open the session, or the session has no such aside.
           $ref: "#/components/responses/Error"
+        "501":
+          description: >-
+            `not_implemented`: this control plane does not offer mentions
+            (offering.features lacks `mentions`). Nothing is read or stored.
+          $ref: "#/components/responses/Error"
         default:
           $ref: "#/components/responses/Error"
   /api/cloud/v1/orgs/{orgId}/sessions/{sessionId}/asides/{asideId}/resolve:
@@ -3645,6 +3768,11 @@ paths:
         "409":
           description: "`SESSION_TERMINATED`: the session ended or was deleted."
           $ref: "#/components/responses/Error"
+        "501":
+          description: >-
+            `not_implemented`: this control plane does not offer mentions
+            (offering.features lacks `mentions`). Nothing is read or stored.
+          $ref: "#/components/responses/Error"
         default:
           $ref: "#/components/responses/Error"
   /api/cloud/v1/orgs/{orgId}/sessions/{sessionId}/asides/{asideId}/reopen:
@@ -3672,6 +3800,11 @@ paths:
           $ref: "#/components/responses/Error"
         "409":
           description: "`SESSION_TERMINATED`: the session ended or was deleted."
+          $ref: "#/components/responses/Error"
+        "501":
+          description: >-
+            `not_implemented`: this control plane does not offer mentions
+            (offering.features lacks `mentions`). Nothing is read or stored.
           $ref: "#/components/responses/Error"
         default:
           $ref: "#/components/responses/Error"
@@ -4071,6 +4204,22 @@ paths:
             details.field `mentions` and a details.reason as on sendMessage.
             Nothing is appended and the agent receives nothing.
           $ref: "#/components/responses/ValidationError"
+        "429":
+          description: >-
+            `rate_limited`: the request carries mentions and the caller sent
+            20 messages, steers and comments with mentions in this session
+            within 10 minutes. Retry-After says when to try again. Nothing is
+            stored. Requests without mentions are not limited.
+          headers:
+            Retry-After:
+              description: Seconds until the caller may send mentions in this session again.
+              schema:
+                type: integer
+                minimum: 1
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
         default:
           $ref: "#/components/responses/Error"
   /api/cloud/v1/orgs/{orgId}/sessions/{sessionId}/turns/{turnId}/edit:
@@ -6020,6 +6169,11 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/NotificationPage"
+        "501":
+          description: >-
+            `not_implemented`: this control plane does not offer mentions
+            (offering.features lacks `mentions`). Nothing is read or stored.
+          $ref: "#/components/responses/Error"
         default:
           $ref: "#/components/responses/Error"
   /api/cloud/v1/me/notification-events:
@@ -6050,6 +6204,11 @@ paths:
             text/event-stream:
               schema:
                 type: string
+        "501":
+          description: >-
+            `not_implemented`: this control plane does not offer mentions
+            (offering.features lacks `mentions`). Nothing is read or stored.
+          $ref: "#/components/responses/Error"
         default:
           $ref: "#/components/responses/Error"
   /api/cloud/v1/me/notifications/state:
@@ -6081,6 +6240,11 @@ paths:
         "422":
           description: "`validation_error`: the body names no target, or more than one (ids, all, or orgId with sessionId)."
           $ref: "#/components/responses/ValidationError"
+        "501":
+          description: >-
+            `not_implemented`: this control plane does not offer mentions
+            (offering.features lacks `mentions`). Nothing is read or stored.
+          $ref: "#/components/responses/Error"
         default:
           $ref: "#/components/responses/Error"
   /api/cloud/v1/me/notification-preferences:
@@ -6098,6 +6262,11 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/NotificationPreferences"
+        "501":
+          description: >-
+            `not_implemented`: this control plane does not offer mentions
+            (offering.features lacks `mentions`). Nothing is read or stored.
+          $ref: "#/components/responses/Error"
         default:
           $ref: "#/components/responses/Error"
     put:
@@ -6120,6 +6289,11 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/NotificationPreferences"
+        "501":
+          description: >-
+            `not_implemented`: this control plane does not offer mentions
+            (offering.features lacks `mentions`). Nothing is read or stored.
+          $ref: "#/components/responses/Error"
         default:
           $ref: "#/components/responses/Error"
   /api/cloud/v1/me/comment-threads:
@@ -6175,6 +6349,11 @@ paths:
         "400":
           description: "`invalid_request`: status, unread or limit is not one of the allowed values. `invalid_cursor`: the cursor is not one this list gave."
           $ref: "#/components/responses/Error"
+        "501":
+          description: >-
+            `not_implemented`: this control plane does not offer mentions
+            (offering.features lacks `mentions`). Nothing is read or stored.
+          $ref: "#/components/responses/Error"
         default:
           $ref: "#/components/responses/Error"
   /api/cloud/v1/me/comment-threads/unread-count:
@@ -6199,6 +6378,11 @@ paths:
                   count:
                     type: integer
                     minimum: 0
+        "501":
+          description: >-
+            `not_implemented`: this control plane does not offer mentions
+            (offering.features lacks `mentions`). Nothing is read or stored.
+          $ref: "#/components/responses/Error"
         default:
           $ref: "#/components/responses/Error"
   /api/cloud/v1/me/hosts:
@@ -7760,7 +7944,17 @@ components:
             (ProjectOrchestratorSandboxProvider): the deployment offers coder
             and freestyle, and the organization may run Coder as its own
             (customCoder), session.branch and session.transcriptImport for
-            sessions moving here from another machine. Empty when none apply.
+            sessions moving here from another machine, and mentions when this
+            control plane offers @mentions of people and teams and comment
+            threads (asides) in shared sessions, with the Threads view and its
+            read state, "Also send to agent", the personal inbox across
+            organizations (the /me notification, notification event and
+            notification preference operations) and the mentioned and
+            aside_reply notifications.
+            Without mentions, those operations answer 501 not_implemented and
+            a message's or steer's mentions are ignored (it goes to the agent
+            as plain text and notifies nobody); a client shows none of the
+            feature. Empty when none apply.
           items:
             type: string
         maxAttachmentBytes:
@@ -10223,7 +10417,10 @@ components:
         it: a chip in the composer, @Name in the text. The person, or every
         member of the team when the message is sent, is notified if they can
         open the session; the sender never is. A client sends no name; the
-        control plane records the current one on the event.
+        control plane records the current one on the event. One message,
+        steer or comment reaches at most 100 people (the people named and the
+        members of the teams named); past that it is refused with
+        team_too_large.
       oneOf:
         - $ref: "#/components/schemas/PersonMentionToken"
         - $ref: "#/components/schemas/TeamMentionToken"
@@ -10485,7 +10682,17 @@ components:
           type: string
           minLength: 1
           maxLength: 2000
-          description: The exact passage of that message, as the client shows it. Absent for a thread on the whole message.
+          description: >-
+            The passage of that message the thread is about, as the client
+            shows it (a selection grown to whole words). It must be the
+            message's own words: the control plane compares words (runs of
+            letters and digits; whitespace, punctuation and markdown syntax
+            only separate them), allows the first and last word to be cut,
+            reads the message as written or as the app draws its markdown
+            (no link destinations, list numbers or HTML tags, and a fenced
+            code block headed by its language, or "text"), and otherwise
+            refuses it with 422 not_in_message. Absent for a thread on the
+            whole message.
         text:
           type: string
           minLength: 1
@@ -10606,6 +10813,15 @@ components:
             Its chat.aside_reply event, which orders it among the thread's
             history entries (Aside.history). Absent from a control plane that
             predates history.
+        editedSequence:
+          type: integer
+          format: int64
+          minimum: 0
+          maximum: 9007199254740991
+          description: >-
+            Its newest edit's chat.aside_reply_edited event; absent if never
+            edited. With sequence it says which version of the comment a
+            client shows (AsideReplyInput.throughSequence).
     AsideThread:
       type: object
       additionalProperties: false
@@ -10658,6 +10874,22 @@ components:
             Also send the whole thread to the agent as one message from the
             caller, and resolve it ("Also send to agent"). Only someone who
             can prompt the agent may (403 prompt_forbidden otherwise).
+            Needs throughSequence (422 validation_error, details.field
+            throughSequence, without it).
+        throughSequence:
+          type: integer
+          format: int64
+          minimum: 0
+          maximum: 9007199254740991
+          description: >-
+            Required with sendToAgent. The newest comment of the thread the
+            sender read: the highest AsideReply.sequence or
+            AsideReply.editedSequence the client showed them (any session
+            event sequence the client had applied works too). A comment
+            written or edited after it, among those the send would carry
+            (written since the thread's last send), refuses the send with 409
+            thread_changed; the agent gets only comments up to it. Ignored
+            without sendToAgent.
     CommentThreadPage:
       type: object
       additionalProperties: false

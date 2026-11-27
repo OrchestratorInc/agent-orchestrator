@@ -27,7 +27,7 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** @description How long the caller's Cloud sessions and their conversation content are kept. The setting is the signed-in user's own and covers every Cloud session they started, in any organization, team sessions included; a child session an orchestrator started follows the orchestrator session's creator. The clock runs from a session's creation: once a session is older than retentionDays and has ended (a session still running is never ended for it; it waits until someone ends it), its sandbox is deleted and its content (chat timeline, harness transcripts, terminal output, commands, agent-switch handoffs and prompts) is deleted for good. The session itself remains, without its content, for billing and audit. A user follows defaultDays (followsDefault) until they choose another period, and can go back to it. */
+        /** @description How long the caller's Cloud sessions and their conversation content are kept. The setting is the signed-in user's own and covers every Cloud session they started, in any organization, team sessions included; a child session an orchestrator started follows the orchestrator session's creator. The clock runs from a session's creation: once a session is older than retentionDays and has ended (a session still running is never ended for it; it waits until someone ends it), its sandbox is deleted and its content (chat timeline, harness transcripts, terminal output, commands, agent-switch handoffs and prompts, and its comment threads: quotes, comments and history) is deleted for good. The session itself remains, without its content, for billing and audit. A user follows defaultDays (followsDefault) until they choose another period, and can go back to it. */
         get: operations["getDataRetention"];
         /** @description Choose how long the caller's Cloud sessions and their conversation content are kept: one of options, or null to follow the deployment's default again (defaultDays, and any later change to it). Both modes answer sessionsToDelete, the number of the caller's sessions, across all organizations, older than the requested period whose content has not been deleted yet: what this change deletes (a session still running once it has ended). With dryRun true nothing changes, so a client can show that number and ask for confirmation before it sends the same request with dryRun false. Every change is written to the audit log with the old and new period. */
         put: operations["putDataRetention"];
@@ -1799,7 +1799,7 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** @description Replies in an aside. Anyone who can open the session may reply, a viewer too, and it needs no composer lease. The reply never reaches the agent. Everyone watching the session receives it as a chat.aside_reply event. Everyone in the aside except the author, and unless they muted it, gets an aside_reply notification; each person or team member the reply mentions joins the aside and gets a mentioned notification instead (mentions are checked as on sendMessage). Replying marks the aside read for the author, and resolves the author's aside_reply and mentioned notifications for it. A reply to a resolved aside reopens it (a `reopened` history entry). With sendToAgent (only for someone who can prompt the agent), in one transaction the reply is stored (unless its text is empty), the aside is resolved, and the agent gets ONE user message from the caller: a framing line, the thread verbatim (the anchor and the comments, with their authors and times) and the reply apart from it as the request, within size limits (FromAside describes the text). A thread sent before carries only the comments written since. That message goes through sendMessage's path (it queues behind a running turn like any message) and its chat.user_message event carries fromAside, from which a client draws the card. The thread gets a `sent_to_agent` history entry, and everyone watching gets chat.aside_resolved with sentToAgent. Nobody is notified of the resolve or the send. A retry with the same clientMessageId returns the reply the first try created and sends nothing again. */
+        /** @description Replies in an aside. Anyone who can open the session may reply, a viewer too, and it needs no composer lease. The reply never reaches the agent. Everyone watching the session receives it as a chat.aside_reply event. Everyone in the aside except the author, and unless they muted it, gets an aside_reply notification; each person or team member the reply mentions joins the aside and gets a mentioned notification instead (mentions are checked as on sendMessage). Replying marks the aside read for the author, and resolves the author's aside_reply and mentioned notifications for it. A reply to a resolved aside reopens it (a `reopened` history entry). With sendToAgent (only for someone who can prompt the agent), in one transaction the reply is stored (unless its text is empty), the aside is resolved, and the agent gets ONE user message from the caller: a framing line, the thread verbatim (the anchor and the comments, with their authors and times) and the reply apart from it as the request, within size limits (FromAside describes the text). A thread sent before carries only the comments written since. The send is pinned to the thread as the caller read it (throughSequence): a comment it would carry that was written or edited after that answers 409 thread_changed, and nothing is stored. That message goes through sendMessage's path (it queues behind a running turn like any message) and its chat.user_message event carries fromAside, from which a client draws the card. The thread gets a `sent_to_agent` history entry, and everyone watching gets chat.aside_resolved with sentToAgent. Nobody is notified of the resolve or the send. A retry with the same clientMessageId returns the reply the first try created and sends nothing again. */
         post: operations["replyToSessionAside"];
         delete?: never;
         options?: never;
@@ -4091,7 +4091,7 @@ export interface components {
              * @enum {string}
              */
             kind: "b2b" | "b2c" | "both" | "none";
-            /** @description The organization's product features (share lets it share sessions) and the deployment's own: attachments when the session attachment routes are on, queued-edit when a queued message can be edited (editQueuedMessage), queued-delete when a queued message can be deleted without stopping a started turn (deleteQueuedMessage), queued-steer when a queued message can be steered into the running turn (steerQueuedMessage), orchestrator-on-coder when a project whose sessions run on Coder may run its orchestrator on Coder too (ProjectOrchestratorSandboxProvider): the deployment offers coder and freestyle, and the organization may run Coder as its own (customCoder), session.branch and session.transcriptImport for sessions moving here from another machine. Empty when none apply. */
+            /** @description The organization's product features (share lets it share sessions) and the deployment's own: attachments when the session attachment routes are on, queued-edit when a queued message can be edited (editQueuedMessage), queued-delete when a queued message can be deleted without stopping a started turn (deleteQueuedMessage), queued-steer when a queued message can be steered into the running turn (steerQueuedMessage), orchestrator-on-coder when a project whose sessions run on Coder may run its orchestrator on Coder too (ProjectOrchestratorSandboxProvider): the deployment offers coder and freestyle, and the organization may run Coder as its own (customCoder), session.branch and session.transcriptImport for sessions moving here from another machine, and mentions when this control plane offers @mentions of people and teams and comment threads (asides) in shared sessions, with the Threads view and its read state, "Also send to agent", the personal inbox across organizations (the /me notification, notification event and notification preference operations) and the mentioned and aside_reply notifications. Without mentions, those operations answer 501 not_implemented and a message's or steer's mentions are ignored (it goes to the agent as plain text and notifies nobody); a client shows none of the feature. Empty when none apply. */
             features: string[];
             /**
              * Format: int64
@@ -5239,7 +5239,7 @@ export interface components {
             /** @description People and teams the guidance notifies, checked as on a message. Recorded, with their names, on the steer's events; the agent receives `text` only. Guidance with mentions starts an aside (asideId on its event). */
             mentions?: components["schemas"]["MentionToken"][];
         };
-        /** @description A person or team named in a message or a steer, as the composer sends it: a chip in the composer, @Name in the text. The person, or every member of the team when the message is sent, is notified if they can open the session; the sender never is. A client sends no name; the control plane records the current one on the event. */
+        /** @description A person or team named in a message or a steer, as the composer sends it: a chip in the composer, @Name in the text. The person, or every member of the team when the message is sent, is notified if they can open the session; the sender never is. A client sends no name; the control plane records the current one on the event. One message, steer or comment reaches at most 100 people (the people named and the members of the teams named); past that it is refused with team_too_large. */
         MentionToken: components["schemas"]["PersonMentionToken"] | components["schemas"]["TeamMentionToken"];
         PersonMentionToken: {
             /** @constant */
@@ -5377,7 +5377,7 @@ export interface components {
                  */
                 sequence: number;
             };
-            /** @description The exact passage of that message, as the client shows it. Absent for a thread on the whole message. */
+            /** @description The passage of that message the thread is about, as the client shows it (a selection grown to whole words). It must be the message's own words: the control plane compares words (runs of letters and digits; whitespace, punctuation and markdown syntax only separate them), allows the first and last word to be cut, reads the message as written or as the app draws its markdown (no link destinations, list numbers or HTML tags, and a fenced code block headed by its language, or "text"), and otherwise refuses it with 422 not_in_message. Absent for a thread on the whole message. */
             quote?: string;
             /** @description The first comment. Each mention is written as @Name, as in a message. */
             text: string;
@@ -5448,6 +5448,11 @@ export interface components {
              * @description Its chat.aside_reply event, which orders it among the thread's history entries (Aside.history). Absent from a control plane that predates history.
              */
             sequence?: number;
+            /**
+             * Format: int64
+             * @description Its newest edit's chat.aside_reply_edited event; absent if never edited. With sequence it says which version of the comment a client shows (AsideReplyInput.throughSequence).
+             */
+            editedSequence?: number;
         };
         AsideThread: {
             aside: components["schemas"]["Aside"];
@@ -5466,8 +5471,13 @@ export interface components {
             mentions?: components["schemas"]["MentionToken"][];
             /** @description The client's id for the reply. A retry with the same one returns the first reply and stores nothing new. */
             clientMessageId: string;
-            /** @description Also send the whole thread to the agent as one message from the caller, and resolve it ("Also send to agent"). Only someone who can prompt the agent may (403 prompt_forbidden otherwise). */
+            /** @description Also send the whole thread to the agent as one message from the caller, and resolve it ("Also send to agent"). Only someone who can prompt the agent may (403 prompt_forbidden otherwise). Needs throughSequence (422 validation_error, details.field throughSequence, without it). */
             sendToAgent?: boolean;
+            /**
+             * Format: int64
+             * @description Required with sendToAgent. The newest comment of the thread the sender read: the highest AsideReply.sequence or AsideReply.editedSequence the client showed them (any session event sequence the client had applied works too). A comment written or edited after it, among those the send would carry (written since the thread's last send), refuses the send with 409 thread_changed; the agent gets only comments up to it. Ignored without sendToAgent.
+             */
+            throughSequence?: number;
         };
         CommentThreadPage: {
             items: components["schemas"]["CommentThread"][];
@@ -11065,8 +11075,19 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description `validation_error`: a field is invalid. For a mention, details.field is `mentions` and details.reason says why: `unknown` (no such person or team in the workspace), `no_access` (the person can't open the session), `outside_session` (a guest named someone who isn't in the session, or a team), or `too_many` (more than 20). Nothing is appended. */
+            /** @description `validation_error`: a field is invalid. For a mention, details.field is `mentions` and details.reason says why: `unknown` (no such person or team in the workspace), `no_access` (the person can't open the session), `outside_session` (a guest named someone who isn't in the session, or a team), `too_many` (more than 20), or `team_too_large` (the teams named, with the people named, reach more than 100 people, counted before access is checked). Nothing is appended. */
             422: components["responses"]["ValidationError"];
+            /** @description `rate_limited`: the request carries mentions and the caller sent 20 messages, steers and comments with mentions in this session within 10 minutes. Retry-After says when to try again. Nothing is stored. Requests without mentions are not limited. */
+            429: {
+                headers: {
+                    /** @description Seconds until the caller may send mentions in this session again. */
+                    "Retry-After"?: number;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
             default: components["responses"]["Error"];
         };
     };
@@ -11096,6 +11117,8 @@ export interface operations {
                     "application/json": components["schemas"]["MentionCandidates"];
                 };
             };
+            /** @description `not_implemented`: this control plane does not offer mentions (offering.features lacks `mentions`). Nothing is read or stored. */
+            501: components["responses"]["Error"];
             default: components["responses"]["Error"];
         };
     };
@@ -11124,6 +11147,8 @@ export interface operations {
             };
             /** @description The caller can't open the session. */
             404: components["responses"]["Error"];
+            /** @description `not_implemented`: this control plane does not offer mentions (offering.features lacks `mentions`). Nothing is read or stored. */
+            501: components["responses"]["Error"];
             default: components["responses"]["Error"];
         };
     };
@@ -11159,8 +11184,21 @@ export interface operations {
             404: components["responses"]["Error"];
             /** @description `SESSION_TERMINATED`: the session ended or was deleted. Nothing is stored. */
             409: components["responses"]["Error"];
-            /** @description `validation_error`: details.field `anchor` with details.reason `invalid_anchor` when anchor.sequence is not a message, steer or agent answer of this session; details.field `quote` with details.reason `quote_too_long` past 2000 characters, or `blank`; details.field `text` when the comment is blank or longer than 65536 characters; details.field `mentions` as on sendMessage. Nothing is stored. */
+            /** @description `validation_error`: details.field `anchor` with details.reason `invalid_anchor` when anchor.sequence is not a message, steer or agent answer of this session; details.field `quote` with details.reason `quote_too_long` past 2000 characters, `blank`, or `not_in_message` when it is not words of the anchored message (AsideCreateInput.quote); details.field `text` when the comment is blank or longer than 65536 characters; details.field `mentions` as on sendMessage. Nothing is stored. */
             422: components["responses"]["ValidationError"];
+            /** @description `rate_limited`: the request carries mentions and the caller sent 20 messages, steers and comments with mentions in this session within 10 minutes. Retry-After says when to try again. Nothing is stored. Requests without mentions are not limited. */
+            429: {
+                headers: {
+                    /** @description Seconds until the caller may send mentions in this session again. */
+                    "Retry-After"?: number;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `not_implemented`: this control plane does not offer mentions (offering.features lacks `mentions`). Nothing is read or stored. */
+            501: components["responses"]["Error"];
             default: components["responses"]["Error"];
         };
     };
@@ -11194,6 +11232,8 @@ export interface operations {
             };
             /** @description The caller can't open the session, or the session has no such aside. */
             404: components["responses"]["Error"];
+            /** @description `not_implemented`: this control plane does not offer mentions (offering.features lacks `mentions`). Nothing is read or stored. */
+            501: components["responses"]["Error"];
             default: components["responses"]["Error"];
         };
     };
@@ -11234,10 +11274,23 @@ export interface operations {
             403: components["responses"]["Error"];
             /** @description The caller can't open the session, or the session has no such aside. */
             404: components["responses"]["Error"];
-            /** @description `SESSION_TERMINATED`: the session ended or was deleted. Nothing is stored. */
+            /** @description `SESSION_TERMINATED`: the session ended or was deleted. `thread_changed`: with sendToAgent, a comment the send would carry was written or edited after throughSequence; read the thread again and resend. Nothing is stored. */
             409: components["responses"]["Error"];
-            /** @description `validation_error`: details.field `text` when the text is blank (allowed only with sendToAgent) or longer than 65536 characters; details.field `mentions` with a details.reason as on sendMessage (`unknown`, `no_access`, `outside_session`, `too_many`). Nothing is stored. */
+            /** @description `validation_error`: details.field `text` when the text is blank (allowed only with sendToAgent) or longer than 65536 characters; details.field `throughSequence` when sendToAgent comes without it (or below 0); details.field `mentions` with a details.reason as on sendMessage (`unknown`, `no_access`, `outside_session`, `too_many`, `team_too_large`). Nothing is stored. */
             422: components["responses"]["ValidationError"];
+            /** @description `rate_limited`: the request carries mentions and the caller sent 20 messages, steers and comments with mentions in this session within 10 minutes. Retry-After says when to try again. Nothing is stored. Requests without mentions are not limited. */
+            429: {
+                headers: {
+                    /** @description Seconds until the caller may send mentions in this session again. */
+                    "Retry-After"?: number;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `not_implemented`: this control plane does not offer mentions (offering.features lacks `mentions`). Nothing is read or stored. */
+            501: components["responses"]["Error"];
             default: components["responses"]["Error"];
         };
     };
@@ -11269,6 +11322,8 @@ export interface operations {
             404: components["responses"]["Error"];
             /** @description `SESSION_TERMINATED`: the session ended or was deleted. */
             409: components["responses"]["Error"];
+            /** @description `not_implemented`: this control plane does not offer mentions (offering.features lacks `mentions`). Nothing is read or stored. */
+            501: components["responses"]["Error"];
             default: components["responses"]["Error"];
         };
     };
@@ -11313,6 +11368,19 @@ export interface operations {
             409: components["responses"]["Error"];
             /** @description `validation_error` on `text` or `mentions`, as on replyToSessionAside. */
             422: components["responses"]["ValidationError"];
+            /** @description `rate_limited`: the request carries mentions and the caller sent 20 messages, steers and comments with mentions in this session within 10 minutes. Retry-After says when to try again. Nothing is stored. Requests without mentions are not limited. */
+            429: {
+                headers: {
+                    /** @description Seconds until the caller may send mentions in this session again. */
+                    "Retry-After"?: number;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `not_implemented`: this control plane does not offer mentions (offering.features lacks `mentions`). Nothing is read or stored. */
+            501: components["responses"]["Error"];
             default: components["responses"]["Error"];
         };
     };
@@ -11341,6 +11409,8 @@ export interface operations {
             };
             /** @description The caller can't open the session, or the session has no such aside. */
             404: components["responses"]["Error"];
+            /** @description `not_implemented`: this control plane does not offer mentions (offering.features lacks `mentions`). Nothing is read or stored. */
+            501: components["responses"]["Error"];
             default: components["responses"]["Error"];
         };
     };
@@ -11369,6 +11439,8 @@ export interface operations {
             };
             /** @description The caller can't open the session, or the session has no such aside. */
             404: components["responses"]["Error"];
+            /** @description `not_implemented`: this control plane does not offer mentions (offering.features lacks `mentions`). Nothing is read or stored. */
+            501: components["responses"]["Error"];
             default: components["responses"]["Error"];
         };
     };
@@ -11403,6 +11475,8 @@ export interface operations {
             };
             /** @description The caller can't open the session, or the session has no such aside. */
             404: components["responses"]["Error"];
+            /** @description `not_implemented`: this control plane does not offer mentions (offering.features lacks `mentions`). Nothing is read or stored. */
+            501: components["responses"]["Error"];
             default: components["responses"]["Error"];
         };
     };
@@ -11433,6 +11507,8 @@ export interface operations {
             404: components["responses"]["Error"];
             /** @description `SESSION_TERMINATED`: the session ended or was deleted. */
             409: components["responses"]["Error"];
+            /** @description `not_implemented`: this control plane does not offer mentions (offering.features lacks `mentions`). Nothing is read or stored. */
+            501: components["responses"]["Error"];
             default: components["responses"]["Error"];
         };
     };
@@ -11463,6 +11539,8 @@ export interface operations {
             404: components["responses"]["Error"];
             /** @description `SESSION_TERMINATED`: the session ended or was deleted. */
             409: components["responses"]["Error"];
+            /** @description `not_implemented`: this control plane does not offer mentions (offering.features lacks `mentions`). Nothing is read or stored. */
+            501: components["responses"]["Error"];
             default: components["responses"]["Error"];
         };
     };
@@ -11910,6 +11988,17 @@ export interface operations {
             };
             /** @description `validation_error`: a field is invalid. A refused mention has details.field `mentions` and a details.reason as on sendMessage. Nothing is appended and the agent receives nothing. */
             422: components["responses"]["ValidationError"];
+            /** @description `rate_limited`: the request carries mentions and the caller sent 20 messages, steers and comments with mentions in this session within 10 minutes. Retry-After says when to try again. Nothing is stored. Requests without mentions are not limited. */
+            429: {
+                headers: {
+                    /** @description Seconds until the caller may send mentions in this session again. */
+                    "Retry-After"?: number;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
             default: components["responses"]["Error"];
         };
     };
@@ -13740,6 +13829,8 @@ export interface operations {
                     "application/json": components["schemas"]["NotificationPage"];
                 };
             };
+            /** @description `not_implemented`: this control plane does not offer mentions (offering.features lacks `mentions`). Nothing is read or stored. */
+            501: components["responses"]["Error"];
             default: components["responses"]["Error"];
         };
     };
@@ -13764,6 +13855,8 @@ export interface operations {
                     "text/event-stream": string;
                 };
             };
+            /** @description `not_implemented`: this control plane does not offer mentions (offering.features lacks `mentions`). Nothing is read or stored. */
+            501: components["responses"]["Error"];
             default: components["responses"]["Error"];
         };
     };
@@ -13793,6 +13886,8 @@ export interface operations {
             };
             /** @description `validation_error`: the body names no target, or more than one (ids, all, or orgId with sessionId). */
             422: components["responses"]["ValidationError"];
+            /** @description `not_implemented`: this control plane does not offer mentions (offering.features lacks `mentions`). Nothing is read or stored. */
+            501: components["responses"]["Error"];
             default: components["responses"]["Error"];
         };
     };
@@ -13814,6 +13909,8 @@ export interface operations {
                     "application/json": components["schemas"]["NotificationPreferences"];
                 };
             };
+            /** @description `not_implemented`: this control plane does not offer mentions (offering.features lacks `mentions`). Nothing is read or stored. */
+            501: components["responses"]["Error"];
             default: components["responses"]["Error"];
         };
     };
@@ -13839,6 +13936,8 @@ export interface operations {
                     "application/json": components["schemas"]["NotificationPreferences"];
                 };
             };
+            /** @description `not_implemented`: this control plane does not offer mentions (offering.features lacks `mentions`). Nothing is read or stored. */
+            501: components["responses"]["Error"];
             default: components["responses"]["Error"];
         };
     };
@@ -13870,6 +13969,8 @@ export interface operations {
             };
             /** @description `invalid_request`: status, unread or limit is not one of the allowed values. `invalid_cursor`: the cursor is not one this list gave. */
             400: components["responses"]["Error"];
+            /** @description `not_implemented`: this control plane does not offer mentions (offering.features lacks `mentions`). Nothing is read or stored. */
+            501: components["responses"]["Error"];
             default: components["responses"]["Error"];
         };
     };
@@ -13893,6 +13994,8 @@ export interface operations {
                     };
                 };
             };
+            /** @description `not_implemented`: this control plane does not offer mentions (offering.features lacks `mentions`). Nothing is read or stored. */
+            501: components["responses"]["Error"];
             default: components["responses"]["Error"];
         };
     };
