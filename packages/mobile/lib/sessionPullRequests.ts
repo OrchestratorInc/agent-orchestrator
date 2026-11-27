@@ -1,5 +1,5 @@
 import type { DashboardPR, DashboardSession, SessionPRSummary } from "./api";
-import { prLifecycle, prReviewPromptHeadline, type PRLifecycle, type Tone } from "./prView";
+import { prResolvedLifecycle, prReviewPromptHeadline, type PRLifecycle, type Tone } from "./prView";
 import { leadOrdered, PR_GLYPHS, PR_TONES, workerRowPullRequest, type WorkerRowPullRequest } from "./workerRowPullRequest";
 
 /**
@@ -43,7 +43,8 @@ export function sessionPullRequests(session: Pick<DashboardSession, "pr" | "prs"
 export function pullRequestRows(prs: readonly DashboardPR[], summaryFor: SummaryFor): PullRequestRow[] {
 	return prs.map((pr) => {
 		const summary = summaryFor(pr.number);
-		const lifecycle = prLifecycle(pr);
+		// The same state the status reads, so the icon and the status never disagree.
+		const lifecycle = prResolvedLifecycle(pr, summary);
 		const loaded = summary?.title?.trim();
 		// The row draws `#N` beside the title, so until the title loads it reads `#N Pull request`.
 		const title = loaded || "Pull request";

@@ -69,3 +69,25 @@ describe("pullRequestMenuAction", () => {
 		expect(pullRequestMenuAction(4)).toBe("list");
 	});
 });
+
+// A cached summary can lag the live PR row (or lead it): the row's icon and its
+// status always come from one resolved state, and an ended PR reads as ended.
+describe("pullRequestRows with a stale summary", () => {
+	const openSummary = (number: number) => ({ ...summary(number, "Doc"), state: "open" }) as SessionPRSummary;
+	const mergedSummary = (number: number) => ({ ...summary(number, "Doc"), state: "merged" }) as SessionPRSummary;
+
+	it("reads a PR merged since its summary was cached as merged", () => {
+		const [row] = pullRequestRows([pr(9137, "merged")], (n) => openSummary(n));
+		expect(row).toMatchObject({ lifecycle: "merged", glyph: "git-merge", glyphTone: "merged", status: { text: "Merged", tone: "merged" } });
+	});
+
+	it("reads a PR closed since its summary was cached as closed", () => {
+		const [row] = pullRequestRows([pr(9001, "closed")], (n) => openSummary(n));
+		expect(row).toMatchObject({ lifecycle: "closed", glyph: "git-pull-request-closed", status: { text: "Closed" } });
+	});
+
+	it("draws a summary that saw the merge first with the merged icon too", () => {
+		const [row] = pullRequestRows([pr(9137, "open")], (n) => mergedSummary(n));
+		expect(row).toMatchObject({ lifecycle: "merged", glyph: "git-merge", glyphTone: "merged", status: { text: "Merged" } });
+	});
+});
