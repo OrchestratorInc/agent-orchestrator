@@ -1,6 +1,6 @@
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { ExitFeedbackRequest } from "../../shared/exit-feedback";
+import type { ExitFeedbackRequest, ExitFeedbackState } from "../../shared/exit-feedback";
 
 const telemetry = vi.hoisted(() => ({
 	captureRendererEvent: vi.fn(async (_event: string, _properties?: Record<string, unknown>) => true),
@@ -13,7 +13,7 @@ import { ExitFeedbackPrompt } from "./ExitFeedbackPrompt";
 
 let request: ((value: ExitFeedbackRequest) => void) | undefined;
 let secondClose: (() => void) | undefined;
-let report: ReturnType<typeof vi.fn>;
+let report: ReturnType<typeof vi.fn<(state: ExitFeedbackState) => void>>;
 
 beforeEach(() => {
 	telemetry.captureRendererEvent.mockReset().mockResolvedValue(true);
@@ -26,7 +26,7 @@ beforeEach(() => {
 		secondClose = listener;
 		return () => undefined;
 	});
-	report = vi.fn();
+	report = vi.fn<(state: ExitFeedbackState) => void>();
 	vi.spyOn(aoBridge.app, "reportExitFeedback").mockImplementation(report);
 });
 afterEach(() => {
