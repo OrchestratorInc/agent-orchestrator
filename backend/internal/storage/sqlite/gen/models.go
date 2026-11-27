@@ -196,7 +196,7 @@ type AppSetting struct {
 
 type Automation struct {
 	ID          domain.AutomationID
-	ProjectID   domain.ProjectID
+	ProjectID   *domain.ProjectID
 	DisplayName string
 	Prompt      string
 	Kind        domain.SessionKind

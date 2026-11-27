@@ -765,7 +765,7 @@ describe("Sidebar", () => {
 		expect(screen.getAllByLabelText("Signed in as user@example.com")).toHaveLength(2);
 	});
 
-	it("shows only the name in the footer row and the email in the account menu", async () => {
+	it("shows only the avatar in the footer row and the name and email in the account menu", async () => {
 		const user = userEvent.setup();
 		cloudSessionState.configured = true;
 		cloudSessionState.status = "authenticated";
@@ -773,7 +773,8 @@ describe("Sidebar", () => {
 		renderSidebar();
 
 		const account = screen.getAllByLabelText("Signed in as ada@example.com").find((el) => el.tabIndex === 0)!;
-		expect(account).toHaveTextContent("Ada Park");
+		// The avatar alone: initials for a person without a picture, no name or email.
+		expect(account).not.toHaveTextContent("Ada Park");
 		expect(account).not.toHaveTextContent("ada@example.com");
 
 		await user.click(account);
@@ -908,6 +909,29 @@ describe("Sidebar", () => {
 		expect(artifacts.textContent).toBe("Artifacts");
 	});
 
+	it("opens Usage from the footer, not the top nav, and marks it active on its route", async () => {
+		const user = userEvent.setup();
+		renderSidebar();
+
+		const footer = document.querySelector('[data-sidebar="footer"]')!;
+		const usage = within(footer as HTMLElement).getAllByRole("button", { name: "Usage" }).find((el) => el.tabIndex === 0)!;
+		expect(usage).toHaveClass("size-7.5");
+		expect(usage).not.toHaveAttribute("aria-current");
+		expect(screen.getAllByRole("button", { name: "Usage" }).every((el) => footer.contains(el))).toBe(true);
+
+		await user.click(usage);
+		expect(navigateMock).toHaveBeenCalledWith({ to: "/usage" });
+	});
+
+	it("marks the footer Usage button as the current page on /usage", () => {
+		mockLocation.pathname = "/usage";
+		renderSidebar();
+
+		const usage = screen.getAllByRole("button", { name: "Usage" }).find((el) => el.tabIndex === 0)!;
+		expect(usage).toHaveAttribute("aria-current", "page");
+		expect(usage).toHaveAttribute("data-active", "true");
+	});
+
 	it("navigates home from the brand row", async () => {
 		const user = userEvent.setup();
 		mockParams.projectId = "proj-1";
@@ -933,7 +957,7 @@ describe("Sidebar", () => {
 		expect(footer).not.toHaveClass("border-t");
 		expect(footer?.querySelector(".border-t")).toBeNull();
 		expect(screen.getAllByRole("button", { name: "Settings" })[0]).toHaveClass("h-9");
-		expect(screen.getAllByRole("button", { name: "Mobile" })[0]).toHaveClass("size-9");
+		expect(screen.getAllByRole("button", { name: "Mobile" })[0]).toHaveClass("size-7.5");
 		expect(footer?.className).not.toContain("--size-center-panel-bottom-inset");
 		expect(footer?.className).not.toContain("--size-center-panel-inset-mac");
 	});
