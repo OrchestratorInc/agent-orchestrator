@@ -88,6 +88,16 @@ import { SessionFilesPopOut } from "./SessionFilesPopOut";
 import { sessionBrowserUnavailable } from "../lib/artifact-preview";
 import { SessionBrowserPopOut } from "./SessionBrowserPopOut";
 import { SessionInspector } from "./SessionInspector";
+import {
+	QUICK_DETAILS_DOCK_MIN_WIDTH_PX,
+	SessionQuickDetailsFloatingPanel,
+	SessionQuickDetailsPanel,
+	SessionQuickDetailsTrigger,
+} from "./SessionQuickDetails";
+import { SessionArchiveDialog, type SessionArchiveChoice } from "./SessionArchiveDialog";
+import { useTerminateSession } from "../hooks/useTerminateSession";
+import { useNavigate } from "@tanstack/react-router";
+import { projectNavigateTarget, sessionNavigateTarget } from "../lib/navigate-to-session";
 import { PRTabChip, PRTabPane } from "./PRTabPane";
 import { activatePRTab, closePRTab, deactivatePRTab, prTabKey, prTabUrl, usePRTabs, type PRTabsState } from "../lib/pr-tabs";
 import { usePRViewEnabled } from "../lib/pr-view";
@@ -167,7 +177,7 @@ import { isMacPlatform } from "../lib/platform";
 import { useShell } from "../lib/shell-context";
 import { cn } from "../lib/utils";
 import { usesPreviewWorkspaceData } from "../lib/preview-mode";
-import { canArchiveWorkerSession, isOrchestratorSession, sessionAgentExited, sessionIsActive, type SessionArtifact, type WorkspaceSummary } from "../types/workspace";
+import { canArchiveWorkerSession, isOrchestratorSession, isScratchpadWorkspace, resolveNextNavigationAfterSessionKill, sessionAgentExited, sessionIsActive, STANDALONE_WORKSPACE_ID, type SessionArtifact, type WorkspaceSummary } from "../types/workspace";
 import { terminalTargetBelongsToSession, type TerminalTarget } from "../types/terminal";
 import { useCloudSessionPresence } from "../hooks/useCloudSessionPresence";
 import { SessionPeopleControl } from "./SessionPeople";
@@ -178,7 +188,7 @@ import { focusAfterPaint, useSessionShortcut } from "../hooks/useAppShortcut";
 import { queryShown } from "../lib/dom-selectors";
 import { KeepRecentAlive } from "./KeepRecentAlive";
 import { openComposerModelPicker, toggleComposerDictation } from "../lib/composer-shortcuts";
-import { inspectorIsOpen, useResolvedTheme, useUiStore, type InspectorView } from "../stores/ui-store";
+import { inspectorIsOpen, quickDetailsIsOpen, useResolvedTheme, useUiStore, type InspectorView } from "../stores/ui-store";
 import { useSideChatTab, useSideChatsAvailable } from "../lib/side-chats";
 import {
 	INSPECTOR_SEPARATOR_RESERVE_PX,
@@ -617,6 +627,7 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 	const theme = useResolvedTheme();
 	const browserOnly = Boolean(session && isOrchestratorSession(session));
 	const isInspectorOpen = useUiStore((state) => inspectorIsOpen(state.inspectorSessions, uiSessionId));
+	const isQuickDetailsOpen = useUiStore((state) => quickDetailsIsOpen(state.inspectorSessions, uiSessionId));
 	const [sideChatContainer, setSideChatContainer] = useState<HTMLDivElement | null>(null);
 	const sideChatsAvailable = useSideChatsAvailable(session, hostId);
 	const [subagentContainer, setSubagentContainer] = useState<HTMLDivElement | null>(null);
@@ -626,6 +637,8 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 	const browserUnseen = useUiStore((state) => Boolean(state.inspectorSessions[uiSessionId]?.browserUnseen));
 	const setInspectorOpenForSession = useUiStore((state) => state.setInspectorOpen);
 	const toggleInspector = useUiStore((state) => state.toggleInspector);
+	const setQuickDetailsOpenForSession = useUiStore((state) => state.setQuickDetailsOpen);
+	const toggleQuickDetails = useUiStore((state) => state.toggleQuickDetails);
 	const setInspectorViewForSession = useUiStore((state) => state.setInspectorView);
 	const showGlobalToast = useUiStore((state) => state.showGlobalToast);
 	const { showTab: showSideChatTab, onSideChatsChange } = useSideChatTab(uiSessionId, sideChatsAvailable);
@@ -2807,6 +2820,85 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 		}
 	}, [browserPoppedOut, hasInspector, inspectorView, isInspectorOpen, uiSessionId, setBrowserUnseen]);
 
+	const navigate = useNavigate();
+	const terminateSession = useTerminateSession();
+	const [quickDetailsArchiveOpen, setQuickDetailsArchiveOpen] = useState(false);
+	useEffect(() => {
+		setQuickDetailsArchiveOpen(false);
+	}, [uiSessionId]);
+
+	const [canDockQuickDetails, setCanDockQuickDetails] = useState(() =>
+		typeof window !== "undefined" ? window.innerWidth >= QUICK_DETAILS_DOCK_MIN_WIDTH_PX + 240 : true,
+	);
+	useEffect(() => {
+		const split = sessionSplitRef.current;
+		if (!split) return;
+		const update = () => {
+			const width = split.clientWidth;
+			if (width > 0) setCanDockQuickDetails(width >= QUICK_DETAILS_DOCK_MIN_WIDTH_PX);
+		};
+		update();
+		if (typeof ResizeObserver === "undefined") return;
+		const observer = new ResizeObserver(update);
+		observer.observe(split);
+		return () => observer.disconnect();
+	}, [hasInspector]);
+	const isQuickDetailsVisible = isQuickDetailsOpen && !isInspectorOpen;
+
+	const handleToggleQuickDetails = useCallback(() => {
+		toggleQuickDetails(uiSessionId, { closeInspector: true });
+	}, [toggleQuickDetails, uiSessionId]);
+
+	const handleCloseQuickDetails = useCallback(() => {
+		setQuickDetailsOpenForSession(uiSessionId, false);
+	}, [setQuickDetailsOpenForSession, uiSessionId]);
+
+	const handleOpenQuickDetailsInspectorView = useCallback(
+		(view: InspectorView) => {
+			if (view === "files" && !browserOnly) {
+				handleOpenFiles();
+				return;
+			}
+			if (view === "browser") setBrowserContentRevealed(uiSessionId, true);
+			transitionInspectorView(view);
+			setInspectorOpenForSession(uiSessionId, true);
+		},
+		[
+			browserOnly,
+			handleOpenFiles,
+			setBrowserContentRevealed,
+			setInspectorOpenForSession,
+			transitionInspectorView,
+			uiSessionId,
+		],
+	);
+
+	const handleQuickDetailsArchiveConfirm = useCallback(
+		({ deleteArtifacts }: SessionArchiveChoice) => {
+			setQuickDetailsArchiveOpen(false);
+			if (!session) return;
+			const allWorkspaces = queryClient.getQueryData<WorkspaceSummary[]>(workspaceQueryKeyForHost(hostId)) ?? [];
+			const fullWorkspace = allWorkspaces.find((workspace) => workspace.id === session.workspaceId);
+			const orchestratorSession = fullWorkspace?.sessions.find((candidate) => isOrchestratorSession(candidate));
+			terminateSession.mutate({ ...session, deleteArtifacts });
+			const nextRoute = resolveNextNavigationAfterSessionKill(fullWorkspace, session.id);
+			if (nextRoute.target === "session") {
+				void navigate(sessionNavigateTarget(session.workspaceId, nextRoute.sessionId, hostId));
+				return;
+			}
+			if (session.workspaceId === STANDALONE_WORKSPACE_ID || (fullWorkspace && isScratchpadWorkspace(fullWorkspace))) {
+				void navigate({ to: "/" });
+				return;
+			}
+			if (orchestratorSession && orchestratorSession.id !== session.id) {
+				void navigate(sessionNavigateTarget(session.workspaceId, orchestratorSession.id, hostId));
+				return;
+			}
+			void navigate(projectNavigateTarget(session.workspaceId, hostId));
+		},
+		[hostId, navigate, queryClient, session, terminateSession],
+	);
+
 	const handleToggleInspector = useCallback(() => {
 		if (browserOnly && inspectorView === "browser") setBrowserContentRevealed(uiSessionId, true);
 		toggleInspector(uiSessionId);
@@ -2979,13 +3071,14 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 							className="relative z-chrome flex h-toolbar w-full shrink-0 overflow-hidden"
 							data-testid="session-topbar-host"
 						/>
-						<div
-							className="relative min-h-0 flex-1"
-							data-split-group={shownGroup?.id}
-							data-testid="center-split-area"
-							ref={splitScreenRef}
-							style={shownLayout?.vars as CSSProperties | undefined}
-						>
+						<div className="relative flex min-h-0 flex-1 overflow-hidden">
+							<div
+								className="relative min-h-0 min-w-0 flex-1"
+								data-split-group={shownGroup?.id}
+								data-testid="center-split-area"
+								ref={splitScreenRef}
+								style={shownLayout?.vars as CSSProperties | undefined}
+							>
 							{isCloudPausedStage(cloudStage) ? <CloudPausedStatus stage={cloudStage} /> : chatWaking ? <CloudPausedStatus stage="paused" /> : null}
 							{/* In Chat, a failed checkout or Setup shows in the conversation, as a failed local start does. */}
 							{startupFailure && session?.cloud && !(showChatSurface && startupFailure.phase === "failed" && isWorkspaceStartupError(startupFailure.code)) ? (
@@ -3319,6 +3412,28 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 								: null}
 							{interfaceUi.notice}
 						</div>
+						{hasInspector && session ? (
+							<SessionQuickDetailsFloatingPanel
+								isOpen={isQuickDetailsVisible}
+								onDismiss={handleCloseQuickDetails}
+								reserveSpace={canDockQuickDetails}
+								sessionKey={uiSessionId}
+							>
+								<SessionQuickDetailsPanel
+									hostId={hostId}
+									key={uiSessionId}
+									onClose={handleCloseQuickDetails}
+									onOpenArtifact={handleOpenArtifact}
+									onOpenInspectorView={handleOpenQuickDetailsInspectorView}
+									onRequestArchive={!browserOnly && canArchiveWorkerSession(session) ? () => setQuickDetailsArchiveOpen(true) : undefined}
+									orchestrator={browserOnly}
+									previewLive
+									session={session}
+									subagentsAvailable={subagentsAvailable}
+								/>
+							</SessionQuickDetailsFloatingPanel>
+						) : null}
+						</div>
 					</div>
 				</div>
 				{hasInspector ? (
@@ -3380,6 +3495,15 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 				) : null}
 			</div>
 			<PageTopbarTrailingAction>
+				{hasInspector && session ? (
+					<SessionQuickDetailsTrigger
+						isOpen={isQuickDetailsVisible}
+						onToggle={() => {
+							captureTopbarAction("quick_details", isOrchestrator ? "orchestrator" : "worker");
+							handleToggleQuickDetails();
+						}}
+					/>
+				) : null}
 				{hasInspector ? <Tooltip>
 					<TooltipTrigger asChild>
 						<Button type="button" size="icon-sm"
@@ -3429,6 +3553,14 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 					/>
 					: null}
 			{interfaceUi.dialogs}
+			{session && !browserOnly && canArchiveWorkerSession(session) ? (
+				<SessionArchiveDialog
+					onConfirm={handleQuickDetailsArchiveConfirm}
+					onOpenChange={setQuickDetailsArchiveOpen}
+					open={quickDetailsArchiveOpen}
+					session={session}
+				/>
+			) : null}
 			{/* Maximized files wear the maximized browser's chrome: a backdrop, the
           filter pinned in the titlebar band where the browser's address bar
           sits, and an inset frame for the explorer. The explorer mounts once

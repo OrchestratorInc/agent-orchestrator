@@ -5896,5 +5896,15 @@
 	"artifactComments.exitFullscreen": "Salir de pantalla completa",
 	"artifactComments.timelinePoint": "Comentarios en {{time}}: {{n}} abiertos",
 	"artifactComments.frameAt": "Fotograma en {{time}}",
-	"artifactComments.markerLabel": "{{label}}: {{n}} abiertos"
+	"artifactComments.markerLabel": "{{label}}: {{n}} abiertos",
+	"quickDetails.open": "Abrir detalles de la sesión",
+	"quickDetails.close": "Cerrar detalles de la sesión",
+	"quickDetails.aria": "Detalles rápidos de la sesión",
+	"quickDetails.changes": "Cambios",
+	"quickDetails.noChanges": "Sin cambios",
+	"quickDetails.filesChanged_one": "{{count}} archivo",
+	"quickDetails.filesChanged_many": "{{count}} archivos",
+	"quickDetails.filesChanged_other": "{{count}} archivos",
+	"quickDetails.viewAll": "Ver todo",
+	"quickDetails.actions": "Acciones de la sesión"
 }

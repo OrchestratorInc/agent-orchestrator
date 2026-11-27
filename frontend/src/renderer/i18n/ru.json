@@ -6066,5 +6066,16 @@
 	"artifactComments.exitFullscreen": "Выйти из полноэкранного режима",
 	"artifactComments.timelinePoint": "Комментарии на {{time}}: открыто {{n}}",
 	"artifactComments.frameAt": "Кадр на {{time}}",
-	"artifactComments.markerLabel": "{{label}}: открыто {{n}}"
+	"artifactComments.markerLabel": "{{label}}: открыто {{n}}",
+	"quickDetails.open": "Открыть сведения о сессии",
+	"quickDetails.close": "Закрыть сведения о сессии",
+	"quickDetails.aria": "Краткие сведения о сессии",
+	"quickDetails.changes": "Изменения",
+	"quickDetails.noChanges": "Нет изменений",
+	"quickDetails.filesChanged_one": "{{count}} файл",
+	"quickDetails.filesChanged_few": "{{count}} файла",
+	"quickDetails.filesChanged_many": "{{count}} файлов",
+	"quickDetails.filesChanged_other": "{{count}} файлов",
+	"quickDetails.viewAll": "Показать всё",
+	"quickDetails.actions": "Действия сессии"
 }
