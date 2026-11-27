@@ -789,8 +789,9 @@ const TimelineItem = memo(function TimelineItem({
 	// the screen. So the bubble's widest is in points, 88% of the row it sits
 	// in, estimated from the window until the row has measured itself.
 	const { width: windowWidth } = useWindowDimensions();
-	const userRow = useMenuRowWidth();
-	const bubbleWidth = Math.floor((userRow.width ?? windowWidth - 2 * space.xl) * 0.88);
+	const rowEstimate = windowWidth - 2 * space.xl;
+	const userRow = useMenuRowWidth(rowEstimate);
+	const bubbleWidth = Math.floor((userRow.width ?? rowEstimate) * 0.88);
 	if (item.kind === "message") {
 		if (item.role === "user" && item.origin === "human") {
 			if (editor) return <View style={styles.userRow}>{editor}</View>;

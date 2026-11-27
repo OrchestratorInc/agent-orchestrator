@@ -48,12 +48,14 @@ export function MenuRowWidthScope({ widths, children }: { widths?: MenuRowWidths
  * first render does not recover: once the measured width arrives, the row is
  * the right size but its title line keeps the width it was first laid out at,
  * so a long title still runs off the screen and pushes the row's time past the
- * edge. So a row with no width to inherit starts at the window's. That is only
- * a guess where the list is narrower than the window, but any width on the
- * first render is enough: the layout effect and `onLayout` then correct it,
- * and follow resizes, without leaving the title behind.
+ * edge. So a row with no width to inherit starts at `estimate`, by default the
+ * window's. That is only a guess where the list is narrower than the window,
+ * but any width on the first render is enough: the layout effect and
+ * `onLayout` then correct it, and follow resizes, without leaving the title
+ * behind. A caller that sizes something else from `width`, and knows its
+ * list's insets, passes a closer estimate.
  */
-export function useMenuRowWidth(): {
+export function useMenuRowWidth(estimate?: number): {
 	ref: RefObject<View | null>;
 	onLayout: (event: LayoutChangeEvent) => void;
 	width?: number;
@@ -61,7 +63,7 @@ export function useMenuRowWidth(): {
 } {
 	const shared = useContext(SharedRowWidth);
 	const ref = useRef<View>(null);
-	const [width, setWidth] = useState<number | undefined>(() => shared?.current ?? windowWidth());
+	const [width, setWidth] = useState<number | undefined>(() => shared?.current ?? (estimate != null && estimate > 0 ? estimate : windowWidth()));
 	const measured = useCallback((next: number) => {
 		// Only a real width seeds the rows after this one: a slot laid out at
 		// zero for a moment would otherwise start every later row at zero.

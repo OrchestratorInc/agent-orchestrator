@@ -126,6 +126,29 @@ it("prefers the list's measured width over the window's for later rows", () => {
 	expect(firstRender(log, "later-j")).toBe(402.5);
 });
 
+// The chat bubble sizes itself from the row's width, so it passes the row's
+// own estimate (the window less the list's insets) instead of the window's.
+function EstimatedSlot({ id, estimate, log }: { id: string; estimate: number; log: [string, number | undefined][] }) {
+	const menuWidth = useMenuRowWidth(estimate);
+	log.push([id, menuWidth.width]);
+	return createElement("View", { ref: menuWidth.ref, onLayout: menuWidth.onLayout, testID: id });
+}
+
+it("starts a row at the caller's estimate when it has no width to inherit", () => {
+	const log: [string, number | undefined][] = [];
+	act(() => { renderer = create(createElement(EstimatedSlot, { id: "first-a", estimate: 390, log }), { createNodeMock: firstBatchOnly }); });
+	expect(firstRender(log, "first-a")).toBe(390);
+	expect(log.at(-1)?.[1]).toBe(402.5);
+});
+
+it("prefers the list's measured width over the caller's estimate", () => {
+	const log: [string, number | undefined][] = [];
+	const rows = (ids: string[]) => createElement(MenuRowWidthScope, null, ...ids.map((id) => createElement(EstimatedSlot, { key: id, id, estimate: 390, log })));
+	act(() => { renderer = create(rows(["first-a"]), { createNodeMock: firstBatchOnly }); });
+	act(() => renderer!.update(rows(["first-a", "later-k"])));
+	expect(firstRender(log, "later-k")).toBe(402.5);
+});
+
 it("leaves a row unsized when the window has no size yet", () => {
 	screen.width = 0;
 	const log: [string, number | undefined][] = [];
