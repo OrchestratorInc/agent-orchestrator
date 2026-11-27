@@ -3543,6 +3543,714 @@ paths:
         background service, and macOS permissions
       tags:
       - computer-use
+  /api/v1/connectors:
+    get:
+      operationId: listConnectors
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ListConnectorsResponse'
+          description: OK
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: List the connectors in name order
+      tags:
+      - connectors
+    post:
+      operationId: createConnector
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ConnectorRequest'
+        required: true
+      responses:
+        "201":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ConnectorEnvelope'
+          description: Created
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "403":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Forbidden
+        "409":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Conflict
+        "413":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Request Entity Too Large
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: Add a connector
+      tags:
+      - connectors
+  /api/v1/connectors/{connectorId}:
+    delete:
+      operationId: deleteConnector
+      parameters:
+      - description: Connector ID or key.
+        in: path
+        name: connectorId
+        required: true
+        schema:
+          description: Connector ID or key.
+          type: string
+      responses:
+        "204":
+          description: No Content
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Found
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: Remove a connector and its stored values
+      tags:
+      - connectors
+    get:
+      operationId: getConnector
+      parameters:
+      - description: Connector ID or key.
+        in: path
+        name: connectorId
+        required: true
+        schema:
+          description: Connector ID or key.
+          type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ConnectorEnvelope'
+          description: OK
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Found
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: Get a connector by ID or key
+      tags:
+      - connectors
+    patch:
+      operationId: updateConnector
+      parameters:
+      - description: Connector ID or key.
+        in: path
+        name: connectorId
+        required: true
+        schema:
+          description: Connector ID or key.
+          type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ConnectorRequest'
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ConnectorEnvelope'
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "403":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Forbidden
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Found
+        "409":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Conflict
+        "413":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Request Entity Too Large
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: 'Change a connector: without transport only the named fields, with
+        transport the whole definition'
+      tags:
+      - connectors
+  /api/v1/connectors/{connectorId}/connect:
+    post:
+      operationId: startConnectorSignIn
+      parameters:
+      - description: Connector ID or key.
+        in: path
+        name: connectorId
+        required: true
+        schema:
+          description: Connector ID or key.
+          type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ConnectorSignInResponse'
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "403":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Forbidden
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Found
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+        "503":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Service Unavailable
+      summary: Start a sign-in and return the page to open
+      tags:
+      - connectors
+  /api/v1/connectors/{connectorId}/connect/finish:
+    post:
+      operationId: finishConnectorSignIn
+      parameters:
+      - description: Connector ID or key.
+        in: path
+        name: connectorId
+        required: true
+        schema:
+          description: Connector ID or key.
+          type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/FinishConnectorSignInRequest'
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ConnectorEnvelope'
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Found
+        "413":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Request Entity Too Large
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+        "503":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Service Unavailable
+      summary: Complete a sign-in from the address the browser opened on another device
+      tags:
+      - connectors
+  /api/v1/connectors/{connectorId}/disconnect:
+    post:
+      operationId: signOutConnector
+      parameters:
+      - description: Connector ID or key.
+        in: path
+        name: connectorId
+        required: true
+        schema:
+          description: Connector ID or key.
+          type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ConnectorEnvelope'
+          description: OK
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Found
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: Forget the sign-in tokens of a connector
+      tags:
+      - connectors
+  /api/v1/connectors/{connectorId}/test:
+    post:
+      operationId: testConnector
+      parameters:
+      - description: Connector ID or key.
+        in: path
+        name: connectorId
+        required: true
+        schema:
+          description: Connector ID or key.
+          type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ConnectorEnvelope'
+          description: OK
+        "403":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Forbidden
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Found
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: Connect to the server, list its tools and save the result as the status
+      tags:
+      - connectors
+  /api/v1/connectors/import:
+    get:
+      operationId: listConnectorImportCandidates
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ListConnectorImportCandidatesResponse'
+          description: OK
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: List the tool servers found in the configuration of Claude Code, Codex
+        and Cursor, without their values
+      tags:
+      - connectors
+    post:
+      operationId: importConnectors
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ImportConnectorsRequest'
+        required: true
+      responses:
+        "201":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ListConnectorsResponse'
+          description: Created
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "403":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Forbidden
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Found
+        "409":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Conflict
+        "413":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Request Entity Too Large
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: Add the chosen found servers as connectors
+      tags:
+      - connectors
+  /api/v1/connectors/proposals:
+    post:
+      operationId: proposeConnector
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ConnectorProposalRequest'
+        required: true
+      responses:
+        "201":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ConnectorProposalEnvelope'
+          description: Created
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Found
+        "409":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Conflict
+        "413":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Request Entity Too Large
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: Record a connector that a session's agent asks the user to add; nothing
+        is added
+      tags:
+      - connectors
+  /api/v1/connectors/proposals/{proposalId}:
+    get:
+      operationId: getConnectorProposal
+      parameters:
+      - in: path
+        name: proposalId
+        required: true
+        schema:
+          type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ConnectorProposalEnvelope'
+          description: OK
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Found
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: Get a proposal and its state
+      tags:
+      - connectors
+  /api/v1/connectors/proposals/{proposalId}/approve:
+    post:
+      operationId: approveConnectorProposal
+      parameters:
+      - in: path
+        name: proposalId
+        required: true
+        schema:
+          type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ApproveConnectorProposalRequest'
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApproveConnectorProposalResponse'
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "403":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Forbidden
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Found
+        "409":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Conflict
+        "413":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Request Entity Too Large
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: Add the proposed connector with the values the user typed
+      tags:
+      - connectors
+  /api/v1/connectors/proposals/{proposalId}/decline:
+    post:
+      operationId: declineConnectorProposal
+      parameters:
+      - in: path
+        name: proposalId
+        required: true
+        schema:
+          type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ConnectorProposalEnvelope'
+          description: OK
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Found
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: Decline a proposal
+      tags:
+      - connectors
   /api/v1/conversations/{conversationId}/find:
     get:
       operationId: findConversation
@@ -8938,6 +9646,73 @@ paths:
       summary: Keep a viewed chat awake or release its view lease
       tags:
       - conversations
+  /api/v1/sessions/{sessionId}/connectors:
+    get:
+      operationId: listSessionConnectors
+      parameters:
+      - description: Session identifier, e.g. project-1.
+        in: path
+        name: sessionId
+        required: true
+        schema:
+          description: Session identifier, e.g. project-1.
+          type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ListSessionConnectorsResponse'
+          description: OK
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: List the connectors a session got when it started, with its tool call
+        counts
+      tags:
+      - connectors
+  /api/v1/sessions/{sessionId}/connectors/proposals:
+    get:
+      operationId: listSessionConnectorProposals
+      parameters:
+      - description: Session identifier, e.g. project-1.
+        in: path
+        name: sessionId
+        required: true
+        schema:
+          description: Session identifier, e.g. project-1.
+          type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ListConnectorProposalsResponse'
+          description: OK
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: List the proposals of a session that wait for an answer
+      tags:
+      - connectors
   /api/v1/sessions/{sessionId}/conversation:
     get:
       operationId: getSessionConversation
@@ -9497,6 +10272,116 @@ paths:
                 $ref: '#/components/schemas/APIError'
           description: Not Implemented
       summary: Restart the tool servers a chat session can reach
+      tags:
+      - conversations
+  /api/v1/sessions/{sessionId}/conversation/mcp/sign-in:
+    post:
+      operationId: signInSessionConversationMcpServer
+      parameters:
+      - description: Session identifier, e.g. project-1.
+        in: path
+        name: sessionId
+        required: true
+        schema:
+          description: Session identifier, e.g. project-1.
+          type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ConversationMCPSignInRequest'
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ConversationMCPSignInResponse'
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Found
+        "409":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Conflict
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: Start the agent's own sign-in for one of its tool servers
+      tags:
+      - conversations
+  /api/v1/sessions/{sessionId}/conversation/mcp/sign-in/finish:
+    post:
+      operationId: finishSessionConversationMcpSignIn
+      parameters:
+      - description: Session identifier, e.g. project-1.
+        in: path
+        name: sessionId
+        required: true
+        schema:
+          description: Session identifier, e.g. project-1.
+          type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/FinishConversationMCPSignInRequest'
+        required: true
+      responses:
+        "204":
+          description: No Content
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Found
+        "409":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Conflict
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: Finish that sign-in from the address of the page the browser opened
       tags:
       - conversations
   /api/v1/sessions/{sessionId}/conversation/messages:
@@ -18172,6 +19057,31 @@ components:
       - cpuPercent
       - cpuMeasured
       type: object
+    ApproveConnectorProposalRequest:
+      properties:
+        projectId:
+          description: Replaces the project of the session that asked. An empty string
+            means all projects.
+          type:
+          - "null"
+          - string
+        values:
+          additionalProperties:
+            type: string
+          description: What the user typed for each environment value and header the
+            proposal names.
+          type: object
+      type: object
+    ApproveConnectorProposalResponse:
+      properties:
+        connector:
+          $ref: '#/components/schemas/ConnectorResponse'
+        proposal:
+          $ref: '#/components/schemas/ConnectorProposalResponse'
+      required:
+      - proposal
+      - connector
+      type: object
     ArtifactFileResponse:
       properties:
         fileFingerprint:
@@ -20162,6 +21072,382 @@ components:
       - daemon
       - imageDirectory
       type: object
+    ConnectorEnvelope:
+      properties:
+        connector:
+          $ref: '#/components/schemas/ConnectorResponse'
+      required:
+      - connector
+      type: object
+    ConnectorImportCandidateResponse:
+      properties:
+        agent:
+          description: Claude Code, Codex or Cursor.
+          type: string
+        args:
+          items:
+            type: string
+          type: array
+        command:
+          type: string
+        envKeys:
+          items:
+            type: string
+          type: array
+        exists:
+          description: A connector with this key exists.
+          type: boolean
+        headerKeys:
+          items:
+            type: string
+          type: array
+        id:
+          type: string
+        key:
+          type: string
+        needsValue:
+          description: Names whose value the user must type, because the file holds
+            a variable or no value.
+          items:
+            type: string
+          type: array
+        projectId:
+          description: Project whose folder or settings hold the definition.
+          type: string
+        source:
+          description: File that holds the definition.
+          type: string
+        transport:
+          enum:
+          - http
+          - stdio
+          type: string
+        url:
+          description: Server address. Each value of its query string reads ***.
+          type: string
+      required:
+      - id
+      - agent
+      - source
+      - key
+      - transport
+      - exists
+      type: object
+    ConnectorProposalEnvelope:
+      properties:
+        proposal:
+          $ref: '#/components/schemas/ConnectorProposalResponse'
+      required:
+      - proposal
+      type: object
+    ConnectorProposalRequest:
+      properties:
+        args:
+          items:
+            type: string
+          type: array
+        auth:
+          enum:
+          - none
+          - oauth
+          - header
+          type: string
+        command:
+          type: string
+        envKeys:
+          description: Names of the environment values the user types on approval.
+          items:
+            type: string
+          type: array
+        headerKeys:
+          description: Names of the headers the user types on approval.
+          items:
+            type: string
+          type: array
+        key:
+          type: string
+        name:
+          type: string
+        reason:
+          description: Why the agent asks, shown to the user.
+          maxLength: 300
+          type: string
+        sessionId:
+          description: Session whose agent asks for the connector.
+          type: string
+        transport:
+          enum:
+          - http
+          - stdio
+          type: string
+        url:
+          type: string
+      required:
+      - sessionId
+      - transport
+      type: object
+    ConnectorProposalResponse:
+      properties:
+        args:
+          items:
+            type: string
+          type: array
+        auth:
+          enum:
+          - none
+          - oauth
+          - header
+          type: string
+        command:
+          type: string
+        connectorKey:
+          description: Key of the connector an approval added.
+          type: string
+        createdAt:
+          format: date-time
+          type: string
+        envKeys:
+          items:
+            type: string
+          type: array
+        headerKeys:
+          items:
+            type: string
+          type: array
+        id:
+          type: string
+        key:
+          type: string
+        name:
+          type: string
+        projectId:
+          description: Project of the session that asked. Omitted for a session without
+            a project.
+          type:
+          - "null"
+          - string
+        reason:
+          type: string
+        sessionId:
+          type: string
+        state:
+          enum:
+          - pending
+          - approved
+          - declined
+          - expired
+          type: string
+        transport:
+          enum:
+          - http
+          - stdio
+          type: string
+        url:
+          type: string
+      required:
+      - id
+      - sessionId
+      - key
+      - name
+      - transport
+      - args
+      - envKeys
+      - headerKeys
+      - auth
+      - state
+      - createdAt
+      type: object
+    ConnectorRequest:
+      properties:
+        args:
+          description: Arguments of the local command.
+          items:
+            type: string
+          type: array
+        auth:
+          description: Sign-in of a server URL.
+          enum:
+          - none
+          - oauth
+          - header
+          type: string
+        command:
+          description: Local command. Loopback callers only.
+          type: string
+        enabled:
+          description: Whether new sessions get the connector.
+          type:
+          - "null"
+          - boolean
+        env:
+          additionalProperties:
+            type: string
+          description: Environment values of the local command. An empty value keeps
+            the stored one.
+          type: object
+        headers:
+          additionalProperties:
+            type: string
+          description: Request headers of the server URL. An empty value keeps the
+            stored one.
+          type: object
+        key:
+          description: Short name that starts each tool name. Lowercase letters, digits,
+            hyphens and underscores. Made from the name when empty.
+          maxLength: 32
+          type: string
+        name:
+          description: Display name.
+          maxLength: 64
+          type: string
+        oauthClientId:
+          description: Client ID of your own OAuth app, for a server that does not
+            let apps register themselves.
+          type: string
+        oauthClientSecret:
+          description: Client secret of your own OAuth app. An empty value keeps the
+            stored one.
+          type: string
+        presetId:
+          description: Catalog entry this connector came from.
+          type: string
+        projectId:
+          description: Project that gets the connector. Omit for all projects.
+          type:
+          - "null"
+          - string
+        transport:
+          description: http for a server URL, stdio for a local command.
+          enum:
+          - http
+          - stdio
+          type: string
+        url:
+          description: Server URL. https, or http on this computer. A query value
+            of *** keeps the stored value of that name.
+          maxLength: 2048
+          type: string
+      type: object
+    ConnectorResponse:
+      properties:
+        args:
+          items:
+            type: string
+          type: array
+        auth:
+          enum:
+          - none
+          - oauth
+          - header
+          type: string
+        checkedAt:
+          format: date-time
+          type:
+          - "null"
+          - string
+        command:
+          type: string
+        createdAt:
+          format: date-time
+          type: string
+        enabled:
+          type: boolean
+        envKeys:
+          description: Names of the stored environment values.
+          items:
+            type: string
+          type: array
+        headerKeys:
+          description: Names of the stored headers.
+          items:
+            type: string
+          type: array
+        id:
+          type: string
+        key:
+          description: Tool names start with this.
+          type: string
+        name:
+          type: string
+        oauthClientId:
+          description: Client ID of the user's own OAuth app, when one is set.
+          type: string
+        presetId:
+          type: string
+        projectId:
+          description: Absent when the connector is for all projects.
+          type:
+          - "null"
+          - string
+        signedIn:
+          description: Whether a sign-in token is stored.
+          type: boolean
+        status:
+          enum:
+          - unchecked
+          - connected
+          - needs_signin
+          - unavailable
+          type: string
+        statusDetail:
+          $ref: '#/components/schemas/ConnectorStatusDetail'
+        tools:
+          items:
+            type: string
+          type: array
+        transport:
+          enum:
+          - http
+          - stdio
+          type: string
+        updatedAt:
+          format: date-time
+          type: string
+        url:
+          description: Server URL. Each value of its query string reads ***.
+          type: string
+      required:
+      - id
+      - key
+      - name
+      - transport
+      - args
+      - envKeys
+      - headerKeys
+      - auth
+      - signedIn
+      - enabled
+      - status
+      - tools
+      - createdAt
+      - updatedAt
+      type: object
+    ConnectorSignInResponse:
+      properties:
+        authorizationUrl:
+          description: Page the user must open to approve. Absent when the server
+            asks for no sign-in.
+          type: string
+        callbackUrl:
+          description: Address the browser goes to after approval. It is on the machine
+            that runs this daemon.
+          type: string
+        connector:
+          $ref: '#/components/schemas/ConnectorResponse'
+      required:
+      - callbackUrl
+      - connector
+      type: object
+    ConnectorStatusDetail:
+      properties:
+        error:
+          type: string
+        step:
+          type: string
+      required:
+      - step
+      - error
+      type: object
     ConsumeAgentAccountResetCreditRequest:
       properties:
         idempotencyKey:
@@ -21630,6 +22916,23 @@ components:
       - name
       - status
       type: object
+    ConversationMCPSignInRequest:
+      properties:
+        server:
+          maxLength: 128
+          type: string
+      required:
+      - server
+      type: object
+    ConversationMCPSignInResponse:
+      properties:
+        authorizationUrl:
+          type: string
+        callbackUrl:
+          type: string
+      required:
+      - authorizationUrl
+      type: object
     ConversationMessageResponse:
       properties:
         authoredByUser:
@@ -22962,6 +24265,28 @@ components:
       - path
       - gitRepo
       type: object
+    FinishConnectorSignInRequest:
+      properties:
+        callbackUrl:
+          description: Address the user's browser opened after approval, pasted as
+            it is.
+          maxLength: 16384
+          type: string
+      required:
+      - callbackUrl
+      type: object
+    FinishConversationMCPSignInRequest:
+      properties:
+        callbackUrl:
+          maxLength: 4096
+          type: string
+        server:
+          maxLength: 128
+          type: string
+      required:
+      - server
+      - callbackUrl
+      type: object
     GetPRStackResponse:
       properties:
         parent:
@@ -23116,6 +24441,24 @@ components:
       required:
       - hostId
       - apiVersion
+      type: object
+    ImportConnectorsRequest:
+      properties:
+        ids:
+          description: Candidate IDs to add as connectors.
+          items:
+            type: string
+          maxItems: 64
+          type: array
+        values:
+          additionalProperties:
+            additionalProperties:
+              type: string
+            type: object
+          description: Values the user typed, by candidate ID and then by name.
+          type: object
+      required:
+      - ids
       type: object
     ImportReport:
       properties:
@@ -23611,6 +24954,33 @@ components:
       required:
       - sessions
       type: object
+    ListConnectorImportCandidatesResponse:
+      properties:
+        candidates:
+          items:
+            $ref: '#/components/schemas/ConnectorImportCandidateResponse'
+          type: array
+      required:
+      - candidates
+      type: object
+    ListConnectorProposalsResponse:
+      properties:
+        proposals:
+          items:
+            $ref: '#/components/schemas/ConnectorProposalResponse'
+          type: array
+      required:
+      - proposals
+      type: object
+    ListConnectorsResponse:
+      properties:
+        connectors:
+          items:
+            $ref: '#/components/schemas/ConnectorResponse'
+          type: array
+      required:
+      - connectors
+      type: object
     ListCuesResponse:
       properties:
         cues:
@@ -23748,6 +25118,15 @@ components:
       - reviews
       - runs
       - activeReviewers
+      type: object
+    ListSessionConnectorsResponse:
+      properties:
+        connectors:
+          items:
+            $ref: '#/components/schemas/SessionConnectorResponse'
+          type: array
+      required:
+      - connectors
       type: object
     ListSessionMemoryResponse:
       properties:
@@ -26149,6 +27528,47 @@ components:
       - unpushed
       - behind
       - conflicts
+      type: object
+    SessionConnectorResponse:
+      properties:
+        auth:
+          description: Sign-in of a server URL connector.
+          enum:
+          - none
+          - oauth
+          - header
+          type: string
+        calls:
+          description: Tool calls of this session to a server URL connector since
+            the daemon started. Calls to a command connector do not pass through the
+            daemon and are not counted.
+          type: integer
+        enabled:
+          type: boolean
+        key:
+          type: string
+        lastTool:
+          type: string
+        name:
+          type: string
+        status:
+          enum:
+          - unchecked
+          - connected
+          - needs_signin
+          - unavailable
+          type: string
+        transport:
+          enum:
+          - http
+          - stdio
+          type: string
+      required:
+      - key
+      - name
+      - status
+      - enabled
+      - calls
       type: object
     SessionDeviceResponse:
       properties:

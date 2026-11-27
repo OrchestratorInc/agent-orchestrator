@@ -3899,6 +3899,7 @@ function approvalSubjectKind(activity: ConversationActivity): ActivityKind | und
 }
 
 function approvalPrompt(subjectKind?: ActivityKind): string {
+	if (subjectKind === "mcp_tool") return "Do you want to use this tool?";
 	return subjectKind === "file_change"
 		? "Do you want to allow these file changes?"
 		: "Do you want to run this command?";

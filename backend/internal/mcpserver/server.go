@@ -12,6 +12,7 @@ import (
 	"os"
 	"slices"
 	"strings"
+	"sync"
 	"unicode/utf8"
 )
 
@@ -39,6 +40,7 @@ var Version = "dev"
 type Daemon interface {
 	GetJSON(ctx context.Context, path string, out any) error
 	PostJSON(ctx context.Context, path string, body, out any) error
+	DoJSON(ctx context.Context, method, path string, body, out any) error
 }
 
 type server struct {
@@ -73,11 +75,47 @@ func (s *server) serveMCP(ctx context.Context, in io.Reader, out io.Writer) erro
 	reader := bufio.NewReader(in)
 	encoder := json.NewEncoder(out)
 	state := &mcpState{}
+	var write, waitsMu sync.Mutex
+	var waits sync.WaitGroup
+	cancelWait := map[string]context.CancelFunc{}
+	defer waits.Wait()
+	ctx, stop := context.WithCancel(ctx)
+	defer stop()
+	reply := func(resp *mcpResponse) error {
+		if resp == nil {
+			return nil
+		}
+		write.Lock()
+		defer write.Unlock()
+		return encoder.Encode(resp)
+	}
 	for {
 		line, readErr := reader.ReadBytes('\n')
 		if line = bytes.TrimSpace(line); len(line) > 0 {
-			if resp := s.handleMCP(ctx, state, line); resp != nil {
-				if err := encoder.Encode(resp); err != nil {
+			switch id, kind := classifyMCPLine(line); kind {
+			case mcpLineCancel:
+				waitsMu.Lock()
+				if cancel := cancelWait[id]; cancel != nil {
+					cancel()
+				}
+				waitsMu.Unlock()
+			case mcpLineWait:
+				waitCtx, cancel := context.WithCancel(ctx)
+				waitsMu.Lock()
+				cancelWait[id] = cancel
+				waitsMu.Unlock()
+				waits.Go(func() {
+					defer cancel()
+					resp := s.handleMCP(waitCtx, state, line)
+					waitsMu.Lock()
+					delete(cancelWait, id)
+					waitsMu.Unlock()
+					if waitCtx.Err() == nil {
+						_ = reply(resp)
+					}
+				})
+			default:
+				if err := reply(s.handleMCP(ctx, state, line)); err != nil {
 					return err
 				}
 			}
@@ -89,6 +127,35 @@ func (s *server) serveMCP(ctx context.Context, in io.Reader, out io.Writer) erro
 			return readErr
 		}
 	}
+}
+
+type mcpLineKind int
+
+const (
+	mcpLineOther mcpLineKind = iota
+	mcpLineWait
+	mcpLineCancel
+)
+
+func classifyMCPLine(line []byte) (string, mcpLineKind) {
+	var peek struct {
+		ID     json.RawMessage `json:"id"`
+		Method string          `json:"method"`
+		Params struct {
+			Name      string          `json:"name"`
+			RequestID json.RawMessage `json:"requestId"`
+		} `json:"params"`
+	}
+	if json.Unmarshal(line, &peek) != nil {
+		return "", mcpLineOther
+	}
+	switch {
+	case peek.Method == "notifications/cancelled":
+		return string(peek.Params.RequestID), mcpLineCancel
+	case peek.Method == "tools/call" && (peek.Params.Name == "session_wait" || peek.Params.Name == "connector_propose") && peek.ID != nil:
+		return string(peek.ID), mcpLineWait
+	}
+	return "", mcpLineOther
 }
 
 // handleMCP answers one message; a notification gets no reply.
@@ -127,7 +194,7 @@ func (s *server) handleMCP(ctx context.Context, state *mcpState, line []byte) *m
 	case "ping":
 		resp.Result = map[string]any{}
 	case "tools/list":
-		tools := append(append([]map[string]any{}, mcpTools...), s.cuaTools(ctx, state)...)
+		tools := append(append(append([]map[string]any{}, mcpTools...), catalogDefinitions()...), s.cuaTools(ctx, state)...)
 		resp.Result = map[string]any{"tools": tools}
 	case "tools/call":
 		var p struct {
@@ -141,6 +208,10 @@ func (s *server) handleMCP(ctx context.Context, state *mcpState, line []byte) *m
 		case "html_render":
 			resp.Result = s.callHTMLRender(ctx, p.Arguments)
 		default:
+			if tool, ok := findCatalogTool(p.Name); ok {
+				resp.Result = s.callCatalog(ctx, tool, p.Arguments)
+				break
+			}
 			if s.cuaTools(ctx, state) != nil && state.cuaNames[p.Name] {
 				resp.Result = s.callCua(ctx, p.Name, p.Arguments)
 				break

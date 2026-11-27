@@ -185,7 +185,7 @@ func browserRequestAllowed(r *http.Request, allowed map[string]struct{}) bool {
 		return true
 	}
 	if origin == "" {
-		return r.Header.Get("Sec-Fetch-Site") == "" || isPreviewHost(r.Host) || isPreviewFileRequest(r) || isRenderDocumentRequest(r) || authenticatedLANBearer(r)
+		return r.Header.Get("Sec-Fetch-Site") == "" || isPreviewHost(r.Host) || isPreviewFileRequest(r) || isRenderDocumentRequest(r) || isConnectorSignInReturn(r) || authenticatedLANBearer(r)
 	}
 	if _, ok := allowed[origin]; ok {
 		return true
@@ -230,6 +230,10 @@ func isPreviewFileRequest(r *http.Request) bool {
 	}
 	parts := strings.SplitN(rest, "/", 4)
 	return len(parts) == 4 && parts[0] != "" && parts[1] == "preview" && (parts[2] == "files" || parts[2] == "artifacts")
+}
+
+func isConnectorSignInReturn(r *http.Request) bool {
+	return r.Method == http.MethodGet && r.URL.Path == "/oauth/mcp/callback"
 }
 
 // Render documents are always served with an opaque-origin CSP sandbox. Allow

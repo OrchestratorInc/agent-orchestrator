@@ -103,6 +103,9 @@ the report. Re-running skips rows that already exist.
 | `ao account switch <session-id> <account-id>` | `PUT /api/v1/agents/accounts/sessions/{id}`; `--wait` polls `GET /api/v1/sessions/{id}/interface-transition` |
 | `ao automation create/list/get/update/delete/runs` | `POST/GET/PATCH/DELETE /api/v1/automations` |
 | `ao cue create/list`                | `POST/GET /api/v1/projects/{id}/cues`         |
+| `ao connector add/list/remove/enable/disable` | `POST/GET/PATCH/DELETE /api/v1/connectors` |
+| `ao connector connect/test/disconnect` | `POST /api/v1/connectors/{id}/connect`, `/connect/finish`, `/test`, `/disconnect` |
+| `ao connector import`               | `GET/POST /api/v1/connectors/import`          |
 | `ao spawn`                          | Targeted launch ensure, then `POST /api/v1/sessions` |
 | `ao session ls`                     | `GET /api/v1/sessions` plus per-session PR summaries; shows branch, PR, CI, review, unresolved threads, activity, and age. |
 | `ao session get <id>`               | `GET /api/v1/sessions/{id}`. `--transcript N` also reads `GET /api/v1/sessions/{id}/conversation` for chat sessions on the local daemon. |

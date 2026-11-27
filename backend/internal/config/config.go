@@ -23,6 +23,9 @@ import (
 // the CLI reads it.
 const EnvComputerUse = "AO_COMPUTER_USE"
 
+// EnvConnectorToken carries a session's connector token to an agent CLI and to the ao-mcp it starts.
+const EnvConnectorToken = "AO_CONNECTOR_TOKEN" // #nosec G101 -- the name of an environment variable, not a credential.
+
 // EnvTerminateOnPRMerge sets the daemon-wide default for whether sessions
 // auto-terminate when their PR is merged.
 const EnvTerminateOnPRMerge = "AO_TERMINATE_ON_PR_MERGE"

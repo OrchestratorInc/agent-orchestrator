@@ -52,11 +52,12 @@ func TestMCPOffersComputerUseToolsWhenTheSessionHasIt(t *testing.T) {
 	for _, tool := range listed {
 		names = append(names, tool.Name)
 	}
-	if strings.Join(names, " ") != "html_preview html_render get_window_state click" {
+	if joined := strings.Join(names, " "); !strings.HasPrefix(joined, "html_preview html_render ") || !strings.HasSuffix(joined, " get_window_state click") {
 		t.Fatalf("tools = %v", names)
 	}
-	if listed[2].InputSchema.Required[0] != "pid" || listed[2].Annotations["readOnlyHint"] != true || listed[3].Annotations["destructiveHint"] != true {
-		t.Fatalf("get_window_state = %+v, click = %+v", listed[2], listed[3])
+	listed = listed[len(listed)-2:]
+	if listed[0].InputSchema.Required[0] != "pid" || listed[0].Annotations["readOnlyHint"] != true || listed[1].Annotations["destructiveHint"] != true {
+		t.Fatalf("get_window_state = %+v, click = %+v", listed[0], listed[1])
 	}
 }
 
@@ -74,7 +75,7 @@ func TestMCPHasNoComputerUseToolsWithoutIt(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			setup(t)
 			replies := runMCP(t, `{"jsonrpc":"2.0","id":1,"method":"tools/list"}`, mcpCall("click", map[string]any{"element_token": "s1:2"}))
-			if len(replies[0].Result.Tools) != 2 {
+			if len(replies[0].Result.Tools) != 2+len(catalog) {
 				t.Fatalf("tools = %+v", replies[0].Result.Tools)
 			}
 			if replies[1].Error == nil || !strings.Contains(replies[1].Error.Message, `unknown tool "click"`) {

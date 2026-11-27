@@ -11,7 +11,7 @@ import (
 )
 
 func main() {
-	if err := mcpserver.Serve(context.Background(), os.Stdin, os.Stdout, mcpserver.NewDaemonClient(), mcpserver.Version); err != nil {
+	if err := mcpserver.Run(context.Background(), os.Stdin, os.Stdout, mcpserver.Version); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}

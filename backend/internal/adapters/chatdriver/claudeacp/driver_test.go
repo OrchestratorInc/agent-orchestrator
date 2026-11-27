@@ -378,9 +378,9 @@ func TestClaudeSessionMetaDisablesBackgroundTools(t *testing.T) {
 func TestClaudeSessionMetaAsksForSDKSessionState(t *testing.T) {
 	for _, cfg := range []acpdriver.LaunchConfig{{}, {DisableTools: true}} {
 		got := claudeNestedMap(claudeSessionMeta(cfg), "claudeCode")["emitRawSDKMessages"]
-		want := []map[string]string{{"type": "system", "subtype": "session_state_changed"}}
+		want := []map[string]string{{"type": "system", "subtype": "session_state_changed"}, {"type": "system", "subtype": "init"}}
 		if !reflect.DeepEqual(got, want) {
-			t.Fatalf("emitRawSDKMessages = %#v, want only session state changes", got)
+			t.Fatalf("emitRawSDKMessages = %#v, want session state changes and the start message", got)
 		}
 	}
 }

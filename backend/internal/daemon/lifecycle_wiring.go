@@ -286,6 +286,7 @@ type sessionLifecycle interface {
 	SetVersionTelemetry(sink ports.EventSink)
 	SetVersionRefreshPolicy(policy func() sessionmanager.VersionRefreshPolicy)
 	SetComputerUseEnabled(enabled func(context.Context) bool)
+	SetSessionConnectors(servers func(context.Context, sessionmanager.SessionConnectorsInput) []ports.ChatMCPServerConfig)
 	SetDevicesOffered(offered func() bool)
 	SetCommitAttributionEnabled(enabled func(context.Context) bool)
 	RetryVersionMoves(ctx context.Context) error

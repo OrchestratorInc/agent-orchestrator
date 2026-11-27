@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -103,7 +104,8 @@ type conversation struct {
 
 	// activeTurn is the most recent provider turn id, used when a caller asks to
 	// interrupt without naming one.
-	activeTurn string
+	activeTurn      string
+	reloadAfterTurn bool
 
 	// contextTokens is the conversation's latest position in the model's context,
 	// and contextWindow the size of that context. Both come from the provider's
@@ -209,6 +211,7 @@ func (c *conversation) pump() {
 		// batch has to be able to read it.
 		c.trackContext(n)
 		c.observeBackgroundNotification(n)
+		c.observeMCPSignIn(n)
 		now := time.Now()
 		usageLimits.observe(n, c.threadID, now)
 		// Some normalized output events omit their thread ID. Read the native
@@ -288,7 +291,14 @@ func (c *conversation) pump() {
 				if c.activeTurn == ev.ProviderTurnID {
 					c.activeTurn = ""
 				}
+				reload := c.reloadAfterTurn && c.activeTurn == ""
+				if reload {
+					c.reloadAfterTurn = false
+				}
 				c.mu.Unlock()
+				if reload {
+					go c.reloadSignedInServers()
+				}
 			}
 			if ev.Kind == ports.ChatEventCompacted {
 				settled, ok := c.settleCompaction(ev)
@@ -889,6 +899,11 @@ func (c *conversation) handleServerRequest(ctx context.Context, req serverReques
 	}
 
 	kind, known := approvalMethods[req.Method]
+	var tool *toolApproval
+	if req.Method == codexproto.MethodMcpServerElicitationRequest {
+		tool = parseToolApproval(req.Params)
+		kind, known = domain.ActivityKindApproval, tool != nil
+	}
 	if !known {
 		c.log.Warn("refusing unmodelled app-server request", "method", req.Method)
 		return nil, fmt.Errorf("unsupported request %s", req.Method)
@@ -903,6 +918,9 @@ func (c *conversation) handleServerRequest(ctx context.Context, req serverReques
 	}
 
 	decisions, summary, detail, turnID := parseApproval(req.Method, req.Params)
+	if tool != nil {
+		decisions, summary, detail, turnID = tool.decisions(), tool.summary(), tool.detail(req.Method), tool.TurnID
+	}
 
 	offered := make(map[string]json.RawMessage, len(decisions))
 	for _, option := range decisions {
@@ -936,6 +954,9 @@ func (c *conversation) handleServerRequest(ctx context.Context, req serverReques
 
 	select {
 	case decision := <-ch:
+		if tool != nil {
+			return tool.reply(decision), nil
+		}
 		return approvalReply(decision), nil
 
 	case <-time.After(approvalWait):
@@ -994,6 +1015,61 @@ func (c *conversation) refuseDynamicToolCall(params json.RawMessage) error {
 	c.log.Warn("refusing dynamic tool call: AO declares no client-side tools",
 		"tool", p.Tool, "callId", p.CallID)
 	return fmt.Errorf("client declares no tools; %q is not available", p.Tool)
+}
+
+const (
+	mcpNeedsSignIn   = "needs-auth"
+	mcpSignInFailed  = "signInFailed"
+	mcpSignInWait    = 10 * time.Minute
+	mcpSignInNoCause = "The sign-in did not complete."
+)
+
+// SignInMCPServer starts Codex's own sign-in for one of its tool servers and returns the page to open.
+func (c *conversation) SignInMCPServer(ctx context.Context, name string) (string, error) {
+	threadID := c.threadID
+	wait := int64(mcpSignInWait / time.Second)
+	var resp codexproto.McpServerOauthLoginResponse
+	params := codexproto.McpServerOauthLoginParams{Name: name, ThreadID: &threadID, TimeoutSecs: &wait}
+	if err := c.conn.request(ctx, codexproto.MethodMcpServerOauthLogin, params, &resp); err != nil {
+		return "", fmt.Errorf("%s: %w", codexproto.MethodMcpServerOauthLogin, err)
+	}
+	c.emit(ports.ChatEvent{Kind: ports.ChatEventMCPServers, MCPServers: []ports.ChatMCPServer{{Name: name, Status: mcpNeedsSignIn}}})
+	return resp.AuthorizationURL, nil
+}
+
+func (c *conversation) observeMCPSignIn(n notification) {
+	if n.Method != codexproto.MethodMcpServerOauthLoginCompleted {
+		return
+	}
+	var p codexproto.McpServerOauthLoginCompletedNotification
+	if err := json.Unmarshal(n.Params, &p); err != nil || p.Name == "" {
+		return
+	}
+	if !p.Success {
+		cause := mcpSignInNoCause
+		if p.Error != nil && *p.Error != "" {
+			cause = *p.Error
+		}
+		c.emit(ports.ChatEvent{Kind: ports.ChatEventMCPServers, MCPServers: []ports.ChatMCPServer{
+			{Name: p.Name, Status: mcpNeedsSignIn, Error: cause, FailureReason: mcpSignInFailed},
+		}})
+		return
+	}
+	c.mu.Lock()
+	busy := c.activeTurn != ""
+	c.reloadAfterTurn = busy
+	c.mu.Unlock()
+	if !busy {
+		go c.reloadSignedInServers()
+	}
+}
+
+func (c *conversation) reloadSignedInServers() {
+	ctx, cancel := context.WithTimeout(context.Background(), handshakeTimeout)
+	defer cancel()
+	if err := c.conn.request(ctx, codexproto.MethodConfigMcpServerReload, map[string]any{}, nil); err != nil {
+		c.log.Warn("tool servers did not reload after a sign-in", "error", err)
+	}
 }
 
 // ReloadMCPServers restarts the provider's tool servers and reports their state.
@@ -1264,6 +1340,83 @@ func decisionLabel(id string) string {
 	default:
 		return id
 	}
+}
+
+type toolApproval struct {
+	Mode string `json:"mode"`
+	Meta struct {
+		Kind    string          `json:"codex_approval_kind"`
+		Persist json.RawMessage `json:"persist"`
+	} `json:"_meta"`
+	Message         string          `json:"message"`
+	RequestedSchema json.RawMessage `json:"requestedSchema"`
+	ServerName      string          `json:"serverName"`
+	TurnID          string          `json:"turnId"`
+}
+
+func parseToolApproval(params json.RawMessage) *toolApproval {
+	var p toolApproval
+	if json.Unmarshal(params, &p) != nil || p.Meta.Kind != "mcp_tool_call" || (p.Mode != "" && p.Mode != "form") {
+		return nil
+	}
+	var schema struct {
+		Properties map[string]json.RawMessage `json:"properties"`
+	}
+	if len(p.RequestedSchema) > 0 && (json.Unmarshal(p.RequestedSchema, &schema) != nil || len(schema.Properties) > 0) {
+		return nil
+	}
+	return &p
+}
+
+func (t *toolApproval) decisions() []ports.ChatDecisionOption {
+	ids := []string{"accept", "cancel"}
+	var one string
+	var many []string
+	_ = json.Unmarshal(t.Meta.Persist, &one)
+	_ = json.Unmarshal(t.Meta.Persist, &many)
+	if one == "session" || slices.Contains(many, "session") {
+		ids = []string{"accept", "acceptForSession", "cancel"}
+	}
+	out := make([]ports.ChatDecisionOption, 0, len(ids))
+	for _, id := range ids {
+		raw, _ := json.Marshal(id)
+		out = append(out, ports.ChatDecisionOption{ID: id, Label: decisionLabel(id), Kind: codexDecisionKind(id), Raw: raw})
+	}
+	return out
+}
+
+func (t *toolApproval) summary() string {
+	switch {
+	case strings.TrimSpace(t.Message) != "":
+		return strings.TrimSpace(t.Message)
+	case t.ServerName != "":
+		return "Use a tool of " + t.ServerName
+	default:
+		return "Approval required"
+	}
+}
+
+func (t *toolApproval) detail(method string) []byte {
+	detail := map[string]any{"method": method, "subjectKind": string(domain.ActivityKindMCPTool)}
+	if t.ServerName != "" {
+		detail["server"] = t.ServerName
+	}
+	encoded, _ := json.Marshal(detail)
+	return encoded
+}
+
+func (t *toolApproval) reply(decision ports.ChatDecision) any {
+	if decision.ID != "accept" && decision.ID != "acceptForSession" {
+		return map[string]any{"action": "cancel"}
+	}
+	reply := map[string]any{"action": "accept"}
+	if decision.ID == "acceptForSession" {
+		reply["_meta"] = map[string]any{"persist": "session"}
+	}
+	if len(t.RequestedSchema) > 0 && string(t.RequestedSchema) != "null" {
+		reply["content"] = map[string]any{}
+	}
+	return reply
 }
 
 // approvalReply builds the provider response for a decision. A decision carrying

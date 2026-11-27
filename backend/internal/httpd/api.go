@@ -63,6 +63,7 @@ type APIDeps struct {
 	Directories        controllers.DirectoryBrowserService
 	ShellTerminals     controllers.ShellTerminalService
 	Cues               controllers.CueService
+	Connectors         controllers.ConnectorService
 	// Conversations is nil until a Chat driver is wired; the controller then
 	// answers 501 rather than panicking, matching the other optional surfaces.
 	Conversations controllers.ConversationService
@@ -186,6 +187,7 @@ type API struct {
 	fs            *controllers.FSController
 	shellTerms    *controllers.ShellTerminalsController
 	cues          *controllers.CuesController
+	connectors    *controllers.ConnectorsController
 	conversations *controllers.ConversationsController
 	settings      *controllers.SettingsController
 	dev           *controllers.DevController
@@ -261,6 +263,7 @@ func newAPIWithLogger(cfg config.Config, deps APIDeps, log *slog.Logger) *API {
 		fs:            &controllers.FSController{Svc: deps.Directories},
 		shellTerms:    &controllers.ShellTerminalsController{Svc: deps.ShellTerminals},
 		cues:          &controllers.CuesController{Svc: deps.Cues},
+		connectors:    &controllers.ConnectorsController{Svc: deps.Connectors},
 		conversations: &controllers.ConversationsController{Svc: deps.Conversations, Renders: attachmentstore.New(cfg.DataDir), Search: deps.ConversationSearch, UserMessages: userMessageRecorder(deps.Sessions), Models: deps.Agents},
 		settings:      &controllers.SettingsController{Svc: deps.Settings},
 		dev:           &controllers.DevController{Import: deps.DevImport},
@@ -337,6 +340,7 @@ func serveWithSetupBudget(next http.Handler, w http.ResponseWriter, req *http.Re
 // Register mounts the bounded /api/v1 REST surface. Long-lived surfaces such
 // as muxed terminal streams stay outside this timeout group.
 func (a *API) Register(root chi.Router) {
+	a.connectors.RegisterRoot(root)
 	timeout := a.cfg.RequestTimeout
 	if timeout <= 0 {
 		timeout = config.DefaultRequestTimeout
@@ -355,6 +359,7 @@ func (a *API) Register(root chi.Router) {
 				clone := middleware.Timeout(max(timeout, 30*time.Minute))(next)
 				computerUse := middleware.Timeout(max(timeout, 2*time.Minute))(next)
 				stackMerge := middleware.Timeout(max(timeout, 3*time.Minute))(next)
+				connectorTest := middleware.Timeout(max(timeout, 2*time.Minute))(next)
 				deviceCommand := middleware.Timeout(max(timeout, deviceCommandBudget))(next)
 				return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
 					// A clone downloads the whole repository inside the request,
@@ -369,6 +374,11 @@ func (a *API) Register(root chi.Router) {
 					// followed by its own read: either outlasts the REST budget.
 					if chi.RouteContext(req.Context()).RoutePattern() == "/api/v1/computer-use/call" {
 						computerUse.ServeHTTP(w, req)
+						return
+					}
+					if pattern := chi.RouteContext(req.Context()).RoutePattern(); pattern == "/api/v1/connectors/{connectorId}/test" || pattern == "/api/v1/connectors/{connectorId}/connect" ||
+						pattern == "/api/v1/connectors/{connectorId}/connect/finish" {
+						connectorTest.ServeHTTP(w, req)
 						return
 					}
 					// A stack merge waits up to two minutes for the provider to land
@@ -444,6 +454,7 @@ func (a *API) Register(root chi.Router) {
 			a.fs.Register(r)
 			a.shellTerms.Register(r)
 			a.cues.Register(r)
+			a.connectors.Register(r)
 			a.conversations.Register(r)
 			a.settings.Register(r)
 			a.dev.Register(r)

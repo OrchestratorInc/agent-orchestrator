@@ -168,6 +168,7 @@ func capabilities() ports.ChatCapabilities {
 		// config/mcpServer/reload plus the status inventory read after it, both
 		// exercised against a live app-server.
 		ports.ChatCapabilityMCPReload: true,
+		ports.ChatCapabilityMCPSignIn: true,
 		// Guidance into a turn already in flight, over turn/steer. Advertised only
 		// after being driven against a live app-server (TestLiveSteerKeepsTheTurnAndItsWork
 		// on codex-cli 0.146.0): the steered turn kept its id, emitted one
@@ -589,8 +590,8 @@ const aoToolTimeoutSec = 150
 // threadConfig is the config override sent with thread/start and
 // thread/resume. Codex layers it above config.toml for this thread only.
 //
-// AO's own "ao" server (html_preview, html_render) is pre-approved. AO answers
-// no mcpServer/elicitation/request, so a prompt could only fail the call.
+// AO's own "ao" server (html_preview, html_render) is pre-approved, so its
+// tools raise no mcpServer/elicitation/request.
 // Verified live on codex-cli 0.160.1: a tool not marked read-only raised that
 // request under on-request and was refused under never/read-only, and
 // default_tools_approval_mode "approve" removed both.

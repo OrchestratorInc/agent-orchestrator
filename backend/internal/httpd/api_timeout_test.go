@@ -18,6 +18,7 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/controllers"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 	"github.com/aoagents/agent-orchestrator/backend/internal/service/computeruse"
+	"github.com/aoagents/agent-orchestrator/backend/internal/service/connectors"
 	prsvc "github.com/aoagents/agent-orchestrator/backend/internal/service/pr"
 	projectsvc "github.com/aoagents/agent-orchestrator/backend/internal/service/project"
 	sessionsvc "github.com/aoagents/agent-orchestrator/backend/internal/service/session"
@@ -281,6 +282,59 @@ func TestStackMergeRouteUsesExtendedTimeout(t *testing.T) {
 			}
 		case <-time.After(time.Second):
 			t.Fatalf("%s never reached the PR service: status=%d body=%s", tc.path, response.Code, response.Body.String())
+		}
+	}
+}
+
+// timeoutProbeConnectors records the request budget a connector call runs under.
+type timeoutProbeConnectors struct {
+	controllers.ConnectorService
+	budget chan time.Duration
+}
+
+func (p *timeoutProbeConnectors) Get(context.Context, string) (connectors.Connector, error) {
+	return connectors.Connector{}, nil
+}
+
+func (p *timeoutProbeConnectors) CallbackURL() string { return "" }
+
+func (p *timeoutProbeConnectors) Test(ctx context.Context, _ string) (connectors.Connector, error) {
+	p.budget <- remainingRequestBudget(ctx)
+	return connectors.Connector{}, nil
+}
+
+func (p *timeoutProbeConnectors) StartSignIn(ctx context.Context, _ string) (string, error) {
+	p.budget <- remainingRequestBudget(ctx)
+	return "", nil
+}
+
+func (p *timeoutProbeConnectors) FinishFromAddress(ctx context.Context, _, _ string) (connectors.Connector, error) {
+	p.budget <- remainingRequestBudget(ctx)
+	return connectors.Connector{}, nil
+}
+
+// A connector test, a sign-in start and a sign-in finish each wait on the
+// connector's own server, which a short configured REST budget would cut off.
+func TestConnectorServerRoutesUseExtendedTimeout(t *testing.T) {
+	const configuredTimeout = 250 * time.Millisecond
+	svc := &timeoutProbeConnectors{budget: make(chan time.Duration, 1)}
+	router := NewRouterWithControl(config.Config{RequestTimeout: configuredTimeout}, discardLogger(), nil, APIDeps{Connectors: svc}, ControlDeps{})
+	for _, tc := range []struct{ path, body string }{
+		{path: "/api/v1/connectors/linear/test"},
+		{path: "/api/v1/connectors/linear/connect"},
+		{path: "/api/v1/connectors/linear/connect/finish", body: `{"callbackUrl":"http://127.0.0.1:3001/oauth/mcp/callback?code=c&state=s"}`},
+	} {
+		req := httptest.NewRequest(http.MethodPost, tc.path, strings.NewReader(tc.body))
+		req.Header.Set("Content-Type", "application/json")
+		response := httptest.NewRecorder()
+		router.ServeHTTP(response, req)
+		select {
+		case budget := <-svc.budget:
+			if budget < 119*time.Second || budget > 2*time.Minute {
+				t.Fatalf("%s budget = %s, want about 2 minutes", tc.path, budget)
+			}
+		case <-time.After(time.Second):
+			t.Fatalf("%s never reached the connector service: status=%d body=%s", tc.path, response.Code, response.Body.String())
 		}
 	}
 }

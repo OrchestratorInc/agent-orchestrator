@@ -72,6 +72,7 @@ import (
 	browsersvc "github.com/aoagents/agent-orchestrator/backend/internal/service/browser"
 	chatsvc "github.com/aoagents/agent-orchestrator/backend/internal/service/chat"
 	"github.com/aoagents/agent-orchestrator/backend/internal/service/computeruse"
+	"github.com/aoagents/agent-orchestrator/backend/internal/service/connectors"
 	cuesvc "github.com/aoagents/agent-orchestrator/backend/internal/service/cue"
 	devimportsvc "github.com/aoagents/agent-orchestrator/backend/internal/service/devimport"
 	fsbrowsersvc "github.com/aoagents/agent-orchestrator/backend/internal/service/fsbrowser"
@@ -961,6 +962,8 @@ func Run(buildVersion string) (retErr error) {
 	sessMgr.SetVersionTelemetry(telemetrySink)
 	// "Let agents use this computer" gives new chat sessions the computer-use tools.
 	sessMgr.SetComputerUseEnabled(settingsSvc.ComputerUseEnabled)
+	connectorSvc := connectors.New(cfg.DataDir, fmt.Sprintf("http://%s:%d", config.LoopbackHost, cfg.Port))
+	wireConnectors(connectorSvc, store, sessMgr)
 	sessMgr.SetVersionRefreshPolicy(func() sessionmanager.VersionRefreshPolicy {
 		return versionRefreshPolicy(ctx, cfg, settingsSvc)
 	})
@@ -1377,6 +1380,7 @@ func Run(buildVersion string) (retErr error) {
 		ShellTerminals:     shellTermSvc,
 		PaneTerminals:      shellTermSvc,
 		Cues:               cuesvc.New(cuesvc.Deps{Store: store, Sessions: sessionSvc, Terminals: shellTermSvc}),
+		Connectors:         connectorSvc,
 		AgentAuth:          agentAuthSvc,
 		GitHub:             newGitHubStatusService(githubpat.New(cfg.DataDir), prReader),
 		Conversations:      sessionConversationService{Service: chatSvc, sessions: sessMgr},
@@ -1437,6 +1441,7 @@ func Run(buildVersion string) (retErr error) {
 		return err
 	}
 	browserLive.SetLoopbackBaseURL("http://" + srv.Addr().String())
+	connectorSvc.SetBaseURL("http://" + srv.Addr().String())
 	previewDone := preview.NewPoller(store, sessionSvc, "http://"+srv.Addr().String(), preview.PollerConfig{
 		Logger:       log,
 		Wake:         cdcPipe.sessionChanges(),

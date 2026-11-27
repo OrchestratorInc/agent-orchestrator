@@ -117,6 +117,7 @@ type conversation struct {
 	mu                sync.Mutex
 	sessionID         string
 	reportedSessionID string
+	reportedServers   map[string]string
 	capabilities      ports.ChatCapabilities
 	prepared          *preparedTurn
 	activeTurn        string

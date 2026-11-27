@@ -517,6 +517,10 @@ func normalizeNotification(n notification, now time.Time) []ports.ChatEvent {
 		if p.FailureReason != nil {
 			server.FailureReason = string(*p.FailureReason)
 		}
+		if p.Status == codexproto.McpServerStartupStateFailed &&
+			(server.FailureReason == string(codexproto.McpServerStartupFailureReasonReauthenticationRequired) || strings.Contains(server.Error, "is not logged in")) {
+			server.Status = mcpNeedsSignIn
+		}
 		return []ports.ChatEvent{{
 			Kind:       ports.ChatEventMCPServers,
 			MCPServers: []ports.ChatMCPServer{server},

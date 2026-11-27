@@ -939,6 +939,11 @@ type LaunchConfig struct {
 	Env map[string]string
 }
 
+// AgentConnectorArgs is implemented by adapters whose CLI takes extra tool servers on its command line.
+type AgentConnectorArgs interface {
+	ConnectorArgs(ctx context.Context, servers []ChatMCPServerConfig, token, file string) (args []string, env map[string]string, err error)
+}
+
 // WorkspaceHookConfig carries inputs needed to install workspace-local agent hooks.
 type WorkspaceHookConfig struct {
 	Config           AgentConfig

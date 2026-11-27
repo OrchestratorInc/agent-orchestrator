@@ -18,6 +18,7 @@ trigger: "Using the `ao` CLI, setting up Orchestrator for a user, importing exis
 | `project` | Register, inspect, configure, or remove projects | Setting up or managing repos Orchestrator knows about | [commands/project.md](commands/project.md) |
 | `automation` | Manage durable recurring session automations | Creating, editing, disabling, deleting, and inspecting scheduled runs | [commands/automation.md](commands/automation.md) |
 | `cue` | Create or list reusable project Cues | Saving a repetitive command or agent task at the user's request | [commands/cue.md](commands/cue.md) |
+| `connector` | Add an MCP server once for every agent session, sign in, test, import | The user asks to add, check or remove a connector, or a connector tool answers that it needs sign-in | [commands/connector.md](commands/connector.md) |
 | `orchestrator` | List orchestrator sessions | Viewing which sessions are orchestrators | [commands/orchestrator.md](commands/orchestrator.md) |
 | `review` | Start, list, cancel, or submit Orchestrator's native reviewer for a worker's PR (default: this session) | Reviewing implementation PRs owned by workers. For someone else's PR, use a worker that claims it with automatic fixing off | [commands/review.md](commands/review.md) |
 | `send` | Send a message to a running agent session | Messaging a live agent; use `--steer` to correct it mid-turn | [commands/send.md](commands/send.md) |
@@ -44,6 +45,7 @@ trigger: "Using the `ao` CLI, setting up Orchestrator for a user, importing exis
 - When the user asks you to set up Orchestrator, add their first project, or get them started, read [commands/setup.md](commands/setup.md) first and follow it.
 - For importing existing agent conversations from outside Orchestrator, read [commands/import.md](commands/import.md). This includes Claude Code and Codex terminal sessions.
 - Most read commands accept `--json` for machine-readable output.
+- In a Chat session, the `ao` tool server gives the session commands as tools: `session_spawn`, `session_wait`, `session_read`, `session_send`, `session_list`, `pending_list`, `pending_respond`, `pr_status`, `report`, and others. Each does what the matching `ao` command does, and works when the shell cannot reach the daemon. After `session_spawn`, call `session_wait` rather than polling `ao session ls`. A tool that starts or changes another session runs only when this session has full access and is not in plan mode. When one refuses, run the matching `ao` command if the shell can reach the daemon; it asks the user for approval as any command does. Otherwise ask the user to do that step in Orchestrator, or to set this session to full access.
 - `-p / --project` scopes session subcommand lookups to one project.
 - Session and project ids are shown by `ao session ls` and `ao project ls`.
 - To refer to a session in Orchestrator Chat or the Orchestrator terminal, use the canonical in-app

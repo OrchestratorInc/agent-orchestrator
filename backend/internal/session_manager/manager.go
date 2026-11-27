@@ -618,6 +618,8 @@ type Manager struct {
 	// computerUse reports the "Let agents use this computer" setting; nil is off.
 	computerUseMu sync.Mutex
 	computerUse   func(context.Context) bool
+	connectorsMu  sync.Mutex
+	connectors    func(context.Context, SessionConnectorsInput) []ports.ChatMCPServerConfig
 	// devicesOffered reports whether devices are on (Developer mode) and the
 	// user opted in; nil is off.
 	devicesMu      sync.Mutex
@@ -1840,6 +1842,7 @@ func (m *Manager) Spawn(ctx context.Context, cfg ports.SpawnConfig) (result doma
 	// path the adapter returned) BEFORE handing the launch to the runtime.
 	// tmux happily creates a session+pane around a missing command, so an
 	// unresolved binary would leak through as a "live" session that never ran.
+	argv = m.terminalConnectors(ctx, agent, cfg.Harness, id, cfg.ProjectID, ws.Path, argv, env)
 	if err := m.validateAgentBinary(argv); err != nil {
 		m.rollbackSeedSpawnWorkspace(ctx, rec, ws, workspaceProject, true, false)
 		return domain.SessionRecord{}, 0, 0, fmt.Errorf("spawn %s: %w", id, err)
@@ -4497,6 +4500,7 @@ func (m *Manager) relaunchSessionWithPolicyAndGeneration(ctx context.Context, op
 			return RestoreResult{}, relaunchFailed("after-start prompt", fmt.Errorf("%s %s: after-start prompt: %w", operation, rec.ID, err))
 		}
 	}
+	argv = m.terminalConnectors(ctx, agent, rec.Harness, rec.ID, rec.ProjectID, launchPath, argv, env)
 	if err := m.validateAgentBinary(argv); err != nil {
 		m.cleanupSystemPromptDir(rec.ID)
 		return RestoreResult{}, relaunchFailed("agent binary", fmt.Errorf("%s %s: %w", operation, rec.ID, err))

@@ -1608,6 +1608,23 @@ describe("controller recovery", () => {
 		invalidateSpy.mockRestore();
 	});
 
+	it("restarts an agent that has already stopped by resuming it", async () => {
+		const exited = { code: "AGENT_EXITED" };
+		postMock.mockImplementation(async (path: string) => path.endsWith("/exit-agent")
+			? { data: undefined, error: exited, response: { status: 409 } }
+			: { data: {}, error: undefined, response: { status: 200 } });
+		apiErrorCodeMock.mockImplementation((error: unknown) => error === exited ? "AGENT_EXITED" : undefined);
+
+		const { result } = renderHook(() => useConversationCommands("ao-1"), { wrapper });
+		await act(async () => {
+			await result.current.restartAgent();
+		});
+
+		expect(postMock).toHaveBeenCalledWith("/api/v1/sessions/{sessionId}/resume-agent", {
+			params: { path: { sessionId: "ao-1" } },
+		});
+	});
+
 	it("restores a terminated session, which the daemon refuses to resume", async () => {
 		postMock.mockResolvedValue({ data: {}, error: undefined, response: { status: 200 } });
 

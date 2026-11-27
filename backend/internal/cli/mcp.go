@@ -15,7 +15,7 @@ func newMCPCommand(_ *commandContext) *cobra.Command {
 		Hidden: true,
 		Args:   noArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			return mcpserver.Serve(cmd.Context(), cmd.InOrStdin(), cmd.OutOrStdout(), mcpserver.NewDaemonClient(), Version)
+			return mcpserver.Run(cmd.Context(), cmd.InOrStdin(), cmd.OutOrStdout(), Version)
 		},
 	}
 }

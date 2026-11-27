@@ -61,6 +61,8 @@ type ConversationService interface {
 	RetryTurn(ctx context.Context, session domain.SessionID, turnID string) (domain.ConversationTurn, error)
 	SetTitle(ctx context.Context, session domain.SessionID, title string) (string, error)
 	ReloadMCPServers(ctx context.Context, session domain.SessionID) ([]domain.ConversationMCPServer, error)
+	SignInMCPServer(ctx context.Context, session domain.SessionID, name string) (chatsvc.MCPSignIn, error)
+	FinishMCPSignIn(ctx context.Context, session domain.SessionID, name, address string) error
 	SwitchProviderReport(ctx context.Context, session domain.SessionID, request domain.ProviderSwitchRequest) (domain.ProviderSwitchResult, error)
 	SwitchProviderAndSend(ctx context.Context, session domain.SessionID, request domain.ProviderSwitchRequest, msg ports.ChatUserMessage) (domain.ConversationTurn, bool, error)
 	SessionHistory(ctx context.Context, session domain.SessionID, offset, limit int) ([]domain.HandoffTurn, int, error)
@@ -168,6 +170,8 @@ func (c *ConversationsController) Register(r chi.Router) {
 	r.Post("/sessions/{sessionId}/conversation/branches/{branchId}/activate", c.activateBranch)
 	r.Put("/sessions/{sessionId}/conversation/title", c.setTitle)
 	r.Post("/sessions/{sessionId}/conversation/mcp/reload", c.reloadMCPServers)
+	r.Post("/sessions/{sessionId}/conversation/mcp/sign-in", c.signInMCPServer)
+	r.Post("/sessions/{sessionId}/conversation/mcp/sign-in/finish", c.finishMCPSignIn)
 	r.Post("/sessions/{sessionId}/provider-switch", c.switchProvider)
 	r.Get("/sessions/{sessionId}/history", c.sessionHistory)
 	r.Post("/sessions/{sessionId}/renders", c.publishRender)
@@ -603,6 +607,41 @@ func (c *ConversationsController) setConfigOption(w http.ResponseWriter, r *http
 		return
 	}
 	envelope.WriteJSON(w, http.StatusOK, configOptionsPayload(options))
+}
+
+func (c *ConversationsController) signInMCPServer(w http.ResponseWriter, r *http.Request) {
+	if c.Svc == nil {
+		apispec.NotImplemented(w, r, "POST", "/api/v1/sessions/{sessionId}/conversation/mcp/sign-in")
+		return
+	}
+	var in ConversationMCPSignInRequest
+	if err := decodeJSON(r, &in); err != nil || strings.TrimSpace(in.Server) == "" {
+		envelope.WriteAPIError(w, r, http.StatusBadRequest, "validation", "CHAT_MCP_SERVER_REQUIRED", "server is required", nil)
+		return
+	}
+	out, err := c.Svc.SignInMCPServer(r.Context(), domain.SessionID(chi.URLParam(r, "sessionId")), in.Server)
+	if err != nil {
+		writeConversationError(w, r, err)
+		return
+	}
+	envelope.WriteJSON(w, http.StatusOK, ConversationMCPSignInResponse{AuthorizationURL: out.AuthorizationURL, CallbackURL: out.CallbackURL})
+}
+
+func (c *ConversationsController) finishMCPSignIn(w http.ResponseWriter, r *http.Request) {
+	if c.Svc == nil {
+		apispec.NotImplemented(w, r, "POST", "/api/v1/sessions/{sessionId}/conversation/mcp/sign-in/finish")
+		return
+	}
+	var in FinishConversationMCPSignInRequest
+	if err := decodeJSON(r, &in); err != nil || strings.TrimSpace(in.Server) == "" {
+		envelope.WriteAPIError(w, r, http.StatusBadRequest, "validation", "CHAT_MCP_SERVER_REQUIRED", "server is required", nil)
+		return
+	}
+	if err := c.Svc.FinishMCPSignIn(r.Context(), domain.SessionID(chi.URLParam(r, "sessionId")), in.Server, in.CallbackURL); err != nil {
+		writeConversationError(w, r, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
 }
 
 // reloadMCPServers restarts the provider's tool servers for a session.
@@ -1429,6 +1468,18 @@ func writeConversationErrorWithCode(w http.ResponseWriter, r *http.Request, err 
 	case errors.Is(err, chatsvc.ErrMCPReloadUnsupported):
 		envelope.WriteAPIError(w, r, http.StatusConflict, "conflict",
 			"CHAT_MCP_RELOAD_UNSUPPORTED", "this agent cannot reload its tool servers", nil)
+
+	case errors.Is(err, chatsvc.ErrMCPSignInUnsupported):
+		envelope.WriteAPIError(w, r, http.StatusConflict, "conflict",
+			"CHAT_MCP_SIGN_IN_UNSUPPORTED", "this agent cannot sign in to its own tool servers from here", nil)
+
+	case errors.Is(err, chatsvc.ErrMCPSignInAddress):
+		envelope.WriteAPIError(w, r, http.StatusBadRequest, "validation",
+			"CHAT_MCP_SIGN_IN_ADDRESS", "Paste the address of the page that opened after you approved the sign-in.", nil)
+
+	case errors.Is(err, chatsvc.ErrMCPSignInClosed):
+		envelope.WriteAPIError(w, r, http.StatusConflict, "conflict",
+			"CHAT_MCP_SIGN_IN_CLOSED", "This sign-in is no longer open. Start it again.", nil)
 
 	case errors.Is(err, chatsvc.ErrTitleRequired):
 		envelope.WriteAPIError(w, r, http.StatusBadRequest, "validation",

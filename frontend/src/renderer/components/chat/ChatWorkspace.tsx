@@ -552,6 +552,8 @@ export interface ChatWorkspaceProps {
 	onContinueTurn?: () => Promise<unknown> | void;
 	commandError?: string;
 	onResumeAgent?: () => void | Promise<unknown>;
+	connectorsMenu?: ReactNode;
+	connectorDock?: ReactNode;
 	resumingAgent?: boolean;
 	resumeError?: string;
 	/** resumeError says another app still holds this chat. */
@@ -927,6 +929,8 @@ function ChatWorkspaceContent({
 	onContinueTurn,
 	commandError,
 	onResumeAgent,
+	connectorsMenu,
+	connectorDock,
 	resumingAgent,
 	resumeError,
 	resumeOpenElsewhere,
@@ -1907,7 +1911,7 @@ function ChatWorkspaceContent({
 				<TurnSettingsBar
 					agentSwitch={agentSwitch}
 					beforePicker={agentSwitch ? <ContextMeter usage={stableUsage} compactsAt={compactsAt} onCompact={meterCompact} compactBlockedReason={meterCompactBlocked} /> : undefined}
-					afterPicker={quotaSign}
+					afterPicker={connectorsMenu ? <>{quotaSign}{connectorsMenu}</> : quotaSign}
 					// While the agent wakes or starts; a chat reads "hibernated" until ready.
 					modelsLoading={settingsLoading}
 					lastModel={lastModel}
@@ -1943,6 +1947,7 @@ function ChatWorkspaceContent({
 				/>
 			) : null,
 		[
+			connectorsMenu,
 			settingsReady,
 			settingsLocked,
 			settingsLoading,
@@ -2495,6 +2500,7 @@ function ChatWorkspaceContent({
 											{welcomeHeading ?? t(artifactSession ? "chat.welcome.artifactHeading" : "chat.welcome.heading")}
 										</h1>
 									) : null}
+									{connectorDock}
 									<McpServerBanner
 										key={draftScopeKey}
 										sessionId={uiSessionId}
@@ -7357,6 +7363,7 @@ function useStableCallback<Args extends unknown[], Result>(
 	// updated the ref — there is no render-phase caller to read a stale closure.
 	return useCallback((...args: Args) => latest.current?.(...args), []);
 }
+
 
 /** Retain an unchanged JSON-shaped value across snapshot refreshes. */
 function useStableValue<T>(value: T): T {

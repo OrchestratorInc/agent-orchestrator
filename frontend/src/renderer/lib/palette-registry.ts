@@ -126,6 +126,7 @@ const SETTINGS_ENTRIES: SettingsEntry[] = [
 	{ id: "split-panes", section: "general", label: "settings.splitPanes", keywords: ["split", "side by side", "panes", "drag tabs"], when: "developerMode" },
 	{ id: "harness", section: "harness", label: "settings.harness", keywords: [] },
 	{ id: "harness-logins", section: "harness", label: "settings.harness.viewLabel", keywords: ["login", "agent login", "api key", "provider key", "environment variable", "anthropic", "openai", "openrouter"] },
+	{ id: "connectors", section: "connectors", label: "settings.connectors", keywords: ["mcp", "mcp servers", "tools", "integrations"] },
 	{ id: "remote-hosts", section: "remoteHosts", label: "settings.remoteHosts", keywords: [] },
 	{ id: "remote-enable", section: "remoteHosts", label: "remote.enable", keywords: ["remote access"] },
 	{ id: "saved-hosts", section: "remoteHosts", label: "remote.savedHosts", keywords: ["servers", "ssh"] },

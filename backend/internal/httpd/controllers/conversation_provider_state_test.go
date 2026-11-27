@@ -5,6 +5,8 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -347,6 +349,56 @@ func TestSnapshotNamesStreamedTextByActivityKind(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestMCPSignInRoutes(t *testing.T) {
+	log := slog.New(slog.NewTextHandler(io.Discard, nil))
+	post := func(svc *fakeConversationService, path, body string) (int, map[string]any) {
+		t.Helper()
+		srv := httptest.NewServer(httpd.NewRouterWithControl(config.Config{}, log, nil, httpd.APIDeps{
+			Sessions: newFakeSessionService(), Conversations: svc,
+		}, httpd.ControlDeps{}))
+		t.Cleanup(srv.Close)
+		resp, err := http.Post(srv.URL+"/api/v1/sessions/p1-1/conversation/mcp/"+path, "application/json", strings.NewReader(body))
+		if err != nil {
+			t.Fatalf("POST %s: %v", path, err)
+		}
+		defer func() { _ = resp.Body.Close() }()
+		var decoded map[string]any
+		_ = json.NewDecoder(resp.Body).Decode(&decoded)
+		return resp.StatusCode, decoded
+	}
+	code := func(body map[string]any) any { return body["code"] }
+
+	svc := &fakeConversationService{signIn: chatsvc.MCPSignIn{AuthorizationURL: "https://mcp.example/authorize", CallbackURL: "http://127.0.0.1:52136/callback"}}
+	status, body := post(svc, "sign-in", `{"server":"tracker"}`)
+	if status != http.StatusOK || body["authorizationUrl"] != "https://mcp.example/authorize" || body["callbackUrl"] != "http://127.0.0.1:52136/callback" {
+		t.Fatalf("sign-in = %d %#v", status, body)
+	}
+	if status, _ := post(svc, "sign-in/finish", `{"server":"tracker","callbackUrl":"http://127.0.0.1:52136/callback?code=c1"}`); status != http.StatusNoContent {
+		t.Fatalf("finish = %d", status)
+	}
+	if want := []string{"start tracker", "finish tracker http://127.0.0.1:52136/callback?code=c1"}; !slices.Equal(svc.signInCalls, want) {
+		t.Fatalf("calls = %v, want %v", svc.signInCalls, want)
+	}
+	for _, path := range []string{"sign-in", "sign-in/finish"} {
+		if status, body := post(&fakeConversationService{}, path, `{"server":"  "}`); status != http.StatusBadRequest || code(body) != "CHAT_MCP_SERVER_REQUIRED" {
+			t.Fatalf("%s with no server = %d %#v", path, status, body)
+		}
+	}
+	for failure, want := range map[error]struct {
+		status int
+		code   string
+	}{
+		chatsvc.ErrMCPSignInUnsupported: {http.StatusConflict, "CHAT_MCP_SIGN_IN_UNSUPPORTED"},
+		chatsvc.ErrMCPSignInAddress:     {http.StatusBadRequest, "CHAT_MCP_SIGN_IN_ADDRESS"},
+		chatsvc.ErrMCPSignInClosed:      {http.StatusConflict, "CHAT_MCP_SIGN_IN_CLOSED"},
+	} {
+		status, body := post(&fakeConversationService{signInErr: failure}, "sign-in/finish", `{"server":"tracker","callbackUrl":"x"}`)
+		if status != want.status || code(body) != want.code {
+			t.Fatalf("%v = %d %#v, want %d %s", failure, status, body, want.status, want.code)
+		}
 	}
 }
 

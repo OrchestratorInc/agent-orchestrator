@@ -1,0 +1,253 @@
+package connectors
+
+import (
+	"context"
+	"os"
+	"path/filepath"
+	"slices"
+	"strings"
+	"testing"
+
+	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
+)
+
+func writeSource(t *testing.T, path, body string) {
+	t.Helper()
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func sourceHome(t *testing.T) (home, project string) {
+	t.Helper()
+	home, project = t.TempDir(), t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	writeSource(t, filepath.Join(home, ".claude.json"), `{
+		"mcpServers": {
+			"Linear": {"type": "http", "url": "https://mcp.linear.app/mcp?team=1"},
+			"old": {"type": "sse", "url": "https://sse.example.com/sse"},
+			"files": {"command": "npx", "args": ["-y", "files"], "env": {"ROOT": "/tmp", "TOKEN": "tok-${FILES_TOKEN}", "DEBUG": ""}}
+		},
+		"projects": {"`+filepath.ToSlash(project)+`": {"mcpServers": {"scoped": {"command": "scoped-server"}, "off": {"command": "x"}},
+			"disabledMcpServers": ["off"], "enabledMcpjsonServers": ["repo"]}}
+	}`)
+	writeSource(t, filepath.Join(home, ".codex", "config.toml"), `
+[mcp_servers.sentry]
+url = "https://mcp.sentry.dev/mcp"
+bearer_token_env_var = "AO_TEST_SENTRY_TOKEN"
+
+[mcp_servers.ao]
+command = "ao"
+
+[mcp_servers.paused]
+command = "paused-server"
+enabled = false
+`)
+	writeSource(t, filepath.Join(project, ".mcp.json"), `{"mcpServers": {"repo": {"command": "repo-server"}, "unapproved": {"command": "x"}}}`)
+	writeSource(t, filepath.Join(home, ".cursor", "mcp.json"), `{"mcpServers": {"blank": {"url": "https://blank.example.com/mcp", "headers": {"Authorization": ""}},
+		"placed": {"command": "${userHome}/bin/placed", "env": {"KEY": "Bearer ${env:PLACED_KEY}"}}}}`)
+	return home, project
+}
+
+func TestNativeNamesReadTheAgentsOwnConfiguration(t *testing.T) {
+	home, project := sourceHome(t)
+	claude := NativeNames(context.Background(), domain.HarnessClaudeCode, filepath.ToSlash(project), nil)
+	for _, name := range []string{"Linear", "linear", "old", "files", "scoped", "repo"} {
+		if !claude[name] {
+			t.Errorf("claude names = %v, missing %q", claude, name)
+		}
+	}
+	for _, name := range []string{"off", "unapproved"} {
+		if claude[name] {
+			t.Errorf("claude names hold %q, which Claude Code does not load", name)
+		}
+	}
+	if codex := NativeNames(context.Background(), domain.HarnessCodex, project, nil); !codex["sentry"] || codex["Linear"] || !codex["paused"] {
+		t.Errorf("codex names = %v", codex)
+	}
+	other := filepath.Join(home, "account")
+	writeSource(t, filepath.Join(other, ".claude.json"), `{"mcpServers": {"account-only": {"command": "x"}}}`)
+	if got := NativeNames(context.Background(), domain.HarnessClaudeCode, "", map[string]string{"CLAUDE_CONFIG_DIR": other}); !got["account-only"] || got["Linear"] {
+		t.Errorf("account folder names = %v", got)
+	}
+	writeSource(t, filepath.Join(home, ".cursor", "mcp.json"), `{"mcpServers": {"Figma": {"url": "https://mcp.figma.com/mcp"}}}`)
+	writeSource(t, filepath.Join(project, ".cursor", "mcp.json"), `{"mcpServers": {"repo-cursor": {"command": "x"}}}`)
+	if got := NativeNames(context.Background(), domain.HarnessCursor, project, nil); !got["figma"] || !got["repo-cursor"] || got["Linear"] {
+		t.Errorf("cursor names = %v", got)
+	}
+}
+
+func TestImportListsCandidatesWithoutValuesAndAddsTheChosenOnes(t *testing.T) {
+	home, project := sourceHome(t)
+	svc := New(t.TempDir(), "http://127.0.0.1:1")
+	svc.SetImportProjects(func(context.Context) []ImportProject {
+		return []ImportProject{{ID: "p1", Path: filepath.ToSlash(project)}}
+	})
+	ctx := context.Background()
+	candidates, err := svc.ImportCandidates(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	byKey := map[string]ImportCandidate{}
+	for _, candidate := range candidates {
+		byKey[candidate.Key] = candidate
+	}
+	if got := byKey["placed"]; !slices.Equal(got.NeedsValue, []string{"PLACED_KEY"}) || got.Command != filepath.Join(home, "bin", "placed") {
+		t.Errorf("a server with Cursor's own placeholders = %+v", got)
+	}
+	if len(byKey) != 10 || byKey["old"].ID != "" || byKey["ao"].ID != "" {
+		t.Fatalf("candidates = %+v", candidates)
+	}
+	if got := byKey["linear"]; got.URL != "https://mcp.linear.app/mcp?team=***" || got.Transport != TransportHTTP || len(got.NeedsValue) != 0 {
+		t.Errorf("linear = %+v", got)
+	}
+	if got := byKey["files"]; !slices.Equal(got.NeedsValue, []string{"FILES_TOKEN"}) || !slices.Equal(got.EnvKeys, []string{"ROOT", "TOKEN"}) {
+		t.Errorf("files = %+v", got)
+	}
+	if got := byKey["sentry"]; !slices.Equal(got.NeedsValue, []string{"Authorization"}) {
+		t.Errorf("sentry = %+v", got)
+	}
+	if byKey["scoped"].ProjectID != "p1" || byKey["repo"].ProjectID != "p1" {
+		t.Errorf("project scope: scoped=%+v repo=%+v", byKey["scoped"], byKey["repo"])
+	}
+
+	if _, err := svc.Import(ctx, []string{byKey["files"].ID}, nil); err == nil {
+		t.Fatal("import without the value it needs succeeded")
+	}
+	added, err := svc.Import(ctx, []string{byKey["files"].ID, byKey["linear"].ID, byKey["sentry"].ID}, map[string]map[string]string{
+		byKey["files"].ID:  {"FILES_TOKEN": "typed"},
+		byKey["sentry"].ID: {"Authorization": "typed-token"},
+	})
+	if blank, err := svc.Import(ctx, []string{byKey["blank"].ID}, map[string]map[string]string{byKey["blank"].ID: {"Authorization": "Bearer typed"}}); err != nil || len(blank) != 1 || blank[0].Auth != AuthHeader {
+		t.Fatalf("import of a server with an empty header that the user typed = %+v, %v", blank, err)
+	}
+	if err != nil || len(added) != 3 {
+		t.Fatalf("import = %+v, %v", added, err)
+	}
+	if added[1].Auth != AuthOAuth || added[2].Auth != AuthHeader || added[0].Transport != TransportStdio {
+		t.Errorf("added = %+v", added)
+	}
+	records, err := readFile(svc.path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, saved := range records {
+		if saved.Key == "sentry" && saved.Headers["Authorization"] != "Bearer typed-token" {
+			t.Errorf("the typed token of a bearer variable = %q", saved.Headers["Authorization"])
+		}
+	}
+	for _, rec := range records {
+		if rec.Key == "files" && (rec.Env["TOKEN"] != "tok-typed" || rec.Env["ROOT"] != "/tmp") {
+			t.Errorf("files env = %v", rec.Env)
+		}
+	}
+	again, err := svc.ImportCandidates(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, candidate := range again {
+		if candidate.Exists != slices.Contains([]string{"files", "linear", "sentry", "blank"}, candidate.Key) {
+			t.Errorf("exists flag wrong for %+v", candidate)
+		}
+	}
+}
+
+func TestImportUsesTheTokenOfABearerVariableWhenTheDaemonHasIt(t *testing.T) {
+	sourceHome(t)
+	t.Setenv("AO_TEST_SENTRY_TOKEN", "from-env")
+	svc := New(t.TempDir(), "http://127.0.0.1:1")
+	candidates, err := svc.ImportCandidates(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, candidate := range candidates {
+		if candidate.Key != "sentry" {
+			continue
+		}
+		if len(candidate.NeedsValue) != 0 {
+			t.Fatalf("sentry needs = %v", candidate.NeedsValue)
+		}
+		if _, err := svc.Import(context.Background(), []string{candidate.ID}, nil); err != nil {
+			t.Fatal(err)
+		}
+		records, _ := readFile(svc.path)
+		if len(records) != 1 || records[0].Headers["Authorization"] != "Bearer from-env" {
+			t.Fatalf("records = %+v", records)
+		}
+		return
+	}
+	t.Fatal("no sentry candidate")
+}
+
+func TestImportOfTheSameServerFromTwoAgentsAddsItOnce(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	writeSource(t, filepath.Join(home, ".claude.json"), `{"mcpServers": {"docs": {"type": "http", "url": "https://docs.example.com/mcp"}}}`)
+	writeSource(t, filepath.Join(home, ".codex", "config.toml"), "[mcp_servers.docs]\nurl = \"https://docs.example.com/mcp\"\n")
+	svc := New(t.TempDir(), "http://127.0.0.1:1")
+	ctx := context.Background()
+	candidates, err := svc.ImportCandidates(ctx)
+	if err != nil || len(candidates) != 2 || candidates[0].Key != "docs" || candidates[1].Key != "docs" {
+		t.Fatalf("candidates = %+v, %v", candidates, err)
+	}
+	added, err := svc.Import(ctx, []string{candidates[0].ID, candidates[1].ID}, nil)
+	if err != nil || len(added) != 1 || added[0].Key != "docs" {
+		t.Fatalf("import of both = %+v, %v", added, err)
+	}
+	if _, err := svc.Import(ctx, []string{candidates[1].ID}, nil); err == nil {
+		t.Fatal("a server whose connector exists was imported again")
+	}
+}
+
+func TestImportAsksForAVariableInAnAddressOrACommandAndAddsAllOrNothing(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	writeSource(t, filepath.Join(home, ".claude.json"), `{"mcpServers": {
+		"tokened": {"command": "npx", "args": ["server", "--token", "${API_TOKEN}", "--region", "${REGION:-eu}"]},
+		"hosted": {"type": "http", "url": "https://${TENANT}.example.com/mcp"},
+		"plain": {"command": "plain-server"},
+		"`+strings.Repeat("n", 70)+`": {"command": "long-name-server"}
+	}}`)
+	svc := New(t.TempDir(), "http://127.0.0.1:1")
+	ctx := context.Background()
+	candidates, err := svc.ImportCandidates(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	byKey := map[string]ImportCandidate{}
+	for _, candidate := range candidates {
+		byKey[candidate.Key] = candidate
+	}
+	if got := byKey["tokened"]; !slices.Equal(got.NeedsValue, []string{"API_TOKEN"}) {
+		t.Fatalf("tokened = %+v", got)
+	}
+	if got := byKey["hosted"]; !slices.Equal(got.NeedsValue, []string{"TENANT"}) {
+		t.Fatalf("hosted = %+v", got)
+	}
+	if long := byKey[strings.Repeat("n", 32)]; long.ID != "" {
+		t.Fatalf("a server that can never be added is offered: %+v", long)
+	}
+	_, err = svc.Import(ctx, []string{byKey["plain"].ID, byKey["hosted"].ID}, map[string]map[string]string{byKey["hosted"].ID: {"TENANT": "not a host"}})
+	if err == nil || !strings.HasPrefix(err.Error(), "hosted: ") {
+		t.Fatalf("an import with a server that cannot be added = %v, want an error that names the server", err)
+	}
+	if all, _ := svc.List(ctx); len(all) != 0 {
+		t.Fatalf("a failed import added %+v", all)
+	}
+	added, err := svc.Import(ctx, []string{byKey["tokened"].ID, byKey["hosted"].ID}, map[string]map[string]string{
+		byKey["tokened"].ID: {"API_TOKEN": "typed-token"},
+		byKey["hosted"].ID:  {"TENANT": "acme"},
+	})
+	if err != nil || len(added) != 2 {
+		t.Fatalf("import = %+v, %v", added, err)
+	}
+	if !slices.Equal(added[0].Args, []string{"server", "--token", "typed-token", "--region", "eu"}) || added[1].URL != "https://acme.example.com/mcp" {
+		t.Fatalf("added = %+v", added)
+	}
+}

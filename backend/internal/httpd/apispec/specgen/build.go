@@ -296,6 +296,9 @@ var schemaNames = map[string]string{ //nolint:gosec // Public OpenAPI type names
 	"ControllersConversationThreadStatePayload":            "ConversationThreadStatePayload",
 	"ControllersConversationMCPServerPayload":              "ConversationMCPServerPayload",
 	"ControllersReloadConversationMCPServersResponse":      "ReloadConversationMCPServersResponse",
+	"ControllersConversationMCPSignInRequest":              "ConversationMCPSignInRequest",
+	"ControllersConversationMCPSignInResponse":             "ConversationMCPSignInResponse",
+	"ControllersFinishConversationMCPSignInRequest":        "FinishConversationMCPSignInRequest",
 	"ControllersCompactConversationResponse":               "CompactConversationResponse",
 	"ControllersPrewarmChatAgentResponse":                  "PrewarmChatAgentResponse",
 	"ControllersUnavailableChatAgentsResponse":             "UnavailableChatAgentsResponse",
@@ -675,6 +678,26 @@ var schemaNames = map[string]string{ //nolint:gosec // Public OpenAPI type names
 	"ControllersInvokeCueRequest":     "InvokeCueRequest",
 	"ControllersInvokeCueResponse":    "InvokeCueResponse",
 	"ControllersCueEnvelope":          "CueEnvelope",
+	// httpd/controllers — connector wire envelopes
+	"ControllersConnectorIDParam":                      "ConnectorIDParam",
+	"ControllersConnectorRequest":                      "ConnectorRequest",
+	"ControllersConnectorStatusDetail":                 "ConnectorStatusDetail",
+	"ControllersConnectorResponse":                     "ConnectorResponse",
+	"ControllersListConnectorsResponse":                "ListConnectorsResponse",
+	"ControllersConnectorEnvelope":                     "ConnectorEnvelope",
+	"ControllersConnectorSignInResponse":               "ConnectorSignInResponse",
+	"ControllersFinishConnectorSignInRequest":          "FinishConnectorSignInRequest",
+	"ControllersSessionConnectorResponse":              "SessionConnectorResponse",
+	"ControllersListSessionConnectorsResponse":         "ListSessionConnectorsResponse",
+	"ControllersConnectorImportCandidateResponse":      "ConnectorImportCandidateResponse",
+	"ControllersListConnectorImportCandidatesResponse": "ListConnectorImportCandidatesResponse",
+	"ControllersImportConnectorsRequest":               "ImportConnectorsRequest",
+	"ControllersConnectorProposalRequest":              "ConnectorProposalRequest",
+	"ControllersConnectorProposalResponse":             "ConnectorProposalResponse",
+	"ControllersConnectorProposalEnvelope":             "ConnectorProposalEnvelope",
+	"ControllersListConnectorProposalsResponse":        "ListConnectorProposalsResponse",
+	"ControllersApproveConnectorProposalRequest":       "ApproveConnectorProposalRequest",
+	"ControllersApproveConnectorProposalResponse":      "ApproveConnectorProposalResponse",
 	// httpd/controllers — PR wire envelopes
 	"ControllersMergePRRequest":             "MergePRRequest",
 	"ControllersPRStackLayerResponse":       "PRStackLayerResponse",
@@ -915,6 +938,7 @@ func operations() []operation {
 	ops = append(ops, paneOperations()...)
 	ops = append(ops, shellTerminalOperations()...)
 	ops = append(ops, cueOperations()...)
+	ops = append(ops, connectorOperations()...)
 	ops = append(ops, systemOperations()...)
 	ops = append(ops, computerUseOperations()...)
 	ops = append(ops, identityOperations()...)
@@ -1977,6 +2001,34 @@ func shellTerminalOperations() []operation {
 			},
 		},
 		{
+			method: http.MethodPost, path: "/api/v1/sessions/{sessionId}/conversation/mcp/sign-in", id: "signInSessionConversationMcpServer", tag: "conversations",
+			summary:    "Start the agent's own sign-in for one of its tool servers",
+			pathParams: []any{controllers.SessionIDParam{}},
+			reqBody:    controllers.ConversationMCPSignInRequest{},
+			resps: []respUnit{
+				{http.StatusOK, controllers.ConversationMCPSignInResponse{}},
+				{http.StatusBadRequest, envelope.APIError{}},
+				{http.StatusNotFound, envelope.APIError{}},
+				{http.StatusConflict, envelope.APIError{}},
+				{http.StatusInternalServerError, envelope.APIError{}},
+				{http.StatusNotImplemented, envelope.APIError{}},
+			},
+		},
+		{
+			method: http.MethodPost, path: "/api/v1/sessions/{sessionId}/conversation/mcp/sign-in/finish", id: "finishSessionConversationMcpSignIn", tag: "conversations",
+			summary:    "Finish that sign-in from the address of the page the browser opened",
+			pathParams: []any{controllers.SessionIDParam{}},
+			reqBody:    controllers.FinishConversationMCPSignInRequest{},
+			resps: []respUnit{
+				{http.StatusNoContent, nil},
+				{http.StatusBadRequest, envelope.APIError{}},
+				{http.StatusNotFound, envelope.APIError{}},
+				{http.StatusConflict, envelope.APIError{}},
+				{http.StatusInternalServerError, envelope.APIError{}},
+				{http.StatusNotImplemented, envelope.APIError{}},
+			},
+		},
+		{
 			method: http.MethodPost, path: "/api/v1/sessions/{sessionId}/conversation/mcp/reload", id: "reloadSessionConversationMcpServers", tag: "conversations",
 			summary:    "Restart the tool servers a chat session can reach",
 			pathParams: []any{controllers.SessionIDParam{}},
@@ -2492,6 +2544,117 @@ func cueOperations() []operation {
 				{http.StatusInternalServerError, envelope.APIError{}},
 				{http.StatusNotImplemented, envelope.APIError{}},
 			},
+		},
+	}
+}
+
+func connectorOperations() []operation {
+	failures := func(extra ...int) []respUnit {
+		out := make([]respUnit, 0, len(extra)+2)
+		for _, status := range extra {
+			out = append(out, respUnit{status, envelope.APIError{}})
+		}
+		return append(out, respUnit{http.StatusInternalServerError, envelope.APIError{}}, respUnit{http.StatusNotImplemented, envelope.APIError{}})
+	}
+	one := []any{controllers.ConnectorIDParam{}}
+	return []operation{
+		{
+			method: http.MethodGet, path: "/api/v1/connectors", id: "listConnectors", tag: "connectors",
+			summary: "List the connectors in name order",
+			resps:   append([]respUnit{{http.StatusOK, controllers.ListConnectorsResponse{}}}, failures()...),
+		},
+		{
+			method: http.MethodPost, path: "/api/v1/connectors", id: "createConnector", tag: "connectors",
+			summary: "Add a connector",
+			reqBody: controllers.ConnectorRequest{},
+			resps: append([]respUnit{{http.StatusCreated, controllers.ConnectorEnvelope{}}},
+				failures(http.StatusBadRequest, http.StatusForbidden, http.StatusConflict, http.StatusRequestEntityTooLarge)...),
+		},
+		{
+			method: http.MethodGet, path: "/api/v1/connectors/import", id: "listConnectorImportCandidates", tag: "connectors",
+			summary: "List the tool servers found in the configuration of Claude Code, Codex and Cursor, without their values",
+			resps:   append([]respUnit{{http.StatusOK, controllers.ListConnectorImportCandidatesResponse{}}}, failures()...),
+		},
+		{
+			method: http.MethodPost, path: "/api/v1/connectors/import", id: "importConnectors", tag: "connectors",
+			summary: "Add the chosen found servers as connectors",
+			reqBody: controllers.ImportConnectorsRequest{},
+			resps: append([]respUnit{{http.StatusCreated, controllers.ListConnectorsResponse{}}},
+				failures(http.StatusBadRequest, http.StatusForbidden, http.StatusNotFound, http.StatusConflict, http.StatusRequestEntityTooLarge)...),
+		},
+		{
+			method: http.MethodPost, path: "/api/v1/connectors/proposals", id: "proposeConnector", tag: "connectors",
+			summary: "Record a connector that a session's agent asks the user to add; nothing is added",
+			reqBody: controllers.ConnectorProposalRequest{},
+			resps: append([]respUnit{{http.StatusCreated, controllers.ConnectorProposalEnvelope{}}},
+				failures(http.StatusBadRequest, http.StatusNotFound, http.StatusConflict, http.StatusRequestEntityTooLarge)...),
+		},
+		{
+			method: http.MethodGet, path: "/api/v1/connectors/proposals/{proposalId}", id: "getConnectorProposal", tag: "connectors",
+			summary: "Get a proposal and its state", pathParams: []any{controllers.ConnectorProposalIDParam{}},
+			resps: append([]respUnit{{http.StatusOK, controllers.ConnectorProposalEnvelope{}}}, failures(http.StatusNotFound)...),
+		},
+		{
+			method: http.MethodPost, path: "/api/v1/connectors/proposals/{proposalId}/approve", id: "approveConnectorProposal", tag: "connectors",
+			summary: "Add the proposed connector with the values the user typed", pathParams: []any{controllers.ConnectorProposalIDParam{}},
+			reqBody: controllers.ApproveConnectorProposalRequest{},
+			resps: append([]respUnit{{http.StatusOK, controllers.ApproveConnectorProposalResponse{}}},
+				failures(http.StatusBadRequest, http.StatusForbidden, http.StatusNotFound, http.StatusConflict, http.StatusRequestEntityTooLarge)...),
+		},
+		{
+			method: http.MethodPost, path: "/api/v1/connectors/proposals/{proposalId}/decline", id: "declineConnectorProposal", tag: "connectors",
+			summary: "Decline a proposal", pathParams: []any{controllers.ConnectorProposalIDParam{}},
+			resps: append([]respUnit{{http.StatusOK, controllers.ConnectorProposalEnvelope{}}}, failures(http.StatusNotFound)...),
+		},
+		{
+			method: http.MethodGet, path: "/api/v1/sessions/{sessionId}/connectors/proposals", id: "listSessionConnectorProposals", tag: "connectors",
+			summary: "List the proposals of a session that wait for an answer", pathParams: []any{controllers.SessionIDParam{}},
+			resps: append([]respUnit{{http.StatusOK, controllers.ListConnectorProposalsResponse{}}}, failures()...),
+		},
+		{
+			method: http.MethodGet, path: "/api/v1/connectors/{connectorId}", id: "getConnector", tag: "connectors",
+			summary: "Get a connector by ID or key", pathParams: one,
+			resps: append([]respUnit{{http.StatusOK, controllers.ConnectorEnvelope{}}}, failures(http.StatusNotFound)...),
+		},
+		{
+			method: http.MethodPatch, path: "/api/v1/connectors/{connectorId}", id: "updateConnector", tag: "connectors",
+			summary: "Change a connector: without transport only the named fields, with transport the whole definition", pathParams: one,
+			reqBody: controllers.ConnectorRequest{},
+			resps: append([]respUnit{{http.StatusOK, controllers.ConnectorEnvelope{}}},
+				failures(http.StatusBadRequest, http.StatusForbidden, http.StatusNotFound, http.StatusConflict, http.StatusRequestEntityTooLarge)...),
+		},
+		{
+			method: http.MethodDelete, path: "/api/v1/connectors/{connectorId}", id: "deleteConnector", tag: "connectors",
+			summary: "Remove a connector and its stored values", pathParams: one,
+			resps: append([]respUnit{{http.StatusNoContent, nil}}, failures(http.StatusNotFound)...),
+		},
+		{
+			method: http.MethodPost, path: "/api/v1/connectors/{connectorId}/test", id: "testConnector", tag: "connectors",
+			summary: "Connect to the server, list its tools and save the result as the status", pathParams: one,
+			resps: append([]respUnit{{http.StatusOK, controllers.ConnectorEnvelope{}}}, failures(http.StatusForbidden, http.StatusNotFound)...),
+		},
+		{
+			method: http.MethodPost, path: "/api/v1/connectors/{connectorId}/connect", id: "startConnectorSignIn", tag: "connectors",
+			summary: "Start a sign-in and return the page to open", pathParams: one,
+			resps: append([]respUnit{{http.StatusOK, controllers.ConnectorSignInResponse{}}},
+				failures(http.StatusBadRequest, http.StatusForbidden, http.StatusNotFound, http.StatusServiceUnavailable)...),
+		},
+		{
+			method: http.MethodPost, path: "/api/v1/connectors/{connectorId}/connect/finish", id: "finishConnectorSignIn", tag: "connectors",
+			summary: "Complete a sign-in from the address the browser opened on another device", pathParams: one,
+			reqBody: controllers.FinishConnectorSignInRequest{},
+			resps: append([]respUnit{{http.StatusOK, controllers.ConnectorEnvelope{}}},
+				failures(http.StatusBadRequest, http.StatusNotFound, http.StatusRequestEntityTooLarge, http.StatusServiceUnavailable)...),
+		},
+		{
+			method: http.MethodGet, path: "/api/v1/sessions/{sessionId}/connectors", id: "listSessionConnectors", tag: "connectors",
+			summary: "List the connectors a session got when it started, with its tool call counts", pathParams: []any{controllers.SessionIDParam{}},
+			resps: append([]respUnit{{http.StatusOK, controllers.ListSessionConnectorsResponse{}}}, failures()...),
+		},
+		{
+			method: http.MethodPost, path: "/api/v1/connectors/{connectorId}/disconnect", id: "signOutConnector", tag: "connectors",
+			summary: "Forget the sign-in tokens of a connector", pathParams: one,
+			resps: append([]respUnit{{http.StatusOK, controllers.ConnectorEnvelope{}}}, failures(http.StatusNotFound)...),
 		},
 	}
 }

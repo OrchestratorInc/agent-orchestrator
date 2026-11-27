@@ -6,7 +6,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"math"
+	"slices"
 	"strings"
 	"time"
 
@@ -652,6 +654,52 @@ func (c *conversation) handleNotification(method string, params json.RawMessage)
 	return true
 }
 
+const claudeAdapterToolServer = "claude_agent_acp"
+
+type claudeToolServer struct {
+	Name   string `json:"name"`
+	Status string `json:"status"`
+}
+
+func (c *conversation) reportClaudeToolServers(reported []claudeToolServer) {
+	now := make(map[string]string, len(reported))
+	order := make([]string, 0, len(reported))
+	for _, server := range reported {
+		if server.Name == "" || server.Name == claudeAdapterToolServer {
+			continue
+		}
+		status := server.Status
+		switch status {
+		case "connected":
+			status = "ready"
+		case "pending":
+			status = "starting"
+		}
+		if _, twice := now[server.Name]; !twice {
+			order = append(order, server.Name)
+		}
+		now[server.Name] = status
+	}
+	c.mu.Lock()
+	before := c.reportedServers
+	c.reportedServers = now
+	c.mu.Unlock()
+	var changed []ports.ChatMCPServer
+	for _, name := range order {
+		if before[name] != now[name] {
+			changed = append(changed, ports.ChatMCPServer{Name: name, Status: now[name]})
+		}
+	}
+	for _, name := range slices.Sorted(maps.Keys(before)) {
+		if _, still := now[name]; !still && before[name] != "disabled" {
+			changed = append(changed, ports.ChatMCPServer{Name: name, Status: "disabled"})
+		}
+	}
+	if len(changed) > 0 {
+		c.emit(ports.ChatEvent{Kind: ports.ChatEventMCPServers, MCPServers: changed})
+	}
+}
+
 // claudeSDKMessageMethod carries the raw Claude Agent SDK messages a session
 // asked for with _meta.claudeCode.emitRawSDKMessages.
 const claudeSDKMessageMethod = "_claude/sdkMessage"
@@ -663,26 +711,17 @@ func (c *conversation) handleClaudeSDKMessage(params json.RawMessage) error {
 	var payload struct {
 		SessionID string `json:"sessionId"`
 		Message   struct {
-			Type    string `json:"type"`
-			Subtype string `json:"subtype"`
-			State   string `json:"state"`
+			Type       string             `json:"type"`
+			Subtype    string             `json:"subtype"`
+			State      string             `json:"state"`
+			MCPServers []claudeToolServer `json:"mcp_servers"`
 		} `json:"message"`
 		Meta map[string]any `json:"_meta"`
 	}
 	if err := json.Unmarshal(params, &payload); err != nil {
 		return err
 	}
-	if payload.Message.Type != "system" || payload.Message.Subtype != "session_state_changed" {
-		return nil
-	}
-	var status domain.ThreadStatus
-	switch payload.Message.State {
-	case "running":
-		status = domain.ThreadStatusActive
-	case "idle":
-		status = domain.ThreadStatusIdle
-	default:
-		// requires_action: the approval or input request already reports it.
+	if payload.Message.Type != "system" || (payload.Message.Subtype != "session_state_changed" && payload.Message.Subtype != "init") {
 		return nil
 	}
 	c.mu.Lock()
@@ -696,6 +735,20 @@ func (c *conversation) handleClaudeSDKMessage(params json.RawMessage) error {
 	loadingHistory := c.history != nil
 	c.historyMu.Unlock()
 	if loadingHistory {
+		return nil
+	}
+	if payload.Message.Subtype == "init" {
+		c.reportClaudeToolServers(payload.Message.MCPServers)
+		return nil
+	}
+	var status domain.ThreadStatus
+	switch payload.Message.State {
+	case "running":
+		status = domain.ThreadStatusActive
+	case "idle":
+		status = domain.ThreadStatusIdle
+	default:
+		// requires_action: the approval or input request already reports it.
 		return nil
 	}
 	c.mu.Lock()

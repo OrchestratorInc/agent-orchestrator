@@ -3055,6 +3055,190 @@ type CueEnvelope struct {
 	Cue CueResponse `json:"cue"`
 }
 
+// ConnectorIDParam is the {connectorId} path parameter of the /connectors/{connectorId} routes.
+type ConnectorIDParam struct {
+	ConnectorID string `path:"connectorId" description:"Connector ID or key."`
+}
+
+// ConnectorRequest is the editable definition of a connector. A PATCH with only enabled turns it on or off.
+type ConnectorRequest struct {
+	Key       string            `json:"key,omitempty" maxLength:"32" description:"Short name that starts each tool name. Lowercase letters, digits, hyphens and underscores. Made from the name when empty."`
+	Name      string            `json:"name,omitempty" maxLength:"64" description:"Display name."`
+	PresetID  string            `json:"presetId,omitempty" description:"Catalog entry this connector came from."`
+	Transport string            `json:"transport,omitempty" enum:"http,stdio" description:"http for a server URL, stdio for a local command."`
+	URL       string            `json:"url,omitempty" maxLength:"2048" description:"Server URL. https, or http on this computer. A query value of *** keeps the stored value of that name."`
+	Command   string            `json:"command,omitempty" description:"Local command. Loopback callers only."`
+	Args      []string          `json:"args,omitempty" description:"Arguments of the local command."`
+	Env       map[string]string `json:"env,omitempty" description:"Environment values of the local command. An empty value keeps the stored one."`
+	Headers   map[string]string `json:"headers,omitempty" description:"Request headers of the server URL. An empty value keeps the stored one."`
+	Auth      string            `json:"auth,omitempty" enum:"none,oauth,header" description:"Sign-in of a server URL."`
+	ProjectID *string           `json:"projectId,omitempty" description:"Project that gets the connector. Omit for all projects."`
+	Enabled   *bool             `json:"enabled,omitempty" description:"Whether new sessions get the connector."`
+
+	OAuthClientID     string `json:"oauthClientId,omitempty" description:"Client ID of your own OAuth app, for a server that does not let apps register themselves."`
+	OAuthClientSecret string `json:"oauthClientSecret,omitempty" description:"Client secret of your own OAuth app. An empty value keeps the stored one."`
+}
+
+// ConnectorStatusDetail names the failed step of the last test.
+type ConnectorStatusDetail struct {
+	Step  string `json:"step"`
+	Error string `json:"error"`
+}
+
+// ConnectorResponse is one connector without its environment and header values. Arguments of a command are returned as stored.
+type ConnectorResponse struct {
+	ID            string                 `json:"id"`
+	Key           string                 `json:"key" description:"Tool names start with this."`
+	Name          string                 `json:"name"`
+	PresetID      string                 `json:"presetId,omitempty"`
+	Transport     string                 `json:"transport" enum:"http,stdio"`
+	URL           string                 `json:"url,omitempty" description:"Server URL. Each value of its query string reads ***."`
+	Command       string                 `json:"command,omitempty"`
+	Args          []string               `json:"args"`
+	EnvKeys       []string               `json:"envKeys" description:"Names of the stored environment values."`
+	HeaderKeys    []string               `json:"headerKeys" description:"Names of the stored headers."`
+	Auth          string                 `json:"auth" enum:"none,oauth,header"`
+	OAuthClientID string                 `json:"oauthClientId,omitempty" description:"Client ID of the user's own OAuth app, when one is set."`
+	SignedIn      bool                   `json:"signedIn" description:"Whether a sign-in token is stored."`
+	ProjectID     *string                `json:"projectId,omitempty" description:"Absent when the connector is for all projects."`
+	Enabled       bool                   `json:"enabled"`
+	Status        string                 `json:"status" enum:"unchecked,connected,needs_signin,unavailable"`
+	StatusDetail  *ConnectorStatusDetail `json:"statusDetail,omitempty"`
+	Tools         []string               `json:"tools"`
+	CheckedAt     *time.Time             `json:"checkedAt,omitempty"`
+	CreatedAt     time.Time              `json:"createdAt"`
+	UpdatedAt     time.Time              `json:"updatedAt"`
+}
+
+// ListConnectorsResponse is the body of GET /api/v1/connectors.
+type ListConnectorsResponse struct {
+	Connectors []ConnectorResponse `json:"connectors"`
+}
+
+// ConnectorEnvelope is the { connector } response body for connector reads and changes.
+type ConnectorEnvelope struct {
+	Connector ConnectorResponse `json:"connector"`
+}
+
+// ConnectorSignInResponse is the body of POST /api/v1/connectors/{connectorId}/connect.
+type ConnectorSignInResponse struct {
+	AuthorizationURL string            `json:"authorizationUrl,omitempty" description:"Page the user must open to approve. Absent when the server asks for no sign-in."`
+	CallbackURL      string            `json:"callbackUrl" description:"Address the browser goes to after approval. It is on the machine that runs this daemon."`
+	Connector        ConnectorResponse `json:"connector"`
+}
+
+// SessionConnectorResponse is one connector a session got when it started, with its use in that session.
+type SessionConnectorResponse struct {
+	Key       string `json:"key"`
+	Name      string `json:"name"`
+	Transport string `json:"transport,omitempty" enum:"http,stdio"`
+	Auth      string `json:"auth,omitempty" enum:"none,oauth,header" description:"Sign-in of a server URL connector."`
+	Status    string `json:"status" enum:"unchecked,connected,needs_signin,unavailable"`
+	Enabled   bool   `json:"enabled"`
+	Calls     int    `json:"calls" description:"Tool calls of this session to a server URL connector since the daemon started. Calls to a command connector do not pass through the daemon and are not counted."`
+	LastTool  string `json:"lastTool,omitempty"`
+}
+
+// ListSessionConnectorsResponse is the body of GET /api/v1/sessions/{sessionId}/connectors.
+type ListSessionConnectorsResponse struct {
+	Connectors []SessionConnectorResponse `json:"connectors"`
+}
+
+// ConnectorImportCandidateResponse is a tool server found in the configuration of another agent. Environment and header values never appear; arguments of a command are shown as written.
+type ConnectorImportCandidateResponse struct {
+	ID         string   `json:"id"`
+	Agent      string   `json:"agent" description:"Claude Code, Codex or Cursor."`
+	Source     string   `json:"source" description:"File that holds the definition."`
+	Key        string   `json:"key"`
+	Transport  string   `json:"transport" enum:"http,stdio"`
+	URL        string   `json:"url,omitempty" description:"Server address. Each value of its query string reads ***."`
+	Command    string   `json:"command,omitempty"`
+	Args       []string `json:"args,omitempty"`
+	EnvKeys    []string `json:"envKeys,omitempty"`
+	HeaderKeys []string `json:"headerKeys,omitempty"`
+	NeedsValue []string `json:"needsValue,omitempty" description:"Names whose value the user must type, because the file holds a variable or no value."`
+	ProjectID  string   `json:"projectId,omitempty" description:"Project whose folder or settings hold the definition."`
+	Exists     bool     `json:"exists" description:"A connector with this key exists."`
+}
+
+// ListConnectorImportCandidatesResponse is the body of GET /api/v1/connectors/import.
+type ListConnectorImportCandidatesResponse struct {
+	Candidates []ConnectorImportCandidateResponse `json:"candidates"`
+}
+
+// ImportConnectorsRequest is the body of POST /api/v1/connectors/import.
+type ImportConnectorsRequest struct {
+	IDs    []string                     `json:"ids" maxItems:"64" description:"Candidate IDs to add as connectors."`
+	Values map[string]map[string]string `json:"values,omitempty" description:"Values the user typed, by candidate ID and then by name."`
+}
+
+// ConnectorProposalIDParam names a proposal.
+type ConnectorProposalIDParam struct {
+	ProposalID string `path:"proposalId"`
+}
+
+// ConnectorProposalRequest is the body of POST /api/v1/connectors/proposals. A proposal carries no value.
+type ConnectorProposalRequest struct {
+	SessionID  string   `json:"sessionId" description:"Session whose agent asks for the connector."`
+	Key        string   `json:"key,omitempty"`
+	Name       string   `json:"name,omitempty"`
+	Transport  string   `json:"transport" enum:"http,stdio"`
+	URL        string   `json:"url,omitempty"`
+	Command    string   `json:"command,omitempty"`
+	Args       []string `json:"args,omitempty"`
+	EnvKeys    []string `json:"envKeys,omitempty" description:"Names of the environment values the user types on approval."`
+	HeaderKeys []string `json:"headerKeys,omitempty" description:"Names of the headers the user types on approval."`
+	Auth       string   `json:"auth,omitempty" enum:"none,oauth,header"`
+	Reason     string   `json:"reason,omitempty" maxLength:"300" description:"Why the agent asks, shown to the user."`
+}
+
+// ConnectorProposalResponse is a connector an agent asked the user to add.
+type ConnectorProposalResponse struct {
+	ID           string    `json:"id"`
+	SessionID    string    `json:"sessionId"`
+	Key          string    `json:"key"`
+	Name         string    `json:"name"`
+	Transport    string    `json:"transport" enum:"http,stdio"`
+	URL          string    `json:"url,omitempty"`
+	Command      string    `json:"command,omitempty"`
+	Args         []string  `json:"args"`
+	EnvKeys      []string  `json:"envKeys"`
+	HeaderKeys   []string  `json:"headerKeys"`
+	Auth         string    `json:"auth" enum:"none,oauth,header"`
+	ProjectID    *string   `json:"projectId,omitempty" description:"Project of the session that asked. Omitted for a session without a project."`
+	Reason       string    `json:"reason,omitempty"`
+	State        string    `json:"state" enum:"pending,approved,declined,expired"`
+	ConnectorKey string    `json:"connectorKey,omitempty" description:"Key of the connector an approval added."`
+	CreatedAt    time.Time `json:"createdAt"`
+}
+
+// ConnectorProposalEnvelope wraps one proposal.
+type ConnectorProposalEnvelope struct {
+	Proposal ConnectorProposalResponse `json:"proposal"`
+}
+
+// ListConnectorProposalsResponse is the body of GET /api/v1/sessions/{sessionId}/connectors/proposals.
+type ListConnectorProposalsResponse struct {
+	Proposals []ConnectorProposalResponse `json:"proposals"`
+}
+
+// ApproveConnectorProposalRequest is the body of POST /api/v1/connectors/proposals/{proposalId}/approve.
+type ApproveConnectorProposalRequest struct {
+	ProjectID *string           `json:"projectId,omitempty" description:"Replaces the project of the session that asked. An empty string means all projects."`
+	Values    map[string]string `json:"values,omitempty" description:"What the user typed for each environment value and header the proposal names."`
+}
+
+// ApproveConnectorProposalResponse is the proposal after approval and the connector it added.
+type ApproveConnectorProposalResponse struct {
+	Proposal  ConnectorProposalResponse `json:"proposal"`
+	Connector ConnectorResponse         `json:"connector"`
+}
+
+// FinishConnectorSignInRequest is the body of POST /api/v1/connectors/{connectorId}/connect/finish.
+type FinishConnectorSignInRequest struct {
+	CallbackURL string `json:"callbackUrl" maxLength:"16384" description:"Address the user's browser opened after approval, pasted as it is."`
+}
+
 // MarkAllNotificationsReadRequest is the optional body of
 // POST /api/v1/notifications/read-all.
 type MarkAllNotificationsReadRequest struct {
@@ -4347,6 +4531,23 @@ type ConversationMCPServerPayload struct {
 // client that polls the snapshot will converge on the same answer.
 type ReloadConversationMCPServersResponse struct {
 	Servers []ConversationMCPServerPayload `json:"servers"`
+}
+
+// ConversationMCPSignInRequest names the agent's own tool server to sign in to.
+type ConversationMCPSignInRequest struct {
+	Server string `json:"server" maxLength:"128"`
+}
+
+// ConversationMCPSignInResponse is the page to open and the address that page returns to.
+type ConversationMCPSignInResponse struct {
+	AuthorizationURL string `json:"authorizationUrl"`
+	CallbackURL      string `json:"callbackUrl,omitempty"`
+}
+
+// FinishConversationMCPSignInRequest carries the address of the page the browser opened after approval.
+type FinishConversationMCPSignInRequest struct {
+	Server      string `json:"server" maxLength:"128"`
+	CallbackURL string `json:"callbackUrl" maxLength:"4096"`
 }
 
 // ConversationUsagePayload is the conversation's token position.
