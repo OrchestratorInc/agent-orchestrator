@@ -156,6 +156,11 @@ func TestEvaluateTask(t *testing.T) {
 			wantStatus: taskStatusFailed, wantReason: "turn t9 is not in session repo-1's history",
 		},
 		{
+			name: "missing named turn wins over a sign-in event", sess: chat, turn: "t9",
+			conv:       `{"turns":[{"id":"t1","state":"completed"}],"activities":[{"activityKind":"system","status":"completed","detail":{"event":"auth.reauth_required"}}]}`,
+			wantStatus: taskStatusFailed, wantReason: "turn t9 is not in session repo-1's history",
+		},
+		{
 			name: "named turn not in the loaded page yet", sess: chat, turn: "t9",
 			conv:       `{"hasMoreBefore":true,"turns":[{"id":"t1","state":"running"}]}`,
 			wantStatus: taskStatusStarting,

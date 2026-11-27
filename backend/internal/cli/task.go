@@ -981,6 +981,12 @@ func evaluateLiveTask(sess taskSession, conv *taskConversation, turnID string, l
 		idx = 0
 	}
 	if idx < 0 {
+		if turnID != "" && !conv.HasMoreBefore {
+			// The whole history is loaded and the named turn is not in it: a
+			// mistyped or foreign task id, not an agent that has yet to start
+			// or one that must sign in. Checked before any sign-in event.
+			return taskEvaluation{status: taskStatusFailed, reason: fmt.Sprintf("turn %s is not in session %s's history", turnID, sess.ID), phase: taskPhaseTurnMissing}
+		}
 		for _, act := range conv.Activities {
 			if act.ActivityKind == "system" && detailString(act.Detail, "event") == "auth.reauth_required" {
 				return taskEvaluation{status: taskStatusFailed, reason: "the agent needs to sign in again (auth_required)", failureCode: "auth_required"}
@@ -988,11 +994,6 @@ func evaluateLiveTask(sess taskSession, conv *taskConversation, turnID string, l
 		}
 		if conv.HasMoreBefore {
 			return taskEvaluation{status: taskStatusStarting, reason: "the task's turn is not in the loaded session history yet", phase: taskPhaseAwaitingTurn}
-		}
-		if turnID != "" {
-			// The whole history is loaded and the named turn is not in it: a
-			// mistyped or foreign task id, not an agent that has yet to start.
-			return taskEvaluation{status: taskStatusFailed, reason: fmt.Sprintf("turn %s is not in session %s's history", turnID, sess.ID), phase: taskPhaseTurnMissing}
 		}
 		return taskEvaluation{status: taskStatusStarting, reason: "waiting for the agent to pick up the task", phase: taskPhaseAwaitingTurn}
 	}
