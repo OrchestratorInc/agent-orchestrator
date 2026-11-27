@@ -7,7 +7,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 vi.mock("electron", () => ({ ipcMain: {} }));
 vi.mock("./cloud-auth", () => ({ getCloudAccessToken: vi.fn(async () => "token-1") }));
 
-import { collectPageFiles, isSharePage, MAX_PAGE_FILES, pageFileReferences, servedPath } from "./cloud-share-page-files";
+import { collectPageFiles, findPageFiles, isSharePage, MAX_PAGE_FILES, pageFileReferences, servedPath } from "./cloud-share-page-files";
 
 describe("pageFileReferences", () => {
 	it("finds what the page's markup and styles load", () => {
@@ -137,5 +137,21 @@ describe("collectPageFiles", () => {
 		const { files, skipped } = await collectPageFiles(dataDir, "sess-1", "page.html", html);
 		expect(files).toHaveLength(MAX_PAGE_FILES);
 		expect(skipped).toEqual([{ reference: `many/${MAX_PAGE_FILES}.png`, reason: "limit" }]);
+	});
+
+	it("stops looking files up once the most a link serves are found", async () => {
+		const count = MAX_PAGE_FILES + 100;
+		const html = Array.from({ length: count }, (_, index) => `<img src="${index}.png">`).join("");
+		let lookups = 0;
+		const { files, skipped } = await findPageFiles("page.html", html, async (relative) => {
+			lookups++;
+			await new Promise((resolve) => setTimeout(resolve, 0));
+			return { relativePath: relative };
+		});
+		expect(files).toHaveLength(MAX_PAGE_FILES);
+		expect(skipped).toHaveLength(count - MAX_PAGE_FILES);
+		expect(skipped.every((skip) => skip.reason === "limit")).toBe(true);
+		// At most the lookups already in flight when the last one resolved.
+		expect(lookups).toBeLessThan(MAX_PAGE_FILES + 8);
 	});
 });

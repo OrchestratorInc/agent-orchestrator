@@ -20761,6 +20761,8 @@ components:
           - cline
           - autohand
           type: string
+        roleAgent:
+          type: string
         scmStatus:
           enum:
           - pr_open
@@ -21774,7 +21776,9 @@ components:
         autoCompactWindow:
           enum:
           - 200k
+          - 500k
           - 1m
+          - "off"
           type: string
         fastMode:
           type: boolean
@@ -22089,6 +22093,13 @@ components:
           items:
             $ref: '#/components/schemas/AttachmentInput'
           type: array
+        autoCompactWindow:
+          enum:
+          - 200k
+          - 500k
+          - 1m
+          - "off"
+          type: string
         baseBranch:
           maxLength: 255
           type: string
@@ -22106,6 +22117,8 @@ components:
           type:
           - "null"
           - string
+        fastMode:
+          type: boolean
         mode:
           enum:
           - tui
@@ -24568,7 +24581,9 @@ components:
         autoCompactWindow:
           enum:
           - 200k
+          - 500k
           - 1m
+          - "off"
           type: string
         effort:
           maxLength: 64
@@ -27577,6 +27592,13 @@ components:
           items:
             $ref: '#/components/schemas/AttachmentInput'
           type: array
+        autoCompactWindow:
+          enum:
+          - 200k
+          - 500k
+          - 1m
+          - "off"
+          type: string
         baseBranch:
           maxLength: 255
           type: string
@@ -27593,6 +27615,8 @@ components:
         effort:
           maxLength: 32
           type: string
+        fastMode:
+          type: boolean
         harness:
           enum:
           - claude-code
@@ -28126,6 +28150,8 @@ components:
     TelemetryIdentityResponse:
       properties:
         cloudUserId:
+          type: string
+        daemonVersion:
           type: string
         distinctId:
           type: string
