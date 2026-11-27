@@ -215,6 +215,11 @@ type Config struct {
 	// assigned, so an identical provider replay stays identical after the same
 	// rewrite. See hermesacp for the motivating shape.
 	HistoryReconciler func([]ports.ChatEvent) []ports.ChatEvent
+	// NativeHistoryReplay reads authoritative provider state when a resume-only
+	// ACP implementation does not replay session/update. It runs only AFTER a
+	// successful native resume, never as a fresh-session or missing-state fallback.
+	// available=false preserves ordinary resume-only history behavior.
+	NativeHistoryReplay func(context.Context, LaunchConfig, string) ([]acpsdk.SessionNotification, bool, error)
 	// PlansSpanTurns marks the agent's ACP plan as one list kept for the whole
 	// session (claude-agent-acp's task list), re-sent into later turns, rather
 	// than a plan for the turn it arrives in.
@@ -819,6 +824,12 @@ func (d *Driver) resumeSession(
 		}
 		configOptions = resp.ConfigOptions
 		modes = resp.Modes
+	}
+	if !init.AgentCapabilities.LoadSession {
+		if err := d.replayNativeHistory(resumeCtx, conv, launchCfg, cfg.ProviderConversationID); err != nil {
+			conv.discard()
+			return nil, fmt.Errorf("%w: native history: %w", ports.ErrChatResumeFailed, err)
+		}
 	}
 	conv.hasDurableTurns = cfg.HasPriorTurns
 	modeFor, permissionFor := d.sessionPolicy(launchCfg, init)

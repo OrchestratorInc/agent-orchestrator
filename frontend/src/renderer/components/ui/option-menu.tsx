@@ -5,13 +5,13 @@ import { cn } from "../../lib/utils";
 import { GHOST_PILL_CLASS } from "./button";
 import { ShieldOutsideClick, skipFocusHopToSibling, swallowClickAfter } from "./menu-focus";
 
-const SURFACE =
+export const OPTION_MENU_SURFACE =
 	"settings-menu-surface min-w-[14rem] rounded-(--radius-settings-panel) border border-(--color-border-overlay) bg-settings-menu shadow-(--shadow-popover)";
 
-const ROW =
+export const OPTION_MENU_ROW =
 	"relative isolate flex min-w-0 cursor-default items-center gap-2.5 rounded-none px-2 py-1.5 text-control text-muted-foreground outline-none whitespace-nowrap transition-none! before:pointer-events-none before:absolute before:inset-0 before:-z-10 before:rounded-md focus:before:bg-interactive-hover focus:text-foreground data-highlighted:before:bg-interactive-hover data-highlighted:text-foreground data-[search-active=true]:before:bg-interactive-hover data-[search-active=true]:text-foreground data-[active=true]:before:bg-interactive-hover data-[active=true]:text-foreground";
 
-const LABEL =
+export const OPTION_MENU_LABEL =
 	"px-2 py-1.5 text-micro tracking-wide text-passive";
 
 /**
@@ -80,8 +80,11 @@ export function OptionMenuContent({
 	steady,
 	children,
 	onPointerDownOutside,
+	container,
 	...props
 }: React.ComponentProps<typeof DropdownMenuPrimitive.Content> & {
+	/** Where the panel portals to; `document.body` by default. A fullscreen element hides everything outside itself. */
+	container?: HTMLElement | null;
 	/**
 	 * Keep the rows still while open. A menu that opens upward is pinned by its bottom
 	 * edge, so a row that disappears would pull every row above it down under the pointer.
@@ -91,7 +94,7 @@ export function OptionMenuContent({
 	const steadyRef = useSteadyHeight(steady);
 	const shield = useContext(ShieldOutsideClick);
 	return (
-		<DropdownMenuPrimitive.Portal>
+		<DropdownMenuPrimitive.Portal container={container}>
 			<DropdownMenuPrimitive.Content
 				ref={steadyRef}
 				onPointerDownOutside={(event) => {
@@ -103,7 +106,7 @@ export function OptionMenuContent({
 				collisionPadding={16}
 				className={cn(
 					"z-overlay",
-					SURFACE,
+					OPTION_MENU_SURFACE,
 					"origin-(--radix-dropdown-menu-content-transform-origin)",
 					"data-[state=open]:animate-popover-in data-[state=closed]:animate-popover-out",
 					className,
@@ -159,7 +162,7 @@ export function OptionMenuLabel({
 }: React.ComponentProps<typeof DropdownMenuPrimitive.Label>) {
 	return (
 		<DropdownMenuPrimitive.Label
-			className={cn(LABEL, className)}
+			className={cn(OPTION_MENU_LABEL, className)}
 			{...props}
 		/>
 	);
@@ -191,7 +194,7 @@ export function OptionMenuItem({
 			: { role: "menuitemradio" as const, "aria-checked": active })}
 			data-active={active || undefined}
 			data-search-active={searchActive || undefined}
-			className={cn(ROW, className)}
+			className={cn(OPTION_MENU_ROW, className)}
 			onPointerLeave={(event) => {
 				onPointerLeave?.(event);
 				skipFocusHopToSibling(event);
@@ -272,7 +275,7 @@ export function OptionMenuSubTrigger({
 	const allowReopen = useContext(AllowSubmenuReopen);
 	return (
 		<DropdownMenuPrimitive.SubTrigger
-			className={cn(ROW, "justify-between gap-3 text-xs text-foreground data-[state=open]:before:bg-interactive-hover data-[state=open]:text-foreground", className)}
+			className={cn(OPTION_MENU_ROW, "justify-between gap-3 text-xs text-foreground data-[state=open]:before:bg-interactive-hover data-[state=open]:text-foreground", className)}
 			// Stop the click reaching the composer's click-to-focus handler without
 			// calling preventDefault, which Radix's composeEventHandlers reads as a
 			// signal to skip its own open/close handling.
@@ -325,7 +328,7 @@ export function OptionMenuSubContent({
 				collisionPadding={16}
 				className={cn(
 					"z-overlay",
-					SURFACE,
+					OPTION_MENU_SURFACE,
 					"h-fit!",
 					"origin-(--radix-dropdown-menu-content-transform-origin)",
 					"data-[state=open]:animate-popover-in",

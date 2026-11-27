@@ -102,7 +102,7 @@ func startLifecycle(ctx context.Context, dataDir string, store *sqlite.Store, ru
 	reaperStart := make(chan struct{})
 	rp := reaper.New(lcm, store, runtime, reaper.Config{Logger: logger, StartAfter: reaperStart})
 	activityStart := make(chan struct{})
-	activityPoller := activityobserver.New(store, lcm, runtime, agents, activityobserver.Config{Logger: logger, DataDir: dataDir, StartAfter: activityStart})
+	activityPoller := activityobserver.New(store, lcm, runtime, agents, activityobserver.Config{Logger: logger, DataDir: dataDir, StartAfter: activityStart, Rechecks: lcm})
 	turnFailurePoller := activityobserver.NewTurnFailureObserver(store, lcm, agents, activityobserver.TurnFailureConfig{
 		Logger:   logger,
 		Wake:     sessionChanges,
@@ -981,6 +981,12 @@ func (c chatLauncher) ArmChatHandoff(
 // the switch instead of a failure.
 func (c chatLauncher) MarkAccountSwitch(ctx context.Context, id domain.SessionID, accountID string) error {
 	return c.svc.MarkAccountSwitch(ctx, id, accountID)
+}
+
+// RecordInterfaceTransitionBoundary shows a degraded handoff's boundary notice
+// in the Chat timeline without sending it to the agent.
+func (c chatLauncher) RecordInterfaceTransitionBoundary(ctx context.Context, id domain.SessionID, transitionID, summary string) error {
+	return c.svc.RecordInterfaceTransitionBoundary(ctx, id, transitionID, summary)
 }
 
 func (c chatLauncher) PrepareChatHandoff(

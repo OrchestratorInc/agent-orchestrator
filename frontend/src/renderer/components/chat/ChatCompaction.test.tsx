@@ -403,6 +403,25 @@ describe("the compact control", () => {
 		);
 	});
 
+	it("compacts again once the turn that refused it has ended", async () => {
+		const user = userEvent.setup();
+		const onCompact = vi.fn();
+		render(
+			<ChatWorkspace
+				snapshot={snapshot([assistantSaid], [
+					{ id: "t1", state: "completed", requestedAt: "2026-08-02T10:00:00Z" },
+				])}
+				onCompact={onCompact}
+				// The daemon's answer to a compact sent while t1 was still running.
+				compactUnavailable="Stop the current turn before compacting"
+			/>,
+		);
+
+		await typeInLexicalEditor(screen.getByLabelText("Message the agent"), "/compact");
+		await user.keyboard("{Enter}");
+		expect(onCompact).toHaveBeenCalledTimes(1);
+	});
+
 	it("does not start a second compaction while one is running", async () => {
 		const user = userEvent.setup();
 		const onCompact = vi.fn();
