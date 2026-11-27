@@ -247,6 +247,10 @@ import {
 	type BrowserProfileIpc,
 	type BrowserProfileMenuItem,
 } from "./main/browser-profile-ipc";
+import { createCredentialFiller } from "./main/browser-vault-fill";
+import { registerBrowserVaultIpc } from "./main/browser-vault-ipc";
+import { VaultStore } from "./main/browser-vault-store";
+import { vaultPlatformSupported } from "./main/browser-vault";
 import { createWindowComposition, type WindowComposition } from "./main/window-composition";
 import { AgentBrowserRuntime } from "./main/agent-browser-runtime";
 import { sameBrowserRuntimeIdentity, type BrowserRuntimeIdentity } from "./main/browser-runtime-identity";
@@ -383,6 +387,20 @@ const desktopDataDir = resolveDesktopDataDir(process.env, os.homedir(), desktopL
 // Read before the daemon can create it: no database means this launch is the
 // first run on this data directory, which ao.launches.timed reports apart.
 const firstRunAtLaunch = !existsSync(path.join(desktopDataDir, "ao.db"));
+// Only where the keychain keeps other local programs from the key (macOS).
+const browserVaultAvailable = () => vaultPlatformSupported(process.platform) && protectedStorageAvailable();
+// Saved site passwords: the data key is wrapped by the OS keychain, and fills
+// happen in this process so the agent never sees a secret.
+const browserVaultStore = new VaultStore({
+	dir: path.join(desktopDataDir, "vault"),
+	protector: {
+		available: browserVaultAvailable,
+		encrypt: (data) => safeStorage.encryptString(data.toString("base64")),
+		decrypt: (data) => Buffer.from(safeStorage.decryptString(data), "base64"),
+	},
+});
+// Fills are approved in the daemon's approval gate before they reach here.
+const browserCredentialFiller = createCredentialFiller({ store: browserVaultStore });
 initializeDesktopLog(desktopDataDir);
 let telemetryPolicyController: DesktopTelemetryController | null = null;
 // PostHog identity: the user-facing analytics opt-out (marker file shared with the
@@ -496,6 +514,7 @@ let daemonAttachmentGeneration = 0;
 let daemonOutput = "";
 let browserViewHost: BrowserViewHost | null = null;
 let browserProfileIpc: BrowserProfileIpc | null = null;
+let browserVaultIpc: { dispose: () => void } | null = null;
 let browserProfileImporter: BrowserProfileImportService | null = null;
 let windowComposition: WindowComposition | null = null;
 const browserCleanupPromises = new Set<Promise<void>>();
@@ -1026,6 +1045,8 @@ async function disposeBrowserViewHost(): Promise<void> {
 	const profileIpc = browserProfileIpc;
 	browserProfileIpc = null;
 	profileIpc?.dispose();
+	browserVaultIpc?.dispose();
+	browserVaultIpc = null;
 	const profileImporter = browserProfileImporter;
 	browserProfileImporter = null;
 	if (!host && !profileImporter) return;
@@ -1353,6 +1374,7 @@ async function createWindowInternal(): Promise<void> {
 		getKeybindingOverrides: () => keybindingOverrides,
 		isKeybindingRecording: () => keybindingRecordingActive,
 		agentBrowserRuntime,
+		credentialFiller: browserCredentialFiller,
 		isCloseShellTerminalShortcutEnabled: () => closeShellTerminalShortcutEnabled,
 		browserProfileStore,
 		browserHistoryStore,
@@ -1375,6 +1397,12 @@ async function createWindowInternal(): Promise<void> {
 		onNativeViewAdded: () => windowComposition?.restackShell(),
 	});
 	browserProfileImporter = profileImporter;
+	browserVaultIpc = registerBrowserVaultIpc({
+		ipcMain,
+		shellWebContents,
+		store: browserVaultStore,
+		keychainAvailable: browserVaultAvailable,
+	});
 	browserProfileIpc = registerBrowserProfileIpc({
 		ipcMain,
 		shellWebContents,
