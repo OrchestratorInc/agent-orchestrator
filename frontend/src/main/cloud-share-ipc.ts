@@ -396,14 +396,15 @@ export function registerCloudShareIpc(deps: CloudShareIpcDeps): void {
 		};
 	};
 
-	// The link and fingerprint are already known: a list that fails or times
-	// out leaves only the page's files unknown, which counts as unchanged, as a
-	// remote host that stops answering does.
+	// The link and fingerprint are already known: a list that fails, times out
+	// or loses its connection (fetch rejects with a TypeError) leaves only the
+	// page's files unknown, which counts as unchanged, as a remote host that
+	// stops answering does.
 	const cloudPageFilesChangedOrUnknown = async (file: CloudSessionShareFile, recorded: Record<string, string>): Promise<boolean> => {
 		try {
 			return await cloudPageFilesChanged(file, recorded);
 		} catch (error) {
-			if (error instanceof CloudShareError) return false;
+			if (error instanceof CloudShareError || error instanceof TypeError) return false;
 			throw error;
 		}
 	};

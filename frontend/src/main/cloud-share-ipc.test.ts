@@ -41,7 +41,7 @@ const HOST_PROXY = "http://127.0.0.1:9/proxy-token";
 /** A remote host's artifact as its daemon serves it: bytes, and the modification time its tag names. */
 type HostArtifact = { body: string; mtimeNs: bigint; tag?: boolean; shortBy?: number; served?: () => void; status?: number; resolvesTo?: string; sendsResolved?: false };
 
-function setup(options: { token?: string | null; finalizeStatus?: number; finalizeCode?: string; shareStatus?: number; shareCode?: string; listStatus?: number; unreachable?: boolean; shares?: unknown[]; listGate?: Promise<void>; hostFiles?: Map<string, HostArtifact>; files?: boolean; refuseVideos?: boolean; cloudFiles?: Map<string, string>; cloudListStatus?: number; sharePredatesFiles?: boolean; sharePageFiles?: unknown } = {}) {
+function setup(options: { token?: string | null; finalizeStatus?: number; finalizeCode?: string; shareStatus?: number; shareCode?: string; listStatus?: number; unreachable?: boolean; shares?: unknown[]; listGate?: Promise<void>; hostFiles?: Map<string, HostArtifact>; files?: boolean; refuseVideos?: boolean; cloudFiles?: Map<string, string>; cloudListStatus?: number; cloudListUnreachable?: boolean; sharePredatesFiles?: boolean; sharePageFiles?: unknown } = {}) {
 	const handlers = new Map<string, (event: unknown, ...args: unknown[]) => unknown>();
 	const requests: string[] = [];
 	const bodies = new Map<string, unknown>();
@@ -118,6 +118,8 @@ function setup(options: { token?: string | null; finalizeStatus?: number; finali
 			}
 			if (pathname.endsWith("/uploads/abort")) return new Response(null, { status: 204 });
 			if (pathname === `${CLOUD_SESSION_PATH}/artifacts`) {
+				// A dropped connection: fetch itself rejects.
+				if (options.cloudListUnreachable) throw new TypeError("fetch failed");
 				if (options.cloudListStatus) return json({ code: "unavailable", message: "Try again later." }, options.cloudListStatus);
 				// A session's committed files: the plan, and any the test names, each with its SHA-256.
 				const listed = [...(options.cloudFiles ?? [])].map(([name, body]) => ({ path: name, name: name.split("/").pop(), kind: "file", size: Buffer.byteLength(body), sha256: createHash("sha256").update(body).digest("hex") }));
@@ -474,6 +476,9 @@ describe("cloudShare IPC", () => {
 			const inspection = await invoke("cloudShare:inspect", page);
 			expect(inspection).toMatchObject({ shareId: SHARE_ID, fingerprint: sha(HTML), publishedFingerprint: sha(HTML) });
 			expect(inspection).not.toHaveProperty("pageFilesChanged");
+			options.cloudListStatus = undefined;
+			options.cloudListUnreachable = true;
+			await expect(invoke("cloudShare:inspect", page)).resolves.toMatchObject({ shareId: SHARE_ID, fingerprint: sha(HTML) });
 		});
 
 		it("publishes the page alone, and says so, to a control plane that predates a page's files", async () => {
