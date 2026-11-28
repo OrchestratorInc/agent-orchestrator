@@ -501,7 +501,12 @@ function AsideReplyBox({
 	const [sending, setSending] = useState(false);
 	const [sendToAgent, setSendToAgent] = useState(false);
 	const [error, setError] = useState<string>();
-	const toAgent = canSendToAgent && sendToAgent;
+	// The choice lasts only while it is offered: resolving the thread (or losing
+	// the right to prompt) clears it, so a reopened thread never goes to the
+	// agent without a fresh tick.
+	const sendOffered = canSendToAgent && !disabled && !firstComment;
+	if (sendToAgent && !sendOffered) setSendToAgent(false);
+	const toAgent = sendOffered && sendToAgent;
 	const box = useRef<HTMLDivElement>(null);
 	// Typing waits while a reply is sending (a failed send gives its draft back
 	// into the box), and the caret comes back once it is done.
@@ -1004,6 +1009,12 @@ export function CloudAsidePane({
 	const [sent, setSent] = useState<CloudCpAsideReply[]>([]);
 	// When each of those was sent (or last edited) here.
 	const sentAt = useRef(new Map<string, number>());
+	// The last send that failed, and the clientMessageId it went with. Sending
+	// the same draft again (same text, mentions and send choice) reuses that id,
+	// so if the failed try had in fact been stored (its answer lost), the control
+	// plane returns it instead of writing the comment, or sending the agent the
+	// thread, a second time.
+	const failedSend = useRef<{ key: string; clientMessageId: string } | undefined>(undefined);
 	const [pending, setPending] = useState<AsideEntry[]>([]);
 	const [removed, setRemoved] = useState<Set<string>>(() => new Set());
 	const live = useMemo(
@@ -1232,7 +1243,9 @@ export function CloudAsidePane({
 	}, [aside, asideId, baseUrl, client, me, myName, orgId, queryClient, sessionId, userId]);
 
 	const onReply = useCallback(async (text: string, mentions: ComposerMention[], sendToAgent: boolean) => {
-		const clientMessageId = crypto.randomUUID();
+		const sendKey = JSON.stringify([asideId, text, mentions.map(({ kind, id }) => `${kind}:${id}`), sendToAgent]);
+		const clientMessageId = failedSend.current?.key === sendKey ? failedSend.current.clientMessageId : crypto.randomUUID();
+		failedSend.current = undefined;
 		const shown: AsideEntry | undefined = text ? {
 			id: `pending:${clientMessageId}`, text, mentions: mentions.map(({ kind, id, name }) => ({ kind, id, name })),
 			createdAt: new Date().toISOString(), pending: true,
@@ -1266,6 +1279,7 @@ export function CloudAsidePane({
 			// the server answers carries its history, and the threads view reads again.
 			invalidateCommentThreads(queryClient, baseUrl, userId);
 		} catch (error) {
+			failedSend.current = { key: sendKey, clientMessageId };
 			if (sendToAgent && threadChanged(error)) {
 				// Someone wrote or edited a comment after this person read the thread:
 				// nothing was sent. The thread is read again and each comment that differs

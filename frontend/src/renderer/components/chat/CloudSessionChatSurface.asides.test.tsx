@@ -662,6 +662,77 @@ describe("comment threads", () => {
 		await waitFor(() => expect(cloudMocks.replyToSessionAside).toHaveBeenCalledWith("org-1", session.id, "c-1", { text: "", clientMessageId: expect.any(String), sendToAgent: true, throughSequence: 50, seen: [{ replyId: "cr-1", version: 50 }] }));
 	});
 
+	it("sends a failed send again under the same clientMessageId, so a send that was in fact stored never reaches the agent twice", async () => {
+		const user = userEvent.setup();
+		withCommentThread();
+		const read: CloudCpAsideThread = { ...commentThread, replies: [{ ...commentThread.replies[0]!, sequence: 50 }] };
+		cloudMocks.getSessionAside.mockImplementation(async (_o: string, _s: string, asideId: string) => (asideId === "c-1" ? read : thread));
+		// The first try's answer is lost; the second gets through.
+		cloudMocks.replyToSessionAside
+			.mockRejectedValueOnce(new Error("offline"))
+			.mockResolvedValueOnce({ aside: { ...commentAside, resolvedAt: at, sentToAgentAt: at } });
+		openAside(session.id, "c-1");
+		renderSurface();
+		const pane = await screen.findByTestId("aside-pane");
+		await user.click(await within(pane).findByRole("checkbox", { name: "Also send to agent" }));
+		const box = within(pane).getByRole("combobox", { name: "Reply to the comment" });
+		await typeInLexicalEditor(box, "Go");
+		await user.keyboard("{Enter}");
+		await waitFor(() => expect(cloudMocks.replyToSessionAside).toHaveBeenCalledTimes(1));
+		await waitFor(() => expect(box).toHaveTextContent("Go"));
+		expect(within(pane).getByRole("checkbox", { name: "Also send to agent" })).toBeChecked();
+		act(() => box.focus());
+		await user.keyboard("{Enter}");
+		await waitFor(() => expect(cloudMocks.replyToSessionAside).toHaveBeenCalledTimes(2));
+		const [first, second] = cloudMocks.replyToSessionAside.mock.calls.map((call: unknown[]) => call[3] as { clientMessageId: string; sendToAgent?: boolean });
+		expect(second!.clientMessageId).toBe(first!.clientMessageId);
+		expect(second!.sendToAgent).toBe(true);
+	});
+
+	it("gives a changed draft a new clientMessageId after a failed send", async () => {
+		const user = userEvent.setup();
+		withCommentThread();
+		cloudMocks.replyToSessionAside
+			.mockRejectedValueOnce(new Error("offline"))
+			.mockImplementationOnce(async (_o: string, _s: string, asideId: string, body: { text: string }) => ({
+				reply: { replyId: "cr-2", asideId, text: body.text, mentions: [], authorUserId: "u-priya", authorName: "Priya Shah", createdAt: at, sequence: 70 },
+			}));
+		openAside(session.id, "c-1");
+		renderSurface();
+		const pane = await screen.findByTestId("aside-pane");
+		const box = await within(pane).findByRole("combobox", { name: "Reply to the comment" });
+		await typeInLexicalEditor(box, "First");
+		await user.keyboard("{Enter}");
+		await waitFor(() => expect(box).toHaveTextContent("First"));
+		await typeInLexicalEditor(box, " and more");
+		await user.keyboard("{Enter}");
+		await waitFor(() => expect(cloudMocks.replyToSessionAside).toHaveBeenCalledTimes(2));
+		const [first, second] = cloudMocks.replyToSessionAside.mock.calls.map((call: unknown[]) => call[3] as { text: string; clientMessageId: string });
+		expect(second!.text).toBe("First and more");
+		expect(second!.clientMessageId).not.toBe(first!.clientMessageId);
+	});
+
+	it("clears Also send to agent when the thread is resolved, so a reopened thread needs a fresh tick", async () => {
+		const user = userEvent.setup();
+		withCommentThread();
+		const read: CloudCpAsideThread = { ...commentThread, replies: [{ ...commentThread.replies[0]!, sequence: 50 }] };
+		cloudMocks.getSessionAside.mockImplementation(async (_o: string, _s: string, asideId: string) => (asideId === "c-1" ? read : thread));
+		openAside(session.id, "c-1");
+		renderSurface();
+		const pane = await screen.findByTestId("aside-pane");
+		await user.click(await within(pane).findByRole("checkbox", { name: "Also send to agent" }));
+		expect(within(pane).getByRole("checkbox", { name: "Also send to agent" })).toBeChecked();
+		await user.click(within(pane).getByRole("button", { name: "Resolve" }));
+		await waitFor(() => expect(within(pane).queryByRole("checkbox", { name: "Also send to agent" })).toBeNull());
+		await user.click(within(pane).getByRole("button", { name: "Reopen" }));
+		const checkbox = await within(pane).findByRole("checkbox", { name: "Also send to agent" });
+		expect(checkbox).not.toBeChecked();
+		// Enter with nothing typed sends nothing: there is no opt-in left.
+		act(() => within(pane).getByRole("combobox", { name: "Reply to the comment" }).focus());
+		await user.keyboard("{Enter}");
+		expect(cloudMocks.replyToSessionAside).not.toHaveBeenCalled();
+	});
+
 	it("pins a send to the newest comment it shows, an edit included, and says what it takes before it goes", async () => {
 		const user = userEvent.setup();
 		withCommentThread();
