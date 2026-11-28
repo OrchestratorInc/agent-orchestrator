@@ -138,12 +138,18 @@ func (c *conversation) requestApproval(
 		return "", nil
 	}
 	accepted, hasAccepted := c.accepted[requestID]
+	turnID := c.activeTurn
+	request.turnID = turnID
 	if hasAccepted && accepted.Kind == persistentInteractionApproval {
 		delete(c.accepted, requestID)
+	} else if c.turnInterruptedLocked(turnID) {
+		// Stop already answered this turn's requests; one that arrives after
+		// session/cancel is cancelled too rather than parked.
+		c.mu.Unlock()
+		return "", nil
 	} else {
 		c.pending[requestID] = request
 	}
-	turnID := c.activeTurn
 	c.mu.Unlock()
 	c.emit(ports.ChatEvent{
 		Kind:           ports.ChatEventApprovalRequested,

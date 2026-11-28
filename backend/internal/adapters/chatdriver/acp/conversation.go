@@ -67,6 +67,7 @@ type interruptAttempt struct {
 
 type parkedPermission struct {
 	options map[string]json.RawMessage
+	turnID  string
 	result  chan string
 	ready   chan struct{}
 }
@@ -1419,7 +1420,9 @@ func (c *conversation) finishPrompt(
 		c.turnCtx = nil
 		c.resetPromptSteeringLocked()
 		c.providerFailure = nil
-		if c.interrupt == interrupt {
+		// Scope by turn, not by the attempt captured above, so no finished
+		// turn's interrupt can leak into the next turn.
+		if c.interrupt != nil && c.interrupt.turnID == turnID {
 			c.interrupt = nil
 		}
 		c.releasePendingSteersLocked()
@@ -2027,6 +2030,9 @@ func (c *conversation) Interrupt(ctx context.Context, providerTurnID string) err
 	if err != nil {
 		return fmt.Errorf("ACP session/cancel: %w", err)
 	}
+	// ACP prompt-turn cancellation requires the client to answer every pending
+	// session/request_permission with the cancelled outcome.
+	c.cancelTurnPermissions(active)
 	// Not every provider withdraws its open questions on session/cancel (ACP
 	// leaves answering them to the client), so close them here: otherwise
 	// Stop leaves the turn waiting on a question nobody can answer.
@@ -2086,10 +2092,20 @@ func (c *conversation) ResolveRequest(
 	eventID, err := c.recordPersistentInteraction(ctx, command)
 	if err != nil {
 		c.mu.Lock()
-		if !c.closed {
+		// Stop's scan ran while the decision was being recorded and could not
+		// see this request, so answer it cancelled as Stop would.
+		stopped := !c.closed && c.turnInterruptedLocked(request.turnID)
+		if !c.closed && !stopped {
 			c.pending[requestID] = request
 		}
 		c.mu.Unlock()
+		if stopped {
+			c.emit(ports.ChatEvent{Kind: ports.ChatEventApprovalResolved, RequestID: requestID})
+			select {
+			case request.result <- "":
+			default:
+			}
+		}
 		return err
 	}
 	command.EventID = eventID
@@ -2434,6 +2450,35 @@ func (c *conversation) failPendingPermissions() {
 	c.pending = make(map[string]*parkedPermission)
 	c.mu.Unlock()
 	for _, request := range pending {
+		select {
+		case request.result <- "":
+		default:
+		}
+	}
+}
+
+// cancelTurnPermissions answers the turn's pending permission requests with
+// the cancelled outcome and reports each one resolved.
+func (c *conversation) cancelTurnPermissions(turnID string) {
+	c.mu.Lock()
+	var cancelled map[string]*parkedPermission
+	for id, request := range c.pending {
+		if request.turnID != turnID {
+			continue
+		}
+		if cancelled == nil {
+			cancelled = make(map[string]*parkedPermission)
+		}
+		cancelled[id] = request
+		delete(c.pending, id)
+	}
+	c.mu.Unlock()
+	for _, id := range sortedKeys(cancelled) {
+		request := cancelled[id]
+		// requestApproval emits ApprovalRequested after it registers the
+		// request; wait for that so the resolution never comes first.
+		<-request.ready
+		c.emit(ports.ChatEvent{Kind: ports.ChatEventApprovalResolved, RequestID: id})
 		select {
 		case request.result <- "":
 		default:
