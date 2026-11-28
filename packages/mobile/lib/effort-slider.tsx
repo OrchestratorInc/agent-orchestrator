@@ -1,13 +1,16 @@
-import { useEffect, useRef, useState } from "react";
-import { StyleSheet, View, type DimensionValue, type LayoutChangeEvent } from "react-native";
-import { Gesture, GestureDetector } from "react-native-gesture-handler";
-import Animated, { Easing, useAnimatedStyle, useSharedValue, withTiming } from "react-native-reanimated";
+import Zap from "lucide-react-native/icons/zap";
+import { memo, useEffect, useMemo, useRef, useState, type ComponentProps } from "react";
+import { StyleSheet, Text, useWindowDimensions, View, type DimensionValue, type LayoutChangeEvent } from "react-native";
+import { Gesture, GestureDetector, Pressable } from "react-native-gesture-handler";
+import Animated, { Easing, useAnimatedStyle, useSharedValue, withTiming, type SharedValue } from "react-native-reanimated";
+import { scheduleOnRN } from "react-native-worklets";
 import { ComposerOverlay, OverlayHeading, overlayCardStyle } from "./composer-overlay";
+import { GradientText } from "./gradient-text";
 import { haptics } from "./haptics";
-import { magneticOffset, nearestStop } from "./modelEffort";
+import { isUltraEffort, magneticOffset, nearestStop } from "./modelEffort";
 import type { Theme } from "./theme";
 import { useTheme, useThemedStyles } from "./ThemeProvider";
-import { duration, space } from "./tokens";
+import { duration, iconSize, space, type, ultraGradient } from "./tokens";
 import { useReducedMotion } from "./useReducedMotion";
 import { useEffortSlider, type EffortSliderProps } from "./useEffortSlider";
 
@@ -18,7 +21,23 @@ import { useEffortSlider, type EffortSliderProps } from "./useEffortSlider";
  * rides inside it. The blob follows the finger but is pulled toward the
  * nearest level, ticks as it lands on each, and glides onto its level when let
  * go. It stays up until a tap lands outside it (see useEffortSliderOpen).
+ * Where the model has a fast mode, a bolt at the heading's right flips it,
+ * filled while it is on, as desktop marks a fast model. Claude Code's
+ * Ultracode is a switch at the heading's left, its name drawn in desktop's
+ * Ultracode gradient while it is on; it is no level, so the track is the
+ * model's levels alone. A model with no levels (Claude Haiku) still opens the
+ * slider for those switches: it is then the switches' row and no track.
  */
+
+/** An on/off over the slider (Fast mode's bolt, Ultracode's switch): on or off, and a flip. */
+export type FastToggle = { on: boolean; toggle: () => void };
+
+type SliderToggles = {
+	/** Fast mode's bolt, at the heading's right; none where the model has no fast mode. */
+	fast?: FastToggle;
+	/** Claude Code's Ultracode, at the heading's left; none where it is not offered. */
+	ultracode?: FastToggle;
+};
 
 const TRACK = 40;
 const INSET = 4;
@@ -30,116 +49,367 @@ const DOT = 3;
 // long as the levels need, and never shorter than MIN_TRACK to drag along.
 const LEVEL_GAP = 68;
 const MIN_TRACK = 240;
+// The room kept between the card's track and each side of the screen.
+const SCREEN_GUTTER = 28;
 // The blob is white in both themes, as a system switch's thumb is.
 const BLOB_FILL = "#ffffff";
 const BLOB_SHADOW = "#000000";
+// While the blob is still gliding from touch down, each move closes this
+// share of the gap to the finger at once, then glides the rest in CATCH_MS, so
+// it keeps up with a moving finger and still lands on one that stops.
+const CATCH_UP = 0.45;
+const CATCH_MS = 60;
+
+/**
+ * Over the keyboard, the slider sits clear of the keys' top edge, level with
+ * the composer's own effort control (the row it opens from), rather than
+ * reaching down over the suggestion strip as the wheels do.
+ */
+const SLIDER_KEYS_OVERLAP = -10;
 
 /** The slider floating over the chat above the composer (see ComposerOverlay). */
-export function EffortSliderOverlay({ bottom, visible = true, ...props }: EffortSliderProps & { bottom: DimensionValue; visible?: boolean }) {
+export function EffortSliderOverlay({ bottom, overKeyboard, onDismiss, visible = true, ...props }: EffortSliderProps & SliderToggles & { bottom?: DimensionValue; overKeyboard?: boolean; onDismiss?: () => void; visible?: boolean }) {
 	return (
-		<ComposerOverlay bottom={bottom} visible={visible}>
-			<EffortSlider {...props} visible={visible} />
+		<ComposerOverlay bottom={bottom} overKeyboard={overKeyboard} keysOverlap={SLIDER_KEYS_OVERLAP} onDismiss={onDismiss} visible={visible}>
+			<EffortSlider {...props} />
 		</ComposerOverlay>
 	);
 }
 
-export function EffortSlider({ choices, onChoose, onRelease, visible = true }: EffortSliderProps & { visible?: boolean }) {
-	const t = useTheme();
+export function EffortSlider({ choices, onChoose, onRelease, fast, ultracode }: EffortSliderProps & SliderToggles) {
 	const styles = useThemedStyles(makeStyles);
 	const reduceMotion = useReducedMotion();
 	const [width, setWidth] = useState(0);
-	const { index, label, pick } = useEffortSlider(choices, onChoose, haptics.detent, visible);
+	const { index, label, show, choose, pick } = useEffortSlider(choices, onChoose, haptics.detent);
 	const count = choices.length;
-	const trackWidth = Math.max(MIN_TRACK, END * 2 + Math.max(count - 1, 0) * LEVEL_GAP);
-	const stepFor = (trackWidth: number) => count > 1 ? (trackWidth - END * 2) / (count - 1) : 0;
-	const step = stepFor(width);
-	const stopX = (i: number) => END + Math.max(i, 0) * step;
+	// No wider than the screen leaves it, in from the sides by the card's pad
+	// and a gutter: a model with many levels would run the track off a narrow
+	// screen.
+	const { width: screen } = useWindowDimensions();
+	const trackWidth = Math.min(screen - SCREEN_GUTTER * 2, Math.max(MIN_TRACK, END * 2 + Math.max(count - 1, 0) * LEVEL_GAP));
+	const stepFor = (length: number) => (count > 1 ? (length - END * 2) / (count - 1) : 0);
+	// Laid out, the track's own width spaces the stops; until then the width it
+	// asked for, so the blob and fill are placed from the first frame.
+	const laidOut = width || trackWidth;
+	const stopX = (i: number) => END + Math.max(i, 0) * stepFor(laidOut);
+	// The levels' keys, the same array while they are the same levels, so the
+	// track's memo holds through a drag.
+	const keyList = choices.map((choice) => choice.value).join("\u0000");
+	const keys = useMemo(() => (keyList ? keyList.split("\u0000") : []), [keyList]);
 
-	// The blob's centre along the track.
-	const blobX = useSharedValue(0);
-	const dragging = useRef(false);
-	// The stop the finger last picked. The blob's own position is not read
-	// back: mid-glide the JS thread sees a stale value, and a quick tap would
-	// land the blob back on the old level.
-	const held = useRef(0);
-	const glide = (x: number) => {
-		blobX.value = reduceMotion ? x : withTiming(x, { duration: duration.base, easing: Easing.out(Easing.cubic) });
+	// The drag runs on the UI thread, so a busy JS thread (a streaming reply)
+	// cannot hold the blob back; the blob, the fill and the dots all read
+	// `blobX`, so they move in the same frame. JS hears only a new level (the
+	// label and a tick) and the release (the choice).
+	const blobX = useSharedValue(stopX(index));
+	const trackW = useSharedValue(laidOut);
+	const step = useSharedValue(stepFor(laidOut));
+	const held = useSharedValue(Math.max(index, 0));
+	const dragging = useSharedValue(0);
+	// The touch-down glide is still running: a move retargets it rather than
+	// cutting it short.
+	const catching = useSharedValue(false);
+	// The level the slider itself last showed, and whether a drag is under way,
+	// for JS: a level from outside moves the blob, the slider's own does not.
+	const shown = useRef(Math.max(index, 0));
+	const midDrag = useRef(false);
+
+	useEffect(() => {
+		trackW.value = laidOut;
+		step.value = stepFor(laidOut);
+		// Fewer levels than before (a model change, even mid-drag): the stop
+		// held and the one shown are brought onto the last there is, so the
+		// release lands on a real level and chooses one.
+		const last = Math.max(count - 1, 0);
+		if (held.value > last) held.value = last;
+		if (shown.current > last) shown.current = last;
+		if (!dragging.value) blobX.value = END + shown.current * step.value;
+	}, [laidOut, count]); // eslint-disable-line react-hooks/exhaustive-deps
+	// A level from outside (a model change, a save that failed) moves the blob;
+	// the slider's own, already there, does not snap it out of its glide.
+	useEffect(() => {
+		if (index < 0 || index === shown.current || dragging.value) return;
+		shown.current = index;
+		held.value = index;
+		blobX.value = END + index * step.value;
+	}, [index]); // eslint-disable-line react-hooks/exhaustive-deps
+
+	const onLevel = (stop: number) => {
+		midDrag.current = true;
+		shown.current = stop;
+		show(stop);
 	};
-	// Settled on the chosen level whenever no finger holds it.
-	useEffect(() => { if (!dragging.current) blobX.value = stopX(index); }, [index, width, count]); // eslint-disable-line react-hooks/exhaustive-deps
-	const blobStyle = useAnimatedStyle(() => ({ transform: [{ translateX: blobX.value - BLOB / 2 }] }));
-	const fillStyle = useAnimatedStyle(() => ({ width: blobX.value + BLOB / 2 + INSET }));
-
-	// `x` is measured from the track's own left edge.
-	const follow = (fingerX: number, animate: boolean) => {
-		const x = Math.min(width - END, Math.max(END, fingerX));
-		const stop = nearestStop(x, END, step, count);
-		held.current = stop;
-		pick(stop);
-		const pulled = stopX(stop) + magneticOffset(x - stopX(stop), step);
-		if (animate) glide(pulled);
-		else blobX.value = pulled;
-	};
-
-	const release = () => {
-		if (!dragging.current) return;
-		dragging.current = false;
-		glide(stopX(held.current));
+	// Settles a drag once: on release, or on unmount mid-drag, whichever
+	// comes first. A release the UI thread sends after the slider is gone
+	// finds it settled and does nothing.
+	const gone = useRef(false);
+	const onEnd = (stop: number) => {
+		if (gone.current) return;
+		midDrag.current = false;
+		shown.current = stop;
+		choose(stop);
 		onRelease?.();
 	};
+	// Closed mid-drag (the keyboard, back, a request card taking the host): the
+	// level the finger was on is still chosen and released, so the owner saves
+	// it whether or not it also hears the close.
+	const settleOnUnmount = useRef(() => {});
+	settleOnUnmount.current = () => { if (midDrag.current) onEnd(shown.current); };
+	useEffect(() => {
+		gone.current = false;
+		return () => { settleOnUnmount.current(); gone.current = true; };
+	}, []);
 
-	// Gesture Handler's pan rather than the responder system: the slider floats
-	// over the conversation, outside the composer's bounds, and on Android the
-	// list under it took the drag as a scroll before a responder could keep it.
-	// With no distance to travel the pan activates on touch down, so the list
-	// never starts scrolling, and a tap lands on its level.
-	const drag = Gesture.Pan()
-		.runOnJS(true)
-		.minDistance(0)
-		.onBegin((event) => {
-			dragging.current = true;
-			follow(event.x, true);
-		})
-		.onUpdate((event) => follow(event.x, false))
-		.onFinalize(release);
+	// The worklets call JS through these, so they always reach the latest
+	// render's callbacks without rebuilding the gesture.
+	const onLevelRef = useStableCallback(onLevel);
+	const onEndRef = useStableCallback(onEnd);
 
+
+	const drag = useMemo(() => {
+		const glideMs = duration.base;
+		const target = (fingerX: number) => {
+			"worklet";
+			const x = Math.min(trackW.value - END, Math.max(END, fingerX));
+			const stop = nearestStop(x, END, step.value, count);
+			const at = END + stop * step.value;
+			return { stop, pulled: at + magneticOffset(x - at, step.value) };
+		};
+		const level = (stop: number) => {
+			"worklet";
+			if (stop === held.value) return;
+			held.value = stop;
+			scheduleOnRN(onLevelRef, stop);
+		};
+		// Gesture Handler's pan: with no distance to travel it holds the touch
+		// from touch down, so nothing under the slider starts a scroll, and a
+		// tap lands on its level.
+		return Gesture.Pan()
+			.minDistance(0)
+			.onBegin((event) => {
+				"worklet";
+				dragging.value = 1;
+				const { stop, pulled } = target(event.x);
+				catching.value = !reduceMotion;
+				blobX.value = reduceMotion ? pulled : withTiming(pulled, { duration: glideMs, easing: Easing.out(Easing.cubic) });
+				level(stop);
+			})
+			.onUpdate((event) => {
+				"worklet";
+				const { stop, pulled } = target(event.x);
+				// Still gliding from touch down: close a share of the gap at once,
+				// then glide the rest, and hold the finger once caught. A glide
+				// alone, retargeted from where the blob was on every move, trailed
+				// a moving finger for the whole drag; a jump alone stopped short of
+				// a finger that stopped.
+				if (!catching.value) {
+					blobX.value = pulled;
+				} else {
+					const next = blobX.value + (pulled - blobX.value) * CATCH_UP;
+					if (Math.abs(pulled - next) < 1) {
+						catching.value = false;
+						blobX.value = pulled;
+					} else {
+						blobX.value = next;
+						blobX.value = withTiming(pulled, { duration: CATCH_MS, easing: Easing.out(Easing.quad) });
+					}
+				}
+				level(stop);
+			})
+			.onFinalize(() => {
+				"worklet";
+				// A pan cancelled, then finalized, settles once.
+				if (!dragging.value) return;
+				dragging.value = 0;
+				catching.value = false;
+				const at = END + held.value * step.value;
+				blobX.value = reduceMotion ? at : withTiming(at, { duration: glideMs, easing: Easing.out(Easing.cubic) });
+				scheduleOnRN(onEndRef, held.value);
+			});
+	}, [count, reduceMotion]); // eslint-disable-line react-hooks/exhaustive-deps
+
+	const headerWidth = { width: trackWidth + CARD_PAD * 2 };
+	// No levels (Claude Haiku): the slider is only its switches, side by side.
+	if (!count) {
+		return (
+			<View style={styles.stack}>
+				<View style={[styles.header, styles.togglesOnly, headerWidth]}>
+					{ultracode ? <UltracodeSwitch {...ultracode} /> : null}
+					{fast ? <FastBolt {...fast} /> : null}
+				</View>
+			</View>
+		);
+	}
+	// An agent's own top level past Max (Codex's "Ultra") in the Ultracode
+	// gradient, as desktop draws it, track and name alike. Claude's Ultracode
+	// leaves the level's name plain: the Ultra pill beside the bolt says it is
+	// on, and once is enough.
+	const ultraLevel = index >= 0 && isUltraEffort(choices[index]?.value);
+	const heading = <OverlayHeading title="Effort" value={label} valueTestID="effort-slider-value" ultra={ultraLevel} />;
+	const togglesWidth = (ultracode ? ULTRA_SLOT : 0) + (fast ? BOLT : 0) + (ultracode && fast ? TOGGLE_GAP : 0);
 	return (
 		<View style={styles.stack}>
 			{/* What the track sets, then the level it is on. The track itself is
 			    "Effort", adjustable, valued the level, for screen readers. */}
-			<OverlayHeading title="Effort" value={label} valueTestID="effort-slider-value" />
-			<View style={styles.card}>
-				<GestureDetector gesture={drag}>
-					<View
-						style={[styles.track, { width: trackWidth }]}
-						onLayout={(event: LayoutChangeEvent) => {
-							const next = event.nativeEvent.layout.width;
-							// The blob and fill mount with this width, already on the
-							// level: set in an effect after they mount, while the card
-							// fades in, the move never reached the fill on Android,
-							// and at the top level the track showed no fill at all.
-							if (!dragging.current) blobX.value = END + Math.max(index, 0) * stepFor(next);
-							setWidth(next);
-						}}
-						accessible
-						accessibilityRole="adjustable"
-						accessibilityLabel="Effort"
-						accessibilityValue={{ text: label }}
-						accessibilityActions={[{ name: "increment" }, { name: "decrement" }]}
-						onAccessibilityAction={(event) => pick(Math.max(index, 0) + (event.nativeEvent.actionName === "increment" ? 1 : -1))}
-						testID="effort-slider"
-					>
-						{width && index >= 0 ? <Animated.View pointerEvents="none" style={[styles.fill, fillStyle]} /> : null}
-						{width ? choices.map((choice, i) => (
-							<View key={choice.value} pointerEvents="none" style={[styles.dot, { left: stopX(i) - DOT, backgroundColor: i <= index ? t.textSecondary : t.textFaint }]} />
-						)) : null}
-						{width && index >= 0 ? <Animated.View pointerEvents="none" style={[styles.blob, blobStyle]} /> : null}
+			{/* The heading centred over the card; Ultra and the bolt together at
+			    its right, where the thumb is, with an empty slot as wide at the
+			    left so the heading stays centred. */}
+			{fast || ultracode ? (
+				<View style={[styles.header, styles.headerWithToggles, headerWidth]}>
+					<View style={[styles.side, { width: togglesWidth }]} />
+					<View style={styles.headingSlot}>{heading}</View>
+					<View style={[styles.side, styles.sideEnd, { width: togglesWidth }]}>
+						{ultracode ? <UltracodeSwitch {...ultracode} /> : null}
+						{fast ? <FastBolt {...fast} /> : null}
 					</View>
-				</GestureDetector>
+				</View>
+			) : (
+				<View style={[styles.header, headerWidth]}>{heading}</View>
+			)}
+			{/* The card is "Effort" for screen readers, adjustable, valued the level:
+			    the value changes with every level, so it lives here, not on the
+			    track, which must not re-render while a finger drags it. */}
+			<View
+				style={styles.card}
+				accessible
+				accessibilityRole="adjustable"
+				accessibilityLabel="Effort"
+				accessibilityValue={{ text: label }}
+				accessibilityActions={[{ name: "increment" }, { name: "decrement" }]}
+				onAccessibilityAction={(event) => {
+					const next = Math.min(count - 1, Math.max(0, Math.max(index, 0) + (event.nativeEvent.actionName === "increment" ? 1 : -1)));
+					shown.current = next;
+					held.value = next;
+					blobX.value = END + next * step.value;
+					pick(next);
+				}}
+				testID="effort-slider"
+			>
+				<SliderTrack trackWidth={trackWidth} laidOut={laidOut} keys={keys} lit={index >= 0} ultra={Boolean(ultracode?.on) || ultraLevel} blobX={blobX} gesture={drag} onWidth={setWidth} />
 			</View>
 		</View>
 	);
 }
+
+/**
+ * The track, its fill, dots and blob. The blob and the fill move by layout
+ * (`left`, `width`), not by transform: Android hands transforms and colours
+ * to the screen directly, outside React's tree, and every React commit in the
+ * screen (a streaming reply re-renders it ten times a second) briefly put an
+ * older position back, so the blob jumped back a step mid-drag. Layout goes
+ * through the same tree as React's commits, and the blob and fill land in the
+ * same frame. The lit dots ride inside the fill, clipped by it, over the
+ * faint ones on the track: a dot is lit exactly where the fill covers it.
+ *
+ * Memoised on props that hold still through a drag, so a level crossed
+ * re-renders the heading, not the track.
+ */
+const SliderTrack = memo(function SliderTrack({ trackWidth, laidOut, keys, lit, ultra, blobX, gesture, onWidth }: {
+	trackWidth: number;
+	laidOut: number;
+	keys: readonly string[];
+	/** A level is chosen, so the fill and the blob show. */
+	lit: boolean;
+	/** Ultracode is on: the fill is drawn in desktop's Ultracode gradient. */
+	ultra: boolean;
+	blobX: SharedValue<number>;
+	gesture: ComponentProps<typeof GestureDetector>["gesture"];
+	onWidth: (width: number) => void;
+}) {
+	const t = useTheme();
+	const styles = useThemedStyles(makeStyles);
+	const blobStyle = useAnimatedStyle(() => ({ left: blobX.value - BLOB / 2 }));
+	const fillStyle = useAnimatedStyle(() => ({ width: blobX.value + BLOB / 2 + INSET }));
+	const stepPx = keys.length > 1 ? (laidOut - END * 2) / (keys.length - 1) : 0;
+	const dots = (color: string) => keys.map((key, i) => <View key={key} pointerEvents="none" style={[styles.dot, { left: END + i * stepPx - DOT, backgroundColor: color }]} />);
+	return (
+		<GestureDetector gesture={gesture}>
+			<View style={[styles.track, { width: trackWidth }]} onLayout={(event: LayoutChangeEvent) => onWidth(event.nativeEvent.layout.width)} testID="effort-slider-track">
+				{dots(t.textFaint)}
+				{lit ? (
+					<Animated.View pointerEvents="none" style={[styles.fill, fillStyle]} testID="effort-slider-fill">
+						{/* With Ultracode on, the fill is the Ultracode gradient laid
+						    across the whole track, so the blob uncovers more of it
+						    as it climbs rather than stretching it. */}
+						{ultra ? <View pointerEvents="none" testID="effort-slider-ultra-fill" style={[styles.ultraFill, { width: laidOut }]} /> : null}
+						{dots(ultra ? ULTRA_DOT : t.textSecondary)}
+					</Animated.View>
+				) : null}
+				{lit ? <Animated.View pointerEvents="none" testID="effort-slider-blob" style={[styles.blob, blobStyle]} /> : null}
+			</View>
+		</GestureDetector>
+	);
+});
+
+/** A function that keeps its identity while always calling the latest one given. */
+function useStableCallback<A extends unknown[]>(fn: (...args: A) => void): (...args: A) => void {
+	const latest = useRef(fn);
+	latest.current = fn;
+	return useRef((...args: A) => latest.current(...args)).current;
+}
+
+/**
+ * Ultracode's switch, beside the bolt: "Ultra" in a soft pill, muted while off and in desktop's Ultracode
+ * gradient while on, as desktop marks it. Text rather than a filled pill, so
+ * it sits as quietly in the heading's line as the bolt opposite it.
+ */
+function UltracodeSwitch({ on, toggle }: FastToggle) {
+	const styles = useThemedStyles(makeStyles);
+	return (
+		<Pressable
+			onPress={() => { haptics.select(); toggle(); }}
+			hitSlop={BOLT_SLOP}
+			accessibilityRole="switch"
+			accessibilityLabel="Ultracode"
+			accessibilityState={{ checked: on }}
+			testID="effort-slider-ultracode"
+			// The pill is the button itself, as the bolt is, and its label takes
+			// no touches: a tap on the gradient label (an SVG, which hit-tests its
+			// own shapes) fell through to the overlay's backdrop and closed the
+			// slider as it flipped Ultra.
+			style={({ pressed }) => [styles.ultraPill, on && styles.ultraPillOn, pressed && styles.ultraPillPressed]}
+		>
+			<View pointerEvents="none">
+				{on ? <GradientText style={styles.ultraLabel}>Ultra</GradientText> : <Text style={[styles.ultraLabel, styles.ultraOff]} numberOfLines={1}>Ultra</Text>}
+			</View>
+		</Pressable>
+	);
+}
+
+/** Fast mode's bolt: outlined while off, filled solid in the text colour while on. */
+function FastBolt({ on, toggle }: FastToggle) {
+	const t = useTheme();
+	const styles = useThemedStyles(makeStyles);
+	return (
+		<Pressable
+			onPress={() => { haptics.select(); toggle(); }}
+			hitSlop={BOLT_SLOP}
+			accessibilityRole="switch"
+			accessibilityLabel="Fast mode"
+			accessibilityState={{ checked: on }}
+			testID="effort-slider-fast"
+			style={({ pressed }) => [styles.bolt, pressed && styles.boltPressed]}
+		>
+			<Zap size={iconSize.md} strokeWidth={2} color={on ? t.textPrimary : t.textSecondary} fill={on ? t.textPrimary : "none"} />
+		</Pressable>
+	);
+}
+
+// The card's pad around the track.
+const CARD_PAD = space.xs;
+// The bolt's room, and the reach of a touch past it, to a full touch target.
+const BOLT = 32;
+const BOLT_SLOP = 6;
+// Ultra's room beside the bolt: the word in the caption face, so the slot
+// opposite is as wide and the heading stays centred.
+const ULTRA_SLOT = 50;
+// The Ultracode gradient as a native gradient, blue through purple to pink.
+const ULTRA_FILL = `linear-gradient(to right, ${ultraGradient.slice(0, 3).join(", ")})`;
+// The lit dots over the gradient: white, as the blob is.
+const ULTRA_DOT = "rgba(255, 255, 255, 0.85)";
+const ULTRA_PILL = 24;
+// Between Ultra and the bolt.
+const TOGGLE_GAP = space.sm;
 
 const makeStyles = (t: Theme) =>
 	StyleSheet.create({
@@ -147,18 +417,45 @@ const makeStyles = (t: Theme) =>
 		// the track's stops are spaced from its measured width, so a narrow
 		// screen packs them closer rather than spilling the card off it.
 		stack: { gap: space.xs, alignItems: "center", maxWidth: "100%" },
+		header: { alignItems: "center", justifyContent: "center" },
+		headerWithToggles: { flexDirection: "row", height: BOLT },
+		togglesOnly: { flexDirection: "row", height: BOLT, gap: space.md },
+		side: { height: BOLT, justifyContent: "center" },
+		sideEnd: { flexDirection: "row", alignItems: "center", justifyContent: "flex-end", gap: TOGGLE_GAP },
+		// Shrinks before the switches do: a long level ("Extra high") is cut
+		// rather than run under them.
+		headingSlot: { flex: 1, minWidth: 0, alignItems: "center" },
+		bolt: { width: BOLT, height: BOLT, alignItems: "center", justifyContent: "center" },
+		boltPressed: { opacity: 0.5 },
+		ultra: { height: BOLT, justifyContent: "center" },
+		ultraPill: {
+			height: ULTRA_PILL,
+			paddingHorizontal: space.sm,
+			borderRadius: ULTRA_PILL / 2,
+			borderCurve: "continuous",
+			justifyContent: "center",
+			alignItems: "center",
+			backgroundColor: t.bgSubtle,
+			borderWidth: StyleSheet.hairlineWidth,
+			borderColor: t.borderSubtle,
+		},
+		ultraPillOn: { backgroundColor: t.accentTint, borderColor: t.accentBorder },
+		ultraPillPressed: { opacity: 0.6 },
+		ultraLabel: { ...type.caption1 },
+		ultraOff: { color: t.textSecondary },
 		card: {
 			maxWidth: "100%",
-			padding: space.xs,
+			padding: CARD_PAD,
 			// Concentric with the track's ends, an even pad in from the card's.
-			...overlayCardStyle(t, TRACK / 2 + space.xs),
+			...overlayCardStyle(t, TRACK / 2 + CARD_PAD),
 		},
 		track: { maxWidth: "100%", height: TRACK, borderRadius: TRACK / 2, borderCurve: "continuous", backgroundColor: t.bgElevatedHover, overflow: "hidden", justifyContent: "center" },
-		fill: { position: "absolute", left: 0, top: 0, bottom: 0, borderRadius: TRACK / 2, backgroundColor: t.accentBorder },
+		ultraFill: { position: "absolute", left: 0, top: 0, bottom: 0, experimental_backgroundImage: ULTRA_FILL },
+		// From the track's start to just past the blob, clipping the lit dots.
+		fill: { position: "absolute", left: 0, top: 0, bottom: 0, borderRadius: TRACK / 2, backgroundColor: t.accentBorder, overflow: "hidden", justifyContent: "center" },
 		dot: { position: "absolute", width: DOT * 2, height: DOT * 2, borderRadius: DOT },
 		blob: {
 			position: "absolute",
-			left: 0,
 			width: BLOB,
 			height: BLOB,
 			borderRadius: BLOB / 2,

@@ -2,12 +2,10 @@ import * as DocumentPicker from "expo-document-picker";
 import * as ImagePicker from "expo-image-picker";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ActivityIndicator, Pressable, Text, TextInput, View } from "react-native";
-import Animated, { useAnimatedStyle } from "react-native-reanimated";
-import { useReanimatedKeyboardAnimation } from "react-native-keyboard-controller";
+import Animated from "react-native-reanimated";
 import { AppSymbol } from "../AppSymbol";
 import { haptics } from "../haptics";
 import { usePressFeedback } from "../pressFeedback";
-import { KEYBOARD_DOCK_GAP } from "../session/keyboardInset";
 import { useTheme, useThemedStyles } from "../ThemeProvider";
 import { textSelectionColors } from "../textSelection";
 import { iconSize, stateOpacity, touchTarget } from "../tokens";
@@ -17,6 +15,7 @@ import { useVoiceInput } from "../voice/useVoiceInput";
 import { ChatAttachmentMenu } from "./ChatAttachmentMenu";
 import { ComposerAttachmentTray } from "./ComposerAttachmentTray";
 import { ComposerGlass } from "./composer-glass";
+import { useComposerDockRise } from "./composerDock";
 import { HardwareReturn } from "./HardwareReturn";
 import { useKeyboardSendRefocus } from "./useKeyboardSendRefocus";
 import { COMPOSER_FIELD_HEIGHT, COMPOSER_RADIUS, composerStyleRules } from "./composerStyles";
@@ -57,7 +56,6 @@ export function ReviewerComposer({ attachmentKey, busy, stopped, attachmentsEnab
 	// See ChatComposer: a hardware-keyboard send gives the field its focus back.
 	const keyboardSend = useKeyboardSendRefocus(inputRef, submitting);
 	const [error, setError] = useState("");
-	const keyboard = useReanimatedKeyboardAnimation();
 	const voice = useVoiceInput({ onTranscript: useCallback((spoken: string) => setText((old) => old ? `${old} ${spoken}` : spoken), []) });
 	const listening = voice.state === "starting" || voice.state === "recording" || voice.state === "transcribing";
 	useEffect(() => {
@@ -127,11 +125,9 @@ export function ReviewerComposer({ attachmentKey, busy, stopped, attachmentsEnab
 
 	// Same dock and pill as the session composer (ChatComposer), minus the turn
 	// settings and queue rows a reviewer has no use for. The dock holds its resting
-	// inset and rides the keyboard's progress to close the difference, exactly as
-	// the session composer does, so the two sit in the same place.
-	const dockRise = useAnimatedStyle(() => ({
-		transform: [{ translateY: (restingInset - KEYBOARD_DOCK_GAP) * (dockRiseOverride ?? keyboard.progress.value) }],
-	}));
+	// inset and rides the keyboard to close the difference on the chat
+	// composer's own ride (see composerDock), so the two sit in the same place.
+	const dockRise = useComposerDockRise(restingInset, dockRiseOverride);
 	const sendDisabled = stopped || submitting || (!text.trim() && !attachments.length);
 	return <Animated.View style={[styles.dock, { paddingBottom: restingInset }, dockRise]}>
 		{error || attachmentNotice || voice.error ? <Text accessibilityRole="alert" style={styles.error}>{error || attachmentNotice || voice.error}</Text> : null}

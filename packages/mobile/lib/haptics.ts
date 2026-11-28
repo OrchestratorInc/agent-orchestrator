@@ -48,6 +48,11 @@ export const haptics = {
 	detent() {
 		feedback(() => Haptics.selectionAsync(), () => since(SEGMENT_TICK_API, Haptics.AndroidHaptics.Segment_Tick, Haptics.AndroidHaptics.Clock_Tick));
 	},
+	// A row passing in a scrolling list — the faintest tick there is, felt
+	// many times a second, so lighter than a slider's detent.
+	scrollTick() {
+		feedback(() => Haptics.selectionAsync(), () => since(SEGMENT_TICK_API, Haptics.AndroidHaptics.Segment_Frequent_Tick, Haptics.AndroidHaptics.Text_Handle_Move));
+	},
 	// A control reached the point where letting go acts — swipe-to-merge armed.
 	// Android has no threshold constant; the heavy click is the firm bump.
 	armed() {

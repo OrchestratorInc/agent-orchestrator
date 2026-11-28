@@ -16,10 +16,10 @@ vi.mock("react-native", async () => {
 vi.mock("react-native-svg", async () => {
 	const React = await import("react");
 	const host = (name: string) => ({ children, ...props }: { children?: React.ReactNode }) => React.createElement(name, props, children);
-	return { default: host("Svg"), Circle: host("Circle"), Line: host("Line"), Path: host("Path") };
+	return { default: host("Svg"), Circle: host("Circle"), Defs: host("Defs"), Line: host("Line"), LinearGradient: host("LinearGradient"), Path: host("Path"), Stop: host("Stop") };
 });
 
-import { EffortGaugeButton } from "./effort-gauge";
+import { EffortGaugeButton, effortGaugeLabel, effortGaugeToggles } from "./effort-gauge";
 
 const levels = (selected?: string) => ["low", "medium", "high", "xhigh", "max"].map((value) => ({ value, label: value[0].toUpperCase() + value.slice(1), selected: value === selected }));
 
@@ -39,6 +39,50 @@ describe("effort gauge", () => {
 		await act(async () => button.props.onPress());
 		expect(onPress).toHaveBeenCalledOnce();
 		expect(fixtures.tap).toHaveBeenCalledOnce();
+	});
+
+	// Desktop's model pill shows Fast mode and Ultracode while they are on;
+	// Ultracode changes every message, so the trigger must not hide it.
+	it("names the switches that are on after the level", () => {
+		expect(effortGaugeLabel(levels("high"), { ultracode: true, fast: false })).toBe("Effort, High, Ultracode on");
+		expect(effortGaugeLabel(levels("high"), { ultracode: true, fast: true })).toBe("Effort, High, Ultracode on, Fast mode on");
+		expect(effortGaugeLabel(levels("high"), { fast: false })).toBe("Effort, High");
+		expect(effortGaugeLabel(levels())).toBe("Effort, default");
+	});
+
+	// Claude Haiku takes no effort: the gauge opens a slider of switches only.
+	it("is named after its switches on a model with no levels", () => {
+		expect(effortGaugeLabel([], { ultracode: false, fast: false })).toBe("Ultracode and Fast mode");
+		expect(effortGaugeLabel([], { ultracode: true })).toBe("Ultracode, Ultracode on");
+		expect(effortGaugeLabel([], { fast: true })).toBe("Fast mode, Fast mode on");
+	});
+
+	it("carries the switches offered, and none where neither is", () => {
+		const toggle = () => {};
+		expect(effortGaugeToggles({ on: true, toggle }, undefined)).toEqual({ fast: true, ultracode: undefined });
+		expect(effortGaugeToggles(undefined, { on: false, toggle })).toEqual({ fast: undefined, ultracode: false });
+		expect(effortGaugeToggles(undefined, undefined)).toBeUndefined();
+	});
+
+	it("draws a bolt while Fast mode is on and lights Ultracode in its gradient", async () => {
+		const gauge = (toggles?: { fast?: boolean; ultracode?: boolean }) => act(async () => {
+			renderer?.unmount();
+			renderer = create(<EffortGaugeButton choices={levels("medium")} toggles={toggles} open={false} onPress={() => {}} disabled={false} testID="gauge" />);
+		});
+		const filled = () => hosts(renderer!.root, "Path").filter((path) => path.props.fill !== "none");
+		const lit = () => hosts(renderer!.root, "Path").filter((path) => path.props.fill === "none" && path.props.strokeOpacity === 1).map((path) => path.props.stroke);
+		await gauge();
+		expect(filled()).toHaveLength(0);
+		expect(lit()).toEqual(["#accent", "#accent"]);
+		expect(hosts(renderer!.root, "LinearGradient")).toHaveLength(0);
+		await gauge({ fast: true, ultracode: false });
+		expect(filled()).toHaveLength(1);
+		expect(lit()).toEqual(["#accent", "#accent"]);
+		await gauge({ fast: false, ultracode: true });
+		expect(filled()).toHaveLength(0);
+		expect(lit()).toEqual(["url(#effort-gauge-ultra)", "url(#effort-gauge-ultra)"]);
+		expect(hosts(renderer!.root, "LinearGradient")).toHaveLength(1);
+		expect(hosts(renderer!.root, "Pressable")[0].props.accessibilityLabel).toBe("Effort, Medium, Ultracode on");
 	});
 
 	// Waiting for the finger to lift read as lag on the slider opening.

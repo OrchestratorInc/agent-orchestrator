@@ -1,7 +1,23 @@
 import { describe, expect, it } from "vitest";
 import type { ChatConfigOption, ChatModel, ConversationSnapshot } from "./types";
-import { nativeModelLabel, NOT_REPORTED, providerChoiceLabel, providerTurnControlKind, resolveDefaultChoices, splitModelChoices,
+import { effortChoiceLabel, nativeModelLabel, NOT_REPORTED, providerChoiceLabel, resolveDefaultChoices, splitModelChoices,
 	turnSettingsParts, turnSettingsRows, turnSettingTopic, turnSettingWrite, readableModelId } from "./turnSettingsModel";
+
+// Desktop's wording for a level (formatEffortLabel): "xhigh" is "Extra high".
+describe("effort level names", () => {
+	it("names a native catalog's levels as desktop does", () => {
+		expect(effortChoiceLabel("xhigh")).toBe("Extra high");
+		expect(effortChoiceLabel("high")).toBe("High");
+		expect(effortChoiceLabel("max")).toBe("Max");
+	});
+
+	it("names a native catalog's Extra high so on the slider's row", () => {
+		const rows = turnSettingsRows({ conversationId: "c", sessionId: "s", harness: "claude-code", mode: "chat", controller: { state: "ready" }, latestSequence: 0, oldestSequence: 0, hasMoreBefore: false, turns: [], items: [], settings: { model: "opus", approvalMode: "auto", reasoningEffort: "xhigh" }, capabilities: [] } as ConversationSnapshot, [{ id: "opus", displayName: "Opus", efforts: ["high", "xhigh"] }] as ChatModel[], []);
+		const effort = rows.find((row) => turnSettingTopic(row) === "effort");
+		expect(effort?.choices.map((choice) => choice.label)).toEqual(["High", "Extra high"]);
+		expect(effort?.value).toBe("Extra high");
+	});
+});
 
 // What the controls row names, all three parts read together: the model's
 // capsule, the effort's speedometer and the approval mode's symbol.
@@ -28,6 +44,48 @@ const snapshot = (over: Partial<ConversationSnapshot> = {}): ConversationSnapsho
 });
 
 describe("turnSettingsRows", () => {
+	// Desktop's Fast mode toggle, for a model that has a fast mode.
+	it("offers fast mode as an on/off for a model that has one, and none for one that does not", () => {
+		const models = [
+			{ id: "opus", displayName: "Opus", default: true, supportsFast: true },
+			{ id: "sonnet", displayName: "Sonnet", default: false },
+		] as ChatModel[];
+		const on = snapshot({ capabilities: [], settings: { model: "opus", fastMode: true } });
+		const fast = turnSettingsRows(on, models, []).find((row) => row.id === "fast")!;
+		expect(fast).toMatchObject({ kind: "boolean", enabled: true, label: "Fast mode" });
+		expect(turnSettingWrite(on.settings, fast, false)).toEqual({ kind: "settings", settings: { model: "opus", fastMode: undefined } });
+		expect(turnSettingWrite({ model: "opus" }, fast, true)).toEqual({ kind: "settings", settings: { model: "opus", fastMode: true } });
+		expect(turnSettingsRows(snapshot({ capabilities: [], settings: { model: "sonnet" } }), models, []).some((row) => row.id === "fast")).toBe(false);
+		// A new model starts without the old one's fast mode.
+		const model = turnSettingsRows(on, models, []).find((row) => row.id === "model")!;
+		expect(turnSettingWrite(on.settings, model, "sonnet")).toEqual({ kind: "settings", settings: { model: "sonnet", reasoningEffort: undefined, fastMode: undefined } });
+	});
+
+	// As on desktop: Fast mode survives a model change only onto another model that has it.
+	it("keeps fast mode when the newly picked model has one too", () => {
+		const models = [
+			{ id: "gpt-5", displayName: "GPT-5", default: true, supportsFast: true },
+			{ id: "gpt-5-mini", displayName: "GPT-5 mini", default: false, supportsFast: true },
+			{ id: "gpt-4", displayName: "GPT-4", default: false },
+		] as ChatModel[];
+		const on = snapshot({ capabilities: [], settings: { model: "gpt-5", reasoningEffort: "high", fastMode: true } });
+		const model = turnSettingsRows(on, models, []).find((row) => row.id === "model")!;
+		expect(model.fastModels).toEqual(["gpt-5", "gpt-5-mini"]);
+		expect(turnSettingWrite(on.settings, model, "gpt-5-mini")).toEqual({ kind: "settings", settings: { model: "gpt-5-mini", reasoningEffort: undefined, fastMode: true } });
+		expect(turnSettingWrite(on.settings, model, "gpt-4")).toEqual({ kind: "settings", settings: { model: "gpt-4", reasoningEffort: undefined, fastMode: undefined } });
+	});
+
+	// A saved model the catalog no longer lists is not the catalog's default, so
+	// it does not borrow the default's Fast mode.
+	it("asks the saved model, not the catalog default, whether it has fast mode", () => {
+		const models = [{ id: "gpt-5", displayName: "GPT-5", default: true, supportsFast: true }] as ChatModel[];
+		const fast = (settings: ConversationSnapshot["settings"]) =>
+			turnSettingsRows(snapshot({ capabilities: [], settings }), models, []).some((row) => row.id === "fast");
+		expect(fast({ model: "gpt-retired" })).toBe(false);
+		expect(fast({})).toBe(true);
+		expect(fast({ model: "gpt-5" })).toBe(true);
+	});
+
 	it("identifies the native controls Android promotes above generic provider options", () => {
 		const controls: ChatConfigOption[] = [
 			{ id: "fast", name: "Fast mode", type: "boolean", currentBoolean: true, choices: [] },
@@ -36,22 +94,34 @@ describe("turnSettingsRows", () => {
 			{ id: "permission_mode", name: "Permissions", category: "mode", type: "select", currentValue: "ask", choices: [{ value: "ask", name: "Ask" }] },
 		];
 
-		expect(controls.map(providerTurnControlKind)).toEqual(["fast", "model", "effort", "permissions"]);
+		expect(turnSettingsRows(snapshot(), [], controls).map((row) => turnSettingTopic(row))).toEqual(["fast", "model", "effort", "permissions"]);
 	});
 
-	it("treats a provider's binary Fast mode select as one direct on/off control", () => {
+	// Claude Code sends Fast mode as a select (AO does not ask for ACP booleans),
+	// and Cursor sends its thinking and fast as "true"/"false" selects. Each is one
+	// on/off, which sends the choice that state stands for.
+	it("treats a provider's binary select as one direct on/off control, and sends its choice", () => {
 		const fastMode: ChatConfigOption = {
-			id: "fast_mode",
+			id: "fast",
 			name: "Fast mode",
+			category: "model_config",
 			type: "select",
 			currentValue: "off",
 			choices: [
-				{ value: "off", name: "Off" },
 				{ value: "on", name: "On" },
+				{ value: "off", name: "Off" },
 			],
 		};
-
-		expect(providerTurnControlKind(fastMode)).toBe("fast");
+		const thinking: ChatConfigOption = { id: "thinking", name: "Thinking", type: "select", currentValue: "true", choices: [{ value: "true", name: "On" }, { value: "false", name: "Off" }] };
+		const rows = turnSettingsRows(snapshot(), [], [fastMode, thinking]);
+		const fast = rows.find((row) => row.id === "option:fast")!;
+		expect(fast).toMatchObject({ kind: "boolean", enabled: false, value: "Off" });
+		expect(turnSettingTopic(fast)).toBe("fast");
+		expect(turnSettingWrite({}, fast, true)).toEqual({ kind: "option", id: "fast", value: { value: "on" } });
+		const think = rows.find((row) => row.id === "option:thinking")!;
+		expect(think).toMatchObject({ kind: "boolean", enabled: true });
+		expect(turnSettingTopic(think)).toBe("setting");
+		expect(turnSettingWrite({}, think, false)).toEqual({ kind: "option", id: "thinking", value: { value: "false" } });
 	});
 
 	it("orders provider controls as fast mode, model, effort, permissions, then remaining controls", () => {
@@ -131,9 +201,9 @@ describe("turnSettingsRows", () => {
 	it("uses a provider permission control in the turn-settings summary", () => {
 		const options: ChatConfigOption[] = [
 			{ id: "model", name: "Model", category: "model", type: "select", currentValue: "sonnet", choices: [{ value: "sonnet", name: "Sonnet" }] },
-			{ id: "permission_mode", name: "Permissions", category: "mode", type: "select", currentValue: "plan", choices: [{ value: "plan", name: "Plan only" }] },
+			{ id: "permission_mode", name: "Permissions", category: "mode", type: "select", currentValue: "acceptEdits", choices: [{ value: "acceptEdits", name: "Accept edits" }, { value: "plan", name: "Plan only" }] },
 		];
-		expect(turnSettingsSummary(snapshot(), [], options)).toBe("Sonnet · Plan only");
+		expect(turnSettingsSummary(snapshot(), [], options)).toBe("Sonnet · Accept edits");
 	});
 });
 
@@ -147,10 +217,11 @@ describe("turn settings menus", () => {
 	];
 	const rows = () => turnSettingsRows(snapshot(), [], options);
 
-	it("draws a glyph for what each row adjusts, and none for an agent picker", () => {
+	// An ACP `agent` option is the agent's own internals (Claude's main-thread
+	// persona), not a model and not AO's agent switch: as on desktop, no row.
+	it("draws a glyph for what each row adjusts, and leaves out an agent's own agent option", () => {
 		expect(rows().map((row) => [row.id, turnSettingTopic(row)])).toEqual([
 			["option:fast", "fast"],
-			["option:agent", undefined],
 			["option:model", "model"],
 			["option:effort", "effort"],
 			["approvals", "permissions"],
@@ -159,11 +230,13 @@ describe("turn settings menus", () => {
 	});
 
 	it("saves a provider choice by option and AO's own by settings", () => {
-		const [fast, , model] = rows();
+		const [fast, model] = rows();
 		expect(turnSettingWrite({}, model, "o3")).toEqual({ kind: "option", id: "model", value: { value: "o3" } });
 		expect(turnSettingWrite({}, fast, true)).toEqual({ kind: "option", id: "fast", value: { enabled: true } });
 		const approvals = rows().find((row) => row.id === "approvals")!;
 		expect(turnSettingWrite({ model: "gpt" }, approvals, "auto")).toEqual({ kind: "settings", settings: { model: "gpt", approvalMode: "auto" } });
+		// The daemon replaces the whole set: what the phone does not show rides along.
+		expect(turnSettingWrite({ model: "gpt", planMode: true, autoCompactWindow: "1m" }, approvals, "auto")).toEqual({ kind: "settings", settings: { model: "gpt", planMode: true, autoCompactWindow: "1m", approvalMode: "auto" } });
 	});
 });
 
@@ -226,96 +299,95 @@ describe("default labels", () => {
 	const choices = (options: ChatConfigOption[], id: string) =>
 		options.find((option) => option.id === id)?.choices.map((choice) => [choice.value, choice.name]);
 	const claudeChat = snapshot({ harness: "claude-code", settings: {} });
+	// A row's choices as the menus and wheels list them: [value, label].
+	const rowChoices = (chat: ConversationSnapshot, options: ChatConfigOption[], id: string) =>
+		turnSettingsRows(chat, [], options).find((row) => row.id === `option:${id}`)?.choices.map((choice) => [choice.value, choice.label]);
 
 	it("names the model a fresh Claude chat runs on and keeps its wire value", () => {
-		const options = resolveDefaultChoices(claude({ model: "default", effort: "default" }));
-		expect(choices(options, "model")?.slice(0, 3)).toEqual([
+		const options = claude({ model: "default", effort: "default" });
+		expect(rowChoices(claudeChat, options, "model")?.slice(0, 3)).toEqual([
 			["default", "Opus 5.5"],
 			["claude-fable-5-1", "Fable 5.1"],
 			["sonnet", "Sonnet 5.5"],
 		]);
-		expect(choices(options, "model")?.some(([value]) => value === "opus")).toBe(false);
-		expect(choices(options, "effort")?.[0]).toEqual(["default", "Use agent effort"]);
+		expect(rowChoices(claudeChat, options, "model")?.some(([value]) => value === "opus")).toBe(false);
+		// A "default" level names none: the agent's levels alone, as on desktop.
+		expect(rowChoices(claudeChat, options, "effort")?.map(([value]) => value)).toEqual(["low", "medium", "high", "xhigh", "max"]);
 	});
 
 	it("says nothing is Default on a fresh Claude chat, and the summary names only what is known", () => {
-		const options = resolveDefaultChoices(claude({ model: "default", effort: "default" }));
+		const options = claude({ model: "default", effort: "default" });
 		for (const row of turnSettingsRows(claudeChat, [], options)) {
 			expect(row.value).not.toMatch(/\bdefault\b/i);
-			// The one "Default" is the tag on the model the agent runs by itself.
-			for (const choice of row.choices) expect(choice.label.replace(/ · Default$/, "")).not.toMatch(/\bdefault\b/i);
+			for (const choice of row.choices) expect(choice.label).not.toMatch(/\bdefault\b/i);
 		}
 		const model = turnSettingsRows(claudeChat, [], options).find((row) => row.id === "option:model");
-		expect(model?.choices[0]).toMatchObject({ value: "default", label: "Opus 5.5 · Default", selected: true });
+		expect(model?.choices[0]).toMatchObject({ value: "default", label: "Opus 5.5", selected: true });
 		expect(turnSettingsSummary(claudeChat, [], options)).toBe("Opus 5.5 · Auto");
 		expect(turnSettingsModelLabel(claudeChat, [], options)).toBe("Opus 5.5");
 	});
 
-	// The menu never lists a model twice: the agent's own choice stands in for
-	// the model it names, and is ticked while that model runs.
+	// The menu never lists a model twice. Picked explicitly, the model is its own
+	// row, ticked, and the agent's own choice, which names it, goes.
 	it("lists the agent's model once when it is picked explicitly", () => {
-		const options = resolveDefaultChoices(claude());
-		expect(choices(options, "model")?.filter(([, name]) => name === "Opus 5.5")).toEqual([["default", "Opus 5.5"]]);
+		const options = claude();
 		const picked = snapshot({ harness: "claude-code", settings: { model: "opus" } });
+		expect(rowChoices(picked, options, "model")?.filter(([, name]) => name === "Opus 5.5")).toEqual([["opus", "Opus 5.5"]]);
 		const model = turnSettingsRows(picked, [], options).find((row) => row.id === "option:model");
-		expect(model?.choices.filter((choice) => choice.selected).map((choice) => choice.value)).toEqual(["default"]);
-		expect(turnSettingsSummary(claudeChat, [], options)).toBe("Opus 5.5 · Xhigh · Auto");
+		expect(model?.choices.filter((choice) => choice.selected).map((choice) => choice.value)).toEqual(["opus"]);
+		expect(turnSettingsSummary(claudeChat, [], options)).toBe("Opus 5.5 · Extra high · Auto");
 	});
 
 	// Claude Code reports "opus" for a session nobody pointed at Opus when its
-	// own settings name it. Nothing was picked in AO, so the chat follows the
-	// agent's model, and the menu says so (review on #7419).
+	// own settings name it: the menu ticks the model running, by its name.
 	it("ticks the agent's model when nothing was picked, whatever the provider reports", () => {
-		const options = resolveDefaultChoices(claude());
+		const options = claude();
 		const model = turnSettingsRows(claudeChat, [], options).find((row) => row.id === "option:model");
-		expect(model?.choices.filter((choice) => choice.selected).map((choice) => choice.label)).toEqual(["Opus 5.5 · Default"]);
+		expect(model?.choices.filter((choice) => choice.selected).map((choice) => choice.label)).toEqual(["Opus 5.5"]);
 		expect(model?.value).toBe("Opus 5.5");
 		expect(turnSettingsModelLabel(claudeChat, [], options)).toBe("Opus 5.5");
 	});
 
 	// AO hands Claude Code its catalog's full ids on top of the aliases Claude
 	// lists by itself, so the newest Opus arrives twice as "Opus 5.5" (review
-	// on #7419). Both fold into the agent's own choice, which names them.
+	// on #7419). It is one row, whichever runs, ticked while either does.
 	describe("with a model listed by alias and by id", () => {
 		const twice = (current: string): ChatConfigOption[] => claude({ model: current }).map((option) => option.id === "model"
 			? { ...option, choices: [...option.choices, { value: "claude-opus-5-5", name: "Opus 5.5", description: "Best for everyday, complex tasks" }] }
 			: option);
-		const opusRows = (current: string) => choices(resolveDefaultChoices(twice(current)), "model")?.filter(([, name]) => name.includes("Opus 5.5"));
+		const opusRows = (current: string) => turnSettingsRows(snapshot({ harness: "claude-code", settings: { model: current } }), [], twice(current))
+			.find((row) => row.id === "option:model")?.choices.filter((choice) => choice.label === "Opus 5.5");
 
-		it("folds both into the agent's own choice, whichever runs", () => {
-			expect(opusRows("opus")).toEqual([["default", "Opus 5.5"]]);
-			expect(opusRows("claude-opus-5-5")).toEqual([["default", "Opus 5.5"]]);
-			expect(opusRows("default")).toEqual([["default", "Opus 5.5"]]);
-			expect(opusRows("sonnet")).toEqual([["default", "Opus 5.5"]]);
+		it("folds both into one row, whichever runs", () => {
+			for (const current of ["opus", "claude-opus-5-5", "default", "sonnet"]) expect(opusRows(current)).toHaveLength(1);
+			expect(opusRows("claude-opus-5-5")?.[0]).toMatchObject({ value: "claude-opus-5-5", selected: true });
+			expect(opusRows("sonnet")?.[0]).toMatchObject({ value: "default", selected: false });
 		});
 	});
 
 	// Same as desktop: with another model picked, the one Opus row is the
 	// provider's own, so choosing it follows the provider.
 	it("folds the named model into the default choice while another model is picked", () => {
-		const options = resolveDefaultChoices(claude({ model: "sonnet" }));
-		expect(choices(options, "model")?.filter(([, name]) => name === "Opus 5.5")).toEqual([["default", "Opus 5.5"]]);
-		expect(turnSettingsModelLabel(claudeChat, [], options)).toBe("Sonnet 5.5");
+		const options = claude({ model: "sonnet" });
+		const picked = snapshot({ harness: "claude-code", settings: { model: "sonnet" } });
+		expect(rowChoices(picked, options, "model")?.filter(([, name]) => name === "Opus 5.5")).toEqual([["default", "Opus 5.5"]]);
+		expect(turnSettingsModelLabel(picked, [], options)).toBe("Sonnet 5.5");
 	});
 
-	// Another Claude Code build names the newest model by its family and keeps the
-	// version in the description: [value, name, description] rows as quoted in #6013.
-	it("keeps the version visible when the named model goes by its family name", () => {
+	// Another Claude Code build names the newest model by its family: the agent's
+	// own choice takes that name, as on desktop, and lists it once.
+	it("names the agent's own choice by the model it stands for when that goes by its family name", () => {
 		const rows = [
 			["default", "Default (recommended)", "Opus"],
 			["opus", "Opus", "Opus 5.5 · Best for everyday, complex tasks · ~2× usage vs Sonnet"],
 			["sonnet", "Sonnet", "Sonnet 5 · Efficient for routine tasks"],
 			["claude-opus-5", "Opus 5", "Newer version available · select Opus for Opus 5.5"],
 		];
-		const [model] = resolveDefaultChoices([{
+		const options: ChatConfigOption[] = [{
 			id: "model", name: "Model", category: "model", type: "select", currentValue: "default",
 			choices: rows.map(([value, name, description]) => ({ value, name, description })),
-		}]);
-		expect(model.choices.map((choice) => [choice.value, choice.name, choice.description])).toEqual([
-			["default", "Opus", "Opus 5.5 · Best for everyday, complex tasks · ~2× usage vs Sonnet"],
-			rows[2],
-			rows[3],
-		]);
+		}];
+		expect(rowChoices(claudeChat, options, "model")).toEqual([["default", "Opus"], ["sonnet", "Sonnet"], ["claude-opus-5", "Opus 5"]]);
 	});
 
 	it("leaves a named permission mode alone and renames the ones that name nothing, dropping none", () => {
@@ -369,9 +441,9 @@ describe("default labels", () => {
 		expect(resolveDefaultChoices(options)[0]).toBe(mode);
 	});
 
-	it("does not call an agent picker a model", () => {
-		const options = resolveDefaultChoices([{ id: "agent", name: "Agent", type: "select", currentValue: "default", choices: [{ value: "default", name: "Default" }, { value: "review", name: "Review" }] }]);
-		expect(choices(options, "agent")?.[0]).toEqual(["default", "Use agent setting"]);
+	it("leaves out an agent's own agent option, which is no model", () => {
+		const options: ChatConfigOption[] = [...claude(), { id: "agent", name: "Agent", description: "Main-thread agent persona", type: "select", currentValue: "default", choices: [{ value: "default", name: "Default", description: "Standard Claude Code agent" }, { value: "review", name: "Review" }] }];
+		expect(turnSettingsRows(claudeChat, [], options).some((row) => row.id === "option:agent")).toBe(false);
 	});
 
 	it("leaves Fast mode alone, whose Off may be spelled default", () => {
@@ -501,11 +573,15 @@ describe("default labels", () => {
 		expect(nativeModelLabel(undefined, undefined)).toBe(NOT_REPORTED);
 	});
 
-	it("names a native default effort as following the agent", () => {
+	// As on desktop: a native "default" level names none, so it is no choice, and
+	// with none picked the model's own default level is the one shown.
+	it("lists a native model's levels without a default level", () => {
 		const models: ChatModel[] = [{ id: "a", displayName: "Alpha", default: true, efforts: ["default", "high"] }];
 		const effort = turnSettingsRows(snapshot({ capabilities: [], settings: { reasoningEffort: "default" } }), models, []).find((row) => row.id === "effort");
-		expect(effort?.value).toBe("Use agent effort");
-		expect(effort?.choices.map((choice) => choice.label)).toEqual(["Use agent effort", "High"]);
+		expect(effort?.value).toBe(NOT_REPORTED);
+		expect(effort?.choices.map((choice) => choice.label)).toEqual(["High"]);
+		const withDefault: ChatModel[] = [{ ...models[0], defaultEffort: "high" }];
+		expect(turnSettingsRows(snapshot({ capabilities: [], settings: {} }), withDefault, []).find((row) => row.id === "effort")?.value).toBe("High");
 	});
 
 	it("names the model for the actions sheet only when something names one", () => {
@@ -546,8 +622,165 @@ describe("splitModelChoices", () => {
 		expect(labels(older)).toEqual(["Haiku 4.5", "Sonnet 5"]);
 	});
 
+	// The picker's list shows latest and older both: picking an older model
+	// must not move it up the list, or the rows jump under the finger.
+	it("keeps every model in place for a list, whatever is picked", () => {
+		const names = ["Opus 5.5", "Fable 5.1", "Sonnet 5.5", "Haiku 5.5", "Haiku 4.5", "Sonnet 5", "Opus 4.8"];
+		const order = (picked?: string) => { const { latest, older } = splitModelChoices(list(names, picked), false); return labels([...latest, ...older]); };
+		expect(order("Opus 4.8")).toEqual(order("Opus 5.5"));
+		expect(order("Sonnet 5")).toEqual(order());
+	});
+
 	it("leaves a short menu, or one with no older versions, whole", () => {
 		expect(splitModelChoices(list(["Opus 5.5", "Opus 4.8", "Sonnet 5"])).older).toEqual([]);
 		expect(splitModelChoices(list(["a", "b", "c", "d", "e", "f", "g"])).older).toEqual([]);
+	});
+});
+
+// Each agent's catalog as the daemon passes it on (backend chatdriver tests and
+// the bundled ACP agents), read as the desktop reads it.
+describe("each agent's settings", () => {
+	const rowsFor = (harness: string, options: ChatConfigOption[], models: ChatModel[] = [], settings: ConversationSnapshot["settings"] = {}) =>
+		turnSettingsRows(snapshot({ harness, settings, capabilities: options.length ? ["config_options"] : [] }), models, options);
+	const topics = (rows: ReturnType<typeof rowsFor>) => rows.map((row) => [row.label, turnSettingTopic(row)]);
+
+	it("Codex: AO's own model, effort and Fast mode, with no options of the agent's", () => {
+		const models: ChatModel[] = [
+			{ id: "gpt-6.2-sol", displayName: "GPT-6.2-Sol", default: true, efforts: ["low", "medium", "high"], defaultEffort: "medium", supportsFast: true },
+			{ id: "gpt-6.2-astra", displayName: "GPT-6.2-Astra", default: false, efforts: ["low", "high"] },
+		];
+		const rows = rowsFor("codex", [], models);
+		expect(topics(rows)).toEqual([["Fast mode", "fast"], ["Model", "model"], ["Effort", "effort"], ["Approvals", "permissions"]]);
+		expect(rows.find((row) => row.id === "effort")?.value).toBe("Medium");
+	});
+
+	it("Claude Code: the model by version, levels without Default, Fast as an on/off, and no agent persona row", () => {
+		const options: ChatConfigOption[] = [
+			{ id: "model", name: "Model", category: "model", type: "select", currentValue: "default", choices: [
+				{ value: "default", name: "Default (recommended)", description: "Opus 5.5" },
+				{ value: "opus", name: "Opus 5.5", description: "For complex work" },
+				{ value: "haiku", name: "Haiku 4.5" },
+			] },
+			{ id: "effort", name: "Effort", category: "thought_level", type: "select", currentValue: "default", choices: [{ value: "default", name: "Default" }, { value: "high", name: "High" }, { value: "xhigh", name: "Xhigh" }] },
+			{ id: "fast", name: "Fast mode", category: "model_config", type: "select", currentValue: "off", choices: [{ value: "on", name: "On" }, { value: "off", name: "Off" }] },
+			{ id: "agent", name: "Agent", description: "Main-thread agent persona", type: "select", currentValue: "default", choices: [{ value: "default", name: "Default" }, { value: "reviewer", name: "reviewer" }] },
+			{ id: "mode", name: "Mode", category: "mode", type: "select", currentValue: "default", choices: [{ value: "default", name: "Manual", permissionMode: "default" }, { value: "plan", name: "Plan Mode" }, { value: "bypassPermissions", name: "Bypass Permissions", permissionMode: "bypass-permissions" }] },
+		];
+		const rows = rowsFor("claude-code", options);
+		expect(topics(rows)).toEqual([["Fast mode", "fast"], ["Model", "model"], ["Effort", "effort"], ["Mode", "permissions"]]);
+		expect(rows.find((row) => row.id === "option:model")?.choices.map((choice) => choice.label)).toEqual(["Opus 5.5", "Haiku 4.5"]);
+		expect(rows.find((row) => row.id === "option:effort")?.choices.map((choice) => choice.label)).toEqual(["High", "Extra high"]);
+	});
+
+	it("Pi: provider-prefixed models under their provider, and its Thinking levels as the effort", () => {
+		const options: ChatConfigOption[] = [
+			{ id: "model", name: "Model", category: "model", type: "select", currentValue: "anthropic/claude-sonnet-4", choices: [
+				{ value: "anthropic/claude-sonnet-4", name: "anthropic/claude-sonnet-4" },
+				{ value: "openai/gpt-5.3-codex", name: "openai/gpt-5.3-codex" },
+			] },
+			{ id: "thought_level", name: "Thinking", category: "thought_level", type: "select", currentValue: "low", choices: [{ value: "minimal", name: "minimal" }, { value: "low", name: "low" }, { value: "high", name: "high" }] },
+		];
+		const rows = rowsFor("pi", options);
+		expect(topics(rows)).toEqual([["Model", "model"], ["Thinking", "effort"], ["Approvals", "permissions"]]);
+		expect(rows.find((row) => row.id === "option:model")?.choices.map((choice) => choice.label)).toEqual(["Claude Sonnet 4", "GPT-5.3 Codex"]);
+	});
+
+	it("OpenCode: provider routes stay apart, and build/plan beside AO's own permission choices stay one permission row", () => {
+		const options: ChatConfigOption[] = [
+			{ id: "model", name: "Model", category: "model", type: "select", currentValue: "opencode/grok-code", choices: [
+				{ value: "opencode/grok-code", name: "Grok Code" },
+				{ value: "opencode-go/grok-code", name: "Grok Code" },
+			] },
+			{ id: "effort", name: "Effort", category: "thought_level", type: "select", currentValue: "default", choices: [{ value: "default", name: "Default" }] },
+			{ id: "mode", name: "Mode", category: "mode", type: "select", currentValue: "ao-default", choices: [
+				{ value: "build", name: "build" },
+				{ value: "plan", name: "plan" },
+				{ value: "ao-default", name: "Use agent permissions", permissionMode: "default" },
+				{ value: "ao-bypass", name: "Bypass permissions", permissionMode: "bypass-permissions" },
+			] },
+		];
+		const rows = rowsFor("opencode", options);
+		// A Default-only effort names no level: no effort row.
+		expect(topics(rows)).toEqual([["Model", "model"], ["Mode", "permissions"]]);
+		expect(rows.find((row) => row.id === "option:model")?.choices).toHaveLength(2);
+	});
+
+	it("OpenCode v2: a mode option of only build and plan is a setting, and AO's Approvals row stays", () => {
+		const options: ChatConfigOption[] = [
+			{ id: "mode", name: "Session Mode", category: "mode", type: "select", currentValue: "build", choices: [{ value: "build", name: "Build" }, { value: "plan", name: "Plan" }] },
+		];
+		expect(topics(rowsFor("opencode-v2", options))).toEqual([["Approvals", "permissions"], ["Session Mode", "setting"]]);
+	});
+
+	it("Cursor: thinking and fast as on/offs, Fast told apart for the effort slider", () => {
+		const options: ChatConfigOption[] = [
+			{ id: "model", name: "Model", category: "model", type: "select", currentValue: "claude-opus-4-8", choices: [{ value: "claude-opus-4-8", name: "Claude Opus 4.8" }, { value: "gpt-6", name: "GPT-6" }] },
+			{ id: "effort", name: "Effort", category: "thought_level", type: "select", currentValue: "high", choices: [{ value: "low", name: "Low" }, { value: "high", name: "High" }] },
+			{ id: "thinking", name: "Thinking", type: "select", currentValue: "false", choices: [{ value: "true", name: "On" }, { value: "false", name: "Off" }] },
+			{ id: "fast", name: "Fast", type: "select", currentValue: "true", choices: [{ value: "true", name: "On" }, { value: "false", name: "Off" }] },
+		];
+		const rows = rowsFor("cursor", options);
+		expect(topics(rows)).toEqual([["Fast", "fast"], ["Model", "model"], ["Effort", "effort"], ["Approvals", "permissions"], ["Thinking", "setting"]]);
+		expect(rows.find((row) => row.id === "option:fast")).toMatchObject({ kind: "boolean", enabled: true });
+	});
+
+	// The bolt shows when, and only when, the agent has Fast mode: a boolean, an
+	// On/Off or true/false select, or a native model that supports it. A select
+	// that only mentions "fast" is a setting like any other.
+	it("finds Fast mode only where the agent has it", () => {
+		const fastModel: ChatConfigOption = { id: "fast_model", name: "Fast model", type: "select", currentValue: "haiku", choices: [{ value: "haiku", name: "Haiku 4.5" }, { value: "sonnet", name: "Sonnet 5.5" }] };
+		const rows = rowsFor("droid", [fastModel]);
+		expect(rows.some((row) => turnSettingTopic(row) === "fast")).toBe(false);
+		expect(rows.find((row) => row.id === "option:fast_model")).toMatchObject({ kind: "select" });
+		const onOff: ChatConfigOption = { id: "fast", name: "Fast mode", type: "select", currentValue: "default", choices: [{ value: "on", name: "On" }, { value: "default", name: "Default" }] };
+		expect(rowsFor("claude-code", [onOff]).filter((row) => turnSettingTopic(row) === "fast")).toHaveLength(1);
+		const native: ChatModel[] = [{ id: "a", displayName: "A", default: true, supportsFast: false }, { id: "b", displayName: "B", default: false, supportsFast: true }];
+		expect(rowsFor("codex", [], native).some((row) => turnSettingTopic(row) === "fast")).toBe(false);
+		expect(rowsFor("codex", [], native, { model: "b" }).some((row) => turnSettingTopic(row) === "fast")).toBe(true);
+		// Claude drops the option for a model without Fast mode: no bolt.
+		expect(rowsFor("claude-code", [{ id: "model", name: "Model", category: "model", type: "select", currentValue: "haiku", choices: [{ value: "haiku", name: "Haiku 4.5" }] }]).some((row) => turnSettingTopic(row) === "fast")).toBe(false);
+	});
+
+	it("Antigravity: the effort drawn out of its model ids, each model listed once", () => {
+		const options: ChatConfigOption[] = [
+			{ id: "model", name: "Model", category: "model", type: "select", currentValue: "gemini-3.8-flash-high", choices: [
+				{ value: "gemini-3.8-flash-low", name: "Gemini 3.8 Flash (Low)" },
+				{ value: "gemini-3.8-flash-high", name: "Gemini 3.8 Flash (High)" },
+				{ value: "gemini-3.8-pro-high", name: "Gemini 3.8 Pro (High)" },
+			] },
+		];
+		const rows = rowsFor("agy", options);
+		expect(rows.find((row) => row.id === "option:model")?.choices.map((choice) => choice.label)).toEqual(["Gemini 3.8 Flash", "Gemini 3.8 Pro"]);
+		expect(rows.find((row) => turnSettingTopic(row) === "effort")?.choices.map((choice) => choice.label)).toEqual(["Low", "High"]);
+	});
+});
+
+// The permission picker lists the modes AO can name: no Plan Mode (an execution
+// mode) and no Don't Ask (no AO permission mode), unless the chat is in one.
+describe("the permission picker's modes", () => {
+	const claudeModes = (currentValue: string): ChatConfigOption[] => [{
+		id: "mode", name: "Mode", category: "mode", type: "select", currentValue, choices: [
+			{ value: "auto", name: "Auto", permissionMode: "auto" },
+			{ value: "default", name: "Manual", permissionMode: "default" },
+			{ value: "acceptEdits", name: "Accept Edits", permissionMode: "accept-edits" },
+			{ value: "plan", name: "Plan Mode" },
+			{ value: "dontAsk", name: "Don't Ask" },
+			{ value: "bypassPermissions", name: "Bypass Permissions", permissionMode: "bypass-permissions" },
+		],
+	}];
+	const modes = (options: ChatConfigOption[], harness = "claude-code") =>
+		turnSettingsRows(snapshot({ harness }), [], options).find((row) => turnSettingTopic(row) === "permissions")?.choices.map((choice) => choice.value);
+
+	it("leaves out Plan Mode and Don't Ask", () => {
+		expect(modes(claudeModes("auto"))).toEqual(["auto", "default", "acceptEdits", "bypassPermissions"]);
+	});
+
+	it("keeps the mode the chat is in, so one is always selected", () => {
+		expect(modes(claudeModes("plan"))).toEqual(["auto", "default", "acceptEdits", "plan", "bypassPermissions"]);
+	});
+
+	it("keeps an agent's own modes when it maps none, less the execution modes", () => {
+		const qwen: ChatConfigOption[] = [{ id: "mode", name: "Mode", category: "mode", type: "select", currentValue: "default", choices: [{ value: "default", name: "Default" }, { value: "plan", name: "Plan" }, { value: "yolo", name: "YOLO" }] }];
+		expect(modes(qwen, "qwen")).toEqual(["default", "yolo"]);
 	});
 });

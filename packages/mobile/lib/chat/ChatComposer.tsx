@@ -3,10 +3,17 @@ import type { ServerConfig } from "../config";
 import * as DocumentPicker from "expo-document-picker";
 import * as ImagePicker from "expo-image-picker";
 import { useCallback, useEffect, useMemo, useRef, useState, type ComponentProps, type ReactNode } from "react";
-import { ActivityIndicator, Keyboard, Platform, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from "react-native";
+import { switchOffersFast } from "../agentSwitch";
+import { ActivityIndicator, Keyboard, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from "react-native";
 import Svg, { Defs, LinearGradient, Rect, Stop } from "react-native-svg";
 import Animated, { FadeIn, FadeOut, interpolate, measure, useAnimatedReaction, useAnimatedRef, useAnimatedStyle, useFrameCallback, useSharedValue, withSpring, withTiming, type SharedValue } from "react-native-reanimated";
 import { useReanimatedFocusedInput, useReanimatedKeyboardAnimation } from "react-native-keyboard-controller";
+import { useComposerDockRise } from "./composerDock";
+import { rememberChatSettings } from "./chatSettingsTemplate";
+import { useHeldModel } from "./useHeldModel";
+import { useKeysWithPickers } from "../useKeysWithPickers";
+import { fastPendingKey, rememberFastModel, usePendingFast } from "./learnedFast";
+import { turnSettingsParts } from "./turnSettingsModel";
 import { KeyboardMotionScope, useKeyboardMotion } from "./keyboardMotion";
 import { AppSymbol } from "../AppSymbol";
 import { rowDividerWidth } from "../divider";
@@ -14,11 +21,9 @@ import { haptics } from "../haptics";
 import { usePressFeedback } from "../pressFeedback";
 import type { Theme } from "../theme";
 import { useTheme, useThemedStyles } from "../ThemeProvider";
-import { textSelectionColors } from "../textSelection";
 import { fontScaleCap, iconSize, radius, space, stateOpacity, touchTarget, type } from "../tokens";
 import { Button } from "../ui";
 import { useReducedMotion } from "../useReducedMotion";
-import { KEYBOARD_DOCK_GAP } from "../session/keyboardInset";
 import { DictationField } from "../voice/DictationField";
 import { useVoiceInput } from "../voice/useVoiceInput";
 import { activeTurn, type ChatConfigOption, type ChatExcerpt, type ChatImage, type ChatModel, type ChatResource, type ChatSkill, type ConversationSnapshot, type TurnSettings } from "./types";
@@ -36,9 +41,14 @@ import { ComposerGlass, composerGlassSupported } from "./composer-glass";
 import { COMPOSER_DISC, COMPOSER_FIELD_HEIGHT, COMPOSER_FONT_SCALE_CAP, COMPOSER_HEIGHT, COMPOSER_RADIUS, composerStyleRules, useComposerFieldSize } from "./composerStyles";
 import { ChatTurnSettingsControl } from "./ChatTurnSettingsControl";
 import type { ChatTurnSettingsControlProps } from "./ChatTurnSettingsControl.types";
+import { ComposerField } from "../composer-field";
 import { EffortSliderHost } from "../effort-slider-host";
+import { effortGaugeToggles } from "../effort-gauge";
+import { ModelWheelHost } from "../model-wheel";
 import { PermissionPickerHost } from "../permission-picker";
 import { useChatEffort } from "./useChatEffort";
+import { isSentDraft, ULTRACODE_HARNESS, ultracodeKey, withUltracode } from "./ultracode";
+import { useChatModelWheel } from "./useChatModelWheel";
 import { useChatPermissions } from "./useChatPermissions";
 import { compactCount } from "../files/model";
 import { composerDeliveryPresentation, composerDeliveryRoute, composerPrimaryAction, hardwareReturnIntent, type ComposerDeliveryIntent } from "./composerDeliveryModel";
@@ -52,7 +62,7 @@ import { queuedConversationMessages } from "./timelineModel";
 import { userFacingError } from "../connectionError";
 import type { DashboardPR, SessionPRSummary } from "../api";
 import { PRChipContent, prChipAccessibilityLabel } from "./PRChip";
-import { decodeResponseDraft, encodeResponseDraft, responseReplyText, responseExcerpts, excerptDraftText, isChatExcerpt, type ResponseQuote, type ResponseQuoteRequest } from "./responseQuotes";
+import { decodeResponseDraft, encodeResponseDraft, responseReplyText, responseExcerpts, isChatExcerpt, type ResponseQuote, type ResponseQuoteRequest } from "./responseQuotes";
 import { afterDraftWrites } from "./pendingSend";
 import { composerTrayItems, forgetComposerAttachments, readComposerAttachments, removeComposerAttachment, updateComposerAttachments, useComposerAttachments, type ComposerAttachment as Attachment } from "./composerAttachments";
 import { attachComposerImages, MAX_ATTACHMENTS } from "./composerImages";
@@ -154,6 +164,7 @@ function Composer({
 	startingAgentName,
 	fileUploads,
 	attachmentsUnavailable,
+	cloud = false,
 }: {
 	quoteRequest?: ResponseQuoteRequest;
 	onQuoteHandled?(id: string): void;
@@ -183,10 +194,11 @@ function Composer({
 	pending?: boolean;
 	interrupting?: boolean;
 	disabled?: boolean;
-	onSend(text: string, attachments?: ChatImage[], resources?: ChatResource[], excerpts?: ChatExcerpt[]): Promise<string>;
+	/** `typed` is the draft as typed, where `text` adds Ultracode's prefix to it. */
+	onSend(text: string, attachments?: ChatImage[], resources?: ChatResource[], excerpts?: ChatExcerpt[], typed?: string): Promise<string>;
 	onAcknowledgeSend(id: string): Promise<void>;
 	completedRetry?: { id: string; draftText: string };
-	onSteer(text: string): Promise<string>;
+	onSteer(text: string, typed?: string): Promise<string>;
 	/** Steers with a queued message. Left out where the host can't, which hides the action. */
 	onPromoteQueuedTurn?(turnId: string): Promise<void>;
 	/** Deletes a queued message. Left out where the host can't, which hides the action. */
@@ -236,6 +248,8 @@ function Composer({
 	fileUploads?: { maxBytes: number };
 	/** Nothing can be attached here (an organization whose plan takes no files): attach stays in place, dimmed. */
 	attachmentsUnavailable?: boolean;
+	/** An Orchestrator Cloud chat, which has no Ultracode, as on desktop. */
+	cloud?: boolean;
 }) {
 	const t = useTheme();
 	const styles = useThemedStyles(makeStyles);
@@ -247,15 +261,8 @@ function Composer({
 	// keyboard is animating with, so the dock moves in lockstep with it.
 	const keyboard = useReanimatedKeyboardAnimation();
 	const reviewPromptAvailable = Boolean(reviewPR && onOpenReview);
-	// The dock gives back its resting inset as the keyboard goes. Android's
-	// keyboard height spans the navigation bar, so there it gives the inset back
-	// over that hidden last stretch alone and rests as soon as the keys are gone.
-	const dockRise = useAnimatedStyle(() => {
-		const inset = restingInset - KEYBOARD_DOCK_GAP;
-		if (dockRiseOverride !== undefined) return { transform: [{ translateY: inset * dockRiseOverride }] };
-		if (Platform.OS === "android") return { transform: [{ translateY: Math.min(-keyboard.height.value, inset) }] };
-		return { transform: [{ translateY: inset * keyboard.progress.value }] };
-	});
+	// Every docked composer rides the keyboard the same way (see composerDock).
+	const dockRise = useComposerDockRise(restingInset, dockRiseOverride);
 	const [text, setText] = useState("");
 	const [quotes, setQuotes] = useState<ResponseQuote[]>([]);
 	const inputRef = useRef<TextInput>(null);
@@ -406,7 +413,7 @@ function Composer({
 		if (draftTimer.current) clearTimeout(draftTimer.current);
 		const current = latestText.current;
 		const currentQuotes = latestQuotes.current;
-		const matches = currentQuotes.length <= 8 && currentQuotes.every((quote) => isChatExcerpt({ ...quote.source, text: quote.text })) && excerptDraftText(responseReplyText(current, currentQuotes), responseExcerpts(currentQuotes)) === completedRetry.draftText;
+		const matches = currentQuotes.length <= 8 && currentQuotes.every((quote) => isChatExcerpt({ ...quote.source, text: quote.text })) && isSentDraft(completedRetry.draftText, responseReplyText(current, currentQuotes), responseExcerpts(currentQuotes));
 		if (matches) {
 			latestText.current = "";
 			setText("");
@@ -426,6 +433,14 @@ function Composer({
 	// Whether a send can start now. Hardware Return is taken only then; otherwise it
 	// stays the field's and inserts a newline, rather than being caught and dropped.
 	const canSubmit = !submitting && !pending && !disabled && !(draftKey && !draftLoaded);
+	// Claude Code's Ultracode, switched on over the effort slider: each message asks for it.
+	const ultracodeOn = useRef<() => boolean>(() => false);
+	// Sets the conversation's Ultracode once a switch lands.
+	const keepUltracode = useRef<(on: boolean) => void>(() => {});
+	// The agent a message goes to: the one running, or a switch picked to run
+	// with it, and whether that switch asks for Ultracode.
+	const receiving = useRef({ harness: snapshot.harness, switchTo: otherAgents?.pending?.harness, switchUltracode: Boolean(otherAgents?.pending?.ultracode) });
+	receiving.current = { harness: snapshot.harness, switchTo: otherAgents?.pending?.harness, switchUltracode: Boolean(otherAgents?.pending?.ultracode) };
 	const submit = useCallback(async (intent: ComposerDeliveryIntent = "send", from: "button" | "keyboard" = "button") => {
 		if (!canSubmit) return;
 		const trimmed = responseReplyText(text, quotes);
@@ -454,9 +469,26 @@ function Composer({
 			const images = attachments.filter((item): item is Extract<Attachment, { kind: "image" }> => item.kind === "image").map((item) => item.image);
 			const resources = attachments.filter((item): item is Extract<Attachment, { kind: "resource" }> => item.kind === "resource").map((item) => item.resource);
 			const route = composerDeliveryRoute(intent, steerEligible);
+			// With Ultracode's prefix added, the draft as typed goes too: a retry's
+			// completion matches the composer against it, exactly.
+			// Ultracode is Claude Code's. A send that switches the chat goes to the
+			// agent picked, and asks for Ultracode as picked for that switch
+			// (desktop's pendingSwitch.ultracode): a switch to another agent never
+			// gets a prefix nobody typed. A steer stays with the agent running now.
+			const { harness: running, switchTo, switchUltracode } = receiving.current;
+			const switching = route === "steer" ? undefined : switchTo;
+			const asksUltracode = switching
+				? switching === ULTRACODE_HARNESS && switchUltracode && !cloud
+				: running === ULTRACODE_HARNESS && ultracodeOn.current();
+			const sentText = asksUltracode ? withUltracode(trimmed) : trimmed;
+			const typed: [] | [string] = sentText === trimmed ? [] : [trimmed];
 			const id = route === "steer"
-				? await onSteer(trimmed)
-				: await onSend(trimmed, images.length ? images : undefined, resources.length ? resources : undefined, excerpts.length ? excerpts : undefined);
+				? await onSteer(sentText, ...typed)
+				: await onSend(sentText, images.length ? images : undefined, resources.length ? resources : undefined, excerpts.length ? excerpts : undefined, ...typed);
+			// The switch landed: Ultracode stays as picked for it for the messages
+			// after it, off for any agent but Claude Code, as desktop's switched()
+			// leaves it.
+			if (switching) keepUltracode.current(asksUltracode);
 			if (draftKey) {
 				const current = latestText.current;
 				const currentQuotes = latestQuotes.current;
@@ -476,7 +508,7 @@ function Composer({
 			setLocalError(userFacingError(cause));
 			haptics.error();
 		} finally { setSubmitting(false); }
-	}, [text, quotes, attachments, steerEligible, onSteer, onSend, onAcknowledgeSend, draftKey, canSubmit, keyboardSend.begin, attachmentKey, dismissAttachmentNotice]);
+	}, [text, quotes, attachments, steerEligible, onSteer, onSend, onAcknowledgeSend, draftKey, canSubmit, keyboardSend.begin, attachmentKey, dismissAttachmentNotice, cloud]);
 
 	// Pasting is a way to attach too, so it follows the same gate as the menu.
 	const pasteLayout = useImagePaste(stopped || submitting || attachmentsUnavailable ? null : (assets, overflow) => {
@@ -609,9 +641,55 @@ function Composer({
 		setText(next);
 		setCursor(caret);
 	}, []);
-	const settingsProps = { snapshot, models, options: configOptions ?? NO_OPTIONS, disabled: disabled || stopped || pending || submitting, onSettings, onOption: onConfigOption };
-	const effort = useChatEffort(settingsProps);
+	// A model picked here shows at once, ahead of the agent reporting it (useHeldModel).
+	const heldModel = useHeldModel(snapshot, configOptions ?? NO_OPTIONS, onSettings, onConfigOption);
+	const settingsProps = { snapshot: heldModel.snapshot, models, options: heldModel.options, disabled: disabled || stopped || pending || submitting, onSettings: heldModel.onSettings, onOption: heldModel.onOption };
+	// Ultracode has no field on the daemon: it is kept per conversation here.
+	const effort = useChatEffort({ ...settingsProps, ultracodeKey: machine ? ultracodeKey(machine, sessionId) : null, cloud });
+	// Claude's Fast, learned for New task: the model this chat runs offers it,
+	// so New task offers the bolt for it; and a task started there with Fast on
+	// has it turned on here, once Claude reports it (see learnedFast).
+	const fastModelLabel = useMemo(() => (effort.fast ? turnSettingsParts(snapshot, models, configOptions ?? NO_OPTIONS).model : ""), [effort.fast, snapshot, models, configOptions]);
+	useEffect(() => {
+		if (machine && !cloud && fastModelLabel) void rememberFastModel(machine, snapshot.harness, fastModelLabel);
+	}, [machine, cloud, fastModelLabel, snapshot.harness]);
+	usePendingFast(machine && !cloud ? fastPendingKey(machine, sessionId) : null, effort.fast, Boolean(configOptions?.length));
+	// The agent's settings as it reports them, kept for New task's pickers (chatSettingsTemplate).
+	useEffect(() => {
+		if (machine && !cloud && configOptions?.length) void rememberChatSettings(machine, snapshot.harness, configOptions);
+	}, [machine, cloud, configOptions, snapshot.harness]);
+	// Read as the message goes.
+	ultracodeOn.current = effort.sendsUltracode;
+	keepUltracode.current = effort.keepUltracode;
 	const permissions = useChatPermissions(settingsProps);
+	// Fast mode and Ultracode over the slider are the running agent's. With a
+	// switch to another agent picked, the next message goes to that one, so
+	// they are the switch's own, sent with it as desktop's pending switch has
+	// them, and never the running agent's: its Fast mode where its model has
+	// one, its Ultracode where it goes to Claude Code on a machine of the
+	// user's own.
+	const pendingPick = otherAgents?.pending;
+	const switchFast = useMemo(() => {
+		if (!pendingPick || !otherAgents || !switchOffersFast(pendingPick, otherAgents.fast)) return undefined;
+		const pick = otherAgents.onPick;
+		return { on: Boolean(pendingPick.fastMode), toggle: () => pick({ ...pendingPick, fastMode: !pendingPick.fastMode || undefined }) };
+	}, [pendingPick, otherAgents]);
+	const switchUltracode = useMemo(() => {
+		if (!pendingPick || !otherAgents || pendingPick.harness !== ULTRACODE_HARNESS || cloud) return undefined;
+		const pick = otherAgents.onPick;
+		return { on: Boolean(pendingPick.ultracode), toggle: () => pick({ ...pendingPick, ultracode: !pendingPick.ultracode || undefined }) };
+	}, [pendingPick, otherAgents, cloud]);
+	const effortFast = pendingPick ? switchFast : effort.fast;
+	const effortUltracode = pendingPick ? switchUltracode : effort.ultracode;
+	// The gauge shows the switches that are on, and opens the slider for them
+	// even on a model with no levels.
+	const effortToggles = effortGaugeToggles(effortFast, effortUltracode);
+	// Fast mode is the effort slider's bolt wherever it is offered (the gauge
+	// shows for it with no levels too), so the wheels leave it out.
+	const modelWheel = useChatModelWheel({ ...settingsProps, otherAgents, fastOnEffort: Boolean(effortFast) });
+	// A picker opened with the keyboard down brings it up with it (useKeysWithPickers).
+	useKeysWithPickers(inputRef, [effort.slider, permissions.slider, modelWheel.slider]);
+	const overlays = useMemo(() => [effort.slider, permissions.slider, modelWheel.slider], [effort.slider, permissions.slider, modelWheel.slider]);
 	// Typing is a tap outside the slider and the picker that the keyboard, not
 	// the app, hears.
 	const closeEffort = effort.close;
@@ -869,16 +947,7 @@ function Composer({
 			/> : null}
 			{/* The field spans the pill between its two controls, so a touch on the
 			    pill focuses it and the pill opens. */}
-			{/* The pill's height goes to the effort slider and the permission picker
-			    floating over it, through their switches, so a change re-renders
-			    them, not the composer. A
-			    percentage `bottom` resolves against the pill's content box, which
-			    leaves out its padding, and sat the slider that far down over the
-			    pill's top edge. */}
-			{requestCard ?? <View style={[styles.composer, stopped && styles.inactive]} onLayout={(event) => {
-				effort.slider.setBottom(event.nativeEvent.layout.height);
-				permissions.slider.setBottom(event.nativeEvent.layout.height);
-			}}>
+			{requestCard ?? <View style={[styles.composer, stopped && styles.inactive]}>
 				<ComposerGlass radius={COMPOSER_RADIUS} />
 				{quotes.length ? <ScrollView style={styles.quotes} keyboardShouldPersistTaps="handled">
 					{quotes.map((quote) => <View key={quote.id} style={styles.quote}>
@@ -904,8 +973,10 @@ function Composer({
 					{/* Return on a hardware keyboard (iPad); the wrapper holds the field's
 					    place in the row, so it hides with the field while dictating. */}
 					<HardwareReturn style={[styles.inputSlot, dictating && styles.hiddenField]} enabled={!sendBlocked} onReturn={(modifiers) => { void submit(hardwareReturnIntent(modifiers), "keyboard"); }}>
-						<TextInput
+						<ComposerField
 							ref={inputRef}
+							// Its caret and handles step aside for the slider and the picker.
+							overlays={overlays}
 							onLayout={pasteLayout}
 							accessibilityLabel="Message the agent"
 							editable={!stopped && !submitting}
@@ -917,7 +988,6 @@ function Composer({
 							placeholder={placeholder}
 							placeholderTextColor={t.textFaint}
 							maxFontSizeMultiplier={COMPOSER_FONT_SCALE_CAP}
-							{...textSelectionColors(t)}
 							// No height of its own: a multiline field grows with its text
 							// between the rule's min and max and then scrolls. Setting the
 							// height from the content-size event lagged a line behind, so
@@ -932,7 +1002,9 @@ function Composer({
 				    drawn when the row opens rather than appearing partway through. */}
 				<Animated.View pointerEvents={expanded ? "box-none" : "none"} style={[styles.controlsRow, { paddingLeft: CORNER_CONTROL, paddingRight: CORNER_CONTROL }, controlsOpening]}>
 					<View style={styles.settingsSlot}>
-						<ChatTurnSettingsControl {...settingsProps} otherAgents={otherAgents} effort={{ choices: effort.choices, slider: effort.slider }} permissions={{ choices: permissions.choices, slider: permissions.slider }} />
+						{/* With no agent or model to roll, the wheels have nothing to show:
+						    the capsule keeps its menu, so the provider's settings stay reachable. */}
+						<ChatTurnSettingsControl {...settingsProps} otherAgents={otherAgents} effort={{ choices: effort.choices, slider: effort.slider, toggles: effortToggles }} permissions={{ choices: permissions.choices, slider: permissions.slider }} modelWheel={modelWheel.agents.length ? { slider: modelWheel.slider } : undefined} />
 					</View>
 					{steerAction}
 				</Animated.View>
@@ -943,10 +1015,27 @@ function Composer({
 				<View style={[styles.corner, styles.cornerTrailing]}>
 					{roundButton}
 				</View>
-				{/* The effort slider floats just above the pill, over the conversation. */}
-				<EffortSliderHost slider={effort.slider} choices={effort.choices} busy={effort.busy} onChoose={effort.choose} onRelease={effort.commit} onClose={effort.commit} />
-				<PermissionPickerHost slider={permissions.slider} choices={permissions.choices} busy={permissions.busy} onChoose={permissions.choose} />
 			</View>}
+			{/* The effort slider and the permission picker open over the
+			    keyboard, in a window of their own, as ChatGPT's do (see
+			    ComposerOverlay's overKeyboard). */}
+			{requestCard ? null : <>
+				<EffortSliderHost slider={effort.slider} choices={effort.choices} busy={effort.busy} onChoose={effort.choose} onRelease={effort.commit} onClose={effort.commit} fast={effortFast} ultracode={effortUltracode} overKeyboard />
+				<PermissionPickerHost slider={permissions.slider} choices={permissions.choices} busy={permissions.busy} onChoose={permissions.choose} />
+				<ModelWheelHost
+					slider={modelWheel.slider}
+					busy={modelWheel.busy}
+					agents={modelWheel.agents}
+					chosenAgent={modelWheel.chosenAgent}
+					chosenModel={modelWheel.chosenModel}
+					runningAgent={modelWheel.runningAgent}
+					runningModel={modelWheel.runningModel}
+					settings={modelWheel.settings}
+					agentsLocked={modelWheel.agentsLocked}
+					choose={modelWheel.choose}
+					toggleSetting={modelWheel.toggleSetting}
+				/>
+			</>}
 		</Animated.View>
 	);
 }

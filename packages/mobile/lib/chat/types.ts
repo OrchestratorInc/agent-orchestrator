@@ -24,7 +24,20 @@ export type ActivityKind =
 	| "ao_action";
 
 export type ApprovalMode = "default" | "accept-edits" | "auto" | "bypass-permissions";
-export type TurnSettings = { model?: string; reasoningEffort?: string; approvalMode?: ApprovalMode };
+export type TurnSettings = {
+	model?: string;
+	reasoningEffort?: string;
+	approvalMode?: ApprovalMode;
+	/** The agent runs the model in its fast mode, where the model offers one (`ChatModel.supportsFast`). */
+	fastMode?: boolean;
+	/**
+	 * Settings the phone does not show but must carry: the daemon replaces the
+	 * whole set on each save, so leaving them out of a save turned desktop's
+	 * Plan mode off and reset its auto-compact window.
+	 */
+	planMode?: boolean;
+	autoCompactWindow?: string;
+};
 
 export type PlanStep = { text: string; status: "pending" | "in_progress" | "completed" };
 export type ConversationPlan = {
@@ -315,6 +328,8 @@ export type ChatModel = {
 	default: boolean;
 	efforts?: string[];
 	defaultEffort?: string;
+	/** The model has a fast mode the chat can turn on (`TurnSettings.fastMode`). */
+	supportsFast?: boolean;
 };
 export type ChatConfigChoice = {
 	value: string;

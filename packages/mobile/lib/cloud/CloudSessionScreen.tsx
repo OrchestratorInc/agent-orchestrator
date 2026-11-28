@@ -12,8 +12,7 @@ import { useFlag } from "../chat/flag";
 import { chatSheetRoute } from "../chat/chatSheetRegistry";
 import type { ConversationMenuAction, ConversationMenuGroup } from "../chat/conversationMenuModel";
 import { ConversationTitle } from "../chat/ConversationTitle";
-import { KeyboardFollower } from "../chat/KeyboardFollower";
-import { KeyboardMotionScope } from "../chat/keyboardMotion";
+import { FloatingComposerLayout } from "../chat/FloatingComposerLayout";
 import { MessageFileSourceContext } from "../chat/messageFiles";
 import { requestDockModel } from "../chat/requestDockModel";
 import { SessionStartupStatus } from "../chat/SessionStartup";
@@ -633,10 +632,13 @@ export function CloudSessionScreen({ sessionId }: { sessionId: string }) {
 	// One keyboard handler for the composer, its follower and the conversation
 	// (see KeyboardMotionScope).
 	return (
-		<KeyboardMotionScope>
-		<View style={styles.screen}>
-			{/* Not padded for the keyboard: the timeline makes its own room, as a local chat's does. */}
-			<View style={[styles.screen, chatKeyboard.floatingRootStyle]}>
+		// Not padded for the keyboard: the timeline makes its own room, and the
+		// composer floats and rides the keys, as a local chat's do (FloatingComposerLayout).
+		<FloatingComposerLayout
+			keyboard={chatKeyboard}
+			style={styles.screen}
+			onComposerLayout={measureComposer}
+			content={<>
 				{headerItems}
 				{CLEAR_HEADER ? null : banners}
 				<View style={styles.conversation}>
@@ -674,9 +676,8 @@ export function CloudSessionScreen({ sessionId }: { sessionId: string }) {
 						</View>
 					) : null}
 				</View>
-			</View>
-			{/* The composer floats over the conversation and rides the keyboard, as a local chat's does. */}
-			<KeyboardFollower lift={chatKeyboard.composerLift} style={styles.floatingComposer} onLayout={measureComposer}>
+			</>}
+			composer={
 				<ChatComposer
 					key={session.id}
 					onExpandedChange={composerOpen.set}
@@ -684,6 +685,8 @@ export function CloudSessionScreen({ sessionId }: { sessionId: string }) {
 					// Keys the unsent draft and attachments, as a machine's does, so a
 					// cloud chat keeps what was typed across leaving it.
 					machine={CLOUD_HOST_ID}
+					// Desktop offers Ultracode on a machine's own chats only.
+					cloud
 					config={null}
 					snapshot={snapshot}
 					// The starting session's brief reads as sent in the timeline; told
@@ -726,10 +729,9 @@ export function CloudSessionScreen({ sessionId }: { sessionId: string }) {
 					reviewPRSummary={reviewPromptSummary}
 					onOpenReview={reviewPromptPR ? () => openPage(reviewRouteForPR(session.id, reviewPromptPR, CLOUD_HOST_ID)) : undefined}
 				/>
-			</KeyboardFollower>
-			{switchCard}
-		</View>
-		</KeyboardMotionScope>
+			}
+			overlay={switchCard}
+		/>
 	);
 }
 
@@ -744,7 +746,6 @@ const makeStyles = (t: Theme) => StyleSheet.create({
 	screen: { flex: 1, backgroundColor: t.bgBase },
 	center: { flex: 1, justifyContent: "center", backgroundColor: t.bgBase },
 	conversation: { flex: 1 },
-	floatingComposer: { position: "absolute", left: 0, right: 0, bottom: 0 },
 	floatingBanners: { position: "absolute", left: 0, right: 0, backgroundColor: t.bgBase },
 	headerFrost: { position: "absolute", top: 0, left: 0, right: 0 },
 	// Where the timeline will draw the checklist, so the handoff to it does not move it.

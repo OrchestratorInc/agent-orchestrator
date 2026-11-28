@@ -3,7 +3,7 @@ import { height, testID, width } from "@expo/ui/jetpack-compose/modifiers";
 import { useState } from "react";
 import { ComposerControlsRow, HarnessMark, KEEP_KEYBOARD, MenuRow, ModelCapsuleMenu, SUBMENU, useCloseMenuOnBack } from "../composeMenu.android";
 import { defaultModelChoice } from "../spawnModel";
-import { AUTOMATIC_MODEL } from "../agentSwitch";
+import { AUTOMATIC_MODEL, repickedSwitch } from "../agentSwitch";
 import { EffortSliderGauge } from "../effort-slider-host";
 import { PermissionPickerButton } from "../permission-picker";
 import { haptics } from "../haptics";
@@ -30,7 +30,7 @@ const MENU_WIDTH = 240;
  * then the provider's other settings, such as Fast mode or its agent, as iOS's
  * does: an on/off setting ticked while on, any other opening onto its choices.
  */
-export function ChatTurnSettingsControl({ snapshot, models, options, disabled, onSettings, onOption, effort, permissions, otherAgents }: ChatTurnSettingsControlProps) {
+export function ChatTurnSettingsControl({ snapshot, models, options, disabled, onSettings, onOption, effort, permissions, modelWheel, otherAgents }: ChatTurnSettingsControlProps) {
 	const t = useTheme();
 	const [openMenu, setOpenMenu] = useState<OpenMenu | null>(null);
 	const close = () => setOpenMenu(null);
@@ -66,15 +66,17 @@ export function ChatTurnSettingsControl({ snapshot, models, options, disabled, o
 	const settingOpen = openMenu?.startsWith("setting:") ?? false;
 	const agentOpen = openMenu?.startsWith("agent") ?? false;
 	const pending = otherAgents?.pending;
-	// Another agent's model only records the pick; the switch runs with the next message.
+	// Another agent's model only records the pick; the switch runs with the
+	// next message. Another model of the agent already picked keeps what was
+	// turned on for it (see repickedSwitch).
 	const pick = (agentId: string, model: { id: string; label: string }, defaultLabel?: string) => {
 		close();
 		haptics.select();
-		otherAgents?.onPick({
+		otherAgents?.onPick(repickedSwitch({
 			harness: agentId,
 			model: model.id === AUTOMATIC_MODEL ? undefined : model.id,
 			modelLabel: model.id === AUTOMATIC_MODEL ? defaultLabel ?? "Default model" : model.label,
-		});
+		}, pending, otherAgents.fast));
 	};
 	// The running agent's model chosen again keeps the running agent (desktop's keepCurrent).
 	const chooseCurrent = (row: TurnSettingRow, value: string) => {
@@ -90,11 +92,19 @@ export function ChatTurnSettingsControl({ snapshot, models, options, disabled, o
 			// filled in the card colour as the plus's circle is.
 			capsule={
 				<ModelCapsuleMenu
-					expanded={openMenu === "model" || openMenu === "older" || settingOpen || agentOpen}
+					// With the wheels, the capsule opens them over the keyboard in
+					// place of its menu, putting the effort and permissions away.
+					expanded={!modelWheel && (openMenu === "model" || openMenu === "older" || settingOpen || agentOpen)}
 					onDismiss={close}
 					harness={capsuleHarness || undefined}
 					title={capsuleTitle}
-					onClick={() => setOpenMenu("model")}
+					onClick={() => {
+						if (!modelWheel) { setOpenMenu("model"); return; }
+						haptics.tap();
+						effort?.slider.setOpen(false);
+						permissions?.slider.setOpen(false);
+						modelWheel.slider.setOpen(!modelWheel.slider.isOpen());
+					}}
 					enabled={!off && Boolean(modelRow || otherRows.length || otherAgents?.agents.length)}
 					testTag="chat-model"
 					// The capsule shows the model alone; TalkBack hears what it is a choice of.
@@ -191,7 +201,7 @@ export function ChatTurnSettingsControl({ snapshot, models, options, disabled, o
 			}
 			// The effort as a speedometer lit to the chosen level; a tap opens the
 			// slider over the composer.
-			effort={effort?.choices.length ? <EffortSliderGauge slider={effort.slider} choices={effort.choices} onPress={() => { close(); permissions?.slider.setOpen(false); }} disabled={off} testID="chat-effort" /> : null}
+			effort={effort && (effort.choices.length || effort.toggles) ? <EffortSliderGauge slider={effort.slider} choices={effort.choices} toggles={effort.toggles} onPress={() => { close(); permissions?.slider.setOpen(false); modelWheel?.slider.setOpen(false); }} disabled={off} testID="chat-effort" /> : null}
 			// The permission mode as its own icon, as desktop's picker leads with
 			// it; a tap opens the picker over the composer, as the effort's does.
 			// In a slot of the button's own size, so the row knows its width from
@@ -205,7 +215,7 @@ export function ChatTurnSettingsControl({ snapshot, models, options, disabled, o
 							slider={permissions.slider}
 							choices={permissions.choices}
 							disabled={off}
-							onPress={() => { close(); effort?.slider.setOpen(false); }}
+							onPress={() => { close(); effort?.slider.setOpen(false); modelWheel?.slider.setOpen(false); }}
 							testID="chat-approval"
 						/>
 					</RNHostView>

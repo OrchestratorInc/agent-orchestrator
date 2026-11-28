@@ -20,6 +20,14 @@ vi.mock("react-native", async () => {
 		View: host("View"),
 	};
 });
+// The overlay's buttons are gesture handler's: they hit-test natively, in the overlay's own window.
+vi.mock("react-native-gesture-handler", async () => {
+	const React = await import("react");
+	return {
+		Pressable: ({ children, style, ...props }: { children?: React.ReactNode; style?: unknown }) =>
+			React.createElement("Pressable", { ...props, style: typeof style === "function" ? style({ pressed: false }) : style }, children),
+	};
+});
 // Desktop's permission icons, drawn by name.
 vi.mock("lucide-react-native/icons/hand", () => ({ default: "Hand" }));
 vi.mock("lucide-react-native/icons/pencil-line", () => ({ default: "PencilLine" }));
@@ -30,14 +38,16 @@ vi.mock("./haptics", () => ({ haptics: { tap: fixtures.tap, select: fixtures.sel
 vi.mock("./composer-overlay", async () => {
 	const React = await import("react");
 	return {
+		COMPOSER_CONTROL_RISE: 37,
 		ComposerOverlay: ({ children, ...props }: { children?: React.ReactNode }) => React.createElement("ComposerOverlay", props, children),
 		OverlayHeading: (props: object) => React.createElement("OverlayHeading", props),
-		overlayCardStyle: () => ({}),
 	};
 });
 vi.mock("./effort-slider-host", () => ({ useWarmAfterIdle: () => false }));
+// The pill's corner, which the rows' corners follow.
+vi.mock("./chat/composerStyles", () => ({ COMPOSER_RADIUS: 30 }));
 
-import { PermissionPicker, PermissionPickerButton, PermissionPickerHost, type PermissionChoice } from "./permission-picker";
+import { permissionGridHeight, PermissionPicker, PermissionPickerButton, PermissionPickerHost, type PermissionChoice } from "./permission-picker";
 import { createEffortSliderSwitch } from "./useEffortSlider";
 
 const modes = (selected: string): PermissionChoice[] => [
@@ -55,32 +65,40 @@ const all = (type: string) => renderer!.root.findAll((node) => hostType(node) ==
 const texts = (node: ReactTestInstance) => node.findAll((child) => hostType(child) === "Text").map((child) => child.props.children);
 
 describe("permission picker", () => {
-	// Desktop's permission rows: the mode's icon, its name and what it lets the
-	// agent do, never asking in the warning colour.
-	it("lists the modes as desktop does, on the veil alone", () => {
+	// Large buttons two to a row, headed as the effort slider is: the mode's
+	// icon over its name, never asking in the warning colour, what each lets
+	// the agent do read out as its hint.
+	it("lays the modes out as a grid of buttons under a heading", () => {
 		act(() => { renderer = create(<PermissionPicker choices={modes("auto")} onChoose={() => {}} />); });
-		expect(all("OverlayHeading")).toHaveLength(0);
-		const rows = all("Pressable");
-		expect(rows.map((row) => texts(row))).toEqual([
-			["Accept edits", "Edits files without asking"],
-			["Auto-approve", "Asks only about risky actions"],
-			["Bypass permissions", "Never asks before acting"],
-		]);
-		const icon = (row: ReactTestInstance) => row.findAll((node) => ["Hand", "PencilLine", "ShieldCheck", "ShieldAlert"].includes(hostType(node)))[0];
-		expect(rows.map((row) => hostType(icon(row)))).toEqual(["PencilLine", "ShieldCheck", "ShieldAlert"]);
-		expect(rows.map((row) => icon(row).props.color)).toEqual(["#textSecondary", "#textPrimary", "#amber"]);
-		// One line each, so every row is the same height.
-		expect(rows.map((row) => row.findAll((node) => hostType(node) === "Text")[1].props.numberOfLines)).toEqual([1, 1, 1]);
-		// The mode in force sits in a low wash, not ticked.
-		expect(rows.map((row) => (row.props.style as { backgroundColor?: string }[]).some((style) => style?.backgroundColor === "#accentTint"))).toEqual([false, true, false]);
-		expect(rows.map((row) => row.props.accessibilityState)).toEqual([{ checked: false }, { checked: true }, { checked: false }]);
+		expect(all("OverlayHeading").map((heading) => heading.props)).toEqual([{ title: "Permissions", value: "Auto-approve" }]);
+		const rows = renderer!.root.findAll((node) => hostType(node) === "View" && node.props.style?.flexDirection === "row");
+		expect(rows.map((row) => row.findAll((node) => hostType(node) === "Pressable").length)).toEqual([2, 1]);
+		const tiles = all("Pressable");
+		expect(tiles.map((tile) => texts(tile))).toEqual([["Accept edits"], ["Auto-approve"], ["Bypass permissions"]]);
+		expect(tiles.map((tile) => tile.props.accessibilityHint)).toEqual(["Edits files without asking", "Asks only about risky actions", "Never asks before acting"]);
+		const icon = (tile: ReactTestInstance) => tile.findAll((node) => ["Hand", "PencilLine", "ShieldCheck", "ShieldAlert"].includes(hostType(node)))[0];
+		expect(tiles.map((tile) => hostType(icon(tile)))).toEqual(["PencilLine", "ShieldCheck", "ShieldAlert"]);
+		expect(tiles.map((tile) => icon(tile).props.color)).toEqual(["#textSecondary", "#textPrimary", "#amber"]);
+		// The mode in force sits in a low wash, outlined, not ticked.
+		expect(tiles.map((tile) => (tile.props.style as { backgroundColor?: string }[]).some((style) => style?.backgroundColor === "#accentTint"))).toEqual([false, true, false]);
+		expect(tiles.map((tile) => tile.props.accessibilityState)).toEqual([{ checked: false }, { checked: true }, { checked: false }]);
+	});
+
+	// Centred on the composer's control row, where the thumb already is: a
+	// taller grid reaches as far below that row as above it.
+	it("sizes its grid by the rows it needs", () => {
+		expect(permissionGridHeight(4)).toBe(permissionGridHeight(3));
+		expect(permissionGridHeight(5)).toBeGreaterThan(permissionGridHeight(4));
+		expect(permissionGridHeight(2)).toBeLessThan(permissionGridHeight(3));
 	});
 
 	// A screen narrower than the list must not push it past the composer.
 	it("caps the list at the width the overlay leaves", () => {
 		act(() => { renderer = create(<PermissionPicker choices={modes("auto")} onChoose={() => {}} />); });
 		const list = renderer!.root.findAll((node) => hostType(node) === "View" && node.props.testID === "permission-picker")[0];
-		expect(list.props.style).toMatchObject({ width: 360, maxWidth: "100%" });
+		// Stretched across what the overlay leaves rather than a fixed width.
+		expect(list.props.style).toMatchObject({ alignSelf: "stretch" });
+		expect(list.props.style.width).toBeUndefined();
 	});
 
 	it("draws an agent's own tier, which maps to no mode, as asking", () => {
@@ -88,9 +106,13 @@ describe("permission picker", () => {
 		expect(all("Hand")).toHaveLength(1);
 	});
 
-	it("chooses a mode, ticking only on a change", () => {
+	it("chooses a mode, ticking only on a change, and never on the touch that opened it", () => {
 		const onChoose = vi.fn();
 		act(() => { renderer = create(<PermissionPicker choices={modes("auto")} onChoose={onChoose} />); });
+		// The touch that opened it lifts over a tile: no pick.
+		act(() => all("Pressable")[2].props.onPress());
+		expect(onChoose).not.toHaveBeenCalled();
+		act(() => { vi.advanceTimersByTime(300); });
 		act(() => all("Pressable")[2].props.onPress());
 		expect(onChoose).toHaveBeenLastCalledWith("bypass-permissions");
 		expect(fixtures.select).toHaveBeenCalledOnce();
@@ -153,12 +175,12 @@ describe("permission button", () => {
 describe("permission picker host", () => {
 	it("shows the picker while open, closes it on a pick, and has no timeout", () => {
 		const slider = createEffortSliderSwitch();
-		slider.setBottom(120);
 		const onChoose = vi.fn();
 		act(() => { renderer = create(<PermissionPickerHost slider={slider} choices={modes("auto")} busy={false} onChoose={onChoose} />); });
 		expect(all("ComposerOverlay")).toHaveLength(0);
 		act(() => slider.setOpen(true));
-		expect(all("ComposerOverlay")[0].props).toMatchObject({ visible: true, bottom: 120 });
+		// Over the keyboard, closing on a tap anywhere else.
+		expect(all("ComposerOverlay")[0].props).toMatchObject({ visible: true, fill: true, overKeyboard: true });
 		act(() => { vi.advanceTimersByTime(60_000); });
 		expect(slider.isOpen()).toBe(true);
 		act(() => all("Pressable")[0].props.onPress());

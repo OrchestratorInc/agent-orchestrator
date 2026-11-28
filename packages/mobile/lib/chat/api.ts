@@ -186,7 +186,7 @@ export async function sendConversationMessage(
 }
 
 /** Which agent the next message switches to, and on which model. */
-export type ProviderSwitchInput = { targetHarness: string; model?: string };
+export type ProviderSwitchInput = { targetHarness: string; model?: string; fastMode?: boolean };
 
 /**
  * Switch the chat's agent and send the message to the new one, in one request
@@ -206,6 +206,7 @@ export async function switchProviderAndSend(
 		body: JSON.stringify({
 			targetHarness: providerSwitch.targetHarness,
 			...(providerSwitch.model ? { model: providerSwitch.model } : {}),
+			...(providerSwitch.fastMode ? { fastMode: true } : {}),
 			idempotencyKey: message.clientMessageId,
 			message,
 		}),
@@ -591,6 +592,13 @@ function toSnapshot(wire: WireSnapshot): ConversationSnapshot {
 			model: wire.settings?.model || undefined,
 			reasoningEffort: wire.settings?.reasoningEffort || undefined,
 			approvalMode: (wire.settings?.approvalMode as ApprovalMode | undefined) || undefined,
+			// Fast mode, where the model has one: dropped here, it always read Off,
+			// and the bolt fell back to Off once its save went unconfirmed.
+			fastMode: wire.settings?.fastMode === true || undefined,
+			// Not shown on the phone, but carried into every save: the daemon
+			// replaces the whole set, and leaving these out cleared them.
+			planMode: wire.settings?.planMode === true || undefined,
+			autoCompactWindow: wire.settings?.autoCompactWindow || undefined,
 		},
 		turns: (wire.turns ?? []).map(toTurn),
 		items: [...messages, ...activities].sort((a, b) => a.sequence - b.sequence),

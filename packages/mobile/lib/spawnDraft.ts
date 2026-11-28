@@ -45,6 +45,10 @@ export type SpawnDraftSelections = {
 	/** Present only when a model was picked. */
 	model?: string;
 	effort?: string;
+	/** Present only when Fast mode was turned on and the task could start in it. */
+	fastMode?: boolean;
+	/** Present only when Ultracode was turned on, so a restored draft still asks for it. */
+	ultracode?: boolean;
 	approvalMode?: string;
 	mode?: string;
 	/** Present only when an agent account was picked, not the default one; for `accountHarness` on the draft's machine. */
@@ -159,6 +163,8 @@ function readSelections(value: unknown): SpawnDraftSelections | undefined {
 		const field = (value as Record<string, unknown>)[key];
 		if (typeof field === "string") selections[key] = field;
 	}
+	if ((value as Record<string, unknown>).fastMode === true) selections.fastMode = true;
+	if ((value as Record<string, unknown>).ultracode === true) selections.ultracode = true;
 	return selections;
 }
 

@@ -130,12 +130,23 @@ describe("the composer and the keyboard", () => {
 	// In a long chat, or one still loading as it opened, focusing the field kept
 	// the JS thread busy for most of a second, and the keyboard came up over a
 	// composer still at the bottom: the padded root held it back.
-	it("rides the keyboard outside the conversation's root, by a transform", () => {
-		const root = screenSource.indexOf("<View style={[styles.screen, chatKeyboard.floatingRootStyle]}>");
-		const follower = screenSource.indexOf("<KeyboardFollower lift={chatKeyboard.composerLift} style={styles.floatingComposer} onLayout={measureComposer}>");
+	// One layout for every screen with a floating composer, so New task (which
+	// sat in a keyboard-avoiding view and lagged the keys) gets the chat's ride.
+	it("rides the keyboard outside the conversation's root, by a transform, on every composer screen", () => {
+		const layout = readFileSync(new URL("./FloatingComposerLayout.tsx", import.meta.url), "utf8");
+		const root = layout.indexOf("<View style={[styles.screen, keyboard.floatingRootStyle]}>{content}</View>");
+		const follower = layout.indexOf("<KeyboardFollower lift={keyboard.composerLift} style={styles.floating} onLayout={onComposerLayout}>{composer}</KeyboardFollower>");
 		expect(root).toBeGreaterThan(-1);
 		expect(follower).toBeGreaterThan(root);
-		expect(screenSource.indexOf("<StableChatComposer")).toBeGreaterThan(follower);
+		expect(layout).toContain("<KeyboardMotionScope>");
+		const spawnSource = readFileSync(new URL("../../app/spawn.tsx", import.meta.url), "utf8");
+		for (const source of [screenSource, cloudScreenSource, spawnSource]) {
+			expect(source).toContain("<FloatingComposerLayout");
+			expect(source).toContain("keyboard={chatKeyboard}");
+			expect(source).not.toContain("KeyboardAvoidingView");
+		}
+		expect(spawnSource).toContain("useChatKeyboard({ underHeader: SYSTEM_GLASS_HEADER, floating: true })");
+		expect(screenSource.indexOf("composer={<>")).toBeLessThan(screenSource.indexOf("<StableChatComposer"));
 	});
 	// The root padded for the keyboard shrank the list, which then chased its end
 	// from JS a frame or more behind the keys: the text lagged, then jumped up.

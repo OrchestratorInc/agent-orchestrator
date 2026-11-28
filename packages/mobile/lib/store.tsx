@@ -100,6 +100,11 @@ export type SpawnOptions = {
 	model?: string;
 	/** The model's effort level; omitted runs the model's default. */
 	effort?: string;
+	/**
+	 * Start the Chat on the model's faster tier. A machine's own tasks only: a
+	 * Cloud worker has no Fast mode, so it is never sent there.
+	 */
+	fastMode?: boolean;
 	/** The worker's starting approval mode; omitted keeps the project's. */
 	approvalMode?: ApprovalMode;
 	/** The subscription account the agent starts on; omitted uses the machine's default. */
@@ -254,7 +259,10 @@ export function HostScope({ hostId, children }: { hostId: string; children: Reac
 			...app,
 			config,
 			configured: !!config && isConfigured(config),
-			machine: config && isConfigured(config) ? machineIdentity(config) : host ? hostMachineIdentity(host.hostId) : "",
+			// Named as the selected machine is (viewMachine), so what a screen keys
+			// on the phone for a machine is the same whichever machine is selected:
+			// a New task keeps its chat's Ultracode under this.
+			machine: viewMachine({ config, selectedHostId: host?.hostId ?? null, configResolved: app.configResolved }).machine,
 			paired: host ? true : app.configResolved ? false : null,
 			currentHostId: host?.hostId,
 			selectedHostName: host?.name ?? null,
@@ -1386,14 +1394,14 @@ export function AppProvider({ children }: { children: ReactNode }) {
 	}, [activeProjectId, projects]);
 
 	const spawn = useCallback(
-		async ({ hostId, projectId, prompt, harness, model, effort, approvalMode, accountId, mode, attachments, clientRequestId }: SpawnOptions) => {
+		async ({ hostId, projectId, prompt, harness, model, effort, fastMode, approvalMode, accountId, mode, attachments, clientRequestId }: SpawnOptions) => {
 			const resolvedMode = mode ?? "chat";
 			return trackFeature("spawn", async () => {
 				// Standalone on Cloud starts a standalone agent, which brings its own project.
 				if (isCloudHost(hostId)) return spawnCloudWorker(cloudActionsRef.current, { ...(projectId === STANDALONE_PROJECT ? { standalone: true } : { projectId }), prompt, harness, model, effort, approvalMode, mode: resolvedMode, attachments, clientRequestId });
 				const c = requireConfig(hostId);
 				if (projectId === STANDALONE_PROJECT) {
-					const session = await spawnSession(c, { prompt, harness, model, effort, approvalMode, accountId, mode: resolvedMode, attachments, clientRequestId });
+					const session = await spawnSession(c, { prompt, harness, model, effort, fastMode, approvalMode, accountId, mode: resolvedMode, attachments, clientRequestId });
 					await refreshHost(hostId);
 					return session;
 				}
@@ -1406,6 +1414,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
 					agent: harness,
 					model,
 					effort,
+					fastMode,
 					approvalMode,
 					accountId,
 					mode: resolvedMode,

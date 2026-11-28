@@ -6,8 +6,34 @@
 
 export type EffortChoice = { value: string; label: string; selected: boolean };
 
-/** A level by name: "high" reads "High". */
+/**
+ * The levels mobile knows by name, worded as desktop's effort menu words them
+ * (formatEffortLabel), so a level reads the same on both: "xhigh" is "Extra
+ * high", never "Xhigh".
+ */
+const EFFORT_LEVEL_LABELS: Readonly<Record<string, string>> = {
+	none: "None",
+	minimal: "Minimal",
+	low: "Low",
+	medium: "Medium",
+	high: "High",
+	xhigh: "Extra high",
+	max: "Max",
+};
+
+/**
+ * The top level some agents have past Max, such as Codex's and Hermes'
+ * "ultra": drawn in the Ultracode gradient, as desktop draws it
+ * (AgentSwitchPicker's isUltraEffort).
+ */
+export function isUltraEffort(value: string | undefined): boolean {
+	return Boolean(value?.toLowerCase().startsWith("ultra"));
+}
+
+/** A level by name: "high" reads "High", "xhigh" "Extra high"; one never seen is capitalized, as desktop shows it. */
 export function effortLabel(level: string): string {
+	const key = level.trim().toLowerCase();
+	if (Object.prototype.hasOwnProperty.call(EFFORT_LEVEL_LABELS, key)) return EFFORT_LEVEL_LABELS[key];
 	return level ? level[0].toUpperCase() + level.slice(1) : level;
 }
 
@@ -83,6 +109,7 @@ export function effortGaugeNeedle(choices: readonly EffortChoice[]): number {
  * `step` apart from `start`.
  */
 export function nearestStop(x: number, start: number, step: number, count: number): number {
+	"worklet";
 	if (count <= 1 || step <= 0) return 0;
 	return Math.min(count - 1, Math.max(0, Math.round((x - start) / step)));
 }
@@ -94,6 +121,7 @@ export function nearestStop(x: number, start: number, step: number, count: numbe
  * at the halfway point, so the blob never jumps.
  */
 export function magneticOffset(offset: number, step: number): number {
+	"worklet";
 	const half = step / 2;
 	if (half <= 0) return 0;
 	const reach = Math.min(Math.abs(offset) / half, 1);

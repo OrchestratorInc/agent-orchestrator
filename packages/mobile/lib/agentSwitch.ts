@@ -16,7 +16,47 @@ export type PendingAgentSwitch = {
 	model?: string;
 	/** What the capsule shows for that model. */
 	modelLabel: string;
+	/** Start the agent in Fast mode, where that model has one (Codex's fast tier). */
+	fastMode?: boolean;
+	/**
+	 * Ask for Claude Code's Ultracode, in the message that runs the switch and
+	 * in every one after it (desktop's pending switch). Claude Code only.
+	 */
+	ultracode?: boolean;
 };
+
+/**
+ * An agent's models that run in Fast mode, from its catalog's `supportsFast`,
+ * and whether its default model does (the pick that names no model).
+ */
+export type AgentFastModels = { models: readonly string[]; byDefault: boolean };
+
+/**
+ * Whether the switch picked can start in Fast mode: its model, or the
+ * agent's default when it names none, has a fast tier. Desktop offers Fast for
+ * a pending switch the same way, and the daemon refuses it for any other.
+ */
+export function switchOffersFast(pick: PendingAgentSwitch, fast: Readonly<Record<string, AgentFastModels>> | undefined): boolean {
+	const list = fast?.[pick.harness];
+	if (!list) return false;
+	const model = requestedSwitchModel(pick.model);
+	return model ? list.models.includes(model) : list.byDefault;
+}
+
+/**
+ * Another model picked for the same switch keeps what was turned on for it,
+ * as desktop's otherAgentSource keeps it: Fast mode only where the new model
+ * has it too, and Ultracode, which works on every Claude Code model. A pick of
+ * another agent starts with neither.
+ */
+export function repickedSwitch(next: PendingAgentSwitch, held: PendingAgentSwitch | undefined, fast: Readonly<Record<string, AgentFastModels>> | undefined): PendingAgentSwitch {
+	if (!held || held.harness !== next.harness) return next;
+	return {
+		...next,
+		...(held.fastMode && switchOffersFast(next, fast) ? { fastMode: true } : {}),
+		...(held.ultracode ? { ultracode: true } : {}),
+	};
+}
 
 export type AgentSwitchTarget = { id: string; label: string };
 

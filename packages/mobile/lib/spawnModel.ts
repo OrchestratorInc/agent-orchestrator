@@ -64,6 +64,19 @@ export function modelOverride(value: string, touched: boolean, catalogDefault?: 
 }
 
 /**
+ * Whether Fast mode stays on when the new task's model changes to `next`:
+ * only for a model that also has a faster tier, as desktop's New chat keeps
+ * it, so it is never on unseen for a model that cannot start in it. The
+ * default row ("__auto__") runs the project's pin (`projectPin`), else the
+ * catalog's default.
+ */
+export function spawnKeepsFast(models: readonly AgentModelInfo[], next: string, projectPin?: string): boolean {
+	const id = next === "__auto__" ? projectPin?.trim() : next;
+	const model = id ? models.find((item) => item.id === id) : models.find((item) => item.isDefault);
+	return Boolean(model?.supportsFast);
+}
+
+/**
  * The default row's model for modelOverride to send: the catalog's default, from
  * the selected agent's own loaded catalog. None for a list of modes, or when the
  * project pins a model or mode for the agent (`projectPin`): the server applies

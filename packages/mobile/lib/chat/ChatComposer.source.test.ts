@@ -25,7 +25,7 @@ describe("chat composer pill", () => {
 		const pill = composer.slice(composer.indexOf("{requestCard ?? <View style={[styles.composer"));
 		const tray = pill.indexOf("<ComposerAttachmentTray items={trayItems}");
 		expect(tray).toBeGreaterThan(0);
-		expect(tray).toBeLessThan(pill.indexOf("<TextInput"));
+		expect(tray).toBeLessThan(pill.indexOf("<ComposerField"));
 		expect(composer.indexOf("<ComposerAttachmentTray")).toBe(composer.indexOf("<ComposerAttachmentTray items={trayItems}"));
 		expect(composer).toContain("useMemo(() => composerTrayItems(attachments), [attachments])");
 	});
@@ -126,16 +126,23 @@ describe("chat composer pill", () => {
 	// and that flag turns over when the keyboard has finished hiding — so the
 	// composer, and the model label above it, spent the whole closing animation one
 	// inset too low and then jumped into place at the end.
+	// The ride lives in one place (composerDock), and every docked composer
+	// takes it: New task kept an older copy and glitched as the keys came up.
 	it("rides the keyboard's own progress instead of switching inset on a flag", () => {
-		expect(composer).toContain("useReanimatedKeyboardAnimation()");
-		expect(composer).toContain("const inset = restingInset - KEYBOARD_DOCK_GAP;");
-		expect(composer).toContain("if (dockRiseOverride !== undefined) return { transform: [{ translateY: inset * dockRiseOverride }] };");
-		expect(composer).toContain("return { transform: [{ translateY: inset * keyboard.progress.value }] };");
+		const dock = source("./composerDock.ts");
+		expect(dock).toContain("useReanimatedKeyboardAnimation()");
+		expect(dock).toContain("const inset = restingInset - KEYBOARD_DOCK_GAP;");
+		expect(dock).toContain("if (override !== undefined) return { transform: [{ translateY: inset * override }] };");
+		expect(dock).toContain("return { transform: [{ translateY: inset * keyboard.progress.value }] };");
+		for (const docked of [composer, source("./ReviewerComposer.tsx"), source("../../app/spawn.tsx")]) {
+			expect(docked).toContain("useComposerDockRise(restingInset, dockRiseOverride)");
+			expect(docked).not.toContain("KEYBOARD_DOCK_GAP) *");
+		}
 	});
 	// On Android the keyboard's last stretch passes behind the navigation bar;
 	// riding it there left the dock drifting down after the keys had gone.
 	it("rests on Android as soon as the keyboard passes behind the navigation bar", () => {
-		expect(composer).toContain('if (Platform.OS === "android") return { transform: [{ translateY: Math.min(-keyboard.height.value, inset) }] };');
+		expect(source("./composerDock.ts")).toContain('if (Platform.OS === "android") return { transform: [{ translateY: Math.min(-keyboard.height.value, inset) }] };');
 		expect(composer).toContain("{ paddingBottom: restingInset }");
 		expect(composer).not.toContain("dockInset(");
 	});
@@ -169,7 +176,7 @@ describe("collapsed and expanded composer", () => {
 
 	// Moving the field between two parents would remount it and drop the keyboard.
 	it("keeps the field in one row in both shapes", () => {
-		expect(composer.match(/<TextInput\n/g)).toHaveLength(1);
+		expect(composer.match(/<ComposerField\n/g)).toHaveLength(1);
 		expect(composer.match(/\{attachMenu\}/g)).toHaveLength(1);
 		expect(composer.match(/\{roundButton\}/g)).toHaveLength(1);
 	});

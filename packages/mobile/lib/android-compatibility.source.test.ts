@@ -30,7 +30,8 @@ describe("Android native compatibility boundaries", () => {
 		const android = source("./spawn-composer-controls.android.tsx");
 		expect(android).not.toMatch(/\bModal\b/);
 		expect(android).not.toContain("@expo/ui/community/bottom-sheet");
-		expect(android).not.toContain("Picker");
+		// The chat's own pickers open over the keyboard, never as a sheet of their own.
+		expect(android).not.toMatch(/<Picker\b|\bModalPicker\b/);
 	});
 
 	it("dismisses the Android keyboard before presenting chat sheets", () => {

@@ -1007,6 +1007,8 @@ export type AgentModelInfo = {
 	/** The effort levels this model takes, lowest first; absent for one that takes none. */
 	efforts?: string[];
 	defaultEffort?: string;
+	/** The model can run on the provider's faster tier, so a new task may start in Fast mode. */
+	supportsFast?: boolean;
 };
 export type AgentModelCatalog = {
 	agentId: string;
@@ -1620,7 +1622,7 @@ export async function sendMessage(cfg: ServerConfig, id: string, message: string
 
 export async function spawnSession(
 	cfg: ServerConfig,
-	opts: { projectId?: string; prompt?: string; issueId?: string; harness?: string; model?: string; effort?: string; approvalMode?: ApprovalMode; mode?: SessionMode; attachments?: SpawnAttachmentInput[]; clientRequestId?: string; accountId?: string },
+	opts: { projectId?: string; prompt?: string; issueId?: string; harness?: string; model?: string; effort?: string; fastMode?: boolean; approvalMode?: ApprovalMode; mode?: SessionMode; attachments?: SpawnAttachmentInput[]; clientRequestId?: string; accountId?: string },
 ): Promise<DashboardSession> {
 	const res = await req(cfg, `${API}/sessions`, {
 		method: "POST",
@@ -1634,6 +1636,9 @@ export async function spawnSession(
 			harness: opts.harness || undefined,
 			model: opts.model || undefined,
 			effort: opts.effort || undefined,
+			// Sent only when on, as desktop sends it: the daemon refuses Fast mode
+			// for a model without a faster tier, and off is the default anyway.
+			fastMode: opts.fastMode || undefined,
 			accountId: opts.accountId || undefined,
 			// Omitted keeps the project's policy (Auto when it names none).
 			approvalMode: opts.approvalMode || undefined,
@@ -1663,7 +1668,7 @@ export async function getSession(cfg: ServerConfig, id: string): Promise<Dashboa
 
 export async function delegateTask(
 	cfg: ServerConfig,
-	opts: { projectId: string; brief: string; agent?: string; model?: string; effort?: string; approvalMode?: ApprovalMode; mode: SessionMode; attachments?: SpawnAttachmentInput[]; clientRequestId?: string; accountId?: string },
+	opts: { projectId: string; brief: string; agent?: string; model?: string; effort?: string; fastMode?: boolean; approvalMode?: ApprovalMode; mode: SessionMode; attachments?: SpawnAttachmentInput[]; clientRequestId?: string; accountId?: string },
 ): Promise<DashboardSession> {
 	const res = await req(cfg, `${API}/orchestrators/delegate`, {
 		method: "POST",
@@ -1674,6 +1679,8 @@ export async function delegateTask(
 			agent: opts.agent || undefined,
 			model: opts.model || undefined,
 			effort: opts.effort || undefined,
+			// Only when on, as spawnSession sends it.
+			fastMode: opts.fastMode || undefined,
 			accountId: opts.accountId || undefined,
 			approvalMode: opts.approvalMode || undefined,
 			mode: opts.mode,

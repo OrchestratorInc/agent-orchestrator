@@ -123,7 +123,7 @@ const modes: PermissionChoice[] = [
 
 type OtherAgents = NonNullable<Parameters<typeof ChatTurnSettingsControl>[0]["otherAgents"]>;
 
-function render(over: { snapshot?: ConversationSnapshot; models?: ChatModel[]; options?: ChatConfigOption[]; disabled?: boolean; effort?: { choices: typeof levels; slider: EffortSliderSwitch } | null; permissions?: { choices: PermissionChoice[]; slider: EffortSliderSwitch } | null; otherAgents?: OtherAgents } = {}) {
+function render(over: { snapshot?: ConversationSnapshot; models?: ChatModel[]; options?: ChatConfigOption[]; disabled?: boolean; effort?: { choices: typeof levels; slider: EffortSliderSwitch; toggles?: { fast?: boolean; ultracode?: boolean } } | null; permissions?: { choices: PermissionChoice[]; slider: EffortSliderSwitch } | null; otherAgents?: OtherAgents } = {}) {
 	const handlers = {
 		onSettings: vi.fn(() => Promise.resolve()),
 		onOption: vi.fn(() => Promise.resolve([] as ChatConfigOption[])),
@@ -177,6 +177,15 @@ describe("Android chat controls row", () => {
 		expect(gauge()).toBeUndefined();
 		render({ effort: { choices: [], slider: createEffortSliderSwitch() } });
 		expect(gauge()).toBeUndefined();
+	});
+
+	// Claude Haiku takes no effort, but its Ultracode (or a Fast mode) is on the slider.
+	it("draws the speedometer with no levels while the slider carries a switch, and opens it", () => {
+		const slider = createEffortSliderSwitch();
+		render({ effort: { choices: [], slider, toggles: { ultracode: false } } });
+		act(() => gauge().props.onPress());
+		expect(slider.isOpen()).toBe(true);
+		expect(gauge().props.open).toBe(true);
 	});
 
 	// The permission mode opens its picker over the composer, as the effort's

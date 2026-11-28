@@ -45,6 +45,7 @@ vi.mock("./ChatTurnSettingsControl", () => ({ ChatTurnSettingsControl: "ChatTurn
 vi.mock("./RequestCard", () => ({ RequestCard: "RequestCard" }));
 vi.mock("../effort-slider", () => ({ EffortSliderOverlay: "EffortSliderOverlay" }));
 vi.mock("../permission-picker", () => ({ PermissionPickerHost: "PermissionPickerHost", PermissionPickerButton: "PermissionPickerButton" }));
+vi.mock("../model-wheel", () => ({ ModelWheelHost: "ModelWheelHost" }));
 vi.mock("./PRChip", () => ({ PRChipContent: "PRChipContent", prChipAccessibilityLabel: () => "Pull request" }));
 
 import { ChatComposer } from "./ChatComposer";
@@ -133,7 +134,7 @@ it("saves an immediately submitted reply and quote before an old host rejects it
 	p.machine = "host.draft-rejection-host";
 	function Harness({ quote = true }: { quote?: boolean }) {
 		const conversation = useMobileConversation(p.config, p.machine, p.sessionId);
-		return <ChatComposer {...p} onSend={conversation.send} onAcknowledgeSend={conversation.acknowledgeSend}
+		return <ChatComposer {...p} onSend={(text, images, resources, excerpts, typed) => conversation.send(text, images, resources, excerpts, undefined, typed)} onAcknowledgeSend={conversation.acknowledgeSend}
 			quoteRequest={quote ? { id: "immediate", text: "Quoted context", source, composerKey: "session" } : undefined} />;
 	}
 	await act(async () => { renderer = create(<Harness />); });
@@ -299,4 +300,159 @@ it("steers on Cmd+Return only when the draft can steer, and sends otherwise", as
 	act(() => renderer.root.findByType(TextInput).props.onChangeText("Use the other branch"));
 	await act(async () => renderer.root.findByType(HardwareReturn).props.onReturn({ ...noModifiers, control: true }));
 	expect(steering.onSteer).toHaveBeenCalledWith("Use the other branch");
+});
+
+// Ultracode is Claude Code's: a send that switches the chat to another agent
+// goes to that agent, which must not get a prefix nobody typed. It is a switch
+// apart from the level, so it asks at High on a model with no Extra High.
+it("asks for Ultracode only when the message goes to Claude Code, at any level", async () => {
+	const ultracodeKey = "ao.chat.ultracode.host.m.session";
+	storage.getItem.mockImplementation(async (key: string) => (key === ultracodeKey ? "1" : null));
+	const sendWith = async (over: { pending?: { harness: string; modelLabel: string }; cloud?: boolean } = {}) => {
+		const p = {
+			...props(),
+			machine: "host.m",
+			cloud: over.cloud,
+			snapshot: { harness: "claude-code", turns: [], items: [], controller: { state: "idle" }, capabilities: [], settings: { model: "sonnet", reasoningEffort: "high" } },
+			models: [{ id: "sonnet", displayName: "Sonnet", efforts: ["low", "medium", "high"], defaultEffort: "high" }],
+			otherAgents: { agents: [], models: {}, pending: over.pending, onPick: vi.fn() },
+		} as unknown as ComponentProps<typeof ChatComposer>;
+		await act(async () => { renderer = create(<ChatComposer {...p} />); });
+		// The switch the slider carries: none while the message goes elsewhere.
+		const offered = renderer.root.findAll((node) => node.props.overKeyboard === true && "ultracode" in node.props && node.props.onRelease).some((node) => node.props.ultracode?.on === true);
+		act(() => renderer.root.findByType(TextInput).props.onChangeText("fix it"));
+		await act(async () => renderer.root.findByType(HardwareReturn).props.onReturn(noModifiers));
+		act(() => renderer.unmount());
+		return { text: vi.mocked(p.onSend).mock.calls[0]?.[0], offered };
+	};
+	expect(await sendWith()).toEqual({ text: "Ultracode:\nfix it", offered: true });
+	expect(await sendWith({ pending: { harness: "codex", modelLabel: "GPT" } })).toEqual({ text: "fix it", offered: false });
+	// Orchestrator Cloud has no Ultracode, as on desktop, whatever the phone kept.
+	expect(await sendWith({ cloud: true })).toEqual({ text: "fix it", offered: false });
+});
+
+// Ultracode and Fast mode over the slider, kept on the phone as the store would.
+const keptOnPhone = () => {
+	const stored = new Map<string, string>();
+	storage.getItem.mockImplementation(async (key: string) => stored.get(key) ?? null);
+	storage.setItem.mockImplementation(async (key: string, value: string) => { stored.set(key, value); });
+	storage.removeItem.mockImplementation(async (key: string) => { stored.delete(key); });
+	return stored;
+};
+const sliderHost = () => renderer.root.findAll((node) => node.props.overKeyboard === true && node.props.onRelease && "ultracode" in node.props)[0];
+const sendText = async (text: string) => {
+	act(() => renderer.root.findByType(TextInput).props.onChangeText(text));
+	await act(async () => renderer.root.findByType(HardwareReturn).props.onReturn(noModifiers));
+};
+const chatOn = (harness: string, model: string) => ({ harness, turns: [], items: [], controller: { state: "idle" }, capabilities: [], settings: { model } });
+
+// Desktop offers Ultracode on a pending switch to Claude Code, asks for it in
+// the message that switches, and keeps it on after (SessionChatSurface's
+// switched()). A pick for the agent already running is no switch, so this
+// starts from Codex.
+it("offers a switch to Claude Code its own Ultracode, asks for it in the switching message, and keeps it on after", async () => {
+	const stored = keptOnPhone();
+	const key = "ao.chat.ultracode.host.m.session";
+	const onPick = vi.fn();
+	const base = { ...props(), machine: "host.m", snapshot: chatOn("codex", "gpt-5.5"), models: [{ id: "gpt-5.5", displayName: "GPT-5.5" }] };
+	const withPick = (pending?: object) => ({ ...base, otherAgents: { agents: [{ id: "claude-code", label: "Claude Code" }], models: {}, pending, onPick } }) as unknown as ComponentProps<typeof ChatComposer>;
+	const pick = { harness: "claude-code", model: "opus", modelLabel: "Opus" };
+	await act(async () => { renderer = create(<ChatComposer {...withPick(pick)} />); });
+	expect(sliderHost().props.ultracode).toEqual({ on: false, toggle: expect.any(Function) });
+	act(() => sliderHost().props.ultracode.toggle());
+	expect(onPick).toHaveBeenLastCalledWith({ ...pick, ultracode: true });
+
+	await act(async () => renderer.update(<ChatComposer {...withPick({ ...pick, ultracode: true })} />));
+	expect(sliderHost().props.ultracode.on).toBe(true);
+	await sendText("fix it");
+	expect(base.onSend).toHaveBeenLastCalledWith("Ultracode:\nfix it", undefined, undefined, undefined, "fix it");
+	expect(stored.get(key)).toBe("1");
+
+	// The chat now runs Claude Code: the messages after the switch ask for it too.
+	const after = { ...withPick(undefined), snapshot: chatOn("claude-code", "opus"), models: [{ id: "opus", displayName: "Opus" }] } as unknown as ComponentProps<typeof ChatComposer>;
+	await act(async () => renderer.update(<ChatComposer {...after} />));
+	expect(sliderHost().props.ultracode.on).toBe(true);
+	await sendText("and this");
+	expect(base.onSend).toHaveBeenLastCalledWith("Ultracode:\nand this", undefined, undefined, undefined, "and this");
+});
+
+// Desktop turns Ultracode off with a switch away; a switch back to Claude Code
+// must not bring back a flag nobody turned on again.
+it("drops Ultracode with a switch away, and a switch back to Claude Code does not bring it back", async () => {
+	const stored = keptOnPhone();
+	const key = "ao.chat.ultracode.host.m.session";
+	stored.set(key, "1");
+	const onPick = vi.fn();
+	const base = { ...props(), machine: "host.m" };
+	const at = (snapshot: object, model: string, pending?: object) => ({ ...base, snapshot, models: [{ id: model, displayName: model }], otherAgents: { agents: [], models: {}, pending, onPick } }) as unknown as ComponentProps<typeof ChatComposer>;
+	const claude = chatOn("claude-code", "opus");
+	const codex = chatOn("codex", "gpt-5.5");
+	await act(async () => { renderer = create(<ChatComposer {...at(claude, "opus")} />); });
+	expect(sliderHost().props.ultracode.on).toBe(true);
+	// To Codex: no prefix, and off once the switch lands.
+	await act(async () => renderer.update(<ChatComposer {...at(claude, "opus", { harness: "codex", modelLabel: "GPT-5.5" })} />));
+	await sendText("one");
+	expect(base.onSend).toHaveBeenLastCalledWith("one", undefined, undefined, undefined);
+	expect(stored.has(key)).toBe(false);
+	await act(async () => renderer.update(<ChatComposer {...at(codex, "gpt-5.5")} />));
+	// Back to Claude Code with Ultracode not picked for the switch.
+	await act(async () => renderer.update(<ChatComposer {...at(codex, "gpt-5.5", { harness: "claude-code", modelLabel: "Opus" })} />));
+	expect(sliderHost().props.ultracode.on).toBe(false);
+	await sendText("two");
+	expect(base.onSend).toHaveBeenLastCalledWith("two", undefined, undefined, undefined);
+	await act(async () => renderer.update(<ChatComposer {...at(claude, "opus")} />));
+	expect(sliderHost().props.ultracode.on).toBe(false);
+	await sendText("three");
+	expect(base.onSend).toHaveBeenLastCalledWith("three", undefined, undefined, undefined);
+});
+
+// The same holds when the chat moves to another agent elsewhere (the desktop,
+// another phone) while this composer is up.
+it("drops a kept Ultracode once the chat is seen running another agent", async () => {
+	const stored = keptOnPhone();
+	const key = "ao.chat.ultracode.host.m.session";
+	stored.set(key, "1");
+	const at = (snapshot: object) => ({ ...props(), machine: "host.m", snapshot, models: [] }) as unknown as ComponentProps<typeof ChatComposer>;
+	await act(async () => { renderer = create(<ChatComposer {...at(chatOn("claude-code", "opus"))} />); });
+	expect(sliderHost().props.ultracode.on).toBe(true);
+	await act(async () => renderer.update(<ChatComposer {...at(chatOn("codex", "gpt-5.5"))} />));
+	expect(stored.has(key)).toBe(false);
+	const back = at(chatOn("claude-code", "opus"));
+	await act(async () => renderer.update(<ChatComposer {...back} />));
+	expect(sliderHost().props.ultracode.on).toBe(false);
+	await sendText("fix it");
+	expect(back.onSend).toHaveBeenLastCalledWith("fix it", undefined, undefined, undefined);
+});
+
+// With a switch picked, the bolt is the switch's Fast mode (desktop's pending
+// switch), sent with it: never the running agent's.
+it("offers the switch's own Fast mode while a switch is picked, never the running agent's", async () => {
+	const onPick = vi.fn();
+	const base = {
+		...props(),
+		machine: "host.m",
+		snapshot: chatOn("claude-code", "opus"),
+		// The running agent's model has a Fast mode of its own.
+		models: [{ id: "opus", displayName: "Opus", efforts: ["low", "high"], defaultEffort: "high", supportsFast: true }],
+	};
+	const fast = { codex: { models: ["gpt-5.5"], byDefault: false } };
+	const withPick = (pending?: object) => ({ ...base, otherAgents: { agents: [{ id: "codex", label: "Codex" }], models: {}, fast, pending, onPick } }) as unknown as ComponentProps<typeof ChatComposer>;
+	await act(async () => { renderer = create(<ChatComposer {...withPick()} />); });
+	expect(sliderHost().props.fast).toMatchObject({ on: false });
+	const running = sliderHost().props.fast;
+
+	const pick = { harness: "codex", model: "gpt-5.5", modelLabel: "GPT-5.5" };
+	await act(async () => renderer.update(<ChatComposer {...withPick(pick)} />));
+	expect(sliderHost().props.fast).not.toBe(running);
+	expect(sliderHost().props.fast).toEqual({ on: false, toggle: expect.any(Function) });
+	act(() => sliderHost().props.fast.toggle());
+	expect(onPick).toHaveBeenLastCalledWith({ ...pick, fastMode: true });
+	await act(async () => renderer.update(<ChatComposer {...withPick({ ...pick, fastMode: true })} />));
+	expect(sliderHost().props.fast.on).toBe(true);
+	act(() => sliderHost().props.fast.toggle());
+	expect(onPick).toHaveBeenLastCalledWith({ ...pick, fastMode: undefined });
+
+	// A model of the switch with no Fast mode: no bolt, and not the running agent's either.
+	await act(async () => renderer.update(<ChatComposer {...withPick({ harness: "codex", model: "gpt-5.1-mini", modelLabel: "mini" })} />));
+	expect(sliderHost().props.fast).toBeUndefined();
 });

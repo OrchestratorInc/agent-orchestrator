@@ -32,7 +32,7 @@ describe("reviewerModelView", () => {
 		expect(view.model).toMatchObject({ title: "Model", value: "opus[1m]", valueLabel: "Opus (1M context)" });
 		// No "Provider default", no placeholder, no way back to where it already is.
 		expect(ids(view.model)).toEqual(["opus[1m]", "sonnet", "haiku"]);
-		expect(view.effort).toMatchObject({ title: "Effort", value: "xhigh", valueLabel: "Xhigh" });
+		expect(view.effort).toMatchObject({ title: "Effort", value: "xhigh", valueLabel: "Extra high" });
 		expect(ids(view.effort)).toEqual(["low", "medium", "high", "xhigh", "max"]);
 	});
 

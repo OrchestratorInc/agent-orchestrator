@@ -25,6 +25,15 @@ it("leaves the model to the agent when none was picked", async () => {
 	expect(JSON.parse(request.mock.lastCall?.[2].body)).not.toHaveProperty("model");
 });
 
+// Desktop's pending switch to a Codex model with a fast tier starts it in Fast mode.
+it("starts the new agent in Fast mode when the pick asks for it, and says nothing otherwise", async () => {
+	request.mockResolvedValue({ json: async () => ({ status: "switched" }) });
+	await switchProviderAndSend(config, "s", { targetHarness: "codex", model: "gpt-5.5", fastMode: true }, { text: "hi", clientMessageId: "send-3" });
+	expect(JSON.parse(request.mock.lastCall?.[2].body)).toMatchObject({ targetHarness: "codex", model: "gpt-5.5", fastMode: true });
+	await switchProviderAndSend(config, "s", { targetHarness: "codex", model: "gpt-5.5", fastMode: undefined }, { text: "hi", clientMessageId: "send-4" });
+	expect(JSON.parse(request.mock.lastCall?.[2].body)).not.toHaveProperty("fastMode");
+});
+
 it("warms the picked agent's chat ahead of the send", async () => {
 	request.mockResolvedValueOnce({});
 	await prewarmChatAgent(config, "codex");

@@ -2,11 +2,18 @@ import AsyncStorage from "@react-native-async-storage/async-storage";
 
 import type { ChatExcerpt } from "./types";
 import type { ProviderSwitchInput } from "./api";
-import { isChatExcerpt } from "./responseQuotes";
+import { excerptDraftText, isChatExcerpt } from "./responseQuotes";
 
 export type PendingSendRecord = {
 	id: string;
 	draftText: string;
+	/**
+	 * The draft as the composer held it, before anything was added to what was
+	 * sent (Ultracode's prefix): what a retry's completion matches the composer
+	 * against, exactly. Absent on older records and where nothing was added,
+	 * and `draftText` is it.
+	 */
+	typedDraft?: string;
 	text: string;
 	hasAttachments: boolean;
 	excerpts?: ChatExcerpt[];
@@ -39,12 +46,28 @@ export async function readPendingSend(key: string): Promise<PendingSendRecord | 
 	const saved = JSON.parse(raw) as PendingSendRecord;
 	if (!saved.id || typeof saved.draftText !== "string" || typeof saved.text !== "string" || typeof saved.hasAttachments !== "boolean" ||
 		(saved.kind !== undefined && saved.kind !== "send" && saved.kind !== "steer") ||
+		(saved.typedDraft !== undefined && typeof saved.typedDraft !== "string") ||
 		(saved.excerpts !== undefined && (!Array.isArray(saved.excerpts) || saved.excerpts.length > 8 || !saved.excerpts.every(isChatExcerpt))) ||
 		(saved.providerSwitch !== undefined && (typeof saved.providerSwitch?.targetHarness !== "string" ||
 			(saved.providerSwitch.model !== undefined && typeof saved.providerSwitch.model !== "string")))) {
 		throw new Error("The previous message's retry record is damaged. Discard it before sending another message.");
 	}
 	return saved;
+}
+
+/**
+ * A send's draft identities: what was sent (`draftText`, which a new send of
+ * the same draft must match to be a retry), and, where the composer's draft
+ * differs from it, the draft as typed (`typedDraft`).
+ */
+export function pendingDraft(sent: string, typed: string | undefined, excerpts?: readonly ChatExcerpt[]): Pick<PendingSendRecord, "draftText" | "typedDraft"> {
+	const draftText = excerptDraftText(sent, excerpts);
+	return typed === undefined || typed === sent ? { draftText } : { draftText, typedDraft: excerptDraftText(typed, excerpts) };
+}
+
+/** The draft a retried send was typed as, for the composer to match exactly. */
+export function retriedDraft(record: Pick<PendingSendRecord, "draftText" | "typedDraft">): string {
+	return record.typedDraft ?? record.draftText;
 }
 
 export async function reservePendingSend(key: string, candidate: PendingSendRecord): Promise<PendingSendRecord> {

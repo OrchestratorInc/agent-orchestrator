@@ -334,6 +334,23 @@ describe("mobile Chat API boundaries", () => {
 		expect(session).toMatchObject({ id: "w-2", projectId: "p-1", mode: "chat", provisionState: "failed", provisionError: "workspace setup failed" });
 	});
 
+	// As desktop's New chat sends it: Fast mode only when on, never a false the
+	// daemon would have to read as "off" for an agent that has none.
+	it("starts a task in Fast mode only when asked to", async () => {
+		vi.mocked(fetch)
+			.mockResolvedValueOnce(response({ session: { id: "w-1", mode: "chat" } }, 201))
+			.mockResolvedValueOnce(response({ session: { id: "w-2", mode: "chat" } }, 201))
+			.mockResolvedValueOnce(response({ ok: true, workerId: "w-3" }, 202))
+			.mockResolvedValueOnce(response({ session: { id: "w-3", projectId: "p-1", mode: "chat" } }));
+		await spawnSession(cfg, { harness: "codex", model: "gpt-5", fastMode: true });
+		await spawnSession(cfg, { harness: "codex", model: "gpt-5", fastMode: false });
+		await delegateTask(cfg, { projectId: "p-1", brief: "Go", agent: "codex", model: "gpt-5", mode: "chat", fastMode: true });
+		const bodies = vi.mocked(fetch).mock.calls.map(([, init]) => init?.body && JSON.parse(String(init.body)));
+		expect(bodies[0]).toMatchObject({ harness: "codex", model: "gpt-5", fastMode: true });
+		expect(bodies[1]).not.toHaveProperty("fastMode");
+		expect(bodies[2]).toEqual({ projectId: "p-1", brief: "Go", agent: "codex", model: "gpt-5", fastMode: true, mode: "chat" });
+	});
+
 	it("forwards picked files as delegated worker attachments", async () => {
 		vi.mocked(fetch)
 			.mockResolvedValueOnce(response({ ok: true, workerId: "w-3" }, 202))

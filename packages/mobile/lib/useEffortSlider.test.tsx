@@ -4,11 +4,15 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 const fixtures = vi.hoisted(() => ({
 	back: new Set<() => boolean>(),
 	keyboard: new Set<() => void>(),
+	keysUp: false,
 }));
 
 vi.mock("react-native", () => ({
 	BackHandler: { addEventListener: (_event: string, handler: () => boolean) => { fixtures.back.add(handler); return { remove: () => fixtures.back.delete(handler) }; } },
-	Keyboard: { addListener: (_event: string, handler: () => void) => { fixtures.keyboard.add(handler); return { remove: () => fixtures.keyboard.delete(handler) }; } },
+	Keyboard: {
+		addListener: (_event: string, handler: () => void) => { fixtures.keyboard.add(handler); return { remove: () => fixtures.keyboard.delete(handler) }; },
+		isVisible: () => fixtures.keysUp,
+	},
 }));
 
 import { markTouchInside, rootTouchStart } from "./touchOutside";
@@ -18,13 +22,13 @@ const levels = [{ value: "low", label: "Low", selected: true }, { value: "high",
 
 let renderer: ReactTestRenderer | undefined;
 let slider: ReturnType<typeof useEffortSliderOpen>;
-beforeEach(() => { vi.useFakeTimers(); vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true); });
+beforeEach(() => { fixtures.keysUp = false; vi.useFakeTimers(); vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true); });
 afterEach(() => { act(() => renderer?.unmount()); renderer = undefined; vi.useRealTimers(); vi.unstubAllGlobals(); });
 
-function render(over: { choices?: typeof levels; busy?: boolean } = {}) {
+function render(over: { choices?: typeof levels; busy?: boolean; toggles?: boolean } = {}) {
 	const onClose = vi.fn();
 	function Harness({ busy }: { busy: boolean }) {
-		slider = useEffortSliderOpen(over.choices ?? levels, busy, onClose);
+		slider = useEffortSliderOpen(over.choices ?? levels, busy, onClose, undefined, undefined, over.toggles);
 		return null;
 	}
 	act(() => { renderer = create(<Harness busy={over.busy ?? false} />); });
@@ -41,13 +45,6 @@ describe("effort slider open", () => {
 		act(() => rootTouchStart());
 		expect(slider.open).toBe(false);
 		expect(onClose).toHaveBeenCalledOnce();
-	});
-
-	it("closes when the keyboard comes up", () => {
-		render();
-		act(() => { for (const listener of [...fixtures.keyboard]) listener(); });
-		expect(slider.open).toBe(false);
-		expect(fixtures.keyboard.size).toBe(0);
 	});
 
 	it("closes after a hard twelve seconds, however busy it has been", () => {
@@ -67,13 +64,37 @@ describe("effort slider open", () => {
 		expect(slider.open).toBe(false);
 	});
 
-	it("closes when the task starts sending, and never opens for a model without levels", () => {
+	// A send, a save or a reconnect flickering busy shut the slider under the
+	// finger: busy keeps it from opening, and leaves one in use up.
+	it("stays up through busy, never opens while busy, and never for a model without levels", () => {
 		const { onClose, setBusy } = render();
 		setBusy(true);
+		expect(slider.open).toBe(true);
+		expect(onClose).not.toHaveBeenCalled();
+		act(() => slider.toggle());
 		expect(slider.open).toBe(false);
-		expect(onClose).toHaveBeenCalledOnce();
+		act(() => slider.toggle());
+		expect(slider.open).toBe(false);
 		render({ choices: [] });
 		expect(slider.open).toBe(false);
+	});
+
+	// Claude Haiku takes no effort, but Ultracode or Fast mode still rides on the slider.
+	it("opens with no levels while the slider carries a switch", () => {
+		render({ choices: [], toggles: true });
+		expect(slider.open).toBe(true);
+	});
+
+	// Over the keys, Android reports the keyboard shown again whenever it
+	// changes height (its suggestion strip, another keyboard): that closed the
+	// slider mid-drag. Only the keyboard coming up under a slider opened
+	// without it puts the slider away.
+	// A picker opened with the keys down brings them up itself (useKeysWithPickers):
+	// the keyboard arriving must not put it away, nor Android re-reporting it.
+	it("stays up as the keyboard comes up", () => {
+		render();
+		expect(fixtures.keyboard.size).toBe(0);
+		expect(slider.open).toBe(true);
 	});
 
 	it("listens to nothing once closed", () => {

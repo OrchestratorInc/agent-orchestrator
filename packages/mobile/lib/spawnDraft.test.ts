@@ -201,12 +201,12 @@ describe("the New task draft", () => {
 
 	// What was picked goes into the Start: restored without it (a model
 	// override), the next Start would send another request under a new id.
-	it("keeps what was picked: project, agent, model override, level, approval, mode, agent account", async () => {
-		const selections = { projectId: "web-app", harness: "codex", model: "gpt-5", effort: "high", approvalMode: "auto", mode: "tui", accountId: "work", accountHarness: "codex" };
+	it("keeps what was picked: project, agent, model override, level, Fast mode, Ultracode, approval, mode, agent account", async () => {
+		const selections = { projectId: "web-app", harness: "codex", model: "gpt-5", effort: "high", fastMode: true, ultracode: true, approvalMode: "auto", mode: "tui", accountId: "work", accountHarness: "codex" };
 		await saveSpawnDraft({ prompt: "Ship it", attachments: [], selections });
 		expect((await loadSpawnDraft())?.selections).toEqual(selections);
 		// Anything not shaped as written is left out, not handed to the page.
-		store.items.set(SPAWN_DRAFT_KEY, JSON.stringify({ v: 1, savedAt: Date.now(), prompt: "x", attachments: [], selections: { model: 3, mode: "chat" }, request: { id: "r" } }));
+		store.items.set(SPAWN_DRAFT_KEY, JSON.stringify({ v: 1, savedAt: Date.now(), prompt: "x", attachments: [], selections: { model: 3, fastMode: "yes", ultracode: 1, mode: "chat" }, request: { id: "r" } }));
 		const odd = await loadSpawnDraft();
 		expect(odd?.selections).toEqual({ mode: "chat" });
 		expect(odd?.request).toBeUndefined();

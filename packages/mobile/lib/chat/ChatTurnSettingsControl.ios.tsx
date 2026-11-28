@@ -1,5 +1,5 @@
 import { Host } from "@expo/ui";
-import { HStack, Label, Menu, Picker, RNHostView, Section, Spacer, Text, Toggle } from "@expo/ui/swift-ui";
+import { Button, HStack, Label, Menu, Picker, RNHostView, Section, Spacer, Text, Toggle } from "@expo/ui/swift-ui";
 import { accessibilityIdentifier, disabled as disabledModifier, pickerStyle, tag } from "@expo/ui/swift-ui/modifiers";
 import { useState } from "react";
 import { StyleSheet } from "react-native";
@@ -9,7 +9,7 @@ import { PermissionPickerButton } from "../permission-picker";
 import { Choice, controlsRowTypeSize, ModelCapsuleLabel, useTriggerModifiers } from "../model-controls.ios";
 import { HarnessImage } from "../spawn-composer-controls.ios";
 import { defaultModelChoice } from "../spawnModel";
-import { AUTOMATIC_MODEL } from "../agentSwitch";
+import { AUTOMATIC_MODEL, repickedSwitch } from "../agentSwitch";
 import type { IOSSymbol } from "../symbols";
 import { useThemeState } from "../ThemeProvider";
 import { space, touchTarget } from "../tokens";
@@ -29,7 +29,7 @@ const topicSymbols: Partial<Record<NonNullable<ReturnType<typeof turnSettingTopi
  * models as the new task's lists each agent's, then any other setting the
  * provider offers, such as Fast mode.
  */
-export function ChatTurnSettingsControl({ snapshot, models, options, disabled, onSettings, onOption, effort, permissions, otherAgents }: ChatTurnSettingsControlProps) {
+export function ChatTurnSettingsControl({ snapshot, models, options, disabled, onSettings, onOption, effort, permissions, modelWheel, otherAgents }: ChatTurnSettingsControlProps) {
 	const { scheme } = useThemeState();
 	const rows = turnSettingsRows(snapshot, models, options);
 	const select = (topic: string) => rows.find((row) => row.kind === "select" && turnSettingTopic(row) === topic);
@@ -59,71 +59,91 @@ export function ChatTurnSettingsControl({ snapshot, models, options, disabled, o
 		if (!choice.selected) choose(row, choice.value);
 	};
 
+	const capsuleLabel = pending
+		? <ModelCapsuleLabel mark={<HarnessImage harness={pending.harness} />} title={pending.modelLabel} />
+		: <ModelCapsuleLabel mark={snapshot.harness ? <HarnessImage harness={snapshot.harness} /> : null} title={parts.model || "Model"} />;
+	const capsuleModifiers = useTriggerModifiers({ label: pending ? `Next message switches to ${otherAgents?.agents.find((agent) => agent.id === pending.harness)?.label ?? pending.harness}, ${pending.modelLabel}` : parts.model ? `Model, ${parts.model}` : "Model", id: "chat-model", disabled: off });
 	return (
 		<Host style={styles.host} ignoreSafeArea="all" colorScheme={scheme}>
 			{/* Who runs the turn and its effort at the row's start beside attach,
 			    approvals at its end beside the round button; the space between
 			    them gives way first. */}
 			<HStack spacing={space.none} modifiers={[controlsRowTypeSize()]}>
-				<Menu
-					key={`model-${generation}`}
-					label={pending
-						? <ModelCapsuleLabel mark={<HarnessImage harness={pending.harness} />} title={pending.modelLabel} />
-						: <ModelCapsuleLabel mark={snapshot.harness ? <HarnessImage harness={snapshot.harness} /> : null} title={parts.model || "Model"} />}
-					modifiers={useTriggerModifiers({ label: pending ? `Next message switches to ${otherAgents?.agents.find((agent) => agent.id === pending.harness)?.label ?? pending.harness}, ${pending.modelLabel}` : parts.model ? `Model, ${parts.model}` : "Model", id: "chat-model", disabled: off })}
-				>
-					{modelChoices.latest.map((choice) => <Choice key={choice.value} label={choice.label} selected={!pending && choice.selected} onChoose={() => chooseCurrent(modelRow!, choice)} />)}
-					{/* Older versions one level down, as on Android: the newest of
-					    each family is what most turns want. */}
-					{modelChoices.older.length ? (
-						<Section>
-							<Menu label="Older models" systemImage="clock.arrow.circlepath">
-								{modelChoices.older.map((choice) => <Choice key={choice.value} label={choice.label} selected={!pending && choice.selected} onChoose={() => chooseCurrent(modelRow!, choice)} />)}
-							</Menu>
-						</Section>
-					) : null}
-					{/* The other agents, each opening onto its models as in the new
-					    task's menu; choosing one switches the session's agent. */}
-					{otherAgents?.agents.length ? (
-						<Section title="Other agents">
-							{otherAgents.agents.map((agent) => {
-								const list = otherAgents.models[agent.id];
-								const choice = (model: { id: string; label: string }) => (
-									<Choice
-										key={model.id}
-										label={model.label}
-										selected={pending?.harness === agent.id && (pending.model ?? AUTOMATIC_MODEL) === model.id}
-										onChoose={() => otherAgents.onPick({
-											harness: agent.id,
-											model: model.id === AUTOMATIC_MODEL ? undefined : model.id,
-											modelLabel: model.id === AUTOMATIC_MODEL ? list?.defaultLabel ?? "Default model" : model.label,
-										})}
-									/>
-								);
-								return (
-									<Menu key={agent.id} label={<Label title={agent.label} icon={<HarnessImage harness={agent.id} />} />} modifiers={[accessibilityIdentifier(`chat-agent-${agent.id}`), disabledModifier(Boolean(otherAgents.disabled))]}>
-										{[{ id: AUTOMATIC_MODEL, label: defaultModelChoice(list?.defaultLabel) }, ...(list?.models ?? [])].map(choice)}
-										{list?.older?.length ? (
-											<Menu label="Older models" systemImage="clock.arrow.circlepath">
-												{list.older.map(choice)}
-											</Menu>
-										) : null}
-									</Menu>
-								);
-							})}
-						</Section>
-					) : null}
-					{otherRows.length ? (
-						<Section>
-							{otherRows.map((row) => <SettingPicker key={row.id} row={row} onChoose={(choice) => { haptics.select(); choose(row, choice); }} />)}
-						</Section>
-					) : null}
-				</Menu>
+				{/* With the wheels, the capsule opens them over the keyboard in
+				    place of its menu, putting the effort and permissions away. */}
+				{modelWheel ? (
+					<Button
+						onPress={() => {
+							haptics.tap();
+							effort?.slider.setOpen(false);
+							permissions?.slider.setOpen(false);
+							modelWheel.slider.setOpen(!modelWheel.slider.isOpen());
+						}}
+						modifiers={capsuleModifiers}
+					>
+						{capsuleLabel}
+					</Button>
+				) : (
+					<Menu
+						key={`model-${generation}`}
+						label={capsuleLabel}
+						modifiers={capsuleModifiers}
+					>
+						{modelChoices.latest.map((choice) => <Choice key={choice.value} label={choice.label} selected={!pending && choice.selected} onChoose={() => chooseCurrent(modelRow!, choice)} />)}
+						{/* Older versions one level down, as on Android: the newest of
+						    each family is what most turns want. */}
+						{modelChoices.older.length ? (
+							<Section>
+								<Menu label="Older models" systemImage="clock.arrow.circlepath">
+									{modelChoices.older.map((choice) => <Choice key={choice.value} label={choice.label} selected={!pending && choice.selected} onChoose={() => chooseCurrent(modelRow!, choice)} />)}
+								</Menu>
+							</Section>
+						) : null}
+						{/* The other agents, each opening onto its models as in the new
+						    task's menu; choosing one switches the session's agent. */}
+						{otherAgents?.agents.length ? (
+							<Section title="Other agents">
+								{otherAgents.agents.map((agent) => {
+									const list = otherAgents.models[agent.id];
+									const choice = (model: { id: string; label: string }) => (
+										<Choice
+											key={model.id}
+											label={model.label}
+											selected={pending?.harness === agent.id && (pending.model ?? AUTOMATIC_MODEL) === model.id}
+											// Another model of the agent already picked keeps what was
+											// turned on for it (see repickedSwitch).
+											onChoose={() => otherAgents.onPick(repickedSwitch({
+												harness: agent.id,
+												model: model.id === AUTOMATIC_MODEL ? undefined : model.id,
+												modelLabel: model.id === AUTOMATIC_MODEL ? list?.defaultLabel ?? "Default model" : model.label,
+											}, pending, otherAgents.fast))}
+										/>
+									);
+									return (
+										<Menu key={agent.id} label={<Label title={agent.label} icon={<HarnessImage harness={agent.id} />} />} modifiers={[accessibilityIdentifier(`chat-agent-${agent.id}`), disabledModifier(Boolean(otherAgents.disabled))]}>
+											{[{ id: AUTOMATIC_MODEL, label: defaultModelChoice(list?.defaultLabel) }, ...(list?.models ?? [])].map(choice)}
+											{list?.older?.length ? (
+												<Menu label="Older models" systemImage="clock.arrow.circlepath">
+													{list.older.map(choice)}
+												</Menu>
+											) : null}
+										</Menu>
+									);
+								})}
+							</Section>
+						) : null}
+						{otherRows.length ? (
+							<Section>
+								{otherRows.map((row) => <SettingPicker key={row.id} row={row} onChoose={(choice) => { haptics.select(); choose(row, choice); }} />)}
+							</Section>
+						) : null}
+					</Menu>
+				)}
 				{/* The effort as a speedometer lit to the chosen level; a tap
 				    opens the slider over the composer. */}
-				{effort?.choices.length ? (
+				{effort && (effort.choices.length || effort.toggles) ? (
 					<RNHostView matchContents>
-						<EffortSliderGauge slider={effort.slider} choices={effort.choices} disabled={off} onPress={() => permissions?.slider.setOpen(false)} testID="chat-effort" />
+						<EffortSliderGauge slider={effort.slider} choices={effort.choices} toggles={effort.toggles} disabled={off} onPress={() => { permissions?.slider.setOpen(false); modelWheel?.slider.setOpen(false); }} testID="chat-effort" />
 					</RNHostView>
 				) : null}
 				<Spacer minLength={0} />
@@ -131,7 +151,7 @@ export function ChatTurnSettingsControl({ snapshot, models, options, disabled, o
 				    the composer, as the effort's does. */}
 				{permissions?.choices.length ? (
 					<RNHostView matchContents>
-						<PermissionPickerButton slider={permissions.slider} choices={permissions.choices} disabled={off} onPress={() => effort?.slider.setOpen(false)} testID="chat-approval" />
+						<PermissionPickerButton slider={permissions.slider} choices={permissions.choices} disabled={off} onPress={() => { effort?.slider.setOpen(false); modelWheel?.slider.setOpen(false); }} testID="chat-approval" />
 					</RNHostView>
 				) : null}
 			</HStack>

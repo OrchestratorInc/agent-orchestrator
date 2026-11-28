@@ -18,12 +18,16 @@ import type { Theme } from "./theme";
 import { useTheme, useThemedStyles } from "./ThemeProvider";
 import { textSelectionColors } from "./textSelection";
 import { iconSize, radius, space, stateOpacity, touchTarget } from "./tokens";
+import type { EffortSliderSwitch } from "./useEffortSlider";
+import { useKeysWithPickers } from "./useKeysWithPickers";
 
 // The chat composer's numbers, so the two pills sit alike.
 const CORNER_CONTROL = touchTarget + space.xxs;
 const dictateGlyph = { ios: "mic.fill", android: "mic" } as const;
 
 export type SpawnComposerProps = {
+	/** The composer's pickers: opening one with the keyboard down brings it up (useKeysWithPickers). */
+	pickers?: readonly EffortSliderSwitch[];
 	prompt: string;
 	onChangePrompt: (value: string) => void;
 	/** Names who will answer, as a conversation's field does: "Ask Codex". */
@@ -64,11 +68,15 @@ export const SpawnSuggestionHost = createContext<((overlay: SpawnSuggestionOverl
  * page is for choosing who runs the task, so the model, effort and approval
  * stay in sight while the field is empty and unfocused.
  */
-export function SpawnComposer({ prompt, onChangePrompt, placeholder, attachments, settings, onChoosePhoto, onChooseFile, onPasteImages, voice, onLoadSkills, onSpawn, busy, disabled }: SpawnComposerProps) {
+const NO_PICKERS: readonly EffortSliderSwitch[] = [];
+
+export function SpawnComposer({ prompt, onChangePrompt, placeholder, attachments, settings, onChoosePhoto, onChooseFile, onPasteImages, voice, onLoadSkills, onSpawn, busy, disabled, pickers = NO_PICKERS }: SpawnComposerProps) {
 	const t = useTheme();
 	const styles = useThemedStyles(makeStyles);
 	const sendFeedback = usePressFeedback("button", { tone: "onAccent" });
 	const field = useRef<TextInput>(null);
+	// A picker opened with the keyboard down brings it up with it, as in chat.
+	useKeysWithPickers(field, pickers);
 	const pasteLayout = useImagePaste(onPasteImages ?? null);
 	// The field's heights at the reader's text size, as the chat's: in points
 	// alone, the largest sizes cut the placeholder off top and bottom.
