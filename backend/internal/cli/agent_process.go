@@ -115,6 +115,10 @@ func (c *commandContext) runSupervisedProcess(ctx context.Context, sessionID, re
 // the child environment lets the real command start instead of failing with
 // `exec: "env": executable file not found`. Other platforms keep the prefix
 // because their `env` applies it.
+//
+// Unlike `env`, an assigned PATH does not affect which binary starts:
+// exec.CommandContext resolves argv[0] against the supervisor's PATH, and the
+// assignment only reaches the child's environment. No adapter assigns PATH.
 func supervisedProcessCommand(ctx context.Context, argv []string) (*exec.Cmd, error) {
 	if len(argv) == 0 {
 		return nil, fmt.Errorf("agent command is required")
