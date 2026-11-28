@@ -6,13 +6,16 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net/http"
 	"net/url"
 	"os"
+	"os/signal"
 	"path/filepath"
 	"regexp"
 	"runtime"
 	"slices"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/spf13/cobra"
@@ -83,6 +86,11 @@ type resolvedTarget struct {
 
 // readOnly reports whether setup must not change anything.
 func (o setupOptions) readOnly() bool { return o.check || o.dryRun }
+
+// agentFlagged reports whether the person named any agent with a flag.
+func (o setupOptions) agentFlagged() bool {
+	return o.agent != "" || o.workerAgent != "" || o.orchestratorAgent != ""
+}
 
 type setupStep struct {
 	Step   string `json:"step"`
@@ -168,7 +176,11 @@ func newSetupCommand(ctx *commandContext) *cobra.Command {
 			if err := opts.validate(cmd); err != nil {
 				return err
 			}
-			res := ctx.runSetup(cmd.Context(), cmd.ErrOrStderr(), opts)
+			// Ctrl-C during the --start wait must still print the task and
+			// exit 4 (submitted; do not start it again), as `ao task` does.
+			runCtx, stop := signal.NotifyContext(cmd.Context(), os.Interrupt, syscall.SIGTERM)
+			defer stop()
+			res := ctx.runSetup(runCtx, cmd.ErrOrStderr(), opts)
 			if err := writeSetupResult(cmd.OutOrStdout(), res, opts); err != nil {
 				return err
 			}
@@ -290,7 +302,10 @@ func (c *commandContext) runSetup(ctx context.Context, errOut io.Writer, opts se
 	agentStep := add(c.setupAgentStep(ctx, opts, &res))
 	// Save the chosen agents even when they still need a sign-in: an
 	// unsupported agent or a failed check is the only reason not to.
-	res.agentSaveable = agentStep.Status == setupOK || agentStep.Status == setupFixed || agentStep.Status == setupNeedsHuman
+	res.agentSaveable = agentStep.Status == setupOK || agentStep.Status == setupFixed || agentStep.Status == setupNeedsHuman ||
+		// A preview whose agent check could not run yet (not checked is
+		// not unusable).
+		(res.readOnly && agentStep.Status == setupSkipped)
 	if res.Agent != nil {
 		// Never save an agent that is not installed (or not supported): the
 		// next run would take it as the person's choice.
@@ -302,7 +317,7 @@ func (c *commandContext) runSetup(ctx context.Context, errOut io.Writer, opts se
 	}
 	add(c.setupGitHubStep(ctx, opts))
 	projectStep := add(c.setupProjectStep(ctx, opts, &res))
-	setupRecheckAgentStep(&res)
+	setupRecheckAgentStep(&res, opts)
 	add(setupFirstRunStep(projectStep, res.Project))
 
 	if opts.start != "" {
@@ -316,9 +331,11 @@ func (c *commandContext) runSetup(ctx context.Context, errOut io.Writer, opts se
 // a registered project whose saved agents replace the ones the agent step
 // picked (another run registered it in between). A blocked agent the project
 // does not run no longer blocks; one it still runs keeps blocking.
-func setupRecheckAgentStep(res *setupResult) {
-	// Explicit agent flags keep their own conflict handling (needs --yes).
-	if res.Agent == nil || res.Agent.Source == "flag" || res.Agent.Source == "roles" {
+func setupRecheckAgentStep(res *setupResult, opts setupOptions) {
+	// An agent the person named with a flag keeps its blocker (and its own
+	// conflict handling, which needs --yes), even when the project's saved
+	// roles replaced it: setup must not start the task on another agent.
+	if res.Agent == nil || opts.agentFlagged() {
 		return
 	}
 	idx := -1
@@ -540,8 +557,15 @@ func setupProbeFromReadiness(agents []agentReadinessSnapshot, id string) setupPr
 		}
 		probe.Supported = true
 		probe.Installed = a.Installation.State == "installed"
+		probe.installUnknown = a.Installation.State == "" || a.Installation.State == "unknown"
 		probe.Agent.Label = a.Label
 		probe.Agent.AuthStatus = a.Authentication.State
+		if a.Authentication.Freshness != "" && a.Authentication.Freshness != "fresh" {
+			// A cached sign-in the daemon has not re-checked recently (an
+			// outside sign-out does not reach the cache) is not current: let
+			// the agent's own status command decide, else say unverified.
+			probe.Agent.AuthStatus = "unknown"
+		}
 	}
 	return probe
 }
@@ -554,6 +578,9 @@ type setupProbe struct {
 	} `json:"agent"`
 	Supported bool `json:"supported"`
 	Installed bool `json:"installed"`
+	// installUnknown marks a preview whose cached readiness has not checked
+	// the installation yet (never set from a probe).
+	installUnknown bool
 }
 
 // setupAgentStep picks the agent (flag, calling agent, first ready) and
@@ -756,6 +783,12 @@ func (c *commandContext) setupCheckAgent(ctx context.Context, id string, res *se
 		check.problem = fmt.Sprintf("agent %q is not supported by this Orchestrator", id)
 		check.fix = "ao agent ls"
 		check.problem += "; pick a supported agent from `ao agent ls` and pass --agent <id>"
+	case !probe.Installed && probe.installUnknown:
+		// A preview on a cold readiness cache: not checked is not "not
+		// installed". The real run checks it.
+		res.pending = true
+		check.status = setupSkipped
+		check.note = fmt.Sprintf("%s's installation has not been checked yet; `ao setup` checks it", id)
 	case !probe.Installed:
 		check.unusable = true
 		check.status = setupNeedsHuman
@@ -783,7 +816,8 @@ func (c *commandContext) setupCheckAgent(ctx context.Context, id string, res *se
 
 // firstReadyAgent returns the first agent the daemon calls ready, else the
 // first installed agent with a saved (unproven) sign-in, else the first
-// installed one whose sign-in is not known yet.
+// installed one whose sign-in is not known yet, else the first installed one
+// that is signed out.
 func firstReadyAgent(agents []agentReadinessSnapshot) string {
 	if id := firstReadyAgentExcept(agents, ""); id != "" {
 		return id
@@ -798,6 +832,13 @@ func firstReadyAgent(agents []agentReadinessSnapshot) string {
 	// step checks it right away, with the agent's own status command.
 	for _, a := range agents {
 		if a.Installation.State == "installed" && (a.Authentication.State == "unknown" || a.Authentication.State == "") {
+			return a.ID
+		}
+	}
+	// Last, an installed agent that is signed out: the agent step names its
+	// sign-in command instead of saying no agent was found.
+	for _, a := range agents {
+		if a.Installation.State == "installed" && a.Authentication.State == "unauthorized" {
 			return a.ID
 		}
 	}
@@ -892,14 +933,24 @@ type setupAuthStatusCommand struct {
 	args          []string
 	loggedInField string
 	signedOutText string
+	// accountProvider is the agent's provider in Orchestrator's saved
+	// accounts: when new sessions use a saved account, not the computer's own
+	// login, the status command (which checks the computer's login) does not
+	// apply.
+	accountProvider string
+	// configHomeEnv/configDir locate the agent's config.toml (the env var
+	// wins, else configDir under the home folder). When that config selects a
+	// model_provider other than defaultProvider, the status command (which
+	// checks the default provider's login only) does not apply.
+	configHomeEnv, configDir, defaultProvider string
 }
 
 // setupAuthStatusCommands maps registry ids to their own status commands, for
 // agents whose daemon probe can report an unproven sign-in. Keep it a plain
 // data list: one row per agent.
 var setupAuthStatusCommands = map[string]setupAuthStatusCommand{
-	"claude-code": {binary: "claude", args: []string{"auth", "status"}, loggedInField: "loggedIn"},
-	"codex":       {binary: "codex", args: []string{"login", "status"}, signedOutText: "Not logged in"},
+	"claude-code": {binary: "claude", args: []string{"auth", "status"}, loggedInField: "loggedIn", accountProvider: "claude"},
+	"codex":       {binary: "codex", args: []string{"login", "status"}, signedOutText: "Not logged in", accountProvider: "codex", configHomeEnv: "CODEX_HOME", configDir: ".codex", defaultProvider: "openai"},
 }
 
 // setupOwnSignIn runs the agent's own status command. Anything unclear (no
@@ -907,6 +958,20 @@ var setupAuthStatusCommands = map[string]setupAuthStatusCommand{
 func (c *commandContext) setupOwnSignIn(ctx context.Context, id string) setupSignIn {
 	cmd, ok := setupAuthStatusCommands[id]
 	if !ok {
+		return setupSignInUnknown
+	}
+	if cmd.accountProvider != "" {
+		switch account := c.setupDefaultAccount(ctx, cmd.accountProvider); {
+		case account.unreadable:
+			return setupSignInUnknown
+		case account.managed && account.loggedIn:
+			return setupSignedIn
+		case account.managed:
+			// A saved account's sign-in is the daemon's to confirm.
+			return setupSignInUnknown
+		}
+	}
+	if cmd.defaultProvider != "" && setupOtherModelProvider(cmd) {
 		return setupSignInUnknown
 	}
 	path := cmd.binary
@@ -951,6 +1016,72 @@ func (c *commandContext) setupOwnSignIn(ctx context.Context, id string) setupSig
 		return setupSignedOut
 	}
 	return setupSignInUnknown
+}
+
+type setupAccount struct {
+	// managed: new sessions use a saved Orchestrator account, not the
+	// computer's own login.
+	managed, loggedIn bool
+	// unreadable: the saved accounts could not be read, so which account new
+	// sessions use is not known.
+	unreadable bool
+}
+
+// setupDefaultAccount reads (from the daemon's cache, never refreshing) which
+// account new sessions of provider use. A daemon without saved accounts
+// answers 404: the computer's own login.
+func (c *commandContext) setupDefaultAccount(ctx context.Context, provider string) setupAccount {
+	var list struct {
+		Accounts []struct {
+			Provider string `json:"provider"`
+			Device   bool   `json:"device"`
+			Default  bool   `json:"default"`
+			LoggedIn bool   `json:"loggedIn"`
+		} `json:"accounts"`
+	}
+	if err := c.getJSON(ctx, "agents/accounts", &list); err != nil {
+		var apiErr apiResponseError
+		if errors.As(err, &apiErr) && (apiErr.StatusCode == http.StatusNotFound || apiErr.StatusCode == http.StatusNotImplemented) {
+			return setupAccount{}
+		}
+		return setupAccount{unreadable: true}
+	}
+	for _, a := range list.Accounts {
+		if a.Provider == provider && a.Default && !a.Device {
+			return setupAccount{managed: true, loggedIn: a.LoggedIn}
+		}
+	}
+	return setupAccount{}
+}
+
+// setupModelProviderLine matches a top-level model_provider setting.
+var setupModelProviderLine = regexp.MustCompile(`^\s*model_provider\s*=\s*["']([^"']+)["']`)
+
+// setupOtherModelProvider reports whether the agent's config on this computer
+// selects a model provider other than its default one, whose login is all
+// its status command checks.
+func setupOtherModelProvider(cmd setupAuthStatusCommand) bool {
+	home := os.Getenv(cmd.configHomeEnv)
+	if home == "" {
+		dir, err := os.UserHomeDir()
+		if err != nil {
+			return false
+		}
+		home = filepath.Join(dir, cmd.configDir)
+	}
+	data, err := os.ReadFile(filepath.Join(home, "config.toml"))
+	if err != nil {
+		return false
+	}
+	for _, line := range strings.Split(string(data), "\n") {
+		if strings.HasPrefix(strings.TrimSpace(line), "[") {
+			break // top-level keys only; a table starts the profiles
+		}
+		if m := setupModelProviderLine.FindStringSubmatch(line); m != nil {
+			return !strings.EqualFold(m[1], cmd.defaultProvider)
+		}
+	}
+	return false
 }
 
 // setupInstallFix tells the person how to install an agent. Setup never
@@ -1049,11 +1180,13 @@ func (c *commandContext) setupRepoOnGitHub(ctx context.Context, opts setupOption
 			continue
 		}
 		if ssh {
-			// An SSH host may be an alias (github-work) for github.com.
-			resolved, ok := c.setupSSHHostname(ctx, host)
-			if (!ok || resolved == host) && !strings.Contains(host, ".") {
-				// A dotless name SSH does not map anywhere is an alias setup
-				// cannot resolve: assume it may be GitHub, and check gh.
+			// An SSH host may be an alias (github-work) for github.com. Ask
+			// with the remote's login user: SSH config can match on it.
+			resolved, ok := c.setupSSHHostname(ctx, host, remoteUser(fields[1]))
+			if (!ok || resolved == host) && !strings.Contains(host, ".") && strings.Contains(host, "github") {
+				// A dotless alias SSH does not map anywhere (github-work) is
+				// taken as GitHub only when its name says so; any other
+				// unresolved name (gitlab) keeps the check advisory.
 				return true
 			}
 			if ok {
@@ -1068,8 +1201,12 @@ func (c *commandContext) setupRepoOnGitHub(ctx context.Context, opts setupOption
 }
 
 // setupSSHHostname resolves an SSH host alias through the person's SSH config.
-func (c *commandContext) setupSSHHostname(ctx context.Context, host string) (string, bool) {
-	out, err := c.deps.CommandOutput(ctx, "ssh", "-G", host)
+func (c *commandContext) setupSSHHostname(ctx context.Context, host, user string) (string, bool) {
+	args := []string{"-G"}
+	if user != "" {
+		args = append(args, "-l", user)
+	}
+	out, err := c.deps.CommandOutput(ctx, "ssh", append(args, host)...)
 	if err != nil {
 		return "", false
 	}
@@ -1079,6 +1216,26 @@ func (c *commandContext) setupSSHHostname(ctx context.Context, host string) (str
 		}
 	}
 	return "", false
+}
+
+// remoteUser returns the login user of an SSH git remote (git in
+// git@host:path or ssh://git@host/path), or "".
+func remoteUser(remote string) string {
+	if strings.Contains(remote, "://") {
+		u, err := url.Parse(remote)
+		if err != nil || u.User == nil {
+			return ""
+		}
+		return u.User.Username()
+	}
+	host, _, ok := strings.Cut(remote, ":")
+	if !ok || strings.Contains(host, "/") {
+		return ""
+	}
+	if user, _, found := strings.Cut(host, "@"); found {
+		return user
+	}
+	return ""
 }
 
 // remoteHost returns the host of a git remote URL and whether it is reached
@@ -1120,11 +1277,22 @@ func (c *commandContext) setupProjectStep(ctx context.Context, opts setupOptions
 	project := existing
 	reused := found
 	if !found {
+		// An agent the person named (any agent flag) that cannot be saved
+		// yet: registering now would save the daemon's default for that role
+		// instead, and the rerun after installing would then need --yes to
+		// replace it. The preview says the same.
+		deferRegistration := opts.agentFlagged() && (res.Agent == nil || !res.agentSaveable)
 		if opts.readOnly() {
 			if repoStep := c.setupCheckRepo(ctx, path); repoStep != nil {
 				return *repoStep
 			}
 			res.pending = true
+			if deferRegistration {
+				step.Status = setupSkipped
+				step.Detail = fmt.Sprintf("%s is not registered; `ao setup` registers it with the agents you chose once they are installed", path)
+				res.Project = &setupProject{Path: path}
+				return step
+			}
 			step.Status = setupSkipped
 			step.Detail = fmt.Sprintf("%s is not registered; `ao setup` would register it", path)
 			if res.Agent != nil && res.agentSaveable {
@@ -1148,10 +1316,7 @@ func (c *commandContext) setupProjectStep(ctx context.Context, opts setupOptions
 			}
 			return step
 		}
-		if res.Agent != nil && !res.agentSaveable && (res.Agent.Source == "flag" || res.Agent.Source == "roles") {
-			// The agent the person named is not usable yet. Registering now
-			// would save the daemon's default instead, and the rerun after
-			// installing would then need --yes to replace it.
+		if deferRegistration {
 			step.Status = setupSkipped
 			step.Detail = fmt.Sprintf("%s is not registered yet: setup registers it with the agents you chose once they are installed", path)
 			return step
@@ -1208,6 +1373,9 @@ func (c *commandContext) setupProjectStep(ctx context.Context, opts setupOptions
 			actions = append(actions, changed)
 		}
 	}
+	// The project is registered (or reused) from here on: report it even if
+	// the default-branch update below fails.
+	res.Project = setupProjectFrom(project, reused)
 
 	// An "auto" default branch is resolved from origin's HEAD when a session
 	// starts. When that cannot work, setupBaseBranch picks one the way
@@ -1235,18 +1403,24 @@ func (c *commandContext) setupProjectStep(ctx context.Context, opts setupOptions
 				step.Fix = fmt.Sprintf("ao project set-config %s --default-branch %s", setupShellQuote(project.ID), setupShellQuote(branch))
 				return step
 			}
-			cfg.DefaultBranch = branch
-			var updated projectResult
-			if err := c.putJSON(ctx, "projects/"+url.PathEscape(project.ID)+"/config", setConfigRequest{Config: cfg}, &updated); err != nil {
-				step.Status, step.Detail = setupFailed, "could not set the default branch: "+err.Error()
-				step.Fix = fmt.Sprintf("ao project set-config %s --default-branch %s", setupShellQuote(project.ID), setupShellQuote(branch))
-				return step
+			if current := strings.TrimSpace(cfg.DefaultBranch); current != "" && current != "auto" {
+				// Someone set a default branch since the lookup: keep it.
+				project.DefaultBranch = current
+				actions = append(actions, fmt.Sprintf("kept default branch %s, set while setup ran", current))
+			} else {
+				cfg.DefaultBranch = branch
+				var updated projectResult
+				if err := c.putJSON(ctx, "projects/"+url.PathEscape(project.ID)+"/config", setConfigRequest{Config: cfg}, &updated); err != nil {
+					step.Status, step.Detail = setupFailed, "could not set the default branch: "+err.Error()
+					step.Fix = fmt.Sprintf("ao project set-config %s --default-branch %s", setupShellQuote(project.ID), setupShellQuote(branch))
+					return step
+				}
+				project.DefaultBranch = branch
+				if updated.Project.ID != "" && updated.Project.DefaultBranch != "" {
+					project.DefaultBranch = updated.Project.DefaultBranch
+				}
+				actions = append(actions, fmt.Sprintf("set default branch to %s (%s)", branch, why))
 			}
-			project.DefaultBranch = branch
-			if updated.Project.ID != "" && updated.Project.DefaultBranch != "" {
-				project.DefaultBranch = updated.Project.DefaultBranch
-			}
-			actions = append(actions, fmt.Sprintf("set default branch to %s (%s)", branch, why))
 		}
 	}
 
@@ -1379,6 +1553,9 @@ func (c *commandContext) setupReconcileAgents(ctx context.Context, opts setupOpt
 	}
 	var updated projectResult
 	if err := c.putJSON(ctx, "projects/"+url.PathEscape(project.ID)+"/config", setConfigRequest{Config: want}, &updated); err != nil {
+		// Report the roles the project really has, not the unsaved draft.
+		res.Agent.Worker = firstNonEmpty(saved.Worker.Agent, res.Agent.Worker)
+		res.Agent.Orchestrator = firstNonEmpty(saved.Orchestrator.Agent, res.Agent.Orchestrator)
 		step := setupStep{Step: setupStepProject, Status: setupFailed, Detail: "could not save the project's agents: " + err.Error()}
 		return &step, ""
 	}
@@ -1580,23 +1757,35 @@ func (c *commandContext) setupBaseBranch(ctx context.Context, project projectDet
 		}
 		return setupBranchPlan{branch: branch, why: why}
 	}
-	if out, err := c.deps.CommandOutputInDir(ctx, project.Path, "git", "symbolic-ref", "-q", "refs/remotes/"+remote+"/HEAD"); err == nil {
+	// A bare branch name means an origin branch to the daemon's resolver, so
+	// another remote's branch is saved remote-qualified (upstream/trunk).
+	qualify := func(branch string) string {
 		if remote == "origin" {
-			return setupBranchPlan{}
+			return branch
 		}
-		if branch := strings.TrimPrefix(strings.TrimSpace(string(out)), "refs/remotes/"+remote+"/"); branch != "" {
-			return setupBranchPlan{branch: branch, why: fmt.Sprintf("the repository has no origin; using %s's default branch", remote), remote: remote}
+		return remote + "/" + branch
+	}
+	if out, err := c.deps.CommandOutputInDir(ctx, project.Path, "git", "symbolic-ref", "-q", "refs/remotes/"+remote+"/HEAD"); err == nil {
+		// The cached HEAD counts only if its target still exists: a deleted
+		// branch leaves a dangling symref the daemon cannot resolve.
+		if _, verr := c.deps.CommandOutputInDir(ctx, project.Path, "git", "rev-parse", "-q", "--verify", "refs/remotes/"+remote+"/HEAD^{commit}"); verr == nil {
+			if remote == "origin" {
+				return setupBranchPlan{}
+			}
+			if branch := strings.TrimPrefix(strings.TrimSpace(string(out)), "refs/remotes/"+remote+"/"); branch != "" {
+				return setupBranchPlan{branch: qualify(branch), why: fmt.Sprintf("the repository has no origin; using %s's default branch", remote), remote: remote}
+			}
 		}
 	}
 	if branch, ok := setupRemoteHead(ctx, project.Path, remote); ok {
 		if remote == "origin" {
 			return setupBranchPlan{}
 		}
-		return setupBranchPlan{branch: branch, why: fmt.Sprintf("the repository has no origin; using %s's default branch", remote), remote: remote}
+		return setupBranchPlan{branch: qualify(branch), why: fmt.Sprintf("the repository has no origin; using %s's default branch", remote), remote: remote}
 	}
 	for _, candidate := range []string{"main", "master"} {
 		if _, err := c.deps.CommandOutputInDir(ctx, project.Path, "git", "rev-parse", "-q", "--verify", "refs/remotes/"+remote+"/"+candidate); err == nil {
-			return setupBranchPlan{branch: candidate, why: fmt.Sprintf("%s's default branch could not be resolved; using %s/%s", remote, remote, candidate), remote: remote}
+			return setupBranchPlan{branch: qualify(candidate), why: fmt.Sprintf("%s's default branch could not be resolved; using %s/%s", remote, remote, candidate), remote: remote}
 		}
 	}
 	return setupBranchPlan{why: fmt.Sprintf("%s's default branch could not be resolved (the remote was never fetched or is unreachable)", remote), remote: remote}
@@ -1704,6 +1893,11 @@ func (c *commandContext) setupStartStep(ctx context.Context, opts setupOptions, 
 		return step
 	}
 	topts := taskStartOptions{project: project.ID, worker: opts.worker, wait: true, timeout: defaultTaskTimeout}
+	if opts.worker && res.Agent != nil && res.Agent.Worker != "" {
+		// Pin the worker agent setup checked and saved, so the task cannot
+		// start on one another client saved in between.
+		topts.agent = res.Agent.Worker
+	}
 	task := c.createTask(ctx, project, opts.start, topts)
 	if task.Status == taskStatusStarting || task.Status == taskStatusQueued || task.Status == taskStatusRunning {
 		task = c.waitTask(ctx, task, topts.timeout)

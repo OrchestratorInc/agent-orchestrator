@@ -10,10 +10,12 @@ import (
 	"path/filepath"
 	"reflect"
 	"runtime"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/registry"
 	"github.com/aoagents/agent-orchestrator/backend/internal/daemonmeta"
@@ -57,6 +59,20 @@ func gitRepo(t *testing.T, withRemote bool) string {
 
 // gitFreeEnv is the test environment without GIT_* variables, so a fixture
 // repository never resolves to a repository the suite runs inside (a hook).
+// clearGitEnv unsets every GIT_* variable for one test (a git hook sets
+// GIT_DIR, which would point the CLI's own git lookups at another repository).
+func clearGitEnv(t *testing.T) {
+	t.Helper()
+	for _, kv := range os.Environ() {
+		if name, _, _ := strings.Cut(kv, "="); strings.HasPrefix(name, "GIT_") {
+			t.Setenv(name, "") // restores the original value afterwards
+			if err := os.Unsetenv(name); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+}
+
 func gitFreeEnv() []string {
 	var env []string
 	for _, kv := range os.Environ() {
@@ -355,6 +371,7 @@ func TestSetupFindsRepoFromCurrentDirectory(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Chdir(sub)
+	clearGitEnv(t)
 	registerOnPost(d, repo, "example/calc")
 
 	out, _, err := executeCLI(t, fakeClockDeps(), "setup", "--json")
@@ -835,13 +852,13 @@ func TestSetupDaemonErrorsFailTheStep(t *testing.T) {
 			d := newSetupDaemon(t)
 			repo := gitRepo(t, true)
 			registerOnPost(d, repo, "example/calc")
-			d.set(tc.route, 500, `{"code":"INTERNAL","message":"boom"}`)
+			d.set(tc.route, 500, `{"code":"INTERNAL","message":"boom","requestId":"req-123"}`)
 			out, _, err := executeCLI(t, fakeClockDeps(), "setup", "--path", repo, "--json")
 			if got := ExitCode(err); got != setupExitFailed {
 				t.Fatalf("exit = %d (%v), want 1", got, err)
 			}
 			res := decodeSetup(t, out)
-			if s := stepNamed(t, res, tc.step); s.Status != setupFailed || !strings.Contains(s.Detail, "boom") {
+			if s := stepNamed(t, res, tc.step); s.Status != setupFailed || !strings.Contains(s.Detail, "boom (INTERNAL) [request req-123]") {
 				t.Fatalf("%s step = %+v", tc.step, s)
 			}
 			if v := stepNamed(t, res, "verify"); v.Status != setupFailed || !strings.Contains(v.Detail, tc.step+" step failed") {
@@ -973,13 +990,14 @@ func TestSetupAgentOwnStatusCommandDecidesUnprovenSignIn(t *testing.T) {
 		cmd      setupAuthStatusCommand
 		wantExit int
 		want     string
+		wantAuth string
 	}{
-		{"json signed out", `{"loggedIn":false}`, 1, setupAuthStatusCommand{loggedInField: "loggedIn"}, setupExitNeedsHuman, setupNeedsHuman},
-		{"json signed out after a warning line", `Warning: renew soon\n{"loggedIn":false}`, 1, setupAuthStatusCommand{loggedInField: "loggedIn"}, setupExitNeedsHuman, setupNeedsHuman},
-		{"json signed in", `{"loggedIn":true}`, 0, setupAuthStatusCommand{loggedInField: "loggedIn"}, 0, setupOK},
-		{"exit code signed out", "Not logged in", 1, setupAuthStatusCommand{signedOutText: "Not logged in"}, setupExitNeedsHuman, setupNeedsHuman},
-		{"exit code signed in", "Logged in using ChatGPT", 0, setupAuthStatusCommand{signedOutText: "Not logged in"}, 0, setupOK},
-		{"unclear output stays unproven", "boom", 2, setupAuthStatusCommand{loggedInField: "loggedIn"}, 0, setupOK},
+		{"json signed out", `{"loggedIn":false}`, 1, setupAuthStatusCommand{loggedInField: "loggedIn"}, setupExitNeedsHuman, setupNeedsHuman, "unauthorized"},
+		{"json signed out after a warning line", `Warning: renew soon\n{"loggedIn":false}`, 1, setupAuthStatusCommand{loggedInField: "loggedIn"}, setupExitNeedsHuman, setupNeedsHuman, "unauthorized"},
+		{"json signed in", `{"loggedIn":true}`, 0, setupAuthStatusCommand{loggedInField: "loggedIn"}, 0, setupOK, "authorized"},
+		{"exit code signed out", "Not logged in", 1, setupAuthStatusCommand{signedOutText: "Not logged in"}, setupExitNeedsHuman, setupNeedsHuman, "unauthorized"},
+		{"exit code signed in", "Logged in", 0, setupAuthStatusCommand{signedOutText: "Not logged in"}, 0, setupOK, "authorized"},
+		{"unclear output stays unproven", "boom", 2, setupAuthStatusCommand{loggedInField: "loggedIn"}, 0, setupOK, "configured"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -997,6 +1015,9 @@ func TestSetupAgentOwnStatusCommandDecidesUnprovenSignIn(t *testing.T) {
 			agent := stepNamed(t, res, "agent")
 			if agent.Status != tc.want {
 				t.Fatalf("agent step = %+v, want %s", agent, tc.want)
+			}
+			if res.Agent == nil || res.Agent.AuthStatus != tc.wantAuth {
+				t.Fatalf("agent = %+v, want authStatus %s", res.Agent, tc.wantAuth)
 			}
 			if tc.want == setupNeedsHuman && (agent.Fix != "agent-a login" || len(res.NextActions) == 0 || res.NextActions[0] != "agent-a login") {
 				t.Fatalf("agent step = %+v, next_actions = %q; want the verbatim login command", agent, res.NextActions)
@@ -1497,14 +1518,14 @@ func TestSetupUsesANonOriginRemotesDefault(t *testing.T) {
 	project := fmt.Sprintf(`{"id":"calc","path":%q,"repo":"","defaultBranch":"auto","config":{"worker":{"agent":"codex"},"orchestrator":{"agent":"codex"}}}`, repo)
 	d.set("POST /api/v1/projects", 201, `{"project":`+project+`}`)
 	d.set("GET /api/v1/projects/calc", 200, `{"status":"ok","project":`+project+`}`)
-	d.set("PUT /api/v1/projects/calc/config", 200, `{"project":{"id":"calc","defaultBranch":"trunk"}}`)
+	d.set("PUT /api/v1/projects/calc/config", 200, `{"project":{"id":"calc","defaultBranch":"upstream/trunk"}}`)
 	out, _, err := executeCLI(t, fakeClockDeps(), "setup", "--path", repo, "--agent", "codex", "--json")
 	if err != nil {
 		t.Fatalf("err = %v\n%s", err, out)
 	}
 	var put setConfigRequest
-	if err := json.Unmarshal([]byte(d.bodies["PUT /api/v1/projects/calc/config"]), &put); err != nil || put.Config.DefaultBranch != "trunk" {
-		t.Fatalf("set-config body = %s, want upstream's default trunk", d.bodies["PUT /api/v1/projects/calc/config"])
+	if err := json.Unmarshal([]byte(d.bodies["PUT /api/v1/projects/calc/config"]), &put); err != nil || put.Config.DefaultBranch != "upstream/trunk" {
+		t.Fatalf("set-config body = %s, want upstream/trunk (remote-qualified)", d.bodies["PUT /api/v1/projects/calc/config"])
 	}
 }
 
@@ -1559,24 +1580,43 @@ func TestSetupFirstRunOKOnceTheProjectIsRegistered(t *testing.T) {
 }
 
 func TestSetupUnresolvedSSHAliasChecksGitHub(t *testing.T) {
-	d := newSetupDaemon(t)
-	repo := gitRepo(t, false)
-	gitIn(t, repo, "remote", "add", "origin", "git@corp-git:org/calc.git")
-	gitIn(t, repo, "update-ref", "refs/remotes/origin/main", "HEAD")
-	gitIn(t, repo, "symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/main")
-	registerOnPost(d, repo, "org/calc")
-	d.set("GET /api/v1/system/github-auth", 200, `{"id":"github-auth","satisfied":false}`)
-	deps := fakeClockDeps()
-	deps.LookPath = func(string) (string, error) { return "/usr/bin/gh", nil }
-	deps.CommandOutput = func(_ context.Context, name string, args ...string) ([]byte, error) {
-		if name == "ssh" {
-			return []byte("hostname corp-git\n"), nil // ssh -G echoes an unknown alias back
-		}
-		return nil, errors.New("unexpected command")
+	cases := []struct {
+		remote, sshHost string
+		want            string
+	}{
+		// A dotless alias SSH echoes back is GitHub only when its name says so.
+		{"git@github-work:org/calc.git", "github-work", setupNeedsHuman},
+		{"git@gitlab:org/calc.git", "gitlab", setupSkipped},
+		// An alias that maps to github.com only for the remote's login user.
+		{"git@code.example.net:org/calc.git", "code.example.net", setupNeedsHuman},
 	}
-	out, _, _ := executeCLI(t, deps, "setup", "--path", repo, "--json")
-	if gh := stepNamed(t, decodeSetup(t, out), "github"); gh.Status != setupNeedsHuman {
-		t.Fatalf("github step = %+v; an alias setup cannot resolve must be checked like GitHub", gh)
+	for _, tc := range cases {
+		t.Run(tc.remote, func(t *testing.T) {
+			d := newSetupDaemon(t)
+			repo := gitRepo(t, false)
+			gitIn(t, repo, "remote", "add", "origin", tc.remote)
+			gitIn(t, repo, "update-ref", "refs/remotes/origin/main", "HEAD")
+			gitIn(t, repo, "symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/main")
+			registerOnPost(d, repo, "org/calc")
+			d.set("GET /api/v1/system/github-auth", 200, `{"id":"github-auth","satisfied":false}`)
+			deps := fakeClockDeps()
+			deps.LookPath = func(string) (string, error) { return "/usr/bin/gh", nil }
+			deps.CommandOutput = func(_ context.Context, name string, args ...string) ([]byte, error) {
+				if name != "ssh" {
+					return nil, errors.New("unexpected command")
+				}
+				// ssh -G echoes an unknown alias back; code.example.net maps
+				// to github.com only under `Match user git`.
+				if tc.sshHost == "code.example.net" && slices.Contains(args, "-l") && slices.Contains(args, "git") {
+					return []byte("hostname github.com\n"), nil
+				}
+				return []byte("hostname " + tc.sshHost + "\n"), nil
+			}
+			out, _, _ := executeCLI(t, deps, "setup", "--path", repo, "--json")
+			if gh := stepNamed(t, decodeSetup(t, out), "github"); gh.Status != tc.want {
+				t.Fatalf("github step = %+v, want %s", gh, tc.want)
+			}
+		})
 	}
 }
 
@@ -1733,5 +1773,318 @@ func TestSetupRemoteLookupFailureSavesNoBranch(t *testing.T) {
 	}
 	if p := stepNamed(t, decodeSetup(t, out), "project"); !strings.Contains(p.Fix, "remote -v") {
 		t.Fatalf("project step = %+v", p)
+	}
+}
+
+// Ctrl-C during the --start wait still prints the task and exits 4: the task
+// was submitted, so it must not be started again.
+func TestSetupStartInterruptedBySignalExits4(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("sends SIGINT to the test process")
+	}
+	d := newSetupDaemon(t)
+	repo := gitRepo(t, true)
+	registerOnPost(d, repo, "example/calc")
+	d.set("POST /api/v1/orchestrators/delegate", 202, `{"ok":true,"workerId":"calc-1"}`)
+	d.set("GET /api/v1/sessions/calc-1", 200, `{"session":{"id":"calc-1","harness":"claude-code","mode":"chat","provisionState":"ready","activity":{"state":"active"}}}`)
+	d.set("GET /api/v1/sessions/calc-1/conversation", 200, `{"turns":[{"id":"t1","state":"queued"}]}`)
+	deps := fakeClockDeps()
+	sleep := deps.Sleep
+	var once sync.Once
+	deps.Sleep = func(dur time.Duration) {
+		once.Do(func() {
+			p, err := os.FindProcess(os.Getpid())
+			if err != nil {
+				t.Error(err)
+				return
+			}
+			if err := p.Signal(os.Interrupt); err != nil {
+				t.Error(err)
+			}
+			time.Sleep(200 * time.Millisecond) // let the signal reach the context
+		})
+		sleep(dur)
+	}
+	out, _, err := executeCLI(t, deps, "setup", "--path", repo, "--start", "fix it", "--worker", "--json")
+	if got := ExitCode(err); got != taskExitStillQueued {
+		t.Fatalf("exit = %d (%v), want 4\n%s", got, err, out)
+	}
+	res := decodeSetup(t, out)
+	if res.Task == nil || res.Task.TaskID != "calc-1" {
+		t.Fatalf("task = %+v", res.Task)
+	}
+	if !reflect.DeepEqual(res.NextActions, []string{"ao task wait calc-1"}) {
+		t.Fatalf("next_actions = %q", res.NextActions)
+	}
+}
+
+// A preview on a cold readiness cache does not call an unchecked agent "not
+// installed".
+func TestSetupCheckDoesNotCallAnUncheckedAgentMissing(t *testing.T) {
+	d := newSetupDaemon(t)
+	repo := gitRepo(t, true)
+	gitIn(t, repo, "update-ref", "refs/remotes/origin/main", "HEAD")
+	gitIn(t, repo, "symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/main")
+	d.set("GET /api/v1/agents/readiness", 200, `{"agents":[
+		{"id":"codex","label":"Agent B","installation":{"state":"unknown"},"authentication":{"state":"unknown"},"effectiveReadiness":"unknown"}]}`)
+	out, _, err := executeCLI(t, fakeClockDeps(), "setup", "--path", repo, "--agent", "codex", "--check", "--json")
+	if got := ExitCode(err); got != setupExitNeedsHuman {
+		t.Fatalf("exit = %d (%v), want 10\n%s", got, err, out)
+	}
+	res := decodeSetup(t, out)
+	agent := stepNamed(t, res, "agent")
+	if strings.Contains(agent.Detail, "not installed") || strings.Contains(agent.Fix, "install") {
+		t.Fatalf("agent step = %+v", agent)
+	}
+	if !strings.Contains(agent.Detail, "has not been checked yet") {
+		t.Fatalf("agent step = %+v", agent)
+	}
+	if res.Ready {
+		t.Fatal("ready before the agent was checked")
+	}
+	if len(res.NextActions) != 1 || !strings.HasPrefix(res.NextActions[0], "ao setup --path ") {
+		t.Fatalf("next_actions = %q, want only the apply command", res.NextActions)
+	}
+}
+
+// The only installed agent is signed out: setup picks it and names its
+// sign-in command, not "no installed coding agent".
+func TestSetupOffersSignInForTheOnlyInstalledAgent(t *testing.T) {
+	d := newSetupDaemon(t)
+	repo := gitRepo(t, true)
+	registerOnPost(d, repo, "example/calc")
+	d.set("POST /api/v1/agents/readiness/ensure", 200, `{"agents":[
+		{"id":"claude-code","label":"Agent A","installation":{"state":"not_installed"},"authentication":{"state":"unknown"},"effectiveReadiness":"not_ready"},
+		{"id":"codex","label":"Agent B","installation":{"state":"installed"},"authentication":{"state":"unauthorized"},"effectiveReadiness":"not_ready"}]}`)
+	d.set("POST /api/v1/agents/codex/probe", 200, `{"agent":{"id":"codex","authStatus":"unauthorized"},"supported":true,"installed":true}`)
+	out, _, err := executeCLI(t, fakeClockDeps(), "setup", "--path", repo, "--json")
+	if got := ExitCode(err); got != setupExitNeedsHuman {
+		t.Fatalf("exit = %d (%v)\n%s", got, err, out)
+	}
+	res := decodeSetup(t, out)
+	if res.Agent == nil || res.Agent.ID != "codex" || !reflect.DeepEqual(res.NextActions, []string{"agent-b login"}) {
+		t.Fatalf("agent = %+v, next_actions = %q", res.Agent, res.NextActions)
+	}
+}
+
+// An agent named by any flag that is not installed defers registration, and
+// the preview says the same as the run.
+func TestSetupDefersRegistrationForAnUninstalledRoleFlag(t *testing.T) {
+	readiness := `{"agents":[
+		{"id":"codex","label":"Agent B","installation":{"state":"installed"},"authentication":{"state":"authorized"},"effectiveReadiness":"ready"},
+		{"id":"gemini","label":"Agent C","installation":{"state":"not_installed"},"authentication":{"state":"unknown"},"effectiveReadiness":"not_ready"}]}`
+	for _, mode := range []string{"run", "--dry-run"} {
+		t.Run(mode, func(t *testing.T) {
+			d := newSetupDaemon(t)
+			repo := gitRepo(t, true)
+			registerOnPost(d, repo, "example/calc")
+			d.set("POST /api/v1/agents/readiness/ensure", 200, readiness)
+			d.set("GET /api/v1/agents/readiness", 200, readiness)
+			args := []string{"setup", "--path", repo, "--worker-agent", "gemini", "--json"}
+			if mode != "run" {
+				args = append(args, mode)
+			}
+			out, _, _ := executeCLI(t, fakeClockDeps(), args...)
+			if d.saw("POST /api/v1/projects") {
+				t.Fatal("registered the project without the requested worker agent")
+			}
+			if project := stepNamed(t, decodeSetup(t, out), "project"); !strings.Contains(project.Detail, "once they are installed") {
+				t.Fatalf("project step = %+v", project)
+			}
+		})
+	}
+}
+
+// A registered project is reported even when the default-branch update fails.
+func TestSetupReportsTheProjectWhenTheBranchUpdateFails(t *testing.T) {
+	d := newSetupDaemon(t)
+	repo := gitRepo(t, false)
+	registerOnPost(d, repo, "")
+	d.set("PUT /api/v1/projects/calc/config", 500, `{"code":"INTERNAL","message":"boom"}`)
+	out, _, err := executeCLI(t, fakeClockDeps(), "setup", "--path", repo, "--json")
+	if got := ExitCode(err); got != setupExitFailed {
+		t.Fatalf("exit = %d (%v)\n%s", got, err, out)
+	}
+	res := decodeSetup(t, out)
+	if res.Project == nil || res.Project.ID != "calc" {
+		t.Fatalf("project = %+v, want the registered project", res.Project)
+	}
+	if first := stepNamed(t, res, "first-run"); first.Status != setupOK {
+		t.Fatalf("first-run = %+v", first)
+	}
+	if project := stepNamed(t, res, "project"); project.Status != setupFailed || !strings.Contains(project.Detail, "could not set the default branch") {
+		t.Fatalf("project step = %+v", project)
+	}
+}
+
+// A dangling origin/HEAD (its branch deleted) is not a resolved default.
+func TestSetupDanglingOriginHeadNeedsHuman(t *testing.T) {
+	d := newSetupDaemon(t)
+	repo := gitRepo(t, false)
+	gitIn(t, repo, "remote", "add", "origin", filepath.Join(t.TempDir(), "missing.git"))
+	gitIn(t, repo, "symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/gone")
+	gitIn(t, repo, "switch", "-q", "-c", "feature/x")
+	registerAutoBranch(d, repo)
+	out, _, err := executeCLI(t, fakeClockDeps(), "setup", "--path", repo, "--agent", "codex", "--json")
+	if got := ExitCode(err); got != setupExitNeedsHuman {
+		t.Fatalf("exit = %d (%v)\n%s", got, err, out)
+	}
+	if project := stepNamed(t, decodeSetup(t, out), "project"); project.Status != setupNeedsHuman || !strings.Contains(project.Fix, "remote set-head origin --auto") {
+		t.Fatalf("project step = %+v", project)
+	}
+	if d.saw("PUT /api/v1/projects/calc/config") {
+		t.Fatal("saved a default branch")
+	}
+}
+
+// A role flag naming an agent that is not installed keeps blocking, even
+// though the project's saved roles replace it: the task must not start on
+// another agent.
+func TestSetupKeepsTheBlockerForAnUnusableRoleFlag(t *testing.T) {
+	d := newSetupDaemon(t)
+	repo := gitRepo(t, true)
+	d.set("GET /api/v1/projects", 200, `{"projects":[{"id":"calc"}]}`)
+	d.set("GET /api/v1/projects/calc", 200, fmt.Sprintf(`{"status":"ok","project":{"id":"calc","path":%q,"repo":"example/calc","defaultBranch":"main","config":{"worker":{"agent":"codex"},"orchestrator":{"agent":"codex"}}}}`, repo))
+	readiness := `{"agents":[
+		{"id":"codex","label":"Agent B","installation":{"state":"installed"},"authentication":{"state":"authorized"},"effectiveReadiness":"ready"},
+		{"id":"gemini","label":"Agent C","installation":{"state":"not_installed"},"authentication":{"state":"unknown"},"effectiveReadiness":"not_ready"}]}`
+	d.set("POST /api/v1/agents/readiness/ensure", 200, readiness)
+	out, _, err := executeCLI(t, fakeClockDeps(), "setup", "--path", repo, "--worker-agent", "gemini", "--yes", "--start", "fix it", "--worker", "--json")
+	if got := ExitCode(err); got != setupExitNeedsHuman {
+		t.Fatalf("exit = %d (%v), want 10\n%s", got, err, out)
+	}
+	if d.saw("POST /api/v1/orchestrators/delegate") || d.saw("POST /api/v1/orchestrators") {
+		t.Fatal("started the task on another agent")
+	}
+	if agent := stepNamed(t, decodeSetup(t, out), "agent"); agent.Status != setupNeedsHuman || !strings.Contains(agent.Detail, "gemini is not installed") {
+		t.Fatalf("agent step = %+v", agent)
+	}
+}
+
+// When new sessions use a saved Orchestrator account, the computer's own
+// login (what the status command checks) does not decide the sign-in.
+func TestSetupOwnStatusUsesTheSavedAccount(t *testing.T) {
+	cases := []struct {
+		name, accounts string
+		code           int
+		wantAuth       string
+	}{
+		{"saved account signed in", `{"accounts":[{"provider":"claude","device":false,"default":true,"loggedIn":true}]}`, 200, "authorized"},
+		{"saved account, sign-in unproven", `{"accounts":[{"provider":"claude","device":false,"default":true,"loggedIn":false}]}`, 200, "configured"},
+		{"accounts unreadable", `{"code":"INTERNAL","message":"boom"}`, 500, "configured"},
+		{"device login is the default", `{"accounts":[{"provider":"claude","device":true,"default":true,"loggedIn":true}]}`, 200, "unauthorized"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			d := newSetupDaemon(t)
+			repo := gitRepo(t, true)
+			registerOnPost(d, repo, "example/calc")
+			d.set("POST /api/v1/agents/claude-code/probe", 200, `{"agent":{"id":"claude-code","authStatus":"configured"},"supported":true,"installed":true}`)
+			d.set("GET /api/v1/agents/accounts", tc.code, tc.accounts)
+			// The computer's own login is signed out.
+			fakeStatusCommand(t, "claude-code", `{"loggedIn":false}`, 1, setupAuthStatusCommand{loggedInField: "loggedIn", accountProvider: "claude"})
+			out, _, _ := executeCLI(t, fakeClockDeps(), "setup", "--path", repo, "--agent", "claude-code", "--json")
+			if res := decodeSetup(t, out); res.Agent == nil || res.Agent.AuthStatus != tc.wantAuth {
+				t.Fatalf("agent = %+v, want authStatus %s", res.Agent, tc.wantAuth)
+			}
+		})
+	}
+}
+
+// An agent configured for another model provider: its status command checks
+// the default provider's login only, so it does not decide.
+func TestSetupOtherModelProviderSkipsTheLoginStatus(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("AGENT_B_HOME", home)
+	if err := os.WriteFile(filepath.Join(home, "config.toml"), []byte("model = \"m\"\nmodel_provider = \"local\"\n\n[model_providers.local]\nname = \"local\"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	d := newSetupDaemon(t)
+	repo := gitRepo(t, true)
+	registerOnPost(d, repo, "example/calc")
+	d.set("POST /api/v1/agents/codex/probe", 200, `{"agent":{"id":"codex","authStatus":"configured"},"supported":true,"installed":true}`)
+	fakeStatusCommand(t, "codex", "Not logged in", 1, setupAuthStatusCommand{signedOutText: "Not logged in", configHomeEnv: "AGENT_B_HOME", defaultProvider: "default-provider"})
+	out, _, err := executeCLI(t, fakeClockDeps(), "setup", "--path", repo, "--agent", "codex", "--json")
+	if err != nil {
+		t.Fatalf("err = %v\n%s", err, out)
+	}
+	if res := decodeSetup(t, out); res.Agent == nil || res.Agent.AuthStatus != "configured" {
+		t.Fatalf("agent = %+v, want the unproven saved sign-in kept", res.Agent)
+	}
+}
+
+// A preview does not take a stale cached sign-in as current: the agent's own
+// status command decides.
+func TestSetupCheckDoesNotTrustAStaleCachedSignIn(t *testing.T) {
+	d := newSetupDaemon(t)
+	repo := gitRepo(t, true)
+	d.set("GET /api/v1/projects", 200, `{"projects":[{"id":"calc"}]}`)
+	d.set("GET /api/v1/projects/calc", 200, fmt.Sprintf(`{"status":"ok","project":{"id":"calc","path":%q,"repo":"example/calc","defaultBranch":"main","config":{"worker":{"agent":"codex"},"orchestrator":{"agent":"codex"}}}}`, repo))
+	d.set("GET /api/v1/agents/readiness", 200, `{"agents":[
+		{"id":"codex","label":"Agent B","installation":{"state":"installed","freshness":"fresh"},"authentication":{"state":"authorized","freshness":"stale"},"effectiveReadiness":"ready"}]}`)
+	fakeStatusCommand(t, "codex", "Not logged in", 1, setupAuthStatusCommand{signedOutText: "Not logged in"})
+	out, _, err := executeCLI(t, fakeClockDeps(), "setup", "--path", repo, "--check", "--json")
+	if got := ExitCode(err); got != setupExitNeedsHuman {
+		t.Fatalf("exit = %d (%v), want 10\n%s", got, err, out)
+	}
+	if res := decodeSetup(t, out); res.Ready || res.Agent == nil || res.Agent.AuthStatus != "unauthorized" {
+		t.Fatalf("ready = %v, agent = %+v", res.Ready, res.Agent)
+	}
+}
+
+// A concrete default branch set by someone else while setup ran is kept.
+func TestSetupKeepsADefaultBranchSetDuringSetup(t *testing.T) {
+	d := newSetupDaemon(t)
+	repo := gitRepo(t, false)
+	project := func(branch string) string {
+		return fmt.Sprintf(`{"id":"calc","path":%q,"repo":"","defaultBranch":%q,"config":{"defaultBranch":%q,"worker":{"agent":"codex"},"orchestrator":{"agent":"codex"}}}`, repo, branch, branch)
+	}
+	d.set("POST /api/v1/projects", 201, `{"project":`+project("auto")+`}`)
+	// The lookup after registering sees auto; the fresh config read sees the
+	// branch another client set in between.
+	d.set("GET /api/v1/projects/calc", 200, `{"status":"ok","project":`+project("develop")+`}`)
+	out, _, err := executeCLI(t, fakeClockDeps(), "setup", "--path", repo, "--agent", "codex", "--json")
+	if err != nil {
+		t.Fatalf("err = %v\n%s", err, out)
+	}
+	if d.saw("PUT /api/v1/projects/calc/config") {
+		t.Fatalf("overwrote the default branch: %s", d.bodies["PUT /api/v1/projects/calc/config"])
+	}
+	res := decodeSetup(t, out)
+	if res.Project == nil || res.Project.DefaultBranch != "develop" || !strings.Contains(stepNamed(t, res, "project").Detail, "kept default branch develop") {
+		t.Fatalf("project = %+v, step = %+v", res.Project, stepNamed(t, res, "project"))
+	}
+}
+
+// When saving the agents fails, setup reports the roles the project really
+// has, not the unsaved draft.
+func TestSetupReportsSavedRolesWhenSavingAgentsFails(t *testing.T) {
+	d := newSetupDaemon(t)
+	repo := gitRepo(t, true)
+	d.set("GET /api/v1/projects", 200, `{"projects":[{"id":"calc"}]}`)
+	d.set("GET /api/v1/projects/calc", 200, fmt.Sprintf(`{"status":"ok","project":{"id":"calc","path":%q,"repo":"example/calc","defaultBranch":"main","config":{"worker":{"agent":"codex"},"orchestrator":{"agent":"codex"}}}}`, repo))
+	d.set("PUT /api/v1/projects/calc/config", 500, `{"code":"INTERNAL","message":"boom"}`)
+	d.set("POST /api/v1/agents/claude-code/probe", 200, `{"agent":{"id":"claude-code","authStatus":"authorized"},"supported":true,"installed":true}`)
+	out, _, err := executeCLI(t, fakeClockDeps(), "setup", "--path", repo, "--agent", "claude-code", "--yes", "--json")
+	if got := ExitCode(err); got != setupExitFailed {
+		t.Fatalf("exit = %d (%v)\n%s", got, err, out)
+	}
+	if res := decodeSetup(t, out); res.Agent == nil || res.Agent.Worker != "codex" || res.Agent.Orchestrator != "codex" {
+		t.Fatalf("agent = %+v, want the saved roles", res.Agent)
+	}
+}
+
+// A worker task is pinned to the worker agent setup checked and saved.
+func TestSetupPinsTheWorkerAgentOnTheTask(t *testing.T) {
+	d := newSetupDaemon(t)
+	repo := gitRepo(t, true)
+	registerOnPost(d, repo, "example/calc")
+	d.set("POST /api/v1/agents/claude-code/probe", 200, `{"agent":{"id":"claude-code","authStatus":"authorized"},"supported":true,"installed":true}`)
+	d.set("POST /api/v1/orchestrators/delegate", 202, `{"ok":true,"workerId":"calc-1"}`)
+	d.set("GET /api/v1/sessions/calc-1", 200, `{"session":{"id":"calc-1","harness":"claude-code","mode":"chat","provisionState":"ready","activity":{"state":"active"}}}`)
+	d.set("GET /api/v1/sessions/calc-1/conversation", 200, `{"turns":[{"id":"t1","state":"running"}]}`)
+	_, _, _ = executeCLI(t, fakeClockDeps(), "setup", "--path", repo, "--agent", "claude-code", "--start", "fix it", "--worker", "--json")
+	if !strings.Contains(d.bodies["POST /api/v1/orchestrators/delegate"], `"agent":"claude-code"`) {
+		t.Fatalf("delegate body = %s, want the worker agent pinned", d.bodies["POST /api/v1/orchestrators/delegate"])
 	}
 }
