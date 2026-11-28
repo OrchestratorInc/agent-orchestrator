@@ -57,6 +57,22 @@ type InstallScriptResult struct {
 	SHA256 string
 }
 
+// InstallScriptDownload is a script runner's own download progress, before
+// any vendor code runs. Attempt is 0 once the script has downloaded.
+type InstallScriptDownload struct {
+	Attempt     int
+	MaxAttempts int
+	// RetryIn is set while the runner waits before Attempt.
+	RetryIn time.Duration
+}
+
+// InstallScriptDownloadReporter is implemented by an InstallScriptRunner's
+// stdout writer that wants the runner's download progress as data rather
+// than log lines.
+type InstallScriptDownloadReporter interface {
+	ReportInstallScriptDownload(InstallScriptDownload)
+}
+
 // InstallScriptRunner downloads and executes a fixed remote installer without
 // exposing script authority to clients.
 type InstallScriptRunner interface {

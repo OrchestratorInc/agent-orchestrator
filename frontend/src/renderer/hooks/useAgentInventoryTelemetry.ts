@@ -2,6 +2,7 @@ import { useQuery } from "@tanstack/react-query";
 import { useEffect, useRef } from "react";
 
 import { buildAgentInventory, buildSetupCheck } from "../lib/agent-inventory-telemetry";
+import { completeOnboardingStepIfViewed } from "../lib/onboarding-telemetry";
 import { captureRendererEvent, telemetryStorage } from "../lib/telemetry";
 import { useAgentReadinessQuery } from "./useAgentReadinessQuery";
 import { githubAuthRequirementQueryOptions, useSystemRequirementsGate } from "./useSystemRequirementsGate";
@@ -63,6 +64,13 @@ export function useSetupCheckedTelemetry(): void {
   const { data: catalog } = useAgentReadinessQuery();
   const { data: githubAuth } = useQuery({ ...githubAuthRequirementQueryOptions, enabled: false });
   const requirements = query.data?.requirements;
+  // The startup dependency dialog unmounts with the last blocking
+  // requirement, so its onboarding step is completed from here.
+  useEffect(() => {
+    if (requirements && !requirements.some((requirement) => requirement.required && !requirement.satisfied)) {
+      completeOnboardingStepIfViewed("dependencies");
+    }
+  }, [requirements]);
   useEffect(() => {
     if (!requirements || !catalog) return;
     // Agent probes still running would report a count that is about to change.

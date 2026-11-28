@@ -1,4 +1,5 @@
 // @vitest-environment node
+import { execFileSync } from "node:child_process";
 import {
 	existsSync,
 	mkdirSync,
@@ -17,8 +18,11 @@ import {
 	createWorkDirectory,
 	npmInvocation,
 	patchClaudeContextUsage,
+	patchClaudeContextWindowProbe,
 	patchClaudeFoldedPromptSettlement,
 	patchClaudeHibernationCheck,
+	patchClaudeBackgroundTasks,
+	patchClaudeCompactionStatus,
 	patchClaudeRetryDetails,
 	patchClaudeStaleIdleDebt,
 	patchClaudeSteerSettlement,
@@ -112,6 +116,418 @@ describe("patchClaudeRetryDetails", () => {
 		expect(patched).toContain("message.retry_delay_ms / 1000");
 		expect(patched).toContain("Trying again in ${retryDelay}.");
 		expect(patched).toContain("details: retryDetails");
+	});
+});
+
+describe("patchClaudeBackgroundTasks", () => {
+	function harness() {
+		const path = join(temporaryDirectory(), "tasks.js");
+		writeFileSync(path, `function dispatch(session, message) { switch(message.subtype ?? message.type) {
+			case "task_started": break; case "task_updated": break;
+			case "task_notification": break; case "background_tasks_changed": break;
+			case "user":
+			case "assistant": { break; }
+		} }
+		connection.onRequest(GOAL_CONTROL_METHOD, { parse: parseGoalRequest }, (ctx) => agent.goal(ctx.params));`);
+		expect(patchClaudeBackgroundTasks(path)).toBe(true);
+		expect(patchClaudeBackgroundTasks(path)).toBe(false);
+		const handlers = new Map();
+		const connection = { onRequest(method, _parser, handler) { handlers.set(method, handler); return connection; } };
+		const session = {};
+		const dispatch = new Function("connection", "agent", "GOAL_CONTROL_METHOD", "parseGoalRequest", "RequestError", `${readFileSync(path, "utf8")}\nreturn dispatch;`)(
+			connection, { sessions: { native: session } }, "goal", p => p,
+			{ invalidParams: () => new Error("invalid session"), methodNotFound: () => new Error("unavailable"), internalError: (data, message) => Object.assign(new Error(message), { code: -32603, data }) },
+		);
+		return { emit: message => dispatch(session, message), read: () => handlers.get("_ao/session/background_tasks")({ params: { sessionId: "native" } }), session, handlers };
+	}
+
+	it("reports an unacknowledged live stop and keeps retry available", async () => {
+		vi.useFakeTimers();
+		try {
+			const h = harness();
+			h.emit({ subtype: "background_tasks_changed", tasks: [{ task_id: "server", task_type: "local_bash" }] });
+			const failure = new Error("transport failed");
+			h.session.query = { stopTask: vi.fn(async () => { throw failure; }) };
+			const stop = () => h.handlers.get("_ao/session/stop_background_task")({ params: { sessionId: "native", taskId: "server" } });
+			for (let attempt = 0; attempt < 2; attempt++) {
+				const outcome = stop().catch(error => error);
+				await vi.advanceTimersByTimeAsync(1000);
+				expect(await outcome).toMatchObject({ code: -32603, message: "Stop not acknowledged; try again.", data: { retryable: true } });
+				expect(h.read().tasks).toMatchObject([{ id: "server", state: "running", stoppable: true }]);
+			}
+			expect(h.session.query.stopTask).toHaveBeenCalledTimes(2);
+			h.session.query.stopTask = async () => { h.session.queryClosed = true; throw failure; };
+			await expect(stop()).rejects.toBe(failure);
+		} finally { vi.useRealTimers(); }
+	});
+
+	it("acknowledges an SDK-accepted stop without inventing completion", async () => {
+		const h = harness();
+		h.emit({ subtype: "background_tasks_changed", tasks: [{ task_id: "server", task_type: "local_bash" }] });
+		h.session.query = { stopTask: async () => {} };
+		await expect(h.handlers.get("_ao/session/stop_background_task")({ params: { sessionId: "native", taskId: "server" } })).resolves.toEqual({});
+		expect(h.read().tasks[0]).toMatchObject({ state: "running", stoppable: true });
+		h.emit({ subtype: "task_notification", task_id: "server", status: "stopped" });
+		expect(h.read().tasks[0]).toMatchObject({ state: "stopped", stoppable: false });
+	});
+
+	it("reconciles a rejected stop when the next snapshot removes the task", async () => {
+		vi.useFakeTimers();
+		try {
+			const h = harness();
+			h.emit({ subtype: "background_tasks_changed", tasks: [{ task_id: "server", task_type: "local_bash" }] });
+			h.session.query = { stopTask: async () => {
+				setTimeout(() => h.emit({ subtype: "background_tasks_changed", tasks: [] }), 250);
+				throw new Error("already ended");
+			} };
+			const outcome = h.handlers.get("_ao/session/stop_background_task")({ params: { sessionId: "native", taskId: "server" } }).catch(error => error);
+			await vi.advanceTimersByTimeAsync(250);
+			expect(await outcome).toEqual(expect.objectContaining({ message: "invalid session" }));
+			expect(h.read().tasks).toEqual([]);
+		} finally { vi.useRealTimers(); }
+	});
+
+	it("maps a terminal notification before rejection to not-running", async () => {
+		const h = harness();
+		h.emit({ subtype: "background_tasks_changed", tasks: [{ task_id: "server", task_type: "local_bash" }] });
+		h.session.query = { stopTask: async () => {
+			h.emit({ subtype: "task_notification", task_id: "server", status: "completed" });
+			throw new Error("already ended");
+		} };
+		await expect(h.handlers.get("_ao/session/stop_background_task")({ params: { sessionId: "native", taskId: "server" } })).rejects.toThrow("invalid session");
+	});
+
+	it.each([0, 50, 250, 999, 1000, 1001, 10000])("reports the native outcome or a visible error for a notification delayed %s ms", async (delay) => {
+		vi.useFakeTimers();
+		try {
+			const h = harness();
+			h.emit({ subtype: "background_tasks_changed", tasks: [{ task_id: "server", task_type: "local_bash" }] });
+			h.session.query = { stopTask: async () => {
+				setTimeout(() => h.emit({ subtype: "task_notification", task_id: "server", status: "stopped" }), delay);
+				throw new Error("already ended");
+			} };
+			const outcome = h.handlers.get("_ao/session/stop_background_task")({ params: { sessionId: "native", taskId: "server" } }).catch(error => error);
+			await vi.advanceTimersByTimeAsync(1000);
+			if (delay <= 1000) {
+				expect(await outcome).toEqual(expect.objectContaining({ message: "invalid session" }));
+			} else {
+				expect(await outcome).toMatchObject({ code: -32603, message: "Stop not acknowledged; try again.", data: { retryable: true } });
+				expect(h.read().tasks[0]).toMatchObject({ state: "running", stoppable: true });
+			}
+			await vi.advanceTimersByTimeAsync(delay);
+			expect(h.read().tasks[0]).toMatchObject({ state: "stopped", stoppable: false });
+		} finally { vi.useRealTimers(); }
+	});
+
+	it("counts only the complete native background set, not foreground starts", () => {
+		const h = harness();
+		expect(h.read).toThrow("unavailable");
+		h.emit({ subtype: "task_started", task_id: "foreground", task_type: "local_bash" });
+		h.emit({ subtype: "background_tasks_changed", tasks: [{ task_id: "server", task_type: "local_bash", description: "Dev server" }] });
+		expect(h.read().tasks).toMatchObject([{ id: "server", kind: "shell", description: "Dev server", state: "running" }]);
+		h.emit({ subtype: "task_notification", task_id: "foreground", status: "completed" });
+		expect(h.read().tasks).toHaveLength(1);
+		// A missed completion bookend cannot wedge the count.
+		h.emit({ subtype: "background_tasks_changed", tasks: [] });
+		expect(h.read()).toEqual({ tasks: [] });
+	});
+
+	it("keeps completion once, expires history, and rejects an older run", () => {
+		vi.useFakeTimers();
+		try {
+			const h = harness();
+			h.emit({ subtype: "background_tasks_changed", tasks: [{ task_id: "a", run_id: "new", task_type: "local_agent", description: "Review" }] });
+			h.emit({ subtype: "task_notification", task_id: "a", run_id: "old", status: "completed" });
+			expect(h.read().tasks[0].state).toBe("running");
+			vi.advanceTimersByTime(8 * 60_000);
+			h.emit({ subtype: "background_tasks_changed", tasks: [] });
+			h.emit({ subtype: "task_updated", task_id: "a", run_id: "new", patch: { status: "completed" } });
+			h.emit({ subtype: "task_notification", task_id: "a", run_id: "new", status: "completed" });
+			expect(h.read().tasks).toHaveLength(1);
+			expect(h.read().tasks[0]).toMatchObject({ kind: "agent", state: "completed" });
+			vi.advanceTimersByTime(30_000);
+			expect(h.read().tasks).toEqual([]);
+		} finally { vi.useRealTimers(); }
+	});
+
+	it("handles level-before-edge ordering, ambient work, unknown types, and disconnected sessions", () => {
+		const h = harness();
+		h.emit({ subtype: "task_started", task_id: "ambient", skip_transcript: true });
+		h.emit({ subtype: "background_tasks_changed", tasks: [
+			{ task_id: "ambient", task_type: "local_bash" },
+			{ task_id: "a", task_type: "new_native_type", description: "Unknown kind" },
+		] });
+		expect(h.read().tasks).toMatchObject([{ id: "a", kind: "other" }]);
+		h.emit({ subtype: "background_tasks_changed", tasks: [] });
+		h.emit({ subtype: "task_notification", task_id: "a", status: "failed" });
+		expect(h.read().tasks).toMatchObject([{ id: "a", state: "failed" }]);
+		h.session.queryClosed = true;
+		expect(h.read).toThrow("invalid session");
+		expect(() => h.handlers.get("_ao/session/background_tasks")({ params: { sessionId: "__proto__" } })).toThrow("invalid session");
+	});
+
+	it("retains ambient classification while native membership survives idle time", () => {
+		vi.useFakeTimers();
+		try {
+			const h = harness();
+			h.emit({ subtype: "task_started", task_id: "ambient", ambient: true });
+			h.emit({ subtype: "background_tasks_changed", tasks: [{ task_id: "ambient", task_type: "local_bash" }] });
+			// The history cap must not evict a current native task's classification.
+			for (let i = 0; i < 512; i++) h.emit({ subtype: "task_started", task_id: `foreground-${i}` });
+			vi.advanceTimersByTime(31_000);
+			expect(h.read().tasks).toEqual([]);
+			h.emit({ subtype: "background_tasks_changed", tasks: [{ task_id: "ambient", task_type: "local_bash" }] });
+			expect(h.read().tasks).toEqual([]);
+			expect(h.session.aoBackgroundKnown.get("ambient").ambient).toBe(true);
+			h.emit({ subtype: "background_tasks_changed", tasks: [] });
+			vi.advanceTimersByTime(31_000);
+			h.read();
+			expect(h.session.aoBackgroundKnown.has("ambient")).toBe(false);
+		} finally { vi.useRealTimers(); }
+	});
+
+	it("keeps the established run when a native snapshot omits it", () => {
+		const h = harness();
+		h.emit({ subtype: "task_started", task_id: "a", run_id: "new" });
+		h.emit({ subtype: "background_tasks_changed", tasks: [{ task_id: "a", task_type: "local_agent" }] });
+		h.emit({ subtype: "task_notification", task_id: "a", run_id: "old", status: "completed" });
+		expect(h.read().tasks).toMatchObject([{ id: "a", runId: "new", state: "running" }]);
+		h.emit({ subtype: "task_notification", task_id: "a", run_id: "new", status: "completed" });
+		expect(h.read().tasks).toMatchObject([{ id: "a", state: "completed" }]);
+	});
+
+	it("reports start times and lets only live background tasks stop", async () => {
+		vi.useFakeTimers();
+		try {
+			vi.setSystemTime(new Date("2026-11-13T10:00:00Z"));
+			const h = harness();
+			const stopped = [];
+			h.session.query = { stopTask: async (id) => { stopped.push(id); } };
+			h.emit({ subtype: "task_started", task_id: "server", task_type: "local_bash" });
+			vi.advanceTimersByTime(4_000);
+			h.emit({ subtype: "background_tasks_changed", tasks: [
+				{ task_id: "server", task_type: "local_bash", description: "Dev server" },
+				{ task_id: "lint", task_type: "local_bash", description: "Lint" },
+			] });
+			const [server, lint] = h.read().tasks;
+			// The run's own start, not the later snapshot that made it background.
+			expect(server).toMatchObject({ id: "server", startedAt: "2026-11-13T10:00:00.000Z", stoppable: true });
+			expect(lint).toMatchObject({ id: "lint", startedAt: "2026-11-13T10:00:04.000Z", stoppable: true });
+			h.emit({ subtype: "background_tasks_changed", tasks: [{ task_id: "server", task_type: "local_bash", description: "Dev server" }] });
+			h.emit({ subtype: "task_notification", task_id: "lint", status: "failed" });
+			expect(h.read().tasks.find((task) => task.id === "lint")).toMatchObject({ state: "failed", stoppable: false, startedAt: "2026-11-13T10:00:04.000Z" });
+
+			const stop = (taskId, sessionId = "native") => h.handlers.get("_ao/session/stop_background_task")({ params: { sessionId, taskId } });
+			await expect(stop("server")).resolves.toEqual({});
+			expect(stopped).toEqual(["server"]);
+			// Settled, foreground and unknown work can never be stopped from here.
+			h.emit({ subtype: "task_started", task_id: "foreground", task_type: "local_bash" });
+			for (const id of ["lint", "foreground", "missing", 7]) await expect(stop(id)).rejects.toThrow("invalid session");
+			await expect(stop("server", "__proto__")).rejects.toThrow("invalid session");
+			expect(stopped).toEqual(["server"]);
+		} finally { vi.useRealTimers(); }
+	});
+});
+
+describe("patchClaudeBackgroundTasks output", () => {
+	function harness() {
+		const path = join(temporaryDirectory(), "tasks.js");
+		writeFileSync(path, `function dispatch(session, message) { switch(message.subtype ?? message.type) {
+			case "task_started": break; case "task_updated": break;
+			case "task_notification": break; case "background_tasks_changed": break;
+			case "user":
+			case "assistant": { break; }
+		} }
+		connection.onRequest(GOAL_CONTROL_METHOD, { parse: parseGoalRequest }, (ctx) => agent.goal(ctx.params));`);
+		patchClaudeBackgroundTasks(path);
+		const handlers = new Map();
+		const connection = { onRequest(method, _parser, handler) { handlers.set(method, handler); return connection; } };
+		const session = { toolUseCache: {} };
+		const dispatch = new Function("connection", "agent", "GOAL_CONTROL_METHOD", "parseGoalRequest", "RequestError", `${readFileSync(path, "utf8")}\nreturn dispatch;`)(
+			connection, { sessions: { native: session } }, "goal", p => p,
+			{ invalidParams: (_data, message) => new Error(message ?? "invalid session"), methodNotFound: () => new Error("unavailable") },
+		);
+		const emit = message => dispatch(session, message);
+		const output = (taskId, params = {}) => handlers.get("_ao/session/background_task_output")({ params: { sessionId: "native", taskId, ...params } });
+		const read = () => handlers.get("_ao/session/background_tasks")({ params: { sessionId: "native" } });
+		return { emit, output, read, session };
+	}
+
+	/** What Claude Code sends when a Bash call goes to the background (2.1.323). */
+	function launch(h, { taskId, toolUseId, command, file, text }) {
+		h.session.toolUseCache[toolUseId] = { name: "Bash", input: { command, run_in_background: true } };
+		h.emit({
+			type: "user",
+			tool_use_result: { stdout: "", stderr: "", interrupted: false, backgroundTaskId: taskId },
+			message: { role: "user", content: [{ type: "tool_result", tool_use_id: toolUseId, content: text ?? `Command running in background with ID: ${taskId}. Output is being written to: ${file}.` }] },
+		});
+		delete h.session.toolUseCache[toolUseId];
+	}
+
+	it("reports a background shell's command and reads the tail of its output file", async () => {
+		const h = harness();
+		const dir = join(temporaryDirectory(), "session", "tasks");
+		mkdirSync(dir, { recursive: true });
+		const file = join(dir, "server.output");
+		writeFileSync(file, "> vite\n  Local: http://localhost:3000/\n");
+		h.emit({ subtype: "background_tasks_changed", tasks: [{ task_id: "server", task_type: "local_bash", description: "Start the dev server" }] });
+		launch(h, { taskId: "server", toolUseId: "toolu_1", command: "npm run dev", file });
+		expect(h.read().tasks).toMatchObject([{ id: "server", description: "Start the dev server", command: "npm run dev" }]);
+		await expect(h.output("server")).resolves.toEqual({ output: "> vite\n  Local: http://localhost:3000/\n", truncated: false });
+
+		// Past the byte cap, the read starts on the next whole line.
+		writeFileSync(file, `${"x".repeat(1500)}\nlast line\n`);
+		await expect(h.output("server", { maxBytes: 1024 })).resolves.toEqual({ output: "last line\n", truncated: true });
+
+		// With no complete line after the cut, the read keeps the bounded tail.
+		writeFileSync(file, `${"x".repeat(1500)}end\n`);
+		await expect(h.output("server", { maxBytes: 1024 })).resolves.toEqual({ output: `${"x".repeat(1020)}end\n`, truncated: true });
+	});
+
+	/** What Claude Code sends when a Monitor starts (2.1.330): a task id, and no file. */
+	function monitor(h, { taskId, toolUseId, command, name = "Monitor" }) {
+		h.session.toolUseCache[toolUseId] = { name, input: { description: "Watch CI", command, timeout_ms: 600000, persistent: false } };
+		h.emit({
+			type: "user",
+			tool_use_result: { taskId, timeoutMs: 600000, persistent: false },
+			message: { role: "user", content: [{ type: "tool_result", tool_use_id: toolUseId, content: `Monitor started (task ${taskId}, expires in 600s unless the source ends first).` }] },
+		});
+		delete h.session.toolUseCache[toolUseId];
+	}
+
+	it("reports a Monitor's command and reads its output from the session's tasks folder", async () => {
+		const h = harness();
+		const dir = join(temporaryDirectory(), "session", "tasks");
+		mkdirSync(dir, { recursive: true });
+		writeFileSync(join(dir, "server.output"), "ready\n");
+		h.emit({ subtype: "background_tasks_changed", tasks: [
+			{ task_id: "server", task_type: "local_bash", description: "Start the dev server" },
+			{ task_id: "ci", task_type: "local_bash", description: "CI on PR #9027" },
+		] });
+		// The shell's launch names the folder the Monitor writes to.
+		launch(h, { taskId: "server", toolUseId: "toolu_s", command: "npm run dev", file: join(dir, "server.output") });
+		monitor(h, { taskId: "ci", toolUseId: "toolu_m", command: "gh pr checks 9027 --watch" });
+		expect(h.read().tasks).toMatchObject([
+			{ id: "server", command: "npm run dev" },
+			{ id: "ci", description: "CI on PR #9027", command: "gh pr checks 9027 --watch" },
+		]);
+		writeFileSync(join(dir, "ci.output"), "check 1: macos pending\n");
+		await expect(h.output("ci")).resolves.toEqual({ output: "check 1: macos pending\n", truncated: false });
+	});
+
+	it("reads a Monitor's output once its end notice names the file", async () => {
+		const h = harness();
+		const dir = join(temporaryDirectory(), "tasks");
+		mkdirSync(dir, { recursive: true });
+		h.emit({ subtype: "background_tasks_changed", tasks: [{ task_id: "ci", task_type: "local_bash", description: "CI on PR #9027" }] });
+		monitor(h, { taskId: "ci", toolUseId: "toolu_m", command: "gh pr checks 9027 --watch" });
+		// No file named yet for this session: the command shows, the output can't.
+		expect(h.read().tasks).toMatchObject([{ id: "ci", command: "gh pr checks 9027 --watch" }]);
+		await expect(h.output("ci")).rejects.toThrow("no output file");
+
+		writeFileSync(join(dir, "ci.output"), "check 1: passed\n\n[exited with code 0]\n");
+		h.emit({ subtype: "background_tasks_changed", tasks: [] });
+		h.emit({ subtype: "task_notification", task_id: "ci", status: "completed", output_file: join(dir, "ci.output"), summary: "stream ended" });
+		await expect(h.output("ci")).resolves.toEqual({ output: "check 1: passed\n\n[exited with code 0]\n", truncated: false });
+		expect(h.read().tasks).toMatchObject([{ id: "ci", state: "completed", command: "gh pr checks 9027 --watch" }]);
+
+		// The notice named the folder, so a later Monitor reads while it runs.
+		h.emit({ subtype: "background_tasks_changed", tasks: [{ task_id: "logs", task_type: "local_bash", description: "Tail the log" }] });
+		monitor(h, { taskId: "logs", toolUseId: "toolu_l", command: "tail -f app.log" });
+		writeFileSync(join(dir, "logs.output"), "GET / 200\n");
+		await expect(h.output("logs")).resolves.toEqual({ output: "GET / 200\n", truncated: false });
+	});
+
+	it("keeps the file of a Monitor that ended before its launch result", async () => {
+		const h = harness();
+		const dir = join(temporaryDirectory(), "tasks");
+		mkdirSync(dir, { recursive: true });
+		writeFileSync(join(dir, "wait.output"), "main fix landed\n");
+		h.emit({ subtype: "background_tasks_changed", tasks: [{ task_id: "wait", task_type: "local_bash", description: "Wait for the fix" }] });
+		h.emit({ subtype: "background_tasks_changed", tasks: [] });
+		h.emit({ subtype: "task_notification", task_id: "wait", status: "completed", output_file: join(dir, "wait.output"), summary: "stream ended" });
+		monitor(h, { taskId: "wait", toolUseId: "toolu_w", command: "until true; do sleep 30; done" });
+		expect(h.read().tasks).toMatchObject([{ id: "wait", state: "completed", command: "until true; do sleep 30; done" }]);
+		await expect(h.output("wait")).resolves.toEqual({ output: "main fix landed\n", truncated: false });
+	});
+
+	it("never reads a file a notice names for another task, or for another tool's task", async () => {
+		const h = harness();
+		const dir = join(temporaryDirectory(), "tasks");
+		mkdirSync(dir, { recursive: true });
+		writeFileSync(join(dir, "other.output"), "not this task\n");
+		h.emit({ subtype: "background_tasks_changed", tasks: [
+			{ task_id: "ci", task_type: "local_bash", description: "CI" },
+			{ task_id: "agent", task_type: "local_agent", description: "Research" },
+		] });
+		monitor(h, { taskId: "ci", toolUseId: "toolu_m", command: "gh pr checks 9027 --watch" });
+		h.emit({ subtype: "task_notification", task_id: "ci", status: "completed", output_file: join(dir, "other.output"), summary: "" });
+		await expect(h.output("ci")).rejects.toThrow("no output file");
+		// An agent's notice keeps no file, and a non-Monitor taskId is no launch.
+		h.emit({ subtype: "task_notification", task_id: "agent", status: "completed", output_file: join(dir, "agent.output"), summary: "" });
+		monitor(h, { taskId: "stopper", toolUseId: "toolu_x", command: "kill 1", name: "TaskStop" });
+		for (const id of ["agent", "stopper"]) await expect(h.output(id)).rejects.toThrow("no output file");
+		expect(h.session.aoBackgroundTaskDir).toBeUndefined();
+	});
+
+	it("reads only the file Claude Code named for that task", async () => {
+		const h = harness();
+		const file = join(temporaryDirectory(), "watch.output");
+		writeFileSync(file, "tick\n");
+		launch(h, { taskId: "watch", toolUseId: "toolu_2", command: "npm test -- --watch", file });
+		await expect(h.output("watch", { path: "/etc/hosts" })).resolves.toEqual({ output: "tick\n", truncated: false });
+		// Unknown tasks and a result that named a different file have no output.
+		launch(h, { taskId: "other", toolUseId: "toolu_3", command: "make", file: join(temporaryDirectory(), "unrelated.txt") });
+		for (const id of ["missing", "other", 7]) await expect(h.output(id)).rejects.toThrow("no output file");
+		rmSync(file);
+		await expect(h.output("watch")).rejects.toThrow("is gone");
+		h.session.queryClosed = true;
+		await expect(h.output("watch")).rejects.toThrow("Live Claude session unavailable");
+	});
+
+	it("keeps an output path that contains spaces", async () => {
+		const h = harness();
+		const dir = join(temporaryDirectory(), "Jane Doe", "tasks");
+		mkdirSync(dir, { recursive: true });
+		const file = join(dir, "spaced.output");
+		writeFileSync(file, "tick\n");
+		launch(h, { taskId: "spaced", toolUseId: "toolu_4", command: "npm run dev", file });
+		await expect(h.output("spaced")).resolves.toEqual({ output: "tick\n", truncated: false });
+		for (const [taskId, path] of [
+			["win", "C:\\Users\\Jane Doe\\AppData\\Local\\Temp\\claude\\tasks\\win.output"],
+			["unc", "\\\\server\\share\\Jane Doe\\unc.output"],
+		]) {
+			launch(h, { taskId, toolUseId: `toolu_${taskId}`, command: "make", file: path });
+			expect(h.session.aoBackgroundLaunches.get(taskId).outputPath).toBe(path);
+		}
+		// A network share is never read.
+		await expect(h.output("unc")).rejects.toThrow("is gone");
+	});
+
+	it("takes the path nearest the file name, ending at its first mention", () => {
+		const h = harness();
+		for (const [taskId, text, path] of [
+			["near", "Output (see /docs) at /tmp/t/near.output", "/tmp/t/near.output"],
+			["first", "Output is being written to: /tmp/x/first.output. Use /tmp/y/first.output", "/tmp/x/first.output"],
+		]) {
+			launch(h, { taskId, toolUseId: `toolu_${taskId}`, command: "make", text });
+			expect(h.session.aoBackgroundLaunches.get(taskId).outputPath).toBe(path);
+		}
+	});
+
+	it.skipIf(process.platform === "win32")("refuses a symlink or a FIFO in place of the output file", async () => {
+		const h = harness();
+		const dir = temporaryDirectory();
+		const target = join(dir, "secret.txt");
+		writeFileSync(target, "not task output\n");
+		const link = join(dir, "link.output");
+		symlinkSync(target, link);
+		launch(h, { taskId: "link", toolUseId: "toolu_5", command: "make", file: link });
+		await expect(h.output("link")).rejects.toThrow("is gone");
+		const fifo = join(dir, "fifo.output");
+		execFileSync("mkfifo", [fifo]);
+		launch(h, { taskId: "fifo", toolUseId: "toolu_6", command: "make", file: fifo });
+		await expect(h.output("fifo")).rejects.toThrow("is gone");
 	});
 });
 
@@ -293,6 +709,236 @@ describe("patchClaudeContextUsage", () => {
 	});
 });
 
+describe("patchClaudeContextWindowProbe", () => {
+	// The pinned adapter's top-level stream branch, as 0.70.0 ships it.
+	const streamBranch = `
+                switch (message.type) {
+                    case "stream_event": {
+                        if (message.parent_tool_use_id === null &&
+                            (message.event.type === "message_start" || message.event.type === "message_delta")) {
+                            if (message.event.type === "message_start") {
+                                lastAssistantUsage = snapshotFromUsage(message.event.message.usage);
+                                const model = message.event.message.model;
+                                if (model && model !== "<synthetic>") {
+                                    lastAssistantModel = model;
+                                    // Only upgrade from the heuristic default.
+                                    if (!session.contextWindowAuthoritative &&
+                                        session.contextWindowSize === DEFAULT_CONTEXT_WINDOW) {
+                                        const inferred = inferContextWindowFromModel(model);
+                                        if (inferred !== null) {
+                                            session.contextWindowSize = inferred;
+                                        }
+                                    }
+                                }
+                            }
+                            else {
+                                const usage = message.event.usage;
+                                const prev = lastAssistantUsage ?? ZERO_USAGE;
+                                lastAssistantUsage = {
+                                    input_tokens: usage.input_tokens ?? prev.input_tokens,
+                                    output_tokens: usage.output_tokens,
+                                    cache_read_input_tokens: usage.cache_read_input_tokens ?? prev.cache_read_input_tokens,
+                                    cache_creation_input_tokens: usage.cache_creation_input_tokens ?? prev.cache_creation_input_tokens,
+                                };
+                            }
+                            const nextUsage = totalTokens(lastAssistantUsage);
+                            if (nextUsage !== lastAssistantTotalUsage) {
+                                lastAssistantTotalUsage = nextUsage;
+                                await sendUpdate({
+                                    sessionId: params.sessionId,
+                                    update: {
+                                        sessionUpdate: "usage_update",
+                                        used: nextUsage,
+                                        size: session.contextWindowSize,
+                                    },
+                                });
+                            }
+                        }
+                        for (const notification of streamEventToAcpNotifications(message, params.sessionId)) {}
+                        break;
+                    }
+                }
+`;
+
+	// One consumer per session, holding its usage counters across messages the
+	// way the adapter's runConsumer closure does.
+	function patchedConsumer() {
+		const adapterPath = join(temporaryDirectory(), "acp-agent.js");
+		writeFileSync(adapterPath, streamBranch);
+		expect(patchClaudeContextWindowProbe(adapterPath)).toBe(true);
+		expect(patchClaudeContextWindowProbe(adapterPath)).toBe(false);
+		const consumer = new Function("session", "sendUpdate", "logger", `
+			const params = { sessionId: "s" };
+			const DEFAULT_CONTEXT_WINDOW = 200000;
+			const ZERO_USAGE = { input_tokens: 0, output_tokens: 0, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 };
+			const inferContextWindowFromModel = (text) => /\\b1m\\b/i.test(text) ? 1000000 : null;
+			const snapshotFromUsage = (usage) => ({ ...ZERO_USAGE, ...usage });
+			const totalTokens = (usage) => Object.values(usage).reduce((sum, tokens) => sum + tokens, 0);
+			const streamEventToAcpNotifications = () => [];
+			let lastAssistantUsage = null, lastAssistantModel, lastAssistantTotalUsage = null;
+			return {
+				logger,
+				newTurn() { session.activeTurn = {}; lastAssistantUsage = null; lastAssistantTotalUsage = null; },
+				async stream(message) { ${readFileSync(adapterPath, "utf8")} },
+			};
+		`);
+		const updates = [];
+		const errors = [];
+		const logger = { error: (...args) => errors.push(args) };
+		const consume = (session) => consumer(session, async ({ update }) => { updates.push([update.used, update.size]); }, logger);
+		return { consume, updates, errors };
+	}
+
+	const start = (model, input_tokens) => ({ type: "stream_event", parent_tool_use_id: null, event: { type: "message_start", message: { model, usage: { input_tokens } } } });
+	const delta = (output_tokens) => ({ type: "stream_event", parent_tool_use_id: null, event: { type: "message_delta", usage: { output_tokens } } });
+
+	function freshSession(modelId, getContextUsage) {
+		return {
+			contextWindowSize: 200000,
+			contextWindowAuthoritative: false,
+			models: { currentModelId: modelId },
+			query: { getContextUsage: vi.fn(getContextUsage) },
+		};
+	}
+
+	const settle = () => new Promise((resolve) => setTimeout(resolve, 0));
+
+	it("publishes a fable session's 1M window with the latest usage, however late the SDK answers", async () => {
+		const { consume, updates } = patchedConsumer();
+		let answer;
+		const session = freshSession("claude-fable-5-1", () => new Promise((resolve) => { answer = resolve; }));
+		const turn = consume(session);
+		vi.useFakeTimers();
+		try {
+			await turn.stream(start("claude-fable-5-1", 206000));
+			await turn.stream(start("claude-fable-5-1", 207000));
+			await turn.stream(delta(500));
+			await vi.advanceTimersByTimeAsync(10000);
+			answer({ totalTokens: 206000, rawMaxTokens: 1000000 });
+		} finally {
+			vi.useRealTimers();
+		}
+		await settle();
+		expect(session.query.getContextUsage).toHaveBeenCalledTimes(1);
+		expect(updates).toEqual([[206000, 200000], [207000, 200000], [207500, 200000], [207500, 1000000]]);
+		expect(session.contextWindowAuthoritative).toBe(true);
+	});
+
+	it("leaves a window the adapter already knows", async () => {
+		const { consume } = patchedConsumer();
+		const known = freshSession("claude-fable-5-1", async () => ({ rawMaxTokens: 1 }));
+		known.contextWindowAuthoritative = true;
+		const named = freshSession("opus[1m]", async () => ({ rawMaxTokens: 1 }));
+		await consume(known).stream(start("claude-fable-5-1", 10));
+		await consume(named).stream(start("claude-opus-4-8[1m]", 10));
+		expect(named.contextWindowSize).toBe(1000000);
+		for (const session of [known, named]) expect(session.query.getContextUsage).not.toHaveBeenCalled();
+	});
+
+	it("publishes nothing more when the probe fails, confirms 200k, loses a race, or a new turn starts", async () => {
+		const { consume, updates, errors } = patchedConsumer();
+		// A result, then a model switch, set the window while the probe ran.
+		const racing = (change) => async (session) => { await null; Object.assign(session, change); return { rawMaxTokens: 1000000 }; };
+		const cases = [
+			[async () => { throw new Error("closed"); }, [200000, false]],
+			[async () => ({ rawMaxTokens: 0 }), [200000, false]],
+			[async () => ({}), [200000, false]],
+			[async () => ({ rawMaxTokens: 200000 }), [200000, true]],
+			[racing({ contextWindowSize: 900000, contextWindowAuthoritative: true }), [900000, true]],
+			[racing({ contextWindowSize: 150000, models: { currentModelId: "claude-haiku-5-5" } }), [150000, false]],
+			[async (_, turn) => { await null; turn.newTurn(); return { rawMaxTokens: 1000000 }; }, [1000000, true]],
+		];
+		for (const [answer, window] of cases) {
+			const session = freshSession("claude-fable-5-1", () => answer(session, turn));
+			const turn = consume(session);
+			await turn.stream(start("claude-fable-5-1", 10));
+			await settle();
+			expect([session.contextWindowSize, session.contextWindowAuthoritative]).toEqual(window);
+		}
+		expect(errors).toHaveLength(1);
+		expect(updates).toEqual(cases.map(() => [10, 200000]));
+	});
+
+	it("probes again after switching back to a model, whatever became of its earlier probe", async () => {
+		for (const earlier of ["discarded", "failed", "pending"]) {
+			const { consume, updates } = patchedConsumer();
+			const answers = [];
+			const session = freshSession("claude-fable-5-1", () => new Promise((resolve, reject) => answers.push({ resolve, reject })));
+			const turn = consume(session);
+			// The adapter's switch path replaces session.models and reseeds the window from the "1m" heuristic.
+			const switchTo = (model) => Object.assign(session, {
+				models: { currentModelId: model }, contextWindowSize: model.includes("[1m]") ? 1000000 : 200000,
+			});
+			await turn.stream(start("claude-fable-5-1", 300));
+			switchTo("claude-opus-4-8[1m]");
+			await turn.stream(start("claude-opus-4-8[1m]", 300));
+			if (earlier === "discarded") answers[0].resolve({ rawMaxTokens: 1000000 });
+			if (earlier === "failed") answers[0].reject(new Error("closed"));
+			await settle();
+			switchTo("claude-fable-5-1");
+			await turn.stream(start("claude-fable-5-1", 310));
+			expect(answers).toHaveLength(2);
+			// Still pending, the first answer may describe the other model.
+			answers[0].resolve({ rawMaxTokens: 1 });
+			await settle();
+			expect(session.contextWindowSize).toBe(200000);
+			answers[1].resolve({ rawMaxTokens: 1000000 });
+			await settle();
+			expect(updates.at(-1)).toEqual([310, 1000000]);
+		}
+	});
+
+	it("retries a failed probe on a later turn, never while one is pending", async () => {
+		const { consume, updates } = patchedConsumer();
+		const answers = [];
+		const session = freshSession("claude-fable-5-1", () => new Promise((resolve, reject) => answers.push({ resolve, reject })));
+		const turn = consume(session);
+		await turn.stream(start("claude-fable-5-1", 100));
+		turn.newTurn();
+		await turn.stream(start("claude-fable-5-1", 200));
+		expect(answers).toHaveLength(1);
+		answers[0].reject(new Error("closed"));
+		await settle();
+		// This turn has not asked yet.
+		await turn.stream(start("claude-fable-5-1", 210));
+		answers[1].resolve({ rawMaxTokens: 0 });
+		await settle();
+		await turn.stream(start("claude-fable-5-1", 220));
+		expect(answers).toHaveLength(2);
+		// The turn was cancelled before its result corrected the window.
+		turn.newTurn();
+		await turn.stream(start("claude-fable-5-1", 230));
+		answers[2].resolve({ rawMaxTokens: 1000000 });
+		await settle();
+		expect(session.query.getContextUsage).toHaveBeenCalledTimes(3);
+		expect(updates.at(-1)).toEqual([230, 1000000]);
+	});
+
+	it("ignores indentation but fails packaging without modifying a changed adapter", () => {
+		const adapterPath = join(temporaryDirectory(), "acp-agent.js");
+		writeFileSync(adapterPath, streamBranch.replace(/^ {8}/gm, ""));
+		expect(patchClaudeContextWindowProbe(adapterPath)).toBe(true);
+		const publish = /lastAssistantTotalUsage = nextUsage;[\s\S]*?\}\);/;
+		for (const changed of [
+			streamBranch.replace("!session.contextWindowAuthoritative &&", ""),
+			streamBranch.replace("message.parent_tool_use_id === null &&", ""),
+			streamBranch.replace("if (nextUsage !== lastAssistantTotalUsage)", "if (nextUsage !== lastAssistantTotalUsage && false)"),
+			streamBranch.replace(publish, (code) => `/* ${code} */`),
+			streamBranch + streamBranch,
+			// A brace in a comment must not become the insertion point.
+			streamBranch.replace("session.contextWindowSize = inferred;", "$&\n// } end heuristic"),
+			// The branch is commented out from outside the compared text.
+			streamBranch.replace(/if \(message\.parent_tool_use_id[\s\S]*?(?=break;)/, (code) => `/*\n${code}*/ `),
+			streamBranch.replace("if (message.parent_tool_use_id === null &&", "if (message.event &&\n// $&"),
+			streamBranch.replace('case "stream_event": {', 'case "assistant": {'),
+		]) {
+			writeFileSync(adapterPath, changed);
+			expect(() => patchClaudeContextWindowProbe(adapterPath)).toThrow("context window patch");
+			expect(readFileSync(adapterPath, "utf8")).toBe(changed);
+		}
+	});
+});
+
 describe("patchClaudeFoldedPromptSettlement", () => {
 	it("routes a task-notification result that names a pending prompt to the user lane", () => {
 		const adapterPath = join(temporaryDirectory(), "acp-agent.js");
@@ -382,6 +1028,159 @@ describe("patchClaudeStaleIdleDebt", () => {
 		writeFileSync(adapterPath, 'case "session_state_changed": {\n');
 
 		expect(() => patchClaudeStaleIdleDebt(adapterPath)).toThrow(/idle-debt patch/);
+	});
+});
+
+describe("patchClaudeCompactionStatus", () => {
+	// claude-agent-acp 0.70's status case, as compiled.
+	const statusCase = `
+                            case "status": {
+                                if (message.status === "compacting") {
+                                    compactionInProgress = true;
+                                    await sendUpdate({
+                                        sessionId: message.session_id,
+                                        update: {
+                                            sessionUpdate: "agent_message_chunk",
+                                            content: { type: "text", text: "Compacting..." },
+                                        },
+                                    });
+                                }
+                                else if (message.compact_result === "success" && compactionInProgress) {
+                                    compactionInProgress = false;
+                                    await sendUpdate({
+                                        sessionId: message.session_id,
+                                        update: {
+                                            sessionUpdate: "agent_message_chunk",
+                                            content: { type: "text", text: "\\n\\nCompacting completed." },
+                                        },
+                                    });
+                                }
+                                else if (message.compact_result === "failed" && compactionInProgress) {
+                                    compactionInProgress = false;
+                                    const reason = message.compact_error ? \`: \${message.compact_error}\` : ".";
+                                    await sendUpdate({
+                                        sessionId: message.session_id,
+                                        update: {
+                                            sessionUpdate: "agent_message_chunk",
+                                            content: { type: "text", text: \`\\n\\nCompacting failed\${reason}\` },
+                                        },
+                                    });
+                                }
+                                break;
+                            }
+                            case "compact_boundary": {
+                                const usedTokens = await fetchContextUsedTokens(session.query, this.logger);
+                                lastAssistantUsage = null;
+                                lastAssistantTotalUsage = usedTokens ?? 0;
+                                await sendUpdate({
+                                    sessionId: message.session_id,
+                                    update: {
+                                        sessionUpdate: "usage_update",
+                                        used: lastAssistantTotalUsage,
+                                        size: session.contextWindowSize,
+                                    },
+                                });
+                                break;
+                            }
+`;
+
+	function boundaryHandler(usedTokens) {
+		const adapterPath = join(temporaryDirectory(), "acp-agent.js");
+		writeFileSync(adapterPath, statusCase);
+		patchClaudeCompactionStatus(adapterPath);
+		const patched = readFileSync(adapterPath, "utf8");
+		const start = patched.indexOf("const usedTokens = await fetchContextUsedTokens");
+		const body = patched.slice(start, patched.indexOf("break;", start));
+		const sent = [];
+		const AsyncFunction = (async () => {}).constructor;
+		const run = new AsyncFunction("message", "session", "sendUpdate", "fetchContextUsedTokens", `
+			let lastAssistantUsage, lastAssistantTotalUsage;
+			${body}
+		`);
+		const onBoundary = (message) => run(
+			{ session_id: "s1", ...message },
+			{ query: {}, contextWindowSize: 200000 },
+			async (update) => { sent.push(update.update); },
+			async () => usedTokens,
+		);
+		return { onBoundary, sent };
+	}
+
+	function statusHandler() {
+		const adapterPath = join(temporaryDirectory(), "acp-agent.js");
+		writeFileSync(adapterPath, statusCase);
+		expect(patchClaudeCompactionStatus(adapterPath)).toBe(true);
+		expect(patchClaudeCompactionStatus(adapterPath)).toBe(false);
+		const patched = readFileSync(adapterPath, "utf8");
+		const start = patched.indexOf('if (message.status === "compacting")');
+		const body = patched.slice(start, patched.indexOf("break;", start));
+		const sent = [];
+		const session = { emittedAssistantText: false };
+		const AsyncFunction = (async () => {}).constructor;
+		const run = new AsyncFunction("message", "session", "sendUpdate", "state", `
+			let compactionInProgress = state.inProgress;
+			${body}
+			state.inProgress = compactionInProgress;
+		`);
+		const state = { inProgress: false };
+		const onStatus = (message) => run({ session_id: "s1", ...message }, session, async (update) => { sent.push(update); }, state);
+		return { onStatus, sent, session };
+	}
+
+	it("reports a compaction that runs and settles as status, never as reply text", async () => {
+		const { onStatus, sent, session } = statusHandler();
+
+		await onStatus({ status: "compacting" });
+		await onStatus({ status: "compacting" });
+		await onStatus({ status: null, compact_result: "success" });
+		// The SDK repeats the terminal status; only the first one is reported.
+		await onStatus({ status: null, compact_result: "success" });
+
+		expect(sent.map((update) => update.update)).toEqual([
+			{ sessionUpdate: "session_info_update", _meta: { "ao/compaction": { status: "started" } } },
+			{ sessionUpdate: "session_info_update", _meta: { "ao/compaction": { status: "started" } } },
+			{ sessionUpdate: "session_info_update", _meta: { "ao/compaction": { status: "completed" } } },
+		]);
+		expect(sent.every((update) => update.sessionId === "s1")).toBe(true);
+		expect(session.emittedAssistantText).toBe(true);
+	});
+
+	it("carries the SDK's reason when compaction fails", async () => {
+		const { onStatus, sent } = statusHandler();
+
+		await onStatus({ status: "compacting" });
+		await onStatus({ status: null, compact_result: "failed", compact_error: "Conversation too long" });
+
+		expect(sent.at(-1).update).toEqual({
+			sessionUpdate: "session_info_update",
+			_meta: { "ao/compaction": { status: "failed", error: { message: "Conversation too long" } } },
+		});
+	});
+
+	it("reports what the compaction freed at its boundary, before the usage it publishes", async () => {
+		const { onBoundary, sent } = boundaryHandler(56805);
+
+		await onBoundary({ compact_metadata: { trigger: "auto", pre_tokens: 73559, post_tokens: 19805 } });
+
+		expect(sent).toEqual([
+			{ sessionUpdate: "session_info_update", _meta: { "ao/compaction": { status: "completed", tokensBefore: 110559, tokensAfter: 56805 } } },
+			{ sessionUpdate: "usage_update", used: 56805, size: 200000 },
+		]);
+	});
+
+	it("falls back to the SDK's own scale when the context usage is unknown", async () => {
+		const { onBoundary, sent } = boundaryHandler(null);
+
+		await onBoundary({ compact_metadata: { pre_tokens: 73559, post_tokens: 19805 } });
+
+		expect(sent[0]._meta["ao/compaction"]).toEqual({ status: "completed", tokensBefore: 73559, tokensAfter: 19805 });
+	});
+
+	it("fails packaging when the adapter's compaction banners change", () => {
+		const adapterPath = join(temporaryDirectory(), "acp-agent.js");
+		writeFileSync(adapterPath, statusCase.replace("Compacting...", "Compacting…"));
+
+		expect(() => patchClaudeCompactionStatus(adapterPath)).toThrow(/compaction status patch/);
 	});
 });
 

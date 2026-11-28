@@ -21,27 +21,53 @@ type ShellAgentStore = {
 	agents: Record<string, ShellAgent>;
 	/** Tabs whose agent finished a turn the user has not seen; cleared on select. */
 	unseenDone: Record<string, true>;
+	resuming: Record<string, string>;
 	replace: (snapshot: Snapshot) => void;
 	/** Drops the agents while disconnected but keeps the done marks. */
 	clearAgents: () => void;
 	markSeen: (handleId: string) => void;
+	expectResume: (handleId: string, harness: string) => void;
 };
+
+export const RESUME_GRACE_MS = 60_000;
+
+function withResuming(agents: Record<string, ShellAgent>, resuming: Record<string, string>) {
+	for (const [handleId, harness] of Object.entries(resuming)) agents[handleId] ??= { harness, state: "idle" };
+	return agents;
+}
 
 export const useShellAgentStore = create<ShellAgentStore>((set) => ({
 	agents: {},
 	unseenDone: {},
+	resuming: {},
 	replace: (snapshot) =>
 		set((current) => {
 			const agents: Record<string, ShellAgent> = {};
 			const unseenDone: Record<string, true> = {};
+			const resuming = { ...current.resuming };
 			for (const { handleId, harness, state } of snapshot) {
 				agents[handleId] = { harness, state };
+				delete resuming[handleId];
 				const finished = current.agents[handleId]?.state === "working" || current.unseenDone[handleId];
 				if (state === "idle" && finished) unseenDone[handleId] = true;
 			}
-			return { agents, unseenDone };
+			return { agents: withResuming(agents, resuming), unseenDone, resuming };
 		}),
-	clearAgents: () => set({ agents: {} }),
+	clearAgents: () => set((current) => ({ agents: withResuming({}, current.resuming) })),
+	expectResume: (handleId, harness) => {
+		set((current) => ({
+			resuming: { ...current.resuming, [handleId]: harness },
+			agents: withResuming({ ...current.agents }, { [handleId]: harness }),
+		}));
+		setTimeout(() => {
+			set((current) => {
+				if (!(handleId in current.resuming)) return current;
+				const { [handleId]: _expired, ...resuming } = current.resuming;
+				const { [handleId]: _shown, ...agents } = current.agents;
+				return { resuming, agents };
+			});
+		}, RESUME_GRACE_MS);
+	},
 	markSeen: (handleId) =>
 		set((current) => {
 			if (!current.unseenDone[handleId]) return current;

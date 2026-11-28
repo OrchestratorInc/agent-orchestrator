@@ -17,6 +17,7 @@ vi.mock("expo-secure-store", () => ({
 	deleteItemAsync: vi.fn(async (key: string) => void secure.delete(key)),
 }));
 vi.mock("./account", () => ({ loadAccount: async () => null }));
+vi.mock("./forgetLocalState", () => ({ forgetMachineState: async () => {} }));
 vi.mock("expo-constants", () => ({ default: { expoConfig: { extra: { eas: { projectId: "test-project" } } } } }));
 vi.mock("expo-device", () => ({ isDevice: true, deviceName: "phone" }));
 vi.mock("expo-notifications", () => ({
@@ -25,6 +26,8 @@ vi.mock("expo-notifications", () => ({
 }));
 vi.mock("react-native", () => ({ Platform: { OS: "ios" }, Linking: { openSettings: vi.fn() } }));
 vi.mock("./installId", () => ({ getInstallId: vi.fn(async () => "phone-install-id") }));
+// Its chats saved on the phone are not under test here.
+vi.mock("./chat/savedConversations", () => ({ forgetSavedConversations: async () => {} }));
 vi.mock("./api", () => ({
 	ApiError: class ApiError extends Error {},
 	registerPushDevice: vi.fn(async () => {}),

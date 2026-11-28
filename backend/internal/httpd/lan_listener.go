@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/envelope"
@@ -25,6 +26,7 @@ import (
 type LANManager struct {
 	handler     http.Handler // shared router, already auth-wrapped
 	tunnel      http.Handler // lanTunnelPath, behind the same auth
+	loopback    http.Handler // loopbackTunnelPath, behind the same auth
 	defaultPort int
 	log         *slog.Logger
 	state       *authState // shared with authMiddleware; SetPasswordHash writes through here
@@ -37,6 +39,8 @@ type LANManager struct {
 	cancel       context.CancelFunc
 	bound        int
 	bindHost     string
+
+	daemonPort atomic.Int64
 }
 
 // NewLANManager wraps handler in the LAN control-block and authMiddleware
@@ -53,6 +57,7 @@ func NewLANManager(handler http.Handler, state *authState, defaultPort int, log 
 		lock:        lock,
 	}
 	m.tunnel = auth(http.HandlerFunc(m.serveTunnel))
+	m.loopback = auth(http.HandlerFunc(m.serveLoopbackTunnel))
 	return m
 }
 
@@ -64,8 +69,7 @@ func NewLANManager(handler http.Handler, state *authState, defaultPort int, log 
 // through Cua Driver under /api/v1/computer-use and the switch that hands it to
 // new chat sessions at /api/v1/settings/computer-use, and personal
 // Codex account-management routes under /api/v1/agents/codex/accounts and
-// /api/v1/agents/codex/account-switches, and agent accounts under
-// /api/v1/agents/accounts (the harmless read-only Codex model
+// /api/v1/agents/codex/account-switches (the harmless read-only Codex model
 // routes stay reachable so mobile can pick a model). Some routes
 // are gated in the shared router by localControlRequest, which trusts the
 // client-supplied Host header. That header is spoofable by any LAN client. The
@@ -86,7 +90,6 @@ var lanControlBlockedPrefixes = []string{
 	"/api/v1/settings/computer-use",
 	"/api/v1/agents/codex/accounts",
 	"/api/v1/agents/codex/account-switches",
-	"/api/v1/agents/accounts",
 }
 
 // lanControlBlock returns 404 for any request whose path is, or is nested
@@ -141,7 +144,10 @@ func IsLANControlBlockedPathForTest(path string) bool { return isLANControlBlock
 // since it is unexported; this gives them a LANManager that owns one, and the
 // daemon rotates the connection password exclusively via SetPasswordHash.
 func NewMobileLAN(handler http.Handler, hostID string, defaultPort int, log *slog.Logger, sink ports.EventSink) *LANManager {
-	return NewLANManager(expectedHostGuard(hostID)(handler), &authState{}, defaultPort, log, sink)
+	guard := expectedHostGuard(hostID)
+	m := NewLANManager(guard(handler), &authState{}, defaultPort, log, sink)
+	m.loopback = guard(m.loopback)
+	return m
 }
 
 // expectedHostGuard prevents a saved address from sending work to a different
@@ -367,6 +373,10 @@ func (m *LANManager) dispatch() http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == lanTunnelPath {
 			m.tunnel.ServeHTTP(w, r)
+			return
+		}
+		if r.URL.Path == loopbackTunnelPath {
+			m.loopback.ServeHTTP(w, r)
 			return
 		}
 		m.handler.ServeHTTP(w, r)

@@ -72,6 +72,40 @@ describe("local awake menu bar monitor", () => {
 		monitor.dispose();
 	});
 
+	it("forwards each change in the awake state, once, for the sidebar", async () => {
+		vi.useFakeTimers();
+		let awake = { active: false, sessions: [] as unknown[] };
+		const request = vi.fn(async (url: string) => Response.json(url.endsWith("mobile/status") ? { keepAwake: { active: false } } : awake));
+		const onAwakeState = vi.fn();
+		const monitor = createAwakeTrayMonitor({ baseURL: () => "http://127.0.0.1:3001", request, setState: vi.fn(), onAwakeState });
+		await vi.advanceTimersByTimeAsync(0);
+		expect(onAwakeState).toHaveBeenCalledTimes(1);
+		await vi.advanceTimersByTimeAsync(5000);
+		expect(onAwakeState).toHaveBeenCalledTimes(1);
+		awake = { active: true, sessions: [{ id: "s1" }] };
+		await vi.advanceTimersByTimeAsync(5000);
+		expect(onAwakeState).toHaveBeenCalledTimes(2);
+		expect(onAwakeState).toHaveBeenLastCalledWith(awake);
+		monitor.dispose();
+	});
+
+	it("does not forward an awake state read from a previous daemon", async () => {
+		vi.useFakeTimers();
+		let base: string | null = "http://127.0.0.1:3001";
+		const finishes: ((value: Response) => void)[] = [];
+		const request = vi.fn((url: string) => url.endsWith("mobile/status")
+			? Promise.resolve(Response.json({ keepAwake: { active: false } }))
+			: new Promise<Response>((resolve) => { finishes.push(resolve); }));
+		const onAwakeState = vi.fn();
+		const monitor = createAwakeTrayMonitor({ baseURL: () => base, request, setState: vi.fn(), onAwakeState });
+		await vi.advanceTimersByTimeAsync(0);
+		base = "http://127.0.0.1:3002";
+		for (const finish of finishes) finish(Response.json({ active: true }));
+		await vi.advanceTimersByTimeAsync(0);
+		expect(onAwakeState).not.toHaveBeenCalled();
+		monitor.dispose();
+	});
+
 	it("does not overlap requests or publish stale responses after detach/disposal", async () => {
 		const { request, setState, monitor, setBase } = setup();
 		await vi.advanceTimersByTimeAsync(0);

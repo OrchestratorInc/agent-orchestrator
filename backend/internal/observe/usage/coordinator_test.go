@@ -271,10 +271,68 @@ func TestCoordinatorStopsWorkersWhenWatcherCloses(t *testing.T) {
 	waitForCoordinatorSignal(t, done, "coordinator did not stop after watcher closure")
 }
 
+func TestNextDiscoveryRetryDoublesUpToLimit(t *testing.T) {
+	limit := 10 * time.Minute
+	delay := 30 * time.Second
+	var got []time.Duration
+	for range 7 {
+		delay = nextDiscoveryRetry(delay, limit)
+		got = append(got, delay)
+	}
+	want := []time.Duration{
+		time.Minute, 2 * time.Minute, 4 * time.Minute, 8 * time.Minute,
+		limit, limit, limit,
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("retry %d = %s, want %s (all: %v)", i, got[i], want[i], got)
+		}
+	}
+}
+
+func TestCoordinatorBacksOffPendingDiscoveryRetries(t *testing.T) {
+	store := &coordinatorTestStore{}
+	store.pending.Store(true)
+	const base = 20 * time.Millisecond
+	reconciled := make(chan time.Time, 16)
+	cfg := CoordinatorConfig{
+		Workers:           1,
+		RetryDelay:        base,
+		DiscoveryRetryMax: 4 * base,
+		Reconcile: func(context.Context) error {
+			reconciled <- time.Now()
+			return nil
+		},
+	}
+	_, cancel, done := startCoordinatorTest(t, store, coordinatorTestIngestor(func(context.Context, int64) (IngestResult, error) {
+		return IngestResult{}, nil
+	}), newCoordinatorTestWatcher(), cfg)
+	defer stopCoordinatorTest(t, cancel, done)
+
+	var at []time.Time
+	for len(at) < 5 {
+		select {
+		case when := <-reconciled:
+			at = append(at, when)
+		case <-time.After(5 * time.Second):
+			t.Fatalf("got %d discovery passes, want 5", len(at))
+		}
+	}
+	// Startup, then retries after base, 2*base, 4*base and 4*base. Timers can
+	// fire late but never early, so only lower bounds are checked.
+	wantMin := []time.Duration{base, 2 * base, 4 * base, 4 * base}
+	for i, minimum := range wantMin {
+		if gap := at[i+1].Sub(at[i]); gap < minimum {
+			t.Fatalf("gap before retry %d = %s, want at least %s", i+1, gap, minimum)
+		}
+	}
+}
+
 type coordinatorTestStore struct {
 	mu         sync.Mutex
 	sources    []domain.UsageSourceRecord
 	finalizing []int64
+	pending    atomic.Bool
 }
 
 func (s *coordinatorTestStore) ListWatchableUsageSources(context.Context) ([]domain.UsageSourceRecord, error) {
@@ -290,7 +348,7 @@ func (s *coordinatorTestStore) ListFinalizingUsageSourceIDs(context.Context) ([]
 }
 
 func (s *coordinatorTestStore) HasPendingUsageDiscovery(context.Context) (bool, error) {
-	return false, nil
+	return s.pending.Load(), nil
 }
 
 type coordinatorTestIngestor func(context.Context, int64) (IngestResult, error)

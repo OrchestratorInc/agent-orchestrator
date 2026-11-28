@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"io"
 	"log/slog"
+	"maps"
 	"net/http"
 	"strings"
 	"sync/atomic"
@@ -594,6 +595,34 @@ func TestHarnessUpdatePayloadAllowlistCoversTheRolloutMetrics(t *testing.T) {
 	}
 }
 
+// The launch dashboards read every daemon startup step; a key missing here
+// would export stripped and leave that step's time unnamed. The steps match
+// backend/internal/daemon/startup_timing.go.
+func TestDaemonStartupPayloadAllowlistCoversEveryStep(t *testing.T) {
+	want := map[string][]string{
+		"ao.daemon.ready": {
+			"prepare_ms", "lock_wait_ms", "store_open_ms", "lifecycle_setup_ms", "chat_setup_ms", "session_setup_ms",
+			"install_recovery_ms", "services_setup_ms", "codex_recovery_ms", "startup_reconcile_ms", "listen_ms", "startup_ms",
+		},
+		"ao.daemon.startup_reconciled": {"chat_hosts_ms", "sessions_ms", "reviewer_recovery_ms", "runtime_ms", "reconcile_ms"},
+	}
+	for name, keys := range want {
+		allowed, ok := remotePayloadAllowlist[name]
+		if !ok {
+			t.Errorf("%s has no allowlist entry", name)
+			continue
+		}
+		if len(allowed) != len(keys) {
+			t.Errorf("%s allowlist has %d keys, want %v", name, len(allowed), keys)
+		}
+		for _, key := range keys {
+			if _, ok := allowed[key]; !ok {
+				t.Errorf("%s is missing allowlisted key %q", name, key)
+			}
+		}
+	}
+}
+
 // properties is pure, so the person-property derivation is exercised directly
 // rather than through the HTTP fixture. When the sanitized payload carries the
 // operator's GitHub handle, the sink mirrors it into $set and flips this one
@@ -732,6 +761,37 @@ func TestPostHogSinkClearsStalePersonProperties(t *testing.T) {
 	}
 	if second["$process_person_profile"] != false {
 		t.Errorf("second event $process_person_profile = %#v, want false", second["$process_person_profile"])
+	}
+}
+
+func TestArtifactRegistrationPayloadsAreClosedVocabulary(t *testing.T) {
+	leaks := map[string]any{"path": "/Users/alice/report.html", "name": "report.html", "session_id": "mer-1"}
+	registered := map[string]any{"source": "artifacts_tab", "content_category": "html", "size_bucket": "s", "count": 2}
+	maps.Copy(registered, leaks)
+	got := sanitizeRemotePayload("ao.artifacts.registered", registered)
+	if len(got) != 4 || got["source"] != "artifacts_tab" || got["content_category"] != "html" || got["size_bucket"] != "s" || got["count"] != int64(2) {
+		t.Fatalf("registered payload = %#v", got)
+	}
+	failed := map[string]any{"source": "worker", "reason": "outside_dir"}
+	maps.Copy(failed, leaks)
+	got = sanitizeRemotePayload("ao.artifacts.register_failed", failed)
+	if len(got) != 2 || got["source"] != "worker" || got["reason"] != "outside_dir" {
+		t.Fatalf("register_failed payload = %#v", got)
+	}
+	for key, hostile := range map[string]any{
+		"source": "mer-1", "content_category": "/Users/alice/a.html", "size_bucket": "2048", "count": "/Users/alice/report.html",
+	} {
+		if got := sanitizeRemotePayload("ao.artifacts.registered", map[string]any{key: hostile}); len(got) != 0 {
+			t.Fatalf("accepted %s %#v: %#v", key, hostile, got)
+		}
+	}
+	for _, count := range []any{0, -1, 2.5} {
+		if got := sanitizeRemotePayload("ao.artifacts.registered", map[string]any{"count": count}); len(got) != 0 {
+			t.Fatalf("accepted count %#v: %#v", count, got)
+		}
+	}
+	if got := sanitizeRemotePayload("ao.artifacts.register_failed", map[string]any{"reason": "ARTIFACT_PATH_OUTSIDE_DIR: /Users/alice"}); len(got) != 0 {
+		t.Fatalf("accepted a raw error as reason: %#v", got)
 	}
 }
 

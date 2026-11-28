@@ -12,6 +12,7 @@ import {
 	type ViewStyle,
 } from "react-native";
 import { AppSymbol } from "./AppSymbol";
+import type { AppSymbolProps } from "./AppSymbol.types";
 import { rowDividerWidth } from "./divider";
 import { resolveChromeIcon, type ChromeIcon } from "./chromeIcon";
 import { haptics } from "./haptics";
@@ -182,7 +183,7 @@ export function MascotLamp({ status, size = 40 }: { status?: ConnStatus; size?: 
 
 /**
  * A board group's heading: a small medium label with a hairline running out of
- * it to the edge, T3 Code's list divider. With `onToggle` it folds its section
+ * it to the edge, like a list divider. With `onToggle` it folds its section
  * away, and a small chevron at the end of the rule says so.
  */
 export function ListSectionHeader({
@@ -190,17 +191,24 @@ export function ListSectionHeader({
 	count,
 	open = true,
 	onToggle,
+	icon,
+	bare = false,
 }: {
 	label: string;
 	count?: number;
 	open?: boolean;
 	onToggle?: () => void;
+	/** A glyph before the label, naming the section by shape (the board's). */
+	icon?: AppSymbolProps["name"];
+	/** Quiet: no rule after the label, and its glyph a step fainter (the board's). The label keeps its contrast. */
+	bare?: boolean;
 }) {
 	const t = useTheme();
 	const s = useThemedStyles(makeStyles);
 	const feedback = usePressFeedback("row");
 	const body = (
 		<>
+			{icon ? <AppSymbol name={icon} size={iconSize.xs} color={bare ? t.textFaint : t.textTertiary} /> : null}
 			<Text maxFontSizeMultiplier={fontScaleCap.chrome} style={s.listSectionLabel}>
 				{label}
 			</Text>
@@ -209,7 +217,7 @@ export function ListSectionHeader({
 					{count}
 				</Text>
 			) : null}
-			<View style={s.listSectionRule} />
+			{bare ? null : <View style={s.listSectionRule} />}
 			{onToggle ? (
 				<AppSymbol name={open ? "chevronDown" : "chevronForward"} size={iconSize.xs} color={t.textTertiary} />
 			) : null}
@@ -218,7 +226,7 @@ export function ListSectionHeader({
 
 	if (!onToggle) {
 		return (
-			<View accessible accessibilityRole="header" accessibilityLabel={count === undefined ? label : `${label}, ${count}`} style={s.listSectionHeader}>
+			<View accessible accessibilityRole="header" accessibilityLabel={count === undefined ? label : `${label}, ${count}`} style={[s.listSectionHeader, bare && s.listSectionBare]}>
 				{body}
 			</View>
 		);
@@ -230,7 +238,7 @@ export function ListSectionHeader({
 			accessibilityLabel={`${label} section`}
 			android_ripple={feedback.android_ripple}
 			onPress={onToggle}
-			style={({ pressed }) => [s.listSectionHeader, pressed && feedback.pressed]}
+			style={({ pressed }) => [s.listSectionHeader, bare && s.listSectionBare, pressed && feedback.pressed]}
 		>
 			{body}
 		</Pressable>
@@ -563,6 +571,9 @@ const makeStyles = (t: Theme) =>
 			paddingTop: space.xl,
 			paddingBottom: space.xs,
 		},
+		// No opacity on the whole header: at 60% the small label fell to about
+		// 2.5:1 on the light background. The glyph and count carry the quiet.
+		listSectionBare: { gap: space.xs },
 		listSectionRule: { flex: 1, height: rowDividerWidth, backgroundColor: t.borderDefault },
 		listSectionLabel: { fontFamily: "DMSans_500Medium", color: t.textTertiary, fontSize: type.footnote.fontSize, lineHeight: type.footnote.lineHeight, fontWeight: "500" },
 		// Mono and tabular so a count changing from 9 to 10 does not shift the rule.

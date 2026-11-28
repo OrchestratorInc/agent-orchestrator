@@ -24,6 +24,7 @@ func startShellTerminals(
 	store *sqlite.Store,
 	projects projectsvc.Manager,
 	sessions *sessionsvc.Service,
+	inputForgetter shelltermsvc.TerminalInputForgetter,
 	log *slog.Logger,
 ) *shelltermsvc.Service {
 	svc := shelltermsvc.NewService(
@@ -35,6 +36,9 @@ func startShellTerminals(
 		cfg.AppRunID,
 		log,
 	)
+	// Shell tabs are destroyed here, not by Session Manager, so the terminal
+	// mux's input timestamps for them are forgotten from this side (#5691).
+	svc.SetTerminalInputForgetter(inputForgetter)
 	// Best-effort: a failed sweep must never block boot. The rows survive and
 	// the next boot retries.
 	if _, err := svc.ReapShellTerminalsFromPreviousAppRuns(ctx); err != nil {

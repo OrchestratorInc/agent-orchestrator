@@ -4,14 +4,15 @@ import { pathToFileURL } from 'node:url';
 const FRONTEND = /^(frontend\/(?!src\/docs\/|native\/)|packages\/(product-ui|shared|cloud-client)\/)/;
 
 export const LANES = {
-  go: [/^backend\//, /^pricing\//, /^go\.work(\.sum)?$/, /^contracts\/session-start-interface\.json$/, /^frontend\/scripts\/prepare-cloudflared\.mjs$/, /^frontend\/src\/api\/schema\.ts$/, /^package(-lock)?\.json$/, /^\.github\/scripts\/go-test-parallel\.sh$/],
+  go: [/^backend\//, /^go\.work(\.sum)?$/, /^contracts\/session-start-interface\.json$/, /^frontend\/scripts\/prepare-cloudflared\.mjs$/, /^frontend\/src\/api\/schema\.ts$/, /^package(-lock)?\.json$/, /^\.github\/scripts\/go-test-parallel\.sh$/],
   'cli-e2e': [/^backend\//, /^test\/cli\//],
   frontend: [FRONTEND],
   docs: [/^frontend\/src\/docs\//],
   boundary: [FRONTEND, /^backend\/internal\/httpd\//],
   cloud: [/^packages\/cloud-client\//, /^contracts\/cloud\//],
   'product-ui': [/^packages\/product-ui\//],
-  mobile: [/^packages\/(mobile|shared)\//],
+  // The app copies the desktop's harness marks; its parity test reads them and the daemon's harness list.
+  mobile: [/^packages\/(mobile|shared)\//, /^frontend\/src\/renderer\/(assets\/agents\/|components\/AgentAvatar\.tsx$)/, /^backend\/internal\/domain\/harness\.go$/],
   'mac-native': [/^frontend\/native\//, /^frontend\/scripts\/build-(mac|update|wake|dictation)/, /^frontend\/assets\/(icon\.icns$|dmg\/)/],
   config: [/^\.github\//, /^scripts\//],
 };
@@ -22,14 +23,19 @@ const EVERY_LANE = /^(\.github\/(workflows|actions)\/|scripts\/ci-lanes\.mjs$)/;
 const ALL_VITEST = /^(frontend\/(package(-lock)?\.json|vite[^/]*\.ts|vitest[^/]*\.ts|tsconfig[^/]*\.json|src\/renderer\/test\/|scripts\/)|packages\/(product-ui|shared)\/)/;
 const FILE_LIMIT = 3000;
 
+// A PR into any other branch is stacked: it is tested when it moves to one of these.
+export const TESTED_BASES = ['main', 'stable'];
+
 export function pickLanes({ event, draft = false, base = 'main', fork = false, labels = [], files = [] }) {
-  if (event === 'pull_request' && !draft && base !== 'main' && fork) {
+  const stacked = event === 'pull_request' && !TESTED_BASES.includes(base);
+  if (stacked && !draft && fork) {
     throw new Error(`This fork PR targets ${base}. CI cannot re-run it when it moves to main, so ci-ok stays red: target main and push again.`);
   }
-  if (event === 'pull_request' && (draft || base !== 'main')) {
+  if (event === 'pull_request' && (draft || stacked)) {
     return { lanes: [], full: false, macos: false, vitest: '' };
   }
-  const full = event !== 'pull_request' || labels.includes('ci:full');
+  // Nothing re-tests stable after a merge, so its release and hotfix PRs get what a push to main gets.
+  const full = event !== 'pull_request' || base === 'stable' || labels.includes('ci:full');
   const paths = files.flatMap(file => [file.filename, file.previous_filename].filter(Boolean));
   const every = full || files.length >= FILE_LIMIT || paths.some(path => EVERY_LANE.test(path));
   const hit = lane => paths.some(path => LANES[lane].some(rule => rule.test(path)));

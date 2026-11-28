@@ -1,21 +1,23 @@
 import { act, create, type ReactTestInstance, type ReactTestRenderer } from "react-test-renderer";
-import { afterEach, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
 vi.mock("react-native", () => ({ StyleSheet: { create: <T,>(styles: T) => styles }, View: "View" }));
 vi.mock("@expo/ui/jetpack-compose", () => ({
-	Button: "Button", Checkbox: "Checkbox", Column: "Column", Host: "Host", ListItem: "ListItem", OutlinedTextField: "OutlinedTextField",
-	RadioButton: "RadioButton", Text: "Text", TextButton: "TextButton", useNativeState: () => ({ get: () => "", set: vi.fn() }),
+	Button: "Button", Checkbox: "Checkbox", Column: "Column", Host: "Host", ListItem: "ListItem",
+	OutlinedTextField: Object.assign(function OutlinedTextField() { return null; }, { Placeholder: "OutlinedTextField.Placeholder" }),
+	RadioButton: "RadioButton", Row: "Row", Spacer: "Spacer", Text: "Text", TextButton: "TextButton", useNativeState: () => ({ get: () => "", set: vi.fn() }),
 }));
 // Each modifier records its name and arguments, so a test can read what a control was given.
 vi.mock("@expo/ui/jetpack-compose/modifiers", () => Object.fromEntries([
-	"fillMaxWidth", "selectable", "selectableGroup", "testID", "toggleable", "width",
+	"fillMaxWidth", "selectable", "selectableGroup", "testID", "toggleable", "weight", "width",
 ].map((name) => [name, (...args: unknown[]) => ({ [name]: args })])));
 vi.mock("../haptics", () => ({ haptics: { select: vi.fn(), tap: vi.fn() } }));
 vi.mock("../ThemeProvider", () => ({ useTheme: () => ({ accent: "#0a84ff", onAccent: "#ffffff" }), useThemeState: () => ({ scheme: "light" }) }));
 
+import { OutlinedTextField } from "@expo/ui/jetpack-compose";
 import { haptics } from "../haptics";
-import { ElicitationAction } from "./elicitation-native-controls";
+import { ElicitationAction, ElicitationActionRow, ElicitationTextField } from "./elicitation-native-controls";
 
 let renderer: ReactTestRenderer | undefined;
 afterEach(() => { if (renderer) act(() => renderer!.unmount()); renderer = undefined; });
@@ -70,4 +72,85 @@ it("taps on press unless the caller buzzes for the outcome", () => {
 	act(() => actionParts().button.props.onClick());
 	expect(haptics.tap).toHaveBeenCalledOnce();
 	expect(onPress).toHaveBeenCalledTimes(2);
+});
+
+// The timeline reveals a request field when it takes focus; losing it asks nothing.
+it("reports a Material text field taking focus", () => {
+	const onFocus = vi.fn();
+	act(() => { renderer = create(<ElicitationTextField value="" label="Title" onChange={vi.fn()} onFocus={onFocus} />); });
+	const field = renderer!.root.findByType(OutlinedTextField);
+	act(() => field.props.onFocusChanged(true));
+	act(() => field.props.onFocusChanged(false));
+	expect(onFocus).toHaveBeenCalledOnce();
+});
+
+// An approval's decisions share one line, whatever their labels or the text
+// size: one native row lays them out, and a crowded row ellipsizes a label
+// rather than wrapping the last decision under the rest.
+describe("action row", () => {
+	const decisions = () => [
+		{ key: "reject", label: "Deny", onPress: vi.fn() },
+		{ key: "allow", label: "Allow Once", primary: true, onPress: vi.fn() },
+		{ key: "always", label: "Always Allow", onPress: vi.fn() },
+	];
+
+	// Hidden copies, one per decision, measure each at its own width; the visible
+	// row is the last host.
+	function rowParts() {
+		const hosts = renderer!.root.findAllByType("Host" as never);
+		const visible = hosts[hosts.length - 1];
+		const buttons = visible.findAll((node) => ["Button", "TextButton"].includes(node.type as string));
+		return { copies: hosts.slice(0, -1), visible, frame: visible.parent!, buttons };
+	}
+
+	it("lays every decision out in one native row, right-aligned", () => {
+		act(() => { renderer = create(<ElicitationActionRow actions={decisions()} reportsOutcome />); });
+		const { copies, visible } = rowParts();
+		expect(copies).toHaveLength(3);
+		expect(copies[0].parent?.props).toMatchObject({ accessibilityElementsHidden: true, pointerEvents: "none" });
+		const row = visible.findByType("Row" as never);
+		const [spacer, ...buttons] = row.children as ReactTestInstance[];
+		// The spacer takes what the decisions leave, and nothing once they need it all.
+		expect(spacer.type).toBe("Spacer");
+		expect(modifiers(spacer)).toEqual([{ weight: [1] }]);
+		expect(buttons.map((button) => button.type)).toEqual(["TextButton", "Button", "TextButton"]);
+	});
+
+	// A long early label must not take the width later decisions need, the
+	// primary among them: once they don't fit, each is held to a fair share.
+	it("holds each decision to a fair share once the row runs short", () => {
+		act(() => { renderer = create(<ElicitationActionRow actions={decisions()} reportsOutcome />); });
+		const { copies, frame } = rowParts();
+		act(() => {
+			// 316 wide, less two 8-wide gaps: 300 for the decisions.
+			frame.props.onLayout({ nativeEvent: { layout: { width: 316 } } });
+			copies[0].props.onLayoutContent({ nativeEvent: { width: 400, height: 48 } });
+			copies[1].props.onLayoutContent({ nativeEvent: { width: 120, height: 48 } });
+			copies[2].props.onLayoutContent({ nativeEvent: { width: 130, height: 48 } });
+		});
+		expect(rowParts().buttons.map(modifiers)).toEqual([[{ width: [100] }], [{ width: [100] }], [{ width: [100] }]]);
+		// With room for them all, each keeps its own width.
+		act(() => frame.props.onLayout({ nativeEvent: { layout: { width: 800 } } }));
+		expect(rowParts().buttons.map(modifiers)).toEqual([undefined, undefined, undefined]);
+	});
+
+	it("keeps each label on one line, ellipsized when the row runs short", () => {
+		act(() => { renderer = create(<ElicitationActionRow actions={decisions()} reportsOutcome />); });
+		for (const title of renderer!.root.findAllByType("Text" as never)) {
+			expect(title.props).toMatchObject({ maxLines: 1, overflow: "ellipsis" });
+		}
+	});
+
+	it("presses the decision tapped, buzzing only when the caller doesn't", () => {
+		const actions = decisions();
+		vi.mocked(haptics.tap).mockClear();
+		act(() => { renderer = create(<ElicitationActionRow actions={actions} reportsOutcome />); });
+		const press = (index: number) => rowParts().buttons[index].props.onClick();
+		act(() => press(1));
+		expect(actions[1].onPress).toHaveBeenCalledOnce();
+		expect(haptics.tap).not.toHaveBeenCalled();
+		act(() => renderer!.update(<ElicitationActionRow actions={actions} />));
+		act(() => press(0));
+		expect(haptics.tap).toHaveBeenCalledOnce();
+	});
 });

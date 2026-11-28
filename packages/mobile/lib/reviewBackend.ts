@@ -8,7 +8,9 @@ import {
 	getSessionPR,
 	getSessionReviews,
 	killSessionReviewer,
+	loadPRDetails,
 	mergeSessionPR,
+	postPRComment,
 	requestSessionRereview,
 	resolveSessionReviewComment,
 	restoreSessionReviewer,
@@ -28,7 +30,7 @@ import {
 import { cloudAgentLabel } from "./cloud/agents";
 import { formatReviewSummaryMessage } from "./reviewFeedback";
 import type { ReviewPolicyKey } from "./review-actions-sheet.types";
-import { defaultReviewerHarness, reviewerChoices, reviewerSwitchSelection } from "./reviewerControls";
+import { defaultReviewerHarness, inheritedReviewerConfig, reviewerChoices, reviewerSwitchSelection } from "./reviewerControls";
 import { useCloud } from "./cloud/CloudProvider";
 import { cloudErrorMessage } from "./cloud/errors";
 import { cloudSessionRow, isCloudHost } from "./cloud/mapping";
@@ -73,6 +75,10 @@ export type ReviewBackend = {
 	rerequest?(sessionId: string, prUrl: string, reviewerId: string): Promise<void>;
 	/** Resolve a review comment on GitHub; a daemon's only. */
 	resolveComment?(sessionId: string, prUrl: string, commentUrl: string): Promise<void>;
+	/** Reply on the provider, into a thread when one is named; a daemon's only. */
+	reply?(pr: { number: number; url: string }, body: string, threadId?: string): Promise<void>;
+	/** Read a PR's threads and comments when none are stored; a daemon's only. */
+	loadDetails?(pr: { number: number; url: string }): Promise<void>;
 };
 
 /** The review actions sheet's reviewer choice and automation switches. */
@@ -83,7 +89,10 @@ export type ReviewSettings = {
 	selectedReviewer: string;
 	/** Who reviews when the session names nobody. */
 	defaultReviewer: string;
+	/** The session's own reviewer settings; an empty field inherits. */
 	reviewerConfig: ReviewerAgentConfig;
+	/** What an empty session field inherits from the project, by reviewer agent. */
+	inheritedConfig: Readonly<Record<string, ReviewerAgentConfig>>;
 	policies: Record<ReviewPolicyKey, boolean>;
 };
 
@@ -104,11 +113,16 @@ export function daemonReviewBackend(config: ServerConfig): ReviewBackend {
 		settings: async (sessionId) => {
 			const [catalog, session] = await Promise.all([getAgents(config), getSession(config, sessionId)]);
 			const project = session.projectId ? await getProject(config, session.projectId).catch(() => undefined) : undefined;
+			const reviewers = reviewerChoices(catalog).map((agent) => ({ id: agent.id, label: agent.label || agent.id, selectable: agent.selectable }));
+			const selectedReviewer = session.reviewerHarness || "";
+			const defaultReviewer = defaultReviewerHarness(project?.config?.reviewers, session.harness ?? undefined);
+			const harnesses = new Set([...reviewers.map((agent) => agent.id), selectedReviewer, defaultReviewer].filter(Boolean));
 			return {
-				reviewers: reviewerChoices(catalog).map((agent) => ({ id: agent.id, label: agent.label || agent.id, selectable: agent.selectable })),
-				selectedReviewer: session.reviewerHarness || "",
-				defaultReviewer: defaultReviewerHarness(project?.config?.reviewers, session.harness ?? undefined),
+				reviewers,
+				selectedReviewer,
+				defaultReviewer,
 				reviewerConfig: session.reviewerConfig ?? {},
+				inheritedConfig: Object.fromEntries([...harnesses].map((harness) => [harness, inheritedReviewerConfig(project?.config, harness)])),
 				policies: {
 					autoReviewEnabled: session.autoReviewEnabled ?? false,
 					autoInjectReview: session.autoInjectReview ?? true,
@@ -128,6 +142,8 @@ export function daemonReviewBackend(config: ServerConfig): ReviewBackend {
 		reviewerModels: (harness, signal) => getAgentModels(config, harness, undefined, signal),
 		rerequest: (sessionId, prUrl, reviewerId) => requestSessionRereview(config, sessionId, prUrl, reviewerId),
 		resolveComment: (sessionId, prUrl, commentUrl) => resolveSessionReviewComment(config, sessionId, prUrl, commentUrl),
+		reply: (pr, body, threadId) => postPRComment(config, pr, body, threadId),
+		loadDetails: (pr) => loadPRDetails(config, pr),
 	};
 }
 
@@ -176,6 +192,7 @@ export function cloudReviewBackend(client: CloudClient, orgId: string): ReviewBa
 				selectedReviewer: selected,
 				defaultReviewer: state.reviewerHarness || session.harness,
 				reviewerConfig: {},
+				inheritedConfig: {},
 				policies: {
 					autoReviewEnabled: session.autoReviewEnabled === true,
 					autoInjectReview: session.autoInjectReview ?? true,

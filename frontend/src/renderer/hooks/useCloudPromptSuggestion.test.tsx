@@ -4,6 +4,7 @@ import { renderHook, waitFor } from "@testing-library/react";
 import type { ReactNode } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { chatFixtureEmpty } from "../lib/chat-fixture";
+import { noteCloudWorkerStarting, resetCloudWorkerStartingForTests, WORKER_STARTING_CODE } from "../lib/cloud-worker-starting";
 import type { ConversationItem, ConversationSnapshot } from "../types/conversation";
 import type { WorkspaceSession } from "../types/workspace";
 
@@ -27,6 +28,7 @@ const settled: ConversationSnapshot = {
 };
 
 const session = { id: "session-1", runtimeConnected: true, cloud: { orgId: "org-1" } } as WorkspaceSession;
+const starting = () => new CloudCpError("The session's workspace is still starting.", { status: 503, code: WORKER_STARTING_CODE, retryAfterMs: 1_000 });
 
 function wrapper({ children }: { children: ReactNode }) {
 	return <QueryClientProvider client={new QueryClient()}>{children}</QueryClientProvider>;
@@ -67,6 +69,27 @@ describe("useCloudPromptSuggestion", () => {
 		suggestChatPrompt.mockClear();
 		renderHook(() => useCloudPromptSuggestion({ ...session, runtimeConnected: false }, settled, true), { wrapper });
 		expect(suggestChatPrompt).not.toHaveBeenCalled();
+	});
+
+	it("does not ask a worker still preparing its workspace, and asks once it is ready", async () => {
+		resetCloudWorkerStartingForTests();
+		noteCloudWorkerStarting("org-1", "session-1", starting());
+		const { result } = renderHook(() => useCloudPromptSuggestion(session, settled, true), { wrapper });
+		await new Promise((resolve) => setTimeout(resolve, 200));
+		expect(suggestChatPrompt).not.toHaveBeenCalled();
+		await waitFor(() => expect(result.current?.text).toBe("Add a regression test."), { timeout: 3_000 });
+		expect(suggestChatPrompt).toHaveBeenCalledTimes(1);
+	});
+
+	it("asks a worker that said it is still starting again after its backoff, instead of giving up on the turn", async () => {
+		resetCloudWorkerStartingForTests();
+		suggestChatPrompt.mockRejectedValueOnce(starting());
+		const { result } = renderHook(() => useCloudPromptSuggestion(session, settled, true), { wrapper });
+		await waitFor(() => expect(suggestChatPrompt).toHaveBeenCalledTimes(1));
+		await new Promise((resolve) => setTimeout(resolve, 200));
+		expect(suggestChatPrompt).toHaveBeenCalledTimes(1);
+		await waitFor(() => expect(result.current?.text).toBe("Add a regression test."), { timeout: 3_000 });
+		expect(suggestChatPrompt).toHaveBeenCalledTimes(2);
 	});
 
 	it("asks a busy worker again instead of giving up", async () => {

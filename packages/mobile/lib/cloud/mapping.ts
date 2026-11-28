@@ -85,6 +85,15 @@ export function cloudSessionRow(session: CloudSession): DashboardSession {
 	};
 }
 
+/**
+ * A standalone agent's session as a board row. Its project is the agent's own,
+ * hidden one, so the row has none, as a machine's standalone session has
+ * none: the board calls it Standalone and no project filter claims it.
+ */
+export function cloudStandaloneAgentRow(session: CloudSession): DashboardSession {
+	return cloudSessionRow({ ...session, projectId: "" });
+}
+
 /** A cloud orchestrator as the Projects tab's orchestrator link. */
 export function cloudOrchestratorLink(session: CloudSession, projectName: string): OrchestratorLink {
 	return {
@@ -146,13 +155,22 @@ export function createCloudEnvironment() {
 	const orchestratorRows = stableRows<CloudSession, OrchestratorLink>();
 	return (projects: readonly CloudProject[], sessions: readonly CloudSession[]): CloudEnvironment => {
 		const names = new Map(projects.map((project) => [project.id, project.displayName]));
+		// A standalone agent's project is never listed as a project.
+		const agents = new Set(projects.filter((project) => project.standaloneAgent).map((project) => project.id));
 		return {
 			hostId: CLOUD_HOST_ID,
 			name: CLOUD_HOST_NAME,
 			appearance: CLOUD_APPEARANCE,
 			connection: "open",
-			projects: projectRows(projects, cloudProjectInfo),
-			sessions: sessionRows(sessions.filter((session) => session.kind !== "orchestrator"), cloudSessionRow),
+			projects: projectRows(projects.filter((project) => !agents.has(project.id)), cloudProjectInfo),
+			// An agent's session is mapped without its hidden project; the row
+			// cache keys on what it maps, so the row stays stable between polls.
+			sessions: sessionRows(
+				sessions
+					.filter((session) => session.kind !== "orchestrator")
+					.map((session) => (agents.has(session.projectId) ? { ...session, projectId: "" } : session)),
+				cloudSessionRow,
+			),
 			orchestrators: orchestratorRows(
 				sessions.filter((session) => session.kind === "orchestrator" && !session.isTerminated),
 				(session) => cloudOrchestratorLink(session, names.get(session.projectId) ?? "Project"),

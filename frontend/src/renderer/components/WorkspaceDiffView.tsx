@@ -935,10 +935,10 @@ export function EmptyMessage({ icon: Icon, title, action }: { icon: AppIcon; tit
 	);
 }
 
-export function RetryButton({ onClick }: { onClick: () => void }) {
+export function RetryButton({ onClick, disabled = false }: { onClick: () => void; disabled?: boolean }) {
 	const { t } = useTranslation();
 	return (
-		<Button onClick={onClick} size="sm" type="button" variant="secondary">
+		<Button disabled={disabled} onClick={onClick} size="sm" type="button" variant="secondary">
 			{t("files.retry")}
 		</Button>
 	);

@@ -8,6 +8,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { daemonExitWasUngraceful, planDaemonAutoRestart } from "./daemon-auto-restart";
 import { keepDaemonAlive } from "./daemon-owner";
 import { createListenPortScanner, parseRunFile } from "../shared/daemon-discovery";
+import { resolveDaemonFromPort, type DaemonProbe, type DaemonProber } from "../shared/daemon-attach";
+import { daemonExitReason } from "../shared/daemon-exit-reason";
+import { bundledDaemonMissingMessage } from "../shared/daemon-launch";
+import { childStdioDrained } from "./child-stdio-drained";
 import { browserDaemonOwnershipDecision, browserRuntimeRecoveryDecision, keepAliveForReplacement, portHolderPidToReplace, shouldReplaceDaemonForStartup } from "../shared/daemon-takeover";
 
 const source = ts.createSourceFile("main.ts", readFileSync(new URL("../main.ts", import.meta.url), "utf8"), ts.ScriptTarget.Latest, true);
@@ -30,6 +34,17 @@ const controllerSource = source.statements.filter((node) => {
 	);
 }).map((node) => node.getText(source)).join("\n");
 const controller = ts.transpileModule(controllerSource, { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText;
+const probeSource = ts.transpileModule(source.statements.filter((node) =>
+	ts.isFunctionDeclaration(node) && node.name?.text === "readDaemonProbe",
+).map((node) => node.getText(source)).join("\n"), { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText;
+
+function readProbeFromMain(request: (url: string, init: { signal: AbortSignal }) => Promise<unknown>) {
+	const context = vm.createContext({ AbortController, setTimeout, clearTimeout, fetch: request, DAEMON_PROBE_TIMEOUT_MS: 2_000 });
+	vm.runInContext(probeSource, context);
+	return vm.runInContext("readDaemonProbe", context) as (
+		port: number, endpoint: "healthz" | "readyz", onTimeout?: () => void,
+	) => Promise<DaemonProbe | null>;
+}
 
 function deferred<T>() {
 	let resolve!: (value: T) => void;
@@ -37,7 +52,8 @@ function deferred<T>() {
 	return { promise, resolve };
 }
 
-function setup() {
+function setup(platform: "linux" | "win32" = "linux") {
+	let shellEnvReady: Promise<void> = Promise.resolve();
 	let marker: string | Error = JSON.stringify({ pid: 42, port: 3001 });
 	const read = vi.fn(async () => {
 		if (marker instanceof Error) throw marker;
@@ -57,45 +73,58 @@ function setup() {
 	const app = new EventEmitter();
 	Object.assign(app, { isPackaged: false, getAppPath: () => "/owned/lab", quit: vi.fn() });
 	const replace = vi.fn(async () => undefined);
-	const inspect = vi.fn(async (): Promise<unknown> => null);
-	const direct = vi.fn(async (): Promise<unknown> => null);
+	const inspect = vi.fn(async (_launch?: unknown, _probe?: DaemonProber): Promise<unknown> => null);
+	const direct = vi.fn(async (_deps?: { expectedPort: number; probe: DaemonProber; identityError: (probe: DaemonProbe) => string | null }): Promise<unknown> => null);
+	const probe = vi.fn(async (_port: number, _endpoint: "healthz" | "readyz", _onTimeout?: () => void): Promise<DaemonProbe | null> => null);
+	const readProcessStartMs = vi.fn(async (_pid: number): Promise<number | null> => null);
+	const kill = vi.fn();
 	const stage = vi.fn(async (): Promise<void> => undefined);
 	const supervisorDisposed = vi.fn();
 	const establishSupervisorLink = vi.fn();
 	const daemonEnv = vi.fn((keep: boolean) => ({ AO_OWNER: keep ? "persistent" : "app" }));
 	const env: Record<string, string | undefined> = {};
+	const lifecycleLog = vi.fn();
+	const planDaemonSpawnIsolation = vi.fn(async (): Promise<unknown> => ({ kind: "unchanged", reason: "disabled" }));
+	const applyDaemonOomScoreAdj = vi.fn(() => 300);
+	const openSync = vi.fn(() => 73);
 	const context = vm.createContext({
+		lifecycleLog, planDaemonSpawnIsolation, applyDaemonOomScoreAdj,
 		console, Date, setTimeout, clearTimeout, setInterval, clearInterval, Buffer, path,
-		openSync: vi.fn(() => 73), closeSync: vi.fn(),
-		process: { env, platform: "linux", resourcesPath: "/owned/lab", kill: vi.fn() },
+		openSync, closeSync: vi.fn(),
+		process: { env, platform, resourcesPath: "/owned/lab", kill },
 		os: { homedir: () => "/owned/home" }, app, ipcMain: { handle: (name: string, handler: () => unknown) => ipc.set(name, handler) },
 		browserQuitRequested: false, daemonOutput: "", supervisorLink: { dispose: supervisorDisposed }, appRunId: "test-app",
 		browserRuntimeRecoveryDecision, browserRuntimeRecoveryAttempted: false,
 		forceReplaceAdoptedRequested: false, cachedShellEnv: {}, earlyShellEnvProbe: null,
-		repairDevAcpRuntime: async () => undefined, ensureShellEnv: async () => undefined, retryFailedEarlyShellEnvProbe: async () => undefined,
+		repairDevAcpRuntime: async () => undefined, ensureShellEnv: () => shellEnvReady, retryFailedEarlyShellEnvProbe: async () => undefined,
 		resolveDaemonLaunch: () => ({ command: "/owned/ao", args: [], cwd: "/owned/data", source: "override", shell: false }),
 		daemonLaunchEnv: () => ({}), inspectExistingDaemon: inspect, browserDaemonOwnershipDecision,
 		shouldReplaceDaemonForStartup, keepAliveForReplacement, gracefullyReplaceDaemonForBrowser: replace,
 		shouldLinkOnAttach: () => false, establishSupervisorLink, resolveDaemonFromPort: direct,
-		resolvedDaemonPort: () => 3001, readDaemonProbe: async () => null, daemonIdentityError: () => null,
+		resolvedDaemonPort: () => 3001, readDaemonProbe: probe, daemonIdentityError: () => null,
 		runFilePath: () => "/owned/running.json", parseRunFile, readFile: read, rm: unlink,
-		portHolderPidToReplace, readProcessStartMs: async () => null, processAlive: () => false,
+		portHolderPidToReplace, readProcessStartMs, processAlive: () => false,
 		existsSync: () => true, ensureBundledTmuxStaged: stage, keepDaemonAlive,
+		waitForFile: async () => true, BUNDLED_DAEMON_WAIT_MS: 10_000, bundledDaemonMissingMessage, daemonExitReason,
+		childStdioDrained, DAEMON_EXIT_DRAIN_MS: 250,
 		spawn, daemonEnv, browserRuntimeToken: "test-only", createListenPortScanner,
-		RUN_FILE_FRESHNESS_SKEW_MS: 1000, RUN_FILE_POLL_MS: 100, PORT_DISCOVERY_TIMEOUT_MS: 5000,
+		RUN_FILE_FRESHNESS_SKEW_MS: 1000, RUN_FILE_POLL_MS: 100, PORT_DISCOVERY_TIMEOUT_MS: 5000, DAEMON_PROBE_TIMEOUT_MS: 2000,
 		DAEMON_RESTART_STOP_TIMEOUT_MS: 5000, appendDaemonOutput: vi.fn(), slowDaemonStartupStatus: () => ({ state: "starting" }),
 		planDaemonAutoRestart, daemonExitWasUngraceful, disposeBrowserRuntimeLink: vi.fn(), captureSideChatState: async () => undefined,
-		desktopQuit: { handleBeforeQuit: () => false }, chatDraftRisks: [], browserCleanupComplete: true,
-		disposeBrowserStreamLink: vi.fn(), trayLifecycle: { dispose: vi.fn() },
+		desktopQuit: { handleBeforeQuit: () => false }, exitFeedbackGate: { intercept: () => false }, chatDraftRisks: [], browserCleanupComplete: true,
+		disposeBrowserStreamLink: vi.fn(), trayLifecycle: { dispose: vi.fn() }, launchTiming: { mark: vi.fn() },
 		agentQuitCleanupComplete: false, agentQuitCleanupPromise: null, shutdownDaemonForDesktopQuit: async () => undefined,
 	});
 	vm.runInContext(`${controller}\nfunction setDaemonStatus(status) { daemonStatus = status; }`, context);
 	return {
-		read, unlink, spawn, children, replace, inspect, direct, stage, supervisorDisposed, establishSupervisorLink, daemonEnv, env,
+		read, unlink, spawn, children, replace, lifecycleLog, planDaemonSpawnIsolation, applyDaemonOomScoreAdj, openSync, inspect, direct, probe, readProcessStartMs, kill, stage, supervisorDisposed, establishSupervisorLink, daemonEnv, env,
+		setShellEnvReady(promise: Promise<void>) { shellEnvReady = promise; },
 		setMarker(value: string | Error) { marker = value; },
 		start: () => ipc.get("daemon:start")!(), stop: () => ipc.get("daemon:stop")!(), restart: () => ipc.get("daemon:restart")!(),
 		status: () => vm.runInContext("daemonStatus", context),
 		refresh: () => ipc.get("daemon:getStatus")!(),
+		markQuitPastPointOfNoReturn: () => vm.runInContext("browserQuitRequested = true", context),
+		scopeLaunchFailed: () => vm.runInContext("daemonScopeLaunchFailed", context),
 		rejectRuntime: () => vm.runInContext('handleBrowserRuntimeRejection("invalid-token")', context),
 		quit: () => app.emit("before-quit", { preventDefault: vi.fn() }),
 		crash(code: number | null = 1, signal: string | null = null) { children.at(-1)!.emit("exit", code, signal); },
@@ -105,7 +134,202 @@ function setup() {
 beforeEach(() => vi.useFakeTimers());
 afterEach(() => vi.useRealTimers());
 
+describe("main.ts daemon HTTP probe", () => {
+	it("records a stalled request only when its deadline aborts", async () => {
+		const onTimeout = vi.fn();
+		const probe = readProbeFromMain((_url, { signal }) => new Promise((_resolve, reject) => {
+			signal.addEventListener("abort", () => reject(new Error("aborted")));
+		}));
+		const pending = probe(3001, "healthz", onTimeout);
+		await vi.advanceTimersByTimeAsync(1_999);
+		expect(onTimeout).not.toHaveBeenCalled();
+		await vi.advanceTimersByTimeAsync(1);
+		await expect(pending).resolves.toBeNull();
+		expect(onTimeout).toHaveBeenCalledOnce();
+	});
+
+	it("does not mark an immediately refused connection as a timeout", async () => {
+		const onTimeout = vi.fn();
+		const probe = readProbeFromMain(() => Promise.reject(new Error("ECONNREFUSED")));
+		await expect(probe(3001, "healthz", onTimeout)).resolves.toBeNull();
+		await vi.advanceTimersByTimeAsync(2_000);
+		expect(onTimeout).not.toHaveBeenCalled();
+	});
+});
+
 describe("main.ts daemon lifecycle wiring with controlled I/O", () => {
+	it.each([false, true])("stops after one Windows stalled listener timeout (run-file probe: %s)", async (runFileProbe) => {
+		const h = setup("win32");
+		if (runFileProbe) h.inspect.mockImplementation(async (_launch, probe) => {
+			await probe!(3001, "healthz");
+			return null;
+		});
+		h.direct.mockImplementation((deps) => resolveDaemonFromPort(deps!));
+		h.probe.mockImplementation((_port, _endpoint, onTimeout) => new Promise((resolve) => {
+			setTimeout(() => { onTimeout?.(); resolve(null); }, 2_000);
+		}));
+		const starting = h.start();
+		await vi.advanceTimersByTimeAsync(0);
+		expect(h.probe).toHaveBeenCalledTimes(1);
+		await vi.advanceTimersByTimeAsync(1_999);
+		expect(h.spawn).not.toHaveBeenCalled();
+		await vi.advanceTimersByTimeAsync(1);
+		await starting;
+		expect(h.probe).toHaveBeenCalledTimes(1);
+		expect(h.spawn).not.toHaveBeenCalled();
+		expect(h.status()).toMatchObject({ state: "error", code: "not_ready", message: expect.stringContaining("did not answer /healthz") });
+	});
+
+	it("spawns promptly on Windows when the expected port refuses connections", async () => {
+		const h = setup("win32");
+		h.direct.mockImplementation((deps) => resolveDaemonFromPort(deps!));
+		await h.start();
+		expect(h.probe).toHaveBeenCalledTimes(2); // direct probe, then late orphan check
+		expect(h.spawn).toHaveBeenCalledTimes(1);
+	});
+
+	it("waits for the selected shell, not the closed port, on a Windows cold start", async () => {
+		const h = setup("win32");
+		h.setMarker(Object.assign(new Error("missing"), { code: "ENOENT" }));
+		h.direct.mockImplementation((deps) => resolveDaemonFromPort(deps!));
+		h.setShellEnvReady(new Promise((resolve) => { setTimeout(resolve, 3_000); }));
+		const starting = h.start();
+		await vi.advanceTimersByTimeAsync(0);
+		expect(h.probe).toHaveBeenCalledTimes(1);
+		expect(h.spawn).not.toHaveBeenCalled();
+		await vi.advanceTimersByTimeAsync(2_999);
+		expect(h.spawn).not.toHaveBeenCalled();
+		await vi.advanceTimersByTimeAsync(1);
+		await starting;
+		expect(h.probe).toHaveBeenCalledTimes(2);
+		expect(h.spawn).toHaveBeenCalledOnce();
+	});
+
+	it("reports a stalled Windows run-file listener before a slow shell finishes", async () => {
+		const h = setup("win32");
+		h.inspect.mockImplementation(async (_launch, probe) => {
+			await probe!(3001, "healthz");
+			return null;
+		});
+		h.direct.mockImplementation((deps) => resolveDaemonFromPort(deps!));
+		h.probe.mockImplementation((_port, _endpoint, onTimeout) => new Promise((resolve) => {
+			setTimeout(() => { onTimeout?.(); resolve(null); }, 2_000);
+		}));
+		h.setShellEnvReady(new Promise((resolve) => { setTimeout(resolve, 3_000); }));
+		const starting = h.start();
+		await vi.advanceTimersByTimeAsync(0);
+		await vi.advanceTimersByTimeAsync(2_000);
+		await starting;
+		expect(h.probe).toHaveBeenCalledOnce();
+		expect(h.status()).toMatchObject({ state: "error", code: "not_ready" });
+		expect(h.spawn).not.toHaveBeenCalled();
+	});
+
+	it("attaches to a valid live Windows daemon without spawning", async () => {
+		const h = setup("win32");
+		h.setMarker(JSON.stringify({ pid: 42, port: 3001, owner: "app", appRunId: "test-app" }));
+		h.direct.mockImplementation((deps) => resolveDaemonFromPort(deps!));
+		h.probe.mockImplementation(async (_port, endpoint) => ({
+			status: endpoint === "healthz" ? "ok" : "ready", service: "agent-orchestrator-daemon", pid: 42,
+		}));
+		await h.start();
+		expect(h.probe).toHaveBeenCalledTimes(2);
+		expect(h.status()).toMatchObject({ state: "ready", port: 3001, pid: 42 });
+		expect(h.spawn).not.toHaveBeenCalled();
+	});
+
+	it("keeps a slow Windows readiness response visible without spawning", async () => {
+		const h = setup("win32");
+		h.direct.mockImplementation((deps) => resolveDaemonFromPort(deps!));
+		h.probe.mockImplementation((_port, endpoint, onTimeout) => endpoint === "healthz"
+			? Promise.resolve({ status: "ok", service: "agent-orchestrator-daemon", pid: 42 })
+			: new Promise((resolve) => { setTimeout(() => { onTimeout?.(); resolve(null); }, 2_000); }));
+		const starting = h.start();
+		await vi.advanceTimersByTimeAsync(0);
+		await vi.advanceTimersByTimeAsync(2_000);
+		await starting;
+		expect(h.probe).toHaveBeenCalledTimes(2);
+		expect(h.status()).toMatchObject({ state: "error", code: "not_ready", port: 3001 });
+		expect(h.spawn).not.toHaveBeenCalled();
+	});
+
+	it("uses a live expected port after a different run-file port times out", async () => {
+		const h = setup("win32");
+		h.setMarker(JSON.stringify({ pid: 42, port: 3001, owner: "app", appRunId: "test-app" }));
+		h.inspect.mockImplementation(async (_launch, probe) => {
+			await probe!(4000, "healthz");
+			return null;
+		});
+		h.direct.mockImplementation((deps) => resolveDaemonFromPort(deps!));
+		h.probe.mockImplementation((port, endpoint, onTimeout) => port === 4000
+			? new Promise((resolve) => { setTimeout(() => { onTimeout?.(); resolve(null); }, 2_000); })
+			: Promise.resolve({ status: endpoint === "healthz" ? "ok" : "ready", service: "agent-orchestrator-daemon", pid: 42 }));
+		const starting = h.start();
+		await vi.advanceTimersByTimeAsync(0);
+		await vi.advanceTimersByTimeAsync(2_000);
+		await starting;
+		expect(h.status()).toMatchObject({ state: "ready", port: 3001, pid: 42 });
+		expect(h.spawn).not.toHaveBeenCalled();
+	});
+
+	it("spawns when a stale run-file port times out but the expected port is free", async () => {
+		const h = setup("win32");
+		h.setMarker(JSON.stringify({ pid: 42, port: 4000, startedAt: "2023-11-14T22:13:20.000Z", owner: "app", appRunId: "previous-app" }));
+		h.readProcessStartMs.mockResolvedValue(1_699_999_992_000);
+		h.inspect.mockImplementation(async (_launch, probe) => {
+			await probe!(4000, "healthz");
+			return null;
+		});
+		h.direct.mockImplementation((deps) => resolveDaemonFromPort(deps!));
+		h.probe.mockImplementation((port, _endpoint, onTimeout) => port === 4000
+			? new Promise((resolve) => { setTimeout(() => { onTimeout?.(); resolve(null); }, 2_000); })
+			: Promise.resolve(null));
+		const starting = h.start();
+		await vi.advanceTimersByTimeAsync(0);
+		await vi.advanceTimersByTimeAsync(2_000);
+		await starting;
+		expect(h.kill).not.toHaveBeenCalled();
+		expect(h.readProcessStartMs).not.toHaveBeenCalled();
+		expect(h.probe.mock.calls.map(([port]) => port)).toEqual([4000, 3001, 3001]);
+		expect(h.replace).not.toHaveBeenCalled();
+		expect(h.spawn).toHaveBeenCalledOnce();
+		expect(h.status()).toMatchObject({ state: "starting" });
+	});
+
+	it("retains non-Windows orphan replacement after the configured port changes", async () => {
+		const h = setup("linux");
+		h.setMarker(JSON.stringify({ pid: 42, port: 4000, startedAt: "2023-11-14T22:13:20.000Z" }));
+		h.readProcessStartMs.mockResolvedValue(1_699_999_992_000);
+		await h.start();
+		expect(h.readProcessStartMs).toHaveBeenCalledWith(42);
+		expect(h.kill).toHaveBeenCalledWith(-42, "SIGTERM");
+		expect(h.spawn).toHaveBeenCalledOnce();
+	});
+
+	it("finishes replacing a live daemon after a different run-file port times out", async () => {
+		const h = setup("win32");
+		h.setMarker(JSON.stringify({ pid: 42, port: 3001, owner: "app", appRunId: "previous-app" }));
+		h.inspect.mockImplementation(async (_launch, probe) => {
+			await probe!(4000, "healthz");
+			return null;
+		});
+		h.direct.mockImplementation((deps) => resolveDaemonFromPort(deps!));
+		let serving = true;
+		h.replace.mockImplementation(async () => { serving = false; });
+		h.probe.mockImplementation((port, endpoint, onTimeout) => port === 4000
+			? new Promise((resolve) => { setTimeout(() => { onTimeout?.(); resolve(null); }, 2_000); })
+			: Promise.resolve(serving
+				? { status: endpoint === "healthz" ? "ok" : "ready", service: "agent-orchestrator-daemon", pid: 42 }
+				: null));
+		const starting = h.start();
+		await vi.advanceTimersByTimeAsync(0);
+		await vi.advanceTimersByTimeAsync(2_000);
+		await starting;
+		expect(h.replace).toHaveBeenCalledOnce();
+		expect(h.spawn).toHaveBeenCalledOnce();
+		expect(h.status()).toMatchObject({ state: "starting" });
+	});
+
 	it("restarts a crashed child through the actual startup path", async () => {
 		const h = setup();
 		await h.start();
@@ -156,6 +380,207 @@ describe("main.ts daemon lifecycle wiring with controlled I/O", () => {
 		expect(h.spawn).toHaveBeenCalledTimes(1);
 		expect(h.unlink).not.toHaveBeenCalled();
 		expect(h.status()).toEqual({ state: "stopped" });
+	});
+
+	it("records the observed exit and the restart decision before respawning", async () => {
+		const h = setup();
+		await h.start();
+		h.crash(null, "SIGBUS");
+		await vi.advanceTimersByTimeAsync(1000);
+		expect(h.spawn).toHaveBeenCalledTimes(2);
+		const calls = h.lifecycleLog.mock.calls;
+		const exitIndex = calls.findIndex(([event]) => event === "daemon_exit");
+		const decisionIndex = calls.findIndex(([event]) => event === "daemon_restart_decision");
+		expect(calls[exitIndex][1]).toMatchObject({ daemonPid: 42, code: null, signal: "SIGBUS", current: true, requestedStop: false });
+		expect(calls[decisionIndex][1]).toMatchObject({
+			daemonPid: 42, signal: "SIGBUS", runFilePresent: true, runFilePid: 42,
+			cause: "ungraceful_exit", decision: "restart", attempt: 1, delayMs: 1000,
+		});
+		const decisionOrder = h.lifecycleLog.mock.invocationCallOrder[decisionIndex];
+		expect(decisionOrder).toBeLessThan(h.spawn.mock.invocationCallOrder[1]);
+		const respawn = calls.findIndex(([event, fields], index) => index > decisionIndex && event === "daemon_spawn" && fields.trigger === "auto_restart");
+		expect(calls[respawn][1]).toMatchObject({ crashedPid: 42 });
+		expect(h.lifecycleLog.mock.invocationCallOrder[respawn]).toBeLessThan(h.spawn.mock.invocationCallOrder[1]);
+	});
+
+	it("spawns through the isolation plan and records it", async () => {
+		const h = setup();
+		h.planDaemonSpawnIsolation.mockResolvedValueOnce({
+			kind: "scope", unit: "ao-daemon-1-x", slice: "app-ao.slice",
+			launch: { command: "/usr/bin/systemd-run", args: ["--user", "--scope", "--", "/owned/ao"], cwd: "/owned/data", source: "override", shell: false },
+		});
+		await h.start();
+		expect(h.spawn.mock.calls[0][0]).toBe("/usr/bin/systemd-run");
+		expect(h.spawn.mock.calls[0][1]).toEqual(["--user", "--scope", "--", "/owned/ao"]);
+		expect(h.lifecycleLog).toHaveBeenCalledWith("daemon_spawn", expect.objectContaining({ isolation: "scope", scopeUnit: "ao-daemon-1-x" }));
+		expect(h.applyDaemonOomScoreAdj).not.toHaveBeenCalled();
+		h.planDaemonSpawnIsolation.mockResolvedValueOnce({ kind: "oom_score_adj", reason: "user_manager_unavailable", adjustment: 300 });
+		h.crash(null, "SIGKILL");
+		await vi.advanceTimersByTimeAsync(1000);
+		expect(h.spawn.mock.calls[1][0]).toBe("/owned/ao");
+		expect(h.applyDaemonOomScoreAdj).toHaveBeenCalledWith(43, 300);
+		expect(h.lifecycleLog).toHaveBeenCalledWith("daemon_spawned", expect.objectContaining({ daemonPid: 43, oomScoreAdj: 300 }));
+	});
+
+	it("opens no keep-alive log descriptor when a stop lands during isolation planning", async () => {
+		const h = setup();
+		h.env.AO_KEEP_DAEMON = "1";
+		const held = deferred<unknown>();
+		h.planDaemonSpawnIsolation.mockImplementationOnce(() => held.promise);
+		const starting = h.start();
+		await vi.advanceTimersByTimeAsync(0);
+		expect(h.planDaemonSpawnIsolation).toHaveBeenCalledTimes(1);
+		h.stop();
+		held.resolve({ kind: "unchanged", reason: "disabled" });
+		await starting;
+		expect(h.openSync).not.toHaveBeenCalled();
+		expect(h.spawn).not.toHaveBeenCalled();
+	});
+
+	it("does not spawn from a normal start when quit proceeds during isolation planning", async () => {
+		const h = setup();
+		const held = deferred<unknown>();
+		h.planDaemonSpawnIsolation.mockImplementationOnce(() => held.promise);
+		const starting = h.start();
+		await vi.advanceTimersByTimeAsync(0);
+		expect(h.planDaemonSpawnIsolation).toHaveBeenCalledTimes(1);
+		h.markQuitPastPointOfNoReturn();
+		held.resolve({ kind: "unchanged", reason: "disabled" });
+		await starting;
+		expect(h.spawn).not.toHaveBeenCalled();
+	});
+
+	it("does not respawn when a successor writes the marker during isolation planning", async () => {
+		const h = setup();
+		await h.start();
+		const held = deferred<unknown>();
+		h.planDaemonSpawnIsolation.mockImplementationOnce(() => held.promise);
+		h.crash(null, "SIGKILL");
+		await vi.advanceTimersByTimeAsync(1000);
+		expect(h.planDaemonSpawnIsolation).toHaveBeenCalledTimes(2);
+		h.setMarker(JSON.stringify({ pid: 99, port: 3001 }));
+		held.resolve({ kind: "unchanged", reason: "disabled" });
+		await vi.advanceTimersByTimeAsync(2000);
+		expect(h.spawn).toHaveBeenCalledTimes(1);
+	});
+
+	it("retries once without the scope when a scoped launch exits before it is ready", async () => {
+		const h = setup();
+		const scopePlan = {
+			kind: "scope", unit: "ao-daemon-1-x", slice: "app-ao.slice",
+			launch: { command: "/usr/bin/systemd-run", args: ["--user", "--scope", "--", "/owned/ao"], cwd: "/owned/data", source: "override", shell: false },
+		};
+		h.planDaemonSpawnIsolation.mockResolvedValueOnce(scopePlan);
+		await h.start();
+		h.setMarker(Object.assign(new Error("missing"), { code: "ENOENT" }));
+		h.crash(1, null);
+		await vi.advanceTimersByTimeAsync(0);
+		expect(h.scopeLaunchFailed()).toBe(true);
+		expect(h.spawn).toHaveBeenCalledTimes(2);
+		expect(h.lifecycleLog).toHaveBeenCalledWith("daemon_restart_decision", expect.objectContaining({ code: 1, decision: "restart", cause: "scope_launch_failed", fallback: "oom_score_adj" }));
+		expect(h.lifecycleLog).toHaveBeenCalledWith("daemon_spawn", expect.objectContaining({ trigger: "scope_fallback" }));
+		// The retry is not a scoped launch, so a second early exit is an ordinary failure.
+		h.crash(1, null);
+		await vi.advanceTimersByTimeAsync(5000);
+		expect(h.spawn).toHaveBeenCalledTimes(2);
+	});
+
+	it("keeps an automatic restart's intent when its scoped launch falls back", async () => {
+		const h = setup();
+		const scopePlan = {
+			kind: "scope", unit: "u", slice: "app-ao.slice",
+			launch: { command: "/usr/bin/systemd-run", args: ["--", "/owned/ao"], cwd: "/owned/data", source: "override", shell: false },
+		};
+		await h.start();
+		h.planDaemonSpawnIsolation.mockResolvedValueOnce(scopePlan);
+		h.crash(null, "SIGKILL");
+		await vi.advanceTimersByTimeAsync(1000);
+		expect(h.spawn).toHaveBeenCalledTimes(2);
+		expect(h.spawn.mock.calls[1][0]).toBe("/usr/bin/systemd-run");
+		// A successor daemon now owns running.json, so automatic recovery must decline.
+		h.setMarker(JSON.stringify({ pid: 99, port: 3001 }));
+		h.crash(1, null);
+		await vi.advanceTimersByTimeAsync(2000);
+		expect(h.lifecycleLog).toHaveBeenCalledWith("daemon_restart_decision", expect.objectContaining({ cause: "scope_launch_failed" }));
+		expect(h.spawn).toHaveBeenCalledTimes(2);
+	});
+
+	it("keeps the failed launch's keep-alive choice in the scope fallback", async () => {
+		const h = setup();
+		h.env.AO_KEEP_DAEMON = "1";
+		h.planDaemonSpawnIsolation.mockResolvedValueOnce({
+			kind: "scope", unit: "u", slice: "app-ao.slice",
+			launch: { command: "/usr/bin/systemd-run", args: ["--", "/owned/ao"], cwd: "/owned/data", source: "override", shell: false },
+		});
+		await h.start();
+		expect(h.daemonEnv).toHaveBeenLastCalledWith(true);
+		delete h.env.AO_KEEP_DAEMON;
+		h.setMarker(Object.assign(new Error("missing"), { code: "ENOENT" }));
+		h.crash(1, null);
+		await vi.advanceTimersByTimeAsync(0);
+		expect(h.spawn).toHaveBeenCalledTimes(2);
+		expect(h.daemonEnv).toHaveBeenLastCalledWith(true);
+		expect(h.lifecycleLog).toHaveBeenCalledWith("daemon_spawn", expect.objectContaining({ trigger: "scope_fallback", keepAlive: true }));
+	});
+
+	it("treats a signal death of a scoped daemon as an ordinary crash", async () => {
+		const h = setup();
+		h.planDaemonSpawnIsolation.mockResolvedValueOnce({
+			kind: "scope", unit: "u", slice: "app-ao.slice",
+			launch: { command: "/usr/bin/systemd-run", args: ["--", "/owned/ao"], cwd: "/owned/data", source: "override", shell: false },
+		});
+		await h.start();
+		h.crash(null, "SIGKILL");
+		await vi.advanceTimersByTimeAsync(1000);
+		expect(h.scopeLaunchFailed()).toBe(false);
+		expect(h.lifecycleLog).toHaveBeenCalledWith("daemon_restart_decision", expect.objectContaining({ cause: "ungraceful_exit", decision: "restart" }));
+	});
+
+	it("labels a nonzero exit without a run file distinctly from a graceful one", async () => {
+		const h = setup();
+		await h.start();
+		h.setMarker(Object.assign(new Error("missing"), { code: "ENOENT" }));
+		h.crash(1, null);
+		await vi.advanceTimersByTimeAsync(2000);
+		expect(h.spawn).toHaveBeenCalledTimes(1);
+		expect(h.lifecycleLog).toHaveBeenCalledWith("daemon_restart_decision", expect.objectContaining({
+			code: 1, decision: "no_restart", cause: "nonzero_exit_without_run_file",
+		}));
+	});
+
+	it("waits for the daemon's stderr to close before reporting its exit", async () => {
+		const h = setup();
+		await h.start();
+		h.setMarker(Object.assign(new Error("missing"), { code: "ENOENT" }));
+		const stderr = Object.assign(h.children.at(-1)!.stderr, { readableEnded: false });
+		h.crash(1, null);
+		expect(h.status()).not.toMatchObject({ code: "exited" });
+		stderr.emit("close");
+		await vi.advanceTimersByTimeAsync(0);
+		expect(h.status()).toMatchObject({ state: "stopped", code: "exited", exitCode: 1, exitReason: "unknown" });
+	});
+
+	it("records a graceful exit as no restart", async () => {
+		const h = setup();
+		await h.start();
+		h.setMarker(Object.assign(new Error("missing"), { code: "ENOENT" }));
+		h.crash(0, null);
+		await vi.advanceTimersByTimeAsync(2000);
+		expect(h.spawn).toHaveBeenCalledTimes(1);
+		expect(h.lifecycleLog).toHaveBeenCalledWith("daemon_restart_decision", expect.objectContaining({
+			code: 0, runFilePresent: false, decision: "no_restart", cause: "graceful_exit",
+		}));
+	});
+
+	it("records giving up once the restart window is exhausted", async () => {
+		const h = setup();
+		await h.start();
+		for (let attempt = 0; attempt < 7; attempt++) {
+			h.setMarker(JSON.stringify({ pid: h.children.at(-1)!.pid, port: 3001 }));
+			h.crash(2, null);
+			await vi.advanceTimersByTimeAsync(31_000);
+		}
+		expect(h.lifecycleLog).toHaveBeenCalledWith("daemon_restart_decision", expect.objectContaining({ decision: "give_up", cause: "ungraceful_exit" }));
 	});
 
 	it("recovers a signal crash whose marker was initially absent", async () => {

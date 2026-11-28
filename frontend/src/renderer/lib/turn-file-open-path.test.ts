@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { turnFileOpenPath, turnPathHints, workspaceRelativeOpenPath } from "./turn-file-open-path";
+import { resolveTurnFilePath, turnFileOpenPath, turnPathHints, workspaceRelativeOpenPath } from "./turn-file-open-path";
 
 const cwd = "/Users/me/.ao/dev/data/worktrees/demo/demo-1";
 
@@ -57,5 +57,15 @@ describe("turnFileOpenPath", () => {
 			},
 		]);
 		expect(turnFileOpenPath("notes.txt", hints)).toBe("docs/notes.txt");
+	});
+
+	it("does not replace an explicit repository path with a basename hint from another repository", () => {
+		const hints = { byBase: new Map([["workspace-test.txt", `${cwd}/alpha/workspace-test.txt`]]), cwd };
+		expect(turnFileOpenPath("beta/workspace-test.txt", hints)).toBe("beta/workspace-test.txt");
+		expect(resolveTurnFilePath("beta/workspace-test.txt", hints)).toBe(`${cwd}/beta/workspace-test.txt`);
+		expect(turnFileOpenPath("./beta/workspace-test.txt", hints)).toBe("beta/workspace-test.txt");
+		expect(resolveTurnFilePath("./beta/workspace-test.txt", hints)).toBe(`${cwd}/beta/workspace-test.txt`);
+		expect(turnFileOpenPath("./workspace-test.txt", hints)).toBe("alpha/workspace-test.txt");
+		expect(resolveTurnFilePath("./workspace-test.txt", hints)).toBe(`${cwd}/alpha/workspace-test.txt`);
 	});
 });

@@ -2,10 +2,12 @@ package store_test
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
+	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
 // TestAgentAccountUsageFollowsBindingHistory pins the per-account statistics:
@@ -82,5 +84,37 @@ func TestInterfaceTransitionsAllowSameModeOnlyForAnAccountMove(t *testing.T) {
 	mustNoError(t, err)
 	if !found || active.TargetAccountID != "acct-b" {
 		t.Fatalf("active = %+v", active)
+	}
+}
+
+// An API key account keeps its kind, name and key hint; an account saved
+// without a kind is a subscription, and only an API key account takes a hint.
+func TestAgentAccountKindsRoundTrip(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+	t0 := time.Date(2026, 11, 16, 9, 0, 0, 0, time.UTC)
+	mustNoError(t, s.CreateAgentAccount(ctx, domain.AgentAccount{
+		ID: "acct-sub", Provider: domain.AgentAccountProviderClaude, Home: "/tmp/acct-sub", Email: "b@example.com", CreatedAt: t0,
+	}))
+	mustNoError(t, s.CreateAgentAccount(ctx, domain.AgentAccount{
+		ID: "acct-key", Provider: domain.AgentAccountProviderClaude, Home: "/tmp/acct-key", Kind: domain.AgentAccountKindAPIKey,
+		Name: "Work key", KeyHint: "a1b2", CreatedAt: t0.Add(time.Minute),
+	}))
+	mustNoError(t, s.UpdateAgentAccountKeyHint(ctx, "acct-key", "c3d4"))
+	if err := s.UpdateAgentAccountKeyHint(ctx, "acct-sub", "e5f6"); !errors.Is(err, ports.ErrAgentAccountUnknown) {
+		t.Fatalf("hint on a subscription account: err = %v, want ErrAgentAccountUnknown", err)
+	}
+
+	accounts, err := s.ListAgentAccounts(ctx)
+	mustNoError(t, err)
+	got := map[string]domain.AgentAccount{}
+	for _, account := range accounts {
+		got[account.ID] = account
+	}
+	if sub := got["acct-sub"]; sub.Kind != domain.AgentAccountKindSubscription || sub.APIKey() || sub.KeyHint != "" {
+		t.Fatalf("subscription account = %+v", sub)
+	}
+	if key := got["acct-key"]; !key.APIKey() || key.Name != "Work key" || key.KeyHint != "c3d4" {
+		t.Fatalf("API key account = %+v", key)
 	}
 }

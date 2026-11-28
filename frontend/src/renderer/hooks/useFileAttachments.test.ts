@@ -8,13 +8,12 @@ import {
 	discardPendingFileAttachments,
 	discardPendingFileAttachmentsForSession,
 	MAX_ATTACHMENTS,
-	MAX_ATTACHMENT_BYTES,
-	MAX_ATTACHMENTS_BYTES,
 	purgeFileAttachmentsForSession,
 	useFileAttachments,
 	type FileAttachment,
 } from "./useFileAttachments";
 import { chatDraftScopeKey } from "../lib/chat-drafts";
+import { INLINE_ATTACHMENT_BYTES } from "../lib/attachment-uploads";
 
 const file = (name: string, bytes = 8, type = "text/plain") =>
 	new File([new Uint8Array(bytes).fill(1)], name, { type });
@@ -355,19 +354,60 @@ describe("useFileAttachments", () => {
 		expect(result.current.error).toMatch(/svg/i);
 	});
 
-	it("rejects a single oversized file before reading it", async () => {
+	it("keeps a file too large to inline as its handle on disk, unread", async () => {
+		const read = vi.spyOn(FileReader.prototype, "readAsDataURL");
+		const huge = file("huge.mov", 8, "video/quicktime");
+		// 2 GB: well past the old 50 MB cap. Only the size is faked; nothing reads it.
+		Object.defineProperty(huge, "size", { value: 2048 * mb });
+		try {
+			const { result } = renderHook(() => useFileAttachments());
+			await act(async () => {
+				await result.current.addFiles([huge]);
+			});
+			expect(result.current.error).toBeNull();
+			expect(result.current.attachments).toHaveLength(1);
+			expect(result.current.attachments[0]).toMatchObject({ name: "huge.mov", bytes: 2048 * mb, file: huge });
+			expect(result.current.attachments[0]?.data).toBeUndefined();
+			expect(read).not.toHaveBeenCalled();
+			expect(result.current.toPayload()).toEqual([{ mimeType: "video/quicktime", data: "", file: huge }]);
+		} finally {
+			read.mockRestore();
+		}
+	});
+
+	it("previews an image too large to read from the file on disk", async () => {
+		const read = vi.spyOn(FileReader.prototype, "readAsDataURL");
+		const originalCreate = URL.createObjectURL;
+		URL.createObjectURL = vi.fn(() => "blob:app/photo");
+		const photo = file("photo.png", 8, "image/png");
+		Object.defineProperty(photo, "size", { value: INLINE_ATTACHMENT_BYTES + 1 });
+		try {
+			const { result } = renderHook(() => useFileAttachments());
+			await act(async () => {
+				await result.current.addFiles([photo]);
+			});
+			expect(result.current.attachments[0]).toMatchObject({ name: "photo.png", dataUrl: "blob:app/photo", file: photo });
+			expect(result.current.attachments[0]?.data).toBeUndefined();
+			expect(URL.createObjectURL).toHaveBeenCalledWith(photo);
+			expect(read).not.toHaveBeenCalled();
+		} finally {
+			URL.createObjectURL = originalCreate;
+			read.mockRestore();
+		}
+	});
+
+	it("still reads a file up to the inline size", async () => {
 		const { result } = renderHook(() => useFileAttachments());
 		await act(async () => {
-			await result.current.addFiles([file("huge.bin", MAX_ATTACHMENT_BYTES + 1, "application/octet-stream")]);
+			await result.current.addFiles([file("edge.bin", INLINE_ATTACHMENT_BYTES, "application/octet-stream")]);
 		});
-		expect(result.current.attachments).toHaveLength(0);
-		expect(result.current.error).toMatch(/under/i);
+		expect(result.current.attachments[0]?.data).toBeTruthy();
 	});
 
 	it("holds files to a smaller limit when one is given, as AO Cloud's 25 MiB", async () => {
 		const { result } = renderHook(() => useFileAttachments({ maxAttachmentBytes: 25 * mb }));
 		await act(async () => {
-			// Under the daemon's 50 MB, over Cloud's 25 MiB.
+			// Fine for the daemon, which takes any size; over Cloud's 25 MiB.
 			await result.current.addFiles([file("big.bin", 25 * mb + 1, "application/octet-stream")]);
 		});
 		expect(result.current.attachments).toHaveLength(0);
@@ -493,41 +533,30 @@ describe("useFileAttachments", () => {
 		}
 	});
 
-	it("skips a file that exceeds the total cap without dropping later smaller files", async () => {
-		// Regression probe for the break-vs-continue cap bug: one file that does not
-		// fit into the remaining budget aborted the whole staging loop, silently
-		// dropping every smaller file staged after it in the same batch.
+	it("has no total size cap", async () => {
 		const read = vi.spyOn(FileReader.prototype, "readAsDataURL");
-		const { result } = renderHook(() => useFileAttachments());
+		const files = ["a.bin", "b.bin", "c.bin"].map((name) => {
+			const big = file(name, 8, "application/octet-stream");
+			Object.defineProperty(big, "size", { value: 600 * mb });
+			return big;
+		});
 		try {
+			const { result } = renderHook(() => useFileAttachments());
 			await act(async () => {
-				await result.current.addFiles([
-					file("a.txt", 40 * mb),
-					file("b.txt", 40 * mb),
-					file("c.txt", 40 * mb),
-					file("d.txt", 15 * mb),
-				]);
+				await result.current.addFiles(files);
 			});
-			// a + b (80 MB) fit; c would push past MAX_ATTACHMENTS_BYTES (100 MB) and only it is
-			// refused; d (95 MB total) still fits and must survive the batch.
-			expect(result.current.attachments.map((a) => a.name)).toEqual(["a.txt", "b.txt", "d.txt"]);
-			expect(result.current.attachments.reduce((sum, a) => sum + a.bytes, 0)).toBeLessThanOrEqual(
-				MAX_ATTACHMENTS_BYTES,
-			);
-			expect(result.current.error).toMatch(/total under/i);
-			expect(read).toHaveBeenCalledTimes(3);
+			expect(result.current.attachments.map((a) => a.name)).toEqual(["a.bin", "b.bin", "c.bin"]);
+			expect(result.current.error).toBeNull();
+			expect(read).not.toHaveBeenCalled();
 		} finally {
 			read.mockRestore();
 		}
 	});
 
-	it("does not reserve budget for a file that fails to read", async () => {
+	it("skips only a file that fails to read", async () => {
 		const unreadable = file("unreadable.bin");
 		const second = file("second.bin");
 		const small = file("small.bin");
-		Object.defineProperty(unreadable, "size", { value: 50 * mb });
-		Object.defineProperty(second, "size", { value: 50 * mb });
-		Object.defineProperty(small, "size", { value: mb });
 		const originalRead = FileReader.prototype.readAsDataURL;
 		const read = vi.spyOn(FileReader.prototype, "readAsDataURL").mockImplementation(function (this: FileReader, blob: Blob) {
 			if (blob === unreadable) {
@@ -547,6 +576,20 @@ describe("useFileAttachments", () => {
 		} finally {
 			read.mockRestore();
 		}
+	});
+
+	it("clears a notice about files that were not attached when it is dismissed", async () => {
+		const key = "dismiss-notice";
+		const { result } = renderHook(() => useFileAttachments({ initialKey: key }));
+		await act(async () => {
+			await result.current.addFiles([file("vector.svg", 8, "image/svg+xml")]);
+		});
+		expect(result.current.error).toMatch(/svg/i);
+		act(() => result.current.dismissError());
+		expect(result.current.error).toBeNull();
+		// A surface that mounts later for the same draft does not bring it back.
+		const later = renderHook(() => useFileAttachments({ initialKey: key }));
+		expect(later.result.current.error).toBeNull();
 	});
 
 	it("discards a pending file read when its draft is cleared", async () => {

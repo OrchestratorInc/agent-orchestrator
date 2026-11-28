@@ -1,3 +1,4 @@
+import { useTelemetrySurface } from "../lib/ui-usage-telemetry";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate, useRouter } from "@tanstack/react-router";
 import { useConnectedHosts } from "../hooks/useHostConnection";
@@ -49,10 +50,12 @@ function ArchiveModal({ open, request }: { open: boolean; request: ArchiveModalR
 	if (open) shownSessionsRef.current = liveSessions;
 	const sessions = shownSessionsRef.current;
 
+	const markArchivePick = useTelemetrySurface("archive_modal", open, { choice: true });
 	const openSession = useCallback((session: WorkspaceSession) => {
 		if (session.kind === "worker") recordManualWorkerOpen(session.id, hostId);
+		markArchivePick();
 		void navigate(sessionNavigateTarget(session.workspaceId, session.id, hostId));
-	}, [hostId, navigate]);
+	}, [hostId, markArchivePick, navigate]);
 
 	const onOpenChange = useCallback((next: boolean) => {
 		if (!next) useUiStore.getState().closeArchive();

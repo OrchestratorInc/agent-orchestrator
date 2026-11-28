@@ -2,7 +2,7 @@ import { Host } from "@expo/ui";
 import { Form, LabeledContent, Section, Text } from "@expo/ui/swift-ui";
 import { textSelection } from "@expo/ui/swift-ui/modifiers";
 import { ACCOUNT_MANAGED_NOTE, endpointDisplayAddress, environmentEndpointRows } from "./environmentView";
-import { FormFooter, formModifiers, FormPasswordField, FormSection, FormTextField, FormToggle, sectionModifiers } from "./formFields";
+import { FormFooter, formModifiers, FormPasswordField, FormSection, FormTextField, sectionModifiers } from "./formFields";
 import type { Host as PairedHost } from "./hosts";
 import { MachineSymbolMenu } from "./MachineSymbolMenu";
 import { useTheme, useThemeState } from "./ThemeProvider";
@@ -69,13 +69,6 @@ export function MachineEditorForm({ host, editor }: MachineEditorFormProps) {
 							placeholder="Connection password"
 							editable={!saving}
 							testID={`environment-password-${host.id}`}
-						/>
-						<FormToggle
-							label="Use TLS"
-							value={Boolean(draft.config.secure)}
-							onValueChange={editor.setSecure}
-							disabled={saving}
-							testID={`environment-tls-${host.id}`}
 						/>
 					</FormSection>
 				)}

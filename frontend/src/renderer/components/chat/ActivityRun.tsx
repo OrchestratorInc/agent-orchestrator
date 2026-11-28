@@ -14,12 +14,12 @@
  * Only a call that failed shows without being asked for, under the line that folds it.
  */
 
-import { useState, type ReactNode } from "react";
+import { useContext, useEffect, useMemo, useState, type ReactNode } from "react";
 import { AnimatePresence, motion, useReducedMotion } from "motion/react";
 import { ChevronRight, Loader2 } from "@/components/app-icons";
 import { cn } from "../../lib/utils";
 import { Pressable } from "../ui/pressable";
-import { ActivityRow, ActivityTransition } from "./ChatTimelineItems";
+import { ActivityRow, ActivityTransition, RevealedChatActivity } from "./ChatTimelineItems";
 import { useChatEntrance } from "./chat-entrance";
 import {
 	ACTIVITY_SUMMARY_BUTTON_CLASS,
@@ -27,12 +27,12 @@ import {
 	isFailedCall,
 	isNonzeroCommandExit,
 } from "./activity-command";
-import { aoActionName, summarizeAOActions } from "./activity-action";
+import { aoActionName, isFailedSpawn, mergeFailedSpawns, summarizeAOActions } from "./activity-action";
 import { activityCommandStep, activityToolStep, isExploratoryTool, type CommandStep } from "./activity-step";
 import { fileChangeFiles, type ConversationActivity } from "../../types/conversation";
 
 export function ActivityRun({
-	activities,
+	activities: recorded,
 	disclosureKey,
 	disclosureOverrides,
 	onDisclosureChange,
@@ -42,6 +42,8 @@ export function ActivityRun({
 	disclosureOverrides?: Readonly<Record<string, boolean>>;
 	onDisclosureChange?: (key: string, open: boolean) => void;
 }) {
+	// A failed spawn is one step: its call, with the daemon's record folded in.
+	const activities = useMemo(() => mergeFailedSpawns(recorded), [recorded]);
 	const [localOpen, setLocalOpen] = useState(false);
 	const open = disclosureKey && disclosureOverrides
 		? disclosureOverrides[disclosureKey] ?? false
@@ -50,6 +52,13 @@ export function ActivityRun({
 		if (disclosureKey && onDisclosureChange) onDisclosureChange(key, next);
 		else setLocalOpen(next);
 	};
+	// A search match inside this run opens it, as a reader's choice would, so it
+	// stays open once the match has been shown.
+	const revealed = useContext(RevealedChatActivity);
+	const holdsRevealed = Boolean(revealed && activities.some((activity) => activity.id === revealed));
+	useEffect(() => {
+		if (holdsRevealed && !open) updateOverride(disclosureKey ?? "", true);
+	}, [holdsRevealed, revealed]);
 	const overrides = disclosureOverrides ?? {};
 	const reducedMotion = useReducedMotion();
 	// The group fades in when it forms while the chat is on screen, never when the
@@ -105,7 +114,7 @@ export function ActivityRun({
 					</span>
 				) : null}
 				{failed > 0 ? (
-					<span className="text-xs text-destructive">
+					<span className="text-xs text-muted-foreground">
 						{failed} failed
 					</span>
 				) : null}
@@ -148,7 +157,7 @@ export function ActivityRun({
 						transition={{ duration: reducedMotion ? 0 : 0.2, ease: [0.22, 1, 0.36, 1] }}
 						className="overflow-hidden"
 					>
-						<div className="flex flex-col gap-1 pt-1">
+						<div className="chat-tree flex flex-col gap-1 pt-1">
 							{subgroups.length === 1
 								? renderActivityRows(subgroups[0]!.activities, nodesByActivityID)
 								: subgroups.map((group) => (
@@ -170,10 +179,14 @@ export function ActivityRun({
 	);
 }
 
-/** The calls that failed, kept on screen while the disclosure holding them is folded. */
+/**
+ * The calls that failed, kept on screen while the disclosure holding them is folded.
+ * A failed spawn that says why stays inside: its run sits in Worked for, the run's
+ * count says one failed, and the reply above says so.
+ */
 function FailedCalls({ activities, folded }: { activities: ConversationActivity[]; folded: boolean }) {
 	const reducedMotion = useReducedMotion();
-	const failed = activities.filter(isFailedCall);
+	const failed = activities.filter((activity) => isFailedCall(activity) && !isFailedSpawn(activity));
 	return (
 		<AnimatePresence initial={false}>
 			{folded && failed.length > 0 ? (
@@ -288,6 +301,15 @@ function ActivitySubgroup({
 		if (disclosureKey && onDisclosureChange) onDisclosureChange(disclosureKey, next);
 		else setLocalOpen(next);
 	};
+	const revealed = useContext(RevealedChatActivity);
+	// A subgroup lists top-level calls; a match inside a subagent below one counts too.
+	const holdsRevealed = Boolean(revealed && activities.some((activity) => {
+		const node = nodesByActivityID.get(activity.id);
+		return node ? nodeActivities(node).some((nested) => nested.id === revealed) : activity.id === revealed;
+	}));
+	useEffect(() => {
+		if (holdsRevealed && !open) updateOverride(true);
+	}, [holdsRevealed, revealed]);
 	const hasNestedAgent = activities.some((activity) =>
 		nodesByActivityID.get(activity.id)?.children.length,
 	);
@@ -324,7 +346,7 @@ function ActivitySubgroup({
 						transition={{ duration: reducedMotion ? 0 : 0.16, ease: [0.22, 1, 0.36, 1] }}
 						className="overflow-hidden"
 					>
-						<div className="flex flex-col gap-1">
+						<div className="chat-tree flex flex-col gap-1">
 							{renderActivityRows(activities, nodesByActivityID)}
 						</div>
 					</motion.div>
@@ -430,7 +452,13 @@ function ActivityTree({ node }: { node: ActivityNode }) {
 }
 
 function NestedAgentRun({ nodes }: { nodes: ActivityNode[] }) {
-	const [open, setOpen] = useState(false);
+	// A search match in one of the subagent's calls opens the fold that holds it.
+	const revealed = useContext(RevealedChatActivity);
+	const holdsRevealed = Boolean(revealed && nodes.some((node) => nodeActivities(node).some((activity) => activity.id === revealed)));
+	const [open, setOpen] = useState(holdsRevealed);
+	useEffect(() => {
+		if (holdsRevealed) setOpen(true);
+	}, [holdsRevealed, revealed]);
 	const reducedMotion = useReducedMotion();
 	const count = countNodes(nodes);
 	const running = nodes.some(nodeRunning);
@@ -454,7 +482,7 @@ function NestedAgentRun({ nodes }: { nodes: ActivityNode[] }) {
 						animate={{ height: "auto", opacity: 1 }}
 						exit={{ height: 0, opacity: 0 }}
 						transition={{ duration: reducedMotion ? 0 : 0.16, ease: [0.22, 1, 0.36, 1] }}
-						className="border-t border-border/70"
+						className="chat-tree border-t border-border/70"
 					>
 					{nodes.map((node) => <ActivityTree key={node.activity.id} node={node} />)}
 					</motion.div>

@@ -93,9 +93,19 @@ func TestTelemetryIncrementalVacuumUpgrade(t *testing.T) {
 	if err := s.IncrementalVacuum(ctx, 256); err != nil {
 		t.Fatal(err)
 	}
+	// The 256-page limit applies to free pages. Truncating them can also drop
+	// the pointer-map page that mapped only the truncated tail, so the file
+	// may shrink by one page more than the free pages it reclaimed.
+	freeAfter, err := s.FreelistCount(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if reclaimed := free - freeAfter; reclaimed <= 0 || reclaimed > 256 {
+		t.Fatalf("reclaimed %d free pages, want 1..256", reclaimed)
+	}
 	after := pages()
-	if reclaimed := before - after; reclaimed <= 0 || reclaimed > 256 {
-		t.Fatalf("reclaimed %d pages, want 1..256", reclaimed)
+	if after >= before {
+		t.Fatalf("page count did not shrink: before=%d after=%d", before, after)
 	}
 	bytesAfter := fileSize()
 	if bytesAfter >= bytesBefore {

@@ -1,0 +1,9 @@
+{
+  "platforms": ["android", "apple"],
+  "android": {
+    "modules": ["ao.mobile.devicestream.DeviceStreamModule"]
+  },
+  "apple": {
+    "modules": ["DeviceStreamModule"]
+  }
+}

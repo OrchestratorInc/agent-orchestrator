@@ -27,6 +27,8 @@ function repeatsPageTitle(title: string, pageTitle: string | null) {
  * ghost button or a muted figure, never a second heading.
  * `titleAction` sits right after the heading text on the same line: a small
  * icon button that acts on the whole section, named by its tooltip.
+ * `description` is one muted line under the heading saying what the section
+ * is for; it shows only with the heading.
  * `testId` replaces the section's data-testid for suites that are not the
  * settings smoke suite.
  */
@@ -34,6 +36,7 @@ export function SettingsSection({
 	title,
 	sectionId,
 	titleHidden,
+	description,
 	grouped,
 	toolbar,
 	action,
@@ -44,6 +47,7 @@ export function SettingsSection({
 	title: string;
 	sectionId?: string;
 	titleHidden?: boolean;
+	description?: ReactNode;
 	grouped?: boolean;
 	toolbar?: ReactNode;
 	action?: ReactNode;
@@ -87,11 +91,16 @@ export function SettingsSection({
 			) : showTitle ? (
 				<h2 className="px-(--settings-row-inset) text-sm font-medium leading-5 text-foreground">{title}</h2>
 			) : null}
+			{showTitle && description ? (
+				<p className="-mt-2 px-(--settings-row-inset) text-pretty text-control leading-4 text-settings-muted">{description}</p>
+			) : null}
 			{toolbar !== undefined ? (
 				// The wrapper stays whenever the prop is passed, even as null, so a toolbar
 				// that comes and goes does not remount the body. A search-first page (no
-				// visible title) tucks up under the page heading.
-				<div className={cn("flex w-full flex-col", toolbar && !showTitle && "-mt-6")}>
+				// visible title) starts at the page body's top padding like any other
+				// first row: the page title lives in the top bar, so there is no in-body
+				// heading to tuck under.
+				<div className="flex w-full flex-col">
 					{toolbar}
 					{body}
 				</div>

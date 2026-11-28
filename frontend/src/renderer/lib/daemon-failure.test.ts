@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { daemonFailureTitle } from "./daemon-failure";
+import { daemonFailureHint, daemonFailureTitle } from "./daemon-failure";
 
 describe("daemonFailureTitle", () => {
 	it.each([
@@ -13,5 +13,13 @@ describe("daemonFailureTitle", () => {
 		{ code: "exited" as const, title: "Orchestrator daemon failed to start" },
 	])("returns $title for $code", ({ code, title }) => {
 		expect(daemonFailureTitle({ state: "error", code })).toBe(title);
+	});
+});
+
+describe("daemonFailureHint", () => {
+	it("tells someone with an installed app to reinstall when the daemon binary is missing", () => {
+		const hint = daemonFailureHint({ state: "error", code: "binary_missing" });
+		expect(hint).toBe("Reinstall Orchestrator to restore its background service.");
+		expect(hint).not.toMatch(/npm|build/);
 	});
 });

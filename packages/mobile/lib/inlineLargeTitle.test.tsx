@@ -8,6 +8,7 @@ const fixtures = vi.hoisted(() => ({
 	glass: true,
 	setOptions: vi.fn(),
 	android: { header: "android-spacer", edge: "android-frost", onScroll: () => {}, topInset: 80 },
+	largeTitleArgs: [] as unknown[],
 }));
 
 vi.mock("expo-router", () => ({ useNavigation: () => ({ setOptions: fixtures.setOptions }) }));
@@ -28,7 +29,7 @@ vi.mock("react-native-reanimated", async () => {
 		withTiming: (value: number) => value,
 	};
 });
-vi.mock("./largeTitle", () => ({ useLargeTitle: () => fixtures.android }));
+vi.mock("./largeTitle", () => ({ useLargeTitle: (...args: unknown[]) => { fixtures.largeTitleArgs = args; return fixtures.android; } }));
 vi.mock("./stackScreenOptions", () => ({ get SYSTEM_GLASS_HEADER() { return fixtures.glass; } }));
 vi.mock("./AppSymbol", () => ({ AppSymbol: "AppSymbol" }));
 vi.mock("./pressFeedback", () => ({ usePressFeedback: () => ({ android_ripple: undefined, pressed: undefined }) }));
@@ -113,6 +114,21 @@ describe("a board title with an action on its line, Android", () => {
 		expect(hook.current).toBe(fixtures.android);
 		expect(fixtures.setOptions).not.toHaveBeenCalled();
 	});
+
+	// Pinned under the bar by useLargeTitle, over its frost.
+	it("passes the title's accessory to the bar", () => {
+		fixtures.platform = "android";
+		renderHook({ accessory: "Can't reach Lab" });
+		expect(fixtures.largeTitleArgs[2]).toEqual({ accessory: "Can't reach Lab" });
+	});
+});
+
+describe("the title's accessory, iOS", () => {
+	it("comes back to the page to place under its title row", () => {
+		expect(renderHook({ accessory: "Can't reach Lab" }).current.accessory).toBe("Can't reach Lab");
+		act(() => renderer?.unmount());
+		expect(renderHook({}).current.accessory).toBeNull();
+	});
 });
 
 describe("the Projects board", () => {
@@ -120,10 +136,19 @@ describe("the Projects board", () => {
 
 	// Android's large title is the bar's own, on the row its actions sit on, and
 	// its board has no floating button any more: there the "+" is the bar's.
-	it("adds a cloud project from its title line on iOS, and from the bar on Android", () => {
+	it("adds a project from its title line on iOS, and from the bar on Android", () => {
 		expect(page).toContain("useInlineLargeTitle(");
-		expect(page).toContain('accessibilityLabel="New cloud project"');
-		expect(page).toContain('onAdd={Platform.OS === "android" && canCreateCloudProject ? newCloudProject : undefined} addLabel="New cloud project"');
+		expect(page).toContain('const newProjectLabel = canCreateLocalProject ? "New project" : "New cloud project";');
+		expect(page).toContain("accessibilityLabel={newProjectLabel}");
+		expect(page).toContain('onAdd={Platform.OS === "android" && (canCreateCloudProject || canCreateLocalProject) ? newProject : undefined} addLabel={newProjectLabel}');
 		expect(page).not.toContain("AddFab");
+	});
+
+	// The freshness line is the title's accessory: under the title row on iOS,
+	// pinned under the bar on Android, clear of the frost that washed it out.
+	it("shows its freshness line as the title's accessory", () => {
+		expect(page).toContain("accessory: freshnessLine,");
+		expect(page).toContain("ListHeaderComponent={<>{largeTitle.header}{largeTitle.accessory}</>}");
+		expect(page).not.toContain("staleBanner");
 	});
 });

@@ -197,6 +197,15 @@ func (r *hybridRuntime) Restart(ctx context.Context, handle ports.RuntimeHandle,
 	return r.Create(ctx, cfg)
 }
 
+func (r *hybridRuntime) BoundedProcessRoots(ctx context.Context, handle ports.RuntimeHandle) ([]ports.ProcessRoot, error) {
+	backend, raw := r.route(handle)
+	inspector, ok := backend.(ports.RuntimeProcessRootBoundInspector)
+	if !ok {
+		return nil, fmt.Errorf("%s runtime cannot bound its process roots", r.platform)
+	}
+	return inspector.BoundedProcessRoots(ctx, raw)
+}
+
 func (r *hybridRuntime) ProcessRootPIDs(ctx context.Context, handle ports.RuntimeHandle) ([]int, error) {
 	backend, raw := r.route(handle)
 	return backend.ProcessRootPIDs(ctx, raw)

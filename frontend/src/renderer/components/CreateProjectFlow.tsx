@@ -46,6 +46,9 @@ import { CloudWorkspaceCard } from "./CloudWorkspaceCard";
 import { additionalReposProblem, canonicalGitHubUrl, sameRepository } from "../lib/cloud-project-repos";
 import { useCloudGate } from "../hooks/useCloudGate";
 import { useCloudOrg } from "../hooks/useCloudOrg";
+import { useProjectAgentDefaults } from "../hooks/useAgentReadinessQuery";
+import { useSettings } from "../hooks/useSettings";
+import type { ProjectAgentDefaults } from "../lib/agent-select-options";
 import type { RemoteHost } from "../hooks/useRemoteHosts";
 import { type CloneProgress, usePreparedClone } from "../hooks/usePreparedClone";
 import { clientForSessionHost } from "../lib/host-clients";
@@ -68,12 +71,11 @@ import {
 } from "../lib/onboarding-ui";
 import { cn } from "../lib/utils";
 import type { ProjectKind } from "../types/workspace";
-import { CreateProjectAgentSheet, type CreateProjectAgentSelection } from "./CreateProjectAgentSheet";
+import { CreateProjectAgentSheet, type CreateProjectSetup } from "./CreateProjectAgentSheet";
 import { RemoteDirectoryPicker } from "./RemoteDirectoryPicker";
 import { GitHubSetupPanel, WithGitHubState } from "./FirstRunSteps";
 import { GitHubIcon } from "./GitHubIcon";
 import CloneRepositoryDialog, { type CloneRepositoryDetails, type CloneRepositorySelection } from "./CloneRepositoryDialog";
-// GitHubTokenField is used via inline Input components in CloudProjectCard
 import { PathRow } from "./PathRow";
 import { Button } from "./ui/button";
 import { CloseButton } from "./ui/close-button";
@@ -89,9 +91,9 @@ export type CreateProjectInput = {
 	asWorkspace?: boolean;
 	defaultBranch?: string;
 	clonePreparationId?: string;
-} & CreateProjectAgentSelection;
+} & ProjectAgentDefaults & CreateProjectSetup;
 export type CloneProjectInput = Pick<CloneRepositorySelection, "remoteUrl" | "destinationParent"> &
-	CreateProjectAgentSelection;
+	ProjectAgentDefaults & CreateProjectSetup;
 
 const LAST_CLONE_DESTINATION_KEY = "ao.clone.lastDestinationParent";
 const LAST_IMPORT_REMOTE_URL_KEY = "ao.import.lastRemoteUrl";
@@ -252,6 +254,21 @@ export function CreateProjectFlow({
 	const projectImportOpen = projectImportStep !== null && projectValidation !== null;
 	const folderDialogOpen = folderPickerOpen && validationScan !== null;
 	const isBusy = isChoosingPath || isCreating || isInitializing || isPreparingGit || preparedClone.isCleaning;
+	// Refresh agent checks while the flow is open so the project starts on the
+	// best agent this machine (or host) has right now, not a stale snapshot.
+	const loadAgentDefaults = useProjectAgentDefaults(
+		(embedded || activeView !== null || selectedPath !== null) && connected,
+		hostId,
+	);
+	const { settings: flowSettings, isLoading: settingsLoading } = useSettings(hostId);
+	const intakeVisible = !!flowSettings?.trackerIntakeEnabled;
+	// The sheet only asks for tracker intake, shows a repository setup notice, or
+	// reports a failed create. With none of those there is nothing to decide, so
+	// the project is created as soon as its folder is chosen. While settings
+	// still load the sheet stays up, so the wait is visible and can be cancelled.
+	const sheetNeeded = intakeVisible || repositorySetup !== null || error !== null;
+	const sheetOpen = selectedPath !== null && (sheetNeeded || settingsLoading);
+	const autoCreatedPath = useRef<string | null>(null);
 	const setModePickerOpen = (open: boolean) => dispatchView(open ? { type: "open", view: "source" } : { type: "close", view: "source" });
 	const setCloneDialogOpen = (open: boolean) => dispatchView(open ? { type: "open", view: "clone" } : { type: "close", view: "clone" });
 	const setFolderPickerOpen = (open: boolean) => dispatchView(open ? { type: "open", view: "folder" } : { type: "close", view: "folder" });
@@ -510,12 +527,13 @@ export function CreateProjectFlow({
 		void selectSource(sourceSignal.source);
 	}, [sourceSignal]);
 
-	const createProject = async (selection: CreateProjectAgentSelection) => {
+	const createProject = async (setup: CreateProjectSetup) => {
 		if (!selectedPath || isCreating || isInitializing) return;
 		setError(null);
 		setIsCreating(true);
 		useUiStore.getState().setProjectCreationPending(true);
 		try {
+			const selection = { ...(await loadAgentDefaults()), ...setup };
 			if (cloneSelection) {
 				const prepared = preparedClone.current();
 				if (!prepared) throw new Error(t("createProject.couldNotAdd"));
@@ -602,6 +620,17 @@ export function CreateProjectFlow({
 			setIsInitializing(false);
 		}
 	};
+
+	useEffect(() => {
+		if (selectedPath === null) {
+			autoCreatedPath.current = null;
+			return;
+		}
+		if (sheetNeeded || settingsLoading || isCreating || isInitializing) return;
+		if (autoCreatedPath.current === selectedPath) return;
+		autoCreatedPath.current = selectedPath;
+		void createProject({});
+	}, [selectedPath, sheetNeeded, settingsLoading, isCreating, isInitializing]);
 
 	const prepareClone = async (next: CloneRepositorySelection) => {
 		if (hostId && !connected) {
@@ -872,6 +901,10 @@ export function CreateProjectFlow({
 								setCloneDialogOpen(false);
 								onCreateStandaloneAgent?.();
 							}}
+							onChatsImported={firstRunClone ? () => {
+								onFirstRunDismiss?.("import");
+								setCloneDialogOpen(false);
+							} : undefined}
 							remote={Boolean(hostId)}
 							onChooseRemoteDestination={() => setRemoteBrowse({ kind: "clone_destination" })}
 							disabled={isBusy}
@@ -1002,7 +1035,8 @@ export function CreateProjectFlow({
 				} : undefined}
 				connected={connected}
 				error={error}
-				hostId={hostId}
+				intakeVisible={intakeVisible}
+				settingsLoading={settingsLoading}
 				isCreating={isCreating}
 				isInitializing={isInitializing}
 				kind={selectedKind}
@@ -1033,7 +1067,7 @@ export function CreateProjectFlow({
 						: undefined
 				}
 				onSubmit={createProject}
-				open={selectedPath !== null}
+				open={sheetOpen}
 				path={selectedPath}
 				repositorySetupNeeded={repositorySetup !== null}
 				repositorySetupWarning={repositorySetupWarning}
@@ -2164,24 +2198,7 @@ function ProjectImportDialog({
 												) : null}
 											</div>
 											<div className="space-y-1.5">
-												<div className="relative">
-													<Label htmlFor="githubRepoName" className="text-[12px] font-medium text-[var(--color-text-import-title)]">{t("createProject.githubRepositoryName")}</Label>
-													<AnimatePresence initial={false}>
-														{availability.state === "unavailable" ? (
-															<motion.p
-																id="githubRepoNameError"
-																initial={{ opacity: 0, filter: "blur(2px)" }}
-																animate={{ opacity: 1, filter: "blur(0px)" }}
-																exit={{ opacity: 0, filter: "blur(2px)" }}
-																transition={{ duration: 0.15, ease: "easeOut" }}
-																className="absolute right-0 top-0 max-w-[65%] truncate overflow-hidden whitespace-nowrap text-right text-[12px] leading-5 text-destructive"
-																role="alert"
-															>
-																{availability.message ?? t("createProject.githubRepoUnavailable")}
-															</motion.p>
-														) : null}
-													</AnimatePresence>
-												</div>
+												<Label htmlFor="githubRepoName" className="text-[12px] font-medium text-[var(--color-text-import-title)]">{t("createProject.githubRepositoryName")}</Label>
 												<div className="relative">
 													<Input
 														id="githubRepoName"
@@ -2213,6 +2230,22 @@ function ProjectImportDialog({
 														) : null}
 													</AnimatePresence>
 												</div>
+												{/* Below the field and free to wrap, so a two-clause message is never clipped. */}
+												<AnimatePresence initial={false}>
+													{availability.state === "unavailable" ? (
+														<motion.p
+															id="githubRepoNameError"
+															initial={{ opacity: 0, filter: "blur(2px)" }}
+															animate={{ opacity: 1, filter: "blur(0px)" }}
+															exit={{ opacity: 0, filter: "blur(2px)" }}
+															transition={{ duration: 0.15, ease: "easeOut" }}
+															className="text-[12px] leading-5 text-destructive"
+															role="alert"
+														>
+															{availability.message ?? t("createProject.githubRepoUnavailable")}
+														</motion.p>
+													) : null}
+												</AnimatePresence>
 												{githubNameWasNormalized ? (
 													<p id="githubRepoNameNormalization" className="text-[11px] leading-4 text-muted-foreground">
 														{t("createProject.githubRepoWillCreate", { repo: githubName })}

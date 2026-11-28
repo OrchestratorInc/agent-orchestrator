@@ -7,7 +7,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 const posthogStub = {
 	init: vi.fn(),
 	register: vi.fn(),
-	capture: vi.fn((_event?: string, _properties?: Record<string, unknown>): object | undefined => ({})),
+	capture: vi.fn((_event?: string, _properties?: Record<string, unknown>, _options?: Record<string, unknown>): object | undefined => ({})),
 	captureException: vi.fn(),
 	addExceptionStep: vi.fn(),
 	identify: vi.fn(),
@@ -61,6 +61,34 @@ describe("initTelemetry recovery", () => {
 		}
 		const legacy = new Set(Object.values(LEGACY_EVENT_NAMES).flat());
 		expect(posthogStub.capture.mock.calls.some(([event]) => legacy.has(String(event)))).toBe(false);
+	});
+
+	it("sends an onboarding event from a closing window at once by sendBeacon, sanitized", async () => {
+		await initializedUpdateCapture();
+		const { captureRendererEventOnUnload } = await import("./telemetry");
+		expect(captureRendererEventOnUnload("ao.onboarding.abandoned", { step: "tools", run_kind: "first_run", duration_ms: 60_000, path: "/Users/me/repo" })).toBe(true);
+		expect(posthogStub.capture).toHaveBeenCalledTimes(1);
+		const [event, properties, options] = posthogStub.capture.mock.calls[0]!;
+		expect(event).toBe("ao.onboarding.abandoned");
+		expect(properties).toMatchObject({ step: "tools", step_index: 3, run_kind: "first_run", duration_ms: 60_000 });
+		expect(properties).not.toHaveProperty("path");
+		expect(options).toEqual({ send_instantly: true, transport: "sendBeacon" });
+	});
+
+	it("sends nothing from a closing window for other events or once opted out", async () => {
+		await initializedUpdateCapture();
+		const { applyAnalyticsOptOut, captureRendererEventOnUnload } = await import("./telemetry");
+		expect(captureRendererEventOnUnload("ao.app.loaded")).toBe(false);
+		await applyAnalyticsOptOut(true);
+		expect(captureRendererEventOnUnload("ao.onboarding.step_abandoned", { step: "tools" })).toBe(false);
+		expect(posthogStub.capture).not.toHaveBeenCalled();
+	});
+
+	it("sends nothing from a closing window before PostHog is ready", async () => {
+		mockPosthog();
+		const { captureRendererEventOnUnload } = await import("./telemetry");
+		expect(captureRendererEventOnUnload("ao.onboarding.abandoned", { step: "tools" })).toBe(false);
+		expect(posthogStub.capture).not.toHaveBeenCalled();
 	});
 
 	it("writes log-only events to the console instead of PostHog", async () => {
@@ -188,6 +216,48 @@ describe("initTelemetry recovery", () => {
 		} finally {
 			vi.useRealTimers();
 		}
+	});
+
+	async function initializedWithLaunchStart() {
+		localStorage.clear();
+		mockPosthog();
+		vi.doMock("./bridge", () => ({
+			aoBridge: {
+				telemetry: {
+					getBootstrap: vi.fn(async () => ({
+						appVersion: "1.2.3", platform: "darwin", distinctId: "ins_test",
+						disabledEvents: [], eventsEnabled: true, consentGeneration: "generation-1",
+					})),
+					takeLaunchStart: vi.fn(async () => ({ kind: "cold", startedAtMs: Date.now() - 500 })),
+				},
+				updateSettings: { get: vi.fn(async () => ({})) },
+			},
+		}));
+		const telemetry = await import("./telemetry");
+		const launch = await import("./launch-telemetry");
+		expect(await telemetry.initTelemetry()).toBe(true);
+		return { ...telemetry, markLaunchUsable: launch.markLaunchUsable };
+	}
+	const settle = () => new Promise((resolve) => setTimeout(resolve, 0));
+	const launchTimedCaptures = () => posthogStub.capture.mock.calls.filter(([event]) => event === "ao.launches.timed");
+
+	it("sends launch timings once the window is usable", async () => {
+		const { markLaunchUsable } = await initializedWithLaunchStart();
+		markLaunchUsable();
+		await settle();
+		await settle();
+		expect(launchTimedCaptures()).toHaveLength(1);
+		expect(launchTimedCaptures()[0]![1]).toMatchObject({ launch_kind: "cold" });
+	});
+
+	it("does not send a launch measured before an opt-out after a later opt-in", async () => {
+		const { applyAnalyticsOptOut, markLaunchUsable } = await initializedWithLaunchStart();
+		await applyAnalyticsOptOut(true);
+		await applyAnalyticsOptOut(false);
+		markLaunchUsable();
+		await settle();
+		await settle();
+		expect(launchTimedCaptures()).toHaveLength(0);
 	});
 
 	it("does not export updater failures counted while opted out", async () => {
@@ -814,5 +884,71 @@ describe("linking a website visit at sign-in", () => {
 		const stored = [localStorage, sessionStorage].flatMap((storage) =>
 			Array.from({ length: storage.length }, (_, index) => `${storage.key(index)}=${storage.getItem(storage.key(index) ?? "")}`));
 		expect(stored.join("\n")).not.toContain(VISITOR);
+	});
+});
+
+// Uses the real SDK through initTelemetry and identifyCloudUser. $identify is
+// sent in its own request at once with the event's Date timestamp still on it,
+// so before_send must leave that Date intact for PostHog to accept the event.
+describe("sign-in $identify request with the real SDK", () => {
+	beforeEach(() => {
+		vi.resetModules();
+		vi.clearAllMocks();
+	});
+
+	it("sends $identify with an ISO timestamp and batched events with a numeric offset", async () => {
+		vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "setInterval", "clearInterval", "Date"] });
+		localStorage.clear();
+		const requests: Array<{ url: string; data: unknown }> = [];
+		vi.doMock("posthog-js/dist/module.full.no-external", async (importOriginal) => {
+			const actual = await importOriginal<typeof import("posthog-js/dist/module.full.no-external")>();
+			const client = new actual.PostHog();
+			(client as unknown as { _send_request: (options: { url: string; data?: unknown }) => void })._send_request = (options) => {
+				requests.push({ url: options.url, data: options.data });
+			};
+			return { ...actual, default: client };
+		});
+		vi.doMock("./bridge", () => ({
+			aoBridge: {
+				telemetry: {
+					getBootstrap: vi.fn(async () => ({
+						appVersion: "1.2.3", platform: "darwin", distinctId: "ins_identify-test",
+						disabledEvents: [], eventsEnabled: true, consentGeneration: "generation-1",
+					})),
+					getGithubLogin: vi.fn(async () => null),
+					getLifetimeSessions: vi.fn(async () => undefined),
+					claimFirstOpen: vi.fn(async () => false),
+				},
+				updateSettings: { get: vi.fn(async () => ({})) },
+			},
+		}));
+		try {
+			const { identifyCloudUser, initTelemetry } = await import("./telemetry");
+			expect(await initTelemetry()).toBe(true);
+			// Let ao.app.loaded go out in its batch first, as it does before a sign-in.
+			await vi.advanceTimersByTimeAsync(5_000);
+			await identifyCloudUser({ id: "user_cloud_1", email: "dev@example.com" });
+			await vi.advanceTimersByTimeAsync(5_000);
+
+			const events = requests
+				.filter((request) => request.data !== undefined && !request.url.includes("/flags"))
+				.flatMap((request) => (Array.isArray(request.data) ? request.data : [request.data])) as Array<Record<string, unknown>>;
+			const batched = events.find((event) => event.event === "ao.app.loaded");
+			const identify = events.find((event) => event.event === "$identify");
+			expect(batched, JSON.stringify(events)).toBeDefined();
+			expect(identify, JSON.stringify(events)).toBeDefined();
+
+			const identifyProperties = identify!.properties as Record<string, unknown>;
+			expect(identifyProperties.distinct_id).toBe("user_cloud_1");
+			expect(identifyProperties.$anon_distinct_id).toBe("ins_identify-test");
+			const identifyBody = JSON.parse(JSON.stringify(identify)) as Record<string, unknown>;
+			expect(typeof identifyBody.timestamp, JSON.stringify(identifyBody.timestamp)).toBe("string");
+			expect(new Date(identifyBody.timestamp as string).toISOString()).toBe(identifyBody.timestamp);
+
+			const batchedBody = JSON.parse(JSON.stringify(batched)) as Record<string, unknown>;
+			expect(typeof batchedBody.offset, JSON.stringify(batchedBody.offset)).toBe("number");
+		} finally {
+			vi.useRealTimers();
+		}
 	});
 });

@@ -27,9 +27,9 @@ type fakeStore struct {
 	sessionAutoInjectReview *bool
 	autoInjectSets          []bool
 
-	updateCalls        int
-	activityUpdates    int
-	resolvedCommentIDs []string
+	updateCalls       int
+	activityUpdates   int
+	resolvedThreadIDs []string
 }
 
 type fakeNotificationSink struct {
@@ -97,33 +97,54 @@ func (f *fakeStore) SetSessionAutoInjectReview(_ context.Context, _ domain.Sessi
 	return true, nil
 }
 
-func (f *fakeStore) UpdateReviewRunResult(_ context.Context, id string, status domain.ReviewRunStatus, verdict domain.ReviewVerdict, body, githubReviewID string, autoInjectReview bool) (bool, error) {
+func (f *fakeStore) TransitionReviewRun(_ context.Context, id string, from []domain.ReviewRunStatus, to domain.ReviewRunStatus, patch domain.ReviewRunPatch) (bool, error) {
+	allowed := func(status domain.ReviewRunStatus) bool {
+		for _, s := range from {
+			if s == status {
+				return true
+			}
+		}
+		return false
+	}
+	apply := func(run *domain.ReviewRun) {
+		run.Status = to
+		if patch.Verdict != "" {
+			run.Verdict = patch.Verdict
+		}
+		if patch.Body != nil {
+			run.Body = *patch.Body
+		}
+		if patch.GithubReviewID != nil {
+			run.GithubReviewID = *patch.GithubReviewID
+		}
+		if patch.AutoInjectReview != nil {
+			run.AutoInjectReview = *patch.AutoInjectReview
+		}
+		if patch.StartedAt != nil {
+			run.StartedAt = patch.StartedAt
+		}
+		if patch.EndedAt != nil {
+			run.EndedAt = patch.EndedAt
+		}
+	}
 	for i := range f.batchRuns {
 		if f.batchRuns[i].ID == id {
-			if f.batchRuns[i].Status != domain.ReviewRunRunning {
+			if !allowed(f.batchRuns[i].Status) {
 				return false, nil
 			}
 			f.updateCalls++
-			f.batchRuns[i].Status = status
-			f.batchRuns[i].Verdict = verdict
-			f.batchRuns[i].Body = body
-			f.batchRuns[i].GithubReviewID = githubReviewID
-			f.batchRuns[i].AutoInjectReview = autoInjectReview
+			apply(&f.batchRuns[i])
 			if f.run.ID == id {
 				f.run = f.batchRuns[i]
 			}
 			return true, nil
 		}
 	}
-	if f.run.Status != domain.ReviewRunRunning {
+	if !allowed(f.run.Status) {
 		return false, nil
 	}
 	f.updateCalls++
-	f.run.Status = status
-	f.run.Verdict = verdict
-	f.run.Body = body
-	f.run.GithubReviewID = githubReviewID
-	f.run.AutoInjectReview = autoInjectReview
+	apply(&f.run)
 	return true, nil
 }
 
@@ -147,17 +168,16 @@ func (f *fakeStore) ListPRComments(_ context.Context, prURL string) ([]domain.Pu
 	return out, nil
 }
 
-func (f *fakeStore) MarkPRCommentResolved(_ context.Context, prURL, commentID string) (bool, error) {
-	f.resolvedCommentIDs = append(f.resolvedCommentIDs, commentID)
+func (f *fakeStore) MarkPRReviewThreadResolved(_ context.Context, prURL, threadID string) error {
+	f.resolvedThreadIDs = append(f.resolvedThreadIDs, threadID)
 	comments := f.prComments[prURL]
 	for i := range comments {
-		if comments[i].ID == commentID {
+		if comments[i].ThreadID == threadID {
 			comments[i].Resolved = true
-			f.prComments[prURL] = comments
-			return true, nil
 		}
 	}
-	return false, nil
+	f.prComments[prURL] = comments
+	return nil
 }
 
 type fakeReviewResolver struct {
@@ -186,7 +206,10 @@ func TestResolveReviewCommentResolvesTrackedThread(t *testing.T) {
 	store := &fakeStore{
 		prs: []domain.PullRequest{{URL: prURL, Number: 7, Provider: "github", Repo: "acme/widget"}},
 		prComments: map[string][]domain.PullRequestComment{
-			prURL: {{ThreadID: "thread-1", ID: "comment-1", URL: commentURL}},
+			prURL: {
+				{ThreadID: "thread-1", ID: "comment-1", URL: commentURL},
+				{ThreadID: "thread-1", ID: "comment-2", URL: commentURL + "-reply"},
+			},
 		},
 	}
 	resolver := &fakeReviewResolver{}
@@ -198,11 +221,37 @@ func TestResolveReviewCommentResolvesTrackedThread(t *testing.T) {
 	if resolver.request.ThreadID != "thread-1" || resolver.request.PR.Number != 7 {
 		t.Fatalf("request = %#v", resolver.request)
 	}
-	if got := store.resolvedCommentIDs; len(got) != 1 || got[0] != "comment-1" {
-		t.Fatalf("resolved comment ids = %#v", got)
+	// The whole thread is marked, replies included, so the summary shows it resolved at once.
+	if got := store.resolvedThreadIDs; len(got) != 1 || got[0] != "thread-1" {
+		t.Fatalf("resolved thread ids = %#v", got)
 	}
-	if !store.prComments[prURL][0].Resolved {
-		t.Fatalf("comment was not marked resolved: %#v", store.prComments[prURL][0])
+	for _, comment := range store.prComments[prURL] {
+		if !comment.Resolved {
+			t.Fatalf("comment was not marked resolved: %#v", comment)
+		}
+	}
+}
+
+func TestResolveReviewCommentMarksThreadWhenCommentIsAlreadyResolved(t *testing.T) {
+	prURL := "https://github.com/acme/widget/pull/7"
+	commentURL := "https://github.com/acme/widget/pull/7#discussion_r1"
+	store := &fakeStore{
+		prs: []domain.PullRequest{{URL: prURL, Number: 7, Provider: "github", Repo: "acme/widget"}},
+		prComments: map[string][]domain.PullRequestComment{
+			prURL: {{ThreadID: "thread-1", ID: "comment-1", URL: commentURL, Resolved: true}},
+		},
+	}
+	resolver := &fakeReviewResolver{}
+	svc := New(nil, store, WithReviewResolver(resolver))
+
+	if err := svc.ResolveReviewComment(context.Background(), "mer-1", prURL, commentURL); err != nil {
+		t.Fatal(err)
+	}
+	if resolver.request.ThreadID != "" {
+		t.Fatalf("provider asked again for a resolved comment: %#v", resolver.request)
+	}
+	if got := store.resolvedThreadIDs; len(got) != 1 || got[0] != "thread-1" {
+		t.Fatalf("resolved thread ids = %#v, want the thread marked locally", got)
 	}
 }
 
@@ -221,8 +270,8 @@ func TestResolveReviewCommentDoesNotPersistWhenProviderFails(t *testing.T) {
 	if err := svc.ResolveReviewComment(context.Background(), "mer-1", prURL, commentURL); err == nil {
 		t.Fatal("ResolveReviewComment error = nil, want provider failure")
 	}
-	if len(store.resolvedCommentIDs) != 0 {
-		t.Fatalf("resolved comment ids = %#v, want none", store.resolvedCommentIDs)
+	if len(store.resolvedThreadIDs) != 0 {
+		t.Fatalf("resolved thread ids = %#v, want none", store.resolvedThreadIDs)
 	}
 	if store.prComments[prURL][0].Resolved {
 		t.Fatalf("comment was marked resolved after provider failure")
@@ -267,8 +316,8 @@ func TestRequestRereviewRejectsUnknownReviewer(t *testing.T) {
 	}
 }
 
-// AO never sends the worker a separate verdict message: the reviewer's posted
-// review reaches the worker through the SCM observer like any other review. A
+// The reviewer's posted findings reach the worker through the SCM observer
+// like any other review; the service never stamps a run delivered. A
 // submitted result is recorded and stays complete.
 func TestSubmitRecordsTheResultWithoutASeparateDelivery(t *testing.T) {
 	st := &fakeStore{
@@ -284,8 +333,65 @@ func TestSubmitRecordsTheResultWithoutASeparateDelivery(t *testing.T) {
 		if err != nil {
 			t.Fatalf("%s: Submit: %v", verdict, err)
 		}
-		if run.Status != domain.ReviewRunComplete || run.DeliveredAt != nil {
+		if run.Status != domain.ReviewRunCompleted || run.DeliveredAt != nil {
 			t.Fatalf("%s: run = %+v, want complete and never stamped delivered", verdict, run)
+		}
+	}
+}
+
+type fakeDoneNotifier struct {
+	calls []domain.SessionID
+	err   error
+}
+
+func (f *fakeDoneNotifier) DeliverReviewDoneNotices(_ context.Context, id domain.SessionID) error {
+	f.calls = append(f.calls, id)
+	return f.err
+}
+
+// Submitting a result hands the worker's "review done" notice to lifecycle at
+// once; a delivery failure leaves it to the sweep and never fails the submit.
+func TestSubmitAsksForTheReviewDoneNotice(t *testing.T) {
+	st := &fakeStore{
+		ok:  true,
+		run: domain.ReviewRun{ID: "run-1", SessionID: "mer-1", RequesterSessionID: "orch", PRURL: "pr1", TargetSHA: "sha1", Status: domain.ReviewRunRunning},
+	}
+	notifier := &fakeDoneNotifier{err: errors.New("pane gone")}
+	svc := New(nil, st, WithReviewDoneNotifier(notifier))
+
+	if _, err := svc.Submit(context.Background(), "mer-1", "run-1", domain.VerdictApproved, "LGTM", "987"); err != nil {
+		t.Fatalf("Submit: %v", err)
+	}
+	if len(notifier.calls) != 1 || notifier.calls[0] != "orch" {
+		t.Fatalf("notifier calls = %v, want one for the worker", notifier.calls)
+	}
+}
+
+// A fast reviewer can submit before the trigger records that its prompt was
+// delivered. The submit completes the run and also records its start; a run
+// that already ended rejects it.
+func TestSubmitCompletesALaunchingRunAndRejectsAFinalOne(t *testing.T) {
+	st := &fakeStore{
+		ok:  true,
+		run: domain.ReviewRun{ID: "run-1", SessionID: "mer-1", BatchID: "batch-1", PRURL: "pr1", TargetSHA: "sha1", Status: domain.ReviewRunLaunching},
+		prs: []domain.PullRequest{{URL: "pr1", HeadSHA: "sha1"}},
+	}
+	svc := New(nil, st)
+	run, err := svc.Submit(context.Background(), "mer-1", "run-1", domain.VerdictApproved, "", "")
+	if err != nil {
+		t.Fatalf("Submit: %v", err)
+	}
+	if run.Status != domain.ReviewRunCompleted || st.run.StartedAt == nil || st.run.EndedAt == nil {
+		t.Fatalf("run = %+v stored = %+v, want completed with started and ended times", run, st.run)
+	}
+
+	for _, status := range []domain.ReviewRunStatus{domain.ReviewRunFailed, domain.ReviewRunCancelled, domain.ReviewRunSuperseded, domain.ReviewRunCancelling, domain.ReviewRunQueued} {
+		st.run = domain.ReviewRun{ID: "run-1", SessionID: "mer-1", PRURL: "pr1", TargetSHA: "sha1", Status: status}
+		if _, err := svc.Submit(context.Background(), "mer-1", "run-1", domain.VerdictApproved, "", ""); !errors.Is(err, ErrInvalid) {
+			t.Fatalf("submit on %s: err = %v, want rejected", status, err)
+		}
+		if st.run.Status != status {
+			t.Fatalf("submit on %s changed the run to %s", status, st.run.Status)
 		}
 	}
 }
@@ -410,7 +516,7 @@ func TestSubmitSnapshotsDisabledPolicyAndNeverDeliversOnRetry(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if run.Status != domain.ReviewRunComplete || run.AutoInjectReview {
+	if run.Status != domain.ReviewRunCompleted || run.AutoInjectReview {
 		t.Fatalf("disabled review = %+v", run)
 	}
 
@@ -420,7 +526,7 @@ func TestSubmitSnapshotsDisabledPolicyAndNeverDeliversOnRetry(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if run.Status != domain.ReviewRunComplete || run.AutoInjectReview {
+	if run.Status != domain.ReviewRunCompleted || run.AutoInjectReview {
 		t.Fatalf("retry rewrote disabled review = %+v", run)
 	}
 }
@@ -485,8 +591,27 @@ func TestSubmitManySkipsSupersededRunAndRecordsSiblings(t *testing.T) {
 	if err != nil {
 		t.Fatalf("SubmitMany must record valid siblings when one run was superseded: %v", err)
 	}
-	if len(runs) != 1 || runs[0].ID != "run-1" || runs[0].Status != domain.ReviewRunComplete {
+	if len(runs) != 1 || runs[0].ID != "run-1" || runs[0].Status != domain.ReviewRunCompleted {
 		t.Fatalf("want only run-1 recorded, got %+v", runs)
+	}
+}
+
+func TestSingleSubmitAfterSupersededSibling(t *testing.T) {
+	st := &fakeStore{
+		ok: true,
+		batchRuns: []domain.ReviewRun{
+			{ID: "stale", SessionID: "mer-1", BatchID: "batch", PRURL: "pr1", Status: domain.ReviewRunSuperseded},
+			{ID: "current", SessionID: "mer-1", BatchID: "batch", PRURL: "pr2", TargetSHA: "sha2", Status: domain.ReviewRunRunning},
+		},
+		prs: []domain.PullRequest{{URL: "pr2", HeadSHA: "sha2"}},
+	}
+	svc := New(nil, st)
+	if _, err := svc.Submit(context.Background(), "mer-1", "stale", domain.VerdictApproved, "ok", ""); !errors.Is(err, ErrInvalid) || !strings.Contains(err.Error(), "superseded: stale") {
+		t.Fatalf("expected superseded run error, got %v", err)
+	}
+	run, err := svc.Submit(context.Background(), "mer-1", "current", domain.VerdictApproved, "ok", "")
+	if err != nil || run.ID != "current" || run.Status != domain.ReviewRunCompleted {
+		t.Fatalf("submit current sibling = %+v, %v", run, err)
 	}
 }
 
@@ -521,7 +646,7 @@ func TestSubmitCompletedRetryRejectsDifferentRecordedFields(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			st := &fakeStore{ok: true, run: domain.ReviewRun{
 				ID: "run-1", SessionID: "mer-1", PRURL: "pr1", TargetSHA: "sha1",
-				Status: domain.ReviewRunComplete, Verdict: domain.VerdictChangesRequested,
+				Status: domain.ReviewRunCompleted, Verdict: domain.VerdictChangesRequested,
 				Body: "fix it", GithubReviewID: "987",
 			}}
 			svc := New(nil, st)

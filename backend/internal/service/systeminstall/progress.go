@@ -9,6 +9,8 @@ import (
 	"sync"
 	"time"
 	"unicode/utf8"
+
+	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
 // Live install progress.
@@ -36,6 +38,10 @@ type Progress struct {
 	Phase   ProgressPhase `json:"phase,omitempty" enum:"downloading,installing" description:"Installer phase the output names. Absent until a line names one."`
 	Percent *int          `json:"percent,omitempty" minimum:"0" maximum:"100" description:"Progress through the current phase, present only when the installer's output states sizes or counts."`
 	Detail  string        `json:"detail,omitempty" description:"The installer's latest output line."`
+	// Set only while AO downloads a vendor install script, before it runs.
+	DownloadAttempt  int `json:"downloadAttempt,omitempty" minimum:"1" description:"Current installer download attempt, before it runs."`
+	DownloadAttempts int `json:"downloadAttempts,omitempty" minimum:"1" description:"Maximum installer download attempts."`
+	RetryInSeconds   int `json:"retryInSeconds,omitempty" minimum:"1" description:"Seconds until the next installer download attempt."`
 }
 
 // progressPublishInterval is how often a running install's captured output
@@ -77,6 +83,10 @@ var (
 	downloadingLine = regexp.MustCompile(`(?i)^(?:\[[a-z]+\]\s*)?(?:==> (?:Fetching|Downloading)|✔︎ (?:Bottle|Formula|Resource|Cask)|Downloading\b|Fetching\b|Resolved \d+ packages?)`)
 )
 
+// installerBootstrapPrefix marks lines the shared script runner writes around
+// a vendor installer (systemexec's remote-script download and launch).
+const installerBootstrapPrefix = "[installer] "
+
 // progressTracker is an io.Writer that forwards installer output and keeps
 // the phase and percentage that output reports.
 type progressTracker struct {
@@ -93,10 +103,25 @@ type progressTracker struct {
 	brewSteps     int
 	brewStarted   int
 	brewInstalled bool
+	// The script runner's own download, reported as data. retryAt is when the
+	// next attempt starts while the runner waits; zero otherwise.
+	download ports.InstallScriptDownload
+	retryAt  time.Time
 }
 
 func newProgressTracker(dst io.Writer) *progressTracker {
 	return &progressTracker{dst: dst, percent: -1}
+}
+
+// ReportInstallScriptDownload implements ports.InstallScriptDownloadReporter.
+func (t *progressTracker) ReportInstallScriptDownload(download ports.InstallScriptDownload) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.download = download
+	t.retryAt = time.Time{}
+	if download.RetryIn > 0 {
+		t.retryAt = time.Now().Add(download.RetryIn)
+	}
 }
 
 func (t *progressTracker) Write(p []byte) (int, error) {
@@ -131,10 +156,18 @@ func (t *progressTracker) Write(p []byte) (int, error) {
 func (t *progressTracker) Snapshot() *Progress {
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	if t.phase == "" && t.detail == "" && t.percent < 0 {
+	if t.phase == "" && t.detail == "" && t.percent < 0 && t.download.Attempt == 0 {
 		return nil
 	}
 	progress := &Progress{Phase: t.phase, Detail: t.detail}
+	if t.download.Attempt > 0 {
+		progress.DownloadAttempt = t.download.Attempt
+		progress.DownloadAttempts = t.download.MaxAttempts
+		// The time left, rounded up, so repeated snapshots count down.
+		if remaining := time.Until(t.retryAt); !t.retryAt.IsZero() && remaining > 0 {
+			progress.RetryInSeconds = int((remaining + time.Second - 1) / time.Second)
+		}
+	}
 	if t.percent >= 0 {
 		percent := t.percent
 		progress.Percent = &percent
@@ -145,6 +178,13 @@ func (t *progressTracker) Snapshot() *Progress {
 func (t *progressTracker) observe(raw string) {
 	line := strings.TrimSpace(ansiEscape.ReplaceAllString(raw, ""))
 	if line == "" {
+		return
+	}
+	// Shared bootstrap lines (script download attempts, retries, the execution
+	// boundary) describe AO's own staging, not the vendor's: that arrives as
+	// data through ReportInstallScriptDownload. They stay in the output as
+	// diagnostics but drive neither the detail nor the vendor's phase.
+	if strings.HasPrefix(line, installerBootstrapPrefix) {
 		return
 	}
 	t.detail = truncateRunes(line, maxProgressDetailRunes)

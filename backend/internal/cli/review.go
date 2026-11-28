@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -8,12 +9,17 @@ import (
 	"io"
 	"net/url"
 	"os"
+	"regexp"
 	"strings"
 	"text/tabwriter"
 	"time"
 
 	"github.com/spf13/cobra"
 	"github.com/spf13/pflag"
+
+	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
+	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
+	aoprocess "github.com/aoagents/agent-orchestrator/backend/internal/process"
 )
 
 const (
@@ -36,6 +42,14 @@ type reviewRun struct {
 	GithubReviewID string     `json:"githubReviewId"`
 	CreatedAt      time.Time  `json:"createdAt"`
 	DeliveredAt    *time.Time `json:"deliveredAt,omitempty"`
+	// Worker notice fields mirror domain.ReviewRun: the "review done" message
+	// state and its last failed delivery.
+	WorkerNotice            string     `json:"workerNotice,omitempty"`
+	WorkerNoticeAttempts    int        `json:"workerNoticeAttempts,omitempty"`
+	WorkerNoticeError       string     `json:"workerNoticeError,omitempty"`
+	WorkerNoticeAttemptedAt *time.Time `json:"workerNoticeAttemptedAt,omitempty"`
+	FailureReason           string     `json:"failureReason,omitempty"`
+	CancelledBy             string     `json:"cancelledBy,omitempty"`
 }
 
 type reviewState struct {
@@ -68,6 +82,7 @@ type triggerReviewRequest struct {
 	Harness            string             `json:"harness,omitempty"`
 	AgentConfig        *reviewAgentConfig `json:"agentConfig,omitempty"`
 	PRURL              string             `json:"prUrl,omitempty"`
+	RequesterSessionID string             `json:"requesterSessionId,omitempty"`
 	Source             string             `json:"source,omitempty"`
 	RejectReviewedHead bool               `json:"rejectReviewedHead,omitempty"`
 	Rerun              bool               `json:"rerun,omitempty"`
@@ -155,9 +170,43 @@ func newReviewCommand(ctx *commandContext) *cobra.Command {
 	}
 	cmd.AddCommand(newReviewListCommand(ctx))
 	cmd.AddCommand(newReviewSubmitCommand(ctx))
+	cmd.AddCommand(newReviewPostGitHubCommand())
 	cmd.AddCommand(newReviewCancelCommand(ctx))
 	cmd.AddCommand(newReviewTriggerCommand(ctx))
 	return cmd
+}
+
+// OpenCode's shell policy can match a fixed command but cannot validate an
+// endpoint inside a wildcard. Read both values as data and invoke gh by argv.
+var reviewEndpoint = regexp.MustCompile(`^` + ports.ReviewEndpointPattern + `$`)
+
+func newReviewPostGitHubCommand() *cobra.Command {
+	return &cobra.Command{
+		Use:    "post-github",
+		Short:  "Post a GitHub pull request review from JSON on stdin",
+		Hidden: true,
+		Args:   cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			var request struct {
+				Endpoint string          `json:"endpoint"`
+				Review   json.RawMessage `json:"review"`
+			}
+			if err := json.NewDecoder(cmd.InOrStdin()).Decode(&request); err != nil {
+				return fmt.Errorf("read GitHub review: %w", err)
+			}
+			if !reviewEndpoint.MatchString(request.Endpoint) || strings.Contains(request.Endpoint, "/../") || strings.Contains(request.Endpoint, "/./") {
+				return errors.New("expected a GitHub pull request reviews endpoint")
+			}
+			var fields map[string]json.RawMessage
+			if err := json.Unmarshal(request.Review, &fields); err != nil || string(fields["event"]) != `"COMMENT"` {
+				return errors.New("expected a GitHub COMMENT review")
+			}
+			post := aoprocess.CommandContext(cmd.Context(), "gh", "api", "--method", "POST", request.Endpoint, "--input", "-", "--jq", ".id")
+			post.Stdin = bytes.NewReader(request.Review)
+			post.Stdout, post.Stderr = cmd.OutOrStdout(), cmd.ErrOrStderr()
+			return post.Run()
+		},
+	}
 }
 
 func newReviewListCommand(ctx *commandContext) *cobra.Command {
@@ -364,6 +413,8 @@ session if it does not track it yet (never taking it from another active
 session) and reviews only it. The reviewer defaults to the session's reviewer
 choice, then the project's reviewer config, then the project's default worker
 agent and model; --agent, --model, and --effort override it for this pass only.
+A pass-only --agent override reviewer retires from the session's pane once its
+pass ends.
 
 A head that is already being reviewed, or already has a review, is not reviewed
 again: the command fails and says why. Pass --rerun to review the same commit
@@ -415,7 +466,8 @@ func (c *commandContext) triggerReview(cmd *cobra.Command, args []string, opts r
 	}
 	// A request from inside an AO session (a worker reviewing its own PR, or an
 	// orchestrator) is labelled as such, so it is never mistaken for a person.
-	if strings.TrimSpace(os.Getenv("AO_SESSION_ID")) != "" {
+	if requester := strings.TrimSpace(os.Getenv("AO_SESSION_ID")); requester != "" {
+		req.RequesterSessionID = requester
 		req.Source = "agent"
 	}
 	path := "sessions/" + url.PathEscape(session) + "/reviews/trigger"
@@ -449,11 +501,22 @@ func (c *commandContext) triggerReview(cmd *cobra.Command, args []string, opts r
 	return nil
 }
 
-// startedRuns returns the running passes on the PR heads the trigger covered.
+// reviewRunActive mirrors domain.ReviewRunStatus.IsActive for the CLI's
+// hand-mirrored DTOs.
+func reviewRunActive(status string) bool {
+	switch status {
+	case "queued", "launching", "running", "cancelling":
+		return true
+	default:
+		return false
+	}
+}
+
+// startedRuns returns the active passes on the PR heads the trigger covered.
 func startedRuns(res triggerReviewResponse) []reviewRun {
 	var out []reviewRun
 	for _, review := range res.Reviews {
-		if review.LatestRun != nil && review.LatestRun.Status == "running" {
+		if review.LatestRun != nil && reviewRunActive(review.LatestRun.Status) {
 			out = append(out, *review.LatestRun)
 		}
 	}
@@ -488,7 +551,7 @@ func writeReviewList(cmd *cobra.Command, session string, res listReviewsResponse
 	}
 
 	tw := tabwriter.NewWriter(out, 0, 4, 2, ' ', 0)
-	if _, err := fmt.Fprintln(tw, "PR\tSTATUS\tVERDICT\tTITLE"); err != nil {
+	if _, err := fmt.Fprintln(tw, "PR\tSTATUS\tRUN\tVERDICT\tTITLE"); err != nil {
 		return err
 	}
 	for _, review := range res.Reviews {
@@ -496,11 +559,51 @@ func writeReviewList(cmd *cobra.Command, session string, res listReviewsResponse
 		if review.LatestRun != nil && review.LatestRun.Verdict != "" {
 			verdict = review.LatestRun.Verdict
 		}
-		if _, err := fmt.Fprintf(tw, "#%d\t%s\t%s\t%s\n", review.PRNumber, review.Status, verdict, review.Title); err != nil {
+		if _, err := fmt.Fprintf(tw, "#%d\t%s\t%s\t%s\t%s\n", review.PRNumber, review.Status, reviewRunLabel(review.LatestRun), verdict, review.Title); err != nil {
 			return err
 		}
 	}
-	return tw.Flush()
+	if err := tw.Flush(); err != nil {
+		return err
+	}
+	// A "review done" message the worker has not received yet is easy to
+	// miss; name the run and why its last delivery failed.
+	for _, review := range res.Reviews {
+		run := review.LatestRun
+		if run == nil || run.WorkerNoticeError == "" {
+			continue
+		}
+		var state string
+		switch run.WorkerNotice {
+		case "pending":
+			state = "not delivered yet"
+		case "failed":
+			state = "not delivered, gave up"
+		default:
+			continue
+		}
+		// The error comes from the worker's runtime; strip control characters
+		// before writing it to the terminal.
+		reason := domain.SanitizeControlChars(run.WorkerNoticeError)
+		if _, err := fmt.Fprintf(out, "#%d: review done message for run %s %s after %d failed attempt(s): %s\n", review.PRNumber, run.ID, state, run.WorkerNoticeAttempts, reason); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// reviewRunLabel names the latest pass's state, with the daemon's reason code
+// for a failed pass so a person can tell a launch problem from a reviewer that
+// stopped without submitting.
+func reviewRunLabel(run *reviewRun) string {
+	switch {
+	case run == nil || run.Status == "":
+		return "-"
+	case run.Status == "failed" && run.FailureReason != "":
+		return "failed (" + run.FailureReason + ")"
+	default:
+		return run.Status
+	}
 }
 
 func readReviewItems(cmd *cobra.Command, path string) ([]submitReviewItem, error) {

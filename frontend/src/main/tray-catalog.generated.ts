@@ -12,7 +12,8 @@ export const TRAY_MESSAGE_KEYS = [
 	"tray.show",
 	"tray.quit",
 	"zone.merge",
-	"zone.action"
+	"zone.action",
+	"browser.profile.defaultName"
 ] as const;
 
 export type TrayMessageKey = (typeof TRAY_MESSAGE_KEYS)[number];
@@ -29,7 +30,8 @@ export const trayCatalogs: Record<AppLocale, Record<TrayMessageKey, string> & Pa
 		"tray.show": "Show Orchestrator",
 		"tray.quit": "Quit Orchestrator Completely",
 		"zone.merge": "Ready to merge",
-		"zone.action": "Needs you"
+		"zone.action": "Needs you",
+		"browser.profile.defaultName": "Personal"
 	},
 	"zh-CN": {
 		"tray.awakeActive": "保持唤醒：正在使此 Mac 保持唤醒",
@@ -42,7 +44,8 @@ export const trayCatalogs: Record<AppLocale, Record<TrayMessageKey, string> & Pa
 		"tray.show": "显示 Orchestrator",
 		"tray.quit": "完全退出 Orchestrator",
 		"zone.merge": "可合并",
-		"zone.action": "需要你处理"
+		"zone.action": "需要你处理",
+		"browser.profile.defaultName": "个人"
 	},
 	"ja": {
 		"tray.awakeActive": "スリープ防止：この Mac を起動状態に維持しています",
@@ -55,7 +58,8 @@ export const trayCatalogs: Record<AppLocale, Record<TrayMessageKey, string> & Pa
 		"tray.show": "Orchestrator を表示",
 		"tray.quit": "Orchestrator を完全に終了",
 		"zone.merge": "マージ準備完了",
-		"zone.action": "対応が必要"
+		"zone.action": "対応が必要",
+		"browser.profile.defaultName": "個人"
 	},
 	"ko": {
 		"tray.awakeActive": "잠자기 방지: 이 Mac을 깨어 있게 유지하는 중",
@@ -68,7 +72,8 @@ export const trayCatalogs: Record<AppLocale, Record<TrayMessageKey, string> & Pa
 		"tray.show": "Orchestrator 표시",
 		"tray.quit": "Orchestrator 완전히 종료",
 		"zone.merge": "병합 준비 완료",
-		"zone.action": "조치 필요"
+		"zone.action": "조치 필요",
+		"browser.profile.defaultName": "개인"
 	},
 	"es": {
 		"tray.awakeActive": "Mantener despierto: este Mac se mantiene activo",
@@ -82,6 +87,7 @@ export const trayCatalogs: Record<AppLocale, Record<TrayMessageKey, string> & Pa
 		"tray.quit": "Salir completamente de Orchestrator",
 		"zone.merge": "Listo para fusionar",
 		"zone.action": "Te necesita",
+		"browser.profile.defaultName": "Personal",
 		"tray.attentionTooltip_many": "{{count}} sesiones requieren atención"
 	},
 	"fr": {
@@ -96,6 +102,7 @@ export const trayCatalogs: Record<AppLocale, Record<TrayMessageKey, string> & Pa
 		"tray.quit": "Quitter complètement Orchestrator",
 		"zone.merge": "Prêt à fusionner",
 		"zone.action": "Action requise",
+		"browser.profile.defaultName": "Personnel",
 		"tray.attentionTooltip_many": "{{count}} sessions nécessitent votre attention"
 	},
 	"de": {
@@ -109,7 +116,8 @@ export const trayCatalogs: Record<AppLocale, Record<TrayMessageKey, string> & Pa
 		"tray.show": "Orchestrator anzeigen",
 		"tray.quit": "Orchestrator vollständig beenden",
 		"zone.merge": "Bereit zum Mergen",
-		"zone.action": "Ihre Aktion nötig"
+		"zone.action": "Ihre Aktion nötig",
+		"browser.profile.defaultName": "Persönlich"
 	},
 	"pt-BR": {
 		"tray.awakeActive": "Manter acordado: este Mac está sendo mantido acordado",
@@ -123,6 +131,7 @@ export const trayCatalogs: Record<AppLocale, Record<TrayMessageKey, string> & Pa
 		"tray.quit": "Sair completamente do Orchestrator",
 		"zone.merge": "Pronto para merge",
 		"zone.action": "Precisa de você",
+		"browser.profile.defaultName": "Pessoal",
 		"tray.attentionTooltip_many": "{{count}} sessões precisam de atenção"
 	},
 	"ru": {
@@ -137,7 +146,22 @@ export const trayCatalogs: Record<AppLocale, Record<TrayMessageKey, string> & Pa
 		"tray.quit": "Полностью выйти из Orchestrator",
 		"zone.merge": "Готово к слиянию",
 		"zone.action": "Требуется ваше действие",
+		"browser.profile.defaultName": "Личный",
 		"tray.attentionTooltip_few": "{{count}} сессии требуют внимания",
 		"tray.attentionTooltip_many": "{{count}} сессий требуют внимания"
+	},
+	"tr": {
+		"tray.awakeActive": "Uyanık Tut: bu Mac uyanık tutuluyor",
+		"tray.awakeUnknown": "Uyanık Tut: durum alınamıyor",
+		"tray.untitledSession": "Adsız oturum",
+		"tray.attentionTooltip_one": "{{count}} oturum ilgi bekliyor",
+		"tray.attentionTooltip_other": "{{count}} oturum ilgi bekliyor",
+		"tray.empty": "İlgi bekleyen oturum yok",
+		"tray.more": "Daha fazla",
+		"tray.show": "Orchestrator'ı gösterin",
+		"tray.quit": "Orchestrator'dan tamamen çıkın",
+		"zone.merge": "Birleştirmeye hazır",
+		"zone.action": "Size ihtiyacı var",
+		"browser.profile.defaultName": "Kişisel"
 	}
 };

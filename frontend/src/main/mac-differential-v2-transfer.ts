@@ -11,6 +11,7 @@ import {
 
 // Cleanup failure must never be converted into a replacement download.
 export class MacV2CleanupError extends AggregateError {
+	readonly code: string = "MAC_V2_CLEANUP_ERROR";
   constructor(errors: unknown[]) { super(errors, "V2 resource cleanup failed"); }
 }
 

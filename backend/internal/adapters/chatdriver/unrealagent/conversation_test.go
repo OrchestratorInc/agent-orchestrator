@@ -47,3 +47,9 @@ func TestConversationProtocolMismatchSignalsReadyAndStopped(t *testing.T) {
 		t.Fatal("protocol mismatch emitted no stopped event")
 	}
 }
+
+func TestForegroundOnlyUnrealDoesNotAdvertiseBackgroundTasks(t *testing.T) {
+	if _, ok := any(&conversation{}).(ports.ChatBackgroundTaskInspector); ok {
+		t.Fatal("foreground-only Unreal conversation exposes background tasks")
+	}
+}

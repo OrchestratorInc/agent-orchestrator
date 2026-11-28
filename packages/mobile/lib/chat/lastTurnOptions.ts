@@ -9,12 +9,14 @@ export type TurnOptions = { models: ChatModel[]; configOptions: ChatConfigOption
 // Twice the 30-second caches' 16: they only need chats opened in the last half
 // minute, this needs every chat someone moves between, and entries are small.
 const LAST_TURN_OPTIONS_LIMIT = 32;
-const lastTurnOptions = new Map<string, TurnOptions>();
+// Each with the agent that offered it: a chat can switch agents, and one
+// agent's models must never stand in for another's.
+const lastTurnOptions = new Map<string, { catalog: TurnOptions; harness?: string }>();
 
-export function rememberTurnOptions(key: string, catalog: TurnOptions): void {
+export function rememberTurnOptions(key: string, catalog: TurnOptions, harness?: string): void {
 	if (!key || isEmptyTurnOptionCatalog(catalog)) return;
 	lastTurnOptions.delete(key);
-	lastTurnOptions.set(key, catalog);
+	lastTurnOptions.set(key, { catalog, harness: harness || undefined });
 	while (lastTurnOptions.size > LAST_TURN_OPTIONS_LIMIT) {
 		const oldest = lastTurnOptions.keys().next().value;
 		if (oldest === undefined) break;
@@ -22,8 +24,16 @@ export function rememberTurnOptions(key: string, catalog: TurnOptions): void {
 	}
 }
 
-export function rememberedTurnOptions(key: string): TurnOptions | undefined {
-	return lastTurnOptions.get(key);
+/**
+ * The chat's last catalog. Asked for a given agent, one another agent offered
+ * is not returned; asked without one (the chat's agent not known yet), the
+ * last catalog is.
+ */
+export function rememberedTurnOptions(key: string, harness?: string): TurnOptions | undefined {
+	const remembered = lastTurnOptions.get(key);
+	if (!remembered) return undefined;
+	if (harness && remembered.harness && remembered.harness !== harness) return undefined;
+	return remembered.catalog;
 }
 
 /**

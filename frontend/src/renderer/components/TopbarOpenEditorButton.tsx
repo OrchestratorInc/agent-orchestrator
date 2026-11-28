@@ -103,7 +103,7 @@ export function TopbarOpenEditorButton({
 
 	return (
 		<div
-			className={`${GHOST_PILL_CLASS} inline-flex items-center gap-0 rounded-md has-[:focus-visible]:before:inset-0 has-[:focus-visible]:before:opacity-100 ${mainDisabled && menuDisabled ? "before:hidden" : ""}`}
+			className={`${GHOST_PILL_CLASS} inline-flex items-center gap-0 rounded-(--radius-control) has-[:focus-visible]:before:inset-0 has-[:focus-visible]:before:opacity-100 ${mainDisabled && menuDisabled ? "before:hidden" : ""}`}
 			data-state={menuOpen ? "open" : "closed"}
 			style={style}
 		>
@@ -111,6 +111,7 @@ export function TopbarOpenEditorButton({
 				<TooltipTrigger asChild>
 					<span className="inline-flex">
 						<Button type="button" size="icon-sm"
+							data-telemetry-id="topbar.open_editor"
 							aria-label={waitingLabel
 								?? (workspaceError
 									?? (mainTarget ? t("editor.openInAria", { name: mainTarget.name }) : t("editor.chooseEditor")))}

@@ -1,10 +1,11 @@
 import { useQuery } from "@tanstack/react-query";
-import { ChevronLeft, ChevronRight, Search } from "@/components/app-icons";
+import { ChevronLeft, ChevronRight, LoaderCircle, Search } from "@/components/app-icons";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
+import { setAgentEndpoint, useRefreshAfterEndpointChange, type AgentEndpointStatus } from "../../../hooks/useAgentEndpoint";
 import { agentModelsQueryOptions } from "../../../hooks/useAgentModelsQuery";
 import { useSettings, useUpdateHarnessDefault } from "../../../hooks/useSettings";
-import { agentModelDisplayLabel, isConcreteModelID, splitClaudeModels } from "../../../lib/agent-model-choices";
+import { acceptsLocalModelID, agentModelDisplayLabel, isConcreteModelID, splitClaudeModels } from "../../../lib/agent-model-choices";
 import { agentLabel, type AgentId } from "../../../lib/agent-options";
 import { LOCAL_HOST } from "../../../lib/hosts";
 import { groupModelProviders } from "../../../lib/model-providers";
@@ -25,13 +26,16 @@ export const MULTI_PROVIDER_HARNESSES = new Set<string>([
 	"continue", "goose", "vibe", "cline", "autohand", "qwen", "fx",
 ]);
 
-/** The harness catalog, browsed by provider. */
-export function HarnessModelsPanel({ agentId, hostId, installed, needsLogin, onOpenAccount }: {
+/** The harness catalog, browsed by provider. With a custom endpoint saved,
+ * the catalog is the endpoint's own model list, and any model in it can be
+ * made the default every session of the harness starts with. */
+export function HarnessModelsPanel({ agentId, hostId, installed, needsLogin, onOpenAccount, customEndpoint }: {
 	agentId: AgentId;
 	hostId?: string;
 	installed: boolean;
 	needsLogin: boolean;
 	onOpenAccount: () => void;
+	customEndpoint?: AgentEndpointStatus;
 }) {
 	const { i18n, t } = useTranslation();
 	const options = agentModelsQueryOptions(agentId, "", hostId, true);
@@ -85,6 +89,24 @@ export function HarnessModelsPanel({ agentId, hostId, installed, needsLogin, onO
 				if (queuedSaves.current === 0) setDisabledDraft(undefined);
 			});
 	};
+	// The endpoint's default model is saved with the endpoint, so changing it
+	// reuses the saved URL and key; the daemon keeps the auth style that works.
+	const refreshEndpoint = useRefreshAfterEndpointChange(hostId);
+	const endpointDefaults = Boolean(customEndpoint?.configured && !customEndpoint.error && customEndpoint.supportsModel && customEndpoint.baseUrl);
+	const [defaultChange, setDefaultChange] = useState<{ scope: string; id?: string; error?: string }>();
+	const pendingDefault = defaultChange?.scope === scope ? defaultChange.id : undefined;
+	const defaultError = defaultChange?.scope === scope ? defaultChange.error : undefined;
+	const makeDefault = async (id: string) => {
+		if (!customEndpoint?.baseUrl || pendingDefault) return;
+		setDefaultChange({ scope, id });
+		try {
+			await setAgentEndpoint(agentId, { baseUrl: customEndpoint.baseUrl, model: id }, hostId);
+			await refreshEndpoint(agentId);
+			setDefaultChange(undefined);
+		} catch (cause) {
+			setDefaultChange({ scope, error: cause instanceof Error ? cause.message : t("settings.harness.models.makeDefaultFailed") });
+		}
+	};
 	const initialModel = allModels?.find((model) => model.isDefault);
 	const initialProviderID = initialModel ? initialModel.provider?.trim() ?? "" : undefined;
 	const initialProvider = providers.find((provider) => provider.id === initialProviderID) ?? providers[0];
@@ -100,6 +122,7 @@ export function HarnessModelsPanel({ agentId, hostId, installed, needsLogin, onO
 		</div></div>;
 	}
 	const data = catalog.data;
+	const acceptsDirectModel = acceptsLocalModelID(agentId, data);
 	// Claude uses the New Task family order, with older models included in the same paginated list.
 	const catalogModels = (showProviders ? selectedProvider?.models : allModels) ?? [];
 	const claude = agentId === "claude-code" ? splitClaudeModels(catalogModels.filter((model) => isConcreteModelID(model.id))) : undefined;
@@ -178,7 +201,8 @@ export function HarnessModelsPanel({ agentId, hostId, installed, needsLogin, onO
 			</span> : null}
 		</div>
 		{disabledModelsError ? <p role="alert" className="text-xs text-error">{disabledModelsError}</p> : null}
-		{providerModels.length > MODELS_PAGE_SIZE ? <label className="flex h-8 shrink-0 items-center gap-2 rounded-md border border-(--color-border-settings-input) bg-(--color-bg-settings-input) px-2.5">
+		{defaultError ? <p role="alert" className="text-xs text-error">{defaultError}</p> : null}
+		{providerModels.length > MODELS_PAGE_SIZE ? <label data-field="search" className="flex h-8 shrink-0 items-center gap-2 rounded-md border border-(--color-border-settings-input) bg-(--color-bg-settings-input) px-2.5">
 			<Search aria-hidden="true" className="size-3.5 shrink-0 text-settings-muted" />
 			<input type="search" aria-label={t("settings.models.searchAria", { label: t("settings.harness.models.title").toLocaleLowerCase() })}
 				className="min-w-0 flex-1 bg-transparent text-sm text-settings-label outline-none placeholder:text-settings-muted"
@@ -186,7 +210,7 @@ export function HarnessModelsPanel({ agentId, hostId, installed, needsLogin, onO
 		</label> : null}
 		{error ? <p role="alert" className="text-xs text-error">{error}</p> : null}
 		{catalog.isPending ? null
-			: !models.length ? <p className="px-3 py-6 text-center text-sm text-settings-muted">{t(normalizedModelSearch ? "settings.options.noMatches" : "settings.harness.models.empty")}</p>
+			: !models.length ? <p className="px-3 py-6 text-center text-sm text-settings-muted">{t(normalizedModelSearch ? "settings.options.noMatches" : acceptsDirectModel ? "settings.harness.models.directEntry" : "settings.harness.models.empty", { agent })}</p>
 			: <ul className={cn(HARNESS_CARD_CLASS, "settings-thin-scrollbar min-h-0 flex-initial overflow-y-auto overscroll-contain")} tabIndex={0} aria-label={t("settings.harness.models.title")}>
 				{visibleModels.map((model) => <li key={model.id} className={cn(HARNESS_CARD_ROW_CLASS, "shrink-0 gap-4")}>
 					<span className="min-w-0 flex-1">
@@ -199,6 +223,14 @@ export function HarnessModelsPanel({ agentId, hostId, installed, needsLogin, onO
 							{model.contextWindow ? <span>{t("settings.harness.models.context")}: {new Intl.NumberFormat(i18n.resolvedLanguage).format(model.contextWindow)}</span> : null}
 						</span> : null}
 					</span>
+					{endpointDefaults && !model.isDefault && isConcreteModelID(model.id) && idsOf(model.id).some(isModelEnabled) ? <Button type="button" size="xs" variant="ghost"
+						className="shrink-0"
+						aria-label={t("settings.harness.models.makeDefaultFor", { model: agentModelDisplayLabel(agentId, model.label) })}
+						disabled={Boolean(pendingDefault)}
+						onClick={() => void makeDefault(model.id)}>
+						{pendingDefault === model.id ? <LoaderCircle className="animate-spin" aria-hidden="true" /> : null}
+						{t("settings.harness.models.makeDefault")}
+					</Button> : null}
 					{model.efforts?.length ? <span className="shrink-0 text-right text-xs text-settings-muted">
 						{t("settings.harness.models.efforts", { levels: model.efforts.join(" · ") })}
 					</span> : null}

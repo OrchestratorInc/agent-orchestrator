@@ -24,7 +24,7 @@ vi.mock("expo-network", () => ({
 vi.mock("./api", () => ({ ApiError: class extends Error {}, getSessions: state.sessions, getNotifications: state.notifications }));
 vi.mock("./resolveConfig", () => ({ resolveActiveConfig: state.resolve, runtimeResolveDeps: () => ({}) }));
 vi.mock("./race", () => ({ IncompatibleHostVersionError: class extends Error {} }));
-vi.mock("./connectRuntime", () => ({ rejectedEndpointNeedsRace: () => false }));
+vi.mock("./connectRuntime", () => ({ endpointStillAnswers: async () => false, rejectedEndpointNeedsRace: () => false }));
 vi.mock("./hosts", () => ({
 	activeHost: async () => ({ id: "a", name: "A", endpoints: [], token: "secret" }),
 	loadHosts: async () => [], sameHostConnections: (x: unknown, y: unknown) => JSON.stringify(x) === JSON.stringify(y),
@@ -57,7 +57,7 @@ let renderer: ReactTestRenderer | undefined;
 function OpenChat() {
 	const app = useApp();
 	const listed = app.sessions.find((row) => row.id === "chat");
-	const view = sessionRouteView({ listed, paired: app.paired, connection: app.connection, loading: app.loading, lookup: { state: "pending" }, routeHostId: "a", currentHostId: app.currentHostId });
+	const view = sessionRouteView({ listed, paired: app.paired, unreachable: app.unreachable, connection: app.connection, error: app.error, errorStatus: app.errorStatus, loading: app.loading, lookup: { state: "pending" }, routeHostId: "a", currentHostId: app.currentHostId });
 	frames.push({ view: view.kind, machine: app.machine, config: app.config?.endpointKind ?? null });
 	return null;
 }

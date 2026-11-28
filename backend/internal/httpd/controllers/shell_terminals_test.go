@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -21,6 +22,8 @@ type fakeShellTerminalService struct {
 	gotCloseID     string
 	gotRenameID    string
 	gotRenameTitle string
+	gotReopen      shelltermsvc.ReopenShellTerminalInput
+	reopened       shelltermsvc.ShellTerminal
 	opened         shelltermsvc.ShellTerminal
 	renamed        shelltermsvc.ShellTerminal
 	listed         []shelltermsvc.ShellTerminal
@@ -45,6 +48,11 @@ func (f *fakeShellTerminalService) RenameShellTerminal(_ context.Context, handle
 func (f *fakeShellTerminalService) CloseShellTerminal(_ context.Context, handleID string) error {
 	f.gotCloseID = handleID
 	return f.err
+}
+
+func (f *fakeShellTerminalService) ReopenShellTerminal(_ context.Context, in shelltermsvc.ReopenShellTerminalInput) (shelltermsvc.ShellTerminal, error) {
+	f.gotReopen = in
+	return f.reopened, f.err
 }
 
 func newShellTerminalTestServer(t *testing.T, svc controllers.ShellTerminalService) *httptest.Server {
@@ -290,5 +298,56 @@ func TestShellTerminalsAPI_NotImplementedWithoutService(t *testing.T) {
 		if status != http.StatusNotImplemented {
 			t.Errorf("%s %s status = %d, want 501; body=%s", tc.method, tc.path, status, body)
 		}
+	}
+}
+
+func TestShellTerminalsAPI_ListReportsEndedShellAndResumableAgent(t *testing.T) {
+	ended := sampleShellTerminal()
+	endedAt := time.Date(2026, 11, 10, 20, 44, 0, 0, time.UTC)
+	ended.EndedAt = &endedAt
+	ended.ResumeHarness = "claude-code"
+	svc := &fakeShellTerminalService{listed: []shelltermsvc.ShellTerminal{sampleShellTerminal(), ended}}
+	srv := newShellTerminalTestServer(t, svc)
+
+	body, status, _ := doRequest(t, srv, "GET", "/api/v1/shell-terminals", "")
+	if status != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body=%s", status, body)
+	}
+	got := string(body)
+	if !strings.Contains(got, `"endedAt":"2026-11-10T20:44:00Z"`) || !strings.Contains(got, `"resumeHarness":"claude-code"`) {
+		t.Fatalf("ended shell fields missing: %s", got)
+	}
+	if strings.Count(got, `"endedAt"`) != 1 {
+		t.Fatalf("a live shell must not report endedAt: %s", got)
+	}
+}
+
+func TestShellTerminalsAPI_ReopenPassesExplicitRequest(t *testing.T) {
+	reopened := sampleShellTerminal()
+	reopened.HandleID = "shellterm-new"
+	svc := &fakeShellTerminalService{reopened: reopened}
+	srv := newShellTerminalTestServer(t, svc)
+
+	body, status, _ := doRequest(t, srv, "POST", "/api/v1/shell-terminals/ptyhost-v1%3Ashellterm-abc123/reopen",
+		`{"resumeAgent":true,"shell":"auto","cols":120,"rows":40}`)
+	if status != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body=%s", status, body)
+	}
+	want := shelltermsvc.ReopenShellTerminalInput{HandleID: "ptyhost-v1:shellterm-abc123", Shell: "auto", ResumeAgent: true, Cols: 120, Rows: 40}
+	if svc.gotReopen != want {
+		t.Fatalf("reopen input = %+v, want %+v", svc.gotReopen, want)
+	}
+	if !strings.Contains(string(body), `"handleId":"shellterm-new"`) {
+		t.Fatalf("response missing new handle: %s", body)
+	}
+}
+
+func TestShellTerminalsAPI_ReopenStillRunningIsConflict(t *testing.T) {
+	svc := &fakeShellTerminalService{err: apierr.Conflict("SHELL_TERMINAL_NOT_ENDED", "This terminal is still running", nil)}
+	srv := newShellTerminalTestServer(t, svc)
+
+	body, status, _ := doRequest(t, srv, "POST", "/api/v1/shell-terminals/shellterm-abc123/reopen", "")
+	if status != http.StatusConflict || !strings.Contains(string(body), "SHELL_TERMINAL_NOT_ENDED") {
+		t.Fatalf("status = %d, want 409 SHELL_TERMINAL_NOT_ENDED; body=%s", status, body)
 	}
 }

@@ -2,6 +2,7 @@ import { apiErrorCode, apiErrorRequestId } from "./api-client";
 
 /** Keep correlation facts without copying arbitrary server messages into auth reports. */
 export class AgentCheckError extends Error {
+	readonly code: string = "AGENT_CHECK_ERROR";
 	constructor(stage: string, error: unknown, status?: number) {
 		const code = apiErrorCode(error);
 		const request = apiErrorRequestId(error);

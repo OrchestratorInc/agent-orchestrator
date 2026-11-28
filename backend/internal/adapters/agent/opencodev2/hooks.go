@@ -57,6 +57,9 @@ func (p *Plugin) GetAgentHooks(ctx context.Context, cfg ports.WorkspaceHookConfi
 	if err := opencode.InstallUsingAOSkill(cfg.WorkspacePath); err != nil {
 		return fmt.Errorf("opencodev2.GetAgentHooks: %w", err)
 	}
+	if err := hookutil.InstallBugTriageSkill(opencode.SkillsDir(cfg.WorkspacePath)); err != nil {
+		return fmt.Errorf("opencodev2.GetAgentHooks: %w", err)
+	}
 	return nil
 }
 
@@ -73,6 +76,9 @@ func (p *Plugin) UninstallHooks(ctx context.Context, workspacePath string) error
 		return fmt.Errorf("opencodev2.UninstallHooks: remove plugin: %w", err)
 	}
 	if err := opencode.UninstallUsingAOSkill(workspacePath); err != nil {
+		return fmt.Errorf("opencodev2.UninstallHooks: %w", err)
+	}
+	if err := hookutil.UninstallBugTriageSkill(opencode.SkillsDir(workspacePath)); err != nil {
 		return fmt.Errorf("opencodev2.UninstallHooks: %w", err)
 	}
 	return nil

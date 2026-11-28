@@ -231,6 +231,40 @@ describe("startRemoteProxy", () => {
 		expect(await request(raw)).toBe(200);
 	});
 
+	it("serves a session's renders from a render origin that carries no token", async () => {
+		const policy = "sandbox allow-scripts allow-forms; worker-src 'none'";
+		const { port, seen } = await startUpstream(() => ({ status: 200, body: "<p>chart</p>", headers: { "content-type": "text/html", "content-security-policy": policy } }));
+		proxy = await startRemoteProxy({ label: "box", url: `http://127.0.0.1:${port}/ao`, password: "pw" });
+		const page = proxy.previewUrl("ao-1", "/api/v1/sessions/ao-1/renders/offline-r1");
+		expect(page).toMatch(/^http:\/\/ao-preview-[0-9a-f]{32}\.localhost:\d+\/offline-r1$/);
+		expect(page).not.toContain(new URL(proxy.base).pathname);
+		expect(proxy.previewUrl("ao-1", "/api/v1/sessions/ao-1/renders/r2")).toBe(new URL("/r2", page).href);
+		expect(proxy.isRenderUrl(page)).toBe(true);
+		expect(proxy.isRenderUrl(proxy.previewUrl("ao-1", `http://ao-preview-artifact.mfxs2mi.localhost:${port}/a.html`))).toBe(false);
+		expect(() => proxy!.previewUrl("ao-2", "/api/v1/sessions/ao-1/renders/r1")).toThrow(/render/);
+		expect(() => proxy!.previewUrl("ao-1", "/api/v1/sessions/ao-1/renders/check")).toThrow(/render/);
+		expect(() => proxy!.previewUrl("ao-1", "/api/v1/sessions/ao-1/renders/..%2F..%2Fprojects")).toThrow(/render/);
+		const request = (path: string, method = "GET") => new Promise<{ status: number; csp?: string }>((resolve, reject) => {
+			const req = httpRequest({ hostname: "127.0.0.1", port: Number(new URL(page).port), path, method, headers: { Host: new URL(page).host } }, (res) => {
+				res.resume();
+				res.on("end", () => resolve({ status: res.statusCode ?? 0, csp: res.headers["content-security-policy"] as string | undefined }));
+			});
+			req.on("error", reject);
+			req.end();
+		});
+		expect(await request("/offline-r1")).toEqual({ status: 200, csp: policy });
+		expect(await request("/offline-r1?source=1")).toMatchObject({ status: 200 });
+		expect((await request("/check")).status).toBe(404);
+		expect((await request("/r1/artifact")).status).toBe(404);
+		expect((await request("/..%2F..%2Fprojects")).status).toBe(404);
+		expect((await request("/offline-r1", "POST")).status).toBe(404);
+		expect(seen.map((entry) => entry.url)).toEqual([
+			"/ao/api/v1/sessions/ao-1/renders/offline-r1",
+			"/ao/api/v1/sessions/ao-1/renders/offline-r1?source=1",
+		]);
+		expect(seen.every((entry) => entry.auth === "Bearer pw")).toBe(true);
+	});
+
 	it("keeps an app preview's origin across restarts with the same preview port", async () => {
 		// Port contention permits a different origin; isolate stable-port URL mapping.
 		vi.spyOn(agentViewer, "listenOnStablePort").mockResolvedValue(44000);
@@ -288,6 +322,8 @@ describe("startRemoteProxy", () => {
 		expect(new URL(proxy.previewUrl("ao-2", "http://127.0.0.2:5173/")).hostname).toMatch(/^ao-preview-[0-9a-f]{32}\.localhost$/);
 		expect(new URL(proxy.previewUrl("ao-2", "http://[::ffff:127.0.0.1]:5173/")).hostname).toMatch(/^ao-preview-[0-9a-f]{32}\.localhost$/);
 		expect(new URL(proxy.previewUrl("ao-2", "http://localhost.:5173/")).hostname).toMatch(/^ao-preview-[0-9a-f]{32}\.localhost$/);
+		expect(proxy.previewUrl("ao-2", "https://localhost:8443/")).toBe("https://localhost:8443/");
+		expect(proxy.previewUrl("ao-2", "http://app.localhost:5173/")).toBe("http://app.localhost:5173/");
 		const changed = proxy.previewUrl("ao-1", `http://localhost:5173/`);
 		expect(changed).not.toBe(preview);
 		expect(proxy.resolvePreviewUrl("ao-1", preview)).toBe("");
@@ -362,6 +398,43 @@ describe("startRemoteProxy", () => {
 		expect(await request()).toBe("app conflict");
 		managed = true;
 		expect(await request()).toContain("ao preview start");
+	});
+
+	it("serves its own preview origin locally and sends that hostname's other ports to the host", async () => {
+		const tunnels: string[] = [];
+		const { port } = await startUpstream((req) => {
+			if (req.url?.startsWith("/api/v1/loopback-tunnel")) tunnels.push(req.url);
+			return { status: 404, body: "" };
+		});
+		proxy = await startRemoteProxy({ label: "workbox", url: `http://127.0.0.1:${port}`, password: "pw" });
+		const preview = new URL(proxy.previewUrl("ao-1", "http://localhost:5173/"));
+		const local = await proxy.openLoopbackTunnel(Number(preview.port), preview.hostname);
+		local.destroy();
+		await expect(proxy.openLoopbackTunnel(3001, preview.hostname)).rejects.toThrow();
+		expect(tunnels).toEqual(["/api/v1/loopback-tunnel?port=3001"]);
+	});
+
+	it("sends an unmanaged preview to its own address on a host with the tunnel", async () => {
+		let tunnel: { status: number; headers?: Record<string, string> } = { status: 502, headers: { "x-ao-loopback-refused": "1" } };
+		const { port } = await startUpstream((req) => req.url?.startsWith("/api/v1/loopback-tunnel")
+			? { body: "", ...tunnel }
+			: { status: 409, body: "", headers: { "x-ao-preview-managed-required": "1" } });
+		proxy = await startRemoteProxy({ label: "workbox", url: `http://127.0.0.1:${port}`, password: "pw" });
+		const preview = new URL(proxy.previewUrl("ao-1", "http://localhost:5173/app?tab=1"));
+		const request = () => new Promise<IncomingMessage>((resolve, reject) => {
+			const req = previewRequest(preview, { path: "/app?tab=1" }, (res) => { res.resume(); resolve(res); });
+			req.on("error", reject);
+			req.end();
+		});
+		expect(await proxy.loopbackReach()).toBe(true);
+		const redirected = await request();
+		expect([redirected.statusCode, redirected.headers.location]).toEqual([302, "http://localhost:5173/app?tab=1"]);
+		const outside = new URL(proxy.externalUrl(preview.href));
+		const outsideStatus = await new Promise((resolve) => httpRequest({ hostname: "127.0.0.1", port: outside.port, path: "/app", headers: { Host: outside.host } }, (res) => { res.resume(); resolve(res.statusCode); }).end());
+		expect(outsideStatus).toBe(409);
+		tunnel = { status: 404 };
+		expect(await proxy.loopbackReach()).toBe(false);
+		expect((await request()).statusCode).toBe(409);
 	});
 
 	it("forwards a managed preview websocket on its preview-only origin", async () => {

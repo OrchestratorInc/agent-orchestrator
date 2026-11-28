@@ -133,6 +133,38 @@ describe("PRCard", () => {
 		expect(onLinkCopied).toHaveBeenCalledTimes(1);
 	});
 
+	// The row leads with what the pull request does, and says only what needs
+	// you: waiting for review is not printed on every row.
+	it("shows the title without its commit prefix, the failing check, and nothing for a plain review wait", () => {
+		const summary = {
+			title: "fix(mobile): build the menu only when it opens", state: "open", repo: "ao/app",
+			ci: { state: "failing", failingChecks: [{ name: "android-build" }] },
+			review: { decision: "review_required", hasUnresolvedHumanComments: false, unresolvedBy: [] },
+			mergeability: { state: "blocked", reasons: ["review_required"] },
+		} as unknown as SessionPRSummary;
+		render({ summary });
+		const text = renderer!.root.findAllByType("Text" as never).map((node) => node.children.join("")).join("|");
+		expect(text).toContain("Build the menu only when it opens");
+		expect(text).toContain("android-build failed");
+		expect(text).not.toMatch(/review required/i);
+		expect(row().props.accessibilityLabel).toBe("Build the menu only when it opens. Pull request 42. android-build failed.");
+	});
+
+	// A screen reader hears what the row shows: the scope that fills the line
+	// when there is no status, and how long ago the pull request changed.
+	it("speaks the row's scope and age", () => {
+		const summary = {
+			title: "fix(mobile): build the menu only when it opens", state: "open", repo: "ao/app", updatedAt: "2026-11-12T10:00:00Z",
+			ci: { state: "passing", failingChecks: [] },
+			review: { decision: "review_required", hasUnresolvedHumanComments: false, unresolvedBy: [] },
+			mergeability: { state: "blocked", reasons: ["review_required"] },
+		} as unknown as SessionPRSummary;
+		act(() => {
+			renderer = create(<PRCard pr={pr} session={session} hostId="mac" summary={summary} now={Date.parse("2026-11-12T15:00:00Z")} />);
+		});
+		expect(row().props.accessibilityLabel).toBe("Build the menu only when it opens. mobile. Pull request 42. open. Updated 5h ago.");
+	});
+
 	// iOS's context menu takes the long press natively. On Android the row's own
 	// press handler holds the touch, so the row opens the dropdown itself.
 	it("opens the menu from the row's long press on Android only", () => {
@@ -149,5 +181,15 @@ describe("PRCard", () => {
 		const menu = renderer!.root.findByType("MenuView" as never);
 		expect(menu.props.style).toEqual(expect.arrayContaining([{ left: 120, top: 30 }]));
 		expect(menu.findAllByType("Pressable" as never)).toHaveLength(0);
+	});
+
+	// Android's card is a plain view that never measures its slot: a fixed width
+	// there would be a guess, and one wider than the gutter-inset slot runs the
+	// card past the screen's edge.
+	it("leaves the row to fill its slot on Android, with no fixed width", () => {
+		fixture.platform.OS = "android";
+		render();
+		const style = [row().props.style({ pressed: false })].flat(Infinity) as Array<Record<string, unknown> | false | null | undefined>;
+		expect(style.some((entry) => entry && "width" in entry)).toBe(false);
 	});
 });

@@ -154,11 +154,26 @@ func TestClaudeImplicitDefaultsRemainProviderOwnedAcrossStartSwitchAndResume(t *
 	if err != nil {
 		t.Fatal(err)
 	}
-	if stored.Settings.Model != "" || stored.Settings.ReasoningEffort != "" {
-		t.Fatalf("restored provider defaults = %+v", stored.Settings)
+	if stored.Settings.Model != "default" || stored.Settings.ReasoningEffort != "" {
+		t.Fatalf("picked default durable settings = %+v", stored.Settings)
 	}
 	if !reflect.DeepEqual(second.calls, []string{"effort:high", "model:default"}) {
-		t.Fatalf("restored default provider calls = %v", second.calls)
+		t.Fatalf("picked default provider calls = %v", second.calls)
+	}
+	if _, err := svc.SetConfigOption(ctx, id, "effort", ports.ChatConfigOptionValue{Select: "low"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := svc.Stop(ctx, id); err != nil {
+		t.Fatal(err)
+	}
+	third := newConversation()
+	resumed = ports.ChatResumeConfig{}
+	svc = newService(third, &resumed)
+	if _, err := svc.Start(ctx, cfg); err != nil {
+		t.Fatal(err)
+	}
+	if resumed.Model != "default" || resumed.Effort != "low" {
+		t.Fatalf("resume after picked default: model=%q effort=%q", resumed.Model, resumed.Effort)
 	}
 }
 

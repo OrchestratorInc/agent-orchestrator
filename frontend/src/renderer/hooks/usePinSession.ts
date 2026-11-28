@@ -85,7 +85,7 @@ export function useUnpinSession() {
 		mutationFn: async (session: WorkspaceSession) => {
 			if (session.cloud) return setCloudPinned(queryClient, session, false);
 			// Pins are this sidebar's to remove even when the owning host is asleep,
-			// offline, or no longer linked: the row leaves Pinned now and the host
+			// offline, or no longer linked: the row loses its pin now and the host
 			// is told whenever it answers.
 			const hostId = remoteHostOf(session);
 			if (hostId) return unpinRemoteSession(queryClient, hostId, session.id, session.pinnedAt);

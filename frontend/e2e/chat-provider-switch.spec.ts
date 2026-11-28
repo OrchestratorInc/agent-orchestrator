@@ -155,14 +155,11 @@ const picker = (page: Page) => page.getByRole("button", { name: "Agent, model an
 /** Picks agent for the next message from the composer's picker. */
 async function pickAgent(page: Page, agent: string) {
 	await picker(page).click();
-	// By keyboard: the submenu slides in, so a pointer can land on it mid-move.
-	await page.getByRole("menuitem", { name: /^Agent/ }).focus();
-	await page.keyboard.press("ArrowRight");
-	const choice = page.getByRole("menuitemradio", { name: agent });
-	await choice.focus();
-	await page.keyboard.press("Enter");
+	const choice = page.getByRole("radiogroup", { name: "Agents" }).getByRole("radio", { name: agent, exact: true });
+	await choice.click();
+	await expect(choice).toHaveAttribute("aria-checked", "true");
 	await page.keyboard.press("Escape");
-	await page.keyboard.press("Escape");
+	await expect(page.getByRole("menu")).toHaveCount(0);
 }
 
 async function send(page: Page, text: string) {
@@ -229,9 +226,7 @@ test("composer pickers stay inside the composer beside an open browser @P0", asy
 	await expect(page.getByRole("menu")).toHaveAttribute("data-browser-native-overlay", "true");
 	await page.keyboard.press("Escape");
 	await model.click();
-	await page.getByRole("menuitem", { name: /^Agent/ }).focus();
-	await page.keyboard.press("ArrowRight");
-	const agent = page.getByRole("menuitemradio", { name: "Claude Code" });
+	const agent = page.getByRole("radiogroup", { name: "Agents" }).getByRole("radio", { name: "Claude Code", exact: true });
 	await expect(agent).toBeVisible();
 	await expect(agent.locator('xpath=ancestor::*[@role="menu"]')).toHaveAttribute("data-browser-native-overlay", "true");
 });

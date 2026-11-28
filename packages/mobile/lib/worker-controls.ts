@@ -1,11 +1,13 @@
 import { hostedProjectKey } from "./hostedRows";
 import type { MachineAppearance } from "./machineAppearance";
+import type { MachineFreshness } from "./machineFreshness";
 
 export const ALL_WORKER_PROJECTS = "all";
 export const ALL_WORKER_ENVIRONMENTS = "all";
 
 type WorkerProject = { id: string; name: string; hostId?: string; hostName?: string };
-export type WorkerEnvironment = { id: string; name: string; appearance?: MachineAppearance };
+/** `freshness` puts the machine's dot on its filter chip (see machineFreshness). */
+export type WorkerEnvironment = { id: string; name: string; appearance?: MachineAppearance; freshness?: MachineFreshness };
 
 export function spawnProjectParam(projectId: string, projects?: readonly WorkerProject[]): { projectId: string; hostId?: string } | undefined {
 	if (projectId === ALL_WORKER_PROJECTS) return undefined;
@@ -80,10 +82,15 @@ export function workerEnvironmentLabel(environments: readonly WorkerEnvironment[
 
 export function workerEnvironmentOptions(
 	environments: readonly WorkerEnvironment[],
-): { id: string; label: string; appearance?: MachineAppearance }[] {
+): { id: string; label: string; appearance?: MachineAppearance; freshness?: MachineFreshness }[] {
 	return [
 		{ id: ALL_WORKER_ENVIRONMENTS, label: "All machines" },
-		...environments.map((environment) => ({ id: environment.id, label: environment.name, ...(environment.appearance ? { appearance: environment.appearance } : {}) })),
+		...environments.map((environment) => ({
+			id: environment.id,
+			label: environment.name,
+			...(environment.appearance ? { appearance: environment.appearance } : {}),
+			...(environment.freshness ? { freshness: environment.freshness } : {}),
+		})),
 	];
 }
 

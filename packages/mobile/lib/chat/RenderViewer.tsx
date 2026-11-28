@@ -5,6 +5,7 @@ import type { Theme } from "../theme";
 import { useTheme, useThemedStyles } from "../ThemeProvider";
 import { space } from "../tokens";
 import { Button, EmptyState } from "../ui";
+import { useLastVerifiedConfig } from "../useLastVerifiedConfig";
 import { RenderDocument, SKELETON_DELAY_MS, useRenderPage } from "./RenderFrame";
 import { RenderSkeleton } from "./RenderSkeleton";
 
@@ -16,7 +17,10 @@ import { RenderSkeleton } from "./RenderSkeleton";
 export function RenderViewer({ path, title }: { path: string; title: string }) {
 	const t = useTheme();
 	const styles = useThemedStyles(makeStyles);
-	const { config } = useApp();
+	const { config: verified, machine } = useApp();
+	// The page stays up through an app switch instead of saying the machine
+	// isn't connected; its document keeps what it loaded with (RenderDocument).
+	const config = useLastVerifiedConfig(verified, machine);
 	const [failed, setFailed] = useState(false);
 	const page = useRenderPage();
 	if (!config || failed) {

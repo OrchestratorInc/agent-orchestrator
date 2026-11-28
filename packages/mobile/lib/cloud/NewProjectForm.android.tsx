@@ -1,5 +1,4 @@
 import {
-	Box,
 	CircularProgressIndicator,
 	Column,
 	DropdownMenu,
@@ -13,7 +12,7 @@ import {
 	TextField,
 	useNativeState,
 } from "@expo/ui/jetpack-compose";
-import { background, clip, fillMaxWidth, padding, Shapes, size, testID as testTag } from "@expo/ui/jetpack-compose/modifiers";
+import { fillMaxWidth, padding, size, testID as testTag } from "@expo/ui/jetpack-compose/modifiers";
 import { Stack } from "expo-router";
 import { useMemo, useRef, useState, type ComponentProps } from "react";
 import { ScrollView, StyleSheet, View } from "react-native";
@@ -22,9 +21,9 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { GroupedRow, GroupedSection } from "../composeGroupedList.android";
 import { SegmentedChoice } from "../files/SegmentedChoice";
 import { FormTextField } from "../formFields";
-import { chipColorFor } from "../harnessLogo";
 import { logoFor } from "../harnessLogoAssets";
 import { InlineBanner } from "../InlineBanner";
+import { PlacementPicker } from "../localProject/PlacementPicker";
 import type { Theme } from "../theme";
 import { useTheme, useThemedStyles, useThemeState } from "../ThemeProvider";
 import { Spinner } from "../Spinner";
@@ -85,7 +84,7 @@ export function NewProjectBar({ canCreate, busy, onCreate }: NewProjectBarProps)
  * The keyboard controller keeps the window from resizing for the IME, so the
  * page pads itself above the keyboard, as the manual connection form does.
  */
-export function NewProjectForm({ project, onConnectAgent }: NewProjectFormProps) {
+export function NewProjectForm({ project, onConnectAgent, placement }: NewProjectFormProps) {
 	const styles = useThemedStyles(makeStyles);
 	const { scheme } = useThemeState();
 	const insets = useSafeAreaInsets();
@@ -103,12 +102,14 @@ export function NewProjectForm({ project, onConnectAgent }: NewProjectFormProps)
 				contentContainerStyle={[styles.content, { paddingBottom: space.xxl + insets.bottom }]}
 				keyboardShouldPersistTaps="handled"
 			>
+				{placement ? <PlacementPicker placement={placement} /> : null}
 				{project.githubUnavailable ? null : (
 					<SegmentedChoice
 						value={project.source}
 						options={SOURCE_OPTIONS}
 						onChange={project.chooseSource}
 						accessibilityLabel="Project source"
+						style={placement ? styles.block : undefined}
 						testID="new-project-source"
 					/>
 				)}
@@ -330,17 +331,12 @@ function AgentRow({ title, agents, value, onChange, testID, position }: {
 	);
 }
 
-/** A harness's brand mark in its own colours, on a chip only where the mark needs one to show. */
+/** A harness's brand mark in its own colours, the variant drawn for the app's colour scheme. */
 function HarnessMark({ harness }: { harness: string }) {
-	const source = logoFor(harness);
+	const { scheme } = useThemeState();
+	const source = logoFor(harness, scheme);
 	if (!source) return <Icon source={materialDrawable("terminal")} size={iconSize.xl} />;
-	const chip = chipColorFor(harness);
-	if (!chip) return <Icon source={source} tint={null} size={iconSize.xl} />;
-	return (
-		<Box contentAlignment="center" modifiers={[size(iconSize.xl, iconSize.xl), clip(Shapes.RoundedCorner(radius.sm)), background(chip)]}>
-			<Icon source={source} tint={null} size={iconSize.md} />
-		</Box>
-	);
+	return <Icon source={source} tint={null} size={iconSize.xl} />;
 }
 
 /** A row's glyph: the secondary ink, or the accent for a row that does something. */

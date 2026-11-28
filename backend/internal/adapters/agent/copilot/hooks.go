@@ -20,7 +20,18 @@ const (
 	copilotHooksDir      = ".github/hooks"
 	copilotHooksFileName = "ao.json"
 
-	copilotAgentsDir = ".github/agents"
+	copilotAgentsDir          = ".github/agents"
+	copilotAgentExcludeHeader = "# agent-orchestrator Copilot session files"
+	// copilotAgentExcludePattern is one stable glob covering every per-session
+	// profile (copilotAgentName always yields "ao-<name>"), so .git/info/exclude
+	// stays a single line instead of growing by one entry per session.
+	// Trade-off: it also hides any user-authored, untracked
+	// .github/agents/ao-*.agent.md from `git status` and `git add .`. The "ao-"
+	// prefix is treated as reserved for AO; users who want their own profile
+	// tracked should pick a different name or `git add -f` it.
+	copilotAgentExcludePattern = "/.github/agents/ao-*.agent.md"
+	copilotAgentExcludePrefix  = "/.github/agents/ao-"
+	copilotAgentExcludeSuffix  = ".agent.md"
 
 	// copilotHooksVersion is the schema version of the hooks file (Copilot uses 1).
 	copilotHooksVersion = 1
@@ -184,7 +195,7 @@ func installCopilotAgent(workspacePath, sessionID, inlinePrompt, promptFile stri
 	if err := hookutil.AtomicWriteFile(agentPath, []byte(body), 0o600); err != nil {
 		return fmt.Errorf("write %s: %w", agentPath, err)
 	}
-	if err := ignoreCopilotPath(workspacePath, "/"+filepath.ToSlash(filepath.Join(copilotAgentsDir, agentName+".agent.md"))); err != nil {
+	if err := ignoreCopilotPath(workspacePath, copilotAgentExcludePattern); err != nil {
 		return fmt.Errorf("git exclude: %w", err)
 	}
 	return nil
@@ -214,21 +225,115 @@ func ignoreCopilotPath(workspacePath, pattern string) error {
 		return fmt.Errorf("read %s: %w", excludePath, err)
 	}
 	pattern = strings.TrimSpace(pattern)
-	if pattern == "" || strings.Contains(string(data), pattern) {
+	if pattern == "" {
+		return nil
+	}
+	body := normalizeCopilotExcludes(string(data), pattern)
+	if body == string(data) {
 		return nil
 	}
 	if err := os.MkdirAll(filepath.Dir(excludePath), 0o750); err != nil {
 		return fmt.Errorf("create %s: %w", filepath.Dir(excludePath), err)
 	}
-	body := strings.TrimRight(string(data), "\n")
-	if body != "" {
-		body += "\n"
-	}
-	body += "# agent-orchestrator Copilot session files\n" + pattern + "\n"
 	if err := hookutil.AtomicWriteFile(excludePath, []byte(body), 0o600); err != nil {
 		return fmt.Errorf("write %s: %w", excludePath, err)
 	}
 	return nil
+}
+
+// normalizeCopilotExcludes collapses AO's Copilot exclude entries (legacy
+// per-session pairs and duplicate glob copies) into one header+glob block.
+//
+// Git applies the last matching exclude rule, so the consolidated block takes
+// the position of the last AO entry: any file an AO entry ignored before stays
+// ignored, even when a user negation (e.g. "!/.github/agents/*.agent.md") sits
+// between AO entries.
+//
+// Lines are compared without their terminator so CRLF files match too; every
+// kept line, including a reused AO block, retains its original line ending so
+// an already-normalized file round-trips byte-for-byte.
+func normalizeCopilotExcludes(data, pattern string) string {
+	lines := strings.SplitAfter(data, "\n")
+	newline := "\n"
+	if strings.Contains(data, "\r\n") {
+		newline = "\r\n"
+	}
+
+	last := -1
+	for i := 0; i < len(lines); {
+		if n := copilotExcludeBlockLen(lines, i, pattern); n > 0 {
+			last = i
+			i += n
+			continue
+		}
+		i++
+	}
+	if last < 0 {
+		body := data
+		if body != "" && !strings.HasSuffix(body, "\n") {
+			body += newline
+		}
+		return body + copilotAgentExcludeHeader + newline + pattern + newline
+	}
+
+	kept := make([]string, 0, len(lines)+1)
+	for i := 0; i < len(lines); {
+		n := copilotExcludeBlockLen(lines, i, pattern)
+		if n == 0 {
+			kept = append(kept, lines[i])
+			i++
+			continue
+		}
+		if i == last {
+			if n == 2 {
+				_, eol := splitExcludeLine(lines[i+1])
+				kept = append(kept, lines[i], pattern+eol)
+			} else {
+				_, eol := splitExcludeLine(lines[i])
+				kept = append(kept, copilotAgentExcludeHeader+newline, pattern+eol)
+			}
+		}
+		i += n
+	}
+	return strings.Join(kept, "")
+}
+
+// copilotExcludeBlockLen reports how many lines starting at lines[i] form an AO
+// exclude entry: 2 for a header followed by the glob or a legacy per-session
+// path, 1 for a bare glob line, 0 otherwise.
+func copilotExcludeBlockLen(lines []string, i int, pattern string) int {
+	line, _ := splitExcludeLine(lines[i])
+	if line == copilotAgentExcludeHeader && i+1 < len(lines) {
+		next, _ := splitExcludeLine(lines[i+1])
+		if next == pattern || isLegacyCopilotAgentExclude(next) {
+			return 2
+		}
+	}
+	if line == pattern {
+		return 1
+	}
+	return 0
+}
+
+// splitExcludeLine separates a line produced by strings.SplitAfter(_, "\n")
+// into its content and its terminator ("\r\n", "\n", or "" at EOF).
+func splitExcludeLine(raw string) (line, eol string) {
+	if content, ok := strings.CutSuffix(raw, "\r\n"); ok {
+		return content, "\r\n"
+	}
+	if content, ok := strings.CutSuffix(raw, "\n"); ok {
+		return content, "\n"
+	}
+	return raw, ""
+}
+
+func isLegacyCopilotAgentExclude(line string) bool {
+	name, ok := strings.CutPrefix(line, copilotAgentExcludePrefix)
+	if !ok {
+		return false
+	}
+	name, ok = strings.CutSuffix(name, copilotAgentExcludeSuffix)
+	return ok && name != "" && !strings.ContainsAny(name, "/*")
 }
 
 func workspaceGitCommonDir(workspacePath string) (string, error) {

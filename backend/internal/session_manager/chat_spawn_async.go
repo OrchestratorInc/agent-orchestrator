@@ -27,6 +27,9 @@ type asyncChatSpawn struct {
 	preparation       *taskPreparation
 	releaseHarness    func()
 	retry             bool
+	// attribution is the trailer decision made before the first prompt,
+	// applied by the workspace setup in the background.
+	attribution spawnAttribution
 }
 
 type asyncChatSpawnRun struct {
@@ -58,7 +61,7 @@ func (m *Manager) beginAsyncChatSpawn(ctx context.Context, in asyncChatSpawn) (d
 	if !in.retry && len(in.cfg.Attachments) > 0 {
 		stageStarted := time.Now()
 		for i, attachment := range in.cfg.Attachments {
-			if err := m.attachments.PutCanonical(ctx, id, spawnAttachmentName(i, attachment), attachment.Data); err != nil {
+			if err := m.attachments.PutCanonicalSource(ctx, id, spawnAttachmentName(i, attachment), attachmentSource(attachment)); err != nil {
 				rollback()
 				return domain.SessionRecord{}, 0, 0, wrapSpawnStage(id, ErrSpawnAttachments, err)
 			}
@@ -213,12 +216,19 @@ func (m *Manager) completeAsyncChatSpawn(ctx context.Context, in asyncChatSpawn)
 	stageStarted = time.Now()
 	if !reusePublishedWorkspace || slices.Contains(plan, domain.SessionProvisionStepSetup) {
 		provisioned := BeginSpawnStep(ctx, SpawnStepSetup)
-		err := m.provisionWorkspace(ctx, in.project, ws.Path)
+		err := m.provisionSpawnWorkspace(ctx, in.project, id, ws.Path, in.attribution)
 		provisioned(err)
 		if err != nil {
 			m.cleanupAsyncChatWorkspace(ctx, id, ws, workspaceProject)
 			m.failAsyncChatSpawn(ctx, id, wrapSpawnStage(id, ErrWorkspaceProvision, err))
 			return
+		}
+	} else {
+		// A reused workspace skips Setup but still credits Orchestrator.
+		if in.attribution.decided {
+			m.configureAttribution(ctx, in.project, ws.Path, in.attribution.coAuthor)
+		} else {
+			m.applyCommitAttribution(ctx, in.project, id, ws.Path, attributionFromSettings)
 		}
 	}
 	if err := ctx.Err(); err != nil {
@@ -417,6 +427,10 @@ func (m *Manager) failAsyncChatSpawn(ctx context.Context, id domain.SessionID, c
 	var setupErr *SetupStepError
 	if errors.As(cause, &setupErr) {
 		message = setupErr.Error()
+	} else if guidance, _, _, ok := ProjectNotARepoGuidance(cause); ok {
+		// A project folder that lost its .git: show how to recover, not
+		// git's raw exit 128 (#8905).
+		message = guidance
 	}
 	if _, err := m.setProvisionStateCause(cleanupCtx, id, domain.SessionProvisionFailed, message, cause); err != nil {
 		m.logger.Error("spawn: record failed start", "sessionID", id, "error", err)
@@ -492,6 +506,9 @@ func (m *Manager) retryFailedChatSpawn(ctx context.Context, rec domain.SessionRe
 	if err != nil {
 		return RestoreResult{}, false, err
 	}
+	// A retry decides attribution again, before its prompt is written, and
+	// carries the decision to its workspace setup.
+	attribution := spawnAttribution{coAuthor: m.recordSpawnAttributionFor(ctx, project, rec.ID), decided: true}
 	systemPrompt, err := m.buildSystemPrompt(ctx, rec.Kind, rec.ProjectID, rec.ID, rec.RequestedOutput, true)
 	if err != nil {
 		return RestoreResult{}, false, err
@@ -508,6 +525,15 @@ func (m *Manager) retryFailedChatSpawn(ctx context.Context, rec domain.SessionRe
 		ProjectID: rec.ProjectID, IssueID: rec.IssueID, Kind: rec.Kind,
 		Harness: rec.Harness, RequestedMode: domain.SessionModeChat,
 		AgentConfig: config, AgentConfigResolved: true, Async: true,
+	}
+	if m.forkRetry != nil && m.isSessionFork(ctx, rec.ID) {
+		// A fork that failed to start is copied again from its original;
+		// a plain restart would leave an empty chat in a blank worktree.
+		fork, err := m.forkRetry(ctx, rec)
+		if err != nil {
+			return RestoreResult{}, false, fmt.Errorf("retry fork %s: %w", rec.ID, err)
+		}
+		cfg.Fork = fork
 	}
 	if rec.Harness == domain.HarnessCodex {
 		// ChatUI can change the saved model independently of effort, and provider
@@ -533,6 +559,7 @@ func (m *Manager) retryFailedChatSpawn(ctx context.Context, rec domain.SessionRe
 		cfg: cfg, project: project, projectKind: projectKind,
 		record: rec, branch: branch, systemPrompt: systemPrompt, systemPromptFile: systemPromptFile,
 		retry: true, releaseHarness: releaseHarness,
+		attribution: attribution,
 	})
 	if err != nil {
 		return RestoreResult{}, false, err

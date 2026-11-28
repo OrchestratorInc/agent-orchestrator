@@ -49,6 +49,9 @@ func New() *Plugin {
 // launch. See ports.SubmitActivitySignaler.
 func (p *Plugin) EmitsSubmitActivity() bool { return true }
 
+// InterruptKey uses Ctrl+C to cancel work without closing Codex.
+func (*Plugin) InterruptKey() string { return "\x03" }
+
 // EmitsSemanticMessageAcceptance reports that the Codex prompt hook includes
 // the accepted prompt, allowing AO delivery ids to be correlated semantically.
 func (p *Plugin) EmitsSemanticMessageAcceptance() bool { return true }
@@ -130,6 +133,9 @@ func (p *Plugin) GetLaunchCommand(ctx context.Context, cfg ports.LaunchConfig) (
 	appendTerminalCompatibilityFlags(&providerArgs)
 	appendReasoningEffortFlag(&providerArgs, cfg.Config.Effort)
 	appendFastTierFlag(&providerArgs, cfg.Config.Launch)
+	if err := appendEndpointFlags(&providerArgs, cfg.Env, cfg.DataDir); err != nil {
+		return nil, err
+	}
 	return agentruntime.BuildLaunchCommand(agentruntime.LaunchConfig{
 		Harness:          agentruntime.HarnessCodex,
 		Binary:           binary,
@@ -170,6 +176,9 @@ func (p *Plugin) GetRestoreCommand(ctx context.Context, cfg ports.RestoreConfig)
 	appendTerminalCompatibilityFlags(&providerArgs)
 	appendReasoningEffortFlag(&providerArgs, cfg.Config.Effort)
 	appendFastTierFlag(&providerArgs, cfg.Config.Launch)
+	if err := appendEndpointFlags(&providerArgs, cfg.Env, cfg.DataDir); err != nil {
+		return nil, false, err
+	}
 	return agentruntime.BuildRestoreCommand(agentruntime.RestoreConfig{
 		Harness:          agentruntime.HarnessCodex,
 		Binary:           binary,
@@ -336,7 +345,8 @@ func (p *Plugin) AuthStatus(ctx context.Context) (ports.AgentAuthStatus, error) 
 
 	started := time.Now()
 	cmd := aoprocess.CommandContext(probeCtx, binary, "login", "status")
-	cmd.Env = agentlaunch.ProcessEnvForLaunchBinary(probeCtx, binary)
+	// The probe sees what Codex sessions see, without a key AO holds back.
+	cmd.Env = authprobe.Environ(ctx, agentlaunch.ProcessEnvForLaunchBinary(probeCtx, binary))
 	out, err := cmd.CombinedOutput()
 	status, recognized := codexAuthStatusFromOutput(out)
 	if !recognized {

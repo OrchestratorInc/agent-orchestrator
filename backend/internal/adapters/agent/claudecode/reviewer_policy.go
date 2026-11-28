@@ -3,6 +3,8 @@ package claudecode
 import (
 	"regexp"
 	"strings"
+
+	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
 // ReviewerAllowedTools is the read-only tool allowlist an AO code reviewer runs
@@ -68,27 +70,34 @@ var ReviewerDisallowedTools = []string{
 // anything, and models pick either one for apostrophes in review text.
 const reviewerSubmitJSONLiteral = `'[^']*(?:(?:'\\''|'"'"')[^']*)*'`
 
-// reviewerSubmitCommandPattern matches the exact command shapes the review
-// prompt dictates: a single-quoted JSON literal fed through `printf '%s'` into
-// either the GitHub review POST or `ao review submit`. Claude Code ≥ 2.1.257
-// prompts on any Bash command its analyzer cannot verify statically, and allow
-// rules never match such commands, so the headless reviewer would hang. The
-// shape is safe to auto-allow: `printf '%s'` performs no format interpretation
-// and a single-quoted operand cannot expand or run anything.
-var reviewerSubmitCommandPattern = regexp.MustCompile(`^printf '%s' ` + reviewerSubmitJSONLiteral + ` \| (?:` +
-	`gh api --method POST repos/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+/pulls/[0-9]+/reviews --input - --jq '\.id'` +
-	`|ao review submit --session (?P<session>[A-Za-z0-9_-]+(?:\.[A-Za-z0-9_-]+)*) --reviews -)$`)
+// Both transports accept only the same two downstream commands.
+const reviewerSubmitCommand = `(?:` + ports.ReviewPostCommandPattern +
+	`|ao review submit --session (?P<session>[A-Za-z0-9_-]+(?:\.[A-Za-z0-9_-]+)*) ` + ports.ReviewRunArgsPattern + `)`
 
-// ReviewerSubmitCommandAllowed reports whether a reviewer's Bash command is one
-// of the exact submit shapes the review prompt dictates. The `ao review submit`
-// shape must name workerSessionID (dotted like the project id it inherits); an
-// empty workerSessionID means a broken
-// launch (the launcher always sets it), so nothing is admitted.
+var reviewerSubmitPipe = regexp.MustCompile(`^printf '%s' ` + reviewerSubmitJSONLiteral + ` \| ` + reviewerSubmitCommand + `$`)
+var reviewerSubmitHeredoc = regexp.MustCompile(`^` + reviewerSubmitCommand + ` <<'` + ports.ReviewSubmitHeredocDelimiter + `'\n(?P<body>(?s:.*\n)?)` + ports.ReviewSubmitHeredocDelimiter + `\n?$`)
+
+// ReviewerSubmitCommandAllowed validates the whole shell command for both a
+// reviewer pane and Chat. A missing worker id indicates a broken launch.
 func ReviewerSubmitCommandAllowed(command, workerSessionID string) bool {
-	m := reviewerSubmitCommandPattern.FindStringSubmatch(strings.TrimSpace(command))
-	if m == nil || workerSessionID == "" {
+	if workerSessionID == "" {
 		return false
 	}
-	session := m[reviewerSubmitCommandPattern.SubexpIndex("session")]
+	command = strings.TrimSpace(command)
+	if m := reviewerSubmitPipe.FindStringSubmatch(command); m != nil {
+		session := m[reviewerSubmitPipe.SubexpIndex("session")]
+		return session == "" || session == workerSessionID
+	}
+	m := reviewerSubmitHeredoc.FindStringSubmatch(command)
+	if m == nil {
+		return false
+	}
+	// An interior terminator would end the body before the validated end.
+	for _, line := range strings.Split(m[reviewerSubmitHeredoc.SubexpIndex("body")], "\n") {
+		if line == ports.ReviewSubmitHeredocDelimiter {
+			return false
+		}
+	}
+	session := m[reviewerSubmitHeredoc.SubexpIndex("session")]
 	return session == "" || session == workerSessionID
 }

@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
+	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 	"github.com/aoagents/agent-orchestrator/backend/internal/sessionguard"
 )
 
@@ -37,6 +38,10 @@ var _ sessionguard.InputLease = (*Manager)(nil)
 func (m *Manager) AcquireSessionInput(id domain.SessionID) (release func(), ok bool) {
 	id = domain.SessionID(strings.TrimSpace(string(id)))
 	m.agentOpMu.Lock()
+	if m.serializedInput[id] && m.inputLeases[id] != 0 {
+		m.agentOpMu.Unlock()
+		return nil, false
+	}
 	if m.agentOperationActiveLocked(id) {
 		m.agentOpMu.Unlock()
 		return nil, false
@@ -55,6 +60,53 @@ func (m *Manager) AcquireSessionInput(id domain.SessionID) (release func(), ok b
 	return func() {
 		once.Do(func() { m.releaseSessionInput(id) })
 	}, true
+}
+
+// No durable reads belong in lease acquisition. Prepare sets this before
+// launch; the first guarded paste also sets it after detached-host adoption.
+// That paste fails closed if another already-admitted writer is still active.
+func (m *Manager) enableSerializedInput(id domain.SessionID) bool {
+	m.agentOpMu.Lock()
+	defer m.agentOpMu.Unlock()
+	if m.serializedInput == nil {
+		m.serializedInput = make(map[domain.SessionID]bool)
+	}
+	m.serializedInput[id] = true
+	return m.inputLeases[id] <= 1
+}
+
+func (m *Manager) forgetSerializedInput(id domain.SessionID) {
+	m.agentOpMu.Lock()
+	defer m.agentOpMu.Unlock()
+	delete(m.serializedInput, id)
+}
+
+// ValidateSessionMessageInput runs while the shared input lease excludes native
+// keystrokes and runtime replacement for an opted-in harness.
+func (m *Manager) ValidateSessionMessageInput(ctx context.Context, rec domain.SessionRecord, message string) error {
+	if m.agents == nil || domain.NormalizeSessionMode(rec.Mode) != domain.SessionModeTUI {
+		return nil
+	}
+	agent, found := m.agents.Agent(rec.Harness)
+	if !found {
+		return nil
+	}
+	guard, guarded := agent.(ports.TerminalMessageInputGuard)
+	if !guarded {
+		return nil
+	}
+	if !m.enableSerializedInput(rec.ID) {
+		return ports.ErrTerminalMessageNotReady
+	}
+	reader, available := m.runtime.(ports.StyledTerminalOutputReader)
+	if !available {
+		return errors.New("current rendered terminal is unavailable")
+	}
+	output, err := reader.GetStyledOutput(ctx, ports.RuntimeHandle{ID: rec.Metadata.RuntimeHandleID}, 32)
+	if err != nil {
+		return err
+	}
+	return guard.ValidateTerminalMessage(output, message)
 }
 
 func (m *Manager) releaseSessionInput(id domain.SessionID) {
@@ -104,24 +156,55 @@ func (m *Manager) agentOperationActiveLocked(id domain.SessionID) bool {
 // no interval in which it can pass a boolean check and write into the new
 // provider generation.
 func (m *Manager) beginAgentOperation(ctx context.Context, id domain.SessionID, kind agentOperationKind) error {
-	if err := ctx.Err(); err != nil {
-		return err
-	}
+	return m.admitAgentOperation(ctx, id, kind, false)
+}
+
+// beginKillOperation is Kill's admission. Unlike the workspace-cleanup and
+// delete paths that share agentOperationKill, it also waits, bounded, for an
+// in-flight resume. That resume is usually a wake started by the user opening
+// the session they are now archiving.
+func (m *Manager) beginKillOperation(ctx context.Context, id domain.SessionID) error {
+	return m.admitAgentOperation(ctx, id, agentOperationKill, true)
+}
+
+func (m *Manager) admitAgentOperation(ctx context.Context, id domain.SessionID, kind agentOperationKind, waitForResume bool) error {
 	var drained <-chan struct{}
+	var resumeDeadline time.Time
 	for {
 		m.agentOpMu.Lock()
+		// Rechecked on every pass: a wait below can outlast the caller's
+		// deadline, and a slot freed at that moment must not be claimed late.
+		if err := ctx.Err(); err != nil {
+			m.agentOpMu.Unlock()
+			return err
+		}
 		if m.agentOperationActiveLocked(id) {
 			current := m.agentOperations[id]
 			m.agentOpMu.Unlock()
-			if current != agentOperationHibernate || kind == agentOperationHibernate {
+			switch {
+			case current == agentOperationHibernate && kind != agentOperationHibernate:
+				// Background cleanup yields to every explicit operation once its
+				// bounded shutdown completes; it must not make Kill/Switch fail.
+			case current == agentOperationResume && waitForResume:
+				// Opening a hibernated Chat session wakes it, and the wake holds
+				// a resume for as long as the provider takes to reload the
+				// conversation. An archive clicked meanwhile must not fail for
+				// work the user did not start: wait for the wake, bounded so a
+				// wedged resume still leaves Kill most of its teardown budget.
+				if resumeDeadline.IsZero() {
+					resumeDeadline = time.Now().Add(m.killResumeWaitLimit())
+				} else if time.Now().After(resumeDeadline) {
+					m.agentWaitLogger().Warn("kill gave up waiting for a resume to finish",
+						"sessionID", id, "waited", m.killResumeWaitLimit())
+					return errAgentOperationInProgress
+				}
+			default:
 				return errAgentOperationInProgress
 			}
-			// Background cleanup yields to every explicit operation once its
-			// bounded shutdown completes; it must not make Kill/Switch fail.
 			select {
 			case <-ctx.Done():
-				m.agentWaitLogger().Warn("agent operation gave up waiting for hibernation to finish",
-					"sessionID", id, "operation", kind, "error", ctx.Err())
+				m.agentWaitLogger().Warn("agent operation gave up waiting for another operation to finish",
+					"sessionID", id, "operation", kind, "holder", current, "error", ctx.Err())
 				return ctx.Err()
 			case <-time.After(20 * time.Millisecond):
 				continue
@@ -156,6 +239,19 @@ func (m *Manager) beginAgentOperation(ctx context.Context, id domain.SessionID, 
 			"inputLeases", leases, "oldestLeaseHeldFor", heldFor, "error", ctx.Err())
 		return ctx.Err()
 	}
+}
+
+// killResumeWaitBudget bounds how long Kill waits for an in-flight resume (a wake)
+// before reporting the session busy. A Chat wake normally finishes in seconds;
+// 30s leaves Kill 60s of its 90s teardown budget and keeps the archive request
+// inside the REST layer's 60s timeout.
+const killResumeWaitBudget = 30 * time.Second
+
+func (m *Manager) killResumeWaitLimit() time.Duration {
+	if m.killResumeWait > 0 {
+		return m.killResumeWait
+	}
+	return killResumeWaitBudget
 }
 
 // Some tests build a Manager without New, so the logger may be unset.

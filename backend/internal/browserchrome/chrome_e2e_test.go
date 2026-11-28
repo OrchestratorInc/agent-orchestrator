@@ -29,9 +29,6 @@ import (
 //
 // Chrome must run with the extension loaded, --use-mock-keychain (or macOS asks
 // for the login password on every launch and pages stall until it is answered)
-// --disable-features=MacWebContentsOcclusion,CalculateNativeWinOcclusion and
-// --disable-backgrounding-occluded-windows (or a covered test window reads as
-// hidden and trusted input and screenshots fail with BROWSER_TAB_HIDDEN),
 // and --remote-debugging-port, used here only to click the consent prompt the
 // way a person would, and to act as the user on tabs and windows. Stop the
 // daemon first: this test serves the Chrome runtime socket itself.
@@ -249,14 +246,18 @@ func TestChromeE2E(t *testing.T) {
 		return int(value["windowId"].(float64))
 	}
 
-	// The agent works in its own window, not the one the user had open.
-	agentWindow := windowOf("AO · " + session)
-	if first := extension(`chrome.windows.getAll().then((all) => ({ count: all.length }))`); first["count"].(float64) < 2 {
-		t.Fatalf("agent shares the user's window: %v", first)
+	// The agent works in a tab group in the user's window, behind the tab the
+	// user has in front, without opening a window of its own.
+	agentWindow := windowOf("Orchestrator · " + session)
+	if windows := extension(fmt.Sprintf(`chrome.windows.getAll({ windowTypes: ["normal"] }).then((all) => ({ count: all.length, ours: all.some((w) => w.id === %d) }))`, agentWindow)); windows["count"].(float64) != 1 || windows["ours"] != true {
+		t.Fatalf("normal windows = %v, want only the user's window", windows)
+	}
+	if front := extension(fmt.Sprintf(`chrome.tabs.query({ windowId: %d, active: true }).then(([tab]) => ({ grouped: tab.groupId !== -1 }))`, agentWindow)); front["grouped"] == true {
+		t.Fatal("the agent's tab took the front of the user's window")
 	}
 
 	// The user switches to their own tab in the agent's window: it stays in
-	// front, input still reaches the page, and screenshots refuse to switch.
+	// front, while input and screenshots still reach the agent's tab.
 	run("open", map[string]interface{}{"url": site.URL + "/"})
 	personal := int(extension(fmt.Sprintf(`chrome.tabs.create({ windowId: %d, active: true, url: %q }).then((tab) => ({ id: tab.id }))`, agentWindow, site.URL+"/next"))["id"].(float64))
 	isFront := func(tabID int) bool {
@@ -265,23 +266,60 @@ func TestChromeE2E(t *testing.T) {
 	}
 	run("act", map[string]interface{}{"instruction": "save button"})
 	run("wait", map[string]interface{}{"text": "Saved", "timeoutMs": 5000})
-	expectError("screenshot", nil, "BROWSER_TAB_BUSY")
+	if tier := inputTier(run("act", map[string]interface{}{"instruction": "save button"})); tier != "trusted" {
+		t.Fatalf("input tier behind the user's tab = %v", tier)
+	}
+	if shot := run("screenshot", nil); shot["data"] == "" || shot["data"] == nil {
+		t.Fatal("no screenshot of the agent's tab behind the user's tab")
+	}
 	if !isFront(personal) {
 		t.Fatal("the agent switched away from the user's tab")
 	}
-
-	// Back on the agent's tab, trusted input resumes.
 	extension(fmt.Sprintf(`chrome.tabs.remove(%d).then(() => ({}))`, personal))
-	if shot := run("screenshot", nil); shot == nil {
-		t.Fatal("no screenshot after the user left")
-	}
 
-	// A minimized agent window comes back for trusted input.
+	// A minimized (hidden) agent window still takes trusted input and is
+	// never restored. Chrome stops drawing minimized windows, so a screenshot
+	// either returns or says so promptly; it never hangs or steals focus.
+	run("open", map[string]interface{}{"url": site.URL + "/"})
 	extension(fmt.Sprintf(`chrome.windows.update(%d, { state: "minimized" }).then(() => ({}))`, agentWindow))
-	run("act", map[string]interface{}{"instruction": "save button"})
-	if state := extension(fmt.Sprintf(`chrome.windows.get(%d).then((w) => ({ state: w.state }))`, agentWindow)); state["state"] != "normal" {
-		t.Fatalf("agent window state = %v", state["state"])
+	minimized := func() bool {
+		t.Helper()
+		return extension(fmt.Sprintf(`chrome.windows.get(%d).then((w) => ({ state: w.state }))`, agentWindow))["state"] == "minimized"
 	}
+	// macOS animates the minimize; wait for the page to see it.
+	hidden := extension(fmt.Sprintf(`(async () => {
+		const [g] = await chrome.tabGroups.query({ title: %q });
+		const [tab] = await chrome.tabs.query({ groupId: g.id });
+		let visibility = "";
+		for (let i = 0; i < 60 && visibility !== "hidden"; i++) {
+			const [frame] = await chrome.scripting.executeScript({ target: { tabId: tab.id }, func: () => document.visibilityState });
+			visibility = frame.result;
+			if (visibility !== "hidden") await new Promise((r) => setTimeout(r, 50));
+		}
+		return { visibility };
+	})()`, "Orchestrator · "+session))
+	if hidden["visibility"] != "hidden" {
+		t.Fatalf("minimized agent page visibility = %v, want hidden", hidden["visibility"])
+	}
+	run("act", map[string]interface{}{"instruction": "email", "action": "fill", "value": "hidden@example.com"})
+	if tier := inputTier(run("act", map[string]interface{}{"instruction": "save button"})); tier != "trusted" {
+		t.Fatalf("input tier in a minimized window = %v", tier)
+	}
+	run("wait", map[string]interface{}{"text": "Saved hidden@example.com", "timeoutMs": 5000})
+	started := time.Now()
+	if _, err := broker.Execute(ctx, session, "screenshot", nil); err != nil {
+		var commandErr browserruntime.CommandError
+		if !errorAs(err, &commandErr) || commandErr.Code != "SCREENSHOT_UNAVAILABLE" {
+			t.Fatalf("minimized screenshot error = %v, want a frame or SCREENSHOT_UNAVAILABLE", err)
+		}
+	}
+	if elapsed := time.Since(started); elapsed > 10*time.Second {
+		t.Fatalf("minimized screenshot took %v", elapsed)
+	}
+	if !minimized() {
+		t.Fatal("the agent restored its minimized window")
+	}
+	extension(fmt.Sprintf(`chrome.windows.update(%d, { state: "normal" }).then(() => ({}))`, agentWindow))
 
 	// A second session gets its own window and doesn't disturb the first.
 	const second = "e2e-second"
@@ -293,16 +331,15 @@ func TestChromeE2E(t *testing.T) {
 	if err := <-secondConsent; err != nil {
 		t.Fatalf("second consent: %v", err)
 	}
-	if windowOf("AO · "+second) == agentWindow {
-		t.Fatal("sessions share a window")
+	if windowOf("Orchestrator · "+second) != agentWindow {
+		t.Fatal("the second session opened a window instead of joining the user's")
 	}
-	secondWindow := windowOf("AO · " + second)
 	if err := broker.DestroySession(ctx, second); err != nil {
 		t.Fatalf("destroy second: %v", err)
 	}
 	time.Sleep(300 * time.Millisecond)
-	if left := extension(fmt.Sprintf(`chrome.windows.getAll().then((all) => ({ open: all.some((w) => w.id === %d) }))`, secondWindow)); left["open"] == true {
-		t.Fatal("a finished session left its window open")
+	if left := extension(fmt.Sprintf(`Promise.all([chrome.windows.getAll(), chrome.tabGroups.query({ title: %q })]).then(([all, groups]) => ({ open: all.some((w) => w.id === %d), groups: groups.length }))`, "Orchestrator · "+second, agentWindow)); left["open"] != true || left["groups"].(float64) != 0 {
+		t.Fatalf("after the second session ended: %v, want the user's window open and its group gone", left)
 	}
 
 	// Allowing every session: the next new session runs without asking.
@@ -327,15 +364,19 @@ func TestChromeE2E(t *testing.T) {
 		t.Fatalf("destroy fourth: %v", err)
 	}
 
-	// The user closes the agent's window: the next command starts over cleanly.
+	// The user, with another window open, closes the one holding the agent's
+	// group: the next command starts over cleanly in the window they use now.
+	// (Closing a profile's last window on macOS shuts the profile down.)
+	other := int(extension(`chrome.windows.create({ focused: true, url: "about:blank" }).then((w) => ({ id: w.id }))`)["id"].(float64))
+	time.Sleep(500 * time.Millisecond)
 	extension(fmt.Sprintf(`chrome.windows.remove(%d).then(() => ({}))`, agentWindow))
 	time.Sleep(500 * time.Millisecond)
 	reopened := run("open", map[string]interface{}{"url": site.URL + "/next"})
 	if reopened["isLoading"] == nil {
 		t.Fatalf("open after closing the window = %#v", reopened)
 	}
-	if windowOf("AO · "+session) == agentWindow {
-		t.Fatal("the session reused a closed window")
+	if got := windowOf("Orchestrator · " + session); got != other {
+		t.Fatalf("session window after the user closed theirs = %d, want the user's other window %d", got, other)
 	}
 
 	if err := broker.DestroySession(ctx, session); err != nil {
@@ -406,6 +447,12 @@ func evalInExtension(ctx context.Context, cdp, expression string) (map[string]in
 	return nil, errors.New("the extension's service worker is not running")
 }
 
+// inputTier reads which input tier an act result's dispatch used.
+func inputTier(act map[string]interface{}) interface{} {
+	result, _ := act["result"].(map[string]interface{})
+	return result["inputTier"]
+}
+
 func errorAs(err error, target *browserruntime.CommandError) bool {
 	return errors.As(err, target)
 }
@@ -417,6 +464,14 @@ func clickConsent(ctx context.Context, cdp string) error {
 }
 
 func clickConsentExpression(ctx context.Context, cdp, expression string) error {
+	// Run the clicks only once consent.js has attached its listeners: the
+	// target appears before the page's script runs.
+	expression = `new Promise((resolve) => {
+		const go = () => {
+			if (document.getElementById('allow') && document.readyState === 'complete') { ` + expression + `; resolve(true); } else setTimeout(go, 50);
+		};
+		go();
+	})`
 	deadline := time.Now().Add(30 * time.Second)
 	for time.Now().Before(deadline) {
 		resp, err := http.Get(cdp + "/json/list")
@@ -436,7 +491,7 @@ func clickConsentExpression(ctx context.Context, cdp, expression string) error {
 					payload, _ := json.Marshal(map[string]interface{}{
 						"id":     1,
 						"method": "Runtime.evaluate",
-						"params": map[string]interface{}{"expression": expression, "userGesture": true},
+						"params": map[string]interface{}{"expression": expression, "userGesture": true, "awaitPromise": true},
 					})
 					err = conn.Write(ctx, websocket.MessageText, payload)
 					_, _, _ = conn.Read(ctx)

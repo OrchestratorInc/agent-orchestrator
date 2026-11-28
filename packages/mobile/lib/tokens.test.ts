@@ -57,7 +57,7 @@ describe("font scale caps", () => {
 });
 
 describe("type scale", () => {
-	// The ramp is T3 Code's compact scale, each step named for the Dynamic Type
+	// The ramp is a compact scale, each step named for the Dynamic Type
 	// style it grows with, rather than a vocabulary of per-screen sizes, so the
 	// fence is its shape: sizes never decrease as the
 	// roles get larger, and the anchors below are the steps the app reads at.
@@ -80,7 +80,7 @@ describe("type scale", () => {
 		expect(sizes).toEqual([...sizes].sort((a, b) => a - b));
 	});
 
-	it("spans T3 Code's scale at its ends", () => {
+	it("keeps the scale's ends", () => {
 		expect(type.caption2.fontSize).toBe(11);
 		expect(type.largeTitle.fontSize).toBe(30);
 	});

@@ -173,3 +173,27 @@ describe("the account's machine directory", () => {
 		expect(fetchImpl).not.toHaveBeenCalled();
 	});
 });
+
+// Settings › General reads and changes the user's own retention period
+// through the text channel; no main-process route of its own is needed.
+describe("the user's data retention", () => {
+	it("reads and changes the period with the main process's token, never the renderer's", async () => {
+		const retention = { retentionDays: 180, defaultDays: 180, options: [30, 60, 90, 180, 365], updatedAt: null };
+		const fetchImpl = vi.fn(async (_url: RequestInfo | URL, init?: RequestInit) => {
+			expect(new Headers(init?.headers).get("authorization")).toBe("Bearer token-1");
+			const body = init?.method === "PUT" ? { ...retention, sessionsToDelete: 2 } : retention;
+			return new Response(JSON.stringify(body), { status: 200, headers: { "content-type": "application/json" } });
+		});
+		const proxy = createCloudCpProxy(() => "/data", { controlPlaneUrl, fetchImpl: fetchImpl as typeof fetch });
+		const target = { baseUrl: "https://cp.example.com", path: "/api/cloud/v1/me/data-retention", headers: { Authorization: "Bearer forged" } };
+
+		const read = await proxy.request({ ...target, method: "GET" });
+		expect(JSON.parse(read.body)).toEqual(retention);
+		const dryRun = await proxy.request({ ...target, method: "PUT", body: JSON.stringify({ retentionDays: 30, dryRun: true }) });
+		expect(JSON.parse(dryRun.body)).toMatchObject({ sessionsToDelete: 2 });
+
+		expect(fetchImpl).toHaveBeenCalledTimes(2);
+		expect(fetchImpl.mock.calls[1][0]).toBe("https://cp.example.com/api/cloud/v1/me/data-retention");
+		expect(fetchImpl.mock.calls[1][1]).toMatchObject({ method: "PUT", body: JSON.stringify({ retentionDays: 30, dryRun: true }) });
+	});
+});

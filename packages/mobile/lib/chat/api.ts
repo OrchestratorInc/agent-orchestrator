@@ -22,6 +22,7 @@ import type {
 	DecisionOption,
 	TurnSettings,
 } from "./types";
+import type { TurnArtifactChange } from "../../../shared/artifacts/turn-artifacts";
 import { parseSseFrame, readSseFrameSeq, takeSseFrames, type ConversationEvent } from "./sse";
 import { mergeConversationPages, type ConversationPage } from "./snapshot";
 
@@ -40,6 +41,9 @@ export type SessionInterfaceTransition = {
 	sourceMode: "chat" | "tui";
 	targetMode: "chat" | "tui";
 	policy: "drain" | "interrupt";
+	/** Set when the transition moves the session to another subscription account. */
+	sourceAccountId?: string;
+	targetAccountId?: string;
 	phase:
 		| "requested"
 		| "preflighting"
@@ -113,8 +117,12 @@ export async function acknowledgeSessionInterfaceTransitionNotice(
 	return body.transition;
 }
 
-type WireSnapshot = Omit<ConversationSnapshot, "items" | "controller"> & {
+/** The daemon sends a turn's artifacts wrapped as `{ files }`. */
+type WireTurn = Omit<ConversationTurn, "artifacts"> & { artifacts?: { files?: TurnArtifactChange[] } };
+
+type WireSnapshot = Omit<ConversationSnapshot, "items" | "controller" | "turns"> & {
 	controller: ControllerState;
+	turns?: WireTurn[];
 	messages?: ConversationMessage[];
 	activities?: Array<Omit<ConversationActivity, "detail" | "decisions"> & { detail?: Record<string, unknown> }>;
 };
@@ -177,6 +185,40 @@ export async function sendConversationMessage(
 	return (await res.json()) as SendMessageResult;
 }
 
+/** Which agent the next message switches to, and on which model. */
+export type ProviderSwitchInput = { targetHarness: string; model?: string };
+
+/**
+ * Switch the chat's agent and send the message to the new one, in one request
+ * (desktop's send with a pending switch). The send's own id is the switch's
+ * idempotency key, so a retried send cannot switch twice.
+ */
+export async function switchProviderAndSend(
+	cfg: ServerConfig,
+	sessionId: string,
+	providerSwitch: ProviderSwitchInput,
+	message: SendMessageInput,
+): Promise<SendMessageResult> {
+	if (message.excerpts?.length) await requireConversationExcerptSupport(cfg, sessionId);
+	const res = await apiRequest(cfg, `${API}/sessions/${encodeURIComponent(sessionId)}/provider-switch`, {
+		method: "POST",
+		headers: message.attachments?.length ? { "X-AO-Attachment-Upload": "1" } : undefined,
+		body: JSON.stringify({
+			targetHarness: providerSwitch.targetHarness,
+			...(providerSwitch.model ? { model: providerSwitch.model } : {}),
+			idempotencyKey: message.clientMessageId,
+			message,
+		}),
+	}, message.attachments?.length ? ATTACHMENT_REQUEST_TIMEOUT_MS : undefined);
+	const data = (await res.json()) as { message?: SendMessageResult };
+	return data.message ?? { duplicate: true };
+}
+
+/** Starts the agent's first-run chat check early, so a switch's send does not wait on it. */
+export async function prewarmChatAgent(cfg: ServerConfig, agent: string): Promise<void> {
+	await apiRequest(cfg, `${API}/agents/${encodeURIComponent(agent)}/chat/prewarm`, { method: "POST" });
+}
+
 export async function sendReviewerConversationMessage(
 	cfg: ServerConfig,
 	reviewId: string,
@@ -221,6 +263,19 @@ export async function cancelQueuedConversationTurn(cfg: ServerConfig, sessionId:
 
 export async function promoteQueuedConversationTurn(cfg: ServerConfig, sessionId: string, turnId: string): Promise<void> {
 	await apiRequest(cfg, conversationPath(sessionId, `/turns/${encodeURIComponent(turnId)}/steer`), { method: "POST" });
+}
+
+/** Sends a failed turn's prompt again, as a new turn. */
+export async function retryConversationTurn(cfg: ServerConfig, sessionId: string, turnId: string): Promise<void> {
+	await apiRequest(cfg, conversationPath(sessionId, `/turns/${encodeURIComponent(turnId)}/retry`), { method: "POST" });
+}
+
+/** Asks the daemon to send a usage-limited prompt again at the reset, or stops it. */
+export async function setConversationTurnAutoResume(cfg: ServerConfig, sessionId: string, turnId: string, enabled: boolean): Promise<void> {
+	await apiRequest(cfg, conversationPath(sessionId, `/turns/${encodeURIComponent(turnId)}/auto-resume`), {
+		method: "PATCH",
+		body: JSON.stringify({ enabled }),
+	});
 }
 
 export async function compactConversation(cfg: ServerConfig, sessionId: string): Promise<void> {
@@ -354,6 +409,20 @@ export async function stageConversationAttachments(
 	}, ATTACHMENT_REQUEST_TIMEOUT_MS);
 	const body = (await res.json()) as { paths?: string[] };
 	return body.paths ?? [];
+}
+
+/** Where the daemon places a path: in the worktree, among the session's artifacts, or outside both. */
+export type WorkspacePathResolution = { kind: "workspace" | "artifact" | "outside"; path?: string };
+
+/**
+ * Place a path an agent wrote, absolute or `~/`, relative to the session. The
+ * daemon follows symlinks, so a link that leaves the worktree is "outside".
+ */
+export async function resolveWorkspacePath(cfg: ServerConfig, sessionId: string, path: string): Promise<WorkspacePathResolution> {
+	const res = await apiRequest(cfg, `${API}/sessions/${encodeURIComponent(sessionId)}/workspace/resolve?${new URLSearchParams({ path })}`);
+	const body = (await res.json()) as { kind?: string; path?: string };
+	const kind = body.kind === "workspace" || body.kind === "artifact" ? body.kind : "outside";
+	return { kind, path: body.path?.trim() || undefined };
 }
 
 export async function getWorkspacePaths(cfg: ServerConfig, sessionId: string): Promise<{ paths: string[]; truncated: boolean }> {
@@ -523,16 +592,22 @@ function toSnapshot(wire: WireSnapshot): ConversationSnapshot {
 			reasoningEffort: wire.settings?.reasoningEffort || undefined,
 			approvalMode: (wire.settings?.approvalMode as ApprovalMode | undefined) || undefined,
 		},
-		turns: wire.turns ?? [],
+		turns: (wire.turns ?? []).map(toTurn),
 		items: [...messages, ...activities].sort((a, b) => a.sequence - b.sequence),
 	};
+}
+
+function toTurn({ artifacts, ...turn }: WireTurn): ConversationTurn {
+	const files = artifacts?.files?.filter((file) => file && typeof file.path === "string" && (file.status === "added" || file.status === "modified"));
+	return files?.length ? { ...turn, artifacts: files.map(({ path, status }) => ({ path, status })) } : turn;
 }
 
 function readDecisions(detail: ActivityDetail): DecisionOption[] | undefined {
 	if (!Array.isArray(detail.decisions)) return undefined;
 	const decisions = detail.decisions.flatMap((option): DecisionOption[] => {
 		if (!option || typeof option !== "object" || typeof option.id !== "string" || !option.id) return [];
-		return [{ id: option.id, label: typeof option.label === "string" && option.label ? option.label : option.id }];
+		const label = typeof option.label === "string" && option.label ? option.label : option.id;
+		return [typeof option.kind === "string" && option.kind ? { id: option.id, label, kind: option.kind } : { id: option.id, label }];
 	});
 	return decisions.length > 0 ? decisions : undefined;
 }
@@ -552,4 +627,39 @@ async function streamError(res: Response): Promise<ApiError> {
 		// A proxy may answer HTML; the status remains enough to classify it.
 	}
 	return new ApiError(res.status, message, code, requestId, detail || undefined);
+}
+
+/** What the daemon reports about forking a session. */
+export type ForkOptions = {
+	allowed: boolean;
+	anyTurn?: boolean;
+	refusal?: { code: string; message: string };
+};
+
+/**
+ * Whether a session can be forked. Null when the daemon has session forks off
+ * (it answers 404), so the app shows no Fork action at all.
+ */
+export async function getForkOptions(cfg: ServerConfig, sessionId: string): Promise<ForkOptions | null> {
+	try {
+		const res = await apiRequest(cfg, `${API}/sessions/${encodeURIComponent(sessionId)}/fork-options`);
+		return (await res.json()) as ForkOptions;
+	} catch (cause) {
+		if ((cause as { status?: number })?.status === 404) return null;
+		throw cause;
+	}
+}
+
+/** Forks a session as it was at turnId into a new session, and returns it. */
+export async function forkSession(
+	cfg: ServerConfig,
+	sessionId: string,
+	turnId: string,
+	clientRequestId: string,
+): Promise<{ sessionId: string; displayName: string }> {
+	const res = await apiRequest(cfg, `${API}/sessions/${encodeURIComponent(sessionId)}/fork`, {
+		method: "POST",
+		body: JSON.stringify({ clientRequestId, turnId }),
+	});
+	return (await res.json()) as { sessionId: string; displayName: string };
 }

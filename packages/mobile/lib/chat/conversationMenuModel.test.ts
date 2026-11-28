@@ -14,6 +14,14 @@ const base: ConversationMenuState = {
 const layout = (state: ConversationMenuState) => conversationMenuGroups(state).map((group) => [group.title, group.items.map((item) => item.label)]);
 
 describe("conversationMenuGroups", () => {
+	it("names the agent's account first in Session, and holds it while a move runs or nothing else is signed in", () => {
+		const account = (state: Partial<NonNullable<ConversationMenuState["account"]>>) => conversationMenuGroups({ ...base, account: { name: "a@x.dev", moving: false, canMove: true, ...state } })
+			.find((group) => group.title === "Session")?.items[0];
+		expect(account({})).toMatchObject({ action: "account", label: "Account", subtitle: "a@x.dev", disabled: false });
+		expect(account({ moving: true })).toMatchObject({ label: "Switching account…", disabled: true });
+		expect(account({ canMove: false })).toMatchObject({ disabled: true });
+	});
+
 	// Only these seven, each in its group, on both platforms.
 	it("offers Terminal, Preview, Artifacts, Pin, PR Review, Compact and Archive in four groups", () => {
 		expect(layout({ ...base, artifactCount: 2, hasPullRequest: true })).toEqual([

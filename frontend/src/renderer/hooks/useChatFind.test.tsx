@@ -1,5 +1,5 @@
 import { useRef } from "react";
-import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useChatFind } from "./useChatFind";
 import type { ConversationMessage, ConversationSnapshot } from "../types/conversation";
@@ -31,6 +31,14 @@ function Harness({ snapshot = source, markdown = false }: { snapshot?: Conversat
 	</section>;
 }
 
+let openFind: ((value: string, anchorMessageId?: string) => void) | undefined;
+function OpenWithHarness() {
+	const root = useRef<HTMLDivElement>(null), viewport = useRef<HTMLDivElement>(null);
+	const find = useChatFind({ source, root, viewport, reveal, pauseFollow: pause });
+	openFind = find.openWith;
+	return <section data-chat-find-scope=""><div ref={root} data-chat-find-surface="">{find.bar}<div ref={viewport} tabIndex={-1}>{find.snapshot.items.map((item) => <div key={item.id} data-find-message-id={item.id}><p data-chat-message-body="">{item.kind === "message" ? item.text : ""}</p></div>)}</div></div></section>;
+}
+
 async function tick(ms = 180) { await act(async () => { await vi.advanceTimersByTimeAsync(ms); }); }
 async function openAndSearch() {
 	fireEvent.keyDown(document.activeElement ?? document.body, { key: "f", ctrlKey: true }); await tick(20);
@@ -47,6 +55,38 @@ describe("find in chat interactions", () => {
 		useKeybindingsStore.setState({ overrides: {} });
 	});
 	afterEach(() => { cleanup(); vi.clearAllTimers(); vi.useRealTimers(); vi.restoreAllMocks(); });
+
+	it("opens on the transcript paired with a focused split terminal, not an earlier visible chat", async () => {
+		render(<>
+			<div data-testid="other-chat"><Harness /></div>
+			<div data-testid="center-split-area">
+				<Harness />
+				<div className="xterm"><textarea aria-label="Terminal input" /></div>
+			</div>
+		</>);
+		const terminal = screen.getByRole("textbox", { name: "Terminal input" });
+		terminal.focus();
+		fireEvent.keyDown(terminal, { key: "F", ctrlKey: true, shiftKey: true });
+		await tick(20);
+		expect(within(screen.getByTestId("center-split-area")).getByRole("searchbox")).toHaveFocus();
+		expect(within(screen.getByTestId("other-chat")).queryByRole("searchbox")).not.toBeInTheDocument();
+	});
+
+	it("opens searching for a session search result's word, from the result's message", async () => {
+		get.mockResolvedValue({ data: { conversationId: "c", transcriptRevision: "r", occurrences: hits, total: 2, offset: 0, initialIndex: 1 }, response: { status: 200 } });
+		render(<OpenWithHarness />);
+		act(() => openFind?.("hello", "m")); await tick(20); await tick();
+		expect(screen.getByRole("searchbox")).toHaveValue("hello");
+		expect(get.mock.calls[0][1].params.query).toMatchObject({ query: "hello", anchorMessageId: "m", anchorBlock: 0, anchorOffset: 0, fallbackToPrevious: false });
+		expect(screen.getByText("2/2")).toBeInTheDocument();
+		expect(reveal).toHaveBeenLastCalledWith(hits[1]);
+		// Another result for the same word searches again from its own message
+		// rather than keeping the active match.
+		const calls = get.mock.calls.length;
+		act(() => openFind?.("hello", "other")); await tick();
+		expect(get.mock.calls.length).toBeGreaterThan(calls);
+		expect(get.mock.calls.at(-1)?.[1].params.query).toMatchObject({ query: "hello", anchorMessageId: "other", fallbackToPrevious: false });
+	});
 
 	it("reveals and highlights a daemon occurrence after a rendered hard break without timing out", async () => {
 		const registry = new Map<string, Set<Range>>();
@@ -121,10 +161,14 @@ describe("find in chat interactions", () => {
 		expect(screen.queryByRole("searchbox")).not.toBeInTheDocument(); fireEvent.keyDown(document.activeElement ?? document.body, { key: "f", ctrlKey: true }); expect(screen.getByRole("searchbox")).toHaveValue("");
 	});
 
-	it("does not capture find from a terminal or modal", async () => {
+	it("leaves the terminal its own find but opens chat find on the terminal-safe chord", async () => {
 		render(<Harness />);
 		const terminal = document.createElement("textarea"); terminal.className = "xterm"; document.body.append(terminal); terminal.focus();
-		fireEvent.keyDown(terminal, { key: "f", ctrlKey: true }); expect(screen.queryByRole("searchbox")).not.toBeInTheDocument(); terminal.remove();
+		// Plain Ctrl+F is the terminal's own search and readline forward-char.
+		fireEvent.keyDown(terminal, { key: "f", ctrlKey: true }); expect(screen.queryByRole("searchbox")).not.toBeInTheDocument();
+		fireEvent.keyDown(terminal, { key: "F", ctrlKey: true, shiftKey: true }); await tick(20);
+		expect(screen.getByRole("searchbox")).toBeInTheDocument();
+		fireEvent.keyDown(screen.getByRole("searchbox"), { key: "Escape" }); terminal.remove();
 		const modal = document.createElement("div"); modal.setAttribute("role", "dialog"); document.body.append(modal);
 		fireEvent.keyDown(screen.getByRole("textbox"), { key: "f", ctrlKey: true }); expect(screen.queryByRole("searchbox")).not.toBeInTheDocument(); modal.remove();
 	});

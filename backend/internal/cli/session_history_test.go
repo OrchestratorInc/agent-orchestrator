@@ -42,6 +42,23 @@ func TestSessionHistory_PrintsTurnsForTheCurrentSession(t *testing.T) {
 	}
 }
 
+// A session in its first turn has no completed turn, which must not read as an
+// idle session.
+func TestSessionHistory_NoCompletedTurnsPointsToSessionGet(t *testing.T) {
+	cfg := setConfigEnv(t)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"turns":[],"total":0,"offset":0}`))
+	}))
+	t.Cleanup(srv.Close)
+	writeRunFileFor(t, cfg, srv)
+
+	out, errOut, err := executeCLI(t, Deps{ProcessAlive: func(int) bool { return true }}, "session", "history", "demo-1")
+	if err != nil || !strings.Contains(out, "no completed turns yet; `ao session get demo-1`") {
+		t.Fatalf("session history: err=%v stderr=%s out=%q", err, errOut, out)
+	}
+}
+
 func TestSessionHistory_RequiresASessionOutsideAO(t *testing.T) {
 	setConfigEnv(t)
 	t.Setenv("AO_SESSION_ID", "")

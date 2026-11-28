@@ -13,6 +13,8 @@ ao report --stuck --note <text> [output flags]
 ao report --done --note <text> [output flags]
 ```
 
+`--note` and free-form text are each limited to 1000 characters.
+
 Output flags are repeatable:
 
 ```text
@@ -51,8 +53,12 @@ user-authorized scope.
 
 `--needs-input` requests immediate non-interrupting delivery. `--stuck`
 requests immediate delivery plus a rate-limited interrupt. Informational work
-batches for up to one hour, while the first done report opens a fixed five
-minute settlement window.
+batches for up to one hour. The first done report opens a five minute
+settlement window: the batch, including pending informational reports, is
+scheduled for delivery about 15 seconds after no other project worker is still
+working, and at the latest when the window closes. Provisioning counts as work.
+After provisioning, idle, waiting, or exited workers do not hold the batch.
+Killed workers do not hold it. Reports stay pending without an active orchestrator.
 
 **Examples:**
 

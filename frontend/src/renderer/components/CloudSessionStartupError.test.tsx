@@ -236,6 +236,7 @@ describe("CloudSessionStartupError", () => {
 		["working_directory_unusable", "The working directory can't be used"],
 		["working_directory_occupied", "The working folder is already in use"],
 		["working_directory_not_durable", "The working folder isn't kept across restarts"],
+		["conversation_restore_failed", "The conversation could not be restored"],
 		["sandbox_unresponsive", "The sandbox stopped responding"],
 		["worker_never_started", "This session couldn't start"],
 		[undefined, "This session couldn't start"],

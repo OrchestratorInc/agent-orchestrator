@@ -110,6 +110,24 @@ test("chat minimap does not make the session pane scroll horizontally", async ({
 	expect(pane.overflowX).toBe("hidden");
 });
 
+test("chat minimap stays while the chat has room beside the text, even with the inspector open", async ({ page }) => {
+	const minimap = page.getByTestId("chat-conversation-minimap");
+	await page.setViewportSize({ width: 1800, height: 900 });
+	await page.getByRole("button", { name: "Open inspector panel", exact: true }).last().click();
+	await expect(page.getByTestId("panel-inspector")).toHaveAttribute("data-state", "expanded");
+	await expect(minimap).toHaveAttribute("aria-hidden", "false");
+	await expect(minimap).toHaveCSS("opacity", "1");
+
+	// Too narrow for both: the dashes would sit on the text.
+	await page.setViewportSize({ width: 1280, height: 900 });
+	await expect(minimap).toHaveAttribute("aria-hidden", "true");
+	await expect(minimap).toHaveCSS("opacity", "0");
+
+	await page.setViewportSize({ width: 1800, height: 900 });
+	await expect(minimap).toHaveAttribute("aria-hidden", "false");
+	await expect(minimap).toHaveCSS("opacity", "1");
+});
+
 test("chat keeps the latest prompt still while either sidebar animates @P0", async ({ page }) => {
 	await page.emulateMedia({ reducedMotion: "no-preference" });
 	await page.waitForTimeout(1500);

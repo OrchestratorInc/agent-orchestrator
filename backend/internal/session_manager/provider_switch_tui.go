@@ -1,6 +1,7 @@
 package sessionmanager
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -9,6 +10,7 @@ import (
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
+	"github.com/aoagents/agent-orchestrator/backend/internal/providerkeys"
 )
 
 // SwitchTUIProvider replaces one terminal provider with another in the same AO
@@ -37,8 +39,12 @@ func (m *Manager) SwitchTUIProvider(ctx context.Context, id domain.SessionID, re
 	if rec.IsTerminated {
 		return &domain.ProviderSwitchError{Kind: domain.ProviderSwitchRefusalRecoveryRequired, Detail: "terminated sessions must be restored before switching"}
 	}
-	if rec.Harness == target {
-		return &domain.ProviderSwitchError{Kind: domain.ProviderSwitchRefusalUnsupported, Detail: "target provider is already active"}
+	sameAgent := rec.Harness == target
+	if sameAgent && !tuiSettingsChange(rec.Metadata, request) {
+		return &domain.ProviderSwitchError{Kind: domain.ProviderSwitchRefusalAlreadyActive, Detail: "target provider is already active", Cause: domain.ErrProviderAlreadyActive}
+	}
+	if sameAgent && rec.Metadata.AgentSessionID == "" {
+		return &domain.ProviderSwitchError{Kind: domain.ProviderSwitchRefusalUnsupported, Detail: fmt.Sprintf("%s has no conversation to resume on new settings yet; try again once it has replied", target)}
 	}
 	if rec.NeedsImportResume() {
 		return &domain.ProviderSwitchError{Kind: domain.ProviderSwitchRefusalRecoveryRequired, Detail: "open the imported chat before switching providers"}
@@ -52,11 +58,11 @@ func (m *Manager) SwitchTUIProvider(ctx context.Context, id domain.SessionID, re
 	if !ok || targetAgent == nil {
 		return &domain.ProviderSwitchError{Kind: domain.ProviderSwitchRefusalUnsupported, Detail: fmt.Sprintf("%s is not available for Terminal UI", target)}
 	}
-	if rec.Activity.State == domain.ActivityActive {
+	if !request.Force && rec.Activity.State == domain.ActivityActive {
 		return &domain.ProviderSwitchError{Kind: domain.ProviderSwitchRefusalBusy, Detail: "the provider is still working"}
 	}
-	if rec.Activity.State == domain.ActivityWaitingInput || rec.Activity.State == domain.ActivityBlocked {
-		return &domain.ProviderSwitchError{Kind: domain.ProviderSwitchRefusalPendingInteraction, Detail: "answer the pending provider interaction before switching"}
+	if !request.Force && (rec.Activity.State == domain.ActivityWaitingInput || rec.Activity.State == domain.ActivityBlocked) {
+		return &domain.ProviderSwitchError{Kind: domain.ProviderSwitchRefusalPendingInteraction, Detail: "the agent is waiting on an approval or question"}
 	}
 
 	// Everything the relaunch needs is read before the source is stopped, so a
@@ -75,7 +81,13 @@ func (m *Manager) SwitchTUIProvider(ctx context.Context, id domain.SessionID, re
 		releaseInput = func() {}
 	}
 	defer releaseInput()
-	if err := m.prepareSourceHandoff(ctx, rec, domain.SessionInterfaceTransitionDrain, lastInputAt); err != nil {
+	policy := domain.SessionInterfaceTransitionDrain
+	if request.Force {
+		policy = domain.SessionInterfaceTransitionInterrupt
+	}
+	if err := m.prepareSourceHandoff(ctx, rec, policy, lastInputAt); err != nil && request.Force {
+		m.logger.Warn("interrupt before forced provider switch failed", "session", id, "error", err)
+	} else if err != nil {
 		kind := domain.ProviderSwitchRefusalBusy
 		if errors.Is(err, errDrainDecisionPending) {
 			kind = domain.ProviderSwitchRefusalPendingInteraction
@@ -150,17 +162,25 @@ func (m *Manager) SwitchTUIProvider(ctx context.Context, id domain.SessionID, re
 	}
 
 	targetRecord := source
-	targetRecord.Harness = target
 	md := &targetRecord.Metadata
-	md.AgentSessionID, md.NativeTranscriptPath, md.NativeIdentityObservedAt = "", "", time.Time{}
-	md.Model, md.Effort, md.LatestUserPrompt, md.LatestAssistantUpdate = request.Model, request.Effort, "", ""
-	md.ConversationCheckpointState, md.ConversationCheckpointGeneration = domain.ConversationCheckpointEmpty, ""
-	md.ConversationCheckpointNativeID, md.ConversationCheckpointTurnID, md.ConversationCheckpointUnsettled = "", "", false
+	if sameAgent {
+		md.Model, md.Effort = cmp.Or(request.Model, md.Model), cmp.Or(request.Effort, md.Effort)
+		targetLaunch = sourceLaunch
+	} else {
+		targetRecord.Harness = target
+		md.AgentSessionID, md.NativeTranscriptPath, md.NativeIdentityObservedAt = "", "", time.Time{}
+		md.Model, md.Effort, md.LatestUserPrompt, md.LatestAssistantUpdate = request.Model, request.Effort, "", ""
+		md.ConversationCheckpointState, md.ConversationCheckpointGeneration = domain.ConversationCheckpointEmpty, ""
+		md.ConversationCheckpointNativeID, md.ConversationCheckpointTurnID, md.ConversationCheckpointUnsettled = "", "", false
+		// The note stays saved with the target's choices until it has started, so a
+		// relaunch before then (the daemon stopped) hands over again instead of
+		// replaying the task. Both move with ownership in one write.
+		targetLaunch.HandoffNote = request.HandoffNote
+	}
+	if request.PermissionMode != "" {
+		md.Permissions = request.PermissionMode
+	}
 	targetRecord.UpdatedAt = m.clock()
-	// The note stays saved with the target's choices until it has started, so a
-	// relaunch before then (the daemon stopped) hands over again instead of
-	// replaying the task. Both move with ownership in one write.
-	targetLaunch.HandoffNote = request.HandoffNote
 	publish := func() error { return m.store.UpdateSession(ctx, targetRecord) }
 	if launchStore != nil {
 		publish = func() error { return launchStore.UpdateSessionWithLaunchOptions(ctx, targetRecord, targetLaunch) }
@@ -174,8 +194,14 @@ func (m *Manager) SwitchTUIProvider(ctx context.Context, id domain.SessionID, re
 	}); ok {
 		preparer.PrepareSwitchTarget(ctx, ws.Path)
 	}
-	started, err := m.relaunchSessionWithPolicyAndGeneration(ctx, "switch TUI provider", targetRecord, project, ws, nil,
-		true, false, "", domain.SessionInterfaceTransitionHistoryStrict, &request.HandoffNote)
+	var started RestoreResult
+	if sameAgent {
+		started, err = m.relaunchSessionWithPolicy(ctx, "restart TUI provider on new settings", targetRecord, project, ws, nil,
+			false, true, domain.SessionInterfaceTransitionHistoryStrict)
+	} else {
+		started, err = m.relaunchSessionWithPolicyAndGeneration(ctx, "switch TUI provider", targetRecord, project, ws, nil,
+			true, false, "", domain.SessionInterfaceTransitionHistoryStrict, &request.HandoffNote)
+	}
 	if err != nil {
 		return restoreSource(err, "target provider failed to start")
 	}
@@ -185,9 +211,20 @@ func (m *Manager) SwitchTUIProvider(ctx context.Context, id domain.SessionID, re
 		m.destroySpawnRuntimeAfterFailure(ctx, runtimeHandle(started.Session.Metadata))
 		return restoreSource(err, "target provider did not stay running")
 	}
-	m.adoptTUISwitchSettings(ctx, id, request)
+	adopt := request
+	adopt.Model, adopt.Effort = md.Model, md.Effort
+	if sameAgent {
+		adopt.AutoCompactWindow = sourceLaunch.AutoCompactWindow
+	}
+	m.adoptTUISwitchSettings(ctx, id, adopt)
 	m.clearHandoffNote(ctx, id)
 	return nil
+}
+
+func tuiSettingsChange(md domain.SessionMetadata, request domain.ProviderSwitchRequest) bool {
+	return (request.Model != "" && !strings.EqualFold(request.Model, md.Model)) ||
+		(request.Effort != "" && !strings.EqualFold(request.Effort, md.Effort)) ||
+		(request.PermissionMode != "" && ports.NormalizePermissionMode(request.PermissionMode) != ports.NormalizePermissionMode(md.Permissions))
 }
 
 // clearHandoffNote drops a switch target's saved note once the target has a
@@ -234,6 +271,9 @@ func (m *Manager) adoptTUISwitchSettings(ctx context.Context, id domain.SessionI
 	settings.AutoCompactWindow = ""
 	if request.TargetHarness == domain.HarnessClaudeCode {
 		settings.AutoCompactWindow = request.AutoCompactWindow
+	}
+	if request.PermissionMode != "" {
+		settings.ApprovalMode = ports.NormalizePermissionMode(request.PermissionMode)
 	}
 	if err := store.SetConversationSettings(ctx, conversation.ID, settings, m.clock()); err != nil {
 		m.logger.Warn("adopt terminal switch settings", "session", id, "error", err)
@@ -297,7 +337,10 @@ func preflightTUISwitchTarget(ctx context.Context, harness domain.AgentHarness, 
 	status := ports.AgentAuthStatusUnknown
 	var err error
 	if runtimeChecker, ok := target.(ports.AgentRuntimeAuthChecker); ok && dataDir != "" {
-		status, _, _, err = runtimeChecker.AuthStatusForRuntime(ctx, dataDir)
+		// The probe sees what the relaunched session gets: no key AO holds
+		// back from this harness.
+		probeCtx := ports.WithAuthEnvironment(ctx, providerkeys.Withheld(dataDir, string(harness)))
+		status, _, _, err = runtimeChecker.AuthStatusForRuntime(probeCtx, dataDir)
 	} else if checker, ok := target.(ports.AgentAuthChecker); ok {
 		status, err = checker.AuthStatus(ctx)
 	}

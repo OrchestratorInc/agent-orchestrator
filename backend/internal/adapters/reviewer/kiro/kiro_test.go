@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"regexp"
 	"slices"
 	"strings"
 	"testing"
@@ -115,5 +116,24 @@ func TestReviewMessageAndCancelUseInteractiveTUI(t *testing.T) {
 	cancel, err := r.ReviewCancel(context.Background())
 	if err != nil || cancel.Mode != ports.ReviewCancelInput || cancel.Input != "\x1b" {
 		t.Fatalf("ReviewCancel = %+v, %v", cancel, err)
+	}
+}
+
+func TestSubmitPolicy(t *testing.T) {
+	patterns := shellAllowedCommands(ports.ReviewInvocation{WorkerSessionID: "w1"})
+	for command, want := range map[string]bool{
+		"printf '%s' 'e30=' | base64 --decode | gh api --method POST repos/o/r/pulls/1/reviews --input - --jq '.id'": true,
+		"printf '%s' 'b2s=' | base64 -D | ao review submit --session w1 --run r --verdict approved --body -":         true,
+		"printf '%s' 'e30=' | base64 --decode | ao review submit --session w1 --reviews -":                           false,
+	} {
+		allowed := false
+		for _, pattern := range patterns {
+			if regexp.MustCompile(pattern).MatchString(command) {
+				allowed = true
+			}
+		}
+		if allowed != want {
+			t.Errorf("allow %q = %v, want %v", command, allowed, want)
+		}
 	}
 }

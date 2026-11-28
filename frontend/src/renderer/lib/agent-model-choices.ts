@@ -1,7 +1,19 @@
+import { CLAUDE_DESCRIBED_MODEL, isDefaultPlaceholderLabel } from "../../../../packages/shared/models/cloud-model-label";
 import { collapseModelVariants, listsModelVariants } from "./model-variants";
+
+// Named as the mobile app names them: one copy, in packages/shared.
+export { cloudModelLabel, isDefaultPlaceholderLabel } from "../../../../packages/shared/models/cloud-model-label";
 
 export function isConcreteModelID(id: string): boolean {
 	return id !== "" && id.toLowerCase() !== "default";
+}
+
+/**
+ * Whether a local New Task may take a typed model ID. Mastra Code lists no
+ * models and selects its native model by ID; other harnesses keep their catalog.
+ */
+export function acceptsLocalModelID(agentId: string, catalog?: { customModelEntry?: string }): boolean {
+	return agentId === "mastra-code" && catalog?.customModelEntry === "direct";
 }
 
 /**
@@ -47,10 +59,6 @@ export function offeredCatalogModels<T extends { id: string; provider?: string }
 	return filterDisabledModels(usable.length > 0 ? usable : models, disabled, keep).models;
 }
 
-export function isDefaultPlaceholderLabel(label: string): boolean {
-	return /^default(?:\s*\([^)]*\))?$/i.test(label.trim());
-}
-
 export function modelChoiceLabel(choice: { id: string; label: string }): string {
 	return isDefaultPlaceholderLabel(choice.label) ? choice.id : choice.label || choice.id;
 }
@@ -60,25 +68,6 @@ export function agentModelDisplayLabel(agentId: string | undefined, label: strin
 }
 
 const CLAUDE_FAMILIES = ["fable", "opus", "sonnet", "haiku"];
-
-// The model a Claude list entry runs, as its description names it: "Haiku 4.5 · Fastest
-// for quick answers", "Opus 5.5 with 1M context · Most capable".
-const CLAUDE_DESCRIBED_MODEL = /^\s*(?:claude\s+)?(fable|opus|sonnet|haiku)\s+(\d{1,2}(?:\.\d{1,2})?)(?![\d.])(\s+with\s+1m\s+context)?/i;
-
-/**
- * A Cloud model's name, from the Cloud list alone. Claude names a family alias by its
- * family ("Haiku") and the model it runs in its description ("Haiku 4.5 · ..."). A
- * worker's CLI can run another model than this computer's for the same alias, so the
- * version comes from that description, never from this computer's catalog.
- */
-export function cloudModelLabel(agentId: string, model: { displayName: string; description?: string }): string {
-	const name = model.displayName;
-	const described = agentId === "claude-code" ? CLAUDE_DESCRIBED_MODEL.exec(model.description ?? "") : null;
-	// A name with a version of its own is kept, and so is a placeholder ("Default (recommended)").
-	if (!described || !name || isDefaultPlaceholderLabel(name) || /\d/.test(name.replace(/\(.*?\)|\[.*?\]/g, ""))) return name;
-	const family = new RegExp(`\\b${described[1]}\\b`, "i");
-	return family.test(name) ? name.replace(family, (word) => `${word} ${described[2]}`) : name;
-}
 
 /**
  * The model a Cloud catalog marks as its default, among `offered` (named by cloudModelLabel).
@@ -163,7 +152,7 @@ export function splitClaudeModels<T extends { id: string; label: string }>(model
  * One row per name within a group. Claude reaches one model by several ids (an alias
  * and its start id), which read the same once labeled. The row for `keep`, the chosen
  * model, stays, else one that can be chosen now; the others' ids become its aliases,
- * so a favourite saved on any shows.
+ * so a model remembered under any of them is still found.
  */
 export function mergeSameNamedModels<T extends { id: string; label: string; group?: string; aliases?: string[] } & ModelAvailability>(models: T[], keep?: string): T[] {
 	return models.flatMap((model) => {

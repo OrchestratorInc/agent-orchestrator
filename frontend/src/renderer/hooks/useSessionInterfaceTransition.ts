@@ -14,6 +14,7 @@ import { CloudCpAuthError, type CloudCpInterfaceTransition } from "../lib/cloud-
 import { conversationQueryKey } from "./useConversation";
 import { useCloudCp } from "./useCloudCp";
 import { cloudSessionsQueryKey, workspaceQueryKeyForHost } from "./useWorkspaceQuery";
+import { withMoveStateText } from "../lib/cloud-move-state";
 
 export type SessionInterfaceTransition = components["schemas"]["SessionInterfaceTransition"];
 export type SessionInterfaceTransitionStatus =
@@ -42,7 +43,14 @@ function mutationContext(target: InterfaceTransitionMutationTarget): SessionInte
 	return target.targetCloudOrgId ? { orgId: target.targetCloudOrgId } : target.targetHostId ?? null;
 }
 
-type StartInterfaceTransitionMutationInput = StartInterfaceTransitionInput & InterfaceTransitionMutationTarget;
+/**
+ * A transition's start. targetHarness, Cloud only, also switches the session's
+ * agent (an agent switch); the local daemon switches agents through its own
+ * provider switch instead.
+ */
+export type StartInterfaceTransitionRequest = StartInterfaceTransitionInput & { targetHarness?: string };
+
+type StartInterfaceTransitionMutationInput = StartInterfaceTransitionRequest & InterfaceTransitionMutationTarget;
 
 type AcknowledgeInterfaceTransitionNoticeMutationInput =
 	InterfaceTransitionMutationTarget & {
@@ -359,6 +367,7 @@ export function useSessionInterfaceTransition(
 			targetSessionId,
 			targetHostId,
 			targetCloudOrgId,
+			targetHarness,
 			...input
 		}: StartInterfaceTransitionMutationInput) => {
 			if (targetCloudOrgId) {
@@ -369,8 +378,12 @@ export function useSessionInterfaceTransition(
 						targetMode: input.targetMode, policy: input.policy,
 						...(input.model ? { model: input.model } : {}),
 						...(input.reasoningEffort ? { reasoningEffort: input.reasoningEffort } : {}),
+						...(targetHarness ? { targetHarness } : {}),
 					},
-				);
+				).catch((error: unknown) => {
+					// A session whose work is moving does not switch (SESSION_MOVING).
+					throw withMoveStateText(error);
+				});
 				return {
 					transition: toSessionInterfaceTransition(response.transition),
 				};
@@ -582,7 +595,7 @@ export function useSessionInterfaceTransition(
 		settling,
 		isLoading: query.isLoading,
 		statusError: query.error ? apiErrorMessage(query.error) : undefined,
-		start: (input: StartInterfaceTransitionInput) => {
+		start: (input: StartInterfaceTransitionRequest) => {
 			if (!sessionId) return Promise.reject(new Error("No session is selected."));
 			return start.mutateAsync({ ...input, targetSessionId: sessionId, targetHostId: hostId, targetCloudOrgId: cloudOrgId });
 		},

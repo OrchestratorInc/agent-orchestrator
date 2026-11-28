@@ -10,6 +10,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/openinterpreter"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
@@ -125,8 +126,8 @@ func TestAgentPlansCoverEveryHarnessOnce(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(plans) != 38 {
-		t.Fatalf("got %d plans, want 38", len(plans))
+	if len(plans) != 44 {
+		t.Fatalf("got %d plans, want 44", len(plans))
 	}
 	seen := make(map[string]bool, len(plans))
 	for _, plan := range plans {
@@ -140,6 +141,9 @@ func TestAgentPlansCoverEveryHarnessOnce(t *testing.T) {
 		if plan.Available && (!plan.Automatic || plan.Command == "" || plan.Method == "") {
 			t.Fatalf("available plan %q is incomplete: %+v", plan.AgentID, plan)
 		}
+	}
+	if !seen["mastra-code"] {
+		t.Fatal("missing install plan for mastra-code")
 	}
 }
 
@@ -319,9 +323,10 @@ func TestAgentPlanSelectsAvailableFallback(t *testing.T) {
 	}{
 		{"claude brew", "darwin", TargetClaudeCode, []string{"brew"}, "homebrew", "brew install --cask claude-code"},
 		{"codex npm", "linux", TargetCodex, []string{"npm"}, "npm", "npm install -g @openai/codex"},
-		{"copilot winget", "windows", TargetCopilot, []string{"winget", "npm"}, "winget", "winget install -e --id GitHub.Copilot --silent --accept-package-agreements --accept-source-agreements --disable-interactivity"},
+		{"copilot winget", "windows", TargetCopilot, []string{"winget", "npm"}, "winget", "winget install -e --id GitHub.Copilot --source winget --silent --accept-package-agreements --accept-source-agreements --disable-interactivity"},
 		{"vibe pipx", "linux", TargetVibe, []string{"pipx"}, "pipx", "pipx install mistral-vibe"},
 		{"openhands uv", "windows", TargetOpenHands, []string{"uv"}, "uv", "uv tool install openhands"},
+		{"docker agent brew", "darwin", TargetDockerAgent, []string{"brew"}, "homebrew", "brew install docker-agent"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -330,6 +335,44 @@ func TestAgentPlanSelectsAvailableFallback(t *testing.T) {
 				t.Fatalf("plan = %+v, want method %q command %q", plan, tt.wantMethod, tt.wantCommand)
 			}
 		})
+	}
+}
+
+func TestWindowsWingetAgentOperationsStayNoninteractive(t *testing.T) {
+	tests := []struct {
+		target Target
+		id     string
+	}{
+		{TargetOpencode, "SST.opencode"},
+		{TargetCopilot, "GitHub.Copilot"},
+	}
+	for _, tt := range tests {
+		for _, operation := range []AgentOperation{AgentOperationInstall, AgentOperationReinstall, AgentOperationUpdate} {
+			t.Run(string(tt.target)+"/"+string(operation), func(t *testing.T) {
+				s := newTestService("windows", "winget")
+				plan := s.planWinget(tt.target, tt.id)
+				plan = requestPlanner{Service: s}.planForOperation(plan, operation)
+				verb := "install"
+				if operation == AgentOperationUpdate {
+					verb = "upgrade"
+				}
+				want := []string{"winget", verb, "-e", "--id", tt.id, "--source", "winget", "--silent", "--accept-package-agreements", "--accept-source-agreements", "--disable-interactivity"}
+				if operation == AgentOperationReinstall {
+					want = append(want, "--force")
+				}
+				if !slices.Equal(plan.Command, want) {
+					t.Fatalf("command = %v, want %v", plan.Command, want)
+				}
+			})
+		}
+	}
+}
+
+func TestDockerAgentWindowsPlanStatesPlatformRestriction(t *testing.T) {
+	plan := newTestService("windows", "winget", "npm").planAgent(TargetDockerAgent)
+	if !plan.Unsupported || plan.Method != "manual" || len(plan.Command) != 0 ||
+		!strings.Contains(plan.Reason, "macOS and Linux only") {
+		t.Fatalf("Windows Docker Agent plan = %+v, want an unsupported manual plan naming the platform limit", plan)
 	}
 }
 
@@ -372,6 +415,9 @@ func TestOfficialInstallerPlansAreAutomaticAndServerOwned(t *testing.T) {
 		{"windows", TargetAgy, []string{"pwsh"}, "https://antigravity.google/cli/install.ps1", "pwsh"},
 		{"linux", TargetKimchi, []string{"sh"}, "https://github.com/getkimchi/kimchi/releases/latest/download/install.sh", "sh"},
 		{"linux", TargetPrimeAgent, []string{"sh"}, "https://app.primeintellect.ai/prime-agent/install.sh", "sh"},
+		{"darwin", TargetMiniMaxCode, []string{"bash"}, "https://filecdn.minimax.chat/public/install.sh", "bash"},
+		{"linux", TargetMiniMaxCode, []string{"bash"}, "https://filecdn.minimax.chat/public/install.sh", "bash"},
+		{"windows", TargetMiniMaxCode, []string{"powershell.exe"}, "https://filecdn.minimax.chat/public/install.ps1", "powershell.exe"},
 	}
 	for _, tt := range tests {
 		t.Run(string(tt.target)+"/"+tt.goos, func(t *testing.T) {
@@ -384,6 +430,30 @@ func TestOfficialInstallerPlansAreAutomaticAndServerOwned(t *testing.T) {
 			}
 			if len(plan.Command) != 0 {
 				t.Fatalf("remote plan exposed executable argv: %v", plan.Command)
+			}
+		})
+	}
+}
+
+func TestOpenInterpreterInstallerPinsInspectedRelease(t *testing.T) {
+	if openInterpreterInstallRelease != openinterpreter.InspectedRelease {
+		t.Fatalf("installer release %q differs from adapter release %q", openInterpreterInstallRelease, openinterpreter.InspectedRelease)
+	}
+	for _, tc := range []struct {
+		goos, shell, url string
+	}{
+		{"darwin", "sh", "https://www.openinterpreter.com/install"},
+		{"linux", "sh", "https://www.openinterpreter.com/install"},
+		{"windows", "pwsh.exe", "https://www.openinterpreter.com/install.ps1"},
+	} {
+		t.Run(tc.goos, func(t *testing.T) {
+			plan := newTestService(tc.goos, tc.shell).planAgent(TargetOpenInterpreter)
+			if plan.Unsupported || plan.Method != "official-installer" || plan.Script == nil || plan.Script.URL != tc.url {
+				t.Fatalf("install plan = %+v", plan)
+			}
+			want := "OPEN_INTERPRETER_RELEASE=" + openinterpreter.InspectedRelease
+			if !slices.Equal(plan.Script.Env, []string{want}) {
+				t.Fatalf("installer env = %v, want %q", plan.Script.Env, want)
 			}
 		})
 	}
@@ -827,5 +897,13 @@ func TestCodewhaleInstallPlanIsManualOnly(t *testing.T) {
 	}
 	if !strings.Contains(plan.Reason, "does not automatically install Codewhale") {
 		t.Fatalf("Codewhale reason = %q", plan.Reason)
+	}
+}
+
+func TestTauInstallUsesLatestRelease(t *testing.T) {
+	s := newTestService("darwin", "uv")
+	plan := s.planAgent(TargetTau)
+	if plan.Unsupported || plan.Method != "uv" || strings.Join(plan.Command, " ") != "uv tool install tau-ai" {
+		t.Fatalf("Tau plan = %+v", plan)
 	}
 }

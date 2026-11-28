@@ -239,20 +239,22 @@ func (s *Store) InsertReviewRun(ctx context.Context, r domain.ReviewRun) error {
 		r.TriggerSource = domain.ReviewTriggerManual
 	}
 	err := s.qw.InsertReviewRun(ctx, gen.InsertReviewRunParams{
-		ID:               r.ID,
-		ReviewID:         r.ReviewID,
-		SessionID:        r.SessionID,
-		BatchID:          r.BatchID,
-		Harness:          r.Harness,
-		TriggerSource:    r.TriggerSource,
-		PRURL:            r.PRURL,
-		TargetSha:        r.TargetSHA,
-		Status:           r.Status,
-		Verdict:          r.Verdict,
-		Body:             r.Body,
-		GithubReviewID:   r.GithubReviewID,
-		CreatedAt:        r.CreatedAt,
-		AutoInjectReview: r.AutoInjectReview,
+		ID:                 r.ID,
+		ReviewID:           r.ReviewID,
+		SessionID:          r.SessionID,
+		BatchID:            r.BatchID,
+		Harness:            r.Harness,
+		RequesterSessionID: r.RequesterSessionID,
+		TriggerSource:      r.TriggerSource,
+		PRURL:              r.PRURL,
+		TargetSha:          r.TargetSHA,
+		Status:             r.Status,
+		Verdict:            r.Verdict,
+		Body:               r.Body,
+		GithubReviewID:     r.GithubReviewID,
+		CreatedAt:          r.CreatedAt,
+		AutoInjectReview:   r.AutoInjectReview,
+		ReviewerModel:      r.ReviewerModel,
 	})
 	if isSQLiteUnique(err) {
 		return fmt.Errorf("insert review run for session %s pr %s sha %s: %w", r.SessionID, r.PRURL, r.TargetSHA, domain.ErrDuplicateReviewRun)
@@ -260,59 +262,184 @@ func (s *Store) InsertReviewRun(ctx context.Context, r domain.ReviewRun) error {
 	return err
 }
 
-// UpdateReviewRunResult sets the status/verdict/body and the GitHub review id of
-// a running review pass.
-func (s *Store) UpdateReviewRunResult(ctx context.Context, id string, status domain.ReviewRunStatus, verdict domain.ReviewVerdict, body, githubReviewID string, autoInjectReview bool) (bool, error) {
-	s.writeMu.Lock()
-	defer s.writeMu.Unlock()
-	n, err := s.qw.UpdateReviewRunResult(ctx, gen.UpdateReviewRunResultParams{
-		Status:           status,
-		Verdict:          verdict,
-		Body:             body,
-		GithubReviewID:   githubReviewID,
-		AutoInjectReview: autoInjectReview,
-		ID:               id,
-	})
+// TransitionReviewRun moves one run to `to` only while it is still in one of
+// `from`, writing patch alongside. It reports false when another actor already
+// moved the run, which callers treat as a no-op.
+func (s *Store) TransitionReviewRun(ctx context.Context, id string, from []domain.ReviewRunStatus, to domain.ReviewRunStatus, patch domain.ReviewRunPatch) (bool, error) {
+	fromJSON, err := reviewRunStatusesJSON(from)
 	if err != nil {
 		return false, err
+	}
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
+	p := reviewRunPatchParams(patch)
+	n, err := s.qw.TransitionReviewRun(ctx, gen.TransitionReviewRunParams{
+		ToStatus:           to,
+		Verdict:            p.verdict,
+		Body:               p.body,
+		GithubReviewID:     p.githubReviewID,
+		AutoInjectReview:   p.autoInjectReview,
+		ReviewerModel:      p.reviewerModel,
+		FailureReason:      p.failureReason,
+		CancelledBy:        p.cancelledBy,
+		LaunchID:           p.launchID,
+		LaunchingAt:        p.launchingAt,
+		StartedAt:          p.startedAt,
+		FirstActivityAt:    p.firstActivityAt,
+		ClearFirstActivity: p.clearFirstActivity,
+		CancelRequestedAt:  p.cancelRequestedAt,
+		EndedAt:            p.endedAt,
+		ID:                 id,
+		FromStatuses:       fromJSON,
+	})
+	if err != nil {
+		return false, fmt.Errorf("transition review run %s to %s: %w", id, to, err)
 	}
 	return n > 0, nil
 }
 
-// SupersedeStaleRunningReviewRuns marks older running unverdicted passes for a
-// worker failed before starting a review for a newer commit.
-func (s *Store) SupersedeStaleRunningReviewRuns(ctx context.Context, sessionID domain.SessionID, prURL, targetSHA, body string) (int64, error) {
+// TransitionReviewRunsBySession moves every run of a worker that is still in
+// one of `from` to `to`. An empty harness matches every reviewer; otherwise
+// only that harness's runs move. It returns the ids it moved.
+func (s *Store) TransitionReviewRunsBySession(ctx context.Context, sessionID domain.SessionID, harness *domain.ReviewerHarness, from []domain.ReviewRunStatus, to domain.ReviewRunStatus, patch domain.ReviewRunPatch) ([]string, error) {
+	fromJSON, err := reviewRunStatusesJSON(from)
+	if err != nil {
+		return nil, err
+	}
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()
-	return s.qw.SupersedeStaleRunningReviewRuns(ctx, gen.SupersedeStaleRunningReviewRunsParams{
-		Body:      body,
-		SessionID: sessionID,
-		PRURL:     prURL,
-		TargetSha: targetSHA,
+	p := reviewRunPatchParams(patch)
+	params := gen.TransitionReviewRunsBySessionParams{
+		ToStatus:           to,
+		Verdict:            p.verdict,
+		Body:               p.body,
+		GithubReviewID:     p.githubReviewID,
+		AutoInjectReview:   p.autoInjectReview,
+		FailureReason:      p.failureReason,
+		CancelledBy:        p.cancelledBy,
+		LaunchID:           p.launchID,
+		LaunchingAt:        p.launchingAt,
+		StartedAt:          p.startedAt,
+		FirstActivityAt:    p.firstActivityAt,
+		ClearFirstActivity: p.clearFirstActivity,
+		CancelRequestedAt:  p.cancelRequestedAt,
+		EndedAt:            p.endedAt,
+		SessionID:          sessionID,
+		AnyHarness:         harness == nil,
+		FromStatuses:       fromJSON,
+	}
+	if harness != nil {
+		params.Harness = *harness
+	}
+	ids, err := s.qw.TransitionReviewRunsBySession(ctx, params)
+	if err != nil {
+		return nil, fmt.Errorf("transition review runs for session %s to %s: %w", sessionID, to, err)
+	}
+	return ids, nil
+}
+
+// TransitionReviewRunsForOlderSHA moves a worker's runs on prURL against any
+// head other than targetSHA that are still in one of `from` to `to`.
+func (s *Store) TransitionReviewRunsForOlderSHA(ctx context.Context, sessionID domain.SessionID, prURL, targetSHA string, from []domain.ReviewRunStatus, to domain.ReviewRunStatus, patch domain.ReviewRunPatch) ([]string, error) {
+	fromJSON, err := reviewRunStatusesJSON(from)
+	if err != nil {
+		return nil, err
+	}
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
+	p := reviewRunPatchParams(patch)
+	ids, err := s.qw.TransitionReviewRunsForOlderSHA(ctx, gen.TransitionReviewRunsForOlderSHAParams{
+		ToStatus:           to,
+		Verdict:            p.verdict,
+		Body:               p.body,
+		GithubReviewID:     p.githubReviewID,
+		AutoInjectReview:   p.autoInjectReview,
+		FailureReason:      p.failureReason,
+		CancelledBy:        p.cancelledBy,
+		LaunchID:           p.launchID,
+		LaunchingAt:        p.launchingAt,
+		StartedAt:          p.startedAt,
+		FirstActivityAt:    p.firstActivityAt,
+		ClearFirstActivity: p.clearFirstActivity,
+		CancelRequestedAt:  p.cancelRequestedAt,
+		EndedAt:            p.endedAt,
+		SessionID:          sessionID,
+		PRURL:              prURL,
+		TargetSha:          targetSHA,
+		FromStatuses:       fromJSON,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("transition older review runs for session %s pr %s to %s: %w", sessionID, prURL, to, err)
+	}
+	return ids, nil
+}
+
+// MarkReviewRunsFirstActivity records the first activity signal from launchID
+// on the review's delivered runs that are still waiting for one.
+func (s *Store) MarkReviewRunsFirstActivity(ctx context.Context, reviewID, launchID string, at time.Time) (int64, error) {
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
+	return s.qw.MarkReviewRunsFirstActivity(ctx, gen.MarkReviewRunsFirstActivityParams{
+		At:       sql.NullTime{Time: at, Valid: true},
+		ReviewID: reviewID,
+		LaunchID: launchID,
 	})
 }
 
-// CancelRunningReviewRunsBySession marks all currently running review passes
-// for a worker cancelled.
-func (s *Store) CancelRunningReviewRunsBySession(ctx context.Context, sessionID domain.SessionID, body string) (int64, error) {
-	s.writeMu.Lock()
-	defer s.writeMu.Unlock()
-	return s.qw.CancelRunningReviewRunsBySession(ctx, gen.CancelRunningReviewRunsBySessionParams{
-		Body:      body,
-		SessionID: sessionID,
-	})
+type reviewRunPatchSQL struct {
+	verdict            string
+	body               sql.NullString
+	githubReviewID     sql.NullString
+	autoInjectReview   sql.NullBool
+	reviewerModel      sql.NullString
+	failureReason      string
+	cancelledBy        string
+	launchID           string
+	launchingAt        sql.NullTime
+	startedAt          sql.NullTime
+	firstActivityAt    sql.NullTime
+	clearFirstActivity bool
+	cancelRequestedAt  sql.NullTime
+	endedAt            sql.NullTime
 }
 
-// CancelRunningReviewRunsBySessionAndHarness marks currently running review
-// passes for a single reviewer harness as cancelled.
-func (s *Store) CancelRunningReviewRunsBySessionAndHarness(ctx context.Context, sessionID domain.SessionID, harness domain.ReviewerHarness, body string) (int64, error) {
-	s.writeMu.Lock()
-	defer s.writeMu.Unlock()
-	return s.qw.CancelRunningReviewRunsBySessionAndHarness(ctx, gen.CancelRunningReviewRunsBySessionAndHarnessParams{
-		Body:      body,
-		SessionID: sessionID,
-		Harness:   harness,
-	})
+func reviewRunPatchParams(p domain.ReviewRunPatch) reviewRunPatchSQL {
+	out := reviewRunPatchSQL{
+		verdict:       string(p.Verdict),
+		failureReason: string(p.FailureReason),
+		cancelledBy:   string(p.CancelledBy),
+		launchID:      p.LaunchID,
+	}
+	if p.Body != nil {
+		out.body = sql.NullString{String: *p.Body, Valid: true}
+	}
+	if p.GithubReviewID != nil {
+		out.githubReviewID = sql.NullString{String: *p.GithubReviewID, Valid: true}
+	}
+	if p.AutoInjectReview != nil {
+		out.autoInjectReview = sql.NullBool{Bool: *p.AutoInjectReview, Valid: true}
+	}
+	if p.ReviewerModel != nil {
+		out.reviewerModel = sql.NullString{String: *p.ReviewerModel, Valid: true}
+	}
+	out.launchingAt = timePtrToNullTime(p.LaunchingAt)
+	out.startedAt = timePtrToNullTime(p.StartedAt)
+	out.firstActivityAt = timePtrToNullTime(p.FirstActivityAt)
+	out.clearFirstActivity = p.ClearFirstActivity
+	out.cancelRequestedAt = timePtrToNullTime(p.CancelRequestedAt)
+	out.endedAt = timePtrToNullTime(p.EndedAt)
+	return out
+}
+
+func reviewRunStatusesJSON(statuses []domain.ReviewRunStatus) (string, error) {
+	if len(statuses) == 0 {
+		return "", fmt.Errorf("review run transition needs at least one from-state")
+	}
+	encoded, err := json.Marshal(statuses)
+	if err != nil {
+		return "", err
+	}
+	return string(encoded), nil
 }
 
 // GetReviewRun returns one review pass by id.
@@ -368,12 +495,26 @@ func (s *Store) ListReviewRunsBySession(ctx context.Context, id domain.SessionID
 	return out, nil
 }
 
-// ListRunningReviewRunsBySession returns only currently running unverdicted
-// review passes for a worker session, newest first.
-func (s *Store) ListRunningReviewRunsBySession(ctx context.Context, id domain.SessionID) ([]domain.ReviewRun, error) {
-	rows, err := s.qr.ListRunningReviewRunsBySession(ctx, id)
+// ListActiveReviewRunsBySession returns a worker's queued, launching, running
+// and cancelling review passes, newest first.
+func (s *Store) ListActiveReviewRunsBySession(ctx context.Context, id domain.SessionID) ([]domain.ReviewRun, error) {
+	rows, err := s.qr.ListActiveReviewRunsBySession(ctx, id)
 	if err != nil {
-		return nil, fmt.Errorf("list running review runs for session %s: %w", id, err)
+		return nil, fmt.Errorf("list active review runs for session %s: %w", id, err)
+	}
+	out := make([]domain.ReviewRun, 0, len(rows))
+	for _, row := range rows {
+		out = append(out, reviewRunFromRow(row))
+	}
+	return out, nil
+}
+
+// ListActiveReviewRuns returns every active review pass across the daemon,
+// oldest first, for the reaper-driven run lifecycle and its boot pass.
+func (s *Store) ListActiveReviewRuns(ctx context.Context) ([]domain.ReviewRun, error) {
+	rows, err := s.qr.ListActiveReviewRuns(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("list active review runs: %w", err)
 	}
 	out := make([]domain.ReviewRun, 0, len(rows))
 	for _, row := range rows {
@@ -393,6 +534,86 @@ func (s *Store) ListReviewRunsByBatch(ctx context.Context, id domain.SessionID, 
 		out = append(out, reviewRunFromRow(row))
 	}
 	return out, nil
+}
+
+// ListPendingReviewRunNotices returns a worker's final review passes that
+// still owe it a "review done" message, oldest first.
+func (s *Store) ListPendingReviewRunNotices(ctx context.Context, id domain.SessionID) ([]domain.ReviewRun, error) {
+	rows, err := s.qr.ListPendingReviewRunNoticesBySession(ctx, gen.ListPendingReviewRunNoticesBySessionParams{SessionID: id, MaxAttempts: domain.ReviewWorkerNoticeMaxAttempts})
+	if err != nil {
+		return nil, fmt.Errorf("list pending review notices for session %s: %w", id, err)
+	}
+	out := make([]domain.ReviewRun, 0, len(rows))
+	for _, row := range rows {
+		out = append(out, reviewRunFromRow(row))
+	}
+	return out, nil
+}
+
+// ListSessionsWithPendingReviewRunNotices returns every worker that is still
+// owed at least one "review done" message.
+func (s *Store) ListSessionsWithPendingReviewRunNotices(ctx context.Context) ([]domain.SessionID, error) {
+	ids, err := s.qr.ListSessionsWithPendingReviewRunNotices(ctx, domain.ReviewWorkerNoticeMaxAttempts)
+	if err != nil {
+		return nil, fmt.Errorf("list sessions with pending review notices: %w", err)
+	}
+	return ids, nil
+}
+
+// MarkReviewRunNoticeSent records that a pass's "review done" message reached
+// the worker. It reports false when the notice was not pending.
+func (s *Store) MarkReviewRunNoticeSent(ctx context.Context, id string) (bool, error) {
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
+	n, err := s.qw.MarkReviewRunNoticeSent(ctx, id)
+	if err != nil {
+		return false, err
+	}
+	return n > 0, nil
+}
+
+// ReviewNoticeChatDelivery returns the state, error and whether the Chat turn
+// carrying clientMessageID started. found=false means no such message exists
+// in the worker's conversation.
+func (s *Store) ReviewNoticeChatDelivery(ctx context.Context, sessionID domain.SessionID, clientMessageID string) (state domain.TurnState, failure string, started, found bool, err error) {
+	row, err := s.qr.SelectReviewNoticeChatDelivery(ctx, gen.SelectReviewNoticeChatDeliveryParams{
+		ClientMessageID: clientMessageID,
+		SessionID:       &sessionID,
+	})
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", "", false, false, nil
+	}
+	if err != nil {
+		return "", "", false, false, fmt.Errorf("review notice chat delivery for %s: %w", sessionID, err)
+	}
+	return row.State, row.ErrorMessage, row.Started, true, nil
+}
+
+// reviewWorkerNotice derives the failed state: a pending notice whose sends
+// failed ReviewWorkerNoticeMaxAttempts times has given up.
+func reviewWorkerNotice(stored string, attempts int64) domain.ReviewWorkerNotice {
+	notice := domain.ReviewWorkerNotice(stored)
+	if notice == domain.ReviewWorkerNoticePending && attempts >= domain.ReviewWorkerNoticeMaxAttempts {
+		return domain.ReviewWorkerNoticeFailed
+	}
+	return notice
+}
+
+// RecordReviewRunNoticeFailure records a failed attempt to deliver a pass's
+// "review done" message and keeps it pending. It reports false when the
+// notice was not pending.
+func (s *Store) RecordReviewRunNoticeFailure(ctx context.Context, id, sendErr string, at time.Time) (bool, error) {
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
+	n, err := s.qw.RecordReviewRunNoticeFailure(ctx, gen.RecordReviewRunNoticeFailureParams{
+		WorkerNoticeError:       sendErr,
+		WorkerNoticeAttemptedAt: sql.NullTime{Time: at, Valid: true},
+		ID:                      id,
+	})
+	if err != nil {
+		return false, err
+	}
+	return n > 0, nil
 }
 
 func reviewFromGetReviewBySessionRow(r gen.GetReviewBySessionRow) domain.Review {
@@ -490,21 +711,35 @@ func reviewRunFromRow(r gen.ReviewRun) domain.ReviewRun {
 		deliveredAt = &t
 	}
 	return domain.ReviewRun{
-		ID:               r.ID,
-		ReviewID:         r.ReviewID,
-		SessionID:        r.SessionID,
-		BatchID:          r.BatchID,
-		Harness:          r.Harness,
-		TriggerSource:    r.TriggerSource,
-		PRURL:            r.PRURL,
-		TargetSHA:        r.TargetSha,
-		Status:           r.Status,
-		Verdict:          r.Verdict,
-		Body:             r.Body,
-		GithubReviewID:   r.GithubReviewID,
-		CreatedAt:        r.CreatedAt,
-		DeliveredAt:      deliveredAt,
-		AutoInjectReview: r.AutoInjectReview,
+		FailureReason:           r.FailureReason,
+		CancelledBy:             r.CancelledBy,
+		LaunchID:                r.LaunchID,
+		LaunchingAt:             nullTimeToTimePtr(r.LaunchingAt),
+		StartedAt:               nullTimeToTimePtr(r.StartedAt),
+		FirstActivityAt:         nullTimeToTimePtr(r.FirstActivityAt),
+		CancelRequestedAt:       nullTimeToTimePtr(r.CancelRequestedAt),
+		EndedAt:                 nullTimeToTimePtr(r.EndedAt),
+		ID:                      r.ID,
+		ReviewID:                r.ReviewID,
+		SessionID:               r.SessionID,
+		BatchID:                 r.BatchID,
+		Harness:                 r.Harness,
+		RequesterSessionID:      r.RequesterSessionID,
+		TriggerSource:           r.TriggerSource,
+		PRURL:                   r.PRURL,
+		TargetSHA:               r.TargetSha,
+		Status:                  r.Status,
+		Verdict:                 r.Verdict,
+		Body:                    r.Body,
+		GithubReviewID:          r.GithubReviewID,
+		CreatedAt:               r.CreatedAt,
+		DeliveredAt:             deliveredAt,
+		AutoInjectReview:        r.AutoInjectReview,
+		ReviewerModel:           r.ReviewerModel,
+		WorkerNotice:            reviewWorkerNotice(r.WorkerNotice, r.WorkerNoticeAttempts),
+		WorkerNoticeAttempts:    int(r.WorkerNoticeAttempts),
+		WorkerNoticeError:       r.WorkerNoticeError,
+		WorkerNoticeAttemptedAt: nullTimePtr(r.WorkerNoticeAttemptedAt),
 	}
 }
 

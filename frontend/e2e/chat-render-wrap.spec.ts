@@ -140,7 +140,7 @@ for (const width of [390, 1440]) {
 			jsonrpc: "2.0", method: "ui/notifications/host-context-changed",
 			params: { theme: "light", styles: { variables: { "--background": "#123456" } } },
 		}, "*"));
-		await expect.poll(() => inline.contentFrame().locator("#ao-theme").textContent()).toContain("--background:#123456");
+		await expect.poll(() => inlineRoot.evaluate((root) => getComputedStyle(root).getPropertyValue("--background").trim())).toBe("#123456");
 		await expect.poll(() => overflow(inline)).toEqual({ root: 0, wrapper: 0 });
 		await inlineRoot.evaluate(() => window.dispatchEvent(new MessageEvent("message", {
 			source: window,

@@ -20,6 +20,7 @@ import { useTheme, useThemedStyles } from "./ThemeProvider";
 import { fontScaleCap, iconSize, radius, space, touchTarget, type } from "./tokens";
 import { Dot } from "./ui";
 import { MachineIdentity } from "./MachineIdentity";
+import { freshnessAccessibilityLabel, type MachineFreshness } from "./machineFreshness";
 import { machineAppearance } from "./machineAppearance";
 
 /** The trailing button's side. */
@@ -46,6 +47,7 @@ export function ProjectCard({
 	row,
 	busy,
 	showMachine = true,
+	freshness,
 	onOpenProject,
 	onOrchestrator,
 }: {
@@ -53,6 +55,8 @@ export function ProjectCard({
 	busy: boolean;
 	/** Off when one machine is paired: it would repeat the same name on every row. */
 	showMachine?: boolean;
+	/** The project's machine's freshness, for the dot beside its name. */
+	freshness?: MachineFreshness;
 	onOpenProject: (row: OrchestratorProjectRow) => void;
 	onOrchestrator: (row: OrchestratorProjectRow) => void;
 }) {
@@ -68,7 +72,7 @@ export function ProjectCard({
 			bodyStyle={styles.body}
 			accessibilityLabel={[
 				row.project.name,
-				showMachine ? `${row.project.hostName} machine` : null,
+				showMachine ? [`${row.project.hostName} machine`, freshnessAccessibilityLabel(freshness)].filter(Boolean).join(", ") : null,
 				`orchestrator ${status.label}`,
 				summary.workers,
 				blocker ? `${blocker.reason}: ${blocker.worker}` : null,
@@ -113,6 +117,7 @@ export function ProjectCard({
 					<MachineIdentity
 						name={row.project.hostName}
 						appearance={machineAppearance({ id: row.project.hostId, name: row.project.hostName, appearance: row.project.hostAppearance })}
+						freshness={freshness}
 						style={styles.machineIdentity}
 					/>
 				) : null}
@@ -246,14 +251,17 @@ function OrchestratorGlyph({ live, color }: { live: boolean; color: string }) {
 export function ProjectMachineIndicator({
 	hostId,
 	hosts,
+	freshness,
 }: {
 	hostId: string | undefined;
 	hosts: readonly Pick<HostSnapshot, "hostId" | "name" | "appearance">[];
+	freshness?: MachineFreshness;
 }) {
 	const styles = useThemedStyles(makeStyles);
 	const host = hosts.find((candidate) => candidate.hostId === hostId);
 	if (!host) return null;
-	return <MachineIdentity name={host.name} appearance={host.appearance} style={styles.projectMachineIdentity} testID="project-machine-identity" />;
+	// Accessible on its own: nothing else in the header says which machine this is or how it is doing.
+	return <MachineIdentity name={host.name} appearance={host.appearance} freshness={freshness} accessible style={styles.projectMachineIdentity} testID="project-machine-identity" />;
 }
 
 /**

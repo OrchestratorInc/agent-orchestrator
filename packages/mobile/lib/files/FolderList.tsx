@@ -38,14 +38,21 @@ export function useFolderTree(backend: FilesBackend | null, sessionId: string, d
 		setError(undefined);
 	}, [scope]);
 
+	// The read in flight, cancelled by the next one and when the page closes, so
+	// one still waiting for the connection is never sent for a page that has gone.
+	const inFlight = useRef<AbortController | null>(null);
+	useEffect(() => () => inFlight.current?.abort(), []);
 	const load = useCallback(async (quiet: boolean) => {
 		if (!backend) return;
 		const ticket = ++request.current;
+		inFlight.current?.abort();
+		const controller = new AbortController();
+		inFlight.current = controller;
 		if (quiet) setRefreshing(true);
 		else setLoading(true);
 		setError(undefined);
 		try {
-			const next = await backend.tree(sessionId, dir);
+			const next = await backend.tree(sessionId, dir, controller.signal);
 			if (ticket === request.current) setTree({ ...next, entries: sortEntries(next.entries) });
 		} catch (cause) {
 			if (ticket === request.current) setError(userFacingError(cause, "Couldn't read this folder."));
@@ -71,14 +78,15 @@ export function useWorkspaceSearch(backend: FilesBackend | null, sessionId: stri
 	useEffect(() => {
 		if (!backend || !trimmed) { setResults(null); setSearching(false); return; }
 		setSearching(true);
-		let cancelled = false;
+		const controller = new AbortController();
 		const timer = setTimeout(() => {
-			backend.search(sessionId, trimmed)
-				.then((found) => { if (!cancelled) setResults(found.results); })
-				.catch(() => { if (!cancelled) setResults([]); })
-				.finally(() => { if (!cancelled) setSearching(false); });
+			backend.search(sessionId, trimmed, controller.signal)
+				.then((found) => { if (!controller.signal.aborted) setResults(found.results); })
+				.catch(() => { if (!controller.signal.aborted) setResults([]); })
+				.finally(() => { if (!controller.signal.aborted) setSearching(false); });
 		}, 250);
-		return () => { cancelled = true; clearTimeout(timer); };
+		// A new query or a closed page cancels the search, even one still waiting for the connection.
+		return () => { controller.abort(); clearTimeout(timer); };
 	}, [backend, sessionId, trimmed]);
 
 	return { active: Boolean(trimmed), query: trimmed, results, searching };

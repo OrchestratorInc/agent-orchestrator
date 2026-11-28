@@ -28,7 +28,7 @@ describe("useCloudSessionsQuery artifact files", () => {
 		cloud.listSessionArtifacts.mockReset().mockResolvedValue({ artifacts: files });
 	});
 
-	it("reads the files of a live session that has any, once per artifact version", async () => {
+	it("reads the files of a session that has any, archived or not, once per artifact version", async () => {
 		cloud.listSessions.mockResolvedValue({ items: [
 			session("s-1", { count: 1, artifactsUpdatedAt: "2026-10-16T10:00:00Z" }),
 			session("s-2", { count: 0 }),
@@ -37,19 +37,26 @@ describe("useCloudSessionsQuery artifact files", () => {
 		const { result } = renderHook(() => useCloudSessionsQuery(), { wrapper });
 		await waitFor(() => expect(result.current.data?.[0]?.artifactFiles).toEqual(files));
 		expect(result.current.data?.[1]?.artifactFiles).toBeUndefined();
-		expect(result.current.data?.[2]?.artifactFiles).toBeUndefined();
-		expect(cloud.listSessionArtifacts).toHaveBeenCalledTimes(1);
+		await waitFor(() => expect(result.current.data?.[2]?.artifactFiles).toEqual(files));
+		expect(cloud.listSessionArtifacts).toHaveBeenCalledTimes(2);
 
 		// Activity changes updatedAt but not the files: no new read.
 		cloud.listSessions.mockResolvedValue({ items: [session("s-1", { count: 1, artifactsUpdatedAt: "2026-10-16T10:00:00Z", updatedAt: "2026-10-16T10:09:00Z" })] });
 		await result.current.refetch();
 		await waitFor(() => expect(result.current.data?.[0]?.updatedAt).toBe("2026-10-16T10:09:00Z"));
-		expect(cloud.listSessionArtifacts).toHaveBeenCalledTimes(1);
+		expect(cloud.listSessionArtifacts).toHaveBeenCalledTimes(2);
 
 		// A commit moves artifactsUpdatedAt: read again.
 		cloud.listSessions.mockResolvedValue({ items: [session("s-1", { count: 1, artifactsUpdatedAt: "2026-10-16T10:10:00Z" })] });
 		await result.current.refetch();
-		await waitFor(() => expect(cloud.listSessionArtifacts).toHaveBeenCalledTimes(2));
+		await waitFor(() => expect(cloud.listSessionArtifacts).toHaveBeenCalledTimes(3));
+	});
+
+	it("reads an already archived session's files on a fresh mount", async () => {
+		cloud.listSessions.mockResolvedValue({ items: [session("s-9", { count: 1, isTerminated: true })] });
+		const { result } = renderHook(() => useCloudSessionsQuery(), { wrapper });
+		await waitFor(() => expect(result.current.data?.[0]?.artifactFiles).toEqual(files));
+		expect(cloud.listSessionArtifacts).toHaveBeenCalledWith("org-1", "s-9", expect.anything());
 	});
 
 	it("keeps the last good list when a new read fails", async () => {

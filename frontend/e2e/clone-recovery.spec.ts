@@ -36,6 +36,10 @@ test.beforeEach(async ({ page }) => {
 			await route.fulfill({ json: { remoteUrl, path: checkout, exists: false, canUseExisting: false } });
 		} else if (pathname === "/api/v1/imports/validate") {
 			await route.fulfill({ json: validation });
+		} else if (pathname === "/api/v1/settings") {
+			// Tracker intake keeps the setup sheet in the flow; without it a clone is
+			// added right away (see the registration failure test).
+			await route.fulfill({ json: { trackerIntakeEnabled: true } });
 		} else {
 			await route.fulfill({ json: { status: "ok" } });
 		}
@@ -43,6 +47,8 @@ test.beforeEach(async ({ page }) => {
 });
 
 test("clone URL is normalized and failed registration keeps the checkout @T0", async ({ page }, testInfo) => {
+	// No intake: the clone is added as soon as it lands, and the failure opens the sheet.
+	await page.route("**/api/v1/settings", (route) => route.fulfill({ json: { trackerIntakeEnabled: false } }));
 	let clones = 0;
 	await page.route("**/api/v1/projects/clone/prepare/stream", async (route) => {
 		clones++;
@@ -59,7 +65,6 @@ test("clone URL is normalized and failed registration keeps the checkout @T0", a
 	await openClone(page);
 	await page.getByRole("button", { name: "Continue", exact: true }).click();
 	await expect(page.getByText(`Repository cloned to ${checkout}. This step adds the project.`)).toBeVisible();
-	await page.getByRole("button", { name: "Create and start", exact: true }).click();
 	await expect(page.getByRole("button", { name: "Retry project setup", exact: true })).toBeVisible();
 	await testInfo.attach("registration-recovery", { body: await page.screenshot(), contentType: "image/png" });
 	await page.getByRole("button", { name: "Retry project setup", exact: true }).click();

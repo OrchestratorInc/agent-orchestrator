@@ -71,6 +71,8 @@ export type CloudProject = {
 	defaultBranch: string;
 	githubRepositoryId?: string;
 	standalone?: boolean;
+	/** A standalone agent's own project: its owner's one worker, with no orchestrator. Only its owner lists it. */
+	standaloneAgent?: boolean;
 	config: CloudProjectConfig;
 	createdAt: string;
 	updatedAt: string;
@@ -133,7 +135,14 @@ export type CloudSession = {
 	branch: string;
 	/** Trust level (read-only | standard | trusted), not the interface. */
 	mode: string;
+	/** The model the session launched with; empty or absent means the agent's default. */
 	model?: string;
+	/**
+	 * The model the session runs now: its owner's Chat pick, else `model`. The
+	 * control plane always sends it, "" for the agent's default; only an older
+	 * one leaves it out (read `model` then).
+	 */
+	currentModel?: string;
 	interfaceMode: CloudInterfaceMode;
 	activityState: string;
 	status: string;
@@ -365,6 +374,9 @@ export type CreateCloudSessionInput = {
 	approvalMode?: CloudApprovalMode;
 	interfaceMode?: CloudInterfaceMode;
 };
+
+/** A session create's body without projectId and kind: the control plane gives the agent a project of its own. */
+export type CreateCloudStandaloneAgentInput = Omit<CreateCloudSessionInput, "projectId" | "kind">;
 
 // ---- Chat -------------------------------------------------------------------
 

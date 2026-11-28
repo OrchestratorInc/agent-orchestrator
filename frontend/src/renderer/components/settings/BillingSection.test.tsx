@@ -64,6 +64,12 @@ function card(plan: string): HTMLElement {
 	return found;
 }
 
+/** The card once the plans have loaded, in whatever language the page is in. */
+async function findCard(plan: string): Promise<HTMLElement> {
+	await screen.findAllByTestId("plan-card");
+	return card(plan);
+}
+
 describe("BillingSection", () => {
 	beforeEach(async () => {
 		await appI18n.changeLanguage("en");
@@ -95,6 +101,165 @@ describe("BillingSection", () => {
 		fireEvent.click(within(card("starter")).getByRole("button", { name: "Upgrade" }));
 		await waitFor(() => expect(mocks.openExternal).toHaveBeenCalledWith("https://checkout.stripe.test/cs_1"));
 		expect(mocks.client.createBillingCheckout).toHaveBeenCalledWith("org-1", "starter");
+	});
+
+	it("offers the free trial on the plan the control plane marks, and Checkout starts it", async () => {
+		const trialPlans = [{ ...plans[0], trialDays: 7 }, plans[1]];
+		mocks.client.getBilling.mockResolvedValue({ enabled: true, exempt: false, plan: "free", entitled: false, plans: trialPlans });
+		mocks.client.createBillingCheckout.mockResolvedValue({ url: "https://checkout.stripe.test/cs_trial" });
+		renderSection();
+		await screen.findByText("Starter");
+		expect(within(card("starter")).queryByRole("button", { name: "Upgrade" })).not.toBeInTheDocument();
+		// Pro has no trial, so it keeps the ordinary label.
+		expect(within(card("pro")).getByRole("button", { name: "Upgrade" })).toBeInTheDocument();
+		fireEvent.click(within(card("starter")).getByRole("button", { name: "Start 7-day trial" }));
+		await waitFor(() => expect(mocks.openExternal).toHaveBeenCalledWith("https://checkout.stripe.test/cs_trial"));
+		expect(mocks.client.createBillingCheckout).toHaveBeenCalledWith("org-1", "starter");
+	});
+
+	// The contract allows any trialDays from 1, so every language must read right for 1 as well as 7.
+	it.each([
+		["en", 1, "Start 1-day trial"],
+		["en", 7, "Start 7-day trial"],
+		["de", 1, "1 Tag kostenlos testen"],
+		["de", 7, "7 Tage kostenlos testen"],
+		["es", 1, "Prueba gratis de 1 día"],
+		["es", 7, "Prueba gratis de 7 días"],
+		["fr", 1, "Essai gratuit de 1 jour"],
+		["fr", 7, "Essai gratuit de 7 jours"],
+		["pt-BR", 1, "Iniciar teste de 1 dia"],
+		["pt-BR", 7, "Iniciar teste de 7 dias"],
+		["ru", 1, "1 день бесплатно"],
+		["ru", 3, "3 дня бесплатно"],
+		["ru", 7, "7 дней бесплатно"],
+		["ja", 7, "7日間無料で試す"],
+		["ko", 7, "7일 무료 체험 시작"],
+		["zh-CN", 7, "开始 7 天试用"],
+	] as const)("labels a %s trial of %i days with the right plural", async (locale, days, label) => {
+		await appI18n.changeLanguage(locale);
+		mocks.client.getBilling.mockResolvedValue({
+			enabled: true, exempt: false, plan: "free", entitled: false, plans: [{ ...plans[0], trialDays: days }, plans[1]],
+		});
+		renderSection();
+		expect(await within(await findCard("starter")).findByRole("button", { name: label })).toBeInTheDocument();
+	});
+
+	it("keeps the trial status short enough for the narrowest plan card in Russian", async () => {
+		await appI18n.changeLanguage("ru");
+		mocks.client.getBilling.mockResolvedValue(subscribed({ subscriptionStatus: "trialing", currentPeriodEnd: "2026-11-23T09:00:00Z" }));
+		renderSection();
+		// "Пробный период" wraps beside the plan name at a 1024 px window; the status reads like "Текущий".
+		expect(await within(await findCard("starter")).findByText("Пробный")).toBeInTheDocument();
+	});
+
+	it("never offers the trial to an org that already has a plan, even if the control plane marks one", async () => {
+		mocks.client.getBilling.mockResolvedValue(subscribed({ plans: [{ ...plans[0], trialDays: 7 }, { ...plans[1], trialDays: 7 }] }));
+		renderSection();
+		await screen.findByText("Usage");
+		expect(within(card("starter")).getByRole("button", { name: "Manage" })).toBeInTheDocument();
+		expect(within(card("pro")).getByRole("button", { name: "Switch" })).toBeInTheDocument();
+		expect(screen.queryByRole("button", { name: /trial/i })).not.toBeInTheDocument();
+	});
+
+	it("shows members the trial plan without a button to start it", async () => {
+		mocks.orgRole = "member";
+		mocks.client.getBilling.mockResolvedValue({
+			enabled: true, exempt: false, plan: "free", entitled: false, plans: [{ ...plans[0], trialDays: 7 }, plans[1]],
+		});
+		renderSection();
+		await screen.findByText("Starter");
+		expect(within(card("starter")).queryByRole("button")).not.toBeInTheDocument();
+		expect(screen.getByText("Only organization admins can manage billing.")).toBeInTheDocument();
+	});
+
+	it("says the card is charged when a free trial ends, and links to Manage billing", async () => {
+		mocks.client.getBilling.mockResolvedValue(subscribed({ subscriptionStatus: "trialing", currentPeriodEnd: "2026-11-23T09:00:00Z" }));
+		mocks.client.createBillingPortal.mockResolvedValue({ url: "https://billing.stripe.test/p_trial" });
+		renderSection();
+		expect(await screen.findByText(/^Your Starter free trial ends on .+\. Your card will be charged then unless you cancel in Manage billing\.$/)).toBeInTheDocument();
+		// A trial is a live subscription: the plan is current, says it is a trial, and changes go through the portal.
+		expect(within(card("starter")).getByText("Free trial")).toBeInTheDocument();
+		expect(within(card("starter")).queryByText("Current")).not.toBeInTheDocument();
+		expect(card("starter")).toHaveAttribute("aria-current", "true");
+		expect(within(card("starter")).getByRole("button", { name: "Manage" })).toBeInTheDocument();
+		expect(within(card("pro")).getByRole("button", { name: "Switch" })).toBeInTheDocument();
+		fireEvent.click(screen.getByRole("button", { name: "Manage billing" }));
+		await waitFor(() => expect(mocks.openExternal).toHaveBeenCalledWith("https://billing.stripe.test/p_trial"));
+		expect(mocks.client.createBillingPortal).toHaveBeenCalledWith("org-1");
+		expect(mocks.client.createBillingCheckout).not.toHaveBeenCalled();
+	});
+
+	it("still says a trial is running when the control plane sends no end date", async () => {
+		mocks.client.getBilling.mockResolvedValue(subscribed({ subscriptionStatus: "trialing", currentPeriodEnd: undefined }));
+		renderSection();
+		expect(await screen.findByText("You're on a Starter free trial. Your card will be charged when it ends unless you cancel in Manage billing.")).toBeInTheDocument();
+	});
+
+	it("explains Free after a trial or plan ends, and offers plans without a second trial", async () => {
+		// What the control plane serves once a canceled trial ends: Free, not entitled, the trial used.
+		mocks.client.getBilling.mockResolvedValue({
+			enabled: true, exempt: false, plan: "free", subscriptionStatus: "canceled", entitled: false,
+			currentPeriodEnd: "2026-11-23T09:00:00Z", plans,
+		});
+		renderSection();
+		expect(await screen.findByText("Your plan has ended, so you're on Free. Choose a plan to run cloud agents again. Paused sessions are kept.")).toBeInTheDocument();
+		expect(within(card("free")).getByText("Current")).toBeInTheDocument();
+		expect(within(card("starter")).getByRole("button", { name: "Upgrade" })).toBeInTheDocument();
+		expect(screen.queryByRole("button", { name: /trial/i })).not.toBeInTheDocument();
+		expect(screen.queryByText("Usage")).not.toBeInTheDocument();
+	});
+
+	it("says nothing about an ended plan to an org that never subscribed", async () => {
+		mocks.client.getBilling.mockResolvedValue({ enabled: true, exempt: false, plan: "free", entitled: false, plans });
+		renderSection();
+		await screen.findByText("Starter");
+		expect(screen.queryByText(/has ended/)).not.toBeInTheDocument();
+	});
+
+	it("re-reads the plan when Checkout says the org already has one, as when a trial just started elsewhere", async () => {
+		mocks.client.getBilling
+			.mockResolvedValueOnce({ enabled: true, exempt: false, plan: "free", entitled: false, plans: [{ ...plans[0], trialDays: 7 }, plans[1]] })
+			.mockResolvedValue(subscribed({ subscriptionStatus: "trialing", currentPeriodEnd: "2026-11-23T09:00:00Z", plans }));
+		mocks.client.createBillingCheckout.mockRejectedValue(new CloudCpError("conflict", { status: 409, code: "ALREADY_SUBSCRIBED" }));
+		renderSection();
+		await screen.findByText("Starter");
+		fireEvent.click(within(card("starter")).getByRole("button", { name: "Start 7-day trial" }));
+		expect(await screen.findByRole("alert")).toHaveTextContent("This organization already has a plan. Use Manage billing to change it.");
+		expect(await within(card("starter")).findByRole("button", { name: "Manage" })).toBeInTheDocument();
+		expect(within(card("starter")).getByText("Free trial")).toBeInTheDocument();
+		expect(mocks.openExternal).not.toHaveBeenCalled();
+	});
+
+	it("says a just-finished Checkout will show, and re-reads the plan", async () => {
+		mocks.client.getBilling
+			.mockResolvedValueOnce({ enabled: true, exempt: false, plan: "free", entitled: false, plans })
+			.mockResolvedValue(subscribed());
+		mocks.client.createBillingCheckout.mockRejectedValue(new CloudCpError("conflict", { status: 409, code: "CHECKOUT_COMPLETED" }));
+		renderSection();
+		await screen.findByText("Starter");
+		fireEvent.click(within(card("pro")).getByRole("button", { name: "Upgrade" }));
+		expect(await screen.findByRole("alert")).toHaveTextContent("Your checkout just finished. Your plan will show here in a moment.");
+		expect(await within(card("starter")).findByRole("button", { name: "Manage" })).toBeInTheDocument();
+	});
+
+	it("tells members when a trial ends without the Manage billing button", async () => {
+		mocks.orgRole = "member";
+		mocks.client.getBilling.mockResolvedValue(subscribed({ subscriptionStatus: "trialing", currentPeriodEnd: "2026-11-23T09:00:00Z" }));
+		renderSection();
+		expect(await screen.findByText(/^Your Starter free trial ends on /)).toBeInTheDocument();
+		expect(screen.queryByRole("button", { name: "Manage billing" })).not.toBeInTheDocument();
+	});
+
+	it("shows only the cancellation notice for a trial set to cancel", async () => {
+		mocks.client.getBilling.mockResolvedValue(subscribed({
+			subscriptionStatus: "trialing", currentPeriodEnd: "2026-11-23T09:00:00Z", cancelAt: "2026-11-23T09:00:00Z",
+		}));
+		renderSection();
+		expect(await screen.findByText(/^Your Starter plan ends on .+\. You'll move to Free then\.$/)).toBeInTheDocument();
+		expect(screen.queryByText(/free trial ends/)).not.toBeInTheDocument();
+		expect(screen.queryByRole("button", { name: "Manage billing" })).not.toBeInTheDocument();
+		// It is still a trial until it ends.
+		expect(within(card("starter")).getByText("Free trial")).toBeInTheDocument();
 	});
 
 	it("lists what each plan includes and books Enterprise with the founders", async () => {

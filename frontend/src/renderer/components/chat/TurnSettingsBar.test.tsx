@@ -1,16 +1,18 @@
-import { fireEvent, render, screen, within } from "@testing-library/react";
+import { act, fireEvent, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 import type { ChatConfigOption } from "../../types/conversation";
 import type { PickerSource } from "./AgentSwitchPicker";
-import { hasProviderPermissionMode, TurnSettingsBar } from "./TurnSettingsBar";
+import { OptionMenu, OptionMenuContent, OptionMenuTrigger } from "../ui/option-menu";
+import { ComposerModeItems, hasProviderPermissionMode, TurnSettingsBar } from "./TurnSettingsBar";
 
 // The agent picker is tested on its own; here only what it is given matters.
-const agentPicker = vi.hoisted(() => ({ current: undefined as PickerSource | undefined }));
+const agentPicker = vi.hoisted(() => ({ current: undefined as PickerSource | undefined, autoCompact: undefined as { kind: string } | undefined }));
 vi.mock("./AgentSwitchPicker", async (original) => ({
 	...await original<typeof import("./AgentSwitchPicker")>(),
-	AgentModelPicker: ({ current }: { current: PickerSource }) => {
+	AgentModelPicker: ({ current, autoCompact }: { current: PickerSource; autoCompact?: { kind: string } }) => {
 		agentPicker.current = current;
+		agentPicker.autoCompact = autoCompact;
 		return null;
 	},
 }));
@@ -879,6 +881,29 @@ describe("ACP session config options", () => {
 		expect(screen.getByRole("menuitemradio", { name: /Use agent permissions/ })).toHaveAttribute("aria-checked", "true");
 	});
 
+	// A Cloud chat keeps its approval mode unless the change is marked as a pick
+	// from this menu, so the unified bar's rows must mark it like the plain rows do.
+	it("reports a pick from the unified bar's approval menu as an approval pick", async () => {
+		const user = userEvent.setup();
+		const onChange = vi.fn();
+		render(
+			<TurnSettingsBar
+				harness="claude-code"
+				models={[]}
+				settings={{ model: "sonnet", approvalMode: "bypass-permissions" }}
+				onChange={onChange}
+				agentSwitch={{ projectId: "p", onPendingChange: vi.fn() }}
+			/>,
+		);
+
+		await user.click(screen.getByRole("button", { name: "Approval policy for the next turn" }));
+		await user.click(screen.getByRole("menuitemradio", { name: /Accept edits/ }));
+		expect(onChange).toHaveBeenLastCalledWith({ model: "sonnet", approvalMode: "accept-edits" }, "approvalMode");
+		await user.click(screen.getByRole("button", { name: "Approval policy for the next turn" }));
+		await user.keyboard("{Home}{Enter}");
+		expect(onChange).toHaveBeenLastCalledWith({ model: "sonnet", approvalMode: "default" }, "approvalMode");
+	});
+
 	it("passes a model's note, such as the orchestrator's model, to the agent picker", () => {
 		render(
 			<TurnSettingsBar
@@ -1105,6 +1130,31 @@ describe("remember project permissions", () => {
 		rerender(<TurnSettingsBar {...props} rememberPermissionsError="Could not save project default" />);
 		expect(screen.getByRole("alert")).toHaveTextContent("Could not save project default");
 		expect(screen.getByRole("button", { name: "Approval policy for the next turn" })).toBeEnabled();
+	});
+
+	it("shows a settings error inside the picker row, so the composer does not grow", async () => {
+		const message = "the agent rejected that model because the account cannot use it";
+		const props = { models: [], settings: {}, onChange: vi.fn() };
+		const { rerender } = render(<TurnSettingsBar {...props} />);
+		const bar = screen.getByRole("group", { name: "Turn settings" });
+		const row = bar.firstElementChild as HTMLElement;
+		expect(bar.children).toHaveLength(1);
+		expect(row).toHaveClass("h-7");
+		expect(row).toContainElement(screen.getByRole("button", { name: "Approval policy for the next turn" }));
+
+		rerender(<TurnSettingsBar {...props} error={message} rememberPermissionsError="Could not save project default" />);
+		const alert = screen.getByRole("alert");
+		expect(row).toContainElement(alert);
+		// The row stays the only child of the bar: nothing is stacked under it.
+		expect(bar.children).toHaveLength(1);
+		expect(alert).toHaveTextContent(message);
+		expect(alert).toHaveTextContent("Could not save project default");
+		// However narrow the row, the warning icon keeps its room.
+		expect(alert).toHaveClass("min-w-3.5");
+		// The line truncates to the free space; keyboard focus opens the whole message.
+		expect(alert).toHaveAttribute("tabindex", "0");
+		act(() => alert.focus());
+		expect(await screen.findByRole("tooltip")).toHaveTextContent(`${message} · Could not save project default`);
 	});
 
 	it("matches the remembered mode against the provider mode instead of stale native settings", async () => {
@@ -1758,6 +1808,46 @@ describe("agent picker effort names", () => {
 		expect(shown).toBe("Extra high");
 	});
 
+	it("offers Claude Code's Ultracode as a mode, not an effort level", () => {
+		agentPicker.current = undefined;
+		const onChangeConfigOption = vi.fn();
+		const ultracode = { on: false, onChange: vi.fn() };
+		const choices = ["high", "xhigh", "max"].map((value) => ({ value, name: "" }));
+		render(<TurnSettingsBar harness="claude-code" models={[]} settings={{}}
+			configOptions={[options(choices)[0], { ...options(choices)[1], currentValue: "high" }]}
+			onChangeConfigOption={onChangeConfigOption} agentSwitch={{ projectId: "p", onPendingChange: vi.fn(), ultracode }} />);
+		const source = agentPicker.current!;
+		expect(source.efforts.map((effort) => effort.value)).toEqual(["high", "xhigh", "max"]);
+		expect(source.ultracode).toBe(false);
+		// It works at any level: turning it on leaves the effort alone, and so does a level its own.
+		act(() => source.onToggleUltracode?.(true));
+		expect(ultracode.onChange).toHaveBeenLastCalledWith(true);
+		expect(onChangeConfigOption).not.toHaveBeenCalled();
+		act(() => source.onPickEffort?.("max"));
+		expect(ultracode.onChange).toHaveBeenCalledTimes(1);
+		expect(onChangeConfigOption).toHaveBeenLastCalledWith("effort", { value: "max" });
+	});
+
+	it("offers Ultracode on a model without Extra high", () => {
+		agentPicker.current = undefined;
+		render(<TurnSettingsBar harness="claude-code" models={[]} settings={{}} configOptions={options([{ value: "high", name: "High" }])}
+			onChangeConfigOption={vi.fn()} agentSwitch={{ projectId: "p", onPendingChange: vi.fn(), ultracode: { on: false, onChange: vi.fn() } }} />);
+		expect(agentPicker.current!.ultracode).toBe(false);
+	});
+
+	it("offers Ultracode and auto-compact when Orchestrator lists Claude Code's models", () => {
+		agentPicker.current = undefined;
+		const ultracode = { on: true, onChange: vi.fn() };
+		render(<TurnSettingsBar harness="claude-code" settings={{ model: "opus" }} onChange={vi.fn()}
+			models={[{ id: "opus", displayName: "Opus", default: true, efforts: ["high"] }]}
+			agentSwitch={{ projectId: "p", onPendingChange: vi.fn(), ultracode, autoCompact: { onChange: vi.fn() } }} />);
+		const source = agentPicker.current!;
+		expect(source.ultracode).toBe(true);
+		act(() => source.onToggleUltracode?.(false));
+		expect(ultracode.onChange).toHaveBeenLastCalledWith(false);
+		expect(agentPicker.autoCompact?.kind).toBe("window");
+	});
+
 	it("keeps the names a provider gives its levels", () => {
 		const { rows, shown } = efforts([{ value: "default", name: "Default" }, { value: "high", name: "High" }, { value: "xhigh", name: "Xhigh" }]);
 		expect(rows.map((effort) => effort.label)).toEqual(["High", "Xhigh"]);
@@ -1973,5 +2063,27 @@ describe("permissions for the agent picked for the next message", () => {
 		await user.click(screen.getByRole("button", { name: note }));
 		await user.click(screen.getByRole("menuitemradio", { name: /Use agent permissions/ }));
 		expect(onPendingChange).toHaveBeenCalledWith({ harness: "kimi", approvalMode: "default" });
+	});
+});
+
+describe("composer add menu", () => {
+	it("leaves Fast mode to the agent picker and keeps the other switches", async () => {
+		const onChangeConfigOption = vi.fn();
+		render(
+			<OptionMenu open>
+				<OptionMenuTrigger>Add</OptionMenuTrigger>
+				<OptionMenuContent>
+					<ComposerModeItems
+						configOptions={[...OPTIONS, { id: "web", name: "Web search", type: "boolean", currentBoolean: false, choices: [] }]}
+						settings={{ model: "opus", fastMode: true }}
+						onChange={vi.fn()}
+						onChangeConfigOption={onChangeConfigOption}
+					/>
+				</OptionMenuContent>
+			</OptionMenu>,
+		);
+		const rows = screen.getAllByRole("menuitem").map((row) => row.textContent);
+		expect(rows).toEqual(["Plan modeTurn plan mode on", "Web searchTurn web search on"]);
+		expect(screen.queryByText("Fast mode")).not.toBeInTheDocument();
 	});
 });

@@ -9,6 +9,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"reflect"
 	"sort"
 	"sync/atomic"
 	"testing"
@@ -412,4 +413,58 @@ func TestListIssuesTheSameStatementsForAnySessionCount(t *testing.T) {
 		t.Fatalf("a list read runs %d statements, want at most 8", large)
 	}
 	t.Logf("a list read runs %d SQL statements for %d and for %d sessions", large, len(settledShapes()), 8*len(settledShapes()))
+}
+
+// The merged list reads the real store: archived sessions whose PR merged,
+// newest merge first by the provider's merge time, not by when the session
+// last changed. An archived open PR and a live merged one stay out.
+func TestListPageByPRStateReadsMergeTimesFromTheStore(t *testing.T) {
+	var statements atomic.Int64
+	store, dataDir := openCountingStore(t, &statements)
+	ctx := context.Background()
+	add := func(terminated bool, updated time.Time, pr domain.PullRequest) domain.SessionID {
+		t.Helper()
+		rec, err := store.CreateSession(ctx, domain.SessionRecord{ProjectID: "mer", Kind: domain.KindWorker, Harness: domain.HarnessClaudeCode, CreatedAt: updated, UpdatedAt: updated})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if terminated {
+			rec.IsTerminated, rec.UpdatedAt = true, updated
+			if err := store.UpdateSession(ctx, rec); err != nil {
+				t.Fatal(err)
+			}
+		}
+		pr.SessionID, pr.HeadSHA, pr.ObservedAt = rec.ID, "head", pr.UpdatedAt
+		pr.URL = fmt.Sprintf("https://github.com/acme/repo/pull/%d", pr.Number)
+		if err := store.WriteSCMObservation(ctx, pr, nil, nil, nil, nil, ports.ReviewWritePreserve); err != nil {
+			t.Fatal(err)
+		}
+		return rec.ID
+	}
+	early := listFixtureTime.Add(-48 * time.Hour)
+	late := listFixtureTime.Add(-24 * time.Hour)
+	mergedEarly := add(true, listFixtureTime, domain.PullRequest{Number: 1, Merged: true, MergedAtProvider: early, UpdatedAt: listFixtureTime})
+	mergedLate := add(true, early, domain.PullRequest{Number: 2, Merged: true, MergedAtProvider: late, UpdatedAt: late})
+	add(true, listFixtureTime, domain.PullRequest{Number: 3, UpdatedAt: listFixtureTime})
+	add(false, listFixtureTime, domain.PullRequest{Number: 4, Merged: true, MergedAtProvider: late, UpdatedAt: late})
+
+	svc := newListFixtureService(store, dataDir, nil)
+	page, err := svc.ListPage(ctx, ListFilter{Active: boolPtr(false), Kind: domain.KindWorker, PRState: domain.PRStateMerged, Limit: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	next, err := svc.ListPage(ctx, ListFilter{Active: boolPtr(false), Kind: domain.KindWorker, PRState: domain.PRStateMerged, Limit: 1, Cursor: page.NextCursor})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := append(pageIDs(page), pageIDs(next)...)
+	if want := []string{string(mergedLate), string(mergedEarly)}; !reflect.DeepEqual(got, want) || next.NextCursor != "" {
+		t.Fatalf("merged pages = %v (cursor %q), want %v", got, next.NextCursor, want)
+	}
+	if page.Total == nil || *page.Total != 2 {
+		t.Fatalf("total = %v, want 2", page.Total)
+	}
+	if prs := page.Sessions[0].PRs; len(prs) != 1 || !prs[0].Merged {
+		t.Fatalf("listed PR facts = %+v, want the merged PR", prs)
+	}
 }

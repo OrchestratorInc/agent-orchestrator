@@ -2,11 +2,15 @@ package store_test
 
 import (
 	"context"
+	"database/sql"
 	"errors"
+	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
+	"github.com/aoagents/agent-orchestrator/backend/internal/storage/sqlite/sqlitetest"
 )
 
 func TestCreateReviewConversationClaimsChatMode(t *testing.T) {
@@ -280,7 +284,7 @@ func TestInsertReviewRunDuplicatePRSHAMapsToSentinel(t *testing.T) {
 		t.Fatalf("same sha on different PR should insert: %v", err)
 	}
 
-	if ok, err := s.UpdateReviewRunResult(ctx, "run-1", domain.ReviewRunFailed, domain.VerdictNone, "claude: not found", "", true); err != nil {
+	if ok, err := finishReviewRun(ctx, s, "run-1", domain.ReviewRunFailed, domain.VerdictNone, "claude: not found", "", true); err != nil {
 		t.Fatalf("mark failed: %v", err)
 	} else if !ok {
 		t.Fatal("mark failed: got ok=false")
@@ -362,7 +366,7 @@ func TestInsertReviewRunAllowsRerunAfterChangesRequested(t *testing.T) {
 	if err := s.InsertReviewRun(ctx, run); err != nil {
 		t.Fatalf("first insert: %v", err)
 	}
-	if ok, err := s.UpdateReviewRunResult(ctx, "run-1", domain.ReviewRunComplete, domain.VerdictChangesRequested, "please fix", "rev-1", true); err != nil {
+	if ok, err := finishReviewRun(ctx, s, "run-1", domain.ReviewRunCompleted, domain.VerdictChangesRequested, "please fix", "rev-1", true); err != nil {
 		t.Fatalf("mark changes requested: %v", err)
 	} else if !ok {
 		t.Fatal("mark changes requested: got ok=false")
@@ -393,7 +397,7 @@ func TestInsertReviewRunAllowsRerunAfterTerminalEmptyVerdict(t *testing.T) {
 	}
 	run := domain.ReviewRun{
 		ID: "run-1", ReviewID: "rev-1", SessionID: rec.ID, Harness: domain.ReviewerClaudeCode,
-		PRURL: "https://example/pr/1", TargetSHA: "sha1", Status: domain.ReviewRunComplete, Verdict: domain.VerdictNone, CreatedAt: now,
+		PRURL: "https://example/pr/1", TargetSHA: "sha1", Status: domain.ReviewRunCompleted, Verdict: domain.VerdictNone, CreatedAt: now,
 	}
 	if err := s.InsertReviewRun(ctx, run); err != nil {
 		t.Fatalf("first insert: %v", err)
@@ -556,7 +560,7 @@ func TestReviewUpsertReusesRowAndRunRoundTrip(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("insert run: %v", err)
 	}
-	if ok, err := s.UpdateReviewRunResult(ctx, "run-1", domain.ReviewRunComplete, domain.VerdictChangesRequested, "please fix", "rev-987", false); err != nil {
+	if ok, err := finishReviewRun(ctx, s, "run-1", domain.ReviewRunCompleted, domain.VerdictChangesRequested, "please fix", "rev-987", false); err != nil {
 		t.Fatalf("update run: %v", err)
 	} else if !ok {
 		t.Fatal("update run: got ok=false")
@@ -574,7 +578,7 @@ func TestReviewUpsertReusesRowAndRunRoundTrip(t *testing.T) {
 	if err != nil || !ok {
 		t.Fatalf("by sha: ok=%v err=%v", ok, err)
 	}
-	if bySHA.Status != domain.ReviewRunComplete || bySHA.Verdict != domain.VerdictChangesRequested || bySHA.Body != "please fix" || bySHA.GithubReviewID != "rev-987" {
+	if bySHA.Status != domain.ReviewRunCompleted || bySHA.Verdict != domain.VerdictChangesRequested || bySHA.Body != "please fix" || bySHA.GithubReviewID != "rev-987" {
 		t.Fatalf("run result not persisted: %+v", bySHA)
 	}
 	byHarness, ok, err := s.GetReviewRunBySessionPRSHAAndHarness(ctx, rec.ID, got.PRURL, "sha1", domain.ReviewerHarness("greptile"))
@@ -606,14 +610,16 @@ func TestReviewUpsertReusesRowAndRunRoundTrip(t *testing.T) {
 		t.Fatalf("batch runs = %+v", batchRuns)
 	}
 
-	if ok, err := s.UpdateReviewRunResult(ctx, "run-1", domain.ReviewRunComplete, domain.VerdictApproved, "again", "", true); err != nil {
+	if ok, err := finishReviewRun(ctx, s, "run-1", domain.ReviewRunCompleted, domain.VerdictApproved, "again", "", true); err != nil {
 		t.Fatalf("second update: %v", err)
 	} else if ok {
 		t.Fatal("second update completed an already-complete run")
 	}
 }
 
-func TestCancelRunningReviewRunsBySession(t *testing.T) {
+// Every write is guarded by its allowed from-states, and the first final
+// state wins: a late writer sees false and changes nothing.
+func TestTransitionReviewRunIsGuardedByFromStates(t *testing.T) {
 	s := newTestStore(t)
 	ctx := context.Background()
 	seedProject(t, s, "mer")
@@ -622,48 +628,57 @@ func TestCancelRunningReviewRunsBySession(t *testing.T) {
 		t.Fatalf("create session: %v", err)
 	}
 	now := time.Now().UTC().Truncate(time.Second)
-	if err := s.UpsertReview(ctx, domain.Review{
-		ID: "rev-1", SessionID: rec.ID, ProjectID: rec.ProjectID,
-		Harness: domain.ReviewerCodex, CreatedAt: now, UpdatedAt: now,
-	}); err != nil {
+	if err := s.UpsertReview(ctx, domain.Review{ID: "rev-1", SessionID: rec.ID, ProjectID: rec.ProjectID, Harness: domain.ReviewerCodex, CreatedAt: now, UpdatedAt: now}); err != nil {
 		t.Fatalf("upsert review: %v", err)
 	}
-	for _, run := range []domain.ReviewRun{
-		{ID: "run-1", ReviewID: "rev-1", SessionID: rec.ID, Harness: domain.ReviewerCodex, PRURL: "https://example/pr/1", TargetSHA: "sha1", Status: domain.ReviewRunRunning, CreatedAt: now},
-		{ID: "run-2", ReviewID: "rev-1", SessionID: rec.ID, Harness: domain.ReviewerCodex, PRURL: "https://example/pr/2", TargetSHA: "sha2", Status: domain.ReviewRunRunning, CreatedAt: now.Add(time.Second)},
-		{ID: "run-3", ReviewID: "rev-1", SessionID: rec.ID, Harness: domain.ReviewerCodex, PRURL: "https://example/pr/3", TargetSHA: "sha3", Status: domain.ReviewRunComplete, Verdict: domain.VerdictApproved, CreatedAt: now.Add(2 * time.Second)},
-	} {
-		if err := s.InsertReviewRun(ctx, run); err != nil {
-			t.Fatalf("insert %s: %v", run.ID, err)
+	if err := s.InsertReviewRun(ctx, domain.ReviewRun{ID: "run-1", ReviewID: "rev-1", SessionID: rec.ID, Harness: domain.ReviewerCodex, PRURL: "https://example/pr/1", TargetSHA: "sha1", Status: domain.ReviewRunQueued, CreatedAt: now}); err != nil {
+		t.Fatalf("insert: %v", err)
+	}
+	get := func() domain.ReviewRun {
+		t.Helper()
+		run, ok, err := s.GetReviewRun(ctx, "run-1")
+		if err != nil || !ok {
+			t.Fatalf("get run ok=%v err=%v", ok, err)
 		}
+		return run
 	}
-	running, err := s.ListRunningReviewRunsBySession(ctx, rec.ID)
-	if err != nil {
-		t.Fatalf("list running: %v", err)
+	launching := now.Add(time.Second)
+	if ok, err := s.TransitionReviewRun(ctx, "run-1", []domain.ReviewRunStatus{domain.ReviewRunRunning}, domain.ReviewRunCompleted, domain.ReviewRunPatch{}); err != nil || ok {
+		t.Fatalf("queued -> completed from running only: ok=%v err=%v", ok, err)
 	}
-	if len(running) != 2 || running[0].ID != "run-2" || running[1].ID != "run-1" {
-		t.Fatalf("running = %+v", running)
+	if ok, err := s.TransitionReviewRun(ctx, "run-1", []domain.ReviewRunStatus{domain.ReviewRunQueued}, domain.ReviewRunLaunching, domain.ReviewRunPatch{LaunchID: "launch-1", LaunchingAt: &launching}); err != nil || !ok {
+		t.Fatalf("queued -> launching: ok=%v err=%v", ok, err)
 	}
-	n, err := s.CancelRunningReviewRunsBySession(ctx, rec.ID, "cancelled by user")
-	if err != nil {
-		t.Fatalf("cancel running: %v", err)
+	started := now.Add(2 * time.Second)
+	if ok, err := s.TransitionReviewRun(ctx, "run-1", []domain.ReviewRunStatus{domain.ReviewRunLaunching}, domain.ReviewRunRunning, domain.ReviewRunPatch{StartedAt: &started}); err != nil || !ok {
+		t.Fatalf("launching -> running: ok=%v err=%v", ok, err)
 	}
-	if n != 2 {
-		t.Fatalf("cancelled rows = %d, want 2", n)
+	if n, err := s.MarkReviewRunsFirstActivity(ctx, "rev-1", "launch-other", started); err != nil || n != 0 {
+		t.Fatalf("activity from another launch counted: n=%d err=%v", n, err)
 	}
-	runs, err := s.ListReviewRunsBySession(ctx, rec.ID)
-	if err != nil {
-		t.Fatalf("list runs: %v", err)
+	if n, err := s.MarkReviewRunsFirstActivity(ctx, "rev-1", "launch-1", started); err != nil || n != 1 {
+		t.Fatalf("activity from the serving launch: n=%d err=%v", n, err)
 	}
-	byID := map[string]domain.ReviewRun{}
-	for _, run := range runs {
-		byID[run.ID] = run
+	if n, err := s.MarkReviewRunsFirstActivity(ctx, "rev-1", "launch-1", started.Add(time.Second)); err != nil || n != 0 {
+		t.Fatalf("first activity recorded twice: n=%d err=%v", n, err)
 	}
-	if byID["run-1"].Status != domain.ReviewRunCancelled || byID["run-2"].Status != domain.ReviewRunCancelled {
-		t.Fatalf("running runs not cancelled: %+v", byID)
+	failedAt := now.Add(3 * time.Second)
+	if ok, err := s.TransitionReviewRun(ctx, "run-1", []domain.ReviewRunStatus{domain.ReviewRunRunning}, domain.ReviewRunFailed, domain.ReviewRunPatch{FailureReason: domain.ReviewFailureTimedOut, EndedAt: &failedAt}); err != nil || !ok {
+		t.Fatalf("running -> failed: ok=%v err=%v", ok, err)
 	}
-	if byID["run-3"].Status != domain.ReviewRunComplete {
-		t.Fatalf("complete run changed: %+v", byID["run-3"])
+	if ok, err := finishReviewRun(ctx, s, "run-1", domain.ReviewRunCompleted, domain.VerdictApproved, "late", "gh-1", true); err != nil || ok {
+		t.Fatalf("late submit overwrote a final run: ok=%v err=%v", ok, err)
+	}
+	run := get()
+	if run.Status != domain.ReviewRunFailed || run.FailureReason != domain.ReviewFailureTimedOut || run.Verdict != domain.VerdictNone || run.Body != "" {
+		t.Fatalf("final run = %+v", run)
+	}
+	if run.LaunchID != "launch-1" || run.LaunchingAt == nil || !run.LaunchingAt.Equal(launching) || run.StartedAt == nil || !run.StartedAt.Equal(started) || run.EndedAt == nil || !run.EndedAt.Equal(failedAt) {
+		t.Fatalf("timestamps = %+v", run)
+	}
+	active, err := s.ListActiveReviewRuns(ctx)
+	if err != nil || len(active) != 0 {
+		t.Fatalf("active runs after final = %+v err=%v", active, err)
 	}
 }
 
@@ -774,7 +789,7 @@ func TestReviewerChatCompletionSettlesOnlyItsUnsubmittedBatch(t *testing.T) {
 			}
 			for _, run := range []domain.ReviewRun{
 				{ID: "missing", BatchID: "batch-1", Status: domain.ReviewRunRunning},
-				{ID: "submitted", BatchID: "batch-1", Status: domain.ReviewRunComplete, Verdict: domain.VerdictApproved, Body: "submitted result"},
+				{ID: "submitted", BatchID: "batch-1", Status: domain.ReviewRunCompleted, Verdict: domain.VerdictApproved, Body: "submitted result"},
 				{ID: "next", BatchID: "batch-2", Status: domain.ReviewRunRunning},
 			} {
 				run.ReviewID, run.SessionID, run.Harness, run.CreatedAt = review.ID, session.ID, domain.ReviewerCodex, now
@@ -811,11 +826,11 @@ func TestReviewerChatCompletionSettlesOnlyItsUnsubmittedBatch(t *testing.T) {
 			if missing.Status != want {
 				t.Fatalf("unsubmitted status = %s, want %s", missing.Status, want)
 			}
-			if want == domain.ReviewRunFailed && missing.Body != "reviewer Chat turn ended without submitting a result" {
-				t.Fatalf("failure explanation = %q", missing.Body)
+			if want == domain.ReviewRunFailed && (missing.FailureReason != domain.ReviewFailureTurnEndedWithoutSubmit || missing.Body != "" || missing.EndedAt == nil) {
+				t.Fatalf("failure = reason %q body %q ended %v", missing.FailureReason, missing.Body, missing.EndedAt)
 			}
 			submitted, _, err := s.GetReviewRun(ctx, "submitted")
-			if err != nil || submitted.Status != domain.ReviewRunComplete || submitted.Verdict != domain.VerdictApproved || submitted.Body != "submitted result" {
+			if err != nil || submitted.Status != domain.ReviewRunCompleted || submitted.Verdict != domain.VerdictApproved || submitted.Body != "submitted result" {
 				t.Fatalf("submitted result changed: %+v %v", submitted, err)
 			}
 			next, _, err := s.GetReviewRun(ctx, "next")
@@ -848,7 +863,7 @@ func TestInsertReviewRunAllowsRerunAfterApproval(t *testing.T) {
 	if err := s.InsertReviewRun(ctx, run); err != nil {
 		t.Fatalf("first insert: %v", err)
 	}
-	if ok, err := s.UpdateReviewRunResult(ctx, "run-1", domain.ReviewRunComplete, domain.VerdictApproved, "approved", "rev-1", true); err != nil {
+	if ok, err := finishReviewRun(ctx, s, "run-1", domain.ReviewRunCompleted, domain.VerdictApproved, "approved", "rev-1", true); err != nil {
 		t.Fatalf("mark approved: %v", err)
 	} else if !ok {
 		t.Fatal("mark approved: got ok=false")
@@ -866,11 +881,294 @@ func TestInsertReviewRunAllowsRerunAfterApproval(t *testing.T) {
 	if err := s.InsertReviewRun(ctx, duplicate); !errors.Is(err, domain.ErrDuplicateReviewRun) {
 		t.Fatalf("concurrent rerun = %v, want duplicate", err)
 	}
-	if ok, err := s.UpdateReviewRunResult(ctx, rerun.ID, domain.ReviewRunComplete, domain.VerdictApproved, "approved again", "rev-2", true); err != nil || !ok {
+	if ok, err := finishReviewRun(ctx, s, rerun.ID, domain.ReviewRunCompleted, domain.VerdictApproved, "approved again", "rev-2", true); err != nil || !ok {
 		t.Fatalf("finish rerun = %v, %v", ok, err)
 	}
 	runs, err := s.ListReviewRunsBySession(ctx, rec.ID)
 	if err != nil || len(runs) != 2 || runs[0].Verdict != domain.VerdictApproved || runs[1].Verdict != domain.VerdictApproved {
 		t.Fatalf("approval history = %+v, %v", runs, err)
+	}
+}
+
+// A pass that ends owes its worker one "review done" message, marked on the
+// final status write itself so every ending path (submit, cancel, failure)
+// and a daemon restart see it. Sessions with review feedback off owe none.
+func TestReviewRunFinalStatusQueuesWorkerNotice(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+	seedProject(t, s, "mer")
+	on, err := s.CreateSession(ctx, sampleRecord("mer"))
+	if err != nil {
+		t.Fatalf("create session: %v", err)
+	}
+	offRec := sampleRecord("mer")
+	offRec.AutoInjectReview = false
+	off, err := s.CreateSession(ctx, offRec)
+	if err != nil {
+		t.Fatalf("create session: %v", err)
+	}
+	requester, err := s.CreateSession(ctx, sampleRecord("mer"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now().UTC().Truncate(time.Second)
+	for _, sess := range []domain.SessionRecord{on, off} {
+		if err := s.UpsertReview(ctx, domain.Review{ID: "rev-" + string(sess.ID), SessionID: sess.ID, ProjectID: sess.ProjectID, Harness: domain.ReviewerCodex, CreatedAt: now, UpdatedAt: now}); err != nil {
+			t.Fatalf("upsert review: %v", err)
+		}
+	}
+	insert := func(id string, sess domain.SessionRecord, sha string, at time.Time) {
+		t.Helper()
+		run := domain.ReviewRun{ID: id, ReviewID: "rev-" + string(sess.ID), SessionID: sess.ID, Harness: domain.ReviewerCodex, ReviewerModel: "gpt-5.5", RequesterSessionID: requester.ID, TriggerSource: domain.ReviewTriggerAgent,
+			PRURL: "https://example/pr/" + string(sess.ID), TargetSHA: sha, Status: domain.ReviewRunRunning, CreatedAt: at, AutoInjectReview: sess.AutoInjectReview}
+		if err := s.InsertReviewRun(ctx, run); err != nil {
+			t.Fatalf("insert %s: %v", id, err)
+		}
+	}
+	notice := func(id string) domain.ReviewRun {
+		t.Helper()
+		run, ok, err := s.GetReviewRun(ctx, id)
+		if err != nil || !ok {
+			t.Fatalf("get %s: ok=%v err=%v", id, ok, err)
+		}
+		return run
+	}
+
+	insert("approved", on, "sha1", now)
+	if got := notice("approved"); got.WorkerNotice != domain.ReviewWorkerNoticeNone || got.ReviewerModel != "gpt-5.5" {
+		t.Fatalf("running pass = notice %q model %q, want no notice and the recorded model", got.WorkerNotice, got.ReviewerModel)
+	}
+	if ok, err := finishReviewRun(ctx, s, "approved", domain.ReviewRunCompleted, domain.VerdictApproved, "LGTM", "555", true); err != nil || !ok {
+		t.Fatalf("submit: ok=%v err=%v", ok, err)
+	}
+	if got := notice("approved").WorkerNotice; got != domain.ReviewWorkerNoticePending {
+		t.Fatalf("approved notice = %q, want pending", got)
+	}
+	// A rerun on the same head is its own pass with its own notice.
+	insert("rerun", on, "sha1", now.Add(time.Second))
+	insert("cancelled", on, "sha2", now.Add(2*time.Second))
+	if n, err := s.TransitionReviewRunsBySession(ctx, on.ID, nil, domain.ActiveReviewRunStatuses, domain.ReviewRunCancelled, domain.ReviewRunPatch{CancelledBy: domain.ReviewCancelledByUser}); err != nil || len(n) != 2 {
+		t.Fatalf("cancel: ids=%v err=%v", n, err)
+	}
+	insert("no-inject", off, "sha3", now)
+	if ok, err := finishReviewRun(ctx, s, "no-inject", domain.ReviewRunCompleted, domain.VerdictApproved, "LGTM", "", false); err != nil || !ok {
+		t.Fatalf("submit no-inject: ok=%v err=%v", ok, err)
+	}
+	if got := notice("no-inject").WorkerNotice; got != domain.ReviewWorkerNoticeNone {
+		t.Fatalf("feedback-off notice = %q, want none", got)
+	}
+
+	for _, source := range []domain.ReviewTriggerSource{domain.ReviewTriggerManual, domain.ReviewTriggerAuto} {
+		run := notice("approved")
+		run.ID = string(source)
+		run.TargetSHA = string(source)
+		run.Status = domain.ReviewRunRunning
+		run.Verdict = domain.VerdictNone
+		run.TriggerSource = source
+		if err := s.InsertReviewRun(ctx, run); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := finishReviewRun(ctx, s, run.ID, domain.ReviewRunCompleted, domain.VerdictApproved, "", "", true); err != nil {
+			t.Fatal(err)
+		}
+		if got := notice(run.ID).WorkerNotice; got != domain.ReviewWorkerNoticeNone {
+			t.Fatalf("%s queued notice %q", source, got)
+		}
+	}
+	if notices, err := s.ListPendingReviewRunNotices(ctx, on.ID); err != nil || len(notices) != 0 {
+		t.Fatalf("PR owner queue: %v, %v", notices, err)
+	}
+	pending, err := s.ListPendingReviewRunNotices(ctx, requester.ID)
+	if err != nil {
+		t.Fatalf("list pending: %v", err)
+	}
+	var ids []string
+	for _, run := range pending {
+		ids = append(ids, run.ID)
+	}
+	if strings.Join(ids, ",") != "approved,rerun,cancelled" {
+		t.Fatalf("pending notices = %v, want oldest first", ids)
+	}
+	sessions, err := s.ListSessionsWithPendingReviewRunNotices(ctx)
+	if err != nil || len(sessions) != 1 || sessions[0] != requester.ID {
+		t.Fatalf("sessions with pending notices = %v err=%v", sessions, err)
+	}
+
+	if ok, err := s.MarkReviewRunNoticeSent(ctx, "approved"); err != nil || !ok {
+		t.Fatalf("mark sent: ok=%v err=%v", ok, err)
+	}
+	if ok, err := s.MarkReviewRunNoticeSent(ctx, "approved"); err != nil || ok {
+		t.Fatalf("second mark sent: ok=%v err=%v, want no-op", ok, err)
+	}
+	if got := notice("approved").WorkerNotice; got != domain.ReviewWorkerNoticeSent {
+		t.Fatalf("approved notice = %q, want sent", got)
+	}
+
+	// A failed delivery stays pending and keeps its error and attempt count.
+	failedAt := now.Add(time.Minute)
+	if ok, err := s.RecordReviewRunNoticeFailure(ctx, "rerun", "no chat controller", failedAt); err != nil || !ok {
+		t.Fatalf("record failure: ok=%v err=%v", ok, err)
+	}
+	if ok, err := s.RecordReviewRunNoticeFailure(ctx, "rerun", "still no controller", failedAt.Add(time.Minute)); err != nil || !ok {
+		t.Fatalf("record second failure: ok=%v err=%v", ok, err)
+	}
+	if got := notice("rerun"); got.WorkerNotice != domain.ReviewWorkerNoticePending || got.WorkerNoticeAttempts != 2 || got.WorkerNoticeError != "still no controller" || got.WorkerNoticeAttemptedAt == nil || !got.WorkerNoticeAttemptedAt.Equal(failedAt.Add(time.Minute)) {
+		t.Fatalf("after failures: %+v", got)
+	}
+	if ok, err := s.RecordReviewRunNoticeFailure(ctx, "approved", "late", failedAt); err != nil || ok {
+		t.Fatalf("failure on a sent notice: ok=%v err=%v, want no-op", ok, err)
+	}
+
+	// After ReviewWorkerNoticeMaxAttempts failures the notice reads as failed
+	// and is no longer queued for delivery.
+	for i := 2; i < domain.ReviewWorkerNoticeMaxAttempts; i++ {
+		if ok, err := s.RecordReviewRunNoticeFailure(ctx, "rerun", "still no controller", failedAt); err != nil || !ok {
+			t.Fatalf("record failure %d: ok=%v err=%v", i+1, ok, err)
+		}
+	}
+	if got := notice("rerun"); got.WorkerNotice != domain.ReviewWorkerNoticeFailed || got.WorkerNoticeAttempts != domain.ReviewWorkerNoticeMaxAttempts || got.WorkerNoticeError != "still no controller" {
+		t.Fatalf("after the last attempt: %+v", got)
+	}
+	queued, err := s.ListPendingReviewRunNotices(ctx, requester.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, run := range queued {
+		if run.ID == "rerun" {
+			t.Fatal("a notice that gave up is still queued")
+		}
+	}
+
+	// A terminated worker cannot take a message; the sweep skips it.
+	rec, _, err := s.GetSession(ctx, requester.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rec.IsTerminated = true
+	if err := s.UpdateSession(ctx, rec); err != nil {
+		t.Fatalf("terminate: %v", err)
+	}
+	if sessions, err := s.ListSessionsWithPendingReviewRunNotices(ctx); err != nil || len(sessions) != 0 {
+		t.Fatalf("sessions with pending notices after terminate = %v err=%v", sessions, err)
+	}
+}
+
+// A review done notice relayed to a Chat session is found by its client
+// message id in the worker's conversation, with its turn's state and error.
+func TestReviewNoticeChatDeliveryReadsTheTurn(t *testing.T) {
+	dataDir := t.TempDir()
+	s := sqlitetest.MustOpenAt(t, dataDir)
+	ctx := context.Background()
+	seedProject(t, s, "mer")
+	rec, err := s.CreateSession(ctx, sampleRecord("mer"))
+	if err != nil {
+		t.Fatalf("create session: %v", err)
+	}
+	now := time.Now().UTC().Truncate(time.Second)
+	conversation, err := s.CreateConversation(ctx, "conv-notice", domain.ConversationScopeSession, rec.ProjectID, rec.ID, now)
+	if err != nil {
+		t.Fatalf("create conversation: %v", err)
+	}
+	if _, _, _, found, err := s.ReviewNoticeChatDelivery(ctx, rec.ID, "review-done:run-1:0"); err != nil || found {
+		t.Fatalf("before the relay: found=%v err=%v", found, err)
+	}
+	// A relayed message starts as a queued turn until a controller runs it.
+	created, err := s.AppendUserMessage(ctx, conversation.ID, rec.ID, "generation-root", domain.ConversationMessage{
+		ID: "msg-1", Origin: domain.MessageOriginAutomation, Text: "AO review done: approved", ClientMessageID: "review-done:run-1:0",
+	}, "turn-1", now)
+	if err != nil || !created {
+		t.Fatalf("append: created=%v err=%v", created, err)
+	}
+	state, failure, started, found, err := s.ReviewNoticeChatDelivery(ctx, rec.ID, "review-done:run-1:0")
+	if err != nil || !found || started || state != domain.TurnStateQueued || failure != "" {
+		t.Fatalf("queued relay: state=%q failure=%q started=%v found=%v err=%v", state, failure, started, found, err)
+	}
+	if err := s.SettleTurnByID(ctx, "turn-1", domain.TurnStateFailed, "could not wake the agent", now.Add(time.Minute)); err != nil {
+		t.Fatalf("settle: %v", err)
+	}
+	state, failure, started, found, err = s.ReviewNoticeChatDelivery(ctx, rec.ID, "review-done:run-1:0")
+	if err != nil || !found || started || state != domain.TurnStateFailed || failure != "could not wake the agent" {
+		t.Fatalf("failed relay: state=%q failure=%q started=%v found=%v err=%v", state, failure, started, found, err)
+	}
+	// A provider ID must prevent replay even when the start timestamp is absent.
+	db, err := sql.Open("sqlite", filepath.Join(dataDir, "ao.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	if _, err := db.ExecContext(ctx, "UPDATE conversation_turns SET provider_turn_id = ? WHERE id = ?", "provider-turn-1", "turn-1"); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, started, found, err := s.ReviewNoticeChatDelivery(ctx, rec.ID, "review-done:run-1:0"); err != nil || !found || !started {
+		t.Fatalf("provider-bound relay: started=%v found=%v err=%v", started, found, err)
+	}
+	if _, _, _, found, err := s.ReviewNoticeChatDelivery(ctx, "other-session", "review-done:run-1:0"); err != nil || found {
+		t.Fatalf("another session's lookup: found=%v err=%v", found, err)
+	}
+}
+
+func TestReviewNoticeChatDeliveryDistinguishesOrphanedTurns(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		providerID string
+		started    bool
+	}{
+		{"never_started", "", false},
+		{"started_at_only", "", true},
+		{"provider_bound", "provider-turn-1", true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s, session, conversation := conversationFixture(t)
+			ctx := context.Background()
+			clientID := "review-done:run-1:0"
+			created, err := s.AppendUserMessage(ctx, conversation, session, "gen-1", domain.ConversationMessage{
+				ID: "msg-notice", Origin: domain.MessageOriginAutomation, Text: "AO review done: approved", ClientMessageID: clientID,
+			}, "turn-notice", histClock)
+			if err != nil || !created {
+				t.Fatalf("append: created=%v err=%v", created, err)
+			}
+			if tc.started {
+				if err := s.BindTurnToProvider(ctx, "turn-notice", tc.providerID, histClock.Add(time.Second)); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if err := s.SettleOrphanedTurns(ctx, session, histClock.Add(time.Minute)); err != nil {
+				t.Fatal(err)
+			}
+			state, failure, started, found, err := s.ReviewNoticeChatDelivery(ctx, session, clientID)
+			if err != nil || !found || state != domain.TurnStateFailed || failure != "controller ended before the turn completed" || started != tc.started {
+				t.Fatalf("orphaned relay: state=%q failure=%q started=%v want=%v found=%v err=%v", state, failure, started, tc.started, found, err)
+			}
+		})
+	}
+}
+
+// A notice queued behind another message drains as a member of one combined
+// provider input. Its own turn reads completed once the provider took the
+// batch, so the notice counts as delivered and is not sent again.
+func TestReviewNoticeChatDeliveryReadsABatchedTurn(t *testing.T) {
+	s, session, conversation := conversationFixture(t)
+	ctx := context.Background()
+	for i, msg := range []domain.ConversationMessage{
+		{ID: "msg-user", Origin: domain.MessageOriginAutomation, Text: "earlier message", ClientMessageID: "client-user"},
+		{ID: "msg-notice", Origin: domain.MessageOriginAutomation, Text: "AO review done: approved", ClientMessageID: "review-done:run-1:0"},
+	} {
+		if created, err := s.AppendUserMessage(ctx, conversation, session, "gen-1", msg, "turn-"+msg.ID, histClock.Add(time.Duration(i)*time.Second)); err != nil || !created {
+			t.Fatalf("append %s: created=%v err=%v", msg.ID, created, err)
+		}
+	}
+	batch, err := s.ClaimQueuedBatch(ctx, conversation, true, 0, histClock.Add(time.Minute))
+	if err != nil || len(batch) != 2 || batch[1].ClientMessageID != "review-done:run-1:0" {
+		t.Fatalf("claimed batch = %+v, %v", batch, err)
+	}
+	if err := s.BindTurnToProvider(ctx, batch[0].TurnID, "provider-turn-1", histClock.Add(time.Minute)); err != nil {
+		t.Fatalf("bind: %v", err)
+	}
+	if err := s.CompleteQueuedBatch(ctx, conversation, []string{batch[1].TurnID}, "provider-turn-1", "ordinary queued work\n\nAO review done: approved", histClock.Add(time.Minute)); err != nil {
+		t.Fatalf("complete batch: %v", err)
+	}
+	state, failure, _, found, err := s.ReviewNoticeChatDelivery(ctx, session, "review-done:run-1:0")
+	if err != nil || !found || state != domain.TurnStateCompleted || failure != "" {
+		t.Fatalf("batched notice: state=%q failure=%q found=%v err=%v", state, failure, found, err)
 	}
 }

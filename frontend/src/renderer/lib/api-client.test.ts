@@ -35,7 +35,7 @@ describe("remote daemon reporting fetch", () => {
 		vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(JSON.stringify(body), { status: 500 }));
 		const response = await reportingFetch(new Request("http://127.0.0.1:4123/api/v1/projects"));
 		expect(await response.json()).toEqual(body);
-		expect(sentryCaptureMock).toHaveBeenCalledExactlyOnceWith("GET /api/v1/projects", "http_5xx", 500, "INTERNAL_ERROR", undefined);
+		expect(sentryCaptureMock).toHaveBeenCalledExactlyOnceWith("GET /api/v1/projects", "http_5xx", 500, "INTERNAL_ERROR", undefined, "private details");
 	});
 
 	it.each(["UPSTREAM_UNAVAILABLE", "HOST_IDENTITY_UNVERIFIED"])("keeps remote proxy state %s out of Sentry without consuming the response", async (code) => {

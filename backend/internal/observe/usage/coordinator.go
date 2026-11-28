@@ -12,10 +12,17 @@ import (
 )
 
 const (
-	defaultWorkerCount            = 2
-	defaultWorkQueueSize          = 256
-	defaultCoordinatorRetry       = 30 * time.Second
-	refreshRetryID          int64 = 0
+	defaultWorkerCount      = 2
+	defaultWorkQueueSize    = 256
+	defaultCoordinatorRetry = 30 * time.Second
+	// defaultDiscoveryRetryMax caps the backoff for discovery that stays
+	// pending. Each retry is a full reconcile pass that globs the provider
+	// transcript trees, and a binding whose transcript never appears would
+	// otherwise repeat it every 30 seconds for as long as the daemon runs.
+	// New transcripts still arrive through watcher events and the daemon's
+	// reconcile tick.
+	defaultDiscoveryRetryMax       = 10 * time.Minute
+	refreshRetryID           int64 = 0
 )
 
 type coordinatorStore interface {
@@ -38,15 +45,18 @@ type transcriptWatcher interface {
 
 // CoordinatorConfig configures the event-driven usage pipeline.
 type CoordinatorConfig struct {
-	Workers       int
-	QueueSize     int
-	Clock         func() time.Time
-	RetryDelay    time.Duration
-	Logger        *slog.Logger
-	Initialize    func(context.Context) error
-	Reconcile     func(context.Context) error
-	ReconcilePath func(context.Context, string) error
-	WatchRoots    func(context.Context) ([]string, error)
+	Workers    int
+	QueueSize  int
+	Clock      func() time.Time
+	RetryDelay time.Duration
+	// DiscoveryRetryMax caps the doubling retry delay while discovery stays
+	// pending. Zero uses defaultDiscoveryRetryMax.
+	DiscoveryRetryMax time.Duration
+	Logger            *slog.Logger
+	Initialize        func(context.Context) error
+	Reconcile         func(context.Context) error
+	ReconcilePath     func(context.Context, string) error
+	WatchRoots        func(context.Context) ([]string, error)
 }
 
 // Coordinator ingests unread usage sources when Flush asks, and finalizing sources at once.
@@ -58,6 +68,7 @@ type Coordinator struct {
 	queueSize     int
 	now           func() time.Time
 	retryDelay    time.Duration
+	discoveryMax  time.Duration
 	logger        *slog.Logger
 	initialize    func(context.Context) error
 	reconcile     func(context.Context) error
@@ -88,6 +99,12 @@ func NewCoordinator(
 	if cfg.RetryDelay <= 0 {
 		cfg.RetryDelay = defaultCoordinatorRetry
 	}
+	if cfg.DiscoveryRetryMax <= 0 {
+		cfg.DiscoveryRetryMax = defaultDiscoveryRetryMax
+	}
+	if cfg.DiscoveryRetryMax < cfg.RetryDelay {
+		cfg.DiscoveryRetryMax = cfg.RetryDelay
+	}
 	if cfg.Logger == nil {
 		cfg.Logger = slog.Default()
 	}
@@ -99,6 +116,7 @@ func NewCoordinator(
 		queueSize:     cfg.QueueSize,
 		now:           cfg.Clock,
 		retryDelay:    cfg.RetryDelay,
+		discoveryMax:  cfg.DiscoveryRetryMax,
 		logger:        cfg.Logger,
 		initialize:    cfg.Initialize,
 		reconcile:     cfg.Reconcile,
@@ -207,6 +225,7 @@ func (c *Coordinator) run(ctx context.Context) {
 	running := 0
 	var retryTimer *time.Timer
 	initializePending := c.initialize != nil
+	discoveryRetry := c.retryDelay
 
 	enqueue := func(sourceID int64) {
 		delete(retries, sourceID)
@@ -336,10 +355,12 @@ func (c *Coordinator) run(ctx context.Context) {
 			}
 		} else if pending {
 			if _, scheduled := retries[refreshRetryID]; !scheduled {
-				scheduleRetry(refreshRetryID, c.now().UTC().Add(c.retryDelay))
+				scheduleRetry(refreshRetryID, c.now().UTC().Add(discoveryRetry))
+				discoveryRetry = nextDiscoveryRetry(discoveryRetry, c.discoveryMax)
 			}
 		} else {
 			delete(retries, refreshRetryID)
+			discoveryRetry = c.retryDelay
 		}
 	}
 
@@ -536,4 +557,13 @@ func stopTimer(timer *time.Timer) {
 	case <-timer.C:
 	default:
 	}
+}
+
+// nextDiscoveryRetry doubles the delay before the next pending-discovery
+// retry, up to limit.
+func nextDiscoveryRetry(delay, limit time.Duration) time.Duration {
+	if delay >= limit/2 {
+		return limit
+	}
+	return delay * 2
 }

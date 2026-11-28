@@ -1,5 +1,5 @@
 import { renderHook } from "@testing-library/react";
-import { describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useScrollFollow } from "./useScrollFollow";
 
 function viewport({ scrollHeight, clientHeight, scrollTop }: { scrollHeight: number; clientHeight: number; scrollTop: number }) {
@@ -47,5 +47,85 @@ describe("useScrollFollow", () => {
 		expect(node.scrollTop).toBe(100);
 		result.current.glideToEnd();
 		expect(node.scrollTop).toBe(2000);
+	});
+});
+
+// Outside test mode the hook animates with the browser's smooth scroll: these stub
+// the mode and record the smooth scrolls it asks for.
+describe("useScrollFollow when it can animate", () => {
+	beforeEach(() => vi.stubEnv("MODE", "production"));
+	afterEach(() => vi.unstubAllEnvs());
+
+	function animated(geometry: { scrollHeight: number; clientHeight: number; scrollTop: number }) {
+		const node = viewport(geometry);
+		const scrollTo = vi.fn();
+		node.scrollTo = scrollTo as typeof node.scrollTo;
+		const resize = (scrollHeight: number) => Object.defineProperty(node, "scrollHeight", { configurable: true, value: scrollHeight });
+		return { node, scrollTo, resize };
+	}
+
+	it("glides a short way to the end", () => {
+		const { node, scrollTo } = animated({ scrollHeight: 2000, clientHeight: 500, scrollTop: 1200 });
+		const { result } = renderHook(() => useScrollFollow(() => node));
+		result.current.glideToEnd();
+		expect(scrollTo).toHaveBeenCalledWith({ top: 1500, behavior: "smooth" });
+		expect(node.scrollTop).toBe(1200);
+		expect(result.current.isGliding()).toBe(true);
+	});
+
+	// A send or Jump to latest from far up used to ride smoothly through every screen.
+	it("cuts to a screen short of a far end before gliding the rest", () => {
+		const { node, scrollTo } = animated({ scrollHeight: 5000, clientHeight: 500, scrollTop: 100 });
+		const { result } = renderHook(() => useScrollFollow(() => node));
+		result.current.glideToEnd();
+		expect(node.scrollTop).toBe(4000);
+		expect(scrollTo).toHaveBeenCalledWith({ top: 4500, behavior: "smooth" });
+		expect(result.current.isOwnScroll(4000)).toBe(true);
+		expect(result.current.isOwnScroll(4300)).toBe(true);
+	});
+
+	it("lands a follow more than a screen from the end at once", () => {
+		const { node, scrollTo } = animated({ scrollHeight: 5000, clientHeight: 500, scrollTop: 100 });
+		const { result } = renderHook(() => useScrollFollow(() => node));
+		result.current.followEnd();
+		expect(node.scrollTop).toBe(4500);
+		expect(scrollTo).not.toHaveBeenCalled();
+		expect(result.current.isFlying()).toBe(false);
+	});
+
+	// Rows loading above the view in mid-glide used to leave it showing an earlier
+	// part of the chat, then ride back down from there.
+	it("moves the view and the glide in flight together when rows above change", () => {
+		const { node, scrollTo, resize } = animated({ scrollHeight: 2000, clientHeight: 500, scrollTop: 1200 });
+		const { result } = renderHook(() => useScrollFollow(() => node));
+		result.current.glideToEnd();
+		resize(2300);
+		result.current.shift(300);
+		expect(node.scrollTop).toBe(1500);
+		expect(scrollTo).toHaveBeenLastCalledWith({ top: 1800, behavior: "smooth" });
+		expect(result.current.isGliding()).toBe(true);
+		expect(result.current.isOwnScroll(1650)).toBe(true);
+	});
+
+	it("ends the glide when a shift puts the view on the end", () => {
+		const { node, scrollTo, resize } = animated({ scrollHeight: 2000, clientHeight: 500, scrollTop: 1200 });
+		const { result } = renderHook(() => useScrollFollow(() => node));
+		result.current.glideToEnd();
+		// The glide reached the end; then a row above grew.
+		node.scrollTop = 1500;
+		resize(2300);
+		result.current.shift(300);
+		expect(node.scrollTop).toBe(1800);
+		expect(scrollTo).toHaveBeenCalledTimes(1);
+		expect(result.current.isFlying()).toBe(false);
+	});
+
+	it("only moves the view when nothing is in flight", () => {
+		const { node, scrollTo } = animated({ scrollHeight: 4000, clientHeight: 500, scrollTop: 1000 });
+		const { result } = renderHook(() => useScrollFollow(() => node));
+		result.current.shift(-250);
+		expect(node.scrollTop).toBe(750);
+		expect(scrollTo).not.toHaveBeenCalled();
+		expect(result.current.isOwnScroll(750)).toBe(true);
 	});
 });

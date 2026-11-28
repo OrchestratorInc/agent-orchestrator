@@ -1,6 +1,9 @@
 package contract
 
-import "time"
+import (
+	"strings"
+	"time"
+)
 
 // KanbanColumn is the derived delivery-lifecycle placement of a session. It
 // answers where the session sits between first commit and merge, and which
@@ -10,7 +13,8 @@ type KanbanColumn string
 
 // KanbanColumn values shown as board lanes by AO clients.
 const (
-	// KanbanBuilding is a session with no PR yet.
+	// KanbanBuilding is a session with no PR yet, or one a person prompted
+	// again after all of its PRs merged or closed.
 	KanbanBuilding KanbanColumn = "building"
 	// KanbanValidating is a PR inside an AO-driven loop: AO's own review of
 	// the current head (scheduled, running, cancelled, failed, or asking for
@@ -24,7 +28,8 @@ const (
 	// and it does not mean the work is idle.
 	KanbanNeedsReview KanbanColumn = "needs_review"
 	// KanbanReady is a PR merged, closed, mergeable, or approved by a person
-	// with no merge conflicts or failing CI in the way.
+	// with no merge conflicts or failing CI in the way. A PR stacked on
+	// another open PR is never ready: it can only land after its parent.
 	KanbanReady KanbanColumn = "ready"
 	// KanbanArchive is a terminated session.
 	KanbanArchive KanbanColumn = "archive"
@@ -47,6 +52,11 @@ type KanbanSessionFacts struct {
 	AutoReview        bool
 	AutoInjectReview  bool
 	AutoInjectCI      bool
+	// HumanPromptAt is when a person last prompted the worker. Messages from
+	// other sessions (an orchestrator's wrap-up note, a report) and passive
+	// changes such as PR polls, CI results, previews and artifact writes never
+	// move it. Zero when unknown.
+	HumanPromptAt time.Time
 }
 
 // KanbanReviewRunFacts summarize AO's own review passes against one PR's
@@ -87,24 +97,82 @@ type KanbanExternalReviewFacts struct {
 
 // KanbanPRFacts are the per-PR facts the column reducer reads.
 type KanbanPRFacts struct {
-	URL            string
-	Draft          bool
-	Merged         bool
-	Closed         bool
-	CI             CIState
-	Review         ReviewDecision
-	Mergeability   Mergeability
-	UpdatedAt      time.Time
+	URL string
+	// Host and Repo locate the PR. StackParent is a PR number in the same
+	// repository, so a session's PRs in different repositories can share a
+	// number without being one another's parent.
+	Host string
+	Repo string
+	// Number is the provider's PR number, which StackParent refers to; 0 when
+	// unknown.
+	Number       int
+	Draft        bool
+	Merged       bool
+	Closed       bool
+	CI           CIState
+	Review       ReviewDecision
+	Mergeability Mergeability
+	UpdatedAt    time.Time
+	// SettledAt is when the PR merged or closed: the time its current
+	// lifecycle state began. Zero while it is open, or when that time is
+	// unknown.
+	SettledAt      time.Time
 	ReviewRun      KanbanReviewRunFacts
 	ExternalReview KanbanExternalReviewFacts
+	// StackParent is the number of the open PR whose branch this PR targets,
+	// or 0 when no open PR owns its base branch. The provider judges a
+	// stacked PR's mergeability against that parent branch, so a clean
+	// stacked PR still cannot reach the default branch until the parent lands.
+	StackParent int
 }
 
+// derivePRKanbanColumn places one PR. A PR that would be ready on its own but
+// is stacked on an open parent waits in review instead: it is mergeable only
+// into the parent's branch, which is not where the work has to land.
 func derivePRKanbanColumn(session KanbanSessionFacts, pr KanbanPRFacts) KanbanColumn {
+	column := prKanbanColumnOnItsOwn(session, pr)
+	if column == KanbanReady && waitsOnStackParent(pr) {
+		return KanbanNeedsReview
+	}
+	return column
+}
+
+// placeSessionPR places one of a session's PRs. A child stacked on a parent
+// the session also owns is placed on its own: the parent is in the same pool
+// and speaks for the stack, and landing it is the session's next step, so the
+// child waiting on it must not pull the session back into review.
+func placeSessionPR(session KanbanSessionFacts, pr KanbanPRFacts, owned map[kanbanPRKey]bool) KanbanColumn {
+	if pr.StackParent > 0 && owned[kanbanPRKeyOf(pr, pr.StackParent)] {
+		return prKanbanColumnOnItsOwn(session, pr)
+	}
+	return derivePRKanbanColumn(session, pr)
+}
+
+// kanbanPRKey names a PR by repository and number. Repository names compare
+// case-insensitively, like the stack-parent lookup.
+type kanbanPRKey struct {
+	host, repo string
+	number     int
+}
+
+func kanbanPRKeyOf(pr KanbanPRFacts, number int) kanbanPRKey {
+	return kanbanPRKey{host: pr.Host, repo: strings.ToLower(pr.Repo), number: number}
+}
+
+// waitsOnStackParent reports a live PR whose base branch belongs to another
+// open PR.
+func waitsOnStackParent(pr KanbanPRFacts) bool {
+	return pr.StackParent > 0 && !pr.Merged && !pr.Closed
+}
+
+func prKanbanColumnOnItsOwn(session KanbanSessionFacts, pr KanbanPRFacts) KanbanColumn {
 	switch {
 	case pr.Merged || pr.Closed:
 		return KanbanReady
 	case pr.Draft:
 		return KanbanValidating
+	case pr.ExternalReview.ChangesRequested:
+		return KanbanNeedsReview
 	case externallyApproved(pr) && !mergeBlockedByPR(pr):
 		return KanbanReady
 	case aoOwnsNextStep(session, pr):
@@ -179,12 +247,22 @@ func liveKanbanPRs(prs []KanbanPRFacts) []KanbanPRFacts {
 	return live
 }
 
-// outranksKanban picks the more actionable of two placements, breaking ties on
-// the most recently updated PR and finally on URL so the board never flickers
-// between equally ranked PRs.
+// outranksKanban picks the least ready of two placements: a session is only as
+// far along as its furthest-behind live PR, so one mergeable PR must not make
+// a session whose other PRs still need review read as ready to merge. Within a
+// column, a PR something is wrong with (conflicts, failing CI, changes
+// requested) speaks before one that is simply waiting, and a PR waiting on a
+// stack parent speaks last. Remaining ties break on the most recently updated
+// PR and finally on URL so the board never flickers between equal PRs.
 func outranksKanban(candidate KanbanColumn, pr KanbanPRFacts, current KanbanColumn, chosen KanbanPRFacts) bool {
 	if kanbanPriority(candidate) != kanbanPriority(current) {
 		return kanbanPriority(candidate) < kanbanPriority(current)
+	}
+	if a, b := prNeedsFixing(pr), prNeedsFixing(chosen); a != b {
+		return a
+	}
+	if a, b := waitsOnStackParent(pr), waitsOnStackParent(chosen); a != b {
+		return b
 	}
 	if !pr.UpdatedAt.Equal(chosen.UpdatedAt) {
 		return pr.UpdatedAt.After(chosen.UpdatedAt)
@@ -192,17 +270,28 @@ func outranksKanban(candidate KanbanColumn, pr KanbanPRFacts, current KanbanColu
 	return pr.URL < chosen.URL
 }
 
+// kanbanPriority orders columns from least to most ready. In review comes
+// first because the next turn there is a person's, ahead of AO's own loops.
 func kanbanPriority(column KanbanColumn) int {
 	switch column {
-	case KanbanReady:
-		return 0
 	case KanbanNeedsReview:
-		return 1
+		return 0
 	case KanbanValidating:
+		return 1
+	case KanbanReady:
 		return 2
 	default:
 		return 3
 	}
+}
+
+// prNeedsFixing reports a live PR that something is wrong with, as opposed to
+// one that is only waiting on a review, a check, or a parent.
+func prNeedsFixing(pr KanbanPRFacts) bool {
+	if pr.Merged || pr.Closed {
+		return false
+	}
+	return mergeBlockedByPR(pr) || changesRequestedOn(pr)
 }
 
 // DisplayStatus is the short phrase shown inside a session's Kanban column. It
@@ -237,6 +326,9 @@ const (
 	DisplayMergeConflicts   DisplayStatus = "Merge conflicts"
 	DisplayCommented        DisplayStatus = "Commented"
 	DisplayChangesRequested DisplayStatus = "Changes requested"
+	// DisplayWaitingOnBasePR is a PR that is clean against its base, but that
+	// base is another open PR's branch, so it lands only after that PR.
+	DisplayWaitingOnBasePR DisplayStatus = "Waiting on base PR"
 	// Ready.
 	DisplayMergeable DisplayStatus = "Mergeable"
 	DisplayApproved  DisplayStatus = "Approved"
@@ -258,9 +350,12 @@ type KanbanPresentation struct {
 // facts; the display status is then derived from the facts that column cares
 // about, so a session never shows a phrase belonging to a stage it is not in.
 //
-// With several PRs the column is picked per PR and ranked, and the winning PR
-// is the one whose facts the display status reads. A merged or closed PR
-// therefore cannot speak for a session that still has live work.
+// With several PRs the column is picked per PR and the least ready live PR
+// wins; its facts are the ones the display status reads. A merged or closed
+// PR therefore cannot speak for a session that still has live work, and one
+// mergeable PR cannot speak for a session whose other PRs are still in review.
+// Within a stack the session owns, the parent speaks: a child waiting only on
+// it is ranked on its own and, tied, yields to the parent.
 func DeriveKanbanPresentation(
 	session KanbanSessionFacts,
 	prs []KanbanPRFacts,
@@ -286,13 +381,31 @@ func DeriveKanbanPresentation(
 	// merged/closed placements count only once nothing is live.
 	pool := liveKanbanPRs(prs)
 	if len(pool) == 0 {
+		// Prompted again after every PR landed: the session is building its
+		// next change, so it reads as building rather than done. Its merged
+		// and closed PRs stay on the card as history. HasArtifactOutput is
+		// deliberately not consulted here: it says the session has ever
+		// written an artifact, not that the resumed work did, so honouring it
+		// would park every resumed session with older files in Validating.
+		if resumedAfterPRsSettled(session, prs) {
+			return KanbanPresentation{
+				Column:        KanbanBuilding,
+				DisplayStatus: buildingDisplayStatus(session, now, noSignalGrace),
+			}
+		}
 		pool = prs
+	}
+	owned := make(map[kanbanPRKey]bool, len(pool))
+	for _, pr := range pool {
+		if pr.Number > 0 {
+			owned[kanbanPRKeyOf(pr, pr.Number)] = true
+		}
 	}
 
 	column := KanbanColumn("")
 	var chosen KanbanPRFacts
 	for _, pr := range pool {
-		candidate := derivePRKanbanColumn(session, pr)
+		candidate := placeSessionPR(session, pr, owned)
 		if column == "" || outranksKanban(candidate, pr, column, chosen) {
 			column, chosen = candidate, pr
 		}
@@ -301,6 +414,22 @@ func DeriveKanbanPresentation(
 		Column:        column,
 		DisplayStatus: displayStatusInColumn(column, session, chosen, now, noSignalGrace),
 	}
+}
+
+// resumedAfterPRsSettled reports a session whose PRs are all merged or closed
+// and that a person prompted again after the last of them settled. A PR whose
+// settle time is unknown keeps the session done: without it, a prompt cannot
+// be shown to come after the merge.
+func resumedAfterPRsSettled(session KanbanSessionFacts, prs []KanbanPRFacts) bool {
+	if session.HumanPromptAt.IsZero() || len(prs) == 0 {
+		return false
+	}
+	for _, pr := range prs {
+		if pr.SettledAt.IsZero() || !session.HumanPromptAt.After(pr.SettledAt) {
+			return false
+		}
+	}
+	return true
 }
 
 func displayStatusInColumn(
@@ -378,7 +507,7 @@ func validatingDisplayStatus(session KanbanSessionFacts, pr KanbanPRFacts, now t
 	switch {
 	case pr.CI == CIFailing && session.AutoInjectCI && active:
 		return DisplayFixingCI
-	case changesRequestedOn(pr) && session.AutoInjectReview && active:
+	case changesRequestedOn(pr) && active:
 		return DisplayAddressingComments
 	case pr.ReviewRun.Running:
 		return DisplayReviewing
@@ -422,7 +551,9 @@ func inReviewDisplayStatus(session KanbanSessionFacts, pr KanbanPRFacts, now tim
 	switch {
 	case pr.CI == CIFailing && session.AutoInjectCI && active:
 		return DisplayFixingCI
-	case (changesRequestedOn(pr) || pr.ExternalReview.Comments) && session.AutoInjectReview && active:
+	case changesRequestedOn(pr) && active:
+		return DisplayAddressingComments
+	case pr.ExternalReview.Comments && session.AutoInjectReview && active:
 		return DisplayAddressingComments
 	case active:
 		return DisplayWorking
@@ -438,6 +569,9 @@ func inReviewDisplayStatus(session KanbanSessionFacts, pr KanbanPRFacts, now tim
 		return DisplayReviewFailed
 	case pr.ReviewRun.Cancelled:
 		return DisplayReviewCancelled
+	// In review only because of its stack: on its own it would be ready.
+	case waitsOnStackParent(pr) && prKanbanColumnOnItsOwn(session, pr) == KanbanReady:
+		return DisplayWaitingOnBasePR
 	default:
 		return DisplayAwaitingReview
 	}

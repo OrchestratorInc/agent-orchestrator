@@ -29,6 +29,7 @@ type CommandPaletteFileSearchQueryOptions = {
 	queryKey: readonly unknown[];
 	queryFn: (context?: { signal?: AbortSignal }) => Promise<CommandPaletteFileSearchResponse>;
 	retry?: (failureCount: number, error: Error) => boolean;
+	retryDelay?: (failureCount: number, error: Error) => number;
 };
 
 function normalizeSearchResponse(response: {

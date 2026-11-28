@@ -13,8 +13,6 @@ import { pairThisDevice } from "./deviceTokenRuntime";
 import { setLocalNetworkConfirmed } from "./localNetworkStore";
 import { AccountManagedHostError, adoptManualConnection, DifferentMachineError, persistManualHostEdit } from "./manualConnect";
 import { IncompatibleHostVersionError } from "./race";
-import { MOBILE_EVENTS } from "./telemetry/events";
-import { mobileTelemetry } from "./telemetry/runtime";
 
 export type ManualConnectProps = {
 	onConnected: () => void;
@@ -42,11 +40,13 @@ export type ManualConnectFailure = {
  * legacy mux port is unused against the Go daemon, so it stays hidden.
  */
 export function useManualConnect({ onConnected, onBusyChange, editingHost, editingEndpointIndex = 0 }: ManualConnectProps) {
-	// New pairings start blank; editing preloads only the pairing the user selected.
-	const [cfg, setCfg] = useState<ServerConfig>(() => {
-		const endpoint = editingHost?.endpoints[editingEndpointIndex];
-		return endpoint ? configForEndpoint(endpoint, editingHost.token, editingHost.id) : { ...DEFAULT_CONFIG, password: editingHost?.token ?? "" };
-	});
+	// New pairings start blank, the port too: an empty port follows the address
+	// (443 for TLS, the Connect Mobile port otherwise). Editing preloads only the
+	// pairing the user selected, and an unchanged address keeps how it connects.
+	const saved = editingHost?.endpoints[editingEndpointIndex];
+	const [cfg, setCfg] = useState<ServerConfig>(() => saved && editingHost
+		? configForEndpoint(saved, editingHost.token, editingHost.id)
+		: { ...DEFAULT_CONFIG, httpPort: "", password: editingHost?.token ?? "" });
 	const [machineName, setMachineName] = useState(editingHost?.name ?? "");
 	const [busy, setBusy] = useState(false);
 	useEffect(() => { onBusyChange?.(busy); }, [busy, onBusyChange]);
@@ -57,20 +57,15 @@ export function useManualConnect({ onConnected, onBusyChange, editingHost, editi
 		setCfg((prev) => ({ ...prev, [key]: value }));
 		setFailure(null);
 	};
-	const setSecure = (secure: boolean) => {
-		setCfg((prev) => ({ ...prev, secure }));
-		setFailure(null);
-	};
-
 	async function connect() {
-		const address = resolveManualAddress(cfg.host, cfg.httpPort, cfg.secure);
+		const address = resolveManualAddress(cfg.host, cfg.httpPort, saved);
 		if (!address.ok) return;
 		setBusy(true);
 		setFailure(null);
-		const target = { ...cfg, host: address.host, httpPort: address.port };
+		const target = { ...cfg, host: address.host, httpPort: address.port, secure: address.secure };
 		try {
 			if (editingHost) {
-				await persistManualHostEdit(editingHost, target, machineName, editingEndpointIndex, {
+				await persistManualHostEdit(editingHost, cfg, machineName, editingEndpointIndex, {
 					probe: (endpoint) => probeEndpoint(endpoint, new AbortController().signal),
 					ping: pingServer,
 					saveHost,
@@ -114,7 +109,6 @@ export function useManualConnect({ onConnected, onBusyChange, editingHost, editi
 				saveHost,
 				setActiveHost,
 			}, machineName, fallbackToken);
-			mobileTelemetry()?.capture(MOBILE_EVENTS.paired, { method: "manual" });
 			haptics.success();
 			onConnected();
 		} catch (e) {
@@ -129,23 +123,21 @@ export function useManualConnect({ onConnected, onBusyChange, editingHost, editi
 		}
 	}
 
-	const address = resolveManualAddress(cfg.host, cfg.httpPort, cfg.secure);
+	const address = resolveManualAddress(cfg.host, cfg.httpPort, saved);
 	const canConnect = !!machineName.trim() && address.ok;
 	const editing = !!editingHost;
 	// What Connect is waiting for, said beside it: a disabled button alone does
 	// not say a name is required. A bad port or address has its own error.
-	const missingPort = !address.ok && address.incomplete && !!cfg.host.trim();
-	const missing = [!machineName.trim() && "a name", !cfg.host.trim() && "a host", missingPort && "a port (or turn on Use TLS for 443)"].filter(Boolean);
+	const missing = [!machineName.trim() && "a name", !cfg.host.trim() && "a host"].filter(Boolean);
 	const connectHint = missing.length ? `Add ${missing.join(" and ")} to ${editing ? "save" : "connect"}.` : undefined;
 	return {
 		cfg,
 		setField,
-		setSecure,
 		machineName,
 		setMachineName,
 		busy,
 		failure,
-		portError: manualAddressError(cfg.host, cfg.httpPort, cfg.secure),
+		portError: manualAddressError(cfg.host, cfg.httpPort, saved),
 		canConnect,
 		connectHint,
 		connect,
@@ -165,6 +157,7 @@ function connectFailure(error: unknown, target: ServerConfig, editing: boolean):
 		host: target.host,
 		port: target.httpPort,
 		platform: Platform.OS,
+		secure: target.secure,
 	});
 	return {
 		message: editing && kind === "auth" ? "That code or password was rejected. Get a new code and try again." : copy.message,

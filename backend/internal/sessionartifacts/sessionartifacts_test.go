@@ -336,3 +336,67 @@ func TestListRegisteredKeepsADeliverablePastTheFileCap(t *testing.T) {
 		t.Fatal("files are not sorted by path")
 	}
 }
+
+// HasFiles counts what List lists: a missing or empty directory, OS metadata
+// and version history are not artifacts; one real file is.
+func TestHasFiles_MatchesWhatListReturns(t *testing.T) {
+	ctx := context.Background()
+	dir := filepath.Join(t.TempDir(), "mer-1")
+	if has, err := HasFiles(ctx, dir); err != nil || has {
+		t.Fatalf("missing dir: has=%v err=%v", has, err)
+	}
+	for _, rel := range []string{".DS_Store", VersionsDir + "/a.md/1"} {
+		path := filepath.Join(dir, filepath.FromSlash(rel))
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte("x"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if has, err := HasFiles(ctx, dir); err != nil || has {
+		t.Fatalf("metadata and history only: has=%v err=%v", has, err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "a.md"), []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if has, err := HasFiles(ctx, dir); err != nil || !has {
+		t.Fatalf("one file: has=%v err=%v", has, err)
+	}
+}
+
+func TestHasFiles_ReportsAFolderItCannotRead(t *testing.T) {
+	if runtime.GOOS == "windows" || os.Geteuid() == 0 {
+		t.Skip("needs a folder this user cannot read")
+	}
+	dir := t.TempDir()
+	locked := filepath.Join(dir, "locked")
+	if err := os.MkdirAll(locked, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(locked, "a.md"), []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(locked, 0); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(locked, 0o755) })
+	if has, err := HasFiles(context.Background(), dir); err == nil {
+		t.Fatalf("unreadable folder: has=%v, want an error", has)
+	}
+}
+
+func TestHasFiles_CountsAWalkCutShortAsHavingFiles(t *testing.T) {
+	dir := t.TempDir()
+	for i := range MaxVisited + 1 {
+		if err := os.Mkdir(filepath.Join(dir, fmt.Sprintf("d%05d", i)), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.WriteFile(filepath.Join(dir, "z.md"), []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if has, err := HasFiles(context.Background(), dir); err != nil || !has {
+		t.Fatalf("walk past MaxVisited: has=%v err=%v", has, err)
+	}
+}

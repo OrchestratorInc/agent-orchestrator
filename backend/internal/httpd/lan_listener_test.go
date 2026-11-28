@@ -390,14 +390,19 @@ func TestLANManagerBlocksLoopbackOnlyControlRoutes(t *testing.T) {
 		t.Fatalf("preview app: got %d want 200", previewResp.StatusCode)
 	}
 
-	// The read-only Codex model routes are not credential surfaces and must
-	// stay reachable so mobile can list and refresh models.
+	// The read-only Codex model routes and the subscription account routes
+	// must stay reachable for mobile and remote desktops.
 	for _, tc := range []struct {
 		method string
 		path   string
 	}{
 		{http.MethodGet, "/api/v1/agents/codex/models"},
 		{http.MethodPost, "/api/v1/agents/codex/models/refresh"},
+		{http.MethodGet, "/api/v1/agents/accounts"},
+		{http.MethodPost, "/api/v1/agents/accounts/login"},
+		{http.MethodPut, "/api/v1/agents/accounts/sessions/ao-1"},
+		{http.MethodPost, "/api/v1/agents/accounts/acct-1/default"},
+		{http.MethodDelete, "/api/v1/agents/accounts/acct-1"},
 	} {
 		req, _ := http.NewRequest(tc.method, fmt.Sprintf("http://127.0.0.1:%d%s", port, tc.path), nil)
 		req.Header.Set("Authorization", "Bearer secret12")

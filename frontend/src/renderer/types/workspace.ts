@@ -2,6 +2,7 @@ import { deliverableArtifacts, type Deliverable } from "../../../../packages/sha
 import { attentionZone as presentationAttentionZone } from "../lib/session-presentation";
 import {
 	AGENT_OPTIONS,
+	agentLabel,
 	toKanbanColumn,
 	toSessionActivity,
 	toSessionStatus,
@@ -35,8 +36,9 @@ export type PRState = "open" | "draft" | "merged" | "closed";
 /**
  * One attributed pull request, mirroring the daemon's SessionPRFacts wire shape.
  * A session can own many (e.g. a stack), so {@link WorkspaceSession.prs} is a
- * list. The wire carries no source/target branch or parent pointer, so the UI
- * renders a flat list of PRs, not a stack tree.
+ * list. The wire carries no source/target branch, so the UI renders a flat
+ * list of PRs, not a stack tree; `stackParent` only says which open PR a
+ * stacked PR waits on.
  */
 export type PullRequestFacts = {
 	url: string;
@@ -53,6 +55,8 @@ export type PullRequestFacts = {
 	}>;
 	reviewComments: boolean;
 	updatedAt: string;
+	/** The open PR whose branch this PR targets; absent when its base has no open PR. */
+	stackParent?: number;
 };
 
 /** What kind of durable output a session has produced, when known. */
@@ -91,6 +95,10 @@ export type SessionArtifact = {
 	previousPaths?: string[];
 	/** The file's public link while it is published from this computer. */
 	shareUrl?: string;
+	/** A cloud file's SHA-256, from its listing: the Publish button compares it with the published one. */
+	sha256?: string;
+	/** Who shareUrl opens for, as this computer last recorded it; the link list has the final say. */
+	shareAccess?: "restricted" | "anyone";
 };
 
 /** The daemon-committed controller currently responsible for the session. */
@@ -105,7 +113,23 @@ export type SessionProvisionStep = {
 };
 
 /** The daemon's observed branch facts. `unpushed` equals `commits` until the branch reaches its remote. */
-export type SessionBranchState = { commits: number; remoteBranch?: string; remoteHead?: string; unpushed: number };
+export type SessionBranchState = {
+	commits: number;
+	remoteBranch?: string;
+	/** The commit the remote branch points at, as last read. */
+	remoteHead?: string;
+	unpushed: number;
+	/** Short name of the branch commits and behind are counted against, such as "main". Absent when the daemon only knows the base as a commit. */
+	base?: string;
+	/** The exact ref that was read for base, such as "origin/main". */
+	baseRef?: string;
+	/** Commits on base the branch does not have. Only meaningful when base is set. */
+	behind: number;
+	/** Merging into base would conflict, read locally. Absent from daemons that predate it. */
+	conflicts?: boolean;
+	/** The branch's tip commit. */
+	head?: string;
+};
 
 /** The session's current launch still runs a harness release an update has replaced. */
 export type SessionStaleBinary = { version: string; since: string; switchFailedAt?: string };
@@ -126,12 +150,19 @@ export type WorkspaceSession = {
 	/** Raw issue/task identifier from the daemon. Intake ids are provider-prefixed. */
 	issueId?: string;
 	provider: AgentProvider;
+	/**
+	 * The agent the project named for this session's role when the session's
+	 * agent was last chosen: at spawn, or by switching agents. Absent for
+	 * sessions from before the daemon recorded it.
+	 */
+	roleAgent?: AgentProvider;
 	/** Reviewer selected for this session; absent means use the project default. */
 	reviewerHarness?: ReviewerHarnessId;
 	/** Per-session reviewer override, including hidden fields preserved across saves. */
 	reviewerConfig?: {
 		model?: string;
 		mode?: string;
+		effort?: string;
 		permissions?: string;
 	};
 	/** Whether the daemon may automatically review this session after it becomes idle. */
@@ -206,6 +237,10 @@ export type WorkspaceSession = {
 	autoInjectReview?: boolean;
 	/** Whether CI failures are automatically injected into the worker. */
 	autoInjectCI?: boolean;
+	/** The Orchestrator Cloud session this session moved to; it is archived here and continues there. */
+	movedTo?: { orgId: string; sessionId: string; at?: string };
+	/** The move to Orchestrator Cloud whose export pushed this session and did not finish. */
+	moveStarted?: string;
 	/** ISO timestamp from the daemon — used for relative time in the inspector. */
 	createdAt?: string;
 	/** ISO timestamp from the daemon. */
@@ -265,6 +300,8 @@ export type WorkspaceSession = {
 		requestedBy?: { userId: string; name: string };
 		/** The control-plane user who started the session; only they share its files as public links. */
 		createdByUserId?: string;
+		/** Set on an AO Cloud automation run's session: it is shared only to watch, with teams and by link. */
+		automationRunId?: string;
 		/** Maximum permission mode for Cloud turns in this session. */
 		permissionMode?: "read-only" | "standard" | "trusted";
 		sandboxProvider?: string;
@@ -272,11 +309,15 @@ export type WorkspaceSession = {
 		observedState?: string;
 		/** Sandbox runtime state; "terminated" means AO stopped retrying startup. */
 		runtimeState?: string;
+		/** The epoch of the session's latest worker connection; absent until a worker has ever connected. */
+		workerEpoch?: number;
 		runtimeError?: string;
 		/** Why the worker has not started; cleared once it connects. */
 		startupError?: { code: string; message: string; at: string; detail?: string };
 		/** Bring-your-own Coder workspace page; absent for managed compute. */
 		coderWorkspaceUrl?: string;
+		/** The session moved to another computer and continues there; it cannot be restored. */
+		movedAway?: true;
 	};
 };
 
@@ -301,6 +342,12 @@ export type ProjectKind = "single_repo" | "workspace" | "scratch";
 /** UI-only grouping for sessions that have no daemon project row. */
 export const STANDALONE_WORKSPACE_ID = "__standalone__" as const;
 export const STANDALONE_PROJECT_KIND = "standalone" as const;
+/**
+ * The new-chat target that starts a Cloud standalone agent: one worker session
+ * with no repository, its own (POST /orgs/{orgId}/standalone-agents). It names
+ * no project; the agent gets its own once created.
+ */
+export const CLOUD_STANDALONE_WORKSPACE_ID = "__cloud_standalone__" as const;
 
 /** Sentinel `kind` value for projects hosted by the AO cloud control plane. */
 export const CLOUD_PROJECT_KIND = "cloud" as const;
@@ -452,6 +499,16 @@ export function sessionIsActive(session: WorkspaceSession): boolean {
 }
 
 /**
+ * Whether a live worker can be archived from its own tab, topbar shortcut, or
+ * inspector: local, remote, or Cloud alike. The orchestrator goes with its
+ * project, and a Cloud session shared from another organization is the
+ * sharer's to archive.
+ */
+export function canArchiveWorkerSession(session: WorkspaceSession): boolean {
+	return !isOrchestratorSession(session) && session.cloud?.shared !== true && sessionIsActive(session);
+}
+
+/**
  * Whether the agent PROCESS is gone while the session ROW is still alive —
  * Ctrl+C, `/exit`, a usage limit. Recovered with `resume-agent`, not `restore`.
  * Not `sessionIsActive`, which reports row liveness and calls this state alive.
@@ -516,6 +573,12 @@ export type WorkspaceSummary = {
 	 * repository (workspaceRepos) side by side in one folder.
 	 */
 	cloudLayout?: "workspace";
+	/**
+	 * Set on a Cloud standalone agent's project: it holds that one agent, which
+	 * the Scratchpad lists beside local standalone sessions, and is not shown
+	 * as a project.
+	 */
+	standaloneAgent?: boolean;
 	/** Local checkout path; empty string for cloud projects (no local folder). */
 	path: string;
 	folderMissing?: boolean;
@@ -532,21 +595,52 @@ export type WorkspaceSummary = {
 	sessions: WorkspaceSession[];
 };
 
+/**
+ * Whether the workspace is the Scratchpad's rather than a project: the local
+ * group of standalone sessions, or a Cloud standalone agent's project. Neither
+ * has an orchestrator, a board, or project settings.
+ */
+export function isScratchpadWorkspace(workspace: Pick<WorkspaceSummary, "kind" | "standaloneAgent"> | undefined): boolean {
+	return workspace?.kind === STANDALONE_PROJECT_KIND || workspace?.standaloneAgent === true;
+}
+
+/**
+ * The workspaces the Scratchpad lists: the local standalone sessions and the
+ * person's own Cloud standalone agents. A standalone agent someone shared with
+ * them stays with the other shared projects.
+ */
+export function ownScratchpadWorkspaces(workspaces: readonly WorkspaceSummary[]): WorkspaceSummary[] {
+	return workspaces.filter((workspace) =>
+		workspace.kind === STANDALONE_PROJECT_KIND || (workspace.standaloneAgent === true && !workspace.shared));
+}
+
 export function hasConfiguredOrchestratorAgent(
 	workspace: Pick<WorkspaceSummary, "orchestratorAgent"> | undefined,
 ): boolean {
 	return Boolean(workspace?.orchestratorAgent);
 }
 
-export function orchestratorNeedsRestart(workspace: WorkspaceSummary, orchestrator?: WorkspaceSession): boolean {
-	if (!orchestrator || !workspace.orchestratorAgent) return false;
-	return orchestrator.provider !== workspace.orchestratorAgent;
+/**
+ * Whether the project's orchestrator agent setting changed after the running
+ * orchestrator's agent was chosen, and the orchestrator is not on the new
+ * agent. Like a worker, an orchestrator may run another agent than the
+ * project's setting: a spawn can pick one and switching agents picks another,
+ * so the running agent alone is never drift. Without a record of the setting
+ * at that choice (sessions from before it was kept) nothing is reported.
+ */
+export function orchestratorAgentSettingChanged(
+	workspace: Pick<WorkspaceSummary, "orchestratorAgent">,
+	orchestrator?: Pick<WorkspaceSession, "provider" | "roleAgent">,
+): boolean {
+	const configured = workspace.orchestratorAgent;
+	if (!orchestrator?.roleAgent || !configured) return false;
+	return orchestrator.roleAgent !== configured && orchestrator.provider !== configured;
 }
 
 export type OrchestratorHealth =
 	| { state: "ok" }
 	| { state: "restarting"; message: string }
-	| { state: "restart_needed"; message: string }
+	| { state: "agent_setting_changed"; message: string }
 	| { state: "missing"; message: string }
 	| { state: "duplicates"; message: string };
 
@@ -569,10 +663,10 @@ export function orchestratorHealth(workspace: WorkspaceSummary, restarting = fal
 	if (!orchestrator) {
 		return { state: "missing", message: "No orchestrator is running for this project." };
 	}
-	if (orchestratorNeedsRestart(workspace, orchestrator)) {
+	if (workspace.orchestratorAgent && orchestratorAgentSettingChanged(workspace, orchestrator)) {
 		return {
-			state: "restart_needed",
-			message: `Configured orchestrator agent is ${workspace.orchestratorAgent}; running agent is ${orchestrator.provider}.`,
+			state: "agent_setting_changed",
+			message: `This project's orchestrator agent is now ${agentLabel(workspace.orchestratorAgent)}. The running orchestrator stays on ${agentLabel(orchestrator.provider)}; a restart starts a new one on ${agentLabel(workspace.orchestratorAgent)}.`,
 		};
 	}
 	return { state: "ok" };

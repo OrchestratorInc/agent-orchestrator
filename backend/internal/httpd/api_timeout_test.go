@@ -13,10 +13,12 @@ import (
 	"github.com/go-chi/chi/v5"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/config"
+	"github.com/aoagents/agent-orchestrator/backend/internal/devices"
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/controllers"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 	"github.com/aoagents/agent-orchestrator/backend/internal/service/computeruse"
+	prsvc "github.com/aoagents/agent-orchestrator/backend/internal/service/pr"
 	projectsvc "github.com/aoagents/agent-orchestrator/backend/internal/service/project"
 	sessionsvc "github.com/aoagents/agent-orchestrator/backend/internal/service/session"
 	"github.com/aoagents/agent-orchestrator/backend/internal/service/sessionimport"
@@ -123,6 +125,37 @@ func TestAttachmentUploadRouteUsesExtendedTimeout(t *testing.T) {
 	}
 }
 
+type timeoutProbeSessionMover struct {
+	controllers.SessionMover
+	budget chan time.Duration
+}
+
+func (m *timeoutProbeSessionMover) MoveTargets(ctx context.Context, _, _ string) ([]sessionsvc.MoveTarget, error) {
+	m.budget <- remainingRequestBudget(ctx)
+	return nil, nil
+}
+
+// move/targets fetches origin for every project with the repository, which
+// can take minutes on a large repository.
+func TestMoveTargetsRouteUsesExtendedTimeout(t *testing.T) {
+	mover := &timeoutProbeSessionMover{budget: make(chan time.Duration, 1)}
+	router := NewRouterWithControl(
+		config.Config{RequestTimeout: 250 * time.Millisecond},
+		discardLogger(),
+		nil,
+		APIDeps{SessionMoves: mover},
+		ControlDeps{},
+	)
+	response := httptest.NewRecorder()
+	router.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/api/v1/sessions/move/targets?repoKey=github.com/acme/app&branch=feat/x", nil))
+	if response.Code != http.StatusOK {
+		t.Fatalf("GET move/targets status = %d, want 200; body=%s", response.Code, response.Body.String())
+	}
+	if budget := <-mover.budget; budget < 9*time.Minute || budget > 10*time.Minute {
+		t.Fatalf("move/targets budget = %s, want about 10 minutes", budget)
+	}
+}
+
 // A managed preview carries the dev server's HMR socket and event streams; the
 // REST budget cut them at a minute (504) and reloaded the page.
 func TestManagedPreviewAppProxyHasNoRequestTimeout(t *testing.T) {
@@ -193,6 +226,100 @@ func TestAttachmentCapableSendUsesExtendedTimeoutOnlyForUploads(t *testing.T) {
 			}
 			if !tc.upload && (budget <= 0 || budget > configuredTimeout) {
 				t.Fatalf("plain text budget = %s, want no more than %s", budget, configuredTimeout)
+			}
+		})
+	}
+}
+
+// timeoutProbePRs records the request budget a PR comment post runs under.
+type timeoutProbePRs struct {
+	prsvc.ActionManager
+	budget chan time.Duration
+}
+
+func (p *timeoutProbePRs) PostComment(ctx context.Context, _ prsvc.CommentRequest) (prsvc.CommentResult, error) {
+	p.budget <- remainingRequestBudget(ctx)
+	return prsvc.CommentResult{ID: "c1"}, nil
+}
+
+func (p *timeoutProbePRs) Merge(ctx context.Context, _ prsvc.MergeRequest) (prsvc.MergeResult, error) {
+	p.budget <- remainingRequestBudget(ctx)
+	return prsvc.MergeResult{}, nil
+}
+
+func (p *timeoutProbePRs) MergeStack(ctx context.Context, _ prsvc.StackMergeRequest) (prsvc.StackMergeResult, error) {
+	p.budget <- remainingRequestBudget(ctx)
+	return prsvc.StackMergeResult{}, nil
+}
+
+// A stack merge waits up to two minutes for GitHub to land it; the one-minute
+// REST budget cancelled it, and the layers it landed went unrecorded. A plain
+// merge keeps the ordinary budget.
+func TestStackMergeRouteUsesExtendedTimeout(t *testing.T) {
+	const configuredTimeout = 250 * time.Millisecond
+	svc := &timeoutProbePRs{budget: make(chan time.Duration, 1)}
+	router := NewRouterWithControl(config.Config{RequestTimeout: configuredTimeout}, discardLogger(), nil, APIDeps{PRs: svc}, ControlDeps{})
+	const head = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+	for _, tc := range []struct {
+		path, body string
+		long       bool
+	}{
+		{path: "/api/v1/prs/2/stack/merge", body: `{"prUrl":"https://github.com/acme/widgets/pull/2","expectedHeads":[{"number":2,"headSha":"` + head + `"}]}`, long: true},
+		{path: "/api/v1/prs/2/merge", body: `{"prUrl":"https://github.com/acme/widgets/pull/2","expectedHeadSha":"` + head + `"}`},
+	} {
+		req := httptest.NewRequest(http.MethodPost, tc.path, strings.NewReader(tc.body))
+		req.Header.Set("Content-Type", "application/json")
+		response := httptest.NewRecorder()
+		router.ServeHTTP(response, req)
+		select {
+		case budget := <-svc.budget:
+			if tc.long && (budget < 179*time.Second || budget > 3*time.Minute) {
+				t.Fatalf("%s budget = %s, want about 3 minutes", tc.path, budget)
+			}
+			if !tc.long && (budget <= 0 || budget > configuredTimeout) {
+				t.Fatalf("%s budget = %s, want no more than %s", tc.path, budget, configuredTimeout)
+			}
+		case <-time.After(time.Second):
+			t.Fatalf("%s never reached the PR service: status=%d body=%s", tc.path, response.Code, response.Body.String())
+		}
+	}
+}
+
+func TestPRCommentWithFilesUsesExtendedTimeout(t *testing.T) {
+	const configuredTimeout = 250 * time.Millisecond
+	prs := &timeoutProbePRs{budget: make(chan time.Duration, 2)}
+	router := NewRouterWithControl(
+		config.Config{RequestTimeout: configuredTimeout},
+		discardLogger(),
+		nil,
+		APIDeps{PRs: prs},
+		ControlDeps{},
+	)
+	for _, tc := range []struct {
+		name   string
+		body   string
+		upload bool
+	}{
+		{name: "text", body: `{"prUrl":"https://github.com/acme/app/pull/7","body":"hello"}`},
+		{name: "files", body: `{"prUrl":"https://github.com/acme/app/pull/7","body":"![a.png](attachment:0)","attachments":[{"name":"a.png","contentType":"image/png","data":"iVBORw=="}]}`, upload: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodPost, "/api/v1/prs/7/comments", bytes.NewBufferString(tc.body))
+			req.Header.Set("Content-Type", "application/json")
+			if tc.upload {
+				req.Header.Set(attachmentUploadHeader, "1")
+			}
+			response := httptest.NewRecorder()
+			router.ServeHTTP(response, req)
+			if response.Code != http.StatusOK {
+				t.Fatalf("comment status = %d, want 200; body=%s", response.Code, response.Body.String())
+			}
+			budget := <-prs.budget
+			if tc.upload && (budget < 9*time.Minute || budget > 10*time.Minute) {
+				t.Fatalf("comment with files budget = %s, want about 10 minutes", budget)
+			}
+			if !tc.upload && (budget <= 0 || budget > configuredTimeout) {
+				t.Fatalf("text comment budget = %s, want no more than %s", budget, configuredTimeout)
 			}
 		})
 	}
@@ -355,12 +482,13 @@ func TestSetupRoutesAreTheOnesThatRunSetup(t *testing.T) {
 	router.Post("/api/v1/orchestrators", record)
 	router.Post("/api/v1/sessions/{sessionId}/restore", record)
 	router.Post("/api/v1/sessions/{sessionId}/resume-agent", record)
+	router.Post("/api/v1/sessions/{sessionId}/fork", record)
 	router.Post("/api/v1/sessions/{sessionId}/send", record)
 	router.Get("/api/v1/sessions", record)
-	for _, call := range [][2]string{{"POST", "/api/v1/sessions"}, {"POST", "/api/v1/orchestrators"}, {"POST", "/api/v1/sessions/s1/restore"}, {"POST", "/api/v1/sessions/s1/resume-agent"}, {"POST", "/api/v1/sessions/s1/send"}, {"GET", "/api/v1/sessions"}} {
+	for _, call := range [][2]string{{"POST", "/api/v1/sessions"}, {"POST", "/api/v1/orchestrators"}, {"POST", "/api/v1/sessions/s1/restore"}, {"POST", "/api/v1/sessions/s1/resume-agent"}, {"POST", "/api/v1/sessions/s1/fork"}, {"POST", "/api/v1/sessions/s1/send"}, {"GET", "/api/v1/sessions"}} {
 		router.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(call[0], call[1], nil))
 	}
-	want := map[string]bool{"POST /api/v1/sessions": true, "POST /api/v1/orchestrators": true, "POST /api/v1/sessions/s1/restore": true, "POST /api/v1/sessions/s1/resume-agent": true, "POST /api/v1/sessions/s1/send": false, "GET /api/v1/sessions": false}
+	want := map[string]bool{"POST /api/v1/sessions": true, "POST /api/v1/orchestrators": true, "POST /api/v1/sessions/s1/restore": true, "POST /api/v1/sessions/s1/resume-agent": true, "POST /api/v1/sessions/s1/fork": true, "POST /api/v1/sessions/s1/send": false, "GET /api/v1/sessions": false}
 	for call, setup := range want {
 		if seen[call] != setup {
 			t.Errorf("setupRoute(%s) = %v, want %v", call, seen[call], setup)
@@ -435,5 +563,78 @@ func TestSessionImportUsesExtendedTimeout(t *testing.T) {
 	router.ServeHTTP(imported, httptest.NewRequest(http.MethodPost, "/api/v1/session-import", strings.NewReader(`{"ids":["a"]}`)))
 	if scan.Code != http.StatusOK || probe.scan < 9*time.Minute || imported.Code != http.StatusOK || probe.imported < 9*time.Minute {
 		t.Fatalf("scan %d in %s, import %d in %s: %s", scan.Code, probe.scan, imported.Code, probe.imported, imported.Body)
+	}
+}
+
+type timeoutProbeDevices struct {
+	controllers.DeviceService
+	budget chan time.Duration
+}
+
+func (d *timeoutProbeDevices) probe(ctx context.Context) { d.budget <- remainingRequestBudget(ctx) }
+
+func (d *timeoutProbeDevices) Install(ctx context.Context, _ domain.SessionID, _ string) (devices.Lease, error) {
+	d.probe(ctx)
+	return devices.Lease{}, nil
+}
+
+func (d *timeoutProbeDevices) Launch(ctx context.Context, _ domain.SessionID, _ string) (devices.Lease, error) {
+	d.probe(ctx)
+	return devices.Lease{}, nil
+}
+
+func (d *timeoutProbeDevices) Close(ctx context.Context, _ domain.SessionID, _ bool) error {
+	d.probe(ctx)
+	return nil
+}
+
+func (d *timeoutProbeDevices) PressButton(ctx context.Context, _ domain.SessionID, _ string) error {
+	d.probe(ctx)
+	return nil
+}
+
+func (d *timeoutProbeDevices) Lease(domain.SessionID) (devices.Lease, bool) {
+	return devices.Lease{}, false
+}
+
+func (d *timeoutProbeDevices) SetAvailable(bool) {}
+
+func (d *timeoutProbeDevices) Status(ctx context.Context) devices.Status {
+	d.probe(ctx)
+	return devices.Status{}
+}
+
+// Installing a large build takes longer than one REST request; the flat budget
+// cancelled the install halfway and answered 504. Device commands get the
+// provider's limits, and an ordinary device read keeps the REST budget.
+func TestDeviceCommandRoutesOutlastTheRESTBudget(t *testing.T) {
+	const restBudget = 250 * time.Millisecond
+	svc := &timeoutProbeDevices{budget: make(chan time.Duration, 1)}
+	router := NewRouterWithControl(config.Config{RequestTimeout: restBudget}, discardLogger(), nil, APIDeps{Devices: svc}, ControlDeps{})
+	for _, tc := range []struct {
+		method, path, body string
+		long               bool
+	}{
+		{http.MethodPost, "/api/v1/sessions/s-1/device/install", `{"path":"/tmp/App.app"}`, true},
+		{http.MethodPost, "/api/v1/sessions/s-1/device/launch", `{"appId":"com.example.app"}`, true},
+		{http.MethodPost, "/api/v1/sessions/s-1/device/close", `{"shutdown":true}`, true},
+		{http.MethodPost, "/api/v1/sessions/s-1/device/button", `{"button":"home"}`, true},
+		{http.MethodGet, "/api/v1/devices", "", false},
+	} {
+		req := httptest.NewRequest(tc.method, tc.path, bytes.NewBufferString(tc.body))
+		req.Header.Set("Content-Type", "application/json")
+		response := httptest.NewRecorder()
+		router.ServeHTTP(response, req)
+		select {
+		case budget := <-svc.budget:
+			if tc.long && budget < deviceCommandBudget-time.Second {
+				t.Fatalf("%s budget = %s, want about %s", tc.path, budget, deviceCommandBudget)
+			}
+			if !tc.long && budget > restBudget {
+				t.Fatalf("%s budget = %s, want at most the REST budget %s", tc.path, budget, restBudget)
+			}
+		case <-time.After(time.Second):
+			t.Fatalf("%s never reached the service: status=%d body=%s", tc.path, response.Code, response.Body.String())
+		}
 	}
 }

@@ -74,6 +74,22 @@ export function isDesktopUnreachable(poll: {
 }
 
 /**
+ * Whether the board's last poll was answered with a refusal that stopped it
+ * (see shouldKeepPolling): a rejected pairing (401/403, after a password
+ * change or a removed device), the failed-attempt lockout (429), or a version
+ * the phone cannot use (426). The opposite of isDesktopUnreachable: the
+ * machine answered, so no reconnect clears it, and nothing asks it again
+ * until the phone is paired afresh or the app comes back to the foreground.
+ */
+export function isPollRejected(poll: {
+	connection: string;
+	error: string | null;
+	errorStatus: number | null;
+}): boolean {
+	return poll.connection === "closed" && poll.error !== null && poll.errorStatus !== null && !shouldKeepPolling(poll.errorStatus);
+}
+
+/**
  * Whether a failed request is the daemon's word that the session no longer
  * exists. Only a 404 or 410 says that. A timeout, a refused connection or a 5xx
  * is a fact about the link, not the session, and a link comes back — so none of
@@ -143,7 +159,8 @@ export type ConnectionErrorCopy = {
  */
 export function describeConnectionFailure(
 	reason: ConnectionFailure,
-	target: { host: string; port: string; platform: "ios" | "android" | string },
+	/** `secure` says the attempt was HTTPS, when the caller knows it. */
+	target: { host: string; port: string; platform: "ios" | "android" | string; secure?: boolean },
 ): ConnectionErrorCopy {
 	// Only surfaced when the phone never reached the host at all, and only on
 	// iOS, where a denied Local Network prompt produces exactly this symptom.
@@ -184,6 +201,24 @@ export function describeConnectionFailure(
 		case "unreachable": {
 			// Build the address string only when we have both host and port
 			const address = target.host && target.port ? `${target.host}:${target.port}` : target.host || "";
+			// A Tailscale name on the Connect Mobile port is plain HTTP, which the
+			// phone does not assume for a qualified name. Android can be told to
+			// type http://; iOS refuses plain HTTP to that name, so it is pointed at
+			// Tailscale's HTTPS address on 443 instead, spelled with https:// and no
+			// port: clearing Port alone keeps a port written into Host, and an
+			// editor would fall back to the saved port.
+			if (target.secure === true && target.port && target.port !== "443" && target.host.trim().toLowerCase().endsWith(".ts.net")) {
+				const name = target.host.trim();
+				return {
+					title: "Your machine is offline",
+					icon: "unplug",
+					hint: target.platform === "ios" ? "Enter https:// and the Tailscale name, with Port empty." : "Type http:// before a Tailscale name.",
+					message: `Nothing answered over HTTPS at ${address}. ` + (target.platform === "ios"
+						? `To use the machine's Tailscale HTTPS address, enter https://${name} in Host and leave Port empty.`
+						: `A Tailscale name on the Connect Mobile port uses plain HTTP: enter http://${name}:${target.port}.`),
+					showLocalNetworkHint: false,
+				};
+			}
 			const messagePrefix = address ? `Reached nothing at ${address}. ` : "Couldn't reach your machine. ";
 			return {
 				title: "Your machine is offline",
@@ -301,6 +336,7 @@ export const LOCAL_NETWORK_HINT = "If Local Network access is off, turn it on in
  * fetch's platform-specific wording ("Network request failed").
  */
 export class UnreachableError extends Error {
+	readonly code: string = "UNREACHABLE_ERROR";
 	constructor(
 		readonly reason: "timeout" | "offline",
 		options?: { cause?: unknown },

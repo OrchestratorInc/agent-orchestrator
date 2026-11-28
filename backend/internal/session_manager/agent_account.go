@@ -142,7 +142,7 @@ func (m *Manager) preflightAccountTarget(
 		}
 		return m.chat.PreflightChat(ctx, rec.Harness, config.Permissions)
 	}
-	return m.preflightTerminalLaunch(ctx, agent, rec, project, transition.NativeConversationID)
+	return m.preflightTerminalLaunch(ctx, agent, rec, project, transition.NativeConversationID, env)
 }
 
 // markAccountSwitch tells the conversation that a move which stopped the turn
@@ -181,7 +181,7 @@ func (m *Manager) deliverQueuedAfterAccountMove(transition domain.SessionInterfa
 // account. An account env that cannot be resolved fails the check: the env
 // would name another login, and every probe below would pass against it.
 func (m *Manager) runtimeEnvOnAccount(rec domain.SessionRecord, projectEnv map[string]string, accountID string) (map[string]string, error) {
-	return m.runtimeEnvChecked(rec.ID, rec.ProjectID, rec.IssueID, projectEnv, accountID)
+	return m.runtimeEnvChecked(rec.ID, rec.ProjectID, rec.IssueID, projectEnv, accountID, rec.Harness)
 }
 
 // ExitAgentsOnAccount stops every running agent that uses accountID, before the

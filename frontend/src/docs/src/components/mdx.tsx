@@ -4,7 +4,9 @@ import { Children, cloneElement, isValidElement, type ComponentPropsWithoutRef, 
 import type { MDXComponents } from "mdx/types";
 import type { CodeBlockProps } from "fumadocs-ui/components/codeblock";
 import { LocalizedCodeBlock } from "./code-block";
+import { STATUS_LABEL, type PlatformStatus } from "@/lib/platform-status";
 import { Tab, Tabs } from "./docs-tabs";
+import { DESKTOP_DOWNLOADS, downloadUrl } from "@/lib/downloads";
 
 function textOf(node: ReactNode): string {
   if (typeof node === "string" || typeof node === "number") return String(node);
@@ -188,13 +190,7 @@ export function PluginCard({
   );
 }
 
-type Status = "full" | "partial" | "none";
-
-const STATUS_LABEL: Record<Status, string> = {
-  full: "Supported",
-  partial: "Limited",
-  none: "Not supported",
-};
+type Status = PlatformStatus;
 
 const STATUS_DOT: Record<Status, string> = {
   full: "bg-green-400",
@@ -244,13 +240,7 @@ export function PlatformSupport({
 }
 
 export function InstallDownloads() {
-  const release = "https://github.com/OrchestratorInc/agent-orchestrator/releases/latest/download";
-  const downloads = [
-    { platform: "macOS Apple silicon", assets: [["Disk image", "Orchestrator-darwin-arm64.dmg"], ["Zip", "agent-orchestrator-darwin-arm64.zip"]] },
-    { platform: "macOS Intel", assets: [["Disk image", "Orchestrator-darwin-x64.dmg"], ["Zip", "agent-orchestrator-darwin-x64.zip"]] },
-    { platform: "Windows x64", assets: [["Installer", "agent-orchestrator-win32-x64.exe"]] },
-    { platform: "Linux x64", assets: [["AppImage", "agent-orchestrator-linux-x64.AppImage"], ["Debian / Ubuntu", "agent-orchestrator-linux-x64.deb"], ["Fedora / RHEL", "agent-orchestrator-linux-x64.rpm"]] },
-  ];
+  const downloads = DESKTOP_DOWNLOADS;
 
   return (
     <div style={{ marginBlock: "1.25rem", overflowX: "auto" }}>
@@ -268,7 +258,7 @@ export function InstallDownloads() {
                   {assets.map(([label, asset], index) => (
                     <span key={asset}>
                       {index > 0 && <span aria-hidden="true"> · </span>}
-                      <a href={`${release}/${asset}`}>{label}</a>
+                      <a href={downloadUrl(asset)}>{label}</a>
                     </span>
                   ))}
                 </div>

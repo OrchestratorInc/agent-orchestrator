@@ -1,5 +1,5 @@
 /*!
- * Adapted from daisyUI button.css with inset-only depth (no outer shadow).
+ * Adapted from daisyUI button.css with inset depth and a faint outer shadow.
  * https://github.com/saadeghi/daisyui/blob/f832adddd5c2b458bda4b0da8816b31a5b17731e/packages/daisyui/src/components/button.css
  *
  * MIT License
@@ -32,7 +32,7 @@
 
 @utility button-raised {
 	--button-face: var(--button-color);
-	--button-edge: color-mix(in oklab, var(--button-color), #000 5%);
+	--button-edge: color-mix(in oklab, var(--button-color), #000 13%);
 	background-color: var(--button-face);
 	border-color: var(--button-edge);
 	box-shadow: var(--shadow-control-inset);

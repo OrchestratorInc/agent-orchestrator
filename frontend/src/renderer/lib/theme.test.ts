@@ -2,6 +2,8 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
 	applyDocumentTheme,
 	applyDocumentThemeStyle,
+	isThemeStylePreviewActive,
+	onThemeStylePreviewEnd,
 	previewDocumentThemeStyle,
 	readStoredThemePreference,
 	readStoredThemeStyle,
@@ -197,5 +199,20 @@ describe("previewDocumentThemeStyle", () => {
 		document.documentElement.dataset.styleTheme = "nord";
 		previewDocumentThemeStyle(null, "github");
 		expect(document.documentElement.dataset.styleTheme).toBe("nord");
+	});
+
+	it("calls preview-end listeners once, after the saved theme is back", () => {
+		previewDocumentThemeStyle("nord", "github");
+		expect(isThemeStylePreviewActive()).toBe(true);
+		const seen: (string | undefined)[] = [];
+		onThemeStylePreviewEnd(() => seen.push(document.documentElement.dataset.styleTheme));
+
+		previewDocumentThemeStyle(null, "github");
+		expect(isThemeStylePreviewActive()).toBe(false);
+		expect(seen).toEqual(["github"]);
+
+		previewDocumentThemeStyle("dracula", "github");
+		previewDocumentThemeStyle(null, "github");
+		expect(seen).toEqual(["github"]);
 	});
 });

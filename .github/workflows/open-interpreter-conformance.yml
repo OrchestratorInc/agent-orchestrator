@@ -1,0 +1,37 @@
+name: Open Interpreter conformance
+
+on:
+  pull_request:
+    paths:
+      - backend/internal/adapters/agent/openinterpreter/**
+      - backend/internal/cli/hooks*.go
+      - .github/workflows/open-interpreter-conformance.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  released-native-tui:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: backend/go.mod
+          cache-dependency-path: backend/go.sum
+      - name: Download checksum-pinned Rust release
+        shell: bash
+        run: |
+          package="$RUNNER_TEMP/open-interpreter.tar.gz"
+          curl --fail --location --retry 3 'https://github.com/openinterpreter/openinterpreter/releases/download/rust-v0.0.56/open-interpreter-package-x86_64-unknown-linux-musl.tar.gz' --output "$package"
+          echo "9e859353d6e2af28381489570d3ecf02060f7c73df5a652f3ca60c196835ccac  $package" | sha256sum --check
+          mkdir -p "$RUNNER_TEMP/open-interpreter"
+          tar -xzf "$package" -C "$RUNNER_TEMP/open-interpreter"
+          binary=$(find "$RUNNER_TEMP/open-interpreter" -type f -path '*/bin/interpreter' -print -quit)
+          test -n "$binary"
+          echo "OPEN_INTERPRETER_CONFORMANCE_BINARY=$binary" >> "$GITHUB_ENV"
+      - name: Exercise production argv against released native TUI
+        working-directory: backend
+        run: go test -tags=openinterpreterconformance -count=1 -timeout=4m -v ./internal/adapters/agent/openinterpreter

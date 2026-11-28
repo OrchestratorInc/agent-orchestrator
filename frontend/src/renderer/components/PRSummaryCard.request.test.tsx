@@ -64,7 +64,8 @@ describe("a shared project's pull request card", () => {
 
 	it("still merges directly for the project's own people", async () => {
 		renderCard(false);
-		fireEvent.click(await screen.findByRole("button", { name: /Merge/ }));
+		// The readiness line is a button too ("Mergeable"), so name the Merge action exactly.
+		fireEvent.click(await screen.findByRole("button", { name: "Merge PR #7" }));
 		await waitFor(() => expect(client.mergePullRequest).toHaveBeenCalledWith("org-1", "s1", 7, prUrl, "head-1"));
 		expect(client.listProjectMergeRequests).not.toHaveBeenCalled();
 	});

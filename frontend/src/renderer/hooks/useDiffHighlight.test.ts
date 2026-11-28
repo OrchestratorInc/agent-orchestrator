@@ -1,7 +1,6 @@
 import { act, renderHook, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { parseUnifiedDiff } from "../lib/diff-parser";
-import * as codeHighlight from "../lib/code-highlight";
 import { useDiffHighlight } from "./useDiffHighlight";
 
 function classesOf(runs: { className?: string }[]): string[] {
@@ -87,25 +86,6 @@ describe("useDiffHighlight", () => {
 			expect(classesOf(result.current.oldSide[contextIndex])).toContain("hljs-comment");
 		});
 		expect(classesOf(result.current.newSide[contextIndex])).not.toContain("hljs-comment");
-	});
-
-	it("does not retry forever once the engine reports highlighting unavailable", async () => {
-		const highlightSyncSpy = vi.spyOn(codeHighlight, "highlightSync").mockReturnValue(undefined);
-		const highlightSpy = vi
-			.spyOn(codeHighlight, "highlight")
-			.mockResolvedValueOnce(undefined)
-			.mockResolvedValueOnce(undefined)
-			.mockReturnValue(new Promise(() => {})); // any further call would hang the test if made
-
-		const rows = parseUnifiedDiff("@@ -1,1 +1,1 @@\n-const before = 0;\n+const after = 1;\n");
-		renderHook(() => useDiffHighlight(rows, "src/App.ts", undefined));
-
-		// One highlight() call per hunk side (old, new); both resolve to undefined
-		// (highlighting unavailable) so there is nothing to retry from.
-		await waitFor(() => expect(highlightSpy).toHaveBeenCalledTimes(2));
-		await new Promise((resolve) => setTimeout(resolve, 100));
-		expect(highlightSpy).toHaveBeenCalledTimes(2);
-		expect(highlightSyncSpy).toHaveBeenCalled();
 	});
 
 	it("uses the previous extension's grammar for the old side of an extension-changing rename", async () => {

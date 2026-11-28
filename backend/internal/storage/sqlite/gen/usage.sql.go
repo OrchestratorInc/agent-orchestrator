@@ -515,6 +515,10 @@ SELECT CAST(EXISTS (
     JOIN sessions s ON s.id = ub.session_id
     WHERE (s.is_terminated = 0 OR ub.state = 'finalizing')
       AND (
+          ub.state IN ('discovering', 'active', 'finalizing')
+          OR (ub.state = 'partial' AND ub.last_error_code = 'codex_source_budget_exceeded')
+      )
+      AND (
           ub.harness IN ('kimi', 'qwen')
           OR ub.state = 'discovering'
           OR ub.last_error_code = 'source_discovery_pending'
@@ -568,6 +572,9 @@ SELECT CAST(EXISTS (
 ) AS INTEGER)
 `
 
+// Only bindings that ListUsageDiscoveryBindings would revisit count. A settled
+// binding with a missing transcript is never rediscovered, so counting it kept
+// discovery pending, and retrying, for as long as its session lived.
 func (q *Queries) HasPendingUsageDiscovery(ctx context.Context) (int64, error) {
 	row := q.db.QueryRowContext(ctx, hasPendingUsageDiscovery)
 	var column_1 int64

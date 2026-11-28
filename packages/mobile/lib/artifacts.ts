@@ -23,6 +23,8 @@ export type SessionArtifact = {
 	shareUrl?: string;
 	/** Set on a file the agent registered with `ao artifact add`. */
 	registered?: boolean;
+	/** The paths the artifact had before it was renamed, so a turn that reported an old one still finds it. */
+	previousPaths?: string[];
 };
 
 /**
@@ -67,7 +69,7 @@ export function parseArtifacts(raw: unknown): SessionArtifact[] {
 	const out: SessionArtifact[] = [];
 	for (const item of raw) {
 		if (!item || typeof item !== "object") continue;
-		const { path, name, kind, size, updatedAt, shareUrl, registered } = item as Record<string, unknown>;
+		const { path, name, kind, size, updatedAt, shareUrl, registered, previousPaths } = item as Record<string, unknown>;
 		if (typeof path !== "string" || !isSafeArtifactPath(path)) continue;
 		const link = artifactShareUrl(shareUrl);
 		out.push({
@@ -78,6 +80,7 @@ export function parseArtifacts(raw: unknown): SessionArtifact[] {
 			updatedAt: typeof updatedAt === "string" ? updatedAt : "",
 			...(link ? { shareUrl: link } : {}),
 			...(registered === true ? { registered } : {}),
+			...(Array.isArray(previousPaths) ? { previousPaths: previousPaths.filter((entry): entry is string => typeof entry === "string") } : {}),
 		});
 	}
 	return out;

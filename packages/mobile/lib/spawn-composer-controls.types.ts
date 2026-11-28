@@ -1,4 +1,6 @@
 import type { ReactNode } from "react";
+import type { ComposerImageAsset, PasteOverflow } from "./chat/composerImages";
+import type { ChatSkill } from "./chat/types";
 import type { EffortChoice } from "./modelEffort";
 import type { VoiceState } from "./voice/types";
 
@@ -74,11 +76,15 @@ export type SpawnComposerControlsProps = {
 	/** The attach button offers both the photo library and the file picker. */
 	onChoosePhoto: () => void;
 	onChooseFile: () => void;
+	/** Takes images pasted into the prompt field; null while they can't be attached. */
+	onPasteImages?: ((assets: ComposerImageAsset[], overflow?: PasteOverflow) => void) | null;
 	/** Dictation into the prompt: tap to start, tap again to finish. */
 	voice: SpawnComposerVoice;
 	/** The task's prompt, written in the composer's field. */
 	prompt: string;
 	onChangePrompt: (value: string) => void;
+	/** The picked agent's skills for a `/` at the start of the prompt; absent on Cloud. */
+	onLoadSkills?: () => Promise<ChatSkill[]>;
 	/** Names who will answer, as a conversation's field does: "Ask Codex". */
 	placeholder: string;
 	/** The picked files, shown above the composer as the chat shows its own. */

@@ -1,4 +1,6 @@
-import { afterEach, describe, expect, it } from "vitest";
+import { readFileSync } from "node:fs";
+import { runInNewContext } from "node:vm";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
 	clampRenderHeight,
 	measuredRenderHeight,
@@ -7,6 +9,7 @@ import {
 	readRenderImageRequest,
 	readRenderLinkRequest,
 	readRenderRef,
+	readRenderSelection,
 	readRenderTheme,
 	renderFileName,
 	renderThemeFragment,
@@ -81,27 +84,30 @@ describe("render-frame helpers", () => {
 		}
 	});
 
-	it("reads the taller of the nearest measured heights on each side of a width", () => {
+	it("sizes a frame from the heights measured nearest its width", () => {
 		const heights: Array<[number, number]> = [
-			[320, 900],
-			[520, 400],
-			[860, 500],
+			[360, 1400],
+			[600, 700],
+			[1024, 820],
 		];
-		expect(measuredRenderHeight(heights, 520)).toBe(400);
-		expect(measuredRenderHeight(heights, 700)).toBe(500);
-		expect(measuredRenderHeight(heights, 400)).toBe(900);
-		expect(measuredRenderHeight(heights, 240)).toBe(900);
-		expect(measuredRenderHeight(heights, 1200)).toBe(500);
-		expect(measuredRenderHeight([[640, 300]], 1200)).toBe(300);
+		expect(measuredRenderHeight(heights, 600)).toBe(700);
+		expect(measuredRenderHeight(heights, 480)).toBe(1400);
+		expect(measuredRenderHeight(heights, 800)).toBe(820);
+		expect(measuredRenderHeight(heights, 300)).toBe(1400);
+		expect(measuredRenderHeight(heights, 1600)).toBe(820);
+		expect(measuredRenderHeight([[500, 250]], 90)).toBe(250);
 	});
 
-	it("names a saved page after its title, without characters a file system refuses", () => {
-		expect(renderFileName("Turns by day")).toBe("Turns by day.html");
-		expect(renderFileName('Q3: a/b\\c *?"<>| \u0007 report\n')).toBe("Q3 a b c report.html");
+	it("names a saved page with the words of its title", () => {
+		expect(renderFileName("Weekly spend")).toBe("Weekly spend.html");
+		expect(renderFileName('CI <main>: p95 / p99 | "flaky"?')).toBe("CI main p95 p99 flaky.html");
+		expect(renderFileName("line one\r\nline two\u0000\u007f")).toBe("line one line two.html");
 		expect(renderFileName("")).toBe("Page.html");
-		expect(renderFileName(' /:*?"<>| ')).toBe("Page.html");
-		expect(renderFileName(`${"x".repeat(119)} tail`)).toBe(`${"x".repeat(119)}.html`);
-		expect(renderFileName("y".repeat(300))).toBe(`${"y".repeat(120)}.html`);
+		expect(renderFileName("  ***  ")).toBe("Page.html");
+		expect(renderFileName("\ufeffBOM\ufefftitle\ufeff")).toBe("BOM title.html");
+		expect(renderFileName("ab ".repeat(50))).toBe(`${"ab ".repeat(40).trim()}.html`);
+		expect(renderFileName("ж".repeat(125))).toBe(`${"ж".repeat(120)}.html`);
+		expect(renderFileName("😀".repeat(121))).toBe(`${"😀".repeat(120)}.html`);
 	});
 
 	it("reads only the bootstrap's own protocol messages", () => {
@@ -109,6 +115,14 @@ describe("render-frame helpers", () => {
 		expect(readRenderContentHeight({ method: "ui/notifications/size-changed", params: { height: 412 } })).toBeUndefined();
 		expect(readRenderLinkRequest({ jsonrpc: "2.0", id: 1, method: "ui/open-link", params: { url: "https://x.dev/a" } })).toBe("https://x.dev/a");
 		expect(readRenderLinkRequest({ jsonrpc: "2.0", id: 1, method: "ui/open-link", params: { url: "javascript:alert(1)" } })).toBeUndefined();
+		const selection = (params: unknown) => readRenderSelection({ jsonrpc: "2.0", method: "ao/selection", params });
+		const box = { left: 1, top: 2, width: 3, height: 4 };
+		expect(selection({ text: "" })).toEqual({ text: "" });
+		expect(selection({ text: "Picked", first: box, extent: box })).toEqual({ text: "Picked", first: box, extent: box });
+		expect(selection({ first: box, extent: box })).toEqual({ first: box, extent: box });
+		expect(selection({ text: "Picked", first: box })).toBeUndefined();
+		expect(selection({ text: 7, first: box, extent: box })).toBeUndefined();
+		expect(selection({ text: "Picked", first: { ...box, left: Number.NaN }, extent: box })).toBeUndefined();
 		const image = (params: unknown) => readRenderImageRequest({ jsonrpc: "2.0", method: "ao/open-image", params });
 		expect(image({ src: "data:image/png;base64,AA==", alt: "Before" })).toEqual({ src: "data:image/png;base64,AA==", alt: "Before" });
 		expect(image({ src: "DATA:IMAGE/svg+xml,<svg/>" })).toEqual({ src: "DATA:IMAGE/svg+xml,<svg/>", alt: "" });
@@ -161,5 +175,248 @@ describe("render-frame helpers", () => {
 			expect(renderThemeMessage(theme, "fullscreen", scrollable, true).params.wrapContent).toBe(true);
 			expect(renderThemeMessage(theme, "inline", scrollable, false).params.wrapContent).toBe(false);
 		}
+	});
+});
+
+const bootstrapSource = readFileSync("../backend/internal/renderpage/render_bootstrap.js", "utf8");
+
+function bootPage(fragment = "") {
+	const location = new URL(`https://reports.example/review.html?view=chart${fragment}`);
+	const frame = document.createElement("iframe");
+	document.body.append(frame);
+	const page = frame.contentDocument!;
+	page.head.innerHTML = `<base href="${location.href}"><style id="ao-theme">:root{--background:black}@media(prefers-color-scheme:light){:root{--background:white}}</style><style id="page-style">:root{--background:tan}</style>`;
+	Object.defineProperty(page, "readyState", { configurable: true, value: "loading" });
+	const documentEvents = vi.spyOn(page, "addEventListener");
+	const windowEvents = new Map<string, (event: unknown) => void>();
+	const frames: Array<() => void> = [];
+	const timeouts: Array<() => void> = [];
+	const postMessage = vi.fn();
+	const host = { postMessage };
+	const observed: Element[] = [];
+	let onResize = () => {};
+	const view = {
+		parent: host,
+		innerWidth: 720,
+		innerHeight: 480,
+		scrollX: 0,
+		scrollY: 0,
+		scrollTo: vi.fn(),
+		addEventListener: (name: string, callback: (event: unknown) => void) => windowEvents.set(name, callback),
+		requestAnimationFrame: (callback: () => void) => frames.push(callback),
+		setTimeout: (callback: () => void) => timeouts.push(callback),
+		clearTimeout: vi.fn(),
+		ResizeObserver: class {
+			constructor(callback: () => void) { onResize = callback; }
+			observe(element: Element) { observed.push(element); }
+		},
+	};
+	const history = { state: { retained: true }, replaceState: vi.fn() };
+	runInNewContext(bootstrapSource, { window: view, document: page, location, history, URL, URLSearchParams });
+	const emitDocument = (name: string, event: object = {}) => {
+		for (const [type, callback] of documentEvents.mock.calls) {
+			if (type === name && typeof callback === "function") Reflect.apply(callback, page, [event]);
+		}
+	};
+	const context = (params: object, source: unknown = host, jsonrpc = "2.0") =>
+		windowEvents.get("message")?.({ source, data: { jsonrpc, method: "ui/notifications/host-context-changed", params } });
+	const theme = () => ((page.getElementById("ao-theme") as HTMLStyleElement).sheet!.cssRules[0] as CSSStyleRule).style;
+	const click = (href: string, trusted = true) => {
+		const link = page.createElement("a");
+		link.href = href;
+		const child = page.createElement("span");
+		link.append(child);
+		const event = { isTrusted: trusted, composedPath: () => [child, link, page], preventDefault: vi.fn() };
+		emitDocument("click", event);
+		return event;
+	};
+	return { page, view, history, observed, frames, timeouts, postMessage, theme, context, click, emitDocument, windowEvents, resize: () => onResize() };
+}
+
+describe("render page bootstrap", () => {
+	afterEach(() => document.body.replaceChildren());
+
+	it("reads the initial context before page styles and removes its fragment", () => {
+		const initial = { appearance: "light", variables: { "--background": "#edf4ee", "--label": '"A+B"' }, displayMode: "fullscreen", wrapContent: true, openImages: true };
+		const page = bootPage(`#extra=kept&ao-theme=${encodeURIComponent(JSON.stringify(initial))}`);
+		expect(page.theme().getPropertyValue("--background")).toBe("#edf4ee");
+		expect(page.theme().getPropertyValue("--label")).toBe('"A+B"');
+		expect(page.theme().getPropertyValue("color-scheme")).toBe("light");
+		expect(page.history.replaceState).toHaveBeenCalledWith(page.history.state, "", "/review.html?view=chart");
+		expect(page.page.getElementById("ao-display")?.textContent).toContain("margin-inline:auto");
+		expect(page.page.getElementById("ao-wrap")?.textContent).toContain("overflow-wrap:anywhere");
+		expect([...page.page.querySelectorAll("style")].slice(0, 2).map((style) => style.id)).toEqual(["ao-theme", "page-style"]);
+		expect(page.page.getElementById("page-style")?.textContent).toBe(":root{--background:tan}");
+	});
+
+	it("keeps the OS fallback without valid host context and accepts only parent updates", () => {
+		const page = bootPage("#ao-theme=%7Bbroken");
+		const fallback = page.page.getElementById("ao-theme")!.textContent;
+		expect(fallback).toContain("prefers-color-scheme:light");
+		expect(page.history.replaceState).not.toHaveBeenCalled();
+		const update = { theme: "dark", styles: { variables: { "--foreground": "#abc123" } }, scrollable: true };
+		page.context(update, {});
+		page.context(update, page.view.parent, "1.0");
+		expect(page.page.getElementById("ao-theme")!.textContent).toBe(fallback);
+		page.context(update);
+		expect(page.theme().getPropertyValue("--foreground")).toBe("#abc123");
+		expect(page.theme().getPropertyValue("--background")).toBe("");
+		page.context({ wrapContent: true });
+		expect(page.theme().getPropertyValue("--foreground")).toBe("#abc123");
+		expect(page.page.getElementById("ao-display")?.textContent).toContain("scrollbar-width:auto");
+		expect(page.page.getElementById("ao-wrap")?.textContent).toContain("overflow-wrap:anywhere");
+		page.context({ theme: "light", styles: { variables: { color: "red", "--escape": "blue;}body{color:red}", "--bad;name": "red" } } });
+		const themeStyle = page.page.getElementById("ao-theme") as HTMLStyleElement;
+		expect(themeStyle.sheet!.cssRules).toHaveLength(1);
+		expect(page.theme().getPropertyValue("color")).toBe("");
+		expect(page.theme().getPropertyValue("--bad;name")).toBe("");
+	});
+
+	it("forwards only trusted external HTTP links and leaves same-page anchors alone", () => {
+		const page = bootPage();
+		for (const [href, trusted] of [["https://outside.example/", false], ["#section-2", true], ["mailto:reader@example.org", true]] as const) {
+			expect(page.click(href, trusted).preventDefault).not.toHaveBeenCalled();
+		}
+		expect(page.postMessage).not.toHaveBeenCalled();
+		expect(page.click("/details?q=4#next").preventDefault).toHaveBeenCalledOnce();
+		expect(page.postMessage).toHaveBeenCalledWith({ jsonrpc: "2.0", method: "ui/open-link", id: "ao-link-1", params: { url: "https://reports.example/details?q=4#next" } }, "*");
+	});
+
+	it("coalesces layout changes and reports overflow or fractional box height once", () => {
+		const page = bootPage();
+		const root = page.page.documentElement;
+		Object.defineProperties(root, { scrollHeight: { configurable: true, value: 915 }, clientHeight: { configurable: true, value: 480 } });
+		vi.spyOn(root, "getBoundingClientRect").mockReturnValue(new DOMRect(0, 0, 720, 480.2));
+		page.emitDocument("DOMContentLoaded");
+		page.resize();
+		page.resize();
+		expect(page.observed).toEqual([root, page.page.body]);
+		expect(page.frames).toHaveLength(1);
+		page.frames.shift()!();
+		expect(page.postMessage).toHaveBeenLastCalledWith({ jsonrpc: "2.0", method: "ui/notifications/size-changed", params: { height: 915 } }, "*");
+		page.resize();
+		page.frames.shift()!();
+		expect(page.postMessage).toHaveBeenCalledOnce();
+		Object.defineProperty(root, "scrollHeight", { value: 480 });
+		page.resize();
+		page.frames.shift()!();
+		expect(page.postMessage).toHaveBeenLastCalledWith({ jsonrpc: "2.0", method: "ui/notifications/size-changed", params: { height: 481 } }, "*");
+	});
+
+	it("keeps trusted image opening and host-owned zoom controls working", () => {
+		const page = bootPage();
+		page.context({ openImages: true, zoomable: true, zoom: 1.5 });
+		expect(page.page.documentElement.style.transform).toBe("translateX(0%) scale(1.5)");
+		const image = page.page.createElement("img");
+		image.src = "data:image/png;base64,AA==";
+		image.alt = "Chart detail";
+		page.windowEvents.get("click")?.({ target: image, isTrusted: false });
+		expect(page.postMessage).not.toHaveBeenCalled();
+		page.windowEvents.get("click")?.({ target: image, isTrusted: true });
+		expect(page.postMessage).toHaveBeenLastCalledWith({ jsonrpc: "2.0", method: "ao/open-image", params: { src: image.src, alt: image.alt } }, "*");
+		const pinch = { ctrlKey: true, deltaY: -35, deltaMode: 0, clientX: 120, clientY: 95, preventDefault: vi.fn() };
+		page.windowEvents.get("wheel")?.(pinch);
+		expect(pinch.preventDefault).toHaveBeenCalledOnce();
+		expect(page.postMessage).toHaveBeenLastCalledWith({ jsonrpc: "2.0", method: "ao/zoom", params: { deltaY: -35, deltaMode: 0, x: 120, y: 95 } }, "*");
+		const reset = { metaKey: true, key: "0", preventDefault: vi.fn() };
+		page.emitDocument("keydown", reset);
+		expect(page.postMessage).toHaveBeenLastCalledWith({ jsonrpc: "2.0", method: "ao/zoom", params: { action: "reset" } }, "*");
+		page.context({ zoom: 1 });
+		expect(page.page.documentElement.style.transform).toBe("");
+	});
+
+	it("reports a released selection's words and place, follows it as the page scrolls, and clears it", () => {
+		const page = bootPage();
+		let selected = "Are fewer than 20 calls waiting?";
+		const range = {
+			getBoundingClientRect: () => new DOMRect(12, 40, 300, 44),
+			getClientRects: () => [new DOMRect(0, 0, 0, 0), new DOMRect(12, 40, 180, 22)],
+		};
+		page.page.getSelection = () => ({ rangeCount: selected ? 1 : 0, isCollapsed: !selected, getRangeAt: () => range, toString: () => selected }) as unknown as Selection;
+		const first = { left: 12, top: 40, width: 180, height: 22 };
+		const extent = { left: 12, top: 40, width: 300, height: 44 };
+		page.emitDocument("keyup", { key: "c" });
+		expect(page.frames).toHaveLength(0);
+		page.emitDocument("keyup", { key: "Meta" });
+		expect(page.frames).toHaveLength(1);
+		page.emitDocument("pointerup");
+		page.frames.shift()!();
+		expect(page.frames).toHaveLength(0);
+		expect(page.postMessage).toHaveBeenCalledExactlyOnceWith({ jsonrpc: "2.0", method: "ao/selection", params: { text: selected, first, extent } }, "*");
+		page.emitDocument("scroll");
+		page.frames.shift()!();
+		expect(page.postMessage).toHaveBeenLastCalledWith({ jsonrpc: "2.0", method: "ao/selection", params: { first, extent } }, "*");
+		selected = "";
+		page.emitDocument("selectionchange");
+		page.frames.shift()!();
+		expect(page.postMessage).toHaveBeenLastCalledWith({ jsonrpc: "2.0", method: "ao/selection", params: { text: "" } }, "*");
+		page.emitDocument("scroll");
+		page.emitDocument("selectionchange");
+		page.emitDocument("pointerup");
+		page.frames.shift()!();
+		expect(page.postMessage).toHaveBeenCalledTimes(3);
+	});
+
+	it("reports its scroll to a host that asks, and goes back to a scroll the host restores", () => {
+		const page = bootPage();
+		// The restore scrolls with options (instant); the zoom with coordinates.
+		const scrollable = (height: number) => page.view.scrollTo.mockImplementation((to: number | { left: number; top: number }, y?: number) => {
+			page.view.scrollX = typeof to === "number" ? to : to.left;
+			page.view.scrollY = Math.min(typeof to === "number" ? y ?? 0 : to.top, height);
+		});
+		scrollable(10_000);
+		const scroll = () => page.windowEvents.get("scroll")?.({});
+		scroll();
+		expect(page.frames).toHaveLength(0);
+
+		// Asked, it reports where it is at once, even at its top.
+		page.context({ scrollReport: true });
+		expect(page.frames).toHaveLength(1);
+		page.frames.shift()!();
+		expect(page.postMessage).toHaveBeenLastCalledWith({ jsonrpc: "2.0", method: "ao/scroll", params: { x: 0, y: 0 } }, "*");
+		page.view.scrollY = 320;
+		scroll();
+		scroll();
+		expect(page.frames).toHaveLength(1);
+		page.frames.shift()!();
+		expect(page.postMessage).toHaveBeenLastCalledWith({ jsonrpc: "2.0", method: "ao/scroll", params: { x: 0, y: 320 } }, "*");
+
+		// Too short for the position yet: it waits for the page to lay out, and reports nothing on the way.
+		scrollable(400);
+		page.postMessage.mockClear();
+		page.context({ scrollTo: { x: 0, y: 900 } });
+		expect(page.view.scrollTo).toHaveBeenLastCalledWith({ left: 0, top: 900, behavior: "instant" });
+		expect(page.view.scrollY).toBe(400);
+		scroll();
+		expect(page.frames).toHaveLength(0);
+		scrollable(10_000);
+		page.resize();
+		page.frames.shift()!();
+		expect(page.view.scrollY).toBe(900);
+		page.frames.shift()!();
+		expect(page.postMessage).toHaveBeenLastCalledWith({ jsonrpc: "2.0", method: "ao/scroll", params: { x: 0, y: 900 } }, "*");
+
+		// The reader scrolling or pressing first ends a restore.
+		scrollable(400);
+		page.context({ scrollTo: { x: 0, y: 1200 } });
+		page.windowEvents.get("pointerdown")?.({});
+		page.view.scrollTo.mockClear();
+		page.resize();
+		for (const frame of page.frames.splice(0)) frame();
+		expect(page.view.scrollTo).not.toHaveBeenCalled();
+
+		// A page that never grows tall enough, or resizes, gives up on its own
+		// deadline: it reports again, and a later resize does not scroll it.
+		page.timeouts.length = 0;
+		page.context({ scrollTo: { x: 0, y: 1500 } });
+		expect(page.timeouts).toHaveLength(1);
+		page.postMessage.mockClear();
+		page.timeouts.shift()!();
+		page.frames.shift()!();
+		expect(page.postMessage).toHaveBeenLastCalledWith({ jsonrpc: "2.0", method: "ao/scroll", params: { x: 0, y: 400 } }, "*");
+		page.view.scrollTo.mockClear();
+		page.resize();
+		for (const frame of page.frames.splice(0)) frame();
+		expect(page.view.scrollTo).not.toHaveBeenCalled();
 	});
 });

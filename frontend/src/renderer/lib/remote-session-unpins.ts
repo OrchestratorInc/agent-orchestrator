@@ -4,8 +4,8 @@ import { isUnpinnedHere, type RemoteUnpin, useRemoteUnpinStore } from "../stores
 import { clientForHost, connectedHost } from "./host-clients";
 import { sessionUiKey } from "./hosts";
 
-// Unpinning a session on another host never waits for that host. The row leaves
-// Pinned here at once (remote-unpin-store), and the host is told when it answers:
+// Unpinning a session on another host never waits for that host. The row loses
+// its pin here at once (remote-unpin-store), and the host is told when it answers:
 // now if it is connected, otherwise whenever its session list next loads.
 
 /** A host that refused or failed is asked again at most this often. */

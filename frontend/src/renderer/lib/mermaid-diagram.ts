@@ -8,7 +8,7 @@
  * Three constraints shape this:
  *
  *   - The bundle stays lean. Mermaid is ~2MB, so it is dynamically imported on
- *     first use, the same lazy-chunk pattern as `code-highlight-engine.ts`.
+ *     first use.
  *     A conversation without a diagram never downloads or parses it.
  *   - The renderer's CSP is `script-src 'self' 'wasm-unsafe-eval'` (WASM only,
  *     for the file/diff highlighter; no JS eval). Mermaid is plain JS, and its

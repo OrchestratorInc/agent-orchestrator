@@ -183,6 +183,7 @@ export function ArtifactHistoryMenu({
  * start, and a restore still writes all of it.
  */
 export function ArtifactVersionPreview({
+	active = true,
 	artifactOrigin,
 	cloud,
 	hostId,
@@ -195,6 +196,8 @@ export function ArtifactVersionPreview({
 	sessionId,
 	version,
 }: {
+	/** False while the view is hidden: a video pauses then. */
+	active?: boolean;
 	artifactOrigin?: string;
 	cloud?: CloudArtifactVersions;
 	hostId?: string;
@@ -235,7 +238,7 @@ export function ArtifactVersionPreview({
 			</div>
 			{media ? (
 				<div className="flex min-h-0 flex-1 flex-col">
-					<FileMediaPreview hostId={hostId} kind={media} path={path} sessionId={sessionId} source={{ kind: "artifact", rawUrl, savedVersion: version }} version={version} />
+					<FileMediaPreview active={active} hostId={hostId} kind={media} path={path} sessionId={sessionId} source={{ kind: "artifact", rawUrl, savedVersion: version }} version={version} />
 				</div>
 			) : <div className="board-scrollbar min-h-0 flex-1 select-text overflow-x-hidden overflow-y-auto overscroll-contain">
 				{query.isPending ? (

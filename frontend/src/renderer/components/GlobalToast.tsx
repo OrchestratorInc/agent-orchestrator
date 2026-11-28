@@ -1,5 +1,6 @@
+import { uiUsage, useTelemetrySurface } from "../lib/ui-usage-telemetry";
 import { useEffect, useState } from "react";
-import { Check } from "@/components/app-icons";
+import { AlertTriangle, Check } from "@/components/app-icons";
 import { useTranslation } from "react-i18next";
 import { type GlobalToast as Toast, useUiStore } from "../stores/ui-store";
 import { CloseButton } from "./ui/close-button";
@@ -41,6 +42,7 @@ function GlobalToastItem({ toast }: { toast: Toast }) {
 	const { t } = useTranslation();
 	const [exiting, setExiting] = useState(false);
 	const dismissGlobalToast = useUiStore((state) => state.dismissGlobalToast);
+	useTelemetrySurface("toast");
 	const isError = toast.tone === "error";
 	const isSuccess = toast.tone === "success";
 	const dismissMs = toast.durationMs ?? (isError ? ERROR_TOAST_DISMISS_MS : TOAST_DISMISS_MS);
@@ -57,6 +59,44 @@ function GlobalToastItem({ toast }: { toast: Toast }) {
 		};
 	}, [dismissGlobalToast, dismissMs, paused, toast.nonce]);
 
+	const runAction = () => {
+		toast.action?.run();
+		dismissGlobalToast(toast.nonce);
+	};
+
+	if (toast.compact) {
+		return (
+			<section
+				aria-live={isError ? "assertive" : "polite"}
+				className={`${exiting ? "toast-exit" : "toast-enter"} group pointer-events-auto flex items-start gap-2.5 rounded-welcome-panel border border-(--color-border-overlay) bg-[var(--color-bg-import-modal)] py-2.5 pr-2 pl-3 text-xs shadow-[var(--shadow-import-modal)]`}
+				role={isError ? "alert" : "status"}
+				data-global-toast=""
+				data-compact=""
+				onMouseEnter={() => setPaused(true)}
+				onMouseLeave={() => setPaused(false)}
+				onFocus={() => setPaused(true)}
+				onBlur={() => setPaused(false)}
+			>
+				{isError ? <AlertTriangle aria-hidden="true" className="mt-0.5 size-icon-base shrink-0 text-error" /> : null}
+				<div className="min-w-0 flex-1 py-0.5">
+					<p className="truncate font-medium text-(--color-text-import-title) group-focus-within:whitespace-normal group-hover:whitespace-normal">{toast.title}</p>
+					{toast.body ? (
+						<div className="grid grid-rows-[0fr] transition-[grid-template-rows] duration-150 group-focus-within:grid-rows-[1fr] group-hover:grid-rows-[1fr] motion-reduce:transition-none" data-toast-body="">
+							<div className="min-h-0 overflow-hidden">
+								<p className="mt-1 wrap-break-word text-pretty text-[var(--color-text-import-muted)]">{toast.body}</p>
+							</div>
+						</div>
+					) : null}
+				</div>
+				{toast.action ? (
+					<CloseButton aria-label={toast.action.label} onClick={runAction} size="icon-xs" data-toast-action="" />
+				) : (
+					<CloseButton aria-label={t("shortcut.dismissNotification")} onClick={() => dismissGlobalToast(toast.nonce)} size="icon-xs" />
+				)}
+			</section>
+		);
+	}
+
 	return (
 		<section
 			aria-live={isError ? "assertive" : "polite"}
@@ -65,6 +105,7 @@ function GlobalToastItem({ toast }: { toast: Toast }) {
 			}`}
 			role={isError ? "alert" : "status"}
 			data-global-toast=""
+			data-telemetry-surface="toast"
 			onMouseEnter={() => setPaused(true)}
 			onMouseLeave={() => setPaused(false)}
 			onFocus={() => setPaused(true)}
@@ -80,11 +121,9 @@ function GlobalToastItem({ toast }: { toast: Toast }) {
 					type="button"
 					variant="ghost"
 					size="xs"
-					onClick={() => {
-						toast.action?.run();
-						dismissGlobalToast(toast.nonce);
-					}}
+					onClick={runAction}
 					className="-my-1 font-medium"
+					data-telemetry-id="toast.action"
 					data-toast-action=""
 				>
 					{toast.action.label}
@@ -93,7 +132,11 @@ function GlobalToastItem({ toast }: { toast: Toast }) {
 			{toast.dismissible ? (
 				<CloseButton
 					aria-label={t("shortcut.dismissNotification")}
-					onClick={() => dismissGlobalToast(toast.nonce)}
+					data-telemetry-id="toast.dismiss"
+					onClick={() => {
+						uiUsage.dismissed("toast");
+						dismissGlobalToast(toast.nonce);
+					}}
 					size="icon-xs"
 				/>
 			) : null}

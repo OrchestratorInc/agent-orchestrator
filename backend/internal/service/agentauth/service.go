@@ -1,21 +1,28 @@
 // Package agentauth owns the fixed, daemon-trusted authentication plans for
 // supported harnesses. Clients select an agent and a reviewed login method;
-// commands stay private, and optional credentials travel only through stdin.
+// commands stay private, and optional credentials never appear in API results.
 package agentauth
 
 import (
 	"context"
 	"fmt"
+	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
+	"slices"
 	"strings"
 	"sync"
 	"time"
 
+	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/mastracode"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/opencodev2"
+	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/primeagent"
+	"github.com/aoagents/agent-orchestrator/backend/internal/harnessendpoint"
 	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/apierr"
 	"github.com/aoagents/agent-orchestrator/backend/internal/process"
+	"github.com/aoagents/agent-orchestrator/backend/internal/providerkeys"
 	"github.com/aoagents/agent-orchestrator/backend/internal/service/shellterm"
 )
 
@@ -75,6 +82,9 @@ type Plan struct {
 	Guidance         string `json:"guidance,omitempty"`
 	DocumentationURL string `json:"documentationUrl"`
 	Reason           string `json:"reason,omitempty"`
+	// CustomEndpoint is present for harnesses that accept a user-supplied base
+	// URL and API key in place of native login. The key is never included.
+	CustomEndpoint *harnessendpoint.Status `json:"customEndpoint,omitempty"`
 	// Methods lists the login methods supported by the background UI flow.
 	Methods       []LoginMethod `json:"methods,omitempty"`
 	command       []string
@@ -95,6 +105,45 @@ type Plan struct {
 	prepareWorkspace func(context.Context, string) error
 	launcher         string
 	launcherArgs     []string
+	hiddenTerminal   bool
+	// guidedMethods are background login methods for a CLI whose sign-in
+	// exists only in its interactive menu: each runs the plan's command in a
+	// hidden terminal and walks the menu with the reviewed steps.
+	guidedMethods map[string][]guidedStep
+	// signInKeepsRunning marks a CLI that stays open after signing in, so a
+	// background sign-in finishes once the harness's auth probe passes.
+	signInKeepsRunning bool
+	// loginURLRules allow the sign-in link printed in the hidden terminal to
+	// be shown in the panel.
+	loginURLRules []loginURLRule
+	// guidedPlatforms limits guidedMethods and signInKeepsRunning to the
+	// operating systems where the harness's auth probe can confirm a sign-in
+	// while the CLI runs. Empty means every platform.
+	guidedPlatforms []string
+	// signedInScreens are texts the CLI shows only once it is signed in, and
+	// signOutSteps lead from them back to its login menu. A CLI that shows the
+	// menu only when signed out would otherwise leave a guided login waiting
+	// for a menu that never appears: seen before the method's first step is
+	// sent, the sign-out steps run first, so the login replaces the existing
+	// sign-in.
+	signedInScreens []string
+	signOutSteps    []guidedStep
+	// codePrompt is the text a guided login's CLI shows when it waits for the
+	// authorization code the browser page displays; while it shows, the panel
+	// offers its code box and SubmitLoginCode types the code into the CLI.
+	// codeRejected is the text the CLI shows when it rejects that code.
+	codePrompt   string
+	codeRejected string
+}
+
+// currentGOOS is the platform guidedPlatforms is checked against; tests
+// replace it.
+var currentGOOS = runtime.GOOS
+
+// guidedSupported reports whether this plan's guided methods and
+// keep-running completion apply on this platform.
+func (p Plan) guidedSupported() bool {
+	return len(p.guidedPlatforms) == 0 || slices.Contains(p.guidedPlatforms, currentGOOS)
 }
 
 // TerminalOpener opens the daemon-trusted terminal used for a native
@@ -120,12 +169,18 @@ type StartResult struct {
 // dataDir roots the stable per-harness auth workspaces used by plans with a
 // prepareWorkspace hook.
 type Service struct {
-	executables    ExecutableFinder
-	agents         AgentBinaryResolver
-	terminals      TerminalOpener
-	dataDir        string
-	selfExecutable func() (string, error)
-	mu             sync.Mutex
+	executables ExecutableFinder
+	agents      AgentBinaryResolver
+	terminals   TerminalOpener
+	dataDir     string
+	// endpointProbeClient asks a custom endpoint which auth style it accepts;
+	// nil uses harnessendpoint.ProbeClient. Tests point it at a local server.
+	endpointProbeClient *http.Client
+	selfExecutable      func() (string, error)
+	mu                  sync.Mutex
+	// keysMu serializes changes to AO's provider keys and their OS user
+	// environment copies: saves, removals and the startup republication.
+	keysMu         sync.Mutex
 	operations     map[string]*loginOperation
 	terminalStarts map[string]bool
 	closed         bool
@@ -141,7 +196,56 @@ func New(executables ExecutableFinder, terminals TerminalOpener) *Service {
 // NewWithAgentResolver creates a service that uses AO's adapter-aware binary
 // resolver as the authoritative validation and discovery boundary.
 func NewWithAgentResolver(executables ExecutableFinder, agents AgentBinaryResolver, terminals TerminalOpener, dataDir string) *Service {
-	return &Service{executables: executables, agents: agents, terminals: terminals, dataDir: dataDir, selfExecutable: os.Executable, operations: make(map[string]*loginOperation), terminalStarts: make(map[string]bool), commandContext: process.CommandContext, loginTimeout: loginLifetime}
+	// Restore AO-managed provider variables before adapter authentication probes
+	// and model discovery run after a daemon restart.
+	republish := map[string]string{}
+	if keys, err := providerkeys.Load(dataDir); err == nil {
+		device, _ := providerkeys.DeviceNames(dataDir)
+		users, _ := providerkeys.UserValueNames(dataDir)
+		for name, value := range keys {
+			// Recorded first, so a value the user exported before starting AO
+			// still reaches the sessions that must not receive AO's copy. A
+			// key AO published itself comes back from the OS user environment
+			// after a restart; that copy is AO's, not the user's.
+			var published []string
+			if device[name] && !users[name] {
+				published = []string{value}
+			}
+			_ = providerkeys.ExportForProbes(name, value, published...)
+			// A value the user set themselves comes from their own setup.
+			if device[name] && !users[name] && deviceSupported {
+				republish[name] = value
+			}
+		}
+		// launchd and systemd user environments are session-scoped. Restore
+		// the keys the user published when AO starts again after a login or
+		// daemon restart, in the background so a slow or missing user bus
+		// never delays daemon startup. A value the user set there since is
+		// left in place.
+	}
+	s := &Service{executables: executables, agents: agents, terminals: terminals, dataDir: dataDir, selfExecutable: os.Executable, operations: make(map[string]*loginOperation), terminalStarts: make(map[string]bool), commandContext: process.CommandContext, loginTimeout: loginLifetime}
+	if len(republish) > 0 {
+		go s.republishProviderKeys(republish)
+	}
+	return s
+}
+
+// republishProviderKeys restores the shared keys recorded at startup. Each
+// runs under keysMu and only if it is still stored with the same value and
+// still shared, so a removal or sharing change made meanwhile is never undone.
+func (s *Service) republishProviderKeys(republish map[string]string) {
+	for name, value := range republish {
+		s.keysMu.Lock()
+		keys, err := providerkeys.Load(s.dataDir)
+		device, deviceErr := providerkeys.DeviceNames(s.dataDir)
+		users, usersErr := providerkeys.UserValueNames(s.dataDir)
+		if err == nil && deviceErr == nil && usersErr == nil && keys[name] == value && device[name] && !users[name] {
+			refreshCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			_ = publishProviderKey(refreshCtx, name, value, value)
+			cancel()
+		}
+		s.keysMu.Unlock()
+	}
 }
 
 // Plans returns every known harness plan in stable Harness settings order.
@@ -185,7 +289,7 @@ func (s *Service) Logout(ctx context.Context, agentID string) (StartResult, erro
 	if len(plan.logoutCommand) == 0 {
 		return StartResult{}, apierr.Invalid("AGENT_LOGOUT_UNSUPPORTED", "This harness does not have a supported native logout command.", nil)
 	}
-	plan.command = plan.logoutCommand
+	plan.command = nativeLogoutCommand(agentID, plan.logoutCommand)
 	plan.Action = ActionLogout
 	plan.title = strings.Replace(plan.title, "Log in to", "Log out of", 1)
 	plan.Guidance = "Complete the harness's native logout flow, then close the terminal to check authentication again."
@@ -211,10 +315,19 @@ func (s *Service) reserveLogin(ctx context.Context, agentID string) (func(), err
 		if op.snapshot.AgentID != agentID {
 			continue
 		}
+		if op.cleanupFailed {
+			s.mu.Unlock()
+			return nil, apierr.Conflict("AGENT_AUTH_CLEANUP_PENDING", "The previous native login terminal could not be stopped. Restart AO before retrying.", nil)
+		}
 		select {
 		case <-op.done:
 		default:
 			s.mu.Unlock()
+			// An account's sign-in is not this harness's own: say so, and never
+			// name its operation for the harness's panel to adopt as its own.
+			if op.account {
+				return nil, apierr.Conflict("AGENT_AUTH_ACCOUNT_LOGIN_IN_PROGRESS", "An account is signing in to this harness. Finish or close that sign-in first.", nil)
+			}
 			return nil, apierr.Conflict("AGENT_AUTH_IN_PROGRESS", "A login is already in progress for this harness.", map[string]any{"operationId": op.snapshot.ID})
 		}
 	}
@@ -257,6 +370,11 @@ func (s *Service) start(ctx context.Context, plan Plan) (StartResult, error) {
 		return StartResult{}, err
 	}
 	defer release()
+	return s.startReserved(ctx, plan)
+}
+
+// startReserved launches only after reserveLogin excludes other login flows.
+func (s *Service) startReserved(ctx context.Context, plan Plan) (StartResult, error) {
 	plan = s.resolve(ctx, plan)
 	if !plan.Available {
 		return StartResult{}, apierr.Invalid("AGENT_AUTH_UNAVAILABLE", plan.Reason, nil)
@@ -281,22 +399,44 @@ func (s *Service) start(ctx context.Context, plan Plan) (StartResult, error) {
 	input := shellterm.OpenCommandTerminalInput{
 		Owner:                          "agentauth:" + plan.AgentID,
 		Argv:                           argv,
+		HideFromList:                   plan.hiddenTerminal,
 		Title:                          plan.title,
 		InitialInput:                   plan.initialInput,
 		InitialInputReadyStates:        plan.initialInputReadyStates,
 		SendInitialInputOnReadyTimeout: plan.sendInitialInputOnReadyTimeout,
 	}
+	// The terminal starts from the daemon's environment, which holds every
+	// AO-saved provider key. A key that would override this harness's own
+	// sign-in is held back, so the CLI never asks about it mid-login.
+	env := providerkeys.WithheldForSignIn(plan.AgentID)
 	if plan.AgentID == "claude-code" && s.dataDir != "" {
 		// The launcher runs in a private auth workspace. Preserve the daemon's
 		// resolved data root instead of re-resolving a relative inherited value.
-		input.Env = map[string]string{"AO_DATA_DIR": s.dataDir}
+		env["AO_DATA_DIR"] = s.dataDir
+	}
+	if plan.AgentID == "mastra-code" {
+		profile := mastracode.ProfileDir(s.dataDir)
+		if !filepath.IsAbs(profile) {
+			return StartResult{}, apierr.Internal("AGENT_AUTH_DATA_HOME_UNAVAILABLE", "Mastra requires an absolute native profile.")
+		}
+		env["MASTRA_APP_DATA_DIR"] = profile
+		if env["MASTRA_TELEMETRY_DISABLED"] == "" {
+			env["MASTRA_TELEMETRY_DISABLED"] = "1"
+		}
 	}
 	if plan.AgentID == "opencode-v2" {
 		dataHome, err := opencodev2.DataHome(ctx)
 		if err != nil {
 			return StartResult{}, apierr.Internal("AGENT_AUTH_DATA_HOME_UNAVAILABLE", err.Error())
 		}
-		input.Env = map[string]string{"XDG_DATA_HOME": dataHome}
+		env["XDG_DATA_HOME"] = dataHome
+	}
+	if plan.AgentID == "prime-agent" && s.dataDir != "" {
+		// Sign in to the profile sessions run with, not ~/.prime/agent.
+		primeagent.New().AugmentRuntimeEnv(env, s.dataDir)
+	}
+	if len(env) > 0 {
+		input.Env = env
 	}
 	if plan.prepareWorkspace != nil {
 		workingDir, err := s.prepareAuthWorkspace(ctx, plan)
@@ -341,6 +481,7 @@ func (s *Service) prepareAuthWorkspace(ctx context.Context, plan Plan) (string, 
 
 func (s *Service) resolve(ctx context.Context, plan Plan) Plan {
 	plan.Methods = loginMethods(plan.AgentID)
+	plan.CustomEndpoint = s.endpointStatus(plan.AgentID)
 	plan.command = append([]string(nil), plan.command...)
 	if len(plan.command) == 0 {
 		plan.Available = true

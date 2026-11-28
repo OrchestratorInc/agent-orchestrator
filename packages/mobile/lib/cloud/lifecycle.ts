@@ -61,6 +61,7 @@ const WORKSPACE_STARTUP_ERRORS = new Set([
 	"working_directory_occupied",
 	"project_setup_failed",
 	"agent_start_failed",
+	"conversation_restore_failed",
 ]);
 
 export type CloudStartupProblem =

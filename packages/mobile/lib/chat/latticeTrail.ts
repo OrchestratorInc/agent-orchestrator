@@ -1,6 +1,7 @@
 /**
- * The timing of the live turn's lattice loader (see LatticeLoader.tsx), kept free
- * of React Native so it stays unit-testable under Node.
+ * The timing of the live turn's lattice loader (see LatticeLoader.tsx) and the
+ * Workers board's stepped comet version of it (LatticeCometLoader.tsx), kept
+ * free of React Native so it stays unit-testable under Node.
  *
  * A port of the desktop's `.chat-lattice` (frontend styles.css and
  * LatticeLoader.tsx): a 4×4 lattice whose outer twelve dots share one
@@ -73,4 +74,46 @@ export function latticeTrailOpacity(phase: number): number {
 		return from + (to - from) * easeInOut((p - start) / (end - start));
 	}
 	return KEYFRAMES[KEYFRAMES.length - 1]![1];
+}
+
+/** Opacity the twelve edge dots rest at under the comet: the trail's floor. */
+export const LATTICE_EDGE_OPACITY = 0.2;
+
+/**
+ * The trail as a comet that steps one edge dot clockwise every twelfth of a
+ * lap: each comet dot's opacity, head first. These are the desktop's trail
+ * sampled once a step (latticeTrailOpacity a step and a half, two and a half
+ * and three and a half behind the newest dot), less the dot just fading in and
+ * the one already back at rest, which sit within a few tenths of the floor.
+ */
+export const LATTICE_COMET = [1, 1, 0.8] as const;
+
+/**
+ * How far before a step's end a comet dot jumps to the next edge dot, in
+ * steps: a sliver of a frame, so the comet steps rather than glides.
+ */
+const LATTICE_STEP_EDGE = 0.001;
+
+/**
+ * Where a comet dot `behind` dots back from the head sits through a lap, as a
+ * stepped interpolation over a value running 0 to 12 (one per edge dot): the
+ * input range holds each step's place from the step's start to just before the
+ * next, and 12 lands back on step 0's place, so a looping lap wraps cleanly.
+ */
+export function latticeCometPath(behind: number, dot: number, gap: number): { inputRange: number[]; left: number[]; top: number[] } {
+	const steps = LATTICE_TRAIL.length;
+	const inputRange: number[] = [];
+	const left: number[] = [];
+	const top: number[] = [];
+	const place = (step: number) => latticeCellOrigin(LATTICE_TRAIL[(step - behind + steps) % steps]!, dot, gap);
+	for (let step = 0; step <= steps; step++) {
+		const origin = place(step);
+		const at = step === steps ? [step] : [step, step + 1 - LATTICE_STEP_EDGE];
+		for (const input of at) {
+			inputRange.push(input);
+			left.push(origin.left);
+			top.push(origin.top);
+		}
+	}
+	return { inputRange, left, top };
 }

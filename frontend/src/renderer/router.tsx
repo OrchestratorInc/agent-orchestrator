@@ -1,6 +1,7 @@
 import { createHashHistory, createRouter, useRouterState } from "@tanstack/react-router";
 import type { QueryClient } from "@tanstack/react-query";
 import { DaemonStartupLoader } from "./components/DaemonStartupLoader";
+import { dismissHoverCards } from "./components/ui/hover-card";
 import { routeTree } from "./routeTree.gen";
 import { reportRouteError } from "./components/RouteErrorCapture";
 
@@ -12,7 +13,7 @@ export function AppPendingFallback() {
 // Hash history is required for Electron's file:// renderer origin — browser
 // history would break on hard reload since there is no server to serve paths.
 export function createAppRouter(queryClient: QueryClient) {
-	return createRouter({
+	const router = createRouter({
 		history: createHashHistory(),
 		routeTree,
 		context: { queryClient },
@@ -34,4 +35,10 @@ export function createAppRouter(queryClient: QueryClient) {
 		defaultPreloadStaleTime: 0,
 		scrollRestoration: true,
 	});
+	// A hover card describes something on the page being left. A chat kept alive
+	// for switching back stays mounted, so its cards would otherwise stay up.
+	router.subscribe("onBeforeNavigate", ({ pathChanged }) => {
+		if (pathChanged) dismissHoverCards();
+	});
+	return router;
 }

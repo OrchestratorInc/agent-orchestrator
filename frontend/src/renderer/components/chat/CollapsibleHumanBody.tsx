@@ -4,6 +4,7 @@ import { useTranslation } from "react-i18next";
 import { useReducedMotion } from "motion/react";
 import { ChevronDown } from "@/components/app-icons";
 import { Button } from "../ui/button";
+import { CHAT_REVEAL_RANGE_EVENT, type ChatRevealRangeDetail } from "../../lib/chat-annotation-navigation";
 import { cn } from "../../lib/utils";
 
 /** A long message folds to this many lines of its own text. */
@@ -12,6 +13,8 @@ const FOLD_LINES = 10;
 const MIN_HIDDEN_LINES = 2;
 /** Matches the height transition in styles.css; ends the animation if `transitionend` never arrives. */
 const ANIMATION_FALLBACK_MS = 300;
+/** Matches --chat-human-fade in styles.css: text in the fade at the fold does not count as shown. */
+const FADE_PX = 40;
 
 /**
  * What each message looked like when it last rendered, keyed by its text. A bubble
@@ -121,6 +124,24 @@ export function CollapsibleHumanBody({ stateKey, scrollWhenFolded = false, child
 	const folded = folds && !open;
 	const height = animation ? animation.height : folded ? foldHeight : undefined;
 
+	// Navigation that lands on text the fold hides (a search result, the session's
+	// find in chat, an annotation) opens the message, as pressing Show more would. Text
+	// above the fold is already readable, so the message stays as the reader left it.
+	useEffect(() => {
+		const clipNode = clip.current;
+		if (!folded || !clipNode) return;
+		const reveal = (event: Event) => {
+			const { range } = (event as CustomEvent<ChatRevealRangeDetail>).detail;
+			if (range.getBoundingClientRect().bottom <= clipNode.getBoundingClientRect().bottom - FADE_PX) return;
+			event.preventDefault();
+			remember(openedMessages, stateKey);
+			finishAnimation();
+			setOpen(true);
+		};
+		clipNode.addEventListener(CHAT_REVEAL_RANGE_EVENT, reveal);
+		return () => clipNode.removeEventListener(CHAT_REVEAL_RANGE_EVENT, reveal);
+	}, [folded, stateKey, finishAnimation]);
+
 	return (
 		<>
 			<div
@@ -151,7 +172,11 @@ export function CollapsibleHumanBody({ stateKey, scrollWhenFolded = false, child
 					aria-expanded={open}
 					aria-controls={clipId}
 					onClick={toggle}
-					className="-mx-2 -mb-1 mt-1"
+					// Its own block, not on a text line whose strut adds space below it. The
+					// label lines up with the message text (the bubble's 12px less the pill's
+					// 8px), so the pill sits 4px in from the bubble's left edge; at the bottom
+					// it sits 4px from the edge too (the bubble's 10px less 6px).
+					className="-mx-2 mt-1 flex w-fit last:-mb-1.5"
 				>
 					{t(open ? "shell.showLess" : "shell.showMore")}
 					<ChevronDown

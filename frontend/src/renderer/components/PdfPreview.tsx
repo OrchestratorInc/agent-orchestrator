@@ -31,6 +31,7 @@ const REDRAW_DELAY_MS = 150;
 const MAX_PDF_BYTES = 100 * 1024 * 1024;
 
 class PdfTooLargeError extends Error {
+	readonly code: string = "PDF_TOO_LARGE_ERROR";
 	constructor(readonly size: number) {
 		super("PDF too large to preview");
 	}
@@ -184,7 +185,7 @@ export function PdfPreview({ cloud = false, cover = false, firstPageOnly = false
 	}
 	if (tooLarge !== null) return <PanelMessage>{t("files.explorer.tooLarge", { size: formatBytes(tooLarge) })}</PanelMessage>;
 	return (
-		<div aria-label={path} className="board-scrollbar min-h-0 min-w-0 flex-1 overflow-auto overscroll-contain bg-surface p-3" ref={scrollRef} role="document">
+		<div aria-label={path} className="board-scrollbar min-h-0 min-w-0 flex-1 overflow-auto overscroll-contain bg-surface p-3" data-artifact-scroll="" ref={scrollRef} role="document">
 			{!loaded ? (
 				<PanelMessage>{t("files.loading")}</PanelMessage>
 			) : width > 0 ? (

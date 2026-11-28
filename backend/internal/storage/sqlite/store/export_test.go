@@ -5,3 +5,6 @@ func (s *Store) HoldWriterForTest() func() {
 	s.writeMu.Lock()
 	return s.writeMu.Unlock
 }
+
+// TerminalActivityStatus is what settling a turn writes over its running rows.
+var TerminalActivityStatus = terminalActivityStatus

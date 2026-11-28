@@ -11,6 +11,8 @@ let recognitionAvailable = true;
 let permissionGranted = true;
 // Counts native permission round-trips, which sit in front of the microphone start.
 let permissionChecks = 0;
+// Counts system permission dialogs.
+let permissionPrompts = 0;
 let supportedLocales = ["en-US", "en-GB", "en-IN"];
 // iOS and Android segment differently, so the provider branches on platform.
 let platformOS = "android";
@@ -60,6 +62,7 @@ vi.mock("expo-speech-recognition", () => ({
 		},
 		requestPermissionsAsync: async () => {
 			permissionChecks++;
+			permissionPrompts++;
 			return { granted: permissionGranted };
 		},
 	},
@@ -89,6 +92,7 @@ beforeEach(() => {
 	recognitionAvailable = true;
 	permissionGranted = true;
 	permissionChecks = 0;
+	permissionPrompts = 0;
 	supportedLocales = ["en-US", "en-GB", "en-IN"];
 	platformOS = "android";
 });
@@ -114,6 +118,20 @@ describe("availability and permission", () => {
 		// native round-trip on every press delays recording enough to swallow the
 		// first words of a short phrase.
 		expect(permissionChecks).toBe(1);
+	});
+
+	// Coming back from Settings re-reads the permission. A dialog there would
+	// pop up every time the app returns to the foreground.
+	it("checks the permission without ever prompting", async () => {
+		permissionGranted = false;
+		const p = createDeviceVoiceProvider();
+		await expect(p.checkPermission()).resolves.toBe(false);
+		permissionGranted = true;
+		await expect(p.checkPermission()).resolves.toBe(true);
+		expect(permissionPrompts).toBe(0);
+		// Once granted, the next press skips the native round-trip.
+		await expect(p.requestPermission()).resolves.toBe(true);
+		expect(permissionChecks).toBe(2);
 	});
 });
 

@@ -10,9 +10,10 @@ export function cloudArtifactPrefix(url: URL): string | undefined {
  * The page's scripts can set their own frame's location; a frame that is a
  * render, or an HTML artifact framed in the chat, stays on that page (hash
  * changes only). A cloud artifact file may open another file of its session,
- * under the same access prefix, and nothing else.
+ * under the same access prefix, and nothing else. isRemoteRender names a
+ * remote host's render on its proxy's render origin, held like a render.
  */
-export function blocksRenderFrameNavigation(currentUrl: string, targetUrl: string): boolean {
+export function blocksRenderFrameNavigation(currentUrl: string, targetUrl: string, isRemoteRender: (url: string) => boolean = () => false): boolean {
 	let currentParsed: URL;
 	try {
 		currentParsed = new URL(currentUrl);
@@ -28,7 +29,7 @@ export function blocksRenderFrameNavigation(currentUrl: string, targetUrl: strin
 			return true;
 		}
 	}
-	if (!isAgentPageUrl(currentUrl)) return false;
+	if (!isAgentPageUrl(currentUrl) && !isRemoteRender(currentUrl)) return false;
 	const current = new URL(currentUrl);
 	try {
 		const target = new URL(targetUrl);

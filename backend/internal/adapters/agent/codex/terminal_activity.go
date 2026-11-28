@@ -48,13 +48,37 @@ func codexLastPromptMarker(output string) string {
 	return "›"
 }
 
-// DetectTerminalActivity reports idle only when Codex's composer and footer are visible.
+// DetectTerminalActivity reports the work state Codex's TUI is rendering. An
+// approval picker is waiting_input even under a running turn (it is checked
+// before the working status line), and an unrecognized frame reports nothing
+// so a recorded state is never overwritten on weak evidence.
 func (p *Plugin) DetectTerminalActivity(output string) (domain.ActivityState, bool) {
-	observation := p.InspectTerminalSurface(output)
-	if observation.Work == ports.TerminalSurfaceWorkIdle {
+	switch p.InspectTerminalSurface(output).Work {
+	case ports.TerminalSurfaceWorkIdle:
 		return domain.ActivityIdle, true
+	case ports.TerminalSurfaceWorkActive:
+		return domain.ActivityActive, true
+	case ports.TerminalSurfaceWorkWaitingInput:
+		return domain.ActivityWaitingInput, true
+	default:
+		return "", false
 	}
-	return "", false
+}
+
+// ContinuouslyDetectTerminalActivityWhileWaiting opts Codex into terminal
+// reconciliation after a waiting_input state is recorded. Codex's
+// PermissionRequest hook sets waiting_input and Codex installs no
+// post-tool-use hook, so once an approval resolves mid-turn nothing else can
+// clear it before Stop; without this the session reads as needs_input for the
+// rest of an actively running turn.
+func (p *Plugin) ContinuouslyDetectTerminalActivityWhileWaiting() bool { return true }
+
+// TerminalActivityOptions reads the rendered viewport for reconciliation. On
+// ConPTY the raw output is the PTY ring, and Codex redraws can leave it
+// without the current working line, so a resumed turn would stay
+// waiting_input. Older pty-hosts without a styled snapshot keep the raw path.
+func (p *Plugin) TerminalActivityOptions() ports.TerminalActivityOptions {
+	return ports.TerminalActivityOptions{PreferStyledOutput: true, RawOutputFallback: true}
 }
 
 // InspectTerminalSurface reports Codex work and composer facts separately.
@@ -89,6 +113,14 @@ func (p *Plugin) InspectTerminalSurface(output string) ports.TerminalSurfaceObse
 				break
 			}
 		}
+	}
+	if prompt >= 0 && codexPickerOptionRow(lines[prompt]) {
+		// A numbered option in the prompt position is a picker whose hint row is
+		// not on screen yet (mid-redraw, or a viewport too short for it). Codex
+		// styles the selected option bold, so the fallback above can land on it;
+		// report nothing rather than read the selection as the composer.
+		observation.Composer = ports.TerminalComposerUnknown
+		return observation
 	}
 	if prompt >= 0 {
 		observation.NativeConversationNotStarted = codexInitialComposer(lines, prompt)
@@ -194,6 +226,8 @@ func codexConfirmationHint(line string) bool {
 	lower := strings.ToLower(line)
 	return strings.Contains(lower, "press enter to confirm") ||
 		strings.Contains(lower, "enter to select") ||
+		// MCP elicitation forms and agent questions with options.
+		strings.Contains(lower, "enter to submit") ||
 		strings.Contains(lower, "esc to go back")
 }
 
@@ -255,4 +289,12 @@ func terminalLines(output string) []string {
 		}
 	}
 	return lines
+}
+
+// codexPickerOptionRow reports a prompt-shaped row whose text is a numbered
+// picker option, under either prompt marker.
+func codexPickerOptionRow(line string) bool {
+	line = strings.TrimSpace(line)
+	marker, ok := codexPromptMarker(line)
+	return ok && codexNumberedOption(strings.TrimSpace(strings.TrimPrefix(line, marker)))
 }

@@ -30,7 +30,7 @@ func (s *Store) RecordAgentLimitReadings(ctx context.Context, readings []domain.
 			}
 			if err := q.InsertAgentLimitReading(ctx, gen.InsertAgentLimitReadingParams{
 				AccountID: r.AccountID, Provider: string(r.Provider), Email: r.Email, Plan: r.Plan, WindowID: r.WindowID, Label: r.Label,
-				DurationMinutes: int64(r.DurationMinutes), UsedPercent: r.UsedPercent, ResetsAtMs: resets, ReadAtMs: r.ReadAt.UnixMilli(),
+				DurationMinutes: int64(r.DurationMinutes), UsedPercent: r.UsedPercent, ResetsAtMs: resets, ReadAtMs: r.ReadAt.UnixMilli(), OrgID: r.OrgID,
 			}); err != nil {
 				return fmt.Errorf("insert %s %s: %w", r.AccountID, r.WindowID, err)
 			}
@@ -48,7 +48,7 @@ func (s *Store) ListAgentLimitReadings(ctx context.Context, since time.Time) ([]
 	out := make([]domain.AgentLimitReading, 0, len(rows))
 	for _, row := range rows {
 		r := domain.AgentLimitReading{
-			AccountID: row.AccountID, Provider: domain.AgentAccountProvider(row.Provider), Email: row.Email, Plan: row.Plan, WindowID: row.WindowID,
+			AccountID: row.AccountID, Provider: domain.AgentAccountProvider(row.Provider), Email: row.Email, OrgID: row.OrgID, Plan: row.Plan, WindowID: row.WindowID,
 			Label: row.Label, DurationMinutes: int(row.DurationMinutes), UsedPercent: row.UsedPercent, ReadAt: time.UnixMilli(row.ReadAtMs).UTC(),
 		}
 		if row.ResetsAtMs.Valid {

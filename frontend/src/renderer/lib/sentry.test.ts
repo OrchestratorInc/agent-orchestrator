@@ -1,11 +1,16 @@
+import { AoError } from "../../../../packages/shared/telemetry/ao-error";
 import { afterEach, expect, it, vi } from "vitest";
-import { captureApiErrorToSentry, captureExceptionToSentry } from "./sentry";
+import { captureApiErrorToSentry, captureExceptionToSentry, captureOnboardingFailureToSentry } from "./sentry";
+import { noteOnboardingPagesFinished, resetOnboardingFlowForTests, setOnboardingTourStep, setOnboardingWindowOpen } from "./onboarding-flow";
 import { SAFE_APP_ASSET, safeSentryFunctionName } from "../../shared/sentry-config";
 
 const capture = vi.hoisted(() => vi.fn());
 vi.mock("./bridge", () => ({ aoBridge: { telemetry: { capture } } }));
 
-afterEach(() => vi.clearAllMocks());
+afterEach(() => {
+	vi.clearAllMocks();
+	resetOnboardingFlowForTests();
+});
 
 it("keeps real component names and built route assets without accepting arbitrary function text", () => {
 	expect(safeSentryFunctionName("ChatWorkspace", "renderer_frame")).toBe("ChatWorkspace");
@@ -71,4 +76,76 @@ it("keeps anonymous minified frames and their chunk debug IDs", () => {
 	} finally {
 		delete (globalThis as { _sentryDebugIds?: Record<string, string> })._sentryDebugIds;
 	}
+});
+
+it("uses the browser location and error type when no error object or stack is available", () => {
+	const event = new ErrorEvent("error", {
+		message: "Uncaught TypeError: Cannot read properties of undefined (reading 'id')",
+		filename: "app://renderer/assets/index-A1B2C3D4.js?private=query",
+		lineno: 42,
+		colno: 9,
+	});
+	captureExceptionToSentry(undefined, { category: "renderer_exception", code: "WINDOW_ERROR" }, event);
+	expect(capture).toHaveBeenCalledWith(expect.objectContaining({
+		message: event.message,
+		exception: { type: "TypeError", frames: [{ function: "renderer_frame", filename: "assets/index-A1B2C3D4.js", lineno: 42, colno: 9 }] },
+	}));
+});
+
+it("reports a broken onboarding action as an error titled by action and reason", () => {
+	captureOnboardingFailureToSentry("gh_install", "install_failed", "gh");
+	expect(capture).toHaveBeenCalledWith({
+		kind: "message",
+		message: "Onboarding action failed",
+		level: "error",
+		tags: { platform: "desktop", category: "onboarding", code: "gh_install:install_failed", severity: "P1", owner: "ours", flow: "onboarding", target: "gh" },
+	});
+	captureOnboardingFailureToSentry("cloud_sign_in", "request_failed");
+	expect(capture.mock.calls.at(-1)?.[0].tags).not.toHaveProperty("target");
+});
+
+it("tags a failed onboarding install with its cause", () => {
+	captureOnboardingFailureToSentry("agent_install", "install_failed", "codex", "npm_missing");
+	expect(capture.mock.calls.at(-1)?.[0].tags).toMatchObject({ code: "agent_install:install_failed", target: "codex", cause: "npm_missing" });
+	// Only an install failure has one.
+	captureOnboardingFailureToSentry("agent_install", "lost_contact", "codex", "npm_missing");
+	expect(capture.mock.calls.at(-1)?.[0].tags).not.toHaveProperty("cause");
+});
+
+it("does not report onboarding setup states", () => {
+	for (const reason of ["not_signed_in", "unsupported", "documentation"] as const) captureOnboardingFailureToSentry("agent_sign_in", reason);
+	expect(capture).not.toHaveBeenCalled();
+});
+
+it("tags every capture with the onboarding flow while the first-run window shows, and none once it closes", () => {
+	setOnboardingWindowOpen(true);
+	captureExceptionToSentry(new TypeError("private"), { category: "render_crash" });
+	captureApiErrorToSentry("GET /api/v1/projects", "http_5xx", 500);
+	expect(capture.mock.calls.map((call) => call[0].tags.flow)).toEqual(["onboarding", "onboarding"]);
+	setOnboardingWindowOpen(false);
+	captureExceptionToSentry(new TypeError("private"), { category: "render_crash" });
+	expect(capture.mock.calls.at(-1)?.[0].tags).not.toHaveProperty("flow");
+});
+
+it("tags the tour only in the launch whose onboarding pages finished", () => {
+	// A tour restored on a later launch, left showing until dismissed.
+	setOnboardingTourStep("tour_project");
+	captureExceptionToSentry(new TypeError("private"), { category: "render_crash" });
+	expect(capture.mock.calls.at(-1)?.[0].tags).not.toHaveProperty("flow");
+	noteOnboardingPagesFinished();
+	captureExceptionToSentry(new TypeError("private"), { category: "render_crash" });
+	expect(capture.mock.calls.at(-1)?.[0].tags).toMatchObject({ flow: "onboarding" });
+	setOnboardingTourStep(undefined);
+	captureExceptionToSentry(new TypeError("private"), { category: "render_crash" });
+	expect(capture.mock.calls.at(-1)?.[0].tags).not.toHaveProperty("flow");
+});
+
+it("forwards a cause code and drops overlong text at the IPC boundary", () => {
+	captureExceptionToSentry(new Error("x".repeat(4097), {
+		cause: new AoError("WORKSPACE_NO_READY_REPOS", "No resolved repositories"),
+	}), { category: "renderer_exception", code: "WINDOW_ERROR" });
+	expect(capture).toHaveBeenCalledWith(expect.objectContaining({
+		message: "",
+		tags: expect.objectContaining({ error_code: "WORKSPACE_NO_READY_REPOS", code: "WINDOW_ERROR" }),
+	}));
 });

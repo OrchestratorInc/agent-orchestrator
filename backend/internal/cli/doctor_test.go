@@ -180,15 +180,19 @@ func TestDoctorChecksHarnessVersions(t *testing.T) {
 		"claude": "/bin/claude",
 		"codex":  "/bin/codex",
 		"muse":   "/bin/muse",
+		"tau":    "/bin/tau",
 	}
 	c := doctorContext(t, cmdPath, func(_ context.Context, name string, args ...string) ([]byte, error) {
 		switch name {
 		case "/bin/git":
 			return []byte("git version 2.43.0\n"), nil
-		case "/bin/claude", "/bin/codex", "/bin/muse":
+		case "/bin/claude", "/bin/codex", "/bin/muse", "/bin/tau":
 			if len(args) == 1 && args[0] == "--version" {
 				if name == "/bin/muse" {
 					return []byte("Muse Code 0.1.0 (0.1.0-R708.1)\n"), nil
+				}
+				if name == "/bin/tau" {
+					return []byte("tau 0.4.7\n"), nil
 				}
 				return []byte(strings.TrimPrefix(name, "/bin/") + " 1.2.3\n"), nil
 			}
@@ -205,11 +209,34 @@ func TestDoctorChecksHarnessVersions(t *testing.T) {
 	})
 
 	checks := c.runDoctor(context.Background())
-	for _, name := range []string{"claude-code", "codex", "muse"} {
+	for _, name := range []string{"claude-code", "codex", "muse", "tau"} {
 		check := findDoctorCheck(t, checks, name)
 		if check.Level != doctorPass || !strings.Contains(check.Message, "resolves to") {
 			t.Fatalf("%s check = %+v, want PASS with path/version", name, check)
 		}
+	}
+}
+
+func TestDoctorWarnsOnIncompatibleTauVersion(t *testing.T) {
+	setConfigEnv(t)
+	c := doctorContext(t, map[string]string{"git": "/bin/git", "tau": "/bin/tau"}, func(_ context.Context, name string, args ...string) ([]byte, error) {
+		switch name {
+		case "/bin/git":
+			return []byte("git version 2.43.0\n"), nil
+		case "/bin/tau":
+			if len(args) != 1 || args[0] != "--version" {
+				t.Fatalf("unexpected tau command: %s %v", name, args)
+			}
+			return []byte("tau 0.4.6\n"), nil
+		default:
+			t.Fatalf("unexpected command: %s %v", name, args)
+			return nil, nil
+		}
+	})
+
+	check := findDoctorCheck(t, c.runDoctor(context.Background()), "tau")
+	if check.Level != doctorWarn || !strings.Contains(check.Message, `reports "tau 0.4.6"`) || !strings.Contains(check.Message, "requires tau-ai 0.4.7 or newer") {
+		t.Fatalf("tau check = %+v, want WARN with found and minimum versions", check)
 	}
 }
 
@@ -237,6 +264,73 @@ func TestDoctorWarnsWhenHarnessMissing(t *testing.T) {
 	check := findDoctorCheck(t, c.runDoctor(context.Background()), "codex")
 	if check.Level != doctorWarn || !strings.Contains(check.Message, "not found in PATH") {
 		t.Fatalf("codex check = %+v, want WARN missing binary", check)
+	}
+}
+
+// The daemon launches agents, so one it reports installed passes even when this
+// shell's PATH has no binary for it, as with the built-in agent. An agent that
+// neither finds still warns.
+func TestDoctorTrustsDaemonForInstalledHarness(t *testing.T) {
+	cfg := setConfigEnv(t)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/healthz":
+			_, _ = fmt.Fprintf(w, `{"status":"ok","service":"agent-orchestrator-daemon","pid":%d}`, os.Getpid())
+		case "/readyz":
+			_, _ = fmt.Fprintf(w, `{"status":"ready","service":"agent-orchestrator-daemon","pid":%d}`, os.Getpid())
+		case "/api/v1/agents/readiness/ensure":
+			_, _ = io.WriteString(w, readinessAgentsJSON("unreal-agent", "installed", "unauthorized"))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	t.Cleanup(srv.Close)
+	writeRunFileFor(t, cfg, srv)
+
+	c := doctorContext(t, map[string]string{"git": "/bin/git"}, func(context.Context, string, ...string) ([]byte, error) {
+		return []byte("git version 2.43.0\n"), nil
+	})
+	c.deps.ProcessAlive = func(int) bool { return true }
+	checks := c.runDoctor(context.Background())
+
+	if check := findDoctorCheck(t, checks, "unreal-agent"); check.Level != doctorPass || !strings.Contains(check.Message, "installed according to the running daemon") {
+		t.Fatalf("unreal-agent check = %+v, want PASS from the daemon's inventory", check)
+	}
+	if check := findDoctorCheck(t, checks, "codex"); check.Level != doctorWarn || !strings.Contains(check.Message, "not found in PATH") {
+		t.Fatalf("codex check = %+v, want WARN missing binary", check)
+	}
+}
+
+// When a ready daemon cannot give its agent list, doctor says so instead of
+// presenting this shell's PATH as the whole answer.
+func TestDoctorSaysWhenDaemonAgentListIsUnavailable(t *testing.T) {
+	cfg := setConfigEnv(t)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/healthz":
+			_, _ = fmt.Fprintf(w, `{"status":"ok","service":"agent-orchestrator-daemon","pid":%d}`, os.Getpid())
+		case "/readyz":
+			_, _ = fmt.Fprintf(w, `{"status":"ready","service":"agent-orchestrator-daemon","pid":%d}`, os.Getpid())
+		default:
+			http.Error(w, `{"error":"internal","code":"AGENTS_FAILED","message":"agent list failed"}`, http.StatusInternalServerError)
+		}
+	}))
+	t.Cleanup(srv.Close)
+	writeRunFileFor(t, cfg, srv)
+
+	c := doctorContext(t, map[string]string{"git": "/bin/git"}, func(context.Context, string, ...string) ([]byte, error) {
+		return []byte("git version 2.43.0\n"), nil
+	})
+	c.deps.ProcessAlive = func(int) bool { return true }
+	checks := c.runDoctor(context.Background())
+
+	if check := findDoctorCheck(t, checks, "agent-inventory"); check.Level != doctorWarn || !strings.Contains(check.Message, "this shell's PATH only") {
+		t.Fatalf("agent-inventory check = %+v, want WARN naming the fallback", check)
+	}
+	if check := findDoctorCheck(t, checks, "unreal-agent"); check.Level != doctorWarn {
+		t.Fatalf("unreal-agent check = %+v, want the PATH fallback", check)
 	}
 }
 
@@ -550,6 +644,42 @@ func TestDoctorPathOnlyHarnessPassesOnFind(t *testing.T) {
 	check := findDoctorCheck(t, c.runDoctor(context.Background()), "cursor")
 	if check.Level != doctorPass || !strings.Contains(check.Message, "resolves to") {
 		t.Fatalf("cursor check = %+v, want PASS with path", check)
+	}
+}
+
+// The CLI probes Open Interpreter like every other harness, through PATH and
+// its version line, never through the adapter. The pinned Rust release passes;
+// the older Python CLI that also installs `interpreter` does not.
+func TestDoctorOpenInterpreterRequiresPinnedRustVersion(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		version string
+		want    doctorLevel
+		message string
+	}{
+		{"pinned Rust release", "interpreter 0.0.56\n", doctorPass, "interpreter resolves to /bin/interpreter (interpreter 0.0.56)"},
+		{"Python CLI collision", "Open Interpreter 0.4.3 Developer Preview\n", doctorWarn, "does not identify the expected CLI"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			setConfigEnv(t)
+			c := doctorContext(t,
+				map[string]string{"git": "/bin/git", "interpreter": "/bin/interpreter"},
+				func(_ context.Context, name string, args ...string) ([]byte, error) {
+					switch {
+					case name == "/bin/git":
+						return []byte("git version 2.43.0\n"), nil
+					case name == "/bin/interpreter" && len(args) == 1 && args[0] == "--version":
+						return []byte(tc.version), nil
+					}
+					t.Fatalf("unexpected CommandOutput call: %s %v", name, args)
+					return nil, nil
+				},
+			)
+			check := findDoctorCheck(t, c.runDoctor(context.Background()), "open-interpreter")
+			if check.Level != tc.want || !strings.Contains(check.Message, tc.message) {
+				t.Fatalf("open-interpreter check = %+v, want %s containing %q", check, tc.want, tc.message)
+			}
+		})
 	}
 }
 

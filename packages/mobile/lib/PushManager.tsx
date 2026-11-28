@@ -11,14 +11,17 @@ import { Alert, AppState, Platform } from "react-native";
 import { markNotificationRead } from "./api";
 import { shouldPoll } from "./appStatePoll";
 import { getInstallId } from "./installId";
+import { launchNotificationResponse, markNotificationResponseHandled } from "./launchNotification";
 import { findHost } from "./hosts";
 import { notificationTarget } from "./notificationView";
 import { announcePairedDevice, configurePushHandler, ensureAndroidChannel, onManualPushRegistration, registerForPush, retryPendingUnpairs } from "./push";
 import { useApp } from "./store";
 import { useCloud } from "./cloud/CloudProvider";
+import { CLOUD_HOST_ID } from "./cloud/mapping";
 import { cloudPushTarget, foreignCloudPushOrganization } from "./cloud/pushTarget";
 import { MOBILE_EVENTS } from "./telemetry/events";
 import { mobileTelemetry } from "./telemetry/runtime";
+import { reportOpenedBy, sessionTargetInPath } from "./telemetry/uiUsageRegistry";
 
 // Set the foreground presentation policy before any notification can arrive.
 configurePushHandler();
@@ -108,11 +111,16 @@ export function PushManager(): null {
 			void route((resp.notification.request.content.data ?? {}) as PushData, coldStart);
 		};
 
+		// The launch's own tap only: one handled before (an earlier launch, or the
+		// listener below) is marked, and RouteRestorer reads the same answer.
 		if (!handledColdStart.current) {
 			handledColdStart.current = true;
-			void Notifications.getLastNotificationResponseAsync().then((r) => handle(r, true));
+			void launchNotificationResponse().then((r) => handle(r, true));
 		}
-		const sub = Notifications.addNotificationResponseReceivedListener((r) => handle(r, false));
+		const sub = Notifications.addNotificationResponseReceivedListener((r) => {
+			void markNotificationResponseHandled(r);
+			handle(r, false);
+		});
 		return () => sub.remove();
 		// route() reads the latest host snapshots through hostsRef.
 		// eslint-disable-next-line react-hooks/exhaustive-deps
@@ -131,6 +139,8 @@ export function PushManager(): null {
 				return;
 			}
 			if (org && data.notificationId && (!data.orgId || data.orgId === org.id)) void client.markNotificationRead(org.id, data.notificationId).catch(() => {});
+			// Only a tap that opens a session credits the notification for it.
+			if (data.sessionId) reportOpenedBy("notification", { sessionId: data.sessionId, hostId: CLOUD_HOST_ID });
 			router.navigate(cloudTarget);
 			return;
 		}
@@ -154,6 +164,8 @@ export function PushManager(): null {
 			markNotificationRead(source.config, data.notificationId).catch(() => {});
 		}
 		// A review opens as a page even when a sheet is up when the tap arrives.
+		// The route it opens names the session and machine the session screen keys by.
+		if (target === "session") reportOpenedBy("notification", sessionTargetInPath(destination));
 		if (target === "review") openPage(destination as Href);
 		else router.navigate(destination);
 	}

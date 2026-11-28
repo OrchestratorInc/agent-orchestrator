@@ -21,6 +21,7 @@ import { useTheme, useThemedStyles } from "../../lib/ThemeProvider";
 import { useGlassBarInset } from "../../lib/useHeaderOverlap";
 import { space, type } from "../../lib/tokens";
 import { Button, EmptyState } from "../../lib/ui";
+import { ARTIFACT_MEDIA_PLAYBACK } from "../../lib/artifactMediaPlayback";
 
 // Past this, a version shows as plain text: a full grammar pass would stall the JS thread.
 const MAX_HIGHLIGHTED_CHARS = 100 * 1024;
@@ -156,6 +157,7 @@ function VersionPage({ backend, sessionId, path, version }: { backend: Artifacts
 	if (!html) return <View style={styles.center}><ActivityIndicator color={t.accent} /></View>;
 	return (
 		<WebView
+			{...ARTIFACT_MEDIA_PLAYBACK}
 			// Loaded from memory with no origin: it cannot reach the daemon.
 			source={{ html }}
 			style={styles.web}

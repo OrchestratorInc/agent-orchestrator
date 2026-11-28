@@ -37,6 +37,7 @@ export function agentLoginReturnUrl(platform: string = Platform.OS, applicationI
 }
 
 export class BrowserSignInUnavailable extends Error {
+	readonly code: string = "BROWSER_SIGN_IN_UNAVAILABLE_ERROR";
 	constructor(message: string, readonly reason: "unsupported" | "port-busy" | "failed") {
 		super(message);
 		this.name = "BrowserSignInUnavailable";

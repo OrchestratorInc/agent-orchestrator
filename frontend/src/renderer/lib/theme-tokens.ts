@@ -65,15 +65,14 @@ export function deriveThemeTokens(p: ThemePalette, mode: Mode): Record<string, s
 		"--color-brand-logo": p.accent,
 		"--color-brand-logo-bright": bright(p.accent),
 		"--color-brand-logo-foreground": onAccent,
+		"--color-brand-logo-text": p.accent,
 		"--color-text-markdown-code": p.accent,
 		"--color-text-markdown-link": p.accent,
 		"--color-text-markdown-link-hover": bright(p.accent),
 
 		"--color-status-working": p.blue,
 		"--color-status-needs-you": p.orange,
-		// tokens.css picks between these by the new sidebar design flag.
-		"--color-status-validating-new": validating,
-		"--color-status-validating-legacy": p.yellow,
+		"--color-status-validating": validating,
 		"--color-status-in-review": inReview,
 		"--color-status-ready": p.green,
 		"--color-status-merged": p.purple,

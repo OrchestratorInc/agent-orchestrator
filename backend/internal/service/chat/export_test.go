@@ -32,3 +32,9 @@ func SetDeltaFlushInterval(interval time.Duration) (restore func()) {
 
 // DeltaRunMaxBytes is the most delta text one batched write carries.
 const DeltaRunMaxBytes = deltaRunMaxBytes
+
+func SetForcedHandoffInterruptLimit(limit time.Duration) (restore func()) {
+	previous := forcedHandoffInterruptLimit
+	forcedHandoffInterruptLimit = limit
+	return func() { forcedHandoffInterruptLimit = previous }
+}

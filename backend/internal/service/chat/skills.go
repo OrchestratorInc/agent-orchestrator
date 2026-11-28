@@ -3,6 +3,8 @@ package chat
 import (
 	"context"
 	"errors"
+	"os"
+	"time"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
@@ -14,6 +16,13 @@ import (
 // to be wrong about, and only the first is permanent.
 var ErrSkillsUnsupported = errors.New("chat driver cannot list skills")
 
+// skillsListTimeout bounds one read of the provider's list. Codex answers
+// `skills/list` over the same app-server connection that runs turns, and a busy
+// or wedged provider would otherwise hold the request (and the client's poll that
+// waits on it) for as long as the client stays connected. The composer keeps its
+// last list meanwhile, so failing fast costs nothing.
+const skillsListTimeout = 8 * time.Second
+
 // Skills reports the named skills the provider will let this session invoke.
 //
 // Read from the live conversation for the same reason models are: skills come from
@@ -21,16 +30,28 @@ var ErrSkillsUnsupported = errors.New("chat driver cannot list skills")
 // without AO being told. A list AO cached at build time would offer commands that
 // no longer exist and hide ones the user just wrote.
 func (s *Service) Skills(ctx context.Context, id domain.SessionID) ([]ports.ChatSkill, error) {
-	if _, err := s.requireChatSession(ctx, id); err != nil {
+	record, err := s.requireChatSession(ctx, id)
+	if err != nil {
 		return nil, err
 	}
 	controller, err := s.Controller(id)
 	if err != nil {
 		return nil, err
 	}
+	shared := sharedSkillIndex(ctx, s.skillSharing, s.dataDir, id)
 	lister, ok := controller.conv.(ports.ChatSkillLister)
-	if !ok {
+	if !ok && len(shared) == 0 {
 		return nil, ErrSkillsUnsupported
 	}
-	return lister.ListSkills(ctx)
+	var skills []ports.ChatSkill
+	if ok {
+		listCtx, cancel := context.WithTimeout(ctx, skillsListTimeout)
+		defer cancel()
+		if skills, err = lister.ListSkills(listCtx); err != nil {
+			return nil, err
+		}
+	}
+	skills = withSharedSkills(skills, shared)
+	home, _ := os.UserHomeDir()
+	return withSkillMetadata(skills, skillRoots(record.Metadata.WorkspacePath, home)), nil
 }

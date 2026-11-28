@@ -8,6 +8,7 @@ const state = vi.hoisted(() => ({
 	resolve: vi.fn(), sessions: vi.fn(), notifications: vi.fn(), selected: "a",
 	endpoints: [] as unknown[],
 	paired: [] as unknown[], others: {} as Record<string, unknown>,
+	stillAnswers: vi.fn(async (): Promise<boolean> => false),
 }));
 vi.mock("./cloud/CloudProvider", () => ({ useCloud: () => ({ org: null, projects: [], sessions: [], connections: [], chatHarnesses: [], client: {}, upsertSession: () => {}, refreshSessions: async () => {}, refresh: async () => {} }) }));
 vi.mock("@react-native-async-storage/async-storage", () => ({ default: { getItem: async () => null, setItem: async () => {} } }));
@@ -22,7 +23,7 @@ vi.mock("expo-network", () => ({
 vi.mock("./api", () => ({ ApiError: class extends Error {}, getSessions: state.sessions, getNotifications: state.notifications }));
 vi.mock("./resolveConfig", () => ({ resolveActiveConfig: state.resolve, runtimeResolveDeps: () => ({}) }));
 vi.mock("./race", () => ({ IncompatibleHostVersionError: class extends Error {} }));
-vi.mock("./connectRuntime", () => ({ rejectedEndpointNeedsRace: () => false }));
+vi.mock("./connectRuntime", () => ({ endpointStillAnswers: () => state.stillAnswers(), rejectedEndpointNeedsRace: () => false }));
 vi.mock("./hosts", () => ({
 	activeHost: async () => ({ id: state.selected, name: state.selected, endpoints: state.endpoints, token: "secret" }),
 	loadHosts: async () => state.paired, sameHostConnections: (a: unknown, b: unknown) => JSON.stringify(a) === JSON.stringify(b),
@@ -39,6 +40,7 @@ import { UnreachableError } from "./connectionError";
 import { IncompatibleHostVersionError } from "./race";
 import { AppProvider, FrozenAppScope, HostScope, useApp } from "./store";
 import { EMPTY_LINK_TRACKER, recordPoll } from "./linkHealth";
+import { noteRequestAnswered, resetAnsweredRequestsForTests } from "./answeredRequests";
 let current!: ReturnType<typeof useApp>;
 let renderer: ReactTestRenderer | undefined;
 function Harness() { current = useApp(); return null; }
@@ -57,10 +59,11 @@ function deferred() {
 async function mount() { await act(async () => { renderer = create(<AppProvider><Harness /></AppProvider>); }); }
 beforeEach(() => {
 	vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
-	vi.useFakeTimers(); vi.clearAllMocks(); state.selected = "a"; state.endpoints = []; state.paired = []; state.others = {};
+	vi.useFakeTimers(); vi.clearAllMocks(); resetAnsweredRequestsForTests(); state.selected = "a"; state.endpoints = []; state.paired = []; state.others = {};
 	state.resolve.mockImplementation(async () => ({ hostId: state.selected, host: `${state.selected}.test`, httpPort: "3011", muxPort: "3011", password: "secret" }));
 	state.sessions.mockResolvedValue(board("Fresh"));
 	state.notifications.mockResolvedValue({ notifications: [], unreadCount: 0 });
+	state.stillAnswers.mockImplementation(async () => false);
 });
 afterEach(async () => {
 	await act(async () => { renderer?.unmount(); }); renderer = undefined;
@@ -184,6 +187,87 @@ it("blames the phone's network, then races and polls as soon as it returns", asy
 	expect(current.sessions[0].displayName).toBe("Back");
 });
 
+// #8282: on a Wi-Fi network Android never validated, the OS reports no network
+// while every request is answered. Those answers win over the OS.
+it("does not call the phone offline while its requests are answered", async () => {
+	// api.ts records answers in the real app; it is mocked here.
+	state.sessions.mockImplementation(async () => { noteRequestAnswered(Date.now()); return board("Live"); });
+	await mount();
+	await act(async () => { state.onNetwork!({ isConnected: false, isInternetReachable: false, type: "WIFI" }); });
+	// Nothing sent since the report has answered yet: the OS may be right.
+	expect(current.linkHealth).toBe("phone-offline");
+	await act(async () => { await vi.advanceTimersByTimeAsync(8_000); });
+	expect(current.phoneOffline).toBe(false);
+	expect(current.phoneNetwork).toEqual({ connected: undefined, internet: undefined });
+	expect(current.linkHealth).toBe("ok");
+	// Android repeats the same report; a repeat is not a change.
+	await act(async () => { state.onNetwork!({ isConnected: false, isInternetReachable: false, type: "WIFI" }); });
+	expect(current.linkHealth).toBe("ok");
+
+	// Then the phone really drops off the network: the report changes and
+	// nothing answers after it.
+	state.sessions.mockRejectedValue(new UnreachableError("offline"));
+	await act(async () => { state.onNetwork!({ isConnected: false, isInternetReachable: false, type: "NONE" }); });
+	expect(current.phoneOffline).toBe(true);
+	await act(async () => { await vi.advanceTimersByTimeAsync(60_000); });
+	expect(current.linkHealth).toBe("phone-offline");
+	expect(current.unreachable).toBe(false);
+});
+
+// Airplane mode on that network did not change the OS's report: it already
+// said offline. Once nothing has answered for a while, the OS is right.
+it("calls the phone offline when answers stop and the OS report never changes", async () => {
+	state.sessions.mockImplementation(async () => { noteRequestAnswered(Date.now()); return board("Live"); });
+	await mount();
+	await act(async () => { state.onNetwork!({ isConnected: false, isInternetReachable: false, type: "WIFI" }); });
+	await act(async () => { await vi.advanceTimersByTimeAsync(8_000); });
+	expect(current.linkHealth).toBe("ok");
+	state.sessions.mockRejectedValue(new UnreachableError("offline"));
+	await act(async () => { await vi.advanceTimersByTimeAsync(20_000); });
+	expect(current.phoneOffline).toBe(false);
+	await act(async () => { await vi.advanceTimersByTimeAsync(30_000); });
+	expect(current.phoneOffline).toBe(true);
+	expect(current.linkHealth).toBe("phone-offline");
+});
+
+// #8308 review: the machine sleeps, the re-race finds nothing and clears the
+// config, and the answers expire. The OS report never changes on this network,
+// so the reconnect probe is the only way to notice the machine is back.
+it("reconnects after the answers expire on a network the OS calls offline", async () => {
+	state.sessions.mockImplementation(async () => { noteRequestAnswered(Date.now()); return board("Live"); });
+	await mount();
+	await act(async () => { state.onNetwork!({ isConnected: false, isInternetReachable: false, type: "WIFI" }); });
+	await act(async () => { await vi.advanceTimersByTimeAsync(8_000); });
+	expect(current.linkHealth).toBe("ok");
+
+	state.sessions.mockRejectedValue(new UnreachableError("offline"));
+	state.resolve.mockResolvedValue(null);
+	await act(async () => { await vi.advanceTimersByTimeAsync(60_000); });
+	expect(current.config).toBeNull();
+	expect(current.phoneOffline).toBe(true);
+
+	state.resolve.mockImplementation(async () => ({ hostId: "a", host: "a.test", httpPort: "3011", muxPort: "3011", password: "secret" }));
+	state.sessions.mockImplementation(async () => { noteRequestAnswered(Date.now()); return board("Awake"); });
+	await act(async () => { await vi.advanceTimersByTimeAsync(16_000); });
+	expect(current.connection).toBe("open");
+	expect(current.sessions[0].displayName).toBe("Awake");
+	expect(current.phoneOffline).toBe(false);
+	expect(current.linkHealth).toBe("ok");
+});
+
+it("blames the machine, not the phone, when Cloud still answers on that network", async () => {
+	await mount();
+	await act(async () => { state.onNetwork!({ isConnected: false, isInternetReachable: false, type: "WIFI" }); });
+	state.sessions.mockRejectedValue(new UnreachableError("offline"));
+	// Cloud's account sync answers every 30 seconds while the machine has stopped.
+	for (let i = 0; i < 3; i++) {
+		await act(async () => { await vi.advanceTimersByTimeAsync(i === 0 ? 1_000 : 30_000); noteRequestAnswered(Date.now()); });
+		expect(current.phoneOffline).toBe(false);
+	}
+	expect(current.linkHealth).toBe("unreachable");
+	expect(current.unreachable).toBe(true);
+});
+
 // A board request still hanging on the link the phone just left must not hold
 // recovery hostage: the race found a working endpoint (here the same URL), so a
 // fresh request goes out at once, and the poll loop keeps running afterwards.
@@ -258,4 +342,74 @@ it("gives another machine the same reconnecting grace period", async () => {
 	expect(scoped.currentHostId).toBe("b");
 	expect(scoped.linkHealth).toBe("reconnecting");
 	expect(scoped.unreachable).toBe(false);
+});
+
+// #8369: a reload superseded while its fallback probe ran must not write its
+// empty result over the machine selected in the meantime.
+it("drops a superseded reload whose probe of the old connection failed", async () => {
+	await mount();
+	expect(current.config?.hostId).toBe("a");
+	let answer!: (value: boolean) => void;
+	state.stillAnswers.mockImplementationOnce(() => new Promise<boolean>((done) => { answer = done; }));
+	state.resolve.mockResolvedValueOnce(null);
+	await act(async () => { state.onNetwork!({ isConnected: false, isInternetReachable: false, type: "NONE" }); });
+	await act(async () => { state.onNetwork!({ isConnected: true, isInternetReachable: true, type: "WIFI" }); });
+	expect(state.stillAnswers).toHaveBeenCalledTimes(1);
+	await act(async () => { await current.switchHost("b"); });
+	expect(current.config?.hostId).toBe("b");
+	await act(async () => { answer(false); });
+	expect(current.config?.hostId).toBe("b");
+});
+
+// #8369: a late fallback to the kept password reported to a superseded
+// resolution still reconnects while the refused token is the one in use.
+it("reconnects after a late credential repair even once a newer reload kept the refused config", async () => {
+	await mount();
+	const [, onRepaired] = state.resolve.mock.calls[0] as unknown as [unknown, (stale: unknown) => void];
+	const inUse = current.config!;
+	state.resolve.mockResolvedValueOnce(null);
+	state.stillAnswers.mockResolvedValueOnce(true);
+	await act(async () => { state.onNetwork!({ isConnected: false, isInternetReachable: false, type: "NONE" }); });
+	await act(async () => { state.onNetwork!({ isConnected: true, isInternetReachable: true, type: "WIFI" }); });
+	expect(current.config).toBe(inUse);
+	const races = state.resolve.mock.calls.length;
+	await act(async () => { onRepaired({ ...inUse }); });
+	expect(state.resolve.mock.calls.length).toBe(races + 1);
+});
+
+// A failed endpoint race leaves the selected machine with no config, which
+// stops its poll; a refresh then had nothing to fetch with and returned at
+// once, so Retry on the freshness line did nothing. It races again instead.
+it("races the selected machine's endpoints again when Retry finds no config", async () => {
+	state.resolve.mockResolvedValueOnce(null);
+	await mount();
+	expect(current.config).toBeNull();
+	expect(state.sessions).not.toHaveBeenCalled();
+	const races = state.resolve.mock.calls.length;
+	await act(async () => { await current.refreshHost("a"); });
+	expect(state.resolve.mock.calls.length).toBe(races + 1);
+	await act(async () => { await vi.advanceTimersByTimeAsync(0); });
+	expect(state.sessions).toHaveBeenCalled();
+	expect(current.connection).toBe("open");
+});
+
+// #8369 review: after airplane mode, an Android Wi-Fi the OS never validates
+// keeps reporting not connected, so the network listener races nothing and the
+// reconnect loop is the only way back. Its short first steps must not have been
+// spent while the phone had no network at all.
+it("retries soon after the network report changes, even after a long stretch offline", async () => {
+	state.resolve.mockResolvedValue(null);
+	await mount();
+	expect(current.config).toBeNull();
+	await act(async () => { state.onNetwork!({ isConnected: false, isInternetReachable: false, type: "NONE" }); });
+	const races = state.resolve.mock.calls.length;
+	await act(async () => { await vi.advanceTimersByTimeAsync(60_000); });
+	// No network at all: nothing worth trying.
+	expect(state.resolve.mock.calls.length).toBe(races);
+
+	state.resolve.mockImplementation(async () => ({ hostId: "a", host: "a.test", httpPort: "3011", muxPort: "3011", password: "secret" }));
+	await act(async () => { state.onNetwork!({ isConnected: false, isInternetReachable: false, type: "WIFI" }); });
+	await act(async () => { await vi.advanceTimersByTimeAsync(2_100); });
+	expect(state.resolve.mock.calls.length).toBe(races + 1);
+	expect(current.connection).toBe("open");
 });

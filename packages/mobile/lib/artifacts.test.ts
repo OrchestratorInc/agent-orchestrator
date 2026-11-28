@@ -52,6 +52,16 @@ describe("parseArtifacts", () => {
 		expect(parseArtifacts(undefined)).toEqual([]);
 	});
 
+	it("keeps the paths a renamed file had, so a turn that reported one still finds it", () => {
+		expect(parseArtifacts([
+			{ path: "final.md", previousPaths: ["draft.md", 4, "notes/draft.md"] },
+			{ path: "fresh.md" },
+		]).map(({ path, previousPaths }) => ({ path, previousPaths }))).toEqual([
+			{ path: "final.md", previousPaths: ["draft.md", "notes/draft.md"] },
+			{ path: "fresh.md", previousPaths: undefined },
+		]);
+	});
+
 	it("keeps a published file's http(s) link and drops anything else", () => {
 		const link = "https://orchestrator.inc/s/3f2a9c";
 		expect(parseArtifacts([

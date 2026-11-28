@@ -136,6 +136,12 @@ func (s *Service) ClaimPR(ctx context.Context, id domain.SessionID, ref string, 
 		return ClaimPRResult{}, err
 	}
 	s.recordClaimed(ctx, id, pr, domain.ActivityStatusCompleted, nil)
+	// The PR has changed hands: tell the previous owner now, so a later read
+	// failing doesn't leave it acting on a PR it no longer owns.
+	tookOver := outcome.PreviousOwner != "" && outcome.PreviousOwner != id
+	if tookOver && s.prMoved != nil && !outcome.OwnerTerminated {
+		s.prMoved(context.WithoutCancel(ctx), outcome.PreviousOwner, id, pr)
+	}
 	// Reconcile immediately rather than waiting for the artifact-output
 	// poller's next tick: a session that already produced artifacts must move
 	// to pr OutputType (and out of the artifact Kanban placement) with the
@@ -155,7 +161,7 @@ func (s *Service) ClaimPR(ctx context.Context, id domain.SessionID, ref string, 
 	// false and have CLI output report that the workspace was unchanged, without
 	// assuming the session was already on the PR branch.
 	res := ClaimPRResult{PRs: prs, BranchChanged: false, DonorWasTerminated: outcome.OwnerTerminated}
-	if outcome.PreviousOwner != "" && outcome.PreviousOwner != id {
+	if tookOver {
 		res.TakenOverFrom = []domain.SessionID{outcome.PreviousOwner}
 	}
 	return res, nil
@@ -312,6 +318,8 @@ func claimRowsFromSCM(sessionID domain.SessionID, obs ports.SCMObservation, revi
 		Repo:                     obs.Repo,
 		SourceBranch:             obs.PR.SourceBranch,
 		TargetBranch:             obs.PR.TargetBranch,
+		HeadFromFork:             obs.PR.HeadFromFork,
+		HeadIsDefaultBranch:      obs.PR.HeadIsDefaultBranch,
 		HeadSHA:                  obs.PR.HeadSHA,
 		Title:                    obs.PR.Title,
 		Additions:                obs.PR.Additions,
@@ -325,6 +333,8 @@ func claimRowsFromSCM(sessionID domain.SessionID, obs ports.SCMObservation, revi
 		ProviderMergeable:        obs.PR.ProviderMergeable,
 		ProviderMergeStateStatus: obs.PR.ProviderMergeStateStatus,
 		HTMLURL:                  obs.PR.HTMLURL,
+		MergeQueueRequired:       obs.PR.MergeQueueRequired,
+		MergeQueue:               obs.PR.MergeQueue,
 		CreatedAtProvider:        obs.PR.CreatedAtProvider,
 		UpdatedAtProvider:        obs.PR.UpdatedAtProvider,
 		MergedAtProvider:         obs.PR.MergedAtProvider,
@@ -365,7 +375,7 @@ func claimRowsFromSCM(sessionID domain.SessionID, obs ports.SCMObservation, revi
 	for _, th := range obs.Review.Threads {
 		threads = append(threads, domain.PullRequestReviewThread{ThreadID: th.ID, Path: th.Path, Line: th.Line, Resolved: th.Resolved, IsBot: th.IsBot, UpdatedAt: now})
 		for _, c := range th.Comments {
-			comments = append(comments, domain.PullRequestComment{ThreadID: th.ID, ReviewID: c.ReviewID, ID: c.ID, Author: c.Author, File: th.Path, Line: th.Line, Body: c.Body, URL: c.URL, Resolved: th.Resolved, IsBot: c.IsBot, CreatedAt: now, AutoInjectReview: sessionRecord.AutoInjectReview})
+			comments = append(comments, domain.PullRequestComment{ThreadID: th.ID, ReviewID: c.ReviewID, ID: c.ID, Author: c.Author, File: th.Path, Line: th.Line, Body: c.Body, URL: c.URL, Resolved: th.Resolved, IsBot: c.IsBot, CreatedAt: commentCreatedAt(c.CreatedAt, now), AutoInjectReview: sessionRecord.AutoInjectReview})
 		}
 	}
 	return pr, checks, reviews, threads, comments
@@ -551,6 +561,15 @@ func firstNonEmpty(values ...string) string {
 		}
 	}
 	return ""
+}
+
+// commentCreatedAt prefers the provider's comment timestamp and falls back to
+// the observation time for providers that do not report one.
+func commentCreatedAt(provider, observed time.Time) time.Time {
+	if !provider.IsZero() {
+		return provider
+	}
+	return observed
 }
 
 // branchPRLister lists a repository's open PRs from one branch, filtered by

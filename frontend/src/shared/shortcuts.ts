@@ -50,6 +50,7 @@ export function artifactZoomAction(chord: Pick<ShortcutChord, "alt" | "code" | "
 
 export type AppShortcutId =
 	| "find-in-chat"
+	| "add-selection-to-chat"
 	| "new-session"
 	| "new-shell-terminal"
 	| "close-shell-terminal"
@@ -112,7 +113,8 @@ export function isSplitPaneShortcut(id: AppShortcutId): boolean {
 // The user-facing shortcut catalog. Bindings live exclusively in
 // defaultShortcutBindings so runtime matching and displayed labels cannot drift.
 export const APP_SHORTCUTS: readonly ShortcutDefinition[] = [
-	{ id: "find-in-chat", label: "Find in chat", category: "Session" },
+	{ id: "find-in-chat", label: "Find in chat or board", category: "Session" },
+	{ id: "add-selection-to-chat", label: "Add selection to chat", category: "Session" },
 	{ id: "new-session", label: "New session", category: "General" },
 	{ id: "command-palette", label: "Open command palette", category: "General" },
 	{ id: "quick-open-file", label: "Quick open file", category: "General" },
@@ -160,8 +162,14 @@ const binding = (
 export function defaultShortcutBindings(id: AppShortcutId, isMac: boolean): readonly ShortcutBinding[] {
 	const primary = isMac ? { meta: true } : { ctrl: true };
 	switch (id) {
+		// A focused terminal keeps Ctrl+F for its own find bar
+		// (see shortcutYieldsToTerminal). Ctrl+Shift+F is not a terminal shortcut,
+		// so it runs the command from anywhere, like the Shift variants of the other
+		// terminal-colliding keys.
 		case "find-in-chat":
-			return [binding("f", primary)];
+			return isMac ? [binding("f", primary)] : [binding("f", { ctrl: true }), binding("f", { ctrl: true, shift: true })];
+		case "add-selection-to-chat":
+			return [binding("l", primary)];
 		case "new-session":
 			return [isMac ? binding("n", { meta: true }) : binding("n", { ctrl: true, shift: true })];
 		// Plain Ctrl+T/W/B are readline/fzf/tmux keys, so on Windows/Linux they
@@ -359,12 +367,34 @@ const YIELDS_TO_FOCUSED_TERMINAL: ReadonlySet<AppShortcutId> = new Set<AppShortc
 	"close-shell-terminal", // Ctrl+W unix-word-rubout
 	"toggle-sidebar", // Ctrl+B backward-char / tmux prefix
 	"keyboard-shortcuts", // Ctrl+/ readline undo
+	"find-in-chat", // Ctrl+F opens terminal search
+	// Ctrl+L clear-screen. No listener claims this id generically today — the chat
+	// and diff selection actions own their chord — but the entry keeps the plain
+	// chord terminal-owned for any shared listener that does.
+	"add-selection-to-chat",
 ]);
 
-/** True when `chord` for `id` must reach a focused terminal instead (Windows/Linux only). */
-export function shortcutYieldsToTerminal(id: AppShortcutId, chord: ShortcutChord): boolean {
-	if (id === "find-in-chat") return true;
+/**
+ * True when `chord` for `id` must reach a focused terminal instead (Windows/Linux only).
+ * A Find chord the user bound themselves is never withheld: the renderer claims it
+ * before xterm only when a chat can handle it (#8420). Custom chords for other
+ * commands keep the bare-chord yield, so adding Ctrl+E to a command does not take
+ * end-of-line from the shell.
+ */
+export function shortcutYieldsToTerminal(id: AppShortcutId, chord: ShortcutChord, userOverrode = false): boolean {
+	if (userOverrode && id === "find-in-chat") return false;
 	return YIELDS_TO_FOCUSED_TERMINAL.has(id) && !chord.shift && !chord.meta && chord.ctrl !== chord.alt;
+}
+
+/** Saved overrides hold the whole list, including defaults retained after editing. */
+export function matchedByUserOverride(
+	id: AppShortcutId,
+	chord: ShortcutChord,
+	isMac: boolean,
+	overrides: KeybindingOverrides = {},
+): boolean {
+	return (overrides[id] ?? []).some((candidate) => matchesShortcutBinding(chord, candidate)) &&
+		!defaultShortcutBindings(id, isMac).some((candidate) => matchesShortcutBinding(chord, candidate));
 }
 
 export function matchesAppShortcut(
@@ -496,6 +526,9 @@ export const NEXT_TAB_SHORTCUT_CHANNEL = "app:next-tab";
 // so adding a command never needs a new preload method. `index` is the zero-based
 // digit for indexed commands (jump-to-session).
 export const APP_SHORTCUT_CHANNEL = "app:shortcut";
+// Main reports each app shortcut chord it claims, by id, for usage counts only.
+// Menu bar items run the same actions without it, so it means a key press.
+export const APP_SHORTCUT_PRESSED_CHANNEL = "app:shortcut-pressed";
 export type AppShortcutEvent = { id: AppShortcutId; index?: number };
 
 // New session: ⌘N on macOS, Ctrl+Shift+N on Windows/Linux. Plain Ctrl+N is a

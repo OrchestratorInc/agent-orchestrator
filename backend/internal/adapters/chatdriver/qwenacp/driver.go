@@ -23,10 +23,14 @@ func New(plugin nativeacp.Plugin, log *slog.Logger) ports.ChatDriver {
 func newDriver(plugin nativeacp.Plugin, probe nativeacp.VersionProbe, log *slog.Logger) ports.ChatDriver {
 	return nativeacp.New(plugin, nativeacp.Config{
 		Harness:        domain.HarnessQwen,
+		HideCommand:    hiddenCommand,
 		Configure:      configure,
 		SessionMode:    sessionMode,
 		SessionOptions: sessionOptions,
 		VersionProbe:   probe,
+		SteerDrain:     steerDrain,
+		// Qwen reports compression as reply text; one row says it instead.
+		CompactionMessage: compactionMessage,
 		Capabilities: ports.ChatCapabilities{
 			// Qwen enforces approval modes over session/request_permission.
 			ports.ChatCapabilityApprovals: true,

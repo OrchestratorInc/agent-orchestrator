@@ -3,6 +3,7 @@
 // policy, and returns the same result shapes as AO's Browser panel.
 
 import { matchInstruction, type ActCandidate } from "../main/browser-act-matcher";
+import { approvalCropRect, type ApprovalElementFacts } from "../shared/browser-approval-describe";
 import { sanitizeBrowserTitle, sanitizeBrowserURL } from "../shared/browser-sanitize";
 import type { ChromeApi, Tab } from "./chrome-api";
 import type { Approval, ConsentManager } from "./consent";
@@ -12,7 +13,7 @@ import type { Annotation, Geometry } from "./dom-actions";
 import type { NetworkCapture } from "./network";
 import { evaluateUrl, parsePolicy, type SitePolicy, trustedInputAllowed } from "./policy";
 import { BridgeError, isRecord, stringArg } from "./protocol";
-import { annotatePng, base64ToBytes, bytesToBase64, MAX_SCREENSHOT_BYTES, pngSize } from "./screenshot";
+import { annotatePng, base64ToBytes, bytesToBase64, cropPng, MAX_SCREENSHOT_BYTES, pngSize } from "./screenshot";
 import { groupTitle, type ActiveTab, type SessionTabRegistry, type SessionTabs } from "./sessions";
 import type { RefInfo } from "./snapshot";
 import type { TrustedInput } from "./trusted-input";
@@ -24,6 +25,9 @@ const NAVIGATION_TIMEOUT_MS = 30_000;
 const LOAD_GRACE_MS = 1_500;
 const POSTCONDITION_POLL_MS = 150;
 const CONTENT_TIMEOUT_MS = 15_000;
+// The element crop in an approval prompt is optional: a tab Chrome is not
+// painting (hidden behind another tab) must not hold the prompt back.
+const APPROVAL_CAPTURE_TIMEOUT_MS = 2_000;
 export const POLICY_KEY = "aoSitePolicy";
 
 type FrameLink = { frameId: number; parentFrameId: number; ref: string };
@@ -58,6 +62,8 @@ export class Executor {
 	/** One activate-and-capture at a time per Chrome window, across sessions. */
 	private readonly captureLocks = new Map<number, Promise<unknown>>();
 	private readonly navigationCounts = new Map<number, number>();
+	/** Tabs whose approved trusted Enter opened a dialog before its key guard could report. */
+	private readonly pendingPressChecks = new Set<number>();
 
 	constructor(private readonly deps: ExecutorDeps) {}
 
@@ -122,9 +128,10 @@ export class Executor {
 			case "type":
 				return this.elementAction(ctx, action, stringArg(args, "ref", "REFERENCE_REQUIRED", "ref is required"), {
 					text: stringArg(args, "text", "INVALID_ARGUMENT", "text is required", true),
+					...(action === "type" && args.approvalBinding !== undefined ? { approvalBinding: args.approvalBinding } : {}),
 				});
 			case "press":
-				return this.press(ctx, stringArg(args, "key", "INVALID_ARGUMENT", "key is required"));
+				return this.press(ctx, stringArg(args, "key", "INVALID_ARGUMENT", "key is required"), args.approvalBinding);
 			case "drag":
 				return this.drag(
 					ctx,
@@ -171,6 +178,14 @@ export class Executor {
 					if (operation !== "status" && operation !== "accept" && operation !== "dismiss") {
 						throw new BridgeError("INVALID_ARGUMENT", "operation must be status, accept, or dismiss");
 					}
+					// An approved accept names the tab whose dialog the user saw;
+					// another tab can show the very same text.
+					if (typeof args.dialogTab === "string" && args.dialogTab !== page.logicalId) {
+						throw new BridgeError(
+							"BROWSER_TARGET_CHANGED",
+							"The active tab changed while the action waited for approval, so this dialog is not the one the user approved. Check the dialog and try again.",
+						);
+					}
 					return {
 						...(await this.deps.trusted.dialog(page.tabId, operation, typeof args.text === "string" ? args.text : undefined, ctx.signal)),
 						target: this.target(page),
@@ -178,6 +193,8 @@ export class Executor {
 				}, { allowBlocked: true });
 			case "screenshot":
 				return this.screenshot(ctx, args.annotate === true);
+			case "describe":
+				return this.describe(ctx, args);
 			case "network-start":
 				return this.withPage(ctx, async (page) =>
 					this.deps.network.start(ctx.sessionId, page.logicalId, page.tabId, Math.min(300, Math.max(1, Number(args.durationSeconds) || 60))),
@@ -254,6 +271,18 @@ export class Executor {
 		if (dialog) {
 			throw new BridgeError("BROWSER_DIALOG_OPEN", `A ${dialog.type} dialog is open; answer it with \`ao browser dialog accept|dismiss\``);
 		}
+		// An approved Enter that opened a dialog could not be checked then:
+		// check it now, and report a held-back key instead of running on.
+		if (this.pendingPressChecks.has(page.tabId) && request.op !== "disarm-press") {
+			this.pendingPressChecks.delete(page.tabId);
+			const check = (await this.content(page, ctx, { op: "disarm-press" }, 0).catch(() => ({ mismatch: false }))) as { mismatch?: boolean };
+			if (check.mismatch === true) {
+				throw new BridgeError(
+					"BROWSER_TARGET_CHANGED",
+					"The approved Enter was held back because focus had moved before it landed, so nothing was pressed. Focus the field again and retry.",
+				);
+			}
+		}
 		// The tab's own address is checked by withPage; a selected frame (or an
 		// ancestor of it) may host a site the policy denies.
 		await this.assertFrameAllowed(ctx, page, frameId);
@@ -311,9 +340,7 @@ export class Executor {
 		await this.assertFrameAllowed(ctx, page, this.frameFor(ctx, page));
 		if (!ctx.approval.trusted || !trustedInputAllowed(ctx.policy, page.tab.url)) return false;
 		const urls = await this.frameChainUrls(page, this.frameFor(ctx, page));
-		if (!urls.every((url) => inheritsParentOrigin(url) || trustedInputAllowed(ctx.policy, url))) return false;
-		// Trusted input needs the tab in front. Never take that from the user.
-		return !(await this.userChoseAnotherTab(page));
+		return urls.every((url) => inheritsParentOrigin(url) || trustedInputAllowed(ctx.policy, url));
 	}
 
 	/** The user is on a tab no agent owns in this tab's window. */
@@ -324,24 +351,25 @@ export class Executor {
 	}
 
 	/**
-	 * Chrome drops trusted input to hidden pages, so show the agent's tab in
-	 * its own window (without focusing the window) and wait until it is visible.
+	 * captureVisibleTab needs the agent's tab painted, so bring it to the front
+	 * of its window (never focusing the window) and wait until it is visible.
+	 * A minimized window stays minimized: restoring it would take focus.
 	 */
 	private async showTab(ctx: Context, page: ActiveTab): Promise<void> {
 		const chrome = this.deps.chrome;
-		if (!page.tab.active) await chrome.tabs.update(page.tabId, { active: true });
+		const hidden = () =>
+			new BridgeError(
+				"BROWSER_TAB_HIDDEN",
+				`Screenshots on this site need the "${groupTitle(ctx.sessionId)}" window on screen, and Chrome is hiding it. Use \`ao browser snapshot\` instead of a screenshot`,
+			);
 		const window = await chrome.windows.get(page.tab.windowId).catch(() => undefined);
-		if (window?.state === "minimized") await chrome.windows.update(page.tab.windowId, { state: "normal" }).catch(() => undefined);
+		if (window?.state === "minimized") throw hidden();
+		if (!page.tab.active) await chrome.tabs.update(page.tabId, { active: true });
 		const deadline = Date.now() + 2_000;
 		for (;;) {
 			const state = (await this.content(page, ctx, { op: "ping" }, 0)) as { visibility?: string };
 			if (state.visibility !== "hidden") return;
-			if (Date.now() >= deadline) {
-				throw new BridgeError(
-					"BROWSER_TAB_HIDDEN",
-					`Chrome is hiding the "${groupTitle(ctx.sessionId)}" window; keep it on screen (it may sit beside your other windows) so trusted input and screenshots can reach it`,
-				);
-			}
+			if (Date.now() >= deadline) throw hidden();
 			await sleep(50, ctx.signal);
 		}
 	}
@@ -514,11 +542,22 @@ export class Executor {
 				return { outcome, instruction, ...(outcome === "ambiguous" ? { candidates } : {}), snapshot, untrustedExternalContent: true };
 			};
 			let dispatched = false;
+			// An approval whose description matched no element approved none: a
+			// later match would act on something the user never saw.
+			if (args.approvalBinding !== undefined && !(isRecord(args.approvalBinding) && typeof args.approvalBinding.ref === "string" && args.approvalBinding.ref !== "")) {
+				throw new BridgeError(
+					"BROWSER_TARGET_CHANGED",
+					"The user approved this action before Orchestrator could find the element it acts on. Take a new snapshot and try again.",
+				);
+			}
 			const perform = async (candidate: ActCandidate, retried: boolean, beforeSnapshot: string) => {
 				const beforeNavigations = this.navigationCounts.get(page.tabId) ?? 0;
 				const before = { tabId: page.logicalId, url: sanitizeBrowserURL(page.tab.url ?? "") };
 				const alreadySatisfied = postcondition ? await this.postconditionHoldsNow(ctx, page, postcondition) : false;
-				const result = (await this.elementAction(ctx, verb, candidate.ref, value !== undefined ? { text: value } : {})) as Record<string, unknown>;
+				const result = (await this.elementAction(ctx, verb, candidate.ref, {
+					...(value !== undefined ? { text: value } : {}),
+					...(args.approvalBinding !== undefined ? { approvalBinding: args.approvalBinding } : {}),
+				})) as Record<string, unknown>;
 				dispatched = true;
 				const observed = !postcondition
 					? undefined
@@ -634,15 +673,39 @@ export class Executor {
 		return { x, y };
 	}
 
+	/**
+	 * An approved action may only land on the tab, document, and (for act) the
+	 * element the user approved. The daemon passes what describe reported.
+	 */
+	private async assertApprovalBinding(ctx: Context, page: ActiveTab, binding: unknown, ref?: string): Promise<void> {
+		if (binding === undefined) return;
+		const bound = isRecord(binding) ? binding : {};
+		const current = (await this.content(page, ctx, { op: "ping" })) as { documentId?: string; focusId?: string };
+		const changed =
+			bound.tabId !== page.logicalId ||
+			typeof bound.document !== "string" ||
+			bound.document !== current.documentId ||
+			(typeof bound.focus === "string" && bound.focus !== "" && bound.focus !== current.focusId) ||
+			(typeof bound.ref === "string" && bound.ref !== "" && ref !== undefined && bound.ref.replace(/^@/, "") !== ref.replace(/^@/, ""));
+		if (changed) {
+			throw new BridgeError(
+				"BROWSER_TARGET_CHANGED",
+				"The page changed while the action waited for approval, so it no longer acts on what the user approved. Take a new snapshot and try again.",
+			);
+		}
+	}
+
 	private async elementAction(ctx: Context, action: string, ref: string, args: Record<string, unknown>): Promise<unknown> {
 		return this.withPage(ctx, async (page) => {
+			// A typed line break is an Enter in the field, so an approved type is
+			// bound like a click.
+			if (action === "click" || action === "dblclick" || action === "type") await this.assertApprovalBinding(ctx, page, args.approvalBinding, ref);
 			const trusted = await this.useTrustedInput(ctx, page);
 			let value: unknown;
 			switch (action) {
 				case "click":
 				case "dblclick":
 					if (trusted) {
-						await this.showTab(ctx, page);
 						const input = await this.deps.trusted.click(page.tabId, await this.point(ctx, page, ref), {
 							clicks: action === "dblclick" ? 2 : 1,
 							human: args.human === true,
@@ -655,7 +718,6 @@ export class Executor {
 					break;
 				case "hover":
 					if (trusted) {
-						await this.showTab(ctx, page);
 						value = { hovered: true, ...(await this.deps.trusted.hover(page.tabId, await this.point(ctx, page, ref), args.human === true, ctx.signal)) };
 					} else {
 						value = await this.content(page, ctx, { op: "hover", ref });
@@ -663,7 +725,6 @@ export class Executor {
 					break;
 				case "type":
 					if (trusted) {
-						await this.showTab(ctx, page);
 						await this.content(page, ctx, { op: "focus", ref });
 						value = { typed: true, ...(await this.deps.trusted.insertText(page.tabId, String(args.text ?? ""), ctx.signal)) };
 					} else {
@@ -678,13 +739,49 @@ export class Executor {
 		});
 	}
 
-	private async press(ctx: Context, key: string): Promise<unknown> {
+	private async press(ctx: Context, key: string, approvalBinding?: unknown): Promise<unknown> {
 		return this.withPage(ctx, async (page) => {
+			await this.assertApprovalBinding(ctx, page, approvalBinding);
 			let input = {};
+			const approvedFocus = isRecord(approvalBinding) && typeof approvalBinding.focus === "string" && approvalBinding.focus ? approvalBinding.focus : undefined;
 			if (await this.useTrustedInput(ctx, page)) {
-				await this.showTab(ctx, page);
-				input = await this.deps.trusted.press(page.tabId, key, ctx.signal);
-			} else await this.content(page, ctx, { op: "press", key });
+				if (!approvedFocus) {
+					input = await this.deps.trusted.press(page.tabId, key, ctx.signal);
+				} else {
+					// Focus can move between the check above and Chrome delivering
+					// the key: the page-side guard cancels a key that lands elsewhere.
+					await this.content(page, ctx, { op: "arm-press", expectDocument: (approvalBinding as Record<string, unknown>).document, expectFocus: approvedFocus });
+					let mismatch = false;
+					try {
+						input = await this.deps.trusted.press(page.tabId, key, ctx.signal);
+					} finally {
+						// The guard already cancelled a stray key in the page. If the page
+						// is gone, the approved Enter most likely navigated it (a submit):
+						// reporting that as a failure would invite a second submit. If the
+						// Enter opened a dialog the page cannot answer yet: the check runs
+						// before the tab's next command instead, once the dialog is closed.
+						mismatch = ((await this.content(page, ctx, { op: "disarm-press" }).catch((error: unknown) => {
+							if (error instanceof BridgeError && error.code === "BROWSER_DIALOG_OPEN") this.pendingPressChecks.add(page.tabId);
+							return { mismatch: false };
+						})) as { mismatch?: boolean }).mismatch === true;
+					}
+					if (mismatch) {
+						throw new BridgeError(
+							"BROWSER_TARGET_CHANGED",
+							"Focus moved while the action waited for approval, so Enter would not reach what the user approved. Focus the field again and retry.",
+						);
+					}
+				}
+			} else {
+				// The page can move focus after the check above; the content script
+				// checks the approved document and focus again as it presses.
+				const bound = isRecord(approvalBinding) ? approvalBinding : undefined;
+				await this.content(page, ctx, {
+					op: "press",
+					key,
+					...(bound ? { expectDocument: bound.document, ...(typeof bound.focus === "string" && bound.focus ? { expectFocus: bound.focus } : {}) } : {}),
+				});
+			}
 			return { pressed: key, ...input, ...this.result(await this.refreshed(page)) };
 		});
 	}
@@ -692,9 +789,8 @@ export class Executor {
 	private async drag(ctx: Context, ref: string, targetRef: string, human: boolean): Promise<unknown> {
 		return this.withPage(ctx, async (page) => {
 			if (!(await this.useTrustedInput(ctx, page))) {
-				throw new BridgeError("BROWSER_TRUSTED_INPUT_REQUIRED", "Dragging needs trusted input, which is off for this site or needs the agent's tab in front");
+				throw new BridgeError("BROWSER_TRUSTED_INPUT_REQUIRED", "Dragging needs trusted input, which is off for this site");
 			}
-			await this.showTab(ctx, page);
 			const from = await this.point(ctx, page, ref);
 			const to = await this.point(ctx, page, targetRef);
 			const input = await this.deps.trusted.drag(page.tabId, from, to, human, ctx.signal);
@@ -775,6 +871,32 @@ export class Executor {
 	}
 
 	/**
+	 * The session's tab as base64 PNG. The debugger captures the tab itself,
+	 * so its window may be covered or the user may be on another tab. Sites
+	 * that keep the debugger away fall back to captureVisibleTab.
+	 */
+	private async captureTab(ctx: Context, page: ActiveTab): Promise<string> {
+		if (ctx.approval.trusted && trustedInputAllowed(ctx.policy, page.tab.url)) {
+			try {
+				return await this.deps.trusted.screenshot(page.tabId, ctx.signal);
+			} catch (error) {
+				// A page that loaded while its window was minimized has never
+				// painted. Restoring the window would take focus from the user
+				// on macOS, so leave it minimized.
+				if (error instanceof BridgeError && error.code === "SCREENSHOT_TIMEOUT") {
+					throw new BridgeError(
+						"SCREENSHOT_UNAVAILABLE",
+						"Chrome has not painted the session's tab (its window is minimized); use `ao browser snapshot` instead of a screenshot",
+					);
+				}
+				throw error;
+			}
+		}
+		const dataUrl = await this.captureOwnTab(ctx, page);
+		return dataUrl.slice(dataUrl.indexOf(",") + 1);
+	}
+
+	/**
 	 * captureVisibleTab captures whatever tab is in front of a window, not a
 	 * given tab. Serialize activation and capture per window across sessions,
 	 * and refuse the pixels if the window showed any other tab meanwhile, so a
@@ -823,6 +945,102 @@ export class Executor {
 		}
 	}
 
+	/**
+	 * Internal: what a click, act, or Enter would act on, for the daemon's
+	 * approval gate. It reads and captures; it never dispatches input.
+	 */
+	private async describe(ctx: Context, args: Record<string, unknown>): Promise<unknown> {
+		const action = typeof args.action === "string" ? args.action : "";
+		const instruction = typeof args.instruction === "string" ? args.instruction : undefined;
+		const nth = typeof args.nth === "number" && Number.isFinite(args.nth) ? Math.trunc(args.nth) : undefined;
+		return this.withPage(ctx, async (page) => {
+			const fresh = await this.refreshed(page);
+			// The address and title come from the same reply as the document id:
+			// in a selected frame that is the frame's own site, which the approval
+			// is scoped to, and a navigation in between cannot pair one page's
+			// facts with another's site. The tab's metadata is only a fallback.
+			const factsFor = (doc: { url?: string; title?: string }) => ({
+				pageUrl: sanitizeBrowserURL(doc.url || fresh.tab.url || ""),
+				pageTitle: sanitizeBrowserTitle(doc.title ?? fresh.tab.title ?? ""),
+				...(instruction ? { instruction } : {}),
+			});
+			let ref = action !== "press" && typeof args.ref === "string" ? args.ref.replace(/^@/, "") : undefined;
+			if (action === "act") {
+				const snapshot = await this.rawSnapshot(ctx, fresh, true);
+				const match = matchInstruction(instruction ?? "", snapshot.refs, { nth });
+				ref = match.outcome === "matched" ? match.candidate.ref : undefined;
+			}
+			if (action !== "press" && !ref) {
+				const current = (await this.content(fresh, ctx, { op: "ping" })) as { documentId?: string; url?: string; title?: string };
+				return { target: factsFor(current), binding: { tabId: fresh.logicalId, document: current.documentId ?? "" }, untrustedExternalContent: true };
+			}
+			const described = (await this.content(fresh, ctx, { op: "describe", ...(ref ? { ref } : {}) })) as {
+				facts: ApprovalElementFacts | null;
+				viewport: { width: number; height: number };
+				dpr: number;
+				documentId: string;
+				url?: string;
+				title?: string;
+				focusId?: string;
+			};
+			// Capturing can bring the tab to the front and wait for a frame: only
+			// do it once the daemon knows it will ask (a second describe).
+			let image: string | undefined;
+			const placed = args.image === true ? await this.inTabViewport(ctx, fresh, described.facts?.rect, described.viewport, described.dpr) : undefined;
+			const crop = placed ? approvalCropRect(placed.rect, placed.viewport) : undefined;
+			if (crop && placed) {
+				try {
+					const shot = await Promise.race([
+						this.captureTab(ctx, fresh),
+						sleep(APPROVAL_CAPTURE_TIMEOUT_MS, ctx.signal).then(() => undefined),
+					]);
+					if (shot) image = bytesToBase64(await cropPng(base64ToBytes(shot), crop, placed.dpr || 1));
+				} catch {
+					// The prompt still shows the page, action, and reason.
+				}
+			}
+			return {
+				target: { ...(described.facts ?? {}), ...factsFor(described) },
+				...(ref ? { resolvedRef: ref } : {}),
+				binding: {
+					tabId: fresh.logicalId,
+					document: described.documentId,
+					...(ref ? { ref } : {}),
+					...(described.focusId ? { focus: described.focusId } : {}),
+				},
+				// The element could not be read, so its form facts are unknown.
+				...(!described.facts ? { partial: true } : {}),
+				...(image ? { image } : {}),
+				untrustedExternalContent: true,
+			};
+		});
+	}
+
+	/**
+	 * An element rectangle in the selected frame, moved into the tab's
+	 * viewport (the screenshot's coordinates) through every enclosing iframe,
+	 * as point() does for input.
+	 */
+	private async inTabViewport(
+		ctx: Context,
+		page: ActiveTab,
+		rect: { x: number; y: number; width: number; height: number } | undefined,
+		viewport: { width: number; height: number },
+		dpr: number,
+	): Promise<{ rect?: { x: number; y: number; width: number; height: number }; viewport: { width: number; height: number }; dpr: number }> {
+		const frame = ctx.extras.frame;
+		if (!rect || !frame || frame.logicalTabId !== page.logicalId) return { rect, viewport, dpr };
+		let x = rect.x;
+		let y = rect.y;
+		for (const link of frame.chain) {
+			const offset = (await this.content(page, ctx, { op: "frameOffset", ref: link.ref }, link.parentFrameId)) as { x: number; y: number };
+			x += offset.x;
+			y += offset.y;
+		}
+		const top = (await this.content(page, ctx, { op: "ping" }, 0)) as { viewport?: { width: number; height: number }; dpr?: number };
+		return { rect: { ...rect, x, y }, viewport: top.viewport ?? viewport, dpr: top.dpr ?? dpr };
+	}
+
 	private async screenshot(ctx: Context, annotate: boolean): Promise<unknown> {
 		return this.withPage(ctx, async (page) => {
 			let items: Annotation[] = [];
@@ -832,8 +1050,7 @@ export class Executor {
 				items = value.annotations;
 				dpr = value.dpr || 1;
 			}
-			const dataUrl = await this.captureOwnTab(ctx, page);
-			let png = base64ToBytes(dataUrl.slice(dataUrl.indexOf(",") + 1));
+			let png = base64ToBytes(await this.captureTab(ctx, page));
 			if (annotate && items.length > 0) png = await annotatePng(png, items, dpr);
 			if (png.length > MAX_SCREENSHOT_BYTES) throw new BridgeError("SCREENSHOT_UNAVAILABLE", "Browser screenshot exceeded Orchestrator's size limit");
 			const { width, height } = pngSize(png);

@@ -2,7 +2,6 @@ package httpd
 
 import (
 	"bufio"
-	"compress/flate"
 	"compress/zlib"
 	"io"
 	"net"
@@ -12,11 +11,19 @@ import (
 	"github.com/go-chi/chi/v5/middleware"
 )
 
+// remoteJSONCompressionLevel is the gzip/deflate level for remote JSON. A remote
+// client usually reads over a host's upload or a tunnel, where bytes cost more
+// than the daemon's CPU. Measured on conversation responses on one M1 core,
+// level 6 sends history pages 15% smaller than BestSpeed (level 1) and the
+// refreshes while a reply streams 8% smaller, for about 0.3 ms more per 60 KB
+// page and 35 µs more per refresh. Level 9 costs 2.7 times level 6's CPU for 1-3 more points.
+const remoteJSONCompressionLevel = 6
+
 // remoteJSONCompression compresses only remote JSON. Chi retains responsibility
 // for content types, existing encodings and streaming/upgrade writer interfaces;
 // its pinned version does not negotiate Accept-Encoding quality values.
 func remoteJSONCompression(next http.Handler) http.Handler {
-	compressor := middleware.NewCompressor(flate.BestSpeed, "application/json")
+	compressor := middleware.NewCompressor(remoteJSONCompressionLevel, "application/json")
 	// HTTP deflate requires zlib framing; chi's default encoder emits raw DEFLATE.
 	compressor.SetEncoder("deflate", func(w io.Writer, level int) io.Writer {
 		writer, err := zlib.NewWriterLevel(w, level)

@@ -183,13 +183,17 @@ func reviewerPermissions(taskPromptRoot string) []permissionRule {
 		"git log *",
 		"git show *",
 		"git status *",
-		"ao review submit *",
+		"ao review submit --session * --run * --verdict * --body -",
+		"ao review post-github",
+		"base64 --decode",
+		"base64 -D",
+		"printf '%s' '*'",
 	} {
 		rules = append(rules, permissionRule{Action: "shell", Resource: resource, Effect: "allow"})
 	}
 	// Later rules win, so the mutating shapes below override the broad allows
-	// above. Any gh api flag is denied (a positive shape, not a flag blocklist);
-	// only the review-submission endpoint is re-allowed afterwards.
+	// above. The fixed post-github command validates the endpoint and passes
+	// it directly to gh, so the shell only needs read access through gh api.
 	for _, resource := range []string{
 		"gh api -*",
 		"gh api * -*",
@@ -221,18 +225,11 @@ func reviewerPermissions(taskPromptRoot string) []permissionRule {
 		rules = append(rules, permissionRule{Action: "shell", Resource: resource, Effect: "deny"})
 	}
 	for _, resource := range []string{
-		"gh api --method POST repos/*/pulls/*/reviews --input -",
-		"gh api --method POST repos/*/pulls/*/reviews --input - --jq '.id'",
-		"printf '%s' '*'",
-	} {
-		rules = append(rules, permissionRule{Action: "shell", Resource: resource, Effect: "allow"})
-	}
-	for _, resource := range []string{
-		"printf '%s' '*' *>*",
-		"printf '%s' '*' *<*",
-		"printf '%s' '*' *|*",
-		"printf '%s' '*' *;*",
-		"printf '%s' '*' *&*",
+		"ao review submit *--reviews*",
+		// Reviewer payloads are base64, so shell syntax is never needed
+		// anywhere in the printf resource.
+		"printf *>*", "printf *<*", "printf *|*", "printf *;*", "printf *&*",
+		"printf *$*", "printf *`*", "printf *\n*",
 	} {
 		rules = append(rules, permissionRule{Action: "shell", Resource: resource, Effect: "deny"})
 	}

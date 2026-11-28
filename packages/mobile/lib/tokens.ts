@@ -2,7 +2,7 @@
  * The app's measurement system. Every size, gap, radius, icon and duration in
  * the product comes from here, so a screen never invents a number.
  *
- * The type follows T3 Code's mobile app, whose look this app shares:
+ * The type:
  *
  *   - **DM Sans** for text and Geist Mono for code. Native chrome the system
  *     draws itself (navigation titles, tab labels) stays in SF Pro / Roboto.
@@ -178,6 +178,9 @@ export const rowIconWidth = 28;
  * so a sheet keeps the platform's shape.
  */
 export { sheetCornerRadius } from "./platformTokens";
+
+/** The corners and gap of an inset-grouped list section, per platform. See `groupedRow`. */
+export { groupedCorner } from "./platformTokens";
 
 /**
  * The inset every sheet body shares. The native sheet draws its own top

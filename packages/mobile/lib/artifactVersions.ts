@@ -95,12 +95,13 @@ export function versionAuthor(version: ArtifactVersionSummary, fallbackHarness?:
  * pages written for AO expect. The page's own CSS overrides it. A test reads
  * the Go constant and fails when the two drift apart.
  */
-export const BASE_PAGE_CSS = "html{background:var(--background);color:var(--foreground);font-family:var(--font-sans);font-size:14px;line-height:1.5;-webkit-font-smoothing:antialiased;scrollbar-width:none}html::-webkit-scrollbar{display:none}body{margin:0}code,kbd,pre,samp{font-family:var(--font-mono)}"
+export const BASE_PAGE_CSS = "html{font:14px/1.5 var(--font-sans);color:var(--foreground);background:var(--background);-webkit-font-smoothing:antialiased}body{margin:0}pre,code,kbd,samp{font-family:var(--font-mono)}html{scrollbar-width:none}html::-webkit-scrollbar{display:none}"
 	+ ":root{--viz-series-1:var(--chart-1);--viz-series-2:var(--chart-2);--viz-series-3:var(--chart-3);--viz-series-4:var(--chart-4);--viz-series-5:var(--chart-5);--viz-series-6:var(--chart-6);--viz-text:var(--foreground);--viz-muted:var(--muted-foreground);--viz-bg:var(--background);--viz-panel:var(--card);--viz-border:var(--border);--viz-accent:var(--accent);--viz-accent-text:var(--accent-foreground);--viz-accent-bg:var(--muted);--viz-warning:var(--warning);--blue:var(--chart-1);--green:var(--success);--orange:var(--warning);--yellow:var(--chart-3);--purple:var(--chart-4);--red:var(--destructive)}";
 
 // A BOM, whitespace and comments may precede the doctype.
 const LEADING_DOCTYPE = /^\uFEFF?(?:\s|<!--[\s\S]*?-->)*<!doctype[^>]*>/i;
-const PAGE_VIEWPORT = /<meta\s[^>]*name\s*=\s*["']?viewport/i;
+/** A <meta> whose name attribute is exactly viewport, in any letter case. */
+const PAGE_VIEWPORT = /<meta\s(?:[^>]*?\s)?name\s*=\s*(?:"viewport"|'viewport'|viewport[\s/>])/i;
 
 /**
  * A saved HTML version as a page, styled as the daemon serves the live file:

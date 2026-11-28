@@ -192,3 +192,12 @@ func TestVerifierDefaultTimeoutAllowsSlowFirstLaunch(t *testing.T) {
 		}
 	})
 }
+
+func TestDockerAgentVersionUsesSubcommand(t *testing.T) {
+	if got := strings.Join(versionArgs(TargetDockerAgent), " "); got != "version" {
+		t.Fatalf("docker-agent version args = %q", got)
+	}
+	if got := strings.Join(versionArgs(TargetCodex), " "); got != "--version" {
+		t.Fatalf("default version args = %q", got)
+	}
+}

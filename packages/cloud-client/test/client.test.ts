@@ -584,6 +584,55 @@ describe("CloudClient", () => {
     expect(fetchMock.mock.calls[1]?.[1]).toMatchObject({ method: "DELETE" });
   });
 
+  it("reads and changes the signed-in user's data retention, dry run first", async () => {
+    const retention = {
+      retentionDays: 180,
+      defaultDays: 180,
+      followsDefault: true,
+      options: [30, 60, 90, 180, 365],
+      updatedAt: null,
+    };
+    const chosen = { ...retention, retentionDays: 30, followsDefault: false, updatedAt: "2026-11-15T10:00:00Z", sessionsToDelete: 12 };
+    const fetchMock = vi
+      .fn(async (_input: RequestInfo | URL, _init?: RequestInit) => jsonResponse(retention))
+      .mockResolvedValueOnce(jsonResponse(retention))
+      .mockResolvedValueOnce(jsonResponse({ ...retention, sessionsToDelete: 12 }))
+      .mockResolvedValueOnce(jsonResponse(chosen))
+      .mockResolvedValueOnce(jsonResponse({ ...retention, updatedAt: "2026-11-16T10:00:00Z", sessionsToDelete: 0 }));
+    const client = createCloudClient({ baseUrl: "https://cloud.test", getAccessToken: () => "token", fetch: fetchMock });
+
+    await expect(client.getDataRetention()).resolves.toEqual(retention);
+    await expect(client.putDataRetention({ retentionDays: 30, dryRun: true }))
+      .resolves.toMatchObject({ retentionDays: 180, sessionsToDelete: 12 });
+    await expect(client.putDataRetention({ retentionDays: 30, dryRun: false }))
+      .resolves.toMatchObject({ retentionDays: 30, followsDefault: false, updatedAt: "2026-11-15T10:00:00Z", sessionsToDelete: 12 });
+    // null goes back to the deployment's default.
+    await expect(client.putDataRetention({ retentionDays: null }))
+      .resolves.toMatchObject({ retentionDays: 180, followsDefault: true, sessionsToDelete: 0 });
+
+    expect(fetchMock.mock.calls[0]?.[0]).toBe("https://cloud.test/api/cloud/v1/me/data-retention");
+    expect(fetchMock.mock.calls[0]?.[1]).toMatchObject({ method: "GET" });
+    expect(fetchMock.mock.calls[1]?.[0]).toBe("https://cloud.test/api/cloud/v1/me/data-retention");
+    expect(fetchMock.mock.calls[1]?.[1]).toMatchObject({ method: "PUT", body: JSON.stringify({ retentionDays: 30, dryRun: true }) });
+    expect(fetchMock.mock.calls[2]?.[1]).toMatchObject({ method: "PUT", body: JSON.stringify({ retentionDays: 30, dryRun: false }) });
+    expect(fetchMock.mock.calls[3]?.[1]).toMatchObject({ method: "PUT", body: JSON.stringify({ retentionDays: null }) });
+  });
+
+  it("surfaces a refused data retention change as a typed error", async () => {
+    const fetchMock = vi
+      .fn(async (_input: RequestInfo | URL, _init?: RequestInit) => jsonResponse({}))
+      .mockResolvedValueOnce(jsonResponse({ error: "Bad Request", code: "invalid_retention", message: "Choose one of 30, 60, 90, 180 or 365 days.", requestId: "r-1" }, 400))
+      .mockResolvedValueOnce(jsonResponse({ error: "Unauthorized", code: "unauthorized", message: "Sign in again.", requestId: "r-2" }, 401));
+    const client = createCloudClient({ baseUrl: "https://cloud.test", getAccessToken: () => "token", fetch: fetchMock });
+
+    await expect(client.putDataRetention({ retentionDays: 45 })).rejects.toMatchObject({
+      name: "CloudApiError", status: 400, code: "invalid_retention",
+    });
+    await expect(client.getDataRetention()).rejects.toMatchObject({
+      name: "CloudApiError", status: 401, code: "unauthorized",
+    });
+  });
+
   it("throws a typed error with the standard error envelope", async () => {
     const fetchMock = vi.fn(
       async (_input: RequestInfo | URL, _init?: RequestInit) =>
@@ -1001,6 +1050,72 @@ describe("CloudClient", () => {
     expect(requestHeaders(fetchMock, 0).get("Idempotency-Key")).toBe("steer-one");
   });
 
+  it("edits a queued message through the public client", async () => {
+    const event = {
+      sessionId: "session", sequence: 3, type: "chat.user_message_edited",
+      payload: { turnId: "turn", messageSequence: 2, text: "Use the new parser" }, createdAt: "2026-11-12T00:00:00Z",
+    };
+    const fetchMock = vi.fn<
+      (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>
+    >(async () => jsonResponse({ event }, 200));
+    const client = createCloudClient({
+      baseUrl: "https://cloud.example.com",
+      getAccessToken: () => "access-token",
+      fetch: fetchMock as typeof fetch,
+    });
+
+    await expect(client.editQueuedMessage("tenant", "session", "turn one", {
+      text: "Use the new parser", attachmentIds: ["file"],
+    })).resolves.toEqual({ event });
+    expect(fetchMock.mock.calls[0]?.[0]).toBe(
+      "https://cloud.example.com/api/cloud/v1/orgs/tenant/sessions/session/turns/turn%20one/edit",
+    );
+    expect(fetchMock.mock.calls[0]?.[1]?.method).toBe("POST");
+    expect(fetchMock.mock.calls[0]?.[1]?.body).toBe(JSON.stringify({ text: "Use the new parser", attachmentIds: ["file"] }));
+  });
+
+  it("steers a queued message through the public client", async () => {
+    const event = {
+      sessionId: "session", sequence: 9, type: "chat.turn_steer_requested", createdAt: "2026-11-13T00:00:00Z",
+      payload: { turnId: "running", text: "report progress", clientMessageId: "steer-key", queuedTurnId: "turn one" },
+    };
+    const fetchMock = vi.fn<
+      (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>
+    >(async () => jsonResponse({ event }, 202));
+    const client = createCloudClient({
+      baseUrl: "https://cloud.example.com",
+      getAccessToken: () => "access-token",
+      fetch: fetchMock as typeof fetch,
+    });
+
+    await expect(client.steerQueuedMessage("tenant", "session", "turn one", { idempotencyKey: "steer-key", composerEpoch: 3 }))
+      .resolves.toEqual({ event });
+    expect(fetchMock.mock.calls[0]?.[0]).toBe(
+      "https://cloud.example.com/api/cloud/v1/orgs/tenant/sessions/session/turns/turn%20one/steer-queued",
+    );
+    expect(fetchMock.mock.calls[0]?.[1]?.method).toBe("POST");
+    expect(fetchMock.mock.calls[0]?.[1]?.body).toBe(JSON.stringify({ composerEpoch: 3 }));
+    expect(new Headers(fetchMock.mock.calls[0]?.[1]?.headers).get("Idempotency-Key")).toBe("steer-key");
+  });
+
+  it("deletes a queued message through the public client", async () => {
+    const fetchMock = vi.fn<
+      (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>
+    >(async () => jsonResponse({ ok: true }, 202));
+    const client = createCloudClient({
+      baseUrl: "https://cloud.example.com",
+      getAccessToken: () => "access-token",
+      fetch: fetchMock as typeof fetch,
+    });
+
+    await expect(client.deleteQueuedMessage("tenant", "session", "turn one")).resolves.toEqual({ ok: true });
+    expect(fetchMock.mock.calls[0]?.[0]).toBe(
+      "https://cloud.example.com/api/cloud/v1/orgs/tenant/sessions/session/turns/turn%20one/delete",
+    );
+    expect(fetchMock.mock.calls[0]?.[1]?.method).toBe("POST");
+    expect(fetchMock.mock.calls[0]?.[1]?.body).toBeUndefined();
+  });
+
   it("submits an approval decision through the public client", async () => {
     const fetchMock = vi.fn<
       (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>
@@ -1018,6 +1133,47 @@ describe("CloudClient", () => {
     );
     expect(fetchMock.mock.calls[0]?.[1]?.method).toBe("POST");
     expect(fetchMock.mock.calls[0]?.[1]?.body).toBe(JSON.stringify({ decisionId: "approve" }));
+  });
+
+  it("routes cloud automations to the organization's automation resources", async () => {
+    const automation = { id: "auto 1" };
+    const run = { id: "run", automationId: "auto 1", status: "pending" };
+    const fetchMock = vi.fn<(input: RequestInfo | URL, init?: RequestInit) => Promise<Response>>(async (input, init) => {
+      if (init?.method === "DELETE" && String(input).endsWith("/automations/auto%201")) return new Response(null, { status: 204 });
+      return jsonResponse({ items: [], page: { hasMore: false }, automation, run, subscribed: init?.method === "PUT" });
+    });
+    const client = createCloudClient({ baseUrl: "https://cloud.test", getAccessToken: () => "token", fetch: fetchMock as typeof fetch });
+    const base = "https://cloud.test/api/cloud/v1/orgs/org%2F1/automations";
+
+    await client.listAutomations("org/1", { projectId: "project", limit: 100, cursor: "next" });
+    await expect(client.getAutomation("org/1", "auto 1")).resolves.toMatchObject({ automation });
+    await client.createAutomation("org/1", {
+      projectId: "project", displayName: "Nightly debt", prompt: "List debt.", harness: "codex",
+      rrule: "FREQ=DAILY;BYHOUR=9;BYMINUTE=0;BYSECOND=0", timezone: "Asia/Kolkata",
+      mode: "trusted", maxRuntimeMinutes: 60, deleteSessionOnComplete: false, enabled: true,
+    });
+    await client.updateAutomation("org/1", "auto 1", { enabled: false });
+    await expect(client.deleteAutomation("org/1", "auto 1")).resolves.toBeUndefined();
+    await client.listAutomationRuns("org/1", "auto 1", { limit: 20 });
+    await expect(client.runAutomationNow("org/1", "auto 1", { idempotencyKey: "run-now-1" })).resolves.toMatchObject({ run });
+    await expect(client.setAutomationSubscription("org/1", "auto 1", true)).resolves.toMatchObject({ subscribed: true });
+    await client.setAutomationSubscription("org/1", "auto 1", false);
+
+    const calls = fetchMock.mock.calls.map(([input, init]) => [String(input), init?.method ?? "GET"]);
+    expect(calls).toEqual([
+      [`${base}?cursor=next&limit=100&projectId=project`, "GET"],
+      [`${base}/auto%201`, "GET"],
+      [base, "POST"],
+      [`${base}/auto%201`, "PATCH"],
+      [`${base}/auto%201`, "DELETE"],
+      [`${base}/auto%201/runs?limit=20`, "GET"],
+      [`${base}/auto%201/runs`, "POST"],
+      [`${base}/auto%201/subscription`, "PUT"],
+      [`${base}/auto%201/subscription`, "DELETE"],
+    ]);
+    expect(JSON.parse(String(fetchMock.mock.calls[2]?.[1]?.body))).toMatchObject({ harness: "codex", timezone: "Asia/Kolkata" });
+    expect(fetchMock.mock.calls[3]?.[1]?.body).toBe(JSON.stringify({ enabled: false }));
+    expect(new Headers(fetchMock.mock.calls[6]?.[1]?.headers).get("Idempotency-Key")).toBe("run-now-1");
   });
 });
 

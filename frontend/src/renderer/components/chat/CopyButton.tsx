@@ -27,7 +27,7 @@ export function CopyButton({
 	/** Confirmation once the text is on the clipboard; callers outside Chat pass a localized one. */
 	copiedLabel = "Copied",
 }: {
-	text: string;
+	text: string | (() => string);
 	label: string;
 	compact?: boolean;
 	size?: ButtonProps["size"];
@@ -43,7 +43,7 @@ export function CopyButton({
 		// Through the bridge rather than `navigator.clipboard`: in Electron that
 		// reaches the native clipboard, which does not need the document to be focused
 		// or a permission the renderer cannot prompt for.
-		void aoBridge.clipboard.writeText(text).then(
+		void aoBridge.clipboard.writeText(typeof text === "function" ? text() : text).then(
 			() => {
 				setCopied(true);
 				clearTimeout(timer.current);

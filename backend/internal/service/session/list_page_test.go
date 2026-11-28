@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"reflect"
+	"sort"
 	"testing"
 	"time"
 
@@ -210,5 +211,195 @@ func TestListWithoutLimitReturnsEveryMatch(t *testing.T) {
 	}
 	if len(page.Sessions) != MaxListLimit+5 || page.NextCursor != "" {
 		t.Fatalf("unpaged list = %d sessions, cursor %q", len(page.Sessions), page.NextCursor)
+	}
+}
+
+func mergedPR(number int, mergedAt time.Time) domain.PRFacts {
+	return domain.PRFacts{URL: fmt.Sprintf("https://github.com/acme/w/pull/%d", number), Number: number, Merged: true, StateChangedAt: mergedAt, UpdatedAt: mergedAt.Add(time.Hour)}
+}
+
+// A merged-PR list keeps the archived sessions owning a merged PR, newest
+// merge first however recently the session itself changed, and pages all of
+// them while reporting the total.
+func TestListPageFiltersByPRStateOrderedByWhenItWasReached(t *testing.T) {
+	base := time.Date(2026, 10, 1, 12, 0, 0, 0, time.UTC)
+	st := newFakeStore()
+	for i := 1; i <= 5; i++ {
+		// Session updatedAt runs opposite to merge time.
+		rec := archivedRecord(fmt.Sprintf("m-%d", i), "ao", base.Add(time.Duration(10-i)*time.Hour))
+		st.sessions[rec.ID] = rec
+		st.prFacts[rec.ID] = []domain.PRFacts{mergedPR(i, base.Add(time.Duration(i)*time.Minute))}
+	}
+	// Pinning does not lift a session above newer merges.
+	pinned := st.sessions["m-1"]
+	pinned.IsPinned = true
+	st.sessions["m-1"] = pinned
+	// A session whose only PR is closed, one with no PR, and one with an open
+	// PR and an older merged one.
+	st.sessions["closed"] = archivedRecord("closed", "ao", base)
+	st.prFacts["closed"] = []domain.PRFacts{{Number: 90, Closed: true, UpdatedAt: base.Add(time.Hour)}}
+	st.sessions["none"] = archivedRecord("none", "ao", base)
+	st.sessions["both"] = archivedRecord("both", "ao", base)
+	legacy := mergedPR(91, time.Time{})
+	legacy.UpdatedAt = base.Add(90 * time.Second) // no state change recorded: between m-1 and m-2
+	st.prFacts["both"] = []domain.PRFacts{{Number: 92, UpdatedAt: base.Add(time.Hour)}, legacy}
+
+	svc := &Service{store: st}
+	filter := ListFilter{Active: boolPtr(false), Kind: domain.KindWorker, PRState: domain.PRStateMerged, Limit: 2}
+	var got []string
+	for pages := 0; ; pages++ {
+		if pages > 5 {
+			t.Fatal("cursor never ran out")
+		}
+		page, err := svc.ListPage(context.Background(), filter)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if page.Total == nil || *page.Total != 6 {
+			t.Fatalf("total = %v, want 6", page.Total)
+		}
+		got = append(got, pageIDs(page)...)
+		if page.NextCursor == "" {
+			break
+		}
+		filter.Cursor = page.NextCursor
+	}
+	want := []string{"m-5", "m-4", "m-3", "m-2", "both", "m-1"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("merged order = %v, want %v", got, want)
+	}
+
+	all, err := svc.ListPage(context.Background(), ListFilter{Active: boolPtr(false), PRState: domain.PRStateMerged})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(pageIDs(all), want) {
+		t.Fatalf("unpaged merged order = %v, want %v", pageIDs(all), want)
+	}
+}
+
+// The PR-state filter replaces the archive summary with its own total and
+// keeps the other filters: an active list with a merged filter holds only live
+// sessions whose PR merged.
+func TestListPagePRStateKeepsTheOtherFilters(t *testing.T) {
+	base := time.Date(2026, 10, 1, 12, 0, 0, 0, time.UTC)
+	st := newFakeStore()
+	st.sessions["live"] = domain.SessionRecord{ID: "live", ProjectID: "ao", Kind: domain.KindWorker, UpdatedAt: base}
+	st.prFacts["live"] = []domain.PRFacts{mergedPR(1, base)}
+	st.sessions["gone"] = archivedRecord("gone", "ao", base)
+	st.prFacts["gone"] = []domain.PRFacts{mergedPR(2, base)}
+	st.sessions["other"] = archivedRecord("other", "web", base)
+	st.prFacts["other"] = []domain.PRFacts{mergedPR(3, base)}
+
+	page, err := (&Service{store: st}).ListPage(context.Background(), ListFilter{Active: boolPtr(true), PRState: domain.PRStateMerged})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := pageIDs(page); !reflect.DeepEqual(got, []string{"live"}) {
+		t.Fatalf("active merged = %v, want [live]", got)
+	}
+	if page.Archived != nil || page.Total == nil || *page.Total != 1 {
+		t.Fatalf("archived = %+v, total = %v; want no summary and total 1", page.Archived, page.Total)
+	}
+	page, err = (&Service{store: st}).ListPage(context.Background(), ListFilter{ProjectID: "web", PRState: domain.PRStateMerged})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := pageIDs(page); !reflect.DeepEqual(got, []string{"other"}) {
+		t.Fatalf("project web merged = %v, want [other]", got)
+	}
+}
+
+// A PR-state page loads card facts for its own sessions only: which sessions
+// match comes from the narrow PR-state read, not from every candidate's facts.
+func TestListPagePRStateLoadsFactsForThePageOnly(t *testing.T) {
+	base := time.Date(2026, 10, 1, 12, 0, 0, 0, time.UTC)
+	st := &recordingStore{fakeStore: newFakeStore()}
+	for i := 1; i <= 60; i++ {
+		rec := archivedRecord(fmt.Sprintf("a-%02d", i), "ao", base.Add(time.Duration(i)*time.Minute))
+		st.sessions[rec.ID] = rec
+		if i%3 == 0 {
+			st.prFacts[rec.ID] = []domain.PRFacts{mergedPR(i, base.Add(time.Duration(i)*time.Hour))}
+		}
+	}
+	page, err := (&Service{store: st}).ListPage(context.Background(), ListFilter{Active: boolPtr(false), PRState: domain.PRStateMerged, Limit: 2})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := pageIDs(page), []string{"a-60", "a-57"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("page = %v, want %v", got, want)
+	}
+	if page.Total == nil || *page.Total != 20 {
+		t.Fatalf("total = %v, want 20", page.Total)
+	}
+	loaded := make([]string, 0, len(st.prFactIDs))
+	for _, id := range st.prFactIDs {
+		loaded = append(loaded, string(id))
+	}
+	sort.Strings(loaded)
+	if want := []string{"a-57", "a-60"}; !reflect.DeepEqual(loaded, want) {
+		t.Fatalf("PR facts loaded for %v, want exactly the page's %v", loaded, want)
+	}
+}
+
+// The version names the whole PR-state list: every page of one list carries
+// it, a re-read of the same list repeats it, and a change on a later page
+// changes it even when the total and the first page stay the same (one
+// archived session restored and another ended).
+func TestListPagePRStateVersionNamesTheWholeList(t *testing.T) {
+	base := time.Date(2026, 10, 1, 12, 0, 0, 0, time.UTC)
+	st := newFakeStore()
+	for i := 1; i <= 4; i++ {
+		rec := archivedRecord(fmt.Sprintf("m-%d", i), "ao", base)
+		st.sessions[rec.ID] = rec
+		st.prFacts[rec.ID] = []domain.PRFacts{mergedPR(i, base.Add(time.Duration(i)*time.Hour))}
+	}
+	svc := &Service{store: st}
+	filter := ListFilter{Active: boolPtr(false), PRState: domain.PRStateMerged, Limit: 2}
+	first, err := svc.ListPage(context.Background(), filter)
+	if err != nil {
+		t.Fatal(err)
+	}
+	filter.Cursor = first.NextCursor
+	second, err := svc.ListPage(context.Background(), filter)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first.Version == "" || first.Version != second.Version {
+		t.Fatalf("versions = %q and %q, want one non-empty version for both pages", first.Version, second.Version)
+	}
+	again, err := svc.ListPage(context.Background(), ListFilter{Active: boolPtr(false), PRState: domain.PRStateMerged, Limit: 2})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if again.Version != first.Version {
+		t.Fatalf("re-read version = %q, want %q", again.Version, first.Version)
+	}
+
+	// m-1 is restored and m-0, merged earlier still, ends: same total, same
+	// first page (m-4, m-3), different second page.
+	restored := st.sessions["m-1"]
+	restored.IsTerminated = false
+	st.sessions["m-1"] = restored
+	ended := archivedRecord("m-0", "ao", base)
+	st.sessions[ended.ID] = ended
+	st.prFacts[ended.ID] = []domain.PRFacts{mergedPR(100, base)}
+	moved, err := svc.ListPage(context.Background(), ListFilter{Active: boolPtr(false), PRState: domain.PRStateMerged, Limit: 2})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := pageIDs(moved); !reflect.DeepEqual(got, pageIDs(first)) || *moved.Total != *first.Total {
+		t.Fatalf("first page %v total %d, want the same as before (%v, %d)", got, *moved.Total, pageIDs(first), *first.Total)
+	}
+	if moved.Version == first.Version {
+		t.Fatalf("version %q unchanged after a later page changed", moved.Version)
+	}
+
+	plain, err := svc.ListPage(context.Background(), ListFilter{Active: boolPtr(false), Limit: 2})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if plain.Version != "" {
+		t.Fatalf("list without prState has version %q", plain.Version)
 	}
 }

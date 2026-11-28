@@ -9,7 +9,7 @@ import { MachineEditorForm } from "../../../../lib/MachineEditorForm";
 import { Spinner } from "../../../../lib/Spinner";
 import { useApp } from "../../../../lib/store";
 import { useTheme } from "../../../../lib/ThemeProvider";
-import { toolbarIcon } from "../../../../lib/toolbarIcon";
+import { HeaderPillButton, PillHeaderRight } from "../../../../lib/headerPill";
 import { EmptyState } from "../../../../lib/ui";
 import { useMachineEditor } from "../../../../lib/useMachineEditor";
 
@@ -47,32 +47,42 @@ function MachineEditor({ host, isDefault }: { host: Host; isDefault: boolean }) 
 	const { hostStates, configForHost, reloadConfig, reloadHostMetadata } = useApp();
 	const snapshot = hostStates.find((item) => item.hostId === host.id);
 	const editor = useMachineEditor(host, snapshot?.config ?? configForHost(host.id) ?? undefined, async (draft) => {
-		const { routeChanged } = await saveEnvironmentMachine(host, draft, Platform.OS);
+		const { routeChanged, appearanceError } = await saveEnvironmentMachine(host, draft, Platform.OS);
 		await reloadHostMetadata();
 		// The default machine reconnects over the route it was just given.
 		if (routeChanged && isDefault) void reloadConfig().catch(() => {});
+		// Only the icon failed: what did save is applied above, and the editor
+		// stays open to say so and to try again.
+		if (appearanceError) throw appearanceError;
 	});
 	const [saved, setSaved] = useState(false);
 
-	// Save is the bar's trailing item: text on iOS, a check on Android, whose bar
-	// draws icons only. Memoized on what it shows, so typing does not register
+	// Save is the bar's trailing item: text on iOS, a check on its own pill on
+	// Android. Memoized on what it shows, so typing does not register
 	// the header again on every key; the item saves the latest draft.
 	const save = async () => { if (await editor.save()) setSaved(true); };
 	const saveRef = useRef(save);
 	saveRef.current = save;
 	const { saving, canSave } = editor;
 	const headerItems = useMemo(() => (
-		<Stack.Toolbar placement="right">
-			{saving ? (
-				<Stack.Toolbar.View hidesSharedBackground>
-					<Spinner accessibilityLabel="Saving changes" />
-				</Stack.Toolbar.View>
-			) : Platform.OS === "ios" ? (
-				<Stack.Toolbar.Button accessibilityLabel="Save machine changes" disabled={!canSave} style={{ fontWeight: "600" }} onPress={() => void saveRef.current()}>Save</Stack.Toolbar.Button>
-			) : (
-				<Stack.Toolbar.Button icon={toolbarIcon("checkmark")} accessibilityLabel="Save machine changes" disabled={!canSave} onPress={() => void saveRef.current()} />
-			)}
-		</Stack.Toolbar>
+		Platform.OS === "android" ? (
+			// Over the clear pill bar, a pill of its own rather than a bare check.
+			<PillHeaderRight>
+				<HeaderPillButton icon="checkmark" label={saving ? "Saving changes" : "Save machine changes"} disabled={!canSave || saving} onPress={() => void saveRef.current()} testID="machine-save">
+					{saving ? <Spinner accessibilityLabel="Saving changes" /> : undefined}
+				</HeaderPillButton>
+			</PillHeaderRight>
+		) : (
+			<Stack.Toolbar placement="right">
+				{saving ? (
+					<Stack.Toolbar.View hidesSharedBackground>
+						<Spinner accessibilityLabel="Saving changes" />
+					</Stack.Toolbar.View>
+				) : (
+					<Stack.Toolbar.Button accessibilityLabel="Save machine changes" disabled={!canSave} style={{ fontWeight: "600" }} onPress={() => void saveRef.current()}>Save</Stack.Toolbar.Button>
+				)}
+			</Stack.Toolbar>
+		)
 	), [canSave, saving]);
 
 	// Unsaved edits hold the page: no swipe back from it, nor from Settings

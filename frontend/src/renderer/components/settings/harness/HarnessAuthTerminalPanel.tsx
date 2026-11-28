@@ -1,5 +1,5 @@
 import { Check, LogIn } from "@/components/app-icons";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useContext, useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import type { components } from "../../../../api/schema";
 import { closeShellTerminal } from "../../../hooks/useShellTerminals";
@@ -10,6 +10,7 @@ import { baseUrlForHost } from "../../../lib/host-clients";
 import { useShellMaybe } from "../../../lib/shell-context";
 import { createTerminalMux, muxUrlFromApiBase } from "../../../lib/terminal-mux";
 import { useResolvedTheme } from "../../../stores/ui-store";
+import { SettingsBrowserLinkContext } from "../SettingsBrowserOverlay";
 import { TerminalPane } from "../../TerminalPane";
 import { Button } from "../../ui/button";
 import { CloseButton } from "../../ui/close-button";
@@ -43,6 +44,7 @@ export function HarnessAuthTerminalPanel({ workflow, hostId, onClose, onRetry, o
 	const { t } = useTranslation();
 	const theme = useResolvedTheme();
 	const shell = useShellMaybe();
+	const openLoginLink = useContext(SettingsBrowserLinkContext);
 	// Logout can exit before attachment. Own its mux so a shell-list refresh
 	// cannot prune the retained cache entry before we receive the exit event.
 	const createMux = useCallback(() => {
@@ -98,7 +100,7 @@ export function HarnessAuthTerminalPanel({ workflow, hostId, onClose, onRetry, o
 				</div>
 			</div>
 			{/* Full-screen setup TUIs need enough rows for their provider pickers. */}
-			<div className="h-[min(600px,75vh)] min-h-0" data-settings-inline-edit=""><TerminalPane createMux={hostId || workflow.action === "logout" ? createMux : undefined} daemonReady={hostId ? true : shell ? shell.daemonStatus.state === "ready" : true} focusRequested={workflow.phase === "running" && terminalState === "attached"} fontSize={12} inputRequest={inputRequest} onInputRequestResult={handleInputRequestResult} onTerminalStateChange={handleTerminalState} terminalTarget={{ kind: "shell", handleId: workflow.terminal.handleId, generation: workflow.terminal.createdAt, title: workflow.terminal.title }} theme={theme} /></div>
+			<div className="h-[min(600px,75vh)] min-h-0" data-settings-inline-edit=""><TerminalPane createMux={hostId || workflow.action === "logout" ? createMux : undefined} daemonReady={hostId ? true : shell ? shell.daemonStatus.state === "ready" : true} focusRequested={workflow.phase === "running" && terminalState === "attached"} fontSize={12} inputRequest={inputRequest} onInputRequestResult={handleInputRequestResult} onLinkOpen={openLoginLink} suppressLoginDim={workflow.agentId === "cline" && workflow.action === "login"} onTerminalStateChange={handleTerminalState} terminalTarget={{ kind: "shell", handleId: workflow.terminal.handleId, generation: workflow.terminal.createdAt, title: workflow.terminal.title }} theme={theme} /></div>
 			{retryable ? <div className="flex items-center justify-end border-t border-(--color-border-settings-input) bg-surface/90 px-3 py-2"><Button type="button" size="sm" variant="secondary" onClick={workflow.phase === "cleanup_failed" ? onClose : onRetry}>{workflow.phase === "cleanup_failed" ? t("settings.harness.retry") : workflow.action === "logout" ? t("settings.harness.logout") : workflow.action === "setup" ? t("settings.harness.setup") : t("settings.harness.login")}</Button></div> : null}
 		</div>
 	);

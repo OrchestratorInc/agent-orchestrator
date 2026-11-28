@@ -5,7 +5,7 @@ import type { ConversationItem, ConversationSnapshot, ConversationTurn } from ".
 const { getMock, baseUrlMock } = vi.hoisted(() => ({ getMock: vi.fn(), baseUrlMock: vi.fn() }));
 vi.mock("../lib/host-clients", () => ({ baseUrlForHost: baseUrlMock, clientForSessionHost: () => ({ GET: getMock }) }));
 
-import { conversationQueryKey, mergeRemoteConversationTail, refreshRemoteConversation, remoteConversationFloor } from "./useConversation";
+import { conversationQueryKey, forgetRemoteConversationRereads, mergeRemoteConversationTail, refreshRemoteConversation, remoteConversationFloor } from "./useConversation";
 
 const turn = (id: string, state: ConversationTurn["state"], extra: Partial<ConversationTurn> = {}): ConversationTurn =>
 	({ id, state, requestedAt: `2026-11-03T00:00:0${id.slice(-1)}Z`, ...extra });
@@ -157,6 +157,109 @@ describe("refreshRemoteConversation", () => {
 		const data = client.getQueryData<InfiniteData<ConversationSnapshot>>(key)!;
 		expect(data.pages).toHaveLength(2);
 		expect(data.pages[0].items.map((item) => item.id)).toEqual(["m1", "a1", "r1", "m2", "a2", "r2", "n1", "n2"]);
+	});
+
+	// A daemon's startup repair settles running rows stranded on finished turns,
+	// which sit in history: an older page the refresh does not reread.
+	it("rereads a row an older page still holds as running, and patches it once it settled", async () => {
+		const history = page([turn("t0", "failed")], [message("m0", "t0", 1), tool("n0", "t0", 2, "running")]);
+		client.setQueryData<InfiniteData<ConversationSnapshot>>(key, { pages: [prior, history], pageParams: [undefined, 1] });
+		const settledRow = { id: "n0", turnId: "t0", sequence: 2, revision: 2, activityKind: "command", status: "failed", summary: "n0", createdAt: "" };
+		getMock
+			.mockResolvedValueOnce(wire({ afterSequence: 3, oldestSequence: 4, turns: [wireTurn("t2", "running")], messages: [wireMessage("m2", "t2", 4)] }))
+			.mockResolvedValueOnce(wire({ oldestSequence: 2, latestSequence: 2, turns: [wireTurn("t0", "failed")], activities: [settledRow] }));
+		await refreshRemoteConversation(client, "s1", "box");
+		expect(getMock).toHaveBeenCalledTimes(2);
+		expect(getMock.mock.calls[1][1].params.query).toEqual({ beforeSequence: 3, afterSequence: 1, limit: 1, outputLimit: 512 });
+		const data = client.getQueryData<InfiniteData<ConversationSnapshot>>(key)!;
+		expect(data.pages[1].items.find((item) => item.id === "n0")).toMatchObject({ status: "failed", revision: 2 });
+	});
+
+	it("does not put back an older revision another refresh replaced while the row was read", async () => {
+		const history = page([turn("t0", "failed")], [message("m0", "t0", 1), tool("n0", "t0", 2, "running")]);
+		client.setQueryData<InfiniteData<ConversationSnapshot>>(key, { pages: [prior, history], pageParams: [undefined, 1] });
+		const staleRead = { id: "n0", turnId: "t0", sequence: 2, revision: 2, activityKind: "command", status: "running", summary: "n0", createdAt: "" };
+		getMock
+			.mockResolvedValueOnce(wire({ afterSequence: 3, oldestSequence: 4, turns: [wireTurn("t2", "running")], messages: [wireMessage("m2", "t2", 4)] }))
+			.mockImplementationOnce(async () => {
+				// An overlapping refresh commits revision 3 before this read answers with 2.
+				client.setQueryData<InfiniteData<ConversationSnapshot>>(key, (current) => current && {
+					...current,
+					pages: current.pages.map((entry, index) => index === 0 ? entry : { ...entry, items: entry.items.map((item) => item.id === "n0" ? { ...item, status: "failed", revision: 3 } as ConversationItem : item) }),
+				});
+				return wire({ oldestSequence: 2, latestSequence: 2, turns: [wireTurn("t0", "failed")], activities: [staleRead] });
+			});
+		await refreshRemoteConversation(client, "s1", "box");
+		const data = client.getQueryData<InfiniteData<ConversationSnapshot>>(key)!;
+		expect(data.pages[1].items.find((item) => item.id === "n0")).toMatchObject({ status: "failed", revision: 3 });
+	});
+
+	it("leaves an older page's running row alone while the host still reports it running", async () => {
+		const history = page([turn("t0", "running")], [message("m0", "t0", 1), tool("n0", "t0", 2, "running")]);
+		client.setQueryData<InfiniteData<ConversationSnapshot>>(key, { pages: [prior, history], pageParams: [undefined, 1] });
+		const sameRow = { id: "n0", turnId: "t0", sequence: 2, revision: 1, activityKind: "command", status: "running", summary: "n0", createdAt: "" };
+		getMock
+			.mockResolvedValueOnce(wire({ afterSequence: 3, oldestSequence: 4, turns: [wireTurn("t2", "running")], messages: [wireMessage("m2", "t2", 4)] }))
+			.mockResolvedValueOnce(wire({ oldestSequence: 2, latestSequence: 2, turns: [wireTurn("t0", "running")], activities: [sameRow] }));
+		await refreshRemoteConversation(client, "s1", "box");
+		const data = client.getQueryData<InfiniteData<ConversationSnapshot>>(key)!;
+		expect(getMock).toHaveBeenCalledTimes(2);
+		expect(data.pages[1]).toEqual(history);
+	});
+
+	// A new live page that no longer reaches a running row still carries it, but
+	// did not cover it, so its settled status has to be read on its own.
+	it("rereads a running row that slid out of a new live page", async () => {
+		const newest = { hasMoreBefore: true, oldestSequence: 7, latestSequence: 8, turns: [wireTurn("t3", "completed")], messages: [wireMessage("n1", "t3", 7), wireMessage("n2", "t3", 8)] };
+		const settledRow = { id: "a2", turnId: "t2", sequence: 5, revision: 2, activityKind: "command", status: "completed", summary: "a2", createdAt: "" };
+		getMock
+			.mockResolvedValueOnce(wire({ afterSequence: 3, ...newest }))
+			.mockResolvedValueOnce(wire(newest))
+			.mockResolvedValueOnce(wire({ oldestSequence: 5, latestSequence: 5, turns: [wireTurn("t2", "completed")], activities: [settledRow] }));
+		await refreshRemoteConversation(client, "s1", "box");
+		expect(getMock).toHaveBeenCalledTimes(3);
+		expect(getMock.mock.calls[2][1].params.query).toEqual({ beforeSequence: 6, afterSequence: 4, limit: 1, outputLimit: 512 });
+		const live = client.getQueryData<InfiniteData<ConversationSnapshot>>(key)!.pages[0];
+		expect(live.items.find((item) => item.id === "a2")).toMatchObject({ status: "completed", revision: 2 });
+		// The rows the new page brought are left as it returned them.
+		expect(live.items.filter((item) => item.sequence >= 7).map((item) => item.id)).toEqual(["n1", "n2"]);
+	});
+
+	// A row the host keeps running (an older daemon, an AO action, an old pending
+	// approval) must not cost a request on every refresh of a streaming turn.
+	describe("a row the host still reports unchanged", () => {
+		const runningRow = { id: "n0", turnId: "t0", sequence: 2, revision: 1, activityKind: "command", status: "running", summary: "n0", createdAt: "" };
+		const tail = (controller = "busy") => wire({ controller, afterSequence: 3, oldestSequence: 4, turns: [wireTurn("t2", "running")], messages: [wireMessage("m2", "t2", 4)] });
+		const reread = () => wire({ oldestSequence: 2, latestSequence: 2, turns: [wireTurn("t0", "running")], activities: [runningRow] });
+		const rereads = () => getMock.mock.calls.filter((call) => call[1].params.query.limit === 1).length;
+		beforeEach(async () => {
+			const history = page([turn("t0", "running")], [message("m0", "t0", 1), tool("n0", "t0", 2, "running")]);
+			client.setQueryData<InfiniteData<ConversationSnapshot>>(key, { pages: [prior, history], pageParams: [undefined, 1] });
+			getMock.mockResolvedValueOnce(tail()).mockResolvedValueOnce(reread());
+			await refreshRemoteConversation(client, "s1", "box");
+			expect(rereads()).toBe(1);
+		});
+
+		it("is not reread by the next refresh", async () => {
+			getMock.mockResolvedValueOnce(tail());
+			await refreshRemoteConversation(client, "s1", "box");
+			expect(getMock).toHaveBeenCalledTimes(3);
+			expect(rereads()).toBe(1);
+		});
+
+		it("is reread once the chat reopens or its host's stream reconnects", async () => {
+			forgetRemoteConversationRereads(client, "box");
+			getMock.mockResolvedValueOnce(tail()).mockResolvedValueOnce(reread());
+			await refreshRemoteConversation(client, "s1", "box");
+			expect(rereads()).toBe(2);
+		});
+
+		// A daemon settles stranded rows when the chat's controller starts.
+		it("is reread when the chat's controller state changes", async () => {
+			getMock.mockResolvedValueOnce(tail("ready")).mockResolvedValueOnce(reread());
+			await refreshRemoteConversation(client, "s1", "box");
+			expect(rereads()).toBe(2);
+		});
 	});
 
 	it("uses the answer of a daemon that ignores afterSequence as the live page", async () => {

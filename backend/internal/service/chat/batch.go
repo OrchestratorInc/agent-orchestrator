@@ -75,6 +75,9 @@ func (c *Controller) queuedBatchInput(ctx context.Context, batch []domain.Queued
 				return ports.ChatUserMessage{}, batchInputError{queued.TurnID, err}
 			}
 		}
+		authored := msg
+		authored.AuthoredByUser = queued.AuthoredByUser
+		msg.Text = c.withSharedSkillInstructions(ctx, authored).Text
 		msg = excerptDeliveryMessage(msg)
 		items = append(items, batchInputItem{
 			Kind: "message", Text: msg.Text, Origin: msg.Origin,
@@ -88,7 +91,7 @@ func (c *Controller) queuedBatchInput(ctx context.Context, batch []domain.Queued
 		}
 	}
 	if steer != nil {
-		rendered := excerptDeliveryMessage(*steer)
+		rendered := excerptDeliveryMessage(c.withSharedSkillInstructions(ctx, *steer))
 		combined.ClientMessageID = rendered.ClientMessageID
 		combined.Origin = rendered.Origin
 		combined.Settings = rendered.Settings
@@ -114,4 +117,23 @@ func queuedBatchIDs(batch []domain.QueuedTurn) []string {
 		ids = append(ids, queued.TurnID)
 	}
 	return ids
+}
+
+// drainRun is how many queued messages, from the front, the next turn takes.
+// A message the user typed gets a turn of its own, so the agent answers each
+// one in order. Agent and Orchestrator messages waiting next to each other still
+// go as one input (#6500), stopping before the next message the user typed.
+// Steering is separate and still takes the whole queue.
+func drainRun(queue []domain.QueuedTurn) int {
+	if len(queue) == 0 {
+		return 0
+	}
+	if queue[0].Origin == domain.MessageOriginHuman {
+		return 1
+	}
+	n := 1
+	for n < len(queue) && queue[n].Origin != domain.MessageOriginHuman {
+		n++
+	}
+	return n
 }

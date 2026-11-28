@@ -6,6 +6,7 @@ import {
 	describeCommandStep,
 	isExploratoryTool,
 	isOrchestratorPlumbing,
+	runsAOSpawn,
 	type CommandStep,
 } from "./activity-step";
 
@@ -305,6 +306,28 @@ describe("Orchestrator CLI", () => {
 		expect(live("ao preview README.md")).toBe("Previewing README.md");
 	});
 
+	it("names a spawn for the agent it starts", () => {
+		const spawn = "ao spawn --project market-place --name 'background config snapshot' --prompt 'Read the config'";
+		expect(done(spawn)).toBe("Started background config snapshot");
+		expect(live(spawn)).toBe("Starting background config snapshot");
+		expect(done("ao spawn --project market-place")).toBe("Started a session");
+	});
+
+	it("knows a spawn by `ao spawn` in a command's place, not by the words anywhere", () => {
+		expect(runsAOSpawn("ao spawn --project market-place --name 'snapshot'")).toBe(true);
+		expect(runsAOSpawn("cd /repo && AO_DEBUG=1 ao spawn --name 'snapshot'")).toBe(true);
+		expect(runsAOSpawn("'/Users/me/.ao/bin/ao' spawn --name 'snapshot'")).toBe(true);
+		expect(runsAOSpawn("\"/opt/ao tools/ao\" spawn")).toBe(true);
+		expect(runsAOSpawn("bash -lc 'ao spawn --name snapshot'")).toBe(true);
+		expect(runsAOSpawn("bash -lc 'cd /repo\nao spawn --name snapshot'")).toBe(true);
+		expect(runsAOSpawn("zsh -lc \"cd /repo\nexport AO_DEBUG=1\nao spawn --name 'snapshot'\"")).toBe(true);
+		expect(runsAOSpawn("bash -lc 'cd /repo\ngrep -rn \"ao spawn\" docs/'")).toBe(false);
+		expect(runsAOSpawn("grep -rn 'ao spawn' docs/")).toBe(false);
+		expect(runsAOSpawn("echo \"run ao spawn later\"")).toBe(false);
+		expect(runsAOSpawn("ao send --session s-1 --message 'ao spawn failed'")).toBe(false);
+		expect(runsAOSpawn("ao spawned")).toBe(false);
+	});
+
 	it("names a chain of browser steps by the step that acts", () => {
 		expect(done('ao preview a.html && ao browser wait --load && ao browser act "Click me" ; ao browser console')).toBe(
 			"Interacted with the page",
@@ -330,6 +353,24 @@ describe("Orchestrator CLI", () => {
 		expect(isOrchestratorPlumbing(commandActivity({ detail: { command: `cat ${guide}` }, status: "running" }))).toBe(true);
 		expect(isOrchestratorPlumbing(commandActivity({ detail: { command: "ao preview README.md" } }))).toBe(false);
 		expect(isOrchestratorPlumbing(toolActivity("Read", "read", { file_path: "/w/app/README.md" }))).toBe(false);
+	});
+
+	it("updates guide visibility when a command or its status changes", () => {
+		const activity = commandActivity({ detail: { command: "ao browser --help" } });
+		expect(isOrchestratorPlumbing(activity)).toBe(true);
+		expect(isOrchestratorPlumbing(activity)).toBe(true);
+		for (const status of ["failed", "cancelled"] as const) {
+			activity.status = status;
+			expect(isOrchestratorPlumbing(activity)).toBe(false);
+		}
+		activity.status = "running";
+		expect(isOrchestratorPlumbing(activity)).toBe(true);
+		activity.detail = { command: "ao preview README.md" };
+		expect(isOrchestratorPlumbing(activity)).toBe(false);
+		expect(isOrchestratorPlumbing(activity)).toBe(false);
+		activity.detail.command = "ao session --help";
+		expect(isOrchestratorPlumbing(activity)).toBe(true);
+		expect(isOrchestratorPlumbing(commandActivity({ id: activity.id, detail: { command: "npm test" } }))).toBe(false);
 	});
 });
 

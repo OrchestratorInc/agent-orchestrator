@@ -124,6 +124,18 @@ func TestSideQuestionWithMultipleReferencesKeepsQuestionLast(t *testing.T) {
 	}
 }
 
+func TestSideQuestionDeliversCommentsOnReferencesWithoutSnapshots(t *testing.T) {
+	turn := domain.SideTurn{Text: "Compare them.", References: []domain.SideReference{
+		{Selection: "sun"},
+		{Selection: "moon", Comment: "  is this a planet?  "},
+	}}
+	got := sideQuestionWithReferences(turn)
+	comment := strings.Index(got, "User's comment on selected text 2:\nis this a planet?")
+	if comment < 0 || comment < strings.Index(got, "> moon") || comment > strings.Index(got, turn.Text) || strings.Count(got, "User's comment") != 1 {
+		t.Fatalf("comment missing or misplaced: %q", got)
+	}
+}
+
 func TestSideRejectsOtherSideOriginAnnotations(t *testing.T) {
 	svc := New(Options{AppRunID: "run"})
 	side := domain.SideConversation{PolicyVersion: 1, ID: "side", MainConversationID: "main"}

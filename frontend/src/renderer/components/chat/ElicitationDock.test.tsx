@@ -258,6 +258,153 @@ describe("ElicitationDock", () => {
 		});
 	});
 
+	// claude-agent-acp marks no question required, so any of them can be skipped.
+	const optionalClaudeQuestions = { ...claudeQuestions, required: [] };
+
+	it("keeps earlier Claude answers when the last question is skipped", async () => {
+		const user = userEvent.setup();
+		const onResolve = vi.fn().mockResolvedValue(undefined);
+		render(<ElicitationDock activity={activity({ inputMode: "form", schema: optionalClaudeQuestions })} onResolve={onResolve} />);
+
+		await user.click(screen.getByRole("radio", { name: /Native/ }));
+		await user.click(screen.getByRole("button", { name: "Next" }));
+		await user.click(screen.getByRole("radio", { name: /Go/ }));
+		await user.click(screen.getByRole("button", { name: "Skip" }));
+		expect(onResolve).toHaveBeenCalledExactlyOnceWith("request-1", "accept", { question_0: "Native" });
+	});
+
+	it("moves past a skipped Claude question and leaves it blank", async () => {
+		const user = userEvent.setup();
+		const onResolve = vi.fn().mockResolvedValue(undefined);
+		render(<ElicitationDock activity={activity({ inputMode: "form", schema: optionalClaudeQuestions })} onResolve={onResolve} />);
+
+		await user.click(screen.getByRole("radio", { name: /Native/ }));
+		await user.click(screen.getByRole("button", { name: "Skip" }));
+		expect(onResolve).not.toHaveBeenCalled();
+		expect(screen.getByRole("group", { name: /Language/ })).toBeVisible();
+
+		await user.click(screen.getByRole("button", { name: "Back" }));
+		expect(screen.getByRole("radio", { name: /Native/ })).not.toBeChecked();
+		await user.click(screen.getByRole("button", { name: "Next" }));
+		await user.click(screen.getByRole("radio", { name: /TypeScript/ }));
+		await user.click(screen.getByRole("button", { name: "Continue" }));
+		expect(onResolve).toHaveBeenCalledExactlyOnceWith("request-1", "accept", { question_1: "TypeScript" });
+	});
+
+	it("skips the whole Claude form when every question is skipped", async () => {
+		const user = userEvent.setup();
+		const onResolve = vi.fn().mockResolvedValue(undefined);
+		render(<ElicitationDock activity={activity({ inputMode: "form", schema: optionalClaudeQuestions })} onResolve={onResolve} />);
+
+		await user.click(screen.getByRole("button", { name: "Skip" }));
+		await user.click(screen.getByRole("button", { name: "Skip" }));
+		expect(onResolve).toHaveBeenCalledExactlyOnceWith("request-1", "decline", undefined);
+	});
+
+	it("sends no schema default for a skipped Claude question", async () => {
+		const user = userEvent.setup();
+		const onResolve = vi.fn().mockResolvedValue(undefined);
+		const { properties } = optionalClaudeQuestions;
+		const withDefaults = {
+			...optionalClaudeQuestions,
+			properties: {
+				...properties,
+				question_0: { ...properties.question_0, default: "Native" },
+				question_1: { ...properties.question_1, default: "Go" },
+			},
+		};
+		render(<ElicitationDock activity={activity({ inputMode: "form", schema: withDefaults })} onResolve={onResolve} />);
+
+		await user.click(screen.getByRole("button", { name: "Skip" }));
+		await user.click(screen.getByRole("button", { name: "Skip" }));
+		expect(onResolve).toHaveBeenCalledExactlyOnceWith("request-1", "decline", undefined);
+	});
+
+	it("offers no Skip on a required Claude question", () => {
+		render(<ElicitationDock activity={activity({ inputMode: "form", schema: claudeQuestions })} onResolve={vi.fn()} />);
+		expect(screen.queryByRole("button", { name: "Skip" })).not.toBeInTheDocument();
+		expect(screen.getByRole("button", { name: "Cancel" })).toBeVisible();
+	});
+
+	// The form `agy acp` sends: the prompt is the field title, each question has an
+	// unmarked `q<n>_other` field, and the message only counts the questions.
+	const agyQuestions = {
+		type: "object" as const,
+		properties: {
+			q1: {
+				type: "string",
+				title: "How should this panel relate to the Inspector?",
+				oneOf: [
+					{ const: "1", title: "(Recommended) Add a Quick Details toggle" },
+					{ const: "2", title: "Redesign the Summary tab" },
+				],
+			},
+			q1_other: { type: "string", title: "Other", description: "Optional free-form answer to: How should this panel relate to the Inspector?" },
+			q2: {
+				type: "string",
+				title: "Which session details should be shown?",
+				oneOf: [
+					{ const: "1", title: "Project and branch" },
+					{ const: "2", title: "Changes" },
+				],
+			},
+			q2_other: { type: "string", title: "Other", description: "Optional free-form answer to: Which session details should be shown?" },
+		},
+	};
+
+	it("shows one Antigravity question at a time with its full prompt", async () => {
+		const user = userEvent.setup();
+		const onResolve = vi.fn().mockResolvedValue(undefined);
+		render(
+			<ElicitationDock
+				activity={activity({ inputMode: "form", message: "The agent has 2 questions.", schema: agyQuestions })}
+				harness="agy"
+				onResolve={onResolve}
+			/>,
+		);
+
+		expect(screen.getByTestId("elicitation-question")).toHaveTextContent("How should this panel relate to the Inspector?");
+		expect(screen.getByText("1 of 2", { exact: false })).toBeVisible();
+		expect(screen.queryByText("The agent has 2 questions.")).not.toBeInTheDocument();
+		expect(screen.queryByText("Which session details should be shown?")).not.toBeInTheDocument();
+		expect(screen.getAllByRole("textbox")).toHaveLength(1);
+
+		await user.click(screen.getByRole("radio", { name: /Quick Details/ }));
+		await user.click(screen.getByRole("button", { name: "Next" }));
+		expect(screen.getByTestId("elicitation-question")).toHaveTextContent("Which session details should be shown?");
+		await user.type(screen.getByRole("textbox"), "Only the branch");
+		await user.click(screen.getByRole("button", { name: "Continue" }));
+		expect(onResolve).toHaveBeenCalledExactlyOnceWith("request-1", "accept", { q1: "1", q2_other: "Only the branch" });
+	});
+
+	it("shows a single Antigravity question's prompt instead of its generic message", () => {
+		const { q1, q1_other } = agyQuestions.properties;
+		render(
+			<ElicitationDock
+				activity={activity({ inputMode: "form", message: "The agent has a question.", schema: { type: "object", properties: { q1, q1_other } } })}
+				harness="agy"
+				onResolve={vi.fn()}
+			/>,
+		);
+		expect(screen.getByTestId("elicitation-question")).toHaveTextContent("How should this panel relate to the Inspector?");
+		expect(screen.queryByText("The agent has a question.")).not.toBeInTheDocument();
+	});
+
+	it("keeps another agent's q1, q2 form in the all-fields layout", () => {
+		render(
+			<ElicitationDock
+				activity={activity({ inputMode: "form", message: "Tell us about the deploy.", schema: { ...agyQuestions, description: "Both are optional." } })}
+				harness="claude-code"
+				onResolve={vi.fn()}
+			/>,
+		);
+		expect(screen.getByTestId("elicitation-question")).toHaveTextContent("Tell us about the deploy.");
+		expect(screen.getByText("Both are optional.")).toBeVisible();
+		expect(screen.getByText("Which session details should be shown?")).toBeVisible();
+		expect(screen.getAllByRole("textbox")).toHaveLength(2);
+		expect(screen.queryByRole("button", { name: "Next" })).not.toBeInTheDocument();
+	});
+
 	it("keeps generic MCP forms in the all-fields layout", () => {
 		render(
 			<ElicitationDock

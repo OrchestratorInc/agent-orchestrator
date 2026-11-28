@@ -144,6 +144,20 @@ describe("PeopleField", () => {
 		}
 	});
 
+	it("keeps the suggestions open when focus comes back before the blur closes them", async () => {
+		renderField();
+		const input = screen.getByRole("combobox", { name: "Add people or teams" });
+		act(() => input.focus());
+		await type(input, "dana");
+		expect(await screen.findByRole("listbox")).toBeInTheDocument();
+		fireEvent.blur(input);
+		fireEvent.focus(input);
+		await act(async () => {
+			await new Promise((resolve) => setTimeout(resolve, 160));
+		});
+		expect(screen.getByRole("listbox")).toBeInTheDocument();
+	});
+
 	it("offers New team with whoever is picked so far", async () => {
 		const onNewTeam = vi.fn();
 		renderField({ onNewTeam });

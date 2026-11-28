@@ -251,6 +251,16 @@ export function createDeviceVoiceProvider(): VoiceProvider {
 			}
 		},
 
+		async checkPermission() {
+			if (granted) return true;
+			try {
+				granted = (await ExpoSpeechRecognitionModule.getPermissionsAsync()).granted;
+				return granted;
+			} catch {
+				return false;
+			}
+		},
+
 		async start(cb, opts) {
 			const longForm = opts?.mode === "latched";
 			// A previous recording that never settled must not leak its listeners.

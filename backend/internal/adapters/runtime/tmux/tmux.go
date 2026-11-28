@@ -23,6 +23,7 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 	aoprocess "github.com/aoagents/agent-orchestrator/backend/internal/process"
+	"github.com/aoagents/agent-orchestrator/backend/internal/sessionid"
 	"github.com/aoagents/agent-orchestrator/backend/internal/tmuxbin"
 )
 
@@ -56,11 +57,12 @@ type Options struct {
 	Binary       string        // default configured/bundled/system tmux resolution
 	LegacyBinary string        // default system tmux from PATH when SocketName is set; used only for pre-private-socket sessions
 	SocketName   string        // default $AO_TMUX_SOCKET_NAME; empty uses tmux's machine-wide default socket
-	Shell        string        // default $SHELL else /bin/sh
+	Shell        string        // interactive fallback if pane $SHELL is unset; defaults to daemon $SHELL or /bin/sh
 	Timeout      time.Duration // default 5s
 	ChunkSize    int           // default 16*1024
 	EnterDelay   time.Duration // pause after pasting a non-empty message before pressing Enter; default defaultEnterDelay. Conpty already does this (ptyInputEnterDelay); tmux lacked it, so a large multiline paste could absorb the trailing Enter and leave the prompt unsubmitted (issue #2342).
 	ReapGrace    time.Duration // grace between SIGTERM and SIGKILL when reaping a pane's leftover background processes on Destroy; default defaultReapGrace.
+	EnvDir       string        // where launch environment files are written; default <AO data dir>/runtime-env (see launchEnvDir)
 }
 
 // Runtime runs agent sessions inside tmux sessions, driving them via the tmux
@@ -74,6 +76,7 @@ type Runtime struct {
 	chunkSize      int
 	enterDelay     time.Duration
 	reapGrace      time.Duration
+	envDir         string
 	runner         runner
 	reapSessions   func(ctx context.Context, pids []int, grace time.Duration)
 	socketMu       sync.RWMutex
@@ -333,6 +336,7 @@ func New(opts Options) *Runtime {
 		chunkSize:      chunkSize,
 		enterDelay:     enterDelay,
 		reapGrace:      reapGrace,
+		envDir:         opts.EnvDir,
 		runner:         execRunner{},
 		reapSessions:   killSessionsByPID,
 		sessionSockets: make(map[string]string),
@@ -356,8 +360,22 @@ func (r *Runtime) Create(ctx context.Context, cfg ports.RuntimeConfig) (ports.Ru
 		return ports.RuntimeHandle{}, tmuxCreateFailure(err)
 	}
 
-	launchCmd := buildLaunchCommand(cfg)
-	args := newSessionArgs(id, cfg.WorkspacePath, r.shell, launchCmd)
+	envFile, err := r.writeLaunchEnv(ctx, cfg)
+	if err != nil {
+		return ports.RuntimeHandle{}, tmuxCreateFailure(err)
+	}
+	// The pane's shell deletes the file once it has read it. Delete it here
+	// too when the session never comes up, so no secret is left behind.
+	created := false
+	defer func() {
+		if !created {
+			_ = os.Remove(envFile)
+		}
+	}()
+	launchCmd := buildLaunchCommand(cfg, envFile, r.shell)
+	// The launch command and sourced environment file use POSIX syntax. The
+	// user's $SHELL is only for the interactive fallback after the agent exits.
+	args := newSessionArgs(id, cfg.WorkspacePath, "/bin/sh", launchCmd)
 	if _, err := r.run(ctx, args...); err != nil {
 		return ports.RuntimeHandle{}, tmuxPossibleCreateFailure(
 			fmt.Errorf("tmux runtime: create session %s: %w", id, err),
@@ -404,6 +422,7 @@ func (r *Runtime) Create(ctx context.Context, cfg ports.RuntimeConfig) (ports.Ru
 	if !alive {
 		return ports.RuntimeHandle{}, r.failedCreatedRuntime(handle, fmt.Errorf("tmux runtime: session %s exited before ready", id))
 	}
+	created = true
 	return handle, nil
 }
 
@@ -439,15 +458,25 @@ func (r *Runtime) Restart(ctx context.Context, handle ports.RuntimeHandle, cfg p
 		return ports.RuntimeHandle{}, err
 	}
 
-	launchCmd := buildLaunchCommand(cfg)
-	if _, err := r.runForSession(ctx, id, respawnPaneArgs(id, cfg.WorkspacePath, r.shell, launchCmd)...); err != nil {
+	envFile, err := r.writeLaunchEnv(ctx, cfg)
+	if err != nil {
+		return ports.RuntimeHandle{}, err
+	}
+	launchCmd := buildLaunchCommand(cfg, envFile, r.shell)
+	if _, err := r.runForSession(ctx, id, respawnPaneArgs(id, cfg.WorkspacePath, "/bin/sh", launchCmd)...); err != nil {
+		_ = os.Remove(envFile)
 		return ports.RuntimeHandle{}, fmt.Errorf("tmux runtime: restart session %s: %w", id, err)
 	}
 	alive, err := r.IsAlive(ctx, handle)
 	if err != nil {
+		// A failed probe does not show the pane is gone: it may still be
+		// starting and will read, then delete, the file itself.
 		return ports.RuntimeHandle{}, fmt.Errorf("tmux runtime: verify restarted session %s: %w", id, err)
 	}
 	if !alive {
+		// The pane exited, possibly before its shell read the file: no later
+		// reader exists, so the secrets it holds go now.
+		_ = os.Remove(envFile)
 		return ports.RuntimeHandle{}, fmt.Errorf("tmux runtime: session %s exited during restart", id)
 	}
 	return handle, nil
@@ -514,6 +543,18 @@ func (r *Runtime) Destroy(ctx context.Context, handle ports.RuntimeHandle) error
 	id, err := handleID(handle)
 	if err != nil {
 		return err
+	}
+	if strings.HasPrefix(id, "review-") && len(id) > 48 {
+		// A raw reviewer ID may name a session created before tmux shortened
+		// long IDs. Prefer that exact session; only use Create's hashed name
+		// after confirming the raw name is absent on the known sockets.
+		alive, probeErr := r.IsAlive(ctx, handle)
+		if probeErr != nil && !errors.Is(probeErr, ports.ErrRuntimeUnavailable) {
+			return probeErr
+		}
+		if !alive {
+			id = SessionName(id)
+		}
 	}
 	// Capture pane session ids while the session still exists; a missing
 	// session lists no panes and reaps nothing. Best-effort: failures here must
@@ -615,6 +656,41 @@ func (r *Runtime) IsAlive(ctx context.Context, handle ports.RuntimeHandle) (bool
 		return false, fmt.Errorf("tmux runtime: probe session %s: %w", id, err)
 	}
 	return true, nil
+}
+
+// BoundedProcessRoots returns the pids of the session's live panes. tmux has
+// not reaped a live pane's process, so its pid cannot have been reused: the
+// roots need no start bound. A dead pane kept by remain-on-exit is skipped,
+// since its pid may now belong to another process.
+func (r *Runtime) BoundedProcessRoots(ctx context.Context, handle ports.RuntimeHandle) ([]ports.ProcessRoot, error) {
+	id, err := handleID(handle)
+	if err != nil {
+		return nil, err
+	}
+	out, err := r.runForSession(ctx, id, listLivePanePIDsArgs(id)...)
+	if err != nil {
+		if sessionMissingOutput(string(out)) || serverNotRunningOutput(string(out)) || serverSocketAbsentOutput(string(out)) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("tmux runtime: list live pane pids %s: %w", id, err)
+	}
+	return parseLivePaneRoots(string(out)), nil
+}
+
+func parseLivePaneRoots(out string) []ports.ProcessRoot {
+	var roots []ports.ProcessRoot
+	for _, line := range strings.Split(out, "\n") {
+		fields := strings.Fields(line)
+		if len(fields) != 2 || fields[1] != "0" {
+			continue
+		}
+		pid, err := strconv.Atoi(fields[0])
+		if err != nil || pid <= 1 {
+			continue
+		}
+		roots = append(roots, ports.ProcessRoot{PID: pid})
+	}
+	return roots
 }
 
 // ProcessRootPIDs returns every pane leader pid of the session so memory
@@ -1455,8 +1531,13 @@ func handleID(handle ports.RuntimeHandle) (string, error) {
 	if id == "" {
 		return "", errors.New("tmux runtime: session id is required")
 	}
-	if !sessionIDPattern.MatchString(id) {
+	if !sessionid.Valid(id) {
 		return "", fmt.Errorf("tmux runtime: invalid handle id %q", id)
+	}
+	// Dotted IDs cannot be stored tmux handles, so map them to Create's name.
+	// Preserve long raw handles here: legacy sessions may use their full name.
+	if strings.Contains(id, ".") {
+		return SessionName(id), nil
 	}
 	return id, nil
 }
@@ -1648,20 +1729,19 @@ func shellQuote(s string) string {
 }
 
 // buildLaunchCommand builds the shell command string passed to `sh -c`. It
-// exports env vars and runs argv. Short-lived command terminals exit with the
-// command; ordinary interactive runtimes keep the tmux session alive. Supervised
-// launches park on a non-interpreting stdin sink after exit so bytes racing a
-// process exit can never become shell commands; legacy/unsupervised launches
-// retain the interactive-shell fallback used by manual recovery.
+// loads the session environment from envFile (see launchEnvScript) and runs
+// argv. Short-lived command terminals exit with the command; ordinary
+// interactive runtimes keep the tmux session alive. Supervised launches park
+// on a non-interpreting stdin sink after exit so bytes racing a process exit
+// can never become shell commands; legacy/unsupervised launches retain the
+// interactive-shell fallback used by manual recovery.
 //
-// PATH from cfg.Env is exported last, after all other keys, so an explicit
-// override takes effect.
-func buildLaunchCommand(cfg ports.RuntimeConfig) string {
-	path := cfg.Env["PATH"]
-	if path == "" {
-		path = getenv("PATH")
-	}
-
+// No environment value appears in this string. It becomes the argv of the
+// pane's `sh -c`, which stays alive as the agent's parent and is readable by
+// any local user through `ps`, /proc/<pid>/cmdline, and tmux's
+// #{pane_start_command}; the environment carries saved provider keys and
+// tokens. The shell reads envFile and deletes it before running argv.
+func buildLaunchCommand(cfg ports.RuntimeConfig, envFile, userShell string) string {
 	var b strings.Builder
 	b.WriteString("cd ")
 	b.WriteString(shellQuote(cfg.WorkspacePath))
@@ -1673,25 +1753,10 @@ func buildLaunchCommand(cfg ports.RuntimeConfig) string {
 		// opt out of color explicitly through its configured environment.
 		b.WriteString("unset NO_COLOR; ")
 	}
-	for _, key := range sortedKeys(cfg.Env) {
-		if key == "PATH" || key == "COLORTERM" {
-			continue
-		}
-		b.WriteString("export ")
-		b.WriteString(key)
-		b.WriteString("=")
-		b.WriteString(shellQuote(cfg.Env[key]))
-		b.WriteString("; ")
-	}
-	// The AO web terminal and tmux attach client both support 24-bit SGR color.
-	// Export this after caller env so agent color detection cannot accidentally
-	// downgrade rich syntax/diff colors to ANSI-256.
-	b.WriteString("export COLORTERM='truecolor'; ")
-	if path != "" {
-		b.WriteString("export PATH=")
-		b.WriteString(shellQuote(path))
-		b.WriteString("; ")
-	}
+	file := shellQuote(envFile)
+	// A file that cannot be read must not start the agent without its
+	// environment (AO_SESSION_ID, PATH, keys).
+	b.WriteString(". " + file + " || { rm -f " + file + "; exit 1; }; rm -f " + file + "; ")
 	// Quote each argv word so spaces inside a word are preserved.
 	parts := make([]string, len(cfg.Argv))
 	for i, a := range cfg.Argv {
@@ -1710,9 +1775,143 @@ func buildLaunchCommand(cfg ports.RuntimeConfig) string {
 	} else {
 		// Keep the tmux session alive after an unsupervised agent exits so the
 		// operator can inspect it and use the historical manual-recovery shell.
-		b.WriteString(`; exec "${SHELL:-/bin/sh}" -i`)
+		b.WriteString(`; if [ -n "${SHELL:-}" ]; then exec "$SHELL" -i; else exec `)
+		b.WriteString(shellQuote(userShell))
+		b.WriteString(` -i; fi`)
 	}
 	return b.String()
+}
+
+// launchEnvScript is the shell script the launch command sources: one export
+// per env var. PATH from cfg.Env is exported last, after all other keys, so
+// an explicit override takes effect.
+func launchEnvScript(cfg ports.RuntimeConfig) string {
+	path := cfg.Env["PATH"]
+	if path == "" {
+		path = getenv("PATH")
+	}
+	var b strings.Builder
+	for _, key := range sortedKeys(cfg.Env) {
+		if key == "PATH" || key == "COLORTERM" {
+			continue
+		}
+		b.WriteString("export ")
+		b.WriteString(key)
+		b.WriteString("=")
+		b.WriteString(shellQuote(cfg.Env[key]))
+		b.WriteString("\n")
+	}
+	// The AO web terminal and tmux attach client both support 24-bit SGR color.
+	// Export this after caller env so agent color detection cannot accidentally
+	// downgrade rich syntax/diff colors to ANSI-256.
+	b.WriteString("export COLORTERM='truecolor'\n")
+	if path != "" {
+		b.WriteString("export PATH=")
+		b.WriteString(shellQuote(path))
+		b.WriteString("\n")
+	}
+	return b.String()
+}
+
+// launchEnvMaxAge bounds how long a launch environment file may wait for its
+// shell. The shell reads it as soon as tmux starts the pane, so an older file
+// belongs to a launch that never ran (a crash between write and start).
+const launchEnvMaxAge = 10 * time.Minute
+
+// launchEnvDir is where launch environment files go: under the session's AO
+// data directory, so the secrets they hold stay under ~/.ao.
+func (r *Runtime) launchEnvDir(cfg ports.RuntimeConfig) (string, error) {
+	if r.envDir != "" {
+		// The pane changes to the workspace before it sources the file, so a
+		// relative directory would name a different place there.
+		abs, err := filepath.Abs(r.envDir)
+		if err != nil {
+			return "", fmt.Errorf("tmux runtime: resolve launch environment directory: %w", err)
+		}
+		return abs, nil
+	}
+	dataDir := cfg.Env["AO_DATA_DIR"]
+	if dataDir == "" {
+		dataDir = getenv("AO_DATA_DIR")
+	}
+	if dataDir == "" {
+		home, err := os.UserHomeDir()
+		if err != nil {
+			return "", fmt.Errorf("tmux runtime: resolve AO data directory: %w", err)
+		}
+		dataDir = filepath.Join(home, ".ao", "data")
+	}
+	abs, err := filepath.Abs(dataDir)
+	if err != nil {
+		return "", fmt.Errorf("tmux runtime: resolve AO data directory: %w", err)
+	}
+	return filepath.Join(abs, "runtime-env"), nil
+}
+
+// writeLaunchEnv writes launchEnvScript(cfg) to a new file only this user can
+// read, in a directory only this user can enter, and returns its path.
+func (r *Runtime) writeLaunchEnv(ctx context.Context, cfg ports.RuntimeConfig) (string, error) {
+	if err := ctx.Err(); err != nil {
+		return "", err
+	}
+	dir, err := r.launchEnvDir(cfg)
+	if err != nil {
+		return "", err
+	}
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return "", fmt.Errorf("tmux runtime: create launch environment directory: %w", err)
+	}
+	info, err := os.Lstat(dir)
+	if err != nil {
+		return "", fmt.Errorf("tmux runtime: inspect launch environment directory: %w", err)
+	}
+	if !info.IsDir() {
+		return "", errors.New("tmux runtime: launch environment directory is not a directory")
+	}
+	if info.Mode().Perm() != 0o700 {
+		if err := os.Chmod(dir, 0o700); err != nil { //nolint:gosec // a directory needs its search bit; 0700 is owner-only
+			return "", fmt.Errorf("tmux runtime: restrict launch environment directory: %w", err)
+		}
+	}
+	sweepLaunchEnv(ctx, dir)
+	if err := ctx.Err(); err != nil {
+		return "", err
+	}
+	f, err := os.CreateTemp(dir, "launch-*.env")
+	if err != nil {
+		return "", fmt.Errorf("tmux runtime: create launch environment: %w", err)
+	}
+	name := f.Name()
+	if _, err := f.WriteString(launchEnvScript(cfg)); err != nil {
+		_ = f.Close()
+		_ = os.Remove(name)
+		return "", fmt.Errorf("tmux runtime: write launch environment: %w", err)
+	}
+	if err := f.Close(); err != nil {
+		_ = os.Remove(name)
+		return "", fmt.Errorf("tmux runtime: write launch environment: %w", err)
+	}
+	return name, nil
+}
+
+// sweepLaunchEnv removes launch environment files no shell read in time. It
+// stops when ctx ends; the next launch sweeps what is left.
+func sweepLaunchEnv(ctx context.Context, dir string) {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return
+	}
+	for _, entry := range entries {
+		if ctx.Err() != nil {
+			return
+		}
+		if !entry.Type().IsRegular() || !strings.HasPrefix(entry.Name(), "launch-") || !strings.HasSuffix(entry.Name(), ".env") {
+			continue
+		}
+		if info, err := entry.Info(); err == nil && time.Since(info.ModTime()) > launchEnvMaxAge {
+			_ = os.Remove(filepath.Join(dir, entry.Name()))
+		}
+	}
 }
 
 func sameDirectory(a, b string) bool {

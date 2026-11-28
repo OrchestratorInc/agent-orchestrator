@@ -100,7 +100,7 @@ export default function OnboardingScreen() {
 				variant="ghost"
 				loading={signingIn}
 				onPress={signIn}
-				style={styles.signIn}
+				style={[styles.cta, styles.signIn]}
 			/>
 		</View>
 	);
@@ -184,7 +184,7 @@ const makeStyles = (t: Theme) =>
 		lede: { ...type.callout, color: t.textSecondary, textAlign: "center", marginTop: space.sm, maxWidth: 300 },
 
 		cta: { alignSelf: "center", width: "100%", maxWidth: 400 },
-		signIn: { alignSelf: "center", marginTop: space.sm },
+		signIn: { marginTop: space.sm },
 	});
 
 export { RouteErrorBoundary as ErrorBoundary } from "../lib/RouteErrorBoundary";

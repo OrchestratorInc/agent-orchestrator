@@ -5,6 +5,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { STANDALONE_WORKSPACE_ID, type WorkspaceSession, type WorkspaceSummary } from "../types/workspace";
 import { settingsQueryKey } from "./useSettings";
 import { useUiStore } from "../stores/ui-store";
+import { aoBridge } from "../lib/bridge";
 
 const { createCloudClientMock, deleteSessionMock, postMock, remotePostMock } = vi.hoisted(() => ({
 	createCloudClientMock: vi.fn(),
@@ -105,6 +106,56 @@ describe("useTerminateSession", () => {
 		} else {
 			expect(after).toBe(before);
 		}
+	});
+
+	describe("published links of deleted artifacts", () => {
+		const published = {
+			...localSession,
+			outputType: "artifact",
+			artifactFiles: [{ id: "art-1", kind: "markdown", name: "a.md", path: "a.md", size: 1, updatedAt: "2026-09-01T00:00:00Z", shareUrl: "https://l/a" }],
+		} satisfies WorkspaceSession;
+		const archive = async (request: WorkspaceSession & { deleteArtifacts?: boolean }) => {
+			const queryClient = newQueryClient();
+			queryClient.setQueryData(settingsQueryKey, { cloudControlPlaneUrl: "https://cp.example.com" });
+			const { result } = renderHook(() => useTerminateSession(), { wrapper: wrapper(queryClient) });
+			await act(async () => { await result.current.mutateAsync(request); });
+		};
+		const order: string[] = [];
+		beforeEach(() => {
+			order.length = 0;
+			useUiStore.setState({ globalToasts: [] });
+			vi.spyOn(aoBridge.cloudShare, "inspect").mockImplementation(async () => {
+				order.push("inspect");
+				return { name: "a.md", unsupported: false, fingerprint: "f", shareId: "share-1" };
+			});
+			vi.spyOn(aoBridge.cloudShare, "unpublish").mockImplementation(async () => { order.push("unpublish"); });
+			vi.mocked(aoBridge.cloudShare.inspect).mockClear();
+			vi.mocked(aoBridge.cloudShare.unpublish).mockClear();
+			postMock.mockImplementation(async () => {
+				order.push("kill");
+				return { data: { ok: true, artifactsDeleted: true }, error: undefined };
+			});
+		});
+
+		it("looks the links up, archives, then unpublishes them once the files are deleted", async () => {
+			await archive({ ...published, deleteArtifacts: true });
+			expect(order).toEqual(["inspect", "kill", "unpublish"]);
+			expect(aoBridge.cloudShare.inspect).toHaveBeenCalledWith({ sessionId: "session-1", path: "a.md", projectId: "project-1", artifactId: "art-1", baseUrl: "https://cp.example.com" }, { linkOnly: true });
+			expect(aoBridge.cloudShare.unpublish).toHaveBeenCalledWith("https://cp.example.com", "share-1");
+		});
+
+		it("keeps the links of files the archive kept", async () => {
+			await archive(published);
+			postMock.mockResolvedValue({ data: { ok: true, artifactsDeleted: false }, error: undefined });
+			await archive({ ...published, deleteArtifacts: true });
+			expect(aoBridge.cloudShare.unpublish).not.toHaveBeenCalled();
+		});
+
+		it("warns that a link still works when it could not be unpublished", async () => {
+			vi.mocked(aoBridge.cloudShare.unpublish).mockRejectedValue(new Error("signed out"));
+			await archive({ ...published, deleteArtifacts: true });
+			expect(useUiStore.getState().globalToasts.map((toast) => toast.title)).toContain("1 public link still works");
+		});
 	});
 
 	it("routes local sessions to the local daemon", async () => {
@@ -445,6 +496,18 @@ describe("durable workspace cleanup feedback", () => {
 
 		await waitFor(() => expect(toasts()).toHaveLength(1));
 		expect(toasts()[0].action).toBeUndefined();
+	});
+
+	it("says nothing when a standalone agent's folder is kept, its only copy of the work", async () => {
+		const queryClient = newQueryClient();
+		const { result } = renderHook(() => useTerminateSession(), { wrapper: wrapper(queryClient) });
+		await act(async () => { await result.current.mutateAsync({ ...session, workspaceId: STANDALONE_WORKSPACE_ID }); });
+		setCleanup(queryClient, "pending");
+
+		await act(async () => { setCleanup(queryClient, "preserved_dirty"); });
+		await act(async () => { setCleanup(queryClient, "preserved_dirty"); });
+
+		expect(toasts()).toEqual([]);
 	});
 
 	it("raises nothing for a cleanup a sweep recorded", async () => {

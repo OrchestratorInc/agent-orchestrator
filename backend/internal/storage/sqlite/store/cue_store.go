@@ -23,7 +23,7 @@ func (s *Store) InsertCue(ctx context.Context, cue domain.Cue) error {
 		return err
 	}
 	defer func() { _ = tx.Rollback() }()
-	q := s.qw.WithTx(tx)
+	q := s.txQueries(tx)
 	err = q.InsertCue(ctx, gen.InsertCueParams{
 		ID:        cue.ID,
 		ProjectID: cue.ProjectID,
@@ -83,7 +83,7 @@ func (s *Store) UpdateCue(ctx context.Context, cue domain.Cue) (domain.Cue, bool
 		return domain.Cue{}, false, err
 	}
 	defer func() { _ = tx.Rollback() }()
-	q := s.qw.WithTx(tx)
+	q := s.txQueries(tx)
 	_, err = q.SelectCueByID(ctx, cue.ID)
 	if errors.Is(err, sql.ErrNoRows) {
 		return domain.Cue{}, false, nil

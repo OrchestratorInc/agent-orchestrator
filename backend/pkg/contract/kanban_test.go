@@ -482,7 +482,7 @@ func TestDeriveKanbanPresentationAOChangesRequestedNeedsActiveWorker(t *testing.
 		{name: "idle worker after delivered feedback requests changes", activity: contract.ActivityIdle, autoFix: true, want: contract.DisplayChangesRequested},
 		{name: "idle worker without auto fix requests changes", activity: contract.ActivityIdle, want: contract.DisplayChangesRequested},
 		{name: "active worker with auto fix addresses comments", activity: contract.ActivityActive, autoFix: true, want: contract.DisplayAddressingComments},
-		{name: "active worker without auto fix is working", activity: contract.ActivityActive, want: contract.DisplayWorking},
+		{name: "active worker without auto fix addresses comments", activity: contract.ActivityActive, want: contract.DisplayAddressingComments},
 		{name: "a running reviewer outranks the idle changes request", activity: contract.ActivityIdle, autoFix: true, running: true, want: contract.DisplayReviewing},
 		{name: "failing CI keeps its precedence", activity: contract.ActivityIdle, autoFix: true, ci: contract.CIFailing, want: contract.DisplayCIFailing},
 		{name: "blocked worker still needs attention", activity: contract.ActivityBlocked, autoFix: true, want: contract.DisplayBlocked},
@@ -826,6 +826,25 @@ func TestDeriveKanbanPresentationSinglePR(t *testing.T) {
 			want:       contract.DisplayChangesRequested,
 		},
 		{
+			name:    "external changes request stays in review despite auto review",
+			session: contract.KanbanSessionFacts{AutoReview: true},
+			pr: contract.KanbanPRFacts{
+				URL: "pr/1", Review: contract.ReviewChangesRequest,
+				ExternalReview: contract.KanbanExternalReviewFacts{ChangesRequested: true},
+			},
+			wantColumn: contract.KanbanNeedsReview,
+			want:       contract.DisplayChangesRequested,
+		},
+		{
+			name: "external changes request stays in review despite mergeable snapshot",
+			pr: contract.KanbanPRFacts{
+				URL: "pr/1", Review: contract.ReviewChangesRequest, Mergeability: contract.MergeMergeable,
+				ExternalReview: contract.KanbanExternalReviewFacts{ChangesRequested: true},
+			},
+			wantColumn: contract.KanbanNeedsReview,
+			want:       contract.DisplayChangesRequested,
+		},
+		{
 			name: "an external changes request with auto-inject on and worker active stays in review while being addressed",
 			session: contract.KanbanSessionFacts{
 				SessionFacts:     contract.SessionFacts{Activity: contract.ActivityActive},
@@ -1061,4 +1080,261 @@ func TestDeriveKanbanPresentationSpeaksForTheChosenPR(t *testing.T) {
 			t.Fatalf("presentation = %+v, want a pr-driven placement", got)
 		}
 	})
+}
+
+// A session is only as far along as its least ready live PR, and a PR stacked
+// on another open PR is mergeable only into that PR's branch, never ready.
+func TestDeriveKanbanPresentationLeastReadyPRSpeaks(t *testing.T) {
+	t.Parallel()
+	older := time.Unix(100, 0)
+	newer := time.Unix(200, 0)
+	present := func(prs ...contract.KanbanPRFacts) contract.KanbanPresentation {
+		return contract.DeriveKanbanPresentation(contract.KanbanSessionFacts{}, prs, time.Unix(3600, 0), testGrace)
+	}
+	awaiting := func(url string, at time.Time) contract.KanbanPRFacts {
+		return contract.KanbanPRFacts{URL: url, Review: contract.ReviewRequired, Mergeability: contract.MergeBlocked, CI: contract.CIPassing, UpdatedAt: at}
+	}
+	mergeable := func(url string, at time.Time) contract.KanbanPRFacts {
+		return contract.KanbanPRFacts{URL: url, Mergeability: contract.MergeMergeable, CI: contract.CIPassing, UpdatedAt: at}
+	}
+	stacked := func(pr contract.KanbanPRFacts, parent int) contract.KanbanPRFacts {
+		pr.StackParent = parent
+		return pr
+	}
+	approved := func(pr contract.KanbanPRFacts) contract.KanbanPRFacts {
+		pr.Review = contract.ReviewApproved
+		pr.ExternalReview.Approved = true
+		return pr
+	}
+	numbered := func(pr contract.KanbanPRFacts, number int) contract.KanbanPRFacts {
+		pr.Number = number
+		return pr
+	}
+	inRepo := func(pr contract.KanbanPRFacts, repo string) contract.KanbanPRFacts {
+		pr.Host, pr.Repo = "github.com", repo
+		return pr
+	}
+
+	for _, tt := range []struct {
+		name string
+		prs  []contract.KanbanPRFacts
+		want contract.KanbanPresentation
+	}{
+		{
+			name: "two prs awaiting review and one clean pr stacked on another session's pr",
+			prs: []contract.KanbanPRFacts{
+				awaiting("pr/8484", older),
+				awaiting("pr/8485", older),
+				stacked(mergeable("pr/8487", newer), 8277),
+			},
+			want: contract.KanbanPresentation{Column: contract.KanbanNeedsReview, DisplayStatus: contract.DisplayAwaitingReview},
+		},
+		{
+			name: "a mergeable pr does not speak for one awaiting review",
+			prs:  []contract.KanbanPRFacts{mergeable("pr/ready", newer), awaiting("pr/review", older)},
+			want: contract.KanbanPresentation{Column: contract.KanbanNeedsReview, DisplayStatus: contract.DisplayAwaitingReview},
+		},
+		{
+			name: "a draft holds back a mergeable pr",
+			prs:  []contract.KanbanPRFacts{mergeable("pr/ready", newer), {URL: "pr/draft", Draft: true, UpdatedAt: older}},
+			want: contract.KanbanPresentation{Column: contract.KanbanValidating, DisplayStatus: contract.DisplayDraft},
+		},
+		{
+			name: "every live pr mergeable is ready",
+			prs:  []contract.KanbanPRFacts{mergeable("pr/a", newer), mergeable("pr/b", older)},
+			want: contract.KanbanPresentation{Column: contract.KanbanReady, DisplayStatus: contract.DisplayMergeable},
+		},
+		{
+			name: "a lone mergeable pr stacked on an open pr waits on it",
+			prs:  []contract.KanbanPRFacts{stacked(mergeable("pr/child", newer), 8530)},
+			want: contract.KanbanPresentation{Column: contract.KanbanNeedsReview, DisplayStatus: contract.DisplayWaitingOnBasePR},
+		},
+		{
+			name: "an approved pr stacked on an open pr waits on it",
+			prs:  []contract.KanbanPRFacts{stacked(approved(mergeable("pr/child", newer)), 8530)},
+			want: contract.KanbanPresentation{Column: contract.KanbanNeedsReview, DisplayStatus: contract.DisplayWaitingOnBasePR},
+		},
+		{
+			name: "a stacked pr with its own failing ci reports the failure",
+			prs:  []contract.KanbanPRFacts{stacked(contract.KanbanPRFacts{URL: "pr/child", CI: contract.CIFailing, UpdatedAt: newer}, 8530)},
+			want: contract.KanbanPresentation{Column: contract.KanbanNeedsReview, DisplayStatus: contract.DisplayCIFailing},
+		},
+		{
+			name: "a pr whose stack parent landed is ready",
+			prs:  []contract.KanbanPRFacts{mergeable("pr/child", newer)},
+			want: contract.KanbanPresentation{Column: contract.KanbanReady, DisplayStatus: contract.DisplayMergeable},
+		},
+		{
+			name: "within review a pr that needs fixing speaks before a newer one awaiting review",
+			prs:  []contract.KanbanPRFacts{awaiting("pr/review", newer), {URL: "pr/ci", CI: contract.CIFailing, UpdatedAt: older}},
+			want: contract.KanbanPresentation{Column: contract.KanbanNeedsReview, DisplayStatus: contract.DisplayCIFailing},
+		},
+		{
+			name: "within review a pr waiting on its parent speaks after one awaiting review",
+			prs:  []contract.KanbanPRFacts{stacked(mergeable("pr/child", newer), 8277), awaiting("pr/review", older)},
+			want: contract.KanbanPresentation{Column: contract.KanbanNeedsReview, DisplayStatus: contract.DisplayAwaitingReview},
+		},
+		{
+			name: "a stack the session owns is ready when its parent is mergeable",
+			prs: []contract.KanbanPRFacts{
+				numbered(mergeable("pr/a", older), 10),
+				numbered(stacked(mergeable("pr/b", newer), 10), 11),
+			},
+			want: contract.KanbanPresentation{Column: contract.KanbanReady, DisplayStatus: contract.DisplayMergeable},
+		},
+		{
+			name: "a stack the session owns follows its parent into review",
+			prs: []contract.KanbanPRFacts{
+				numbered(awaiting("pr/a", older), 10),
+				numbered(stacked(mergeable("pr/b", newer), 10), 11),
+			},
+			want: contract.KanbanPresentation{Column: contract.KanbanNeedsReview, DisplayStatus: contract.DisplayAwaitingReview},
+		},
+		{
+			name: "a child in a stack the session owns still reports its own failing ci",
+			prs: []contract.KanbanPRFacts{
+				numbered(mergeable("pr/a", newer), 10),
+				numbered(stacked(contract.KanbanPRFacts{URL: "pr/b", CI: contract.CIFailing, UpdatedAt: older}, 10), 11),
+			},
+			want: contract.KanbanPresentation{Column: contract.KanbanNeedsReview, DisplayStatus: contract.DisplayCIFailing},
+		},
+		{
+			name: "a parent number the session owns in another repository is not the child's parent",
+			prs: []contract.KanbanPRFacts{
+				inRepo(numbered(mergeable("repo-a/12", older), 12), "acme/repo-a"),
+				inRepo(numbered(stacked(mergeable("repo-b/13", newer), 12), 13), "acme/repo-b"),
+			},
+			want: contract.KanbanPresentation{Column: contract.KanbanNeedsReview, DisplayStatus: contract.DisplayWaitingOnBasePR},
+		},
+		{
+			name: "a parent the session owns is matched regardless of repository name case",
+			prs: []contract.KanbanPRFacts{
+				inRepo(numbered(mergeable("pr/a", older), 10), "Acme/App"),
+				inRepo(numbered(stacked(mergeable("pr/b", newer), 10), 11), "acme/app"),
+			},
+			want: contract.KanbanPresentation{Column: contract.KanbanReady, DisplayStatus: contract.DisplayMergeable},
+		},
+		{
+			name: "a merged pr with a stack parent recorded is still merged",
+			prs:  []contract.KanbanPRFacts{stacked(contract.KanbanPRFacts{URL: "pr/old", Merged: true, UpdatedAt: newer}, 8277)},
+			want: contract.KanbanPresentation{Column: contract.KanbanReady, DisplayStatus: contract.DisplayMerged},
+		},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			if got := present(tt.prs...); got != tt.want {
+				t.Fatalf("presentation = %+v, want %+v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestDeriveKanbanPresentationResumedAfterPRsSettled(t *testing.T) {
+	t.Parallel()
+	merged := time.Unix(1000, 0)
+	before, after := merged.Add(-time.Minute), merged.Add(time.Minute)
+	prompted := func(activity contract.ActivityState, at time.Time) contract.KanbanSessionFacts {
+		session := sessionAt(activity)
+		session.HumanPromptAt = at
+		return session
+	}
+	done := contract.KanbanPresentation{Column: contract.KanbanReady, DisplayStatus: contract.DisplayMerged}
+	building := func(status contract.DisplayStatus) contract.KanbanPresentation {
+		return contract.KanbanPresentation{Column: contract.KanbanBuilding, DisplayStatus: status}
+	}
+	tests := []struct {
+		name    string
+		session contract.KanbanSessionFacts
+		prs     []contract.KanbanPRFacts
+		want    contract.KanbanPresentation
+	}{
+		{
+			name:    "merged and untouched stays done",
+			session: prompted(contract.ActivityIdle, before),
+			prs:     []contract.KanbanPRFacts{{URL: "pr/1", Merged: true, SettledAt: merged}},
+			want:    done,
+		},
+		{
+			name:    "never prompted stays done",
+			session: sessionAt(contract.ActivityIdle),
+			prs:     []contract.KanbanPRFacts{{URL: "pr/1", Merged: true, SettledAt: merged}},
+			want:    done,
+		},
+		{
+			name:    "a prompt after the merge is building again once idle",
+			session: prompted(contract.ActivityIdle, after),
+			prs:     []contract.KanbanPRFacts{{URL: "pr/1", Merged: true, SettledAt: merged}},
+			want:    building(contract.DisplayIdle),
+		},
+		{
+			name:    "a resumed worker reads as working",
+			session: prompted(contract.ActivityActive, after),
+			prs:     []contract.KanbanPRFacts{{URL: "pr/1", Merged: true, SettledAt: merged}},
+			want:    building(contract.DisplayWorking),
+		},
+		{
+			name:    "a resumed worker waiting on input needs input",
+			session: prompted(contract.ActivityWaitingInput, after),
+			prs:     []contract.KanbanPRFacts{{URL: "pr/1", Merged: true, SettledAt: merged}},
+			want:    building(contract.DisplayNeedsInput),
+		},
+		{
+			name:    "a closed pr resumes the same way",
+			session: prompted(contract.ActivityIdle, after),
+			prs:     []contract.KanbanPRFacts{{URL: "pr/1", Closed: true, SettledAt: merged}},
+			want:    building(contract.DisplayIdle),
+		},
+		{
+			name:    "an unknown settle time keeps the session done",
+			session: prompted(contract.ActivityIdle, after),
+			prs:     []contract.KanbanPRFacts{{URL: "pr/1", Merged: true}},
+			want:    done,
+		},
+		{
+			name:    "a pr that merged after the prompt keeps the session done",
+			session: prompted(contract.ActivityIdle, after),
+			prs: []contract.KanbanPRFacts{
+				{URL: "pr/1", Merged: true, SettledAt: merged},
+				{URL: "pr/2", Merged: true, SettledAt: after.Add(time.Minute)},
+			},
+			want: done,
+		},
+		{
+			name:    "a prompt after every pr settled resumes",
+			session: prompted(contract.ActivityIdle, after.Add(2*time.Minute)),
+			prs: []contract.KanbanPRFacts{
+				{URL: "pr/1", Merged: true, SettledAt: merged},
+				{URL: "pr/2", Closed: true, SettledAt: after.Add(time.Minute)},
+			},
+			want: building(contract.DisplayIdle),
+		},
+		{
+			name: "earlier artifact output does not hold a resumed session in validating",
+			session: func() contract.KanbanSessionFacts {
+				session := prompted(contract.ActivityIdle, after)
+				session.HasArtifactOutput = true
+				return session
+			}(),
+			prs:  []contract.KanbanPRFacts{{URL: "pr/1", Merged: true, SettledAt: merged}},
+			want: building(contract.DisplayIdle),
+		},
+		{
+			name:    "a live pr still speaks for a resumed session",
+			session: prompted(contract.ActivityIdle, after),
+			prs: []contract.KanbanPRFacts{
+				{URL: "pr/1", Merged: true, SettledAt: merged},
+				{URL: "pr/2", Mergeability: contract.MergeMergeable},
+			},
+			want: contract.KanbanPresentation{Column: contract.KanbanReady, DisplayStatus: contract.DisplayMergeable},
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			got := contract.DeriveKanbanPresentation(tc.session, tc.prs, time.Unix(3600, 0), testGrace)
+			if got != tc.want {
+				t.Fatalf("presentation = %+v, want %+v", got, tc.want)
+			}
+		})
+	}
 }

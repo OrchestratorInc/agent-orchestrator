@@ -322,6 +322,7 @@ func mrToSCMPRObservation(repo ports.SCMRepo, mr *restMR) ports.SCMPRObservation
 		Closed:                   closed,
 		SourceBranch:             mr.SourceBranch,
 		HeadRepo:                 repo.Repo,
+		HeadFromFork:             mr.SourceProjectID != 0 && mr.SourceProjectID != mr.TargetProjectID,
 		TargetBranch:             mr.TargetBranch,
 		HeadSHA:                  mr.SHA,
 		Title:                    mr.Title,
@@ -921,11 +922,12 @@ func (p *Provider) FetchReviewThreads(ctx context.Context, ref ports.SCMPRRef) (
 			}
 			if j < reviewCommentLimitPerThread {
 				comments = append(comments, ports.SCMReviewCommentObservation{
-					ID:     strconv.Itoa(n.ID),
-					Author: n.Author.Username,
-					Body:   n.Body,
-					URL:    n.noteURL(ref),
-					IsBot:  isBot,
+					ID:        strconv.Itoa(n.ID),
+					Author:    n.Author.Username,
+					Body:      n.Body,
+					URL:       n.noteURL(ref),
+					IsBot:     isBot,
+					CreatedAt: safeTime(n.CreatedAt),
 				})
 			}
 		}
@@ -1001,7 +1003,8 @@ type restNote struct {
 	Author     struct {
 		Username string `json:"username"`
 	} `json:"author"`
-	Position *restNotePosition `json:"position"`
+	Position  *restNotePosition `json:"position"`
+	CreatedAt *time.Time        `json:"created_at"`
 }
 
 type restNotePosition struct {

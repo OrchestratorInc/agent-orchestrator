@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { cloudAgentsOffered, cloudPlanBlock, cloudPlanView, cloudSessionBilled, formatPlanHours, freePlanSummary, planRefusalTitle } from "./plan";
+import { cloudAgentsOffered, cloudPlanBlock, cloudPlanView, cloudSessionBilled, formatPlanHours, freePlanSummary, PLAN_DESKTOP_NOTE, planBlocksCloudSetup, planRefusalTitle } from "./plan";
 import type { CloudBillingSummary } from "./types";
 
 const NOW = Date.parse("2026-11-11T10:00:00Z");
@@ -115,8 +115,14 @@ describe("what a plan pays for", () => {
 });
 
 describe("cloudPlanBlock", () => {
-	it("blocks a new cloud task on Free, with nothing to wait for", () => {
-		expect(cloudPlanBlock(free, NOW)).toEqual({ reason: "plan", message: "Your organization's Free plan doesn't include cloud agents." });
+	it("blocks a new cloud task on Free, with nothing to wait for, and says where plans are managed", () => {
+		expect(cloudPlanBlock(free, NOW)).toEqual({ reason: "plan", message: "Your organization's Free plan doesn't include cloud agents. Plans are managed in Orchestrator on your desktop." });
+	});
+
+	it("leaves nothing to set up on Free, while a spent window still lets the task be set up", () => {
+		expect(planBlocksCloudSetup(cloudPlanBlock(free, NOW))).toBe(true);
+		expect(planBlocksCloudSetup(cloudPlanBlock({ ...paid, usage: { ...usage, windowUsedMinutes: 300 } }, NOW))).toBe(false);
+		expect(planBlocksCloudSetup(undefined)).toBe(false);
 	});
 
 	it("blocks it while a usage window is spent, and says when it lifts", () => {
@@ -160,6 +166,11 @@ describe("cloudAgentsOffered", () => {
 });
 
 describe("plan copy", () => {
+	it("points to the desktop without a link, price, or upgrade", () => {
+		expect(PLAN_DESKTOP_NOTE).toBe("Plans are managed in Orchestrator on your desktop.");
+		expect(PLAN_DESKTOP_NOTE).not.toMatch(/https?:|\$|upgrade|buy|subscribe/i);
+	});
+
 	it("writes session-hours as the desktop does: one decimal, none when whole", () => {
 		expect(formatPlanHours(252)).toBe("4.2");
 		expect(formatPlanHours(360)).toBe("6");

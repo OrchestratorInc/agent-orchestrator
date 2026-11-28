@@ -24,6 +24,7 @@ import { useMemo, useRef } from "react";
 import { StyleSheet, View } from "react-native";
 import { formModifiers, FormTextField, sectionModifiers } from "../formFields";
 import { InlineBanner } from "../InlineBanner";
+import { PlacementPicker } from "../localProject/PlacementPicker";
 import { SettingsSection } from "../SettingsForm";
 import { HarnessImage } from "../spawn-composer-controls.ios";
 import { Spinner } from "../Spinner";
@@ -31,6 +32,7 @@ import { symbols, type IOSSymbol } from "../symbols";
 import { appFont } from "../swiftUIFont";
 import { useTheme, useThemeState } from "../ThemeProvider";
 import { rowIconWidth, space } from "../tokens";
+import { useGlassBarInset } from "../useHeaderOverlap";
 import { useNativeTextInput } from "../useNativeTextInput";
 import { cloudAgentLabel, isCloudAgent, type CloudAgent } from "./agents";
 import { PROJECT_NAME_MAX, repositoryDetail, repositorySearchHint, type ProjectSource } from "./newProject";
@@ -47,6 +49,7 @@ import {
 } from "./NewProjectForm.types";
 import type { CloudGitHubRepository } from "./types";
 import type { NewCloudProject } from "./useNewCloudProject";
+import { FormFocusContext, useTrackedField } from "../formFocus";
 
 export { NEW_PROJECT_TITLE, type NewProjectBarProps, type NewProjectFormProps } from "./NewProjectForm.types";
 
@@ -84,49 +87,54 @@ export function NewProjectBar({ canCreate, busy, onCancel, onCreate }: NewProjec
 	), [busy, canCreate]);
 }
 
-export function NewProjectForm({ project, onConnectAgent }: NewProjectFormProps) {
+export function NewProjectForm({ project, onConnectAgent, placement, focus }: NewProjectFormProps) {
 	const t = useTheme();
 	const { scheme } = useThemeState();
 	const github = project.source === "github";
+	// The sheet's clear bar covers the page's top; the Form insets itself, the banner over it does not.
+	const barInset = useGlassBarInset();
 	return (
 		<View style={[styles.screen, { backgroundColor: t.bgBase }]}>
 			{/* Over the form rather than in it, so it shows however far the form has scrolled. */}
-			{project.error ? <InlineBanner tone="danger" icon="error" title={project.error} accessibilityRole="alert" onDismiss={project.dismissError} /> : null}
-			<Host style={styles.form} colorScheme={scheme}>
-				{/* Every row's text in the app's family, scaled with Dynamic Type. */}
-				<Form modifiers={[...formModifiers(t), appFont("body")]}>
-					{project.githubUnavailable ? null : (
-						// The segmented control on its own, on the page rather than in a
-						// card: no row fill and no row insets, so it spans the cards' width.
-						<SettingsSection>
-							<Picker
-								label="Source"
-								selection={project.source}
-								onSelectionChange={(next: string) => {
-									const option = SOURCE_OPTIONS.find((item) => item.key === next);
-									if (option) project.chooseSource(option.key);
-								}}
-								modifiers={[pickerStyle("segmented"), listRowBackground("transparent"), listRowInsets({ top: 0, leading: 0, bottom: 0, trailing: 0 }), accessibilityIdentifier("new-project-source")]}
-							>
-								{SOURCE_OPTIONS.map((option) => <Text key={option.key} modifiers={[tag(option.key)]}>{option.label}</Text>)}
-							</Picker>
+			{project.error ? <View style={{ paddingTop: barInset }}><InlineBanner tone="danger" icon="error" title={project.error} accessibilityRole="alert" onDismiss={project.dismissError} /></View> : null}
+			<FormFocusContext value={focus ?? null}>
+				<Host style={styles.form} colorScheme={scheme}>
+					{/* Every row's text in the app's family, scaled with Dynamic Type. */}
+					<Form modifiers={[...formModifiers(t), appFont("body")]}>
+						{placement ? <PlacementPicker placement={placement} /> : null}
+						{project.githubUnavailable ? null : (
+							// The segmented control on its own, on the page rather than in a
+							// card: no row fill and no row insets, so it spans the cards' width.
+							<SettingsSection>
+								<Picker
+									label="Source"
+									selection={project.source}
+									onSelectionChange={(next: string) => {
+										const option = SOURCE_OPTIONS.find((item) => item.key === next);
+										if (option) project.chooseSource(option.key);
+									}}
+									modifiers={[pickerStyle("segmented"), listRowBackground("transparent"), listRowInsets({ top: 0, leading: 0, bottom: 0, trailing: 0 }), accessibilityIdentifier("new-project-source")]}
+								>
+									{SOURCE_OPTIONS.map((option) => <Text key={option.key} modifiers={[tag(option.key)]}>{option.label}</Text>)}
+								</Picker>
+							</SettingsSection>
+						)}
+						{github ? <RepositorySection project={project} /> : null}
+						<SettingsSection footer={nameNote(project.source)} modifiers={sectionModifiers(t)}>
+							<FormTextField
+								label="Name"
+								value={project.name}
+								onChangeText={project.setName}
+								placeholder={namePlaceholder(project.source, project.repo)}
+								maxLength={PROJECT_NAME_MAX}
+								returnKeyType="done"
+								testID="new-project-name"
+							/>
 						</SettingsSection>
-					)}
-					{github ? <RepositorySection project={project} /> : null}
-					<SettingsSection footer={nameNote(project.source)} modifiers={sectionModifiers(t)}>
-						<FormTextField
-							label="Name"
-							value={project.name}
-							onChangeText={project.setName}
-							placeholder={namePlaceholder(project.source, project.repo)}
-							maxLength={PROJECT_NAME_MAX}
-							returnKeyType="done"
-							testID="new-project-name"
-						/>
-					</SettingsSection>
-					<AgentsSection project={project} onConnectAgent={onConnectAgent} />
-				</Form>
-			</Host>
+						<AgentsSection project={project} onConnectAgent={onConnectAgent} />
+					</Form>
+				</Host>
+			</FormFocusContext>
 		</View>
 	);
 }
@@ -202,6 +210,7 @@ function RepositorySection({ project }: { project: NewCloudProject }) {
  * Form row hands every tap in it to the button.
  */
 function RepositorySearchRow({ project }: { project: NewCloudProject }) {
+	const tracked = useTrackedField("new-project-repo-search");
 	const t = useTheme();
 	const text = useNativeState(project.query);
 	const change = useNativeTextInput<string>(project.query, text, project.setQuery);
@@ -214,6 +223,8 @@ function RepositorySearchRow({ project }: { project: NewCloudProject }) {
 				placeholder="Search repositories"
 				autoFocus={project.reselecting}
 				onTextChange={(next) => change(next)}
+				ref={tracked?.ref}
+				onFocusChange={tracked?.onFocusChange}
 				testID="new-project-repo-search"
 				modifiers={[
 					textInputAutocapitalization("never"),
@@ -222,6 +233,7 @@ function RepositorySearchRow({ project }: { project: NewCloudProject }) {
 					// The caret and selection take the tint; the app's other fields use this colour for both.
 					tint(t.highlight),
 					accessibilityLabel("Search repositories"),
+					disabledModifier(tracked?.locked ?? false),
 				]}
 			/>
 			{project.searching ? (

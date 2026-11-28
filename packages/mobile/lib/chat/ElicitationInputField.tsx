@@ -1,10 +1,12 @@
 import { Host, Switch } from "@expo/ui";
+import { useContext, useRef } from "react";
 import { StyleSheet, Text, View } from "react-native";
 import type { Theme } from "../theme";
 import { useThemedStyles, useThemeState } from "../ThemeProvider";
 import { space, type } from "../tokens";
 import { ElicitationChoiceList, ElicitationTextField } from "./elicitation-native-controls";
 import { humanizeInputName, inputOptions, toggleInputValue } from "./elicitationModel";
+import { RevealFocusedField } from "./fieldReveal";
 import type { InputProperty } from "./types";
 
 /**
@@ -14,6 +16,9 @@ import type { InputProperty } from "./types";
 export function ElicitationInputField({ name, property, required, value, onChange }: { name: string; property: InputProperty; required: boolean; value: unknown; onChange(value: unknown): void }) {
 	const styles = useThemedStyles(makeStyles);
 	const { scheme } = useThemeState();
+	const reveal = useContext(RevealFocusedField);
+	const textField = useRef<View>(null);
+	const textInput = useRef<View>(null);
 	const label = `${property.title || humanizeInputName(name)}${required ? " *" : ""}`;
 	if (property.type === "boolean") {
 		const checked = Boolean(value);
@@ -47,10 +52,14 @@ export function ElicitationInputField({ name, property, required, value, onChang
 			<ElicitationChoiceList choices={options} multi={multi} selected={(choice) => multi ? Array.isArray(value) && value.includes(choice) : value === choice} onChange={(choice) => onChange(multi ? toggleInputValue(Array.isArray(value) ? value : [], choice) : choice)} />
 		</View>;
 	}
-	return <View style={styles.field}>
+	// The label and hint come into view with the field they describe, when they
+	// fit; a hint too long for the space above the keyboard gives way to the input.
+	return <View ref={textField} collapsable={false} style={styles.field}>
 		<Text style={styles.inputLabel}>{label}</Text>
 		{property.description ? <Text style={styles.inputHint}>{property.description}</Text> : null}
-		<ElicitationTextField label={label} value={value} numeric={property.type === "number" || property.type === "integer"} maxLength={property.maxLength} onChange={onChange} />
+		<View ref={textInput} collapsable={false}>
+			<ElicitationTextField label={label} value={value} numeric={property.type === "number" || property.type === "integer"} maxLength={property.maxLength} onChange={onChange} onFocus={reveal ? () => reveal(textField.current, textInput.current) : undefined} />
+		</View>
 	</View>;
 }
 

@@ -1,6 +1,7 @@
 import type { RendererTelemetryCaptureInput } from "./telemetry-policy";
 
-type Handler = (error: unknown, source: "window-error" | "unhandledrejection") => void;
+type Source = "window-error" | "unhandledrejection" | "script-load";
+type Handler = (error: unknown, source: Source, event?: ErrorEvent) => void;
 type State = { capture?: Handler; early: WeakSet<object> };
 type ErrorWindow = Window & {
 	__aoRendererErrors?: State;
@@ -18,15 +19,25 @@ export function installRendererErrorHandlers(capture?: Handler): void {
 	const state: State = { capture, early: new WeakSet() };
 	root.__aoRendererErrors = state;
 	const budgets = new Map<string, { minute: number; day: number; minuteCount: number; dayCount: number }>();
-	const report = (error: unknown, source: "window-error" | "unhandledrejection", event?: ErrorEvent) => {
+	const report = (error: unknown, source: Source, event?: ErrorEvent) => {
 		try {
-			if (state.capture) { state.capture(error, source); return; }
+			if (state.capture) { state.capture(error, source, event); return; }
 			if (!root.ao?.telemetry) return;
 			const object = error !== null && typeof error === "object" ? error : undefined;
 			if (object && state.early.has(object)) return;
-			if ((error instanceof Error || error instanceof DOMException) && error.name === "AbortError") return;
 			const types = new Set(["Error", "EvalError", "RangeError", "ReferenceError", "SyntaxError", "TypeError", "URIError", "AggregateError", "DOMException"]);
-			const name = error instanceof Error && types.has(error.name) ? error.name : "Error";
+			let message = typeof error === "string" ? error : event?.message ?? "";
+			let type = /^(?:Uncaught )?(\w+): /.exec(message)?.[1];
+			let stack = "";
+			try {
+				if (error instanceof Error || error instanceof DOMException) {
+					type = error.name;
+					if (type === "AbortError") return;
+					if (typeof error.message === "string") message = error.message;
+					if (typeof error.stack === "string") stack = error.stack;
+				}
+			} catch { /* A proxy or throwing getter can still be reported. */ }
+			const name = type && types.has(type) ? type : "Error";
 			const location = event?.filename?.replace(/^app:\/\/renderer\//, "");
 			const filename = location && /^assets\/[A-Za-z0-9_][A-Za-z0-9_.-]{0,80}-[A-Za-z0-9_-]{8,16}\.(?:js|mjs)$/.test(location) ? location : undefined;
 			const line = event?.lineno, column = event?.colno;
@@ -41,15 +52,66 @@ export function installRendererErrorHandlers(capture?: Handler): void {
 			if (budget.minuteCount >= 5 || budget.dayCount >= 200) return;
 			budget.minuteCount++; budget.dayCount++; budgets.set(key, budget);
 			if (object) state.early.add(object);
+			// This runs before the renderer module can parse stacks. Extract only
+			// packaged asset coordinates and look up their injected debug IDs.
+			const ids = (root as Window & { _sentryDebugIds?: Record<string, string> })._sentryDebugIds;
+			const assets = new Map<string, string>();
+			for (const [stack, id] of Object.entries(ids ?? {})) {
+				const asset = /app:\/\/renderer\/(assets\/[^\s:)?#]+)/.exec(stack)?.[1];
+				if (asset) assets.set(asset, id);
+			}
+			const frames = [];
+			for (const frame of stack.split("\n")) {
+				const match = /^\s*at\s+(?:.*?\()?app:\/\/renderer\/(assets\/[A-Za-z0-9_][A-Za-z0-9_.-]{0,80}-[A-Za-z0-9_-]{8,16}\.(?:js|mjs))(?:[?#][^\s)]*)?:(\d+):(\d+)\)?$/.exec(frame);
+				if (!match) continue;
+				const [, filename, line, column] = match;
+				const lineno = Number(line), colno = Number(column);
+				if (lineno < 1 || lineno > 1_000_000 || colno < 1 || colno > 10_000_000) continue;
+				const debugId = assets.get(filename);
+				frames.push({ function: "renderer_frame", filename, lineno, colno, ...(debugId ? { debug_id: debugId } : {}) });
+				if (frames.length === 8) break;
+			}
+			if (!frames.length && (filename || lineno)) {
+				const debugId = filename && assets.get(filename);
+				frames.push({ function: "renderer_frame", ...(filename ? { filename } : {}), ...(lineno ? { lineno } : {}), ...(colno ? { colno } : {}), ...(debugId ? { debug_id: debugId } : {}) });
+			}
+			// Keep this bounded walk inside the serialized installer.
+			let errorCode: string | undefined;
+			let fallbackCode: string | undefined;
+			let candidate = error;
+			for (let depth = 0; depth < 16 && candidate !== null && typeof candidate === "object"; depth++) {
+				try {
+					const value = candidate as { code?: unknown; cause?: unknown; telemetryCode?: unknown; expected?: unknown };
+					if (value.expected === true) return;
+					const { code, telemetryCode } = value;
+					if (!errorCode && typeof code === "string" && /^[A-Z][A-Z0-9_]{2,63}$/.test(code)) {
+						errorCode = code;
+					}
+					if (!fallbackCode && typeof telemetryCode === "string" && /^[A-Z][A-Z0-9_]{2,63}$/.test(telemetryCode)) fallbackCode = telemetryCode;
+					candidate = value.cause;
+				} catch {
+					break;
+				}
+			}
+			errorCode ??= fallbackCode;
 			void root.ao.telemetry.capture({
-				kind: "exception", message: "Renderer startup error", level: "error",
-				exception: { type: name, frames: filename || lineno ? [{ function: "renderer_frame", ...(filename ? { filename } : {}), ...(lineno ? { lineno } : {}), ...(colno ? { colno } : {}) }] : [] },
+				kind: "exception", message: message.length <= 4096 ? message : "", level: "error",
+				tags: { category: source === "unhandledrejection" ? "renderer_rejection" : "renderer_exception",
+					...(errorCode ? { error_code: errorCode } : {}),
+					code: source === "unhandledrejection" ? "UNHANDLED_REJECTION" : source === "script-load" ? "RENDERER_SCRIPT_LOAD_FAILED" : "WINDOW_ERROR" },
+				exception: { type: name, frames: frames.reverse() },
 			}).catch(() => undefined);
 		} catch { /* reporting must not become another uncaught error */ }
 	};
 	window.addEventListener("error", (event: Event) => {
-		if (event instanceof ErrorEvent) report(event.error ?? new Error("Renderer startup error"), "window-error", event);
-		else if (event.target instanceof HTMLScriptElement) report(new Error("Renderer script load failed"), "window-error");
+		// Chromium raises this, with no error object, when a ResizeObserver
+		// leaves resizes for the next frame. Nothing failed; the callbacks still run.
+		if (event instanceof ErrorEvent && event.error == null && /^ResizeObserver loop (?:completed with undelivered notifications|limit exceeded)\.?$/.test(event.message)) return;
+		// A cross-origin script's error, which the browser hides behind this text
+		// with no error object or location. Nothing in it can be acted on.
+		if (event instanceof ErrorEvent && event.error == null && !event.filename && /^Script error\.?$/.test(event.message)) return;
+		if (event instanceof ErrorEvent) report(event.error ?? event.message, "window-error", event);
+		else if (event.target instanceof HTMLScriptElement) report(new Error("Renderer script load failed"), "script-load");
 	}, true);
 	window.addEventListener("unhandledrejection", (event) => report(event.reason, "unhandledrejection"));
 }

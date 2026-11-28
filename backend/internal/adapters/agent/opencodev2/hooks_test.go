@@ -46,6 +46,9 @@ func TestGetAgentHooksInstallsV2AndRemovesOnlyManagedV1(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(workspace, ".opencode", "skills", "using-ao", "SKILL.md")); err != nil {
 		t.Fatalf("shared using-ao skill missing: %v", err)
 	}
+	if _, err := os.Stat(filepath.Join(workspace, ".opencode", "skills", "bug-triage", "SKILL.md")); err != nil {
+		t.Fatalf("bug-triage skill missing: %v", err)
+	}
 
 	if err := New().UninstallHooks(ctx, workspace); err != nil {
 		t.Fatalf("uninstall v2: %v", err)
@@ -58,6 +61,9 @@ func TestGetAgentHooksInstallsV2AndRemovesOnlyManagedV1(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(workspace, ".opencode", "skills", "using-ao")); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("managed skill survived uninstall: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(workspace, ".opencode", "skills", "bug-triage")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("bug-triage skill survived uninstall: %v", err)
 	}
 }
 

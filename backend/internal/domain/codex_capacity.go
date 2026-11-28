@@ -41,6 +41,9 @@ type CodexCapacityBucket struct {
 	Primary     *CodexCapacityWindow      `json:"primary,omitempty"`
 	Secondary   *CodexCapacityWindow      `json:"secondary,omitempty"`
 	Reached     CodexCapacityReachedState `json:"reached" enum:"not_reached,reached,unknown"`
+	// InvalidWindow is set when the provider reported a window that was
+	// dropped for a missing or out-of-range usage percent.
+	InvalidWindow bool `json:"-"`
 }
 
 // CodexResetCreditsSummary is the safe subset of provider-reported usage-limit

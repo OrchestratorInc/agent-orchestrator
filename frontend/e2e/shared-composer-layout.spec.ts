@@ -30,3 +30,17 @@ for (const width of [960, 390]) {
 	expect(await form.evaluate(el => Number.parseFloat(getComputedStyle(el).borderTopLeftRadius))).toBeGreaterThan(0);
  });
 }
+
+test("open queue keeps a solid fill over a translucent window @T0", async ({ page }) => {
+	await page.goto("/e2e/shared-composer/harness.html");
+	const queue = page.getByTestId("queued-message-dock");
+	await expect(queue).toHaveAttribute("data-expanded", "true");
+	await page.evaluate(() => document.documentElement.setAttribute("data-window-translucent", "true"));
+	// The open queue floats over the transcript's last rows; a see-through fill lets them show through it.
+	const alpha = await queue.evaluate(el => {
+		const color = getComputedStyle(el).backgroundColor;
+		const match = color.match(/\/\s*([\d.]+)(%?)\s*\)$/) ?? color.match(/^rgba\(.*,\s*([\d.]+)()\s*\)$/);
+		return match ? Number.parseFloat(match[1]) / (match[2] ? 100 : 1) : color === "transparent" ? 0 : 1;
+	});
+	expect(alpha).toBe(1);
+});

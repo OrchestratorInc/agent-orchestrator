@@ -34,6 +34,7 @@ function initialModeFor(path: string): FileViewMode {
  * markdown, a table, or a PDF page can be sent to the worker.
  */
 export function ArtifactFileView({
+	active = true,
 	artifactName,
 	feedbackRequestKey,
 	initialEditing = false,
@@ -42,6 +43,7 @@ export function ArtifactFileView({
 	path,
 	rawUrl,
 	readOnly = false,
+	noFeedback = false,
 	cloud = false,
 	artifactRoot,
 	onAccessRefused,
@@ -52,6 +54,8 @@ export function ArtifactFileView({
 	menuActions,
 	onEditingChange,
 }: {
+	/** False while the view is mounted but hidden, such as a closed inspector: a video pauses then. */
+	active?: boolean;
 	artifactName: string;
 	feedbackRequestKey?: number;
 	initialEditing?: boolean;
@@ -61,6 +65,8 @@ export function ArtifactFileView({
 	rawUrl?: string;
 	/** Hides the edit action, as for a cloud session's artifacts. */
 	readOnly?: boolean;
+	/** Offers no feedback to the worker, as for an archived session's files. */
+	noFeedback?: boolean;
 	/** Told whenever the file enters or leaves edit mode. */
 	onEditingChange?: (editing: boolean) => void;
 	/** Fetches rawUrl through the cloud control-plane bridge. */
@@ -81,8 +87,8 @@ export function ArtifactFileView({
 }) {
 	const annotation = useFileAnnotation(sessionId, { hostId, source: artifactName, sendMessage });
 	const source = useMemo(
-		() => ({ kind: "artifact" as const, rawUrl, readOnly, cloud, artifactRoot, onAccessRefused, save }),
-		[rawUrl, readOnly, cloud, artifactRoot, onAccessRefused, save],
+		() => ({ kind: "artifact" as const, rawUrl, readOnly, noFeedback, cloud, artifactRoot, onAccessRefused, save }),
+		[rawUrl, readOnly, noFeedback, cloud, artifactRoot, onAccessRefused, save],
 	);
 	const scrollRef = useRef<HTMLDivElement>(null);
 	// The Send bar sits under the scrolling content, so the zoom never scales or moves it.
@@ -129,7 +135,7 @@ export function ArtifactFileView({
 
 	useEffect(() => {
 		if (feedbackRequestKey === undefined) return;
-		annotation.begin({ path, side: "file", surface: "focused" });
+		if (!noFeedback) annotation.begin({ path, side: "file", surface: "focused" });
 		onFeedbackRequestConsumed?.(feedbackRequestKey);
 		// This effect is intentionally keyed to the external one-shot request,
 		// not the annotation model object, which changes when the composer opens.
@@ -139,13 +145,14 @@ export function ArtifactFileView({
 	return (
 		<div className={cn("flex h-full min-h-0 flex-col", !fileMediaKind(path) && !isSvgPath(path) ? "ao-document-surface" : "bg-background")}>
 			{/* The app shell is unselectable; an artifact's text is meant to be selected. */}
-			<div className="board-scrollbar min-h-0 flex-1 select-text overflow-x-hidden overflow-y-auto overscroll-contain" ref={scrollRef}>
+			{/* Its scroll is remembered for a return to the file; media files scroll in their own viewers (a PDF marks its own). */}
+			<div className="board-scrollbar min-h-0 flex-1 select-text overflow-x-hidden overflow-y-auto overscroll-contain" data-artifact-scroll={fileMediaKind(path) ? undefined : ""} data-artifact-selection-scope="" ref={scrollRef}>
 				<div className="h-full origin-top-left" ref={contentRef}>
-					<FileContentPane annotation={annotation} initialEditing={initialEditing && !readOnly} initialMode={initialEditing && !readOnly ? "file" : initialModeFor(path)} hostId={hostId} path={path} sessionId={sessionId} source={source} split={false} toolbarHost={toolbarHost} menuActions={menuActions} footerHost={footerHost} onEditingChange={editingChanged} />
+					<FileContentPane active={active} annotation={annotation} initialEditing={initialEditing && !readOnly} initialMode={initialEditing && !readOnly ? "file" : initialModeFor(path)} hostId={hostId} path={path} sessionId={sessionId} source={source} split={false} toolbarHost={toolbarHost} menuActions={menuActions} footerHost={footerHost} onEditingChange={editingChanged} />
 				</div>
 			</div>
 			<div className="shrink-0" ref={setFooterHost} />
-			<ArtifactSelectionAsk annotation={annotation} containerRef={scrollRef} path={path} />
+			{noFeedback ? null : <ArtifactSelectionAsk annotation={annotation} containerRef={scrollRef} path={path} />}
 		</div>
 	);
 }

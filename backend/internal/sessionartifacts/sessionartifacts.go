@@ -10,6 +10,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"sort"
 	"strings"
@@ -49,12 +50,91 @@ const MaxVisited = 10000
 // ignored are skipped, as are unreadable entries rather than failing the walk.
 // A cancelled ctx stops the walk and returns its error.
 func List(ctx context.Context, dir string) ([]domain.SessionArtifactFile, error) {
-	return list(ctx, dir, nil)
+	return list(ctx, dir, nil, MaxFiles)
 }
 
-// list is List that also records each file's identity in quick, when quick is
-// not nil.
-func list(ctx context.Context, dir string, quick map[string]domain.FileIdentity) ([]domain.SessionArtifactFile, error) {
+// errFound stops HasFiles' walk at the first file.
+var errFound = errors.New("found")
+
+// HasFiles reports whether a session's artifact directory holds any file List
+// would return. It stops at the first one, so a sweep over many sessions does
+// not walk whole trees. A missing directory has none.
+//
+// Unlike List it is strict, since a false answer lets the caller delete the
+// directory: an entry it cannot read or stat is an error, and a walk that
+// reaches MaxVisited without an answer counts as having files.
+func HasFiles(ctx context.Context, dir string) (bool, error) {
+	dir = strings.TrimSpace(dir)
+	if dir == "" {
+		return false, nil
+	}
+	root, err := filepath.Abs(dir)
+	if err != nil {
+		return false, err
+	}
+	visited := 0
+	err = filepath.WalkDir(root, func(path string, d fs.DirEntry, walkErr error) error {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		if walkErr != nil {
+			return walkErr
+		}
+		visited++
+		if visited > MaxVisited {
+			return errFound
+		}
+		if d.Type()&os.ModeSymlink != 0 {
+			if d.IsDir() {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if path != root && ignored(d.Name()) {
+			if d.IsDir() {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if d.IsDir() {
+			if d.Name() == VersionsDir && filepath.Dir(path) == root {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		info, err := d.Info()
+		if err != nil {
+			return err
+		}
+		if info.Mode().IsRegular() {
+			return errFound
+		}
+		return nil
+	})
+	switch {
+	case errors.Is(err, errFound):
+		return true, nil
+	case err == nil:
+		return false, nil
+	case errors.Is(err, fs.ErrNotExist):
+		// A missing artifact directory reads as empty; a file vanishing
+		// mid-walk, or a root that cannot be checked again, stays an error.
+		_, statErr := os.Lstat(root)
+		if errors.Is(statErr, fs.ErrNotExist) {
+			return false, nil
+		}
+		if statErr != nil {
+			return false, statErr
+		}
+		return false, err
+	default:
+		return false, err
+	}
+}
+
+// list is List, stopping after maxFiles files, that also records each file's
+// identity in quick, when quick is not nil.
+func list(ctx context.Context, dir string, quick map[string]domain.FileIdentity, maxFiles int) ([]domain.SessionArtifactFile, error) {
 	dir = strings.TrimSpace(dir)
 	if dir == "" {
 		return nil, nil
@@ -79,7 +159,7 @@ func list(ctx context.Context, dir string, quick map[string]domain.FileIdentity)
 			return nil
 		}
 		visited++
-		if len(files) >= MaxFiles || visited > MaxVisited {
+		if len(files) >= maxFiles || visited > MaxVisited {
 			return filepath.SkipAll
 		}
 		if d.Type()&os.ModeSymlink != 0 {
@@ -165,22 +245,153 @@ func IsBundleDir(name string) bool {
 }
 
 // RelPath is reference as a slash-separated path inside dir: an absolute path
-// under dir, or a path relative to it, once cleaned.
+// under dir, or a path relative to it, once cleaned. An absolute path that
+// reaches dir another way counts too; see relUnder. On Windows a Git Bash,
+// Cygwin or WSL drive path such as /c/Users/… is read as C:/Users/….
 func RelPath(dir, reference string) (string, bool) {
 	if dir == "" {
 		return "", false
 	}
+	if runtime.GOOS == "windows" {
+		reference = WindowsDrivePath(reference)
+	}
 	rel := filepath.Clean(reference)
 	if filepath.IsAbs(rel) {
-		var err error
-		if rel, err = filepath.Rel(filepath.Clean(dir), rel); err != nil {
-			return "", false
-		}
+		rel = relUnder(filepath.Clean(dir), rel, caseInsensitiveOS(runtime.GOOS))
 	}
 	if !filepath.IsLocal(rel) {
 		return "", false
 	}
 	return filepath.ToSlash(rel), true
+}
+
+// relUnder is target relative to dir, both clean and absolute, or ".." when
+// target is not under dir. When the plain comparison fails it compares again
+// with symlinks resolved in dir and in target's parent (macOS /var is
+// /private/var, and ~/.ao can be a link), and with letter case ignored where
+// the file system ignores it. Target's own last element is never resolved, so
+// a symlink artifact is still refused as one.
+func relUnder(dir, target string, foldCase bool) string {
+	if rel, ok := localRel(dir, target); ok {
+		return rel
+	}
+	realDir := resolveExisting(dir)
+	realTarget := filepath.Join(resolveExisting(filepath.Dir(target)), filepath.Base(target))
+	if rel, ok := localRel(realDir, realTarget); ok {
+		return rel
+	}
+	if foldCase {
+		for _, pair := range [][2]string{{dir, target}, {realDir, realTarget}} {
+			if rel, ok := foldedRel(pair[0], pair[1]); ok {
+				return rel
+			}
+		}
+	}
+	return ".."
+}
+
+func localRel(dir, target string) (string, bool) {
+	rel, err := filepath.Rel(dir, target)
+	return rel, err == nil && filepath.IsLocal(rel)
+}
+
+// resolveExisting is path with symlinks resolved in its longest existing
+// ancestor, so a file not written yet still compares by its real directory.
+func resolveExisting(path string) string {
+	rest := ""
+	for {
+		if resolved, err := filepath.EvalSymlinks(path); err == nil {
+			return filepath.Join(resolved, rest)
+		}
+		parent := filepath.Dir(path)
+		if parent == path {
+			return filepath.Join(path, rest)
+		}
+		rest = filepath.Join(filepath.Base(path), rest)
+		path = parent
+	}
+}
+
+// foldedRel is target relative to dir when target is under dir ignoring letter
+// case, the way macOS and Windows file systems compare names by default.
+func foldedRel(dir, target string) (string, bool) {
+	prefix := dir
+	if !strings.HasSuffix(prefix, string(filepath.Separator)) {
+		prefix += string(filepath.Separator)
+	}
+	if len(target) <= len(prefix) || !strings.EqualFold(target[:len(prefix)], prefix) {
+		return "", false
+	}
+	rel := target[len(prefix):]
+	return rel, filepath.IsLocal(rel)
+}
+
+func caseInsensitiveOS(goos string) bool {
+	return goos == "darwin" || goos == "windows"
+}
+
+// WindowsDrivePath turns a Git Bash (/c/…), Cygwin (/cygdrive/c/…) or WSL
+// (/mnt/c/…) drive path into the C:/… path Windows uses, and returns any
+// other path unchanged. Windows reads such a path as rooted on the current
+// drive with no drive letter, which is never inside an artifact directory, so
+// reading it as a drive path can only turn a refusal into the file meant.
+func WindowsDrivePath(path string) string {
+	slashed := strings.ReplaceAll(path, `\`, "/")
+	for _, prefix := range []string{"/cygdrive/", "/mnt/", "/"} {
+		rest, ok := strings.CutPrefix(slashed, prefix)
+		if !ok || rest == "" || !isASCIILetter(rest[0]) || (len(rest) > 1 && rest[1] != '/') {
+			continue
+		}
+		return strings.ToUpper(rest[:1]) + ":/" + strings.TrimPrefix(rest[1:], "/")
+	}
+	return path
+}
+
+func isASCIILetter(c byte) bool {
+	return ('a' <= c && c <= 'z') || ('A' <= c && c <= 'Z')
+}
+
+// FromWorkingDir is reference as the agent's shell meant it from workingDir,
+// the absolute folder it ran ao artifact add in. A relative reference is read
+// from workingDir when that folder is inside dir and the file is there, so
+// `ao artifact add index.html` works from a subfolder of the artifact
+// directory. Anywhere else, or when no file is there, it stays relative to
+// dir as before. A file there that cannot be inspected keeps the joined path,
+// so Registrable refuses it instead of a same-named file at dir's top.
+func FromWorkingDir(dir, workingDir, reference string) string {
+	if workingDir == "" || !filepath.IsAbs(workingDir) {
+		return reference
+	}
+	native := reference
+	if runtime.GOOS == "windows" {
+		native = WindowsDrivePath(reference)
+	}
+	if native == "" || filepath.IsAbs(native) || filepath.VolumeName(native) != "" || strings.HasPrefix(filepath.ToSlash(native), "/") {
+		return reference
+	}
+	// The shell's folder can itself be a link into dir, so resolve it whole for
+	// this check. The joined path keeps workingDir: Registrable still checks the
+	// file it names.
+	if _, ok := RelPath(dir, resolveExisting(workingDir)); !ok {
+		return reference
+	}
+	joined := filepath.Join(workingDir, native)
+	if _, err := os.Lstat(joined); errors.Is(err, fs.ErrNotExist) {
+		return reference
+	}
+	return joined
+}
+
+// SplitAtSpace reports whether reference looks like dir cut off at a space:
+// the start of a path that contains spaces, passed unquoted to a shell that
+// split it into several arguments.
+func SplitAtSpace(dir, reference string) bool {
+	if runtime.GOOS == "windows" {
+		reference = WindowsDrivePath(reference)
+	}
+	ref := filepath.ToSlash(filepath.Clean(reference))
+	full := filepath.ToSlash(filepath.Clean(dir))
+	return len(ref) > 1 && len(ref) < len(full) && full[len(ref)] == ' ' && strings.EqualFold(full[:len(ref)], ref)
 }
 
 // Errors from Registrable.
@@ -235,7 +446,7 @@ func ListRegistered(ctx context.Context, dir string, registered []string) ([]dom
 }
 
 func listRegistered(ctx context.Context, dir string, registered []string, quick map[string]domain.FileIdentity) ([]domain.SessionArtifactFile, error) {
-	files, err := list(ctx, dir, quick)
+	files, err := list(ctx, dir, quick, MaxFiles)
 	if err != nil || len(registered) == 0 {
 		return files, err
 	}
@@ -302,7 +513,7 @@ func missedFiles(ctx context.Context, dir, rel string, seen map[string]bool, qui
 	if quick != nil {
 		inner = make(map[string]domain.FileIdentity)
 	}
-	inside, err := list(ctx, full, inner)
+	inside, err := list(ctx, full, inner, MaxFiles)
 	if err != nil {
 		return nil, err
 	}

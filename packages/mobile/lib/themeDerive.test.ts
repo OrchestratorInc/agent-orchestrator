@@ -26,8 +26,8 @@ describe("themeFor with a named theme", () => {
 		expect(themeFor("dark")).toBe(darkTheme);
 	});
 
-	// Orchestrate follows T3 Code: filled controls stay hue-less, and only
-	// links, selection and the cursor take its blue.
+	// In Orchestrate filled controls stay hue-less, and only links, selection
+	// and the cursor take its blue.
 	it("gives Orchestrate a blue highlight beside its hue-less accent", () => {
 		expect(darkTheme.accent).not.toBe(darkTheme.highlight);
 		expect(lightTheme.accent).not.toBe(lightTheme.highlight);

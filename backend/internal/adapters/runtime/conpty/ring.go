@@ -1,6 +1,7 @@
 package conpty
 
 import (
+	"bytes"
 	"strings"
 	"sync"
 )
@@ -8,38 +9,97 @@ import (
 // MaxOutputLines is the rolling line-buffer cap, matching MAX_OUTPUT_LINES in pty-host.ts.
 const MaxOutputLines = 1000
 
+// MaxOutputBytes caps the bytes a Ring keeps, whatever its line cap.
+const MaxOutputBytes = 1 << 20
+
+// partialKeepCap is the largest partialLine buffer kept for reuse after a newline.
+const partialKeepCap = 64 << 10
+
 // Ring is a bounded rolling buffer of terminal output lines, ANSI codes preserved.
 // It mirrors the appendOutput state machine from pty-host.ts.
 // Concurrent Append and Snapshot/Tail calls are safe.
 type Ring struct {
 	mu          sync.Mutex
 	lines       []string // each entry is "line\n" (or bare text on FlushPartial)
-	partialLine string
+	size        int
+	maxLines    int
+	partialLine []byte // appended in place; only its last MaxOutputBytes count
 }
 
 // NewRing returns an empty Ring.
 func NewRing() *Ring {
-	return &Ring{}
+	return NewRingOfLines(MaxOutputLines)
+}
+
+// NewRingOfLines returns an empty Ring that keeps up to maxLines lines, or
+// MaxOutputLines when maxLines is not positive.
+func NewRingOfLines(maxLines int) *Ring {
+	if maxLines <= 0 {
+		maxLines = MaxOutputLines
+	}
+	return &Ring{maxLines: maxLines}
 }
 
 // Append mirrors appendOutput from pty-host.ts: prepend the current partialLine,
 // split on newlines, store completed lines with "\n" re-appended, keep the last
-// element as the new partialLine, then trim to MaxOutputLines.
+// element as the new partialLine, then trim to the line cap and MaxOutputBytes.
 func (r *Ring) Append(raw []byte) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
-	text := r.partialLine + string(raw)
-	parts := strings.Split(text, "\n")
-	// The last element is either "" (text ended with \n) or an incomplete line.
-	r.partialLine = parts[len(parts)-1]
-	for _, line := range parts[:len(parts)-1] {
-		r.lines = append(r.lines, line+"\n")
+	for {
+		i := bytes.IndexByte(raw, '\n')
+		if i < 0 {
+			break
+		}
+		r.pushLocked(raw[:i+1])
+		raw = raw[i+1:]
 	}
-	if len(r.lines) > MaxOutputLines {
+	r.partialLine = append(r.partialLine, raw...)
+	r.trimLocked()
+}
+
+// pushLocked stores partialLine, ended by end, as a completed line.
+func (r *Ring) pushLocked(end []byte) {
+	partial := r.partialLocked()
+	var line strings.Builder
+	line.Grow(len(partial) + len(end))
+	line.Write(partial)
+	line.Write(end)
+	r.lines = append(r.lines, line.String())
+	r.size += line.Len()
+	if cap(r.partialLine) > partialKeepCap {
+		r.partialLine = nil
+	} else {
+		r.partialLine = r.partialLine[:0]
+	}
+}
+
+// partialLocked returns the part of partialLine the ring keeps.
+func (r *Ring) partialLocked() []byte {
+	if len(r.partialLine) > MaxOutputBytes {
+		return r.partialLine[len(r.partialLine)-MaxOutputBytes:]
+	}
+	return r.partialLine
+}
+
+func (r *Ring) trimLocked() {
+	// Compact only once the dropped head is as long as the kept part, so appends stay linear.
+	if len(r.partialLine) >= 2*MaxOutputBytes {
+		r.partialLine = append(r.partialLine[:0], r.partialLocked()...)
+	}
+	partial := len(r.partialLocked())
+	drop := 0
+	for drop < len(r.lines) && (len(r.lines)-drop > r.maxLines || r.size+partial > MaxOutputBytes) {
+		r.size -= len(r.lines[drop])
+		drop++
+	}
+	if drop > 0 {
+		// Let the dropped strings be collected; the backing array outlives the slice head.
+		clear(r.lines[:drop])
 		// ponytail: slice off the head; ceiling: O(n) copy on every trim cycle.
 		// Upgrade path: circular buffer if trim rate is very high.
-		r.lines = r.lines[len(r.lines)-MaxOutputLines:]
+		r.lines = r.lines[drop:]
 	}
 }
 
@@ -49,11 +109,11 @@ func (r *Ring) FlushPartial() {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
-	if r.partialLine == "" {
+	if len(r.partialLine) == 0 {
 		return
 	}
-	r.lines = append(r.lines, r.partialLine)
-	r.partialLine = ""
+	r.pushLocked(nil)
+	r.trimLocked()
 }
 
 // Snapshot returns all stored lines concatenated as raw bytes for scrollback replay.
@@ -62,7 +122,7 @@ func (r *Ring) Snapshot() []byte {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
-	return []byte(strings.Join(r.lines, ""))
+	return r.joinLocked(nil)
 }
 
 // Replay returns the complete terminal byte stream retained for a newly
@@ -74,7 +134,16 @@ func (r *Ring) Replay() []byte {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
-	return []byte(strings.Join(r.lines, "") + r.partialLine)
+	return r.joinLocked(r.partialLocked())
+}
+
+// joinLocked returns the stored lines followed by tail, in one allocation.
+func (r *Ring) joinLocked(tail []byte) []byte {
+	out := make([]byte, 0, r.size+len(tail))
+	for _, line := range r.lines {
+		out = append(out, line...)
+	}
+	return append(out, tail...)
 }
 
 // Tail returns the last n stored lines joined as a string.

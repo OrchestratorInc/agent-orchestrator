@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"path/filepath"
+	"strconv"
 	"strings"
 )
 
@@ -18,7 +19,9 @@ type HostOptions struct {
 	LazySurface bool
 	// Cols and Rows, when both set, start the process immediately at that grid
 	// (taking precedence over StartOnAttach).
-	Cols, Rows uint16
+	Cols, Rows  uint16
+	ReplayFile  string
+	OutputLines int
 }
 
 // hostSpawner starts a detached pty-host for the session and returns its
@@ -33,10 +36,12 @@ const (
 	startOnAttachArg = "--start=attach"
 	lazySurfaceArg   = "--surface=lazy"
 	sizeArgPrefix    = "--size="
+	replayArgPrefix  = "--replay="
+	linesArgPrefix   = "--lines="
 )
 
 // ptyHostArgs builds the pty-host subcommand argv:
-// pty-host [--start=attach] [--surface=lazy] <sessionID> <cwd> <shellCmd> <shellArgs...>
+// pty-host [--start=attach] [--surface=lazy] [--size=COLSxROWS] [--replay=FILE] [--lines=N] <sessionID> <cwd> <shellCmd> <shellArgs...>
 func ptyHostArgs(sessionID, cwd string, argv []string, opts HostOptions) []string {
 	args := []string{"pty-host"}
 	if opts.StartOnAttach {
@@ -47,6 +52,12 @@ func ptyHostArgs(sessionID, cwd string, argv []string, opts HostOptions) []strin
 	}
 	if opts.Cols > 0 && opts.Rows > 0 {
 		args = append(args, fmt.Sprintf("%s%dx%d", sizeArgPrefix, opts.Cols, opts.Rows))
+	}
+	if opts.ReplayFile != "" {
+		args = append(args, replayArgPrefix+opts.ReplayFile)
+	}
+	if opts.OutputLines > 0 {
+		args = append(args, linesArgPrefix+strconv.Itoa(opts.OutputLines))
 	}
 	args = append(args, sessionID, cwd)
 	return append(args, argv...)
@@ -63,6 +74,14 @@ func splitHostOptionArgs(args []string) (HostOptions, []string) {
 		case lazySurfaceArg:
 			opts.LazySurface = true
 		default:
+			if path, ok := strings.CutPrefix(args[0], replayArgPrefix); ok {
+				opts.ReplayFile = path
+				break
+			}
+			if lines, ok := strings.CutPrefix(args[0], linesArgPrefix); ok {
+				opts.OutputLines, _ = strconv.Atoi(lines)
+				break
+			}
 			if !strings.HasPrefix(args[0], sizeArgPrefix) {
 				return opts, args
 			}

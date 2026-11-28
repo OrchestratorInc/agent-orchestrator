@@ -6,7 +6,6 @@ import (
 	"errors"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
-	"github.com/aoagents/agent-orchestrator/backend/internal/storage/sqlite/gen"
 )
 
 // ConversationFindSource reads messages and their visibility facts from one
@@ -17,7 +16,7 @@ func (s *Store) ConversationFindSource(ctx context.Context, id string) (domain.C
 		return domain.ConversationRecord{}, nil, err
 	}
 	defer func() { _ = tx.Rollback() }()
-	q := gen.New(tx)
+	q := s.txQueries(tx)
 	conv, err := q.SelectConversationByID(ctx, id)
 	if errors.Is(err, sql.ErrNoRows) {
 		return domain.ConversationRecord{}, nil, ErrConversationNotFound
@@ -63,7 +62,7 @@ func (s *Store) ConversationFindWindow(ctx context.Context, id string, sequence 
 	}
 	defer func() { _ = tx.Rollback() }()
 	view := *s
-	view.qr = gen.New(tx)
+	view.qr = s.txQueries(tx)
 	before := sequence
 	if before > (1<<63-1)-51 {
 		before = 1<<63 - 1

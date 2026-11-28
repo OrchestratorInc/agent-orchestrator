@@ -4,6 +4,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
@@ -21,17 +22,15 @@ func TestReviewTextsIncludesMultiPRQueue(t *testing.T) {
 	prompt, _ := reviewTexts(spec)
 	for _, want := range []string{
 		"AO created 2 review tasks",
-		"Review every queued PR, then submit all results together",
+		"Review every queued PR and record a result for each one",
 		"Complete every review task in the queue autonomously",
 		"Do not ask the user whether to continue to the next PR",
 		"* 1. https://github.com/o/r/pull/1 (head commit sha1, run run-1)",
 		"* 2. https://github.com/o/r/pull/2 (head commit sha2, run run-2)",
-		"After every PR has its own GitHub review from step 1",
-		"printf '%s'",
-		"do not use a heredoc",
-		"as its own shell call, in exactly the shape shown",
-		"ao review submit --session mer-1 --reviews -",
-		`"reviews": [`,
+		"Do these steps in order for each PR",
+		"skip it without retrying and continue with the next queued PR",
+		"gh api --method POST repos/{owner}/{repo}/pulls/{number}/reviews --input - --jq '.id' <<'AO_REVIEW_EOF'\n{",
+		"ao review submit --session mer-1 --run <run-id> --verdict <approved|changes_requested> --review-id <id-from-step-1> --body - <<'AO_REVIEW_EOF'\n<your full review markdown>\nAO_REVIEW_EOF\n",
 	} {
 		if !strings.Contains(prompt, want) {
 			t.Fatalf("prompt missing %q:\n%s", want, prompt)
@@ -63,5 +62,50 @@ func TestReviewPromptRequiresInlineCommentsForRequiredChanges(t *testing.T) {
 	}
 	if strings.Contains(prompt, "omit the field for a review with no inline comments") {
 		t.Fatalf("review prompt still makes inline comments optional:\n%s", prompt)
+	}
+}
+
+// Review text reaches the submit commands through a quoted heredoc, so the
+// reviewer never shell-escapes it. Read-only sandboxes that cannot create a
+// here-document temp file fall back to the printf pipe, and a failing submit
+// is retried at most twice instead of looping.
+func TestReviewPromptSubmitsThroughHeredocWithBoundedFallback(t *testing.T) {
+	prompt, _ := reviewTexts(launchSpec())
+	for _, want := range []string{
+		"Do not shell-escape anything inside it",
+		"Put the closing AO_REVIEW_EOF alone on its own line with no indentation",
+		"never write a line that is exactly AO_REVIEW_EOF inside the review text",
+		"cannot create a temp file for the here document",
+		"`printf '%s' '<the same text>' | <the same command without the heredoc>`",
+		"replace every single quote in the text with '\\''",
+		"If step 1 produced no review id, leave out `--review-id <id-from-step-1>` entirely",
+		"Do not retry a failing submit command more than twice",
+		"If step 2 still fails, stop and report the command's error output",
+	} {
+		if !strings.Contains(prompt, want) {
+			t.Fatalf("review prompt missing %q:\n%s", want, prompt)
+		}
+	}
+	for _, stale := range []string{"do not use a heredoc", "Keep the JSON on one line", "--reviews -"} {
+		if strings.Contains(prompt, stale) {
+			t.Fatalf("review prompt still contains %q:\n%s", stale, prompt)
+		}
+	}
+}
+
+func TestSingleLineSubmitExamples(t *testing.T) {
+	for _, harness := range []domain.ReviewerHarness{domain.ReviewerAider, domain.ReviewerKimchi, domain.ReviewerOpenCodeV2, domain.ReviewerCodex, domain.ReviewerKiro} {
+		post, record, _ := reviewSubmitExamples(LaunchSpec{Harness: harness, WorkerID: "worker-1"})
+		if strings.HasSuffix(post, " | ao review post-github") != (harness == domain.ReviewerOpenCodeV2) {
+			t.Errorf("%s unexpected GitHub posting command: %q", harness, post)
+		}
+		for _, cmd := range []string{post, record} {
+			if strings.Contains(cmd, "<<") || strings.Contains(cmd, "\n") || !strings.HasPrefix(cmd, "printf '%s'") {
+				t.Errorf("%s expected single-line pipeline, got %q", harness, cmd)
+			}
+			if strings.Contains(cmd, " | base64 --decode | ") != (harness == domain.ReviewerKiro || harness == domain.ReviewerOpenCodeV2) {
+				t.Errorf("%s unexpected encoding in %q", harness, cmd)
+			}
+		}
 	}
 }

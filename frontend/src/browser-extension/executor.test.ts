@@ -49,7 +49,7 @@ class FakeChrome {
 	groups = new Map<number, { id: number; title?: string; color?: string; windowId: number }>();
 	injected = new Set<number>();
 	registries = new Map<number, RefRegistry>();
-	debuggerCalls: { method: string; params?: Record<string, unknown> }[] = [];
+	debuggerCalls: { method: string; params?: Record<string, unknown>; tabId?: number }[] = [];
 	attached = 0;
 	windowsCreated: string[] = [];
 	holdLoad = false;
@@ -58,6 +58,10 @@ class FakeChrome {
 	holdCommit = false;
 	windowsRemoved: number[] = [];
 	windowStates = new Map<number, string>();
+	/** Debugger screenshots that never produce a frame, like a page that loaded minimized. */
+	hangingScreenshots = 0;
+	/** The user's last focused window, if they have one open. */
+	userWindow?: { id: number; incognito?: boolean };
 	windowUpdates: Array<{ windowId: number; state?: string; focused?: boolean }> = [];
 	granted = { origins: true, debugger: true };
 	events = {
@@ -84,6 +88,8 @@ class FakeChrome {
 	captures: number[] = [];
 	/** Runs during a capture, for example a user switching tabs. */
 	duringCapture?: () => void;
+	// Runs just before a CDP key event reaches the page, as a page could.
+	beforeKey?: () => void;
 
 	activate(tabId: number) {
 		const tab = this.tabs.get(tabId)!;
@@ -174,6 +180,12 @@ class FakeChrome {
 					if (!self.injected.has(tabId)) throw new Error("Could not establish connection. Receiving end does not exist.");
 					try {
 						const value = await handleContentRequest(document, self.registries.get(tabId)!, message as never);
+						// jsdom's document lives at its own address; in Chrome a top
+						// frame's document is at the tab's, so report that.
+						if ((options?.frameId ?? 0) === 0 && value && typeof value === "object" && "documentId" in value) {
+							const tab = self.tabs.get(tabId);
+							return { ok: true, value: { ...value, url: tab?.url ?? "", title: tab?.title ?? "" } };
+						}
 						return { ok: true, value };
 					} catch (error) {
 						const bridge = error as BridgeError;
@@ -203,7 +215,10 @@ class FakeChrome {
 					return { id: self.nextWindow++, focused: true };
 				},
 				get: async (windowId) => ({ id: windowId, focused: false, state: self.windowStates.get(windowId) ?? "normal" }),
-				getLastFocused: async () => ({ id: 1, focused: true }),
+				getLastFocused: async () => {
+					if (!self.userWindow) throw new Error("No last-focused window");
+					return { ...self.userWindow, focused: true, type: "normal" };
+				},
 				update: async (windowId, props) => {
 					self.windowUpdates.push({ windowId, ...props });
 					if (props.state) self.windowStates.set(windowId, props.state);
@@ -226,8 +241,24 @@ class FakeChrome {
 			debugger: {
 				attach: async () => void self.attached++,
 				detach: async () => undefined,
-				sendCommand: async (_target, method, params) => {
-					self.debuggerCalls.push({ method, params });
+				sendCommand: async (target, method, params) => {
+					self.debuggerCalls.push({ method, params, tabId: target.tabId });
+					if (method === "Input.dispatchKeyEvent") {
+						// Like Chrome, a CDP key event goes to whatever has focus.
+						const key = params as { type?: string; key?: string };
+						const type = key.type === "keyUp" ? "keyup" : key.type === "keyDown" || key.type === "rawKeyDown" ? "keydown" : undefined;
+						if (type) {
+							if (type === "keydown") self.beforeKey?.();
+							(document.activeElement ?? document.body).dispatchEvent(new KeyboardEvent(type, { key: key.key, bubbles: true, cancelable: true }));
+						}
+					}
+					if (method === "Page.captureScreenshot") {
+						if (self.hangingScreenshots > 0) {
+							self.hangingScreenshots--;
+							return new Promise(() => undefined);
+						}
+						return { data: CAPTURE_PNG.slice(CAPTURE_PNG.indexOf(",") + 1) };
+					}
 					return {};
 				},
 				onEvent: self.events.debuggerEvent,
@@ -391,16 +422,52 @@ describe("Executor", () => {
 		expect(await run("snapshot", { interactive: true, delta: true })).toMatchObject({ kind: "unchanged", revision: 2, baseRevision: 1 });
 	});
 
-	it("gives each session its own unfocused window instead of the user's", async () => {
+	it("opens each session's tab group in the background of the user's window", async () => {
+		const { fake, run, approve } = setup();
+		fake.userWindow = { id: 1 };
+		const mine = await fake.api().tabs.create({ url: "https://personal.test/", active: true, windowId: 1 });
+		await approve("s1");
+		await approve("s2");
+		await run("open", { url: "https://shop.test/" }, "s1");
+		const tabOf = (url: string) => [...fake.tabs.values()].find((tab) => tab.url === url)!;
+		// The user's tab stays in front while the agent works behind it.
+		const { refs } = (await run("snapshot", { interactive: true }, "s1")) as { refs: Record<string, { name: string }> };
+		const buy = Object.entries(refs).find(([, info]) => info.name === "Buy now")![0];
+		expect(await run("click", { ref: buy }, "s1")).toMatchObject({ inputTier: "trusted" });
+		expect(await run("screenshot", {}, "s1")).toMatchObject({ width: 1, height: 1 });
+		expect(fake.tabs.get(mine.id!)!.active).toBe(true);
+		expect(tabOf("https://shop.test/").active).toBe(false);
+
+		await run("open", { url: "https://shop.test/done" }, "s2");
+		expect(fake.windowsCreated).toEqual([]);
+		expect(tabOf("https://shop.test/").windowId).toBe(1);
+		expect(tabOf("https://shop.test/done").windowId).toBe(1);
+		expect(tabOf("https://shop.test/").groupId).not.toBe(tabOf("https://shop.test/done").groupId);
+		expect(fake.tabs.get(mine.id!)!.active).toBe(true);
+
+		// Ending a session never closes the user's window.
+		await run("__destroy-session", {}, "s1");
+		expect(fake.windowsRemoved).toEqual([]);
+		expect(fake.tabs.get(mine.id!)).toBeDefined();
+	});
+
+	it("never opens a session in an incognito window", async () => {
+		const { fake, run, approve } = setup();
+		fake.userWindow = { id: 1, incognito: true };
+		await approve();
+		await run("open", { url: "https://shop.test/" });
+		expect(fake.windowsCreated).toHaveLength(1);
+		expect([...fake.tabs.values()].find((tab) => tab.url === "https://shop.test/")!.windowId).not.toBe(1);
+	});
+
+	it("falls back to an unfocused window of its own when the user has none open", async () => {
 		const { fake, run, approve } = setup();
 		await approve("s1");
 		await approve("s2");
 		await run("open", { url: "https://shop.test/" }, "s1");
 		await run("open", { url: "https://shop.test/done" }, "s2");
 		const windowOf = (url: string) => [...fake.tabs.values()].find((tab) => tab.url === url)!.windowId;
-		// Window 1 is the user's focused window in the fake.
-		expect(windowOf("https://shop.test/")).not.toBe(1);
-		expect(windowOf("https://shop.test/done")).not.toBe(1);
+		expect(fake.windowsCreated).toHaveLength(2);
 		expect(windowOf("https://shop.test/")).not.toBe(windowOf("https://shop.test/done"));
 		// A second tab for a session joins that session's window.
 		await run("tab-new", { url: "https://shop.test/more" }, "s1");
@@ -449,16 +516,24 @@ describe("Executor", () => {
 		expect(fake.tabs.get(handed.id!)?.groupId).toBe(-1);
 	});
 
-	it("restores a minimized agent window for trusted input without focusing it", async () => {
+	it("uses trusted input and screenshots while the agent window is minimized or covered, without touching it", async () => {
 		const { fake, run, approve } = setup();
 		await approve();
 		await run("open", { url: "https://shop.test/" });
 		const sessionWindow = [...fake.tabs.values()].find((tab) => tab.url === "https://shop.test/")!.windowId;
 		fake.windowStates.set(sessionWindow, "minimized");
+		fake.frameResponder = (frameId, message) => (message.op === "ping" && frameId === 0 ? { visibility: "hidden" } : undefined);
 		const { refs } = (await run("snapshot", { interactive: true })) as { refs: Record<string, { name: string }> };
 		const buy = Object.entries(refs).find(([, info]) => info.name === "Buy now")![0];
+		fake.debuggerCalls.length = 0;
 		expect(await run("click", { ref: buy })).toMatchObject({ inputTier: "trusted" });
-		expect(fake.windowUpdates).toEqual([{ windowId: sessionWindow, state: "normal" }]);
+		expect(await run("press", { key: "Enter" })).toMatchObject({ pressed: "Enter" });
+		expect(await run("screenshot")).toMatchObject({ width: 1, height: 1 });
+		expect(fake.windowUpdates).toEqual([]);
+		expect(fake.captures).toEqual([]);
+		// Pages that check focus see the agent's tab as focused while it acts.
+		const focus = fake.debuggerCalls.filter((call) => call.method === "Emulation.setFocusEmulationEnabled").map((call) => call.params?.enabled);
+		expect(focus).toEqual([true, false, true, false, true, false]);
 	});
 
 	it("blocks denied sites and non-web pages", async () => {
@@ -491,6 +566,259 @@ describe("Executor", () => {
 		expect(await run("click", { ref: buy })).toMatchObject({ inputTier: "synthetic" });
 		expect(fake.attached).toBe(attached);
 		expect(synthetic).toBe(1);
+	});
+
+	it("describes an action's target for the approval gate without dispatching input", async () => {
+		const { fake, run, approve } = setup();
+		await approve();
+		await run("open", { url: "https://shop.test/" });
+		const { refs } = (await run("snapshot", { interactive: true })) as { refs: Record<string, { name: string }> };
+		const buy = Object.entries(refs).find(([, info]) => info.name === "Buy now")![0];
+		let clicks = 0;
+		document.getElementById("buy")!.addEventListener("click", () => clicks++);
+		const before = fake.debuggerCalls.length;
+
+		expect(await run("describe", { action: "click", ref: buy })).toMatchObject({
+			target: { role: "button", name: "Buy now", tag: "button", pageUrl: "https://shop.test/", pageTitle: "Shop" },
+			untrustedExternalContent: true,
+		});
+		expect(await run("describe", { action: "act", instruction: "the buy now button" })).toMatchObject({
+			target: { role: "button", name: "Buy now", instruction: "the buy now button" },
+		});
+		expect(await run("describe", { action: "act", instruction: "the checkout button" })).toEqual({
+			target: { pageUrl: "https://shop.test/", pageTitle: "Shop", instruction: "the checkout button" },
+			binding: { tabId: "t1", document: expect.any(String) },
+			untrustedExternalContent: true,
+		});
+		(document.getElementById("q") as HTMLInputElement).focus();
+		expect(await run("describe", { action: "press", key: "Enter" })).toMatchObject({
+			target: { role: "textbox", name: "Search", isSubmit: false },
+		});
+		expect(clicks).toBe(0);
+		expect(fake.debuggerCalls.slice(before).some((call) => call.method.startsWith("Input."))).toBe(false);
+	});
+
+	it("describes without capturing the tab unless an image is asked for", async () => {
+		const { fake, run, approve } = setup();
+		await approve("s1", false);
+		await run("open", { url: "https://shop.test/" });
+		const { refs } = (await run("snapshot", { interactive: true })) as { refs: Record<string, { name: string }> };
+		const buy = Object.entries(refs).find(([, info]) => info.name === "Buy now")![0];
+		const shots = () => fake.captures.length + fake.debuggerCalls.filter((call) => call.method === "Page.captureScreenshot").length;
+		const before = shots();
+		const plain = await run("describe", { action: "click", ref: buy });
+		expect(plain).toMatchObject({ target: { name: "Buy now" } });
+		expect(plain).not.toHaveProperty("image");
+		expect(shots()).toBe(before);
+		await run("describe", { action: "click", ref: buy, image: true });
+		expect(shots()).toBeGreaterThan(before);
+	});
+
+	it("describes a drag's drop target for the approval gate", async () => {
+		const { run, approve } = setup();
+		await approve("s1", false);
+		await run("open", { url: "https://shop.test/" });
+		const { refs } = (await run("snapshot", { interactive: true })) as { refs: Record<string, { name: string }> };
+		const buy = Object.entries(refs).find(([, info]) => info.name === "Buy now")![0];
+		// The daemon asks about the drop target (the drag's targetRef) as ref.
+		expect(await run("describe", { action: "drag", ref: buy })).toMatchObject({
+			target: { role: "button", name: "Buy now", pageUrl: "https://shop.test/" },
+			binding: { ref: buy },
+		});
+	});
+
+	it("refuses an approved action once the page, tab, or element is not the one approved", async () => {
+		const { fake, run, approve } = setup();
+		await approve("s1", false);
+		await run("open", { url: "https://shop.test/" });
+		let clicks = 0;
+		document.getElementById("buy")!.addEventListener("click", () => clicks++);
+		const { binding } = (await run("describe", { action: "act", instruction: "the buy now button" })) as { binding: Record<string, unknown> };
+		expect(binding).toMatchObject({ tabId: "t1", ref: expect.any(String), document: expect.any(String) });
+
+		// Another element.
+		await expect(run("act", { instruction: "the buy now button", approvalBinding: { ...binding, ref: "e999" } })).rejects.toMatchObject({ code: "BROWSER_TARGET_CHANGED" });
+		// Another document with the same refs (the page navigated while waiting).
+		await expect(run("click", { ref: binding.ref, approvalBinding: { ...binding, document: "older-document" } })).rejects.toMatchObject({ code: "BROWSER_TARGET_CHANGED" });
+		// Another tab.
+		await expect(run("press", { key: "Enter", approvalBinding: { ...binding, tabId: "t2" } })).rejects.toMatchObject({ code: "BROWSER_TARGET_CHANGED" });
+		expect(clicks).toBe(0);
+		expect(fake.debuggerCalls.some((call) => call.method.startsWith("Input."))).toBe(false);
+
+		expect(await run("act", { instruction: "the buy now button", approvalBinding: binding })).toMatchObject({ outcome: "matched" });
+		expect(clicks).toBe(1);
+	});
+
+	it("refuses an approved line-break type once the page, tab, or element is not the one approved", async () => {
+		const { fake, run, approve } = setup();
+		await approve("s1", false);
+		await run("open", { url: "https://shop.test/" });
+		const field = document.getElementById("q") as HTMLInputElement;
+		const { binding } = (await run("describe", { action: "act", instruction: "the search box" })) as { binding: Record<string, unknown> };
+		expect(binding).toMatchObject({ ref: expect.any(String) });
+		const ref = binding.ref as string;
+		await expect(run("type", { ref, text: "shoes\n", approvalBinding: { ...binding, ref: "e999" } })).rejects.toMatchObject({ code: "BROWSER_TARGET_CHANGED" });
+		await expect(run("type", { ref, text: "shoes\n", approvalBinding: { ...binding, document: "older-document" } })).rejects.toMatchObject({ code: "BROWSER_TARGET_CHANGED" });
+		await expect(run("type", { ref, text: "shoes\n", approvalBinding: { ...binding, tabId: "t2" } })).rejects.toMatchObject({ code: "BROWSER_TARGET_CHANGED" });
+		expect(field.value).toBe("");
+		// Chrome mode inserts text without key events, so the line break
+		// itself never presses Enter here.
+		const keys: string[] = [];
+		field.addEventListener("keydown", (event) => keys.push(event.key));
+		await run("type", { ref, text: "shoes\n", approvalBinding: binding });
+		expect(field.value).toContain("shoes");
+		expect(keys).not.toContain("Enter");
+		expect(fake.debuggerCalls.some((call) => call.method === "Input.dispatchKeyEvent")).toBe(false);
+	});
+
+	it("refuses an approved synthetic Enter if focus moves after the binding check", async () => {
+		const { chrome, run, approve } = setup();
+		await approve("s1", false);
+		await run("open", { url: "https://shop.test/" });
+		const field = document.getElementById("q") as HTMLInputElement;
+		const buy = document.getElementById("buy") as HTMLButtonElement;
+		field.focus();
+		const { binding } = (await run("describe", { action: "press", key: "Enter" })) as { binding: Record<string, unknown> };
+		const keys: string[] = [];
+		buy.addEventListener("keydown", (event) => keys.push(event.key));
+		// The page moves focus between the binding check and the key.
+		const original = chrome.tabs.sendMessage;
+		vi.spyOn(chrome.tabs, "sendMessage").mockImplementation(async (tabId, message, options) => {
+			const result = await original(tabId, message, options);
+			if ((message as { op?: string }).op === "ping") buy.focus();
+			return result;
+		});
+		await expect(run("press", { key: "Enter", approvalBinding: binding })).rejects.toMatchObject({ code: "BROWSER_TARGET_CHANGED" });
+		expect(keys).toEqual([]);
+	});
+
+	it("refuses an approved trusted Enter if focus moves before the CDP key lands", async () => {
+		const { fake, run, approve } = setup();
+		await approve("s1", true);
+		await run("open", { url: "https://shop.test/" });
+		const field = document.getElementById("q") as HTMLInputElement;
+		const buy = document.getElementById("buy") as HTMLButtonElement;
+		field.focus();
+		const { binding } = (await run("describe", { action: "press", key: "Enter" })) as { binding: Record<string, unknown> };
+		const fieldKeys: string[] = [];
+		const buyKeys: string[] = [];
+		field.addEventListener("keydown", (event) => fieldKeys.push(event.key));
+		buy.addEventListener("keydown", (event) => buyKeys.push(event.key));
+		// Focus is where it was approved: the trusted Enter goes through.
+		expect(await run("press", { key: "Enter", approvalBinding: binding })).toMatchObject({ pressed: "Enter" });
+		expect(fieldKeys).toEqual(["Enter"]);
+		expect(fake.debuggerCalls.some((call) => call.method === "Input.dispatchKeyEvent")).toBe(true);
+		// The page moves focus after every check, just before the key lands.
+		fake.beforeKey = () => buy.focus();
+		await expect(run("press", { key: "Enter", approvalBinding: binding })).rejects.toMatchObject({ code: "BROWSER_TARGET_CHANGED" });
+		expect(buyKeys).toEqual([]);
+	});
+
+	it("leaves no key guard behind when an approved trusted Enter opens a dialog", async () => {
+		const { fake, run, approve } = setup();
+		await approve("s1", true);
+		await run("open", { url: "https://shop.test/" });
+		const field = document.getElementById("q") as HTMLInputElement;
+		const buy = document.getElementById("buy") as HTMLButtonElement;
+		field.focus();
+		const { binding } = (await run("describe", { action: "press", key: "Enter" })) as { binding: Record<string, unknown> };
+		const tabId = [...fake.tabs.keys()][0]!;
+		// The page answers the Enter with a confirm dialog.
+		const opensDialog = () => fake.events.debuggerEvent.fire({ tabId }, "Page.javascriptDialogOpening", { type: "confirm", message: "Sure?" });
+		field.addEventListener("keydown", opensDialog, { once: true });
+		expect(await run("press", { key: "Enter", approvalBinding: binding })).toMatchObject({ pressed: "Enter", dialogOpened: true });
+		fake.events.debuggerEvent.fire({ tabId }, "Page.javascriptDialogClosed", {});
+		// Later keys on other controls are the page's own and must not be held.
+		const later = new KeyboardEvent("keydown", { key: "a", bubbles: true, cancelable: true });
+		buy.dispatchEvent(later);
+		expect(later.defaultPrevented).toBe(false);
+		expect(await run("get", { property: "title" })).toBeDefined();
+	});
+
+	it("reports a held-back trusted Enter once its dialog closes", async () => {
+		const { fake, run, approve } = setup();
+		await approve("s1", true);
+		await run("open", { url: "https://shop.test/" });
+		const field = document.getElementById("q") as HTMLInputElement;
+		const buy = document.getElementById("buy") as HTMLButtonElement;
+		field.focus();
+		const { binding } = (await run("describe", { action: "press", key: "Enter" })) as { binding: Record<string, unknown> };
+		const tabId = [...fake.tabs.keys()][0]!;
+		// Focus moves and the page opens a dialog before the key lands: the
+		// guard holds the key back, but the page cannot report it yet.
+		fake.beforeKey = () => {
+			buy.focus();
+			fake.events.debuggerEvent.fire({ tabId }, "Page.javascriptDialogOpening", { type: "alert", message: "Hi" });
+		};
+		await run("press", { key: "Enter", approvalBinding: binding }).catch(() => undefined);
+		fake.beforeKey = undefined;
+		fake.events.debuggerEvent.fire({ tabId }, "Page.javascriptDialogClosed", {});
+		// The next command learns that the approved Enter never went through.
+		await expect(run("snapshot", { interactive: true })).rejects.toMatchObject({ code: "BROWSER_TARGET_CHANGED" });
+		// Reported once; later commands run.
+		expect(await run("snapshot", { interactive: true })).toBeDefined();
+	});
+
+	it("answers an approved dialog only on the tab the user approved", async () => {
+		const { fake, run, approve } = setup();
+		await approve("s1", true);
+		await run("open", { url: "https://shop.test/" });
+		const tabId = [...fake.tabs.keys()][0]!;
+		// A dialog follows an action, which starts the debugger listener.
+		await run("press", { key: "Tab" });
+		fake.events.debuggerEvent.fire({ tabId }, "Page.javascriptDialogOpening", { type: "confirm", message: "Are you sure?" });
+		const answered = () => fake.debuggerCalls.filter((call) => call.method === "Page.handleJavaScriptDialog").length;
+		// Approved on another tab: refused, the dialog stays unanswered.
+		await expect(run("dialog", { operation: "accept", dialogTab: "t-other" })).rejects.toMatchObject({ code: "BROWSER_TARGET_CHANGED" });
+		expect(answered()).toBe(0);
+		const { target } = (await run("dialog", { operation: "status" })) as { target: { tabId: string } };
+		expect(await run("dialog", { operation: "accept", dialogTab: target.tabId })).toMatchObject({ handled: "accept" });
+		expect(answered()).toBe(1);
+	});
+
+	it("describes with the URL and title of the document it read", async () => {
+		const { chrome, run, approve } = setup();
+		await approve("s1", false);
+		await run("open", { url: "https://shop.test/" });
+		// The tab navigated between reading the tab and the content reply.
+		const original = chrome.tabs.sendMessage;
+		vi.spyOn(chrome.tabs, "sendMessage").mockImplementation(async (tabId, message, options) => {
+			const result = (await original(tabId, message, options)) as { ok: boolean; value?: Record<string, unknown> };
+			if ((message as { op?: string }).op === "describe" && result?.ok && result.value) {
+				return { ...result, value: { ...result.value, url: "https://other.test/after", title: "After" } };
+			}
+			return result;
+		});
+		(document.getElementById("q") as HTMLInputElement).focus();
+		expect(await run("describe", { action: "press", key: "Enter" })).toMatchObject({
+			target: { pageUrl: "https://other.test/after", pageTitle: "After" },
+		});
+	});
+
+	it("refuses an approved act whose description found no element", async () => {
+		const { run, approve } = setup();
+		await approve("s1", false);
+		await run("open", { url: "https://shop.test/" });
+		let clicks = 0;
+		document.getElementById("buy")!.addEventListener("click", () => clicks++);
+		// Nothing matched when the user was asked, so they approved no element.
+		const { binding } = (await run("describe", { action: "act", instruction: "the checkout button" })) as { binding: Record<string, unknown> };
+		expect(binding.ref).toBeUndefined();
+		await expect(run("act", { instruction: "the buy now button", approvalBinding: binding })).rejects.toMatchObject({ code: "BROWSER_TARGET_CHANGED" });
+		expect(clicks).toBe(0);
+	});
+
+	it("refuses an approved Enter once focus has moved", async () => {
+		const { run, approve } = setup();
+		await approve("s1", false);
+		await run("open", { url: "https://shop.test/" });
+		(document.getElementById("q") as HTMLInputElement).focus();
+		const { binding } = (await run("describe", { action: "press", key: "Enter" })) as { binding: Record<string, unknown> };
+		expect(binding.focus).toEqual(expect.any(String));
+		(document.getElementById("buy") as HTMLButtonElement).focus();
+		await expect(run("press", { key: "Enter", approvalBinding: binding })).rejects.toMatchObject({ code: "BROWSER_TARGET_CHANGED" });
+		(document.getElementById("q") as HTMLInputElement).focus();
+		expect(await run("press", { key: "Enter", approvalBinding: binding })).toMatchObject({ pressed: "Enter" });
 	});
 
 	it("resolves act instructions and reports unmatched ones with the snapshot", async () => {
@@ -586,14 +914,17 @@ describe("Executor", () => {
 		const [first, second] = await Promise.all([run("screenshot", {}, "s1"), run("screenshot", {}, "s2")]);
 		expect(first).toMatchObject({ target: { url: "https://shop.test/" } });
 		expect(second).toMatchObject({ target: { url: "https://shop.test/done" } });
-		// Each capture happened while that session's own tab was in front.
-		expect(fake.captures.sort()).toEqual([tabOf("https://shop.test/"), tabOf("https://shop.test/done")].sort());
+		// Each session's debugger captured its own tab, never the window's front tab.
+		const shots = fake.debuggerCalls.filter((call) => call.method === "Page.captureScreenshot").map((call) => call.tabId);
+		expect(shots.sort()).toEqual([tabOf("https://shop.test/"), tabOf("https://shop.test/done")].sort());
+		expect(fake.captures).toEqual([]);
 	});
 
-	it("refuses pixels captured after the window switched tabs", async () => {
+	it("refuses pixels captured after the window switched tabs on a synthetic-input site", async () => {
 		const { fake, run, approve } = setup();
 		await approve();
 		await run("open", { url: "https://shop.test/" });
+		await fake.local.set({ [POLICY_KEY]: { ...DEFAULT_SITE_POLICY, syntheticInput: ["shop.test"] } });
 		const sessionWindow = [...fake.tabs.values()].find((tab) => tab.url === "https://shop.test/")!.windowId;
 		const personal = await fake.api().tabs.create({ url: "https://personal.test/", active: false, windowId: sessionWindow });
 		// The user switches the session's window to another tab during the capture.
@@ -608,8 +939,6 @@ describe("Executor", () => {
 		await approve();
 		await run("open", { url: "https://shop.test/" });
 		const own = [...fake.tabs.values()].find((tab) => tab.url === "https://shop.test/")!;
-		await run("screenshot");
-		expect(own.active).toBe(true);
 		const { refs } = (await run("snapshot", { interactive: true })) as { refs: Record<string, { name: string }> };
 		const buy = Object.entries(refs).find(([, info]) => info.name === "Buy now")![0];
 
@@ -617,22 +946,28 @@ describe("Executor", () => {
 		fake.activate(personal.id!);
 		const inputBefore = fake.debuggerCalls.length;
 
-		// Input still works, without trusted input, which would need the tab in front.
-		expect(await run("click", { ref: buy })).toMatchObject({ inputTier: "synthetic" });
+		// Trusted input and screenshots reach the agent's background tab directly.
+		expect(await run("click", { ref: buy })).toMatchObject({ inputTier: "trusted" });
 		expect(await run("press", { key: "Enter" })).toBeTruthy();
+		expect(await run("screenshot")).toMatchObject({ width: 1, height: 1 });
+		expect(fake.tabs.get(personal.id!)!.active).toBe(true);
+		expect(own.active).toBe(false);
+		const after = fake.debuggerCalls.slice(inputBefore);
+		expect(after.filter((call) => call.method.startsWith("Input.")).every((call) => call.tabId === own.id)).toBe(true);
+		expect(after.some((call) => call.method === "Page.captureScreenshot" && call.tabId === own.id)).toBe(true);
+
+		// A synthetic-input site falls back to captureVisibleTab, which never takes the user's tab.
+		await fake.local.set({ [POLICY_KEY]: { ...DEFAULT_SITE_POLICY, syntheticInput: ["shop.test"] } });
+		expect(await run("click", { ref: buy })).toMatchObject({ inputTier: "synthetic" });
 		await expect(run("screenshot")).rejects.toMatchObject({ code: "BROWSER_TAB_BUSY" });
 		expect(fake.tabs.get(personal.id!)!.active).toBe(true);
-		expect(fake.debuggerCalls.slice(inputBefore).filter((call) => call.method.startsWith("Input."))).toEqual([]);
-
-		// Back on the agent's tab, trusted input resumes.
-		fake.activate(own.id!);
-		expect(await run("click", { ref: buy })).toMatchObject({ inputTier: "trusted" });
 	});
 
-	it("still brings an agent's own tab forward when another agent tab is in front", async () => {
+	it("still brings an agent's own tab forward for a synthetic-input screenshot when another agent tab is in front", async () => {
 		const { fake, run, approve } = setup();
 		await approve();
 		await run("open", { url: "https://shop.test/" });
+		await fake.local.set({ [POLICY_KEY]: { ...DEFAULT_SITE_POLICY, syntheticInput: ["shop.test"] } });
 		await run("screenshot");
 		await run("tab-new", { url: "https://shop.test/more" });
 		const first = [...fake.tabs.values()].find((tab) => tab.url === "https://shop.test/more")!;
@@ -756,6 +1091,81 @@ describe("Executor", () => {
 		await run("open", { url: "https://shop.test/" });
 		const shot = await run("screenshot");
 		expect(shot).toMatchObject({ width: 1, height: 1, target: { tabId: "t1" } });
-		expect([...fake.tabs.values()][0]!.active).toBe(true);
+		expect(fake.debuggerCalls.filter((call) => call.method === "Page.captureScreenshot")).toHaveLength(1);
+	});
+
+	it("reports an unpainted tab instead of hanging, and leaves a minimized window alone", async () => {
+		vi.useFakeTimers({ shouldAdvanceTime: true });
+		try {
+			const { fake, run, approve } = setup();
+			await approve();
+			await run("open", { url: "https://shop.test/" });
+			const sessionWindow = [...fake.tabs.values()].find((tab) => tab.url === "https://shop.test/")!.windowId;
+			fake.windowStates.set(sessionWindow, "minimized");
+			fake.hangingScreenshots = 1;
+			const pending = run("screenshot");
+			const outcome = expect(pending).rejects.toMatchObject({ code: "SCREENSHOT_UNAVAILABLE", message: expect.stringContaining("ao browser snapshot") });
+			await vi.advanceTimersByTimeAsync(4_500);
+			await outcome;
+			expect(fake.windowUpdates).toEqual([]);
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
+	it("describes for the approval gate without waiting on a capture that never finishes", async () => {
+		vi.useFakeTimers({ shouldAdvanceTime: true });
+		const box = Element.prototype.getBoundingClientRect;
+		Element.prototype.getBoundingClientRect = () => ({ x: 10, y: 10, width: 80, height: 20, left: 10, top: 10, right: 90, bottom: 30, toJSON() {} }) as DOMRect;
+		try {
+			const { fake, run, approve } = setup();
+			await approve();
+			await run("open", { url: "https://shop.test/" });
+			const { refs } = (await run("snapshot", { interactive: true })) as { refs: Record<string, { name: string }> };
+			const buy = Object.entries(refs).find(([, info]) => info.name === "Buy now")![0];
+			fake.hangingScreenshots = 1;
+			let settled = false;
+			const pending = run("describe", { action: "click", ref: buy }).finally(() => {
+				settled = true;
+			});
+			await vi.advanceTimersByTimeAsync(2_500);
+			// Settled by the prompt's own 2 s bound, not by any later screenshot timeout.
+			expect(settled).toBe(true);
+			const described = (await pending) as { target: { name: string }; image?: string };
+			expect(described.target.name).toBe("Buy now");
+			expect(described.image).toBeUndefined();
+		} finally {
+			Element.prototype.getBoundingClientRect = box;
+			vi.useRealTimers();
+		}
+	});
+
+	it("never restores a minimized window for a synthetic-input screenshot", async () => {
+		const { fake, run, approve } = setup();
+		await approve();
+		await run("open", { url: "https://shop.test/" });
+		await fake.local.set({ [POLICY_KEY]: { ...DEFAULT_SITE_POLICY, syntheticInput: ["shop.test"] } });
+		const sessionWindow = [...fake.tabs.values()].find((tab) => tab.url === "https://shop.test/")!.windowId;
+		fake.windowStates.set(sessionWindow, "minimized");
+		await expect(run("screenshot")).rejects.toMatchObject({ code: "BROWSER_TAB_HIDDEN", message: expect.stringContaining("ao browser snapshot") });
+		expect(fake.windowUpdates).toEqual([]);
+		expect(fake.captures).toEqual([]);
+	});
+
+	it("tells the agent to use a snapshot when a synthetic-input site's window is hidden", async () => {
+		vi.useFakeTimers({ shouldAdvanceTime: true });
+		try {
+			const { fake, run, approve } = setup();
+			await approve();
+			await run("open", { url: "https://shop.test/" });
+			await fake.local.set({ [POLICY_KEY]: { ...DEFAULT_SITE_POLICY, syntheticInput: ["shop.test"] } });
+			fake.frameResponder = (frameId, message) => (message.op === "ping" && frameId === 0 ? { visibility: "hidden" } : undefined);
+			const pending = run("screenshot");
+			const outcome = expect(pending).rejects.toMatchObject({ code: "BROWSER_TAB_HIDDEN", message: expect.stringContaining("ao browser snapshot") });
+			await vi.advanceTimersByTimeAsync(2_500);
+			await outcome;
+		} finally {
+			vi.useRealTimers();
+		}
 	});
 });

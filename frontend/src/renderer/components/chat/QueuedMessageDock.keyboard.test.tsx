@@ -44,7 +44,8 @@ describe("QueuedMessageDock keyboard reorder", () => {
 		const [grip] = screen.getAllByRole("button", { name: "Drag to reorder queued message" });
 		grip.focus();
 		await user.keyboard(" ");
-		await waitFor(() => expect(screen.getByRole("status")).toHaveTextContent(/queued-2/));
+		// The first grip is the next message to send: rows read in send order.
+		await waitFor(() => expect(screen.getByRole("status")).toHaveTextContent(/queued-1/));
 		await user.keyboard("{Escape}");
 		await waitFor(() => expect(screen.getByRole("status")).toHaveTextContent(/cancelled/i));
 		expect(onReorder).not.toHaveBeenCalled();

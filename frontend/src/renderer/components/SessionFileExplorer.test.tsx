@@ -84,7 +84,7 @@ vi.mock("./diffs/WorkspaceReviewPane", () => ({
 		<div data-testid="review-pane">
 			<span data-testid="review-filter">{filter}</span>
 			<span data-testid="review-scroll">{scrollRequest ? `${scrollRequest.path}:${scrollRequest.key}` : ""}</span>
-			<span data-testid="review-target">{target.key}</span>
+			<span data-state={target.state} data-testid="review-target">{target.key}</span>
 			<span data-testid="review-collapse">{collapseRequest ? `${collapseRequest.expand ? "expand" : "collapse"}:${collapseRequest.key}` : ""}</span>
 			<button onClick={() => onAllCollapsedChange?.(true)} type="button">Report all collapsed</button>
 			<button onClick={() => onAllCollapsedChange?.(false)} type="button">Report an expanded file</button>
@@ -127,6 +127,12 @@ describe("SessionFileExplorer", () => {
 		postMock.mockReset();
 		hostAGetMock.mockReset();
 		hostBGetMock.mockReset();
+	});
+
+	it("waits for a starting session's worktree instead of reading it and showing an error", () => {
+		renderWithQuery(<SessionFileExplorer sessionId="starting-session" workspacePending />);
+		expect(screen.getByText("Setting up this session's workspace…")).toBeTruthy();
+		expect(getMock).not.toHaveBeenCalled();
 	});
 
 	it("warms the exact file query on hover so opening it needs no second request", async () => {
@@ -733,6 +739,30 @@ describe("SessionFileExplorer review pickers", () => {
 			expect.stringMatching(/^fix\/crash.*Pull request #42 · Updated/),
 		]);
 		expect(rows[0]).toHaveAttribute("aria-checked", "true");
+	});
+
+	it("reviews the branch's commits from the manifest while its history loads, and browses their snapshot once it lands", async () => {
+		const sessionId = "sess-all-commits";
+		const committed = { ...manifest, files: [changed], sections: { uncommitted: [], committed: [changed], staged: [], unstaged: [], untracked: [] }, summary: { additions: 1, deletions: 0, files: 1 } };
+		let resolveHistory: (value: { data: WorkspaceHistoryResponse }) => void = () => {};
+		getMock.mockImplementation(async (path: string) => {
+			if (path.endsWith("/workspace/manifest")) return { data: { ...committed, sessionId } };
+			if (path.endsWith("/workspace/branches")) return { data: { ...branchList, sessionId } };
+			if (path.endsWith("/workspace/history")) return new Promise((resolve) => { resolveHistory = resolve; });
+			throw new Error(`Unexpected GET ${path}`);
+		});
+		renderWithQuery(<SessionFileExplorer sessionId={sessionId} />);
+
+		// The manifest lists the whole range's files, so the review needs no second round trip.
+		expect(await screen.findByTestId("review-target")).toHaveAttribute("data-state", "ready");
+		expect(screen.getByTestId("review-target")).toHaveTextContent("committed");
+		// Browsing that range's snapshot waits for the tip its history fences it to.
+		await userEvent.click(screen.getByRole("tab", { name: "Files" }));
+		expect(screen.getByText("Loading files...")).toBeInTheDocument();
+		expect(screen.queryByTestId("tree-changed-only")).not.toBeInTheDocument();
+		await act(async () => resolveHistory({ data: { ...checkedOutHistory, sessionId } }));
+		expect(await screen.findByTestId("tree-changed-only")).toHaveTextContent("false");
+		expect(screen.queryByText("Loading files...")).not.toBeInTheDocument();
 	});
 
 	it("picking another branch offers only commits, hides the view tabs, and sends only read requests", async () => {

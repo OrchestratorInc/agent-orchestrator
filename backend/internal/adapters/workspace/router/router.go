@@ -38,6 +38,7 @@ type Workspace struct {
 
 var _ ports.Workspace = (*Workspace)(nil)
 var _ ports.WorkspaceDefaultBranchRefresher = (*Workspace)(nil)
+var _ ports.WorkspaceDefaultBranchBudgetedResolver = (*Workspace)(nil)
 var _ ports.WorkspaceProject = (*Workspace)(nil)
 var _ ports.WorkspaceObserver = (*Workspace)(nil)
 var _ ports.WorkspaceReclaimer = (*Workspace)(nil)
@@ -54,6 +55,15 @@ func New(deps Deps) *Workspace {
 
 // ResolveDefaultBranch delegates local default-branch resolution to the git workspace adapter.
 func (w *Workspace) ResolveDefaultBranch(ctx context.Context, repoPath, configuredBranch string) (ports.WorkspaceDefaultBranch, error) {
+	return w.git.ResolveDefaultBranch(ctx, repoPath, configuredBranch)
+}
+
+// ResolveDefaultBranchWithin delegates budgeted default-branch resolution to
+// the git workspace adapter. An adapter without it resolves under its own budget.
+func (w *Workspace) ResolveDefaultBranchWithin(ctx, remoteCtx context.Context, repoPath, configuredBranch string) (ports.WorkspaceDefaultBranch, error) {
+	if budgeted, ok := w.git.(ports.WorkspaceDefaultBranchBudgetedResolver); ok {
+		return budgeted.ResolveDefaultBranchWithin(ctx, remoteCtx, repoPath, configuredBranch)
+	}
 	return w.git.ResolveDefaultBranch(ctx, repoPath, configuredBranch)
 }
 

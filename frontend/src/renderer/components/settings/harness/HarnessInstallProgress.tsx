@@ -1,3 +1,4 @@
+import { installerProgress } from "../../../lib/installer-progress";
 import { useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { isActiveInstallJob, type InstallJob } from "../../../hooks/useHarnessUpdates";
@@ -37,7 +38,7 @@ export function HarnessInstallProgress({ job, stage, label }: { job: InstallJob;
 	const { t } = useTranslation();
 	const done = stage === "done";
 	const percent = installPercent(job);
-	const detail = done ? t("settings.harness.progress.done") : stage === "verifying" ? t("settings.harness.progress.verifyingDetail") : job.progress?.detail;
+	const detail = done ? t("settings.harness.progress.done") : stage === "verifying" ? t("settings.harness.progress.verifyingDetail") : (installerProgress(job.progress, t) ?? job.progress?.detail);
 	return <div data-harness-install-progress={stage ?? "starting"} className={cn(HARNESS_CARD_ROW_CLASS, "flex-col items-stretch gap-2.5")}>
 		{/* Keyed apart so the fill starts from its value, not from the sweep's width. */}
 		{done || percent !== undefined ? <div

@@ -1,20 +1,28 @@
 import fs from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import {
-	backdropFor, chipColorFor, HARNESS_CHIP, harnessInitial, hasLogo, LOGO_KEYS,
-	NEEDS_DARK_BACKDROP, NEEDS_LIGHT_BACKDROP,
-} from "./harnessLogo";
+import { DESKTOP_ASSETS, readDesktopLogos, sourceHash } from "../scripts/desktop-harness-logos.mjs";
+import { harnessInitial, hasLogo, LOGO_KEYS } from "./harnessLogo";
+import { HARNESS_LOGO_MANIFEST } from "./harnessLogoManifest";
 import { darkTheme, lightTheme } from "./theme";
 
 const PNG = (require("pngjs") as {
 	PNG: { sync: { read: (data: Buffer) => { width: number; height: number; data: Buffer } } };
 }).PNG;
 
-const NEUTRAL = [
-	"agy", "aider", "amp", "auggie", "autohand", "claude-code", "codex", "copilot",
-	"crush", "kimchi", "kiro", "muse", "qwen", "vibe",
-];
+const repo = path.join(__dirname, "..", "..", "..");
+const assets = path.join(__dirname, "..", "assets", "agents");
+const SYNC = "run `node packages/mobile/scripts/sync-harness-logos.mjs`";
+
+// The harnesses the daemon accepts, read from the daemon itself so a new one
+// cannot ship without a mark here.
+const daemonHarnesses = [
+	...fs.readFileSync(path.join(repo, "backend", "internal", "domain", "harness.go"), "utf8")
+		.matchAll(/^\s*Harness\w+\s+AgentHarness = "([^"]+)"$/gm),
+].map(([, id]) => id);
+
+// The fake harness exists only for tests and intentionally has no brand asset.
+const NO_ASSET = ["fake"];
 
 function luminance([red, green, blue]: readonly number[]): number {
 	const linear = (value: number) => {
@@ -28,10 +36,11 @@ function hexRgb(hex: string): [number, number, number] {
 	return [1, 3, 5].map((index) => Number.parseInt(hex.slice(index, index + 2), 16)) as [number, number, number];
 }
 
-function lowContrastShare(data: Buffer, background: readonly [number, number, number]): number {
+/** The share of a mark's visible pixels that stand out from the background (at least 1.5:1). */
+function visibleShare(data: Buffer, background: readonly [number, number, number]): number {
 	const backgroundLuminance = luminance(background);
 	let visible = 0;
-	let lowContrast = 0;
+	let distinct = 0;
 	for (let i = 0; i < data.length; i += 4) {
 		const alpha = data[i + 3] / 255;
 		if (alpha === 0) continue;
@@ -42,25 +51,17 @@ function lowContrastShare(data: Buffer, background: readonly [number, number, nu
 		const foregroundLuminance = luminance(composited);
 		const contrast = (Math.max(foregroundLuminance, backgroundLuminance) + 0.05) /
 			(Math.min(foregroundLuminance, backgroundLuminance) + 0.05);
-		if (contrast < 1.5) lowContrast++;
+		if (contrast >= 1.5) distinct++;
 	}
-	return lowContrast / visible;
+	return distinct / visible;
 }
 
-// The harnesses the daemon accepts — backend/internal/domain/harness.go.
-const ALL_HARNESSES = [
-	"claude-code", "codex", "aider", "opencode", "grok", "droid", "amp", "agy",
-	"crush", "cursor", "qwen", "copilot", "goose", "auggie", "continue", "devin",
-	"cline", "kimi", "muse", "kiro", "kilocode", "vibe", "pi", "autohand",
-	"kimchi", "prime-agent", "fx",
-];
-
-// The fake harness exists only for tests and intentionally has no brand asset.
-const NO_ASSET = ["fake"];
+const readAsset = (asset: string) => PNG.sync.read(fs.readFileSync(path.join(assets, `${asset}.png`)));
 
 describe("logo registry", () => {
-	it("has a mark for every harness that ships one", () => {
-		for (const h of ALL_HARNESSES.filter((h) => !NO_ASSET.includes(h))) {
+	it("has a mark for every harness the daemon accepts", () => {
+		expect(daemonHarnesses.length).toBeGreaterThan(40);
+		for (const h of daemonHarnesses.filter((h) => !NO_ASSET.includes(h))) {
 			expect(hasLogo(h), h).toBe(true);
 		}
 	});
@@ -82,95 +83,80 @@ describe("logo registry", () => {
 		expect(hasLogo("Claude-Code")).toBe(true);
 		expect(hasLogo(" codex ")).toBe(true);
 	});
+});
 
-	// The registry is a hand-written list beside a directory of files and a
-	// second hand-written list of `require`s. Checking it against the real
-	// directory is what stops a rename from silently dropping a mark — a missing
-	// asset is a bundle-time failure, which no type check would catch.
-	it("matches the asset directory exactly", () => {
-		const dir = path.join(__dirname, "..", "assets", "agents");
-		const onDisk = fs
-			.readdirSync(dir)
-			.filter((f) => f.endsWith(".png"))
-			.map((f) => f.replace(/\.png$/, ""))
-			.sort();
-		expect(onDisk).toEqual([...LOGO_KEYS].sort());
-		for (const key of onDisk) {
-			const png = fs.readFileSync(path.join(dir, `${key}.png`));
-			expect([...png.subarray(0, 8)], key).toEqual([137, 80, 78, 71, 13, 10, 26, 10]);
-			expect(() => PNG.sync.read(png), key).not.toThrow();
+// The desktop's marks are the source of truth. The app drifted from them once
+// (wrong brands for grok, goose, crush and pi, an empty auggie, eleven harnesses
+// missing), so these fail as soon as the two disagree.
+describe("parity with the desktop", () => {
+	const desktop = readDesktopLogos(repo);
+
+	it(`ships the desktop's harnesses and no others (${SYNC})`, () => {
+		expect([...LOGO_KEYS].sort()).toEqual(Object.keys(desktop).sort());
+	});
+
+	it(`uses the desktop's file for each mark, as a light/dark pair where the desktop has one (${SYNC})`, () => {
+		for (const [key, { light, dark }] of Object.entries(desktop)) {
+			const entry = HARNESS_LOGO_MANIFEST[key];
+			expect(entry?.light.source, key).toBe(light);
+			expect(entry?.dark?.source, key).toBe(dark);
 		}
 	});
 
-	it("registers fx for Metro", () => {
+	it(`was rasterised from the desktop's current files (${SYNC})`, () => {
+		for (const [key, entry] of Object.entries(HARNESS_LOGO_MANIFEST)) {
+			for (const file of [entry.light, entry.dark]) {
+				if (!file) continue;
+				const desktopFile = fs.readFileSync(path.join(repo, DESKTOP_ASSETS, file.source));
+				expect(sourceHash(desktopFile), `${key}: ${file.source}`).toBe(file.hash);
+			}
+		}
+	});
+});
+
+describe("logo assets", () => {
+	// A missing asset is a bundle-time failure that no type check would catch.
+	it("match the asset directory exactly, each a 128px PNG", () => {
+		const onDisk = fs.readdirSync(assets).filter((f) => f.endsWith(".png")).map((f) => f.replace(/\.png$/, "")).sort();
+		const expected = [...new Set(Object.values(HARNESS_LOGO_MANIFEST).flatMap((entry) =>
+			[entry.light.asset, entry.dark?.asset].filter((asset): asset is string => Boolean(asset)),
+		))].sort();
+		expect(onDisk).toEqual(expected);
+		for (const asset of onDisk) {
+			const png = readAsset(asset);
+			expect([png.width, png.height], asset).toEqual([128, 128]);
+		}
+	});
+
+	it("are each registered for Metro under the scheme they are drawn on", () => {
 		const registry = fs.readFileSync(path.join(__dirname, "harnessLogoAssets.ts"), "utf8");
-		expect(registry).toMatch(/fx:\s*require\("\.\.\/assets\/agents\/fx\.png"\)/);
-	});
-
-	it("keeps the Copilot mark visible on both card backgrounds", () => {
-		const png = PNG.sync.read(fs.readFileSync(path.join(__dirname, "..", "assets", "agents", "copilot.png")));
-		expect(png.width).toBe(128);
-		expect(png.height).toBe(128);
-		expect(lowContrastShare(png.data, hexRgb(lightTheme.bgElevated))).toBeLessThan(0.5);
-		expect(lowContrastShare(png.data, hexRgb(darkTheme.bgElevated))).toBeLessThan(0.5);
-	});
-});
-
-describe("backdropFor", () => {
-	// Measured, not guessed: >50% of these marks fall below 1.5:1 contrast
-	// against white. opencode and cursor are pure #ffffff.
-	it("puts a dark chip behind marks that vanish on a light card", () => {
-		for (const h of ["opencode", "cursor", "cline", "continue", "grok"]) {
-			expect(backdropFor(h), h).toBe("needs-dark");
+		const req = (asset: string) => `require("../assets/agents/${asset}.png")`;
+		for (const [key, { light, dark }] of Object.entries(HARNESS_LOGO_MANIFEST)) {
+			const property = /^[a-z_$][\w$]*$/i.test(key) ? key : JSON.stringify(key);
+			const value = dark ? `{ light: ${req(light.asset)}, dark: ${req(dark.asset)} }` : `{ light: ${req(light.asset)} }`;
+			expect(registry, key).toContain(`\t${property}: ${value},`);
 		}
 	});
 
-	// The symmetric case, which is the one that is easy to miss: goose and
-	// kilocode are pure black and vanish on the dark card.
-	it("puts a light chip behind marks that vanish on a dark card", () => {
-		for (const h of ["kilocode", "goose", "devin", "droid", "pi", "kimi", "fx", "prime-agent"]) {
-			expect(backdropFor(h), h).toBe("needs-light");
+	// No mark sits on a chip, so each theme's mark has to show on that theme's
+	// own surfaces. A mark drawn on the wrong one keeps none of itself (white
+	// cursor on light, black goose on dark); the faintest right one is tau, whose
+	// glyph is about 7% of a black tile.
+	it("stay visible on every surface of the theme they are drawn on", () => {
+		const surfaces = (theme: typeof lightTheme) => [theme.bgBase, theme.bgSurface, theme.bgElevated].map(hexRgb);
+		for (const [key, { light, dark = light }] of Object.entries(HARNESS_LOGO_MANIFEST)) {
+			for (const [mark, theme] of [[light, lightTheme], [dark, darkTheme]] as const) {
+				const png = readAsset(mark.asset);
+				for (const surface of surfaces(theme)) {
+					expect(visibleShare(png.data, surface), `${key} (${mark.asset}) on ${surface}`).toBeGreaterThan(0.05);
+				}
+			}
 		}
 	});
 
-	it("assigns each logo exactly one polarity", () => {
-		const dark = [...NEEDS_DARK_BACKDROP];
-		const light = [...NEEDS_LIGHT_BACKDROP];
-		expect(dark.filter((h) => NEEDS_LIGHT_BACKDROP.has(h))).toEqual([]);
-		expect(NEUTRAL.filter((h) => NEEDS_DARK_BACKDROP.has(h) || NEEDS_LIGHT_BACKDROP.has(h))).toEqual([]);
-		expect([...new Set([...dark, ...light, ...NEUTRAL])].sort()).toEqual([...LOGO_KEYS].sort());
-		for (const h of NEUTRAL) expect(backdropFor(h), h).toBe("neutral");
-	});
-
-	it("treats an unknown or missing harness as neutral", () => {
-		expect(backdropFor("some-new-agent")).toBe("neutral");
-		expect(backdropFor(null)).toBe("neutral");
-	});
-});
-
-describe("chipColorFor", () => {
-	// Every surface that draws a mark has to route through this. The spawn
-	// composer's SwiftUI menu drew the raw asset instead, so opencode's pure-white
-	// mark rendered on the light theme's own surface and disappeared.
-	it("returns the fixed chip for each polarity", () => {
-		expect(chipColorFor("opencode")).toBe(HARNESS_CHIP.dark);
-		expect(chipColorFor("cursor")).toBe(HARNESS_CHIP.dark);
-		expect(chipColorFor("goose")).toBe(HARNESS_CHIP.light);
-		expect(chipColorFor("kilocode")).toBe(HARNESS_CHIP.light);
-	});
-
-	it("returns nothing for a mark that needs no backdrop", () => {
-		expect(chipColorFor("codex")).toBeUndefined();
-		expect(chipColorFor("claude-code")).toBeUndefined();
-		expect(chipColorFor("copilot")).toBeUndefined();
-		expect(chipColorFor(null)).toBeUndefined();
-	});
-
-	// A palette token would follow the theme and put the white mark back on a
-	// light surface, which is the bug this exists to prevent.
-	it("keeps both chips theme-independent", () => {
-		expect(HARNESS_CHIP.dark).toBe("#24272e");
-		expect(HARNESS_CHIP.light).toBe("#ffffff");
+	it("would lose a mark drawn on the wrong theme, which is what the pairs prevent", () => {
+		expect(visibleShare(readAsset("cursor-dark").data, hexRgb(lightTheme.bgSurface))).toBeLessThan(0.05);
+		expect(visibleShare(readAsset("goose-light").data, hexRgb(darkTheme.bgElevated))).toBeLessThan(0.05);
 	});
 });
 

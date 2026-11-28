@@ -480,19 +480,19 @@ describe("SettingsDialog", () => {
 		expect(screen.getByRole("button", { name: "Remote hosts" })).toHaveAttribute("data-active", "true");
 	});
 
-	it("opens Harness, where accounts live, and forwards its agent focus target", async () => {
+	it("opens Agents, where accounts live, and forwards its agent focus target", async () => {
 		useUiStore.getState().openGlobalSettings("harness", { focusAgentId: "claude-code" });
 		renderSettingsDialog();
 
 		const form = await screen.findByTestId("global-settings-section");
 		expect(form).toHaveTextContent("harness");
 		expect(form).toHaveAttribute("data-focus-agent", "claude-code");
-		expect(screen.getByRole("button", { name: "Harness" })).toHaveAttribute("data-active", "true");
+		expect(screen.getByRole("button", { name: "Agents" })).toHaveAttribute("data-active", "true");
 		// Accounts are on each harness's Account tab; there is no page of their own.
-		expect(screen.queryByRole("button", { name: "Subscriptions" })).toBeNull();
+		expect(screen.queryByRole("button", { name: "Accounts" })).toBeNull();
 	});
 
-	it("forwards the remote host from a Manage agents action to Harness", async () => {
+	it("forwards the remote host from a Manage agents action to Agents", async () => {
 		useUiStore.getState().openGlobalSettings("harness", { focusAgentId: "codex", hostId: "box-a" });
 		renderSettingsDialog();
 		const form = await screen.findByTestId("global-settings-section");
@@ -500,13 +500,13 @@ describe("SettingsDialog", () => {
 		expect(form).toHaveAttribute("data-host", "box-a");
 	});
 
-	it("does not replay the Harness focus target after navigating away during the same modal opening", async () => {
+	it("does not replay the Agents focus target after navigating away during the same modal opening", async () => {
 		useUiStore.getState().openGlobalSettings("harness", { focusAgentId: "claude-code" });
 		renderSettingsDialog();
 		expect(await screen.findByTestId("global-settings-section")).toHaveAttribute("data-focus-agent", "claude-code");
 
 		await userEvent.click(screen.getByRole("button", { name: "General" }));
-		await userEvent.click(screen.getByRole("button", { name: "Harness" }));
+		await userEvent.click(screen.getByRole("button", { name: "Agents" }));
 
 		expect(screen.getByTestId("global-settings-section")).not.toHaveAttribute("data-focus-agent");
 	});

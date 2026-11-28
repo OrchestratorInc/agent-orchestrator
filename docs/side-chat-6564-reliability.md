@@ -121,3 +121,50 @@ blocked by missing Visual Studio C++ build tools. No full-app or real-provider
 crash-window pass is claimed. Full Windows suites have platform limitations; see
 [the PR validation notes](https://github.com/OrchestratorInc/agent-orchestrator/pull/7088)
 for complete-suite counts and final-head CI results.
+
+## Deferred opening follow-up (2026-11-15)
+
+Based on upstream `40779b13971a09081d479119b46a12b280f754e8`, side creation now
+records an unused `draft`. The first accepted question atomically freezes the
+completed parent cutoff, launch configuration, model/effort, opening turn ID and
+startup timestamp before creating the child provider. Submissions and settings
+writes are serialized; duplicate client receipts keep their accepted identity.
+The shared Timeline and LiveResponseStatus render the opening question and
+LatticeLoader, while follow-ups use the queue dock. The existing experiment flag
+and desktop-only availability remain.
+
+Recovery keeps unused drafts cold. An uncertain first-send receipt, or a saved
+queued opening whose dispatch may have happened after the snapshot, requires
+visible recreation even when the child provider identity is known. Safe live
+retries retain the accepted question and context. Staged native images reload
+from daemon-owned files after remounts; recreation retains the opening files and
+keeps newer edits in the original tab. Closing retains the existing Electron
+controller's authority and generation fences.
+
+Native verification used a separate checkout, a real npm installation and scratch
+data/profile under `~/.ao/dev/sidechat-deferred-20261115`. Real Codex acceptance
+confirmed no new host on unused open/close, one host on first Send, a 16-dot square
+loader inside the conversation below the question, one reconciled question and a
+completed answer, reload retention, and no orphan host after immediate close of
+an accepted startup. The scratch session and verification app were stopped.
+Computer Use capture and screen recording were not used. Claude Code reported
+signed out, so native Claude acceptance remains unverified.
+
+Focused side lifecycle, delivery, recovery, closing, timeline and HTTP checks,
+frontend/E2E typechecks, renderer production build, Electron main/preload
+compilation, backend build/vet and pinned API regeneration were exercised.
+Full Windows backend suites and the frontend CI always-run suites are not green:
+unchanged failures include POSIX permissions, unavailable symlink privileges,
+Windows path/newline fixtures, and locale-dependent number formatting. The
+backend changed-code lint check reports zero issues; the complete lint gate has
+existing failures. Race tests require a C compiler/CGO, and the Docker Linux
+engine is unavailable. Linux CI and authenticated Claude native acceptance are
+still required before treating this as a release validation pass.
+
+The final focused frontend selection passed 265 tests across 13 files. The full
+439-file related selection passed 9,364 tests, skipped six, and failed one
+unchanged ContextMeter assertion because Windows used `en-IN` number grouping
+(`2,58,400` instead of `258,400`). The 25-file CI always-run selection passed 730,
+failed 33 and skipped six on this host. Neither complete selection is reported as
+a CI pass. All ten failures in the complete Chat/HTTP suites were also reproduced
+on the unchanged upstream checkout.

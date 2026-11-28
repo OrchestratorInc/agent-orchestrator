@@ -124,7 +124,7 @@ for (const theme of ["dark", "light"]) {
 			if (transparency) await expect(page.locator("html")).toHaveAttribute("data-window-translucent", "true");
 
 			// The archive is a modal now, not a sheet over the lanes.
-			await page.getByRole("button", { name: "Archive, 8 sessions", exact: true }).click();
+			await page.getByRole("button", { name: "Archived sessions, 8", exact: true }).click();
 			const archive = page.getByRole("dialog", { name: "Archived sessions" });
 			await expect(archive).toBeVisible();
 			await expect(archive.getByText("Archived session 0")).toBeVisible();

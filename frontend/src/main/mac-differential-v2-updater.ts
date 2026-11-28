@@ -9,7 +9,9 @@ import type { MacV2TrustedKey } from "./mac-differential-v2-protocol";
 import { authorizeMacV2Target, MacV2CleanupError, reconstructMacV2, verifyMacV2LocalFile } from "./mac-differential-v2-transfer";
 
 const MAC_V2_CACHE_AUTHORIZATION = "ao-diff-v2-cache.json";
-class MacV2CacheAuthorizationError extends Error {}
+class MacV2CacheAuthorizationError extends Error {
+	readonly code: string = "MAC_V2_CACHE_AUTHORIZATION_ERROR";
+}
 
 export interface MacV2UpdaterOptions {
   trustedKeys: Readonly<Record<string, MacV2TrustedKey>>;

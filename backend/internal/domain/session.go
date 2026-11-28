@@ -134,6 +134,9 @@ type SessionArtifactFile struct {
 	Size      int64               `json:"size"`
 	UpdatedAt time.Time           `json:"updatedAt"`
 	ShareURL  string              `json:"shareUrl,omitempty"`
+	// ShareAccess is who ShareURL opens for, as the desktop last recorded it:
+	// restricted (invited people only) or anyone. Empty when not recorded.
+	ShareAccess string `json:"shareAccess,omitempty"`
 	// Registered is set on a file the agent registered as a deliverable, or
 	// inside a bundle directory it registered.
 	Registered bool `json:"registered,omitempty"`
@@ -394,6 +397,12 @@ type SessionMetadata struct {
 	// means the provider default, including an explicit task-level reset. The
 	// resolved value is pinned so project-default changes cannot alter resume.
 	Effort string `json:"effort,omitempty"`
+	// RoleAgent is the agent the project named for this session's role when
+	// the session's agent was last chosen: at spawn, or by switching to another
+	// agent. A project setting that differs from it changed afterwards. A
+	// session's own agent differing from the setting is not drift: a spawn or
+	// switch may pick any agent. Empty for sessions from before it was recorded.
+	RoleAgent AgentHarness `json:"-"`
 	// ArtifactDir is the session-owned artifact directory under AO's data dir.
 	// It is outside the git workspace and is never exposed directly on the API.
 	ArtifactDir string `json:"-"`
@@ -403,6 +412,14 @@ type SessionMetadata struct {
 	// session. Keeping the verifier durable lets a surviving worker authenticate
 	// after the desktop app or daemon restarts.
 	BrowserCapabilityVerifier string `json:"-"`
+}
+
+// SessionMove records the AO Cloud session a session moved to.
+type SessionMove struct {
+	MoveID    string    `json:"moveId"`
+	OrgID     string    `json:"orgId"`
+	SessionID string    `json:"sessionId"`
+	At        time.Time `json:"at"`
 }
 
 // SessionRecord is the persistence shape. It intentionally stores only durable
@@ -452,6 +469,18 @@ type SessionRecord struct {
 	// HibernatedAt records that the idle Chat controller was stopped while the
 	// session and conversation remain resumable. Nil means no recorded hibernation.
 	HibernatedAt *time.Time `json:"hibernatedAt,omitempty"`
+	// MovedTo is set when the session moved to AO Cloud. The session is
+	// archived here and continues there, so it must not run here again.
+	MovedTo *SessionMove `json:"movedTo,omitempty"`
+	// MoveConversationPlaced is set on a session moved here from AO Cloud once
+	// its conversation and the conversation's sidecar folder are placed.
+	MoveConversationPlaced bool `json:"-"`
+	// MoveStarted is the move id of a move to AO Cloud whose export pushed the
+	// branch and that has neither finished nor been rolled back. Restoring at
+	// startup leaves such a session stopped; an explicit restore or resume ends
+	// the move here and clears it. The app finishes that move under this id
+	// instead of starting a second one.
+	MoveStarted string `json:"moveStarted,omitempty"`
 	// StaleBinary is set while the session's current launch still runs a
 	// harness release an update has since replaced. It is derived when the row
 	// is read: any later launch starts on the installed release and reads as
@@ -552,6 +581,7 @@ type SessionWait struct {
 
 // SessionBranchState is the session branch's commit and push facts.
 type SessionBranchState struct {
+	Branch string `json:"branch,omitempty"`
 	// Commits is how many commits the branch has on top of its base.
 	Commits int `json:"commits"`
 	// RemoteBranch is the remote-tracking branch, such as "origin/feat/x".
@@ -561,6 +591,21 @@ type SessionBranchState struct {
 	// Unpushed is how many branch commits are not on RemoteBranch. It equals
 	// Commits while RemoteBranch is empty.
 	Unpushed int `json:"unpushed"`
+	// Base is the short name of the branch Commits and Behind are counted
+	// against, such as "main". Empty when the base is known only as a commit,
+	// in which case Behind is not known.
+	Base string `json:"base,omitempty"`
+	// BaseRef is the exact ref that was read for Base, such as "origin/main".
+	BaseRef string `json:"baseRef,omitempty"`
+	// Behind is how many commits Base has that the branch does not. Only
+	// meaningful when Base is set.
+	Behind int `json:"behind"`
+	// Head is the branch's tip commit, so a client can tell work that already
+	// shipped in a merged PR from new work.
+	Head string `json:"head,omitempty"`
+	// Conflicts reports that merging the branch into Base would conflict, read
+	// locally before any provider says so. False also covers "could not tell".
+	Conflicts bool `json:"conflicts"`
 }
 
 // SessionProvisionStepID names one stage of an asynchronous Chat start.
@@ -710,7 +755,7 @@ type Session struct {
 	// important current fact about the session at the stage it sits in. It is
 	// derived after the column, from the facts that column reads, and ships in
 	// renderable form so clients print it without a mapping table of their own.
-	DisplayStatus    DisplayStatus `json:"displayStatus" enum:"Working,Blocked,Needs input,Exited,No signal,Interrupted,Idle,Fixing CI failures,Addressing comments,Review scheduled,Reviewing,Retrying review,Draft,Awaiting review,Review failed,Review cancelled,CI failing,Merge conflicts,Commented,Changes requested,Mergeable,Approved,Merged,Closed without merge,Terminated"`
+	DisplayStatus    DisplayStatus `json:"displayStatus" enum:"Working,Blocked,Needs input,Exited,No signal,Interrupted,Idle,Fixing CI failures,Addressing comments,Review scheduled,Reviewing,Retrying review,Draft,Awaiting review,Review failed,Review cancelled,CI failing,Merge conflicts,Commented,Changes requested,Waiting on base PR,Mergeable,Approved,Merged,Closed without merge,Terminated"`
 	TerminalHandleID string        `json:"terminalHandleId,omitempty"`
 	// TerminalTitle is the title the session's terminal program set, present
 	// only when it should label the session: it is meaningful and no explicit

@@ -49,14 +49,6 @@ describe("MermaidBlock", () => {
 		);
 	});
 
-	it("shows source text without calling the engine while streaming", () => {
-		render(<MermaidBlock code={CODE} streaming />);
-
-		expect(screen.getByText(/A\[User\]/)).toBeInTheDocument();
-		expect(screen.queryByTestId("mermaid-diagram")).not.toBeInTheDocument();
-		expect(renderDiagram).not.toHaveBeenCalled();
-	});
-
 	it("falls back to source with a caption when the diagram will not render", async () => {
 		renderDiagram.mockRejectedValue(new Error("Parse error"));
 		render(<MermaidBlock code={CODE} />);

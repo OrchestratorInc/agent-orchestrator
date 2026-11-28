@@ -330,6 +330,7 @@ func TestInteractiveRestoreRequiresRenderedScreen(t *testing.T) {
 	a := &interactiveTestAgent{plan: &interactiveTestPlan{}}
 	m, _, raw, _ := interactiveManager(t, true, a)
 	m.runtime = &renderedRestoreRuntime{fakeRuntime: raw, err: errors.New("current rendered screen unavailable")}
+	m.nativeRestoreProofWait = 50 * time.Millisecond
 	if _, err := m.RestoreWithMode(ctx, "mer-1"); err == nil || !strings.Contains(err.Error(), "current rendered") {
 		t.Fatal(err)
 	}
@@ -338,5 +339,108 @@ func TestInteractiveRestoreRequiresRenderedScreen(t *testing.T) {
 	}
 	if raw.destroyed != 1 {
 		t.Fatal("unsupported runtime not rolled back", raw.destroyed)
+	}
+}
+
+// A provider's current-generation receipt and composer are insufficient when
+// its exact supervised child has exited or the process probe is inconclusive.
+type receiptRestoreVerifier struct{}
+
+func (receiptRestoreVerifier) VerifyNativeRestore(context.Context, ports.RestoreConfig, string, string) (bool, error) {
+	return true, nil
+}
+
+func TestNativeRestoreReceiptRequiresLiveExactGeneration(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		alive     bool
+		probeErr  error
+		wantError bool
+	}{
+		{name: "live exact child", alive: true},
+		{name: "receipt survives dead child", wantError: true},
+		{name: "probe unknown", probeErr: errors.New("probe unavailable"), wantError: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			rt := &fakeRuntime{aliveByHandle: map[string]bool{"target": tc.alive}, supervisedErr: tc.probeErr}
+			m := New(Deps{Runtime: &renderedRestoreRuntime{fakeRuntime: rt}})
+			err := m.verifyNativeRestore(t.Context(), receiptRestoreVerifier{}, ports.RestoreConfig{
+				Session: ports.SessionRef{ID: "mastra-1"},
+			}, "replacement", ports.RuntimeHandle{ID: "target"})
+			if (err != nil) != tc.wantError {
+				t.Fatalf("verification error = %v, wantError=%t", err, tc.wantError)
+			}
+		})
+	}
+}
+
+// flakyRenderedRuntime fails its first screen reads, then renders.
+type flakyRenderedRuntime struct {
+	*fakeRuntime
+	failures int
+}
+
+func (r *flakyRenderedRuntime) GetStyledOutput(context.Context, ports.RuntimeHandle, int) (string, error) {
+	if r.failures > 0 {
+		r.failures--
+		return "", errors.New("transient read failure")
+	}
+	return "CURRENT RENDERED SCREEN", nil
+}
+
+// A failed read of the replacement's screen is retried like an unready
+// composer; only the proof deadline turns it into a failed restore.
+func TestNativeRestoreRetriesTransientScreenReads(t *testing.T) {
+	rt := &fakeRuntime{aliveByHandle: map[string]bool{"target": true}}
+	m := New(Deps{Runtime: &flakyRenderedRuntime{fakeRuntime: rt, failures: 2}})
+	err := m.verifyNativeRestore(t.Context(), receiptRestoreVerifier{}, ports.RestoreConfig{
+		Session: ports.SessionRef{ID: "mastra-1"},
+	}, "replacement", ports.RuntimeHandle{ID: "target"})
+	if err != nil {
+		t.Fatalf("transient read failures failed the restore: %v", err)
+	}
+	m = New(Deps{Runtime: &flakyRenderedRuntime{fakeRuntime: rt, failures: 1 << 30}})
+	m.nativeRestoreProofWait = 50 * time.Millisecond
+	err = m.verifyNativeRestore(t.Context(), receiptRestoreVerifier{}, ports.RestoreConfig{
+		Session: ports.SessionRef{ID: "mastra-1"},
+	}, "replacement", ports.RuntimeHandle{ID: "target"})
+	if err == nil || !strings.Contains(err.Error(), "transient read failure") {
+		t.Fatalf("persistent read failure = %v; want it reported at the deadline", err)
+	}
+}
+
+// failingProofAgent restores natively but its identity proof always fails.
+type failingProofAgent struct{ *interactiveTestAgent }
+
+func (failingProofAgent) VerifyNativeRestore(context.Context, ports.RestoreConfig, string, string) (bool, error) {
+	return false, errors.New("resumed a different native thread")
+}
+
+// A stale TUI replacement that dies during the identity proof is fenced from
+// the old row, like one that dies at the start check, so the failure must
+// reconcile it as exited instead of leaving an idle row nothing can resume.
+func TestFailedNativeIdentityReconcilesDeadStaleTUIReplacement(t *testing.T) {
+	rt := &fakeRuntime{fencedResult: ports.FencedProbeResult{Liveness: ports.FencedDead}}
+	agent := failingProofAgent{&interactiveTestAgent{plan: &interactiveTestPlan{}}}
+	m, st, _ := newExitedResumeManager(t, rt, agent)
+	m.runtime = &renderedRestoreRuntime{fakeRuntime: rt}
+	m.lcm = &nativeBindingLCM{fakeLCM: &fakeLCM{store: st}}
+	rec := st.sessions["mer-1"]
+	rec.Harness = domain.HarnessMemcode
+	rec.Activity.State = domain.ActivityIdle
+	rec.Metadata.AgentSessionIDLaunchID = "launch-old"
+	rec.StaleBinary = &domain.SessionStaleBinary{Version: "new", Since: time.Now()}
+	st.sessions[rec.ID] = rec
+
+	_, err := m.resumeAgentRecordWithPolicy(context.Background(), "version refresh", rec, true)
+	if err == nil || !strings.Contains(err.Error(), "native identity") {
+		t.Fatalf("restore error = %v; want the native identity failure", err)
+	}
+	got := st.sessions[rec.ID]
+	if got.Activity.State != domain.ActivityExited {
+		t.Fatalf("activity = %q; want the dead replacement reconciled as exited", got.Activity.State)
+	}
+	if got.Metadata.RuntimeLaunchID != "launch-old" || got.Metadata.AgentSessionID != "agent-x" || got.StaleBinary == nil {
+		t.Fatalf("failed restore lost recoverable state: %+v", got)
 	}
 }

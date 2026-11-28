@@ -75,7 +75,7 @@ it("sends inspector policy and review mutations to the selected host with equal 
 	a.unmount();
 	const b = renderInspector("box-b");
 	await userEvent.click(screen.getByRole("tab", { name: "Reviews" }));
-	await userEvent.click(await screen.findByRole("button", { name: "Review latest commit" }));
+	await userEvent.click(await screen.findByRole("button", { name: "Review now" }));
 	await waitFor(() => expect(mutations).toContain("POST http://127.0.0.1:4001/api/v1/sessions/same-session/reviews/trigger"));
 	expect(mutations).not.toContain("PATCH http://127.0.0.1:4001/api/v1/sessions/same-session/auto-inject-ci");
 	expect(client.getQueryData(sessionReviewsQueryKey("same-session"))).toBe("local-sentinel");

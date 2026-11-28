@@ -4,6 +4,7 @@ import { AgentLogo } from "./AgentLogo";
 import { formatVersionTime, restoredNote, versionAuthor, type ArtifactVersionSummary } from "./artifactVersions";
 import { userFacingError } from "./connectionError";
 import { haptics } from "./haptics";
+import { AppSymbol } from "./AppSymbol";
 import { Feather } from "./icons";
 import { useApp } from "./store";
 import { useArtifactsBackend } from "./useArtifactsBackend";
@@ -101,7 +102,7 @@ export function ArtifactHistorySheet({ sessionId, path, name, onSelect }: { sess
 						) : (
 							<AgentLogo harness={author.harness} size={AVATAR} />
 						)}
-						<Feather name="chevron-right" size={iconSize.sm} color={t.textFaint} />
+						<AppSymbol name="chevronForward" size={iconSize.sm} color={t.textFaint} weight="semibold" />
 					</Pressable>
 				);
 			}}

@@ -7,6 +7,7 @@ import { CloudSessionScreen } from "../../lib/cloud/CloudSessionScreen";
 import { isCloudHost } from "../../lib/cloud/mapping";
 import { hostRouteMatches } from "../../lib/hostRoute";
 import { rememberLastProject } from "../../lib/lastProject";
+import { MachineRejectedState } from "../../lib/MachineRejectedState";
 import { lookUpSession } from "../../lib/session/sessionLookup";
 import TerminalSessionScreen from "../../lib/session/TerminalSessionScreen";
 import {
@@ -17,6 +18,7 @@ import {
 	type KeyedSessionLookup,
 } from "../../lib/session/sessionRoute";
 import { HostScope, useApp } from "../../lib/store";
+import { useSessionSurface } from "../../lib/telemetry/useSessionSurface";
 import { useTheme, useThemedStyles } from "../../lib/ThemeProvider";
 import type { Theme } from "../../lib/theme";
 import { Button, EmptyState } from "../../lib/ui";
@@ -30,6 +32,7 @@ import { Button, EmptyState } from "../../lib/ui";
  */
 export default function MobileSessionRoute() {
 	const { id, hostId } = useLocalSearchParams<{ id: string; hostId?: string }>();
+	useSessionSurface(isCloudHost(hostId) ? "cloud" : null, `${hostId ?? ""}|${id ?? ""}`);
 	// Orchestrator Cloud sessions open the same route with the cloud host: their chat and
 	// terminal come from the control plane rather than a paired daemon.
 	if (isCloudHost(hostId)) return <CloudSessionScreen key={String(id ?? "")} sessionId={String(id ?? "")} />;
@@ -43,7 +46,7 @@ function SessionRouteContent() {
 	// `machine` and `paired`, not `config`: the verified connection drops on every
 	// app switch and endpoint race, and this screen must stay mounted through
 	// both (see viewMachine.ts).
-	const { sessions, orchestrators, projects, config, machine, paired, currentHostId, connection, loading } = useApp();
+	const { sessions, orchestrators, projects, config, machine, paired, unreachable, currentHostId, connection, error, errorStatus, loading } = useApp();
 	const hostMatches = hostRouteMatches(routeHostId, currentHostId);
 	const listed = hostMatches ? sessions.find((item) => item.id === id) ?? orchestrators.find((item) => item.id === id) : undefined;
 	const isListed = Boolean(listed);
@@ -125,12 +128,13 @@ function SessionRouteContent() {
 		setAttempt((n) => n + 1);
 	}, []);
 
-	const view = sessionRouteView({ listed, paired, connection, loading, lookup, routeHostId, currentHostId: currentHostId ?? undefined });
+	const view = sessionRouteView({ listed, paired, unreachable, connection, error, errorStatus, loading, lookup, routeHostId, currentHostId: currentHostId ?? undefined });
 	// The session on screen, listed or looked up. A session can outlive its
 	// project; only a project still listed is worth starting in.
 	const shownProjectId = view.kind === "screen" ? view.session.projectId : undefined;
 	const rememberedProjectId = shownProjectId && projects.some((project) => project.id === shownProjectId) ? shownProjectId : undefined;
 	useFocusEffect(useCallback(() => { rememberLastProject(currentHostId, rememberedProjectId); }, [currentHostId, rememberedProjectId]));
+	useSessionSurface(view.kind === "screen" ? view.session.mode : null, `${routeHostId ?? currentHostId ?? ""}|${id}`);
 
 	switch (view.kind) {
 		case "screen":
@@ -179,6 +183,14 @@ function SessionRouteContent() {
 						title="This machine is offline"
 						action={<Button title="Open board" icon="workers" variant="secondary" onPress={openBoard} />}
 					/>
+				</View>
+			);
+		case "rejected":
+			// The board's own copy for the refusal, with its repair; no Retry, which
+			// would only spend another attempt toward the daemon's lockout.
+			return (
+				<View style={styles.center}>
+					<MachineRejectedState action={<Button key="board" title="Open board" icon="workers" variant="secondary" onPress={openBoard} />} />
 				</View>
 			);
 		case "ended":

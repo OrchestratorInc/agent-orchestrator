@@ -120,11 +120,18 @@ WHERE ub.state = 'finalizing'
 ORDER BY us.id;
 
 -- name: HasPendingUsageDiscovery :one
+-- Only bindings that ListUsageDiscoveryBindings would revisit count. A settled
+-- binding with a missing transcript is never rediscovered, so counting it kept
+-- discovery pending, and retrying, for as long as its session lived.
 SELECT CAST(EXISTS (
     SELECT 1
     FROM usage_bindings ub
     JOIN sessions s ON s.id = ub.session_id
     WHERE (s.is_terminated = 0 OR ub.state = 'finalizing')
+      AND (
+          ub.state IN ('discovering', 'active', 'finalizing')
+          OR (ub.state = 'partial' AND ub.last_error_code = 'codex_source_budget_exceeded')
+      )
       AND (
           ub.harness IN ('kimi', 'qwen')
           OR ub.state = 'discovering'

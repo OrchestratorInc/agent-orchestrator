@@ -3,6 +3,7 @@ import { useEffect, useLayoutEffect } from "react";
 import { StyleSheet, View } from "react-native";
 import { haptics } from "./haptics";
 import { captureMobileException } from "./sentry";
+import { reportErrorShown } from "./telemetry/uiUsageRegistry";
 import { Button, EmptyState } from "./ui";
 import { space } from "./tokens";
 import { backOr } from "./backNavigation";
@@ -29,7 +30,7 @@ import { backOr } from "./backNavigation";
 export function RouteErrorBoundary({ error, retry }: ErrorBoundaryProps) {
 	const router = useRouter();
 	const navigation = useNavigation();
-	useReportOnShow(error);
+	useReportOnShow(error, "screen");
 	// Header options belong to the navigator, so a header button the route set
 	// outlives it and would act on a screen that is no longer there. A successful
 	// retry remounts the route, which sets its own again.
@@ -67,7 +68,7 @@ export function RouteErrorBoundary({ error, retry }: ErrorBoundaryProps) {
  */
 export function SheetErrorBoundary({ error }: ErrorBoundaryProps) {
 	const router = useRouter();
-	useReportOnShow(error);
+	useReportOnShow(error, "sheet");
 	return (
 		<View style={styles.center}>
 			<EmptyState
@@ -83,11 +84,12 @@ export function SheetErrorBoundary({ error }: ErrorBoundaryProps) {
 // Runs on every show, including after a Try again that threw again, so that tap
 // is never a silent no-op. Reported with the category and operation the desktop's
 // boundary ends up with (`telemetry.ts` maps its source to `render_crash`).
-function useReportOnShow(error: Error) {
+function useReportOnShow(error: Error, presentation: "screen" | "sheet") {
 	useEffect(() => {
 		haptics.error();
 		captureMobileException(error, { category: "render_crash", operation: "react_render" });
-	}, [error]);
+		reportErrorShown(presentation, "render_crash");
+	}, [error, presentation]);
 }
 
 // No background: the route's own contentStyle shows through, so a sheet keeps its

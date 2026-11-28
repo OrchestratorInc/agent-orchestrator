@@ -48,7 +48,7 @@ func TestSessionListDerivesKanbanColumn(t *testing.T) {
 			record: domain.SessionRecord{ID: "mer-1", ProjectID: "mer"},
 			pr:     &domain.PRFacts{URL: "pr1", HeadSHA: "head1"},
 			runs: []domain.CurrentHeadReviewRun{
-				{PRURL: "pr1", Status: domain.ReviewRunComplete, Verdict: domain.VerdictApproved},
+				{PRURL: "pr1", Status: domain.ReviewRunCompleted, Verdict: domain.VerdictApproved},
 			},
 			want: domain.KanbanNeedsReview,
 		},
@@ -57,7 +57,7 @@ func TestSessionListDerivesKanbanColumn(t *testing.T) {
 			record: domain.SessionRecord{ID: "mer-1", ProjectID: "mer", AutoReviewEnabled: true},
 			pr:     &domain.PRFacts{URL: "pr1", HeadSHA: "head1"},
 			runs: []domain.CurrentHeadReviewRun{
-				{PRURL: "pr1", Status: domain.ReviewRunComplete, Verdict: domain.VerdictChangesRequested},
+				{PRURL: "pr1", Status: domain.ReviewRunCompleted, Verdict: domain.VerdictChangesRequested},
 			},
 			want: domain.KanbanValidating,
 		},
@@ -80,6 +80,15 @@ func TestSessionListDerivesKanbanColumn(t *testing.T) {
 				Mergeability: domain.MergeBlocked, ExternalApproved: true,
 			},
 			want: domain.KanbanReady,
+		},
+		{
+			name:   "a mergeable pr stacked on an open pr waits in review",
+			record: domain.SessionRecord{ID: "mer-1", ProjectID: "mer"},
+			pr: &domain.PRFacts{
+				URL: "pr1", HeadSHA: "head1", Mergeability: domain.MergeMergeable,
+				CI: domain.CIPassing, StackParent: 8277,
+			},
+			want: domain.KanbanNeedsReview,
 		},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
@@ -341,7 +350,7 @@ func TestSessionGetUsesLatestCurrentHeadRunPerHarness(t *testing.T) {
 		t.Helper()
 		if err := st.InsertReviewRun(ctx, domain.ReviewRun{
 			ID: id, ReviewID: "rev", SessionID: rec.ID, Harness: "claude-code",
-			PRURL: "pr/1", TargetSHA: "head1", Status: domain.ReviewRunComplete,
+			PRURL: "pr/1", TargetSHA: "head1", Status: domain.ReviewRunCompleted,
 			Verdict: verdict, CreatedAt: createdAt, AutoInjectReview: true,
 		}); err != nil {
 			t.Fatalf("insert %s: %v", id, err)
@@ -441,11 +450,11 @@ func TestSessionGetDoesNotPromiseARetryAutoReviewWillNotRun(t *testing.T) {
 		},
 		{
 			name: "approved pass before a failed rerun", earlierHarness: "claude-code",
-			earlierStatus: domain.ReviewRunComplete, earlierVerdict: domain.VerdictApproved, wantDisplay: contract.DisplayReviewFailed,
+			earlierStatus: domain.ReviewRunCompleted, earlierVerdict: domain.VerdictApproved, wantDisplay: contract.DisplayReviewFailed,
 		},
 		{
 			name: "changes requested before a failed rerun", earlierHarness: "claude-code",
-			earlierStatus: domain.ReviewRunComplete, earlierVerdict: domain.VerdictChangesRequested, wantDisplay: contract.DisplayReviewFailed,
+			earlierStatus: domain.ReviewRunCompleted, earlierVerdict: domain.VerdictChangesRequested, wantDisplay: contract.DisplayReviewFailed,
 		},
 		{
 			name: "another harness cancelled does not stop this one", earlierHarness: "codex",
@@ -544,7 +553,7 @@ func TestSessionKanbanIdleWorkerAfterAOReviewDeliveryRequestsChanges(t *testing.
 	if err := st.InsertReviewRun(ctx, domain.ReviewRun{
 		ID: "current", ReviewID: "rev", SessionID: rec.ID, Harness: "claude-code",
 		PRURL: "pr/1", TargetSHA: "head1", GithubReviewID: providerReviewID,
-		Status: domain.ReviewRunComplete, Verdict: domain.VerdictChangesRequested,
+		Status: domain.ReviewRunCompleted, Verdict: domain.VerdictChangesRequested,
 		AutoInjectReview: true, CreatedAt: now,
 	}); err != nil {
 		t.Fatal(err)
@@ -587,5 +596,45 @@ func seedKanbanTestProject(t *testing.T, st *sqlite.Store, id string) {
 		ID: id, Path: "/tmp/" + id, RegisteredAt: time.Now().UTC().Truncate(time.Second),
 	}); err != nil {
 		t.Fatalf("seed project %s: %v", id, err)
+	}
+}
+
+func TestKanbanFactsCarryHumanPromptAndSettleTimes(t *testing.T) {
+	t.Parallel()
+	prompt := time.Date(2026, 11, 23, 19, 0, 0, 0, time.UTC)
+	message := prompt.Add(time.Minute)
+	merged := prompt.Add(-24 * time.Hour)
+
+	for _, tt := range []struct {
+		name string
+		md   domain.SessionMetadata
+		want time.Time
+	}{
+		{name: "never prompted", want: time.Time{}},
+		{name: "a human prompt", md: domain.SessionMetadata{LatestUserPromptAt: prompt}, want: prompt},
+		{name: "a newer message from another session does not count", md: domain.SessionMetadata{LatestUserPromptAt: prompt, LatestInteractionAt: message}, want: prompt},
+		{name: "only a session message is not a human prompt", md: domain.SessionMetadata{LatestInteractionAt: message}, want: time.Time{}},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			got := toContractKanbanSessionFacts(domain.SessionRecord{Metadata: tt.md}, false, true).HumanPromptAt
+			if !got.Equal(tt.want) {
+				t.Fatalf("HumanPromptAt = %v, want %v", got, tt.want)
+			}
+		})
+	}
+
+	prs := toContractKanbanPRFacts([]domain.PRFacts{
+		{URL: "open", StateChangedAt: merged, UpdatedAt: prompt},
+		{URL: "merged", Merged: true, StateChangedAt: merged, UpdatedAt: prompt},
+		{URL: "closed", Closed: true, StateChangedAt: merged, UpdatedAt: prompt},
+	}, nil)
+	for _, pr := range prs {
+		want := merged
+		if pr.URL == "open" {
+			want = time.Time{}
+		}
+		if !pr.SettledAt.Equal(want) {
+			t.Fatalf("%s SettledAt = %v, want %v (from StateChangedAt, never UpdatedAt)", pr.URL, pr.SettledAt, want)
+		}
 	}
 }

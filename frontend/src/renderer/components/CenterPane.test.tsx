@@ -882,17 +882,25 @@ describe("CenterPane tab context menu", () => {
 		expect(await screen.findByRole("menuitem", { name: /Archive session/ })).toBeInTheDocument();
 		unmount();
 
-		renderCenterPane({ session: { ...worker, cloud: { orgId: "org-1" } } as WorkspaceSession });
+		// A Cloud worker archives like a local one.
+		const cloud = renderCenterPane({ session: { ...worker, cloud: { orgId: "org-1" } } as WorkspaceSession });
 		fireEvent.contextMenu(screen.getByRole("tab", { name: /^do the thing/ }));
-		await screen.findByRole("menuitem", { name: "Close tab" });
+		expect(await screen.findByRole("menuitem", { name: /Archive session/ })).toBeInTheDocument();
+		cloud.unmount();
+
+		// A Cloud session shared from another organization is the sharer's to archive.
+		renderCenterPane({ session: { ...worker, cloud: { orgId: "org-1", shared: true } } as WorkspaceSession });
+		fireEvent.contextMenu(screen.getByRole("tab", { name: /^do the thing/ }));
+		await screen.findByRole("menu");
 		expect(screen.queryByRole("menuitem", { name: /Archive session/ })).not.toBeInTheDocument();
 	});
 
-	it("never closes the session's own tab", async () => {
+	it("lists no Close tab for the session's own tab", async () => {
 		renderCenterPane({ session: worker, shellTerminals: shells, onCloseShellTerminal: vi.fn() });
 
 		fireEvent.contextMenu(screen.getByRole("tab", { name: /^do the thing/ }));
 
-		expect(await screen.findByRole("menuitem", { name: "Close tab" })).toHaveAttribute("aria-disabled", "true");
+		expect(await screen.findByRole("menuitem", { name: /Archive session/ })).toBeInTheDocument();
+		expect(screen.queryByRole("menuitem", { name: "Close tab" })).not.toBeInTheDocument();
 	});
 });

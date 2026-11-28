@@ -82,7 +82,9 @@ describe("project page", () => {
 	// One way to start a task at a time: "No workers yet" has its own Start
 	// task, so the compose button and the FAB wait for a worker to show.
 	it("leaves the compose button and the FAB out while No workers yet offers Start task", () => {
-		expect(page).toContain("const offerNewTask = canStartTask && !noWorkersShown;");
+		// Unknown until the list reports, so an empty project never flashes the compose button.
+		expect(page).toContain("const [noWorkersShown, setNoWorkersShown] = useState<boolean | null>(null);");
+		expect(page).toContain("const offerNewTask = canStartTask && noWorkersShown === false;");
 		expect(page).toContain("onEmptyChange={setNoWorkersShown}");
 		expect(page).toContain('{offerNewTask ? <AddFab expanded={fab.expanded} label="New task"');
 		expect(page).toContain('action={<Button title="Start task" icon="plus" onPress={startTask} />}');

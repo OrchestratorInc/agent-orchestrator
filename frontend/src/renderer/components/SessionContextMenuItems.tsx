@@ -1,19 +1,24 @@
 import { useCallback, useRef } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
-import { Archive, Code2, Copy, ExternalLink, GitBranch, Pencil, Pin, PinOff, Play } from "@/components/app-icons";
+import { Archive, Cloud, Code2, Copy, ExternalLink, GitBranch, GitFork, Laptop, Pencil, Pin, PinOff, Play } from "@/components/app-icons";
 import type { OpenTarget } from "../../shared/editor-handoff";
 import { resumeAgentOnOpen, useCanResumeAgent } from "../hooks/useCanResumeAgent";
+import { useIsCloudSessionCreator } from "../hooks/useCloudAgentSwitch";
+import { useCloudGate } from "../hooks/useCloudGate";
+import { useCloudOffering } from "../hooks/useCloudOffering";
 import { conversationQueryKey } from "../hooks/useConversation";
 import { editorHandoffErrorMessage, useEditorHandoffState, useOpenSessionTarget } from "../hooks/useEditorHandoff";
 import { usePinSession, useUnpinSession } from "../hooks/usePinSession";
 import { workspaceQueryKeyForHost } from "../hooks/useWorkspaceQuery";
 import { aoBridge } from "../lib/bridge";
+import { CLOUD_BRANCH_FEATURE } from "../lib/move-session";
 import { sessionBranchPresentation } from "../lib/session-branch";
 import { useUiStore } from "../stores/ui-store";
-import { isOrchestratorSession, primaryPR, type WorkspaceSession } from "../types/workspace";
+import { isOrchestratorSession, primaryPR, sessionIsActive, type WorkspaceSession } from "../types/workspace";
 import { MenuEntries, type MenuEntry } from "./menu-model";
 import { OpenTargetIcon } from "./OpenTargetIcon";
+import { useForkSessionFromMenu, useSessionForkOptions } from "./SessionForkControls";
 
 /** Copy from a menu, which has no inline place to confirm the copy. */
 export function useCopyToClipboard() {
@@ -58,6 +63,19 @@ export function useSessionMenuEntries(session: WorkspaceSession | undefined, { o
 	// Remote and Cloud sessions have no local workspace for Electron to hand off.
 	const hasLocalWorkspace = Boolean(session && !session.hostId && !session.cloud);
 	const workspaceEntries = useSessionWorkspaceEntries(hasLocalWorkspace ? session : undefined);
+	const forkSession = useForkSessionFromMenu();
+	// Cloud sessions can't be forked here; for the rest the daemon says
+	// whether this one can, and why not.
+	const forkable = Boolean(session && !session.cloud);
+	const forkOptions = useSessionForkOptions(session, forkable);
+	const openMoveSession = useUiStore((state) => state.openMoveSession);
+	// Sessions move between this computer and AO Cloud, so only they read this daemon's settings.
+	const { cloudEnabled } = useCloudGate(Boolean(session && !session.hostId));
+	// Only the person who started a Cloud session may move it, and only once
+	// its organization's Cloud can push a session's branch.
+	const cloudOrgId = session?.cloud?.orgId;
+	const cloudOffering = useCloudOffering(Boolean(cloudOrgId), cloudOrgId);
+	const cloudCreator = useIsCloudSessionCreator(session?.cloud ? session : undefined);
 	if (!session) return [];
 
 	const branch = sessionBranchPresentation(session).branch;
@@ -67,6 +85,16 @@ export function useSessionMenuEntries(session: WorkspaceSession | undefined, { o
 	// plane for a Cloud session. A session shared from another organization is
 	// the sharer's to name and lists outside this sidebar's pins.
 	const canRenameAndPin = !session.cloud?.shared;
+	// A live worker on this computer can move to AO Cloud when Cloud is on.
+	const canMove = cloudEnabled && !session.cloud && !isOrchestratorSession(session) && sessionIsActive(session);
+	// A live worker this person started in AO Cloud can move to this computer.
+	const canMoveHere =
+		cloudEnabled &&
+		Boolean(session.cloud && !session.cloud.shared) &&
+		cloudCreator &&
+		cloudOffering.features.includes(CLOUD_BRANCH_FEATURE) &&
+		!isOrchestratorSession(session) &&
+		sessionIsActive(session);
 	const resume = () => {
 		void resumeAgentOnOpen(session.id)
 			.catch((error: unknown) => {
@@ -95,6 +123,7 @@ export function useSessionMenuEntries(session: WorkspaceSession | undefined, { o
 				label: t("shell.rename"),
 				onSelect: onRename,
 				shortcut: renameShortcut,
+				accelerator: "r",
 			},
 			{
 				kind: "item",
@@ -102,11 +131,35 @@ export function useSessionMenuEntries(session: WorkspaceSession | undefined, { o
 				icon: session.isPinned ? <PinOff aria-hidden="true" /> : <Pin aria-hidden="true" />,
 				label: session.isPinned ? t("shell.unpinSession") : t("shell.pinSession"),
 				onSelect: () => (session.isPinned ? unpinSession(session) : pinSession(session)),
+				accelerator: "p",
 			},
 		);
 	}
 	if (canResume) {
 		entries.push({ kind: "item", id: "session-resume", icon: <Play aria-hidden="true" />, label: t("command.resumeAgent"), onSelect: resume });
+	}
+	// Forks at the latest finished turn; terminal sessions have no turn rows,
+	// so this is their way to fork. A session that can't be forked shows the
+	// item disabled, with the reason as its tooltip: a line under it would
+	// widen the fixed-width menu.
+	if (forkable) {
+		const refused = forkOptions.data && !forkOptions.data.allowed ? forkOptions.data : undefined;
+		entries.push({
+			kind: "item",
+			id: "session-fork",
+			icon: <GitFork aria-hidden="true" />,
+			label: t("sessionFork.forkSession"),
+			disabled: Boolean(refused),
+			title: refused?.refusal?.message,
+			onSelect: () => forkSession(session),
+			accelerator: "f",
+		});
+	}
+	if (canMove) {
+		entries.push({ kind: "item", id: "session-move-to-cloud", icon: <Cloud aria-hidden="true" />, label: t("move.menuItem"), onSelect: () => openMoveSession(session) });
+	}
+	if (canMoveHere) {
+		entries.push({ kind: "item", id: "session-move-here", icon: <Laptop aria-hidden="true" />, label: t("moveHere.menuItem"), onSelect: () => openMoveSession(session) });
 	}
 	entries.push({ kind: "separator", id: "session-links-sep" });
 	if (pr) {
@@ -117,6 +170,7 @@ export function useSessionMenuEntries(session: WorkspaceSession | undefined, { o
 				icon: <ExternalLink aria-hidden="true" />,
 				label: t("command.openPr", { number: pr.number }),
 				onSelect: () => openPullRequest(pr.url, t("command.openPr", { number: pr.number })),
+				accelerator: "o",
 			},
 			{
 				kind: "item",
@@ -128,12 +182,12 @@ export function useSessionMenuEntries(session: WorkspaceSession | undefined, { o
 		);
 	}
 	if (showBranch && branch) {
-		entries.push({ kind: "item", id: "session-copy-branch", icon: <GitBranch aria-hidden="true" />, label: t("command.copyBranch"), onSelect: () => copyToClipboard(branch) });
+		entries.push({ kind: "item", id: "session-copy-branch", icon: <GitBranch aria-hidden="true" />, label: t("command.copyBranch"), onSelect: () => copyToClipboard(branch), accelerator: "b" });
 	}
 	if (onArchive) {
 		entries.push(
 			{ kind: "separator", id: "session-archive-sep" },
-			{ kind: "item", id: "session-archive", icon: <Archive aria-hidden="true" />, label: t("shell.archiveSession"), onSelect: onArchive },
+			{ kind: "item", id: "session-archive", icon: <Archive aria-hidden="true" />, label: t("shell.archiveSession"), onSelect: onArchive, accelerator: "a" },
 		);
 	}
 	return entries;
@@ -208,7 +262,7 @@ function useSessionWorkspaceEntries(session: WorkspaceSession | undefined): Menu
 		});
 	}
 	if (state?.workspaceAvailable !== false) {
-		entries.push({ kind: "item", id: "copy-workspace-path", icon: <Copy aria-hidden="true" />, label: t("editor.copyPath"), onSelect: copyPath });
+		entries.push({ kind: "item", id: "copy-workspace-path", icon: <Copy aria-hidden="true" />, label: t("editor.copyPath"), onSelect: copyPath, accelerator: "c" });
 	}
 	return entries;
 }

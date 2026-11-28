@@ -27,6 +27,7 @@ const AGENT_STEP_ERRORS = new Set([
 	"working_directory_occupied",
 	"project_setup_failed",
 	"agent_start_failed",
+	"conversation_restore_failed",
 ]);
 
 /**

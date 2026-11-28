@@ -79,7 +79,7 @@ func (v *Verifier) Verify(ctx context.Context, target Target) (VerifyResult, err
 		return VerifyResult{}, err
 	}
 	out := &capturedOutput{max: maxOutputBytes}
-	if err := v.commands.Run(probeCtx, []string{path, "--version"}, out, out); err != nil {
+	if err := v.commands.Run(probeCtx, append([]string{path}, versionArgs(target)...), out, out); err != nil {
 		result := VerifyResult{ResolvedPath: path, Output: out.String()}
 		// The runner kills the probe at the deadline, so err alone only says
 		// "signal: killed". Name the timeout so the failure is actionable.
@@ -89,4 +89,13 @@ func (v *Verifier) Verify(ctx context.Context, target Target) (VerifyResult, err
 		return result, fmt.Errorf("run %s version probe: %w", target, err)
 	}
 	return VerifyResult{ResolvedPath: path, Output: out.String()}, nil
+}
+
+// versionArgs is the native version command; most CLIs take --version, but
+// Docker Agent only has a `version` subcommand and rejects the flag.
+func versionArgs(target Target) []string {
+	if target == TargetDockerAgent {
+		return []string{"version"}
+	}
+	return []string{"--version"}
 }

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"io"
 	"log/slog"
+	"strings"
 	"testing"
 	"time"
 
@@ -16,8 +17,10 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/crush"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/droid"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/hermes"
+	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/kimi"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/kiro"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/memcode"
+	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/minimaxcode"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/muse"
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
@@ -57,15 +60,50 @@ type pollingResolverAgent struct {
 	resolvedID   string
 	resolveErr   error
 	resolveCalls int
+	lastResolve  ports.NativeSessionResolveConfig
 }
 
 func (a *pollingResolverAgent) DetectTerminalActivity(string) (domain.ActivityState, bool) {
 	return a.state, true
 }
 func (*pollingResolverAgent) ContinuouslyDetectTerminalActivity() bool { return true }
-func (a *pollingResolverAgent) ResolveNativeSessionID(context.Context, ports.NativeSessionResolveConfig) (string, bool, error) {
+func (a *pollingResolverAgent) ResolveNativeSessionID(_ context.Context, cfg ports.NativeSessionResolveConfig) (string, bool, error) {
 	a.resolveCalls++
+	a.lastResolve = cfg
 	return a.resolvedID, true, a.resolveErr
+}
+
+// An adapter whose native-identity lookup runs its CLI (Stakpak on a remote
+// profile) may need a credential set only in the project environment. The
+// observer passes the session's runtime environment from the session manager.
+func TestPollResolvesNativeIdentityInTheSessionEnvironment(t *testing.T) {
+	now := time.Unix(500, 0).UTC()
+	session := activeSession(now, domain.HarnessCodewhale)
+	agent := &pollingResolverAgent{state: domain.ActivityIdle, resolvedID: "native-id"}
+	sink := &fakeSink{}
+	observer := New(fakeSessions{rows: []domain.SessionRecord{session}}, sink, &fakeRuntime{}, fakeAgents{session.Harness: agent}, Config{DataDir: t.TempDir(), Clock: func() time.Time { return now }, Logger: testLogger()})
+	var asked domain.SessionID
+	observer.SetSessionEnv(func(_ context.Context, rec domain.SessionRecord) (map[string]string, error) {
+		asked = rec.ID
+		return map[string]string{"STAKPAK_API_KEY": "project-only"}, nil
+	})
+	if err := observer.Poll(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if agent.resolveCalls != 1 || asked != session.ID || agent.lastResolve.Env["STAKPAK_API_KEY"] != "project-only" {
+		t.Fatalf("resolve calls=%d asked=%q env=%v; want the session environment passed", agent.resolveCalls, asked, agent.lastResolve.Env)
+	}
+	// A session whose environment cannot be built still resolves, without one.
+	observer.SetSessionEnv(func(context.Context, domain.SessionRecord) (map[string]string, error) {
+		return nil, errors.New("project unavailable")
+	})
+	agent.state = domain.ActivityWaitingInput
+	if err := observer.Poll(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if agent.resolveCalls != 2 || agent.lastResolve.Env != nil {
+		t.Fatalf("resolve calls=%d env=%v; want a resolve without an environment", agent.resolveCalls, agent.lastResolve.Env)
+	}
 }
 
 func TestPollOnlyResolvesOrdinaryNativeIdentityOnStateChange(t *testing.T) {
@@ -315,6 +353,136 @@ func TestPollReconcilesWaitingCrushAfterUserResponds(t *testing.T) {
 				t.Fatalf("unexpected reconciliation: %+v", sink.signals)
 			}
 		})
+	}
+}
+
+// Real codex-cli 0.146.0 frames (openai/codex tag rust-v0.146.0 TUI snapshots
+// image_generation_begin_restores_working_status and
+// status_widget_and_approval_modal), trailing padding trimmed.
+const (
+	codexRunningFrame = "\n• Working (0s • esc to interrupt)\n\n\n" +
+		"› Ask Codex to do anything\n\n  gpt-5.6-sol default · /tmp/project\n"
+	codexExecApprovalFrame = "\n\n  Would you like to run the following command?\n\n" +
+		"  Reason: this is a test reason such as one that would be produced by the model\n\n" +
+		"  $ echo 'hello world'\n\n" +
+		"› 1. Yes, proceed (y)\n" +
+		"  2. Yes, and don't ask again for commands that start with `echo 'hello world'` (p)\n" +
+		"  3. No, and tell Codex what to do differently (esc)\n\n" +
+		"  Press enter to confirm or esc to cancel\n"
+	codexComposerFrame = "\n› Ask Codex to do anything\n\n  gpt-5.6-sol default · /tmp/project\n"
+)
+
+// Issue #5876: Codex's PermissionRequest hook records waiting_input and no hook
+// clears it mid-turn. Once the approval is resolved the pane shows the turn
+// running again, and the observer must recover — while a live picker must keep
+// the session waiting.
+func TestPollReconcilesWaitingCodexOnceTurnResumes(t *testing.T) {
+	for _, tt := range []struct {
+		name   string
+		output string
+		want   domain.ActivityState
+		signal bool
+	}{
+		{name: "approved turn running", output: codexRunningFrame, want: domain.ActivityActive, signal: true},
+		{name: "turn finished at composer", output: codexComposerFrame, want: domain.ActivityIdle, signal: true},
+		{name: "approval still pending", output: codexExecApprovalFrame},
+		{name: "stale working line above live picker", output: "• Working (6m 13s • esc to interrupt)\n" + codexExecApprovalFrame},
+		{name: "unrecognized frame", output: "Reading the diff before the next step…\n"},
+		{name: "styled picker without its hint row", output: strings.Replace(strings.Replace(codexExecApprovalFrame, "› 1.", "\x1b[1m›\x1b[0m 1.", 1), "Press enter to confirm or esc to cancel", "", 1)},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			now := time.Unix(500, 0).UTC()
+			session := activeSession(now, domain.HarnessCodex)
+			session.Activity = domain.Activity{State: domain.ActivityWaitingInput, LastActivityAt: now.Add(-time.Second)}
+			session.UpdatedAt = now.Add(-time.Second)
+			sink := &fakeSink{}
+			runtime := &fakeRuntime{output: tt.output}
+			observer := New(
+				fakeSessions{rows: []domain.SessionRecord{session}},
+				sink,
+				runtime,
+				fakeAgents{domain.HarnessCodex: codex.New()},
+				Config{Clock: func() time.Time { return now }, Logger: testLogger()},
+			)
+
+			if err := observer.Poll(context.Background()); err != nil {
+				t.Fatal(err)
+			}
+			if runtime.calls != 1 {
+				t.Fatalf("waiting codex session was not sampled: output calls=%d", runtime.calls)
+			}
+			if !tt.signal {
+				if len(sink.signals) != 0 {
+					t.Fatalf("live approval picker left waiting_input: %+v", sink.signals)
+				}
+				return
+			}
+			if len(sink.signals) != 1 || sink.signals[0].State != tt.want {
+				t.Fatalf("signals = %+v, want one %q", sink.signals, tt.want)
+			}
+			if got := sink.signals[0].ExpectedRevision; got == nil || *got != session.Revision {
+				t.Fatalf("reconciliation not fenced on revision: %+v", sink.signals[0])
+			}
+		})
+	}
+}
+
+// On ConPTY the raw output is the PTY ring and the styled output is the
+// rendered viewport. A redraw can leave the ring still showing the approval
+// picker while the screen shows the resumed working line; reconciliation must
+// read the rendered screen so the turn becomes active.
+func TestPollReconcilesWaitingCodexFromRenderedScreen(t *testing.T) {
+	now := time.Unix(500, 0).UTC()
+	session := activeSession(now, domain.HarnessCodex)
+	session.Activity = domain.Activity{State: domain.ActivityWaitingInput, LastActivityAt: now.Add(-time.Second)}
+	session.UpdatedAt = now.Add(-time.Second)
+	sink := &fakeSink{}
+	runtime := &styledRuntime{fakeRuntime: fakeRuntime{output: codexExecApprovalFrame}, surface: codexRunningFrame}
+	observer := New(
+		fakeSessions{rows: []domain.SessionRecord{session}},
+		sink, runtime, fakeAgents{domain.HarnessCodex: codex.New()},
+		Config{Clock: func() time.Time { return now }, Logger: testLogger()},
+	)
+	if err := observer.Poll(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if runtime.calls != 0 || runtime.surfaceCalls != 1 {
+		t.Fatalf("raw calls=%d surface calls=%d", runtime.calls, runtime.surfaceCalls)
+	}
+	if len(sink.signals) != 1 || sink.signals[0].State != domain.ActivityActive {
+		t.Fatalf("signals = %+v, want one active", sink.signals)
+	}
+}
+
+// panickingCodex parses panes like codex but panics while doing it.
+type panickingCodex struct{ *codex.Plugin }
+
+func (panickingCodex) DetectTerminalActivity(string) (domain.ActivityState, bool) {
+	panic("malformed pane")
+}
+
+func TestPollSurvivesAPanicWhileReconcilingOneSession(t *testing.T) {
+	now := time.Unix(500, 0).UTC()
+	waiting := domain.Activity{State: domain.ActivityWaitingInput, LastActivityAt: now.Add(-time.Second)}
+	broken := activeSession(now, domain.HarnessClaudeCode)
+	broken.Activity = waiting
+	healthy := activeSession(now, domain.HarnessCodex)
+	healthy.ID = "ao-2"
+	healthy.Activity = waiting
+	sink := &fakeSink{}
+	observer := New(
+		fakeSessions{rows: []domain.SessionRecord{broken, healthy}},
+		sink,
+		&fakeRuntime{output: codexRunningFrame},
+		fakeAgents{domain.HarnessClaudeCode: panickingCodex{codex.New()}, domain.HarnessCodex: codex.New()},
+		Config{Clock: func() time.Time { return now }, Logger: testLogger()},
+	)
+
+	if err := observer.Poll(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if len(sink.signals) != 1 || sink.signals[0].State != domain.ActivityActive {
+		t.Fatalf("healthy session not reconciled after a panic in another: %+v", sink.signals)
 	}
 }
 
@@ -597,5 +765,254 @@ func TestMemcodeObservationUsesCurrentRenderedScreen(t *testing.T) {
 	}
 	if len(rawSink.signals) != 1 || rawSink.signals[0].State != domain.ActivityIdle {
 		t.Fatal("raw output fallback did not detect current chrome", rawSink.signals)
+	}
+}
+
+// kimiComposer is the bottom of a Kimi Code 2.4 screen: the composer box,
+// which stays on screen while a turn runs, and the footer.
+const kimiComposer = " ╭──────────────────────────╮\n" +
+	" │ >                        │\n" +
+	" ╰──────────────────────────╯\n" +
+	" kimi-for-coding  ~/project\n" +
+	"                 context: 1% (266/128k)\n"
+
+// A Kimi turn whose end hook never reached AO stays active until the
+// rendered screen proves Kimi is back at its composer. The raw ring still
+// holds the last spinner redraw, so it must not be read.
+func TestPollReconcilesStaleKimiFromRenderedScreen(t *testing.T) {
+	now := time.Unix(500, 0).UTC()
+	session := activeSession(now, domain.HarnessKimi)
+	sink := &fakeSink{}
+	rt := &renderedMemcodeRuntime{
+		fakeRuntime: &fakeRuntime{output: "\x1b[2K\x1b[1G  ⠧ Working… · Tip: @: mention files"},
+		rendered: " ❯ fix the importer\n" +
+			"   Error: [provider.auth_error] 401 The API Key appears to be invalid or may have expired.\n" + kimiComposer,
+	}
+	observer := New(fakeSessions{rows: []domain.SessionRecord{session}}, sink, rt,
+		fakeAgents{domain.HarnessKimi: kimi.New()}, Config{Clock: func() time.Time { return now }, Logger: testLogger()})
+	if err := observer.Poll(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if rt.calls != 0 || rt.styledCalls != 1 {
+		t.Fatalf("output reads raw=%d styled=%d, want only the rendered screen", rt.calls, rt.styledCalls)
+	}
+	if len(sink.signals) != 1 || sink.signals[0].State != domain.ActivityIdle || sink.signals[0].Event != "terminal-idle" {
+		t.Fatalf("signals = %+v, want one terminal-idle", sink.signals)
+	}
+}
+
+type fakeRechecks map[domain.SessionID]bool
+
+func (f fakeRechecks) TerminalActivityRecheckDue(id domain.SessionID, _ time.Time) bool { return f[id] }
+
+// A Kimi StopFailure taken for a child's may have been the parent's own. The
+// screen settles it before the session goes stale, but only when asked.
+func TestPollRechecksFreshKimiActivityOnlyWhenAsked(t *testing.T) {
+	now := time.Unix(500, 0).UTC()
+	for name, tc := range map[string]struct {
+		due         bool
+		wantSignals int
+	}{
+		"asked":     {due: true, wantSignals: 1},
+		"not asked": {due: false, wantSignals: 0},
+	} {
+		t.Run(name, func(t *testing.T) {
+			session := activeSession(now, domain.HarnessKimi)
+			session.Activity.LastActivityAt = now.Add(-10 * time.Second)
+			sink := &fakeSink{}
+			rt := &renderedMemcodeRuntime{fakeRuntime: &fakeRuntime{}, rendered: " ● Done.\n" + kimiComposer}
+			observer := New(fakeSessions{rows: []domain.SessionRecord{session}}, sink, rt,
+				fakeAgents{domain.HarnessKimi: kimi.New()}, Config{
+					Clock: func() time.Time { return now }, Logger: testLogger(),
+					Rechecks: fakeRechecks{session.ID: tc.due},
+				})
+			if err := observer.Poll(context.Background()); err != nil {
+				t.Fatal(err)
+			}
+			if len(sink.signals) != tc.wantSignals {
+				t.Fatalf("signals = %+v, want %d", sink.signals, tc.wantSignals)
+			}
+			if tc.wantSignals == 1 && (sink.signals[0].State != domain.ActivityIdle || sink.signals[0].Event != "terminal-idle") {
+				t.Fatalf("signal = %+v, want terminal-idle", sink.signals[0])
+			}
+			if !tc.due && rt.styledCalls != 0 {
+				t.Fatalf("read the screen %d times without a recheck", rt.styledCalls)
+			}
+		})
+	}
+}
+
+func TestPollKeepsGenuineLongKimiTurnActive(t *testing.T) {
+	now := time.Unix(500, 0).UTC()
+	for name, activity := range map[string]string{
+		"streaming":    "  ⠧ Working… · Tip: ctrl-s to add guidance without waiting for the turn to finish\n",
+		"running tool": " ● Running a command · $ go test ./...\n  🌒 · Tip: @: mention files\n",
+	} {
+		t.Run(name, func(t *testing.T) {
+			sink := &fakeSink{}
+			rt := &renderedMemcodeRuntime{fakeRuntime: &fakeRuntime{}, rendered: activity + kimiComposer}
+			observer := New(fakeSessions{rows: []domain.SessionRecord{activeSession(now, domain.HarnessKimi)}}, sink, rt,
+				fakeAgents{domain.HarnessKimi: kimi.New()}, Config{Clock: func() time.Time { return now }, Logger: testLogger()})
+			if err := observer.Poll(context.Background()); err != nil {
+				t.Fatal(err)
+			}
+			if len(sink.signals) != 0 {
+				t.Fatalf("long active turn emitted reconciliation: %+v", sink.signals)
+			}
+		})
+	}
+}
+
+// raw Tail excludes MiniMax's non-newline-terminated footer; the rendered
+// snapshot includes it and contains only the current composer.
+type styledRuntime struct {
+	fakeRuntime
+	surface      string
+	surfaceErr   error
+	surfaceCalls int
+}
+
+func (f *styledRuntime) GetStyledOutput(context.Context, ports.RuntimeHandle, int) (string, error) {
+	f.surfaceCalls++
+	return f.surface, f.surfaceErr
+}
+
+func TestPollRetainsClaudeAndCodexReconciliationOnOlderHosts(t *testing.T) {
+	for _, tc := range []struct {
+		harness domain.AgentHarness
+		agent   ports.Agent
+		output  string
+		want    domain.ActivityState
+		// Codex asks for the rendered screen first and falls back to raw
+		// output when the host reports it unavailable.
+		surfaceCalls int
+	}{
+		{domain.HarnessClaudeCode, claudecode.New(), claudeStuckActiveScreen, domain.ActivityWaitingInput, 0},
+		{domain.HarnessCodex, codex.New(), "› Write tests for @filename\n\ngpt-5.6-sol low · ~/project\n", domain.ActivityIdle, 1},
+	} {
+		t.Run(string(tc.harness), func(t *testing.T) {
+			now := time.Unix(500, 0).UTC()
+			sink := &fakeSink{}
+			runtime := &styledRuntime{
+				fakeRuntime: fakeRuntime{output: tc.output},
+				surfaceErr:  ports.ErrStyledTerminalOutputUnavailable,
+			}
+			observer := New(
+				fakeSessions{rows: []domain.SessionRecord{activeSession(now, tc.harness)}},
+				sink, runtime, fakeAgents{tc.harness: tc.agent},
+				Config{Clock: func() time.Time { return now }, Logger: testLogger()},
+			)
+			if err := observer.Poll(context.Background()); err != nil {
+				t.Fatal(err)
+			}
+			if len(sink.signals) != 1 || sink.signals[0].State != tc.want {
+				t.Fatalf("reconciliation = %+v, want %s", sink.signals, tc.want)
+			}
+			if runtime.calls != 1 || runtime.surfaceCalls != tc.surfaceCalls {
+				t.Fatalf("raw calls=%d surface calls=%d", runtime.calls, runtime.surfaceCalls)
+			}
+		})
+	}
+}
+
+func TestPollUsesCurrentMiniMaxSurface(t *testing.T) {
+	const draft = "Stopped · message restored to the Composer.\n───\n› cancelled request\n───\n"
+	const footer = "workspace │ Auto │ ✦ glm-5.3-flash"
+	for _, tt := range []struct {
+		name, raw, surface string
+		err                error
+		want               domain.ActivityState
+	}{
+		{name: "non-newline footer", raw: draft, surface: draft + footer, want: domain.ActivityIdle},
+		{name: "current active beats raw stopped", raw: draft + footer, surface: "Loading · Esc stop\n───\n› draft\n───\n" + footer},
+		{name: "unknown surface does not use old raw", raw: draft + footer, surface: "unknown screen"},
+		{name: "capture error does not use old raw", raw: draft + footer, err: errors.New("capture failed")},
+		{name: "old host does not use old raw", raw: draft + footer, err: ports.ErrStyledTerminalOutputUnavailable},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			now := time.Unix(500, 0).UTC()
+			session := activeSession(now, domain.HarnessMiniMaxCode)
+			session.Activity.LastActivityAt = now.Add(-time.Second)
+			sink := &fakeSink{}
+			runtime := &styledRuntime{fakeRuntime: fakeRuntime{output: tt.raw}, surface: tt.surface, surfaceErr: tt.err}
+			observer := New(fakeSessions{rows: []domain.SessionRecord{session}}, sink, runtime, fakeAgents{domain.HarnessMiniMaxCode: minimaxcode.New()}, Config{Clock: func() time.Time { return now }, Logger: testLogger()})
+			if err := observer.Poll(context.Background()); err != nil {
+				t.Fatal(err)
+			}
+			if tt.want == "" {
+				if len(sink.signals) != 0 {
+					t.Fatalf("unproven surface changed activity: %+v", sink.signals)
+				}
+			} else if len(sink.signals) != 1 || sink.signals[0].State != tt.want {
+				t.Fatalf("signals=%+v want %s", sink.signals, tt.want)
+			}
+			if runtime.calls != 0 || runtime.surfaceCalls != 1 {
+				t.Fatalf("raw calls=%d surface calls=%d", runtime.calls, runtime.surfaceCalls)
+			}
+		})
+	}
+}
+
+// The daemon starts the observer before the session manager exists. Polling
+// waits for StartAfter, which the daemon closes only after installing the
+// session environment: a state change read earlier would resolve its native
+// identity without it, and a steady session is not looked up again.
+func TestStartWaitsForTheSessionEnvironment(t *testing.T) {
+	now := time.Unix(500, 0).UTC()
+	session := activeSession(now, domain.HarnessCodewhale)
+	agent := &pollingResolverAgent{state: domain.ActivityIdle, resolvedID: "native-id"}
+	applied := make(chan struct{}, 1)
+	sink := &fakeSink{applied: func() {
+		select {
+		case applied <- struct{}{}:
+		default:
+		}
+	}}
+	start := make(chan struct{})
+	observer := New(fakeSessions{rows: []domain.SessionRecord{session}}, sink, &fakeRuntime{}, fakeAgents{session.Harness: agent},
+		Config{DataDir: t.TempDir(), Tick: time.Hour, Clock: func() time.Time { return now }, Logger: testLogger(), StartAfter: start})
+	ctx, cancel := context.WithCancel(t.Context())
+	done := observer.Start(ctx)
+	defer func() { cancel(); <-done }()
+
+	select {
+	case <-applied:
+		t.Fatal("the observer polled before it was started")
+	case <-time.After(50 * time.Millisecond):
+	}
+	observer.SetSessionEnv(func(context.Context, domain.SessionRecord) (map[string]string, error) {
+		return map[string]string{"STAKPAK_API_KEY": "project-only"}, nil
+	})
+	close(start)
+	select {
+	case <-applied:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the observer never polled after it was started")
+	}
+	if got := agent.lastResolve.Env["STAKPAK_API_KEY"]; got != "project-only" {
+		t.Fatalf("first lookup environment STAKPAK_API_KEY = %q, want the session's", got)
+	}
+}
+
+func TestStartWithoutStartAfterPollsAtOnce(t *testing.T) {
+	now := time.Unix(500, 0).UTC()
+	session := activeSession(now, domain.HarnessCodewhale)
+	agent := &pollingResolverAgent{state: domain.ActivityIdle, resolvedID: "native-id"}
+	applied := make(chan struct{}, 1)
+	sink := &fakeSink{applied: func() {
+		select {
+		case applied <- struct{}{}:
+		default:
+		}
+	}}
+	observer := New(fakeSessions{rows: []domain.SessionRecord{session}}, sink, &fakeRuntime{}, fakeAgents{session.Harness: agent},
+		Config{DataDir: t.TempDir(), Tick: time.Hour, Clock: func() time.Time { return now }, Logger: testLogger()})
+	ctx, cancel := context.WithCancel(t.Context())
+	done := observer.Start(ctx)
+	defer func() { cancel(); <-done }()
+	select {
+	case <-applied:
+	case <-time.After(5 * time.Second):
+		t.Fatal("an observer without StartAfter never polled")
 	}
 }

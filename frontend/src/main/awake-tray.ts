@@ -5,9 +5,20 @@ export function createAwakeTrayMonitor(options: {
 	baseURL: () => string | null;
 	request: (url: string, init: RequestInit) => Promise<Response>;
 	setState: (active: boolean | null) => void;
+	/** Each change in the daemon's Stay Awake state, as GET /api/v1/awake returns it. */
+	onAwakeState?: (state: unknown) => void;
 }) {
 	let disposed = false;
 	let inFlight = false;
+	let lastAwake: string | undefined;
+	// The sidebar shows the same state; forwarding each change saves it a poll of its own.
+	const publishAwake = (state: unknown, base: string) => {
+		if (disposed || base !== options.baseURL() || !options.onAwakeState) return;
+		const json = JSON.stringify(state);
+		if (json === lastAwake) return;
+		lastAwake = json;
+		options.onAwakeState(state);
+	};
 	const poll = async () => {
 		if (disposed || inFlight) return;
 		const base = options.baseURL();
@@ -20,7 +31,7 @@ export function createAwakeTrayMonitor(options: {
 				return response.json();
 			};
 			const states = await Promise.allSettled([
-				read("awake").then((state: components["schemas"]["AwakeState"]) => state.active),
+				read("awake").then((state: components["schemas"]["AwakeState"]) => { publishAwake(state, base); return state.active; }),
 				read("mobile/status").then((state: components["schemas"]["MobileStatusResponse"]) => state.keepAwake?.active),
 			]);
 			// A failed probe is not evidence that an existing wake hold ended.

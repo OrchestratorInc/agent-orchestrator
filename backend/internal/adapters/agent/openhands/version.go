@@ -15,9 +15,9 @@ import (
 // identity and activity.
 var minVersion = [3]int{1, 12, 0}
 
-// versionProbeTimeout covers a cold Python start; a warm `openhands --version`
-// already takes several seconds.
-const versionProbeTimeout = 30 * time.Second
+// versionProbeTimeout covers a cold Python/SDK start. The installed 1.16 CLI
+// took 42 seconds during native import validation on a busy desktop.
+const versionProbeTimeout = 60 * time.Second
 
 // versionPattern anchors on the CLI's own banner. The SDK prints a separate
 // "OpenHands SDK vX.Y.Z" banner on stderr, which must not be mistaken for the

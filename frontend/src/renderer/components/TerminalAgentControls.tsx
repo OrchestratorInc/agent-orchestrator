@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
+import { useCloudAgentSwitch } from "../hooks/useCloudAgentSwitch";
 import { useProviderSwitchCommand } from "../hooks/useConversation";
 import { agentLabel } from "../lib/agent-options";
 import { apiErrorMessage } from "../lib/api-client";
@@ -16,6 +17,8 @@ const NO_CHOICES = { models: [], modelLabel: "", efforts: [] };
  * A terminal session tab's agent row, in either of the tab's menus. A picked
  * agent adds Switch and Cancel, since a terminal has no next message to wait
  * on; a successful switch closes the menu. A chat picks its agent in the composer.
+ * A Cloud session's switch is its interface transition to the picked agent,
+ * among the agents its control plane can switch to.
  */
 export function TerminalAgentPickerRow({
 	session,
@@ -31,12 +34,20 @@ export function TerminalAgentPickerRow({
 	const closeMenu = useCloseMenu();
 	const [pending, setPending] = useState<PendingAgentSwitch>();
 	const providerSwitch = useProviderSwitchCommand(session.id, hostId);
+	const cloud = session.cloud;
+	const cloudSwitch = useCloudAgentSwitch(cloud ? session : undefined);
 	const showGlobalToast = useUiStore((state) => state.showGlobalToast);
-	const agentSwitch = { projectId: session.workspaceId, hostId, pending, onPendingChange: setPending };
+	const agentSwitch = cloud
+		? { projectId: session.workspaceId, cloudOrgId: cloud.orgId, pending, onPendingChange: setPending, agents: cloudSwitch.agents, harnessView: "cloud" as const }
+		: { projectId: session.workspaceId, hostId, pending, onPendingChange: setPending };
+	const switchPending = cloud ? cloudSwitch.switching : providerSwitch.isPending;
 	const switchNow = () => {
 		if (!pending) return;
 		const { harness: targetHarness, model, fastMode, ultracode, autoCompactWindow } = pending;
-		void providerSwitch.mutateAsync({ targetHarness, model, effort: switchEffort(pending), fastMode, ultracode, autoCompactWindow })
+		const switched = cloud
+			? cloudSwitch.start(pending)
+			: providerSwitch.mutateAsync({ targetHarness, model, effort: switchEffort(pending), fastMode, ultracode, autoCompactWindow });
+		void switched
 			.then(() => { setPending(undefined); closeMenu(); })
 			.catch((error) => showGlobalToast(t("agentSwitch.switchFailed"), apiErrorMessage(error), "error"));
 	};
@@ -50,16 +61,16 @@ export function TerminalAgentPickerRow({
 				<span className="min-w-0 flex-1 truncate" title={target}>{pending.modelLabel ?? agentLabel(pending.harness)}</span>
 				<Button
 					type="button"
-					disabled={blocked || providerSwitch.isPending}
+					disabled={blocked || switchPending}
 					title={blocked ? t("agentSwitch.busy") : t("agentSwitch.switchTerminalTo", { target })}
 					onClick={switchNow}
 					className="disabled:pointer-events-auto disabled:cursor-not-allowed"
 					size="xs"
 					variant="primary"
 				>
-					{providerSwitch.isPending ? t("agentSwitch.switchingNow") : t("agentSwitch.switchAction")}
+					{switchPending ? t("agentSwitch.switchingNow") : t("agentSwitch.switchAction")}
 				</Button>
-				<DismissButton label={t("agentSwitch.cancel")} disabled={providerSwitch.isPending} onClick={() => setPending(undefined)} />
+				<DismissButton label={t("agentSwitch.cancel")} disabled={switchPending} onClick={() => setPending(undefined)} />
 			</div>
 		</div>
 	) : null;

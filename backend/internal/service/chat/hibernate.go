@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
+	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/apierr"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
@@ -56,6 +57,18 @@ type hibernationTurnReader interface {
 // resume path. It is installed after both services have been constructed.
 func (s *Service) SetWakeCallback(wake func(context.Context, domain.SessionID) error) {
 	s.wakeChat = wake
+}
+
+// SetOtherWriterCheck reports whether another process has a chat open, and
+// otherwise whether one wrote to it after the given time when that time is set.
+func (s *Service) SetOtherWriterCheck(check func(context.Context, domain.SessionRecord, time.Time) (bool, bool)) {
+	s.otherWriter = check
+}
+
+// SetResumeAgentCallback connects a Chat session whose agent exited to Session
+// Manager's resume-agent path, so a provider switch has a source to hand over from.
+func (s *Service) SetResumeAgentCallback(resume func(context.Context, domain.SessionID) error) {
+	s.resumeAgent = resume
 }
 
 // SetChatView records a short-lived view lease. Registration and the final
@@ -151,6 +164,19 @@ func (s *Service) hasChatView(id domain.SessionID) bool {
 	return len(views) != 0
 }
 
+// OpenChats lists the sessions a renderer has open now, without the close grace.
+func (s *Service) OpenChats() []domain.SessionID {
+	s.viewMu.Lock()
+	defer s.viewMu.Unlock()
+	var ids []domain.SessionID
+	for id := range s.viewLeases {
+		if s.liveViewLeasesLocked(id) != nil {
+			ids = append(ids, id)
+		}
+	}
+	return ids
+}
+
 // Callers hold viewMu. Expired leases cannot keep a provider alive after a
 // renderer crash or a missed release request.
 func (s *Service) liveViewLeasesLocked(id domain.SessionID) map[string]time.Time {
@@ -187,10 +213,11 @@ type hibernateOptions struct {
 	// ignoreViews lets a refresh run under an open view: the user's next
 	// message is about to wake the session anyway.
 	ignoreViews bool
+	otherWriter bool
 }
 
 func (o hibernateOptions) enabled(s *Service) bool {
-	if o.versionRefresh || o.forUpdate {
+	if o.versionRefresh || o.forUpdate || o.otherWriter {
 		return true
 	}
 	return s.hibernationEnabled != nil && s.hibernationEnabled()
@@ -361,10 +388,25 @@ func (s *Service) hibernateChat(ctx context.Context, id domain.SessionID, opts h
 	}
 	// Persist the intent while intake is fenced. A failed or contested write
 	// leaves the provider alive; a crash during shutdown can finish it on boot.
+	if opts.versionRefresh || opts.forUpdate {
+		if moves, ok := s.sessions.(ports.SessionVersionMoveStore); ok {
+			if err := moves.PutSessionVersionMove(ctx, domain.NewSessionVersionMove(fresh)); err != nil {
+				controller.sendMu.Unlock()
+				return false, err
+			}
+		}
+	}
 	at := s.now()
 	applied, err := marker.SetSessionHibernated(ctx, id, fresh.Revision, &at)
 	if err != nil || !applied {
 		controller.sendMu.Unlock()
+		if opts.versionRefresh || opts.forUpdate {
+			if moves, ok := s.sessions.(ports.SessionVersionMoveStore); ok {
+				cleanup, cancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
+				defer cancel()
+				err = errors.Join(err, moves.DeleteSessionVersionMove(cleanup, id))
+			}
+		}
 		return false, err
 	}
 	controller.mu.Lock()
@@ -405,6 +447,9 @@ func (s *Service) hibernateChat(ctx context.Context, id domain.SessionID, opts h
 		// The wake that follows starts the installed release; remember which
 		// one, so a failed start keeps the user's queued messages.
 		s.noteVersionSwitch(id, fresh.StaleBinary.Version)
+		if err := s.recordVersionMoveStopped(finishCtx, id); err != nil {
+			return true, err
+		}
 		s.log.Info("chat session stopped to move to a new harness release", "session", id, "harness", fresh.Harness, "version", fresh.StaleBinary.Version)
 		return true, nil
 	}
@@ -417,6 +462,9 @@ func (s *Service) hibernateChat(ctx context.Context, id domain.SessionID, opts h
 		}
 		s.updateStops[id] = true
 		s.wakeMu.Unlock()
+		if err := s.recordVersionMoveStopped(finishCtx, id); err != nil {
+			return true, err
+		}
 		s.log.Info("chat session stopped for a harness update", "session", id, "harness", fresh.Harness)
 		return true, nil
 	}
@@ -703,6 +751,52 @@ func (s *Service) startBackgroundWake(id domain.SessionID) {
 			s.failQueuedTurns(ctx, id, fmt.Sprintf("could not deliver the message: %v", err))
 		}
 	}()
+}
+
+// ErrChatOpenElsewhere reports a message refused because another Claude Code
+// process has the chat open.
+var ErrChatOpenElsewhere = apierr.Conflict("CHAT_OPEN_ELSEWHERE", "This chat is open in another Claude Code session, such as a terminal or an IDE. Quit it there, then send your message again.", nil)
+
+// checkOtherWriter refuses a delivery while another process has the chat open.
+// When one wrote turns and left, it stops the idle provider so its next start
+// reads them, and reports the stop.
+func (s *Service) checkOtherWriter(ctx context.Context, rec domain.SessionRecord) (bool, error) {
+	if s.otherWriter == nil || rec.IsTerminated {
+		return false, nil
+	}
+	var controller *Controller
+	var state ports.ChatControllerState
+	if rec.HibernatedAt == nil {
+		if live, err := s.Controller(rec.ID); err == nil {
+			controller, state = live, live.State()
+		}
+	}
+	var since time.Time
+	if state == ports.ChatControllerReady || state == ports.ChatControllerBusy {
+		since = controller.started
+		if since.IsZero() {
+			since = rec.CreatedAt
+		}
+	}
+	open, wrote := s.otherWriter(ctx, rec, since)
+	if open {
+		return false, ErrChatOpenElsewhere
+	}
+	if !wrote {
+		return false, nil
+	}
+	if state == ports.ChatControllerBusy {
+		return false, ErrChatOpenElsewhere
+	}
+	stopped, err := s.hibernateChat(ctx, rec.ID, hibernateOptions{otherWriter: true, ignoreViews: true})
+	if !stopped {
+		if err != nil {
+			s.log.Warn("could not stop a chat another process wrote", "session", rec.ID, "err", err)
+		}
+		return false, ErrChatOpenElsewhere
+	}
+	s.log.Info("chat session stopped to read turns another process wrote", "session", rec.ID)
+	return true, nil
 }
 
 func (s *Service) failQueuedTurns(ctx context.Context, id domain.SessionID, message string) {

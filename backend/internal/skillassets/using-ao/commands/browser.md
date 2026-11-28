@@ -1,6 +1,6 @@
 # ao browser
 
-Inspect and control the current Orchestrator-managed session's target-isolated browser. The desktop app must be open. The agent and user share the same live page, cookies, navigation state, and `WebContentsView`; the runtime remains usable while the Browser panel is hidden, except for commands that need the page to be painted (see `--human` and `screenshot` below). Tabs in this worker share an ephemeral browser profile, while other workers use isolated profiles.
+Inspect and control the current Orchestrator-managed session's target-isolated browser. The desktop app must be open. The agent and user share the same live page, cookies, navigation state, and `WebContentsView`; the runtime remains usable while the Browser panel is hidden, except for commands that need the page to be painted (see `--human` and `screenshot` below). Tabs in this worker share one browser profile; see [Browser profiles](#browser-profiles) for which one and whether sign-ins persist.
 
 `AO_SESSION_ID` selects the target, so run these commands from inside a worker session.
 
@@ -100,6 +100,8 @@ ao browser click <ref> [--human] [--json]
 ao browser dblclick <ref> [--json]
 ao browser focus <ref> [--json]
 ao browser fill <ref> <text> [--json]
+ao browser login [origin] [--item <id>] [--json]
+ao browser fill-secret <ref> --item <id> [--field username|password|totp | --totp] [--json]
 ao browser type <ref> <text> [--json]
 ao browser press <key> [--json]
 ao browser hover <ref> [--json]
@@ -196,6 +198,13 @@ transient UI, and `--dom-stable <ms>` after HMR or a dynamic render. Conditional
 waits retry through brief execution-context replacement during navigation and
 fail with `WAIT_TIMEOUT` when `--timeout` expires.
 
+Some sites refuse this browser: bot protection that keeps challenging it, or
+Google refusing to sign in from an embedded browser. `errors` then reports a
+`browser-site` entry naming the site. Do not retry, reload in a loop, or try to
+get past it. Tell the user; the Browser panel already offers them a
+"Continue in Chrome" button for that page. If the task needs the agent to keep
+working there and Chrome mode is set up, switch with `ao browser target chrome`.
+
 Network capture is optional and disabled by default. Use it only when the user
 explicitly asks to inspect requests, or when diagnosing loading, API, CORS,
 authentication, caching, or redirect failures after snapshots, console
@@ -218,6 +227,56 @@ instead, omit the path and explicitly combine `--base64` with `--json`.
 
 `ao browser open` requires an explicit HTTP(S) URL or hostname. It does not
 silently search the web and does not allow `file://` or local filesystem paths.
+
+## Browser profiles
+
+By default a session's browser uses the user's default browser profile, which
+is persistent: a site the user signed in to once stays signed in for every
+later session, and several sessions can use it at the same time. A session the
+user switched to Temporary (private) starts signed out and its data is cleared
+when the session ends. Profiles stay on this computer and are never copied
+between machines.
+
+```bash
+ao browser status   # e.g. "Browser profile: Personal (persistent: ...)"
+```
+
+- Run `ao browser status` when a page shows you signed out. If the profile is
+  Temporary or not the one with the user's sign-ins, ask the user to pick a
+  profile from the Browser panel's menu (Profile) or set a default in Settings →
+  Browser. You cannot change profiles yourself; there is no profile flag.
+- If the user is not signed in to a site, ask them to sign in themselves in the
+  Browser panel. Never type the user's passwords or one-time codes, and do not
+  sign in on their behalf.
+- In Chrome mode the profile is the user's own Chrome.
+
+## Signing in with saved credentials
+
+Never ask the user to paste a password or code into the chat, and never type one
+with `fill`/`type`. The user saves sites in Settings › Browser › Saved passwords; use them with:
+
+```bash
+ao browser open https://app.example.com/login
+ao browser login                 # types username + password; on a 2FA page, the TOTP code
+ao browser click e7              # submit the form yourself
+```
+
+`login` fills only on an exact origin match (scheme, host and port) and only in
+this project. Pass the origin you expect (`ao browser login https://app.example.com`)
+to refuse a page that redirected somewhere else. When several saved credentials match it lists their ids; rerun
+with `--item <id>`. For a field `login` cannot find, use
+`ao browser fill-secret <ref> --item <id> [--field username|--totp]`.
+
+Output only ever shows `••••`. `press` is refused while focus is in a filled
+password or code field (`BROWSER_SECRET_FIELD_LOCKED`); click elsewhere or submit.
+While a page holds a filled password, selectors or raw refs that test a `value`
+(for example `input[value^="a"]`) are refused; use snapshot refs. Filled passwords and codes are also masked in
+later `snapshot`, `get value`, console and network output. The first fill of each
+saved login on a site waits for the user to approve it in Orchestrator's
+approval prompt; if they
+decline or do not answer, the command fails, so ask them in chat instead of
+retrying. Saved credentials work
+in the Browser panel only, not in Chrome mode yet.
 
 ## Chrome mode: the user's own Chrome
 
@@ -247,9 +306,14 @@ ao browser target panel    # switch back
   the group, the session loses it.
 - The same commands and output shapes work, with these differences: `devtools`
   is not available; clicks, typing, key presses, and drags use real (trusted)
-  input, which shows Chrome's "started debugging this browser" bar while acting
-  and brings the session's tab to the front of its window; `screenshot` does
-  the same; `console` and `errors` read what Chrome kept for the page.
+  input, which shows Chrome's "started debugging this browser" bar while acting;
+  `console` and `errors` read what Chrome kept for the page. Input works while
+  the session's window is covered, minimized, or behind the user's tabs, and so
+  does `screenshot` except in a minimized window: Chrome stops drawing it, so a
+  screenshot there may fail with `SCREENSHOT_UNAVAILABLE`. On a site the user
+  limited to synthetic input, a screenshot needs the window on screen and fails
+  with `BROWSER_TAB_HIDDEN` otherwise. In both cases use `snapshot` instead, and
+  never ask the user to bring Chrome forward.
 - A click that opens `alert`/`confirm`/`prompt` returns at once; answer it with
   `ao browser dialog accept|dismiss` before other commands, which otherwise fail
   with `BROWSER_DIALOG_OPEN`.

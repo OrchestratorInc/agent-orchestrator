@@ -20,7 +20,7 @@ import { HoverCard, HoverCardTrigger } from "./ui/hover-card";
 export const AppBrowserLinkContext = createContext<((url: string) => void) | undefined>(undefined);
 
 /** Shared web-link behavior; native fragments and special schemes retain their handlers. */
-export function AppLink({ href, onClick, onAuxClick, onBrowserOpen, inAppLink, systemBrowser, filePath, menuPath, onFileOpen, hoverPreview, ref, ...props }: ComponentProps<"a"> & {
+export function AppLink({ href, onClick, onAuxClick, onBrowserOpen, inAppLink, systemBrowser, inAppOnly, filePath, menuPath, onFileOpen, hoverPreview, noHoverPreview, ref, ...props }: ComponentProps<"a"> & {
 	onBrowserOpen?: (url: string) => void;
 	inAppLink?: (url: string) => boolean;
 	/**
@@ -29,11 +29,14 @@ export function AppLink({ href, onClick, onAuxClick, onBrowserOpen, inAppLink, s
 	 * Browser. Schemes other than http(s) and mailto open nothing.
 	 */
 	systemBrowser?: boolean;
+	inAppOnly?: boolean;
 	filePath?: string;
 	/** A displayed filesystem path whose click navigates elsewhere, such as an artifact link. */
 	menuPath?: string;
 	onFileOpen?: (path: string) => void;
 	hoverPreview?: (open: boolean) => ReactNode;
+	/** For links in a dense list, where a preview card would cover the rows around it. */
+	noHoverPreview?: boolean;
 }) {
 	const { t } = useTranslation();
 	const sessionBrowserOpen = useContext(AppBrowserLinkContext);
@@ -43,9 +46,11 @@ export function AppLink({ href, onClick, onAuxClick, onBrowserOpen, inAppLink, s
 	const webLink = !!href && isWebLink(href);
 	const browserLink = !systemBrowser && !!href && (inAppLink?.(href) ?? webLink);
 	const showBrowserAction = browserLink && !(contextPath && pathMenuContext);
-	const hasHoverPreview = webLink || Boolean(hoverPreview);
+	const hasHoverPreview = !noHoverPreview && (webLink || Boolean(hoverPreview));
 	const [previewOpen, setPreviewOpen] = useState(false);
-	const previewQuery = useLinkPreview(href ?? "", previewOpen && webLink);
+	// A link with its own card (a session, an artifact, a pull request) never
+	// asks for the page's Open Graph preview.
+	const previewQuery = useLinkPreview(href ?? "", previewOpen && webLink && !hoverPreview);
 	const anchorRef = useRef<HTMLAnchorElement>(null);
 	useImperativeHandle(ref, () => anchorRef.current as HTMLAnchorElement);
 	// Gaining or losing a card remounts the anchor, so that re-runs this too.
@@ -65,15 +70,16 @@ export function AppLink({ href, onClick, onAuxClick, onBrowserOpen, inAppLink, s
 				}
 				if (!browserLink) return;
 				event.preventDefault();
-				if (openBrowser && (!webLink || (!event.ctrlKey && !event.metaKey && !event.altKey))) openBrowser(href);
-				else void openLinkInSystemBrowser(href);
+				if (openBrowser && (inAppOnly || !webLink || (!event.ctrlKey && !event.metaKey && !event.altKey))) openBrowser(href);
+				else if (!inAppOnly) void openLinkInSystemBrowser(href);
 			}}
 			onAuxClick={(event) => {
 				onAuxClick?.(event);
 				// Middle click would otherwise open a window the shell routes on its own.
-				if (!systemBrowser || event.button !== 1 || event.defaultPrevented || !href) return;
+				if ((!systemBrowser && !inAppOnly) || event.button !== 1 || event.defaultPrevented || !href) return;
 				event.preventDefault();
-				if (isSystemBrowserLink(href)) void openLinkInSystemBrowser(href);
+				if (inAppOnly) openBrowser?.(href);
+				else if (isSystemBrowserLink(href)) void openLinkInSystemBrowser(href);
 			}}
 		/>
 	);
@@ -110,7 +116,7 @@ export function AppLink({ href, onClick, onAuxClick, onBrowserOpen, inAppLink, s
 						{t("link.openInAO")}
 					</ContextMenuItem>
 				)}
-				{webLink && (
+				{webLink && !inAppOnly && (
 					<ContextMenuItem onSelect={() => void openLinkInSystemBrowser(href)}>
 						<ExternalLink aria-hidden="true" />
 						{t("link.openInExternalBrowser")}
@@ -130,8 +136,8 @@ export function AppLink({ href, onClick, onAuxClick, onBrowserOpen, inAppLink, s
 	return (
 		<HoverCard onOpenChange={setPreviewOpen}>
 			{menu}
-			{previewOpen && webLink && <LinkPreviewHoverCard url={href} query={previewQuery} onBrowserOpen={openBrowser} />}
-			{previewOpen && !webLink && hoverPreview?.(previewOpen)}
+			{previewOpen && webLink && !hoverPreview && <LinkPreviewHoverCard url={href} query={previewQuery} onBrowserOpen={openBrowser} />}
+			{previewOpen && hoverPreview?.(previewOpen)}
 		</HoverCard>
 	);
 }

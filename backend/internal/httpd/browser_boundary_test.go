@@ -48,6 +48,9 @@ func (*boundaryShells) RenameShellTerminal(context.Context, string, string) (she
 	return shelltermsvc.ShellTerminal{}, nil
 }
 func (*boundaryShells) CloseShellTerminal(context.Context, string) error { return nil }
+func (*boundaryShells) ReopenShellTerminal(context.Context, shelltermsvc.ReopenShellTerminalInput) (shelltermsvc.ShellTerminal, error) {
+	return shelltermsvc.ShellTerminal{}, nil
+}
 
 type boundarySource struct{ attached atomic.Int32 }
 type boundaryStream struct{ net.Conn }

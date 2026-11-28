@@ -61,6 +61,7 @@ vi.mock("../ThemeProvider", () => ({
 vi.mock("../formFields", () => ({ FormTextField: "FormTextField", formModifiers: () => [], sectionModifiers: () => [] }));
 vi.mock("../SettingsForm", () => ({ SettingsSection: "SettingsSection" }));
 vi.mock("../InlineBanner", () => ({ InlineBanner: "InlineBanner" }));
+vi.mock("../useHeaderOverlap", () => ({ useGlassBarInset: () => 0 }));
 vi.mock("../Spinner", () => ({ Spinner: "Spinner" }));
 vi.mock("../AppSymbol", () => ({ AppSymbol: "AppSymbol" }));
 vi.mock("../ui", () => ({ Button: "Button" }));

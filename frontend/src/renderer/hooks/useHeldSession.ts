@@ -11,10 +11,19 @@ export const SESSION_HOLD_LIMIT_MS = 500;
  * interruptible slices, so main-thread animations keep running. The session
  * already on screen stays painted, inert, until then. Entering from another
  * route has nothing to keep, so it renders directly.
+ *
+ * `destinationPending` says the destination's chat history is still on its
+ * first read. The session on screen stays for that too, within the same limit,
+ * so the destination's first frame has its history instead of its chrome over
+ * a loading chat that fills in a moment later. Past the limit it renders with
+ * the chat's own loading state, as before.
  */
-export function useHeldSession(liveSessionId: string | undefined, liveProjectId: string | undefined) {
+export function useHeldSession(liveSessionId: string | undefined, liveProjectId: string | undefined, destinationPending = false) {
 	const deferredSessionId = useDeferredValue(liveSessionId);
 	const deferredProjectId = useDeferredValue(liveProjectId);
+	// The read landing is an urgent store update; ending the hold through the
+	// deferred copy keeps the destination's render interruptible, as above.
+	const deferredPending = useDeferredValue(destinationPending);
 	// A background render restarts on every urgent update. While the held
 	// session streams, it may never finish, so past the limit the destination
 	// renders the way it did before switches were deferred.
@@ -22,14 +31,18 @@ export function useHeldSession(liveSessionId: string | undefined, liveProjectId:
 	// Only the session already on screen is kept. Returning from another route
 	// before the deferred value caught up must not bring back an older session.
 	const shownSessionId = useRef<string | undefined>(undefined);
-	const keepShown = Boolean(
-		liveSessionId && deferredSessionId && deferredSessionId === shownSessionId.current && forcedSessionId !== liveSessionId,
+	const shownProjectId = useRef<string | undefined>(undefined);
+	const rendering = Boolean(liveSessionId && deferredSessionId && deferredSessionId === shownSessionId.current);
+	const awaitingHistory = Boolean(
+		liveSessionId && shownSessionId.current && shownSessionId.current !== liveSessionId && (destinationPending || deferredPending),
 	);
-	const sessionId = keepShown ? deferredSessionId : liveSessionId;
-	const projectId = keepShown ? deferredProjectId : liveProjectId;
+	const keepShown = (rendering || awaitingHistory) && forcedSessionId !== liveSessionId;
+	const sessionId = keepShown ? (rendering ? deferredSessionId : shownSessionId.current) : liveSessionId;
+	const projectId = keepShown ? (rendering ? deferredProjectId : shownProjectId.current) : liveProjectId;
 	const switching = sessionId !== liveSessionId;
 	useLayoutEffect(() => {
 		shownSessionId.current = sessionId;
+		shownProjectId.current = projectId;
 	});
 	useLayoutEffect(() => {
 		setSessionSwitchHeld(switching);

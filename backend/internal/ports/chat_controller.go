@@ -39,7 +39,20 @@ type ChatControllerStart struct {
 	Permissions   PermissionMode
 	// ReadOnly forces the provider's native sandbox to reject workspace writes.
 	// Reviewer-owned conversations set this independently of approval behavior.
-	ReadOnly              bool
+	ReadOnly bool
+	// ForkHandoffNote is a text-handoff fork's copy of its original's
+	// conversation. The first start stores it with the conversation, so every
+	// later start of this agent gets it too.
+	ForkHandoffNote string
+	// ForkFirstStart marks a fork's first start, resuming the provider
+	// conversation just copied for it into a conversation with no saved
+	// settings: it starts with, and saves, Model, Effort, and Permissions.
+	ForkFirstStart bool
+	// FastMode and AutoCompactWindow seed a brand-new conversation's settings.
+	// Resumes, restores and provider switches leave them unset and keep the
+	// saved ones.
+	FastMode              bool
+	AutoCompactWindow     string
 	SystemPrompt          string
 	AdditionalDirectories []string
 	MCPServers            []ChatMCPServerConfig

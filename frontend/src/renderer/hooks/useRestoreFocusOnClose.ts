@@ -1,4 +1,5 @@
 import { useCallback, useLayoutEffect, useRef } from "react";
+import { queryShown } from "../lib/dom-selectors";
 
 const COMPOSER_SELECTOR = '[aria-label="Message the agent"]';
 
@@ -19,7 +20,7 @@ export function useRestoreFocusOnClose(open: boolean) {
 		const remembered = returnFocusRef.current;
 		const target = remembered?.isConnected && remembered !== document.body
 			? remembered
-			: document.querySelector<HTMLElement>(COMPOSER_SELECTOR);
+			: queryShown<HTMLElement>(COMPOSER_SELECTOR);
 		if (!target) return;
 		event.preventDefault();
 		target.focus();

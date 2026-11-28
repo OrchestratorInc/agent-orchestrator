@@ -29,12 +29,19 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 	aoprocess "github.com/aoagents/agent-orchestrator/backend/internal/process"
+	"github.com/aoagents/agent-orchestrator/backend/pkg/agentcreds"
 )
 
 const minimumNodeMajor = 22
 
 // claudeTodoToolsEnv switches on Claude Code's to-do tools in SDK sessions.
 const claudeTodoToolsEnv = "CLAUDE_CODE_ENABLE_TODO_TOOLS"
+
+const (
+	claudeEntrypointEnv = "CLAUDE_CODE_ENTRYPOINT"
+	claudeEntrypoint    = "agent-orchestrator"
+	claudeArtifactEnv   = "CLAUDE_CODE_ARTIFACT"
+)
 
 // claudePlanGuidance asks Claude to plan multi-step work with its to-do tools.
 // Claude Code defers TaskCreate and TaskUpdate until ToolSearch loads them and
@@ -83,8 +90,10 @@ type claudeLaunchAuthenticator interface {
 // plugin. The plugin remains the canonical discovery/auth implementation for
 // both Chat and TUI modes.
 func New(plugin claudePlugin, log *slog.Logger, onAuthRejected func()) ports.ChatDriver {
+	aliases := newClaudeAliasCatalog()
 	return &checkpointDriver{plugin: plugin, ChatDriver: acpdriver.New(acpdriver.Config{
-		Harness: domain.HarnessClaudeCode,
+		Harness:     domain.HarnessClaudeCode,
+		HideCommand: hiddenCommands,
 		// A live rejection is the ground truth that outranks any cached
 		// verdict, so drop the cache the moment one arrives. This is also the
 		// only auth correction that works for credential sources AO cannot
@@ -93,6 +102,10 @@ func New(plugin claudePlugin, log *slog.Logger, onAuthRejected func()) ports.Cha
 		OnAuthRejected:        claudeAuthRejected(onAuthRejected),
 		PromptResponseFailure: claudePromptResponseFailure,
 		CanHibernate:          claudeCanHibernate,
+		BackgroundTasks:       claudeBackgroundTasks,
+		AsyncTasks:            true,
+		StopBackgroundTask:    claudeStopBackgroundTask,
+		BackgroundTaskOutput:  claudeBackgroundTaskOutput,
 		HistoryNotice:         claudeTranscriptNotice,
 		// claude-agent-acp keeps one TaskCreate/TaskUpdate list for the session
 		// and re-sends it at the start of every prompt while a task is unfinished.
@@ -143,7 +156,9 @@ func New(plugin claudePlugin, log *slog.Logger, onAuthRejected func()) ports.Cha
 			modelsStarted := time.Now()
 			if _, preserve := claudeACPModelConfig(cfg.Env); !preserve {
 				var modelErr error
-				models, modelErr = claudecode.ProviderModels(ctx, claudeBinary, cfg.WorkspacePath, cfg.Env)
+				modelCtx, cancel := context.WithTimeout(ctx, agentcreds.DefaultTimeout)
+				models, modelErr = claudecode.ProviderModels(modelCtx, claudeBinary, cfg.WorkspacePath, cfg.Env)
+				cancel()
 				if modelErr != nil && log != nil {
 					log.Debug("Claude provider model discovery unavailable; using ACP defaults", "error", modelErr)
 				}
@@ -152,6 +167,7 @@ func New(plugin claudePlugin, log *slog.Logger, onAuthRejected func()) ports.Cha
 				log.Debug("Claude launch prepared", "sessionID", cfg.SessionID,
 					"authDuration", authDuration, "modelsDuration", time.Since(modelsStarted))
 			}
+			aliases.record(cfg.SessionID, models)
 			env := claudeACPLaunchEnv(cfg.Env, claudeBinary, cfg.Model, models)
 			return acpdriver.Launch{
 				Command: runtimeLaunch.command,
@@ -159,7 +175,10 @@ func New(plugin claudePlugin, log *slog.Logger, onAuthRejected func()) ports.Cha
 				Env:     env,
 			}, nil
 		},
-		ServedModel:    claudeServedModel,
+		OptionalDirectories: func(cfg acpdriver.LaunchConfig) []string {
+			return claudecode.SkillDirectories(cfg.DataDir, string(ports.SkillsOf(cfg.SessionID, cfg.SkillSessionID)))
+		},
+		ServedModel:    aliases.servedModel,
 		SessionMeta:    claudeSessionMeta,
 		SessionMode:    claudeSessionMode,
 		SessionOptions: claudeSessionOptions,
@@ -343,20 +362,6 @@ func claudeValidateModel(ctx context.Context, plugin claudePlugin, model string)
 	return nil
 }
 
-// claudeServedModel reports what a Claude alias actually resolved to. The ACP
-// adapter does not surface the answering model, but Claude's own transcript
-// records it on every assistant message.
-func claudeServedModel(ctx context.Context, cfg acpdriver.LaunchConfig, sessionID, selected string) (string, string) {
-	if !isClaudeNativeModelAlias(selected) {
-		return "", ""
-	}
-	served, err := claudecode.LastAssistantModel(ctx, cfg.Env, sessionID)
-	if err != nil || served == "" {
-		return "", ""
-	}
-	return served, fmt.Sprintf("The installed Claude Code resolves %q to %s", selected, served)
-}
-
 func claudeNestedMap(meta map[string]any, key string) map[string]any {
 	if meta == nil {
 		return nil
@@ -389,6 +394,16 @@ func claudeACPLaunchEnv(
 	// value the user already chose, in the project env or the daemon's own, wins.
 	if _, chosen := claudeTodoToolsChoice(input); !chosen {
 		env[claudeTodoToolsEnv] = "1"
+	}
+	if strings.TrimSpace(input[claudeEntrypointEnv]) == "" {
+		env[claudeEntrypointEnv] = claudeEntrypoint
+	}
+	if strings.TrimSpace(input[claudeArtifactEnv]) == "" {
+		if strings.TrimSpace(os.Getenv(claudeArtifactEnv)) == "" {
+			env[claudeArtifactEnv] = "0"
+		} else {
+			delete(env, claudeArtifactEnv)
+		}
 	}
 	selected := strings.TrimSpace(selectedModel)
 	if _, configured := input["ANTHROPIC_CUSTOM_MODEL_OPTION"]; selected != "" &&

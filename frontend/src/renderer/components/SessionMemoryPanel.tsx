@@ -47,6 +47,7 @@ import {
 	DialogClose,
 	DialogContent,
 	DialogDescription,
+	DialogOverlay,
 	DialogTitle,
 	settingsDialogBodyClass,
 	settingsDialogContentClass,
@@ -554,9 +555,16 @@ export function SessionMemoryPanel({
 	const { t } = useTranslation();
 	useFastMemorySampling();
 	const scroller = useRef<HTMLDivElement>(null);
+	// A fixed height, not one that follows the rows: the window is centred, so
+	// every sample that added or dropped a row (a process, a reviewer, a
+	// session) moved the whole window by half the difference.
 	return (
 		<Dialog open={open} onOpenChange={onOpenChange}>
-			<DialogContent className={cn(settingsDialogContentClass, "w-[min(52rem,calc(100vw-var(--space-8)))]")} showCloseButton={false}>
+			<DialogContent
+				className={cn(settingsDialogContentClass, "h-[min(var(--size-settings-dialog-max-h),calc(100svh-var(--space-8)))] w-[min(52rem,calc(100vw-var(--space-8)))]")}
+				overlay={<DialogOverlay className="diagnostics-dialog-overlay" />}
+				showCloseButton={false}
+			>
 				<div className={cn(settingsDialogHeaderClass, "flex h-auto flex-row items-center justify-between border-b-0 pb-3")}>
 					<div className="min-w-0 flex-1">
 						<DialogTitle className="text-lg font-semibold leading-6 text-settings-label">{t("shell.memoryPanelTitle")}</DialogTitle>
@@ -583,7 +591,7 @@ export function SessionMemoryPanel({
 function GroupRow({ label }: { label: string }) {
 	return (
 		<tr className="memory-group">
-			<td className={cn("pb-1 pt-4 text-xs font-medium leading-4 text-settings-muted in-[tr:first-child]:pt-3", cell.name)} colSpan={columnCount}>{label}</td>
+			<td className={cn("pb-1 pt-4 text-xs font-medium leading-4 text-settings-muted [tr:first-child>&]:pt-3", cell.name)} colSpan={columnCount}>{label}</td>
 		</tr>
 	);
 }

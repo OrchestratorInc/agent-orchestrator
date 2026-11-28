@@ -79,14 +79,15 @@ func buildDaemon(t *testing.T) string {
 			buildErr = err
 			return
 		}
-		out := filepath.Join(dir, "ao")
-		cmd := exec.Command("go", "build", "-o", out, "./cmd/ao")
-		cmd.Dir = ".."
-		if combined, err := cmd.CombinedOutput(); err != nil {
-			buildErr = fmt.Errorf("go build ./cmd/ao: %w\n%s", err, combined)
-			return
+		for _, name := range []string{"ao", "ao-chat-host"} {
+			cmd := exec.Command("go", "build", "-o", filepath.Join(dir, name), "./cmd/"+name)
+			cmd.Dir = ".."
+			if combined, err := cmd.CombinedOutput(); err != nil {
+				buildErr = fmt.Errorf("go build ./cmd/%s: %w\n%s", name, err, combined)
+				return
+			}
 		}
-		aoBinary = out
+		aoBinary = filepath.Join(dir, "ao")
 	})
 	if buildErr != nil {
 		t.Fatalf("build daemon: %v", buildErr)

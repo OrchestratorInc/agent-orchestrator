@@ -193,6 +193,38 @@ func (r *Resolver) Resolve(ctx, remoteCtx context.Context, repo string) (Resolut
 	)
 }
 
+// RefreshRemoteHead asks the selected remote for its HEAD and records it as
+// the cached remote HEAD that Inspect reads. It fetches that branch only when
+// the cached HEAD names a different one (or none), which happens after the
+// remote changes its default: a remote-tracking ref left from earlier may be
+// stale. When the cached HEAD already names it, the caller refreshes the
+// branch's commits itself, so the common case never downloads here.
+func (r *Resolver) RefreshRemoteHead(ctx, remoteCtx context.Context, repo string) error {
+	remote, remotes, err := r.selectRemote(ctx, repo)
+	if err != nil {
+		return err
+	}
+	if len(remotes) == 0 {
+		return nil
+	}
+	if remoteCtx == nil {
+		remoteCtx = ctx
+	}
+	branch, err := r.liveRemoteHead(remoteCtx, repo, remote)
+	if err != nil {
+		return err
+	}
+	if err := r.validateBranch(ctx, repo, branch); err != nil {
+		return err
+	}
+	if cached, ok := r.cachedRemoteHead(ctx, repo, remote); !ok || cached.Branch != branch {
+		if _, err := r.run(remoteCtx, r.binary, fetchBranchArgs(repo, remote, branch)...); err != nil {
+			return fmt.Errorf("fetch remote default %q from %q: %w", branch, remote, err)
+		}
+	}
+	return r.setCachedRemoteHead(ctx, repo, remote, branch)
+}
+
 // An empty clone can have an AO-created initial commit before its first push.
 // Keep remote HEAD authoritative once available, and never use this fallback
 // when the selected remote already has fetched branches.

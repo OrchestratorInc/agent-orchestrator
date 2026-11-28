@@ -1,6 +1,10 @@
 package domain
 
-import "time"
+import (
+	"path/filepath"
+	"strings"
+	"time"
+)
 
 const (
 	// ProjectKindSingleRepo is the existing one-repository project shape.
@@ -70,6 +74,23 @@ type WorkspaceRepoRecord struct {
 	DefaultBranch string
 	RegisteredAt  time.Time
 	GitStatus     GitStatus
+}
+
+// WorkspaceIgnorePattern returns the root-anchored gitignore pattern that
+// matches exactly the folder at rel. Glob characters, backslashes and spaces
+// are escaped, so a folder named "notes[1]" never matches "notes1".
+func WorkspaceIgnorePattern(rel string) string {
+	var b strings.Builder
+	b.WriteByte('/')
+	for _, r := range filepath.ToSlash(rel) {
+		switch r {
+		case '\\', '*', '?', '[', ' ':
+			b.WriteByte('\\')
+		}
+		b.WriteRune(r)
+	}
+	b.WriteByte('/')
+	return b.String()
 }
 
 // SessionWorktreeRecord tracks one repo worktree in a session. Workspace

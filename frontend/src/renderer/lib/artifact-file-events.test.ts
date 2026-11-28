@@ -163,7 +163,7 @@ describe("subscribeArtifactFileChanges", () => {
 	});
 
 	it("rebuilds a stream the daemon refused, after a backoff", () => {
-		const { client } = fakeQueryClient();
+		const { client, listRefreshes } = fakeQueryClient();
 		const unsubscribe = subscribe("ao-1", client);
 		const refused = EventSourceStub.instances[0];
 
@@ -173,6 +173,9 @@ describe("subscribeArtifactFileChanges", () => {
 		vi.advanceTimersByTime(5_000);
 		expect(EventSourceStub.instances).toHaveLength(2);
 		expect(EventSourceStub.instances[1].url).toBe(refused.url);
+		// Ready on the replacement stream rereads a file written during the gap.
+		EventSourceStub.instances[1].dispatch("ready");
+		expect(listRefreshes()).toBe(1);
 		unsubscribe();
 		expect(EventSourceStub.instances[1].closed).toBe(true);
 	});

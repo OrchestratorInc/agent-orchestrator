@@ -77,6 +77,7 @@ export function localAuthAvailable(cpUrl: string): boolean {
 // ---------------------------------------------------------------------------
 
 export class LocalAuthError extends Error {
+	readonly code: string = "LOCAL_AUTH_ERROR";
 	constructor(
 		readonly status: number,
 		message: string,

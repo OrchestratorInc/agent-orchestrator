@@ -1,7 +1,9 @@
 import { useCallback, useEffect, useRef } from "react";
 import { Pressable, ScrollView, StyleSheet, Text, View, type LayoutChangeEvent, type NativeScrollEvent, type NativeSyntheticEvent } from "react-native";
 import { AppSymbol } from "./AppSymbol";
+import { FreshnessDot } from "./FreshnessDot";
 import { haptics } from "./haptics";
+import { freshnessAccessibilityLabel, freshnessTone } from "./machineFreshness";
 import type { Theme } from "./theme";
 import { useTheme, useThemedStyles } from "./ThemeProvider";
 import { gutter, press, radius, space, touchTarget, type } from "./tokens";
@@ -19,7 +21,8 @@ const CHIP_HIT_SLOP = { top: (touchTarget - CHIP_HEIGHT) / 2, bottom: (touchTarg
  * paired machine, scrolling sideways, as Android's Material filter chips do.
  * It is the one place to choose a machine; the header's filter holds projects.
  * The chosen chip is tinted and checked, the others outlined, and choosing the
- * chosen machine again goes back to every machine.
+ * chosen machine again goes back to every machine. A machine whose rows may
+ * not be current wears its freshness dot before its name.
  */
 export function WorkerEnvironmentFilter({ environments, selectedEnvironmentId, onSelectEnvironment }: WorkerEnvironmentFilterProps) {
 	const t = useTheme();
@@ -70,7 +73,9 @@ export function WorkerEnvironmentFilter({ environments, selectedEnvironmentId, o
 					<Pressable
 						key={environment.id}
 						accessibilityRole="button"
-						accessibilityLabel={environment.label}
+						accessibilityLabel={environment.freshness && environment.freshness !== "live"
+							? `${environment.label}, ${freshnessAccessibilityLabel(environment.freshness)}`
+							: environment.label}
 						accessibilityState={{ selected }}
 						hitSlop={CHIP_HIT_SLOP}
 						onLayout={(event) => {
@@ -87,6 +92,9 @@ export function WorkerEnvironmentFilter({ environments, selectedEnvironmentId, o
 								<AppSymbol name="checkmark" size={14} color={t.accent} />
 							</View>
 						) : null}
+						{/* Ahead of the name, where the eye lands first; after the check
+						    when chosen, so the check keeps the chip's leading edge. */}
+						<FreshnessDot tone={freshnessTone(environment.freshness)} testID={`worker-environment-freshness-${environment.id}`} />
 						<Text numberOfLines={1} style={[styles.label, selected && styles.selectedLabel]}>{environment.label}</Text>
 					</Pressable>
 				);

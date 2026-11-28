@@ -4,13 +4,14 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const pickerMounts = vi.hoisted(() => ({ count: 0 }));
 
+const theme = vi.hoisted(() => ({ bgElevated: "#elevated", bgSurface: "#surface", textPrimary: "#primary", textSecondary: "#secondary", textTertiary: "#tertiary" }));
 vi.mock("./ThemeProvider", () => ({
-	useTheme: () => ({ bgElevated: "#elevated", bgSurface: "#surface", textPrimary: "#primary", textSecondary: "#secondary", textTertiary: "#tertiary" }),
+	useTheme: () => theme,
+	useThemeState: () => ({ theme, scheme: "light" }),
 }));
 vi.mock("./toolbarIcon.android", () => ({ materialDrawable: (name: string) => `drawable:${name}` }));
 vi.mock("./harnessLogoAssets", () => ({ logoFor: (harness: string) => (harness === "codex" ? "logo:codex" : harness === "opencode" ? "logo:opencode" : null) }));
-vi.mock("./harnessLogo", () => ({ chipColorFor: (harness: string) => (harness === "opencode" ? "#chip" : undefined) }));
-vi.mock("./spawn-composer-controls.ios", () => ({ HarnessImage: "HarnessImage", useHarnessLogoUris: () => ({ codex: "file://codex.png" }) }));
+vi.mock("./spawn-composer-controls.ios", () => ({ HarnessImage: "HarnessImage" }));
 vi.mock("@expo/ui/jetpack-compose", async () => {
 	const React = await import("react");
 	const host = (name: string) => ({ children, ...props }: { children?: React.ReactNode }) => React.createElement(name, props, children);
@@ -90,10 +91,10 @@ function props(overrides: Partial<ReviewerPickerProps> = {}): ReviewerPickerProp
 		selectedReviewer: "",
 		effectiveReviewer: "codex",
 		onSelectReviewer: vi.fn(),
-		models: [{ id: "gpt-5", label: "GPT-5" }],
-		modelTitle: "Model",
-		selectedModel: "",
+		model: { title: "Model", value: "gpt-5", valueLabel: "GPT-5", options: [{ id: "gpt-5", label: "GPT-5" }, { id: "gpt-5-mini", label: "GPT-5 mini" }] },
 		onSelectModel: vi.fn(),
+		effort: { title: "Effort", value: "high", valueLabel: "High", options: [{ id: "low", label: "Low" }, { id: "high", label: "High" }] },
+		onSelectEffort: vi.fn(),
 		busy: false,
 		...overrides,
 	};
@@ -107,13 +108,28 @@ async function render(element: React.ReactElement) {
 const texts = (node: { findAllByType(type: never): { props: { children?: unknown } }[] }) => node.findAllByType("ComposeText" as never).map((text) => text.props.children);
 
 describe("ReviewerPicker on Android", () => {
-	it("reads each setting's current value, leaving the model out without a catalog", async () => {
+	it("reads each setting's current value, leaving out a setting the reviewer has none of", async () => {
 		let root = await render(<ReviewerPicker {...props()} />);
 		const rows = root.findAllByType("ListItem" as never);
-		expect(rows.map((row) => texts(row.findByType("Supporting" as never)))).toEqual([["Project default · Codex"], ["Provider default"]]);
+		expect(rows.map((row) => texts(row.findByType("Headline" as never)))).toEqual([["Reviewer"], ["Model"], ["Effort"]]);
+		expect(rows.map((row) => texts(row.findByType("Supporting" as never)))).toEqual([["Project default · Codex"], ["GPT-5"], ["High"]]);
 		await act(async () => renderer?.unmount());
-		root = await render(<ReviewerPicker {...props({ models: [] })} />);
+		root = await render(<ReviewerPicker {...props({ model: undefined, effort: undefined })} />);
 		expect(root.findAllByType("ListItem" as never)).toHaveLength(1);
+	});
+
+	it("checks the effort the review runs with and saves a picked one by id", async () => {
+		const onSelectEffort = vi.fn();
+		const root = await render(<ReviewerPicker {...props({ onSelectEffort })} />);
+		const effortMenu = () => root.findAllByType("DropdownMenu" as never)[2];
+		act(() => root.findAllByType("ListItem" as never)[2].props.modifiers.find((entry: { clickable?: () => void }) => entry.clickable).clickable());
+		expect(effortMenu().props.expanded).toBe(true);
+		const choices = effortMenu().findAllByType("DropdownMenuItem" as never);
+		expect(choices.map((choice) => texts(choice.findByType("ItemText" as never))[0])).toEqual(["Low", "High"]);
+		expect(choices.map((choice) => choice.findAllByType("ItemTrailingIcon" as never).length)).toEqual([0, 1]);
+		act(() => choices[0].props.onClick());
+		expect(onSelectEffort).toHaveBeenCalledWith("low");
+		expect(effortMenu().props.expanded).toBe(false);
 	});
 
 	it("opens a dropdown of the choices with the current one marked, and closes on a choice", async () => {
@@ -141,16 +157,31 @@ describe("ReviewerPicker on Android", () => {
 });
 
 describe("ReviewerPicker on iOS", () => {
-	it("offers each setting's choices by id, keeping a configured model the catalog no longer lists", async () => {
+	it("offers each setting's choices by id, checking the value the review runs with", async () => {
 		const onSelectModel = vi.fn();
-		const root = await render(<IOSReviewerPicker {...props({ selectedModel: "gpt-4", onSelectModel })} />);
-		const [reviewer, model] = root.findAllByType("Picker" as never);
+		const onSelectEffort = vi.fn();
+		const root = await render(<IOSReviewerPicker {...props({ onSelectModel, onSelectEffort })} />);
+		const [reviewer, model, effort] = root.findAllByType("Picker" as never);
 		expect(reviewer.props).toMatchObject({ label: "Reviewer", selection: "" });
 		const options = reviewer.findAllByType("Label" as never);
 		expect(options.map((option) => [option.props.title, option.props.modifiers[0].args[0]])).toEqual([["Project default · Codex", ""], ["Codex", "codex"], ["OpenCode", "opencode"]]);
-		expect(model.findAllByType("SwiftText" as never).map((option) => option.props.children)).toEqual(["Provider default", "GPT-5", "gpt-4"]);
-		act(() => model.props.onSelectionChange("gpt-5"));
-		expect(onSelectModel).toHaveBeenCalledWith("gpt-5");
+		const choices = (picker: typeof model) => picker.findAllByType("SwiftText" as never).map((option) => [option.props.children, option.props.modifiers[0].args[0]]);
+		expect(model.props).toMatchObject({ label: "Model", selection: "gpt-5" });
+		expect(choices(model)).toEqual([["GPT-5", "gpt-5"], ["GPT-5 mini", "gpt-5-mini"]]);
+		expect(effort.props).toMatchObject({ label: "Effort", selection: "high" });
+		expect(choices(effort)).toEqual([["Low", "low"], ["High", "high"]]);
+		act(() => model.props.onSelectionChange("gpt-5-mini"));
+		expect(onSelectModel).toHaveBeenCalledWith("gpt-5-mini");
+		act(() => effort.props.onSelectionChange("low"));
+		expect(onSelectEffort).toHaveBeenCalledWith("low");
+	});
+
+	it("tags the way back to the agent's model with no id", async () => {
+		const model = { title: "Model", value: "gpt-5-mini", valueLabel: "GPT-5 mini", options: [{ id: "", label: "Use agent model" }, { id: "gpt-5", label: "GPT-5" }, { id: "gpt-5-mini", label: "GPT-5 mini" }] };
+		const root = await render(<IOSReviewerPicker {...props({ model, effort: undefined })} />);
+		const pickers = root.findAllByType("Picker" as never);
+		expect(pickers).toHaveLength(2);
+		expect(pickers[1].findAllByType("SwiftText" as never)[0].props).toMatchObject({ children: "Use agent model", modifiers: [{ modifier: "tag", args: [""] }] });
 	});
 
 	// Stands in for the sheet: a choice makes it busy at once (it asks before

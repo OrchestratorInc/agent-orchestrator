@@ -176,6 +176,7 @@ type SetupOptions = {
 	isVisible?: boolean;
 	inputDisabled?: boolean;
 	hasMeasuredGrid?: boolean;
+	shellTerminalHandleId?: string;
 };
 
 function setup({
@@ -187,6 +188,7 @@ function setup({
 	isVisible = true,
 	inputDisabled = false,
 	hasMeasuredGrid = true,
+	shellTerminalHandleId,
 }: SetupOptions = {}) {
 	const muxes: FakeMux[] = [];
 	const createMux = () => {
@@ -214,6 +216,7 @@ function setup({
 				createMux,
 				inputDisabled: blocked,
 				isVisible: visible,
+				shellTerminalHandleId,
 			}),
 		{ initialProps, wrapper },
 	);
@@ -1001,6 +1004,14 @@ describe("useTerminalSession", () => {
 		expect(terminal.lines.some((line) => line.includes("[process exited]"))).toBe(true);
 		expect(muxes[0].disposed).toBe(true);
 		expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: workspaceQueryKey });
+	});
+
+	it("refetches the shell terminal list when a shell exits, so its tab closes", () => {
+		const { view, muxes, invalidateSpy } = setup({ shellTerminalHandleId: "shell-1" });
+		act(() => muxes[0].emitExit("shell-1"));
+		expect(view.result.current.state).toBe("exited");
+		expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ["shell-terminals"] });
+		expect(invalidateSpy).not.toHaveBeenCalledWith({ queryKey: workspaceQueryKey });
 	});
 
 	it("uses a contextual exit notice for intentionally short-lived terminals", () => {

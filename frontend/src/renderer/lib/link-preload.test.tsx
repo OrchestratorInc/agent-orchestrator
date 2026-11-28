@@ -21,6 +21,10 @@ vi.mock("../hooks/useSessionWorkspaceFiles", () => ({
 	}),
 }));
 
+/** The page-preview reads; a pull request link also reads its PR's state. */
+const linkPreviewCalls = () => getMock.mock.calls.filter(([path]) => path === "/api/v1/link-preview");
+const prPreviewCalls = () => getMock.mock.calls.filter(([path]) => path === "/api/v1/pr-preview");
+
 const observed = new Set<Element>();
 let reportIntersection: (element: Element, isIntersecting: boolean) => void = () => undefined;
 
@@ -105,10 +109,8 @@ describe("observeLinkForPreload", () => {
 		await vi.advanceTimersByTimeAsync(1);
 		await vi.advanceTimersByTimeAsync(0);
 
-		expect(getMock).toHaveBeenCalledExactlyOnceWith("/api/v1/link-preview", {
-			params: { query: { url } },
-			signal: expect.any(AbortSignal),
-		});
+		expect(linkPreviewCalls()).toEqual([["/api/v1/link-preview", { params: { query: { url } }, signal: expect.any(AbortSignal) }]]);
+		expect(prPreviewCalls()).toEqual([["/api/v1/pr-preview", { params: { query: { url } }, signal: expect.any(AbortSignal) }]]);
 		expect(queryClient.getQueryData(linkPreviewQueryKey(url))).toMatchObject({ title: "A pull request" });
 		expect(warmedImages).toEqual([
 			{ src: "https://og.example/1.png", crossOrigin: null, referrerPolicy: "no-referrer" },
@@ -145,7 +147,7 @@ describe("observeLinkForPreload", () => {
 		const queued = visibleLink(pullRequest(12));
 		visibleLink(pullRequest(13));
 		await vi.advanceTimersByTimeAsync(250);
-		expect(getMock).toHaveBeenCalledTimes(2);
+		expect(linkPreviewCalls()).toHaveLength(2);
 
 		reportIntersection(queued.element, false);
 		while (pending.length) {
@@ -153,7 +155,7 @@ describe("observeLinkForPreload", () => {
 			await vi.advanceTimersByTimeAsync(0);
 		}
 
-		const urls = getMock.mock.calls.map(([, options]) => options.params.query.url);
+		const urls = linkPreviewCalls().map(([, options]) => options.params.query.url);
 		expect(urls).toEqual([pullRequest(10), pullRequest(11), pullRequest(13)]);
 	});
 
@@ -168,7 +170,8 @@ describe("observeLinkForPreload", () => {
 		reportIntersection(first.element, false);
 		reportIntersection(first.element, true);
 		await vi.advanceTimersByTimeAsync(1_000);
-		expect(getMock).toHaveBeenCalledTimes(1);
+		expect(linkPreviewCalls()).toHaveLength(1);
+		expect(prPreviewCalls()).toHaveLength(1);
 	});
 
 	describe("artifact links", () => {
@@ -241,7 +244,7 @@ describe("AppLink preloading", () => {
 
 		expect(await screen.findByTestId("link-preview-card")).toHaveTextContent("A pull request");
 		expect(screen.queryByTestId("link-preview-loading")).not.toBeInTheDocument();
-		expect(getMock).toHaveBeenCalledTimes(1);
+		expect(linkPreviewCalls()).toHaveLength(1);
 	});
 
 	it("forwards the caller's ref and stops watching on unmount", () => {

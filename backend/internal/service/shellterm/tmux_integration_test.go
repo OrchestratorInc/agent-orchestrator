@@ -126,14 +126,22 @@ func TestTmuxUserShellExitReconciliation(t *testing.T) {
 					t.Fatalf("host after child exit = %v, %v; want retained=%v", alive, err, tc.retainPane)
 				}
 				if reconcile == "desktop relaunch" {
-					if n, err := svc.ReapShellTerminalsFromPreviousAppRuns(ctx); err != nil || n != 1 {
+					// The shell is found gone at the next launch: the reap
+					// runs once per launch, so relaunch before reaping.
+					svc = NewService(rt, st, nil, sessions, workspace, "third-launch", testLogger())
+					if n, err := svc.ReapShellTerminalsFromPreviousAppRuns(ctx); err != nil || n != 0 {
 						t.Fatalf("exited reap = %d, %v", n, err)
 					}
-				} else if listed, err := svc.ListShellTerminalsForCurrentAppRun(ctx); err != nil || len(listed) != 0 {
-					t.Fatalf("exited list = %+v, %v", listed, err)
-				}
-				if len(st.records) != 0 {
-					t.Fatalf("exited shell row retained: %+v", st.records)
+					if listed, err := svc.ListShellTerminalsForCurrentAppRun(ctx); err != nil || len(listed) != 1 || listed[0].EndedAt == nil {
+						t.Fatalf("exited list = %+v, %v; want one ended tab", listed, err)
+					}
+				} else {
+					if listed, err := svc.ListShellTerminalsForCurrentAppRun(ctx); err != nil || len(listed) != 0 {
+						t.Fatalf("exited list = %+v, %v", listed, err)
+					}
+					if len(st.records) != 0 {
+						t.Fatalf("exited shell row retained: %+v", st.records)
+					}
 				}
 				// Destroy clears the runtime's socket cache. Inspect this exact
 				// fixture server instead of probing an uncached legacy fallback.

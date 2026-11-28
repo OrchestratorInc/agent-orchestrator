@@ -52,6 +52,9 @@ func (p *Plugin) PreLaunch(ctx context.Context, cfg ports.LaunchConfig) error {
 	if strings.TrimSpace(cfg.WorkspacePath) == "" || strings.TrimSpace(cfg.DataDir) == "" {
 		return nil
 	}
+	if IsImportedHome(cfg.Env[kimiCodeHomeEnv], cfg.DataDir) {
+		return ensureKimiWorkspaceTrusted(cfg.Env[kimiCodeHomeEnv], cfg.WorkspacePath)
+	}
 	return ensureKimiWorkspaceTrusted(kimiCodeHomeDir(cfg.DataDir), cfg.WorkspacePath)
 }
 

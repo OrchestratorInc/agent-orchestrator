@@ -1,7 +1,7 @@
-import { mkdtemp, readdir, readFile, rm } from "node:fs/promises";
+import { mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } from "vitest";
 
 const ACCESS_TOKEN = `header.${Buffer.from(
   JSON.stringify({ exp: 4_102_444_800, sid: "session_123" }),
@@ -23,7 +23,25 @@ const mocks = vi.hoisted(() => ({
   openExternal: vi.fn(),
   showMessageBox: vi.fn(),
   providerAuthenticate: vi.fn(),
+  // Error codes the next reads of the login file fail with, one per read.
+  storeReadFailures: [] as string[],
+  storeReads: 0,
 }));
+
+// Reads of the login file can be made to fail with a chosen code; every other
+// file operation is the real one.
+vi.mock("node:fs/promises", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:fs/promises")>();
+  const readFile = ((...args: Parameters<typeof actual.readFile>) => {
+    if (String(args[0]).endsWith("cloud-auth.bin")) {
+      mocks.storeReads += 1;
+      const code = mocks.storeReadFailures.shift();
+      if (code) return Promise.reject(Object.assign(new Error(`${code}: synthetic read failure`), { code }));
+    }
+    return actual.readFile(...args);
+  }) as typeof actual.readFile;
+  return { ...actual, readFile, default: { ...actual, readFile } };
+});
 
 // The browser login itself is exercised in provider-auth-flow tests; here it
 // just returns a captured credential.
@@ -63,6 +81,7 @@ vi.mock("electron", () => ({
 }));
 
 import {
+  AuthStoreUnreadableError,
   beginCloudSignIn,
   getCloudAccessToken,
   getCloudSession,
@@ -81,6 +100,8 @@ describe("native WorkOS authentication", () => {
 
   beforeEach(async () => {
     vi.clearAllMocks();
+    mocks.storeReadFailures = [];
+    mocks.storeReads = 0;
     mocks.encryptionAvailable = true;
     mocks.selectedStorageBackend = "gnome_libsecret";
     dataDir = await mkdtemp(path.join(os.tmpdir(), "ao-cloud-auth-"));
@@ -126,7 +147,8 @@ describe("native WorkOS authentication", () => {
       "ao-app://callback?code=code_123&state=state_123",
       dataDir,
     );
-    expect(signIn).not.toHaveProperty("signIn");
+    // A completed sign-in is marked even without the website's visitor id.
+    expect(signIn?.signIn).toEqual({});
     const session = signIn?.account;
     expect(session).toMatchObject({
       authProvider: "workos",
@@ -146,9 +168,10 @@ describe("native WorkOS authentication", () => {
   it("silently accepts the same completed callback without exchanging its code again", async () => {
     await beginCloudSignIn(dataDir);
     const callback = "ao-app://callback?code=code_123&state=state_123";
-    const account = await handleCloudDeepLink(callback, dataDir);
+    const first = await handleCloudDeepLink(callback, dataDir);
 
-    await expect(handleCloudDeepLink(callback, dataDir)).resolves.toEqual(account);
+    // The repeat returns the same account, and no completed sign-in to report again.
+    await expect(handleCloudDeepLink(callback, dataDir)).resolves.toEqual({ account: first?.account });
     expect(mocks.authenticateWithCode).toHaveBeenCalledTimes(1);
     expect(mocks.showMessageBox).not.toHaveBeenCalled();
   });
@@ -161,31 +184,33 @@ describe("native WorkOS authentication", () => {
       handleCloudDeepLink(callback, dataDir),
     ]);
 
-    expect(accounts[0]).toEqual(accounts[1]);
+    expect(accounts[0]?.account).toEqual(accounts[1]?.account);
+    // Only the call that exchanged the code reports a completed sign-in.
+    expect(accounts.filter((result) => result?.signIn)).toHaveLength(1);
     expect(mocks.authenticateWithCode).toHaveBeenCalledTimes(1);
   });
 
   it("ignores callbacks with no login pending without changing the signed-in account", async () => {
     await beginCloudSignIn(dataDir);
-    const account = await handleCloudDeepLink("ao-app://callback?code=code_123&state=state_123", dataDir);
+    const account = (await handleCloudDeepLink("ao-app://callback?code=code_123&state=state_123", dataDir))?.account;
     await expect(handleCloudDeepLink(
       "ao-app://callback?code=different_code&state=state_123", dataDir,
-    )).resolves.toEqual(account);
+    )).resolves.toEqual({ account });
     await expect(handleCloudDeepLink(
       "ao-app://callback?code=code_123&state=unverified_state", dataDir,
-    )).resolves.toEqual(account);
+    )).resolves.toEqual({ account });
     expect(mocks.authenticateWithCode).toHaveBeenCalledTimes(1);
   });
 
   it("quietly returns to an account saved before callback deduplication was added", async () => {
     await beginCloudSignIn(dataDir);
     const callback = "ao-app://callback?code=code_123&state=state_123";
-    const account = await handleCloudDeepLink(callback, dataDir);
+    const account = (await handleCloudDeepLink(callback, dataDir))?.account;
     const store = await readAuthStore(dataDir);
     delete store.completedCallback;
     await writeAuthStore(dataDir, store);
 
-    await expect(handleCloudDeepLink(callback, dataDir)).resolves.toEqual(account);
+    await expect(handleCloudDeepLink(callback, dataDir)).resolves.toEqual({ account });
     expect(mocks.authenticateWithCode).toHaveBeenCalledTimes(1);
   });
 
@@ -203,13 +228,13 @@ describe("native WorkOS authentication", () => {
   it("keeps a newer pending login when an already completed callback repeats", async () => {
     await beginCloudSignIn(dataDir);
     const callback = "ao-app://callback?code=code_123&state=state_123";
-    const account = await handleCloudDeepLink(callback, dataDir);
+    const account = (await handleCloudDeepLink(callback, dataDir))?.account;
     mocks.getAuthorizationUrlWithPKCE.mockResolvedValueOnce({
       url: "https://workos.example/authorize", state: "state_456", codeVerifier: "verifier_456",
     });
     await beginCloudSignIn(dataDir);
 
-    await expect(handleCloudDeepLink(callback, dataDir)).resolves.toEqual(account);
+    await expect(handleCloudDeepLink(callback, dataDir)).resolves.toEqual({ account });
     await handleCloudDeepLink("ao-app://callback?code=code_456&state=state_456", dataDir);
     expect(mocks.authenticateWithCode).toHaveBeenCalledTimes(2);
     expect(mocks.authenticateWithCode).toHaveBeenLastCalledWith(expect.objectContaining({
@@ -252,7 +277,7 @@ describe("native WorkOS authentication", () => {
       expect(withVisitor.exchange).toEqual([[{ clientId: "client_test", code: "code_123", codeVerifier: "verifier_123" }]]);
       expect(withVisitor.store).toEqual(without.store);
       expect(withVisitor.account).toEqual(without.account);
-      expect(without.result).toEqual({ account: without.result?.account });
+      expect(without.result).toEqual({ account: without.result?.account, signIn: {} });
       expect(withVisitor.result).toEqual({ account: withVisitor.result?.account, signIn: { webDistinctId: VISITOR } });
     });
 
@@ -276,7 +301,7 @@ describe("native WorkOS authentication", () => {
       mocks.authenticateWithCode.mockClear();
       const invalid = await signInWith(`&web_distinct_id=${value}`);
 
-      expect(invalid.result).toEqual({ account: invalid.result?.account });
+      expect(invalid.result).toEqual({ account: invalid.result?.account, signIn: {} });
       expect(invalid.exchange).toEqual(without.exchange);
       expect(invalid.store).toEqual(without.store);
       expect(invalid.account).toEqual(without.account);
@@ -399,6 +424,70 @@ describe("native WorkOS authentication", () => {
       await expect(connect()).rejects.toThrow("fetch failed");
       await expect(readFile(tokenFile(), "utf8")).rejects.toMatchObject({ code: "ENOENT" });
     });
+
+    // Local sessions use the default account's login: an account login is
+    // kept locally only when the control plane saved it as the default.
+    const connectAccount = async (account: string) => {
+      const handler = mocks.ipcHandle.mock.calls.find(
+        ([channel]) => channel === "cloud:connectProviderAuth",
+      )?.[1] as (event: unknown, input: unknown) => Promise<void>;
+      return handler({}, { baseUrl: "https://cloud.example", provider: "claude-code", persistLocalClaudeToken: true, account });
+    };
+
+    it("keeps an added account's token only when the control plane made it the default", async () => {
+      const answer = (isDefault: boolean) => new Response(JSON.stringify({ agentAccount: { id: "a", isDefault } }), { status: 201 });
+      vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(answer(false));
+      await connectAccount("new");
+      await expect(readFile(tokenFile(), "utf8")).rejects.toMatchObject({ code: "ENOENT" });
+
+      vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(answer(true));
+      await connectAccount("new");
+      await expect(readFile(tokenFile(), "utf8")).resolves.toBe("sk-ant-oat01-test-token");
+    });
+
+    it("keeps a signed-in-again account's token only when it is the default", async () => {
+      vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(
+        new Response(JSON.stringify({ agentAccount: { id: "a", isDefault: false } }), { status: 200 }));
+      await connectAccount("33333333-3333-4333-8333-333333333333");
+      await expect(readFile(tokenFile(), "utf8")).rejects.toMatchObject({ code: "ENOENT" });
+    });
+  });
+
+  describe("Cloud agent accounts", () => {
+    const connect = (account: unknown) => {
+      const handler = mocks.ipcHandle.mock.calls.find(
+        ([channel]) => channel === "cloud:connectProviderAuth",
+      )?.[1] as (event: unknown, input: unknown) => Promise<void>;
+      return handler({}, { baseUrl: "https://cloud.example", provider: "codex", account });
+    };
+    const accountId = "33333333-3333-4333-8333-333333333333";
+
+    beforeEach(async () => {
+      await beginCloudSignIn(dataDir);
+      await handleCloudDeepLink("ao-app://callback?code=code_123&state=state_123", dataDir);
+      mocks.providerAuthenticate.mockResolvedValue({ provider: "codex", credentialType: "auth_json", secret: "{\"tokens\":{}}" });
+    });
+
+    it("saves a login as another account, or signs an account in again", async () => {
+      const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response("{}", { status: 201 }));
+      await connect("new");
+      await connect(accountId);
+      const requests = fetchMock.mock.calls.map(([url, init]) => ({ url: String(url), method: init?.method, body: JSON.parse(String(init?.body)) }));
+      expect(requests).toEqual([
+        { url: "https://cloud.example/api/cloud/v1/me/agent-accounts", method: "POST", body: { agent: "codex", credentialType: "auth_json", secret: "{\"tokens\":{}}" } },
+        { url: `https://cloud.example/api/cloud/v1/me/agent-accounts/${accountId}/credential`, method: "PUT", body: { credentialType: "auth_json", secret: "{\"tokens\":{}}" } },
+      ]);
+    });
+
+    it("refuses an account that is not an id before the login starts", async () => {
+      await expect(connect("../providers/codex")).rejects.toThrow("Invalid Cloud provider login request.");
+      expect(mocks.providerAuthenticate).not.toHaveBeenCalled();
+    });
+
+    it("shows why the control plane refused the login", async () => {
+      vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(JSON.stringify({ code: "AGENT_ACCOUNT_DUPLICATE", message: "That login is already saved." }), { status: 409 }));
+      await expect(connect("new")).rejects.toThrow("That login is already saved.");
+    });
   });
 
   it("rejects callbacks whose OAuth state does not match", async () => {
@@ -446,6 +535,248 @@ describe("native WorkOS authentication", () => {
       user: { email: "person@example.com" },
     });
     await signOutCloud(dataDir);
+  });
+
+  // Secure storage can be out for a while: a locked keychain, or a Linux
+  // keyring that had not started when the app did (basic_text for that run).
+  describe("through a secure storage outage", () => {
+    type CloudAuth = typeof import("./cloud-auth");
+    const PERSON = { id: "user_123", email: "person@example.com", name: "Person Example" };
+    const OTHER = { id: "user_456", email: "other@example.com", name: "Other Person" };
+    const storeFile = () => path.join(dataDir, "cloud-auth.bin");
+    const fileStore = async () => JSON.parse(await readFile(storeFile(), "utf8")) as Record<string, unknown>;
+    const signedInAs = (email: string) => expect.objectContaining({ user: expect.objectContaining({ email }) });
+    let warn: MockInstance<typeof console.warn>;
+
+    beforeEach(() => {
+      warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+      mocks.decryptString.mockImplementation((value: Buffer) => value.toString("utf8"));
+    });
+
+    // A fresh copy of the module: what the app holds in memory is gone, the
+    // file on disk stays.
+    async function restart(): Promise<CloudAuth> {
+      vi.resetModules();
+      const auth = await import("./cloud-auth");
+      auth.installCloudIPC(() => dataDir, mocks.notifyRenderers);
+      return auth;
+    }
+
+    async function signIn(auth: CloudAuth, code = "code_123") {
+      await auth.beginCloudSignIn(dataDir);
+      return auth.handleCloudDeepLink(`ao-app://callback?code=${code}&state=state_123`, dataDir);
+    }
+
+    const outages: Array<[string, () => void]> = [
+      ["encryption is unavailable", () => {
+        mocks.encryptionAvailable = false;
+      }],
+      ["Linux falls back to basic_text", () => {
+        vi.spyOn(process, "platform", "get").mockReturnValue("linux");
+        mocks.selectedStorageBackend = "basic_text";
+      }],
+    ];
+    const storageBack = () => {
+      mocks.encryptionAvailable = true;
+      mocks.selectedStorageBackend = "gnome_libsecret";
+    };
+
+    it.each(outages)("keeps the saved sign-in when %s at launch, and shows it again once storage is back", async (_name, outage) => {
+      await signIn(await restart());
+      outage();
+      const auth = await restart();
+
+      await expect(auth.getCloudSession(dataDir)).resolves.toBeNull();
+      await expect(readFile(storeFile())).resolves.toBeInstanceOf(Buffer);
+
+      storageBack();
+      await expect(auth.getCloudSession(dataDir)).resolves.toEqual(signedInAs("person@example.com"));
+      expect(mocks.notifyRenderers).toHaveBeenCalledWith(signedInAs("person@example.com"));
+      await expect((await restart()).getCloudSession(dataDir)).resolves.toEqual(signedInAs("person@example.com"));
+    });
+
+    it("saves a sign-in made during the outage over the older saved account once storage is back", async () => {
+      await signIn(await restart());
+      mocks.encryptionAvailable = false;
+      const auth = await restart();
+      mocks.authenticateWithCode.mockResolvedValueOnce({ accessToken: ACCESS_TOKEN, refreshToken: "refresh_456", user: OTHER });
+      await signIn(auth, "code_456");
+
+      storageBack();
+      await expect(auth.getCloudSession(dataDir)).resolves.toEqual(signedInAs("other@example.com"));
+      expect(await fileStore()).toMatchObject({ session: { refreshToken: "refresh_456", user: { email: "other@example.com" } } });
+      await expect((await restart()).getCloudSession(dataDir)).resolves.toEqual(signedInAs("other@example.com"));
+    });
+
+    it("says a sign-in made during the outage will not survive a restart, and never brings back the account it replaced", async () => {
+      await signIn(await restart());
+      mocks.encryptionAvailable = false;
+      let auth = await restart();
+      mocks.authenticateWithCode.mockResolvedValueOnce({ accessToken: ACCESS_TOKEN, refreshToken: "refresh_456", user: OTHER });
+
+      await expect(signIn(auth, "code_456")).resolves.toMatchObject({ account: signedInAs("other@example.com") });
+      await expect(readFile(storeFile())).rejects.toMatchObject({ code: "ENOENT" });
+      expect(warn).toHaveBeenCalledOnce();
+      expect(String(warn.mock.calls[0]?.[0])).toContain("will not survive a restart");
+
+      auth = await restart();
+      await expect(auth.getCloudSession(dataDir)).resolves.toBeNull();
+      storageBack();
+      await expect(auth.getCloudSession(dataDir)).resolves.toBeNull();
+      await expect(readFile(storeFile())).rejects.toMatchObject({ code: "ENOENT" });
+    });
+
+    it("saves a token rotated during the outage once storage is back, warning once per sign-in", async () => {
+      mocks.encryptionAvailable = false;
+      const auth = await restart();
+      mocks.authenticateWithCode.mockResolvedValueOnce({ accessToken: EXPIRED_ACCESS_TOKEN, refreshToken: "refresh_123", user: PERSON });
+      mocks.authenticateWithRefreshToken.mockResolvedValueOnce({ accessToken: ACCESS_TOKEN, refreshToken: "refresh_456", user: PERSON });
+      await signIn(auth);
+      await expect(auth.getCloudSession(dataDir)).resolves.toEqual(signedInAs("person@example.com"));
+      expect(mocks.authenticateWithRefreshToken).toHaveBeenCalledOnce();
+
+      storageBack();
+      await auth.getCloudSession(dataDir);
+      expect(await fileStore()).toMatchObject({ session: { refreshToken: "refresh_456" } });
+      expect(warn).toHaveBeenCalledOnce();
+    });
+
+    it("keeps the saved sign-in when a sign-in started during the outage is not finished, and lets it finish later", async () => {
+      await signIn(await restart());
+      mocks.encryptionAvailable = false;
+      const auth = await restart();
+      await auth.beginCloudSignIn(dataDir);
+      await expect(readFile(storeFile())).resolves.toBeInstanceOf(Buffer);
+
+      storageBack();
+      await expect(auth.getCloudSession(dataDir)).resolves.toEqual(signedInAs("person@example.com"));
+      expect(await fileStore()).toMatchObject({ session: { user: { email: "person@example.com" } }, pkce: { state: "state_123" } });
+
+      mocks.authenticateWithCode.mockResolvedValueOnce({ accessToken: ACCESS_TOKEN, refreshToken: "refresh_456", user: OTHER });
+      await expect(
+        auth.handleCloudDeepLink("ao-app://callback?code=code_456&state=state_123", dataDir),
+      ).resolves.toMatchObject({ account: signedInAs("other@example.com") });
+      expect(await fileStore()).toMatchObject({ session: { user: { email: "other@example.com" } }, pkce: null });
+    });
+
+    it("keeps the saved sign-in when storage drops between reading it and saving a sign-in started on it, even across a restart", async () => {
+      await signIn(await restart());
+      let auth = await restart();
+      const store = await auth.readAuthStore(dataDir);
+      mocks.encryptionAvailable = false;
+      await auth.writeAuthStore(dataDir, { ...store, pkce: { codeVerifier: "verifier_456", state: "state_456", expiresAt: Date.now() + 60_000 } });
+
+      await expect(readFile(storeFile())).resolves.toBeInstanceOf(Buffer);
+      expect(warn).not.toHaveBeenCalled();
+      await expect(auth.getCloudSession(dataDir)).resolves.toEqual(signedInAs("person@example.com"));
+
+      auth = await restart();
+      storageBack();
+      await expect(auth.getCloudSession(dataDir)).resolves.toEqual(signedInAs("person@example.com"));
+    });
+
+    it("keeps the saved sign-in when saving it fails as storage comes back, and storage drops again before a sign-in is started on it", async () => {
+      await signIn(await restart());
+      mocks.encryptionAvailable = false;
+      let auth = await restart();
+      await auth.beginCloudSignIn(dataDir);
+
+      storageBack();
+      mocks.encryptString.mockImplementationOnce(() => {
+        throw new Error("keychain locked again");
+      });
+      await expect(auth.getCloudSession(dataDir)).resolves.toEqual(signedInAs("person@example.com"));
+      expect(mocks.notifyRenderers).toHaveBeenCalledWith(signedInAs("person@example.com"));
+
+      mocks.encryptionAvailable = false;
+      await auth.beginCloudSignIn(dataDir);
+      await expect(readFile(storeFile())).resolves.toBeInstanceOf(Buffer);
+      expect(warn).not.toHaveBeenCalled();
+
+      auth = await restart();
+      storageBack();
+      await expect(auth.getCloudSession(dataDir)).resolves.toEqual(signedInAs("person@example.com"));
+    });
+
+    it("removes the saved sign-in for good when signing out during the outage", async () => {
+      await signIn(await restart());
+      mocks.encryptionAvailable = false;
+      const auth = await restart();
+
+      await auth.signOutCloud(dataDir);
+      await expect(readFile(storeFile())).rejects.toMatchObject({ code: "ENOENT" });
+
+      storageBack();
+      await expect(auth.getCloudSession(dataDir)).resolves.toBeNull();
+      await expect((await restart()).getCloudSession(dataDir)).resolves.toBeNull();
+      expect(mocks.notifyRenderers).not.toHaveBeenCalledWith(signedInAs("person@example.com"));
+    });
+
+    it("does not tell the renderers the account signed out when a token is asked for during the outage", async () => {
+      await signIn(await restart());
+      mocks.encryptionAvailable = false;
+      const auth = await restart();
+
+      await expect(auth.getCloudAccessToken(dataDir)).resolves.toBeNull();
+      expect(auth.isSavedSignInHidden(dataDir)).toBe(true);
+      expect(mocks.notifyRenderers).not.toHaveBeenCalledWith(null);
+    });
+
+    it("shows the saved sign-in again when the app is focused once storage is back", async () => {
+      await signIn(await restart());
+      mocks.encryptionAvailable = false;
+      const auth = await restart();
+      await expect(auth.getCloudSession(dataDir)).resolves.toBeNull();
+
+      auth.recheckSavedSignIn(dataDir);
+      await Promise.resolve();
+      expect(mocks.notifyRenderers).not.toHaveBeenCalledWith(signedInAs("person@example.com"));
+
+      storageBack();
+      auth.recheckSavedSignIn(dataDir);
+      await vi.waitFor(() => expect(mocks.notifyRenderers).toHaveBeenCalledWith(signedInAs("person@example.com")));
+      expect(auth.isSavedSignInHidden(dataDir)).toBe(false);
+    });
+
+    it("keeps a saved sign-in that does not decrypt, without asking the keychain again, until the next launch", async () => {
+      await signIn(await restart());
+      const saved = await readFile(storeFile());
+      const auth = await restart();
+      mocks.decryptString.mockImplementation(() => {
+        throw new Error("keychain access denied");
+      });
+      mocks.decryptString.mockClear();
+
+      await expect(auth.getCloudSession(dataDir)).resolves.toBeNull();
+      await expect(auth.getCloudSession(dataDir)).resolves.toBeNull();
+      expect(mocks.decryptString).toHaveBeenCalledOnce();
+      expect(warn).toHaveBeenCalledOnce();
+      expect(auth.isSavedSignInHidden(dataDir)).toBe(true);
+      await expect(auth.getCloudAccessToken(dataDir)).resolves.toBeNull();
+      expect(mocks.notifyRenderers).not.toHaveBeenCalledWith(null);
+      // Starting a sign-in does not write over the file it could not read.
+      await auth.beginCloudSignIn(dataDir);
+      await expect(readFile(storeFile())).resolves.toEqual(saved);
+
+      mocks.decryptString.mockImplementation((value: Buffer) => value.toString("utf8"));
+      await expect((await restart()).getCloudSession(dataDir)).resolves.toEqual(signedInAs("person@example.com"));
+    });
+
+    it("saves a new sign-in over a saved one that does not decrypt", async () => {
+      await signIn(await restart());
+      const auth = await restart();
+      mocks.decryptString.mockImplementationOnce(() => {
+        throw new Error("keychain access denied");
+      });
+      await expect(auth.getCloudSession(dataDir)).resolves.toBeNull();
+
+      mocks.authenticateWithCode.mockResolvedValueOnce({ accessToken: ACCESS_TOKEN, refreshToken: "refresh_456", user: OTHER });
+      await signIn(auth, "code_456");
+
+      expect(await fileStore()).toMatchObject({ session: { refreshToken: "refresh_456" }, pkce: null });
+      expect(auth.isSavedSignInHidden(dataDir)).toBe(false);
+      await expect((await restart()).getCloudSession(dataDir)).resolves.toEqual(signedInAs("other@example.com"));
+    });
   });
 
   it("shows a bounded error when the callback cannot be completed", async () => {
@@ -661,6 +992,241 @@ describe("native WorkOS authentication", () => {
 
     expect(mocks.openExternal).not.toHaveBeenCalled();
     await expect(getCloudSession(dataDir)).resolves.toBeNull();
+  });
+
+  describe("a saved login the app cannot read just now", () => {
+    const storeFile = () => path.join(dataDir, "cloud-auth.bin");
+
+    beforeEach(async () => {
+      await beginCloudSignIn(dataDir);
+      await handleCloudDeepLink(
+        "ao-app://callback?code=code_123&state=state_123",
+        dataDir,
+      );
+      mocks.openExternal.mockClear();
+      mocks.notifyRenderers.mockClear();
+      mocks.storeReads = 0;
+    });
+
+    it("reads the login once the file handles free up", async () => {
+      mocks.storeReadFailures = ["EMFILE", "EMFILE"];
+
+      await expect(getCloudSession(dataDir)).resolves.toMatchObject({
+        user: { email: "person@example.com" },
+      });
+      expect(mocks.storeReads).toBe(3);
+    });
+
+    it("keeps the login file when reads keep failing, and finds the login on the next read", async () => {
+      const saved = await readFile(storeFile());
+      mocks.storeReadFailures = ["EMFILE", "EMFILE", "EMFILE", "EMFILE"];
+
+      const failed = await getCloudSession(dataDir).catch((error: unknown) => error);
+      expect(failed).toBeInstanceOf(AuthStoreUnreadableError);
+      expect(failed).toMatchObject({ code: "EMFILE" });
+      // Only the code, never where the login is kept.
+      expect((failed as Error).message).not.toContain(dataDir);
+      expect(mocks.storeReadFailures).toEqual([]);
+      await expect(readFile(storeFile())).resolves.toEqual(saved);
+      expect(mocks.notifyRenderers).not.toHaveBeenCalled();
+
+      await expect(getCloudSession(dataDir)).resolves.toMatchObject({
+        user: { email: "person@example.com" },
+      });
+      await expect(readFile(storeFile())).resolves.toEqual(saved);
+    });
+
+    it("does not tell the proxies or renderers the account signed out", async () => {
+      const saved = await readFile(storeFile());
+      mocks.storeReadFailures = ["EMFILE", "EMFILE", "EMFILE", "EMFILE"];
+
+      await expect(getCloudAccessToken(dataDir)).rejects.toBeInstanceOf(
+        AuthStoreUnreadableError,
+      );
+      expect(mocks.notifyRenderers).not.toHaveBeenCalled();
+      await expect(readFile(storeFile())).resolves.toEqual(saved);
+
+      await expect(getCloudAccessToken(dataDir)).resolves.toBe(ACCESS_TOKEN);
+    });
+
+    it("keeps the login file without retrying a read it has no permission for", async () => {
+      const saved = await readFile(storeFile());
+      mocks.storeReads = 0;
+      mocks.storeReadFailures = ["EACCES"];
+
+      await expect(getCloudSession(dataDir)).rejects.toMatchObject({
+        code: "EACCES",
+      });
+      expect(mocks.storeReads).toBe(1);
+      await expect(readFile(storeFile())).resolves.toEqual(saved);
+      await expect(getCloudSession(dataDir)).resolves.toMatchObject({
+        user: { email: "person@example.com" },
+      });
+    });
+
+    it("does not write a new sign-in over the login it could not read", async () => {
+      const saved = await readFile(storeFile());
+      mocks.storeReadFailures = ["EIO"];
+
+      await expect(beginCloudSignIn(dataDir)).rejects.toBeInstanceOf(
+        AuthStoreUnreadableError,
+      );
+      expect(mocks.openExternal).not.toHaveBeenCalled();
+      await expect(readFile(storeFile())).resolves.toEqual(saved);
+      await expect(getCloudSession(dataDir)).resolves.toMatchObject({
+        user: { email: "person@example.com" },
+      });
+    });
+
+    it("does not clear the login after a refresh the server refused while the file is unreadable", async () => {
+      mocks.authenticateWithCode.mockResolvedValueOnce({
+        accessToken: EXPIRED_ACCESS_TOKEN,
+        refreshToken: "refresh_123",
+        user: { id: "user_123", email: "person@example.com", name: "Person Example" },
+      });
+      await beginCloudSignIn(dataDir);
+      await handleCloudDeepLink(
+        "ao-app://callback?code=code_456&state=state_123",
+        dataDir,
+      );
+      const saved = await readFile(storeFile());
+      // The first read finds the expiring login; the one that would confirm
+      // nothing replaced it before clearing it fails.
+      mocks.authenticateWithRefreshToken.mockImplementationOnce(() => {
+        mocks.storeReadFailures = ["EACCES"];
+        return Promise.reject(new Error("refresh token already consumed"));
+      });
+
+      await expect(getCloudSession(dataDir)).rejects.toBeInstanceOf(
+        AuthStoreUnreadableError,
+      );
+      await expect(readFile(storeFile())).resolves.toEqual(saved);
+      expect(mocks.notifyRenderers).not.toHaveBeenCalledWith(null);
+    });
+
+    it("saves a refreshed login even when the read before saving it fails", async () => {
+      mocks.authenticateWithCode.mockResolvedValueOnce({
+        accessToken: EXPIRED_ACCESS_TOKEN,
+        refreshToken: "refresh_123",
+        user: { id: "user_123", email: "person@example.com", name: "Person Example" },
+      });
+      await beginCloudSignIn(dataDir);
+      await handleCloudDeepLink(
+        "ao-app://callback?code=code_456&state=state_123",
+        dataDir,
+      );
+      // WorkOS rotates the token, using up the old one; the read that would
+      // merge the new one into the file then fails.
+      mocks.authenticateWithRefreshToken.mockImplementationOnce(() => {
+        mocks.storeReadFailures = ["EACCES"];
+        return Promise.resolve({
+          accessToken: ACCESS_TOKEN,
+          refreshToken: "refresh_456",
+          user: { id: "user_123", email: "person@example.com", name: "Person Example" },
+        });
+      });
+
+      await expect(getCloudSession(dataDir)).resolves.toMatchObject({
+        user: { email: "person@example.com" },
+      });
+      expect(JSON.parse(await readFile(storeFile(), "utf8"))).toMatchObject({
+        session: { accessToken: ACCESS_TOKEN, refreshToken: "refresh_456" },
+        pkce: null,
+      });
+    });
+
+    describe("saves a refreshed login when the read before saving it finds the saved sign-in hidden", () => {
+      const rotated = {
+        accessToken: ACCESS_TOKEN,
+        refreshToken: "refresh_456",
+        user: { id: "user_123", email: "person@example.com", name: "Person Example" },
+      };
+
+      beforeEach(async () => {
+        mocks.authenticateWithCode.mockResolvedValueOnce({ ...rotated, accessToken: EXPIRED_ACCESS_TOKEN, refreshToken: "refresh_123" });
+        await beginCloudSignIn(dataDir);
+        await handleCloudDeepLink(
+          "ao-app://callback?code=code_456&state=state_123",
+          dataDir,
+        );
+      });
+
+      it("because the file does not decrypt", async () => {
+        mocks.authenticateWithRefreshToken.mockImplementationOnce(() => {
+          mocks.decryptString.mockImplementationOnce(() => {
+            throw new Error("synthetic decrypt failure");
+          });
+          return Promise.resolve(rotated);
+        });
+
+        await expect(getCloudSession(dataDir)).resolves.toMatchObject({
+          user: { email: "person@example.com" },
+        });
+        expect(JSON.parse(await readFile(storeFile(), "utf8"))).toMatchObject({
+          session: { accessToken: ACCESS_TOKEN, refreshToken: "refresh_456" },
+        });
+      });
+
+      it("because secure storage went out", async () => {
+        mocks.authenticateWithRefreshToken.mockImplementationOnce(() => {
+          mocks.encryptionAvailable = false;
+          return Promise.resolve(rotated);
+        });
+
+        await expect(getCloudSession(dataDir)).resolves.toMatchObject({
+          user: { email: "person@example.com" },
+        });
+        mocks.encryptionAvailable = true;
+        await expect(readAuthStore(dataDir)).resolves.toMatchObject({
+          session: { refreshToken: "refresh_456" },
+        });
+        expect(JSON.parse(await readFile(storeFile(), "utf8"))).toMatchObject({
+          session: { accessToken: ACCESS_TOKEN, refreshToken: "refresh_456" },
+        });
+      });
+    });
+
+    it("says why sign-in did not open when the login cannot be read", async () => {
+      const signIn = mocks.ipcHandle.mock.calls.find(
+        ([channel]) => channel === "cloud:signIn",
+      )?.[1] as () => Promise<void>;
+      mocks.storeReadFailures = ["EIO"];
+
+      await expect(signIn()).resolves.toBeUndefined();
+
+      expect(mocks.openExternal).not.toHaveBeenCalled();
+      expect(mocks.showMessageBox).toHaveBeenCalledWith(expect.objectContaining({
+        type: "error",
+        detail: expect.stringContaining("could not read its saved sign-in"),
+      }));
+    });
+
+    it("still signs out from the app menu when the login cannot be read", async () => {
+      const signOut = mocks.ipcHandle.mock.calls.find(
+        ([channel]) => channel === "cloud:signOut",
+      )?.[1] as () => Promise<void>;
+      mocks.storeReadFailures = ["EACCES"];
+
+      await signOut();
+
+      await expect(readFile(storeFile())).rejects.toMatchObject({ code: "ENOENT" });
+      expect(mocks.notifyRenderers).toHaveBeenCalledWith(null);
+      await expect(getCloudSession(dataDir)).resolves.toBeNull();
+    });
+
+    it("treats a missing login file as signed out without creating one", async () => {
+      await rm(storeFile());
+
+      await expect(getCloudSession(dataDir)).resolves.toBeNull();
+      await expect(readFile(storeFile())).rejects.toMatchObject({ code: "ENOENT" });
+    });
+
+    it("removes a login file that reads but cannot be decoded", async () => {
+      await writeFile(storeFile(), "not an encrypted store");
+
+      await expect(getCloudSession(dataDir)).resolves.toBeNull();
+      await expect(readFile(storeFile())).rejects.toMatchObject({ code: "ENOENT" });
+    });
   });
 });
 

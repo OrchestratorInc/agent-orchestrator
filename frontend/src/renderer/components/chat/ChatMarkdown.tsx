@@ -9,7 +9,8 @@ import { rehypeExcerptSource, excerptElementProps } from "../../lib/rehype-excer
  * visible backticks.
  *
  * Raw HTML is escaped, not rendered. Agent output is only as trustworthy as the
- *     files it just read, so `rehype-raw` is deliberately absent; markdown-only is
+ *     files it just read, so `rehype-raw` runs only where a caller passes it with a
+ *     sanitizer (GitHub review bodies); otherwise markdown-only is
  *     the whole sanitization story and there is no schema to get wrong, with two
  *     exceptions: ```mermaid fences render as diagrams through `MermaidBlock`,
  *     whose SVG passes through mermaid's strict mode plus DOMPurify with
@@ -18,8 +19,8 @@ import { rehypeExcerptSource, excerptElementProps } from "../../lib/rehype-excer
  *     highlighting keeps that property — it renders a token tree as elements
  *     rather than injecting the highlighter's HTML string.
  *
- * Streaming reuses completed blocks and repairs incomplete inline formatting
- * for display only. Copy actions continue to use the stored source.
+ * A reply renders through Words while it streams and through react-markdown
+ * once it settles. Copy actions continue to use the stored source.
  */
 
 import {
@@ -31,27 +32,29 @@ import {
 	useEffect,
 	useLayoutEffect,
 	useMemo,
+	useRef,
 	useState,
 	type MouseEvent as ReactMouseEvent,
 	type ReactNode,
 } from "react";
+import { createPortal } from "react-dom";
 import { QueryClientContext } from "@tanstack/react-query";
 import Markdown, { defaultUrlTransform, type Components, type Options } from "react-markdown";
 import remarkGfm from "remark-gfm";
 import type { Root, RootContent } from "mdast";
 import type { Processor } from "unified";
-import remend from "remend";
-import { splitStreamingMarkdown } from "../../lib/streaming-markdown";
+import { Markdown as WordsMarkdown, type ReactiveIslands } from "@pierre/words/react";
 import { WrapText } from "@/components/app-icons";
 import { cn } from "../../lib/utils";
 import { useLatestCallback } from "../../hooks/useStable";
 import { Button } from "../ui/button";
 import { Pressable } from "../ui/pressable";
 import { isHostLocalWebLink } from "../../lib/loopback";
-import { canonicalLanguage } from "../../lib/code-highlight";
-import { fenceOf } from "../../lib/markdown-fence";
-import { EMOJI_GRAPHEME, rehypeStreamFade } from "../../lib/rehype-stream-fade";
-import { isInlineMath, remarkMath } from "../../lib/remark-math";
+import { canonicalLanguage, streamingCodeHighlighter } from "../../lib/code-highlight";
+import { fenceOf, textOf } from "../../lib/markdown-fence";
+import { CODE_ISLAND, COPY_ISLAND, EMOJI_GRAPHEME, GRAPHEME_SEGMENTER, IMAGE_ISLAND, LINK_ISLAND, codeBlockIsland, codeIsland, headingIslands, imageIsland, islandHref, linkIsland, proseIslands, unescapeHtml } from "../../lib/stream-islands";
+import { pageHidden } from "../../lib/page-hidden";
+import { createDollarDelimiters, isInlineMath, remarkMath } from "../../lib/remark-math";
 import { useUiStore } from "../../stores/ui-store";
 import { artifactLinkForPath, artifactLinkForTarget, findSessionLinks, hasArtifactDirectorySegment, isAoLink, isSessionLink, remarkSessionLinks, sessionArtifactPath } from "../../lib/session-links";
 import { useSessionLinkSource } from "../../lib/use-session-link-navigation";
@@ -63,8 +66,12 @@ import {
 	workspaceFilePath,
 } from "../../lib/external-link-policy";
 import { AppLink } from "../AppLink";
+import { LinkFavicon } from "../LinkPreviewCard";
+import { PULL_REQUEST_CHIP_CLASS, PullRequestChipContent, PullRequestHoverCard, parsePullRequestLink, pullRequestChipLabel } from "./PullRequestLink";
+import { useCachedLinkFavicons } from "../../hooks/useLinkPreview";
+import { canLoadLinkFavicon, preloadLinkFavicon } from "../../lib/link-preload";
 import { ChatPathMenu, ChatPathMenuContext } from "../ChatPathMenu";
-import { ArtifactLinkPreviewCard, SessionLinkPreviewCard } from "../SessionLinkPreviewCard";
+import { ArtifactLinkPreviewCard, SessionLinkPreviewCard, type SessionLinkPreview } from "../SessionLinkPreviewCard";
 import {
 	explicitWorkspaceFilePath,
 	createWorkspaceFileLookup,
@@ -75,8 +82,9 @@ import {
 } from "../../lib/workspace-file-path";
 import { HighlightedCode } from "./HighlightedCode";
 import { MermaidBlock } from "./MermaidBlock";
-import { MathFormula } from "./MathFormula";
+import { formulaHtml, MathFormula, useKatex } from "./MathFormula";
 import { CopyButton } from "./CopyButton";
+import { FileChip } from "./ChatFileIcon";
 import { ChatImage, ChatImageGallery, ChatImageLinkScope, isImageOnlyParagraph } from "./ChatImage";
 import "./code-theme.css";
 
@@ -98,20 +106,11 @@ export const ActivityTitle = memo(function ActivityTitle({ text }: { text: strin
 /** GitHub-flavoured markdown: tables, strikethrough, task lists, autolinks. */
 const PLUGINS = [remarkGfm, remarkSessionLinks];
 const MATH_PLUGINS = [...PLUGINS, remarkMath];
-// Reduced motion gets plain text, not a span per character that never animates.
-const prefersReducedMotion = () => window.matchMedia?.("(prefers-reduced-motion: reduce)").matches ?? false;
-// How long a settled reply keeps its fade spans, so the last characters (and the final
-// flush of buffered text) finish fading in before they are dropped.
-const FADE_SHED_MS = 450;
+const STREAM_FADE = { animation: "fadeIn", duration: 300 } as const;
+const MATH_FENCE = /(`{3,}|~{3,})[ \t]*math\b/i;
+const MATH_SYNTAX = /\$|\\[([]/;
+const MATH_SVG = /^<svg[^>]*data-markdown="math(-display)?"[^>]*aria-label="([^"]*)"/;
 
-/**
- * Whether the prose is still arriving, for the fences inside it.
- *
- * A context rather than a prop because `COMPONENTS` has to stay module-level:
- * rebuilding that map per render would defeat react-markdown's own memoization
- * and re-parse every message on every poll.
- */
-const StreamingProse = createContext(false);
 const InsideMarkdownLink = createContext(false);
 /** Inside a link to an artifact: its name reads in the UI font, as everywhere else artifacts are named. */
 const InsideArtifactLink = createContext(false);
@@ -122,6 +121,7 @@ const OpenChatLink = createContext<{
 	open?: (url: string) => void;
 	openFile?: (path: string, line?: number) => void;
 	remoteHost?: boolean;
+	hostLocalLinks?: boolean;
 	sessionLinkHostId?: string;
 	sessionLinkSourceKind?: "cloud";
 	openSession?: (url: string) => void;
@@ -156,6 +156,7 @@ export function ChatLinkProvider({
 	onLinkOpen,
 	onFileOpen,
 	remoteHost,
+	hostLocalLinks,
 	sessionLinkHostId,
 	sessionLinkSourceKind,
 	onSessionLinkOpen,
@@ -166,6 +167,7 @@ export function ChatLinkProvider({
 	onLinkOpen?: (url: string) => void;
 	onFileOpen?: (path: string, line?: number) => void;
 	remoteHost?: boolean;
+	hostLocalLinks?: boolean;
 	sessionLinkHostId?: string;
 	sessionLinkSourceKind?: "cloud";
 	onSessionLinkOpen?: (url: string) => void;
@@ -180,8 +182,8 @@ export function ChatLinkProvider({
 	const canOpenFile = Boolean(onFileOpen);
 	const canOpenSession = Boolean(onSessionLinkOpen);
 	const value = useMemo(
-		() => ({ sessionId, open: canOpenLink ? openLink : undefined, openFile: canOpenFile ? openFile : undefined, openSession: canOpenSession ? openSession : undefined, remoteHost, sessionLinkHostId, sessionLinkSourceKind, workspacePaths, findFile }),
-		[sessionId, canOpenLink, canOpenFile, canOpenSession, openLink, openFile, openSession, remoteHost, sessionLinkHostId, sessionLinkSourceKind, workspacePaths, findFile],
+		() => ({ sessionId, open: canOpenLink ? openLink : undefined, openFile: canOpenFile ? openFile : undefined, openSession: canOpenSession ? openSession : undefined, remoteHost, hostLocalLinks, sessionLinkHostId, sessionLinkSourceKind, workspacePaths, findFile }),
+		[sessionId, canOpenLink, canOpenFile, canOpenSession, openLink, openFile, openSession, remoteHost, hostLocalLinks, sessionLinkHostId, sessionLinkSourceKind, workspacePaths, findFile],
 	);
 	const pathMenuValue = useMemo(
 		() => ({ sessionId, remote: Boolean(remoteHost || sessionLinkHostId || sessionLinkSourceKind === "cloud") }),
@@ -214,11 +216,13 @@ function chatUrlTransform(url: string, key: string): string | undefined {
 	return defaultUrlTransform(url);
 }
 
-/**
- * True while the surrounding chat is rendering its first commit. A stable ref,
- * not a value, so ending the opening never re-renders every reply.
- */
-export const ChatOpeningRef = createContext<{ readonly current: boolean }>({ current: false });
+const streamUrlTransform = (url: string, key: "href" | "src") => {
+	const safe = chatUrlTransform(url, key);
+	return safe ? islandHref(safe) : safe;
+};
+const inertLinks = (event: ReactMouseEvent<HTMLElement>) => {
+	if ((event.target as Element).closest?.("a[href]")) event.preventDefault();
+};
 
 export const ChatMarkdown = memo(function ChatMarkdown({
 	text,
@@ -227,6 +231,7 @@ export const ChatMarkdown = memo(function ChatMarkdown({
 	className,
 	safeOrigin = false,
 	remarkPlugins,
+	rehypePlugins,
 }: {
 	text: string;
 	streaming?: boolean;
@@ -240,93 +245,38 @@ export const ChatMarkdown = memo(function ChatMarkdown({
 	safeOrigin?: boolean;
 	/** Run after the built-in plugins; keep the array stable, a new one re-parses the text. */
 	remarkPlugins?: Options["remarkPlugins"];
+	rehypePlugins?: Options["rehypePlugins"];
 }) {
-	// Replies opened from history mount settled and never wrap; live ones keep the fade a
-	// beat past the end of the stream.
-	const [fading, setFading] = useState(streaming);
-	if (streaming && !fading) setFading(true);
-	// A reply already on screen when its chat opens (switching to a chat
-	// mid-stream) is not new; only characters that arrive afterwards fade in. A
-	// reply that arrives later fades from its first character.
-	const chatOpening = useContext(ChatOpeningRef);
-	const [settledOffset] = useState(() => (chatOpening.current ? text.length : 0));
 	const renderMath = useUiStore((state) => state.renderMath);
 	const plugins = useMemo(() => {
 		const base = renderMath ? MATH_PLUGINS : PLUGINS;
 		return remarkPlugins ? [...base, ...remarkPlugins] : base;
 	}, [renderMath, remarkPlugins]);
-	// History stays on the single-parser path. Replies that streamed retain
-	// their chunks on completion, preserving code controls and diagram state.
-	const [parsed, setParsed] = useState(() => streaming ? splitStreamingMarkdown(text, undefined, renderMath) : {
-		source: text, math: renderMath, blocks: [{ source: text, start: 0, repairInline: false }], stableCount: 0,
-	});
-	// Chunks are cut, and their prose repair decided, in the math dialect they
-	// render in, so turning math on or off re-cuts them. A settled single block
-	// is exempt: it is a whole document in either dialect, and repair only runs
-	// while streaming.
-	const current = parsed.source === text && (parsed.math === renderMath || (!streaming && parsed.blocks.length === 1));
-	const blocks = current ? parsed : splitStreamingMarkdown(text, parsed, renderMath);
-	if (blocks !== parsed) setParsed(blocks);
-	const animate = fading && !prefersReducedMotion();
-	useEffect(() => {
-		if (streaming) return;
-		const timer = setTimeout(() => setFading(false), FADE_SHED_MS);
-		return () => clearTimeout(timer);
-	}, [streaming]);
+	const settledPlugins = useMemo<NonNullable<Options["rehypePlugins"]>>(
+		() => [...(rehypePlugins ?? []), [rehypeExcerptSource, { offset: 0 }]],
+		[rehypePlugins],
+	);
 
 	return (
 		<SafeOriginContent.Provider value={safeOrigin}>
 			<div
 				className={cn(
 					"chat-md leading-[1.58]",
+					streaming && "chat-md-stream",
 					muted ? "text-sm text-muted-foreground" : "text-sm text-foreground",
 					className,
 				)}
 			>
-				{blocks.blocks.map((block, index) => (
-					<MarkdownChunk
-						key={index}
-						source={block.source}
-						sourceOffset={block.start}
-						repairInline={block.repairInline}
-						streaming={streaming && index === blocks.blocks.length - 1}
-						fading={animate && index === blocks.blocks.length - 1}
-						settledOffset={Math.max(0, settledOffset - block.start)}
-						remarkPlugins={plugins}
-					/>
-				))}
+				{streaming ? (
+					<StreamingMarkdown text={text} math={renderMath} />
+				) : (
+					<Markdown remarkPlugins={plugins} rehypePlugins={settledPlugins} components={COMPONENTS} urlTransform={chatUrlTransform}>
+						{text}
+					</Markdown>
+				)}
 			</div>
 		</SafeOriginContent.Provider>
 	);
-});
-
-// No wrapper DOM: list/table layout, image galleries and prose spacing keep
-// their existing parent. Only the changing chunk enters react-markdown again.
-const MarkdownChunk = memo(function MarkdownChunk({ source, sourceOffset, repairInline, streaming, fading, settledOffset, remarkPlugins }: {
-	source: string;
-	sourceOffset: number;
-	repairInline: boolean;
-	streaming: boolean;
-	fading: boolean;
-	settledOffset: number;
-	remarkPlugins: Options["remarkPlugins"];
-}) {
-	const repaired = useMemo(() => streaming && repairInline ? remend(source, {
-		linkMode: "text-only", images: false, htmlTags: false,
-		katex: false, setextHeadings: false, comparisonOperators: false,
-	}) : source, [source, streaming, repairInline]);
-	const plugins = useMemo<NonNullable<Options["rehypePlugins"]>>(() => {
-		// Repaired streaming tails cannot be selected. Settled chunks retain only
-		// source bounds; detailed mappings are built when a selection is captured.
-		const entries: NonNullable<Options["rehypePlugins"]> = streaming ? [] : [[rehypeExcerptSource, { offset: sourceOffset }]];
-		if (fading) entries.push([rehypeStreamFade, { settledOffset }]);
-		return entries;
-	}, [sourceOffset, streaming, fading, settledOffset]);
-	return <StreamingProse.Provider value={streaming}>
-		<Markdown remarkPlugins={remarkPlugins} rehypePlugins={plugins} components={COMPONENTS} urlTransform={chatUrlTransform}>
-			{repaired}
-		</Markdown>
-	</StreamingProse.Provider>;
 });
 
 /**
@@ -350,7 +300,6 @@ let preferredWrap = false;
  */
 function CodeBlock({ code, language, sourceNode }: { code: string; language?: string; sourceNode?: HastElement }) {
 	const positions = excerptElementProps(sourceNode);
-	const streaming = useContext(StreamingProse);
 	const grammar = canonicalLanguage(language);
 	const [wrap, setWrap] = useState(preferredWrap);
 
@@ -385,16 +334,117 @@ function CodeBlock({ code, language, sourceNode }: { code: string; language?: st
 					<CopyButton text={code} label="Copy code" />
 				</div>
 			</div>
-			<pre className="scrollbar-none overflow-x-auto px-3 py-2.5">
+			<pre data-no-swipe-nav="" className="scrollbar-none overflow-x-auto px-3 py-2.5">
 				<code {...positions} data-excerpt-kind="block-code" className="font-mono text-xs leading-[1.6] text-foreground">
-					<HighlightedCode code={code} language={grammar} streaming={streaming} />
+					<HighlightedCode code={code} language={grammar} />
 				</code>
 			</pre>
 		</div>
 	);
 }
 
-const GRAPHEME_SEGMENTER = new Intl.Segmenter(undefined, { granularity: "grapheme" });
+const LINKED_IMAGE: HastElement = { type: "element", tagName: "a", properties: {}, children: [{ type: "element", tagName: "img", properties: {}, children: [] }] };
+
+const StreamLink = memo(function StreamLink({ href, label, image }: { href: string; label: string; image: boolean }) {
+	const ref = useRef<HTMLSpanElement>(null);
+	const html = useMemo(() => ({ __html: label }), [label]);
+	const [images, setImages] = useState<{ content: Element; src: string; alt: string }[]>([]);
+	useLayoutEffect(() => setImages([...ref.current?.querySelectorAll(`[data-words-island="${IMAGE_ISLAND}"]`) ?? []].map((host) => {
+		host.querySelector("[data-words-island-fallback]")?.remove();
+		const { src, alt } = JSON.parse(host.getAttribute("data-words-island-data")!) as { src: string; alt: string };
+		return { content: host.querySelector("[data-words-island-content]")!, src, alt };
+	})), [label]);
+	return (
+		<MarkdownLink href={href} node={image ? LINKED_IMAGE : undefined} labelText={label.includes("<") ? undefined : unescapeHtml(label)}>
+			<span ref={ref} dangerouslySetInnerHTML={html} />
+			{images.map(({ content, src, alt }, index) => createPortal(<MarkdownImage src={src} alt={alt} />, content, index))}
+		</MarkdownLink>
+	);
+});
+
+const StreamCode = memo(function StreamCode({ text }: { text: string }) {
+	return <InlineCode>{text}</InlineCode>;
+});
+
+const StreamCopy = memo(function StreamCopy() {
+	const ref = useRef<HTMLSpanElement>(null);
+	const code = () => ref.current?.closest('[data-markdown="code-block"]')?.querySelector("pre code")?.textContent?.replace(/\n$/, "") ?? "";
+	return <span ref={ref}><CopyButton text={code} label="Copy code" /></span>;
+});
+
+const STREAM_ISLANDS: ReactiveIslands = {
+	[LINK_ISLAND]: {
+		render: ({ href, label, image }) => typeof href === "string" && typeof label === "string"
+			? <StreamLink href={href} label={label} image={image === true} />
+			: null,
+	},
+	[CODE_ISLAND]: { render: ({ text }) => typeof text === "string" ? <StreamCode text={text} /> : null },
+	[COPY_ISLAND]: { render: () => <StreamCopy /> },
+	[IMAGE_ISLAND]: { render: ({ src, alt }) => typeof src === "string" && typeof alt === "string" ? <MarkdownImage src={src} alt={alt} /> : null },
+};
+
+function StreamingMarkdown({ text, math }: { text: string; math: boolean }) {
+	const [mounted, setMounted] = useState(false);
+	useEffect(() => setMounted(true), []);
+	const katex = useKatex(MATH_FENCE.test(text) || (math && MATH_SYNTAX.test(text)));
+	const [dollarDelimiters] = useState(createDollarDelimiters);
+	const { components, plugins } = useMemo(() => {
+		const typeset = new Map<string, string>();
+		const formula = (tex: string, display: boolean) => {
+			const key = `${display ? "$$" : "$"}${tex}`;
+			let html = typeset.get(key);
+			if (html !== undefined) return html;
+			if (typeset.size >= 256) typeset.clear();
+			typeset.set(key, html = formulaHtml(katex, tex, display));
+			return html;
+		};
+		return {
+			components: {
+				svg: (html: string) => {
+					const match = MATH_SVG.exec(html);
+					if (!match) return html;
+					const tex = unescapeHtml(match[2]);
+					return formula(tex, Boolean(match[1]) && tex.endsWith("\n"));
+				},
+				div: codeBlockIsland,
+				img: imageIsland,
+				a: linkIsland,
+				inlineCode: codeIsland,
+				p: proseIslands,
+				li: proseIslands,
+				td: proseIslands,
+				th: proseIslands,
+				h1: headingIslands,
+				h2: headingIslands,
+				h3: headingIslands,
+				h4: headingIslands,
+				h5: headingIslands,
+				h6: headingIslands,
+			},
+			plugins: {
+				code: streamingCodeHighlighter,
+				renderers: [{ language: ["math", "Math", "MATH"], render: ({ code }: { code: string }) => formula(code, true) }],
+			},
+		};
+	}, [katex]);
+	return (
+		<WordsMarkdown
+			isAnimating
+			animated={mounted && !pageHidden() && STREAM_FADE}
+			math={math}
+			components={components}
+			plugins={plugins}
+			controls={false}
+			lineNumbers={false}
+			urlTransform={streamUrlTransform}
+			islands={STREAM_ISLANDS}
+			onClickCapture={inertLinks}
+			onAuxClickCapture={inertLinks}
+		>
+			{math ? dollarDelimiters(text) : text}
+		</WordsMarkdown>
+	);
+}
 
 function compactEmoji(children: ReactNode): ReactNode {
 	if (typeof children === "string") {
@@ -421,7 +471,17 @@ function compactEmoji(children: ReactNode): ReactNode {
 	return children;
 }
 
-type MarkdownLinkProps = { href?: string; children?: ReactNode; className?: string; menuPath?: string };
+type MarkdownLinkProps = {
+	href?: string;
+	children?: ReactNode;
+	className?: string;
+	menuPath?: string;
+	node?: HastElement;
+	/** The link's text, where it is plain text; read from node otherwise. */
+	labelText?: string;
+	/** Where a session link's hover card opens, and an extra line it shows. */
+	preview?: SessionLinkPreview;
+};
 
 function MarkdownLink(props: MarkdownLinkProps) {
 	const { href } = props;
@@ -449,9 +509,62 @@ function ArtifactFileLink(props: MarkdownLinkProps & { href: string }) {
 		: <MarkdownLinkTarget {...props} />;
 }
 
-function MarkdownLinkTarget({ href, children, className, menuPath }: MarkdownLinkProps) {
+/**
+ * The plain text of a markdown link, or undefined when it wraps anything but
+ * text. Settled text arrives wrapped in excerpt spans, which count as text.
+ */
+function hastLinkText(node: HastElement | undefined): string | undefined {
+	if (!node) return undefined;
+	let text = "";
+	for (const child of node.children) {
+		if (child.type === "text") text += child.value;
+		else if (child.type === "element" && child.tagName === "span") {
+			const inner = hastLinkText(child);
+			if (inner === undefined) return undefined;
+			text += inner;
+		} else return undefined;
+	}
+	return text;
+}
+
+/** Whether a markdown link wraps a picture, which marks itself. */
+function linksImage(node: HastElement | undefined): boolean {
+	return node?.children.some((child) => child.type === "element" && child.tagName === "img") ?? false;
+}
+
+/**
+ * A web link's site icon before its text, behind a shimmering globe until it
+ * arrives and a still one when none does. Asked for as soon as the link
+ * renders (its site root only, once per site). A fixed 14px slot, so the text
+ * never moves when the icon arrives or fails.
+ */
+function InlineLinkFavicon({ href }: { href: string }) {
+	const cachedState = useCachedLinkFavicons(href);
+	const favicons = cachedState === "failed" ? undefined : cachedState;
+	const cached = Boolean(favicons);
+	const loadable = useMemo(() => canLoadLinkFavicon(href), [href]);
+	useEffect(() => {
+		if (!cached && loadable) preloadLinkFavicon(href);
+	}, [cached, href, loadable]);
+	return (
+		<span
+			aria-hidden="true"
+			data-link-favicon=""
+			className="me-1 inline-flex size-3.5 select-none align-[-0.15em] text-muted-foreground"
+		>
+			<LinkFavicon
+				faviconUrl={favicons?.faviconUrl}
+				faviconDarkUrl={favicons?.faviconDarkUrl}
+				pending={cachedState === undefined && loadable}
+				className="size-3.5 shrink-0"
+			/>
+		</span>
+	);
+}
+
+function MarkdownLinkTarget({ href, children, className, menuPath, node, labelText, preview }: MarkdownLinkProps) {
 	const safeOriginContent = useContext(SafeOriginContent);
-	const { sessionId, open: onLinkOpen, openFile: onFileOpen, openSession: onSessionLinkOpen, remoteHost, sessionLinkHostId, sessionLinkSourceKind, workspacePaths, findFile } = useContext(OpenChatLink);
+	const { sessionId, open: onLinkOpen, openFile: onFileOpen, openSession: onSessionLinkOpen, remoteHost, hostLocalLinks, sessionLinkHostId, sessionLinkSourceKind, workspacePaths, findFile } = useContext(OpenChatLink);
 	const filePath = href && onFileOpen
 		? workspaceFilePath(href, workspacePaths) ?? findFile(href) ?? explicitWorkspaceFilePath(href)
 		: undefined;
@@ -465,7 +578,7 @@ function MarkdownLinkTarget({ href, children, className, menuPath }: MarkdownLin
 	const linkedFile = href && sessionId && onFileOpen ? explicitWorkspaceFilePath(href.split(/[?#]/, 1)[0]!) : undefined;
 	const ownArtifact = linkedFile && sessionId && sessionArtifactPath(linkedFile, sessionId) ? linkedFile : undefined;
 	const openInFiles = ownArtifact ?? (filePath && href && !/\.html?$/i.test(filePath) ? workspaceFileOpenTarget(href, filePath) : undefined);
-	if (remoteHost && href && (isHostLocalWebLink(href) || (isPotentialWorkspaceFileLink(href) && !openInFiles))) {
+	if (remoteHost && href && ((isHostLocalWebLink(href) && !hostLocalLinks) || (isPotentialWorkspaceFileLink(href) && !openInFiles))) {
 		const unavailable = <span className="text-muted-foreground" title={REMOTE_PREVIEW_UNAVAILABLE}>
 			{children}<span className="sr-only"> (remote preview unavailable)</span>
 		</span>;
@@ -474,9 +587,17 @@ function MarkdownLinkTarget({ href, children, className, menuPath }: MarkdownLin
 			: unavailable;
 	}
 	const browserLink = href ? !sessionLink && (isWebLink(href) || (!remoteHost && (!!filePath || isPotentialWorkspaceFileLink(href)))) : false;
+	const hostLocal = Boolean(remoteHost && href && isHostLocalWebLink(href));
+	// A GitHub pull request link shows the PR's card on hover; one whose text
+	// only names the PR is drawn as a chip with its state.
+	const pullRequest = href && !sessionLink && !linksImage(node) ? parsePullRequestLink(href) : undefined;
+	const text = labelText ?? hastLinkText(node);
+	const chip = pullRequest && href && text !== undefined ? pullRequestChipLabel(href, text) : undefined;
 	return (
 		<AppLink
 			href={href}
+			noHoverPreview={hostLocal}
+			inAppOnly={hostLocal}
 			onBrowserOpen={onLinkOpen}
 			inAppLink={href ? () => browserLink : undefined}
 			filePath={ownArtifact ?? (filePath && href ? workspaceFileOpenTarget(href, filePath) : filePath)}
@@ -484,9 +605,11 @@ function MarkdownLinkTarget({ href, children, className, menuPath }: MarkdownLin
 			onFileOpen={onFileOpen}
 			hoverPreview={sessionLink
 				? () => isSessionLink(href!)
-					? <SessionLinkPreviewCard href={href!} sourceHostId={sessionLinkHostId} sourceKind={sessionLinkSourceKind} onOpen={onSessionLinkOpen && (() => onSessionLinkOpen(href!))} />
+					? <SessionLinkPreviewCard href={href!} sourceHostId={sessionLinkHostId} sourceKind={sessionLinkSourceKind} onOpen={onSessionLinkOpen && (() => onSessionLinkOpen(href!))} {...preview} />
 					: <ArtifactLinkPreviewCard href={href!} sourceHostId={sessionLinkHostId} sourceKind={sessionLinkSourceKind} />
-				: undefined}
+				: pullRequest
+					? () => <PullRequestHoverCard url={href!} onBrowserOpen={onLinkOpen} />
+					: undefined}
 			onClick={(event) => {
 				if (href && sessionLink) {
 					event.preventDefault();
@@ -507,20 +630,25 @@ function MarkdownLinkTarget({ href, children, className, menuPath }: MarkdownLin
 			}}
 			target="_blank"
 			rel="noreferrer noopener"
-			className={className ?? "text-markdown-link underline decoration-markdown-link/45 underline-offset-2 transition-colors hover:text-markdown-link-hover hover:decoration-markdown-link-hover/75"}
+			className={chip ? PULL_REQUEST_CHIP_CLASS : className ?? "text-markdown-link underline decoration-markdown-link/45 underline-offset-2 transition-colors hover:text-markdown-link-hover hover:decoration-markdown-link-hover/75"}
 		>
-			<ChatImageLinkScope>
-				<InsideMarkdownLink.Provider value>
-					<InsideArtifactLink.Provider value={sessionLink && !isSessionLink(href!)}>{children}</InsideArtifactLink.Provider>
-				</InsideMarkdownLink.Provider>
-			</ChatImageLinkScope>
+			{chip && href ? <PullRequestChipContent href={href} repo={chip.repo} number={chip.number} /> : (
+				<>
+					{href && !sessionLink && isWebLink(href) && !linksImage(node) ? <InlineLinkFavicon href={href} /> : null}
+					<ChatImageLinkScope>
+						<InsideMarkdownLink.Provider value>
+							<InsideArtifactLink.Provider value={sessionLink && !isSessionLink(href!)}>{children}</InsideArtifactLink.Provider>
+						</InsideMarkdownLink.Provider>
+					</ChatImageLinkScope>
+				</>
+			)}
 		</AppLink>
 	);
 }
 
 /** Render one safe in-app session or artifact link using the surrounding ChatLinkProvider. */
-export function SessionLabelLink({ href, children, className }: { href: string; children: ReactNode; className?: string }) {
-	return <MarkdownLink href={href} className={className}>{children}</MarkdownLink>;
+export function SessionLabelLink({ href, children, className, preview }: { href: string; children: ReactNode; className?: string; preview?: SessionLinkPreview }) {
+	return <MarkdownLink href={href} className={className} preview={preview}>{children}</MarkdownLink>;
 }
 
 function MarkdownImage({ src, alt }: { src?: string | Blob; alt?: string }) {
@@ -582,14 +710,13 @@ export const SessionLinkedText = memo(function SessionLinkedText({ text }: { tex
 });
 
 /**
- * A mermaid fence with the streaming state it was rendered under.
+ * A mermaid fence, with host-local links blocked on remote hosts.
  *
  * A separate component rather than a hook call in the `pre` override because
  * overrides are not components: hooks are illegal there, and `COMPONENTS`
  * must stay module-level so react-markdown's memoization survives polling.
  */
 function MermaidFence({ code }: { code: string }) {
-	const streaming = useContext(StreamingProse);
 	const { open: onLinkOpen, remoteHost } = useContext(OpenChatLink);
 	const blockHostLocalLink = (event: ReactMouseEvent<HTMLDivElement>) => {
 		const href = (event.target as Element).closest?.("a[href]")?.getAttribute("href");
@@ -597,14 +724,14 @@ function MermaidFence({ code }: { code: string }) {
 		event.preventDefault();
 		event.stopPropagation();
 	};
-	const diagram = <MermaidBlock code={code} streaming={streaming} onLinkOpen={onLinkOpen} />;
+	const diagram = <MermaidBlock code={code} onLinkOpen={onLinkOpen} />;
 	return remoteHost
 		? <div onClickCapture={blockHostLocalLink} onAuxClickCapture={blockHostLocalLink} onContextMenuCapture={blockHostLocalLink}>{diagram}</div>
 		: diagram;
 }
 
 /** A path this chat can open in Files, and how to open it (at a line when given); undefined when it cannot. */
-function useWorkspaceFile(path: string | undefined) {
+export function useWorkspaceFile(path: string | undefined) {
 	const { openFile, findFile } = useContext(OpenChatLink);
 	const filePath = path && openFile ? findFile(path) : undefined;
 	if (!path || !filePath || !openFile) return undefined;
@@ -656,9 +783,32 @@ export function ArtifactPathCode({ text, children, unlisted = children }: { text
 	}, [children, href, path, unlisted]);
 }
 
+function InlineSessionReference({ id, node, fallback }: { id: string; node?: HastElement; fallback: ReactNode }) {
+	const workspaces = useChatLinkWorkspaces();
+	const target = useMemo(() => {
+		let match: { href: string; title: string } | undefined;
+		for (const workspace of workspaces) {
+			const session = workspace.sessions.find((entry) => entry.id === id);
+			if (!session) continue;
+			if (match) return undefined;
+			match = { href: `ao://sessions/${encodeURIComponent(workspace.id)}/${encodeURIComponent(id)}`, title: session.title || id };
+		}
+		return match;
+	}, [workspaces, id]);
+	const href = target?.href;
+	const title = target?.title;
+	return useMemo(() => {
+		if (!href) return fallback;
+		// A displayed title represents the entire source token when quoted.
+		const mapping = title === id ? { "data-excerpt-kind": "inline-code" } : { "data-excerpt-block": "" };
+		return <SessionLabelLink href={href}><span {...excerptElementProps(node)} {...mapping}>{title}</span></SessionLabelLink>;
+	}, [href, title, id, fallback, node]);
+}
+
 function InlineCode({ children, className, node }: { children?: ReactNode; className?: string; node?: HastElement }) {
 	const positions = excerptElementProps(node);
 	const { openSession } = useContext(OpenChatLink);
+	const safeOrigin = useContext(SafeOriginContent);
 	const insideLink = useContext(InsideMarkdownLink);
 	const insideArtifactLink = useContext(InsideArtifactLink);
 	const text = typeof children === "string" ? children : undefined;
@@ -675,11 +825,14 @@ function InlineCode({ children, className, node }: { children?: ReactNode; class
 	);
 	if (insideLink) return code;
 	if (!file) {
+		if (!safeOrigin && openSession && text && /^[^\s/\\]+-\d+$/u.test(text)) return <InlineSessionReference id={text} node={node} fallback={code} />;
 		if (text?.includes("/") && openSession) return <ArtifactPathCode text={text} unlisted={code}>{name}</ArtifactPathCode>;
 		const path = text ? explicitWorkspaceFilePath(text) : undefined;
 		return path ? <ChatPathMenu path={path}>{code}</ChatPathMenu> : code;
 	}
 	const openFile = () => file.open(workspaceFileReferenceLine(text ?? ""));
+	// A file this chat can open gets its Files-tree icon on a faint brand wash,
+	// so it reads apart from code names, which keep the plain chip.
 	return (
 		<ChatPathMenu path={normalizeWorkspaceFileReference(text ?? "")} onFileOpen={openFile}>
 			<Pressable
@@ -687,16 +840,23 @@ function InlineCode({ children, className, node }: { children?: ReactNode; class
 				data-excerpt-include=""
 				onClick={openFile}
 				aria-label={`Open ${file.filePath} in Files`}
-				className="inline rounded transition-colors hover:bg-interactive-hover"
+				className="group mx-0.5 inline rounded"
 			>
-				{code}
+				{/* The tint sits on the chip's inline span, sized like a plain code chip (a
+				    button's box follows the line height and would grow it). Its icon stays
+				    outside the code element, whose text alone carries the excerpt offsets. */}
+				<FileChip path={file.filePath}>
+					<code {...positions} data-excerpt-kind="inline-code" className="text-chat-file-foreground">
+						{children}
+					</code>
+				</FileChip>
 			</Pressable>
 		</ChatPathMenu>
 	);
 }
 
 const COMPONENTS: Components = {
-	span: ({ children, node: _node, ...props }) => <span {...props}>{props.className?.split(" ").includes("stream-char") ? children : compactEmoji(children)}</span>,
+	span: ({ children, node: _node, ...props }) => <span {...props}>{compactEmoji(children)}</span>,
 	// Headings step down in size but stay in the conversation's voice — an agent's
 	// "## Findings" is a paragraph label, not a page title.
 	h1: ({ children, node: _node, ...props }) => (
@@ -758,7 +918,7 @@ const COMPONENTS: Components = {
 	// on the class alone rendered those as inline code.
 	pre: ({ children, node }) => {
 		const fence = fenceOf(children);
-		if (!fence) return <>{children}</>;
+		if (!fence) return <CodeBlock code={textOf(children).replace(/\n$/, "")} sourceNode={node} />;
 		// Mermaid is a diagram, not source: it renders through the sandboxed SVG
 		// path rather than the highlighter. See `MermaidBlock.tsx`.
 		if (fence.language?.toLowerCase() === "mermaid") return <div {...excerptElementProps(node)} data-excerpt-block="" data-excerpt-flowchart=""><MermaidFence code={fence.code} /></div>;
@@ -773,7 +933,7 @@ const COMPONENTS: Components = {
 	// Wide tables scroll inside their own container so the conversation column
 	// never scrolls sideways.
 	table: ({ children }) => (
-		<div className="my-2.5 overflow-x-auto rounded-lg border border-border">
+		<div data-no-swipe-nav="" className="my-2.5 overflow-x-auto rounded-lg border border-border">
 			<table className="w-full border-collapse text-xs">{children}</table>
 		</div>
 	),
@@ -795,6 +955,10 @@ const COMPONENTS: Components = {
 	hr: () => <hr className="my-3 border-border" />,
 	strong: ({ children, node: _node, ...props }) => <strong {...props} className="font-semibold text-foreground">{children}</strong>,
 	del: ({ children, node: _node, ...props }) => <del {...props} className="text-muted-foreground">{children}</del>,
+	details: ({ children, node: _node, ...props }) => <details {...props} className="my-2 first:mt-0 last:mb-0">{children}</details>,
+	summary: ({ children, node: _node, ...props }) => (
+		<summary {...props} className="cursor-pointer text-muted-foreground transition-colors hover:text-foreground">{children}</summary>
+	),
 
 	// Match terminal links: a plain HTTP(S) click uses the session's AO Browser;
 	// Cmd/Ctrl- or Option/Alt-click and non-web schemes use the system browser,

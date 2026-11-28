@@ -11,6 +11,7 @@ export function agentReadiness(
 		freshness?: "fresh" | "stale" | "checking";
 		usageCount?: number;
 		lastUsedAt?: string | null;
+		canStopTurn?: boolean;
 	} = {},
 ): AgentReadinessSnapshot {
 	const installation = options.installation ?? "installed";
@@ -18,6 +19,7 @@ export function agentReadiness(
 	return {
 		id,
 		label,
+		canStopTurn: options.canStopTurn ?? false,
 		installation: {
 			state: installation,
 			freshness: options.freshness ?? "fresh",

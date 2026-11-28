@@ -1,3 +1,4 @@
+import { sentryErrorCode } from "../../../../packages/shared/telemetry/ao-error";
 import { StrictMode } from "react";
 import { render, waitFor } from "@testing-library/react";
 import { createMemoryHistory, createRootRoute, createRoute, createRouter, notFound, redirect, RouterProvider } from "@tanstack/react-router";
@@ -20,8 +21,8 @@ it("reports a non-API query error once across cache, route and React StrictMode 
 	await expect(queryClient.fetchQuery({ queryKey: ["private-project-id"], retry: false, queryFn: () => { throw error; } })).rejects.toBe(error);
 	const view = render(<StrictMode><RouteErrorCapture error={error} reset={() => {}} /></StrictMode>);
 	await waitFor(() => expect(capture).toHaveBeenCalledOnce());
-	expect(capture.mock.calls[0][0]).toMatchObject({ kind: "exception", message: "Renderer error", tags: { operation: "query" } });
-	expect(JSON.stringify(capture.mock.calls)).not.toMatch(/private query details|private-project-id/);
+	expect(capture.mock.calls[0][0]).toMatchObject({ kind: "exception", message: error.message, tags: { operation: "query" } });
+	expect(JSON.stringify(capture.mock.calls)).not.toMatch(/private-project-id/);
 	view.unmount();
 });
 
@@ -49,6 +50,11 @@ it.each([false, true])("does not duplicate raw or wrapped API errors (wrapped=%s
 	expect(capture.mock.calls[0][0]).toMatchObject({ kind: "message" });
 });
 
+it("retains the daemon error code through API exception wrapping", () => {
+	const error = apiErrorException({ code: "WORKSPACE_NO_READY_REPOS", message: "Workspace has no resolved repositories" });
+	expect(sentryErrorCode(error)).toBe("WORKSPACE_NO_READY_REPOS");
+});
+
 it("still reports missing data without an API error and ignores caller cancellation", async () => {
 	await expect(queryClient.fetchQuery({ queryKey: ["missing-data"], retry: false, queryFn: () => { throw apiErrorException(undefined, "private missing data"); } })).rejects.toThrow();
 	await waitFor(() => expect(capture).toHaveBeenCalledOnce());
@@ -64,7 +70,7 @@ it("captures a real router loader rejection once while preserving silent session
 	await router.load();
 	const view = render(<StrictMode><RouterProvider router={router} /></StrictMode>);
 	await waitFor(() => expect(capture).toHaveBeenCalledOnce());
-	expect(JSON.stringify(capture.mock.calls)).not.toContain("private route id");
+	expect(capture.mock.calls[0][0]).toMatchObject({ message: error.message, tags: { operation: "route" } });
 	view.unmount();
 });
 

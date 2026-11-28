@@ -16,7 +16,11 @@ const initial: SearchState = { phase: "idle", hits: [], total: 0 };
 const MODAL = "[role='dialog'], [role='alertdialog'], [role='menu'], [aria-modal='true'], [data-keybinding-recording]";
 /** A streaming reply changes the transcript constantly; re-search it at this pace. */
 const STREAM_REFRESH_MS = 2000;
-const OTHER_SURFACE = ".xterm, .terminal-surface, .monaco-editor, .cm-editor, iframe, webview";
+const OTHER_SURFACE = ".monaco-editor, .cm-editor, iframe, webview";
+// A focused terminal keeps the plain chord for its own search. Windows/Linux
+// have a terminal-safe chord as well (Ctrl+Shift+F); refusing every chord because
+// a terminal held focus is what made Find in chat unreachable there (#8420).
+const TERMINAL_SURFACE = ".xterm, .terminal-surface, [data-testid='session-terminal']";
 
 function isFindModalOpen(): boolean {
 	return Array.from(document.querySelectorAll<HTMLElement>(MODAL)).some((element) =>
@@ -50,6 +54,10 @@ export function useChatFind({ source, root, viewport, hostId, unavailable = fals
 	const input = useRef<HTMLInputElement>(null), previousFocus = useRef<HTMLElement | null>(null);
 	const sourceRef = useRef(source), activeRef = useRef(active), revealRef = useRef(reveal), pauseRef = useRef(pauseFollow);
 	const queryRef = useRef(query), hostRef = useRef(hostId);
+	// Where openWith asked the first search to start, instead of the first match
+	// on screen: a session search opens its result's message, and find must
+	// start at that match rather than wherever the transcript was.
+	const pendingAnchor = useRef<string | undefined>(undefined);
 	queryRef.current = query; hostRef.current = hostId;
 	const writtenRef = useRef(onScrollWritten);
 	writtenRef.current = onScrollWritten;
@@ -124,12 +132,23 @@ export function useChatFind({ source, root, viewport, hostId, unavailable = fals
 		if (!element || !element.getClientRects().length || isSettingsPageOpen()) return false;
 		if (isFindModalOpen()) return false;
 		const focused = document.activeElement;
-		if (focused instanceof Element && focused.closest(OTHER_SURFACE)) return false;
+		const focusedTerminal = focused instanceof Element && focused.closest(TERMINAL_SURFACE) !== null;
+		if (!focusedTerminal && focused instanceof Element && focused.closest(OTHER_SURFACE)) return false;
 		const focusedChat = focused instanceof Element ? focused.closest("[data-chat-find-scope], [data-chat-find-surface]") : null;
 		if (focusedChat) return focusedChat === element || focusedChat === element.closest("[data-chat-find-scope]");
-		if (focused instanceof Element && focused.closest("input, textarea, [contenteditable='true'], [role='textbox']")) return false;
-		// Prefer the primary selected transcript when chrome holds focus.
-		return Array.from(document.querySelectorAll<HTMLElement>("[data-chat-find-surface]")).find((candidate) => candidate.getClientRects().length > 0) === element;
+		// Keystrokes meant for a terminal are not chat input, so its focus is not a
+		// reason to refuse like a focused composer or editor is.
+		if (!focusedTerminal && focused instanceof Element && focused.closest("input, textarea, [contenteditable='true'], [role='textbox']")) return false;
+		// A split shell is a sibling of its transcript, not inside its scope.
+		// Keep its Find within that session's split area, even when another
+		// visible chat was mounted earlier in the page.
+		const split = focusedTerminal && focused instanceof Element
+			? focused.closest('[data-testid="center-split-area"]')
+			: null;
+		// Otherwise prefer the primary selected transcript when chrome holds focus.
+		return Array.from((split ?? document).querySelectorAll<HTMLElement>("[data-chat-find-surface]")).find((candidate) =>
+			candidate.getClientRects().length > 0 && !candidate.closest("[inert], [aria-hidden='true']") && getComputedStyle(candidate).visibility !== "hidden",
+		) === element;
 	}, [root]);
 	const show = useCallback(() => {
 		if (!open) {
@@ -140,6 +159,17 @@ export function useChatFind({ source, root, viewport, hostId, unavailable = fals
 		requestAnimationFrame(() => { input.current?.focus(); input.current?.select(); });
 	}, [open, root, activate]);
 	useAppShortcut("find-in-chat", show, true, canHandle);
+	// Opens find already searching for value, its first match at or after
+	// anchorMessageId (a session search result opening its session).
+	const openWith = useCallback((value: string, anchorMessageId?: string) => {
+		cancelWork(); prepareRefresh();
+		// A new search from the anchor even when value is the current query:
+		// otherwise the search would keep its active match instead.
+		pendingAnchor.current = anchorMessageId; activeRef.current = undefined; lastQuery.current = "";
+		setQuery(value); setAnnouncement(""); setActive(undefined);
+		setState({ ...initial, phase: isEmptyFindQuery(value) ? "idle" : "searching" });
+		show();
+	}, [cancelWork, prepareRefresh, show]);
 	useEffect(() => {
 		const otherOpened = (event: Event) => { if ((event as CustomEvent).detail !== root.current) close(false); };
 		document.addEventListener("chat-find-open", otherOpened);
@@ -204,7 +234,10 @@ export function useChatFind({ source, root, viewport, hostId, unavailable = fals
 				const changedQuery = lastQuery.current !== query;
 				const prior = changedQuery ? undefined : activeRef.current;
 				let anchorMessageId = prior?.messageId, anchorBlock = prior?.block ?? 0, anchorOffset = prior?.start ?? 0;
-				if (!prior) {
+				if (!prior && pendingAnchor.current) {
+					anchorMessageId = pendingAnchor.current;
+					pendingAnchor.current = undefined;
+				} else if (!prior) {
 					const top = viewport.current?.getBoundingClientRect().top ?? 0;
 					outer: for (const element of root.current?.querySelectorAll<HTMLElement>("[data-find-message-id]") ?? []) {
 						if (element.getBoundingClientRect().bottom < top) continue;
@@ -367,6 +400,24 @@ export function useChatFind({ source, root, viewport, hostId, unavailable = fals
 
 	// Closing find leaves the reader in place; the jumped-to page goes when they return to the latest.
 	const dropWindow = useCallback(() => setWindowPage(undefined), []);
+	// Shows the history around one sequence without opening find: a search match
+	// deep in a long chat loads its page in one request rather than paging back
+	// through everything newer. Resolves once the page is shown or could not be.
+	const showWindowAt = useCallback(async (sequence: number) => {
+		windowAbort.current?.abort();
+		const controller = new AbortController(); windowAbort.current = controller;
+		const snapshot = sourceRef.current;
+		try {
+			const { data } = await clientForSessionHost(hostId).GET("/api/v1/conversations/{conversationId}/find-window", {
+				params: { path: { conversationId: snapshot.conversationId }, query: { sequence } }, signal: controller.signal,
+			});
+			if (!data || controller.signal.aborted || sourceRef.current.conversationId !== snapshot.conversationId || sourceRef.current.activeBranchId !== snapshot.activeBranchId) return;
+			const page = toSnapshot(data);
+			if (page.conversationId === snapshot.conversationId && page.activeBranchId === snapshot.activeBranchId) setWindowPage(page);
+		} catch {
+			// The caller falls back to the turn the match belongs to.
+		}
+	}, [hostId]);
 	let snapshot = windowPage && windowPage.conversationId === source.conversationId && windowPage.activeBranchId === source.activeBranchId
 		? mergeConversationPages([source, windowPage]) ?? source : source;
 	if (sideChat && snapshot !== source) {
@@ -405,5 +456,5 @@ export function useChatFind({ source, root, viewport, hostId, unavailable = fals
 		{state.error ? <span role="alert" className="absolute top-full right-0 mt-2 w-full rounded-lg border border-border bg-surface p-2 shadow-lg">{state.error} <button type="button" className="underline" onClick={() => { prepareRefresh(); setRetry((value) => value + 1); }}>{t("notify.retry")}</button></span> : null}
 		<span className="sr-only" role="status" aria-live="polite">{announcement}</span>
 	</div> : null;
-	return { snapshot, bar, active, open, engaged, gapBeforeSequence, dropWindow };
+	return { snapshot, bar, active, open, engaged, gapBeforeSequence, dropWindow, showWindowAt, openWith };
 }

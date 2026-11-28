@@ -2,6 +2,7 @@ import { act, create } from "react-test-renderer";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 const fixtures = vi.hoisted(() => ({ platform: { OS: "android" }, theme: new Proxy({}, { get: () => "#000000" }) }));
+vi.mock("./headerPill", () => ({ pillHeaderOptions: () => ({}), pillScreenLayout: undefined, PillHeaderFrame: ({ children }: { children: unknown }) => children }));
 vi.mock("react-native", () => ({ Platform: fixtures.platform, View: "View" }));
 vi.mock("expo-router", async () => {
 	const React = await import("react");
@@ -16,15 +17,20 @@ vi.mock("expo-splash-screen", () => ({ preventAutoHideAsync: vi.fn(async () => {
 vi.mock("expo-status-bar", () => ({ StatusBar: "StatusBar" }));
 vi.mock("react-native-gesture-handler", () => ({ GestureHandlerRootView: "GestureHandlerRootView" }));
 vi.mock("react-native-keyboard-controller", () => ({ KeyboardProvider: "KeyboardProvider" }));
+vi.mock("./KeyboardResumeResync", () => ({ KeyboardResumeResync: () => null }));
 vi.mock("react-native-safe-area-context", () => ({ SafeAreaProvider: "SafeAreaProvider" }));
 vi.mock("./ThemeProvider", () => ({ ThemeProvider: "ThemeProvider", useTheme: () => fixtures.theme, useThemeState: () => ({ scheme: "dark" }) }));
 vi.mock("./themeStore", () => ({ loadThemeSettings: async () => ({ preference: "system", style: "orchestrate" }) }));
 vi.mock("./store", () => ({ AppProvider: "AppProvider" }));
 vi.mock("./cloud/CloudProvider", () => ({ CloudProvider: "CloudProvider" }));
 vi.mock("./OnboardingGate", () => ({ OnboardingGate: () => null }));
+vi.mock("./RouteRestorer", () => ({ RouteRestorer: () => null }));
+vi.mock("./files/reviewPersistence", () => ({ startReviewPersistence: async () => {} }));
 vi.mock("./TelemetryManager", () => ({ TelemetryManager: () => null }));
 vi.mock("./PushManager", () => ({ PushManager: () => null }));
 vi.mock("./UpdatesManager", () => ({ UpdatesManager: () => null }));
+vi.mock("./UpdateScreen", () => ({ UpdateScreen: () => null }));
+vi.mock("./UpdateRouteKeeper", () => ({ UpdateRouteKeeper: () => null }));
 vi.mock("./StoreUpdateManager", () => ({ StoreUpdateManager: () => null }));
 
 import RootLayout from "../app/_layout";

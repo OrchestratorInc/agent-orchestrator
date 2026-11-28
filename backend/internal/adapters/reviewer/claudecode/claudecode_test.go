@@ -166,6 +166,41 @@ func TestReviewCommandEmitsPersistedNativeSessionID(t *testing.T) {
 	}
 }
 
+func (a *captureHistoryAgent) NewNativeSessionID() string {
+	return "11111111-2222-4333-8444-555555555555"
+}
+
+func TestReviewCommandUsesNewSessionIDWhenDerivedConversationExists(t *testing.T) {
+	derived := workeragent.SessionUUID("review-w1")
+	agent := &captureHistoryAgent{existing: map[string]bool{derived: true}}
+	r := &Reviewer{agent: agent}
+
+	spec, err := r.ReviewCommand(context.Background(), ports.ReviewInvocation{ReviewerID: "review-w1", Prompt: "review it"})
+	if err != nil {
+		t.Fatalf("ReviewCommand: %v", err)
+	}
+	if spec.AgentSessionID == derived || spec.AgentSessionID != agent.NewNativeSessionID() {
+		t.Fatalf("session id = %q, want a new id because %q already has a conversation", spec.AgentSessionID, derived)
+	}
+	if agent.got.NativeSessionID != spec.AgentSessionID {
+		t.Fatalf("launched with %q, persisted %q", agent.got.NativeSessionID, spec.AgentSessionID)
+	}
+}
+
+func TestReviewCommandKeepsDerivedSessionIDWithoutConversation(t *testing.T) {
+	derived := workeragent.SessionUUID("review-w1")
+	agent := &captureHistoryAgent{}
+	r := &Reviewer{agent: agent}
+
+	spec, err := r.ReviewCommand(context.Background(), ports.ReviewInvocation{ReviewerID: "review-w1", Prompt: "review it"})
+	if err != nil {
+		t.Fatalf("ReviewCommand: %v", err)
+	}
+	if spec.AgentSessionID != derived || agent.got.NativeSessionID != derived {
+		t.Fatalf("session id = %q, launched with %q, want %q", spec.AgentSessionID, agent.got.NativeSessionID, derived)
+	}
+}
+
 func TestPreLaunchInstallsSelectedReviewerHooksAndTrustsWorkspace(t *testing.T) {
 	agent := &captureAgent{}
 	r := &Reviewer{agent: agent}

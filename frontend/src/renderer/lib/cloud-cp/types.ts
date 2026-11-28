@@ -108,6 +108,18 @@ export interface CloudCpMeResponse {
 	 */
 	chatHarnesses?: string[];
 	/**
+	 * Harnesses a running session can switch its coding agent to (an interface
+	 * transition with targetHarness). Absent or empty on a control plane that
+	 * cannot switch a session's agent.
+	 */
+	agentSwitchHarnesses?: string[];
+	/**
+	 * True when each coding agent can hold several accounts (/me/agent-accounts)
+	 * and a session can move to another of them. Absent on an older control
+	 * plane: one login per agent (/me/providers).
+	 */
+	agentAccounts?: boolean;
+	/**
 	 * The organization the app works in: the one the sign-in token's WorkOS
 	 * organization maps to, else organizations[0]. Absent on an older control
 	 * plane.
@@ -154,6 +166,20 @@ export interface CloudCpInvitation {
 /** GET /invitations */
 export interface CloudCpInvitationsResponse {
 	invitations: CloudCpInvitation[];
+}
+
+/** One active member of an organization (GET /orgs/{orgId}/members). */
+export interface CloudCpOrgMember {
+	userId: string;
+	email: string;
+	displayName: string;
+	role: string;
+	createdAt: string;
+}
+
+/** GET /orgs/{orgId}/members: every active member, any member may read it. */
+export interface CloudCpOrgMembersResponse {
+	members: CloudCpOrgMember[];
 }
 
 // ---------------------------------------------------------------------------
@@ -218,11 +244,21 @@ export interface CloudCpListQuery {
 	cursor?: string;
 }
 
+/**
+ * GET /orgs/{orgId}/projects: the projects without the caller's standalone
+ * agents ("exclude"), or only those agents ("only"). Omitted lists both; an
+ * older control plane ignores it and lists every project.
+ */
+export interface CloudCpProjectListQuery extends CloudCpListQuery {
+	standaloneAgents?: "exclude" | "only";
+}
+
 // ---------------------------------------------------------------------------
 // Projects (`resource_handlers.go`)
 // ---------------------------------------------------------------------------
 
-import type { ProjectConfig, ProjectAgentConfig, ProjectSettingsInput, ProjectRoleConfig, ProjectReviewer, ProjectEnvironment, ProjectIntakeStatus, ProjectTrackerIntake, Cue, CueDefinitionInput, InvokeCueResult } from "../../../../../packages/cloud-client/src/types";
+import type { AddAgentAccountInput, CloudAgentAccount, SessionAgentAccount } from "../../../../../packages/cloud-client/src/types";
+import type { ProjectConfig, ProjectAgentConfig, ProjectSettingsInput, ProjectRoleConfig, ProjectReviewer, ProjectEnvironment, ProjectIntakeStatus, ProjectTrackerIntake, Cue, CueDefinitionInput, InvokeCueResult, Automation, AutomationRun, AutomationList, AutomationRunList, CreateAutomationInput, UpdateAutomationInput } from "../../../../../packages/cloud-client/src/types";
 
 export type CloudCpProjectAgentConfig = ProjectAgentConfig;
 /** A project's environment variables; `value` only for an owner or admin (`editable`). */
@@ -233,7 +269,19 @@ export type CloudCpProjectTrackerIntake = ProjectTrackerIntake;
 export type CloudCpCue = Cue;
 export type CloudCpCueDefinition = CueDefinitionInput;
 export type CloudCpInvokeCueResult = InvokeCueResult;
+/** A scheduled prompt a project's worker runs in AO Cloud (`automation_handlers.go`). */
+export type CloudCpAutomation = Automation;
+export type CloudCpAutomationRun = AutomationRun;
+export type CloudCpAutomationList = AutomationList;
+export type CloudCpAutomationRunList = AutomationRunList;
+export type CloudCpCreateAutomationRequest = CreateAutomationInput;
+export type CloudCpUpdateAutomationRequest = UpdateAutomationInput;
 export type CloudCpProjectRoleConfig = ProjectRoleConfig;
+/**
+ * Where a Coder project's orchestrator runs (config.orchestratorSandboxProvider):
+ * "freestyle", the default and the same as absent, or "coder".
+ */
+export type CloudCpOrchestratorSandboxProvider = NonNullable<ProjectConfig["orchestratorSandboxProvider"]>;
 export type CloudCpProjectReviewer = ProjectReviewer;
 /**
  * PATCH /orgs/{orgId}/projects/{projectId}/settings. `config.coder` accepts
@@ -304,8 +352,27 @@ export interface CloudCpProject {
 	defaultBranch: string;
 	githubRepositoryId?: string;
 	config: ProjectConfig;
+	/**
+	 * A standalone agent's project: its owner's one worker session, with no
+	 * repository. Only its owner lists it; others reach it through a share.
+	 * Absent from older control planes.
+	 */
+	standaloneAgent?: boolean;
 	createdAt: string;
 	updatedAt: string;
+}
+
+/**
+ * POST /orgs/{orgId}/standalone-agents (requires an Idempotency-Key header): a
+ * standalone agent, the session create's body without projectId and kind. The
+ * control plane makes the agent its own project and starts its one worker
+ * session there. Offered when offering.features lists "standalone_agents".
+ */
+export type CloudCpCreateStandaloneAgentRequest = Omit<CloudCpCreateSessionRequest, "projectId" | "kind">;
+
+export interface CloudCpStandaloneAgentResponse {
+	project: CloudCpProject;
+	session: CloudCpSession;
 }
 
 /** POST /orgs/{orgId}/projects (requires an Idempotency-Key header). */
@@ -424,6 +491,18 @@ export interface CloudCpCreateSessionRequest {
 	 * field (see createCloudSession).
 	 */
 	defaultInterfaceMode?: CloudCpInterfaceMode;
+	/**
+	 * Branch to continue: one already on the repository is checked out from its
+	 * commits. Only sent when offering.features lists session.branch; an older
+	 * control plane rejects the whole create.
+	 */
+	branch?: string;
+	/**
+	 * A conversation uploaded to transcript-imports/{id}, which the session
+	 * resumes instead of starting from prompt. Only sent when
+	 * offering.features lists session.transcriptImport.
+	 */
+	transcriptImportId?: string;
 }
 
 export interface CloudCpSessionRepo {
@@ -651,6 +730,12 @@ export interface CloudCpSession {
 	 */
 	coderWorkspaceUrl?: string;
 	isTerminated: boolean;
+	/**
+	 * The session moved to another computer: the delete that finished its move
+	 * ended it, and it continues there, so it cannot be restored here. Absent
+	 * from an older control plane.
+	 */
+	movedAway?: boolean;
 	autoInjectCI?: boolean;
 	autoInjectReview?: boolean;
 	terminateOnPrMerge?: boolean;
@@ -669,6 +754,8 @@ export interface CloudCpSession {
 	requestedBy?: CloudCpPersonRef;
 	/** The person who started the session; only they share its files as public links. Absent when none is on record. */
 	createdByUserId?: string;
+	/** The automation run the session was started for; such a session is shared only to watch, with teams and by link. */
+	automationRunId?: string;
 	/** What the session owns. Absent from older control planes. */
 	outputType?: "none" | "pr" | "artifact" | "pr_artifact";
 	/** How many committed artifact files the session has, while the deployment keeps artifacts. */
@@ -760,6 +847,69 @@ export interface CloudCpChatSearchResponse {
 	results: CloudCpChatSearchHit[];
 }
 
+/**
+ * A link someone else published and shared with the signed-in person
+ * (listSharedArtifacts), by their email, a team they are in, or a workspace
+ * they are a member of. It names no owner.
+ */
+export interface CloudCpSharedArtifact {
+	linkId: string;
+	name: string;
+	contentType: string;
+	size: number;
+	updatedAt: string;
+	access: "restricted" | "anyone";
+	viewerUrl?: string;
+	/** The first that holds: direct, shared with their email; team, with a team they are in; workspace, with their workspace. */
+	via: "direct" | "team" | "workspace";
+	/** Every team of theirs the link is shared with; empty when none. */
+	teams: { id: string; name: string }[];
+	/** Every workspace of theirs the link is shared with; empty when none (and on an older control plane). */
+	workspaces?: { id: string; name: string }[];
+	sharedAt: string;
+}
+
+/** What viewArtifactShare returns for a link that opens for the signed-in person. */
+export interface CloudCpArtifactShareView {
+	linkId: string;
+	name: string;
+	contentType: string;
+	size: number;
+	updatedAt: string;
+	/** Where the file is served; a private link's carries a short-lived view token. */
+	contentUrl: string;
+	access?: "restricted" | "anyone";
+	/** The link's viewer page; absent where the control plane has no viewer. */
+	viewerUrl?: string;
+}
+
+import type {
+	ArtifactComment,
+	ArtifactCommentEditInput,
+	ArtifactCommentsSnapshot,
+	ArtifactCommentThread,
+	ArtifactReplyInput,
+	ArtifactThreadCreateInput,
+	ArtifactCommentThreadStatus,
+} from "../../../../../packages/shared/artifact-comments/types";
+
+/** GET /artifact-shares/{linkId}/comments: every thread on one version of a link. */
+export type CloudCpArtifactCommentsSnapshot = ArtifactCommentsSnapshot;
+export type CloudCpArtifactCommentThread = ArtifactCommentThread;
+export type CloudCpArtifactComment = ArtifactComment;
+export type CloudCpArtifactThreadCreateRequest = ArtifactThreadCreateInput;
+export type CloudCpArtifactReplyRequest = ArtifactReplyInput;
+export type CloudCpArtifactCommentEditRequest = ArtifactCommentEditInput;
+export type CloudCpArtifactCommentThreadStatus = ArtifactCommentThreadStatus;
+
+/**
+ * listArtifactShareComments: the snapshot with the ETag to send next time, or
+ * notModified when the If-None-Match ETag still matches (HTTP 304).
+ */
+export type CloudCpArtifactCommentsResult =
+	| { notModified: true; etag: string }
+	| { notModified: false; etag: string | null; snapshot: CloudCpArtifactCommentsSnapshot };
+
 /** POST /orgs/{orgId}/sessions/{sessionId}/artifacts/access */
 export interface CloudCpArtifactAccessResponse {
 	/** Control-plane path ending in "/"; append a file's escaped path. */
@@ -816,6 +966,15 @@ export interface CloudCpInterfaceTransition {
 	errorCode?: string;
 	errorDetail?: string;
 	noticeAcknowledgedAt?: string;
+	/** An agent switch's agents and models; absent on an interface-only switch. */
+	sourceHarness?: string;
+	targetHarness?: string;
+	sourceModel?: string;
+	targetModel?: string;
+	targetReasoningEffort?: string;
+	/** An account switch's accounts; absent on any other switch. */
+	sourceAccountId?: string;
+	targetAccountId?: string;
 	createdAt: string;
 	updatedAt: string;
 	completedAt?: string;
@@ -834,6 +993,8 @@ export interface CloudCpStartInterfaceTransitionRequest {
 	policy: "drain" | "interrupt";
 	model?: string;
 	reasoningEffort?: string;
+	/** Switches the session's agent to this harness, in targetMode (which may be its current one). */
+	targetHarness?: string;
 }
 
 export interface CloudCpStartInterfaceTransitionResponse {
@@ -1339,10 +1500,100 @@ export interface CloudCpHarnessVersionsResponse {
 	editable: boolean;
 	agents: CloudCpHarnessVersion[];
 }
+
+// ---------------------------------------------------------------------------
+// Data retention (GET/PUT /me/data-retention)
+// ---------------------------------------------------------------------------
+
+/**
+ * How long the signed-in user's Cloud sessions and their conversation content
+ * are kept: every session they started, in any organization, team sessions
+ * included. A session older than `retentionDays`, counted from its creation,
+ * has its content deleted once it has ended (a running session is never ended
+ * for it). Each user sets their own.
+ */
+export interface CloudCpDataRetention {
+	retentionDays: number;
+	/** The deployment's default period; always one of `options`. */
+	defaultDays: number;
+	/**
+	 * True while the user has no period of their own and follows `defaultDays`.
+	 * Absent from a control plane that predates going back to the default.
+	 */
+	followsDefault?: boolean;
+	/** The periods the user may choose, in days, ascending. */
+	options: number[];
+	/** When the user last chose the period; null while they never chose one. */
+	updatedAt: string | null;
+}
+
+/** PUT /me/data-retention. */
+export interface CloudCpPutDataRetentionRequest {
+	/** One of `options`, or null to follow the deployment's default again. */
+	retentionDays: number | null;
+	/** Only count the sessions the period would delete; change nothing. */
+	dryRun?: boolean;
+}
+
+/** The retention as stored (unchanged by a dry run) and what the requested period deletes. */
+export interface CloudCpDataRetentionChange extends CloudCpDataRetention {
+	/** The user's sessions older than the requested period whose content is not deleted yet. */
+	sessionsToDelete: number;
+}
 export interface CloudCpListSessionsQuery extends CloudCpListQuery {
 	/** Restrict the listing to one project. */
 	projectId?: string;
 }
+
+/** GET /orgs/{orgId}/sessions/{sessionId}/move/preview: what move/export would push now. */
+export interface CloudCpMovePreviewResponse {
+	branch: string;
+	/** untracked marks a file git did not track in the sandbox; absent from a control plane that does not say. */
+	changes: { path: string; status: "added" | "modified" | "deleted"; untracked?: boolean }[];
+	/** The Claude Code conversation the move would carry; bytes count its sidecar folder too. */
+	transcript?: { bytes: number; subagents?: number };
+}
+
+/** POST /orgs/{orgId}/sessions/{sessionId}/move/export: the pushed branch, in the shape an AO daemon's move/import takes. */
+export interface CloudCpMoveExportResponse {
+	/** The export this answers. */
+	moveId?: string;
+	manifest: {
+		sourceSessionId: string;
+		sourceLabel: string;
+		repoKey: string;
+		branch: string;
+		tip: string;
+		wip: boolean;
+		harness: string;
+		model?: string;
+		displayName?: string;
+		/** The session's approval mode (in Chat, its last turn's); absent from a control plane that does not carry it. */
+		permissions?: "default" | "accept-edits" | "auto" | "bypass-permissions";
+		/** The interface the session was in; absent from an older control plane. */
+		interface?: "chat" | "terminal";
+		/** The GitHub issue intake started the session for, as owner/repo#N. */
+		issueId?: string;
+		/** URLs of the session's open pull requests. */
+		pullRequests?: string[];
+	};
+	handoffNote: string;
+	/** Base64 gzip, as move/import takes it. Absent for another agent or when none was captured. */
+	transcript?: { agentSessionId: string; projectDir: string; transcriptGzip: string; sidecarGzip?: string };
+}
+
+/** A move export AO Cloud's worker is still on (202): ask again with moveId after retryAfterMs. */
+export interface CloudCpMoveExportRunning {
+	status: "running";
+	moveId: string;
+	/** The agent is stopped and the branch may already be pushed. */
+	branchMayBePushed?: boolean;
+	message?: string;
+	retryAfterMs?: number;
+}
+
+/** What move/export, or its GET, answers: the move, or the export still running. */
+export type CloudCpMoveExportResult = CloudCpMoveExportResponse | CloudCpMoveExportRunning;
 
 /** DELETE /orgs/{orgId}/sessions/{sessionId} responds 202: teardown is reconciler-owned. */
 export interface CloudCpSessionDeletedResponse {
@@ -1472,6 +1723,22 @@ export interface CloudCpSteerTurnResponse {
 	event: CloudCpClientEvent;
 }
 
+/**
+ * POST /orgs/{orgId}/sessions/{sessionId}/turns/{turnId}/edit: a queued
+ * message's new text and every file it keeps (offering feature queued-edit).
+ */
+export interface CloudCpEditQueuedMessageRequest {
+	/** At most 65536 bytes; may be empty when the message carries attachments. */
+	text: string;
+	/** Files uploaded to the session that the edited message carries; one left out is dropped. */
+	attachmentIds?: string[];
+}
+
+/** The chat.user_message_edited event the edit appended. */
+export interface CloudCpEditQueuedMessageResponse {
+	event: CloudCpClientEvent;
+}
+
 export interface CloudCpChatEventsQuery {
 	/** Replay events with sequence strictly greater than this (0-9007199254740991). */
 	after?: number;
@@ -1561,21 +1828,6 @@ export interface CloudCpPutAgentConnectionRequest {
 	secret: string;
 }
 
-/** PUT /me/github-pat */
-export interface CloudCpPutGitHubPATRequest {
-	/** Raw GitHub personal access token; stored encrypted and never echoed. */
-	secret: string;
-}
-
-/** POST /me/github-pat/validate-saved-repository */
-export interface CloudCpValidateRepositoryAccessRequest {
-	repositoryUrl: string;
-}
-
-export interface CloudCpValidateRepositoryAccessResponse {
-	writeAccess: boolean;
-}
-
 export interface CloudCpProviderConnection {
 	id: string;
 	provider: string;
@@ -1592,9 +1844,35 @@ export interface CloudCpProviderConnectionsResponse {
 	providerConnections: CloudCpProviderConnection[];
 }
 
-/** PUT /me/providers/{agent}, PUT /me/github-pat */
+/** PUT /me/providers/{agent} */
 export interface CloudCpProviderConnectionResponse {
 	providerConnection: CloudCpProviderConnection;
+}
+
+// ---------------------------------------------------------------------------
+// Coding-agent accounts (`agent_account_handlers.go`), when /me reports
+// agentAccounts: each login or key is an account; the default one runs new
+// sessions, and a session can move to another of its agent's accounts.
+// ---------------------------------------------------------------------------
+
+export type CloudCpAgentAccount = CloudAgentAccount;
+export type CloudCpAddAgentAccountRequest = AddAgentAccountInput;
+export type CloudCpSessionAgentAccount = SessionAgentAccount;
+
+/** GET /me/agent-accounts */
+export interface CloudCpAgentAccountsResponse {
+	agentAccounts: CloudCpAgentAccount[];
+}
+
+/** POST /me/agent-accounts and the account's own routes. */
+export interface CloudCpAgentAccountResponse {
+	agentAccount: CloudCpAgentAccount;
+}
+
+/** PUT /orgs/{orgId}/sessions/{sessionId}/agent-account */
+export interface CloudCpSwitchSessionAgentAccountRequest {
+	accountId: string;
+	policy?: "drain" | "interrupt";
 }
 
 /** GET /me/github/repos */
@@ -1780,6 +2058,12 @@ export interface CloudCpPlanOffer {
 	currency?: string;
 	interval?: string;
 	limits?: CloudCpPlanLimits;
+	/**
+	 * Days of free trial a Checkout of this plan starts. Set only while a Checkout the
+	 * viewer starts now would begin one: one trial per org and per person, never for
+	 * an org that already subscribed or trialed. Absent from older control planes.
+	 */
+	trialDays?: number;
 }
 
 /** POST /orgs/{orgId}/billing/checkout and /billing/portal */

@@ -206,3 +206,26 @@ func TestEnsureIdentityIsStableWithoutHardwareAddresses(t *testing.T) {
 		t.Fatalf("host id churned with no interfaces: %q -> %q", first.HostID, second.HostID)
 	}
 }
+
+// The installed app and a development checkout of it run on the same laptop but
+// keep separate data dirs and credentials. They must stay separate host
+// identities too: publishing both would give the phone two entries for one
+// machine, and the dev one stops answering when its daemon does.
+func TestEnsureIdentityIsPerInstallationNotPerMachine(t *testing.T) {
+	ifaces := []net.Interface{iface("en0", "aa:bb:cc:dd:ee:01")}
+	installed := filepath.Join(t.TempDir(), "data", "mobile", "identity.json")
+	development := filepath.Join(t.TempDir(), "dev", "data", "mobile", "identity.json")
+
+	installedID, err := EnsureIdentityFor(installed, ifaces)
+	if err != nil {
+		t.Fatalf("EnsureIdentityFor installed: %v", err)
+	}
+	developmentID, err := EnsureIdentityFor(development, ifaces)
+	if err != nil {
+		t.Fatalf("EnsureIdentityFor development: %v", err)
+	}
+
+	if installedID.HostID == developmentID.HostID {
+		t.Fatalf("installed and development installations share a host id: %q", installedID.HostID)
+	}
+}

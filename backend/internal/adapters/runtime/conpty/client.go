@@ -39,6 +39,16 @@ func dialHostContext(ctx context.Context, addr string, timeout time.Duration) (n
 	return dialer.DialContext(ctx, "tcp", addr)
 }
 
+func isType(want byte) func(byte) bool {
+	return func(msgType byte) bool { return msgType == want }
+}
+
+// withControl prefixes a connection's first frame with MsgControlReq, so the
+// host sends it no replay and no terminal output.
+func withControl(frame []byte) []byte {
+	return append([]byte{MsgControlReq, 0, 0, 0, 0}, frame...)
+}
+
 // armClientDeadline bounds host I/O by both the client's transport timeout and
 // its caller context. AfterFunc also interrupts an in-flight Read immediately
 // when a context without an earlier deadline is cancelled.
@@ -61,6 +71,9 @@ func clientSendMessage(addr, message string) error {
 		return err
 	}
 	defer func() { _ = conn.Close() }()
+	if _, err := conn.Write(withControl(nil)); err != nil {
+		return err
+	}
 
 	runes := []rune(message)
 	for i := 0; i < len(runes); i += ptyInputChunkRunes {
@@ -107,7 +120,7 @@ func clientSendInput(addr, input string) error {
 	if err != nil {
 		return err
 	}
-	_, err = conn.Write(frame)
+	_, err = conn.Write(withControl(frame))
 	return err
 }
 
@@ -136,7 +149,7 @@ func clientReadOutput(ctx context.Context, addr string, lines int, requestType, 
 
 	req, _ := json.Marshal(GetOutputReq{Lines: lines})
 	reqFrame, _ := EncodeMessage(requestType, req) // req is small JSON, never overflows uint32
-	if _, err := conn.Write(reqFrame); err != nil {
+	if _, err := conn.Write(withControl(reqFrame)); err != nil {
 		if ctxErr := ctx.Err(); ctxErr != nil {
 			return "", ctxErr
 		}
@@ -144,12 +157,10 @@ func clientReadOutput(ctx context.Context, addr string, lines int, requestType, 
 	}
 
 	resultC := make(chan string, 1)
-	parser := NewMessageParser(func(msgType byte, payload []byte) {
-		if msgType == responseType {
-			select {
-			case resultC <- string(payload):
-			default:
-			}
+	parser := newFilteredParser(isType(responseType), func(_ byte, payload []byte) {
+		select {
+		case resultC <- string(payload):
+		default:
 		}
 	})
 
@@ -227,7 +238,7 @@ func clientStatusContext(ctx context.Context, addr string) (status StatusPayload
 	defer stopCancellation()
 
 	statusReqFrame, _ := EncodeMessage(MsgStatusReq, nil) // nil payload, never overflows
-	if _, err := conn.Write(statusReqFrame); err != nil {
+	if _, err := conn.Write(withControl(statusReqFrame)); err != nil {
 		if ctxErr := ctx.Err(); ctxErr != nil {
 			return StatusPayload{}, false, ctxErr
 		}
@@ -241,14 +252,12 @@ func clientStatusContext(ctx context.Context, addr string) (status StatusPayload
 		err     error
 	}
 	statusC := make(chan statusResult, 1)
-	parser := NewMessageParser(func(msgType byte, payload []byte) {
-		if msgType == MsgStatusRes {
-			var sp StatusPayload
-			decodeErr := json.Unmarshal(payload, &sp)
-			select {
-			case statusC <- statusResult{payload: sp, err: decodeErr}:
-			default:
-			}
+	parser := newFilteredParser(isType(MsgStatusRes), func(_ byte, payload []byte) {
+		var sp StatusPayload
+		decodeErr := json.Unmarshal(payload, &sp)
+		select {
+		case statusC <- statusResult{payload: sp, err: decodeErr}:
+		default:
 		}
 	})
 
@@ -321,7 +330,7 @@ func clientKill(addr string) error {
 	defer func() { _ = conn.Close() }()
 	_ = conn.SetDeadline(time.Now().Add(isAliveTimeout))
 	killFrame, _ := EncodeMessage(MsgKillReq, nil) // nil payload, never overflows
-	if _, err := conn.Write(killFrame); err != nil {
+	if _, err := conn.Write(withControl(killFrame)); err != nil {
 		return fmt.Errorf("write pty-host kill request: %w", err)
 	}
 	return nil
@@ -364,14 +373,10 @@ func clientWatchFrames(ctx context.Context, addr string, request, response byte,
 	if err != nil {
 		return err
 	}
-	if _, err := conn.Write(frame); err != nil {
+	if _, err := conn.Write(withControl(frame)); err != nil {
 		return err
 	}
-	parser := NewMessageParser(func(msgType byte, payload []byte) {
-		if msgType == response {
-			fn(payload)
-		}
-	})
+	parser := newFilteredParser(isType(response), func(_ byte, payload []byte) { fn(payload) })
 	buf := make([]byte, 32*1024)
 	for {
 		n, err := conn.Read(buf)

@@ -33,6 +33,7 @@ export type ResultFrame = {
 
 /** A failure with a stable code the daemon maps to an HTTP status. */
 export class BridgeError extends Error {
+	readonly telemetryCode: string = "BRIDGE_ERROR";
 	readonly code: string;
 
 	constructor(code: string, message: string) {

@@ -1,3 +1,4 @@
+import { AoError } from "../../../packages/shared/telemetry/ao-error";
 import { probeRemote, type RemoteHealth } from "./remote-request";
 import {
 	applyRemoteChanges,
@@ -21,7 +22,7 @@ export function toHostViews(entries: RemoteEntry[]): RemoteHostView[] {
 
 export async function findRemote(path: string, url: string, hostId?: string): Promise<RemoteEntry> {
 	const entry = (await readRemotes(path)).find((candidate) => candidate.url === url && (!hostId || candidate.hostId === hostId));
-	if (!entry) throw new Error(`no saved host for ${url}`);
+	if (!entry) throw new AoError("SAVED_REMOTE_NOT_FOUND", `no saved host for ${url}`);
 	return entry;
 }
 

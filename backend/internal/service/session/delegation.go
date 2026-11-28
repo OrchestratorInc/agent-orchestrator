@@ -30,16 +30,21 @@ const (
 type DelegateTaskInput struct {
 	ProjectID         domain.ProjectID
 	Brief             string
+	BaseBranch        string
 	RequestedAgent    domain.AgentHarness
 	Branch            string
 	Model             string
 	Effort            *string
 	ApprovalMode      domain.PermissionMode
 	RequestedMode     domain.SessionMode
+	AccountID         string
 	Attachments       []ports.SpawnAttachment
 	TaskPreparation   domain.TaskPreparationToken
 	ClientRequestID   string
 	ClientRequestHash string
+	// FastMode and AutoCompactWindow are a Chat worker's starting choices.
+	FastMode          bool
+	AutoCompactWindow string
 }
 
 // DelegateTaskOutcome identifies the spawned worker. OrchestratorID remains
@@ -95,12 +100,13 @@ func (s *Service) DelegateTask(ctx context.Context, in DelegateTaskInput) (Deleg
 	}
 
 	effort, effortOverride := optionalTuningValue(in.Effort)
-	worker, _, _, err := s.spawnWithTelemetry(ctx, ports.SpawnConfig{
+	spawnCfg := ports.SpawnConfig{
 		ClientRequestID:   in.ClientRequestID,
 		ClientRequestHash: in.ClientRequestHash,
 		ProjectID:         in.ProjectID,
 		Kind:              domain.KindWorker,
 		Harness:           in.RequestedAgent,
+		BaseBranch:        in.BaseBranch,
 		Branch:            in.Branch,
 		RequireNewBranch:  in.Branch != "",
 		Prompt:            prompt,
@@ -113,13 +119,21 @@ func (s *Service) DelegateTask(ctx context.Context, in DelegateTaskInput) (Deleg
 		},
 		EffortOverride: effortOverride,
 		RequestedMode:  in.RequestedMode,
+		AgentAccountID: in.AccountID,
 		Attachments:    in.Attachments,
 		// This is the desktop's new-task path: there is a UI waiting to navigate
 		// to the session. A Chat worker answers as soon as it is addressable and
 		// finishes starting in the background.
-		Async:           true,
-		TaskPreparation: in.TaskPreparation,
-	}, project)
+		Async:             true,
+		TaskPreparation:   in.TaskPreparation,
+		FastMode:          in.FastMode,
+		AutoCompactWindow: in.AutoCompactWindow,
+	}
+	// This path does not go through spawn, so it runs the same check itself.
+	if err := refuseUnsupportedStartSettings(spawnCfg, project); err != nil {
+		return DelegateTaskOutcome{}, err
+	}
+	worker, _, _, err := s.spawnWithTelemetry(ctx, spawnCfg, project)
 	if err != nil {
 		return DelegateTaskOutcome{}, toSpawnAPIError(err)
 	}

@@ -30,3 +30,28 @@ export function isDialogOrMenuOpenOutside(host: Element): boolean {
 	}
 	return false;
 }
+
+/**
+ * Like `root.querySelector(selector)`, but skips elements inside a hidden
+ * <Activity>. Recently viewed chats stay mounted there (see KeepRecentAlive),
+ * so a document-wide lookup for "the composer" would otherwise find a hidden
+ * one first. React hides an Activity with an inline `display: none`.
+ */
+export function queryShown<T extends Element = HTMLElement>(selector: string, root: ParentNode = document): T | null {
+	for (const element of root.querySelectorAll<T>(selector)) {
+		if (!inHiddenActivity(element)) return element;
+	}
+	return null;
+}
+
+/** Every match of `selector` outside a hidden <Activity>, in document order. */
+export function queryAllShown<T extends Element = HTMLElement>(selector: string, root: ParentNode = document): T[] {
+	return Array.from(root.querySelectorAll<T>(selector)).filter((element) => !inHiddenActivity(element));
+}
+
+function inHiddenActivity(element: Element): boolean {
+	for (let node: Element | null = element; node; node = node.parentElement) {
+		if (node instanceof HTMLElement && node.style.display === "none") return true;
+	}
+	return false;
+}

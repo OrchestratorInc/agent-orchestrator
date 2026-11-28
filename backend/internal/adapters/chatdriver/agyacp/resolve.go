@@ -8,12 +8,13 @@ import (
 	"runtime"
 	"strings"
 
+	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/agy"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/binaryutil"
 )
 
 // serverPathEnvVar points AO at an exact agy_acp_server executable, like
 // AO_CLAUDE_ACP_COMMAND does for Claude's adapter.
-const serverPathEnvVar = "AO_AGY_ACP_SERVER_PATH"
+const serverPathEnvVar = agy.ACPServerPathEnvVar
 
 // harnessPathEnvVar is how the server finds its localharness_external helper
 // when it is not on PATH, for example when agy_acp_server is a symlink.
@@ -49,13 +50,44 @@ type resolver struct {
 	isFile      func(string) bool
 	agyCLI      func(context.Context) (string, error)
 	resolveSpec func(context.Context, binaryutil.BinarySpec) (string, error)
+	// cliVersion reports the agy CLI's version. Nil never launches `agy acp`.
+	cliVersion func(context.Context, string) (string, error)
 }
 
 func newResolver(agyCLI func(context.Context) (string, error)) resolver {
 	return resolver{
 		getenv: os.Getenv, isFile: isExecutableFile,
 		agyCLI: agyCLI, resolveSpec: binaryutil.ResolveBinary,
+		cliVersion: agy.CLIVersion,
 	}
+}
+
+// launchTarget is the ACP server AO starts: the agy CLI's built-in `agy acp`,
+// or Google's separate agy_acp_server.
+type launchTarget struct {
+	path string
+	cli  bool
+}
+
+// target picks the server to launch. An explicit AO_AGY_ACP_SERVER_PATH keeps
+// the separate server. Otherwise an agy CLI new enough to steer runs as
+// `agy acp`, which needs no second install; older CLIs fall back to the
+// separate server.
+func (r resolver) target(ctx context.Context) (launchTarget, error) {
+	if strings.TrimSpace(r.getenv(serverPathEnvVar)) == "" && r.agyCLI != nil && r.cliVersion != nil {
+		if cli, err := r.agyCLI(ctx); err == nil && cli != "" {
+			if raw, err := r.cliVersion(ctx, cli); err == nil {
+				if installed, ok := parseVersion(raw); ok && !installed.less(mustVersion(minimumCLIACPVersion)) {
+					return launchTarget{path: cli, cli: true}, nil
+				}
+			}
+		}
+	}
+	server, err := r.serverPath(ctx)
+	if err != nil {
+		return launchTarget{}, err
+	}
+	return launchTarget{path: server}, nil
 }
 
 // serverPath resolves, in order: the explicit override, the server installed
@@ -78,8 +110,9 @@ func (r resolver) serverPath(ctx context.Context) (string, error) {
 	}
 	path, err := r.resolveSpec(ctx, serverSpec)
 	if err != nil {
-		return "", fmt.Errorf("antigravity ACP server is not installed (install Google's ACP registry entry "+
-			"\"antigravity-acp\" beside agy or on PATH, or set %s): %w", serverPathEnvVar, err)
+		return "", fmt.Errorf("antigravity ACP server is not installed (update agy to %s or newer, which "+
+			"includes `agy acp`; or install Google's ACP registry entry \"antigravity-acp\" beside agy or "+
+			"on PATH, or set %s): %w", minimumCLIACPVersion, serverPathEnvVar, err)
 	}
 	return path, nil
 }

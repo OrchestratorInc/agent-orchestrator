@@ -24,7 +24,7 @@ vi.mock("./artifactDownload", () => ({
 	discardArtifact: vi.fn(),
 	downloadArtifact: mocks.downloadArtifact,
 }));
-vi.mock("./connectionError", () => ({ userFacingError: (_: unknown, fallback: string) => fallback }));
+vi.mock("./connectionError", () => ({ userFacingError: (_: unknown, fallback: string) => fallback, UnreachableError: class extends Error {} }));
 vi.mock("./ThemeProvider", () => ({ useTheme: () => ({}), useThemedStyles: () => ({}) }));
 vi.mock("./ui", () => ({ Button: "Button", EmptyState: "EmptyState" }));
 vi.mock("./useHeaderOverlap", () => ({ useGlassBarInset: () => 0 }));
@@ -32,6 +32,7 @@ vi.mock("./useHeaderOverlap", () => ({ useGlassBarInset: () => 0 }));
 import { MAX_ARTIFACT_DOWNLOAD_BYTES } from "./artifacts";
 import type { ArtifactsBackend } from "./artifactsBackend";
 import { ArtifactPdf } from "./ArtifactPdf";
+import { createLiveSlot, holdArtifactsBackend } from "./heldBackend";
 
 // A daemon backend: it tells sizes; Cloud's does not.
 const backend = {
@@ -109,5 +110,57 @@ describe("ArtifactPdf", () => {
 		expect(mocks.downloadArtifact).toHaveBeenCalledTimes(2);
 		expect((mocks.downloadArtifact.mock.calls[1] as unknown[])[0]).toEqual({ uri: "https://signed/new/spec.pdf" });
 		expect(renderer!.root.findAll((node) => (node.type as unknown) === "PdfRendererView")).toHaveLength(1);
+	});
+
+	// The download carries the machine's password. While the app reconnects, the
+	// old address may answer as another device, so a retry waits for the
+	// machine to be verified and then downloads from the address it answered on.
+	describe("held for a machine through an app switch", () => {
+		const daemon = (host: string) => ({
+			key: "host.a",
+			cloud: false,
+			canChange: true,
+			streamSource: (sessionId: string, path: string) => ({ uri: `http://${host}/${sessionId}/${path}`, headers: { Authorization: "Bearer machine-password" } }),
+			webSource: () => undefined,
+			imageSource: () => undefined,
+			markdownImageSource: () => undefined,
+		}) as unknown as ArtifactsBackend;
+		const element = (backend: ArtifactsBackend) => createElement(ArtifactPdf, { backend, sessionId: "ao-1", artifact: { path: "spec.pdf", updatedAt: "v1", size: 2048 }, active: true, label: "PDF file", hint: "" });
+		// Try again is the error's action.
+		const press = (root: ReactTestRenderer) => root.root.find((node) => (node.type as unknown) === "EmptyState").props.action.props.onPress();
+
+		it("waits to retry until the machine is verified, never sending the credential to the old address", async () => {
+			const slot = createLiveSlot<ArtifactsBackend>();
+			slot.set(daemon("192.168.1.20:3011"));
+			const held = holdArtifactsBackend(slot, slot.get()!, "host.a");
+			mocks.downloadArtifact.mockRejectedValueOnce(new Error("offline"));
+			await act(async () => { renderer = create(element(held)); });
+			await act(async () => {});
+			expect(mocks.downloadArtifact).toHaveBeenCalledTimes(1);
+			// Backgrounded: the verified connection is dropped on purpose.
+			slot.set(null);
+			await act(async () => { press(renderer!); });
+			await act(async () => {});
+			expect(mocks.downloadArtifact).toHaveBeenCalledTimes(1);
+			// Verified again, on the address the machine answered from.
+			await act(async () => { slot.set(daemon("100.64.0.9:3011")); });
+			await act(async () => {});
+			expect(mocks.downloadArtifact).toHaveBeenCalledTimes(2);
+			expect((mocks.downloadArtifact.mock.calls[1] as unknown[])[0]).toEqual({ uri: "http://100.64.0.9:3011/ao-1/spec.pdf", headers: { Authorization: "Bearer machine-password" } });
+			expect(renderer!.root.findAll((node) => (node.type as unknown) === "PdfRendererView")).toHaveLength(1);
+		});
+
+		it("keeps a PDF already on screen while the connection is away", async () => {
+			const slot = createLiveSlot<ArtifactsBackend>();
+			slot.set(daemon("192.168.1.20:3011"));
+			const held = holdArtifactsBackend(slot, slot.get()!, "host.a");
+			await act(async () => { renderer = create(element(held)); });
+			await act(async () => {});
+			slot.set(null);
+			await act(async () => { renderer!.update(element(held)); });
+			await act(async () => {});
+			expect(mocks.downloadArtifact).toHaveBeenCalledTimes(1);
+			expect(renderer!.root.findAll((node) => (node.type as unknown) === "PdfRendererView")).toHaveLength(1);
+		});
 	});
 });

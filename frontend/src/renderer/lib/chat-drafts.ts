@@ -28,6 +28,12 @@ export interface ChatDraftScope {
 
 type ChatDraftScopeInput = string | ChatDraftScope;
 
+/** The new chat page's composer draft; one per host, shared by every project on it. */
+export function newChatDraftScope(hostId?: string): ChatDraftScope {
+	const id = `new-chat:${hostId ?? "local"}`;
+	return { sessionId: id, incarnation: id };
+}
+
 type ChatDraftScopeLease = {
 	schemaVersion: typeof CHAT_DRAFT_SCOPE_SCHEMA_VERSION;
 	sessionId: string;
@@ -113,6 +119,7 @@ export interface ChatDraftExcerptReference {
 	messageId: string;
 	revision: number;
 	text: string;
+	comment?: string;
 	role: "user" | "assistant";
 }
 
@@ -752,6 +759,7 @@ function isExcerptReference(value: unknown): value is ChatDraftExcerptReference 
 		typeof excerpt.revision === "number" && Number.isSafeInteger(excerpt.revision) && excerpt.revision >= 0 &&
 		typeof excerpt.text === "string" && (excerpt.text.trim().length > 0 || isFlowchartOnlySnapshot(excerpt.snapshot)) &&
 		(excerpt.snapshot === undefined || isExcerptSnapshot(excerpt.snapshot)) &&
+		(excerpt.comment === undefined || typeof excerpt.comment === "string") &&
 		(excerpt.role === "user" || excerpt.role === "assistant")
 	);
 }
@@ -916,6 +924,24 @@ export function loadChatSessionDraft(
   ok: true,
   draft: isChatSessionDraft(parsed, scope) ? parsed : empty,
 	};
+}
+
+/**
+ * Every staged attachment path a saved draft still names: a send in flight, an
+ * unsent message, a queued edit, and, when asked, the composer's own chips.
+ * A file named here must not be released while the draft holds it.
+ */
+export function draftStagedPaths(draft: ChatSessionDraft, { composer }: { composer: boolean }): Set<string> {
+	const paths = new Set<string>();
+	const add = (attachments: readonly { path?: string }[] | undefined) => {
+		for (const attachment of attachments ?? []) if (attachment.path) paths.add(attachment.path);
+	};
+	if (composer) add(draft.composer.attachments);
+	add(draft.composer.delivery?.draft?.attachments);
+	add(draft.unsent?.draft?.attachments);
+	add(draft.queuedEdit?.stagedAttachments);
+	add(draft.queuedEdit?.attachments);
+	return paths;
 }
 
 export function readChatSessionDraft(
@@ -1506,7 +1532,7 @@ export function writeChatExcerptReferences(
 			...draft,
 			composer: {
 				...draft.composer,
-				revision: draft.composer.revision + 1,
+				revision: draft.composer.delivery && !draft.composer.delivery.draft ? draft.composer.revision : draft.composer.revision + 1,
 				excerpts,
 			},
 		}),
@@ -1657,7 +1683,7 @@ export function clearAcceptedChatComposer(
 				attachments: current.composer.delivery.draft
 					? current.composer.attachments
 					: current.composer.attachments.filter((attachment) => !acceptedAttachmentIds.includes(attachment.id)),
-				excerpts: current.composer.excerpts?.filter(ref => !current.composer.delivery?.excerpts?.some(sent => sent.id === ref.id)),
+				excerpts: current.composer.excerpts?.filter(ref => !current.composer.delivery?.excerpts?.some(sent => sent.id === ref.id && sent.comment === ref.comment)),
 				fileReferences: current.composer.fileReferences?.filter(ref => !current.composer.delivery?.fileReferences?.some(sent => sent.id === ref.id)),
 			},
 		};
@@ -1670,13 +1696,14 @@ export function clearAcceptedChatComposer(
 			}
 			: { ok: false, cleared: false, draft: current };
 	}
+	const sent = current.composer.delivery;
 	const next: ChatSessionDraft = {
 		...current,
 		composer: {
 			revision: current.composer.revision + 1,
 			text: "",
 			attachments: [],
-			excerpts: [],
+			excerpts: sent ? current.composer.excerpts?.filter(ref => !sent.excerpts?.some(item => item.id === ref.id && item.comment === ref.comment)) ?? [] : [],
 			fileReferences: [],
 		},
 	};

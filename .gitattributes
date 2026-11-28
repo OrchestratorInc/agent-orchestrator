@@ -2,3 +2,7 @@
 backend/internal/httpd/apispec/openapi.yaml text eol=lf
 frontend/src/api/schema.ts text eol=lf
 frontend/src/renderer/routeTree.gen.ts text eol=lf
+
+# Embedded into the Go binary and run by sh as a git hook: a CRLF checkout
+# would break every hook in session worktrees.
+backend/internal/attribution/hook.sh text eol=lf

@@ -137,6 +137,12 @@ func exactSessionTarget(id string) string {
 // exact-match target `=` avoids prefix collisions (see killSessionArgs). Each
 // #{pane_pid} is the pane's session-leader pid, used to reap the pane's
 // descendants when the session is destroyed.
+// listLivePanePIDsArgs lists each pane's pid with whether it is dead, so a
+// pane kept after its process exited (remain-on-exit) is not taken as live.
+func listLivePanePIDsArgs(id string) []string {
+	return []string{"list-panes", "-s", "-t", exactSessionTarget(id), "-F", "#{pane_pid} #{pane_dead}"}
+}
+
 func listPanePIDsArgs(id string) []string {
 	return []string{"list-panes", "-s", "-t", exactSessionTarget(id), "-F", "#{pane_pid}"}
 }

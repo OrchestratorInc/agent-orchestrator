@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"testing/iotest"
@@ -521,6 +522,49 @@ func TestReviewListGetsReviews(t *testing.T) {
 	}
 }
 
+// A review done message that failed to reach the worker is shown with its
+// last error, so a missed notice can be diagnosed without daemon logs.
+func TestReviewListShowsUndeliveredReviewDoneMessage(t *testing.T) {
+	cfg := setReviewEnv(t)
+	srv, _ := reviewServer(t, http.StatusOK, `{
+		"reviews":[{
+			"prUrl":"https://github.com/example/repo/pull/42",
+			"prNumber":42,
+			"title":"Fix session resume",
+			"status":"approved",
+			"latestRun":{"id":"run-1","verdict":"approved","workerNotice":"pending","workerNoticeAttempts":3,"workerNoticeError":"guard mer-1: send: no chat controller"}
+		},{
+			"prUrl":"https://github.com/example/repo/pull/43",
+			"prNumber":43,
+			"status":"approved",
+			"latestRun":{"id":"run-2","verdict":"approved","workerNotice":"sent","workerNoticeAttempts":1,"workerNoticeError":"earlier failure"}
+		},{
+			"prUrl":"https://github.com/example/repo/pull/44",
+			"prNumber":44,
+			"status":"approved",
+			"latestRun":{"id":"run-3","verdict":"approved","workerNotice":"failed","workerNoticeAttempts":5,"workerNoticeError":"bad \u001b[31merror"}
+		}]
+	}`)
+	writeRunFileFor(t, cfg, srv)
+
+	out, errOut, err := executeCLI(t, aliveDeps(), "review", "ls", "mer-1")
+	if err != nil {
+		t.Fatalf("unexpected error: %v\nstderr=%s", err, errOut)
+	}
+	if want := "#42: review done message for run run-1 not delivered yet after 3 failed attempt(s): guard mer-1: send: no chat controller"; !strings.Contains(out, want) {
+		t.Fatalf("stdout = %q, want %q", out, want)
+	}
+	if want := "#44: review done message for run run-3 not delivered, gave up after 5 failed attempt(s): bad [31merror"; !strings.Contains(out, want) {
+		t.Fatalf("stdout = %q, want %q", out, want)
+	}
+	if strings.Contains(out, "\x1b") {
+		t.Fatalf("control characters from the error reached the terminal: %q", out)
+	}
+	if strings.Contains(out, "earlier failure") {
+		t.Fatalf("a delivered message was reported as undelivered: %q", out)
+	}
+}
+
 func TestReviewListJSONPreservesResponse(t *testing.T) {
 	cfg := setReviewEnv(t)
 	srv, _ := reviewServer(t, http.StatusOK, `{
@@ -643,7 +687,7 @@ func TestReviewTriggerDefaultsToCallingSessionAsAgent(t *testing.T) {
 	if err := json.Unmarshal([]byte(capture.body), &body); err != nil {
 		t.Fatalf("decode body %q: %v", capture.body, err)
 	}
-	if body["source"] != "agent" || body["rejectReviewedHead"] != true || body["enableAutoInject"] != true {
+	if body["requesterSessionId"] != "mer-9" || body["source"] != "agent" || body["rejectReviewedHead"] != true || body["enableAutoInject"] != true {
 		t.Fatalf("body = %v, want source=agent, rejectReviewedHead and enableAutoInject", body)
 	}
 	if _, ok := body["rerun"]; ok {
@@ -734,5 +778,34 @@ func TestReviewListDefaultsToCallingSession(t *testing.T) {
 	}
 	if capture.path != "/api/v1/sessions/mer-3/reviews" {
 		t.Fatalf("path = %q, want the calling session", capture.path)
+	}
+}
+
+func TestReviewPostGitHubEndpoint(t *testing.T) {
+	for _, endpoint := range []string{"repos/o/r/pulls/1?extra/reviews", "repos/o/r/pulls/1/more/reviews", "repos/o/../pulls/1/reviews", "repos/o/r/pulls/1 --extra/reviews"} {
+		input := `{"endpoint":"` + endpoint + `","review":{"event":"COMMENT"}}`
+		_, _, err := executeCLI(t, Deps{In: strings.NewReader(input)}, "review", "post-github")
+		if err == nil || !strings.Contains(err.Error(), "expected a GitHub pull request reviews endpoint") {
+			t.Fatalf("endpoint %q: %v", endpoint, err)
+		}
+	}
+}
+
+func TestReviewPostGitHubForwardsReview(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("POSIX gh fixture")
+	}
+	bin := t.TempDir()
+	// Echo the argv and stdin so the test checks the exact provider call.
+	if err := os.WriteFile(filepath.Join(bin, "gh"), []byte("#!/bin/sh\nprintf '%s\\n' \"$@\"\ncat\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+	const review = `{"event":"COMMENT","body":"summary","comments":[{"path":"main.go","line":2,"body":"check this"}]}`
+	input := `{"endpoint":"repos/o/r/pulls/1/reviews","review":` + review + `}`
+	out, _, err := executeCLI(t, Deps{In: strings.NewReader(input)}, "review", "post-github")
+	want := "api\n--method\nPOST\nrepos/o/r/pulls/1/reviews\n--input\n-\n--jq\n.id\n" + review
+	if err != nil || out != want {
+		t.Fatalf("got %q, %v; want %q", out, err, want)
 	}
 }

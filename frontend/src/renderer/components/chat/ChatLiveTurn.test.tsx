@@ -54,6 +54,17 @@ describe("live turn", () => {
 		expect(screen.getByRole("dialog")).toBeInTheDocument();
 	});
 
+	it("does not reserve an empty row for Worked for while the turn is running", () => {
+		const { rerender } = render(<ChatWorkspace snapshot={snapshot("running", [user])} />);
+		expect(document.querySelector("[data-turn-worked-gap]")).toBeNull();
+		expect(document.querySelector("[data-turn-worked]")).toBeNull();
+
+		const reply: ConversationItem = { kind: "message", id: "reply", turnId: "t", sequence: 2, revision: 0, role: "assistant", origin: "provider", text: "Done.", streaming: false, createdAt: at };
+		rerender(<TooltipProvider><ChatWorkspace snapshot={snapshot("completed", [user, reply])} /></TooltipProvider>);
+		expect(document.querySelector("[data-turn-worked-gap]")).toBeNull();
+		expect(document.querySelector("[data-turn-worked]")).toBeInTheDocument();
+	});
+
 	it("folds the work under Worked for once the turn has finished", () => {
 		const reply: ConversationItem = { kind: "message", id: "reply", turnId: "t", sequence: 4, revision: 0, role: "assistant", origin: "provider", text: "Here is what I found so far", streaming: false, createdAt: at };
 		render(<ChatWorkspace snapshot={snapshot("completed", [user, note, command, reply])} />);
@@ -64,13 +75,17 @@ describe("live turn", () => {
 	});
 });
 
-// A reader who scrolled up into a running turn keeps their place when it settles
-// and its steps fold under "Worked for" all at once.
+// A reader who scrolled up into a running turn, or above it, keeps their place when
+// it settles and its steps fold under "Worked for" all at once.
 describe("settling under a reader who scrolled up", () => {
 	const secondNote: ConversationItem = { kind: "message", id: "note-2", turnId: "t", sequence: 4, revision: 0, role: "assistant", origin: "provider", text: "Now the tests.", streaming: false, createdAt: at };
 	const testRun: ConversationItem = { kind: "activity", id: "cmd-2", turnId: "t", sequence: 5, revision: 0, activityKind: "command", status: "completed", summary: "npm test", detail: { command: "npm test", exitCode: 0 }, createdAt: at };
 	const reply: ConversationItem = { kind: "message", id: "reply", turnId: "t", sequence: 6, revision: 0, role: "assistant", origin: "provider", text: "All green.", streaming: false, createdAt: at };
 	const items = [user, note, command, secondNote, testRun, reply];
+	// A terminal switch hands its note over as the turn's prompt, which is not drawn,
+	// so the turn opens on a step that folds away.
+	const handoff: ConversationItem = { kind: "message", id: "handoff", turnId: "t", sequence: 1, revision: 0, role: "user", origin: "human", text: "<ao-handoff-request>Carry on from the terminal.</ao-handoff-request>", content: [], streaming: false, delivery: "accepted", createdAt: at };
+	const handedOff = [handoff, ...items.slice(1)];
 	let restoreLayout: (() => void) | undefined;
 	afterEach(async () => {
 		cleanup();
@@ -83,18 +98,19 @@ describe("settling under a reader who scrolled up", () => {
 		restoreLayout = undefined;
 	});
 
-	/** jsdom has no layout: stack the turn's rows 100px apart ("Worked for" and the row reserved for it are 28px) under a scrollable log. */
-	function stubTurnLayout(log: HTMLElement, scrollTop: number) {
+	/**
+	 * jsdom has no layout: stack the turn's rows 100px apart ("Worked for" is 28px)
+	 * from `turnTop` down a scrollable log, as if earlier conversation filled the
+	 * space above.
+	 */
+	function stubTurnLayout(log: HTMLElement, scrollTop: number, turnTop = 20) {
 		const bounds = HTMLElement.prototype.getBoundingClientRect;
-		// The empty row reserved under the prompt is as tall as "Worked for", which
-		// takes its place as the turn settles.
-		const height = (row: Element) =>
-			row.hasAttribute("data-turn-worked") || row.hasAttribute("data-turn-worked-gap") ? 28 : 100;
+		const height = (row: Element) => (row.hasAttribute("data-turn-worked") ? 28 : 100);
 		const spy = vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(function (this: HTMLElement) {
 			if (this === log) return { ...bounds.call(this), top: 0, bottom: 800, height: 800 } as DOMRect;
 			const turn = this.parentElement;
 			if (!turn?.parentElement?.hasAttribute("data-chat-turn")) return bounds.call(this);
-			let top = 20 - log.scrollTop;
+			let top = turnTop - log.scrollTop;
 			for (const row of turn.children) {
 				if (row === this) break;
 				top += height(row);
@@ -112,14 +128,14 @@ describe("settling under a reader who scrolled up", () => {
 		fireEvent.scroll(log);
 	}
 
-	function settle(rerender: (ui: ReactElement) => void) {
-		rerender(<TooltipProvider><ChatWorkspace snapshot={snapshot("completed", items)} /></TooltipProvider>);
+	function settle(rerender: (ui: ReactElement) => void, turnItems = items) {
+		rerender(<TooltipProvider><ChatWorkspace snapshot={snapshot("completed", turnItems)} /></TooltipProvider>);
 	}
 
 	it("lands Worked for at the top of the view when the reader was among the steps", () => {
 		const { rerender } = render(<ChatWorkspace snapshot={snapshot("running", items)} />);
 		const log = screen.getByRole("log", { name: "Conversation" });
-		// Rows: prompt 20, reserved row 120, note 148, ls 248, second note 348, npm test 448, reply 548.
+		// Rows: prompt 20, note 120, ls 220, second note 320, npm test 420, reply 520.
 		// At 350 the second note sits across the top edge.
 		stubTurnLayout(log, 350);
 
@@ -133,12 +149,64 @@ describe("settling under a reader who scrolled up", () => {
 	it("holds the reply still when the reader was already on it", () => {
 		const { rerender } = render(<ChatWorkspace snapshot={snapshot("running", items)} />);
 		const log = screen.getByRole("log", { name: "Conversation" });
-		// The reply starts at 548, 40px above the top edge.
-		stubTurnLayout(log, 588);
+		// The reply starts at 520, 40px above the top edge.
+		stubTurnLayout(log, 560);
 
 		settle(rerender);
 
 		// Folded, the reply starts at 148: still 40px above the top edge.
 		expect(log.scrollTop).toBe(188);
+	});
+
+	it("holds the view still when the whole turn is below it", () => {
+		const { rerender } = render(<ChatWorkspace snapshot={snapshot("running", handedOff)} />);
+		const log = screen.getByRole("log", { name: "Conversation" });
+		// The view runs from 100 to 900; the turn starts below it, at 1200.
+		stubTurnLayout(log, 100, 1200);
+
+		settle(rerender, handedOff);
+
+		expect(screen.getByRole("button", { name: /Worked for/ })).toBeInTheDocument();
+		expect(log.scrollTop).toBe(100);
+	});
+
+	it("does not pull the reader to the bottom when a turn settles during an upward wheel hold", () => {
+		let now = 0;
+		const nowSpy = vi.spyOn(performance, "now").mockImplementation(() => now);
+		const { rerender } = render(<ChatWorkspace snapshot={snapshot("running", items)} />);
+		const log = screen.getByRole("log", { name: "Conversation" });
+		const bounds = HTMLElement.prototype.getBoundingClientRect;
+		const spy = vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(function (this: HTMLElement) {
+			if (this === log) return { ...bounds.call(this), top: 0, bottom: 800, height: 800 } as DOMRect;
+			return bounds.call(this);
+		});
+		restoreLayout = () => {
+			spy.mockRestore();
+			nowSpy.mockRestore();
+		};
+		Object.defineProperty(log, "scrollHeight", { configurable: true, value: 3000 });
+		Object.defineProperty(log, "clientHeight", { configurable: true, value: 800 });
+		Object.defineProperty(log, "scrollTop", { configurable: true, writable: true, value: 2100 });
+
+		// Move past the opening snap window so followOrSnapToEnd uses followEnd.
+		now = 2000;
+		// Upward wheel arms the reader-intent hold before the scroll event clears pinnedRef.
+		fireEvent.wheel(log, { deltaY: -120 });
+		settle(rerender);
+
+		// Settling must not pull scrollTop to the new end (2200) while the hold is active.
+		expect(log.scrollTop).toBe(2100);
+	});
+
+	it("holds the view still when the turn starts partway down it", () => {
+		const { rerender } = render(<ChatWorkspace snapshot={snapshot("running", handedOff)} />);
+		const log = screen.getByRole("log", { name: "Conversation" });
+		// The view runs from 700 to 1500: the turn starts 500px down it.
+		stubTurnLayout(log, 700, 1200);
+
+		settle(rerender, handedOff);
+
+		// "Worked for" opens where the first step was, 500px down the view.
+		expect(log.scrollTop).toBe(700);
 	});
 });

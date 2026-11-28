@@ -42,10 +42,6 @@ for (const completion of ["Enter", "Tab"])
 				},
 			],
 		});
-		await page.addInitScript(() => {
-			localStorage.setItem("ao.developerMode", "true");
-			localStorage.setItem("ao.sideChats", "true");
-		});
 		const sides = [
 			{
 				id: "existing",
@@ -155,8 +151,8 @@ for (const completion of ["Enter", "Tab"])
 		const main = page.getByRole("combobox", { name: "Message the agent" });
 		await expect(main).toBeVisible({ timeout: 15_000 });
 		await main.fill("/side");
-		await expect(page.getByRole("option", { name: /\/btw/ })).toBeVisible();
-		await expect(page.getByRole("option", { name: /^\/side\b/ })).toHaveCount(
+		await expect(page.getByRole("option", { name: /^BTW/ })).toBeVisible();
+		await expect(page.getByRole("option", { name: /^Side/ })).toHaveCount(
 			0,
 		);
 		await page.screenshot({
@@ -174,7 +170,7 @@ for (const completion of ["Enter", "Tab"])
 		const side = page.getByRole("combobox", { name: "Side chat question" });
 		await expect(side).toBeVisible();
 		await side.fill("/side");
-		await expect(page.getByRole("option", { name: /\/btw/ })).toBeVisible();
+		await expect(page.getByRole("option", { name: /^BTW/ })).toBeVisible();
 		await side.press(completion);
 		await expect(side).toContainText("/btw");
 		expect(created).toHaveLength(1);

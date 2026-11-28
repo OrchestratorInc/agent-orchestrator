@@ -25,6 +25,15 @@ async function clearDraft(field: HTMLElement) {
 }
 
 describe("next-message suggestion", () => {
+	it("lines the ghost text up with the field over it, inset the same from both sides", () => {
+		const { field } = renderComposer();
+		const ghost = screen.getByTestId("prompt-suggestion").parentElement!;
+		expect(ghost).toHaveClass("px-[7px]");
+		expect(field).toHaveClass("px-[7px]", "overflow-visible");
+		// The wrapper scrolls the suggestion, so it reserves the scrollbar gutter for both.
+		expect(field.parentElement).toHaveClass("overflow-y-auto", "chat-composer-scrollbar", "[scrollbar-gutter:stable_both-edges]");
+	});
+
 	it("shows ghost text outside the saved draft and inserts it with Tab before sending", async () => {
 		const sessionId = "prompt-suggestion-accept";
 		const { field, onSend } = renderComposer({ draftSessionId: sessionId });

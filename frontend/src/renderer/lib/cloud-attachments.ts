@@ -1,3 +1,4 @@
+import { AoError } from "../../../../packages/shared/telemetry/ao-error";
 // Files attached to a cloud session. The control plane keeps their bytes in
 // its storage and lists them on the message they ride; the worker places them
 // in the sandbox before the agent reads the message. Uploads and downloads are
@@ -123,9 +124,44 @@ export async function uploadCloudAttachment(
 		headers: { "Content-Type": "application/octet-stream", [SHA256_HEADER]: await sha256Hex(bytes) },
 		body: bytes,
 	}, { signal: options.signal, timeoutMs: uploadTimeoutMs(bytes.byteLength) });
-	if (response.status !== 201) throw new Error(errorMessage(response.body, response.status));
+	if (response.status !== 201) throw new AoError("CLOUD_ATTACHMENT_UPLOAD_FAILED", errorMessage(response.body, response.status));
 	const parsed = JSON.parse(new TextDecoder().decode(response.body)) as { attachment: CloudAttachment };
 	return parsed.attachment;
+}
+
+/**
+ * Upload a moving session's conversation, gzipped, for the Cloud session
+ * createSession then starts from it (transcriptImportId = importId).
+ */
+export async function uploadCloudTranscript(
+	baseUrl: string,
+	orgId: string,
+	importId: string,
+	harness: string,
+	agentSessionId: string,
+	gzip: Uint8Array,
+): Promise<void> {
+	const query = new URLSearchParams({ harness, agentSessionId });
+	const response = await binaryRequest({
+		baseUrl,
+		path: `/api/cloud/v1/orgs/${encodeURIComponent(orgId)}/transcript-imports/${encodeURIComponent(importId)}?${query}`,
+		method: "PUT",
+		headers: { "Content-Type": "application/gzip" },
+		body: gzip,
+	}, { timeoutMs: uploadTimeoutMs(gzip.byteLength) });
+	if (response.status !== 204) throw new AoError("CLOUD_TRANSCRIPT_UPLOAD_FAILED", errorMessage(response.body, response.status));
+}
+
+/** Upload a moving conversation's sidecar folder, a gzipped tar, to its import. */
+export async function uploadCloudTranscriptSidecar(baseUrl: string, orgId: string, importId: string, gzip: Uint8Array): Promise<void> {
+	const response = await binaryRequest({
+		baseUrl,
+		path: `/api/cloud/v1/orgs/${encodeURIComponent(orgId)}/transcript-imports/${encodeURIComponent(importId)}/sidecar`,
+		method: "PUT",
+		headers: { "Content-Type": "application/gzip" },
+		body: gzip,
+	}, { timeoutMs: uploadTimeoutMs(gzip.byteLength) });
+	if (response.status !== 204) throw new AoError("CLOUD_TRANSCRIPT_SIDECAR_UPLOAD_FAILED", errorMessage(response.body, response.status));
 }
 
 /** Read an attachment's bytes as a Blob of its content type. */
@@ -141,7 +177,7 @@ export async function fetchCloudAttachment(
 		path: `${sessionPath(orgId, sessionId)}/${encodeURIComponent(attachment.id)}`,
 		method: "GET",
 	}, options);
-	if (response.status !== 200) throw new Error(errorMessage(response.body, response.status));
+	if (response.status !== 200) throw new AoError("CLOUD_ATTACHMENT_READ_FAILED", errorMessage(response.body, response.status));
 	return new Blob([response.body as BlobPart], { type: attachment.contentType });
 }
 
@@ -161,7 +197,7 @@ export async function placeCloudAttachment(
 		path: `${sessionPath(orgId, sessionId)}/${encodeURIComponent(attachmentId)}/place`,
 		method: "POST",
 	}, options);
-	if (response.status !== 200) throw new Error(errorMessage(response.body, response.status));
+	if (response.status !== 200) throw new AoError("CLOUD_ATTACHMENT_PLACE_FAILED", errorMessage(response.body, response.status));
 	const parsed = JSON.parse(new TextDecoder().decode(response.body)) as { path?: unknown };
 	if (typeof parsed.path !== "string" || parsed.path === "") throw new Error("The worker did not place the attachment.");
 	return parsed.path;

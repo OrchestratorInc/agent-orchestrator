@@ -14,6 +14,7 @@ import { aoBridge } from "../../lib/bridge";
 import { useCloudSession } from "../../lib/cloud-session";
 import { AccountHostSyncError, deleteAccountRemoteHost } from "../../lib/account-remote-hosts";
 import { linkThisComputer } from "../../lib/link-this-computer";
+import { isDevelopmentBuild } from "../../lib/build-channel";
 import { captureRendererEvent } from "../../lib/telemetry";
 import { ANDROID_PLAY_STORE_URL, IOS_APP_STORE_URL } from "./ConnectMobileGetApp";
 import { reasonMessage, type SetupMode } from "./ConnectMobileSetup";
@@ -397,7 +398,11 @@ export function ConnectMobileContent({ active }: { active: boolean }) {
 		options?: { ifListed?: boolean },
 	): Promise<{ linked: string; added: string; failed: boolean }> => {
 		setLinkError("");
-		if (!signedIn || !password) return { linked: "", added: "", failed: false };
+		// A development build must not publish its temporary ~/.ao/dev identity
+		// beside the installed app's. Allow access remains available when a
+		// developer explicitly wants an account listing, and regenerating
+		// credentials refreshes that existing listing with { ifListed: true }.
+		if (!signedIn || !password || (isDevelopmentBuild() && !options?.ifListed)) return { linked: "", added: "", failed: false };
 		// Not fatal: an unlinked computer still gets a quick tunnel, whose
 		// address changes on restart. Said, though: after a new password the
 		// account's devices hold the old one until a link lands. An AO Cloud
@@ -415,7 +420,7 @@ export function ConnectMobileContent({ active }: { active: boolean }) {
 	};
 	/** Links this computer when signed in, then starts remote access, which moves a running connector to the fixed address the link gave it, so the code stays valid after restarts. */
 	const linkAndStartRemoteAccess = async (password: string, hostId: string) => {
-		const { added } = await linkIfSignedIn(password, hostId);
+		const { added } = await linkIfSignedIn(password, hostId, isDevelopmentBuild() ? { ifListed: true } : undefined);
 		const started = await apiClient.POST("/api/v1/mobile/remote-access");
 		if (started.error) {
 			// Not left listed at an address nothing serves.

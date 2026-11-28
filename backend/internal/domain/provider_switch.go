@@ -17,7 +17,17 @@ const (
 	ProviderSwitchRefusalUnsupported        ProviderSwitchRefusalKind = "unsupported"
 	ProviderSwitchRefusalUnavailable        ProviderSwitchRefusalKind = "unavailable"
 	ProviderSwitchRefusalRecoveryRequired   ProviderSwitchRefusalKind = "recovery_required"
+	ProviderSwitchRefusalAlreadyActive      ProviderSwitchRefusalKind = "already_active"
 )
+
+// ProviderSwitchResult is what a completed switch did on the way.
+type ProviderSwitchResult struct {
+	StoppedTurn     bool
+	CancelledQueued int
+	FailedApprovals bool
+	SettingsUpdated bool
+	Warnings        []string
+}
 
 // ProviderSwitchRequest is what a switch to another provider asks for.
 type ProviderSwitchRequest struct {
@@ -35,6 +45,7 @@ type ProviderSwitchRequest struct {
 	// terminal target. See AgentLaunchOptions.
 	Ultracode         bool
 	AutoCompactWindow string
+	Force             bool
 	// HandoffNote is the note the target provider starts with. The switch
 	// front door builds it; it is never accepted from a client.
 	HandoffNote string
@@ -48,7 +59,7 @@ type ChatProviderSwitch struct {
 	SourceBranchID string
 	SourceSequence int64
 	Bootstrap      string
-	// AutoCompactWindow is the Claude Code compaction window the target starts with.
+	// AutoCompactWindow is the auto-compaction the target starts with: Claude Code's window, or OpenCode's "off".
 	AutoCompactWindow string
 }
 

@@ -24,13 +24,15 @@ import (
 
 type sideHTTPService struct {
 	*chatsvc.Service
-	calls    int
-	created  chatsvc.SideCreateRequest
-	sent     ports.ChatUserMessage
-	turn     *domain.SideTurn
-	snapshot *domain.SideSnapshot
-	before   time.Time
-	limit    int
+	calls     int
+	created   chatsvc.SideCreateRequest
+	sent      ports.ChatUserMessage
+	sendErr   error
+	createErr error
+	turn      *domain.SideTurn
+	snapshot  *domain.SideSnapshot
+	before    time.Time
+	limit     int
 }
 
 func (s *sideHTTPService) ListIndependentSideChats(context.Context, domain.SessionID) ([]domain.SideConversation, error) {
@@ -40,11 +42,17 @@ func (s *sideHTTPService) ListIndependentSideChats(context.Context, domain.Sessi
 func (s *sideHTTPService) CreateIndependentSideChat(_ context.Context, _ domain.SessionID, req chatsvc.SideCreateRequest) (domain.SideConversation, error) {
 	s.calls++
 	s.created = req
+	if s.createErr != nil {
+		return domain.SideConversation{}, s.createErr
+	}
 	return domain.SideConversation{ID: "side", State: "opening"}, nil
 }
 func (s *sideHTTPService) SendSideQuestion(_ context.Context, _ domain.SessionID, _ string, msg ports.ChatUserMessage) (domain.SideTurn, error) {
 	s.calls++
 	s.sent = msg
+	if s.sendErr != nil {
+		return domain.SideTurn{}, s.sendErr
+	}
 	if s.turn != nil {
 		return *s.turn, nil
 	}
@@ -65,8 +73,8 @@ func TestSideChatHTTPForwardsReferencesAndKeepsSummariesSafe(t *testing.T) {
 	svc := &sideHTTPService{Service: chatsvc.New(chatsvc.Options{})}
 	handler := sideHTTPRouter(svc)
 	create := httptest.NewRecorder()
-	handler.ServeHTTP(create, httptest.NewRequest(http.MethodPost, "/api/v1/sessions/session/conversation/side-chats", strings.NewReader(`{"idempotencyKey":"create","forceNew":true,"reference":{"conversationId":"main","messageId":"source","revision":3,"text":"selected"}}`)))
-	if create.Code != http.StatusCreated || !svc.created.ForceNew || svc.created.Reference == nil || svc.created.Reference.MessageID != "source" {
+	handler.ServeHTTP(create, httptest.NewRequest(http.MethodPost, "/api/v1/sessions/session/conversation/side-chats", strings.NewReader(`{"idempotencyKey":"create","forceNew":true,"label":"Investigate timeout","reference":{"conversationId":"main","messageId":"source","revision":3,"text":"selected"}}`)))
+	if create.Code != http.StatusCreated || !svc.created.ForceNew || svc.created.Label != "Investigate timeout" || svc.created.Reference == nil || svc.created.Reference.MessageID != "source" {
 		t.Fatalf("create: %d %s %+v", create.Code, create.Body.String(), svc.created)
 	}
 	send := httptest.NewRecorder()
@@ -113,6 +121,24 @@ func TestSideChatHTTPMapsUnavailableOwnershipToConflict(t *testing.T) {
 	sideHTTPRouter(svc).ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/api/v1/sessions/session/conversation/side-chats/wrong", nil))
 	if response.Code != http.StatusConflict || !strings.Contains(response.Body.String(), "CHAT_SIDE_UNAVAILABLE") {
 		t.Fatal(response.Code, response.Body.String())
+	}
+}
+
+func TestSideChatHTTPReportsInvalidCreationLabel(t *testing.T) {
+	svc := &sideHTTPService{Service: chatsvc.New(chatsvc.Options{}), createErr: chatsvc.ErrSideLabelInvalid}
+	response := httptest.NewRecorder()
+	sideHTTPRouter(svc).ServeHTTP(response, httptest.NewRequest(http.MethodPost, "/api/v1/sessions/session/conversation/side-chats", strings.NewReader(`{"idempotencyKey":"create","label":"`+strings.Repeat("x", 81)+`"}`)))
+	if response.Code != http.StatusBadRequest || !strings.Contains(response.Body.String(), "CHAT_SIDE_LABEL_INVALID") || !strings.Contains(response.Body.String(), "80 characters") || !strings.Contains(response.Body.String(), "requestId") {
+		t.Fatalf("invalid creation label: %d %s", response.Code, response.Body.String())
+	}
+}
+
+func TestSideChatHTTPReportsIncompatibleSettingsWithoutAcceptingTheQuestion(t *testing.T) {
+	svc := &sideHTTPService{Service: chatsvc.New(chatsvc.Options{}), sendErr: fmt.Errorf("%w (codex)", chatsvc.ErrSideSettingsUnavailable)}
+	response := httptest.NewRecorder()
+	sideHTTPRouter(svc).ServeHTTP(response, httptest.NewRequest(http.MethodPost, "/api/v1/sessions/session/conversation/side-chats/side/messages", strings.NewReader(`{"text":"Keep this question","clientMessageId":"first"}`)))
+	if response.Code != http.StatusConflict || !strings.Contains(response.Body.String(), "CHAT_SIDE_SETTINGS_UNAVAILABLE") || !strings.Contains(response.Body.String(), "choose a compatible model") || !strings.Contains(response.Body.String(), "requestId") {
+		t.Fatalf("incompatible settings: %d %s", response.Code, response.Body.String())
 	}
 }
 

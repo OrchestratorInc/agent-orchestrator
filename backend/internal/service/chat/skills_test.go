@@ -3,6 +3,7 @@ package chat_test
 import (
 	"context"
 	"testing"
+	"time"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 	chatsvc "github.com/aoagents/agent-orchestrator/backend/internal/service/chat"
@@ -67,5 +68,34 @@ func TestSkillsRequiresALiveController(t *testing.T) {
 	_, err := h.svc.Skills(context.Background(), testSession)
 	if !errorsIs(err, chatsvc.ErrNoController) {
 		t.Fatalf("err = %v, want ErrNoController", err)
+	}
+}
+
+// deadlineConversation records whether the provider was asked with a deadline.
+type deadlineConversation struct {
+	*fakeConversation
+	deadline time.Time
+	bounded  bool
+}
+
+func (c *deadlineConversation) ListSkills(ctx context.Context) ([]ports.ChatSkill, error) {
+	c.deadline, c.bounded = ctx.Deadline()
+	return nil, nil
+}
+
+// A provider that never answers must not hold the request, and the composer's poll
+// behind it, open for as long as the client stays connected.
+func TestSkillsBoundsTheProviderRead(t *testing.T) {
+	conv := &deadlineConversation{fakeConversation: newFakeConversation()}
+	h := newHarnessWithConversation(t, conv)
+
+	if _, err := h.svc.Skills(context.Background(), testSession); err != nil {
+		t.Fatalf("Skills: %v", err)
+	}
+	if !conv.bounded {
+		t.Fatal("provider asked without a deadline")
+	}
+	if left := time.Until(conv.deadline); left > 10*time.Second {
+		t.Fatalf("deadline %s away, want a few seconds", left)
 	}
 }

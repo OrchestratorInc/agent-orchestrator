@@ -132,9 +132,9 @@ func TestManagedAccountLoginDoesNotExcludeMainAuthentication(t *testing.T) {
 						if err := store.CreateAgentAccount(ctx, account); err != nil {
 							t.Fatal(err)
 						}
-						managed, err = accounts.StartSignInAgain(ctx, account.ID)
+						managed, err = accounts.StartSignInAgain(ctx, account.ID, agentaccounts.LoginRequest{})
 					} else {
-						managed, err = accounts.StartLogin(ctx, provider)
+						managed, err = accounts.StartLogin(ctx, provider, agentaccounts.LoginRequest{})
 					}
 					if err != nil {
 						t.Fatal(err)

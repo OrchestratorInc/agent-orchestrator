@@ -54,3 +54,16 @@ export async function annotatePng(png: Uint8Array, items: Annotation[], scale: n
 	const blob = await canvas.convertToBlob({ type: "image/png" });
 	return new Uint8Array(await blob.arrayBuffer());
 }
+
+/** Crop a PNG to a CSS-pixel rectangle (service worker: OffscreenCanvas). */
+export async function cropPng(png: Uint8Array, rect: { x: number; y: number; width: number; height: number }, scale: number): Promise<Uint8Array> {
+	const bitmap = await createImageBitmap(new Blob([new Uint8Array(png)], { type: "image/png" }));
+	const width = Math.max(1, Math.round(rect.width * scale));
+	const height = Math.max(1, Math.round(rect.height * scale));
+	const canvas = new OffscreenCanvas(width, height);
+	const context = canvas.getContext("2d");
+	if (!context) throw new BridgeError("SCREENSHOT_UNAVAILABLE", "Could not crop the screenshot");
+	context.drawImage(bitmap, Math.round(rect.x * scale), Math.round(rect.y * scale), width, height, 0, 0, width, height);
+	const blob = await canvas.convertToBlob({ type: "image/png" });
+	return new Uint8Array(await blob.arrayBuffer());
+}

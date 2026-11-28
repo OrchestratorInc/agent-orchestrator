@@ -4,16 +4,16 @@ import {
 	accessibilityAddTraits,
 	accessibilityHidden,
 	buttonStyle,
-	contentShape,
 	controlSize,
 	disabled as disabledModifier,
 	fixedSize,
 	font,
 	foregroundStyle,
 	frame,
+	lineLimit,
+	minimumScaleFactor,
 	multilineTextAlignment,
 	padding,
-	shapes,
 	textFieldStyle,
 	tint,
 	type ViewModifier,
@@ -22,9 +22,9 @@ import { glassPanel } from "../glass";
 import { haptics } from "../haptics";
 import { secondaryForeground } from "../swiftUIStyles";
 import { useTheme, useThemeState } from "../ThemeProvider";
-import type { ElicitationActionProps, ElicitationChoiceListProps, ElicitationTextFieldProps } from "./elicitation-native-controls";
+import type { ElicitationActionProps, ElicitationActionRowProps, ElicitationChoiceListProps, ElicitationTextFieldProps } from "./elicitation-native-controls";
 import { useActionFit } from "./elicitationActionFit";
-import { iconSize, touchTarget } from "../tokens";
+import { iconSize, space, touchTarget } from "../tokens";
 import { useNativeTextInput } from "../useNativeTextInput";
 
 export function ElicitationChoiceList({ choices, selected, multi, onChange }: ElicitationChoiceListProps) {
@@ -57,7 +57,7 @@ export function ElicitationChoiceList({ choices, selected, multi, onChange }: El
 	</Host>;
 }
 
-export function ElicitationTextField({ value, label, numeric, maxLength, onChange }: ElicitationTextFieldProps) {
+export function ElicitationTextField({ value, label, numeric, maxLength, onChange, onFocus }: ElicitationTextFieldProps) {
 	const t = useTheme();
 	const { scheme } = useThemeState();
 	const controlledText = value === undefined ? "" : String(value);
@@ -73,6 +73,7 @@ export function ElicitationTextField({ value, label, numeric, maxLength, onChang
 				const changed = numeric ? (next === "" ? "" : Number(next)) : next;
 				changeText(changed);
 			}}
+			onFocusChange={(focused) => { if (focused) onFocus?.(); }}
 			modifiers={[
 				textFieldStyle("plain"),
 				frame({ maxWidth: 1000, minHeight: touchTarget, alignment: "leading" }),
@@ -97,10 +98,11 @@ export function ElicitationAction({ label, primary, disabled, reportsOutcome, on
 	const button = (cap: number | undefined, extra: ViewModifier[], press?: () => void) => <Button
 		onPress={press}
 		modifiers={[
-			buttonStyle(primary ? "borderedProminent" : "plain"),
-			// The large prominent button is at least the 44pt target. A plain one is
-			// only as tappable as its label, so the label carries the target.
-			controlSize(primary ? "large" : "regular"),
+			// One prominent action and bordered secondaries, as desktop's accent and
+			// secondary buttons. Plain secondaries had no shape, so beside the
+			// prominent one they read as a line of text. Large is at least 44pt.
+			buttonStyle(primary ? "borderedProminent" : "bordered"),
+			controlSize("large"),
 			...(cap !== undefined ? [frame({ width: cap })] : []),
 			multilineTextAlignment("center"),
 			tint(primary ? t.accent : t.textSecondary),
@@ -108,7 +110,7 @@ export function ElicitationAction({ label, primary, disabled, reportsOutcome, on
 			...extra,
 		]}
 	>
-		<Text modifiers={primary ? [] : [frame({ minWidth: touchTarget, minHeight: touchTarget }), contentShape(shapes.rectangle())]}>{label}</Text>
+		<Text>{label}</Text>
 	</Button>;
 	// The button takes its label's own width, so a long decision is never cut
 	// short, and wraps only when that is wider than the row.
@@ -131,4 +133,37 @@ export function ElicitationAction({ label, primary, disabled, reportsOutcome, on
 			})}
 		</Host>
 	</>;
+}
+
+/**
+ * A request's decisions on one line, whatever their labels or the text size.
+ * One SwiftUI row lays them out: the spacer takes whatever they leave, so they
+ * sit at the end, and a row too short for them all scales its labels down a
+ * little (then truncates) instead of wrapping a decision under the rest.
+ */
+export function ElicitationActionRow({ actions, reportsOutcome }: ElicitationActionRowProps) {
+	const t = useTheme();
+	const { scheme } = useThemeState();
+	return <Host matchContents={{ vertical: true }} style={{ width: "100%" }} colorScheme={scheme}>
+		<HStack spacing={space.sm}>
+			<Spacer minLength={0} />
+			{actions.map((action) => <Button
+				key={action.key}
+				onPress={() => {
+					if (!reportsOutcome) haptics.tap();
+					action.onPress();
+				}}
+				modifiers={[
+					// As ElicitationAction: one prominent action, bordered secondaries,
+					// and large, which is at least the 44pt target.
+					buttonStyle(action.primary ? "borderedProminent" : "bordered"),
+					controlSize("large"),
+					tint(action.primary ? t.accent : t.textSecondary),
+					disabledModifier(action.disabled),
+				]}
+			>
+				<Text modifiers={[font({ textStyle: "subheadline", weight: "semibold" }), lineLimit(1), minimumScaleFactor(0.7)]}>{action.label}</Text>
+			</Button>)}
+		</HStack>
+	</Host>;
 }

@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { CLOSE_SHELL_TERMINAL_SHORTCUT_CHANNEL, APP_SHORTCUT_CHANNEL, KEYBOARD_SHORTCUTS_HELP_CHANNEL, NEXT_SESSION_SHORTCUT_CHANNEL, NEXT_TAB_SHORTCUT_CHANNEL, NEW_SESSION_SHORTCUT_CHANNEL, NEW_SHELL_TERMINAL_SHORTCUT_CHANNEL, OPEN_SETTINGS_SHORTCUT_CHANNEL, PREVIOUS_SESSION_SHORTCUT_CHANNEL, PREVIOUS_TAB_SHORTCUT_CHANNEL, TERMINAL_FONT_SIZE_SHORTCUT_CHANNEL, ARTIFACT_ZOOM_SHORTCUT_CHANNEL } from "../shared/shortcuts";
+import { CLOSE_SHELL_TERMINAL_SHORTCUT_CHANNEL, APP_SHORTCUT_CHANNEL, KEYBOARD_SHORTCUTS_HELP_CHANNEL, NEXT_SESSION_SHORTCUT_CHANNEL, NEXT_TAB_SHORTCUT_CHANNEL, NEW_SESSION_SHORTCUT_CHANNEL, NEW_SHELL_TERMINAL_SHORTCUT_CHANNEL, OPEN_SETTINGS_SHORTCUT_CHANNEL, PREVIOUS_SESSION_SHORTCUT_CHANNEL, PREVIOUS_TAB_SHORTCUT_CHANNEL, TERMINAL_FONT_SIZE_SHORTCUT_CHANNEL, ARTIFACT_ZOOM_SHORTCUT_CHANNEL, defaultShortcutBindings, type AppShortcutId } from "../shared/shortcuts";
 import { attachAppShortcuts, attachShellReloadGuard } from "./app-shortcuts";
 import { toggleAppDevTools } from "./app-devtools";
 
@@ -43,6 +43,15 @@ function fakeTarget() {
 }
 
 describe("attachAppShortcuts", () => {
+	it.each([false, true])("leaves default and custom selection shortcuts to the renderer (Mac: %s)", isMac => {
+		const source = fakeSource(), target = fakeTarget();
+		attachAppShortcuts(source, isMac, target);
+		expect(source.emit({ key: "l", control: !isMac, meta: isMac }).preventDefault).not.toHaveBeenCalled();
+		attachAppShortcuts(source, isMac, target, false, () => ({ "add-selection-to-chat": [{ key: "j", ctrl: !isMac, meta: isMac, shift: true, alt: true }] }));
+		expect(source.emit({ key: "j", control: !isMac, meta: isMac, shift: true, alt: true }).preventDefault).not.toHaveBeenCalled();
+		expect(target.send).not.toHaveBeenCalled();
+		expect(target.focus).not.toHaveBeenCalled();
+	});
 	it("routes Ctrl+Shift+I to shell DevTools when no Browser view is available", async () => {
 		const source = fakeSource();
 		const target = { ...fakeTarget(), toggleDevTools: vi.fn() };
@@ -258,6 +267,26 @@ describe("attachAppShortcuts", () => {
 		expect(target.send).toHaveBeenCalledWith(channel);
 	});
 
+	it("reports each claimed chord by id before its action, once per press", () => {
+		const source = fakeSource();
+		const target = fakeTarget();
+		const order: string[] = [];
+		target.send.mockImplementation((channel: string) => order.push(channel));
+		const onPressed = vi.fn((id: string) => order.push(`pressed:${id}`));
+		attachAppShortcuts(source, true, target, false, undefined, undefined, undefined, undefined, undefined, undefined, undefined, onPressed);
+
+		source.emit({ key: "}", code: "BracketRight", meta: true, shift: true });
+		// A held chord repeats without running or counting again.
+		source.emit({ key: "}", code: "BracketRight", meta: true, shift: true, isAutoRepeat: true });
+		// Find is left to the page, which counts it itself.
+		source.emit({ key: "f", meta: true });
+		// Not a shortcut.
+		source.emit({ key: "q", shift: true });
+
+		expect(onPressed).toHaveBeenCalledExactlyOnceWith("next-session");
+		expect(order).toEqual(["pressed:next-session", NEXT_SESSION_SHORTCUT_CHANNEL]);
+	});
+
 	it.each([1, 5, 9])("sends the zero-based index for jump-to-session with digit %i", (digit) => {
 		const source = fakeSource();
 		const target = fakeTarget();
@@ -361,6 +390,58 @@ describe("attachAppShortcuts", () => {
 		}
 	});
 
+	it("leaves a custom bare chord of a terminal-yielding command to the terminal, but forwards its Shift form (issue #8420)", () => {
+		const source = fakeSource();
+		const target = fakeTarget();
+		attachAppShortcuts(
+			source, false, target, false,
+			() => ({ "command-palette": [
+				{ key: "j", ctrl: true, meta: false, shift: false, alt: false },
+				{ key: "j", ctrl: true, meta: false, shift: true, alt: false },
+			] }),
+			() => false, () => true, undefined, () => true,
+		);
+
+		const bare = source.emit({ key: "j", control: true });
+		expect(bare.preventDefault).not.toHaveBeenCalled();
+		expect(target.send).not.toHaveBeenCalled();
+
+		const shifted = source.emit({ key: "J", control: true, shift: true });
+		expect(target.send).toHaveBeenCalledExactlyOnceWith(APP_SHORTCUT_CHANNEL, { id: "command-palette" });
+		expect(shifted.preventDefault).toHaveBeenCalledOnce();
+	});
+
+	it.each([
+		["add a binding to Quick open", "quick-open-file", { key: "p", control: true }, "add"],
+		["remove a binding from Command palette", "command-palette", { key: "k", control: true }, "remove"],
+		["add a binding to Back", "history-back", { key: "ArrowLeft", alt: true }, "add"],
+		["move Ctrl+Shift+P to another command", "command-palette", { key: "k", control: true }, "conflict"],
+	] satisfies [string, AppShortcutId, Partial<InputEvent> & { key: string }, string][])(
+		"keeps the retained shell binding when Settings would %s",
+		(_label, id, input, edit) => {
+			const source = fakeSource(), target = fakeTarget();
+			const defaults = defaultShortcutBindings(id, false);
+			const custom = { key: "o", ctrl: true, meta: false, shift: true, alt: true };
+			const overrides = {
+				[id]: edit === "add" ? [...defaults, custom] : defaults.filter((binding) => !binding.shift),
+				...(edit === "conflict" ? { "toggle-terminal": [{ key: "p", ctrl: true, meta: false, shift: true, alt: false }] } : {}),
+			};
+			attachAppShortcuts(source, false, target, false, () => overrides, () => false, () => true, undefined, () => true);
+			expect(source.emit(input).preventDefault).not.toHaveBeenCalled();
+			expect(target.send).not.toHaveBeenCalled();
+		},
+	);
+
+	it("leaves a custom bare readline chord to a focused terminal", () => {
+		const source = fakeSource(), target = fakeTarget();
+		const overrides = {
+			"toggle-sidebar": [...defaultShortcutBindings("toggle-sidebar", false), { key: "e", ctrl: true, meta: false, shift: false, alt: false }],
+		};
+		attachAppShortcuts(source, false, target, false, () => overrides, () => false, () => true, undefined, () => true);
+		expect(source.emit({ key: "e", control: true }).preventDefault).not.toHaveBeenCalled();
+		expect(target.send).not.toHaveBeenCalled();
+	});
+
 	it("still opens the palette from a focused terminal on macOS", () => {
 		const source = fakeSource();
 		const target = fakeTarget();
@@ -440,6 +521,36 @@ describe("attachAppShortcuts", () => {
 
 		expect(appZoomEvent.preventDefault).not.toHaveBeenCalled();
 		expect(target.send).not.toHaveBeenCalled();
+	});
+
+	it.each([
+		{ key: ";", code: "Semicolon", shift: true },
+		{ key: ":", code: "Semicolon", shift: true },
+		{ key: "^", code: "Equal", shift: false },
+	])("routes the macOS JIS zoom-in alias $key/$code to the focused terminal", (input) => {
+		const source = fakeSource();
+		const target = fakeTarget();
+		let terminalFocused = true;
+		attachAppShortcuts(source, true, target, false, () => ({}), () => false, () => true, undefined, () => terminalFocused);
+
+		expect(source.emit({ key: ";", code: "Semicolon", meta: true }).preventDefault).not.toHaveBeenCalled();
+		expect(source.emit({ ...input, meta: true }).preventDefault).toHaveBeenCalledOnce();
+		expect(target.send).toHaveBeenCalledExactlyOnceWith(TERMINAL_FONT_SIZE_SHORTCUT_CHANNEL, 1);
+
+		terminalFocused = false;
+		expect(source.emit({ ...input, meta: true }).preventDefault).not.toHaveBeenCalled();
+		expect(target.send).toHaveBeenCalledTimes(1);
+	});
+
+	it("honors custom app bindings before the JIS terminal alias", () => {
+		const source = fakeSource();
+		const target = fakeTarget();
+		attachAppShortcuts(source, true, target, false, () => ({
+			"open-settings": [{ key: ":", ctrl: false, meta: true, shift: true, alt: false }],
+		}), () => false, () => true, undefined, () => true);
+
+		expect(source.emit({ key: ":", code: "Semicolon", meta: true, shift: true }).preventDefault).toHaveBeenCalledOnce();
+		expect(target.send).toHaveBeenCalledExactlyOnceWith(OPEN_SETTINGS_SHORTCUT_CHANNEL);
 	});
 
 	it.each([

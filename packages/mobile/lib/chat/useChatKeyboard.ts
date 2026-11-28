@@ -7,6 +7,8 @@ import {
 	CHAT_KEYBOARD_HIDDEN,
 	chatDockRiseOverride,
 	dockRestingInset,
+	KEYBOARD_DOCK_GAP,
+	KEYBOARD_END_GAP_TUCK,
 	keyboardVerticalOffset,
 	PLATFORM_KEYBOARD_SETTLE_MS,
 	reduceChatKeyboard,
@@ -36,7 +38,15 @@ function initialState(insetsBottom: number): ChatKeyboardState {
  * `underHeader`: the screen is laid out under a clear header, from the
  * window's top (iOS 26's glass bar), so the avoiding view owes it nothing.
  */
-export function useChatKeyboard({ underHeader = false }: { underHeader?: boolean } = {}) {
+export function useChatKeyboard({ underHeader = false, floating = false }: {
+	underHeader?: boolean;
+	/**
+	 * The composer floats over a conversation that moves itself with the
+	 * keyboard, so a close starting changes no state: re-rendering the screen
+	 * then stalled the keyboard's animation.
+	 */
+	floating?: boolean;
+} = {}) {
 	const headerHeight = useHeaderHeight();
 	const insets = useSafeAreaInsets();
 	const insetsBottom = useRef(insets.bottom);
@@ -49,38 +59,58 @@ export function useChatKeyboard({ underHeader = false }: { underHeader?: boolean
 	// The keyboard is on its way down. Only the conversation's padding hears it
 	// (see rootStyle); the composer's own handling waits for the close as before.
 	const [closing, setClosing] = useState(false);
+	// keyboard-controller reported this opening, so the list made its own room.
+	const [controllerOpen, setControllerOpen] = useState(false);
 
 	useEffect(() => {
 		// React Native's reports wait out the keyboard's own animation; see
 		// reduceChatKeyboard. Only the latest one is kept, and it is dropped if React
 		// Native's own record has moved on by the time it would apply.
 		let settle: ReturnType<typeof setTimeout> | undefined;
+		// Bumped by every open either source reports. Android sends the two in
+		// either order: keyboard-controller's keyboardWillShow can land before
+		// React Native's keyboardDidShow, while Keyboard.isVisible() still says
+		// hidden, so visibility alone cannot tell a close that is stale.
+		let opens = 0;
 		const settleThenCorrect = (signal: Extract<ChatKeyboardSignal, { kind: "platform-shown" | "platform-hidden" }>) => {
 			if (settle) clearTimeout(settle);
+			const opensAtReport = opens;
 			settle = setTimeout(() => {
 				settle = undefined;
 				if (Keyboard.isVisible() !== (signal.kind === "platform-shown")) return;
+				if (signal.kind === "platform-hidden") {
+					// An open since this close was reported owns the keyboard now.
+					if (opens !== opensAtReport) return;
+					// A close only React Native saw ends a reported open too.
+					setControllerOpen(false);
+				}
 				dispatch(signal);
 			}, PLATFORM_KEYBOARD_SETTLE_MS);
 		};
 		const subscriptions = [
 			KeyboardEvents.addListener("keyboardWillShow", (event) => {
+				opens += 1;
 				setClosing(false);
+				setControllerOpen(true);
 				dispatch({ kind: "controller-show", height: event.height });
 			}),
-			KeyboardEvents.addListener("keyboardWillHide", () => setClosing(true)),
+			...(floating ? [] : [KeyboardEvents.addListener("keyboardWillHide", () => setClosing(true))]),
 			KeyboardEvents.addListener("keyboardDidHide", () => {
 				setClosing(false);
+				setControllerOpen(false);
 				dispatch({ kind: "controller-hidden" });
 			}),
-			Keyboard.addListener("keyboardDidShow", (event) => settleThenCorrect({ kind: "platform-shown", height: event.endCoordinates.height, insetsBottom: insetsBottom.current })),
+			Keyboard.addListener("keyboardDidShow", (event) => {
+				opens += 1;
+				settleThenCorrect({ kind: "platform-shown", height: event.endCoordinates.height, insetsBottom: insetsBottom.current });
+			}),
 			Keyboard.addListener("keyboardDidHide", () => settleThenCorrect({ kind: "platform-hidden" })),
 		];
 		return () => {
 			if (settle) clearTimeout(settle);
 			subscriptions.forEach((subscription) => subscription.remove());
 		};
-	}, []);
+	}, [floating]);
 
 	return {
 		keyboardVisible: state.visible,
@@ -93,6 +123,13 @@ export function useChatKeyboard({ underHeader = false }: { underHeader?: boolean
 		behavior: platform === "ios" ? "padding" as const : undefined,
 		keyboardVerticalOffset: platform === "ios" ? keyboardVerticalOffset(underHeader ? 0 : headerHeight) : 0,
 		restingInset: dockRestingInset(insets.bottom),
+		// A floating composer's conversation rises with the keyboard by its height
+		// less the gap the dock closes, less the end gap it gives up.
+		listKeyboardOffset: dockRestingInset(insets.bottom) - KEYBOARD_DOCK_GAP + KEYBOARD_END_GAP_TUCK,
+		// Only when keyboard-controller missed the open (see reduceChatKeyboard):
+		// the list never heard it either, so the root makes the room instead. A
+		// height that merely disagrees with an open it reported is the list's.
+		floatingRootStyle: platform === "android" && state.visible && !state.progressTrusted && !controllerOpen ? { paddingBottom: state.height } : undefined,
 		dockRiseOverride: platform === "android" ? chatDockRiseOverride(state) : undefined,
 		// How far the composer stands above the screen's bottom when the keyboard's
 		// own progress cannot be trusted; `undefined` rides it (see KeyboardFollower).

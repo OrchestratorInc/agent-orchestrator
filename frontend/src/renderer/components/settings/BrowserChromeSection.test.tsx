@@ -77,8 +77,16 @@ describe("BrowserChromeSection", () => {
 		expect(writeText).toHaveBeenCalledWith(base.extensionPath);
 		expect(await screen.findByText("Set up · extension not connected")).toBeInTheDocument();
 		expect(screen.getByText("Google Chrome")).toBeInTheDocument();
-		expect(screen.getByText(base.extensionPath)).toBeInTheDocument();
-		expect(screen.getByText(base.extensionId)).toBeInTheDocument();
+		// The folder is a selectable field; the extension ID and the agent's
+		// command are implementation details the user has no use for.
+		const folder = screen.getByRole("textbox", { name: "Extension folder" }) as HTMLInputElement;
+		expect(folder).toHaveValue(base.extensionPath);
+		expect(folder).toHaveAttribute("readonly");
+		fireEvent.focus(folder);
+		expect([folder.selectionStart, folder.selectionEnd]).toEqual([0, base.extensionPath.length]);
+		expect(screen.queryByText(base.extensionId, { exact: false })).not.toBeInTheDocument();
+		expect(screen.queryByText(/ao browser target/)).not.toBeInTheDocument();
+		expect(screen.getByText("Ask an agent to use your Chrome. The first time, Chrome asks you to allow that session.")).toBeInTheDocument();
 		expect(screen.getByRole("button", { name: "Remove" })).toBeInTheDocument();
 	});
 
@@ -96,7 +104,7 @@ describe("BrowserChromeSection", () => {
 		vi.spyOn(apiClient, "GET").mockResolvedValue({ data: connected } as never);
 		renderSection();
 		expect(await screen.findByText("Connected · extension 0.1.0")).toBeInTheDocument();
-		expect(screen.queryByText(base.extensionPath)).not.toBeInTheDocument();
+		expect(screen.queryByRole("textbox", { name: "Extension folder" })).not.toBeInTheDocument();
 	});
 
 	it("shows setup failures", async () => {

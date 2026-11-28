@@ -16,6 +16,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"slices"
 	"strconv"
 	"strings"
@@ -51,7 +52,8 @@ func buildConfig(plugin piPlugin, resolve binaryResolver, log *slog.Logger) acpd
 	totals := &sessionTotals{totals: map[string]int{}}
 	agentDirs := &piAgentDirs{}
 	return acpdriver.Config{
-		Harness: domain.HarnessPi,
+		Harness:     domain.HarnessPi,
+		HideCommand: hiddenCommands,
 		Capabilities: ports.ChatCapabilities{
 			ports.ChatCapabilityStreaming: true,
 			ports.ChatCapabilityTools:     true,
@@ -100,7 +102,15 @@ func buildConfig(plugin piPlugin, resolve binaryResolver, log *slog.Logger) acpd
 			// pi-acp 0.17 uses a long-running daemon. A session-private socket
 			// prevents one project's first-start environment (notably
 			// PI_CODING_AGENT_DIR and provider keys) leaking into another.
-			env["PI_ACP_SOCKET_DIR"] = filepath.Join(cfg.DataDir, "pi-acp", string(cfg.SessionID), "run")
+			env["PI_ACP_SOCKET_DIR"] = sessionRunDir(cfg)
+			if runtime.GOOS != "windows" {
+				// AO's steering extension listens here (see steer.go).
+				if err := installSteerExtension(cfg.WorkspacePath); err == nil {
+					env[steerDirEnv] = sessionRunDir(cfg)
+				} else if log != nil {
+					log.Warn("Pi chat cannot steer a running turn", "session", cfg.SessionID, "error", err)
+				}
+			}
 			if err := prepareStandingInstructions(ctx, cfg); err != nil {
 				return acpdriver.Launch{}, err
 			}
@@ -122,6 +132,7 @@ func buildConfig(plugin piPlugin, resolve binaryResolver, log *slog.Logger) acpd
 		// pi-acp can exit during its first handshake while its background
 		// daemon starts; the next start finds the daemon up.
 		RetryStartupExit: true,
+		SteerExternal:    steerExternal,
 	}
 }
 

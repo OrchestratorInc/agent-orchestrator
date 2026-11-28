@@ -372,6 +372,11 @@ func TestSteerRouteRefusalsAreTypedAndCoded(t *testing.T) {
 			wantStatus: http.StatusConflict, wantCode: "CHAT_INTERFACE_TRANSITION",
 		},
 		{
+			name:       "chat open in another process",
+			err:        chatsvc.ErrChatOpenElsewhere,
+			wantStatus: http.StatusConflict, wantCode: "CHAT_OPEN_ELSEWHERE",
+		},
+		{
 			name:       "terminal-mode session",
 			err:        chatsvc.ErrNotChatMode,
 			wantStatus: http.StatusConflict, wantCode: "SESSION_MODE_MISMATCH",

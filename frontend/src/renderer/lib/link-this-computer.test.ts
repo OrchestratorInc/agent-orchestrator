@@ -19,6 +19,7 @@ vi.mock("./api-client", () => ({
 vi.mock("./bridge", () => ({ aoBridge: { remotes: { computerName: async () => "Mac" } } }));
 
 import { saveAccountRemoteHost } from "./account-remote-hosts";
+import { apiClient } from "./api-client";
 import { linkThisComputer } from "./link-this-computer";
 
 const link = (options?: { url?: string; ifListed?: boolean }) => linkThisComputer("https://cp.example.test", "user_01", "h_this", "pw", options);
@@ -55,4 +56,24 @@ it("links only a listed computer when asked to", async () => {
 	expect(fake.calls).toEqual(["directory"]);
 	fake.directory.hosts = [{ hostId: "h_this" }];
 	expect((await link({ ifListed: true })).hostId).toBe("h_this");
+});
+
+it("preserves HTTP status when account-token issuance fails", async () => {
+	(apiClient.POST as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
+		error: { error: "forbidden", code: "REMOTE_HOST_ACCOUNT_TOKEN", message: "connection password required" },
+		response: { status: 403 } as Response,
+	});
+	let caught: unknown;
+	try {
+		await link();
+	} catch (err) {
+		caught = err;
+	}
+	expect(caught).toBeInstanceOf(Error);
+	expect((caught as { status?: number }).status).toBe(403);
+	expect((caught as { cause?: { error?: string; code?: string } }).cause).toEqual({
+		error: "forbidden",
+		code: "REMOTE_HOST_ACCOUNT_TOKEN",
+		message: "connection password required",
+	});
 });

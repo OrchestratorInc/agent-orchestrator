@@ -68,6 +68,15 @@ func TestConfigOptionsRoutePreservesProviderCatalog(t *testing.T) {
 	if got.Options[1].CurrentBoolean == nil || !*got.Options[1].CurrentBoolean {
 		t.Fatalf("boolean option = %#v", got.Options[1])
 	}
+	var wire struct {
+		Options []map[string]json.RawMessage `json:"options"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &wire); err != nil {
+		t.Fatalf("decode wire response: %v", err)
+	}
+	if string(wire.Options[1]["choices"]) != "[]" {
+		t.Fatalf("empty choices = %s, want []", wire.Options[1]["choices"])
+	}
 }
 
 func TestSetConfigOptionAcceptsSelectAndBooleanValues(t *testing.T) {

@@ -1,15 +1,16 @@
-::highlight(chat-find-matches) {
+/* Scoped to the chat timeline the matches are in; see the ::highlight() note in styles.css. */
+[data-chat-find-surface] ::highlight(chat-find-matches) {
 	background-color: #ffe066;
 	color: #202020;
 }
 
-::highlight(chat-find-active) {
+[data-chat-find-surface] ::highlight(chat-find-active) {
 	background-color: #c4580e;
 	color: #fff;
 	text-decoration: underline;
 }
 
 @media (forced-colors: active) {
-	::highlight(chat-find-matches) { background-color: Mark; color: MarkText; }
-	::highlight(chat-find-active) { background-color: Highlight; color: HighlightText; }
+	[data-chat-find-surface] ::highlight(chat-find-matches) { background-color: Mark; color: MarkText; }
+	[data-chat-find-surface] ::highlight(chat-find-active) { background-color: Highlight; color: HighlightText; }
 }

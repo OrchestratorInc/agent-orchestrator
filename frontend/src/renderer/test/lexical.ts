@@ -85,3 +85,23 @@ export function lexicalEditorText(field: HTMLElement): string {
 		.getEditorState()
 		.read(() => $getRoot().getChildren().map((child) => child.getTextContent()).join("\n"));
 }
+
+/** Empties the editor the way deleting all of its text would. */
+export function clearLexicalEditor(field: HTMLElement): void {
+	lexicalEditor(field).update(() => $getRoot().clear(), { discrete: true });
+}
+
+/**
+ * What the chat composer's empty box actually draws, read from its placeholder
+ * nodes rather than its aria attribute: the next-message suggestion, the hint
+ * (marked while it fades out), or null while the box holds text.
+ */
+export function drawnComposerPlaceholder(field: HTMLElement): string | null {
+	const box = field.parentElement;
+	if (!box) return null;
+	const suggestion = box.querySelector('[data-testid="prompt-suggestion"]');
+	if (suggestion) return `suggestion: ${suggestion.textContent}`;
+	const hint = box.querySelector<HTMLElement>('span[aria-hidden="false"] > span');
+	if (!hint) return null;
+	return hint.style.opacity === "0" ? `fading: ${hint.textContent}` : hint.textContent;
+}

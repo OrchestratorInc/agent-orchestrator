@@ -29,6 +29,7 @@ func TestCLIActorTypeKeepsKnownLegacyUserCommands(t *testing.T) {
 	for _, commandPath := range []string{
 		"ao agent ls",
 		"ao session claim-pr",
+		"ao session interrupt",
 		"ao dev import-projects",
 		"ao project orchestration get",
 		"ao project orchestration set",

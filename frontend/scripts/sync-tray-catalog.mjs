@@ -10,7 +10,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const frontend = join(dirname(fileURLToPath(import.meta.url)), "..");
-const LOCALES = ["en", "zh-CN", "ja", "ko", "es", "fr", "de", "pt-BR", "ru"];
+const LOCALES = ["en", "zh-CN", "ja", "ko", "es", "fr", "de", "pt-BR", "ru", "tr"];
 const KEYS = [
 	"tray.awakeActive",
 	"tray.awakeUnknown",
@@ -23,6 +23,8 @@ const KEYS = [
 	"tray.quit",
 	"zone.merge",
 	"zone.action",
+	// Not tray text: the main process names the first-run browser profile.
+	"browser.profile.defaultName",
 ];
 
 const catalogs = {};

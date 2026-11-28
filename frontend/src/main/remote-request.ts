@@ -1,3 +1,4 @@
+import { AoError } from "../../../packages/shared/telemetry/ao-error";
 import { parseDaemonProbe } from "../shared/daemon-attach";
 import { DEVICE_TOKEN_PREFIX, type RemoteEntry } from "./remotes-store";
 
@@ -11,7 +12,8 @@ import { DEVICE_TOKEN_PREFIX, type RemoteEntry } from "./remotes-store";
 export type RemoteHealth = "online" | "unauthorized" | "offline" | "not-a-daemon" | "incompatible";
 
 export class IncompatibleRemoteVersionError extends Error {
-	constructor() {
+	readonly code: string = "INCOMPATIBLE_REMOTE_VERSION_ERROR";
+	constructor(readonly hostId?: string) {
 		super("Orchestrator versions are incompatible. Update Orchestrator on this computer and the remote host.");
 		this.name = "IncompatibleRemoteVersionError";
 	}
@@ -57,7 +59,7 @@ export async function readRemoteIdentity(
 	const body = (await response.json()) as { hostId?: unknown; apiVersion?: unknown };
 	if (typeof body.hostId !== "string" || body.hostId === "") throw new Error("remote identity probe returned no host ID");
 	if (body.hostId === "local") throw new Error("remote identity probe returned reserved local host ID");
-	if (body.apiVersion !== 1) throw new IncompatibleRemoteVersionError();
+	if (body.apiVersion !== 1) throw new IncompatibleRemoteVersionError(body.hostId);
 	return body.hostId;
 }
 
@@ -160,4 +162,58 @@ export async function readAuthErrorCode(entry: RemoteEntry, fetchImpl: FetchImpl
 	} catch {
 		return undefined;
 	}
+}
+
+export type HostUpdateView = { version: string; supported: boolean; method?: "service" | "app"; state: "idle" | "updating" | "failed"; error?: string };
+
+function parseHostUpdate(body: unknown): HostUpdateView | null {
+	const value = body as Partial<HostUpdateView> | null;
+	if (typeof value?.version !== "string" || typeof value.supported !== "boolean" || !["idle", "updating", "failed"].includes(value.state ?? "")) return null;
+	return {
+		version: value.version,
+		supported: value.supported,
+		...(value.method === "service" || value.method === "app" ? { method: value.method } : {}),
+		state: value.state!,
+		...(typeof value.error === "string" && value.error ? { error: value.error } : {}),
+	};
+}
+
+export async function readHostUpdate(entry: RemoteEntry, fetchImpl: FetchImpl = fetch, timeoutMs = 5_000): Promise<HostUpdateView | null> {
+	try {
+		const response = await fetchImpl(remoteUrl(entry, "/api/v1/remote-host/update").href, {
+			method: "GET",
+			redirect: "error",
+			headers: { Authorization: `Bearer ${entry.password}`, ...(entry.hostId ? { "X-AO-Expected-Host-ID": entry.hostId } : {}) },
+			signal: AbortSignal.timeout(timeoutMs),
+		});
+		return response.ok ? parseHostUpdate(await response.json()) : null;
+	} catch {
+		return null;
+	}
+}
+
+export async function checkHostUpdate(entry: RemoteEntry, fetchImpl: FetchImpl = fetch, timeoutMs = 50_000): Promise<string> {
+	const response = await fetchImpl(remoteUrl(entry, "/api/v1/remote-host/update/check").href, {
+		method: "POST",
+		redirect: "error",
+		headers: { Authorization: `Bearer ${entry.password}`, ...(entry.hostId ? { "X-AO-Expected-Host-ID": entry.hostId } : {}) },
+		signal: AbortSignal.timeout(timeoutMs),
+	}).catch(() => null);
+	const body = (await response?.json().catch(() => null)) as { message?: unknown; version?: unknown } | null | undefined;
+	if (response?.ok && typeof body?.version === "string" && body.version) return body.version;
+	throw new AoError("HOST_UPDATE_CHECK_FAILED", typeof body?.message === "string" && body.message ? body.message : "That computer didn't say which version it installs. Try again.");
+}
+
+export async function startHostUpdate(entry: RemoteEntry, version?: string, fetchImpl: FetchImpl = fetch, timeoutMs = 15_000): Promise<HostUpdateView | null> {
+	const response = await fetchImpl(remoteUrl(entry, "/api/v1/remote-host/update").href, {
+		method: "POST",
+		redirect: "error",
+		headers: { Authorization: `Bearer ${entry.password}`, ...(entry.hostId ? { "X-AO-Expected-Host-ID": entry.hostId } : {}), ...(version ? { "Content-Type": "application/json" } : {}) },
+		...(version ? { body: JSON.stringify({ version }) } : {}),
+		signal: AbortSignal.timeout(timeoutMs),
+	}).catch(() => null);
+	if (!response || response.status >= 502) return null;
+	const body = (await response.json().catch(() => null)) as { message?: unknown } | null;
+	if (!response.ok) throw new AoError("HOST_UPDATE_START_FAILED", typeof body?.message === "string" && body.message ? body.message : `the host refused the update (${response.status})`);
+	return parseHostUpdate(body);
 }

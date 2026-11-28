@@ -35,7 +35,6 @@ export function SessionImportPanel({ harness }: { harness: AgentId }) {
 	const navigate = useNavigate();
 	const navigateToSession = useNavigateToSession();
 	const closeSettings = useUiStore((state) => state.closeSettings);
-	const closeSessionImportOffer = useUiStore((state) => state.closeSessionImportOffer);
 	const workspaces = useQuery(workspaceQueryOptions);
 	const projects = useMemo(
 		() =>
@@ -119,7 +118,6 @@ export function SessionImportPanel({ harness }: { harness: AgentId }) {
 			const imported = await importChats(queryClient, "settings", ids, newFolders);
 			setResults(imported);
 			setSelected(new Set(imported.filter((r) => r.status === "failed").map((r) => r.id)));
-			if (imported.some((r) => r.status === "created")) closeSessionImportOffer();
 		} catch (err) {
 			setError(
 				err instanceof Error ? err.message : t("sessionImport.failed"),

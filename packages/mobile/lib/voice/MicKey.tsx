@@ -68,7 +68,8 @@ export function MicKey({
 	// remove the control from the row entirely, reflowing everything beside it.
 	const unavailable = state === "unavailable";
 	// Never while it is listening: a hands-free recording has to stay stoppable.
-	const disabled = unavailable || denied || (disabledByOwner && !live);
+	// Not when denied either: that tap opens Settings to turn the microphone on.
+	const disabled = unavailable || (disabledByOwner && !live);
 	const controlShape = { width: size, height: size, borderRadius: circular ? size / 2 : MIC_RADIUS };
 
 	// A ring breathing out from the key while the mic is open. Under Reduce
@@ -102,7 +103,7 @@ export function MicKey({
 			{glass ? <MicGlass size={size} radius={shapeRadius} /> : null}
 			<Pressable
 				accessibilityRole="button"
-				accessibilityLabel={unavailable ? "Dictation unavailable on this device" : live ? "Stop dictating" : "Dictate"}
+				accessibilityLabel={unavailable ? "Dictation unavailable on this device" : denied ? "Turn on microphone access in Settings" : live ? "Stop dictating" : "Dictate"}
 				accessibilityState={{ busy: live, disabled }}
 				disabled={disabled}
 				android_ripple={feedback.android_ripple}

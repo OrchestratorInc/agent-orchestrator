@@ -5,7 +5,8 @@ import {
 	type BrowserProfile,
 	type BrowserProfileListState,
 	type BrowserProfileMenuInput,
-	type BrowserProfileSelectInput,
+	type BrowserProfileSwitchConfirmRequest,
+	type BrowserProfileSwitchFailure,
 	type BrowserProfileViewState,
 	type BrowserProfileUsage,
 	type BrowserProfileUsageResult,
@@ -47,9 +48,19 @@ export type BrowserProfileIpcOptions = {
 	host: BrowserProfileIpcHost;
 	importer: BrowserProfileImportService;
 	buildMenu: (items: BrowserProfileMenuItem[]) => BrowserProfileMenu;
-	confirmSwitch: (labels: BrowserProfileMenuInput["labels"]) => Promise<boolean>;
-	reportSwitchFailure: (message: string, labels: BrowserProfileMenuInput["labels"]) => void;
 };
+
+/**
+ * The renderer that asked for a switch. Confirmation and failure are shown in
+ * the app by that renderer, never as native dialogs.
+ */
+type BrowserProfileSwitchNotifier = Pick<WebContents, "send"> & Partial<Pick<WebContents, "isDestroyed">>;
+
+function notifySwitch(notify: BrowserProfileSwitchNotifier, channel: string, payload: unknown): void {
+	// A native-menu click can land after its renderer reloaded or closed.
+	if (notify.isDestroyed?.()) return;
+	notify.send(channel, payload);
+}
 
 export type BrowserProfileIpc = {
 	dispose: () => void;
@@ -113,7 +124,7 @@ function menuBoundsFromInput(value: unknown): BrowserMenuBounds {
 
 function labelsFromInput(value: unknown): BrowserProfileMenuInput["labels"] {
 	if (!isRecord(value)) throw invalid("Browser profile menu labels are invalid.");
-	const keys = ["temporary", "manage", "switchTitle", "switchMessage", "switchDetail", "cancel", "confirm"] as const;
+	const keys = ["temporary", "manage"] as const;
 	const labels = {} as BrowserProfileMenuInput["labels"];
 	for (const key of keys) {
 		const label = value[key];
@@ -243,8 +254,7 @@ export function registerBrowserProfileIpc(options: BrowserProfileIpcOptions): Br
 		const viewId = viewIdFromInput(input.viewId);
 		if (!options.host.isRendererOwned(event, viewId)) return undefined;
 		const profileId = input.profileId === null ? null : profileIdFromInput(input.profileId);
-		const labels = labelsFromInput(input.labels) satisfies BrowserProfileSelectInput["labels"];
-		await selectFromMenu(viewId, profileId, labels, options);
+		await selectProfile(viewId, profileId, input.confirmed === true, event.sender, options);
 		return undefined;
 	});
 	handle("browser:profile:menu", (event, input: unknown) => {
@@ -264,14 +274,14 @@ export function registerBrowserProfileIpc(options: BrowserProfileIpcOptions): Br
 				type: "radio",
 				checked: current.profileId === null,
 				enabled: !switchBlocked,
-				click: () => void selectFromMenu(viewId, null, labels, options),
+				click: () => void selectProfile(viewId, null, false, event.sender, options),
 			},
 			...profiles.map((profile) => ({
 				label: profileLabel(profile),
 				type: "radio" as const,
 				checked: current.profileId === profile.id,
 				enabled: !switchBlocked && !options.store.isProfileOperationInProgress(profile.id),
-				click: () => void selectFromMenu(viewId, profile.id, labels, options),
+				click: () => void selectProfile(viewId, profile.id, false, event.sender, options),
 			})),
 			{ type: "separator" },
 			{
@@ -294,21 +304,41 @@ export function registerBrowserProfileIpc(options: BrowserProfileIpcOptions): Br
 	};
 }
 
-async function selectFromMenu(
+async function selectProfile(
 	viewId: string,
 	profileId: string | null,
-	labels: BrowserProfileMenuInput["labels"],
+	confirmed: boolean,
+	notify: BrowserProfileSwitchNotifier,
 	options: BrowserProfileIpcOptions,
 ): Promise<void> {
 	const current = options.host.getProfileState(viewId);
 	if (!current || current.profileId === profileId) return;
 	const info = options.host.getProfileSwitchInfo(viewId);
-	if (!info || info.agentActive) return;
-	if (info.hasNavigated && !(await options.confirmSwitch(labels))) return;
+	if (!info) return;
+	if (info.agentActive) {
+		// The menus disable switching while an agent drives the browser, so this
+		// only happens when the agent started after the user confirmed. Say why
+		// the profile did not change instead of closing the prompt silently.
+		if (confirmed) {
+			notifySwitch(notify, "browser:profileSwitchFailed", {
+				viewId,
+				message: "An agent is using this browser.",
+				reason: "agent-active",
+			} satisfies BrowserProfileSwitchFailure);
+		}
+		return;
+	}
+	if (info.hasNavigated && !confirmed) {
+		// The shell confirms in its own dialog and selects again with `confirmed`;
+		// the checks above run again then, against the state at that moment.
+		notifySwitch(notify, "browser:profileSwitchConfirm", { viewId, profileId } satisfies BrowserProfileSwitchConfirmRequest);
+		return;
+	}
 	try {
 		await options.host.switchProfile(viewId, profileId);
 	} catch (error) {
 		console.error("browser profile switch failed:", error);
-		options.reportSwitchFailure(error instanceof Error ? error.message : "Browser profile could not be switched.", labels);
+		const message = error instanceof Error ? error.message : "Browser profile could not be switched.";
+		notifySwitch(notify, "browser:profileSwitchFailed", { viewId, message } satisfies BrowserProfileSwitchFailure);
 	}
 }

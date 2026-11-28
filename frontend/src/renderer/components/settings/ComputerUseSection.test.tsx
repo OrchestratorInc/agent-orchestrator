@@ -4,7 +4,14 @@ import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const apiMocks = vi.hoisted(() => ({ get: vi.fn(), post: vi.fn() }));
-const bridgeMocks = vi.hoisted(() => ({ openExternal: vi.fn(), showPrivacyGuide: vi.fn(), updatePrivacyGuide: vi.fn(), closePrivacyGuide: vi.fn() }));
+const bridgeMocks = vi.hoisted(() => ({
+	openExternal: vi.fn(),
+	showPrivacyGuide: vi.fn(),
+	updatePrivacyGuide: vi.fn(),
+	closePrivacyGuide: vi.fn(),
+	getAppPrivacy: vi.fn(),
+	requestAppPrivacy: vi.fn(),
+}));
 
 vi.mock("../../lib/api-client", () => ({
 	apiClient: { GET: apiMocks.get, POST: apiMocks.post },
@@ -65,6 +72,150 @@ beforeEach(() => {
 	bridgeMocks.showPrivacyGuide.mockReset().mockResolvedValue(undefined);
 	bridgeMocks.updatePrivacyGuide.mockReset().mockResolvedValue(true);
 	bridgeMocks.closePrivacyGuide.mockReset().mockResolvedValue(undefined);
+	bridgeMocks.getAppPrivacy.mockReset().mockResolvedValue(undefined);
+	bridgeMocks.requestAppPrivacy.mockReset().mockResolvedValue(undefined);
+	delete document.documentElement.dataset.aoPlatform;
+});
+
+describe("Orchestrator's own permissions", () => {
+	const appGear = () => screen.findByRole("button", { name: "Open Orchestrator's permissions in System Settings" });
+
+	it("are not shown off macOS", async () => {
+		daemon({ status: () => installed });
+		renderSection();
+		expect(await screen.findByText("Installed")).toBeInTheDocument();
+		expect(screen.queryByText("Native computer use")).not.toBeInTheDocument();
+		expect(screen.queryByText("Grant macOS permissions to Orchestrator")).not.toBeInTheDocument();
+		expect(bridgeMocks.getAppPrivacy).not.toHaveBeenCalled();
+	});
+
+	it("sit under native computer use once both are granted, and open the guide to review them", async () => {
+		document.documentElement.dataset.aoPlatform = "darwin";
+		daemon({ status: () => notInstalled });
+		bridgeMocks.getAppPrivacy.mockResolvedValue({ accessibility: true, screenRecording: true });
+		renderSection();
+
+		expect(await screen.findByText("Native computer use")).toBeInTheDocument();
+		expect(await screen.findByText("Grant macOS permissions to Orchestrator")).toBeInTheDocument();
+		await userEvent.click(await appGear());
+		expect(bridgeMocks.requestAppPrivacy).not.toHaveBeenCalled();
+		expect(bridgeMocks.showPrivacyGuide).toHaveBeenCalledWith(expect.objectContaining({
+			target: "orchestrator",
+			pane: "accessibility",
+			granted: { accessibility: true, screenRecording: true },
+		}));
+	});
+
+	it("asks macOS for missing grants, docks the guide on Orchestrator's missing pane, and follows the grants", async () => {
+		document.documentElement.dataset.aoPlatform = "darwin";
+		daemon({ status: () => notInstalled });
+		let grants = { accessibility: false, screenRecording: false };
+		bridgeMocks.getAppPrivacy.mockImplementation(async () => grants);
+		bridgeMocks.requestAppPrivacy.mockResolvedValue({ accessibility: true, screenRecording: false });
+		renderSection();
+
+		expect(await screen.findByText("Accessibility: Missing · Screen Recording: Missing")).toBeInTheDocument();
+		await userEvent.click(await appGear());
+		expect(bridgeMocks.requestAppPrivacy).toHaveBeenCalledTimes(1);
+		expect(bridgeMocks.showPrivacyGuide).toHaveBeenCalledWith(expect.objectContaining({
+			target: "orchestrator",
+			pane: "screenRecording",
+			granted: { accessibility: true, screenRecording: false },
+			text: expect.objectContaining({ drag: "Drag Orchestrator into the list above", allowed: "Orchestrator is allowed here" }),
+		}));
+
+		grants = { accessibility: true, screenRecording: true };
+		await waitFor(() => expect(bridgeMocks.updatePrivacyGuide).toHaveBeenLastCalledWith("orchestrator", { accessibility: true, screenRecording: true }), { timeout: 4_000 });
+	});
+
+	it("stop polling once the guide closes, even after a read fails", async () => {
+		document.documentElement.dataset.aoPlatform = "darwin";
+		daemon({ status: () => notInstalled });
+		let grants: { accessibility: boolean; screenRecording: boolean } | undefined = { accessibility: false, screenRecording: false };
+		bridgeMocks.getAppPrivacy.mockImplementation(async () => grants);
+		bridgeMocks.requestAppPrivacy.mockResolvedValue({ accessibility: false, screenRecording: false });
+		renderSection();
+
+		await userEvent.click(await appGear());
+		await waitFor(() => expect(bridgeMocks.showPrivacyGuide).toHaveBeenCalled());
+		// The next read fails, and the user closes the guide with its X.
+		grants = undefined;
+		bridgeMocks.updatePrivacyGuide.mockResolvedValue(false);
+		const readsBefore = bridgeMocks.getAppPrivacy.mock.calls.length;
+		const updatesBefore = bridgeMocks.updatePrivacyGuide.mock.calls.length;
+		// The failed read still reports in, with the last grants the guide showed.
+		await waitFor(() => {
+			expect(bridgeMocks.getAppPrivacy.mock.calls.length).toBeGreaterThan(readsBefore);
+			expect(bridgeMocks.updatePrivacyGuide.mock.calls.length).toBeGreaterThan(updatesBefore);
+		}, { timeout: 4_000 });
+		expect(bridgeMocks.updatePrivacyGuide).toHaveBeenLastCalledWith("orchestrator", { accessibility: false, screenRecording: false });
+		await waitFor(() => undefined);
+		const reads = bridgeMocks.getAppPrivacy.mock.calls.length;
+		await new Promise((resolve) => setTimeout(resolve, 2_500));
+		expect(bridgeMocks.getAppPrivacy.mock.calls.length).toBe(reads);
+	}, 10_000);
+
+	it("still follow the guide when a read fails while it is opening", async () => {
+		document.documentElement.dataset.aoPlatform = "darwin";
+		daemon({ status: () => notInstalled });
+		let grants: { accessibility: boolean; screenRecording: boolean } | undefined = { accessibility: false, screenRecording: false };
+		bridgeMocks.getAppPrivacy.mockImplementation(async () => grants);
+		bridgeMocks.requestAppPrivacy.mockResolvedValue({ accessibility: false, screenRecording: false });
+		let opened: () => void = () => undefined;
+		bridgeMocks.showPrivacyGuide.mockImplementation(() => new Promise<void>((resolve) => { opened = resolve; }));
+		const { client } = renderSection();
+
+		await userEvent.click(await appGear());
+		await waitFor(() => expect(bridgeMocks.showPrivacyGuide).toHaveBeenCalled());
+		// A focus refetch fails before the guide finishes opening.
+		grants = undefined;
+		const readsBefore = bridgeMocks.getAppPrivacy.mock.calls.length;
+		await client.invalidateQueries({ queryKey: ["computer-use", "app-privacy"] });
+		await waitFor(() => expect(bridgeMocks.getAppPrivacy.mock.calls.length).toBeGreaterThan(readsBefore));
+		// The user closes the guide with its X as soon as it is up.
+		bridgeMocks.updatePrivacyGuide.mockResolvedValue(false);
+		opened();
+		await waitFor(() => expect(bridgeMocks.updatePrivacyGuide).toHaveBeenCalledWith("orchestrator", { accessibility: false, screenRecording: false }));
+		await waitFor(() => undefined);
+		const reads = bridgeMocks.getAppPrivacy.mock.calls.length;
+		await new Promise((resolve) => setTimeout(resolve, 2_500));
+		expect(bridgeMocks.getAppPrivacy.mock.calls.length).toBe(reads);
+	}, 10_000);
+
+	it("show their own failure under their section, not Cua Driver's", async () => {
+		document.documentElement.dataset.aoPlatform = "darwin";
+		daemon({ status: () => notInstalled });
+		bridgeMocks.getAppPrivacy.mockResolvedValue({ accessibility: false, screenRecording: false });
+		bridgeMocks.requestAppPrivacy.mockRejectedValue(new Error("System Settings did not open"));
+		renderSection();
+
+		await userEvent.click(await appGear());
+		const alert = await screen.findByRole("alert");
+		expect(alert).toHaveTextContent("System Settings did not open");
+		// Below the native section's row, so it reads as that section's error.
+		expect(screen.getByText("Grant macOS permissions to Orchestrator").compareDocumentPosition(alert) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+	});
+
+	it("keep Cua Driver's failures under Cua Driver, above their section", async () => {
+		document.documentElement.dataset.aoPlatform = "darwin";
+		daemon({ status: () => notInstalled });
+		bridgeMocks.getAppPrivacy.mockResolvedValue({ accessibility: true, screenRecording: true });
+		apiMocks.post.mockResolvedValue({ data: undefined, error: { message: "Installer could not start" } });
+		renderSection();
+
+		await userEvent.click(await screen.findByRole("button", { name: "Install · Official installer" }));
+		const alert = await screen.findByRole("alert");
+		expect(alert).toHaveTextContent("Installer could not start");
+		expect(screen.getByText("Native computer use").compareDocumentPosition(alert) & Node.DOCUMENT_POSITION_PRECEDING).toBeTruthy();
+	});
+
+	it("says when they cannot be checked", async () => {
+		document.documentElement.dataset.aoPlatform = "darwin";
+		daemon({ status: () => notInstalled });
+		renderSection();
+		expect(await screen.findByText("Could not check Orchestrator's permissions.")).toBeInTheDocument();
+		expect(await appGear()).toBeDisabled();
+	});
 });
 
 describe("ComputerUseSection", () => {
@@ -74,7 +225,7 @@ describe("ComputerUseSection", () => {
 		renderSection();
 
 		const install = await screen.findByRole("button", { name: "Install · Official installer" });
-		expect(screen.getByText("Lets agents see the screen and operate desktop apps.")).toBeInTheDocument();
+		expect(screen.getByText("Powers Orchestrator's computer use tools, so agents in chat sessions can see the screen and operate desktop apps.")).toBeInTheDocument();
 		expect(screen.queryByText("Background service")).not.toBeInTheDocument();
 
 		await userEvent.click(install);
@@ -137,7 +288,7 @@ describe("ComputerUseSection", () => {
 
 		const update = await screen.findByRole("button", { name: "Update to 0.37.0" });
 		expect(screen.queryByText("Background service")).not.toBeInTheDocument();
-		expect(screen.getByText("macOS permissions")).toBeInTheDocument();
+		expect(screen.getByText("Grant macOS permissions")).toBeInTheDocument();
 		expect(screen.queryByText(/Accessibility: Granted/)).not.toBeInTheDocument();
 		expect(screen.queryByText("/Users/me/.local/bin/cua-driver")).not.toBeInTheDocument();
 		expect(screen.getByRole("switch", { name: "Let agents use this computer" })).toBeEnabled();
@@ -176,7 +327,7 @@ describe("ComputerUseSection", () => {
 		// While macOS waits on the user, the gear spins and cannot be pressed again.
 		await waitFor(() => expect(screen.getByRole("button", { name: "Open in System Settings" })).toHaveAttribute("aria-busy", "true"));
 		expect(screen.getByRole("button", { name: "Open in System Settings" })).toBeDisabled();
-		await waitFor(() => expect(bridgeMocks.updatePrivacyGuide).toHaveBeenCalledWith({ accessibility: true, screenRecording: false }));
+		await waitFor(() => expect(bridgeMocks.updatePrivacyGuide).toHaveBeenCalledWith("cuaDriver", { accessibility: true, screenRecording: false }));
 	});
 
 	it("opens the guide from the gear when everything is granted", async () => {
@@ -192,7 +343,7 @@ describe("ComputerUseSection", () => {
 			text: expect.objectContaining({ allowed: "CuaDriver is allowed here", allowedHint: "Turn off its switch to revoke access." }),
 		}));
 		// Still followed: a revoke made from the strip reaches it.
-		await waitFor(() => expect(bridgeMocks.updatePrivacyGuide).toHaveBeenCalledWith({ accessibility: true, screenRecording: true }));
+		await waitFor(() => expect(bridgeMocks.updatePrivacyGuide).toHaveBeenCalledWith("cuaDriver", { accessibility: true, screenRecording: true }));
 	});
 
 	it("sends AO's resolved theme, not the OS appearance", async () => {

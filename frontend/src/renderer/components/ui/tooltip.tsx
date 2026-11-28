@@ -42,15 +42,18 @@ function TooltipContent({
 	children,
 	hideArrow = false,
 	shortcut,
+	container,
 	...props
 }: React.ComponentProps<typeof TooltipPrimitive.Content> & {
 	hideArrow?: boolean;
+	/** Where the tooltip portals to; `document.body` by default. A fullscreen element hides everything outside itself. */
+	container?: HTMLElement | null;
 	/** Command whose keybinding is shown beside the label as muted glyphs (⌘ K), like the Cmd+K palette. */
 	shortcut?: AppShortcutId;
 }) {
 	const keys = useShortcutKeys(shortcut);
 	return (
-		<TooltipPrimitive.Portal>
+		<TooltipPrimitive.Portal container={container}>
 			<TooltipPrimitive.Content
 				data-slot="tooltip-content"
 				sideOffset={sideOffset}

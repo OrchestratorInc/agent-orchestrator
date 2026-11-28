@@ -10,6 +10,14 @@ const fixtures = vi.hoisted(() => ({
 	router: { navigate: vi.fn(), dismissTo: vi.fn() },
 	backHandlers: [] as Array<() => boolean>,
 	web: { reload: vi.fn(), goBack: vi.fn() },
+	// The app in the background or reconnecting: no verified connection.
+	away: false,
+	unreachable: false,
+	// The status the board poll was refused with, if it was.
+	refusedWith: null as number | null,
+	// How often the live browser pane mounted and unmounted: a remount is a new
+	// pane, whose stream and page state start over.
+	paneLife: { mounts: 0, unmounts: 0 },
 }));
 
 vi.mock("react-native", async () => {
@@ -52,11 +60,19 @@ vi.mock("react-native-webview", async () => {
 vi.mock("./api", () => ({ getPreview: fixtures.getPreview }));
 vi.mock("./config", () => ({ authHeaders: () => ({ Authorization: "Bearer test" }) }));
 vi.mock("./haptics", () => ({ haptics: { tap: vi.fn(), select: vi.fn() } }));
-vi.mock("./connectionError", () => ({ userFacingError: String }));
+vi.mock("./connectionError", async (importOriginal) => ({ ...(await importOriginal<typeof import("./connectionError")>()), userFacingError: String }));
 vi.mock("./RouteErrorBoundary", () => ({ RouteErrorBoundary: () => null }));
 vi.mock("./store", () => ({
 	HostScope: ({ children }: { children: React.ReactNode }) => children,
-	useApp: () => ({ config: fixtures.config, currentHostId: fixtures.config.hostId, connection: "open" }),
+	useApp: () => ({
+		config: fixtures.away ? null : fixtures.config,
+		currentHostId: fixtures.config.hostId,
+		connection: fixtures.away ? "closed" : "open",
+		paired: true,
+		unreachable: fixtures.unreachable,
+		error: fixtures.refusedWith ? "Your machine rejected this phone's password." : null,
+		errorStatus: fixtures.refusedWith,
+	}),
 }));
 vi.mock("./ThemeProvider", () => {
 	const theme = new Proxy({}, { get: () => "#888" });
@@ -73,7 +89,14 @@ vi.mock("./ui", async () => {
 vi.mock("./useHeaderOverlap", () => ({ useGlassBarInset: () => 0 }));
 vi.mock("./preview/BrowserLivePane", async () => {
 	const React = await import("react");
-	return { BrowserLivePane: (props: object) => React.createElement("BrowserLivePane", props) };
+	function BrowserLivePane(props: object) {
+		React.useEffect(() => {
+			fixtures.paneLife.mounts += 1;
+			return () => { fixtures.paneLife.unmounts += 1; };
+		}, []);
+		return React.createElement("BrowserLivePane", props);
+	}
+	return { BrowserLivePane };
 });
 vi.mock("./preview/LoadingBar", async () => {
 	const React = await import("react");
@@ -147,8 +170,12 @@ beforeEach(() => {
 	fixtures.router.navigate.mockClear();
 	fixtures.router.dismissTo.mockClear();
 	fixtures.backHandlers.length = 0;
+	fixtures.paneLife = { mounts: 0, unmounts: 0 };
 	fixtures.web.reload.mockClear();
 	fixtures.web.goBack.mockClear();
+	fixtures.away = false;
+	fixtures.unreachable = false;
+	fixtures.refusedWith = null;
 });
 
 afterEach(() => {
@@ -397,5 +424,88 @@ describe("app preview controls", () => {
 		await act(async () => banner.findByType("Button" as never).props.onPress());
 		expect(fixtures.web.reload).toHaveBeenCalledTimes(1);
 		expect(screen.root.findAll((node) => node.props.accessibilityRole === "alert")).toHaveLength(0);
+	});
+
+	// The app drops its verified connection every time it goes to the background.
+	describe("through an app switch", () => {
+		const titles = () => nodes("EmptyState").map((node) => node.props.title);
+		const appSwitch = async (unreachable = false) => {
+			fixtures.away = true;
+			fixtures.unreachable = unreachable;
+			await act(async () => { screen.update(<SessionPreviewScreen />); });
+		};
+
+		it("keeps the live browser on screen when the session has an app preview, for it to wait on the connection", async () => {
+			await openPreview();
+			expect(mobileView().disabled).toBe(false);
+			const before = { ...fixtures.paneLife };
+			expect(before.mounts).toBeGreaterThan(0);
+			await appSwitch();
+			expect(nodes("BrowserLivePane")).toHaveLength(1);
+			// The same pane, not a new one in its place.
+			expect(fixtures.paneLife).toEqual(before);
+			expect(titles()).not.toContain("Machine offline");
+		});
+
+		// A browser-only session has no app preview to hold, so the screen's own
+		// "Connecting" view replaced the pane and its last frame was lost.
+		it("keeps the live browser on screen when the session has no app preview", async () => {
+			fixtures.getPreview.mockResolvedValue(null);
+			await openPreview();
+			expect(mobileView().disabled).toBe(true);
+			const before = { ...fixtures.paneLife };
+			expect(before.mounts).toBeGreaterThan(0);
+			await appSwitch();
+			expect(nodes("BrowserLivePane")).toHaveLength(1);
+			expect(fixtures.paneLife).toEqual(before);
+			expect(titles()).toEqual([]);
+		});
+
+		it("keeps the live browser on screen through an app switch before its preview loaded", async () => {
+			fixtures.getPreview.mockReturnValue(new Promise(() => {}));
+			await openPreview();
+			const before = { ...fixtures.paneLife };
+			await appSwitch();
+			expect(fixtures.paneLife).toEqual(before);
+			expect(titles()).not.toContain("Machine offline");
+		});
+
+		it("waits for the connection instead of mounting the live browser when it opens during a reconnect", async () => {
+			fixtures.getPreview.mockResolvedValue(null);
+			fixtures.away = true;
+			await openPreview();
+			expect(titles()).toEqual(["Connecting to this machine…"]);
+			expect(nodes("BrowserLivePane")).toHaveLength(0);
+			expect(fixtures.getPreview).not.toHaveBeenCalled();
+			fixtures.away = false;
+			await act(async () => { screen.update(<SessionPreviewScreen />); });
+			expect(nodes("BrowserLivePane")).toHaveLength(1);
+		});
+
+		it("does not hold a live browser from another session", async () => {
+			fixtures.getPreview.mockResolvedValue(null);
+			await openPreview();
+			fixtures.params.id = "session-2";
+			await appSwitch();
+			expect(titles()).toEqual(["Connecting to this machine…"]);
+			expect(nodes("BrowserLivePane")).toHaveLength(0);
+		});
+
+		it("says the machine is offline once it really is", async () => {
+			fixtures.getPreview.mockReturnValue(new Promise(() => {}));
+			await openPreview();
+			await appSwitch(true);
+			expect(titles()).toEqual(["Machine offline"]);
+		});
+
+		// Its poll stopped on the refusal, so "Connecting to this machine…" spun for good.
+		it("says the machine rejected this phone instead of connecting forever", async () => {
+			fixtures.getPreview.mockReturnValue(new Promise(() => {}));
+			await openPreview();
+			fixtures.refusedWith = 401;
+			await appSwitch();
+			expect(titles()).toEqual(["Your machine rejected this phone"]);
+			expect([nodes("EmptyState")[0]!.props.action].flat().map((button) => button.props.title)).toEqual(["Scan new code"]);
+		});
 	});
 });

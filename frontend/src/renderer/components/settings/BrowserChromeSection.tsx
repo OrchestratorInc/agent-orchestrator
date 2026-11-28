@@ -9,6 +9,7 @@ import { isMacPlatform } from "../../lib/platform";
 import { usesPreviewWorkspaceData } from "../../lib/preview-mode";
 import { useUiStore, type GlobalSettingsSection } from "../../stores/ui-store";
 import { Button } from "../ui/button";
+import { Input } from "../ui/input";
 import { SettingsRow } from "./SettingsRow";
 import { SettingsSection } from "./SettingsSection";
 
@@ -149,10 +150,13 @@ export function BrowserChromeSection() {
 									<li>{t("settings.browserChrome.loadStep3")}</li>
 								</ol>
 								{openFailed ? <span className="mt-1 block text-error">{t("settings.browserChrome.openFailed")}</span> : null}
-								<span className="mt-1 block font-mono break-all">{status.extensionPath}</span>
-								<span className="mt-1 block">
-									{t("settings.browserChrome.extensionId")}: <span className="font-mono">{status.extensionId}</span>
-								</span>
+								<Input
+									aria-label={t("settings.browserChrome.extensionPath")}
+									className="mt-2 font-mono"
+									onFocus={(event) => event.currentTarget.select()}
+									readOnly
+									value={status.extensionPath}
+								/>
 							</>
 						) : (
 							<span className="text-error">{t("settings.browserChrome.bundleMissing")}</span>

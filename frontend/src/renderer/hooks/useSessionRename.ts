@@ -1,6 +1,6 @@
 import { QueryClientContext } from "@tanstack/react-query";
 import { useCallback, useContext, useRef, useState } from "react";
-import { renameCloudSession, renameSession } from "../lib/rename-session";
+import { commitSessionRename } from "../lib/commit-session-rename";
 import type { WorkspaceSession } from "../types/workspace";
 
 export const MAX_SESSION_DISPLAY_NAME_LEN = 100;
@@ -8,9 +8,9 @@ export const MAX_SESSION_DISPLAY_NAME_LEN = 100;
 type RenameableSession = Pick<WorkspaceSession, "id" | "title" | "hostId" | "cloud">;
 
 export function useSessionRename(session?: RenameableSession, onRenamed?: () => void | Promise<void>) {
-  // Only a Cloud rename needs the query cache (for the control plane and the
-  // session lists); a tab outside a query provider still renames locally.
-  const queryClient = useContext(QueryClientContext);
+  // The cache carries the new title to every list; a tab outside a query
+  // provider still renames, showing it once the next read lands.
+  const queryClient = useContext(QueryClientContext) ?? null;
   const [isEditing, setIsEditing] = useState(false);
   const [draft, setDraft] = useState(session?.title ?? "");
   const cancelledRef = useRef(false);
@@ -36,20 +36,9 @@ export function useSessionRename(session?: RenameableSession, onRenamed?: () => 
     }
     setIsEditing(false);
     if (!session) return;
-    const name = draft.trim();
-    if (!name || name === session.title) return;
-		try {
-			if (session.cloud) {
-				if (!queryClient) throw new Error("Renaming a Cloud session needs the app's query cache.");
-				await renameCloudSession(queryClient, { id: session.id, cloud: session.cloud }, name);
-			}
-			else if (session.hostId) await renameSession(session.id, name, session.hostId);
-			else await renameSession(session.id, name);
-			await onRenamed?.();
-		} catch (error) {
-      console.error("Failed to rename session:", error);
-    }
-	}, [draft, onRenamed, queryClient, session]);
+    // Starts the rename before any await, so the editor closes onto the new title.
+    await commitSessionRename(queryClient, session, draft, onRenamed ? { refresh: onRenamed } : undefined);
+  }, [draft, onRenamed, queryClient, session]);
 
   return { begin, cancel, commit, draft, isEditing, setDraft };
 }
