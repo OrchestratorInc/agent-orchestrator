@@ -522,8 +522,10 @@ type BrowserViewLike = View & {
 
 type BrowserWindowLike = {
   contentView: {
-    addChildView: (view: BrowserViewLike) => void;
+    // With an index, re-adding a child moves it to that place in the stack.
+    addChildView: (view: BrowserViewLike, index?: number) => void;
     removeChildView?: (view: BrowserViewLike) => void;
+    readonly children?: readonly unknown[];
   };
   getContentBounds: () => BrowserRect;
   webContents?: WebContents;
@@ -590,6 +592,9 @@ export type BrowserViewHostOptions = {
   // Test hook: how long a tab's initial about:blank load may take before
   // awaiting callers get a typed failure instead of hanging forever.
   entryReadyTimeoutMs?: number;
+  // Test hook: how long a never-shown agent tab is put on screen (1px at the
+  // window edge) before it is parked offscreen. See keepAgentTabPainted.
+  agentTabPrimeMs?: number;
 };
 
 export type BrowserViewHost = {
@@ -671,6 +676,12 @@ type BrowserEntry = {
   // agent page after it is made.
   driver: () => TabDriver;
   ready: Promise<void>;
+  // Drawn on screen at least once. Chromium routes CDP input to a view only
+  // after that, so an agent tab that never was is shown briefly first.
+  painted?: boolean;
+  // Stops the keepalive screencast that keeps this tab drawing while the agent
+  // works on it parked offscreen (keepAgentTabPainted).
+  stopKeepalive?: () => void;
   state: BrowserNavState;
   // Set on a tab that shows the agent's own browser: the agent browser tab it
   // shows, for life ("" until its viewer first reports).
@@ -760,6 +771,16 @@ type BrowserSessionEntry = {
   // may still open and close tabs; profileSwitching refuses only new work.
   profileReplacing: boolean;
   profileSwitchTargetId: BrowserProfileId | null;
+  // The tab agent commands act on, apart from the tab the person has in front
+  // (activeTabId): selecting or opening a tab in the panel never moves it.
+  // Bound to the tab in front by the agent's first command; only the agent's
+  // own tab commands, or a popup its tab opens, move it after that.
+  // A tab ID left here after its tab closed (IDs are never reused) makes the
+  // agent's next command fall back to the tab in front and say so.
+  agentTargetTabId?: string;
+  // Set while the agent's own `tab new` runs: the tab it creates opens behind
+  // the person's tab and becomes the agent's.
+  agentOpeningTab?: boolean;
   nativeActiveTabId?: string;
   // Agent browser pages whose tabs closed here: they are closing, so the
   // agent tab sync must not bring them back meanwhile. A page a person closed
@@ -1021,6 +1042,17 @@ export function scaleBoundsForZoom(
 // entire command queue (#5369 wedge family). The default sits above the 55s
 // wait-action ceiling, so only a genuinely stuck load trips it.
 const DEFAULT_ENTRY_READY_TIMEOUT_MS = 60_000;
+const DEFAULT_AGENT_TAB_PRIME_MS = 300;
+// A screencast keeps Chromium drawing a view parked outside the window, so CDP
+// screenshots of it stay fresh. At this size and rate it delivers next to
+// nothing (no frames at all in the spike); it only has to be running.
+const AGENT_KEEPALIVE_SCREENCAST = {
+  format: "jpeg",
+  quality: 1,
+  maxWidth: 32,
+  maxHeight: 32,
+  everyNthFrame: 60,
+};
 
 const loadEntryReady = (
   view: { webContents: { loadURL: (url: string) => Promise<void> } },
@@ -1066,6 +1098,7 @@ export function createBrowserViewHost(
 ): BrowserViewHost {
   const entryReadyTimeoutMs =
     options.entryReadyTimeoutMs ?? DEFAULT_ENTRY_READY_TIMEOUT_MS;
+  const agentTabPrimeMs = options.agentTabPrimeMs ?? DEFAULT_AGENT_TAB_PRIME_MS;
   const entries = new Map<string, BrowserSessionEntry>();
   const historyFaviconCache = new WeakMap<
     Session,
@@ -1507,7 +1540,13 @@ export function createBrowserViewHost(
         // Defer queries/layout until Electron has returned from that callback.
         setImmediate(() => {
           if (!isCurrentEntry() || session.tabs.get(popup.tabId) !== popup) return;
-          activateTab(session, popup.tabId, false);
+          // A popup from the agent's tab becomes the agent's. It comes to the
+          // front unless the agent opened it from a tab the person is not
+          // looking at.
+          const fromAgent = session.agentTargetTabId === entry.tabId;
+          if (fromAgent) session.agentTargetTabId = popup.tabId;
+          if (!fromAgent || session.activeTabId === entry.tabId)
+            activateTab(session, popup.tabId, false);
           queueNativeActiveTabSync(session);
           pushTabsState(options, session, { kind: "popup", tabId: popup.tabId });
         });
@@ -1929,6 +1968,99 @@ export function createBrowserViewHost(
     challenge.timer.unref?.();
   };
 
+  // Starts the keepalive screencast on a parked agent tab. Best effort: it
+  // needs agent-browser's debugger attachment, and a page that refuses it
+  // only loses fresh screenshots (the capturePage fallback remains).
+  const startKeepalive = (entry: BrowserEntry): void => {
+    if (entry.stopKeepalive) return;
+    const debug = entry.view.webContents.debugger;
+    if (!debug?.isAttached()) return;
+    const listener = (_event: unknown, method: string, params: Record<string, unknown>) => {
+      if (method !== "Page.screencastFrame") return;
+      void debug.sendCommand("Page.screencastFrameAck", { sessionId: params.sessionId }).catch(() => undefined);
+    };
+    debug.on("message", listener);
+    const stop = () => {
+      if (entry.stopKeepalive !== stop) return;
+      entry.stopKeepalive = undefined;
+      debug.removeListener("message", listener);
+      if (debug.isAttached()) void debug.sendCommand("Page.stopScreencast").catch(() => undefined);
+    };
+    entry.stopKeepalive = stop;
+    void debug.sendCommand("Page.startScreencast", AGENT_KEEPALIVE_SCREENCAST).catch(stop);
+  };
+
+  // Puts a never-drawn tab on screen where the person cannot see it, so
+  // Chromium sets it up for input: right behind the tab they have in front, at
+  // its bounds, when that tab shows in the panel; else as a 1px sliver at the
+  // window's edge. Moving this hidden view in the stack, not the person's live
+  // page, keeps their page from flashing.
+  const primeOutOfSight = (
+    session: BrowserSessionEntry,
+    entry: BrowserEntry,
+    size: BrowserRect,
+  ): void => {
+    const content = options.mainWindow.contentView;
+    const front = session.tabs.get(session.activeTabId);
+    const frontIndex = front && isTabOnScreen(session, front)
+      ? content.children?.indexOf(front.view) ?? -1
+      : -1;
+    if (front && frontIndex >= 0) {
+      const ownIndex = content.children?.indexOf(entry.view) ?? -1;
+      if (ownIndex > frontIndex) content.addChildView(entry.view, frontIndex);
+      // Exactly where the person's tab is, so no edge of it shows.
+      entry.view.setBounds(front.view.getBounds?.() ?? session.bounds);
+      return;
+    }
+    const window = options.mainWindow.getContentBounds();
+    entry.view.setBounds({ x: window.width - 1, y: 0, width: size.width, height: size.height });
+  };
+
+  // The agent's tab, when the person is not looking at it, stays drawing where
+  // they cannot see it: visible, at the panel's size, moved outside the window.
+  // Chromium draws nothing for a view outside its window (CDP screenshots time
+  // out), so a keepalive screencast keeps it drawing; and CDP clicks reach a
+  // view only once it has been on screen, so a tab that never was is first
+  // shown for a moment where it cannot be seen (primeOutOfSight). Measured on
+  // Electron 44.7 / macOS (spike 7): screenshots, clicks, navigation and idle
+  // all work this way; without either step they do not.
+  const keepAgentTabPainted = async (
+    session: BrowserSessionEntry,
+    entry: BrowserEntry,
+  ): Promise<void> => {
+    // Only one agent tab draws offscreen: one it left goes back to parked.
+    for (const other of session.tabs.values()) {
+      if (other === entry || !other.stopKeepalive) continue;
+      other.stopKeepalive();
+      if (other.tabId !== session.activeTabId)
+        applyBrowserViewBounds(other.view, OFFSCREEN_BOUNDS, false);
+    }
+    if (entry.agentTab !== undefined || isTabOnScreen(session, entry)) return;
+    // The live stream already keeps the tab in front drawing offscreen.
+    if (session.live && entry.tabId === session.activeTabId) return;
+    const size = session.visible && session.bounds.width > 0 && session.bounds.height > 0
+      ? session.bounds
+      : session.lastVisibleSize ?? OFFSCREEN_BOUNDS;
+    const parked = {
+      x: OFFSCREEN_BOUNDS.x,
+      y: OFFSCREEN_BOUNDS.y,
+      width: Math.round(size.width),
+      height: Math.round(size.height),
+    };
+    // Show before moving, so Chromium takes the new bounds.
+    entry.view.setVisible?.(true);
+    if (!entry.painted) {
+      primeOutOfSight(session, entry, parked);
+      if (agentTabPrimeMs > 0)
+        await new Promise((resolve) => setTimeout(resolve, agentTabPrimeMs));
+      entry.painted = true;
+      // The person may have brought it forward, or closed it, meanwhile.
+      if (session.tabs.get(entry.tabId) !== entry || isTabOnScreen(session, entry)) return;
+    }
+    entry.view.setBounds(parked);
+    startKeepalive(entry);
+  };
+
   const ensureNativeActiveTab = async (
     session: BrowserSessionEntry,
     signal?: AbortSignal,
@@ -1936,8 +2068,10 @@ export function createBrowserViewHost(
     tabCommand = false,
   ): Promise<void> => {
     if (!options.agentBrowserRuntime) return;
-    while (session.nativeActiveTabId !== session.activeTabId) {
-      const tabId = session.activeTabId;
+    // agent-browser follows the agent's tab, not the one the person has in
+    // front: the two differ whenever the agent works in the background.
+    while (session.nativeActiveTabId !== agentTargetId(session)) {
+      const tabId = agentTargetId(session);
       const entry = session.tabs.get(tabId);
       if (!entry)
         throw browserError(
@@ -2451,7 +2585,8 @@ export function createBrowserViewHost(
     preview = false,
   ): Promise<BrowserTabsState> => {
     if (!options.agentBrowserRuntime) {
-      await openTab(session, url, true, "opened", false, preview);
+      const entry = await openTab(session, url, true, "opened", false, preview);
+      if (preview) session.agentTargetTabId = entry.tabId;
       return listTabs(session);
     }
     return queueNativeOperation(session, async () => {
@@ -2464,7 +2599,10 @@ export function createBrowserViewHost(
       // CDP identity first (ensureNativeActiveTab), as after a person closes a
       // tab. Creating it directly also keeps a first tab from racing the
       // bootstrap page agent-browser makes when it connects to zero targets.
-      await openTab(session, url, true, "opened", false, preview);
+      const entry = await openTab(session, url, true, "opened", false, preview);
+      // A tab the session's terminal opens (`ao preview`, a link clicked in
+      // it) is the agent's: its next command acts there.
+      if (preview) session.agentTargetTabId = entry.tabId;
       session.nativeActiveTabId = undefined;
       session.snapshotDeltaBaseline = undefined;
       options.agentBrowserRuntime!.reconcileTargets(session.sessionId);
@@ -2709,10 +2847,22 @@ export function createBrowserViewHost(
         [...session.tabs.values()]
           .filter((entry) => entry.agentTab === undefined)
           .map(target),
-      createTarget: async (url) =>
-        target(
-          await openTab(session, url === "about:blank" ? undefined : url, true),
-        ),
+      createTarget: async (url) => {
+        // The agent's own `tab new` opens behind the person's tab (in front
+        // only when no tab is) and becomes the agent's; the person's "+"
+        // opens in front.
+        const forAgent = session.agentOpeningTab === true;
+        const entry = await openTab(
+          session,
+          url === "about:blank" ? undefined : url,
+          !forAgent || !session.tabs.has(session.activeTabId),
+        );
+        if (forAgent) session.agentTargetTabId = entry.tabId;
+        return target(entry);
+      },
+      // agent-browser activates the target it selects, which follows the
+      // agent's tab. The tab in front is the person's: only their selection,
+      // or AO itself, changes it.
       activateTarget: async (targetId) => {
         const entry = session.tabs.get(targetId);
         if (!entry)
@@ -2721,7 +2871,6 @@ export function createBrowserViewHost(
             `Browser tab ${targetId} does not exist`,
           );
         await entry.ready;
-        activateTab(session, targetId);
       },
       closeTarget: (targetId) => {
         closeTab(session, targetId);
@@ -2939,11 +3088,14 @@ export function createBrowserViewHost(
       applyBrowserViewBounds(entry.view, session.bounds, false);
       return;
     }
-    applyBrowserViewBounds(
-      entry.view,
-      session.bounds,
-      session.bounds.width > 0 && session.bounds.height > 0,
-    );
+    const drawn = session.bounds.width > 0 && session.bounds.height > 0;
+    applyBrowserViewBounds(entry.view, session.bounds, drawn);
+    if (drawn) {
+      entry.painted = true;
+      // In the panel it draws anyway; the live stream may run its own
+      // screencast on this tab, which a keepalive would reconfigure.
+      entry.stopKeepalive?.();
+    }
   }
 
   const isRendererOwned = (
@@ -3040,14 +3192,19 @@ export function createBrowserViewHost(
       );
     assertProfileStable(session);
     return withBrowserOperation(session, async () => {
+      // What the session's terminal opens (`ao preview`, a link clicked in
+      // it) is the agent's tab: its next command acts there.
       if (!session.tabs.size) {
         const entry = await openTab(session, url, true, "opened", false, preview);
+        if (preview) session.agentTargetTabId = entry.tabId;
         return pushNavState(options, entry);
       }
       const entry = activeEntry(session);
       checkedBrowserURL(url);
-      if (preview) session.previewTabId = entry.tabId;
-      else if (session.previewTabId === entry.tabId) session.previewTabId = undefined;
+      if (preview) {
+        session.previewTabId = entry.tabId;
+        session.agentTargetTabId = entry.tabId;
+      } else if (session.previewTabId === entry.tabId) session.previewTabId = undefined;
       return navigateEntry(entry, url);
     });
   };
@@ -3080,6 +3237,15 @@ export function createBrowserViewHost(
     }
     const owner = entries.get(entry.state.viewId);
     if (owner) owner.livePreviewPending = false;
+    // The panel's address bar and buttons follow the tab in front only. A tab
+    // loading behind it (the agent's own) keeps its state to itself.
+    const announce = (state: BrowserNavState): BrowserNavState => {
+      entry.state = state;
+      const shownIn = entries.get(state.viewId);
+      if (!shownIn || shownIn.activeTabId === entry.tabId)
+        shellWebContents.send("browser:navState", state);
+      return state;
+    };
     const pendingNavigation = { url: href };
     entry.pendingNavigation = pendingNavigation;
     try {
@@ -3088,14 +3254,12 @@ export function createBrowserViewHost(
       else await entry.view.webContents.loadURL(href);
     } catch (err) {
       if ((err as { errorCode?: number })?.errorCode === -3)
-        return pushNavState(options, entry);
+        return announce(readNavState(entry));
       entry.view.setVisible?.(false);
-      entry.state = {
+      return announce({
         ...readNavState(entry),
         error: String((err as Error)?.message || "Unable to load page"),
-      };
-      shellWebContents.send("browser:navState", entry.state);
-      return entry.state;
+      });
     } finally {
       if (entry.pendingNavigation === pendingNavigation)
         entry.pendingNavigation = undefined;
@@ -3103,7 +3267,7 @@ export function createBrowserViewHost(
     const session = entries.get(entry.state.viewId);
     if (session?.activeTabId === entry.tabId)
       applySessionBounds(session, entry);
-    return pushNavState(options, entry);
+    return announce(readNavState(entry));
   };
 
   // clear resets the view to a blank page (`ao preview clear`). about:blank is
@@ -3283,6 +3447,7 @@ export function createBrowserViewHost(
 
   const destroyTabView = (entry: BrowserEntry): void => {
     clearSiteChallenge(entry);
+    entry.stopKeepalive?.();
     applyBrowserViewBounds(entry.view, OFFSCREEN_BOUNDS, false);
     options.mainWindow.contentView.removeChildView?.(entry.view);
     if (entry.view.webContents.debugger?.isAttached()) {
@@ -4145,12 +4310,11 @@ export function createBrowserViewHost(
     if (!session || !isRendererOwned(event, input.viewId))
       return emptyTabsState(input.viewId);
     assertProfileStable(session);
-    return queueNativeOperation(session, async () => {
-      activateTab(session, input.tabId);
-      if (session.tabs.get(input.tabId)?.agentTab === undefined)
-        await ensureNativeActiveTab(session);
-      return listTabs(session);
-    });
+    // The person's selection only changes the tab in front. The agent keeps
+    // its own tab (agentTargetTabId), so this neither waits for an agent
+    // command in flight nor moves agent-browser.
+    activateTab(session, input.tabId);
+    return listTabs(session);
   });
   handle("browser:closeTab", (event, input: BrowserTabInput) => {
     const session = entries.get(input.viewId);
@@ -4602,7 +4766,7 @@ export function createBrowserViewHost(
       ) {
         const probed = options.credentialFiller.selectorProbeBlocked(
           sessionId,
-          vaultDocumentKey(activeEntry(session)),
+          vaultDocumentKey(agentEntry(session)),
           args,
         );
         if (probed) throw browserError("BROWSER_SECRET_FIELD_LOCKED", probed);
@@ -4618,11 +4782,19 @@ export function createBrowserViewHost(
               ? normalizeAgentBrowserURL(args.url)
               : undefined;
             await openUserTab(session, url);
-            return agentTabResult(activeEntry(session), true);
+            session.agentTargetTabId = session.activeTabId;
+            return agentTabResult(agentEntry(session), true);
           }
           await openTab(session, undefined, true);
         }
-        const entry = activeEntry(session);
+        // Set once, for this command: the agent's tab closed since its last
+        // command, so it now acts on the tab in front.
+        const retargeted = bindAgentTarget(session);
+        const actionTarget = (targetEntry: BrowserEntry) => ({
+          ...agentActionTarget(targetEntry),
+          ...(retargeted ? { retargeted: true as const } : {}),
+        });
+        const entry = agentEntry(session);
         const approvalBinding = parseApprovalBinding(args.approvalBinding);
         const runNative = async (
           nativeAction: string,
@@ -4646,9 +4818,10 @@ export function createBrowserViewHost(
             session,
             async () => {
               await ensureNativeActiveTab(session, nativeSignal, nativeAction.startsWith("tab-"));
-              const targetEntry = activeEntry(session);
+              const targetEntry = agentEntry(session);
               const targetTabId = targetEntry.tabId;
               await targetEntry.ready;
+              await keepAgentTabPainted(session, targetEntry);
               await beforeDispatch?.(targetEntry);
               // An approved action may only land on the tab, document, and (for
               // act) element the user approved; checked in the same queued
@@ -4700,14 +4873,18 @@ export function createBrowserViewHost(
                     .then(() => true, () => false);
                 }
               }
-              const targetBeforeAction = agentActionTarget(targetEntry);
-              const activationRevision = session.activationRevision;
+              if (targetTabId !== session.activeTabId)
+                await emulateAgentFocus(targetEntry);
+              const targetBeforeAction = actionTarget(targetEntry);
               let result: Record<string, unknown>;
               if (nativeAction === "tab-select") {
                 // A failed selection may still have changed the native target.
                 // Require fresh synchronization before the next page action.
                 session.nativeActiveTabId = undefined;
               }
+              // The tab agent-browser creates for the agent's `tab new` is
+              // the agent's: createTarget opens it behind the person's tab.
+              if (nativeAction === "tab-new") session.agentOpeningTab = true;
               try {
                 result = await options.agentBrowserRuntime!.runAction(
                   sessionId,
@@ -4731,6 +4908,8 @@ export function createBrowserViewHost(
                   );
                 }
                 throw error;
+              } finally {
+                session.agentOpeningTab = false;
               }
               if (pressGuarded) {
                 // An Enter that opened a dialog leaves the page unable to
@@ -4754,14 +4933,10 @@ export function createBrowserViewHost(
               ) {
                 session.nativeActiveTabId = nativeArgs.tabId;
                 const requestedEntry = session.tabs.get(nativeArgs.tabId);
-                // An in-flight command must not overwrite a newer human selection,
-                // even if they switched away and back to the original tab.
-                if (
-                  session.activationRevision === activationRevision &&
-                  requestedEntry && requestedEntry.agentTab === undefined
-                ) {
-                  activateTab(session, nativeArgs.tabId);
-                }
+                // The agent's selection moves the agent, never the tab the
+                // person has in front.
+                if (requestedEntry && requestedEntry.agentTab === undefined)
+                  session.agentTargetTabId = nativeArgs.tabId;
               }
               if (nativeAction === "tab-new" || nativeAction === "tab-close") {
                 session.nativeActiveTabId = undefined;
@@ -4770,11 +4945,15 @@ export function createBrowserViewHost(
                 session.snapshotDeltaBaseline = undefined;
               if (nativeAction.startsWith("tab-"))
                 await ensureNativeActiveTab(session, nativeSignal, true);
+              // A tab the agent just moved to gets drawing now, not on its next
+              // command: a new one is shown for a moment first.
+              if (nativeAction === "tab-new" || nativeAction === "tab-select")
+                await keepAgentTabPainted(session, agentEntry(session));
               const targetAfterAction = session.tabs.get(targetTabId);
               return {
                 ...result,
                 target: targetAfterAction
-                  ? agentActionTarget(targetAfterAction)
+                  ? actionTarget(targetAfterAction)
                   : targetBeforeAction,
               };
             },
@@ -4808,7 +4987,7 @@ export function createBrowserViewHost(
           case "snapshot": {
             const interactive = Boolean(args.interactive);
             if (args.delta === true) {
-              const tabId = session.activeTabId;
+              const tabId = agentTargetId(session);
               const baseline = session.snapshotDeltaBaseline;
               const current =
                 baseline &&
@@ -4847,7 +5026,7 @@ export function createBrowserViewHost(
               // flight (a background tab closing, a profile switch) must win over
               // a response captured before it.
               session.snapshotDeltaBaseline =
-                session.activeTabId === tabId &&
+                agentTargetId(session) === tabId &&
                 session.snapshotDeltaBaseline === baseline
                   ? { tabId, interactive, revision: response.delta.revision }
                   : undefined;
@@ -4950,7 +5129,7 @@ export function createBrowserViewHost(
               retried: boolean,
               beforeSnapshot: string,
             ) => {
-              const actionEntry = activeEntry(session);
+              const actionEntry = agentEntry(session);
               const before = actionFacts(actionEntry);
               const generations = {
                 documentGeneration: actionEntry.documentGeneration,
@@ -4987,7 +5166,7 @@ export function createBrowserViewHost(
                     signal,
                   )
                 : undefined;
-              const resultEntry = activeEntry(session);
+              const resultEntry = agentEntry(session);
               const navigation =
                 resultEntry.tabId !== actionEntry.tabId ||
                 actionEntry.navigationGeneration >
@@ -5122,7 +5301,7 @@ export function createBrowserViewHost(
               );
               if (locked) throw browserError("BROWSER_SECRET_FIELD_LOCKED", locked);
             };
-            await refuseIfFilledFieldFocused(activeEntry(session));
+            await refuseIfFilledFieldFocused(agentEntry(session));
             return runNative(
               action,
               {
@@ -5164,7 +5343,7 @@ export function createBrowserViewHost(
                 ? normalizeAgentBrowserURL(args.url)
                 : undefined;
             await runNative(action, { url });
-            return agentTabResult(activeEntry(session), true);
+            return agentTabResult(agentEntry(session), true);
           }
           case "tab-select": {
             await runNative(action, {
@@ -5175,13 +5354,13 @@ export function createBrowserViewHost(
                 "tabId is required",
               ),
             });
-            return agentTabResult(activeEntry(session), true);
+            return agentTabResult(agentEntry(session), true);
           }
           case "tab-close": {
             const tabId =
               typeof args.tabId === "string" && args.tabId.trim()
                 ? args.tabId.trim()
-                : session.activeTabId;
+                : agentTargetId(session);
             if (session.tabs.size === 1) {
               throw browserError(
                 "CANNOT_CLOSE_LAST_TAB",
@@ -5274,7 +5453,7 @@ export function createBrowserViewHost(
               const blocked = await filler.screenshotBlocked(sessionId, vaultDocumentKey(shown), vaultCdp(shown));
               if (blocked) throw browserError("BROWSER_SECRET_ON_SCREEN", blocked);
             };
-            await refuseIfCodeOnScreen(activeEntry(session));
+            await refuseIfCodeOnScreen(agentEntry(session));
             if (!options.agentBrowserRuntime) {
               throw browserError(
                 "BROWSER_AUTOMATION_UNAVAILABLE",
@@ -5285,8 +5464,9 @@ export function createBrowserViewHost(
               session,
               async () => {
                 await ensureNativeActiveTab(session, signal);
-                const targetEntry = activeEntry(session);
+                const targetEntry = agentEntry(session);
                 await targetEntry.ready;
+                await keepAgentTabPainted(session, targetEntry);
                 await refuseIfCodeOnScreen(targetEntry);
                 try {
                   const result = await options.agentBrowserRuntime!.screenshot(
@@ -5295,7 +5475,7 @@ export function createBrowserViewHost(
                     signal,
                     { annotate: args.annotate === true },
                   );
-                  return { ...result, target: agentActionTarget(targetEntry) };
+                  return { ...result, target: actionTarget(targetEntry) };
                 } catch (error) {
                   if (!isAgentBrowserTimeout(error)) throw error;
                   const image = await captureScreenshotFallback(targetEntry, signal);
@@ -5311,7 +5491,7 @@ export function createBrowserViewHost(
                     data: png.toString("base64"),
                     width,
                     height,
-                    target: agentActionTarget(targetEntry),
+                    target: actionTarget(targetEntry),
                     untrustedExternalContent: true as const,
                   };
                 }
@@ -5364,7 +5544,7 @@ export function createBrowserViewHost(
                 ref: stringArg(args, "ref", "REFERENCE_REQUIRED", "ref is required"),
               });
             }
-            const target = activeEntry(session);
+            const target = agentEntry(session);
             await ensureDebugger(target);
             const fillTarget = {
               cdp: target.view.webContents.debugger,
@@ -5412,7 +5592,7 @@ export function createBrowserViewHost(
           case "describe": {
             // Internal: the daemon's approval gate asks what a click, act,
             // or Enter would act on before it lets the action run.
-            const describeEntry = activeEntry(session);
+            const describeEntry = agentEntry(session);
             await describeEntry.ready;
             const contents = describeEntry.view.webContents;
             const describeDocument = describeEntry.documentGeneration;
@@ -5462,7 +5642,7 @@ export function createBrowserViewHost(
             // the tab moved on while they were read, discard them and let the
             // daemon ask for a fresh read.
             if (
-              activeEntry(session) !== describeEntry ||
+              agentEntry(session) !== describeEntry ||
               describeEntry.documentGeneration !== describeDocument
             ) {
               throw browserError(
@@ -5496,7 +5676,7 @@ export function createBrowserViewHost(
         if (!filler) return result;
         // Mask by element as well as by string: a filled field's current
         // value is masked even after it was edited.
-        const shown = session.tabs.size ? activeEntry(session) : undefined;
+        const shown = session.tabs.size ? agentEntry(session) : undefined;
         return shown
           ? filler.scrubLive(sessionId, vaultDocumentKey(shown), vaultCdp(shown), result)
           : filler.scrub(sessionId, result);
@@ -5687,6 +5867,47 @@ function activeEntry(session: BrowserSessionEntry): BrowserEntry {
       "Active browser tab is unavailable",
     );
   return entry;
+}
+
+// Drawn in the Browser panel: the panel is visible with a real size and this
+// is its tab in front. Every other tab is parked outside the window.
+function isTabOnScreen(
+  session: Pick<BrowserSessionEntry, "visible" | "activeTabId" | "bounds">,
+  entry: Pick<BrowserEntry, "tabId">,
+): boolean {
+  return (
+    session.visible &&
+    session.activeTabId === entry.tabId &&
+    session.bounds.width > 0 &&
+    session.bounds.height > 0
+  );
+}
+
+// The tab ID agent commands act on: the agent's own tab while it is open, else
+// the tab in front (before the agent's first command binds one).
+function agentTargetId(session: BrowserSessionEntry): string {
+  const own = session.agentTargetTabId;
+  return own && session.tabs.has(own) ? own : session.activeTabId;
+}
+
+function agentEntry(session: BrowserSessionEntry): BrowserEntry {
+  const entry = session.tabs.get(agentTargetId(session));
+  if (!entry)
+    throw browserError(
+      "BROWSER_TARGET_UNAVAILABLE",
+      "Active browser tab is unavailable",
+    );
+  return entry;
+}
+
+// Binds the agent to the tab in front when it has no tab of its own yet, or
+// its tab closed. Returns true when an earlier tab was lost, so the command can
+// tell the agent it now acts on a different page.
+function bindAgentTarget(session: BrowserSessionEntry): boolean {
+  const own = session.agentTargetTabId;
+  if (own && session.tabs.has(own)) return false;
+  session.agentTargetTabId = session.activeTabId || undefined;
+  return own !== undefined;
 }
 
 function isBlankBrowserEntry(entry: BrowserEntry): boolean {
@@ -5959,8 +6180,10 @@ async function observeActionPostcondition(
   signal?: AbortSignal,
 ): Promise<Record<string, unknown>> {
   const deadline = Date.now() + postcondition.timeoutMs;
+  // A popup from the agent's tab moves the agent; the person switching tabs
+  // in the panel does not count as this action navigating.
   const activeTabChanged = () =>
-    activeEntry(session).tabId !== sourceEntry.tabId;
+    agentEntry(session).tabId !== sourceEntry.tabId;
   const satisfiedNavigation = () =>
     activeTabChanged() ||
     sourceEntry.navigationGeneration > before.navigationGeneration;
@@ -6129,12 +6352,16 @@ function agentTabResult(
 
 function agentTabsResult(
   session: BrowserSessionEntry,
-): BrowserTabsState & { untrustedExternalContent: true } {
+): BrowserTabsState & { panelTabId: string; untrustedExternalContent: true } {
+  // For the agent, the active tab is its own; panelTabId is the one the
+  // person has in front.
+  const agentTabId = agentTargetId(session);
   return {
     viewId: session.viewId,
-    activeTabId: session.activeTabId,
+    activeTabId: agentTabId,
+    panelTabId: session.activeTabId,
     tabs: [...session.tabs.values()].map((entry) =>
-      agentTabResult(entry, entry.tabId === session.activeTabId),
+      agentTabResult(entry, entry.tabId === agentTabId),
     ),
     untrustedExternalContent: true,
   };
@@ -6173,11 +6400,32 @@ type SnapshotDelta =
 // the command to the request deadline instead of failing with something the
 // agent can act on.
 function assertPanelPainted(session: BrowserSessionEntry): void {
-  if (session.visible) return;
-  throw browserError(
-    "BROWSER_PANEL_HIDDEN",
-    "Human pointer movement needs the Browser panel visible on screen. Ask the user to open it, or retry without --human.",
-  );
+  if (!session.visible)
+    throw browserError(
+      "BROWSER_PANEL_HIDDEN",
+      "Human pointer movement needs the Browser panel visible on screen. Ask the user to open it, or retry without --human.",
+    );
+  // The agent's tab behind the person's is parked offscreen: not painted.
+  if (agentTargetId(session) !== session.activeTabId)
+    throw browserError(
+      "BROWSER_PANEL_HIDDEN",
+      "Human pointer movement needs the agent's tab in front in the Browser panel. Ask the user to select it, or retry without --human.",
+    );
+}
+
+// CDP input reaches a tab the person is not looking at, but that page reads
+// document.hasFocus() as false, which some sites act on (rich-text editors,
+// autocomplete that closes on blur, validation on blur). Best effort:
+// agent-browser owns the debugger attachment, so a tab it has not attached
+// yet is left alone.
+async function emulateAgentFocus(entry: BrowserEntry): Promise<void> {
+  const debug = entry.view.webContents.debugger;
+  if (!debug?.isAttached()) return;
+  try {
+    await debug.sendCommand("Emulation.setFocusEmulationEnabled", { enabled: true });
+  } catch {
+    // The page still works without it; only focus-sensitive sites differ.
+  }
 }
 
 function parseSnapshotDelta(value: unknown): SnapshotDelta {
@@ -6743,7 +6991,7 @@ function networkEntryFor(session: BrowserSessionEntry): BrowserEntry {
     if (captured) return captured;
     session.networkTabId = undefined;
   }
-  return activeEntry(session);
+  return agentEntry(session);
 }
 
 async function startNetworkCapture(

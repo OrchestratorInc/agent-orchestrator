@@ -168,14 +168,26 @@ passing off an unlabelled image as an annotated one.
 
 `highlight` draws a non-mutating overlay around a snapshot ref until
 `unhighlight`, navigation, or target replacement.
-`tabs` reports stable logical IDs such as `t1` and marks the active tab.
-`tab new` creates and selects a tab, `tab select` changes the target of all
-following browser commands, and `tab close` defaults to the active tab.
+The agent has its own tab, separate from the tab the user has in front. The
+first agent command uses the tab in front; after that, agent commands stay on
+that tab even when the user opens or selects another one. A tab that
+`ao preview` (or a link clicked in the session's terminal) opens or loads
+becomes the agent's tab.
+`tabs` reports stable logical IDs such as `t1`, marks the agent's tab as
+active, and reports the user's tab as `panelTabId`. `tab new` creates a tab
+behind the user's and makes it the agent's, `tab select` changes the agent's
+tab for all following browser commands without changing what the user sees,
+and `tab close` defaults to the agent's tab. To work on the tab the user is
+looking at, `tab select` its `panelTabId`.
 Allowed page popups are captured as new Orchestrator tabs instead of opening a separate
-OS browser. Take a new snapshot after switching tabs because element refs are
-invalidated at the tab boundary. The user can select or close these same tabs
-from the compact tab control in the Browser toolbar; the next agent command
-uses whichever tab the user selected.
+OS browser; a popup opened from the agent's tab becomes the agent's tab. Take a
+new snapshot after switching tabs because element refs are invalidated at the
+tab boundary. The user can select or close these same tabs from the compact tab
+control in the Browser toolbar. If the user closes the agent's tab, the next
+agent command uses the tab in front and its `target` includes
+`retargeted: true`. While the user looks at another tab, the agent's tab keeps
+rendering out of sight, so screenshots, clicks, and typing work there as usual;
+`--human` pointer actions still need the agent's tab in front.
 If the native automation runtime cannot reconcile its selected target with
 that Orchestrator tab, the command fails before reading or mutating a page with
 `BROWSER_TARGET_MISMATCH`; it never falls through to another tab. Structured
@@ -209,7 +221,7 @@ Network capture is optional and disabled by default. Use it only when the user
 explicitly asks to inspect requests, or when diagnosing loading, API, CORS,
 authentication, caching, or redirect failures after snapshots, console
 messages, and page errors are insufficient. Do not enable it for routine
-navigation or interaction. `network start` captures only the active tab for 60
+navigation or interaction. `network start` captures only the agent's tab for 60
 seconds by default (maximum 300), retains at most 200 in-memory entries, and
 stops automatically. It records sanitized request metadata only: no request or
 response bodies, credentials, cookies, or query values. `network status` and

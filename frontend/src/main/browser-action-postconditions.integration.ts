@@ -638,12 +638,14 @@ async function run(): Promise<void> {
 				process.stdout.write(`browser native popup ${name.endsWith("link") ? "link" : "window"} attempt ${attempt + 1} passed\n`);
 			}
 		}
-		async function waitForTabs(sessionId: string, expectedIds: string[], activeTabId?: string) {
+		// activeTabId is the agent's tab; panelTabId the one the person has in front.
+		async function waitForTabs(sessionId: string, expectedIds: string[], activeTabId?: string, panelTabId?: string) {
 			return deadline((async () => {
 				for (;;) {
-					const state = await nativeCommand(sessionId, "tabs") as BrowserTabsState;
+					const state = await nativeCommand(sessionId, "tabs") as BrowserTabsState & { panelTabId?: string };
 					if (state.tabs.map(tab => tab.id).join(",") === expectedIds.join(",") &&
-						(activeTabId === undefined || state.activeTabId === activeTabId)) return state;
+						(activeTabId === undefined || state.activeTabId === activeTabId) &&
+						(panelTabId === undefined || state.panelTabId === panelTabId)) return state;
 					await new Promise(resolve => setTimeout(resolve, 10));
 				}
 			})());
@@ -680,7 +682,10 @@ async function run(): Promise<void> {
 			const gapOpener = activeWebContents();
 			async function openGapPopup(name: "Third" | "Fourth" | "Transient", ids: string[]) {
 				await gapOpener.executeJavaScript(`window.open(${JSON.stringify(new URL(`/native-tab?name=${name}`, fixtureURL).href)}, '_blank'); undefined`, true);
-				await waitForTabs(sessionId, ids, ids[ids.length - 1]);
+				// The popup comes to the front of the panel. It becomes the agent's
+				// tab only when its opener is the agent's tab (not for Fourth: the
+				// agent is on t3 by then).
+				await waitForTabs(sessionId, ids, undefined, ids[ids.length - 1]);
 				const contents = activeWebContents();
 				await deadline((async () => {
 					while (await contents.executeJavaScript("document.title") !== `${name} tab`)
@@ -720,6 +725,15 @@ async function run(): Promise<void> {
 				nativeRuntime.runAction = originalRunAction;
 			}
 			await nativeCommand(sessionId, "tab-select", { tabId: "t3" });
+			// The agent's selection moves only the agent; the person brings t3
+			// into the panel themselves.
+			{
+				const ensure = ipcHandlers.get("browser:ensure");
+				const select = ipcHandlers.get("browser:selectTab");
+				assert.ok(ensure && select);
+				const { viewId } = await ensure({ sender: shellWebContents }, sessionId) as { viewId: string };
+				await select({ sender: shellWebContents }, { viewId, tabId: "t3" });
+			}
 			assert.equal(browserViews.get(third.id)?.getBounds().x, 0, "AO t3 must occupy the visible panel");
 			assert.ok((browserViews.get(fourth.id)?.getBounds().x ?? 0) < 0, "inactive AO t4 must be parked outside the panel");
 			assert.ok(targetProvider, "background synchronization must expose this session's real target provider");
@@ -789,8 +803,10 @@ async function run(): Promise<void> {
 					release?.();
 					nativeRuntime.runAction = runAction;
 				}
-				await waitForTabs(sessionId, ["t1", "t3", "t4"], "t3");
-				await nativeSnapshot(sessionId, "Third changed", "t3");
+				// The person's selection takes the panel at once; the agent's own
+				// queued selections still run in order and leave it on t1.
+				await waitForTabs(sessionId, ["t1", "t3", "t4"], "t1", "t3");
+				await nativeSnapshot(sessionId, "Open report link", "t1");
 			}
 			const thirdClosed = new Promise<void>(resolve => third.once("destroyed", () => resolve()));
 			await nativeCommand(sessionId, "tab-close", { tabId: "t3" });
