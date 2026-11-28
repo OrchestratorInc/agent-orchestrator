@@ -348,6 +348,61 @@ func TestSecurePairingStatusActive(t *testing.T) {
 	}
 }
 
+func TestSecurePairingAdvertisesMagicDNSEndpoint(t *testing.T) {
+	const host = "prasads-macbook-pro.tail057d04.ts.net"
+	secure := mobilebridge.Endpoint{Kind: mobilebridge.KindTailscale, Host: host, Port: 443, Secure: true}
+	raw := mobilebridge.Endpoint{Kind: mobilebridge.KindTailscale, Host: "100.72.46.7", Port: 3011}
+	lan := mobilebridge.Endpoint{Kind: mobilebridge.KindLAN, Host: "192.0.2.1", Port: 3011}
+
+	setup := func(t *testing.T, secureOn bool) *BridgeService {
+		b := newSecureBridge(t, tsUp, func() int { return 3011 })
+		b.PickLANHosts = func() []string { return []string{"192.0.2.1"} }
+		b.PickTailscaleHosts = func() []string { return []string{"100.72.46.7"} }
+		if secureOn {
+			if _, err := b.SetSecurePairing(true); err != nil {
+				t.Fatal(err)
+			}
+		}
+		if _, err := b.Enable(); err != nil {
+			t.Fatal(err)
+		}
+		return b
+	}
+	equal := func(t *testing.T, got, want []mobilebridge.Endpoint) {
+		t.Helper()
+		if len(got) != len(want) {
+			t.Fatalf("got %+v, want %+v", got, want)
+		}
+		for i := range want {
+			if got[i] != want[i] {
+				t.Fatalf("endpoint %d: got %+v, want %+v", i, got[i], want[i])
+			}
+		}
+	}
+
+	t.Run("active", func(t *testing.T) {
+		b := setup(t, true)
+		want := []mobilebridge.Endpoint{lan, secure, raw}
+		equal(t, b.AdvertisedEndpoints(), want)
+		st := b.Status()
+		equal(t, st.Endpoints, want)
+		if st.TailscaleHost != host {
+			t.Errorf("TailscaleHost = %q, want %q", st.TailscaleHost, host)
+		}
+	})
+
+	t.Run("inactive", func(t *testing.T) {
+		b := setup(t, false)
+		want := []mobilebridge.Endpoint{lan, raw}
+		equal(t, b.AdvertisedEndpoints(), want)
+		st := b.Status()
+		equal(t, st.Endpoints, want)
+		if st.TailscaleHost != "100.72.46.7" {
+			t.Errorf("TailscaleHost = %q, want the raw Tailscale IP", st.TailscaleHost)
+		}
+	})
+}
+
 func TestSecurePairingReasons(t *testing.T) {
 	cases := []struct {
 		name   string
