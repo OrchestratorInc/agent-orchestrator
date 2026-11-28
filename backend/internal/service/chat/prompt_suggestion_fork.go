@@ -23,7 +23,7 @@ func (s *Service) RunPromptSuggestionTask(ctx context.Context, id domain.Session
 	// A standalone daemon retains the scratch-conversation fallback.
 	runID := s.sides.launchID()
 	if !canFork || runID == "" {
-		return s.RunBackgroundTask(ctx, harness, cfg, prompt)
+		return s.runBackgroundTask(ctx, harness, cfg, prompt, false)
 	}
 	source, release, err := s.workingController(ctx, id)
 	if err != nil {
@@ -32,7 +32,7 @@ func (s *Service) RunPromptSuggestionTask(ctx context.Context, id domain.Session
 	defer release()
 	caps := source.Capabilities()
 	if !caps.Has(ports.ChatCapabilityFork) && !caps.Has(ports.ChatCapabilityForkCurrent) {
-		return s.RunBackgroundTask(ctx, harness, cfg, prompt)
+		return s.runBackgroundTask(ctx, harness, cfg, prompt, false)
 	}
 	if source.harness != harness || source.busy() || source.State() != ports.ChatControllerReady {
 		return "", ErrPromptSuggestionStale
@@ -149,5 +149,5 @@ func (s *Service) RunPromptSuggestionTask(ctx context.Context, id domain.Session
 	if conversation.ProviderConversationID() != side.ProviderForkID {
 		return "", errors.New("suggestion fork ownership changed before generation")
 	}
-	return runBackgroundTurn(taskCtx, harness, conversation, prompt)
+	return runBackgroundTurn(taskCtx, harness, conversation, prompt, false)
 }

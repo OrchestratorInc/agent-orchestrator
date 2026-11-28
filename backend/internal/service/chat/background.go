@@ -13,7 +13,11 @@ import (
 
 // RunBackgroundTask executes a short provider turn without publishing a Chat
 // controller or conversation into AO's durable session history.
-func (s *Service) RunBackgroundTask(ctx context.Context, harness domain.AgentHarness, cfg ports.ChatStartConfig, prompt string) (_ string, err error) {
+func (s *Service) RunBackgroundTask(ctx context.Context, harness domain.AgentHarness, cfg ports.ChatStartConfig, prompt string) (string, error) {
+	return s.runBackgroundTask(ctx, harness, cfg, prompt, harness == domain.HarnessClaudeCode)
+}
+
+func (s *Service) runBackgroundTask(ctx context.Context, harness domain.AgentHarness, cfg ports.ChatStartConfig, prompt string, preferHaiku bool) (_ string, err error) {
 	if strings.TrimSpace(prompt) == "" {
 		return "", errors.New("background task prompt is empty")
 	}
@@ -49,11 +53,11 @@ func (s *Service) RunBackgroundTask(ctx context.Context, harness domain.AgentHar
 		input, _ := json.Marshal(prompt)
 		prompt = instructions + "\n\nInput data (JSON string):\n" + string(input)
 	}
-	return runBackgroundTurn(ctx, harness, conversation, prompt)
+	return runBackgroundTurn(ctx, harness, conversation, prompt, preferHaiku)
 }
 
-func runBackgroundTurn(ctx context.Context, harness domain.AgentHarness, conversation ports.ChatConversation, prompt string) (string, error) {
-	settings, err := backgroundTaskSettings(ctx, conversation)
+func runBackgroundTurn(ctx context.Context, harness domain.AgentHarness, conversation ports.ChatConversation, prompt string, preferHaiku bool) (string, error) {
+	settings, err := backgroundTaskSettings(ctx, conversation, preferHaiku)
 	if err != nil {
 		return "", fmt.Errorf("configure background %s task: %w", harness, err)
 	}
@@ -110,12 +114,15 @@ func runBackgroundTurn(ctx context.Context, harness domain.AgentHarness, convers
 
 // The provider's live catalog keeps this text-only call from inheriting an
 // expensive reasoning setting or choosing a level its model cannot use.
-func backgroundTaskSettings(ctx context.Context, conversation ports.ChatConversation) (ports.ChatTurnSettings, error) {
+func backgroundTaskSettings(ctx context.Context, conversation ports.ChatConversation, preferHaiku bool) (ports.ChatTurnSettings, error) {
 	switch provider := conversation.(type) {
 	case ports.ChatConfigOptionController:
 		catalog, err := provider.ListConfigOptions(ctx)
 		if err != nil {
 			return ports.ChatTurnSettings{}, err
+		}
+		if preferHaiku {
+			catalog = selectNamingHaiku(ctx, provider, catalog)
 		}
 		for _, option := range catalog {
 			if option.Category != "thought_level" || option.Type != ports.ChatConfigOptionSelect {
@@ -143,6 +150,30 @@ func backgroundTaskSettings(ctx context.Context, conversation ports.ChatConversa
 		}
 	}
 	return ports.ChatTurnSettings{}, nil
+}
+
+// The scratch conversation starts on the session's selected model. Switch only
+// to a Haiku offered by this account, using its native option ID and value.
+func selectNamingHaiku(ctx context.Context, provider ports.ChatConfigOptionController, catalog []ports.ChatConfigOption) []ports.ChatConfigOption {
+	for _, option := range catalog {
+		if (option.ID != "model" && option.Category != "model") || option.Type != ports.ChatConfigOptionSelect {
+			continue
+		}
+		for _, choice := range option.Choices {
+			isHaiku := strings.Contains(strings.ToLower(choice.Value), "haiku") || strings.Contains(strings.ToLower(choice.Name), "haiku")
+			if choice.Value == "" || !isHaiku {
+				continue
+			}
+			if choice.Value != option.Current.Select {
+				updated, err := provider.SetConfigOption(ctx, option.ID, ports.ChatConfigOptionValue{Select: choice.Value})
+				if err == nil {
+					return updated
+				}
+			}
+			return catalog
+		}
+	}
+	return catalog
 }
 
 func lowestBackgroundEffort(values []string) string {
