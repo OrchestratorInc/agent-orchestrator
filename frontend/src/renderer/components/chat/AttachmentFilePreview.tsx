@@ -3,6 +3,7 @@ import { mediaCrossOrigin } from "../../lib/file-media";
 import { cn } from "../../lib/utils";
 import { Dialog, DialogContent, DialogTitle } from "../ui/dialog";
 import { Pressable } from "../ui/pressable";
+import { VideoPlayer } from "../VideoPlayer";
 import { useChatImageSrc } from "./chat-image-source";
 import {
 	ATTACHMENT_TILE_OVERLAY_PILL_CLASS,
@@ -155,7 +156,7 @@ export function AttachmentFilePreview({ kind, url, name, onError: onLoadError }:
 									<PdfPreview onError={onError} path={name} src={src} />
 								</Suspense>
 							) : (
-								<video crossOrigin={mediaCrossOrigin(src)} controls onError={onError} playsInline preload="metadata" src={src} className="size-full min-h-0 object-contain" />
+								<VideoPlayer crossOrigin={mediaCrossOrigin(src)} label={name} onError={onError} src={src} />
 							)}
 						</div>
 					</DialogContent>

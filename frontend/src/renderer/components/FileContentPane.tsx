@@ -419,7 +419,7 @@ export function FileContentPane({
 					{t("files.previousVersionAt", { revision: detail.compareBaseSha?.slice(0, 12) ?? "base" })}
 				</p>
 			) : null}
-			<CompleteFileView annotationRange={annotationRange} annotationReady={annotationReady}
+			<CompleteFileView active={active} annotationRange={annotationRange} annotationReady={annotationReady}
 				annotation={newerLiveText ? { ...annotation, begin: () => {} } : annotation}
 				detail={displayDetail}
 				editing={editing && effectiveMode === "file"}
@@ -679,14 +679,14 @@ function artifactOriginOf(source: FilesSource): string | undefined {
 	}
 }
 
-function CompleteFileView({ annotationReady = true, annotationRange, annotation, commitSha, detail, editing, markdownEditing = false, mediaKind, onContentReady, onEditChange, onRevealLineConsumed, revealLine, scope, sessionId, hostId, source, version }: { annotationReady?: boolean; annotationRange?: FileAnnotationRange; annotation: FileAnnotationModel; commitSha?: string; detail: WorkspaceFileDetail; editing: boolean; markdownEditing?: boolean; mediaKind?: FileMediaKind; onContentReady?: () => void; onEditChange: (content: string) => void; onRevealLineConsumed?: (requestKey: number) => void; revealLine?: { line: number; requestKey: number }; scope: WorkspaceDiffScope; sessionId: string; hostId?: string; source: FilesSource; version: number | string }) {
+function CompleteFileView({ active = true, annotationReady = true, annotationRange, annotation, commitSha, detail, editing, markdownEditing = false, mediaKind, onContentReady, onEditChange, onRevealLineConsumed, revealLine, scope, sessionId, hostId, source, version }: { active?: boolean; annotationReady?: boolean; annotationRange?: FileAnnotationRange; annotation: FileAnnotationModel; commitSha?: string; detail: WorkspaceFileDetail; editing: boolean; markdownEditing?: boolean; mediaKind?: FileMediaKind; onContentReady?: () => void; onEditChange: (content: string) => void; onRevealLineConsumed?: (requestKey: number) => void; revealLine?: { line: number; requestKey: number }; scope: WorkspaceDiffScope; sessionId: string; hostId?: string; source: FilesSource; version: number | string }) {
 	const { t } = useTranslation();
 	const needsRevision = !mediaKind && source.kind !== "artifact" && source.kind !== "snapshot" && (detail.deleted || detail.contentTruncated) && !detail.imageMediaType;
 	const revision = useQuery({
 		...sessionSourceFileRevisionQueryOptions({ commitSha, path: detail.path, scope, sessionId, hostId, side: detail.deleted ? "before" : "after", source, workspaceVersion: detail.workspaceVersion }),
 		enabled: needsRevision,
 	});
-	if (mediaKind && !editing) return <FileMediaPreview hostId={hostId} kind={mediaKind} path={detail.path} sessionId={sessionId} source={source} side={detail.deleted ? "before" : "after"} version={version} />;
+	if (mediaKind && !editing) return <FileMediaPreview active={active} hostId={hostId} kind={mediaKind} path={detail.path} sessionId={sessionId} source={source} side={detail.deleted ? "before" : "after"} version={version} />;
 	if (needsRevision && revision.isPending && revision.isFetching) return <PanelMessage>{t("files.loading")}</PanelMessage>;
 	const retryRevision = <span data-file-annotation-retry={annotationRange?.requestKey}><RetryButton onClick={() => void revision.refetch({ cancelRefetch: false })} /></span>;
 	if (needsRevision && revision.error) return <PanelMessage action={retryRevision}>{revision.error.message}</PanelMessage>;

@@ -377,7 +377,7 @@ export const SessionInspector = memo(function SessionInspector({
 				ariaLabel={t("inspector.aria")}
 				artifactsView={
 					session ? (
-						<SessionArtifactsView hostId={hostId} key={sessionUiKey(session.id, hostId)} onRequestConsumed={onArtifactRequestConsumed} request={artifactRequest} session={session} />
+						<SessionArtifactsView active={isInspectorVisible && view === "artifacts"} hostId={hostId} key={sessionUiKey(session.id, hostId)} onRequestConsumed={onArtifactRequestConsumed} request={artifactRequest} session={session} />
 					) : undefined
 				}
 				browserPoppedOut={browserPoppedOut}
@@ -561,9 +561,11 @@ const SummaryView = memo(function SummaryView({
 	const prView = usePRViewEnabled();
 	return (
 		<SessionInspectorSummaryView
-			activity={
+			// Activity is hidden for now. To restore it, uncomment these two props:
+			// activity={<ActivityTimeline hostId={hostId} prs={prSummaries} session={session} />}
+			// activityTitle={t("inspector.activity")}
+			footer={
 				<>
-					<ActivityTimeline hostId={hostId} prs={prSummaries} session={session} />
 					<SessionAccountSummary session={session} hostId={hostId} />
 					<ResumeAgentControl
 						className="w-full"
@@ -573,7 +575,6 @@ const SummaryView = memo(function SummaryView({
 					/>
 				</>
 			}
-			activityTitle={t("inspector.activity")}
 			artifactCards={
 				hasArtifacts ? <ArtifactSummaryList artifacts={artifacts} onOpenArtifact={onOpenArtifact} previewLive={inspectorVisible} session={session} /> : undefined
 			}
@@ -1643,7 +1644,7 @@ type SortableTimelineEvent = InspectorTimelineEvent & { sortTime: number };
 // ponytail: newest 5 commits only; a "show all" control when long sessions need it.
 const TIMELINE_COMMIT_LIMIT = 5;
 
-function ActivityTimeline({ hostId, prs, session }: { hostId?: string; prs: SessionPRSummary[]; session: WorkspaceSession }) {
+export function ActivityTimeline({ hostId, prs, session }: { hostId?: string; prs: SessionPRSummary[]; session: WorkspaceSession }) {
 	// Keyed on the daemon's commit count, not the shared history query that every
 	// file edit invalidates, so only a new commit refetches.
 	const commitCount = session.branchState?.commits ?? 0;
