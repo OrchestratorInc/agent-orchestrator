@@ -45,13 +45,13 @@ func nextRetentionResult(rows *[]int64) int64 {
 
 func TestRetentionJanitorRunOncePrunesAgeAndSizeUntilStable(t *testing.T) {
 	store := &fakeRetentionStore{
-		ageRows:  []int64{2, 1, 0},
+		ageRows:  []int64{3, 3, 1},
 		sizeRows: []int64{3, 0},
 	}
 	j := NewRetentionJanitor(store, RetentionConfig{
 		Retention: time.Hour,
 		MaxRows:   10,
-		Batch:     100,
+		Batch:     3,
 		Clock:     func() time.Time { return time.Date(2026, 9, 8, 12, 0, 0, 0, time.UTC) },
 		Logger:    slog.New(slog.NewTextHandler(io.Discard, nil)),
 	})
@@ -59,8 +59,11 @@ func TestRetentionJanitorRunOncePrunesAgeAndSizeUntilStable(t *testing.T) {
 	if err := j.RunOnce(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	if store.ages != 3 || store.sizes != 3 {
-		t.Fatalf("prune calls = age %d/size %d, want 3/3", store.ages, store.sizes)
+	if store.ages != 3 || store.sizes != 2 {
+		t.Fatalf("prune calls = age %d/size %d, want 3/2", store.ages, store.sizes)
+	}
+	if len(store.ageRows) != 0 || len(store.sizeRows) != 0 {
+		t.Fatalf("unconsumed results = age %v/size %v", store.ageRows, store.sizeRows)
 	}
 }
 

@@ -2,6 +2,8 @@ package store_test
 
 import (
 	"context"
+	"errors"
+	"sync"
 	"testing"
 	"time"
 
@@ -93,5 +95,41 @@ func TestChangeLogRetentionPrunesToMaxRowsInBatches(t *testing.T) {
 	}
 	if len(events) != 3 || events[0].Seq != 3 {
 		t.Fatalf("remaining events = %#v, want seq 3-5", events)
+	}
+}
+
+func TestMaintenanceWritesWaitForTheWriter(t *testing.T) {
+	s := newTestStore(t)
+	hold := s.HoldWriterForTest()
+	var released sync.Once
+	release := func() { released.Do(hold) }
+	defer release()
+	cases := map[string]func(context.Context) error{
+		"change log age":  func(ctx context.Context) error { _, err := s.PruneChangeLogBefore(ctx, time.Now(), 10); return err },
+		"change log size": func(ctx context.Context) error { _, err := s.PruneChangeLogToMaxRows(ctx, 1, 10); return err },
+		"telemetry prune": func(ctx context.Context) error {
+			_, err := s.PruneTelemetryEventsBefore(ctx, time.Now(), 10)
+			return err
+		},
+		"incremental vacuum": func(ctx context.Context) error { return s.IncrementalVacuum(ctx, 10) },
+	}
+	for name, run := range cases {
+		ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+		err := run(ctx)
+		cancel()
+		if !errors.Is(err, context.DeadlineExceeded) {
+			t.Fatalf("%s while writer held: err = %v, want deadline exceeded", name, err)
+		}
+	}
+	release()
+	for name, run := range cases {
+		for i := 0; i < 2; i++ {
+			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+			err := run(ctx)
+			cancel()
+			if err != nil {
+				t.Fatalf("%s run %d after writer released: %v", name, i+1, err)
+			}
+		}
 	}
 }

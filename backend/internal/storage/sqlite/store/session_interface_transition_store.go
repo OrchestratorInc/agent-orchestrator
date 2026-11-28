@@ -192,7 +192,9 @@ func (s *Store) AdvanceSessionInterfaceTransition(
 	nativeID, errorCode, errorDetail string,
 	now time.Time,
 ) (bool, error) {
-	s.writeMu.Lock()
+	if err := s.writeMu.LockContext(ctx); err != nil {
+		return false, fmt.Errorf("advance interface transition %s: %w", id, err)
+	}
 	defer s.writeMu.Unlock()
 	var completed sql.NullTime
 	if next.Terminal() {
@@ -224,7 +226,9 @@ func (s *Store) CompleteSessionInterfaceTransition(
 	message string,
 	now time.Time,
 ) (bool, error) {
-	s.writeMu.Lock()
+	if err := s.writeMu.LockContext(ctx); err != nil {
+		return false, fmt.Errorf("complete interface transition %s: %w", id, err)
+	}
 	defer s.writeMu.Unlock()
 	var moved bool
 	err := s.inTx(ctx, "complete interface transition with notice", func(q *gen.Queries) error {

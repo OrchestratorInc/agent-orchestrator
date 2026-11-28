@@ -22,8 +22,8 @@ const (
 	DefaultMaxRows int64 = 100_000
 	// DefaultRetentionBatch bounds each delete transaction so cleanup cannot
 	// monopolize SQLite's single writer connection.
-	DefaultRetentionBatch         int64 = 10_000
-	defaultRetentionBatchesPerRun int   = 8
+	DefaultRetentionBatch         int64 = 1_000
+	defaultRetentionBatchesPerRun int   = 80
 )
 
 // RetentionStore is the small storage surface needed by the change-log
@@ -117,19 +117,23 @@ func (j *RetentionJanitor) Start(ctx context.Context) <-chan struct{} {
 func (j *RetentionJanitor) RunOnce(ctx context.Context) error {
 	before := j.clock().UTC().Add(-j.retention)
 	var total int64
-	for i := 0; i < j.maxBatches; i++ {
-		removedByAge, err := j.store.PruneChangeLogBefore(ctx, before, j.batch)
-		if err != nil {
-			return err
+	ageDone, sizeDone := false, false
+	for i := 0; i < j.maxBatches && (!ageDone || !sizeDone); i++ {
+		if !ageDone {
+			n, err := j.store.PruneChangeLogBefore(ctx, before, j.batch)
+			if err != nil {
+				return err
+			}
+			total += n
+			ageDone = n < j.batch
 		}
-		removedBySize, err := j.store.PruneChangeLogToMaxRows(ctx, j.maxRows, j.batch)
-		if err != nil {
-			return err
-		}
-		removed := removedByAge + removedBySize
-		total += removed
-		if removed == 0 {
-			break
+		if !sizeDone {
+			n, err := j.store.PruneChangeLogToMaxRows(ctx, j.maxRows, j.batch)
+			if err != nil {
+				return err
+			}
+			total += n
+			sizeDone = n < j.batch
 		}
 	}
 	if total > 0 {

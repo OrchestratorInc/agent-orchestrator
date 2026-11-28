@@ -3,6 +3,7 @@ package store_test
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"testing"
 	"time"
 
@@ -475,5 +476,46 @@ func TestSessionInterfaceTransitionNoticeAcknowledgementRoundTripAndCDC(t *testi
 	}
 	if len(events) != 0 {
 		t.Fatalf("idempotent acknowledgement emitted duplicate events: %+v", events)
+	}
+}
+
+func TestSessionInterfaceTransitionAdvanceStopsWaitingAtDeadline(t *testing.T) {
+	st := newTestStore(t)
+	ctx := context.Background()
+	seedProject(t, st, "switch")
+	now := time.Now().UTC().Truncate(time.Second)
+	rec := sampleRecord("switch")
+	rec.Mode = domain.SessionModeTUI
+	session, err := st.CreateSession(ctx, rec)
+	if err != nil {
+		t.Fatalf("create session: %v", err)
+	}
+	if _, _, err := st.CreateSessionInterfaceTransition(ctx, domain.SessionInterfaceTransition{
+		ID: "held", SessionID: session.ID,
+		SourceMode: domain.SessionModeTUI, TargetMode: domain.SessionModeChat,
+		Policy: domain.SessionInterfaceTransitionDrain, HistoryPolicy: domain.SessionInterfaceTransitionHistoryStrict,
+		Phase: domain.SessionInterfaceTransitionRequested, CreatedAt: now, UpdatedAt: now,
+	}); err != nil {
+		t.Fatalf("create transition: %v", err)
+	}
+
+	release := st.HoldWriterForTest()
+	waitCtx, cancel := context.WithTimeout(ctx, 50*time.Millisecond)
+	started := time.Now()
+	_, err = st.AdvanceSessionInterfaceTransition(waitCtx, "held",
+		domain.SessionInterfaceTransitionRequested, domain.SessionInterfaceTransitionPreflighting, "", "", "", now)
+	cancel()
+	waited := time.Since(started)
+	release()
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("advance behind a held writer: %v, want deadline exceeded", err)
+	}
+	if waited > 2*time.Second {
+		t.Fatalf("advance waited %s past its deadline", waited)
+	}
+	moved, err := st.AdvanceSessionInterfaceTransition(ctx, "held",
+		domain.SessionInterfaceTransitionRequested, domain.SessionInterfaceTransitionPreflighting, "", "", "", now)
+	if err != nil || !moved {
+		t.Fatalf("advance after release: moved=%v err=%v", moved, err)
 	}
 }

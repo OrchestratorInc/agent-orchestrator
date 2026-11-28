@@ -22,6 +22,7 @@ const (
 	interfaceInterruptSettle              = 2 * time.Second
 	interfaceTransitionStopLimit          = 15 * time.Second
 	interfaceTransitionStepLimit          = 45 * time.Second
+	interfaceTransitionMoveLimit          = 30 * time.Second
 	interfaceDeliveryRetry                = 2 * time.Second
 	interfaceDeliveryIdlePoll             = 30 * time.Second
 )
@@ -1649,7 +1650,7 @@ func (m *Manager) moveInterfaceTransitionWithNativeID(
 	if !ok {
 		return ports.ErrChatUnsupported
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), interfaceTransitionMoveLimit)
 	defer cancel()
 	for attempt := 0; attempt < 4; attempt++ {
 		current, ok, err := store.GetSessionInterfaceTransition(ctx, id)
@@ -1662,8 +1663,9 @@ func (m *Manager) moveInterfaceTransitionWithNativeID(
 		if current.Phase.Terminal() {
 			return fmt.Errorf("transition %s is already %s", id, current.Phase)
 		}
-		if nativeConversationID == "" {
-			nativeConversationID = current.NativeConversationID
+		attemptNativeID := nativeConversationID
+		if attemptNativeID == "" {
+			attemptNativeID = current.NativeConversationID
 		}
 		var moved bool
 		if next == domain.SessionInterfaceTransitionCompleted && current.DegradedKind != "" {
@@ -1673,7 +1675,7 @@ func (m *Manager) moveInterfaceTransitionWithNativeID(
 				degradedHandoffMarkerTextFor(current), m.clock())
 		} else {
 			moved, err = store.AdvanceSessionInterfaceTransition(ctx, id, current.Phase, next,
-				nativeConversationID, errorCode, errorDetail, m.clock())
+				attemptNativeID, errorCode, errorDetail, m.clock())
 		}
 		if err != nil {
 			return err
