@@ -3,7 +3,6 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { Alert, Pressable, RefreshControl, ScrollView, StyleSheet, Text, View } from "react-native";
 import { buildReviewBlocks } from "../../../shared/review/review-comments";
-import { AoError } from "../../../shared/telemetry/ao-error";
 import { sessionTitle, type DashboardSession, type SessionPRSummary, type SessionReviews } from "../../lib/api";
 import { AoError } from "../../../shared/telemetry/ao-error";
 import { RECONNECTING_ACTION_COPY, userFacingError } from "../../lib/connectionError";

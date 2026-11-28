@@ -3,7 +3,6 @@ import { memo, useCallback, useEffect, useReducer, useRef, useState } from "reac
 import { Alert, Pressable, StyleSheet, Text, View } from "react-native";
 import { reviewCommentIsOpen, type ReviewComment, type ReviewReply } from "../../shared/review/review-comments";
 import { reviewCommentsWorkerMessage, reviewCommentWorkerMessage } from "../../shared/review/review-messages";
-import { AoError } from "../../shared/telemetry/ao-error";
 import { AccountAvatar } from "./AccountAvatar";
 import { AgentLogo } from "./AgentLogo";
 import type { ReviewRun } from "./api";
