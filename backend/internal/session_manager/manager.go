@@ -7642,6 +7642,13 @@ func (m *Manager) runtimeEnvChecked(id domain.SessionID, project domain.ProjectI
 	if err != nil {
 		return nil, err
 	}
+	// The project's own endpoint values apply even when the saved endpoint
+	// does not (none is saved, or the project moved to another origin), as for
+	// reviewers: Codex's AO-prefixed keys are otherwise stripped with other
+	// project env and never restored.
+	if spec, ok := harnessendpoint.Lookup(string(harness)); ok {
+		endpointEnv = spec.WithProjectEnv(endpointEnv, projectEnv, caseInsensitive)
+	}
 	env := spawnEnvForOS(id, project, issue, m.dataDir, projectEnv, caseInsensitive)
 	// projectSets reports whether the project sets key itself, matching
 	// names the way the platform's environment does.
