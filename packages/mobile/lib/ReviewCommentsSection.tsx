@@ -8,6 +8,7 @@ import { AgentLogo } from "./AgentLogo";
 import type { ReviewRun } from "./api";
 import { AppSymbol } from "./AppSymbol";
 import { GitHubComment, WorkerSessionsProvider } from "./chat/AutomationMessage";
+import { AoError } from "../../shared/telemetry/ao-error";
 import { RECONNECTING_ACTION_COPY, userFacingError } from "./connectionError";
 import { rowDividerWidth } from "./divider";
 import { haptics } from "./haptics";
@@ -120,7 +121,7 @@ export const ReviewCommentsSection = memo(function ReviewCommentsSection({
 	const liveBackend = useRef(backend);
 	liveBackend.current = backend;
 	const live = (): ReviewBackend => {
-		if (!liveBackend.current) throw new Error(RECONNECTING_ACTION_COPY);
+		if (!liveBackend.current) throw new AoError("REVIEW_BACKEND_RECONNECTING", RECONNECTING_ACTION_COPY);
 		return liveBackend.current;
 	};
 

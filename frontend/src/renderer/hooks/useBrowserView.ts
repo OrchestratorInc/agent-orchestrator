@@ -1054,7 +1054,7 @@ export function useBrowserView({
 	);
 
 	const openTab = useCallback(
-		async (url?: string) => {
+		async (url?: string, preview?: boolean) => {
 			if (!hasNativeBrowser || transientClosedRef.current) return;
 			let viewId = viewIdRef.current;
 			if (!viewId) {
@@ -1068,7 +1068,7 @@ export function useBrowserView({
 				setViewId(viewId);
 				setNavState(ensured);
 			}
-			const state = await window.ao!.browser.openTab({ viewId, url });
+			const state = await window.ao!.browser.openTab({ viewId, url, ...(preview ? { preview } : {}) });
 			if (viewIdRef.current === state.viewId) setTabsState(state);
 		},
 		[hasNativeBrowser, sessionId],
@@ -1186,7 +1186,7 @@ export function useBrowserView({
 	}, [navState.url, setAnnotationMode]);
 
 	const navigate = useCallback(
-		(url: string) => {
+		(url: string, preview?: boolean) => {
 			if (!hasNativeBrowser) {
 				const normalized = url.trim();
 				setNavState((current) => ({
@@ -1197,7 +1197,7 @@ export function useBrowserView({
 				}));
 				return Promise.resolve();
 			}
-			return withView((id) => window.ao!.browser.navigate({ viewId: id, url }));
+			return withView((id) => window.ao!.browser.navigate({ viewId: id, url, ...(preview ? { preview } : {}) }));
 		},
 		[hasNativeBrowser, withView],
 	);
@@ -1208,12 +1208,11 @@ export function useBrowserView({
 		async (url: string) => {
 			const id = viewIdRef.current;
 			const tabs = hasNativeBrowser && id ? (await window.ao!.browser.getTabs(id).catch(() => null))?.tabs : undefined;
-			if (!tabs?.find((tab) => tab.active)?.remote) return navigate(url);
-			const preview = /^https:\/\/ao-preview-[0-9a-f]{32}\.localhost(?::\d+)?\//;
-			const own = tabs.find((tab) => !tab.remote && (sameBrowserOrigin(tab.url, url) || preview.test(tab.url)));
-			if (!own) return openTab(url);
+			if (!tabs?.find((tab) => tab.active)?.remote) return navigate(url, true);
+			const own = tabs.find((tab) => !tab.remote && (sameBrowserOrigin(tab.url, url) || tab.preview));
+			if (!own) return openTab(url, true);
 			await selectTab(own.id);
-			return navigate(url);
+			return navigate(url, true);
 		},
 		[hasNativeBrowser, navigate, openTab, selectTab],
 	);

@@ -76,6 +76,7 @@ type Service struct {
 	loginConfirmed func(domain.AgentAccount, time.Time)
 	keyCheck       KeyCheck
 	uiLogin        UILogin
+	customEndpoint func(domain.AgentAccountProvider) bool
 
 	// keyMu serializes changes to an API key account's key with each other and
 	// with removing an account, apart from mu so a key check never holds it.
@@ -223,7 +224,7 @@ func (s *Service) keepingLimits(ctx context.Context) bool {
 	return log != nil && log.LimitHistoryEnabled(ctx)
 }
 
-func (s *Service) recordLimits(ctx context.Context, account domain.AgentAccount, email, plan string, limits domain.AgentAccountLimits) {
+func (s *Service) recordLimits(ctx context.Context, account domain.AgentAccount, email, orgID, plan string, limits domain.AgentAccountLimits) {
 	if len(limits.Windows) == 0 || !s.keepingLimits(ctx) {
 		return
 	}
@@ -237,7 +238,7 @@ func (s *Service) recordLimits(ctx context.Context, account domain.AgentAccount,
 	readings := make([]domain.AgentLimitReading, 0, len(limits.Windows))
 	for _, w := range limits.Windows {
 		readings = append(readings, domain.AgentLimitReading{
-			AccountID: account.ID, Provider: account.Provider, Email: email, Plan: plan, WindowID: w.ID, Label: w.Label,
+			AccountID: account.ID, Provider: account.Provider, Email: email, OrgID: orgID, Plan: plan, WindowID: w.ID, Label: w.Label,
 			DurationMinutes: w.DurationMinutes, UsedPercent: w.UsedPercent, ResetsAt: w.ResetsAt, ReadAt: at,
 		})
 	}
@@ -400,6 +401,13 @@ func (s *Service) read(ctx context.Context, account domain.AgentAccount) *readin
 	s.mu.Lock()
 	known := s.lastOrg[account.ID]
 	s.mu.Unlock()
+	// A saved account stays in the organization it was found in: a check that
+	// names none reads as that organization, both for the limits it records and
+	// for the login it confirms, so the two never disagree (#8891).
+	if err == nil && !account.Device() && identity.OrgID == "" && known.id != "" {
+		identity.OrgID, identity.OrgName = known.id, known.name
+		r.identity.OrgID, r.identity.OrgName = known.id, known.name
+	}
 	// A per-token sign-in is never a subscription, so it is checked for the
 	// login and organization it was added with here, before it skips limits.
 	perToken := account.PerToken() && identity.LoggedIn
@@ -439,14 +447,14 @@ func (s *Service) read(ctx context.Context, account domain.AgentAccount) *readin
 			s.mu.Unlock()
 		} else {
 			r.limits = &limits
-			email, plan := identity.Email, identity.Plan
+			email, orgID, plan := identity.Email, identity.OrgID, identity.Plan
 			if email == "" {
 				email = account.Email
 			}
 			if plan == "" {
 				plan = account.Plan
 			}
-			s.recordLimits(ctx, account, email, plan, limits)
+			s.recordLimits(ctx, account, email, orgID, plan, limits)
 		}
 	}
 	if err == nil {
@@ -721,8 +729,9 @@ func (s *Service) newSessionAccount(ctx context.Context, p domain.AgentAccountPr
 	if err != nil {
 		return domain.AgentAccount{}, err
 	}
-	// A custom Codex model provider does not use the account's sign-in.
-	if p == domain.AgentAccountProviderCodex && codexagent.UsesCustomModelProvider() {
+	// A custom Codex model provider, or a custom endpoint set for the
+	// provider's harness, does not use the account's sign-in.
+	if (p == domain.AgentAccountProviderCodex && codexagent.UsesCustomModelProvider()) || s.usesCustomEndpoint(p) {
 		return account, nil
 	}
 	r := s.cachedReading(account.ID)

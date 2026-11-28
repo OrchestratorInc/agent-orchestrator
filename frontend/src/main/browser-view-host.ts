@@ -21,7 +21,7 @@ import type {
   OpenDevToolsOptions,
 } from "electron";
 import { nativeImage } from "electron";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import type { BrowserCloseFailure } from "./browser-close-diagnostics";
 import type {
   BrowserAnnotationCancelPayload,
@@ -68,7 +68,7 @@ import { trustPreviewCertificate } from "./preview-certificate";
 import { REMOTE_TAB_REPORT, parseRemoteTabReport, type RemoteTabReport } from "../shared/remote-tab";
 import type { ActCandidate } from "./browser-act-matcher";
 import { BrowserScreencast } from "./browser-screencast";
-import { type BrowserSiteBlock, canOpenInUserBrowser, classifySiteResponse } from "../shared/browser-site-block";
+import { type BrowserSiteBlock, canOpenInUserBrowser, classifySiteResponse, isLoopbackHost } from "../shared/browser-site-block";
 import type { UserBrowser } from "./user-browser";
 import type {
 	BrowserLiveSink,
@@ -164,6 +164,7 @@ export type BrowserTabState = {
   // Set when the tab shows the agent's own browser: the agent browser tab it
   // shows ("" until its viewer first reports).
   remote?: { tabId: string };
+  preview?: boolean;
 };
 
 export type BrowserTabsState = {
@@ -247,6 +248,7 @@ type BrowserBoundsInput = {
 type BrowserNavigateInput = {
   viewId: string;
   url: string;
+  preview?: boolean;
 };
 
 type BrowserHistorySuggestInput = {
@@ -273,6 +275,7 @@ type BrowserMuteTabInput = {
 type BrowserOpenTabInput = {
   viewId: string;
   url?: string;
+  preview?: boolean;
 };
 
 type BrowserShortcutInput = {
@@ -576,6 +579,7 @@ export type BrowserViewHostOptions = {
   describeUserBrowser?: () => Promise<UserBrowser>;
   // Configures a browser partition's session before its first page exists.
   prepareBrowserPartition?: (partition: string) => void;
+  routeBrowserPartition?: (partition: string, hostId: string) => Promise<void>;
   // Electron 44 removed clipboard.writeImage; main.ts adapts the async
   // ClipboardItem API to this narrow image-only writer.
   clipboard?: { writeImage(image: Electron.NativeImage): void | Promise<void> };
@@ -726,6 +730,8 @@ type BrowserEntry = {
 type BrowserSessionEntry = {
   sessionId: string;
   viewId: string;
+  hostId?: string;
+  previewTabId?: string;
   profileId: BrowserProfileId | null;
   profilePartition: string;
   tabs: Map<string, BrowserEntry>;
@@ -903,12 +909,44 @@ const SITE_CHALLENGE_LOOP_MS = 60_000;
 // up to 60s, so without a cap the switch would hang and block every other agent
 // command that long. After this, it fails with "still busy" and the user retries.
 const PROFILE_SWITCH_SETTLE_MS = 10_000;
-// A remote session's previews show on AO's own preview origins (remote-proxy.ts),
-// as the renderer's showPreview matches them.
+// A remote session's previews show on AO's own preview origins (remote-proxy.ts).
 const REMOTE_PREVIEW_URL = /^https:\/\/ao-preview-[0-9a-f]{32}\.localhost(?::\d+)?\//;
+
+function isPreviewPage(url: string, hostId?: string): boolean {
+  if (REMOTE_PREVIEW_URL.test(url)) return true;
+  if (!hostId) return false;
+  try {
+    return isLoopbackHost(new URL(url).hostname);
+  } catch {
+    return false;
+  }
+}
+
+function previewTab(session: BrowserSessionEntry): BrowserEntry | undefined {
+  const tab = session.previewTabId ? session.tabs.get(session.previewTabId) : undefined;
+  if (!tab || tab.agentTab !== undefined) return undefined;
+  return isPreviewPage(tab.view.webContents.getURL(), session.hostId) ? tab : undefined;
+}
 
 function temporaryBrowserPartition(): string {
   return `${TEMPORARY_BROWSER_PARTITION_PREFIX}${randomUUID()}`;
+}
+
+export function remoteHostOfBrowserSession(sessionId: string): string | undefined {
+  const ref = sessionId.startsWith("remote:") ? sessionId.slice("remote:".length) : "";
+  const separator = ref.indexOf(":");
+  if (separator <= 0) return undefined;
+  try {
+    return decodeURIComponent(ref.slice(0, separator));
+  } catch {
+    return undefined;
+  }
+}
+
+export function sessionBrowserPartition(profileId: BrowserProfileId | null, hostId?: string): string {
+  if (!profileId) return temporaryBrowserPartition();
+  const partition = browserProfilePartition(profileId);
+  return hostId ? `${partition}-host-${createHash("sha256").update(hostId).digest("hex").slice(0, 32)}` : partition;
 }
 
 function isTemporaryBrowserPartition(partition: string): boolean {
@@ -1623,16 +1661,16 @@ export function createBrowserViewHost(
     let session = entries.get(viewId);
     if (!session) {
       const profileId = initialProfileIdForSession(sessionId);
+      const hostId = remoteHostOfBrowserSession(sessionId);
       session = {
         sessionId,
         viewId,
+        hostId,
         profileId,
         // Temporary workers still use a persist: partition: Electron's built-in
         // PDF viewer does not reliably render in in-memory partitions, while AO
         // clears this session-scoped partition when the browser session ends.
-        profilePartition: profileId
-          ? browserProfilePartition(profileId)
-          : temporaryBrowserPartition(),
+        profilePartition: sessionBrowserPartition(profileId, hostId),
         tabs: new Map(),
         activeTabId: "",
         activationRevision: 0,
@@ -1997,6 +2035,7 @@ export function createBrowserViewHost(
     // otherwise the runtime keeps issuing further actions against the tab the
     // agent was on before the link, not the one it's actually looking at now.
     syncNativeOnActivate = false,
+    preview = false,
   ): Promise<BrowserEntry> => {
     assertTabsNotReplacing(session);
     return withBrowserOperation(session, async () => {
@@ -2009,6 +2048,7 @@ export function createBrowserViewHost(
         normalizedURL = normalized.href;
       }
       const entry = createTab(session, activate, syncNativeOnActivate);
+      if (preview) session.previewTabId = entry.tabId;
       registerBrowserSignalWatcher(session);
       await entry.ready;
       if (normalizedURL) {
@@ -2408,9 +2448,10 @@ export function createBrowserViewHost(
   const openUserTab = async (
     session: BrowserSessionEntry,
     url?: string,
+    preview = false,
   ): Promise<BrowserTabsState> => {
     if (!options.agentBrowserRuntime) {
-      await openTab(session, url, true);
+      await openTab(session, url, true, "opened", false, preview);
       return listTabs(session);
     }
     return queueNativeOperation(session, async () => {
@@ -2423,7 +2464,7 @@ export function createBrowserViewHost(
       // CDP identity first (ensureNativeActiveTab), as after a person closes a
       // tab. Creating it directly also keeps a first tab from racing the
       // bootstrap page agent-browser makes when it connects to zero targets.
-      await openTab(session, url, true);
+      await openTab(session, url, true, "opened", false, preview);
       session.nativeActiveTabId = undefined;
       session.snapshotDeltaBaseline = undefined;
       options.agentBrowserRuntime!.reconcileTargets(session.sessionId);
@@ -2989,6 +3030,7 @@ export function createBrowserViewHost(
   const navigate = async ({
     viewId,
     url,
+    preview,
   }: BrowserNavigateInput): Promise<BrowserNavState> => {
     const session = entries.get(viewId);
     if (!session)
@@ -2999,11 +3041,23 @@ export function createBrowserViewHost(
     assertProfileStable(session);
     return withBrowserOperation(session, async () => {
       if (!session.tabs.size) {
-        const entry = await openTab(session, url, true);
+        const entry = await openTab(session, url, true, "opened", false, preview);
         return pushNavState(options, entry);
       }
-      return navigateEntry(activeEntry(session), url);
+      const entry = activeEntry(session);
+      checkedBrowserURL(url);
+      if (preview) session.previewTabId = entry.tabId;
+      else if (session.previewTabId === entry.tabId) session.previewTabId = undefined;
+      return navigateEntry(entry, url);
     });
+  };
+
+  const checkedBrowserURL = (url: string): string => {
+    const normalized = normalizeBrowserURL(url);
+    if (!isAllowedBrowserURL(normalized.href, options.rendererOrigin)) {
+      throw new Error("Unsupported browser URL");
+    }
+    return normalized.href;
   };
 
   const navigateEntry = async (
@@ -3012,11 +3066,7 @@ export function createBrowserViewHost(
     loadOptions?: Electron.LoadURLOptions,
   ): Promise<BrowserNavState> => {
     await entry.ready;
-    const normalized = normalizeBrowserURL(url);
-    if (!isAllowedBrowserURL(normalized.href, options.rendererOrigin)) {
-      throw new Error("Unsupported browser URL");
-    }
-    return entry.driver().navigate(normalized.href, loadOptions);
+    return entry.driver().navigate(checkedBrowserURL(url), loadOptions);
   };
 
   // Loads a checked address into the tab's own view (navigateEntry).
@@ -3033,6 +3083,7 @@ export function createBrowserViewHost(
     const pendingNavigation = { url: href };
     entry.pendingNavigation = pendingNavigation;
     try {
+      if (owner?.hostId) await options.routeBrowserPartition?.(owner.profilePartition, owner.hostId);
       if (loadOptions) await entry.view.webContents.loadURL(href, loadOptions);
       else await entry.view.webContents.loadURL(href);
     } catch (err) {
@@ -3077,10 +3128,9 @@ export function createBrowserViewHost(
       const entry =
         active.agentTab === undefined
           ? active
-          : [...session.tabs.values()].find(
-              (tab) => tab.agentTab === undefined && REMOTE_PREVIEW_URL.test(tab.view.webContents.getURL()),
-            );
+          : previewTab(session);
       if (!entry) return pushNavState(options, active);
+      session.previewTabId = undefined;
       cancelAnnotation(options, entry, "navigation");
       if (entry === active) {
         if (session.devtools) destroyDevTools(session);
@@ -3319,6 +3369,7 @@ export function createBrowserViewHost(
       await entry.ready;
       assertCurrentSession();
       try {
+        if (session.hostId) await options.routeBrowserPartition?.(session.profilePartition, session.hostId);
         await entry.view.webContents.loadURL(saved.url);
       } catch (error) {
         entry.state = {
@@ -3465,9 +3516,7 @@ export function createBrowserViewHost(
       disposeSessionTabs(session);
       didTearDown = true;
       session.profileId = normalizedRequestedProfileId;
-      session.profilePartition = normalizedRequestedProfileId
-        ? browserProfilePartition(normalizedRequestedProfileId)
-        : temporaryBrowserPartition();
+      session.profilePartition = sessionBrowserPartition(normalizedRequestedProfileId, session.hostId);
       await rebuildSessionTabs(
         session,
         savedTabs,
@@ -3895,9 +3944,12 @@ export function createBrowserViewHost(
       }
       const cached = cache.get(origin);
       if (cached) return cached;
-      const pending = fetchFaviconFromSession(
-        tabSession,
-        `${origin}/favicon.ico`,
+      const routed = entry.hostId
+        ? Promise.resolve(options.routeBrowserPartition?.(entry.profilePartition, entry.hostId))
+        : Promise.resolve();
+      const pending = routed.then(
+        () => fetchFaviconFromSession(tabSession, `${origin}/favicon.ico`),
+        () => undefined,
       ).then((favicon) => {
         if (!favicon) cache?.delete(origin);
         return favicon;
@@ -3935,7 +3987,7 @@ export function createBrowserViewHost(
     const session = isRendererOwned(event, viewId) ? entries.get(viewId) : undefined;
     const entry = session?.tabs.size ? activeEntry(session) : undefined;
     const url = entry ? readNavState(entry).url : "";
-    if (!options.openInUserBrowser || !canOpenInUserBrowser(url, { agentTab: entry?.agentTab !== undefined })) {
+    if (!options.openInUserBrowser || !canOpenInUserBrowser(url, { onHost: entry?.agentTab !== undefined || session?.hostId !== undefined })) {
       throw browserError("BROWSER_URL_FORBIDDEN", "This page cannot be opened in another browser");
     }
     return options.openInUserBrowser(url);
@@ -4187,7 +4239,7 @@ export function createBrowserViewHost(
       }
       return listTabs(session);
     }
-    return openUserTab(session, url);
+    return openUserTab(session, url, input.preview);
   });
   handle(
     "browser:annotation:setMode",
@@ -6181,12 +6233,14 @@ function listTabs(
   session: BrowserSessionEntry,
   change?: BrowserTabsState["change"],
 ): BrowserTabsState & { untrustedExternalContent: true } {
+  const preview = previewTab(session);
   return {
     viewId: session.viewId,
     activeTabId: session.activeTabId,
-    tabs: [...session.tabs.values()].map((entry) =>
-      tabResult(entry, entry.tabId === session.activeTabId),
-    ),
+    tabs: [...session.tabs.values()].map((entry) => {
+      const tab = tabResult(entry, entry.tabId === session.activeTabId);
+      return entry === preview ? { ...tab, preview: true } : tab;
+    }),
     untrustedExternalContent: true,
     ...(change ? { change } : {}),
   };

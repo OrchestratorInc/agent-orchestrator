@@ -98,6 +98,15 @@ export function SessionInspectorRail({
 		const topbar = column.querySelector('[data-testid="session-topbar-host"]');
 		return { top: topbar ? topbar.getBoundingClientRect().bottom : box.top, bottom: box.bottom };
 	}, [inspectorEdge]);
+	// Interface v2 splits the session and the inspector into two panels with a
+	// gap (styles.css, --split-panel-gap): the rail's box starts that gap in from
+	// its left edge, and the line runs down the middle of the gap.
+	const inspectorLineCenter = useCallback(() => {
+		const panel = panelRef.current;
+		if (!panel) return null;
+		const gap = Number.parseFloat(getComputedStyle(panel).getPropertyValue("--split-panel-gap"));
+		return Number.isFinite(gap) && gap > 0 ? panel.getBoundingClientRect().left + gap / 2 : null;
+	}, []);
 	useAncestorFlag(gapRef, ".session-split", "data-inspector-expanded", isOpen);
 	const minWidth = useCallback(() => {
 		const split = splitRef.current;
@@ -189,7 +198,7 @@ export function SessionInspectorRail({
 			{/* After the content: the handle reaches into the inspector's header,
 			    which is a macOS window-drag region, and Electron applies drag and
 			    no-drag in document order, so only a later no-drag punches through. */}
-			<ResizeHandle className={!isOpen ? "hidden" : undefined} data-testid="inspector-resize-handle" edge={inspectorEdge} span={inspectorSpan} onDoubleClick={onDoubleClick} onPointerDown={onPointerDown} side="left" style={noDragStyle} />
+			<ResizeHandle className={!isOpen ? "hidden" : undefined} data-testid="inspector-resize-handle" edge={inspectorEdge} lineCenter={inspectorLineCenter} span={inspectorSpan} onDoubleClick={onDoubleClick} onPointerDown={onPointerDown} side="left" style={noDragStyle} />
 		</div>
 	</>;
 }

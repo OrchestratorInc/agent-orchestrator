@@ -80,7 +80,7 @@ function sortProjectsByActivity(projects: WorkspaceSummary[]): WorkspaceSummary[
 		.sort((left, right) => latestProjectTimestamp(right).localeCompare(latestProjectTimestamp(left)));
 }
 
-function ProjectRow({ project, onClick, emptyTimeLabel, tourTarget }: { project: WorkspaceSummary; onClick: () => void; emptyTimeLabel: string; tourTarget?: string }) {
+function ProjectRow({ project, onClick, emptyTimeLabel }: { project: WorkspaceSummary; onClick: () => void; emptyTimeLabel: string }) {
 	const { t } = useTranslation();
 	const lastOpenedAt = getProjectLastOpenedAt(project.id);
 	const latestProjectFact = latestProjectTimestamp(project) || lastOpenedAt;
@@ -93,7 +93,6 @@ function ProjectRow({ project, onClick, emptyTimeLabel, tourTarget }: { project:
 				NAV_ROW_HIGHLIGHT_HOST_CLASS,
 			)}
 			onClick={onClick}
-			data-tour={tourTarget}
 		>
 			<NavRowHighlight className="bg-card" />
 			<span className={cn(HOME_PROJECT_ICON_CLASS, "relative z-[1]")} aria-hidden="true">
@@ -205,8 +204,7 @@ function HomePageContent() {
 		<div ref={fadeRef} className="edge-fade [--edge-fade-end-size:0px] relative flex min-h-0 flex-1 items-center justify-center overflow-y-auto px-6 py-16">
 			<div className="w-full max-w-[640px]">
 				<div className="space-y-6">
-					{/* The guided tour's first stop, add actions and recent projects together (GuidedTour). */}
-					<section className="space-y-3 px-3" data-tour="add-project">
+					<section className="space-y-3 px-3">
 						<div className="flex items-baseline justify-between gap-4">
 							<h1 className={HOME_SECTION_TITLE_CLASS}>{recentProjects.length === 0 ? t("home.getStarted") : t("home.jumpBack")}</h1>
 							{/* Quiet text link — not filled button / accent. Dashed underline only on hover. */}
@@ -256,12 +254,10 @@ function HomePageContent() {
 						{/* Same section as the grid so the gap matches the grid's gap-3. */}
 						{recentProjects.length > 0 && (
 							<div>
-								{recentProjects.map((project, index) => (
+								{recentProjects.map((project) => (
 									<ProjectRow
 										key={project.id}
 										project={project}
-										// Tells the guided tour there are projects to open (GuidedTour).
-										tourTarget={index === 0 ? "recent-project" : undefined}
 										onClick={() => {
 										if (project.kind === STANDALONE_PROJECT_KIND) {
 											const session = project.sessions.find((candidate) => candidate.kind === "worker");

@@ -244,6 +244,7 @@ export const aoBridge: AoBridge =
 			setAnalyticsOptOut: async (optedOut: boolean) => optedOut,
 			onAnalyticsOptOut: () => () => undefined,
 			setCloudUser: async () => false,
+			setPlan: async () => false,
 			getGithubLogin: async () => null,
 			getLifetimeSessions: async () => null,
 			takeLaunchStart: async () => null,
@@ -503,6 +504,7 @@ export const aoBridge: AoBridge =
 			resolvePreviewUrl: async (_hostId: string, _sessionId: string, viewedUrl: string) => viewedUrl,
 			agentBrowserUrl: async () => "",
 			externalUrl: async (_hostId: string, url: string) => url,
+			loopbackReach: async () => false,
 		},
 		cloud: {
 			getSession: async () => null,

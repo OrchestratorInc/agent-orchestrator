@@ -1,6 +1,6 @@
 import { useQueryClient } from "@tanstack/react-query";
 import { useNavigate } from "@tanstack/react-router";
-import { ArrowLeft, ArrowRight, ChevronDown, ChevronUp, Cloud, LoaderCircle, Monitor, RefreshCw, Smartphone, type AppIcon } from "@/components/app-icons";
+import { Archive, ArrowLeft, ChevronRight, CircleDot, Cloud, Code2, Eye, ListChecks, LoaderCircle, MessageSquare, Monitor, RefreshCw, Smartphone, type AppIcon } from "@/components/app-icons";
 import { AnimatePresence, motion, useReducedMotion } from "motion/react";
 import {
 	createContext,
@@ -12,11 +12,10 @@ import {
 	useMemo,
 	useRef,
 	useState,
-	type ComponentProps,
 	type ReactNode,
 } from "react";
 import { createPortal } from "react-dom";
-import { Trans, useTranslation } from "react-i18next";
+import { useTranslation } from "react-i18next";
 import type { MessageKey } from "../../i18n";
 import { useAgentAuthPlans, useStartAgentAuth } from "../../hooks/useAgentAuth";
 import {
@@ -37,7 +36,10 @@ import {
 } from "../../hooks/useSystemRequirementsGate";
 import { useWorkspaceQuery } from "../../hooks/useWorkspaceQuery";
 import type { AgentId } from "../../lib/agent-options";
-import { DEFAULT_AGENT_PRIORITY_RANK } from "../../lib/agent-select-options";
+import { DEFAULT_AGENT_PRIORITY_RANK, defaultProjectAgents, preferredAgentList } from "../../lib/agent-select-options";
+import { toReviewerHarnessId } from "../../lib/reviewer-harnesses";
+import { INITIAL_PROJECT_DEFAULTS, readProjectDefaults, saveProjectDefaults, type ProjectDefaults } from "../../lib/project-defaults";
+import { useSettings } from "../../hooks/useSettings";
 import { freshMachineSimActive, setFreshMachineSim } from "../../lib/fresh-machine-sim";
 import { aoBridge } from "../../lib/bridge";
 import { useCloudSession } from "../../lib/cloud-session";
@@ -70,22 +72,31 @@ import { GitHubIcon } from "../GitHubIcon";
 import { FocusScope } from "@radix-ui/react-focus-scope";
 import { Badge } from "../ui/badge";
 import { ConfirmDialog } from "../ConfirmDialog";
+import { Dialog, DialogClose, DialogContent, DialogTitle, settingsDialogBodyClass, settingsDialogContentClass, settingsDialogHeaderClass } from "../ui/dialog";
+import { CloseButton } from "../ui/close-button";
+import { useRestoreFocusOnClose } from "../../hooks/useRestoreFocusOnClose";
 import { GitHubLoginActions, GitHubLoginTerminal, useGitHubLogin } from "../GitHubOnboardingNotice";
 import { dragStyle } from "../PageTopbar";
 import { HarnessAuthTerminalPanel } from "../settings/harness/HarnessAuthTerminalPanel";
-import { Button } from "../ui/button";
+import { Button, type ButtonProps } from "../ui/button";
 import { Pressable } from "../ui/pressable";
-import { startGuidedTour } from "./GuidedTour";
+import { AgentSelectMenuItem } from "../settings/AgentSelectMenuItem";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../ui/select";
+import { Switch } from "../ui/switch";
+import { landAfterSetup } from "./FirstTaskFunnel";
 import { agentRowState, closeLoginWorkflow, InstallDocsLink, InstallProblem, InstallProgress, useAgentInstalls, useGhInstall, useLoginLifetime, useOnboardingLogin, useVerifyWhileSigningIn, verifyAgentSignIn, type AgentRowState } from "./ToolInstalls";
 import { PreviewStage, type PreviewCard, type ScenePage } from "./OnboardingPreviews";
 import { SchematicPhoneScreen, SchematicScene, type SceneFocus } from "./OnboardingSchematic";
 
-// Three pages: what Orchestrator is (with its three-part story playing in the
-// preview), the optional account, and the tools a worker needs (GitHub CLI and
-// a coding agent). Log in and Your tools are skipped when there is nothing to
-// do on them. The first project and task follow in the real app, as a guided
-// tour (GuidedTour).
-const STEPS = ["welcome", "signin", "tools"] as const;
+// Four pages: what Orchestrator is (with its three-part story playing in the
+// preview), the optional account, the tools a worker needs (GitHub CLI and a
+// coding agent), and the defaults new projects start with (the agent they run
+// on, review, auto-fix, archive on merge, assigned issues). Log in and Your
+// tools are skipped when there is nothing to do on them; the defaults page
+// always shows. Then the real app takes over with Add Project open: no tour, the
+// app has to make the first project and task obvious on its own
+// (FirstTaskFunnel only measures whether it does).
+const STEPS = ["welcome", "signin", "tools", "defaults"] as const;
 type Step = (typeof STEPS)[number];
 // Where a step stored by the earlier seven-page flow resumes.
 const LEGACY_STEPS: Record<string, Step> = {
@@ -96,7 +107,7 @@ const LEGACY_STEPS: Record<string, Step> = {
 	project: "tools",
 };
 /** Each page's step in the onboarding funnel (onboarding-steps.ts). */
-const FUNNEL_STEP: Record<Step, OnboardingStep> = { welcome: "welcome", signin: "sign_in", tools: "tools" };
+const FUNNEL_STEP: Record<Step, OnboardingStep> = { welcome: "welcome", signin: "sign_in", tools: "tools", defaults: "work_defaults" };
 // Resume on the same page after a relaunch mid-setup (per-viewer convenience).
 const STEP_STORAGE_KEY = "ao.firstRun.step";
 /** Longest the Tools page's view waits for its checks before reporting what it knows. */
@@ -110,17 +121,19 @@ const FADE = { duration: 0.15, ease: [0.23, 1, 0.32, 1] } as const;
 /** The copy column's width beside the stage. */
 const COPY_WIDTH = 520;
 
-/** "How Orchestrator works": the three parts the welcome preview plays. */
+/** "How Orchestrator works": the three steps the welcome preview plays, in
+ * order: the request, the workers at it, then CI and code review. */
 const ORCH_POINTS = [
 	{ title: "firstRun.orchPoint1Title", body: "firstRun.orchPoint1Body" },
 	{ title: "firstRun.orchPoint2Title", body: "firstRun.orchPoint2Body" },
 	{ title: "firstRun.orchPointCiTitle", body: "firstRun.orchPointCiBody" },
 ] as const;
+const STORY_POINTS = ORCH_POINTS.length;
 /** The part where pull requests go through CI and code review on GitHub. */
 const CI_POINT = 2;
-/** How far the welcome's other story points recede while one plays. */
+/** How far the welcome's other steps recede while one plays. */
 const INACTIVE_POINT_OPACITY = 0.35;
-/** The welcome's story points come up and recede on this curve. */
+/** The welcome's steps come up and recede on this curve. */
 const CAPTION_EASE = [0.23, 1, 0.32, 1] as const;
 /** How long each part of the story holds before the next plays. */
 const POINT_HOLD_MS = [4200, 3800, 10200] as const;
@@ -130,6 +143,8 @@ const POINT_HOLD_MS = [4200, 3800, 10200] as const;
  * board held a moment once it's all sorted. */
 const SORT_ORDER = [3, 2, 0, 1] as const;
 const SORT_BEAT_MS = 2200;
+/** The last page holds its sorted board this long before the trips play again. */
+const FINISH_HOLD_MS = 3500;
 
 
 function readStoredStep(): Step {
@@ -235,8 +250,8 @@ export function FirstRunOnboarding() {
 	return (
 		<OnboardingFlow
 			runKind={runKind.current}
-			onFinish={({ tour = true } = {}) => {
-				completeOnboardingRun(tour ? "finished" : "skipped_setup");
+			onFinish={({ skipped = false } = {}) => {
+				completeOnboardingRun(skipped ? "skipped_setup" : "finished");
 				setOpen(false);
 				markSeen();
 				if (replaySimulated.current) {
@@ -244,22 +259,16 @@ export function FirstRunOnboarding() {
 					setFreshMachineSim(false);
 					resetToolChecks();
 				}
-				// The tour starts on Home, where projects are added, once it's
-				// showing (not on whatever page was behind the onboarding). A
-				// skipped setup has no harness to show it with, so it goes without.
-				const replay = runKind.current === "replay";
-				if (tour) void navigate({ to: "/" }).then(() => startGuidedTour({ replay }));
+				// Setup done: Home (not whatever page was behind the onboarding),
+				// with Add Project open over it. A skipped setup has no harness to
+				// run a project's agents with, so it lands on Home without it.
+				void landAfterSetup(() => navigate({ to: "/" }), { skipped, replay: runKind.current === "replay" });
 			}}
 		/>
 	);
 }
 
-// The person asked for a calmer press here than the app-wide shrink: buttons
-// darken briefly and stay put while the next step fades in.
-const PRESS_CLASS =
-	"[&_button:active]:!scale-100 [&_button:active]:!translate-y-0 [&_button:not(:disabled):active]:brightness-[0.85]";
-
-function OnboardingFlow({ runKind, onFinish }: { runKind: OnboardingRunKind; onFinish: (options?: { tour?: boolean }) => void }) {
+function OnboardingFlow({ runKind, onFinish }: { runKind: OnboardingRunKind; onFinish: (options?: { skipped?: boolean }) => void }) {
 	const { t } = useTranslation();
 	// Settings open over the app (a harness's installers, from Your tools).
 	const settingsAside = useUiStore((state) => state.settingsModal?.scope === "global");
@@ -299,10 +308,11 @@ function OnboardingFlow({ runKind, onFinish }: { runKind: OnboardingRunKind; onF
 	const skips = (candidate: Step) =>
 		candidate === "signin" ? cloud.status === "authenticated"
 		: candidate === "tools" ? ghReady && agentReady
+		// The defaults page is never passed over: the choices are the person's.
 		: false;
 	// Past the last page with something to do, setup is over: the app takes
-	// over with the guided tour. `skipped`: the person moved on without doing
-	// the page (Sign in's "do it later").
+	// over with Add Project open. `skipped`: the person moved on without doing
+	// the page (Skip on Sign in).
 	const goNext = ({ skipped = false }: { skipped?: boolean } = {}) => {
 		// Tools reports its view once its checks answer; leaving sooner still reads viewed, then completed.
 		if (step === "tools") ensureOnboardingStepViewed("tools", toolsViewed());
@@ -356,6 +366,7 @@ function OnboardingFlow({ runKind, onFinish }: { runKind: OnboardingRunKind; onF
 		const timer = window.setTimeout(() => setToolsWaitOver(true), TOOLS_VIEW_WAIT_MS);
 		return () => window.clearTimeout(timer);
 	}, [step, toolsWaitOver]);
+	useOnboardingStep("work_defaults", step === "defaults", { autoComplete: false });
 	useOnboardingStep("tools", step === "tools", {
 		autoComplete: false,
 		viewReady: toolsChecksAnswered || toolsWaitOver,
@@ -372,8 +383,8 @@ function OnboardingFlow({ runKind, onFinish }: { runKind: OnboardingRunKind; onF
 	useEffect(() => {
 		if (step !== "welcome") return;
 		const timer = window.setTimeout(() => {
-			if (point === ORCH_POINTS.length - 1) setCycle((current) => current + 1);
-			setPoint((point + 1) % ORCH_POINTS.length);
+			if (point === STORY_POINTS - 1) setCycle((current) => current + 1);
+			setPoint((point + 1) % STORY_POINTS);
 		}, POINT_HOLD_MS[point]);
 		return () => window.clearTimeout(timer);
 	}, [step, point]);
@@ -381,8 +392,15 @@ function OnboardingFlow({ runKind, onFinish }: { runKind: OnboardingRunKind; onF
 	// trip to GitHub reads on its own.
 	// The beat is keyed to the loop and point it belongs to, so a new run starts
 	// from 0 on its first frame instead of flashing the previous run's board.
-	const sorting = step === "welcome" && point === CI_POINT;
-	const sortKey = `${cycle}:${point}`;
+	// The last page plays the same trips on a loop: how a worker's PR finishes.
+	const [finishCycle, setFinishCycle] = useState(0);
+	useEffect(() => {
+		if (step !== "defaults") return;
+		const timer = window.setInterval(() => setFinishCycle((current) => current + 1), SORT_ORDER.length * SORT_BEAT_MS + FINISH_HOLD_MS);
+		return () => window.clearInterval(timer);
+	}, [step]);
+	const sorting = (step === "welcome" && point === CI_POINT) || step === "defaults";
+	const sortKey = step === "defaults" ? `defaults:${finishCycle}` : `${cycle}:${point}`;
 	const [sort, setSort] = useState({ key: "", beat: 0 });
 	useEffect(() => {
 		if (!sorting) return;
@@ -398,8 +416,20 @@ function OnboardingFlow({ runKind, onFinish }: { runKind: OnboardingRunKind; onF
 	const githubShown = sorting;
 	// What the funnel records about a page as it's finished.
 	function pageCompletion(): Record<string, unknown> {
-		if (step === "welcome") return { story_points_seen: cycle > 0 ? ORCH_POINTS.length : point + 1, story_completed: cycle > 0 };
+		if (step === "welcome") return { story_points_seen: cycle > 0 ? STORY_POINTS : point + 1, story_completed: cycle > 0 };
 		if (step === "tools") return { agents_ready: readyAgentCount, gh_ready: ghReady };
+		const chosen = readProjectDefaults();
+		if (step === "defaults") {
+			return chosen ? {
+				orchestrator_agent: chosen.orchestratorAgent,
+				worker_agent: chosen.workerAgent,
+				archive_on_merge: chosen.archiveOnMerge,
+				auto_review: chosen.review,
+				assigned_issues: chosen.assignedIssues,
+				fix_checks: chosen.fixChecks,
+				fix_review_comments: chosen.fixReviewComments,
+			} : {};
+		}
 		return {};
 	}
 	const toolAgents = useToolAgents();
@@ -408,6 +438,7 @@ function OnboardingFlow({ runKind, onFinish }: { runKind: OnboardingRunKind; onF
 			step={step}
 			point={point}
 			cycle={cycle}
+			finishCycle={finishCycle}
 			sortBeat={sortBeat}
 			pickerAgents={toolAgents.pickerAgents}
 			selectedAgentId={toolAgents.selectedId}
@@ -424,7 +455,7 @@ function OnboardingFlow({ runKind, onFinish }: { runKind: OnboardingRunKind; onF
 		    see _shell.tsx), except while Settings has it step aside. */}
 		<FocusScope asChild loop trapped={!settingsAside}>
 		<div
-			className={cn("first-run-onboarding onboarding-backdrop fixed inset-0 z-[calc(var(--z-overlay)-1)] flex flex-col bg-background text-foreground", PRESS_CLASS, settingsAside && "hidden")}
+			className={cn("first-run-onboarding onboarding-backdrop fixed inset-0 z-[calc(var(--z-overlay)-1)] flex flex-col bg-background text-foreground", settingsAside && "hidden")}
 			data-testid="first-run-onboarding"
 			// Settings opened from here (a harness's installers): step aside, keeping the page.
 			data-aside={settingsAside ? "" : undefined}
@@ -457,11 +488,12 @@ function OnboardingFlow({ runKind, onFinish }: { runKind: OnboardingRunKind; onF
 									onNext={() => goNext()}
 									onSkip={() => {
 										skipOnboardingStep("tools", "user");
-										onFinish({ tour: false });
+										onFinish({ skipped: true });
 									}}
 									login={harnessLogin}
 								/>
 							) : null}
+							{step === "defaults" ? <WorkDefaultsStep onNext={() => goNext()} /> : null}
 						</motion.div>
 					</AnimatePresence>
 				</div>
@@ -520,33 +552,33 @@ function StepAction({ children }: { children: ReactNode }) {
 /** Back, owned by the flow but drawn in each step's action row. */
 const BackContext = createContext<(() => void) | undefined>(undefined);
 
-/** The step's actions, just under its content and flush right: Back, then the
- * step's own, its primary last. On a step taller than the window they stay in
- * view at the column's foot while the content scrolls under them. */
+/** The step's actions, one row just under its content, in the shared Button
+ * sizes: Back at the start, the step's own at the end (a way past the step,
+ * then its primary last). On a step taller than the window they stay put
+ * below the content, which scrolls and fades out above them (StepSplit). */
 function StepActions({ setSlot }: { setSlot: (slot: HTMLDivElement | null) => void }) {
 	const { t } = useTranslation();
 	const onBack = useContext(BackContext);
 	return (
-		<div className="sticky bottom-0 z-10 flex flex-wrap items-start justify-end gap-2 bg-background pb-14 pt-8 [&_button]:h-11 [&_button]:rounded-xl [&_button]:px-5 [&_button]:text-base">
+		<div className="flex shrink-0 items-center gap-2 pb-14 pt-4" data-testid="first-run-actions">
 			{onBack ? (
-				<Button type="button" variant="ghost" className="!w-11 !px-0" aria-label={t("firstRun.back")} title={t("firstRun.back")} onClick={onBack}>
-					<ArrowLeft className="!size-5" aria-hidden="true" />
+				<Button type="button" variant="quiet" className="-ms-2" onClick={onBack}>
+					<ArrowLeft aria-hidden="true" />
+					{t("firstRun.back")}
 				</Button>
 			) : null}
-			<div ref={setSlot} className="contents" />
+			<div ref={setSlot} className="ms-auto flex flex-wrap items-center justify-end gap-2" />
 		</div>
 	);
 }
 
-/** A step's primary action: the label, then an arrow in its own rounded
- * square at the right end (a spinner there while it's busy). */
-function NextButton({ busy = false, children, ...props }: ComponentProps<typeof Button> & { busy?: boolean }) {
+/** A step's primary action: the shared primary Button, with a spinner before
+ * the label while it waits. */
+function NextButton({ busy = false, children, ...props }: Omit<ButtonProps, "variant"> & { busy?: boolean }) {
 	return (
-		<Button variant="primary" {...props} className="!pl-5 !pr-1.5 gap-3">
+		<Button type="button" variant="primary" aria-busy={busy || undefined} {...props}>
+			{busy ? <LoaderCircle className="animate-spin" aria-hidden="true" /> : null}
 			{children}
-			<span aria-hidden="true" className="flex size-8 items-center justify-center rounded-lg bg-primary-foreground text-primary">
-				{busy ? <LoaderCircle className="size-4 animate-spin" /> : <ArrowRight className="size-4" strokeWidth={2} />}
-			</span>
 		</Button>
 	);
 }
@@ -570,20 +602,30 @@ function StepSplit({
 		// The copy and its actions sit centred in the column's height, a little
 		// below the middle (more padding on top than under it). my-auto rather
 		// than justify-center so a tall step still scrolls from its top.
-		// No bottom padding here: the actions carry it, so when they stick to the
-		// foot of a tall step nothing shows beneath them.
-		<div className="flex min-h-0 w-full flex-col overflow-y-auto bg-background pl-12 pr-10 pt-[max(6rem,16vh)]">
-			<div className="my-auto flex w-full max-w-md flex-col">
-				<h1 className={titleHidden ? "sr-only" : "text-balance text-heading-lg font-semibold leading-tight tracking-tight text-foreground"}>{title}</h1>
-				{body ? <p className="max-w-sm pt-3 text-pretty text-sm leading-relaxed text-muted-foreground">{body}</p> : null}
-				<ActionSlotContext.Provider value={actionSlot}>
-					{children ? <div className={cn("flex flex-col gap-4", !titleHidden && "pt-6")}>{children}</div> : null}
-				</ActionSlotContext.Provider>
+		// A step taller than the window scrolls its content only, never the
+		// actions: the content fades out above them along a mask rather than
+		// hiding behind a painted bar, since the page is see-through in a
+		// translucent window (FADE_FOOT). The side padding keeps focus rings and
+		// row edges clear of the scroller's clip.
+		<div className="flex min-h-0 w-full flex-col overflow-hidden bg-background pl-12 pr-10 pt-[max(6rem,16vh)]">
+			<div className="my-auto flex min-h-0 w-full max-w-md flex-col">
+				<div className={cn("-mx-1 flex min-h-0 flex-col overflow-y-auto px-1", FADE_FOOT)}>
+					<h1 className={titleHidden ? "sr-only" : "text-balance text-heading-lg font-semibold leading-tight tracking-tight text-foreground"}>{title}</h1>
+					{body ? <p className="max-w-sm pt-3 text-pretty text-sm leading-relaxed text-muted-foreground">{body}</p> : null}
+					<ActionSlotContext.Provider value={actionSlot}>
+						{children ? <div className={cn("flex flex-col gap-4", !titleHidden && "pt-6")}>{children}</div> : null}
+					</ActionSlotContext.Provider>
+				</div>
 				<StepActions setSlot={setActionSlot} />
 			</div>
 		</div>
 	);
 }
+
+/** A scroller's fading foot: the bottom padding is the fade's height, so the
+ * last row clears it once scrolled to the end, and a short list's fade covers
+ * only that padding. */
+const FADE_FOOT = "pb-10 [mask-image:linear-gradient(to_bottom,black_calc(100%-2.5rem),transparent)]";
 
 function Waiting({ children }: { children: ReactNode }) {
 	return (
@@ -629,14 +671,16 @@ const ROW_LIST = "overflow-hidden rounded-xl border border-border bg-(--schemati
 /** CheckRows as an open list, without the box or the lines between rows. */
 const OPEN_ROW_LIST = "[&>li]:!border-t-0 [&>li]:!px-0";
 
-function CheckRow({ icon, label, detail, trailing, below }: { icon?: ReactNode; label: ReactNode; detail?: ReactNode; trailing?: ReactNode; below?: ReactNode }) {
+function CheckRow({ icon, label, detail, trailing, below, wrap = false }: { icon?: ReactNode; label: ReactNode; detail?: ReactNode; trailing?: ReactNode; below?: ReactNode; /** Let the label and detail wrap instead of truncating (a sentence of detail). */ wrap?: boolean }) {
 	return (
 		<li className="px-4 py-3 [&+&]:border-t [&+&]:border-border">
-			<div className="flex items-center gap-3">
-				{icon ? <span className="flex shrink-0" aria-hidden="true">{icon}</span> : null}
+			<div className={cn("flex gap-3", wrap ? "items-start" : "items-center")}>
+				{/* Wrapping rows centre the icon on the label's first line (a box one
+				    line of the label's text tall), not on the whole block. */}
+				{icon ? <span className={cn("flex shrink-0 items-center", wrap && "h-[1lh] text-sm")} aria-hidden="true">{icon}</span> : null}
 				<span className="min-w-0 flex-1">
-					<span className="block truncate text-sm text-foreground">{label}</span>
-					{detail ? <span className="block truncate text-xs text-muted-foreground">{detail}</span> : null}
+					<span className={cn("block text-sm text-foreground", wrap ? "text-pretty" : "truncate")}>{label}</span>
+					{detail ? <span className={cn("block text-xs text-muted-foreground", wrap ? "text-pretty pt-0.5 leading-relaxed" : "truncate")}>{detail}</span> : null}
 				</span>
 				<span className="flex h-control-md shrink-0 items-center">{trailing}</span>
 			</div>
@@ -651,14 +695,15 @@ const MORE_HARNESS_MARKS = ["cursor", "gemini", "copilot", "opencode", "aider", 
 
 /** The last row of the harness list: three well-known marks and how many more
  * harnesses AO can install, opening the full list. */
-function MoreHarnessesRow({ ids, onShow }: { ids: string[]; onShow: () => void }) {
+function MoreHarnessesRow({ ids, expanded, onShow }: { ids: string[]; expanded: boolean; onShow: () => void }) {
 	const { t } = useTranslation();
 	const marks = [...MORE_HARNESS_MARKS.filter((id) => ids.includes(id)), ...ids.filter((id) => !MORE_HARNESS_MARKS.includes(id))].slice(0, 3);
 	return (
 		<li className="[&+&]:border-t [&+&]:border-border">
 			<Pressable
 				className="flex w-full items-center gap-3 px-4 py-3 transition-colors duration-fast hover:bg-muted/60 focus-visible:bg-muted/60"
-				aria-expanded={false}
+				aria-haspopup="dialog"
+				aria-expanded={expanded}
 				onClick={onShow}
 			>
 				<span className="flex shrink-0 -space-x-1.5" aria-hidden="true">
@@ -672,10 +717,34 @@ function MoreHarnessesRow({ ids, onShow }: { ids: string[]; onShow: () => void }
 				<span className="min-w-0 flex-1 truncate text-sm text-foreground">{t("firstRun.moreHarnesses", { count: ids.length })}</span>
 				<span className="flex shrink-0 items-center gap-1 text-xs text-muted-foreground">
 					{t("firstRun.showAllHarnesses")}
-					<ChevronDown className="size-icon-sm" aria-hidden="true" />
+					<ChevronRight className="size-icon-sm" aria-hidden="true" />
 				</span>
 			</Pressable>
 		</li>
+	);
+}
+
+/** Every harness, over the Tools page. */
+function MoreHarnessesDialog({ open, onOpenChange, children }: { open: boolean; onOpenChange: (open: boolean) => void; children: ReactNode }) {
+	const { t } = useTranslation();
+	const restoreFocusOnClose = useRestoreFocusOnClose(open);
+	return (
+		<Dialog open={open} onOpenChange={onOpenChange}>
+			<DialogContent
+				showCloseButton={false}
+				aria-describedby={undefined}
+				className={cn(settingsDialogContentClass, "w-[min(440px,calc(100vw-24px))]")}
+				onCloseAutoFocus={restoreFocusOnClose}
+			>
+				<DialogClose asChild>
+					<CloseButton floating aria-label={t("common.close")} title={t("common.close")} />
+				</DialogClose>
+				<div className={cn(settingsDialogHeaderClass, "border-b-0 p-5 pr-12")}>
+					<DialogTitle className="settings-dialog-title text-base">{t("firstRun.toolsAgentsHeading")}</DialogTitle>
+				</div>
+				<div className={cn(settingsDialogBodyClass, "px-5 pt-0 pb-5")}>{children}</div>
+			</DialogContent>
+		</Dialog>
 	);
 }
 
@@ -763,6 +832,7 @@ function OnboardingScene({
 	step,
 	point,
 	cycle,
+	finishCycle,
 	sortBeat,
 	pickerAgents,
 	selectedAgentId,
@@ -773,6 +843,8 @@ function OnboardingScene({
 	step: Step;
 	point: number;
 	cycle: number;
+	/** The last page's loop of trips to GitHub, so each one's cards arrive again. */
+	finishCycle: number;
 	sortBeat: number;
 	pickerAgents: Array<{ id: string; label: string; dimmed?: boolean }>;
 	selectedAgentId?: string;
@@ -785,13 +857,15 @@ function OnboardingScene({
 	const project = t("firstRun.projectPlaceholder");
 	const welcome = step === "welcome";
 	const stage: WorkStage = welcome ? (point === 0 ? "none" : point === 1 ? "working" : "sorted") : "sorted";
-	const page: ScenePage = welcome && point === 0 ? "chat" : step === "tools" ? "new" : "board";
-	const cards = exampleCards(tasks, stage, welcome ? sortBeat : undefined);
+	const picking = step === "tools";
+	const page: ScenePage = welcome && point === 0 ? "chat" : picking ? "new" : "board";
+	const finishing = step === "defaults";
+	const cards = exampleCards(tasks, stage, welcome || finishing ? sortBeat : undefined);
 	// While the chat leads a new loop, the board (fading out behind it) keeps
 	// the last loop's work instead of flashing empty; the next loop's board
 	// mounts fresh so its cards arrive again.
 	const boardCards = stage === "none" ? exampleCards(tasks, "sorted") : cards;
-	const boardKey = stage === "none" ? `${cycle}-previous` : `${cycle}`;
+	const boardKey = finishing ? `finish-${finishCycle}` : stage === "none" ? `${cycle}-previous` : `${cycle}`;
 	const sidebarCards = cards
 		.slice()
 		.sort((a, b) => tasks.findIndex((task) => task.id === a.id) - tasks.findIndex((task) => task.id === b.id));
@@ -810,7 +884,7 @@ function OnboardingScene({
 			phoneShown={phoneShown}
 			phoneDelay={phoneDelay}
 			githubShown={githubShown}
-			focus={welcome ? STORY_FOCUS[point]! : step === "tools" ? "new" : step === "signin" ? "devices" : "overview"}
+			focus={welcome ? STORY_FOCUS[point]! : picking ? "new" : step === "signin" ? "devices" : finishing ? "ci" : "overview"}
 		/>
 	);
 }
@@ -842,26 +916,38 @@ function WelcomeStep({ point, onNext }: { point: number; onNext: () => void }) {
 	const { t } = useTranslation();
 	const reduceMotion = useReducedMotion();
 	return (
-		<StepSplit
-			title={t("firstRun.welcomeTitle")}
-			body={t("firstRun.welcomeBody")}
-		>
-			{/* Narrates the preview: the whole story at once, the part playing
-			    brought up and the rest dimmed. */}
-			<ol className="flex flex-col gap-4 pt-6 pb-8">
+		<StepSplit title={t("firstRun.welcomeTitle")} body={t("firstRun.welcomeIntro")}>
+			{/* Narrates the preview as numbered steps on a thin rail: the whole
+			    story at once, the step playing brought up with its number filled
+			    and the rest dimmed. */}
+			<ol className="flex flex-col pt-6 pb-8">
 				{ORCH_POINTS.map(({ title, body }, i) => {
 					const active = i === point;
+					const last = i === ORCH_POINTS.length - 1;
 					return (
 						<motion.li
 							key={title}
-							className="flex flex-col gap-1"
+							className={cn("relative grid grid-cols-[1.5rem_1fr] gap-x-3.5", !last && "pb-5")}
 							aria-current={active ? "step" : undefined}
 							initial={false}
 							animate={{ opacity: active ? 1 : INACTIVE_POINT_OPACITY }}
 							transition={reduceMotion ? { duration: 0 } : { duration: 0.4, ease: CAPTION_EASE }}
 						>
-							<span className="text-sm font-medium text-foreground">{t(title)}</span>
-							<span className="max-w-sm text-pretty text-sm leading-relaxed text-muted-foreground">{t(body)}</span>
+							{/* The rail from this step's number down to the next one's. */}
+							{!last ? <span aria-hidden="true" className="absolute bottom-1 left-3 top-8 w-px -translate-x-1/2 bg-border" /> : null}
+							<span
+								aria-hidden="true"
+								className={cn(
+									"grid size-6 place-items-center rounded-full border text-caption font-medium tabular-nums transition-colors duration-normal motion-reduce:transition-none",
+									active ? "border-transparent bg-foreground text-background" : "border-border text-muted-foreground",
+								)}
+							>
+								{i + 1}
+							</span>
+							<span className="flex flex-col gap-1 pt-0.5">
+								<span className="text-sm font-medium text-foreground">{t(title)}</span>
+								<span className="max-w-sm text-pretty text-sm leading-relaxed text-muted-foreground">{t(body)}</span>
+							</span>
 						</motion.li>
 					);
 				})}
@@ -893,6 +979,14 @@ function SignInStep({ onNext, onSkip }: { onNext: () => void; onSkip: () => void
 	const account = cloud.status === "authenticated" ? cloud.session : null;
 	const accountName = account ? (account.user.displayName?.trim() || account.user.email) : "";
 	const browserWaiting = waiting && !localAuth.available;
+	// Signed in (the browser came back, or the email dialog closed signed in):
+	// nothing is left to do here, so the page moves on by itself. Only once.
+	const advanced = useRef(false);
+	useEffect(() => {
+		if (!account || advanced.current) return;
+		advanced.current = true;
+		onNext();
+	}, [account, onNext]);
 	const signIn = () => {
 		// cloud_signed_in reads where the sign-in started (source: onboarding).
 		noteSignInSource("onboarding");
@@ -946,7 +1040,7 @@ function SignInStep({ onNext, onSkip }: { onNext: () => void; onSkip: () => void
 				{browserWaiting ? (
 					<div className="flex flex-wrap items-center gap-3">
 						<Waiting>{t("firstRun.signInWaiting")}</Waiting>
-						<Button variant="ghost" className="text-muted-foreground" onClick={() => cloud.signIn()}>
+						<Button type="button" variant="quiet" onClick={() => cloud.signIn()}>
 							{t("firstRun.signInReopen")}
 						</Button>
 					</div>
@@ -955,37 +1049,28 @@ function SignInStep({ onNext, onSkip }: { onNext: () => void; onSkip: () => void
 			)}
 			{/* The local email/password dialog is only mounted by the cloud gate. */}
 			{localAuth.available && !cloudEnabled ? <CloudLocalSignInDialog /> : null}
-			{/* Continue once logged in, else Create account with a way to continue without one under it. */}
+			{/* Continue once logged in, else Skip beside Create account: one row with
+			    Back, the way past the step quieter than the primary. */}
 			<StepAction>
 				{account ? (
 					<NextButton onClick={onNext}>{t("firstRun.continue")}</NextButton>
 				) : cloud.status === "loading" ? null : (
-					<div className="flex flex-col items-center gap-2">
+					<>
+						<Button
+							type="button"
+							variant="ghost"
+							onClick={() => {
+								// Moving on while the browser still has the sign-in page.
+								finishOnboardingAction("cloud_sign_in", "cancelled");
+								onSkip();
+							}}
+						>
+							{t("firstRun.skip")}
+						</Button>
 						<NextButton onClick={signIn} disabled={browserWaiting} busy={browserWaiting}>
 							{t("firstRun.signInBrowser")}
 						</NextButton>
-						{/* A sentence, not a button, with the way out underlined and in the
-						    body colour so it's plainly there without competing. */}
-						<p className="text-sm text-muted-foreground">
-							<Trans
-								t={t}
-								i18nKey="firstRun.doLater"
-								components={{
-									skip: (
-										<button
-											type="button"
-											className="!h-auto !rounded-sm !px-0 !text-sm text-foreground underline decoration-foreground/40 underline-offset-4 transition-colors hover:decoration-foreground"
-											onClick={() => {
-												// Moving on while the browser still has the sign-in page.
-												finishOnboardingAction("cloud_sign_in", "cancelled");
-												onSkip();
-											}}
-										/>
-									),
-								}}
-							/>
-						</p>
-					</div>
+					</>
 				)}
 			</StepAction>
 		</StepSplit>
@@ -1081,6 +1166,10 @@ function ToolsStep({ onNext, onSkip, login }: {
 	const settingsOpen = useUiStore((state) => state.settingsModal?.scope === "global");
 	const wasInSettings = useRef(false);
 	const [showAllAgents, setShowAllAgents] = useState(false);
+	// A sign-in opens its terminal on the page, so the harness dialog steps aside.
+	useEffect(() => {
+		if (workflow) setShowAllAgents(false);
+	}, [workflow]);
 	// A login in progress (not one that timed out or is being cleaned up).
 	const signingInAgent = workflow?.phase === "running" ? workflow.agentId : undefined;
 	// Any harness can be signed in to here, the ones under "more" included.
@@ -1296,22 +1385,18 @@ function ToolsStep({ onNext, onSkip, login }: {
 					>
 						<ul className={ROW_LIST}>
 							{listed.map(agentRow)}
-							{rest.length > 0 && !showAllAgents ? (
-								<MoreHarnessesRow ids={rest.map(({ agent }) => agent.id)} onShow={() => setShowAllAgents(true)} />
+							{rest.length > 0 ? (
+								<MoreHarnessesRow ids={rest.map(({ agent }) => agent.id)} expanded={showAllAgents} onShow={() => setShowAllAgents(true)} />
 							) : null}
 						</ul>
-						{showAllAgents && rest.length > 0 ? (
-							<>
-								{/* Every other harness, installable from here too; scrolls past a few rows. */}
-								<ul className={cn(ROW_LIST, "max-h-80 overflow-y-auto")} aria-label={t("firstRun.moreHarnessesList")}>
-									{rest.map(agentRow)}
-								</ul>
-								<Button type="button" variant="ghost" size="sm" className="self-start text-muted-foreground" onClick={() => setShowAllAgents(false)}>
-									{t("firstRun.showFewerHarnesses")}
-									<ChevronUp aria-hidden="true" />
-								</Button>
-							</>
-						) : null}
+						{/* Every harness, the page's ones first, in a dialog so the page never
+						    grows past the window. Installs show on their rows here; a sign-in
+						    closes it (its terminal opens on the page). */}
+						<MoreHarnessesDialog open={showAllAgents && rest.length > 0} onOpenChange={setShowAllAgents}>
+							{/* Its box clips its rows, so it would shrink to the dialog's height
+							    instead of the dialog scrolling: it keeps its size. */}
+							<ul className={cn(ROW_LIST, "shrink-0")}>{[...listed, ...rest].map(agentRow)}</ul>
+						</MoreHarnessesDialog>
 					</RowGroup>
 				</div>
 			)}
@@ -1353,6 +1438,120 @@ function ToolsStep({ onNext, onSkip, login }: {
 				onConfirm={onSkip}
 				onOpenChange={setConfirmingSkip}
 			/>
+		</StepSplit>
+	);
+}
+
+// ── 3. Picking agents ───────────────────────────────────────────────────────
+
+/** Ready agents, ranked as a new project would pick them (best first). */
+function useReadyAgents() {
+	const readiness = useAgentReadinessQuery();
+	const agents = readiness.data?.agents ?? [];
+	const ready = agents.filter((agent) => agent.effectiveReadiness === "ready");
+	const ranked = preferredAgentList(ready);
+	return { agents, ranked, ranking: defaultProjectAgents(ready), labelFor: (id: string) => agents.find((agent) => agent.id === id)?.label ?? id };
+}
+
+/** An agent picker for a row's trailing slot: the Add Project sheet's agent
+ * rows, opening below the trigger with a capped height. */
+function AgentPicker({ value, options, labelFor, labelledBy, onChange }: {
+	value: string;
+	options: readonly string[];
+	labelFor: (id: string) => string;
+	labelledBy: string;
+	onChange: (id: string) => void;
+}) {
+	return (
+		<Select value={value} onValueChange={onChange}>
+			<SelectTrigger size="sm" aria-labelledby={labelledBy} className="min-w-40">
+				{/* Only the avatar and name: Radix would otherwise copy the whole
+				    menu row, checkmark included, into the trigger. */}
+				<SelectValue>
+					<span className="flex min-w-0 items-center gap-2">
+						<AgentAvatar provider={value} className="size-icon-base" decorative />
+						<span className="min-w-0 truncate">{labelFor(value)}</span>
+					</span>
+				</SelectValue>
+			</SelectTrigger>
+			<SelectContent position="popper" side="bottom" align="end" sideOffset={4} showScrollButtons={false} className="max-h-select-menu-max! min-w-56">
+				{options.map((id) => (
+					<SelectItem key={id} value={id} className="[&>span:last-child]:w-full">
+						<AgentSelectMenuItem agentId={id} label={labelFor(id)} selected={id === value} />
+					</SelectItem>
+				))}
+			</SelectContent>
+		</Select>
+	);
+}
+
+// ── 4. What new projects start with ─────────────────────────────────────────
+
+/**
+ * Defaults every project added from here starts with (project-defaults.ts): the
+ * agent its orchestrator and workers run on (the one a new project would pick
+ * anyway until changed; each project's settings can change it later), a
+ * second agent reviews each PR, agents fix failing checks and merge conflicts
+ * and review comments on their own, a chat is archived once its PR merges, and
+ * agents pick up issues assigned to you. The preview plays the PRs' trips
+ * through CI and review meanwhile.
+ */
+function WorkDefaultsStep({ onNext }: { onNext: () => void }) {
+	const { t } = useTranslation();
+	const { settings } = useSettings();
+	const intakeAvailable = settings?.trackerIntakeEnabled === true;
+	const [choices, setChoices] = useState<ProjectDefaults>(() => readProjectDefaults() ?? INITIAL_PROJECT_DEFAULTS);
+	const change = (patch: Partial<ProjectDefaults>) => setChoices((current) => ({ ...current, ...patch }));
+	// The reviewer isn't asked here: a ready agent that can review (not every
+	// worker agent can), the usual pick first; project settings can change it.
+	const { ranked, ranking, labelFor } = useReadyAgents();
+	const reviewerIds = ranked.filter((id) => toReviewerHarnessId(id) !== undefined);
+	const suggested = reviewerIds.includes(ranking.reviewerAgent) ? ranking.reviewerAgent : reviewerIds[0];
+	const reviewer = choices.reviewerAgent && reviewerIds.includes(choices.reviewerAgent) ? choices.reviewerAgent : suggested;
+	// One agent for the orchestrator and the workers; projects can split them later.
+	const chosenAgent = choices.workerAgent ?? choices.orchestratorAgent;
+	const agent = chosenAgent && ranked.includes(chosenAgent) ? chosenAgent : ranked.includes(ranking.workerAgent) ? ranking.workerAgent : ranked[0];
+	const finish = () => {
+		saveProjectDefaults({
+			...choices,
+			// Nothing ready yet (still checking): new projects rank their own.
+			orchestratorAgent: agent,
+			workerAgent: agent,
+			reviewerAgent: choices.review ? reviewer : undefined,
+			assignedIssues: intakeAvailable && choices.assignedIssues,
+		});
+		onNext();
+	};
+	const row = (id: string, key: "archiveOnMerge" | "review" | "fixChecks" | "fixReviewComments" | "assignedIssues", icon: ReactNode, label: string, detail: string) => (
+		<CheckRow
+			key={id}
+			icon={icon}
+			label={<label htmlFor={id}>{label}</label>}
+			detail={detail}
+			wrap
+			trailing={<Switch id={id} checked={choices[key]} onCheckedChange={(checked) => change({ [key]: checked })} />}
+		/>
+	);
+	const iconClass = "size-icon-md text-muted-foreground";
+	return (
+		<StepSplit title={t("firstRun.defaultsTitle")} body={t("firstRun.defaultsBody")}>
+			<ul className={ROW_LIST}>
+				{agent ? (
+					<CheckRow
+						icon={<Code2 className={iconClass} />}
+						label={<span id="onboarding-default-agent">{t("firstRun.defaultsAgent")}</span>}
+						trailing={<AgentPicker value={agent} options={ranked} labelFor={labelFor} labelledBy="onboarding-default-agent" onChange={(id) => change({ orchestratorAgent: id, workerAgent: id })} />}
+					/>
+				) : null}
+				{row("onboarding-review", "review", <Eye className={iconClass} />, t("firstRun.defaultsReview"), t("firstRun.defaultsReviewDetail"))}
+				{row("onboarding-fix-checks", "fixChecks", <ListChecks className={iconClass} />, t("firstRun.defaultsFixChecks"), t("firstRun.defaultsFixChecksDetail"))}
+				{row("onboarding-fix-comments", "fixReviewComments", <MessageSquare className={iconClass} />, t("firstRun.defaultsFixComments"), t("firstRun.defaultsFixCommentsDetail"))}
+				{row("onboarding-archive-on-merge", "archiveOnMerge", <Archive className={iconClass} />, t("firstRun.defaultsArchive"), t("firstRun.defaultsArchiveDetail"))}
+				{intakeAvailable ? row("onboarding-assigned-issues", "assignedIssues", <CircleDot className={iconClass} />, t("firstRun.defaultsIssues"), t("firstRun.defaultsIssuesDetail")) : null}
+			</ul>
+			<StepAction>
+				<NextButton onClick={finish}>{t("firstRun.continue")}</NextButton>
+			</StepAction>
 		</StepSplit>
 	);
 }

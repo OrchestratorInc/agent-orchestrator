@@ -2,6 +2,8 @@ import { useTelemetrySurface } from "../../lib/ui-usage-telemetry";
 import type { ChatExcerptSnapshot } from "../../../shared/chat-excerpt";
 import { excerptSizeError } from "../../../shared/chat-excerpt";
 import { captureExcerptSnapshot, captureExcerptTurn } from "../../lib/chat-excerpt-snapshot";
+import { readRenderSelection } from "../../lib/render-frame";
+import type { ChatSelectionFrame } from "../../hooks/useChatSelectionPosition";
 import { FileAnnotationContext } from "./FileAnnotationPreview";
 import { useChatFind } from "../../hooks/useChatFind";
 import { occurrenceKey, type FindOccurrence } from "../../lib/chat-find";
@@ -57,7 +59,7 @@ import {
 	type WheelEvent as ReactWheelEvent,
 } from "react";
 import { createPortal } from "react-dom";
-import { ArrowDown, Columns2, FlaskConical, ListTodo, Loader2, NotebookPen, Presentation, Route, ScanSearch, TriangleAlert, Undo2, WandSparkles } from "@/components/app-icons";
+import { ArrowDown, Bug, Columns2, FlaskConical, ListTodo, Loader2, NotebookPen, Presentation, Route, ScanSearch, TriangleAlert, Undo2, WandSparkles, Wrench } from "@/components/app-icons";
 import { AnimatePresence, motion, Reorder, usePresence, useReducedMotion } from "motion/react";
 import { useTranslation } from "react-i18next";
 import { ChatSelectionActions } from "./ChatSelectionActions";
@@ -122,7 +124,7 @@ import { handleTerminalTabListKeyDown } from "../../lib/terminal-tabs";
 import { agentLabel } from "../../lib/agent-options";
 import { labelForHost } from "../../lib/host-clients";
 import type { ApprovalMode } from "../../types/conversation";
-import type { ConversationLocalEcho } from "../../hooks/useConversation";
+import type { ConversationLocalEcho, UpdateAttachmentLeases } from "../../hooks/useConversation";
 import type { ShellTerminal } from "../../hooks/useShellTerminals";
 import { sidebarOccupiesLayout, useUiStore } from "../../stores/ui-store";
 import type { TerminalTarget } from "../../types/terminal";
@@ -589,6 +591,7 @@ export interface ChatWorkspaceProps {
 	shellError?: string;
 	/** Open an HTTP(S) link in this session's AO Browser panel. */
 	onLinkOpen?: (url: string) => void;
+	hostLocalLinks?: boolean;
 	onSessionLinkOpen?: (url: string) => void;
 	/** A send or decision is in flight. */
 	busy?: boolean;
@@ -724,6 +727,8 @@ export interface ChatWorkspaceProps {
 	 * no worktree to write into.
 	 */
 	onStageAttachments?: (attachments: OutgoingAttachment[], signal?: AbortSignal) => Promise<string[]>;
+	/** Releases or renews the leases of files staged for the draft; see ChatComposer. */
+	onUpdateAttachmentLeases?: UpdateAttachmentLeases;
 	/** Staged files are uploaded to AO Cloud, up to maxBytes each; see ChatComposer. */
 	cloudAttachments?: { maxBytes: number };
 	/** The provider negotiated native image prompt blocks. */
@@ -967,6 +972,7 @@ function ChatWorkspaceContent({
 	openingShell,
 	shellError,
 	onLinkOpen,
+	hostLocalLinks,
 	onSessionLinkOpen,
 	busy,
 	models,
@@ -1024,6 +1030,7 @@ function ChatWorkspaceContent({
 	localEchos,
 	sendAwaitingTurn = false,
 	onStageAttachments,
+	onUpdateAttachmentLeases,
 	cloudAttachments,
 	nativeImages,
 	onSteer,
@@ -1512,8 +1519,8 @@ function ChatWorkspaceContent({
 		},
 		[onCancelQueuedTurn, queueEdit, stableCancelQueuedTurn, updateQueueDraft],
 	);
-	// Messages and steers this composer sent that the guided tour waits to see
-	// arrive (GuidedTour): the chat holding one is what counts as delivered.
+	// Messages and steers this composer sent that the onboarding funnel waits to see
+	// arrive (FirstTaskFunnel): the chat holding one is what counts as delivered.
 	const tourAwaitedIds = useRef(new Set<string>());
 	// Keep the dispatch target with this composer instance while attachment staging
 	// awaits. A newer queue editor must not redirect an older ordinary send.
@@ -2043,11 +2050,22 @@ function ChatWorkspaceContent({
 		() => (queuedSteerErrors && Object.keys(queuedSteerErrors).length > 0 ? { ...queuedSteerErrors, ...steerErrors } : steerErrors),
 		[queuedSteerErrors, steerErrors],
 	);
+	// The composer sits outside the timeline's image source, so its dock is told
+	// where staged files are read from, the same way the timeline resolves them.
+	const queuedLocalBaseUrl = useSyncExternalStore(subscribeApiBaseUrl, getApiBaseUrl, getApiBaseUrl);
+	const queuedAttachmentSource = useMemo(
+		() => ({
+			sessionId: snapshot.sessionId,
+			apiBaseUrl: activeRemoteHostId ? assetBaseUrl ?? null : assetBaseUrl ?? queuedLocalBaseUrl,
+		}),
+		[activeRemoteHostId, assetBaseUrl, queuedLocalBaseUrl, snapshot.sessionId],
+	);
 	const composerQueuedDock = useMemo(
 		() =>
 			visibleQueuedMessages.length > 0 ? (
 				<QueuedMessageDock
 					messages={visibleQueuedMessages}
+					attachmentSource={queuedAttachmentSource}
 					editingTurnId={queueEdit?.turnId}
 					disabled={Boolean(queueEdit?.clientMessageId)}
 					canSteer={canSteerQueuedMessage}
@@ -2085,6 +2103,7 @@ function ChatWorkspaceContent({
 			promoteQueuedTurnPendingTurnId,
 			queueEdit?.clientMessageId,
 			queueEdit?.turnId,
+			queuedAttachmentSource,
 			queuedSteerFailures,
 			steeringTurnIds,
 			visibleQueuedMessages,
@@ -2167,6 +2186,14 @@ function ChatWorkspaceContent({
 	const conversationEmpty = !openedDocked && !arrivingWithHistory && snapshot.items.length === 0 && !turn && (localEchos?.length ?? 0) === 0 && (!hasStartup || sessionRole === "orchestrator");
 	// With comments, the composer keeps the messages' column (the Timeline's), whose margin holds their icons.
 	const commentColumn = Boolean(useContext(CommentMarkersContext));
+	const welcomeKind: WelcomeKind = artifactSession ? "artifact" : sessionRole === "orchestrator" ? "orchestrator" : "chat";
+	// An orchestrator's empty chat asks in orchestration terms; its surface says
+	// "first task" instead while the project has no workers (welcomeHeading).
+	const emptyChatHeading = welcomeHeading ?? t(
+		welcomeKind === "artifact" ? "chat.welcome.artifactHeading"
+		: welcomeKind === "orchestrator" ? "chat.welcome.orchestratorHeading"
+		: "chat.welcome.heading",
+	);
 	const composerDockRef = useRef<HTMLDivElement>(null);
 	// The composer itself, not the dock: the dock also holds the welcome heading, which
 	// disappears on the first send, and sliding from the dock's top would make the
@@ -2413,6 +2440,7 @@ function ChatWorkspaceContent({
 							onFileOpen={onOpenFile}
 							onSessionLinkOpen={onSessionLinkOpen}
 							remoteHost={Boolean(activeRemoteHostId)}
+							hostLocalLinks={hostLocalLinks}
 							sessionLinkHostId={activeRemoteHostId}
 							sessionLinkSourceKind={session?.cloud ? "cloud" : undefined}
 							workspacePaths={filePaths}
@@ -2517,20 +2545,19 @@ function ChatWorkspaceContent({
 											(retryControl.autoResumeTurnId === limitedTurn.id ? retryControl.autoResumeError : undefined)}
 									/>
 								) : null}
-								{/* The guided tour's last stop (GuidedTour). */}
 								<div
 									ref={composerBoxRef}
 									className="relative z-10"
 									data-composer-tray={conversationEmpty && composerTray ? "" : undefined}
-									data-tour="composer"
+									data-chat-composer-box=""
 								>
 									{conversationEmpty ? (
 										<WelcomeStack
-											heading={welcomeHeading ?? t(artifactSession ? "chat.welcome.artifactHeading" : "chat.welcome.heading")}
+											heading={emptyChatHeading}
 											// While an orchestrator starts the prompts stay put, disabled, so they don't
 											// pop in at the handoff. Other fenced chats keep them hidden.
 											promptsOpen={composerEmpty && (!newWorkDisabled || pendingInPlaceStart || orchestratorStarting)}
-											artifact={artifactSession}
+											kind={welcomeKind}
 											unavailable={newWorkDisabled || pendingInPlaceStart}
 											onPick={(text) => { if (!newWorkDisabled && !pendingInPlaceStart) composerFocusRef.current?.setDraft(text); }}
 											onRoom={setWelcomeRoom}
@@ -2541,7 +2568,7 @@ function ChatWorkspaceContent({
 											aria-hidden="true"
 											className="chat-welcome-leaving pointer-events-none absolute inset-x-0 bottom-full mb-5 text-center text-2xl font-normal tracking-tight text-foreground sm:text-3xl"
 										>
-											{welcomeHeading ?? t(artifactSession ? "chat.welcome.artifactHeading" : "chat.welcome.heading")}
+											{emptyChatHeading}
 										</h1>
 									) : null}
 									<McpServerBanner
@@ -2657,7 +2684,7 @@ function ChatWorkspaceContent({
 										// task can have non-message activity before its first visible chat
 										// message, and the generic placeholder makes a still-empty composer
 										// look like a regression.
-										emptyPlaceholder={conversationEmpty ? (artifactSession ? t("chat.welcome.artifactPlaceholder") : EMPTY_CHAT_PLACEHOLDER) : undefined}
+										emptyPlaceholder={conversationEmpty ? (artifactSession ? t("chat.welcome.artifactPlaceholder") : sessionRole === "orchestrator" ? t("chat.welcome.orchestratorPlaceholder") : EMPTY_CHAT_PLACEHOLDER) : undefined}
 										skills={skills}
 										skillsLoading={skillsLoading}
 										filePaths={filePaths}
@@ -2665,6 +2692,7 @@ function ChatWorkspaceContent({
 										filePathsLoading={filePathsLoading}
 										onFileQuery={onFileQuery}
 										onStageAttachments={newWorkDisabled ? undefined : onStageAttachments}
+										onUpdateAttachmentLeases={onUpdateAttachmentLeases}
 										cloudAttachments={cloudAttachments}
 										holdAttachments={newWorkDisabled ? undefined : holdAttachments}
 										onHeldAttachmentsChange={onHeldAttachmentsChange}
@@ -2695,7 +2723,7 @@ function ChatWorkspaceContent({
 										parkUnsentSends={parkUnsentSends}
 									/>}
 								</div>
-								{conversationEmpty && composerTray ? <div className="chat-composer-tray flex items-center" data-tour="composer-tray">{composerTray}</div> : null}
+								{conversationEmpty && composerTray ? <div className="chat-composer-tray flex items-center">{composerTray}</div> : null}
 								{compactStartup ? <OrchestratorStartupStatus {...compactStartup} /> : null}
 								{draftNotice}
 							</div>
@@ -3774,6 +3802,7 @@ export function Timeline({
 	const [selectionAction, setSelectionAction] = useState<{
 		excerpt: ChatDraftExcerptReference;
 		range: Range;
+		frame?: ChatSelectionFrame;
 	} | null>(null);
 	const clearSelectionAction = useCallback(() => setSelectionAction(null), []);
 	const selectionComment = useRef("");
@@ -3935,6 +3964,36 @@ export function Timeline({
 			previous.excerpt.revision === revision && previous.excerpt.text === text && selectionRangesEqual(previous.range, selectedRange)
 			? previous : next);
 	}, [excerptsEnabled, snapshot]);
+	const captureFrameSelection = useCallback((event: MessageEvent) => {
+		const posted = readRenderSelection(event.data);
+		const text = posted?.text;
+		if (!posted || text === undefined) return;
+		const frame = Array.from(scrollContent.current?.querySelectorAll("iframe") ?? []).find((each) => each.contentWindow === event.source);
+		if (!frame) return;
+		if (!text.trim() || !("first" in posted)) {
+			if (selectionActionRef.current?.frame?.element === frame && !selectionComment.current.trim()) setSelectionAction(null);
+			return;
+		}
+		const activityId = frame.closest<HTMLElement>("[data-chat-activity-id]")?.dataset.chatActivityId;
+		const activity = snapshot.items.find((item) => item.kind === "activity" && item.id === activityId);
+		if (!activity || document.activeElement !== frame) return;
+		const range = document.createRange();
+		range.selectNode(frame);
+		setEditingAnnotation(null);
+		setSelectionAction((previous) => previous?.frame?.element === frame && previous.excerpt.text === text ? previous : {
+			excerpt: {
+				id: crypto.randomUUID(),
+				conversationId: snapshot.conversationId,
+				messageId: activity.id,
+				revision: activity.revision,
+				text,
+				role: "assistant",
+				snapshot: { version: 1, rawText: "", captureMode: "legacy" },
+			},
+			range,
+			frame: { element: frame, first: posted.first, extent: posted.extent },
+		});
+	}, [snapshot]);
 	useEffect(() => {
 		if (!excerptsEnabled) return;
 		const capture = (event: Event) => captureTranscriptSelection(event);
@@ -3968,7 +4027,9 @@ export function Timeline({
 		document.addEventListener("pointerup", capture);
 		document.addEventListener("keyup", capture);
 		document.addEventListener("keydown", escape, true);
+		window.addEventListener("message", captureFrameSelection);
 		return () => {
+			window.removeEventListener("message", captureFrameSelection);
 			document.removeEventListener("pointerup", capture);
 			document.removeEventListener("keyup", capture);
 			document.removeEventListener("keydown", escape, true);
@@ -3976,7 +4037,7 @@ export function Timeline({
 			document.removeEventListener("keyup", release);
 			window.removeEventListener("blur", blur);
 		};
-	}, [captureTranscriptSelection, clearSelectionAction, excerptsEnabled]);
+	}, [captureFrameSelection, captureTranscriptSelection, clearSelectionAction, excerptsEnabled]);
 
 	const addSelectionToChat = useCallback(async (comment: string) => {
 		if (!selectionAction) return;
@@ -4684,10 +4745,10 @@ export function Timeline({
 		const cleaned = spawned.size === 0 || !placed.some((group) => group.items.some(repeats)) ? placed : placed
 			.map((group) => group.items.some(repeats) ? { ...group, items: group.items.filter((item) => !repeats(item)) } : group)
 			.filter((group) => group.live || group.items.length > 0);
-		const folded = foldBackground(cleaned, workerUpdateIndex, endedSpawns, new Set(snapshot.turns.map((turn) => turn.id)), runKeys.current, batchedReports.under, find.gapBeforeSequence);
+		const folded = foldBackground(cleaned, workerUpdateIndex, endedSpawns, new Set(snapshot.turns.map((turn) => turn.id)), runKeys.current, batchedReports.under, find.gapBeforeSequence, queued);
 		runKeys.current = new Map(folded.flatMap((group) => group.folded ? group.folded.members.map((member) => [member.key, group.key] as const) : []));
 		return folded;
-	}, [batchedReports, controllerStopped, developerMode, endedSpawns, find.gapBeforeSequence, openingPending, openingStartedAt, openingStartupLabel, openingTurnId, pendingTurnLabel, snapshot, timelineItems, workerUpdateIndex, workerUpdates]);
+	}, [batchedReports, controllerStopped, developerMode, endedSpawns, find.gapBeforeSequence, openingPending, openingStartedAt, openingStartupLabel, openingTurnId, pendingTurnLabel, queued, snapshot, timelineItems, workerUpdateIndex, workerUpdates]);
 	const groups = useStableList(grouped, groupKey, sameGroup);
 	// Read from every group, not the mounted ones: the timeline is virtualized, and the
 	// panel lists a child whose turn has scrolled far out of view.
@@ -4961,8 +5022,8 @@ export function Timeline({
 			setAnnotationTarget(undefined);
 			return;
 		}
-		const source = Array.from(scrollContent.current?.querySelectorAll<HTMLElement>("[data-chat-message-id]") ?? [])
-			.find((element) => element.dataset.chatMessageId === annotationTarget.messageId);
+		const source = Array.from(scrollContent.current?.querySelectorAll<HTMLElement>("[data-chat-message-id], [data-chat-activity-id]") ?? [])
+			.find((element) => (element.dataset.chatMessageId ?? element.dataset.chatActivityId) === annotationTarget.messageId);
 		if (!source) {
 			const keys = revealKeys(groups[index], (item) => item.id === annotationTarget.messageId);
 			if (keys.some((key) => !activityDisclosureOverrides[key])) {
@@ -6807,7 +6868,38 @@ const TurnGroup = memo(function TurnGroup({
 		if (waiting.length === 0) return renderRun(run);
 		return [renderRun(run), reportsLine(`${run.key}:waiting`, waiting)];
 	};
-	const body: ReactNode[] = humanRuns.flatMap(renderWorkerRun);
+	const sentUpdates = (run: TimelineRun) => {
+		const item = run.kind === "single" ? run.items[0] : undefined;
+		const updates = workerUpdates && item && !isUserQueuePrompt(item) ? workerUpdatesOf(item) : [];
+		return updates.length > 0 && updates[0]?.state === undefined && !batched?.under.get(item!.id)?.length ? updates : undefined;
+	};
+	const renderWorkerRuns = (list: readonly TimelineRun[]): ReactNode[] => {
+		const out: ReactNode[] = [];
+		for (let start = 0; start < list.length;) {
+			let end = start;
+			while (end < list.length && sentUpdates(list[end]!)) end += 1;
+			if (end - start < 2) {
+				out.push(...[renderWorkerRun(list[start]!)].flat());
+				start += 1;
+				continue;
+			}
+			const sent = list.slice(start, end);
+			const keys = sent.map((run) => `${group.key}:sent:${run.key}`);
+			out.push(
+				<BackgroundUpdates
+					key={keys[0]}
+					turns={sent.map((run) => ({ at: run.items[0]!.createdAt, updates: sentUpdates(run)! }))}
+					open={keys.some((key) => activityDisclosureOverrides[key])}
+					onOpenChange={(open) => keys.forEach((key) => onActivityDisclosureChange(key, open))}
+				>
+					<WorkerUpdateRows updates={sent.flatMap((run) => sentUpdates(run)!)} />
+				</BackgroundUpdates>,
+			);
+			start = end;
+		}
+		return out;
+	};
+	const body: ReactNode[] = renderWorkerRuns(humanRuns);
 	const tail = workedRuns.at(-1);
 	const tailIsReply = group.live && tail?.kind === "single" && tail.items[0].kind === "message" && tail.items[0].role === "assistant";
 	// The live row sits at the end of the turn, under what the agent has written so
@@ -6853,7 +6945,7 @@ const TurnGroup = memo(function TurnGroup({
 	const waitingWorkers = waitingSpawns(recordedSpawns, commandSpawns, updateIndex, endedSpawns);
 	const spawnTree = waitingWorkers.length > 0 ? <SpawnedAgents key="spawned" spawns={waitingWorkers} /> : null;
 	const hasFoldedWork = foldedRuns.length > 0;
-	const foldedWork = (): ReactNode[] => foldedRuns.flatMap(renderWorkerRun);
+	const foldedWork = (): ReactNode[] => renderWorkerRuns(foldedRuns);
 	const showsWorked = Boolean(
 		// A message refused for its login did no work, so it gets no "Worked for".
 		outcome && !onlyRead && !loginNoteMessageId && (hasFoldedWork || workedDurationMs !== undefined),
@@ -6885,9 +6977,9 @@ const TurnGroup = memo(function TurnGroup({
 	// with no scroll box of their own. They go straight into the turn's flat list, so
 	// a step keeps its element as later ones land under it and an image the reader
 	// opened from it stays open. Once the turn settles they fold beneath "Worked for".
-	if (!outcome) body.push(...workedRuns.flatMap(renderWorkerRun));
+	if (!outcome) body.push(...renderWorkerRuns(workedRuns));
 	// Settled steers still carry the reports they delivered.
-	if (outcome) body.push(...noticeRuns.flatMap(renderWorkerRun));
+	if (outcome) body.push(...renderWorkerRuns(noticeRuns));
 	// Under the reply, so the reply streams in above the tree, and above the reply's
 	// copy and undo row, which belongs to the whole turn.
 	const finalReply = finalRun?.kind === "single" && finalRun.items[0]?.kind === "message" && finalRun.items[0].role === "assistant";
@@ -7348,7 +7440,8 @@ const turnsIn = (group: TimelineGroup): TimelineGroup[] => group.folded?.members
 function revealKeys(group: TimelineGroup, holds: (item: ConversationItem) => boolean): string[] {
 	const member = group.folded?.members.find((candidate) => candidate.items.some(holds));
 	const turn = member ?? group;
-	const inside = [`${turn.key}:worked`];
+	const target = turn.items.find(holds);
+	const inside = [`${turn.key}:worked`, ...(target ? [`${turn.key}:sent:${itemKey(target)}`] : [])];
 	if (!member) return inside;
 	const { kind } = group.folded!;
 	if (member === bannerOf(group) && (kind === "failed" || !holds(member.items[0]!))) return inside;
@@ -7376,11 +7469,11 @@ function bannerOf(group: TimelineGroup): TimelineGroup | undefined {
 	return last && isAccountFailure(last) ? last : undefined;
 }
 
-function foldBackground(groups: readonly TimelineGroup[], index: WorkerUpdateIndex | null, endedSpawns: ReadonlySet<string>, known: ReadonlySet<string>, prior: ReadonlyMap<string, string>, carried: ReadonlyMap<string, readonly WorkerUpdate[]>, gap?: number): TimelineGroup[] {
+function foldBackground(groups: readonly TimelineGroup[], index: WorkerUpdateIndex | null, endedSpawns: ReadonlySet<string>, known: ReadonlySet<string>, prior: ReadonlyMap<string, string>, carried: ReadonlyMap<string, readonly WorkerUpdate[]>, gap?: number, queued?: ReadonlySet<string>): TimelineGroup[] {
 	const out: TimelineGroup[] = [];
 	const used = new Set<string>();
 	const held: TimelineGroup[] = [];
-	let run: { kind: "background" | "failed"; key: string; members: TimelineGroup[] } | undefined;
+	let run: { kind: "background" | "waiting" | "failed"; key: string; members: TimelineGroup[] } | undefined;
 	const close = () => {
 		if (!run) return;
 		const { kind, members } = run;
@@ -7405,7 +7498,7 @@ function foldBackground(groups: readonly TimelineGroup[], index: WorkerUpdateInd
 			continue;
 		}
 		const outcome = group.turnId && !group.live && segments.get(group.turnId) === 1
-			? group.outcome ?? (known.has(group.turnId) ? undefined : { state: "completed" as const })
+			? group.outcome ?? (queued?.has(group.turnId) || !known.has(group.turnId) ? { state: "completed" as const } : undefined)
 			: undefined;
 		const { steps, live, stopped } = groupSubagents(group);
 		const teamWorking = group.items.some((item) => isSubagentLaunch(item) && readSubagent(item, steps.get(item.id) ?? [], live.has(item.id), stopped).state === "working");
@@ -7414,8 +7507,9 @@ function foldBackground(groups: readonly TimelineGroup[], index: WorkerUpdateInd
 		// that ended before it answered keeps it until the next turn, since that line is where
 		// the chat says so, and then lets the turn go.
 		const spawnWaiting = waitingSpawns(group.items.flatMap((item) => spawnedWorker(item) ?? []), spawnedSessionIds(group.items), index, endedSpawns).length > 0;
-		const standing = outcome && !teamWorking && !spawnWaiting ? turnStanding(group.items, outcome, index, carried) : "yours";
-		if (standing !== "background" && standing !== "failed") {
+		const judged = outcome && !teamWorking && !spawnWaiting ? turnStanding(group.items, outcome, index, carried) : "yours";
+		const standing = !group.turnId || !queued?.has(group.turnId) ? judged : judged === "background" ? "waiting" : "yours";
+		if (standing !== "background" && standing !== "waiting" && standing !== "failed") {
 			close();
 			out.push(standing === "replaced"
 				? { key: `replaced:${group.key}`, anchor: group.anchor, items: group.items, folded: { kind: "replaced", members: [group] } }
@@ -7510,12 +7604,13 @@ function FoldedTurns({ group, overrides, onOpenChange, renderTurn }: {
 			{member === banner ? null : body(member)}
 		</BackgroundTurnRow>
 	);
-	const { rows, tally } = kind === "background" ? backgroundRows(listed, updates) : { rows: undefined, tally: undefined };
+	const { rows, tally } = kind !== "failed" ? backgroundRows(listed, updates) : { rows: undefined, tally: undefined };
 	const line = (
 		<BackgroundUpdates
 			turns={listed.filter((member) => !isLooseNotices(member)).map((member) => ({ at: member.items[0]!.createdAt, updates: updates.get(member)! }))}
 			tally={tally}
 			failed={kind === "failed"}
+			waiting={kind === "waiting"}
 			{...toggleAll("line", listed)}
 		>
 			{rows ? rows.map((row) => {
@@ -7671,7 +7766,7 @@ type TimelineGroup = {
 	accountSwitched?: boolean;
 	/** Subagents' steps, read from the whole conversation. See `withSubagentSteps`. */
 	subagents?: GroupSubagents;
-	folded?: { kind: "background" | "failed" | "replaced"; members: TimelineGroup[] };
+	folded?: { kind: "background" | "waiting" | "failed" | "replaced"; members: TimelineGroup[] };
 	leadless?: boolean;
 };
 
@@ -8623,6 +8718,20 @@ const CHAT_PROMPTS = [
 	{ prompt: "chat.welcome.prompt.simplify", chip: "chat.welcome.chip.simplify", icon: WandSparkles },
 ] as const;
 
+/** An orchestrator's: each one fans out into workers, so the first task shows what it does. */
+const ORCHESTRATOR_PROMPTS = [
+	{ prompt: "chat.welcome.orchestratorPrompt.refine", chip: "chat.welcome.chip.refine", icon: Wrench },
+	{ prompt: "chat.welcome.orchestratorPrompt.bug", chip: "chat.welcome.chip.bug", icon: Bug },
+	{ prompt: "chat.welcome.orchestratorPrompt.tests", chip: "chat.welcome.chip.tests", icon: FlaskConical },
+] as const;
+
+const WELCOME_PROMPTS = {
+	chat: { label: "chat.welcome.prompts", prompts: CHAT_PROMPTS },
+	artifact: { label: "chat.welcome.artifactPrompts", prompts: ARTIFACT_PROMPTS },
+	orchestrator: { label: "chat.welcome.orchestratorPrompts", prompts: ORCHESTRATOR_PROMPTS },
+} as const;
+type WelcomeKind = keyof typeof WELCOME_PROMPTS;
+
 /** The heading settling into the space the sample prompts leave: a soft deceleration. */
 const WELCOME_SETTLE = { duration: 0.34, ease: [0.32, 0.72, 0, 1] } as const;
 
@@ -8636,10 +8745,10 @@ const WELCOME_SETTLE = { duration: 0.34, ease: [0.32, 0.72, 0, 1] } as const;
  * an opacity, so the animation that starts on the first keystroke never relays out
  * the page while the user types.
  */
-function WelcomeStack({ heading, promptsOpen, artifact, unavailable = false, onPick, onRoom }: { heading: string; promptsOpen: boolean; artifact: boolean; unavailable?: boolean; onPick: (text: string) => void; onRoom: (height: number) => void }) {
+function WelcomeStack({ heading, promptsOpen, kind, unavailable = false, onPick, onRoom }: { heading: string; promptsOpen: boolean; kind: WelcomeKind; unavailable?: boolean; onPick: (text: string) => void; onRoom: (height: number) => void }) {
 	const { t } = useTranslation();
 	const reducedMotion = useReducedMotion();
-	const prompts = artifact ? ARTIFACT_PROMPTS : CHAT_PROMPTS;
+	const { label, prompts } = WELCOME_PROMPTS[kind];
 	// The prompts sit out of the flow, pinned to the composer's top edge, and this
 	// spacer holds their room. When they leave, the spacer closes at once and the
 	// prompts travel down with the heading, tucking behind the composer's top edge
@@ -8696,7 +8805,7 @@ function WelcomeStack({ heading, promptsOpen, artifact, unavailable = false, onP
 				// The `/` and `@` menus open where the heading stands, so it steps aside for them.
 				// Anchored on the composer box alone: a group-has variant would restyle the app
 				// on every DOM change (style-invalidation.test.ts).
-				className="mb-5 text-center text-2xl font-normal tracking-tight text-foreground transition-opacity duration-150 ease-out motion-reduce:transition-none [[data-tour=composer]:has([data-composer-suggest-menu])>*>&]:opacity-0 sm:text-3xl"
+				className="mb-5 text-center text-2xl font-normal tracking-tight text-foreground transition-opacity duration-150 ease-out motion-reduce:transition-none [[data-chat-composer-box]:has([data-composer-suggest-menu])>*>&]:opacity-0 sm:text-3xl"
 			>
 				{heading}
 			</motion.h1>
@@ -8715,8 +8824,7 @@ function WelcomeStack({ heading, promptsOpen, artifact, unavailable = false, onP
 						// Sink with the heading; the fade finishes before they reach the composer.
 						exit={{ opacity: 0, y: promptsHeight, transition: reducedMotion ? { duration: 0 } : { y: WELCOME_SETTLE, opacity: { duration: 0.2, ease: [0.4, 0, 1, 1] } } }}
 					>
-						{/* Lit with the composer on the guided tour's last stop (GuidedTour). */}
-						<ul aria-label={t(artifact ? "chat.welcome.artifactPrompts" : "chat.welcome.prompts")} className="flex flex-wrap justify-center gap-2 pb-4" data-tour="composer-prompts">
+						<ul aria-label={t(label)} className="flex flex-wrap justify-center gap-2 pb-4">
 							{chips(onPick)}
 						</ul>
 					</motion.div>

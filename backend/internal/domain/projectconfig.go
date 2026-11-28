@@ -87,6 +87,17 @@ type ProjectConfig struct {
 	// user/global default. Users can still override the per-session toggle after spawn.
 	TerminateOnPRMerge *bool `json:"terminateOnPrMerge,omitempty"`
 
+	// AutoInjectCI controls whether new sessions spawned for this project start
+	// with failing CI checks and merge conflicts sent to their agent to fix.
+	// Nil keeps the default (on). Users can still change the per-session toggle
+	// after spawn.
+	AutoInjectCI *bool `json:"autoInjectCI,omitempty"`
+
+	// AutoInjectReview controls whether new sessions spawned for this project
+	// start with PR review comments sent to their agent to fix. Nil keeps the
+	// default (on). Users can still change the per-session toggle after spawn.
+	AutoInjectReview *bool `json:"autoInjectReview,omitempty"`
+
 	// WorkersRequestReview changes what worker sessions are told about AO's
 	// native reviewer. When set, a worker requests an AO review of its own PR
 	// (`ao review trigger`) once the PR is pushed and verified, and again after

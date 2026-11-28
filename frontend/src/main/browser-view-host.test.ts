@@ -9,9 +9,11 @@ import {
 	createBrowserViewHost,
 	isAllowedBrowserURL,
 	normalizeBrowserURL,
+	remoteHostOfBrowserSession,
 	sanitizeBrowserTitle,
 	sanitizeBrowserURL,
 	scaleBoundsForZoom,
+	sessionBrowserPartition,
 	shouldHandleAppShortcutInBrowserContext,
 } from "./browser-view-host";
 import { browserProfilePartition, type BrowserProfile } from "../shared/browser-profiles";
@@ -1242,6 +1244,7 @@ function setupTabHost(
 	overrides?: {
 		entryReadyTimeoutMs?: number;
 		openInUserBrowser?: (url: string) => Promise<{ name: string; chrome: boolean }>;
+		routeBrowserPartition?: (partition: string, hostId: string) => Promise<void>;
 		/** Flip `destroyed` to model the BaseWindow closing under the host. */
 		window?: { destroyed: boolean };
 	},
@@ -1489,6 +1492,7 @@ function setupTabHost(
 		prepareBrowserPartition,
 		entryReadyTimeoutMs: overrides?.entryReadyTimeoutMs,
 		openInUserBrowser: overrides?.openInUserBrowser,
+		routeBrowserPartition: overrides?.routeBrowserPartition,
 		onNativeViewAdded,
 		onTabCloseFailure,
 		// Kept only as a regression tripwire: the removed auto-send path used
@@ -2699,6 +2703,17 @@ describe("browser profile partitions and replacement", () => {
 
 		const partition = constructorOptions[0]!.webPreferences.partition!;
 		expect(order.slice(0, 2)).toEqual([`prepare ${partition}`, `construct ${partition}`]);
+	});
+
+	it("loads nothing in a remote session's tab until its partition is routed", async () => {
+		const route = vi.fn((_partition: string, _hostId: string) => Promise.resolve()).mockRejectedValueOnce(new Error("no proxy"));
+		const { invoke, views } = setupTabHost(undefined, false, undefined, undefined, undefined, { routeBrowserPartition: route });
+		const { viewId } = (await invoke("browser:ensure", "remote:h_box:ao-1")) as { viewId: string };
+		const go = async () => (await invoke("browser:navigate", { viewId, url: "http://localhost:3000/" })) as BrowserNavState;
+		expect((await go()).error).toBe("no proxy");
+		expect(views[0]!.webContents.getURL()).toBe("about:blank");
+		expect((await go()).url).toBe("http://localhost:3000/");
+		expect(route.mock.calls[0]![1]).toBe("h_box");
 	});
 
 	it("clears temporary persisted partitions when their browser session is destroyed", async () => {
@@ -4555,11 +4570,11 @@ describe("agent browser runtime", () => {
 		const viewer = `${AGENT_VIEWER}?embed=1&sq=70&ss=1`;
 		// The sync runs off the reporting tab's own event.
 		const settle = () => new Promise((resolve) => setTimeout(resolve, 0));
-		type Tab = { id: string; url: string; title: string; active: boolean; favicon?: string; remote?: { tabId: string } };
+		type Tab = { id: string; url: string; title: string; active: boolean; favicon?: string; remote?: { tabId: string }; preview?: boolean };
 		// A remote session's view: its first tab (t1) and the agent browser (a1, views[1]).
-		const openAgent = async (store?: BrowserProfileStore) => {
+		const openAgent = async (store?: BrowserProfileStore, sessionId = "sess-1") => {
 			const host = setupTabHost(store);
-			const { viewId } = (await host.invoke("browser:ensure", "sess-1")) as { viewId: string };
+			const { viewId } = (await host.invoke("browser:ensure", sessionId)) as { viewId: string };
 			await host.invoke("browser:openTab", { viewId, url: viewer });
 			await settle();
 			const tabs = async () => ((await host.invoke("browser:getTabs", viewId)) as { tabs: Tab[] }).tabs;
@@ -5004,14 +5019,52 @@ describe("agent browser runtime", () => {
 		});
 
 		it("clears the person's preview tab behind an agent tab, never the agent's page", async () => {
-			const { invoke, agent, views, viewId, tabs } = await openAgent();
-			await invoke("browser:navigate", { viewId, url: "https://ao-preview-0123456789abcdef0123456789abcdef.localhost:47663/" });
+			const { invoke, agent, views, viewId, tabs } = await openAgent(undefined, "remote:h_box:ao-1");
+			const previewOf = async (id: string) => (await tabs()).find((tab) => tab.id === id)?.preview;
+			await invoke("browser:navigate", { viewId, url: "http://localhost:4000/" });
+			await invoke("browser:openTab", { viewId, url: "https://ao-preview-0123456789abcdef0123456789abcdef.localhost:47663/", preview: true });
+			const load = views[2].webContents.loadURL as unknown as (url: string) => Promise<void>;
+			await load("http://localhost:5173/");
+			await invoke("browser:selectTab", { viewId, tabId: "t1" });
+			await invoke("browser:navigate", { viewId, url: "http://localhost:4001/" });
+			expect([await previewOf("t1"), await previewOf("t2")]).toEqual([undefined, true]);
+			await load("https://example.com/");
+			expect(await previewOf("t2")).toBeUndefined();
+			await load("http://localhost:5173/");
 			await invoke("browser:selectTab", { viewId, tabId: "a1" });
 			// `ao preview clear`, with the agent's page in front.
 			await invoke("browser:clear", viewId);
-			expect(views[0].webContents.getURL()).toBe("about:blank");
+			expect(views[2].webContents.getURL()).toBe("about:blank");
+			expect(views[0].webContents.getURL()).toBe("http://localhost:4001/");
 			expect(agent.getURL()).toBe(viewer);
 			expect((await tabs()).find((tab) => tab.active)?.id).toBe("a1");
+			await invoke("browser:selectTab", { viewId, tabId: "t2" });
+			await invoke("browser:navigate", { viewId, url: "http://localhost:4002/" });
+			expect(await previewOf("t2")).toBeUndefined();
+		});
+
+		it("lets a typed address release a preview tab whose first load has not finished", async () => {
+			let release!: () => void;
+			const { invoke } = setupTabHost(undefined, false, async (_view, url) => {
+				if (url.startsWith("http://localhost:3000")) await new Promise<void>((resolve) => (release = resolve));
+			});
+			const { viewId } = (await invoke("browser:ensure", "remote:h_box:ao-1", false)) as { viewId: string };
+			const opening = invoke("browser:openTab", { viewId, url: "http://localhost:3000/", preview: true });
+			await settle();
+			await invoke("browser:navigate", { viewId, url: "http://localhost:4001/" });
+			release();
+			await opening;
+			const { tabs } = (await invoke("browser:getTabs", viewId)) as { tabs: Tab[] };
+			expect(tabs[0]?.preview).toBeUndefined();
+		});
+
+		it("keeps the preview tab when a typed address is rejected", async () => {
+			const { invoke } = setupTabHost();
+			const { viewId } = (await invoke("browser:ensure", "remote:h_box:ao-1", false)) as { viewId: string };
+			await invoke("browser:openTab", { viewId, url: "http://localhost:3000/", preview: true });
+			await expect(invoke("browser:navigate", { viewId, url: "http://localhost:99999/" })).rejects.toThrow();
+			const { tabs } = (await invoke("browser:getTabs", viewId)) as { tabs: Tab[] };
+			expect(tabs[0]?.preview).toBe(true);
 		});
 
 		it("leaves Cmd+F in an agent tab to its viewer, whose find searches the agent's page", async () => {
@@ -7426,5 +7479,28 @@ describe("sites that refuse the Browser panel", () => {
 		await invoke("browser:clear", viewId);
 		await expect(invoke("browser:openInUserBrowser", viewId)).rejects.toMatchObject({ code: "BROWSER_URL_FORBIDDEN" });
 		expect(openInUserBrowser).toHaveBeenCalledOnce();
+	});
+
+	it("keeps a remote session's localhost page out of the person's own browser", async () => {
+		const openInUserBrowser = vi.fn(async (_url: string) => ({ name: "Chrome", chrome: true }));
+		const { invoke } = setupTabHost(undefined, false, undefined, undefined, undefined, { openInUserBrowser });
+		const { viewId } = (await invoke("browser:ensure", "remote:h_box:s1")) as BrowserNavState;
+		await invoke("browser:navigate", { viewId, url: "http://localhost:3000/" });
+		await expect(invoke("browser:openInUserBrowser", viewId)).rejects.toMatchObject({ code: "BROWSER_URL_FORBIDDEN" });
+		expect(openInUserBrowser).not.toHaveBeenCalled();
+	});
+});
+
+describe("remote session partitions", () => {
+	it("keeps each remote host's pages in a partition of its own", () => {
+		const profile = "6f2c1a8e-4b3d-4c1e-9a7f-2d5e8b1c0a93";
+		const remote = `remote:${encodeURIComponent("h_box/1")}:${encodeURIComponent("s:1")}`;
+		expect(remoteHostOfBrowserSession(remote)).toBe("h_box/1");
+		expect(remoteHostOfBrowserSession("s-1")).toBeUndefined();
+		expect(remoteHostOfBrowserSession("remote:%E0%A4:s")).toBeUndefined();
+		expect(sessionBrowserPartition(profile, "h_box/1")).toMatch(new RegExp(`^${browserProfilePartition(profile)}-host-[0-9a-f]{32}$`));
+		expect(sessionBrowserPartition(profile, "h_box/1")).not.toBe(sessionBrowserPartition(profile, "h_box_1"));
+		expect(sessionBrowserPartition(profile)).toBe(browserProfilePartition(profile));
+		expect(sessionBrowserPartition(null, "h_box")).not.toContain("-host-");
 	});
 });

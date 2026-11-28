@@ -166,6 +166,12 @@ sampled by install rather than by event:
   Failed onboarding installs and sign-ins also send from every install (see
   "Onboarding errors in Sentry"): they are rare and block a new user's first
   run.
+- Every desktop and daemon event carries a `plan` tag with the install's AO
+  Cloud plan (the `cloud_plan` list in "Signing in to AO Cloud"). The desktop
+  keeps it in memory and passes it to the daemon on the loopback-only
+  `/internal/telemetry/identity` route. An install on `starter`, `pro` or
+  `enterprise` sends non-fatal errors outside the sample; the daily caps below
+  still apply.
 - Every event carries a `sample_rate` tag: `0.1` for sampled non-fatal events
   and `1` for always-sent events. Multiply counts of `sample_rate:0.1`
   events by 10 to estimate the real volume.
@@ -1034,7 +1040,7 @@ Properties on `ao.launches.timed`:
 
 Properties on `ao.usage.ui_performance`:
 
-- Window: `measurement_schema_version` (3), `flush_reason` (`interval` or
+- Window: `measurement_schema_version` (4), `flush_reason` (`interval` or
   `startup`), `window_seconds` (elapsed time while the app was running, so a
   window kept across a quit leaves out the time the app was closed; never less
   than `active_seconds`),
@@ -1061,10 +1067,16 @@ Properties on `ao.usage.ui_performance`:
   from the browser's Event Timing API, which reports only interactions of
   40 ms or more, so `interaction_p98_ms` is 0 when none reached 40 ms: a
   fallback, not a measured duration.
-- Frozen frames: `long_frame_count` (frames that took over 50 ms),
+- Frozen frames: `long_frame_count` (frames that took over 50 ms and that
+  someone could notice: an input arrived during the frame, or it drew to the
+  screen while the user was active, within five minutes of their last input),
   `long_frame_blocking_ms` (their total blocking time), `long_frame_ms` (their
   total duration), `long_frame_max_ms` (the longest one), and
-  `long_frame_no_script_count` (those the browser listed no script for). Each
+  `long_frame_no_script_count` (those the browser listed no script for). Frames
+  over 50 ms that drew nothing with no input waiting, or that came while the
+  user was away, are only counted in `long_frame_unnoticed_count` and
+  `long_frame_unnoticed_ms` (their total duration), and none of the other
+  frozen-frame properties include them. Each counted
   frame's time is split by phase into causes, and each cause's total is sent
   as `long_frame_<cause>_ms` with dashes as underscores, such as
   `long_frame_frame_callbacks_ms`: before rendering starts, each script the
@@ -1086,8 +1098,10 @@ Properties on `ao.usage.ui_performance`:
   with no ids, attributes or URLs; script loads are not named.
   `long_frame_top_bundle` is the app code bundle whose listed scripts took
   longest, such as `SessionView`, and is left out for code from anywhere else.
-  Version 2 summaries put `unlisted` and `frame-callbacks` time under `other`,
-  and version 1 also put rendering there.
+  Version 3 and earlier summaries counted every frame over 50 ms while the
+  window was visible, including ones no one could notice. Version 2 summaries
+  also put `unlisted` and `frame-callbacks` time under `other`, and version 1
+  also put rendering there.
 - Chat open: `chat_open_count` and `chat_open_p75_ms`, for opening a chat whose
   messages were not in memory, from the click to the frame that shows them.
 - Memory and CPU: `renderer_mb_bucket` (the window's peak memory) and
@@ -1266,8 +1280,11 @@ users move through first-run onboarding, so we can see where they stop and
 why. The flow is: the startup dependency dialog (only when git, tmux or a
 coding agent is missing, before onboarding), the welcome page and its three-part story (the last
 part shows CI and code review on GitHub), the optional AO Cloud sign-in, Your
-tools (the GitHub CLI and coding agents), then a guided tour of the real app
-(add a project, open its orchestrator, send the first message).
+tools (the GitHub CLI and coding agents), how agents finish their work
+(defaults for the projects added next), then the real app with Add Project
+open: adding a project lands on its orchestrator's chat, where the person
+sends the first message. There is no guided tour; the last three steps only
+measure whether the app gets people there on its own.
 
 The onboarding properties below are only the closed values listed here,
 counts, buckets and durations: never a path, repository name or URL, project
@@ -1278,16 +1295,25 @@ GitHub CLI is signed in and `ao_cloud_user_id` when signed in to AO Cloud.
 
 ### Steps
 
-The funnel to read is the pages and then the tour: `welcome` → `sign_in` →
-`tools` → `tour_project` → `tour_orchestrator` → `first_task` → `finish`.
+The funnel to read is the pages and then the app: `welcome` → `sign_in` →
+`tools` → `work_defaults` → `tour_project` → `tour_orchestrator` →
+`first_task`. `work_defaults` was added after the others, so its `step_index`
+(10) is out of flow order. The `tour_*`
+names are from the guided tour that used to cover those steps, but the steps
+now complete on different signals (below), so they do not read the same across
+versions: every event the unguided funnel sends for `tour_project`,
+`tour_orchestrator` and `first_task`, and every `activated`, carries
+`funnel_variant: "unguided"`. Compare across the change by that property, not
+by step name alone.
 Three steps are conditional sub-steps, not stages every run passes through,
 so `step_index` is an order, not a dense funnel:
 
 - `dependencies` shows only when git, tmux or a coding agent is missing, and
   before `started`. It counts only while onboarding has not been seen yet; the
   same dialog after onboarding (a tool removed months later) sends nothing.
-- `github_auth` shows inside Your tools, or in the clone dialog opened from
-  the tour, only while the GitHub CLI needs installing or signing in. It has
+- `github_auth` shows inside Your tools, or in the clone dialog opened while
+  the first project is being added, only while the GitHub CLI needs
+  installing or signing in. It has
   no `already_done` skip when Your tools itself is skipped. The clone dialog
   outside onboarding sends nothing.
 - `import_chats` is not reachable today.
@@ -1303,16 +1329,17 @@ Every step is identified by `step` and its position in the flow,
 | 3 | `tools` | Your tools: the GitHub CLI and coding agents |
 | 4 | `github_auth` | Signing the GitHub CLI in, on Your tools |
 | 5 | `import_chats` | Importing earlier chats. Not shown since the first-run prompt on Home was removed; recorded if it returns |
-| 6 | `tour_project` | Tour: open or add a project |
-| 7 | `tour_orchestrator` | Tour: open the project's orchestrator |
-| 8 | `first_task` | Tour: send the first message |
-| 9 | `finish` | Tour: the closing note |
+| 6 | `tour_project` | A project is added (Add Project opens as onboarding closes), or an existing one opened, local or on a remote host. Skipped as `dismissed` when the Add Project that onboarding opened is closed with no project (the step can still complete later) |
+| 7 | `tour_orchestrator` | Any chat is showing, not only the orchestrator's; adding a project lands on its orchestrator's, so this usually completes at once |
+| 8 | `first_task` | The first message is sent from a chat while the funnel is on this step |
+| 9 | `finish` | The guided tour's closing note. Not sent since the tour was removed |
+| 10 | `work_defaults` | What new projects start with: the agent their orchestrator and workers run on, and how agents finish their work: review every PR, fix failing checks and merge conflicts, fix review comments, archive chats on merge, work on assigned issues |
 
 | Event | When it is sent | Onboarding-specific properties |
 | --- | --- | --- |
 | `ao.onboarding.step_viewed` | A step is shown | `step`, `step_index`, `run_kind`, `missing` (dependencies, tools), `agents_ready` (tools), `chats_found_bucket` (import_chats) |
-| `ao.onboarding.step_completed` | A step is done: Continue on a page, the tour moving on, the tool signed in | `step`, `step_index`, `run_kind`, `time_on_step_ms`; `story_points_seen` and `story_completed` (welcome); `agents_ready` and `gh_ready` (tools); `project_source` (tour_project) |
-| `ao.onboarding.step_skipped` | A step is passed over: automatically because there was nothing to do, by the person (Sign in's "do it later", Skip setup, Skip on the import step), or by closing the tour | `step`, `step_index`, `run_kind`, `reason`, `time_on_step_ms` |
+| `ao.onboarding.step_completed` | A step is done: Continue on a page, the app reaching the next step, the tool signed in | `step`, `step_index`, `run_kind`, `time_on_step_ms`; `story_points_seen` and `story_completed` (welcome); `agents_ready` and `gh_ready` (tools); `archive_on_merge`, `auto_review`, `assigned_issues`, `fix_checks` and `fix_review_comments` (work_defaults, booleans); `orchestrator_agent` and `worker_agent` (work_defaults, agent registry ids only; the same agent for both); `project_source` (tour_project) |
+| `ao.onboarding.step_skipped` | A step is passed over: automatically because there was nothing to do, by the person (Skip on Sign in, Skip setup, Skip on the import step), or, in versions with the tour, by closing it | `step`, `step_index`, `run_kind`, `reason`, `time_on_step_ms` |
 | `ao.onboarding.step_abandoned` | The window closes while the step is showing. Sent at once with `sendBeacon` | `step`, `step_index`, `run_kind`, `time_on_step_ms` |
 | `ao.onboarding.back_clicked` | Back is clicked | `step`, `step_index`, `to_step`, `run_kind` |
 
@@ -1333,7 +1360,7 @@ was known. Its `time_on_step_ms` runs from when it opened.
 | `ao.onboarding.started` | Onboarding opens for the first time on this installation, or a replay starts | `step`, `step_index`, `run_kind` |
 | `ao.onboarding.resumed` | Onboarding opens on a later launch after the app was quit mid-flow | `step`, `step_index`, `run_kind`, `away_ms`, `away_bucket`, `launch_count` |
 | `ao.onboarding.abandoned` | The window closes mid-flow. At most once per launch. Sent at once with `sendBeacon` | `step` (the page showing), `step_index`, `run_kind`, `duration_ms`, `duration_bucket`, `launch_count` |
-| `ao.onboarding.completed` | Onboarding ends. Once per run | `step` (the last page shown: `welcome`, `sign_in` or `tools`), `step_index`, `run_kind`, `outcome`, `duration_ms`, `duration_bucket`, `launch_count`, `resumed`, `back_count`, `auto_skipped_count` |
+| `ao.onboarding.completed` | Onboarding ends. Once per run | `step` (the last page shown: `welcome`, `sign_in`, `tools` or `work_defaults`), `step_index`, `run_kind`, `outcome`, `duration_ms`, `duration_bucket`, `launch_count`, `resumed`, `back_count`, `auto_skipped_count` |
 | `ao.onboarding.activated` | The first chat message delivered after a first run finished, within 7 days. Once per installation | `milestone`, `time_since_completed_ms`, `time_bucket`, `during_tour` |
 
 PostHog sends its queue from its own `pagehide` handler before the app's run,
@@ -1345,7 +1372,7 @@ visible: the run has `started` without `completed`, and a later launch sends
 ### Actions
 
 Installs and sign-ins started during onboarding report how each attempt
-ended. The tour's project step sends no action: its add or clone is already
+ended. The `tour_project` step sends no action: its add or clone is already
 `ao.projects.added`, `ao.projects.add_failed` or `ao.projects.clone_failed`,
 and `project_source` on its `step_completed` says which it was.
 
@@ -1396,10 +1423,10 @@ sampling.
   `left`), so a later failure is not filed as an onboarding issue. The API
   error code stays in PostHog's `action_finished`.
 - Every other renderer Sentry event (a render crash, a failed query, an API
-  error) sent while the first-run window shows, or a tour step in the launch
-  whose onboarding pages finished, carries `flow:onboarding`. A tour restored
-  on a later launch stays until it is dismissed, so it does not tag those
-  launches' errors. The tag does not change how the event is grouped.
+  error) sent while the first-run window shows, or a `tour_*` or `first_task`
+  step in the launch whose onboarding pages finished, carries
+  `flow:onboarding`. Those steps are restored on later launches until the
+  first message is sent, so they do not tag those launches' errors. The tag does not change how the event is grouped.
   Electron main's own events (process crashes, handled update or IPC
   failures) do not carry it: main does not track which screen the renderer
   shows.
@@ -1426,7 +1453,12 @@ sampling.
   played at least once, CI part included.
 - `project_source` is `clone`, `local_folder`, `existing` (a project that was
   already there) or `other` (such as an AO Cloud project).
-- `reason` on `step_skipped` is `already_done`, `user` or `dismissed`.
+- `reason` on `step_skipped` is `already_done`, `user`, `dismissed`,
+  `activated` (the first message was sent before the funnel reached that step;
+  the run ends and every step not yet completed is skipped) or `expired` (the
+  7-day activation window passed with the run unfinished; same).
+- `funnel_variant` is `unguided` on the post-setup funnel's events and on
+  `activated`; events from versions with the guided tour have none.
 - `outcome` on `completed` is `finished` (the last page's Continue),
   `skipped_setup` (Skip setup on Your tools) or `superseded` (a later launch
   found a project, or an offer to bring over data from an older installation,
@@ -1436,7 +1468,10 @@ sampling.
   the run has spanned. Durations are capped at 30 days.
 - `time_bucket` on `activated` is `lt_5m`, `5m_15m`, `15m_1h`, `1h_1d` or
   `1d_7d`. `milestone` is `first_message`. `during_tour` is true when the
-  message was the tour's task step.
+  message was sent on the `first_task` step. With `funnel_variant: "unguided"`
+  that means the person got there through Add Project, which is most first
+  messages; it meant the tour was showing before, so do not compare it across
+  the change.
 - `action` is `dependency_install`, `gh_install`, `gh_sign_in`,
   `agent_install`, `agent_sign_in` or `cloud_sign_in`. `target` is the install target or agent id from AO's own
   registry, such as `gh`, `tmux` or `claude-code`.
@@ -1444,10 +1479,10 @@ sampling.
   person closed the login or moved on), `timed_out` (a login left open 15
   minutes), `handed_off` (the agent signs in outside AO, so its guide
   opened) or `left` (onboarding ended, or the window closed, while it was
-  still running: Skip setup, onboarding closed for the person, the tour ending
-  or closing, or quitting mid-onboarding). An install or sign-in from the
-  onboarding pages keeps running into the tour, so its `left` comes when the
-  tour ends and its `duration_ms` includes the tour.
+  still running: Skip setup, onboarding closed for the person, the first
+  message being sent, or quitting mid-onboarding). An install or sign-in from
+  the onboarding pages keeps running past them, so its `left` comes with the
+  first message and its `duration_ms` includes the time until then.
 - `reason` on `action_finished` is `start_failed`, `install_failed`,
   `interrupted`, `unsupported`, `lost_contact`, `not_signed_in`,
   `cleanup_failed`, `request_failed`, `documentation` or `other`.
@@ -1731,6 +1766,22 @@ account you signed in with and is never read from git config. The daemon and the
 mobile app never receive your email; they receive only the user ID. Signing out
 stops attributing new desktop events to you. Only the production WorkOS sign-in
 is identified.
+
+Desktop events also carry the AO Cloud plan as `cloud_plan` (one of `free`,
+`starter`, `pro`, `enterprise`, `none` when signed out or the org has no
+billing, or `unknown` before billing loads, for a contract org, or for any other
+value) and `cloud_paid` (`true` only for a self-serve org that is entitled, not
+exempt and not on Free) and `cloud_trial` (`true` for a paid plan still on its
+free trial; it counts as paid). All three are also person properties of the
+signed-in AO Cloud person; `install_id` is unchanged. When a fresh billing
+summary shows a different plan, or a different trial state, than the one last
+seen for that org, the desktop sends `ao.billing.plan_changed` with
+`from_plan`, `to_plan` (same list), `direction` (`upgrade`, `downgrade`,
+`cancel` for a move to Free, or `same_tier`, as when a trial converts to paid on
+the same plan) and `from_trial` / `to_trial`, so a trial that ends unpaid is
+told apart from a paying customer cancelling. The last plan and trial state per
+org are kept in the app's local storage, keyed by a hash of the org ID. The first summary for an org, a sign-out and a failed
+billing request send nothing. No price, org name, email or Stripe ID is sent.
 
 A release build returns from the sign-in page through
 `https://orchestrator.inc/app/auth/return/` on the Orchestrator.inc website.

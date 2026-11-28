@@ -25,7 +25,8 @@ import { TrayRuntime } from "../components/TrayRuntime";
 import { SharedWithYouNotifier } from "../components/teams/SharedWithYouNotifier";
 import { NewTaskNavigator } from "../components/NewTaskNavigator";
 import { FirstRunOnboarding } from "../components/onboarding/FirstRunOnboarding";
-import { GuidedTour } from "../components/onboarding/GuidedTour";
+import { projectDefaultsConfig, readProjectDefaults, remoteProjectDefaults, type ProjectDefaults } from "../lib/project-defaults";
+import { FirstTaskFunnel } from "../components/onboarding/FirstTaskFunnel";
 import { ArchiveModalHost } from "../components/ArchiveModalHost";
 import { GlobalToast } from "../components/GlobalToast";
 import { GlobalApprovalCard } from "../components/approvals/ApprovalHost";
@@ -283,12 +284,14 @@ type CreateProjectConfigInput = {
 	defaultBranch?: string;
 };
 
-export function createProjectConfig(input: CreateProjectConfigInput): components["schemas"]["ProjectConfig"] {
+/** `defaults`: how agents finish their work, as chosen in onboarding (project-defaults.ts). */
+export function createProjectConfig(input: CreateProjectConfigInput, defaults: ProjectDefaults | null = null): components["schemas"]["ProjectConfig"] {
 	return {
 		...(input.defaultBranch ? { defaultBranch: input.defaultBranch } : {}),
 		worker: { agent: input.workerAgent as components["schemas"]["RoleOverride"]["agent"] },
 		orchestrator: { agent: input.orchestratorAgent as components["schemas"]["RoleOverride"]["agent"] },
 		...(input.reviewerAgent ? { reviewers: [{ harness: input.reviewerAgent }] } : {}),
+		...projectDefaultsConfig(defaults, input.reviewerAgent),
 		...(input.trackerIntake ? { trackerIntake: input.trackerIntake } : {}),
 	};
 }
@@ -967,7 +970,7 @@ const replacementErrorCount = Object.keys(orchestratorReplacementErrors).length;
 					path: input.path,
 					asWorkspace: input.asWorkspace || undefined,
 					clonePreparationId: input.clonePreparationId,
-					config: createProjectConfig(input),
+					config: createProjectConfig(input, readProjectDefaults()),
 				},
 			}).catch((requestError: unknown) => {
 				reportFailure("REQUEST_FAILED");
@@ -1066,7 +1069,7 @@ const replacementErrorCount = Object.keys(orchestratorReplacementErrors).length;
 				body: {
 					remoteUrl: input.remoteUrl,
 					destinationParent: input.destinationParent,
-					config: createProjectConfig(input),
+					config: createProjectConfig(input, readProjectDefaults()),
 				},
 			}).catch((requestError: unknown) => {
 				// A clone the user cancelled is not a failure.
@@ -1117,7 +1120,7 @@ const replacementErrorCount = Object.keys(orchestratorReplacementErrors).length;
 			path: input.path,
 			asWorkspace: input.asWorkspace || undefined,
 			clonePreparationId: input.clonePreparationId,
-			config: createProjectConfig(input),
+			config: createProjectConfig(input, remoteProjectDefaults(readProjectDefaults())),
 		} });
 		let projectId = error ? undefined : data?.project.id;
 		if (input.clonePreparationId && apiErrorCode(error) === "PATH_ALREADY_REGISTERED") {
@@ -1715,7 +1718,7 @@ const replacementErrorCount = Object.keys(orchestratorReplacementErrors).length;
 				) : null}
 				<NewTaskNavigator />
 				<FirstRunOnboarding />
-				<GuidedTour />
+				<FirstTaskFunnel />
 				<ArchiveModalHost />
 				<GlobalToast />
 				{daemonStatus.state === "ready" ? <GlobalApprovalCard /> : null}

@@ -23,6 +23,7 @@ export function turnStanding(items: readonly ConversationItem[], outcome: Outcom
 	const settled = state === "completed" || state === "recovered";
 	if (automation?.kind === "notice" && automation.notice === "orchestratorReplaced") return settled ? "replaced" : "up";
 	if (lead.kind !== "message" || !isWorkerLead(lead) || (isTaskTitleUpdate(lead) && !renamedTitle(items))) return "yours";
+	if (items.some((item) => item !== lead && item.kind === "message" && item.role === "user" && !isWorkerLead(item))) return "up";
 	if (turnUpdates(items, carried).some((update) => needsYouNow(index, update))) return "up";
 	const asks = /[?？][*_)\]"'”’`」』）】》〉»›]*$/.test(finalReply(items));
 	if (asks) return "up";

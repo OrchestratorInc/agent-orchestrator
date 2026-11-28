@@ -5,7 +5,7 @@ import { isDialogOrMenuOpen } from "../../lib/dom-selectors";
 import { useLatestCallback } from "../../hooks/useStable";
 import { useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, type MutableRefObject, type RefObject } from "react";
 import { useTranslation } from "react-i18next";
-import { useChatSelectionPosition } from "../../hooks/useChatSelectionPosition";
+import { useChatSelectionPosition, type ChatSelectionFrame } from "../../hooks/useChatSelectionPosition";
 import { apiErrorMessage } from "../../lib/api-client";
 import { useChatDraftTranslation } from "../../lib/chat-draft-messages";
 import {
@@ -37,7 +37,7 @@ export function ChatSelectionActions({
 	commentRef,
 	canAskAgent = true,
 }: {
-	selection: { excerpt: ChatDraftExcerptReference; range: Range };
+	selection: { excerpt: ChatDraftExcerptReference; range: Range; frame?: ChatSelectionFrame };
 	viewportRef: RefObject<HTMLDivElement | null>;
 	onInvalid: () => void;
 	onAdd: (comment: string) => void | Promise<void>;
@@ -90,6 +90,7 @@ export function ChatSelectionActions({
 		buttonRef,
 		onInvalid,
 		pinned,
+		selection.frame,
 	);
 	const locked = useRef(false);
 	const alive = useRef(true);
@@ -108,13 +109,13 @@ export function ChatSelectionActions({
 	useLayoutEffect(() => {
 		const api = globalThis as unknown as HighlightApi;
 		const registry = api.CSS?.highlights;
-		if (!pinned || !registry || !api.Highlight) return;
+		if (!pinned || !registry || !api.Highlight || selection.frame) return;
 		const highlight = new api.Highlight(selection.range);
 		registry.set(DRAFT_HIGHLIGHT, highlight);
 		return () => {
 			if (registry.get(DRAFT_HIGHLIGHT) === highlight) registry.delete(DRAFT_HIGHLIGHT);
 		};
-	}, [pinned, selection.range]);
+	}, [pinned, selection.range, selection.frame]);
 	useEffect(() => {
 		if (!(editing || askingAgent) || !position?.visible) return;
 		textareaRef.current?.focus({ preventScroll: true });

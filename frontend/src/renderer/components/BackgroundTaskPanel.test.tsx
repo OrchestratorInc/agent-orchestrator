@@ -63,7 +63,9 @@ describe("background task panel", () => {
 	});
 
 	it("keeps a finished task readable without a stop, and says when a task ended without an outcome", () => {
-		const { rerender } = render(<Panel isVisible sessionId="s" tab={{ task: task({ state: "failed", endedAt: ago(60_000) }) }} />);
+		const now = Date.now();
+		const at = (ms: number) => new Date(now - ms).toISOString();
+		const { rerender } = render(<Panel isVisible sessionId="s" tab={{ task: task({ state: "failed", startedAt: at(12 * 60_000), endedAt: at(60_000) }) }} />);
 		expect(screen.getByText("Failed")).toBeVisible();
 		expect(screen.getByText("11m")).toBeVisible();
 		expect(screen.queryByRole("button", { name: /Stop/ })).toBeNull();
