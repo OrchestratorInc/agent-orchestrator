@@ -2121,6 +2121,7 @@
 	"settings.project.cloudVarReposRoot": "すべてのリポジトリのフォルダーを含むフォルダー",
 	"settings.project.copyVariable": "{{name}} をコピー",
 	"settings.project.cloudScriptsAdminOnly": "これらのスクリプトを変更できるのは、組織のオーナーと管理者だけです。",
+	"settings.project.scriptsHostOnly": "セットアップとクリーンアップのコマンドは、ホスト上でのみ変更できます。",
 	"settings.project.workspaceCleanup": "Workspace cleanup",
 	"settings.project.cleanupHint": "Runs before a Git worktree is removed, not when you quit the app. Failed steps keep it for retry.",
 	"settings.project.cleanupShellHint": "ステップは順番に実行され、制限時間を設定しない限り時間制限はありません。再実行しても安全なコマンドにしてください。",

@@ -2103,6 +2103,7 @@
 	"settings.project.cloudVarReposRoot": "包含所有仓库文件夹的文件夹",
 	"settings.project.copyVariable": "复制 {{name}}",
 	"settings.project.cloudScriptsAdminOnly": "只有组织的所有者和管理员可以更改这些脚本。",
+	"settings.project.scriptsHostOnly": "设置和清理命令只能在主机本身上更改。",
 	"settings.project.workspaceCleanup": "Workspace cleanup",
 	"settings.project.cleanupHint": "Runs before a Git worktree is removed, not when you quit the app. Failed steps keep it for retry.",
 	"settings.project.cleanupShellHint": "步骤按顺序运行，除非你设置时间限制，否则没有时间限制。请确保命令可以安全地重试。",

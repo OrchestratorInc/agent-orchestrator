@@ -2157,6 +2157,7 @@
 	"settings.project.cloudVarReposRoot": "a pasta que contém a pasta de cada repositório",
 	"settings.project.copyVariable": "Copiar {{name}}",
 	"settings.project.cloudScriptsAdminOnly": "Somente proprietários e administradores da organização podem alterar estes scripts.",
+	"settings.project.scriptsHostOnly": "Os comandos de configuração e limpeza só podem ser alterados no próprio host.",
 	"settings.project.workspaceCleanup": "Workspace cleanup",
 	"settings.project.cleanupHint": "Runs before a Git worktree is removed, not when you quit the app. Failed steps keep it for retry.",
 	"settings.project.cleanupShellHint": "Os passos rodam em ordem, sem limite de tempo, a menos que você defina um. Faça comandos que possam ser repetidos com segurança.",

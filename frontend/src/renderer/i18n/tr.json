@@ -2542,6 +2542,7 @@
 	"settings.project.cloudVarReposRoot": "tüm depo klasörlerini içeren klasör",
 	"settings.project.copyVariable": "{{name}} kopyala",
 	"settings.project.cloudScriptsAdminOnly": "Bu betikleri yalnızca kuruluş sahipleri ve yöneticileri değiştirebilir.",
+	"settings.project.scriptsHostOnly": "Kurulum ve temizleme komutları yalnızca ana makinenin kendisinde değiştirilebilir.",
 	"settings.project.environment": "Ortam",
 	"settings.project.environmentVariables": "Ortam değişkenleri",
 	"settings.project.environmentHint": "Yeni aracılar, terminaller, kurulum komutları, inceleyiciler, önizlemeler ve Cues tarafından kullanılır. Çalışan süreçler mevcut değerlerini korur. Değişiklikleri uygulamak için süreçleri yeniden başlatın. Değerler yerel proje ayarlarında şifrelenmeden saklanır. Maskeleme yalnızca bu ekranda gizler. Orchestrator bir .env dosyası oluşturmaz veya otomatik olarak okumaz.",

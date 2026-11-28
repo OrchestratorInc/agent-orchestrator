@@ -310,7 +310,10 @@ function ScriptsEditor({ projectId, hostId, scratch, postCreate, preRemove, repo
 			error: mutation.error instanceof Error ? mutation.error.message : undefined,
 		});
 	}, [dirty, mutation.error, mutation.isError, mutation.isPending, onSaveState, savedAt]);
-	const locked = mutation.isPending || retry.isPending || cloud?.readOnly === true;
+	// A remote host's daemon refuses Setup and Cleanup changes from another
+	// machine (they are shell commands it runs), so they show read-only there.
+	const remoteReadOnly = hostId !== undefined;
+	const locked = mutation.isPending || retry.isPending || cloud?.readOnly === true || remoteReadOnly;
 	const updateSteps = (kind: ScriptKind, steps: ScriptStepDraft[]) => {
 		setDrafts((current) => ({ ...current, [kind]: steps }));
 		setSavedAt(false);
@@ -330,6 +333,7 @@ function ScriptsEditor({ projectId, hostId, scratch, postCreate, preRemove, repo
 							<p>{t(kind === "setup" ? "settings.project.cloudSetupShellHint" : "settings.project.cloudCleanupShellHint")}</p>
 							{kind === "cleanup" && !cloud.cleanupRuns && <p role="note" className="text-settings-label">{t("settings.project.cloudCleanupUnsupported")}</p>}
 						</div> : <div className="space-y-1 text-pretty text-xs leading-4 text-settings-muted">
+							{remoteReadOnly && <p role="note" className="text-settings-label">{t("settings.project.scriptsHostOnly")}</p>}
 							<p>{t(kind === "setup" ? scratch ? "settings.project.setupHintScratch" : "settings.project.setupHintGit" : "settings.project.cleanupHint")}</p>
 							<p>{t(`settings.project.${kind}ShellHint`)}</p>
 							<p>{t("settings.project.setupPlatformHint")}</p>
