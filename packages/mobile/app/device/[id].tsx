@@ -3,8 +3,8 @@ import { useLocalSearchParams, useNavigation, useRouter } from "expo-router";
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { MenuView, type MenuAction, type MenuComponentRef, type NativeActionEvent } from "@expo/ui/community/menu";
-import { ActivityIndicator, Image, Platform, Pressable, StatusBar, StyleSheet, Text, View, type GestureResponderEvent, type LayoutChangeEvent } from "react-native";
-import { closeSessionDevice, getDeviceStatus, getSessionDevice, openSessionDevice, pressSessionDeviceButton, type DeviceStatus, type DeviceSummary, type SessionDeviceLease } from "../../lib/api";
+import { ActivityIndicator, Alert, Image, Platform, Pressable, StatusBar, StyleSheet, Text, View, type GestureResponderEvent, type LayoutChangeEvent } from "react-native";
+import { ApiError, closeSessionDevice, getDeviceStatus, getSessionDevice, openSessionDevice, pressSessionDeviceButton, type DeviceStatus, type DeviceSummary, type SessionDeviceLease } from "../../lib/api";
 import { authHeaders } from "../../lib/config";
 import { userFacingError } from "../../lib/connectionError";
 import { clampPoint, missingPlatforms, deviceAvccURL, deviceInputURL, deviceMjpegURL, deviceSocketHeaders, deviceVideoURL, emptyFrameLayers, fetchDeviceFrame, frameLoaded, withFrame, encodeButton, encodeTouch, openDeviceInput, type DeviceButton, type TouchPhase } from "../../lib/deviceInput";
@@ -19,8 +19,11 @@ import { HostScope, useApp } from "../../lib/store";
 import type { Theme } from "../../lib/theme";
 import { useTheme, useThemeState, useThemedStyles } from "../../lib/ThemeProvider";
 import { iconSize, space, type } from "../../lib/tokens";
-import { Button, EmptyState } from "../../lib/ui";
+import { Button, EmptyState, MASCOT_ASPECT } from "../../lib/ui";
 import { useForeground } from "../../lib/useForeground";
+import { useWakeOnShow } from "../../lib/useWakeOnShow";
+import { UpdateMascot } from "../../lib/UpdateMascot";
+import MASCOT from "../../assets/mascot.png";
 
 // Screenshots stand in for the desktop's live stream: React Native's Image
 // cannot render MJPEG, and a still every few hundred milliseconds is enough to
@@ -33,8 +36,10 @@ const DEVICES_POLL_MS = 5_000;
 /** The touch socket's first retry; each failed one waits twice as long, up to the cap. */
 const SOCKET_RETRY_MS = 1_500;
 const SOCKET_RETRY_MAX_MS = 30_000;
-/** Lost stream connections in a row, without a frame, before the screen says so. */
-const STREAM_FAILURES_SHOWN = 3;
+// Ruto inside the device frame while the screen shows nothing live.
+const SCREEN_MASCOT = 112;
+/** How often a device waiting for room on the machine asks again. */
+const ROOM_RETRY_MS = 4_000;
 
 /** The session's simulator or emulator: watch it and tap it from the phone. */
 export default function SessionDeviceScreen() {
@@ -179,9 +184,6 @@ function DeviceLive({ config, foreground, lease, leaseError, onReleased, session
 	// a build without the native view polls screenshots.
 	const NativeStream = DeviceStreamView;
 	const [streaming, setStreaming] = useState(false);
-	// Stream connections lost in a row without a frame: the native view keeps
-	// retrying (more slowly each time), and after a few the screen says so.
-	const [streamFailures, setStreamFailures] = useState(0);
 	const [actionError, setActionError] = useState<string>();
 	// A simulator streams as H.264 (~5 Mbit/s scrolling, against ~112 for
 	// MJPEG). A daemon without that route never starts it: MJPEG after 10 s.
@@ -223,6 +225,7 @@ function DeviceLive({ config, foreground, lease, leaseError, onReleased, session
 
 	// Shut down outside AO: say so rather than hold the last frame.
 	const off = !device.booted;
+	const asleep = lease.suspended === true;
 	// The touch socket is held only while the device is on: one opened while it
 	// is off goes nowhere once it boots, so turning it on opens a fresh one.
 	// Closed in the background too, and retried more slowly while it keeps failing.
@@ -286,9 +289,14 @@ function DeviceLive({ config, foreground, lease, leaseError, onReleased, session
 	];
 
 	const leave = () => { haptics.tap(); if (router.canGoBack()) router.back(); else router.navigate("/"); };
+	const [releasing, setReleasing] = useState(false);
 	const release = (shutdown: boolean) => {
 		setActionError(undefined);
-		void closeSessionDevice(config, sessionID, { shutdown }).then(onReleased).catch((cause) => setActionError(userFacingError(cause)));
+		setReleasing(true);
+		void closeSessionDevice(config, sessionID, { shutdown })
+			.then(onReleased)
+			.catch((cause) => setActionError(userFacingError(cause)))
+			.finally(() => setReleasing(false));
 	};
 	// What the screen does not show by itself lives in one menu, named in words:
 	// giving the device back, and powering it off.
@@ -310,52 +318,98 @@ function DeviceLive({ config, foreground, lease, leaseError, onReleased, session
 		return () => clearTimeout(fallback);
 	}, [off, streamMode, streaming]);
 	const [starting, setStarting] = useState(false);
+	// Why the last start failed, kept across retries so the info mark does not
+	// blink: no room right now (NO_DEVICE_ROOM) is waited out, anything else is
+	// a failure that waits for Start.
+	const [startProblem, setStartProblem] = useState<{ reason: string; waitForRoom: boolean }>();
 	const start = () => {
 		setStarting(true);
-		setActionError(undefined);
 		void openSessionDevice(config, sessionID, { deviceId: device.id, platform: device.platform })
-			.catch((cause) => setActionError(userFacingError(cause)))
+			.then(() => setStartProblem(undefined))
+			.catch((cause) => setStartProblem({ reason: userFacingError(cause), waitForRoom: cause instanceof ApiError && cause.code === "NO_DEVICE_ROOM" }))
 			.finally(() => setStarting(false));
 	};
-	const subtitle = [device.version, off ? "Off" : live ? null : "Connecting…"].filter(Boolean).join(" · ");
-	// Said, not left at "Connecting…" forever: a refused token or a daemon without the stream route.
-	const notice = actionError ?? leaseError ?? (!off && streamFailures >= STREAM_FAILURES_SHOWN ? "Can't load the device's screen. Retrying…" : undefined);
+	const startRef = useRef(start);
+	startRef.current = start;
+	// Running, by this start or another client's: a wait for room is over, and a
+	// later stop (shut down outside AO) must ask for Start, not start it again.
+	useEffect(() => {
+		if (!off) setStartProblem(undefined);
+	}, [off]);
+	// Put to sleep for going unused: started again as soon as it is on screen,
+	// but not while it is being given back (a start then would lease it again).
+	useWakeOnShow(asleep, foreground, starting || releasing, start);
+	const subtitle = [device.version, off ? (asleep ? "Asleep" : "Off") : null].filter(Boolean).join(" · ");
+	// A failed release or button press, or a lease that does not load, is said
+	// below the device. Starting, connecting and retrying show inside the frame,
+	// and a start that failed sits behind an info mark: no line of text.
+	const notice = actionError ?? leaseError;
+	const screenEmpty = NativeStream ? !streaming : layers.uris[0] === null && layers.uris[1] === null;
+	// Ruto moves only while AO boots the device or its stream connects. He waits,
+	// still, while a start is asked for and while there is no room for the device
+	// (it starts on its own once there is). Start appears only for a failure that
+	// will not clear by itself.
+	const waitingForRoom = startProblem?.waitForRoom === true;
+	const loading = lease.starting === true || (!off && screenEmpty);
+	const waiting = off && !loading && (starting || waitingForRoom);
+	const resting = off && !loading && !waiting;
+	useEffect(() => {
+		// Not while the device is being given back: a start then would lease it again.
+		if (!waitingForRoom || !foreground || starting || releasing || !off || lease.starting) return;
+		const retry = setTimeout(() => startRef.current(), ROOM_RETRY_MS);
+		return () => clearTimeout(retry);
+	}, [foreground, lease.starting, off, releasing, starting, waitingForRoom]);
 
 	return <View style={styles.screen}>
 		<StatusBar hidden animated />
 		<View style={[styles.stage, { paddingTop: insets.top + PILL_HEIGHT + space.lg, paddingBottom: Math.max(insets.bottom, space.md) + CAPSULE_HEIGHT + space.lg }]}>
-			{off ? <EmptyState icon="smartphone" title={`${device.name} is off`} action={<Button title={starting ? "Starting…" : "Start"} disabled={starting} onPress={start} />} /> : null}
-			{/* Hidden rather than unmounted while off: React Native reuses the native
-			    stream view, and a reused one connected but drew nothing. An empty url
-			    stops the stream until the device runs again. */}
+			{/* The frame stays whatever the device is doing: AO starting it, asleep, or
+			    live. Never unmounted: React Native reuses the native stream view, and a
+			    reused one connected but drew nothing. An empty url stops the stream
+			    until the device runs again. Touches go to the device only while it
+			    runs: off, Start and its info mark take their own taps. */}
 			<View
 				accessibilityLabel={`${device.name} screen`}
 				onLayout={(event: LayoutChangeEvent) => { size.current = event.nativeEvent.layout; }}
-				onMoveShouldSetResponder={() => true}
+				onMoveShouldSetResponder={() => !off}
 				onResponderGrant={(event) => touch("begin", event)}
 				onResponderMove={(event) => touch("move", event)}
 				onResponderRelease={(event) => touch("end", event)}
 				onResponderTerminate={(event) => touch("end", event)}
-				onStartShouldSetResponder={() => true}
-				style={[styles.device, { aspectRatio: aspect, borderRadius: device.platform === "ios" ? 40 : 24 }, off && styles.hidden]}
+				onStartShouldSetResponder={() => !off}
+				style={[styles.device, { aspectRatio: aspect, borderRadius: device.platform === "ios" ? 40 : 24 }]}
 			>
 				{NativeStream ? <NativeStream
 					headers={device.platform === "android" ? deviceSocketHeaders(config) : authHeaders(config)}
 					mode={streamMode}
 					onSize={(event) => { const { width, height } = event.nativeEvent; if (width && height) setAspect(width / height); }}
-					onState={(event) => {
-						const state = event.nativeEvent.state;
-						setStreaming(state === "streaming");
-						if (state === "streaming") setStreamFailures(0);
-						else if (state === "closed") setStreamFailures((count) => count + 1);
-					}}
+					onState={(event) => { setStreaming(event.nativeEvent.state === "streaming"); }}
 					onStats={(event) => reportStream(event.nativeEvent)}
 					pointerEvents="none"
 					style={StyleSheet.absoluteFill}
 					url={off || !foreground ? "" : streamMode === "h264" ? deviceVideoURL(config, sessionID, device.id) : streamMode === "avcc" ? deviceAvccURL(config, sessionID, device.id) : deviceMjpegURL(config, sessionID, device.id)}
 				/> : null}
-				{/* No touch target: a touch starting on it would be measured from its own corner. */}
-				{(NativeStream ? !streaming : layers.uris[0] === null && layers.uris[1] === null) ? <ActivityIndicator color={t.accent} pointerEvents="none" /> : null}
+				{/* Over the screen while it shows nothing live: Ruto at work while AO
+				    boots the device or its stream connects (no touch target there: a
+				    touch starting on it would be measured from its own corner), Ruto
+				    still while he waits, with Start only after a real failure. */}
+				{loading ? (
+					<View accessible accessibilityLabel={lease.starting ? `Starting ${device.name}` : `Connecting to ${device.name}`} pointerEvents="none" style={styles.screenCover}>
+						<UpdateMascot finale={false} shadowColor="rgba(255,255,255,0.08)" size={SCREEN_MASCOT} />
+					</View>
+				) : waiting || resting ? (
+					<View accessibilityLabel={waitingForRoom ? `${device.name} starts when there's room` : waiting ? `Starting ${device.name}` : `${device.name} is ${asleep ? "asleep" : "off"}`} style={styles.screenCover}>
+						<Image source={MASCOT} resizeMode="contain" style={styles.restingMascot} />
+						<View style={styles.startRow}>
+							{resting ? <Button title="Start" onPress={start} /> : null}
+							{startProblem ? (
+								<Pressable accessibilityLabel={startProblem.reason} accessibilityRole="button" hitSlop={10} onPress={() => Alert.alert(waitingForRoom ? `${device.name} is waiting for room` : `${device.name} didn't start`, startProblem.reason)} style={({ pressed }) => [styles.startInfo, pressed && styles.dimmed]}>
+									<Feather color={t.textSecondary} name="info" size={iconSize.md} />
+								</Pressable>
+							) : null}
+						</View>
+					</View>
+				) : null}
 				<DeviceTouchRipple point={ripple} />
 				{([0, 1] as const).map((layer) => {
 					const uri = layers.uris[layer];
@@ -403,7 +457,10 @@ const PILL_HEIGHT = 52;
 const CAPSULE_HEIGHT = 48;
 
 const makeStyles = (t: Theme) => StyleSheet.create({
-	hidden: { display: "none" },
+	screenCover: { position: "absolute", top: 0, right: 0, bottom: 0, left: 0, zIndex: 2, alignItems: "center", justifyContent: "center", gap: space.lg, backgroundColor: "#000" },
+	restingMascot: { width: SCREEN_MASCOT, height: SCREEN_MASCOT * MASCOT_ASPECT },
+	startRow: { flexDirection: "row", alignItems: "center", gap: space.sm, minHeight: 44 },
+	startInfo: { padding: space.xs },
 	screen: { flex: 1, backgroundColor: t.bgBase },
 	center: { flex: 1, alignItems: "center", justifyContent: "center", gap: space.md, paddingHorizontal: space.xxxl, backgroundColor: t.bgBase },
 	dimmed: { opacity: 0.5 },
