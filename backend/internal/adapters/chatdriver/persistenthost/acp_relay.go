@@ -173,6 +173,10 @@ func (r *acpRelay) captureAvailableCommands(method string, params json.RawMessag
 		notification.SessionID == "" {
 		return
 	}
+	if r.state.SessionID != "" && notification.SessionID != r.state.SessionID {
+		// A loaded child session's catalog is not the conversation's.
+		return
+	}
 	r.availableCommands = append(json.RawMessage(nil), notification.Update.AvailableCommands...)
 	r.availableCommandsSession = notification.SessionID
 }
@@ -765,6 +769,9 @@ func (r *acpRelay) captureResponse(request acpClientRequest, envelope map[string
 		r.state.InitialPermissions = params.Meta[ACPInitialPermissionsMetaKey]
 		r.state.InitializeResult = append(json.RawMessage(nil), result...)
 	case "session/new", "session/load", "session/resume", "session/fork":
+		if isChildSessionLoad(request.params) {
+			return
+		}
 		var response struct {
 			SessionID string `json:"sessionId"`
 		}
@@ -819,6 +826,19 @@ func keepsTurn(params json.RawMessage) bool {
 	}
 	keeps, _ := prompt.Meta[ACPSteerKeepsTurnMetaKey].(bool)
 	return keeps
+}
+
+// isChildSessionLoad reports whether session/load params carry
+// ACPChildSessionMetaKey.
+func isChildSessionLoad(params json.RawMessage) bool {
+	var load struct {
+		Meta map[string]any `json:"_meta"`
+	}
+	if json.Unmarshal(params, &load) != nil {
+		return false
+	}
+	child, _ := load.Meta[ACPChildSessionMetaKey].(bool)
+	return child
 }
 
 // isSteerPrompt reports whether session/prompt params carry ACPSteerPromptMetaKey.
