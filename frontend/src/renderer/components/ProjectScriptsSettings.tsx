@@ -295,7 +295,7 @@ function ScriptsEditor({ projectId, hostId, scratch, postCreate, preRemove, repo
 			return data;
 		},
 		onSuccess: (result) => {
-			for (const sessionId of [...result.cleaned, ...result.alreadyGone]) clearTerminateSessionState(client, sessionId);
+			for (const sessionId of [...result.cleaned, ...result.alreadyGone]) clearTerminateSessionState(client, sessionId, hostId);
 			onSaved();
 		},
 	});

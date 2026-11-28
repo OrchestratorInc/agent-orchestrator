@@ -1028,7 +1028,7 @@
 	"cues.agentLabel": "Agent instruction",
 	"cues.cancel": "Cancel",
 	"cues.commandLabel": "Command",
-	"cues.commandHostOnly": "Command cues can only be added or changed on the host itself.",
+	"cues.commandHostOnly": "Los cues de comando solo se pueden añadir o cambiar en el propio host.",
 	"cues.commandPlaceholder": "e.g. /status or npm test",
 	"cues.create": "Create",
 	"cues.delete": "Delete",

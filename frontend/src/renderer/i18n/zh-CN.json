@@ -1019,7 +1019,7 @@
 	"cues.agentLabel": "Agent instruction",
 	"cues.cancel": "Cancel",
 	"cues.commandLabel": "Command",
-	"cues.commandHostOnly": "Command cues can only be added or changed on the host itself.",
+	"cues.commandHostOnly": "命令 Cue 只能在主机本身上添加或修改。",
 	"cues.commandPlaceholder": "e.g. /status or npm test",
 	"cues.create": "Create",
 	"cues.delete": "Delete",
