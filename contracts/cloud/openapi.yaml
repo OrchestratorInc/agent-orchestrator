@@ -3779,6 +3779,143 @@ paths:
                 $ref: "#/components/schemas/WorkerOKResponse"
         default:
           $ref: "#/components/responses/Error"
+  /api/cloud/v1/orgs/{orgId}/sessions/{sessionId}/browser-vault/key:
+    parameters:
+      - $ref: "#/components/parameters/OrgId"
+      - $ref: "#/components/parameters/SessionId"
+    get:
+      operationId: getBrowserVaultKey
+      tags: [Sessions]
+      description: >-
+        The public key of the session's sandbox browser, which a saved login is sealed to on the person's
+        device. The private half never leaves the browser service in the sandbox, so the control plane relays
+        what is sealed to it and can open none of it. The key changes when the browser service restarts.
+        404 with `BROWSER_VAULT_NO_KEY` means the browser has not started; a 404 without that code means this
+        deployment has no saved logins for cloud sessions. Only the session's owner may read it.
+      responses:
+        "200":
+          description: The sandbox browser's key.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BrowserVaultKey"
+        default:
+          $ref: "#/components/responses/Error"
+  /api/cloud/v1/orgs/{orgId}/sessions/{sessionId}/browser-vault/requests:
+    parameters:
+      - $ref: "#/components/parameters/OrgId"
+      - $ref: "#/components/parameters/SessionId"
+    get:
+      operationId: listBrowserVaultRequests
+      tags: [Sessions]
+      description: >-
+        Saved-login requests from the session's agent that wait for the person's device: which site, page and
+        field. None holds a secret. A request expires two minutes after it is made. Only the session's owner
+        may list them.
+      responses:
+        "200":
+          description: Pending requests, oldest first.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BrowserVaultRequestList"
+        default:
+          $ref: "#/components/responses/Error"
+  /api/cloud/v1/orgs/{orgId}/sessions/{sessionId}/browser-vault/requests/{requestId}/grant:
+    parameters:
+      - $ref: "#/components/parameters/OrgId"
+      - $ref: "#/components/parameters/SessionId"
+      - name: requestId
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+    post:
+      operationId: grantBrowserVaultRequest
+      tags: [Sessions]
+      description: >-
+        Answer a saved-login request. On allow, the body carries the secret sealed on the person's device to
+        the sandbox browser's key, bound to this org, session, key, request, exact origin and field. The
+        control plane keeps it until the sandbox fetches it, at most until the request expires, and never logs
+        it. A key that is no longer the browser's is refused with `BROWSER_VAULT_KEY_CHANGED`; an answered or
+        expired request with `BROWSER_VAULT_REQUEST_CLOSED`. Only the session's owner may answer.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/BrowserVaultGrantInput"
+      responses:
+        "202":
+          description: Answer accepted.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/WorkerOKResponse"
+        default:
+          $ref: "#/components/responses/Error"
+  /api/cloud/v1/orgs/{orgId}/sessions/{sessionId}/browser-vault/cookie-grants:
+    parameters:
+      - $ref: "#/components/parameters/OrgId"
+      - $ref: "#/components/parameters/SessionId"
+    post:
+      operationId: createBrowserVaultCookieGrant
+      tags: [Sessions]
+      description: >-
+        Carry one site's cookies from the person's local browser into the session's sandbox browser, on the
+        person's explicit request. The cookies are sealed on the device to the sandbox browser's key (field
+        `cookies`, request id `cookieGrantId`), and set only on that site. The grant expires two minutes
+        after it is made. A device-bound site needs `acknowledgedDeviceBound`, or the request is refused with
+        `BROWSER_VAULT_DEVICE_BOUND`. Whole profiles are never carried. Only the session's owner may.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/BrowserVaultCookieGrantInput"
+      responses:
+        "202":
+          description: Grant accepted.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/WorkerOKResponse"
+        default:
+          $ref: "#/components/responses/Error"
+  /api/cloud/v1/orgs/{orgId}/browser-vault/audit:
+    parameters:
+      - $ref: "#/components/parameters/OrgId"
+    get:
+      operationId: listBrowserVaultAudit
+      tags: [Sessions]
+      description: >-
+        Every saved-login fill and cookie carry-over in the caller's cloud sessions, newest first: site,
+        session, item, field and outcome. An entry never holds a secret.
+      parameters:
+        - name: sessionId
+          in: query
+          required: false
+          schema:
+            type: string
+            format: uuid
+        - name: limit
+          in: query
+          required: false
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 500
+            default: 100
+      responses:
+        "200":
+          description: Audit entries.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BrowserVaultAuditList"
+        default:
+          $ref: "#/components/responses/Error"
   /api/cloud/v1/orgs/{orgId}/sessions/{sessionId}/chat-events:
     parameters:
       - $ref: "#/components/parameters/OrgId"
@@ -9187,6 +9324,171 @@ components:
         sha256:
           type: string
           pattern: '^[0-9a-f]{64}$'
+    BrowserVaultKey:
+      type: object
+      additionalProperties: false
+      required: [keyId, publicKey, algorithm, createdAt]
+      properties:
+        keyId:
+          type: string
+          pattern: "^[0-9a-f]{32}$"
+          description: The first 16 bytes of the SHA-256 of `publicKey`, in hex.
+        publicKey:
+          type: string
+          pattern: "^[A-Za-z0-9+/]+={0,2}$"
+          description: The raw 32-byte X25519 public key, in base64.
+        algorithm:
+          type: string
+          enum: [x25519-hkdf-sha256-aes256gcm]
+          description: >-
+            ECDH with an ephemeral X25519 key; HKDF-SHA256 over the shared secret with salt ephemeral key ||
+            this key and info `ao-vault-v1`, 32 bytes; AES-256-GCM with a 12-byte nonce and additional data
+            `ao-vault-v1|orgId|sessionId|keyId|requestId|origin|field`. The plaintext is JSON with `username`,
+            `password`, `totp` (the code valid now, never the seed) or `cookies`.
+        createdAt:
+          type: string
+          format: date-time
+    BrowserVaultRequest:
+      type: object
+      additionalProperties: false
+      required: [requestId, origin, pageUrl, field, createdAt, expiresAt]
+      properties:
+        requestId:
+          type: string
+          format: uuid
+        origin:
+          type: string
+          description: The agent tab's exact origin; https, or http on the sandbox's loopback.
+        pageUrl:
+          type: string
+        pageTitle:
+          type: string
+        field:
+          type: string
+          enum: [login, username, password, totp]
+        itemHint:
+          type: string
+          maxLength: 256
+          description: The item label the agent named, if any. It is a hint only; the device picks the item.
+        createdAt:
+          type: string
+          format: date-time
+        expiresAt:
+          type: string
+          format: date-time
+    BrowserVaultRequestList:
+      type: object
+      additionalProperties: false
+      required: [requests]
+      properties:
+        requests:
+          type: array
+          items:
+            $ref: "#/components/schemas/BrowserVaultRequest"
+    BrowserVaultSealed:
+      type: object
+      additionalProperties: false
+      required: [keyId, ephemeralPublicKey, nonce, ciphertext]
+      properties:
+        keyId:
+          type: string
+          pattern: "^[0-9a-f]{32}$"
+        ephemeralPublicKey:
+          type: string
+          pattern: "^[A-Za-z0-9+/]+={0,2}$"
+        nonce:
+          type: string
+          pattern: "^[A-Za-z0-9+/]+={0,2}$"
+        ciphertext:
+          type: string
+          pattern: "^[A-Za-z0-9+/]+={0,2}$"
+          maxLength: 65536
+    BrowserVaultItemRef:
+      type: object
+      additionalProperties: false
+      required: [id, label]
+      properties:
+        id:
+          type: string
+          maxLength: 128
+        label:
+          type: string
+          maxLength: 256
+        username:
+          type: string
+          maxLength: 256
+          description: Not a secret; the agent may see it.
+    BrowserVaultGrantInput:
+      type: object
+      additionalProperties: false
+      required: [decision]
+      properties:
+        decision:
+          type: string
+          enum: [allow, deny]
+        sealed:
+          $ref: "#/components/schemas/BrowserVaultSealed"
+          description: Required when `decision` is allow.
+        item:
+          $ref: "#/components/schemas/BrowserVaultItemRef"
+          description: Required when `decision` is allow; recorded in the audit log.
+        reason:
+          type: string
+          enum: [denied, no-match, locked]
+          description: Why a deny, for the agent's message and the audit log.
+    BrowserVaultCookieGrantInput:
+      type: object
+      additionalProperties: false
+      required: [cookieGrantId, site, sealed]
+      properties:
+        cookieGrantId:
+          type: string
+          format: uuid
+        site:
+          type: string
+          description: The registrable domain whose cookies are carried, for example `github.com`.
+        sealed:
+          $ref: "#/components/schemas/BrowserVaultSealed"
+        acknowledgedDeviceBound:
+          type: boolean
+          description: The person saw the warning that this site binds sessions to their device.
+    BrowserVaultAuditEntry:
+      type: object
+      additionalProperties: false
+      required: [id, time, sessionId, origin, field, outcome]
+      properties:
+        id:
+          type: string
+          format: uuid
+        time:
+          type: string
+          format: date-time
+        sessionId:
+          type: string
+          format: uuid
+        origin:
+          type: string
+        itemId:
+          type: string
+        itemLabel:
+          type: string
+        field:
+          type: string
+          enum: [login, username, password, totp, cookies]
+        outcome:
+          type: string
+          enum: [filled, denied, expired, origin-changed, error]
+        reason:
+          type: string
+    BrowserVaultAuditList:
+      type: object
+      additionalProperties: false
+      required: [entries]
+      properties:
+        entries:
+          type: array
+          items:
+            $ref: "#/components/schemas/BrowserVaultAuditEntry"
     ChatApprovalDecisionInput:
       type: object
       additionalProperties: false

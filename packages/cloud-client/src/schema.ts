@@ -2109,6 +2109,106 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/cloud/v1/orgs/{orgId}/sessions/{sessionId}/browser-vault/key": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                sessionId: components["parameters"]["SessionId"];
+            };
+            cookie?: never;
+        };
+        /** @description The public key of the session's sandbox browser, which a saved login is sealed to on the person's device. The private half never leaves the browser service in the sandbox, so the control plane relays what is sealed to it and can open none of it. The key changes when the browser service restarts. 404 with `BROWSER_VAULT_NO_KEY` means the browser has not started; a 404 without that code means this deployment has no saved logins for cloud sessions. Only the session's owner may read it. */
+        get: operations["getBrowserVaultKey"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/cloud/v1/orgs/{orgId}/sessions/{sessionId}/browser-vault/requests": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                sessionId: components["parameters"]["SessionId"];
+            };
+            cookie?: never;
+        };
+        /** @description Saved-login requests from the session's agent that wait for the person's device: which site, page and field. None holds a secret. A request expires two minutes after it is made. Only the session's owner may list them. */
+        get: operations["listBrowserVaultRequests"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/cloud/v1/orgs/{orgId}/sessions/{sessionId}/browser-vault/requests/{requestId}/grant": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                sessionId: components["parameters"]["SessionId"];
+                requestId: string;
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** @description Answer a saved-login request. On allow, the body carries the secret sealed on the person's device to the sandbox browser's key, bound to this org, session, key, request, exact origin and field. The control plane keeps it until the sandbox fetches it, at most until the request expires, and never logs it. A key that is no longer the browser's is refused with `BROWSER_VAULT_KEY_CHANGED`; an answered or expired request with `BROWSER_VAULT_REQUEST_CLOSED`. Only the session's owner may answer. */
+        post: operations["grantBrowserVaultRequest"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/cloud/v1/orgs/{orgId}/sessions/{sessionId}/browser-vault/cookie-grants": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                sessionId: components["parameters"]["SessionId"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** @description Carry one site's cookies from the person's local browser into the session's sandbox browser, on the person's explicit request. The cookies are sealed on the device to the sandbox browser's key (field `cookies`, request id `cookieGrantId`), and set only on that site. The grant expires two minutes after it is made. A device-bound site needs `acknowledgedDeviceBound`, or the request is refused with `BROWSER_VAULT_DEVICE_BOUND`. Whole profiles are never carried. Only the session's owner may. */
+        post: operations["createBrowserVaultCookieGrant"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/cloud/v1/orgs/{orgId}/browser-vault/audit": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+            };
+            cookie?: never;
+        };
+        /** @description Every saved-login fill and cookie carry-over in the caller's cloud sessions, newest first: site, session, item, field and outcome. An entry never holds a secret. */
+        get: operations["listBrowserVaultAudit"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/cloud/v1/orgs/{orgId}/sessions/{sessionId}/chat-events": {
         parameters: {
             query?: never;
@@ -4775,6 +4875,91 @@ export interface components {
             /** Format: int64 */
             size: number;
             sha256: string;
+        };
+        BrowserVaultKey: {
+            /** @description The first 16 bytes of the SHA-256 of `publicKey`, in hex. */
+            keyId: string;
+            /** @description The raw 32-byte X25519 public key, in base64. */
+            publicKey: string;
+            /**
+             * @description ECDH with an ephemeral X25519 key; HKDF-SHA256 over the shared secret with salt ephemeral key || this key and info `ao-vault-v1`, 32 bytes; AES-256-GCM with a 12-byte nonce and additional data `ao-vault-v1|orgId|sessionId|keyId|requestId|origin|field`. The plaintext is JSON with `username`, `password`, `totp` (the code valid now, never the seed) or `cookies`.
+             * @enum {string}
+             */
+            algorithm: "x25519-hkdf-sha256-aes256gcm";
+            /** Format: date-time */
+            createdAt: string;
+        };
+        BrowserVaultRequest: {
+            /** Format: uuid */
+            requestId: string;
+            /** @description The agent tab's exact origin; https, or http on the sandbox's loopback. */
+            origin: string;
+            pageUrl: string;
+            pageTitle?: string;
+            /** @enum {string} */
+            field: "login" | "username" | "password" | "totp";
+            /** @description The item label the agent named, if any. It is a hint only; the device picks the item. */
+            itemHint?: string;
+            /** Format: date-time */
+            createdAt: string;
+            /** Format: date-time */
+            expiresAt: string;
+        };
+        BrowserVaultRequestList: {
+            requests: components["schemas"]["BrowserVaultRequest"][];
+        };
+        BrowserVaultSealed: {
+            keyId: string;
+            ephemeralPublicKey: string;
+            nonce: string;
+            ciphertext: string;
+        };
+        BrowserVaultItemRef: {
+            id: string;
+            label: string;
+            /** @description Not a secret; the agent may see it. */
+            username?: string;
+        };
+        BrowserVaultGrantInput: {
+            /** @enum {string} */
+            decision: "allow" | "deny";
+            /** @description Required when `decision` is allow. */
+            sealed?: components["schemas"]["BrowserVaultSealed"];
+            /** @description Required when `decision` is allow; recorded in the audit log. */
+            item?: components["schemas"]["BrowserVaultItemRef"];
+            /**
+             * @description Why a deny, for the agent's message and the audit log.
+             * @enum {string}
+             */
+            reason?: "denied" | "no-match" | "locked";
+        };
+        BrowserVaultCookieGrantInput: {
+            /** Format: uuid */
+            cookieGrantId: string;
+            /** @description The registrable domain whose cookies are carried, for example `github.com`. */
+            site: string;
+            sealed: components["schemas"]["BrowserVaultSealed"];
+            /** @description The person saw the warning that this site binds sessions to their device. */
+            acknowledgedDeviceBound?: boolean;
+        };
+        BrowserVaultAuditEntry: {
+            /** Format: uuid */
+            id: string;
+            /** Format: date-time */
+            time: string;
+            /** Format: uuid */
+            sessionId: string;
+            origin: string;
+            itemId?: string;
+            itemLabel?: string;
+            /** @enum {string} */
+            field: "login" | "username" | "password" | "totp" | "cookies";
+            /** @enum {string} */
+            outcome: "filled" | "denied" | "expired" | "origin-changed" | "error";
+            reason?: string;
+        };
+        BrowserVaultAuditList: {
+            entries: components["schemas"]["BrowserVaultAuditEntry"][];
         };
         ChatApprovalDecisionInput: {
             decisionId: string;
@@ -10766,6 +10951,137 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["WorkerOKResponse"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    getBrowserVaultKey: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                sessionId: components["parameters"]["SessionId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The sandbox browser's key. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BrowserVaultKey"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    listBrowserVaultRequests: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                sessionId: components["parameters"]["SessionId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Pending requests, oldest first. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BrowserVaultRequestList"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    grantBrowserVaultRequest: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                sessionId: components["parameters"]["SessionId"];
+                requestId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["BrowserVaultGrantInput"];
+            };
+        };
+        responses: {
+            /** @description Answer accepted. */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WorkerOKResponse"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    createBrowserVaultCookieGrant: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                sessionId: components["parameters"]["SessionId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["BrowserVaultCookieGrantInput"];
+            };
+        };
+        responses: {
+            /** @description Grant accepted. */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WorkerOKResponse"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    listBrowserVaultAudit: {
+        parameters: {
+            query?: {
+                sessionId?: string;
+                limit?: number;
+            };
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Audit entries. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BrowserVaultAuditList"];
                 };
             };
             default: components["responses"]["Error"];
