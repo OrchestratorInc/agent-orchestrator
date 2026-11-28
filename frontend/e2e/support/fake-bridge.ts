@@ -541,6 +541,7 @@ export async function installFakeBridge(page: Page, opts: FakeBridgeOptions = {}
 					},
 					onSessionChanged: unsubscribe,
 				},
+				sessionLinks: { onOpen: unsubscribe, takePending: async () => null },
 				cloudCp: {
 					request: async () => ({ status: 401, headers: {}, body: "" }),
 					requestBinary: async () => ({ status: 401, headers: {}, body: new Uint8Array() }),
@@ -1578,6 +1579,7 @@ export async function installFakeAgent(page: Page, opts: FakeAgentOptions = {}):
 					},
 					onSessionChanged: unsubscribe,
 				},
+				sessionLinks: { onOpen: unsubscribe, takePending: async () => null },
 				cloudCp: {
 					request: async () => ({ status: 401, headers: {}, body: "" }),
 					requestBinary: async () => ({ status: 401, headers: {}, body: new Uint8Array() }),

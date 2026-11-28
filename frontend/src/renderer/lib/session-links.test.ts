@@ -163,3 +163,12 @@ describe("session links", () => {
 		expect(findPlainReferences("proj-297", sessions)[0]!.node.url).toBe("ao://sessions/proj/proj-297");
 	});
 });
+
+describe("sessionLink", () => {
+	it("builds the canonical URL that parseSessionLink reads back", async () => {
+		const { sessionLink, parseSessionLink } = await import("./session-links");
+		const url = sessionLink("my project", "s 1");
+		expect(url).toBe("ao://sessions/my%20project/s%201");
+		expect(parseSessionLink(url)).toEqual({ projectId: "my project", sessionId: "s 1" });
+	});
+});

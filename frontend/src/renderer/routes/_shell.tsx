@@ -30,6 +30,7 @@ import { ArchiveModalHost } from "../components/ArchiveModalHost";
 import { GlobalToast } from "../components/GlobalToast";
 import { GlobalApprovalCard } from "../components/approvals/ApprovalHost";
 import { SettingsPane, SettingsProvider, useSettingsPage } from "../components/SettingsDialog";
+import { SessionDeepLinkHost } from "../components/SessionDeepLinkHost";
 import { ShareLinkHost } from "../components/OpenShareLinkDialog";
 import { SharedArtifactLinkHost } from "../components/SharedArtifactLinkHost";
 import { KeyboardShortcutsDialog } from "../components/KeyboardShortcutsDialog";
@@ -215,6 +216,7 @@ function ShellOutlet({ startingChat }: { startingChat: ReactNode }) {
 			</div>
 			<SettingsPane />
 			<ShareLinkHost />
+			<SessionDeepLinkHost />
 		</>
 	);
 }

@@ -324,6 +324,7 @@ vi.mock("../components/CommandPalette", () => ({ CommandPalette: () => null }));
 vi.mock("../components/OrchestratorReplacementDialog", () => ({ OrchestratorReplacementDialog: () => null }));
 vi.mock("../components/OpenShareLinkDialog", () => ({ ShareLinkHost: () => null }));
 vi.mock("../components/SharedArtifactLinkHost", () => ({ SharedArtifactLinkHost: () => null }));
+vi.mock("../components/SessionDeepLinkHost", () => ({ SessionDeepLinkHost: () => null }));
 vi.mock("../components/TitlebarNav", async () => {
 	const { sidebarIsVisible, useUiStore: useStore } = await vi.importActual<
 		typeof import("../stores/ui-store")
