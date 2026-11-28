@@ -2155,7 +2155,9 @@ function ChatWorkspaceContent({
 	// then it counts as docked, so nothing glides in when Chat appears.
 	const [settledDocked, setSettledDocked] = useState<boolean | undefined>(shellActive ? undefined : historyUnread);
 	if (settledDocked === undefined && !shellActive) setSettledDocked(historyUnread);
-	const openedDocked = settledDocked !== false;
+	// Older history remains above whatever is loaded (a page of only PR updates,
+	// say): the chat is not new, so it stays docked with its earlier messages to load.
+	const openedDocked = settledDocked !== false || Boolean(hasOlder);
 	const conversationEmpty = !openedDocked && !arrivingWithHistory && snapshot.items.length === 0 && !turn && (localEchos?.length ?? 0) === 0 && (!hasStartup || sessionRole === "orchestrator");
 	const composerDockRef = useRef<HTMLDivElement>(null);
 	// The composer itself, not the dock: the dock also holds the welcome heading, which
@@ -5882,7 +5884,9 @@ export function Timeline({
 		updateScrollbar();
 	}
 
-	if (timelineItems.length === 0 && !messageEdit && !turn && !showStartup) {
+	// With older pages to read, the list stays: its "Load earlier messages" and
+	// the fill that reads them live here, even before a row has loaded.
+	if (timelineItems.length === 0 && !messageEdit && !turn && !showStartup && !hasOlder) {
 		return null;
 	}
 

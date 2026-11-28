@@ -18,7 +18,7 @@ import type { ChatConfigOption, ChatModel, TurnSettings } from "../../types/conv
 import type { AgentSwitchProps, PickerSource } from "./AgentSwitchPicker";
 import { cloudSessionsQueryKey, sharedCloudWorkspacesQueryKey } from "../../hooks/useWorkspaceQuery";
 import { QUEUED_STEER_STALE_MS, cloudSteeringQueuedTurns, nextQueuedSteerDeadline, appendCloudEvents, CHAT_EVENTS_CACHE_MS, cloudExcerptText, cloudAnnotationContent, cloudMessageBody, cloudQueuedSteerErrors, CloudSessionChatSurface, cloudStartupChecklist, cloudWorkspaceFilePath, ownMessageTurns, planRefusalCode, toSnapshot } from "./CloudSessionChatSurface";
-import { CLOUD_CHAT_NEWEST, cloudChatHistoryKey, mergeCloudEvents } from "../../lib/cloud-chat-history";
+import { CLOUD_CHAT_NEWEST, CLOUD_CHAT_READ_BACK_PAGES, cloudChatHistoryKey, mergeCloudEvents } from "../../lib/cloud-chat-history";
 import { clearPreviousAccountState } from "../../hooks/useCloudAccountSwitchReset";
 import { TurnSettingsBar } from "./TurnSettingsBar";
 import { noteCloudWorkerStarting, resetCloudWorkerStartingForTests, WORKER_STARTING_CODE } from "../../lib/cloud-worker-starting";
@@ -3337,6 +3337,76 @@ AssertionError: expected refusal telemetry to match
 		await waitFor(() => expect(texts()).toEqual(["First", "Earlier", "Latest"]));
 		expect(props()).toMatchObject({ hasOlder: false, loadingOlder: false, snapshot: { hasMoreBefore: false } });
 		expect(cloudMocks.listChatEvents).toHaveBeenCalledWith("org-1", session.id, { before: 70, limit: 200, since: undefined });
+	});
+
+	describe("a newest page of only pull request updates", () => {
+		// A paused session's newest events can all be scm.updated: every push to the
+		// repository refreshed its open pull request while nobody talked to it.
+		const minute = (sequence: number) => new Date(Date.UTC(2026, 10, 27, 0, 0) + sequence * 60_000).toISOString();
+		const history = (chatThrough: number, total: number): CloudCpClientEvent[] => Array.from({ length: total }, (_, index) => {
+			const sequence = index + 1;
+			if (sequence > chatThrough) return { sessionId: session.id, sequence, type: "scm.updated", payload: { pullRequestId: "pr-1", number: 7, repository: "octo/widgets" }, createdAt: minute(sequence) };
+			const turnId = `turn-${Math.ceil(sequence / 2)}`;
+			return sequence % 2
+				? { sessionId: session.id, sequence, type: "chat.user_message", payload: { text: `Ask ${sequence}`, turnId }, createdAt: minute(sequence) }
+				: { sessionId: session.id, sequence, type: "chat.turn_completed", payload: { turnId }, createdAt: minute(sequence) };
+		});
+		// The control plane's read back: the newest limit before `before`, cut at since.
+		const serve = (events: CloudCpClientEvent[]) => async (_org: string, _session: string, query: { before?: number; after?: number; limit: number; since?: string }) => {
+			let page = events.filter((event) => event.sequence > (query.after ?? 0) && event.sequence < (query.before ?? Number.MAX_SAFE_INTEGER)).slice(-query.limit);
+			if (query.since) page = page.filter((event) => event.createdAt >= query.since!);
+			const first = page[0]?.sequence ?? query.before ?? 0;
+			return { events: page, hasMore: false, nextAfter: page.at(-1)?.sequence ?? query.after ?? 0, hasOlder: events.some((event) => event.sequence < first && event.sequence > (query.after ?? 0)), nextBefore: first };
+		};
+		const readBacks = () => cloudMocks.listChatEvents.mock.calls.filter(([, , query]) => query.limit === 200);
+		const mount = (events: CloudCpClientEvent[]) => {
+			cloudMocks.listChatEvents.mockReset().mockImplementation(serve(events));
+			cloudMocks.listChatModels.mockReset().mockResolvedValue({ models: [] });
+			cloudMocks.chatProps.mockClear();
+			const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+			render(<QueryClientProvider client={queryClient}><CloudSessionChatSurface session={{ ...session, runtimeConnected: false, cloud: { orgId: "org-1" } }} /></QueryClientProvider>);
+		};
+		const props = () => cloudMocks.chatProps.mock.lastCall?.[0];
+		const messages = (call = props()) => (call?.snapshot.items as { kind: string; text?: string }[]).filter((item) => item.kind === "message");
+
+		it("reads back to the conversation, pending all the while, never as an empty chat", async () => {
+			// 40 chat events, then 960 pull request updates: the newest page and its
+			// half hour hold none of the conversation.
+			mount(history(40, 1000));
+			await waitFor(() => expect(messages().length).toBeGreaterThan(0), { timeout: 5_000 });
+			expect(messages().at(-1)?.text).toBe("Ask 39");
+			// Every frame without the conversation said its history was still being read.
+			for (const [call] of cloudMocks.chatProps.mock.calls) {
+				if (messages(call).length === 0) expect(call.historyPending).toBe(true);
+			}
+			await waitFor(() => expect(props().historyPending).toBe(false));
+			expect(readBacks().length).toBeLessThanOrEqual(CLOUD_CHAT_READ_BACK_PAGES);
+		});
+
+		it("stops reading back at the bound, then offers the earlier messages", async () => {
+			mount(history(0, 3000));
+			await waitFor(() => expect(props()).toMatchObject({ historyPending: false, hasOlder: true, loadingOlder: false }), { timeout: 5_000 });
+			expect(readBacks()).toHaveLength(CLOUD_CHAT_READ_BACK_PAGES);
+			await new Promise((resolve) => setTimeout(resolve, 200));
+			expect(readBacks()).toHaveLength(CLOUD_CHAT_READ_BACK_PAGES);
+			expect(messages()).toHaveLength(0);
+			// "Load earlier messages" still reads on.
+			act(() => props().onLoadOlder());
+			await waitFor(() => expect(readBacks()).toHaveLength(CLOUD_CHAT_READ_BACK_PAGES + 1));
+		});
+
+		it("ends the read back when nothing older remains: a chat with no messages", async () => {
+			mount(history(0, 400));
+			await waitFor(() => expect(props()).toMatchObject({ historyPending: false, hasOlder: false }), { timeout: 5_000 });
+			expect(readBacks().length).toBeLessThan(CLOUD_CHAT_READ_BACK_PAGES);
+		});
+
+		it("does not read back when the newest page holds the conversation", async () => {
+			mount(history(1000, 1000));
+			await waitFor(() => expect(messages().length).toBeGreaterThan(0));
+			await waitFor(() => expect(props().historyPending).toBe(false));
+			expect(readBacks()).toHaveLength(0);
+		});
 	});
 
 	it("reads the whole history forward from a control plane that cannot read back", async () => {

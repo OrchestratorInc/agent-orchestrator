@@ -1,7 +1,8 @@
 import { act, create, type ReactTestRenderer } from "react-test-renderer";
-import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { forgetCloudAccountCaches } from "./accountCaches";
-import { CLOUD_CHAT_NEWEST } from "./chatHistory";
+import type { ConversationSnapshot } from "../chat/types";
+import { CLOUD_CHAT_NEWEST, CLOUD_CHAT_READ_BACK_PAGES } from "./chatHistory";
 import type { CloudClient } from "./client";
 import type { CloudChatEventsPage, CloudClientEvent, CloudSession } from "./types";
 import { useCloudConversation, type CloudConversation } from "./useCloudConversation";
@@ -110,4 +111,63 @@ it("reopens a chat from what it held and reads only what is newer, until the acc
 	forgetCloudAccountCaches();
 	await open(cloud());
 	expect(chat.snapshot).toBeNull();
+});
+
+describe("a newest page of only pull request updates", () => {
+	// A paused session's newest events can all be scm.updated: every push to the
+	// repository refreshed its open pull request while nobody talked to it.
+	const update = (sequence: number): CloudClientEvent => ({
+		sessionId: "s1", sequence, type: "scm.updated", createdAt: new Date(Date.UTC(2026, 10, 9, 10, sequence)).toISOString(),
+		payload: { pullRequestId: "pr-1", number: 7, repository: "octo/widgets" },
+	});
+	const chatThen = (chatThrough: number, total: number) => Array.from({ length: total }, (_, index) => {
+		const sequence = index + 1;
+		return sequence > chatThrough ? update(sequence) : { ...event(sequence), createdAt: new Date(Date.UTC(2026, 10, 9, 10, sequence)).toISOString() };
+	});
+	/** The control plane's read back: the newest limit before `before`, cut at since. */
+	function serving(events: CloudClientEvent[]) {
+		const client = cloud();
+		client.listChatEvents.mockImplementation(async (_org, _session, query) => {
+			let held = events.filter((item) => item.sequence > (query.after ?? 0) && item.sequence < (query.before ?? Number.MAX_SAFE_INTEGER)).slice(-(query.limit ?? 500));
+			if (query.since) held = held.filter((item) => item.createdAt >= query.since!);
+			const first = held[0]?.sequence ?? query.before ?? 0;
+			return page(held, { hasOlder: events.some((item) => item.sequence < first && item.sequence > (query.after ?? 0)), nextBefore: first });
+		});
+		return client;
+	}
+	const readBacks = (client: ReturnType<typeof cloud>) => client.listChatEvents.mock.calls.filter(([, , query]) => query.limit === 200);
+	const settleLong = () => act(async () => { for (let tick = 0; tick < 60; tick++) await new Promise((resolve) => setTimeout(resolve, 0)); });
+
+	it("reads back to the conversation, loading until it does", async () => {
+		const client = serving(chatThen(100, 1000));
+		await open(client);
+		const frames: (ConversationSnapshot | null)[] = [];
+		for (let round = 0; round < 10 && !chat.snapshot; round++) {
+			await act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)); });
+			frames.push(chat.snapshot);
+		}
+		await settleLong();
+		// No frame showed the chat without its conversation.
+		expect(frames.every((frame) => frame === null || frame.turns.length > 0)).toBe(true);
+		expect(chat.snapshot?.turns.length).toBeGreaterThan(0);
+		expect(readBacks(client).length).toBeGreaterThan(0);
+		expect(readBacks(client).length).toBeLessThanOrEqual(CLOUD_CHAT_READ_BACK_PAGES);
+	});
+
+	it("stops at the bound and offers the earlier messages", async () => {
+		const client = serving(chatThen(0, 3000));
+		await open(client);
+		await settleLong();
+		expect(readBacks(client)).toHaveLength(CLOUD_CHAT_READ_BACK_PAGES);
+		expect(chat.snapshot).toMatchObject({ hasMoreBefore: true, turns: [] });
+		await act(async () => { await chat.loadOlder(); });
+		expect(readBacks(client)).toHaveLength(CLOUD_CHAT_READ_BACK_PAGES + 1);
+	});
+
+	it("does not read back a newest page that holds the conversation", async () => {
+		const client = cloud();
+		await open(client);
+		await settle();
+		expect(readBacks(client)).toHaveLength(0);
+	});
 });

@@ -4,7 +4,7 @@ import { AppState } from "react-native";
 import { shouldPoll } from "../appStatePoll";
 import type { ConversationSnapshot } from "../chat/types";
 import type { CloudClient } from "./client";
-import { cloudChatKey, prependOlderCloudEvents, readCloudChatEvents, readOlderCloudChatEvents, retainCloudChat, retainedCloudChat, streamedCloudChatEvents, type CloudChatHistory } from "./chatHistory";
+import { CLOUD_CHAT_READ_BACK_PAGES, cloudChatEventsHoldChat, cloudChatKey, prependOlderCloudEvents, readCloudChatEvents, readOlderCloudChatEvents, retainCloudChat, retainedCloudChat, streamedCloudChatEvents, type CloudChatHistory } from "./chatHistory";
 import { appendCloudEvents, cloudConversationSnapshot, cloudSessionModel, mergeCloudEvents, runningCloudTurnId } from "./conversation";
 import { followCloudSessionEvents } from "./eventStream";
 import { CloudError, cloudErrorMessage, isPlanRefusal, planResetCopy } from "./errors";
@@ -247,6 +247,36 @@ export function useCloudConversation(input: { client: CloudClient; orgId: string
 		if (active && recentPending) void loadOlder(true);
 	}, [active, loadOlder, recentPending]);
 
+	// Newest events with none of the conversation in them (a paused session's
+	// pull request updates can fill a page, and its half hour) read further back
+	// once, a bounded number of pages, until a message loads or nothing older
+	// remains; "Load earlier messages" reads on from there. Until the read back
+	// ends the conversation is still loading, not an empty chat.
+	const chatKeyRef = useRef(chatKey);
+	chatKeyRef.current = chatKey;
+	const [readBack, setReadBack] = useState<{ key: string; running: boolean }>();
+	const readBackStarted = Boolean(chatKey) && readBack?.key === chatKey;
+	const quietPage = Boolean(eventsLoaded && history?.hasOlder && !cloudChatEventsHoldChat(events));
+	const readingBack = readBackStarted ? readBack!.running : quietPage;
+	const readBackReady = active && !readBackStarted && quietPage && !history?.recentPending && !loadingOlder;
+	useEffect(() => {
+		if (!readBackReady || !chatKey) return;
+		const key = chatKey;
+		setReadBack({ key, running: true });
+		void (async () => {
+			for (let read = 0; read < CLOUD_CHAT_READ_BACK_PAGES;) {
+				if (chatKeyRef.current !== key || !historyRef.current?.hasOlder || cloudChatEventsHoldChat(eventsRef.current)) return;
+				// A page another read has in flight is waited for, not counted.
+				if (loadingOlderRef.current) {
+					await new Promise((resolve) => setTimeout(resolve, 50));
+					continue;
+				}
+				read++;
+				await loadOlder();
+			}
+		})().finally(() => setReadBack((current) => current?.key === key ? { key, running: false } : current));
+	}, [chatKey, loadOlder, readBackReady]);
+
 	// Live polling while the screen is in front.
 	useEffect(() => {
 		if (!active || !orgId) return;
@@ -369,12 +399,12 @@ export function useCloudConversation(input: { client: CloudClient; orgId: string
 	}, [active, catalogKey, client, connected, orgId, sessionId, terminated]);
 
 	const snapshot = useMemo(() => {
-		if (!session || !eventsLoaded) return null;
+		if (!session || !eventsLoaded || readingBack) return null;
 		return cloudConversationSnapshot(session, events, {
 			settings: { model: settings.model ?? cloudSessionModel(session), reasoningEffort: settings.reasoningEffort, approvalMode: settings.approvalMode },
 			partial: Boolean(history?.hasOlder),
 		});
-	}, [events, eventsLoaded, history?.hasOlder, session, settings]);
+	}, [events, eventsLoaded, history?.hasOlder, readingBack, session, settings]);
 
 	const send = useCallback(async (text: string, attachmentIds: readonly string[] = []) => {
 		const body = text.trim();

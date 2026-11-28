@@ -3,11 +3,14 @@ import { describe, expect, it, vi } from "vitest";
 import type { CloudCpChatEventsResponse, CloudCpClientEvent } from "./cloud-cp";
 import {
 	CLOUD_CHAT_NEWEST,
+	CLOUD_CHAT_READ_BACK_PAGES,
+	cloudChatEventsHoldChat,
 	cloudChatEventsKey,
 	cloudChatHistoryKey,
 	cloudChatHistoryPartial,
 	loadCloudChatHistory,
 	loadOlderCloudChatEvents,
+	readBackToCloudChat,
 	readCloudChatEvents,
 	streamedCloudChatEvents,
 	type CloudChatHistory,
@@ -221,5 +224,68 @@ describe("streamedCloudChatEvents", () => {
 		expect(sequences(streamedCloudChatEvents(queryClient, ORG, SESSION, current, [event(43), event(901)]))).toEqual([43, 901]);
 		queryClient.setQueryData<CloudChatHistory>(cloudChatHistoryKey(ORG, SESSION), { hasOlder: true, nextBefore: 880, recentPending: false, loadingOlder: false, generation: 1 });
 		expect(sequences(streamedCloudChatEvents(queryClient, ORG, SESSION, current, [event(43), event(900), event(901)]))).toEqual([900, 901]);
+	});
+});
+
+describe("readBackToCloudChat", () => {
+	const update = (sequence: number): CloudCpClientEvent => ({
+		sessionId: SESSION, sequence, type: "scm.updated", payload: { pullRequestId: "pr-1" }, createdAt: "2026-11-08T10:00:00.000Z",
+	});
+	const range = (from: number, to: number, make: (sequence: number) => CloudCpClientEvent) =>
+		Array.from({ length: to - from + 1 }, (_, index) => make(from + index));
+	function held(events: CloudCpClientEvent[], nextBefore: number, loadingOlder = false) {
+		const queryClient = new QueryClient();
+		queryClient.setQueryData(cloudChatEventsKey(ORG, SESSION), events);
+		queryClient.setQueryData<CloudChatHistory>(cloudChatHistoryKey(ORG, SESSION), { hasOlder: true, nextBefore, recentPending: false, loadingOlder, generation: 1 });
+		return queryClient;
+	}
+
+	it("tells the conversation from session and pull request updates", () => {
+		expect(cloudChatEventsHoldChat(range(1, 3, update))).toBe(false);
+		expect(cloudChatEventsHoldChat([...range(1, 3, update), event(4)])).toBe(true);
+	});
+
+	it("reads older pages until one brings in the conversation", async () => {
+		const queryClient = held(range(801, 1000, update), 801);
+		const cloud = client(back(range(601, 800, update), true), back([event(599), ...range(600, 600, update)], true));
+		await readBackToCloudChat(queryClient, cloud, ORG, SESSION);
+		expect(cloud.listChatEvents).toHaveBeenCalledTimes(2);
+		expect(cloud.listChatEvents).toHaveBeenNthCalledWith(1, ORG, SESSION, { before: 801, limit: 200, since: undefined });
+		expect(cloud.listChatEvents).toHaveBeenNthCalledWith(2, ORG, SESSION, { before: 601, limit: 200, since: undefined });
+		expect(queryClient.getQueryData<CloudCpClientEvent[]>(cloudChatEventsKey(ORG, SESSION))?.[0]?.sequence).toBe(599);
+	});
+
+	it("stops at the bound", async () => {
+		const queryClient = held(range(5001, 5200, update), 5001);
+		const listChatEvents = vi.fn(async (_org: string, _session: string, query?: object) => {
+			const before = (query as { before: number }).before;
+			return back(range(before - 200, before - 1, update), true);
+		});
+		await readBackToCloudChat(queryClient, { listChatEvents }, ORG, SESSION);
+		expect(listChatEvents).toHaveBeenCalledTimes(CLOUD_CHAT_READ_BACK_PAGES);
+		expect(history(queryClient)).toMatchObject({ hasOlder: true, loadingOlder: false });
+	});
+
+	it("stops when nothing older remains, and reads nothing once the conversation is held", async () => {
+		const empty = held(range(201, 400, update), 201);
+		const cloud = client(back(range(1, 200, update), false));
+		await readBackToCloudChat(empty, cloud, ORG, SESSION);
+		expect(cloud.listChatEvents).toHaveBeenCalledTimes(1);
+		expect(history(empty)?.hasOlder).toBe(false);
+		const chatting = held([event(300), ...range(301, 400, update)], 300);
+		const idle = client();
+		await readBackToCloudChat(chatting, idle, ORG, SESSION);
+		expect(idle.listChatEvents).not.toHaveBeenCalled();
+	});
+
+	it("waits for a page already being read instead of counting it", async () => {
+		const queryClient = held(range(801, 1000, update), 801, true);
+		const cloud = client(back([event(700)], false));
+		const reading = readBackToCloudChat(queryClient, cloud, ORG, SESSION, { pages: 1 });
+		await new Promise((resolve) => setTimeout(resolve, 20));
+		expect(cloud.listChatEvents).not.toHaveBeenCalled();
+		queryClient.setQueryData<CloudChatHistory>(cloudChatHistoryKey(ORG, SESSION), (current) => current && { ...current, loadingOlder: false });
+		await reading;
+		expect(cloud.listChatEvents).toHaveBeenCalledTimes(1);
 	});
 });
