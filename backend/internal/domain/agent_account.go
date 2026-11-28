@@ -131,6 +131,9 @@ type AgentLimitReading struct {
 	UsedPercent     float64
 	ResetsAt        *time.Time
 	ReadAt          time.Time
+	// OrgID is the organization the login belongs to, empty when the provider
+	// reports none or the reading predates it.
+	OrgID string
 }
 
 // AgentAccountLimits is what the provider's CLI reports about an account's
@@ -140,6 +143,10 @@ type AgentAccountLimits struct {
 	// AutoResumeResetsAt is present only when native rolling limits identify an
 	// unambiguous future deadline. Nil does not establish available capacity.
 	AutoResumeResetsAt *time.Time `json:"-"`
+	// Incomplete is set when the provider reported a window without a valid
+	// utilization, or a limit state Windows does not show, so Windows alone
+	// cannot establish available capacity.
+	Incomplete bool `json:"-"`
 	// ReachedScopes are the meter scopes the provider reports as exhausted.
 	ReachedScopes []string `json:"-"`
 	// ExtraUsage is Claude's paid usage beyond the plan, in the plan's currency.

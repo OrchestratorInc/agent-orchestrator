@@ -10,6 +10,13 @@ const fixtures = vi.hoisted(() => ({
 	theme: new Proxy({}, { get: () => "#000000" }),
 }));
 
+vi.mock("./headerPill", async () => {
+	const React = await import("react");
+	return {
+		PillHeaderRight: ({ children }: { children?: React.ReactNode }) => children ?? null,
+		HeaderPillButton: ({ children, ...props }: { children?: React.ReactNode }) => React.createElement("HeaderPillButton", props, children),
+	};
+});
 vi.mock("expo-router", async () => {
 	const React = await import("react");
 	const host = (name: string) => ({ children, ...props }: { children?: React.ReactNode }) => React.createElement(name, props, children);
@@ -155,5 +162,16 @@ describe("Cloud coding agent: browser sign-in", () => {
 		await act(async () => { row(tree, "cloud-agent-cancel").props.onPress(); });
 		await settle();
 		expect(row(tree, "cloud-agent-method-codex-login").props.disabled).toBe(false);
+	});
+
+	// The Settings stack has Android's clear pill bar: the paste form's check
+	// sits on a pill of its own, as the machine editor's Save does.
+	it("sends a pasted key from a pill over Android's clear bar", async () => {
+		await act(async () => { tree = create(<CloudAgentScreen />); });
+		await act(async () => { row(tree, "cloud-agent-method-openai-api-key").props.onPress(); });
+		await settle();
+		const pill = () => tree.root.findByType("HeaderPillButton" as never);
+		expect(pill().props).toMatchObject({ icon: "checkmark", label: "Save Codex credential", disabled: true });
+		expect(tree.root.findAllByType("StackToolbarButton" as never)).toHaveLength(0);
 	});
 });

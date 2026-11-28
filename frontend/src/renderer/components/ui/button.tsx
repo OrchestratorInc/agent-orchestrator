@@ -29,14 +29,14 @@ export const GHOST_PILL_CLASS = [
 // The default 16px icon size has zero specificity (`:where`) so a caller's
 // `[&_svg]:size-*` always wins over it.
 const buttonVariants = cva(
-	"group/button inline-flex shrink-0 items-center justify-center gap-1.5 whitespace-nowrap rounded-md border bg-clip-padding text-sm font-normal transition-[background-color,border-color,color,box-shadow,opacity] duration-[200ms] ease-out outline-none select-none motion-reduce:transition-none disabled:pointer-events-none disabled:opacity-50 [&_svg]:pointer-events-none [&_svg]:shrink-0 [:where(&_svg:not([class*='size-']))]:size-4",
+	"group/button inline-flex shrink-0 items-center justify-center gap-1.5 whitespace-nowrap rounded-(--radius-control) border bg-clip-padding text-sm font-normal transition-[background-color,border-color,color,box-shadow,opacity] duration-[200ms] ease-out outline-none select-none motion-reduce:transition-none disabled:pointer-events-none disabled:opacity-50 [&_svg]:pointer-events-none [&_svg]:shrink-0 [:where(&_svg:not([class*='size-']))]:size-4",
 	{
 		variants: {
 			variant: {
 				/** The one main action in a region. Accent fill. */
-				primary: "button-raised button-emphasis [--button-color:var(--primary)] text-primary-foreground",
+				primary: "button-raised button-classic button-classic-contrast button-emphasis [--button-color:var(--primary)] text-primary-foreground",
 				/** Brand-blue fill for a decision the turn is waiting on (approve, open link). */
-				accent: "button-raised button-emphasis [--button-color:var(--color-brand-logo)] text-logo-accent-foreground",
+				accent: "button-raised button-classic button-emphasis [--button-color:var(--color-brand-logo)] text-logo-accent-foreground",
 				/** Quiet filled surface for secondary actions. */
 				secondary:
 					"button-raised [--button-color:var(--secondary)] text-secondary-foreground",

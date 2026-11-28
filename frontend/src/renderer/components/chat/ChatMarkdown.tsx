@@ -71,7 +71,7 @@ import { PULL_REQUEST_CHIP_CLASS, PullRequestChipContent, PullRequestHoverCard, 
 import { useCachedLinkFavicons } from "../../hooks/useLinkPreview";
 import { canLoadLinkFavicon, preloadLinkFavicon } from "../../lib/link-preload";
 import { ChatPathMenu, ChatPathMenuContext } from "../ChatPathMenu";
-import { ArtifactLinkPreviewCard, SessionLinkPreviewCard } from "../SessionLinkPreviewCard";
+import { ArtifactLinkPreviewCard, SessionLinkPreviewCard, type SessionLinkPreview } from "../SessionLinkPreviewCard";
 import {
 	explicitWorkspaceFilePath,
 	createWorkspaceFileLookup,
@@ -479,6 +479,8 @@ type MarkdownLinkProps = {
 	node?: HastElement;
 	/** The link's text, where it is plain text; read from node otherwise. */
 	labelText?: string;
+	/** Where a session link's hover card opens, and an extra line it shows. */
+	preview?: SessionLinkPreview;
 };
 
 function MarkdownLink(props: MarkdownLinkProps) {
@@ -560,7 +562,7 @@ function InlineLinkFavicon({ href }: { href: string }) {
 	);
 }
 
-function MarkdownLinkTarget({ href, children, className, menuPath, node, labelText }: MarkdownLinkProps) {
+function MarkdownLinkTarget({ href, children, className, menuPath, node, labelText, preview }: MarkdownLinkProps) {
 	const safeOriginContent = useContext(SafeOriginContent);
 	const { sessionId, open: onLinkOpen, openFile: onFileOpen, openSession: onSessionLinkOpen, remoteHost, hostLocalLinks, sessionLinkHostId, sessionLinkSourceKind, workspacePaths, findFile } = useContext(OpenChatLink);
 	const filePath = href && onFileOpen
@@ -603,7 +605,7 @@ function MarkdownLinkTarget({ href, children, className, menuPath, node, labelTe
 			onFileOpen={onFileOpen}
 			hoverPreview={sessionLink
 				? () => isSessionLink(href!)
-					? <SessionLinkPreviewCard href={href!} sourceHostId={sessionLinkHostId} sourceKind={sessionLinkSourceKind} onOpen={onSessionLinkOpen && (() => onSessionLinkOpen(href!))} />
+					? <SessionLinkPreviewCard href={href!} sourceHostId={sessionLinkHostId} sourceKind={sessionLinkSourceKind} onOpen={onSessionLinkOpen && (() => onSessionLinkOpen(href!))} {...preview} />
 					: <ArtifactLinkPreviewCard href={href!} sourceHostId={sessionLinkHostId} sourceKind={sessionLinkSourceKind} />
 				: pullRequest
 					? () => <PullRequestHoverCard url={href!} onBrowserOpen={onLinkOpen} />
@@ -645,8 +647,8 @@ function MarkdownLinkTarget({ href, children, className, menuPath, node, labelTe
 }
 
 /** Render one safe in-app session or artifact link using the surrounding ChatLinkProvider. */
-export function SessionLabelLink({ href, children, className }: { href: string; children: ReactNode; className?: string }) {
-	return <MarkdownLink href={href} className={className}>{children}</MarkdownLink>;
+export function SessionLabelLink({ href, children, className, preview }: { href: string; children: ReactNode; className?: string; preview?: SessionLinkPreview }) {
+	return <MarkdownLink href={href} className={className} preview={preview}>{children}</MarkdownLink>;
 }
 
 function MarkdownImage({ src, alt }: { src?: string | Blob; alt?: string }) {
@@ -729,7 +731,7 @@ function MermaidFence({ code }: { code: string }) {
 }
 
 /** A path this chat can open in Files, and how to open it (at a line when given); undefined when it cannot. */
-function useWorkspaceFile(path: string | undefined) {
+export function useWorkspaceFile(path: string | undefined) {
 	const { openFile, findFile } = useContext(OpenChatLink);
 	const filePath = path && openFile ? findFile(path) : undefined;
 	if (!path || !filePath || !openFile) return undefined;

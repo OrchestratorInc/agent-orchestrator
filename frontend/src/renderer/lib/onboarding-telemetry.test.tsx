@@ -334,6 +334,12 @@ describe("onboarding action telemetry", () => {
 		]);
 	});
 
+	it("sends why a failed install failed", () => {
+		startOnboardingAction("gh_install", { target: "gh", step: "tools" });
+		finishOnboardingAction("gh_install", "failed", { target: "gh", reason: "install_failed", failureCause: "brew_missing" });
+		expect(capture).toHaveBeenCalledWith("ao.onboarding.action_finished", expect.objectContaining({ action: "gh_install", outcome: "failed", reason: "install_failed", failure_cause: "brew_missing" }));
+	});
+
 	it("does not finish an action that was never started", () => {
 		expect(finishOnboardingAction("gh_sign_in", "succeeded", { target: "gh" })).toBe(false);
 		expect(capture).not.toHaveBeenCalled();
@@ -342,6 +348,10 @@ describe("onboarding action telemetry", () => {
 	it("maps install job end states", () => {
 		expect(installJobOutcome("succeeded")).toEqual({ outcome: "succeeded" });
 		expect(installJobOutcome("failed")).toEqual({ outcome: "failed", reason: "install_failed" });
+		expect(installJobOutcome("failed", "permission_denied")).toEqual({ outcome: "failed", reason: "install_failed", failureCause: "permission_denied" });
+		// A cause this build does not know (a newer daemon's) is counted as other, never passed through.
+		expect(installJobOutcome("failed", "some_new_cause")).toEqual({ outcome: "failed", reason: "install_failed", failureCause: "other" });
+		expect(installJobOutcome("succeeded", "network")).toEqual({ outcome: "succeeded" });
 		expect(installJobOutcome("interrupted")).toEqual({ outcome: "failed", reason: "interrupted" });
 		expect(installJobOutcome("unsupported")).toEqual({ outcome: "failed", reason: "unsupported" });
 		expect(installJobOutcome("running")).toBeNull();
@@ -565,6 +575,12 @@ describe("onboarding Sentry reports", () => {
 		startOnboardingAction("gh_install", { target: "gh", step: "tools" });
 		finishOnboardingAction("gh_install", "failed", { target: "gh", reason: "lost_contact" });
 		expect(sentry.failure.mock.calls.at(-1)).toEqual(["gh_install", "lost_contact", "gh"]);
+	});
+
+	it("passes a failed install's cause to Sentry", () => {
+		startOnboardingAction("agent_install", { target: "opencode", step: "tools" });
+		finishOnboardingAction("agent_install", "failed", { target: "opencode", reason: "install_failed", failureCause: "network" });
+		expect(sentry.failure.mock.calls).toEqual([["agent_install", "install_failed", "opencode", "network"]]);
 	});
 
 	it("sends nothing for an attempt that succeeded, was cancelled or timed out", () => {

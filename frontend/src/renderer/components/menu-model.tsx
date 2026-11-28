@@ -1,7 +1,9 @@
-import { createContext, Fragment, useContext, type ComponentType, type ReactNode } from "react";
+import { createContext, Fragment, useContext, useEffect, type ComponentType, type ReactNode } from "react";
 import type { AppShortcutId } from "../../shared/shortcuts";
+import { newDesktopUiEnabled } from "../lib/new-desktop-ui";
 import { isMacPlatform } from "../lib/platform";
 import { cn } from "../lib/utils";
+import { useUiStore } from "../stores/ui-store";
 import { actionMenuDestructiveItemClass } from "./ui/menu-styles";
 import {
 	ContextMenuItem,
@@ -36,6 +38,8 @@ export type MenuEntry =
 			shortcut?: string;
 			/** An app shortcut's key hint, honouring custom keybindings. */
 			shortcutId?: AppShortcutId;
+			/** One letter that runs this row while its menu is open, shown as the row's hint. */
+			accelerator?: string;
 			/** A muted trailing count in the hint column; give `ariaLabel` the spoken form. */
 			count?: number;
 			disabled?: boolean;
@@ -63,6 +67,8 @@ type ItemProps = {
 	disabled?: boolean;
 	title?: string;
 	"aria-label"?: string;
+	"aria-keyshortcuts"?: string;
+	"data-menu-accelerator"?: string;
 	onSelect?: (event: Event) => void;
 	children?: ReactNode;
 };
@@ -130,9 +136,44 @@ function AppShortcutHint({ id }: { id: AppShortcutId }) {
 	return keys ? <Shortcut aria-hidden="true">{keys.join(isMacPlatform() ? "" : "+")}</Shortcut> : null;
 }
 
+/**
+ * A row's letter runs it while its menu holds focus, as a press would: the
+ * row is clicked, so selection, closing and focus return stay the menu's own.
+ * Only rows of the menu the key came from count, never a parent's or a
+ * submenu's, and a field inside the menu keeps its typing.
+ */
+function runMenuAccelerator(event: KeyboardEvent) {
+	if (event.defaultPrevented || event.metaKey || event.ctrlKey || event.altKey || event.key.length !== 1) return;
+	const target = event.target instanceof Element ? event.target : null;
+	if (!target || target.closest("input, textarea, select, [contenteditable='true']")) return;
+	const menu = target.closest('[role="menu"]');
+	if (!menu) return;
+	const key = event.key.toLowerCase();
+	const row = [...menu.querySelectorAll<HTMLElement>(`[data-menu-accelerator="${CSS.escape(key)}"]`)].find(
+		(element) => element.closest('[role="menu"]') === menu && !element.hasAttribute("data-disabled") && element.getAttribute("aria-disabled") !== "true",
+	);
+	if (!row) return;
+	event.preventDefault();
+	event.stopPropagation();
+	row.click();
+}
+
+function useMenuAccelerators(entries: MenuEntry[], enabled: boolean) {
+	const active = enabled && entries.some((entry) => entry.kind === "item" && entry.accelerator);
+	useEffect(() => {
+		if (!active) return;
+		// Capture, so the letter is not first taken by the menu's type-to-find.
+		document.addEventListener("keydown", runMenuAccelerator, true);
+		return () => document.removeEventListener("keydown", runMenuAccelerator, true);
+	}, [active]);
+}
+
 /** Renders entries with the surrounding menu's primitives. */
 export function MenuEntries({ entries }: { entries: MenuEntry[] }) {
 	const kit = useMenuKit();
+	// Letter keys are part of the Interface v2 preview; without it rows show no letters.
+	const lettersOn = useUiStore(newDesktopUiEnabled);
+	useMenuAccelerators(entries, lettersOn);
 	return (
 		<>
 			{tidyMenuEntries(entries).map((entry) => {
@@ -153,12 +194,20 @@ export function MenuEntries({ entries }: { entries: MenuEntry[] }) {
 								</kit.SubContent>
 							</kit.Sub>
 						);
-					case "item":
+					case "item": {
+						const accelerator = lettersOn ? entry.accelerator : undefined;
 						return (
 							<kit.Item
 								key={entry.id}
 								aria-label={entry.ariaLabel}
-								className={cn(entry.destructive && actionMenuDestructiveItemClass)}
+								aria-keyshortcuts={accelerator?.toUpperCase()}
+								data-menu-accelerator={accelerator?.toLowerCase()}
+								className={cn(
+									entry.destructive && actionMenuDestructiveItemClass,
+									// A disabled row normally ignores the pointer; one that explains why
+									// takes it back so its tooltip shows. Radix still won't select it.
+									entry.disabled && entry.title && "data-[disabled]:pointer-events-auto",
+								)}
 								disabled={entry.disabled || !entry.onSelect}
 								onSelect={entry.onSelect ? () => entry.onSelect?.() : undefined}
 								title={entry.title}
@@ -170,13 +219,16 @@ export function MenuEntries({ entries }: { entries: MenuEntry[] }) {
 										<span className="text-xs text-muted-foreground">{entry.description}</span>
 									</span>
 								) : (
-									entry.label
+									// A fixed-width menu truncates a long label instead of growing.
+									<span className="min-w-0 truncate">{entry.label}</span>
 								)}
 								{entry.shortcut ? <kit.Shortcut aria-hidden="true">{entry.shortcut}</kit.Shortcut> : null}
 								{!entry.shortcut && entry.shortcutId ? <AppShortcutHint id={entry.shortcutId} /> : null}
+								{!entry.shortcut && !entry.shortcutId && accelerator ? <kit.Shortcut aria-hidden="true">{accelerator.toUpperCase()}</kit.Shortcut> : null}
 								{entry.count !== undefined ? <kit.Shortcut aria-hidden="true">{entry.count}</kit.Shortcut> : null}
 							</kit.Item>
 						);
+					}
 				}
 			})}
 		</>

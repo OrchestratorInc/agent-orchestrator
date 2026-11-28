@@ -45,7 +45,12 @@ export function useApplyEffortDefault(
 		if (disabled) return;
 		if (initialContext.current === undefined) initialContext.current = context;
 		else if (context !== initialContext.current) contextChanged.current = true;
-		if (!value) return;
+		if (!value) {
+			// "Use agent model" clears the context; a later pick of the same model
+			// must apply its fallback again. Keep the key when only effort is cleared.
+			if (!context) applied.current = undefined;
+			return;
+		}
 		if (!applyOnMount && !contextChanged.current) return;
 		const key = JSON.stringify([context, value]);
 		if (applied.current === key) return;

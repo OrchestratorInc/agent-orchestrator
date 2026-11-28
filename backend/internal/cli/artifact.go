@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/url"
 	"os"
+	"path/filepath"
 	"strings"
 
 	"github.com/spf13/cobra"
@@ -17,7 +18,8 @@ import (
 const maxListedRootFiles = 5
 
 type artifactRegisterRequest struct {
-	Paths []string `json:"paths"`
+	Paths      []string `json:"paths"`
+	WorkingDir string   `json:"workingDir,omitempty"`
 }
 
 type artifactRegisterResponse struct {
@@ -39,7 +41,9 @@ func newArtifactCommand(ctx *commandContext) *cobra.Command {
 		Long: "Register files or bundle directories in this session's artifact directory as\n" +
 			"its deliverables. Only registered files are listed as artifacts. Other files\n" +
 			"stay in the directory, so links between them keep working.\n\n" +
-			"A path is absolute, or relative to the artifact directory. Run this once per\n" +
+			"A path is absolute, or relative to the artifact directory. Run from a folder\n" +
+			"inside the artifact directory, a relative path is read from that folder when\n" +
+			"the file is there. A leading ~ is your home folder. Run this once per\n" +
 			"path, not after every edit. A file renamed or moved inside the directory stays\n" +
 			"registered; a copy is a new file.",
 		Example: `  ao artifact add report.html
@@ -57,18 +61,43 @@ func (c *commandContext) artifactAdd(ctx context.Context, out io.Writer, paths [
 	if sessionID == "" {
 		return usageError{errors.New("usage: AO_SESSION_ID is required")}
 	}
-	for _, path := range paths {
+	home, _ := os.UserHomeDir()
+	expanded := make([]string, len(paths))
+	for i, path := range paths {
 		if strings.TrimSpace(path) == "" {
 			return usageError{errors.New("usage: paths must be non-empty")}
 		}
+		expanded[i] = expandHome(path, home)
 	}
+	// The daemon reads a relative path from here only when this folder is
+	// inside the session's artifact directory; elsewhere it ignores it.
+	workingDir, _ := os.Getwd()
 	var response artifactRegisterResponse
 	path := "sessions/" + url.PathEscape(sessionID) + "/artifact-registrations"
-	if err := c.postJSON(ctx, path, artifactRegisterRequest{Paths: paths}, &response); err != nil {
+	if err := c.postJSON(ctx, path, artifactRegisterRequest{Paths: expanded, WorkingDir: workingDir}, &response); err != nil {
 		return err
 	}
 	_, err := io.WriteString(out, artifactAddSummary(response))
 	return err
+}
+
+// expandHome replaces a leading ~ with home. A shell expands it, but
+// PowerShell does not for a native command's arguments, so there the daemon
+// would otherwise look for a folder named ~ in the artifact directory.
+func expandHome(path, home string) string {
+	if home == "" {
+		return path
+	}
+	if path == "~" {
+		return home
+	}
+	if rest, ok := strings.CutPrefix(path, "~/"); ok {
+		return filepath.Join(home, rest)
+	}
+	if rest, ok := strings.CutPrefix(path, `~\`); ok {
+		return filepath.Join(home, rest)
+	}
+	return path
 }
 
 // artifactAddSummary tells the agent what the user will and won't see. Files

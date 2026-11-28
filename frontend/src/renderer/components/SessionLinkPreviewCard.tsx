@@ -44,10 +44,20 @@ function relativeTime(timestamp: string | undefined, format: (key: "shell.update
 
 const SESSION_CARD_CLASS = "w-64 max-h-48 overflow-y-auto p-2";
 
-function LoadingCard() {
+/** Where a session link's card opens, and one extra line it shows under the status. */
+export type SessionLinkPreview = {
+	side?: "top" | "bottom";
+	align?: "start" | "center";
+	/** A line the link's own surface has no room for, clamped to two lines. */
+	detail?: string;
+};
+
+type CardPlacement = Pick<SessionLinkPreview, "side" | "align">;
+
+function LoadingCard({ side, align }: CardPlacement) {
 	const { t } = useTranslation();
 	return (
-		<HoverCardContent collisionPadding={8} sideOffset={6} className={SESSION_CARD_CLASS}>
+		<HoverCardContent collisionPadding={8} sideOffset={6} side={side} align={align} className={SESSION_CARD_CLASS}>
 			<div role="status" aria-label={t("session.statusChecking")} className="flex items-center gap-2">
 				<Skeleton className="size-6 shrink-0 rounded-md" />
 				<div className="min-w-0 flex-1 space-y-1.5"><Skeleton className="h-3 w-32" /><Skeleton className="h-2.5 w-24" /></div>
@@ -56,19 +66,19 @@ function LoadingCard() {
 	);
 }
 
-function UnavailableCard() {
+function UnavailableCard({ side, align }: CardPlacement) {
 	const { t } = useTranslation();
 	return (
-		<HoverCardContent collisionPadding={8} sideOffset={6} className={SESSION_CARD_CLASS}>
+		<HoverCardContent collisionPadding={8} sideOffset={6} side={side} align={align} className={SESSION_CARD_CLASS}>
 			<p role="status" className="text-xs font-medium text-foreground">{t("session.statusUnavailable")}</p>
 		</HoverCardContent>
 	);
 }
 
-function ErrorCard() {
+function ErrorCard({ side, align }: CardPlacement) {
 	const { t } = useTranslation();
 	return (
-		<HoverCardContent collisionPadding={8} sideOffset={6} className={SESSION_CARD_CLASS}>
+		<HoverCardContent collisionPadding={8} sideOffset={6} side={side} align={align} className={SESSION_CARD_CLASS}>
 			<div role="alert" className="space-y-0.5">
 				<p className="text-xs font-medium text-foreground">{t("session.statusUnavailable")}</p>
 				<p className="text-caption leading-4 text-muted-foreground">{t("shell.couldNotLoadSessions")}</p>
@@ -101,7 +111,7 @@ function compactPRStatus(
 		: { label: t("pr.card.open"), tone: "neutral" };
 }
 
-function SessionCardBody({ session }: { session: WorkspaceSession }) {
+function SessionCardBody({ session, detail }: { session: WorkspaceSession; detail?: string }) {
 	const { t } = useTranslation();
 	const prs = useMemo(() => sessionPRDisplaySummaries(session), [session]);
 	const status = session.statusReadiness === "unavailable"
@@ -126,6 +136,7 @@ function SessionCardBody({ session }: { session: WorkspaceSession }) {
 				<span className="min-w-0 truncate font-medium text-popover-foreground">{status}</span>
 				<span className="ml-auto shrink-0 text-xs text-muted-foreground">{relativeTime(session.updatedAt, t)}</span>
 			</div>
+			{detail ? <p className="line-clamp-2 text-xs leading-[1.45] text-muted-foreground">{detail}</p> : null}
 			{prs.length > 0 && (
 				<div className="border-t border-border pt-1.5">
 					<p className="sr-only">{t("pr.count", { count: prs.length })}</p>
@@ -153,13 +164,16 @@ export function SessionLinkPreviewCard({
 	sourceHostId,
 	sourceKind,
 	onOpen,
+	side,
+	align,
+	detail,
 }: {
 	href: string;
 	sourceHostId?: string;
 	sourceKind?: "cloud";
 	/** Opens the session through the same path as clicking the link itself. */
 	onOpen?: () => void;
-}) {
+} & SessionLinkPreview) {
 	const target = parseSessionLink(href);
 	const source = useSessionLinkSource(sourceHostId, sourceKind);
 	const workspace = target ? source.workspaces.find((candidate) => candidate.id === target.projectId) : undefined;
@@ -171,19 +185,21 @@ export function SessionLinkPreviewCard({
 			<HoverCardContent
 				collisionPadding={8}
 				sideOffset={6}
+				side={side}
+				align={align}
 				className={cn(SESSION_CARD_CLASS, onOpen && "cursor-pointer transition-colors hover:bg-accent")}
 				onClick={onOpen ? () => {
 					dismiss();
 					onOpen();
 				} : undefined}
 			>
-				<SessionCardBody session={session} />
+				<SessionCardBody session={session} detail={detail} />
 			</HoverCardContent>
 		);
 	}
-	if (source.isLoading) return <LoadingCard />;
-	if (source.isError) return <ErrorCard />;
-	return <UnavailableCard />;
+	if (source.isLoading) return <LoadingCard side={side} align={align} />;
+	if (source.isError) return <ErrorCard side={side} align={align} />;
+	return <UnavailableCard side={side} align={align} />;
 }
 
 const ARTIFACT_EXCERPT_CHARS = 480;

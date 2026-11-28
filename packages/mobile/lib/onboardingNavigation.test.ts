@@ -27,6 +27,20 @@ describe("completeOnboarding", () => {
 		expect(pair).toContain("else backOr(router);");
 	});
 
+	// Both ways of pairing complete the funnel: the scan here, the manual page
+	// itself (it reports even when the person left it while it connected).
+	it("reports a completed onboarding for a scan and for a manual connection", () => {
+		const pair = readFileSync(fileURLToPath(new URL("../app/pair.tsx", import.meta.url)), "utf8");
+		expect(pair).toMatch(/method: "qr", from_onboarding: fromOnboarding \}\);[\s\S]*?if \(fromOnboarding\) mobileTelemetry\(\)\?\.capture\(MOBILE_EVENTS\.onboardingCompleted\);/);
+		expect(pair).toContain("connectRoute(() => void finish(), repairHost?.id, fromOnboarding)");
+		const connect = readFileSync(fileURLToPath(new URL("../app/connect.tsx", import.meta.url)), "utf8");
+		const onConnected = connect.slice(connect.indexOf("onConnected={() => {"));
+		const report = onConnected.indexOf("MOBILE_EVENTS.onboardingCompleted");
+		expect(report).toBeGreaterThan(0);
+		// Before the early return for a page the person already left.
+		expect(report).toBeLessThan(onConnected.indexOf("if (!navigation.isFocused()) return;"));
+	});
+
 	it("is used after signing in from onboarding brings in a machine", () => {
 		const onboarding = readFileSync(fileURLToPath(new URL("../app/onboarding.tsx", import.meta.url)), "utf8");
 		expect(onboarding).toContain('title="Sign in"');

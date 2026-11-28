@@ -1,9 +1,7 @@
 import { isLoopbackHost } from "../../shared/browser-site-block";
+import { isLoopbackHostname } from "../../shared/telemetry-text";
 
-export function isLoopbackHostname(value: string): boolean {
-	const hostname = value.toLowerCase().replace(/^\[(.*)\]$/, "$1");
-	return hostname === "localhost" || hostname.endsWith(".localhost") || hostname === "127.0.0.1" || hostname === "::1";
-}
+export { isLoopbackHostname };
 
 // A web link that names the machine it runs on: for a remote session, the
 // remote host's, which the desktop can't reach under that name.

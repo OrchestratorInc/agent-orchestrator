@@ -1,5 +1,5 @@
 import { ONBOARDING_STEPS, onboardingStepIndex, type OnboardingStep } from "./onboarding-steps";
-import { ONBOARDING_ACTIONS, ONBOARDING_FAILURE_REASONS } from "../../shared/onboarding-failures";
+import { ONBOARDING_ACTIONS, ONBOARDING_FAILURE_CAUSES, ONBOARDING_FAILURE_REASONS } from "../../shared/onboarding-failures";
 
 // The onboarding funnel's closed vocabulary and its per-event property
 // allowlist. telemetry.ts hands every ao.onboarding.* event here, so a value
@@ -11,8 +11,8 @@ import { ONBOARDING_ACTIONS, ONBOARDING_FAILURE_REASONS } from "../../shared/onb
 // actions and failure reasons live in shared/ so Electron main's Sentry
 // allowlist reads the same lists.
 
-export { ONBOARDING_ACTIONS, ONBOARDING_FAILURE_REASONS };
-export type { OnboardingAction, OnboardingFailureReason } from "../../shared/onboarding-failures";
+export { ONBOARDING_ACTIONS, ONBOARDING_FAILURE_CAUSES, ONBOARDING_FAILURE_REASONS };
+export type { OnboardingAction, OnboardingFailureCause, OnboardingFailureReason } from "../../shared/onboarding-failures";
 
 export const ONBOARDING_RUN_KINDS = ["first_run", "replay"] as const;
 export type OnboardingRunKind = (typeof ONBOARDING_RUN_KINDS)[number];
@@ -206,6 +206,8 @@ export function sanitizeOnboardingProperties(event: string, properties?: Propert
 			}
 			set(safe, "outcome", oneOf(p?.outcome, ONBOARDING_ACTION_OUTCOMES));
 			set(safe, "reason", oneOf(p?.reason, ONBOARDING_FAILURE_REASONS));
+			// Only with install_failed: why the install job failed, from the daemon's closed list.
+			if (safe.reason === "install_failed") set(safe, "failure_cause", oneOf(p?.failure_cause, ONBOARDING_FAILURE_CAUSES));
 			if (typeof p?.error_code === "string" && ERROR_CODE_PATTERN.test(p.error_code)) safe.error_code = p.error_code;
 			set(safe, "duration_ms", duration(p?.duration_ms));
 			break;

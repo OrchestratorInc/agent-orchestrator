@@ -11,6 +11,7 @@ import { DevicePanel } from "./DevicePanel";
 import { useDevicesEnabled } from "../lib/devices-enabled";
 import { AppLink } from "./AppLink";
 import { buildReviewBlocks, type ReviewComment, type ReviewPRBlock } from "../lib/review-comments";
+import { reviewCommentsWorkerMessage, reviewCommentWorkerMessage } from "../../../../packages/shared/review/review-messages";
 import { ReviewCommentsSection, type ReviewCommentActions } from "./review/ReviewComments";
 import { ArtifactThumbnail } from "./ArtifactThumbnail";
 import type { ArtifactRow } from "../lib/artifacts";
@@ -85,7 +86,6 @@ import { useCloudCp } from "../hooks/useCloudCp";
 import { cloudWorkspaceReviewSummaryQueryOptions } from "../hooks/useCloudWorkspaceReview";
 import { useCloudWorkspaceReady } from "../hooks/useCloudWorkspaceReady";
 import { useSendToSessionWorker } from "../hooks/useSendToSessionWorker";
-import { sanitizeWorkerMessagePart } from "../lib/worker-message";
 import { pendingMergeRequestFor, useMergeRequestActions, useProjectMergeRequests } from "../hooks/useProjectMergeRequests";
 import { useSessionBrowserLink } from "../hooks/useSessionBrowserLink";
 import { clearTerminateSessionState, useTerminateSession } from "../hooks/useTerminateSession";
@@ -312,10 +312,12 @@ export const SessionInspector = memo(function SessionInspector({
 	// local worker sessions only until remote and cloud providers exist, and
 	// only with Developer mode on.
 	const deviceAvailable = devicesEnabled && session !== undefined && !session.cloud && !hostId && !orchestrator;
-	// The orchestrator's rail also offers its chat's Subagents panel while it lists
-	// any, and Background tasks once its composer strip has opened one.
+	// The orchestrator's rail also offers its chat's Side chat and Subagents panels
+	// while the host passes them, and Background tasks once its composer strip has
+	// opened one. Its chat accepts /btw, so Side chat must be able to open here.
 	const availableViewDefs = orchestrator ? VIEW_DEFS.filter((entry) =>
 		entry.id === "summary" || entry.id === "browser"
+		|| (entry.id === "sideChat" && sideChatView !== undefined)
 		|| (entry.id === "subagents" && subagentsView !== undefined)
 		|| (entry.id === "task" && Boolean(taskTabs?.length))
 		|| (entry.id === "artifacts" && ((session?.artifactFiles?.length ?? 0) > 0 || artifactRequestPending)))
@@ -561,9 +563,11 @@ const SummaryView = memo(function SummaryView({
 	const prView = usePRViewEnabled();
 	return (
 		<SessionInspectorSummaryView
-			activity={
+			// Activity is hidden for now. To restore it, uncomment these two props:
+			// activity={<ActivityTimeline hostId={hostId} prs={prSummaries} session={session} />}
+			// activityTitle={t("inspector.activity")}
+			footer={
 				<>
-					<ActivityTimeline hostId={hostId} prs={prSummaries} session={session} />
 					<SessionAccountSummary session={session} hostId={hostId} />
 					<ResumeAgentControl
 						className="w-full"
@@ -573,7 +577,6 @@ const SummaryView = memo(function SummaryView({
 					/>
 				</>
 			}
-			activityTitle={t("inspector.activity")}
 			artifactCards={
 				hasArtifacts ? <ArtifactSummaryList artifacts={artifacts} onOpenArtifact={onOpenArtifact} previewLive={inspectorVisible} session={session} /> : undefined
 			}
@@ -1643,7 +1646,7 @@ type SortableTimelineEvent = InspectorTimelineEvent & { sortTime: number };
 // ponytail: newest 5 commits only; a "show all" control when long sessions need it.
 const TIMELINE_COMMIT_LIMIT = 5;
 
-function ActivityTimeline({ hostId, prs, session }: { hostId?: string; prs: SessionPRSummary[]; session: WorkspaceSession }) {
+export function ActivityTimeline({ hostId, prs, session }: { hostId?: string; prs: SessionPRSummary[]; session: WorkspaceSession }) {
 	// Keyed on the daemon's commit count, not the shared history query that every
 	// file edit invalidates, so only a new commit refetches.
 	const commitCount = session.branchState?.commits ?? 0;
@@ -2584,35 +2587,6 @@ function MergedReviewsSection({
 	);
 }
 
-/** One comment as the worker reads it: who, where, what, and a link back. */
-function reviewCommentWorkerMessage(comment: ReviewComment, block: ReviewPRBlock): string {
-	const reviewerId = comment.source === "orchestrator" ? comment.harness || "reviewer" : comment.author;
-	if (comment.kind === "inline") {
-		return formatInlineReviewCommentMessage({ body: comment.body, file: comment.file, line: comment.line, reviewerId, url: comment.url });
-	}
-	return formatReviewSummaryMessage({
-		body: comment.body,
-		pullRequestUrl: block.webUrl,
-		reviewerId,
-		source: comment.source === "orchestrator" ? "agent" : "external",
-		url: comment.url,
-	});
-}
-
-/** A PR's open comments in one message, so the worker takes them as one round. */
-function reviewCommentsWorkerMessage(block: ReviewPRBlock, comments: ReviewComment[]): string {
-	const lines = [
-		`Pull request #${block.number} has ${comments.length} open review ${comments.length === 1 ? "comment" : "comments"}. Address the actionable ones, run the relevant tests, commit the fixes, and push the branch.`,
-	];
-	comments.forEach((comment, index) => {
-		const reviewer = sanitizeWorkerMessagePart(comment.source === "orchestrator" ? `Orchestrator review (${comment.harness || "reviewer"})` : `@${comment.author}`);
-		const location = comment.file ? sanitizeWorkerMessagePart(`${comment.file}${comment.line ? `:${comment.line}` : ""}`) : comment.kind === "summary" ? "review summary" : "general PR comment";
-		lines.push("", `${index + 1}. ${reviewer} · ${location}`, sanitizeWorkerMessagePart(comment.body.trim() || "No comment body provided."));
-		if (comment.url) lines.push(`URL: ${sanitizeWorkerMessagePart(comment.url)}`);
-	});
-	return lines.join("\n");
-}
-
 function buildReviewerAgentConfig(
 	existing: WorkspaceSession["reviewerConfig"] | undefined,
 	model: string,
@@ -2627,43 +2601,6 @@ function buildReviewerAgentConfig(
 	if (effort) next.effort = effort;
 	else delete next.effort;
 	return Object.keys(next).length > 0 ? next : undefined;
-}
-
-function formatInlineReviewCommentMessage(comment: { body?: string; file?: string; line?: number; reviewerId?: string; url?: string }): string {
-	const reviewer = sanitizeWorkerMessagePart(comment.reviewerId?.trim() || "unknown reviewer");
-	const file = sanitizeWorkerMessagePart(comment.file?.trim() || "");
-	const location = file ? `${file}${comment.line ? `:${comment.line}` : ""}` : "general PR comment";
-	const body = sanitizeWorkerMessagePart(comment.body?.trim() || "No comment body provided.");
-	const url = sanitizeWorkerMessagePart(comment.url?.trim() || "");
-	const lines = [
-		`A reviewer left an unresolved inline comment on your PR. Address it, commit the fix, and push the branch to GitHub.`,
-		"",
-		`Reviewer: @${reviewer}`,
-		`Location: ${location}`,
-		"",
-		"Comment:",
-		body,
-	];
-	if (url) {
-		lines.push("", `Comment URL: ${url}`);
-	}
-	lines.push("", "You should not need to re-fetch review data unless you need additional context beyond what Orchestrator has provided here.");
-	return lines.join("\n");
-}
-
-function formatReviewSummaryMessage(summary: { body: string; pullRequestUrl?: string; reviewerId: string; source: "agent" | "external"; url?: string | null }): string {
-	const reviewer = sanitizeWorkerMessagePart(summary.reviewerId.trim() || "reviewer");
-	const body = sanitizeWorkerMessagePart(summary.body.trim());
-	const url = sanitizeWorkerMessagePart((summary.url || summary.pullRequestUrl || "").trim());
-	const source = summary.source === "agent" ? "Orchestrator review" : "external PR review";
-	const lines = [
-		`An ${source} from ${reviewer} has feedback for your pull request. Address the actionable items, run relevant tests, commit the fixes, and push the branch.`,
-		"",
-		"Review summary:",
-		body,
-	];
-	if (url) lines.push("", `Review URL: ${url}`);
-	return lines.join("\n");
 }
 
 function projectConfig(project: components["schemas"]["ProjectOrDegraded"] | undefined): ProjectConfig | undefined {
@@ -2836,6 +2773,7 @@ function ReviewPanel({
 									>
 										<SelectTrigger
 											aria-label={t("inspector.selectReviewerAgent")}
+											data-field="compact"
 											className="h-control-md max-w-[11rem] text-xs"
 											size="sm"
 										>

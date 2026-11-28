@@ -78,6 +78,36 @@ func ParseRepositoryIdentity(raw string) (RepositoryIdentity, error) {
 	return RepositoryIdentity{Provider: provider, Host: strings.ToLower(u.Host), Namespace: strings.Join(parts[:len(parts)-1], "/"), Name: parts[len(parts)-1]}, nil
 }
 
+// RepositoryKey names a repository the same way however its remote is
+// written, as AO Cloud's repoKey does: https, http or SSH (also git@host:path),
+// with or without a trailing / or .git, the host lower-cased without a port
+// or a leading "www.", GitHub's SSH-over-HTTPS host ssh.github.com as
+// github.com, then /namespace/name; the whole key lower-cased on GitHub,
+// whose names ignore case. It is "" when raw is not a repository URL.
+func RepositoryKey(raw string) string {
+	id, err := ParseRepositoryIdentity(strings.TrimSpace(raw))
+	if err != nil {
+		return ""
+	}
+	key := repositoryKeyHost(id.Host) + "/" + id.Namespace + "/" + id.Name
+	if id.Provider == "github" {
+		key = strings.ToLower(key)
+	}
+	return key
+}
+
+// repositoryKeyHost is a remote's host as every way of writing it names it.
+func repositoryKeyHost(host string) string {
+	if name, _, err := net.SplitHostPort(host); err == nil {
+		host = name
+	}
+	host = strings.TrimPrefix(strings.ToLower(host), "www.")
+	if host == "ssh.github.com" {
+		host = "github.com"
+	}
+	return host
+}
+
 // ValidateCanonicalRepository keeps an explicitly selected upstream on the
 // checkout's provider and host. Empty canonical identity preserves origin-only claims.
 func (c ProjectConfig) ValidateCanonicalRepository(origin string) error {

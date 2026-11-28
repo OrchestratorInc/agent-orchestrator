@@ -44,6 +44,14 @@ Project configuration has typed fields for the base branch, session prefix, envi
 
 See [Projects](/configuration/projects) for the current field reference.
 
+## Share skills between agents
+
+Agents look for skills (`SKILL.md` folders) in different places, so a skill written for one is often missing from another. Turn on **Settings > General > Share skills between agents** to give every agent the skills in `~/.agents/skills`, `~/.claude/skills`, and `~/.codex/skills` that it does not load itself. It is off by default, works only inside Orchestrator, and changes no agent's own configuration or skill folders. Open sessions follow when they next resume.
+
+Agents that can load a folder for one session (Antigravity, Claude Code chats, Codex chats) get the skills as their own. Other agents are told where to find the list. In any chat, the missing skills also appear in the `/` menu, and starting a message with one sends its instructions. A skill of the same name in the repository always comes first.
+
+A skill that depends on one agent's tools or MCP servers appears in the others but may not work there, and an agent may ask before it reads a skill's files outside the worktree.
+
 ## Daemon environment
 
 The primary daemon listener is always loopback-only and unauthenticated. Its bind host is not configurable. Useful environment variables include:
@@ -71,7 +79,7 @@ Choose the default for new sessions in **Settings → General**. A choice made f
 
 Project `agentConfig.mode` selects a provider execution mode. It does not select Chat or Terminal UI. Choose the interface in the new-session flow or with `ao spawn --mode chat|tui`. Compatible Claude Code and Codex sessions can switch interfaces without changing the Orchestrator session or worktree.
 
-Manage recurring tasks in **Automations**, reusable project actions in **Cues**, installed provider readiness in **Settings → Harness**, and persistent profiles/imports in **Settings → Browser**. These features have their own settings/resources rather than legacy YAML keys.
+Manage recurring tasks in **Automations**, reusable project actions in **Cues**, installed provider readiness in **Settings → Agents**, and persistent profiles/imports in **Settings → Browser**. These features have their own settings/resources rather than legacy YAML keys.
 
 <Cards>
 	<Card title="Projects" href="/configuration/projects" description="Configure one project and its session roles." />

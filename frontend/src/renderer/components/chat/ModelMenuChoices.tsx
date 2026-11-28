@@ -1,12 +1,13 @@
 import { Search } from "@/components/app-icons";
 import { useCallback, useId, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type KeyboardEvent, type ReactNode } from "react";
-import { useEdgeFade } from "../../hooks/useEdgeFade";
 import { useTranslation } from "react-i18next";
 import { cn } from "../../lib/utils";
 
 const INITIAL_VISIBLE_COUNT = 100;
 const MAX_SEARCH_RESULTS = 50;
 const BATCH_SIZE = 50;
+// A settings row under the list.
+const FOOTER_ROW = '[role^="menuitem"]:not([data-disabled])';
 // The height held while open, capped by the room Radix leaves the menu less the menu surface's
 // padding and border, so it can never hold the menu taller than the window allows.
 const HELD_HEIGHT_CLASS = "min-h-[min(var(--model-menu-held,0px),calc(var(--radix-dropdown-menu-content-available-height,100vh)-var(--space-2)-2px))]";
@@ -40,10 +41,10 @@ export function ModelMenuChoices<T extends { id: string; label: string }>({
 	browseKey?: string;
 	/**
 	 * Rows to show before the list scrolls, so a long catalog does not stretch the menu.
-	 * Unset takes the pane's own max height. The count includes any rows above the list, such as favourites.
+	 * Unset takes the pane's own max height. The count includes any rows above the list.
 	 */
 	rows?: number;
-	/** Of `rows`, the ones a search hides (favourites above the list), left out of a search's cap. */
+	/** Of `rows`, the ones a search hides (rows above the list), left out of a search's cap. */
 	searchHidesRows?: number;
 	/**
 	 * Controls between the search and the list, such as the agent rail. Up and Shift+Tab
@@ -111,7 +112,7 @@ export function ModelMenuChoices<T extends { id: string; label: string }>({
 	const headerRef = useRef<HTMLDivElement>(null);
 	const footerRef = useRef<HTMLDivElement>(null);
 	// A search hides the header, and the list takes its room as one more row. Rows it hides above
-	// the list (favourites) leave its cap, so a long list of matches scrolls rather than growing.
+	// the list leave its cap, so a long list of matches scrolls rather than growing.
 	const showHeader = Boolean(header) && !normalizedQuery;
 	const listRows = rows === undefined ? undefined
 		: normalizedQuery ? Math.max(1, rows - searchHidesRows) + (header ? 1 : 0)
@@ -119,7 +120,7 @@ export function ModelMenuChoices<T extends { id: string; label: string }>({
 	// A row is the menu item's text line plus its py-1.5, with the surface's 1px gap between rows.
 	// The pane's basis is that height whatever it lists, so a search with no matches never shrinks the
 	// menu under the pointer. It grows into room the held height below leaves it, and shrinks only
-	// when the menu has no room for it (many favourites in a short window), scrolling as it does.
+	// when the menu has no room for it (many rows above the list in a short window), scrolling as it does.
 	// It keeps two rows even then: past that the menu scrolls as a whole, so the list never closes up.
 	const rowCap = listRows === undefined
 		? undefined
@@ -148,7 +149,6 @@ export function ModelMenuChoices<T extends { id: string; label: string }>({
 			root.style.removeProperty("--model-menu-held");
 		};
 	}, [holdsHeight]);
-	useEdgeFade(scrollRef);
 	// The header's own tab stop (the rail's chosen agent), if it has one.
 	const focusHeader = () => {
 		const target = headerRef.current?.querySelector<HTMLElement>('[tabindex="0"]');
@@ -162,7 +162,7 @@ export function ModelMenuChoices<T extends { id: string; label: string }>({
 		const scroller = scrollRef.current;
 		const target = scroller?.querySelector<HTMLElement>('[role="menuitemradio"][aria-checked="true"]:not([data-disabled])')
 			?? scroller?.querySelector<HTMLElement>('[role^="menuitem"]:not([data-disabled])')
-			?? footerRef.current?.querySelector<HTMLElement>('[role^="menuitem"]:not([data-disabled])')
+			?? footerRef.current?.querySelector<HTMLElement>(FOOTER_ROW)
 			?? searchRef.current;
 		target?.focus();
 	};
@@ -205,7 +205,8 @@ export function ModelMenuChoices<T extends { id: string; label: string }>({
 				<div
 					// No inline padding: the field then shares the menu rows' silhouette,
 					// since their highlight spans the same content box.
-					className={cn("relative shrink-0 pb-1", searchable && !showHeader ? "mb-1 border-b border-border" : undefined)}
+					// Flush with the menu's top, its line running through the menu's padding to both edges.
+					className={cn("relative shrink-0", searchable ? "-mx-(--space-1) -mt-(--space-1) border-b border-border px-(--space-1)" : "pb-1")}
 					onClick={(event) => event.stopPropagation()}
 					onKeyDown={(event) => {
 						if (event.nativeEvent.isComposing) {
@@ -240,7 +241,7 @@ export function ModelMenuChoices<T extends { id: string; label: string }>({
 				>
 					<div className="relative">
 						<Search
-							className="pointer-events-none absolute left-3 top-1/2 size-icon-sm -translate-y-1/2 text-settings-muted"
+							className="pointer-events-none absolute left-1 top-1/2 size-icon-sm -translate-y-1/2 text-settings-muted"
 							aria-hidden="true"
 						/>
 						<input
@@ -253,7 +254,8 @@ export function ModelMenuChoices<T extends { id: string; label: string }>({
 							onFocus={() => setSearchFocused(true)}
 							onBlur={() => setSearchFocused(false)}
 							placeholder={searchPlaceholder ?? t("settings.models.searchPlaceholder")}
-							className="menu-search-input h-auto! rounded-[10px] py-[7px]! pl-8! text-xs!"
+							// No box or fill: the search is part of the menu's top, its icon at the start.
+							className="menu-search-input h-auto! rounded-none border-transparent! bg-transparent! py-[7px]! pl-6! text-xs!"
 						/>
 					</div>
 					{normalizedQuery ? (
@@ -266,7 +268,8 @@ export function ModelMenuChoices<T extends { id: string; label: string }>({
 			{showHeader && header ? (
 				<div
 					ref={headerRef}
-					className="shrink-0 border-b border-border pb-1 mb-1"
+					// Its line runs through the menu's padding to both edges.
+					className="-mx-(--space-1) mb-1 shrink-0 border-b border-border px-(--space-1) py-1"
 					// Kept from the composer's click-to-focus handler, as the search is.
 					onClick={(event) => event.stopPropagation()}
 					onKeyDown={(event) => {
@@ -290,12 +293,14 @@ export function ModelMenuChoices<T extends { id: string; label: string }>({
 				</div>
 			) : null}
 			<div
-				className={cn("relative grid min-h-0 grid-rows-[minmax(0,1fr)] overflow-hidden", rowCap ? "min-h-(--model-list-min) shrink grow basis-(--model-list-rows)" : "flex-1")}
+				// Out to the menu's edges, the list padded back in below: this box and the scroller clip what
+				// lies past them, so a line drawn through the menu's padding (a search group's) needs the room.
+				className={cn("relative -mx-(--space-1) grid min-h-0 grid-rows-[minmax(0,1fr)] overflow-hidden", rowCap ? "min-h-(--model-list-min) shrink grow basis-(--model-list-rows)" : "flex-1")}
 				style={rowCap}
 			>
 				<div
 					ref={scrollRef}
-					className="model-menu-scroll edge-fade min-h-0 overflow-y-auto overscroll-contain"
+					className="model-menu-scroll min-h-0 overflow-y-auto overscroll-contain px-(--space-1)"
 					onScroll={handleScroll}
 					onKeyDownCapture={(event) => {
 						// A submenu's keys bubble here through React, not the DOM; they are its own.
@@ -334,7 +339,7 @@ export function ModelMenuChoices<T extends { id: string; label: string }>({
 					onKeyDownCapture={(event) => {
 						// A submenu's keys bubble here through React, not the DOM; they are its own.
 						if (!event.currentTarget.contains(event.target as Node)) return;
-						const enabled = '[role^="menuitem"]:not([data-disabled])';
+						const enabled = FOOTER_ROW;
 						// Up from the first row goes to the list's last row through the menu's own focus,
 						// unless the list has none; Shift+Tab leaves for the header, as it does from the list.
 						const upward = event.key === "ArrowUp"

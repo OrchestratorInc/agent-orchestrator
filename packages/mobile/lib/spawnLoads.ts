@@ -21,6 +21,18 @@ export function nextConnectionEpoch(state: ConnectionEpoch, config: ServerConfig
 }
 
 /**
+ * The connection New task may send its own requests through: one its machine
+ * has answered a poll on (`open`), kept through a later failed poll on that
+ * same connection. A connection the app has just verified the identity of
+ * waits for the poll: its credential is not proven yet, and requests on one
+ * revoked while the phone was away would arm the machine's lockout.
+ */
+export function provenSpawnConfig(proven: ServerConfig | null, live: ServerConfig | null, connection: string): ServerConfig | null {
+	if (!live) return null;
+	return connection === "open" || live === proven ? live : null;
+}
+
+/**
  * Every agent's machine-wide models for one scope (a machine on one
  * connection). Only lists that loaded are kept: a failed agent is asked again
  * on the next load, and the ones that loaded are not.

@@ -181,6 +181,7 @@ function bootPage(fragment = "") {
 	const documentEvents = vi.spyOn(page, "addEventListener");
 	const windowEvents = new Map<string, (event: unknown) => void>();
 	const frames: Array<() => void> = [];
+	const timeouts: Array<() => void> = [];
 	const postMessage = vi.fn();
 	const host = { postMessage };
 	const observed: Element[] = [];
@@ -194,6 +195,8 @@ function bootPage(fragment = "") {
 		scrollTo: vi.fn(),
 		addEventListener: (name: string, callback: (event: unknown) => void) => windowEvents.set(name, callback),
 		requestAnimationFrame: (callback: () => void) => frames.push(callback),
+		setTimeout: (callback: () => void) => timeouts.push(callback),
+		clearTimeout: vi.fn(),
 		ResizeObserver: class {
 			constructor(callback: () => void) { onResize = callback; }
 			observe(element: Element) { observed.push(element); }
@@ -218,7 +221,7 @@ function bootPage(fragment = "") {
 		emitDocument("click", event);
 		return event;
 	};
-	return { page, view, history, observed, frames, postMessage, theme, context, click, emitDocument, windowEvents, resize: () => onResize() };
+	return { page, view, history, observed, frames, timeouts, postMessage, theme, context, click, emitDocument, windowEvents, resize: () => onResize() };
 }
 
 describe("render page bootstrap", () => {
@@ -311,5 +314,68 @@ describe("render page bootstrap", () => {
 		expect(page.postMessage).toHaveBeenLastCalledWith({ jsonrpc: "2.0", method: "ao/zoom", params: { action: "reset" } }, "*");
 		page.context({ zoom: 1 });
 		expect(page.page.documentElement.style.transform).toBe("");
+	});
+
+	it("reports its scroll to a host that asks, and goes back to a scroll the host restores", () => {
+		const page = bootPage();
+		// The restore scrolls with options (instant); the zoom with coordinates.
+		const scrollable = (height: number) => page.view.scrollTo.mockImplementation((to: number | { left: number; top: number }, y?: number) => {
+			page.view.scrollX = typeof to === "number" ? to : to.left;
+			page.view.scrollY = Math.min(typeof to === "number" ? y ?? 0 : to.top, height);
+		});
+		scrollable(10_000);
+		const scroll = () => page.windowEvents.get("scroll")?.({});
+		scroll();
+		expect(page.frames).toHaveLength(0);
+
+		// Asked, it reports where it is at once, even at its top.
+		page.context({ scrollReport: true });
+		expect(page.frames).toHaveLength(1);
+		page.frames.shift()!();
+		expect(page.postMessage).toHaveBeenLastCalledWith({ jsonrpc: "2.0", method: "ao/scroll", params: { x: 0, y: 0 } }, "*");
+		page.view.scrollY = 320;
+		scroll();
+		scroll();
+		expect(page.frames).toHaveLength(1);
+		page.frames.shift()!();
+		expect(page.postMessage).toHaveBeenLastCalledWith({ jsonrpc: "2.0", method: "ao/scroll", params: { x: 0, y: 320 } }, "*");
+
+		// Too short for the position yet: it waits for the page to lay out, and reports nothing on the way.
+		scrollable(400);
+		page.postMessage.mockClear();
+		page.context({ scrollTo: { x: 0, y: 900 } });
+		expect(page.view.scrollTo).toHaveBeenLastCalledWith({ left: 0, top: 900, behavior: "instant" });
+		expect(page.view.scrollY).toBe(400);
+		scroll();
+		expect(page.frames).toHaveLength(0);
+		scrollable(10_000);
+		page.resize();
+		page.frames.shift()!();
+		expect(page.view.scrollY).toBe(900);
+		page.frames.shift()!();
+		expect(page.postMessage).toHaveBeenLastCalledWith({ jsonrpc: "2.0", method: "ao/scroll", params: { x: 0, y: 900 } }, "*");
+
+		// The reader scrolling or pressing first ends a restore.
+		scrollable(400);
+		page.context({ scrollTo: { x: 0, y: 1200 } });
+		page.windowEvents.get("pointerdown")?.({});
+		page.view.scrollTo.mockClear();
+		page.resize();
+		for (const frame of page.frames.splice(0)) frame();
+		expect(page.view.scrollTo).not.toHaveBeenCalled();
+
+		// A page that never grows tall enough, or resizes, gives up on its own
+		// deadline: it reports again, and a later resize does not scroll it.
+		page.timeouts.length = 0;
+		page.context({ scrollTo: { x: 0, y: 1500 } });
+		expect(page.timeouts).toHaveLength(1);
+		page.postMessage.mockClear();
+		page.timeouts.shift()!();
+		page.frames.shift()!();
+		expect(page.postMessage).toHaveBeenLastCalledWith({ jsonrpc: "2.0", method: "ao/scroll", params: { x: 0, y: 400 } }, "*");
+		page.view.scrollTo.mockClear();
+		page.resize();
+		for (const frame of page.frames.splice(0)) frame();
+		expect(page.view.scrollTo).not.toHaveBeenCalled();
 	});
 });

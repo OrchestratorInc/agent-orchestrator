@@ -64,7 +64,7 @@ Not tested here: Grok Bot's own side (cards, routines, UpdateSkill) beyond what 
 |---|---|
 | An orchestrator can't be created when an old folder is left at its worktree path that git no longer tracks (`todo-app` here) | `provisionState: failed`; every message to it fails. The skill reports it |
 | `POST /sessions/<id>/send` returns a bare 500 when the agent controller is stopped | `steer-or-send` returns a clear `CHAT_CONTROLLER_NOT_READY` for the same case |
-| `ao pr merge <n>` posts an empty body, but the route requires `prUrl` and `expectedHeadSha` | The CLI merge fails with `INVALID_PR`. The skill sends the full body |
+| `ao pr merge <n>` posted an empty body, but the route requires `prUrl` and `expectedHeadSha` | The CLI merge failed with `INVALID_PR`. Fixed since: `ao pr merge` now requires `--url` and `--expected-head-sha`. The skill sends the full body |
 
 ## What AO could add to make this better
 

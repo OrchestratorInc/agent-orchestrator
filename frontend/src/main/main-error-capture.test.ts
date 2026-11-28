@@ -82,7 +82,8 @@ describe("main error capture", () => {
 		expect(sanitizeMainErrorCapture({ category: "made_up" as never, reason: "exited" })).toBeNull();
 		expect(sanitizeMainErrorCapture({ category: "daemon", reason: "made_up" as never })).toBeNull();
 		expect(sanitizeMainErrorCapture({ category: "daemon", reason: "exited", detail: "/Users/dave/secret" })).toEqual({ category: "daemon", reason: "exited" });
-		for (const detail of ["signal:SIGKILL", "code:1", "code:1:already_running", "code:-3", "channel:app:chooseDirectory", "kind:invalid-signature"]) {
+		expect(sanitizeMainErrorCapture({ category: "daemon", reason: "exited", detail: "code:12345678901" })).toEqual({ category: "daemon", reason: "exited" });
+		for (const detail of ["signal:SIGKILL", "code:1", "code:1:already_running", "code:-3", "code:3221225477:crashed", "code:-1073741819", "channel:app:chooseDirectory", "kind:invalid-signature"]) {
 			expect(sanitizeMainErrorCapture({ category: "daemon", reason: "exited", detail })?.detail).toBe(detail);
 		}
 	});
@@ -125,10 +126,12 @@ describe("daemon failure reporting", () => {
 		reportDaemonFailure({ state: "error", code: "exited" }, { state: "error", code: "exited" });
 		reportDaemonFailure({ state: "ready" }, { state: "error", code: "exited", exitCode: 7 });
 		reportDaemonFailure({ state: "ready" }, { state: "stopped", code: "exited", exitCode: 1, exitReason: "store_open_failed" });
+		reportDaemonFailure({ state: "ready" }, { state: "stopped", code: "exited", exitCode: 3221225477, exitReason: "crashed" });
 		expect(sink.mock.calls.map(([event]) => event)).toEqual([
 			{ category: "daemon", reason: "exited", detail: "signal:SIGKILL" },
 			{ category: "daemon", reason: "exited", detail: "code:7" },
 			{ category: "daemon", reason: "exited", detail: "code:1:store_open_failed" },
+			{ category: "daemon", reason: "exited", detail: "code:3221225477:crashed" },
 		]);
 	});
 	it("ignores normal and transitional states", () => {

@@ -6,6 +6,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
 	ActivityIndicator,
 	Alert,
+	Platform,
 	Pressable,
 	RefreshControl,
 	SectionList,
@@ -47,8 +48,10 @@ import { Button, Dot, EmptyState, ListSectionHeader } from "../../lib/ui";
 import { usePressFeedback } from "../../lib/pressFeedback";
 import { refreshControlColors } from "../../lib/refreshControlColors";
 import { toolbarIcon } from "../../lib/toolbarIcon";
+import { HeaderPillButton, PillHeaderRight } from "../../lib/headerPill";
 import { UnpairedState } from "../../lib/UnpairedState";
 import { iconSize, radius, space, stateOpacity, type } from "../../lib/tokens";
+import { useGlassBarInset } from "../../lib/useHeaderOverlap";
 import { userFacingError } from "../../lib/connectionError";
 import { ToastHost } from "../../lib/Toast";
 import type { ToastDuration } from "../../lib/Toast.types";
@@ -82,6 +85,9 @@ function NotificationsContent() {
 	const styles = useThemedStyles(makeStyles);
 	const openPage = useOpenPage();
 	const insets = useSafeAreaInsets();
+	// Android's clear pill bar: the list starts below it (iOS insets itself).
+	const glassInset = useGlassBarInset();
+	const barInset = Platform.OS === "android" ? glassInset : 0;
 	const { hostStates, cloud, configForHost, refreshHost, restore } = useApp();
 	// Orchestrator Cloud is one more feed here, beside each machine's.
 	const cloudState = useCloud();
@@ -551,8 +557,14 @@ function NotificationsContent() {
 	const clearable = items.length > 0;
 	// A pushed page on both platforms: the bar's back button leaves it, and
 	// Clear all takes the trailing end.
+	// On Android the bar is the chat's clear pill bar, so Clear all takes a
+	// pill of its own rather than floating bare over the frost.
 	const headerItems = useMemo(() => (
-		clearable ? (
+		Platform.OS === "android" ? (
+			<PillHeaderRight>
+				{clearable ? <HeaderPillButton icon="delete" label="Clear all" onPress={() => confirmClearAllRef.current()} testID="notifications-clear-all" /> : null}
+			</PillHeaderRight>
+		) : clearable ? (
 			<Stack.Toolbar placement="right">
 				<Stack.Toolbar.Button icon={toolbarIcon("delete")} accessibilityLabel="Clear all" onPress={() => confirmClearAllRef.current()} />
 			</Stack.Toolbar>
@@ -578,8 +590,8 @@ function NotificationsContent() {
 				contentInsetAdjustmentBehavior="automatic"
 				contentContainerStyle={
 					items.length === 0
-						? { flexGrow: 1 }
-						: { paddingBottom: insets.bottom + 24 }
+						? { flexGrow: 1, paddingTop: barInset }
+						: { paddingTop: barInset, paddingBottom: insets.bottom + 24 }
 				}
 				stickySectionHeadersEnabled={false}
 				refreshControl={
@@ -587,6 +599,7 @@ function NotificationsContent() {
 						refreshing={refreshing}
 						// The refresh control gives each platform's own feedback.
 						onRefresh={() => void load("refresh")}
+						progressViewOffset={barInset}
 						{...refreshControlColors(t)}
 					/>
 				}

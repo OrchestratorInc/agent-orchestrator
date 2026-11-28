@@ -26,7 +26,7 @@ func (a *restoreContextAgent) PrepareRuntimeLaunch(_ context.Context, cfg ports.
 func TestFreshWorkspaceHooksHaveNoNativeRestoreContext(t *testing.T) {
 	a := &restoreContextAgent{}
 	m := New(Deps{DataDir: t.TempDir()})
-	if err := m.prepareWorkspace(context.Background(), a, "fresh", t.TempDir(), "", "", ports.AgentConfig{}, map[string]string{}); err != nil {
+	if err := m.prepareWorkspace(context.Background(), a, "fresh", t.TempDir(), "", "", ports.AgentConfig{}, map[string]string{}, workspaceRestoreContext{}); err != nil {
 		t.Fatal(err)
 	}
 	if err := m.prepareRuntimeLaunch(context.Background(), a, "fresh", t.TempDir(), "", "", ports.AgentConfig{}, map[string]string{}, workspaceRestoreContext{}); err != nil {
@@ -57,6 +57,11 @@ func TestImportedWorkspaceHooksReceiveSelectedNativeIdentity(t *testing.T) {
 	}
 	if cfg := a.runtimeHooks[0]; cfg.NativeSessionID != "selected-native" || cfg.ImportConfigDir != rec.Metadata.ImportSource.ConfigDir {
 		t.Fatalf("imported restore lost selected identity: %#v", cfg)
+	}
+	// Workspace hooks apply an import's rules (OpenHands' OPENHANDS_WORK_DIR
+	// check, Memcode's sol pin), so they need the same identity.
+	if cfg := a.hooks[0]; cfg.NativeSessionID != "selected-native" || cfg.ImportConfigDir != rec.Metadata.ImportSource.ConfigDir {
+		t.Fatalf("imported restore hooks lost selected identity: %#v", cfg)
 	}
 }
 

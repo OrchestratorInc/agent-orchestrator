@@ -2418,20 +2418,53 @@ export function useWorkspaceFilePaths(sessionId: string | undefined, enabled: bo
  * paths in the message it sends, which is how an image reaches an agent whose
  * conversation carries text: the same thing spawn does for the opening brief.
  */
-export function useStageAttachments(sessionId: string | undefined, hostId?: string) {
+export function useStageAttachments(sessionId: string | undefined, hostId?: string, archived = false, draft = false) {
+	const queryClient = useQueryClient();
 	return useCallback(
 		async (attachments: OutgoingAttachment[], signal?: AbortSignal): Promise<string[]> => {
 			if (!sessionId || attachments.length === 0) return [];
+			if (archived) {
+				const restores = queryClient.getMutationCache().findAll({ mutationKey: ["resume-agent", hostId ?? "local", sessionId], status: "pending" });
+				await Promise.all(restores.map((restore) => restore.continue()));
+				signal?.throwIfAborted();
+			}
 			// A file too large to inline is streamed from disk to this session's
 			// daemon first, and the request names the upload.
 			const wire = await toWireAttachments(attachments, hostId, signal);
 			const { data, error } = await clientForSessionHost(hostId).POST("/api/v1/sessions/{sessionId}/attachments", {
 				params: { path: { sessionId } },
-				// The daemon names staged files itself; only the bytes go.
-				body: { attachments: wire },
+				// The daemon names staged files itself; only the bytes go. A draft's
+				// files are leased to it, so removing one later frees its storage.
+				body: { attachments: wire, ...(draft ? { draft: true } : {}) },
 			});
 			if (error) throw error;
 			return data?.paths ?? [];
+		},
+		[archived, draft, hostId, queryClient, sessionId],
+	);
+}
+
+/** Releases staged paths a draft gave up and renews the ones it still holds. */
+export type UpdateAttachmentLeases = (release: string[], renew?: string[]) => Promise<string[]>;
+
+/**
+ * Release and renew the leases of files staged for an unsent draft.
+ *
+ * Releasing is how a removed chip or a discarded draft frees its stored copies;
+ * the daemon deletes a file only while no accepted message names it, so a
+ * release that races a send cannot erase history. Renewing keeps a restored
+ * draft's files from expiring and answers which of them are already gone.
+ */
+export function useAttachmentLeases(sessionId: string | undefined, hostId?: string): UpdateAttachmentLeases {
+	return useCallback(
+		async (release: string[], renew: string[] = []): Promise<string[]> => {
+			if (!sessionId || release.length + renew.length === 0) return [];
+			const { data, error } = await clientForSessionHost(hostId).POST("/api/v1/sessions/{sessionId}/attachments/leases", {
+				params: { path: { sessionId } },
+				body: { ...(release.length ? { release } : {}), ...(renew.length ? { renew } : {}) },
+			});
+			if (error) throw error;
+			return data?.missing ?? [];
 		},
 		[hostId, sessionId],
 	);
@@ -2553,6 +2586,7 @@ export function toSnapshot(wire: WireSnapshot): ConversationSnapshot {
 			retryOfTurnId: turn.retryOfTurnId,
 			hasRetryAttempt: turn.hasRetryAttempt,
 			hasHumanPrompt: turn.hasHumanPrompt,
+			hasEventPrompt: turn.hasEventPrompt,
 			errorMessage: turn.errorMessage,
 			failureCode: turn.failureCode,
 			usageLimit: turn.usageLimit ? {

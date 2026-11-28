@@ -39,7 +39,7 @@ func TestRestoreDropsCreationOverridesLaunchKeeps(t *testing.T) {
 	if err != nil || !ok {
 		t.Fatalf("ok=%v err=%v", ok, err)
 	}
-	want := []string{binary, "chat", "--cli", "--in", "/workspace", "--continue", "ao-ao-1-abc", "--yolo"}
+	want := []string{binary, "chat", "--cli", "--in", "/workspace", "--continue", "20261020_native", "--yolo"}
 	if !slices.Equal(restore, want) {
 		t.Fatalf("restore = %v, want %v (no creation overrides)", restore, want)
 	}

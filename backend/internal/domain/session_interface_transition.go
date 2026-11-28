@@ -88,6 +88,14 @@ func (p SessionInterfaceTransitionPhase) Terminal() bool {
 // installed harness adapter never declared a compatible TUI+Chat identity pair.
 const SessionInterfaceTransitionDegradedIdentityReset = "identity-reset"
 
+// SessionInterfaceTransitionBoundaryMessageID is the outbox client message id
+// of a degraded handoff's boundary notice. The notice is a timeline row for the
+// user, not input for the agent, so delivery recognizes it by this id and
+// records it instead of sending it.
+func SessionInterfaceTransitionBoundaryMessageID(transitionID string) string {
+	return "interface-transition:" + transitionID + ":context-boundary"
+}
+
 // SessionInterfaceTransition is the durable controller-handoff record, for a
 // move between interfaces or between provider accounts. The session row (and
 // its account binding) remains the authority for what is committed; this row

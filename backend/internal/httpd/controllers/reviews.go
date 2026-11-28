@@ -445,7 +445,14 @@ func writeReviewError(w http.ResponseWriter, r *http.Request, err error) {
 	case errors.Is(err, reviewsvc.ErrAgentBinaryNotFound):
 		envelope.WriteAPIError(w, r, http.StatusUnprocessableEntity, "unprocessable", "REVIEWER_BINARY_NOT_FOUND", err.Error(), nil)
 	case errors.Is(err, ports.ErrChatAuthRequired):
-		envelope.WriteAPIError(w, r, http.StatusConflict, "conflict", "REVIEWER_AUTH_REQUIRED", "The reviewer agent is installed but not authenticated", nil)
+		// Only adapter-written sign-in guidance is shown; other auth errors may
+		// wrap provider internals and keep the fixed message.
+		message := "The reviewer agent is installed but not authenticated"
+		var authErr *ports.ReviewerAuthRequiredError
+		if errors.As(err, &authErr) && strings.TrimSpace(authErr.Guidance) != "" {
+			message = authErr.Guidance
+		}
+		envelope.WriteAPIError(w, r, http.StatusConflict, "conflict", "REVIEWER_AUTH_REQUIRED", message, nil)
 	default:
 		envelope.CaptureError(r, err)
 		envelope.WriteAPIError(w, r, http.StatusInternalServerError, "internal", "REVIEW_OPERATION_FAILED", "Review operation failed", nil)

@@ -461,6 +461,27 @@ describe("editor handoff", () => {
 		);
 	});
 
+	it("opens Command Prompt on Windows in its own console without passing the workspace path to cmd.exe", async () => {
+		const workspacePath = "C:\\work trees\\%TEMP% & fix";
+		const input = winDeps({ resolveWorkspace: vi.fn().mockResolvedValue(workspacePath), isExecutable: () => false });
+		const handoff = createEditorHandoff(input);
+
+		expect((await handoff.getState("ao-1")).targets).toContainEqual({ id: "terminal", name: "Command Prompt", kind: "terminal" });
+		await handoff.open({ sessionId: "ao-1", targetId: "terminal" });
+
+		expect(input.launch).toHaveBeenCalledWith(
+			"C:\\Windows\\System32\\cmd.exe",
+			["/d", "/s", "/v:off", "/c", `"start "" "C:\\Windows\\System32\\cmd.exe""`],
+			workspacePath,
+		);
+	});
+
+	it("falls back to cmd.exe for the Windows Command Prompt when ComSpec is unset", async () => {
+		const input = winDeps({ env: { PATH: "C:\\bin" }, isExecutable: () => false });
+		await createEditorHandoff(input).open({ sessionId: "ao-1", targetId: "terminal" });
+		expect(input.launch).toHaveBeenCalledWith("cmd.exe", ["/d", "/s", "/v:off", "/c", `"start "" "cmd.exe""`], "/worktrees/ao-1");
+	});
+
 	it("reports a missing workspace without hiding the available targets", async () => {
 		const missing = Object.assign(new Error("Session workspace is not available."), {
 			code: "SESSION_WORKSPACE_NOT_FOUND",

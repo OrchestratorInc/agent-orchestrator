@@ -23,6 +23,8 @@ const KEYS = [
 	"tray.quit",
 	"zone.merge",
 	"zone.action",
+	// Not tray text: the main process names the first-run browser profile.
+	"browser.profile.defaultName",
 ];
 
 const catalogs = {};

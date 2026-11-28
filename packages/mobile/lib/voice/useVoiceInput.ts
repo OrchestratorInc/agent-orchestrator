@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { activateKeepAwakeAsync, deactivateKeepAwake } from "expo-keep-awake";
 import { AppState, Linking } from "react-native";
 import { haptics } from "../haptics";
 import { getDeviceVoiceProvider } from "./deviceProvider";
@@ -14,6 +15,9 @@ import type { VoiceMode, VoiceProvider, VoiceState } from "./types";
 const TAP_MS = 250;
 // How long after a tap a second tap still counts as a double-tap.
 const DOUBLE_TAP_MS = 300;
+// Keep-awake tag held while the mic is open. Tagged so dictation releases only
+// its own hold, never one another screen took.
+const KEEP_AWAKE_TAG = "dictation";
 // Breathing room between aborting the tap's recording and starting the latched
 // one, so the native recogniser isn't still tearing down and reporting "busy".
 // Only ever paid on the double-tap path, which is not latency-sensitive.
@@ -173,6 +177,21 @@ export function useVoiceInput({
 		});
 		return () => sub.remove();
 	}, [device, setPhase, clearNotice, showDeniedNotice]);
+
+	// Talking is not touching: the OS idle timer only resets on touch, so without
+	// this a hands-free dictation dims and locks the screen at the auto-lock
+	// timeout, and the lock backgrounds the app, which aborts the recording above
+	// and drops the words. Held only while the mic is open, so the phone sleeps
+	// normally again the moment dictation ends. Keyed on `state`, which every
+	// exit path (stop, abort, error, backgrounding, unmount) settles through.
+	const micOpen = state === "starting" || state === "recording";
+	useEffect(() => {
+		if (!micOpen) return;
+		activateKeepAwakeAsync(KEEP_AWAKE_TAG).catch(() => {});
+		return () => {
+			deactivateKeepAwake(KEEP_AWAKE_TAG).catch(() => {});
+		};
+	}, [micOpen]);
 
 	const beginRecording = useCallback(
 		(mode: VoiceMode) => {

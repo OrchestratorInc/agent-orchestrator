@@ -8,9 +8,8 @@ import { useApp } from "./store";
 // The poll fetches live workers only, so a pull request merged or closed by a
 // session that has since ended is in no row the PR list reads. A machine whose
 // daemon pages its archive is asked for those sessions separately, all of
-// them: merged ones while Merged or All is open, closed ones while All is. A
-// machine that still sends its archive with the poll needs none of this: its
-// ended sessions are already rows.
+// them, in each state the caller asks for. A machine that still sends its
+// archive with the poll needs none of this: its ended sessions are already rows.
 
 /** One machine's archive, optionally narrowed to a project, read for its PRs. */
 export type ArchivedPRSource = {

@@ -21,6 +21,7 @@ import type {
 import { scmUserAvatarUrl } from "./scm-avatar";
 import { NAV_ROW_HIGHLIGHT_HOST_CLASS, NavRowHighlight } from "./NavRowHighlight";
 import { cn } from "./utils";
+import { commentTextLines } from "./comment-text";
 import { UserAvatar } from "./UserAvatar";
 
 // Usage telemetry names for each inspector view: the desktop's
@@ -290,13 +291,14 @@ export function InspectorSection({
 }
 
 export function SessionInspectorSummaryView({
-	activity,
-	activityTitle,
+	activity: _activity,
+	activityTitle: _activityTitle,
 	artifactCards,
 	artifactTitle,
 	branch,
 	completion,
 	context,
+	footer,
 	pullRequestCards,
 	pullRequestTitle,
 	reviews,
@@ -304,19 +306,24 @@ export function SessionInspectorSummaryView({
 	usage,
 	workers,
 }: {
-	activity: ReactNode;
-	activityTitle: string;
+	activity?: ReactNode;
+	activityTitle?: string;
 	/** Omit alongside {@link artifactTitle} to skip the artifacts section entirely. */
 	artifactCards?: ReactNode;
 	artifactTitle?: string;
 	branch?: ReactNode;
 	completion?: ReactNode;
 	context?: ReactNode;
+	/**
+	 * Rows under the sections (the session's account, Resume agent), on the
+	 * sections' content inset. Each may render nothing.
+	 */
+	footer?: ReactNode;
 	/** Omit alongside {@link pullRequestTitle} to skip the PR section entirely (e.g. no known PR output). */
 	pullRequestCards?: ReactNode;
 	pullRequestTitle?: string;
 	reviews?: ReactNode;
-	/** The project's Setup and Cleanup runs (Cloud sessions), just before the activity. */
+	/** The project's Setup and Cleanup runs (Cloud sessions), just before the footer. */
 	scripts?: ReactNode;
 	usage?: ReactNode;
 	/**
@@ -326,7 +333,9 @@ export function SessionInspectorSummaryView({
 	workers?: ReactNode;
 }) {
 	return (
-		<div role="tabpanel">
+		// An empty footer is still the last child, so the section above it drops
+		// its bottom padding here, as it would if it were last.
+		<div className="[&>section:has(+[data-inspector-footer]:empty:last-child)>*>div]:pb-0" role="tabpanel">
 			{workers}
 			{context}
 			{branch}
@@ -343,7 +352,15 @@ export function SessionInspectorSummaryView({
 			{reviews}
 			{completion}
 			{scripts}
-			<InspectorSection title={activityTitle}>{activity}</InspectorSection>
+			{/* Activity is hidden for now. To restore it, uncomment this:
+			{_activityTitle ? <InspectorSection title={_activityTitle}>{_activity}</InspectorSection> : null}
+			*/}
+			{/* No divider above the first row: sections are set apart by spacing alone. */}
+			{footer ? (
+				<div className="min-w-0 px-3 empty:hidden [&>:first-child]:mt-0 [&>:first-child]:border-t-0 [&>:first-child]:pt-0" data-inspector-footer="">
+					{footer}
+				</div>
+			) : null}
 			{usage}
 		</div>
 	);
@@ -1312,44 +1329,6 @@ function InlineCommentList({
 			))}
 		</div>
 	);
-}
-
-/**
- * A comment's words line by line, as plain text: HTML comments and tags,
- * heading, list and quote markers, and emphasis go; rules and code fences are
- * not lines of words.
- */
-export function commentTextLines(body: string): string[] {
-	return body
-		.replace(/<!--[\s\S]*?-->/g, "")
-		// Only tag-shaped spans outside inline code are HTML: `Map<string, number>`
-		// and `a < b && c > d` are words to keep.
-		.split(/(`[^`\n]*`)/)
-		.map((part, index) => index % 2 === 1 ? part : part.replace(/<\/?[A-Za-z][\w-]*(?:\s[^<>]*)?\/?>/g, ""))
-		.join("")
-		.split("\n")
-		.map((line) => {
-			const raw = line.trim();
-			// Fences and rules go before any marker is stripped, while they still look like
-			// themselves: a suggestion block previews as its code, not as "suggestion".
-			if (/^(?:```|~~~)/.test(raw) || /^(?:[-*_=]\s*){3,}$/.test(raw)) return "";
-			// A GitHub alert's "> [!NOTE]" marker is its type, not its text.
-			if (/^(?:>\s*)?\[!(?:NOTE|TIP|IMPORTANT|WARNING|CAUTION)\]$/i.test(raw)) return "";
-			return raw
-				// A quoted line can carry its own heading or list marker ("> ## Reviews paused").
-				.replace(/^(?:>\s*)+/, "")
-				.replace(/^(?:#{1,6}\s+|[-*+]\s+(?:\[[ xX]\]\s+)?)/, "")
-				// Emphasis is stripped outside inline code only; `_` must sit at a word edge, so snake_case stays.
-				.split(/(`[^`\n]*`)/)
-				.map((part, index) => index % 2 === 1 ? part.slice(1, -1) : part
-					.replace(/\*\*|__/g, "")
-					.replace(/(^|[^\w])_([^_\n]+?)_(?!\w)/g, "$1$2")
-					.replace(/`/g, ""))
-				.join("")
-				.replace(/\s+/g, " ")
-				.trim();
-		})
-		.filter(Boolean);
 }
 
 function InlineCommentRow({

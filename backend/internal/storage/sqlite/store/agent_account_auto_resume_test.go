@@ -86,6 +86,41 @@ func TestSetTurnAutoResumeRejectsChangedSourceAccount(t *testing.T) {
 	}
 }
 
+func TestConversationSnapshotDropsResetAfterAccountMove(t *testing.T) {
+	for _, harness := range []domain.AgentHarness{domain.HarnessClaudeCode, domain.HarnessCodex} {
+		t.Run(string(harness), func(t *testing.T) {
+			ctx := context.Background()
+			s := newTestStore(t)
+			session, conversation := seedAccountAutoResume(t, s, harness)
+			provider, _ := domain.AgentAccountProviderFor(harness)
+			snapshotReset := func() *time.Time {
+				t.Helper()
+				snapshot, err := s.LoadConversationSnapshot(ctx, conversation.ID)
+				mustNoError(t, err)
+				for _, turn := range snapshot.Turns {
+					if turn.ID == "turn-"+string(session.ID) && turn.UsageLimit != nil {
+						return turn.UsageLimit.ResetsAt
+					}
+				}
+				t.Fatalf("limited turn missing from snapshot")
+				return nil
+			}
+			mustNoError(t, s.BindSessionAgentAccount(ctx, session.ID, provider, "account-a", testNow.Add(-time.Minute)))
+			if snapshotReset() == nil {
+				t.Fatal("reset dropped on the account that hit the limit")
+			}
+			mustNoError(t, s.BindSessionAgentAccount(ctx, session.ID, provider, "account-b", testNow.Add(30*time.Minute)))
+			if reset := snapshotReset(); reset != nil {
+				t.Fatalf("reset after account move = %v", reset)
+			}
+			mustNoError(t, s.BindSessionAgentAccount(ctx, session.ID, provider, "account-a", testNow.Add(40*time.Minute)))
+			if snapshotReset() == nil {
+				t.Fatal("reset dropped after moving back to the limited account")
+			}
+		})
+	}
+}
+
 func TestSetTurnAutoResumePreservesUnknownSourceAccount(t *testing.T) {
 	for _, harness := range []domain.AgentHarness{domain.HarnessClaudeCode, domain.HarnessCodex} {
 		t.Run(string(harness), func(t *testing.T) {

@@ -81,7 +81,11 @@ function menuRows() {
 	return Array.from(menu.querySelectorAll("[role=menuitem], [role=separator], [data-menu-row]")).map((row) => {
 		const role = row.getAttribute("role") ?? "custom";
 		const disabled = row.getAttribute("aria-disabled") === "true" || row.hasAttribute("data-disabled");
-		return `${role}|${row.textContent ?? ""}|${disabled ? "disabled" : "enabled"}`;
+		// A row's letter key is a hint, not its label.
+		const key = row.getAttribute("aria-keyshortcuts");
+		const text = row.textContent ?? "";
+		const label = key && row.hasAttribute("data-menu-accelerator") && text.endsWith(key) ? text.slice(0, -key.length) : text;
+		return `${role}|${label}|${disabled ? "disabled" : "enabled"}`;
 	});
 }
 

@@ -106,6 +106,7 @@ const ROUTE_TEMPLATES = [
 	"/api/v1/agents/readiness",
 	"/api/v1/agents/readiness/ensure",
 	"/api/v1/agents/{agent}/auth",
+	"/api/v1/agents/{agent}/endpoint",
 	"/api/v1/agents/{agent}/auth/operations",
 	"/api/v1/agents/{agent}/auth/operations/{operationId}",
 	"/api/v1/agents/{agent}/auth/operations/{operationId}/code",
@@ -136,12 +137,19 @@ const ROUTE_TEMPLATES = [
 	"/api/v1/agents/{agent}/models",
 	"/api/v1/agents/{agent}/models/refresh",
 	"/api/v1/agents/{agent}/probe",
+	"/api/v1/agents/{agent}/skills",
 	"/api/v1/agents/{agent}/verify",
 	"/api/v1/desktop/sessions/{sessionId}/workspace",
 	"/api/v1/events",
 	"/api/v1/import",
 	"/api/v1/imports/prepare-git",
 	"/api/v1/imports/validate",
+	"/api/v1/approvals",
+	"/api/v1/approvals/stream",
+	"/api/v1/approvals/{id}/decision",
+	"/api/v1/approvals/audit",
+	"/api/v1/approvals/policy",
+	"/api/v1/approvals/sites",
 	"/api/v1/notifications",
 	"/api/v1/notifications/{id}",
 	"/api/v1/notifications/read-all",
@@ -284,6 +292,9 @@ const EXPECTED_PROBE_CONFLICTS = new Set([
 	"GET /api/v1/sessions/:id/conversation/config-options",
 	"GET /api/v1/sessions/:id/conversation/models",
 	"GET /api/v1/sessions/:id/conversation/skills",
+	// A remote host older than the new chat page's skill scan answers 404; the
+	// page keeps the list a session last reported.
+	"GET /api/v1/agents/:id/skills",
 ]);
 
 function expectedProbeConflict(operation: string, status?: number): boolean {

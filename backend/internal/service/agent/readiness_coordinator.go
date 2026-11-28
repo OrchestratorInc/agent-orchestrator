@@ -23,6 +23,9 @@ const (
 	defaultLaunchReadinessTTL   = 30 * time.Second
 	defaultInstallCheckTimeout  = 2 * time.Second
 	opencodeInstallCheckTimeout = 12 * time.Second
+	// Gemini's --version probe runs Node through the npm launcher; the adapter
+	// allows it 10s, and on Windows a warm probe alone takes several seconds.
+	geminiInstallCheckTimeout = 12 * time.Second
 	// Hermes is a Python CLI: a warm --version identity probe takes about two
 	// seconds, and the first run after an install compiles its bytecode.
 	hermesInstallCheckTimeout = 60 * time.Second
@@ -589,6 +592,8 @@ func (c *readinessCoordinator) checkInstallation(item agentregistry.HarnessAgent
 		switch item.Harness {
 		case domain.HarnessOpenCode, domain.HarnessOpenCodeV2:
 			timeout = opencodeInstallCheckTimeout
+		case domain.HarnessGemini:
+			timeout = geminiInstallCheckTimeout
 		case domain.HarnessHermes:
 			timeout = hermesInstallCheckTimeout
 		}

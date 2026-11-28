@@ -1,6 +1,6 @@
 import { UITextView as Text } from "@bsky.app/react-native-uitextview";
 import * as Clipboard from "expo-clipboard";
-import { createContext, isValidElement, lazy, memo, Suspense, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from "react";
+import { createContext, Fragment, isValidElement, lazy, memo, Suspense, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from "react";
 import { Image, Platform, Pressable, ScrollView, StyleSheet, View, type StyleProp, type TextStyle } from "react-native";
 import { AppSymbol } from "../AppSymbol";
 import { rowDividerWidth } from "../divider";
@@ -16,7 +16,7 @@ import { FirstLineMarker } from "./FirstLineMarker";
 import { HighlightedCodeText } from "./HighlightedCodeText";
 import { isMermaidFence } from "./mermaidFence";
 import { allowsUnderscoreEmphasis } from "./inlineEmphasis";
-import { parseBlocks, type MarkdownBlock, type TableAlign } from "./markdownBlocks";
+import { parseBlocks, repairStreamingInline, type MarkdownBlock, type MarkdownListItem, type TableAlign } from "./markdownBlocks";
 import { iconSize, prose, radius, space, touchTarget, type } from "../tokens";
 import type { ChatExcerpt } from "./types";
 import { sessionLink } from "./automationMessages";
@@ -113,21 +113,30 @@ export const ChatMarkdown = memo(function ChatMarkdown({ text, streaming = false
 	const t = useTheme();
 	const styles = useThemedStyles(makeStyles);
 	const selectionColor = textSelectionColors(t).selectionColor;
-	const blocks = parseBlocks(text, { relativeImages: Boolean(resolveImage) });
+	// While a reply streams, an unfinished `**bold` reads as bold rather than as asterisks.
+	const shown = streaming ? repairStreamingInline(text) : text;
+	const blocks = parseBlocks(shown, { relativeImages: Boolean(resolveImage) });
 	const openFiles = Boolean(useFilesNavigation());
+	const selectCode = useResponseSelection(selectionSource, onAddSelection);
 	if (continuousSelection) {
 		// Native selection cannot cross sibling views. Keep each run of response text
-		// in one text surface; only a table breaks the run, because a grid cannot
-		// live inside text. Image previews follow without repeating captions.
+		// in one text surface, broken only where a block needs a surface of its own:
+		// a table's grid, a code card (with its copy, wrap and sideways scroll, as
+		// on the desktop), a quote's bar and a rule. Image previews follow without
+		// repeating captions.
 		const images = imagesInPlace ? [] : blocks.filter((block): block is Extract<MarkdownBlock, { kind: "image" }> => block.kind === "image");
 		return <View style={styles.root}>
-			{splitRuns(blocks, imagesInPlace, diagrams && !streaming).map((run, index) => Array.isArray(run)
-				? <SelectableResponseText key={index} blocks={run} source={selectionSource} onSelect={onAddSelection} />
-				: run.kind === "code"
-					? <DiagramFence key={index} code={run.text} codeBlock={<CodeBlock {...run} nestedScroll={nestedScroll} />} />
-				: run.kind === "image"
-					? <MarkdownImage key={index} alt={run.alt} url={run.url} selectionColor={selectionColor} resolve={resolveImage} />
-					: <MarkdownTable key={index} headers={run.headers} align={run.align} rows={run.rows} selectionColor={selectionColor} nestedScroll={nestedScroll} />)}
+			{splitRuns(blocks, imagesInPlace).map((run, index) => {
+				if (Array.isArray(run)) return <SelectableResponseText key={index} blocks={run} source={selectionSource} onSelect={onAddSelection} />;
+				if (run.kind === "code") {
+					const codeBlock = <CodeBlock key={index} {...run} streaming={streaming} nestedScroll={nestedScroll} onAddSelection={selectCode} />;
+					return diagrams && !streaming && isMermaidFence(run.language) ? <DiagramFence key={index} code={run.text} codeBlock={codeBlock} /> : codeBlock;
+				}
+				if (run.kind === "quote") return <View key={index} style={styles.quote}><SelectableResponseText blocks={[run]} source={selectionSource} onSelect={onAddSelection} /></View>;
+				if (run.kind === "rule") return <View key={index} style={styles.rule} />;
+				if (run.kind === "image") return <MarkdownImage key={index} alt={run.alt} url={run.url} selectionColor={selectionColor} resolve={resolveImage} />;
+				return <MarkdownTable key={index} headers={run.headers} align={run.align} rows={run.rows} selectionColor={selectionColor} nestedScroll={nestedScroll} />;
+			})}
 			{images.map((image, index) => <MarkdownImage key={`${image.url}-${index}`} alt={image.alt} url={image.url} selectionColor={selectionColor} showCaption={false} resolve={resolveImage} />)}
 		</View>;
 	}
@@ -143,7 +152,7 @@ export const ChatMarkdown = memo(function ChatMarkdown({ text, streaming = false
 			// Keep those blocks separate without splitting the surrounding prose.
 			if (Platform.OS === "ios" && hasInlineLink(block.text, styles, openFiles)) {
 				flushProse();
-				content.push(<SelectableInlineText key={content.length} value={block.text} selectionColor={selectionColor} style={block.kind === "heading" ? [styles.heading, block.level > 2 && styles.smallHeading] : styles.body} styles={styles} />);
+				content.push(<SelectableInlineText key={content.length} value={block.text} selectionColor={selectionColor} style={block.kind === "heading" ? headingStyle(block.level, styles) : styles.body} styles={styles} />);
 			} else prose.push(block);
 			continue;
 		}
@@ -155,7 +164,7 @@ export const ChatMarkdown = memo(function ChatMarkdown({ text, streaming = false
 		else if (block.kind === "table") content.push(<MarkdownTable key={index} headers={block.headers} align={block.align} rows={block.rows} selectionColor={selectionColor} nestedScroll={nestedScroll} />);
 		else if (block.kind === "rule") content.push(<View key={index} style={styles.rule} />);
 		else if (block.kind === "quote") content.push(<View key={index} style={styles.quote}><SelectableInlineText value={block.text} selectionColor={selectionColor} style={styles.quoteText} styles={styles} /></View>);
-		else content.push(<View key={index} style={styles.list}>{block.items.map((item, itemIndex) => <View key={itemIndex} style={styles.listRow}><ListMarker checked={item.checked} number={block.ordered ? itemIndex + 1 : undefined} styles={styles} /><SelectableInlineText value={item.text} selectionColor={selectionColor} style={[styles.body, styles.listBody, item.checked && styles.taskDone]} styles={styles} /></View>)}</View>);
+		else content.push(<View key={index} style={styles.list}>{block.items.map((item, itemIndex) => <View key={itemIndex} style={[styles.listRow, item.depth > 0 && { paddingLeft: item.depth * LIST_INDENT }]}><ListMarker checked={item.checked} number={item.number} depth={item.depth} styles={styles} /><SelectableInlineText value={item.text} selectionColor={selectionColor} style={[styles.body, styles.listBody, item.checked && styles.taskDone]} styles={styles} /></View>)}</View>);
 	}
 	flushProse();
 	return (
@@ -172,30 +181,55 @@ const TASK_OPEN = { ios: "square", android: "check_box_outline_blank" } as const
  * or the item's number. The continuous selection surface keeps the characters
  * instead, since they are part of the text a reader copies from there.
  */
-function ListMarker({ checked, number, styles }: { checked?: boolean; number?: number; styles: ReturnType<typeof makeStyles> }) {
+function ListMarker({ checked, number, depth, styles }: { checked?: boolean; number?: number; depth: number; styles: ReturnType<typeof makeStyles> }) {
 	const t = useTheme();
 	if (checked !== undefined) return <FirstLineMarker lineStyle={styles.body} style={styles.markerBox}><AppSymbol name={checked ? TASK_DONE : TASK_OPEN} size={iconSize.md} color={t.textTertiary} accessibilityLabel={checked ? "Done" : "Not done"} /></FirstLineMarker>;
 	if (number !== undefined) return <Text style={styles.marker}>{`${number}.`}</Text>;
-	return <FirstLineMarker lineStyle={styles.body} style={styles.markerBox}><View style={styles.bullet} /></FirstLineMarker>;
+	// A nested level reads by its marker as well as its indent: a ring, then a square.
+	return <FirstLineMarker lineStyle={styles.body} style={styles.markerBox}><View style={[styles.bullet, depth === 1 && styles.bulletRing, depth > 1 && styles.bulletSquare]} /></FirstLineMarker>;
+}
+
+/** How far each nesting level of a list steps in: one marker column and its gap. */
+const LIST_INDENT = 20 + space.sm;
+
+/** The marker a list item shows inside one run of selectable text. */
+function listMarkerText(item: MarkdownListItem): string {
+	if (item.checked !== undefined) return item.checked ? "☑ " : "☐ ";
+	if (item.number !== undefined) return `${item.number}. `;
+	return item.depth === 0 ? "• " : item.depth === 1 ? "◦ " : "▪ ";
+}
+
+/**
+ * Headings step down in size but stay in the conversation's voice, as on the
+ * desktop: an agent's "## Findings" is a paragraph label, not a page title.
+ */
+function headingStyle(level: number, styles: ReturnType<typeof makeStyles>): StyleProp<TextStyle> {
+	return level <= 1 ? styles.heading : level <= 3 ? [styles.heading, styles.subheading] : [styles.heading, styles.minorHeading];
 }
 
 type TableBlock = Extract<MarkdownBlock, { kind: "table" }>;
 type ImageBlock = Extract<MarkdownBlock, { kind: "image" }>;
 type CodeFence = Extract<MarkdownBlock, { kind: "code" }>;
+type QuoteBlock = Extract<MarkdownBlock, { kind: "quote" }>;
+type RuleBlock = Extract<MarkdownBlock, { kind: "rule" }>;
+/** A block drawn on a surface of its own, between runs of selectable text. */
+type StandaloneBlock = TableBlock | ImageBlock | CodeFence | QuoteBlock | RuleBlock;
+type TextRunBlock = Exclude<MarkdownBlock, TableBlock>;
 
 /** What a markdown image loads: its URL, with headers when it needs the connection's credential. */
 export type MarkdownImageSource = { uri: string; headers?: Record<string, string> };
 
 /**
- * Runs of text one selection can span, broken by a table (a grid cannot live
- * inside text), by a Mermaid fence drawn as its diagram, and, for a document,
- * by each image so it sits in place.
+ * Runs of text one selection can span, broken by each block that needs a
+ * surface of its own: a table (a grid cannot live inside text), a code fence
+ * (its card, or its diagram), a quote (its bar), a rule, and, for a document,
+ * each image so it sits in place.
  */
-export function splitRuns(blocks: MarkdownBlock[], splitImages: boolean, splitDiagrams = false): Array<Array<Exclude<MarkdownBlock, TableBlock>> | TableBlock | ImageBlock | CodeFence> {
-	const runs: Array<Array<Exclude<MarkdownBlock, TableBlock>> | TableBlock | ImageBlock | CodeFence> = [];
+export function splitRuns(blocks: MarkdownBlock[], splitImages: boolean): Array<Array<TextRunBlock> | StandaloneBlock> {
+	const runs: Array<Array<TextRunBlock> | StandaloneBlock> = [];
 	for (const block of blocks) {
 		const last = runs[runs.length - 1];
-		if (block.kind === "table" || (splitImages && block.kind === "image") || (splitDiagrams && block.kind === "code" && isMermaidFence(block.language))) runs.push(block);
+		if (block.kind === "table" || block.kind === "code" || block.kind === "quote" || block.kind === "rule" || (splitImages && block.kind === "image")) runs.push(block);
 		else if (Array.isArray(last)) last.push(block);
 		else runs.push([block]);
 	}
@@ -215,33 +249,48 @@ function containsLink(nodes: ReactNode[]): boolean {
 function SelectableProseGroup({ blocks, selectionColor, styles }: { blocks: Array<Extract<MarkdownBlock, { kind: "paragraph" | "heading" }>>; selectionColor: string; styles: ReturnType<typeof makeStyles> }) {
 	const openFiles = Boolean(useFilesNavigation());
 	return <Text selectable uiTextView selectionColor={selectionColor} style={styles.body}>
-		{blocks.map((block, index) => <Text key={index} style={block.kind === "heading" ? [styles.heading, block.level > 2 && styles.smallHeading] : styles.body}>
-			{index > 0 ? <Text style={styles.proseGap}>{"\n\n"}</Text> : null}{inline(block.text, styles, true, undefined, openFiles)}
+		{blocks.map((block, index) => <Text key={index} style={block.kind === "heading" ? headingStyle(block.level, styles) : styles.body}>
+			{index > 0 ? <Text style={block.kind === "heading" ? styles.headingGap : styles.proseGap}>{"\n\n"}</Text> : null}{inline(block.text, styles, true, undefined, openFiles)}
 		</Text>)}
 	</Text>;
 }
 
-/** One native text surface for selecting across a run of response blocks. */
-export function SelectableResponseText({ blocks, source, onSelect }: { blocks: Array<Exclude<MarkdownBlock, TableBlock>>; source?: Omit<ChatExcerpt, "text">; onSelect?: (text: string) => void }) {
-	const t = useTheme();
+/**
+ * What the selection menu's "Add to chat" does with response text: hands it to
+ * the surface's own handler, or quotes it into the conversation's composer. In a
+ * conversation, only a finished message (one with a source) can be quoted.
+ */
+function useResponseSelection(source: Omit<ChatExcerpt, "text"> | undefined, onSelect: ((text: string) => void) | undefined): ((text: string) => void) | undefined {
 	const addToChat = useContext(AddResponseToChat);
-	// In a conversation, only a finished message (one with a source) can be quoted.
 	const enabled = Boolean(onSelect || (addToChat && source));
 	const select = useCallback((selected: string) => onSelect ? onSelect(selected) : source ? addToChat?.(selected, source) : addToChat?.(selected), [addToChat, onSelect, source]);
-	const onLayout = useAndroidResponseSelection(enabled ? select : null);
+	return enabled ? select : undefined;
+}
+
+/** One native text surface for selecting across a run of response blocks. */
+export function SelectableResponseText({ blocks, source, onSelect }: { blocks: TextRunBlock[]; source?: Omit<ChatExcerpt, "text">; onSelect?: (text: string) => void }) {
+	const t = useTheme();
+	const select = useResponseSelection(source, onSelect);
+	const onLayout = useAndroidResponseSelection(select ?? null);
 	const styles = useThemedStyles(makeStyles);
 	const openFiles = Boolean(useFilesNavigation());
 	const selectionColor = textSelectionColors(t).selectionColor;
-	return <Text selectable uiTextView selectionColor={selectionColor} style={styles.body} onLayout={onLayout} addToChatEnabled={enabled} onAddToChat={(event) => select(event.nativeEvent.text)}>
+	const text = (value: string) => inline(value, styles, true, undefined, openFiles);
+	// The space between blocks is a short blank line, not a full line of prose,
+	// so paragraphs sit as close as they do on the desktop; a heading takes more.
+	const gap = (block: TextRunBlock, index: number) => index > 0 ? <Text style={block.kind === "heading" ? styles.headingGap : styles.proseGap}>{"\n\n"}</Text> : null;
+	const quoted = blocks.length === 1 && blocks[0].kind === "quote";
+	return <Text selectable uiTextView selectionColor={selectionColor} style={quoted ? styles.quoteText : styles.body} onLayout={onLayout} addToChatEnabled={Boolean(select)} onAddToChat={(event) => select?.(event.nativeEvent.text)}>
 		{blocks.map((block, index) => {
-			const separator = index > 0 ? "\n\n" : "";
-			if (block.kind === "heading") return <Text key={index} style={[styles.heading, block.level > 2 && styles.smallHeading]}>{separator}{inline(block.text, styles, true, undefined, openFiles)}</Text>;
-			if (block.kind === "paragraph") return <Text key={index}>{separator}{inline(block.text, styles, true, undefined, openFiles)}</Text>;
-			if (block.kind === "quote") return <Text key={index} style={styles.quoteText}>{separator}{inline(block.text, styles, true, undefined, openFiles)}</Text>;
-			if (block.kind === "list") return <Text key={index}>{separator}{block.items.map((item, itemIndex) => <Text key={itemIndex} style={item.checked ? styles.taskDone : undefined}>{itemIndex > 0 ? "\n" : ""}{item.checked !== undefined ? (item.checked ? "☑ " : "☐ ") : block.ordered ? `${itemIndex + 1}. ` : "• "}{inline(item.text, styles, true, undefined, openFiles)}</Text>)}</Text>;
-			if (block.kind === "code") return <Text key={index} style={styles.selectionCode}>{separator}{block.language ? `${block.language}\n` : ""}{block.text}</Text>;
-			if (block.kind === "image") return <Text key={index} style={styles.imageCaption}>{separator}{inline(block.alt || block.url, styles, true, undefined, openFiles)}</Text>;
-			return <Text key={index}>{separator}────────</Text>;
+			if (block.kind === "heading") return <Fragment key={index}>{gap(block, index)}<Text style={headingStyle(block.level, styles)}>{text(block.text)}</Text></Fragment>;
+			if (block.kind === "paragraph") return <Fragment key={index}>{gap(block, index)}<Text>{text(block.text)}</Text></Fragment>;
+			if (block.kind === "quote") return <Fragment key={index}>{gap(block, index)}<Text style={styles.quoteText}>{text(block.text)}</Text></Fragment>;
+			if (block.kind === "list") return <Fragment key={index}>{gap(block, index)}{block.items.map((item, itemIndex) => <Text key={itemIndex} style={item.checked ? styles.taskDone : undefined}>
+				{itemIndex > 0 ? "\n" : ""}{"\u2003".repeat(item.depth)}<Text style={styles.inlineMarker}>{listMarkerText(item)}</Text>{text(item.text)}
+			</Text>)}</Fragment>;
+			if (block.kind === "code") return <Fragment key={index}>{gap(block, index)}<Text style={styles.selectionCode}>{block.language ? `${block.language}\n` : ""}{block.text}</Text></Fragment>;
+			if (block.kind === "image") return <Fragment key={index}>{gap(block, index)}<Text style={styles.imageCaption}>{text(block.alt || block.url)}</Text></Fragment>;
+			return <Fragment key={index}>{gap(block, index)}<Text>────────</Text></Fragment>;
 		})}
 	</Text>;
 }
@@ -297,7 +346,7 @@ function MarkdownTable({ headers, align, rows, selectionColor, nestedScroll }: {
 /** How long Copy shows its checkmark before it turns back. */
 const COPIED_MS = 1_400;
 
-function CodeBlock({ text, language, streaming, nestedScroll = false }: { text: string; language?: string; streaming?: boolean; nestedScroll?: boolean }) {
+function CodeBlock({ text, language, streaming, nestedScroll = false, onAddSelection }: { text: string; language?: string; streaming?: boolean; nestedScroll?: boolean; onAddSelection?: (text: string) => void }) {
 	const t = useTheme();
 	const styles = useThemedStyles(makeStyles);
 	const feedback = usePressFeedback("icon");
@@ -341,7 +390,7 @@ function CodeBlock({ text, language, streaming, nestedScroll = false }: { text: 
 				</Pressable>
 			</View>
 			<ScrollView horizontal={!wrap} nestedScrollEnabled={nestedScroll && !wrap} showsHorizontalScrollIndicator={!wrap} contentContainerStyle={wrap ? styles.codeWrap : undefined}>
-				<HighlightedCodeText code={text} language={language} streaming={streaming} style={[styles.codeText, wrap && styles.codeTextWrap]} />
+				<HighlightedCodeText code={text} language={language} streaming={streaming} style={[styles.codeText, wrap && styles.codeTextWrap]} onAddSelection={onAddSelection} />
 			</ScrollView>
 		</View>
 	);
@@ -393,41 +442,76 @@ function inline(text: string, styles: ReturnType<typeof makeStyles>, linksPressa
 	// Web links, AO's own `ao://` links, and file links (`[a.ts:12](src/a.ts:12)`); a bare session link stops before prose punctuation.
 	// A destination may hold balanced parentheses, as a route group does: `app/(tabs)/index.tsx`.
 	// Bold runs may hold a single `*` or `_` (italic, say) but not a closing pair.
-	const pattern = /(\[([^\]]+)\]\(((?:[^\s()]|\([^\s()]*\))+)\)|<((?:https?|ao):\/\/[^\s>]+)>|`([^`]+)`|\*\*((?:[^*]|\*(?!\*))+)\*\*|__((?:[^_]|_(?!_))+)__|~~([^~]+)~~|\*([^*\n]+)\*|_([^_\n]+)_|(https?:\/\/[^\s<]+)|(ao:\/\/sessions\/[^\s<>()]*[^\s<>().,;:!?'"]))/g;
+	// `**bold *italic***`, italics ending on the bold's closing run, is a branch of
+	// its own. Every branch gives each `*` exactly one way to match: alternatives
+	// that could both take the same `*` backtrack exponentially on an unclosed `**`.
+	// Italics neither open before nor close after a space, as in CommonMark: `2 * 3 * 4` stays arithmetic.
+	const pattern = /\\(?<escaped>[!-/:-@[-`{-~])|\[(?<label>[^\]]+)\]\((?<href>(?:[^\s()]|\([^\s()]*\))+)\)|<(?<angle>(?:https?|ao):\/\/[^\s>]+)>|`(?<code>[^`]+)`|\*\*\*(?<strongEm>[^*\n]+)\*\*\*|\*\*(?<strongLead>[^*]*)\*(?<strongTail>[^*]+)\*\*\*|\*\*(?<strong>(?:[^*]|\*(?!\*))+)\*\*|__(?<underStrong>(?:[^_]|_(?!_))+)__|~~(?<strike>[^~]+)~~|\*(?<em>[^*\s](?:[^*\n]*[^*\s])?)\*|_(?<underEm>[^_\n]+)_|(?<bare>https?:\/\/[^\s<]+)|(?<session>ao:\/\/sessions\/[^\s<>()]*[^\s<>().,;:!?'"])/g;
 	const nodes: ReactNode[] = [];
 	let at = 0;
 	let match: RegExpExecArray | null;
 	while ((match = pattern.exec(text))) {
+		const g = match.groups!;
 		if (match.index > at) nodes.push(text.slice(at, match.index));
-		if ((match[7] || match[10]) && !allowsUnderscoreEmphasis(text, match.index, pattern.lastIndex)) {
+		let end = match.index + match[0].length;
+		if (g.escaped !== undefined) {
+			// `\*` is a literal asterisk, not the start of emphasis.
+			nodes.push(g.escaped);
+		} else if ((g.underStrong || g.underEm) && !allowsUnderscoreEmphasis(text, match.index, pattern.lastIndex)) {
 			nodes.push(match[0]);
-		} else if (match[3] && !WEB_OR_AO_LINK.test(match[3]) && !chatFileReference(match[3])) {
+		} else if (g.href && !WEB_OR_AO_LINK.test(g.href) && !chatFileReference(g.href)) {
 			// Neither a page nor a file (mailto:, an anchor): keep the Markdown as
 			// written, and keep reading inside it so its code and emphasis render.
 			nodes.push("[");
 			at = match.index + 1;
 			pattern.lastIndex = at;
 			continue;
-		} else if (match[3] && !openFiles && !WEB_OR_AO_LINK.test(match[3])) {
-			nodes.push(match[2]);
-		} else if ((match[2] && match[3]) || match[4] || match[11] || match[12]) {
-			const url = match[3] ?? match[4] ?? match[11] ?? match[12];
-			const label = match[2] ?? url;
+		} else if (g.href && !openFiles && !WEB_OR_AO_LINK.test(g.href)) {
+			nodes.push(g.label);
+		} else if (g.href || g.angle || g.bare || g.session) {
+			// A bare address ends before the sentence's punctuation, as GitHub reads it.
+			const url = g.href ?? g.angle ?? g.session ?? trimBareUrl(g.bare!);
+			if (g.bare) end = match.index + url.length;
+			const label = g.label ?? url;
 			nodes.push(linksPressable ? <MarkdownLink key={`${match.index}-link`} url={url} label={label} style={styles.link} /> : <Text key={`${match.index}-link`} style={styles.link}>{label}</Text>);
-		} else if (match[5]) {
-			nodes.push(<Text key={`${match.index}-code`} style={codeStyle ? [styles.inlineCode, codeStyle] : styles.inlineCode}>{match[5]}</Text>);
-		} else if (match[6] || match[7]) {
+		} else if (g.code) {
+			nodes.push(<Text key={`${match.index}-code`} style={codeStyle ? [styles.inlineCode, codeStyle] : styles.inlineCode}>{g.code}</Text>);
+		} else if (g.strongEm) {
+			nodes.push(<Text key={`${match.index}-strong-em`} style={[styles.strong, styles.em]}>{inline(g.strongEm, styles, linksPressable, codeStyle, openFiles)}</Text>);
+		} else if (g.strongTail) {
+			nodes.push(<Text key={`${match.index}-strong`} style={styles.strong}>{inline(g.strongLead, styles, linksPressable, codeStyle, openFiles)}<Text style={styles.em}>{inline(g.strongTail, styles, linksPressable, codeStyle, openFiles)}</Text></Text>);
+		} else if (g.strong || g.underStrong) {
 			// Emphasis holds inline Markdown of its own: a link inside bold is still a link.
-			nodes.push(<Text key={`${match.index}-strong`} style={styles.strong}>{inline(match[6] ?? match[7], styles, linksPressable, codeStyle, openFiles)}</Text>);
-		} else if (match[8]) {
-			nodes.push(<Text key={`${match.index}-strike`} style={styles.strike}>{inline(match[8], styles, linksPressable, codeStyle, openFiles)}</Text>);
+			nodes.push(<Text key={`${match.index}-strong`} style={styles.strong}>{inline(g.strong ?? g.underStrong, styles, linksPressable, codeStyle, openFiles)}</Text>);
+		} else if (g.strike) {
+			nodes.push(<Text key={`${match.index}-strike`} style={styles.strike}>{inline(g.strike, styles, linksPressable, codeStyle, openFiles)}</Text>);
 		} else {
-			nodes.push(<Text key={`${match.index}-em`} style={styles.em}>{inline(match[9] ?? match[10], styles, linksPressable, codeStyle, openFiles)}</Text>);
+			nodes.push(<Text key={`${match.index}-em`} style={styles.em}>{inline(g.em ?? g.underEm, styles, linksPressable, codeStyle, openFiles)}</Text>);
 		}
-		at = match.index + match[0].length;
+		at = end;
+		pattern.lastIndex = end;
 	}
 	if (at < text.length) nodes.push(text.slice(at));
 	return nodes;
+}
+
+/**
+ * A bare web address without the punctuation that ends its sentence: a trailing
+ * full stop, comma or quote, and a closing parenthesis it did not open.
+ */
+export function trimBareUrl(url: string): string {
+	let end = url.length;
+	for (;;) {
+		const last = url[end - 1];
+		if (/[.,;:!?'"*_~]/.test(last)) end--;
+		else if (last === ")" && count(url.slice(0, end), "(") < count(url.slice(0, end), ")")) end--;
+		else break;
+	}
+	return url.slice(0, end);
+}
+
+function count(text: string, char: string): number {
+	return text.split(char).length - 1;
 }
 
 const makeStyles = (t: Theme) =>
@@ -435,8 +519,12 @@ const makeStyles = (t: Theme) =>
 		root: { gap: 10 },
 		body: { fontFamily: "DMSans_400Regular", color: t.textPrimary, fontSize: prose.fontSize, lineHeight: prose.lineHeight },
 		proseGap: { fontSize: 10, lineHeight: 10 },
+		// A heading opens a section, so it sits further from the text above it.
+		headingGap: { fontSize: 16, lineHeight: 16 },
 		heading: { fontFamily: "DMSans_600SemiBold", color: t.textPrimary, fontSize: type.title3.fontSize, lineHeight: type.title3.lineHeight, fontWeight: "600", marginTop: space.xs },
-		smallHeading: { fontFamily: "DMSans_400Regular", fontSize: type.callout.fontSize, lineHeight: type.callout.lineHeight },
+		// `##` and `###` label a paragraph: prose size, semibold.
+		subheading: { fontSize: prose.fontSize, lineHeight: prose.lineHeight },
+		minorHeading: { color: t.textSecondary, fontSize: type.subheadline.fontSize, lineHeight: type.subheadline.lineHeight },
 		strong: { fontFamily: "DMSans_600SemiBold", fontWeight: "600" },
 		em: { fontStyle: "italic" },
 		strike: { textDecorationLine: "line-through" },
@@ -453,9 +541,13 @@ const makeStyles = (t: Theme) =>
 		// A drawn marker's column takes the numbered marker's width.
 		markerBox: { width: 20 },
 		bullet: { width: 5, height: 5, borderRadius: radius.pill, backgroundColor: t.textTertiary },
+		bulletRing: { backgroundColor: "transparent", borderWidth: 1, borderColor: t.textTertiary },
+		bulletSquare: { borderRadius: 1 },
+		// A marker inside selectable text steps back like a drawn one.
+		inlineMarker: { color: t.textTertiary },
 		taskDone: { color: t.textTertiary, textDecorationLine: "line-through" },
 		quote: { borderLeftWidth: 2, borderLeftColor: t.borderStrong, paddingLeft: space.md },
-		quoteText: { fontFamily: "DMSans_400Regular", color: t.textSecondary, fontSize: type.subheadline.fontSize, lineHeight: prose.lineHeight, fontStyle: "italic" },
+		quoteText: { fontFamily: "DMSans_400Regular", color: t.textSecondary, fontSize: prose.fontSize, lineHeight: prose.lineHeight },
 		rule: { height: rowDividerWidth, backgroundColor: t.borderSubtle, marginVertical: space.xxs },
 		codeCard: { borderRadius: radius.md, borderCurve: "continuous", overflow: "hidden", borderWidth: rowDividerWidth, borderColor: t.borderSubtle, backgroundColor: t.bgColumn },
 		codeHeader: { paddingLeft: space.md, flexDirection: "row", alignItems: "center", borderBottomWidth: rowDividerWidth, borderBottomColor: t.borderSubtle },
