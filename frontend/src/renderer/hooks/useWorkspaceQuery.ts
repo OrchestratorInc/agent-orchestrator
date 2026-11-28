@@ -593,6 +593,7 @@ export function toCloudWorkspaceSession(
 			...(session.workerEpoch ? { workerEpoch: session.workerEpoch } : {}),
 			...(session.requestedBy ? { requestedBy: session.requestedBy } : {}),
 			...(session.createdByUserId ? { createdByUserId: session.createdByUserId } : {}),
+			...(session.automationRunId ? { automationRunId: session.automationRunId } : {}),
 		},
 		outputType: session.outputType,
 		requestedOutput: session.requestedOutput,

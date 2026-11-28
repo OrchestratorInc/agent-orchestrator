@@ -1,11 +1,11 @@
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type FormEvent } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type FormEvent, type ReactNode, type RefObject } from "react";
 import { flushSync } from "react-dom";
 import { useQueryClient } from "@tanstack/react-query";
 import { useNavigate } from "@tanstack/react-router";
 import { ScrollArea } from "radix-ui";
 import { useTranslation } from "react-i18next";
 import type { TFunction } from "i18next";
-import { ArrowDownUp, ArrowUpRight, CalendarClock, CircleAlert, Folder, ChevronDown, Clock, GitPullRequest, ListChecks, FileText, Filter, Pause, Pencil, Plus, Repeat, Trash2, TriangleAlert, type AppIcon, StickyNote } from "@/components/app-icons";
+import { ArrowDownUp, ArrowUpRight, Bell, BellRing, CalendarClock, CircleAlert, Cloud, Folder, ChevronDown, Clock, GitPullRequest, Laptop, ListChecks, FileText, Filter, Pause, Pencil, Play, Plus, Repeat, Trash2, TriangleAlert, type AppIcon, StickyNote } from "@/components/app-icons";
 import { Button, GHOST_PILL_CLASS } from "./ui/button";
 import { CloseButton } from "./ui/close-button";
 import { ResizeHandle } from "./ResizeHandle";
@@ -43,9 +43,30 @@ import { agentModelsQueryOptions } from "../hooks/useAgentModelsQuery";
 import { useAgentReadinessQuery, type AgentReadinessSnapshot } from "../hooks/useAgentReadinessQuery";
 import { useProjectWorkerDefaults } from "../hooks/useProjectDefaultWorker";
 import { useResizable } from "../hooks/useResizable";
-import { useWorkspaceQuery } from "../hooks/useWorkspaceQuery";
+import { useCloudProjectsQuery, useWorkspaceQuery } from "../hooks/useWorkspaceQuery";
 import { CLOUD_PROJECT_KIND, STANDALONE_PROJECT_KIND, STANDALONE_WORKSPACE_ID } from "../types/workspace";
 import { agentLabel } from "../lib/agent-options";
+import {
+	CLOUD_AUTOMATION_HARNESSES,
+	cloudAutomationsQueryKey,
+	cloudAutomationActiveRun,
+	cloudAutomationErrorMessage,
+	cloudRunErrorMessage,
+	isCloudRunInFlight,
+	useCloudAutomationRuns,
+	useCloudAutomations,
+	useCreateCloudAutomation,
+	useDeleteCloudAutomation,
+	useRunCloudAutomationNow,
+	useSubscribeCloudAutomation,
+	useUpdateCloudAutomation,
+	type CloudAutomation,
+} from "../hooks/useCloudAutomations";
+import { useCloudOffering } from "../hooks/useCloudOffering";
+import { useProviderConnections } from "../hooks/useProviderConnections";
+import { sessionNavigateTarget } from "../lib/navigate-to-session";
+import { CloudCpError } from "../lib/cloud-cp";
+import { useUiStore } from "../stores/ui-store";
 import {
 	buildRankedAgentOptions,
 	DEFAULT_AGENT_PRIORITY_RANK,
@@ -117,9 +138,34 @@ function timestamp(value?: string) {
 	return value ? Date.parse(value) || 0 : 0;
 }
 
+/** This computer's IANA timezone, the zone a new automation's clock time is in. */
+function localTimezone() {
+	return Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";
+}
+
+/** One row of the list: an automation of this computer's daemon, or one that runs in AO Cloud. */
+type ListedAutomation = {
+	key: string;
+	displayName: string;
+	enabled: boolean;
+	nextRunAt?: string;
+	createdAt: string;
+	projectId: string;
+	local?: Automation;
+	cloud?: CloudAutomation;
+};
+
+function listLocal(item: Automation): ListedAutomation {
+	return { key: `local:${item.id}`, displayName: item.displayName, enabled: item.enabled, nextRunAt: item.nextRunAt, createdAt: item.createdAt, projectId: item.projectId, local: item };
+}
+
+function listCloud(item: CloudAutomation): ListedAutomation {
+	return { key: `cloud:${item.id}`, displayName: item.displayName, enabled: item.enabled, nextRunAt: item.nextRunAt, createdAt: item.createdAt, projectId: item.projectId, cloud: item };
+}
+
 /** Orders the list: soonest next run first with paused ones last, by name, or newest first. */
-function sortAutomations(items: Automation[], order: SortOrder) {
-	const byName = (left: Automation, right: Automation) => left.displayName.localeCompare(right.displayName);
+function sortAutomations(items: ListedAutomation[], order: SortOrder) {
+	const byName = (left: ListedAutomation, right: ListedAutomation) => left.displayName.localeCompare(right.displayName);
 	return [...items].sort((left, right) => {
 		if (order === "name") return byName(left, right);
 		if (order === "created") return timestamp(right.createdAt) - timestamp(left.createdAt) || byName(left, right);
@@ -165,10 +211,23 @@ export function AutomationsView() {
 	const { t } = useTranslation();
 	const query = useAutomations();
 	const workspaces = useWorkspaceQuery().data ?? [];
+	// Whether each listed session has ended: a cloud run's session may outlive
+	// its run (an automation that keeps it) or end before it (deleted mid-run).
+	const sessionTerminated = useMemo(() => new Map(workspaces.flatMap((workspace) => (workspace.sessions ?? []).map((session) => [session.id, Boolean(session.isTerminated)] as const))), [workspaces]);
 	const harnesses = useAgentReadinessQuery().data?.agents ?? [];
 	const create = useCreateAutomation();
 	const update = useUpdateAutomation();
 	const remove = useDeleteAutomation();
+	const cloud = useCloudAutomations();
+	const chatHarnesses = useCloudOffering().chatHarnesses;
+	const providerConnections = useProviderConnections().data;
+	const connectedCloudHarnesses = useMemo(
+		() => providerConnections?.filter((connection) => connection.validationState === "valid").map((connection) => connection.provider),
+		[providerConnections],
+	);
+	const createCloud = useCreateCloudAutomation();
+	const updateCloud = useUpdateCloudAutomation();
+	const removeCloud = useDeleteCloudAutomation();
 	const [createOpen, setCreateOpen] = useState(false);
 	const [starter, setStarter] = useState<AutomationTemplateID>("custom");
 	const [search, setSearch] = useState("");
@@ -180,11 +239,34 @@ export function AutomationsView() {
 		setCreateOpen(true);
 	}
 	const [editTarget, setEditTarget] = useState<Automation | null>(null);
-	const [deleteTarget, setDeleteTarget] = useState<Automation | null>(null);
+	const [cloudEditTarget, setCloudEditTarget] = useState<CloudAutomation | null>(null);
+	const [deleteTarget, setDeleteTarget] = useState<ListedAutomation | null>(null);
+	// The selected row's key: local:<id> or cloud:<id>.
 	const [selectedId, setSelectedId] = useState<string | null>(null);
 	const [actionError, setActionError] = useState<string | null>(null);
-	const automations = useMemo(() => query.data ?? [], [query.data]);
-	const projectName = (id: string) => id === STANDALONE_WORKSPACE_ID ? t("standalone.workspaceName") : workspaces.find((workspace) => workspace.id === id)?.name ?? id;
+	const cloudItems = cloud.available ? cloud.data : undefined;
+	const automations = useMemo(() => [...(query.data ?? []).map(listLocal), ...(cloudItems ?? []).map(listCloud)], [query.data, cloudItems]);
+	// A cloud automation's project that the loaded project list lacks (deleted:
+	// its automation stays, turned off, until someone deletes it) reads as not
+	// found rather than as its id.
+	const cloudProjects = useCloudProjectsQuery({ enabled: cloud.available }).data;
+	const cloudProjectsLoaded = cloudProjects !== undefined;
+	const cloudProjectIds = useMemo(() => new Set((cloudItems ?? []).map((item) => item.projectId)), [cloudItems]);
+	// The organization's projects changed (one deleted here, in its settings
+	// or on another device): the control plane has turned that project's
+	// automations off, so read them again now rather than at the next poll.
+	const listedProjectIds = useMemo(() => cloudProjects?.map((project) => project.id).sort().join("\n"), [cloudProjects]);
+	const queryClient = useQueryClient();
+	const previousProjectIds = useRef<string | undefined>(undefined);
+	useEffect(() => {
+		if (listedProjectIds === undefined) return;
+		if (previousProjectIds.current !== undefined && previousProjectIds.current !== listedProjectIds) {
+			void queryClient.invalidateQueries({ queryKey: cloudAutomationsQueryKey });
+		}
+		previousProjectIds.current = listedProjectIds;
+	}, [listedProjectIds, queryClient]);
+	const projectName = (id: string) => id === STANDALONE_WORKSPACE_ID ? t("standalone.workspaceName") : workspaces.find((workspace) => workspace.id === id)?.name
+		?? (cloudProjectsLoaded && cloudProjectIds.has(id) ? t("automations.cloud.projectNotFound") : id);
 	// Projects that own at least one automation, so the filter never offers an empty choice.
 	const projectOptions = [...new Set(automations.map((item) => item.projectId))].map((id) => ({ id, name: projectName(id) }));
 	const needle = search.trim().toLocaleLowerCase();
@@ -197,7 +279,7 @@ export function AutomationsView() {
 	);
 	const hasAutomations = automations.length > 0;
 	// Details stay open only while their automation is in the visible list.
-	const selected = visibleAutomations.find((item) => item.id === selectedId);
+	const selected = visibleAutomations.find((item) => item.key === selectedId);
 	// Forget a selection that left the list, so clearing a filter doesn't reopen it unasked.
 	useEffect(() => {
 		if (selectedId && !selected) setSelectedId(null);
@@ -241,6 +323,7 @@ export function AutomationsView() {
 					{actionError ? <p role="alert" className="mb-3 rounded-md bg-destructive/10 px-3 py-2 text-xs text-destructive">{actionError}</p> : null}
 					{query.isLoading ? <p role="status" className="px-3 py-8 text-center text-sm text-muted-foreground">{t("automations.loading")}</p> : null}
 					{query.error ? <p role="alert" className="text-sm text-destructive">{query.error.message}</p> : null}
+					{cloud.error ? <p role="alert" className="text-sm text-destructive">{cloudAutomationErrorMessage(cloud.error, t)}</p> : null}
 					{!query.isLoading && !query.error && !hasAutomations ? (
 						<section aria-labelledby="automation-templates">
 							<h2 id="automation-templates" className="text-control font-medium text-foreground">{t("automations.templates.title")}</h2>
@@ -323,9 +406,13 @@ export function AutomationsView() {
 							</div>
 							{visibleAutomations.length > 0 ? (
 								<div className="flex flex-col gap-0.5">
-									{visibleAutomations.map((item) => (
-										<AutomationRow key={item.id} item={item} projectName={projectName(item.projectId)} selected={item.id === selected?.id} onSelect={() => setSelectedId(item.id === selected?.id ? null : item.id)} />
-									))}
+									{visibleAutomations.map((entry) => {
+										const isSelected = entry.key === selected?.key;
+										const onSelect = () => setSelectedId(isSelected ? null : entry.key);
+										return entry.cloud
+											? <CloudAutomationRow key={entry.key} rowKey={entry.key} item={entry.cloud} projectName={projectName(entry.projectId)} selected={isSelected} onSelect={onSelect} />
+											: entry.local ? <AutomationRow key={entry.key} rowKey={entry.key} item={entry.local} projectName={projectName(entry.projectId)} selected={isSelected} onSelect={onSelect} /> : null;
+									})}
 								</div>
 							) : (
 								<div className="flex flex-col items-center gap-1 py-16 text-center">
@@ -341,14 +428,39 @@ export function AutomationsView() {
 					<ScrollArea.Thumb className="relative flex-1 rounded-full bg-[color-mix(in_srgb,var(--color-scrollbar)_42%,transparent)] hover:bg-[color-mix(in_srgb,var(--color-scrollbar)_56%,transparent)]" />
 				</ScrollArea.Scrollbar>
 			</ScrollArea.Root>
-			{selected ? (
-				<AutomationDetails key={selected.id} item={selected} projectName={projectName(selected.projectId)} busy={update.isPending}
-					onClose={closeDetails} onEdit={() => setEditTarget(selected)} onDelete={() => setDeleteTarget(selected)} onToggle={(enabled) => toggle(selected, enabled)} />
+			{selected?.cloud ? (
+				<CloudAutomationDetails key={selected.key} item={selected.cloud} userId={cloud.userId} sessionTerminated={sessionTerminated} projectName={projectName(selected.projectId)} busy={updateCloud.isPending}
+					onClose={closeDetails} onEdit={() => setCloudEditTarget(selected.cloud ?? null)} onDelete={() => setDeleteTarget(selected)} onError={setActionError}
+					onToggle={(enabled) => updateCloud.mutateAsync({ id: selected.cloud!.id, body: { enabled } })} />
+			) : selected?.local ? (
+				<AutomationDetails key={selected.key} item={selected.local} projectName={projectName(selected.projectId)} busy={update.isPending}
+					onClose={closeDetails} onEdit={() => setEditTarget(selected.local ?? null)} onDelete={() => setDeleteTarget(selected)} onToggle={(enabled) => toggle(selected.local!, enabled)} />
 			) : null}
 			</main>
-			<AutomationFormDialog initialTemplateId={starter} open={createOpen} workspaces={workspaces} harnesses={harnesses} busy={create.isPending} error={create.error?.message ?? null} onOpenChange={setCreateOpen} onSubmit={async (input) => { await create.mutateAsync(input as CreateAutomationInput); setCreateOpen(false); }} />
-			<AutomationFormDialog open={Boolean(editTarget)} automation={editTarget ?? undefined} workspaces={workspaces} harnesses={harnesses} busy={update.isPending} error={update.error?.message ?? null} onOpenChange={(open) => { if (!open) setEditTarget(null); }} onSubmit={async (input) => { if (!editTarget) return; await update.mutateAsync({ id: editTarget.id, body: input }); setEditTarget(null); }} />
-			<ConfirmDialog open={Boolean(deleteTarget)} title={t("automations.delete.title")} description={t("automations.delete.description", { name: deleteTarget?.displayName })} confirmLabel={t("automations.delete.confirm")} destructive busy={remove.isPending} error={remove.error?.message ?? null} onOpenChange={(open) => { if (!open) setDeleteTarget(null); }} onConfirm={() => { if (!deleteTarget) return; remove.mutate(deleteTarget.id, { onSuccess: () => setDeleteTarget(null) }); }} />
+			<AutomationFormDialog initialTemplateId={starter} open={createOpen} workspaces={workspaces} harnesses={harnesses} cloudOrgId={cloud.available ? cloud.orgId : undefined} cloudHarnesses={chatHarnesses} connectedCloudHarnesses={connectedCloudHarnesses} busy={create.isPending || createCloud.isPending} error={create.error?.message ?? cloudAutomationErrorMessage(createCloud.error, t, { harness: createCloud.variables?.harness, saving: true })} onOpenChange={(open) => { setCreateOpen(open); if (!open) createCloud.reset(); }} onSubmit={async (input) => {
+				if (input.runsOn === "cloud") {
+					// A cloud run is unattended: trusted mode, the default time limit.
+					await createCloud.mutateAsync({ projectId: input.projectId!, displayName: input.displayName!, prompt: input.prompt!, harness: input.harness!, timezone: input.timezone!, rrule: input.rrule, mode: "trusted", maxRuntimeMinutes: 60, deleteSessionOnComplete: input.deleteSessionOnComplete ?? false, enabled: true });
+				} else {
+					const { runsOn: _runsOn, ...body } = input;
+					await create.mutateAsync(body as CreateAutomationInput);
+				}
+				setCreateOpen(false);
+			}} />
+			<AutomationFormDialog open={Boolean(editTarget)} automation={editTarget ?? undefined} workspaces={workspaces} harnesses={harnesses} busy={update.isPending} error={update.error?.message ?? null} onOpenChange={(open) => { if (!open) setEditTarget(null); }} onSubmit={async (input) => { if (!editTarget || input.runsOn !== "local") return; const { runsOn: _runsOn, ...body } = input; await update.mutateAsync({ id: editTarget.id, body }); setEditTarget(null); }} />
+			<AutomationFormDialog open={Boolean(cloudEditTarget)} cloudAutomation={cloudEditTarget ?? undefined} cloudProjectName={cloudEditTarget ? projectName(cloudEditTarget.projectId) : undefined} cloudOrgId={cloud.orgId} cloudUserId={cloud.userId} cloudHarnesses={chatHarnesses} connectedCloudHarnesses={connectedCloudHarnesses} workspaces={workspaces} harnesses={harnesses} busy={updateCloud.isPending} error={cloudAutomationErrorMessage(updateCloud.error, t, { harness: updateCloud.variables?.body.harness ?? cloudEditTarget?.harness, saving: true })} onOpenChange={(open) => { if (!open) { setCloudEditTarget(null); updateCloud.reset(); } }} onSubmit={async (input) => {
+				if (!cloudEditTarget || input.runsOn !== "cloud") return;
+				// Only what changed: any change makes the automation run as the editor, so
+				// an unchanged save must not rebind it.
+				const { runsOn: _runsOn, projectId: _projectId, timezone: _timezone, ...body } = input;
+				if (Object.keys(body).length > 0) await updateCloud.mutateAsync({ id: cloudEditTarget.id, body });
+				setCloudEditTarget(null);
+			}} />
+			<ConfirmDialog open={Boolean(deleteTarget)} title={t("automations.delete.title")} description={t("automations.delete.description", { name: deleteTarget?.displayName })} confirmLabel={t("automations.delete.confirm")} destructive busy={remove.isPending || removeCloud.isPending} error={deleteTarget?.cloud ? cloudAutomationErrorMessage(removeCloud.error, t) : remove.error?.message ?? null} onOpenChange={(open) => { if (!open) { setDeleteTarget(null); removeCloud.reset(); } }} onConfirm={() => {
+				if (!deleteTarget) return;
+				if (deleteTarget.cloud) removeCloud.mutate(deleteTarget.cloud.id, { onSuccess: () => setDeleteTarget(null) });
+				else if (deleteTarget.local) remove.mutate(deleteTarget.local.id, { onSuccess: () => setDeleteTarget(null) });
+			}} />
 		</div>
 	);
 }
@@ -429,20 +541,78 @@ function StatusDot({ state }: { state: "failed" | "ran" | "waiting" }) {
 	);
 }
 
-function AutomationRow({ item, projectName, selected, onSelect }: { item: Automation; projectName: string; selected: boolean; onSelect: () => void }) {
+function AutomationRow({ rowKey, item, projectName, selected, onSelect }: { rowKey: string; item: Automation; projectName: string; selected: boolean; onSelect: () => void }) {
 	const { t, i18n } = useTranslation();
 	const locale = i18n.resolvedLanguage;
 	const scheduleLabel = useScheduleLabel();
 	const failed = item.enabled && item.latestRun?.status === "failed";
 	const failedAt = item.latestRun?.finishedAt ?? item.latestRun?.scheduledFor;
 	return <article>
-		<Pressable id={automationRowId(item.id)} aria-expanded={selected} aria-controls={selected ? AUTOMATION_DETAILS_ID : undefined} onClick={onSelect}
+		<Pressable id={automationRowId(rowKey)} aria-expanded={selected} aria-controls={selected ? AUTOMATION_DETAILS_ID : undefined} onClick={onSelect}
 			className={cn("flex w-full min-w-0 items-center gap-3 rounded-md px-2 py-2.5 text-start", selected ? "bg-interactive-hover" : "hover:bg-interactive-hover")}>
 			<StatusMark state={!item.enabled ? "paused" : failed ? "failed" : item.latestRun ? "ran" : "waiting"} />
 			<div className="min-w-0 flex-1">
 				<h2 className="truncate text-control font-medium leading-5 text-foreground">{item.displayName}</h2>
 				<p className="flex min-w-0 items-center gap-1.5 text-caption leading-5 text-muted-foreground">
 					<span className="truncate">{scheduleLabel(item.rrule)}</span>
+					<span aria-hidden="true" className="text-passive">·</span>
+					<span className="truncate">{projectName}</span>
+				</p>
+			</div>
+			<span className={cn("sr-only shrink-0 text-caption tabular-nums @md:not-sr-only", failed ? "text-destructive" : item.enabled ? "text-foreground" : "text-muted-foreground")}>
+				{!item.enabled
+					? t("automations.paused")
+					: failed && failedAt
+						? t("automations.failedOn", { date: new Intl.DateTimeFormat(locale, { month: "short", day: "numeric" }).format(new Date(failedAt)) })
+						: item.nextRunAt ? displayRelativeTime(new Date(item.nextRunAt), t, locale) : null}
+			</span>
+		</Pressable>
+	</article>;
+}
+
+/** A cloud automation's latest run did not finish: it failed or reached its time limit. */
+function cloudRunFailed(status: string | undefined) {
+	return status === "failed" || status === "timed_out";
+}
+
+/**
+ * A run's status and reason as one accessible name, with the status said once:
+ * a reason that already leads with it ("Skipped: the previous run was still
+ * going.") stands alone; any other reason follows the status.
+ */
+function runStatusLabel(status: string, reason: string) {
+	const lead = reason.split(/[:：]/, 1)[0]?.trim() ?? "";
+	return lead.localeCompare(status, undefined, { sensitivity: "accent" }) === 0 ? reason : `${status}: ${reason}`;
+}
+
+/** A schedule as a person reads it, with the automation's timezone when it is not this computer's (the organization shares it). */
+function useCloudScheduleLabel() {
+	const { t } = useTranslation();
+	const scheduleLabel = useScheduleLabel();
+	return (item: Pick<CloudAutomation, "rrule" | "timezone">) => item.timezone === localTimezone()
+		? scheduleLabel(item.rrule)
+		: t("automations.cloud.scheduleInZone", { schedule: scheduleLabel(item.rrule), timezone: item.timezone });
+}
+
+/** An AO Cloud automation's row: as a local one's, with the AO Cloud mark. */
+function CloudAutomationRow({ rowKey, item, projectName, selected, onSelect }: { rowKey: string; item: CloudAutomation; projectName: string; selected: boolean; onSelect: () => void }) {
+	const { t, i18n } = useTranslation();
+	const locale = i18n.resolvedLanguage;
+	const scheduleLabel = useCloudScheduleLabel();
+	const latest = cloudAutomationActiveRun(item) ?? item.latestRun;
+	const failed = item.enabled && cloudRunFailed(latest?.status);
+	const failedAt = latest?.finishedAt ?? latest?.scheduledFor;
+	return <article>
+		<Pressable id={automationRowId(rowKey)} aria-expanded={selected} aria-controls={selected ? AUTOMATION_DETAILS_ID : undefined} onClick={onSelect}
+			className={cn("flex w-full min-w-0 items-center gap-3 rounded-md px-2 py-2.5 text-start", selected ? "bg-interactive-hover" : "hover:bg-interactive-hover")}>
+			<StatusMark state={!item.enabled ? "paused" : failed ? "failed" : latest ? "ran" : "waiting"} />
+			<div className="min-w-0 flex-1">
+				<h2 className="flex min-w-0 items-center gap-1.5 text-control font-medium leading-5 text-foreground">
+					<span className="truncate">{item.displayName}</span>{" "}
+					<span className="flex shrink-0 items-center gap-1 text-caption font-normal text-muted-foreground"><Cloud aria-hidden="true" className="size-icon-xs" />{t("automations.cloud.badge")}</span>
+				</h2>
+				<p className="flex min-w-0 items-center gap-1.5 text-caption leading-5 text-muted-foreground">
+					<span className="truncate">{scheduleLabel(item)}</span>
 					<span aria-hidden="true" className="text-passive">·</span>
 					<span className="truncate">{projectName}</span>
 				</p>
@@ -469,15 +639,13 @@ const DETAILS_LIST_MIN_WIDTH_PX = 480;
 /** Runs shown at first, and how many more each Show more adds. */
 const RUNS_PAGE_SIZE = 5;
 
-/** The selected automation beside the list: its actions, schedule, runs and prompt. */
-function AutomationDetails({ item, projectName, busy, onClose, onEdit, onDelete, onToggle }: { item: Automation; projectName: string; busy: boolean; onClose: () => void; onEdit: () => void; onDelete: () => void; onToggle: (enabled: boolean) => Promise<void> }) {
-	const runs = useAutomationRuns(item.id);
-	const navigate = useNavigate();
-	const { t, i18n } = useTranslation();
-	const locale = i18n.resolvedLanguage;
-	const scheduleLabel = useScheduleLabel();
+/**
+ * The selected automation's panel beside the list, local or AO Cloud: beside
+ * the list when there is room, at the width its handle sets; in its place in a
+ * narrow window, closed with the X that closeRef names.
+ */
+function DetailsPanel({ label, closeRef, children }: { label: string; closeRef: RefObject<HTMLButtonElement | null>; children: ReactNode }) {
 	const asideRef = useRef<HTMLElement>(null);
-	const closeRef = useRef<HTMLButtonElement>(null);
 	// A narrow window hides the list, and the row that had focus with it, so focus moves into the panel.
 	useEffect(() => {
 		const list = asideRef.current?.previousElementSibling;
@@ -500,21 +668,53 @@ function AutomationDetails({ item, projectName, busy, onClose, onEdit, onDelete,
 		edge: "left",
 		reclampOnWindowResize: true,
 	});
-	const [visibleRuns, setVisibleRuns] = useState(RUNS_PAGE_SIZE);
+	return (
+		<aside ref={asideRef} id={AUTOMATION_DETAILS_ID} aria-label={label}
+			className="relative flex min-h-0 flex-1 flex-col @3xl/automations:w-(--automation-details-w) @3xl/automations:max-w-[max(340px,calc(100%-480px))] @3xl/automations:flex-none @3xl/automations:border-s @3xl/automations:border-border">
+			<div className="min-h-0 flex-1 overflow-y-auto">
+				<div className="flex flex-col gap-6 p-4">{children}</div>
+			</div>
+			{/* Outside the scroller so it spans the panel's full height; a narrow window has nothing beside it to resize against. */}
+			<ResizeHandle side="left" edge={() => asideRef.current} className="hidden @3xl/automations:block" data-testid="automation-details-resize-handle" onPointerDown={onPointerDown} onDoubleClick={onDoubleClick} />
+		</aside>
+	);
+}
+
+/** The details' prompt, clamped to four lines with Show full prompt when they cut it short. */
+function DetailsPrompt({ prompt }: { prompt: string }) {
+	const { t } = useTranslation();
 	const promptRef = useRef<HTMLParagraphElement>(null);
 	const [promptOpen, setPromptOpen] = useState(false);
 	const [promptClipped, setPromptClipped] = useState(false);
 	// Offer the full prompt only when the four clamped lines cut it short.
 	useLayoutEffect(() => {
-		const prompt = promptRef.current;
-		if (prompt && !promptOpen) setPromptClipped(prompt.scrollHeight > prompt.clientHeight);
-	}, [item.prompt, promptOpen]);
+		const element = promptRef.current;
+		if (element && !promptOpen) setPromptClipped(element.scrollHeight > element.clientHeight);
+	}, [prompt, promptOpen]);
 	return (
-		// Beside the list when there is room, at the width its handle sets; in its place in a narrow window, closed with its X.
-		<aside ref={asideRef} id={AUTOMATION_DETAILS_ID} aria-label={item.displayName}
-			className="relative flex min-h-0 flex-1 flex-col @3xl/automations:w-(--automation-details-w) @3xl/automations:max-w-[max(340px,calc(100%-480px))] @3xl/automations:flex-none @3xl/automations:border-s @3xl/automations:border-border">
-			<div className="min-h-0 flex-1 overflow-y-auto">
-			<div className="flex flex-col gap-6 p-4">
+		<section className="flex flex-col gap-1">
+			<h3 className={FORM_CAPTION_CLASS}>{t("automations.field.prompt")}</h3>
+			<p ref={promptRef} className={cn("whitespace-pre-wrap text-sm leading-6 text-foreground", !promptOpen && "line-clamp-4")}>{prompt}</p>
+			{promptClipped ? (
+				<Button type="button" size="sm" variant="quiet" className="-ms-2.5 self-start" onClick={() => setPromptOpen(!promptOpen)}>
+					{t(promptOpen ? "automations.details.showLess" : "automations.details.showFullPrompt")}
+				</Button>
+			) : null}
+		</section>
+	);
+}
+
+/** The selected automation beside the list: its actions, schedule, runs and prompt. */
+function AutomationDetails({ item, projectName, busy, onClose, onEdit, onDelete, onToggle }: { item: Automation; projectName: string; busy: boolean; onClose: () => void; onEdit: () => void; onDelete: () => void; onToggle: (enabled: boolean) => Promise<void> }) {
+	const runs = useAutomationRuns(item.id);
+	const navigate = useNavigate();
+	const { t, i18n } = useTranslation();
+	const locale = i18n.resolvedLanguage;
+	const scheduleLabel = useScheduleLabel();
+	const closeRef = useRef<HTMLButtonElement>(null);
+	const [visibleRuns, setVisibleRuns] = useState(RUNS_PAGE_SIZE);
+	return (
+		<DetailsPanel label={item.displayName} closeRef={closeRef}>
 				<header className="flex flex-col gap-3">
 					<div className="flex items-start gap-2">
 						<div className="min-w-0 flex-1">
@@ -598,26 +798,215 @@ function AutomationDetails({ item, projectName, busy, onClose, onEdit, onDelete,
 						<p className="py-2 text-xs text-muted-foreground">{t("automations.runs.empty")}</p>
 					)}
 				</section>
-				<section className="flex flex-col gap-1">
-					<h3 className={FORM_CAPTION_CLASS}>{t("automations.field.prompt")}</h3>
-					<p ref={promptRef} className={cn("whitespace-pre-wrap text-sm leading-6 text-foreground", !promptOpen && "line-clamp-4")}>{item.prompt}</p>
-					{promptClipped ? (
-						<Button type="button" size="sm" variant="quiet" className="-ms-2.5 self-start" onClick={() => setPromptOpen(!promptOpen)}>
-							{t(promptOpen ? "automations.details.showLess" : "automations.details.showFullPrompt")}
-						</Button>
+				<DetailsPrompt prompt={item.prompt} />
+		</DetailsPanel>
+	);
+}
+
+/**
+ * An AO Cloud automation's details: as a local one's, plus who it runs as,
+ * Run now and notifications, its branch, and its runs' sessions. The whole
+ * organization sees it and may run it now; only the person it runs as, its
+ * creator and admins change it (canEdit).
+ */
+function CloudAutomationDetails({ item, userId, sessionTerminated, projectName, busy, onClose, onEdit, onDelete, onToggle, onError }: { item: CloudAutomation; userId?: string; sessionTerminated: ReadonlyMap<string, boolean>; projectName: string; busy: boolean; onClose: () => void; onEdit: () => void; onDelete: () => void; onToggle: (enabled: boolean) => Promise<unknown>; onError: (message: string | null) => void }) {
+	const runs = useCloudAutomationRuns(item.id);
+	const runNow = useRunCloudAutomationNow();
+	const subscribe = useSubscribeCloudAutomation();
+	const navigate = useNavigate();
+	const { t, i18n } = useTranslation();
+	const locale = i18n.resolvedLanguage;
+	const scheduleLabel = useScheduleLabel();
+	const closeRef = useRef<HTMLButtonElement>(null);
+	const [visibleRuns, setVisibleRuns] = useState(RUNS_PAGE_SIZE);
+	const runAs = item.runAs.displayName || item.runAs.email || t("automations.cloud.runAsUnknown");
+	const latestError = item.latestRun ? cloudRunErrorMessage(item.latestRun, t) : undefined;
+	// A run in flight leads, even when an occurrence skipped since is the latest run.
+	const running = Boolean(cloudAutomationActiveRun(item));
+	async function act(action: () => Promise<unknown>) {
+		onError(null);
+		try { await action(); } catch (error) { onError(cloudAutomationErrorMessage(error, t, { harness: item.harness })); }
+	}
+	// Turning it on makes it run as whoever turned it on (the contract's
+	// updateAutomation), so an editor who is not its run-as person is told
+	// before and after.
+	const turnOnRebinds = !item.enabled && item.canEdit && Boolean(userId) && item.runAs.userId !== userId;
+	async function toggle(enabled: boolean) {
+		onError(null);
+		try {
+			await onToggle(enabled);
+		} catch (error) {
+			onError(enabled && turnOnRebinds && error instanceof CloudCpError && error.code === "agent_provider_required"
+				? t("automations.cloud.error.turnOnNeedsLogin", { agent: agentLabel(item.harness) })
+				: cloudAutomationErrorMessage(error, t, { harness: item.harness, saving: enabled }) ?? t("automations.updateError"));
+		}
+	}
+	const toggleSwitch = <Switch checked={item.enabled} disabled={busy || !item.canEdit} aria-label={t(item.enabled ? "automations.disable" : "automations.enable", { name: item.displayName })} onCheckedChange={(checked) => void toggle(checked)} />;
+	const runNowDisabled = running || runNow.isPending;
+	const runNowButton = (
+		<Button type="button" size="sm" variant="secondary" aria-label={t("automations.cloud.runNow.aria", { name: item.displayName })} disabled={runNowDisabled} onClick={() => void act(() => runNow.mutateAsync(item.id))}>
+			<Play aria-hidden="true" className="size-icon-sm" />
+			{t("automations.cloud.runNow")}
+		</Button>
+	);
+	return (
+		<DetailsPanel label={item.displayName} closeRef={closeRef}>
+			<header className="flex flex-col gap-3">
+				<div className="flex items-start gap-2">
+					<div className="min-w-0 flex-1">
+						<h2 className="truncate text-subtitle font-semibold leading-6 text-foreground">{item.displayName}</h2>
+						<p className="truncate text-xs text-muted-foreground">{projectName} · {agentLabel(item.harness)}</p>
+						<p className="flex min-w-0 items-center gap-1 text-xs text-muted-foreground">
+							<Cloud aria-hidden="true" className="size-icon-xs shrink-0" />
+							<span className="shrink-0">{t("automations.cloud.badge")}</span>
+							<span aria-hidden="true" className="text-passive">·</span>
+							<span className="truncate">{t("automations.cloud.runsAs", { name: runAs })}</span>
+						</p>
+					</div>
+					<CloseButton ref={closeRef} aria-label={t("common.close")} onClick={onClose} />
+				</div>
+				<div className="flex flex-wrap items-center gap-1">
+					{runNowDisabled ? (
+						// The button names itself; a tooltip only says why it is off (DESIGN.md).
+						// A disabled button takes no pointer or focus, so a focusable wrapper
+						// carries that tooltip (Radix's disabled-trigger pattern).
+						<Tooltip>
+							<TooltipTrigger asChild>
+								<span tabIndex={0} className="inline-flex rounded-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60">{runNowButton}</span>
+							</TooltipTrigger>
+							<TooltipContent side="bottom">{t(running ? "automations.cloud.runNow.running" : "automations.runStatus.starting")}</TooltipContent>
+						</Tooltip>
+					) : runNowButton}
+					{item.canEdit ? (
+						<>
+							<Button type="button" size="sm" variant="secondary" aria-label={t("automations.edit.aria", { name: item.displayName })} onClick={onEdit}>
+								<Pencil aria-hidden="true" className="size-icon-sm" />
+								{t("automations.details.edit")}
+							</Button>
+							<Button type="button" size="sm" variant="quiet" aria-label={t("automations.delete.aria", { name: item.displayName })} onClick={onDelete}>
+								<Trash2 aria-hidden="true" className="size-icon-sm" />
+								{t("automations.details.delete")}
+							</Button>
+						</>
 					) : null}
-				</section>
-			</div>
-			</div>
-			{/* Outside the scroller so it spans the panel's full height; a narrow window has nothing beside it to resize against. */}
-			<ResizeHandle side="left" edge={() => asideRef.current} className="hidden @3xl/automations:block" data-testid="automation-details-resize-handle" onPointerDown={onPointerDown} onDoubleClick={onDoubleClick} />
-		</aside>
+					<Tooltip>
+						<TooltipTrigger asChild>
+							<Button type="button" size="icon-sm" variant="quiet" aria-label={t("automations.cloud.subscribe", { name: item.displayName })} aria-pressed={item.subscribed} disabled={subscribe.isPending} onClick={() => void act(() => subscribe.mutateAsync({ id: item.id, subscribed: !item.subscribed }))}>
+								{item.subscribed ? <BellRing aria-hidden="true" className="size-icon-sm" /> : <Bell aria-hidden="true" className="size-icon-sm" />}
+							</Button>
+						</TooltipTrigger>
+						<TooltipContent side="bottom">{t(item.subscribed ? "automations.cloud.unsubscribe.tooltip" : "automations.cloud.subscribe.tooltip")}</TooltipContent>
+					</Tooltip>
+					<span aria-hidden="true" className="ms-auto text-xs text-muted-foreground">{t(item.enabled ? "automations.details.on" : "automations.details.off")}</span>
+					{turnOnRebinds ? (
+						<Tooltip>
+							<TooltipTrigger asChild>{toggleSwitch}</TooltipTrigger>
+							<TooltipContent side="bottom">{t("automations.cloud.turnOnRebinds", { agent: agentLabel(item.harness) })}</TooltipContent>
+						</Tooltip>
+					) : toggleSwitch}
+				</div>
+				{latestError ? <p role="alert" className="rounded-md bg-destructive/10 px-3 py-2 text-xs text-destructive">{latestError}</p> : null}
+			</header>
+			<section className="flex flex-col gap-1">
+				<h3 className={FORM_CAPTION_CLASS}>{t("automations.field.schedule")}</h3>
+				<p className="text-sm text-foreground">
+					{scheduleLabel(item.rrule)}
+					<span aria-hidden="true" className="text-passive"> · </span>
+					<span className="text-muted-foreground">{item.timezone}</span>
+				</p>
+				{/* A run in flight leads, even when an occurrence skipped since is the latest run. */}
+				{running ? <p className="text-xs text-foreground">{t("automations.runStatus.running")}</p> : null}
+				<p className="text-xs tabular-nums text-muted-foreground">
+					{item.enabled
+						? t("automations.nextRunAt", { time: item.nextRunAt ? displayRelativeTime(new Date(item.nextRunAt), t, locale) : "—" })
+						: item.disabledReason || t("automations.paused")}
+				</p>
+				<p className="text-xs text-muted-foreground">{t("automations.cloud.branch")}: <span className="font-mono text-foreground">{item.branch}</span></p>
+			</section>
+			<section className="flex flex-col gap-1">
+				<h3 className={FORM_CAPTION_CLASS}>{t("automations.runs.title")}</h3>
+				{runs.isLoading ? (
+					<p role="status" className="py-2 text-xs text-muted-foreground">{t("automations.runs.loading")}</p>
+				) : runs.error ? (
+					<p role="alert" className="py-2 text-xs text-destructive">{cloudAutomationErrorMessage(runs.error, t)}</p>
+				) : runs.data?.length ? (
+					<>
+						<ul className="divide-y divide-border">
+							{runs.data.slice(0, visibleRuns).map((run) => {
+								const failed = cloudRunFailed(run.status);
+								const duration = run.status === "completed" && run.startedAt && run.finishedAt ? formatDuration(Date.parse(run.finishedAt) - Date.parse(run.startedAt)) : null;
+								const status = duration ?? t(`automations.runStatus.${run.status}`, { defaultValue: run.status });
+								const statusClass = cn("shrink-0 text-xs tabular-nums", failed ? "text-destructive" : "text-muted-foreground");
+								const runError = cloudRunErrorMessage(run, t);
+								const sessionId = run.sessionId;
+								// An ended session is still readable (and restorable), never live. The
+								// session list says which have ended; one it does not carry ended with
+								// its settled run only when the automation deletes its runs' sessions.
+								// Otherwise the session stays, paused, and the next run continues in it.
+								const sessionEnded = Boolean(sessionId) && (sessionTerminated.get(sessionId!) ?? (!isCloudRunInFlight(run) && item.deleteSessionOnComplete));
+								return (
+									<li key={run.id} data-testid="automation-run" data-session={sessionId} className="flex min-h-9 items-center gap-2.5 py-1.5">
+										<StatusDot state={failed ? "failed" : run.status === "completed" ? "ran" : "waiting"} />
+										<p className="min-w-0 flex-1 truncate text-sm tabular-nums text-foreground">
+											{displayRelativeTime(new Date(run.scheduledFor), t, locale)}
+											{run.trigger === "manual" ? <span className="ms-2 text-xs text-muted-foreground">{t("automations.cloud.manual")}</span> : null}
+											{sessionEnded ? <span className="ms-2 text-xs text-muted-foreground">{t("automations.cloud.sessionEnded")}</span> : null}
+										</p>
+										{runError ? (
+											// The reason stays one hover or focus away, so a long message never stretches the row.
+											<Tooltip>
+												<TooltipTrigger asChild>
+													<button type="button" aria-label={runStatusLabel(status, runError)} className={cn(GHOST_PILL_CLASS, statusClass, "-mx-1.5 inline-flex h-control-sm items-center gap-1 rounded-md px-1.5 outline-none")}>
+														{status}
+														<CircleAlert aria-hidden="true" className={cn("size-icon-sm", failed ? "text-destructive" : "text-muted-foreground")} />
+													</button>
+												</TooltipTrigger>
+												<TooltipContent side="left" className="max-w-72">{runError}</TooltipContent>
+											</Tooltip>
+										) : (
+											<span className={statusClass}>{status}</span>
+										)}
+										{sessionId ? (
+											<Button type="button" size="icon-xs" variant="quiet" aria-label={t(sessionEnded ? "automations.cloud.viewSession" : "automations.runs.openSession")} onClick={() => void navigate(sessionNavigateTarget(item.projectId, sessionId))}>
+												<ArrowUpRight aria-hidden="true" className="size-icon-sm" />
+											</Button>
+										) : null}
+									</li>
+								);
+							})}
+						</ul>
+						{runs.data.length > visibleRuns ? (
+							<Button type="button" size="sm" variant="quiet" className="-ms-2.5 self-start" onClick={() => setVisibleRuns(visibleRuns + RUNS_PAGE_SIZE)}>
+								{t("automations.runs.showMore")}
+							</Button>
+						) : null}
+					</>
+				) : (
+					<p className="py-2 text-xs text-muted-foreground">{t("automations.runs.empty")}</p>
+				)}
+			</section>
+			<DetailsPrompt prompt={item.prompt} />
+		</DetailsPanel>
 	);
 }
 
 
-type WorkspaceOption = { id: string; name: string; kind?: string; standaloneAgent?: boolean };
-type AutomationFormSubmit = {
+type WorkspaceOption = { id: string; name: string; kind?: string; standaloneAgent?: boolean; cloudOrgId?: string; shared?: unknown };
+type RunsOn = "local" | "cloud";
+/** A cloud automation's create, or only the fields an edit changed. */
+type CloudAutomationFormSubmit = {
+	runsOn: "cloud";
+	projectId?: string;
+	timezone?: string;
+	displayName?: string;
+	prompt?: string;
+	harness?: CloudAutomation["harness"];
+	rrule?: string;
+	deleteSessionOnComplete?: boolean;
+};
+type AutomationFormSubmit = CloudAutomationFormSubmit | {
+	/** Where the automation runs: this computer's daemon. */
+	runsOn: "local";
 	templateId?: AutomationTemplateID;
 	useCase?: AutomationUseCase;
 	projectId?: string;
@@ -635,6 +1024,18 @@ type AutomationFormDialogProps = {
 	open: boolean;
 	initialTemplateId?: AutomationTemplateID;
 	automation?: Automation;
+	/** A cloud automation being edited. */
+	cloudAutomation?: CloudAutomation;
+	/** The edited cloud automation's project as the list names it (Project not found once deleted). */
+	cloudProjectName?: string;
+	/** The organization whose cloud projects may run automations; unset when AO Cloud automations are not offered. */
+	cloudOrgId?: string;
+	/** The signed-in Cloud user; editing an automation that runs as someone else makes it run as them. */
+	cloudUserId?: string;
+	/** Harnesses AO Cloud runs in Chat (`/me` chatHarnesses). */
+	cloudHarnesses?: string[];
+	/** Harnesses the user has a valid AO Cloud login for; unset while loading. */
+	connectedCloudHarnesses?: string[];
 	workspaces: WorkspaceOption[];
 	harnesses: AgentReadinessSnapshot[];
 	busy: boolean;
@@ -642,6 +1043,7 @@ type AutomationFormDialogProps = {
 	onOpenChange: (open: boolean) => void;
 	onSubmit: (input: AutomationFormSubmit) => Promise<void>;
 };
+const DELETE_SESSION_FIELD_ID = "automation-delete-session";
 
 type AutomationField = "projectId" | "name" | "prompt" | "time" | "hour" | "minute" | "monthDay";
 type AutomationValidationErrors = Partial<Record<AutomationField, string>>;
@@ -660,6 +1062,12 @@ function AutomationFormDialog({
 	open,
 	initialTemplateId = "custom",
 	automation,
+	cloudAutomation,
+	cloudProjectName,
+	cloudOrgId,
+	cloudUserId,
+	cloudHarnesses,
+	connectedCloudHarnesses,
 	workspaces,
 	harnesses,
 	busy,
@@ -668,10 +1076,15 @@ function AutomationFormDialog({
 	onSubmit,
 }: AutomationFormDialogProps) {
 	const { t, i18n } = useTranslation();
-	const editing = Boolean(automation);
-	const timezone = automation?.timezone || Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";
+	const edited = automation ?? cloudAutomation;
+	const editing = Boolean(edited);
+	const timezone = edited?.timezone || localTimezone();
+	// Runs on: this computer's daemon, or AO Cloud (with a Cloud project; the
+	// Scratchpad is this computer's, so it is a local choice only).
+	const [runsOn, setRunsOn] = useState<RunsOn>("local");
+	const isCloud = runsOn === "cloud";
 	const [projectId, setProjectId] = useState("");
-	const projectDefaults = useProjectWorkerDefaults(open ? daemonProjectId(automation?.projectId || projectId) : "");
+	const projectDefaults = useProjectWorkerDefaults(open && !isCloud ? daemonProjectId(automation?.projectId || projectId) : "");
 	const projectDefaultWorker = projectDefaults.harness;
 	const [name, setName] = useState("");
 	const nameRef = useRef<HTMLInputElement>(null);
@@ -684,6 +1097,8 @@ function AutomationFormDialog({
 	const [model, setModel] = useState("");
 	const [mode, setMode] = useState("");
 	const [effort, setEffort] = useState("");
+	// Off, a cloud run's session stays (paused while idle) and the next run continues in it.
+	const [deleteSessionOnComplete, setDeleteSessionOnComplete] = useState(false);
 	const [modelValid, setModelValid] = useState(true);
 	const [schedule, setSchedule] = useState<ScheduleFields>(() => ({
 		preset: "daily",
@@ -721,19 +1136,21 @@ function AutomationFormDialog({
 
 	useEffect(() => {
 		if (!open) return;
-		if (!automation) void captureRendererEvent("ao.automations.create_opened");
-		setProjectId(automation?.projectId ?? "");
-		setName(automation?.displayName ?? "");
-		setPrompt(automation?.prompt ?? "");
-		setHarness(automation?.harness ?? "");
+		if (!edited) void captureRendererEvent("ao.automations.create_opened");
+		setRunsOn(cloudAutomation ? "cloud" : "local");
+		setProjectId(edited?.projectId ?? "");
+		setName(edited?.displayName ?? "");
+		setPrompt(edited?.prompt ?? "");
+		setHarness(edited?.harness ?? "");
 		setModel(automation?.model ?? "");
 		setMode(automation?.mode ?? "");
 		setEffort(automation?.effort ?? "");
+		setDeleteSessionOnComplete(cloudAutomation?.deleteSessionOnComplete ?? false);
 		setModelValid(true);
 		const defaultTime = nowLocalHHMM();
 		const [defaultHour, defaultMinute] = defaultTime.split(":");
-		const nextSchedule = automation
-			? scheduleFieldsFromRRule(automation.rrule)
+		const nextSchedule = edited
+			? scheduleFieldsFromRRule(edited.rrule)
 			: {
 					preset: "daily" as const,
 					time: defaultTime,
@@ -748,12 +1165,12 @@ function AutomationFormDialog({
 		setSchedule(nextSchedule);
 		setValidationErrors({});
 		setDraftTemplateId("custom");
-		if (!automation && initialTemplateId !== "custom") applyTemplate(initialTemplateId);
+		if (!edited && initialTemplateId !== "custom") applyTemplate(initialTemplateId);
 	// Language changes must not discard edits to an open form.
 	// eslint-disable-next-line react-hooks/exhaustive-deps
-	}, [open, automation, initialTemplateId]);
+	}, [open, automation, cloudAutomation, initialTemplateId]);
 
-	const nextRun = schedule.legacyRaw || (automation && automation.timezone !== Intl.DateTimeFormat().resolvedOptions().timeZone)
+	const nextRun = schedule.legacyRaw || (edited && edited.timezone !== localTimezone())
 		? null
 		: nextScheduledRun(schedule);
 	// Re-render when the shown run passes or the day turns, so Next run and its
@@ -767,18 +1184,34 @@ function AutomationFormDialog({
 		const timer = window.setTimeout(() => setClockTick((tick) => tick + 1), Math.min(nextRunAt, midnight) - now + 1000);
 		return () => window.clearTimeout(timer);
 	}, [open, nextRunAt, clockTick]);
-	// Automations run on this machine's daemon, which knows no Cloud project (it
-	// answers "Unknown project"), and a Cloud standalone agent takes no session
-	// but its own: neither is a project for an automation.
-	const projectOptions = [
-		{ value: STANDALONE_WORKSPACE_ID, label: t("standalone.workspaceName") },
-		...workspaces
-			.filter((item) => item.kind !== CLOUD_PROJECT_KIND && item.kind !== STANDALONE_PROJECT_KIND && !item.standaloneAgent)
-			.map((item) => ({ value: item.id, label: item.name })),
-	];
-	if (automation && !projectOptions.some((option) => option.value === automation.projectId)) {
-		projectOptions.unshift({ value: automation.projectId, label: automation.projectId });
+	// This computer's daemon knows no Cloud project (it answers "Unknown
+	// project"), so This computer offers the Scratchpad (Sessions) and local
+	// projects. AO Cloud offers the organization's own cloud projects (not ones
+	// shared in), a standalone project with no repository included; the
+	// Scratchpad is this computer's, so it is no AO Cloud choice. A Cloud
+	// standalone agent takes no session but its own: neither side offers it.
+	const projectOptions = isCloud
+		? workspaces
+			.filter((item) => item.kind === CLOUD_PROJECT_KIND && item.cloudOrgId === cloudOrgId && !item.shared && !item.standaloneAgent)
+			.map((item) => ({ value: item.id, label: item.name }))
+		: [
+			{ value: STANDALONE_WORKSPACE_ID, label: t("standalone.workspaceName") },
+			...workspaces
+				.filter((item) => item.kind !== CLOUD_PROJECT_KIND && item.kind !== STANDALONE_PROJECT_KIND && !item.standaloneAgent)
+				.map((item) => ({ value: item.id, label: item.name })),
+		];
+	if (edited && !projectOptions.some((option) => option.value === edited.projectId)) {
+		projectOptions.unshift({ value: edited.projectId, label: cloudAutomation ? cloudProjectName ?? t("automations.cloud.projectNotFound") : edited.projectId });
 	}
+	const cloudHarnessOptions = CLOUD_AUTOMATION_HARNESSES
+		.filter((id) => !cloudHarnesses?.length || cloudHarnesses.includes(id))
+		// A run uses the login of the person it runs as, so offer only harnesses logged in to AO Cloud.
+		.filter((id) => !connectedCloudHarnesses || connectedCloudHarnesses.includes(id) || id === cloudAutomation?.harness)
+		.map((id) => ({ value: id, label: harnesses.find((agent) => agent.id === id)?.label ?? agentLabel(id) }));
+	const cloudHarness = cloudHarnessOptions.find((option) => option.value === harness)?.value ?? cloudHarnessOptions[0]?.value;
+	// Any saved change makes a cloud automation run as its editor (the contract's updateAutomation).
+	const rebindsToEditor = Boolean(cloudAutomation && cloudUserId && cloudAutomation.runAs.userId !== cloudUserId);
+	const openGlobalSettings = useUiStore((state) => state.openGlobalSettings);
 	// The ready agents, ranked as the composer offers them.
 	const agentChoices = buildRankedAgentOptions({
 		agents: harnesses,
@@ -838,7 +1271,7 @@ function AutomationFormDialog({
 
 	async function submit(event: FormEvent) {
 		event.preventDefault();
-		if (!modelValid || awaitingInheritedHarness) return;
+		if (isCloud ? !cloudHarness : !modelValid || awaitingInheritedHarness) return;
 		const nextErrors: AutomationValidationErrors = {};
 		if (!editing && !projectId) nextErrors.projectId = t("automations.validation.project");
 		if (!name.trim()) nextErrors.name = t("automations.validation.name");
@@ -863,7 +1296,7 @@ function AutomationFormDialog({
 			return;
 		}
 		const nextRRule = buildRRuleFromSchedule(schedule);
-		const scheduleChanged = !(editing && automation && initialSchedule && schedulesEqual(schedule, initialSchedule));
+		const scheduleChanged = !(editing && initialSchedule && schedulesEqual(schedule, initialSchedule));
 		const tuning = {
 			...(!editing || model !== (automation?.model ?? "") ? { model } : {}),
 			...(!editing || mode !== (automation?.mode ?? "") ? { mode } : {}),
@@ -879,7 +1312,21 @@ function AutomationFormDialog({
 					prompt_length_bucket: automationPromptLengthBucket(prompt.trim()),
 				};
 		try {
-			await onSubmit({
+			if (isCloud) {
+				// A cloud automation runs the harness's default model in trusted mode.
+				// An edit sends only what changed: any change rebinds who it runs as.
+				await onSubmit({
+					runsOn: "cloud",
+					...(editing ? {} : { projectId, timezone }),
+					...(!cloudAutomation || name !== cloudAutomation.displayName ? { displayName: name } : {}),
+					...(!cloudAutomation || prompt !== cloudAutomation.prompt ? { prompt } : {}),
+					...(!cloudAutomation || cloudHarness !== cloudAutomation.harness ? { harness: cloudHarness } : {}),
+					...(scheduleChanged ? { rrule: nextRRule } : {}),
+					// Compared with the default it opened with, so an unchanged save never rebinds.
+					...(!cloudAutomation || deleteSessionOnComplete !== (cloudAutomation.deleteSessionOnComplete ?? false) ? { deleteSessionOnComplete } : {}),
+				});
+			} else await onSubmit({
+				runsOn: "local",
 				// Kind is not a form choice: automations are workers, and editing
 				// leaves the stored kind untouched.
 				...(editing ? {} : { projectId, timezone, templateId, useCase: template?.useCase ?? "unknown", kind: "worker" as const }),
@@ -953,7 +1400,22 @@ function AutomationFormDialog({
 					<div className="flex min-h-0 flex-col gap-6 border-t border-border p-4 md:overflow-y-auto md:border-t-0 md:border-s">
 						<section className="flex flex-col gap-2" aria-labelledby="automation-run-in">
 						<h3 id="automation-run-in" className={FORM_CAPTION_CLASS}>{t("automations.section.runIn")}</h3>
-						{/* The composer's project picker, then its one agent, model and effort picker. */}
+						{cloudOrgId && !editing ? (
+							<Field label={t("automations.field.runsOn")} hideLabel>
+								<AutomationSelect
+									icon={isCloud ? Cloud : Laptop}
+									label={t("automations.field.runsOn")}
+									value={runsOn}
+									onValueChange={(value) => { setRunsOn(value as RunsOn); setProjectId(""); setHarness(""); setModel(""); setMode(""); setEffort(""); setModelValid(true); clearValidationError("projectId"); }}
+									options={[
+										{ value: "local", label: t("automations.runsOn.local") },
+										{ value: "cloud", label: t("automations.runsOn.cloud") },
+									]}
+								/>
+								{isCloud ? <p className={onboardingFieldHintClass}>{t("automations.runsOn.cloudHint")}</p> : null}
+							</Field>
+						) : null}
+						{/* The composer's project picker, then its one agent, model and effort picker (AO Cloud: the agent, whose default model a run uses). */}
 						<div className="-ms-3 flex min-w-0 items-center gap-1">
 							<SettingsOptionMenu
 								triggerRef={projectRef}
@@ -973,18 +1435,33 @@ function AutomationFormDialog({
 								showCaret={false}
 								renderTrigger={(selected, placeholder) => (
 									<span className="inline-flex min-w-0 items-center gap-1.5">
-										<ProjectMark projectId={selected?.value} className="size-3.5 text-muted-foreground" />
+										<ProjectMark projectId={selected?.value} cloud={isCloud} className="size-3.5 text-muted-foreground" />
 										<span className="min-w-0 truncate">{selected?.label ?? placeholder}</span>
 									</span>
 								)}
 								renderMenuItem={(option) => (
 									<>
-										<ProjectMark projectId={option.value} className="size-icon-sm" />
+										<ProjectMark projectId={option.value} cloud={isCloud} className="size-icon-sm" />
 										<span className="min-w-0 truncate">{option.label}</span>
 									</>
 								)}
 							/>
-							{open ? (
+							{isCloud ? (
+								<SettingsOptionMenu
+									aria-label={`${t("automations.agent")}: ${cloudHarnessOptions.find((option) => option.value === cloudHarness)?.label ?? t("automations.cloud.noConnectedAgent")}`}
+									aria-describedby={cloudHarness ? undefined : "automation-agent-login"}
+									value={cloudHarness ?? ""}
+									options={cloudHarnessOptions}
+									placeholder={t("automations.cloud.noConnectedAgent")}
+									disabled={busy || !cloudHarness}
+									onChange={setHarness}
+									menuAlign="start"
+									menuClassName="w-48 max-h-72"
+									triggerVariant="ghost"
+									triggerClassName={cn(TRIGGER_CLASS, "w-fit min-w-0")}
+									showCaret={false}
+								/>
+							) : open ? (
 								<div className="flex shrink-0 items-center" inert={busy || awaitingInheritedHarness} aria-busy={awaitingInheritedHarness}>
 									<AgentModelField
 										key={selectedHarness + ":" + projectId}
@@ -1005,6 +1482,14 @@ function AutomationFormDialog({
 							) : null}
 						</div>
 						{validationErrors.projectId ? <p id={`${AUTOMATION_FIELD_IDS.projectId}-error`} className={onboardingFieldErrorClass}>{validationErrors.projectId}</p> : null}
+						{isCloud && !cloudHarness ? (
+							<div className="flex items-center justify-between gap-3">
+								<p id="automation-agent-login" className={onboardingFieldHintClass}>{t("automations.cloud.connectAgentHint")}</p>
+								<Button type="button" variant="secondary" size="sm" className="shrink-0" onClick={() => { onOpenChange(false); openGlobalSettings("harness", { harnessView: "cloud" }); }}>
+									{t("createProject.openHarnessSettings")}
+								</Button>
+							</div>
+						) : null}
 						</section>
 						<section className="flex flex-col gap-2" aria-labelledby="automation-schedule">
 							<h3 id="automation-schedule" className={FORM_CAPTION_CLASS}>{t("automations.field.schedule")}</h3>
@@ -1160,6 +1645,18 @@ function AutomationFormDialog({
 						) : null}
 						<p className={onboardingFieldHintClass}>{t("automations.timezone", { timezone })}</p>
 						</section>
+						{isCloud ? (
+							// What the switch does is visible help it is described by, as a Settings
+							// row's description: a tooltip only names a control (DESIGN.md).
+							<section className="flex flex-col gap-1">
+								<div className="flex items-center justify-between gap-3">
+									<label htmlFor={DELETE_SESSION_FIELD_ID} className={onboardingFormLabelClass}>{t("automations.cloud.deleteSession")}</label>
+									<Switch id={DELETE_SESSION_FIELD_ID} checked={deleteSessionOnComplete} disabled={busy} aria-describedby={`${DELETE_SESSION_FIELD_ID}-help`} onCheckedChange={setDeleteSessionOnComplete} />
+								</div>
+								<p id={`${DELETE_SESSION_FIELD_ID}-help`} className={onboardingFieldHintClass}>{t("automations.cloud.deleteSession.help")}</p>
+							</section>
+						) : null}
+						{rebindsToEditor && cloudHarness ? <p className={onboardingFieldHintClass}>{t("automations.cloud.rebindNotice", { agent: agentLabel(cloudHarness) })}</p> : null}
 						{error ? <p role="alert" className={onboardingFieldErrorClass}>{error}</p> : null}
 						{nextRun ? (
 							<div className="mt-auto flex flex-col gap-1 rounded-lg border border-border px-4 py-3">
@@ -1174,7 +1671,7 @@ function AutomationFormDialog({
 						<Button type="button" variant="secondary" disabled={busy} onClick={() => onOpenChange(false)}>
 							{t("automations.cancel")}
 						</Button>
-						<Button type="submit" variant="primary" disabled={busy || !modelValid || awaitingInheritedHarness}>
+						<Button type="submit" variant="primary" disabled={busy || (isCloud ? !cloudHarness : !modelValid || awaitingInheritedHarness)}>
 							{busy ? t(editing ? "automations.saving" : "automations.creating") : t(editing ? "automations.save" : "automations.create")}
 						</Button>
 					</div>
@@ -1184,9 +1681,9 @@ function AutomationFormDialog({
 	);
 }
 
-/** A project's mark in the picker: the Scratchpad's note, as on the new chat page, or a folder. */
-function ProjectMark({ projectId, className }: { projectId?: string; className: string }) {
-	const Icon = projectId === STANDALONE_WORKSPACE_ID ? StickyNote : Folder;
+/** A project's mark in the picker: the Scratchpad's note, as on the new chat page, a cloud for an AO Cloud project, or a folder. */
+function ProjectMark({ projectId, cloud = false, className }: { projectId?: string; cloud?: boolean; className: string }) {
+	const Icon = projectId === STANDALONE_WORKSPACE_ID ? StickyNote : cloud ? Cloud : Folder;
 	return <Icon aria-hidden="true" className={cn("shrink-0", className)} />;
 }
 

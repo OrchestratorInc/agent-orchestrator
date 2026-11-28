@@ -16,6 +16,7 @@ import {
 	isOptimisticallyRemovedProject,
 	trackOptimisticProjectRemoval,
 } from "./optimistic-project-removals";
+import { cloudAutomationsQueryKey } from "./useCloudAutomations";
 import { useLatestCallback } from "./useStable";
 import {
 	cloudProjectsQueryKey,
@@ -243,6 +244,10 @@ export function useRemoveProject({ findWorkspace, isViewing, cloud }: {
 		}
 
 		if (!hostId) void captureRendererEvent("ao.projects.removed", { project_id: projectId });
+		// The control plane turned the deleted project's cloud automations off
+		// as it accepted the deletion: read them again now, not at the list's
+		// next poll, so their rows say Paused at once.
+		if (isCloud) void queryClient.invalidateQueries({ queryKey: cloudAutomationsQueryKey });
 		unpin();
 		const read = await refetchLists(queryClient, target);
 		// A cloud archive finishes after the request returns and its ids are never
