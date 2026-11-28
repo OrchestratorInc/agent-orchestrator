@@ -214,16 +214,7 @@ func knownAppLocations() []string {
 		}
 		return paths
 	case "windows":
-		var paths []string
-		// Default electron-builder NSIS per-user install (perMachine:false).
-		if local := os.Getenv("LOCALAPPDATA"); local != "" {
-			paths = append(paths, windowsInstalledExe(local))
-		}
-		// Per-machine fallback (if a user chose an all-users install).
-		if pf := os.Getenv("ProgramFiles"); pf != "" {
-			paths = append(paths, filepath.Join(pf, "Agent Orchestrator", "agent-orchestrator.exe"))
-		}
-		return paths
+		return windowsAppLocations(windowsRegistryInstallDirs(), os.Getenv("LOCALAPPDATA"), os.Getenv("ProgramFiles"))
 	case "linux":
 		paths := []string{linuxAppImagePath()}
 		if home, err := os.UserHomeDir(); err == nil {
@@ -235,10 +226,47 @@ func knownAppLocations() []string {
 	}
 }
 
-// windowsInstalledExe is the default per-user electron-builder NSIS install
-// target for the app exe under %LOCALAPPDATA%.
-func windowsInstalledExe(localAppData string) string {
-	return filepath.Join(localAppData, "Programs", "Agent Orchestrator", "agent-orchestrator.exe")
+// windowsExeName is the installed app binary. It is forge.config.ts's
+// EXECUTABLE_NAME plus ".exe" (TestWindowsInstallNamesMatchForgeConfig).
+const windowsExeName = "agent-orchestrator.exe"
+
+// windowsInstallDirNames are the folder names the NSIS installer has used under
+// %LOCALAPPDATA%\Programs and %ProgramFiles%, current first. electron-builder
+// names the folder after win.executableName when it is set (forge.config.ts
+// passes EXECUTABLE_NAME, since #2467), so it is "agent-orchestrator", not the
+// product name. "Agent Orchestrator" is the folder installs got from #403 to
+// #2467, when it followed productName, and the installer keeps an existing
+// install's folder on upgrade.
+var windowsInstallDirNames = []string{"agent-orchestrator", "Agent Orchestrator"}
+
+// windowsInstallRegistryKey is where the NSIS installer records InstallLocation,
+// under HKCU (per-user) or HKLM (per-machine). electron-builder names it
+// Software\<UUIDv5(appId)>, appId being forge.config.ts's
+// "dev.agent-orchestrator.desktop". It is the only way to find an install in a
+// folder the user picked, which the installer allows.
+const windowsInstallRegistryKey = `Software\d06535a3-65f7-5495-a483-b4bc9f28c80a`
+
+// windowsAppLocations lists candidate app exes on Windows: recorded install
+// folders first, then the default per-user and per-machine folders, current
+// name before the old one. Empty inputs are skipped.
+func windowsAppLocations(registryDirs []string, localAppData, programFiles string) []string {
+	var paths []string
+	for _, dir := range registryDirs {
+		if dir != "" {
+			paths = append(paths, filepath.Join(dir, windowsExeName))
+		}
+	}
+	for _, name := range windowsInstallDirNames {
+		if localAppData != "" {
+			paths = append(paths, filepath.Join(localAppData, "Programs", name, windowsExeName))
+		}
+	}
+	for _, name := range windowsInstallDirNames {
+		if programFiles != "" {
+			paths = append(paths, filepath.Join(programFiles, name, windowsExeName))
+		}
+	}
+	return paths
 }
 
 // linuxAppImagePath is the stable location `ao start` downloads the AppImage to
@@ -425,12 +453,11 @@ func (c *commandContext) fetchAppDarwin(ctx context.Context, w io.Writer) (strin
 }
 
 // fetchAppWindows downloads the NSIS installer into staging, runs it silently,
-// and returns the default per-user install path (spec §6.3).
-//
-// ponytail: the silent-install flow (NSIS `/S`, default per-user dir) is
-// untested on real Windows hardware (this build host is macOS). If the installed
-// exe isn't where electron-builder's defaults put it, this surfaces as a clear
-// "not found" error rather than silently launching the wrong thing.
+// and returns the installed exe (spec §6.3). `/S` installs into the folder the
+// registry records for an existing install, else the default per-user folder,
+// so the result is looked up the same way resolveApp scans. If the exe still
+// isn't found, this is a clear "not found" error rather than launching the
+// wrong thing.
 func (c *commandContext) fetchAppWindows(ctx context.Context, w io.Writer) (string, error) {
 	asset, err := assetName()
 	if err != nil {
@@ -465,15 +492,13 @@ func (c *commandContext) fetchAppWindows(ctx context.Context, w io.Writer) (stri
 		return "", fmt.Errorf("silent install: %w: %s", err, out)
 	}
 
-	local := os.Getenv("LOCALAPPDATA")
-	if local == "" {
-		return "", fmt.Errorf("ao start: LOCALAPPDATA not set; cannot locate installed app")
+	candidates := appScanLocations()
+	for _, p := range candidates {
+		if isUsableBundle(p) {
+			return p, nil
+		}
 	}
-	appPath := windowsInstalledExe(local)
-	if !isUsableBundle(appPath) {
-		return "", fmt.Errorf("ao start: installed app not found at %s", appPath)
-	}
-	return appPath, nil
+	return "", fmt.Errorf("ao start: installed app not found; looked in %s", strings.Join(candidates, ", "))
 }
 
 // fetchAppLinux downloads the self-contained AppImage to a stable path under
