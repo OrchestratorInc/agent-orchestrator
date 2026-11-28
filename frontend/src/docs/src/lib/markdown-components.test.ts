@@ -16,6 +16,19 @@ describe("expandComponents", () => {
     expect(out.endsWith("\n\nThen open the app.")).toBe(true);
   });
 
+  it("offers each Mac only the stable disk image, not the updater zip", () => {
+    const lines = installDownloadsMarkdown().split("\n");
+    expect(lines).toContain(
+      "- macOS Apple silicon: [Disk image](https://github.com/OrchestratorInc/agent-orchestrator/releases/latest/download/Orchestrator-darwin-arm64.dmg)",
+    );
+    expect(lines).toContain(
+      "- macOS Intel: [Disk image](https://github.com/OrchestratorInc/agent-orchestrator/releases/latest/download/Orchestrator-darwin-x64.dmg)",
+    );
+    const macAssets = DESKTOP_DOWNLOADS.filter(({ platform }) => platform.startsWith("macOS")).flatMap(({ assets }) => assets);
+    expect(macAssets.map(([, asset]) => asset)).toEqual(["Orchestrator-darwin-arm64.dmg", "Orchestrator-darwin-x64.dmg"]);
+    expect(installDownloadsMarkdown()).not.toMatch(/darwin-[^)]*\.zip/);
+  });
+
   it("lists every platform once", () => {
     const items = installDownloadsMarkdown().split("\n").filter((line) => line.startsWith("- "));
     expect(items).toHaveLength(DESKTOP_DOWNLOADS.length);
