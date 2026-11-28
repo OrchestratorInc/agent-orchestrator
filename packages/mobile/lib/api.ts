@@ -1627,7 +1627,10 @@ export async function setSessionAutoInjectCI(cfg: ServerConfig, id: string, auto
 const recoveriesInFlight = new Map<string, Promise<void>>();
 
 function recoverOnce(cfg: ServerConfig, kind: "restore" | "resume", id: string, run: () => Promise<void>): Promise<void> {
-	const key = `${kind}\n${cfg.hostId ?? httpBase(cfg)}\n${id}`;
+	// Scoped to the endpoint as well as the machine: once the app moves to a
+	// working route, a request still stuck on the old one must not hold the
+	// new call hostage until its Setup-length timeout.
+	const key = `${kind}\n${cfg.hostId ?? ""}\n${httpBase(cfg)}\n${id}`;
 	const pending = recoveriesInFlight.get(key);
 	if (pending) return pending;
 	const recovery = run().finally(() => recoveriesInFlight.delete(key));

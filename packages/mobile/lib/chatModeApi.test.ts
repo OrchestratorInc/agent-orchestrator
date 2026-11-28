@@ -479,6 +479,22 @@ describe("mobile Chat API boundaries", () => {
 		expect(vi.mocked(fetch).mock.calls.filter(([url]) => String(url).endsWith("/w-1/restore"))).toHaveLength(2);
 	});
 
+	it("does not hold a restore on a new route behind one stuck on the old route", async () => {
+		vi.mocked(fetch).mockImplementation(async () => response({ ok: true }));
+		vi.mocked(fetch).mockImplementationOnce(() => new Promise<Response>(() => {}));
+		// The same machine (same host id), reached over another address.
+		const lan = { ...cfg, hostId: "h-1" };
+		const stuck = restoreSession(lan, "w-1");
+		const moved = { ...lan, host: "ao-tailnet.test" };
+		await expect(restoreSession(moved, "w-1")).resolves.toBeUndefined();
+		const urls = vi.mocked(fetch).mock.calls.map(([url]) => String(url));
+		expect(urls).toEqual([
+			"http://ao.test:3011/api/v1/sessions/w-1/restore",
+			"http://ao-tailnet.test:3011/api/v1/sessions/w-1/restore",
+		]);
+		void stuck;
+	});
+
 	it("acknowledges the exact durable interface-transition notice", async () => {
 		vi.mocked(fetch).mockResolvedValue(
 			response({
