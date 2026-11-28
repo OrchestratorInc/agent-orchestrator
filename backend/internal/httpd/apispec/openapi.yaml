@@ -16635,6 +16635,43 @@ paths:
       summary: Choose how long archived sessions are kept before they are deleted
       tags:
       - settings
+  /api/v1/settings/skill-sharing:
+    patch:
+      operationId: updateSkillSharing
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateSkillSharingRequest'
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SettingsResponse'
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: Turn sharing the user's skills with every agent on or off
+      tags:
+      - settings
   /api/v1/settings/version-refresh:
     patch:
       operationId: updateVersionRefresh
@@ -28145,6 +28182,11 @@ components:
           description: Days an archived session whose worktree is released is kept
             before the daemon deletes it permanently; 0 keeps it.
           type: integer
+        skillSharing:
+          description: Sessions get the user's skills from ~/.agents, ~/.claude and
+            ~/.codex that their agent does not load itself, inside Orchestrator only.
+            A running session follows at its next resume.
+          type: boolean
         trackerIntakeEnabled:
           type: boolean
         versionRefresh:
@@ -28161,6 +28203,7 @@ components:
       - computerUse
       - accountHandoff
       - commitAttribution
+      - skillSharing
       - sessionRetentionDays
       - cloudEnabled
       - cloudControlPlaneUrl
@@ -29623,6 +29666,15 @@ components:
           type: string
       required:
       - title
+      type: object
+    UpdateSkillSharingRequest:
+      properties:
+        enabled:
+          type:
+          - "null"
+          - boolean
+      required:
+      - enabled
       type: object
     UpdateVersionRefreshRequest:
       properties:

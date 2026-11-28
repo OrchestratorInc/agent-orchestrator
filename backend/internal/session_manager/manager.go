@@ -625,6 +625,9 @@ type Manager struct {
 	// commitAttribution reports the Orchestrator attribution beta; nil is off.
 	commitAttributionMu sync.Mutex
 	commitAttribution   func(context.Context) bool
+	// skillSharing reports the skill sharing setting; nil is off.
+	skillSharingMu sync.Mutex
+	skillSharing   func(context.Context) bool
 	// versionTelemetry receives version-move events; nil drops them.
 	versionTelemetryMu sync.Mutex
 	versionTelemetry   ports.EventSink
@@ -7263,6 +7266,9 @@ func (m *Manager) buildSystemPrompt(ctx context.Context, kind domain.SessionKind
 	if pointer := strings.TrimSpace(m.aoSkillPointer(chat)); pointer != "" {
 		cfg.AdditionalSections = append(cfg.AdditionalSections, pointer)
 	}
+	if skills := m.skillIndexPrompt(ctx, sessionID, chat); skills != "" {
+		cfg.AdditionalSections = append(cfg.AdditionalSections, skills)
+	}
 	if chat && m.computerUseEnabled(ctx) {
 		cfg.AdditionalSections = append(cfg.AdditionalSections, computerUsePrompt(skillassets.Dir(m.dataDir)))
 	}
@@ -7505,6 +7511,7 @@ func (m *Manager) cleanupSystemPromptDir(id domain.SessionID) {
 	if err := os.RemoveAll(dir); err != nil {
 		m.logger.Warn("system prompt cleanup failed", "session", id, "path", dir, "err", err)
 	}
+	m.removeSkills(id)
 }
 
 func workspaceOrchestratorPrompt(repos []domain.WorkspaceRepoRecord) string {
@@ -8154,6 +8161,7 @@ func (m *Manager) prepareWorkspace(ctx context.Context, agent ports.Agent, id do
 			return fmt.Errorf("pre-launch: %w", err)
 		}
 	}
+	m.syncSkills(ctx, agent, id, workspacePath, env)
 	return nil
 }
 

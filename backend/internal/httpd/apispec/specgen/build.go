@@ -228,6 +228,7 @@ var schemaNames = map[string]string{ //nolint:gosec // Public OpenAPI type names
 	"ControllersUpdateVersionRefreshRequest":               "UpdateVersionRefreshRequest",
 	"ControllersUpdateComputerUseRequest":                  "UpdateComputerUseRequest",
 	"ControllersUpdateCommitAttributionRequest":            "UpdateCommitAttributionRequest",
+	"ControllersUpdateSkillSharingRequest":                 "UpdateSkillSharingRequest",
 	"ControllersUpdateSessionRetentionRequest":             "UpdateSessionRetentionRequest",
 	"ControllersUpdateAccountHandoffRequest":               "UpdateAccountHandoffRequest",
 	"ControllersConversationSnapshotResponse":              "ConversationSnapshotResponse",
@@ -1744,6 +1745,17 @@ func shellTerminalOperations() []operation {
 			method: http.MethodPatch, path: "/api/v1/settings/chat-hibernation", id: "updateChatHibernation", tag: "settings",
 			summary: "Turn idle Chat hibernation on or off for this machine",
 			reqBody: controllers.UpdateChatHibernationRequest{},
+			resps: []respUnit{
+				{http.StatusOK, controllers.SettingsResponse{}},
+				{http.StatusBadRequest, envelope.APIError{}},
+				{http.StatusInternalServerError, envelope.APIError{}},
+				{http.StatusNotImplemented, envelope.APIError{}},
+			},
+		},
+		{
+			method: http.MethodPatch, path: "/api/v1/settings/skill-sharing", id: "updateSkillSharing", tag: "settings",
+			summary: "Turn sharing the user's skills with every agent on or off",
+			reqBody: controllers.UpdateSkillSharingRequest{},
 			resps: []respUnit{
 				{http.StatusOK, controllers.SettingsResponse{}},
 				{http.StatusBadRequest, envelope.APIError{}},
