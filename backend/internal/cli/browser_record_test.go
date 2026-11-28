@@ -40,9 +40,6 @@ func (s *browserRecordServer) start(t *testing.T) *httptest.Server {
 		switch body.Action {
 		case "record-start":
 			result = map[string]any{"recording": true, "id": "rec-1", "fps": body.Args["fps"]}
-			if body.Args["size"] == "full-hd" {
-				result = map[string]any{"recording": true, "id": "rec-1", "window": "too-large", "viewport": map[string]any{"width": 1920, "height": 1080, "mobile": false}}
-			}
 			if body.Args["size"] == "iphone-12-pro" {
 				result = map[string]any{"recording": true, "id": "rec-1", "viewport": map[string]any{"width": 390, "height": 844, "mobile": true}}
 			}
@@ -123,14 +120,10 @@ func TestBrowserRecordStartLaysThePageOutAtASize(t *testing.T) {
 	if args["size"] != "iphone-12-pro" || args["mobile"] != false {
 		t.Fatalf("record start --size args = %#v", args)
 	}
-	out, _, err = executeCLI(t, deps, "browser", "record", "start", "--size", "full-hd")
-	if err != nil || !strings.Contains(out, "off screen at full size (bigger than a window on this screen can show) at 1920x1080") {
-		t.Fatalf("record start --size full-hd out=%q err=%v", out, err)
-	}
 	if _, _, err := executeCLI(t, deps, "browser", "record", "start", "--size", "800x600", "--mobile"); err != nil {
 		t.Fatalf("record start --size --mobile: %v", err)
 	}
-	if args := server.requests[2].Args; args["size"] != "800x600" || args["mobile"] != true {
+	if args := server.requests[1].Args; args["size"] != "800x600" || args["mobile"] != true {
 		t.Fatalf("record start --mobile args = %#v", args)
 	}
 }

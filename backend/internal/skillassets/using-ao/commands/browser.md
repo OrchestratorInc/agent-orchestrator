@@ -231,8 +231,8 @@ instead, omit the path and explicitly combine `--base64` with `--json`.
 tab switches. The page opens in its own window, sized to the recording and
 fixed while it records, so the user can watch; it appears without taking the
 user's keyboard, and the side panel says the page is recording there. A size
-bigger than a window on the screen can show records off screen at its full
-size instead, with no window (any window the user had open closes). The
+bigger than a window on the screen can show is refused with the largest size
+that fits (`BROWSER_RECORDING_TOO_LARGE`): record at a smaller `--size`. The
 window closes when the recording stops and the page returns to the panel; a
 window the user already had open is used instead and gets its own size back.
 If no window can open, the page is recorded off screen. Recording needs no

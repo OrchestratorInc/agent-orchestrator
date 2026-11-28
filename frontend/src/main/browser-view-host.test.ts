@@ -638,38 +638,22 @@ describe("browser recording", () => {
 		expect(await record("record-stop")).toMatchObject({ frames: 1 });
 	});
 
-	it("records a size bigger than the screen off screen at its full size, without a window", async () => {
+	it("refuses a size bigger than a window on the screen can show, naming the largest", async () => {
 		const requestSessionWindow = vi.fn();
-		const closeSessionWindow = vi.fn();
-		const { debuggerSendCommand, host, invoke, record, sendFrame, view } = setupRecordingHost({
+		const { debuggerSendCommand, invoke, record } = setupRecordingHost({
 			requestSessionWindow,
-			closeSessionWindow,
-			sessionWindowFits: () => false,
+			sessionWindowMaxSize: () => ({ width: 1462, height: 836 }),
 		});
-		const { viewId } = await invoke("browser:ensure", "sess-1");
-		// A window the person had open gives the page back and closes.
-		const sessionWindow = {
-			contentView: { addChildView: vi.fn(), removeChildView: vi.fn() },
-			getContentBounds: () => ({ x: 0, y: 0, width: 1200, height: 820 }),
-			isDestroyed: () => false,
-		};
-		host.attachWindow(viewId, sessionWindow);
-
-		expect(await record("record-start", { size: "laptop" })).toMatchObject({ window: "too-large", viewport: { width: 1440, height: 900 } });
+		await invoke("browser:ensure", "sess-1");
+		await expect(record("record-start", { size: "laptop" })).rejects.toMatchObject({
+			code: "BROWSER_RECORDING_TOO_LARGE",
+			message: expect.stringContaining("up to 1462x836"),
+		});
+		// Nothing started: no window, no page size, no capture.
 		expect(requestSessionWindow).not.toHaveBeenCalled();
-		expect(sessionWindow.contentView.removeChildView).toHaveBeenCalledWith(view);
-		expect(closeSessionWindow).toHaveBeenCalledWith(viewId);
-		// The page is laid out at the full size, not shrunk, on a surface that size.
-		expect(debuggerSendCommand).toHaveBeenCalledWith("Emulation.setDeviceMetricsOverride", {
-			width: 1440,
-			height: 900,
-			deviceScaleFactor: 0,
-			mobile: false,
-		});
-		expect(view.setBounds).toHaveBeenLastCalledWith({ x: -10_000, y: -10_000, width: 1440, height: 900 });
-		sendFrame(jpegFrame(1440, 900));
-		expect(await record("record-stop")).toMatchObject({ frames: 1, width: 1440, height: 900 });
-		expect(closeSessionWindow).toHaveBeenCalledTimes(1);
+		expect(debuggerSendCommand).not.toHaveBeenCalledWith("Emulation.setDeviceMetricsOverride", expect.anything());
+		expect(await record("record-status")).toEqual({ recording: false });
+		await expect(record("record-start", { size: "desktop" })).resolves.toMatchObject({ recording: true });
 	});
 
 	it("takes no screenshots of a still page recording in its window, and plain ones off screen", async () => {

@@ -41,8 +41,8 @@ export type BrowserSessionWindows = {
 	 * for one that fits), fixed while it records; null gives back its own size.
 	 */
 	fitToRecording: (viewId: string, viewport: { width: number; height: number } | null) => void;
-	/** Whether a window this screen can show holds the viewport at its full size. */
-	fits: (viewport: { width: number; height: number }) => boolean;
+	/** The largest page a window on this screen shows at its full size. */
+	maxContentSize: () => { width: number; height: number };
 	closeAll: () => void;
 };
 
@@ -204,9 +204,9 @@ export function createBrowserSessionWindows(options: {
 			window.setContentSize(before.width, before.height);
 			window.setMinimumSize(before.minimumSize[0] ?? 0, before.minimumSize[1] ?? 0);
 		},
-		fits: (viewport) => {
-			const size = fitted(viewport);
-			return size.width === viewport.width && size.height === viewport.height;
+		maxContentSize: () => {
+			const area = options.contentArea();
+			return { width: Math.floor(area.width), height: Math.floor(area.height) };
 		},
 		closeAll: () => {
 			for (const { window } of [...windows.values()]) {

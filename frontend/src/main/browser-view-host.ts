@@ -617,9 +617,9 @@ export type BrowserViewHostOptions = {
   // Size a session's open window for a recording's viewport, or (null) give
   // it back its own size and let the person resize it again.
   fitSessionWindow?: (viewId: string, viewport: { width: number; height: number } | null) => void;
-  // Whether a recording's viewport fits a window on this screen. A page draws
-  // only as large as its window, so a bigger one records off screen instead.
-  sessionWindowFits?: (viewport: { width: number; height: number }) => boolean;
+  // The largest page a session's window on this screen shows. A page draws
+  // only as large as its window, so a recording is never bigger than this.
+  sessionWindowMaxSize?: () => { width: number; height: number } | undefined;
   // How long a recording waits for its window to open before recording off
   // screen instead.
   recordingWindowTimeoutMs?: number;
@@ -4536,9 +4536,8 @@ export function createBrowserViewHost(
 
 	// Whether a recording opened its session's window ("opened": it closes it
 	// again), sized one already open ("existing": it gives the size back), or
-	// records off screen ("none": no window could open; "too-large": its size
-	// does not fit a window on this screen).
-	type RecordingWindowMode = "opened" | "existing" | "none" | "too-large";
+	// records off screen ("none": no window could open).
+	type RecordingWindowMode = "opened" | "existing" | "none";
 	const recordingWindowModes = new WeakMap<BrowserRecording, RecordingWindowMode>();
 
 	async function prepareRecordingWindow(
@@ -4546,15 +4545,6 @@ export function createBrowserViewHost(
 		viewport: { width: number; height: number },
 	): Promise<RecordingWindowMode> {
 		const viewId = session.viewId;
-		// A page draws only as large as its window: shrunk to fit, the video
-		// would hold a shrunk page. It records off screen at its full size.
-		if (options.sessionWindowFits && !options.sessionWindowFits(viewport)) {
-			if (session.window) {
-				releaseWindow(viewId);
-				options.closeSessionWindow?.(viewId);
-			}
-			return "too-large";
-		}
 		if (session.window) {
 			options.fitSessionWindow?.(viewId, viewport);
 			return "existing";
@@ -4597,6 +4587,15 @@ export function createBrowserViewHost(
 			}
 		}
 		const viewport = resolveBrowserViewport(requestedSize, args.mobile === true)!;
+		// The page records in its window, and draws only as large as that window:
+		// a size the screen cannot show would be a shrunk page in the video.
+		const largest = options.sessionWindowMaxSize?.();
+		if (largest && (viewport.width > largest.width || viewport.height > largest.height)) {
+			throw browserError(
+				"BROWSER_RECORDING_TOO_LARGE",
+				`${viewport.width}x${viewport.height} is bigger than a window on this screen can show (up to ${largest.width}x${largest.height}); record at a smaller --size, such as desktop (1280x800) or a WIDTHxHEIGHT within that`,
+			);
+		}
 		if (!session.tabs.size) await openTab(session, undefined, true);
 		recordingDirectoryReady ??= recordingOptions.store.prepare();
 		await recordingDirectoryReady;
