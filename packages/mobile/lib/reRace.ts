@@ -56,14 +56,28 @@ export function shouldReRace(state: ReRaceState): boolean {
 	return state.now - state.lastReRaceAt >= RE_RACE_COOLDOWN_MS;
 }
 
+/** How long into an outage a machine is tried every RECOVERY_QUICK_DELAY_MS. */
+export const RECOVERY_QUICK_FOR_MS = 60_000;
+export const RECOVERY_QUICK_DELAY_MS = 2_000;
+/** After the quick minute, until this far in, a try every RECOVERY_SOON_DELAY_MS. */
+export const RECOVERY_SOON_FOR_MS = 300_000;
+export const RECOVERY_SOON_DELAY_MS = 5_000;
+
 /**
- * How long a machine that could not be reached waits before the next try:
- * 2 s, 4 s, 8 s, then every 15 s. A flat 15 s left the app saying "can't
- * reach" for up to that long after a blip it had already recovered from;
- * starting short catches the common case (a network that took a moment to
- * come up), and the cap keeps a machine that is really off from being raced
- * continuously.
+ * How long a machine that could not be reached waits before the next try,
+ * given how long it has been out: every 2 s for the first minute, every 5 s
+ * until five minutes, then every 15 s.
+ *
+ * Paced by time out, not by tries made. Counting tries (2 s, 4 s, 8 s, then
+ * 15 s) spent the quick ones in the first 14 seconds, before the board even
+ * called the machine unreachable, so a machine restarted the moment it was
+ * marked waited up to 15 s for the phone to notice. One try at a time, each
+ * waiting for the last to settle, so a slow race spaces them out on its own,
+ * and a machine that is really off is tried no more often than before once
+ * the outage is minutes old.
  */
-export function recoveryDelayMs(attempt: number): number {
-	return [2_000, 4_000, 8_000][attempt] ?? RE_RACE_COOLDOWN_MS;
+export function recoveryDelayMs(outageMs: number): number {
+	if (outageMs < RECOVERY_QUICK_FOR_MS) return RECOVERY_QUICK_DELAY_MS;
+	if (outageMs < RECOVERY_SOON_FOR_MS) return RECOVERY_SOON_DELAY_MS;
+	return RE_RACE_COOLDOWN_MS;
 }

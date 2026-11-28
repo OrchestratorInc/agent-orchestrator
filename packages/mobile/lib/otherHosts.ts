@@ -11,6 +11,7 @@ import { findHost, type Host } from "./hosts";
 import { EMPTY_LINK_TRACKER, failedPollOutcome, recordPoll, SLOW_POLL_MS, type LinkTracker, type PollOutcome } from "./linkHealth";
 import { machineAppearance, type MachineAppearance } from "./machineAppearance";
 import { pollIntervalFor } from "./pollInterval";
+import { RE_RACE_COOLDOWN_MS, recoveryDelayMs } from "./reRace";
 import { sameServerConfig } from "./sameConfig";
 import { shouldRaceForUpgrade, UPGRADE_RACE_CHECK_MS } from "./upgradeRace";
 
@@ -144,6 +145,10 @@ function createOtherHostRunner(host: Host, previous: HostSnapshot | undefined, p
 	let projectsKnown = previous?.projectsKnown ?? false;
 	let busy: Promise<void> | null = null;
 	let tracker = previous?.linkTracker ?? EMPTY_LINK_TRACKER;
+	// When this machine stopped answering, or 0 while it answers. Tries are paced
+	// by how long it has been out (see recoveryDelayMs), so one that comes back
+	// after a short outage is found within seconds.
+	let outageSince = 0;
 	const runner: Runner = {
 		config: seed?.config ?? null,
 		refresh: () => {
@@ -162,6 +167,10 @@ function createOtherHostRunner(host: Host, previous: HostSnapshot | undefined, p
 		if (timer) clearTimeout(timer);
 		if (!stopped) timer = setTimeout(() => void runner.refresh(), ms);
 	};
+	const retryAfterOutage = () => {
+		if (!outageSince) outageSince = Date.now();
+		schedule(recoveryDelayMs(Date.now() - outageSince));
+	};
 	const connect = async () => {
 		if (stopped) return;
 		// A saved address is not verified after a network change. A mounted chat
@@ -179,7 +188,13 @@ function createOtherHostRunner(host: Host, previous: HostSnapshot | undefined, p
 				// An incompatible host answered; nothing answering at all is a failed race.
 				record(incompatible ? "answered-error" : "no-answer");
 				update({ config: null, connection: "closed", loading: false, error: incompatible ? "Orchestrator versions are incompatible. Update Orchestrator on this phone and the machine." : "Host is unreachable", errorStatus: incompatible ? 426 : null });
-				schedule(15_000);
+				// An incompatible machine answered: it is not out, and trying sooner
+				// cannot change its version. If it stops answering later (restarting
+				// to update), that is a new outage.
+				if (incompatible) {
+					outageSince = 0;
+					schedule(RE_RACE_COOLDOWN_MS);
+				} else retryAfterOutage();
 				return;
 			}
 			runner.config = result.config;
@@ -191,7 +206,7 @@ function createOtherHostRunner(host: Host, previous: HostSnapshot | undefined, p
 			runner.config = null;
 			update({ config: null, connection: "closed", loading: false, error: userFacingError(cause), errorStatus: null });
 			record("no-answer");
-			schedule(15_000);
+			retryAfterOutage();
 		}
 	};
 	// A late fallback to the kept password left `result.config` with the token
@@ -259,6 +274,7 @@ function createOtherHostRunner(host: Host, previous: HostSnapshot | undefined, p
 			const answer = await getSessions(c, "all");
 			if (stopped || runner.config !== c) return;
 			record(Date.now() - startedAt > SLOW_POLL_MS ? "slow" : "ok");
+			outageSince = 0;
 			if (answer.projects !== null) {
 				lastProjects = answer.projects;
 				projectsKnown = true;
@@ -302,6 +318,7 @@ function createOtherHostRunner(host: Host, previous: HostSnapshot | undefined, p
 			if (status === undefined || status === 421) {
 				runner.config = null;
 				update({ config: null }); // An old address is no longer verified for actions.
+				if (status === undefined && !outageSince) outageSince = Date.now();
 				schedule(2_000); // Race LAN/tunnel again after a network change.
 			} else schedule(pollIntervalFor(c));
 		}
