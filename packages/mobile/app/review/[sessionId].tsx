@@ -3,6 +3,7 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { Alert, Pressable, RefreshControl, ScrollView, StyleSheet, Text, View } from "react-native";
 import { buildReviewBlocks } from "../../../shared/review/review-comments";
+import { AoError } from "../../../shared/telemetry/ao-error";
 import { sessionTitle, type DashboardSession, type SessionPRSummary, type SessionReviews } from "../../lib/api";
 import { RECONNECTING_ACTION_COPY, userFacingError } from "../../lib/connectionError";
 import { AppSymbol } from "../../lib/AppSymbol";
@@ -297,7 +298,7 @@ function ReviewDetailContent() {
 	const reply = async (target: ReviewReplyTarget, body: string) => {
 		// Thrown, not skipped: the dock keeps the text and says why it did not post.
 		const live = shownBackend.current;
-		if (!live) throw new Error(RECONNECTING_ACTION_COPY);
+		if (!live) throw new AoError("REVIEW_BACKEND_RECONNECTING", RECONNECTING_ACTION_COPY);
 		const post = live.reply;
 		if (!post) return;
 		const { comment } = target;

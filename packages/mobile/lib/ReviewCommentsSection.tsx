@@ -3,6 +3,7 @@ import { memo, useCallback, useEffect, useReducer, useRef, useState } from "reac
 import { Alert, Pressable, StyleSheet, Text, View } from "react-native";
 import { reviewCommentIsOpen, type ReviewComment, type ReviewReply } from "../../shared/review/review-comments";
 import { reviewCommentsWorkerMessage, reviewCommentWorkerMessage } from "../../shared/review/review-messages";
+import { AoError } from "../../shared/telemetry/ao-error";
 import { AccountAvatar } from "./AccountAvatar";
 import { AgentLogo } from "./AgentLogo";
 import type { ReviewRun } from "./api";
@@ -120,7 +121,7 @@ export const ReviewCommentsSection = memo(function ReviewCommentsSection({
 	const liveBackend = useRef(backend);
 	liveBackend.current = backend;
 	const live = (): ReviewBackend => {
-		if (!liveBackend.current) throw new Error(RECONNECTING_ACTION_COPY);
+		if (!liveBackend.current) throw new AoError("REVIEW_BACKEND_RECONNECTING", RECONNECTING_ACTION_COPY);
 		return liveBackend.current;
 	};
 
