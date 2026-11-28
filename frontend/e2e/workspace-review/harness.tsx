@@ -43,7 +43,7 @@ client.setQueryData(sessionWorkspaceDiffsQueryOptions({ contextLines: REVIEW_CON
 	groups: mixed ? [{ repository: "", patch, includedPaths: ["example.ts"], truncated: false, deferred: [] }] : [],
 });
 const noop = () => {};
-const annotation: FileAnnotationModel = { targets: [], status: "idle", error: "", begin: noop, draftFor: () => "", statusFor: () => "idle", setDraft: noop, cancel: noop, submit: async () => {} };
+const annotation: FileAnnotationModel = { targets: [], status: "idle", error: "", begin: noop, draftFor: () => "", statusFor: () => "idle", setDraft: noop, cancel: noop, submit: async () => {}, consumeOpened: () => false };
 
 function Review() {
 	const [allCollapsed, setAllCollapsed] = useState(false);

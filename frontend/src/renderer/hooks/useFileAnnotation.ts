@@ -25,6 +25,10 @@ export function useFileAnnotation(sessionId: string, options: UseFileAnnotationO
 	const statusRef = useRef<FileAnnotationStatus>("idle");
 	const [error, setError] = useState("");
 	const generationRef = useRef(0);
+	// The key of the box opened most recently, cleared when consumed. It is the
+	// scroll-once token the composers consume: a box that remounts later (a
+	// virtualized row scrolling away and back) must not scroll again.
+	const openedKeyRef = useRef<string | null>(null);
 	// The comments the current send (or its result) is about.
 	const activeKeysRef = useRef(new Set<string>());
 	const sentTimerRef = useRef<number | null>(null);
@@ -44,6 +48,7 @@ export function useFileAnnotation(sessionId: string, options: UseFileAnnotationO
 	};
 	const reset = () => {
 		generationRef.current += 1;
+		openedKeyRef.current = null;
 		clearSentTimer();
 		activeKeysRef.current = new Set();
 		commitEntries([]);
@@ -75,11 +80,22 @@ export function useFileAnnotation(sessionId: string, options: UseFileAnnotationO
 		activeKeysRef.current = new Set();
 		commitStatus("idle");
 		if (current.some((entry) => fileAnnotationKey(entry.target) === key)) {
+			openedKeyRef.current = null;
 			commitEntries(current.filter((entry) => fileAnnotationKey(entry.target) !== key));
 			return;
 		}
 		// Boxes left empty close, so only comments with text stay open alongside the new one.
 		commitEntries([...current.filter((entry) => entry.draft.trim()), { target: { ...nextTarget, source }, draft: "" }]);
+		openedKeyRef.current = key;
+	};
+	// Exactly-once scroll token for the box `target` belongs to: the composer
+	// consumes it on the effect that puts the box on screen, so remounts of the
+	// same row never repeat the scroll.
+	const consumeOpened = (target: ActiveFileAnnotationTarget): boolean => {
+		const key = fileAnnotationKey(target);
+		if (openedKeyRef.current !== key) return false;
+		openedKeyRef.current = null;
+		return true;
 	};
 	const setDraft = (target: ActiveFileAnnotationTarget, draft: string) => {
 		const key = fileAnnotationKey(target);
@@ -97,6 +113,7 @@ export function useFileAnnotation(sessionId: string, options: UseFileAnnotationO
 		const key = fileAnnotationKey(target);
 		const next = entriesRef.current.filter((entry) => fileAnnotationKey(entry.target) !== key);
 		if (next.length === entriesRef.current.length) return;
+		if (openedKeyRef.current === key) openedKeyRef.current = null;
 		commitEntries(next);
 		activeKeysRef.current = new Set();
 		commitStatus("idle");
@@ -159,5 +176,5 @@ export function useFileAnnotation(sessionId: string, options: UseFileAnnotationO
 		targetsRef.current = entries.map((entry) => entry.target);
 	}
 
-	return { targets: targetsRef.current, status, statusFor, error, begin, draftFor, setDraft, cancel, submit };
+	return { targets: targetsRef.current, status, statusFor, error, begin, draftFor, setDraft, cancel, submit, consumeOpened };
 }
