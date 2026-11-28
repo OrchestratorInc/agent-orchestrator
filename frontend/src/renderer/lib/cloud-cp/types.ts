@@ -2033,6 +2033,8 @@ export interface CloudCpBillingSummary {
 	subscriptionStatus?: string;
 	entitled: boolean;
 	currentPeriodEnd?: string;
+	/** How often the subscription renews; absent without one and from older control planes (read as month). */
+	billingInterval?: CloudCpBillingInterval;
 	/** When a plan set to cancel ends and the org moves to Free; absent while it renews. */
 	cancelAt?: string;
 	limits?: CloudCpPlanLimits;
@@ -2054,6 +2056,21 @@ export interface CloudCpPlanOffer {
 	 * viewer starts now would begin one: one trial per org and per person, never for
 	 * an org that already subscribed or trialed. Absent from older control planes.
 	 */
+	trialDays?: number;
+	/** The same plan sold yearly, with the same limits; absent when the deployment sells it monthly only. */
+	yearly?: CloudCpPlanOfferPrice;
+}
+
+/** How often a subscription renews. */
+export type CloudCpBillingInterval = "month" | "year";
+
+/** Another price a plan is sold at (its yearly price). Price fields are absent when Stripe could not be read. */
+export interface CloudCpPlanOfferPrice {
+	id: string;
+	unitAmount?: number;
+	currency?: string;
+	interval?: string;
+	/** Days of free trial a Checkout at this price starts; set as for CloudCpPlanOffer.trialDays. */
 	trialDays?: number;
 }
 

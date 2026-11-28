@@ -5365,7 +5365,9 @@ paths:
         within the grace period) is on Free, which runs no billed sessions:
         creating or waking one answers 402 PLAN_REQUIRED. Usage counts every
         running billed session per minute. Plans lists what the organization
-        can buy, cheapest first, for self-serve organizations only.
+        can buy, cheapest first, for self-serve organizations only; a plan
+        also sold yearly carries that price as yearly, and billingInterval
+        says which one the organization pays.
       parameters:
         - $ref: "#/components/parameters/OrgId"
       responses:
@@ -6170,6 +6172,10 @@ components:
         currentPeriodEnd:
           type: string
           format: date-time
+        billingInterval:
+          type: string
+          enum: [month, year]
+          description: How often the organization's subscription renews. Absent without a subscription, and from control planes that do not report it; read absent as month.
         cancelAt:
           type: string
           format: date-time
@@ -6280,6 +6286,35 @@ components:
           type: integer
           minimum: 1
           description: Days of free trial that a Checkout of this plan starts. Present only while the organization can still start a free trial.
+        yearly:
+          $ref: "#/components/schemas/PlanOfferPrice"
+    PlanOfferPrice:
+      type: object
+      additionalProperties: false
+      description: |
+        Another price the same plan is sold at, with the same limits: the
+        plan's yearly price. Present only when the deployment sells the plan
+        yearly. A Checkout with interval year subscribes at it; without this
+        price, a control plane refuses interval year. The price fields are
+        zero or empty when Stripe could not be read.
+      required: [id, unitAmount, currency, interval]
+      properties:
+        id:
+          type: string
+          description: The Stripe price.
+        unitAmount:
+          type: integer
+          format: int64
+          description: In the currency's smallest unit, for the whole interval.
+        currency:
+          type: string
+        interval:
+          type: string
+          description: year.
+        trialDays:
+          type: integer
+          minimum: 1
+          description: Days of free trial that a Checkout at this price starts. Present only while the organization can still start a free trial of it.
     PutPushDeviceInput:
       type: object
       additionalProperties: false

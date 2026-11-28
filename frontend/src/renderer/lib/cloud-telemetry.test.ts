@@ -262,6 +262,18 @@ describe("cloud funnel telemetry", () => {
 		expect(captured[1]?.properties).toMatchObject({ plan: "starter" });
 	});
 
+	it("reports a yearly checkout's interval and the trial of the yearly price", async () => {
+		const plans = [{ name: "starter", id: "price_1", trialDays: 7, yearly: { id: "price_1y", unitAmount: 20000, currency: "usd", interval: "year" } }];
+		const client = instrumentCloudClient(fakeClient({
+			getBilling: vi.fn(async () => ({ enabled: true, exempt: false, plan: "free", entitled: false, plans })),
+		} as unknown as Partial<CloudCpClient>));
+		await client.getBilling("org-1");
+		await client.createBillingCheckout("org-1", "starter", { interval: "year" });
+		expect(captured.at(-1)).toMatchObject({ event: "ao.renderer.cloud_checkout_started", properties: { plan: "starter", interval: "year", trial: false } });
+		await client.createBillingCheckout("org-1", "starter");
+		expect(captured.at(-1)).toMatchObject({ event: "ao.renderer.cloud_checkout_started", properties: { plan: "starter", interval: "month", trial: true } });
+	});
+
 	it("tells a free trial apart from a paid checkout", async () => {
 		const plans = [{ name: "starter", id: "price_1", trialDays: 7 }, { name: "pro", id: "price_2" }];
 		let summary = { enabled: true, exempt: false, plan: "free", entitled: false, plans } as Record<string, unknown>;

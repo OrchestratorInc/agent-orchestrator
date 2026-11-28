@@ -25,6 +25,10 @@ const PENDING_SESSION_TTL_MS = 60 * 60_000;
 const PENDING_CHECKOUT_KEY = "ao.telemetry.cloudCheckoutPending";
 /** Per org, the plans whose Checkout the control plane last said starts a free trial (trialDays). */
 const trialOffers = new Map<string, ReadonlySet<string>>();
+/** A plan's key in trialOffers: the plan name, with ":year" for its yearly price. */
+function trialOfferKey(plan: string, interval: "month" | "year"): string {
+	return interval === "year" ? `${plan}:year` : plan;
+}
 
 let reportedOfferings = new Set<string>();
 let defaultProvider = "";
@@ -390,12 +394,18 @@ export function instrumentCloudClient(client: CloudCpClient): CloudCpClient {
 	instrumented.createBillingCheckout = async (orgId, plan, options) => {
 		const response = await client.createBillingCheckout(orgId, plan, options);
 		markCheckoutPending(plan, Date.now());
-		void captureRendererEvent("ao.renderer.cloud_checkout_started", { plan, trial: trialOffers.get(orgId)?.has(plan) ?? false });
+		const interval = options?.interval === "year" ? "year" : "month";
+		void captureRendererEvent("ao.renderer.cloud_checkout_started", {
+			plan, interval, trial: trialOffers.get(orgId)?.has(trialOfferKey(plan, interval)) ?? false,
+		});
 		return response;
 	};
 	instrumented.getBilling = async (orgId, options) => {
 		const summary = await client.getBilling(orgId, options);
-		trialOffers.set(orgId, new Set((summary.plans ?? []).filter((offer) => (offer.trialDays ?? 0) > 0).map((offer) => offer.name)));
+		trialOffers.set(orgId, new Set((summary.plans ?? []).flatMap((offer) => [
+			...((offer.trialDays ?? 0) > 0 ? [trialOfferKey(offer.name, "month")] : []),
+			...((offer.yearly?.trialDays ?? 0) > 0 ? [trialOfferKey(offer.name, "year")] : []),
+		])));
 		observeBillingSummary(summary);
 		return summary;
 	};

@@ -59,6 +59,7 @@ import type {
 	CloudCpDataRetentionChange,
 	CloudCpPutDataRetentionRequest,
 	CloudCpOrgMembersResponse,
+	CloudCpBillingInterval,
 	CloudCpBillingLinkResponse,
 	CloudCpBillingSummary,
 	CloudCpPutOrgCoderConfigRequest,
@@ -411,8 +412,12 @@ export interface CloudCpClient {
 	getOrgCoderConfig(orgId: string, options?: CloudCpRequestOptions): Promise<CloudCpOrgCoderConfigResponse>;
 	/** The org's plan, its limits, and usage against them. */
 	getBilling(orgId: string, options?: CloudCpRequestOptions): Promise<CloudCpBillingSummary>;
-	/** A Stripe Checkout URL that subscribes the org to `plan`. Admins only. */
-	createBillingCheckout(orgId: string, plan: string, options?: CloudCpRequestOptions): Promise<CloudCpBillingLinkResponse>;
+	/**
+	 * A Stripe Checkout URL that subscribes the org to `plan`. Admins only. `interval: "year"`
+	 * subscribes at the plan's yearly price; send it only for an offer that carries `yearly`,
+	 * since a control plane without yearly billing refuses the field.
+	 */
+	createBillingCheckout(orgId: string, plan: string, options?: CloudCpRequestOptions & { interval?: CloudCpBillingInterval }): Promise<CloudCpBillingLinkResponse>;
 	/**
 	 * A Stripe Customer Portal URL for changing plan, card, or cancelling. Admins only.
 	 * `flow: "cancel"` opens the portal straight on cancelling the plan (downgrading to Free).
@@ -1189,7 +1194,11 @@ export function createCloudCpClient(options: CloudCpClientOptions): CloudCpClien
 			requestJson("GET", `/orgs/${seg(orgId)}/coder-config`, { signal: o?.signal }),
 		getBilling: (orgId, o) => requestJson("GET", `/orgs/${seg(orgId)}/billing`, { signal: o?.signal }),
 		createBillingCheckout: (orgId, plan, o) =>
-			requestJson("POST", `/orgs/${seg(orgId)}/billing/checkout`, { body: { plan }, signal: o?.signal }),
+			requestJson("POST", `/orgs/${seg(orgId)}/billing/checkout`, {
+				// Monthly sends the plan alone, as every control plane accepts.
+				body: o?.interval === "year" ? { plan, interval: "year" } : { plan },
+				signal: o?.signal,
+			}),
 		createBillingPortal: (orgId, flow, o) =>
 			requestJson("POST", `/orgs/${seg(orgId)}/billing/portal`, { body: flow ? { flow } : {}, signal: o?.signal }),
 		resetBillingUsage: (orgId, o) =>
