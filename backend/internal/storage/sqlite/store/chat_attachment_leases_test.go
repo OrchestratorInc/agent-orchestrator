@@ -198,8 +198,9 @@ func TestChatAttachmentLeaseClaimRefusesAcceptance(t *testing.T) {
 // An image a message sends by its staged path names it in a structured block.
 // If reclamation took the file between the daemon reading it and the message
 // being accepted, the write is refused, on every path that accepts a message;
-// a live draft file is still committed, and text or a link naming a reclaimed
-// file is still just a mention.
+// a live draft file is still committed, even if another session reclaimed a
+// file of the same name, and text or a link naming a reclaimed file is still
+// just a mention.
 func TestChatAttachmentReclaimedImageReferenceRefused(t *testing.T) {
 	s, session, conversation := conversationFixture(t)
 	ctx := context.Background()
@@ -230,6 +231,24 @@ func TestChatAttachmentReclaimedImageReferenceRefused(t *testing.T) {
 		t.Fatal("a steer sending a reclaimed file's image was reserved")
 	}
 
+	// A fork copies its parent's files under the same names: the other session
+	// discarding its copy does not refuse this session's own.
+	fork, err := s.CreateSession(ctx, sampleRecord("hist"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.LeaseChatAttachment(ctx, fork.ID, leasedSent, histClock); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.ReleaseChatAttachmentLeases(ctx, fork.ID, []string{leasedSent}, histClock); err != nil {
+		t.Fatal(err)
+	}
+	if claimed, err := s.ClaimChatAttachmentLease(ctx, fork.ID, leasedSent, histClock.Add(time.Second)); err != nil || !claimed {
+		t.Fatalf("fork claim = %v, %v", claimed, err)
+	}
+	if err := s.MarkChatAttachmentReclaimed(ctx, fork.ID, leasedSent, histClock.Add(2*time.Second)); err != nil {
+		t.Fatal(err)
+	}
 	live := domain.ConversationMessage{ID: "m2", Text: "look", Origin: domain.MessageOriginHuman, DeliveryContentJSON: image(leasedSent)}
 	if _, err := s.AppendUserMessage(ctx, conversation, session, "gen-1", live, "turn-2", at); err != nil {
 		t.Fatalf("a message sending a live draft file was refused: %v", err)

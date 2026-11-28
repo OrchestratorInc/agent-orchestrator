@@ -8,6 +8,9 @@
 -- is gone and a retry of the same message would fail on it before reaching
 -- its receipt. An image block naming a file that reclamation claimed is
 -- refused instead, in the same write. Text and other blocks are unchanged.
+-- Only leases of the session that owns the conversation count: a fork copies
+-- its parent's files under the same names, and the parent discarding its copy
+-- leaves the fork's own one in place.
 -- +goose StatementBegin
 CREATE TRIGGER chat_attachment_leases_refuse_reclaimed_image_insert
 AFTER INSERT ON conversation_messages
@@ -16,8 +19,10 @@ BEGIN
     SELECT RAISE(ABORT, 'chat attachment was discarded')
     WHERE EXISTS (
         SELECT 1 FROM json_each(NEW.delivery_content_json) AS block
+        JOIN conversations AS owner ON owner.id = NEW.conversation_id
         JOIN chat_attachment_leases AS lease
           ON json_extract(block.value, '$.uri') = '.ao/attachments/' || lease.name
+         AND lease.session_id IN (owner.session_id, owner.current_session_id)
         WHERE json_extract(block.value, '$.type') = 'image'
           AND lease.reclaiming_at_ms IS NOT NULL
     );
@@ -32,8 +37,10 @@ BEGIN
     SELECT RAISE(ABORT, 'chat attachment was discarded')
     WHERE EXISTS (
         SELECT 1 FROM json_each(NEW.delivery_content_json) AS block
+        JOIN conversations AS owner ON owner.id = NEW.conversation_id
         JOIN chat_attachment_leases AS lease
           ON json_extract(block.value, '$.uri') = '.ao/attachments/' || lease.name
+         AND lease.session_id IN (owner.session_id, owner.current_session_id)
         WHERE json_extract(block.value, '$.type') = 'image'
           AND lease.reclaiming_at_ms IS NOT NULL
           AND instr(OLD.delivery_content_json, lease.name) = 0
@@ -49,8 +56,10 @@ BEGIN
     SELECT RAISE(ABORT, 'chat attachment was discarded')
     WHERE EXISTS (
         SELECT 1 FROM json_each(NEW.request_json, '$.content') AS block
+        JOIN conversations AS owner ON owner.id = NEW.conversation_id
         JOIN chat_attachment_leases AS lease
           ON json_extract(block.value, '$.uri') = '.ao/attachments/' || lease.name
+         AND lease.session_id IN (owner.session_id, owner.current_session_id)
         WHERE json_extract(block.value, '$.type') = 'image'
           AND lease.reclaiming_at_ms IS NOT NULL
     );
