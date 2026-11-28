@@ -22,9 +22,12 @@ import (
 // loopback port, publish the running.json handshake, serve until the context
 // is cancelled, then shut down gracefully and clean up the handshake file.
 type Server struct {
-	cfg    config.Config
-	log    *slog.Logger
-	http   *http.Server
+	cfg  config.Config
+	log  *slog.Logger
+	http *http.Server
+	// router is the unguarded handler shared with the LAN listener; http
+	// serves it behind loopbackHostGuard on the loopback listeners.
+	router http.Handler
 	listen net.Listener
 	// listen6 serves the same router on [::1] at the loopback port; nil when
 	// that address could not be bound (see bindIPv6Loopback).
@@ -71,12 +74,13 @@ func NewWithDeps(cfg config.Config, log *slog.Logger, termMgr *terminal.Manager,
 		listen6:           bindIPv6Loopback(cfg, ln, log),
 		shutdownRequested: make(chan struct{}),
 	}
+	srv.router = NewRouterWithControl(cfg, log, termMgr, deps, ControlDeps{
+		RequestShutdown:      srv.requestShutdown,
+		RequestAgentShutdown: srv.requestAgentShutdown,
+		IPv6Loopback:         srv.listen6 != nil,
+	})
 	srv.http = &http.Server{
-		Handler: NewRouterWithControl(cfg, log, termMgr, deps, ControlDeps{
-			RequestShutdown:      srv.requestShutdown,
-			RequestAgentShutdown: srv.requestAgentShutdown,
-			IPv6Loopback:         srv.listen6 != nil,
-		}),
+		Handler: loopbackHostGuard(srv.router),
 		// ReadHeaderTimeout guards against slow-loris even on loopback;
 		// per-request body/handler timeouts are applied per-surface.
 		ReadHeaderTimeout: 10 * time.Second,
@@ -123,8 +127,9 @@ func (s *Server) IPv6LoopbackAddr() net.Addr {
 
 // Handler returns the loopback server's built router so the daemon can share
 // the exact same handler instance with the LAN listener (via NewMobileLAN),
-// keeping the loopback and LAN surfaces identical.
-func (s *Server) Handler() http.Handler { return s.http.Handler }
+// keeping the loopback and LAN surfaces identical. It is the router without
+// the loopback Host guard, since LAN and tunnel requests carry other hosts.
+func (s *Server) Handler() http.Handler { return s.router }
 
 // Run serves until ctx is cancelled (SIGINT/SIGTERM via signal.NotifyContext),
 // then performs a graceful shutdown bounded by cfg.ShutdownTimeout. It writes

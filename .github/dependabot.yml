@@ -1,0 +1,51 @@
+# Dependency updates. Security updates for vulnerable packages are enabled in
+# the repository settings and arrive regardless of the grouping below.
+#
+# Version updates are weekly and grouped so they stay reviewable: one PR per
+# ecosystem for minor and patch bumps, majors one at a time. The 7-day
+# cooldown skips releases younger than a week, so a hijacked publish is
+# usually caught and yanked before Dependabot proposes it.
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directories:
+      - /
+      - /.github/actions/*
+    schedule:
+      interval: weekly
+    cooldown:
+      default-days: 7
+    groups:
+      actions:
+        patterns: ["*"]
+        update-types: [minor, patch]
+
+  - package-ecosystem: gomod
+    directory: /backend
+    schedule:
+      interval: weekly
+    cooldown:
+      default-days: 7
+    open-pull-requests-limit: 5
+    groups:
+      go-minor-patch:
+        update-types: [minor, patch]
+
+  - package-ecosystem: npm
+    directories:
+      - /
+      - /frontend
+      - /frontend/acp-runtime
+      - /frontend/src/docs
+      - /packages/cloud-client
+      - /packages/mobile
+      - /packages/product-ui
+      - /scripts
+    schedule:
+      interval: weekly
+    cooldown:
+      default-days: 7
+    open-pull-requests-limit: 5
+    groups:
+      npm-minor-patch:
+        update-types: [minor, patch]
