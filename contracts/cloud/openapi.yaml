@@ -59,10 +59,14 @@ paths:
         orchestrator session's creator. The clock runs from a session's
         creation: once a session is older than retentionDays and has ended
         (a session still running is never ended for it; it waits until
-        someone ends it), its sandbox is deleted and its content (chat
-        timeline, harness transcripts, terminal output, commands,
-        agent-switch handoffs and prompts, and its comment threads: quotes,
-        comments and history) is deleted for good. The session
+        someone ends it), its sandbox is deleted and its content
+        (chat timeline, harness transcripts, terminal output, commands,
+        agent-switch handoffs and prompts, its comment threads: quotes,
+        comments and history, and its notifications with their events,
+        including the mention and comment reply notifications that copy
+        what someone wrote) is deleted for good, and neither the personal
+        inbox nor its replay returns any of it afterwards. Notifications
+        already pushed to a phone stay on the phone. The session
         itself remains, without its content, for billing and audit. A user
         follows defaultDays (followsDefault) until they choose another
         period, and can go back to it.
@@ -3264,9 +3268,11 @@ paths:
         chat.user_message event, or for a steer the event the steer request
         returned, chat.turn_steer_requested), and createSessionAside on any
         message, steer or agent answer (origin `comment`). The
-        message still goes to the agent like any other, but the agent never
-        reads the aside: its replies never reach a worker, a prompt, a prompt
-        suggestion or the agent's context. Anyone
+        message still goes to the agent like any other, but the agent does
+        not read the aside: its replies reach no worker, prompt, prompt
+        suggestion or the agent's context, unless someone who can prompt the
+        agent sends the thread (replyToSessionAside with sendToAgent), which
+        sends it as one of their messages. Anyone
         who can open the session (read or write) may list them; a client draws
         each message's comment marker, and its unread state, from the open
         ones in this list.
@@ -3307,7 +3313,8 @@ paths:
         turn and itemId). quote, when set, is the exact passage of that
         message the thread is about; it is stored sealed like other content
         and copied into the thread, so the thread keeps it even if the
-        message is no longer shown. Nothing reaches the agent: everyone
+        message is no longer shown. Nothing reaches the agent until someone
+        sends the thread to it (replyToSessionAside with sendToAgent): everyone
         watching the session receives chat.aside_created, and each person or
         team member the comment mentions joins the thread and gets a
         mentioned notification (mentions are checked as on sendMessage). A
@@ -3427,8 +3434,9 @@ paths:
       tags: [Sessions]
       description: >-
         Replies in an aside. Anyone who can open the session may reply, a
-        viewer too, and it needs no composer lease. The reply never reaches
-        the agent. Everyone watching the session receives it as a
+        viewer too, and it needs no composer lease. A reply stays out of the
+        agent's context, unless the caller sends the thread with it
+        (sendToAgent, below). Everyone watching the session receives it as a
         chat.aside_reply event. Everyone in the aside except the author, and
         unless they muted it, gets an aside_reply notification; each person or
         team member the reply mentions joins the aside and gets a mentioned
@@ -3495,7 +3503,7 @@ paths:
             (allowed only with sendToAgent) or longer than 65536 characters;
             details.field `throughSequence` when sendToAgent comes without it
             (or below 0); details.field `seen` when sendToAgent comes without
-            it, with more than 500 entries, or with an entry that has no uuid
+            it, with more than 2000 entries, or with an entry that has no uuid
             replyId or no version;
             details.field `mentions` with a
             details.reason as on sendMessage (`unknown`, `no_access`,
@@ -7298,6 +7306,26 @@ components:
       type: object
       additionalProperties: false
       required: [id, orgId, recipientUserId, source, type, title, body, status, metadata, createdAt, updatedAt]
+      # Each kind's metadata as its type says; other kinds keep an open object.
+      allOf:
+        - if:
+            required: [type]
+            properties:
+              type:
+                const: mentioned
+          then:
+            properties:
+              metadata:
+                $ref: "#/components/schemas/MentionNotificationMetadata"
+        - if:
+            required: [type]
+            properties:
+              type:
+                const: aside_reply
+          then:
+            properties:
+              metadata:
+                $ref: "#/components/schemas/AsideReplyNotificationMetadata"
       properties:
         id:
           type: string
@@ -7330,6 +7358,12 @@ components:
           type: string
         body:
           type: string
+          description: >-
+            The notification's text. A `mentioned` or `aside_reply` row's copies
+            the first line of what was written (a message, steer, comment or
+            reply; a thread's quote first). It goes, with the row and its
+            events, when the session's content is deleted at the end of its
+            retention period (getDataRetention).
         status:
           type: string
           enum: [unread, read]
@@ -7358,6 +7392,11 @@ components:
     CloudNotificationEvent:
       type: object
       additionalProperties: false
+      description: >-
+        One change to a notification, as the personal inbox's replay serves
+        it. A session's notifications and their events are deleted with its
+        content at the end of its retention period (getDataRetention); the
+        replay no longer returns them.
       required: [sequence, orgId, recipientUserId, kind, eventId, notification, createdAt]
       properties:
         sequence:
@@ -9800,6 +9839,34 @@ components:
           type: string
           minLength: 1
           description: Assistant output frame, limited by the server to 16 KiB.
+    AssistantDeltaPayload:
+      type: object
+      additionalProperties: false
+      description: >-
+        A chat.assistant_delta event's payload: the worker's output frame
+        (WorkerOutputPayload) and the answer item it belongs to.
+      required: [turnId, attempt, stream, text]
+      properties:
+        turnId:
+          type: string
+          format: uuid
+        attempt:
+          type: integer
+          minimum: 1
+        stream:
+          type: string
+          enum: [stdout, stderr]
+        text:
+          type: string
+          minLength: 1
+          description: Assistant output frame, limited by the server to 16 KiB.
+        itemId:
+          type: string
+          description: >-
+            The answer item the text belongs to (an agent's answer is one per
+            turn and itemId; an AsideAnchor on an answer names its first
+            delta). Empty when the agent named none. Older events omit it: a
+            client then matches an answer's anchor by sequence alone.
     WorkerReadyEventInput:
       type: object
       additionalProperties: false
@@ -10888,6 +10955,22 @@ components:
       type: object
       additionalProperties: false
       required: [text, clientMessageId]
+      description: >-
+        A reply, or with sendToAgent a reply that also sends the thread: that
+        one needs throughSequence and seen (an empty seen when there is no
+        comment to carry).
+      oneOf:
+        - properties:
+            sendToAgent:
+              const: false
+        - required: [sendToAgent, throughSequence, seen]
+          properties:
+            sendToAgent:
+              const: true
+            throughSequence:
+              type: integer
+            seen:
+              type: array
       properties:
         text:
           type: string
@@ -10933,11 +11016,12 @@ components:
             pins each comment shown. Ignored without sendToAgent.
         seen:
           type: array
-          maxItems: 500
+          maxItems: 2000
           description: >-
             Required with sendToAgent (an empty list for a thread with no
-            comment to carry). Every comment of the thread the client showed
-            the sender, with the version shown: its editedSequence, or its
+            comment to carry). At most 2000 entries, as many comments as a
+            client reads of one thread. Every comment of the thread the client
+            showed the sender, with the version shown: its editedSequence, or its
             sequence if never edited. A comment the send would carry (written
             since the thread's last send) that is missing from it, or whose
             version is now newer than the one listed, refuses the send with
@@ -14218,7 +14302,7 @@ components:
         type:
           const: chat.assistant_delta
         payload:
-          $ref: "#/components/schemas/WorkerOutputPayload"
+          $ref: "#/components/schemas/AssistantDeltaPayload"
         createdAt:
           type: string
           format: date-time

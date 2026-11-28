@@ -27,7 +27,7 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** @description How long the caller's Cloud sessions and their conversation content are kept. The setting is the signed-in user's own and covers every Cloud session they started, in any organization, team sessions included; a child session an orchestrator started follows the orchestrator session's creator. The clock runs from a session's creation: once a session is older than retentionDays and has ended (a session still running is never ended for it; it waits until someone ends it), its sandbox is deleted and its content (chat timeline, harness transcripts, terminal output, commands, agent-switch handoffs and prompts, and its comment threads: quotes, comments and history) is deleted for good. The session itself remains, without its content, for billing and audit. A user follows defaultDays (followsDefault) until they choose another period, and can go back to it. */
+        /** @description How long the caller's Cloud sessions and their conversation content are kept. The setting is the signed-in user's own and covers every Cloud session they started, in any organization, team sessions included; a child session an orchestrator started follows the orchestrator session's creator. The clock runs from a session's creation: once a session is older than retentionDays and has ended (a session still running is never ended for it; it waits until someone ends it), its sandbox is deleted and its content (chat timeline, harness transcripts, terminal output, commands, agent-switch handoffs and prompts, its comment threads: quotes, comments and history, and its notifications with their events, including the mention and comment reply notifications that copy what someone wrote) is deleted for good, and neither the personal inbox nor its replay returns any of it afterwards. Notifications already pushed to a phone stay on the phone. The session itself remains, without its content, for billing and audit. A user follows defaultDays (followsDefault) until they choose another period, and can go back to it. */
         get: operations["getDataRetention"];
         /** @description Choose how long the caller's Cloud sessions and their conversation content are kept: one of options, or null to follow the deployment's default again (defaultDays, and any later change to it). Both modes answer sessionsToDelete, the number of the caller's sessions, across all organizations, older than the requested period whose content has not been deleted yet: what this change deletes (a session still running once it has ended). With dryRun true nothing changes, so a client can show that number and ask for confirmation before it sends the same request with dryRun false. Every change is written to the audit log with the old and new period. */
         put: operations["putDataRetention"];
@@ -1752,10 +1752,10 @@ export interface paths {
             };
             cookie?: never;
         };
-        /** @description The session's asides (comment threads), open and resolved, as the caller sees them, in the order their messages were sent: at most the newest 1000. An aside is a thread between people about one message. Two things start one: a message or steer that mentions people or teams (origin `tag`; its event names it by asideId: its chat.user_message event, or for a steer the event the steer request returned, chat.turn_steer_requested), and createSessionAside on any message, steer or agent answer (origin `comment`). The message still goes to the agent like any other, but the agent never reads the aside: its replies never reach a worker, a prompt, a prompt suggestion or the agent's context. Anyone who can open the session (read or write) may list them; a client draws each message's comment marker, and its unread state, from the open ones in this list. */
+        /** @description The session's asides (comment threads), open and resolved, as the caller sees them, in the order their messages were sent: at most the newest 1000. An aside is a thread between people about one message. Two things start one: a message or steer that mentions people or teams (origin `tag`; its event names it by asideId: its chat.user_message event, or for a steer the event the steer request returned, chat.turn_steer_requested), and createSessionAside on any message, steer or agent answer (origin `comment`). The message still goes to the agent like any other, but the agent does not read the aside: its replies reach no worker, prompt, prompt suggestion or the agent's context, unless someone who can prompt the agent sends the thread (replyToSessionAside with sendToAgent), which sends it as one of their messages. Anyone who can open the session (read or write) may list them; a client draws each message's comment marker, and its unread state, from the open ones in this list. */
         get: operations["listSessionAsides"];
         put?: never;
-        /** @description Starts a comment thread (an aside whose origin is `comment`) on one message of the session, with its first comment. Anyone who can open the session may, a viewer too, and it needs no composer lease. The anchor is a person's message (chat.user_message), a steer (chat.turn_steered), or an agent's answer (the first chat.assistant_delta event of the answer the client shows: one per turn and itemId). quote, when set, is the exact passage of that message the thread is about; it is stored sealed like other content and copied into the thread, so the thread keeps it even if the message is no longer shown. Nothing reaches the agent: everyone watching the session receives chat.aside_created, and each person or team member the comment mentions joins the thread and gets a mentioned notification (mentions are checked as on sendMessage). A retry with the same clientMessageId returns the thread the first try created. */
+        /** @description Starts a comment thread (an aside whose origin is `comment`) on one message of the session, with its first comment. Anyone who can open the session may, a viewer too, and it needs no composer lease. The anchor is a person's message (chat.user_message), a steer (chat.turn_steered), or an agent's answer (the first chat.assistant_delta event of the answer the client shows: one per turn and itemId). quote, when set, is the exact passage of that message the thread is about; it is stored sealed like other content and copied into the thread, so the thread keeps it even if the message is no longer shown. Nothing reaches the agent until someone sends the thread to it (replyToSessionAside with sendToAgent): everyone watching the session receives chat.aside_created, and each person or team member the comment mentions joins the thread and gets a mentioned notification (mentions are checked as on sendMessage). A retry with the same clientMessageId returns the thread the first try created. */
         post: operations["createSessionAside"];
         delete?: never;
         options?: never;
@@ -1799,7 +1799,7 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** @description Replies in an aside. Anyone who can open the session may reply, a viewer too, and it needs no composer lease. The reply never reaches the agent. Everyone watching the session receives it as a chat.aside_reply event. Everyone in the aside except the author, and unless they muted it, gets an aside_reply notification; each person or team member the reply mentions joins the aside and gets a mentioned notification instead (mentions are checked as on sendMessage). Replying marks the aside read for the author, and resolves the author's aside_reply and mentioned notifications for it. A reply to a resolved aside reopens it (a `reopened` history entry). With sendToAgent (only for someone who can prompt the agent), in one transaction the reply is stored (unless its text is empty), the aside is resolved, and the agent gets ONE user message from the caller: a framing line, the thread verbatim (the anchor and the comments, with their authors and times) and the reply apart from it as the request, within size limits (FromAside describes the text). A thread sent before carries only the comments written since. The send is pinned to the thread as the caller read it: seen lists every comment the caller was shown, at the version shown, and throughSequence bounds it. A comment the send would carry that is missing from seen, newer than the version seen lists, or written or edited after throughSequence answers 409 thread_changed, and nothing is stored. That message goes through sendMessage's path (it queues behind a running turn like any message) and its chat.user_message event carries fromAside, from which a client draws the card. The thread gets a `sent_to_agent` history entry, and everyone watching gets chat.aside_resolved with sentToAgent. Nobody is notified of the resolve or the send. A retry with the same clientMessageId returns the reply the first try created and sends nothing again. */
+        /** @description Replies in an aside. Anyone who can open the session may reply, a viewer too, and it needs no composer lease. A reply stays out of the agent's context, unless the caller sends the thread with it (sendToAgent, below). Everyone watching the session receives it as a chat.aside_reply event. Everyone in the aside except the author, and unless they muted it, gets an aside_reply notification; each person or team member the reply mentions joins the aside and gets a mentioned notification instead (mentions are checked as on sendMessage). Replying marks the aside read for the author, and resolves the author's aside_reply and mentioned notifications for it. A reply to a resolved aside reopens it (a `reopened` history entry). With sendToAgent (only for someone who can prompt the agent), in one transaction the reply is stored (unless its text is empty), the aside is resolved, and the agent gets ONE user message from the caller: a framing line, the thread verbatim (the anchor and the comments, with their authors and times) and the reply apart from it as the request, within size limits (FromAside describes the text). A thread sent before carries only the comments written since. The send is pinned to the thread as the caller read it: seen lists every comment the caller was shown, at the version shown, and throughSequence bounds it. A comment the send would carry that is missing from seen, newer than the version seen lists, or written or edited after throughSequence answers 409 thread_changed, and nothing is stored. That message goes through sendMessage's path (it queues behind a running turn like any message) and its chat.user_message event carries fromAside, from which a client draws the card. The thread gets a `sent_to_agent` history entry, and everyone watching gets chat.aside_resolved with sentToAgent. Nobody is notified of the resolve or the send. A retry with the same clientMessageId returns the reply the first try created and sends nothing again. */
         post: operations["replyToSessionAside"];
         delete?: never;
         options?: never;
@@ -3800,6 +3800,7 @@ export interface components {
             /** @description What happened. `mentioned`: someone named the recipient, or a team they are in, in a session's message or steer, or in a reply in an aside; its metadata is a MentionNotificationMetadata. `aside_reply`: someone replied in an aside the recipient is in; its metadata is an AsideReplyNotificationMetadata. A client shows kinds it doesn't know by title and body. */
             type: string;
             title: string;
+            /** @description The notification's text. A `mentioned` or `aside_reply` row's copies the first line of what was written (a message, steer, comment or reply; a thread's quote first). It goes, with the row and its events, when the session's content is deleted at the end of its retention period (getDataRetention). */
             body: string;
             /** @enum {string} */
             status: "unread" | "read";
@@ -3814,7 +3815,8 @@ export interface components {
             createdAt: string;
             /** Format: date-time */
             updatedAt: string;
-        };
+        } & (unknown & unknown);
+        /** @description One change to a notification, as the personal inbox's replay serves it. A session's notifications and their events are deleted with its content at the end of its retention period (getDataRetention); the replay no longer returns them. */
         CloudNotificationEvent: {
             /** Format: int64 */
             sequence: number;
@@ -4947,6 +4949,18 @@ export interface components {
             /** @description Assistant output frame, limited by the server to 16 KiB. */
             text: string;
         };
+        /** @description A chat.assistant_delta event's payload: the worker's output frame (WorkerOutputPayload) and the answer item it belongs to. */
+        AssistantDeltaPayload: {
+            /** Format: uuid */
+            turnId: string;
+            attempt: number;
+            /** @enum {string} */
+            stream: "stdout" | "stderr";
+            /** @description Assistant output frame, limited by the server to 16 KiB. */
+            text: string;
+            /** @description The answer item the text belongs to (an agent's answer is one per turn and itemId; an AsideAnchor on an answer names its first delta). Empty when the agent named none. Older events omit it: a client then matches an answer's anchor by sequence alone. */
+            itemId?: string;
+        };
         WorkerReadyEventInput: {
             /**
              * @description discriminator enum property added by openapi-typescript
@@ -5473,6 +5487,7 @@ export interface components {
             /** @description Set when hasMore is true. */
             nextCursor?: string;
         };
+        /** @description A reply, or with sendToAgent a reply that also sends the thread: that one needs throughSequence and seen (an empty seen when there is no comment to carry). */
         AsideReplyInput: {
             /** @description The reply. Blank text is refused with 422, except with sendToAgent, which then sends and resolves the thread as it is. Each mention is written as @Name, as in a message. */
             text: string;
@@ -5487,14 +5502,22 @@ export interface components {
              * @description Required with sendToAgent. The newest comment of the thread the sender read: the highest AsideReply.sequence or AsideReply.editedSequence the client showed them (any session event sequence the client had applied works too). It bounds the send: the agent gets only comments up to it, and a comment written or edited after it refuses the send with 409 thread_changed. seen pins each comment shown. Ignored without sendToAgent.
              */
             throughSequence?: number;
-            /** @description Required with sendToAgent (an empty list for a thread with no comment to carry). Every comment of the thread the client showed the sender, with the version shown: its editedSequence, or its sequence if never edited. A comment the send would carry (written since the thread's last send) that is missing from it, or whose version is now newer than the one listed, refuses the send with 409 thread_changed, as one written or edited after throughSequence does. Ignored without sendToAgent. */
+            /** @description Required with sendToAgent (an empty list for a thread with no comment to carry). At most 2000 entries, as many comments as a client reads of one thread. Every comment of the thread the client showed the sender, with the version shown: its editedSequence, or its sequence if never edited. A comment the send would carry (written since the thread's last send) that is missing from it, or whose version is now newer than the one listed, refuses the send with 409 thread_changed, as one written or edited after throughSequence does. Ignored without sendToAgent. */
             seen?: {
                 /** Format: uuid */
                 replyId: string;
                 /** Format: int64 */
                 version: number;
             }[];
-        };
+        } & ({
+            /** @constant */
+            sendToAgent?: false;
+        } | {
+            /** @constant */
+            sendToAgent: true;
+            throughSequence: number;
+            seen: unknown[];
+        });
         CommentThreadPage: {
             items: components["schemas"]["CommentThread"][];
             /** @description More threads follow; ask again with nextCursor. */
@@ -7040,7 +7063,7 @@ export interface components {
             sequence: number;
             /** @constant */
             type: "chat.assistant_delta";
-            payload: components["schemas"]["WorkerOutputPayload"];
+            payload: components["schemas"]["AssistantDeltaPayload"];
             /** Format: date-time */
             createdAt: string;
         };
@@ -11299,7 +11322,7 @@ export interface operations {
             404: components["responses"]["Error"];
             /** @description `SESSION_TERMINATED`: the session ended or was deleted. `thread_changed`: with sendToAgent, a comment the send would carry was written or edited after throughSequence, is missing from seen, or is newer than the version seen lists; read the thread again and resend. Nothing is stored. */
             409: components["responses"]["Error"];
-            /** @description `validation_error`: details.field `text` when the text is blank (allowed only with sendToAgent) or longer than 65536 characters; details.field `throughSequence` when sendToAgent comes without it (or below 0); details.field `seen` when sendToAgent comes without it, with more than 500 entries, or with an entry that has no uuid replyId or no version; details.field `mentions` with a details.reason as on sendMessage (`unknown`, `no_access`, `outside_session`, `too_many`, `team_too_large`). Nothing is stored. */
+            /** @description `validation_error`: details.field `text` when the text is blank (allowed only with sendToAgent) or longer than 65536 characters; details.field `throughSequence` when sendToAgent comes without it (or below 0); details.field `seen` when sendToAgent comes without it, with more than 2000 entries, or with an entry that has no uuid replyId or no version; details.field `mentions` with a details.reason as on sendMessage (`unknown`, `no_access`, `outside_session`, `too_many`, `team_too_large`). Nothing is stored. */
             422: components["responses"]["ValidationError"];
             /** @description `rate_limited`: the request carries mentions and the caller sent 20 messages, steers and comments with mentions in this session within 10 minutes. Retry-After says when to try again. Nothing is stored. Requests without mentions are not limited. */
             429: {
