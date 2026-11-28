@@ -7,7 +7,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"regexp"
 	goruntime "runtime"
 	"strings"
 	"sync"
@@ -16,6 +15,7 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/runtime/conpty/ptyregistry"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 	"github.com/aoagents/agent-orchestrator/backend/internal/procmem"
+	"github.com/aoagents/agent-orchestrator/backend/internal/sessionid"
 )
 
 const (
@@ -48,9 +48,6 @@ func conptyCreateFailure(err error) error {
 func conptyPartialCreateFailure(err error, handle ports.RuntimeHandle, cleanup ports.RuntimeCleanupOutcome) error {
 	return runtimeEffectFailure{err: err, handle: handle, effect: ports.RuntimeEffectPossible, cleanup: cleanup}
 }
-
-// validSessionID matches agent-orchestrator's assertValidSessionId.
-var validSessionID = regexp.MustCompile(`^[a-zA-Z0-9_-]+$`)
 
 // hostSession is the in-memory state for a live pty-host connection.
 type hostSession struct {
@@ -132,8 +129,10 @@ func New(opts Options) *Runtime {
 // Returns an error if sessionID is invalid, already exists, or spawn fails.
 func (r *Runtime) Create(ctx context.Context, cfg ports.RuntimeConfig) (ports.RuntimeHandle, error) {
 	id := string(cfg.SessionID)
-	if !validSessionID.MatchString(id) {
-		return ports.RuntimeHandle{}, conptyCreateFailure(fmt.Errorf("conpty: invalid session id %q: must match ^[a-zA-Z0-9_-]+$", id))
+	// Keep runtime handles identical to session IDs: the registry and restore
+	// path use the handle as an exact key.
+	if !sessionid.Valid(id) {
+		return ports.RuntimeHandle{}, conptyCreateFailure(fmt.Errorf("conpty: invalid session id %q: must contain only letters, digits, underscores, hyphens, and internal dots", id))
 	}
 	if cfg.WorkspacePath == "" {
 		return ports.RuntimeHandle{}, conptyCreateFailure(fmt.Errorf("conpty: workspace path required"))

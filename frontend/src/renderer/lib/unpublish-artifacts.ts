@@ -231,7 +231,7 @@ export function combinePublishedChecks(checks: readonly PublishedCheck[]): Publi
  */
 export async function countPublished(baseUrl: string, files: readonly UnpublishTarget[], bridge: UnpublishBridge = aoBridge.cloudShare): Promise<number> {
 	if (!baseUrl || files.length === 0) return 0;
-	const lookups = await Promise.allSettled(files.map((file) => bridge.inspect({ ...file, baseUrl })));
+	const lookups = await Promise.allSettled(files.map((file) => bridge.inspect({ ...file, baseUrl }, { linkOnly: true })));
 	return new Set(lookups.flatMap((lookup) => lookup.status === "fulfilled" && lookup.value.shareId ? [lookup.value.shareId] : [])).size;
 }
 
@@ -251,7 +251,7 @@ export async function prepareUnpublish(
 		.filter((target) => !known.some((file) => publishKey(baseUrl, file) === publishKey(baseUrl, target)));
 	const files = [...known, ...publishedMeanwhile];
 	if (files.length === 0) return NOTHING_TO_UNPUBLISH;
-	const lookups = await Promise.allSettled(files.map((file) => bridge.inspect({ ...file, baseUrl })));
+	const lookups = await Promise.allSettled(files.map((file) => bridge.inspect({ ...file, baseUrl }, { linkOnly: true })));
 	const shareIds = new Set<string>();
 	let unresolved = 0;
 	for (const lookup of lookups) {

@@ -37,6 +37,8 @@ function DaemonFailureContent({ status }: { status: DaemonStatus }) {
 	const canRestart =
 		!slowStartup &&
 		(status.code === "not_ready" ||
+			// The binary can come back (an installer finishing, antivirus restoring it).
+			status.code === "binary_missing" ||
 			status.code === "spawn_failed" ||
 			status.code === "exited" ||
 			status.code === "identity_mismatch" ||

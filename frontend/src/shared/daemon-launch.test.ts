@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { bundledDaemonIdentityError, resolveDaemonLaunch } from "./daemon-launch";
+import { bundledDaemonIdentityError, bundledDaemonMissingMessage, resolveDaemonLaunch } from "./daemon-launch";
 
 describe("resolveDaemonLaunch", () => {
 	it("uses AO_DAEMON_COMMAND when configured", () => {
@@ -133,5 +133,18 @@ describe("bundledDaemonIdentityError", () => {
 		expect(bundledDaemonIdentityError({}, "/opt/ao/resources/daemon/ao", undefined, samePath)).toBe(
 			"An older Orchestrator daemon is already running, but it does not report its binary path. Stop it and restart this app.",
 		);
+	});
+});
+
+describe("bundledDaemonMissingMessage", () => {
+	it("tells an installed app to reinstall, not to rebuild", () => {
+		const message = bundledDaemonMissingMessage("/Applications/Orchestrator.app/Contents/Resources/daemon/ao", "darwin");
+		expect(message).toContain("Reinstall Orchestrator");
+		expect(message).not.toMatch(/rebuild|npm/i);
+		expect(message).not.toContain("antivirus");
+	});
+
+	it("names the quarantined executable on Windows", () => {
+		expect(bundledDaemonMissingMessage("C:\\Program Files\\Orchestrator\\resources\\daemon\\ao.exe", "win32")).toContain("antivirus software quarantined ao.exe");
 	});
 });

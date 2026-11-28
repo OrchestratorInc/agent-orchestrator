@@ -1,4 +1,6 @@
-import { act, render, screen, waitFor } from "@testing-library/react";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { aoBridge } from "../lib/bridge";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import * as codeSelection from "./diffs/useCodeSelection";
 import { subscribeChatComposerReferences } from "../lib/chat-context-bus";
 import { createElement, type ReactNode } from "react";
@@ -219,6 +221,36 @@ describe("ReadOnlyFileView", () => {
 		expect(screen.getByRole("img")).toHaveAttribute("src", expect.stringContaining("http://127.0.0.1:4000/token-a/api/v1/sessions/same-id/"));
 		rerender(<ReadOnlyFileView annotation={annotation()} detail={detail} hostId="offline" sessionId="same-id" />);
 		expect(screen.getByRole("img")).not.toHaveAttribute("src");
+	});
+
+	it("reveals an unsupported ZIP artifact using the existing native action", async () => {
+		const open = vi.spyOn(aoBridge.editorHandoff, "openArtifacts").mockResolvedValue({ id: "file-manager", kind: "file_manager", name: "Finder" });
+		const client = new QueryClient();
+		render(<QueryClientProvider client={client}><ReadOnlyFileView annotation={annotation()} detail={baseDetail({ binary: true, content: "", path: "exports/report.ZIP" })} sessionId="sess-1" source={{ kind: "artifact" }} /></QueryClientProvider>);
+		expect(screen.getByText("Preview isn't available for .ZIP files.")).toBeInTheDocument();
+		fireEvent.click(screen.getByRole("button", { name: /^Show in/ }));
+		await waitFor(() => expect(open).toHaveBeenCalledWith({ sessionId: "sess-1", path: "exports/report.ZIP", targetId: "file-manager" }));
+		open.mockRestore();
+	});
+
+	it("explains a reveal failure and clears it when another artifact opens", async () => {
+		const open = vi.spyOn(aoBridge.editorHandoff, "openArtifacts").mockRejectedValue(new Error("This session has no artifacts folder yet."));
+		const client = new QueryClient();
+		const view = (path: string) => <QueryClientProvider client={client}><ReadOnlyFileView annotation={annotation()} detail={baseDetail({ binary: true, content: "", path })} sessionId="sess-1" source={{ kind: "artifact" }} /></QueryClientProvider>;
+		const { rerender } = render(view("report.zip"));
+		fireEvent.click(screen.getByRole("button", { name: /^Show in/ }));
+		expect(await screen.findByRole("alert")).toHaveTextContent("This session has no artifacts folder yet.");
+		rerender(view("archive"));
+		expect(screen.getByText("Preview isn't available for this file type.")).toBeInTheDocument();
+		expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+		open.mockRestore();
+	});
+
+	it.each(["remote", "cloud"])("does not offer a local reveal for a %s artifact", (location) => {
+		const client = new QueryClient();
+		render(<QueryClientProvider client={client}><ReadOnlyFileView annotation={annotation()} detail={baseDetail({ binary: true, content: "", path: "report.zip" })} hostId={location === "remote" ? "remote-1" : undefined} sessionId="sess-1" source={{ kind: "artifact", cloud: location === "cloud" }} /></QueryClientProvider>);
+		expect(screen.getByText("Preview isn't available for .zip files.")).toBeInTheDocument();
+		expect(screen.queryByRole("button", { name: /^Show in/ })).not.toBeInTheDocument();
 	});
 
 	it("shows a binary placeholder for a non-image binary file", () => {

@@ -104,11 +104,21 @@ describe("macOS differential update policy", () => {
   afterEach(() => { restorePlatform(); vi.restoreAllMocks(); });
   const nightly: UpdateSettings = { enabled: true, channel: "nightly", nightlyAck: true, feature: null, macDifferentialUpdates: true };
 
+  it.each([["win32", false], ["linux", true]] as const)("starts %s with differential download disabled=%s", async (platform, disabled) => {
+    const restore = stubProcess(platform, process.execPath);
+    try {
+      const { autoUpdater } = await importAutoUpdater(nightly);
+      // Linux feeds never carry blockMapSize (scripts/feed.mjs), so the
+      // AppImage differential path can only fail; Windows uses its sidecar.
+      expect(autoUpdater.disableDifferentialDownload).toBe(disabled);
+    } finally { restore(); }
+  });
+
   it.each(["win32", "linux"] as const)("preserves %s differential policy across updater operations", async platform => {
     const restore = stubProcess(platform, process.execPath);
     try {
       const { module, autoUpdater } = await importAutoUpdater(nightly);
-      expect(autoUpdater.disableDifferentialDownload).toBe(false);
+      expect(autoUpdater.disableDifferentialDownload).toBe(platform === "linux");
       for (const disabled of [false, true]) {
         autoUpdater.disableDifferentialDownload = disabled;
         await module.setMacDifferentialUpdates(stateDir, true);

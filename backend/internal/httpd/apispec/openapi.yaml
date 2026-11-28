@@ -19775,6 +19775,8 @@ components:
           - cline
           - autohand
           type: string
+        roleAgent:
+          type: string
         scmStatus:
           enum:
           - pr_open
@@ -23554,6 +23556,10 @@ components:
           items:
             type: string
           type: array
+        workingDir:
+          description: The absolute folder the command ran in. When it is inside the
+            artifact directory, a relative path is read from it if the file is there.
+          type: string
       required:
       - paths
       type: object

@@ -53,6 +53,34 @@ func TestPRChecksCDC_EmitsOnInsertAndStatusUpdate(t *testing.T) {
 	}
 }
 
+func TestPRChecksSameNameKeepsActionableLinkUntilAllPass(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+	seedProject(t, s, "mer")
+	rec, err := s.CreateSession(ctx, sampleRecord("mer"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	pr := domain.PullRequest{URL: "https://example/pr/2", SessionID: rec.ID, Number: 2, HeadSHA: "head", CI: domain.CIFailing, UpdatedAt: time.Now()}
+	failed := domain.PullRequestCheck{Name: "lint", CommitHash: "head", Status: domain.PRCheckCancelled, URL: "https://example/check/cancelled", CreatedAt: pr.UpdatedAt}
+	passed := domain.PullRequestCheck{Name: "lint", CommitHash: "head", Status: domain.PRCheckPassed, URL: "https://example/check/passed", CreatedAt: pr.UpdatedAt}
+	if err := s.WritePR(ctx, pr, []domain.PullRequestCheck{failed, passed}, nil); err != nil {
+		t.Fatal(err)
+	}
+	checks, err := s.ListChecks(ctx, pr.URL)
+	if err != nil || len(checks) != 1 || checks[0].Status != domain.PRCheckCancelled || checks[0].URL != failed.URL {
+		t.Fatalf("same-name checks = %+v, err %v; want current cancelled link", checks, err)
+	}
+	pr.CI = domain.CIPassing
+	if err := s.WritePR(ctx, pr, []domain.PullRequestCheck{passed}, nil); err != nil {
+		t.Fatal(err)
+	}
+	checks, err = s.ListChecks(ctx, pr.URL)
+	if err != nil || len(checks) != 1 || checks[0].Status != domain.PRCheckPassed || checks[0].URL != passed.URL {
+		t.Fatalf("replacement checks = %+v, err %v; want passed link", checks, err)
+	}
+}
+
 func TestPRReviewThreadsCDC_EmitsOnInsertAndResolvedTransition(t *testing.T) {
 	s := newTestStore(t)
 	ctx := context.Background()

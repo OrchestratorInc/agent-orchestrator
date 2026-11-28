@@ -14,6 +14,16 @@ export function bundledDaemonBinaryName(platform: NodeJS.Platform): string {
 	return platform === "win32" ? "ao.exe" : "ao";
 }
 
+/**
+ * What a user sees when the packaged app's daemon executable is not on disk.
+ * It points at reinstalling, not at rebuilding: only installed apps get here.
+ */
+export function bundledDaemonMissingMessage(command: string, platform: NodeJS.Platform): string {
+	const base = `Orchestrator's background service is missing from this install (expected at ${command}). Reinstall Orchestrator to restore it.`;
+	if (platform !== "win32") return base;
+	return `${base} If antivirus software quarantined ${bundledDaemonBinaryName(platform)}, restore it or allow it, then choose Retry.`;
+}
+
 export function resolveDaemonLaunch(
 	env: Record<string, string | undefined>,
 	isPackaged: boolean,

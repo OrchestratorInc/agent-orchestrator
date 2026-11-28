@@ -35,7 +35,20 @@ func toContractKanbanSessionFacts(rec domain.SessionRecord, interrupted, signalC
 		AutoReview:        rec.AutoReviewEnabled,
 		AutoInjectReview:  rec.AutoInjectReview,
 		AutoInjectCI:      rec.AutoInjectCI,
+		// Only a person's prompt resumes a done session. LatestInteractionAt
+		// also counts messages from other sessions, such as an orchestrator's
+		// note after the merge, which must leave the session done.
+		HumanPromptAt: rec.Metadata.LatestUserPromptAt,
 	}
+}
+
+// prSettledAt is when a merged or closed PR reached that state; zero while it
+// is open.
+func prSettledAt(pr domain.PRFacts) time.Time {
+	if !pr.Merged && !pr.Closed {
+		return time.Time{}
+	}
+	return pr.StateChangedAt
 }
 
 func toContractKanbanPRFacts(prs []domain.PRFacts, runs []domain.CurrentHeadReviewRun) []contract.KanbanPRFacts {
@@ -67,6 +80,7 @@ func toContractKanbanPRFacts(prs []domain.PRFacts, runs []domain.CurrentHeadRevi
 			Review:       pr.Review,
 			Mergeability: pr.Mergeability,
 			UpdatedAt:    pr.UpdatedAt,
+			SettledAt:    prSettledAt(pr),
 			ReviewRun:    byPR[pr.URL],
 			ExternalReview: contract.KanbanExternalReviewFacts{
 				Approved:         pr.ExternalApproved,

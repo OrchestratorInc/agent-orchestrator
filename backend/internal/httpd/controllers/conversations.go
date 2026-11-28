@@ -1533,7 +1533,7 @@ func conversationSnapshotResponse(s chatsvc.Snapshot) ConversationSnapshotRespon
 		Title:                            s.Conversation.ProviderTitle,
 		ModelReroute:                     modelReroutePayload(s.Conversation.ModelReroute),
 		Account:                          accountPayload(s.Conversation.Account),
-		ThreadState:                      threadStatePayload(s.Conversation.ThreadState),
+		ThreadState:                      threadStatePayload(s.Conversation.ThreadStateFor(s.Harness, s.ActiveBranch.ProviderConversationID)),
 		MCPServers:                       mcpServersPayload(s.Conversation.MCPServers),
 		Capabilities:                     capabilityNames(s.Capabilities),
 	}
@@ -1818,6 +1818,8 @@ func accountPayload(account *domain.ConversationAccount) *ConversationAccountPay
 }
 
 // threadStatePayload maps the provider's thread lifecycle onto the wire shape.
+// Callers pass only state that describes the current agent's thread; a report
+// about a thread the conversation has since left is not this thread's state.
 func threadStatePayload(state *domain.ConversationThreadState) *ConversationThreadStatePayload {
 	if state == nil {
 		return nil

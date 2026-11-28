@@ -2201,6 +2201,8 @@ func mapSessionError(err error) error {
 		return apierr.Conflict("HARNESS_INSTALL_ACTIVE", "The selected harness is currently being installed", nil)
 	case errors.Is(err, sessionmanager.ErrUnsupportedModel):
 		return apierr.Invalid("UNSUPPORTED_MODEL", err.Error(), nil)
+	case errors.Is(err, sessionmanager.ErrSpawnPermissionExceedsPolicy):
+		return apierr.Invalid("SPAWN_PERMISSION_EXCEEDS_POLICY", err.Error(), nil)
 	case errors.Is(err, sessionmanager.ErrTerminalUnsupported):
 		return apierr.Invalid("TERMINAL_UNSUPPORTED", err.Error(), nil)
 	case errors.Is(err, sessionmanager.ErrTargetAgentUnauthorized):
@@ -2284,6 +2286,8 @@ func mapSessionError(err error) error {
 		return apierr.Conflict("WORKSPACE_LOCKED", err.Error(), nil)
 	case errors.Is(err, ports.ErrWorkspacePathOccupied):
 		return apierr.Conflict("WORKSPACE_PATH_OCCUPIED", err.Error(), nil)
+	case errors.Is(err, ports.ErrWorkspaceNotARepo):
+		return projectNotARepoError(err)
 	case errors.Is(err, sessionmanager.ErrCleanupScript):
 		return apierr.Conflict("WORKSPACE_CLEANUP_FAILED", "Workspace cleanup script failed; the worktree was preserved. Fix the script and retry cleanup.", nil)
 	case errors.Is(err, context.DeadlineExceeded):
@@ -2295,6 +2299,19 @@ func mapSessionError(err error) error {
 	default:
 		return err
 	}
+}
+
+// projectNotARepoError turns git's raw "not a git repository" exit 128 for a
+// registered project folder (for example a project or workspace root whose .git
+// was deleted) into an actionable error that names the folder and how to
+// recover. The text is shared with asynchronous chat start failures.
+func projectNotARepoError(err error) error {
+	message, path, fix, _ := sessionmanager.ProjectNotARepoGuidance(err)
+	details := map[string]any{"suggestedFix": fix}
+	if path != "" {
+		details["path"] = path
+	}
+	return apierr.Invalid("PROJECT_NOT_A_REPO", message, details)
 }
 
 // toSpawnAPIError maps spawn failures to structured API errors so telemetry and

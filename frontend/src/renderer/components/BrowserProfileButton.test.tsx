@@ -42,7 +42,7 @@ describe("BrowserProfileButton", () => {
 			expect.objectContaining({
 				viewId: "1:worker-1",
 				bounds: expect.objectContaining({ width: 0, height: 0 }),
-				labels: expect.objectContaining({ temporary: "Temporary", cancel: "No", confirm: "Yes" }),
+				labels: { temporary: "Temporary", manage: "Manage profiles" },
 			}),
 		);
 	});

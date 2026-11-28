@@ -2,14 +2,18 @@ package sessionmanager
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
+
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 	browsersvc "github.com/aoagents/agent-orchestrator/backend/internal/service/browser"
+	chatsvc "github.com/aoagents/agent-orchestrator/backend/internal/service/chat"
 	"github.com/aoagents/agent-orchestrator/backend/internal/storage/sqlite"
 	"github.com/aoagents/agent-orchestrator/backend/internal/storage/sqlite/sqlitetest"
 )
@@ -71,8 +75,11 @@ func TestInterfaceTransitionHermesWithoutIdentityPairDegradesToFreshChat(t *test
 			if len(messages) != 1 || messages[0].Message != degradedHandoffMarkerText {
 				t.Fatalf("marker messages = %+v, want exactly the fresh-start boundary", messages)
 			}
-			if got := chat.relayMessages; len(got) != 1 || got[0] != degradedHandoffMarkerText {
-				t.Fatalf("chat relay = %v, want the fresh-start boundary", got)
+			if got := chat.boundaries; len(got) != 1 || got[0] != degradedHandoffMarkerText {
+				t.Fatalf("timeline boundaries = %v, want the fresh-start boundary", got)
+			}
+			if got := chat.relayMessages; len(got) != 0 {
+				t.Fatalf("boundary notice was sent to the agent as a prompt: %v", got)
 			}
 			return
 		}
@@ -142,10 +149,10 @@ func (a *hermesDegradedTransitionAgent) GetRestoreCommand(ctx context.Context, c
 // upstream-hermes-main runtime in the Chat→TUI direction: the installed adapter
 // never declares a compatible TUI+Chat identity pair, but the recorded native
 // conversation is still resumable, so the switch must restore THAT terminal,
-// mark the row identity-reset, and deliver an honest boundary turn — exactly
-// once — into the resumed terminal.
+// mark the row identity-reset, and record an honest boundary notice — exactly
+// once — in the Chat timeline, without typing it into the resumed terminal.
 func TestInterfaceTransitionHermesChatToTUIDegradesToNativeRestore(t *testing.T) {
-	manager, store, runtime, _, log := newTransitionManager(t, domain.SessionModeChat)
+	manager, store, runtime, chat, log := newTransitionManager(t, domain.SessionModeChat)
 	useFastInterfaceTransitionTimings(manager)
 	agent := &hermesDegradedTransitionAgent{resumeFound: true}
 	manager.agents = singleAgent{agent: agent}
@@ -197,15 +204,15 @@ func TestInterfaceTransitionHermesChatToTUIDegradesToNativeRestore(t *testing.T)
 	if got := fmt.Sprint(*log); got != "[prepare:chat:drain stop:chat start:tui]" {
 		t.Fatalf("controller order = %s", got)
 	}
-	awaitDegradedMarker(t, store, transition.ID, degradedTerminalResumeMarkerText)
+	awaitDegradedMarker(t, store, chat, transition.ID, degradedTerminalResumeMarkerText)
 }
 
 // TestInterfaceTransitionHermesChatToTUIDegradesToFreshTUI covers the missing
 // native terminal: nothing resumable exists, so the switch starts an ordinary
 // fresh TUI for the workspace, still marked identity-reset with its own honest
-// boundary turn. The Chat conversation stays archived as-is.
+// boundary notice. The Chat conversation stays archived as-is.
 func TestInterfaceTransitionHermesChatToTUIDegradesToFreshTUI(t *testing.T) {
-	manager, store, runtime, _, log := newTransitionManager(t, domain.SessionModeChat)
+	manager, store, runtime, chat, log := newTransitionManager(t, domain.SessionModeChat)
 	useFastInterfaceTransitionTimings(manager)
 	agent := &hermesDegradedTransitionAgent{}
 	manager.agents = singleAgent{agent: agent}
@@ -249,7 +256,7 @@ func TestInterfaceTransitionHermesChatToTUIDegradesToFreshTUI(t *testing.T) {
 	if got := fmt.Sprint(*log); got != "[prepare:chat:drain stop:chat start:tui]" {
 		t.Fatalf("controller order = %s", got)
 	}
-	awaitDegradedMarker(t, store, transition.ID, degradedTerminalFreshMarkerText)
+	awaitDegradedMarker(t, store, chat, transition.ID, degradedTerminalFreshMarkerText)
 }
 
 // A Chat that already ran the session's prompt must not hand it to the fresh
@@ -301,9 +308,9 @@ func TestInterfaceTransitionHermesFreshTUIReplaysPromptOnlyIfChatNeverRanIt(t *t
 }
 
 // awaitDegradedMarker polls the transition outbox until the degraded boundary
-// turn has been delivered, then asserts it was delivered exactly once with the
-// expected text.
-func awaitDegradedMarker(t *testing.T, store *transitionStore, transitionID, want string) {
+// notice has been delivered, then asserts it was recorded in the timeline
+// exactly once with the expected text and never sent to the agent.
+func awaitDegradedMarker(t *testing.T, store *transitionStore, chat *transitionChat, transitionID, want string) {
 	t.Helper()
 	deadline := time.Now().Add(3 * time.Second)
 	for time.Now().Before(deadline) {
@@ -315,6 +322,12 @@ func awaitDegradedMarker(t *testing.T, store *transitionStore, transitionID, wan
 			messages := store.messages[transitionID]
 			if len(messages) != 1 || messages[0].Message != want {
 				t.Fatalf("marker messages = %+v, want exactly %q", messages, want)
+			}
+			if got := chat.boundaries; len(got) != 1 || got[0] != want {
+				t.Fatalf("timeline boundaries = %v, want exactly %q", got, want)
+			}
+			if sent := store.messenger.msgs; len(sent) != 0 || len(chat.relayMessages) != 0 {
+				t.Fatalf("boundary notice was sent to the agent: terminal=%v chat=%v", sent, chat.relayMessages)
 			}
 			return
 		}
@@ -404,8 +417,18 @@ func hermesMessagedChatOrchestrator(t *testing.T) (*Manager, *sqlite.Store, *tra
 // The fresh TUI must start, the degraded boundary must be recorded, and the
 // messaged Chat conversation must stay archived exactly as it was.
 func TestInterfaceTransitionHermesChatWithMessagesToTUIDegradesToFreshTUI(t *testing.T) {
-	manager, store, runtime, _, log, id := hermesMessagedChatOrchestrator(t)
+	manager, store, runtime, chat, log, id := hermesMessagedChatOrchestrator(t)
 	ctx := context.Background()
+	// The real Chat service records the boundary in the real store.
+	chat.recordBoundary = chatsvc.New(chatsvc.Options{Store: store, Sessions: store, NewID: uuid.NewString}).RecordInterfaceTransitionBoundary
+	before, err := store.ConversationForSession(ctx, id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	archived, err := store.LoadConversationSnapshot(ctx, before.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	status, err := manager.InterfaceTransitionStatus(ctx, id)
 	if err != nil {
@@ -460,5 +483,117 @@ func TestInterfaceTransitionHermesChatWithMessagesToTUIDegradesToFreshTUI(t *tes
 		t.Fatal(err)
 	} else if !hasTurns {
 		t.Fatal("archived Chat lost its turn history")
+	}
+	// It gains exactly one boundary row, and no turn: the notice is never a
+	// prompt. Another delivery pass adds nothing.
+	deadline := time.Now().Add(3 * time.Second)
+	for {
+		pending, err := store.ListPendingSessionInterfaceTransitionMessages(ctx, transition.ID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(pending) == 0 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("boundary notice was not recorded: %+v", pending)
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	if err := manager.deliverAllTransitionMessages(ctx); err != nil {
+		t.Fatal(err)
+	}
+	snapshot, err := store.LoadConversationSnapshot(ctx, conversation.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var boundaries []domain.ConversationActivity
+	for _, activity := range snapshot.Activities {
+		var detail map[string]string
+		if json.Unmarshal(activity.Detail, &detail) == nil && detail["event"] == chatsvc.InterfaceBoundaryEvent {
+			boundaries = append(boundaries, activity)
+		}
+	}
+	if len(boundaries) != 1 || boundaries[0].Summary != degradedTerminalFreshMarkerText || boundaries[0].TurnID != "" {
+		t.Fatalf("boundary rows = %+v, want one turnless row saying %q", boundaries, degradedTerminalFreshMarkerText)
+	}
+	if len(snapshot.Turns) != len(archived.Turns) {
+		t.Fatalf("archived Chat has %d turns, want the %d it had", len(snapshot.Turns), len(archived.Turns))
+	}
+}
+
+// degradedOutbox is a completed degraded handoff whose outbox holds the
+// boundary notice followed by input the user queued during the switch.
+func degradedOutbox(t *testing.T) (*Manager, *transitionStore, *transitionChat, domain.SessionInterfaceTransition) {
+	t.Helper()
+	manager, store, _, chat, _ := newTransitionManager(t, domain.SessionModeChat)
+	useFastInterfaceTransitionTimings(manager)
+	ctx := context.Background()
+	transition := domain.SessionInterfaceTransition{
+		ID: "transition-1", SessionID: "session-1", TargetMode: domain.SessionModeChat,
+		Phase:        domain.SessionInterfaceTransitionCompleted,
+		DegradedKind: domain.SessionInterfaceTransitionDegradedIdentityReset,
+	}
+	store.transitions[transition.ID] = transition
+	for id, text := range map[string]string{
+		domain.SessionInterfaceTransitionBoundaryMessageID(transition.ID): degradedHandoffMarkerText,
+		"user-1": "run the tests",
+	} {
+		if err := store.EnqueueSessionInterfaceTransitionMessage(ctx, transition.ID, id, text, time.Now(),
+			ports.MessageDeliveryOptions{AuthoredByUser: id == "user-1"}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return manager, store, chat, transition
+}
+
+// The notice is only a display row, so a timeline that can't take it must not
+// hold up the user's queued input. It stays pending and is retried.
+func TestDegradedBoundaryFailureDoesNotHoldUpQueuedInput(t *testing.T) {
+	manager, store, chat, transition := degradedOutbox(t)
+	ctx := context.Background()
+	chat.boundaryErr = errors.New("timeline is busy")
+
+	if err := manager.deliverTransitionMessages(ctx, transition); !errors.Is(err, chat.boundaryErr) {
+		t.Fatalf("delivery error = %v, want the boundary failure reported", err)
+	}
+	if got := chat.relayMessages; len(got) != 1 || got[0] != "run the tests" {
+		t.Fatalf("delivered input = %v, want the user's queued message", got)
+	}
+	pending, _ := store.ListPendingSessionInterfaceTransitionMessages(ctx, transition.ID)
+	if len(pending) != 1 || pending[0].Message != degradedHandoffMarkerText {
+		t.Fatalf("pending = %+v, want only the boundary notice", pending)
+	}
+
+	chat.boundaryErr = nil
+	if err := manager.deliverAllTransitionMessages(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if got := chat.boundaries; len(got) != 1 || got[0] != degradedHandoffMarkerText {
+		t.Fatalf("recorded boundaries = %v, want the retried notice once", got)
+	}
+	if got := chat.relayMessages; len(got) != 1 {
+		t.Fatalf("delivered input = %v, want nothing sent twice", got)
+	}
+	if pending, _ := store.ListPendingSessionInterfaceTransitionMessages(ctx, transition.ID); len(pending) != 0 {
+		t.Fatalf("pending after the retry = %+v, want none", pending)
+	}
+}
+
+// A Chat service that can't record the notice acknowledges it, and still never
+// sends it to the agent.
+func TestDegradedBoundaryIsAcknowledgedWithoutARecorder(t *testing.T) {
+	manager, store, chat, transition := degradedOutbox(t)
+	ctx := context.Background()
+	manager.chat = struct{ ChatLauncher }{chat}
+
+	if err := manager.deliverTransitionMessages(ctx, transition); err != nil {
+		t.Fatal(err)
+	}
+	if got := chat.relayMessages; len(got) != 1 || got[0] != "run the tests" || len(chat.boundaries) != 0 {
+		t.Fatalf("delivered input = %v, boundaries = %v; want only the user's message", got, chat.boundaries)
+	}
+	if pending, _ := store.ListPendingSessionInterfaceTransitionMessages(ctx, transition.ID); len(pending) != 0 {
+		t.Fatalf("pending = %+v, want the notice acknowledged", pending)
 	}
 }

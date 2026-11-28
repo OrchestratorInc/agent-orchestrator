@@ -31,6 +31,7 @@ import type { DashboardPR } from "../../lib/api";
 import { hostedRowKey, type HostedSession } from "../../lib/hostedRows";
 import { useArchivedPRs, withArchivedPRSessions, type ArchivedPRSource } from "../../lib/archivedPRs";
 import type { ArchivedPRState } from "../../lib/api";
+import { useLastVerifiedConfigs } from "../../lib/useLastVerifiedConfig";
 
 export { RouteErrorBoundary as ErrorBoundary } from "../../lib/RouteErrorBoundary";
 
@@ -57,6 +58,11 @@ const SUMMARY_LOOKAHEAD = 30;
 // The ended sessions' PRs each filter shows.
 const ARCHIVED_STATES: Record<PRListFilter, readonly ArchivedPRState[]> = { open: [], merged: ["merged"], all: ["merged", "closed"] };
 
+// The ended sessions' PRs read as the page opens, whichever filter is shown.
+// The daemon counts archived sessions, not PRs (a session can own several), so
+// only the read lists give the filter counts the list's own PR identity.
+const READ_ARCHIVED_STATES: readonly ArchivedPRState[] = ["merged", "closed"];
+
 // Its rows share one width (see `MenuRowWidthScope`): a filter mounts a new
 // set of rows, and the ones past the list's first render batch are sized on
 // their first frame.
@@ -80,8 +86,9 @@ function PRList() {
 	const [filter, setFilter] = useState<Filter>("open");
 	const [refreshToken, setRefreshToken] = useState(0);
 	// Each machine that pages its archive is read for the PRs of sessions that
-	// have ended: merged ones once Merged or All is open, closed ones once All
-	// is. A machine with an empty archive has none to read.
+	// have ended, merged and closed, as the page opens: Merged and All show
+	// their real counts before either is opened, and their rows at once when
+	// it is. A machine with an empty archive has none to read.
 	const archivedSources = useMemo<ArchivedPRSource[]>(() => visibleHosts.flatMap((host) => {
 		if (isCloudHost(host.hostId) || !host.archive) return [];
 		const projectId = projectFilter === "all" ? undefined : projectFilter;
@@ -89,7 +96,7 @@ function PRList() {
 		return archived > 0 ? [{ hostId: host.hostId, hostName: host.name, appearance: host.appearance, projectId, archived }] : [];
 	}), [visibleHosts, projectFilter]);
 	const archivedStates = ARCHIVED_STATES[filter];
-	const archived = useArchivedPRs(archivedSources, { states: archivedStates, refreshToken });
+	const archived = useArchivedPRs(archivedSources, { states: READ_ARCHIVED_STATES, refreshToken });
 	const archivedLoading = archivedStates.some((state) => archived.loading[state]);
 	const archivedKeys = useMemo(() => new Set(archived.sessions.map((session) => hostedRowKey(session.hostId, session.id))), [archived.sessions]);
 	const prs = useMemo(() => {
@@ -160,6 +167,9 @@ function PRList() {
 		return config ? [{ config, sessionId: session.id }] : [];
 	}), [shownRows, summaryReach, archivedKeys, configForHost]);
 	const summaries = usePRSummaries(summaryTargets);
+	// Cards read their detail with the last verified connection of their machine,
+	// so it stays through an app switch. Fetches above use only the live one.
+	const summaryConfigFor = useLastVerifiedConfigs(configForHost);
 	// A cloud session's detail comes from Orchestrator Cloud, not a daemon,
 	// stamped with its pull requests' states: one merged or closed in Cloud
 	// reads afresh rather than keeping its open card until the reuse runs out.
@@ -238,7 +248,7 @@ function PRList() {
 				refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} {...refreshControlColors(t)} />}
 				renderSectionHeader={({ section }) => <PRSectionHeader label={section.label} count={section.data.length} />}
 				renderItem={({ item: { pr, session }, index, section }) => {
-					const config = configForHost(session.hostId);
+					const config = summaryConfigFor(session.hostId);
 					return <PRCard
 						pr={pr}
 						session={session}

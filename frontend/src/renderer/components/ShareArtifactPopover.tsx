@@ -1087,7 +1087,11 @@ function SharePanel({
 		if (files?.unsupported) return status(t("artifacts.share.pageFiles.unsupported"), "status");
 		if (!files?.skipped) return null;
 		const left = t("artifacts.share.pageFiles.skipped", { count: files.skipped });
-		return status(files.videos > 0 ? `${left} ${t("artifacts.share.pageFiles.videos")}` : left, "status");
+		const why = [
+			files.videos > 0 ? t("artifacts.share.pageFiles.videos") : "",
+			files.hostOutdated ? t("artifacts.share.pageFiles.hostOutdated") : "",
+		].filter(Boolean);
+		return status([left, ...why].join(" "), "status");
 	};
 	const note = (text: string) => (
 		<p role="status" className="rounded-md bg-status-in-review/10 px-2.5 py-2 text-caption leading-4 text-status-in-review" data-share-note="">{text}</p>

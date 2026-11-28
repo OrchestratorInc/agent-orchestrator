@@ -376,6 +376,11 @@ func mergeKimiHooksConfig(existing string) string {
 // reports active and lifecycle clears waiting_input as soon as the approval
 // dialog resolves; permission-request keeps the session on waiting_input until
 // then, and lifecycle's sticky suppression stops the trio from clearing it.
+//
+// Kimi checks each hook's event against its own list and refuses the whole
+// config on an unknown one, so an event is added only when every release that
+// accepts this block already knows it. StopFailure predates PermissionRequest;
+// Interrupt (an Esc'd turn) stays out because releases before 0.14 refuse it.
 func kimiHooksConfigBlock() string {
 	return kimiHooksSentinelStart + "\n\n" +
 		kimiHookEntry("SessionStart", "startup", "ao hooks kimi session-start") +
@@ -386,6 +391,15 @@ func kimiHooksConfigBlock() string {
 		kimiHookEntry("PermissionRequest", "", "ao hooks kimi permission-request") +
 		kimiHookEntry("PermissionResult", "", "ao hooks kimi permission-resolved") +
 		kimiHookEntry("Stop", "", "ao hooks kimi stop") +
+		// Kimi fires StopFailure instead of Stop when a provider error (an
+		// invalid API key, a rate limit) ends the turn. Without it that turn
+		// leaves the session active, reading "working" forever.
+		kimiHookEntry("StopFailure", "", "ao hooks kimi stop-failure") +
+		// Kimi runs hooks per agent with no agent id, so a child's
+		// StopFailure reads like the parent's. These bracket each child so
+		// lifecycle can tell them apart. Both predate PermissionRequest.
+		kimiHookEntry("SubagentStart", "", "ao hooks kimi subagent-start") +
+		kimiHookEntry("SubagentStop", "", "ao hooks kimi subagent-stop") +
 		kimiHooksSentinelEnd + "\n"
 }
 

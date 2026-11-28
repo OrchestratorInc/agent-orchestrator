@@ -488,12 +488,38 @@ New (`historical: false`) PR outcomes add:
   controller).
 - `failed_step` is `model_check`, `branch_fetch`, `worktree`, `setup`,
   `agent_start`, `prompt` or `other`.
-- `cause` is a fixed value, never error text: `timeout`; for git and worktree
-  failures `branch_exists`, `path_exists`, `locked`, `permission`,
-  `path_too_long`, `not_a_repo`, `killed` or `other`, classified from git's
-  stderr inside the daemon; for agent and Chat starts `exited`,
-  `no_response`, `not_logged_in`, `killed` or `other`. Sentry spawn errors
-  carry `failed_step` and `cause` as tags.
+- `cause` is a fixed value from a closed list, never error text, paths or
+  messages. The daemon reads the error inside the process to choose it and
+  sends only the value. Sentry spawn errors carry `failed_step` and `cause`
+  as tags and drop any value not on this list.
+  - Any step: `timeout` (the start ran out of its time budget),
+    `permission` (permission denied, read-only file system), `disk_full`
+    (no space left or quota exceeded), `path_too_long`, `killed` (the process
+    was killed by a signal) and `other` (none of the causes below).
+  - Worktree and branch steps, from AO's own typed refusals first, then git's
+    stderr and exit state, then the operating-system error behind a non-git
+    step: `branch_exists` (the branch exists or is checked out in another
+    worktree), `path_exists` (the worktree folder is already occupied),
+    `locked` (a git lock file or a locked worktree), `not_a_repo` (the project
+    folder is not a Git repository), `unsafe_repo` (git refused a repository
+    it considers of dubious ownership), `repo_missing` (the project folder is
+    gone or not registered), `git_missing` (git is not installed, including
+    the macOS stub that needs the Command Line Tools), `in_use` (a file is held
+    by another process), `repo_corrupt` (a corrupt object or index),
+    `ref_conflict` (the branch name collides with an existing branch folder,
+    such as `a` and `a/b`), `ref_missing` (the start branch or commit does not
+    exist locally), `no_default_branch` (the default branch could not be
+    determined), `invalid_branch` (the branch name is not valid) and
+    `git_error` (git ran and failed with a message not listed here). Only
+    `git worktree` and `git status` run with English messages, so other git
+    commands in a non-English locale can report `git_error`.
+  - Agent and Chat starts: `not_logged_in`, `binary_missing` (the agent is
+    not installed, not on PATH, or not a valid executable), `agent_error` (the
+    agent answered the start request with an error), `host_failed` (AO's
+    background chat host process did not start or could not be reached),
+    `exited` (the agent process exited or disconnected while starting),
+    `no_response` (the agent did not answer in time) and `incompatible` (the
+    agent's version does not speak the protocol AO expects).
 - `mode` is `chat` or `terminal` (absent when the start failed before a mode
   was chosen), `async` is whether the start went on in the background after
   the request was answered, and `model` is a fixed Claude family alias
@@ -726,8 +752,9 @@ heatmap and no session replay.
   (`NOT_CONFIGURED`, `DAEMON_UNREACHABLE`, `BINARY_MISSING`, `SPAWN_FAILED`,
   `EXITED`, `PORT_UNCONFIRMED`, `NOT_READY`, `IDENTITY_MISMATCH`,
   `DATADIR_UNWRITABLE`) or a chat turn failure (`AUTH_REQUIRED`,
-  `PROVIDER_KEY_MISSING`). Any other code is dropped, and it is omitted when
-  there is none.
+  `PROVIDER_KEY_MISSING`, or `USAGE_LIMIT` when the agent's account hit its
+  usage limit). Any other code is dropped, and it is omitted when there is
+  none.
 - `surface` on `ao.ui.error_shown` is the surface that showed the error, or,
   for a toast, the surface you used in the 10 seconds before it. It is omitted
   when neither is known.
@@ -794,7 +821,7 @@ label:
 - Sidebar: `sidebar.home`, `sidebar.collapse`, `sidebar.new_project`,
   `sidebar.settings`, `sidebar.connect_mobile`, `sidebar.project_row`,
   `sidebar.project_toggle`, `sidebar.project_new_session`,
-  `sidebar.project_menu`, `sidebar.project_unpin`, `sidebar.session_row`,
+  `sidebar.project_orchestrator`, `sidebar.project_menu`, `sidebar.project_unpin`, `sidebar.session_row`,
   `sidebar.session_pin`, `sidebar.session_archive`,
   `sidebar.archived_sessions`
 - Tabs and top bar: `tab.select`, `tab.close`, `tab.new`,
@@ -815,12 +842,15 @@ Hover counts are kept for `sidebar.session_row`, `tab.select`, and
 ### Definitions
 
 - A rage click is the fourth pointer click on the same element within one
-  second. A burst is counted once, however long it lasts.
+  second. A burst is counted once, however long it lasts. Double and triple
+  clicks that select text, in a field or on text they leave selected, restart
+  the count, so selecting words quickly is not a rage click.
 - A dead click is a single pointer click inside a surface that lands on
   nothing interactive (no button, link, field, tab, menu item, terminal, named
-  control or other focusable element), shows no pointer cursor, does not
-  select text, and is not on a scrollbar. Double clicks are never dead, since
-  they usually select text.
+  control or other focusable element), shows neither a pointer nor a text
+  cursor, does not select text, and is not on a scrollbar. Double clicks are
+  never dead, since they usually select text. A click that only closes an open
+  menu, popover or list, or that the app handles and cancels, is not dead.
 - Visible and focused time stop counting after 5 minutes with no input, and
   while the window is hidden or not focused. A surface that is mounted but
   hidden, such as a chat kept alive in the background, is not on screen.
@@ -840,7 +870,9 @@ since several can be sent together at launch, and keep the daily cap.
 
 The listeners are passive and attached once to the document, so they cannot
 delay a click, scroll or key press. Telling which surface or control was used
-walks up the DOM from the event target and reads no layout. Hover is checked
+walks up the DOM from the event target and reads no layout. Each press looks
+up open menus and popovers with one selector query, also without reading
+layout. Hover is checked
 at most once per animation frame, for the last element the mouse entered. The
 only layout read is for a click on nothing interactive: the clicked element's
 box and cursor, read after the click's frame has painted, to tell a dead click

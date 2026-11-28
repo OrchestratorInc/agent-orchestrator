@@ -1562,6 +1562,31 @@ func TestEnrichFailureLogsDoesNotRefetchExistingTailOrMissingProviderID(t *testi
 	}
 }
 
+func TestEnrichFailureLogsSkipsCancelledChecks(t *testing.T) {
+	obsValue := testObs(1)
+	obsValue.CI.Summary = string(domain.CIFailing)
+	obsValue.CI.FailedFingerprint = "fp"
+	obsValue.CI.Checks = []ports.SCMCheckObservation{
+		{Name: "build", Status: string(domain.PRCheckFailed), Conclusion: "failure", ProviderID: "1"},
+		{Name: "lint", Status: string(domain.PRCheckCancelled), Conclusion: "cancelled", ProviderID: "2"},
+	}
+	obsValue.CI.FailedChecks = append([]ports.SCMCheckObservation(nil), obsValue.CI.Checks...)
+
+	provider := &fakeProvider{logTails: map[string]string{"build": "build tail", "lint": "should not fetch"}}
+	obs := newTestObserver(testStoreWithSession(), provider, &fakeLifecycle{}, time.Unix(1, 0).UTC())
+	obs.enrichFailureLogs(context.Background(), &obsValue, domain.PullRequest{})
+
+	if provider.logCalls != 1 {
+		t.Fatalf("log calls = %d, want 1 (failed check only)", provider.logCalls)
+	}
+	if got := obsValue.CI.FailedChecks[1].LogTail; got != "" {
+		t.Fatalf("cancelled check tail = %q, want empty", got)
+	}
+	if got := obsValue.CI.FailureLogTail; got != "build tail" {
+		t.Fatalf("FailureLogTail = %q, want only the failed check's tail", got)
+	}
+}
+
 func TestPoll_ReviewPollingRespectsInterval(t *testing.T) {
 	store := testStoreWithSession()
 	local := knownPR(1)
