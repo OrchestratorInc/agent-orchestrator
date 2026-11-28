@@ -403,6 +403,8 @@ describe("cloud funnel telemetry", () => {
 			release(paid("pro"));
 			await inFlight;
 			expect(contexts.at(-1)).toMatchObject({ plan: "none", paid: false });
+			expect(planChanges()).toEqual([]);
+			expect(window.localStorage.getItem("ao.telemetry.cloudPlans")).toBeNull();
 		});
 
 		it("tags the org's events with the plan once billing loads", async () => {

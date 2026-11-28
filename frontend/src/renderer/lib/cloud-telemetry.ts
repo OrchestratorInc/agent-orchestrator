@@ -249,8 +249,10 @@ export async function observeBillingPlan(orgId: string, summary: Parameters<type
 	const paid = isPaidBillingSummary(summary);
 	const trial = isTrialBillingSummary(summary);
 	billedPlans.set(orgId, { plan, paid, trial });
-	// A summary that lands after /me said billing is off cannot bring a plan back.
-	if (currentOffering?.orgId === orgId && currentOffering.billingMode !== "off") setCloudTelemetryContext({ ...currentOffering, plan, paid, trial });
+	// A summary that lands after /me said billing is off for this org cannot
+	// bring a plan back, report a change, or become the stored plan.
+	if (currentOffering?.orgId === orgId && currentOffering.billingMode === "off") return;
+	if (currentOffering?.orgId === orgId) setCloudTelemetryContext({ ...currentOffering, plan, paid, trial });
 	const to = PLAN_RANKS.get(plan);
 	if (to === undefined) return;
 	const orgHash = await hashedTelemetryID(orgId);
