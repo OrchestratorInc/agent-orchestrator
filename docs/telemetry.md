@@ -254,6 +254,9 @@ Orchestrator.inc sends structured events in a few broad categories:
 - Your GitHub username, when Orchestrator.inc can resolve the account signed in
   to its GitHub integration, on every desktop and daemon event (previously only
   session-start events)
+- One answer to the first-day exit feedback prompt, with any text typed in its
+  optional box, when a new install quits without starting work. See "Exit
+  feedback prompt" below
 - Desktop onboarding progress: each step viewed, completed, skipped or left,
   installs and sign-ins started there and how they ended, how long onboarding
   took, and whether the first chat message followed. See "Desktop onboarding
@@ -1453,6 +1456,73 @@ that was off when it began has no `started`, and so sends no `completed`.
 properties are no longer allowed: they belonged to the first-run prompt on
 Home, which has been removed. Builds from before that still send them.
 
+## Exit feedback prompt
+
+When a new desktop install quits on its first day without starting any work,
+the app shows one small dialog asking what stopped them, then closes. It asks
+at most once per install, ever.
+
+It shows only when all of these are true at the moment of quitting:
+
+- The install is less than 24 hours old (the age of `telemetry_install_id`).
+- No worker session and no standalone session has ever been started on the
+  install. An orchestrator session does not count as work. The daemon keeps a
+  durable count for this (`lifetimeWorkSessions` on
+  `GET /api/v1/telemetry/identity`) that includes sessions later deleted. If
+  the daemon cannot be reached, the prompt does not show.
+- The app has been open for at least 10 seconds in this launch.
+- It is a user quit: on macOS ⌘Q, the Quit menu item or Quit from the Dock;
+  on Windows and Linux, closing the main window or quitting. Restarting to
+  install an update, shutting down, restarting or logging out the computer, a
+  crash, and a forced quit go straight through. With the window hidden or
+  minimized, nothing shows. On macOS the menu bar icon is always on, so a
+  ⌘Q, menu or Dock quit closes the window and leaves Orchestrator running in
+  the menu bar; the prompt still asks on that quit, and its events mean the
+  window closed, not that the app exited. The prompt replaces the "Quit
+  Orchestrator?" confirm for that one quit.
+- Share usage analytics is on, and none of the three events below is silenced
+  by `AO_TELEMETRY_DISABLED_EVENTS`.
+- It has not shown on this install before. The record is the marker file
+  `exit_feedback_shown` in the AO data directory, written the moment the
+  dialog appears, whatever happens next.
+
+The question depends on how far the install got: one version for an install
+with no project, another for an install with a project but no work. The user
+can tap one of five answers, type up to 500 characters in an optional box,
+skip, press Escape (ignored once they have typed, or while an input method
+is composing), quit again or do nothing. With no input it closes itself
+after 15 seconds; once the user types, it waits for an answer or a skip. The
+dialog can never keep the app open on its own: if the check, the dialog or
+sending fails, the app quits normally.
+
+It sends three events, each with the same context as other desktop events
+(installation ID, app version, platform, and the GitHub login or AO Cloud user
+ID when there is one). Answers are not anonymous.
+
+| Event | When | Properties |
+| --- | --- | --- |
+| `ao.exit_feedback.shown` | The dialog appears | `version` |
+| `ao.exit_feedback.answered` | An answer is tapped | `version`, `answer`, `has_text`, `text`, `seconds_open` |
+| `ao.exit_feedback.dismissed` | Skipped, Escape, a second quit, or 15 seconds with no input | `version`, `how`, `seconds_open` |
+
+- `version`: `no_project` or `project_no_work`.
+- `answer`: for `no_project`, `just_looking`, `unsure_where_to_start`,
+  `no_repo_or_agent`, `something_broke` or `not_a_fit`; for
+  `project_no_work`, `no_task_in_mind`, `unsure_what_to_ask`,
+  `agent_not_ready`, `tried_nothing_started` or `not_comfortable`.
+- `how`: `skip`, `escape`, `second_close` or `timeout`.
+- `text`: what the user typed, trimmed, with local paths and local URLs
+  replaced the same way as other event text, at most 500 characters. Sent only
+  with an answer, and left out when the box is empty. Text typed before a skip
+  is not sent.
+- `seconds_open`: whole seconds from the dialog appearing to the action.
+
+The chosen answer and any typed text are sent to PostHog and stored there with
+the rest of the usage analytics, linked to the same identifiers. Because the
+app is closing, the desktop's main process sends these events itself and waits
+up to 2 seconds for them before it quits. Turning off Share usage analytics
+stops the prompt from showing, and nothing is sent.
+
 ## What Orchestrator.inc does not intentionally send
 
 Product telemetry is designed not to include:
@@ -1466,6 +1536,8 @@ Product telemetry is designed not to include:
   account (invitee emails are never sent)
 - Screen recordings, session replays, screenshots, pointer coordinates, or
   the text of anything you click or hover
+- Text you type, with one exception: the optional box in the first-day exit
+  feedback prompt, sent with your answer (see "Exit feedback prompt")
 
 The explicit account fields are the GitHub owner segment, your authenticated
 GitHub username, and, only if you sign in to AO Cloud, your AO Cloud user ID and
@@ -1664,7 +1736,8 @@ identity (user ID, email, GitHub username) stays in the client. It takes effect
 immediately and is remembered across restarts (it is a marker file,
 `telemetry_opt_out`, next to the installation identifier). A paired phone picks
 it up the next time it connects and keeps it until a paired desktop that has
-analytics on tells it otherwise. Turning it back on resumes sending; the desktop
+analytics on tells it otherwise. With it off, the first-day exit feedback
+prompt never shows. Turning it back on resumes sending; the desktop
 interface uses a fresh anonymous identifier until the next restart. Data already
 sent to PostHog is not deleted.
 

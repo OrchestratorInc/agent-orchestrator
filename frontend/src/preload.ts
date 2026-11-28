@@ -62,6 +62,7 @@ import {
 } from "./shared/telemetry-policy";
 import type { MigrationState } from "./main/app-state";
 import type { PrivacyGuideRequest, PrivacyGuideTarget, PrivacyPane } from "./main/privacy-guide";
+import { EXIT_FEEDBACK_EVENT_CHANNEL, EXIT_FEEDBACK_REQUEST_CHANNEL, EXIT_FEEDBACK_SECOND_CLOSE_CHANNEL, EXIT_FEEDBACK_STATE_CHANNEL, isExitFeedbackVersion, type ExitFeedbackRequest, type ExitFeedbackState } from "./shared/exit-feedback";
 import type { UpdateSettings, UpdateStatus, UpdateInstallResult } from "./main/update-settings";
 import type { CloudAccount, CloudPendingSignIn } from "./shared/cloud-account";
 import {
@@ -373,6 +374,24 @@ const api = {
 			};
 		},
 		resolveQuitConfirm: (confirmed: boolean) => ipcRenderer.send(QUIT_CONFIRM_RESULT_CHANNEL, confirmed),
+		// First-day exit feedback: main holds the quit until reportExitFeedback("done").
+		onExitFeedbackRequest: (listener: (request: ExitFeedbackRequest) => void) => {
+			const wrapped = (_event: Electron.IpcRendererEvent, request?: Partial<ExitFeedbackRequest>) => {
+				if (isExitFeedbackVersion(request?.version)) listener({ version: request.version });
+			};
+			ipcRenderer.on(EXIT_FEEDBACK_REQUEST_CHANNEL, wrapped);
+			return () => {
+				ipcRenderer.off(EXIT_FEEDBACK_REQUEST_CHANNEL, wrapped);
+			};
+		},
+		onExitFeedbackSecondClose: (listener: () => void) => {
+			const wrapped = () => listener();
+			ipcRenderer.on(EXIT_FEEDBACK_SECOND_CLOSE_CHANNEL, wrapped);
+			return () => {
+				ipcRenderer.off(EXIT_FEEDBACK_SECOND_CLOSE_CHANNEL, wrapped);
+			};
+		},
+		reportExitFeedback: (state: ExitFeedbackState) => ipcRenderer.send(EXIT_FEEDBACK_STATE_CHANNEL, state),
 		// Fired by the main process when ⌘T / Ctrl+T is pressed in any web contents,
 		// including while focus is inside a terminal pane.
 		onNewShellTerminalShortcut: (listener: () => void) => {
@@ -676,6 +695,8 @@ const api = {
 		takeResourceSummary: () => ipcRenderer.invoke("telemetry:takeResourceSummary") as Promise<ResourceSummary | null>,
 		launchSteps: () => ipcRenderer.invoke("telemetry:launchSteps") as Promise<LaunchSteps | null>,
 		claimFirstOpen: () => ipcRenderer.invoke("telemetry:claimFirstOpen") as Promise<"claimed" | "ineligible" | "unknown">,
+		// A finished exit feedback event, posted by main so it survives the quit.
+		sendExitFeedbackEvent: (event: Record<string, unknown>) => ipcRenderer.send(EXIT_FEEDBACK_EVENT_CHANNEL, event),
 		getPolicy: async () => {
 			const view = await ipcRenderer.invoke("telemetry:getPolicy") as TelemetryPolicyView;
 			applyTelemetryPolicy(view);
