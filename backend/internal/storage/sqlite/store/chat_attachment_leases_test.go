@@ -195,6 +195,62 @@ func TestChatAttachmentLeaseClaimRefusesAcceptance(t *testing.T) {
 	}
 }
 
+// An image a message sends by its staged path names it in a structured block.
+// If reclamation took the file between the daemon reading it and the message
+// being accepted, the write is refused, on every path that accepts a message;
+// a live draft file is still committed, and text or a link naming a reclaimed
+// file is still just a mention.
+func TestChatAttachmentReclaimedImageReferenceRefused(t *testing.T) {
+	s, session, conversation := conversationFixture(t)
+	ctx := context.Background()
+	for _, name := range []string{leasedSent, leasedDropped} {
+		if err := s.LeaseChatAttachment(ctx, session, name, histClock); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := s.ReleaseChatAttachmentLeases(ctx, session, []string{leasedDropped}, histClock); err != nil {
+		t.Fatal(err)
+	}
+	if claimed, err := s.ClaimChatAttachmentLease(ctx, session, leasedDropped, histClock.Add(time.Second)); err != nil || !claimed {
+		t.Fatalf("claim = %v, %v", claimed, err)
+	}
+	if err := s.MarkChatAttachmentReclaimed(ctx, session, leasedDropped, histClock.Add(2*time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	image := func(name string) string {
+		return `[{"type":"image","data":"aW1hZ2U=","mimeType":"image/png","uri":".ao/attachments/` + name + `"}]`
+	}
+	at := histClock.Add(3 * time.Second)
+	gone := domain.ConversationMessage{ID: "m1", Text: "look", Origin: domain.MessageOriginHuman, DeliveryContentJSON: image(leasedDropped)}
+	if _, err := s.AppendUserMessage(ctx, conversation, session, "gen-1", gone, "turn-1", at); err == nil {
+		t.Fatal("a message sending a reclaimed file's image was accepted")
+	}
+	steer := `{"text":"look","content":` + image(leasedDropped) + `,"origin":"human","settings":{}}`
+	if _, _, err := s.ReserveSteerDelivery(ctx, conversation, "steer-1", steer, at); err == nil {
+		t.Fatal("a steer sending a reclaimed file's image was reserved")
+	}
+
+	live := domain.ConversationMessage{ID: "m2", Text: "look", Origin: domain.MessageOriginHuman, DeliveryContentJSON: image(leasedSent)}
+	if _, err := s.AppendUserMessage(ctx, conversation, session, "gen-1", live, "turn-2", at); err != nil {
+		t.Fatalf("a message sending a live draft file was refused: %v", err)
+	}
+	if err := s.ReleaseChatAttachmentLeases(ctx, session, []string{leasedSent}, at.Add(time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	if got := releasedNames(t, s, session); len(got) != 0 {
+		t.Fatalf("released = %v, want the sent image committed", got)
+	}
+	if err := s.UpdateQueuedTurnMessage(ctx, conversation, "turn-2", "look again", image(leasedDropped), 0, at.Add(2*time.Second), domain.ConversationQueuedEditDelivery{}); err == nil {
+		t.Fatal("a queued edit adding a reclaimed file's image was accepted")
+	}
+
+	link := domain.ConversationMessage{ID: "m3", Text: "see .ao/attachments/" + leasedDropped, Origin: domain.MessageOriginHuman,
+		DeliveryContentJSON: `[{"type":"resource_link","uri":".ao/attachments/` + leasedDropped + `","name":"x"}]`}
+	if _, err := s.AppendUserMessage(ctx, conversation, session, "gen-1", link, "turn-3", at.Add(3*time.Second)); err != nil {
+		t.Fatalf("a mention and link of a reclaimed file were refused: %v", err)
+	}
+}
+
 // While a side question holding a file is being recorded, reclamation cannot
 // claim it, even if the draft released it meanwhile. If the question is then
 // not recorded, dropping its hold leaves the release in force.
