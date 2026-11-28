@@ -8,6 +8,9 @@ describe("isNightlyBuild", () => {
 		expect(isNightlyBuild(undefined)).toBe(false);
 		expect(isNightlyBuild("0.0.0-preview")).toBe(false);
 		expect(isNightlyBuild("0.0.0-test")).toBe(false);
+		// A release candidate is a stable build, not a nightly.
+		expect(isNightlyBuild("0.15.8-rc.1")).toBe(false);
+		expect(isNightlyBuild("0.15.8-rc.12")).toBe(false);
 	});
 });
 

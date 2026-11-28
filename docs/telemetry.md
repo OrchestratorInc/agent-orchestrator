@@ -138,13 +138,15 @@ session death or remove worktrees from these read failures.
 ### Published builds only
 
 Sentry initializes only in a published build: the version must be a
-release-stamped stable (`0.14.10`) or nightly (`0.14.11-nightly.202611100625`)
-version, and the build must carry the `AO_PUBLISHED_BUILD=1` marker that only
+release-stamped stable (`0.14.10`), release candidate (`0.15.8-rc.1`) or nightly
+(`0.14.11-nightly.202611100625`) version, and the build must carry the `AO_PUBLISHED_BUILD=1` marker that only
 the release workflow (`build-artifacts.yml`) bakes into Electron main. A
 development run, a fork or self-built copy (for example `0.13.0`,
 `0.14.10+fork.1`, `0.13.0-company.7`), and an edge or PR build send nothing to
 either Sentry project. The daemon applies the same version pattern to the DSN
-it receives.
+it receives. A release candidate reports to Sentry and PostHog as `stable`
+(Sentry environment and `version_channel`) and is told apart only by its
+version.
 
 ### Sampling and daily caps
 

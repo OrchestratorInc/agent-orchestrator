@@ -197,6 +197,8 @@ func TestVersionChannel(t *testing.T) {
 		"0.12.0-NIGHTLY.1":  "nightly",
 		"":                  "stable", // absent version is not nightly
 		"0.11.3-feature.42": "stable", // a pinned feature build is not a nightly
+		"0.15.8-rc.1":       "stable", // a release candidate reports as stable
+		"0.15.8-rc.12":      "stable",
 	}
 	for v, want := range cases {
 		if got := versionChannel(v); got != want {

@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { DEFAULT_DAEMON_SENTRY_DSN, daemonSentryDsn, isPublishedSentryBuild, safeSentryExceptionType } from "./sentry-config";
+import { DEFAULT_DAEMON_SENTRY_DSN, daemonSentryDsn, isPublishedSentryBuild, safeSentryExceptionType, sentryEnvironment } from "./sentry-config";
 
 import { sentryExceptionValue } from "../../../packages/shared/telemetry/sentry-message";
 
@@ -41,6 +41,38 @@ describe("published Sentry builds", () => {
 	it("requires the release build marker even for a stable-looking version", () => {
 		vi.stubEnv("AO_PUBLISHED_BUILD", "");
 		expect(isPublishedSentryBuild("0.13.0", false)).toBe(false);
+	});
+
+	it("accepts release candidates alongside stable and nightly versions", () => {
+		for (const version of ["0.15.8", "0.15.8-nightly.202611281200", "0.15.8-rc.1", "0.15.8-rc.12"]) {
+			expect(isPublishedSentryBuild(version, false)).toBe(true);
+		}
+		expect(daemonSentryDsn(undefined, "0.15.8-rc.1", false)).toBe(DEFAULT_DAEMON_SENTRY_DSN);
+	});
+
+	it("rejects malformed release candidates and other suffixes", () => {
+		for (const version of ["0.15.8-rc", "0.15.8-rc.x", "0.15.8-rc.1.202611281200", "0.15.8-pr123.1", "0.15.8+fork.1"]) {
+			expect(isPublishedSentryBuild(version, false)).toBe(false);
+		}
+	});
+
+	it("gives a release candidate no DSN without the release marker or in dev", () => {
+		expect(isPublishedSentryBuild("0.15.8-rc.1", true)).toBe(false);
+		expect(daemonSentryDsn(undefined, "0.15.8-rc.1", true)).toBe("");
+		vi.stubEnv("AO_PUBLISHED_BUILD", "");
+		expect(isPublishedSentryBuild("0.15.8-rc.1", false)).toBe(false);
+		expect(daemonSentryDsn(undefined, "0.15.8-rc.1", false)).toBe("");
+	});
+});
+
+describe("Sentry environment", () => {
+	it("reports a release candidate as stable", () => {
+		expect(sentryEnvironment("0.15.8")).toBe("stable");
+		expect(sentryEnvironment("0.15.8-rc.1")).toBe("stable");
+		expect(sentryEnvironment("0.15.8-rc.12")).toBe("stable");
+		expect(sentryEnvironment("0.15.8-nightly.202611281200")).toBe("nightly");
+		expect(sentryEnvironment("0.15.8-pr123.1")).toBe("development");
+		expect(sentryEnvironment("")).toBe("unknown");
 	});
 });
 
