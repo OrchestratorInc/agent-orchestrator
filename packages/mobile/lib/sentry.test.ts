@@ -276,3 +276,83 @@ it.each([
 	expect(event?.fingerprint?.at(-2)).toBe("sha256");
 	expect(JSON.stringify(event)).not.toMatch(privateText);
 });
+
+describe("mobile Sentry API context", () => {
+	async function apiEvent(operation: string, setup?: (sentry: typeof import("./sentry")) => void, hostId?: string) {
+		const sentry = await import("./sentry");
+		setup?.(sentry);
+		sentry.setMobileSentryConsent(true);
+		await sentry.initMobileSentry();
+		sentry.captureMobileApiError(operation, "http_5xx", 500, undefined, undefined, hostId);
+		const [message, hint] = sdk.captureMessage.mock.calls.at(-1) ?? [];
+		return sentry.sanitizeMobileSentryEvent({ type: undefined, message, tags: hint?.tags });
+	}
+
+	it("names and groups an API failure by its route", async () => {
+		const sessions = await apiEvent("GET /api/v1/sessions");
+		expect(sessions).toMatchObject({ message: "Mobile API error in GET /api/v1/sessions", tags: { "ao.operation": "GET /api/v1/sessions" } });
+		const send = await apiEvent("POST /api/v1/sessions/:id/send");
+		expect(send?.fingerprint).not.toEqual(sessions?.fingerprint);
+	});
+
+	// The character class alone would let a lowercase project slug through.
+	it("drops an operation with a segment that is not a route word", async () => {
+		const event = await apiEvent("GET /api/v1/projects/acme-secret/sessions");
+		expect(event?.message).toBe("Mobile API error");
+		expect(event?.tags).not.toHaveProperty("ao.operation");
+		expect(JSON.stringify(event)).not.toContain("acme-secret");
+	});
+
+	it("drops an operation that is not a route name", async () => {
+		const event = await apiEvent("GET /api/v1/projects/Acme Secret/sessions");
+		expect(event?.message).toBe("Mobile API error");
+		expect(event?.tags).not.toHaveProperty("ao.operation");
+		expect(JSON.stringify(event)).not.toMatch(/Acme|Secret/);
+	});
+
+	it("tags the OTA update as dist and the version of the daemon that answered", async () => {
+		const id = "0198a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a5b";
+		const event = await apiEvent("GET /api/v1/sessions", (sentry) => {
+			sentry.setMobileSentryContext({ release: "2.4.0@12", updateId: id });
+			sentry.setMobileDaemonVersions({ "host-a": "1.9.0" }, true);
+		}, "host-a");
+		expect(event).toMatchObject({ dist: id, tags: { "ao.update_id": id, "ao.daemon_version": "1.9.0" } });
+	});
+
+	// With two desktops paired, an error names the one that served it.
+	it("tags each API error with its own desktop's version", async () => {
+		const versions = { "host-a": "1.9.0", "host-b": "1.7.2" };
+		const fromB = await apiEvent("GET /api/v1/sessions", (sentry) => sentry.setMobileDaemonVersions(versions, true), "host-b");
+		expect(fromB?.tags).toMatchObject({ "ao.daemon_version": "1.7.2" });
+		const unknownHost = await apiEvent("GET /api/v1/sessions", (sentry) => sentry.setMobileDaemonVersions(versions, true));
+		expect(unknownHost?.tags).not.toHaveProperty("ao.daemon_version");
+	});
+
+	it("tags an exception only when every connected desktop runs one version", async () => {
+		const exceptionWith = async (versions: Record<string, string>, complete = true) => {
+			const sentry = await import("./sentry");
+			sentry.setMobileDaemonVersions(versions, complete);
+			sentry.setMobileSentryConsent(true);
+			await sentry.initMobileSentry();
+			sentry.captureMobileException(new Error("boom"), { category: "render_crash" });
+			return sentry.sanitizeMobileSentryEvent({ type: undefined, tags: sdk.captureException.mock.calls.at(-1)?.[1]?.tags });
+		};
+		expect((await exceptionWith({ a: "1.9.0", b: "1.9.0" }))?.tags).toMatchObject({ "ao.daemon_version": "1.9.0" });
+		expect((await exceptionWith({ a: "1.9.0", b: "1.7.2" }))?.tags).not.toHaveProperty("ao.daemon_version");
+		// B reported none (an older daemon, or its fetch failed): A's version is not B's.
+		expect((await exceptionWith({ a: "1.9.0" }, false))?.tags).not.toHaveProperty("ao.daemon_version");
+	});
+
+	it("keeps a reporting desktop's version for its own API errors when another reported none", async () => {
+		const event = await apiEvent("GET /api/v1/sessions", (sentry) => sentry.setMobileDaemonVersions({ "host-a": "1.9.0" }, false), "host-a");
+		expect(event?.tags).toMatchObject({ "ao.daemon_version": "1.9.0" });
+	});
+
+	it("forgets the daemon versions when no desktop is connected", async () => {
+		const event = await apiEvent("GET /api/v1/sessions", (sentry) => {
+			sentry.setMobileDaemonVersions({ "host-a": "1.9.0" }, true);
+			sentry.setMobileDaemonVersions({}, false);
+		}, "host-a");
+		expect(event?.tags).not.toHaveProperty("ao.daemon_version");
+	});
+});

@@ -16,6 +16,7 @@ package chat
 
 import (
 	"bytes"
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -222,7 +223,11 @@ type Controller struct {
 	// workspacePath is the worktree whose files are snapshotted before each turn
 	// and restored by a rollback.
 	workspacePath string
-	started       time.Time
+	// dataDir holds the session's shared skills; a review's controller has none.
+	dataDir string
+	// skillSharing reports the skill sharing setting; nil is off.
+	skillSharing func(context.Context) bool
+	started      time.Time
 
 	conv                   ports.ChatConversation
 	backgroundMu           sync.Mutex
@@ -386,9 +391,8 @@ var ErrControllerHandoff = errors.New("chat controller is switching interfaces")
 var ErrForcedHandoffStoppedSource = errors.New("the forced handoff stopped the source")
 
 // ErrTurnNotRetryable reports a turn that cannot be retried: it is not part of
-// this conversation, not failed, was rolled back, or carries no durable prompt
-// the user authored. A retry is only ever offered for an eligible failed human
-// turn.
+// this conversation, not failed, was rolled back, or carries no durable human or
+// event prompt to send again.
 var ErrTurnNotRetryable = errors.New("turn is not retryable")
 
 // ErrRetryStaleBranch reports a durable failed turn that is no longer visible
@@ -1071,6 +1075,20 @@ type nativeHistoryTurn struct {
 	activities     map[string]int
 	// steers counts the user-message fingerprints of inputs steered into this turn.
 	steers map[string]int
+	// assistantText holds the turn's assistant messages, in order.
+	assistantText []string
+}
+
+// nativeHistoryReplyText is a turn's whole reply without whitespace, so it
+// compares the same however the reply was divided into messages.
+func nativeHistoryReplyText(parts []string) string {
+	var text strings.Builder
+	for _, part := range parts {
+		for _, field := range strings.Fields(part) {
+			text.WriteString(field)
+		}
+	}
+	return text.String()
 }
 
 func nativeHistoryMessageFingerprint(role domain.MessageRole, text string) string {
@@ -1210,6 +1228,9 @@ func indexNativeHistoryTurnsForHarness(
 			continue
 		}
 		candidate.messages[nativeHistoryFingerprintForHarness(harness, message.Role, nativeHistoryMessageText(message))]++
+		if message.Role == domain.MessageRoleAssistant {
+			candidate.assistantText = append(candidate.assistantText, message.Text)
+		}
 		rememberProviderItem(message.ProviderItemID, candidate)
 		if message.Role == domain.MessageRoleUser && candidate.text == "" {
 			candidate.text = nativeHistoryMessageText(message)
@@ -1480,6 +1501,21 @@ func reconcileNativeHistoryForHarness(
 		}
 		return match
 	}
+	// A steer taken mid-reply ends AO's live message where it arrived. The
+	// provider's own history keeps that reply whole, or divides it elsewhere, so
+	// no replayed message equals a recorded one. When the turn's whole replayed
+	// reply is the reply AO recorded in parts, all of it is already projected.
+	replayedReply := make(map[*nativeHistoryTurn][]string)
+	for _, event := range events {
+		if candidate := mapped[event.ProviderTurnID]; candidate != nil && event.Kind == ports.ChatEventMessageCompleted {
+			replayedReply[candidate] = append(replayedReply[candidate], event.Text)
+		}
+	}
+	sameReply := make(map[*nativeHistoryTurn]bool)
+	for candidate, parts := range replayedReply {
+		sameReply[candidate] = len(candidate.steers) > 0 && len(candidate.assistantText) > 1 &&
+			nativeHistoryReplyText(parts) == nativeHistoryReplyText(candidate.assistantText)
+	}
 	// A native provider may omit persisted item ids even though its live stream
 	// supplied them. Codex does this today: a live assistant message can be
 	// `msg_...`, while thread/read later calls the same item `item-2`. Stable turn
@@ -1509,6 +1545,9 @@ func reconcileNativeHistoryForHarness(
 		}
 		if fingerprint, ok := nativeHistoryEventFingerprintForHarness(harness, event); ok && candidate.messages[fingerprint] > 0 {
 			candidate.messages[fingerprint]--
+			matched = true
+		}
+		if event.Kind == ports.ChatEventMessageCompleted && sameReply[candidate] {
 			matched = true
 		}
 		if event.Kind == ports.ChatEventActivityCompleted {
@@ -1822,7 +1861,12 @@ func (c *Controller) retryTurnLocked(ctx context.Context, turnID string, autoRes
 	if !prompt.ActiveLineage {
 		return domain.ConversationTurn{}, fmt.Errorf("%w: %s", ErrRetryStaleBranch, turnID)
 	}
-	if prompt.Origin != domain.MessageOriginHuman {
+	// An event's prompt (a review comment, a CI failure, an orchestrator message)
+	// is sent again as it was, like a human one: a turn it started that failed on
+	// a timeout or a dropped connection is otherwise stuck with no way to finish.
+	// A limited one resumes through its continuation below instead.
+	limitedEvent := prompt.Origin == domain.MessageOriginAutomation && source.UsageLimit != nil
+	if prompt.Origin != domain.MessageOriginHuman && prompt.Origin != domain.MessageOriginAutomation {
 		return domain.ConversationTurn{}, fmt.Errorf("%w: %s", ErrTurnNotRetryable, turnID)
 	}
 
@@ -1850,6 +1894,12 @@ func (c *Controller) retryTurnLocked(ctx context.Context, turnID string, autoRes
 		return domain.ConversationTurn{}, ErrTurnRunning
 	}
 
+	relayed := prompt.AuthoredByUser && cmp.Or(prompt.ProviderInputText, prompt.Text) == prompt.Text
+	if limitedEvent && !relayed {
+		if prompt, err = c.usageLimitEventContinuation(ctx, source); err != nil {
+			return domain.ConversationTurn{}, err
+		}
+	}
 	content, err := retryPromptContent(prompt.DeliveryContentJSON, c.Capabilities())
 	if err != nil {
 		return domain.ConversationTurn{}, err
@@ -1868,6 +1918,7 @@ func (c *Controller) retryTurnLocked(ctx context.Context, turnID string, autoRes
 		ClientMessageID:     key,
 		DeliveryContentJSON: prompt.DeliveryContentJSON,
 		Continuation:        prompt.Continuation,
+		AuthoredByUser:      prompt.AuthoredByUser,
 	}
 	var created bool
 	if autoResume {
@@ -1900,6 +1951,7 @@ func (c *Controller) retryTurnLocked(ctx context.Context, turnID string, autoRes
 		Continuation:    prompt.Continuation,
 		Content:         content,
 		Origin:          prompt.Origin,
+		AuthoredByUser:  prompt.AuthoredByUser,
 		ClientMessageID: key,
 	}, now, false, nil)
 }
@@ -2073,7 +2125,7 @@ func (c *Controller) dispatch(
 	// setting that only applied when the user pressed send would silently stop
 	// applying exactly when they were not watching.
 	msg.Settings = c.turnSettings()
-	msg = excerptDeliveryMessage(msg)
+	msg = excerptDeliveryMessage(c.withSharedSkillInstructions(ctx, msg))
 	deferred, hasDeferredStart := c.conv.(ports.ChatDeferredTurnStarter)
 	if err := c.store.RecordProviderInput(ctx, turnID, msg.Text); err != nil {
 		if len(followers) > 0 {
@@ -3646,7 +3698,7 @@ func (c *Controller) apply(ctx context.Context, event ports.ChatEvent) error {
 		if event.ProviderTurnID == "" || event.Text == "" {
 			return nil
 		}
-		return c.store.AppendImportedUserMessage(ctx, c.conversation.ID, event.ProviderTurnID,
+		err := c.store.AppendImportedUserMessage(ctx, c.conversation.ID, event.ProviderTurnID,
 			domain.ConversationMessage{
 				ID:              c.newID(),
 				Role:            domain.MessageRoleUser,
@@ -3655,6 +3707,18 @@ func (c *Controller) apply(ctx context.Context, event ports.ChatEvent) error {
 				ProviderItemID:  event.ProviderItemID,
 				ClientMessageID: event.ClientMessageID,
 			}, now)
+		if errors.Is(err, domain.ErrNoConversationTurn) {
+			// The turn's start was already archived under this replay identity by
+			// an earlier import that matched it to another AO turn. ACP agents
+			// without message ids (agy) number replay turns by position, and a
+			// later replay can match the same position differently. The earlier
+			// import already showed this prompt, so skip it: failing here would
+			// fail every resume of the session.
+			c.log.Warn("skipped imported user message: its provider turn was never recorded",
+				"session", c.sessionID, "providerTurn", event.ProviderTurnID, "event", event.ProviderEventID)
+			return nil
+		}
+		return err
 
 	case ports.ChatEventTurnCompleted:
 		message := ""
@@ -3905,20 +3969,26 @@ func (c *Controller) apply(ctx context.Context, event ports.ChatEvent) error {
 		// row: after a restart the reclaim figures are gone from memory, and a
 		// conversation that silently lost half its history with nothing to mark where
 		// reads as if the agent simply forgot.
+		status := compactionStatus(event)
 		if err := c.store.UpsertActivity(ctx, c.conversation.ID, event.ProviderTurnID,
 			domain.ConversationActivity{
 				ID:     c.newID(),
 				Kind:   domain.ActivityKindSystem,
-				Status: domain.ActivityStatusCompleted,
+				Status: status,
 				// Falls back to a plain label rather than an empty row: a driver that
 				// reports a compaction without a summary still happened.
-				Summary: firstNonEmpty(event.Summary, "Compacted the conversation history"),
+				Summary: compactionSummary(event, status),
 				Detail:  compactionDetail(event),
 				// The provider's own item id, so a compaction replayed across a
-				// reconnect updates the existing row instead of adding a second.
+				// reconnect, or settling after it was reported running, updates the
+				// existing row instead of adding a second.
 				ProviderItemID: event.ProviderItemID,
 			}, now); err != nil {
 			return err
+		}
+		if status != domain.ActivityStatusCompleted {
+			// Running or failed: the history is still what it was.
+			return nil
 		}
 		return c.store.MarkCompacted(ctx, c.conversation.ID, now)
 
@@ -4092,6 +4162,10 @@ func (c *Controller) afterProject(ctx context.Context, event ports.ChatEvent, pr
 		c.reportInteractionResolved(ctx, "chat.input.resolved", now)
 	case ports.ChatEventCompacted:
 		if event.ProviderConversationID != "" && event.ProviderConversationID != c.conv.ProviderConversationID() {
+			return
+		}
+		if compactionStatus(event) == domain.ActivityStatusRunning {
+			// Under way, not settled: sends stay queued behind it.
 			return
 		}
 		c.mu.Lock()
@@ -4637,12 +4711,44 @@ func normalizeOrigin(origin domain.MessageOrigin) domain.MessageOrigin {
 // because the choice of kind is this projection's, not the provider's — and a
 // compaction rendered as a generic notice would lose the one thing that matters
 // about it: that the history above it is no longer what the agent sees.
+// compactionStatus is where a reported compaction stands. Drivers that only see
+// the finished compaction leave the status empty, which has always meant done.
+func compactionStatus(event ports.ChatEvent) domain.ActivityStatus {
+	switch event.ActivityStatus {
+	case domain.ActivityStatusRunning, domain.ActivityStatusFailed:
+		return event.ActivityStatus
+	default:
+		return domain.ActivityStatusCompleted
+	}
+}
+
+// compactionSummary is the row's one-line label. A failed compaction's Summary
+// is the provider's reason, which reads only after the label it explains.
+func compactionSummary(event ports.ChatEvent, status domain.ActivityStatus) string {
+	switch status {
+	case domain.ActivityStatusRunning:
+		return firstNonEmpty(event.Summary, "Compacting the conversation history")
+	case domain.ActivityStatusFailed:
+		if reason := strings.TrimSpace(event.Summary); reason != "" {
+			return "Could not compact the conversation history: " + reason
+		}
+		return "Could not compact the conversation history"
+	default:
+		return firstNonEmpty(event.Summary, "Compacted the conversation history")
+	}
+}
+
 func compactionDetail(event ports.ChatEvent) []byte {
 	merged := map[string]any{}
 	if len(event.Detail) > 0 {
 		_ = json.Unmarshal(event.Detail, &merged)
 	}
 	merged["event"] = "compaction"
+	if reason := strings.TrimSpace(event.Summary); compactionStatus(event) == domain.ActivityStatusFailed && reason != "" {
+		// The provider's reason, apart from the summary, so a client can show it
+		// under its own label.
+		merged["error"] = reason
+	}
 	encoded, err := json.Marshal(merged)
 	if err != nil {
 		return event.Detail

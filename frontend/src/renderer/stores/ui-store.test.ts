@@ -729,3 +729,23 @@ describe("background tasks side panel", () => {
 		expect(panel().seenFailedTasks).toEqual([failedTaskKey(failed), failedTaskKey(task("build", { runId: "r2" }))]);
 	});
 });
+
+describe("artifactsView memory", () => {
+	beforeEach(() => useUiStore.setState({ inspectorSessions: {} }));
+
+	it("keeps each session's Artifacts view apart, and leaves the store alone for an unchanged one", () => {
+		const store = useUiStore.getState();
+		store.setArtifactsView("sess-1", { path: "notes.md", zoom: 1.5, scroll: { x: 0, y: 240 }, requestKey: 2 });
+		store.setArtifactsView(sessionUiKey("sess-1", "remote-1"), { path: null });
+		const sessions = useUiStore.getState().inspectorSessions;
+		expect(sessions["sess-1"]?.artifactsView).toEqual({ path: "notes.md", zoom: 1.5, scroll: { x: 0, y: 240 }, requestKey: 2 });
+		expect(sessions[sessionUiKey("sess-1", "remote-1")]?.artifactsView).toEqual({ path: null });
+		// The rest of the session's panel state is untouched.
+		expect(sessions["sess-1"]).toMatchObject({ isOpen: false, view: "summary" });
+
+		store.setArtifactsView("sess-1", { path: "notes.md", zoom: 1.5, scroll: { x: 0, y: 240 }, requestKey: 2 });
+		expect(useUiStore.getState().inspectorSessions).toBe(sessions);
+		store.setArtifactsView("sess-1", { path: "notes.md", zoom: 1.5, scroll: { x: 0, y: 300 }, requestKey: 2 });
+		expect(useUiStore.getState().inspectorSessions["sess-1"]?.artifactsView?.scroll).toEqual({ x: 0, y: 300 });
+	});
+});

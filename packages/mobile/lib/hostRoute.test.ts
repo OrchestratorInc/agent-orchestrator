@@ -1,10 +1,10 @@
 import { describe, expect, it, vi } from "vitest";
 import type { ServerConfig } from "./config";
 import {
+	autoSpawnHostId,
 	connectedSpawnHosts,
 	heldPreview,
 	hostRouteMatches,
-	initialSpawnHostId,
 	machineState,
 	rejectedMachineCopy,
 	rejectedMachineLine,
@@ -12,8 +12,8 @@ import {
 	previewForConfig,
 	promotableHostConfig,
 	selectSpawnHost,
+	spawnHostNeedsRetry,
 	spawnHostRequestIsCurrent,
-	spawnHostSelectionReady,
 	type SpawnHostState,
 } from "./hostRoute";
 
@@ -72,44 +72,6 @@ describe("host-qualified mobile routes", () => {
 		];
 
 		expect(connectedSpawnHosts(hosts)).toEqual([{ id: "host-a", label: "Alpha" }]);
-	});
-
-	it("starts a generic spawn on the connected default and preserves an explicit connected route", () => {
-		const hosts = [{ id: "host-a", label: "Alpha" }, { id: "host-b", label: "Beta" }];
-
-		expect(initialSpawnHostId({ routeHostId: undefined, currentHostId: "host-b", hosts })).toBe("host-b");
-		expect(initialSpawnHostId({ routeHostId: "host-a", currentHostId: "host-b", hosts })).toBe("host-a");
-		expect(initialSpawnHostId({ routeHostId: "missing", currentHostId: "host-b", hosts })).toBeNull();
-		expect(initialSpawnHostId({ routeHostId: undefined, currentHostId: "missing", hosts })).toBe("host-a");
-	});
-
-	// Reopened after the phone closed the app, the page can open before the
-	// store has read the pairings: picked then, it lands on no machine (or
-	// Cloud) and never moves to the paired one once they load.
-	it("waits for the pairings before picking a machine, routed or not", () => {
-		const loaded = [{ hostId: "host-a", loading: false }];
-		expect(spawnHostSelectionReady({ configResolved: false, hosts: [], connectedMachineCount: 0 })).toBe(false);
-		expect(spawnHostSelectionReady({ configResolved: true, hosts: [], connectedMachineCount: 0 })).toBe(true);
-		expect(spawnHostSelectionReady({ configResolved: true, hosts: loaded, connectedMachineCount: 1 })).toBe(true);
-		// A machine still connecting, with none connected, is waited for before Cloud becomes the default.
-		expect(spawnHostSelectionReady({ configResolved: true, hosts: [{ hostId: "host-a", loading: true }], connectedMachineCount: 0 })).toBe(false);
-		// Routed: the machine named is waited for until it is known and has connected.
-		expect(spawnHostSelectionReady({ routeHostId: "host-a", configResolved: false, hosts: [], connectedMachineCount: 0 })).toBe(false);
-		expect(spawnHostSelectionReady({ routeHostId: "host-a", configResolved: false, hosts: [{ hostId: "host-a", loading: true }], connectedMachineCount: 0 })).toBe(false);
-		expect(spawnHostSelectionReady({ routeHostId: "host-a", configResolved: false, hosts: loaded, connectedMachineCount: 1 })).toBe(true);
-		expect(spawnHostSelectionReady({ routeHostId: "gone", configResolved: true, hosts: loaded, connectedMachineCount: 1 })).toBe(true);
-	});
-
-	// Cloud can load after the machines: picked before it does, a Cloud draft
-	// lands on a machine (or none) and is never moved back.
-	it("waits for Cloud to sign in or fail before picking for a Cloud route or draft", () => {
-		const loaded = [{ hostId: "host-a", loading: false }];
-		expect(spawnHostSelectionReady({ routeHostId: "orchestrator-cloud", configResolved: true, hosts: loaded, connectedMachineCount: 1 })).toBe(false);
-		expect(spawnHostSelectionReady({ routeHostId: "orchestrator-cloud", configResolved: true, hosts: loaded, connectedMachineCount: 1, cloudResolved: false })).toBe(false);
-		expect(spawnHostSelectionReady({ routeHostId: "orchestrator-cloud", configResolved: true, hosts: loaded, connectedMachineCount: 1, cloudResolved: true })).toBe(true);
-		expect(spawnHostSelectionReady({ routeHostId: "orchestrator-cloud", configResolved: false, hosts: [], connectedMachineCount: 0, cloudResolved: true })).toBe(false);
-		// A machine's route does not wait for Cloud.
-		expect(spawnHostSelectionReady({ routeHostId: "host-a", configResolved: true, hosts: loaded, connectedMachineCount: 1, cloudResolved: false })).toBe(true);
 	});
 
 	it("rejects catalog results requested for a previously selected machine", () => {
@@ -214,5 +176,78 @@ describe("host-qualified mobile routes", () => {
 		// A lockout clears by itself, and a new code does not fix a version mismatch.
 		expect(rejectionRepairsWithQr(429)).toBe(false);
 		expect(rejectionRepairsWithQr(426)).toBe(false);
+	});
+});
+
+// New task picks its own machine until the person picks one. Back from the
+// background, every machine is reconnecting, and a choice made then used to
+// stick: no machine at all, another machine, or Cloud, while the board already
+// showed the default's workers.
+describe("autoSpawnHostId", () => {
+	const ready = (hostId: string) => ({ hostId, ready: true, state: "ok" as const });
+	const reconnecting = (hostId: string) => ({ hostId, ready: false, state: "ok" as const });
+	const offline = (hostId: string) => ({ hostId, ready: false, state: "offline" as const });
+	const rejected = (hostId: string) => ({ hostId, ready: false, state: "rejected" as const });
+	const loaded = { configResolved: true, cloudResolved: true, cloud: false };
+
+	it("keeps the default machine while it reconnects instead of settling on none", () => {
+		expect(autoSpawnHostId({ ...loaded, currentHostId: "host-a", hosts: [reconnecting("host-a")] })).toEqual({ settled: true, hostId: "host-a" });
+	});
+
+	it("keeps the default while another machine answers first", () => {
+		expect(autoSpawnHostId({ ...loaded, currentHostId: "host-a", hosts: [reconnecting("host-a"), ready("host-b")] })).toEqual({ settled: true, hostId: "host-a" });
+	});
+
+	it("does not move a reconnecting default to Cloud", () => {
+		expect(autoSpawnHostId({ ...loaded, cloud: true, currentHostId: "host-a", hosts: [reconnecting("host-a")] })).toEqual({ settled: true, hostId: "host-a" });
+	});
+
+	it("falls back to a connected machine, then Cloud, only once the default is offline or refused", () => {
+		expect(autoSpawnHostId({ ...loaded, cloud: true, currentHostId: "host-a", hosts: [offline("host-a"), ready("host-b")] })).toEqual({ settled: true, hostId: "host-b" });
+		expect(autoSpawnHostId({ ...loaded, cloud: true, currentHostId: "host-a", hosts: [rejected("host-a")] })).toEqual({ settled: true, hostId: "orchestrator-cloud" });
+		// Nothing else to use: the default stays, so the page says why and picks it up once it is back.
+		expect(autoSpawnHostId({ ...loaded, currentHostId: "host-a", hosts: [offline("host-a"), reconnecting("host-b")] })).toEqual({ settled: true, hostId: "host-a" });
+	});
+
+	it("keeps a routed machine, reconnecting or offline, and never swaps in another", () => {
+		expect(autoSpawnHostId({ ...loaded, routeHostId: "host-a", currentHostId: "host-b", hosts: [reconnecting("host-a"), ready("host-b")] })).toEqual({ settled: true, hostId: "host-a" });
+		expect(autoSpawnHostId({ ...loaded, cloud: true, routeHostId: "host-a", currentHostId: "host-b", hosts: [offline("host-a"), ready("host-b")] })).toEqual({ settled: true, hostId: "host-a" });
+		expect(autoSpawnHostId({ ...loaded, routeHostId: "gone", currentHostId: "host-b", hosts: [ready("host-b")] })).toEqual({ settled: true, hostId: null });
+	});
+
+	it("goes back to a restored draft's machine while it reconnects, and to the default once that one is gone", () => {
+		expect(autoSpawnHostId({ ...loaded, draftHostId: "host-b", currentHostId: "host-a", hosts: [ready("host-a"), reconnecting("host-b")] })).toEqual({ settled: true, hostId: "host-b" });
+		expect(autoSpawnHostId({ ...loaded, draftHostId: "host-b", currentHostId: "host-a", hosts: [ready("host-a"), offline("host-b")] })).toEqual({ settled: true, hostId: "host-a" });
+		expect(autoSpawnHostId({ ...loaded, draftHostId: "forgotten", currentHostId: "host-a", hosts: [reconnecting("host-a")] })).toEqual({ settled: true, hostId: "host-a" });
+	});
+
+	it("waits for the pairings, and for Cloud when the route or draft names it", () => {
+		expect(autoSpawnHostId({ ...loaded, configResolved: false, currentHostId: undefined, hosts: [] })).toEqual({ settled: false });
+		expect(autoSpawnHostId({ ...loaded, configResolved: false, routeHostId: "host-a", hosts: [] })).toEqual({ settled: false });
+		expect(autoSpawnHostId({ ...loaded, cloudResolved: false, routeHostId: "orchestrator-cloud", hosts: [ready("host-a")] })).toEqual({ settled: false });
+		expect(autoSpawnHostId({ ...loaded, cloud: true, routeHostId: "orchestrator-cloud", hosts: [ready("host-a")] })).toEqual({ settled: true, hostId: "orchestrator-cloud" });
+		expect(autoSpawnHostId({ ...loaded, routeHostId: "orchestrator-cloud", hosts: [ready("host-a")] })).toEqual({ settled: true, hostId: null });
+		expect(autoSpawnHostId({ ...loaded, cloudResolved: false, draftHostId: "orchestrator-cloud", currentHostId: "host-a", hosts: [ready("host-a")] })).toEqual({ settled: false });
+		expect(autoSpawnHostId({ ...loaded, draftHostId: "orchestrator-cloud", currentHostId: "host-a", hosts: [ready("host-a")] })).toEqual({ settled: true, hostId: "host-a" });
+	});
+
+	it("settles on no machine only when nothing is paired and Cloud is not signed in", () => {
+		expect(autoSpawnHostId({ ...loaded, hosts: [] })).toEqual({ settled: true, hostId: null });
+		expect(autoSpawnHostId({ ...loaded, cloud: true, hosts: [] })).toEqual({ settled: true, hostId: "orchestrator-cloud" });
+	});
+});
+
+describe("spawnHostNeedsRetry", () => {
+	it("asks again for a machine whose last try failed and that nothing is retrying yet", () => {
+		expect(spawnHostNeedsRetry({ connection: "closed", loading: false, config: null })).toBe(true);
+	});
+
+	it("leaves a machine that is connecting, connected, or still holds a verified connection", () => {
+		expect(spawnHostNeedsRetry({ connection: "connecting", loading: true, config: null })).toBe(false);
+		expect(spawnHostNeedsRetry({ connection: "closed", loading: true, config: null })).toBe(false);
+		expect(spawnHostNeedsRetry({ connection: "open", loading: false, config: { hostId: "host-a" } as ServerConfig })).toBe(false);
+		// A poll that failed on a verified connection is already polling again.
+		expect(spawnHostNeedsRetry({ connection: "closed", loading: false, config: { hostId: "host-a" } as ServerConfig })).toBe(false);
+		expect(spawnHostNeedsRetry(undefined)).toBe(false);
 	});
 });

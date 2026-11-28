@@ -167,3 +167,18 @@ func TestProcessEnvForLaunchBinaryAddsNodeForNPMLauncher(t *testing.T) {
 		t.Fatal("process environment was not preserved")
 	}
 }
+
+func TestLaunchBinaryUnwrapsProviderEnvWrapper(t *testing.T) {
+	for _, tc := range []struct {
+		argv []string
+		want string
+	}{
+		{[]string{"sh", "-c", "export X=\"$Y\"; exec \"$@\"", ProviderEnvMarker, "/opt/agents/codewhale", "--resume", "id"}, "/opt/agents/codewhale"},
+		{[]string{"sh", "-c", "exec \"$@\"", ProviderEnvMarker, "env", "A=b", "prime-agent"}, "prime-agent"},
+		{[]string{"sh", "-c", "echo not-a-wrapper"}, "sh"},
+	} {
+		if got, ok := launchBinary(tc.argv); !ok || got != tc.want {
+			t.Fatalf("launchBinary(%q) = %q, %v; want %q", tc.argv, got, ok, tc.want)
+		}
+	}
+}

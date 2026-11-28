@@ -7,6 +7,7 @@ import (
 	"errors"
 	"log/slog"
 	"strings"
+	"time"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/browserruntime"
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
@@ -20,7 +21,8 @@ var actions = map[string]struct{}{
 	"uncheck": {}, "get": {}, "wait": {}, "screenshot": {}, "network-start": {},
 	"network-status": {}, "network-list": {}, "network-stop": {}, "network-clear": {},
 	"console": {}, "errors": {}, "frame": {}, "dialog": {},
-	"devtools-open": {}, "devtools-close": {}, "target": {},
+	"devtools-open": {}, "devtools-close": {}, "target": {}, "profile": {},
+	"fill-secret": {}, "login": {},
 }
 
 type sessionReader interface {
@@ -43,6 +45,16 @@ type Service struct {
 	chrome  runtime
 	targets *TargetStore
 	log     *slog.Logger
+
+	approvals       approvalGate
+	approvalTimeout time.Duration
+	// describeTimeout caps how long a runtime may take to describe a target,
+	// so a stuck read (a hidden tab's capture) never delays the prompt.
+	describeTimeout time.Duration
+	remote          RemoteBrowser
+	// approvalsErr is why the gate could not load. While set, actions that
+	// may need approval are refused rather than run unasked.
+	approvalsErr error
 }
 
 // New creates a browser service.
@@ -95,7 +107,8 @@ func (s *Service) Execute(
 	args map[string]interface{},
 ) (browserruntime.Result, string, error) {
 	action = strings.ToLower(strings.TrimSpace(action))
-	if err := s.authorize(ctx, sessionID, capability); err != nil {
+	session, err := s.authorizedSession(ctx, sessionID, capability)
+	if err != nil {
 		return browserruntime.Result{}, action, err
 	}
 	if _, ok := actions[action]; !ok {
@@ -110,13 +123,49 @@ func (s *Service) Execute(
 		return result, action, err
 	}
 	target := s.targetFor(sessionID)
+	if action == "profile" && target == TargetChrome {
+		// Chrome mode drives the user's own Chrome, signed in as they are.
+		return browserruntime.Result{Value: map[string]interface{}{
+			"profileId": nil, "profileName": "your Chrome", "persistent": true,
+		}}, action, nil
+	}
+	if _, ok := credentialActions[action]; ok && target == TargetChrome {
+		return browserruntime.Result{}, action, apierr.Invalid(
+			"BROWSER_VAULT_CHROME_UNSUPPORTED",
+			"Saved credentials fill only in the Orchestrator Browser panel for now",
+			nil,
+		)
+	}
 	if target == TargetChrome {
 		// Chrome mode acts with the user's real identity; keep an audit line
 		// per command (never arguments, which can hold typed text).
 		s.log.Info("browser chrome command", "session", sessionID, "action", action)
 	}
-	result, err := s.runtimeFor(target).Execute(ctx, sessionID, action, args)
+	rt := s.runtimeFor(target)
+	// Consequential actions (pay, send, post, delete...) wait for the user.
+	args, err = s.preflight(ctx, sessionID, rt, action, args)
+	if err != nil {
+		return browserruntime.Result{}, action, err
+	}
+	if _, ok := credentialActions[action]; ok {
+		stamped, final, err := s.credentialPreflight(ctx, session, rt, action, args)
+		if err != nil || final != nil {
+			if final == nil {
+				final = &browserruntime.Result{}
+			}
+			return *final, action, err
+		}
+		args = stamped
+	}
+	result, err := rt.Execute(ctx, sessionID, action, args)
 	return result, action, err
+}
+
+// ApprovalsUnavailable records that the approval gate could not load. Until a
+// gate is installed, consequential actions fail with
+// BROWSER_APPROVAL_UNAVAILABLE instead of running unasked.
+func (s *Service) ApprovalsUnavailable(err error) {
+	s.approvalsErr = err
 }
 
 // target reads or changes which browser the session's commands go to.
@@ -173,19 +222,24 @@ func (l Lifecycle) DestroySession(ctx context.Context, sessionID domain.SessionI
 }
 
 func (s *Service) authorize(ctx context.Context, sessionID domain.SessionID, capability string) error {
+	_, err := s.authorizedSession(ctx, sessionID, capability)
+	return err
+}
+
+func (s *Service) authorizedSession(ctx context.Context, sessionID domain.SessionID, capability string) (domain.Session, error) {
 	session, err := s.sessions.Get(ctx, sessionID)
 	if err != nil {
-		return err
+		return domain.Session{}, err
 	}
 	if session.IsTerminated {
-		return apierr.Conflict("SESSION_TERMINATED", "Session is terminated", nil)
+		return domain.Session{}, apierr.Conflict("SESSION_TERMINATED", "Session is terminated", nil)
 	}
 	if s.authority == nil || !s.authority.Valid(
 		sessionID,
 		strings.TrimSpace(capability),
 		session.Metadata.BrowserCapabilityVerifier,
 	) {
-		return apierr.Forbidden("BROWSER_CAPABILITY_INVALID", "Browser capability is invalid")
+		return domain.Session{}, apierr.Forbidden("BROWSER_CAPABILITY_INVALID", "Browser capability is invalid")
 	}
-	return nil
+	return session, nil
 }

@@ -59,6 +59,7 @@ const {
 	workspacePathsState: { paths: [] as string[] },
 	conversationCommandState: {
 		busy: false,
+		resumingAgent: false,
 		send: vi.fn(),
 		chooseSettings: vi.fn(),
 		pendingAcceptedTurnId: undefined as string | undefined,
@@ -110,6 +111,9 @@ const sideMocks = vi.hoisted(() => ({
 	sentOutsideTranscript: Symbol("chat.sentOutsideTranscript"),
 }));
 const stageAttachmentsMock = vi.hoisted(() => vi.fn());
+// A plain function, not a vi.fn(): mock resets must not leave the lease
+// renewal without a promise to chain on.
+const updateAttachmentLeasesMock = vi.hoisted(() => async (): Promise<string[]> => []);
 vi.mock("./IndependentSideChats", () => ({
 	useIndependentSideChats: () => ({ ...sideMocks, panel: null }),
 }));
@@ -159,6 +163,7 @@ vi.mock("../../hooks/useConversation", () => ({
 	useConversationModels: vi.fn(() => ({ models: [], loaded: true })),
 	useConversationSkills: vi.fn(() => ({ skills: [] })),
 	useStageAttachments: () => stageAttachmentsMock,
+	useAttachmentLeases: () => updateAttachmentLeasesMock,
 	useWorkspaceFilePaths: () => ({ paths: workspacePathsState.paths, truncated: false }),
 }));
 
@@ -273,6 +278,7 @@ vi.mock("./ChatWorkspace", async () => {
 
 import { sessionUiKey } from "../../lib/hosts";
 import { SessionChatSurface } from "./SessionChatSurface";
+import { rememberLaunchSettings } from "./LaunchSettingsBar";
 import {
 	peekSessionSearchReveal,
 	requestSessionSearchReveal,
@@ -326,6 +332,7 @@ beforeEach(() => {
 	conversationState.loadOlder = vi.fn();
 	conversationCommandState.send = vi.fn().mockResolvedValue({});
 	conversationCommandState.busy = false;
+	conversationCommandState.resumingAgent = false;
 	conversationCommandState.pendingAcceptedTurnId = undefined;
 	conversationCommandState.acknowledgeAcceptedTurn.mockReset();
 	conversationCommandState.echoBeforeSend.mockReset();
@@ -352,10 +359,15 @@ describe("SessionChatSurface recovery", () => {
 		expect(conversationCommandArgs.at(-1)).toEqual([target.id, undefined, terminated, false, undefined]);
 	});
 
-	it("takes files only once an archived session is back", () => {
+	it("takes files in an archived session once the restore its message runs is under way", () => {
 		const client = new QueryClient();
-		const view = render(<Wrapper client={client}><SessionChatSurface session={{ ...session, isTerminated: true }} /></Wrapper>);
+		const archived = { ...session, isTerminated: true };
+		const view = render(<Wrapper client={client}><SessionChatSurface session={archived} /></Wrapper>);
 		expect(sideMocks.stageAttachments).toBeUndefined();
+		conversationCommandState.resumingAgent = true;
+		view.rerender(<Wrapper client={client}><SessionChatSurface session={{ ...archived }} /></Wrapper>);
+		expect(sideMocks.stageAttachments).toEqual(expect.any(Function));
+		conversationCommandState.resumingAgent = false;
 		view.rerender(<Wrapper client={client}><SessionChatSurface session={session} /></Wrapper>);
 		expect(sideMocks.stageAttachments).toEqual(expect.any(Function));
 	});
@@ -377,6 +389,26 @@ describe("SessionChatSurface recovery", () => {
 		};
 		render(<Wrapper client={new QueryClient()}><SessionChatSurface session={session} /></Wrapper>);
 		expect(conversationCommandArgs.at(-1)).toEqual([session.id, undefined, false, true, "turn-1"]);
+	});
+});
+
+describe("SessionChatSurface Ultracode", () => {
+	it("stays on for a task started with it on the new chat page", async () => {
+		conversationState.snapshot = { ...snapshotFor(session.id), harness: "claude-code" };
+		const client = new QueryClient();
+		rememberLaunchSettings(client, session.id, undefined, { harness: "claude-code", projectId: "p", models: [], settings: {}, ultracode: true });
+		render(<Wrapper client={client}><SessionChatSurface session={session} /></Wrapper>);
+		expect(sideMocks.agentSwitch?.ultracode?.on).toBe(true);
+		await act(async () => {
+			await sideMocks.workspaceSend?.("And the tests.", undefined, "next-message");
+		});
+		expect(conversationCommandState.send).toHaveBeenCalledWith(expect.objectContaining({ text: "Ultracode:\nAnd the tests." }));
+	});
+
+	it("starts off otherwise", () => {
+		conversationState.snapshot = { ...snapshotFor(session.id), harness: "claude-code" };
+		render(<Wrapper client={new QueryClient()}><SessionChatSurface session={session} /></Wrapper>);
+		expect(sideMocks.agentSwitch?.ultracode?.on).toBe(false);
 	});
 });
 

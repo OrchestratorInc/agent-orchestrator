@@ -29,7 +29,19 @@ export function configForEndpoint(endpoint: Endpoint, token: string, hostId = ""
 }
 
 export type ConnectResult =
-	| { ok: true; config: ServerConfig; endpoint: Endpoint; hostId: string }
+	| {
+		ok: true;
+		config: ServerConfig;
+		endpoint: Endpoint;
+		hostId: string;
+		/**
+		 * Present when the connection was handed back before its endpoint refresh
+		 * finished. Resolves true if that refresh then found the token refused
+		 * and stored the kept password in its place: `config` still carries the
+		 * refused token, so whoever uses it should connect again.
+		 */
+		credentialRepair?: Promise<boolean>;
+	}
 	| { ok: false; reason: "unknown-host" | "no-candidates" | "none-reachable" | "incompatible" };
 
 export type ConnectDeps = {
@@ -37,13 +49,34 @@ export type ConnectDeps = {
 	race: (host: Host) => Promise<RaceOutcome>;
 	/** Asks the daemon what it advertises now, over the endpoint that just won. */
 	refreshEndpoints: (config: ServerConfig) => Promise<Endpoint[]>;
-	saveEndpoints: (hostId: string, endpoints: Endpoint[]) => Promise<void>;
+	/** With `unchangedSince`, saves only if no other save landed after that revision. */
+	saveEndpoints: (hostId: string, endpoints: Endpoint[], unchangedSince?: number) => Promise<void>;
+	/** The revision of the stored endpoint list a host from findHost was read at. */
+	endpointRevision?: (host: Host) => number | undefined;
 	/** Records the identity a machine reported that had none stored. */
 	adoptIdentity: (oldId: string, hostId: string) => Promise<void>;
 	touch: (hostId: string) => Promise<void>;
 	pair?: (config: ServerConfig) => Promise<PairDeviceResult>;
 	saveToken?: (hostId: string, token: string, fallbackToken?: string) => Promise<void>;
+	/** How long connect waits for the endpoint refresh before using the connection; see REFRESH_WAIT_MS. */
+	refreshWaitMs?: number;
 };
+
+/**
+ * How long a connect waits for the endpoint refresh before handing back the
+ * connection that just answered.
+ *
+ * The refresh is a second round trip after the race, and every connect and
+ * resume waited for it before the board, the chat's live updates or anything
+ * else could start: on a slow link, seconds of "reconnecting" over a machine
+ * that had already answered. A fast link finishes it well inside this; a slow
+ * one gets the connection now and lets the refresh finish behind it. What it
+ * learns is for the next race. Its one other job, falling back to the kept
+ * pairing password when a release without device tokens refuses this phone's
+ * token, still happens; landing late, the result's `credentialRepair` says so,
+ * so the caller connects again with the stored password.
+ */
+export const REFRESH_WAIT_MS = 1_000;
 
 /**
  * Connects to a paired machine: race its endpoints, then refresh what we know
@@ -57,6 +90,9 @@ export type ConnectDeps = {
 export async function connectHost(id: string, deps: ConnectDeps): Promise<ConnectResult> {
 	const host = await deps.findHost(id);
 	if (!host) return { ok: false, reason: "unknown-host" };
+	// The revision host.endpoints was read at: the refresh below merges into
+	// that list, so it must not save over a list a later connection stored.
+	const endpointsRevision = host.id ? deps.endpointRevision?.(host) : undefined;
 
 	const outcome = await deps.race(host);
 	if (!outcome.ok) return { ok: false, reason: outcome.reason };
@@ -93,6 +129,7 @@ export async function connectHost(id: string, deps: ConnectDeps): Promise<Connec
 		await deps.saveEndpoints(
 			hostKey,
 			mergeEndpoints(host.endpoints, refreshed),
+			...(endpointsRevision === undefined ? [] : [endpointsRevision]),
 		);
 	};
 
@@ -102,7 +139,8 @@ export async function connectHost(id: string, deps: ConnectDeps): Promise<Connec
 		await deps.touch(hostKey);
 		return { ok: true, config, endpoint: outcome.endpoint, hostId: hostKey };
 	}
-	try {
+	let repaired = false;
+	const refreshing = (async () => { try {
 		await refreshEndpoints();
 	} catch (error) {
 		// A failed refresh must not cost us a working connection: the endpoints
@@ -119,14 +157,32 @@ export async function connectHost(id: string, deps: ConnectDeps): Promise<Connec
 				// The device token is replaced only once the kept password works.
 				await refreshEndpoints();
 				await deps.saveToken(hostKey, token);
+				repaired = true;
 				await swapPairingPassword();
 			} catch {
 				token = deviceToken;
 				config = configForEndpoint(outcome.endpoint, token, hostKeyForConfig);
 			}
 		}
-	}
+	} })();
+	let waited: ReturnType<typeof setTimeout> | undefined;
+	let refreshed = false;
+	await Promise.race([
+		refreshing.then(() => { refreshed = true; }),
+		new Promise<void>((resolve) => { waited = setTimeout(resolve, deps.refreshWaitMs ?? REFRESH_WAIT_MS); }),
+	]);
+	clearTimeout(waited);
 	await deps.touch(hostKey);
 
-	return { ok: true, config, endpoint: outcome.endpoint, hostId: hostKey };
+	if (refreshed) return { ok: true, config, endpoint: outcome.endpoint, hostId: hostKey };
+	// Handed back before the refresh finished: a late fallback to the kept
+	// password cannot change the config returned here, so it is reported.
+	const handedBack = config;
+	return {
+		ok: true,
+		config: handedBack,
+		endpoint: outcome.endpoint,
+		hostId: hostKey,
+		credentialRepair: refreshing.then(() => repaired && config.password !== handedBack.password),
+	};
 }

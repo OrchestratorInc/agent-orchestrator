@@ -20,6 +20,8 @@ export type LaunchSettings = {
 	/** What no chosen model means, as the bar names it (see TurnSettingsBar). */
 	unsetModelLabel?: string;
 	approvalModes?: ApprovalMode[];
+	/** Claude Code's Ultracode, asked for in the opening message; the session's chat keeps it on. Unset where it is not offered. */
+	ultracode?: boolean;
 };
 
 const launchSettingsKey = (sessionId: string, hostId?: string) => ["session-launch-settings", sessionUiKey(sessionId, hostId)] as const;
@@ -63,7 +65,7 @@ const ignorePending = () => undefined;
 
 // The new chat page's settings bar, held still while the task starts. The
 // session's own bar replaces it, in the same place, once its agent is ready.
-export function LaunchSettingsBar({ harness, projectId, hostId, models, settings, configOptions, showApprovalMode, unsetModelLabel, approvalModes }: LaunchSettings) {
+export function LaunchSettingsBar({ harness, projectId, hostId, models, settings, configOptions, showApprovalMode, unsetModelLabel, approvalModes, ultracode }: LaunchSettings) {
 	const providerMode = Boolean(configOptions?.length);
 	return (
 		<div className="contents [&_button:disabled]:cursor-default [&_button:disabled]:opacity-100">
@@ -77,7 +79,8 @@ export function LaunchSettingsBar({ harness, projectId, hostId, models, settings
 				showApprovalMode={showApprovalMode}
 				unsetModelLabel={unsetModelLabel}
 				approvalModes={approvalModes}
-				agentSwitch={{ projectId, hostId, disabled: true, onPendingChange: ignorePending }}
+				// Shown only while on, so the trigger keeps its mark as the task starts.
+				agentSwitch={{ projectId, hostId, disabled: true, onPendingChange: ignorePending, ...(ultracode ? { ultracode: { on: true, onChange: ignoreChange } } : {}) }}
 				disabled
 			/>
 		</div>

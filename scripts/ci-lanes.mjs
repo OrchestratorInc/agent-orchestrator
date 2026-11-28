@@ -23,14 +23,19 @@ const EVERY_LANE = /^(\.github\/(workflows|actions)\/|scripts\/ci-lanes\.mjs$)/;
 const ALL_VITEST = /^(frontend\/(package(-lock)?\.json|vite[^/]*\.ts|vitest[^/]*\.ts|tsconfig[^/]*\.json|src\/renderer\/test\/|scripts\/)|packages\/(product-ui|shared)\/)/;
 const FILE_LIMIT = 3000;
 
+// A PR into any other branch is stacked: it is tested when it moves to one of these.
+export const TESTED_BASES = ['main', 'stable'];
+
 export function pickLanes({ event, draft = false, base = 'main', fork = false, labels = [], files = [] }) {
-  if (event === 'pull_request' && !draft && base !== 'main' && fork) {
+  const stacked = event === 'pull_request' && !TESTED_BASES.includes(base);
+  if (stacked && !draft && fork) {
     throw new Error(`This fork PR targets ${base}. CI cannot re-run it when it moves to main, so ci-ok stays red: target main and push again.`);
   }
-  if (event === 'pull_request' && (draft || base !== 'main')) {
+  if (event === 'pull_request' && (draft || stacked)) {
     return { lanes: [], full: false, macos: false, vitest: '' };
   }
-  const full = event !== 'pull_request' || labels.includes('ci:full');
+  // Nothing re-tests stable after a merge, so its release and hotfix PRs get what a push to main gets.
+  const full = event !== 'pull_request' || base === 'stable' || labels.includes('ci:full');
   const paths = files.flatMap(file => [file.filename, file.previous_filename].filter(Boolean));
   const every = full || files.length >= FILE_LIMIT || paths.some(path => EVERY_LANE.test(path));
   const hit = lane => paths.some(path => LANES[lane].some(rule => rule.test(path)));

@@ -10,7 +10,7 @@ permissions:
 
 jobs:
   rerun:
-    if: github.event.changes.base && github.base_ref == 'main' && !github.event.pull_request.head.repo.fork
+    if: github.event.changes.base && contains(fromJSON('["main","stable"]'), github.base_ref) && !github.event.pull_request.head.repo.fork
     runs-on: ubuntu-latest
     timeout-minutes: 90
     steps:

@@ -80,16 +80,17 @@ The AO Cloud control plane (the hosted service behind Cloud Agents) is not in th
 files and starts only the lanes those files can affect; the rules live in
 `scripts/ci-lanes.mjs`. `ci-ok` passes when every lane that started passes, so
 it is the one check to watch. A change to a workflow or to the lane rules starts
-every Linux lane, and a push to `main` runs every lane in full.
+every Linux lane. A push to `main` and a PR into `stable` run every lane in full,
+with Windows and macOS.
 
 On a PR, vitest runs the tests related to the changed frontend files plus the
 files listed in `frontend/scripts/ci-vitest-always-run.txt`. Add a test to that
 list when it reads source files from disk instead of importing them.
 
 Draft and stacked PRs run no lanes. Marking a PR ready, or retargeting a stacked
-PR to `main`, starts them. Editing a PR's title or body starts nothing. A PR
-from a fork that targets another branch fails `ci-ok`: target `main` and push
-again.
+PR to `main` or `stable`, starts them. Editing a PR's title or body starts
+nothing. A PR from a fork that targets another branch fails `ci-ok`: target
+`main` and push again.
 
 ### Native CI coverage
 

@@ -197,6 +197,7 @@ function StackTaskDialog({ hostId, onOpenChange, open, pr, session }: {
 		>
 			<textarea
 				aria-label={t("pr.stack.newTaskPlaceholder")}
+				data-field="textarea"
 				className="min-h-24 w-full resize-none rounded-lg border border-border bg-transparent px-3 py-2 text-sm text-foreground outline-none placeholder:text-passive focus-visible:border-ring focus-visible:ring-2 focus-visible:ring-ring/40"
 				onChange={(event) => setBrief(event.target.value)}
 				onKeyDown={onKeyDown}

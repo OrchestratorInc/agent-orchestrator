@@ -43,12 +43,13 @@ func TestHandoffTargetPicksMostVerifiedRoomForTheModel(t *testing.T) {
 	provider := &handoffLimitsProvider{
 		fakeClaude: &fakeClaude{
 			signedInAs: map[string]string{
+				"":   "device@example.com",
 				"/a": "a@example.com", "/b": "b@example.com", "/c": "c@example.com",
 				"/full": "full@example.com", "/other": "someone-else@example.com",
 			},
 			failing: map[string]bool{},
 		},
-		used: map[string]float64{"/a": 0, "/b": 50, "/c": 20, "/full": 95, "/out": 0, "/other": 0},
+		used: map[string]float64{"": 0, "/a": 0, "/b": 50, "/c": 20, "/full": 95, "/out": 0, "/other": 0},
 	}
 	svc := New(store, []ports.AgentAccountProviderCLI{provider}, t.TempDir(), nil, nil)
 	ctx := context.Background()

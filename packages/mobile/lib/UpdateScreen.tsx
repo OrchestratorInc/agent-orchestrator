@@ -107,13 +107,16 @@ function UpdateScreenBody({ phase }: { phase: UpdateScreenPhase }) {
 				accessibilityElementsHidden={restarting}
 				importantForAccessibility={restarting ? "no-hide-descendants" : "auto"}
 			>
+				{/* One row: a small text-only Not now on the left, the update taking
+				    the rest of the width on the right. */}
+				<Button title="Not now" variant="ghost" onPress={dismissUpdateScreen} />
 				<Button
 					title="Restart to update"
+					style={styles.primary}
 					onPress={() => {
 						applyUpdate({ reloadAsync: reloadIntoUpdate }).catch((e) => console.warn("[updates] reload failed", e));
 					}}
 				/>
-				<Button title="Not now" variant="ghost" onPress={dismissUpdateScreen} />
 			</View>
 		</View>
 	);
@@ -139,6 +142,7 @@ const styles = StyleSheet.create({
 	track: { width: BAR_W, height: 3, borderRadius: 1.5, overflow: "hidden", marginTop: space.lg },
 	fill: { height: 3, borderRadius: 1.5 },
 	status: { ...type.footnote, marginTop: space.sm, textAlign: "center" },
-	actions: { alignSelf: "stretch", gap: space.sm },
+	actions: { alignSelf: "stretch", flexDirection: "row", alignItems: "center", gap: space.sm },
+	primary: { flex: 1 },
 	hidden: { opacity: 0 },
 });

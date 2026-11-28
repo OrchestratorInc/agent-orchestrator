@@ -3,6 +3,7 @@ package sessionmanager
 import (
 	"context"
 	"errors"
+	"fmt"
 	"maps"
 	"strings"
 
@@ -51,6 +52,12 @@ func (m *Manager) prepareImportedNativeSession(ctx context.Context, rec domain.S
 			DataDir:           m.dataDir,
 			Env:               maps.Clone(env),
 		})
+		var refused *ports.ImportRefusedError
+		if errors.As(err, &refused) {
+			// The adapter wrote why, e.g. the CLI changed between import and
+			// first open; the user can act on it.
+			return rec, fmt.Errorf("%w: %w", importNotice(refused.Message), err)
+		}
 		if err != nil {
 			return rec, err
 		}
@@ -76,6 +83,15 @@ func (m *Manager) prepareImportedNativeSession(ctx context.Context, rec domain.S
 	rec.Metadata.AgentSessionID, rec.Metadata.ProviderConversationID = ref.NativeSessionID, ref.NativeSessionID
 	if ref.TranscriptPath != "" {
 		rec.Metadata.NativeTranscriptPath = ref.TranscriptPath
+	}
+	// Kilo and CodeWhale publish stable copies before AO checkpoints identity.
+	// A retry may recover an older copy after the original advances. Refresh
+	// from that verified prepared identity, never from the newer original, and
+	// refuse launch if the matching displayed archive cannot be committed.
+	if (rec.Harness == domain.HarnessKilocode || rec.Harness == domain.HarnessCodewhale) && !rec.Metadata.ImportSource.Adopted && m.importArchive != nil {
+		if err := m.importArchive.RefreshArchive(ctx, rec); err != nil {
+			return rec, fmt.Errorf("refresh prepared native history: %w", err)
+		}
 	}
 	return rec, nil
 }

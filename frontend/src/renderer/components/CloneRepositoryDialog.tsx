@@ -427,11 +427,12 @@ export default function CloneRepositoryDialog({
 								<Label htmlFor="cloneDestination" className="text-[13px] font-semibold text-[var(--color-text-import-title)]">
 									{t("createProject.cloneDestination")}
 								</Label>
-								<div className="flex h-control-form items-center overflow-hidden rounded-md border border-transparent bg-[var(--color-bg-import-card)] text-[13px] text-foreground">
+								<div data-field="field" className="flex h-control-form items-center overflow-hidden rounded-md border border-transparent bg-[var(--color-bg-import-card)] text-[13px] text-foreground">
 									<div className="relative min-w-0 flex-1">
 										<Folder className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-[var(--color-text-import-muted)]" aria-hidden="true" />
 										<Input
 											id="cloneDestination"
+											data-field="none"
 											className={`border-transparent bg-transparent pl-10 text-[13px] ${firstRun ? "" : "font-mono"}`}
 											aria-describedby={`cloneDestinationHelp${destinationError ? " cloneDestinationError" : ""}`}
 											aria-invalid={Boolean(destinationError)}

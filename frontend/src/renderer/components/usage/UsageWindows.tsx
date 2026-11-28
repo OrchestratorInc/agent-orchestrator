@@ -14,6 +14,36 @@ const STALE_MS = HOUR_MS;
 
 type Sessions = { login: UsageLimitLogin; spans: UsageLimitSpan[] };
 
+function loginKey(login: UsageLimitLogin): string {
+	// Older hosts omit the history ID.
+	return login.loginId ?? JSON.stringify([login.provider, login.email, login.accountId]);
+}
+
+/** A second line for each login whose name alone does not tell it apart: two
+ * organizations can share an email and plan, and readings from before the
+ * organization was recorded are their own group. */
+function loginDetails(logins: UsageLimitLogin[], t: TFunction): Map<string, string> {
+	const shown = (login: UsageLimitLogin) => JSON.stringify([login.provider, login.email ?? "", formatPlanName(login.plan)]);
+	const count = new Map<string, number>();
+	for (const login of logins) count.set(shown(login), (count.get(shown(login)) ?? 0) + 1);
+	const details = new Map<string, string>();
+	for (const login of logins) {
+		if (login.organizationUnknown) details.set(loginKey(login), t("usage.windows.organizationUnknown"));
+		else if ((count.get(shown(login)) ?? 0) > 1) details.set(loginKey(login), login.organizationName || t("usage.windows.accountLabel", { id: login.accountId.slice(0, 8) }));
+	}
+	// Two organizations can carry the same name; the account then tells them apart.
+	const seen = new Map<string, number>();
+	for (const login of logins) {
+		const detail = details.get(loginKey(login));
+		if (detail) seen.set(shown(login) + detail, (seen.get(shown(login) + detail) ?? 0) + 1);
+	}
+	for (const login of logins) {
+		const detail = details.get(loginKey(login));
+		if (detail && (seen.get(shown(login) + detail) ?? 0) > 1) details.set(loginKey(login), `${detail} · ${login.accountId.slice(0, 8)}`);
+	}
+	return details;
+}
+
 export function UsageWindows({ history, now }: { history: UsageLimitWindows; now: Date }) {
 	const { t, i18n } = useTranslation();
 	const locale = i18n.language;
@@ -32,6 +62,7 @@ export function UsageWindows({ history, now }: { history: UsageLimitWindows; now
 	const timelineStart = Math.max(since, firstDay);
 	const timelineEnd = Math.max(until, ...sessions.flatMap(({ spans }) => spans.filter((span) => span.state === "open").map((span) => Date.parse(span.resetsAt))));
 	const dateTime = new Intl.DateTimeFormat(locale, { weekday: "short", day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" });
+	const details = loginDetails(history.logins, t);
 
 	if (sessions.length === 0 && weekly.length === 0) {
 		return (
@@ -48,12 +79,12 @@ export function UsageWindows({ history, now }: { history: UsageLimitWindows; now
 				{t("usage.windows.about")}
 				{firstReading !== null && firstReading - since > HOUR_MS ? ` ${t("usage.windows.recordingSince", { value: dateTime.format(firstReading) })}` : null}
 			</p>
-			{sessions.length > 0 ? <SessionTimeline sessions={sessions} since={timelineStart} until={timelineEnd} now={now} dateTime={dateTime} /> : null}
+			{sessions.length > 0 ? <SessionTimeline sessions={sessions} details={details} since={timelineStart} until={timelineEnd} now={now} dateTime={dateTime} /> : null}
 			{weekly.length > 0 ? (
 				<section aria-labelledby="usage-windows-weekly" className="flex flex-col gap-4">
 					<SectionHeading id="usage-windows-weekly" title={t("usage.windows.allowance")} help={t("usage.windows.allowanceHelp")} />
 					<div className="grid gap-8 lg:grid-cols-2">
-						{weekly.map(({ login, span }) => <WeeklyAllowance key={`${login.provider}:${login.email}:${span.windowId}`} login={login} span={span} now={now} dateTime={dateTime} />)}
+						{weekly.map(({ login, span }) => <WeeklyAllowance key={JSON.stringify([loginKey(login), span.windowId, span.resetsAt])} login={login} detail={details.get(loginKey(login))} span={span} now={now} dateTime={dateTime} />)}
 					</div>
 				</section>
 			) : null}
@@ -61,7 +92,7 @@ export function UsageWindows({ history, now }: { history: UsageLimitWindows; now
 	);
 }
 
-function LoginName({ login }: { login: UsageLimitLogin }) {
+function LoginName({ login, detail }: { login: UsageLimitLogin; detail?: string }) {
 	const { t } = useTranslation();
 	const plan = formatPlanName(login.plan);
 	return (
@@ -70,6 +101,7 @@ function LoginName({ login }: { login: UsageLimitLogin }) {
 			<span className="flex min-w-0 flex-col">
 				<span className="truncate text-xs text-foreground">{login.email || agentAccountProviderNames[login.provider]}</span>
 				{plan ? <span className="truncate text-2xs text-muted-foreground">{t("settings.codexAccounts.planLabel", { name: plan })}</span> : null}
+				{detail ? <span className="truncate text-2xs text-muted-foreground">{detail}</span> : null}
 			</span>
 		</span>
 	);
@@ -136,7 +168,7 @@ function LegendBlock({ state }: { state: UsageLimitSpan["state"] }) {
 	);
 }
 
-function SessionTimeline({ sessions, since, until, now, dateTime }: { sessions: Sessions[]; since: number; until: number; now: Date; dateTime: Intl.DateTimeFormat }) {
+function SessionTimeline({ sessions, details, since, until, now, dateTime }: { sessions: Sessions[]; details: Map<string, string>; since: number; until: number; now: Date; dateTime: Intl.DateTimeFormat }) {
 	const { t, i18n } = useTranslation();
 	const span = until - since;
 	const at = (ms: number) => `${Math.min(100, Math.max(0, ((ms - since) / span) * 100))}%`;
@@ -151,8 +183,8 @@ function SessionTimeline({ sessions, since, until, now, dateTime }: { sessions: 
 			<SectionHeading id="usage-windows-timeline" title={t("usage.windows.timeline")} help={t("usage.windows.timelineHelp")} />
 			<div className="grid grid-cols-[minmax(0,13rem)_minmax(0,1fr)] gap-x-4 gap-y-2">
 				{sessions.map(({ login, spans }) => (
-					<div key={`${login.provider}:${login.email}:${login.accountId}`} className="contents">
-						<LoginName login={login} />
+					<div key={loginKey(login)} className="contents">
+						<LoginName login={login} detail={details.get(loginKey(login))} />
 						<div className="relative h-11 overflow-hidden rounded-md bg-muted/60">
 							{midnights.map((ms) => <div key={ms} aria-hidden="true" className="absolute inset-y-0 border-s border-border/70" style={{ insetInlineStart: at(ms) }} />)}
 							{now.getTime() < until ? (
@@ -166,7 +198,7 @@ function SessionTimeline({ sessions, since, until, now, dateTime }: { sessions: 
 								const used = Math.min(100, window.peakUsedPercent);
 								const pace = window.state === "open" ? spanPace(window) : null;
 								return (
-									<Tooltip key={window.resetsAt}>
+									<Tooltip key={JSON.stringify([window.windowId, window.resetsAt])}>
 										<TooltipTrigger asChild>
 											<div
 												tabIndex={0}
@@ -226,7 +258,7 @@ function SessionTimeline({ sessions, since, until, now, dateTime }: { sessions: 
 	);
 }
 
-function WeeklyAllowance({ login, span, now, dateTime }: { login: UsageLimitLogin; span: UsageLimitSpan; now: Date; dateTime: Intl.DateTimeFormat }) {
+function WeeklyAllowance({ login, detail, span, now, dateTime }: { login: UsageLimitLogin; detail?: string; span: UsageLimitSpan; now: Date; dateTime: Intl.DateTimeFormat }) {
 	const { t } = useTranslation();
 	const tone = agentTone(PROVIDER_HARNESS[login.provider]);
 	const start = span.startsAt ? Date.parse(span.startsAt) : Date.parse(span.firstReadAt);
@@ -248,7 +280,7 @@ function WeeklyAllowance({ login, span, now, dateTime }: { login: UsageLimitLogi
 		<div className="flex min-w-0 flex-col gap-2">
 			<div className="flex items-baseline justify-between gap-3">
 				<span className="flex min-w-0 items-baseline gap-2">
-					<LoginName login={login} />
+					<LoginName login={login} detail={detail} />
 					<span className="shrink-0 text-xs text-muted-foreground">{span.label}</span>
 				</span>
 				<span className="shrink-0 text-xs tabular-nums text-muted-foreground">{t("usage.windows.resets", { value: dateTime.format(reset) })}</span>

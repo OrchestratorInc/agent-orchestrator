@@ -140,7 +140,7 @@ describe("useTerminateSession", () => {
 		it("looks the links up, archives, then unpublishes them once the files are deleted", async () => {
 			await archive({ ...published, deleteArtifacts: true });
 			expect(order).toEqual(["inspect", "kill", "unpublish"]);
-			expect(aoBridge.cloudShare.inspect).toHaveBeenCalledWith({ sessionId: "session-1", path: "a.md", projectId: "project-1", artifactId: "art-1", baseUrl: "https://cp.example.com" });
+			expect(aoBridge.cloudShare.inspect).toHaveBeenCalledWith({ sessionId: "session-1", path: "a.md", projectId: "project-1", artifactId: "art-1", baseUrl: "https://cp.example.com" }, { linkOnly: true });
 			expect(aoBridge.cloudShare.unpublish).toHaveBeenCalledWith("https://cp.example.com", "share-1");
 		});
 
@@ -496,6 +496,18 @@ describe("durable workspace cleanup feedback", () => {
 
 		await waitFor(() => expect(toasts()).toHaveLength(1));
 		expect(toasts()[0].action).toBeUndefined();
+	});
+
+	it("says nothing when a standalone agent's folder is kept, its only copy of the work", async () => {
+		const queryClient = newQueryClient();
+		const { result } = renderHook(() => useTerminateSession(), { wrapper: wrapper(queryClient) });
+		await act(async () => { await result.current.mutateAsync({ ...session, workspaceId: STANDALONE_WORKSPACE_ID }); });
+		setCleanup(queryClient, "pending");
+
+		await act(async () => { setCleanup(queryClient, "preserved_dirty"); });
+		await act(async () => { setCleanup(queryClient, "preserved_dirty"); });
+
+		expect(toasts()).toEqual([]);
 	});
 
 	it("raises nothing for a cleanup a sweep recorded", async () => {

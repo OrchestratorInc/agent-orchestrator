@@ -129,6 +129,12 @@ describe("SessionFileExplorer", () => {
 		hostBGetMock.mockReset();
 	});
 
+	it("waits for a starting session's worktree instead of reading it and showing an error", () => {
+		renderWithQuery(<SessionFileExplorer sessionId="starting-session" workspacePending />);
+		expect(screen.getByText("Setting up this session's workspace…")).toBeTruthy();
+		expect(getMock).not.toHaveBeenCalled();
+	});
+
 	it("warms the exact file query on hover so opening it needs no second request", async () => {
 		useUiStore.getState().setFilesChangedOnly("hover-session", false);
 		const detail = { sessionId: "hover-session", path: "src/App.tsx", content: "ready before click" };

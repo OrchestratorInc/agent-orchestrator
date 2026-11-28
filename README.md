@@ -55,9 +55,13 @@ Failed checks, review comments, and merge conflicts go back to the worker that o
 
 <img src="docs/assets/readme/site/feedback.jpg" alt="A pull request timeline where a failed check and a review comment are routed back to Claude Code, which pushes a fix" width="100%" />
 
+### Everything about a session in one window
+
+The left sidebar lists **Sessions** (chats outside any project) above your **Projects**; pin a session or project to keep it at the top. Each session opens with a tab bar for its chat, extra terminals, and files. The right sidebar shows **Summary**, **Files**, and **Browser**, plus **Reviews** for a worker until its PRs are merged or closed, and **Side chat**, **Artifacts**, and other tabs when the session has them. With Developer mode on, a **Device** tab opens an iOS Simulator or Android Emulator for local workers.
+
 ### Use the agent you already trust
 
-Pick the agent and model per task, then work in structured chat or the agent's own terminal UI. Each worker also gets a browser to preview and test its app.
+Pick the agent and model per task, then work in structured chat or the agent's own terminal UI. You can switch the agent, model, or reasoning effort mid-session, or move between chat and terminal UI. Each worker also gets a browser to preview and test its app.
 
 #### Supported agents
 
@@ -75,7 +79,7 @@ Worker, Chat, and reviewer support differ by agent; the [agent setup guides](htt
     <td valign="middle" nowrap><picture><source media="(prefers-color-scheme: dark)" srcset="frontend/src/renderer/assets/agents/copilot-dark.svg" /><img src="frontend/src/renderer/assets/agents/copilot-light.svg" alt="GitHub Copilot" width="24" height="24" align="middle" /></picture> &nbsp; <b>GitHub Copilot</b></td>
   </tr>
   <tr valign="middle">
-    <td valign="middle" nowrap><picture><source media="(prefers-color-scheme: dark)" srcset="frontend/src/renderer/assets/agents/grok-dark.svg" /><img src="frontend/src/renderer/assets/agents/grok-light.svg" alt="Grok" width="24" height="24" align="middle" /></picture> &nbsp; <b>Grok</b></td>
+    <td valign="middle" nowrap><picture><source media="(prefers-color-scheme: dark)" srcset="frontend/src/renderer/assets/agents/grok-dark.svg" /><img src="frontend/src/renderer/assets/agents/grok-light.svg" alt="Grok Build" width="24" height="24" align="middle" /></picture> &nbsp; <b>Grok Build</b></td>
     <td valign="middle" nowrap><picture><source media="(prefers-color-scheme: dark)" srcset="frontend/src/renderer/assets/agents/kimi-dark.svg" /><img src="frontend/src/renderer/assets/agents/kimi-light.svg" alt="Kimi" width="24" height="24" align="middle" /></picture> &nbsp; <b>Kimi</b></td>
     <td valign="middle" nowrap><img src="docs/assets/readme/agents/pi-coding-agent.svg" alt="Pi" width="24" height="24" align="middle" /> &nbsp; <b>Pi</b></td>
   </tr>
@@ -90,17 +94,17 @@ Worker, Chat, and reviewer support differ by agent; the [agent setup guides](htt
     <td valign="middle" nowrap><picture><source media="(prefers-color-scheme: dark)" srcset="frontend/src/renderer/assets/agents/goose-dark.svg" /><img src="frontend/src/renderer/assets/agents/goose-light.svg" alt="Goose" width="24" height="24" align="middle" /></picture> &nbsp; <b>Goose</b></td>
   </tr>
   <tr valign="middle">
-    <td valign="middle" nowrap><picture><source media="(prefers-color-scheme: dark)" srcset="frontend/src/renderer/assets/agents/qwen-dark.svg" /><img src="frontend/src/renderer/assets/agents/qwen-light.svg" alt="Qwen" width="24" height="24" align="middle" /></picture> &nbsp; <b>Qwen</b></td>
+    <td valign="middle" nowrap><picture><source media="(prefers-color-scheme: dark)" srcset="frontend/src/renderer/assets/agents/qwen-dark.svg" /><img src="frontend/src/renderer/assets/agents/qwen-light.svg" alt="Qwen Code" width="24" height="24" align="middle" /></picture> &nbsp; <b>Qwen Code</b></td>
     <td valign="middle" nowrap><picture><source media="(prefers-color-scheme: dark)" srcset="frontend/src/renderer/assets/agents/continue-dark.svg" /><img src="frontend/src/renderer/assets/agents/continue-light.svg" alt="Continue" width="24" height="24" align="middle" /></picture> &nbsp; <b>Continue</b></td>
     <td valign="middle" nowrap><picture><source media="(prefers-color-scheme: dark)" srcset="frontend/src/renderer/assets/agents/devin-dark.svg" /><img src="frontend/src/renderer/assets/agents/devin-light.svg" alt="Devin" width="24" height="24" align="middle" /></picture> &nbsp; <b>Devin</b></td>
   </tr>
   <tr valign="middle">
     <td valign="middle" nowrap><img src="frontend/src/renderer/assets/agents/kiro.svg" alt="Kiro" width="24" height="24" align="middle" /> &nbsp; <b>Kiro</b></td>
     <td valign="middle" nowrap><picture><source media="(prefers-color-scheme: dark)" srcset="frontend/src/renderer/assets/agents/kilocode-dark.svg" /><img src="frontend/src/renderer/assets/agents/kilocode-light.svg" alt="Kilo Code" width="24" height="24" align="middle" /></picture> &nbsp; <b>Kilo Code</b></td>
-    <td valign="middle" nowrap><img src="frontend/src/renderer/assets/agents/vibe.svg" alt="Vibe" width="24" height="24" align="middle" /> &nbsp; <b>Vibe</b></td>
+    <td valign="middle" nowrap><img src="frontend/src/renderer/assets/agents/vibe.svg" alt="Mistral Vibe" width="24" height="24" align="middle" /> &nbsp; <b>Mistral Vibe</b></td>
   </tr>
   <tr valign="middle">
-    <td valign="middle" nowrap><img src="frontend/src/renderer/assets/agents/muse.svg" alt="Muse" width="24" height="24" align="middle" /> &nbsp; <b>Muse</b></td>
+    <td valign="middle" nowrap><img src="frontend/src/renderer/assets/agents/muse.svg" alt="Muse Code" width="24" height="24" align="middle" /> &nbsp; <b>Muse Code</b></td>
     <td valign="middle" nowrap><img src="frontend/src/renderer/assets/agents/agy.svg" alt="Agy" width="24" height="24" align="middle" /> &nbsp; <b>Agy</b></td>
     <td valign="middle" nowrap><picture><source media="(prefers-color-scheme: dark)" srcset="docs/assets/readme/agents/autohand-stacked-dark.png" /><img src="docs/assets/readme/agents/autohand-stacked-light.png" alt="Autohand" width="24" height="24" align="middle" /></picture> <b>Autohand</b></td>
   </tr>
@@ -144,7 +148,7 @@ Worker, Chat, and reviewer support differ by agent; the [agent setup guides](htt
 
 ### Orchestrator for Mobile
 
-Control the agents running on your desktop from your phone. Install the app for [iPhone](https://apps.apple.com/app/ao-mobile/id6792552173) or [Android](https://play.google.com/store/apps/details?id=aoagents.dev). Scan the QR code in **Settings → Connect Mobile** to pair it with your desktop. It works on your home Wi-Fi and away from home.
+Control the agents running on your desktop from your phone. Install the app for [iPhone](https://apps.apple.com/app/ao-mobile/id6792552173) or [Android](https://play.google.com/store/apps/details?id=aoagents.dev). Scan the QR code in **Settings → Mobile** to pair it with your desktop. It works on your home Wi-Fi and away from home.
 
 - **Get alerts.** A push notification tells you when an agent has a question or needs approval.
 - **Reply.** Answer in chat, approve the request, or open the agent's terminal.
@@ -162,6 +166,10 @@ Run workers in hosted workspaces instead of on your machine. Choose **Clone to t
 - **Nothing on your machine.** The code, worktrees, and agents all live in the cloud.
 
 See the [Cloud guide](https://docs.orchestrator.inc/guides/cloud) for setup.
+
+### Remote hosts
+
+Run Orchestrator on your own Linux VM and use it from the desktop and mobile apps. Install it on the VM with one command and sign in to the same account; the host then shows up on your devices. Sessions stay on the machine that started them. Manage and update hosts in **Settings → Remote hosts**. Setup is in [docs/self-hosted-remote.md](docs/self-hosted-remote.md). This is experimental.
 
 ## Install
 

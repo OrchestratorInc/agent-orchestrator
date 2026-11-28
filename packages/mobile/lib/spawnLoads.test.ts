@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import type { AgentModelInfo } from "./api";
 import type { ServerConfig } from "./config";
-import { createAgentModelCache, nextConnectionEpoch, type ConnectionEpoch } from "./spawnLoads";
+import { createAgentModelCache, nextConnectionEpoch, provenSpawnConfig, type ConnectionEpoch } from "./spawnLoads";
 
 const lan: ServerConfig = { host: "192.168.1.20", httpPort: "3011", muxPort: "", password: "pw", hostId: "host-a", endpointKind: "lan" };
 const models = (...ids: string[]) => ids.map((id) => ({ id, label: id }) as AgentModelInfo);
@@ -63,5 +63,25 @@ describe("createAgentModelCache", () => {
 		expect(cache.missing("machine-b", ["a"])).toEqual(["a"]);
 		cache.record("machine-a", "a", models("late"));
 		expect(cache.lists(["a"])).toEqual({ a: [] });
+	});
+});
+
+// New task can now pick a machine before it has answered, so its own requests
+// must not go out on a credential no poll has accepted yet: one revoked while
+// the phone was away would add New task's failed requests to the poll's and
+// arm the machine's lockout before the person can scan a new code.
+describe("provenSpawnConfig", () => {
+	it("holds New task's requests until the machine answers a poll on that connection", () => {
+		const resumed = { ...lan };
+		expect(provenSpawnConfig(null, resumed, "closed")).toBeNull();
+		expect(provenSpawnConfig(null, resumed, "connecting")).toBeNull();
+		expect(provenSpawnConfig(null, resumed, "open")).toBe(resumed);
+	});
+
+	it("keeps a connection that answered through a failed poll, but not one that replaced it", () => {
+		expect(provenSpawnConfig(lan, lan, "closed")).toBe(lan);
+		const upgraded: ServerConfig = { ...lan, host: "abc.trycloudflare.com", httpPort: "443", secure: true, endpointKind: "tunnel" };
+		expect(provenSpawnConfig(lan, upgraded, "connecting")).toBeNull();
+		expect(provenSpawnConfig(lan, null, "closed")).toBeNull();
 	});
 });

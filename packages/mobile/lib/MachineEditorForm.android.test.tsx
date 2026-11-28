@@ -9,6 +9,7 @@ const { theme } = vi.hoisted(() => ({
 	theme: { accent: "accent", accentTint: "tint", bgBase: "base", red: "red", textPrimary: "ink", textSecondary: "gray", textTertiary: "dim", onAccent: "#000000", bgElevatedHover: "hover" },
 }));
 
+vi.mock("./useHeaderOverlap", () => ({ useGlassBarInset: () => 0, useHeaderOverlap: () => 0 }));
 vi.mock("react-native", () => ({
 	Platform: { OS: "android" },
 	Pressable: "Pressable",

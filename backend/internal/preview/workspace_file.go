@@ -2,12 +2,51 @@ package preview
 
 import (
 	"io/fs"
+	"net/url"
 	"os"
 	"path"
 	"path/filepath"
 	"strings"
 	"syscall"
 )
+
+// ResolvedPathHeader names, on an artifact file's response, the file's path
+// beneath the artifacts folder once its symlinks are followed (see
+// ResolvedPath), each segment URL-escaped. The desktop includes a shared
+// page's files only from the page's own folder, which the requested path
+// alone cannot tell when it goes through a symlink.
+const ResolvedPathHeader = "X-AO-Artifact-Path"
+
+// ResolvedPath returns the slash-separated path beneath rootPath of the open
+// file f, read from f's own handle, with each segment URL-escaped: the file
+// whose bytes f reads, whatever symlinks its path went through or were
+// repointed since. It is false when that is not beneath rootPath or the
+// platform cannot read an open file's path.
+func ResolvedPath(rootPath string, f *os.File) (string, bool) {
+	// The root's path is read the same way, so the two compare as one form.
+	root, err := os.Open(rootPath)
+	if err != nil {
+		return "", false
+	}
+	defer func() { _ = root.Close() }()
+	realRoot, ok := openedPath(root)
+	if !ok {
+		return "", false
+	}
+	target, ok := openedPath(f)
+	if !ok {
+		return "", false
+	}
+	rel, err := filepath.Rel(realRoot, target)
+	if err != nil || rel == "." || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) || filepath.IsAbs(rel) {
+		return "", false
+	}
+	segments := strings.Split(filepath.ToSlash(rel), "/")
+	for index, segment := range segments {
+		segments[index] = url.PathEscape(segment)
+	}
+	return strings.Join(segments, "/"), true
+}
 
 // CleanWorkspacePath normalizes a browser/workspace path without discarding
 // meaningful whitespace from valid Unix filenames. The leading slash used by

@@ -110,6 +110,7 @@ export type BrowserViewModel = {
 	tabNotice: string;
 	selectTab: (tabId: string) => Promise<void>;
 	closeTab: (tabId: string) => Promise<void>;
+	muteTab: (tabId: string, muted: boolean) => Promise<void>;
 	openTab: (url?: string) => Promise<void>;
 	openLink: (url: string) => Promise<void>;
 	reorderTabs: (orderedIds: string[]) => void;
@@ -262,9 +263,9 @@ function publishBrowserHole(viewId: string, rect: BrowserRect | null): void {
 }
 
 // ResizeHandle.tsx sits at the inspector panel's left edge with a
-// `--size-resize-handle-offset` (6px) negative inset, so only its right half
-// (0 to 6px, inside the panel) survives the panel's `overflow-hidden` — the
-// left half is clipped away. That surviving 6px is inside `[data-panel]`, the
+// `--size-resize-handle-offset` (6px) negative inset. The panel clips to its
+// box plus 2px on the left (room for the hover line), so the handle's right half
+// (0 to 6px, inside the panel) is what the pointer reaches. That 6px is inside `[data-panel]`, the
 // same territory the browser view fills, so without this reserve the native
 // view covers the handle at rest and a drag can never start once a page is
 // loaded (only continuing an already-started drag is handled elsewhere, via
@@ -1035,6 +1036,23 @@ export function useBrowserView({
 		[hasNativeBrowser, showTabNotice, updateClosedTabs],
 	);
 
+	const muteTab = useCallback(
+		async (tabId: string, muted: boolean) => {
+			const viewId = viewIdRef.current;
+			if (!viewId || !hasNativeBrowser) return;
+			try {
+				const state = await window.ao!.browser.muteTab({ viewId, tabId, muted });
+				if (viewIdRef.current === state.viewId) setTabsState(state);
+			} catch {
+				// Mute is a toggle, so a stale push is self-correcting on the next
+				// click; resync quietly rather than showing a failure notice.
+				const state = await window.ao!.browser.getTabs(viewId).catch(() => undefined);
+				if (state && viewIdRef.current === state.viewId) setTabsState(state);
+			}
+		},
+		[hasNativeBrowser],
+	);
+
 	const openTab = useCallback(
 		async (url?: string) => {
 			if (!hasNativeBrowser || transientClosedRef.current) return;
@@ -1393,6 +1411,7 @@ export function useBrowserView({
 			tabNotice: modelTabNotice,
 			selectTab,
 			closeTab,
+			muteTab,
 			openTab,
 			openLink,
 			reorderTabs,
@@ -1414,7 +1433,7 @@ export function useBrowserView({
 		[
 			modelViewId, modelNavState, slotRef, navigate, goBack, goForward, reload, stop, modelFindState,
 			modelFindOpenRequest, findInPage, stopFindInPage, modelTabs, modelActiveTabId, modelTabNotice, selectTab,
-			closeTab, openTab, openLink, reorderTabs, modelClosedTabs, reopenClosedTab, modelDevtoolsState,
+			closeTab, muteTab, openTab, openLink, reorderTabs, modelClosedTabs, reopenClosedTab, modelDevtoolsState,
 			modelProfileState, openDevTools, closeDevTools, setDevToolsPlacement, modelAgentBrowserActive,
 			modelAgentBrowserActivity, destroy, annotationMode, annotationState, setAnnotationMode, annotationAction,
 		],

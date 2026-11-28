@@ -33,7 +33,8 @@ export type ModelEffortSelection = Pick<ModelTuningControlsProps,
 	"effort" | "effortsWithoutModel" | "onEffortChange" | "onEffortReset" | "onValidityChange" | "roleLabel"
 >;
 
-type AgentModel = NonNullable<AgentModelCatalog["models"]>[number];
+// note is a quiet line under the name, such as why a kept model is not listed.
+type AgentModel = NonNullable<AgentModelCatalog["models"]>[number] & { note?: string };
 
 type IndexedModel = {
 	model: AgentModel;
@@ -73,6 +74,8 @@ export function AgentModelCombobox({
 	onChange,
 	onCustom,
 	onUseDefault,
+	useDefaultLabel,
+	preserveDefaultSelection = false,
 	emptyLabel,
 	footer,
 	modelHint,
@@ -105,6 +108,14 @@ export function AgentModelCombobox({
 	onCustom?: (value: string) => void;
 	/** Offers the agent's native default as a choice, above the listed models. */
 	onUseDefault?: () => void;
+	/** Names the onUseDefault choice where "project or agent default" does not fit. */
+	useDefaultLabel?: string;
+	/**
+	 * Reports a pick of the catalog's default model or effort as that value
+	 * rather than as "" (inherit), so a caller can pin it. Project settings
+	 * use this; the composer keeps "default means follow the agent".
+	 */
+	preserveDefaultSelection?: boolean;
 	/** Shown when the agent does not report a concrete model. */
 	emptyLabel?: string;
 	/** A note under the models, such as where they come from. */
@@ -170,9 +181,12 @@ export function AgentModelCombobox({
 	// model is chosen, so the control never reads as unset.
 	const aoDefaultEffort = fallbackEffort(effortOptions, providerEffort);
 	const effectiveEffort = explicitEffort || defaultEffort || aoDefaultEffort || "";
+	// A caller that pins choices treats an unset model as "follow the agent", so
+	// AO's fallback level is not written for it: that would pin an effort right
+	// after the choices were cleared.
 	useApplyEffortDefault(
 		explicitModel,
-		tuning && !explicitEffort ? aoDefaultEffort : undefined,
+		tuning && !explicitEffort && !(preserveDefaultSelection && !explicitModel) ? aoDefaultEffort : undefined,
 		tuning?.onEffortChange ?? ignoreEffortChange,
 		{ disabled: disabled || !tuning },
 	);
@@ -210,6 +224,8 @@ export function AgentModelCombobox({
 		[concreteModels],
 	);
 
+	const sharedLabelDetails = useMemo(() => detailsForSharedLabels(searchIndex.models), [searchIndex]);
+
 	const claude = useMemo(
 		() => (agentId === "claude-code" ? splitClaudeModels(searchIndex.models) : undefined),
 		[agentId, searchIndex],
@@ -246,7 +262,15 @@ export function AgentModelCombobox({
 	const customSearchValue = search.trim();
 	const showCustomSearchAction = allowDirectCustom && customSearchValue !== "" && rankedModels.length === 0;
 	// With no identified model, nothing is selected and the menu just lists models.
-	const currentLabel = (triggerLabel ?? selected?.label ?? explicitModel) || emptyLabel || t("settings.models.selectModel");
+	// A closed compact picker tells a shared name apart too: by its provider, or by a
+	// routed ID. An alias such as "opus" reads worse than the name, so it keeps it.
+	const sharedDetail = compact && selected ? sharedLabelDetails.get(selected.id) : undefined;
+	let selectedName = selected?.label;
+	if (selected && sharedDetail) {
+		if (sharedDetail !== selected.id) selectedName = `${selected.label} (${sharedDetail})`;
+		else if (selected.id.includes("/")) selectedName = selected.id;
+	}
+	const currentLabel = (triggerLabel ?? selectedName ?? explicitModel) || emptyLabel || t("settings.models.selectModel");
 	const scrollRef = useRef<HTMLDivElement>(null);
 	const searchInputRef = useRef<HTMLInputElement>(null);
 	const effortTriggerRef = useRef<HTMLDivElement>(null);
@@ -260,7 +284,7 @@ export function AgentModelCombobox({
 			const next = rememberRecentModel(recentScope, modelID);
 			setSessionRecentModels((current) => ({ ...current, [recentScope]: next }));
 		}
-		onChange(modelID === defaultModel ? "" : modelID);
+		onChange(!preserveDefaultSelection && modelID === defaultModel ? "" : modelID);
 	};
 	const selectCatalogModel = (event: Event, item: IndexedModel) => {
 		const family = families?.find((entry) => entry.id === item.id);
@@ -426,9 +450,9 @@ export function AgentModelCombobox({
 					>
 						{onUseDefault && normalizedSearch === "" && (
 							<>
-								<DropdownMenuItem onSelect={onUseDefault} className={modelItemClass(explicitModel === "")}>
+								<DropdownMenuItem onSelect={onUseDefault} className={modelItemClass(explicitModel === "" && !(preserveDefaultSelection && explicitEffort))}>
 									<span className="truncate text-settings-label">
-										{t("settings.models.useConfiguredDefault")}
+										{useDefaultLabel ?? t("settings.models.useConfiguredDefault")}
 									</span>
 								</DropdownMenuItem>
 								{visibleModels.length > 0 && <DropdownMenuSeparator />}
@@ -448,9 +472,15 @@ export function AgentModelCombobox({
 											aria-current={tuning && item.id === shownModel ? true : undefined}
 										>
 											<div className="min-w-0 flex-1">
-												<span className="truncate text-settings-label">{item.label}</span>
+												<span className="block wrap-anywhere text-settings-label" title={item.id}>{item.label}</span>
+												{sharedLabelDetails.has(item.id) && (
+													<p className="wrap-anywhere text-xs text-settings-muted">{sharedLabelDetails.get(item.id)}</p>
+												)}
 												{item.model.unavailableReason && (
 													<p className="text-xs text-settings-muted">{item.model.unavailableReason}</p>
+												)}
+												{item.model.note && !item.model.unavailableReason && (
+													<p className="text-xs text-settings-muted">{item.model.note}</p>
 												)}
 											</div>
 											{modelHint?.id === item.id && (
@@ -472,6 +502,9 @@ export function AgentModelCombobox({
 													)}
 													{item.model.unavailableReason && (
 														<p className="text-xs text-settings-muted">{item.model.unavailableReason}</p>
+													)}
+													{item.model.note && !item.model.unavailableReason && (
+														<p className="text-xs text-settings-muted">{item.model.note}</p>
 													)}
 												</div>
 												{modelHint?.id === item.id && (
@@ -604,7 +637,7 @@ export function AgentModelCombobox({
 								{effortOptions.map((effort) => (
 									<OptionMenuItem key={effort} role="menuitemradio" aria-checked={effort === effectiveEffort}
 										active={effort === effectiveEffort} onSelect={() => {
-											tuning.onEffortChange(effort === defaultEffort ? "" : effort);
+											tuning.onEffortChange(!preserveDefaultSelection && effort === defaultEffort ? "" : effort);
 											setEffortMenuOpen(false);
 											setAwaitingEffort(false);
 											setMenuOpen(false);
@@ -634,6 +667,7 @@ export function AgentModelCombobox({
 						value={effectiveEffort}
 						choices={effortOptions.map((effort) => ({ value: effort }))}
 						defaultEffort={defaultEffort || undefined}
+						keepDefaultPick={preserveDefaultSelection}
 						availability={effortAvailability}
 						disabled={disabled}
 						triggerClassName="w-fit"
@@ -709,6 +743,27 @@ function shouldShowModelID(item: IndexedModel, siblings: IndexedModel[], search:
 	if (duplicateLabel) return true;
 
 	return search !== "" && normalizeSearch(item.id).includes(search) && !label.includes(search);
+}
+
+/**
+ * What a compact row shows under a name that several models share, keyed by
+ * model ID: the provider, or the full ID where the provider repeats too.
+ * A name only one model has needs nothing under it.
+ */
+function detailsForSharedLabels(models: IndexedModel[]): Map<string, string> {
+	const byLabel = new Map<string, IndexedModel[]>();
+	for (const item of models) byLabel.set(item.normalizedLabel, [...(byLabel.get(item.normalizedLabel) ?? []), item]);
+	const details = new Map<string, string>();
+	for (const shared of byLabel.values()) {
+		if (shared.length < 2) continue;
+		const providers = new Map<string, number>();
+		for (const item of shared) providers.set(item.normalizedProvider, (providers.get(item.normalizedProvider) ?? 0) + 1);
+		for (const item of shared) {
+			const providerTellsApart = item.provider !== "Other" && providers.get(item.normalizedProvider) === 1;
+			details.set(item.id, providerTellsApart ? item.provider : item.id);
+		}
+	}
+	return details;
 }
 
 function providerFromModelID(modelID: string): string {

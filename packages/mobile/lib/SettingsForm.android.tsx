@@ -56,6 +56,7 @@ import {
 	type SettingsAccountRowProps,
 } from "./SettingsForm.types";
 import { useTheme, useThemeState } from "./ThemeProvider";
+import { useGlassBarInset } from "./useHeaderOverlap";
 import { materialDrawable } from "./toolbarIcon.android";
 import { font as typeface, gutter, iconSize, radius, space, stateOpacity } from "./tokens";
 
@@ -114,11 +115,13 @@ export function SettingsForm({ children, testID }: SettingsFormProps) {
 	const t = useTheme();
 	const { scheme } = useThemeState();
 	const insets = useSafeAreaInsets();
+	// Under a clear pill bar the list starts below it, and scrolls up under it.
+	const barInset = useGlassBarInset();
 	return (
 		<Host style={[styles.fill, { backgroundColor: t.bgBase }]} colorScheme={scheme}>
 			<LazyColumn
 				verticalArrangement={{ spacedBy: space.xxl }}
-				contentPadding={{ start: gutter, end: gutter, top: gutter, bottom: gutter + insets.bottom }}
+				contentPadding={{ start: gutter, end: gutter, top: gutter + barInset, bottom: gutter + insets.bottom }}
 				modifiers={[fillMaxSize(), background(t.bgBase), ...(testID ? [testIDModifier(testID)] : [])]}
 			>
 				{children}

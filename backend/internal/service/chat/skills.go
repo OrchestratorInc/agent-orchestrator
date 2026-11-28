@@ -38,16 +38,20 @@ func (s *Service) Skills(ctx context.Context, id domain.SessionID) ([]ports.Chat
 	if err != nil {
 		return nil, err
 	}
+	shared := sharedSkillIndex(ctx, s.skillSharing, s.dataDir, id)
 	lister, ok := controller.conv.(ports.ChatSkillLister)
-	if !ok {
+	if !ok && len(shared) == 0 {
 		return nil, ErrSkillsUnsupported
 	}
-	listCtx, cancel := context.WithTimeout(ctx, skillsListTimeout)
-	defer cancel()
-	skills, err := lister.ListSkills(listCtx)
-	if err != nil {
-		return nil, err
+	var skills []ports.ChatSkill
+	if ok {
+		listCtx, cancel := context.WithTimeout(ctx, skillsListTimeout)
+		defer cancel()
+		if skills, err = lister.ListSkills(listCtx); err != nil {
+			return nil, err
+		}
 	}
+	skills = withSharedSkills(skills, shared)
 	home, _ := os.UserHomeDir()
 	return withSkillMetadata(skills, skillRoots(record.Metadata.WorkspacePath, home)), nil
 }

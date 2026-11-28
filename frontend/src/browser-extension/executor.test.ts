@@ -88,6 +88,8 @@ class FakeChrome {
 	captures: number[] = [];
 	/** Runs during a capture, for example a user switching tabs. */
 	duringCapture?: () => void;
+	// Runs just before a CDP key event reaches the page, as a page could.
+	beforeKey?: () => void;
 
 	activate(tabId: number) {
 		const tab = this.tabs.get(tabId)!;
@@ -178,6 +180,12 @@ class FakeChrome {
 					if (!self.injected.has(tabId)) throw new Error("Could not establish connection. Receiving end does not exist.");
 					try {
 						const value = await handleContentRequest(document, self.registries.get(tabId)!, message as never);
+						// jsdom's document lives at its own address; in Chrome a top
+						// frame's document is at the tab's, so report that.
+						if ((options?.frameId ?? 0) === 0 && value && typeof value === "object" && "documentId" in value) {
+							const tab = self.tabs.get(tabId);
+							return { ok: true, value: { ...value, url: tab?.url ?? "", title: tab?.title ?? "" } };
+						}
 						return { ok: true, value };
 					} catch (error) {
 						const bridge = error as BridgeError;
@@ -235,6 +243,15 @@ class FakeChrome {
 				detach: async () => undefined,
 				sendCommand: async (target, method, params) => {
 					self.debuggerCalls.push({ method, params, tabId: target.tabId });
+					if (method === "Input.dispatchKeyEvent") {
+						// Like Chrome, a CDP key event goes to whatever has focus.
+						const key = params as { type?: string; key?: string };
+						const type = key.type === "keyUp" ? "keyup" : key.type === "keyDown" || key.type === "rawKeyDown" ? "keydown" : undefined;
+						if (type) {
+							if (type === "keydown") self.beforeKey?.();
+							(document.activeElement ?? document.body).dispatchEvent(new KeyboardEvent(type, { key: key.key, bubbles: true, cancelable: true }));
+						}
+					}
 					if (method === "Page.captureScreenshot") {
 						if (self.hangingScreenshots > 0) {
 							self.hangingScreenshots--;
@@ -551,6 +568,259 @@ describe("Executor", () => {
 		expect(synthetic).toBe(1);
 	});
 
+	it("describes an action's target for the approval gate without dispatching input", async () => {
+		const { fake, run, approve } = setup();
+		await approve();
+		await run("open", { url: "https://shop.test/" });
+		const { refs } = (await run("snapshot", { interactive: true })) as { refs: Record<string, { name: string }> };
+		const buy = Object.entries(refs).find(([, info]) => info.name === "Buy now")![0];
+		let clicks = 0;
+		document.getElementById("buy")!.addEventListener("click", () => clicks++);
+		const before = fake.debuggerCalls.length;
+
+		expect(await run("describe", { action: "click", ref: buy })).toMatchObject({
+			target: { role: "button", name: "Buy now", tag: "button", pageUrl: "https://shop.test/", pageTitle: "Shop" },
+			untrustedExternalContent: true,
+		});
+		expect(await run("describe", { action: "act", instruction: "the buy now button" })).toMatchObject({
+			target: { role: "button", name: "Buy now", instruction: "the buy now button" },
+		});
+		expect(await run("describe", { action: "act", instruction: "the checkout button" })).toEqual({
+			target: { pageUrl: "https://shop.test/", pageTitle: "Shop", instruction: "the checkout button" },
+			binding: { tabId: "t1", document: expect.any(String) },
+			untrustedExternalContent: true,
+		});
+		(document.getElementById("q") as HTMLInputElement).focus();
+		expect(await run("describe", { action: "press", key: "Enter" })).toMatchObject({
+			target: { role: "textbox", name: "Search", isSubmit: false },
+		});
+		expect(clicks).toBe(0);
+		expect(fake.debuggerCalls.slice(before).some((call) => call.method.startsWith("Input."))).toBe(false);
+	});
+
+	it("describes without capturing the tab unless an image is asked for", async () => {
+		const { fake, run, approve } = setup();
+		await approve("s1", false);
+		await run("open", { url: "https://shop.test/" });
+		const { refs } = (await run("snapshot", { interactive: true })) as { refs: Record<string, { name: string }> };
+		const buy = Object.entries(refs).find(([, info]) => info.name === "Buy now")![0];
+		const shots = () => fake.captures.length + fake.debuggerCalls.filter((call) => call.method === "Page.captureScreenshot").length;
+		const before = shots();
+		const plain = await run("describe", { action: "click", ref: buy });
+		expect(plain).toMatchObject({ target: { name: "Buy now" } });
+		expect(plain).not.toHaveProperty("image");
+		expect(shots()).toBe(before);
+		await run("describe", { action: "click", ref: buy, image: true });
+		expect(shots()).toBeGreaterThan(before);
+	});
+
+	it("describes a drag's drop target for the approval gate", async () => {
+		const { run, approve } = setup();
+		await approve("s1", false);
+		await run("open", { url: "https://shop.test/" });
+		const { refs } = (await run("snapshot", { interactive: true })) as { refs: Record<string, { name: string }> };
+		const buy = Object.entries(refs).find(([, info]) => info.name === "Buy now")![0];
+		// The daemon asks about the drop target (the drag's targetRef) as ref.
+		expect(await run("describe", { action: "drag", ref: buy })).toMatchObject({
+			target: { role: "button", name: "Buy now", pageUrl: "https://shop.test/" },
+			binding: { ref: buy },
+		});
+	});
+
+	it("refuses an approved action once the page, tab, or element is not the one approved", async () => {
+		const { fake, run, approve } = setup();
+		await approve("s1", false);
+		await run("open", { url: "https://shop.test/" });
+		let clicks = 0;
+		document.getElementById("buy")!.addEventListener("click", () => clicks++);
+		const { binding } = (await run("describe", { action: "act", instruction: "the buy now button" })) as { binding: Record<string, unknown> };
+		expect(binding).toMatchObject({ tabId: "t1", ref: expect.any(String), document: expect.any(String) });
+
+		// Another element.
+		await expect(run("act", { instruction: "the buy now button", approvalBinding: { ...binding, ref: "e999" } })).rejects.toMatchObject({ code: "BROWSER_TARGET_CHANGED" });
+		// Another document with the same refs (the page navigated while waiting).
+		await expect(run("click", { ref: binding.ref, approvalBinding: { ...binding, document: "older-document" } })).rejects.toMatchObject({ code: "BROWSER_TARGET_CHANGED" });
+		// Another tab.
+		await expect(run("press", { key: "Enter", approvalBinding: { ...binding, tabId: "t2" } })).rejects.toMatchObject({ code: "BROWSER_TARGET_CHANGED" });
+		expect(clicks).toBe(0);
+		expect(fake.debuggerCalls.some((call) => call.method.startsWith("Input."))).toBe(false);
+
+		expect(await run("act", { instruction: "the buy now button", approvalBinding: binding })).toMatchObject({ outcome: "matched" });
+		expect(clicks).toBe(1);
+	});
+
+	it("refuses an approved line-break type once the page, tab, or element is not the one approved", async () => {
+		const { fake, run, approve } = setup();
+		await approve("s1", false);
+		await run("open", { url: "https://shop.test/" });
+		const field = document.getElementById("q") as HTMLInputElement;
+		const { binding } = (await run("describe", { action: "act", instruction: "the search box" })) as { binding: Record<string, unknown> };
+		expect(binding).toMatchObject({ ref: expect.any(String) });
+		const ref = binding.ref as string;
+		await expect(run("type", { ref, text: "shoes\n", approvalBinding: { ...binding, ref: "e999" } })).rejects.toMatchObject({ code: "BROWSER_TARGET_CHANGED" });
+		await expect(run("type", { ref, text: "shoes\n", approvalBinding: { ...binding, document: "older-document" } })).rejects.toMatchObject({ code: "BROWSER_TARGET_CHANGED" });
+		await expect(run("type", { ref, text: "shoes\n", approvalBinding: { ...binding, tabId: "t2" } })).rejects.toMatchObject({ code: "BROWSER_TARGET_CHANGED" });
+		expect(field.value).toBe("");
+		// Chrome mode inserts text without key events, so the line break
+		// itself never presses Enter here.
+		const keys: string[] = [];
+		field.addEventListener("keydown", (event) => keys.push(event.key));
+		await run("type", { ref, text: "shoes\n", approvalBinding: binding });
+		expect(field.value).toContain("shoes");
+		expect(keys).not.toContain("Enter");
+		expect(fake.debuggerCalls.some((call) => call.method === "Input.dispatchKeyEvent")).toBe(false);
+	});
+
+	it("refuses an approved synthetic Enter if focus moves after the binding check", async () => {
+		const { chrome, run, approve } = setup();
+		await approve("s1", false);
+		await run("open", { url: "https://shop.test/" });
+		const field = document.getElementById("q") as HTMLInputElement;
+		const buy = document.getElementById("buy") as HTMLButtonElement;
+		field.focus();
+		const { binding } = (await run("describe", { action: "press", key: "Enter" })) as { binding: Record<string, unknown> };
+		const keys: string[] = [];
+		buy.addEventListener("keydown", (event) => keys.push(event.key));
+		// The page moves focus between the binding check and the key.
+		const original = chrome.tabs.sendMessage;
+		vi.spyOn(chrome.tabs, "sendMessage").mockImplementation(async (tabId, message, options) => {
+			const result = await original(tabId, message, options);
+			if ((message as { op?: string }).op === "ping") buy.focus();
+			return result;
+		});
+		await expect(run("press", { key: "Enter", approvalBinding: binding })).rejects.toMatchObject({ code: "BROWSER_TARGET_CHANGED" });
+		expect(keys).toEqual([]);
+	});
+
+	it("refuses an approved trusted Enter if focus moves before the CDP key lands", async () => {
+		const { fake, run, approve } = setup();
+		await approve("s1", true);
+		await run("open", { url: "https://shop.test/" });
+		const field = document.getElementById("q") as HTMLInputElement;
+		const buy = document.getElementById("buy") as HTMLButtonElement;
+		field.focus();
+		const { binding } = (await run("describe", { action: "press", key: "Enter" })) as { binding: Record<string, unknown> };
+		const fieldKeys: string[] = [];
+		const buyKeys: string[] = [];
+		field.addEventListener("keydown", (event) => fieldKeys.push(event.key));
+		buy.addEventListener("keydown", (event) => buyKeys.push(event.key));
+		// Focus is where it was approved: the trusted Enter goes through.
+		expect(await run("press", { key: "Enter", approvalBinding: binding })).toMatchObject({ pressed: "Enter" });
+		expect(fieldKeys).toEqual(["Enter"]);
+		expect(fake.debuggerCalls.some((call) => call.method === "Input.dispatchKeyEvent")).toBe(true);
+		// The page moves focus after every check, just before the key lands.
+		fake.beforeKey = () => buy.focus();
+		await expect(run("press", { key: "Enter", approvalBinding: binding })).rejects.toMatchObject({ code: "BROWSER_TARGET_CHANGED" });
+		expect(buyKeys).toEqual([]);
+	});
+
+	it("leaves no key guard behind when an approved trusted Enter opens a dialog", async () => {
+		const { fake, run, approve } = setup();
+		await approve("s1", true);
+		await run("open", { url: "https://shop.test/" });
+		const field = document.getElementById("q") as HTMLInputElement;
+		const buy = document.getElementById("buy") as HTMLButtonElement;
+		field.focus();
+		const { binding } = (await run("describe", { action: "press", key: "Enter" })) as { binding: Record<string, unknown> };
+		const tabId = [...fake.tabs.keys()][0]!;
+		// The page answers the Enter with a confirm dialog.
+		const opensDialog = () => fake.events.debuggerEvent.fire({ tabId }, "Page.javascriptDialogOpening", { type: "confirm", message: "Sure?" });
+		field.addEventListener("keydown", opensDialog, { once: true });
+		expect(await run("press", { key: "Enter", approvalBinding: binding })).toMatchObject({ pressed: "Enter", dialogOpened: true });
+		fake.events.debuggerEvent.fire({ tabId }, "Page.javascriptDialogClosed", {});
+		// Later keys on other controls are the page's own and must not be held.
+		const later = new KeyboardEvent("keydown", { key: "a", bubbles: true, cancelable: true });
+		buy.dispatchEvent(later);
+		expect(later.defaultPrevented).toBe(false);
+		expect(await run("get", { property: "title" })).toBeDefined();
+	});
+
+	it("reports a held-back trusted Enter once its dialog closes", async () => {
+		const { fake, run, approve } = setup();
+		await approve("s1", true);
+		await run("open", { url: "https://shop.test/" });
+		const field = document.getElementById("q") as HTMLInputElement;
+		const buy = document.getElementById("buy") as HTMLButtonElement;
+		field.focus();
+		const { binding } = (await run("describe", { action: "press", key: "Enter" })) as { binding: Record<string, unknown> };
+		const tabId = [...fake.tabs.keys()][0]!;
+		// Focus moves and the page opens a dialog before the key lands: the
+		// guard holds the key back, but the page cannot report it yet.
+		fake.beforeKey = () => {
+			buy.focus();
+			fake.events.debuggerEvent.fire({ tabId }, "Page.javascriptDialogOpening", { type: "alert", message: "Hi" });
+		};
+		await run("press", { key: "Enter", approvalBinding: binding }).catch(() => undefined);
+		fake.beforeKey = undefined;
+		fake.events.debuggerEvent.fire({ tabId }, "Page.javascriptDialogClosed", {});
+		// The next command learns that the approved Enter never went through.
+		await expect(run("snapshot", { interactive: true })).rejects.toMatchObject({ code: "BROWSER_TARGET_CHANGED" });
+		// Reported once; later commands run.
+		expect(await run("snapshot", { interactive: true })).toBeDefined();
+	});
+
+	it("answers an approved dialog only on the tab the user approved", async () => {
+		const { fake, run, approve } = setup();
+		await approve("s1", true);
+		await run("open", { url: "https://shop.test/" });
+		const tabId = [...fake.tabs.keys()][0]!;
+		// A dialog follows an action, which starts the debugger listener.
+		await run("press", { key: "Tab" });
+		fake.events.debuggerEvent.fire({ tabId }, "Page.javascriptDialogOpening", { type: "confirm", message: "Are you sure?" });
+		const answered = () => fake.debuggerCalls.filter((call) => call.method === "Page.handleJavaScriptDialog").length;
+		// Approved on another tab: refused, the dialog stays unanswered.
+		await expect(run("dialog", { operation: "accept", dialogTab: "t-other" })).rejects.toMatchObject({ code: "BROWSER_TARGET_CHANGED" });
+		expect(answered()).toBe(0);
+		const { target } = (await run("dialog", { operation: "status" })) as { target: { tabId: string } };
+		expect(await run("dialog", { operation: "accept", dialogTab: target.tabId })).toMatchObject({ handled: "accept" });
+		expect(answered()).toBe(1);
+	});
+
+	it("describes with the URL and title of the document it read", async () => {
+		const { chrome, run, approve } = setup();
+		await approve("s1", false);
+		await run("open", { url: "https://shop.test/" });
+		// The tab navigated between reading the tab and the content reply.
+		const original = chrome.tabs.sendMessage;
+		vi.spyOn(chrome.tabs, "sendMessage").mockImplementation(async (tabId, message, options) => {
+			const result = (await original(tabId, message, options)) as { ok: boolean; value?: Record<string, unknown> };
+			if ((message as { op?: string }).op === "describe" && result?.ok && result.value) {
+				return { ...result, value: { ...result.value, url: "https://other.test/after", title: "After" } };
+			}
+			return result;
+		});
+		(document.getElementById("q") as HTMLInputElement).focus();
+		expect(await run("describe", { action: "press", key: "Enter" })).toMatchObject({
+			target: { pageUrl: "https://other.test/after", pageTitle: "After" },
+		});
+	});
+
+	it("refuses an approved act whose description found no element", async () => {
+		const { run, approve } = setup();
+		await approve("s1", false);
+		await run("open", { url: "https://shop.test/" });
+		let clicks = 0;
+		document.getElementById("buy")!.addEventListener("click", () => clicks++);
+		// Nothing matched when the user was asked, so they approved no element.
+		const { binding } = (await run("describe", { action: "act", instruction: "the checkout button" })) as { binding: Record<string, unknown> };
+		expect(binding.ref).toBeUndefined();
+		await expect(run("act", { instruction: "the buy now button", approvalBinding: binding })).rejects.toMatchObject({ code: "BROWSER_TARGET_CHANGED" });
+		expect(clicks).toBe(0);
+	});
+
+	it("refuses an approved Enter once focus has moved", async () => {
+		const { run, approve } = setup();
+		await approve("s1", false);
+		await run("open", { url: "https://shop.test/" });
+		(document.getElementById("q") as HTMLInputElement).focus();
+		const { binding } = (await run("describe", { action: "press", key: "Enter" })) as { binding: Record<string, unknown> };
+		expect(binding.focus).toEqual(expect.any(String));
+		(document.getElementById("buy") as HTMLButtonElement).focus();
+		await expect(run("press", { key: "Enter", approvalBinding: binding })).rejects.toMatchObject({ code: "BROWSER_TARGET_CHANGED" });
+		(document.getElementById("q") as HTMLInputElement).focus();
+		expect(await run("press", { key: "Enter", approvalBinding: binding })).toMatchObject({ pressed: "Enter" });
+	});
+
 	it("resolves act instructions and reports unmatched ones with the snapshot", async () => {
 		const { run, approve } = setup();
 		await approve("s1", false);
@@ -839,6 +1109,33 @@ describe("Executor", () => {
 			await outcome;
 			expect(fake.windowUpdates).toEqual([]);
 		} finally {
+			vi.useRealTimers();
+		}
+	});
+
+	it("describes for the approval gate without waiting on a capture that never finishes", async () => {
+		vi.useFakeTimers({ shouldAdvanceTime: true });
+		const box = Element.prototype.getBoundingClientRect;
+		Element.prototype.getBoundingClientRect = () => ({ x: 10, y: 10, width: 80, height: 20, left: 10, top: 10, right: 90, bottom: 30, toJSON() {} }) as DOMRect;
+		try {
+			const { fake, run, approve } = setup();
+			await approve();
+			await run("open", { url: "https://shop.test/" });
+			const { refs } = (await run("snapshot", { interactive: true })) as { refs: Record<string, { name: string }> };
+			const buy = Object.entries(refs).find(([, info]) => info.name === "Buy now")![0];
+			fake.hangingScreenshots = 1;
+			let settled = false;
+			const pending = run("describe", { action: "click", ref: buy }).finally(() => {
+				settled = true;
+			});
+			await vi.advanceTimersByTimeAsync(2_500);
+			// Settled by the prompt's own 2 s bound, not by any later screenshot timeout.
+			expect(settled).toBe(true);
+			const described = (await pending) as { target: { name: string }; image?: string };
+			expect(described.target.name).toBe("Buy now");
+			expect(described.image).toBeUndefined();
+		} finally {
+			Element.prototype.getBoundingClientRect = box;
 			vi.useRealTimers();
 		}
 	});

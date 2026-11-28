@@ -61,6 +61,18 @@ describe("spawnHostState", () => {
 		expect(spawnNotices({ ...base, machine: spawnHostState({ ...failedPoll, linkTracker: givenUp }, online, now) })).toEqual([SPAWN_OFFLINE_NOTICE]);
 	});
 
+	// A machine that keeps answering with server errors (a tunnel whose desktop
+	// is off answers 502) never counts as unanswered, so the link tracker never
+	// gives up on it. New task can't use it: it says so, and its machine choice
+	// falls back to another machine or Cloud, as it did before.
+	it.each([500, 502, 503])("is offline for a closed connection whose last poll was answered with %s", (status) => {
+		const serverError = { ...failedPoll, error: "Your machine had a problem answering.", errorStatus: status };
+		expect(spawnHostState(serverError, online, now)).toBe("offline");
+		expect(spawnHostState({ ...serverError, linkTracker: givenUp }, online, now)).toBe("offline");
+		// Asking again after the app came back is not a failure yet.
+		expect(spawnHostState({ ...serverError, connection: "connecting" }, online, now)).toBe("ok");
+	});
+
 	it("is ok for an open connection, or no machine", () => {
 		expect(spawnHostState({ ...failedPoll, connection: "open", linkTracker: givenUp }, online, now)).toBe("ok");
 		expect(spawnHostState(undefined, online, now)).toBe("ok");

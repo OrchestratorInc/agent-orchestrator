@@ -36,6 +36,14 @@ const AUTH_PROTOCOL = {
 	schemes: ["ao-app"],
 };
 const AUTH_PROTOCOL_MIME_TYPE = "x-scheme-handler/ao-app";
+// Linux app menu metadata (#7834). The .desktop Comment= and the deb/rpm package
+// description come from package.json "description", which KDE/GNOME show in the
+// app menu, so keep that string user-facing. The menu category is set here:
+// without it the deb/rpm makers default to "GNOME;GTK;Utility;" and
+// electron-builder (AppImage) to "Utility". The AppImage maker takes one main
+// category; deb/rpm take a list.
+const LINUX_DESKTOP_MAIN_CATEGORY = "Development";
+const LINUX_DESKTOP_CATEGORIES = [LINUX_DESKTOP_MAIN_CATEGORY];
 const PACKAGED_EXTERNAL_DEPENDENCIES = [
 	"/node_modules/better-sqlite3",
 	"/node_modules/bindings",
@@ -428,6 +436,7 @@ const config: ForgeConfig = {
 				productName: "Orchestrator",
 				appImage: { artifactName: "Agent Orchestrator-${version}.${ext}" },
 				icon: "assets/icon.png",
+				category: LINUX_DESKTOP_MAIN_CATEGORY,
 				protocols: [AUTH_PROTOCOL],
 			},
 			["linux"],
@@ -441,6 +450,7 @@ const config: ForgeConfig = {
 					// the Electron app binary". (Both are "agent-orchestrator".)
 					bin: EXECUTABLE_NAME,
 					icon: "assets/icon.png",
+					categories: LINUX_DESKTOP_CATEGORIES,
 					maintainer: appPackage.author,
 					homepage: "https://github.com/aoagents/agent-orchestrator",
 					mimeType: [AUTH_PROTOCOL_MIME_TYPE],
@@ -452,6 +462,7 @@ const config: ForgeConfig = {
 			config: {
 				options: {
 					icon: "assets/icon.png",
+					categories: LINUX_DESKTOP_CATEGORIES,
 					// rpmbuild rejects a spec with an empty License field.
 					license: "MIT",
 					homepage: "https://github.com/aoagents/agent-orchestrator",
