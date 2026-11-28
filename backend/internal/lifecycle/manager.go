@@ -144,6 +144,14 @@ type sessionTerminator interface {
 	Kill(ctx context.Context, id domain.SessionID) (bool, error)
 }
 
+// sessionWorkloadInspector is an optional capability of the completion
+// terminator. It counts the commands a session's agent still runs in its
+// terminal (a test run, a build, a dev server). Merge completion waits while
+// any run, because the teardown would kill them partway through.
+type sessionWorkloadInspector interface {
+	RunningWorkloadCommands(ctx context.Context, id domain.SessionID) (int, error)
+}
+
 type sessionUsageFinalizer interface {
 	FinalizeSession(
 		ctx context.Context,
