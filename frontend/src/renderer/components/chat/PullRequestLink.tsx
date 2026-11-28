@@ -56,8 +56,13 @@ function chatPrState(state: PullRequestPreview["state"]) {
 	return state === "draft" ? { ...base, className: "text-muted-foreground" } : base;
 }
 
-/** The chip's look; the anchor itself is the chat's link. */
-export const PULL_REQUEST_CHIP_CLASS = "inline-flex h-5 items-center gap-1 rounded-sm bg-interactive-active px-1.5 align-[-0.3em] text-control font-medium leading-5 whitespace-nowrap text-foreground tabular-nums no-underline transition-colors hover:bg-[color-mix(in_oklch,var(--color-text-primary)_11%,transparent)] focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-ring";
+/**
+ * The chip's look; the anchor itself is the chat's link. Its label sits on the
+ * line's own baseline, as a file chip's does, so the chip stays centred on the
+ * text at any chat font size; only the icon is centred in the box. The corners
+ * match the file and inline-code chips.
+ */
+export const PULL_REQUEST_CHIP_CLASS = "inline-flex h-5 items-baseline gap-1 rounded bg-interactive-active px-1.5 text-control font-medium leading-5 whitespace-nowrap text-foreground tabular-nums no-underline transition-colors hover:bg-[color-mix(in_oklch,var(--color-text-primary)_11%,transparent)] focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-ring";
 
 /**
  * A pull request link's chip: its state icon and number, or GitHub's mark
@@ -71,7 +76,7 @@ export function PullRequestChipContent({ href, repo, number }: { href: string; r
 	const Icon = state?.icon;
 	return (
 		<>
-			{Icon ? <Icon aria-hidden="true" className={cn("size-3.5 shrink-0", state.className)} /> : <GitHubMark className="size-3.5 shrink-0 text-foreground" />}
+			{Icon ? <Icon aria-hidden="true" className={cn("size-3.5 shrink-0 self-center", state.className)} /> : <GitHubMark className="size-3.5 shrink-0 self-center text-foreground" />}
 			{repo ? <span className="font-normal text-muted-foreground">{repo}</span> : null}
 			<span>#{number}</span>
 			{data ? <span className="sr-only">, {t(`pr.state.${data.state}`)}</span> : null}

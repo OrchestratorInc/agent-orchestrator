@@ -7,6 +7,8 @@ vi.mock("expo/fetch", () => ({ fetch: vi.fn() }));
 import {
 	cancelSessionReview,
 	getSessionReviews,
+	loadPRDetails,
+	postPRComment,
 	requestSessionRereview,
 	resolveSessionReviewComment,
 	restoreSessionReviewer,
@@ -18,7 +20,8 @@ import {
 } from "./api";
 import type { ServerConfig } from "./config";
 import { conversationErrorIsPermanent } from "./chat/conversationErrors";
-import { reviewBatchAction, reviewForPullRequest, reviewPrimaryAction, reviewStatusLabel, reviewVerdictLabel } from "./reviewView";
+import { reviewerStatusLine, reviewNowAction } from "./reviewCommentView";
+import { reviewForPullRequest } from "./reviewView";
 
 const cfg: ServerConfig = { host: "ao.test", httpPort: "3011", muxPort: "3011", secure: false, password: "secret12" };
 const sessionId = "worker/1";
@@ -28,7 +31,7 @@ const pr2 = "https://github.com/ao/repo/pull/42";
 function run(over: Partial<ReviewRun> = {}): ReviewRun {
 	return {
 		id: "run-1", reviewId: "review-1", sessionId, batchId: "batch-1", harness: "codex",
-		triggerSource: "manual", prUrl: pr1, targetSha: "sha-1", status: "complete",
+		triggerSource: "manual", prUrl: pr1, targetSha: "sha-1", status: "completed",
 		verdict: "approved", body: "Looks good", githubReviewId: "101",
 		createdAt: "2026-09-23T00:00:00Z", autoInjectReview: true, ...over,
 	};
@@ -76,6 +79,8 @@ class ReviewDaemon {
 			return json({ reviewerHandleId: this.state.reviewerHandleId });
 		}
 		if (path.endsWith("/reviews/rerequest") || path.endsWith("/reviews/comments/resolve")) return json({ ok: true });
+		if (path.endsWith("/comments")) return json({ ok: true });
+		if (path.endsWith("/details")) return new Response(null, { status: 204 });
 		return json({ code: "NOT_FOUND", message: "not found", requestId: "req-404" }, 404);
 	});
 }
@@ -94,18 +99,21 @@ describe("mobile review lifecycle", () => {
 
 		daemon.state.reviews = [review(pr1, 41), review(pr2, 42)];
 		const pending = await getSessionReviews(cfg, sessionId);
-		expect(reviewBatchAction(pending.reviews[0]!, pending.reviews)).toBe("start");
+		expect(reviewNowAction(pending, pending.reviews[0]!)).toBe("review");
+		expect(reviewerStatusLine(pending, pending.reviews[0]!).label).toBe("Not reviewed yet");
 
 		await triggerSessionReview(cfg, sessionId);
 		const running = await getSessionReviews(cfg, sessionId);
 		expect(running.reviews.map((item) => item.status)).toEqual(["running", "running"]);
 		expect(new Set(running.reviews.map((item) => item.latestRun?.batchId))).toEqual(new Set(["batch-2"]));
-		expect(reviewBatchAction(running.reviews[0]!, running.reviews)).toBe("cancel");
+		// One button for the session: Stop review while any of its PRs is reviewed.
+		expect(reviewNowAction(running, running.reviews[0]!)).toBe("stop");
+		expect(reviewerStatusLine(running, running.reviews[0]!)).toMatchObject({ kind: "working", label: "Reviewing #41, #42" });
 
 		await cancelSessionReview(cfg, sessionId);
 		const cancelled = await getSessionReviews(cfg, sessionId);
 		expect(cancelled.reviews.map((item) => item.latestRun?.status)).toEqual(["cancelled", "cancelled"]);
-		expect(cancelled.reviews.map((item) => reviewVerdictLabel(item.latestRun!))).toEqual(["Review cancelled", "Review cancelled"]);
+		expect(reviewNowAction(cancelled, cancelled.reviews[0]!)).toBe("review");
 	});
 
 	it("distinguishes approval, requested changes, and a new commit needing a fresh pass", async () => {
@@ -114,9 +122,8 @@ describe("mobile review lifecycle", () => {
 		daemon.state.reviews = [approved, requested];
 
 		const completed = await getSessionReviews(cfg, sessionId);
-		expect(reviewStatusLabel(completed.reviews[0]!.status)).toBe("Reviewed");
-		expect(reviewVerdictLabel(completed.reviews[0]!.latestRun!)).toBe("Approved");
-		expect(reviewPrimaryAction(completed.reviews[1]!)).toBe("review_again");
+		expect(reviewerStatusLine(completed, completed.reviews[0]!, Date.parse("2026-09-23T00:05:00Z"))).toEqual({ kind: "quiet", label: "Last reviewed 5m ago", facts: ["sha-1"] });
+		expect(reviewNowAction(completed, completed.reviews[1]!)).toBe("review");
 
 		const previousRun = requested.latestRun;
 		daemon.state.reviews[1] = review(pr2, 42, { targetSha: "sha-42-next", status: "needs_review", previousRun });
@@ -165,7 +172,7 @@ describe("mobile review lifecycle", () => {
 			reviewerSurface: { mode: "chat", reviewId: "review-1" },
 		});
 		expect(recovered.reviews[0]).toMatchObject({ status: "running", latestRun: { id: "run-1", status: "running" } });
-		expect(reviewBatchAction(recovered.reviews[0]!, recovered.reviews)).toBe("cancel");
+		expect(reviewNowAction(recovered, recovered.reviews[0]!)).toBe("stop");
 		expect(daemon.requests.filter((request) => request.path.endsWith("/reviews/trigger"))).toHaveLength(0);
 	});
 
@@ -187,18 +194,25 @@ describe("mobile review lifecycle", () => {
 			["auto-2", "auto", "failed"],
 			["auto-3", "auto", "running"],
 		]);
-		expect(reviewVerdictLabel(observed.reviews[0]!.previousRun!)).toBe("Review failed");
-		expect(reviewStatusLabel(observed.reviews[0]!.status)).toBe("Review in progress");
+		// The retry running is what the line says, not the failures before it.
+		expect(reviewerStatusLine(observed, observed.reviews[0]!)).toMatchObject({ kind: "working", label: "Reviewing #41" });
 		expect(daemon.requests.filter((request) => request.method === "POST")).toHaveLength(0);
 	});
 
 	it("sends exact external-review and comment-resolution payloads", async () => {
 		await requestSessionRereview(cfg, sessionId, pr2, "octocat");
 		await resolveSessionReviewComment(cfg, sessionId, pr2, `${pr2}#discussion_r77`);
+		await postPRComment(cfg, { number: 42, url: pr2 }, "Fixed in abc123.", "PRRT_1");
+		await postPRComment(cfg, { number: 42, url: pr2 }, "> Quoted\n\n@maya thanks");
+		await loadPRDetails(cfg, { number: 42, url: pr2 });
 
-		expect(daemon.requests.slice(-2)).toEqual([
+		expect(daemon.requests.slice(-5)).toEqual([
 			{ path: "/api/v1/sessions/worker%2F1/reviews/rerequest", method: "POST", body: { pullRequestUrl: pr2, reviewerId: "octocat" } },
 			{ path: "/api/v1/sessions/worker%2F1/reviews/comments/resolve", method: "POST", body: { pullRequestUrl: pr2, commentUrl: `${pr2}#discussion_r77` } },
+			// A reply goes into its thread; without one it is a top-level comment.
+			{ path: "/api/v1/prs/42/comments", method: "POST", body: { prUrl: pr2, body: "Fixed in abc123.", threadId: "PRRT_1" } },
+			{ path: "/api/v1/prs/42/comments", method: "POST", body: { prUrl: pr2, body: "> Quoted\n\n@maya thanks" } },
+			{ path: "/api/v1/prs/42/details", method: "POST", body: { prUrl: pr2 } },
 		]);
 	});
 });

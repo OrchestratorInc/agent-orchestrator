@@ -199,7 +199,7 @@ func TestHandoffNoteKeepsArtifactsWithinTheByteCap(t *testing.T) {
 }
 
 func TestClipHandoffNoteEnforcesTheByteCap(t *testing.T) {
-	note := clipNote(strings.Repeat("📄", DefaultMaxChars*2), DefaultMaxChars)
+	note := clipNote(strings.Repeat("📄", DefaultMaxChars*2), DefaultMaxChars, MaxBytes)
 	if len(note) > MaxBytes || utf8.RuneCountInString(note) > DefaultMaxChars {
 		t.Fatalf("clipped note is %d bytes / %d characters, want at most %d / %d",
 			len(note), utf8.RuneCountInString(note), MaxBytes, DefaultMaxChars)
@@ -220,5 +220,35 @@ func TestBuildSaysWhereTheFullHistoryIsOnlyWhenTold(t *testing.T) {
 	pointed := Build(Input{Turns: handoffTestTurns(2), FullHistory: "Read /tmp/history.md for the whole conversation."})
 	if !strings.Contains(pointed, "## Earlier history\nRead /tmp/history.md for the whole conversation.\n") {
 		t.Fatalf("the full history pointer is missing:\n%s", pointed)
+	}
+}
+
+// A moved session's note names no path under the user's home folder and
+// names the WIP commit by the subject the move gave it.
+func TestBuildMovedNoteHidesTheHomeFolder(t *testing.T) {
+	got := Build(Input{
+		SourceHarness: "claude-code", TargetHarness: "claude-code", SessionTitle: "Importer", Branch: "feat/move",
+		MovedFrom: "the user's computer", MovedWIP: true, MovedWIPCommit: "WIP: uncommitted changes from a local session",
+		MovedWIPSHA: "3f2a91c0d4e5f60718293a4b5c6d7e8f90a1b2c3",
+		HomeDir:     "/Users/ann/",
+		Turns: []Turn{{
+			UserRequest:   "read /Users/ann/.config/app.toml and /Users/ann",
+			AgentResponse: "done; /Users/anna/notes.md is someone else's, see ~/x and /tmp/Users/ann/y",
+			At:            time.Unix(1, 0),
+		}},
+	})
+	for _, want := range []string{
+		"/ao-moved/home/.config/app.toml", "and /ao-moved/home", "/Users/anna/notes.md", "/tmp/Users/ann/y",
+		`as commit 3f2a91c0d4e5f60718293a4b5c6d7e8f90a1b2c3, "WIP: uncommitted changes from a local session", on branch feat/move`,
+		"not committed on the user's computer", "Orchestrator made that commit, not you or the user.",
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("note is missing %q:\n%s", want, got)
+		}
+	}
+	// Only the paths that merely share the prefix may still read /Users/ann.
+	rest := strings.NewReplacer("/Users/anna/", "", "/tmp/Users/ann/", "").Replace(got)
+	if strings.Contains(rest, "/Users/ann") {
+		t.Errorf("note still names the home folder:\n%s", got)
 	}
 }

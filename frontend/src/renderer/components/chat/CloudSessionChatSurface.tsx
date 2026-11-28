@@ -28,6 +28,7 @@ import { cloudChatStartingInPlace, cloudStartupProblem, isWorkspaceStartupError,
 import { PLAN_REFUSAL_CODES } from "../../lib/cloud-cp/client";
 import { forgetCloudOpening, useCloudOpening } from "../../lib/cloud-opening";
 import { CloudCpError } from "../../lib/cloud-cp/errors";
+import { withMoveStateText } from "../../lib/cloud-move-state";
 import { reportPlanRefusal } from "../../lib/cloud-telemetry";
 import { useCloudBilling } from "../../hooks/useCloudBilling";
 import { cloudSessionScriptsEnded, groupScriptRuns, parseScriptStepPayload, SCRIPT_STEP_EVENT, type ScriptRun } from "../../lib/cloud-script-runs";
@@ -51,11 +52,12 @@ import { ChatWorkspace } from "./ChatWorkspace";
 import { AdaptiveStreamPacingContext } from "./ChatTimelineItems";
 import { MAX_CLOUD_CP_BINARY_BYTES } from "../../../shared/cloud-binary";
 import { CloudAttachmentSourceProvider } from "./CloudMessageAttachments";
-import { cloudAttachmentReference, cloudMessageAttachments, uploadCloudAttachment, type CloudAttachment } from "../../lib/cloud-attachments";
+import { cloudAttachmentReference, cloudMessageAttachments, splitCloudAttachmentReferences, uploadCloudAttachment, type CloudAttachment } from "../../lib/cloud-attachments";
 import type { ApprovalModeLimits } from "./TurnSettingsBar";
 import { SharedComposerNotice } from "./SharedComposerNotice";
 import { Button } from "../ui/button";
 import { artifactAtPath } from "../../../../../packages/shared/artifacts/deliverables";
+import { sameSentence, usageLimitSentence } from "../../../../../packages/shared/chat/usage-limit";
 
 type EventPayload = {
 	attempt?: unknown;
@@ -1103,6 +1105,7 @@ export function toSnapshot(session: WorkspaceSession, events: CloudCpClientEvent
 			const turn = turns.get(turnID)!;
 			turn.state = "running";
 			turn.startedAt = event.createdAt;
+			delete turn.usageLimit;
 			startedTurns.add(turnID);
 			// A new attempt (a retry, a new worker) waits for its own agent.
 			agentTurns.delete(turnID);
@@ -1133,6 +1136,14 @@ export function toSnapshot(session: WorkspaceSession, events: CloudCpClientEvent
 			turn.completedAt = event.createdAt;
 			const error = eventPayload(event).error;
 			turn.errorMessage = typeof error === "string" ? error : undefined;
+			// The cloud sends a quota refusal as its raw failure and never marks it,
+			// so the turn is marked here: it then reads as a usage limit, with the
+			// provider's sentence instead of the transport dump.
+			const limit = turn.state === "failed" && turn.errorMessage ? usageLimitSentence(turn.errorMessage) : undefined;
+			if (limit) {
+				turn.errorMessage = limit;
+				turn.usageLimit = { autoResume: false };
+			}
 			// No agent started on it: its prompt is loaded with no start after it
 			// (a turn starts after its prompt), or it ended at attempt 0, never
 			// claimed, which holds on a page without its prompt too.
@@ -1458,9 +1469,17 @@ export function toSnapshot(session: WorkspaceSession, events: CloudCpClientEvent
 	}
 	const hasRunningTurn = orderedTurns.some((turn) => turn.state === "running");
 	const activeTurn = orderedTurns.find((turn) => turn.state === "running");
+	// A cloud Claude worker also sends its quota refusal as the turn's reply. A
+	// local turn has no reply there, only the usage-limit outcome carrying the
+	// sentence, so the echo is dropped and the two read the same.
+	const echoesLimit = (item: ConversationItem) => {
+		if (item.kind !== "message" || item.role !== "assistant" || !item.turnId) return false;
+		const turn = turns.get(item.turnId);
+		return Boolean(turn?.usageLimit && turn.errorMessage && sameSentence(item.text, turn.errorMessage));
+	};
 	return {
 		conversationId: `cloud:${session.id}`, sessionId: session.id, harness: session.provider, mode: "chat",
-		controller: { state: hasRunningTurn ? "busy" : "ready" }, turns: orderedTurns, items: shownItems,
+		controller: { state: hasRunningTurn ? "busy" : "ready" }, turns: orderedTurns, items: shownItems.filter((item) => !echoesLimit(item)),
 		latestSequence: events.at(-1)?.sequence ?? 0, oldestSequence: events[0]?.sequence ?? 1,
 		hasMoreBefore: partial, settings: {}, capabilities: activeTurn && steerableTurns.has(activeTurn.id) ? ["steer"] : [],
 		...(usage ? { usage } : {}),
@@ -1997,16 +2016,22 @@ export function CloudSessionChatSurface({
 				...(composerEpoch !== undefined ? { composerEpoch } : {}),
 			};
 			const message = cloudMessageBody(text, display);
-			if (!message.content) return client.sendSessionMessage(orgId, sessionId, request, { idempotencyKey: clientMessageId });
+			// A session whose work is moving takes no messages; the user is told
+			// why in their language (SESSION_MOVING).
+			const post = (body: typeof request) =>
+				client.sendSessionMessage(orgId, sessionId, body, { idempotencyKey: clientMessageId }).catch((error: unknown) => {
+					throw withMoveStateText(error);
+				});
+			if (!message.content) return post(request);
 			try {
-				return await client.sendSessionMessage(orgId, sessionId, { ...request, ...message }, { idempotencyKey: clientMessageId });
+				return await post({ ...request, ...message });
 			} catch (error) {
 				// A control plane from before message displays refuses the fields,
 				// and one that finds the display text missing from the text refuses
 				// it (both 400). The text already carries the quotes and captures,
 				// so it goes as text alone, with the same key.
 				if (!(error instanceof CloudCpError) || error.status !== 400) throw error;
-				return client.sendSessionMessage(orgId, sessionId, request, { idempotencyKey: clientMessageId });
+				return post(request);
 			}
 		},
 		onSuccess: (data, { sessionId }) => {
@@ -2593,7 +2618,7 @@ export function CloudSessionChatSurface({
 			onOpenArtifact={onOpenArtifact}
 			onInterrupt={activeTurn ? () => interrupt.mutate() : undefined}
 			onSteer={activeTurn && snapshot.capabilities?.includes("steer") ? (text, attachments, clientMessageId) => {
-				if (attachments?.length) return Promise.resolve({ status: "not-accepted" as const, reason: "Cloud steering currently accepts text only." });
+				if (attachments?.length || splitCloudAttachmentReferences(text).attachmentIds.length) return Promise.resolve({ status: "not-accepted" as const, reason: "Cloud steering currently accepts text only." });
 				return steer.mutateAsync({ text, clientMessageId });
 			} : undefined}
 			steerPending={steer.isPending}

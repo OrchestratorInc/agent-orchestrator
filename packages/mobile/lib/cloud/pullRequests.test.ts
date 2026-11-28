@@ -63,3 +63,21 @@ it("leaves the model out of the reviewer section's footer where Cloud cannot cho
 	expect(reviewerSectionFooter({ ...reviewer, modelChoice: false })).toBe("Choose who runs the next Orchestrator review.");
 	expect(reviewerSectionFooter(reviewer)).toContain("which model it uses");
 });
+
+// Cloud keeps its older run states; the phone reads them as the daemon's, so a
+// finished Cloud review can be sent to the worker like a machine's.
+it("reads Cloud's complete and delivered runs as completed", () => {
+	const status = (value: CloudReviewRun["status"]) => cloudSessionReviews({ sessionId: "s1", reviews: [], runs: [{ ...run, status: value }] }).runs[0]?.status;
+	expect(status("complete")).toBe("completed");
+	expect(status("delivered")).toBe("completed");
+	expect(status("running")).toBe("running");
+	expect(status("failed")).toBe("failed");
+});
+
+// Read as "completed", a delivered run still says it reached the worker.
+it("keeps a delivered Cloud run marked delivered", () => {
+	const read = (over: Partial<CloudReviewRun>) => cloudSessionReviews({ sessionId: "s1", reviews: [], runs: [{ ...run, ...over }] }).runs[0];
+	expect(read({ status: "delivered" })).toMatchObject({ status: "completed", deliveredAt: run.createdAt });
+	expect(read({ status: "delivered", deliveredAt: "2026-11-08T10:05:00Z" })?.deliveredAt).toBe("2026-11-08T10:05:00Z");
+	expect(read({ status: "complete" })?.deliveredAt).toBeNull();
+});

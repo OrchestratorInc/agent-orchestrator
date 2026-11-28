@@ -26,6 +26,16 @@ type DeviceInfo struct {
 	// Tablet marks an iPad or tablet emulator, which a pick without a named
 	// device passes over for a phone.
 	Tablet bool
+	// BootID changes each time the device boots (a simulator's simctl
+	// lastUsedAt); empty when the provider cannot tell.
+	BootID string
+}
+
+// DeviceBootWatcher is implemented by providers whose stream helpers can
+// outlive a device's reboot. The device service tells it, on each look at a
+// leased device, which boot that device is on.
+type DeviceBootWatcher interface {
+	NoteBooted(device DeviceInfo)
 }
 
 // DevicePlatformAvailability reports whether a provider can run a platform,

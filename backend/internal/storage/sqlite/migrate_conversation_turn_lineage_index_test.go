@@ -6,9 +6,9 @@ import (
 )
 
 const (
-	turnLineageMigrationVersion      = 20261126084920915
+	turnLineageMigrationVersion      = 20261128072745042
 	turnLineageDraftMigrationVersion = 20261101115405806
-	beforeTurnLineageMigration       = 20261124180938781
+	beforeTurnLineageMigration       = 20261128055914527
 )
 
 // Break caught: reading a forked conversation checked each turn's lineage with a

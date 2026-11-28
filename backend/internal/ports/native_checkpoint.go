@@ -22,8 +22,20 @@ type NativeCheckpointBoundary struct {
 	UserMessageID string
 	UserText      string
 	AssistantText string
-	// Interrupted is a boundary turn the user interrupted (Esc). It has no
-	// answer, so its replayed text is not compared: what was cut short, and
-	// any filler the provider adds after the interrupt, varies with timing.
+	// Interrupted means the newest turn, the boundary's or a note after it, has
+	// no settled answer: Esc, or no reply at all. Replayed text is not
+	// compared: what was cut short, and any filler the provider adds after it,
+	// varies with timing.
 	Interrupted bool
+}
+
+// UnansweredNativeTailError holds Boundary once the settle window passes with no reply.
+type UnansweredNativeTailError struct{ Boundary NativeCheckpointBoundary }
+
+func (e *UnansweredNativeTailError) Error() string {
+	return "native tail has no reply: " + e.Unwrap().Error()
+}
+
+func (e *UnansweredNativeTailError) Unwrap() error {
+	return &ChatHistoryUnsettledError{Dimensions: []ChatHistoryMismatchDimension{ChatHistoryMismatchUnsettledBoundary}}
 }

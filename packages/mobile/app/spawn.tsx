@@ -11,10 +11,11 @@ import { agentErrorCopy } from "../lib/agentError";
 import { AppSymbol } from "../lib/AppSymbol";
 import { defaultAgent, rankAgents } from "../lib/agentPicker";
 import { ApiError, getAgentModels, getAgents, getProject, getSettings, type AgentCatalog, type AgentModelCatalog, type AgentModelInfo, type ProjectDetail, type SessionMode } from "../lib/api";
+import type { ServerConfig } from "../lib/config";
 import { userFacingError } from "../lib/connectionError";
 import { chatErrorCopy, isChatPreflightError } from "../lib/chatError";
 import { haptics } from "../lib/haptics";
-import { connectedSpawnHosts, initialSpawnHostId, selectSpawnHost, spawnHostRequestIsCurrent, spawnHostSelectionReady } from "../lib/hostRoute";
+import { autoSpawnHostId, connectedSpawnHosts, selectSpawnHost, spawnHostNeedsRetry, spawnHostRequestIsCurrent } from "../lib/hostRoute";
 import { rememberLastProject, useLastProject } from "../lib/lastProject";
 import { ALL_PROJECTS, STANDALONE_PROJECT, resolveSpawnProject } from "../lib/projectFilter";
 import { claudeAliasModel, defaultEffortModel, defaultRowModelToSend, menuModelName, menuModels, modelOverride, resolveSpawnAgent, resolveSpawnModel, spawnModelSourceChanged } from "../lib/spawnModel";
@@ -22,8 +23,10 @@ import { appendSpawnAttachments, joinAttachmentErrors, MAX_SPAWN_ATTACHMENTS, pa
 import { ComposerAttachmentTray } from "../lib/chat/ComposerAttachmentTray";
 import type { ComposerImageAsset, PasteOverflow } from "../lib/chat/composerImages";
 import { SpawnComposerControls } from "../lib/spawn-composer-controls";
+import { SpawnSuggestionHost, type SpawnSuggestionOverlay } from "../lib/spawn-composer";
 import { errorAfterEdit, spawnHostState, spawnNotices, START_DROPPED_NOTICE } from "../lib/spawnNotices";
-import { createAgentModelCache, nextConnectionEpoch, type ConnectionEpoch } from "../lib/spawnLoads";
+import { createAgentModelCache, nextConnectionEpoch, provenSpawnConfig, type ConnectionEpoch } from "../lib/spawnLoads";
+import { loadSpawnSkills } from "../lib/spawnSkills";
 import { spawnEffortChoices, spawnEffortToSend } from "../lib/modelEffort";
 import { useApp } from "../lib/store";
 import { useCloud } from "../lib/cloud/CloudProvider";
@@ -42,21 +45,36 @@ import { Button } from "../lib/ui";
 import { iconSize, radius, space, type } from "../lib/tokens";
 import { approvalOptions, isApprovalMode, resolveApprovalMode, type ApprovalMode } from "../lib/spawnApproval";
 import { modelSheetRoute } from "../lib/sheetResult";
-import { agentAccountLabel, useAgentAccounts } from "../lib/agentAccounts";
+import { agentAccountOptions, useAgentAccounts } from "../lib/agentAccounts";
+import { AccountUsageAvatar } from "../lib/AccountUsageAvatar";
+import { chatSheetRoute, type AccountPickerState } from "../lib/chat/chatSheetRegistry";
+import { useValueFeed } from "../lib/useValueFeed";
+import { SpawnAccountButton } from "../lib/SpawnAccountButton";
 import { useChatKeyboard } from "../lib/chat/useChatKeyboard";
 import { SYSTEM_GLASS_HEADER } from "../lib/stackScreenOptions";
+import { PillHeaderFrame } from "../lib/headerPill";
 import { useGlassBarInset } from "../lib/useHeaderOverlap";
 import { KEYBOARD_DOCK_GAP } from "../lib/session/keyboardInset";
 
 export { RouteErrorBoundary as ErrorBoundary } from "../lib/RouteErrorBoundary";
 
+// Android: the chat's pill bar (see `pillHeaderOptions` on the route) over its
+// frost; the page holds itself below the bar through `useGlassBarInset`.
 export default function SpawnScreen() {
+	return (
+		<PillHeaderFrame>
+			<SpawnPage />
+		</PillHeaderFrame>
+	);
+}
+
+function SpawnPage() {
 	const t = useTheme();
 	const styles = useThemedStyles(makeStyles);
 	const router = useRouter();
 	const navigation = useNavigation();
 	const { projectId: routeProjectId, hostId: routeHostId } = useLocalSearchParams<{ projectId?: string; hostId?: string }>();
-	const { hostStates, cloud, activeProjectId, currentHostId, configForHost, switchHost, setActiveProject, spawn, configResolved, phoneNetwork } = useApp();
+	const { hostStates, cloud, activeProjectId, currentHostId, configForHost, switchHost, setActiveProject, spawn, configResolved, phoneNetwork, refreshHost } = useApp();
 	const cloudState = useCloud();
 	// Orchestrator Cloud is the picker's last choice, after the connected machines, while signed in.
 	const machineHosts = useMemo(() => connectedSpawnHosts(hostStates), [hostStates]);
@@ -65,7 +83,21 @@ export default function SpawnScreen() {
 	// out, or failed. A Cloud draft's page waits for it before picking.
 	const cloudResolved = Boolean(cloud) || (cloudState.status !== "loading" && cloudState.status !== "connecting");
 	const [selectedHostId, setSelectedHostId] = useState<string | null>(null);
+	// The machine the page last asked for. Until a render shows it, effects later
+	// in the same commit still see the machine being left (see the project seed).
+	const selectionTarget = useRef<string | null>(null);
+	const selectHost = (hostId: string | null) => {
+		selectionTarget.current = hostId;
+		setSelectedHostId(hostId);
+	};
 	const hostSelectionInitialized = useRef(false);
+	// Set once a machine is picked by hand, or the one chosen for the person can
+	// be used: until then the page keeps choosing (see autoSpawnHostId).
+	const hostSettled = useRef(false);
+	// The person has edited the form (any control, typing or dictation). From
+	// then on the chosen machine stays: a move would clear their choices and
+	// send Start to a machine they never picked.
+	const formEdited = useRef(false);
 	// State, not a ref: what was typed while the saved New task draft was being
 	// read is saved as soon as the read is done (see the draft below).
 	const [draftRestored, setDraftRestored] = useState(false);
@@ -74,7 +106,12 @@ export default function SpawnScreen() {
 	const catalogGeneration = useRef(0);
 	const selectedHost = hostStates.find((host) => host.hostId === selectedHostId);
 	const cloudSelected = isCloudHost(selectedHostId);
-	const config = selectedHostId && !cloudSelected ? configForHost(selectedHostId) : null;
+	const liveConfig = selectedHostId && !cloudSelected ? configForHost(selectedHostId) : null;
+	// A machine can be chosen while it reconnects, so the page's own requests
+	// wait for a connection the machine has answered a poll on (provenSpawnConfig).
+	const provenConfig = useRef<ServerConfig | null>(null);
+	const config = provenSpawnConfig(provenConfig.current, liveConfig, selectedHost?.connection ?? "closed");
+	if (config) provenConfig.current = config;
 	// The pickers load once per machine, not once per connection. An app switch
 	// drops the connection and brings it back, and the loads below used to empty
 	// every picker and fetch it all again each time. Each remembers what it last
@@ -116,19 +153,53 @@ export default function SpawnScreen() {
 		return selected ? [{ id: selected.hostId, label: selected.name }, ...connectedHosts] : connectedHosts;
 	}, [connectedHosts, hostStates, selectedHostId]);
 
+	// Back from the background every machine is reconnecting, and a choice made
+	// once then stuck: no machine, another machine or Cloud. The page keeps
+	// choosing until a machine is picked or the chosen one can be used, so the
+	// default (or the route's, or the draft's) shows at once and is ready as
+	// soon as it answers.
 	useEffect(() => {
-		if (hostSelectionInitialized.current) return;
+		if (hostSettled.current) return;
+		// Read here, not where the edit happened, so an edit made before any
+		// machine was chosen never leaves the page on none.
+		if (formEdited.current && selectedHostId !== null) {
+			hostSettled.current = true;
+			return;
+		}
 		// The saved draft is read first: restored, it goes back to its own machine.
 		if (!draftRestored) return;
-		const draftHostId = restoredHostId.current;
-		// Unrouted, a restored draft's machine is the one waited for: picking
-		// another while it is still connecting would move its draft there.
-		const awaitedHostId = routeHostId ?? draftHostId ?? undefined;
-		if (!spawnHostSelectionReady({ routeHostId: awaitedHostId, configResolved, hosts: hostStates, connectedMachineCount: machineHosts.length, cloudResolved })) return;
+		const now = Date.now();
+		const auto = autoSpawnHostId({
+			routeHostId,
+			draftHostId: restoredHostId.current ?? undefined,
+			currentHostId: currentHostId ?? undefined,
+			hosts: hostStates.map((host) => ({ hostId: host.hostId, ready: machineHosts.some((item) => item.id === host.hostId), state: spawnHostState(host, phoneNetwork, now) })),
+			cloud: Boolean(cloud),
+			configResolved,
+			cloudResolved,
+		});
+		if (!auto.settled) return;
 		hostSelectionInitialized.current = true;
-		const preferredHostId = draftHostId && connectedHosts.some((host) => host.id === draftHostId) ? draftHostId : currentHostId ?? undefined;
-		setSelectedHostId(initialSpawnHostId({ routeHostId, currentHostId: preferredHostId, hosts: connectedHosts }));
-	}, [cloudResolved, configResolved, connectedHosts, currentHostId, draftRestored, hostStates, machineHosts, routeHostId]);
+		if (auto.hostId !== selectedHostId) {
+			if (selectedHostId !== null) resetHostChoice();
+			selectHost(auto.hostId);
+		}
+		// Usable now: kept from here on, so a later blip never moves the page.
+		if (isCloudHost(auto.hostId) || machineHosts.some((host) => host.id === auto.hostId)) hostSettled.current = true;
+		// resetHostChoice only clears state; it changes with every render.
+		// eslint-disable-next-line react-hooks/exhaustive-deps
+	}, [cloud, cloudResolved, configResolved, currentHostId, draftRestored, hostStates, machineHosts, phoneNetwork, routeHostId, selectedHostId]);
+
+	// Opened on a machine whose last try failed, ask again now instead of at the
+	// next recovery try: the person is waiting to use it. Once per machine; the
+	// store's own retries take over after that.
+	const retriedHost = useRef<string | null>(null);
+	useEffect(() => {
+		if (!selectedHostId || cloudSelected || retriedHost.current === selectedHostId) return;
+		if (!spawnHostNeedsRetry(selectedHost && { connection: selectedHost.connection, loading: selectedHost.loading, config: liveConfig })) return;
+		retriedHost.current = selectedHostId;
+		void refreshHost(selectedHostId).catch(() => {});
+	}, [cloudSelected, liveConfig, refreshHost, selectedHost, selectedHostId]);
 
 	const [projectId, setProjectId] = useState<string | null>(null);
 	// Only a session the plan pays for is the plan's to stop: Coder the
@@ -206,8 +277,8 @@ export default function SpawnScreen() {
 		const settingUp = restoredAccount && (selectedHostId === null || (selectedHostId === restoredAccount.hostId && !harness));
 		if (restoredAccount && !settingUp) setRestoredAccount(null);
 	}, [restoredAccount, selectedHostId, harness]);
-	const accountOptions = useMemo(() => spawnAccounts.accounts.filter((account) => account.signedIn).map((account) => ({ id: account.id, label: agentAccountLabel(account, spawnAccounts.accounts) })), [spawnAccounts.accounts]);
 	const shownAccountId = accountPick || spawnAccounts.accounts.find((account) => account.default)?.id;
+	const shownAccount = spawnAccounts.accounts.find((account) => account.id === shownAccountId);
 	const [projectDetail, setProjectDetail] = useState<ProjectDetail>();
 	const [projectDetailLoadedFor, setProjectDetailLoadedFor] = useState<string | null>(null);
 	const [modelLoading, setModelLoading] = useState(false);
@@ -280,6 +351,9 @@ export default function SpawnScreen() {
 			// Text typed or files added before the draft was read are the page's
 			// now: the old draft neither replaces nor joins them.
 			if (promptRef.current || attachmentsRef.current.length) return;
+			// What the person chose for the draft's machine: the page keeps that
+			// machine, as after an edit, so a move never clears or overwrites it.
+			formEdited.current = true;
 			setPrompt(draft.prompt);
 			attachmentsRef.current = draft.attachments;
 			setAttachments(draft.attachments);
@@ -335,12 +409,14 @@ export default function SpawnScreen() {
 	// Dictation edits the form too, so it clears a dropped Start's notice.
 	const voice = useVoiceInput({ onTranscript: useCallback((spoken: string) => {
 		setError(errorAfterEdit);
+		formEdited.current = true;
 		setPrompt((old) => old ? `${old} ${spoken}` : spoken);
 	}, []) });
 	const listening = voice.state === "starting" || voice.state === "recording";
 	// The composer docks to the bottom as the chat's does, on the same keyboard
 	// avoidance: its resting inset closes to the keyboard gap as the keys rise.
-	// The page sits below the stack's opaque bar, so the avoider counts it.
+	// On iOS the page sits below the stack's bar, so the avoider counts it; on
+	// Android it runs under the clear pill bar, and the offset is iOS's alone.
 	const chatKeyboard = useChatKeyboard({ underHeader: SYSTEM_GLASS_HEADER });
 	const glassInset = useGlassBarInset();
 	const keyboard = useReanimatedKeyboardAnimation();
@@ -362,6 +438,9 @@ export default function SpawnScreen() {
 	// seeded first would stick.
 	const lastProject = useLastProject(selectedHostId);
 	useEffect(() => {
+		// Moved this commit by the choosing effect: these values are still the
+		// machine being left, and its project would replace the reset's.
+		if (selectionTarget.current !== selectedHostId) return;
 		if (!lastProject.loaded) return;
 		const resolved = resolveSpawnProject(
 			// Standalone holds only where it is offered: a machine always, Cloud when its control plane says so.
@@ -684,6 +763,19 @@ export default function SpawnScreen() {
 		// eslint-disable-next-line react-hooks/exhaustive-deps
 	}, [cloudSelected, connected, epoch, harness, projectId, reloadKey, selectedHostId]);
 
+	// The "/" list's skills, read from the machine when it opens, as a new chat
+	// on the desktop lists them before the agent starts. A Cloud task's agent
+	// runs in its sandbox, away from this machine's skill folders.
+	// The open "/" list, drawn over the page above the composer (see below).
+	const [suggestionOverlay, setSuggestionOverlay] = useState<SpawnSuggestionOverlay | null>(null);
+	const latestConfig = useRef(config);
+	latestConfig.current = config;
+	const skillsProjectId = !projectId || projectId === STANDALONE_PROJECT ? undefined : projectId;
+	const loadSkills = useMemo(() => {
+		if (cloudSelected || !selectedHostId || !harness) return undefined;
+		return () => loadSpawnSkills(latestConfig.current, selectedHostId, harness, skillsProjectId);
+	}, [cloudSelected, harness, selectedHostId, skillsProjectId]);
+
 	// Loads that failed while the desktop was unreachable run again once the
 	// board's poll reconnects. Keyed on the reconnect, not on the errors, so an
 	// endpoint that keeps failing while connected can't loop.
@@ -700,6 +792,7 @@ export default function SpawnScreen() {
 	// change emptying the composer) leave it.
 	const edited = <A extends unknown[]>(change: (...args: A) => void) => (...args: A) => {
 		setError(errorAfterEdit);
+		formEdited.current = true;
 		change(...args);
 	};
 
@@ -708,8 +801,9 @@ export default function SpawnScreen() {
 	// A cleared catalog is not loaded any more: picking the same agent or
 	// project again (A, B, then A) loads it again rather than leaving it empty.
 	const resetModelSource = () => { clearModelOverride(); loadedFor.current.models = undefined; setModelCatalog(undefined); setModelError(undefined); };
-	const chooseHost = (nextHostId: string) => {
-		if (nextHostId === selectedHostId) return;
+	// Clears what was chosen for the machine being left: a project id is never
+	// carried across machines. Shared by a pick by hand and the page's own choice.
+	const resetHostChoice = () => {
 		catalogGeneration.current += 1;
 		setProjectId(null);
 		setHarness("");
@@ -728,8 +822,14 @@ export default function SpawnScreen() {
 		setError(null);
 		setOfferTUI(false);
 		requestRef.current = undefined;
+	};
+	const chooseHost = (nextHostId: string) => {
+		if (nextHostId === selectedHostId) return;
+		// Picked by hand: the page stops choosing for the person.
+		hostSettled.current = true;
+		resetHostChoice();
 		// Cloud is never the default machine: choosing it here leaves that alone.
-		void selectSpawnHost(nextHostId, { select: setSelectedHostId, persistDefault: isCloudHost(nextHostId) ? async () => {} : switchHost })
+		void selectSpawnHost(nextHostId, { select: selectHost, persistDefault: isCloudHost(nextHostId) ? async () => {} : switchHost })
 			.catch(() => setError("Could not make that machine the default. Try again."));
 	};
 	const changeProject = (nextProjectId: string | null) => {
@@ -995,6 +1095,29 @@ export default function SpawnScreen() {
 	}, [busy, navigation]);
 
 	const harnessLabel = agents.find((item) => item.id === harness)?.label;
+
+	// The account's avatar in the bar opens the machine's accounts, each with
+	// its usage. Read through a ref so the bar's button stays the same one.
+	// The sheet follows the accounts while it is up, so the reload it starts
+	// (fresh usage, an account signed out) reaches the rows it shows.
+	const accountPicker = useMemo<AccountPickerState>(() => ({
+		options: agentAccountOptions(spawnAccounts.accounts, (account) => <AccountUsageAvatar account={account} size={28} />),
+		selected: shownAccountId ?? "",
+	}), [shownAccountId, spawnAccounts.accounts]);
+	const subscribeAccountPicker = useValueFeed(accountPicker);
+	const openAccountsRef = useRef<() => void>(() => {});
+	openAccountsRef.current = () => {
+		const machine = hostOptions.find((host) => host.id === selectedHostId)?.label;
+		void spawnAccounts.reload().catch(() => undefined);
+		router.push(chatSheetRoute({
+			kind: "account-picker",
+			subtitle: [harnessLabel, machine].filter(Boolean).join(" on "),
+			...accountPicker,
+			subscribe: subscribeAccountPicker,
+			onSelect: edited(setAccountPick),
+		}));
+	};
+	const openAccounts = useCallback(() => openAccountsRef.current(), []);
 	// Before the list lands the seed can name a project the picker doesn't list
 	// yet. It shows under its id, the name it was created with, so Start never
 	// sends a task somewhere the picker calls "Choose project".
@@ -1008,10 +1131,15 @@ export default function SpawnScreen() {
 			behavior={chatKeyboard.behavior}
 			keyboardVerticalOffset={chatKeyboard.keyboardVerticalOffset}
 		>
+			<SpawnAccountButton account={shownAccount} accounts={spawnAccounts.accounts} onPress={openAccounts} />
+			{/* The room and the dock share one unpadded frame, so the "/" list's
+			    layer below can be measured from the dock's own bottom. */}
+			<View style={styles.stage}>
 			{/* The empty conversation the task will become. A tap there puts the
 			    keyboard away, as it does over a conversation. */}
 			<Pressable accessible={false} style={styles.room} onPress={Keyboard.dismiss} />
 
+			<SpawnSuggestionHost.Provider value={setSuggestionOverlay}>
 			<Animated.View style={[styles.dock, { paddingBottom: restingInset }, dockRise]}>
 				{hasComposerMessage ? <View style={styles.messages}>
 					{notices.map((notice) => <Text key={notice} style={styles.warn}>{notice}</Text>)}
@@ -1036,9 +1164,6 @@ export default function SpawnScreen() {
 						: [...unlistedProject, ...projects.map((item) => ({ id: item.id, label: item.name, icon: "folder" as const })), { id: STANDALONE_PROJECT, label: "Standalone agent", icon: "message-square-plus" as const, sectionBreakBefore: true }]}
 					projectId={projectId}
 					onSelectProject={edited(changeProject)}
-					accounts={accountOptions}
-					accountId={shownAccountId}
-					onSelectAccount={edited(setAccountPick)}
 					agents={agents.filter((item) => item.selectable).map((item) => ({ id: item.id, label: item.label }))}
 					harness={harness}
 					onSelectHarness={edited(selectAgent)}
@@ -1061,6 +1186,7 @@ export default function SpawnScreen() {
 					voice={{ state: voice.state, partial: voice.partial, subscribeLevel: voice.subscribeLevel, onToggleLatched: voice.toggleLatched }}
 					prompt={prompt}
 					onChangePrompt={edited(setPrompt)}
+					onLoadSkills={loadSkills}
 					placeholder={harnessLabel ? `Ask ${harnessLabel}` : "What should this worker do?"}
 					attachments={<ComposerAttachmentTray
 						items={trayItems}
@@ -1076,6 +1202,21 @@ export default function SpawnScreen() {
 					disabled={!selectedHostId || (!config && !cloudSelected) || !projectId || !harness || busy || modelLoading || projectDetailsPending || loading || listening || voice.state === "transcribing" || Boolean(planBlock)}
 				/>
 			</Animated.View>
+			</SpawnSuggestionHost.Provider>
+
+			{/* The "/" list floats over the page, just above the composer, rather
+			    than taking room in the dock: the machine and project rows stay put
+			    under it. It rises with the dock over the keyboard, and only the list
+			    itself takes touches. It stands on the page's own colour, as the
+			    chat's list stands on its dock's fade, so the rows under it don't
+			    show through its glass. */}
+			{suggestionOverlay ? <Animated.View
+				pointerEvents="box-none"
+				style={[styles.suggestionLayer, { paddingBottom: restingInset + suggestionOverlay.composerHeight + space.xs }, dockRise]}
+			>
+				<View style={styles.suggestionBackdrop}>{suggestionOverlay.panel}</View>
+			</Animated.View> : null}
+			</View>
 		</KeyboardAvoidingView>
 	);
 }
@@ -1094,9 +1235,15 @@ const makeStyles = (t: Theme) =>
 	StyleSheet.create({
 		// The page a conversation is drawn on, since this is where one begins.
 		screen: { flex: 1, backgroundColor: t.bgBase },
+		stage: { flex: 1 },
 		room: { flex: 1 },
+		// Spans the stage, the list at its foot: in the dock's side margin, and
+		// over the composer by the composer's height and the dock's gap.
+		suggestionLayer: { position: "absolute", top: 0, right: 0, bottom: 0, left: 0, paddingHorizontal: space.sm, justifyContent: "flex-end" },
+		// The list's own corners (ComposerSuggestionPanel), filled with the page.
+		suggestionBackdrop: { backgroundColor: t.bgBase, borderRadius: radius.xl, borderCurve: "continuous" },
 		// The chat composer's dock: its side margin and the gap to the keyboard.
-		dock: { paddingHorizontal: space.md, paddingTop: space.xs, gap: space.xs },
+		dock: { paddingHorizontal: space.sm, paddingTop: space.xs, gap: space.xs },
 		messages: { gap: space.xs, paddingHorizontal: space.xs },
 		warn: { fontFamily: "DMSans_400Regular", color: t.amber, fontSize: type.footnote.fontSize, lineHeight: type.footnote.lineHeight },
 		error: { fontFamily: "DMSans_400Regular", color: t.red, fontSize: type.footnote.fontSize, lineHeight: type.footnote.lineHeight },

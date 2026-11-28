@@ -81,8 +81,18 @@ export const ArchivedWorkerRow = memo(function ArchivedWorkerRow({
 				</Text>
 				{details || machine ? (
 					<View style={styles.metadata}>
-						{details ? (
-							<Text style={[styles.details, prs?.tone && { color: toneColor(t, prs.tone) }]} numberOfLines={1}>
+						{prs ? (
+							// One Text of nested spans, each lifecycle group in its own
+							// color, so the line still truncates with a single ellipsis.
+							<Text style={styles.details} numberOfLines={1}>
+								{prs.segments.map((segment, index) => (
+									<Text key={index} style={segment.tone ? { color: toneColor(t, segment.tone) } : undefined}>
+										{segment.text}
+									</Text>
+								))}
+							</Text>
+						) : details ? (
+							<Text style={styles.details} numberOfLines={1}>
 								{details}
 							</Text>
 						) : <View style={styles.metadataSpacer} />}

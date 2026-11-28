@@ -1,12 +1,13 @@
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import type { ArchiveSummary, DashboardSession, DashboardStats, OrchestratorLink, ProjectInfo } from "./api";
 
-// The selected machine's last board, saved on the phone. A phone that closes
+// Each paired machine's last board, saved on the phone. A phone that closes
 // the app in the background (cheaper ones often do) used to bring it back to
 // an empty board and a loader until it had reconnected and fetched the list
 // again, which on a slow network takes a while. Now the last board shows at
 // once, under the freshness line's "updated … ago", and the first poll
-// replaces it.
+// replaces it. Every other paired machine's is kept too (see otherHosts): one
+// that is off at launch still shows its last rows, under its dot.
 
 const KEY_PREFIX = "ao.board.v1.";
 /** A board older than this is not shown: after a week it misleads more than it helps. */

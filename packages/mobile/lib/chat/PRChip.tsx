@@ -5,15 +5,16 @@ import { AppSymbol } from "../AppSymbol";
 import { resolveChromeIcon, type ChromeIcon } from "../chromeIcon";
 import type { Theme } from "../theme";
 import { useTheme, useThemedStyles } from "../ThemeProvider";
-import { prReviewPromptHeadline, toneColor } from "../prView";
+import { prReviewPromptHeadline, toneColor, type Tone } from "../prView";
+import { pullRequestMoreWords, type WorkerRowPullRequest } from "../workerRowPullRequest";
 import { fontScaleCap, iconSize, space, type } from "../tokens";
 
 /** Waiting on CI or a reviewer. */
 const pending = { ios: "clock", android: "schedule" } as const;
 
-/** What the composer's PR chip says to a screen reader. */
-export function prChipAccessibilityLabel(pr: DashboardPR, summary?: SessionPRSummary): string {
-	return `Pull request ${pr.number}, ${prReviewPromptHeadline(pr, summary).text}`;
+/** What the composer's PR chip says to a screen reader, the session's other PRs included. */
+export function prChipAccessibilityLabel(pr: DashboardPR, summary?: SessionPRSummary, badge?: WorkerRowPullRequest): string {
+	return `Pull request ${pr.number}, ${prReviewPromptHeadline(pr, summary).text}${badge ? pullRequestMoreWords(badge) : ""}`;
 }
 
 /**
@@ -21,7 +22,12 @@ export function prChipAccessibilityLabel(pr: DashboardPR, summary?: SessionPRSum
  * the one status that decides what to do next, in that status's colour. The
  * chip opens the review, where the rest of the PR's state lives.
  */
-export function PRChipContent({ pr, summary }: { pr: DashboardPR; summary?: SessionPRSummary }) {
+export function PRChipContent({ pr, summary, more }: {
+	pr: DashboardPR;
+	summary?: SessionPRSummary;
+	/** The session's other PRs: a `+N` in their tone (see workerRowPullRequest's moreTone). */
+	more?: { count: number; tone: Tone | null };
+}) {
 	const t = useTheme();
 	const styles = useThemedStyles(makeStyles);
 	const headline = prReviewPromptHeadline(pr, summary);
@@ -31,6 +37,7 @@ export function PRChipContent({ pr, summary }: { pr: DashboardPR; summary?: Sess
 		<Text numberOfLines={1} maxFontSizeMultiplier={fontScaleCap.chrome} style={styles.number}>#{pr.number}</Text>
 		<StatusGlyph icon={statusIcon(headline.text)} color={color} />
 		<Text numberOfLines={1} maxFontSizeMultiplier={fontScaleCap.chrome} style={[styles.status, { color }]}>{headline.text}</Text>
+		{more && more.count > 0 ? <Text numberOfLines={1} maxFontSizeMultiplier={fontScaleCap.chrome} style={[styles.more, { color: more.tone ? toneColor(t, more.tone) : t.textSecondary }]}>{` +${more.count}`}</Text> : null}
 	</>;
 }
 
@@ -52,4 +59,6 @@ function statusIcon(status: string): ChromeIcon {
 const makeStyles = (t: Theme) => StyleSheet.create({
 	number: { fontFamily: "DMSans_600SemiBold", color: t.textPrimary, fontSize: type.footnote.fontSize, fontWeight: "600", marginRight: space.xxs },
 	status: { fontFamily: "DMSans_500Medium", flexShrink: 1, fontSize: type.footnote.fontSize, fontWeight: "500" },
+	// Never shrinks: the count is the one thing the chip adds for several PRs.
+	more: { fontFamily: "DMSans_600SemiBold", flexShrink: 0, fontSize: type.footnote.fontSize, fontWeight: "600" },
 });

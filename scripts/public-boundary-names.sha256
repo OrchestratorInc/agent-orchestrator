@@ -1,0 +1,19 @@
+# SHA-256 of names that belong to the AO Cloud control plane alone (its
+# settings, database roles, deployment labels and repository paths), one per
+# line. check-public-boundary.sh fails a tracked file naming any of them. The
+# names themselves are kept out of this repository; add one by its hash:
+#   printf '%s' NAME | shasum -a 256
+07ffed3ba29a9f05f8b25bd1d9b36cfd9a4cffbe95757b081795646d079a2018
+2ced422c271d60342dc02cb14690a376b986005baed3a89f131edfe5b7788fb6
+38646610f08c5ae8b00e28aea58942fa6f0f38e41be337207b9e0b5a1493250d
+3a85b4c6131303e9a651ad40c8d0eb89d52bde766e96100a5084b3ea1741cb94
+4dfa300a6a858bbe3ea6b4129f30f76192576b851500f18cd18dc5222df9ace4
+5a1240ed6b45e5dbc1fcb38f70418f5dd88849ae2e21a7b57a0c69be9423d5bb
+8cb877cae003b7ef04b485942dba1256a40e0423693b400e24f7f5bd02e9b800
+a726dce2b7e2a6b5bb8567b5dc54782ab04aa1ab181cf97e57bb345562693486
+bb2dc6d7915f6f5bcf045d1e5156bf57e996bcc54366b43424535f8c6ee4409c
+c3790d8ebef71237ccc37f54f8016eab66e7c6d11742a37ad22c2c2582588a1a
+c79f7cfe09febd025c2f794d3ebe7465f1a6a38f17f8fb90454c6c7ceeb2b958
+d84da4caac557f1b9ef5ba2f638d2d8cc151b12a365798d85d3f2acef7279229
+e30cc3005112774424e154c10a4480c79dd8b9748f4a5941c8b391591049b99a
+e6c5e31eb7a39e7e63f5ce4a8e21f9895026ecc5c387365c237db4d6dc8cfb57
