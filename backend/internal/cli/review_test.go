@@ -565,6 +565,41 @@ func TestReviewListShowsUndeliveredReviewDoneMessage(t *testing.T) {
 	}
 }
 
+func TestReviewListShowsFailedRunDetails(t *testing.T) {
+	cfg := setReviewEnv(t)
+	srv, _ := reviewServer(t, http.StatusOK, `{
+		"reviews":[{
+			"prUrl":"https://github.com/example/repo/pull/50",
+			"prNumber":50,
+			"title":"Add CI workflow",
+			"status":"failed",
+			"latestRun":{
+				"id":"run-fail-1",
+				"status":"failed",
+				"failureReason":"turn_ended_without_submit",
+				"body":"Claude Code turn failed: token limit exceeded \u001b[31merror\u001b[0m"
+			}
+		}]
+	}`)
+	writeRunFileFor(t, cfg, srv)
+
+	out, errOut, err := executeCLI(t, aliveDeps(), "review", "ls", "mer-1")
+	if err != nil {
+		t.Fatalf("unexpected error: %v\nstderr=%s", err, errOut)
+	}
+	for _, want := range []string{"#50", "failed", "failed (turn_ended_without_submit)", "Add CI workflow"} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("table missing expected element %q: %q", want, out)
+		}
+	}
+	if want := "#50: review run run-fail-1 failed: Claude Code turn failed: token limit exceeded [31merror[0m"; !strings.Contains(out, want) {
+		t.Fatalf("diagnostic detail missing or incorrect: %q, want %q", out, want)
+	}
+	if strings.Contains(out, "\x1b") {
+		t.Fatalf("raw control characters leaked in output: %q", out)
+	}
+}
+
 func TestReviewListJSONPreservesResponse(t *testing.T) {
 	cfg := setReviewEnv(t)
 	srv, _ := reviewServer(t, http.StatusOK, `{

@@ -566,6 +566,19 @@ func writeReviewList(cmd *cobra.Command, session string, res listReviewsResponse
 	if err := tw.Flush(); err != nil {
 		return err
 	}
+	// Surface underlying failure details for failed review passes that ended without submitting.
+	for _, review := range res.Reviews {
+		run := review.LatestRun
+		if run == nil || run.Status != "failed" || run.Body == "" {
+			continue
+		}
+		detail := domain.SanitizeControlChars(strings.TrimSpace(run.Body))
+		if detail != "" {
+			if _, err := fmt.Fprintf(out, "#%d: review run %s failed: %s\n", review.PRNumber, run.ID, detail); err != nil {
+				return err
+			}
+		}
+	}
 	// A "review done" message the worker has not received yet is easy to
 	// miss; name the run and why its last delivery failed.
 	for _, review := range res.Reviews {

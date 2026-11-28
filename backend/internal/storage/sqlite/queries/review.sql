@@ -340,7 +340,15 @@ WHERE pr.head_sha != ''
   )));
 
 -- name: FailUnsubmittedReviewBatchForChatTurn :exec
-UPDATE review_run SET status = 'failed', failure_reason = 'turn_ended_without_submit', ended_at = sqlc.arg(ended_at)
+UPDATE review_run SET status = 'failed', failure_reason = 'turn_ended_without_submit',
+  body = CASE
+    WHEN review_run.body != '' THEN review_run.body
+    ELSE (
+      SELECT turn.error_message FROM conversation_turns AS turn
+      WHERE turn.id = sqlc.arg(turn_id)
+    )
+  END,
+  ended_at = sqlc.arg(ended_at)
 WHERE status IN ('launching', 'running') AND batch_id != ''
   AND EXISTS (
     SELECT 1 FROM conversation_turns AS turn
