@@ -25,6 +25,8 @@ import { ChatImageDialog } from "./ChatImage";
 import { readAttachmentNames } from "../../lib/chat-attachment-names";
 import { mediaCrossOrigin } from "../../lib/file-media";
 import { useSentAttachmentPreview } from "../../lib/sent-attachment-previews";
+import { isCloudAttachmentReference } from "../../lib/cloud-attachment-reference";
+import type { UploadingImage } from "./ChatComposer";
 import { withoutAnnotationPlaceholder } from "./ChatTimelineItems";
 import { parseBrowserAnnotationMessage, type ParsedBrowserAnnotationItem } from "../../../shared/browser-annotations";
 import { formatFileChatReference } from "../../../shared/file-annotations";
@@ -34,6 +36,8 @@ export type QueuedMessage = {
 	message: ConversationMessage;
 	/** Sent but not yet confirmed by the daemon: shown at once, with no actions until it has a turn id. */
 	pending?: boolean;
+	/** Sent while its files upload: its images, shown until the upload settles. */
+	uploadingImages?: UploadingImage[];
 };
 
 const QUEUE_DOCK_VISIBLE_ROWS = 5;
@@ -61,17 +65,19 @@ function oneLine(text: string, max: number): string {
 export type QueuedAttachmentSource = { sessionId: string; apiBaseUrl: string | null };
 
 /**
- * One attached image as a small thumbnail that opens at full size. A message
- * just sent draws from the composer's copy; otherwise the daemon serves it.
+ * One attached image as a small thumbnail that opens at full size. A picture
+ * still uploading is drawn from its own bytes (`src`), a message just sent from
+ * the composer's copy, and otherwise the daemon serves it.
  */
-function QueuedImageThumbnail({ path, name, source }: { path: string; name: string; source: { sessionId: string; apiBaseUrl: string } }) {
+function QueuedImageThumbnail({ path, src, name, source }: { path?: string; src?: string; name: string; source?: { sessionId: string; apiBaseUrl: string } }) {
 	const { t } = useTranslation();
 	const [open, setOpen] = useState(false);
-	const local = useSentAttachmentPreview(path);
+	const local = useSentAttachmentPreview(src ? undefined : path);
 	const [failedUrl, setFailedUrl] = useState<string>();
-	const url = local.url ?? attachmentURL(source.apiBaseUrl, source.sessionId, path);
+	// The daemon does not hold an AO Cloud attachment, so it is not asked for one.
+	const url = src ?? local.url ?? (path && source && !isCloudAttachmentReference(path) ? attachmentURL(source.apiBaseUrl, source.sessionId, path) : undefined);
 	// A file that cannot be read shows its name, not a broken image.
-	if (url === failedUrl) return <span className="max-w-32 truncate text-xs text-muted-foreground" title={name}>{name}</span>;
+	if (!url || url === failedUrl) return <span className="max-w-32 truncate text-xs text-muted-foreground" title={name}>{name}</span>;
 	return (
 		<>
 			<Pressable
@@ -141,6 +147,7 @@ function sortableRowStyle({
 
 function QueuedMessageRowContent({
 	message,
+	uploadingImages,
 	showPersistentSteer,
 	enterSteers = false,
 	showHoverSteer = false,
@@ -162,6 +169,7 @@ function QueuedMessageRowContent({
 	attachmentSource,
 }: {
 	message: ConversationMessage;
+	uploadingImages?: UploadingImage[];
 	attachmentSource?: QueuedAttachmentSource;
 	showPersistentSteer?: boolean;
 	/** Cmd/Ctrl+Enter in the empty composer steers this row; the button shows the key. */
@@ -216,9 +224,12 @@ function QueuedMessageRowContent({
 		.map((path) => originalNames[path] ?? attachmentName(path));
 	const typed = labelInlineImages(body, images, imageLabel);
 	// Without a way to read the files (a remote host offline), images read as their names.
-	const imageSource = images.length > 0 && attachmentSource && attachmentSource.apiBaseUrl !== null
+	const readSource = attachmentSource && attachmentSource.apiBaseUrl !== null
 		? { sessionId: attachmentSource.sessionId, apiBaseUrl: attachmentSource.apiBaseUrl }
 		: undefined;
+	const imageSource = images.length > 0 ? readSource : undefined;
+	// A message still uploading shows the pictures it waits on; its text names none yet.
+	const rowImages: UploadingImage[] = uploadingImages ?? (imageSource ? images.map((path) => ({ path })) : []);
 	const attachmentNames = [...images.map(imageName), ...fileNames];
 	const namedInRow = (imageSource ? fileNames : attachmentNames).join(", ");
 	const showReferences = !typed.trim() && references.length > 0;
@@ -254,13 +265,19 @@ function QueuedMessageRowContent({
 				className="size-3 shrink-0 text-muted-foreground/60"
 			/>
 			<div className="flex min-w-0 flex-1 items-center gap-1.5 overflow-hidden">
-				{imageSource ? (
+				{rowImages.length > 0 ? (
 					<span className="flex shrink-0 items-center gap-1" data-testid="queued-message-images">
-						{images.slice(0, ROW_IMAGE_LIMIT).map((path) => (
-							<QueuedImageThumbnail key={path} path={path} name={imageName(path)} source={imageSource} />
+						{rowImages.slice(0, ROW_IMAGE_LIMIT).map((image, index) => (
+							<QueuedImageThumbnail
+								key={image.path ?? image.src}
+								path={image.path}
+								src={image.src}
+								name={(image.path ? originalNames[image.path] : undefined) ?? imageLabel(index + 1)}
+								source={readSource}
+							/>
 						))}
-						{images.length > ROW_IMAGE_LIMIT ? (
-							<span className="text-xs tabular-nums text-muted-foreground" title={attachmentNames.join(", ")}>+{images.length - ROW_IMAGE_LIMIT}</span>
+						{rowImages.length > ROW_IMAGE_LIMIT ? (
+							<span className="text-xs tabular-nums text-muted-foreground" title={attachmentNames.join(", ")}>+{rowImages.length - ROW_IMAGE_LIMIT}</span>
 						) : null}
 					</span>
 				) : null}
@@ -285,6 +302,12 @@ function QueuedMessageRowContent({
 					<span className="shrink-0 text-xs leading-relaxed text-muted-foreground">{referenceCount}</span>
 				) : null}
 			</div>
+			{/* In the row, not under it: the dock is sized to whole rows. The actions keep their place. */}
+			{uploadingImages ? (
+				<span role="status" className="shrink-0 text-xs text-muted-foreground motion-safe:animate-pulse">
+					Uploading…
+				</span>
+			) : null}
 			<div className="queue-dock-actions flex shrink-0 items-center gap-0.5 whitespace-nowrap">
 				{showHoverSteerButton ? (
 					<Button
@@ -385,6 +408,7 @@ function QueuedMessageRowContent({
 function SortableQueuedMessageRow({
 	turnId,
 	message,
+	uploadingImages,
 	hiddenFromView,
 	showPersistentSteer,
 	enterSteers,
@@ -409,6 +433,7 @@ function SortableQueuedMessageRow({
 }: {
 	turnId: string;
 	message: ConversationMessage;
+	uploadingImages?: UploadingImage[];
 	attachmentSource?: QueuedAttachmentSource;
 	hiddenFromView?: boolean;
 	showPersistentSteer?: boolean;
@@ -473,6 +498,7 @@ function SortableQueuedMessageRow({
 				dragHandleRef={setActivatorNodeRef}
 				enterSteers={enterSteers}
 				message={message}
+				uploadingImages={uploadingImages}
 				onBeginQueuedEdit={onBeginQueuedEdit}
 				canEditMessage={canEditMessage}
 				onCancelQueuedTurn={onCancelQueuedTurn}
@@ -825,7 +851,7 @@ export const QueuedMessageDock = memo(function QueuedMessageDock({
 									isOpen && count >= QUEUE_DOCK_VISIBLE_ROWS && "queue-dock-scroll-active",
 								)}
 							>
-								{displayMessages.map(({ turnId, message, pending }, index) => {
+								{displayMessages.map(({ turnId, message, pending, uploadingImages }, index) => {
 									const steering = steeringTurnIds?.has(turnId) ?? false;
 									const deleting = cancelPendingTurnId === turnId;
 									// A steering row keeps its Delete: deleting it withdraws the steer.
@@ -840,6 +866,7 @@ export const QueuedMessageDock = memo(function QueuedMessageDock({
 											key={message.clientMessageId ?? turnId}
 											turnId={turnId}
 											message={message}
+											uploadingImages={uploadingImages}
 											// Folded, the dock keeps the next message to send in view.
 											hiddenFromView={!isOpen && index !== 0}
 											// Every row's Steer, and the next row's key hint, stay put while a

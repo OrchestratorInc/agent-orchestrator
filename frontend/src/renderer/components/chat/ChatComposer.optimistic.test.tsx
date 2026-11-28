@@ -105,6 +105,31 @@ describe("optimistic message delivery", () => {
 		expect(screen.queryByRole("alert")).not.toBeInTheDocument();
 	});
 
+	it("takes no files during a send, and takes them again once it is answered", async () => {
+		const pending = pendingSend();
+		const stage = vi.fn().mockResolvedValue([".ao/attachments/after.png"]);
+		render(
+			<TooltipProvider>
+				<ChatComposer draftSessionId="optimistic-attach-during-send" onSend={pending.onSend} onStageAttachments={stage} />
+			</TooltipProvider>,
+		);
+		const field = await startSend(pending.onSend, "first message");
+		const paste = (name: string) => fireEvent.paste(field, {
+			clipboardData: { files: [new File([new Uint8Array([137, 80, 78, 71])], name, { type: "image/png" })], items: [], getData: () => "", setData: () => undefined },
+		});
+		expect(screen.getByRole("button", { name: "Attach a file" })).toBeDisabled();
+		paste("during.png");
+		// A file that was taken shows its tile at once, so it is never picked up and then lost.
+		expect(screen.queryByLabelText("Attaching during.png")).not.toBeInTheDocument();
+
+		await act(async () => pending.resolve());
+
+		await waitFor(() => expect(screen.getByRole("button", { name: "Attach a file" })).toBeEnabled());
+		paste("after.png");
+		expect(screen.getByLabelText("Attaching after.png")).toBeInTheDocument();
+		expect(await screen.findByRole("button", { name: "Remove after.png" })).toBeInTheDocument();
+	});
+
 	function pasteImages(field: HTMLElement, ...names: string[]) {
 		fireEvent.paste(field, {
 			clipboardData: {

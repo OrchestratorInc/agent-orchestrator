@@ -41,6 +41,7 @@ func clientPayloadHash(msg ports.ChatUserMessage) (string, error) {
 // Prompt formatting is server-owned, so changing it must not change the identity
 // of the client request. Copy only when normalizing, preserving durable content.
 func clientPayloadContent(content []ports.ChatContent) []ports.ChatContent {
+	content = withoutImageURIs(content)
 	for i, block := range content {
 		if block.Type == "file_reference" && block.Text == FileReferenceQuotedPath {
 			content = append([]ports.ChatContent(nil), content...)
@@ -120,4 +121,24 @@ func (s *Service) sentMessageRetry(ctx context.Context, id domain.SessionID, msg
 	}
 	_, found, err := sentMessageReceipt(ctx, s.store, conversation.ID, msg, false)
 	return found, err
+}
+
+// withoutImageURIs is content as a receipt compares it. The daemon records the
+// path it read a staged image from as the image's URI, so the write accepting
+// the message commits the draft's lease on the file. A request saved before it
+// did, or sent again with the bytes inline, is still the same request. Copies
+// only when it changes something.
+func withoutImageURIs(content []ports.ChatContent) []ports.ChatContent {
+	for i, block := range content {
+		if block.Type == "image" && block.URI != "" {
+			content = append([]ports.ChatContent(nil), content...)
+			for j := i; j < len(content); j++ {
+				if content[j].Type == "image" {
+					content[j].URI = ""
+				}
+			}
+			break
+		}
+	}
+	return content
 }

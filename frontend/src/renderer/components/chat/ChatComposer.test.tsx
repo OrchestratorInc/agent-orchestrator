@@ -8,7 +8,7 @@ import userEvent from "@testing-library/user-event";
 import { Activity, Profiler } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { useUiStore } from "../../stores/ui-store";
-import { ChatComposer } from "./ChatComposer";
+import { ChatComposer, type UploadingSend } from "./ChatComposer";
 import { captureFileReference } from "../../../shared/chat-file-reference";
 import { sendReferenceToChat } from "../../lib/chat-context-bus";
 import { attachmentURL } from "./messageAttachments";
@@ -1114,6 +1114,9 @@ describe("send keys", () => {
 		["CHAT_SIDE_UNSUPPORTED", "side chats support Codex, Claude Code, and OpenCode"],
 		["CHAT_SIDE_UNAVAILABLE", "side chats are unavailable"],
 		["CHAT_OPEN_ELSEWHERE", "open in another process", "This chat is open in another Claude Code session, such as a terminal or an IDE. Quit it there, then send your message again."],
+		// A staged image the daemon cannot read by path fails the same way on every retry.
+		["ATTACHMENT_NOT_FOUND", "staged attachment not found"],
+		["ATTACHMENT_PATH_UNSUPPORTED", "this conversation does not accept staged image paths"],
 	])("unlocks a definitively rejected first send (%s) and gives the edited send a new identity", async (code, message, shown = message) => {
 		const sessionId = `composer-first-send-refused-${code}`;
 		const onSend = vi.fn()
@@ -3025,6 +3028,142 @@ describe("attachments", () => {
 		expect(onSend.mock.calls[0]?.[1]).toEqual([
 			{ mimeType: "image/png", data: expect.any(String) },
 		]);
+	});
+
+	it("names a staged image by its path, and stages its raw bytes, where the daemon reads staged images", async () => {
+		const stage = vi.fn().mockResolvedValue([".ao/attachments/attachment-native.png"]);
+		const { onSend, field } = renderComposer({ onStageAttachments: stage, nativeImages: true, stagedImageReferences: true });
+
+		fireEvent.paste(field, { clipboardData: clipboardData([png()]) });
+		await waitFor(() => expect(screen.getAllByRole("listitem")).toHaveLength(1));
+		// The file goes as itself, streamed to the daemon unencoded.
+		expect(stage.mock.calls[0]?.[0]).toEqual([{ mimeType: "image/png", data: "", file: expect.any(File) }]);
+		await typeInComposer(field, "inspect this");
+		await userEvent.keyboard("{Enter}");
+
+		await waitFor(() => expect(onSend).toHaveBeenCalledTimes(1));
+		// The daemon already holds the bytes, so the message only names them.
+		expect(onSend.mock.calls[0]?.[1]).toEqual([
+			{ mimeType: "image/png", data: "", path: ".ao/attachments/attachment-native.png" },
+		]);
+	});
+
+	it("shows a pasted image's own picture while it uploads", async () => {
+		const original = { createObjectURL: URL.createObjectURL, revokeObjectURL: URL.revokeObjectURL };
+		URL.createObjectURL = vi.fn((blob: Blob) => `blob:${(blob as File).name}`);
+		URL.revokeObjectURL = vi.fn();
+		try {
+			const { field } = renderComposer({ draftSessionId: "composer-upload-picture", onStageAttachments: vi.fn(() => new Promise<string[]>(() => undefined)) });
+			fireEvent.paste(field, { clipboardData: clipboardData([png("shot.png")]) });
+			const tile = await screen.findByRole("status", { name: "Attaching shot.png" });
+			expect(tile.querySelector("img")).toHaveAttribute("src", "blob:shot.png");
+		} finally {
+			URL.createObjectURL = original.createObjectURL;
+			URL.revokeObjectURL = original.revokeObjectURL;
+		}
+	});
+
+	it("takes a second image pasted while the first is still uploading", async () => {
+		const first = deferred<string[]>();
+		const second = deferred<string[]>();
+		const stage = vi.fn().mockReturnValueOnce(first.promise).mockReturnValueOnce(second.promise);
+		const { field } = renderComposer({ draftSessionId: "composer-paste-during-upload", onStageAttachments: stage });
+
+		fireEvent.paste(field, { clipboardData: clipboardData([png("first.png")]) });
+		await waitFor(() => expect(stage).toHaveBeenCalledOnce());
+		fireEvent.paste(field, { clipboardData: clipboardData([png("second.png")]) });
+		expect(await screen.findByRole("status", { name: "Attaching second.png" })).toBeInTheDocument();
+		first.resolve([".ao/attachments/attachment-first.png"]);
+		await waitFor(() => expect(stage).toHaveBeenCalledTimes(2));
+		second.resolve([".ao/attachments/attachment-second.png"]);
+		expect(await screen.findByRole("button", { name: "Remove first.png" })).toBeInTheDocument();
+		expect(await screen.findByRole("button", { name: "Remove second.png" })).toBeInTheDocument();
+	});
+
+	it("waits for a replaced surface's upload before taking a new file for the same draft", async () => {
+		const stage = vi.fn(() => new Promise<string[]>(() => undefined));
+		const sessionId = "composer-foreign-upload";
+		const first = render(<ChatComposer draftSessionId={sessionId} onSend={vi.fn()} onStageAttachments={stage} />);
+		fireEvent.paste(screen.getByLabelText("Message the agent"), { clipboardData: clipboardData([png("large.png")]) });
+		await waitFor(() => expect(stage).toHaveBeenCalledOnce());
+		first.unmount();
+		render(<ChatComposer draftSessionId={sessionId} onSend={vi.fn()} onStageAttachments={stage} />);
+		// The old surface's queue would commit after this one's and overwrite the new file.
+		fireEvent.paste(screen.getByLabelText("Message the agent"), { clipboardData: clipboardData([png("small.png")]) });
+		expect(stage).toHaveBeenCalledOnce();
+		expect(screen.queryByRole("status", { name: "Attaching small.png" })).not.toBeInTheDocument();
+	});
+
+	it("shows a restored staged image in the uploading row beside the one pasted after it", async () => {
+		const original = { createObjectURL: URL.createObjectURL, revokeObjectURL: URL.revokeObjectURL };
+		URL.createObjectURL = vi.fn((blob: Blob) => `blob:${(blob as File).name}`);
+		URL.revokeObjectURL = vi.fn();
+		try {
+			const sessionId = "composer-restored-uploading";
+			const restored = ".ao/attachments/attachment-restored.png";
+			writeChatAttachments(sessionId, [{ id: "restored", path: restored, name: "restored.png", mimeType: "image/png", bytes: 4 }]);
+			const stage = vi.fn(() => new Promise<string[]>(() => undefined));
+			const onUploadingSendChange = vi.fn();
+			const { field } = renderComposer({ draftSessionId: sessionId, onStageAttachments: stage, onUploadingSendChange });
+			await typeInComposer(field, "compare");
+			fireEvent.paste(field, { clipboardData: clipboardData([png("second.png")]) });
+			await waitFor(() => expect(stage).toHaveBeenCalledOnce());
+			fireEvent.keyDown(field, { key: "Enter" });
+			await waitFor(() => expect(onUploadingSendChange).toHaveBeenLastCalledWith(expect.objectContaining({
+				images: [{ path: restored }, { src: "blob:second.png" }],
+			})));
+		} finally {
+			URL.createObjectURL = original.createObjectURL;
+			URL.revokeObjectURL = original.revokeObjectURL;
+		}
+	});
+
+	it("takes an image cancelled while the message waits out of its queued row", async () => {
+		const original = { createObjectURL: URL.createObjectURL, revokeObjectURL: URL.revokeObjectURL };
+		URL.createObjectURL = vi.fn((blob: Blob) => `blob:${(blob as File).name}`);
+		URL.revokeObjectURL = vi.fn();
+		try {
+			const stage = vi.fn(() => new Promise<string[]>(() => undefined));
+			const onUploadingSendChange = vi.fn();
+			const { field } = renderComposer({ draftSessionId: "composer-cancel-while-queued", onStageAttachments: stage, onUploadingSendChange });
+			await typeInComposer(field, "compare these");
+			fireEvent.paste(field, { clipboardData: clipboardData([png("first.png")]) });
+			fireEvent.paste(field, { clipboardData: clipboardData([png("second.png")]) });
+			await screen.findByRole("button", { name: "Cancel attaching second.png" });
+			fireEvent.keyDown(field, { key: "Enter" });
+			await waitFor(() => expect(onUploadingSendChange).toHaveBeenLastCalledWith(expect.objectContaining({ images: [{ src: "blob:first.png" }, { src: "blob:second.png" }] })));
+
+			await userEvent.click(screen.getByRole("button", { name: "Cancel attaching first.png" }));
+			await waitFor(() => expect(onUploadingSendChange).toHaveBeenLastCalledWith(expect.objectContaining({ images: [{ src: "blob:second.png" }] })));
+		} finally {
+			URL.createObjectURL = original.createObjectURL;
+			URL.revokeObjectURL = original.revokeObjectURL;
+		}
+	});
+
+	it("lets a message go while its image uploads: it waits in the queue and the box reads as sent", async () => {
+		const staging = deferred<string[]>();
+		const stage = vi.fn(() => staging.promise);
+		const onUploadingSendChange = vi.fn();
+		const { onSend, field } = renderComposer({ draftSessionId: "composer-send-during-upload", onStageAttachments: stage, onUploadingSendChange });
+		await typeInComposer(field, "then i got this");
+		fireEvent.paste(field, { clipboardData: clipboardData([png()]) });
+		await waitFor(() => expect(stage).toHaveBeenCalledOnce());
+		fireEvent.keyDown(field, { key: "Enter" });
+
+		await waitFor(() => expect(onUploadingSendChange).toHaveBeenCalledWith(expect.objectContaining({ text: "then i got this" })));
+		const uploading = onUploadingSendChange.mock.calls[0]![0] as UploadingSend;
+		expect(field).toHaveClass("invisible");
+		expect(onSend).not.toHaveBeenCalled();
+		// A stalled upload can still be cancelled from its tile.
+		expect(screen.getByRole("button", { name: "Cancel attaching shot.png" })).toBeEnabled();
+
+		staging.resolve([".ao/attachments/attachment-shot.png"]);
+		await waitFor(() => expect(onSend).toHaveBeenCalledOnce());
+		// The row the queue showed is the one this send replaces.
+		expect(onSend.mock.calls[0]?.[2]).toBe(uploading.clientMessageId);
+		expect(onSend.mock.calls[0]?.[0]).toContain(".ao/attachments/attachment-shot.png");
+		await waitFor(() => expect(onUploadingSendChange).toHaveBeenLastCalledWith(null));
 	});
 
 	it("sends an image above the native limit by workspace path", async () => {

@@ -130,7 +130,7 @@ import {
 	type ChatDraftRetainedAttachment,
 	type DraftClearResult,
 } from "../../lib/chat-drafts";
-import { attachmentPreviewKind, attachmentURL, IMAGE_ATTACHMENT_PATH, isInlineImagePath, proseBesideImages, removeInlineImagePath, withAttachmentReferences } from "./messageAttachments";
+import { attachmentPreviewKind, attachmentURL, IMAGE_ATTACHMENT_PATH, isInlineImagePath, proseBesideImages, removeInlineImagePath, splitInlineImagePaths, withAttachmentReferences } from "./messageAttachments";
 import { ComposerAttachmentTile, ComposerPendingTile } from "./ComposerAttachmentTile";
 import { AttachmentStrip } from "./StagedAttachmentItems";
 import { rememberAttachmentName } from "../../lib/chat-attachment-names";
@@ -250,6 +250,26 @@ function restoredDeliveryNotice(delivery: ChatComposerDelivery | undefined, park
 }
 /** A retained server-owned attachment; image bytes stay in durable storage. */
 export type StoredComposerAttachment = ChatDraftRetainedAttachment & { dataUrl?: string };
+/**
+ * A message sent while its files were still uploading. It leaves the composer at
+ * once and shows in the queue under the id its send will use, so the real row
+ * takes its place without a jump.
+ */
+export type UploadingSend = { clientMessageId: string; text: string; images: UploadingImage[] };
+/** A picture in hand, or a staged image restored with a draft, which the queue reads by its path. */
+export type UploadingImage = { src: string; path?: undefined } | { path: string; src?: undefined };
+
+/** The pictures a message waiting on its uploads shows: its attached images, then those still uploading. */
+function uploadingImages(attachments: FileAttachment[], pending: { previewUrl?: string }[]): UploadingImage[] {
+	return [
+		...attachments.flatMap((attachment): UploadingImage[] => {
+			if (!isSupportedImageAttachment(attachment.mimeType)) return [];
+			if (attachment.dataUrl) return [{ src: attachment.dataUrl }];
+			return attachment.stagedPath ? [{ path: attachment.stagedPath }] : [];
+		}),
+		...pending.flatMap((file): UploadingImage[] => (file.previewUrl ? [{ src: file.previewUrl }] : [])),
+	];
+}
 export type ChatComposerHandle = {
 	focus(): void;
 	isEmpty(): boolean;
@@ -344,6 +364,8 @@ export const ChatComposer = memo(function ChatComposer({
 	assetBaseUrl,
 	remoteHost = false,
 	assetSessionId,
+	stagedImageReferences = false,
+	onUploadingSendChange,
 	acceptedClientMessageIds,
 	emptyPlaceholder,
 	promptSuggestion,
@@ -534,6 +556,13 @@ export const ChatComposer = memo(function ChatComposer({
 	remoteHost?: boolean;
 	/** Daemon wire session ID when draft storage uses a host-scoped identity. */
 	assetSessionId?: string;
+	/**
+	 * The daemon names a native image by its staged path and takes files as raw
+	 * uploads, so each file crosses the network once, unencoded.
+	 */
+	stagedImageReferences?: boolean;
+	/** A message sent while its files upload, shown in the queue until its send takes over. */
+	onUploadingSendChange?: (send: UploadingSend | null) => void;
 	/** Client ids already present in daemon-authoritative conversation history. */
 	acceptedClientMessageIds?: ReadonlySet<string>;
 	/**
@@ -639,6 +668,17 @@ export const ChatComposer = memo(function ChatComposer({
 	const addMenuTrigger = useRef<HTMLButtonElement>(null);
 	const [addMenuBox, setAddMenuBox] = useState<{ lift: number; shift: number; width: number }>();
 	const submitInFlight = useRef<Promise<void> | null>(null);
+	// A message sent while its files upload: it waits in the queue, and the draft
+	// is hidden until the upload settles (then the send clears it as usual).
+	const [awaitingUploads, setAwaitingUploads] = useState(false);
+	// Read when the send settles, which can be after a re-render replaced it.
+	const onUploadingSendChangeRef = useRef(onUploadingSendChange);
+	onUploadingSendChangeRef.current = onUploadingSendChange;
+	const uploadingSend = useRef<UploadingSend | null>(null);
+	const publishUploadingSend = useCallback((send: UploadingSend | null) => {
+		uploadingSend.current = send;
+		onUploadingSendChangeRef.current?.(send);
+	}, []);
 	/**
 	 * Messages sent in quick succession go out one after another, in order.
 	 *
@@ -778,8 +818,13 @@ export const ChatComposer = memo(function ChatComposer({
 		async (attachments: FileAttachment[], signal: AbortSignal): Promise<FileAttachment[]> => {
 			if (!onStageAttachments) throw new AoError("ATTACHMENT_STAGING_UNAVAILABLE", "Attachment staging is unavailable");
 			// A file too large to inline goes as its handle on disk; the stager
-			// streams it to the daemon (toWireAttachments).
-			const paths = await onStageAttachments(attachments.flatMap(attachmentPayload), signal);
+			// streams it to the daemon (toWireAttachments). Where the daemon names
+			// staged images by path, every file goes that way: raw bytes are a
+			// quarter smaller than base64, which a slow link to a remote host feels.
+			const payloads = attachments.flatMap((attachment) => stagedImageReferences && attachment.file
+				? [{ mimeType: attachment.mimeType, data: "", file: attachment.file }]
+				: attachmentPayload(attachment));
+			const paths = await onStageAttachments(payloads, signal);
 			if (paths.length !== attachments.length) {
 				throw new AoError("ATTACHMENT_STAGING_INCOMPLETE", "Attachment staging returned an incomplete result");
 			}
@@ -790,7 +835,7 @@ export const ChatComposer = memo(function ChatComposer({
 				return { ...attachment, stagedPath };
 			});
 		},
-		[onStageAttachments],
+		[onStageAttachments, stagedImageReferences],
 	);
 	useEffect(() => {
 		if (restoredSessionId.current === draftScopeKey) return;
@@ -842,7 +887,18 @@ export const ChatComposer = memo(function ChatComposer({
 		maxAttachmentBytes: cloudAttachments?.maxBytes,
 		prepareEach: Boolean(cloudAttachments),
 	});
+	// Files still uploading keep their tiles, and so a way to cancel one, even
+	// once the message they belong to waits in the queue.
 	const { pendingAttachments } = fileAttachments;
+	// The queued row shows what will be sent: a file cancelled meanwhile leaves it.
+	useEffect(() => {
+		const send = uploadingSend.current;
+		if (!awaitingUploads || !send) return;
+		const images = uploadingImages(fileAttachments.attachments, pendingAttachments);
+		const same = (a: UploadingImage, b: UploadingImage | undefined) => a.src === b?.src && a.path === b?.path;
+		if (images.length === send.images.length && images.every((image, index) => same(image, send.images[index]))) return;
+		publishUploadingSend({ ...send, images });
+	}, [awaitingUploads, fileAttachments.attachments, pendingAttachments, publishUploadingSend]);
 	const fileAttachmentsRef = useRef(fileAttachments);
 	fileAttachmentsRef.current = fileAttachments;
 	const draftScopeRef = useRef(draftScope);
@@ -995,7 +1051,7 @@ export const ChatComposer = memo(function ChatComposer({
 	}, [sendInFlight]);
 	const sendConcealed = sendInFlight && !concealExpired;
 	const nextDraftHasChanged = Boolean(durableDelivery?.draft && composerRevision.current > durableDelivery.revision + 1);
-	const stripConcealed = steerInFlight && sendConcealed;
+	const stripConcealed = (steerInFlight && sendConcealed) || awaitingUploads;
 	const stripAttachments = (stripConcealed || (sentFiles && (optimisticSend || nextDraftHasChanged)) ? [] : [...visibleRetainedAttachments, ...fileAttachments.attachments]).map((file) => {
 		const path = "stagedPath" in file ? file.stagedPath : "path" in file ? file.path : undefined;
 		const assetOrigin = remoteHost ? assetBaseUrl : assetBaseUrl ?? getApiBaseUrl();
@@ -1024,7 +1080,9 @@ export const ChatComposer = memo(function ChatComposer({
 	const acceptedClearFailed = composerMutation.accepted?.result.ok === false;
 	const draftMutationPending =
 		submitting || composerMutation.pending || acceptedMutationWaiting || Boolean(durableDelivery);
-	const attachBlocked = !takesNextFiles && (fileAttachments.preparing || draftMutationPending);
+	// A file still uploading here does not stop another one (batches are added one
+	// after another); one still uploading from a replaced surface does.
+	const attachBlocked = !takesNextFiles && (fileAttachments.hasForeignPendingWork() || draftMutationPending);
 	const canRecoverDelivery = Boolean(
 		durableDelivery &&
 			(!busy || durableDelivery.state === "accepted") &&
@@ -1923,6 +1981,7 @@ export const ChatComposer = memo(function ChatComposer({
 			await performClaimedSubmit(forceSteer, mutationToken);
 		} finally {
 			if (draftScope && mutationToken) cancelChatComposerMutation(draftScope, mutationToken);
+			publishUploadingSend(null);
 		}
 	}
 
@@ -1977,7 +2036,29 @@ export const ChatComposer = memo(function ChatComposer({
 		}
 
 		const textPastes = [...pendingTextPastes.current];
-		await fileAttachments.toSettledPayload();
+		// Files still uploading: the message leaves the box now and waits in the
+		// queue with its pictures, instead of the box greying out until the upload
+		// ends. It keeps the id its send will use, so the real row replaces it in place.
+		let uploadingId: string | undefined;
+		if (draftScope && !recoveringDelivery && !savingQueuedEdit && !forceSteer && fileAttachments.preparing) {
+			uploadingId = crypto.randomUUID();
+			setAwaitingUploads(true);
+			publishUploadingSend({
+				clientMessageId: uploadingId,
+				// Images show as thumbnails in the row, so their paths leave the text.
+				text: splitInlineImagePaths(currentText)
+					.flatMap((segment) => (segment.path === undefined ? [segment.text] : []))
+					.join("")
+					.replace(/[ \t]{2,}/g, " ")
+					.trim(),
+				images: uploadingImages(fileAttachments.attachments, fileAttachments.pendingAttachments),
+			});
+		}
+		try {
+			await fileAttachments.toSettledPayload();
+		} finally {
+			setAwaitingUploads(false);
+		}
 		// A replacement hook can still have staging work owned by the old surface.
 		if (fileAttachments.hasPendingReads()) return;
 		if ((await Promise.all(textPastes)).includes(false)) return;
@@ -2079,13 +2160,24 @@ export const ChatComposer = memo(function ChatComposer({
 			nativeImageBytes += attachment.bytes;
 			return true;
 		});
-		let nativePayloads = nativeImageAttachments.flatMap(({ mimeType, data }) =>
-			data ? [{ mimeType, data }] : []);
+		// The daemon already holds each staged image, so where it reads them by path
+		// the message names them instead of carrying their bytes a second time.
+		const byPath = (attachment: FileAttachment): FileAttachmentPayload | undefined =>
+			stagedImageReferences && attachment.stagedPath ? { mimeType: attachment.mimeType, data: "", path: attachment.stagedPath } : undefined;
+		let nativePayloads = nativeImageAttachments.flatMap((attachment) => {
+			const payload = byPath(attachment) ?? (attachment.data ? { mimeType: attachment.mimeType, data: attachment.data } : undefined);
+			return payload ? [payload] : [];
+		});
 		const restoreNativePayloads = async (): Promise<boolean> => {
 			if (!attachmentScope || !sendNativeImages || recoveringDelivery?.kind === "steer" || recoveringDelivery?.state === "accepted") return true;
 			const restored: FileAttachmentPayload[] = [];
 			try {
 				for (const attachment of nativeImageAttachments) {
+					const named = byPath(attachment);
+					if (named) {
+						restored.push(named);
+						continue;
+					}
 					if (attachment.data) {
 						restored.push({ mimeType: attachment.mimeType, data: attachment.data });
 						continue;
@@ -2217,7 +2309,7 @@ export const ChatComposer = memo(function ChatComposer({
 			excerpts: capturedReferences,
 			fileReferences: capturedFiles,
 			requestText,
-			clientMessageId: recoveringDelivery?.clientMessageId ?? crypto.randomUUID(),
+			clientMessageId: recoveringDelivery?.clientMessageId ?? uploadingId ?? crypto.randomUUID(),
 		});
 		if (!prepared.ok) {
 			setTextDraftPersistenceError(
@@ -2808,6 +2900,7 @@ export const ChatComposer = memo(function ChatComposer({
 										key={file.id}
 										name={file.name}
 										mimeType={file.mimeType}
+										previewUrl={file.previewUrl}
 										statusLabel={`Attaching ${file.name}`}
 										cancelLabel={`Cancel attaching ${file.name}`}
 										onCancel={() => {
@@ -2861,7 +2954,7 @@ export const ChatComposer = memo(function ChatComposer({
 					disabled={Boolean(disabled || queuedEditRecovery || (!optimisticSend && (submitting || draftMutationPending)))}
 					readOnly={typingLocked}
 					enterSends={enterSends}
-					concealed={sendConcealed && !optimisticSend}
+					concealed={(sendConcealed || awaitingUploads) && !optimisticSend}
 					label="Message the agent"
 					placeholder={
 						disabledPlaceholder ?? (disabled

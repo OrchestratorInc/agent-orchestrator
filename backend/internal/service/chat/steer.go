@@ -1,6 +1,7 @@
 package chat
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -10,6 +11,7 @@ import (
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
+	"github.com/aoagents/agent-orchestrator/backend/internal/storage/sqlite/store"
 )
 
 // Steering: guidance delivered into a turn that is already running.
@@ -391,6 +393,10 @@ func (c *Controller) rejectSteerBeforeDispatch(
 	}
 	delivery, created, err := c.store.ReserveSteerDelivery(
 		ctx, c.conversation.ID, clientMessageID, requestJSON, c.now())
+	if errors.Is(err, store.ErrChatAttachmentDiscarded) {
+		// Refused before anything was reserved: definite, with no receipt to find.
+		return SteerResult{}, err
+	}
 	if err != nil {
 		return SteerResult{}, fmt.Errorf("%w: %s: %w",
 			ErrSteerDeliveryUncertain, refusal.reserveContext, err)
@@ -481,6 +487,10 @@ func (c *Controller) steerLocked(ctx context.Context, msg ports.ChatUserMessage)
 	if msg.ClientMessageID != "" {
 		delivery, created, reserveErr := c.store.ReserveSteerDelivery(
 			ctx, c.conversation.ID, msg.ClientMessageID, requestJSON, c.now())
+		if errors.Is(reserveErr, store.ErrChatAttachmentDiscarded) {
+			// Refused before anything was reserved or sent: a definite answer.
+			return SteerResult{}, reserveErr
+		}
 		if reserveErr != nil {
 			return SteerResult{}, fmt.Errorf("%w: reserve delivery: %w",
 				ErrSteerDeliveryUncertain, reserveErr)
@@ -656,7 +666,12 @@ func (c *Controller) SteerOrSend(
 	turn, err := c.sendLocked(ctx, msg, false, override, queuedBatchIDs(batch))
 	if err != nil {
 		if len(batch) > 0 {
-			if failErr := c.store.FailQueuedBatch(context.WithoutCancel(ctx), c.conversation.ID,
+			if errors.Is(err, store.ErrChatAttachmentDiscarded) {
+				// Refused before anything was dispatched: the held messages still go.
+				if releaseErr := c.store.ReleaseQueuedBatch(context.WithoutCancel(ctx), c.conversation.ID, queuedBatchIDs(batch)); releaseErr != nil {
+					c.log.Error("failed to release fallback batch", "error", releaseErr)
+				}
+			} else if failErr := c.store.FailQueuedBatch(context.WithoutCancel(ctx), c.conversation.ID,
 				queuedBatchIDs(batch), ErrSteerDeliveryUncertain.Error(), c.now(), false); failErr != nil {
 				c.log.Error("failed to settle fallback batch", "error", failErr)
 			}
@@ -731,11 +746,27 @@ func encodeSteerDeliveryRequest(msg ports.ChatUserMessage) (string, error) {
 	return string(encoded), nil
 }
 
+// sameSteerRequest compares a saved steer request with a new one as a receipt
+// does: the URI a staged image carries (withoutImageURIs) makes no difference.
+func sameSteerRequest(saved, fresh string) bool {
+	if saved == fresh {
+		return true
+	}
+	var a, b steerDeliveryRequest
+	if json.Unmarshal([]byte(saved), &a) != nil || json.Unmarshal([]byte(fresh), &b) != nil {
+		return false
+	}
+	a.Content, b.Content = withoutImageURIs(a.Content), withoutImageURIs(b.Content)
+	left, errA := json.Marshal(a)
+	right, errB := json.Marshal(b)
+	return errA == nil && errB == nil && bytes.Equal(left, right)
+}
+
 func replaySteerDelivery(
 	delivery domain.ConversationSteerDelivery,
 	requestJSON string,
 ) (SteerResult, error) {
-	if delivery.RequestJSON != requestJSON {
+	if !sameSteerRequest(delivery.RequestJSON, requestJSON) {
 		return SteerResult{}, ErrSteerIdempotencyConflict
 	}
 	switch delivery.State {

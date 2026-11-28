@@ -107,7 +107,7 @@ const sideMocks = vi.hoisted(() => ({
 	settingsReady: undefined as boolean | undefined,
 	workspaceSend: undefined as
 		| undefined
-		| ((text: string, attachments: undefined, clientMessageId: string) => Promise<unknown>),
+		| ((text: string, attachments: { mimeType: string; data: string; path?: string }[] | undefined, clientMessageId: string) => Promise<unknown>),
 	sentOutsideTranscript: Symbol("chat.sentOutsideTranscript"),
 }));
 const stageAttachmentsMock = vi.hoisted(() => vi.fn());
@@ -117,6 +117,17 @@ const updateAttachmentLeasesMock = vi.hoisted(() => async (): Promise<string[]> 
 vi.mock("./IndependentSideChats", () => ({
 	useIndependentSideChats: () => ({ ...sideMocks, panel: null }),
 }));
+
+// The real read-back, unless a test makes a staged image unreadable.
+const uploadMocks = vi.hoisted(() => ({ inline: undefined as undefined | (() => Promise<never>) }));
+vi.mock("../../lib/attachment-uploads", async (importOriginal) => {
+	const actual = await importOriginal<typeof import("../../lib/attachment-uploads")>();
+	return {
+		...actual,
+		inlineStagedAttachments: (...args: Parameters<typeof actual.inlineStagedAttachments>) =>
+			uploadMocks.inline ? uploadMocks.inline() : actual.inlineStagedAttachments(...args),
+	};
+});
 
 vi.mock("../../lib/api-client", () => ({
 	apiClient: { GET: getMock, POST: postMock },
@@ -1578,6 +1589,31 @@ describe("side command routing", () => {
 			);
 		},
 	);
+	it("opens no side chat for /btw when one of its images is gone", async () => {
+		sideMocks.create.mockReset().mockImplementation(async (_excerpt, _force, key) => ({ id: `side-${key}` }));
+		sideMocks.send.mockReset().mockResolvedValue(undefined);
+		uploadMocks.inline = async () => {
+			throw Object.assign(new Error("gone"), { code: "ATTACHMENT_NOT_FOUND" });
+		};
+		try {
+			const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+			render(
+				<Wrapper client={queryClient}>
+					<SessionChatSurface session={session} />
+				</Wrapper>,
+			);
+			let error: unknown;
+			await act(async () => {
+				error = await Promise.resolve(sideMocks.workspaceSend!("/btw look", [{ mimeType: "image/png", data: "", path: ".ao/attachments/attachment-gone.png" }], "submission-gone"))
+					.catch((caught: unknown) => caught);
+			});
+			expect(error).toMatchObject({ code: "ATTACHMENT_NOT_FOUND" });
+			expect(sideMocks.create).not.toHaveBeenCalled();
+			expect(sideMocks.send).not.toHaveBeenCalled();
+		} finally {
+			uploadMocks.inline = undefined;
+		}
+	});
 	it.each(["/side", "/side question"])("sends literal %s to the main agent even when side creation is available", async text => {
 		sideMocks.create.mockReset();
 		const mainSend=vi.fn().mockResolvedValue(undefined);

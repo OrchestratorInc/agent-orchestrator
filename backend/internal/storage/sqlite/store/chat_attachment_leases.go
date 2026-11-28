@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
@@ -21,6 +22,16 @@ import (
 // ErrChatAttachmentDiscarded reports a message naming a staged file that was
 // discarded and is being or has been deleted.
 var ErrChatAttachmentDiscarded = errors.New("chat attachment was discarded")
+
+// chatAttachmentRefusal marks a write the lease triggers aborted (they RAISE
+// with ErrChatAttachmentDiscarded's text) as ErrChatAttachmentDiscarded, so a
+// caller can refuse it outright instead of reporting an unknown failure.
+func chatAttachmentRefusal(err error) error {
+	if err != nil && !errors.Is(err, ErrChatAttachmentDiscarded) && strings.Contains(err.Error(), ErrChatAttachmentDiscarded.Error()) {
+		return fmt.Errorf("%w: %w", ErrChatAttachmentDiscarded, err)
+	}
+	return err
+}
 
 // LeaseChatAttachment records name as staged for an unsent draft of id.
 func (s *Store) LeaseChatAttachment(ctx context.Context, id domain.SessionID, name string, now time.Time) error {

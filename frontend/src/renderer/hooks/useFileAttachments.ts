@@ -80,8 +80,11 @@ export type FileAttachmentOptions = {
 	maxAttachmentBytes?: number;
 };
 
-/** A file still being read or staged. Its type is known from the start, so its placeholder can take the shape its tile will. */
-type PendingFileAttachment = Pick<FileAttachment, "id" | "name" | "mimeType">;
+/**
+ * A file still being read or staged. Its type is known from the start, so its placeholder can take the
+ * shape its tile will; an image shows its own picture meanwhile.
+ */
+type PendingFileAttachment = Pick<FileAttachment, "id" | "name" | "mimeType"> & { previewUrl?: string };
 
 type SharedAttachmentUpdate = {
 	pending: number;
@@ -246,6 +249,16 @@ function subscribeSharedAttachmentWork(
 	};
 }
 
+/** Whether files are still being staged for this scope by work other than `own`, such as a replaced surface. */
+function sharedForeignPending(key: string, own: ReadonlySet<symbol>): boolean {
+	const entry = sharedAttachmentEntries.get(key);
+	if (!entry) return false;
+	for (const [token, files] of entry.pending) {
+		if (!own.has(token) && files.length > 0) return true;
+	}
+	return false;
+}
+
 function sharedAttachmentPending(key: string | undefined): boolean {
 	return Boolean(key && (sharedAttachmentEntries.get(key)?.pending.size ?? 0) > 0);
 }
@@ -399,6 +412,10 @@ export function useFileAttachments(options: FileAttachmentOptions = {}) {
 	const pendingReadsRef = useRef<Set<Promise<unknown>>>(new Set());
 	const addQueueRef = useRef<Promise<unknown>>(Promise.resolve());
 	const queuedAddsRef = useRef(0);
+	// Files in batches still being read or staged, which already claim attachment slots.
+	const outstandingFilesRef = useRef(0);
+	// This instance's own shared staging work, told apart from a replaced surface's.
+	const ownWorkRef = useRef(new Set<symbol>());
 	const generationRef = useRef(0);
 
 	useEffect(() => {
@@ -602,10 +619,20 @@ export function useFileAttachments(options: FileAttachmentOptions = {}) {
 		if (batch.length === 0) return Promise.resolve([]);
 		const sharedKey = initialKey;
 		const generation = generationRef.current;
-		const pending = batch.map((file) => ({ id: ids?.get(file) ?? crypto.randomUUID(), name: file.name, mimeType: file.type }));
+		// An image shows its own picture while it uploads, not a placeholder: the
+		// bytes are already here, and only their upload can take a while. Only files
+		// that can still be attached get one, so a large drop loads no extra pictures.
+		const slots = MAX_ATTACHMENTS - attachmentsRef.current.length - outstandingFilesRef.current;
+		outstandingFilesRef.current += batch.length;
+		const pending = batch.map((file, index): PendingFileAttachment => {
+			const fits = index < slots && (maxAttachmentBytes === undefined || file.size <= maxAttachmentBytes);
+			const previewUrl = fits && isSupportedImageAttachment(file.type) ? fileObjectUrl(file) : undefined;
+			return { id: ids?.get(file) ?? crypto.randomUUID(), name: file.name, mimeType: file.type, ...(previewUrl ? { previewUrl } : {}) };
+		});
 		for (const file of pending) pendingFileControllers.set(file.id, new AbortController());
 		const entries = batch.map((file, index) => ({ file, id: pending[index]!.id }));
 		const sharedWork = sharedKey ? beginSharedAttachmentWork(sharedKey, pending) : undefined;
+		if (sharedWork) ownWorkRef.current.add(sharedWork.token);
 		if (!sharedKey) setPendingAttachments((current) => [...current, ...pending]);
 		queuedAddsRef.current += 1;
 		setPreparing(true);
@@ -622,8 +649,14 @@ export function useFileAttachments(options: FileAttachmentOptions = {}) {
 				return [];
 			})
 			.finally(() => {
-				for (const file of pending) pendingFileControllers.delete(file.id);
+				outstandingFilesRef.current = Math.max(0, outstandingFilesRef.current - batch.length);
+				for (const file of pending) {
+					pendingFileControllers.delete(file.id);
+					// The attached file draws from its own bytes from here on.
+					if (file.previewUrl) URL.revokeObjectURL(file.previewUrl);
+				}
 				queuedAddsRef.current = Math.max(0, queuedAddsRef.current - 1);
+				if (sharedWork) ownWorkRef.current.delete(sharedWork.token);
 				if (sharedKey && sharedWork) endSharedAttachmentWork(sharedKey, sharedWork.token);
 				else {
 					setPendingAttachments((current) => current.filter((file) => !pending.some((item) => item.id === file.id)));
@@ -632,7 +665,7 @@ export function useFileAttachments(options: FileAttachmentOptions = {}) {
 			});
 		addQueueRef.current = settled;
 		return settled;
-	}, [initialKey, processFiles]);
+	}, [initialKey, maxAttachmentBytes, processFiles]);
 
 	/**
 	 * Clear the notice about files that were not attached. Their files are gone,
@@ -745,5 +778,11 @@ export function useFileAttachments(options: FileAttachmentOptions = {}) {
 		toSettledPayload,
 		attachmentSignature,
 		hasPendingReads,
+		/**
+		 * Files are still being staged for this draft by another instance, such as
+		 * the surface this one replaced. Its queue would commit after this one's and
+		 * overwrite what this instance adds, so new files wait for it.
+		 */
+		hasForeignPendingWork: () => (initialKey ? sharedForeignPending(initialKey, ownWorkRef.current) : false),
 	};
 }

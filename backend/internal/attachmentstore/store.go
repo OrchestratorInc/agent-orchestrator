@@ -287,6 +287,26 @@ func (s *Store) openUploadsRoot(ctx context.Context) (*os.Root, error) {
 	return root, err
 }
 
+// SweepUploads removes uploads no attachment took within UploadTTL. Upload
+// sweeps too, but a file a discarded draft left there must go even when no
+// other file is ever uploaded. It creates nothing when there are no uploads.
+func (s *Store) SweepUploads(ctx context.Context) {
+	if s.dataDir == "" {
+		return
+	}
+	dataRoot, err := os.OpenRoot(s.dataDir)
+	if err != nil {
+		return
+	}
+	root, err := openChildDir(ctx, dataRoot, uploadsDir, false, 0)
+	_ = dataRoot.Close()
+	if err != nil {
+		return
+	}
+	defer func() { _ = root.Close() }()
+	sweepUploads(ctx, root, time.Now())
+}
+
 // sweepUploads removes uploads, and temporary files a crash left behind, last
 // written more than UploadTTL ago. Best effort: a failure leaves the file for
 // the next sweep. A cancelled request stops it between entries.
@@ -467,6 +487,31 @@ func (s *Store) MaterializeWorkspace(ctx context.Context, id domain.SessionID, w
 		materialized = true
 	}
 	return materialized, nil
+}
+
+// OpenExact is Open for a name that must match the stored file's spelling. On a
+// case-insensitive volume Open finds attachment-x.png for attachment-x.PNG; a
+// caller that records the name (the lease triggers compare it byte for byte)
+// must not take the other spelling for it.
+func (s *Store) OpenExact(ctx context.Context, id domain.SessionID, name string) (*os.File, fs.FileInfo, error) {
+	file, info, err := s.Open(ctx, id, name)
+	if err != nil {
+		return nil, nil, err
+	}
+	sessionRoot, err := s.openCanonicalSession(ctx, id, false)
+	if err == nil {
+		defer func() { _ = sessionRoot.Close() }()
+		var entries []fs.DirEntry
+		if entries, err = fs.ReadDir(sessionRoot.FS(), "."); err == nil {
+			for _, entry := range entries {
+				if entry.Name() == name {
+					return file, info, nil
+				}
+			}
+		}
+	}
+	_ = file.Close()
+	return nil, nil, fs.ErrNotExist
 }
 
 // Open opens a regular canonical attachment for HTTP serving.

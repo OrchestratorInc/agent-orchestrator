@@ -1273,6 +1273,8 @@ func (s *Store) AppendUserMessage(
 	turnID string,
 	now time.Time,
 ) (created bool, err error) {
+	// The lease triggers refuse a message naming a file cleanup took.
+	defer func() { err = chatAttachmentRefusal(err) }()
 	return s.appendUserMessage(ctx, conversationID, session, "", generation, msg, turnID, "", false, now)
 }
 
@@ -3161,7 +3163,9 @@ func (s *Store) UpdateQueuedTurnMessage(
 ) error {
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()
-	return s.inTx(ctx, "update queued turn message", func(q *gen.Queries) error {
+	// A queued image naming a file cleanup took is refused as such (see
+	// chatAttachmentRefusal), so the edit is not left looking unanswered.
+	return chatAttachmentRefusal(s.inTx(ctx, "update queued turn message", func(q *gen.Queries) error {
 		if delivery.ClientMessageID != "" {
 			hash, err := q.SelectConversationQueuedEditDelivery(ctx, gen.SelectConversationQueuedEditDeliveryParams{
 				ConversationID: conversationID, ClientMessageID: delivery.ClientMessageID,
@@ -3195,7 +3199,7 @@ func (s *Store) UpdateQueuedTurnMessage(
 			})
 		}
 		return nil
-	})
+	}))
 }
 
 // SettleTurnByID records a terminal state for a turn AO can name directly.
@@ -5531,6 +5535,8 @@ func (s *Store) ReserveSteerDelivery(
 	conversationID, clientMessageID, requestJSON string,
 	now time.Time,
 ) (delivery domain.ConversationSteerDelivery, created bool, err error) {
+	// The lease triggers refuse a steer naming a file cleanup took.
+	defer func() { err = chatAttachmentRefusal(err) }()
 	return reserveConversationDelivery(
 		ctx,
 		s,

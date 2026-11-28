@@ -1674,11 +1674,15 @@ func Run(buildVersion string) (retErr error) {
 			}
 			ticker := time.NewTicker(workspaceCleanupSweepTick)
 			defer ticker.Stop()
+			uploads := attachmentstore.New(cfg.DataDir)
 			for {
 				if err := sessMgr.ReconcileWorkspaceCleanup(ctx); err != nil && ctx.Err() == nil {
 					log.Warn("workspace cleanup reconcile failed", "err", err)
 				}
 				reapForkSeeds(ctx, cfg.DataDir, store, log)
+				// An upload a discarded draft left behind expires here too, not only
+				// when another file is uploaded.
+				uploads.SweepUploads(ctx)
 				if settings, err := settingsSvc.Get(ctx); err != nil {
 					log.Warn("read session retention", "err", err)
 				} else if err := sessionSvc.DeleteExpired(ctx, settings.SessionRetentionDays); err != nil && ctx.Err() == nil {

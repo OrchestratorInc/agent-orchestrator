@@ -3746,10 +3746,19 @@ type SessionHistoryResponse struct {
 	Offset int                  `json:"offset"`
 }
 
-// ConversationImageContentRequest is a native raster image prompt block.
+// ConversationImageContentRequest is a native raster image prompt block. It
+// carries the image as base64 Data, or as Path: a file this session already
+// staged (POST /sessions/{id}/attachments answered ".ao/attachments/<name>").
+// A path spares a client on a slow link from sending the same bytes twice.
+// Only session sends, steers, provider switches and queued edits accept a
+// path, and only on a daemon whose snapshot reports supportsStagedImages.
 type ConversationImageContentRequest struct {
 	MIMEType string `json:"mimeType"`
-	Data     string `json:"data"`
+	Data     string `json:"data,omitempty"`
+	Path     string `json:"path,omitempty"`
+	// staged is the path the daemon read Data from (stagedImages). Not part of
+	// the API: it carries the file's name into the accepted message.
+	staged string
 }
 
 // EditQueuedConversationMessageRequest changes an undispatched prompt. Omitted
@@ -4228,6 +4237,7 @@ type ConversationSnapshotResponse struct {
 	// provider capabilities. Older daemons silently ignore the excerpts input.
 	SupportsExcerpts           bool   `json:"supportsExcerpts,omitempty"`
 	SupportsFileReferences     bool   `json:"supportsFileReferences,omitempty"`
+	SupportsStagedImages       bool   `json:"supportsStagedImages,omitempty"`
 	ConversationID             string `json:"conversationId"`
 	ActiveBranchID             string `json:"activeBranchId,omitempty"`
 	BranchedFromEarlierMessage bool   `json:"branchedFromEarlierMessage"`

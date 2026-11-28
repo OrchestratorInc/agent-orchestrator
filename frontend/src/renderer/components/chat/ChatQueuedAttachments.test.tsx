@@ -17,7 +17,7 @@ beforeEach(() => {
 const path = ".ao/attachments/attachment-shot.png";
 const suffix = `Attached files (read these files in the workspace):\n- ${path}`;
 
-function setup(text = "inspect this", content: ConversationContentSummary[] = [], nativeImages = true) {
+function setup(text = "inspect this", content: ConversationContentSummary[] = [], nativeImages = true, assetSessionId?: string) {
 	const edit = vi.fn().mockResolvedValue(undefined);
 	const send = vi.fn().mockResolvedValue(undefined);
 	const stage = vi.fn().mockResolvedValue([path]);
@@ -50,6 +50,7 @@ function setup(text = "inspect this", content: ConversationContentSummary[] = []
 				onCancelQueuedTurn={cancel}
 				onStageAttachments={stage}
 				nativeImages={nativeImages}
+				assetSessionId={assetSessionId}
 			/>
 		</TooltipProvider>,
 	);
@@ -71,6 +72,7 @@ function setup(text = "inspect this", content: ConversationContentSummary[] = []
 						onCancelQueuedTurn={cancel}
 						onStageAttachments={stage}
 						nativeImages={nativeImages}
+						assetSessionId={assetSessionId}
 					/>
 				</TooltipProvider>,
 			),
@@ -102,6 +104,12 @@ describe("queued message attachments", () => {
 		expect(row).not.toHaveTextContent("Attached files");
 	});
 
+	it("reads a queued image from the session that staged it, not a New Chat's stand-in id", () => {
+		setup(suffix, [], true, "prepared-1");
+		const image = within(screen.getByTestId("queued-message-q1")).getByRole("button", { name: "Open image: Image 1" }).querySelector("img");
+		expect(image?.getAttribute("src")).toContain("/sessions/prepared-1/preview/files/.ao/attachments/attachment-shot.png");
+	});
+
 	it("keeps a reused delivery key locked for recovery", async () => {
 		const { edit } = setup();
 		edit.mockRejectedValue({ code: "CHAT_QUEUED_EDIT_IDEMPOTENCY_CONFLICT", message: "Recovery key conflict" });
@@ -127,6 +135,30 @@ describe("queued message attachments", () => {
 		expect(screen.getByRole("button", { name: "Cancel edit" })).toBeEnabled();
 		await userEvent.click(screen.getByRole("button", { name: "Cancel edit" }));
 		expect(readChatSessionDraft(chatFixture.sessionId).queuedEdit).toBeUndefined();
+	});
+
+	it("unlocks a queued edit whose first attempt is refused for a staged image the daemon cannot read", async () => {
+		const { edit } = setup();
+		edit.mockRejectedValueOnce({ code: "ATTACHMENT_NOT_FOUND", message: "staged attachment not found" });
+		await beginEdit();
+		await userEvent.click(screen.getByRole("button", { name: "Send message" }));
+		await screen.findByText("staged attachment not found");
+		expect(readChatSessionDraft(chatFixture.sessionId).queuedEdit?.clientMessageId).toBeUndefined();
+		expect(screen.getByRole("button", { name: "Cancel edit" })).toBeEnabled();
+	});
+
+	it("keeps a recovered queued edit locked when its retry is refused for a staged image", async () => {
+		const { edit } = setup();
+		edit.mockRejectedValueOnce(new Error("response lost"));
+		await beginEdit();
+		await userEvent.click(screen.getByRole("button", { name: "Send message" }));
+		await screen.findByText("response lost");
+		// The first attempt may have been accepted before its answer was lost.
+		edit.mockRejectedValueOnce({ code: "ATTACHMENT_NOT_FOUND", message: "staged attachment not found" });
+		await userEvent.click(screen.getByRole("button", { name: "Retry edit safely" }));
+		await screen.findByText("staged attachment not found");
+		expect(readChatSessionDraft(chatFixture.sessionId).queuedEdit?.clientMessageId).toBeTruthy();
+		expect(screen.getByRole("button", { name: "Cancel edit" })).toBeDisabled();
 	});
 
 	it.each(["cancel", "escape", "replace", "delete"])("preserves an unresolved queued receipt through %s and remount", async (exit) => {
@@ -522,4 +554,30 @@ describe("queued message attachments", () => {
 		} finally { read.mockRestore(); }
 	});
 
+});
+
+describe("send during upload", () => {
+	it("shows the message in the queue at once while its image uploads, then sends it", async () => {
+		const { send, stage, field } = setup();
+		let finishStaging!: (paths: string[]) => void;
+		stage.mockImplementation(() => new Promise<string[]>((resolve) => { finishStaging = resolve; }));
+		await typeInLexicalEditor(field, "then i got this");
+		fireEvent.paste(field, {
+			clipboardData: { files: [new File([new Uint8Array([137, 80, 78, 71])], "shot.png", { type: "image/png" })], items: [] },
+		});
+		await waitFor(() => expect(stage).toHaveBeenCalledOnce());
+		fireEvent.keyDown(field, { key: "Enter" });
+
+		const dock = await screen.findByTestId("queued-message-dock");
+		expect(within(dock).getByText("Uploading…")).toBeInTheDocument();
+		expect(dock).toHaveTextContent("then i got this");
+		// The queued message already there keeps its own row, without AO's file list.
+		expect(dock).toHaveTextContent("inspect this");
+		expect(dock).not.toHaveTextContent("Attached files");
+		expect(send).not.toHaveBeenCalled();
+
+		await act(async () => finishStaging([path]));
+		await waitFor(() => expect(send).toHaveBeenCalledOnce());
+		expect(send.mock.calls[0]?.[0]).toContain(`then i got this ${path}`);
+	});
 });

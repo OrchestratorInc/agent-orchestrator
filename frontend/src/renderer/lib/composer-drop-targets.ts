@@ -6,7 +6,7 @@
  */
 export interface ComposerDropTarget {
 	element: () => HTMLElement | null;
-	/** Whether the composer can take files right now (no send or staging in flight). */
+	/** Whether the composer can take files right now (no send in flight). */
 	accepts: () => boolean;
 	/** Attaches the files; false when the composer cannot take them right now. */
 	attach: (files: File[]) => boolean;

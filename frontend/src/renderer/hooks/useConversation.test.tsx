@@ -1480,6 +1480,19 @@ describe("steering refusals", () => {
 		});
 	});
 
+	it("lets a first steer refused for a missing staged image go back to the draft, but not a receipt-only retry", async () => {
+		apiErrorCodeMock.mockReturnValue("ATTACHMENT_NOT_FOUND");
+		apiErrorMessageMock.mockReturnValue("staged attachment not found");
+		postMock.mockResolvedValue({ data: undefined, error: { code: "ATTACHMENT_NOT_FOUND" } });
+		const { result } = renderHook(() => useConversationCommands("ao-1"), { wrapper });
+
+		await expect(result.current.steer("look", [{ mimeType: "image/png", path: ".ao/attachments/attachment-a.png" }], "image-steer-1")).resolves.toEqual({
+			status: "not-accepted",
+			reason: "staged attachment not found",
+		});
+		await expect(result.current.steer("look", [{ mimeType: "image/png", path: ".ao/attachments/attachment-a.png" }], "image-steer-1", true)).rejects.toBeDefined();
+	});
+
 	it("treats a durable interface-transition refusal as definitive non-acceptance", async () => {
 		apiErrorCodeMock.mockReturnValue("CHAT_INTERFACE_TRANSITION");
 		apiErrorMessageMock.mockReturnValue("the session is switching interfaces");

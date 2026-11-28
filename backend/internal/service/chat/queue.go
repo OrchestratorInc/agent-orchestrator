@@ -215,6 +215,7 @@ func queuedEditDelivery(turnID string, edit QueuedMessageEdit) (domain.Conversat
 	if edit.ClientMessageID == "" {
 		return domain.ConversationQueuedEditDelivery{}, nil
 	}
+	edit.Content = withoutImageURIs(edit.Content)
 	data, err := json.Marshal(struct {
 		TurnID string
 		Edit   QueuedMessageEdit

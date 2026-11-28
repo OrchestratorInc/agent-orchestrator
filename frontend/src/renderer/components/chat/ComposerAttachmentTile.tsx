@@ -260,12 +260,17 @@ function TextThumbnail({ file, url }: { file?: File; url?: string }) {
  * the shape the finished tile will be, a square for an image or a video and a
  * card for any other file, so nothing changes size when the file lands.
  */
-export function ComposerPendingTile({ name, mimeType, statusLabel, cancelLabel, onCancel }: { name: string; mimeType: string; statusLabel: string; cancelLabel: string; onCancel: () => void }) {
+export function ComposerPendingTile({ name, mimeType, previewUrl, statusLabel, cancelLabel, onCancel }: { name: string; mimeType: string; previewUrl?: string; statusLabel: string; cancelLabel: string; onCancel: () => void }) {
 	const cancel = <ComposerTileRemove label={cancelLabel} onRemove={onCancel} />;
 	if (isSupportedImageAttachment(mimeType) || attachmentPreviewKind(name) === "video") {
 		return (
 			<li role="status" aria-label={statusLabel} className={cn(TILE_CLASS, "size-14")}>
-				<span aria-hidden="true" className={cn(SQUARE_CLASS, "block bg-surface motion-safe:animate-pulse")} />
+				{/* An image shows its own picture while it uploads; the pulse says it is still on its way. */}
+				{previewUrl ? (
+					<img src={previewUrl} alt="" aria-hidden="true" className={cn(SQUARE_CLASS, "block object-cover motion-safe:animate-pulse")} />
+				) : (
+					<span aria-hidden="true" className={cn(SQUARE_CLASS, "block bg-surface motion-safe:animate-pulse")} />
+				)}
 				{cancel}
 			</li>
 		);

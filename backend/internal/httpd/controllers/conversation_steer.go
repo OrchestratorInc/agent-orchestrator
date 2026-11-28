@@ -41,8 +41,18 @@ func (c *ConversationsController) steerOrSend(w http.ResponseWriter, r *http.Req
 	if !decodeConversationBody(w, r, &req) {
 		return
 	}
+	attachmentErr := stagedImageSteerNeedsID(req.Attachments, req.ClientMessageID)
+	attachments := req.Attachments
+	if attachmentErr == nil {
+		attachments, attachmentErr = c.stagedImages(r.Context(), chi.URLParam(r, "sessionId"), req.Attachments)
+	}
+	if attachmentErr != nil {
+		envelope.WriteAPIError(w, r, http.StatusBadRequest, "validation",
+			attachmentErr.code, attachmentErr.message, nil)
+		return
+	}
 	content, attachmentErr := conversationContent(SendConversationMessageRequest{
-		Attachments: req.Attachments,
+		Attachments: attachments,
 	})
 	if attachmentErr != nil {
 		envelope.WriteAPIError(w, r, http.StatusBadRequest, "validation",
@@ -112,8 +122,18 @@ func (c *ConversationsController) steer(w http.ResponseWriter, r *http.Request) 
 		})
 		return
 	}
+	attachmentErr := stagedImageSteerNeedsID(req.Attachments, req.ClientMessageID)
+	attachments := req.Attachments
+	if attachmentErr == nil {
+		attachments, attachmentErr = c.stagedImages(r.Context(), chi.URLParam(r, "sessionId"), req.Attachments)
+	}
+	if attachmentErr != nil {
+		envelope.WriteAPIError(w, r, http.StatusBadRequest, "validation",
+			attachmentErr.code, attachmentErr.message, nil)
+		return
+	}
 	content, attachmentErr := conversationContent(SendConversationMessageRequest{
-		Attachments: req.Attachments,
+		Attachments: attachments,
 	})
 	if attachmentErr != nil {
 		envelope.WriteAPIError(w, r, http.StatusBadRequest, "validation",
@@ -233,4 +253,20 @@ func writeSteerError(w http.ResponseWriter, r *http.Request, err error) {
 	default:
 		writeConversationError(w, r, err)
 	}
+}
+
+// stagedImageSteerNeedsID refuses a steer that names a staged image but has no
+// clientMessageId. Such a steer is never reserved, and its reservation is the
+// write that commits the draft's lease on the file, so the file could be
+// reclaimed after the agent got it.
+func stagedImageSteerNeedsID(images []ConversationImageContentRequest, clientMessageID string) *attachmentError {
+	if clientMessageID != "" {
+		return nil
+	}
+	for _, image := range images {
+		if image.Path != "" {
+			return &attachmentError{"ATTACHMENT_PATH_UNSUPPORTED", "a steer that names a staged image needs a clientMessageId"}
+		}
+	}
+	return nil
 }

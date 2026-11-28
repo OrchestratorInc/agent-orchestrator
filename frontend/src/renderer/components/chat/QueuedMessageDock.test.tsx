@@ -493,3 +493,26 @@ describe("ChatWorkspace queued excerpts", () => {
 		expect(dock).not.toHaveTextContent("Use the attached");
 	});
 });
+
+describe("QueuedMessageDock uploading row", () => {
+	it("says a message is still uploading and shows the pictures it waits on", () => {
+		const [message] = queuedMessages(["then i got this"]);
+		const restored = ".ao/attachments/attachment-1367e3e6.png";
+		const cloud = "ao-cloud-attachment:6f1c2a8e-0b1d-4c3e-9f5a-2d7e8b9c0a11/shot.png";
+		render(
+			<QueuedMessageDock
+				attachmentSource={{ sessionId: "s-1", apiBaseUrl: "http://127.0.0.1:3001" }}
+				messages={[{ ...message!, pending: true, uploadingImages: [{ src: "blob:local-shot" }, { path: restored }, { path: cloud }] }]}
+			/>,
+		);
+		const row = screen.getByTestId("queued-message-queued-1");
+		expect(within(row).getByRole("status")).toHaveTextContent("Uploading…");
+		expect(row).toHaveTextContent("then i got this");
+		const images = row.querySelectorAll("img");
+		expect(images).toHaveLength(2);
+		expect(images[0]).toHaveAttribute("src", "blob:local-shot");
+		expect(images[1]).toHaveAttribute("src", expect.stringContaining(`/preview/files/${restored}`));
+		// The local daemon does not hold a Cloud reference: it reads as its name, never a broken picture.
+		expect(screen.getByTestId("queued-message-images")).toHaveTextContent("Image 3");
+	});
+});

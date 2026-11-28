@@ -217,7 +217,7 @@ import { ChatImageSourceProvider } from "./chat-image-source";
 import type { AgentSwitchProps } from "./AgentSwitchPicker";
 import type { ComposerPromptSuggestion } from "./ComposerEditor";
 import { ChatTokenSkills } from "./sentComposerTokens";
-import { ChatComposer, type ChatComposerHandle, type StoredComposerAttachment } from "./ChatComposer";
+import { ChatComposer, type ChatComposerHandle, type StoredComposerAttachment, type UploadingSend } from "./ChatComposer";
 import { ContextMeter } from "./ContextMeter";
 import { nearQuotaWindow, QuotaSign, QuotaStatus } from "./QuotaReadout";
 import { stagedAttachmentParts, attachmentName } from "./messageAttachments";
@@ -1349,6 +1349,35 @@ function ChatWorkspaceContent({
 			})),
 		[backgroundWakeQueuedTurnIds, localEchos, snapshot.items, snapshot.latestSequence],
 	);
+	// A message sent while its files upload waits in the dock at once, under the id
+	// its send will use, until that send's own echo or row takes its place.
+	const [uploadingSend, setUploadingSend] = useState<UploadingSend | null>(null);
+	const uploadingQueuedMessage = useMemo((): QueuedMessage | undefined => {
+		if (!uploadingSend) return undefined;
+		const { clientMessageId } = uploadingSend;
+		if ((localEchos ?? []).some((echo) => echo.clientMessageId === clientMessageId)) return undefined;
+		if (snapshot.items.some((item) => item.kind === "message" && item.clientMessageId === clientMessageId)) return undefined;
+		const id = `local:${clientMessageId}`;
+		return {
+			turnId: id,
+			pending: true,
+			uploadingImages: uploadingSend.images,
+			message: {
+				kind: "message",
+				id,
+				turnId: id,
+				sequence: snapshot.latestSequence + 0.01,
+				revision: 0,
+				role: "user",
+				origin: "human",
+				text: uploadingSend.text,
+				streaming: false,
+				delivery: "queued",
+				clientMessageId,
+				createdAt: new Date().toISOString(),
+			},
+		};
+	}, [localEchos, snapshot.items, snapshot.latestSequence, uploadingSend]);
 	// A host that records steers keeps a message being steered in the queue (see steeringQueuedTurnIds).
 	const steerInQueue = steeringQueuedTurnIds !== undefined;
 	const visibleQueuedMessages = useMemo(
@@ -1357,8 +1386,9 @@ function ChatWorkspaceContent({
 				(message) => !backgroundWakeQueuedTurnIds.has(message.turnId) && (steerInQueue || !steerStartedAt.has(message.turnId)),
 			),
 			...pendingQueuedMessages,
+			...(uploadingQueuedMessage ? [uploadingQueuedMessage] : []),
 		],
-		[backgroundWakeQueuedTurnIds, pendingQueuedMessages, queuedMessages, steerInQueue, steerStartedAt],
+		[backgroundWakeQueuedTurnIds, pendingQueuedMessages, queuedMessages, steerInQueue, steerStartedAt, uploadingQueuedMessage],
 	);
 	const steeringTurnIds = useMemo(
 		() => (steerInQueue ? new Set([...steeringQueuedTurnIds, ...steerStartedAt.keys()]) : undefined),
@@ -1512,6 +1542,7 @@ function ChatWorkspaceContent({
 				if (!currentEdit || currentEdit.turnId !== queueEdit.turnId || currentEdit.ownerId !== queueEdit.ownerId) {
 					throw new Error("chat.draft.queueReplaced");
 				}
+				const firstAttempt = !currentEdit.clientMessageId;
 				const prepared = updateQueueDraft({
 					...currentEdit,
 					saving: true,
@@ -1530,13 +1561,17 @@ function ChatWorkspaceContent({
 					// These outcomes follow the daemon's atomic receipt lookup, so even
 					// a recovered retry proves this exact edit was never accepted. A
 					// Cloud control plane's refusal of the edit proves it too.
+					const code = apiErrorCode(error) ?? "";
 					if ([
 						"CHAT_TURN_NOT_QUEUED",
 						"CHAT_QUEUED_EDIT_CONFLICT",
 						"CHAT_QUEUED_CONTENT_INVALID",
 						"CHAT_QUEUED_TEXT_REQUIRED",
 						"CHAT_QUEUED_EDIT_REFUSED",
-					].includes(apiErrorCode(error) ?? "")) {
+					].includes(code) ||
+						// A staged image the daemon cannot read is refused before that lookup,
+						// so only a first attempt proves the edit was never accepted.
+						(firstAttempt && ["INVALID_ATTACHMENT_PATH", "ATTACHMENT_NOT_FOUND", "ATTACHMENT_PATH_UNSUPPORTED"].includes(code))) {
 						updateQueueDraft({
 							...prepared.draft.queuedEdit,
 							clientMessageId: undefined, saving: undefined, nativeImages: undefined,
@@ -2028,10 +2063,11 @@ function ChatWorkspaceContent({
 	const queuedLocalBaseUrl = useSyncExternalStore(subscribeApiBaseUrl, getApiBaseUrl, getApiBaseUrl);
 	const queuedAttachmentSource = useMemo(
 		() => ({
-			sessionId: snapshot.sessionId,
+			// A New Chat's snapshot has a stand-in id; its files are staged in the prepared session.
+			sessionId: assetSessionId ?? snapshot.sessionId,
 			apiBaseUrl: activeRemoteHostId ? assetBaseUrl ?? null : assetBaseUrl ?? queuedLocalBaseUrl,
 		}),
-		[activeRemoteHostId, assetBaseUrl, queuedLocalBaseUrl, snapshot.sessionId],
+		[activeRemoteHostId, assetBaseUrl, assetSessionId, queuedLocalBaseUrl, snapshot.sessionId],
 	);
 	const composerQueuedDock = useMemo(
 		() =>
@@ -2682,6 +2718,8 @@ function ChatWorkspaceContent({
 										assetBaseUrl={assetBaseUrl}
 										assetSessionId={assetSessionId ?? snapshot.sessionId}
 										remoteHost={Boolean(activeRemoteHostId)}
+										stagedImageReferences={Boolean(snapshot.supportsStagedImages)}
+										onUploadingSendChange={setUploadingSend}
 										acceptedClientMessageIds={acceptedClientMessageIds}
 										parkUnsentSends={parkUnsentSends}
 									/>}
