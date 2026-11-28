@@ -181,7 +181,7 @@ function shareStartRequest<T>(kind: CloudSessionStartRequest, orgId: string, ses
 	return request;
 }
 
-/** Whether a resume, workspace checkout or restore of the session is in flight. */
+/** Whether a resume, workspace checkout, restore or startup retry of the session is in flight. */
 export function cloudSessionStartRequestInFlight(orgId: string, sessionId: string): boolean {
 	const suffix = `:${orgId}/${sessionId}`;
 	for (const key of startRequestsInFlight.keys()) if (key.endsWith(suffix)) return true;
