@@ -41,6 +41,9 @@ func newRenderCommand(ctx *commandContext) *cobra.Command {
 			"--card-foreground --popover --border --border-strong --primary\n" +
 			"--primary-foreground --accent --accent-foreground --success --warning\n" +
 			"--destructive --code --link --chart-1..--chart-6 --radius --font-sans --font-mono.\n" +
+			"Make the page responsive for mobile too: include a viewport meta tag, avoid fixed\n" +
+			"widths and fixed multi-column layouts, and let grid/flex content shrink. Check\n" +
+			"both 720px and 390px widths; fix horizontal overflow and clipped content.\n" +
 			"Let the page fill the width without outer padding, a card, or a border; give\n" +
 			"charts a fixed pixel height; do not size html or body with 100vh. Chat sessions\n" +
 			"only: in a terminal session use `ao preview` instead.\n\n" +
@@ -63,7 +66,7 @@ func newRenderCommand(ctx *commandContext) *cobra.Command {
 	cmd.Flags().IntVar(&height, "height", mcpserver.DefaultRenderHeight, "first-paint frame height in CSS pixels, 80-2000; the frame then fits the page")
 	cmd.Flags().BoolVar(&check, "check", false, "screenshot the page in the Orchestrator desktop app instead of publishing it")
 	cmd.Flags().BoolVar(&artifact, "artifact", false, "also keep the page as a session artifact; only when the user asks to keep it")
-	cmd.Flags().IntVar(&width, "width", mcpserver.DefaultRenderWidth, "with --check: viewport width in CSS pixels, 240-1600; use 390 for phones")
+	cmd.Flags().IntVar(&width, "width", mcpserver.DefaultRenderWidth, "with --check: viewport width in CSS pixels, 240-1600; check both 720 (desktop) and 390 (phone)")
 	cmd.Flags().StringVar(&out, "out", "", "with --check: PNG path to write (default: a new file in the temp directory)")
 	return cmd
 }
