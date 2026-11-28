@@ -603,6 +603,15 @@ describe("SessionChatSurface startup check", () => {
 		expect(whenReady).toBeUndefined();
 	});
 
+	it("hands /btw back during the check instead of sending it to the main chat", async () => {
+		await sendDuringCheck(checking);
+		conversationCommandState.send.mockClear();
+		sideMocks.create.mockReset();
+		await expect(sideMocks.workspaceSend!("/btw what is this?", undefined, "side-1")).rejects.toMatchObject({ code: "CHAT_SIDE_NOT_READY" });
+		expect(conversationCommandState.send).not.toHaveBeenCalled();
+		expect(sideMocks.create).not.toHaveBeenCalled();
+	});
+
 	it("holds Continue during the check", async () => {
 		await sendDuringCheck(checking);
 		conversationCommandState.send.mockClear();

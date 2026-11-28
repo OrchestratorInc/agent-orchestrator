@@ -803,6 +803,9 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 					// Only claim /btw where side chats can open. Elsewhere the
 					// text goes to the agent as typed (it may be the harness's own skill),
 					// so a failed side launch can never strand the main draft.
+					if (startupHold && sideEnabled && /^\/btw(?:\s+|$)/i.test(text)) {
+						throw Object.assign(new Error("Side chats aren't ready yet. Try /btw again in a moment."), { code: "CHAT_SIDE_NOT_READY" });
+					}
 					const btw = sideCreationEnabled ? /^\/btw(?:\s+|$)/i.exec(text) : null;
      if (btw && fileReferences?.length) {
       throw Object.assign(new Error("File annotations cannot be sent to side chats yet. Send in the main chat or remove the file annotations."), { code: "CHAT_FILE_REFERENCES_SIDE_UNSUPPORTED" });
