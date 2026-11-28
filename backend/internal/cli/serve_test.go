@@ -2,6 +2,7 @@ package cli
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -995,5 +996,158 @@ func TestServeTimeoutAppliesBeforeAcceptingReady(t *testing.T) {
 	}, "serve", "--timeout", "1s")
 	if err == nil || !strings.Contains(err.Error(), "did not become ready within 1s") {
 		t.Fatalf("err = %v, want a timeout for a daemon ready only after the deadline", err)
+	}
+}
+
+// waitServeReady given an already-delivered child exit returns a ready
+// same-dir winner instead of the exit error (deterministic: the exit is the
+// first thing the wait sees).
+func TestWaitServeReadyAcceptsWinnerOnChildExit(t *testing.T) {
+	cfg := setConfigEnv(t)
+	srv := fakeServeDaemon(t, 5151)
+	if err := runfile.Write(cfg.runFile, runfile.Info{PID: 5151, Port: serverPort(t, srv.URL), StartedAt: time.Unix(100, 0).UTC()}); err != nil {
+		t.Fatal(err)
+	}
+	exited := make(chan error, 1)
+	exited <- errors.New("exit status 75")
+	c := &commandContext{deps: Deps{ProcessAlive: func(pid int) bool { return pid == 5151 }, PIDMayBeHidden: func() bool { return false }}.withDefaults()}
+	loaded, err := config.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	res, err := c.waitServeReady(context.Background(), loaded, 9, exited, time.Minute, false, nil)
+	if err != nil || res == nil || res.PID != 5151 || !res.Reused {
+		t.Fatalf("res=%#v err=%v, want the ready winner", res, err)
+	}
+}
+
+func TestServeRejectsExplicitPortZero(t *testing.T) {
+	setConfigEnv(t)
+	for _, args := range [][]string{{"serve", "--port=0"}, {"service", "install", "--port", "0"}} {
+		if _, _, err := executeCLI(t, Deps{}, args...); ExitCode(err) != 2 {
+			t.Fatalf("%v: exit %d (err %v), want usage error 2", args, ExitCode(err), err)
+		}
+	}
+}
+
+// A booting daemon that becomes ready on another port than asked warns too.
+func TestServeWarnsForBootingDaemonOnOtherPort(t *testing.T) {
+	cfg := setConfigEnv(t)
+	ready := false
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		status := "ok"
+		if r.URL.Path == "/readyz" {
+			status = "starting"
+			if ready {
+				status = "ready"
+			}
+		}
+		_, _ = fmt.Fprintf(w, `{"status":%q,"service":%q,"pid":4242,"workingDirectory":%q}`, status, daemonmeta.ServiceName, cfg.dataDir)
+	}))
+	t.Cleanup(srv.Close)
+	port := serverPort(t, srv.URL)
+	if err := runfile.Write(cfg.runFile, runfile.Info{PID: 4242, Port: port, StartedAt: time.Unix(100, 0).UTC()}); err != nil {
+		t.Fatal(err)
+	}
+	_, errOut, err := executeCLI(t, Deps{
+		ProcessAlive: func(pid int) bool { return pid == 4242 },
+		Sleep:        func(time.Duration) { ready = true },
+	}, "serve", "--port", fmt.Sprint(port+1))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(errOut, fmt.Sprintf("--port %d was ignored", port+1)) {
+		t.Fatalf("stderr = %q, want the ignored-port warning for the booting daemon", errOut)
+	}
+}
+
+// A daemon shutting down while serve starts may be an app swap: serve waits
+// for the replacement and watches it rather than exiting.
+func TestServeForegroundFollowsSwapDuringStartupShutdown(t *testing.T) {
+	h := newForegroundHarness(t)
+	if err := runfile.Write(h.cfg.runFile, runfile.Info{PID: 4242, Port: 1, StartedAt: time.Unix(100, 0).UTC()}); err != nil {
+		t.Fatal(err)
+	}
+	h.alive[4242] = true // unhealthy: alive, listener closed
+	app := fakeServeDaemon(t, 7070)
+	old := serveForegroundDaemon
+	t.Cleanup(func() { serveForegroundDaemon = old })
+	serveForegroundDaemon = func([]string) error { h.started++; return nil }
+	ticks := 0
+	out, _, err := executeCLI(t, Deps{
+		ProcessAlive:   func(pid int) bool { return h.alive[pid] },
+		PIDMayBeHidden: func() bool { return false },
+		Now:            func() time.Time { return h.now },
+		Sleep: func(d time.Duration) {
+			h.now = h.now.Add(d)
+			ticks++
+			switch ticks {
+			case 1: // the old daemon finishes shutting down
+				h.alive[4242] = false
+				_ = runfile.Remove(h.cfg.runFile)
+			case 2: // the app's replacement is up
+				h.alive[7070] = true
+				_ = runfile.Write(h.cfg.runFile, runfile.Info{PID: 7070, Port: serverPort(t, app.URL), StartedAt: time.Unix(100, 0).UTC(), Owner: "persistent"})
+			case 6: // later it is stopped cleanly
+				h.alive[7070] = false
+				_ = runfile.Remove(h.cfg.runFile)
+			}
+		},
+	}, "serve", "--foreground")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if h.started != 0 || !strings.Contains(out, "pid 7070") {
+		t.Fatalf("started=%d out=%q; want serve to watch the replacement 7070", h.started, out)
+	}
+}
+
+// An app replacement seen booting during the wait, then gone, restarts.
+func TestWaitForReplacementRemembersBootingAppReplacement(t *testing.T) {
+	cfg := setConfigEnv(t)
+	app := fakeBootingDaemon(t, 7070)
+	if err := runfile.Write(cfg.runFile, runfile.Info{PID: 7070, Port: serverPort(t, app.URL), StartedAt: time.Unix(100, 0).UTC(), Owner: "app"}); err != nil {
+		t.Fatal(err)
+	}
+	alive := true
+	now := time.Unix(1000, 0)
+	c := &commandContext{deps: Deps{
+		ProcessAlive:   func(int) bool { return alive },
+		PIDMayBeHidden: func() bool { return false },
+		Now:            func() time.Time { return now },
+		Sleep: func(d time.Duration) {
+			now = now.Add(d)
+			alive = false
+			_ = runfile.Remove(cfg.runFile) // the app quits before it is ready
+		},
+	}.withDefaults()}
+	loaded, _ := config.Load()
+	if _, err := c.waitForReplacement(context.Background(), loaded); err == nil || !strings.Contains(err.Error(), "replacement daemon (pid 7070) stopped with the app") {
+		t.Fatalf("err = %v, want a restart error for the app's booting replacement", err)
+	}
+}
+
+func TestTelemetryOptedOutFailsClosed(t *testing.T) {
+	notADir := filepath.Join(t.TempDir(), "file")
+	if err := os.WriteFile(notADir, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if !telemetryOptedOut(notADir) {
+		t.Fatal("an opt-out marker that cannot be checked must count as opted out")
+	}
+	if telemetryOptedOut(t.TempDir()) {
+		t.Fatal("a marker known to be absent is not an opt-out")
+	}
+}
+
+func TestApplyProcessEnvKeepsEmptyValues(t *testing.T) {
+	before := os.Environ()
+	t.Cleanup(func() { _ = applyProcessEnv(before) })
+	_ = os.Unsetenv("AO_SERVE_TEST_EMPTY")
+	if err := applyProcessEnv(append(os.Environ(), "AO_SERVE_TEST_EMPTY=")); err != nil {
+		t.Fatal(err)
+	}
+	if v, ok := os.LookupEnv("AO_SERVE_TEST_EMPTY"); !ok || v != "" {
+		t.Fatalf("explicitly empty variable lost: %q, %t", v, ok)
 	}
 }

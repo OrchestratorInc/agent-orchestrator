@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"html"
 	"io"
+	"io/fs"
 	"os"
 	"os/exec"
 	"os/user"
@@ -116,7 +117,8 @@ func newServiceInstallCommand(ctx *commandContext) *cobra.Command {
 		Short: "Install and start a user service that runs `ao serve`",
 		Args:  noArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			if opts.port < 0 || opts.port > 65535 {
+			// An explicit --port=0 is misuse, not "use AO_PORT".
+			if opts.port < 0 || opts.port > 65535 || (opts.port == 0 && cmd.Flags().Changed("port")) {
 				return usageError{fmt.Errorf("invalid --port %d: out of range 1-65535", opts.port)}
 			}
 			if opts.timeout <= 0 {
@@ -410,6 +412,11 @@ func sortedKeys(m map[string]string) []string {
 func ownedServiceFile(path string) (exists, owned bool, err error) {
 	data, err := os.ReadFile(path)
 	if errors.Is(err, os.ErrNotExist) {
+		// A symlink whose target is missing (say, an unmounted dotfiles
+		// dir) is still someone else's entry, not a free path.
+		if _, lerr := os.Lstat(path); lerr == nil {
+			return true, false, nil
+		}
 		return false, false, nil
 	}
 	if err != nil {
@@ -471,6 +478,14 @@ func (c *commandContext) serviceInstall(ctx context.Context, opts serviceOptions
 			return serviceStatus{}, fmt.Errorf("a launchd job named %s is already loaded, but not from %s; leaving it alone. If it is a leftover of ours, remove it with: launchctl bootout %s/%s", spec.Name, spec.File, launchdDomain(), spec.Name)
 		}
 	}
+	if !exists && spec.Manager == serviceManagerSystemd {
+		// systemd may already resolve this name to a unit elsewhere (such as
+		// /etc/systemd/user); writing ours would take it over on restart.
+		out, err := c.deps.CommandOutput(ctx, "systemctl", "--user", "show", "-p", "FragmentPath", "--value", spec.Name+".service")
+		if frag := strings.TrimSpace(string(out)); err == nil && frag != "" && canonicalPath(frag) != canonicalPath(spec.File) {
+			return serviceStatus{}, fmt.Errorf("a systemd user unit named %s.service already exists at %s; leaving it alone", spec.Name, frag)
+		}
+	}
 	before, err := c.inspectDaemon(ctx)
 	if err != nil {
 		return serviceStatus{}, err
@@ -515,7 +530,7 @@ func (c *commandContext) serviceInstall(ctx context.Context, opts serviceOptions
 	}
 	// Leave nothing behind when the service manager refuses the file; after
 	// a failed reinstall, restore the earlier definition and its state.
-	enabled := false
+	enabled, restarted := false, false
 	rollback := func(cause error) (serviceStatus, error) {
 		// An interrupt may have cancelled ctx; the compensating steps must
 		// still run.
@@ -526,6 +541,13 @@ func (c *commandContext) serviceInstall(ctx context.Context, opts serviceOptions
 				return serviceStatus{}, fmt.Errorf("%w; restoring the previous service also failed: %w", cause, err)
 			}
 			return serviceStatus{}, cause
+		}
+		if restarted {
+			// A start job systemd accepted can outlive a cancelled client:
+			// stop the unit before its definition goes, or keep the file.
+			if err := c.serviceCmd(rctx, "systemctl", "--user", "stop", spec.Name+".service"); err != nil {
+				return serviceStatus{}, fmt.Errorf("%w; rollback could not stop the unit, so %s was kept for `ao service uninstall`: %w", cause, spec.File, err)
+			}
 		}
 		if enabled {
 			// Keep the unit when its enablement links cannot be removed, so
@@ -563,6 +585,7 @@ func (c *commandContext) serviceInstall(ctx context.Context, opts serviceOptions
 		if err := c.serviceCmd(ctx, "systemctl", "--user", "enable", "--no-reload", spec.Name+".service"); err != nil {
 			return rollback(err)
 		}
+		restarted = true // a job systemd accepted may run even if the client fails
 		if err := c.serviceCmd(ctx, "systemctl", "--user", "restart", spec.Name+".service"); err != nil {
 			return rollback(err)
 		}
@@ -593,7 +616,7 @@ func (c *commandContext) serviceInstall(ctx context.Context, opts serviceOptions
 	}
 	// Ready must mean supervised: checked last, after every blocking probe,
 	// that the attached serve is still running.
-	if _, err := os.Stat(serveAttachMarker(cfg.RunFilePath, servePID)); err != nil || c.servicePID(ctx, spec) != servePID {
+	if _, err := os.Stat(serveAttachMarker(canonicalPath(cfg.RunFilePath), servePID)); err != nil || c.servicePID(ctx, spec) != servePID {
 		return serviceStatus{}, fmt.Errorf("service installed, but its ao serve (pid %d) exited after starting; check it with `ao service status`", servePID)
 	}
 	return st, nil
@@ -606,7 +629,7 @@ func (c *commandContext) waitServiceAttached(ctx context.Context, spec serviceSp
 	deadline := c.deps.Now().Add(timeout)
 	for {
 		if pid := c.servicePID(ctx, spec); pid > 0 {
-			if _, err := os.Stat(serveAttachMarker(cfg.RunFilePath, pid)); err == nil {
+			if _, err := os.Stat(serveAttachMarker(canonicalPath(cfg.RunFilePath), pid)); err == nil {
 				return pid, nil
 			}
 		}
@@ -630,10 +653,10 @@ var selfHostedServiceNames = map[string]string{
 
 // selfHostedService returns the self-hosted host service file next to where
 // spec would be written, and the data dir its daemon uses, when it exists.
-func selfHostedService(spec serviceSpec) (file, dataDir string) {
+func selfHostedService(spec serviceSpec) (file, dataDir string, err error) {
 	name := selfHostedServiceNames[spec.Manager]
 	if name == "" {
-		return "", ""
+		return "", "", nil
 	}
 	home, _ := os.UserHomeDir()
 	// Next to our file, and where the setup script itself writes: it ignores
@@ -644,30 +667,40 @@ func selfHostedService(spec serviceSpec) (file, dataDir string) {
 	}
 	var data []byte
 	for _, candidate := range candidates {
-		if b, err := os.ReadFile(candidate); err == nil {
-			file, data = candidate, b
-			break
+		b, err := os.ReadFile(candidate)
+		if errors.Is(err, fs.ErrNotExist) {
+			continue // confirmed absent: try the next place
 		}
+		if err != nil {
+			// A definition that exists but cannot be read is not "no
+			// conflict".
+			return "", "", fmt.Errorf("read self-hosted host service %s: %w", candidate, err)
+		}
+		file, data = candidate, b
+		break
 	}
 	if file == "" {
-		return "", ""
+		return "", "", nil
 	}
 	dataDir = filepath.Join(home, ".ao", "data")
-	// The script's runner exports AO_DATA_DIR only when it was set at setup.
+	// The script's runner exports AO_DATA_DIR only when it was set at setup;
+	// the default applies only after reading a runner that sets none.
 	if runner := selfHostedRunnerRE.Find(data); runner != nil {
 		path := string(runner)
 		if spec.Manager == serviceManagerLaunchd {
 			path = html.UnescapeString(path) // plistlib writes & as &amp;
 		}
-		if body, err := os.ReadFile(path); err == nil {
-			if m := selfHostedDataDirRE.FindSubmatch(body); m != nil {
-				// Only a CR may follow the word: trimming spaces would drop
-				// an escaped trailing space that belongs to the path.
-				dataDir = shellUnquote(strings.TrimRight(string(m[1]), "\r"))
-			}
+		body, err := os.ReadFile(path)
+		if err != nil {
+			return file, "", fmt.Errorf("read the self-hosted host service's runner %s: %w", path, err)
+		}
+		if m := selfHostedDataDirRE.FindSubmatch(body); m != nil {
+			// Only a CR may follow the word: trimming spaces would drop an
+			// escaped trailing space that belongs to the path.
+			dataDir = shellUnquote(strings.TrimRight(string(m[1]), "\r"))
 		}
 	}
-	return file, dataDir
+	return file, dataDir, nil
 }
 
 var (
@@ -804,7 +837,10 @@ func shellQuote(s string) string {
 // would fight over one daemon, and the script's service restarts it after
 // `ao stop`.
 func refuseSelfHostedConflict(spec serviceSpec) error {
-	file, theirs := selfHostedService(spec)
+	file, theirs, err := selfHostedService(spec)
+	if err != nil {
+		return err
+	}
 	if file == "" {
 		return nil
 	}
@@ -896,9 +932,11 @@ func (c *commandContext) serviceState(ctx context.Context, spec serviceSpec) (ru
 		}
 		state, _ := c.deps.CommandOutput(ctx, "systemctl", "--user", "is-enabled", unit)
 		switch strings.TrimSpace(string(state)) {
-		case "enabled", "enabled-runtime", "static", "alias", "indirect", "generated", "transient":
+		case "enabled", "static", "alias", "indirect", "generated", "transient":
 			enabled = true
-		case "disabled", "linked", "linked-runtime", "masked", "masked-runtime":
+		// Runtime-only enablement is not persistent: a rollback must remove a
+		// persistent link a failed install added.
+		case "enabled-runtime", "disabled", "linked", "linked-runtime", "masked", "masked-runtime":
 		default:
 			return false, false, fmt.Errorf("systemctl --user is-enabled %s: %q", unit, strings.TrimSpace(string(state)))
 		}
@@ -1016,16 +1054,22 @@ func (c *commandContext) serviceStatus(ctx context.Context) (serviceStatus, erro
 	}
 	st := serviceStatus{Manager: spec.Manager, Name: spec.Name, File: spec.File, Installed: exists && owned}
 	if st.Installed {
-		st.Loaded = c.serviceLoaded(ctx, spec)
+		// A failed manager query is an error, not a confirmed "not loaded".
+		running, enabled, err := c.serviceState(ctx, spec)
+		if err != nil {
+			return serviceStatus{}, fmt.Errorf("cannot tell whether %s is running: %w", spec.Name, err)
+		}
+		st.Loaded = running
 		if spec.Manager == serviceManagerSystemd {
-			enabled := c.serviceCmd(ctx, "systemctl", "--user", "is-enabled", "--quiet", spec.Name+".service") == nil
 			st.Enabled = &enabled
 		}
 	}
 	c.fillLinger(ctx, spec, &st)
-	if file, _ := selfHostedService(spec); file != "" {
-		st.SelfHostedService = file
+	file, _, err := selfHostedService(spec)
+	if err != nil {
+		return serviceStatus{}, err
 	}
+	st.SelfHostedService = file
 	ds, err := c.inspectDaemon(ctx)
 	if err != nil {
 		return serviceStatus{}, err
@@ -1065,6 +1109,9 @@ func (c *commandContext) serviceUninstall(ctx context.Context) (serviceStatus, e
 			// right after would see the label still loaded.
 			deadline := c.deps.Now().Add(launchdServiceGoneWait)
 			for {
+				if err := ctx.Err(); err != nil {
+					return serviceStatus{}, fmt.Errorf("%w; %s was kept so uninstall can be retried", err, spec.File)
+				}
 				still, err := c.launchdJobLoaded(ctx, spec)
 				if err == nil && !still {
 					break

@@ -620,7 +620,7 @@ func TestServiceSystemdStatusSeparatesActiveFromEnabled(t *testing.T) {
 	if _, _, err := executeCLI(t, systemdDeps(t, nil, nil), "service", "install", "--no-wait"); err != nil {
 		t.Fatal(err)
 	}
-	deps := systemdDeps(t, nil, map[string]bool{"systemctl --user is-active": true})
+	deps := systemdDeps(t, map[string]string{"systemctl --user is-active": "inactive\n"}, nil)
 	out, _, err := executeCLI(t, deps, "service", "status", "--json")
 	if err != nil {
 		t.Fatal(err)
@@ -638,6 +638,17 @@ func TestServiceSystemdStatusSeparatesActiveFromEnabled(t *testing.T) {
 // LaunchAgent and a runner that exports dataDir when it is set.
 func writeSelfHostedService(t *testing.T, agents, dataDir string) string {
 	t.Helper()
+	word := ""
+	if dataDir != "" {
+		word = shellQuote(dataDir) // a literal shell word, as printf %q would make
+	}
+	return writeSelfHostedServiceWord(t, agents, word)
+}
+
+// writeSelfHostedServiceWord writes the runner's AO_DATA_DIR word exactly as
+// given, for a caller that already has printf %q output.
+func writeSelfHostedServiceWord(t *testing.T, agents, dataDirWord string) string {
+	t.Helper()
 	if runtime.GOOS == "windows" {
 		t.Skip("the self-hosted setup script is bash-only; Windows is not a self-hosted host")
 	}
@@ -648,8 +659,8 @@ func writeSelfHostedService(t *testing.T, agents, dataDir string) string {
 	}
 	runner := filepath.Join(dir, "run-daemon.sh")
 	body := "#!/usr/bin/env bash\nexport PATH=/usr/bin\n"
-	if dataDir != "" {
-		body += "export AO_DATA_DIR=" + dataDir + "\n"
+	if dataDirWord != "" {
+		body += "export AO_DATA_DIR=" + dataDirWord + "\n"
 	}
 	if err := os.WriteFile(runner, []byte(body+"exec /x/ao daemon\n"), 0o700); err != nil {
 		t.Fatal(err)
@@ -717,7 +728,7 @@ func TestServiceInstallAllowsSelfHostedServiceOnOtherDataDir(t *testing.T) {
 	}
 	other := t.TempDir()
 	writeSelfHostedService(t, filepath.Dir(spec.File), other)
-	if _, got := selfHostedService(spec); got != other {
+	if _, got, _ := selfHostedService(spec); got != other {
 		t.Fatalf("runner data dir = %q, want %q read from the runner", got, other)
 	}
 	if _, _, err := executeCLI(t, deps, "service", "install", "--no-wait"); err != nil {
@@ -921,7 +932,7 @@ func TestServiceInstallRefusesSelfHostedWithShellQuotedDataDir(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	writeSelfHostedService(t, filepath.Dir(spec.File), string(quoted))
+	writeSelfHostedServiceWord(t, filepath.Dir(spec.File), string(quoted))
 	if _, _, err := executeCLI(t, deps, "service", "install", "--no-wait"); err == nil || !strings.Contains(err.Error(), "self-hosted host service") {
 		t.Fatalf("err = %v, want the conflict seen through %%q quoting (%s)", err, quoted)
 	}
@@ -997,8 +1008,12 @@ func TestWriteFileAtomic(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = os.Chmod(dir, 0o700) })
-	if err := writeFileAtomic(path, []byte("broken")); err == nil {
+	if probe, err := os.Create(filepath.Join(dir, "probe")); err == nil {
+		_ = probe.Close()
 		t.Skip("directory still writable (running as root?)")
+	}
+	if err := writeFileAtomic(path, []byte("broken")); err == nil {
+		t.Fatal("writeFileAtomic succeeded in a directory it cannot create files in; it must not overwrite in place")
 	}
 	if got, _ := os.ReadFile(path); string(got) != "new" {
 		t.Fatalf("failed write damaged the file: %q", got)
@@ -1120,7 +1135,7 @@ func TestServiceSystemdFindsSelfHostedUnitOutsideXDG(t *testing.T) {
 	t.Cleanup(func() { serviceGOOS = old })
 	home, _ := os.UserHomeDir()
 	runner := filepath.Join(t.TempDir(), "run-daemon.sh")
-	if err := os.WriteFile(runner, []byte("#!/usr/bin/env bash\nexport AO_DATA_DIR="+cfg.dataDir+"\nexec /x/ao daemon\n"), 0o700); err != nil {
+	if err := os.WriteFile(runner, []byte("#!/usr/bin/env bash\nexport AO_DATA_DIR="+shellQuote(cfg.dataDir)+"\nexec /x/ao daemon\n"), 0o700); err != nil {
 		t.Fatal(err)
 	}
 	unitDir := filepath.Join(home, ".config", "systemd", "user")
@@ -1346,7 +1361,7 @@ func TestServiceSelfHostedRunnerWithXMLEscapesAndTrailingSpace(t *testing.T) {
 	if err := os.WriteFile(plist, []byte("<plist><dict><key>ProgramArguments</key><array><string>"+xmlEscape(runner)+"</string></array></dict></plist>"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if _, got := selfHostedService(spec); got != dataDir {
+	if _, got, _ := selfHostedService(spec); got != dataDir {
 		t.Fatalf("runner data dir = %q, want %q", got, dataDir)
 	}
 	if _, _, err := executeCLI(t, deps, "service", "install", "--no-wait"); err == nil || !strings.Contains(err.Error(), "self-hosted host service") {
@@ -1387,24 +1402,37 @@ func TestServiceSystemdRollbackDisablesAfterFailedEnable(t *testing.T) {
 	old := serviceGOOS
 	serviceGOOS = "linux"
 	t.Cleanup(func() { serviceGOOS = old })
-	var got []string
-	deps := systemdDeps(t, nil, map[string]bool{"systemctl --user enable": true})
+	deps := systemdDeps(t, nil, nil)
+	spec, err := (&commandContext{deps: deps.withDefaults()}).currentServiceSpec(0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	link := false
 	inner := deps.CommandOutput
 	deps.CommandOutput = func(ctx context.Context, name string, args ...string) ([]byte, error) {
-		got = append(got, name+" "+strings.Join(args, " "))
+		if name == "systemctl" && len(args) > 1 {
+			switch args[1] {
+			case "enable":
+				link = true // the link is made, then the implicit reload fails
+				return []byte("Failed to reload"), errors.New("exit status 1")
+			case "disable":
+				if _, err := os.Stat(spec.File); err != nil {
+					t.Errorf("rollback disabled after removing the unit file: %v", err)
+				}
+				link = false
+				return nil, nil
+			}
+		}
 		return inner(ctx, name, args...)
 	}
 	if _, _, err := executeCLI(t, deps, "service", "install", "--no-wait"); err == nil {
 		t.Fatal("install succeeded although enable failed")
 	}
-	disabled := false
-	for _, c := range got {
-		if strings.HasPrefix(c, "systemctl --user disable ") {
-			disabled = true
-		}
+	if link {
+		t.Fatal("rollback left the enablement link")
 	}
-	if !disabled {
-		t.Fatalf("rollback after a failed enable did not disable: %v", got)
+	if _, err := os.Stat(spec.File); !os.IsNotExist(err) {
+		t.Fatalf("rollback left the unit file: %v", err)
 	}
 }
 
@@ -1443,5 +1471,212 @@ func TestServiceRollbackKeepsUnitReplacedConcurrently(t *testing.T) {
 	}
 	if got, err := os.ReadFile(spec.File); err != nil || string(got) != other {
 		t.Fatalf("the concurrent install's unit was removed or changed (err %v): %q", err, got)
+	}
+}
+
+// A manager query that fails is reported as an error, not as "not loaded".
+func TestServiceStatusReportsUnknownState(t *testing.T) {
+	setConfigEnv(t)
+	setServiceHome(t)
+	t.Setenv("XDG_CONFIG_HOME", "")
+	old := serviceGOOS
+	serviceGOOS = "linux"
+	t.Cleanup(func() { serviceGOOS = old })
+	if _, _, err := executeCLI(t, systemdDeps(t, nil, nil), "service", "install", "--no-wait"); err != nil {
+		t.Fatal(err)
+	}
+	deps := systemdDeps(t, map[string]string{"systemctl --user is-active": "Failed to connect to bus\n"}, nil)
+	if _, _, err := executeCLI(t, deps, "service", "status", "--json"); err == nil || !strings.Contains(err.Error(), "cannot tell whether") {
+		t.Fatalf("err = %v, want an unknown-state error", err)
+	}
+}
+
+// A dangling symlink at the service path is someone else's entry.
+func TestServiceInstallRefusesDanglingSymlink(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("needs symlinks")
+	}
+	setConfigEnv(t)
+	setServiceHome(t)
+	old := serviceGOOS
+	serviceGOOS = "darwin"
+	t.Cleanup(func() { serviceGOOS = old })
+	var calls []serviceCall
+	deps := serviceTestDeps(&calls, nil)
+	spec, _ := (&commandContext{deps: deps.withDefaults()}).currentServiceSpec(0)
+	if err := os.MkdirAll(filepath.Dir(spec.File), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(filepath.Join(t.TempDir(), "unmounted", "x.plist"), spec.File); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := executeCLI(t, deps, "service", "install", "--no-wait"); err == nil || !strings.Contains(err.Error(), "not written by `ao service install`") {
+		t.Fatalf("err = %v, want the dangling symlink left alone", err)
+	}
+	if fi, err := os.Lstat(spec.File); err != nil || fi.Mode()&os.ModeSymlink == 0 {
+		t.Fatalf("the symlink was replaced: %v", err)
+	}
+}
+
+// A unit of the same name that systemd resolves elsewhere is not taken over.
+func TestServiceSystemdRefusesUnitElsewhere(t *testing.T) {
+	setConfigEnv(t)
+	setServiceHome(t)
+	t.Setenv("XDG_CONFIG_HOME", "")
+	old := serviceGOOS
+	serviceGOOS = "linux"
+	t.Cleanup(func() { serviceGOOS = old })
+	deps := systemdDeps(t, map[string]string{"systemctl --user show": "/etc/systemd/user/agent-orchestrator-serve.service\n"}, nil)
+	_, _, err := executeCLI(t, deps, "service", "install", "--no-wait")
+	if err == nil || !strings.Contains(err.Error(), "already exists at /etc/systemd/user/") {
+		t.Fatalf("err = %v, want a refusal for the unit elsewhere", err)
+	}
+}
+
+// A self-hosted definition or runner that exists but cannot be read is not
+// "no conflict".
+func TestServiceSelfHostedDiscoveryErrorsPropagate(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("the self-hosted setup script is bash-only; Windows is not a self-hosted host")
+	}
+	setConfigEnv(t)
+	setServiceHome(t)
+	old := serviceGOOS
+	serviceGOOS = "darwin"
+	t.Cleanup(func() { serviceGOOS = old })
+	var calls []serviceCall
+	deps := serviceTestDeps(&calls, nil)
+	spec, _ := (&commandContext{deps: deps.withDefaults()}).currentServiceSpec(0)
+	plist := writeSelfHostedService(t, filepath.Dir(spec.File), t.TempDir())
+
+	// The runner is gone: the default data dir must not be assumed.
+	data, _ := os.ReadFile(plist)
+	if err := os.WriteFile(plist, []byte(strings.Replace(string(data), "run-daemon.sh", "gone/run-daemon.sh", 1)), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := executeCLI(t, deps, "service", "install", "--no-wait"); err == nil || !strings.Contains(err.Error(), "runner") {
+		t.Fatalf("err = %v, want the unreadable runner reported", err)
+	}
+	// The definition itself cannot be read.
+	if err := os.Chmod(plist, 0o000); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(plist, 0o600) })
+	if _, err := os.ReadFile(plist); err == nil {
+		t.Skip("file still readable (running as root?)")
+	}
+	if _, _, err := executeCLI(t, deps, "service", "install", "--no-wait"); err == nil || !strings.Contains(err.Error(), "read self-hosted host service") {
+		t.Fatalf("err = %v, want the unreadable definition reported", err)
+	}
+}
+
+// A failed fresh install whose restart systemd may have accepted stops the
+// unit before it removes the definition.
+func TestServiceSystemdRollbackStopsBeforeRemoving(t *testing.T) {
+	setConfigEnv(t)
+	setServiceHome(t)
+	t.Setenv("XDG_CONFIG_HOME", "")
+	old := serviceGOOS
+	serviceGOOS = "linux"
+	t.Cleanup(func() { serviceGOOS = old })
+	deps := systemdDeps(t, nil, map[string]bool{"systemctl --user restart": true})
+	spec, _ := (&commandContext{deps: deps.withDefaults()}).currentServiceSpec(0)
+	stopped := false
+	inner := deps.CommandOutput
+	deps.CommandOutput = func(ctx context.Context, name string, args ...string) ([]byte, error) {
+		if name == "systemctl" && len(args) > 1 && args[1] == "stop" {
+			if _, err := os.Stat(spec.File); err != nil {
+				t.Errorf("unit file removed before the stop: %v", err)
+			}
+			stopped = true
+		}
+		return inner(ctx, name, args...)
+	}
+	if _, _, err := executeCLI(t, deps, "service", "install", "--no-wait"); err == nil {
+		t.Fatal("install succeeded although restart failed")
+	}
+	if !stopped {
+		t.Fatal("rollback did not stop the unit")
+	}
+	if _, err := os.Stat(spec.File); !os.IsNotExist(err) {
+		t.Fatalf("unit file left after rollback: %v", err)
+	}
+}
+
+// Uninstall honours cancellation while it waits for launchd, keeping the
+// plist for a retry.
+func TestServiceLaunchdUninstallHonoursCancellation(t *testing.T) {
+	setConfigEnv(t)
+	setServiceHome(t)
+	old := serviceGOOS
+	serviceGOOS = "darwin"
+	t.Cleanup(func() { serviceGOOS = old })
+	var calls []serviceCall
+	if _, _, err := executeCLI(t, serviceTestDeps(&calls, nil), "service", "install", "--no-wait"); err != nil {
+		t.Fatal(err)
+	}
+	deps := serviceTestDeps(&calls, nil)
+	ctx, cancel := context.WithCancel(context.Background())
+	deps.CommandOutput = func(_ context.Context, _ string, args ...string) ([]byte, error) {
+		if args[0] == "bootout" {
+			cancel() // the user interrupts right after the bootout
+		}
+		return nil, nil // launchd keeps listing the job
+	}
+	c := &commandContext{deps: deps.withDefaults()}
+	_, err := c.serviceUninstall(ctx)
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("err = %v, want the cancellation", err)
+	}
+	spec, _ := c.currentServiceSpec(0)
+	if _, err := os.Stat(spec.File); err != nil {
+		t.Fatalf("plist removed although uninstall was interrupted: %v", err)
+	}
+}
+
+// With AO_RUN_FILE behind a symlink, install looks for the serve's marker
+// beside the canonical run file, where the service's serve writes it.
+func TestServiceInstallFindsMarkerBesideCanonicalRunFile(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("needs symlinks")
+	}
+	setConfigEnv(t)
+	setServiceHome(t)
+	old := serviceGOOS
+	serviceGOOS = "darwin"
+	t.Cleanup(func() { serviceGOOS = old })
+	// The run file itself is a symlink into another directory.
+	realDir := t.TempDir()
+	link := filepath.Join(t.TempDir(), "running.json")
+	if err := os.Symlink(filepath.Join(realDir, "running.json"), link); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("AO_RUN_FILE", link)
+	srv := fakeServeDaemon(t, 4242)
+	if err := runfile.Write(filepath.Join(realDir, "running.json"), runfile.Info{PID: 4242, Port: serverPort(t, srv.URL), StartedAt: time.Unix(100, 0).UTC()}); err != nil {
+		t.Fatal(err)
+	}
+	canonical, _ := filepath.EvalSymlinks(realDir)
+	if err := os.WriteFile(serveAttachMarker(filepath.Join(canonical, "running.json"), 777), nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var calls []serviceCall
+	deps := serviceTestDeps(&calls, nil)
+	deps.ProcessAlive = func(pid int) bool { return pid == 4242 }
+	loaded := false
+	deps.CommandOutput = func(_ context.Context, _ string, args ...string) ([]byte, error) {
+		switch args[0] {
+		case "print":
+			if !loaded {
+				return []byte("Could not find service"), errors.New("exit status 113")
+			}
+			return []byte("\tpid = 777\n"), nil
+		case "bootstrap":
+			loaded = true
+		}
+		return nil, nil
+	}
+	if _, _, err := executeCLI(t, deps, "service", "install", "--timeout", "5s"); err != nil {
+		t.Fatalf("install did not find the marker beside the canonical run file: %v", err)
 	}
 }

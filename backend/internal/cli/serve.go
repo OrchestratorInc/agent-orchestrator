@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
 	"os/exec"
 	"os/signal"
@@ -84,7 +85,8 @@ func newServeCommand(ctx *commandContext) *cobra.Command {
 			"Stop it with `ao stop`. Keep it running across reboots with `ao service install`.",
 		Args: noArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			if opts.port < 0 || opts.port > 65535 {
+			// An explicit --port=0 is misuse, not "use AO_PORT".
+			if opts.port < 0 || opts.port > 65535 || (opts.port == 0 && cmd.Flags().Changed("port")) {
 				return usageError{fmt.Errorf("invalid --port %d: out of range 1-65535", opts.port)}
 			}
 			if opts.timeout <= 0 {
@@ -221,7 +223,11 @@ func (c *commandContext) existingDaemon(ctx context.Context, errOut io.Writer, c
 		return &res, nil
 	case stateNotReady:
 		// Ours, alive and still booting: wait for it instead of starting another.
-		return c.waitServeReady(ctx, cfg, 0, nil, opts.timeout, true, &st)
+		res, err := c.waitServeReady(ctx, cfg, 0, nil, opts.timeout, true, &st)
+		if res != nil && opts.port != 0 && opts.port != res.Port {
+			_, _ = fmt.Fprintf(errOut, "warning: a daemon is already serving on port %d; --port %d was ignored\n", res.Port, opts.port)
+		}
+		return res, err
 	case stateUnhealthy:
 		return nil, fmt.Errorf("a daemon (pid %d) is running for %s but is not healthy: %s; check it with `ao status` or stop it with `ao stop`", st.PID, cfg.DataDir, st.Error)
 	}
@@ -285,10 +291,18 @@ func (c *commandContext) serveForeground(parent context.Context, out, errOut io.
 
 func (c *commandContext) serveForegroundLoop(ctx context.Context, out, errOut io.Writer, cfg config.Config, opts serveOptions) error {
 	sawDaemon, sawOwner, stopped, err := c.settleStartup(ctx, opts.timeout)
-	if err != nil || stopped {
+	if err != nil {
 		return err
 	}
-	res, err := c.existingDaemon(ctx, errOut, cfg, opts)
+	var res *serveResult
+	if stopped {
+		// The daemon seen shutting down is gone. It may be an app swap, so
+		// it falls through to the replacement wait below, and only then is
+		// the stop honoured.
+		err = nil
+	} else {
+		res, err = c.existingDaemon(ctx, errOut, cfg, opts)
+	}
 	var stoppedErr daemonStoppedError
 	if errors.As(err, &stoppedErr) {
 		// Gone while it booted: follow a replacement if one comes (an app
@@ -432,6 +446,7 @@ func (c *commandContext) settleStartup(ctx context.Context, timeout time.Duratio
 func (c *commandContext) waitForReplacement(ctx context.Context, cfg config.Config) (*serveResult, error) {
 	deadline := c.deps.Now().Add(serveReplacementWait)
 	var last daemonStatus
+	var booting *daemonStatus // the last verified replacement seen booting
 	for {
 		if err := ctx.Err(); err != nil {
 			return nil, err
@@ -448,10 +463,18 @@ func (c *commandContext) waitForReplacement(ctx context.Context, cfg config.Conf
 			return &res, nil
 		}
 		last = st
+		if st.State == stateNotReady && st.workingDirectory != "" && checkDaemonDataDir(st, cfg.DataDir) == nil {
+			b := st
+			booting = &b
+		}
 		if !c.deps.Now().Before(deadline) {
 			if last.State == stateStale {
 				// A replacement started, wrote its run file and died.
 				return nil, fmt.Errorf("the replacement daemon (pid %d) exited without shutting down; exiting so the service manager restarts it", last.PID)
+			}
+			if booting != nil && booting.owner == "app" {
+				// The app swapped in its daemon and quit before it was ready.
+				return nil, fmt.Errorf("the desktop app's replacement daemon (pid %d) stopped with the app before it was ready; exiting so the service manager starts one", booting.PID)
 			}
 			return nil, nil
 		}
@@ -606,7 +629,9 @@ func newServeResult(st daemonStatus, reused bool) serveResult {
 // analytics" in the desktop app, which leaves a marker in the data dir.
 func telemetryOptedOut(dataDir string) bool {
 	_, err := os.Stat(filepath.Join(dataDir, telemetryadapter.OptOutFile))
-	return err == nil
+	// Only a marker known to be absent means "not opted out"; a permission or
+	// I/O error fails closed.
+	return !errors.Is(err, fs.ErrNotExist)
 }
 
 // serveEnv builds the daemon's environment from the caller's. It leaves the
@@ -749,7 +774,7 @@ func applyProcessEnv(env []string) error {
 		}
 	}
 	for k, v := range want {
-		if os.Getenv(k) == v {
+		if cur, ok := os.LookupEnv(k); ok && cur == v {
 			continue
 		}
 		if err := os.Setenv(k, v); err != nil {
