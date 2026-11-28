@@ -59,3 +59,60 @@ func TestSetJSONCEditsOnlyTheChangedValue(t *testing.T) {
 		t.Fatal("descended into a non-object")
 	}
 }
+
+func TestJSONCBlankMeansNoValue(t *testing.T) {
+	for _, tc := range []struct {
+		in    string
+		blank bool
+	}{
+		{"", true},
+		{" \n\t", true},
+		{"\ufeff", true},
+		{"// only a comment\n", true},
+		{"/* a */ // b", true},
+		{"{}", false},
+		{"// note\n{\"a\": 1,}", false},
+		{"null", false},
+		{"{", false},
+	} {
+		if got := jsoncBlank([]byte(tc.in)); got != tc.blank {
+			t.Errorf("jsoncBlank(%q) = %v, want %v", tc.in, got, tc.blank)
+		}
+	}
+}
+
+func TestSetJSONCStartsAFreshObjectInABlankFile(t *testing.T) {
+	got, err := setJSONC([]byte("// nothing yet\n"), []string{"a", "b"}, []byte(`"new"`))
+	if want := "{\n  \"a\": {\n    \"b\": \"new\"\n  }\n}\n"; err != nil || string(got) != want {
+		t.Fatalf("setJSONC = %q, %v; want %q", got, err, want)
+	}
+}
+
+func TestSetJSONCRejectsInvalidSettings(t *testing.T) {
+	if _, err := setJSONC([]byte(`{"a": }`), []string{"a"}, []byte(`"new"`)); err == nil {
+		t.Fatal("edited invalid settings")
+	}
+}
+
+// Gemini CLI ends a // comment at a lone CR or at the end of the file, so a
+// save must keep the settings that follow such a comment.
+func TestSetJSONCKeepsSettingsAroundHarnessLineEndings(t *testing.T) {
+	for _, tc := range []struct{ in, want string }{
+		{
+			in:   "// settings\r{\"theme\":\"dark\"}",
+			want: "// settings\r{\"theme\":\"dark\", \"security\":{\"auth\":{\"selectedType\":\"new\"}}}",
+		},
+		{
+			in:   "{\"theme\":\"dark\"} // note",
+			want: "{\"theme\":\"dark\", \"security\":{\"auth\":{\"selectedType\":\"new\"}}} // note",
+		},
+	} {
+		got, err := setJSONC([]byte(tc.in), []string{"security", "auth", "selectedType"}, []byte(`"new"`))
+		if err != nil {
+			t.Fatalf("setJSONC(%q): %v", tc.in, err)
+		}
+		if string(got) != tc.want {
+			t.Errorf("setJSONC(%q) = %q, want %q", tc.in, got, tc.want)
+		}
+	}
+}

@@ -1,7 +1,6 @@
 package agentauth
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"io"
@@ -125,7 +124,7 @@ func geminiAPIKeySettings(path string) ([]byte, error) {
 			return nil, apierr.Unavailable("AGENT_AUTH_STORE_UNAVAILABLE", "Gemini's settings file could not be read.")
 		}
 		// Gemini CLI accepts comments in settings.json, as its probe does.
-		if plain, _ := jsoncPlain(data); len(bytes.TrimSpace(plain)) > 0 && (jsoncUnmarshal(data, &root) != nil || root == nil) {
+		if !jsoncBlank(data) && (jsoncUnmarshal(data, &root) != nil || root == nil) {
 			return nil, apierr.Invalid("AGENT_AUTH_STORE_INVALID", "Gemini's settings file is invalid; repair it before saving a key here.", nil)
 		}
 	} else if !os.IsNotExist(err) {
