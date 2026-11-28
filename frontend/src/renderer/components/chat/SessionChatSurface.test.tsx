@@ -636,6 +636,33 @@ describe("SessionChatSurface startup check", () => {
 		expect(conversationCommandState.send).toHaveBeenCalledWith(expect.objectContaining({ continuation: true }), expect.any(Promise));
 	});
 
+	it("hands the message back when the remote host stops accepting this device", async () => {
+		vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+		try {
+			conversationState.snapshot = { ...snapshotFor(session.id), controller: { state: "stopped" } };
+			conversationCommandState.send = vi.fn().mockResolvedValue({});
+			const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+			let refused = false;
+			const read = vi.fn(async () => {
+				if (refused) throw { code: "BAD_PASSWORD", message: "This computer is no longer paired." };
+				return [{ id: session.workspaceId, sessions: [checking] }];
+			});
+			await client.prefetchQuery({ queryKey: ["remote-workspaces", "h_air"], queryFn: read });
+			render(<Wrapper client={client}><SessionChatSurface session={checking} hostId="h_air" /></Wrapper>);
+			await act(async () => {
+				await sideMocks.workspaceSend?.("go on", undefined, "held-1");
+			});
+			const outcome = (conversationCommandState.send.mock.calls[0]?.[1] as Promise<void>).catch((error: unknown) => error);
+			refused = true;
+			await act(async () => { vi.advanceTimersByTime(1_000); });
+			await expect(outcome).resolves.toMatchObject({ code: "CHAT_CONTROLLER_NOT_READY" });
+			await act(async () => { vi.advanceTimersByTime(5_000); });
+			expect(read).toHaveBeenCalledTimes(2);
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
 	it("refreshes a remote host's sessions only while its check runs", async () => {
 		vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
 		try {

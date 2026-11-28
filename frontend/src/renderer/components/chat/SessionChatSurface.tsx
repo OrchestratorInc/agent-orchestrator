@@ -1001,18 +1001,25 @@ function whenSessionRecovered(queryClient: QueryClient, held: WorkspaceSession, 
 	const listed = () => queryClient.getQueryData<WorkspaceSummary[]>(workspacesKey)
 		?.flatMap((workspace) => workspace.sessions).find((candidate) => candidate.id === held.id);
 	const cached = () => listed() ?? (hostId ? undefined : queryClient.getQueryData<WorkspaceSession>(directKey));
-	const replaced = () => {
+	const refusal = () => {
+		const hostError = hostId ? queryClient.getQueryState(workspacesKey)?.error : undefined;
+		const hostCode = apiErrorCode(hostError);
+		if (hostCode === "BAD_PASSWORD" || hostCode === "HOST_API_INCOMPATIBLE") {
+			return Object.assign(new Error(apiErrorMessage(hostError, "The host no longer accepts this computer, so the message was not sent.")), { code: "CHAT_CONTROLLER_NOT_READY" });
+		}
 		const session = cached();
-		return Boolean(session && session.createdAt !== held.createdAt);
+		return session && session.createdAt !== held.createdAt
+			? Object.assign(new Error("This chat was replaced, so the message was not sent."), { code: "SESSION_NOT_FOUND" })
+			: undefined;
 	};
 	const recovered = () => {
 		const session = cached();
 		return Boolean(session) && session?.statusReadiness !== "checking" && queryClient.isMutating({ mutationKey: resumeKey }) === 0 &&
 			(resumeSettled || !canResumeAgent(session));
 	};
-	const replacedError = () => Object.assign(new Error("This chat was replaced, so the message was not sent."), { code: "SESSION_NOT_FOUND" });
 	return new Promise((resolve, reject) => {
-		if (replaced()) return reject(replacedError());
+		const refusedAtOnce = refusal();
+		if (refusedAtOnce) return reject(refusedAtOnce);
 		if (recovered()) return resolve();
 		const poll = setInterval(() => {
 			if (hostId) void queryClient.refetchQueries({ queryKey: workspacesKey, exact: true }, { cancelRefetch: false });
@@ -1024,9 +1031,10 @@ function whenSessionRecovered(queryClient: QueryClient, held: WorkspaceSession, 
 			stopMutations();
 		};
 		const settle = () => {
-			if (replaced()) {
+			const refused = refusal();
+			if (refused) {
 				stop();
-				return reject(replacedError());
+				return reject(refused);
 			}
 			if (cached()?.statusReadiness !== "checking") clearInterval(poll);
 			if (!recovered()) return;
