@@ -353,6 +353,21 @@ describe("DevicePanel", () => {
 		}
 	});
 
+	it("does not start a sleeping device that is shown again while it is being released", async () => {
+		mockApi({ lease: { ...iosLease, suspended: true, device: { ...iosLease.device, booted: false } } });
+		postMock.mockResolvedValue({ error: { code: "DEVICE_BOOT_FAILED", message: "The simulator could not boot." } });
+		const view = renderPanel(<DevicePanel isActive sessionId="ao-1" />);
+		expect(await screen.findByRole("button", { name: "Start" })).toBeInTheDocument();
+		postMock.mockImplementation(() => new Promise(() => {}));
+		await userEvent.click(screen.getByRole("button", { name: "Device options" }));
+		await userEvent.click(await screen.findByRole("menuitem", { name: "Release device" }));
+		view.rerender(<DevicePanel isActive={false} sessionId="ao-1" />);
+		view.rerender(<DevicePanel isActive sessionId="ao-1" />);
+		await act(async () => new Promise((resolve) => setTimeout(resolve, 50)));
+		const opens = postMock.mock.calls.filter(([path]) => path === "/api/v1/sessions/{sessionId}/device/open");
+		expect(opens).toHaveLength(1);
+	});
+
 	it("stops waiting for room once the device is being released", async () => {
 		vi.useFakeTimers({ shouldAdvanceTime: true });
 		try {

@@ -555,10 +555,11 @@ function DeviceLive({
 			wokeOnShow.current = false;
 			return;
 		}
-		if (starting || wokeOnShow.current) return;
+		// Not while the device is being given back: a start then would lease it again.
+		if (starting || releasing || wokeOnShow.current) return;
 		wokeOnShow.current = true;
 		onStart();
-	}, [asleep, isActive, onStart, starting]);
+	}, [asleep, isActive, onStart, releasing, starting]);
 
 	// Frames go to a canvas as each arrives: Android's H.264 through WebCodecs,
 	// iOS's MJPEG newest-part-first. Screenshots only where WebCodecs is missing.
