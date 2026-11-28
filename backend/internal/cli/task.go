@@ -10,6 +10,7 @@ import (
 	"net/url"
 	"os"
 	"os/signal"
+	"regexp"
 	"slices"
 	"strconv"
 	"strings"
@@ -283,20 +284,50 @@ func (id taskID) terminalBriefFingerprint() (length int, hash string, ok bool) {
 	return n, parts[2], true
 }
 
-// briefHash is the short fingerprint of a brief's trimmed text.
-func briefHash(text string) string {
-	sum := sha256.Sum256([]byte(text))
+// briefFingerprintHead is how much of a brief its fingerprint hashes. Turn
+// recorders keep at least this much of the start of a request.
+const briefFingerprintHead = 1024
+
+// canonicalBrief is a brief as turn recorders store it: trimmed, with control
+// characters other than tab and newlines removed (as the daemon delivers it).
+func canonicalBrief(text string) string {
+	return domain.SanitizeControlChars(strings.TrimSpace(text))
+}
+
+// briefHash is the short fingerprint of the first briefFingerprintHead bytes
+// of a canonical brief.
+func briefHash(canonical string) string {
+	head := canonical[:min(len(canonical), briefFingerprintHead)]
+	sum := sha256.Sum256([]byte(head))
 	return hex.EncodeToString(sum[:4])
 }
 
-// turnCarriesBrief reports whether a recorded request is the brief: its
-// trimmed text ends with exactly the brief (a sender header may precede it).
+// turnCarriesBrief reports whether a recorded request is the complete brief:
+// the same text, or, for a brief longer than a recorder keeps, a shortened copy
+// with the same start. A request that only contains the brief, or extends it,
+// does not match.
 func turnCarriesBrief(request string, length int, hash string) bool {
-	request = strings.TrimSpace(request)
-	if len(request) < length {
+	request = canonicalBrief(request)
+	if matchesBriefFingerprint(request, length, hash) {
+		return true
+	}
+	// The one header Orchestrator puts in front of a message from another
+	// session (`[from <session>] `, as `ao send` writes it) is not the brief.
+	if m := senderHeader.FindStringIndex(request); m != nil {
+		return matchesBriefFingerprint(request[m[1]:], length, hash)
+	}
+	return false
+}
+
+// senderHeader is the `[from <session-id>]` prefix `ao send` writes.
+var senderHeader = regexp.MustCompile(`^\[from [A-Za-z0-9_.-]+\][ \t]*\n?`)
+
+func matchesBriefFingerprint(request string, length int, hash string) bool {
+	head := min(length, briefFingerprintHead)
+	if len(request) < head || briefHash(request[:head]) != hash {
 		return false
 	}
-	return briefHash(request[len(request)-length:]) == hash
+	return len(request) == length || len(request) < length && length > briefFingerprintHead
 }
 
 func (id taskID) String() string {
@@ -483,7 +514,8 @@ func (c *commandContext) createTask(ctx context.Context, project projectDetails,
 	if err != nil {
 		return failedTask("", sessions, err.Error(), "")
 	}
-	if res := probe(sess.Harness, settingFix("--orchestrator-agent")); res != nil {
+	orchestratorFix := settingFix("--orchestrator-agent") + fmt.Sprintf("; the setting applies to new orchestrators only, so archive the running one (`ao session kill %s`) before starting the task again", orchestratorID)
+	if res := probe(sess.Harness, orchestratorFix); res != nil {
 		res.SessionIDs = sessions
 		return *res
 	}
@@ -525,8 +557,8 @@ func (c *commandContext) createTask(ctx context.Context, project projectDetails,
 		sentAt := c.deps.Now()
 		// The id carries the send time and the brief's fingerprint, so status
 		// matches the brief's own turn, not other work recorded after the send.
-		trimmed := strings.TrimSpace(message)
-		id := taskID{session: orchestratorID, turn: fmt.Sprintf("%s%d-%d-%s", terminalTaskTurnPrefix, sentAt.UnixMilli(), len(trimmed), briefHash(trimmed))}
+		canonical := canonicalBrief(message)
+		id := taskID{session: orchestratorID, turn: fmt.Sprintf("%s%d-%d-%s", terminalTaskTurnPrefix, sentAt.UnixMilli(), len(canonical), briefHash(canonical))}
 		err := c.postJSON(ctx, "sessions/"+url.PathEscape(orchestratorID)+"/send", sendAPIRequest{Message: message, SenderSessionID: sender, UserAuthored: sender == ""}, nil)
 		if errors.As(err, &apiErr) && apiErr.ErrorBody.Code == "SESSION_DELIVERY_UNCONFIRMED" {
 			// The brief is in the terminal's composer but not submitted.
@@ -961,86 +993,82 @@ func answerInSessionFix(session, task string) string {
 	return fmt.Sprintf("answer the pending request in session %s (open it in the Orchestrator app; `ao session get %s` shows it), then keep waiting with `ao task wait %s`", session, session, task)
 }
 
-// foldTaskWorkers combines the orchestrator turn's status with the workers its
-// turn (and earlier attempts of it) started. Each worker is read at its latest
-// turn, so follow-up work the orchestrator sends it, and an approval pending on
-// that work, count. The task needs input if any worker does, and is done only
-// once the turn and every worker have finished. A failed worker fails the task
-// once the orchestrator's turn is over, but only a worker of the current
-// attempt: a retry that succeeded supersedes an earlier attempt's failures.
-// Workers that existed before the task started are not tracked, since nothing
-// records which of them the orchestrator messaged for it.
-func (c *commandContext) foldTaskWorkers(ctx context.Context, res taskResult, workers, current []string) taskResult {
-	var needs, active, failed []string
-	var failReason, failFix string
+// taskWorkerPass is one read of every worker a task started.
+type taskWorkerPass struct {
+	needs, active, failed []string
+	failReason, failFix   string
+}
+
+// readTaskWorkers reads each worker at its latest turn. Failures of workers
+// from superseded attempts are left out.
+func (c *commandContext) readTaskWorkers(ctx context.Context, workers, current []string) taskWorkerPass {
+	var pass taskWorkerPass
 	for _, worker := range workers {
 		obs := c.observeTask(ctx, taskID{session: worker, latest: true})
 		w := obs.result
 		if obs.readFailed {
 			// An unread worker may still be working, whichever attempt started
 			// it, so the task cannot be reported done or failed from it.
-			active = append(active, fmt.Sprintf("%s (could not be read: %s)", worker, w.Reason))
+			pass.active = append(pass.active, fmt.Sprintf("%s (could not be read: %s)", worker, w.Reason))
 			continue
 		}
 		switch w.Status {
 		case taskStatusNeedsInput:
-			needs = append(needs, worker)
+			pass.needs = append(pass.needs, worker)
 		case taskStatusFailed:
 			if !slices.Contains(current, worker) {
 				continue // superseded by a retry of the attempt that started it
 			}
-			failed = append(failed, worker)
-			if failReason == "" {
-				failReason, failFix = fmt.Sprintf("worker %s failed: %s", worker, w.Reason), w.Fix
+			pass.failed = append(pass.failed, worker)
+			if pass.failReason == "" {
+				pass.failReason, pass.failFix = fmt.Sprintf("worker %s failed: %s", worker, w.Reason), w.Fix
 			}
 		case taskStatusDone:
 		default:
-			active = append(active, fmt.Sprintf("%s (%s)", worker, w.Status))
+			pass.active = append(pass.active, fmt.Sprintf("%s (%s)", worker, w.Status))
 		}
 	}
+	return pass
+}
+
+// foldTaskWorkers combines the orchestrator turn's status with the workers its
+// turn (and earlier attempts of it) started. Each worker is read at its
+// running (otherwise latest) turn, so follow-up work the orchestrator sends it,
+// and an approval pending on that work, count. The task needs input if any
+// worker does, and is done only once the turn and every worker have finished,
+// as seen by two consecutive passes: a worker read as done early in the first
+// pass may have been sent follow-up work since. A failed worker fails the task
+// once the orchestrator's turn is over, but only a worker of the current
+// attempt: a retry that succeeded supersedes an earlier attempt's failures.
+// Workers that existed before the task started are not tracked, since nothing
+// records which of them the orchestrator messaged for it.
+func (c *commandContext) foldTaskWorkers(ctx context.Context, res taskResult, workers, current []string) taskResult {
+	pass := c.readTaskWorkers(ctx, workers, current)
 	turnDone := res.Status == taskStatusDone
+	if turnDone && len(pass.needs) == 0 && len(pass.failed) == 0 && len(pass.active) == 0 {
+		// Everything looked finished: confirm with a second pass, judged by
+		// the same rules (needs input, current-attempt failure, still working).
+		pass = c.readTaskWorkers(ctx, workers, current)
+	}
 	switch {
-	case len(needs) > 0:
+	case len(pass.needs) > 0:
 		res.Status = taskStatusNeedsInput
-		res.Reason = fmt.Sprintf("worker %s is waiting for your answer or approval", strings.Join(needs, ", "))
+		res.Reason = fmt.Sprintf("worker %s is waiting for your answer or approval", strings.Join(pass.needs, ", "))
 		// Name the worker, not the orchestrator, as the session to answer.
-		res.Fix = answerInSessionFix(needs[0], res.TaskID)
-	case len(failed) > 0 && turnDone:
-		res.Status, res.Reason, res.Fix = taskStatusFailed, failReason, failFix
-	case len(active) > 0 || len(failed) > 0:
+		res.Fix = answerInSessionFix(pass.needs[0], res.TaskID)
+	case len(pass.failed) > 0 && turnDone:
+		res.Status, res.Reason, res.Fix = taskStatusFailed, pass.failReason, pass.failFix
+	case len(pass.active) > 0 || len(pass.failed) > 0:
 		res.Status = taskStatusRunning
 		if turnDone {
-			res.Reason = "the orchestrator handed the task to its workers; still working: " + strings.Join(active, ", ")
+			res.Reason = "the orchestrator handed the task to its workers; still working: " + strings.Join(pass.active, ", ")
 		} else {
 			res.Reason = "the orchestrator is working on it; workers started so far: " + strings.Join(workers, ", ")
 		}
 	case turnDone:
-		// Report done only from a consistent view: a worker read as done
-		// early in the pass may have been sent follow-up work since.
-		if busy := c.recheckTaskWorkers(ctx, workers); len(busy) > 0 {
-			res.Status = taskStatusRunning
-			res.Reason = "the orchestrator handed the task to its workers; still working: " + strings.Join(busy, ", ")
-			break
-		}
 		res.Reason = fmt.Sprintf("the orchestrator and its %d worker(s) finished", len(workers))
 	}
 	return res
-}
-
-// recheckTaskWorkers re-reads every worker after a pass that found all of
-// them done, and returns any that is no longer done (or could not be read).
-func (c *commandContext) recheckTaskWorkers(ctx context.Context, workers []string) []string {
-	var busy []string
-	for _, worker := range workers {
-		obs := c.observeTask(ctx, taskID{session: worker, latest: true})
-		switch {
-		case obs.readFailed:
-			busy = append(busy, fmt.Sprintf("%s (could not be read: %s)", worker, obs.result.Reason))
-		case obs.result.Status != taskStatusDone && obs.result.Status != taskStatusFailed:
-			busy = append(busy, fmt.Sprintf("%s (%s)", worker, obs.result.Status))
-		}
-	}
-	return busy
 }
 
 type taskEvaluation struct {

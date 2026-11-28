@@ -2001,3 +2001,98 @@ func TestTaskStartWaitAllReadsFailedSaysUnknown(t *testing.T) {
 		t.Fatalf("result = %v", res)
 	}
 }
+
+// A terminal brief matches only the complete recorded request: a request that
+// merely contains or extends the brief is other work.
+func TestTurnCarriesBriefMatchesTheCompleteBrief(t *testing.T) {
+	fp := func(brief string) (int, string) { c := canonicalBrief(brief); return len(c), briefHash(c) }
+	n, h := fp("Reply OK")
+	for _, tc := range []struct {
+		request string
+		want    bool
+	}{
+		{"Reply OK", true},
+		{"  Reply OK\n", true},
+		{"[from repo-9] Reply OK", true},
+		{"[from repo-9]\nReply OK", true},
+		{"Do not Reply OK", false},
+		{"Reply OK please", false},
+		{"[from repo-9] Do not Reply OK", false},
+	} {
+		if got := turnCarriesBrief(tc.request, n, h); got != tc.want {
+			t.Errorf("turnCarriesBrief(%q) = %v, want %v", tc.request, got, tc.want)
+		}
+	}
+
+	// Control characters are removed by the daemon before delivery, so the
+	// fingerprint is taken over the same text the recorder stores.
+	n, h = fp("Reply\x07 OK")
+	if !turnCarriesBrief("Reply OK", n, h) {
+		t.Error("a brief with a control character should match its sanitized record")
+	}
+
+	// A brief longer than the recorder keeps matches its truncated record by its
+	// start, but not a different long request.
+	long := strings.Repeat("a", 20000) + " end"
+	n, h = fp(long)
+	truncated := long[:8000] + "\n[... truncated by AO ...]\n" + long[len(long)-8000:]
+	if !turnCarriesBrief(truncated, n, h) {
+		t.Error("a long brief should match its truncated record")
+	}
+	if turnCarriesBrief("b"+long[1:], n, h) {
+		t.Error("a different long request must not match")
+	}
+}
+
+// The orchestrator-agent fix says the setting applies to new orchestrators and
+// to archive the running one before retrying.
+func TestTaskUnsupportedOrchestratorAgentFixSaysReplaceIt(t *testing.T) {
+	d := newTaskDaemon(t)
+	d.set("GET /api/v1/projects/repo", 200, `{"project":{"id":"repo","path":"/tmp/repo","config":{"worker":{"agent":"codex"},"orchestrator":{"agent":"claude-code"}}}}`)
+	d.set("POST /api/v1/agents/codex/probe", 200, `{"agent":{"id":"codex","authStatus":"authorized"},"supported":true,"installed":true}`)
+	d.set("POST /api/v1/agents/claude-code/probe", 200, `{"agent":{"id":"claude-code"},"supported":false,"installed":false}`)
+	d.set("POST /api/v1/orchestrators", 201, `{"orchestrator":{"id":"repo-orchestrator","projectId":"repo"}}`)
+	d.set("GET /api/v1/sessions/repo-orchestrator", 200, `{"session":{"id":"repo-orchestrator","harness":"claude-code","mode":"chat","provisionState":"ready","activity":{"state":"active"}}}`)
+	out, _, _ := executeCLI(t, fakeClockDeps(), "task", "start", "fix calc", "--project", "repo", "--json")
+	if fix := decodeTaskResult(t, out)["fix"].(string); !strings.Contains(fix, "applies to new orchestrators only") || !strings.Contains(fix, "ao session kill repo-orchestrator") {
+		t.Fatalf("fix = %q", fix)
+	}
+}
+
+// The second pass is judged like the first: a worker that asks for approval,
+// or a current-attempt worker that fails, during the recheck decides the task.
+func TestTaskStatusFoldRecheckKeepsNeedsInputAndFailures(t *testing.T) {
+	for _, tc := range []struct {
+		name, second, wantStatus string
+		wantExit                 int
+	}{
+		{"needs input on the recheck", `{"turns":[{"id":"w1","state":"completed"},{"id":"w2","state":"running"}],"activities":[{"turnId":"w2","activityKind":"approval","status":"pending"}]}`, "needs_input", 3},
+		{"failure on the recheck", `{"turns":[{"id":"w1","state":"completed"},{"id":"w2","state":"failed","errorMessage":"tests failed"}]}`, "failed", 1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			d := newTaskDaemon(t)
+			d.set("GET /api/v1/sessions/repo-orchestrator", 200, `{"session":{"id":"repo-orchestrator","harness":"claude-code","mode":"chat","provisionState":"ready","activity":{"state":"waiting_input"}}}`)
+			d.set("GET /api/v1/sessions/repo-orchestrator/conversation", 200, `{"turns":[{"id":"t2","state":"completed"}],"activities":[
+				{"id":"a1","turnId":"t2","activityKind":"ao_action","status":"completed","detail":{"action":"session.spawned","targetSessionId":"repo-3"}}]}`)
+			d.set("GET /api/v1/sessions/repo-3", 200, `{"session":{"id":"repo-3","harness":"claude-code","mode":"chat","provisionState":"ready","activity":{"state":"active"}}}`)
+			reads := 0
+			d.setFunc("GET /api/v1/sessions/repo-3/conversation", func() (int, string) {
+				d.mu.Lock()
+				reads++
+				n := reads
+				d.mu.Unlock()
+				if n == 1 {
+					return 200, `{"turns":[{"id":"w1","state":"completed"}]}`
+				}
+				return 200, tc.second
+			})
+			out, _, err := executeCLI(t, fakeClockDeps(), "task", "status", "repo-orchestrator:t2", "--json")
+			if got := ExitCode(err); got != tc.wantExit {
+				t.Fatalf("exit = %d (%v), want %d", got, err, tc.wantExit)
+			}
+			if res := decodeTaskResult(t, out); res["status"] != tc.wantStatus {
+				t.Fatalf("result = %v", res)
+			}
+		})
+	}
+}
