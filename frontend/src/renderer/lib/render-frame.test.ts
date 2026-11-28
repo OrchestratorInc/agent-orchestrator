@@ -337,8 +337,9 @@ describe("render page bootstrap", () => {
 		const extent = { left: 12, top: 40, width: 300, height: 44 };
 		page.emitDocument("keyup", { key: "c" });
 		expect(page.frames).toHaveLength(0);
+		page.emitDocument("keyup", { key: "Meta" });
+		expect(page.frames).toHaveLength(1);
 		page.emitDocument("pointerup");
-		page.emitDocument("keyup", { key: "Shift" });
 		page.frames.shift()!();
 		expect(page.frames).toHaveLength(0);
 		expect(page.postMessage).toHaveBeenCalledExactlyOnceWith({ jsonrpc: "2.0", method: "ao/selection", params: { text: selected, first, extent } }, "*");

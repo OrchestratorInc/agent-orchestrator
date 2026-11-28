@@ -154,7 +154,7 @@ describe("selection action positioning", () => {
 		report(other.contentWindow, 300); flush();
 		expect(hook.result.current?.top).toBe(108);
 		report(frame.contentWindow, 300); flush();
-		expect(hook.result.current?.top).toBe(308);
+		expect(hook.result.current).toEqual({ left: 100, top: 308, visible: false });
 		hook.rerender({ pinned: true });
 		expect(hook.result.current?.top).toBe(308);
 		frame.remove();

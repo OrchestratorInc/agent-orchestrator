@@ -43,9 +43,9 @@ export function useChatSelectionPosition(
 			}
 			let rect: DOMRect;
 			let extent: DOMRect;
-			if (frame) {
-				const box = source.getBoundingClientRect();
-				const place = (each: RenderRect) => new DOMRect(box.left + each.left, box.top + each.top, each.width, each.height);
+			const frameBox = frame && source.getBoundingClientRect();
+			if (frame && frameBox) {
+				const place = (each: RenderRect) => new DOMRect(frameBox.left + each.left, frameBox.top + each.top, each.width, each.height);
 				const latest = moved.current?.frame === frame ? moved.current : frame;
 				rect = place(latest.first);
 				extent = place(latest.extent);
@@ -76,7 +76,8 @@ export function useChatSelectionPosition(
 			const placed = selectionToolbarPosition(rect, bounds, size, extent);
 			const left = placed.left - parent.left;
 			const top = placed.top - parent.top;
-			const visible = placed.visible;
+			const visible = placed.visible && (!frameBox || (extent.bottom > frameBox.top && extent.top < frameBox.bottom &&
+				extent.right > frameBox.left && extent.left < frameBox.right));
 			setPosition((previous) => previous?.left === left && previous.top === top && previous.visible === visible
 				? previous : { left, top, visible });
 		};

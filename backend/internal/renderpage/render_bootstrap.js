@@ -242,8 +242,7 @@
   }
   document.addEventListener("pointerup", function () { reportSelection(true); }, true);
   document.addEventListener("keyup", function (e) {
-    if (/^(Arrow(Up|Down|Left|Right)|Home|End|PageUp|PageDown|Shift)$/.test(e.key) ||
-        ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "a")) reportSelection(true);
+    if (/^(Arrow(Up|Down|Left|Right)|Home|End|PageUp|PageDown|Shift|Meta|Control)$/.test(e.key)) reportSelection(true);
   }, true);
   document.addEventListener("selectionchange", function () {
     var selection = document.getSelection();
@@ -251,7 +250,7 @@
   });
   document.addEventListener("scroll", function () {
     if (selectionShown) reportSelection(false);
-  }, { passive: true });
+  }, { capture: true, passive: true });
   var reportedHeight, scheduled = false;
   function scheduleHeight() {
     if (scheduled) return;
