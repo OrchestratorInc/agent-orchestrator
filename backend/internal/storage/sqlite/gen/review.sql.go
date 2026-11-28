@@ -94,13 +94,21 @@ func (q *Queries) ClearReviewerHandleByHarness(ctx context.Context, arg ClearRev
 }
 
 const failUnsubmittedReviewBatchForChatTurn = `-- name: FailUnsubmittedReviewBatchForChatTurn :exec
-UPDATE review_run SET status = 'failed', failure_reason = 'turn_ended_without_submit', ended_at = ?1
-WHERE status IN ('launching', 'running') AND batch_id != ''
+UPDATE review_run SET
+    status = 'failed',
+    failure_reason = 'turn_ended_without_submit',
+    ended_at = ?1,
+    body = COALESCE(
+        (SELECT NULLIF(CAST(?2 AS TEXT), '') FROM conversation_turns AS turn
+         WHERE turn.id = ?3 AND turn.state = 'failed'),
+        'reviewer Chat turn ended without submitting a result'
+    )
+WHERE status IN ('launching', 'running') AND verdict = '' AND batch_id != ''
   AND EXISTS (
     SELECT 1 FROM conversation_turns AS turn
     JOIN conversation_messages AS message ON message.turn_id = turn.id AND message.conversation_id = turn.conversation_id
     JOIN review ON review.id = turn.handled_by_review_id
-    WHERE turn.id = ?2
+    WHERE turn.id = ?3
       AND turn.state IN ('completed', 'recovered', 'failed', 'interrupted', 'cancelled')
       AND turn.handled_by_review_id = review_run.review_id
       AND turn.controller_generation != '' AND turn.controller_generation = review.controller_generation
@@ -111,12 +119,13 @@ WHERE status IN ('launching', 'running') AND batch_id != ''
 `
 
 type FailUnsubmittedReviewBatchForChatTurnParams struct {
-	EndedAt sql.NullTime
-	TurnID  string
+	EndedAt      sql.NullTime
+	ErrorSummary string
+	TurnID       string
 }
 
 func (q *Queries) FailUnsubmittedReviewBatchForChatTurn(ctx context.Context, arg FailUnsubmittedReviewBatchForChatTurnParams) error {
-	_, err := q.db.ExecContext(ctx, failUnsubmittedReviewBatchForChatTurn, arg.EndedAt, arg.TurnID)
+	_, err := q.db.ExecContext(ctx, failUnsubmittedReviewBatchForChatTurn, arg.EndedAt, arg.ErrorSummary, arg.TurnID)
 	return err
 }
 
