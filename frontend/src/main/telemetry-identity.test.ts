@@ -40,11 +40,18 @@ describe("TelemetryIdentityController plan hand-off", () => {
 		await ctl.setPlan("free");
 		await ctl.flush();
 		expect(bodies().map((body) => body.plan)).toEqual(["pro", "pro", "free"]);
+		// A failed send is retried by the next setPlan with the same plan.
+		fetcher.mockResolvedValueOnce(new Response(null, { status: 500 }));
+		await ctl.setPlan("pro");
+		fetcher.mockResolvedValue(new Response(null, { status: 204 }));
+		await ctl.setPlan("pro");
+		await ctl.setPlan("pro");
+		expect(bodies().map((body) => body.plan)).toEqual(["pro", "pro", "free", "pro", "pro"]);
 		// Plan-only: never a cloudUserId; strictly increasing sequences.
 		expect(bodies().every((body) => !("cloudUserId" in body))).toBe(true);
 		const sequences = bodies().map((body) => body.sequence);
 		expect(sequences).toEqual([...sequences].sort((a, b) => a - b));
-		expect(new Set(sequences).size).toBe(3);
+		expect(new Set(sequences).size).toBe(5);
 	});
 });
 

@@ -177,7 +177,8 @@ export class TelemetryIdentityController {
 
 	/** Records the plan (already from the fixed vocabulary) and hands it to the daemon. */
 	setPlan(plan: string): Promise<void> {
-		if (plan === this.plan) return Promise.resolve();
+		// Only a delivered plan is skipped; a pending one is retried.
+		if (plan === this.plan && this.planPushed) return Promise.resolve();
 		this.plan = plan;
 		this.planPushed = false;
 		return this.flush();
