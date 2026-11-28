@@ -361,6 +361,8 @@ export interface CommandDetail {
 	providerToolName?: string;
 	providerTitle?: string;
 	subagentType?: string;
+	/** A subagent launch that settles as soon as the child starts; its hand-back says when it finished. */
+	background?: boolean;
 	subagentRetry?: unknown;
 	terminalId?: string;
 	signal?: string;

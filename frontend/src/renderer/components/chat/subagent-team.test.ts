@@ -328,3 +328,87 @@ describe("latestSubagentLine", () => {
 		expect(latestSubagentLine([edit])).toEqual({ kind: "edit", running: false, path: "page.tsx" });
 	});
 });
+
+// The shape AO's DeepSeek Harness driver records: an ordinary tool call that
+// completes as soon as the child starts, marked background, with the child's
+// steps and report read from DeepSeek's session store.
+function deepseekLaunch(id: string, tool: "subagent" | "subagent_fork" = "subagent", agentType?: string): ConversationActivity {
+	return {
+		kind: "activity",
+		id,
+		providerItemId: `tool-${id}`,
+		sequence: 1,
+		revision: 1,
+		activityKind: "mcp_tool",
+		status: "completed",
+		summary: tool,
+		detail: {
+			providerToolName: tool,
+			background: true,
+			input: { description: "Audit the cart", prompt: "Read-only. Audit the cart." },
+			content: [{ type: "text", text: "started subagent agent-1" }],
+			...(agentType ? { subagentType: agentType } : {}),
+		} as ConversationActivity["detail"],
+		createdAt: at(0),
+	};
+}
+
+describe("DeepSeek Harness subagents", () => {
+	it("recognizes both launch tools, with a fork's type", () => {
+		expect(isSubagentLaunch(deepseekLaunch("a"))).toBe(true);
+		const fork = readSubagent(deepseekLaunch("b", "subagent_fork", "fork"), [], true);
+		expect(isSubagentLaunch(fork.launch)).toBe(true);
+		expect(fork).toMatchObject({ title: "Audit the cart", agentType: "fork", prompt: "Read-only. Audit the cart." });
+	});
+
+	it("is working while the turn holding it runs, not done with its start note", () => {
+		const subagent = readSubagent(deepseekLaunch("a"), [], true);
+		expect(subagent.state).toBe("working");
+		expect(subagent.report).toBeUndefined();
+	});
+
+	it("reports what its hand-back says", () => {
+		const subagent = readSubagent(
+			deepseekLaunch("a"),
+			[step("s1", "tool-a", { activityKind: "mcp_tool", summary: "bash" }), handback("h1", "tool-a", "The cart is fine.")],
+			false,
+		);
+		expect(subagent).toMatchObject({ state: "done", report: "The cart is fine." });
+		expect(subagent.steps.map((s) => s.id)).toEqual(["s1"]);
+	});
+
+	it("reports its latest run once a follow-up gives it more work", () => {
+		const subagent = readSubagent(
+			deepseekLaunch("a"),
+			[handback("h1", "tool-a", "First pass.", at(5)), step("s2", "tool-a", { createdAt: at(6) }), handback("h2", "tool-a", "Second pass.", at(9))],
+			false,
+		);
+		expect(subagent).toMatchObject({ state: "done", report: "Second pass." });
+		expect(subagent.steps.map((s) => s.id)).toEqual(["h1", "s2"]);
+	});
+
+	it("is working on a follow-up run, not done with the earlier report", () => {
+		const subagent = readSubagent(
+			deepseekLaunch("a"),
+			[handback("h1", "tool-a", "First pass.", at(5)), step("s2", "tool-a", { status: "running", createdAt: at(6) })],
+			false,
+		);
+		expect(subagent.state).toBe("working");
+	});
+
+	it("reads a failed run as failed with its reason, and a cancelled one as stopped", () => {
+		const failedEnd = { ...handback("h1", "tool-a", "Background subagent agent-1 failed.\n\nrate limited"), status: "failed" as const };
+		expect(readSubagent(deepseekLaunch("a"), [failedEnd], true)).toMatchObject({
+			state: "failed",
+			error: "Background subagent agent-1 failed.",
+		});
+		const stoppedEnd = { ...handback("h1", "tool-a", "Background subagent agent-1 was stopped."), status: "cancelled" as const };
+		expect(readSubagent(deepseekLaunch("a"), [stoppedEnd], true).state).toBe("stopped");
+	});
+
+	it("has no report, rather than its start note, once the turn ends without one", () => {
+		const subagent = readSubagent(deepseekLaunch("a"), [], false);
+		expect(subagent.state).toBe("unknown");
+		expect(subagent.report).toBeUndefined();
+	});
+});

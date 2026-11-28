@@ -35,6 +35,8 @@ func New(plugin nativeacp.Plugin, log *slog.Logger) ports.ChatDriver {
 		SessionPreamble:      SessionPreamble,
 		PermissionPolicy:     permissionPolicy,
 		ValidateTurnSettings: validateTurnSettings,
+		// Subagents leave their work only in the session store; see subagents.go.
+		SubagentRecords: subagentRecords(),
 	}, log)
 }
 

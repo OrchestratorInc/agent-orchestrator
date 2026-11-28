@@ -487,6 +487,12 @@ func (c *conversation) resetHistoryItems(turnID string) {
 func (c *conversation) captureHistoryEvent(event ports.ChatEvent) bool {
 	c.historyMu.Lock()
 	defer c.historyMu.Unlock()
+	return c.captureHistoryEventLocked(event)
+}
+
+// captureHistoryEventLocked is captureHistoryEvent for a caller that holds
+// historyMu.
+func (c *conversation) captureHistoryEventLocked(event ports.ChatEvent) bool {
 	if c.history == nil {
 		return false
 	}
