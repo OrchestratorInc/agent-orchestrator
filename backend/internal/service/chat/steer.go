@@ -393,6 +393,10 @@ func (c *Controller) rejectSteerBeforeDispatch(
 	}
 	delivery, created, err := c.store.ReserveSteerDelivery(
 		ctx, c.conversation.ID, clientMessageID, requestJSON, c.now())
+	if errors.Is(err, store.ErrChatAttachmentDiscarded) {
+		// Refused before anything was reserved: definite, with no receipt to find.
+		return SteerResult{}, err
+	}
 	if err != nil {
 		return SteerResult{}, fmt.Errorf("%w: %s: %w",
 			ErrSteerDeliveryUncertain, refusal.reserveContext, err)
@@ -662,7 +666,12 @@ func (c *Controller) SteerOrSend(
 	turn, err := c.sendLocked(ctx, msg, false, override, queuedBatchIDs(batch))
 	if err != nil {
 		if len(batch) > 0 {
-			if failErr := c.store.FailQueuedBatch(context.WithoutCancel(ctx), c.conversation.ID,
+			if errors.Is(err, store.ErrChatAttachmentDiscarded) {
+				// Refused before anything was dispatched: the held messages still go.
+				if releaseErr := c.store.ReleaseQueuedBatch(context.WithoutCancel(ctx), c.conversation.ID, queuedBatchIDs(batch)); releaseErr != nil {
+					c.log.Error("failed to release fallback batch", "error", releaseErr)
+				}
+			} else if failErr := c.store.FailQueuedBatch(context.WithoutCancel(ctx), c.conversation.ID,
 				queuedBatchIDs(batch), ErrSteerDeliveryUncertain.Error(), c.now(), false); failErr != nil {
 				c.log.Error("failed to settle fallback batch", "error", failErr)
 			}

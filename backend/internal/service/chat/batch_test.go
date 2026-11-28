@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -684,11 +685,16 @@ func TestFailedSteeredBatchRetryKeepsEveryInputAndImage(t *testing.T) {
 type duplicateFallbackStore struct {
 	chatsvc.Store
 	duplicate bool
+	discarded bool
 }
 
 func (s *duplicateFallbackStore) AppendUserMessage(ctx context.Context, conversationID string,
 	session domain.SessionID, generation string, msg domain.ConversationMessage,
 	turnID string, now time.Time) (bool, error) {
+	if s.discarded {
+		// The lease triggers refusing a staged image cleanup took after it was read.
+		return false, fmt.Errorf("append user message: %w", store.ErrChatAttachmentDiscarded)
+	}
 	if s.duplicate {
 		// Simulate a second writer winning after SteerOrSend's initial lookup.
 		return false, nil
@@ -731,6 +737,46 @@ func TestDuplicateSteerFallbackReleasesPendingBatch(t *testing.T) {
 	second, err := h.st.NextQueuedTurn(ctx, h.ctrl.ConversationID())
 	if err != nil || second.Text != "pending second" {
 		t.Fatalf("second pending message = %+v, %v", second, err)
+	}
+}
+
+// A fallback send refused for a discarded image dispatched nothing, so the
+// messages it had claimed stay queued instead of being failed with it.
+func TestDiscardedImageFallbackReleasesPendingBatch(t *testing.T) {
+	var refusing *duplicateFallbackStore
+	h, provider := steerHarnessWithStore(t, func(st *store.Store) chatsvc.Store {
+		refusing = &duplicateFallbackStore{Store: st}
+		return refusing
+	})
+	ctx := context.Background()
+	for _, text := range []string{"pending first", "pending second"} {
+		if _, err := h.svc.Send(ctx, testSession, ports.ChatUserMessage{
+			Text: text, ClientMessageID: text, Origin: domain.MessageOriginAutomation,
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	provider.failWith(ports.ErrChatNoSteerableTurn)
+	refusing.discarded = true
+	_, err := h.svc.SteerOrSend(ctx, testSession, ports.ChatUserMessage{
+		Text: "look", ClientMessageID: "discarded-fallback", Origin: domain.MessageOriginHuman,
+	}, false)
+	if !errors.Is(err, store.ErrChatAttachmentDiscarded) {
+		t.Fatalf("fallback err = %v, want ErrChatAttachmentDiscarded", err)
+	}
+	if len(provider.sentTexts()) != 1 {
+		t.Fatalf("refused fallback reached provider: %v", provider.sentTexts())
+	}
+	first, err := h.st.NextQueuedTurn(ctx, h.ctrl.ConversationID())
+	if err != nil || first.Text != "pending first" {
+		t.Fatalf("first pending message = %+v, %v; want it still queued", first, err)
+	}
+	if err := h.st.CancelQueuedTurnByID(ctx, h.ctrl.ConversationID(), first.TurnID, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	second, err := h.st.NextQueuedTurn(ctx, h.ctrl.ConversationID())
+	if err != nil || second.Text != "pending second" {
+		t.Fatalf("second pending message = %+v, %v; want it still queued", second, err)
 	}
 }
 

@@ -473,6 +473,22 @@ func TestSteerRefusedForADiscardedImageIsDefinite(t *testing.T) {
 	}
 }
 
+// The same holds when the steer is refused before dispatch (no turn in flight):
+// recording that refusal is the reservation the triggers refuse.
+func TestPreDispatchSteerRefusedForADiscardedImageIsDefinite(t *testing.T) {
+	provider := newSteerRecorder()
+	h := newHarnessWithConversationAndStore(t, provider, func(st *store.Store) chatsvc.Store {
+		return discardedImageSteerStore{Store: st}
+	})
+	_, err := h.svc.Steer(context.Background(), testSession, ports.ChatUserMessage{Text: "look", ClientMessageID: "steer-discarded-idle"})
+	if !errors.Is(err, store.ErrChatAttachmentDiscarded) || errors.Is(err, chatsvc.ErrSteerDeliveryUncertain) {
+		t.Fatalf("err = %v, want a definite ErrChatAttachmentDiscarded", err)
+	}
+	if len(provider.steers()) != 0 {
+		t.Error("asked the provider to steer")
+	}
+}
+
 func TestReservedSteerStaysUncertainAcrossRetryAndRestart(t *testing.T) {
 	var flaky *failSteerCompletionStore
 	h, provider := steerHarnessWithStore(t, func(st *store.Store) chatsvc.Store {
