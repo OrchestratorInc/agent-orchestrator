@@ -3,7 +3,9 @@ import { act, fireEvent, render, screen, waitFor, within } from "@testing-librar
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { closeThreadInView, openThreadInView, peekThreadInView } from "../lib/cloud-asides";
+import { CloudCpError } from "../lib/cloud-cp/errors";
 import type { CloudCpAsideThread, CloudCpCommentThread, CloudCpCommentThreadPage } from "../lib/cloud-cp/types";
+import { typeInLexicalEditor } from "../test/lexical";
 import { TooltipProvider } from "./ui/tooltip";
 import { ThreadsView } from "./ThreadsView";
 
@@ -296,7 +298,163 @@ describe("opening a thread from the list", () => {
 		await act(() => queryClient.invalidateQueries({ queryKey: ["cloud-comment-threads"] }));
 		await waitFor(() => expect(pane.querySelector("[data-aside-reply-box]")).toBeNull());
 		expect(pane.querySelector("[data-comment-read-only]")).not.toBeNull();
-	});	it("keeps a thread in an ended session read-only", async () => {
+	});
+
+	it("reads the session again when the selected row leaves the list, and follows what it says", async () => {
+		mocks.listMyCommentThreads.mockResolvedValue(page([row("c-1")]));
+		mocks.getSession.mockResolvedValue({ session: { id: "session-c-1", projectId: "project-1", displayName: "Speed up session start", isTerminated: true } });
+		const queryClient = renderView();
+		fireEvent.click(await findRow("c-1"));
+		const pane = await screen.findByTestId("aside-pane");
+		await waitFor(() => expect(pane.querySelector("[data-aside-reply-box]")).not.toBeNull());
+		expect(mocks.getSession).not.toHaveBeenCalled();
+		// The session ended: its row moves under Resolved, and no Resolved page is cached.
+		mocks.listMyCommentThreads.mockResolvedValue(page([]));
+		await act(() => queryClient.invalidateQueries({ queryKey: ["cloud-comment-threads"] }));
+		await waitFor(() => expect(mocks.getSession).toHaveBeenCalled());
+		await waitFor(() => expect(pane.querySelector("[data-aside-reply-box]")).toBeNull());
+		expect(pane.querySelector("[data-comment-read-only]")).not.toBeNull();
+	});
+
+	it("keeps a thread whose row left the list editable once its session says it is live", async () => {
+		mocks.listMyCommentThreads.mockResolvedValue(page([row("c-1")]));
+		mocks.getSession.mockResolvedValue({ session: { id: "session-c-1", projectId: "project-1", displayName: "Speed up session start", isTerminated: false } });
+		const queryClient = renderView();
+		fireEvent.click(await findRow("c-1"));
+		const pane = await screen.findByTestId("aside-pane");
+		await waitFor(() => expect(pane.querySelector("[data-aside-reply-box]")).not.toBeNull());
+		mocks.listMyCommentThreads.mockResolvedValue(page([]));
+		await act(() => queryClient.invalidateQueries({ queryKey: ["cloud-comment-threads"] }));
+		await waitFor(() => expect(mocks.getSession).toHaveBeenCalled());
+		await waitFor(() => expect(pane.querySelector("[data-aside-reply-box]")).not.toBeNull());
+	});
+
+	it("drops a comment sent here once a newer read of the thread no longer has it (deleted in another window)", async () => {
+		mocks.listMyCommentThreads.mockResolvedValue(page([row("c-1")]));
+		const mine = { replyId: "r-mine", asideId: "c-1", text: "Use full jitter.", mentions: [], authorUserId: "u-me", authorName: "Me", createdAt: at, sequence: 60 };
+		mocks.replyToSessionAside.mockResolvedValue({ reply: mine });
+		const queryClient = renderView();
+		fireEvent.click(await findRow("c-1"));
+		const pane = await screen.findByTestId("aside-pane");
+		await typeInLexicalEditor(await within(pane).findByRole("combobox", { name: "Reply to the comment" }), "Use full jitter.");
+		await userEvent.keyboard("{Enter}");
+		await within(pane).findByText("Use full jitter.");
+		// Read again after it was deleted elsewhere: the thread no longer has it.
+		await act(() => queryClient.invalidateQueries({ queryKey: ["cloud-aside", "org-1", "session-c-1", "c-1"] }));
+		await waitFor(() => expect(within(pane).queryByText("Use full jitter.")).toBeNull());
+		expect(within(pane).getByText("Should this use jitter?")).toBeInTheDocument();
+	});
+
+	it("keeps a resolve that answered before a slow read of the thread", async () => {
+		const user = userEvent.setup();
+		mocks.listMyCommentThreads.mockResolvedValue(page([row("c-1")]));
+		let answerRead: (aside: CloudCpAsideThread["aside"]) => void = () => undefined;
+		mocks.markSessionAsideRead.mockImplementation(() => new Promise((resolve) => { answerRead = resolve; }));
+		mocks.resolveSessionAside.mockResolvedValue({ ...thread("c-1").aside, unread: false, resolvedAt: at, resolvedBy: { userId: "u-priya", name: "Priya Shah" } });
+		renderView();
+		fireEvent.click(await findRow("c-1"));
+		const pane = await screen.findByTestId("aside-pane");
+		await waitFor(() => expect(mocks.markSessionAsideRead).toHaveBeenCalled());
+		await user.click(await within(pane).findByRole("button", { name: "Resolve" }));
+		expect(await within(pane).findByRole("button", { name: "Reopen" })).toBeInTheDocument();
+		// The read answers last, with the thread as it was before the resolve.
+		await act(async () => answerRead({ ...thread("c-1").aside, unread: false }));
+		// Let the cache's update reach the pane before looking.
+		await act(async () => { await new Promise((resolve) => setTimeout(resolve, 50)); });
+		await waitFor(() => expect(mocks.markSessionAsideRead).toHaveBeenCalledTimes(1));
+		expect(within(pane).getByRole("button", { name: "Reopen" })).toBeInTheDocument();
+		expect(within(pane).queryByRole("button", { name: "Resolve" })).toBeNull();
+	});
+
+	it("asks a refused read again a few times, later each time, not on every render", async () => {
+		mocks.listMyCommentThreads.mockResolvedValue(page([row("c-1")]));
+		mocks.markSessionAsideRead.mockRejectedValue(new Error("offline"));
+		renderView();
+		fireEvent.click(await findRow("c-1"));
+		await screen.findByTestId("aside-pane");
+		// Asked, then again after 1 s and 2 s more, and no more.
+		await waitFor(() => expect(mocks.markSessionAsideRead.mock.calls.length).toBeGreaterThanOrEqual(3), { timeout: 6000 });
+		await act(async () => { await new Promise((resolve) => setTimeout(resolve, 2500)); });
+		expect(mocks.markSessionAsideRead).toHaveBeenCalledTimes(3);
+	});
+
+	it("holds a Mark unread made while a refused read waits to be asked again", async () => {
+		const user = userEvent.setup();
+		mocks.listMyCommentThreads.mockResolvedValue(page([row("c-1")]));
+		mocks.markSessionAsideRead.mockRejectedValue(new Error("offline"));
+		mocks.markSessionAsideUnread.mockResolvedValue({ ...thread("c-1").aside, unread: true });
+		renderView();
+		fireEvent.click(await findRow("c-1"));
+		const pane = await screen.findByTestId("aside-pane");
+		await waitFor(() => expect(mocks.markSessionAsideRead).toHaveBeenCalled());
+		await user.click(within(pane).getByRole("button", { name: "Comment options" }));
+		await user.click(await screen.findByRole("menuitem", { name: "Mark unread" }));
+		await waitFor(() => expect(mocks.markSessionAsideUnread).toHaveBeenCalledTimes(1));
+		const reads = mocks.markSessionAsideRead.mock.calls.length;
+		await act(async () => { await new Promise((resolve) => setTimeout(resolve, 2500)); });
+		expect(mocks.markSessionAsideRead.mock.calls.length).toBe(reads);
+	});
+
+	describe("your own comment, edited in another window", () => {
+		const mine = { replyId: "r-mine", asideId: "c-1", text: "W30 my reply", mentions: [], authorUserId: "u-priya", authorName: "Priya Shah", createdAt: at, sequence: 60 };
+		const edited = { ...mine, text: "W30 my reply, edited", editedAt: "2026-11-24T10:05:00Z", editedSequence: 61 };
+		const withMine = (reply: typeof mine) => ({ ...thread("c-1"), replies: [...thread("c-1").replies, reply] });
+
+		async function sendMine() {
+			const user = userEvent.setup();
+			mocks.replyToSessionAside.mockResolvedValueOnce({ reply: mine });
+			const queryClient = renderView();
+			fireEvent.click(await findRow("c-1"));
+			const pane = await screen.findByTestId("aside-pane");
+			await typeInLexicalEditor(await within(pane).findByRole("combobox", { name: "Reply to the comment" }), "W30 my reply");
+			await user.keyboard("{Enter}");
+			await within(pane).findByText("W30 my reply");
+			return { user, queryClient, pane };
+		}
+
+		it("shows the edit once the list says the newest comment changed, and pins a send to it", async () => {
+			mocks.listMyCommentThreads.mockResolvedValue(page([row("c-1")]));
+			const { user, queryClient, pane } = await sendMine();
+			// Edited elsewhere: the list's newest comment reads the edit; its activity time does not move.
+			mocks.getSessionAside.mockImplementation(async () => withMine(edited));
+			mocks.listMyCommentThreads.mockResolvedValue(page([row("c-1", { lastComment: { replyId: "r-mine", authorName: "Priya Shah", preview: "W30 my reply, edited", at } })]));
+			await act(() => queryClient.invalidateQueries({ queryKey: ["cloud-comment-threads"] }));
+			expect(await within(pane).findByText("W30 my reply, edited")).toBeInTheDocument();
+			mocks.replyToSessionAside.mockResolvedValue({ aside: { ...thread("c-1").aside, resolvedAt: at, sentToAgentAt: at } });
+			await user.click(within(pane).getByRole("checkbox", { name: "Also send to agent" }));
+			await user.click(within(pane).getByRole("button", { name: "Send, resolve and send the thread to the agent" }));
+			await waitFor(() => expect(mocks.replyToSessionAside).toHaveBeenLastCalledWith("org-1", "session-c-1", "c-1", expect.objectContaining({
+				sendToAgent: true, throughSequence: 61, seen: [{ replyId: "r-1", version: 50 }, { replyId: "r-mine", version: 61 }],
+			})));
+		});
+
+		it("shows what changed after a send it refused, the edit included", async () => {
+			mocks.listMyCommentThreads.mockResolvedValue(page([row("c-1")]));
+			const { user, pane } = await sendMine();
+			// Edited elsewhere with nothing on the list to say so.
+			mocks.getSessionAside.mockImplementation(async () => withMine(edited));
+			mocks.replyToSessionAside.mockRejectedValue(new CloudCpError("The thread changed after you read it.", { status: 409, code: "thread_changed" }));
+			await user.click(within(pane).getByRole("checkbox", { name: "Also send to agent" }));
+			await user.click(within(pane).getByRole("button", { name: "Send, resolve and send the thread to the agent" }));
+			expect(await within(pane).findByText("W30 my reply, edited")).toBeInTheDocument();
+			expect(within(pane).queryByText("W30 my reply")).toBeNull();
+			expect(pane.querySelector("[data-aside-entry='r-mine']")?.textContent).toMatch(/changed since you read it/i);
+		});
+	});
+
+	it("says why a send listing more comments than the control plane takes was refused", async () => {
+		const user = userEvent.setup();
+		mocks.listMyCommentThreads.mockResolvedValue(page([row("c-1")]));
+		mocks.replyToSessionAside.mockRejectedValue(new CloudCpError("seen: at most 2000", { status: 422, code: "validation_error", details: { field: "seen" } }));
+		renderView();
+		fireEvent.click(await findRow("c-1"));
+		const pane = await screen.findByTestId("aside-pane");
+		await user.click(await within(pane).findByRole("checkbox", { name: "Also send to agent" }));
+		await user.click(within(pane).getByRole("button", { name: "Send, resolve and send the thread to the agent" }));
+		expect(await within(pane).findByRole("alert")).toHaveTextContent("This thread has too many comments to send to the agent at once.");
+	});
+
+	it("keeps a thread in an ended session read-only", async () => {
 		mocks.listMyCommentThreads.mockResolvedValue(page([row("c-1", { sessionTerminated: true })]));
 		renderView();
 		fireEvent.click(await findRow("c-1"));

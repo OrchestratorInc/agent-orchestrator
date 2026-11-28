@@ -5585,6 +5585,7 @@
 	"comment.quoteNotInMessage": "Part of that selection isn't the message's own text (a formula, a diagram or a code block's controls), so it can't be quoted. Your comment is kept.",
 	"comment.postOnWholeMessage": "Post it on the whole message",
 	"comment.threadChanged": "The thread changed after you read it. Check the marked comments, then send it again.",
+	"comment.threadTooLong": "This thread has too many comments to send to the agent at once.",
 	"comment.changedSinceRead": "changed since you read it",
 	"comment.sendPreview_one": "Sends the agent {{count}} comment from this thread",
 	"comment.sendPreview_other": "Sends the agent {{count}} comments from this thread",

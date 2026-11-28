@@ -5605,6 +5605,7 @@
 	"comment.quoteNotInMessage": "選択範囲の一部がメッセージ本文ではない（数式、図、コードブロックの操作部分など）ため、引用できません。コメントは残っています。",
 	"comment.postOnWholeMessage": "メッセージ全体に投稿",
 	"comment.threadChanged": "読んだ後にスレッドが変更されました。印の付いたコメントを確認してから、もう一度送信してください。",
+	"comment.threadTooLong": "このスレッドはコメントが多すぎるため、まとめてエージェントに送信できません。",
 	"comment.changedSinceRead": "読んだ後に変更",
 	"comment.sendPreview_one": "このスレッドのコメント {{count}} 件をエージェントに送信します",
 	"comment.sendPreview_other": "このスレッドのコメント {{count}} 件をエージェントに送信します",

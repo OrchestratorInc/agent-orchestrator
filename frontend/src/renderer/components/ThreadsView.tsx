@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useId, useMemo, useState } from "react";
+import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useNavigate } from "@tanstack/react-router";
 import { useTranslation } from "react-i18next";
@@ -226,9 +226,23 @@ function ThreadPane({ thread, listed }: { thread: ThreadInView; listed?: CloudCp
 	// The row is current (a session that ended, a prompt right revoked); what the
 	// selection carried stands in only until a row is listed.
 	const known = { ...definedOf(thread), ...(cachedRow ? threadTarget(cachedRow) : {}) };
+	const sessionKey = useMemo(() => ["cloud-thread-session", baseUrl, thread.orgId, thread.sessionId] as const, [baseUrl, thread.orgId, thread.sessionId]);
+	// A row that leaves the list (a session that ended moves under Resolved) no
+	// longer vouches for the session: it is read again, and the pane stays
+	// read-only until it answers.
+	const [rowLeft, setRowLeft] = useState(false);
+	const wasListed = useRef(cachedRow !== undefined);
+	useEffect(() => {
+		const listedNow = cachedRow !== undefined;
+		if (wasListed.current && !listedNow) {
+			setRowLeft(true);
+			void queryClient.invalidateQueries({ queryKey: sessionKey });
+		} else if (listedNow) setRowLeft(false);
+		wasListed.current = listedNow;
+	}, [cachedRow, queryClient, sessionKey]);
 	const session = useQuery<CloudCpSession | undefined>({
-		queryKey: ["cloud-thread-session", baseUrl, thread.orgId, thread.sessionId],
-		enabled: ready && (known.sessionTitle === undefined || known.projectId === undefined || known.ended === undefined),
+		queryKey: sessionKey,
+		enabled: ready && (rowLeft || known.sessionTitle === undefined || known.projectId === undefined || known.ended === undefined),
 		staleTime: 60_000,
 		queryFn: async ({ signal }) => (await client.getSession(thread.orgId, thread.sessionId, { signal })).session,
 	});
@@ -236,7 +250,8 @@ function ThreadPane({ thread, listed }: { thread: ThreadInView; listed?: CloudCp
 	const projectId = known.projectId ?? session.data?.projectId;
 	// Unknown until the row or the session says: read-only meanwhile (and if the
 	// session can't be read), so an ended session never offers comments.
-	const ended = known.ended ?? (session.data ? session.data.isTerminated === true : true);
+	const sessionEnded = session.data ? session.data.isTerminated === true : true;
+	const ended = rowLeft ? (session.isFetching ? true : sessionEnded) : known.ended ?? sessionEnded;
 	// The row says whether this person may prompt the session's agent; a thread
 	// opened before its row is listed doesn't offer the send until it is.
 	const canPrompt = !ended && known.canPrompt === true;
@@ -251,7 +266,7 @@ function ThreadPane({ thread, listed }: { thread: ThreadInView; listed?: CloudCp
 			canPrompt={canPrompt}
 			ended={ended}
 			focusKey={thread.focusKey}
-			freshAt={cachedRow?.lastActivityAt}
+			freshAt={cachedRow ? threadActivityKey(cachedRow) : undefined}
 			onClose={closeThreadInView}
 			onOpenInSession={projectId ? onOpenInSession : undefined}
 			orgId={thread.orgId}
@@ -259,6 +274,16 @@ function ThreadPane({ thread, listed }: { thread: ThreadInView; listed?: CloudCp
 			sessionTitle={sessionTitle}
 		/>
 	);
+}
+
+/**
+ * What changes whenever the row says the thread changed: new activity, or its
+ * newest comment rewritten (an edit does not move lastActivityAt), so the pane
+ * reads the thread again and shows the newest copy of each comment.
+ */
+function threadActivityKey(row: CloudCpCommentThread): string {
+	const last = row.lastComment;
+	return [row.lastActivityAt, row.commentCount, last?.replyId ?? "", last?.at ?? "", last?.preview ?? ""].join("\n");
 }
 
 /** The fields that are set, so they override what a cached row says. */

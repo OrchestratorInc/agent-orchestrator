@@ -741,6 +741,14 @@ describe("mentions and the personal inbox", () => {
 		expect(onForbidden).not.toHaveBeenCalled();
 	});
 
+	it("sends an explicit zero limit for the threads view, and none when left out", async () => {
+		const { client, calls } = recording({ items: [] });
+		await client.listMyCommentThreads({ status: "open", limit: 0 });
+		await client.listMyCommentThreads({ status: "open" });
+		expect(calls()[0][0]).toBe("https://cloud.example.test/api/cloud/v1/me/comment-threads?status=open&limit=0");
+		expect(calls()[1][0]).toBe("https://cloud.example.test/api/cloud/v1/me/comment-threads?status=open");
+	});
+
 	it("asks a session's @ menu by name", async () => {
 		const { client, calls } = recording({ people: [], teams: [] });
 		await client.listMentionCandidates("org", "session", { q: "pri", limit: 20 });

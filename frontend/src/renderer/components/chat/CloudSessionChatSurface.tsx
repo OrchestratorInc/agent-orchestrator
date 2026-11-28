@@ -2693,13 +2693,16 @@ export function CloudSessionChatSurface({
 	// A new tagged message, comment, resolve or reopen: read the list again.
 	const newestAsideEvent = useMemo(() => (chatEvents ?? []).reduce((newest, event) =>
 		(event.type === ASIDE_REPLY_EVENT && asideReplyOf(event)) || ASIDE_STATE_EVENTS.has(event.type) || asideIdOf(event) ? Math.max(newest, event.sequence) : newest, 0), [chatEvents]);
-	// The newest thread event when the list was first read; undefined until the
+	// The newest thread event the list has been read against; undefined until the
 	// conversation loads, so a first thread after none (0) still reads it again.
+	// The first history to load may hold a thread event the list (read before
+	// it) does not know, so a conversation with any reads the list once more.
 	const asidesSeen = useRef<number | undefined>(undefined);
 	const chatEventsLoaded = chatEvents !== undefined;
 	useEffect(() => {
 		if (!asidesOn || !chatEventsLoaded) return;
-		if (asidesSeen.current === undefined || asidesSeen.current === newestAsideEvent) {
+		const first = asidesSeen.current === undefined;
+		if (asidesSeen.current === newestAsideEvent || (first && newestAsideEvent === 0)) {
 			asidesSeen.current = newestAsideEvent;
 			return;
 		}

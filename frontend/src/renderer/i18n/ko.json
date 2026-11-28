@@ -5605,6 +5605,7 @@
 	"comment.quoteNotInMessage": "선택한 부분 일부가 메시지 본문이 아니어서(수식, 다이어그램, 코드 블록의 컨트롤 등) 인용할 수 없습니다. 댓글은 그대로 남아 있습니다.",
 	"comment.postOnWholeMessage": "메시지 전체에 게시",
 	"comment.threadChanged": "읽은 후에 스레드가 바뀌었습니다. 표시된 댓글을 확인한 후 다시 보내세요.",
+	"comment.threadTooLong": "이 스레드는 댓글이 너무 많아 에이전트에게 한 번에 보낼 수 없습니다.",
 	"comment.changedSinceRead": "읽은 후 변경됨",
 	"comment.sendPreview_one": "이 스레드의 댓글 {{count}}개를 에이전트에게 보냅니다",
 	"comment.sendPreview_other": "이 스레드의 댓글 {{count}}개를 에이전트에게 보냅니다",

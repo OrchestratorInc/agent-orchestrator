@@ -5625,6 +5625,7 @@
 	"comment.quoteNotInMessage": "Bu seçimin bir kısmı mesajın kendi metni değil (bir formül, bir diyagram veya bir kod bloğunun denetimleri), bu yüzden alıntılanamaz. Yorumunuz korundu.",
 	"comment.postOnWholeMessage": "Mesajın tamamına gönder",
 	"comment.threadChanged": "Siz okuduktan sonra konu değişti. İşaretli yorumlara bakın, sonra yeniden gönderin.",
+	"comment.threadTooLong": "Bu konuda, ajana tek seferde gönderilemeyecek kadar çok yorum var.",
 	"comment.changedSinceRead": "okuduktan sonra değişti",
 	"comment.sendPreview_one": "Ajana bu konudan {{count}} yorum gönderir",
 	"comment.sendPreview_other": "Ajana bu konudan {{count}} yorum gönderir",

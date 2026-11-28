@@ -5780,6 +5780,7 @@
 	"comment.quoteNotInMessage": "Parte de esa selección no es el texto del mensaje (una fórmula, un diagrama o los controles de un bloque de código), así que no se puede citar. Tu comentario se conserva.",
 	"comment.postOnWholeMessage": "Publicarlo en el mensaje completo",
 	"comment.threadChanged": "El hilo cambió después de que lo leyeras. Revisa los comentarios marcados y vuelve a enviarlo.",
+	"comment.threadTooLong": "Este hilo tiene demasiados comentarios para enviarlo al agente de una vez.",
 	"comment.changedSinceRead": "cambió desde que lo leíste",
 	"comment.sendPreview_one": "Envía al agente {{count}} comentario de este hilo",
 	"comment.sendPreview_many": "Envía al agente {{count}} comentarios de este hilo",

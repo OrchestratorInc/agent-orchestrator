@@ -11,6 +11,7 @@ import {
 	asideReplyOf,
 	asideStateChangeOf,
 	cloudAsideKey,
+	ASIDE_MAX_REPLIES,
 	cloudAsidesKey,
 	loadAsideThread,
 	mergeAsideReplies,
@@ -26,6 +27,7 @@ import {
 	type CommentDraft,
 } from "../../lib/cloud-asides";
 import { flashChatMessage } from "../../lib/chat-flash";
+import { requestMentionFocus } from "../../lib/cloud-mention-open";
 import { CHAT_EVENTS_CACHE_MS } from "../../lib/cloud-chat-history";
 import { cloudMeQueryKey } from "../../lib/cloud-offering";
 import type {
@@ -42,7 +44,7 @@ import type {
 } from "../../lib/cloud-cp/types";
 import { AoError } from "../../../../../packages/shared/telemetry/ao-error";
 import { CloudCpError } from "../../lib/cloud-cp/errors";
-import { isPathQuery, MAX_MENTIONS, mentionRateLimit, mentionRefusal, mentionRefusalKey, mentionToken, parseEventMentions, type ComposerMention } from "../../lib/cloud-mentions";
+import { isPathQuery, MAX_MENTIONS, mentionRateLimit, mentionRefusal, mentionRefusalKey, mentionToken, parseEventMentions, splitByMentions, type ComposerMention } from "../../lib/cloud-mentions";
 import { activeCloudNotification, ASIDE_REPLY, asideReplyMetadata, cloudInboxQueryKey, MENTIONED, mentionMetadata } from "../../lib/cloud-notifications";
 import { formatTimeCompact } from "../../lib/format-time";
 import type { MessageKey } from "../../i18n/messages";
@@ -532,7 +534,11 @@ function AsideReplyBox({
 		// Focus first: the editor applies setText after this, so the caret it
 		// puts at the end of the seeded text is the one the next key types at.
 		editor.current?.focus();
-		if (seed.current) editor.current?.setText(seed.current, "end", []);
+		if (seed.current) {
+			editor.current?.setText(seed.current, "end", []);
+			// A programmatic change reports no onChange: the seeded text counts as typed.
+			setHasText(seed.current.trim() !== "");
+		}
 	}, [disabled, focusKey]);
 
 	const onChange = useCallback((snapshot: ComposerEditorSnapshot) => {
@@ -646,6 +652,8 @@ function AsideReplyBox({
 					{mentionSource && !disabled ? (
 						<Button
 							aria-label={t("comment.mentionSomeone")}
+							// Lexical's read-only stops typing, not insertText: no @ lands in a sending draft.
+							disabled={sending}
 							onClick={() => {
 								editor.current?.focus();
 								editor.current?.insertText("@");
@@ -753,6 +761,8 @@ function replyRefusalKey(error: unknown): MessageKey {
 	if (reason) return mentionRefusalKey(reason);
 	if (error instanceof CloudCpError && error.status === 403) return "comment.sendToAgentForbidden";
 	if (threadChanged(error)) return "comment.threadChanged";
+	// More comments shown than the control plane takes in seen.
+	if (error instanceof CloudCpError && error.status === 422 && error.details?.field === "seen") return "comment.threadTooLong";
 	return error instanceof CloudCpError && error.status === 409 ? "comment.ended" : "comment.replyFailed";
 }
 
@@ -776,31 +786,30 @@ export interface AsideFallback {
 
 const EMPTY_EVENTS: CloudCpClientEvent[] = [];
 
-/** The most comments a send to the agent names in seen (the contract's cap). */
-const MAX_SEEN = 500;
+/** The most comments a send to the agent names in seen (the contract's cap, as many as a read takes). */
+const MAX_SEEN = ASIDE_MAX_REPLIES;
 
 /** How often a refused read of a thread is asked again, and the first wait (it grows with each try). */
 const READ_RETRIES = 3;
 const READ_RETRY_MS = 1000;
 
-/** Scrolls the conversation to a message's anchor and tints it for a moment (lib/chat-flash.ts). */
-export function jumpToCommentAnchor(sequence: number): void {
+/** Scrolls the conversation to a message's anchor and tints it for a moment (lib/chat-flash.ts); false when it is not drawn. */
+export function jumpToCommentAnchor(sequence: number): boolean {
 	const node = document.querySelector<HTMLElement>(`[data-comment-anchor="${sequence}"]`);
-	if (!node) return;
+	if (!node) return false;
 	node.scrollIntoView({ block: "center", behavior: "smooth" });
 	flashChatMessage(node);
+	return true;
 }
 
-/** Scrolls the conversation to the message or steer whose tags started a thread, and tints it. */
-export function jumpToTaggedMessage(asideId: string, sequence: number): void {
+/** Scrolls the conversation to the message or steer whose tags started a thread, and tints it; false when it is not drawn. */
+export function jumpToTaggedMessage(asideId: string, sequence: number): boolean {
 	// A tagged steer's anchor is the event its request returned, so the row is found by its thread.
 	const tagged = document.querySelector<HTMLElement>(`[data-chat-aside="${asideId}"]`);
-	if (!tagged) {
-		jumpToCommentAnchor(sequence);
-		return;
-	}
+	if (!tagged) return jumpToCommentAnchor(sequence);
 	tagged.scrollIntoView({ block: "center", behavior: "smooth" });
 	flashChatMessage(tagged);
+	return true;
 }
 
 /** Translates one of the anchor labels. */
@@ -872,26 +881,53 @@ export function CloudAsidePane({
 	 */
 	onOpenInSession?: (sequence: number) => void;
 	/**
-	 * The threads view: when its list last saw the thread change. A newer
-	 * value (someone commented) reads the thread again and marks it read.
+	 * The threads view: what its list last saw of the thread (its activity and
+	 * newest comment). A change (someone commented, or rewrote a comment)
+	 * reads the thread again and marks it read.
 	 */
 	freshAt?: string;
 	onClose: () => void;
 }) {
 	const { t } = useTranslation();
 	const { client, ready, baseUrl, userId } = useCloudCp();
+	// A message the conversation has not drawn (older than what it loaded, or a
+	// long chat's row out of view) is opened as a mention is: read in, then
+	// scrolled to. No notification text stands in for it.
+	const focusInConversation = useCallback((sequence: number) => {
+		requestMentionFocus({
+			notificationId: `thread:${asideId}:${sequence}`,
+			kind: "aside_reply",
+			orgId,
+			sessionId,
+			sequence,
+			body: "",
+			asideId,
+			createdAt: new Date().toISOString(),
+		});
+	}, [asideId, orgId, sessionId]);
 	// Jumps to a message: in the conversation on screen, or in its session from the threads view.
-	const jumpTo = useCallback((sequence: number) => (onOpenInSession ? onOpenInSession(sequence) : jumpToCommentAnchor(sequence)), [onOpenInSession]);
+	const jumpTo = useCallback((sequence: number) => {
+		if (onOpenInSession) onOpenInSession(sequence);
+		else if (!jumpToCommentAnchor(sequence)) focusInConversation(sequence);
+	}, [focusInConversation, onOpenInSession]);
 	const jumpLabel = onOpenInSession ? t("comment.openInSession") : undefined;
 	const queryClient = useQueryClient();
 	const eventsLoaded = loadedEvents !== undefined;
 	const events = loadedEvents ?? EMPTY_EVENTS;
 	const threadKey = cloudAsideKey(orgId, sessionId, asideId);
+	// When this pane's newest read of the thread started: a reply it sent before
+	// then that the read leaves out was deleted elsewhere (see replies).
+	const readStartedAt = useRef(0);
 	const thread = useQuery<CloudCpAsideThread>({
 		queryKey: threadKey,
 		enabled: ready,
 		gcTime: CHAT_EVENTS_CACHE_MS,
-		queryFn: ({ signal }) => loadAsideThread(client, orgId, sessionId, asideId, signal),
+		queryFn: async ({ signal }) => {
+			const startedAt = Date.now();
+			const read = await loadAsideThread(client, orgId, sessionId, asideId, signal);
+			readStartedAt.current = Math.max(readStartedAt.current, startedAt);
+			return read;
+		},
 	});
 	// The thread as the list knows it, for a pane opened before the thread loads.
 	const listed = useCachedQueryData<CloudCpAsideListResponse>(cloudAsidesKey(orgId, sessionId), true)?.items.find((item) => item.asideId === asideId);
@@ -953,10 +989,16 @@ export function CloudAsidePane({
 	const messageJump = useMemo(() => {
 		if (comment || !aside || !message || anchorShown?.(aside) === false) return undefined;
 		const { asideId: tagged, anchor: { sequence } } = aside;
-		return { onJump: () => (onOpenInSession ? onOpenInSession(sequence) : jumpToTaggedMessage(tagged, sequence)), label: jumpLabel ?? t("comment.jump") };
-	}, [anchorShown, aside, comment, jumpLabel, message, onOpenInSession, t]);
+		const onJump = () => {
+			if (onOpenInSession) onOpenInSession(sequence);
+			else if (!jumpToTaggedMessage(tagged, sequence)) focusInConversation(sequence);
+		};
+		return { onJump, label: jumpLabel ?? t("comment.jump") };
+	}, [anchorShown, aside, comment, focusInConversation, jumpLabel, message, onOpenInSession, t]);
 
 	const [sent, setSent] = useState<CloudCpAsideReply[]>([]);
+	// When each of those was sent (or last edited) here.
+	const sentAt = useRef(new Map<string, number>());
 	const [pending, setPending] = useState<AsideEntry[]>([]);
 	const [removed, setRemoved] = useState<Set<string>>(() => new Set());
 	const live = useMemo(
@@ -988,7 +1030,13 @@ export function CloudAsidePane({
 	// it would carry whose version differs (edited, or new) is marked until a send goes.
 	const [refusedSeen, setRefusedSeen] = useState<ReadonlyMap<string, number>>();
 	const replies = useMemo<AsideEntry[]>(() => {
-		const own = sent.filter((reply) => reply.asideId === asideId);
+		// This person's own copies, less any a whole read that started after it was
+		// sent leaves out: deleted in another window. The threads view gets no
+		// deletion events; a reply sent after the read stays.
+		const read = thread.data;
+		const readIds = new Set(read?.replies.map((reply) => reply.replyId));
+		const own = sent.filter((reply) => reply.asideId === asideId &&
+			!(read && !read.hasMore && !readIds.has(reply.replyId) && (sentAt.current.get(reply.replyId) ?? Infinity) <= readStartedAt.current));
 		// Each comment as its newest copy (mergeAsideReplies): the thread as read,
 		// the stream, this person's own sends and edits, and a streamed edit newer
 		// than all of them. The text shown and the version a send pins (seen) are
@@ -1029,7 +1077,7 @@ export function CloudAsidePane({
 	// them (else the message the thread is on), the upper bound. The control
 	// plane refuses (409 thread_changed) a send when a comment it would carry
 	// (written since the last send) is missing from seen, newer than listed, or
-	// after throughSequence. seen holds at most 500: past that, only the
+	// after throughSequence. seen holds at most MAX_SEEN: past that, only the
 	// comments the send carries.
 	const seen = useMemo(() => {
 		const shown = replies.flatMap((entry) => (!entry.pending && entry.version !== undefined ? [{ replyId: entry.id, version: entry.version, sequence: entry.sequence ?? 0 }] : []));
@@ -1075,9 +1123,12 @@ export function CloudAsidePane({
 		seenFresh.current = freshAt;
 		void queryClient.invalidateQueries({ queryKey: threadKey });
 	}, [freshAt, queryClient, threadKey]);
+	// Each read asked is keyed by what it reads (the newest comment from others,
+	// the list's activity) and its retry: a render alone never asks again.
+	const readKey = `${asideId}:${newestFromOthers}:${freshAt ?? ""}`;
 	useEffect(() => {
 		if (!ready || !attentive) return;
-		const key = `${asideId}:${newestFromOthers}:${freshAt ?? ""}`;
+		const key = `${readKey}:${readRetry}`;
 		if (markedKey.current === key) return;
 		markedKey.current = key;
 		patchCachedAside(queryClient, orgId, sessionId, asideId, { unread: false });
@@ -1099,39 +1150,50 @@ export function CloudAsidePane({
 		patchCommentThreadRows(queryClient, baseUrl, userId, asideId, { unread: false });
 		void client.markSessionAsideRead(orgId, sessionId, asideId)
 			.then((next) => {
-				replaceCachedAside(queryClient, orgId, sessionId, asideId, next);
+				// Only the read state: a resolve or reopen that answered meanwhile is newer than this aside.
+				patchCachedAside(queryClient, orgId, sessionId, asideId, { unread: next.unread });
 				void queryClient.invalidateQueries({ queryKey: cloudUnreadThreadsKey(baseUrl, userId) });
 			})
 			.catch(() => {
 				// Nothing was marked: the caches read the control plane's unread state
 				// again (a newer Mark unread stands), and the read is asked again, up
-				// to READ_RETRIES times, while this thread is still the one on screen.
-				markedKey.current = "";
+				// to READ_RETRIES times and later each time, while this thread is
+				// still the one on screen.
 				void queryClient.invalidateQueries({ queryKey: cloudAsidesKey(orgId, sessionId) });
 				void queryClient.invalidateQueries({ queryKey: threadKey });
 				void queryClient.invalidateQueries({ queryKey: cloudInboxQueryKey(baseUrl, userId) });
 				invalidateCommentThreads(queryClient, baseUrl, userId);
-				const attempts = readAttempts.current.key === key ? readAttempts.current.count + 1 : 1;
-				readAttempts.current = { key, count: attempts };
+				const attempts = readAttempts.current.key === readKey ? readAttempts.current.count + 1 : 1;
+				readAttempts.current = { key: readKey, count: attempts };
+				window.clearTimeout(readRetryTimer.current);
 				if (attempts < READ_RETRIES) readRetryTimer.current = window.setTimeout(() => setReadRetry((value) => value + 1), READ_RETRY_MS * attempts);
 			});
-	}, [asideId, attentive, baseUrl, client, freshAt, newestFromOthers, orgId, queryClient, readRetry, ready, sessionId, threadKey, userId]);
+	}, [asideId, attentive, baseUrl, client, orgId, queryClient, readKey, readRetry, ready, sessionId, threadKey, userId]);
 
-	// "Mark unread": unread again for this person until they open it next.
+	// "Mark unread": unread again for this person until they open it next. A read
+	// asked again after a refused one (or a focus change) does not undo it.
 	const onMarkUnread = useCallback(() => {
+		window.clearTimeout(readRetryTimer.current);
+		readRetryTimer.current = undefined;
+		markedKey.current = `${readKey}:${readRetry}`;
 		patchCachedAside(queryClient, orgId, sessionId, asideId, { unread: true });
 		patchCommentThreadRows(queryClient, baseUrl, userId, asideId, { unread: true });
 		void client.markSessionAsideUnread(orgId, sessionId, asideId)
 			.then((next) => {
-				replaceCachedAside(queryClient, orgId, sessionId, asideId, next);
+				patchCachedAside(queryClient, orgId, sessionId, asideId, { unread: next.unread });
 				patchCommentThreadRows(queryClient, baseUrl, userId, asideId, { unread: next.unread });
 			})
 			.catch(() => {
+				// Nothing changed on the control plane, which may hold either state (a
+				// refused read leaves it unread): the caches read it again.
 				patchCachedAside(queryClient, orgId, sessionId, asideId, { unread: false });
 				patchCommentThreadRows(queryClient, baseUrl, userId, asideId, { unread: false });
+				void queryClient.invalidateQueries({ queryKey: cloudAsidesKey(orgId, sessionId) });
+				void queryClient.invalidateQueries({ queryKey: threadKey });
+				invalidateCommentThreads(queryClient, baseUrl, userId);
 			})
 			.finally(() => void queryClient.invalidateQueries({ queryKey: cloudUnreadThreadsKey(baseUrl, userId) }));
-	}, [asideId, baseUrl, client, orgId, queryClient, sessionId, userId]);
+	}, [asideId, baseUrl, client, orgId, queryClient, readKey, readRetry, sessionId, threadKey, userId]);
 
 	const muted = aside?.muted ?? false;
 	const onMute = useCallback((next: boolean) => {
@@ -1181,7 +1243,10 @@ export function CloudAsidePane({
 				: body);
 			if (sendToAgent) setRefusedSeen(undefined);
 			const reply = result.reply;
-			if (reply) setSent((current) => [...current, reply]);
+			if (reply) {
+				sentAt.current.set(reply.replyId, Date.now());
+				setSent((current) => [...current, reply]);
+			}
 			queryClient.setQueryData<CloudCpAsideThread>(threadKey, (current) => current && {
 				...current,
 				// The server's aside is whole (a reply may have reopened the thread, or resolved it by sending).
@@ -1217,13 +1282,16 @@ export function CloudAsidePane({
 
 	const onEdit = useCallback(async (replyId: string, text: string) => {
 		const original = replies.find((entry) => entry.id === replyId);
-		// Mentions still written in the text stay; the server checks them again.
-		const kept = (original?.mentions ?? []).filter((mention) => text.includes(`@${mention.name}`));
+		// Mentions still written in the text, as whole names where a chip would
+		// draw (`@Alex` in `@Alexandra` is not one), stay; the server checks them again.
+		const kept = [...new Map(splitByMentions(text, original?.mentions ?? [])
+			.flatMap((part) => typeof part === "string" ? [] : [[`${part.kind}:${part.id}`, part] as const])).values()];
 		try {
 			const { reply } = await client.editSessionAsideReply(orgId, sessionId, asideId, replyId, {
 				text,
 				...(kept.length ? { mentions: kept.map((mention) => mentionToken({ kind: mention.kind, id: mention.id, name: mention.name } as ComposerMention)) } : {}),
 			});
+			sentAt.current.set(reply.replyId, Date.now());
 			setSent((current) => [...current.filter((entry) => entry.replyId !== replyId), reply]);
 			queryClient.setQueryData<CloudCpAsideThread>(threadKey, (current) => current && { ...current, replies: mergeAsideReplies(current.replies, [reply]) });
 		} catch (error) {

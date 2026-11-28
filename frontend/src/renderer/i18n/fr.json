@@ -5780,6 +5780,7 @@
 	"comment.quoteNotInMessage": "Une partie de cette sélection n’est pas le texte du message (une formule, un diagramme ou les commandes d’un bloc de code) : elle ne peut pas être citée. Votre commentaire est conservé.",
 	"comment.postOnWholeMessage": "Le publier sur le message entier",
 	"comment.threadChanged": "Le fil a changé depuis que vous l’avez lu. Vérifiez les commentaires signalés, puis renvoyez-le.",
+	"comment.threadTooLong": "Ce fil contient trop de commentaires pour être envoyé à l’agent en une seule fois.",
 	"comment.changedSinceRead": "modifié depuis votre lecture",
 	"comment.sendPreview_one": "Envoie à l’agent {{count}} commentaire de ce fil",
 	"comment.sendPreview_many": "Envoie à l’agent {{count}} commentaires de ce fil",

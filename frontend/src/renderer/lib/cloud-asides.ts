@@ -141,6 +141,8 @@ export function asideIsOpen(aside: Pick<CloudCpAside, "resolvedAt">): boolean {
 /** At most this many replies one read of an aside takes, and this many reads. */
 const ASIDE_PAGE = 200;
 const ASIDE_MAX_PAGES = 10;
+/** The most comments of one thread a read takes (2000), so the most a send to the agent lists in seen: the contract's cap. */
+export const ASIDE_MAX_REPLIES = ASIDE_PAGE * ASIDE_MAX_PAGES;
 
 /** The session's asides as this person sees them (reply counts, unread dots, mute). */
 export const cloudAsidesKey = (orgId: string, sessionId: string) => ["cloud-asides", orgId, sessionId] as const;
@@ -230,23 +232,39 @@ export function replyVersion(reply: Pick<CloudCpAsideReply, "sequence" | "edited
 /**
  * Each reply once, oldest first. Of its copies (the thread as read, the
  * stream, this person's own sends and edits) the newest revision wins
- * (replyVersion), the later list between equal ones: a copy kept locally
- * never hides a newer edit. Replies with session events are ordered by them,
- * any other by time.
+ * (replyVersion), then the later edit (editedAt, for a control plane without
+ * edit events), then the later list: a copy kept locally never hides a newer
+ * edit. Replies with session events keep their events'
+ * order; each reply without one goes before the first with an event written
+ * after it, by time (a merge of the two orders, so every input has one
+ * order whatever it arrived in).
  */
 export function mergeAsideReplies(...lists: ReadonlyArray<readonly CloudCpAsideReply[]>): CloudCpAsideReply[] {
 	const byId = new Map<string, CloudCpAsideReply>();
+	const edited = (reply: CloudCpAsideReply) => (reply.editedAt ? Date.parse(reply.editedAt) || 0 : 0);
 	for (const list of lists) {
 		for (const reply of list) {
 			const held = byId.get(reply.replyId);
-			if (!held || replyVersion(reply) >= replyVersion(held)) byId.set(reply.replyId, reply);
+			// Between equal versions, the later edit; then the later list.
+			const newer = !held || replyVersion(reply) > replyVersion(held) ||
+				(replyVersion(reply) === replyVersion(held) && edited(reply) >= edited(held));
+			if (newer) byId.set(reply.replyId, reply);
 		}
 	}
 	const time = (reply: CloudCpAsideReply) => Date.parse(reply.createdAt) || 0;
-	return [...byId.values()]
-		.map((reply, index) => ({ reply, index }))
-		.sort((a, b) => (a.reply.sequence !== undefined && b.reply.sequence !== undefined ? a.reply.sequence - b.reply.sequence : time(a.reply) - time(b.reply)) || a.index - b.index)
-		.map(({ reply }) => reply);
+	const entries = [...byId.values()].map((reply, index) => ({ reply, index }));
+	const sequenced = entries.filter(({ reply }) => reply.sequence !== undefined)
+		.sort((a, b) => a.reply.sequence! - b.reply.sequence! || a.index - b.index);
+	const timed = entries.filter(({ reply }) => reply.sequence === undefined)
+		.sort((a, b) => time(a.reply) - time(b.reply) || a.index - b.index);
+	const merged: CloudCpAsideReply[] = [];
+	let next = 0;
+	for (const { reply } of sequenced) {
+		while (next < timed.length && time(timed[next]!.reply) < time(reply)) merged.push(timed[next++]!.reply);
+		merged.push(reply);
+	}
+	while (next < timed.length) merged.push(timed[next++]!.reply);
+	return merged;
 }
 
 /** One row of a thread in the pane: a comment, or a state change ("{Name} resolved this"). */

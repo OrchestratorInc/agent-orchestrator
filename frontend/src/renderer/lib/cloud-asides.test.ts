@@ -262,6 +262,23 @@ describe("one thread's comments from several copies", () => {
 		expect(mergeAsideReplies([local], [server])).toEqual([server]);
 	});
 
+	it("between copies of one version, keeps the later edit (a control plane without edit events)", () => {
+		const sent = reply("r-1", 60, { text: "first take" });
+		const editedElsewhere = reply("r-1", 60, { text: "second take", editedAt: "2026-11-24T10:10:00Z" });
+		expect(mergeAsideReplies([editedElsewhere], [sent])).toEqual([editedElsewhere]);
+		expect(mergeAsideReplies([sent], [editedElsewhere])).toEqual([editedElsewhere]);
+	});
+
+	it("gives a list of comments with and without events one order, whatever order they arrive in", () => {
+		// By events b goes before a; by time a before c and c before b: a sort on those mixed rules has a cycle.
+		const a = reply("r-a", 20, { createdAt: "2026-11-24T10:01:00Z" });
+		const b = reply("r-b", 10, { createdAt: "2026-11-24T10:03:00Z" });
+		const c = reply("r-c", undefined, { createdAt: "2026-11-24T10:02:00Z" });
+		const orders = [[a, b, c], [a, c, b], [b, a, c], [b, c, a], [c, a, b], [c, b, a]]
+			.map((list) => mergeAsideReplies(list).map((row) => row.replyId).join(","));
+		expect(new Set(orders)).toEqual(new Set(["r-c,r-b,r-a"]));
+	});
+
 	it("orders comments by their events before history goes between them", () => {
 		const merged = mergeAsideReplies([reply("r-14", 14), reply("r-10", 10)]);
 		expect(merged.map((row) => row.replyId)).toEqual(["r-10", "r-14"]);

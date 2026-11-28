@@ -5780,6 +5780,7 @@
 	"comment.quoteNotInMessage": "Parte dessa seleção não é o texto da mensagem (uma fórmula, um diagrama ou os controles de um bloco de código), então não pode ser citada. Seu comentário foi mantido.",
 	"comment.postOnWholeMessage": "Publicar na mensagem inteira",
 	"comment.threadChanged": "A conversa mudou depois que você a leu. Confira os comentários marcados e envie de novo.",
+	"comment.threadTooLong": "Esta conversa tem comentários demais para ser enviada ao agente de uma só vez.",
 	"comment.changedSinceRead": "alterado desde que você leu",
 	"comment.sendPreview_one": "Envia ao agente {{count}} comentário desta conversa",
 	"comment.sendPreview_many": "Envia ao agente {{count}} comentários desta conversa",

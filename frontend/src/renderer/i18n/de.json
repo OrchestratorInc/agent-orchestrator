@@ -5605,6 +5605,7 @@
 	"comment.quoteNotInMessage": "Ein Teil dieser Auswahl ist nicht der Text der Nachricht (eine Formel, ein Diagramm oder die Bedienelemente eines Codeblocks) und kann daher nicht zitiert werden. Ihr Kommentar bleibt erhalten.",
 	"comment.postOnWholeMessage": "Zur ganzen Nachricht posten",
 	"comment.threadChanged": "Der Thread hat sich geändert, nachdem Sie ihn gelesen haben. Prüfen Sie die markierten Kommentare und senden Sie ihn dann erneut.",
+	"comment.threadTooLong": "Dieser Thread hat zu viele Kommentare, um ihn auf einmal an den Agenten zu senden.",
 	"comment.changedSinceRead": "geändert, seit Sie ihn gelesen haben",
 	"comment.sendPreview_one": "Sendet dem Agenten {{count}} Kommentar aus diesem Thread",
 	"comment.sendPreview_other": "Sendet dem Agenten {{count}} Kommentare aus diesem Thread",

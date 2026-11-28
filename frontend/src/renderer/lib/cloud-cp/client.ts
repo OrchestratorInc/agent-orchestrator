@@ -695,9 +695,9 @@ export interface CloudCpClient {
 	listSessionAsides(orgId: string, sessionId: string, options?: CloudCpRequestOptions): Promise<CloudCpAsideListResponse>;
 	/** One aside: the message that started it and a page of its replies, oldest first. */
 	getSessionAside(orgId: string, sessionId: string, asideId: string, query?: CloudCpAsideThreadQuery, options?: CloudCpRequestOptions): Promise<CloudCpAsideThread>;
-	/** Replies in an aside; anyone who can open the session may, a viewer too. The agent never reads it. */
+	/** Replies in an aside; anyone who can open the session may, a viewer too. The agent reads it only when the thread is sent with it (sendToAgent). */
 	replyToSessionAside(orgId: string, sessionId: string, asideId: string, body: CloudCpAsideReplyRequest, options?: CloudCpRequestOptions): Promise<{ reply?: CloudCpAsideReply; aside?: CloudCpAside; sentMessage?: CloudCpAsideSentMessage }>;
-	/** Starts a comment thread on one message, with its first comment. Nothing reaches the agent. */
+	/** Starts a comment thread on one message, with its first comment. Nothing reaches the agent until the thread is sent to it. */
 	createSessionAside(orgId: string, sessionId: string, body: CloudCpAsideCreateRequest, options?: CloudCpRequestOptions): Promise<{ aside: CloudCpAside; reply: CloudCpAsideReply }>;
 	/** Resolves a comment thread without telling the agent. */
 	resolveSessionAside(orgId: string, sessionId: string, asideId: string, options?: CloudCpRequestOptions): Promise<CloudCpAside>;
@@ -1530,7 +1530,8 @@ export function createCloudCpClient(options: CloudCpClientOptions): CloudCpClien
 					...(query?.status ? { status: query.status } : {}),
 					...(query?.unread ? { unread: "true" } : {}),
 					...(query?.cursor ? { cursor: query.cursor } : {}),
-					...(query?.limit ? { limit: query.limit } : {}),
+					// An explicit 0 is sent (and refused), not read as no limit.
+					limit: query?.limit,
 				},
 				signal: o?.signal,
 			}),
