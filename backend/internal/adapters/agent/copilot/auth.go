@@ -3,6 +3,7 @@ package copilot
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -41,7 +42,10 @@ var copilotTokenEnvVars = []string{
 
 // copilotLocalAuthStatus follows Copilot CLI's own credential order: token
 // environment variables first (one silently overrides a stored login), then
-// Copilot's stored login, then the GitHub CLI. A BYOK provider is the fallback.
+// Copilot's stored credentials, the GitHub CLI, and a BYOK provider. A stored
+// login record is account metadata rather than a verified credential, so it is
+// only a fallback: a signed-in GitHub CLI or a BYOK provider still reports
+// authorized instead of being hidden behind it.
 func copilotLocalAuthStatus(ctx context.Context) (ports.AgentAuthStatus, bool, error) {
 	if err := ctx.Err(); err != nil {
 		return ports.AgentAuthStatusUnknown, false, err
@@ -53,7 +57,7 @@ func copilotLocalAuthStatus(ctx context.Context) (ports.AgentAuthStatus, bool, e
 		}
 	}
 	status, ok, err := copilotStoredAuthStatus(ctx)
-	if err == nil && ok && status.HasCredential() {
+	if err == nil && ok && status == ports.AgentAuthStatusAuthorized {
 		return status, true, nil
 	}
 	if copilotBYOKConfigured() {
@@ -76,12 +80,19 @@ func copilotStoredAuthStatus(ctx context.Context) (ports.AgentAuthStatus, bool, 
 	// config file must not prevent the documented GitHub CLI token fallback.
 	configPath := filepath.Join(copilotHomeDir(home), "config.json")
 	configStatus, configOK, _ := copilotConfigAuthStatus(configPath)
-	if configOK {
+	if configOK && configStatus == ports.AgentAuthStatusAuthorized {
 		ports.RecordAuthEvidence(ctx, authprobe.FileSource(configPath).WithMethod(domain.AgentAccountMethodAccount))
 		return configStatus, true, nil
 	}
+	// A recorded login is account metadata, not a verified credential, so the
+	// GitHub CLI still gets to prove an authorization before that login is
+	// reported as merely configured.
 	if status, ok, err := copilotGHAuthStatus(ctx); err != nil || ok {
 		return status, ok, err
+	}
+	if configOK {
+		ports.RecordAuthEvidence(ctx, authprobe.FileSource(configPath).WithMethod(domain.AgentAccountMethodAccount))
+		return configStatus, true, nil
 	}
 	return ports.AgentAuthStatusUnknown, false, nil
 }
@@ -113,7 +124,11 @@ func copilotConfigAuthStatus(path string) (ports.AgentAuthStatus, bool, error) {
 		return ports.AgentAuthStatusUnknown, false, nil
 	}
 	var config map[string]json.RawMessage
-	if err := json.Unmarshal(data, &config); err != nil {
+	cleaned, err := stripJSONC(data)
+	if err != nil {
+		return ports.AgentAuthStatusUnknown, false, err
+	}
+	if err := json.Unmarshal(cleaned, &config); err != nil {
 		return ports.AgentAuthStatusUnknown, false, err
 	}
 	for _, key := range []string{"authToken", "accessToken", "token"} {
@@ -123,7 +138,10 @@ func copilotConfigAuthStatus(path string) (ports.AgentAuthStatus, bool, error) {
 		}
 	}
 	if copilotLoggedInUser(config) {
-		return ports.AgentAuthStatusAuthorized, true, nil
+		// Account metadata only. Copilot CLI keeps OAuth tokens in the OS
+		// credential store, so a config login entry proves a sign-in happened
+		// but not that the credential is still valid (issue #8219).
+		return ports.AgentAuthStatusConfigured, true, nil
 	}
 	return ports.AgentAuthStatusUnknown, false, nil
 }
@@ -213,15 +231,112 @@ func copilotUsableToken(value string) bool {
 	return value != "" && !strings.HasPrefix(value, "ghp_")
 }
 
+// copilotLoggedInUser reports whether Copilot's config records at least one
+// account sign-in. Current Copilot CLI releases list loggedInUsers as an array
+// of account objects; older releases stored a map keyed by host. Empty or
+// stale records count as no login. An entry is account metadata only: the
+// credential itself lives in the OS credential store and is never read here.
 func copilotLoggedInUser(config map[string]json.RawMessage) bool {
-	var users map[string]json.RawMessage
-	if err := json.Unmarshal(config["loggedInUsers"], &users); err != nil {
+	users := config["loggedInUsers"]
+	var legacy map[string]json.RawMessage
+	if err := json.Unmarshal(users, &legacy); err == nil {
+		for _, user := range legacy {
+			if copilotLoginRecord(user) {
+				return true
+			}
+		}
 		return false
 	}
-	for _, user := range users {
-		if len(user) > 0 && string(user) != "null" && string(user) != `""` {
+	var accounts []json.RawMessage
+	if err := json.Unmarshal(users, &accounts); err != nil {
+		return false
+	}
+	for _, user := range accounts {
+		if copilotLoginRecord(user) {
 			return true
 		}
 	}
 	return false
+}
+
+// copilotLoginRecord reports whether a loggedInUsers entry records an actual
+// account. Objects must carry at least one field, however their braces are
+// spaced; nulls and empty or whitespace-only strings are not logins.
+func copilotLoginRecord(user json.RawMessage) bool {
+	var value any
+	if err := json.Unmarshal(user, &value); err != nil {
+		return false
+	}
+	switch v := value.(type) {
+	case map[string]any:
+		return len(v) > 0
+	case string:
+		return strings.TrimSpace(v) != ""
+	default:
+		return false
+	}
+}
+
+// stripJSONC removes // and /* */ comments and trailing commas so Copilot
+// CLI's JSONC config.json (issue #8219) decodes with encoding/json. String
+// contents are kept verbatim, including sequences that look like comments
+// inside URLs. It mirrors modelcatalog.stripJSONC, except that a block
+// comment left unterminated by a truncated write is reported as an error so
+// malformed input takes the GitHub CLI fallback instead of parsing as if the
+// missing tail were part of the comment; keep the two in sync otherwise.
+func stripJSONC(raw []byte) ([]byte, error) {
+	out := make([]byte, 0, len(raw))
+	inString, escaped := false, false
+	for i := 0; i < len(raw); i++ {
+		c := raw[i]
+		if inString {
+			out = append(out, c)
+			switch {
+			case escaped:
+				escaped = false
+			case c == '\\':
+				escaped = true
+			case c == '"':
+				inString = false
+			}
+			continue
+		}
+		switch {
+		case c == '"':
+			inString = true
+			out = append(out, c)
+		case c == '/' && i+1 < len(raw) && raw[i+1] == '/':
+			for i < len(raw) && raw[i] != '\n' {
+				i++
+			}
+			if i < len(raw) {
+				out = append(out, '\n')
+			}
+		case c == '/' && i+1 < len(raw) && raw[i+1] == '*':
+			end := -1
+			for j := i + 2; j+1 < len(raw); j++ {
+				if raw[j] == '*' && raw[j+1] == '/' {
+					end = j + 1
+					break
+				}
+			}
+			if end < 0 {
+				return nil, errors.New("unterminated block comment")
+			}
+			i = end
+		case c == ']' || c == '}':
+			// Drop a trailing comma left before this closer.
+			j := len(out) - 1
+			for j >= 0 && (out[j] == ' ' || out[j] == '\t' || out[j] == '\n' || out[j] == '\r') {
+				j--
+			}
+			if j >= 0 && out[j] == ',' {
+				out = append(out[:j], out[j+1:]...)
+			}
+			out = append(out, c)
+		default:
+			out = append(out, c)
+		}
+	}
+	return out, nil
 }
