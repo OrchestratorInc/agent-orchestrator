@@ -3,10 +3,14 @@ import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { Settings } from "../../hooks/useSettings";
+import { useUiStore } from "../../stores/ui-store";
 
-const { settingsMock, updateRetentionMock } = vi.hoisted(() => ({
+const { settingsMock, updateRetentionMock, updateCommitAttributionMock, updateSkillSharingMock, skillSharingError } = vi.hoisted(() => ({
+	updateSkillSharingMock: vi.fn(),
+	skillSharingError: { current: undefined as string | undefined },
 	settingsMock: vi.fn(),
 	updateRetentionMock: vi.fn(),
+	updateCommitAttributionMock: vi.fn(),
 }));
 
 const idle = { update: vi.fn(), saving: false, error: undefined };
@@ -15,6 +19,8 @@ vi.mock("../../hooks/useSettings", () => ({
 	useUpdateSessionInterface: () => idle,
 	useUpdateVersionRefresh: () => idle,
 	useUpdateSessionRetention: () => ({ update: updateRetentionMock, saving: false, error: undefined }),
+	useUpdateSkillSharing: () => ({ update: updateSkillSharingMock, saving: false, error: skillSharingError.current }),
+	useUpdateCommitAttribution: () => ({ update: updateCommitAttributionMock, saving: false, error: undefined }),
 }));
 
 vi.mock("../../hooks/useEditorHandoff", () => ({
@@ -84,5 +90,55 @@ describe("archived session retention", () => {
 		renderSection();
 
 		expect(screen.queryByRole("button", { name: "Delete archived sessions" })).not.toBeInTheDocument();
+	});
+});
+
+describe("Orchestrator attribution beta switch", () => {
+	it("only appears in Developer Mode", () => {
+		settingsMock.mockReturnValue(settings({}));
+		useUiStore.setState({ developerMode: false });
+		renderSection();
+		expect(screen.queryByRole("switch", { name: "Orchestrator attribution (beta)" })).not.toBeInTheDocument();
+	});
+
+	it("reflects the daemon setting and saves a change to it", async () => {
+		updateCommitAttributionMock.mockReset();
+		settingsMock.mockReturnValue(settings({ commitAttribution: false }));
+		useUiStore.setState({ developerMode: true });
+		renderSection();
+		const toggle = screen.getByRole("switch", { name: "Orchestrator attribution (beta)" });
+		expect(toggle).not.toBeChecked();
+		await userEvent.click(toggle);
+		expect(updateCommitAttributionMock).toHaveBeenCalledWith(true);
+	});
+});
+
+describe("Share skills between agents switch", () => {
+	const name = "Share skills between agents";
+
+	it("is hidden on a daemon that predates the setting", () => {
+		settingsMock.mockReturnValue(settings({}));
+		renderSection();
+		expect(screen.queryByRole("switch", { name })).not.toBeInTheDocument();
+	});
+
+	it("reflects the daemon setting and saves a change to it", async () => {
+		updateSkillSharingMock.mockReset();
+		settingsMock.mockReturnValue(settings({ skillSharing: false }));
+		useUiStore.setState({ developerMode: false });
+		renderSection();
+		const toggle = screen.getByRole("switch", { name });
+		expect(toggle).not.toBeChecked();
+		await userEvent.click(toggle);
+		expect(updateSkillSharingMock).toHaveBeenCalledWith(true);
+	});
+
+	it("says when the change could not be saved", () => {
+		settingsMock.mockReturnValue(settings({ skillSharing: true }));
+		skillSharingError.current = "daemon unavailable";
+		renderSection();
+		expect(screen.getByRole("switch", { name })).toBeChecked();
+		expect(screen.getByRole("alert")).toHaveTextContent("Couldn't save. Try again.");
+		skillSharingError.current = undefined;
 	});
 });

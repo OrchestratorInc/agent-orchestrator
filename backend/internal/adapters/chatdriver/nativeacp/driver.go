@@ -74,7 +74,10 @@ type Config struct {
 	PromptErrorFailure func(error, bool) error
 	// HistoryReconciler rewrites a completed session/load replay. See
 	// acpdriver.Config.HistoryReconciler.
-	HistoryReconciler      func([]ports.ChatEvent) []ports.ChatEvent
+	HistoryReconciler func([]ports.ChatEvent) []ports.ChatEvent
+	// NativeHistoryReplay: see acpdriver.Config. The native process must have
+	// successfully resumed before this adapter-owned history reader is called.
+	NativeHistoryReplay    func(context.Context, acpdriver.LaunchConfig, string) ([]acpsdk.SessionNotification, bool, error)
 	PermissionPolicy       acpdriver.PermissionPolicy
 	ClientExtension        acpdriver.ClientExtensionHandler
 	ClientExtensionAliases map[string]string
@@ -95,6 +98,8 @@ type Config struct {
 	QuickStop bool
 	// HideCommand: see acpdriver.Config.HideCommand.
 	HideCommand func(acpsdk.AvailableCommand) bool
+	// CompactionMessage: see acpdriver.Config.CompactionMessage.
+	CompactionMessage func(text string, meta map[string]any) (acpdriver.CompactionReport, bool)
 }
 
 // New creates a Chat driver that launches the exact executable resolved by the
@@ -196,6 +201,7 @@ func buildConfig(plugin Plugin, cfg Config, log *slog.Logger) acpdriver.Config {
 		SuppressSessionModes:         cfg.SuppressSessionModes,
 		ImplicitWorkspaceDirectories: cfg.ImplicitWorkspaceDirectories,
 		HistoryReconciler:            cfg.HistoryReconciler,
+		NativeHistoryReplay:          cfg.NativeHistoryReplay,
 		PromptErrorFailure:           cfg.PromptErrorFailure,
 		PermissionPolicy:             cfg.PermissionPolicy,
 		ClientExtension:              cfg.ClientExtension,
@@ -208,5 +214,6 @@ func buildConfig(plugin Plugin, cfg Config, log *slog.Logger) acpdriver.Config {
 		DecodeProviderConversationID: cfg.DecodeProviderConversationID,
 		QuickStop:                    cfg.QuickStop,
 		HideCommand:                  cfg.HideCommand,
+		CompactionMessage:            cfg.CompactionMessage,
 	}
 }

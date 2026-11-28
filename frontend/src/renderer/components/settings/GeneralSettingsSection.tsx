@@ -28,7 +28,7 @@ import { IS_DEV } from "../../lib/is-dev";
 import { freshMachineSimActive, setFreshMachineSim } from "../../lib/fresh-machine-sim";
 import { agentReadinessQueryKey } from "../../hooks/useAgentReadinessQuery";
 import { githubAuthRequirementQueryOptions, systemRequirementsQueryKey } from "../../hooks/useSystemRequirementsGate";
-import { useSettings, useUpdateSessionInterface, useUpdateSessionRetention, useUpdateVersionRefresh } from "../../hooks/useSettings";
+import { useSettings, useUpdateCommitAttribution, useUpdateSessionInterface, useUpdateSessionRetention, useUpdateSkillSharing, useUpdateVersionRefresh } from "../../hooks/useSettings";
 import { useEditorPreference, useSetPreferredEditor } from "../../hooks/useEditorHandoff";
 import { TargetIcon } from "../TopbarOpenEditorButton";
 import type { EditorId } from "../../../shared/editor-handoff";
@@ -143,6 +143,36 @@ function VersionRefreshRow() {
 				</p>
 			) : null}
 		</div>
+	);
+}
+
+/**
+ * Every agent can use the user's skills, whichever agent they were written for.
+ * Daemon-owned, because the daemon prepares them at launch. Hidden on a daemon
+ * that predates the setting, where the switch would do nothing.
+ */
+function SkillSharingRow() {
+	const { t } = useTranslation();
+	const { settings } = useSettings();
+	const { update, saving, error } = useUpdateSkillSharing();
+	if (settings?.skillSharing === undefined) return null;
+	return (
+		<SettingsRow
+			className="rounded-none"
+			label={t("settings.skillSharing.label")}
+			description={
+				<span className={cn(error && "text-error")} role={error ? "alert" : undefined}>
+					{error ? t("settings.skillSharing.saveFailed") : t("settings.skillSharing.description")}
+				</span>
+			}
+		>
+			<Switch
+				aria-label={t("settings.skillSharing.label")}
+				checked={settings.skillSharing}
+				disabled={saving}
+				onCheckedChange={update}
+			/>
+		</SettingsRow>
 	);
 }
 
@@ -466,6 +496,7 @@ export function GeneralSettingsSection({
 					/>
 				</SettingsRow>
 				<VersionRefreshRow />
+				<SkillSharingRow />
 				<SessionRetentionRow />
 				<TerminalShellRows />
 				<SettingsRow label={t("settings.terminalCopyOnSelect")}>
@@ -523,8 +554,10 @@ export function GeneralSettingsSection({
 				<CliLinkSettings enabled={developerMode} />
 				<CliShadowSettingsRow />
 				{developerMode && <SplitPanesRow />}
+				{developerMode && <NewDesktopUiRow />}
 				{developerMode && <PRViewRow />}
 				{developerMode && <ChromeAgentsRow />}
+				{developerMode && <CommitAttributionRow />}
 				{/* Dev builds only: IS_DEV folds to false in production, stripping the row. */}
 				{IS_DEV && developerMode && <SimulateNewMachineRow />}
 				{IS_DEV && developerMode && <ReplayOnboardingRow />}
@@ -612,6 +645,45 @@ function DiagnosticsRow() {
 	return (
 		<SettingsRow label={t("settings.diagnostics")} description={t("settings.diagnosticsToggleHint")}>
 			<Switch aria-label={t("settings.diagnostics")} checked={diagnostics} onCheckedChange={setDiagnostics} />
+		</SettingsRow>
+	);
+}
+
+/**
+ * Developer Mode-only beta: credit Orchestrator on new sessions' commits and
+ * PRs. Daemon-owned, because the daemon installs the commit hook at spawn.
+ */
+function CommitAttributionRow() {
+	const { t } = useTranslation();
+	const { settings } = useSettings();
+	const { update, saving, error } = useUpdateCommitAttribution();
+	return (
+		<SettingsRow
+			label={t("settings.commitAttribution")}
+			description={
+				<span className={cn(error && "text-error")} role={error ? "alert" : undefined}>
+					{error ? t("settings.commitAttributionSaveFailed") : t("settings.commitAttributionHint")}
+				</span>
+			}
+		>
+			<Switch
+				aria-label={t("settings.commitAttribution")}
+				checked={settings?.commitAttribution ?? false}
+				disabled={saving || !settings}
+				onCheckedChange={update}
+			/>
+		</SettingsRow>
+	);
+}
+
+/** Developer Mode preview, off by default: Interface v2. Off is the current UI. */
+function NewDesktopUiRow() {
+	const { t } = useTranslation();
+	const newDesktopUi = useUiStore((state) => state.newDesktopUi);
+	const setNewDesktopUi = useUiStore((state) => state.setNewDesktopUi);
+	return (
+		<SettingsRow label={t("settings.newDesktopUi")} description={t("settings.newDesktopUiHint")}>
+			<Switch aria-label={t("settings.newDesktopUi")} checked={newDesktopUi} onCheckedChange={setNewDesktopUi} />
 		</SettingsRow>
 	);
 }

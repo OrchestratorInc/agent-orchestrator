@@ -1,5 +1,6 @@
 import { parseSharedArtifactLink } from "../../packages/shared/artifacts/shared-artifact-link";
 import { openSharedArtifact, SHARED_ARTIFACT_VIEWER_ORIGINS } from "./main/shared-artifact-window";
+import { installDevRendererFraming } from "./main/dev-frame-ancestors";
 import type { SideCloseRequest, SideCloseState } from "./shared/side-close";
 import { SideCloseRecovery, type SideSnapshotCoverage } from "./main/side-close";
 import { SideCloseController } from "./main/side-close-controller";
@@ -7,7 +8,7 @@ import { SideLaunchRecovery } from "./main/side-launch-recovery";
 import { launchTriageInTerminal } from "./main/triage-launch";
 import { initializeDesktopLog } from "./main/desktop-log";
 import { syncMacWindowButtons } from "./main/window-chrome";
-import { MAC_TRAFFIC_LIGHT_ROW_HEIGHT, MAC_WINDOW_BUTTON_X, MAC_WINDOW_BUTTON_RADIUS } from "./shared/window-chrome";
+import { MAC_INTERFACE_V2_EDGE_EXTRA, MAC_TRAFFIC_LIGHT_ROW_HEIGHT, MAC_WINDOW_BUTTON_X, MAC_WINDOW_BUTTON_RADIUS } from "./shared/window-chrome";
 import { finishUpdateQuit } from "./main/update-quit";
 import { acknowledgeMacUpdateRestart } from "./main/mac-update-progress";
 import { consumeUpdateRelaunchFlag } from "./main/update-relaunch-flag";
@@ -52,8 +53,10 @@ import {
 	setUpdateSettings,
 	setMacDifferentialUpdates,
 	returnToHome,
+	getMacInstallBlocker,
 	type UpdateCheckOptions,
 } from "./main/auto-updater";
+import { REMOTE_APP_UPDATE_ACTION, runRemoteAppUpdate } from "./main/remote-app-update";
 import { listFeatureBuilds, getActiveFeatureBuild } from "./main/feature-builds";
 import { clearMainSentryCache, initMainSentry, sanitizeRendererCapture } from "./main/sentry-main";
 import { TelemetryPolicyAuthority, resolveDesktopDataDir } from "./main/telemetry-policy-file";
@@ -72,7 +75,7 @@ import { registerDictationIpc } from "./main/dictation";
 import { launchCommand } from "./main/launch-command";
 import { createLaunchTiming } from "./main/launch-timing";
 import { createResourceSampler } from "./main/resource-sampler";
-import type { LaunchTimingStart, ResourceSummary } from "./shared/performance-telemetry";
+import type { LaunchSteps, LaunchTimingStart, ResourceSummary } from "./shared/performance-telemetry";
 import { readNativeAppIcon } from "./main/native-app-icon";
 import { blocksRenderFrameNavigation, cloudArtifactPrefix } from "./main/render-frame-guard";
 import { agentPageRequestAllowed } from "./main/render-frame-network";
@@ -99,7 +102,10 @@ import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { promisify } from "node:util";
-import { type DaemonLaunchSpec, bundledDaemonIdentityError, resolveDaemonLaunch } from "./shared/daemon-launch";
+import { type DaemonLaunchSpec, bundledDaemonIdentityError, bundledDaemonMissingMessage, resolveDaemonLaunch } from "./shared/daemon-launch";
+import { daemonExitReason } from "./shared/daemon-exit-reason";
+import { waitForFile } from "./main/wait-for-file";
+import { childStdioDrained } from "./main/child-stdio-drained";
 import { createListenPortScanner, defaultRunFilePath, parseRunFile } from "./shared/daemon-discovery";
 import type { DaemonStatus } from "./shared/daemon-status";
 import { canonicalPathInside, sameCanonicalPath } from "./shared/path-identity";
@@ -117,6 +123,7 @@ import { relayScrollPhases } from "./main/scroll-phase";
 import {
 	KEYBOARD_SHORTCUTS_HELP_CHANNEL,
 	OPEN_SETTINGS_SHORTCUT_CHANNEL,
+	APP_SHORTCUT_PRESSED_CHANNEL,
 	QUIT_CONFIRM_REQUEST_CHANNEL,
 	QUIT_CONFIRM_RESULT_CHANNEL,
 	type QuitConfirmRequest,
@@ -224,6 +231,7 @@ import { createBrowserCloseDiagnostics } from "./main/browser-close-diagnostics"
 import { repairBrowserProfileCookies } from "./main/browser-cookie-repair";
 import { browserProfilePartition } from "./shared/browser-profiles";
 import { createBrowserProfileStore } from "./main/browser-profile-store";
+import { defaultBrowserProfileName } from "./main/browser-default-profile-name";
 import { BrowserHistoryStore } from "./main/browser-history-store";
 import { createAwakeTrayMonitor } from "./main/awake-tray";
 import { createAwakeDownloadBridge } from "./main/awake-download-bridge";
@@ -240,7 +248,10 @@ import {
 	type BrowserProfileIpc,
 	type BrowserProfileMenuItem,
 } from "./main/browser-profile-ipc";
-import type { BrowserProfileMenuInput } from "./shared/browser-profiles";
+import { createCredentialFiller } from "./main/browser-vault-fill";
+import { registerBrowserVaultIpc } from "./main/browser-vault-ipc";
+import { VaultStore } from "./main/browser-vault-store";
+import { vaultPlatformSupported } from "./main/browser-vault";
 import { createWindowComposition, type WindowComposition } from "./main/window-composition";
 import { AgentBrowserRuntime } from "./main/agent-browser-runtime";
 import { sameBrowserRuntimeIdentity, type BrowserRuntimeIdentity } from "./main/browser-runtime-identity";
@@ -374,6 +385,23 @@ const desktopLaunchWorkingDirectory = process.cwd();
 const processStartedAt = process.getCreationTime() ?? performance.timeOrigin;
 const launchTiming = createLaunchTiming(processStartedAt);
 const desktopDataDir = resolveDesktopDataDir(process.env, os.homedir(), desktopLaunchWorkingDirectory, app.isPackaged);
+// Read before the daemon can create it: no database means this launch is the
+// first run on this data directory, which ao.launches.timed reports apart.
+const firstRunAtLaunch = !existsSync(path.join(desktopDataDir, "ao.db"));
+// Only where the keychain keeps other local programs from the key (macOS).
+const browserVaultAvailable = () => vaultPlatformSupported(process.platform) && protectedStorageAvailable();
+// Saved site passwords: the data key is wrapped by the OS keychain, and fills
+// happen in this process so the agent never sees a secret.
+const browserVaultStore = new VaultStore({
+	dir: path.join(desktopDataDir, "vault"),
+	protector: {
+		available: browserVaultAvailable,
+		encrypt: (data) => safeStorage.encryptString(data.toString("base64")),
+		decrypt: (data) => Buffer.from(safeStorage.decryptString(data), "base64"),
+	},
+});
+// Fills are approved in the daemon's approval gate before they reach here.
+const browserCredentialFiller = createCredentialFiller({ store: browserVaultStore });
 initializeDesktopLog(desktopDataDir);
 let telemetryPolicyController: DesktopTelemetryController | null = null;
 // PostHog identity: the user-facing analytics opt-out (marker file shared with the
@@ -487,6 +515,7 @@ let daemonAttachmentGeneration = 0;
 let daemonOutput = "";
 let browserViewHost: BrowserViewHost | null = null;
 let browserProfileIpc: BrowserProfileIpc | null = null;
+let browserVaultIpc: { dispose: () => void } | null = null;
 let browserProfileImporter: BrowserProfileImportService | null = null;
 let windowComposition: WindowComposition | null = null;
 const browserCleanupPromises = new Set<Promise<void>>();
@@ -611,6 +640,9 @@ let rendererWindowBackground: string | null = null;
 // macOS window transparency: the shell paints translucent surfaces and the
 // native vibrancy material underneath blurs the desktop.
 let windowTranslucent = false;
+// Interface v2 sits the shell 2px further from the window edges, native buttons
+// included (shared/window-chrome.ts). The renderer reports it per document.
+let macWindowEdgeExtra = 0;
 // What each window last received, so theme changes and resizes skip identical
 // native calls. A new window (a Dock reopen) starts with no entry.
 const appliedNativeBackground = new WeakMap<BaseWindow, { vibrancy: string | null; color: string }>();
@@ -912,7 +944,7 @@ function setDaemonStatus(nextStatus: DaemonStatus): void {
 	if (nextStatus.state === "ready") void telemetryIdentity.flush();
 	else telemetryIdentity.invalidate();
 	getShellWebContents()?.send("daemon:status", daemonStatus);
-	if (nextStatus.state === "ready" && browserViewHost) {
+	if (nextStatus.state === "ready") {
 		establishBrowserRuntimeLink();
 		establishBrowserStreamLink();
 	}
@@ -1014,6 +1046,8 @@ async function disposeBrowserViewHost(): Promise<void> {
 	const profileIpc = browserProfileIpc;
 	browserProfileIpc = null;
 	profileIpc?.dispose();
+	browserVaultIpc?.dispose();
+	browserVaultIpc = null;
 	const profileImporter = browserProfileImporter;
 	browserProfileImporter = null;
 	if (!host && !profileImporter) return;
@@ -1076,6 +1110,15 @@ async function createWindowInternal(): Promise<void> {
 		return;
 	}
 	const browserProfileStore = await createBrowserProfileStore({ stateDir: browserProfileStateDir() });
+	// Agents start in a persistent profile, so a site the user signed in to once
+	// stays signed in for the next session. Temporary stays a per-session choice.
+	const settingsRunFile = runFilePath();
+	const profileLocale = settingsRunFile
+		? (await readUiSettings(path.dirname(settingsRunFile)).catch(() => DEFAULT_UI_SETTINGS)).locale
+		: DEFAULT_UI_SETTINGS.locale;
+	await browserProfileStore.ensureDefaultProfile(defaultBrowserProfileName(profileLocale)).catch((error: unknown) => {
+		console.warn(`AO: could not create the default browser profile: ${(error as Error).message}`);
+	});
 	// In the background: this must never hold up the window.
 	void repairBrowserProfileCookies({
 		stateDir: browserProfileStateDir(),
@@ -1149,7 +1192,9 @@ async function createWindowInternal(): Promise<void> {
 	trustedShellWebContents.set(shellWebContents.id, shellWebContents);
 	shellLaunchStarts.set(
 		shellWebContents.id,
-		shellWindowsCreated++ === 0 ? { kind: "cold", startedAtMs: processStartedAt } : { kind: "warm", startedAtMs: windowRequestedAt },
+		shellWindowsCreated++ === 0
+			? { kind: "cold", startedAtMs: processStartedAt, ...(firstRunAtLaunch ? { firstRun: true } : {}) }
+			: { kind: "warm", startedAtMs: windowRequestedAt },
 	);
 	// The start belongs to the first document. A reload that lands before that
 	// page read it must not report a launch, so later documents get none.
@@ -1320,6 +1365,7 @@ async function createWindowInternal(): Promise<void> {
 		() => terminalFocused,
 		() => terminalFontSizeFocused,
 		() => artifactZoomEngaged,
+		(id) => shellWebContents.send(APP_SHORTCUT_PRESSED_CHANNEL, id),
 	);
 
 	browserViewHost = createBrowserViewHost({
@@ -1338,6 +1384,7 @@ async function createWindowInternal(): Promise<void> {
 		getKeybindingOverrides: () => keybindingOverrides,
 		isKeybindingRecording: () => keybindingRecordingActive,
 		agentBrowserRuntime,
+		credentialFiller: browserCredentialFiller,
 		isCloseShellTerminalShortcutEnabled: () => closeShellTerminalShortcutEnabled,
 		browserProfileStore,
 		browserHistoryStore,
@@ -1360,6 +1407,12 @@ async function createWindowInternal(): Promise<void> {
 		onNativeViewAdded: () => windowComposition?.restackShell(),
 	});
 	browserProfileImporter = profileImporter;
+	browserVaultIpc = registerBrowserVaultIpc({
+		ipcMain,
+		shellWebContents,
+		store: browserVaultStore,
+		keychainAvailable: browserVaultAvailable,
+	});
 	browserProfileIpc = registerBrowserProfileIpc({
 		ipcMain,
 		shellWebContents,
@@ -1370,26 +1423,6 @@ async function createWindowInternal(): Promise<void> {
 		buildMenu: (items: BrowserProfileMenuItem[]) => {
 			const menu = Menu.buildFromTemplate(items as Electron.MenuItemConstructorOptions[]);
 			return { popup: (options) => menu.popup(options as Electron.PopupOptions) };
-		},
-		confirmSwitch: async (labels: BrowserProfileMenuInput["labels"]) => {
-			const result = await dialog.showMessageBox({
-				type: "warning",
-				title: labels.switchTitle,
-				message: labels.switchMessage,
-				detail: labels.switchDetail,
-				buttons: [labels.cancel, labels.confirm],
-				defaultId: 0,
-				cancelId: 0,
-			});
-			return result.response === 1;
-		},
-		reportSwitchFailure: (message, labels) => {
-			if (!mainWindow || mainWindow.isDestroyed()) return;
-			void dialog.showMessageBox(mainWindow, {
-				type: "error",
-				title: labels.switchTitle,
-				message,
-			}).catch((error) => console.error("browser profile error dialog failed:", error));
 		},
 	});
 	if (daemonStatus.state === "ready") {
@@ -1412,7 +1445,7 @@ async function createWindowInternal(): Promise<void> {
 	const syncWindowChrome = (force = true) => {
 		if (!mainWindow || shellWebContents.isDestroyed()) return;
 		syncNativeWindowBackground(force);
-		if (process.platform === "darwin") syncMacWindowButtons(mainWindow, shellWebContents);
+		if (process.platform === "darwin") syncMacWindowButtons(mainWindow, shellWebContents, macWindowEdgeExtra);
 		shellWebContents.send("window:zoom", shellWebContents.getZoomFactor());
 	};
 	// Resize/zoom and fullscreen exit can reset AppKit's button placement.
@@ -1469,7 +1502,6 @@ async function createWindowInternal(): Promise<void> {
 		chatDraftDialog = undefined;
 		chatDraftQuitConfirmed = false;
 		chatDraftWindowCloseConfirmed = false;
-		disposeBrowserRuntimeLink();
 		keybindingRecordingActive = false;
 		if (windowComposition === composition) windowComposition = null;
 		void disposeBrowserViewHost()
@@ -1824,6 +1856,13 @@ const browserRuntimeToken = (() => {
 })();
 let stagedBundledTmuxBinary: string | null = null;
 
+// How long a launch waits for a bundled daemon executable that is not on disk
+// yet before reporting it missing.
+const BUNDLED_DAEMON_WAIT_MS = 10_000;
+// How long an exit waits for the daemon's pipes to deliver its last lines,
+// which name the fatal error, before it is classified.
+const DAEMON_EXIT_DRAIN_MS = 250;
+
 async function ensureBundledTmuxStaged(): Promise<void> {
 	const source = bundledTmuxBinaryPath(app.isPackaged, process.resourcesPath, process.platform);
 	const destination = stableBundledTmuxBinaryPath(
@@ -2016,7 +2055,6 @@ function reconnectBrowserRuntimeLink(): void {
 }
 
 function establishBrowserRuntimeLink(): void {
-	if (!browserViewHost) return;
 	const rfp = runFilePath();
 	if (!rfp) {
 		console.warn("AO: browser runtime link skipped; run-file path unavailable");
@@ -2047,20 +2085,30 @@ function establishBrowserRuntimeLink(): void {
 	browserRuntimeLink = connectBrowserRuntime(address, {
 		token,
 		execute: (command, signal) => {
-			// A render check or measure uses its own hidden offscreen window,
-			// never the main window or the session's Browser panel, so it does
-			// not need (or disturb) the view host.
-			if (command.action === "__render-check") {
-				return checkRender({ BrowserWindow }, command.args ?? {}, signal);
-			}
-			if (command.action === "__render-measure") {
-				return measureRender({ BrowserWindow }, command.args ?? {}, signal);
+			if (command.action === REMOTE_APP_UPDATE_ACTION) {
+				return runRemoteAppUpdate({
+					packaged: app.isPackaged,
+					hasUnsavedDrafts: () => chatDraftRisks.length > 0,
+					installBlocker: getMacInstallBlocker,
+					check: () => checkForUpdatesNow(path.dirname(rfp)),
+					download: () => downloadUpdateNow(),
+					status: getUpdateStatus,
+					install: quitAndInstallUpdate,
+				}, command.args ?? {});
 			}
 			const host = browserViewHost;
 			if (!host) {
 				throw Object.assign(new Error("Browser target owner is unavailable"), {
 					code: "BROWSER_TARGET_UNAVAILABLE",
 				});
+			}
+			// A render check or measure uses its own hidden offscreen window,
+			// never the main window or the session's Browser panel.
+			if (command.action === "__render-check") {
+				return checkRender({ BrowserWindow }, command.args ?? {}, signal);
+			}
+			if (command.action === "__render-measure") {
+				return measureRender({ BrowserWindow }, command.args ?? {}, signal);
 			}
 			return host.execute(command.sessionId, command.action, command.args, signal);
 		},
@@ -2579,10 +2627,15 @@ async function startDaemonInner(startEpoch: number, autoRestartIntent: DaemonAut
 		}
 	}
 
-	if (launch.source === "bundled" && !existsSync(launch.command)) {
+	// An installer still copying files, or an antivirus scan holding the fresh
+	// executable, can hide the bundled binary for a few seconds after launch.
+	if (launch.source === "bundled" && !(await waitForFile(launch.command, { timeoutMs: BUNDLED_DAEMON_WAIT_MS }))) {
+		// The wait is long enough for a stop or a newer start to land; never
+		// overwrite their status.
+		if (startCancelled()) return daemonStatus;
 		setDaemonStatus({
 			state: "error",
-			message: `Bundled Orchestrator daemon binary was not found at ${launch.command}. Rebuild the desktop package.`,
+			message: bundledDaemonMissingMessage(launch.command, process.platform),
 			code: "binary_missing",
 		});
 		return daemonStatus;
@@ -2598,7 +2651,7 @@ async function startDaemonInner(startEpoch: number, autoRestartIntent: DaemonAut
 		});
 		return daemonStatus;
 	}
-	if (autoRestartIntent && startCancelled()) return daemonStatus;
+	if (startCancelled()) return daemonStatus;
 
 	daemonOutput = "";
 	setDaemonStatus({ state: "starting" });
@@ -2677,6 +2730,7 @@ async function startDaemonInner(startEpoch: number, autoRestartIntent: DaemonAut
 		...(autoRestartIntent ? { crashedPid: autoRestartIntent.crashedPid } : {}),
 	});
 	let child: ChildProcess;
+	launchTiming.mark("daemonSpawned");
 	try {
 		child = spawn(spawnLaunch.command, spawnLaunch.args, {
 			cwd: launch.cwd,
@@ -2733,6 +2787,9 @@ async function startDaemonInner(startEpoch: number, autoRestartIntent: DaemonAut
 	// streams are scanned) and the running.json handshake — first one wins.
 	const spawnedAtMs = Date.now();
 	let portConfirmed = false;
+	// Set as soon as the child exits: its pipes can still deliver a listen line
+	// while the exit waits for them to drain, and a dead child is never ready.
+	let childExited = false;
 	let runFileTimer: ReturnType<typeof setInterval> | undefined;
 	let fallbackTimer: ReturnType<typeof setTimeout> | undefined;
 
@@ -2744,7 +2801,7 @@ async function startDaemonInner(startEpoch: number, autoRestartIntent: DaemonAut
 	};
 
 	const reportBoundPort = (port: number) => {
-		if (portConfirmed || daemonProcess !== child || daemonStoppingProcess === child) return;
+		if (portConfirmed || childExited || daemonProcess !== child || daemonStoppingProcess === child) return;
 		portConfirmed = true;
 		stopDiscovery();
 		lifecycleLog("daemon_ready", { daemonPid: child.pid ?? null, port, startupMs: Date.now() - spawnedAtMs });
@@ -2853,6 +2910,7 @@ async function startDaemonInner(startEpoch: number, autoRestartIntent: DaemonAut
 
 	child.once("exit", (code, signal) => {
 		stopDiscovery();
+		childExited = true;
 		lifecycleLog("daemon_exit", {
 			daemonPid: child.pid ?? null,
 			code,
@@ -2864,6 +2922,15 @@ async function startDaemonInner(startEpoch: number, autoRestartIntent: DaemonAut
 			restartAfterStop: daemonRestartAfterExitProcess === child,
 			quitting: browserQuitRequested,
 		});
+		if (daemonProcess !== child) return;
+		// The daemon's last stderr line names its fatal error, and Node can
+		// report the exit before the pipes deliver it.
+		const drained = childStdioDrained(child, DAEMON_EXIT_DRAIN_MS);
+		if (drained) void drained.then(() => handleDaemonExit(code, signal));
+		else handleDaemonExit(code, signal);
+	});
+
+	function handleDaemonExit(code: number | null, signal: NodeJS.Signals | null): void {
 		if (daemonProcess !== child) return;
 		daemonProcess = null;
 		// An explicit stopDaemon() already set a clean `{ state: "stopped" }`.
@@ -2910,6 +2977,7 @@ async function startDaemonInner(startEpoch: number, autoRestartIntent: DaemonAut
 			code: "exited",
 			exitCode: code,
 			signal,
+			exitReason: daemonExitReason(daemonOutput, code),
 		});
 		const exitedPid = child.pid ?? null;
 		const generation = daemonAutoRestartGeneration;
@@ -2945,7 +3013,7 @@ async function startDaemonInner(startEpoch: number, autoRestartIntent: DaemonAut
 				});
 			}
 		});
-	});
+	}
 
 	return daemonStatus;
 }
@@ -3444,7 +3512,7 @@ ipcMain.handle("app:closePrivacyGuide", (event) => {
 
 ipcMain.handle("window:getZoomFactor", () => {
 	const shell = getShellWebContents();
-	if (process.platform === "darwin" && mainWindow && shell) syncMacWindowButtons(mainWindow, shell);
+	if (process.platform === "darwin" && mainWindow && shell) syncMacWindowButtons(mainWindow, shell, macWindowEdgeExtra);
 	return shell?.getZoomFactor() ?? 1;
 });
 ipcMain.handle("window:isFullScreen", () => mainWindow?.isFullScreen() ?? false);
@@ -3489,6 +3557,13 @@ ipcMain.handle("theme:set-window-translucent", (_event, enabled: unknown) => {
 	if (!mainWindow || mainWindow.isDestroyed()) return;
 	windowTranslucent = enabled;
 	syncNativeWindowBackground(true);
+});
+
+ipcMain.handle("theme:set-interface-v2", (_event, enabled: unknown) => {
+	if (process.platform !== "darwin" || typeof enabled !== "boolean") return;
+	macWindowEdgeExtra = enabled ? MAC_INTERFACE_V2_EDGE_EXTRA : 0;
+	const shell = getShellWebContents();
+	if (mainWindow && !mainWindow.isDestroyed() && shell) syncMacWindowButtons(mainWindow, shell, macWindowEdgeExtra);
 });
 
 ipcMain.handle("theme:persist-terminal",(_event, scheme: unknown) => {
@@ -3595,17 +3670,17 @@ ipcMain.handle("menu:action", (event, action: string) => {
 			return toggleAppDevTools(browserViewHost, getShellWebContents, isDev);
 		case "view.zoomIn":
 			wc.setZoomLevel(wc.getZoomLevel() + 0.5);
-			if (process.platform === "darwin" && wc === getShellWebContents()) syncMacWindowButtons(win, wc);
+			if (process.platform === "darwin" && wc === getShellWebContents()) syncMacWindowButtons(win, wc, macWindowEdgeExtra);
 			wc.send("window:zoom", wc.getZoomFactor());
 			return;
 		case "view.zoomOut":
 			wc.setZoomLevel(wc.getZoomLevel() - 0.5);
-			if (process.platform === "darwin" && wc === getShellWebContents()) syncMacWindowButtons(win, wc);
+			if (process.platform === "darwin" && wc === getShellWebContents()) syncMacWindowButtons(win, wc, macWindowEdgeExtra);
 			wc.send("window:zoom", wc.getZoomFactor());
 			return;
 		case "view.zoomReset":
 			wc.setZoomLevel(0);
-			if (process.platform === "darwin" && wc === getShellWebContents()) syncMacWindowButtons(win, wc);
+			if (process.platform === "darwin" && wc === getShellWebContents()) syncMacWindowButtons(win, wc, macWindowEdgeExtra);
 			wc.send("window:zoom", wc.getZoomFactor());
 			return;
 		case "view.fullscreen":
@@ -3706,6 +3781,22 @@ ipcMain.handle("telemetry:takeLaunchStart", (event): LaunchTimingStart | null =>
 	const start = shellLaunchStarts.get(event.sender.id) ?? null;
 	shellLaunchStarts.delete(event.sender.id);
 	return start;
+});
+// The cold launch's main-process steps, read when the renderer sends
+// ao.launches.timed. Marks keep their first time, so a later daemon restart
+// does not move them.
+ipcMain.handle("telemetry:launchSteps", (event): LaunchSteps | null => {
+	if (trustedShellWebContents.get(event.sender.id) !== event.sender) return null;
+	const marks = launchTiming.marks();
+	const spawned = marks.daemonSpawned;
+	const ready = marks.daemonReady;
+	return {
+		appReadyMs: marks.appReady,
+		windowShownMs: marks.windowShown,
+		serverSpawnMs: spawned,
+		serverReadyMs: ready,
+		...(ready === undefined ? {} : { serverReused: spawned === undefined || spawned > ready }),
+	};
 });
 ipcMain.handle("telemetry:takeResourceSummary", (event): ResourceSummary | null => {
 	if (trustedShellWebContents.get(event.sender.id) !== event.sender) return null;
@@ -4833,52 +4924,16 @@ app.whenReady().then(async () => {
 		console.error("failed to write app-state marker:", err);
 	}
 
-	// A pre-fix bundle cannot be patched retroactively. After the maintained
-	// /Applications build runs, offer to retire older AO copies that can still
-	// overwrite it if Finder, Spotlight, or an old Dock tile launches them.
-	try {
-		const { formatStaleAppCopies, retireStaleMacAppCopies } = await import("./main/stale-app-copies");
-		await retireStaleMacAppCopies({
-			platform: process.platform,
-			isPackaged: app.isPackaged,
-			runningPath: resolveBundlePath(),
-			runningVersion: app.getVersion(),
-			confirm: async (copies) => {
-				const result = await dialog.showMessageBox({
-					type: "warning",
-					buttons: ["Move old copies to Trash", "Not now"],
-					defaultId: 0,
-					cancelId: 1,
-					title: "Remove old Orchestrator copies",
-					message: `Old copies of ${APP_DISPLAY_NAME} can replace your updated app.`,
-					detail: `${formatStaleAppCopies(copies)}\n\nMove these copies to Trash to prevent another downgrade. Your Orchestrator projects and sessions will not be removed.`,
-					noLink: true,
-				});
-				return result.response === 0;
-			},
-			trashItem: (candidate) => shell.trashItem(candidate),
-			reportFailures: async (paths) => {
-				await dialog.showMessageBox({
-					type: "warning",
-					buttons: ["OK"],
-					defaultId: 0,
-					title: "Some old copies could not be removed",
-					message: "Move these copies to Trash manually before launching Orchestrator again.",
-					detail: paths.join("\n"),
-					noLink: true,
-				});
-			},
-		});
-	} catch (err) {
-		console.warn("stale AO copy cleanup failed:", err);
-	}
-
 	const keybindingRunFile = runFilePath();
 	if (keybindingRunFile) {
 		keybindingOverrides = await readKeybindingOverrides(path.dirname(keybindingRunFile));
 	}
 
 	registerRendererProtocol();
+	// A dev build's renderer is http://localhost, which Cloud file hosts refuse to frame; see dev-frame-ancestors.
+	if (!app.isPackaged && typeof MAIN_WINDOW_VITE_DEV_SERVER_URL !== "undefined" && MAIN_WINDOW_VITE_DEV_SERVER_URL) {
+		installDevRendererFraming(session.defaultSession, MAIN_WINDOW_VITE_DEV_SERVER_URL);
+	}
 	registerArtifactSnapshotProtocol({ protocol, store: artifactSnapshotStore });
 	// Which account owns the cached Cloud previews from the last run, so a different or lost one clears them
 	// even if the app quit before it could.
@@ -4952,6 +5007,55 @@ app.whenReady().then(async () => {
 					},
 				}))
 			.catch((err) => console.warn("desktop version floor check failed:", err));
+	}
+	// A pre-fix bundle cannot be patched retroactively. After the maintained
+	// /Applications build runs, offer to retire older AO copies that can still
+	// overwrite it if Finder, Spotlight, or an old Dock tile launches them.
+	// Not awaited, and only once the window exists: looking in Downloads and
+	// Desktop can raise macOS's folder access prompt, and the trash dialog waits
+	// for an answer, so either would hold the window. A first run is skipped: no
+	// earlier install means no old copy to retire, and a new install should not
+	// be asked for access to those folders.
+	if (!firstRunAtLaunch) {
+		void import("./main/stale-app-copies")
+			.then(({ formatStaleAppCopies, retireStaleMacAppCopies }) => {
+				const showMessage = (options: Electron.MessageBoxOptions) => {
+					const parent = mainWindow;
+					return parent && !parent.isDestroyed() ? dialog.showMessageBox(parent, options) : dialog.showMessageBox(options);
+				};
+				return retireStaleMacAppCopies({
+					platform: process.platform,
+					isPackaged: app.isPackaged,
+					runningPath: resolveBundlePath(),
+					runningVersion: app.getVersion(),
+					confirm: async (copies) => {
+						const result = await showMessage({
+							type: "warning",
+							buttons: ["Move old copies to Trash", "Not now"],
+							defaultId: 0,
+							cancelId: 1,
+							title: "Remove old Orchestrator copies",
+							message: `Old copies of ${APP_DISPLAY_NAME} can replace your updated app.`,
+							detail: `${formatStaleAppCopies(copies)}\n\nMove these copies to Trash to prevent another downgrade. Your Orchestrator projects and sessions will not be removed.`,
+							noLink: true,
+						});
+						return result.response === 0;
+					},
+					trashItem: (candidate) => shell.trashItem(candidate),
+					reportFailures: async (paths) => {
+						await showMessage({
+							type: "warning",
+							buttons: ["OK"],
+							defaultId: 0,
+							title: "Some old copies could not be removed",
+							message: "Move these copies to Trash manually before launching Orchestrator again.",
+							detail: paths.join("\n"),
+							noLink: true,
+						});
+					},
+				});
+			})
+			.catch((err) => console.warn("stale AO copy cleanup failed:", err));
 	}
 	if (!daemonStartsWithWindow) void startDaemon();
 	initAutoUpdates();

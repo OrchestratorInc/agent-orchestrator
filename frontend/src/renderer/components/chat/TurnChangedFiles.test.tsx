@@ -297,6 +297,23 @@ describe("TurnChangedFiles", () => {
 		expectCardPath("src/file-5.ts");
 	});
 
+	it("marks each row with its file type's icon, like the Files panel", () => {
+		render(
+			<TurnChangedFiles
+				diff={diff({
+					files: [
+						{ path: "src/Button.tsx", additions: 1, deletions: 0, status: "modified" },
+						{ path: "notes.md", additions: 1, deletions: 0, status: "modified" },
+					],
+				})}
+			/>,
+		);
+		const [tsx, markdown] = screen.getAllByRole("listitem").map((row) => row.querySelector("svg"));
+		expect(tsx).not.toBeNull();
+		expect(markdown).not.toBeNull();
+		expect(tsx!.innerHTML).not.toBe(markdown!.innerHTML);
+	});
+
 	it("marks a running turn's diff as still growing", () => {
 		render(<TurnChangedFiles diff={diff()} live />);
 		expect(screen.getByLabelText("still changing")).toBeInTheDocument();
@@ -513,7 +530,7 @@ describe("ActivityRun with a streaming command", () => {
 		expect(screen.queryByText("2 failed")).not.toBeInTheDocument();
 	});
 
-	it("keeps real grouped failures destructive when mixed with a command exit", () => {
+	it("counts real grouped failures beside a command exit, in the summary's color", () => {
 		const failedPlan = plan("act-2");
 		failedPlan.status = "failed";
 
@@ -527,7 +544,8 @@ describe("ActivityRun with a streaming command", () => {
 		);
 
 		expect(screen.getByText("1 exited")).toHaveClass("text-muted-foreground/70");
-		expect(screen.getByText("1 failed")).toHaveClass("text-destructive");
+		expect(screen.getByText("1 failed")).toHaveClass("text-muted-foreground");
+		expect(screen.getByText("1 failed")).not.toHaveClass("text-destructive");
 	});
 });
 

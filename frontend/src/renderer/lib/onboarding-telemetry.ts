@@ -1,4 +1,6 @@
 import { useCallback, useEffect, useRef } from "react";
+import type { components } from "../../api/schema";
+import { onboardingFailureCause, type OnboardingFailureCause } from "../../shared/onboarding-failures";
 import { onComposerSent } from "./guided-tour-signals";
 import type { OnboardingStep } from "./onboarding-steps";
 import type {
@@ -443,7 +445,7 @@ export function startOnboardingAction(
 export function finishOnboardingAction(
 	action: OnboardingAction,
 	outcome: OnboardingActionOutcome,
-	options: { target?: string; reason?: OnboardingFailureReason; errorCode?: string; attempt?: number; onUnload?: boolean } = {},
+	options: { target?: string; reason?: OnboardingFailureReason; failureCause?: OnboardingFailureCause; errorCode?: string; attempt?: number; onUnload?: boolean } = {},
 ): boolean {
 	const key = actionKey(action, options.target);
 	const watched = errorWatch.get(key);
@@ -452,7 +454,10 @@ export function finishOnboardingAction(
 	const attempt = pending.get(key);
 	// Once per attempt, and only for one started during onboarding: the same
 	// panels outside onboarding (the clone dialog's GitHub sign-in) send nothing.
-	if (errorWatch.delete(key) && outcome === "failed" && options.reason) captureOnboardingFailureToSentry(action, options.reason, options.target);
+	if (errorWatch.delete(key) && outcome === "failed" && options.reason) {
+		if (options.failureCause) captureOnboardingFailureToSentry(action, options.reason, options.target, options.failureCause);
+		else captureOnboardingFailureToSentry(action, options.reason, options.target);
+	}
 	if (!tracking() || !attempt) return false;
 	pending.delete(key);
 	(options.onUnload ? captureOnUnload : capture)("ao.onboarding.action_finished", {
@@ -462,6 +467,7 @@ export function finishOnboardingAction(
 		attempt: attempt.attempt,
 		outcome,
 		reason: options.reason,
+		failure_cause: options.failureCause,
 		error_code: options.errorCode,
 		duration_ms: Date.now() - attempt.startedAt,
 	});
@@ -500,13 +506,27 @@ export function onboardingActionAttempt(action: OnboardingAction, target?: strin
 	return errorWatch.get(actionKey(action, target));
 }
 
-/** An install job's end state, as an action outcome. */
-export function installJobOutcome(status: string | undefined): { outcome: OnboardingActionOutcome; reason?: OnboardingFailureReason } | null {
+type InstallFailureCause = NonNullable<components["schemas"]["InstallJob"]["failureCause"]>;
+// The daemon's enum and the closed list sent as failure_cause must match both ways.
+type Same<A, B> = [A] extends [B] ? ([B] extends [A] ? true : false) : false;
+const _failureCausesMatch: Same<InstallFailureCause, OnboardingFailureCause> = true;
+void _failureCausesMatch;
+
+/**
+ * An install job's end state, as an action outcome. A failed job carries the
+ * daemon's closed-list cause (none from a daemon too old to send one).
+ */
+export function installJobOutcome(
+	status: string | undefined,
+	failureCause?: string,
+): { outcome: OnboardingActionOutcome; reason?: OnboardingFailureReason; failureCause?: OnboardingFailureCause } | null {
 	switch (status) {
 		case "succeeded":
 			return { outcome: "succeeded" };
-		case "failed":
-			return { outcome: "failed", reason: "install_failed" };
+		case "failed": {
+			const cause = onboardingFailureCause(failureCause);
+			return { outcome: "failed", reason: "install_failed", ...(cause ? { failureCause: cause } : {}) };
+		}
 		case "interrupted":
 			return { outcome: "failed", reason: "interrupted" };
 		case "unsupported":

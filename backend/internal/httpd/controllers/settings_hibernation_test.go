@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -48,6 +49,37 @@ func TestSettingsChatHibernationRequiresBoolean(t *testing.T) {
 		var got SettingsResponse
 		if err := json.Unmarshal(w.Body.Bytes(), &got); err != nil || w.Code != http.StatusOK || got.ChatHibernationEnabled != enabled {
 			t.Fatalf("body=%s status=%d response=%+v err=%v", body, w.Code, got, err)
+		}
+	}
+}
+
+type skillSharingSettingsService struct {
+	hibernationSettingsService
+	sharing bool
+}
+
+func (s *skillSharingSettingsService) SetSkillSharing(_ context.Context, enabled bool) (settingssvc.Snapshot, error) {
+	s.sharing = enabled
+	s.calls++
+	return settingssvc.Snapshot{}, nil
+}
+
+func TestSettingsSkillSharingRequiresBoolean(t *testing.T) {
+	svc := &skillSharingSettingsService{}
+	c := &SettingsController{Svc: svc}
+	patch := func(body string) int {
+		w := httptest.NewRecorder()
+		c.setSkillSharing(w, httptest.NewRequest(http.MethodPatch, "/api/v1/settings/skill-sharing", strings.NewReader(body)))
+		return w.Code
+	}
+	for _, body := range []string{`{}`, `{"enabled":null}`, `{"enabled":"true"}`} {
+		if code := patch(body); code != http.StatusBadRequest || svc.calls != 0 {
+			t.Fatalf("body=%s status=%d calls=%d", body, code, svc.calls)
+		}
+	}
+	for _, enabled := range []bool{true, false} {
+		if code := patch(`{"enabled":` + strconv.FormatBool(enabled) + `}`); code != http.StatusOK || svc.sharing != enabled {
+			t.Fatalf("enabled=%v status=%d stored=%v", enabled, code, svc.sharing)
 		}
 	}
 }
@@ -135,6 +167,35 @@ func TestSettingsSessionRetentionRequiresDays(t *testing.T) {
 	c.setSessionRetention(w, httptest.NewRequest(http.MethodPatch, "/api/v1/settings/session-retention", strings.NewReader(`{"days":30}`)))
 	var got SettingsResponse
 	if err := json.Unmarshal(w.Body.Bytes(), &got); err != nil || w.Code != http.StatusOK || got.SessionRetentionDays != 30 || svc.days != 30 {
+		t.Fatalf("status=%d response=%+v err=%v", w.Code, got, err)
+	}
+}
+
+type commitAttributionSettingsService struct {
+	hibernationSettingsService
+	commitAttribution bool
+}
+
+func (s *commitAttributionSettingsService) SetCommitAttribution(_ context.Context, enabled bool) (settingssvc.Snapshot, error) {
+	s.commitAttribution = enabled
+	s.calls++
+	return settingssvc.Snapshot{CommitAttribution: enabled}, nil
+}
+
+func TestSettingsCommitAttributionRequiresBoolean(t *testing.T) {
+	svc := &commitAttributionSettingsService{}
+	c := &SettingsController{Svc: svc}
+	for _, body := range []string{`{}`, `{"enabled":null}`, `{"enabled":"true"}`} {
+		w := httptest.NewRecorder()
+		c.setCommitAttribution(w, httptest.NewRequest(http.MethodPatch, "/api/v1/settings/commit-attribution", strings.NewReader(body)))
+		if w.Code != http.StatusBadRequest || svc.calls != 0 {
+			t.Fatalf("body=%s status=%d calls=%d", body, w.Code, svc.calls)
+		}
+	}
+	w := httptest.NewRecorder()
+	c.setCommitAttribution(w, httptest.NewRequest(http.MethodPatch, "/api/v1/settings/commit-attribution", strings.NewReader(`{"enabled":true}`)))
+	var got SettingsResponse
+	if err := json.Unmarshal(w.Body.Bytes(), &got); err != nil || w.Code != http.StatusOK || !got.CommitAttribution || !svc.commitAttribution {
 		t.Fatalf("status=%d response=%+v err=%v", w.Code, got, err)
 	}
 }

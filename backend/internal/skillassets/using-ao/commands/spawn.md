@@ -13,13 +13,14 @@ ao spawn [flags]
 
 | Flag | Meaning | Default / Required |
 |---|---|---|
-| `--branch string` | Branch for the session worktree | `ao/<session-id>/root` |
+| `--branch string` | Branch for the session worktree | `orchestrator/<session-id>/root` |
 | `--claim-pr string` | Claim an existing PR. For review-only work, add `--no-takeover --review` | - |
 | `--kind string` | Session role: `worker` or `orchestrator` | `worker` |
 | `--harness string` | Agent harness to use (see list below) | Project `worker.agent`; required if the project has none |
 | `--issue string` | Issue id to associate with the session | - |
 | `--model string` | Agent model override for this session only; overrides project/role config | - |
 | `--effort string` | Reasoning effort override for this session only (for example `low`, `medium`, `high`); overrides project/role config | - |
+| `--permission string` | Permission mode for this session only: `default`, `accept-edits`, `auto`, or `bypass-permissions`; a spawn from a session in the same project cannot exceed the project's role setting, and an orchestrator cannot exceed its own mode when the project sets none | The project's role setting; when the project sets none, a worker spawned from an orchestrator takes the orchestrator's mode |
 | `--account string` | Claude Code or Codex account id to start on (from `ao account ls`); the account must be signed in | The agent's default account |
 | `--name string` | Display name shown in the sidebar (max 100 characters) | Required |
 | `--mode chat\|tui` | Initial session interface; Chat requires harness support (including Grok Build via native ACP) | Daemon default, otherwise Terminal UI |
