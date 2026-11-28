@@ -872,6 +872,13 @@ func (m *sideManager) open(side domain.SideConversation, cfg StartConfig, driver
 }
 
 func (m *sideManager) failOpen(side domain.SideConversation, err error) {
+	m.recordOpenFailure(side, err)
+	m.announce(side.ID)
+}
+
+// recordOpenFailure stores a failed open without announcing it, so restore can
+// record it in the same critical section that ends the restore.
+func (m *sideManager) recordOpenFailure(side domain.SideConversation, err error) {
 	m.service.log.Warn("side chat opening failed", "side", side.ID, "error", err)
 	if side.ProviderForkID == "" && errors.Is(err, ports.ErrChatRecoveryInconclusive) && !errors.Is(err, ErrSidePolicyRecreate) {
 		err = fmt.Errorf("%w: %w", ErrSidePolicyRecreate, err)
@@ -882,7 +889,6 @@ func (m *sideManager) failOpen(side domain.SideConversation, err error) {
 			_ = m.store.SettleSideTurn(context.Background(), side.ID, turn.ID, side.Generation, "failed", "", err.Error(), m.service.now())
 		}
 	}
-	m.announce(side.ID)
 }
 
 func (m *sideManager) ensureRestore(side domain.SideConversation) error {
@@ -947,18 +953,26 @@ func (s *Service) RetrySideConnection(ctx context.Context, session domain.Sessio
 }
 
 func (m *sideManager) restore(ctx context.Context, side domain.SideConversation) {
+	connected := false
+	// fail records why the restore failed. It runs under m.mu together with the
+	// end of the restore, so a retry sees either this restore still running or
+	// the side already failed, never a failed side whose retry is a no-op.
+	var fail func()
 	defer func() {
 		m.mu.Lock()
 		if cancel := m.restoring[side.ID]; cancel != nil {
 			cancel()
 		}
 		delete(m.restoring, side.ID)
+		if fail == nil && !connected && m.ctx.Err() == nil {
+			fail = func() { m.recordOpenFailure(side, errors.New("side provider could not resume; retry the connection")) }
+		}
+		if fail != nil {
+			fail()
+		}
 		m.mu.Unlock()
-	}()
-	connected := false
-	defer func() {
-		if !connected && m.ctx.Err() == nil {
-			m.failOpen(side, errors.New("side provider could not resume; retry the connection"))
+		if fail != nil {
+			m.announce(side.ID)
 		}
 	}()
 	var source *Controller
@@ -996,8 +1010,7 @@ func (m *sideManager) restore(ctx context.Context, side domain.SideConversation)
 	}
 	if err := m.reconcileRestoredTurns(ctx, side, conv); err != nil {
 		_ = conv.Close()
-		m.failOpen(side, err)
-		connected = true
+		fail = func() { m.recordOpenFailure(side, err) }
 		return
 	}
 	if activator, ok := conv.(ports.ChatLiveReconnectActivator); ok {

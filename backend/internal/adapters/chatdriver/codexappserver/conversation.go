@@ -213,9 +213,31 @@ func (c *conversation) pump() {
 	}()
 	retries := make(map[string]ports.ChatEvent)
 	citations := newCitationFormatter()
+	subagents := newSubagentRouter(c.scopedID)
+	// After a live reattach, a thread no launch names may be a child whose launch
+	// went out before the detach. Its launch chain is read back off the pump, once
+	// per thread, while the router holds its events.
+	recoveries := make(chan subagentRecovery)
+	recoveryTried := map[string]bool{}
+	notifs := c.conn.notifs()
+	next := func() (notification, bool) {
+		for {
+			select {
+			case found := <-recoveries:
+				subagents.recovered(found)
+				c.emitRouted(subagents, subagents.release())
+			case n, ok := <-notifs:
+				return n, ok
+			}
+		}
+	}
 	var usageLimits usageLimitTracker
 
-	for n := range c.conn.notifs() {
+	for {
+		n, ok := next()
+		if !ok {
+			break
+		}
 		// Before normalizing, because a token-usage report is the only place the
 		// context position is stated and a compaction event that arrives in the same
 		// batch has to be able to read it.
@@ -230,6 +252,13 @@ func (c *conversation) pump() {
 		}
 		_ = json.Unmarshal(n.Params, &scope)
 		citations.observeNotification(n, c.threadID)
+		subagents.observe(n, c.threadID)
+		if c.proc.reconnected && scope.ThreadID != "" && scope.ThreadID != c.threadID && !subagents.placed(scope.ThreadID) &&
+			!recoveryTried[scope.ThreadID] && len(recoveryTried) < maxSubagentRecoveries {
+			recoveryTried[scope.ThreadID] = true
+			subagents.recover(scope.ThreadID)
+			go c.recoverLaunchChain(scope.ThreadID, subagents.placedThreads(), recoveries)
+		}
 
 		// The clock is passed in rather than read inside: a rate-limit reset arrives
 		// as an absolute instant and has to become a remaining duration, and a
@@ -281,7 +310,9 @@ func (c *conversation) pump() {
 					retry.Kind = ports.ChatEventActivityCompleted
 					retry.ActivityStatus = domain.ActivityStatusCompleted
 					if !completed || (ev.TurnState != domain.TurnStateFailed && ev.Err == nil) {
-						c.emit(retry)
+						// Routed like its start, which a child thread's router may
+						// still hold: the completion must follow it, under the launch.
+						c.emitRouted(subagents, subagents.route(c.threadID, threadID, retry))
 					}
 					delete(retries, key)
 				}
@@ -341,12 +372,14 @@ func (c *conversation) pump() {
 				}
 				c.mu.Unlock()
 			}
-			c.emit(ev)
+			c.emitRouted(subagents, subagents.route(c.threadID, threadID, ev))
 			if threadStatus != nil {
 				c.emit(*threadStatus)
 			}
 		}
+		c.emitRouted(subagents, subagents.release())
 	}
+	c.emitRouted(subagents, subagents.flush())
 	// The connection ended. Say so explicitly rather than letting the stream go
 	// quiet: a silent channel close is indistinguishable from an idle agent.
 	state := ports.ChatEvent{Kind: ports.ChatEventControllerState, ControllerState: ports.ChatControllerStopped}
@@ -355,6 +388,14 @@ func (c *conversation) pump() {
 	}
 	c.emit(state)
 	c.failPendingApprovals()
+}
+
+// emitRouted delivers what the subagent router returned. A piece of a child's reply
+// is as droppable as an assistant delta: its completion restates the whole reply.
+func (c *conversation) emitRouted(subagents *subagentRouter, events []ports.ChatEvent) {
+	for _, ev := range events {
+		c.deliver(ev, subagents.replyChunk(ev))
+	}
 }
 
 // turnCompletedAt is when Codex says a failed turn ended, for a turn/completed
@@ -378,7 +419,11 @@ func turnCompletedAt(n notification) (time.Time, bool) {
 
 // emit delivers an event, preferring to drop a delta over blocking the reader. A
 // lifecycle event is never dropped silently.
-func (c *conversation) emit(ev ports.ChatEvent) {
+func (c *conversation) emit(ev ports.ChatEvent) { c.deliver(ev, false) }
+
+// deliver emits ev. A droppable event, like a delta, is dropped at once when the
+// reader is behind rather than waited on.
+func (c *conversation) deliver(ev ports.ChatEvent, droppable bool) {
 	c.eventsMu.RLock()
 	defer c.eventsMu.RUnlock()
 	if c.eventsClosed {
@@ -391,11 +436,12 @@ func (c *conversation) emit(ev ports.ChatEvent) {
 	default:
 	}
 
-	switch ev.Kind {
-	case ports.ChatEventMessageDelta, ports.ChatEventReasoningDelta:
+	switch {
+	case droppable, ev.Kind == ports.ChatEventMessageDelta, ev.Kind == ports.ChatEventReasoningDelta:
 		// The settled text arrives on item/completed for both of these — a message's
 		// as `text`, a reasoning item's as `summary` — so a dropped delta costs
-		// smoothness, not correctness.
+		// smoothness, not correctness. A droppable event, such as a piece of a
+		// child's reply, is restated the same way.
 		//
 		// The other streams are deliberately NOT droppable. Command output, terminal
 		// keystrokes and tool progress have no settled restatement: the delta is the

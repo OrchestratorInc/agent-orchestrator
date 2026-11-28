@@ -2,8 +2,9 @@
  * Subagents, read back out of the activities their parent recorded.
  *
  * Claude records a subagent launch as one tool call (the `Agent` tool, `Task` before
- * it was renamed) and stamps every step the child takes with that call's id. ACP files
- * the launch as reasoning, which the timeline drops, so the child's commands used to
+ * it was renamed) and stamps every step the child takes with that call's id. Codex
+ * launches with `spawnAgent`, and its driver stamps the child's thread the same way.
+ * ACP files the launch as reasoning, which the timeline drops, so the child's commands used to
  * surface as loose tool calls in the parent's turn: interleaved with everything else
  * the parent did, with nothing saying which agent ran them or whether it finished.
  *
@@ -14,8 +15,11 @@
 
 import { fileChangeFiles, type ConversationActivity, type ConversationItem } from "../../types/conversation";
 
-/** Tool names a provider uses for "start a subagent". `Task` is Claude's older name. */
-const LAUNCH_TOOLS = new Set(["Agent", "Task"]);
+/**
+ * Tool names a provider uses for "start a subagent". `Task` is Claude's older name;
+ * `spawnAgent` is Codex's.
+ */
+const LAUNCH_TOOLS = new Set(["Agent", "Task", "spawnAgent"]);
 
 /** The child's report back to its caller; its payload is the report, not a step. */
 const HANDBACK_TOOL = "SubagentHandback";
@@ -141,14 +145,24 @@ export function readSubagent(
 ): Subagent {
 	const input = launchInput(launch);
 	// The steps carry the whole chain under this launch, so an inner child's hand-back
-	// is among them. Only the one addressed to this launch is its report; the rest are
-	// steps the reader can open like any other.
-	const handback = allSteps.find(
-		(step) => isHandback(step) && launch.providerItemId !== undefined && step.detail?.parentProviderItemId === launch.providerItemId,
-	);
+	// is among them. Only one addressed to this launch is its report, and a child that
+	// took another turn (a Codex follow-up) reports once per turn, so the latest one
+	// stands. The rest are steps the reader can open like any other.
+	const handback = allSteps
+		.filter((step) => isHandback(step) && launch.providerItemId !== undefined && step.detail?.parentProviderItemId === launch.providerItemId)
+		.at(-1);
 	const steps = allSteps.filter((step) => step !== handback);
+	// A step the child itself took after its latest report means it is on another
+	// turn, which will end in a report of its own. A nested child's steps say nothing
+	// about this one: it can keep working after its parent reported.
+	const sinceReport = handback === undefined
+		? []
+		: allSteps.slice(allSteps.indexOf(handback) + 1).filter((step) => step.detail?.parentProviderItemId === launch.providerItemId);
+	const resumed = sinceReport.length > 0;
 	const result = launchResultText(launch);
-	const background = ASYNC_RESULT.test(result);
+	// A background launch settles as soon as the child starts. Codex's driver says so
+	// in the detail; Claude says it in the result note.
+	const background = launch.detail?.background === true || ASYNC_RESULT.test(result);
 	const startedAt = timeOf(launch.createdAt);
 	const lastStepAt = steps.reduce((latest, step) => Math.max(latest, timeOf(step.createdAt)), startedAt);
 	const base = {
@@ -164,6 +178,17 @@ export function readSubagent(
 		return { ...base, state: "failed", error: firstParagraph(result), endedAt: lastStepAt };
 	}
 	if (launch.status === "cancelled") return { ...base, state: "stopped", endedAt: lastStepAt };
+	// That turn is working only while it runs. One that ended with no report, such as
+	// when the app-server exited during it, leaves the earlier report out of date.
+	if (resumed) {
+		const running = sinceReport.some((step) => step.status === "running" || step.status === "pending");
+		if (!stopped && (live || running)) return { ...base, state: "working" };
+		return { ...base, state: "unknown", endedAt: lastStepAt };
+	}
+	if (handback?.status === "failed") {
+		return { ...base, state: "failed", error: stringOf(launchInput(handback).message), endedAt: timeOf(handback.createdAt) };
+	}
+	if (handback?.status === "cancelled") return { ...base, state: "stopped", endedAt: timeOf(handback.createdAt) };
 	if (handback && handback.status === "completed") {
 		return {
 			...base,

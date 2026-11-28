@@ -314,6 +314,131 @@ describe("ChatWorkspace subagents", () => {
 		expect(screen.queryByText(/Ran \d+ tool call/)).not.toBeInTheDocument();
 	});
 
+	it("shows a Codex child's own turn on its subagent, not as a turn of the parent's", () => {
+		// Codex leaves a child's steps on the child's own provider turn, so that turn's
+		// end settles them. The turn is the child's: whether it is still going, and how
+		// it ended, show on its subagent.
+		const childTurn = "turn-child";
+		const spawn: ConversationActivity = {
+			kind: "activity", id: "spawn", turnId, sequence: 2, revision: 0,
+			providerItemId: "call-spawn",
+			activityKind: "mcp_tool",
+			status: "completed",
+			summary: "Check the build",
+			detail: { providerToolName: "spawnAgent", background: true, input: { prompt: "Check the build" } } as ConversationActivity["detail"],
+			createdAt: at(2),
+		};
+		const ownTurn = (item: ConversationActivity, status: ConversationActivity["status"] = item.status): ConversationActivity =>
+			({ ...inTurn(item, childTurn), status, detail: { ...item.detail, childTurn: true } });
+		const codex = (state: "running" | "failed", items: ConversationActivity[]): ConversationSnapshot => ({
+			...chatFixtureEmpty,
+			harness: "codex",
+			controller: { state: "ready" },
+			latestSequence: 3 + items.length,
+			turns: [
+				{ id: turnId, state: "completed", requestedAt: at(0), startedAt: at(0), completedAt: at(3) },
+				{
+					id: childTurn, state, requestedAt: at(3), startedAt: at(3),
+					...(state === "failed" ? { completedAt: at(9), errorMessage: "stream disconnected" } : {}),
+				},
+			],
+			items: [text("prompt", 1, "user", "Check the build with a subagent"), spawn, text("started", 3, "assistant", "Started one agent."), ...items],
+		});
+		const command = child("c1", 4, "call-spawn", "go build ./...");
+		const { rerender } = render(<ChatWorkspace snapshot={codex("running", [ownTurn(command, "running")])} />);
+
+		// The parent's turn has ended and the child works on: the child says so, with
+		// its running command under it rather than loose in a turn of its own.
+		openTeam();
+		expect(within(screen.getByRole("button", { name: /Check the build/ })).getByLabelText("Working")).toBeInTheDocument();
+		expect(screen.getByRole("button", { name: /Check the build/ })).toHaveTextContent("go build ./...");
+		expect(screen.queryByText(/Ran \d+ tool call/)).not.toBeInTheDocument();
+
+		// Codex reports the fatal error on its own before the failed turn ends.
+		const fatal: ConversationActivity = {
+			kind: "activity", id: "err", turnId: childTurn, sequence: 5, revision: 0,
+			activityKind: "error",
+			status: "failed",
+			summary: "stream disconnected",
+			detail: { error: "stream disconnected", parentProviderItemId: "call-spawn", childTurn: true } as ConversationActivity["detail"],
+			createdAt: at(5),
+		};
+		rerender(<ChatWorkspace snapshot={codex("failed", [ownTurn(command, "failed"), fatal, ownTurn(handback("hb", 6, "call-spawn", "stream disconnected"), "failed")])} />);
+
+		// The failure is the child's: its subagent says so, and the parent's turn does not
+		// read as failing.
+		fireEvent.click(screen.getAllByRole("button", { name: /Worked for/ })[0]!);
+		expect(within(screen.getByRole("button", { name: /1 subagent/ })).getByText("1 failed")).toBeInTheDocument();
+		expect(screen.queryByText("The agent ran into a problem")).not.toBeInTheDocument();
+		expect(screen.queryByText(/Ran \d+ tool call/)).not.toBeInTheDocument();
+	});
+
+	describe("a Codex child's own turn", () => {
+		const childTurn = "turn-child";
+		const spawn: ConversationActivity = {
+			kind: "activity", id: "spawn", turnId, sequence: 2, revision: 0,
+			providerItemId: "call-spawn",
+			activityKind: "mcp_tool",
+			status: "completed",
+			summary: "Fix the build",
+			detail: { providerToolName: "spawnAgent", background: true, input: { prompt: "Fix the build" } } as ConversationActivity["detail"],
+			createdAt: at(2),
+		};
+		const ownTurn = (item: ConversationActivity, status: ConversationActivity["status"] = item.status): ConversationActivity =>
+			({ ...inTurn(item, childTurn), status, detail: { ...item.detail, childTurn: true } });
+		const codex = (child: ConversationSnapshot["turns"][number], items: ConversationItem[]): ConversationSnapshot => ({
+			...chatFixtureEmpty,
+			harness: "codex",
+			controller: { state: "ready" },
+			latestSequence: 3 + items.length,
+			turns: [
+				{
+					id: turnId, state: "completed", requestedAt: at(0), startedAt: at(0), completedAt: at(3),
+					diff: { files: [{ path: "README.md", additions: 1, deletions: 0, status: "modified" }] },
+				},
+				child,
+			],
+			items: [text("prompt", 1, "user", "Fix the build with a subagent"), spawn, text("started", 3, "assistant", "Started one agent."), ...items],
+		});
+
+		it("counts the files the child changed on the turn that launched it", async () => {
+			// Codex tracks each thread's diff on its own turn, and that turn is left out of
+			// the timeline, so its edits are counted where the launch is.
+			render(<ChatWorkspace snapshot={codex(
+				{
+					id: childTurn, state: "completed", requestedAt: at(3), startedAt: at(3), completedAt: at(9),
+					diff: { files: [{ path: "main.go", additions: 4, deletions: 1, status: "modified" }] },
+				},
+				[ownTurn(child("c1", 4, "call-spawn", "go build ./...")), ownTurn(handback("hb", 5, "call-spawn", "Build fixed."))],
+			)} onOpenFiles={vi.fn()} />);
+
+			expect(await screen.findByText("2 Files Changed")).toBeInTheDocument();
+		});
+
+		it("shows an approval the child asks for without bringing back its turn", () => {
+			// The driver cannot file an approval under the launch. It still shows, but the
+			// child's turn keeps no Working row of its own: its subagent already says so.
+			render(<ChatWorkspace snapshot={codex(
+				{ id: childTurn, state: "running", requestedAt: at(3), startedAt: at(3) },
+				[
+					ownTurn(child("c1", 4, "call-spawn", "go test ./..."), "running"),
+					{
+						kind: "activity", id: "approve", turnId: childTurn, sequence: 5, revision: 0,
+						activityKind: "approval", status: "pending", summary: "Run go test?",
+						requestId: "child-approval",
+						decisions: [{ id: "allow_once", label: "Allow Once", kind: "allow_once" }],
+						detail: { command: "go test ./..." }, createdAt: at(5),
+					},
+				],
+			)} onDecide={vi.fn()} />);
+
+			expect(screen.getByRole("group", { name: "Approval request child-approval" })).toBeInTheDocument();
+			expect(screen.queryByTestId("live-working-label")).not.toBeInTheDocument();
+			openTeam();
+			expect(within(screen.getByRole("button", { name: /Fix the build/ })).getByLabelText("Working")).toBeInTheDocument();
+		});
+	});
+
 	it("does not stop the parent turn when Escape is pressed in the Subagents panel", async () => {
 		const user = userEvent.setup();
 		const tabBody = document.createElement("div");

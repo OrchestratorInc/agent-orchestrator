@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 )
@@ -38,11 +39,20 @@ func TestPragmasSetJournalSizeLimit(t *testing.T) {
 // the daemon: the writer Open returns cuts it back at the next WAL reset.
 func TestOpenWriterTrimsAnInflatedWALAtTheNextReset(t *testing.T) {
 	dir := t.TempDir()
-	store, err := Open(dir)
+	// The background timestamp repair reads the database. A read open during
+	// the burst stops its checkpoint partway, and the writer cannot reset a log
+	// that is not fully checkpointed, so let the repair finish first.
+	repaired := make(chan struct{})
+	store, err := openWithTimestampOptions(dir, timestampOpenOptions{fenceBudget: timestampFenceTimeout, repairDone: repaired})
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
 	t.Cleanup(func() { _ = store.Close() })
+	select {
+	case <-repaired:
+	case <-time.After(30 * time.Second):
+		t.Fatal("timestamp repair never finished")
+	}
 
 	// Inflate the log from a connection that has no limit. It checkpoints the
 	// log into the database right after the commit, so the writer is free to
