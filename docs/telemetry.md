@@ -226,7 +226,9 @@ Orchestrator.inc sends structured events in a few broad categories:
   session safety check that must finish before the API opens), and
   `listen_ms`. When the restore that starts alongside the API ends,
   `ao.daemon.startup_reconciled` sends `reconcile_ms` split into
-  `chat_hosts_ms`, `reviewer_recovery_ms`, `sessions_ms`, and `runtime_ms`.
+  `chat_hosts_ms`, `sessions_ms`, `reviewer_recovery_ms` (reviewer recovery runs
+  alongside the session check; this is the time it runs past it), and
+  `runtime_ms`.
   Both carry durations only
 - Basic environment information, such as the Orchestrator.inc version, operating system,
   release channel, and which supported agent types are available. Desktop and

@@ -794,7 +794,7 @@ func (m *sideManager) open(side domain.SideConversation, cfg StartConfig, driver
 		if forker, ok := driver.(ports.ChatIsolatedForker); ok {
 			anchor := side.NativeAnchorID
 			forkConfig := ports.ChatStartConfig{
-				SessionID: domain.SessionID(side.ProviderHostID), DataDir: cfg.DataDir,
+				SessionID: domain.SessionID(side.ProviderHostID), SkillSessionID: side.SessionID, DataDir: cfg.DataDir,
 				WorkspacePath: cfg.WorkspacePath, Env: cfg.Env, Model: side.Model, Effort: side.Effort,
 				Permissions: cfg.Permissions, ReadOnly: cfg.ReadOnly, SystemPrompt: sideIdentityPrompt(cfg.SystemPrompt),
 				ProviderScopeID: side.ID, ProviderIDsScoped: true, RecordFork: recordFork,
@@ -837,7 +837,7 @@ func (m *sideManager) open(side domain.SideConversation, cfg StartConfig, driver
 	}
 	if conv == nil && providerID != "" {
 		conv, err = driver.Resume(ctx, ports.ChatResumeConfig{
-			SessionID: domain.SessionID(side.ProviderHostID), ProviderConversationID: providerID,
+			SessionID: domain.SessionID(side.ProviderHostID), SkillSessionID: side.SessionID, ProviderConversationID: providerID,
 			DataDir: cfg.DataDir, WorkspacePath: cfg.WorkspacePath, Env: cfg.Env,
 			Model: side.Model, Effort: side.Effort, Permissions: cfg.Permissions,
 			ReadOnly: cfg.ReadOnly, SystemPrompt: sideIdentityPrompt(cfg.SystemPrompt),
@@ -846,7 +846,7 @@ func (m *sideManager) open(side domain.SideConversation, cfg StartConfig, driver
 		})
 	} else if conv == nil {
 		conv, err = driver.Start(ctx, ports.ChatStartConfig{
-			SessionID: domain.SessionID(side.ProviderHostID), DataDir: cfg.DataDir,
+			SessionID: domain.SessionID(side.ProviderHostID), SkillSessionID: side.SessionID, DataDir: cfg.DataDir,
 			WorkspacePath: cfg.WorkspacePath, Env: cfg.Env, Model: side.Model, Effort: side.Effort,
 			Permissions: cfg.Permissions, ReadOnly: cfg.ReadOnly,
 			SystemPrompt: sideIdentityPrompt(cfg.SystemPrompt), ProviderScopeID: side.ID, ProviderIDsScoped: true,
@@ -983,7 +983,7 @@ func (m *sideManager) restore(ctx context.Context, side domain.SideConversation)
 		return
 	}
 	conv, err := driver.Resume(ctx, ports.ChatResumeConfig{
-		SessionID: domain.SessionID(side.ProviderHostID), ProviderConversationID: side.ProviderForkID,
+		SessionID: domain.SessionID(side.ProviderHostID), SkillSessionID: side.SessionID, ProviderConversationID: side.ProviderForkID,
 		DataDir: cfg.DataDir, WorkspacePath: cfg.WorkspacePath, Env: cfg.Env,
 		Model: side.Model, Effort: side.Effort, Permissions: cfg.Permissions,
 		ReadOnly: cfg.ReadOnly, SystemPrompt: sideIdentityPrompt(cfg.SystemPrompt),
@@ -1445,7 +1445,10 @@ func (m *sideManager) runTurn(runtime *sideRuntime, side domain.SideConversation
 		}
 	}
 	m.announce(side.ID)
-	text := sideQuestionWithReferences(turn)
+	question := turn
+	question.Text = withSharedSkillInstructions(ctx, m.service.skillSharing, m.service.dataDir, side.SessionID, runtime.conv,
+		ports.ChatUserMessage{Text: turn.Text, Origin: domain.MessageOriginHuman}).Text
+	text := sideQuestionWithReferences(question)
 	// Keep attachment paths and resource contents out of the user's wording while
 	// retaining a text representation for providers without resource blocks.
 	for _, item := range turn.Content {

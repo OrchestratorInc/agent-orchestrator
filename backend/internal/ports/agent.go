@@ -270,6 +270,31 @@ type AgentLaunchAuthValidator interface {
 	ValidateLaunchAuth(ctx context.Context, workingDir string, env map[string]string) (AgentAuthStatus, error)
 }
 
+// AgentSkillRequest describes the session an agent's skills are asked about.
+type AgentSkillRequest struct {
+	WorkspacePath string
+	Env           map[string]string
+	// Chat is true for a chat session, false for a terminal one.
+	Chat bool
+}
+
+// AgentSkillSupport is how an agent finds the user's skills.
+type AgentSkillSupport struct {
+	// Native are the folders of user skills the agent loads itself, whatever
+	// its workspace.
+	Native []string
+	// Layout is where the agent looks for skills in a directory its adapter
+	// adds to one session, as a skillbridge layout. Empty means the adapter
+	// adds none, and the session is pointed at a list of skills instead.
+	Layout string
+}
+
+// AgentSkillSource is the optional capability of an adapter that knows where
+// its agent finds skills.
+type AgentSkillSource interface {
+	SkillSupport(context.Context, AgentSkillRequest) AgentSkillSupport
+}
+
 // AgentBinaryResolver is the optional capability adapters expose when their
 // binary can be checked without constructing a real session launch command.
 type AgentBinaryResolver interface {

@@ -164,6 +164,19 @@ func (s *Service) hasChatView(id domain.SessionID) bool {
 	return len(views) != 0
 }
 
+// OpenChats lists the sessions a renderer has open now, without the close grace.
+func (s *Service) OpenChats() []domain.SessionID {
+	s.viewMu.Lock()
+	defer s.viewMu.Unlock()
+	var ids []domain.SessionID
+	for id := range s.viewLeases {
+		if s.liveViewLeasesLocked(id) != nil {
+			ids = append(ids, id)
+		}
+	}
+	return ids
+}
+
 // Callers hold viewMu. Expired leases cannot keep a provider alive after a
 // renderer crash or a missed release request.
 func (s *Service) liveViewLeasesLocked(id domain.SessionID) map[string]time.Time {

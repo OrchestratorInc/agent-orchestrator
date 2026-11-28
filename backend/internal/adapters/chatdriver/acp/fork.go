@@ -39,6 +39,7 @@ func (d *Driver) ForkIntoHost(ctx context.Context, sourceID, lastTurnID string, 
 		SessionID: cfg.SessionID, DataDir: cfg.DataDir, WorkspacePath: cfg.WorkspacePath,
 		Env: cfg.Env, Model: cfg.Model, Permissions: cfg.Permissions,
 		SystemPrompt: cfg.SystemPrompt, ProviderScopeID: cfg.ProviderScopeID,
+		SkillSessionID: ports.SkillsOf(cfg.SessionID, cfg.SkillSessionID),
 	}
 	conv, init, live, err := d.connect(ctx, launchCfg, cfg.PrepareEnv)
 	if err != nil {
@@ -52,9 +53,7 @@ func (d *Driver) ForkIntoHost(ctx context.Context, sourceID, lastTurnID string, 
 		conv.discard()
 		return nil, fmt.Errorf("%w: ACP agent does not advertise resumable session/fork", ports.ErrChatCapabilityUnavailable)
 	}
-	additional, err := normalizeAdditionalDirectories(cfg.WorkspacePath, cfg.AdditionalDirectories,
-		init.AgentCapabilities.SessionCapabilities.AdditionalDirectories != nil,
-		d.cfg.ImplicitWorkspaceDirectories)
+	additional, err := d.sessionDirectories(launchCfg, cfg.AdditionalDirectories, init)
 	if err != nil {
 		conv.discard()
 		return nil, err

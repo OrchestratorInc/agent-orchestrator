@@ -223,7 +223,11 @@ type Controller struct {
 	// workspacePath is the worktree whose files are snapshotted before each turn
 	// and restored by a rollback.
 	workspacePath string
-	started       time.Time
+	// dataDir holds the session's shared skills; a review's controller has none.
+	dataDir string
+	// skillSharing reports the skill sharing setting; nil is off.
+	skillSharing func(context.Context) bool
+	started      time.Time
 
 	conv                   ports.ChatConversation
 	backgroundMu           sync.Mutex
@@ -2086,7 +2090,7 @@ func (c *Controller) dispatch(
 	// setting that only applied when the user pressed send would silently stop
 	// applying exactly when they were not watching.
 	msg.Settings = c.turnSettings()
-	msg = excerptDeliveryMessage(msg)
+	msg = excerptDeliveryMessage(c.withSharedSkillInstructions(ctx, msg))
 	deferred, hasDeferredStart := c.conv.(ports.ChatDeferredTurnStarter)
 	if err := c.store.RecordProviderInput(ctx, turnID, msg.Text); err != nil {
 		if len(followers) > 0 {

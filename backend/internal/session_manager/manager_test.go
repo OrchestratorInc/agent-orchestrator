@@ -475,6 +475,7 @@ func (f *fakeStore) ListAllSessions(context.Context) ([]domain.SessionRecord, er
 	for _, r := range f.sessions {
 		out = append(out, r)
 	}
+	slices.SortFunc(out, func(a, b domain.SessionRecord) int { return strings.Compare(string(a.ID), string(b.ID)) })
 	return out, nil
 }
 func (f *fakeStore) ListChatHibernationCandidates(ctx context.Context) ([]domain.SessionID, error) {

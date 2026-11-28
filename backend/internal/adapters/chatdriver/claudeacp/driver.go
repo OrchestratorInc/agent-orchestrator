@@ -175,6 +175,9 @@ func New(plugin claudePlugin, log *slog.Logger, onAuthRejected func()) ports.Cha
 				Env:     env,
 			}, nil
 		},
+		OptionalDirectories: func(cfg acpdriver.LaunchConfig) []string {
+			return claudecode.SkillDirectories(cfg.DataDir, string(ports.SkillsOf(cfg.SessionID, cfg.SkillSessionID)))
+		},
 		ServedModel:    aliases.servedModel,
 		SessionMeta:    claudeSessionMeta,
 		SessionMode:    claudeSessionMode,

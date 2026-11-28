@@ -294,6 +294,7 @@ var shippedMigrations = map[int64]string{
 	20261124173817272: "20261124173817272_review_run_github_review_id_index.sql",
 	20261124180709139: "20261124180709139_review_reviewer_handle_index.sql",
 	20261124180938781: "20261124180938781_review_chat_active_index.sql",
+	20261125084210509: "20261125084210509_skill_sharing.sql",
 	20261126154409684: "20261126154409684_session_role_agent.sql",
 	20261126171748993: "20261126171748993_add_session_moved_to.sql",
 	20261126171749183: "20261126171749183_add_session_move_conversation_placed.sql",

@@ -2,9 +2,13 @@ package codexappserver
 
 import (
 	"context"
+	"os"
+	"path/filepath"
 	"testing"
 
+	"github.com/OrchestratorInc/agent-orchestrator/backend/internal/domain"
 	"github.com/OrchestratorInc/agent-orchestrator/backend/internal/ports"
+	"github.com/OrchestratorInc/agent-orchestrator/backend/internal/skillbridge"
 )
 
 // The menu is built from this list, so what it drops matters as much as what it
@@ -102,5 +106,70 @@ func TestListSkillsReportsAnEmptyListRatherThanNil(t *testing.T) {
 	}
 	if len(skills) != 0 {
 		t.Errorf("got %d skills, want none: %+v", len(skills), skills)
+	}
+}
+
+func TestDriverGivesANewAppServerTheBridgedSkills(t *testing.T) {
+	source, data, workspace := t.TempDir(), t.TempDir(), t.TempDir()
+	skill := filepath.Join(source, "mine", "SKILL.md")
+	if err := os.MkdirAll(filepath.Dir(skill), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(skill, []byte("---\nname: mine\ndescription: d\n---\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := skillbridge.Sync(context.Background(), skillbridge.Config{
+		Dir: skillbridge.SessionDir(data, "codex", "s-1"), Layout: skillbridge.AgentsLayout, Sources: []string{source},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		name    string
+		session domain.SessionID
+		skills  domain.SessionID
+		resume  bool
+		fork    bool
+		refused bool
+		want    bool
+	}{
+		{name: "start", session: "s-1", want: true},
+		{name: "resume", session: "s-1", resume: true, want: true},
+		{name: "fork", session: "s-1", fork: true, want: true},
+		{name: "refused by an older Codex", session: "s-1", refused: true, want: true},
+		{name: "no skills", session: "s-2"},
+		// A side conversation runs in a host of its own and takes its session's skills.
+		{name: "side start", session: "side-host", skills: "s-1", want: true},
+		{name: "side resume", session: "side-host", skills: "s-1", resume: true, want: true},
+		{name: "side fork", session: "side-host", skills: "s-1", fork: true, want: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			driver, srv := newTestDriver(t)
+			if tc.refused {
+				srv.failures["skills/extraRoots/set"] = `{"code":-32601,"message":"unknown method"}`
+			} else {
+				srv.responses["skills/extraRoots/set"] = `{}`
+			}
+			var conv ports.ChatConversation
+			var err error
+			start := ports.ChatStartConfig{SessionID: tc.session, SkillSessionID: tc.skills, DataDir: data, WorkspacePath: workspace}
+			switch {
+			case tc.resume:
+				conv, err = driver.Resume(context.Background(), ports.ChatResumeConfig{
+					SessionID: tc.session, SkillSessionID: tc.skills, DataDir: data, WorkspacePath: workspace, ProviderConversationID: "thread-1",
+				})
+			case tc.fork:
+				srv.reply("thread/fork", `{"thread":{"id":"fork-thread"},"model":"test-model"}`)
+				conv, err = driver.ForkIntoHost(context.Background(), "thread-1", "turn-1", start)
+			default:
+				conv, err = driver.Start(context.Background(), start)
+			}
+			if err != nil {
+				t.Fatalf("the session did not start: %v", err)
+			}
+			defer func() { _ = conv.Close() }()
+			if got := srv.sentMethod("skills/extraRoots/set"); got != tc.want {
+				t.Fatalf("skills sent = %v, want %v", got, tc.want)
+			}
+		})
 	}
 }
