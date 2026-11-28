@@ -39,6 +39,16 @@ export type SideChatDraft = {
 	lastHandoffDelivery?: SideDeliveryReceipt;
 };
 
+// sideDeliveryHoldsPath reports whether a delivery the draft still owns (one
+// sent and not yet resolved, an accepted opening kept for recreation, a
+// command's frozen request, or the last handoff kept for retry) names path.
+// Such a file must stay staged even when its chip is removed from the draft.
+export function sideDeliveryHoldsPath(draft: SideChatDraft | undefined, path: string): boolean {
+	if (!draft) return false;
+	return [draft.pendingDelivery, draft.openingDelivery, draft.pendingCommand?.receipt, draft.lastHandoffDelivery]
+		.some((receipt) => receipt?.submitted.attachments.some((file) => file.path === path));
+}
+
 export function emptySideChatDraft(): SideChatDraft {
 	return { version: 1, text: "", attachments: [], references: [] };
 }

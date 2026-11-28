@@ -72,7 +72,7 @@ func newSuggestionForkHarness(t *testing.T, provider domain.AgentHarness, capabi
 	if supplied := os.Getenv("AO_TEST_SUGGESTION_CRASH_DIR"); supplied != "" {
 		dir = supplied
 	}
-	svc := chatsvc.New(chatsvc.Options{Store: st, Reader: fullSnapshotReader(st), Sessions: st, Drivers: fakeRegistry{driver: driver}, DataDir: dir, AppRunID: "suggestions", NewID: uuid.NewString})
+	svc := chatsvc.New(chatsvc.Options{Store: st, Reader: fullSnapshotReader(st), Sessions: st, Drivers: fakeRegistry{driver: driver}, DataDir: dir, SkillSharingEnabled: func(context.Context) bool { return true }, AppRunID: "suggestions", NewID: uuid.NewString})
 	ctrl, err := svc.Start(t.Context(), chatsvc.StartConfig{SessionID: testSession, ProjectID: testProject, Harness: provider, WorkspacePath: t.TempDir(), Model: "parent-model", Permissions: ports.PermissionModeAuto})
 	if err != nil {
 		t.Fatal(err)

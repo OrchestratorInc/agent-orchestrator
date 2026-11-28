@@ -37,6 +37,38 @@ export const ONBOARDING_FAILURE_REASONS = [
 export type OnboardingFailureReason = (typeof ONBOARDING_FAILURE_REASONS)[number];
 
 /**
+ * Why an install job failed (`install_failed`), as the daemon reads it from
+ * the installer's error and output (InstallJob.failureCause). The daemon's
+ * enum and this list must match; onboarding-telemetry.ts checks that at
+ * compile time.
+ */
+export const ONBOARDING_FAILURE_CAUSES = [
+	"timeout",
+	"not_found_after_install",
+	"verify_failed",
+	"node_missing",
+	"npm_missing",
+	"brew_missing",
+	"tool_missing",
+	"xcode_tools_missing",
+	"disk_full",
+	"permission_denied",
+	"network",
+	"locked",
+	"exit_nonzero",
+	"other",
+] as const;
+export type OnboardingFailureCause = (typeof ONBOARDING_FAILURE_CAUSES)[number];
+
+const CAUSES: ReadonlySet<string> = new Set(ONBOARDING_FAILURE_CAUSES);
+
+/** A listed failure cause, `other` for any other text (a newer daemon's), or none. */
+export function onboardingFailureCause(cause: unknown): OnboardingFailureCause | undefined {
+	if (typeof cause !== "string" || cause === "") return undefined;
+	return CAUSES.has(cause) ? cause as OnboardingFailureCause : "other";
+}
+
+/**
  * Failures that create a Sentry issue: something broke. A login the person
  * did not finish (`not_signed_in`), a platform without an installer
  * (`unsupported`) and an agent that signs in outside AO (`documentation`) are

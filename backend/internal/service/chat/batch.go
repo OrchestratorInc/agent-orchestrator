@@ -75,6 +75,9 @@ func (c *Controller) queuedBatchInput(ctx context.Context, batch []domain.Queued
 				return ports.ChatUserMessage{}, batchInputError{queued.TurnID, err}
 			}
 		}
+		authored := msg
+		authored.AuthoredByUser = queued.AuthoredByUser
+		msg.Text = c.withSharedSkillInstructions(ctx, authored).Text
 		msg = excerptDeliveryMessage(msg)
 		items = append(items, batchInputItem{
 			Kind: "message", Text: msg.Text, Origin: msg.Origin,
@@ -88,7 +91,7 @@ func (c *Controller) queuedBatchInput(ctx context.Context, batch []domain.Queued
 		}
 	}
 	if steer != nil {
-		rendered := excerptDeliveryMessage(*steer)
+		rendered := excerptDeliveryMessage(c.withSharedSkillInstructions(ctx, *steer))
 		combined.ClientMessageID = rendered.ClientMessageID
 		combined.Origin = rendered.Origin
 		combined.Settings = rendered.Settings

@@ -18,6 +18,7 @@ import (
 	openapi "github.com/swaggest/openapi-go"
 	"github.com/swaggest/openapi-go/openapi31"
 
+	"github.com/aoagents/agent-orchestrator/backend/internal/harnessendpoint"
 	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/controllers"
 	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/envelope"
 	"github.com/aoagents/agent-orchestrator/backend/internal/service/agentauth"
@@ -228,6 +229,7 @@ var schemaNames = map[string]string{ //nolint:gosec // Public OpenAPI type names
 	"ControllersUpdateVersionRefreshRequest":               "UpdateVersionRefreshRequest",
 	"ControllersUpdateComputerUseRequest":                  "UpdateComputerUseRequest",
 	"ControllersUpdateCommitAttributionRequest":            "UpdateCommitAttributionRequest",
+	"ControllersUpdateSkillSharingRequest":                 "UpdateSkillSharingRequest",
 	"ControllersUpdateSessionRetentionRequest":             "UpdateSessionRetentionRequest",
 	"ControllersUpdateAccountHandoffRequest":               "UpdateAccountHandoffRequest",
 	"ControllersConversationSnapshotResponse":              "ConversationSnapshotResponse",
@@ -382,6 +384,21 @@ var schemaNames = map[string]string{ //nolint:gosec // Public OpenAPI type names
 	"ControllersStartPreviewServerRequest":                "StartPreviewServerRequest",
 	"ControllersPreviewServerStatusResponse":              "PreviewServerStatusResponse",
 	"ControllersBrowserStatusQuery":                       "BrowserStatusQuery",
+	"ControllersApprovalPendingResponse":                  "ApprovalPendingResponse",
+	"ControllersApprovalListResponse":                     "ApprovalListResponse",
+	"ControllersApprovalIDParam":                          "ApprovalIDParam",
+	"ControllersApprovalDecisionRequest":                  "ApprovalDecisionRequest",
+	"ControllersApprovalDecisionResponse":                 "ApprovalDecisionResponse",
+	"ControllersApprovalAuditQuery":                       "ApprovalAuditQuery",
+	"ControllersApprovalAuditEntryResponse":               "ApprovalAuditEntryResponse",
+	"ControllersApprovalAuditResponse":                    "ApprovalAuditResponse",
+	"ControllersApprovalPolicyQuery":                      "ApprovalPolicyQuery",
+	"ControllersApprovalSiteRuleResponse":                 "ApprovalSiteRuleResponse",
+	"ControllersApprovalPolicyResponse":                   "ApprovalPolicyResponse",
+	"ControllersApprovalPolicyRequest":                    "ApprovalPolicyRequest",
+	"ControllersApprovalSiteRuleQuery":                    "ApprovalSiteRuleQuery",
+	"ControllersBrowserRemoteCommandRequest":              "BrowserRemoteCommandRequest",
+	"ControllersBrowserRemoteCommandResponse":             "BrowserRemoteCommandResponse",
 	"ControllersBrowserStatusResponse":                    "BrowserStatusResponse",
 	"ControllersDevicePlatformStatus":                     "DevicePlatformStatus",
 	"ControllersDeviceSummary":                            "DeviceSummary",
@@ -410,6 +427,18 @@ var schemaNames = map[string]string{ //nolint:gosec // Public OpenAPI type names
 	"ControllersRenameSessionResponse":                    "RenameSessionResponse",
 	"ControllersRestoreSessionResponse":                   "RestoreSessionResponse",
 	"ControllersExitAgentResponse":                        "ExitAgentResponse",
+	"ControllersMovePreviewResponse":                      "MovePreviewResponse",
+	"ControllersMoveChange":                               "MoveChange",
+	"ControllersMoveExportRequest":                        "MoveExportRequest",
+	"ControllersMoveExportResponse":                       "MoveExportResponse",
+	"ControllersMoveImportRequest":                        "MoveImportRequest",
+	"ControllersMoveImportResponse":                       "MoveImportResponse",
+	"ControllersMoveAbandonRequest":                       "MoveAbandonRequest",
+	"ControllersMoveAbandonResponse":                      "MoveAbandonResponse",
+	"ControllersMoveCompleteRequest":                      "MoveCompleteRequest",
+	"ControllersMoveCompleteResponse":                     "MoveCompleteResponse",
+	"SessionMoveManifest":                                 "MoveManifest",
+	"DomainSessionMove":                                   "SessionMove",
 	"ControllersResumeAgentResponse":                      "ResumeAgentResponse",
 	"ControllersStartSessionInterfaceTransitionRequest":   "StartSessionInterfaceTransitionRequest",
 	"ControllersSessionInterfaceTransitionView":           "SessionInterfaceTransition",
@@ -441,6 +470,8 @@ var schemaNames = map[string]string{ //nolint:gosec // Public OpenAPI type names
 	"ControllersAttachmentUploadResponse":                 "AttachmentUploadResponse",
 	"ControllersStageSessionAttachmentsRequest":           "StageSessionAttachmentsRequest",
 	"ControllersStageSessionAttachmentsResponse":          "StageSessionAttachmentsResponse",
+	"ControllersUpdateSessionAttachmentLeasesRequest":     "UpdateSessionAttachmentLeasesRequest",
+	"ControllersUpdateSessionAttachmentLeasesResponse":    "UpdateSessionAttachmentLeasesResponse",
 	"ControllersAttachmentInput":                          "AttachmentInput",
 	"ControllersListWorkspaceFilesResponse":               "ListWorkspaceFilesResponse",
 	"ControllersWorkspaceManifestResponse":                "WorkspaceManifestResponse",
@@ -580,6 +611,10 @@ var schemaNames = map[string]string{ //nolint:gosec // Public OpenAPI type names
 	"AgentauthPlan":                               "AgentAuthPlan",
 	"ControllersListAgentAuthPlansResponse":       "ListAgentAuthPlansResponse",
 	"ControllersStartAgentAuthResponse":           "StartAgentAuthResponse",
+	"ControllersAgentEndpointResponse":            "AgentEndpointResponse",
+	"HarnessendpointStatus":                       "AgentEndpointStatus",
+	"HarnessendpointInput":                        "SetAgentEndpointRequest",
+	"HarnessendpointAuthStyle":                    "AgentEndpointAuthStyle",
 	"ControllersStartAgentUILoginRequest":         "StartAgentUILoginRequest",
 	"ControllersSubmitAgentUILoginCodeRequest":    "SubmitAgentUILoginCodeRequest",
 	"AgentauthLoginMethod":                        "AgentLoginMethod",
@@ -899,6 +934,7 @@ func operations() []operation {
 	ops = append(ops, awakeOperations()...)
 	ops = append(ops, mobileDeviceOperations()...)
 	ops = append(ops, browserOperations()...)
+	ops = append(ops, approvalOperations()...)
 	ops = append(ops, deviceOperations()...)
 	ops = append(ops, paneOperations()...)
 	ops = append(ops, shellTerminalOperations()...)
@@ -1450,6 +1486,21 @@ func browserOperations() []operation {
 			},
 		},
 		{
+			method: http.MethodPost, path: "/api/v1/browser/remote-commands", id: "executeRemoteBrowserCommand", tag: "browser",
+			summary:    "Run an agent-browser command on this host's self-hosted agent browser, after the approval gate",
+			pathParams: []any{controllers.BrowserCapabilityHeader{}},
+			reqBody:    controllers.BrowserRemoteCommandRequest{},
+			resps: []respUnit{
+				{http.StatusOK, controllers.BrowserRemoteCommandResponse{}},
+				{http.StatusBadRequest, envelope.APIError{}},
+				{http.StatusForbidden, envelope.APIError{}},
+				{http.StatusNotFound, envelope.APIError{}},
+				{http.StatusConflict, envelope.APIError{}},
+				{http.StatusServiceUnavailable, envelope.APIError{}},
+				{http.StatusNotImplemented, envelope.APIError{}},
+			},
+		},
+		{
 			method: http.MethodPost, path: "/api/v1/browser/commands", id: "executeBrowserCommand", tag: "browser",
 			summary:    "Execute a target-scoped command in a session's desktop browser",
 			pathParams: []any{controllers.BrowserCapabilityHeader{}},
@@ -1463,6 +1514,88 @@ func browserOperations() []operation {
 				{http.StatusUnprocessableEntity, envelope.APIError{}},
 				{http.StatusServiceUnavailable, envelope.APIError{}},
 				{http.StatusGatewayTimeout, envelope.APIError{}},
+				{http.StatusNotImplemented, envelope.APIError{}},
+			},
+		},
+	}
+}
+
+// approvalOperations declares the /approvals operations: the prompt that holds
+// consequential agent actions for the user, its policy, and the audit log.
+func approvalOperations() []operation {
+	return []operation{
+		{
+			method: http.MethodGet, path: "/api/v1/approvals", id: "listApprovals", tag: "approvals",
+			summary: "List agent actions waiting for the user's approval",
+			resps: []respUnit{
+				{http.StatusOK, controllers.ApprovalListResponse{}},
+				{http.StatusNotImplemented, envelope.APIError{}},
+			},
+		},
+		{
+			method: http.MethodGet, path: "/api/v1/approvals/stream", id: "streamApprovals", tag: "approvals",
+			summary: "Stream approval requests as they arrive and end",
+			resps: []respUnit{
+				{http.StatusOK, ""},
+				{http.StatusInternalServerError, envelope.APIError{}},
+				{http.StatusNotImplemented, envelope.APIError{}},
+			},
+			contentTypes: map[int]string{http.StatusOK: "text/event-stream"},
+		},
+		{
+			method: http.MethodPost, path: "/api/v1/approvals/{id}/decision", id: "decideApproval", tag: "approvals",
+			summary:    "Allow once, always allow on this site, or deny a pending agent action",
+			pathParams: []any{controllers.ApprovalIDParam{}},
+			reqBody:    controllers.ApprovalDecisionRequest{},
+			resps: []respUnit{
+				{http.StatusOK, controllers.ApprovalDecisionResponse{}},
+				{http.StatusBadRequest, envelope.APIError{}},
+				{http.StatusForbidden, envelope.APIError{}},
+				{http.StatusConflict, envelope.APIError{}},
+				{http.StatusInternalServerError, envelope.APIError{}},
+				{http.StatusNotImplemented, envelope.APIError{}},
+			},
+		},
+		{
+			method: http.MethodGet, path: "/api/v1/approvals/audit", id: "listApprovalAudit", tag: "approvals",
+			summary:    "Read the log of gated agent actions and how each was decided",
+			pathParams: []any{controllers.ApprovalAuditQuery{}},
+			resps: []respUnit{
+				{http.StatusOK, controllers.ApprovalAuditResponse{}},
+				{http.StatusBadRequest, envelope.APIError{}},
+				{http.StatusInternalServerError, envelope.APIError{}},
+				{http.StatusNotImplemented, envelope.APIError{}},
+			},
+		},
+		{
+			method: http.MethodGet, path: "/api/v1/approvals/policy", id: "getApprovalPolicy", tag: "approvals",
+			summary:    "Read a session's approval mode and the sites always allowed",
+			pathParams: []any{controllers.ApprovalPolicyQuery{}},
+			resps: []respUnit{
+				{http.StatusOK, controllers.ApprovalPolicyResponse{}},
+				{http.StatusNotImplemented, envelope.APIError{}},
+			},
+		},
+		{
+			method: http.MethodPut, path: "/api/v1/approvals/policy", id: "setApprovalPolicy", tag: "approvals",
+			summary: "Change when a session asks before acting: off, risky actions, or every form submission",
+			reqBody: controllers.ApprovalPolicyRequest{},
+			resps: []respUnit{
+				{http.StatusOK, controllers.ApprovalPolicyResponse{}},
+				{http.StatusBadRequest, envelope.APIError{}},
+				{http.StatusForbidden, envelope.APIError{}},
+				{http.StatusNotImplemented, envelope.APIError{}},
+			},
+		},
+		{
+			method: http.MethodDelete, path: "/api/v1/approvals/sites", id: "removeApprovalSiteRule", tag: "approvals",
+			summary:    "Forget an always-allow choice for a site and category",
+			pathParams: []any{controllers.ApprovalSiteRuleQuery{}},
+			resps: []respUnit{
+				{http.StatusOK, controllers.ApprovalPolicyResponse{}},
+				{http.StatusBadRequest, envelope.APIError{}},
+				{http.StatusForbidden, envelope.APIError{}},
+				{http.StatusInternalServerError, envelope.APIError{}},
 				{http.StatusNotImplemented, envelope.APIError{}},
 			},
 		},
@@ -1619,6 +1752,17 @@ func shellTerminalOperations() []operation {
 			method: http.MethodPatch, path: "/api/v1/settings/chat-hibernation", id: "updateChatHibernation", tag: "settings",
 			summary: "Turn idle Chat hibernation on or off for this machine",
 			reqBody: controllers.UpdateChatHibernationRequest{},
+			resps: []respUnit{
+				{http.StatusOK, controllers.SettingsResponse{}},
+				{http.StatusBadRequest, envelope.APIError{}},
+				{http.StatusInternalServerError, envelope.APIError{}},
+				{http.StatusNotImplemented, envelope.APIError{}},
+			},
+		},
+		{
+			method: http.MethodPatch, path: "/api/v1/settings/skill-sharing", id: "updateSkillSharing", tag: "settings",
+			summary: "Turn sharing the user's skills with every agent on or off",
+			reqBody: controllers.UpdateSkillSharingRequest{},
 			resps: []respUnit{
 				{http.StatusOK, controllers.SettingsResponse{}},
 				{http.StatusBadRequest, envelope.APIError{}},
@@ -2595,6 +2739,29 @@ func agentOperations() []operation {
 			pathParams: []any{controllers.AgentIDParam{}},
 			resps: []respUnit{
 				{http.StatusAccepted, controllers.PrewarmChatAgentResponse{}},
+				{http.StatusNotImplemented, envelope.APIError{}},
+			},
+		},
+		{
+			method: http.MethodPut, path: "/api/v1/agents/{agent}/endpoint", id: "setAgentEndpoint", tag: "agents",
+			summary:    "Store a custom API base URL and key for one agent",
+			pathParams: []any{controllers.AgentIDParam{}},
+			reqBody:    harnessendpoint.Input{},
+			resps: []respUnit{
+				{http.StatusOK, controllers.AgentEndpointResponse{}},
+				{http.StatusBadRequest, envelope.APIError{}},
+				{http.StatusInternalServerError, envelope.APIError{}},
+				{http.StatusNotImplemented, envelope.APIError{}},
+			},
+		},
+		{
+			method: http.MethodDelete, path: "/api/v1/agents/{agent}/endpoint", id: "clearAgentEndpoint", tag: "agents",
+			summary:    "Remove the custom API endpoint for one agent",
+			pathParams: []any{controllers.AgentIDParam{}},
+			resps: []respUnit{
+				{http.StatusOK, controllers.AgentEndpointResponse{}},
+				{http.StatusBadRequest, envelope.APIError{}},
+				{http.StatusInternalServerError, envelope.APIError{}},
 				{http.StatusNotImplemented, envelope.APIError{}},
 			},
 		},
@@ -3968,6 +4135,19 @@ func sessionOperations() []operation {
 			},
 		},
 		{
+			method: http.MethodPost, path: "/api/v1/sessions/{sessionId}/attachments/leases", id: "updateSessionAttachmentLeases", tag: "sessions",
+			summary:    "Release or renew files staged for an unsent chat draft",
+			pathParams: []any{controllers.SessionIDParam{}},
+			reqBody:    controllers.UpdateSessionAttachmentLeasesRequest{},
+			resps: []respUnit{
+				{http.StatusOK, controllers.UpdateSessionAttachmentLeasesResponse{}},
+				{http.StatusBadRequest, envelope.APIError{}},
+				{http.StatusNotFound, envelope.APIError{}},
+				{http.StatusInternalServerError, envelope.APIError{}},
+				{http.StatusNotImplemented, envelope.APIError{}},
+			},
+		},
+		{
 			method: http.MethodGet, path: "/api/v1/sessions/{sessionId}/workspace/manifest", id: "getSessionWorkspaceManifest", tag: "sessions",
 			summary:    "Get the compact changed-file manifest for the initial workspace review paint",
 			pathParams: []any{controllers.SessionIDParam{}},
@@ -4398,6 +4578,91 @@ func sessionOperations() []operation {
 				{http.StatusConflict, envelope.APIError{}},
 				{http.StatusInternalServerError, envelope.APIError{}},
 				{http.StatusNotImplemented, envelope.APIError{}},
+			},
+		},
+		{
+			method: http.MethodGet, path: "/api/v1/sessions/{sessionId}/move/preview", id: "previewSessionMove", tag: "sessions",
+			summary:    "List what a move to AO Cloud would push, or why it cannot move",
+			pathParams: []any{controllers.SessionIDParam{}},
+			resps: []respUnit{
+				{http.StatusOK, controllers.MovePreviewResponse{}},
+				{http.StatusNotFound, envelope.APIError{}},
+				{http.StatusConflict, envelope.APIError{}},
+				{http.StatusInternalServerError, envelope.APIError{}},
+			},
+		},
+		{
+			method: http.MethodPost, path: "/api/v1/sessions/{sessionId}/move/export", id: "exportSessionMove", tag: "sessions",
+			summary:    "Push a stopped session's branch and return its settings and handoff note to move it to AO Cloud",
+			pathParams: []any{controllers.SessionIDParam{}},
+			reqBody:    controllers.MoveExportRequest{},
+			resps: []respUnit{
+				{http.StatusOK, controllers.MoveExportResponse{}},
+				{http.StatusBadRequest, envelope.APIError{}},
+				{http.StatusNotFound, envelope.APIError{}},
+				{http.StatusConflict, envelope.APIError{}},
+				{http.StatusInternalServerError, envelope.APIError{}},
+			},
+		},
+		{
+			method: http.MethodGet, path: "/api/v1/sessions/{sessionId}/move/transcript", id: "getSessionMoveTranscript", tag: "sessions",
+			summary:    "Read a stopped session's agent conversation, with its paths replaced for AO Cloud, so the move resumes it there",
+			pathParams: []any{controllers.SessionIDParam{}},
+			resps: []respUnit{
+				{http.StatusOK, controllers.MoveTranscriptResponse{}},
+				{http.StatusNotFound, envelope.APIError{}},
+				{http.StatusConflict, envelope.APIError{}},
+				{http.StatusInternalServerError, envelope.APIError{}},
+				{http.StatusNotImplemented, envelope.APIError{}},
+			},
+		},
+		{
+			method: http.MethodGet, path: "/api/v1/sessions/move/targets", id: "listSessionMoveTargets", tag: "sessions",
+			summary:    "List the projects here a session from Orchestrator Cloud could move into, and why one cannot",
+			pathParams: []any{controllers.MoveTargetsQuery{}},
+			resps: []respUnit{
+				{http.StatusOK, controllers.MoveTargetsResponse{}},
+				{http.StatusBadRequest, envelope.APIError{}},
+				{http.StatusInternalServerError, envelope.APIError{}},
+				{http.StatusNotImplemented, envelope.APIError{}},
+			},
+		},
+		{
+			method: http.MethodPost, path: "/api/v1/sessions/move/import", id: "importSessionMove", tag: "sessions",
+			summary: "Start a session moved from AO Cloud",
+			reqBody: controllers.MoveImportRequest{},
+			resps: []respUnit{
+				{http.StatusOK, controllers.MoveImportResponse{}},
+				{http.StatusBadRequest, envelope.APIError{}},
+				{http.StatusNotFound, envelope.APIError{}},
+				{http.StatusConflict, envelope.APIError{}},
+				{http.StatusInternalServerError, envelope.APIError{}},
+			},
+		},
+		{
+			method: http.MethodPost, path: "/api/v1/sessions/{sessionId}/move/abandon", id: "abandonSessionMove", tag: "sessions",
+			summary:    "End a move to AO Cloud that will not finish, leaving the agent stopped",
+			pathParams: []any{controllers.SessionIDParam{}},
+			reqBody:    controllers.MoveAbandonRequest{},
+			resps: []respUnit{
+				{http.StatusOK, controllers.MoveAbandonResponse{}},
+				{http.StatusBadRequest, envelope.APIError{}},
+				{http.StatusNotFound, envelope.APIError{}},
+				{http.StatusConflict, envelope.APIError{}},
+				{http.StatusInternalServerError, envelope.APIError{}},
+			},
+		},
+		{
+			method: http.MethodPost, path: "/api/v1/sessions/{sessionId}/move/complete", id: "completeSessionMove", tag: "sessions",
+			summary:    "Mark a session as moved to AO Cloud and archive it here",
+			pathParams: []any{controllers.SessionIDParam{}},
+			reqBody:    controllers.MoveCompleteRequest{},
+			resps: []respUnit{
+				{http.StatusOK, controllers.MoveCompleteResponse{}},
+				{http.StatusBadRequest, envelope.APIError{}},
+				{http.StatusNotFound, envelope.APIError{}},
+				{http.StatusConflict, envelope.APIError{}},
+				{http.StatusInternalServerError, envelope.APIError{}},
 			},
 		},
 		{

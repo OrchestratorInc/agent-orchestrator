@@ -94,12 +94,12 @@ const entry = (grantId: string, subject: CloudCpShareEntry["subject"], extra: Pa
 	grantId, subject, scope: "session", sessionId: "sess", projectId: "proj", projectName: "storefront", role: "viewer", modeCap: "read-only", deniedCommands: [], source: "direct", createdAt: "2026-10-30T00:00:00Z", ...extra,
 });
 
-function renderDialog(props: { onOpenChange?: (open: boolean) => void; standaloneAgent?: boolean } = {}) {
+function renderDialog(props: { onOpenChange?: (open: boolean) => void; standaloneAgent?: boolean; viewOnly?: boolean } = {}) {
 	const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
 	const view = (open: boolean) => (
 		<QueryClientProvider client={client}>
 			<TooltipProvider>
-				<ShareSessionDialog open={open} onOpenChange={props.onOpenChange ?? (() => undefined)} orgId="org" projectId="proj" sessionId="sess" standaloneAgent={props.standaloneAgent} />
+				<ShareSessionDialog open={open} onOpenChange={props.onOpenChange ?? (() => undefined)} orgId="org" projectId="proj" sessionId="sess" standaloneAgent={props.standaloneAgent} viewOnly={props.viewOnly} />
 				<GlobalToast />
 			</TooltipProvider>
 		</QueryClientProvider>
@@ -498,6 +498,24 @@ describe("ShareSessionDialog people and teams", () => {
 		await userEvent.click(await screen.findByRole("button", { name: "Undo" }));
 		await waitFor(() => expect(mocks.calls.filter((call) => call[0] === "createShareGrants")).toHaveLength(1));
 		expect(onOpenChange).not.toHaveBeenCalledWith(true);
+	});
+
+	it("shares an AO Cloud automation run's session only to watch, with teams and not people", async () => {
+		renderDialog({ viewOnly: true });
+		await screen.findByText("Platform");
+		expect(screen.getByText("This automation run can only be shared to watch, with teams and by link.")).toBeInTheDocument();
+		const input = await stageCheckout();
+		const field = input.closest("[data-people-field]") as HTMLElement;
+		await userEvent.click(within(field).getByRole("button", { name: /Change access: Can watch/ }));
+		expect(await screen.findByRole("menuitem", { name: /Can watch/ })).toBeInTheDocument();
+		expect(screen.queryByRole("menuitem", { name: /Can write/ })).toBeNull();
+		fireEvent.keyDown(document.activeElement ?? document.body, { key: "Escape" });
+		// A person is refused before anything is sent.
+		fireEvent.change(input, { target: { value: "lee@acme.co" } });
+		fireEvent.keyDown(input, { key: "Enter" });
+		await userEvent.click(screen.getByRole("button", { name: "Share" }));
+		expect(await screen.findByText("Share an automation run with a team or by link, not with a person.")).toBeInTheDocument();
+		expect(mocks.calls.filter((call) => call[0] === "createShareGrants")).toHaveLength(0);
 	});
 
 	it("names a new team after what was typed when New team is picked", async () => {

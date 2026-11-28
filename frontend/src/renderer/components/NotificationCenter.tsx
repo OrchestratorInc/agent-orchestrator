@@ -8,6 +8,7 @@ import {
 	ArrowUpRight,
 	Bell,
 	BellRing,
+	CalendarClock,
 	CheckCheck,
 	CircleAlert,
 	GitMerge,
@@ -1444,6 +1445,10 @@ function notificationIcon(type: string) {
 			return GitMerge;
 		case "pr_closed_unmerged":
 			return GitPullRequestClosed;
+		case "automation_run_completed":
+		case "automation_run_failed":
+		case "automation_run_skipped":
+			return CalendarClock;
 		default:
 			return Bell;
 	}
@@ -1466,7 +1471,12 @@ function notificationIconClass(type: string): string {
 		case "pr_merged":
 			return "text-[var(--color-status-merged)]";
 		case "pr_closed_unmerged":
+		case "automation_run_failed":
 			return "text-error";
+		case "automation_run_completed":
+			return "text-success";
+		case "automation_run_skipped":
+			return "text-warning";
 		default:
 			return "text-muted-foreground";
 	}

@@ -35,6 +35,8 @@ export const QUEUED_DELETE_FEATURE = "queued-delete";
  * running turn (steerQueuedMessage), with the outcome recorded on the queued turn's events.
  */
 export const QUEUED_STEER_FEATURE = "queued-steer";
+/** Offering feature of a control plane that schedules cloud automations (/orgs/{orgId}/automations). */
+export const AUTOMATIONS_FEATURE = "automations";
 /**
  * Offering feature the control plane sends when a project whose sessions run on
  * Coder may run its orchestrator on Coder too (config.orchestratorSandboxProvider

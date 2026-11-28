@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { LATTICE_SIDE, LATTICE_TRAIL, latticeCellOrigin, latticeTrailOpacity } from "./latticeTrail";
+import { LATTICE_SIDE, LATTICE_TRAIL, LATTICE_COMET, LATTICE_EDGE_OPACITY, latticeCellOrigin, latticeCometPath, latticeTrailOpacity } from "./latticeTrail";
 
 // The lattice mirrors the desktop's working mark, so what is worth pinning is the
 // shape of the trail and the beat each dot plays, not the animation plumbing.
@@ -58,6 +58,40 @@ describe("lattice trail", () => {
 			const lit = LATTICE_TRAIL.filter((_, step) => latticeTrailOpacity(lap - step / LATTICE_TRAIL.length) > 0.5);
 			expect(lit.length).toBeGreaterThanOrEqual(3);
 			expect(lit.length).toBeLessThanOrEqual(4);
+		}
+	});
+});
+
+describe("the trail's comet", () => {
+	it("lights the dots the desktop's trail holds lit at each step, and leaves the rest at its floor", () => {
+		const steps = LATTICE_TRAIL.length;
+		for (const [behind, level] of LATTICE_COMET.entries()) expect(level).toBeCloseTo(latticeTrailOpacity((behind + 1.5) / steps), 1);
+		expect(latticeTrailOpacity(0.5 / steps)).toBeLessThan(0.4);
+		expect(latticeTrailOpacity(4.5 / steps)).toBeCloseTo(LATTICE_EDGE_OPACITY, 1);
+	});
+
+	it("holds each comet dot on the edge dot it has reached for the whole step, clockwise, and wraps onto the lap", () => {
+		const dot = 3;
+		const gap = 1;
+		const steps = LATTICE_TRAIL.length;
+		// What Animated's interpolate (clamped, linear between points) reads at `value`.
+		const read = (path: ReturnType<typeof latticeCometPath>, value: number) => {
+			const { inputRange: input } = path;
+			let i = 0;
+			while (i < input.length - 2 && value > input[i + 1]!) i++;
+			const t = Math.min(1, Math.max(0, (value - input[i]!) / (input[i + 1]! - input[i]!)));
+			return { left: path.left[i]! + (path.left[i + 1]! - path.left[i]!) * t, top: path.top[i]! + (path.top[i + 1]! - path.top[i]!) * t };
+		};
+		for (const behind of [0, 2]) {
+			const path = latticeCometPath(behind, dot, gap);
+			for (let i = 1; i < path.inputRange.length; i++) expect(path.inputRange[i]!).toBeGreaterThan(path.inputRange[i - 1]!);
+			expect(path.inputRange[0]).toBe(0);
+			expect(path.inputRange.at(-1)).toBe(steps);
+			for (let step = 0; step < steps; step++) {
+				const cell = latticeCellOrigin(LATTICE_TRAIL[(step - behind + steps) % steps]!, dot, gap);
+				for (const into of [0, 0.5, 0.99]) expect(read(path, step + into)).toEqual(cell);
+			}
+			expect(read(path, steps)).toEqual(read(path, 0));
 		}
 	});
 });

@@ -2484,7 +2484,7 @@ describe("ProjectSettingsForm", () => {
 		expect(putMock).not.toHaveBeenCalled();
 	});
 
-	it("restarts when the saved orchestrator agent already differs from the running orchestrator", async () => {
+	it("keeps a running orchestrator on another agent when the orchestrator agent setting is unchanged", async () => {
 		getMock.mockResolvedValue({
 			data: {
 				status: "ok",
@@ -2531,14 +2531,14 @@ describe("ProjectSettingsForm", () => {
 		const orchestratorAgent = await screen.findByRole("button", { name: "Orchestrator agent" });
 		expect(orchestratorAgent).toHaveTextContent("Goose");
 
+		// The orchestrator was switched to Claude Code on purpose: saving the
+		// project's settings must not replace it with a Goose one.
 		submitSettings();
 
 		await waitFor(() => expect(putMock).toHaveBeenCalledTimes(1));
-		await waitFor(() => expect(postMock).toHaveBeenCalledTimes(1));
-		expect(postMock).toHaveBeenCalledWith("/api/v1/orchestrators", {
-			body: { projectId: "proj-1", clean: true },
-		});
-		await expectReplacementWithoutNavigation();
+		await new Promise((resolve) => setTimeout(resolve, 0));
+		expect(postMock).not.toHaveBeenCalled();
+		expect(navigateMock).not.toHaveBeenCalled();
 	});
 
 	it("navigates to the replacement orchestrator after changing the default agent", async () => {

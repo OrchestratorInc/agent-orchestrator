@@ -16,7 +16,11 @@ const initial: SearchState = { phase: "idle", hits: [], total: 0 };
 const MODAL = "[role='dialog'], [role='alertdialog'], [role='menu'], [aria-modal='true'], [data-keybinding-recording]";
 /** A streaming reply changes the transcript constantly; re-search it at this pace. */
 const STREAM_REFRESH_MS = 2000;
-const OTHER_SURFACE = ".xterm, .terminal-surface, .monaco-editor, .cm-editor, iframe, webview";
+const OTHER_SURFACE = ".monaco-editor, .cm-editor, iframe, webview";
+// A focused terminal keeps the plain chord for its own search. Windows/Linux
+// have a terminal-safe chord as well (Ctrl+Shift+F); refusing every chord because
+// a terminal held focus is what made Find in chat unreachable there (#8420).
+const TERMINAL_SURFACE = ".xterm, .terminal-surface, [data-testid='session-terminal']";
 
 function isFindModalOpen(): boolean {
 	return Array.from(document.querySelectorAll<HTMLElement>(MODAL)).some((element) =>
@@ -128,12 +132,23 @@ export function useChatFind({ source, root, viewport, hostId, unavailable = fals
 		if (!element || !element.getClientRects().length || isSettingsPageOpen()) return false;
 		if (isFindModalOpen()) return false;
 		const focused = document.activeElement;
-		if (focused instanceof Element && focused.closest(OTHER_SURFACE)) return false;
+		const focusedTerminal = focused instanceof Element && focused.closest(TERMINAL_SURFACE) !== null;
+		if (!focusedTerminal && focused instanceof Element && focused.closest(OTHER_SURFACE)) return false;
 		const focusedChat = focused instanceof Element ? focused.closest("[data-chat-find-scope], [data-chat-find-surface]") : null;
 		if (focusedChat) return focusedChat === element || focusedChat === element.closest("[data-chat-find-scope]");
-		if (focused instanceof Element && focused.closest("input, textarea, [contenteditable='true'], [role='textbox']")) return false;
-		// Prefer the primary selected transcript when chrome holds focus.
-		return Array.from(document.querySelectorAll<HTMLElement>("[data-chat-find-surface]")).find((candidate) => candidate.getClientRects().length > 0) === element;
+		// Keystrokes meant for a terminal are not chat input, so its focus is not a
+		// reason to refuse like a focused composer or editor is.
+		if (!focusedTerminal && focused instanceof Element && focused.closest("input, textarea, [contenteditable='true'], [role='textbox']")) return false;
+		// A split shell is a sibling of its transcript, not inside its scope.
+		// Keep its Find within that session's split area, even when another
+		// visible chat was mounted earlier in the page.
+		const split = focusedTerminal && focused instanceof Element
+			? focused.closest('[data-testid="center-split-area"]')
+			: null;
+		// Otherwise prefer the primary selected transcript when chrome holds focus.
+		return Array.from((split ?? document).querySelectorAll<HTMLElement>("[data-chat-find-surface]")).find((candidate) =>
+			candidate.getClientRects().length > 0 && !candidate.closest("[inert], [aria-hidden='true']") && getComputedStyle(candidate).visibility !== "hidden",
+		) === element;
 	}, [root]);
 	const show = useCallback(() => {
 		if (!open) {

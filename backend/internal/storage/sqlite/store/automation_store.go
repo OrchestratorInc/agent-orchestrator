@@ -185,7 +185,8 @@ func (s *Store) MaterializeAutomationRuns(
 	return applied, nil
 }
 
-// ClaimNextAutomationRun leases the globally oldest eligible pending run.
+// ClaimNextAutomationRun supersedes stale pending occurrences, then leases
+// the globally oldest eligible run among each definition's newest due work.
 // The transaction and active-sibling predicate are the durable non-overlap
 // boundary for one automation definition.
 func (s *Store) ClaimNextAutomationRun(ctx context.Context, now, leaseExpiresAt time.Time) (domain.AutomationRun, bool, error) {
@@ -194,6 +195,9 @@ func (s *Store) ClaimNextAutomationRun(ctx context.Context, now, leaseExpiresAt 
 	var claimed domain.AutomationRun
 	found := false
 	err := s.inTx(ctx, "claim automation run", func(q *gen.Queries) error {
+		if err := q.SupersedePendingAutomationRuns(ctx, timePtrToNullTime(&now)); err != nil {
+			return err
+		}
 		candidate, err := q.GetNextClaimableAutomationRun(ctx)
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil
@@ -225,7 +229,7 @@ func automationToInsert(rec domain.Automation) gen.InsertAutomationParams {
 	return gen.InsertAutomationParams{
 		TemplateID:  rec.TemplateID,
 		ID:          rec.ID,
-		ProjectID:   rec.ProjectID,
+		ProjectID:   optionalProjectID(rec.ProjectID),
 		DisplayName: rec.DisplayName,
 		Prompt:      rec.Prompt,
 		UseCase:     rec.UseCase,
@@ -247,7 +251,7 @@ func automationToInsert(rec domain.Automation) gen.InsertAutomationParams {
 func automationFromGen(row gen.Automation) domain.Automation {
 	return domain.Automation{
 		ID:          row.ID,
-		ProjectID:   row.ProjectID,
+		ProjectID:   projectIDValue(row.ProjectID),
 		DisplayName: row.DisplayName,
 		Prompt:      row.Prompt,
 		TemplateID:  row.TemplateID,
@@ -328,6 +332,18 @@ func (s *Store) MarkAutomationRunRunning(ctx context.Context, id domain.Automati
 	})
 	if err != nil {
 		return false, fmt.Errorf("mark automation run %s running: %w", id, err)
+	}
+	return rows > 0, nil
+}
+
+// RecordAutomationRunOutcome stores, on a running run, the failure it takes
+// when its session ends. An empty failure means the run completes.
+func (s *Store) RecordAutomationRunOutcome(ctx context.Context, id domain.AutomationRunID, failure string, now time.Time) (bool, error) {
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
+	rows, err := s.qw.RecordAutomationRunOutcome(ctx, gen.RecordAutomationRunOutcomeParams{ErrorMessage: nullableString(failure), UpdatedAt: now, ID: id})
+	if err != nil {
+		return false, fmt.Errorf("record automation run %s outcome: %w", id, err)
 	}
 	return rows > 0, nil
 }
@@ -430,4 +446,14 @@ func (s *Store) ListAutomationRuns(ctx context.Context, filter domain.Automation
 		items = append(items, automationRunFromGen(row))
 	}
 	return domain.AutomationRunPage{Items: items, Total: total}, nil
+}
+
+// AutomationSessionReadyToComplete reads durable completion evidence. Idle
+// workers with no successful outcome, unsettled turns, or open PRs stay active.
+func (s *Store) AutomationSessionReadyToComplete(ctx context.Context, id domain.SessionID, now time.Time) (bool, error) {
+	ready, err := s.qr.AutomationSessionReadyToComplete(ctx, gen.AutomationSessionReadyToCompleteParams{SessionID: id, Now: timePtrToNullTime(&now)})
+	if err != nil {
+		return false, fmt.Errorf("read automation session completion: %w", err)
+	}
+	return ready, nil
 }

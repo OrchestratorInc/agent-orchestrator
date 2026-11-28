@@ -252,7 +252,8 @@ func containsFold(values []string, needle string) bool {
 func seenIssueIDs(sessions []domain.SessionRecord) map[domain.IssueID]bool {
 	seen := make(map[domain.IssueID]bool, len(sessions))
 	for _, sess := range sessions {
-		if sess.IssueID != "" && !sess.IsTerminated {
+		// A moved session still owns its issue; it runs in AO Cloud.
+		if sess.IssueID != "" && (!sess.IsTerminated || sess.MovedTo != nil) {
 			seen[sess.IssueID] = true
 		}
 	}

@@ -6835,6 +6835,28 @@ func TestWorkspaceFileReadsRenewAHeldPreparation(t *testing.T) {
 	}
 }
 
+func TestGetAttachmentRecordAllowsAndRenewsHeldPreparation(t *testing.T) {
+	st := newFakeStore()
+	st.sessions["mer-1"] = domain.SessionRecord{ID: "mer-1", IsTaskPreparation: true}
+	st.sessions["mer-2"] = domain.SessionRecord{ID: "mer-2"}
+	commander := &renewingCommander{fakeCommander: &fakeCommander{}}
+	svc := &Service{store: st, manager: commander}
+
+	if _, err := svc.Get(context.Background(), "mer-1"); err == nil {
+		t.Fatal("Get returned a held preparation")
+	}
+	rec, err := svc.GetAttachmentRecord(context.Background(), "mer-1")
+	if err != nil || rec.ID != "mer-1" {
+		t.Fatalf("GetAttachmentRecord(mer-1) = %+v, %v; want mer-1", rec, err)
+	}
+	if _, err := svc.GetAttachmentRecord(context.Background(), "mer-2"); err != nil {
+		t.Fatalf("GetAttachmentRecord(mer-2) err = %v", err)
+	}
+	if want := []domain.TaskPreparationToken{"mer-1"}; !slices.Equal(commander.renewed, want) {
+		t.Fatalf("renewed = %v, want only the preparation %v", commander.renewed, want)
+	}
+}
+
 // An imported chat whose agent CLI changed between import and first open shows
 // the adapter's version message, not the generic "check the daemon log".
 func TestResumeAgentShowsImportVersionMessage(t *testing.T) {

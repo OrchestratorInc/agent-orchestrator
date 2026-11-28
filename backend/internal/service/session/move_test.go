@@ -1,0 +1,1194 @@
+package session
+
+import (
+	"archive/tar"
+	"bytes"
+	"compress/gzip"
+	"context"
+	"crypto/rand"
+	"encoding/hex"
+	"errors"
+	"fmt"
+	"io"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"slices"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
+	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/apierr"
+	"github.com/aoagents/agent-orchestrator/backend/internal/nativetransfer"
+	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
+	sessionmanager "github.com/aoagents/agent-orchestrator/backend/internal/session_manager"
+	"github.com/aoagents/agent-orchestrator/backend/internal/sessionmove"
+)
+
+type moveStore struct {
+	*fakeStore
+	beforeEnd func()
+}
+
+// MarkSessionMoved holds only while the move is the session's move in
+// progress and its agent is stopped, as the SQLite store's conditional write does.
+func (m moveStore) MarkSessionMoved(_ context.Context, id domain.SessionID, move domain.SessionMove, _ time.Time) (bool, error) {
+	rec, ok := m.sessions[id]
+	if !ok || rec.MovedTo != nil || rec.MoveStarted != move.MoveID || (!rec.IsTerminated && rec.Activity.State != domain.ActivityExited) {
+		return false, nil
+	}
+	rec.MovedTo, rec.MoveStarted = &move, ""
+	m.sessions[id] = rec
+	return true, nil
+}
+
+func (m moveStore) SetSessionMoveStarted(_ context.Context, id domain.SessionID, moveID string, _ time.Time) (bool, error) {
+	rec, ok := m.sessions[id]
+	rec.MoveStarted = moveID
+	m.sessions[id] = rec
+	return ok, nil
+}
+
+// EndSessionMoveStartedFor clears the move in progress only while it is still
+// moveID and the session has not moved, as the SQLite store's conditional
+// write does. beforeEnd, when set, runs first: a test's racing export.
+func (m moveStore) EndSessionMoveStartedFor(_ context.Context, id domain.SessionID, moveID string, _ time.Time) (bool, error) {
+	if m.beforeEnd != nil {
+		m.beforeEnd()
+	}
+	rec, ok := m.sessions[id]
+	if !ok || rec.MovedTo != nil || rec.MoveStarted != moveID {
+		return false, nil
+	}
+	rec.MoveStarted = ""
+	m.sessions[id] = rec
+	return true, nil
+}
+
+func (m moveStore) SetSessionMoveConversationPlaced(_ context.Context, id domain.SessionID, _ time.Time) (bool, error) {
+	rec, ok := m.sessions[id]
+	rec.MoveConversationPlaced = true
+	m.sessions[id] = rec
+	return ok, nil
+}
+
+// fakeStore counts these calls without a lock, and the orchestrator notice
+// reads sessions on its own goroutine. No session here has pull requests.
+func (moveStore) ListPRFactsForSession(context.Context, domain.SessionID) ([]domain.PRFacts, error) {
+	return nil, nil
+}
+
+func (moveStore) ListPRFactsForSessions(context.Context, []domain.SessionID) (map[domain.SessionID][]domain.PRFacts, error) {
+	return nil, nil
+}
+
+func TestCompleteMoveDoesNotWaitForTheOrchestrator(t *testing.T) {
+	st := newFakeStore()
+	st.sessions["mer-1"] = domain.SessionRecord{ID: "mer-1", ProjectID: "mer", Kind: domain.KindOrchestrator}
+	st.sessions["mer-2"] = domain.SessionRecord{ID: "mer-2", ProjectID: "mer", Kind: domain.KindWorker,
+		MoveStarted: "move-1", Activity: domain.Activity{State: domain.ActivityExited}}
+	release := make(chan struct{})
+	told := make(chan string, 1)
+	fc := &fakeCommander{sendFunc: func(id domain.SessionID, message string) error {
+		<-release
+		told <- string(id) + " " + message
+		return nil
+	}}
+	svc := NewWithDeps(Deps{Manager: fc, Store: moveStore{fakeStore: st}})
+
+	dest := domain.SessionMove{MoveID: "move-1", OrgID: "org-1", SessionID: "cloud-1"}
+	if _, err := svc.CompleteMove(context.Background(), "mer-2", MoveCompleteInput{Destination: dest}); err != nil {
+		t.Fatalf("CompleteMove: %v", err)
+	}
+	if st.sessions["mer-2"].MovedTo == nil || len(fc.killed) != 1 {
+		t.Fatalf("CompleteMove returned before marking and archiving: moved=%v killed=%v", st.sessions["mer-2"].MovedTo, fc.killed)
+	}
+	close(release)
+	select {
+	case got := <-told:
+		if !strings.HasPrefix(got, "mer-1 ") || !strings.Contains(got, "mer-2") || !strings.Contains(got, "cloud-1") {
+			t.Fatalf("orchestrator message = %q", got)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("the orchestrator was not told")
+	}
+}
+
+// A move/complete retried after the user resumed the session here never
+// archives it: the session stays, and the refusal says the Cloud copy remains.
+func TestCompleteMoveRefusesASessionResumedHere(t *testing.T) {
+	for name, rec := range map[string]domain.SessionRecord{
+		"resumed (move ended here)": {ID: "mer-2", ProjectID: "mer", Kind: domain.KindWorker, Activity: domain.Activity{State: domain.ActivityExited}},
+		"agent running":             {ID: "mer-2", ProjectID: "mer", Kind: domain.KindWorker, MoveStarted: "move-1", Activity: domain.Activity{State: domain.ActivityActive}},
+		"another move":              {ID: "mer-2", ProjectID: "mer", Kind: domain.KindWorker, MoveStarted: "move-2", Activity: domain.Activity{State: domain.ActivityExited}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			st := newFakeStore()
+			st.sessions["mer-2"] = rec
+			fc := &fakeCommander{}
+			svc := NewWithDeps(Deps{Manager: fc, Store: moveStore{fakeStore: st}})
+			_, err := svc.CompleteMove(context.Background(), "mer-2", MoveCompleteInput{Destination: domain.SessionMove{MoveID: "move-1", OrgID: "org-1", SessionID: "cloud-1"}})
+			var apiErr *apierr.Error
+			if !errors.As(err, &apiErr) || apiErr.Code != "MOVE_NOT_IN_PROGRESS" {
+				t.Fatalf("err = %v, want MOVE_NOT_IN_PROGRESS", err)
+			}
+			if st.sessions["mer-2"].MovedTo != nil || len(fc.killed) != 0 {
+				t.Fatalf("session marked %v, killed %v; want neither", st.sessions["mer-2"].MovedTo, fc.killed)
+			}
+		})
+	}
+}
+
+// A repeated complete of a move already recorded still archives the session
+// and reports it moved.
+func TestCompleteMoveRepeatsSafely(t *testing.T) {
+	st := newFakeStore()
+	dest := domain.SessionMove{MoveID: "move-1", OrgID: "org-1", SessionID: "cloud-1"}
+	st.sessions["mer-2"] = domain.SessionRecord{ID: "mer-2", ProjectID: "mer", Kind: domain.KindWorker, MovedTo: &dest,
+		Activity: domain.Activity{State: domain.ActivityExited}}
+	fc := &fakeCommander{}
+	svc := NewWithDeps(Deps{Manager: fc, Store: moveStore{fakeStore: st}})
+	if _, err := svc.CompleteMove(context.Background(), "mer-2", MoveCompleteInput{Destination: dest}); err != nil {
+		t.Fatalf("CompleteMove: %v", err)
+	}
+	if len(fc.killed) != 1 {
+		t.Fatalf("killed = %v, want the session archived", fc.killed)
+	}
+}
+
+func TestMoveRefusalsNameTheFiles(t *testing.T) {
+	for _, tc := range []struct {
+		err  error
+		want string
+	}{
+		{fmt.Errorf("%w: model.bin, data/weights.bin", sessionmove.ErrLFSObjects), "Git LFS files cannot move yet: model.bin, data/weights.bin."},
+		{fmt.Errorf("%w: vendor/sub", sessionmove.ErrDirtySubmodule), "Commit or discard the changes inside vendor/sub first."},
+		{&sessionmove.FileTooLargeError{Limit: 1, Files: []sessionmove.Blob{{Path: "big.bin"}, {Path: "big.bin"}, {Path: "data.csv"}}}, "Over GitHub's 100 MiB file limit: big.bin, data.csv."},
+		{fmt.Errorf("%w: MERGE_HEAD exists", sessionmove.ErrOperationInProgress), "Finish or abort the merge, rebase or conflict in the worktree first."},
+		{fmt.Errorf("%w: main", sessionmove.ErrDefaultBranch), "The session is on main, the repository's default branch. A move pushes the session's uncommitted work to its branch, so only a session on its own branch can move."},
+		{fmt.Errorf("%w: git push: exit status 1: fatal: Authentication failed", sessionmove.ErrRemoteAuth), "Origin refused this computer's Git credentials. Check that you can fetch and push the repository here, then try again."},
+	} {
+		var got *apierr.Error
+		if !errors.As(moveAPIError(tc.err), &got) || got.Message != tc.want {
+			t.Errorf("moveAPIError(%v) = %v, want message %q", tc.err, got, tc.want)
+		}
+	}
+	// Git's raw output stays out of a refusal about origin.
+	var got *apierr.Error
+	if errors.As(moveAPIError(fmt.Errorf("%w: fatal: secret", sessionmove.ErrRemoteUnreachable)), &got) && got.Details != nil {
+		t.Errorf("origin refusal details = %v, want none", got.Details)
+	}
+	// One it cannot explain is a 500 whose message is not git's.
+	svc := NewWithDeps(Deps{Manager: &fakeCommander{}, Store: newFakeStore()})
+	if !errors.As(svc.moveAPIError(context.Background(), errors.New("git push: fatal: raw")), &got) || got.Code != "MOVE_GIT_FAILED" || strings.Contains(got.Message, "raw") {
+		t.Errorf("unexplained error = %v, want MOVE_GIT_FAILED without git's text", got)
+	}
+}
+
+// transcriptCommander is a manager that reads a session's agent conversation.
+type transcriptCommander struct {
+	*fakeCommander
+	size     int64
+	sizeErr  error
+	id, data string
+	writeErr error
+	// sidecar is the sidecar folder's bytes as the agent would pack them.
+	sidecar    string
+	sidecarErr error
+}
+
+func (c transcriptCommander) CloudTranscriptSize(context.Context, domain.SessionRecord, domain.ProjectRecord) (int64, error) {
+	return c.size, c.sizeErr
+}
+
+func (c transcriptCommander) CloudSidecarInfo(context.Context, domain.SessionRecord, domain.ProjectRecord) (nativetransfer.ClaudeSidecar, error) {
+	return nativetransfer.ClaudeSidecar{Bytes: int64(len(c.sidecar)), Subagents: 1}, nil
+}
+
+func (c transcriptCommander) WriteCloudSidecar(_ context.Context, _ domain.SessionRecord, _ domain.ProjectRecord, w io.Writer, _ int64) (bool, error) {
+	if c.sidecarErr != nil || c.sidecar == "" {
+		return false, c.sidecarErr
+	}
+	_, err := io.WriteString(w, c.sidecar)
+	return true, err
+}
+
+func (c transcriptCommander) WriteCloudTranscript(_ context.Context, _ domain.SessionRecord, _ domain.ProjectRecord, w io.Writer, _ int64) (string, error) {
+	if c.writeErr != nil {
+		return "", c.writeErr
+	}
+	_, err := io.WriteString(w, c.data)
+	return c.id, err
+}
+
+func transcriptService(c transcriptCommander, state domain.ActivityState) *Service {
+	st := newFakeStore()
+	st.projects["mer"] = domain.ProjectRecord{ID: "mer", RepoOriginURL: "https://github.com/acme/app"}
+	st.sessions["mer-2"] = domain.SessionRecord{
+		ID: "mer-2", ProjectID: "mer", Kind: domain.KindWorker, Harness: domain.HarnessClaudeCode,
+		Activity: domain.Activity{State: state}, Metadata: domain.SessionMetadata{WorkspacePath: "/wt/mer-2"},
+	}
+	c.fakeCommander = &fakeCommander{}
+	return NewWithDeps(Deps{Manager: c, Store: st})
+}
+
+func TestMoveTranscriptGzipsTheConversation(t *testing.T) {
+	svc := transcriptService(transcriptCommander{id: "aid-1", data: "{\"cwd\":\"/ao-moved/cwd\"}\n"}, domain.ActivityExited)
+	out, err := svc.MoveTranscript(context.Background(), "mer-2")
+	if err != nil {
+		t.Fatal(err)
+	}
+	zr, err := gzip.NewReader(bytes.NewReader(out.Gzip))
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, _ := io.ReadAll(zr)
+	if out.AgentSessionID != "aid-1" || string(raw) != "{\"cwd\":\"/ao-moved/cwd\"}\n" {
+		t.Fatalf("MoveTranscript = %q, %q", out.AgentSessionID, raw)
+	}
+}
+
+func TestMoveTranscriptRefusals(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		c     transcriptCommander
+		state domain.ActivityState
+		code  string
+	}{
+		{"running agent", transcriptCommander{}, domain.ActivityIdle, "MOVE_AGENT_RUNNING"},
+		{"another agent", transcriptCommander{writeErr: sessionmanager.ErrCloudTranscriptUnsupported}, domain.ActivityExited, "MOVE_TRANSCRIPT_UNSUPPORTED"},
+		{"too large", transcriptCommander{writeErr: fmt.Errorf("%w: 70 MiB", nativetransfer.ErrTooLarge)}, domain.ActivityExited, "MOVE_TRANSCRIPT_TOO_LARGE"},
+		{"no transcript", transcriptCommander{writeErr: errors.New("no Claude Code transcript")}, domain.ActivityExited, "MOVE_TRANSCRIPT_UNAVAILABLE"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := transcriptService(tc.c, tc.state).MoveTranscript(context.Background(), "mer-2")
+			var got *apierr.Error
+			if !errors.As(err, &got) || got.Code != tc.code {
+				t.Fatalf("err = %v, want %s", err, tc.code)
+			}
+		})
+	}
+}
+
+func TestMoveTranscriptInfoSaysWhyTheConversationStays(t *testing.T) {
+	for _, tc := range []struct {
+		c    transcriptCommander
+		want MoveTranscriptInfo
+	}{
+		{transcriptCommander{size: 2048}, MoveTranscriptInfo{Bytes: 2048}},
+		{transcriptCommander{sizeErr: sessionmanager.ErrCloudTranscriptUnsupported}, MoveTranscriptInfo{Unavailable: "unsupported"}},
+		{transcriptCommander{sizeErr: errors.New("missing")}, MoveTranscriptInfo{Unavailable: "not_found"}},
+		{transcriptCommander{size: CloudTranscriptMaxBytes + 1}, MoveTranscriptInfo{Bytes: CloudTranscriptMaxBytes + 1, Unavailable: "too_large"}},
+	} {
+		svc := transcriptService(tc.c, domain.ActivityIdle)
+		if got := svc.moveTranscriptInfo(context.Background(), domain.SessionRecord{}, domain.ProjectRecord{}); got != tc.want {
+			t.Errorf("moveTranscriptInfo = %+v, want %+v", got, tc.want)
+		}
+	}
+}
+
+func TestWriteImportArchiveReadsTheCloudTranscript(t *testing.T) {
+	const id = "0b5a6c1e-3f2d-4c8a-9e7b-1d2c3b4a5f60"
+	var gz bytes.Buffer
+	zw := gzip.NewWriter(&gz)
+	_, _ = zw.Write([]byte(`{"type":"user","cwd":"/workspace/repository","sessionId":"` + id + `","version":"2.1.287","message":{"role":"user","content":"hi"}}` + "\n"))
+	_ = zw.Close()
+	var sidecar bytes.Buffer
+	sw := gzip.NewWriter(&sidecar)
+	tw := tar.NewWriter(sw)
+	sub := []byte(`{"type":"user","cwd":"/workspace/repository","message":{"role":"user","content":"sub"}}` + "\n")
+	_ = tw.WriteHeader(&tar.Header{Name: "subagents/agent-1.jsonl", Typeflag: tar.TypeReg, Size: int64(len(sub)), Mode: 0o600})
+	_, _ = tw.Write(sub)
+	_ = tw.Close()
+	_ = sw.Close()
+	transcript := MoveImportTranscript{AgentSessionID: id, ProjectDir: "/home/agent/.claude/projects/-workspace-repository", Gzip: gz.Bytes(), SidecarGzip: sidecar.Bytes()}
+
+	archive, warning, _, err := writeImportArchive(context.Background(), t.TempDir(), domain.HarnessClaudeCode, transcript)
+	if err != nil || warning != "" {
+		t.Fatal(err, warning)
+	}
+	cwd := t.TempDir()
+	res, err := nativetransfer.ImportClaude(context.Background(), mustOpen(t, archive), nativetransfer.ClaudeImportOptions{ConfigDir: t.TempDir(), LaunchCwd: cwd})
+	if err != nil || res.NativeID != id {
+		t.Fatalf("ImportClaude = %+v, %v", res, err)
+	}
+	placed, err := os.ReadFile(filepath.Join(filepath.Dir(res.TranscriptPath), id, "subagents", "agent-1.jsonl"))
+	if err != nil || !strings.Contains(string(placed), `"cwd":"`) || strings.Contains(string(placed), "/workspace/repository") {
+		t.Fatalf("placed subagent transcript = %q, %v", placed, err)
+	}
+
+	// A sidecar that cannot be read stays behind; the transcript still moves.
+	transcript.SidecarGzip = []byte("plain")
+	if _, warning, _, err := writeImportArchive(context.Background(), t.TempDir(), domain.HarnessClaudeCode, transcript); err != nil || !strings.Contains(warning, "stayed in Orchestrator Cloud") {
+		t.Fatalf("unreadable sidecar: warning %q, err %v", warning, err)
+	}
+
+	for name, bad := range map[string]MoveImportTranscript{
+		"not gzip":   {AgentSessionID: id, ProjectDir: transcript.ProjectDir, Gzip: []byte("plain")},
+		"id as path": {AgentSessionID: "../" + id, ProjectDir: transcript.ProjectDir, Gzip: gz.Bytes()},
+	} {
+		if _, _, _, err := writeImportArchive(context.Background(), t.TempDir(), domain.HarnessClaudeCode, bad); err == nil {
+			t.Errorf("%s: no error", name)
+		}
+	}
+}
+
+func TestWriteImportArchivePassesACodexRolloutAsIs(t *testing.T) {
+	const id = "01a1f2eb-1c10-7462-9afc-a0787b4e965c"
+	rollout := `{"type":"session_meta","payload":{"id":"` + id + `","timestamp":"2026-11-19T08:27:36.895Z","cwd":"/workspace/repository"}}` + "\n"
+	var gz bytes.Buffer
+	zw := gzip.NewWriter(&gz)
+	_, _ = zw.Write([]byte(rollout))
+	_ = zw.Close()
+	path, warning, _, err := writeImportArchive(context.Background(), t.TempDir(), domain.HarnessCodex, MoveImportTranscript{AgentSessionID: id, Gzip: gz.Bytes()})
+	if err != nil || warning != "" {
+		t.Fatal(err, warning)
+	}
+	home, cwd := t.TempDir(), t.TempDir()
+	if got, err := nativetransfer.ImportCodex(context.Background(), path, nativetransfer.CodexImportOptions{Home: home, Cwd: cwd}); err != nil || got != id {
+		t.Fatalf("ImportCodex = %q, %v", got, err)
+	}
+}
+
+func mustOpen(t *testing.T, name string) *os.File {
+	t.Helper()
+	f, err := os.Open(name)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = f.Close() })
+	return f
+}
+
+func importManifest(tip string) MoveManifest {
+	return MoveManifest{RepoKey: "github.com/acme/app", Branch: "feat/move", Tip: tip, Harness: domain.HarnessClaudeCode, SourceLabel: "Orchestrator Cloud"}
+}
+
+// A conversation from AO Cloud names the user's home folder with a
+// placeholder; it is placed with this machine's home folder filled in.
+func TestWriteImportArchiveFillsInTheHomeFolder(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	const id = "01a1f2eb-1c10-7462-9afc-a0787b4e965c"
+	rollout := `{"type":"session_meta","payload":{"id":"` + id + `","timestamp":"2026-11-19T08:27:36.895Z","cwd":"/workspace/repository"}}` + "\n" +
+		`{"type":"response_item","payload":{"text":"read ` + nativetransfer.CloudHomePlaceholder + `/.config/app.toml"}}` + "\n"
+	var gz bytes.Buffer
+	zw := gzip.NewWriter(&gz)
+	_, _ = zw.Write([]byte(rollout))
+	_ = zw.Close()
+	path, _, _, err := writeImportArchive(context.Background(), t.TempDir(), domain.HarnessCodex, MoveImportTranscript{AgentSessionID: id, Gzip: gz.Bytes()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(data), "read "+home+"/.config/app.toml") || strings.Contains(string(data), nativetransfer.CloudHomePlaceholder) {
+		t.Fatalf("placed rollout = %s, want the placeholder filled in with %s", data, home)
+	}
+}
+
+func TestImportMoveRefusesAnotherRepository(t *testing.T) {
+	st := newFakeStore()
+	st.projects["mer"] = domain.ProjectRecord{ID: "mer", RepoOriginURL: "https://github.com/acme/other"}
+	fc := &fakeCommander{}
+	_, err := NewWithDeps(Deps{Manager: fc, Store: moveStore{fakeStore: st}}).ImportMove(context.Background(), MoveImportInput{
+		ProjectID: "mer", MoveID: "m-1", Manifest: importManifest(strings.Repeat("a", 40)),
+	})
+	var got *apierr.Error
+	if !errors.As(err, &got) || got.Code != "MOVE_REPO_MISMATCH" || fc.spawnCalls != 0 {
+		t.Fatalf("err = %v, spawns = %d; want MOVE_REPO_MISMATCH and no spawn", err, fc.spawnCalls)
+	}
+}
+
+func TestImportMoveRefusesATipThatIsNotACommitID(t *testing.T) {
+	st := newFakeStore()
+	st.projects["mer"] = domain.ProjectRecord{ID: "mer", RepoOriginURL: "https://github.com/acme/app"}
+	for _, tip := range []string{"HEAD", "origin/other", "--output=x", strings.Repeat("A", 40), strings.Repeat("a", 39)} {
+		fc := &fakeCommander{}
+		_, err := NewWithDeps(Deps{Manager: fc, Store: moveStore{fakeStore: st}}).ImportMove(context.Background(), MoveImportInput{
+			ProjectID: "mer", MoveID: "m-1", Manifest: importManifest(tip),
+		})
+		var got *apierr.Error
+		if !errors.As(err, &got) || got.Code != "MOVE_MANIFEST_INVALID" || fc.spawnCalls != 0 {
+			t.Fatalf("tip %q: err = %v, spawns = %d; want MOVE_MANIFEST_INVALID", tip, err, fc.spawnCalls)
+		}
+	}
+}
+
+func TestImportMoveReplaysTheSameMove(t *testing.T) {
+	in := MoveImportInput{ProjectID: "mer", MoveID: "m-1", Manifest: importManifest(strings.Repeat("a", 40))}
+	st := newFakeStore()
+	st.projects["mer"] = domain.ProjectRecord{ID: "mer", RepoOriginURL: "https://github.com/acme/app"}
+	st.sessions["mer-1"] = domain.SessionRecord{
+		ID: "mer-1", ProjectID: "mer", Kind: domain.KindWorker, Harness: domain.HarnessClaudeCode,
+		ClientRequestID: "m-1", ClientRequestHash: moveRequestHash(in), ClientRequestCommitted: true,
+	}
+	fc := &fakeCommander{}
+	out, err := NewWithDeps(Deps{Manager: fc, Store: moveStore{fakeStore: st}}).ImportMove(context.Background(), in)
+	if err != nil || out.Session.ID != "mer-1" || fc.spawnCalls != 0 {
+		t.Fatalf("ImportMove = %q, %v, spawns = %d; want mer-1 without a spawn", out.Session.ID, err, fc.spawnCalls)
+	}
+}
+
+// pushedBranch makes an origin with feat/move one commit ahead of main and a
+// clone that has only main, and returns the clone and feat/move's tip.
+func pushedBranch(t *testing.T) (string, string) {
+	t.Helper()
+	t.Setenv("GIT_CONFIG_GLOBAL", os.DevNull)
+	t.Setenv("GIT_CONFIG_NOSYSTEM", "1")
+	root := t.TempDir()
+	git := func(dir string, args ...string) string {
+		t.Helper()
+		args = append([]string{"-c", "user.name=t", "-c", "user.email=t@example.com"}, args...)
+		out, err := exec.Command("git", append([]string{"-C", dir}, args...)...).CombinedOutput()
+		if err != nil {
+			t.Fatalf("git %v: %v\n%s", args, err, out)
+		}
+		return strings.TrimSpace(string(out))
+	}
+	origin, src := root+"/origin.git", root+"/src"
+	git(root, "init", "-q", "--bare", "-b", "main", origin)
+	git(root, "init", "-q", "-b", "main", src)
+	git(src, "commit", "-q", "--allow-empty", "-m", "seed")
+	git(src, "push", "-q", origin, "main")
+	git(src, "switch", "-q", "-c", "feat/move")
+	git(src, "commit", "-q", "--allow-empty", "-m", "work")
+	git(src, "push", "-q", origin, "feat/move")
+	git(root, "clone", "-q", origin, root+"/repo")
+	return root + "/repo", git(src, "rev-parse", "HEAD")
+}
+
+// Orchestrator Cloud's opencode is OpenCode 2: the session here runs as
+// opencode-v2 and resumes the session export document as it came.
+func TestImportMoveRunsCloudOpenCodeAsOpenCodeV2(t *testing.T) {
+	repo, tip := pushedBranch(t)
+	const id = "ses_e34d0cd52ffeMzGW05mHN4RIm7"
+	doc := `{"info":{"id":"` + id + `","location":{"directory":"/workspace/repository"}},"messages":[]}`
+	var gz bytes.Buffer
+	zw := gzip.NewWriter(&gz)
+	_, _ = zw.Write([]byte(doc))
+	_ = zw.Close()
+	st := newFakeStore()
+	st.projects["mer"] = domain.ProjectRecord{ID: "mer", Path: repo, RepoOriginURL: "https://github.com/acme/app"}
+	var spawned ports.SpawnConfig
+	var placed []byte
+	fc := &fakeCommander{spawnFunc: func(cfg ports.SpawnConfig) domain.SessionRecord {
+		spawned = cfg
+		if cfg.Transfer != nil {
+			placed, _ = os.ReadFile(cfg.Transfer.NativeArchive)
+		}
+		return domain.SessionRecord{ID: "mer-9", ProjectID: cfg.ProjectID, Kind: cfg.Kind, Harness: cfg.Harness}
+	}}
+	manifest := importManifest(tip)
+	manifest.Harness = domain.HarnessOpenCode
+	if _, err := NewWithDeps(Deps{Manager: fc, Store: moveStore{fakeStore: st}}).ImportMove(context.Background(), MoveImportInput{
+		ProjectID: "mer", MoveID: "m-opencode", Manifest: manifest, HandoffNote: "NOTE",
+		Transcript: &MoveImportTranscript{AgentSessionID: id, ProjectDir: "/workspace/.ao/home", Gzip: gz.Bytes()},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if spawned.Harness != domain.HarnessOpenCodeV2 || string(placed) != doc {
+		t.Fatalf("spawned %s with %q, want opencode-v2 with the document", spawned.Harness, placed)
+	}
+}
+
+func TestImportMoveStartsFromTheNoteWhenTheConversationCannotBeRead(t *testing.T) {
+	repo, tip := pushedBranch(t)
+	var gz bytes.Buffer
+	zw := gzip.NewWriter(&gz)
+	_, _ = zw.Write([]byte(`{"type":"user","cwd":"/workspace/repository","message":{"role":"user","content":"hi"}}` + "\n"))
+	_ = zw.Close()
+	const id = "0b5a6c1e-3f2d-4c8a-9e7b-1d2c3b4a5f60"
+	for _, tc := range []struct {
+		name           string
+		gzip, sidecar  []byte
+		placed         bool
+		wantResume     bool
+		wantWarning    string
+		wantIncomplete bool
+	}{
+		{name: "placed", gzip: gz.Bytes(), placed: true, wantResume: true},
+		{name: "not placed", gzip: gz.Bytes(), wantResume: true, wantWarning: "could not be placed", wantIncomplete: true},
+		{name: "sidecar unreadable", gzip: gz.Bytes(), sidecar: []byte("plain"), placed: true, wantResume: true, wantWarning: "stayed in Orchestrator Cloud", wantIncomplete: true},
+		{name: "not gzip", gzip: []byte("plain"), wantWarning: "conversation could not be read", wantIncomplete: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			st := newFakeStore()
+			st.projects["mer"] = domain.ProjectRecord{ID: "mer", Path: repo, RepoOriginURL: "https://github.com/acme/app"}
+			// The spawn records the conversation id once it placed the conversation.
+			fc := &fakeCommander{spawnFunc: func(cfg ports.SpawnConfig) domain.SessionRecord {
+				rec := domain.SessionRecord{ID: "mer-9", ProjectID: cfg.ProjectID, Kind: cfg.Kind, Harness: cfg.Harness}
+				if cfg.Transfer != nil && tc.placed {
+					rec.Metadata.AgentSessionID = id
+				}
+				return rec
+			}}
+			out, err := NewWithDeps(Deps{Manager: fc, Store: moveStore{fakeStore: st}}).ImportMove(context.Background(), MoveImportInput{
+				ProjectID: "mer", MoveID: "m-" + strings.ReplaceAll(tc.name, " ", "-"), Manifest: importManifest(tip), HandoffNote: "NOTE",
+				Transcript: &MoveImportTranscript{AgentSessionID: id, ProjectDir: "/home/agent/.claude/projects/-workspace-repository", Gzip: tc.gzip, SidecarGzip: tc.sidecar},
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			// The fake store has no spawned session, so copying its settings warns too.
+			var conversation []string
+			for _, w := range out.Warnings {
+				if !strings.HasPrefix(w, "Could not copy a session setting") {
+					conversation = append(conversation, w)
+				}
+			}
+			warnings := strings.Join(conversation, "\n")
+			if (tc.wantWarning == "") != (warnings == "") || !strings.Contains(warnings, tc.wantWarning) {
+				t.Fatalf("warnings %q, want %q", warnings, tc.wantWarning)
+			}
+			if out.ConversationIncomplete != tc.wantIncomplete {
+				t.Fatalf("ConversationIncomplete = %v, want %v", out.ConversationIncomplete, tc.wantIncomplete)
+			}
+			cfg := fc.spawnedCfg
+			if tc.wantResume {
+				if cfg.Transfer == nil || cfg.Transfer.FallbackPrompt != "NOTE" || cfg.Prompt != "" {
+					t.Fatalf("spawn = %+v; want a transfer with the note as fallback", cfg)
+				}
+				return
+			}
+			if cfg.Transfer != nil || cfg.Prompt != "NOTE" {
+				t.Fatalf("spawn = %+v; want the note", cfg)
+			}
+		})
+	}
+}
+
+// A sidecar folder that could not be placed leaves the conversation id right,
+// so a replay has to read the stored result, not re-derive it from the id.
+func TestImportMoveReplayKeepsAnIncompleteConversation(t *testing.T) {
+	repo, tip := pushedBranch(t)
+	var gz bytes.Buffer
+	zw := gzip.NewWriter(&gz)
+	_, _ = zw.Write([]byte(`{"type":"user","cwd":"/workspace/repository","message":{"role":"user","content":"hi"}}` + "\n"))
+	_ = zw.Close()
+	const id = "0b5a6c1e-3f2d-4c8a-9e7b-1d2c3b4a5f60"
+	st := newFakeStore()
+	st.projects["mer"] = domain.ProjectRecord{ID: "mer", Path: repo, RepoOriginURL: "https://github.com/acme/app"}
+	// Like the manager, the spawn records the session with its client request and the placed conversation id.
+	fc := &fakeCommander{spawnFunc: func(cfg ports.SpawnConfig) domain.SessionRecord {
+		rec := domain.SessionRecord{
+			ID: "mer-9", ProjectID: cfg.ProjectID, Kind: cfg.Kind, Harness: cfg.Harness,
+			ClientRequestID: cfg.ClientRequestID, ClientRequestHash: cfg.ClientRequestHash, ClientRequestCommitted: true,
+		}
+		rec.Metadata.AgentSessionID = id
+		st.sessions[rec.ID] = rec
+		return rec
+	}}
+	svc := NewWithDeps(Deps{Manager: fc, Store: moveStore{fakeStore: st}})
+	in := MoveImportInput{
+		ProjectID: "mer", MoveID: "m-1", Manifest: importManifest(tip), HandoffNote: "NOTE",
+		Transcript: &MoveImportTranscript{AgentSessionID: id, ProjectDir: "/home/agent/.claude/projects/-workspace-repository", Gzip: gz.Bytes(), SidecarGzip: []byte("plain")},
+	}
+	first, err := svc.ImportMove(context.Background(), in)
+	if err != nil || !first.ConversationIncomplete {
+		t.Fatalf("first import: incomplete %v, err %v; want incomplete", first.ConversationIncomplete, err)
+	}
+	replay, err := svc.ImportMove(context.Background(), in)
+	if err != nil || !replay.ConversationIncomplete || fc.spawnCalls != 1 {
+		t.Fatalf("replay: incomplete %v, spawns %d, err %v; want incomplete without a second spawn", replay.ConversationIncomplete, fc.spawnCalls, err)
+	}
+}
+
+// placedWriteFails stands in for a daemon that stopped, or a write that
+// failed, between the spawn and recording the placement.
+type placedWriteFails struct{ moveStore }
+
+func (placedWriteFails) SetSessionMoveConversationPlaced(context.Context, domain.SessionID, time.Time) (bool, error) {
+	return false, errors.New("disk I/O error")
+}
+
+// A replay counts the conversation as moved only once its placement was
+// recorded after the spawn; until then the source keeps its copy.
+func TestImportMoveReplayNeedsTheRecordedPlacement(t *testing.T) {
+	repo, tip := pushedBranch(t)
+	var gz bytes.Buffer
+	zw := gzip.NewWriter(&gz)
+	_, _ = zw.Write([]byte(`{"type":"user","cwd":"/workspace/repository","message":{"role":"user","content":"hi"}}` + "\n"))
+	_ = zw.Close()
+	const id = "0b5a6c1e-3f2d-4c8a-9e7b-1d2c3b4a5f60"
+	for _, tc := range []struct {
+		name           string
+		store          func(moveStore) Store
+		wantIncomplete bool
+	}{
+		{"placement recorded", func(m moveStore) Store { return m }, false},
+		{"placement not recorded", func(m moveStore) Store { return placedWriteFails{m} }, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			st := newFakeStore()
+			st.projects["mer"] = domain.ProjectRecord{ID: "mer", Path: repo, RepoOriginURL: "https://github.com/acme/app"}
+			fc := &fakeCommander{spawnFunc: func(cfg ports.SpawnConfig) domain.SessionRecord {
+				rec := domain.SessionRecord{
+					ID: "mer-9", ProjectID: cfg.ProjectID, Kind: cfg.Kind, Harness: cfg.Harness,
+					ClientRequestID: cfg.ClientRequestID, ClientRequestHash: cfg.ClientRequestHash, ClientRequestCommitted: true,
+				}
+				rec.Metadata.AgentSessionID = id
+				st.sessions[rec.ID] = rec
+				return rec
+			}}
+			svc := NewWithDeps(Deps{Manager: fc, Store: tc.store(moveStore{fakeStore: st})})
+			in := MoveImportInput{
+				ProjectID: "mer", MoveID: "m-1", Manifest: importManifest(tip), HandoffNote: "NOTE",
+				Transcript: &MoveImportTranscript{AgentSessionID: id, ProjectDir: "/home/agent/.claude/projects/-workspace-repository", Gzip: gz.Bytes()},
+			}
+			first, err := svc.ImportMove(context.Background(), in)
+			if err != nil || first.ConversationIncomplete {
+				t.Fatalf("first import: incomplete %v, err %v; want the conversation placed", first.ConversationIncomplete, err)
+			}
+			replay, err := svc.ImportMove(context.Background(), in)
+			if err != nil || replay.ConversationIncomplete != tc.wantIncomplete || fc.spawnCalls != 1 {
+				t.Fatalf("replay: incomplete %v, spawns %d, err %v; want incomplete %v", replay.ConversationIncomplete, fc.spawnCalls, err, tc.wantIncomplete)
+			}
+		})
+	}
+}
+
+type failingMoveNoter struct{}
+
+func (failingMoveNoter) MoveNote(context.Context, domain.SessionRecord, string, string, int) (string, error) {
+	return "", errors.New("note failed")
+}
+
+// A failed export leaves origin and the local branch as they were.
+func TestExportMoveWritesTheNoteBeforePushing(t *testing.T) {
+	t.Setenv("GIT_CONFIG_GLOBAL", os.DevNull)
+	t.Setenv("GIT_CONFIG_NOSYSTEM", "1")
+	root := t.TempDir()
+	git := func(dir string, args ...string) string {
+		t.Helper()
+		args = append([]string{"-C", dir, "-c", "user.name=t", "-c", "user.email=t@example.com"}, args...)
+		out, err := exec.Command("git", args...).CombinedOutput()
+		if err != nil {
+			t.Fatalf("git %v: %v\n%s", args, err, out)
+		}
+		return strings.TrimSpace(string(out))
+	}
+	origin, wt := root+"/origin.git", root+"/wt"
+	git(root, "init", "-q", "--bare", "-b", "main", origin)
+	git(root, "clone", "-q", origin, wt)
+	git(wt, "switch", "-q", "-c", "feat/move")
+	git(wt, "commit", "-q", "--allow-empty", "-m", "work")
+	git(wt, "push", "-q", "origin", "feat/move")
+	head := git(wt, "rev-parse", "HEAD")
+	if err := os.WriteFile(wt+"/new.txt", []byte("uncommitted\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	st := newFakeStore()
+	st.projects["mer"] = domain.ProjectRecord{ID: "mer", RepoOriginURL: "https://github.com/acme/app"}
+	st.sessions["mer-2"] = domain.SessionRecord{
+		ID: "mer-2", ProjectID: "mer", Kind: domain.KindWorker, Harness: domain.HarnessClaudeCode,
+		Activity: domain.Activity{State: domain.ActivityExited}, Metadata: domain.SessionMetadata{WorkspacePath: wt},
+	}
+	svc := NewWithDeps(Deps{Manager: &fakeCommander{}, Store: moveStore{fakeStore: st}})
+	svc.SetMoveNoter(failingMoveNoter{})
+	if _, err := svc.ExportMove(context.Background(), "mer-2", MoveExportInput{MoveID: "m-1", SourceLabel: "Mac"}); err == nil {
+		t.Fatal("export succeeded with a failing note")
+	}
+	if got := git(wt, "ls-remote", "origin", "refs/heads/feat/move"); !strings.HasPrefix(got, head) {
+		t.Fatalf("origin feat/move = %q, want %s", got, head)
+	}
+	if got := git(wt, "rev-parse", "HEAD"); got != head {
+		t.Fatalf("local HEAD = %s, want %s", got, head)
+	}
+}
+
+// A session on the default branch would push its uncommitted work onto it, so
+// both preview and export refuse before committing or pushing anything.
+func TestExportMoveRefusesTheDefaultBranch(t *testing.T) {
+	t.Setenv("GIT_CONFIG_GLOBAL", os.DevNull)
+	t.Setenv("GIT_CONFIG_NOSYSTEM", "1")
+	root := t.TempDir()
+	git := func(dir string, args ...string) string {
+		t.Helper()
+		args = append([]string{"-C", dir, "-c", "user.name=t", "-c", "user.email=t@example.com"}, args...)
+		out, err := exec.Command("git", args...).CombinedOutput()
+		if err != nil {
+			t.Fatalf("git %v: %v\n%s", args, err, out)
+		}
+		return strings.TrimSpace(string(out))
+	}
+	origin, seed, wt := root+"/origin.git", root+"/seed", root+"/wt"
+	git(root, "init", "-q", "--bare", "-b", "main", origin)
+	git(root, "init", "-q", "-b", "main", seed)
+	git(seed, "commit", "-q", "--allow-empty", "-m", "seed")
+	git(seed, "push", "-q", origin, "main")
+	git(root, "clone", "-q", origin, wt)
+	head := git(wt, "rev-parse", "HEAD")
+	if err := os.WriteFile(wt+"/dirty.txt", []byte("uncommitted\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	st := newFakeStore()
+	st.projects["mer"] = domain.ProjectRecord{ID: "mer", RepoOriginURL: "https://github.com/acme/app"}
+	st.sessions["mer-2"] = domain.SessionRecord{
+		ID: "mer-2", ProjectID: "mer", Kind: domain.KindWorker, Harness: domain.HarnessClaudeCode,
+		Activity: domain.Activity{State: domain.ActivityExited}, Metadata: domain.SessionMetadata{WorkspacePath: wt},
+	}
+	svc := NewWithDeps(Deps{Manager: &fakeCommander{}, Store: moveStore{fakeStore: st}})
+	var refusal *apierr.Error
+	if _, err := svc.PreviewMove(context.Background(), "mer-2"); !errors.As(err, &refusal) || refusal.Code != "MOVE_DEFAULT_BRANCH" {
+		t.Fatalf("PreviewMove err = %v, want MOVE_DEFAULT_BRANCH", err)
+	}
+	if _, err := svc.ExportMove(context.Background(), "mer-2", MoveExportInput{MoveID: "m-1", SourceLabel: "Mac"}); !errors.As(err, &refusal) || refusal.Code != "MOVE_DEFAULT_BRANCH" {
+		t.Fatalf("ExportMove err = %v, want MOVE_DEFAULT_BRANCH", err)
+	}
+	if !strings.Contains(refusal.Message, "main") {
+		t.Fatalf("message %q does not name the branch", refusal.Message)
+	}
+	if got := git(wt, "ls-remote", "origin", "refs/heads/main"); !strings.HasPrefix(got, head) {
+		t.Fatalf("origin main = %q, want %s", got, head)
+	}
+	if got := git(wt, "rev-parse", "HEAD"); got != head {
+		t.Fatalf("local HEAD = %s, want %s", got, head)
+	}
+	if got := git(wt, "status", "--porcelain"); got != "?? dirty.txt" {
+		t.Fatalf("worktree status = %q, want the dirty file untouched", got)
+	}
+	if st.sessions["mer-2"].MoveStarted != "" {
+		t.Fatal("a refused export recorded a move in progress")
+	}
+}
+
+// An export records the move in progress before it pushes, so a restart
+// during the move does not relaunch the agent here.
+func TestExportMoveRecordsTheMoveBeforePushing(t *testing.T) {
+	t.Setenv("GIT_CONFIG_GLOBAL", os.DevNull)
+	t.Setenv("GIT_CONFIG_NOSYSTEM", "1")
+	root := t.TempDir()
+	git := func(dir string, args ...string) string {
+		t.Helper()
+		args = append([]string{"-C", dir, "-c", "user.name=t", "-c", "user.email=t@example.com"}, args...)
+		out, err := exec.Command("git", args...).CombinedOutput()
+		if err != nil {
+			t.Fatalf("git %v: %v\n%s", args, err, out)
+		}
+		return strings.TrimSpace(string(out))
+	}
+	origin, seed, wt := root+"/origin.git", root+"/seed", root+"/wt"
+	git(root, "init", "-q", "--bare", "-b", "main", origin)
+	git(root, "init", "-q", "-b", "main", seed)
+	git(seed, "commit", "-q", "--allow-empty", "-m", "seed")
+	git(seed, "push", "-q", origin, "main")
+	git(root, "clone", "-q", origin, wt)
+	git(wt, "switch", "-q", "-c", "feat/move")
+	if err := os.WriteFile(wt+"/new.txt", []byte("uncommitted\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	st := newFakeStore()
+	st.projects["mer"] = domain.ProjectRecord{ID: "mer", RepoOriginURL: "https://github.com/acme/app"}
+	st.sessions["mer-2"] = domain.SessionRecord{
+		ID: "mer-2", ProjectID: "mer", Kind: domain.KindWorker, Harness: domain.HarnessClaudeCode,
+		Activity: domain.Activity{State: domain.ActivityExited}, Metadata: domain.SessionMetadata{WorkspacePath: wt},
+	}
+	svc := NewWithDeps(Deps{Manager: &fakeCommander{}, Store: moveStore{fakeStore: st}})
+	if preview, err := svc.PreviewMove(context.Background(), "mer-2"); err != nil || preview.DefaultBranch != "main" {
+		t.Fatalf("PreviewMove = %+v, %v; want default branch main", preview, err)
+	}
+	out, err := svc.ExportMove(context.Background(), "mer-2", MoveExportInput{MoveID: "m-1", SourceLabel: "Mac"})
+	if err != nil {
+		t.Fatalf("ExportMove: %v", err)
+	}
+	if got := git(wt, "ls-remote", "origin", "refs/heads/feat/move"); !strings.HasPrefix(got, out.Manifest.Tip) {
+		t.Fatalf("origin feat/move = %q, want %s", got, out.Manifest.Tip)
+	}
+	if got := st.sessions["mer-2"].MoveStarted; got != "m-1" {
+		t.Fatalf("MoveStarted = %q, want m-1", got)
+	}
+}
+
+// A session moved back from AO Cloud keeps its name, which outranks the title
+// Claude Code gives its terminal, and its approval mode: Cloud's when its
+// manifest sends them, else those of the session that moved from here.
+func TestImportMoveKeepsTheNameAndApprovalMode(t *testing.T) {
+	repo, tip := pushedBranch(t)
+	for _, tc := range []struct {
+		name            string
+		displayName     string
+		permissions     domain.PermissionMode
+		wantName        string
+		wantPermissions domain.PermissionMode
+	}{
+		{"from the session that moved", "", "", "Fix login", domain.PermissionModeBypassPermissions},
+		{"from Cloud's manifest", "Fix login (cloud)", domain.PermissionModeAcceptEdits, "Fix login (cloud)", domain.PermissionModeAcceptEdits},
+		{"an unknown mode is ignored", "", "yolo", "Fix login", domain.PermissionModeBypassPermissions},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			st := newFakeStore()
+			st.projects["mer"] = domain.ProjectRecord{ID: "mer", Path: repo, RepoOriginURL: "https://github.com/acme/app"}
+			st.sessions["mer-1"] = domain.SessionRecord{
+				ID: "mer-1", ProjectID: "mer", Kind: domain.KindWorker, IsTerminated: true, DisplayName: "Fix login",
+				MovedTo:  &domain.SessionMove{MoveID: "m-out", OrgID: "org-1", SessionID: "cloud-7"},
+				Metadata: domain.SessionMetadata{Permissions: domain.PermissionModeBypassPermissions},
+			}
+			var spawned ports.SpawnConfig
+			fc := &fakeCommander{spawnFunc: func(cfg ports.SpawnConfig) domain.SessionRecord {
+				spawned = cfg
+				return domain.SessionRecord{ID: "mer-9", ProjectID: cfg.ProjectID, Kind: cfg.Kind, Harness: cfg.Harness}
+			}}
+			manifest := importManifest(tip)
+			manifest.SourceSessionID, manifest.DisplayName, manifest.Permissions = "cloud-7", tc.displayName, tc.permissions
+			if _, err := NewWithDeps(Deps{Manager: fc, Store: moveStore{fakeStore: st}}).ImportMove(context.Background(), MoveImportInput{
+				ProjectID: "mer", MoveID: "m-back-" + strings.ReplaceAll(tc.name, " ", "-"), Manifest: manifest,
+			}); err != nil {
+				t.Fatal(err)
+			}
+			if spawned.DisplayName != tc.wantName || !spawned.DisplayNameExplicit || spawned.AgentConfig.Permissions != tc.wantPermissions {
+				t.Fatalf("spawned name %q (explicit %v), permissions %q; want %q, explicit, %q",
+					spawned.DisplayName, spawned.DisplayNameExplicit, spawned.AgentConfig.Permissions, tc.wantName, tc.wantPermissions)
+			}
+		})
+	}
+}
+
+// The agent is told the move made the WIP commit, by its sha and branch: in
+// the system prompt when it resumes the conversation, and in the note when it
+// starts from one.
+func TestImportMoveTellsTheAgentAboutTheWIPCommit(t *testing.T) {
+	repo, tip := pushedBranch(t)
+	for _, withTranscript := range []bool{false, true} {
+		st := newFakeStore()
+		st.projects["mer"] = domain.ProjectRecord{ID: "mer", Path: repo, RepoOriginURL: "https://github.com/acme/app"}
+		var spawned ports.SpawnConfig
+		fc := &fakeCommander{spawnFunc: func(cfg ports.SpawnConfig) domain.SessionRecord {
+			spawned = cfg
+			return domain.SessionRecord{ID: "mer-9", ProjectID: cfg.ProjectID, Kind: cfg.Kind, Harness: cfg.Harness}
+		}}
+		manifest := importManifest(tip)
+		manifest.WIP = true
+		in := MoveImportInput{ProjectID: "mer", MoveID: fmt.Sprintf("m-wip-%v", withTranscript), Manifest: manifest, HandoffNote: "NOTE"}
+		if withTranscript {
+			const id = "0b5a6c1e-3f2d-4c8a-9e7b-1d2c3b4a5f60"
+			var gz bytes.Buffer
+			zw := gzip.NewWriter(&gz)
+			_, _ = zw.Write([]byte(`{"type":"user","cwd":"/workspace/repository","sessionId":"` + id + `","message":{"role":"user","content":"hi"}}` + "\n"))
+			_ = zw.Close()
+			in.Transcript = &MoveImportTranscript{AgentSessionID: id, ProjectDir: "/home/agent/.claude/projects/-workspace-repository", Gzip: gz.Bytes()}
+		}
+		if _, err := NewWithDeps(Deps{Manager: fc, Store: moveStore{fakeStore: st}}).ImportMove(context.Background(), in); err != nil {
+			t.Fatal(err)
+		}
+		want := "as commit " + tip + " on branch feat/move. Orchestrator made that commit, not you or the user."
+		if withTranscript {
+			if spawned.Transfer == nil || !strings.Contains(spawned.Transfer.SystemNote, want) || !strings.Contains(spawned.Transfer.FallbackPrompt, want) {
+				t.Fatalf("transfer = %+v, want the WIP commit in its system note and fallback", spawned.Transfer)
+			}
+			continue
+		}
+		if !strings.HasPrefix(spawned.Prompt, "NOTE") || !strings.Contains(spawned.Prompt, want) {
+			t.Fatalf("prompt = %q, want the note and the WIP commit", spawned.Prompt)
+		}
+	}
+}
+
+// AO Cloud's manifest names a GitHub issue owner/repo#N; the session here
+// gets this machine's tracker id for it, which intake matches on.
+func TestImportMoveTakesCloudsIssueAsATrackerID(t *testing.T) {
+	repo, tip := pushedBranch(t)
+	st := newFakeStore()
+	st.projects["mer"] = domain.ProjectRecord{ID: "mer", Path: repo, RepoOriginURL: "https://github.com/acme/app"}
+	var spawned ports.SpawnConfig
+	fc := &fakeCommander{spawnFunc: func(cfg ports.SpawnConfig) domain.SessionRecord {
+		spawned = cfg
+		return domain.SessionRecord{ID: "mer-9", ProjectID: cfg.ProjectID, Kind: cfg.Kind, Harness: cfg.Harness}
+	}}
+	manifest := importManifest(tip)
+	manifest.IssueID = "acme/app#42"
+	if _, err := NewWithDeps(Deps{Manager: fc, Store: moveStore{fakeStore: st}}).ImportMove(context.Background(), MoveImportInput{ProjectID: "mer", MoveID: "m-issue", Manifest: manifest}); err != nil {
+		t.Fatal(err)
+	}
+	if spawned.IssueID != "github:acme/app#42" {
+		t.Fatalf("spawned issue = %q, want github:acme/app#42", spawned.IssueID)
+	}
+}
+
+// A session moved back keeps the tracker issue and the open pull requests it
+// had here, when AO Cloud's manifest does not send them.
+func TestImportMoveKeepsTheIssueAndPullRequests(t *testing.T) {
+	repo, tip := pushedBranch(t)
+	st := newFakeStore()
+	st.projects["mer"] = domain.ProjectRecord{ID: "mer", Path: repo, RepoOriginURL: "https://github.com/acme/app"}
+	st.sessions["mer-1"] = domain.SessionRecord{
+		ID: "mer-1", ProjectID: "mer", Kind: domain.KindWorker, IsTerminated: true, IssueID: "acme/app#42",
+		MovedTo: &domain.SessionMove{MoveID: "m-out", OrgID: "org-1", SessionID: "cloud-7"},
+	}
+	st.prs["mer-1"] = []domain.PullRequest{
+		{URL: "https://github.com/acme/app/pull/7", SessionID: "mer-1"},
+		{URL: "https://github.com/acme/app/pull/3", SessionID: "mer-1", Merged: true},
+	}
+	var spawned ports.SpawnConfig
+	fc := &fakeCommander{spawnFunc: func(cfg ports.SpawnConfig) domain.SessionRecord {
+		spawned = cfg
+		return domain.SessionRecord{ID: "mer-9", ProjectID: cfg.ProjectID, Kind: cfg.Kind, Harness: cfg.Harness}
+	}}
+	manifest := importManifest(tip)
+	manifest.SourceSessionID = "cloud-7"
+	out, err := NewWithDeps(Deps{Manager: fc, Store: moveStore{fakeStore: st}}).ImportMove(context.Background(), MoveImportInput{ProjectID: "mer", MoveID: "m-back", Manifest: manifest})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if spawned.IssueID != "acme/app#42" {
+		t.Fatalf("spawned issue = %q, want acme/app#42", spawned.IssueID)
+	}
+	// The open pull request is claimed for the session (or its claim is warned
+	// about); the merged one is not.
+	claimed := false
+	for _, pr := range st.prs["mer-9"] {
+		claimed = claimed || pr.URL == "https://github.com/acme/app/pull/7"
+	}
+	for _, w := range out.Warnings {
+		claimed = claimed || strings.Contains(w, "https://github.com/acme/app/pull/7")
+		if strings.Contains(w, "pull/3") {
+			t.Fatalf("the merged pull request was carried: %v", out.Warnings)
+		}
+	}
+	if !claimed && st.pr["mer-9"].URL != "https://github.com/acme/app/pull/7" {
+		t.Fatalf("pull request 7 was not carried: prs %v, pr %v, warnings %v", st.prs["mer-9"], st.pr["mer-9"], out.Warnings)
+	}
+}
+
+// What AO Cloud would refuse to take is said before the move, and refused or
+// left out by the move itself, never dropped silently: a conversation over the
+// upload limit once gzipped, and a sidecar folder over it.
+func TestMoveTranscriptKeepsWithinCloudsUploadLimit(t *testing.T) {
+	prev := cloudUploadMaxBytes
+	cloudUploadMaxBytes = 64 << 10
+	t.Cleanup(func() { cloudUploadMaxBytes = prev })
+	noisy := func(n int) string {
+		b := make([]byte, n)
+		_, _ = rand.Read(b)
+		return hex.EncodeToString(b)
+	}
+
+	big := transcriptCommander{id: "aid-1", size: 300 << 10, data: noisy(150 << 10)}
+	if got := transcriptService(big, domain.ActivityIdle).moveTranscriptInfo(context.Background(), domain.SessionRecord{}, domain.ProjectRecord{}); got.Unavailable != "too_large" {
+		t.Fatalf("preview of a conversation over the upload limit = %+v, want too_large", got)
+	}
+	_, err := transcriptService(big, domain.ActivityExited).MoveTranscript(context.Background(), "mer-2")
+	var refused *apierr.Error
+	if !errors.As(err, &refused) || refused.Code != "MOVE_TRANSCRIPT_TOO_LARGE" {
+		t.Fatalf("MoveTranscript err = %v, want MOVE_TRANSCRIPT_TOO_LARGE", err)
+	}
+
+	withSidecar := transcriptCommander{id: "aid-1", size: 100, data: "{}\n", sidecar: noisy(100 << 10)}
+	if got := transcriptService(withSidecar, domain.ActivityIdle).moveTranscriptInfo(context.Background(), domain.SessionRecord{}, domain.ProjectRecord{}); got.Unavailable != "" || got.SidecarUnavailable != "too_large" || got.Subagents != 0 {
+		t.Fatalf("preview of a sidecar over the upload limit = %+v, want the transcript alone and sidecar too_large", got)
+	}
+	out, err := transcriptService(withSidecar, domain.ActivityExited).MoveTranscript(context.Background(), "mer-2")
+	if err != nil || out.SidecarGzip != nil || out.SidecarOmitted != "too_large" {
+		t.Fatalf("MoveTranscript = %d sidecar bytes, omitted %q, %v; want it left out as too_large", len(out.SidecarGzip), out.SidecarOmitted, err)
+	}
+	broken := transcriptCommander{id: "aid-1", size: 100, data: "{}\n", sidecar: "x", sidecarErr: errors.New("permission denied")}
+	if out, err := transcriptService(broken, domain.ActivityExited).MoveTranscript(context.Background(), "mer-2"); err != nil || out.SidecarOmitted != "unreadable" {
+		t.Fatalf("MoveTranscript = omitted %q, %v; want unreadable", out.SidecarOmitted, err)
+	}
+}
+
+// chatMoveCommander is a session manager that can refuse a spawn's Chat and
+// records the interface switches it is asked for.
+type chatMoveCommander struct {
+	*fakeCommander
+	spawnErrs     []error
+	modes         []domain.SessionMode
+	switches      []domain.SessionMode
+	switchedID    domain.SessionID
+	switchPolicy  domain.SessionInterfaceTransitionPolicy
+	switchHistory domain.SessionInterfaceTransitionHistoryPolicy
+	switchErr     error
+	// switchErrs answer the first switches, before switchErr.
+	switchErrs []error
+}
+
+func (c *chatMoveCommander) Spawn(ctx context.Context, cfg ports.SpawnConfig) (domain.SessionRecord, int, int, error) {
+	c.modes = append(c.modes, cfg.RequestedMode)
+	if len(c.spawnErrs) > 0 {
+		err := c.spawnErrs[0]
+		c.spawnErrs = c.spawnErrs[1:]
+		if err != nil {
+			return domain.SessionRecord{}, 0, 0, err
+		}
+	}
+	return c.fakeCommander.Spawn(ctx, cfg)
+}
+
+func (c *chatMoveCommander) InterfaceTransitionStatus(context.Context, domain.SessionID) (sessionmanager.InterfaceTransitionStatus, error) {
+	return sessionmanager.InterfaceTransitionStatus{}, nil
+}
+
+func (c *chatMoveCommander) StartInterfaceTransition(_ context.Context, id domain.SessionID, target domain.SessionMode,
+	policy domain.SessionInterfaceTransitionPolicy, history domain.SessionInterfaceTransitionHistoryPolicy,
+) (domain.SessionInterfaceTransition, error) {
+	c.switches = append(c.switches, target)
+	c.switchedID, c.switchPolicy, c.switchHistory = id, policy, history
+	if len(c.switchErrs) > 0 {
+		err := c.switchErrs[0]
+		c.switchErrs = c.switchErrs[1:]
+		return domain.SessionInterfaceTransition{}, err
+	}
+	return domain.SessionInterfaceTransition{}, c.switchErr
+}
+
+func (c *chatMoveCommander) CancelInterfaceTransition(context.Context, domain.SessionID) error {
+	return nil
+}
+
+func (c *chatMoveCommander) AcknowledgeInterfaceTransitionNotice(context.Context, domain.SessionID, string) (domain.SessionInterfaceTransition, error) {
+	return domain.SessionInterfaceTransition{}, nil
+}
+
+// A session that was in Chat where it came from starts here in Chat. A
+// carried conversation resumes in the terminal and then switches to Chat, as
+// Switch to Chat does; without one the session starts in Chat. When this
+// computer cannot run it in Chat, it starts in the terminal and says so.
+func TestImportMoveKeepsChat(t *testing.T) {
+	repo, tip := pushedBranch(t)
+	var gz bytes.Buffer
+	zw := gzip.NewWriter(&gz)
+	_, _ = zw.Write([]byte(`{"type":"user","cwd":"/workspace/repository","message":{"role":"user","content":"hi"}}` + "\n"))
+	_ = zw.Close()
+	const id = "0b5a6c1e-3f2d-4c8a-9e7b-1d2c3b4a5f61"
+	refused := apierr.Conflict("SESSION_MODE_UNSUPPORTED", "claude-code does not support Chat UI", nil)
+	unconfirmed := fmt.Errorf("%w for claude-code", sessionmanager.ErrNativeConversationUnverified)
+	attempts, wait := moveChatSwitchAttempts, moveChatSwitchWait
+	moveChatSwitchAttempts, moveChatSwitchWait = 3, time.Millisecond
+	t.Cleanup(func() { moveChatSwitchAttempts, moveChatSwitchWait = attempts, wait })
+	for _, tc := range []struct {
+		name         string
+		mode         domain.SessionMode
+		conversation bool
+		spawnErrs    []error
+		switchErrs   []error
+		switchErr    error
+		wantModes    []domain.SessionMode
+		wantSwitches []domain.SessionMode
+		wantWarning  bool
+	}{
+		{name: "chat without a conversation", mode: domain.SessionModeChat, wantModes: []domain.SessionMode{domain.SessionModeChat}},
+		{name: "chat this computer cannot run", mode: domain.SessionModeChat, spawnErrs: []error{refused},
+			wantModes: []domain.SessionMode{domain.SessionModeChat, domain.SessionModeTUI}, wantWarning: true},
+		{name: "chat with a conversation", mode: domain.SessionModeChat, conversation: true,
+			wantModes: []domain.SessionMode{domain.SessionModeTUI}, wantSwitches: []domain.SessionMode{domain.SessionModeChat}},
+		{name: "chat with a conversation that cannot switch", mode: domain.SessionModeChat, conversation: true, switchErr: errors.New("chat unsupported"),
+			wantModes: []domain.SessionMode{domain.SessionModeTUI}, wantSwitches: []domain.SessionMode{domain.SessionModeChat}, wantWarning: true},
+		{name: "chat with a conversation its launch confirms a moment later", mode: domain.SessionModeChat, conversation: true, switchErrs: []error{unconfirmed},
+			wantModes: []domain.SessionMode{domain.SessionModeTUI}, wantSwitches: []domain.SessionMode{domain.SessionModeChat, domain.SessionModeChat}},
+		{name: "chat with a conversation its launch never confirms", mode: domain.SessionModeChat, conversation: true, switchErr: unconfirmed,
+			wantModes: []domain.SessionMode{domain.SessionModeTUI}, wantSwitches: []domain.SessionMode{domain.SessionModeChat, domain.SessionModeChat, domain.SessionModeChat}, wantWarning: true},
+		{name: "terminal", mode: domain.SessionModeTUI, conversation: true, wantModes: []domain.SessionMode{domain.SessionModeTUI}},
+		{name: "an unknown interface", mode: "terminal", wantModes: []domain.SessionMode{""}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			st := newFakeStore()
+			st.projects["mer"] = domain.ProjectRecord{ID: "mer", Path: repo, RepoOriginURL: "https://github.com/acme/app"}
+			fc := &chatMoveCommander{spawnErrs: tc.spawnErrs, switchErrs: tc.switchErrs, switchErr: tc.switchErr, fakeCommander: &fakeCommander{spawnFunc: func(cfg ports.SpawnConfig) domain.SessionRecord {
+				rec := domain.SessionRecord{ID: "mer-9", ProjectID: cfg.ProjectID, Kind: cfg.Kind, Harness: cfg.Harness, Mode: cfg.RequestedMode}
+				if cfg.Transfer != nil {
+					rec.Metadata.AgentSessionID = id
+				}
+				return rec
+			}}}
+			manifest := importManifest(tip)
+			manifest.Mode, manifest.Permissions = tc.mode, domain.PermissionModeAcceptEdits
+			in := MoveImportInput{ProjectID: "mer", MoveID: "m-chat-" + strings.ReplaceAll(tc.name, " ", "-"), Manifest: manifest, HandoffNote: "NOTE"}
+			if tc.conversation {
+				in.Transcript = &MoveImportTranscript{AgentSessionID: id, ProjectDir: "/home/agent/.claude/projects/-workspace-repository", Gzip: gz.Bytes()}
+			}
+			out, err := NewWithDeps(Deps{Manager: fc, Store: moveStore{fakeStore: st}}).ImportMove(context.Background(), in)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !slices.Equal(fc.modes, tc.wantModes) {
+				t.Fatalf("spawned in %q, want %q", fc.modes, tc.wantModes)
+			}
+			if !slices.Equal(fc.switches, tc.wantSwitches) {
+				t.Fatalf("switches %q, want %q", fc.switches, tc.wantSwitches)
+			}
+			if len(tc.wantSwitches) > 0 && (fc.switchedID != "mer-9" || fc.switchPolicy != domain.SessionInterfaceTransitionDrain ||
+				fc.switchHistory != domain.SessionInterfaceTransitionHistoryStrict) {
+				t.Fatalf("switched %q with %q/%q, want mer-9 drain/strict", fc.switchedID, fc.switchPolicy, fc.switchHistory)
+			}
+			// The approval mode Chat ran with goes with it.
+			if fc.spawnedCfg.AgentConfig.Permissions != domain.PermissionModeAcceptEdits {
+				t.Fatalf("permissions %q, want accept-edits", fc.spawnedCfg.AgentConfig.Permissions)
+			}
+			if got := slices.Contains(out.Warnings, movedChatInTerminal); got != tc.wantWarning {
+				t.Fatalf("warnings %q, want the terminal note: %v", out.Warnings, tc.wantWarning)
+			}
+		})
+	}
+}
+
+// A move that will not finish is ended without starting the agent, and only
+// while it is still the session's move in progress: a later move's record
+// stands, and a session that moved stays moved.
+func TestAbandonMoveEndsOnlyThisMove(t *testing.T) {
+	moved := &domain.SessionMove{MoveID: "move-1", OrgID: "org-1", SessionID: "cloud-1"}
+	for _, tc := range []struct {
+		name        string
+		rec         domain.SessionRecord
+		wantEnded   bool
+		wantStarted string
+		wantCode    string
+	}{
+		{"this move", domain.SessionRecord{MoveStarted: "move-1"}, true, "", ""},
+		{"another move", domain.SessionRecord{MoveStarted: "move-2"}, false, "move-2", ""},
+		{"no move", domain.SessionRecord{}, false, "", ""},
+		{"already moved", domain.SessionRecord{MovedTo: moved}, false, "", "SESSION_MOVED"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			rec := tc.rec
+			rec.ID, rec.ProjectID, rec.Kind, rec.Activity = "mer-2", "mer", domain.KindWorker, domain.Activity{State: domain.ActivityExited}
+			st := newFakeStore()
+			st.sessions["mer-2"] = rec
+			fc := &fakeCommander{}
+			svc := NewWithDeps(Deps{Manager: fc, Store: moveStore{fakeStore: st}})
+			ended, err := svc.AbandonMove(context.Background(), "mer-2", "move-1")
+			var apiErr *apierr.Error
+			if tc.wantCode != "" {
+				if !errors.As(err, &apiErr) || apiErr.Code != tc.wantCode {
+					t.Fatalf("err = %v, want %s", err, tc.wantCode)
+				}
+			} else if err != nil {
+				t.Fatal(err)
+			}
+			if ended != tc.wantEnded || st.sessions["mer-2"].MoveStarted != tc.wantStarted {
+				t.Fatalf("ended %v, move_started %q; want %v, %q", ended, st.sessions["mer-2"].MoveStarted, tc.wantEnded, tc.wantStarted)
+			}
+			if len(fc.killed) != 0 || st.sessions["mer-2"].Activity.State != domain.ActivityExited {
+				t.Fatalf("the agent's state changed: killed %v, activity %v", fc.killed, st.sessions["mer-2"].Activity.State)
+			}
+		})
+	}
+}
+
+// An abandon of move A that overlaps a newer export recording move B, after
+// A was read and before the write, leaves B in progress: the write itself
+// compares the move id, so B's completion still finds its move.
+func TestAbandonMoveDoesNotClearANewerMove(t *testing.T) {
+	st := newFakeStore()
+	st.sessions["mer-2"] = domain.SessionRecord{ID: "mer-2", ProjectID: "mer", Kind: domain.KindWorker, MoveStarted: "move-a",
+		Activity: domain.Activity{State: domain.ActivityExited}}
+	store := moveStore{fakeStore: st}
+	store.beforeEnd = func() {
+		rec := st.sessions["mer-2"]
+		rec.MoveStarted = "move-b"
+		st.sessions["mer-2"] = rec
+	}
+	svc := NewWithDeps(Deps{Manager: &fakeCommander{}, Store: store})
+	ended, err := svc.AbandonMove(context.Background(), "mer-2", "move-a")
+	if err != nil || ended {
+		t.Fatalf("AbandonMove = %v, %v; want not ended, no error", ended, err)
+	}
+	if got := st.sessions["mer-2"].MoveStarted; got != "move-b" {
+		t.Fatalf("move_started = %q, want the newer move-b kept", got)
+	}
+}

@@ -405,6 +405,27 @@ describe("NotificationCenter", () => {
 		expect(clearAllMock).toHaveBeenCalledTimes(1);
 	});
 
+	it("shows an automation run's notification with the automations icon, colored by how it ended", async () => {
+		const automationRun = (id: string, type: string, title: string): CloudCpNotification => ({
+			id, source: "cloud", orgId: "org-1", projectId: "cproj-1", sessionId: "csess-1", type, title,
+			body: "Open it to see.", status: "unread", createdAt: "2026-07-21T10:30:00Z", updatedAt: "2026-07-21T10:30:00Z",
+		});
+		cloudNotificationsMock.mockReturnValue(cloudNotificationsResult([
+			automationRun("cntf_done", "automation_run_completed", "Nightly debt finished"),
+			automationRun("cntf_failed", "automation_run_failed", "Nightly debt failed"),
+			automationRun("cntf_skipped", "automation_run_skipped", "Nightly debt skipped"),
+		]));
+		renderNotificationCenter();
+		await clickOpen();
+
+		for (const [title, tone] of [["Nightly debt finished", "text-success"], ["Nightly debt failed", "text-error"], ["Nightly debt skipped", "text-warning"]]) {
+			const row = screen.getByLabelText(title).closest("[role='listitem']") as HTMLElement;
+			const icon = row.querySelector(".icon-calendar-clock");
+			expect(icon, title).not.toBeNull();
+			expect(icon!.parentElement).toHaveClass(tone);
+		}
+	});
+
 	it("keeps the row's Open session tooltip off its action buttons", async () => {
 		cloudNotificationsMock.mockReturnValue(cloudNotificationsResult(cloudNotifications));
 		renderNotificationCenter();

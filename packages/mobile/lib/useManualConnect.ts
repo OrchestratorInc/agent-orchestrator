@@ -13,8 +13,6 @@ import { pairThisDevice } from "./deviceTokenRuntime";
 import { setLocalNetworkConfirmed } from "./localNetworkStore";
 import { AccountManagedHostError, adoptManualConnection, DifferentMachineError, persistManualHostEdit } from "./manualConnect";
 import { IncompatibleHostVersionError } from "./race";
-import { MOBILE_EVENTS } from "./telemetry/events";
-import { mobileTelemetry } from "./telemetry/runtime";
 
 export type ManualConnectProps = {
 	onConnected: () => void;
@@ -111,7 +109,6 @@ export function useManualConnect({ onConnected, onBusyChange, editingHost, editi
 				saveHost,
 				setActiveHost,
 			}, machineName, fallbackToken);
-			mobileTelemetry()?.capture(MOBILE_EVENTS.paired, { method: "manual" });
 			haptics.success();
 			onConnected();
 		} catch (e) {

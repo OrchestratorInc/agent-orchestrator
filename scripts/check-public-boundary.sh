@@ -43,6 +43,18 @@ PY
 	then :; else status=1; fi
 done < <(git ls-files 'package.json' '*/package.json' | grep -v node_modules)
 
+# 5. No tracked file knows the control plane's private internals: settings
+#    only it reads, its database roles, its deployment's labels, or a script
+#    or checkout of its repository. Code here reaches it through the contract
+#    alone; a test that stands it up (such as the session move round trip)
+#    lives in its repository. The names are listed by SHA-256 only, so this
+#    check does not publish them (AO_BOUNDARY_NAME_HASHES swaps the list in
+#    its test).
+names_file="${AO_BOUNDARY_NAME_HASHES:-scripts/public-boundary-names.sha256}"
+if ! hits="$(python3 scripts/check_private_names.py "$names_file")"; then
+	fail "these lines name the control plane's private internals (keep what stands it up in its repository):"$'\n'"$hits"
+fi
+
 if [[ "$status" == 0 ]]; then
 	echo "public boundary: ok"
 fi

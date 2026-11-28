@@ -342,3 +342,21 @@ func TestSendTurnSplitsAVariantModelOntoEitherReasoningOption(t *testing.T) {
 		})
 	}
 }
+
+func TestAgyRestoresSeparateEffortOntoEitherReasoningOption(t *testing.T) {
+	for _, id := range []string{"thinking_level", "thought_level"} {
+		t.Run(id, func(t *testing.T) {
+			c := &conversation{harness: domain.HarnessAgy, configOptions: []ports.ChatConfigOption{
+				{ID: "model", Type: ports.ChatConfigOptionSelect, Choices: []ports.ChatConfigOptionChoice{{Value: "gemini-3.8-flash"}}},
+				{ID: id, Category: "thought_level", Type: ports.ChatConfigOptionSelect, Choices: []ports.ChatConfigOptionChoice{{Value: "low"}}},
+			}}
+			got := c.expandModelVariant([]SessionOption{
+				{ID: "model", Value: "gemini-3.8-flash", Optional: true},
+				{ID: "thinking_level", Value: "low", Optional: true},
+			})
+			if len(got) != 2 || got[0].Value != "gemini-3.8-flash" || got[1].ID != id || got[1].Value != "low" {
+				t.Fatalf("restored model/effort options = %+v", got)
+			}
+		})
+	}
+}

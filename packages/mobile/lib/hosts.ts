@@ -89,8 +89,11 @@ async function writeStored(hosts: StoredHost[]): Promise<void> {
 // Several hosts can reconnect together. Serialize read-modify-write so one
 // host's endpoint refresh cannot overwrite another's update.
 let pendingWrite: Promise<void> = Promise.resolve();
-function mutateStored(change: (hosts: StoredHost[]) => StoredHost[] | Promise<StoredHost[]>): Promise<void> {
-	const write = pendingWrite.then(async () => writeStored(await change(await readStored())));
+function mutateStored(change: (hosts: StoredHost[]) => StoredHost[] | Promise<StoredHost[]>, afterWrite?: () => void): Promise<void> {
+	const write = pendingWrite.then(async () => {
+		await writeStored(await change(await readStored()));
+		afterWrite?.();
+	});
 	pendingWrite = write.then(() => {}, () => {});
 	return write;
 }
@@ -98,14 +101,19 @@ function mutateStored(change: (hosts: StoredHost[]) => StoredHost[] | Promise<St
 /** Every paired machine, most recently connected first. */
 export async function loadHosts(): Promise<Host[]> {
 	const stored = sortHosts(await readStored());
+	// Taken with the list it describes, before the keystore reads below can
+	// let another save land.
+	const revisions = new Map(stored.map((h) => [h.id, hostEndpointRevision(h.id)]));
 	return Promise.all(
 		stored.map(async (h) => {
 			const fallbackToken = await SecureStore.getItemAsync(fallbackTokenKey(h.id));
-			return {
+			const host: Host = {
 				...h,
 				token: (await SecureStore.getItemAsync(tokenKey(h.id))) ?? "",
 				...(fallbackToken ? { fallbackToken } : {}),
 			};
+			snapshotRevisions.set(host, revisions.get(h.id) ?? 0);
+			return host;
 		}),
 	);
 }
@@ -119,7 +127,11 @@ export async function findHost(id: string): Promise<Host | null> {
  * rather than adding a second entry for it. */
 export async function saveHost(host: Host): Promise<void> {
 	const { token, fallbackToken, ...rest } = host;
-	await mutateStored((stored) => [rest, ...stored.filter((h) => h.id !== host.id)]);
+	// Its endpoints are replaced too: a refresh that read the list before must not save over them.
+	await mutateStored(
+		(stored) => [rest, ...stored.filter((h) => h.id !== host.id)],
+		() => { endpointRevisions.set(host.id, hostEndpointRevision(host.id) + 1); },
+	);
 	await writeSecret(tokenKey(host.id), token);
 	await writeSecret(fallbackTokenKey(host.id), fallbackToken);
 	// Paired (again): its chats may be saved on the phone, even if it was forgotten before.
@@ -150,8 +162,35 @@ export async function updateHostAppearance(id: string, appearance: MachineAppear
  * advertises, so a rotated tunnel hostname or a changed LAN address is picked
  * up without the user doing anything.
  */
-export async function updateHostEndpoints(id: string, endpoints: Endpoint[]): Promise<void> {
-	await mutateStored((stored) => stored.map((h) => (h.id === id ? { ...h, endpoints } : h)));
+export async function updateHostEndpoints(id: string, endpoints: Endpoint[], unchangedSince?: number): Promise<void> {
+	let saved = false;
+	// The revision is counted once the list is on the phone, so a read in
+	// between still pairs the old list with the old revision.
+	await mutateStored((stored) => {
+		// Checked inside the serialized write, so no other save can land between
+		// the check and this one.
+		if (unchangedSince !== undefined && hostEndpointRevision(id) !== unchangedSince) return stored;
+		saved = true;
+		return stored.map((h) => (h.id === id ? { ...h, endpoints } : h));
+	}, () => { if (saved) endpointRevisions.set(id, hostEndpointRevision(id) + 1); });
+}
+
+const endpointRevisions = new Map<string, number>();
+const snapshotRevisions = new WeakMap<Host, number>();
+
+/** The endpoint revision a host from loadHosts/findHost was read at. */
+export function endpointRevisionOf(host: Host): number | undefined {
+	return snapshotRevisions.get(host);
+}
+
+/**
+ * Counts the endpoint saves for a machine in this process. A refresh that read
+ * the stored list at revision N saves only while it is still N, so a slow
+ * refresh cannot replace a list a later connection already saved (a rotated
+ * tunnel address above all).
+ */
+export function hostEndpointRevision(id: string): number {
+	return endpointRevisions.get(id) ?? 0;
 }
 
 /** Records a successful connection, so the list orders by recency. */

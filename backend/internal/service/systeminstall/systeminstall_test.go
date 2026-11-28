@@ -437,6 +437,9 @@ func TestStart_ExitZeroWithoutTargetOnPATHFails(t *testing.T) {
 	if !strings.Contains(final.Error, "tmux is still not in PATH") {
 		t.Fatalf("Error = %q, want failed PATH verification", final.Error)
 	}
+	if final.FailureCause != FailureNotFoundAfterInstall {
+		t.Fatalf("FailureCause = %q, want %q", final.FailureCause, FailureNotFoundAfterInstall)
+	}
 }
 
 func TestStartAndStatus_Failed(t *testing.T) {
@@ -452,6 +455,9 @@ func TestStartAndStatus_Failed(t *testing.T) {
 	final, _ := s.Status(context.Background(), TargetTmux)
 	if final.Error == "" {
 		t.Fatalf("Error is empty, want the exec failure")
+	}
+	if final.FailureCause != FailureExitNonzero {
+		t.Fatalf("FailureCause = %q, want %q", final.FailureCause, FailureExitNonzero)
 	}
 }
 
@@ -581,6 +587,9 @@ func TestRun_Timeout(t *testing.T) {
 	final, _ := s.Status(context.Background(), TargetTmux)
 	if !strings.Contains(final.Error, "timed out") {
 		t.Fatalf("Error = %q, want it to mention the timeout", final.Error)
+	}
+	if final.FailureCause != FailureTimeout {
+		t.Fatalf("FailureCause = %q, want %q", final.FailureCause, FailureTimeout)
 	}
 	if final.FinishedAt == nil {
 		t.Fatalf("FinishedAt is nil, want set")
@@ -1244,7 +1253,10 @@ func TestRecoverInterruptsAndHydratesDurableJobs(t *testing.T) {
 func TestListAgentJobsReturnsDurableJobs(t *testing.T) {
 	store := newInstallJobStoreFake()
 	now := time.Now().UTC()
-	store.records[string(TargetCodex)] = ports.AgentInstallJobRecord{Target: string(TargetCodex), Status: string(StatusFailed), StartedAt: now, UpdatedAt: now}
+	store.records[string(TargetCodex)] = ports.AgentInstallJobRecord{
+		Target: string(TargetCodex), Status: string(StatusFailed), StartedAt: now, UpdatedAt: now,
+		Error: "exit status 243", Output: "npm error code EACCES\nnpm error syscall mkdir\n",
+	}
 	s := newTestService("darwin", "npm")
 	s.jobStore = store
 	jobs, err := s.AgentJobs(context.Background())
@@ -1253,6 +1265,32 @@ func TestListAgentJobsReturnsDurableJobs(t *testing.T) {
 	}
 	if len(jobs) != 1 || jobs[0].Target != TargetCodex || jobs[0].Status != StatusFailed {
 		t.Fatalf("jobs = %+v", jobs)
+	}
+	// The cause is not stored; a durable job reads it again from its error and output.
+	if jobs[0].FailureCause != FailurePermissionDenied {
+		t.Fatalf("FailureCause = %q, want %q", jobs[0].FailureCause, FailurePermissionDenied)
+	}
+}
+
+func TestAgentInstallFailureCarriesItsCause(t *testing.T) {
+	s := newTestService("darwin", "npm")
+	s.installCapabilities = installCapabilitiesStub{prefix: "/Users/test/.npm", writable: true}
+	s.commands = commandRunnerFunc(func(_ context.Context, _ []string, stdout, _ io.Writer) error {
+		_, _ = io.WriteString(stdout, "npm error code ENOTFOUND\nnpm error network request to https://registry.npmjs.org/@openai%2fcodex failed\n")
+		return errors.New("exit status 1")
+	})
+
+	if _, err := s.StartAgent(context.Background(), TargetCodex, "npm"); err != nil {
+		t.Fatalf("StartAgent: %v", err)
+	}
+	waitForStatus(t, s, TargetCodex, StatusFailed)
+
+	job, err := s.Status(context.Background(), TargetCodex)
+	if err != nil {
+		t.Fatalf("Status: %v", err)
+	}
+	if job.FailureCause != FailureNetwork {
+		t.Fatalf("FailureCause = %q, want %q (job %+v)", job.FailureCause, FailureNetwork, job)
 	}
 }
 

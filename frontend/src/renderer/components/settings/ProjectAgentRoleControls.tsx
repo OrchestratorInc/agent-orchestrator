@@ -10,6 +10,7 @@ import { cloudModelVerdict, listsLocalModelsForCloud } from "../../lib/cloud-mod
 import { cloudCatalogAsAgentCatalog, useCloudModelCatalog } from "../../hooks/useCloudModelCatalog";
 import { LOCAL_HOST } from "../../lib/hosts";
 import { TaskModelSelection } from "../TaskModelControls";
+import type { AgentSwitchProps } from "../chat/AgentSwitchPicker";
 import { AgentModelCombobox } from "./AgentModelCombobox";
 import { EffortPicker } from "./EffortPicker";
 import { SettingsOptionMenu } from "./SettingsOptionMenu";
@@ -39,6 +40,7 @@ export function AgentModelField({
 	independentMode = false,
 	cloudOrgId,
 	warningClassName,
+	agentSwitch,
 	pinCatalogDefaults = false,
 }: {
 	role: "worker" | "orchestrator" | "reviewer";
@@ -65,6 +67,8 @@ export function AgentModelField({
 	independentMode?: boolean;
 	/** Where the warning sits in the caller's layout (a row gives it its own line). */
 	warningClassName?: string;
+	/** The task variant's agent, chosen in the same picker as its model and effort. */
+	agentSwitch?: AgentSwitchProps;
 	/**
 	 * A Cloud project's organization: the field then lists Cloud's models for
 	 * the account (the ones its sessions run), and this computer's only where
@@ -128,17 +132,18 @@ export function AgentModelField({
 		(query.isError ? (query.error instanceof Error ? query.error.message : t("settings.models.loadFailed")) : undefined);
 
 	if (variant === "task") {
-		return <>
+		return (
 			<TaskModelSelection id="automation-model" fetching={query.isFetching} agentId={agentId} agentLabel={agentId} projectId={projectId}
 				catalog={catalog ? { ...catalog, models: offeredModels } : undefined}
 				value={model} mode={mode} effort={effort}
 				disabled={agentId === "" || (query.isFetching && !catalog)}
 				onModelChange={onModelChange} onModeChange={onModeChange} onEffortChange={onEffortChange}
 				onValidityChange={onValidityChange}
-				onRefresh={cloudSourced ? readCloudAgain : async () => { const refreshed = await refreshAgentModels(agentId, projectId, hostId); queryClient.setQueryData(agentModelsQueryKey(agentId, projectId, hostId), refreshed); }}
+				agentSwitch={agentSwitch ?? { projectId, hostId, agents: [], onPendingChange: () => {} }}
+				warning={warning}
+				onRetry={cloudGapWarning ? readCloudAgain : undefined}
 			/>
-			{warning ? <FieldWarning className={cn("text-xs", warningClassName)} warning={warning} onRetry={cloudGapWarning ? readCloudAgain : undefined} /> : null}
-		</>;
+		);
 	}
 
 	if (isMode) {

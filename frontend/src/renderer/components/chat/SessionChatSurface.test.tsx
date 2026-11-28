@@ -111,6 +111,9 @@ const sideMocks = vi.hoisted(() => ({
 	sentOutsideTranscript: Symbol("chat.sentOutsideTranscript"),
 }));
 const stageAttachmentsMock = vi.hoisted(() => vi.fn());
+// A plain function, not a vi.fn(): mock resets must not leave the lease
+// renewal without a promise to chain on.
+const updateAttachmentLeasesMock = vi.hoisted(() => async (): Promise<string[]> => []);
 vi.mock("./IndependentSideChats", () => ({
 	useIndependentSideChats: () => ({ ...sideMocks, panel: null }),
 }));
@@ -160,6 +163,7 @@ vi.mock("../../hooks/useConversation", () => ({
 	useConversationModels: vi.fn(() => ({ models: [], loaded: true })),
 	useConversationSkills: vi.fn(() => ({ skills: [] })),
 	useStageAttachments: () => stageAttachmentsMock,
+	useAttachmentLeases: () => updateAttachmentLeasesMock,
 	useWorkspaceFilePaths: () => ({ paths: workspacePathsState.paths, truncated: false }),
 }));
 
@@ -195,7 +199,9 @@ vi.mock("./ChatWorkspace", async () => {
 			importBlock,
 			findRequest,
 			onFindRequestHandled,
+			welcomeHeading,
 		}: {
+			welcomeHeading?: string;
 			importBlock?: string;
 			onSend: typeof sideMocks.workspaceSend;
 			onStageAttachments?: unknown;
@@ -251,6 +257,7 @@ vi.mock("./ChatWorkspace", async () => {
 					))}
 					{snapshot.harness === "claude-code" && <TurnSettingsBar models={models} settings={snapshot.settings} harness={snapshot.harness} configOptions={configOptions} onChangeConfigOption={() => {}} />}
 					<div data-testid="prompt-suggestion">{promptSuggestion?.text}</div>
+					<div data-testid="welcome-heading">{welcomeHeading}</div>
 					<div data-testid="conversation-id">{snapshot.conversationId}</div>
 					<div data-testid="find-request" data-request-id={findRequest?.id ?? ""}>{findRequest ? `${findRequest.query}@${findRequest.messageId ?? ""}` : ""}</div>
 					<button type="button" onClick={() => { if (findRequest) onFindRequestHandled?.(findRequest.id); }}>Apply find request</button>
@@ -809,6 +816,27 @@ describe("SessionChatSurface link routing", () => {
 		view.rerender(tree("ready"));
 		expect(screen.getByText(`Mounted ${session.id}`)).toBe(mounted);
 		expect(useUiStore.getState().provisioningProjectIds.has(session.workspaceId)).toBe(false);
+	});
+
+	it("asks an orchestrator for the project's first task until the project shows a worker", () => {
+		const orchestrator = { ...session, id: "proj-1-orchestrator", kind: "orchestrator" as const };
+		const project = (sessions: WorkspaceSession[]) => [{ id: session.workspaceId, name: "proj", kind: "single_repo", path: "/tmp/proj", type: "main", sessions }];
+		const headingWith = (projects: ReturnType<typeof project> | undefined, chat: WorkspaceSession = orchestrator) => {
+			const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+			if (projects) queryClient.setQueryData(workspaceQueryKey, projects);
+			conversationState.snapshot = snapshotFor(chat.id);
+			const view = render(<Wrapper client={queryClient}><SessionChatSurface session={chat} /></Wrapper>);
+			const text = screen.getByTestId("welcome-heading").textContent;
+			view.unmount();
+			return text;
+		};
+		// The project list hasn't loaded: "first task", so a new project never switches heading.
+		expect(headingWith(undefined)).toBe("Give your orchestrator its first task");
+		expect(headingWith(project([orchestrator]))).toBe("Give your orchestrator its first task");
+		// Once the project has a worker, the chat's usual orchestrator heading.
+		expect(headingWith(project([orchestrator, session]))).toBe("");
+		// A worker's chat keeps the chat's own heading.
+		expect(headingWith(project([orchestrator, session]), session)).toBe("");
 	});
 
 	it("releases project loading to show a failed orchestrator's retry UI", () => {
