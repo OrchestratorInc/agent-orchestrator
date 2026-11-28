@@ -66,7 +66,7 @@ import { InlineMessageEditor, type MessageEditDraft } from "./InlineMessageEdito
 import { JumpToLatest } from "./JumpToLatest";
 import { useFlagValue, type Flag } from "./flag";
 import { KeyboardMotionScope, useKeyboardMotion } from "./keyboardMotion";
-import { atTail, followsAfterRest, openingRow, RESUME_SLOP, type Release } from "./timelineScroll";
+import { atTail, followsAfterRest, openingRow, RESUME_SLOP, visibleContentAnchor, type Release } from "./timelineScroll";
 import { createFieldReveals, fieldRevealOffset, RevealFocusedField } from "./fieldReveal";
 
 /** The jump back to the newest message fades in and out rather than popping. */
@@ -242,6 +242,13 @@ function Timeline({
 	// above as they scroll up change the content's size, and that must not read
 	// as a reason to pull them back down.
 	const followsTail = useRef(true);
+	// The same, for what the list draws from it (`visibleContentAnchor`). Set
+	// with the ref, through `setFollowsTail`.
+	const [following, setFollowing] = useState(true);
+	const setFollowsTail = useCallback((next: boolean) => {
+		followsTail.current = next;
+		setFollowing(next);
+	}, []);
 	// The list's own height and its content's, for `scrollToLatest`.
 	const viewportHeight = useRef(0);
 	const contentHeight = useRef(0);
@@ -348,7 +355,7 @@ function Timeline({
 	if (!sameEditableTurns(editsRef.current, nextEdits)) editsRef.current = nextEdits;
 	const edits = editsRef.current;
 	const latestForkTurnId = useMemo(() => latestForkableTurnId(snapshot.turns), [snapshot.turns]);
-	const stopFollowingTail = useCallback(() => { followsTail.current = false; }, []);
+	const stopFollowingTail = useCallback(() => setFollowsTail(false), [setFollowsTail]);
 	const { editDraft, editing, detached, startEdit, cancelEdit, submitEdit } = useMessageEdit({ items: snapshot.items, onEditMessage, onEditingChange, onStart: stopFollowingTail });
 	// Back closes the edit first, as Escape does on the desktop, rather than
 	// leaving the conversation with the draft. A JS back listener never hears
@@ -397,7 +404,7 @@ function Timeline({
 		followAfterKeyboard.current = false;
 		if (followsTail.current) scrollToLatest(false);
 	};
-	const jumpToLatest = () => { followsTail.current = true; setShowJump(false); scrollToLatest(true); };
+	const jumpToLatest = () => { setFollowsTail(true); setShowJump(false); scrollToLatest(true); };
 
 	useEffect(() => {
 		if (jumpToSequence === undefined) return;
@@ -406,12 +413,12 @@ function Timeline({
 		// turn never matched and the jump silently did nothing.
 		const index = groups.findIndex((group) => group.anchor === jumpToSequence || group.items.some((item) => item.sequence === jumpToSequence));
 		if (index >= 0) {
-			followsTail.current = index === groups.length - 1;
+			setFollowsTail(index === groups.length - 1);
 			setShowJump(!followsTail.current);
 			requestAnimationFrame(() => listRef.current?.scrollToIndex({ index, animated: true, viewPosition: jumpViewPosition }));
 		}
 		onJumpHandled?.();
-	}, [groups, jumpToSequence, jumpViewPosition, onJumpHandled]);
+	}, [groups, jumpToSequence, jumpViewPosition, onJumpHandled, setFollowsTail]);
 
 	// The keyboard shrinks the list, so bring the prompt being edited back into view.
 	const editingTurnId = editDraft?.turnId;
@@ -481,7 +488,7 @@ function Timeline({
 					if (target === undefined || !isCurrent()) return;
 					// A move of ours, not the person's: the list stops following new
 					// output until it comes back to the end.
-					followsTail.current = false;
+					setFollowsTail(false);
 					listRef.current?.scrollToOffset({ offset: Math.max(target, Platform.OS === "ios" ? -underHeader : 0), animated: true });
 				};
 				if (fieldRevealOffset({ ...spans, offset: 0 }) === undefined) return;
@@ -492,7 +499,7 @@ function Timeline({
 				else scrollTo(scrollOffset.current);
 			})));
 		}));
-	}, [bottomInset, fieldReveals, topInset, underHeader]);
+	}, [bottomInset, fieldReveals, setFollowsTail, topInset, underHeader]);
 
 	if (plan.kind === "empty") openedAt.current = undefined;
 	if (plan.kind === "empty" && startup?.visible) {
@@ -528,7 +535,7 @@ function Timeline({
 		dragging.current = false;
 		const offset = event.nativeEvent.contentOffset.y;
 		const resting = atTail(event.nativeEvent, keyboardInset.current, RESUME_SLOP);
-		followsTail.current = released ? resting : followsAfterRest(releasedAt.current, offset, resting);
+		setFollowsTail(released ? resting : followsAfterRest(releasedAt.current, offset, resting));
 		releasedAt.current = released ? { offset, atEnd: resting } : undefined;
 		setShowJump(!followsTail.current);
 		// A follow that resumes catches up on output that arrived meanwhile.
@@ -583,9 +590,10 @@ function Timeline({
 							updateCellsBatchingPeriod={32}
 							windowSize={5}
 							// Content off screen can resize (a page measured ahead, earlier history
-							// loading in); what is on screen stays put on both platforms.
-							maintainVisibleContentPosition={{ minIndexForVisible: 0 }}
-							onScrollBeginDrag={() => { dragging.current = true; followsTail.current = false; releasedAt.current = undefined; }}
+							// loading in); what is on screen stays put on both platforms. Not on
+							// iOS while following the newest message (see `visibleContentAnchor`).
+							maintainVisibleContentPosition={visibleContentAnchor(Platform.OS, following)}
+							onScrollBeginDrag={() => { dragging.current = true; setFollowsTail(false); releasedAt.current = undefined; }}
 							onScrollEndDrag={(event) => settle(event, true)}
 							onMomentumScrollBegin={() => { dragging.current = true; }}
 							onMomentumScrollEnd={settle}
@@ -596,7 +604,7 @@ function Timeline({
 								// Whenever the list is not following, the jump to the newest message
 								// is offered, on this path and in `settle`.
 								const resting = atTail(event.nativeEvent, keyboardInset.current, RESUME_SLOP);
-								if (!dragging.current && resting) followsTail.current = true;
+								if (!dragging.current && resting) setFollowsTail(true);
 								setShowJump(!followsTail.current && !resting);
 								notifyRenderViewport();
 							}}

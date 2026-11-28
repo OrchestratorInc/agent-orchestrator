@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { atTail, followsAfterRest, openingRow, RESUME_SLOP, TAIL_SLOP } from "./timelineScroll";
+import { atTail, followsAfterRest, openingRow, RESUME_SLOP, TAIL_SLOP, visibleContentAnchor } from "./timelineScroll";
 
 const metrics = (offset: number) => ({ contentOffset: { x: 0, y: offset }, contentSize: { width: 390, height: 3000 }, layoutMeasurement: { width: 390, height: 800 } });
 
@@ -45,6 +45,25 @@ describe("followsAfterRest", () => {
 		expect(followsAfterRest({ offset: 0, atEnd: false }, 1000, false)).toBe(false);
 		expect(followsAfterRest(undefined, 2200, true)).toBe(true);
 		expect(followsAfterRest(undefined, 2200, false)).toBe(false);
+	});
+});
+
+describe("visibleContentAnchor", () => {
+	// iOS anchored to the list's spacer for rows not drawn yet when a follow
+	// landed in it. Drawing those rows recycled the spacer and moved the offset
+	// back by the spacer's height: a long chat opened part way up its transcript.
+	it("holds nothing in place on iOS while the list follows the newest message", () => {
+		expect(visibleContentAnchor("ios", true)).toBeUndefined();
+	});
+	it("holds what the person reads in place when they have scrolled up", () => {
+		expect(visibleContentAnchor("ios", false)).toEqual({ minIndexForVisible: 0 });
+	});
+	it("keeps Android's anchor either way", () => {
+		expect(visibleContentAnchor("android", true)).toEqual({ minIndexForVisible: 0 });
+		expect(visibleContentAnchor("android", false)).toEqual({ minIndexForVisible: 0 });
+	});
+	it("returns the same anchor each time, so the list's props stay put", () => {
+		expect(visibleContentAnchor("ios", false)).toBe(visibleContentAnchor("android", true));
 	});
 });
 

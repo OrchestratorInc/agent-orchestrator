@@ -36,6 +36,26 @@ export function followsAfterRest(release: Release | undefined, offset: number, a
 	return release !== undefined && Math.abs(offset - release.offset) < 1 ? release.atEnd : atEndNow;
 }
 
+const ANCHOR_FIRST_VISIBLE = { minIndexForVisible: 0 } as const;
+
+/**
+ * What the list holds in place when content off screen resizes (its
+ * `maintainVisibleContentPosition`): the first row in view, except on iOS while
+ * it follows the newest message, where nothing needs holding because every
+ * size change scrolls it to the end anyway.
+ *
+ * React Native's iOS anchor is the first view in sight, and that can be the
+ * list's spacer for rows not drawn yet. A long chat opening scrolls to its end
+ * before the newest rows are drawn, so it landed in the spacer below the tall
+ * replies. Drawing those rows recycled the spacer as another view, and the
+ * anchor read the move as the content shifting by the spacer's whole offset and
+ * scrolled back by as much: up into the tall replies, where the spacer was drawn
+ * again, so each follow to the end bounced back to the same place.
+ */
+export function visibleContentAnchor(platform: string, following: boolean): typeof ANCHOR_FIRST_VISIBLE | undefined {
+	return platform === "ios" && following ? undefined : ANCHOR_FIRST_VISIBLE;
+}
+
 /**
  * The row the timeline opens on: the start of the newest `window` rows. The list
  * draws those first and scrolls to them, rather than drawing the oldest rows and
