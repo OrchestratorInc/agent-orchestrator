@@ -2,10 +2,10 @@ import { ChevronDown, KeyRound } from "@/components/app-icons";
 import { useEffect, useId, useRef, type KeyboardEvent } from "react";
 import { useTranslation } from "react-i18next";
 import type { ApprovalDecision, PendingApproval } from "../../lib/approvals";
+import { offersSiteRule } from "../../lib/approval-site-rule";
 import { Button } from "../ui/button";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "../ui/dropdown-menu";
 import { approvalTimeLeft, useNow } from "./ApprovalPrompt";
-import { offersSiteRule } from "../../lib/approval-site-rule";
 
 /** "shop.example" for "https://shop.example"; the value itself when it is not a URL. */
 function siteHost(site: string): string {

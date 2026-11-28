@@ -19,6 +19,9 @@ import type {
 	CloudCpArtifactReplyRequest,
 	CloudCpArtifactThreadCreateRequest,
 	CloudCpSharedArtifact,
+	CloudCpBrowserApprovalDecision,
+	CloudCpBrowserApprovalDecisionInput,
+	CloudCpBrowserApprovalList,
 	CloudCpOffering,
 	CloudCpAgentProvider,
 	CloudCpAddAgentAccountRequest,
@@ -665,6 +668,17 @@ export interface CloudCpClient {
 	listNotificationEvents(orgId: string, after?: number, options?: CloudCpRequestOptions): Promise<CloudCpNotificationEventsResponse>;
 	markNotificationsRead(orgId: string, notificationIds?: string[], options?: CloudCpRequestOptions): Promise<{ updated: number }>;
 	subscribeNotificationEvents(orgId: string, options: CloudCpNotificationEventsOptions): Promise<void>;
+
+	/** The session's agent browser actions waiting for approval, oldest first. */
+	listBrowserApprovals(orgId: string, sessionId: string, options?: CloudCpRequestOptions): Promise<CloudCpBrowserApprovalList>;
+	/** 409: already decided otherwise, or expired. 403: anyone but the session's creator or the person it was started for (BrowserApproval.canDecide). */
+	decideBrowserApproval(
+		orgId: string,
+		sessionId: string,
+		approvalId: string,
+		body: CloudCpBrowserApprovalDecisionInput,
+		options?: CloudCpRequestOptions,
+	): Promise<CloudCpBrowserApprovalDecision>;
 
 	createTerminalTicket(
 		orgId: string,
@@ -1443,6 +1457,14 @@ export function createCloudCpClient(options: CloudCpClientOptions): CloudCpClien
 			? requestJson("POST", `/orgs/${seg(orgId)}/notifications/read-all`, { signal: o?.signal })
 			: Promise.all(notificationIds.map((id) => requestJson<{ updated: number }>("PATCH", `/orgs/${seg(orgId)}/notifications/${seg(id)}`, { body: { status: "read" }, signal: o?.signal }))).then((rows) => ({ updated: rows.reduce((total, row) => total + row.updated, 0) })),
 		subscribeNotificationEvents,
+
+		listBrowserApprovals: (orgId, sessionId, o) =>
+			requestJson("GET", `/orgs/${seg(orgId)}/sessions/${seg(sessionId)}/browser-approvals`, { signal: o?.signal }),
+		decideBrowserApproval: (orgId, sessionId, approvalId, body, o) =>
+			requestJson("POST", `/orgs/${seg(orgId)}/sessions/${seg(sessionId)}/browser-approvals/${seg(approvalId)}/decide`, {
+				body,
+				signal: o?.signal,
+			}),
 
 		createTerminalTicket: (orgId, sessionId, body, o) =>
 			requestJson("POST", `/orgs/${seg(orgId)}/sessions/${seg(sessionId)}/terminal-ticket`, {

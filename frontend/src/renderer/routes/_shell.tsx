@@ -28,7 +28,7 @@ import { FirstRunOnboarding } from "../components/onboarding/FirstRunOnboarding"
 import { GuidedTour } from "../components/onboarding/GuidedTour";
 import { ArchiveModalHost } from "../components/ArchiveModalHost";
 import { GlobalToast } from "../components/GlobalToast";
-import { GlobalApprovalCard } from "../components/approvals/ApprovalHost";
+import { CloudApprovalReader, GlobalApprovalCard } from "../components/approvals/ApprovalHost";
 import { SettingsPane, SettingsProvider, useSettingsPage } from "../components/SettingsDialog";
 import { ShareLinkHost } from "../components/OpenShareLinkDialog";
 import { SharedArtifactLinkHost } from "../components/SharedArtifactLinkHost";
@@ -1678,11 +1678,20 @@ const replacementErrorCount = Object.keys(orchestratorReplacementErrors).length;
 	const quitConfirmDialog = (
 		<QuitConfirmDialog open={isQuitConfirmOpen} keepsRunning={quitKeepsRunning} onResolve={resolveQuitConfirm} />
 	);
+	// Cloud approvals do not wait for this machine's daemon, so they mount
+	// while it starts or reconnects too, not only in the ready shell below.
+	const cloudApprovalHosts = (
+		<>
+			<GlobalApprovalCard localReady={daemonStatus.state === "ready"} />
+			<CloudApprovalReader />
+		</>
+	);
 	if (isStartupLoading) {
 		return (
 			<>
 				<div className="flex h-full min-h-0 flex-col"><PageTopbar /><DaemonStartupLoader /></div>
 				{quitConfirmDialog}
+				{cloudApprovalHosts}
 			</>
 		);
 	}
@@ -1718,7 +1727,7 @@ const replacementErrorCount = Object.keys(orchestratorReplacementErrors).length;
 				<GuidedTour />
 				<ArchiveModalHost />
 				<GlobalToast />
-				{daemonStatus.state === "ready" ? <GlobalApprovalCard /> : null}
+				{cloudApprovalHosts}
 				<RestartToUpdateDialog />
 				<SessionImportDialog />
 				<MoveSessionDialog />

@@ -1,9 +1,9 @@
 import { useEffect, useRef, useState, type KeyboardEvent } from "react";
 import { useTranslation } from "react-i18next";
 import type { ApprovalDecision, PendingApproval } from "../../lib/approvals";
+import { offersSiteRule } from "../../lib/approval-site-rule";
 import { cn } from "../../lib/utils";
 import { Button } from "../ui/button";
-import { offersSiteRule } from "../../lib/approval-site-rule";
 
 /** "1:05" until the request is denied for lack of an answer. */
 export function approvalTimeLeft(expiresAt: string, now: number): string {
@@ -55,14 +55,18 @@ export function ApprovalPrompt({
 	const category = t(categoryKey as "approvals.category.payment", { defaultValue: request.category });
 	const label = request.kind === "credential-use" ? t("approvals.credentialLabel") : t("approvals.label");
 
+	// Someone else decides it: the card only says who it waits for.
+	const waitingFor = request.waitingFor;
+
 	useEffect(() => {
 		const node = ref.current;
 		// Take focus only when nothing else has it, so typing elsewhere continues.
+		if (waitingFor) return;
 		if (node && (document.activeElement === document.body || !document.activeElement)) node.focus();
-	}, [request.id]);
+	}, [request.id, waitingFor]);
 
 	const onKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
-		if (busy || event.defaultPrevented || event.altKey || event.ctrlKey || event.metaKey) return;
+		if (waitingFor || busy || event.defaultPrevented || event.altKey || event.ctrlKey || event.metaKey) return;
 		if (event.key === "Escape") {
 			event.preventDefault();
 			onDecide("deny");
@@ -78,7 +82,7 @@ export function ApprovalPrompt({
 	return (
 		<div
 			ref={ref}
-			role="alertdialog"
+			role={waitingFor ? "status" : "alertdialog"}
 			tabIndex={-1}
 			aria-label={t("approvals.region")}
 			aria-describedby={`approval-reason-${request.id}`}
@@ -140,24 +144,28 @@ export function ApprovalPrompt({
 						{more > 0 ? <span className="text-caption text-passive">{t("approvals.more", { count: more })}</span> : null}
 					</div>
 				) : null}
-				<div className="flex flex-wrap justify-end gap-1.5">
-					<Button type="button" variant="secondary" size="sm" disabled={busy} onClick={() => onDecide("deny")}>
-						{t("approvals.deny")}
-						<kbd className="rounded-full bg-foreground/10 px-1.5 py-0.5 font-sans text-caption leading-none text-muted-foreground">
-							Esc
-						</kbd>
-					</Button>
-					{/* "script" is the catch-all (eval, unknown commands, unreadable
-					    targets): the daemon refuses a site rule for it. */}
-					{offersSiteRule(request) ? (
-						<Button type="button" variant="ghost" size="sm" disabled={busy} data-approval-allow="" onClick={() => onDecide("allow-site")}>
-							{t("approvals.allowSite", { site: request.site })}
+				{waitingFor ? (
+					<p className="text-caption leading-snug text-muted-foreground" data-testid="approval-waiting">
+						{waitingFor.name ? t("approvals.waitingFor", { name: waitingFor.name }) : t("approvals.waitingForOwner")}
+					</p>
+				) : (
+					<div className="flex flex-wrap justify-end gap-1.5">
+						<Button type="button" variant="secondary" size="sm" disabled={busy} onClick={() => onDecide("deny")}>
+							{t("approvals.deny")}
+							<kbd className="rounded-full bg-foreground/10 px-1.5 py-0.5 font-sans text-caption leading-none text-muted-foreground">
+								Esc
+							</kbd>
 						</Button>
-					) : null}
-					<Button type="button" variant="accent" size="sm" disabled={busy} data-approval-allow="" onClick={() => onDecide("allow-once")}>
-						{t("approvals.allowOnce")}
-					</Button>
-				</div>
+						{offersSiteRule(request) ? (
+							<Button type="button" variant="ghost" size="sm" disabled={busy} data-approval-allow="" onClick={() => onDecide("allow-site")}>
+								{t("approvals.allowSite", { site: request.site })}
+							</Button>
+						) : null}
+						<Button type="button" variant="accent" size="sm" disabled={busy} data-approval-allow="" onClick={() => onDecide("allow-once")}>
+							{t("approvals.allowOnce")}
+						</Button>
+					</div>
+				)}
 			</div>
 		</div>
 	);

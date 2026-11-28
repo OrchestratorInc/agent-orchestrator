@@ -2996,7 +2996,7 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 							className="relative z-chrome flex h-toolbar w-full shrink-0 overflow-hidden"
 							data-testid="session-topbar-host"
 						/>
-						{!session?.cloud && !chatShowsApprovals ? <SessionApprovalDock sessionId={sessionId} hostId={hostId} /> : null}
+						{!chatShowsApprovals ? <SessionApprovalDock sessionId={sessionId} hostId={hostId} cloudOrgId={session?.cloud?.orgId ?? (isCloudRoute ? routeCloudOrgId : undefined)} /> : null}
 						<div
 							className="relative min-h-0 flex-1"
 							data-split-group={shownGroup?.id}

@@ -1,3 +1,4 @@
+import { useTranslation } from "react-i18next";
 import { QueryClientContext, useQueryClient } from "@tanstack/react-query";
 import { useRouterState } from "@tanstack/react-router";
 import { useContext, useState, type CSSProperties } from "react";
@@ -11,6 +12,7 @@ import {
 	type ApprovalDecision,
 	type PendingApproval,
 } from "../../lib/approvals";
+import { useCloudPendingApprovals, useLiveCloudPendingApprovals, useWatchCloudApprovals } from "../../lib/cloud-approvals";
 import { useNavigateToSession } from "../../lib/navigate-to-session";
 import { useUiStore } from "../../stores/ui-store";
 import type { AgentAvatarProps } from "../AgentAvatar";
@@ -19,6 +21,7 @@ import { ApprovalNoticeCard } from "./ApprovalNoticeCard";
 import { ApprovalPrompt } from "./ApprovalPrompt";
 
 function useDecide(request: PendingApproval | undefined) {
+	const { t } = useTranslation();
 	const queryClient = useQueryClient();
 	const [busyId, setBusyId] = useState<string>();
 	const [error, setError] = useState<{ id: string; message: string }>();
@@ -27,7 +30,15 @@ function useDecide(request: PendingApproval | undefined) {
 		setBusyId(request.id);
 		setError(undefined);
 		try {
-			await decideApproval(request.id, decision, queryClient, request.hostId);
+			const outcome = await decideApproval(
+				request.id,
+				decision,
+				queryClient,
+				request.hostId,
+				request.cloud && { ...request.cloud, sessionId: request.sessionId },
+			);
+			// The card leaves either way; without this it would look as if the answer worked.
+			if (outcome === "ended") useUiStore.getState().showGlobalToast(t("approvals.alreadyEnded"));
 		} catch (reason) {
 			setError({ id: request.id, message: reason instanceof Error ? reason.message : String(reason) });
 		} finally {
@@ -45,7 +56,10 @@ function useDecide(request: PendingApproval | undefined) {
 function useSessionApprovals(sessionId: string, hostId: string | undefined) {
 	const local = usePendingApprovals();
 	const remote = useRemotePendingApprovals();
-	return (hostId ? remote : local.data ?? []).filter(
+	// A cloud session's agent browser is gated by AO Cloud; its requests
+	// share the route key of a local session (no host).
+	const cloud = useCloudPendingApprovals();
+	return (hostId ? remote : [...(local.data ?? []), ...cloud]).filter(
 		(request) => request.sessionId === sessionId && (request.hostId ?? undefined) === hostId,
 	);
 }
@@ -55,7 +69,9 @@ function useSessionApprovals(sessionId: string, hostId: string | undefined) {
  * not showing its chat (a terminal, or a file or PR tab over the chat).
  * Requests are answered oldest first.
  */
-export function SessionApprovalDock({ sessionId, hostId }: { sessionId: string; hostId?: string }) {
+export function SessionApprovalDock({ sessionId, hostId, cloudOrgId }: { sessionId: string; hostId?: string; cloudOrgId?: string }) {
+	// A cloud session on screen is read often, whatever the session lists say.
+	useWatchCloudApprovals(hostId ? undefined : cloudOrgId, sessionId);
 	const mine = useSessionApprovals(sessionId, hostId);
 	const request = mine[0];
 	const { decide, busy, error } = useDecide(request);
@@ -110,20 +126,53 @@ const requestKey = (request: PendingApproval) => `${request.hostId ?? ""}/${requ
  * Approval requests from sessions the user is not looking at, so one is never
  * left to time out unseen. It names the session and can open it.
  */
-export function GlobalApprovalCard() {
+export function GlobalApprovalCard({ localReady = true }: { localReady?: boolean } = {}) {
 	// Shell hosts without a query client (some test harnesses) have nothing to show.
-	return useContext(QueryClientContext) ? <GlobalApprovalCardContent /> : null;
+	return useContext(QueryClientContext) ? <GlobalApprovalCardContent localReady={localReady} /> : null;
 }
 
-function GlobalApprovalCardContent() {
+/**
+ * Reads AO Cloud's pending approvals for the whole renderer. Mounted apart
+ * from the approval card, which waits for the local daemon: a cloud session's
+ * request must still be read while this machine's daemon restarts.
+ */
+export function CloudApprovalReader() {
+	return useContext(QueryClientContext) ? <CloudApprovalReaderContent /> : null;
+}
+
+function CloudApprovalReaderContent() {
+	useLiveCloudPendingApprovals();
+	return null;
+}
+
+/**
+ * What the app-wide card may show: only requests the viewer can answer. One
+ * that waits for someone else (a teammate's cloud session) shows only in its
+ * own session's dock, so it never takes the corner or hides the viewer's own.
+ */
+export function answerable(requests: PendingApproval[]): PendingApproval[] {
+	return requests.filter((request) => !request.waitingFor);
+}
+
+/**
+ * localReady: this machine's daemon is up. While it is not, the card reads
+ * nothing from it (nor from remote hosts, which it reaches) and shows only
+ * AO Cloud's requests, which do not depend on it.
+ */
+function GlobalApprovalCardContent({ localReady }: { localReady: boolean }) {
 	// The shell's card holds the one live stream every approval reader shares.
-	const pending = usePendingApprovals({ live: true });
+	const pendingQuery = usePendingApprovals({ live: localReady });
 	// Self-hosted remote hosts gate their agent browsers the same way.
-	const remote = useRemotePendingApprovals({ live: true });
+	const remoteRequests = useRemotePendingApprovals({ live: localReady });
+	// Nothing cached from before the daemon went away is shown as pending.
+	const pending = localReady ? pendingQuery.data ?? [] : [];
+	const remote = localReady ? remoteRequests : [];
+	// AO Cloud gates cloud sessions' agent browsers; CloudApprovalReader reads them.
+	const cloud = useCloudPendingApprovals();
 	const routed = useRoutedSessionKey();
 	const workspaces = useWorkspaceQuery();
 	const navigateToSession = useNavigateToSession();
-	const elsewhere = [...(pending.data ?? []), ...remote].filter((request) => requestKey(request) !== routed);
+	const elsewhere = answerable([...pending, ...remote, ...cloud].filter((request) => requestKey(request) !== routed));
 	const request = elsewhere[0];
 	const { decide, busy, error } = useDecide(request);
 	const placement = useCornerPlacement();

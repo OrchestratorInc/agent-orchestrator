@@ -15,13 +15,6 @@ import (
 	"time"
 )
 
-// Request kinds. KindSavedLogin is the credential vault's first use of a
-// saved login on a site.
-const (
-	KindBrowserAction = "browser-action"
-	KindSavedLogin    = "credential-use"
-)
-
 // DefaultTimeout is how long a request waits for the user before denying.
 const DefaultTimeout = 2 * time.Minute
 

@@ -13,10 +13,19 @@ import { baseUrlForHost, clientForHost, clientForSessionHost, connectedHosts, su
 import { probeRemoteSse } from "./remote-sse-probe";
 import { usesPreviewWorkspaceData } from "./preview-mode";
 import { computeSseRetryDelayMs } from "./sse-backoff";
+import { decideCloudApproval, type CloudApprovalTarget } from "./cloud-approvals";
+import { createRendererCloudCpClient } from "./cloud-cp/renderer-client";
 
 export type PendingApproval = components["schemas"]["ApprovalPendingResponse"] & {
 	/** The remote host whose daemon holds the request; absent for this machine. */
 	hostId?: string;
+	/** Set when AO Cloud holds the request (a cloud session's agent browser). */
+	cloud?: { baseUrl: string; orgId: string };
+	/**
+	 * Set when someone else decides this request (a cloud session only its
+	 * creator may approve): the card shows who it waits for, with no buttons.
+	 */
+	waitingFor?: { name?: string };
 };
 export type ApprovalAuditEntry = components["schemas"]["ApprovalAuditEntryResponse"];
 export type ApprovalPolicy = components["schemas"]["ApprovalPolicyResponse"];
@@ -46,7 +55,16 @@ export async function decideApproval(
 	decision: ApprovalDecision,
 	queryClient: QueryClient,
 	hostId?: string,
-): Promise<void> {
+	cloud?: CloudApprovalTarget,
+): Promise<"decided" | "ended" | void> {
+	if (cloud) {
+		try {
+			// "ended": the request had already ended, so the answer was not used.
+			return await decideCloudApproval(createRendererCloudCpClient(cloud.baseUrl), cloud, id, decision);
+		} finally {
+			await queryClient.invalidateQueries({ queryKey: ["approvals"] });
+		}
+	}
 	const client = hostId ? clientForHost(hostId) : apiClient;
 	const { error } = await client.POST("/api/v1/approvals/{id}/decision", {
 		params: { path: { id } },
@@ -232,6 +250,8 @@ export function usePendingApprovals({ live = false }: { live?: boolean } = {}) {
 		enabled: live,
 		// The stream drives updates; poll only while it is down.
 		refetchInterval: live && !streamLive ? 15_000 : false,
+		// The fallback must keep reading while the window is hidden.
+		refetchIntervalInBackground: true,
 	});
 }
 
@@ -353,6 +373,7 @@ export function useRemotePendingApprovals({ live = false }: { live?: boolean } =
 			queryFn: () => fetchRemotePendingApprovals(hostId),
 			enabled: live && !usesPreviewWorkspaceData,
 			refetchInterval: live && !streaming.includes(hostId) ? REMOTE_FALLBACK_POLL_MS : (false as const),
+			refetchIntervalInBackground: true,
 		})),
 	});
 	return results.flatMap((result) => result.data ?? []);

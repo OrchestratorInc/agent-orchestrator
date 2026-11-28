@@ -1896,6 +1896,67 @@ describe("useBrowserView", () => {
 			}
 		});
 
+		describe("a cloud agent tab streams only while someone can see it", () => {
+			const cloud = { sessionId: "ses-1", cloudAgentBrowser: { baseUrl: "https://cp.example", orgId: "org-1", sessionId: "ses-1" }, poppedOut: false };
+			const cloudViewId = "42:ses-1";
+			const agentTab = (id: string) => ({ id, url: "https://en.wikipedia.org/wiki/Starfish", title: "Starfish", active: id === "a1", remote: { tabId: `R-${id}` } });
+
+			it("opens nothing while the Browser panel is closed, and opens once it is shown", async () => {
+				const browser = setupBridge();
+				vi.spyOn(aoBridge.cloudCp, "agentBrowserUrl").mockResolvedValue(agentUrl);
+				const { rerender } = renderHook((props: { active: boolean }) => useBrowserView({ ...cloud, ...props }), { initialProps: { active: false } });
+				await act(async () => { await new Promise((resolve) => setTimeout(resolve, 20)); });
+				expect(browser.openTab).not.toHaveBeenCalled();
+				rerender({ active: true });
+				await waitFor(() => expect(browser.openTab).toHaveBeenCalledWith({ viewId: cloudViewId, url: agentUrl }));
+			});
+
+			it("never closes the agent's pages when the panel closes or the window is hidden", async () => {
+				let visibility: DocumentVisibilityState = "visible";
+				const spy = vi.spyOn(document, "visibilityState", "get").mockImplementation(() => visibility);
+				try {
+					const browser = setupBridge();
+					vi.spyOn(aoBridge.cloudCp, "agentBrowserUrl").mockResolvedValue(agentUrl);
+					const preview = { id: "t1", url: "http://localhost:3000/", title: "First", active: false };
+					browser.openTab.mockResolvedValue({ viewId: cloudViewId, activeTabId: "a1", tabs: [preview, agentTab("a1"), agentTab("a2")] });
+					const { rerender } = renderHook((props: { active: boolean }) => useBrowserView({ ...cloud, ...props }), { initialProps: { active: true } });
+					await waitFor(() => expect(browser.openTab).toHaveBeenCalled());
+					rerender({ active: false });
+					visibility = "hidden";
+					act(() => { document.dispatchEvent(new Event("visibilitychange")); });
+					await act(async () => { await new Promise((resolve) => setTimeout(resolve, 20)); });
+					// Closing an agent tab would close the agent's own page in its sandbox.
+					expect(browser.closeTab).not.toHaveBeenCalled();
+				} finally {
+					spy.mockRestore();
+				}
+			});
+
+			it("opens nothing while the window is hidden, and opens once it is shown", async () => {
+				let visibility: DocumentVisibilityState = "hidden";
+				const spy = vi.spyOn(document, "visibilityState", "get").mockImplementation(() => visibility);
+				try {
+					const browser = setupBridge();
+					vi.spyOn(aoBridge.cloudCp, "agentBrowserUrl").mockResolvedValue(agentUrl);
+					renderHook(() => useBrowserView({ ...cloud, active: true }));
+					await act(async () => { await new Promise((resolve) => setTimeout(resolve, 20)); });
+					expect(browser.openTab).not.toHaveBeenCalled();
+					visibility = "visible";
+					act(() => { document.dispatchEvent(new Event("visibilitychange")); });
+					await waitFor(() => expect(browser.openTab).toHaveBeenCalledWith({ viewId: cloudViewId, url: agentUrl }));
+				} finally {
+					spy.mockRestore();
+				}
+			});
+
+			it("leaves a remote host's agent browser as it was", async () => {
+				const browser = setupBridge();
+				vi.spyOn(aoBridge.remotes, "agentBrowserUrl").mockResolvedValue(agentUrl);
+				renderHook(() => useBrowserView({ ...remote, active: false }));
+				await waitFor(() => expect(browser.openTab).toHaveBeenCalledWith({ viewId, url: agentUrl }));
+			});
+		});
+
 		it("opens a preview beside the agent tab, never over it", async () => {
 			const browser = setupBridge();
 			vi.spyOn(aoBridge.remotes, "agentBrowserUrl").mockResolvedValue("");

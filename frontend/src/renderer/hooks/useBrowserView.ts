@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import type {
 	BrowserAgentActivityState,
 	BrowserDevToolsPlacement,
@@ -322,6 +322,12 @@ function hiddenByFullscreen(node: HTMLElement): boolean {
  *  session's view was the one on screen. A command that began while the user
  *  was elsewhere and finishes after they switch in is not theirs to reveal. */
 export type ObservedBrowserAgentActivity = BrowserAgentActivityState & { startObserved: boolean };
+
+const subscribePageVisibility = (listener: () => void) => {
+	document.addEventListener("visibilitychange", listener);
+	return () => document.removeEventListener("visibilitychange", listener);
+};
+const pageVisible = () => document.visibilityState !== "hidden";
 
 export function useBrowserView({
 	sessionId,
@@ -1218,6 +1224,15 @@ export function useBrowserView({
 		[hasNativeBrowser, navigate, openTab, selectTab],
 	);
 
+	// A cloud agent tab streams the sandbox's screen for as long as it is open,
+	// which costs the sandbox CPU, memory and bandwidth, so it is only opened
+	// once someone can see it: the Browser panel on screen in a visible window.
+	// It is never closed here when they stop looking: closing an agent tab
+	// closes the agent's own page in the sandbox (closeAgentTab with closePage).
+	// Main pauses the stream of a tab that is off screen instead.
+	const windowVisible = useSyncExternalStore(subscribePageVisibility, pageVisible, () => true);
+	const cloudAgentStreamable = active && windowVisible;
+
 	// A remote or cloud session's agent browser (the host's or sandbox's
 	// Chromium its agent drives, streamed) is part of the session's surface:
 	// main shows it as one tab per agent page. It is derived from the host
@@ -1232,6 +1247,7 @@ export function useBrowserView({
 				? () => aoBridge.cloudCp.agentBrowserUrl(cloudAgentBrowser.baseUrl, cloudAgentBrowser.orgId, cloudAgentBrowser.sessionId)
 				: undefined;
 		if (!hasNativeBrowser || !agentBrowserUrl || !viewId || viewIdRef.current !== viewId || terminated) return;
+		if (cloudAgentBrowser && !cloudAgentStreamable) return;
 		let cancelled = false;
 		let retry = 0;
 		// ponytail: polls every 15 s at most while nothing shows; main could
@@ -1255,7 +1271,7 @@ export function useBrowserView({
 			cancelled = true;
 			window.clearTimeout(retry);
 		};
-	}, [hasNativeBrowser, origin?.hostId, origin?.sessionId, origin?.proxyBase, cloudAgentBrowser?.baseUrl, cloudAgentBrowser?.orgId, cloudAgentBrowser?.sessionId, terminated, viewId]);
+	}, [hasNativeBrowser, origin?.hostId, origin?.sessionId, origin?.proxyBase, cloudAgentBrowser?.baseUrl, cloudAgentBrowser?.orgId, cloudAgentBrowser?.sessionId, cloudAgentStreamable, terminated, viewId]);
 
 	const clear = useCallback(() => {
 		if (!hasNativeBrowser) {
