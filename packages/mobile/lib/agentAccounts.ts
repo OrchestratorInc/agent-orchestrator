@@ -17,6 +17,8 @@ export type AgentAccount = {
 	device?: boolean;
 	orgId?: string;
 	orgName?: string;
+	/** On the CLI's own login: the saved account signed in as the same login. */
+	sameLoginAs?: string;
 	signedIn: boolean;
 	default: boolean;
 	/** An API key account's own name. */
@@ -43,6 +45,19 @@ export function agentAccountProvider(harness?: string): AgentAccountProvider | u
 export function agentAccountName(account: Pick<AgentAccount, "email" | "provider">): string {
 	if (account.email) return account.email;
 	return account.provider === "claude" ? "OAuth token" : "Codex CLI login";
+}
+
+/**
+ * Lists a login once: the CLI's own login and the saved account signed in as
+ * it are one login. `keepId`, the account shown as chosen, stays whichever of
+ * the two it is, and its twin goes.
+ */
+export function oneRowPerLogin<T extends Pick<AgentAccount, "id" | "sameLoginAs">>(accounts: readonly T[], keepId?: string): T[] {
+	const ids = new Set(accounts.map((account) => account.id));
+	const keptTwin = accounts.find((account) => account.id === keepId)?.sameLoginAs;
+	return accounts.filter((account) => account.id === keepId
+		? true
+		: account.id !== keptTwin && !(account.sameLoginAs && ids.has(account.sameLoginAs)));
 }
 
 type LabelPeer = Pick<AgentAccount, "id" | "email" | "orgId" | "orgName">;
@@ -126,8 +141,9 @@ export async function moveSessionAgentAccount(cfg: ServerConfig, sessionId: stri
 	});
 }
 
-/** `mark` draws each row's avatar, given the account. */
-export function agentAccountOptions(accounts: readonly AgentAccount[], mark?: (account: AgentAccount) => PickerOption["mark"], nowMs = Date.now()): PickerOption[] {
+/** `mark` draws each row's avatar, given the account. `keepId` is the account shown as chosen (see `oneRowPerLogin`). */
+export function agentAccountOptions(all: readonly AgentAccount[], keepId?: string, mark?: (account: AgentAccount) => PickerOption["mark"], nowMs = Date.now()): PickerOption[] {
+	const accounts = oneRowPerLogin(all, keepId);
 	return accounts.map((account) => {
 		const usage = account.signedIn ? agentAccountUsageSummary(account, nowMs) : undefined;
 		const detail = [!account.signedIn ? "Signed out" : account.default ? "Default" : undefined, usage].filter(Boolean).join(" · ");

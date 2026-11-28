@@ -6,7 +6,7 @@ vi.mock("expo/fetch", () => ({ fetch: vi.fn() }));
 
 import { createElement } from "react";
 import { act, create, type ReactTestRenderer } from "react-test-renderer";
-import { accountUsageAccessibilityLabel, agentAccountInitial, agentAccountLabel, agentAccountOptions, agentAccountPeakUsage, agentAccountProvider, agentAccountUsageSeverity, agentAccountUsageSummary, getAgentAccounts, getSessionAgentAccount, moveSessionAgentAccount, useAgentAccounts } from "./agentAccounts";
+import { accountUsageAccessibilityLabel, agentAccountInitial, agentAccountLabel, agentAccountOptions, agentAccountPeakUsage, agentAccountProvider, agentAccountUsageSeverity, agentAccountUsageSummary, getAgentAccounts, getSessionAgentAccount, moveSessionAgentAccount, oneRowPerLogin, useAgentAccounts } from "./agentAccounts";
 import { delegateTask, spawnSession } from "./api";
 import type { ServerConfig } from "./config";
 
@@ -59,7 +59,7 @@ describe("agent account usage", () => {
 			{ id: "c1", provider: "claude", email: "a@x.dev", signedIn: true, default: true, limits },
 			{ id: "c2", provider: "claude", email: "b@x.dev", signedIn: true, default: false, limits: { windows: [{ id: "seven_day", label: "Weekly", usedPercent: 91 }] } },
 			{ id: "c3", provider: "claude", email: "c@x.dev", signedIn: false, default: false, limits },
-		], undefined, now);
+		], undefined, undefined, now);
 		expect(options).toEqual([
 			{ id: "c1", title: "a@x.dev", detail: "Default · Session (5h) 42% · Weekly 18%", disabled: false },
 			{ id: "c2", title: "b@x.dev", detail: "Weekly 91%", disabled: false, warn: true },
@@ -87,6 +87,19 @@ describe("agent accounts on mobile", () => {
 		]);
 		expect(await getSessionAgentAccount(cfg, "ao 1", "claude")).toBe("c2");
 		expect(vi.mocked(fetch).mock.calls[1][0]).toBe("http://ao.test:3011/api/v1/agents/accounts/sessions/ao%201");
+	});
+
+	it("lists the CLI's login once when a saved account holds the same login", () => {
+		const limits = { windows: [{ id: "five_hour", label: "Session (5h)", usedPercent: 19 }] };
+		const accounts = [
+			{ id: "device-claude", provider: "claude" as const, device: true, email: "a@x.dev", sameLoginAs: "c1", signedIn: true, default: true, limits },
+			{ id: "c1", provider: "claude" as const, email: "a@x.dev", signedIn: true, default: false, limits },
+			{ id: "c2", provider: "claude" as const, email: "b@x.dev", signedIn: true, default: false },
+		];
+		expect(agentAccountOptions(accounts, "device-claude").map((option) => [option.id, option.title])).toEqual([["device-claude", "a@x.dev"], ["c2", "b@x.dev"]]);
+		expect(agentAccountOptions(accounts, "c1").map((option) => option.id)).toEqual(["c1", "c2"]);
+		expect(agentAccountOptions(accounts).map((option) => option.id)).toEqual(["c1", "c2"]);
+		expect(oneRowPerLogin(accounts, "c2").map((account) => account.id)).toEqual(["c1", "c2"]);
 	});
 
 	it("tells same-email accounts in different organizations apart", () => {

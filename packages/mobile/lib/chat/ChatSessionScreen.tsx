@@ -76,7 +76,7 @@ import { space } from "../tokens";
 import { Button, EmptyState } from "../ui";
 import { backOr } from "../backNavigation";
 import { userFacingError, NOT_PAIRED_ACTION_COPY, RECONNECTING_ACTION_COPY } from "../connectionError";
-import { agentAccountLabel, agentAccountOptions, moveSessionAgentAccount, useAgentAccounts } from "../agentAccounts";
+import { agentAccountLabel, agentAccountOptions, moveSessionAgentAccount, oneRowPerLogin, useAgentAccounts } from "../agentAccounts";
 import { useValueFeed } from "../useValueFeed";
 import { useStillHere } from "../useStillHere";
 import { ARCHIVE_SESSION_CONFIRM } from "../worker-action-model";
@@ -680,10 +680,12 @@ export function ChatSessionScreen({ session: boardSession }: { session: MobileCh
 	const agentAccounts = useAgentAccounts(config, terminated ? undefined : headerHarness, session.id, accountMoving ? undefined : accountMove?.id);
 	const stillHere = useStillHere(`${currentHostId ?? ""}|${session.id}|${config ? JSON.stringify(config) : ""}`, () => navigation.isFocused?.() !== false);
 	const currentAccount = agentAccounts.accounts.find((account) => account.id === agentAccounts.current);
-	const menuAccountName = currentAccount ? agentAccountLabel(currentAccount, agentAccounts.accounts) : undefined;
+	// The CLI's login and the saved account signed in as it are one login: name each against the list the picker shows.
+	const accountPeers = useMemo(() => oneRowPerLogin(agentAccounts.accounts, agentAccounts.current), [agentAccounts.accounts, agentAccounts.current]);
+	const menuAccountName = currentAccount ? agentAccountLabel(currentAccount, accountPeers) : undefined;
 	const menuAccountCanMove = agentAccounts.accounts.some((account) => account.signedIn && account.id !== agentAccounts.current);
 	// The account sheet follows the accounts while it is up (see `AccountPickerEntry`).
-	const accountPicker = useMemo(() => ({ options: agentAccountOptions(agentAccounts.accounts), selected: agentAccounts.current ?? "" }), [agentAccounts.accounts, agentAccounts.current]);
+	const accountPicker = useMemo(() => ({ options: agentAccountOptions(agentAccounts.accounts, agentAccounts.current), selected: agentAccounts.current ?? "" }), [agentAccounts.accounts, agentAccounts.current]);
 	const subscribeAccountPicker = useValueFeed(accountPicker);
 	const limitedTurnId = useMemo(() => conversation.snapshot ? usageLimitedTurn(conversation.snapshot)?.id : undefined, [conversation.snapshot]);
 	const { retryTurn, setTurnAutoResume } = conversation;
@@ -693,9 +695,9 @@ export function ChatSessionScreen({ session: boardSession }: { session: MobileCh
 		setAutoResume: setTurnAutoResume,
 		accountLabel: (accountId) => {
 			const account = agentAccounts.accounts.find((candidate) => candidate.id === accountId);
-			return account ? agentAccountLabel(account, agentAccounts.accounts) : undefined;
+			return account ? agentAccountLabel(account, accountPeers) : undefined;
 		},
-	}), [agentAccounts.accounts, limitedTurnId, retryTurn, setTurnAutoResume]);
+	}), [accountPeers, agentAccounts.accounts, limitedTurnId, retryTurn, setTurnAutoResume]);
 	const menuGroups = useMemo(() => menuReady ? conversationMenuGroups({
 		previewReady,
 		deviceName: menuDeviceName,
@@ -757,7 +759,7 @@ export function ChatSessionScreen({ session: boardSession }: { session: MobileCh
 			void presentSheet({
 				kind: "account-picker",
 				subtitle: "The agent resumes this conversation on the account you choose.",
-				options: agentAccountOptions(accounts),
+				options: agentAccountOptions(accounts, current),
 				selected: current ?? "",
 				subscribe: subscribeAccountPicker,
 				onSelect: (accountId) => {
@@ -766,7 +768,7 @@ export function ChatSessionScreen({ session: boardSession }: { session: MobileCh
 					haptics.warning();
 					Alert.alert(
 						"Stop the turn and move?",
-						`The agent is still working. Orchestrator stops it now and resumes the conversation on ${target ? agentAccountLabel(target, accounts) : "that account"}.`,
+						`The agent is still working. Orchestrator stops it now and resumes the conversation on ${target ? agentAccountLabel(target, oneRowPerLogin(accounts, current)) : "that account"}.`,
 						[
 							{ text: "Cancel", style: "cancel" },
 							{ text: "Stop and move", style: "destructive", onPress: () => move(accountId, true) },
