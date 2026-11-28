@@ -356,7 +356,10 @@ type Job struct {
 	Output              string    `json:"output,omitempty" description:"Combined stdout+stderr from the install command, tail-capped to the last ~4000 bytes. Published while the command runs."`
 	Progress            *Progress `json:"progress,omitempty" description:"While installing, the phase and percentage the installer's output reports. Absent in every other status."`
 	Error               string    `json:"error,omitempty" description:"Set on failure or when the target is unsupported on this machine: the exec error, the Unsupported reason, or a timeout message."`
-	Notice              string    `json:"notice,omitempty" description:"Fixed user-visible consequence to acknowledge before running this install."`
+	// FailureCause is derived from Error and Output and carries none of
+	// their text, so the desktop may send it as analytics.
+	FailureCause FailureCause `json:"failureCause,omitempty" enum:"timeout,not_found_after_install,verify_failed,node_missing,npm_missing,brew_missing,tool_missing,xcode_tools_missing,disk_full,permission_denied,network,locked,exit_nonzero,other" description:"Set only when status is failed: why, from a closed list read from the error and output."`
+	Notice       string       `json:"notice,omitempty" description:"Fixed user-visible consequence to acknowledge before running this install."`
 	// Pointers, not time.Time: omitempty has no effect on a struct, so a bare
 	// time.Time always serializes (as the zero value's "0001-01-01..."
 	// timestamp) even when nothing has happened yet. A nil pointer actually
@@ -1064,6 +1067,27 @@ func (s *Service) TryBeginHarnessUse(harness domain.AgentHarness) (func(), bool)
 	return gate.RUnlock, true
 }
 
+// TryBeginHarnessUseNow lets background recovery skip an active installer
+// without waiting or claiming a stopped session that the installer will resume.
+func (s *Service) TryBeginHarnessUseNow(harness domain.AgentHarness) (func(), bool) {
+	gate := s.harnessGate(harness)
+	if !gate.TryRLock() {
+		return nil, false
+	}
+	s.mu.Lock()
+	job := s.jobs[Target(harness)]
+	installing := job != nil && activeStatus(job.Status) && job.Status != StatusWaitingForIdle
+	s.mu.Unlock()
+	if installing {
+		gate.RUnlock()
+		return nil, false
+	}
+	if IsAgentTarget(Target(harness)) {
+		s.forgetReplacedBinary(Target(harness))
+	}
+	return gate.RUnlock, true
+}
+
 // Status returns the current or last known Job for target. A target that has
 // never been started returns a plan preview: Idle when the daemon can run it,
 // or Unsupported with a manual command/reason when it cannot. An error is
@@ -1323,6 +1347,7 @@ func (s *Service) run(parent context.Context, plan Plan, job *Job) {
 	if ctx.Err() == context.DeadlineExceeded {
 		job.Status = StatusFailed
 		job.Error = fmt.Sprintf("install timed out after %s", s.installTimeout)
+		job.FailureCause = classifyFailure(job.Status, job.Error, job.Output)
 		s.mu.Unlock()
 		return
 	}
@@ -1335,12 +1360,14 @@ func (s *Service) run(parent context.Context, plan Plan, job *Job) {
 	if runErr != nil {
 		job.Status = StatusFailed
 		job.Error = runErr.Error()
+		job.FailureCause = classifyFailure(job.Status, job.Error, job.Output)
 		s.mu.Unlock()
 		return
 	}
 	if !found {
 		job.Status = StatusFailed
 		job.Error = fmt.Sprintf("install command finished but %s is still not in PATH", job.Target)
+		job.FailureCause = classifyFailure(job.Status, job.Error, job.Output)
 		s.mu.Unlock()
 		return
 	}
@@ -1647,6 +1674,7 @@ func (s *Service) transitionAgentJob(job *Job, status Status, output, errorMessa
 	job.Status = status
 	job.Output = combineOutput(job.Output, output)
 	job.Error = errorMessage
+	job.FailureCause = classifyFailure(status, errorMessage, job.Output)
 	if resolvedPath != "" {
 		job.ExpectedDestination = resolvedPath
 	}
@@ -1662,6 +1690,7 @@ func (s *Service) finishAgentJob(job *Job, status Status, output, errorMessage, 
 	job.Status = status
 	job.Output = combineOutput(job.Output, output)
 	job.Error = errorMessage
+	job.FailureCause = classifyFailure(status, errorMessage, job.Output)
 	if resolvedPath != "" {
 		job.ExpectedDestination = resolvedPath
 	}
@@ -1681,6 +1710,7 @@ func (s *Service) finishAgentJob(job *Job, status Status, output, errorMessage, 
 		s.mu.Lock()
 		job.Status = StatusFailed
 		job.Error = fmt.Sprintf("persist terminal operation state: %v", err)
+		job.FailureCause = FailureOther
 		s.mu.Unlock()
 		return
 	}
@@ -1729,6 +1759,8 @@ func jobFromRecord(record ports.AgentInstallJobRecord) Job {
 		Command: record.Command, ExpectedDestination: record.ExpectedDestination,
 		Output: record.Output, Error: record.Error, StartedAt: &startedAt,
 		FinishedAt: record.FinishedAt, UpdatedAt: &updatedAt,
+		// Not stored: read again from the error and output it came from.
+		FailureCause: classifyFailure(Status(record.Status), record.Error, record.Output),
 	}
 }
 

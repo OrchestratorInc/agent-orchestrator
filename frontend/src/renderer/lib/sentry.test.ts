@@ -104,6 +104,14 @@ it("reports a broken onboarding action as an error titled by action and reason",
 	expect(capture.mock.calls.at(-1)?.[0].tags).not.toHaveProperty("target");
 });
 
+it("tags a failed onboarding install with its cause", () => {
+	captureOnboardingFailureToSentry("agent_install", "install_failed", "codex", "npm_missing");
+	expect(capture.mock.calls.at(-1)?.[0].tags).toMatchObject({ code: "agent_install:install_failed", target: "codex", cause: "npm_missing" });
+	// Only an install failure has one.
+	captureOnboardingFailureToSentry("agent_install", "lost_contact", "codex", "npm_missing");
+	expect(capture.mock.calls.at(-1)?.[0].tags).not.toHaveProperty("cause");
+});
+
 it("does not report onboarding setup states", () => {
 	for (const reason of ["not_signed_in", "unsupported", "documentation"] as const) captureOnboardingFailureToSentry("agent_sign_in", reason);
 	expect(capture).not.toHaveBeenCalled();

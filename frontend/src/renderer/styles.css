@@ -2141,7 +2141,6 @@ textarea,
 	width: calc(100% / 1.8);
 	margin-left: calc(100% * 0.775 / 1.8);
 	overflow: hidden;
-	text-overflow: ellipsis;
 	white-space: nowrap;
 	/* Tinted toward the working blue at low strength, like the row's spinner, so a
 	   working title reads apart from an idle one without a row fill. */
@@ -2162,6 +2161,65 @@ textarea,
 	.sidebar-working-shimmer {
 		display: none;
 	}
+}
+
+/* Sidebar session titles: one line with no ellipsis. A title that doesn't fit
+   (useTitleMarquee sets data-overflow) fades out at its right edge; while the
+   row is hovered, after about 1.5s, it slides to its end and back in a
+   loop, fading the left edge once the start has moved out. Leaving the row
+   drops the animation, so the title snaps straight back to its start. The
+   working shimmer's copy carries its own track and moves in step. */
+@property --session-title-fade-start {
+	syntax: "<length>";
+	inherits: false;
+	initial-value: 0px;
+}
+
+@property --session-title-fade-end {
+	syntax: "<length>";
+	inherits: false;
+	initial-value: 24px;
+}
+
+.session-title {
+	overflow: hidden;
+	white-space: nowrap;
+}
+
+.session-title-track {
+	display: inline-block;
+	white-space: nowrap;
+}
+
+.session-title[data-overflow] {
+	/* A soft ease that is already moving at the start, so the slide reads at
+	   once instead of creeping out of a full ease-in. */
+	--session-title-ease: cubic-bezier(0.35, 0.15, 0.65, 0.85);
+	mask-image: linear-gradient(to right, transparent 0, #000 var(--session-title-fade-start), #000 calc(100% - var(--session-title-fade-end)), transparent 100%);
+}
+
+/* Only with motion allowed: under reduced motion the title keeps its static
+   fade and never slides. */
+@media (prefers-reduced-motion: no-preference) {
+	.group\/session-row:is(:hover, :has(:focus-visible)) .session-title[data-overflow] {
+		animation: session-title-fade var(--marquee-duration) var(--session-title-ease) var(--marquee-delay) infinite alternate both;
+	}
+
+	.group\/session-row:is(:hover, :has(:focus-visible)) .session-title[data-overflow] .session-title-track {
+		animation: session-title-scroll var(--marquee-duration) var(--session-title-ease) var(--marquee-delay) infinite alternate both;
+	}
+}
+
+@keyframes session-title-scroll {
+	0%, 12% { translate: 0; }
+	88%, 100% { translate: calc(-1 * var(--marquee-distance)); }
+}
+
+@keyframes session-title-fade {
+	0%, 12% { --session-title-fade-start: 0px; --session-title-fade-end: 24px; }
+	24% { --session-title-fade-start: 16px; }
+	76% { --session-title-fade-end: 24px; }
+	88%, 100% { --session-title-fade-start: 16px; --session-title-fade-end: 0px; }
 }
 
 /* Project → session tree rail. A muted spine drops from under the project
@@ -8129,6 +8187,13 @@ html[data-new-desktop-ui] [role="menu"]:not(:has(> [role="menuitem"]:not([aria-h
 	display: none;
 }
 
+/* Stay Awake's switch row wraps its icon in a span, which the rule above
+ * doesn't reach; drop it too so the Mobile menu is words only. Its paused
+ * warning still shows as the row's red second line and on the footer icon. */
+html[data-new-desktop-ui] [role="menu"] [data-awake-menu-icon] {
+	display: none;
+}
+
 /* The menu's edge: a slight hairline so the panel holds its shape over any
  * surface; the overlay border token is too faint to read on its own. */
 html[data-new-desktop-ui] [role="menu"] {
@@ -8146,7 +8211,8 @@ html[data-new-desktop-ui] [role="menu"] :is([role="menuitem"], [role="menuitemch
 
 /* A destructive row under the pointer takes a soft red fill instead, so the
  * row reads as a warning before it runs. */
-html[data-new-desktop-ui] [role="menu"] .text-destructive:is(:focus, [data-highlighted]):not([data-disabled]) {
+/* Same selector shape as the fill rule above, so this one outranks it. */
+html[data-new-desktop-ui] [role="menu"] :is([role="menuitem"], [role="menuitemcheckbox"], [role="menuitemradio"]).text-destructive:is(:focus, [data-highlighted]):not([data-disabled], .settings-menu-surface [class*="before:absolute"]) {
 	background-color: color-mix(in oklab, var(--destructive) 22%, transparent);
 	color: color-mix(in oklab, var(--destructive) 75%, var(--foreground));
 }
