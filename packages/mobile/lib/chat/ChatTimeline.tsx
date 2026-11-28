@@ -44,7 +44,7 @@ import { userMessageSurfaceStyle } from "./chatChrome";
 import { MenuRowWidthScope, useMenuRowWidth } from "../useMenuRowWidth";
 import { requestPresentation } from "./chatPresentation";
 import { workingElapsedLabel } from "./conversationChrome";
-import { errorActivityDuplicatesTurn, providerErrorCopy } from "./providerError";
+import { errorActivityDuplicatesTurn, providerErrorCopy, turnErrorCopy } from "./providerError";
 import { ElicitationAction, ElicitationActionRow } from "./elicitation-native-controls";
 import { primaryDecisionId } from "./approvalDecisions";
 import { ElicitationInputField } from "./ElicitationInputField";
@@ -732,7 +732,8 @@ const ConversationTurnGroup = memo(function ConversationTurnGroup({ group, sessi
 	// A stretch a later steer cut off is not where the turn ends: its actions,
 	// diff and plan draw once, under the last stretch.
 	const endsTurn = group.endsTurn !== false;
-	const summary = group.turn && endsTurn ? <TurnSummary turn={group.turn} plan={group.plan} /> : null;
+	const replyText = turnError ? [...items].reverse().find((item): item is ConversationMessage => item.kind === "message" && item.role === "assistant")?.text : undefined;
+	const summary = group.turn && endsTurn ? <TurnSummary turn={group.turn} plan={group.plan} replyText={replyText} /> : null;
 	if (!partition || !group.turn) return <View>{renderRows(items)}{summary}</View>;
 	const reply = partition.final.find((item): item is ConversationMessage => item.kind === "message");
 	const actions = endsTurn ? <TurnActions turn={group.turn} reply={reply} onRollback={canRollBack ? onRollback : undefined} onFork={onFork} /> : null;
@@ -1354,7 +1355,7 @@ function TurnStatusRow({ turn, foldable, open, onToggle }: { turn: ConversationT
 	</Pressable>;
 }
 
-function TurnSummary({ turn, plan }: { turn: ConversationTurn; plan?: ConversationPlan }) {
+function TurnSummary({ turn, plan, replyText }: { turn: ConversationTurn; plan?: ConversationPlan; replyText?: string }) {
 	const styles = useThemedStyles(makeStyles);
 	// The deliverables a completed turn made show as tiles; every other changed
 	// file stays in the changed-files card, so nothing shows twice or goes
@@ -1372,9 +1373,37 @@ function TurnSummary({ turn, plan }: { turn: ConversationTurn; plan?: Conversati
 			{results.artifacts.length && source ? <TurnArtifacts artifacts={results.artifacts} source={source} /> : null}
 			{results.files.length ? <ChangedFiles turn={turn} changed={results.files} /> : null}
 			{usageLimited ? <UsageLimitNotice turn={usageLimited} /> : null}
-			{turn.errorMessage && !usageLimited ? <Text style={styles.turnError}>{turn.errorMessage}</Text> : null}
+			{turn.errorMessage && !usageLimited ? <TurnErrorBlock error={turn.errorMessage} replyText={replyText} /> : null}
 		</View>
 	);
+}
+
+/**
+ * A failed turn's error, as desktop draws it: the provider's failure is
+ * code-like, so it sits in a quiet mono block spanning the turn. When the
+ * provider's own sentence can be read out of a transport dump, that sentence
+ * leads and the dump folds under Details.
+ */
+function TurnErrorBlock({ error, replyText }: { error: string; replyText?: string }) {
+	const t = useTheme();
+	const styles = useThemedStyles(makeStyles);
+	const feedback = usePressFeedback("row");
+	const [open, setOpen] = useState(false);
+	const copy = useMemo(() => turnErrorCopy(error, replyText), [error, replyText]);
+	return <View style={styles.turnErrorWrap}>
+		{copy.headline ? <Text selectable style={styles.turnErrorHeadline}>{copy.headline}</Text> : null}
+		{copy.folded ? <Pressable
+			accessibilityRole="button"
+			accessibilityState={{ expanded: open }}
+			onPress={() => setOpen((value) => !value)}
+			android_ripple={feedback.android_ripple}
+			style={({ pressed }) => [styles.turnErrorToggle, pressed && feedback.pressed]}
+		>
+			<Text style={styles.turnErrorToggleLabel}>Details</Text>
+			<FoldChevron open={open} color={t.textTertiary} />
+		</Pressable> : null}
+		{!copy.folded || open ? <CodeOutput value={copy.raw} /> : null}
+	</View>;
 }
 
 function ChangedFiles({ turn, changed }: { turn: ConversationTurn; changed: DiffFile[] }) {
@@ -1748,7 +1777,10 @@ const makeStyles = (t: Theme) => {
 		// Even-width digits, so the ticking timer doesn't shift as it counts.
 		turnTimer: { fontVariant: ["tabular-nums"] },
 		turnState: { fontFamily: "DMSans_500Medium", color: t.textTertiary, fontSize: type.footnote.fontSize, lineHeight: type.footnote.lineHeight, fontWeight: "500" },
-		turnError: { fontFamily: "DMSans_400Regular", color: t.red, fontSize: type.footnote.fontSize, lineHeight: type.footnote.lineHeight, textAlign: "right" },
+		turnErrorWrap: { gap: space.xs },
+		turnErrorHeadline: { fontFamily: "DMSans_400Regular", color: t.textPrimary, fontSize: type.footnote.fontSize, lineHeight: type.footnote.lineHeight },
+		turnErrorToggle: { flexDirection: "row", alignItems: "center", alignSelf: "flex-start", gap: space.xxs, minHeight: touchTarget },
+		turnErrorToggleLabel: { fontFamily: "DMSans_400Regular", color: t.textTertiary, fontSize: type.footnote.fontSize },
 		planCard: { ...card, backgroundColor: t.bgSurface, borderColor: t.borderDefault, overflow: "hidden" },
 		planHeader: { minHeight: touchTarget, flexDirection: "row", alignItems: "center", gap: space.sm, paddingHorizontal: space.md },
 		changedHeader: { flexDirection: "row", alignItems: "center", paddingRight: space.sm },
