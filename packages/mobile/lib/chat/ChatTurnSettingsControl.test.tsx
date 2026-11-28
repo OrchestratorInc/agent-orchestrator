@@ -62,6 +62,7 @@ vi.mock("react-native", () => ({
 }));
 vi.mock("../toolbarIcon.android", () => ({ materialDrawable: (name: string) => `drawable:${name}` }));
 vi.mock("../effort-gauge", () => ({ EffortGaugeButton: "EffortGaugeButton" }));
+vi.mock("../effort-slider", () => ({ EffortSliderOverlay: "EffortSliderOverlay" }));
 vi.mock("../haptics", () => ({ haptics: { select: fixtures.select } }));
 vi.mock("../ThemeProvider", () => ({
 	useTheme: () => fixtures.theme,
@@ -69,6 +70,7 @@ vi.mock("../ThemeProvider", () => ({
 }));
 
 import { ChatTurnSettingsControl } from "./ChatTurnSettingsControl";
+import { createEffortSliderSwitch, type EffortSliderSwitch } from "../useEffortSlider";
 
 const snapshot = (over: Partial<ConversationSnapshot> = {}): ConversationSnapshot => ({
 	conversationId: "c",
@@ -113,13 +115,13 @@ const levels = [{ value: "low", label: "Low", selected: true }, { value: "high",
 
 type OtherAgents = NonNullable<Parameters<typeof ChatTurnSettingsControl>[0]["otherAgents"]>;
 
-function render(over: { snapshot?: ConversationSnapshot; models?: ChatModel[]; options?: ChatConfigOption[]; disabled?: boolean; effort?: { choices: typeof levels; open: boolean; onToggle(): void } | null; otherAgents?: OtherAgents } = {}) {
+function render(over: { snapshot?: ConversationSnapshot; models?: ChatModel[]; options?: ChatConfigOption[]; disabled?: boolean; effort?: { choices: typeof levels; slider: EffortSliderSwitch } | null; otherAgents?: OtherAgents } = {}) {
 	const handlers = {
 		onSettings: vi.fn(() => Promise.resolve()),
 		onOption: vi.fn(() => Promise.resolve([] as ChatConfigOption[])),
-		onToggleEffort: vi.fn(),
+		slider: createEffortSliderSwitch(),
 	};
-	const effort = over.effort === null ? undefined : over.effort ?? { choices: levels, open: false, onToggle: handlers.onToggleEffort };
+	const effort = over.effort === null ? undefined : over.effort ?? { choices: levels, slider: handlers.slider };
 	act(() => {
 		renderer = create(<ChatTurnSettingsControl snapshot={over.snapshot ?? snapshot()} models={over.models ?? models} options={over.options ?? [fast]} disabled={over.disabled} onSettings={handlers.onSettings} onOption={handlers.onOption} effort={effort} otherAgents={over.otherAgents} />);
 	});
@@ -150,16 +152,20 @@ describe("Android chat controls row", () => {
 
 	// The speedometer lit to the level, which opens the composer's slider.
 	it("draws the effort's speedometer, which opens the composer's slider", () => {
-		const { onToggleEffort } = render();
+		const { slider } = render();
 		expect(gauge().props.disabled).toBe(false);
+		expect(gauge().props.open).toBe(false);
 		act(() => gauge().props.onPress());
-		expect(onToggleEffort).toHaveBeenCalledOnce();
+		expect(slider.isOpen()).toBe(true);
+		expect(gauge().props.open).toBe(true);
+		act(() => gauge().props.onPress());
+		expect(slider.isOpen()).toBe(false);
 	});
 
 	it("draws no speedometer for a model that takes no effort", () => {
 		render({ effort: null });
 		expect(gauge()).toBeUndefined();
-		render({ effort: { choices: [], open: false, onToggle: () => {} } });
+		render({ effort: { choices: [], slider: createEffortSliderSwitch() } });
 		expect(gauge()).toBeUndefined();
 	});
 

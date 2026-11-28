@@ -36,7 +36,7 @@ import { ComposerGlass, composerGlassSupported } from "./composer-glass";
 import { COMPOSER_DISC, COMPOSER_FIELD_HEIGHT, COMPOSER_FONT_SCALE_CAP, COMPOSER_HEIGHT, COMPOSER_RADIUS, composerStyleRules, useComposerFieldSize } from "./composerStyles";
 import { ChatTurnSettingsControl } from "./ChatTurnSettingsControl";
 import type { ChatTurnSettingsControlProps } from "./ChatTurnSettingsControl.types";
-import { EffortSliderOverlay } from "../effort-slider";
+import { EffortSliderHost } from "../effort-slider-host";
 import { useChatEffort } from "./useChatEffort";
 import { compactCount } from "../files/model";
 import { composerDeliveryPresentation, composerDeliveryRoute, composerPrimaryAction, hardwareReturnIntent, type ComposerDeliveryIntent } from "./composerDeliveryModel";
@@ -273,13 +273,6 @@ function Composer({
 	const [localError, setLocalError] = useState<string>();
 	const [submitting, setSubmitting] = useState(false);
 	const [focused, setFocused] = useState(false);
-	// The pill's height, for the effort slider floating over it. A percentage
-	// `bottom` resolves against the pill's content box, which leaves out its
-	// padding, and sat the slider that far down over the pill's top edge.
-	// State only while the slider is open: the height changes every frame the
-	// pill animates, and each change re-rendered the composer.
-	const [pillHeight, setPillHeight] = useState(0);
-	const latestPillHeight = useRef(0);
 	// Return on a hardware keyboard: typing carries on in the field after the send.
 	const keyboardSend = useKeyboardSendRefocus(inputRef, submitting);
 	const [promotingQueuedTurnId, setPromotingQueuedTurnId] = useState<string>();
@@ -616,7 +609,6 @@ function Composer({
 	}, []);
 	const settingsProps = { snapshot, models, options: configOptions ?? NO_OPTIONS, disabled: disabled || stopped || pending || submitting, onSettings, onOption: onConfigOption };
 	const effort = useChatEffort(settingsProps);
-	useEffect(() => { if (effort.open) setPillHeight(latestPillHeight.current); }, [effort.open]);
 	// Typing is a tap outside the slider that the keyboard, not the app, hears.
 	const closeEffort = effort.close;
 	useEffect(() => { closeEffort(); }, [text, closeEffort]);
@@ -872,10 +864,12 @@ function Composer({
 			/> : null}
 			{/* The field spans the pill between its two controls, so a touch on the
 			    pill focuses it and the pill opens. */}
-			{requestCard ?? <View style={[styles.composer, stopped && styles.inactive]} onLayout={(event) => {
-				latestPillHeight.current = event.nativeEvent.layout.height;
-				if (effort.open) setPillHeight(latestPillHeight.current);
-			}}>
+			{/* The pill's height goes to the effort slider floating over it, through
+			    its switch, so a change re-renders the slider, not the composer. A
+			    percentage `bottom` resolves against the pill's content box, which
+			    leaves out its padding, and sat the slider that far down over the
+			    pill's top edge. */}
+			{requestCard ?? <View style={[styles.composer, stopped && styles.inactive]} onLayout={(event) => effort.slider.setBottom(event.nativeEvent.layout.height)}>
 				<ComposerGlass radius={COMPOSER_RADIUS} />
 				{quotes.length ? <ScrollView style={styles.quotes} keyboardShouldPersistTaps="handled">
 					{quotes.map((quote) => <View key={quote.id} style={styles.quote}>
@@ -929,7 +923,7 @@ function Composer({
 				    drawn when the row opens rather than appearing partway through. */}
 				<Animated.View pointerEvents={expanded ? "box-none" : "none"} style={[styles.controlsRow, { paddingLeft: CORNER_CONTROL, paddingRight: CORNER_CONTROL }, controlsOpening]}>
 					<View style={styles.settingsSlot}>
-						<ChatTurnSettingsControl {...settingsProps} otherAgents={otherAgents} effort={{ choices: effort.choices, open: effort.open, onToggle: effort.toggle }} />
+						<ChatTurnSettingsControl {...settingsProps} otherAgents={otherAgents} effort={{ choices: effort.choices, slider: effort.slider }} />
 					</View>
 					{steerAction}
 				</Animated.View>
@@ -941,7 +935,7 @@ function Composer({
 					{roundButton}
 				</View>
 				{/* The effort slider floats just above the pill, over the conversation. */}
-				{effort.open && pillHeight ? <EffortSliderOverlay choices={effort.choices} onChoose={effort.choose} onRelease={effort.release} bottom={pillHeight} /> : null}
+				<EffortSliderHost slider={effort.slider} choices={effort.choices} busy={effort.busy} onChoose={effort.choose} onRelease={effort.commit} onClose={effort.commit} />
 			</View>}
 		</Animated.View>
 	);

@@ -18,9 +18,8 @@ import { useEffect, useState, type ReactNode } from "react";
 import { StyleSheet, View } from "react-native";
 import { logoKey } from "./harnessLogo";
 import { hasMenuIcon } from "./harnessMenuIcons";
-import { EffortGaugeButton } from "./effort-gauge";
-import { EffortSliderOverlay } from "./effort-slider";
-import { useEffortSliderOpen } from "./useEffortSlider";
+import { EffortSliderGauge, EffortSliderHost } from "./effort-slider-host";
+import { useEffortSliderSwitch } from "./useEffortSlider";
 import { ApprovalMenu, Choice, controlsRowTypeSize, ModelCapsuleLabel, useTriggerModifiers } from "./model-controls.ios";
 import { SpawnComposer } from "./spawn-composer";
 import type { SpawnComposerControlsProps, SpawnComposerOption } from "./spawn-composer-controls.types";
@@ -77,10 +76,12 @@ export function SpawnComposerControls({
 }: SpawnComposerControlsProps) {
 	const t = useTheme();
 	const { scheme } = useThemeState();
-	const effortSlider = useEffortSliderOpen(effortChoices, busy);
-	const [composerHeight, setComposerHeight] = useState(0);
+	// Whether the effort slider is open, and the composer's height it floats
+	// above, live in its switch: opening it re-renders the gauge and the slider,
+	// not this whole form.
+	const effortSlider = useEffortSliderSwitch();
 	// Typing is a tap outside the slider that the keyboard, not the app, hears.
-	useEffect(() => { effortSlider.close(); }, [prompt, effortSlider.close]);
+	useEffect(() => { effortSlider.setOpen(false); }, [prompt, effortSlider]);
 	const selectedProject = projects.find((project) => project.id === projectId);
 	const hostLabel = hosts.find((host) => host.id === hostId)?.label ?? "Choose machine";
 	const projectLabel = selectedProject?.label ?? "Choose project";
@@ -167,9 +168,9 @@ export function SpawnComposerControls({
 			</Host>
 
 			{/* The effort slider floats just above the composer, over the rows. */}
-			{effortSlider.open ? <EffortSliderOverlay choices={effortChoices} onChoose={onSelectEffort} bottom={composerHeight} /> : null}
+			<EffortSliderHost slider={effortSlider} choices={effortChoices} busy={busy} onChoose={onSelectEffort} />
 
-			<View onLayout={(event) => setComposerHeight(event.nativeEvent.layout.height)}>
+			<View onLayout={(event) => effortSlider.setBottom(event.nativeEvent.layout.height)}>
 				<SpawnComposer
 					prompt={prompt}
 					attachments={attachments}
@@ -221,7 +222,7 @@ export function SpawnComposerControls({
 								    opens the effort slider above the composer. */}
 								{effortChoices.length ? (
 									<RNHostView matchContents>
-										<EffortGaugeButton choices={effortChoices} open={effortSlider.open} onPress={effortSlider.toggle} disabled={busy} testID="spawn-effort" />
+										<EffortSliderGauge slider={effortSlider} choices={effortChoices} disabled={busy} testID="spawn-effort" />
 									</RNHostView>
 								) : null}
 								<Spacer minLength={0} />

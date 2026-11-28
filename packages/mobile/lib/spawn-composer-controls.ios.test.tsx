@@ -107,6 +107,9 @@ const baseProps = (overrides: Partial<Props> = {}): Props => ({
 
 async function render(props: Props) {
 	await act(async () => { renderer = create(<SpawnComposerControls {...props} />); });
+	// The composer lays out as on a phone: the effort slider floats that high.
+	const composer = renderer!.root.findAll((node) => typeof node.type === "string" && typeof node.props.onLayout === "function")[0];
+	await act(async () => composer.props.onLayout({ nativeEvent: { layout: { x: 0, y: 0, width: 360, height: 120 } } }));
 	return renderer!.root;
 }
 

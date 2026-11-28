@@ -10,17 +10,20 @@ const fixtures = vi.hoisted(() => ({
 	midGlide: false,
 	glides: [] as number[],
 	setOptions: vi.fn(),
+	os: "ios",
 }));
 
 vi.mock("expo-router", () => ({ useNavigation: () => ({ setOptions: fixtures.setOptions }) }));
 
 vi.mock("./ThemeProvider", () => ({ useTheme: () => fixtures.theme, useThemedStyles: (make: (theme: object) => object) => make(fixtures.theme) }));
 vi.mock("./haptics", () => ({ haptics: { detent: fixtures.detent } }));
+vi.mock("./AppSymbol", () => ({ AppSymbol: "AppSymbol" }));
+vi.mock("./effort-slider-veil", () => ({ EffortSliderVeil: "EffortSliderVeil" }));
 vi.mock("./useReducedMotion", () => ({ useReducedMotion: () => fixtures.reduceMotion }));
 vi.mock("react-native", async () => {
 	const React = await import("react");
 	const host = (name: string) => ({ children, ...props }: { children?: React.ReactNode }) => React.createElement(name, props, children);
-	return { BackHandler: { addEventListener: () => ({ remove: () => {} }) }, StyleSheet: { create: (styles: object) => styles }, Text: host("Text"), View: host("View") };
+	return { BackHandler: { addEventListener: () => ({ remove: () => {} }) }, Platform: { get OS() { return fixtures.os; } }, StyleSheet: { create: (styles: object) => styles }, Text: host("Text"), View: host("View") };
 });
 // The pan's builder keeps its callbacks, so a test can play a drag through them.
 vi.mock("react-native-gesture-handler", async () => {
@@ -70,7 +73,7 @@ import { markTouchInside } from "./touchOutside";
 const levels = (selected?: string) => ["low", "medium", "high", "xhigh", "max"].map((value) => ({ value, label: value[0].toUpperCase() + value.slice(1), selected: value === selected }));
 
 let renderer: ReactTestRenderer | undefined;
-beforeEach(() => { fixtures.detent.mockClear(); fixtures.setOptions.mockClear(); fixtures.midGlide = false; fixtures.glides = []; });
+beforeEach(() => { fixtures.detent.mockClear(); fixtures.setOptions.mockClear(); fixtures.midGlide = false; fixtures.glides = []; fixtures.os = "ios"; });
 afterEach(() => { act(() => renderer?.unmount()); renderer = undefined; });
 
 const hostType = (node: ReactTestInstance): string => (typeof node.type === "string" ? node.type : "");
@@ -99,7 +102,7 @@ async function render(selected?: string) {
 		track,
 		pan,
 		drag,
-		label: () => root.findAll((node) => hostType(node) === "Text")[0].props.children,
+		label: () => root.findAll((node) => hostType(node) === "Text" && node.props.testID === "effort-slider-value")[0].props.children,
 		blobCentre,
 		onChoose,
 		onRelease,
@@ -159,7 +162,11 @@ describe("effort slider", () => {
 
 	it("keeps its own touches from counting as a tap outside it", async () => {
 		await act(async () => { renderer = create(<EffortSliderOverlay choices={levels("high")} onChoose={() => {}} bottom="100%" />); });
-		expect(renderer!.root.findAll((node) => hostType(node) === "AnimatedView")[0].props.onTouchStart).toBe(markTouchInside);
+		const overlay = renderer!.root.findAll((node) => hostType(node) === "AnimatedView")[0];
+		expect(overlay.props.onTouchStart).toBe(markTouchInside);
+		// A touch on the chat beside the card, or through the veil, is outside it.
+		expect(overlay.props.pointerEvents).toBe("box-none");
+		expect(overlay.findAll((node) => hostType(node) === "EffortSliderVeil")).toHaveLength(1);
 	});
 
 	it("holds the screen's back swipe while it is up, so a drag to the right stays on the slider", async () => {
@@ -170,6 +177,40 @@ describe("effort slider", () => {
 		expect(fixtures.setOptions.mock.calls.at(-1)).toEqual([{ gestureEnabled: true }]);
 	});
 
+	// The option is iOS's alone, and setting it re-renders the whole screen
+	// under the slider as it opens.
+	it("leaves the screen's options alone on Android, which has no back swipe to hold", async () => {
+		fixtures.os = "android";
+		await act(async () => { renderer = create(<EffortSliderOverlay choices={levels("low")} onChoose={() => {}} bottom="100%" />); });
+		await act(async () => renderer!.unmount());
+		renderer = undefined;
+		expect(fixtures.setOptions).not.toHaveBeenCalled();
+	});
+
+	it("heads the track with what it sets, then the level it is on, kept from screen readers", async () => {
+		await render("medium");
+		const texts = renderer!.root.findAll((node) => hostType(node) === "Text").map((node) => node.props.children);
+		expect(texts).toEqual(["Effort", "Medium"]);
+		const heading = renderer!.root.findAll((node) => hostType(node) === "View" && node.props.importantForAccessibility === "no-hide-descendants")[0];
+		expect(heading.findAll((node) => hostType(node) === "AppSymbol")[0].props.name).toBe("chevronForward");
+	});
+
+	// Kept mounted between opens: hidden, it takes no touch, reads to no
+	// screen reader, and leaves the screen's back swipe alone.
+	it("takes no touches and holds nothing while hidden", async () => {
+		await act(async () => { renderer = create(<EffortSliderOverlay visible={false} choices={levels("low")} onChoose={() => {}} bottom="100%" />); });
+		const overlay = () => renderer!.root.findAll((node) => hostType(node) === "AnimatedView")[0];
+		expect(overlay().props.pointerEvents).toBe("none");
+		expect(overlay().props.onTouchStart).toBeUndefined();
+		expect(overlay().props.importantForAccessibility).toBe("no-hide-descendants");
+		expect(fixtures.setOptions).not.toHaveBeenCalled();
+		await act(async () => renderer!.update(<EffortSliderOverlay visible choices={levels("low")} onChoose={() => {}} bottom="100%" />));
+		expect(overlay().props.pointerEvents).toBe("box-none");
+		expect(fixtures.setOptions.mock.calls).toEqual([[{ gestureEnabled: false }]]);
+		await act(async () => renderer!.update(<EffortSliderOverlay visible={false} choices={levels("low")} onChoose={() => {}} bottom="100%" />));
+		expect(fixtures.setOptions.mock.calls.at(-1)).toEqual([{ gestureEnabled: true }]);
+	});
+
 	it("steps a level at a time for a screen reader, and stops at the ends", async () => {
 		const { track, onChoose } = await render("xhigh");
 		expect(track().props.accessibilityRole).toBe("adjustable");
@@ -177,5 +218,44 @@ describe("effort slider", () => {
 		await act(async () => track().props.onAccessibilityAction({ nativeEvent: { actionName: "increment" } }));
 		await act(async () => track().props.onAccessibilityAction({ nativeEvent: { actionName: "increment" } }));
 		expect(onChoose.mock.calls.map(([value]) => value)).toEqual(["max"]);
+	});
+
+	// Kept mounted across model changes; a model with fewer levels, or none,
+	// must not read past them before the slider catches up.
+	it("survives the choices shrinking under a kept level, and re-places the blob", async () => {
+		const { label, blobCentre } = await render("max");
+		expect(label()).toBe("Max");
+		const two = [{ value: "low", label: "Low", selected: false }, { value: "high", label: "High", selected: true }];
+		await act(async () => renderer!.update(<EffortSlider choices={two} onChoose={() => {}} />));
+		expect(label()).toBe("High");
+		// Two stops on the 240 track: 20 and 220.
+		expect(blobCentre()).toBe(220);
+		await act(async () => renderer!.update(<EffortSlider choices={[]} onChoose={() => {}} />));
+		expect(label()).toBe("Default");
+	});
+
+	it("re-places the blob when the level count changes under the same index", async () => {
+		const { blobCentre } = await render("medium");
+		// Index 1 of five on the 240 track sits at 70.
+		expect(blobCentre()).toBe(70);
+		const three = [{ value: "low", label: "Low", selected: false }, { value: "medium", label: "Medium", selected: true }, { value: "high", label: "High", selected: false }];
+		await act(async () => renderer!.update(<EffortSlider choices={three} onChoose={() => {}} />));
+		expect(blobCentre()).toBe(120);
+	});
+
+	// Kept mounted between opens; a pick whose save failed leaves the chosen
+	// level where it was, and the next open must show that level, not the pick.
+	it("goes back to the chosen level each time it is put away", async () => {
+		const props = { choices: levels("low"), onChoose: () => {}, bottom: "100%" as const };
+		await act(async () => { renderer = create(<EffortSliderOverlay visible {...props} />); });
+		const root = renderer!.root;
+		const label = () => root.findAll((node) => hostType(node) === "Text" && node.props.testID === "effort-slider-value")[0].props.children;
+		const track = () => root.findAll((node) => hostType(node) === "View" && node.props.testID === "effort-slider")[0];
+		await act(async () => track().props.onAccessibilityAction({ nativeEvent: { actionName: "increment" } }));
+		expect(label()).toBe("Medium");
+		await act(async () => renderer!.update(<EffortSliderOverlay visible={false} {...props} />));
+		expect(label()).toBe("Low");
+		await act(async () => renderer!.update(<EffortSliderOverlay visible {...props} />));
+		expect(label()).toBe("Low");
 	});
 });

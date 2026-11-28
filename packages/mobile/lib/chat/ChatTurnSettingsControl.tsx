@@ -4,7 +4,7 @@ import { useState } from "react";
 import { ComposerControlsRow, HarnessMark, KEEP_KEYBOARD, MenuRow, ModelCapsuleMenu, SUBMENU, useCloseMenuOnBack } from "../composeMenu.android";
 import { defaultModelChoice } from "../spawnModel";
 import { AUTOMATIC_MODEL } from "../agentSwitch";
-import { EffortGaugeButton } from "../effort-gauge";
+import { EffortSliderGauge } from "../effort-slider-host";
 import { haptics } from "../haptics";
 import { useTheme } from "../ThemeProvider";
 import { materialDrawable } from "../toolbarIcon.android";
@@ -190,7 +190,7 @@ export function ChatTurnSettingsControl({ snapshot, models, options, disabled, o
 			}
 			// The effort as a speedometer lit to the chosen level; a tap opens the
 			// slider over the composer.
-			effort={effort?.choices.length ? <EffortGaugeButton choices={effort.choices} open={effort.open} onPress={() => { close(); effort.onToggle(); }} disabled={off} testID="chat-effort" /> : null}
+			effort={effort?.choices.length ? <EffortSliderGauge slider={effort.slider} choices={effort.choices} onPress={close} disabled={off} testID="chat-effort" /> : null}
 			// The approval mode as its symbol alone; the menu and TalkBack name it.
 			end={approvalRow ? (
 				<DropdownMenu expanded={openMenu === "approval"} properties={KEEP_KEYBOARD} onDismissRequest={close} color={t.bgElevated}>

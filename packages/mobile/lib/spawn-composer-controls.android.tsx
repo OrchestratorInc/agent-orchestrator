@@ -13,9 +13,8 @@ import { fillMaxWidth, padding, semantics, testID } from "@expo/ui/jetpack-compo
 import { Fragment, useEffect, useState, type ReactNode } from "react";
 import { StyleSheet, View } from "react-native";
 import { ComposerControlsRow, HarnessMark, KEEP_KEYBOARD, MenuRow, ModelCapsuleMenu, SUBMENU, useCloseMenuOnBack } from "./composeMenu.android";
-import { EffortGaugeButton } from "./effort-gauge";
-import { EffortSliderOverlay } from "./effort-slider";
-import { useEffortSliderOpen } from "./useEffortSlider";
+import { EffortSliderGauge, EffortSliderHost } from "./effort-slider-host";
+import { useEffortSliderSwitch } from "./useEffortSlider";
 import { haptics } from "./haptics";
 import { SpawnComposer } from "./spawn-composer";
 import type { SpawnComposerControlsProps, SpawnComposerOption } from "./spawn-composer-controls.types";
@@ -84,10 +83,12 @@ export function SpawnComposerControls({
 	const [openAgent, setOpenAgent] = useState<string | null>(null);
 	const [olderOpen, setOlderOpen] = useState<string | null>(null);
 	const close = () => { setOpenMenu(null); setOpenAgent(null); setOlderOpen(null); };
-	const effortSlider = useEffortSliderOpen(effortChoices, busy);
-	const [composerHeight, setComposerHeight] = useState(0);
+	// Whether the effort slider is open, and the composer's height it floats
+	// above, live in its switch: opening it re-renders the gauge and the slider,
+	// not this whole form.
+	const effortSlider = useEffortSliderSwitch();
 	// Typing is a tap outside the slider that the keyboard, not the app, hears.
-	useEffect(() => { effortSlider.close(); }, [prompt, effortSlider.close]);
+	useEffect(() => { effortSlider.setOpen(false); }, [prompt, effortSlider]);
 	useCloseMenuOnBack(Boolean(openMenu), close);
 	const selectedProject = projects.find((project) => project.id === projectId);
 	const hostLabel = hosts.find((host) => host.id === hostId)?.label ?? "Choose machine";
@@ -164,9 +165,9 @@ export function SpawnComposerControls({
 			</Host>
 
 			{/* The effort slider floats just above the composer, over the rows. */}
-			{effortSlider.open ? <EffortSliderOverlay choices={effortChoices} onChoose={onSelectEffort} bottom={composerHeight} /> : null}
+			<EffortSliderHost slider={effortSlider} choices={effortChoices} busy={busy} onChoose={onSelectEffort} />
 
-			<View onLayout={(event) => setComposerHeight(event.nativeEvent.layout.height)}>
+			<View onLayout={(event) => effortSlider.setBottom(event.nativeEvent.layout.height)}>
 				<SpawnComposer
 					prompt={prompt}
 					attachments={attachments}
@@ -248,7 +249,7 @@ export function SpawnComposerControls({
 							}
 							// The effort as a speedometer lit to the chosen level; a tap
 							// opens the effort slider above the composer.
-							effort={effortChoices.length ? <EffortGaugeButton choices={effortChoices} open={effortSlider.open} onPress={() => { close(); effortSlider.toggle(); }} disabled={busy} testID="spawn-effort" /> : null}
+							effort={effortChoices.length ? <EffortSliderGauge slider={effortSlider} choices={effortChoices} onPress={close} disabled={busy} testID="spawn-effort" /> : null}
 							// The approval mode as its symbol alone, as the chat's; the menu
 							// and TalkBack name it.
 							end={

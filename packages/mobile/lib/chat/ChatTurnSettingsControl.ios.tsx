@@ -5,7 +5,7 @@ import { useState } from "react";
 import { StyleSheet } from "react-native";
 import { haptics } from "../haptics";
 import { approvalSymbol } from "../approvalSymbol";
-import { EffortGaugeButton } from "../effort-gauge";
+import { EffortSliderGauge } from "../effort-slider-host";
 import { ApprovalMenu, Choice, controlsRowTypeSize, ModelCapsuleLabel, useTriggerModifiers } from "../model-controls.ios";
 import { HarnessImage } from "../spawn-composer-controls.ios";
 import { defaultModelChoice } from "../spawnModel";
@@ -123,7 +123,7 @@ export function ChatTurnSettingsControl({ snapshot, models, options, disabled, o
 				    opens the slider over the composer. */}
 				{effort?.choices.length ? (
 					<RNHostView matchContents>
-						<EffortGaugeButton choices={effort.choices} open={effort.open} onPress={effort.onToggle} disabled={off} testID="chat-effort" />
+						<EffortSliderGauge slider={effort.slider} choices={effort.choices} disabled={off} testID="chat-effort" />
 					</RNHostView>
 				) : null}
 				<Spacer minLength={0} />
