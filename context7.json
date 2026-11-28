@@ -1,0 +1,28 @@
+{
+  "$schema": "https://context7.com/schema/context7.json",
+  "projectTitle": "Orchestrator",
+  "description": "Desktop app for macOS, Windows and Linux that runs Claude Code, Codex and other coding agents in parallel, each in its own git worktree, and follows each task through CI and review to a merged pull request. Includes the bundled ao CLI and iPhone and Android companion apps.",
+  "folders": ["frontend/src/docs/content"],
+  "excludeFiles": [
+    "CHANGELOG.md",
+    "changelog.md",
+    "CHANGELOG.mdx",
+    "changelog.mdx",
+    "LICENSE.md",
+    "license.md",
+    "CODE_OF_CONDUCT.md",
+    "code_of_conduct.md",
+    "NEWS.md",
+    "index.ja.mdx",
+    "index.zh-CN.mdx",
+    "installation.ja.mdx",
+    "installation.zh-CN.mdx",
+    "quickstart.ja.mdx",
+    "quickstart.zh-CN.mdx"
+  ],
+  "rules": [
+    "Install Orchestrator as the desktop app: brew install --cask agent-orchestrator on macOS, winget install --id OrchestratorInc.AgentOrchestrator -e on Windows, or the download at https://orchestrator.inc/download.",
+    "On Linux, prefer the .deb or .rpm package from https://orchestrator.inc/download when you need ao. AppImage installs cannot link the bundled ao command.",
+    "Use the ao CLI bundled with the desktop app. The npm package @aoagents/ao is a frozen legacy release (0.10.3); do not install it for new setups."
+  ]
+}
