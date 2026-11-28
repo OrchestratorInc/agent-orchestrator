@@ -1,6 +1,6 @@
 import type { DashboardPR, DashboardSession, SessionPRSummary } from "./api";
 import { prResolvedLifecycle, prReviewPromptHeadline, type PRLifecycle, type Tone } from "./prView";
-import { leadOrdered, PR_GLYPHS, PR_TONES, workerRowPullRequest, type WorkerRowPullRequest } from "./workerRowPullRequest";
+import { leadOrdered, PR_GLYPHS, PR_TONES, withTrackedMerges, workerRowPullRequest, type TrackedMergeOf, type WorkerRowPullRequest } from "./workerRowPullRequest";
 
 /**
  * Every pull request a session raised, for its chip and the list the chip
@@ -35,10 +35,8 @@ export type SessionPullRequests = {
 };
 
 type SummaryFor = (number: number) => SessionPRSummary | undefined;
-/** A merge the phone started on this pull request, if any (see prMergeTracker). */
-type MergeOf = (pr: DashboardPR) => "merging" | "merged" | "failed" | undefined;
-
 const MERGING: PullRequestRow["status"] = { text: "Merging…", tone: "merged" };
+const MERGED: PullRequestRow["status"] = { text: "Merged", tone: "merged" };
 
 /** The session's real pull requests (a number above zero), in lead order. */
 export function sessionPullRequests(session: Pick<DashboardSession, "pr" | "prs">): DashboardPR[] {
@@ -71,24 +69,30 @@ export function pullRequestRows(prs: readonly DashboardPR[], summaryFor: Summary
 /**
  * Undefined for a session with no pull request, which shows no chip. A merge
  * the phone started shows before the board or the summaries agree: one running
- * says "Merging…", and a finished one reads merged at once.
+ * says "Merging…" and leads, as on the board's pill, and a finished one reads
+ * merged at once.
  */
-export function sessionPullRequestModel(session: Pick<DashboardSession, "pr" | "prs">, summaryFor: SummaryFor, mergeOf: MergeOf = () => undefined): SessionPullRequests | undefined {
+export function sessionPullRequestModel(session: Pick<DashboardSession, "pr" | "prs">, summaryFor: SummaryFor, mergeOf?: TrackedMergeOf): SessionPullRequests | undefined {
 	const list: DashboardPR[] = session.prs?.length ? session.prs : session.pr ? [session.pr] : [];
-	const merged = new Set(list.filter((pr) => pr && pr.state !== "merged" && pr.state !== "closed" && mergeOf(pr) === "merged").map((pr) => pr.number));
-	const tracked = merged.size ? { prs: list.map((pr) => merged.has(pr.number) ? { ...pr, state: "merged" as const } : pr) } : session;
-	const trackedSummaryFor: SummaryFor = merged.size ? (number) => {
-		const summary = summaryFor(number);
-		return summary && merged.has(number) ? { ...summary, state: "merged" } : summary;
-	} : summaryFor;
-	const prs = sessionPullRequests(tracked);
-	const badge = workerRowPullRequest(tracked);
+	const tracked = withTrackedMerges(list, mergeOf);
+	// The pull requests the phone merged, by object: two in different
+	// repositories can share a number, and only the merged one changes.
+	const finished = new Set(tracked.filter((pr, index) => pr !== list[index]));
+	const prs = sessionPullRequests({ prs: tracked });
+	const badge = workerRowPullRequest({ prs: tracked }, mergeOf);
 	if (prs.length === 0 || !badge) return undefined;
-	const rows = pullRequestRows(prs, trackedSummaryFor).map((row) => mergeOf(row.pr) === "merging"
-		? { ...row, status: MERGING, accessibilityLabel: row.title === "Pull request" ? `Pull request ${row.number}, ${MERGING.text}` : `Pull request ${row.number}, ${row.title}, ${MERGING.text}` }
-		: row);
-	const model: SessionPullRequests = { lead: badge.lead, leadSummary: trackedSummaryFor(badge.lead.number), badge, rows };
-	return mergeOf(badge.lead) === "merging" ? { ...model, leadMerging: true } : model;
+	const rows = pullRequestRows(prs, summaryFor).map((row) => finished.has(row.pr)
+		? withStatus({ ...row, lifecycle: "merged", glyph: PR_GLYPHS.merged, glyphTone: PR_TONES.merged }, MERGED)
+		: mergeOf?.(row.pr) === "merging" ? withStatus(row, MERGING) : row);
+	// Summaries are read by number; only the lead's is read here, and it is the merged one when it changed.
+	const summary = summaryFor(badge.lead.number);
+	const leadSummary = summary && finished.has(badge.lead) ? { ...summary, state: "merged" as const } : summary;
+	return { lead: badge.lead, leadSummary, badge, rows, ...(badge.merging ? { leadMerging: true } : {}) };
+}
+
+function withStatus(row: PullRequestRow, status: PullRequestRow["status"]): PullRequestRow {
+	const loaded = row.title !== "Pull request";
+	return { ...row, status, accessibilityLabel: loaded ? `Pull request ${row.number}, ${row.title}, ${status.text}` : `Pull request ${row.number}, ${status.text}` };
 }
 
 /** What the session's ⋯ menu "Pull requests" does: one PR's review, or the list. */

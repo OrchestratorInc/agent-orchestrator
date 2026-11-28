@@ -14,8 +14,8 @@ import { useTheme, useThemedStyles } from "./ThemeProvider";
 import { workerRowIndicator, type WorkerRowIndicator, type WorkerRowMarker } from "./workerRowMarker";
 import Animated, { useAnimatedStyle, useSharedValue, withSequence, withSpring, withTiming } from "react-native-reanimated";
 import { useReducedMotion } from "./useReducedMotion";
-import { withTrackedMerge, workerRowAccessibilityLabel, workerRowPullRequest, type WorkerRowPullRequest } from "./workerRowPullRequest";
-import { prMergeKey, usePRMerge } from "./prMergeTracker";
+import { workerRowAccessibilityLabel, workerRowPullRequest, type WorkerRowPullRequest } from "./workerRowPullRequest";
+import { prMergeKey, usePRMerges } from "./prMergeTracker";
 import { textSelectionColors } from "./textSelection";
 import { workerContextActions, type WorkerActionId } from "./worker-action-model";
 import { WorkerRowActions } from "./worker-row-actions";
@@ -105,9 +105,9 @@ export const WorkerListRow = memo(
 	// live one's number, in its own lifecycle's colour and glyph.
 	// A merge started from the PR page shows here too: the user leaves that
 	// page for this board while it runs.
-	const observedPR = workerRowPullRequest(session);
-	const mergeKey = observedPR?.lead.url ? prMergeKey(sessionHostId(session) ?? hostId, observedPR.lead.url) : undefined;
-	const pr = withTrackedMerge(observedPR, usePRMerge(mergeKey)?.status);
+	const merges = usePRMerges();
+	const mergeHost = sessionHostId(session) ?? hostId;
+	const pr = workerRowPullRequest(session, (item) => item.url ? merges.get(prMergeKey(mergeHost, item.url))?.status : undefined);
 	// When the worker last changed, the time the board orders it by; `nowBucket`
 	// re-renders the row as the minute turns.
 	const updated = relativeTime(eventAtOf(session));

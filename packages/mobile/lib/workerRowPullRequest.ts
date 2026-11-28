@@ -46,12 +46,34 @@ export function leadOrdered(prs: readonly DashboardPR[]): DashboardPR[] {
 	return [...prs].sort((a, b) => LEAD_ORDER[prLifecycle(a)] - LEAD_ORDER[prLifecycle(b)] || b.number - a.number);
 }
 
-/** Null for a worker with no pull request. */
-export function workerRowPullRequest(session: Pick<DashboardSession, "pr" | "prs">): WorkerRowPullRequest | null {
-	const list: DashboardPR[] = session.prs?.length ? session.prs : session.pr ? [session.pr] : [];
+/** A merge the phone started on a pull request, if any (see prMergeTracker). */
+export type TrackedMergeOf = (pr: DashboardPR) => "merging" | "merged" | "failed" | undefined;
+
+const live = (pr: DashboardPR) => prLifecycle(pr) === "open" || prLifecycle(pr) === "draft";
+
+/**
+ * The pull requests with the merges the phone finished laid over them: each
+ * reads merged before the board's next poll says so. The others are the same
+ * objects, so a caller can tell which ones changed.
+ */
+export function withTrackedMerges(prs: readonly DashboardPR[], mergeOf?: TrackedMergeOf): DashboardPR[] {
+	if (!mergeOf) return [...prs];
+	return prs.map((pr) => pr?.number > 0 && live(pr) && mergeOf(pr) === "merged" ? { ...pr, state: "merged" as const, isDraft: false } : pr);
+}
+
+/**
+ * Null for a worker with no pull request. With `mergeOf`, the merges the phone
+ * started show before the board agrees: a finished one reads merged, and one
+ * still running leads the pill, in the merged hue, so it names the pull
+ * request being merged rather than calling another one merging.
+ */
+export function workerRowPullRequest(session: Pick<DashboardSession, "pr" | "prs">, mergeOf?: TrackedMergeOf): WorkerRowPullRequest | null {
+	const list = withTrackedMerges(session.prs?.length ? session.prs : session.pr ? [session.pr] : [], mergeOf);
 	const real = list.filter((pr) => pr?.number > 0);
 	if (real.length === 0) return null;
-	const lead = leadOrdered(real)[0];
+	const ordered = leadOrdered(real);
+	const merging = mergeOf ? ordered.find((pr) => live(pr) && mergeOf(pr) === "merging") : undefined;
+	const lead = merging ?? ordered[0];
 	const lifecycle = prLifecycle(lead);
 	const more = real.length - 1;
 	const counts = new Map<PRLifecycle, number>();
@@ -71,8 +93,9 @@ export function workerRowPullRequest(session: Pick<DashboardSession, "pr" | "prs
 		more,
 		moreTone: moreToneOf(counts),
 		moreLifecycles,
-		tone: PR_TONES[lifecycle],
-		glyph: PR_GLYPHS[lifecycle],
+		tone: merging ? PR_TONES.merged : PR_TONES[lifecycle],
+		glyph: merging ? PR_GLYPHS.merged : PR_GLYPHS[lifecycle],
+		...(merging ? { merging: true } : {}),
 	};
 }
 
@@ -83,18 +106,6 @@ function moreToneOf(counts: Map<PRLifecycle, number>): Tone | null {
 	if (counts.has("open")) return PR_TONES.open;
 	if (counts.has("draft")) return PR_TONES.draft;
 	return PR_TONES.merged;
-}
-
-/**
- * The pill with a merge the phone started laid over it: one still running
- * reads "Merging…" in the merged hue, and a finished one reads merged before
- * the board's next poll says so.
- */
-export function withTrackedMerge(pr: WorkerRowPullRequest | null, status: "merging" | "merged" | "failed" | undefined): WorkerRowPullRequest | null {
-	if (!pr || (pr.lifecycle !== "open" && pr.lifecycle !== "draft")) return pr;
-	if (status === "merging") return { ...pr, tone: PR_TONES.merged, glyph: PR_GLYPHS.merged, merging: true };
-	if (status === "merged") return { ...pr, lifecycle: "merged", tone: PR_TONES.merged, glyph: PR_GLYPHS.merged };
-	return pr;
 }
 
 const INDICATOR_WORDS: Record<Exclude<WorkerRowIndicator, null | "attention">, string> = {

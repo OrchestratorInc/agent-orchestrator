@@ -878,6 +878,18 @@ describe("the pull request pill on a row", () => {
 		act(() => renderer.unmount());
 	});
 
+	// Two open PRs: #15 leads, but the merge started from the PR list is #12's.
+	it("names a non-lead pull request on the pill while its merge runs", () => {
+		const url15 = "https://github.test/acme/tracker/pull/15";
+		const url12 = "https://github.test/acme/tracker/pull/12";
+		void trackPRMerge(prMergeKey(undefined, url12), () => new Promise<void>(() => {}));
+		const renderer = render({ prs: [{ number: 15, state: "open", url: url15 }, { number: 12, state: "open", url: url12 }] as never });
+		const text = renderer.root.findByProps({ testID: "worker-pr-pill" }).findAllByType("Text" as never);
+		expect(text[0].props.children[0]).toBe("#12 · Merging…");
+		expect(text[1].props.children).toBe(" +1");
+		act(() => renderer.unmount());
+	});
+
 	// A merge on another machine's pull request with the same number is not this one.
 	it("leaves the pill alone for a merge on another machine", () => {
 		const url = "https://github.test/acme/tracker/pull/15";

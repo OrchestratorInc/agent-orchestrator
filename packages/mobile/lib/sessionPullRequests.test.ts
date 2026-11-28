@@ -115,6 +115,24 @@ describe("sessionPullRequestModel with merges the phone started", () => {
 		expect(model.leadMerging).toBeUndefined();
 	});
 
+	// A session can raise PRs in several repositories: app#12 merging is not lib#12.
+	it("marks only the pull request that merged, not another with the same number", () => {
+		const app = { ...pr(12, "open"), url: "https://forge.test/acme/app/pull/12" } as DashboardPR;
+		const lib = { ...pr(12, "open"), url: "https://forge.test/acme/lib/pull/12" } as DashboardPR;
+		const model = sessionPullRequestModel({ prs: [app, lib] }, () => undefined, (p) => (p.url === app.url ? "merged" : undefined))!;
+		expect(model.rows.find((row) => row.pr.url === lib.url)).toMatchObject({ lifecycle: "open" });
+		expect(model.rows.find((row) => row.pr.url === app.url)).toMatchObject({ lifecycle: "merged", status: { text: "Merged", tone: "merged" } });
+		expect(model.lead.url).toBe(lib.url);
+	});
+
+	// The chip names the PR being merged, as the board's pill does.
+	it("leads with a pull request being merged although another would lead", () => {
+		const model = sessionPullRequestModel({ prs: [pr(15, "open"), pr(12, "open")] }, () => undefined, (p) => (p.number === 12 ? "merging" : undefined))!;
+		expect(model.lead.number).toBe(12);
+		expect(model.leadMerging).toBe(true);
+		expect(model.rows.find((row) => row.number === 15)!.status.text).not.toBe("Merging…");
+	});
+
 	it("leaves the model as it was for a failed merge or none", () => {
 		const plain = sessionPullRequestModel({ prs: [lead] }, summaries);
 		expect(sessionPullRequestModel({ prs: [lead] }, summaries, () => "failed")).toEqual(plain);
