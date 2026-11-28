@@ -534,7 +534,11 @@ func (c *commandContext) serviceInstall(ctx context.Context, opts serviceOptions
 				return serviceStatus{}, fmt.Errorf("%w; rollback also failed, so %s was kept for `ao service uninstall`: %w", cause, spec.File, err)
 			}
 		}
-		_ = os.Remove(spec.File)
+		// Remove only the file this attempt wrote: a concurrent install may
+		// have replaced it meanwhile.
+		if current, err := os.ReadFile(spec.File); err == nil && string(current) == content {
+			_ = os.Remove(spec.File)
+		}
 		return serviceStatus{}, cause
 	}
 	switch spec.Manager {

@@ -526,7 +526,11 @@ func (c *commandContext) waitServeReady(ctx context.Context, cfg config.Config, 
 			return nil, daemonExitedError(exitErr, cfg.DataDir, logPath)
 		default:
 		}
-		st, err := c.inspectDaemon(ctx)
+		// One deadline bounds the probe, the sleep and the success check.
+		remaining := deadline.Sub(c.deps.Now())
+		pctx, cancel := context.WithTimeout(ctx, max(remaining, time.Millisecond))
+		st, err := c.inspectDaemon(pctx)
+		cancel()
 		if err != nil {
 			return nil, err
 		}
@@ -545,7 +549,7 @@ func (c *commandContext) waitServeReady(ctx context.Context, cfg config.Config, 
 		}
 		// Another daemon that won a concurrent start is just as good: it
 		// serves the same data dir.
-		if st.State == stateReady {
+		if st.State == stateReady && c.deps.Now().Before(deadline) {
 			if err := checkDaemonDataDir(st, cfg.DataDir); err != nil {
 				return nil, err
 			}
@@ -559,7 +563,7 @@ func (c *commandContext) waitServeReady(ctx context.Context, cfg config.Config, 
 			}
 			return nil, fmt.Errorf("daemon did not become ready within %s (last state %s); see %s", timeout, detail, logPath)
 		}
-		c.deps.Sleep(200 * time.Millisecond)
+		c.deps.Sleep(min(200*time.Millisecond, deadline.Sub(c.deps.Now())))
 	}
 }
 

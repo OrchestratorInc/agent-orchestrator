@@ -973,3 +973,27 @@ func TestStopLosingChildSkipsExitedChild(t *testing.T) {
 		t.Fatalf("killed=%t after %s; want an immediate return", killed, time.Since(start))
 	}
 }
+
+// A daemon that only becomes ready after the deadline is a timeout: one
+// deadline bounds the probe, the sleep and the success check.
+func TestServeTimeoutAppliesBeforeAcceptingReady(t *testing.T) {
+	cfg := setConfigEnv(t)
+	srv := fakeServeDaemon(t, 5151)
+	now := time.Unix(1000, 0)
+	_, _, err := executeCLI(t, Deps{
+		Executable:   func() (string, error) { return "/opt/ao/bin/ao", nil },
+		ProcessAlive: func(pid int) bool { return pid == 5151 },
+		Now:          func() time.Time { return now },
+		Sleep: func(d time.Duration) {
+			// The daemon becomes ready, but only once the deadline has passed.
+			now = now.Add(2 * time.Second)
+			_ = runfile.Write(cfg.runFile, runfile.Info{PID: 5151, Port: serverPort(t, srv.URL), StartedAt: time.Unix(100, 0).UTC()})
+		},
+		StartDetached: func(processStartConfig) (startedProcess, error) {
+			return startedProcess{PID: 5151, Exited: make(chan error)}, nil
+		},
+	}, "serve", "--timeout", "1s")
+	if err == nil || !strings.Contains(err.Error(), "did not become ready within 1s") {
+		t.Fatalf("err = %v, want a timeout for a daemon ready only after the deadline", err)
+	}
+}

@@ -1413,3 +1413,35 @@ func TestShellQuoteIsLiteral(t *testing.T) {
 		t.Fatalf("shellQuote = %s", got)
 	}
 }
+
+// A failed fresh install removes only the file it wrote: a concurrent
+// install that replaced it keeps its unit.
+func TestServiceRollbackKeepsUnitReplacedConcurrently(t *testing.T) {
+	setConfigEnv(t)
+	setServiceHome(t)
+	t.Setenv("XDG_CONFIG_HOME", "")
+	old := serviceGOOS
+	serviceGOOS = "linux"
+	t.Cleanup(func() { serviceGOOS = old })
+	deps := systemdDeps(t, nil, nil)
+	spec, err := (&commandContext{deps: deps.withDefaults()}).currentServiceSpec(0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	other := "# " + serviceMarker + "\n# written by a concurrent install\n"
+	inner := deps.CommandOutput
+	deps.CommandOutput = func(ctx context.Context, name string, args ...string) ([]byte, error) {
+		if name == "systemctl" && len(args) > 1 && args[1] == "daemon-reload" {
+			// Another install replaces the unit, then this one's reload fails.
+			_ = os.WriteFile(spec.File, []byte(other), 0o600)
+			return []byte("Failed to connect to bus"), errors.New("exit status 1")
+		}
+		return inner(ctx, name, args...)
+	}
+	if _, _, err := executeCLI(t, deps, "service", "install", "--no-wait"); err == nil {
+		t.Fatal("install succeeded although daemon-reload failed")
+	}
+	if got, err := os.ReadFile(spec.File); err != nil || string(got) != other {
+		t.Fatalf("the concurrent install's unit was removed or changed (err %v): %q", err, got)
+	}
+}
