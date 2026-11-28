@@ -39,6 +39,7 @@ import {
 	useConversationConfigOptions,
 	useConversationModels,
 	useConversationSkills,
+	useAttachmentLeases,
 	useProviderSwitchCommand,
 	useStageAttachments,
 	useWorkspaceFilePaths,
@@ -448,7 +449,10 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 		rememberChatSkills(snapshot.harness, hostId, skills, session.workspaceId);
 	}, [hostId, session.kind, session.workspaceId, skills, skillsSettled, snapshot?.harness]);
 	const { paths, truncated, isLoading: filePathsLoading } = useWorkspaceFilePaths(session.id, Boolean(snapshot) && !session.needsResume, hostId);
-	const stageAttachments = useStageAttachments(session.id, hostId, !sessionIsActive(session));
+	// Files picked into a draft are leased to it, so a removed chip or a
+	// discarded draft frees its stored copies; a sent one keeps them.
+	const stageAttachments = useStageAttachments(session.id, hostId, !sessionIsActive(session), true);
+	const updateAttachmentLeases = useAttachmentLeases(session.id, hostId);
 	// Applied once: the chat below unmounts while the conversation reloads, and
 	// a request still held would scroll it back to the same message on return.
 	const annotationNavigation = useChatNavigationRequest<{ id: string; text: string; snapshot?: import("../../../shared/chat-excerpt").ChatExcerptSnapshot; messageId?: string; revision?: number; activitySequence?: number }>(uiSessionId);
@@ -500,6 +504,7 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 		},
 		() => useUiStore.getState().setInspectorOpen(uiSessionId, false),
 		sideCreationEnabled,
+		updateAttachmentLeases,
 	);
 	useEffect(() => { if (sideChatContainer) sideChats.show(); }, [sideChatContainer]);
 	const sideChatsPresent = sideChats.loaded ? sideChats.sides.length > 0 : undefined;
@@ -957,6 +962,7 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 				filePathsLoading={filePathsLoading}
 				localEchos={localEchos}
 				onStageAttachments={sessionIsActive(session) || commands.resumingAgent ? stageAttachments : undefined}
+				onUpdateAttachmentLeases={updateAttachmentLeases}
 				nativeImages={can(renderSnapshot, "images")}
 				// Gated on what the daemon advertises, so the control is never drawn for a
 				// harness that cannot steer. The refusal check stays as a backstop: it

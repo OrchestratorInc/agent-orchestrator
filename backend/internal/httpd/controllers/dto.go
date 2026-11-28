@@ -813,6 +813,25 @@ type StageSessionAttachmentsRequest struct {
 	// Attachments each carry their bytes as standard base64 (no data: URL
 	// prefix) or name an upload. The same count and blocked-type rules as spawn apply.
 	Attachments []AttachmentInput `json:"attachments"`
+	// Draft leases the files to an unsent draft: a file no accepted message
+	// names is deleted once the draft releases it or stops renewing it. Omitted,
+	// files are kept until the session is deleted.
+	Draft bool `json:"draft,omitempty"`
+}
+
+// UpdateSessionAttachmentLeasesRequest gives up and keeps draft-staged files.
+type UpdateSessionAttachmentLeasesRequest struct {
+	// Release names staged paths the draft no longer holds. A path an accepted
+	// message names, or one staged without a lease, is never deleted.
+	Release []string `json:"release,omitempty"`
+	// Renew names staged paths the draft still holds, so they do not expire.
+	Renew []string `json:"renew,omitempty"`
+}
+
+// UpdateSessionAttachmentLeasesResponse reports renewed paths that are gone.
+type UpdateSessionAttachmentLeasesResponse struct {
+	// Missing lists the renewed paths that no longer have a stored file.
+	Missing []string `json:"missing"`
 }
 
 // StageSessionAttachmentsResponse is where the files were written.

@@ -5138,6 +5138,10 @@ func (m *Manager) ReconcileBackground(ctx context.Context) (resultErr error) {
 		}
 	}
 	m.startupTaskPreparations = nil
+	// Finish draft-attachment reclaims a previous run released or let expire.
+	if err := m.ReclaimChatAttachments(ctx); err != nil {
+		m.logger.Warn("reconcile: staged chat attachments could not be reclaimed", "error", err)
+	}
 	for _, interrupted := range m.startupProvisioningRetries {
 		id := interrupted.ID
 		rec, ok, err := m.store.GetSession(ctx, id)

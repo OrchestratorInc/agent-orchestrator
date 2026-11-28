@@ -469,6 +469,8 @@ var schemaNames = map[string]string{ //nolint:gosec // Public OpenAPI type names
 	"ControllersAttachmentUploadResponse":                 "AttachmentUploadResponse",
 	"ControllersStageSessionAttachmentsRequest":           "StageSessionAttachmentsRequest",
 	"ControllersStageSessionAttachmentsResponse":          "StageSessionAttachmentsResponse",
+	"ControllersUpdateSessionAttachmentLeasesRequest":     "UpdateSessionAttachmentLeasesRequest",
+	"ControllersUpdateSessionAttachmentLeasesResponse":    "UpdateSessionAttachmentLeasesResponse",
 	"ControllersAttachmentInput":                          "AttachmentInput",
 	"ControllersListWorkspaceFilesResponse":               "ListWorkspaceFilesResponse",
 	"ControllersWorkspaceManifestResponse":                "WorkspaceManifestResponse",
@@ -4098,6 +4100,19 @@ func sessionOperations() []operation {
 			reqBody:    controllers.StageSessionAttachmentsRequest{},
 			resps: []respUnit{
 				{http.StatusCreated, controllers.StageSessionAttachmentsResponse{}},
+				{http.StatusBadRequest, envelope.APIError{}},
+				{http.StatusNotFound, envelope.APIError{}},
+				{http.StatusInternalServerError, envelope.APIError{}},
+				{http.StatusNotImplemented, envelope.APIError{}},
+			},
+		},
+		{
+			method: http.MethodPost, path: "/api/v1/sessions/{sessionId}/attachments/leases", id: "updateSessionAttachmentLeases", tag: "sessions",
+			summary:    "Release or renew files staged for an unsent chat draft",
+			pathParams: []any{controllers.SessionIDParam{}},
+			reqBody:    controllers.UpdateSessionAttachmentLeasesRequest{},
+			resps: []respUnit{
+				{http.StatusOK, controllers.UpdateSessionAttachmentLeasesResponse{}},
 				{http.StatusBadRequest, envelope.APIError{}},
 				{http.StatusNotFound, envelope.APIError{}},
 				{http.StatusInternalServerError, envelope.APIError{}},
