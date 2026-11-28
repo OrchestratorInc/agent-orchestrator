@@ -113,7 +113,11 @@ func CaptureBackground(ctx context.Context, err error, component, operation stri
 // captureAsync shares bounded admission across HTTP and background reports.
 // Admission pins consent; only owned metadata crosses the goroutine boundary.
 func captureAsync(ctx context.Context, tags map[string]string, fingerprint string, route telemetrymeta.SafeRoute, site telemetrymeta.FailureSite, operation string) {
-	if ctx.Err() != nil || !sampled.Load() || !enterCapture(ctx) {
+	if ctx.Err() != nil {
+		return
+	}
+	tags, send := admitPlan(tags)
+	if !send || !enterCapture(ctx) {
 		return
 	}
 	select {

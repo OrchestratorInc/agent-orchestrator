@@ -12,6 +12,7 @@ import (
 
 	telemetryadapter "github.com/aoagents/agent-orchestrator/backend/internal/adapters/telemetry"
 	"github.com/aoagents/agent-orchestrator/backend/internal/config"
+	"github.com/aoagents/agent-orchestrator/backend/internal/observe/sentryobs"
 )
 
 func TestTelemetryIdentityRoutes(t *testing.T) {
@@ -80,6 +81,28 @@ func TestTelemetryIdentityRoutes(t *testing.T) {
 	}
 	if _, ok := got["email"]; ok {
 		t.Fatal("identity response leaks email")
+	}
+	// A plan-only body sets the Sentry plan and leaves the signed-in user alone.
+	t.Cleanup(func() { sentryobs.SetPlan("unknown") })
+	if c := post("127.0.0.1:3001", "", `{"plan":"pro"}`); c != http.StatusNoContent {
+		t.Fatalf("plan-only = %d, want 204", c)
+	}
+	if c := post("127.0.0.1:3001", "app://renderer", `{"plan":"pro"}`); c != http.StatusForbidden {
+		t.Fatalf("plan from renderer origin = %d, want 403", c)
+	}
+	if got := get(); got["cloudUserId"] != "user_01H" || got["isSignedIn"] != true {
+		t.Fatalf("plan-only body changed the identity: %#v", got)
+	}
+	// Plan-only bodies are ordered on their own counter: a delayed older one is
+	// refused, and a large plan sequence never blocks an identity hand-off.
+	if c := post("127.0.0.1:3001", "", `{"plan":"free","sequence":2000}`); c != http.StatusNoContent {
+		t.Fatalf("newer plan = %d, want 204", c)
+	}
+	if c := post("127.0.0.1:3001", "", `{"plan":"pro","sequence":1000}`); c != http.StatusConflict {
+		t.Fatalf("stale plan = %d, want 409", c)
+	}
+	if c := post("127.0.0.1:3001", "", `{"cloudUserId":"user_01H","sequence":5}`); c != http.StatusNoContent {
+		t.Fatalf("identity after plan sequences = %d, want 204", c)
 	}
 	if c := post("127.0.0.1:3001", "", `{"cloudUserId":""}`); c != http.StatusNoContent {
 		t.Fatalf("sign-out = %d, want 204", c)

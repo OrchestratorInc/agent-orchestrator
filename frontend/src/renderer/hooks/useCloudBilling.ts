@@ -1,4 +1,5 @@
 import { useQuery } from "@tanstack/react-query";
+import { isPaidBillingSummary } from "../../shared/cloud-plan";
 import type { CloudCpBillingSummary } from "../lib/cloud-cp/types";
 import { useCloudSession } from "../lib/cloud-session";
 import { useCloudCp } from "./useCloudCp";
@@ -32,9 +33,7 @@ export function useCloudBilling(options: { pollUntil?: number } = {}) {
 
 /** The paid plan to show beside the user's name, or null for none. */
 export function paidPlanBadge(summary: CloudCpBillingSummary | undefined): string | null {
-	if (!summary?.enabled || !summary.entitled || summary.exempt) return null;
-	if (summary.billingMode !== undefined && summary.billingMode !== "self_serve") return null;
+	if (!summary || !isPaidBillingSummary(summary)) return null;
 	const plan = summary.limits?.plan ?? summary.plan;
-	if (!plan || plan === "free") return null;
 	return plan.charAt(0).toUpperCase() + plan.slice(1);
 }
