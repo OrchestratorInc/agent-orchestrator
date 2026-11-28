@@ -91,6 +91,50 @@ func TestReconcileSessionBranchStateTracksCommitsAndPushes(t *testing.T) {
 	}
 }
 
+// A claimed PR whose head lives on a contributor's fork has no origin branch
+// under the local name. Its recorded head is where the branch was pushed, so
+// those commits must not read as unpushed (#8460).
+func TestReconcileSessionBranchStateCountsAForkPRHeadAsPushed(t *testing.T) {
+	repo := newPushableRepo(t)
+	runGit(t, repo, "checkout", "-b", "ao/s1/pr-7")
+	commitFile(t, repo, "a.go")
+	commitFile(t, repo, "b.go")
+	pushed := strings.TrimSpace(runGit(t, repo, "rev-parse", "HEAD"))
+
+	st := &branchStateStore{fakeStore: newFakeStore()}
+	st.sessions["s1"] = domain.SessionRecord{ID: "s1", Metadata: domain.SessionMetadata{
+		WorkspacePath: repo, DiffBaseRef: "refs/remotes/origin/main",
+	}}
+	st.prs["s1"] = []domain.PullRequest{{URL: "https://github.com/o/r/pull/7", Number: 7, SourceBranch: "fix/x", HeadSHA: pushed}}
+	svc := &Service{store: st}
+	reconcile := func(want domain.SessionBranchState) {
+		t.Helper()
+		if err := svc.ReconcileSessionBranchState(context.Background(), "s1"); err != nil {
+			t.Fatalf("reconcile: %v", err)
+		}
+		want = headed(t, repo, want)
+		if got := st.sessions["s1"].BranchState; got == nil || *got != want {
+			t.Fatalf("branch state = %+v, want %+v", got, want)
+		}
+	}
+	reconcile(domain.SessionBranchState{Branch: "ao/s1/pr-7", Commits: 2, RemoteBranch: "pr-7/fix/x", RemoteHead: pushed, Unpushed: 0, Base: "main", BaseRef: "origin/main"})
+
+	commitFile(t, repo, "c.go")
+	reconcile(domain.SessionBranchState{Branch: "ao/s1/pr-7", Commits: 3, RemoteBranch: "pr-7/fix/x", RemoteHead: pushed, Unpushed: 1, Base: "main", BaseRef: "origin/main"})
+
+	// Another PR replacing this one at the same head renames the pushed point.
+	st.prs["s1"] = []domain.PullRequest{
+		{URL: "https://github.com/o/r/pull/7", Number: 7, SourceBranch: "fix/x", HeadSHA: pushed, Closed: true},
+		{URL: "https://github.com/o/r/pull/8", Number: 8, SourceBranch: "fix/y", HeadSHA: pushed},
+	}
+	reconcile(domain.SessionBranchState{Branch: "ao/s1/pr-7", Commits: 3, RemoteBranch: "pr-8/fix/y", RemoteHead: pushed, Unpushed: 1, Base: "main", BaseRef: "origin/main"})
+
+	// A PR at a commit this branch does not contain is some other branch's PR.
+	runGit(t, repo, "checkout", "-b", "ao/s1/other", "main")
+	commitFile(t, repo, "d.go")
+	reconcile(domain.SessionBranchState{Branch: "ao/s1/other", Commits: 1, Unpushed: 1, Base: "main", BaseRef: "origin/main"})
+}
+
 func TestReconcileBranchStatesFollowsTheWorktreeBranch(t *testing.T) {
 	repo := newPushableRepo(t)
 	worktree := filepath.Join(t.TempDir(), "wt")
