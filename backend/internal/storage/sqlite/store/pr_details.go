@@ -46,7 +46,7 @@ func writePRDetails(ctx context.Context, q *gen.Queries, prURL string, providerU
 		CommitCount:          int64(details.CommitCount),
 		Conversation:         string(conversation),
 		ObservedAt:           details.ObservedAt,
-		ProviderUpdatedAt:    nullTime(providerUpdatedAt),
+		ProviderUpdatedAt:    timeToNullTime(providerUpdatedAt),
 	}); err != nil {
 		return fmt.Errorf("write pr details %s: %w", prURL, err)
 	}

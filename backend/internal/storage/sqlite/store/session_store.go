@@ -1655,37 +1655,6 @@ func normalizeSessionOutputType(v domain.SessionOutputType) domain.SessionOutput
 	return v
 }
 
-// nullTimeToTime / timeToNullTime bridge the nullable first_signal_at column
-// to the domain's zero-time convention (zero = no signal received yet).
-func nullTimeToTime(t sql.NullTime) time.Time {
-	if !t.Valid {
-		return time.Time{}
-	}
-	return t.Time
-}
-
-func timeToNullTime(t time.Time) sql.NullTime {
-	if t.IsZero() {
-		return sql.NullTime{}
-	}
-	// Also used by handwritten SQL that does not go through utcTimes.
-	return sql.NullTime{Time: t.UTC(), Valid: true}
-}
-
-func nullTimeToTimePtr(t sql.NullTime) *time.Time {
-	if !t.Valid {
-		return nil
-	}
-	return &t.Time
-}
-
-func timePtrToNullTime(t *time.Time) sql.NullTime {
-	if t == nil {
-		return sql.NullTime{}
-	}
-	return sql.NullTime{Time: *t, Valid: true}
-}
-
 func normalActivity(a domain.Activity, fallback time.Time) domain.Activity {
 	if a.State == "" {
 		a.State = domain.ActivityIdle

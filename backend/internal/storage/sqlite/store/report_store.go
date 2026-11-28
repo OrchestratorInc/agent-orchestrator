@@ -26,7 +26,7 @@ func (s *Store) CreateReport(ctx context.Context, rec domain.ReportRecord) (doma
 			ID: rec.ID, SessionID: string(rec.SessionID), ProjectID: string(rec.ProjectID),
 			State: string(rec.State), Note: rec.Note, Message: rec.Message,
 			CreatedAt: rec.CreatedAt, AvailableAt: rec.AvailableAt,
-			SettlementDeadline: nullTime(rec.SettlementDeadline), RepeatCount: rec.RepeatCount,
+			SettlementDeadline: timeToNullTime(rec.SettlementDeadline), RepeatCount: rec.RepeatCount,
 		})
 		if err != nil {
 			return err
@@ -146,7 +146,7 @@ func (s *Store) ClaimPendingReportBatch(ctx context.Context, projectID domain.Pr
 		}
 		rows, err = q.ClaimPendingReportsByBatch(ctx, gen.ClaimPendingReportsByBatchParams{
 			ProjectID: string(projectID), DeliveryBatchID: batchID,
-			ClaimToken: token, ClaimedAt: nullTime(at),
+			ClaimToken: token, ClaimedAt: timeToNullTime(at),
 		})
 		return err
 	})
@@ -164,7 +164,7 @@ func (s *Store) AcknowledgeReportBatch(ctx context.Context, projectID domain.Pro
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()
 	rows, err := s.qw.AcknowledgeReportBatch(ctx, gen.AcknowledgeReportBatchParams{
-		ProjectID: string(projectID), ClaimToken: token, AcknowledgedAt: nullTime(at),
+		ProjectID: string(projectID), ClaimToken: token, AcknowledgedAt: timeToNullTime(at),
 	})
 	if err != nil {
 		return 0, fmt.Errorf("acknowledge project report batch: %w", err)
@@ -304,14 +304,14 @@ func (s *Store) ListPendingReports(ctx context.Context, at time.Time, limit int6
 // ClaimReport atomically fences one pending report to a delivery attempt token.
 func (s *Store) ClaimReport(ctx context.Context, id, token string, at time.Time) (domain.ReportRecord, bool, error) {
 	return s.updateReportClaim(ctx, id, token, at, "claim", func() (gen.Report, error) {
-		return s.qw.ClaimReport(ctx, gen.ClaimReportParams{ID: id, ClaimToken: token, ClaimedAt: nullTime(at)})
+		return s.qw.ClaimReport(ctx, gen.ClaimReportParams{ID: id, ClaimToken: token, ClaimedAt: timeToNullTime(at)})
 	})
 }
 
 // AcknowledgeReport completes only the delivery attempt holding the current token.
 func (s *Store) AcknowledgeReport(ctx context.Context, id, token string, at time.Time) (domain.ReportRecord, bool, error) {
 	return s.updateReportClaim(ctx, id, token, at, "acknowledge", func() (gen.Report, error) {
-		return s.qw.AcknowledgeReport(ctx, gen.AcknowledgeReportParams{ID: id, ClaimToken: token, AcknowledgedAt: nullTime(at)})
+		return s.qw.AcknowledgeReport(ctx, gen.AcknowledgeReportParams{ID: id, ClaimToken: token, AcknowledgedAt: timeToNullTime(at)})
 	})
 }
 

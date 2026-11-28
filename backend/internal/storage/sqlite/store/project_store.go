@@ -103,7 +103,7 @@ func upsertProject(ctx context.Context, q *gen.Queries, r domain.ProjectRecord, 
 		RepoOriginURL: r.RepoOriginURL,
 		DisplayName:   r.DisplayName,
 		RegisteredAt:  r.RegisteredAt,
-		ArchivedAt:    nullTime(r.ArchivedAt),
+		ArchivedAt:    timeToNullTime(r.ArchivedAt),
 		Config:        config,
 		Kind:          string(kind),
 	})
@@ -156,7 +156,7 @@ func importProject(ctx context.Context, q *gen.Queries, r domain.ProjectRecord, 
 		RepoOriginURL: r.RepoOriginURL,
 		DisplayName:   r.DisplayName,
 		RegisteredAt:  r.RegisteredAt,
-		ArchivedAt:    nullTime(r.ArchivedAt),
+		ArchivedAt:    timeToNullTime(r.ArchivedAt),
 		Config:        config,
 		Kind:          string(kind),
 	})
@@ -268,7 +268,7 @@ func (s *Store) ArchiveProject(ctx context.Context, id string, at time.Time) (bo
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()
 	n, err := s.qw.ArchiveProject(ctx, gen.ArchiveProjectParams{
-		ArchivedAt: nullTime(at),
+		ArchivedAt: timeToNullTime(at),
 		ID:         domain.ProjectID(id),
 	})
 	if err != nil {
@@ -321,13 +321,6 @@ func unmarshalProjectConfig(s sql.NullString) domain.ProjectConfig {
 		return domain.ProjectConfig{}
 	}
 	return cfg
-}
-
-func nullTime(t time.Time) sql.NullTime {
-	if t.IsZero() {
-		return sql.NullTime{}
-	}
-	return sql.NullTime{Time: t, Valid: true}
 }
 
 // SetProjectPermissions serializes a focused read-modify-write with other writes.
