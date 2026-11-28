@@ -1,6 +1,7 @@
 package chat
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -731,11 +732,27 @@ func encodeSteerDeliveryRequest(msg ports.ChatUserMessage) (string, error) {
 	return string(encoded), nil
 }
 
+// sameSteerRequest compares a saved steer request with a new one as a receipt
+// does: the URI a staged image carries (withoutImageURIs) makes no difference.
+func sameSteerRequest(saved, fresh string) bool {
+	if saved == fresh {
+		return true
+	}
+	var a, b steerDeliveryRequest
+	if json.Unmarshal([]byte(saved), &a) != nil || json.Unmarshal([]byte(fresh), &b) != nil {
+		return false
+	}
+	a.Content, b.Content = withoutImageURIs(a.Content), withoutImageURIs(b.Content)
+	left, errA := json.Marshal(a)
+	right, errB := json.Marshal(b)
+	return errA == nil && errB == nil && bytes.Equal(left, right)
+}
+
 func replaySteerDelivery(
 	delivery domain.ConversationSteerDelivery,
 	requestJSON string,
 ) (SteerResult, error) {
-	if delivery.RequestJSON != requestJSON {
+	if !sameSteerRequest(delivery.RequestJSON, requestJSON) {
 		return SteerResult{}, ErrSteerIdempotencyConflict
 	}
 	switch delivery.State {
