@@ -32,7 +32,12 @@ const adapterID = "muse"
 // Unlike AGENTS.md, it applies only to this process and cannot dirty the
 // project. Muse's base-instructions override is rejected by the Meta provider,
 // so AO's standing instructions must ride the developer-prompt channel.
-const museDeveloperPromptEnvVar = "TBH_EVAL_APPEND_DEVELOPER_PROMPT"
+const museDeveloperPromptEnvVar = DeveloperPromptEnvVar
+
+// DeveloperPromptEnvVar carries AO's standing instructions into a Muse host,
+// the terminal UI's and `muse acp`'s alike: Muse appends its value to the
+// developer prompt.
+const DeveloperPromptEnvVar = "TBH_EVAL_APPEND_DEVELOPER_PROMPT"
 
 // Plugin is the Muse Code CLI agent adapter. It is safe for concurrent use;
 // the binary path is resolved once and cached under binaryMu.

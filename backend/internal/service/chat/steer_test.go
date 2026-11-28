@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -1155,4 +1156,45 @@ func TestRecoverImageSteerWithoutControllerNeverRedispatches(t *testing.T) {
 func withoutReplay(r chatsvc.SteerResult) chatsvc.SteerResult {
 	r.Replayed = false
 	return r
+}
+
+// An agent that cannot take guidance mid-turn (Muse Code over ACP) gets a
+// steer-or-send as its next turn: queued behind the running turn, never pushed
+// into it, never refused, and delivered once that turn ends (#7832).
+func TestSteerOrSendQueuesForAnAgentThatCannotSteer(t *testing.T) {
+	h := newHarness(t)
+	ctx := context.Background()
+	if _, err := h.svc.Send(ctx, testSession, ports.ChatUserMessage{
+		Text: "do the long thing", ClientMessageID: "turn-1", Origin: domain.MessageOriginHuman,
+	}); err != nil {
+		t.Fatalf("Send: %v", err)
+	}
+	h.conv.emit(ports.ChatEvent{Kind: ports.ChatEventTurnStarted, ProviderTurnID: "provider-turn-1"})
+
+	msg := ports.ChatUserMessage{Text: "and then this", ClientMessageID: "queued-1", Origin: domain.MessageOriginHuman}
+	result, err := h.svc.SteerOrSend(ctx, testSession, msg, false)
+	if err != nil {
+		t.Fatalf("SteerOrSend: %v", err)
+	}
+	if result.Steered || result.Turn.ID == "" || result.Turn.State != domain.TurnStateQueued {
+		t.Fatalf("result = %+v, want a queued turn", result)
+	}
+	if sent := h.conv.sendCallCount(); sent != 1 {
+		t.Fatalf("provider received %d prompts while the first turn ran, want 1", sent)
+	}
+	again, err := h.svc.SteerOrSend(ctx, testSession, msg, false)
+	if err != nil || !again.Duplicate || again.Turn.ID != result.Turn.ID {
+		t.Fatalf("retry = %+v, %v; want the same queued turn", again, err)
+	}
+
+	h.conv.emit(ports.ChatEvent{Kind: ports.ChatEventTurnCompleted, ProviderTurnID: "provider-turn-1", TurnState: domain.TurnStateCompleted})
+	deadline := time.Now().Add(5 * time.Second)
+	for h.conv.sendCallCount() < 2 && time.Now().Before(deadline) {
+		time.Sleep(10 * time.Millisecond)
+	}
+	h.conv.mu.Lock()
+	defer h.conv.mu.Unlock()
+	if len(h.conv.sent) != 2 || !strings.Contains(h.conv.sent[1].Text, "and then this") {
+		t.Fatalf("after the turn ended the provider got %+v, want the queued message next", h.conv.sent)
+	}
 }

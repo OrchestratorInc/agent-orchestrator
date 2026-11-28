@@ -10,6 +10,8 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/spf13/cobra"
+
+	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 )
 
 type sendOptions struct {
@@ -147,6 +149,12 @@ func (c *commandContext) steerMessage(
 	}
 	if result.Duplicate {
 		_, _ = fmt.Fprintln(c.deps.Out, "Message was already accepted; delivery state is unchanged.")
+		return nil
+	}
+	if result.State == string(domain.TurnStateQueued) {
+		_, _ = fmt.Fprintf(c.deps.Out,
+			"The agent is working and cannot take guidance mid-turn. Message queued as its next turn with delivery handle %s; it is delivered when the current turn ends.\n",
+			clientMessageID)
 		return nil
 	}
 	_, _ = fmt.Fprintf(c.deps.Out,

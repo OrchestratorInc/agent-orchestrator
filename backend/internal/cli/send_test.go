@@ -167,6 +167,33 @@ func TestSend_SteerIdleStartsOneNormalChatTurn(t *testing.T) {
 	}
 }
 
+// An agent that cannot take guidance mid-turn queues the message as its next
+// turn; the CLI says so instead of claiming no turn was active.
+func TestSend_SteerBusyAgentWithoutSteeringQueues(t *testing.T) {
+	t.Setenv("AO_SESSION_ID", "")
+	cfg := setConfigEnv(t)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasPrefix(r.URL.Path, "/internal/") {
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusAccepted)
+		_, _ = io.WriteString(w, `{"outcome":"sent","turnId":"turn-2","state":"queued","duplicate":false}`)
+	}))
+	t.Cleanup(srv.Close)
+	writeRunFileFor(t, cfg, srv)
+
+	out, errOut, err := executeCLI(t, Deps{ProcessAlive: func(int) bool { return true }},
+		"send", "--session", "demo-1", "--steer", "--client-message-id", "handle-1", "--message", "next")
+	if err != nil {
+		t.Fatalf("unexpected error: %v\nstderr=%s", err, errOut)
+	}
+	if !strings.Contains(out, "queued as its next turn with delivery handle handle-1") || strings.Contains(out, "No active turn") {
+		t.Fatalf("output = %q", out)
+	}
+}
+
 func TestSend_SteerStateChangeRaceUsesOneAtomicRequest(t *testing.T) {
 	t.Setenv("AO_SESSION_ID", "")
 	cfg := setConfigEnv(t)
