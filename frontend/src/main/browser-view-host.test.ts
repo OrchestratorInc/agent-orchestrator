@@ -4397,6 +4397,33 @@ describe("agent browser runtime", () => {
 		expect(navStates().slice(before)).not.toContain("http://localhost:4173/");
 	});
 
+	it("makes the tab the terminal previews into the agent's tab", async () => {
+		const { host, invoke } = setupTabHost();
+		const { viewId } = (await invoke("browser:ensure", "sess-1")) as { viewId: string };
+		await host.execute("sess-1", "open", { url: "https://agent.example.test/" });
+		await invoke("browser:openTab", { viewId, url: "https://person.example.test/" });
+
+		// `ao preview` (or a link clicked in the terminal) loads into the tab in front.
+		await invoke("browser:navigate", { viewId, url: "http://localhost:3000/", preview: true });
+
+		const tabs = (await host.execute("sess-1", "tabs")) as { activeTabId: string; panelTabId: string };
+		expect(tabs).toMatchObject({ activeTabId: "t2", panelTabId: "t2" });
+		const result = (await host.execute("sess-1", "get", { property: "url" })) as { target: { tabId: string } };
+		expect(result.target.tabId).toBe("t2");
+	});
+
+	it("makes a new tab the terminal opens the agent's tab, but not one the person opens", async () => {
+		const { host, invoke } = setupTabHost();
+		const { viewId } = (await invoke("browser:ensure", "sess-1")) as { viewId: string };
+		await host.execute("sess-1", "open", { url: "https://agent.example.test/" });
+
+		await invoke("browser:openTab", { viewId, url: "https://person.example.test/" });
+		expect(await host.execute("sess-1", "tabs")).toMatchObject({ activeTabId: "t1", panelTabId: "t2" });
+
+		await invoke("browser:openTab", { viewId, url: "http://localhost:3000/", preview: true });
+		expect(await host.execute("sess-1", "tabs")).toMatchObject({ activeTabId: "t3", panelTabId: "t3" });
+	});
+
 	it("emulates focus for the agent's tab while it works in the background", async () => {
 		const { debuggerCommands, host, invoke, views } = setupTabHost();
 		const { viewId } = (await invoke("browser:ensure", "sess-1")) as { viewId: string };

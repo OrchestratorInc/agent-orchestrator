@@ -2585,7 +2585,8 @@ export function createBrowserViewHost(
     preview = false,
   ): Promise<BrowserTabsState> => {
     if (!options.agentBrowserRuntime) {
-      await openTab(session, url, true, "opened", false, preview);
+      const entry = await openTab(session, url, true, "opened", false, preview);
+      if (preview) session.agentTargetTabId = entry.tabId;
       return listTabs(session);
     }
     return queueNativeOperation(session, async () => {
@@ -2598,7 +2599,10 @@ export function createBrowserViewHost(
       // CDP identity first (ensureNativeActiveTab), as after a person closes a
       // tab. Creating it directly also keeps a first tab from racing the
       // bootstrap page agent-browser makes when it connects to zero targets.
-      await openTab(session, url, true, "opened", false, preview);
+      const entry = await openTab(session, url, true, "opened", false, preview);
+      // A tab the session's terminal opens (`ao preview`, a link clicked in
+      // it) is the agent's: its next command acts there.
+      if (preview) session.agentTargetTabId = entry.tabId;
       session.nativeActiveTabId = undefined;
       session.snapshotDeltaBaseline = undefined;
       options.agentBrowserRuntime!.reconcileTargets(session.sessionId);
@@ -3188,14 +3192,19 @@ export function createBrowserViewHost(
       );
     assertProfileStable(session);
     return withBrowserOperation(session, async () => {
+      // What the session's terminal opens (`ao preview`, a link clicked in
+      // it) is the agent's tab: its next command acts there.
       if (!session.tabs.size) {
         const entry = await openTab(session, url, true, "opened", false, preview);
+        if (preview) session.agentTargetTabId = entry.tabId;
         return pushNavState(options, entry);
       }
       const entry = activeEntry(session);
       checkedBrowserURL(url);
-      if (preview) session.previewTabId = entry.tabId;
-      else if (session.previewTabId === entry.tabId) session.previewTabId = undefined;
+      if (preview) {
+        session.previewTabId = entry.tabId;
+        session.agentTargetTabId = entry.tabId;
+      } else if (session.previewTabId === entry.tabId) session.previewTabId = undefined;
       return navigateEntry(entry, url);
     });
   };

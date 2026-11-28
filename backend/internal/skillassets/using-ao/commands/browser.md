@@ -170,7 +170,9 @@ passing off an unlabelled image as an annotated one.
 `unhighlight`, navigation, or target replacement.
 The agent has its own tab, separate from the tab the user has in front. The
 first agent command uses the tab in front; after that, agent commands stay on
-that tab even when the user opens or selects another one.
+that tab even when the user opens or selects another one. A tab that
+`ao preview` (or a link clicked in the session's terminal) opens or loads
+becomes the agent's tab.
 `tabs` reports stable logical IDs such as `t1`, marks the agent's tab as
 active, and reports the user's tab as `panelTabId`. `tab new` creates a tab
 behind the user's and makes it the agent's, `tab select` changes the agent's
