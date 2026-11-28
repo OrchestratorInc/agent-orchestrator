@@ -427,7 +427,7 @@ func (b *BridgeService) lanHosts() []string {
 	if b.PickLANHosts != nil {
 		return b.PickLANHosts()
 	}
-	return mobilebridge.LocalPrivateIPv4s()
+	return mobilebridge.LocalLANHosts()
 }
 
 func (b *BridgeService) tailscaleHosts() []string {
