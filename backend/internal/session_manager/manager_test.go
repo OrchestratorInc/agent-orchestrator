@@ -2393,6 +2393,9 @@ func TestSpawnOMPEffortInheritanceAndExplicitValidation(t *testing.T) {
 		Messenger: &fakeMessenger{}, Lifecycle: &fakeLCM{store: st}, LookPath: func(string) (string, error) { return binary, nil },
 		Executable: func() (string, error) { return binary, nil }, NewLaunchID: func() string { return "omp-launch" },
 	})
+	m.SetModelCatalog(tuningCatalog{catalog: ports.AgentModelCatalog{Models: []ports.AgentModelInfo{
+		{ID: "omp-model", IsDefault: true, Efforts: []string{"high"}},
+	}}})
 	rec, _, _, err := m.Spawn(t.Context(), ports.SpawnConfig{ProjectID: "mer", Kind: domain.KindWorker, RequestedMode: domain.SessionModeTUI, Prompt: "do the work"})
 	if err != nil {
 		t.Fatal(err)
@@ -2412,18 +2415,26 @@ func TestSpawnOMPEffortInheritanceAndExplicitValidation(t *testing.T) {
 	if rec.Metadata.Effort != "high" || initialEffort != "high" {
 		t.Fatalf("OMP effort final=%q initial=%q, want high in both", rec.Metadata.Effort, initialEffort)
 	}
-	for _, effort := range []string{"high", "bogus"} {
-		beforeRows, beforeLaunches := len(st.createdRows), rt.created
-		_, _, _, err := m.Spawn(t.Context(), ports.SpawnConfig{
-			ProjectID: "mer", Kind: domain.KindWorker, RequestedMode: domain.SessionModeTUI,
-			AgentConfig: ports.AgentConfig{Effort: effort}, EffortOverride: true, Prompt: "do the work",
-		})
-		if !errors.Is(err, ports.ErrUnsupportedEffort) {
-			t.Fatalf("explicit OMP effort %q error = %v, want unsupported effort", effort, err)
-		}
-		if len(st.createdRows) != beforeRows || rt.created != beforeLaunches {
-			t.Fatalf("explicit OMP effort %q created session row or runtime", effort)
-		}
+	explicitRec, _, _, err := m.Spawn(t.Context(), ports.SpawnConfig{
+		ProjectID: "mer", Kind: domain.KindWorker, RequestedMode: domain.SessionModeTUI,
+		AgentConfig: ports.AgentConfig{Effort: "high"}, EffortOverride: true, Prompt: "do the work",
+	})
+	if err != nil {
+		t.Fatalf("explicit OMP effort high: %v", err)
+	}
+	if explicitRec.Metadata.Effort != "high" {
+		t.Fatalf("explicit OMP effort final=%q, want high", explicitRec.Metadata.Effort)
+	}
+	beforeRows, beforeLaunches := len(st.createdRows), rt.created
+	_, _, _, err = m.Spawn(t.Context(), ports.SpawnConfig{
+		ProjectID: "mer", Kind: domain.KindWorker, RequestedMode: domain.SessionModeTUI,
+		AgentConfig: ports.AgentConfig{Effort: "bogus"}, EffortOverride: true, Prompt: "do the work",
+	})
+	if !errors.Is(err, ports.ErrUnsupportedEffort) {
+		t.Fatalf("explicit OMP effort bogus error = %v, want unsupported effort", err)
+	}
+	if len(st.createdRows) != beforeRows || rt.created != beforeLaunches {
+		t.Fatal("explicit OMP bogus effort created session row or runtime")
 	}
 }
 

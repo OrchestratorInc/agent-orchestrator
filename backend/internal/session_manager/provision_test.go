@@ -600,16 +600,16 @@ func TestResolveChatAgentConfigValidatesClaudeEffort(t *testing.T) {
 	}
 }
 
-// TestResolveAgentConfigValidatesPiEffort covers effort resolution for the Pi
-// and Prime Agent harnesses: a level the model advertises starts, no effort
+// TestResolveAgentConfigValidatesPiEffort covers effort resolution for the Pi,
+// Prime Agent, and OMP harnesses: a level the model advertises starts, no effort
 // needs no catalog, an explicitly requested unsupported level is rejected, and an
 // inherited level that is unsupported or has no resolvable model is cleared
 // rather than failing the launch.
 func TestResolveAgentConfigValidatesPiEffort(t *testing.T) {
-	// Pi and Prime Agent advertise per-model thinking levels as efforts and
+	// Pi, Prime Agent, and OMP advertise per-model thinking levels as efforts and
 	// consume them at launch via `--thinking`, so a level the model offers must
 	// select and start, while a level it does not offer is still rejected.
-	for _, harness := range []domain.AgentHarness{domain.HarnessPi, domain.HarnessPrimeAgent} {
+	for _, harness := range []domain.AgentHarness{domain.HarnessPi, domain.HarnessPrimeAgent, domain.HarnessOMP} {
 		m := &Manager{modelCatalog: tuningCatalog{catalog: ports.AgentModelCatalog{Models: []ports.AgentModelInfo{
 			{ID: "openai/gpt-6.1-sol", IsDefault: true, Efforts: []string{"minimal", "low", "medium", "high", "xhigh"}},
 		}}}}
@@ -666,7 +666,7 @@ func TestResolveAgentConfigValidatesPiEffort(t *testing.T) {
 
 	// With no model or catalog default, a terminal leaves inherited effort to
 	// the CLI's default model, as it did before catalog validation.
-	for _, harness := range []domain.AgentHarness{domain.HarnessPi, domain.HarnessPrimeAgent} {
+	for _, harness := range []domain.AgentHarness{domain.HarnessPi, domain.HarnessPrimeAgent, domain.HarnessOMP} {
 		m := &Manager{modelCatalog: tuningCatalog{catalog: ports.AgentModelCatalog{Models: []ports.AgentModelInfo{
 			{ID: "openai/gpt-6.1-sol", Efforts: []string{"low", "high"}},
 		}}}}
@@ -681,7 +681,7 @@ func TestResolveAgentConfigValidatesPiEffort(t *testing.T) {
 }
 
 func TestResolveTUIAgentConfigResetsPiEffortOnModelChangeWithoutCatalog(t *testing.T) {
-	for _, harness := range []domain.AgentHarness{domain.HarnessPi, domain.HarnessPrimeAgent} {
+	for _, harness := range []domain.AgentHarness{domain.HarnessPi, domain.HarnessPrimeAgent, domain.HarnessOMP} {
 		t.Run(string(harness), func(t *testing.T) {
 			m := &Manager{}
 			project := domain.ProjectConfig{Worker: domain.RoleOverride{
@@ -773,7 +773,7 @@ func TestResolveAgentConfigRejectsExplicitEffortForUnsupportedHarness(t *testing
 		if !errors.Is(err, ports.ErrUnsupportedEffort) {
 			t.Fatalf("harness %q override error = %v, want ErrUnsupportedEffort", harness, err)
 		}
-		if !strings.Contains(err.Error(), "only supported for codex, claude-code, command-code, hermes, pi, prime-agent, and open-interpreter") {
+		if !strings.Contains(err.Error(), "only supported for codex, claude-code, command-code, hermes, pi, prime-agent, omp, and open-interpreter") {
 			t.Fatalf("harness %q error = %v, want support hint", harness, err)
 		}
 		// Unflagged request-carried effort still clears silently, matching the

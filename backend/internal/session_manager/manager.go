@@ -1358,10 +1358,9 @@ func (m *Manager) Spawn(ctx context.Context, cfg ports.SpawnConfig) (result doma
 	}
 	// Resolve inherited effort too, so a harness that cannot use it stores the
 	// provider default instead of advertising a level it never launched with.
-	// OMP already accepts inherited --thinking in its TUI adapter, but does not
-	// yet expose effort in the model catalog. Explicit effort still goes through
-	// validation, as it does for other harnesses.
-	if mode == domain.SessionModeTUI && (cfg.Harness == domain.HarnessClaudeCode || cfg.Harness == domain.HarnessCodex || strings.TrimSpace(cfg.AgentConfig.Effort) != "" || (cfg.Harness != domain.HarnessOMP && strings.TrimSpace(agentConfig.Effort) != "")) {
+	// Pi, Prime Agent, and OMP also validate against the model catalog so a
+	// stale level is cleared instead of reaching --thinking.
+	if mode == domain.SessionModeTUI && (cfg.Harness == domain.HarnessClaudeCode || cfg.Harness == domain.HarnessCodex || strings.TrimSpace(cfg.AgentConfig.Effort) != "" || strings.TrimSpace(agentConfig.Effort) != "") {
 		checked := BeginSpawnStep(ctx, SpawnStepModelCheck)
 		resolved, err := m.resolveTUIAgentConfig(ctx, cfg, project.Config, agentConfig)
 		checked(err)
@@ -2021,11 +2020,11 @@ func (m *Manager) resolveTUIAgentConfig(ctx context.Context, cfg ports.SpawnConf
 // validates the resulting effort against the harness. Harnesses without effort
 // support clear it (or reject a flagged explicit override); command-code and
 // hermes forward the level raw for the CLI to check; the catalog-backed
-// harnesses (codex, claude-code, pi, prime-agent) confirm the selected model
+// harnesses (codex, claude-code, pi, prime-agent, omp) confirm the selected model
 // advertises the level. It returns ErrUnsupportedEffort when a model does not
 // offer an explicitly requested level and ErrModelCapabilitiesUnavailable when
-// the catalog cannot confirm the launch. Unsupported inherited Pi or Prime
-// Agent effort is cleared. Terminals leave unconfirmed inherited levels to the
+// the catalog cannot confirm the launch. Unsupported inherited Pi, Prime
+// Agent, or OMP effort is cleared. Terminals leave unconfirmed inherited levels to the
 // CLI; chat clears them.
 func (m *Manager) resolveAgentConfig(ctx context.Context, cfg ports.SpawnConfig, project domain.ProjectConfig) (ports.AgentConfig, error) {
 	resolved, err := m.resolveAgentConfigOnce(ctx, cfg, project)
@@ -2047,14 +2046,14 @@ func (m *Manager) resolveAgentConfigOnce(ctx context.Context, cfg ports.SpawnCon
 	resolved := applySpawnAgentConfig(base, requested)
 	modelChangedWithoutExplicitEffort := requested.Model != "" && requested.Model != base.Model &&
 		!cfg.EffortOverride && requested.Effort == ""
-	// Role or project settings may carry a stale Pi, Prime Agent, or Open
+	// Role or project settings may carry a stale Pi, Prime Agent, OMP, or Open
 	// Interpreter effort that the selected model does not advertise. Clear it instead of failing
 	// the launch; terminals let the CLI judge levels the catalog cannot confirm.
 	// A level the request carries itself (a flagged override, or a nonempty effort
 	// in the spawn request) is explicit and still validated, so an unsupported
 	// choice is rejected rather than silently dropped.
 	inheritedCatalogEffort := !cfg.EffortOverride && strings.TrimSpace(requested.Effort) == "" &&
-		(cfg.Harness == domain.HarnessPi || cfg.Harness == domain.HarnessPrimeAgent || cfg.Harness == domain.HarnessOpenInterpreter)
+		(cfg.Harness == domain.HarnessPi || cfg.Harness == domain.HarnessPrimeAgent || cfg.Harness == domain.HarnessOMP || cfg.Harness == domain.HarnessOpenInterpreter)
 	clearUnconfirmedInheritedEffort := inheritedCatalogEffort &&
 		(cfg.RequestedMode != domain.SessionModeTUI || modelChangedWithoutExplicitEffort)
 	if cfg.EffortOverride {
@@ -2069,13 +2068,13 @@ func (m *Manager) resolveAgentConfigOnce(ctx context.Context, cfg ports.SpawnCon
 		}
 		return resolved, nil
 	}
-	if cfg.Harness != domain.HarnessCodex && cfg.Harness != domain.HarnessClaudeCode && cfg.Harness != domain.HarnessCommandCode && cfg.Harness != domain.HarnessHermes && cfg.Harness != domain.HarnessPi && cfg.Harness != domain.HarnessPrimeAgent && cfg.Harness != domain.HarnessOpenInterpreter {
+	if cfg.Harness != domain.HarnessCodex && cfg.Harness != domain.HarnessClaudeCode && cfg.Harness != domain.HarnessCommandCode && cfg.Harness != domain.HarnessHermes && cfg.Harness != domain.HarnessPi && cfg.Harness != domain.HarnessPrimeAgent && cfg.Harness != domain.HarnessOMP && cfg.Harness != domain.HarnessOpenInterpreter {
 		// Only a flagged explicit override (the spawn API and delegation mark
 		// request-carried effort) fails loudly: the caller asked for something
 		// the harness cannot honor. Unflagged or inherited effort still clears
 		// silently so role/project defaults keep working for every harness.
 		if cfg.EffortOverride && strings.TrimSpace(requested.Effort) != "" {
-			return ports.AgentConfig{}, fmt.Errorf("%w for harness %q: effort is only supported for codex, claude-code, command-code, hermes, pi, prime-agent, and open-interpreter agents, or Grok Chat", ports.ErrUnsupportedEffort, cfg.Harness)
+			return ports.AgentConfig{}, fmt.Errorf("%w for harness %q: effort is only supported for codex, claude-code, command-code, hermes, pi, prime-agent, omp, and open-interpreter agents, or Grok Chat", ports.ErrUnsupportedEffort, cfg.Harness)
 		}
 		resolved.Effort = ""
 		return resolved, nil

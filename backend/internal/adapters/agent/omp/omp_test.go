@@ -89,17 +89,17 @@ func TestGetLaunchCommandExplicitlyLoadsManagedExtension(t *testing.T) {
 	}
 }
 
-func TestGetLaunchCommandAppendsSystemPromptAndModel(t *testing.T) {
+func TestGetLaunchCommandAppendsSystemPromptModelAndThinking(t *testing.T) {
 	p := &Plugin{resolvedBinary: "omp"}
 	cmd, err := p.GetLaunchCommand(context.Background(), ports.LaunchConfig{
 		SystemPrompt: "follow repo rules",
-		Config:       ports.AgentConfig{Model: "  anthropic/claude-sonnet-4  "},
+		Config:       ports.AgentConfig{Model: "  anthropic/claude-sonnet-4  ", Effort: "high"},
 		Prompt:       "implement it",
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := []string{"omp", "--append-system-prompt", "follow repo rules", "--model", "anthropic/claude-sonnet-4", "implement it"}
+	want := []string{"omp", "--append-system-prompt", "follow repo rules", "--model", "anthropic/claude-sonnet-4", "--thinking", "high", "implement it"}
 	if !reflect.DeepEqual(cmd, want) {
 		t.Fatalf("cmd = %#v, want %#v", cmd, want)
 	}
@@ -129,7 +129,7 @@ func TestGetRestoreCommandUsesNativeSessionID(t *testing.T) {
 	p := &Plugin{resolvedBinary: "omp"}
 	cmd, ok, err := p.GetRestoreCommand(context.Background(), ports.RestoreConfig{
 		SystemPrompt: "restore rules",
-		Config:       ports.AgentConfig{Model: "openai/gpt-5-codex"},
+		Config:       ports.AgentConfig{Model: "openai/gpt-5-codex", Effort: "medium"},
 		Session: ports.SessionRef{
 			Metadata: map[string]string{ports.MetadataKeyAgentSessionID: "019e950e-52e0-7411-961b-d380ca7e610f"},
 		},
@@ -140,7 +140,7 @@ func TestGetRestoreCommandUsesNativeSessionID(t *testing.T) {
 	if !ok {
 		t.Fatal("ok=false, want true")
 	}
-	want := []string{"omp", "--append-system-prompt", "restore rules", "--model", "openai/gpt-5-codex", "--resume", "019e950e-52e0-7411-961b-d380ca7e610f"}
+	want := []string{"omp", "--append-system-prompt", "restore rules", "--model", "openai/gpt-5-codex", "--thinking", "medium", "--resume", "019e950e-52e0-7411-961b-d380ca7e610f"}
 	if !reflect.DeepEqual(cmd, want) {
 		t.Fatalf("cmd = %#v, want %#v", cmd, want)
 	}

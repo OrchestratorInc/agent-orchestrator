@@ -239,7 +239,7 @@ func ompProviderCatalog(ctx context.Context, path string) ports.AgentModelCatalo
 		}
 		// Cache keys can include account-specific suffixes: trust model.provider,
 		// never expose the cache key as a provider or infer it from a selector.
-		result.Models = append(result.Models, parseProviderModelRecords(raw, "", false)...)
+		result.Models = append(result.Models, parseProviderModelRecords(raw, "", true)...)
 	}
 	if rows.Err() != nil {
 		return ports.AgentModelCatalog{}

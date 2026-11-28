@@ -1,6 +1,7 @@
 package sessionmanager
 
 import (
+	"database/sql"
 	"errors"
 	"os"
 	"os/exec"
@@ -119,6 +120,107 @@ func TestSpawn_TUIPiDiscoveredEffort(t *testing.T) {
 						t.Fatalf("launch effort=%q, launches=%d, runtimes=%d; want %q, 1, 1", agent.lastConfig.Effort, agent.launchCalls, rt.created, tc.effort)
 					}
 				})
+			}
+		})
+	}
+}
+
+func TestSpawn_TUIOMPDiscoveredEffort(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("fixture CLI uses a shell script")
+	}
+	root := t.TempDir()
+	t.Setenv("HOME", root)
+	ompDir := filepath.Join(root, ".omp", "agent")
+	if err := os.MkdirAll(ompDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	dbPath := filepath.Join(ompDir, "models.db")
+	db, err := sql.Open("sqlite", dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = db.Close() }()
+	_, err = db.Exec(`CREATE TABLE model_cache (provider_id TEXT, models TEXT);
+ INSERT INTO model_cache VALUES ('fixture:test', '[
+   {"id":"reasoning","provider":"fixture","name":"Reasoning","reasoning":true,"thinkingLevelMap":{"minimal":null,"low":"low","medium":null,"high":"high","xhigh":null}},
+   {"id":"plain","provider":"fixture","name":"Plain","reasoning":false,"thinkingLevelMap":{"high":"high"}},
+   {"id":"unmapped","provider":"fixture","name":"Unmapped","reasoning":true},
+   {"id":"partial","provider":"fixture","name":"Partial","reasoning":true,"thinkingLevelMap":{"minimal":null,"max":"max"}}
+ ]');`)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	cliPath := filepath.Join(root, "omp")
+	if err := os.WriteFile(cliPath, []byte("#!/bin/sh\necho '[]'\n"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+
+	catalog, err := (modelcatalog.Discoverer{}).Discover(t.Context(), ports.AgentModelDiscoveryRequest{
+		AgentID: string(domain.HarnessOMP), Binary: cliPath, WorkingDir: root,
+		Env: map[string]string{"HOME": root, "PI_CODING_AGENT_DIR": ompDir, "XDG_CONFIG_HOME": root, "XDG_DATA_HOME": root},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(catalog.Models) != 4 {
+		t.Fatalf("discovered models = %#v, want reasoning, plain, unmapped and partial", catalog.Models)
+	}
+	for _, model := range catalog.Models {
+		var want []string
+		switch model.ID {
+		case "fixture/reasoning":
+			want = []string{"low", "high"}
+		case "fixture/unmapped":
+			want = []string{"minimal", "low", "medium", "high"}
+		case "fixture/partial":
+			want = []string{"low", "medium", "high"}
+		}
+		if !slices.Equal(model.Efforts, want) {
+			t.Errorf("%s discovered efforts = %v, want %v", model.ID, model.Efforts, want)
+		}
+	}
+	for _, tc := range []struct {
+		name, model, effort string
+		inherited, rejected bool
+	}{
+		{"explicit", "fixture/reasoning", "high", false, false},
+		{"inherited", "fixture/reasoning", "high", true, false},
+		{"unsupported level", "fixture/reasoning", "xhigh", false, true},
+		{"no reasoning", "fixture/plain", "high", false, true},
+		{"unmapped inherited", "fixture/unmapped", "high", true, false},
+		{"unmapped xhigh", "fixture/unmapped", "xhigh", false, true},
+		{"partial xhigh", "fixture/partial", "xhigh", false, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			m, st, rt, _ := newManager()
+			m.dataDir = root
+			agent := &recordingAgent{}
+			m.agents = singleAgent{agent: agent}
+			m.SetModelCatalog(tuningCatalog{catalog: catalog})
+			request := ports.SpawnConfig{
+				ProjectID: "mer", Kind: domain.KindWorker, Harness: domain.HarnessOMP, RequestedMode: domain.SessionModeTUI,
+				AgentConfig: ports.AgentConfig{Model: tc.model, Effort: tc.effort}, EffortOverride: true,
+			}
+			if tc.inherited {
+				project := st.projects["mer"]
+				project.Config.Worker = domain.RoleOverride{Harness: domain.HarnessOMP, AgentConfig: domain.AgentConfig{Model: tc.model, Effort: tc.effort}}
+				st.projects["mer"] = project
+				request.AgentConfig, request.EffortOverride = ports.AgentConfig{}, false
+			}
+			_, _, _, err := m.Spawn(t.Context(), request)
+			if tc.rejected {
+				if !errors.Is(err, ports.ErrUnsupportedEffort) || rt.created != 0 || len(st.sessions) != 0 || agent.launchCalls != 0 {
+					t.Fatalf("spawn = %v, runtimes=%d, sessions=%d, launches=%d; want effort rejection before launch", err, rt.created, len(st.sessions), agent.launchCalls)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if agent.lastConfig.Effort != tc.effort || agent.launchCalls != 1 || rt.created != 1 {
+				t.Fatalf("launch effort=%q, launches=%d, runtimes=%d; want %q, 1, 1", agent.lastConfig.Effort, agent.launchCalls, rt.created, tc.effort)
 			}
 		})
 	}
