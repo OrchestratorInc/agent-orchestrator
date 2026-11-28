@@ -96,6 +96,8 @@ type Deps struct {
 	CommandOutputInDir    func(ctx context.Context, dir, name string, args ...string) ([]byte, error)
 	RunInteractiveCommand func(ctx context.Context, name, dir string, args []string, stdin io.Reader, stdout, stderr io.Writer) error
 	ReadSecret            func(io.Reader) ([]byte, error)
+	// DoctorResolveCodexBinary resolves like a spawn; see checkCodexLaunchFlags.
+	DoctorResolveCodexBinary func(ctx context.Context) (string, error)
 	// DoctorGitHubRESTBase lets tests point the doctor GitHub token probe at
 	// httptest without mutating package-global state.
 	DoctorGitHubRESTBase string
@@ -118,24 +120,25 @@ type Deps struct {
 // DefaultDeps returns production dependencies.
 func DefaultDeps() Deps {
 	return Deps{
-		In:                    os.Stdin,
-		Out:                   os.Stdout,
-		Err:                   os.Stderr,
-		HTTPClient:            &http.Client{Timeout: 2 * time.Second},
-		Executable:            os.Executable,
-		StartProcess:          startProcess,
-		ProcessAlive:          processalive.Alive,
-		PIDMayBeHidden:        pidMayBeHidden,
-		LookPath:              exec.LookPath,
-		CommandOutput:         commandOutput,
-		CommandOutputInDir:    commandOutputInDir,
-		RunInteractiveCommand: runInteractiveCommand,
-		ReadSecret:            readSecret,
-		DoctorGitHubRESTBase:  defaultDoctorGitHubRESTBase,
-		DoctorGitLabRESTBase:  defaultDoctorGitLabRESTBase,
-		OpenAIRESTBase:        defaultOpenAIRESTBase,
-		Now:                   time.Now,
-		Sleep:                 time.Sleep,
+		In:                       os.Stdin,
+		Out:                      os.Stdout,
+		Err:                      os.Stderr,
+		HTTPClient:               &http.Client{Timeout: 2 * time.Second},
+		Executable:               os.Executable,
+		StartProcess:             startProcess,
+		ProcessAlive:             processalive.Alive,
+		PIDMayBeHidden:           pidMayBeHidden,
+		LookPath:                 exec.LookPath,
+		CommandOutput:            commandOutput,
+		CommandOutputInDir:       commandOutputInDir,
+		RunInteractiveCommand:    runInteractiveCommand,
+		ReadSecret:               readSecret,
+		DoctorResolveCodexBinary: codex.ResolveCodexBinary,
+		DoctorGitHubRESTBase:     defaultDoctorGitHubRESTBase,
+		DoctorGitLabRESTBase:     defaultDoctorGitLabRESTBase,
+		OpenAIRESTBase:           defaultOpenAIRESTBase,
+		Now:                      time.Now,
+		Sleep:                    time.Sleep,
 
 		ResolveAgentBinary: func(ctx context.Context, name string) (string, error) {
 			if name == "claude" {
@@ -204,6 +207,9 @@ func (d Deps) withDefaults() Deps {
 	}
 	if d.ReadSecret == nil {
 		d.ReadSecret = def.ReadSecret
+	}
+	if d.DoctorResolveCodexBinary == nil {
+		d.DoctorResolveCodexBinary = def.DoctorResolveCodexBinary
 	}
 	if d.DoctorGitHubRESTBase == "" {
 		d.DoctorGitHubRESTBase = def.DoctorGitHubRESTBase
