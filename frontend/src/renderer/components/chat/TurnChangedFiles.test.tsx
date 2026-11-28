@@ -277,8 +277,12 @@ describe("TurnChangedFiles", () => {
 
 	it("says the list was cut rather than presenting it as the whole change", () => {
 		render(<TurnChangedFiles diff={diff({ truncated: true })} onReview={() => {}} />);
-		expect(screen.getByText(/changed more files than Orchestrator lists/i)).toBeInTheDocument();
-		expect(screen.getByText(/Use Review for the whole change/i)).toBeInTheDocument();
+		expect(screen.getByText("Preview shortened. Open Review for the full diff.")).toBeInTheDocument();
+	});
+
+	it("points at the Files tab when there is no Review to open", () => {
+		render(<TurnChangedFiles diff={diff({ truncated: true })} />);
+		expect(screen.getByText("Preview shortened. Open the Files tab for the full diff.")).toBeInTheDocument();
 	});
 
 	it("expands beyond the preview with Show N more", async () => {
