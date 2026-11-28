@@ -1185,6 +1185,49 @@ describe("CloudSessionChatSurface", () => {
 			role: "user", origin: "automation", senderLabel: "Worker · Builder", text: "Full prompt",
 		});
 	});
+
+	it("shows a failed ACP prompt in the agent's words, and a usage limit as one, said once", () => {
+		const raw = 'ACP prompt: {"code":-32603,"message":"Internal error: You\'ve hit your 5-hour limit · resets 11am (UTC)","data":{"errorKind":"rate_limit"}}: [session/query] sessionId=c8cf34f2 resume=none apiType=native baseUrl=native\n'
+			+ "(node:9482) [CLAUDE_SDK_CAN_USE_TOOL_SHADOWED] Warning: canUseTool will not be invoked: permissionMode 'bypassPermissions' auto-approves every tool call.\n"
+			+ "(Use `node --trace-warnings ...` to show where the warning was created)";
+		const limit = "You've hit your 5-hour limit · resets 11am (UTC)";
+		const events: CloudCpClientEvent[] = [
+			{ sessionId: session.id, sequence: 1, type: "chat.user_message", payload: { text: "start a review", turnId: "turn-1" }, createdAt: "2026-11-27T08:00:00Z" },
+			{ sessionId: session.id, sequence: 2, type: "chat.turn_started", payload: { turnId: "turn-1" }, createdAt: "2026-11-27T08:00:01Z" },
+			{ sessionId: session.id, sequence: 3, type: "chat.assistant_delta", payload: { turnId: "turn-1", itemId: "a1", text: limit }, createdAt: "2026-11-27T08:00:02Z" },
+			{ sessionId: session.id, sequence: 4, type: "chat.turn_aborted", payload: { turnId: "turn-1", attempt: 1, error: raw }, createdAt: "2026-11-27T08:00:04Z" },
+			{ sessionId: session.id, sequence: 5, type: "chat.user_message", payload: { text: "again", turnId: "turn-2" }, createdAt: "2026-11-27T08:01:00Z" },
+			{ sessionId: session.id, sequence: 6, type: "chat.turn_started", payload: { turnId: "turn-2" }, createdAt: "2026-11-27T08:01:01Z" },
+			{ sessionId: session.id, sequence: 7, type: "chat.turn_aborted", payload: { turnId: "turn-2", attempt: 1, error: "ACP prompt: peer disconnected: Error: spawn claude ENOENT\n(node:1) Warning: something\n" }, createdAt: "2026-11-27T08:01:02Z" },
+		];
+		const snapshot = toSnapshot(session, events);
+		const [limited, crashed] = snapshot.turns;
+		expect(limited).toMatchObject({ state: "failed", errorMessage: limit, usageLimit: { autoResume: false } });
+		// The reply that restates the limit is the outcome's to say.
+		expect(snapshot.items.some((item) => item.kind === "message" && item.role === "assistant")).toBe(false);
+		expect(crashed).toMatchObject({ state: "failed", errorMessage: "peer disconnected: Error: spawn claude ENOENT" });
+		expect(crashed).not.toHaveProperty("usageLimit");
+	});
+
+	it("reads the pull request event an automation message reports, and only from automation", () => {
+		const automation = {
+			kind: "merge_conflict",
+			pullRequest: { number: 8717, url: "https://github.com/acme/app/pull/8717", title: "fix(settings): keep tabs", repository: "acme/app" },
+		};
+		const text = "There are merge conflicts on acme/app#8717. Rebase onto the base branch and resolve them.\nPR: https://github.com/acme/app/pull/8717";
+		const events: CloudCpClientEvent[] = [
+			{ sessionId: session.id, sequence: 1, type: "chat.user_message", payload: { text, turnId: "turn-1", origin: "automation", senderLabel: "GitHub", displayText: text, automation }, createdAt: "2026-10-01T00:00:00Z" },
+			// A person's message cannot claim to be one.
+			{ sessionId: session.id, sequence: 2, type: "chat.user_message", payload: { text, turnId: "turn-2", authorUserId: "me", automation }, createdAt: "2026-10-01T00:00:01Z" },
+		];
+		const [feedback, typed] = toSnapshot(session, events).items;
+		expect(feedback).toMatchObject({
+			role: "user", origin: "automation", senderLabel: "GitHub", text,
+			pullRequestEvent: { kind: "mergeConflict", pr: { number: 8717, url: "https://github.com/acme/app/pull/8717", title: "fix(settings): keep tabs" } },
+		});
+		expect(typed).toMatchObject({ origin: "human" });
+		expect(typed).not.toHaveProperty("pullRequestEvent");
+	});
 	it("says once, outside any turn, that the session runs the default because the account lacks the project's model", () => {
 		const events: CloudCpClientEvent[] = [
 			{ sessionId: session.id, sequence: 1, type: "session.model_unavailable", payload: { model: "claude-opus-5-5", harness: "claude-code" }, createdAt: "2026-10-01T00:00:00Z" },

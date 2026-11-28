@@ -14,6 +14,7 @@ import type { ChatFileReference } from "../../shared/chat-file-reference";
 
 import type { ScriptRun } from "../lib/cloud-script-runs";
 import type { CloudAttachment } from "../lib/cloud-attachments";
+import type { PullRequestAutomation } from "../../../../packages/shared/chat/pull-request-automation";
 
 /** Which controller currently owns the AO session. */
 export type SessionMode = "chat" | "tui";
@@ -259,6 +260,8 @@ export interface ConversationMessage {
 	senderSessionId?: string;
 	senderProjectId?: string;
 	senderDisplayName?: string;
+	/** The pull request event an automation message reports, when AO Cloud sent it with the message. */
+	pullRequestEvent?: PullRequestAutomation;
 	/** The sender's idempotency key. Lets the local echo and this row share one identity. */
 	clientMessageId?: string;
 	/** Files a cloud message carries, read back from the control plane. */

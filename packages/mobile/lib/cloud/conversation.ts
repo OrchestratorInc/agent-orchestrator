@@ -14,6 +14,7 @@ import type {
 	PlanStep,
 } from "../chat/types";
 import { sameSentence, usageLimitSentence } from "../chat/providerError";
+import { cloudPullRequestAutomation } from "../../../shared/chat/pull-request-automation";
 import { cloudLifecycleStage } from "./lifecycle";
 import type { CloudClientEvent, CloudSession } from "./types";
 
@@ -448,6 +449,7 @@ export function cloudConversationSnapshot(session: CloudSession, events: readonl
 			// A desktop message with quotes reads as it was typed, the quotes beside
 			// it; the agent got them inlined in `text`.
 			const quotes = automation ? undefined : messageQuotes(payload.content);
+			const pullRequestEvent = automation ? cloudPullRequestAutomation(payload.automation) : undefined;
 			items.push({
 				kind: "message", id: `cloud-event-${event.sequence}`, sequence: event.sequence, revision: 1, turnId,
 				role: "user", origin: automation ? "automation" : "human",
@@ -458,6 +460,8 @@ export function cloudConversationSnapshot(session: CloudSession, events: readonl
 				senderSessionId: automation ? str(payload.senderSessionId) : undefined,
 				senderProjectId: automation ? str(payload.senderProjectId) : undefined,
 				senderDisplayName: automation ? str(payload.senderDisplayName) : undefined,
+				// A pull request event (failing CI, a review, merge conflicts) draws as that event.
+				...(pullRequestEvent ? { pullRequestEvent } : {}),
 				streaming: false, delivery: "accepted", createdAt: event.createdAt,
 			});
 			continue;

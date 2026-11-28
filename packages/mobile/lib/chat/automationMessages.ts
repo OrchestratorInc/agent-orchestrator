@@ -10,6 +10,9 @@
 // ponytail: parses the daemon's prompt text, as the desktop does; structured rows on the message would end the guess on both clients.
 
 import type { ConversationItem } from "./types";
+import type { FailedCheck, PullRequestAutomation, PullRequestRef, ReviewComment } from "../../../shared/chat/pull-request-automation";
+
+export type { FailedCheck, PullRequestRef, ReviewComment };
 
 /* -------------------------------------------------------------------------- */
 /* worker reports                                                              */
@@ -159,7 +162,6 @@ export function splitHeadline(body: string): { headline: string; detail: string 
 /* automation messages                                                         */
 /* -------------------------------------------------------------------------- */
 
-export type PullRequestRef = { number: number; title?: string; url?: string };
 
 export type FileFeedback = {
 	path: string;
@@ -175,8 +177,6 @@ export type FileFeedback = {
 
 export type BrowserAnnotation = { number: number; target: string; text: string; comment: string; changes: string[] };
 export type BrowserFeedback = { pageTitle: string; pageUrl: string; items: BrowserAnnotation[]; screenshotCount: number };
-export type FailedCheck = { name: string; url?: string; log?: string };
-export type ReviewComment = { path?: string; line?: number; author: string; body: string };
 export type GitAction = "createPR" | "createDraftPR" | "commit" | "commitPush" | "push";
 export type AutomationNotice = "orchestratorReplaced" | "contextCarried" | "reviewTask";
 
@@ -185,11 +185,7 @@ export type Automation =
 	| { kind: "diffSelection"; path: string; start?: number; end?: number; instruction: string }
 	| { kind: "gitAction"; action: GitAction; base?: string }
 	| { kind: "browserFeedback"; annotations: BrowserFeedback }
-	| { kind: "ciFailing"; pr: PullRequestRef; checks: FailedCheck[] }
-	// `at` is when the event happened on the forge; absent in messages from before AO wrote it.
-	| { kind: "reviewComments"; pr: PullRequestRef; comments: ReviewComment[]; at?: string }
-	| { kind: "changesRequested"; pr: PullRequestRef; author?: string; body: string; at?: string }
-	| { kind: "mergeConflict"; pr: PullRequestRef }
+	| PullRequestAutomation
 	| { kind: "notice"; notice: AutomationNotice };
 
 // `PR #12 "title" (source → target)`, as lifecycle's prIdentity writes it.
@@ -432,11 +428,11 @@ export function readAutomation(text: string): Automation | null {
 	return readUserAction(trimmed) ?? readPullRequestNudge(trimmed) ?? readNotice(trimmed);
 }
 
-// A message an agent sent is the agent's, whatever its text says.
+// A message an agent sent is the agent's, whatever its text says. A pull request
+// event AO Cloud sent with the message is read from the event, not its text.
 export const automationOf = cachedBy((item): Automation | null =>
-	item.kind === "message" && item.role === "user" && item.origin !== "human" && !item.senderSessionId && !/^\s*\[from /.test(item.text)
-		? readAutomation(item.text)
-		: null,
+	item.kind !== "message" || item.role !== "user" || item.origin === "human" || item.senderSessionId ? null
+		: item.pullRequestEvent ?? (/^\s*\[from /.test(item.text) ? null : readAutomation(item.text)),
 );
 
 /** The forges AO reads PRs from. A URL in the text links only to these, so a look-alike message cannot send the user elsewhere. */

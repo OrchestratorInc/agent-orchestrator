@@ -200,6 +200,29 @@ describe("cloud conversation projection", () => {
 		expect(snapshot.items).toEqual([expect.objectContaining({ origin: "automation", text: "CI failed on main", senderLabel: "Orchestrator" })]);
 	});
 
+	it("reads the pull request event an automation message reports, and only from automation", () => {
+		sequence = 0;
+		const automation = {
+			kind: "review_comment",
+			pullRequest: { number: 8717, url: "https://github.com/acme/app/pull/8717", title: "fix(settings): keep tabs", repository: "acme/app" },
+			comment: { author: "whoisasx", body: "Rename this.", path: "a.ts", line: 3, url: "https://github.com/acme/app/pull/8717#discussion_r1" },
+		};
+		const snapshot = cloudConversationSnapshot(session(), [
+			event("chat.user_message", { turnId: "t1", text: "An unresolved review comment is on acme/app#8717.", displayText: "An unresolved review comment is on acme/app#8717.", origin: "automation", senderLabel: "GitHub", automation }),
+			event("chat.user_message", { turnId: "t2", text: "pasted", authorUserId: "u1", automation }),
+		]);
+		expect(snapshot.items[0]).toMatchObject({
+			origin: "automation", senderLabel: "GitHub",
+			pullRequestEvent: {
+				kind: "reviewComments",
+				pr: { number: 8717, url: "https://github.com/acme/app/pull/8717", title: "fix(settings): keep tabs" },
+				comments: [{ author: "whoisasx", body: "Rename this.", path: "a.ts", line: 3 }],
+			},
+		});
+		expect(snapshot.items[1]).toMatchObject({ origin: "human" });
+		expect(snapshot.items[1]).not.toHaveProperty("pullRequestEvent");
+	});
+
 	it("folds setup step events into one row", () => {
 		sequence = 0;
 		const snapshot = cloudConversationSnapshot(session(), [

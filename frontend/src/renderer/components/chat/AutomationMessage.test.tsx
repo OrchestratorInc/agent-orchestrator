@@ -22,6 +22,7 @@ vi.mock("../../lib/external-link-policy", async (importOriginal) => ({
 	...(await importOriginal<typeof import("../../lib/external-link-policy")>()),
 	openLinkInSystemBrowser: vi.fn(async () => {}),
 }));
+import { cloudPullRequestAutomation } from "../../../../../packages/shared/chat/pull-request-automation";
 
 const PR = 'PR #6974 "feat: link this computer" (ao/remote/this-computer → main)';
 const URL = "https://github.com/o/r/pull/6974";
@@ -347,6 +348,50 @@ describe("drawing AO's automation messages", () => {
 
 		draw("AO transferred the previous agent's context in hidden system instructions. Continue a clear, safe, already-authorized unfinished action.");
 		expect(screen.getByTestId("automation-notice")).toHaveTextContent("Context carried over from the previous agent");
+	});
+
+	it("draws the pull request event AO Cloud sends with its message, whatever the message's text", async () => {
+		const pr = { number: 8717, url: "https://github.com/acme/app/pull/8717", title: "fix(settings): keep tabs", repository: "acme/app" };
+		const cloud = (automation: object, extra: Partial<ConversationMessage> = {}) => {
+			const pullRequestEvent = cloudPullRequestAutomation(automation);
+			expect(pullRequestEvent).toBeDefined();
+			return message("Cloud's own wording", { senderLabel: "GitHub", pullRequestEvent, ...extra });
+		};
+		const drawCloud = (item: ConversationMessage) => render(<TooltipProvider><AutomationMessage message={item} fallback={<p>card</p>} /></TooltipProvider> as ReactElement);
+
+		drawCloud(cloud({ kind: "merge_conflict", pullRequest: pr }));
+		expect(screen.getByTestId("pull-request-event")).toHaveTextContent("Merge conflicts on #8717");
+		cleanup();
+
+		drawCloud(cloud({ kind: "ci_failing", pullRequest: pr, checks: [{ name: "lint", url: "https://github.com/acme/app/actions/runs/1" }, { name: "unit" }] }));
+		expect(screen.getByTestId("pull-request-event")).toHaveTextContent("#8717");
+		await userEvent.click(within(screen.getByTestId("pull-request-event")).getByRole("button"));
+		expect(screen.getByTestId("pull-request-event")).toHaveTextContent("lint");
+		expect(screen.getByTestId("pull-request-event")).toHaveTextContent("unit");
+		cleanup();
+
+		drawCloud(cloud({ kind: "changes_requested", pullRequest: pr, review: { author: "whoisasx", body: "Split this up." }, at: "2026-11-16T07:54:42Z" }));
+		expect(screen.getByTestId("pull-request-event")).toHaveTextContent("@whoisasx requested changes on #8717");
+		expect(screen.getByTestId("pull-request-event").querySelector("time")).toHaveAttribute("datetime", "2026-11-16T07:54:42Z");
+		cleanup();
+
+		// Cloud sends a review round comment by comment; it draws as one event.
+		const first = cloud({ kind: "review_comment", pullRequest: pr, comment: { author: "illegalcall", body: "Rename this.", path: "a.ts", line: 3 } }, { id: "c1" });
+		const second = cloud({ kind: "review_comment", pullRequest: pr, comment: { author: "illegalcall", body: "And this.", path: "b.ts", line: 9 } }, { id: "c2", sequence: 2 });
+		const bursts = reviewBursts([first, second]);
+		expect(bursts.get("c1")).toEqual([first, second]);
+		render(<TooltipProvider><AutomationMessage message={first} burst={bursts.get("c1")} fallback={<p>card</p>} /></TooltipProvider> as ReactElement);
+		expect(screen.getByTestId("pull-request-event")).toHaveTextContent("2 review comments on #8717");
+	});
+
+	it("keeps the card for a Cloud pull request event it cannot read", () => {
+		expect(cloudPullRequestAutomation({ kind: "deployment_failed", pullRequest: { number: 1 } })).toBeUndefined();
+		expect(cloudPullRequestAutomation({ kind: "merge_conflict", pullRequest: { number: 0 } })).toBeUndefined();
+		expect(cloudPullRequestAutomation({ kind: "ci_failing", pullRequest: { number: 1 }, checks: [] })).toBeUndefined();
+		expect(cloudPullRequestAutomation({ kind: "review_comment", pullRequest: { number: 1 } })).toBeUndefined();
+		expect(cloudPullRequestAutomation("merge_conflict")).toBeUndefined();
+		draw("Cloud's own wording", { senderLabel: "GitHub" });
+		expect(screen.getByText("card")).toBeInTheDocument();
 	});
 
 	it("draws a git button and a diff selection as the user's own message, queued until sent", () => {
