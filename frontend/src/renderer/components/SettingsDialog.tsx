@@ -145,9 +145,9 @@ function useSettingsLayer(settingsModal: SettingsModal | null) {
 		{ id: "general", label: t("settings.project.general"), icon: MonitorCog },
 		{ id: "agents", label: t("settings.project.agents"), icon: Bot },
 	];
-	// Scripts, environment and cues are project settings on local and Cloud
-	// projects alike (a Cloud session's worker runs and gets them); remote hosts
-	// expose none of these.
+	// Scripts, environment and cues are project settings on local, remote-host
+	// and Cloud projects alike (a Cloud session's worker runs and gets them; a
+	// remote host's daemon stores and runs its own).
 	// A Cloud project's repositories, where its agent starts, and the
 	// instructions added to its agents' prompts live on the control plane.
 	if (isCloudProjectSettings) {
@@ -156,11 +156,9 @@ function useSettingsLayer(settingsModal: SettingsModal | null) {
 		projectSections.push({ id: "repositories", label: workspace ? t("settings.cloudProject.workspaceRepositories", { defaultValue: "Workspace repositories" }) : t("settings.project.repositories", { defaultValue: "Repositories" }), icon: FolderGit2 });
 		projectSections.push({ id: "instructions", label: t("settings.project.instructions", { defaultValue: "Instructions" }), icon: ScrollText });
 	}
-	if (!remoteHostId) projectSections.push({ id: "scripts", label: t("settings.project.scripts"), icon: Wrench });
-	if (!remoteHostId) {
-		projectSections.push({ id: "environment", label: t("settings.project.environment"), icon: KeyRound });
-		projectSections.push({ id: "cues", label: t("cues.title"), icon: Play });
-	}
+	projectSections.push({ id: "scripts", label: t("settings.project.scripts"), icon: Wrench });
+	projectSections.push({ id: "environment", label: t("settings.project.environment"), icon: KeyRound });
+	projectSections.push({ id: "cues", label: t("cues.title"), icon: Play });
 	// Sharing the whole project, as a session's Share does: only the project's
 	// own organization shares it, and only once WorkOS enables sharing for it.
 	const canShareProject = isCloudProjectSettings && cloudOrgId === offering.org?.id && offering.features?.includes(SHARE_FEATURE) === true;
@@ -343,8 +341,8 @@ function useSettingsLayer(settingsModal: SettingsModal | null) {
 					</div>
 				);
 			}
-			if (displaySettings?.scope === "project" && !remoteHostId && activeProjectSection === "cues") {
-				return <CuesSettings projectId={displaySettings.projectId} cloudOrgId={cloudOrgId} onBusyChange={setCueBusy} />;
+			if (displaySettings?.scope === "project" && activeProjectSection === "cues") {
+				return <CuesSettings projectId={displaySettings.projectId} cloudOrgId={cloudOrgId} hostId={remoteHostId} onBusyChange={setCueBusy} />;
 			}
 			if (displaySettings?.scope === "project" && isCloudProjectSettings && cloudOrgId !== undefined && activeProjectSection === "repositories") {
 				return <CloudProjectRepositoriesSettings projectId={displaySettings.projectId} cloudOrgId={cloudOrgId} onSaveState={setProjectSaveState} />;
@@ -355,15 +353,15 @@ function useSettingsLayer(settingsModal: SettingsModal | null) {
 			if (displaySettings?.scope === "project" && isCloudProjectSettings && cloudOrgId !== undefined && activeProjectSection === "instructions") {
 				return <CloudProjectInstructionsSettings projectId={displaySettings.projectId} cloudOrgId={cloudOrgId} onSaveState={setProjectSaveState} />;
 			}
-			if (displaySettings?.scope === "project" && !remoteHostId && activeProjectSection === "scripts") {
+			if (displaySettings?.scope === "project" && activeProjectSection === "scripts") {
 				return isCloudProjectSettings && cloudOrgId !== undefined
 					? <CloudProjectScriptsSettings projectId={displaySettings.projectId} cloudOrgId={cloudOrgId} onSaveState={setProjectSaveState} />
-					: <ProjectScriptsSettings projectId={displaySettings.projectId} onSaveState={setProjectSaveState} />;
+					: <ProjectScriptsSettings projectId={displaySettings.projectId} hostId={remoteHostId} onSaveState={setProjectSaveState} />;
 			}
-			if (displaySettings?.scope === "project" && !remoteHostId && activeProjectSection === "environment") {
+			if (displaySettings?.scope === "project" && activeProjectSection === "environment") {
 				return isCloudProjectSettings && cloudOrgId !== undefined
 					? <CloudProjectEnvironmentSettings projectId={displaySettings.projectId} cloudOrgId={cloudOrgId} onSaveState={setProjectSaveState} />
-					: <ProjectEnvironmentSettings projectId={displaySettings.projectId} onSaveState={setProjectSaveState} />;
+					: <ProjectEnvironmentSettings projectId={displaySettings.projectId} hostId={remoteHostId} onSaveState={setProjectSaveState} />;
 			}
 			if (displaySettings?.scope === "project") {
 				return <ProjectSettingsForm projectId={displaySettings.projectId} hostId={remoteHostId} cloudOrgId={cloudOrgId} section={activeProjectSection as ProjectFormSection} onSaveState={setProjectSaveState} />;

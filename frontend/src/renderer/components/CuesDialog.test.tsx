@@ -384,6 +384,23 @@ test("agent editing validates required content and keeps a failed update editabl
 	expect(cues.updateCue).toHaveBeenLastCalledWith("cue-1", expect.objectContaining({ prompt: "  explain\n", type: "agent" }));
 });
 
+test("a remote host's cues load and save on that host, with command cues left to the host itself", async () => {
+	setup(<CuesSettings projectId="project" hostId="box-a" />);
+	await screen.findByText("Tests");
+	expect(cues.fetchProjectCues).toHaveBeenCalledWith("project", undefined, "box-a");
+	expect(screen.getByText("Command cues can only be added or changed on the host itself.")).toBeInTheDocument();
+	expect(screen.getByRole("button", { name: "Edit" })).toBeDisabled();
+	expect(screen.getByRole("button", { name: "Delete" })).toBeEnabled();
+
+	fireEvent.click(screen.getByRole("button", { name: "New cue" }));
+	expect(screen.queryByLabelText("Command")).toBeNull();
+	fireEvent.change(screen.getByLabelText("Name"), { target: { value: "Explain" } });
+	fireEvent.change(screen.getByLabelText("Agent instruction"), { target: { value: "explain" } });
+	fireEvent.click(screen.getByRole("button", { name: "Create" }));
+	await waitFor(() => expect(cues.createCue).toHaveBeenCalledTimes(1));
+	expect(cues.createCue).toHaveBeenLastCalledWith("project", expect.objectContaining({ type: "agent", prompt: "explain" }), undefined, "box-a");
+});
+
 test.each(["", "deleted-cue"])("clicking without a valid remembered cue (%s) opens the list", async (id) => {
 	rememberLastRunCue("project", id);
 	setup(<CueRunMenu projectId="project" sessionId="session" />);

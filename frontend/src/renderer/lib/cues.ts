@@ -2,6 +2,8 @@ import { apiErrorException } from "./api-error-exception";
 import type { components } from "../../api/schema";
 import { apiClient } from "./api-client";
 import type { CloudCpClient } from "./cloud-cp";
+import { clientForSessionHost } from "./host-clients";
+import type { HostId } from "./hosts";
 
 export type CueDTO = components["schemas"]["CueResponse"];
 export type CueInput = components["schemas"]["CueDefinitionRequest"];
@@ -9,7 +11,10 @@ export type CueInvokeResult = components["schemas"]["InvokeCueResponse"];
 /** A Cloud command cue comes back as its command, for the desktop to run in a new shell of the session. */
 export type CloudCueInvokeResult = { kind: "agent" | "command"; sessionId: string; command?: string };
 
-/** A Cloud project's cues live on the control plane; a local project's on the daemon. */
+/**
+ * A Cloud project's cues live on the control plane; a local project's on the
+ * local daemon; a remote host's project's on that host's daemon (hostId).
+ */
 export type CueHost = { client: CloudCpClient; orgId: string };
 
 export const CUE_LIMITS = {
@@ -18,20 +23,21 @@ export const CUE_LIMITS = {
 	prompt: 16384,
 } as const;
 
-export const projectCuesQueryKey = (projectId: string) => ["cues", projectId] as const;
+export const projectCuesQueryKey = (projectId: string, hostId?: HostId) =>
+	hostId ? ["cues", hostId, projectId] as const : ["cues", projectId] as const;
 
-export async function fetchProjectCues(projectId: string, cloud?: CueHost): Promise<CueDTO[]> {
+export async function fetchProjectCues(projectId: string, cloud?: CueHost, hostId?: HostId): Promise<CueDTO[]> {
 	if (cloud) return (await cloud.client.listProjectCues(cloud.orgId, projectId)).cues;
-	const { data, error } = await apiClient.GET("/api/v1/projects/{projectId}/cues", {
+	const { data, error } = await clientForSessionHost(hostId).GET("/api/v1/projects/{projectId}/cues", {
 		params: { path: { projectId } },
 	});
 	if (error) throw apiErrorException(error, "Could not load cues");
 	return data?.cues ?? [];
 }
 
-export async function createCue(projectId: string, input: CueInput, cloud?: CueHost): Promise<CueDTO> {
+export async function createCue(projectId: string, input: CueInput, cloud?: CueHost, hostId?: HostId): Promise<CueDTO> {
 	if (cloud) return (await cloud.client.createProjectCue(cloud.orgId, projectId, toCloudCue(input))).cue;
-	const { data, error } = await apiClient.POST("/api/v1/projects/{projectId}/cues", {
+	const { data, error } = await clientForSessionHost(hostId).POST("/api/v1/projects/{projectId}/cues", {
 		params: { path: { projectId } },
 		body: input,
 	});
@@ -39,9 +45,9 @@ export async function createCue(projectId: string, input: CueInput, cloud?: CueH
 	return data.cue;
 }
 
-export async function updateCue(cueId: string, input: CueInput, cloud?: CueHost): Promise<CueDTO> {
+export async function updateCue(cueId: string, input: CueInput, cloud?: CueHost, hostId?: HostId): Promise<CueDTO> {
 	if (cloud) return (await cloud.client.updateProjectCue(cloud.orgId, cueId, toCloudCue(input))).cue;
-	const { data, error } = await apiClient.PATCH("/api/v1/cues/{cueId}", {
+	const { data, error } = await clientForSessionHost(hostId).PATCH("/api/v1/cues/{cueId}", {
 		params: { path: { cueId } },
 		body: input,
 	});
@@ -49,9 +55,9 @@ export async function updateCue(cueId: string, input: CueInput, cloud?: CueHost)
 	return data.cue;
 }
 
-export async function deleteCue(cueId: string, cloud?: CueHost): Promise<void> {
+export async function deleteCue(cueId: string, cloud?: CueHost, hostId?: HostId): Promise<void> {
 	if (cloud) return cloud.client.deleteProjectCue(cloud.orgId, cueId);
-	const { error } = await apiClient.DELETE("/api/v1/cues/{cueId}", {
+	const { error } = await clientForSessionHost(hostId).DELETE("/api/v1/cues/{cueId}", {
 		params: { path: { cueId } },
 	});
 	if (error) throw apiErrorException(error, "Could not delete cue");

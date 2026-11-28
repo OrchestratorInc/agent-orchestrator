@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"slices"
 	"sync"
 
 	"github.com/go-chi/chi/v5"
@@ -15,6 +16,7 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/apispec"
 	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/envelope"
+	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/requestscope"
 	projectsvc "github.com/aoagents/agent-orchestrator/backend/internal/service/project"
 )
 
@@ -247,12 +249,41 @@ func (c *ProjectsController) updateSettings(w http.ResponseWriter, r *http.Reque
 		envelope.WriteAPIError(w, r, http.StatusBadRequest, "bad_request", "INVALID_JSON", "Invalid JSON body", nil)
 		return
 	}
+	if c.rejectLANScriptChange(w, r, in.Config) {
+		return
+	}
 	p, err := c.Mgr.UpdateSettings(r.Context(), projectID(r), in)
 	if err != nil {
 		envelope.WriteError(w, r, err)
 		return
 	}
 	envelope.WriteJSON(w, http.StatusOK, ProjectResponse{Project: p})
+}
+
+// rejectLANScriptChange refuses a request from the LAN listener (a paired
+// remote desktop or phone) that would add or change the project's Setup
+// (postCreate) or Cleanup (preRemove) commands. They are shell commands the
+// host runs, so like command cues (rejectLANCommandCueWrite) they are set on
+// the owning desktop. A LAN save that resends the stored commands unchanged,
+// such as an Environment save, still goes through.
+func (c *ProjectsController) rejectLANScriptChange(w http.ResponseWriter, r *http.Request, next domain.ProjectConfig) bool {
+	if !requestscope.IsLAN(r.Context()) {
+		return false
+	}
+	got, err := c.Mgr.Get(r.Context(), projectID(r))
+	if err != nil {
+		envelope.WriteError(w, r, err)
+		return true
+	}
+	var stored domain.ProjectConfig
+	if got.Project != nil && got.Project.Config != nil {
+		stored = *got.Project.Config
+	}
+	if slices.Equal(stored.PostCreate, next.PostCreate) && slices.Equal(stored.PreRemove, next.PreRemove) {
+		return false
+	}
+	envelope.WriteAPIError(w, r, http.StatusForbidden, "forbidden", "PROJECT_SCRIPTS_LOOPBACK_REQUIRED", "Setup and cleanup commands must be changed on the owning desktop", nil)
+	return true
 }
 
 func (c *ProjectsController) setConfig(w http.ResponseWriter, r *http.Request) {
@@ -263,6 +294,9 @@ func (c *ProjectsController) setConfig(w http.ResponseWriter, r *http.Request) {
 	var in projectsvc.SetConfigInput
 	if err := decodeJSONStrict(r, &in); err != nil {
 		envelope.WriteAPIError(w, r, http.StatusBadRequest, "bad_request", "INVALID_JSON", "Invalid JSON body", nil)
+		return
+	}
+	if c.rejectLANScriptChange(w, r, in.Config) {
 		return
 	}
 	p, err := c.Mgr.SetConfig(r.Context(), projectID(r), in)

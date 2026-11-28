@@ -1,3 +1,4 @@
+import { projectQueryKey } from "../lib/project-query-key";
 import { apiErrorException } from "../lib/api-error-exception";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
@@ -33,8 +34,6 @@ type ProjectConfig = components["schemas"]["ProjectConfig"];
 type TrackerIntakeConfig = components["schemas"]["TrackerIntakeConfig"];
 
 const DEFAULT_BRANCH_AUTO = "auto";
-
-const projectQueryKey = (id: string, hostId?: string) => hostId ? ["project", hostId, id] as const : ["project", id] as const;
 
 type SettingsSaveResult = {
 	savedKey: string;
