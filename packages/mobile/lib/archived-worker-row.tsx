@@ -1,6 +1,7 @@
 import { memo, useMemo } from "react";
 import { Pressable, StyleSheet, Text, View } from "react-native";
 import type { DashboardSession } from "./api";
+import { canRestore } from "./sessionStatus";
 import { AgentLogo } from "./AgentLogo";
 import { AppSymbol } from "./AppSymbol";
 import { sessionMachineIdentity } from "./hostedRows";
@@ -101,7 +102,7 @@ export const ArchivedWorkerRow = memo(function ArchivedWorkerRow({
 				) : null}
 				{restoreError ? <Text accessibilityRole="alert" style={styles.restoreError}>{restoreError}</Text> : null}
 			</View>
-			<Pressable
+			{canRestore(session) ? <Pressable
 				accessibilityRole="button"
 				accessibilityLabel={`Restore ${row.title}`}
 				accessibilityHint={offline ? "Unavailable while this machine is offline." : undefined}
@@ -114,7 +115,7 @@ export const ArchivedWorkerRow = memo(function ArchivedWorkerRow({
 				{restoring
 					? <Spinner size={iconSize.lg} color={t.textPrimary} />
 					: <AppSymbol name={workerActionSymbol("restore")} size={iconSize.lg} color={t.textSecondary} />}
-			</Pressable>
+			</Pressable> : null}
 		</View>
 	);
 });

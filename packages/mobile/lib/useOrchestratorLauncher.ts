@@ -43,7 +43,9 @@ export function useOrchestratorLauncher() {
 		router.push({ pathname: "/session/[id]", params: { id, projectId: row.project.id, hostId: rowHostId(row, currentHostId) } });
 	}, [currentHostId, router]);
 
-	const runLaunch = useCallback(async (row: OrchestratorProjectRow, mode: "chat" | "tui" = "chat") => {
+	// No mode lets the machine start Chat and fall back to Terminal UI on its own;
+	// "tui" is only the explicit retry offered when a Chat start is still refused.
+	const runLaunch = useCallback(async (row: OrchestratorProjectRow, mode?: "tui") => {
 		const hostId = rowHostId(row, currentHostId);
 		const key = hostedRowKey(hostId, row.project.id);
 		if (launching.current.has(key)) return;
@@ -55,7 +57,7 @@ export function useOrchestratorLauncher() {
 			else await refreshHost(hostId);
 		} catch (cause) {
 			haptics.error();
-			if (mode === "chat" && isChatPreflightError(cause)) {
+			if (mode !== "tui" && isChatPreflightError(cause)) {
 				Alert.alert("Chat is unavailable", chatErrorCopy(cause), [
 					{ text: "Cancel", style: "cancel" },
 					{ text: "Start Terminal UI", onPress: () => void runLaunch(row, "tui") },
