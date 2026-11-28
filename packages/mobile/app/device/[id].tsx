@@ -331,6 +331,11 @@ function DeviceLive({ config, foreground, lease, leaseError, onReleased, session
 	};
 	const startRef = useRef(start);
 	startRef.current = start;
+	// Running, by this start or another client's: a wait for room is over, and a
+	// later stop (shut down outside AO) must ask for Start, not start it again.
+	useEffect(() => {
+		if (!off) setStartProblem(undefined);
+	}, [off]);
 	// Put to sleep for going unused: started again as soon as it is on screen.
 	useWakeOnShow(asleep, foreground, starting, start);
 	const subtitle = [device.version, off ? (asleep ? "Asleep" : "Off") : null].filter(Boolean).join(" · ");
