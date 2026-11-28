@@ -7,4 +7,13 @@ export type DictationEvent =
 	| { type: "finishing" }
 	| { type: "end"; text: string }
 	| { type: "error"; message: string }
+	/** Another surface started dictating; this one's run ends with what it has. */
+	| { type: "superseded" }
 	| { type: "exit" };
+
+/**
+ * An event as main delivers it: tagged with the run number the surface passed
+ * to `dictation:start`, so a late event from an earlier run (a "superseded" in
+ * flight, say) cannot end the run started after it.
+ */
+export type DictationMessage = DictationEvent & { run: number };

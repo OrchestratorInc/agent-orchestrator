@@ -21,7 +21,7 @@ export const aoBridge: AoBridge =
 			onState: () => () => undefined,
 		},
 		dictation: {
-			start: async () => undefined,
+			start: async () => false,
 			stop: async () => undefined,
 			cancel: async () => undefined,
 			onEvent: () => () => undefined,

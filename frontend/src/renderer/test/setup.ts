@@ -147,7 +147,7 @@ if (typeof window !== "undefined") {
 			onState: () => () => undefined,
 		},
 		dictation: {
-			start: async () => undefined,
+			start: async () => true,
 			stop: async () => undefined,
 			cancel: async () => undefined,
 			onEvent: () => () => undefined,
