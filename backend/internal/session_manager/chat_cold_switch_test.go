@@ -25,7 +25,7 @@ func seedExitedChatSession(st *fakeStore, id domain.SessionID) {
 // target's own launch, never the exited source's, and drops the source's
 // provider conversation.
 func TestLaunchColdChatSwitchBuildsTheTargetLaunch(t *testing.T) {
-	m, st, _ := newChatManager(&recordingLauncher{})
+	m, st, _ := newChatManager(t, &recordingLauncher{})
 	seedExitedChatSession(st, "mer-1")
 	var got ChatStart
 	err := m.LaunchColdChatSwitch(context.Background(), "mer-1", domain.HarnessClaudeCode,
@@ -57,7 +57,7 @@ func TestLaunchColdChatSwitchBuildsTheTargetLaunch(t *testing.T) {
 // A resume the user started holds the session; the cold switch must not start a
 // second agent beside it.
 func TestLaunchColdChatSwitchRefusesWhileAResumeRuns(t *testing.T) {
-	m, st, _ := newChatManager(&recordingLauncher{})
+	m, st, _ := newChatManager(t, &recordingLauncher{})
 	seedExitedChatSession(st, "mer-1")
 	m.agentOpMu.Lock()
 	m.agentOperations["mer-1"] = agentOperationResume
@@ -81,7 +81,7 @@ func TestLaunchColdChatSwitchRefusesWhileAResumeRuns(t *testing.T) {
 // chat that never chose a mode runs under the strictest mode agy accepts, not the
 // project's bypass default, so a cold switch must not hand the target bypass.
 func TestLaunchColdChatSwitchCarriesTheSourceChatsPermissions(t *testing.T) {
-	m, st, _ := newChatManager(&recordingLauncher{permissionModes: []ports.PermissionMode{ports.PermissionModeDefault}})
+	m, st, _ := newChatManager(t, &recordingLauncher{permissionModes: []ports.PermissionMode{ports.PermissionModeDefault}})
 	project := st.projects[string(chatTestProject)]
 	project.Config.AgentConfig.Permissions = ports.PermissionModeBypassPermissions
 	st.projects[string(chatTestProject)] = project

@@ -42,7 +42,7 @@ func (r *recordingRefresher) SwitchToInstalledRelease(_ context.Context, id doma
 }
 
 func TestMarkHarnessUpdatedMarksThroughTheStore(t *testing.T) {
-	mgr, store, _ := newChatManager(&recordingLauncher{})
+	mgr, store, _ := newChatManager(t, &recordingLauncher{})
 	stale := &staleBinaryFakeStore{fakeStore: store}
 	mgr.store = stale
 	if err := mgr.MarkHarnessUpdated(context.Background(), domain.HarnessCodex, "2.0.0", time.Now()); err != nil {
@@ -55,7 +55,7 @@ func TestMarkHarnessUpdatedMarksThroughTheStore(t *testing.T) {
 
 func TestRefreshStaleChatsSkipsSessionsInAnotherOperation(t *testing.T) {
 	refresher := &recordingRefresher{recordingLauncher: &recordingLauncher{live: true}}
-	mgr, store, _ := newChatManager(refresher)
+	mgr, store, _ := newChatManager(t, refresher)
 	seedChatResumeSession(store, domain.ActivityIdle)
 	busy := store.sessions["mer-1"]
 	busy.ID = "busy"
@@ -81,7 +81,7 @@ func TestRefreshStaleChatsSkipsSessionsInAnotherOperation(t *testing.T) {
 }
 
 func TestForEachVersionMoveRunsAtMostFourAtOnce(t *testing.T) {
-	mgr, _, _ := newChatManager(&recordingLauncher{})
+	mgr, _, _ := newChatManager(t, &recordingLauncher{})
 	ids := make([]domain.SessionID, 10)
 	for i := range ids {
 		ids[i] = domain.SessionID(fmt.Sprintf("s%d", i))
@@ -105,7 +105,7 @@ func TestForEachVersionMoveRunsAtMostFourAtOnce(t *testing.T) {
 }
 
 func TestRetryVersionMovesForgetsSessionsThatAreBack(t *testing.T) {
-	mgr, store, _ := newChatManager(&recordingLauncher{live: true})
+	mgr, store, _ := newChatManager(t, &recordingLauncher{live: true})
 	seedChatResumeSession(store, domain.ActivityIdle)
 	mgr.versionRetries.note("mer-1")
 	if err := mgr.RetryVersionMoves(context.Background()); err != nil {
@@ -118,7 +118,7 @@ func TestRetryVersionMovesForgetsSessionsThatAreBack(t *testing.T) {
 
 func TestRetryVersionMovesWaitsForSharedPermit(t *testing.T) {
 	launcher := &recordingLauncher{startErr: fmt.Errorf("fixture startup failed")}
-	mgr, store, _ := newChatManager(launcher)
+	mgr, store, _ := newChatManager(t, launcher)
 	seedChatResumeSession(store, domain.ActivityExited)
 	mgr.versionRetries.note("mer-1")
 	var releases []func()
@@ -148,7 +148,7 @@ func TestRetryVersionMoveHoldsPermitThroughStartup(t *testing.T) {
 	entered, finish := make(chan struct{}), make(chan struct{})
 	launcher := &recordingLauncher{beforeStart: func(ChatStart) { close(entered); <-finish }}
 	launcher.afterReady = func() { launcher.live = true }
-	mgr, store, _ := newChatManager(launcher)
+	mgr, store, _ := newChatManager(t, launcher)
 	seedChatResumeSession(store, domain.ActivityExited)
 	mgr.versionRetries.note("mer-1")
 	done := make(chan error, 1)

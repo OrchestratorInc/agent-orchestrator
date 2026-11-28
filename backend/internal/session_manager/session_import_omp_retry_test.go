@@ -63,7 +63,7 @@ func TestOMPFailedFirstLoadKeepsArchivePairedWithRelocatedCopy(t *testing.T) {
 		t.Fatal(err)
 	}
 	launcher := &recordingLauncher{startErr: ports.ErrChatResumeFailed, providerConversationID: nativeID}
-	m, st, _ := newChatManager(launcher)
+	m, st, _ := newChatManager(t, launcher)
 	m.agents = relocatingAgents{agent: ompRetryAgent{}}
 	archive := &ompRetryArchiveStore{fakeStore: st}
 	m.SetImportArchiveRefresher(sessionimport.New(archive, "", func(domain.AgentHarness) bool { return true }))

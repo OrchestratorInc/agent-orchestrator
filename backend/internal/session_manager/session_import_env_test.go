@@ -142,7 +142,7 @@ func TestImportedPreparationEnvironmentIsClonedAndErrorsRedacted(t *testing.T) {
 
 func TestChatImportPreparationReusesEnvironmentThroughControllerGate(t *testing.T) {
 	launcher := &recordingLauncher{}
-	manager, store, _ := newChatManager(launcher)
+	manager, store, _ := newChatManager(t, launcher)
 	manager.dataDir = t.TempDir()
 	seedChatResumeSession(store, domain.ActivityExited)
 	root := t.TempDir()
@@ -207,7 +207,7 @@ func TestLegacyImportRelocationGetsEnvironmentClone(t *testing.T) {
 
 func TestNonImportChatLaunchEnvironmentRemainsIdentical(t *testing.T) {
 	launcher := &recordingLauncher{}
-	manager, store, _ := newChatManager(launcher)
+	manager, store, _ := newChatManager(t, launcher)
 	manager.dataDir = t.TempDir()
 	seedChatResumeSession(store, domain.ActivityExited)
 	record := store.sessions["mer-1"]

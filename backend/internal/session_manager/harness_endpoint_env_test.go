@@ -377,7 +377,7 @@ func TestRuntimeEnvStopsLaunchOnBrokenEndpointBeforeResolvingAccount(t *testing.
 
 func TestDefaultChatSpawnRejectsBrokenEndpointBeforeCreatingSession(t *testing.T) {
 	launcher := &recordingLauncher{}
-	manager, store, runtime := newChatManager(launcher)
+	manager, store, runtime := newChatManager(t, launcher)
 	manager.defaults = fixedSessionModeDefaults(domain.SessionModeChat)
 	manager.dataDir = t.TempDir()
 	writeBrokenCodexEndpoint(t, manager.dataDir)

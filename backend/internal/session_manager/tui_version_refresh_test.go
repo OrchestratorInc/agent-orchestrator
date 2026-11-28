@@ -27,7 +27,7 @@ func (g *viewerGate) TerminalOnScreen(string) bool               { return g.onSc
 
 func TestTerminalRestartWaitsForEveryBlocker(t *testing.T) {
 	now := time.Date(2026, 10, 15, 12, 0, 0, 0, time.UTC)
-	mgr, _, _ := newChatManager(&recordingLauncher{})
+	mgr, _, _ := newChatManager(t, &recordingLauncher{})
 	mgr.clock = func() time.Time { return now }
 	mgr.agents = singleAgent{agent: claudecode.New()}
 	gate := &viewerGate{}
@@ -81,7 +81,7 @@ func (r *styledScreenRuntime) GetStyledOutput(context.Context, ports.RuntimeHand
 // report, and no new idle report follows. The rendered screen decides then.
 func TestTerminalRestartAfterInputThatChangedNothing(t *testing.T) {
 	now := time.Date(2026, 10, 15, 12, 0, 0, 0, time.UTC)
-	mgr, _, rt := newChatManager(&recordingLauncher{})
+	mgr, _, rt := newChatManager(t, &recordingLauncher{})
 	mgr.clock = func() time.Time { return now }
 	mgr.agents = singleAgent{agent: transitionSurfaceAgent{}}
 	screen := &styledScreenRuntime{fakeRuntime: rt}
@@ -124,7 +124,7 @@ func TestTerminalRefreshCapabilities(t *testing.T) {
 		domain.HarnessCursor: cursor.New(), domain.HarnessGemini: gemini.New(),
 	} {
 		t.Run(string(harness), func(t *testing.T) {
-			mgr, _, _ := newChatManager(&recordingLauncher{})
+			mgr, _, _ := newChatManager(t, &recordingLauncher{})
 			mgr.agents = singleAgent{agent: agent}
 			mgr.SetTerminalInputGate(&viewerGate{})
 			rec := domain.SessionRecord{Harness: harness, Kind: domain.KindWorker,

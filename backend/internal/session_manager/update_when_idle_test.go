@@ -11,7 +11,7 @@ import (
 )
 
 func TestBusyHarnessSessionsNamesWhyEachMustWait(t *testing.T) {
-	mgr, store, _ := newChatManager(&recordingLauncher{})
+	mgr, store, _ := newChatManager(t, &recordingLauncher{})
 	now := time.Now()
 	seedChatResumeSession(store, domain.ActivityIdle)
 	idle := store.sessions["mer-1"]
@@ -62,7 +62,7 @@ func (idleWorkloadRuntime) RunningWorkloadCommands(context.Context, ports.Runtim
 }
 
 func TestBusyHarnessSessionsKeepsATerminalThatCannotResume(t *testing.T) {
-	mgr, store, rt := newChatManager(&recordingLauncher{})
+	mgr, store, rt := newChatManager(t, &recordingLauncher{})
 	mgr.runtime = idleWorkloadRuntime{rt}
 	terminal := func(id domain.SessionID, agentSessionID string) domain.SessionRecord {
 		return domain.SessionRecord{ID: id, ProjectID: chatTestProject, Kind: domain.KindWorker,
@@ -86,7 +86,7 @@ func TestBusyHarnessSessionsKeepsATerminalThatCannotResume(t *testing.T) {
 
 func TestResumeAfterUpdateDeliversWhatQueuedWhileStopped(t *testing.T) {
 	launcher := &recordingLauncher{}
-	mgr, store, _ := newChatManager(launcher)
+	mgr, store, _ := newChatManager(t, launcher)
 	seedChatResumeSession(store, domain.ActivityIdle)
 	rec := store.sessions["mer-1"]
 	at := time.Now().UTC()
@@ -105,7 +105,7 @@ func TestFailedResumeAfterUpdateIsRetriedWithoutTheUser(t *testing.T) {
 	providerErr := errors.New("provider failed to start")
 	launcher := &recordingLauncher{startErr: providerErr}
 	launcher.afterReady = func() { launcher.live = true }
-	mgr, store, _ := newChatManager(launcher)
+	mgr, store, _ := newChatManager(t, launcher)
 	seedChatResumeSession(store, domain.ActivityIdle)
 	rec := store.sessions["mer-1"]
 	at := time.Now().UTC()
@@ -160,7 +160,7 @@ func TestRetryAfterUpdateNeverFallsBackToFreshTerminal(t *testing.T) {
 // STAKPAK_API_KEY after a daemon restart, for one). The probe issues no
 // browser capability.
 func TestTerminalResumeProbePassesTheSessionEnvironment(t *testing.T) {
-	mgr, store, rt := newChatManager(&recordingLauncher{})
+	mgr, store, rt := newChatManager(t, &recordingLauncher{})
 	mgr.runtime = idleWorkloadRuntime{rt}
 	agent := &recordingAgent{}
 	mgr.agents = singleAgent{agent}

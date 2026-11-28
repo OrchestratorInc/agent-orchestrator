@@ -48,7 +48,7 @@ func TestTaskNamingAllShippedAgents(t *testing.T) {
 				launcher.err = ports.ErrChatCapabilityUnavailable
 				want = "fix-login-redirect"
 			}
-			m, st, _ := newChatManager(launcher)
+			m, st, _ := newChatManager(t, launcher)
 			m.dataDir = t.TempDir()
 			m.runBackground = func(work func()) { work() }
 			cfg := asyncChatSpawnConfig("Fix login redirect")
@@ -225,7 +225,7 @@ func TestTaskNamingFallbackAndManualTitle(t *testing.T) {
 }
 
 func TestTaskNamingDeadlineAndCapacity(t *testing.T) {
-	m, st, _ := newChatManager(&taskNamingLauncher{wait: true})
+	m, st, _ := newChatManager(t, &taskNamingLauncher{wait: true})
 	m.dataDir = t.TempDir()
 	cfg := asyncChatSpawnConfig("Fix login redirect")
 	cfg.NameFromPrompt = true
@@ -495,7 +495,7 @@ func TestTaskNamingRecordsSplitBranches(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			ctx := context.Background()
-			m, fake, _ := newChatManager(&recordingLauncher{})
+			m, fake, _ := newChatManager(t, &recordingLauncher{})
 			st := sqlitetest.MustOpen(t)
 			if err := st.UpsertProject(ctx, fake.projects["mer"]); err != nil {
 				t.Fatal(err)

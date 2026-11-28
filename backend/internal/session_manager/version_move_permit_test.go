@@ -38,7 +38,7 @@ func (r *wakeCountingRefresher) WaitForWake(context.Context, domain.SessionID) e
 
 func TestVersionMovesHoldTheirPermitUntilTheProviderStarted(t *testing.T) {
 	refresher := &wakeCountingRefresher{recordingLauncher: &recordingLauncher{live: true}}
-	mgr, store, _ := newChatManager(refresher)
+	mgr, store, _ := newChatManager(t, refresher)
 	seedChatResumeSession(store, domain.ActivityIdle)
 	base := store.sessions["mer-1"]
 	ids := make([]domain.SessionID, 7)
@@ -68,7 +68,7 @@ func TestVersionMovesHoldTheirPermitUntilTheProviderStarted(t *testing.T) {
 }
 
 func TestVersionMovesWaitWhileEveryPermitIsHeld(t *testing.T) {
-	mgr, _, _ := newChatManager(&recordingLauncher{})
+	mgr, _, _ := newChatManager(t, &recordingLauncher{})
 	for range maxConcurrentVersionMoves {
 		release, err := mgr.versionMoves.acquire(context.Background())
 		if err != nil {

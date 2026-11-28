@@ -5408,7 +5408,11 @@ func (m *Manager) restoreAllSession(ctx context.Context, rec domain.SessionRecor
 		recreated = recreated || missing
 	}
 	if recreated {
-		m.noteSetupOwed(rec.ID)
+		if err := m.noteSetupOwed(rec.ID); err != nil {
+			m.logger.Error("restore-all: record owed setup failed", "sessionID", rec.ID, "error", err)
+			captureBackgroundFault(ctx, err, "boot_restore", "restore_workspace")
+			return
+		}
 	}
 
 	// Step 1: ensure the worktree exists. workspace.Restore re-creates it
@@ -5569,7 +5573,9 @@ func (m *Manager) restoreSessionWorkspace(ctx context.Context, project domain.Pr
 			return ports.WorkspaceInfo{}, err
 		}
 		if recreated {
-			m.noteSetupOwed(rec.ID)
+			if err := m.noteSetupOwed(rec.ID); err != nil {
+				return ports.WorkspaceInfo{}, err
+			}
 		}
 		ws, err := m.workspace.Restore(ctx, ports.WorkspaceConfig{
 			ProjectID:     rec.ProjectID,
@@ -5611,7 +5617,9 @@ func (m *Manager) restoreSessionWorkspace(ctx context.Context, project domain.Pr
 		recreated = recreated || missing
 	}
 	if recreated {
-		m.noteSetupOwed(rec.ID)
+		if err := m.noteSetupOwed(rec.ID); err != nil {
+			return ports.WorkspaceInfo{}, err
+		}
 	}
 	root, err := m.restoreWorkspaceProjectRows(ctx, rows)
 	if err != nil {

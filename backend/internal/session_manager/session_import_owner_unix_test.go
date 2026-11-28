@@ -208,7 +208,7 @@ func TestAdoptedClaudeImportOpenElsewhereBlocksResume(t *testing.T) {
 		t.Fatal(err)
 	}
 	launcher := &recordingLauncher{}
-	m, st, _ := newChatManager(launcher)
+	m, st, _ := newChatManager(t, launcher)
 	rec := domain.SessionRecord{ID: "mer-1", ProjectID: "mer", Kind: domain.KindWorker, Harness: domain.HarnessClaudeCode, Mode: domain.SessionModeChat, Activity: domain.Activity{State: domain.ActivityIdle}}
 	rec.Metadata = domain.SessionMetadata{WorkspacePath: "/already-copied", Branch: "ao/import", ProviderConversationID: "thread-1", ImportSource: &domain.SessionImportSource{NativeID: "thread-1", ConfigDir: home, Transferred: true, Prepared: true, Adopted: true}}
 	st.sessions[rec.ID] = rec
@@ -238,7 +238,7 @@ func TestAdoptedCodexImportOpenElsewhereSkipsLaunch(t *testing.T) {
 		t.Fatal(err)
 	}
 	launcher := &recordingLauncher{}
-	m, st, _ := newChatManager(launcher)
+	m, st, _ := newChatManager(t, launcher)
 	rec := domain.SessionRecord{ID: "mer-1", ProjectID: "mer", Kind: domain.KindWorker, Harness: domain.HarnessCodex, Mode: domain.SessionModeChat, Activity: domain.Activity{State: domain.ActivityIdle}}
 	rec.Metadata = domain.SessionMetadata{WorkspacePath: "/already-copied", Branch: "ao/import", ProviderConversationID: "thread-1", ImportSource: &domain.SessionImportSource{NativeID: "thread-1", ConfigDir: home, Transferred: true, Prepared: true, Adopted: true}}
 	st.sessions[rec.ID] = rec

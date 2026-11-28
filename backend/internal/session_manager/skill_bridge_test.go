@@ -70,7 +70,7 @@ func newSkillBridgeManager(t *testing.T, agent ports.Agent) (*Manager, *fakeStor
 	t.Setenv("HOME", home)
 	t.Setenv("USERPROFILE", home)
 	launcher := &recordingLauncher{}
-	m, store, _ := newChatManager(launcher)
+	m, store, _ := newChatManager(t, launcher)
 	m.dataDir = t.TempDir()
 	m.agents = singleAgent{agent: agent}
 	return m, store, launcher, home

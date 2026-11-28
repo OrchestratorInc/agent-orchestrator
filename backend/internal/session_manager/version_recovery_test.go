@@ -244,7 +244,7 @@ func TestVersionMoveRetryBudgetSurvivesRecreation(t *testing.T) {
 
 func TestUpdateStopRecoversChatAcrossManagerRecreation(t *testing.T) {
 	ctx := context.Background()
-	before, base, _ := newChatManager(&recordingLauncher{})
+	before, base, _ := newChatManager(t, &recordingLauncher{})
 	seedChatResumeSession(base, domain.ActivityIdle)
 	rec := base.sessions["mer-1"]
 	store := &versionRecoveryStore{refreshTestStore: &refreshTestStore{fakeStore: base}}
@@ -263,7 +263,7 @@ func TestUpdateStopRecoversChatAcrossManagerRecreation(t *testing.T) {
 	launcher := &recordingLauncher{}
 	launcher.providerConversationID = rec.Metadata.ProviderConversationID
 	launcher.afterReady = func() { launcher.live = true }
-	after, _, _ := newChatManager(launcher)
+	after, _, _ := newChatManager(t, launcher)
 	after.store, after.lcm = store, &fakeLCM{store: base}
 	if err := after.RetryVersionMoves(ctx); err != nil {
 		t.Fatal(err)

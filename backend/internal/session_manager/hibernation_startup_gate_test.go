@@ -11,7 +11,7 @@ import (
 func TestHibernatedResumeWaitsForPersistentHostReconcile(t *testing.T) {
 	started := make(chan struct{}, 1)
 	launcher := &recordingLauncher{beforeStart: func(ChatStart) { started <- struct{}{} }}
-	mgr, store, _ := newChatManager(launcher)
+	mgr, store, _ := newChatManager(t, launcher)
 	seedChatResumeSession(store, domain.ActivityIdle)
 	rec := store.sessions["mer-1"]
 	at := time.Now().UTC()

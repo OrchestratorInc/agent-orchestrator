@@ -5526,6 +5526,59 @@ func TestRestoreOwesSetupWhenItFailsBeforeSetupStarts(t *testing.T) {
 	}
 }
 
+func newOwedSetupRestore(t *testing.T) (*Manager, domain.ProjectRecord, domain.SessionRecord, string) {
+	t.Helper()
+	m, _, _, _ := newManager()
+	m.dataDir = t.TempDir()
+	managed := filepath.Join(t.TempDir(), "workspaces")
+	adapter, err := scratch.New(scratch.Options{ManagedRoot: managed})
+	if err != nil {
+		t.Fatal(err)
+	}
+	m.workspace = adapter
+	workspace := filepath.Join(managed, "scratch", "workers", "scratch-1")
+	project := domain.ProjectRecord{ID: "scratch", Kind: domain.ProjectKindScratch, Path: t.TempDir(), Config: domain.ProjectConfig{PostCreate: []string{"echo setup >> setup-runs"}}}
+	rec := domain.SessionRecord{ID: "scratch-1", ProjectID: "scratch", Kind: domain.KindWorker, Metadata: domain.SessionMetadata{WorkspacePath: workspace}}
+	return m, project, rec, workspace
+}
+
+// A debt that cannot be recorded must stop the restore before the worktree is
+// recreated: otherwise a failed Setup would leave nothing saying it is owed.
+func TestRestoreDoesNotRecreateWhenOwedSetupCannotBeRecorded(t *testing.T) {
+	m, project, rec, workspace := newOwedSetupRestore(t)
+	if err := os.WriteFile(filepath.Join(m.dataDir, "setup-owed"), nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := m.restoreSessionWorkspace(context.Background(), project, rec); err == nil {
+		t.Fatal("restore succeeded, want the unrecordable debt to fail it")
+	}
+	if _, err := os.Stat(workspace); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("worktree stat err = %v, want it never recreated", err)
+	}
+}
+
+// A marker that cannot be inspected is not "nothing owed".
+func TestRestoreFailsWhenOwedSetupCannotBeInspected(t *testing.T) {
+	m, project, rec, _ := newOwedSetupRestore(t)
+	if _, err := m.restoreSessionWorkspace(context.Background(), project, rec); err != nil {
+		t.Fatal(err)
+	}
+	if err := m.noteSetupOwed(rec.ID); err != nil {
+		t.Fatal(err)
+	}
+	dir := filepath.Join(m.dataDir, "setup-owed")
+	if err := os.Chmod(dir, 0o000); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(dir, 0o750) })
+	if _, err := os.Stat(filepath.Join(dir, string(rec.ID))); err == nil || errors.Is(err, os.ErrNotExist) {
+		t.Skipf("cannot make the marker uninspectable here (running as root?): %v", err)
+	}
+	if _, err := m.restoreSessionWorkspace(context.Background(), project, rec); err == nil {
+		t.Fatal("restore succeeded, want the uninspectable debt to fail it")
+	}
+}
+
 func TestRestore_WorkspaceProjectRestoresChildrenAndRecordsInventory(t *testing.T) {
 	m, st, rt, ws := newManager()
 	st.projects["mer"] = domain.ProjectRecord{ID: "mer", Path: "/repo/mer", Kind: domain.ProjectKindWorkspace, Config: testRoleAgents()}
@@ -11938,7 +11991,7 @@ func TestReconcileLive_ScratchChatReattachesPersistentController(t *testing.T) {
 		Messenger: &fakeMessenger{},
 		Lifecycle: lcm,
 		Chat:      launcher,
-		DataDir:   "/ao-test-data",
+		DataDir:   t.TempDir(),
 		LookPath:  func(string) (string, error) { return "/bin/true", nil },
 	})
 	rec := domain.SessionRecord{

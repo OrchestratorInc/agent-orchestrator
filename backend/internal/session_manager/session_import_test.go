@@ -142,7 +142,7 @@ func TestImportCopiesDirtyGitStateWithoutChangingSource(t *testing.T) {
 
 func TestImportedIdleHistoryDoesNotRestartUntilResume(t *testing.T) {
 	launcher := &recordingLauncher{startErr: ports.ErrChatResumeFailed}
-	m, st, _ := newChatManager(launcher)
+	m, st, _ := newChatManager(t, launcher)
 	rec := domain.SessionRecord{ID: "mer-1", ProjectID: "mer", Kind: domain.KindWorker, Harness: domain.HarnessClaudeCode, Mode: domain.SessionModeChat, Activity: domain.Activity{State: domain.ActivityIdle}}
 	rec.Metadata = domain.SessionMetadata{WorkspacePath: "/already-copied", Branch: "ao/import", ProviderConversationID: "thread-1", ImportSource: &domain.SessionImportSource{NativeID: "thread-1", ConfigDir: "/original-provider-home", Transferred: true}}
 	st.sessions[rec.ID] = rec
@@ -261,7 +261,7 @@ func TestImportPreservesNestedWorktreePointers(t *testing.T) {
 
 func TestImportedResumeReportsOwnershipRefusal(t *testing.T) {
 	launcher := &recordingLauncher{startErr: errors.New("thread is already in use")}
-	m, st, _ := newChatManager(launcher)
+	m, st, _ := newChatManager(t, launcher)
 	rec := domain.SessionRecord{ID: "mer-1", ProjectID: "mer", Kind: domain.KindWorker, Harness: domain.HarnessClaudeCode, Mode: domain.SessionModeChat, Activity: domain.Activity{State: domain.ActivityIdle}}
 	rec.Metadata = domain.SessionMetadata{WorkspacePath: "/already-copied", Branch: "ao/import", ProviderConversationID: "thread-1", ImportSource: &domain.SessionImportSource{NativeID: "thread-1", ConfigDir: "/provider-home", Transferred: true, Prepared: true}}
 	st.sessions[rec.ID] = rec
@@ -275,7 +275,7 @@ func TestImportedResumeReportsOwnershipRefusal(t *testing.T) {
 
 func TestImportedWorkspaceSetupRetriesWithoutRecopy(t *testing.T) {
 	launcher := &recordingLauncher{}
-	m, st, _ := newChatManager(launcher)
+	m, st, _ := newChatManager(t, launcher)
 	workspace := t.TempDir()
 	project := st.projects["mer"]
 	project.Config.PostCreate = []string{"exit 9"}
@@ -307,7 +307,7 @@ func TestImportedPendingSessionCanBeArchivedAndRestored(t *testing.T) {
 	for _, withWorkspace := range []bool{false, true} {
 		t.Run(map[bool]string{false: "unopened", true: "copied but not adopted"}[withWorkspace], func(t *testing.T) {
 			launcher := &recordingLauncher{}
-			m, st, _ := newChatManager(launcher)
+			m, st, _ := newChatManager(t, launcher)
 			rec := domain.SessionRecord{ID: "mer-1", ProjectID: "mer", Kind: domain.KindWorker, Harness: domain.HarnessClaudeCode, Mode: domain.SessionModeChat, Activity: domain.Activity{State: domain.ActivityIdle}}
 			rec.Metadata = domain.SessionMetadata{ProviderConversationID: "thread-1", ImportSource: &domain.SessionImportSource{NativeID: "thread-1", ConfigDir: "/provider"}}
 			if withWorkspace {
@@ -575,7 +575,7 @@ func TestImportedClaudeChatKeepsAOModel(t *testing.T) {
 // spawn and rolls it back; an idle import must survive every daemon restart.
 func TestStartupHealthKeepsIdleImportedHistory(t *testing.T) {
 	launcher := &recordingLauncher{}
-	m, st, _ := newChatManager(launcher)
+	m, st, _ := newChatManager(t, launcher)
 	rec := domain.SessionRecord{ID: "mer-1", ProjectID: "mer", Kind: domain.KindWorker, Harness: domain.HarnessClaudeCode, Mode: domain.SessionModeChat, Activity: domain.Activity{State: domain.ActivityIdle}, ProvisionState: domain.SessionProvisionReady}
 	rec.Metadata = domain.SessionMetadata{ProviderConversationID: "native", ImportSource: &domain.SessionImportSource{NativeID: "native", ConfigDir: "/provider-home"}}
 	st.sessions[rec.ID] = rec
@@ -677,7 +677,7 @@ func TestImportedWorkspaceWhoseFolderIsGoneStartsFromRegisteredCheckouts(t *test
 // open-elsewhere explanation, not a generic resume failure.
 func TestAdoptedResumeReportsOwnershipRefusal(t *testing.T) {
 	launcher := &recordingLauncher{startErr: errors.New("thread 019a already has an active writer")}
-	m, st, _ := newChatManager(launcher)
+	m, st, _ := newChatManager(t, launcher)
 	rec := domain.SessionRecord{ID: "mer-1", ProjectID: "mer", Kind: domain.KindWorker, Harness: domain.HarnessCodex, Mode: domain.SessionModeChat, Activity: domain.Activity{State: domain.ActivityIdle}}
 	rec.Metadata = domain.SessionMetadata{WorkspacePath: "/already-copied", Branch: "ao/import", ProviderConversationID: "thread-1", ImportSource: &domain.SessionImportSource{NativeID: "thread-1", ConfigDir: "/provider-home", Transferred: true, Prepared: true, Adopted: true}}
 	st.sessions[rec.ID] = rec
@@ -744,7 +744,7 @@ func TestImportReplayBoundaryIsFixedAtAdoption(t *testing.T) {
 	m := New(Deps{
 		Runtime: &fakeRuntime{}, Agents: fakeAgents{}, Workspace: &fakeWorkspace{},
 		Store: st, Messenger: &fakeMessenger{}, Chat: launcher,
-		Lifecycle: &fakeLCM{store: st.fakeStore}, DataDir: "/ao-test-data",
+		Lifecycle: &fakeLCM{store: st.fakeStore}, DataDir: t.TempDir(),
 	})
 	if _, err := m.ResumeAgentWithMode(context.Background(), sessionID); err != nil {
 		t.Fatal(err)

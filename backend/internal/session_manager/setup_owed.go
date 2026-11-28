@@ -2,6 +2,7 @@ package sessionmanager
 
 import (
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -33,39 +34,52 @@ func (m *Manager) setupOwedPath(id domain.SessionID) string {
 }
 
 // setupOwed reports whether a session's worktree still owes Setup: it was
-// recreated now, or an earlier recreation's Setup never finished.
-func (m *Manager) setupOwed(id domain.SessionID, recreated bool) bool {
+// recreated now, or an earlier recreation's Setup never finished. A marker
+// that cannot be inspected is an error, never "nothing owed": guessing wrong
+// would launch the agent in an unprovisioned worktree.
+func (m *Manager) setupOwed(id domain.SessionID, recreated bool) (bool, error) {
 	if recreated {
-		return true
+		return true, nil
 	}
 	path := m.setupOwedPath(id)
 	if path == "" {
-		return false
+		return false, nil
 	}
-	_, err := os.Stat(path)
-	return err == nil
+	if _, err := os.Stat(path); err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return false, nil
+		}
+		return false, fmt.Errorf("inspect owed setup: %w", err)
+	}
+	return true, nil
 }
 
 // noteSetupOwed records that the session's worktree owes Setup. Call it before
-// recreating the worktree, so any failure from then on leaves the debt behind.
-func (m *Manager) noteSetupOwed(id domain.SessionID) {
+// recreating the worktree, and do not recreate it when this fails: an
+// unrecorded recreation whose Setup then fails would be skipped from then on.
+func (m *Manager) noteSetupOwed(id domain.SessionID) error {
 	path := m.setupOwedPath(id)
 	if path == "" {
-		return
+		return nil
 	}
-	err := os.MkdirAll(filepath.Dir(path), 0o750)
-	if err == nil {
-		err = os.WriteFile(path, nil, 0o600)
+	if err := os.MkdirAll(filepath.Dir(path), 0o750); err != nil {
+		return fmt.Errorf("record owed setup: %w", err)
 	}
-	if err != nil && m.logger != nil {
-		m.logger.Warn("record owed setup", "sessionID", id, "error", err)
+	if err := os.WriteFile(path, nil, 0o600); err != nil {
+		return fmt.Errorf("record owed setup: %w", err)
 	}
+	return nil
 }
 
 // runOwedSetup runs provision when the worktree owes Setup and clears the debt
-// only once provision succeeds.
+// only once provision succeeds. A marker left behind after a successful Setup
+// costs one extra Setup run, so failing to clear it is only logged.
 func (m *Manager) runOwedSetup(id domain.SessionID, recreated bool, provision func() error) error {
-	if !m.setupOwed(id, recreated) {
+	owed, err := m.setupOwed(id, recreated)
+	if err != nil {
+		return err
+	}
+	if !owed {
 		return nil
 	}
 	if err := provision(); err != nil {
