@@ -12484,7 +12484,7 @@ components:
               description: 0 for a turn stopped while still queued, before the agent started on it.
             reason:
               type: string
-              enum: [deleted, interface_switch, steered]
+              enum: [deleted, interface_switch, session_ended, steered]
               description: >-
                 Why a turn ended before it started. deleted: the person took
                 the queued message back (cancelTurn), so a client drops it from
@@ -12493,9 +12493,42 @@ components:
                 interrupted. steered: the message was steered into the running
                 turn instead (chat.turn_steered with this turn as its
                 queuedTurnId), so a client shows it there, as the steer, and
-                drops it from the queue. Absent for a stopped running turn and for events
+                drops it from the queue. session_ended: the turn, running or
+                queued, ended because its session ended (deleted, killed by
+                its orchestrator, or cleaned up), not because anyone stopped
+                it; endedBy says who ended the session when that is known. A
+                client keeps the message, shown interrupted. Absent for a
+                stopped running turn and for events
                 written before reasons existed; a client reads a missing or
                 unknown reason as a plain interruption and keeps the message.
+            endedBy:
+              type: object
+              additionalProperties: false
+              required: [kind]
+              description: >-
+                With reason session_ended, who ended the session. orchestrator:
+                the orchestrator session sessionId killed this worker (ao kill).
+                user: the person userId deleted the session or its project.
+                Absent when nobody is known to have ended it (a system cleanup,
+                or a control plane that does not record enders).
+              properties:
+                kind:
+                  type: string
+                  enum: [orchestrator, user]
+                sessionId:
+                  type: string
+                  format: uuid
+                  description: The orchestrator's session, for kind orchestrator.
+                userId:
+                  type: string
+                  format: uuid
+                  description: The person, for kind user.
+                name:
+                  type: string
+                  description: >-
+                    For kind user, a snapshot of the person's display name when
+                    the session ended, as a prompt's authorName is. Absent when
+                    it could not be read.
         createdAt:
           type: string
           format: date-time

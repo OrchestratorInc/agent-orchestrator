@@ -23,7 +23,7 @@ import {
 	chatFixtureThreadError,
 } from "../../lib/chat-fixture";
 import { appI18n } from "../../i18n";
-import type { ConversationActivity, ConversationItem, ConversationMessage, ConversationSnapshot } from "../../types/conversation";
+import type { ConversationActivity, ConversationItem, ConversationMessage, ConversationSnapshot, ConversationTurn } from "../../types/conversation";
 import type { ConversationLocalEcho } from "../../hooks/useConversation";
 import { setApiBaseUrl } from "../../lib/api-client";
 import { useUiStore } from "../../stores/ui-store";
@@ -1623,6 +1623,36 @@ describe("ChatWorkspace timeline", () => {
 		// One that ran keeps its working time.
 		render(<ChatWorkspace snapshot={{ ...snapshot, turns: [{ ...snapshot.turns[0]!, startedAt: "2026-11-13T09:00:10Z" }] }} />);
 		expect(document.querySelector("[data-turn-worked]")?.textContent).toMatch(/Worked for\s*20s/);
+	});
+
+	// A Cloud turn its session's end cut off (an orchestrator's ao kill, a
+	// delete) was nobody's Stop: it says who ended the session, not "interrupted
+	// by you". A turn without that fact (a Stop, an older control plane) keeps
+	// the Stop's line.
+	it("says who ended the session for a turn its end cut off", () => {
+		const turnId = "turn-session-ended";
+		const snapshot = (sessionEnded?: ConversationTurn["sessionEnded"]): ConversationSnapshot => ({
+			...chatFixtureEmpty,
+			latestSequence: 1,
+			turns: [{ id: turnId, state: "interrupted", requestedAt: "2026-11-26T09:00:00Z", startedAt: "2026-11-26T09:00:01Z", completedAt: "2026-11-26T09:00:30Z", ...(sessionEnded ? { sessionEnded } : {}) }],
+			items: [{
+				kind: "message", id: "prompt", turnId, sequence: 1, revision: 0,
+				role: "user", origin: "human", text: "review the PR",
+				streaming: false, createdAt: "2026-11-26T09:00:00Z",
+			}],
+		});
+		for (const [sessionEnded, label] of [
+			[{ kind: "orchestrator" }, "The orchestrator ended this session"],
+			[{ kind: "you" }, "You ended this session"],
+			[{ kind: "user", name: "Ada Lovelace" }, "Ada Lovelace ended this session"],
+			[{ kind: "unknown" }, "Stopped when the session ended"],
+			[undefined, "The agent was interrupted by you"],
+		] as const) {
+			const view = render(<ChatWorkspace snapshot={snapshot(sessionEnded)} />);
+			expect(screen.getByText(label)).toBeInTheDocument();
+			if (sessionEnded) expect(screen.queryByText("The agent was interrupted by you")).toBeNull();
+			view.unmount();
+		}
 	});
 
 	it("heads a turn with no work to fold with Worked for as plain text", () => {

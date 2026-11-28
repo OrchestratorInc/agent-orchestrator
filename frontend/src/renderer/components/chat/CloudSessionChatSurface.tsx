@@ -35,7 +35,7 @@ import { cloudSessionScriptsEnded, groupScriptRuns, parseScriptStepPayload, SCRI
 import { cloudChatHistoryKey, loadCloudChatHistory, loadOlderCloudChatEvents, mergeCloudEvents, streamedCloudChatEvents, type CloudChatHistory } from "../../lib/cloud-chat-history";
 import { useSessionLinkNavigation } from "../../lib/use-session-link-navigation";
 import type { ChatDraftExcerptReference } from "../../lib/chat-drafts";
-import type { ActivityKind, ApprovalMode, ChatConfigOption, ConversationActivity, ConversationContentSummary, ConversationItem, ConversationMessage, ConversationPlan, ConversationSnapshot, ConversationTurn, ConversationUsage, DiffFile, FileChangeFile, PlanStep, SystemEventDetail, TurnSettings } from "../../types/conversation";
+import type { ActivityKind, ApprovalMode, ChatConfigOption, ConversationActivity, ConversationContentSummary, ConversationItem, ConversationMessage, ConversationPlan, ConversationSnapshot, ConversationTurn, ConversationUsage, DiffFile, FileChangeFile, PlanStep, SessionEndedBy, SystemEventDetail, TurnSettings } from "../../types/conversation";
 import type { TerminalTarget } from "../../types/terminal";
 import type { SessionProvisionStep, WorkspaceSession } from "../../types/workspace";
 import { requestWorkspaceRetry } from "../CloudSessionStartupError";
@@ -67,10 +67,13 @@ type EventPayload = {
 	epoch?: unknown;
 	/**
 	 * chat.turn_interrupted: why a turn ended before it started (deleted,
-	 * interface_switch, steered); chat.turn_aborted: author_cannot_write for a message
-	 * the control plane did not run.
+	 * interface_switch, steered), or session_ended for a turn its session's end cut
+	 * off; chat.turn_aborted: author_cannot_write for a message the control plane
+	 * did not run.
 	 */
 	reason?: unknown;
+	/** chat.turn_interrupted of reason session_ended: who ended the session, when known. */
+	endedBy?: unknown;
 	/** chat.user_message: the files the message carries. */
 	attachments?: unknown;
 	/** workspace.setup */
@@ -893,6 +896,21 @@ export function withoutFailedSetupAttempts(items: ConversationItem[], startFaile
 }
 
 /**
+ * Who ended the session, from a chat.turn_interrupted's endedBy: the orchestrator,
+ * the viewer, another person, or nobody known (absent, or a kind this desktop does
+ * not know).
+ */
+export function sessionEndedBy(endedBy: unknown, viewerUserId: string | undefined): SessionEndedBy {
+	if (!endedBy || typeof endedBy !== "object") return { kind: "unknown" };
+	const { kind, userId, name } = endedBy as { kind?: unknown; userId?: unknown; name?: unknown };
+	if (kind === "orchestrator") return { kind: "orchestrator" };
+	if (kind !== "user") return { kind: "unknown" };
+	if (viewerUserId && userId === viewerUserId) return { kind: "you" };
+	const trimmed = typeof name === "string" ? name.trim() : "";
+	return trimmed ? { kind: "user", name: trimmed } : { kind: "user" };
+}
+
+/**
  * The name to show on a prompt in a shared session: another participant's,
  * never the viewer's own, and nothing for a message no person sent.
  */
@@ -1134,6 +1152,13 @@ export function toSnapshot(session: WorkspaceSession, events: CloudCpClientEvent
 			const turn = turns.get(turnID)!;
 			turn.state = event.type === "chat.turn_completed" ? "completed" : event.type === "chat.turn_interrupted" ? "interrupted" : "failed";
 			turn.completedAt = event.createdAt;
+			// The session ended under the turn: nobody stopped it. A control plane
+			// that predates reasons sends none, which keeps reading as a Stop.
+			if (event.type === "chat.turn_interrupted" && eventPayload(event).reason === "session_ended") {
+				turn.sessionEnded = sessionEndedBy(eventPayload(event).endedBy, viewerUserId);
+			} else {
+				delete turn.sessionEnded;
+			}
 			const error = eventPayload(event).error;
 			turn.errorMessage = typeof error === "string" ? error : undefined;
 			// The cloud sends a quota refusal as its raw failure and never marks it,

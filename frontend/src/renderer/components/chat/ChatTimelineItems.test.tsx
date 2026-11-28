@@ -266,6 +266,25 @@ describe("TurnOutcome", () => {
 		expect(screen.getByRole("alert")).toHaveTextContent("Stop the agent first");
 	});
 
+	it("says who ended the session for a turn its end cut off, and keeps a Stop's line", () => {
+		const cases = [
+			[undefined, "The agent was interrupted by you"],
+			[{ kind: "orchestrator" }, "The orchestrator ended this session"],
+			[{ kind: "you" }, "You ended this session"],
+			[{ kind: "user", name: "Ada Lovelace" }, "Ada Lovelace ended this session"],
+			[{ kind: "user" }, "Someone else ended this session"],
+			[{ kind: "unknown" }, "Stopped when the session ended"],
+		] as const;
+		for (const [sessionEnded, label] of cases) {
+			const view = render(<TurnOutcome state="interrupted" sessionEnded={sessionEnded} />);
+			expect(screen.getByText(label)).toBeInTheDocument();
+			view.unmount();
+		}
+		// Only an interrupted turn reads so: a failure keeps its own line.
+		render(<TurnOutcome state="failed" sessionEnded={{ kind: "orchestrator" }} />);
+		expect(screen.getByText("The agent ran into a problem")).toBeInTheDocument();
+	});
+
 	it("draws no action row when a stopped turn has nothing to act on", () => {
 		render(<TurnOutcome state="interrupted" />);
 		expect(screen.getByText("The agent was interrupted by you")).toBeInTheDocument();

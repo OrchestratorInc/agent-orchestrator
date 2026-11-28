@@ -909,6 +909,52 @@ describe("CloudSessionChatSurface", () => {
 		expect(partial.turns.find((turn) => turn.id === "turn-ended")?.state).toBe("cancelled");
 	});
 
+	// A turn its session's end cut off (an orchestrator's ao kill, a person's
+	// delete, a cleanup) says so, with who ended it, rather than reading as the
+	// viewer's Stop. A Stop, and an older control plane that sends no reason,
+	// keep reading as an interruption.
+	const endedEvents = (payload: Record<string, unknown>) => {
+		const at = (sequence: number, type: string, body: Record<string, unknown>) =>
+			({ sessionId: session.id, sequence, type, payload: body, createdAt: `2026-11-26T09:0${sequence}:00Z` });
+		return [
+			at(1, "chat.user_message", { text: "review PR 12", turnId: "turn-run" }),
+			at(2, "chat.turn_started", { turnId: "turn-run", attempt: 1 }),
+			at(3, "chat.turn_interrupted", { turnId: "turn-run", attempt: 1, ...payload }),
+		];
+	};
+	const endedTurn = (payload: Record<string, unknown>) =>
+		toSnapshot(session, endedEvents(payload), "user-1").turns.find((turn) => turn.id === "turn-run");
+	it("says who ended the session for a turn its end cut off", () => {
+		// A person's Stop: no reason.
+		expect(endedTurn({})).toMatchObject({ state: "interrupted" });
+		expect(endedTurn({})?.sessionEnded).toBeUndefined();
+		// An orchestrator's ao kill.
+		expect(endedTurn({ reason: "session_ended", endedBy: { kind: "orchestrator", sessionId: "orch-1" } }))
+			.toMatchObject({ state: "interrupted", sessionEnded: { kind: "orchestrator" } });
+		// The viewer's own delete.
+		expect(endedTurn({ reason: "session_ended", endedBy: { kind: "user", userId: "user-1", name: "Me" } })?.sessionEnded).toEqual({ kind: "you" });
+		// Another person's delete, by name.
+		expect(endedTurn({ reason: "session_ended", endedBy: { kind: "user", userId: "user-2", name: " Ada Lovelace " } })?.sessionEnded)
+			.toEqual({ kind: "user", name: "Ada Lovelace" });
+		// Nobody known (a cleanup), or an ender this desktop does not know.
+		expect(endedTurn({ reason: "session_ended" })?.sessionEnded).toEqual({ kind: "unknown" });
+		expect(endedTurn({ reason: "session_ended", endedBy: { kind: "robot" } })?.sessionEnded).toEqual({ kind: "unknown" });
+		// The message stays in the conversation, as a stopped turn's does.
+		expect(toSnapshot(session, endedEvents({ reason: "session_ended" }), "user-1").items.some((item) => item.kind === "message" && item.turnId === "turn-run")).toBe(true);
+	});
+
+	it("tells the viewer's own end from another person's in the surface", async () => {
+		cloudMocks.listChatEvents.mockResolvedValue({
+			events: endedEvents({ reason: "session_ended", endedBy: { kind: "user", userId: "user-1", name: "Me" } }),
+			hasMore: false, nextAfter: 3,
+		});
+		cloudMocks.listChatModels.mockResolvedValue({ models: [] });
+		const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
+		render(<QueryClientProvider client={queryClient}><CloudSessionChatSurface session={{ ...session, cloud: { orgId: "org-1" } }} /></QueryClientProvider>);
+		await waitFor(() => expect(cloudMocks.chatProps.mock.lastCall?.[0].snapshot.turns.find((turn: { id: string }) => turn.id === "turn-run")?.sessionEnded)
+			.toEqual({ kind: "you" }));
+	});
+
 	// A queued message steered into the running turn reads from the events, so
 	// a remount (a tab switch, a screen change) shows what the control plane
 	// holds: steering while the agent has not answered, the steer in the turn
