@@ -1884,7 +1884,7 @@ export function useConversationCommands(
 				await steer.mutateAsync({ text, attachments, clientMessageId, recoverOnly });
 				return { status: "accepted" };
 			} catch (error) {
-				const outcome = steerNonAcceptance(error);
+				const outcome = steerNonAcceptance(error, recoverOnly);
 				if (outcome) return outcome;
 				throw error;
 			}
@@ -1988,9 +1988,16 @@ const DEFINITIVE_STEER_NON_ACCEPTANCE_CODES = new Set([
 	"CHAT_OPEN_ELSEWHERE",
 ]);
 
-function steerNonAcceptance(error: unknown): ChatSteerOutcome | undefined {
+/**
+ * A staged image the daemon cannot read is refused before the steer gets a
+ * receipt, so on a first attempt it proves the steer was not taken. A retry
+ * that only recovers a receipt proves nothing by it.
+ */
+const STAGED_IMAGE_REFUSALS = new Set(["INVALID_ATTACHMENT_PATH", "ATTACHMENT_NOT_FOUND", "ATTACHMENT_PATH_UNSUPPORTED"]);
+
+function steerNonAcceptance(error: unknown, recoverOnly?: boolean): ChatSteerOutcome | undefined {
 	const code = apiErrorCode(error);
-	if (!code || !DEFINITIVE_STEER_NON_ACCEPTANCE_CODES.has(code)) return undefined;
+	if (!code || !(DEFINITIVE_STEER_NON_ACCEPTANCE_CODES.has(code) || (!recoverOnly && STAGED_IMAGE_REFUSALS.has(code)))) return undefined;
 	return {
 		status: "not-accepted",
 		reason: steerRefusal(error) ?? apiErrorMessage(error),
