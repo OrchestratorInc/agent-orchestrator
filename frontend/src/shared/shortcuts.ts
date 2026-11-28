@@ -376,11 +376,13 @@ const YIELDS_TO_FOCUSED_TERMINAL: ReadonlySet<AppShortcutId> = new Set<AppShortc
 
 /**
  * True when `chord` for `id` must reach a focused terminal instead (Windows/Linux only).
- * A chord the user bound themselves is never withheld: rebinding a command is how
- * a terminal-safe chord is chosen, so it has to work from the terminal too.
+ * A Find chord the user bound themselves is never withheld: the renderer claims it
+ * before xterm only when a chat can handle it (#8420). Custom chords for other
+ * commands keep the bare-chord yield, so adding Ctrl+E to a command does not take
+ * end-of-line from the shell.
  */
 export function shortcutYieldsToTerminal(id: AppShortcutId, chord: ShortcutChord, userOverrode = false): boolean {
-	if (userOverrode) return false;
+	if (userOverrode && id === "find-in-chat") return false;
 	return YIELDS_TO_FOCUSED_TERMINAL.has(id) && !chord.shift && !chord.meta && chord.ctrl !== chord.alt;
 }
 

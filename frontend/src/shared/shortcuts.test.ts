@@ -398,10 +398,15 @@ describe("shortcut binding matching and validation", () => {
 		expect(shortcutYieldsToTerminal("add-selection-to-chat", chord({ key: "l", ctrl: true }))).toBe(true);
 	});
 
-	it("never withholds a chord the user bound themselves", () => {
+	it("never withholds a Find chord the user bound themselves", () => {
 		expect(shortcutYieldsToTerminal("find-in-chat", chord({ key: "j", ctrl: true }), true)).toBe(false);
-		expect(shortcutYieldsToTerminal("command-palette", chord({ key: "j", ctrl: true }), true)).toBe(false);
 		expect(shortcutYieldsToTerminal("command-palette", chord({ key: "k", ctrl: true }))).toBe(true);
+	});
+
+	it("keeps custom bare chords of other commands yielding to the terminal", () => {
+		expect(shortcutYieldsToTerminal("toggle-sidebar", chord({ key: "e", ctrl: true }), true)).toBe(true);
+		expect(shortcutYieldsToTerminal("history-back", chord({ key: "b", alt: true }), true)).toBe(true);
+		expect(shortcutYieldsToTerminal("toggle-sidebar", chord({ key: "E", ctrl: true, shift: true }), true)).toBe(false);
 	});
 
 	it("reports only non-default chords from a saved override as user-bound", () => {

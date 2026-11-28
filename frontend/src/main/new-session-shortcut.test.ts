@@ -425,6 +425,16 @@ describe("attachAppShortcuts", () => {
 		},
 	);
 
+	it("leaves a custom bare readline chord to a focused terminal", () => {
+		const source = fakeSource(), target = fakeTarget();
+		const overrides = {
+			"toggle-sidebar": [...defaultShortcutBindings("toggle-sidebar", false), { key: "e", ctrl: true, meta: false, shift: false, alt: false }],
+		};
+		attachAppShortcuts(source, false, target, false, () => overrides, () => false, () => true, undefined, () => true);
+		expect(source.emit({ key: "e", control: true }).preventDefault).not.toHaveBeenCalled();
+		expect(target.send).not.toHaveBeenCalled();
+	});
+
 	it("still opens the palette from a focused terminal on macOS", () => {
 		const source = fakeSource();
 		const target = fakeTarget();
