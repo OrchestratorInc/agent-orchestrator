@@ -69,19 +69,19 @@ export function classifySiteResponse(input: { url: string; statusCode: number; h
  * agent tab shows a page on the agent's host, so a loopback address there
  * names that host, not this computer.
  */
-export function canOpenInUserBrowser(rawUrl: string, options: { agentTab?: boolean } = {}): boolean {
+export function canOpenInUserBrowser(rawUrl: string, options: { onHost?: boolean } = {}): boolean {
 	try {
 		const url = new URL(rawUrl);
 		if (url.protocol !== "http:" && url.protocol !== "https:") return false;
 		// AO's own preview origins only work inside AO.
 		if (/^ao-preview-[0-9a-f]{32}\.localhost$/.test(url.hostname)) return false;
-		return !(options.agentTab && isLoopbackHost(url.hostname));
+		return !(options.onHost && isLoopbackHost(url.hostname));
 	} catch {
 		return false;
 	}
 }
 
-function isLoopbackHost(hostname: string): boolean {
+export function isLoopbackHost(hostname: string): boolean {
 	const host = hostname.toLowerCase().replace(/^\[(.*)\]$/, "$1").replace(/\.$/, "");
 	if (host === "localhost" || host.endsWith(".localhost") || /^127\.\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(host)) return true;
 	if (host === "::1" || host === "0.0.0.0" || host === "::") return true;

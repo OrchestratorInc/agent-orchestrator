@@ -23,6 +23,7 @@ import { type SideChatsState, useSideChatsAvailable } from "../../lib/side-chats
 import { AlertTriangle, Loader2 } from "@/components/app-icons";
 import { memo, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { useLoopbackReach } from "../../hooks/useHostLoopback";
 import { useChatPermissionModes } from "../../hooks/useChatPermissionModes";
 import { useChatMessageFocus, useChatNavigationRequest } from "../../hooks/useChatMessageFocus";
 import { useChatModelChoices } from "../../hooks/useChatModelChoices";
@@ -587,6 +588,7 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 
 	const openLinkInBrowser = useSessionBrowserLink(session, onOpenLinkInBrowser, paths, onOpenFile);
 	const openSessionLink = useSessionLinkNavigation(hostId);
+	const loopbackReach = useLoopbackReach(hostId);
 	const promptSuggestion = useConversationPromptSuggestion(snapshot, Boolean(
 		controllerCatalogsEnabled && !controllerBusy && !localEchos.length &&
 		!commands.rollbackPending && !commands.editMessagePending && !commands.activateBranchPending && !commands.compacting &&
@@ -756,6 +758,7 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 				savedCopy={savedCopy}
 				importBlock={importBlock}
 				onLinkOpen={openLinkInBrowser}
+				hostLocalLinks={loopbackReach && sessionIsActive(session)}
 				onSessionLinkOpen={openSessionLink}
 				sessionTitle={session.title}
 				sessionRole={session.kind}
@@ -880,7 +883,7 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 				}}
 				commandError={commands.error}
 				agentSwitch={agentSwitch}
-				composerNotice={<>{!hostId ? <SessionBackgroundTasks session={session} onOpenTask={openBackgroundTask} /> : null}{interfaceSwitch?.errorNotice ?? (switchError ? (
+				composerNotice={<><SessionBackgroundTasks session={session} hostId={hostId} onOpenTask={openBackgroundTask} />{interfaceSwitch?.errorNotice ?? (switchError ? (
 					<ComposerErrorNotice
 						title={t("agentSwitch.couldNotSwitch")}
 						message={apiErrorMessage(switchError)}

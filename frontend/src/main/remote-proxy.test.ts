@@ -322,6 +322,8 @@ describe("startRemoteProxy", () => {
 		expect(new URL(proxy.previewUrl("ao-2", "http://127.0.0.2:5173/")).hostname).toMatch(/^ao-preview-[0-9a-f]{32}\.localhost$/);
 		expect(new URL(proxy.previewUrl("ao-2", "http://[::ffff:127.0.0.1]:5173/")).hostname).toMatch(/^ao-preview-[0-9a-f]{32}\.localhost$/);
 		expect(new URL(proxy.previewUrl("ao-2", "http://localhost.:5173/")).hostname).toMatch(/^ao-preview-[0-9a-f]{32}\.localhost$/);
+		expect(proxy.previewUrl("ao-2", "https://localhost:8443/")).toBe("https://localhost:8443/");
+		expect(proxy.previewUrl("ao-2", "http://app.localhost:5173/")).toBe("http://app.localhost:5173/");
 		const changed = proxy.previewUrl("ao-1", `http://localhost:5173/`);
 		expect(changed).not.toBe(preview);
 		expect(proxy.resolvePreviewUrl("ao-1", preview)).toBe("");
@@ -396,6 +398,43 @@ describe("startRemoteProxy", () => {
 		expect(await request()).toBe("app conflict");
 		managed = true;
 		expect(await request()).toContain("ao preview start");
+	});
+
+	it("serves its own preview origin locally and sends that hostname's other ports to the host", async () => {
+		const tunnels: string[] = [];
+		const { port } = await startUpstream((req) => {
+			if (req.url?.startsWith("/api/v1/loopback-tunnel")) tunnels.push(req.url);
+			return { status: 404, body: "" };
+		});
+		proxy = await startRemoteProxy({ label: "workbox", url: `http://127.0.0.1:${port}`, password: "pw" });
+		const preview = new URL(proxy.previewUrl("ao-1", "http://localhost:5173/"));
+		const local = await proxy.openLoopbackTunnel(Number(preview.port), preview.hostname);
+		local.destroy();
+		await expect(proxy.openLoopbackTunnel(3001, preview.hostname)).rejects.toThrow();
+		expect(tunnels).toEqual(["/api/v1/loopback-tunnel?port=3001"]);
+	});
+
+	it("sends an unmanaged preview to its own address on a host with the tunnel", async () => {
+		let tunnel: { status: number; headers?: Record<string, string> } = { status: 502, headers: { "x-ao-loopback-refused": "1" } };
+		const { port } = await startUpstream((req) => req.url?.startsWith("/api/v1/loopback-tunnel")
+			? { body: "", ...tunnel }
+			: { status: 409, body: "", headers: { "x-ao-preview-managed-required": "1" } });
+		proxy = await startRemoteProxy({ label: "workbox", url: `http://127.0.0.1:${port}`, password: "pw" });
+		const preview = new URL(proxy.previewUrl("ao-1", "http://localhost:5173/app?tab=1"));
+		const request = () => new Promise<IncomingMessage>((resolve, reject) => {
+			const req = previewRequest(preview, { path: "/app?tab=1" }, (res) => { res.resume(); resolve(res); });
+			req.on("error", reject);
+			req.end();
+		});
+		expect(await proxy.loopbackReach()).toBe(true);
+		const redirected = await request();
+		expect([redirected.statusCode, redirected.headers.location]).toEqual([302, "http://localhost:5173/app?tab=1"]);
+		const outside = new URL(proxy.externalUrl(preview.href));
+		const outsideStatus = await new Promise((resolve) => httpRequest({ hostname: "127.0.0.1", port: outside.port, path: "/app", headers: { Host: outside.host } }, (res) => { res.resume(); resolve(res.statusCode); }).end());
+		expect(outsideStatus).toBe(409);
+		tunnel = { status: 404 };
+		expect(await proxy.loopbackReach()).toBe(false);
+		expect((await request()).statusCode).toBe(409);
 	});
 
 	it("forwards a managed preview websocket on its preview-only origin", async () => {

@@ -67,6 +67,25 @@ describe("background task queries", () => {
 		client.clear();
 	});
 
+	it("rechecks a host that has no background task endpoint once a minute", async () => {
+		vi.useFakeTimers({ shouldAdvanceTime: true });
+		getMock.mockResolvedValue({ error: { message: "not found" }, response: { status: 404 } });
+		function Consumer() {
+			const query = useBackgroundTasks("s", true);
+			return <span>{query.isError ? "unavailable" : "loading"}</span>;
+		}
+		const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+		const view = render(<QueryClientProvider client={client}><Consumer /></QueryClientProvider>);
+		await waitFor(() => expect(screen.getByText("unavailable")).toBeVisible());
+		await vi.advanceTimersByTimeAsync(20_000);
+		expect(getMock).toHaveBeenCalledTimes(1);
+		await vi.advanceTimersByTimeAsync(40_000);
+		expect(getMock).toHaveBeenCalledTimes(2);
+		view.unmount();
+		client.clear();
+		vi.useRealTimers();
+	});
+
 	it.each([
 		["session", { status: "ok" }],
 		["session", { sessionId: "s", availability: "ready", tasks: null }],
@@ -101,6 +120,25 @@ describe("a background task's output", () => {
 		return <span>{query.data ? `${query.data.availability}:${query.data.output}:${query.data.lastRead ? "last" : "live"}${error}` : "loading"}</span>;
 	}
 	const reply = (availability: string, output: string) => ({ data: { sessionId: "s", taskId: "dev", availability, output } });
+
+	it("rechecks a live task's output once a minute on a host without the output route", async () => {
+		vi.useFakeTimers({ shouldAdvanceTime: true });
+		getMock.mockResolvedValue({ error: { message: "not found" }, response: { status: 404 } });
+		function Live() {
+			const query = useBackgroundTaskOutput("s", "dev", "r1", { enabled: true, live: true, over: false });
+			return <span>{query.isError ? "unavailable" : "loading"}</span>;
+		}
+		const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+		const view = render(<QueryClientProvider client={client}><Live /></QueryClientProvider>);
+		await waitFor(() => expect(screen.getByText("unavailable")).toBeVisible());
+		await vi.advanceTimersByTimeAsync(5_000);
+		expect(getMock).toHaveBeenCalledTimes(1);
+		await vi.advanceTimersByTimeAsync(55_000);
+		expect(getMock).toHaveBeenCalledTimes(2);
+		view.unmount();
+		client.clear();
+		vi.useRealTimers();
+	});
 
 	it("keeps the last output read when the daemon no longer has it, across remounts", async () => {
 		getMock.mockResolvedValueOnce(reply("ready", "ready on :3000"));

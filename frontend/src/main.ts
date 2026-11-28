@@ -98,7 +98,7 @@ import type { GitHubIssueArtifact } from "./shared/github-issue-artifact";
 import { execFile, spawn, type ChildProcess } from "node:child_process";
 import { randomBytes, randomUUID } from "node:crypto";
 import { closeSync, existsSync, mkdirSync, openSync, readFileSync, renameSync, writeFileSync } from "node:fs";
-import { chmod, copyFile, mkdir, readFile, realpath, rename, rm, stat, writeFile } from "node:fs/promises";
+import { chmod, copyFile, mkdir, readdir, readFile, realpath, rename, rm, stat, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
@@ -302,6 +302,7 @@ import { sealSavedPasswords, setPasswordCipher } from "./main/remotes-store";
 import { createLocalHostIdentity } from "./main/remote-request";
 import { RemoteRegistry } from "./main/remote-registry";
 import { startRemoteProxy } from "./main/remote-proxy";
+import { createLoopbackTunnels } from "./main/loopback-tunnel";
 import { captureMainError, reportDaemonFailure, ExpectedIpcError, installIpcErrorCapture, setMainErrorSink } from "./main/main-error-capture";
 
 // Every ipcMain.handle registered from here on reports unexpected throws.
@@ -1153,9 +1154,18 @@ const userBrowser = createUserBrowser({
 });
 
 async function clearElectronBrowserProfileData(partition: string): Promise<void> {
-	const browserSession = session.fromPartition(partition);
-	// clearCache leaves V8's code cache, which is most of what a cleared partition still holds.
-	await Promise.all([browserSession.clearStorageData(), browserSession.clearCache(), browserSession.clearCodeCaches({})]);
+	const hostPrefix = `${partition.replace(/^persist:/, "")}-host-`.toLowerCase();
+	const hostPartitions = (await readdir(path.join(app.getPath("userData"), "Partitions")).catch((error: NodeJS.ErrnoException) => {
+		if (error.code === "ENOENT") return [];
+		throw error;
+	}))
+		.filter((name) => name.toLowerCase().startsWith(hostPrefix))
+		.map((name) => `persist:${name}`);
+	await Promise.all([partition, ...hostPartitions].map((name) => {
+		const browserSession = session.fromPartition(name);
+		// clearCache leaves V8's code cache, which is most of what a cleared partition still holds.
+		return Promise.all([browserSession.clearStorageData(), browserSession.clearCache(), browserSession.clearCodeCaches({})]);
+	}));
 }
 
 async function disposeAllBrowserViewHosts(): Promise<void> {
@@ -1486,6 +1496,7 @@ async function createWindowInternal(): Promise<void> {
 				platform: process.platform,
 				languages: acceptLanguages(app.getLocale(), app.getPreferredSystemLanguages()),
 			}),
+		routeBrowserPartition: (partition, hostId) => routeLoopback(session.fromPartition(partition), hostId),
 		clipboard: { writeImage: writeClipboardImage },
 		onNativeViewAdded: () => windowComposition?.restackShell(),
 	});
@@ -4040,6 +4051,7 @@ const remoteRegistry = new RemoteRegistry((entry) => {
 	const devUrl = typeof MAIN_WINDOW_VITE_DEV_SERVER_URL === "undefined" ? undefined : MAIN_WINDOW_VITE_DEV_SERVER_URL;
 	return startRemoteProxy(entry, devUrl ? new URL(devUrl).origin : RENDERER_ORIGIN);
 });
+const routeLoopback = createLoopbackTunnels((hostId, port, host) => remoteRegistry.openLoopbackTunnel(hostId, port, host));
 setPasswordCipher(() => protectedStorageAvailable() ? {
 	encrypt: (text) => safeStorage.encryptString(text).toString("base64"),
 	decrypt: (sealed) => safeStorage.decryptString(Buffer.from(sealed, "base64")),

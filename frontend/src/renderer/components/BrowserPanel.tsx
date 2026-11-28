@@ -102,7 +102,7 @@ import { useBrowserDownloads } from "../hooks/useBrowserDownloads";
 import { BrowserDownloadsList } from "./BrowserDownloadsList";
 import { isWebLink, openLinkInSystemBrowser } from "../lib/external-link-policy";
 import { aoBridge } from "../lib/bridge";
-import { isHostLocalWebLink } from "../lib/loopback";
+import { hostLoopbackUrl, isHostLocalWebLink } from "../lib/loopback";
 
 // One-click viewport width presets for responsive testing — height is shown
 // for reference but not enforced (only width drives CSS breakpoints, and
@@ -493,8 +493,8 @@ export const BrowserPanelView = memo(function BrowserPanelView({
 	// An agent tab's localhost page is the host's: opened here it would be this
 	// computer's own. Before the viewer's first report the tab shows the viewer
 	// itself, an ao-preview-….localhost address, so that is held back too.
-	const agentPageOnHost = onAgentTab && isHostLocalWebLink(navState.url);
-	const canOpenElsewhere = Boolean(viewId) && canOpenInUserBrowser(navState.url, { agentTab: onAgentTab }) && !browserUnavailable;
+	const pageOnHost = onAgentTab ? isHostLocalWebLink(navState.url) : Boolean(session?.hostId && hostLoopbackUrl(navState.url));
+	const canOpenElsewhere = Boolean(viewId) && canOpenInUserBrowser(navState.url, { onHost: onAgentTab || Boolean(session?.hostId) }) && !browserUnavailable;
 	const canRetryAnnotation = status === "error" && queuedCount > 0;
 	const [devicePreset, setDevicePreset] = useState<string | null>(null);
 	const [customDeviceWidth, setCustomDeviceWidth] = useState("390");
@@ -912,7 +912,7 @@ export const BrowserPanelView = memo(function BrowserPanelView({
 	};
 
 	const openCurrentPageExternally = async () => {
-		if (!isWebLink(navState.url) || agentPageOnHost) return;
+		if (!isWebLink(navState.url) || pageOnHost) return;
 		await openLinkInSystemBrowser(await externalURL(navState.url));
 	};
 
@@ -1089,9 +1089,9 @@ export const BrowserPanelView = memo(function BrowserPanelView({
 						{/* On an agent's host page, aria-disabled rather than disabled: a
 						    disabled button would lose the tooltip that says why. */}
 						{currentURLIsWeb ? (
-							<BrowserControlTooltip label={agentPageOnHost ? t("browser.agentPageOnHost") : t("inspector.openInSystemBrowser")}>
+							<BrowserControlTooltip label={pageOnHost ? t("browser.agentPageOnHost") : t("inspector.openInSystemBrowser")}>
 									<Button
-										aria-disabled={agentPageOnHost || undefined}
+										aria-disabled={pageOnHost || undefined}
 										aria-label={t("inspector.openInSystemBrowser")}
 										className="browser-panel__url-external"
 										onClick={() => void openCurrentPageExternally()}
@@ -1099,7 +1099,7 @@ export const BrowserPanelView = memo(function BrowserPanelView({
 										type="button"
 										variant="quiet"
 									>
-										<ExternalLink aria-hidden="true" className={cn("size-icon-base", agentPageOnHost && "opacity-50")} />
+										<ExternalLink aria-hidden="true" className={cn("size-icon-base", pageOnHost && "opacity-50")} />
 									</Button>
 							</BrowserControlTooltip>
 						) : null}
