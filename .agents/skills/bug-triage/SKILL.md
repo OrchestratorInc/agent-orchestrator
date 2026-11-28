@@ -169,6 +169,25 @@ login works in their terminal, compare that terminal's executable, user, host, a
 config directory or environment overrides with the diagnostics: AO checks run in its
 own process environment.
 
+Claude Code and Codex sessions can run on a saved AO account with its own CLI home,
+while readiness checks only the machine's own login. Readiness can therefore say
+`authorized` while the session runs on a signed-out or usage-limited saved account, or
+the reverse. For login, `unauthorized`, or launch reports on these harnesses, record the
+session's account with `"$ao_bin" account show <session-id> --json`. Pass the reporter's
+session ID; without one it reports the current session. This read-only lookup returns
+only account IDs, falling back to the provider's default when none is saved.
+
+`account ls` (`GET /agents/accounts`) is not passive: it re-reads sign-in and limits for
+any account whose reading is due, which runs CLI or provider calls, and it returns
+account identity. Read it only for account symptoms, record the time, drop identity,
+and keep `signedIn`, `loggedIn`, `problem`, `problemKind`, and `limits` for the
+session's account. Don't use `--refresh`, `account switch`, or `account default`.
+
+```bash
+"$ao_bin" account ls --json \
+  | jq 'del(.accounts[].email, .accounts[].orgName, .accounts[].keyHint)'
+```
+
 Don't call the `POST` agent routes (`readiness/ensure`, `refresh`, `probe`, `verify`,
 `models/refresh`, `install`, `auth`, `logout`), `?refresh=true`, or `agent ls` just to
 collect evidence: they run native install or auth checks, model discovery, or change
