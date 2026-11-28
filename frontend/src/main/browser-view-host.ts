@@ -522,8 +522,10 @@ type BrowserViewLike = View & {
 
 type BrowserWindowLike = {
   contentView: {
-    addChildView: (view: BrowserViewLike) => void;
+    // With an index, re-adding a child moves it to that place in the stack.
+    addChildView: (view: BrowserViewLike, index?: number) => void;
     removeChildView?: (view: BrowserViewLike) => void;
+    readonly children?: readonly unknown[];
   };
   getContentBounds: () => BrowserRect;
   webContents?: WebContents;
@@ -1988,12 +1990,38 @@ export function createBrowserViewHost(
     void debug.sendCommand("Page.startScreencast", AGENT_KEEPALIVE_SCREENCAST).catch(stop);
   };
 
+  // Puts a never-drawn tab on screen where the person cannot see it, so
+  // Chromium sets it up for input: right behind the tab they have in front, at
+  // its bounds, when that tab shows in the panel; else as a 1px sliver at the
+  // window's edge. Moving this hidden view in the stack, not the person's live
+  // page, keeps their page from flashing.
+  const primeOutOfSight = (
+    session: BrowserSessionEntry,
+    entry: BrowserEntry,
+    size: BrowserRect,
+  ): void => {
+    const content = options.mainWindow.contentView;
+    const front = session.tabs.get(session.activeTabId);
+    const frontIndex = front && isTabOnScreen(session, front)
+      ? content.children?.indexOf(front.view) ?? -1
+      : -1;
+    if (front && frontIndex >= 0) {
+      const ownIndex = content.children?.indexOf(entry.view) ?? -1;
+      if (ownIndex > frontIndex) content.addChildView(entry.view, frontIndex);
+      // Exactly where the person's tab is, so no edge of it shows.
+      entry.view.setBounds(front.view.getBounds?.() ?? session.bounds);
+      return;
+    }
+    const window = options.mainWindow.getContentBounds();
+    entry.view.setBounds({ x: window.width - 1, y: 0, width: size.width, height: size.height });
+  };
+
   // The agent's tab, when the person is not looking at it, stays drawing where
   // they cannot see it: visible, at the panel's size, moved outside the window.
   // Chromium draws nothing for a view outside its window (CDP screenshots time
   // out), so a keepalive screencast keeps it drawing; and CDP clicks reach a
   // view only once it has been on screen, so a tab that never was is first
-  // shown for a moment as a 1px sliver at the window's edge. Measured on
+  // shown for a moment where it cannot be seen (primeOutOfSight). Measured on
   // Electron 44.7 / macOS (spike 7): screenshots, clicks, navigation and idle
   // all work this way; without either step they do not.
   const keepAgentTabPainted = async (
@@ -2022,8 +2050,7 @@ export function createBrowserViewHost(
     // Show before moving, so Chromium takes the new bounds.
     entry.view.setVisible?.(true);
     if (!entry.painted) {
-      const window = options.mainWindow.getContentBounds();
-      entry.view.setBounds({ x: window.width - 1, y: 0, width: parked.width, height: parked.height });
+      primeOutOfSight(session, entry, parked);
       if (agentTabPrimeMs > 0)
         await new Promise((resolve) => setTimeout(resolve, agentTabPrimeMs));
       entry.painted = true;

@@ -1452,12 +1452,18 @@ function setupTabHost(
 	} as unknown as import("./agent-browser-runtime").AgentBrowserRuntime;
 	// The agent browser's viewer URLs are AO's only while its host is registered.
 	const agentHost = { registered: true };
-	const addChildView = vi.fn();
+	// The window's views, bottom to top; re-adding one with an index moves it.
+	const childViews: unknown[] = [];
+	const addChildView = vi.fn((view: unknown, index?: number) => {
+		const existing = childViews.indexOf(view);
+		if (existing >= 0) childViews.splice(existing, 1);
+		childViews.splice(index ?? childViews.length, 0, view);
+	});
 	const onNativeViewAdded = vi.fn();
 	const onTabCloseFailure = vi.fn();
 	const host = createBrowserViewHost({
 		mainWindow: {
-			contentView: { addChildView, removeChildView: () => undefined },
+			contentView: { addChildView, removeChildView: () => undefined, children: childViews },
 			getContentBounds: () => ({ x: 0, y: 0, width: 800, height: 600 }),
 			...(overrides?.window ? { isDestroyed: () => overrides.window!.destroyed } : {}),
 			webContents: {
@@ -1522,6 +1528,7 @@ function setupTabHost(
 		activeTargets,
 		agentHost,
 		addChildView,
+		childViews,
 		onNativeViewAdded,
 		onTabCloseFailure,
 		constructorOptions,
@@ -4080,8 +4087,9 @@ describe("agent browser runtime", () => {
 			expect.objectContaining({ id: "t2", url: "http://localhost:4173/", active: true }),
 		]);
 		expect(views).toHaveLength(2);
-		// The agent's never-shown tab was shown once as a 1px sliver at the
-		// window's edge, then parked visible outside the window so it keeps drawing.
+		// With no panel on screen to hide behind, the agent's never-shown tab was
+		// shown once as a 1px sliver at the window's edge, then parked visible
+		// outside the window so it keeps drawing.
 		expect(views[1].setBounds).toHaveBeenCalledWith({ x: 799, y: 0, width: 1280, height: 720 });
 		expect(views[1].setVisible).toHaveBeenLastCalledWith(true);
 		expect(views[1].setBounds).toHaveBeenLastCalledWith({ x: -10_000, y: -10_000, width: 1280, height: 720 });
@@ -4334,7 +4342,7 @@ describe("agent browser runtime", () => {
 	});
 
 	it("parks the tab the agent left and keeps only its new tab drawing", async () => {
-		const { debuggerCommands, emit, host, invoke, views } = setupTabHost();
+		const { childViews, debuggerCommands, emit, host, invoke, views } = setupTabHost();
 		const { viewId } = (await invoke("browser:ensure", "sess-1")) as { viewId: string };
 		emit("browser:setBounds", { viewId, revision: 1, rect: { x: 10, y: 20, width: 320, height: 240 }, visible: true });
 		await host.execute("sess-1", "open", { url: "https://agent.example.test/" });
@@ -4346,11 +4354,33 @@ describe("agent browser runtime", () => {
 
 		expect(debuggerCommands.some(({ method }) => method === "Page.stopScreencast")).toBe(true);
 		expect(views[0].setVisible).toHaveBeenLastCalledWith(false);
-		// The new tab was never on screen: shown for a moment as a 1px sliver
-		// at the window's edge, then parked visible outside the window.
-		expect(views[2].setBounds).toHaveBeenCalledWith({ x: 799, y: 0, width: 320, height: 240 });
+		// The new tab was never on screen: shown for a moment right behind the
+		// person's tab, where they cannot see it, then parked visible outside
+		// the window. Never as a sliver at the window's edge.
+		expect(childViews.indexOf(views[2])).toBe(childViews.indexOf(views[1]) - 1);
+		expect(views[2].setBounds).toHaveBeenCalledWith({ x: 10, y: 20, width: 320, height: 240 });
+		expect(views[2].setBounds).not.toHaveBeenCalledWith(expect.objectContaining({ x: 799 }));
 		expect(views[2].setVisible).toHaveBeenLastCalledWith(true);
 		expect(views[2].setBounds).toHaveBeenLastCalledWith({ x: -10_000, y: -10_000, width: 320, height: 240 });
+	});
+
+	it("describes the agent's tab for an approval, not the tab the person has in front", async () => {
+		const { host, invoke, runtime } = setupTabHost();
+		const { viewId } = (await invoke("browser:ensure", "sess-1")) as { viewId: string };
+		await host.execute("sess-1", "open", { url: "https://agent.example.test/" });
+		await invoke("browser:openTab", { viewId, url: "https://person.example.test/" });
+		const runAction = runtime.runAction as unknown as ReturnType<typeof vi.fn>;
+		const originalRunAction = runAction.getMockImplementation()! as (...args: unknown[]) => Promise<unknown>;
+		runAction.mockImplementation(async (...call: unknown[]) =>
+			call[1] === "snapshot"
+				? { snapshot: '- button "Save" [ref=e1]', refs: { e1: { role: "button", name: "Save" } } }
+				: originalRunAction(...call),
+		);
+
+		// The approval binds the action to the page the agent will act on.
+		await expect(host.execute("sess-1", "describe", { action: "click", ref: "e1" })).resolves.toMatchObject({
+			binding: { tabId: "t1", ref: "e1" },
+		});
 	});
 
 	it("emulates focus for the agent's tab while it works in the background", async () => {
