@@ -131,7 +131,12 @@ func (s *Service) RecheckAgent(agentID string) {
 // signals after its installation and authentication passes finish. Model
 // catalog updates wait for the first pass; the saved catalog is served before it.
 func (s *Service) WarmReadiness() <-chan struct{} {
-	done := s.readiness.Warm()
+	var done <-chan struct{}
+	if used, ok := s.usedHarnesses(s.readiness.ctx); ok {
+		done = s.readiness.WarmUsed(used)
+	} else {
+		done = s.readiness.Warm()
+	}
 	if s.readinessWarm == nil {
 		return done
 	}
@@ -320,4 +325,28 @@ func readinessInfo(snapshot domain.AgentReadinessSnapshot) Info {
 		ID: snapshot.ID, Label: snapshot.Label, AuthStatus: status,
 		UsageCount: snapshot.UsageCount, LastUsedAt: snapshot.LastUsedAt,
 	}
+}
+
+// usedHarnesses lists the harnesses this install has sessions for. ok is false
+// when there is no session store or it cannot be read, and callers then keep
+// the warm-everything behavior.
+func (s *Service) usedHarnesses(ctx context.Context) ([]string, bool) {
+	if s.sessions == nil {
+		return nil, false
+	}
+	records, err := s.sessions.ListAllSessions(ctx)
+	if err != nil {
+		return nil, false
+	}
+	seen := map[string]bool{}
+	var used []string
+	for _, record := range records {
+		id := string(record.Harness)
+		if id == "" || seen[id] {
+			continue
+		}
+		seen[id] = true
+		used = append(used, id)
+	}
+	return used, true
 }

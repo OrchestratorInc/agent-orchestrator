@@ -9,6 +9,8 @@ import {
 	agentReadinessQueryKey,
 	cacheAgentReadiness,
 	ensureAgentReadiness,
+	focusReadinessIds,
+	loadAgentReadinessSnapshot,
 } from "./useAgentReadinessQuery";
 import { systemRequirementsQueryKey } from "./useSystemRequirementsGate";
 
@@ -99,13 +101,18 @@ export function useDaemonStatus(queryClient: QueryClient = defaultQueryClient) {
 		};
 
 		void refreshStatus();
+		// A return to the app re-checks the agents a user may have just changed
+		// (focusReadinessIds), not every agent on the machine; the daemon's
+		// display TTL decides which checks actually run.
 		const refreshOnFocus = () => {
-			void refreshStatus().then((nextStatus) => {
-				if (nextStatus?.state !== "ready") return;
-				void ensureAgentReadiness([], "display")
-					.then((next) => cacheAgentReadiness(queryClient, next))
-					.catch(() => undefined);
-			});
+			void refreshStatus()
+				.then(async (nextStatus) => {
+					if (nextStatus?.state !== "ready") return;
+					const ids = focusReadinessIds((await loadAgentReadinessSnapshot(queryClient)).agents);
+					if (ids.length === 0) return;
+					cacheAgentReadiness(queryClient, await ensureAgentReadiness(ids, "display"));
+				})
+				.catch(() => undefined);
 		};
 		const refreshOnVisibility = () => {
 			if (document.visibilityState === "visible") refreshOnFocus();

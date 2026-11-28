@@ -209,3 +209,42 @@ export function useProjectAgentDefaults(enabled: boolean, hostId?: string): () =
 	useEnsureAgentReadiness({ enabled, hostId });
 	return useCallback(() => loadProjectAgentDefaults(queryClient, hostId), [queryClient, hostId]);
 }
+
+/**
+ * The agents a return to the app re-checks: every agent with sessions, every
+ * agent not confirmed installed (the presence check runs no process), and every
+ * installed agent whose last sign-in check did not pass, since the user may have
+ * just fixed it in a terminal. An installed agent that is unused and signed in,
+ * or never checked, waits for a picker or a launch to ask, so focus never sets
+ * off a check of every agent on the machine. The daemon's display TTL decides
+ * which of these actually run.
+ */
+// A check that did not finish keeps the last known state (authorized, say) but
+// records why, so focus still re-checks it.
+const AUTH_CHECK_FAILURE_CODES = new Set(["auth_check_inconclusive", "auth_check_timeout", "auth_check_failed"]);
+
+export function focusReadinessIds(agents: AgentReadinessSnapshot[]): string[] {
+	return agents
+		.filter((agent) =>
+			agent.usageCount > 0 ||
+			agent.installation.state !== "installed" ||
+			((agent.authentication.checkedAt != null || agent.authentication.attemptedAt != null) &&
+				(agent.authentication.state === "unauthorized" ||
+					agent.authentication.state === "unknown" ||
+					AUTH_CHECK_FAILURE_CODES.has(agent.authentication.reasonCode))),
+		)
+		.map((agent) => agent.id);
+}
+
+/**
+ * A fresh readiness snapshot (fetching it runs no checks), so the agents a
+ * return to the app re-checks reflect sessions started since the cache filled.
+ */
+export function loadAgentReadinessSnapshot(queryClient: QueryClient, hostId?: string): Promise<AgentReadiness> {
+	return queryClient.fetchQuery({
+		...agentReadinessQueryOptions,
+		staleTime: 0,
+		queryKey: agentReadinessQueryKeyForHost(hostId),
+		queryFn: () => fetchAgentReadiness(hostId),
+	});
+}

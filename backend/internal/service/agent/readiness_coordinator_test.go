@@ -972,16 +972,92 @@ func TestReadinessCoordinatorUsesConfiguredRetryBackoff(t *testing.T) {
 		RetryDelays: delays,
 	})
 
-	for attempt, wantDelay := range []time.Duration{delays[0], delays[1], delays[2], delays[2]} {
+	// The hold follows the delays and stays at the last one, as before.
+	for attempt, wantDelay := range []time.Duration{delays[0], delays[1], delays[2], delays[2], delays[2]} {
 		if _, err := coordinator.Ensure(context.Background(), nil, domain.AgentReadinessPurposeLaunch); err != nil {
 			t.Fatal(err)
 		}
 		coordinator.mu.Lock()
-		gotDelay := coordinator.entries["codex"].nextRetryAt.Sub(now)
+		next := coordinator.entries["codex"].nextRetryAt
 		coordinator.mu.Unlock()
+		gotDelay := time.Duration(0)
+		if !next.IsZero() {
+			gotDelay = next.Sub(now)
+		}
 		if gotDelay != wantDelay {
 			t.Fatalf("attempt %d retry delay = %s, want %s", attempt+1, gotDelay, wantDelay)
 		}
+	}
+}
+
+func TestReadinessCoordinatorDoesNotRetryInconclusiveAuthentication(t *testing.T) {
+	t.Parallel()
+	daemonCtx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	agent := &readinessTestAgent{
+		resolve: func(context.Context) (string, error) { return "/bin/codex", nil },
+		auth:    func(context.Context) (ports.AgentAuthStatus, error) { return ports.AgentAuthStatusUnknown, nil },
+	}
+	coordinator := newReadinessCoordinator(readinessCoordinatorConfig{
+		Agents:      []agentregistry.HarnessAgent{readinessHarness("codex", "Codex", agent)},
+		Context:     daemonCtx,
+		RetryDelays: []time.Duration{time.Millisecond},
+	})
+	items, err := coordinator.Ensure(context.Background(), nil, domain.AgentReadinessPurposeDisplay)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := items[0].Authentication.ReasonCode; got != domain.AgentReadinessReasonAuthCheckInconclusive {
+		t.Fatalf("auth reason = %q, want inconclusive", got)
+	}
+	// No background retry once the 1 ms hold has passed.
+	time.Sleep(50 * time.Millisecond)
+	if got := agent.authCalls.Load(); got != 1 {
+		t.Fatalf("authentication checks = %d, want 1 (no background retry)", got)
+	}
+	// A display request after the hold checks again at once, as soon as a
+	// background retry would have, and so does a launch.
+	if _, err := coordinator.Ensure(context.Background(), nil, domain.AgentReadinessPurposeDisplay); err != nil {
+		t.Fatal(err)
+	}
+	if got := agent.authCalls.Load(); got != 2 {
+		t.Fatalf("authentication checks after a display request = %d, want 2", got)
+	}
+	if _, err := coordinator.Ensure(context.Background(), nil, domain.AgentReadinessPurposeLaunch); err != nil {
+		t.Fatal(err)
+	}
+	if got := agent.authCalls.Load(); got != 3 {
+		t.Fatalf("authentication checks after launch = %d, want 3", got)
+	}
+}
+
+// A failed check retries in the background once per configured delay, then
+// stops; it used to retry at the last delay for as long as the daemon ran.
+func TestReadinessCoordinatorStopsBackgroundRetriesAfterOnePass(t *testing.T) {
+	t.Parallel()
+	daemonCtx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	agent := &readinessTestAgent{
+		resolve: func(context.Context) (string, error) { return "", errors.New("probe failed") },
+		auth:    func(context.Context) (ports.AgentAuthStatus, error) { return ports.AgentAuthStatusAuthorized, nil },
+	}
+	coordinator := newReadinessCoordinator(readinessCoordinatorConfig{
+		Agents:      []agentregistry.HarnessAgent{readinessHarness("codex", "Codex", agent)},
+		Context:     daemonCtx,
+		RetryDelays: []time.Duration{time.Millisecond, time.Millisecond},
+	})
+	if _, err := coordinator.Ensure(context.Background(), nil, domain.AgentReadinessPurposeDisplay); err != nil {
+		t.Fatal(err)
+	}
+	// The first check and one retry per delay.
+	for deadline := time.Now().Add(2 * time.Second); agent.resolveCalls.Load() < 3; time.Sleep(time.Millisecond) {
+		if time.Now().After(deadline) {
+			t.Fatalf("installation checks = %d, want the two background retries", agent.resolveCalls.Load())
+		}
+	}
+	time.Sleep(100 * time.Millisecond)
+	if got := agent.resolveCalls.Load(); got != 3 {
+		t.Fatalf("installation checks = %d, want 3 (no retries past the configured delays)", got)
 	}
 }
 
@@ -1529,5 +1605,68 @@ func TestReadinessCoordinatorRetainsAuthDiagnosticWithoutInventingSignOut(t *tes
 	preserveAuthenticationFailure(&previous, observation)
 	if previous.State != domain.AgentAuthenticationAuthorized || previous.Freshness != domain.AgentReadinessStale || len(previous.Diagnostics) != 1 || previous.CheckedAt != &checked {
 		t.Fatalf("previous=%+v", previous)
+	}
+}
+
+// WarmUsed signs in the used harnesses before done, then checks the other
+// installed harnesses one at a time, so every picker knows their sign-in state
+// soon after launch without a burst of agent CLIs.
+func TestReadinessCoordinatorWarmUsedChecksTheRestOneAtATime(t *testing.T) {
+	t.Parallel()
+	var mu sync.Mutex
+	active, maxActive := 0, 0
+	checked := map[string]bool{}
+	authFor := func(id string) func(context.Context) (ports.AgentAuthStatus, error) {
+		return func(context.Context) (ports.AgentAuthStatus, error) {
+			mu.Lock()
+			active++
+			maxActive = max(maxActive, active)
+			mu.Unlock()
+			time.Sleep(20 * time.Millisecond)
+			mu.Lock()
+			active--
+			checked[id] = true
+			mu.Unlock()
+			return ports.AgentAuthStatusAuthorized, nil
+		}
+	}
+	harness := func(id string) agentregistry.HarnessAgent {
+		return readinessHarness(id, id, &readinessTestAgent{
+			resolve: func(context.Context) (string, error) { return "/bin/" + id, nil },
+			auth:    authFor(id),
+		})
+	}
+	coordinator := newReadinessCoordinator(readinessCoordinatorConfig{
+		Agents: []agentregistry.HarnessAgent{harness("used"), harness("other-a"), harness("other-b"), harness("other-c")},
+	})
+	done := coordinator.WarmUsed([]string{"used"})
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("warm of the used harness was not signaled")
+	}
+	mu.Lock()
+	usedFirst := checked["used"]
+	mu.Unlock()
+	if !usedFirst {
+		t.Fatal("done closed before the used harness was signed in")
+	}
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		mu.Lock()
+		all := checked["other-a"] && checked["other-b"] && checked["other-c"]
+		peak := maxActive
+		mu.Unlock()
+		if all {
+			// The used harness ran alone too, so the peak covers both passes.
+			if peak != 1 {
+				t.Fatalf("up to %d sign-in checks ran at once, want one at a time", peak)
+			}
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("the unused installed harnesses were never checked")
+		}
+		time.Sleep(5 * time.Millisecond)
 	}
 }
