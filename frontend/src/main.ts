@@ -1587,8 +1587,12 @@ async function createWindowInternal(): Promise<void> {
 		terminalFocused = false;
 		terminalFontSizeFocused = false;
 		artifactZoomEngaged = false;
-		artifactEscapeArmed = false;
 		trayLifecycle.clear();
+	});
+	// Main frame only: did-start-loading also fires when an artifact's iframe
+	// loads, which would disarm Escape while its viewer or preview is open.
+	shellWebContents.on("did-navigate", () => {
+		artifactEscapeArmed = false;
 	});
 	shellWebContents.on("render-process-gone", () => {
 		trayLifecycle.clear();
