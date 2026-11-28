@@ -1,5 +1,5 @@
 import { useQueryClient } from "@tanstack/react-query";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { previewDocumentThemeStyle, type ThemePreference, type ThemeStyle } from "../../lib/theme";
 import { THEMES, getThemeDefinition } from "../../lib/theme-palettes";
@@ -34,8 +34,46 @@ import { TargetIcon } from "../TopbarOpenEditorButton";
 import type { EditorId } from "../../../shared/editor-handoff";
 import type { SessionMode } from "../../types/workspace";
 import type { TerminalShellKind } from "../../../shared/ui-locale";
-import { isMacPlatform, isWindowsPlatform } from "../../lib/platform";
+import { isLinuxPlatform, isMacPlatform, isWindowsPlatform } from "../../lib/platform";
+import { aoBridge } from "../../lib/bridge";
 import type { TerminalClickMode } from "../../lib/terminal-mouse";
+
+function AltMenuRow() {
+	const { t } = useTranslation();
+	const [enabled, setEnabled] = useState(true);
+	const [error, setError] = useState(false);
+	const [saving, setSaving] = useState(false);
+	const confirmedEnabled = useRef(true);
+	const userChanged = useRef(false);
+	useEffect(() => {
+		let active = true;
+		void aoBridge.uiSettings.get().then((settings) => {
+			if (active && !userChanged.current) {
+				confirmedEnabled.current = settings.altMenuEnabled;
+				setEnabled(settings.altMenuEnabled);
+			}
+		}).catch(() => { if (active && !userChanged.current) setError(true); });
+		return () => { active = false; };
+	}, []);
+	const label = t("settings.altMenu", { defaultValue: "Show menu bar with Alt" });
+	return <SettingsRow label={label} description={error ? t("settings.altMenuSaveFailed", { defaultValue: "Could not save this setting." }) : undefined}>
+		<Switch aria-label={label} checked={enabled} disabled={saving} onCheckedChange={(next) => {
+			userChanged.current = true;
+			setSaving(true);
+			setEnabled(next);
+			void aoBridge.uiSettings.set({ altMenuEnabled: next }).then((settings) => {
+				confirmedEnabled.current = settings.altMenuEnabled;
+				setEnabled(settings.altMenuEnabled);
+				setError(false);
+				setSaving(false);
+			}).catch(() => {
+				setEnabled(confirmedEnabled.current);
+				setError(true);
+				setSaving(false);
+			});
+		}} />
+	</SettingsRow>;
+}
 
 /**
  * Default interface for new sessions. Daemon-owned so `ao spawn` and mobile
@@ -474,6 +512,7 @@ export function GeneralSettingsSection({
 			</SettingsSection>
 
 			<SettingsSection title={t("settings.navigation")} grouped>
+				{isLinuxPlatform() && <AltMenuRow />}
 				<SettingsRow label={t("settings.navigationGestures")} description={t("settings.navigationGesturesHint")}>
 					<Switch
 						aria-label={t("settings.navigationGestures")}

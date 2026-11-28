@@ -20,6 +20,7 @@ export interface TerminalShellPreference {
 
 export interface UiSettings {
 	locale: AppLocale;
+	altMenuEnabled: boolean;
 	/** Whether attention-worthy notifications (needs input, ready to merge) also play a sound. */
 	soundNotificationsEnabled: boolean;
 	/** Shell used for newly opened standalone terminal panes. */
@@ -30,6 +31,7 @@ export const DEFAULT_TERMINAL_SHELL: TerminalShellPreference = { kind: "auto" };
 
 export const DEFAULT_UI_SETTINGS: UiSettings = {
 	locale: DEFAULT_LOCALE,
+	altMenuEnabled: true,
 	soundNotificationsEnabled: true,
 	terminalShell: DEFAULT_TERMINAL_SHELL,
 };
@@ -64,6 +66,7 @@ export function coerceUiSettings(raw: unknown): UiSettings {
 			: DEFAULT_UI_SETTINGS.soundNotificationsEnabled;
 	return {
 		locale: coerceLocale(record.locale),
+		altMenuEnabled: typeof record.altMenuEnabled === "boolean" ? record.altMenuEnabled : true,
 		soundNotificationsEnabled,
 		terminalShell: coerceTerminalShell(record.terminalShell),
 	};
