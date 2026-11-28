@@ -4383,6 +4383,20 @@ describe("agent browser runtime", () => {
 		});
 	});
 
+	it("keeps the panel's address bar on the person's tab while the agent's new tab loads behind it", async () => {
+		const { host, sent } = setupTabHost();
+		await host.execute("sess-1", "open", { url: "http://localhost:3000" });
+		await host.execute("sess-1", "snapshot");
+		const navStates = () =>
+			sent.filter(({ channel }) => channel === "browser:navState").map(({ payload }) => (payload as BrowserNavState).url);
+		const before = navStates().length;
+
+		await host.execute("sess-1", "tab-new", { url: "http://localhost:4173" });
+
+		// The new tab is the agent's and loads behind: the panel hears nothing of it.
+		expect(navStates().slice(before)).not.toContain("http://localhost:4173/");
+	});
+
 	it("emulates focus for the agent's tab while it works in the background", async () => {
 		const { debuggerCommands, host, invoke, views } = setupTabHost();
 		const { viewId } = (await invoke("browser:ensure", "sess-1")) as { viewId: string };

@@ -3228,6 +3228,15 @@ export function createBrowserViewHost(
     }
     const owner = entries.get(entry.state.viewId);
     if (owner) owner.livePreviewPending = false;
+    // The panel's address bar and buttons follow the tab in front only. A tab
+    // loading behind it (the agent's own) keeps its state to itself.
+    const announce = (state: BrowserNavState): BrowserNavState => {
+      entry.state = state;
+      const shownIn = entries.get(state.viewId);
+      if (!shownIn || shownIn.activeTabId === entry.tabId)
+        shellWebContents.send("browser:navState", state);
+      return state;
+    };
     const pendingNavigation = { url: href };
     entry.pendingNavigation = pendingNavigation;
     try {
@@ -3236,14 +3245,12 @@ export function createBrowserViewHost(
       else await entry.view.webContents.loadURL(href);
     } catch (err) {
       if ((err as { errorCode?: number })?.errorCode === -3)
-        return pushNavState(options, entry);
+        return announce(readNavState(entry));
       entry.view.setVisible?.(false);
-      entry.state = {
+      return announce({
         ...readNavState(entry),
         error: String((err as Error)?.message || "Unable to load page"),
-      };
-      shellWebContents.send("browser:navState", entry.state);
-      return entry.state;
+      });
     } finally {
       if (entry.pendingNavigation === pendingNavigation)
         entry.pendingNavigation = undefined;
@@ -3251,7 +3258,7 @@ export function createBrowserViewHost(
     const session = entries.get(entry.state.viewId);
     if (session?.activeTabId === entry.tabId)
       applySessionBounds(session, entry);
-    return pushNavState(options, entry);
+    return announce(readNavState(entry));
   };
 
   // clear resets the view to a blank page (`ao preview clear`). about:blank is
