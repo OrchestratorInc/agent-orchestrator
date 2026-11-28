@@ -8,6 +8,7 @@ import {
 	CommentTarget,
 	commentDraftForSelection,
 	findQuoteRange,
+	markdownPreviewLines,
 	messageExcerpt,
 	type CommentMarkers,
 	type CommentMarkerState,
@@ -200,6 +201,15 @@ describe("quoted passages", () => {
 		expect(commentDraftForSelection(across)).toBeUndefined();
 	});
 
+	it("takes no comment on a selection in an answer still streaming", () => {
+		document.body.innerHTML = `<div data-comment-anchor="60" data-comment-kind="agent_message" data-comment-unfinished=""><div data-chat-message-body><p>The time goes to the additional repositories.</p></div></div>`;
+		const text = document.querySelector("[data-comment-anchor='60'] p")!.firstChild as Text;
+		const range = document.createRange();
+		range.setStart(text, 4);
+		range.setEnd(text, 8);
+		expect(commentDraftForSelection(range)).toBeUndefined();
+	});
+
 	it("quotes whole words when a selection stops inside one", () => {
 		document.body.innerHTML = `<div data-comment-anchor="11" data-comment-kind="agent_message"><div data-chat-message-body><p>Hi! I'm the orchestrator for the finance-controller project. I can spawn workers.</p></div></div>`;
 		const text = document.querySelector("[data-comment-anchor='11'] p")!.firstChild as Text;
@@ -224,6 +234,11 @@ describe("quoted passages", () => {
 		// An answer that starts with a code block: its first line of code, not the fence.
 		expect(messageExcerpt("```python\ndef retry_delay(attempt):\n    return 2\n```")).toBe("def retry_delay(attempt):");
 		expect(messageExcerpt("x".repeat(250))).toHaveLength(200);
+	});
+
+	it("keeps a shorter fence inside a longer one as code", () => {
+		expect(messageExcerpt("````md\n```js\nconst a = 1;\n```\n````")).toBe("```js");
+		expect(markdownPreviewLines("~~~\nline one\n```\nline two\n~~~\nAfter **it**.")).toEqual(["line one", "```", "line two", "After it."]);
 	});
 
 	it("shows an answer's first line as it reads, without its markdown", () => {

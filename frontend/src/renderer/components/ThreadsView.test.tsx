@@ -265,7 +265,38 @@ describe("opening a thread from the list", () => {
 		expect(mocks.openInSession).toHaveBeenCalledWith({ orgId: "org-1", projectId: "project-1", sessionId: "session-a-1", asideId: "a-1", sequence: 42 });
 	});
 
-	it("keeps a thread in an ended session read-only", async () => {
+	it("keeps a thread a notification opened read-only until its session says it is live", async () => {
+		let answer: (value: unknown) => void = () => undefined;
+		mocks.getSession.mockImplementation(() => new Promise((resolve) => { answer = resolve; }));
+		act(() => openThreadInView({ orgId: "org-1", sessionId: "session-x", asideId: "c-9" }, { focusReply: true }));
+		renderView();
+		const pane = await screen.findByTestId("aside-pane");
+		expect(pane.querySelector("[data-aside-reply-box]")).toBeNull();
+		await act(async () => answer({ session: { id: "session-x", projectId: "project-9", displayName: "Notification session", isTerminated: false } }));
+		await waitFor(() => expect(pane.querySelector("[data-aside-reply-box]")).not.toBeNull());
+	});
+
+	it("stays read-only for a thread a notification opened in an ended session", async () => {
+		mocks.getSession.mockResolvedValue({ session: { id: "session-x", projectId: "project-9", displayName: "Notification session", isTerminated: true } });
+		act(() => openThreadInView({ orgId: "org-1", sessionId: "session-x", asideId: "c-9" }, { focusReply: true }));
+		renderView();
+		const pane = await screen.findByTestId("aside-pane");
+		await waitFor(() => expect(pane.querySelector("[data-comment-pane-title]")).toHaveTextContent("Notification session"));
+		expect(pane.querySelector("[data-aside-reply-box]")).toBeNull();
+		expect(pane.querySelector("[data-comment-read-only]")).not.toBeNull();
+	});
+
+	it("takes a session that ended since the thread was opened from its current row", async () => {
+		mocks.listMyCommentThreads.mockResolvedValue(page([row("c-1")]));
+		const queryClient = renderView();
+		fireEvent.click(await findRow("c-1"));
+		const pane = await screen.findByTestId("aside-pane");
+		await waitFor(() => expect(pane.querySelector("[data-aside-reply-box]")).not.toBeNull());
+		mocks.listMyCommentThreads.mockResolvedValue(page([row("c-1", { sessionTerminated: true })]));
+		await act(() => queryClient.invalidateQueries({ queryKey: ["cloud-comment-threads"] }));
+		await waitFor(() => expect(pane.querySelector("[data-aside-reply-box]")).toBeNull());
+		expect(pane.querySelector("[data-comment-read-only]")).not.toBeNull();
+	});	it("keeps a thread in an ended session read-only", async () => {
 		mocks.listMyCommentThreads.mockResolvedValue(page([row("c-1", { sessionTerminated: true })]));
 		renderView();
 		fireEvent.click(await findRow("c-1"));

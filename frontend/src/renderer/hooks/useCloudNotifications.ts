@@ -108,7 +108,8 @@ export function useCloudNotifications(
 	}, [clears, loaded, mentionsOffered]);
 	// The server's unread total, less the unread mention and thread rows it lists
 	// while mentions are not offered (they are not shown, so they are not counted).
-	const hiddenUnread = mentionsOffered ? 0 : (loaded ?? EMPTY).filter((item) => item.status === "unread" && mentionsNotification(item)).length;
+	// A resolved one is already out of the count (resolveInCache), so only open ones come off.
+	const hiddenUnread = mentionsOffered ? 0 : (loaded ?? EMPTY).filter((item) => item.status === "unread" && mentionsNotification(item) && activeCloudNotification(item)).length;
 	const unreadCount = Math.max(0, (mode === "pending" ? 0 : active.data?.unreadCount ?? 0) - hiddenUnread);
 
 	// A cleared row the control plane re-raises (in place: status back to unread,
@@ -271,12 +272,15 @@ function markReadInCache(queryClient: QueryClient, key: readonly unknown[], matc
 	queryClient.setQueryData<CloudCpNotificationListResponse>(key, (page) => {
 		if (!page) return page;
 		let read = 0;
+		let changed = false;
 		const items = page.items.map((row) => {
 			if (row.status !== "unread" || !match(row)) return row;
-			read += 1;
+			changed = true;
+			// A resolved mention or reply already left the unread count (resolveInCache).
+			if (activeCloudNotification(row)) read += 1;
 			return { ...row, status: "read" as const };
 		});
-		return read === 0 ? page : { ...page, items, unreadCount: Math.max(0, page.unreadCount - read) };
+		return changed ? { ...page, items, unreadCount: Math.max(0, page.unreadCount - read) } : page;
 	});
 }
 

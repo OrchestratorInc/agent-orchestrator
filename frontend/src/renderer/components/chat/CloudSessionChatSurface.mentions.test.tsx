@@ -26,7 +26,8 @@ vi.mock("../../hooks/useCloudCp", () => ({
 // The control plane offers mentions and comment threads unless a test says it does not.
 const offering = vi.hoisted(() => ({ features: ["mentions"] as string[] }));
 vi.mock("../../hooks/useCloudOffering", () => ({ useCloudOffering: () => offering }));
-vi.mock("../../hooks/useCloudOrg", () => ({ useCloudOrg: () => ({ org: { id: "org-1", displayName: "Northwind", slug: "northwind", role: "member" } }) }));
+const activeOrg = vi.hoisted(() => ({ displayName: "Northwind" }));
+vi.mock("../../hooks/useCloudOrg", () => ({ useCloudOrg: () => ({ org: { id: "org-1", displayName: activeOrg.displayName, slug: "northwind", role: "member" } }) }));
 vi.mock("./ChatWorkspace", () => ({
 	ChatWorkspace: (props: unknown) => {
 		cloudMocks.chatProps(props);
@@ -99,6 +100,7 @@ function renderSurface(queryClient = new QueryClient({ defaultOptions: { queries
 beforeEach(() => {
 	localStorage.clear();
 	offering.features = ["mentions"];
+	activeOrg.displayName = "Northwind";
 	resetCloudInboxSupport();
 	const pending = peekMentionFocus();
 	if (pending) clearMentionFocus(pending.sessionId, pending.nonce);
@@ -254,6 +256,14 @@ describe("the @ menu's source", () => {
 		renderSurface();
 		await waitFor(() => expect(cloudMocks.chatProps).toHaveBeenCalled());
 		expect(lastProps().composerMentions).toBeUndefined();
+	});
+
+	it("titles the workspace's people neutrally when the workspace is named by an email", async () => {
+		recordCloudInboxSupport(BASE, "supported");
+		activeOrg.displayName = "pritom@example.com";
+		renderSurface();
+		await waitFor(() => expect(lastProps().composerMentions).toBeDefined());
+		expect(lastProps().composerMentions?.workspaceName).toBeUndefined();
 	});
 
 	it("offers them, as the control plane lists them, on one that has mentions", async () => {

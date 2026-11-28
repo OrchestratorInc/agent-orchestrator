@@ -17,7 +17,16 @@ function fakeBridge() {
 	return bridge;
 }
 
-const event = { sequence: 9, orgId: "org-guest", recipientUserId: "u-1", kind: "notification_created", notification: { id: "n-1" }, createdAt: "2026-11-13T10:00:00Z" } as unknown as CloudCpNotificationEvent;
+const at = "2026-11-13T10:00:00Z";
+// A frame the server replays after the requested cursor (41).
+const event: CloudCpNotificationEvent = {
+	sequence: 42,
+	orgId: "org-guest",
+	recipientUserId: "u-1",
+	kind: "notification_created",
+	notification: { id: "n-1", source: "cloud", orgId: "org-guest", sessionId: "s-1", type: "mentioned", title: "Chen Li mentioned you", body: "Can you look?", status: "unread", createdAt: at, updatedAt: at },
+	createdAt: at,
+};
 
 describe("the caller's notification stream", () => {
 	it("streams /me events from every organization after a sequence", async () => {
@@ -35,6 +44,33 @@ describe("the caller's notification stream", () => {
 		bridge.emit({ type: "end" });
 		await done;
 		expect(received).toEqual([event]);
+	});
+
+	it("delivers nothing after an event aborts the subscription, even later in the same chunk", async () => {
+		const bridge = fakeBridge();
+		const controller = new AbortController();
+		const received: CloudCpNotificationEvent[] = [];
+		const done = subscribeMyNotificationEventsBridged({ baseUrl: "https://cp.test", after: 41, bridge, signal: controller.signal, onEvent: (next) => {
+			received.push(next);
+			controller.abort();
+		} });
+		await vi.waitFor(() => expect(bridge.onStreamEvent).toHaveBeenCalled());
+		const second = { ...event, sequence: 43 };
+		bridge.emit({ type: "chunk", data: `data: ${JSON.stringify(event)}\n\ndata: ${JSON.stringify(second)}\n\n` });
+		await done;
+		expect(received).toEqual([event]);
+	});
+
+	it("delivers every event of a chunk when nothing aborts", async () => {
+		const bridge = fakeBridge();
+		const received: CloudCpNotificationEvent[] = [];
+		const done = subscribeMyNotificationEventsBridged({ baseUrl: "https://cp.test", after: 41, bridge, onEvent: (next) => received.push(next) });
+		await vi.waitFor(() => expect(bridge.onStreamEvent).toHaveBeenCalled());
+		const second = { ...event, sequence: 43 };
+		bridge.emit({ type: "chunk", data: `data: ${JSON.stringify(event)}\n\ndata: ${JSON.stringify(second)}\n\n` });
+		bridge.emit({ type: "end" });
+		await done;
+		expect(received).toEqual([event, second]);
 	});
 
 	it("keeps the organization's stream where it was", async () => {

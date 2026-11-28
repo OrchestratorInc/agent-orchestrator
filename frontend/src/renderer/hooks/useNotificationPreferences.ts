@@ -39,12 +39,26 @@ export function useNotificationPreferences(enabled = true) {
 			if (previous) queryClient.setQueryData<CloudCpNotificationPreferences>(key, { ...previous, ...change });
 			return { previous };
 		},
-		onError: (_error, _change, context) => {
-			if (context?.previous) queryClient.setQueryData(key, context.previous);
+		// A failed save puts back only the switches it changed, and only where they
+		// still show its value: another save may have moved them since, or moved
+		// the others (a whole-object rollback would undo those).
+		onError: (_error, change, context) => {
+			const before = context?.previous;
+			if (!before) return;
+			queryClient.setQueryData<CloudCpNotificationPreferences>(key, (current) => {
+				if (!current) return before;
+				const restored = { ...current };
+				for (const name of Object.keys(change) as Array<keyof CloudCpNotificationPreferences>) {
+					if (current[name] === change[name] && before[name] !== undefined) Object.assign(restored, { [name]: before[name] });
+				}
+				return restored;
+			});
 		},
 		onSuccess: (preferences) => {
 			queryClient.setQueryData(key, preferences);
 		},
+		// Then the switches read what the server holds.
+		onSettled: () => void queryClient.invalidateQueries({ queryKey: key }),
 	});
 	return {
 		available: enabled && offered && support === "supported" && query.isSuccess,

@@ -2947,8 +2947,8 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 
 	const view = (
 		<div className="relative flex h-full min-h-0 flex-col bg-background text-foreground" data-testid="session-detail">
-			{/* Opening a cloud session reads the mentions it raised for this person. */}
-			{session?.cloud && !hostId ? <CloudSessionNotificationReader orgId={session.cloud.orgId} sessionId={session.id} /> : null}
+			{/* Opening a cloud session reads the mentions it raised for this person, while its conversation is in front (no file or other tab over it). */}
+			{session?.cloud && !hostId ? <CloudSessionNotificationReader conversationShown={!mainActiveFilePath && !activeWorkspaceTabKey} orgId={session.cloud.orgId} sessionId={session.id} /> : null}
 			<DeviceRevealWatcher enabled={deviceAvailable} onReveal={revealDevice} sessionId={sessionId} terminated={terminated} uiSessionId={uiSessionId} />
 			{!session?.cloud && session?.mode !== "chat" && sessionAgentExited(session) && autoResume.variables === sessionId && autoResume.isError ? (
 				<p className="px-4 py-2 text-xs text-error" role="alert">

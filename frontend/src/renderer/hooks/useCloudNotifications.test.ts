@@ -346,7 +346,28 @@ describe("the personal inbox (/me)", () => {
 		await reading;
 	});
 
-	it("drops a mention or aside reply from the bell once it is resolved, at once from its event", async () => {
+	it("does not take a resolved mention off the unread count twice when the session reads it", async () => {
+		const resolved = mention({ resolvedAt: "2026-11-13T10:10:00Z" });
+		// The server's count already leaves the resolved mention out.
+		const listMyNotifications = vi.fn(async () => ({ ...page([resolved, cloudRow({ id: "other", sessionId: "session-9", orgId: "org-guest", status: "unread" })]), unreadCount: 1 }));
+		const changeMyNotificationState = vi.fn(async () => ({ updated: 1 }));
+		const { result, queryClient } = renderInbox({ listMyNotifications, changeMyNotificationState });
+		await waitFor(() => expect(result.current.mode).toBe("inbox"));
+		const reading = readCloudSessionMentions(queryClient, { changeMyNotificationState }, "https://cloud.test", "user-1", "org-guest", "session-9");
+		const cached = queryClient.getQueryData<{ items: CloudCpNotification[]; unreadCount: number }>(cloudInboxQueryKey("https://cloud.test", "user-1"));
+		expect(cached?.items.find((row) => row.id === "cntf_mention")?.status).toBe("read");
+		expect(cached?.unreadCount).toBe(1);
+		await reading;
+	});
+
+	it("does not take a resolved hidden mention off the unread count while mentions are not offered", async () => {
+		offered.mentions = false;
+		const ready = cloudRow({ id: "cntf_ready", status: "unread" });
+		const listMyNotifications = vi.fn(async () => ({ ...page([mention({ resolvedAt: "2026-11-13T10:10:00Z" }), ready]), unreadCount: 1 }));
+		const { result } = renderInbox({ listMyNotifications });
+		await waitFor(() => expect(result.current.items.map((row) => row.id)).toEqual(["cntf_ready"]));
+		expect(result.current.unreadCount).toBe(1);
+	});	it("drops a mention or aside reply from the bell once it is resolved, at once from its event", async () => {
 		const first = mention({ metadata: { authorName: "Chen Li", sequence: 42, asideId: "a-1" } });
 		const reply = mention({ id: "cntf_reply", type: "aside_reply", title: "Dana Kim replied in an aside", metadata: { asideId: "a-1", replyId: "r-1", authorName: "Dana Kim", sequence: 42 } });
 		const second = mention({ id: "cntf_mention_2", metadata: { authorName: "Marco Rossi", sequence: 57, asideId: "a-2" } });

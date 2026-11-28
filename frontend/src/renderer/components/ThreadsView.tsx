@@ -223,16 +223,20 @@ function ThreadPane({ thread, listed }: { thread: ThreadInView; listed?: CloudCp
 		}
 		return undefined;
 	}, [baseUrl, listed, queryClient, thread.asideId, userId]);
-	const known = { ...(cachedRow ? threadTarget(cachedRow) : {}), ...definedOf(thread) };
+	// The row is current (a session that ended, a prompt right revoked); what the
+	// selection carried stands in only until a row is listed.
+	const known = { ...definedOf(thread), ...(cachedRow ? threadTarget(cachedRow) : {}) };
 	const session = useQuery<CloudCpSession | undefined>({
 		queryKey: ["cloud-thread-session", baseUrl, thread.orgId, thread.sessionId],
-		enabled: ready && (known.sessionTitle === undefined || known.projectId === undefined),
+		enabled: ready && (known.sessionTitle === undefined || known.projectId === undefined || known.ended === undefined),
 		staleTime: 60_000,
 		queryFn: async ({ signal }) => (await client.getSession(thread.orgId, thread.sessionId, { signal })).session,
 	});
 	const sessionTitle = known.sessionTitle ?? session.data?.displayName ?? "";
 	const projectId = known.projectId ?? session.data?.projectId;
-	const ended = known.ended ?? false;
+	// Unknown until the row or the session says: read-only meanwhile (and if the
+	// session can't be read), so an ended session never offers comments.
+	const ended = known.ended ?? (session.data ? session.data.isTerminated === true : true);
 	// The row says whether this person may prompt the session's agent; a thread
 	// opened before its row is listed doesn't offer the send until it is.
 	const canPrompt = !ended && known.canPrompt === true;

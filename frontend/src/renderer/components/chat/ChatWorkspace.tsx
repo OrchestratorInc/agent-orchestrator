@@ -3430,6 +3430,8 @@ const SETTLE_EASE = "cubic-bezier(0.22, 1, 0.36, 1)";
 const RELATCH_AFTER_MS = 1800;
 /** A scroll this soon after the reader's own input counts as theirs. */
 const RELATCH_INTENT_MS = 400;
+/** How long a mention that is not loaded waits for the older page it asked for to start loading. */
+const FOCUS_OLDER_WAIT_MS = 1000;
 /** How far above the end still counts as a pause rather than reading back. */
 const relatchBand = (node: HTMLElement) => Math.min(320, Math.round(node.clientHeight * 0.4));
 const CHAT_ESTIMATED_TURN_HEIGHT = 600;
@@ -5617,7 +5619,7 @@ export function Timeline({
 	// a moment (lib/chat-flash.ts). The view stops following the end there; it follows again once
 	// the reader scrolls back down. Each request key lands once; one the history
 	// can't reach (gone, or past the pages it reads) opens the chat as usual.
-	const focusRequest = useRef<{ key: string | number; landed: boolean; tries: number; olderAt?: number }>(undefined);
+	const focusRequest = useRef<{ key: string | number; landed: boolean; tries: number; olderAt?: string; olderAskedAt?: number; olderLoading?: boolean }>(undefined);
 	const [focusRetry, setFocusRetry] = useState(0);
 	useLayoutEffect(() => {
 		if (!focusMessage) return undefined;
@@ -5630,11 +5632,27 @@ export function Timeline({
 		};
 		const index = groups.findIndex((group) => group.items.some((item) => item.id === focusMessage.messageId));
 		if (index < 0) {
-			if (timelineHistoryPending || loadingOlder) return undefined;
-			if (hasOlder && onLoadOlder && request.olderAt !== groups.length) {
-				request.olderAt = groups.length;
-				onLoadOlder();
+			if (timelineHistoryPending) return undefined;
+			if (loadingOlder) {
+				request.olderLoading = true;
 				return undefined;
+			}
+			if (hasOlder && onLoadOlder) {
+				// Once per oldest row: an older page can add rows to a turn already
+				// shown (the group count stays), and one that added nothing ends it.
+				if (request.olderAt !== oldestRow) {
+					request.olderAt = oldestRow;
+					request.olderLoading = false;
+					request.olderAskedAt = Date.now();
+					onLoadOlder();
+					return undefined;
+				}
+				// A render before the asked page starts loading is no answer: wait a
+				// moment for the load, then open the chat as usual.
+				if (!request.olderLoading && Date.now() - (request.olderAskedAt ?? 0) < FOCUS_OLDER_WAIT_MS) {
+					const timer = window.setTimeout(() => setFocusRetry((value) => value + 1), 50);
+					return () => window.clearTimeout(timer);
+				}
 			}
 			done();
 			return undefined;
@@ -5643,6 +5661,11 @@ export function Timeline({
 		const source = Array.from(scrollContent.current?.querySelectorAll<HTMLElement>("[data-chat-focus-id]") ?? [])
 			.find((element) => element.dataset.chatFocusId === focusMessage.messageId);
 		if (!source || !node) {
+			// A message inside a closed "Worked for" (or a folded turn) opens it first.
+			const keys = revealKeys(groups[index]!, (item) => item.id === focusMessage.messageId);
+			if (keys.some((key) => !activityDisclosureOverrides[key])) {
+				setActivityDisclosureOverrides((current) => ({ ...current, ...Object.fromEntries(keys.map((key) => [key, true])) }));
+			}
 			if (virtualized) virtualizer.scrollToIndex(index, { align: "center" });
 			if (request.tries++ >= 20) {
 				done();
@@ -5662,7 +5685,7 @@ export function Timeline({
 		flashChatMessage(source);
 		done();
 		return undefined;
-	}, [focusMessage, focusRetry, groups, hasOlder, loadingOlder, onFocusMessageDone, onLoadOlder, releaseFollow, markWritten, timelineHistoryPending, virtualRows, virtualized, virtualizer]);
+	}, [activityDisclosureOverrides, focusMessage, focusRetry, groups, hasOlder, loadingOlder, oldestRow, onFocusMessageDone, onLoadOlder, releaseFollow, markWritten, timelineHistoryPending, virtualRows, virtualized, virtualizer]);
 	useEffect(() => clearChatFlash, []);
 
 	// The pause-then-resume for a reader who only nudged up a little: armed by their

@@ -23,13 +23,22 @@ function renderSection() {
 	return render(<QueryClientProvider client={queryClient}><NotificationsSection titleHidden={false} /></QueryClientProvider>);
 }
 
+// The control plane keeps what a save sent and reads it back, as the real one does.
+function serveHeld(initial: Record<string, boolean>) {
+	let held = { ...initial };
+	client.getMyNotificationPreferences.mockReset().mockImplementation(async () => ({ ...held }));
+	client.setMyNotificationPreferences.mockReset().mockImplementation(async (change: Record<string, boolean>) => {
+		held = { ...held, ...change };
+		return { ...held };
+	});
+}
+
 beforeEach(() => {
 	localStorage.clear();
 	offered.mentions = true;
 	resetCloudInboxSupport();
 	recordCloudInboxSupport("https://cp.test", "supported");
-	client.getMyNotificationPreferences.mockReset().mockResolvedValue({ mentions: true, teamMentions: true });
-	client.setMyNotificationPreferences.mockReset().mockImplementation(async (change) => ({ mentions: true, teamMentions: true, ...change }));
+	serveHeld({ mentions: true, teamMentions: true });
 });
 
 describe("Settings › Notifications", () => {
@@ -61,10 +70,7 @@ describe("Settings › Notifications", () => {
 });
 
 describe("Settings › Notifications with asides", () => {
-	beforeEach(() => {
-		client.getMyNotificationPreferences.mockReset().mockResolvedValue({ mentions: true, teamMentions: true, asideReplies: true });
-		client.setMyNotificationPreferences.mockReset().mockImplementation(async (change) => ({ mentions: true, teamMentions: true, asideReplies: true, ...change }));
-	});
+	beforeEach(() => serveHeld({ mentions: true, teamMentions: true, asideReplies: true }));
 
 	it("adds a third switch for replies in asides, on by default, under Mentions and comments", async () => {
 		renderSection();
@@ -131,5 +137,26 @@ describe("the Notifications page behind the mentions feature", () => {
 		const { result } = renderPreferences();
 		await waitFor(() => expect(result.current.available).toBe(true));
 		expect(client.getMyNotificationPreferences).toHaveBeenCalledTimes(1);
+	});
+});
+
+describe("saves that overlap", () => {
+	it("keeps a later save that went through when an earlier one fails", async () => {
+		const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+		const wrapper = ({ children }: { children: ReactNode }) => <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>;
+		client.getMyNotificationPreferences.mockResolvedValue({ mentions: true, teamMentions: true, asideReplies: true });
+		const { result } = renderHook(() => useNotificationPreferences(), { wrapper });
+		await waitFor(() => expect(result.current.available).toBe(true));
+		let failFirst: (error: unknown) => void = () => undefined;
+		client.setMyNotificationPreferences
+			.mockImplementationOnce(() => new Promise((_resolve, reject) => { failFirst = reject; }))
+			.mockResolvedValueOnce({ mentions: true, teamMentions: false, asideReplies: true });
+		// What the server holds once the second save went through and the first failed.
+		client.getMyNotificationPreferences.mockResolvedValue({ mentions: true, teamMentions: false, asideReplies: true });
+		let first!: Promise<unknown>;
+		await act(async () => { first = result.current.save({ mentions: false }).catch(() => undefined); });
+		await act(async () => { await result.current.save({ teamMentions: false }); });
+		await act(async () => { failFirst(new Error("offline")); await first; });
+		await waitFor(() => expect(result.current.preferences).toEqual({ mentions: true, teamMentions: false, asideReplies: true }));
 	});
 });

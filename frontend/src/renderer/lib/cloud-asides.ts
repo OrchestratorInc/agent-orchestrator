@@ -222,13 +222,30 @@ export function asideReplyOf(event: Pick<CloudCpClientEvent, "type" | "payload" 
 	};
 }
 
-/** Each reply once (the newest copy of it wins), oldest first. */
+/** A copy of a reply's revision: its newest edit's event, else its own (0 without either). */
+export function replyVersion(reply: Pick<CloudCpAsideReply, "sequence" | "editedSequence">): number {
+	return reply.editedSequence ?? reply.sequence ?? 0;
+}
+
+/**
+ * Each reply once, oldest first. Of its copies (the thread as read, the
+ * stream, this person's own sends and edits) the newest revision wins
+ * (replyVersion), the later list between equal ones: a copy kept locally
+ * never hides a newer edit. Replies with session events are ordered by them,
+ * any other by time.
+ */
 export function mergeAsideReplies(...lists: ReadonlyArray<readonly CloudCpAsideReply[]>): CloudCpAsideReply[] {
 	const byId = new Map<string, CloudCpAsideReply>();
-	for (const list of lists) for (const reply of list) byId.set(reply.replyId, reply);
+	for (const list of lists) {
+		for (const reply of list) {
+			const held = byId.get(reply.replyId);
+			if (!held || replyVersion(reply) >= replyVersion(held)) byId.set(reply.replyId, reply);
+		}
+	}
+	const time = (reply: CloudCpAsideReply) => Date.parse(reply.createdAt) || 0;
 	return [...byId.values()]
 		.map((reply, index) => ({ reply, index }))
-		.sort((a, b) => (Date.parse(a.reply.createdAt) || 0) - (Date.parse(b.reply.createdAt) || 0) || a.index - b.index)
+		.sort((a, b) => (a.reply.sequence !== undefined && b.reply.sequence !== undefined ? a.reply.sequence - b.reply.sequence : time(a.reply) - time(b.reply)) || a.index - b.index)
 		.map(({ reply }) => reply);
 }
 

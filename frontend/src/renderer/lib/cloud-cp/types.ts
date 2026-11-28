@@ -492,19 +492,29 @@ export interface CloudCpAsideThreadQuery {
 }
 
 /** POST /orgs/{orgId}/sessions/{sessionId}/asides/{asideId}/replies; idempotent on clientMessageId. */
-export interface CloudCpAsideReplyRequest {
+/** A comment as the sender's client showed it: its id and the version shown (editedSequence, else sequence). */
+export interface CloudCpAsideSeenComment {
+	replyId: string;
+	version: number;
+}
+
+interface CloudCpAsideReplyBase {
 	text: string;
 	mentions?: CloudCpMentionToken[];
 	clientMessageId: string;
-	/** Also send the whole thread to the agent and resolve it ("Also send to agent"). */
-	sendToAgent?: boolean;
-	/**
-	 * With sendToAgent: the newest comment the sender read (its event, or its
-	 * newest edit's). A thread changed after it is refused with 409
-	 * thread_changed, and the send carries only the comments up to it.
-	 */
-	throughSequence?: number;
 }
+
+/**
+ * A reply, or with sendToAgent a reply that also sends the thread to the
+ * agent and resolves it ("Also send to agent"). That one names what the
+ * sender read: seen, every comment shown at the version shown (at most 500),
+ * and throughSequence, the newest of them, as the upper bound. A comment the
+ * send would carry that is missing from seen, newer than listed or after
+ * throughSequence is refused with 409 thread_changed.
+ */
+export type CloudCpAsideReplyRequest =
+	| (CloudCpAsideReplyBase & { sendToAgent?: false })
+	| (CloudCpAsideReplyBase & { sendToAgent: true; throughSequence: number; seen: CloudCpAsideSeenComment[] });
 
 export interface CloudCpNotificationEvent {
 	sequence: number;

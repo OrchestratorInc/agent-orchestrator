@@ -208,6 +208,8 @@ export function commentDraftForSelection(range: Range): CommentDraft | undefined
 	const anchorOf = (node: Node) => (node instanceof Element ? node : node.parentElement)?.closest<HTMLElement>("[data-comment-anchor]") ?? undefined;
 	const start = anchorOf(range.startContainer);
 	if (!start || start !== anchorOf(range.endContainer)) return undefined;
+	// An answer still streaming (or a message queued or being edited) takes no comment yet, as its Comment button shows only once it is finished.
+	if (start.dataset.commentUnfinished !== undefined) return undefined;
 	const sequence = Number(start.dataset.commentAnchor);
 	const kind = start.dataset.commentKind;
 	if (!Number.isFinite(sequence) || (kind !== "user_message" && kind !== "steer" && kind !== "agent_message")) return undefined;
@@ -229,14 +231,27 @@ export function commentDraftForSelection(range: Range): CommentDraft | undefined
  */
 export function markdownPreviewLines(markdown: string): string[] {
 	const lines: string[] = [];
-	let code = false;
+	// The open code fence: its character and length. Only a fence of the same
+	// character, at least as long and with nothing after it, closes it
+	// (CommonMark), so a shorter fence inside a longer one stays code.
+	let fence: { char: string; length: number } | undefined;
 	for (const line of markdown.split(/\r?\n/)) {
-		if (/^\s*(```|~~~)/.test(line)) {
-			code = !code;
+		const marker = /^\s{0,3}(`{3,}|~{3,})(.*)$/.exec(line);
+		if (!fence) {
+			if (marker) {
+				fence = { char: marker[1]![0]!, length: marker[1]!.length };
+				continue;
+			}
+			const text = renderedSnippetText(line);
+			if (text !== "") lines.push(text);
 			continue;
 		}
-		const text = code ? line.trim() : renderedSnippetText(line);
-		if (text !== "") lines.push(text);
+		if (marker && marker[1]![0] === fence.char && marker[1]!.length >= fence.length && marker[2]!.trim() === "") {
+			fence = undefined;
+			continue;
+		}
+		const code = line.trim();
+		if (code !== "") lines.push(code);
 	}
 	return lines;
 }
@@ -339,7 +354,7 @@ function CommentTargetWith({
 
 	const markerLabel = comments?.state === "active" ? t("comment.closeMarker") : comments?.state === "unread" ? t("comment.openUnread") : t("comment.open");
 	return (
-		<div className="group/comment relative" data-comment-anchor={sequence} data-comment-author={authorName} data-comment-kind={kind} onClick={onClick} ref={root}>
+		<div className="group/comment relative" data-comment-anchor={sequence} data-comment-author={authorName} data-comment-kind={kind} data-comment-unfinished={finished ? undefined : ""} onClick={onClick} ref={root}>
 			{children}
 			{finished && markers.canComment ? (
 				// In the right margin, as a document's add-comment button: it never

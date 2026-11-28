@@ -59,7 +59,7 @@ import type { ApprovalModeLimits } from "./TurnSettingsBar";
 import { SharedComposerNotice } from "./SharedComposerNotice";
 import { MentionTintContext, type MentionTint } from "./MentionChip";
 import type { ComposerMentionSource } from "./ChatComposer";
-import { mentionRateLimit, mentionRefusal, mentionRefusalKey, mentionToken, parseEventMentions, type ComposerMention } from "../../lib/cloud-mentions";
+import { mentionRateLimit, mentionRefusal, mentionRefusalKey, mentionToken, mentionWorkspaceName, parseEventMentions, type ComposerMention } from "../../lib/cloud-mentions";
 import { cloudInboxQueryKey, mentionMetadata, probeCloudInbox } from "../../lib/cloud-notifications";
 import { clearMentionFocus, mentionFallbackEvents, mentionMessageId, useMentionFocus } from "../../lib/cloud-mention-open";
 import { useCloudInboxSupport } from "../../hooks/useCloudNotifications";
@@ -1152,6 +1152,9 @@ export function toSnapshot(session: WorkspaceSession, events: CloudCpClientEvent
 				const attachments = eventAttachments(event);
 				edited.text = text;
 				delete edited.content;
+				// An edited thread send (an older app could edit one) is its new text,
+				// not the thread its card showed.
+				delete edited.fromAside;
 				if (attachments.length > 0) edited.cloudAttachments = attachments;
 				else delete edited.cloudAttachments;
 				edited.revision += 1;
@@ -2164,8 +2167,10 @@ export function CloudSessionChatSurface({
 	// agent receives. The control plane takes an edit of a message with quotes
 	// or captures but drops them, and they are inlined in the text the agent
 	// gets, which the composer cannot rebuild, so such a message offers no Edit.
+	// Nor does a thread "Also send to agent" sent: its text is the thread, drawn
+	// as the thread's card; to change it, comment in the thread.
 	const canEditQueuedMessage = useCallback(
-		(message: ConversationMessage) => Boolean(message.turnId && ownTurns.has(message.turnId) && !message.content?.length),
+		(message: ConversationMessage) => Boolean(message.turnId && ownTurns.has(message.turnId) && !message.content?.length && !message.fromAside),
 		[ownTurns],
 	);
 	// A queued message is taken back before the agent starts on it. Where the
@@ -2657,7 +2662,7 @@ export function CloudSessionChatSurface({
 	const composerMentions = useMemo<ComposerMentionSource | undefined>(() => mentionsOn ? {
 		onQuery: setMentionQuery,
 		candidates: mentionCandidates.data,
-		workspaceName: activeOrg?.id === cloud?.orgId ? activeOrg?.displayName : undefined,
+		workspaceName: activeOrg?.id === cloud?.orgId ? mentionWorkspaceName(activeOrg?.displayName) : undefined,
 		selfUserId: me,
 	} : undefined, [activeOrg?.displayName, activeOrg?.id, cloud?.orgId, me, mentionCandidates.data, mentionsOn]);
 	// A chip naming this person, or a team a mention reached them through, is tinted.
@@ -2688,16 +2693,19 @@ export function CloudSessionChatSurface({
 	// A new tagged message, comment, resolve or reopen: read the list again.
 	const newestAsideEvent = useMemo(() => (chatEvents ?? []).reduce((newest, event) =>
 		(event.type === ASIDE_REPLY_EVENT && asideReplyOf(event)) || ASIDE_STATE_EVENTS.has(event.type) || asideIdOf(event) ? Math.max(newest, event.sequence) : newest, 0), [chatEvents]);
-	const asidesSeen = useRef(0);
+	// The newest thread event when the list was first read; undefined until the
+	// conversation loads, so a first thread after none (0) still reads it again.
+	const asidesSeen = useRef<number | undefined>(undefined);
+	const chatEventsLoaded = chatEvents !== undefined;
 	useEffect(() => {
-		if (!asidesOn) return;
-		if (asidesSeen.current === 0 || asidesSeen.current === newestAsideEvent) {
+		if (!asidesOn || !chatEventsLoaded) return;
+		if (asidesSeen.current === undefined || asidesSeen.current === newestAsideEvent) {
 			asidesSeen.current = newestAsideEvent;
 			return;
 		}
 		asidesSeen.current = newestAsideEvent;
 		void queryClient.invalidateQueries({ queryKey: cloudAsidesKey(cloud?.orgId ?? "", session.id) });
-	}, [asidesOn, cloud?.orgId, newestAsideEvent, queryClient, session.id]);
+	}, [asidesOn, chatEventsLoaded, cloud?.orgId, newestAsideEvent, queryClient, session.id]);
 	const openAsideState = useOpenAside(session.id);
 	const shownAside = cloud && chatInFront && mentionsOffered ? openAsideState : undefined;
 	const commentMarkers = useMemo<CommentMarkers | undefined>(() => {
@@ -2733,7 +2741,7 @@ export function CloudSessionChatSurface({
 	const asideFallback = useMemo<AsideFallback | undefined>(() => mentionFocus && shownAside?.asideId && mentionFocus.asideId === shownAside.asideId && mentionFocus.body.trim() !== ""
 		? { kind: mentionFocus.kind, body: mentionFocus.body, authorName: mentionFocus.authorName, createdAt: mentionFocus.createdAt }
 		: undefined, [mentionFocus, shownAside?.asideId]);
-	const paneWorkspace = cloud && activeOrg?.id === cloud.orgId ? activeOrg?.displayName : undefined;
+	const paneWorkspace = cloud && activeOrg?.id === cloud.orgId ? mentionWorkspaceName(activeOrg?.displayName) : undefined;
 	// Whether a thread's message is on screen: shown, gone (its sequence is
 	// within the loaded history but nothing draws it: a withdrawn or rolled back
 	// message), or unknown (older than what is loaded).
@@ -2750,9 +2758,11 @@ export function CloudSessionChatSurface({
 			}
 		}
 		const oldest = chatEvents?.[0]?.sequence;
+		const newest = chatEvents?.at(-1)?.sequence;
 		return (aside: Pick<CloudCpAside, "asideId" | "anchor">): boolean | undefined => {
 			if (tagged.has(aside.asideId) || sequences.has(aside.anchor.sequence)) return true;
-			return oldest === undefined || aside.anchor.sequence < oldest ? undefined : false;
+			// Outside the loaded history (older, or newer than its tail) nothing is known.
+			return oldest === undefined || newest === undefined || aside.anchor.sequence < oldest || aside.anchor.sequence > newest ? undefined : false;
 		};
 	}, [chatEvents, snapshot.items]);
 	const listedThreads = shownAside?.messageSequence !== undefined

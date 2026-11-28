@@ -4,6 +4,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { cloudInboxQueryKey, MENTIONED } from "../lib/cloud-notifications";
 import type { CloudCpNotification, CloudCpNotificationListResponse } from "../lib/cloud-cp/types";
 import { CloudSessionNotificationReader } from "./CloudSessionNotificationReader";
+import { MainViewVisibleContext } from "../lib/main-view-visibility";
+import type { ReactElement } from "react";
 
 const BASE = "https://cp.test";
 const mocks = vi.hoisted(() => ({ changeMyNotificationState: vi.fn() }));
@@ -71,6 +73,23 @@ describe("CloudSessionNotificationReader behind the mentions feature", () => {
 		render(
 			<QueryClientProvider client={queryClient}>
 				<CloudSessionNotificationReader orgId="org-1" sessionId="session-1" />
+			</QueryClientProvider>,
+		);
+		await act(async () => undefined);
+		expect(mocks.changeMyNotificationState).not.toHaveBeenCalled();
+	});
+});
+
+describe("CloudSessionNotificationReader while the conversation is covered", () => {
+	it.each([
+		["a file or other tab is in front", (reader: ReactElement) => reader, false],
+		["a popped-out browser covers the main view", (reader: ReactElement) => <MainViewVisibleContext.Provider value={false}>{reader}</MainViewVisibleContext.Provider>, true],
+	] as const)("reads nothing while %s", async (_case, wrap, conversationShown) => {
+		const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+		queryClient.setQueryData(cloudInboxQueryKey(BASE, "u-priya"), page([mention]));
+		render(
+			<QueryClientProvider client={queryClient}>
+				{wrap(<CloudSessionNotificationReader conversationShown={conversationShown} orgId="org-1" sessionId="session-1" />)}
 			</QueryClientProvider>,
 		);
 		await act(async () => undefined);

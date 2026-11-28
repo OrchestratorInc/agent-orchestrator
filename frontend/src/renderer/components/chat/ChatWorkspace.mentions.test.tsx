@@ -6,6 +6,8 @@ import { renderChat as render } from "../../test/render-chat";
 import type { WorkspaceSession } from "../../types/workspace";
 import { COMMENT_COLUMN_CLASS, CommentMarkersContext, type CommentMarkers } from "./AsideMarker";
 import { ChatWorkspace } from "./ChatWorkspace";
+import { chatFixtureEmpty } from "../../lib/chat-fixture";
+import type { ConversationSnapshot } from "../../types/conversation";
 import { toSnapshot } from "./CloudSessionChatSurface";
 import { MentionTintContext } from "./MentionChip";
 
@@ -175,5 +177,69 @@ describe("the column of a Cloud chat with comments", () => {
 			expect(toolbar).toHaveClass("absolute");
 			expect(toolbar.querySelector("[data-chat-message-body]")).toBeNull();
 		}
+	});
+});
+
+describe("landing on a message the chat does not show yet", () => {
+	const time = "2026-08-11T10:01:00Z";
+	const message = (id: string, turnId: string, sequence: number, role: "user" | "assistant", text: string) => ({
+		kind: "message" as const, id, turnId, sequence, revision: 0, role, origin: role === "user" ? "human" as const : "provider" as const, text, streaming: false, createdAt: time,
+	});
+	const turn = (id: string) => ({ id, state: "completed" as const, providerTurnId: `p-${id}`, requestedAt: time, startedAt: time, completedAt: time });
+
+	it("opens the closed Worked for that holds it", async () => {
+		const done = vi.fn();
+		const snapshot: ConversationSnapshot = {
+			...chatFixtureEmpty,
+			latestSequence: 3,
+			turns: [turn("t-1")],
+			items: [
+				message("prompt", "t-1", 1, "user", "Inspect the implementation"),
+				message("intermediate-answer", "t-1", 2, "assistant", "I found the relevant component."),
+				message("final-answer", "t-1", 3, "assistant", "The implementation is correct."),
+			],
+		};
+		render(<ChatWorkspace snapshot={snapshot} focusMessage={{ messageId: "intermediate-answer", key: "w:loaded" }} onFocusMessageDone={done} />);
+		await waitFor(() => expect(done).toHaveBeenCalledWith("w:loaded"));
+		const row = document.querySelector<HTMLElement>('[data-chat-focus-id="intermediate-answer"]');
+		expect(row).not.toBeNull();
+		expect(row!.querySelector("[data-chat-flash]") ?? (row!.dataset.chatFlash !== undefined ? row : null)).not.toBeNull();
+	});
+
+	it("keeps reading older pages while each one moves the oldest row, even within one turn", async () => {
+		const onLoadOlder = vi.fn();
+		const done = vi.fn();
+		const newest: ConversationSnapshot = {
+			...chatFixtureEmpty,
+			latestSequence: 11,
+			turns: [turn("t-2")],
+			items: [message("late-answer", "t-2", 11, "assistant", "Done.")],
+		};
+		const view = render(<ChatWorkspace snapshot={newest} hasOlder onLoadOlder={onLoadOlder} focusMessage={{ messageId: "early", key: "o:loaded" }} onFocusMessageDone={done} />);
+		await waitFor(() => expect(onLoadOlder).toHaveBeenCalledTimes(1));
+		// The older page only adds the same turn's prompt: the turn count stays one.
+		const older: ConversationSnapshot = { ...newest, items: [message("late-prompt", "t-2", 10, "user", "Finish it"), ...newest.items] };
+		view.rerender(<ChatWorkspace snapshot={older} hasOlder onLoadOlder={onLoadOlder} focusMessage={{ messageId: "early", key: "o:loaded" }} onFocusMessageDone={done} />);
+		await waitFor(() => expect(onLoadOlder).toHaveBeenCalledTimes(2));
+		expect(done).not.toHaveBeenCalled();
+	});
+
+	it("opens the chat as usual once the older page it asked for loaded and added nothing", async () => {
+		const onLoadOlder = vi.fn();
+		const done = vi.fn();
+		const newest: ConversationSnapshot = {
+			...chatFixtureEmpty,
+			latestSequence: 11,
+			turns: [turn("t-2")],
+			items: [message("late-answer", "t-2", 11, "assistant", "Done.")],
+		};
+		const focus = { messageId: "gone", key: "o:gone" };
+		const view = render(<ChatWorkspace snapshot={newest} hasOlder onLoadOlder={onLoadOlder} focusMessage={focus} onFocusMessageDone={done} />);
+		await waitFor(() => expect(onLoadOlder).toHaveBeenCalledTimes(1));
+		expect(done).not.toHaveBeenCalled();
+		view.rerender(<ChatWorkspace snapshot={newest} hasOlder loadingOlder onLoadOlder={onLoadOlder} focusMessage={focus} onFocusMessageDone={done} />);
+		view.rerender(<ChatWorkspace snapshot={newest} hasOlder loadingOlder={false} onLoadOlder={onLoadOlder} focusMessage={focus} onFocusMessageDone={done} />);
+		await waitFor(() => expect(done).toHaveBeenCalledWith("o:gone"));
+		expect(onLoadOlder).toHaveBeenCalledTimes(1);
 	});
 });

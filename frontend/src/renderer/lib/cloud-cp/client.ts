@@ -1505,8 +1505,9 @@ export function createCloudCpClient(options: CloudCpClientOptions): CloudCpClien
 			requestJson("GET", `/orgs/${seg(orgId)}/sessions/${seg(sessionId)}/asides`, { signal: o?.signal }),
 		getSessionAside: (orgId, sessionId, asideId, query, o) =>
 			requestJson("GET", `/orgs/${seg(orgId)}/sessions/${seg(sessionId)}/asides/${seg(asideId)}`, { query: { cursor: query?.cursor, limit: query?.limit }, signal: o?.signal }),
+		// A 403 on a comment (prompt_forbidden, not_author) is about it, not a stale organization.
 		replyToSessionAside: (orgId, sessionId, asideId, body, o) =>
-			requestJson("POST", `/orgs/${seg(orgId)}/sessions/${seg(sessionId)}/asides/${seg(asideId)}/replies`, { body, signal: o?.signal }),
+			requestJson("POST", `/orgs/${seg(orgId)}/sessions/${seg(sessionId)}/asides/${seg(asideId)}/replies`, { body, resourceForbidden: true, signal: o?.signal }),
 		markSessionAsideRead: (orgId, sessionId, asideId, o) =>
 			requestJson("POST", `/orgs/${seg(orgId)}/sessions/${seg(sessionId)}/asides/${seg(asideId)}/read`, { signal: o?.signal }),
 		muteSessionAside: (orgId, sessionId, asideId, muted, o) =>
@@ -1518,9 +1519,9 @@ export function createCloudCpClient(options: CloudCpClientOptions): CloudCpClien
 		reopenSessionAside: (orgId, sessionId, asideId, o) =>
 			requestJson("POST", `/orgs/${seg(orgId)}/sessions/${seg(sessionId)}/asides/${seg(asideId)}/reopen`, { signal: o?.signal }),
 		editSessionAsideReply: (orgId, sessionId, asideId, replyId, body, o) =>
-			requestJson("PATCH", `/orgs/${seg(orgId)}/sessions/${seg(sessionId)}/asides/${seg(asideId)}/replies/${seg(replyId)}`, { body, signal: o?.signal }),
+			requestJson("PATCH", `/orgs/${seg(orgId)}/sessions/${seg(sessionId)}/asides/${seg(asideId)}/replies/${seg(replyId)}`, { body, resourceForbidden: true, signal: o?.signal }),
 		deleteSessionAsideReply: (orgId, sessionId, asideId, replyId, o) =>
-			requestVoid("DELETE", `/orgs/${seg(orgId)}/sessions/${seg(sessionId)}/asides/${seg(asideId)}/replies/${seg(replyId)}`, { signal: o?.signal }),
+			requestVoid("DELETE", `/orgs/${seg(orgId)}/sessions/${seg(sessionId)}/asides/${seg(asideId)}/replies/${seg(replyId)}`, { resourceForbidden: true, signal: o?.signal }),
 		markSessionAsideUnread: (orgId, sessionId, asideId, o) =>
 			requestJson("POST", `/orgs/${seg(orgId)}/sessions/${seg(sessionId)}/asides/${seg(asideId)}/unread`, { signal: o?.signal }),
 		listMyCommentThreads: (query, o) =>

@@ -14,6 +14,7 @@ import {
 	cloudAsidesKey,
 	loadAsideThread,
 	mergeAsideReplies,
+	replyVersion,
 	openAside,
 	cloudUnreadThreadsKey,
 	invalidateCommentThreads,
@@ -42,7 +43,7 @@ import type {
 import { AoError } from "../../../../../packages/shared/telemetry/ao-error";
 import { CloudCpError } from "../../lib/cloud-cp/errors";
 import { isPathQuery, MAX_MENTIONS, mentionRateLimit, mentionRefusal, mentionRefusalKey, mentionToken, parseEventMentions, type ComposerMention } from "../../lib/cloud-mentions";
-import { ASIDE_REPLY, asideReplyMetadata, cloudInboxQueryKey, MENTIONED, mentionMetadata } from "../../lib/cloud-notifications";
+import { activeCloudNotification, ASIDE_REPLY, asideReplyMetadata, cloudInboxQueryKey, MENTIONED, mentionMetadata } from "../../lib/cloud-notifications";
 import { formatTimeCompact } from "../../lib/format-time";
 import type { MessageKey } from "../../i18n/messages";
 import { cn } from "../../lib/utils";
@@ -498,6 +499,15 @@ function AsideReplyBox({
 	const [sendToAgent, setSendToAgent] = useState(false);
 	const [error, setError] = useState<string>();
 	const toAgent = canSendToAgent && sendToAgent;
+	const box = useRef<HTMLDivElement>(null);
+	// Typing waits while a reply is sending (a failed send gives its draft back
+	// into the box), and the caret comes back once it is done.
+	const refocus = useRef(false);
+	useEffect(() => {
+		if (sending || !refocus.current) return;
+		refocus.current = false;
+		editor.current?.focus();
+	}, [sending]);
 
 	const query = trigger && trigger.kind === "file" && trigger.key !== dismissedKey && !isPathQuery(trigger.query) ? trigger.query : undefined;
 	const onQuery = mentionSource?.onQuery;
@@ -553,14 +563,15 @@ function AsideReplyBox({
 			return;
 		}
 		setError(undefined);
+		refocus.current = Boolean(box.current?.contains(document.activeElement));
 		setSending(true);
 		editor.current?.clear();
 		try {
 			await send(text, mentions, toAgent);
 			setSendToAgent(false);
 		} catch (reason) {
-			// Nothing was sent: the draft comes back, with its chips.
-			editor.current?.setText(snapshot.text, "end", mentions);
+			// Nothing was sent: the draft comes back, with each of its chips.
+			editor.current?.setText(snapshot.text, "end", snapshot.mentionChips ?? mentions);
 			setError(reason instanceof Error && reason.message ? reason.message : t("comment.replyFailed"));
 		} finally {
 			setSending(false);
@@ -587,7 +598,7 @@ function AsideReplyBox({
 	}, [menuOpen, suggestions.length, trigger]);
 
 	return (
-		<div className="shrink-0 px-3 pb-3">
+		<div className="shrink-0 px-3 pb-3" ref={box}>
 			<div className="relative rounded-lg bg-raised px-1.5 pt-1 pb-1.5" data-aside-reply-box="">
 				{menuOpen ? (
 					<ComposerSuggestMenu highlighted={active} id={menuId} items={suggestions} kind="file" onPick={pick} />
@@ -607,6 +618,7 @@ function AsideReplyBox({
 					onKeyDown={onKeyDown}
 					onPaste={() => undefined}
 					placeholder={disabled ?? (firstComment ? t("comment.firstPlaceholder") : t("comment.replyPlaceholder"))}
+					readOnly={sending}
 					ref={editor}
 				/>
 				{canSendToAgent && !disabled && !firstComment ? (
@@ -763,6 +775,13 @@ export interface AsideFallback {
 }
 
 const EMPTY_EVENTS: CloudCpClientEvent[] = [];
+
+/** The most comments a send to the agent names in seen (the contract's cap). */
+const MAX_SEEN = 500;
+
+/** How often a refused read of a thread is asked again, and the first wait (it grows with each try). */
+const READ_RETRIES = 3;
+const READ_RETRY_MS = 1000;
 
 /** Scrolls the conversation to a message's anchor and tints it for a moment (lib/chat-flash.ts). */
 export function jumpToCommentAnchor(sequence: number): void {
@@ -959,35 +978,42 @@ export function CloudAsidePane({
 		}
 		return { edits, deleted };
 	}, [asideId, events]);
+	// What a send takes: the comments since the thread was last sent, or all of them.
+	const lastSent = useMemo(
+		() => (aside?.history ?? []).reduce((newest, entry) => (entry.kind === "sent_to_agent" ? Math.max(newest, entry.sequence) : newest), 0),
+		[aside?.history],
+	);
 	// Set when a send to the agent was refused because the thread changed after
-	// the sequence it named: comments newer than it are marked until a send goes.
-	const [changedAfter, setChangedAfter] = useState<number>();
+	// it was read (409 thread_changed): the versions that send named. Each comment
+	// it would carry whose version differs (edited, or new) is marked until a send goes.
+	const [refusedSeen, setRefusedSeen] = useState<ReadonlyMap<string, number>>();
 	const replies = useMemo<AsideEntry[]>(() => {
 		const own = sent.filter((reply) => reply.asideId === asideId);
-		const stored = mergeAsideReplies(thread.data?.replies ?? [], live, own);
-		// The copies read from the thread (and this person's sends), which know their newest edit.
-		const saved = new Map([...(thread.data?.replies ?? []), ...own].map((reply) => [reply.replyId, reply]));
-		const shown: AsideEntry[] = stored
+		// Each comment as its newest copy (mergeAsideReplies): the thread as read,
+		// the stream, this person's own sends and edits, and a streamed edit newer
+		// than all of them. The text shown and the version a send pins (seen) are
+		// that one copy's.
+		const shown: AsideEntry[] = mergeAsideReplies(thread.data?.replies ?? [], live, own)
+			.map((reply) => {
+				const edit = liveChanges.edits.get(reply.replyId);
+				return edit?.sequence !== undefined && edit.sequence > replyVersion(reply)
+					? { ...reply, text: edit.text, mentions: edit.mentions, editedAt: edit.editedAt, editedSequence: edit.sequence }
+					: reply;
+			})
 			.filter((reply) => !liveChanges.deleted.has(reply.replyId) && !removed.has(reply.replyId))
 			.map((reply) => {
-				const streamed = liveChanges.edits.get(reply.replyId);
-				const read = saved.get(reply.replyId);
-				const readEdit = read?.editedSequence ?? 0;
-				// The newer edit shows: the stream's, or the one the thread was read with.
-				const edit = streamed && (streamed.sequence ?? Number.POSITIVE_INFINITY) >= readEdit ? streamed
-					: read && readEdit > 0 ? { text: read.text, mentions: read.mentions, sequence: readEdit } : undefined;
-				const version = Math.max(reply.sequence ?? read?.sequence ?? 0, edit?.sequence ?? 0);
+				const version = replyVersion(reply);
 				return {
 					id: reply.replyId,
-					text: edit?.text ?? reply.text,
-					mentions: edit?.mentions ?? reply.mentions,
+					text: reply.text,
+					mentions: reply.mentions,
 					authorName: reply.authorName,
 					createdAt: reply.createdAt,
-					edited: Boolean(streamed || reply.editedAt || read?.editedAt),
+					edited: Boolean(reply.editedAt || reply.editedSequence),
 					own: Boolean(userId && reply.authorUserId === userId),
 					...(reply.sequence !== undefined ? { sequence: reply.sequence } : {}),
 					...(version > 0 ? { version } : {}),
-					...(changedAfter !== undefined && version > changedAfter ? { changed: true } : {}),
+					...(refusedSeen && (reply.sequence ?? 0) > lastSent && refusedSeen.get(reply.replyId) !== version ? { changed: true } : {}),
 				};
 			});
 		// With nothing loaded yet, the comment the notification named stands in.
@@ -995,20 +1021,26 @@ export function CloudAsidePane({
 			shown.push({ id: "reply:fallback", text: fallback.body, mentions: [], authorName: fallback.authorName, createdAt: fallback.createdAt });
 		}
 		return [...shown, ...pending];
-	}, [asideId, changedAfter, fallback, live, liveChanges, pending, removed, sent, thread.data, userId]);
+	}, [asideId, fallback, lastSent, live, liveChanges, pending, refusedSeen, removed, sent, thread.data, userId]);
 
-	// "Also send to agent" sends the thread as this person read it: the newest
-	// comment (or edit) shown, else the message the thread is on. The control
-	// plane refuses (409 thread_changed) a thread written or edited after it.
+	// "Also send to agent" sends the thread as this person read it: seen lists
+	// every comment shown, at the version shown (the newest copy's
+	// editedSequence, else its sequence), and throughSequence is the newest of
+	// them (else the message the thread is on), the upper bound. The control
+	// plane refuses (409 thread_changed) a send when a comment it would carry
+	// (written since the last send) is missing from seen, newer than listed, or
+	// after throughSequence. seen holds at most 500: past that, only the
+	// comments the send carries.
+	const seen = useMemo(() => {
+		const shown = replies.flatMap((entry) => (!entry.pending && entry.version !== undefined ? [{ replyId: entry.id, version: entry.version, sequence: entry.sequence ?? 0 }] : []));
+		const listed = shown.length > MAX_SEEN ? shown.filter((entry) => entry.sequence > lastSent) : shown;
+		return listed.map(({ replyId, version }) => ({ replyId, version }));
+	}, [lastSent, replies]);
 	const readThrough = useMemo(
 		() => replies.reduce((newest, entry) => Math.max(newest, entry.version ?? 0), aside?.anchor.sequence ?? 0),
 		[aside?.anchor.sequence, replies],
 	);
-	// What a send takes: the comments since the thread was last sent, or all of them.
-	const lastSent = useMemo(
-		() => (aside?.history ?? []).reduce((newest, entry) => (entry.kind === "sent_to_agent" ? Math.max(newest, entry.sequence) : newest), 0),
-		[aside?.history],
-	);
+	// What a send takes besides the reply: the comments since the thread was last sent.
 	const agentComments = useMemo(
 		() => replies.filter((entry) => !entry.pending && entry.sequence !== undefined && entry.sequence > lastSent).length,
 		[lastSent, replies],
@@ -1030,6 +1062,11 @@ export function CloudAsidePane({
 		return "";
 	}, [asideId, events, userId]);
 	const markedKey = useRef("");
+	// A read the control plane refused is asked again a few times, later each time, while the thread is on screen.
+	const [readRetry, setReadRetry] = useState(0);
+	const readAttempts = useRef({ key: "", count: 0 });
+	const readRetryTimer = useRef<number | undefined>(undefined);
+	useEffect(() => () => window.clearTimeout(readRetryTimer.current), []);
 	// Outside the session (the threads view) no comments stream in: the list's
 	// newer activity reads the thread again, and reads it as seen.
 	const seenFresh = useRef(freshAt);
@@ -1048,13 +1085,16 @@ export function CloudAsidePane({
 		queryClient.setQueryData<CloudCpNotificationListResponse>(cloudInboxQueryKey(baseUrl, userId), (page) => {
 			if (!page) return page;
 			let read = 0;
+			let changed = false;
 			const items = page.items.map((row) => {
 				const rowAside = row.type === ASIDE_REPLY ? asideReplyMetadata(row)?.asideId : row.type === MENTIONED ? mentionMetadata(row)?.asideId : undefined;
 				if (row.status !== "unread" || rowAside !== asideId) return row;
-				read += 1;
+				changed = true;
+				// A resolved row already left the unread count.
+				if (activeCloudNotification(row)) read += 1;
 				return { ...row, status: "read" as const };
 			});
-			return read === 0 ? page : { ...page, items, unreadCount: Math.max(0, page.unreadCount - read) };
+			return changed ? { ...page, items, unreadCount: Math.max(0, page.unreadCount - read) } : page;
 		});
 		patchCommentThreadRows(queryClient, baseUrl, userId, asideId, { unread: false });
 		void client.markSessionAsideRead(orgId, sessionId, asideId)
@@ -1063,10 +1103,19 @@ export function CloudAsidePane({
 				void queryClient.invalidateQueries({ queryKey: cloudUnreadThreadsKey(baseUrl, userId) });
 			})
 			.catch(() => {
-				// Asked again when the next comment arrives or the pane opens again.
+				// Nothing was marked: the caches read the control plane's unread state
+				// again (a newer Mark unread stands), and the read is asked again, up
+				// to READ_RETRIES times, while this thread is still the one on screen.
 				markedKey.current = "";
+				void queryClient.invalidateQueries({ queryKey: cloudAsidesKey(orgId, sessionId) });
+				void queryClient.invalidateQueries({ queryKey: threadKey });
+				void queryClient.invalidateQueries({ queryKey: cloudInboxQueryKey(baseUrl, userId) });
+				invalidateCommentThreads(queryClient, baseUrl, userId);
+				const attempts = readAttempts.current.key === key ? readAttempts.current.count + 1 : 1;
+				readAttempts.current = { key, count: attempts };
+				if (attempts < READ_RETRIES) readRetryTimer.current = window.setTimeout(() => setReadRetry((value) => value + 1), READ_RETRY_MS * attempts);
 			});
-	}, [asideId, attentive, baseUrl, client, freshAt, newestFromOthers, orgId, queryClient, ready, sessionId, userId]);
+	}, [asideId, attentive, baseUrl, client, freshAt, newestFromOthers, orgId, queryClient, readRetry, ready, sessionId, threadKey, userId]);
 
 	// "Mark unread": unread again for this person until they open it next.
 	const onMarkUnread = useCallback(() => {
@@ -1124,14 +1173,13 @@ export function CloudAsidePane({
 		if (shown) setPending((current) => [...current, shown]);
 		// The thread as this person read it when they pressed send.
 		const throughSequence = readThrough;
+		const shownVersions = seen;
 		try {
-			const result = await client.replyToSessionAside(orgId, sessionId, asideId, {
-				text,
-				...(mentions.length ? { mentions: mentions.map(mentionToken) } : {}),
-				clientMessageId,
-				...(sendToAgent ? { sendToAgent: true, throughSequence } : {}),
-			});
-			if (sendToAgent) setChangedAfter(undefined);
+			const body = { text, ...(mentions.length ? { mentions: mentions.map(mentionToken) } : {}), clientMessageId };
+			const result = await client.replyToSessionAside(orgId, sessionId, asideId, sendToAgent
+				? { ...body, sendToAgent: true, throughSequence, seen: shownVersions }
+				: body);
+			if (sendToAgent) setRefusedSeen(undefined);
 			const reply = result.reply;
 			if (reply) setSent((current) => [...current, reply]);
 			queryClient.setQueryData<CloudCpAsideThread>(threadKey, (current) => current && {
@@ -1150,9 +1198,10 @@ export function CloudAsidePane({
 		} catch (error) {
 			if (sendToAgent && threadChanged(error)) {
 				// Someone wrote or edited a comment after this person read the thread:
-				// nothing was sent. The thread is read again and what changed is marked,
-				// so they can read it and send again (the draft stays).
-				setChangedAfter(throughSequence);
+				// nothing was sent. The thread is read again and each comment that differs
+				// from what this send named is marked, so they can read it and send again
+				// (the draft stays).
+				setRefusedSeen(new Map(shownVersions.map(({ replyId, version }) => [replyId, version])));
 				void queryClient.invalidateQueries({ queryKey: threadKey });
 			}
 			const seconds = mentions.length > 0 ? mentionRateLimit(error) : undefined;
@@ -1164,7 +1213,7 @@ export function CloudAsidePane({
 		} finally {
 			if (shown) setPending((current) => current.filter((entry) => entry.id !== shown.id));
 		}
-	}, [asideId, baseUrl, client, orgId, queryClient, readThrough, sessionId, t, threadKey, userId]);
+	}, [asideId, baseUrl, client, orgId, queryClient, readThrough, seen, sessionId, t, threadKey, userId]);
 
 	const onEdit = useCallback(async (replyId: string, text: string) => {
 		const original = replies.find((entry) => entry.id === replyId);
@@ -1221,7 +1270,9 @@ export function CloudAsidePane({
 			agentComments={agentComments}
 			anchor={anchor}
 			messageJump={messageJump}
-			canSendToAgent={canPrompt && !ended}
+			// A send carries every comment since the last one, so it waits until the
+			// thread is read whole: none it carries goes unseen.
+			canSendToAgent={canPrompt && !ended && thread.data !== undefined && !thread.data.hasMore}
 			focusKey={focusKey}
 			mentionSource={mentionSource}
 			message={message}

@@ -716,13 +716,29 @@ describe("mentions and the personal inbox", () => {
 		expect(JSON.parse(calls()[2][1].body as string)).toEqual({ orgId: "org", sessionId: "session", read: true });
 	});
 
-	it("reads and changes the two mention switches", async () => {
-		const { client, calls } = recording({ mentions: true, teamMentions: false });
-		await expect(client.getMyNotificationPreferences()).resolves.toEqual({ mentions: true, teamMentions: false });
-		await client.setMyNotificationPreferences({ teamMentions: false });
+	it("reads and changes the mention and reply switches", async () => {
+		const before = { mentions: true, teamMentions: true, asideReplies: true };
+		const after = { mentions: true, teamMentions: false, asideReplies: true };
+		const fetchImpl = vi.fn()
+			.mockResolvedValueOnce(new Response(JSON.stringify(before), { status: 200, headers: { "Content-Type": "application/json" } }))
+			.mockResolvedValueOnce(new Response(JSON.stringify(after), { status: 200, headers: { "Content-Type": "application/json" } }));
+		const client = createCloudCpClient({ baseUrl: "https://cloud.example.test", getToken: async () => "token", fetchImpl });
+		const calls = () => fetchImpl.mock.calls as Array<[string, RequestInit]>;
+		await expect(client.getMyNotificationPreferences()).resolves.toEqual(before);
+		await expect(client.setMyNotificationPreferences({ teamMentions: false })).resolves.toEqual(after);
 		expect(calls()[1][0]).toBe("https://cloud.example.test/api/cloud/v1/me/notification-preferences");
 		expect(calls()[1][1].method).toBe("PUT");
 		expect(JSON.parse(calls()[1][1].body as string)).toEqual({ teamMentions: false });
+	});
+
+	it("does not treat a comment 403 as a stale organization", async () => {
+		const onForbidden = vi.fn();
+		const fetchImpl = vi.fn().mockImplementation(async () => new Response(JSON.stringify({ error: "forbidden", code: "prompt_forbidden", message: "No", requestId: "r" }), { status: 403, headers: { "Content-Type": "application/json" } }));
+		const client = createCloudCpClient({ baseUrl: "https://cloud.example.test", getToken: async () => "token", fetchImpl, onForbidden });
+		await expect(client.replyToSessionAside("org", "s", "a", { text: "", clientMessageId: "c", sendToAgent: true, throughSequence: 1, seen: [] })).rejects.toMatchObject({ status: 403, code: "prompt_forbidden" });
+		await expect(client.editSessionAsideReply("org", "s", "a", "r", { text: "x" })).rejects.toMatchObject({ status: 403 });
+		await expect(client.deleteSessionAsideReply("org", "s", "a", "r")).rejects.toMatchObject({ status: 403 });
+		expect(onForbidden).not.toHaveBeenCalled();
 	});
 
 	it("asks a session's @ menu by name", async () => {

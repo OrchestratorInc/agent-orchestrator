@@ -230,6 +230,8 @@ async function subscribeNotificationStream(basePath: string, options: SubscribeM
 		const finish = () => { if (settled) return; settled = true; unsubscribe(); signal?.removeEventListener("abort", abort); resolve(); };
 		const abort = () => { bridge.closeStream(streamId); finish(); };
 		function deliver(data: string): void {
+			// An event earlier in the same chunk may have aborted the subscription: nothing after it goes out.
+			if (settled) return;
 			try { onEvent(JSON.parse(data) as CloudCpNotificationEvent); } catch { fail(new CloudCpError("The notification stream sent a frame with malformed JSON.", { status: 200 })); }
 		}
 		unsubscribe = bridge.onStreamEvent(streamId, (event) => {

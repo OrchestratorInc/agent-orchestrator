@@ -778,19 +778,21 @@ describe("CloudSessionChatSurface", () => {
 			message(2, "plain", { text: "mine", authorUserId: "user-1" }),
 			message(3, "quoted", { text: "Explain this\n\nquote", displayText: "Explain this", content: [{ type: "excerpt", text: "quote" }], authorUserId: "user-1" }),
 			message(4, "theirs", { text: "theirs", authorUserId: "teammate" }),
+			// A thread "Also send to agent" sent: its text is the thread, drawn as its card.
+			message(5, "thread", { text: "Comment thread on: x", authorUserId: "user-1", fromAside: { asideId: "c-1", comments: [{ authorName: "Mohak", text: "Do it" }] } }),
 		];
-		cloudMocks.listChatEvents.mockReset().mockResolvedValue({ events, hasMore: false, nextAfter: 4, hasOlder: false, nextBefore: 1 });
+		cloudMocks.listChatEvents.mockReset().mockResolvedValue({ events, hasMore: false, nextAfter: 5, hasOlder: false, nextBefore: 1 });
 		cloudMocks.listChatModels.mockResolvedValue({ models: [] });
 		cloudMocks.chatProps.mockClear();
 		const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
 		render(<QueryClientProvider client={queryClient}><CloudSessionChatSurface session={{ ...session, cloud: { orgId: "org-1" } }} /></QueryClientProvider>);
-		await waitFor(() => expect(cloudMocks.chatProps.mock.lastCall?.[0].snapshot.items.filter((item: { kind: string }) => item.kind === "message")).toHaveLength(3));
+		await waitFor(() => expect(cloudMocks.chatProps.mock.lastCall?.[0].snapshot.items.filter((item: { kind: string }) => item.kind === "message")).toHaveLength(4));
 		const props = cloudMocks.chatProps.mock.lastCall?.[0];
 		expect(props.onEditQueuedTurn).toEqual(expect.any(Function));
 		const editable = Object.fromEntries(props.snapshot.items
 			.filter((item: { kind: string }) => item.kind === "message")
 			.map((item: { turnId: string }) => [item.turnId, props.canEditQueuedMessage(item)]));
-		expect(editable).toEqual({ plain: true, quoted: false, theirs: false });
+		expect(editable).toEqual({ plain: true, quoted: false, theirs: false, thread: false });
 	});
 
 	// Delete stops a queued message's turn before the agent starts on it

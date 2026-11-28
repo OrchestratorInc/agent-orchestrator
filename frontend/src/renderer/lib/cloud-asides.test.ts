@@ -248,3 +248,24 @@ describe("the threads view's cache", () => {
 		expect(page.items[0]!.aside.unread).toBe(false);
 	});
 });
+
+describe("one thread's comments from several copies", () => {
+	const reply = (replyId: string, sequence: number | undefined, extra: Partial<CloudCpAsideReply> = {}): CloudCpAsideReply => ({
+		replyId, asideId: "c-1", text: replyId, mentions: [], authorUserId: "u-priya", authorName: "Priya Shah", createdAt: "2026-11-24T10:00:00Z",
+		...(sequence !== undefined ? { sequence } : {}), ...extra,
+	});
+
+	it("keeps the newest revision of a comment, never an older copy kept locally", () => {
+		const local = reply("r-1", 60, { text: "first take" });
+		const server = reply("r-1", 60, { text: "second take", editedSequence: 70, editedAt: "2026-11-24T10:10:00Z" });
+		expect(mergeAsideReplies([server], [local])).toEqual([server]);
+		expect(mergeAsideReplies([local], [server])).toEqual([server]);
+	});
+
+	it("orders comments by their events before history goes between them", () => {
+		const merged = mergeAsideReplies([reply("r-14", 14), reply("r-10", 10)]);
+		expect(merged.map((row) => row.replyId)).toEqual(["r-10", "r-14"]);
+		const resolved: CloudCpAsideHistoryEntry = { kind: "resolved", actor: { userId: "u-priya", name: "Priya Shah" }, at: "2026-11-24T10:00:00Z", sequence: 12 };
+		expect(threadTimeline(merged, [resolved]).map((row) => (row.kind === "comment" ? row.reply.replyId : row.entry.kind))).toEqual(["r-10", "resolved", "r-14"]);
+	});
+});

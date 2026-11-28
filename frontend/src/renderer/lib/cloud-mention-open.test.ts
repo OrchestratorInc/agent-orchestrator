@@ -54,6 +54,12 @@ describe("mentionOpenTarget", () => {
 		});
 	});
 
+	it("opens a mention written in a reply as that reply, with no stand-in message", () => {
+		const target = mentionOpenTarget(row({ metadata: { authorName: "Chen Li", sequence: 300, asideId: "a-1", replyId: "r-1" } }));
+		expect(target).toMatchObject({ kind: "aside_reply", asideId: "a-1", sequence: 300 });
+		expect(mentionFallbackEvents(target)).toBeUndefined();
+	});
+
 	it("has no target for another kind or a row without a session", () => {
 		expect(mentionOpenTarget(row({ type: "pr_merged" }))).toBeUndefined();
 		expect(mentionOpenTarget(row({ sessionId: undefined }))).toBeUndefined();

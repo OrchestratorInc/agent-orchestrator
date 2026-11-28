@@ -253,7 +253,16 @@ describe("the conversation", () => {
 		expect(snapshot.items.some((item) => (item.sequence ?? 0) >= 44)).toBe(false);
 	});
 
-	it("draws a message Also send to agent sent as its thread", () => {
+	it("reads an edited thread send as its new text, not the thread its card showed", () => {
+		const sent: CloudCpClientEvent = {
+			sessionId: session.id, sequence: 50, type: "chat.user_message", createdAt: at,
+			payload: { text: "Comment thread on: real backoff", turnId: "turn-3", authorUserId: "u-priya", authorName: "Priya Shah", fromAside: { asideId: "c-1", anchorKind: "agent_message", comments: [{ authorName: "Marco Rossi", text: "Use jitter" }] } },
+		};
+		const edited: CloudCpClientEvent = { sessionId: session.id, sequence: 51, type: "chat.user_message_edited", payload: { turnId: "turn-3", text: "Just add jitter." }, createdAt: at };
+		const message = toSnapshot(session, [...events, sent, edited], "u-priya").items.find((item): item is ConversationMessage => item.kind === "message" && item.sequence === 50);
+		expect(message?.text).toBe("Just add jitter.");
+		expect(message?.fromAside).toBeUndefined();
+	});	it("draws a message Also send to agent sent as its thread", () => {
 		const sent: CloudCpClientEvent = {
 			sessionId: session.id, sequence: 50, type: "chat.user_message", createdAt: at,
 			payload: {
@@ -599,7 +608,7 @@ describe("comment threads", () => {
 		await user.keyboard("{Enter}");
 		await waitFor(() => expect(cloudMocks.replyToSessionAside).toHaveBeenCalledWith("org-1", session.id, "c-1", {
 			// Pinned to the thread as it was read: no comment here has a later event than its message.
-			text: "Agreed, use jitter.", clientMessageId: expect.any(String), sendToAgent: true, throughSequence: 41,
+			text: "Agreed, use jitter.", clientMessageId: expect.any(String), sendToAgent: true, throughSequence: 41, seen: [],
 		}));
 		// The server sent it: the client sends nothing to the agent itself.
 		expect(cloudMocks.sendSessionMessage).not.toHaveBeenCalled();
@@ -620,7 +629,7 @@ describe("comment threads", () => {
 		const sendAll = within(pane).getByRole("button", { name: "Send, resolve and send the thread to the agent" });
 		expect(sendAll).toBeEnabled();
 		await user.click(sendAll);
-		await waitFor(() => expect(cloudMocks.replyToSessionAside).toHaveBeenCalledWith("org-1", session.id, "c-1", { text: "", clientMessageId: expect.any(String), sendToAgent: true, throughSequence: 41 }));
+		await waitFor(() => expect(cloudMocks.replyToSessionAside).toHaveBeenCalledWith("org-1", session.id, "c-1", { text: "", clientMessageId: expect.any(String), sendToAgent: true, throughSequence: 41, seen: [] }));
 	});
 
 	it("pins a send to the newest comment it shows, an edit included, and says what it takes before it goes", async () => {
@@ -644,6 +653,8 @@ describe("comment threads", () => {
 		await user.keyboard("{Enter}");
 		await waitFor(() => expect(cloudMocks.replyToSessionAside).toHaveBeenCalledWith("org-1", session.id, "c-1", {
 			text: "Go", clientMessageId: expect.any(String), sendToAgent: true, throughSequence: 55,
+			// Every comment shown, at the version shown: the edit for cr-1.
+			seen: [{ replyId: "cr-1", version: 55 }, { replyId: "cr-2", version: 52 }],
 		}));
 	});
 
@@ -673,7 +684,7 @@ describe("comment threads", () => {
 		await typeInLexicalEditor(box, "Agreed.");
 		await user.keyboard("{Enter}");
 		expect(await within(pane).findByText("The thread changed after you read it. Check the marked comments, then send it again.")).toBeInTheDocument();
-		expect(cloudMocks.replyToSessionAside).toHaveBeenLastCalledWith("org-1", session.id, "c-1", expect.objectContaining({ sendToAgent: true, throughSequence: 50 }));
+		expect(cloudMocks.replyToSessionAside).toHaveBeenLastCalledWith("org-1", session.id, "c-1", expect.objectContaining({ sendToAgent: true, throughSequence: 50, seen: [{ replyId: "cr-1", version: 50 }] }));
 		// Read again: the edit and the new comment are marked, and the draft and the tick stay.
 		await within(pane).findByText("Wait, the gateway changed.");
 		await waitFor(() => expect(pane.querySelectorAll("[data-comment-changed]")).toHaveLength(2));
@@ -681,7 +692,7 @@ describe("comment threads", () => {
 		await waitFor(() => expect(box).toHaveTextContent("Agreed."));
 		expect(within(pane).getByRole("checkbox", { name: "Also send to agent" })).toBeChecked();
 		await user.click(within(pane).getByRole("button", { name: "Send, resolve and send the thread to the agent" }));
-		await waitFor(() => expect(cloudMocks.replyToSessionAside).toHaveBeenLastCalledWith("org-1", session.id, "c-1", expect.objectContaining({ text: "Agreed.", sendToAgent: true, throughSequence: 62 })));
+		await waitFor(() => expect(cloudMocks.replyToSessionAside).toHaveBeenLastCalledWith("org-1", session.id, "c-1", expect.objectContaining({ text: "Agreed.", sendToAgent: true, throughSequence: 62, seen: [{ replyId: "cr-1", version: 61 }, { replyId: "cr-3", version: 62 }] })));
 		await waitFor(() => expect(pane.querySelector("[data-comment-changed]")).toBeNull());
 	});
 
@@ -724,7 +735,105 @@ describe("comment threads", () => {
 		await waitFor(() => expect(peekOpenAside(session.id)?.asideId).toBe("c-1"));
 	});
 
-	it("never offers Also send to agent to a viewer", async () => {
+	it("shows a server edit newer than the copy it kept of its own reply, and pins a send to that edit", async () => {
+		const user = userEvent.setup();
+		withCommentThread();
+		const first: CloudCpAsideThread = { ...commentThread, replies: [{ ...commentThread.replies[0]!, sequence: 50 }] };
+		let current = first;
+		cloudMocks.getSessionAside.mockImplementation(async (_o: string, _s: string, asideId: string) => (asideId === "c-1" ? current : thread));
+		const own = { replyId: "cr-own", asideId: "c-1", text: "First take", mentions: [], authorUserId: "u-priya", authorName: "Priya Shah", createdAt: at, sequence: 60 };
+		cloudMocks.replyToSessionAside.mockResolvedValueOnce({ reply: own });
+		openAside(session.id, "c-1");
+		const { queryClient } = renderSurface();
+		const pane = await screen.findByTestId("aside-pane");
+		await typeInLexicalEditor(await within(pane).findByRole("combobox", { name: "Reply to the comment" }), "First take");
+		await user.keyboard("{Enter}");
+		await within(pane).findByText("First take");
+		// Edited in another window: the thread read again has the newer copy.
+		current = { ...commentThread, replies: [first.replies[0]!, { ...own, text: "Second take", editedAt: at, editedSequence: 70 }] };
+		await act(() => queryClient.invalidateQueries({ queryKey: cloudAsideKey("org-1", session.id, "c-1") }));
+		await within(pane).findByText("Second take");
+		expect(within(pane).queryByText("First take")).toBeNull();
+		cloudMocks.replyToSessionAside.mockResolvedValue({ aside: { ...commentAside, resolvedAt: at, sentToAgentAt: at } });
+		await user.click(within(pane).getByRole("checkbox", { name: "Also send to agent" }));
+		await user.click(within(pane).getByRole("button", { name: "Send, resolve and send the thread to the agent" }));
+		await waitFor(() => expect(cloudMocks.replyToSessionAside).toHaveBeenLastCalledWith("org-1", session.id, "c-1", {
+			text: "", clientMessageId: expect.any(String), sendToAgent: true, throughSequence: 70,
+			seen: [{ replyId: "cr-1", version: 50 }, { replyId: "cr-own", version: 70 }],
+		}));
+	});
+
+	it("offers no Also send to agent while the thread is not read whole", async () => {
+		withCommentThread();
+		cloudMocks.getSessionAside.mockImplementation(async (_o: string, _s: string, asideId: string) => (asideId === "c-1" ? { ...commentThread, hasMore: true, nextCursor: "more" } : thread));
+		openAside(session.id, "c-1");
+		renderSurface();
+		const pane = await screen.findByTestId("aside-pane");
+		await within(pane).findByText("Should this use jitter?");
+		await waitFor(() => expect(cloudMocks.getSessionAside.mock.calls.length).toBeGreaterThan(1));
+		expect(within(pane).queryByRole("checkbox", { name: "Also send to agent" })).toBeNull();
+	});
+
+	it("keeps the reply box closed to typing while a reply is sending, and gives the draft back if it fails", async () => {
+		const user = userEvent.setup();
+		withCommentThread();
+		let fail: (error: unknown) => void = () => undefined;
+		cloudMocks.replyToSessionAside.mockImplementation(() => new Promise((_resolve, reject) => { fail = reject; }));
+		openAside(session.id, "c-1");
+		renderSurface();
+		const pane = await screen.findByTestId("aside-pane");
+		const box = await within(pane).findByRole("combobox", { name: "Reply to the comment" });
+		await typeInLexicalEditor(box, "First");
+		await user.keyboard("{Enter}");
+		await waitFor(() => expect(box).toHaveAttribute("contenteditable", "false"));
+		await act(async () => fail(new Error("offline")));
+		await waitFor(() => expect(box).toHaveTextContent("First"));
+		expect(box).toHaveAttribute("contenteditable", "true");
+	});
+
+	it("reads the caches again and asks again when marking a thread read fails", async () => {
+		withCommentThread();
+		let listReads = 0;
+		cloudMocks.markSessionAsideRead
+			.mockImplementationOnce(async () => {
+				listReads = cloudMocks.listSessionAsides.mock.calls.length;
+				throw new Error("offline");
+			})
+			.mockResolvedValue({ ...commentAside, unread: false });
+		openAside(session.id, "c-1");
+		renderSurface();
+		await screen.findByTestId("aside-pane");
+		await waitFor(() => expect(cloudMocks.markSessionAsideRead).toHaveBeenCalled());
+		// The list reads the control plane's unread state again, and the read is asked again.
+		await waitFor(() => expect(cloudMocks.listSessionAsides.mock.calls.length).toBeGreaterThan(listReads));
+		await waitFor(() => expect(cloudMocks.markSessionAsideRead.mock.calls.length).toBeGreaterThanOrEqual(2), { timeout: 3000 });
+	});
+
+	it("keeps Jump to message for a message newer than what is loaded", async () => {
+		withCommentThread();
+		const later = { ...commentAside, anchor: { ...commentAside.anchor, sequence: 99 } };
+		cloudMocks.listSessionAsides.mockResolvedValue({ items: [thread.aside, later] });
+		cloudMocks.getSessionAside.mockImplementation(async (_o: string, _s: string, asideId: string) => (asideId === "c-1" ? { ...commentThread, aside: later } : thread));
+		openAside(session.id, "c-1");
+		renderSurface();
+		const pane = await screen.findByTestId("aside-pane");
+		await waitFor(() => expect(within(pane).getByRole("button", { name: "Jump to message" })).toBeInTheDocument());
+		expect(within(pane).queryByText("Original message not shown")).toBeNull();
+	});
+
+	it("reads the thread list again for the first thread of a conversation that had none", async () => {
+		const plain = events.filter((event) => event.sequence < 42);
+		cloudMocks.listChatEvents.mockResolvedValue({ events: plain, hasMore: false, nextAfter: 41, hasOlder: false });
+		cloudMocks.listSessionAsides.mockResolvedValue({ items: [] });
+		const { queryClient } = renderSurface();
+		await waitFor(() => expect(cloudMocks.listSessionAsides).toHaveBeenCalledTimes(1));
+		await waitFor(() => expect(lastProps()?.snapshot.items.length).toBeGreaterThan(0));
+		const created: CloudCpClientEvent = { sessionId: session.id, sequence: 44, type: "chat.aside_created", payload: { asideId: "c-1", anchor: { sequence: 41, kind: "agent_message" }, origin: "comment", createdAt: at }, createdAt: at };
+		await act(async () => {
+			queryClient.setQueryData<CloudCpClientEvent[]>(cloudChatEventsKey("org-1", session.id), (current) => [...(current ?? []), created]);
+		});
+		await waitFor(() => expect(cloudMocks.listSessionAsides).toHaveBeenCalledTimes(2));
+	});	it("never offers Also send to agent to a viewer", async () => {
 		withCommentThread();
 		openAside(session.id, "c-1");
 		renderSurface(undefined, { ...session, cloud: { orgId: "org-1", shared: true } });

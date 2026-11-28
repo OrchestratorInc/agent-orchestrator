@@ -8,6 +8,7 @@ import { ASIDE_REPLY, cloudInboxQueryKey, MENTIONED } from "../lib/cloud-notific
 import type { CloudCpNotificationListResponse } from "../lib/cloud-cp/types";
 import { useUiStore } from "../stores/ui-store";
 import { useWindowAttention } from "../hooks/useWindowAttention";
+import { useMainViewVisible } from "../lib/main-view-visibility";
 
 /**
  * Reads the mention and aside reply notifications a cloud session raised for
@@ -19,7 +20,14 @@ import { useWindowAttention } from "../hooks/useWindowAttention";
  * window focus it watches never re-render the session view. Nothing is read
  * while the offering does not list mentions (the bell does not show those rows).
  */
-export function CloudSessionNotificationReader({ orgId, sessionId }: { orgId: string; sessionId: string }) {
+export function CloudSessionNotificationReader({ orgId, sessionId, conversationShown = true }: {
+	orgId: string;
+	sessionId: string;
+	/** The session's conversation is in front: no file or other tab covers it. */
+	conversationShown?: boolean;
+}) {
+	// Covered by a popped-out browser or Settings, the session is not on screen either.
+	const mainViewVisible = useMainViewVisible();
 	const settingsOpen = useUiStore((state) => state.settingsModal?.scope === "global");
 	const queryClient = useQueryClient();
 	const { client, ready, baseUrl, userId } = useCloudCp();
@@ -35,12 +43,12 @@ export function CloudSessionNotificationReader({ orgId, sessionId }: { orgId: st
 		.join("|"), [inbox?.items, orgId, sessionId, supported]);
 	const asked = useRef("");
 	useEffect(() => {
-		if (!ready || settingsOpen || !attentive || unreadKey === "" || asked.current === unreadKey) return;
+		if (!ready || settingsOpen || !attentive || !mainViewVisible || !conversationShown || unreadKey === "" || asked.current === unreadKey) return;
 		asked.current = unreadKey;
 		void readCloudSessionMentions(queryClient, client, baseUrl, userId, orgId, sessionId).catch(() => {
 			// Asked again the next time the session's rows change.
 			asked.current = "";
 		});
-	}, [attentive, baseUrl, client, orgId, queryClient, ready, sessionId, settingsOpen, unreadKey, userId]);
+	}, [attentive, baseUrl, client, conversationShown, mainViewVisible, orgId, queryClient, ready, sessionId, settingsOpen, unreadKey, userId]);
 	return null;
 }

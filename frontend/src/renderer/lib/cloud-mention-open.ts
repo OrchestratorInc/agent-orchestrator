@@ -57,7 +57,8 @@ export function mentionOpenTarget(row: CloudCpNotification): MentionOpenTarget |
 	if (!metadata) return undefined;
 	return {
 		notificationId: row.id,
-		kind: mention ? "mention" : "aside_reply",
+		// A mention written in a reply opens as that reply: its body is the comment, not a message of the conversation.
+		kind: mention && !mention.replyId ? "mention" : "aside_reply",
 		orgId: row.orgId,
 		projectId: row.projectId,
 		sessionId: row.sessionId,
