@@ -961,3 +961,22 @@ func writeHooksLogLines(t *testing.T, dataDir string, lines ...string) {
 		t.Fatal(err)
 	}
 }
+
+func TestGitLabRESTBaseFromConfiguredHost(t *testing.T) {
+	tests := []struct{ name, env, want string }{
+		{"unset", "", "https://gitlab.com/api/v4"},
+		{"self-managed", "gitlab.example.com", "https://gitlab.example.com/api/v4"},
+		{"port, first wins", " GitLab.Internal:8443 ,other.example", "https://gitlab.internal:8443/api/v4"},
+		{"only gitlab.com", "gitlab.com", "https://gitlab.com/api/v4"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			setConfigEnv(t)
+			c := doctorContext(t, map[string]string{}, nil)
+			t.Setenv("AO_GITLAB_ALLOWED_HOSTS", tc.env)
+			if got := c.gitlabRESTBase(); got != tc.want {
+				t.Fatalf("gitlabRESTBase = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}

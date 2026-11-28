@@ -740,7 +740,7 @@ func (c *commandContext) checkGitLabToken(ctx context.Context) doctorCheck {
 
 	reqCtx, cancel := context.WithTimeout(ctx, probeTimeout)
 	defer cancel()
-	req, err := http.NewRequestWithContext(reqCtx, http.MethodGet, strings.TrimRight(c.deps.DoctorGitLabRESTBase, "/")+"/user", http.NoBody)
+	req, err := http.NewRequestWithContext(reqCtx, http.MethodGet, strings.TrimRight(c.gitlabRESTBase(), "/")+"/user", http.NoBody)
 	if err != nil {
 		return doctorCheck{Level: doctorFail, Section: doctorSectionGitLab, Name: "gitlab-token", Message: err.Error()}
 	}
@@ -774,6 +774,24 @@ func (c *commandContext) checkGitLabToken(ctx context.Context) doctorCheck {
 		login = "unknown user"
 	}
 	return doctorCheck{Level: doctorPass, Section: doctorSectionGitLab, Name: "gitlab-token", Message: fmt.Sprintf("%s token valid for %s", source, login)}
+}
+
+// gitlabRESTBase returns the GitLab REST base used by the doctor probe. An
+// explicit Deps override wins; otherwise it is built from the first host in
+// AO_GITLAB_ALLOWED_HOSTS (the configured self-managed host), falling back to
+// gitlab.com when none is configured.
+func (c *commandContext) gitlabRESTBase() string {
+	if c.deps.DoctorGitLabRESTBase != "" {
+		return c.deps.DoctorGitLabRESTBase
+	}
+	for _, h := range strings.Split(os.Getenv("AO_GITLAB_ALLOWED_HOSTS"), ",") {
+		h = strings.ToLower(strings.TrimSpace(h))
+		h = strings.TrimSuffix(strings.TrimPrefix(strings.TrimPrefix(h, "https://"), "http://"), "/")
+		if h != "" && h != "gitlab.com" && h != "www.gitlab.com" {
+			return "https://" + h + "/api/v4"
+		}
+	}
+	return defaultDoctorGitLabRESTBase
 }
 
 func (c *commandContext) gitlabToken(ctx context.Context) (token, source string, err error) {
