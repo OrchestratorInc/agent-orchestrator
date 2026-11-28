@@ -1,6 +1,7 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { useState } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import claudeCodeLogo from "../../assets/agents/claude-code.svg";
 import codexLogo from "../../assets/agents/codex.svg";
@@ -13,8 +14,10 @@ const unavailableGet = vi.hoisted(() => vi.fn());
 const readiness = vi.hoisted(() => ({ agents: [] as unknown[] }));
 vi.mock("../../lib/host-clients", () => ({ clientForSessionHost: () => ({ GET: unavailableGet }) }));
 vi.mock("../../hooks/useAgentReadinessQuery", () => ({ useAgentReadinessQuery: () => ({ data: { agents: readiness.agents } }) }));
-const hostSettings = vi.hoisted(() => ({ value: undefined as { chatHarnesses: string[] } | undefined }));
-vi.mock("../../hooks/useSettings", () => ({ useSettings: () => ({ settings: hostSettings.value }) }));
+const hostSettings = vi.hoisted(() => ({
+	value: undefined as { chatHarnesses: string[]; harnessDefaults?: Record<string, { disabledModels?: string[] }> } | undefined,
+}));
+vi.mock("../../hooks/useSettings", () => ({ useSettings: () => ({ settings: hostSettings.value, isLoading: false }) }));
 const cloudModels = vi.hoisted(() => vi.fn());
 vi.mock("../../hooks/useCloudCp", () => ({
 	useCloudCp: () => ({ ready: true, baseUrl: "https://cp.test", userId: "user-1", client: { listUserAgentModels: cloudModels } }),
@@ -322,6 +325,71 @@ describe("AgentModelPicker", () => {
 		await user.click(screen.getByRole("radio", { name: "Codex" }));
 		expect(onPendingChange).toHaveBeenCalledWith({ harness: "codex" });
 		expect(screen.queryAllByRole("menu")).toHaveLength(1);
+	});
+
+	it("resolves a bare pending agent to its supported default while the menu is closed", async () => {
+		hostSettings.value = { chatHarnesses: ["claude-code", "codex"], harnessDefaults: {} };
+		const queryClient = new QueryClient();
+		queryClient.setQueryData(["agent-models", "codex"], {
+			models: [
+				{ id: "gpt-x", label: "GPT X", isDefault: true, efforts: ["low", "high"], defaultEffort: "high" },
+				{ id: "gpt-y", label: "GPT Y", efforts: ["low", "high"], defaultEffort: "high" },
+			],
+		});
+		const onPendingChange = vi.fn();
+		function ControlledPicker() {
+			const [pending, setPending] = useState<PendingAgentSwitch | undefined>({ harness: "codex" });
+			return <AgentModelPicker currentHarness="claude-code" current={{ models: [], modelLabel: "Claude Code", efforts: [] }} agentSwitch={{ projectId: "p", pending, onPendingChange: (next) => { onPendingChange(next); setPending(next); } }} />;
+		}
+		render(<QueryClientProvider client={queryClient}><ControlledPicker /></QueryClientProvider>);
+		await waitFor(() => expect(onPendingChange).toHaveBeenCalledWith(expect.objectContaining({
+			harness: "codex",
+			model: "gpt-x",
+			modelLabel: "GPT X",
+			shownEffort: "high",
+		})));
+	});
+
+	it("waits for host settings and skips a disabled default model", async () => {
+		hostSettings.value = undefined;
+		const queryClient = new QueryClient();
+		queryClient.setQueryData(["agent-models", "codex"], {
+			models: [
+				{ id: "gpt-x", label: "GPT X", isDefault: true, efforts: ["low", "high"], defaultEffort: "high" },
+				{ id: "gpt-y", label: "GPT Y", efforts: ["low", "high"], defaultEffort: "high" },
+			],
+		});
+		const onPendingChange = vi.fn();
+		function ControlledPicker() {
+			const [pending, setPending] = useState<PendingAgentSwitch | undefined>({ harness: "codex" });
+			return <AgentModelPicker currentHarness="claude-code" current={{ models: [], modelLabel: "Claude Code", efforts: [] }} agentSwitch={{ projectId: "p", pending, onPendingChange: (next) => { onPendingChange(next); setPending(next); } }} />;
+		}
+		const picker = <QueryClientProvider client={queryClient}><ControlledPicker /></QueryClientProvider>;
+		const view = render(picker);
+		expect(onPendingChange).not.toHaveBeenCalled();
+
+		hostSettings.value = { chatHarnesses: ["claude-code", "codex"], harnessDefaults: { codex: { disabledModels: ["gpt-x"] } } };
+		view.rerender(picker);
+		await waitFor(() => expect(onPendingChange).toHaveBeenCalledWith(expect.objectContaining({
+			harness: "codex",
+			model: "gpt-y",
+		})));
+	});
+
+	it("keeps an explicit pending model when the catalog arrives", async () => {
+		hostSettings.value = { chatHarnesses: ["claude-code", "codex"], harnessDefaults: {} };
+		const queryClient = new QueryClient();
+		queryClient.setQueryData(["agent-models", "codex"], {
+			models: [{ id: "gpt-x", label: "GPT X", isDefault: true, efforts: ["low", "high"], defaultEffort: "high" }],
+		});
+		const onPendingChange = vi.fn();
+		function ControlledPicker() {
+			const [pending, setPending] = useState<PendingAgentSwitch | undefined>({ harness: "codex", model: "custom", modelLabel: "Custom" });
+			return <AgentModelPicker currentHarness="claude-code" current={{ models: [], modelLabel: "Claude Code", efforts: [] }} agentSwitch={{ projectId: "p", pending, onPendingChange: (next) => { onPendingChange(next); setPending(next); } }} />;
+		}
+		render(<QueryClientProvider client={queryClient}><ControlledPicker /></QueryClientProvider>);
+		await waitFor(() => expect(screen.getByRole("button", { name: /Agent, model and reasoning effort/ })).toBeInTheDocument());
+		expect(onPendingChange).not.toHaveBeenCalled();
 	});
 
 	it("keeps the rail in one order whichever agent runs, so a pick never moves a logo", async () => {

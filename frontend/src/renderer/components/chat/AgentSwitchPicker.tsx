@@ -7,7 +7,7 @@
 import { useQueries, useQuery, useQueryClient } from "@tanstack/react-query";
 import type { TFunction } from "i18next";
 import { Brain, ChevronRight, Loader2, Settings2, TriangleAlert, Zap, type AppIcon } from "@/components/app-icons";
-import { Fragment, memo, useCallback, useId, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
+import { Fragment, memo, useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 import { agentModelsQueryOptions, type AgentModelCatalog } from "../../hooks/useAgentModelsQuery";
 import { useAgentManagementMenu } from "../../hooks/useAgentManagementMenu";
@@ -266,7 +266,7 @@ export function AgentModelPicker({
 	// The agents to offer before a session exists, in place of the chat switch targets.
 	const choices = agentSwitch.agents;
 	const readiness = useAgentReadinessQuery(true, hostId).data?.agents;
-	const { settings: hostSettings } = useSettings(hostId);
+	const { settings: hostSettings, isLoading: loadingHostSettings } = useSettings(hostId);
 	// A Chat session can switch to any agent the host has a Chat driver for.
 	const chatTargets = useMemo(() => chatSwitchTargets(hostSettings?.chatHarnesses), [hostSettings?.chatHarnesses]);
 	// An agent can be ready in a terminal and still miss the adapter its chat
@@ -364,6 +364,27 @@ export function AgentModelPicker({
 		),
 		held, onPendingChange, t,
 	);
+	// A bare agent pick starts on that agent's supported default model.
+	// An explicit pending model always wins, and settings must be loaded first
+	// so models disabled by the host cannot be selected accidentally.
+	useEffect(() => {
+		if (!pending || pending.model || loadingHostSettings || !hostSettings) return;
+		const catalog = catalogs[others.findIndex((agent) => agent.id === pending.harness)]?.data;
+		if (!catalog) return;
+		const offered = offeredCatalogModels(
+			catalog,
+			hostSettings.harnessDefaults?.[pending.harness]?.disabledModels,
+		).filter((model) => model.id && !model.unavailableReason);
+		const selected = offered.find((model) => model.isDefault)
+			?? (catalog.models.some((model) => model.isDefault) ? offered[0] : undefined);
+		if (!selected) return;
+		onPendingChange({
+			...pending,
+			model: selected.id,
+			modelLabel: agentModelDisplayLabel(pending.harness, selected.label),
+			shownEffort: selected.defaultEffort,
+		});
+	}, [catalogs, hostSettings, loadingHostSettings, onPendingChange, others, pending]);
 	// The rows below always describe who answers next: the pending agent, or the running one.
 	const shownHarness = pending?.harness ?? currentHarness;
 	const source = pending ? otherSource(pending.harness, pending) : currentSource;
