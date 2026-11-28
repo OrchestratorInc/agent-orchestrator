@@ -1388,26 +1388,45 @@ export function useConversationCommands(
 	 * because the advice differs: one means "send this as a new message instead", one
 	 * means "wait and try again", and one means this harness cannot do it at all.
 	 */
+	const steerMutationKey = ["steer", hostId ?? "local", sessionId];
 	const steer = useMutation({
+		mutationKey: steerMutationKey,
 		onMutate: () => {
 			setSteerRefusedOn(undefined);
 			return { sentOn: currentTurnIdRef.current };
 		},
 		onError: (_error, _input, sent) => setSteerRefusedOn({ sentOn: sent?.sentOn, arrivedOn: currentTurnIdRef.current }),
-		mutationFn: async (input: { text: string; attachments?: WireImageContent[]; clientMessageId?: string; recoverOnly?: boolean }) => {
+		mutationFn: async (input: { text: string; attachments?: WireImageContent[]; clientMessageId: string; recoverOnly?: boolean }) => {
 			const { data, error } = await clientForSessionHost(hostId).POST(
-				"/api/v1/sessions/{sessionId}/conversation/steer",
+				"/api/v1/sessions/{sessionId}/conversation/steer-or-send",
 				{
 					params: { path: { sessionId: sessionId as string } },
 					headers: input.attachments?.length ? { "X-AO-Attachment-Upload": "1" } : undefined,
-					body: { ...input, clientMessageId: input.clientMessageId ?? crypto.randomUUID() },
+					body: input,
 				},
 			);
 			if (error) throw error;
 			return data;
 		},
-		onSuccess: invalidate,
+		onSuccess: (data, input) => {
+			const turnId = data?.outcome === "sent" && data.state !== "queued" && (!data.duplicate || data.state === "running")
+				? data.turnId
+				: undefined;
+			if (turnId && stateSessionId) {
+				queryClient.setQueryData<ConversationDispatchTrackingBySession>(
+					conversationDispatchTrackingQueryKey,
+					(current = {}) => current[stateSessionId]?.state === "pending"
+						? current
+						: { ...current, [stateSessionId]: { operation: "send", requestId: input.clientMessageId, state: "accepted", turnId } },
+				);
+			}
+			invalidate();
+		},
 	});
+	const steerInFlight = useIsMutating({
+		mutationKey: steerMutationKey,
+		predicate: (mutation) => !(mutation.state.variables as { recoverOnly?: boolean } | undefined)?.recoverOnly,
+	}) > 0;
 
 	const promoteQueuedTurn = useMutation({
 		mutationFn: async (turnId: string) => {
@@ -1870,7 +1889,7 @@ export function useConversationCommands(
 				: undefined,
 		activateBranch: (branchId: string) => activateBranch.mutateAsync(branchId),
 		activateBranchPending: activateBranch.isPending,
-		activateBranchDisabled: hasActiveTurn,
+		activateBranchDisabled: hasActiveTurn || steerInFlight,
 		activateBranchTarget: activateBranch.variables,
 		activateBranchError:
 			activateBranchIsBusyError && !hasActiveTurn
@@ -1881,7 +1900,7 @@ export function useConversationCommands(
 		steer: async (text: string, attachments?: WireImageContent[], clientMessageId?: string, recoverOnly?: boolean): Promise<ChatSteerOutcome> => {
 			try {
 				if (sessionId) recordDirectWorkerInteraction(sessionId, "chat", "worker", hostId);
-				await steer.mutateAsync({ text, attachments, clientMessageId, recoverOnly });
+				await steer.mutateAsync({ text, attachments, clientMessageId: clientMessageId ?? crypto.randomUUID(), recoverOnly });
 				return { status: "accepted" };
 			} catch (error) {
 				const outcome = steerNonAcceptance(error);
