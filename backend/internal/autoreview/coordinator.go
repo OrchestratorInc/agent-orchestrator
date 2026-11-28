@@ -201,6 +201,12 @@ func existingHeadReason(runs []domain.ReviewRun, prURL, targetSHA string) string
 		if run.Verdict == domain.VerdictChangesRequested {
 			return "changes_requested_same_sha"
 		}
+		if run.Status == domain.ReviewRunFailed && run.FailureReason == domain.ReviewFailureTurnEndedWithoutSubmit {
+			// The reviewer finished its turn but AO never got the result. It has
+			// usually posted to the PR already, so another automatic pass on this
+			// head would only post a duplicate review.
+			return "unsubmitted_same_sha"
+		}
 		if run.Status == domain.ReviewRunFailed && !run.FailureReason.AutoRetryable() {
 			// A failed preflight needs a person; an unconfirmed cancel may still
 			// have a reviewer working. Neither is retried automatically.

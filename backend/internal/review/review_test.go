@@ -2763,6 +2763,20 @@ func TestAutoReviewHeadBlockedCapsFailedAutoRetriesPerHeadAndHarness(t *testing.
 			},
 			want: false,
 		},
+		{
+			name: "a run that ended without submitting blocks its head, whoever triggered it",
+			runs: []domain.ReviewRun{
+				{PRURL: prURL, TargetSHA: "sha1", Harness: harness, TriggerSource: domain.ReviewTriggerAgent, Status: domain.ReviewRunFailed, FailureReason: domain.ReviewFailureTurnEndedWithoutSubmit},
+			},
+			want: true,
+		},
+		{
+			name: "an unsubmitted run on another head does not block",
+			runs: []domain.ReviewRun{
+				{PRURL: prURL, TargetSHA: "old-sha", Harness: harness, TriggerSource: domain.ReviewTriggerAuto, Status: domain.ReviewRunFailed, FailureReason: domain.ReviewFailureTurnEndedWithoutSubmit},
+			},
+			want: false,
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
