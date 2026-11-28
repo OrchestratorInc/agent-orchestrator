@@ -4,7 +4,7 @@ import { MacDifferentialV2Updater } from "./mac-differential-v2-updater";
 import macV2TrustedKeys from "../../scripts/mac-differential-v2-trust.json";
 import macDifferentialRollout from "../../scripts/mac-differential-rollout.json";
 import { CancellationToken } from "builder-util-runtime";
-import { app, dialog, powerMonitor, autoUpdater as nativeAutoUpdater } from "electron";
+import { app, powerMonitor, autoUpdater as nativeAutoUpdater } from "electron";
 import { startMacUpdateProgress } from "./mac-update-progress";
 import { markUpdateRelaunch } from "./update-relaunch-flag";
 import { createUpdateDiagnostics } from "./update-diagnostics";
@@ -3268,61 +3268,17 @@ async function prepareRememberedNonDarwinUpdate(): Promise<void> {
   }
 }
 
-// ensureUpdatePrefs prompts once (first run, before any settings file exists)
-// for auto-update opt-in + channel, with a nightly instability disclaimer.
+// ensureUpdatePrefs writes the first-run defaults once, without asking, when no
+// settings file exists: automatic downloads off, Stable channel. Both are changed
+// in Settings > Updates. A Nightly build stays on Nightly so it is never offered
+// Stable behind the user's back (#4954). Saved settings are never touched.
 export async function ensureUpdatePrefs(stateDir: string): Promise<void> {
   if (existsSync(path.join(stateDir, UPDATE_SETTINGS_FILE_NAME))) return;
-
   const installedNightly = installedUpdateChannel() === "nightly";
-  const optIn = await dialog.showMessageBox({
-    type: "question",
-    buttons: ["Enable auto-updates", "Not now"],
-    defaultId: 0,
-    cancelId: 1,
-    message: "Keep Orchestrator up to date automatically?",
-    detail: "You can change this later in Settings.",
+  await writeUpdateSettings(stateDir, {
+    enabled: false,
+    channel: installedNightly ? "nightly" : "latest",
+    nightlyAck: installedNightly,
+    feature: null,
   });
-  if (optIn.response !== 0) {
-    await writeUpdateSettings(stateDir, {
-      enabled: false,
-      channel: installedNightly ? "nightly" : "latest",
-      nightlyAck: installedNightly,
-      feature: null,
-    });
-    return;
-  }
-
-  const chan = await dialog.showMessageBox({
-    type: "question",
-    buttons: ["Stable", "Nightly"],
-    defaultId: installedNightly ? 1 : 0,
-    cancelId: installedNightly ? 1 : 0,
-    message: "Which update channel?",
-    detail: "Stable is released and tested. Nightly is the newest daily build.",
-  });
-  if (chan.response !== 1) {
-    await writeUpdateSettings(stateDir, {
-      enabled: true,
-      channel: "latest",
-      nightlyAck: false,
-      feature: null,
-    });
-    return;
-  }
-
-  const ack = await dialog.showMessageBox({
-    type: "warning",
-    buttons: ["I understand, use Nightly", "Use Stable instead"],
-    defaultId: 1,
-    cancelId: 1,
-    message: "Nightly builds can be unstable",
-    detail:
-      "Nightly is built every day and may be broken or lose data. Only use it if you are comfortable with that.",
-  });
-  await writeUpdateSettings(
-    stateDir,
-    ack.response === 0
-      ? { enabled: true, channel: "nightly", nightlyAck: true, feature: null }
-      : { enabled: true, channel: "latest", nightlyAck: false, feature: null },
-  );
 }
