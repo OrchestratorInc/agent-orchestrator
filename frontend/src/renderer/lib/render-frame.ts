@@ -160,20 +160,17 @@ export function renderThemesEqual(left: RenderTheme, right: RenderTheme): boolea
 /** Where the page shows: inline in the thread, or expanded in the dialog. */
 export type RenderDisplayMode = "inline" | "fullscreen";
 
-/**
- * The fragment a render reads its theme and wrapping choice from before first
- * paint. scrollable lets a page scroll inside a capped frame with a scrollbar.
- */
-export function renderThemeFragment(theme: RenderTheme, displayMode: RenderDisplayMode, scrollable = false, wrapContent = false): string {
-	return `#ao-theme=${encodeURIComponent(JSON.stringify({ ...theme, displayMode, ...(scrollable ? { scrollable } : {}), wrapContent, openImages: true }))}`;
+/** The fragment a render reads its theme and wrapping choice from before first paint. */
+export function renderThemeFragment(theme: RenderTheme, displayMode: RenderDisplayMode, wrapContent = false): string {
+	return `#ao-theme=${encodeURIComponent(JSON.stringify({ ...theme, displayMode, wrapContent, openImages: true }))}`;
 }
 
 /** Live theme and wrapping updates; displayMode is the MCP Apps host-context field. */
-export function renderThemeMessage(theme: RenderTheme, displayMode: RenderDisplayMode, scrollable = false, wrapContent = false) {
+export function renderThemeMessage(theme: RenderTheme, displayMode: RenderDisplayMode, wrapContent = false) {
 	return {
 		jsonrpc: "2.0",
 		method: "ui/notifications/host-context-changed",
-		params: { theme: theme.appearance, styles: { variables: theme.variables }, displayMode, ...(scrollable ? { scrollable } : {}), wrapContent, openImages: true },
+		params: { theme: theme.appearance, styles: { variables: theme.variables }, displayMode, wrapContent, openImages: true },
 	} as const;
 }
 

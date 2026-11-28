@@ -161,14 +161,12 @@ describe("render-frame helpers", () => {
 		});
 	});
 
-	it("carries the wrapping choice in initial and live context for renders and artifacts", () => {
+	it("carries the wrapping choice in initial and live context", () => {
 		const theme = { appearance: "dark" as const, variables: {} };
-		for (const scrollable of [false, true]) {
-			const fragment = renderThemeFragment(theme, "inline", scrollable, true);
-			expect(JSON.parse(decodeURIComponent(fragment.slice("#ao-theme=".length)))).toMatchObject({ wrapContent: true });
-			expect(renderThemeMessage(theme, "fullscreen", scrollable, true).params.wrapContent).toBe(true);
-			expect(renderThemeMessage(theme, "inline", scrollable, false).params.wrapContent).toBe(false);
-		}
+		const fragment = renderThemeFragment(theme, "inline", true);
+		expect(JSON.parse(decodeURIComponent(fragment.slice("#ao-theme=".length)))).toMatchObject({ wrapContent: true });
+		expect(renderThemeMessage(theme, "fullscreen", true).params.wrapContent).toBe(true);
+		expect(renderThemeMessage(theme, "inline", false).params.wrapContent).toBe(false);
 	});
 });
 

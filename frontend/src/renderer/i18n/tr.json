@@ -3787,7 +3787,6 @@
 	"chat.render.openInBrowser": "Harici tarayıcıda aç",
 	"chat.render.sourceError": "Sayfanın kaynağı yüklenemedi.",
 	"chat.render.remoteHost": "Sayfayı görmek için bu oturumu barındırıldığı makinede açın.",
-	"chat.artifact.openNamed": "{{name}} öğesini Çıktılar sekmesinde aç",
 	"chat.artifact.label": "Çıktı",
 	"chat.artifact.unavailable": "Bu sayfa artık oturumun çıktıları arasında değil.",
 	"chat.image.numbered": "Görsel {{index}}",

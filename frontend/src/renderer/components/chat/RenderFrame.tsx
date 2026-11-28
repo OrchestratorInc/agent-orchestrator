@@ -100,7 +100,7 @@ function RenderDocument({
 	// posted, so they never reload the page.
 	const baseUrl = useSyncExternalStore(subscribeApiBaseUrl, getApiBaseUrl, getApiBaseUrl);
 	const src = useMemo(
-		() => `${page.remoteUrl ?? `${baseUrl}${page.path}`}${renderThemeFragment(themeRef.current, displayMode, false, wrapContentRef.current)}`,
+		() => `${page.remoteUrl ?? `${baseUrl}${page.path}`}${renderThemeFragment(themeRef.current, displayMode, wrapContentRef.current)}`,
 		[baseUrl, page.path, page.remoteUrl, displayMode],
 	);
 	const [contentHeight, setContentHeight] = useState<number>();
@@ -119,7 +119,7 @@ function RenderDocument({
 		return () => observer.disconnect();
 	}, [heights]);
 	const postTheme = () =>
-		frameRef.current?.contentWindow?.postMessage(renderThemeMessage(themeRef.current, displayMode, false, wrapContent), "*");
+		frameRef.current?.contentWindow?.postMessage(renderThemeMessage(themeRef.current, displayMode, wrapContent), "*");
 	useEffect(() => {
 		postTheme();
 	}, [theme, wrapContent]);
@@ -336,7 +336,7 @@ export function RenderFrame({ render }: { render: RenderRef }) {
 	// render opens only in its frame here.
 	const opensStandalone = !remoteHost;
 	const openStandalone = (open: (url: string) => void) =>
-		open(`${getApiBaseUrl()}${page.path}${renderThemeFragment(readRenderTheme(), "fullscreen", false, wrapContent)}`);
+		open(`${getApiBaseUrl()}${page.path}${renderThemeFragment(readRenderTheme(), "fullscreen", wrapContent)}`);
 	const browserPanelAction = openInBrowserPanel && opensStandalone ? (
 		<RenderAction
 			label={t("inspector.openInAOBrowser")}

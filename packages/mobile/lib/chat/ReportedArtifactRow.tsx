@@ -10,25 +10,39 @@ import { iconSize, space, touchTarget, type } from "../tokens";
 import type { ArtifactRef } from "./renderFrameModel";
 
 /**
+ * Where a reported file is now: the path the session lists it at, found by the
+ * reported path or, for a file renamed since, by that earlier path. A file the
+ * list does not hold (not loaded yet, or gone) keeps the reported path.
+ */
+export function currentArtifactPath(artifacts: readonly { path: string; previousPaths?: string[] }[] | undefined, path: string): string {
+	return artifacts?.find((file) => file.path === path)?.path
+		?? artifacts?.find((file) => file.previousPaths?.includes(path))?.path
+		?? path;
+}
+
+/**
  * Where an agent reported an HTML artifact mid-turn: one line naming it, not
  * the page, as desktop shows it. An artifact is a standalone document, so the
  * thread never frames it; the turn's artifact tiles preview it, and a tap
- * opens the artifact viewer.
+ * opens the artifact viewer where the file is now.
  */
 export function ReportedArtifactRow({ sessionId, artifact }: { sessionId: string; artifact: ArtifactRef }) {
 	const t = useTheme();
 	const styles = useThemedStyles(makeStyles);
 	const router = useRouter();
 	const feedback = usePressFeedback("row");
-	const { currentHostId } = useApp();
+	const { currentHostId, sessions } = useApp();
+	const listed = sessions?.find((session) => session.id === sessionId)?.artifacts;
 	return (
 		<Pressable
 			accessibilityRole="button"
-			accessibilityLabel={`Open artifact ${artifact.name}`}
+			// The name is the row's visible text, so voice control finds it as it reads.
+			accessibilityLabel={`Artifact ${artifact.name}`}
+			accessibilityHint="Opens the artifact"
 			android_ripple={feedback.android_ripple}
 			onPress={() => {
 				haptics.tap();
-				router.push({ pathname: "/artifact/[sessionId]", params: { sessionId, path: artifact.path, hostId: currentHostId ?? undefined } });
+				router.push({ pathname: "/artifact/[sessionId]", params: { sessionId, path: currentArtifactPath(listed, artifact.path), hostId: currentHostId ?? undefined } });
 			}}
 			style={({ pressed }) => [styles.row, pressed && feedback.pressed]}
 		>

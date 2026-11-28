@@ -6654,6 +6654,28 @@ describe("SessionView", () => {
 		}
 	});
 
+	it("opens a remote host's requested artifact only when the request names that host", () => {
+		// A chat's artifact row on a remote host asks with the host, as the view's key needs.
+		const worker = workerSession("sess-1");
+		const uiKey = sessionUiKey("sess-1", "box-a");
+		worker.artifactFiles = [{ kind: "html", name: "report.html", path: "report.html", size: 10, updatedAt: "2026-06-10T00:00:00Z" }];
+		workspaceQueryState.isStale = false;
+		try {
+			render(<SessionView hostId="box-a" sessionId="sess-1" />);
+			// Without the host, the request names a local session of the same id, not this view.
+			act(() => useUiStore.getState().requestWorkspaceFileOpen("sess-1", "report.html", undefined, "artifact"));
+			expect(useUiStore.getState().inspectorSessions[uiKey]?.view).not.toBe("artifacts");
+			expect(useUiStore.getState().workspaceFileOpenRequest).not.toBeNull();
+
+			act(() => useUiStore.getState().requestWorkspaceFileOpen("sess-1", "report.html", "box-a", "artifact"));
+			expect(screen.getByText("selected report.html")).toBeInTheDocument();
+			expect(useUiStore.getState().inspectorSessions[uiKey]?.view).toBe("artifacts");
+			expect(useUiStore.getState().workspaceFileOpenRequest).toBeNull();
+		} finally {
+			delete worker.artifactFiles;
+		}
+	});
+
 	it.each([
 		["direct HTML file", "direct.html"],
 		["render saved as an artifact", "renders/chart.html"],

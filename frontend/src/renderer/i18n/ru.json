@@ -3948,7 +3948,6 @@
 	"chat.render.openInBrowser": "Открыть во внешнем браузере",
 	"chat.render.sourceError": "Не удалось загрузить исходный код страницы.",
 	"chat.render.remoteHost": "Чтобы увидеть страницу, откройте эту сессию на компьютере, где она запущена.",
-	"chat.artifact.openNamed": "Открыть {{name}} во вкладке «Артефакты»",
 	"chat.artifact.label": "Артефакт",
 	"chat.artifact.unavailable": "Этой страницы больше нет среди артефактов сеанса.",
 	"chat.image.numbered": "Изображение {{index}}",

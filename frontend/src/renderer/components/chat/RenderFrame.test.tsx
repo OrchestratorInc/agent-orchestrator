@@ -521,7 +521,7 @@ describe("artifact activity", () => {
 	const sessionArtifact = (path: string): SessionArtifact => ({ kind: "html", name: "Q3 (final).html", path, previewUrl, inlineUrl, size: 9, updatedAt: "2026-10-08T10:00:00Z" });
 	// What a local session lists for the row's file.
 	const listed = [sessionArtifact("q3/Q3 (final).html")];
-	const openButton = () => screen.getByRole("button", { name: "Open Q3 (final).html in Artifacts tab" });
+	const openButton = () => screen.getByRole("button", { name: "Artifact Q3 (final).html" });
 
 	function renderArtifact(artifacts: SessionArtifact[] | undefined = listed, hostId?: string) {
 		const client = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
@@ -598,6 +598,22 @@ describe("artifact activity", () => {
 		expect(row).toHaveAttribute("title", "This page is no longer in the session's artifacts.");
 		expect(screen.queryByRole("button")).toBeNull();
 		expect(document.querySelector("iframe")).toBeNull();
+	});
+
+	it("does not call a file gone while the session's list is still loading", () => {
+		const client = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
+		render(
+			<QueryClientProvider client={client}>
+				<ChatImageSourceProvider sessionId="proj-1" remoteHost>
+					<ActivityRow activity={artifactActivity} />
+				</ChatImageSourceProvider>
+			</QueryClientProvider>,
+		);
+		const row = screen.getByTestId("reported-artifact-row");
+		expect(row).toHaveTextContent("Q3 (final).html");
+		expect(row).not.toHaveTextContent("This page is no longer in the session's artifacts.");
+		expect(row).not.toHaveAttribute("title");
+		expect(screen.queryByRole("button")).toBeNull();
 	});
 
 	describe("in a cloud chat", () => {

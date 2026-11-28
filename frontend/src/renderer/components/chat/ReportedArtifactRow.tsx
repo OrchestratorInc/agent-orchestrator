@@ -51,15 +51,20 @@ export function ReportedArtifactRow({ artifact }: { artifact: ReportedArtifact }
 	const openable = Boolean(links) || Boolean(cloud && chatArtifacts);
 
 	if (!openable) {
-		const unavailable = t("chat.artifact.unavailable");
+		// Before the session's list has loaded, the file is not known to be gone.
+		const unavailable = chatArtifacts?.artifacts ? t("chat.artifact.unavailable") : undefined;
 		const follows = chatArtifacts && !cloud && !remoteHost;
 		return (
 			<div className={ROW_CLASS} data-testid="reported-artifact-row" title={unavailable}>
 				<Icon aria-hidden="true" className="size-3.5 shrink-0 text-passive" />
-				<span className="shrink-0 font-medium text-muted-foreground">{t("chat.artifact.label")}</span>
+				<span className="shrink-0 font-medium text-muted-foreground">{t("chat.artifact.label")}</span>{" "}
 				<span className="min-w-0 shrink truncate text-muted-foreground">{artifact.name}</span>
-				<span aria-hidden="true" className="shrink-0 text-passive">·</span>
-				<span className="min-w-0 flex-1 truncate text-muted-foreground">{unavailable}</span>
+				{unavailable ? (
+					<>
+						<span aria-hidden="true" className="shrink-0 text-passive">·</span>
+						<span className="min-w-0 flex-1 truncate text-muted-foreground">{unavailable}</span>
+					</>
+				) : null}
 				{follows ? <FollowArtifactList sessionId={chatArtifacts.sessionId} /> : null}
 			</div>
 		);
@@ -76,9 +81,10 @@ export function ReportedArtifactRow({ artifact }: { artifact: ReportedArtifact }
 		void queryClient.invalidateQueries({ queryKey: cloud?.shared ? sharedCloudWorkspacesQueryKey : cloudSessionsQueryKey });
 		requestWorkspaceFileOpen(chatArtifacts.sessionId, artifact.path, undefined, "artifact");
 	};
+	// The button's name is its visible text, "Artifact <name>", so voice control
+	// and screen readers name it as it reads on screen.
 	return (
 		<Pressable
-			aria-label={t("chat.artifact.openNamed", { name: artifact.name })}
 			className={cn("group rounded-md focus-visible:ring-1 focus-visible:ring-ring", ROW_CLASS)}
 			data-testid="reported-artifact-row"
 			onClick={open}
@@ -86,6 +92,7 @@ export function ReportedArtifactRow({ artifact }: { artifact: ReportedArtifact }
 		>
 			<Icon aria-hidden="true" className="size-3.5 shrink-0 text-muted-foreground" />
 			<span className="shrink-0 font-medium text-foreground">{t("chat.artifact.label")}</span>
+			{/* A flex row never draws this space; it keeps the name "Artifact <name>". */}{" "}
 			<span className="min-w-0 truncate text-muted-foreground group-hover:text-foreground">{artifact.name}</span>
 		</Pressable>
 	);

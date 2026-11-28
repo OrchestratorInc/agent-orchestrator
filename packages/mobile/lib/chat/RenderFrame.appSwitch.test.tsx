@@ -18,7 +18,6 @@ vi.mock("react-native", () => ({
 vi.mock("expo-router", () => ({ useRouter: () => ({ push: vi.fn() }) }));
 vi.mock("react-native-webview", () => ({ WebView: "WebView" }));
 vi.mock("expo-router/react-navigation", () => ({ useIsFocused: () => true }));
-vi.mock("../useInlinedArtifactPage", () => ({ useInlinedArtifactPage: () => ({ failed: false }) }));
 vi.mock("expo-linking", () => ({ openURL: vi.fn() }));
 vi.mock("../haptics", () => ({ haptics: { tap: () => {} } }));
 vi.mock("../config", () => ({

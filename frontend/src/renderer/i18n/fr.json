@@ -3873,7 +3873,6 @@
 	"chat.render.openInBrowser": "Ouvrir dans le navigateur externe",
 	"chat.render.sourceError": "Impossible de charger la source de la page.",
 	"chat.render.remoteHost": "Ouvrez cette session sur son hôte pour voir la page.",
-	"chat.artifact.openNamed": "Ouvrir {{name}} dans l’onglet Artefacts",
 	"chat.artifact.label": "Artifact",
 	"chat.artifact.unavailable": "Cette page ne fait plus partie des artefacts de la session.",
 	"chat.image.numbered": "Image {{index}}",
