@@ -7,7 +7,7 @@ import { setApiBaseUrl } from "../../lib/api-client";
 import { aoBridge } from "../../lib/bridge";
 import { useUiStore } from "../../stores/ui-store";
 import type { ConversationActivity } from "../../types/conversation";
-import type { SessionArtifact } from "../../types/workspace";
+import type { SessionArtifact, WorkspaceSession } from "../../types/workspace";
 import { TooltipProvider } from "../ui/tooltip";
 import { ChatLinkProvider } from "./ChatMarkdown";
 import { ActivityRow } from "./ChatTimelineItems";
@@ -590,11 +590,56 @@ describe("artifact activity", () => {
 		expect(useUiStore.getState().workspaceFileOpenRequest).toMatchObject({ path: "q3/Q3 (final).html" });
 	});
 
-	it("shows the name without an action when the session does not list the artifact", () => {
+	it("mutes a row whose file the session does not list, and says why instead of offering a dead click", () => {
 		renderArtifact([sessionArtifact("other.html")]);
-		expect(screen.getByTestId("reported-artifact-row")).toHaveTextContent("Q3 (final).html");
+		const row = screen.getByTestId("reported-artifact-row");
+		expect(row).toHaveTextContent("Q3 (final).html");
+		expect(row).toHaveTextContent("This page is no longer in the session's artifacts.");
+		expect(row).toHaveAttribute("title", "This page is no longer in the session's artifacts.");
 		expect(screen.queryByRole("button")).toBeNull();
 		expect(document.querySelector("iframe")).toBeNull();
+	});
+
+	describe("in a cloud chat", () => {
+		const cloud = { orgId: "org-1" } as WorkspaceSession["cloud"];
+
+		function renderCloud(artifacts: SessionArtifact[], session: WorkspaceSession["cloud"] = cloud) {
+			const client = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
+			const invalidated = vi.spyOn(client, "invalidateQueries").mockResolvedValue();
+			render(
+				<QueryClientProvider client={client}>
+					<ChatImageSourceProvider sessionId="cloud-1" artifacts={artifacts} cloud={session}>
+						<ActivityRow activity={artifactActivity} />
+					</ChatImageSourceProvider>
+				</QueryClientProvider>,
+			);
+			return invalidated;
+		}
+
+		it("opens a file the list has not caught up with yet, rereading the list once on the click rather than polling", async () => {
+			const user = userEvent.setup();
+			const invalidated = renderCloud([]);
+			expect(screen.queryByText("This page is no longer in the session's artifacts.")).toBeNull();
+			expect(invalidated).not.toHaveBeenCalled();
+			await user.click(openButton());
+			expect(invalidated).toHaveBeenCalledExactlyOnceWith({ queryKey: ["cloud-sessions"] });
+			expect(useUiStore.getState().workspaceFileOpenRequest).toMatchObject({ sessionId: "cloud-1", path: "q3/Q3 (final).html", source: "artifact" });
+		});
+
+		it("rereads the shared workspaces list for a session shared with the reader", async () => {
+			const user = userEvent.setup();
+			const invalidated = renderCloud([], { ...cloud, shared: true } as WorkspaceSession["cloud"]);
+			await user.click(openButton());
+			expect(invalidated).toHaveBeenCalledExactlyOnceWith({ queryKey: ["cloud-shared-workspaces"] });
+		});
+
+		it("opens a listed file without rereading the list", async () => {
+			const user = userEvent.setup();
+			const invalidated = renderCloud(listed);
+			await user.click(openButton());
+			expect(invalidated).not.toHaveBeenCalled();
+			expect(useUiStore.getState().workspaceFileOpenRequest).toMatchObject({ sessionId: "cloud-1", path: "q3/Q3 (final).html", source: "artifact" });
+		});
 	});
 
 	it("rereads the session's artifacts while a row's file is missing, and offers to open it once listed", () => {

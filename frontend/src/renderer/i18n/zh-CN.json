@@ -3662,6 +3662,7 @@
 	"chat.render.remoteHost": "请在此会话所在的主机上打开它以查看页面。",
 	"chat.artifact.openNamed": "在工件标签页中打开 {{name}}",
 	"chat.artifact.label": "Artifact",
+	"chat.artifact.unavailable": "此页面已不在该会话的工件中。",
 	"chat.image.numbered": "图片 {{index}}",
 	"chat.edit.cancel": "取消编辑",
 	"chat.edit.cancelAction": "取消",

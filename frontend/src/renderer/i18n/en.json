@@ -3696,6 +3696,7 @@
 	"chat.render.remoteHost": "Open this session on its host to see the page.",
 	"chat.artifact.openNamed": "Open {{name}} in Artifacts tab",
 	"chat.artifact.label": "Artifact",
+	"chat.artifact.unavailable": "This page is no longer in the session's artifacts.",
 	"chat.image.numbered": "Image {{index}}",
 	"chat.edit.cancel": "Cancel edit",
 	"chat.edit.cancelAction": "Cancel",
