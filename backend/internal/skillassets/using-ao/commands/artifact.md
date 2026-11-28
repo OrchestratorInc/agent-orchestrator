@@ -38,7 +38,7 @@ A later round on the same thread or topic is a revision, not a new deliverable,
 even when it covers a new detail. Do not write a new file and register it.
 
 - Edit or overwrite the existing artifact. Rename it with `mv` to retitle it for
-  the latest state, for example `mv menu-before-after.png menu-final.png`.
+  the latest state, for example `mv draft-report.html q3-report.html`.
 - For running before/after comparisons, keep one HTML page per thread, such as
   `design-polish.html`, register it once, and add each round to it. Its images
   are supporting files and stay unregistered.
