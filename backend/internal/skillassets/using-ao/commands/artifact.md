@@ -38,3 +38,20 @@ of the directory. If one of those is a deliverable, register it too.
 `ao report --artifact` does not register a file. Neither does keeping a render
 with `ao render --artifact` or `artifact: true` in `html_render`: run
 `ao artifact add` on the path it returns.
+
+## HTML artifacts on mobile
+
+HTML deliverables may also be opened in the mobile app, where the available
+width is typically about 390-440 CSS pixels. Make HTML artifacts responsive;
+do not assume a desktop-width viewer.
+
+- Include `<meta name="viewport" content="width=device-width, initial-scale=1">`.
+- Use `box-sizing: border-box`, `max-width: 100%` for media, and avoid fixed
+  widths or fixed multi-column layouts.
+- Use shrinkable grid tracks (for example `minmax(0, 1fr)`), set
+  `min-width: 0` on grid/flex children, and collapse dense columns to one
+  column at narrow widths.
+- Wrap long text and code. Keep wide tables in a horizontally scrollable
+  wrapper so they do not force the whole page wider than the screen.
+- Check the artifact at both desktop width (720px) and phone width (390px)
+  before handing it over; fix horizontal overflow and clipped content.
