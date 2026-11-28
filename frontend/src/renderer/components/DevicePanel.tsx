@@ -124,6 +124,12 @@ export function DevicePanel({ isActive, sessionId }: { isActive: boolean; sessio
 	// blink: no room right now (NO_DEVICE_ROOM) is waited out, anything else is
 	// a failure that waits for Start.
 	const [startProblem, setStartProblem] = useState<{ reason: string; waitForRoom: boolean }>();
+	// Running, by this start or another client's: a wait for room is over, and a
+	// later stop (shut down outside AO) must ask for Start, not start it again.
+	const leaseBooted = lease.data?.device.booted === true;
+	useEffect(() => {
+		if (leaseBooted) setStartProblem(undefined);
+	}, [leaseBooted]);
 	const open = useMutation({
 		mutationFn: async (device: DeviceSummary) => {
 			const { error } = await apiClient.POST("/api/v1/sessions/{sessionId}/device/open", {
