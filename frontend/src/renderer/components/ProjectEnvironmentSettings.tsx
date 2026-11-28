@@ -4,9 +4,11 @@ import { Eye, EyeOff, FileCode2, Plus, Trash2 } from "@/components/app-icons";
 import { useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import type { components } from "../../api/schema";
-import { apiClient } from "../lib/api-client";
+import { clientForSessionHost } from "../lib/host-clients";
+import type { HostId } from "../lib/hosts";
 import { useCloudCp } from "../hooks/useCloudCp";
-import { workspaceQueryKey } from "../hooks/useWorkspaceQuery";
+import { workspaceQueryKeyForHost } from "../hooks/useWorkspaceQuery";
+import { projectQueryKey } from "../lib/project-query-key";
 import type { ProjectSettingsSaveState } from "./ProjectSettingsForm";
 import { Button } from "./ui/button";
 import { ProjectSettingsSection } from "@aoagents/product-ui";
@@ -44,13 +46,14 @@ function parsePastedEnv(text: string): { rows: Row[]; invalidLine?: number } {
 	return { rows };
 }
 
-export function ProjectEnvironmentSettings({ projectId, onSaveState }: { projectId: string; onSaveState?: (state: ProjectSettingsSaveState) => void }) {
+/** hostId names the remote host whose daemon holds the project; omit it for the local daemon. */
+export function ProjectEnvironmentSettings({ projectId, hostId, onSaveState }: { projectId: string; hostId?: HostId; onSaveState?: (state: ProjectSettingsSaveState) => void }) {
 	const { t } = useTranslation();
 	const queryClient = useQueryClient();
 	const query = useQuery({
-		queryKey: ["project", projectId],
+		queryKey: projectQueryKey(projectId, hostId),
 		queryFn: async () => {
-			const { data, error } = await apiClient.GET("/api/v1/projects/{id}", { params: { path: { id: projectId } } });
+			const { data, error } = await clientForSessionHost(hostId).GET("/api/v1/projects/{id}", { params: { path: { id: projectId } } });
 			if (error) throw apiErrorException(error);
 			if (data?.status !== "ok") throw new Error(t("settings.project.degraded"));
 			return data.project as Project;
@@ -60,19 +63,20 @@ export function ProjectEnvironmentSettings({ projectId, onSaveState }: { project
 	if (query.isError || !query.data) return <div className="flex flex-col items-start gap-3 px-(--settings-row-inset)"><p role="alert" className="text-sm text-error">{query.error instanceof Error ? query.error.message : t("settings.project.loadFailed")}</p><Button type="button" variant="quiet" size="sm" onClick={() => void query.refetch()}>{t("settings.project.retry")}</Button></div>;
 	const save = async (env: Record<string, string>) => {
 		// Refresh before the whole-config PUT so this page cannot erase changes made elsewhere.
-		const current = await apiClient.GET("/api/v1/projects/{id}", { params: { path: { id: projectId } } });
+		const daemon = clientForSessionHost(hostId);
+		const current = await daemon.GET("/api/v1/projects/{id}", { params: { path: { id: projectId } } });
 		if (current.error) throw apiErrorException(current.error);
 		if (current.data?.status !== "ok" || !current.data.project) throw new Error(t("settings.project.degraded"));
 		const project = current.data.project as Project;
-		const { error: updateError } = await apiClient.PUT("/api/v1/projects/{id}", {
+		const { error: updateError } = await daemon.PUT("/api/v1/projects/{id}", {
 			params: { path: { id: projectId } },
 			body: { displayName: project.name, config: { ...project.config, env } },
 		});
 		if (updateError) throw apiErrorException(updateError);
 	};
 	return <VariablesEditor key={projectId} initial={query.data.config?.env} description={t("settings.project.environmentDescription")} persist={save} onSaveState={onSaveState} onSaved={() => {
-		void queryClient.invalidateQueries({ queryKey: ["project", projectId] });
-		void queryClient.invalidateQueries({ queryKey: workspaceQueryKey });
+		void queryClient.invalidateQueries({ queryKey: projectQueryKey(projectId, hostId) });
+		void queryClient.invalidateQueries({ queryKey: workspaceQueryKeyForHost(hostId) });
 	}} />;
 }
 

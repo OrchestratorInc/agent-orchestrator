@@ -12,6 +12,7 @@ import {
 } from "../hooks/useCuesQuery";
 import { CUE_LIMITS } from "../lib/cues";
 import type { CueDTO, CueInput } from "../lib/cues";
+import type { HostId } from "../lib/hosts";
 import { Button } from "./ui/button";
 import { CloseButton } from "./ui/close-button";
 import { ConfirmDialog } from "./ConfirmDialog";
@@ -35,6 +36,12 @@ type CuesSettingsProps = {
 	projectId: string;
 	/** A Cloud project's organization: its cues live on the control plane. */
 	cloudOrgId?: string;
+	/**
+	 * A remote host whose daemon holds the project. Its daemon refuses command
+	 * cues written from another machine, so they are set up on the host itself:
+	 * here they show read-only (still deletable) and new cues are agent cues.
+	 */
+	hostId?: HostId;
 	onBusyChange?: (busy: boolean) => void;
 	createOnly?: boolean;
 	onCreated?: () => void;
@@ -55,8 +62,8 @@ type CueDraft = {
 	prompt: string;
 };
 
-function emptyDraft(): CueDraft {
-	return { name: "", type: "command", command: "", prompt: "" };
+function emptyDraft(type: CueType = "command"): CueDraft {
+	return { name: "", type, command: "", prompt: "" };
 }
 
 function draftFromDTO(cue: CueDTO): CueDraft {
@@ -79,22 +86,24 @@ export function CuesSettings(props: CuesSettingsProps) {
 	return <ProjectCuesSettings key={props.projectId} {...props} />;
 }
 
-function ProjectCuesSettings({ projectId, cloudOrgId, onBusyChange, createOnly = false, onCreated, onCancel, hideCueActions = false }: CuesSettingsProps) {
+function ProjectCuesSettings({ projectId, cloudOrgId, hostId, onBusyChange, createOnly = false, onCreated, onCancel, hideCueActions = false }: CuesSettingsProps) {
 	const { t } = useTranslation();
 	const showGlobalToast = useUiStore((state) => state.showGlobalToast);
-	const cuesQuery = useProjectCuesQuery(projectId, !createOnly, cloudOrgId);
+	const commandCuesLocked = Boolean(hostId);
+	const newDraft = () => emptyDraft(commandCuesLocked ? "agent" : "command");
+	const cuesQuery = useProjectCuesQuery(projectId, !createOnly, cloudOrgId, hostId);
 	useEffect(() => {
 		if (!createOnly && cuesQuery.isError && !cuesQuery.isFetching) {
 			showGlobalToast(t("cues.loadFailed"), apiErrorMessage(cuesQuery.error, t("cues.loadFailed")), { tone: "error", dedupeKey: `cues.load.${projectId}` });
 		}
 	}, [projectId, createOnly, cuesQuery.isError, cuesQuery.isFetching, cuesQuery.error, showGlobalToast, t]);
-	const createMutation = useCreateCueMutation(projectId, cloudOrgId);
-	const updateMutation = useUpdateCueMutation(projectId, cloudOrgId);
-	const deleteMutation = useDeleteCueMutation(projectId, cloudOrgId);
+	const createMutation = useCreateCueMutation(projectId, cloudOrgId, hostId);
+	const updateMutation = useUpdateCueMutation(projectId, cloudOrgId, hostId);
+	const deleteMutation = useDeleteCueMutation(projectId, cloudOrgId, hostId);
 
 	const [formOpen, setFormOpen] = useState<"new" | CueDTO | null>(createOnly ? "new" : null);
 	const [deletingCue, setDeletingCue] = useState<CueDTO | null>(null);
-	const [draft, setDraft] = useState<CueDraft>(emptyDraft);
+	const [draft, setDraft] = useState<CueDraft>(newDraft);
 	const [formError, setFormError] = useState<string | null>(null);
 	const [saving, setSaving] = useState(false);
 	const [deleting, setDeleting] = useState(false);
@@ -112,7 +121,7 @@ function ProjectCuesSettings({ projectId, cloudOrgId, onBusyChange, createOnly =
 
 	const openNew = () => {
 		if (pending.current) return;
-		setDraft(emptyDraft());
+		setDraft(newDraft());
 		setFormError(null);
 		setFormOpen("new");
 	};
@@ -242,6 +251,7 @@ function ProjectCuesSettings({ projectId, cloudOrgId, onBusyChange, createOnly =
 					<div className="settings-grouped-rows flex w-full flex-col">
 						{cues.map((cue) => {
 							const cueKind = cueType(cue);
+							const editLocked = commandCuesLocked && cueKind === "command";
 							return (
 								<div key={cue.id} className="settings-row-bar">
 									<CueTypeIcon type={cueKind} className="size-4 shrink-0 text-settings-muted" />
@@ -256,10 +266,10 @@ function ProjectCuesSettings({ projectId, cloudOrgId, onBusyChange, createOnly =
 											type="button"
 											variant="quiet"
 											size="icon-sm"
-											disabled={busy}
+											disabled={busy || editLocked}
 											onClick={() => openEdit(cue)}
 											aria-label={t("cues.edit")}
-											title={t("cues.edit")}
+											title={editLocked ? t("cues.commandHostOnly") : t("cues.edit")}
 											className="shrink-0"
 										>
 											<Pencil className="size-3.5" aria-hidden="true" />
@@ -310,8 +320,8 @@ function ProjectCuesSettings({ projectId, cloudOrgId, onBusyChange, createOnly =
 					aria-label={t("cues.typeLabel")}
 					value={draft.type}
 					options={[
-						{ value: "command", label: t("cues.typeName.command"), icon: <CueTypeIcon type="command" className="size-3! shrink-0 text-settings-muted" /> },
-						{ value: "agent", label: t("cues.typeName.agent"), icon: <CueTypeIcon type="agent" className="size-3! shrink-0 text-settings-muted" /> },
+						...(commandCuesLocked ? [] : [{ value: "command" as const, label: t("cues.typeName.command"), icon: <CueTypeIcon type="command" className="size-3! shrink-0 text-settings-muted" /> }]),
+						{ value: "agent" as const, label: t("cues.typeName.agent"), icon: <CueTypeIcon type="agent" className="size-3! shrink-0 text-settings-muted" /> },
 					]}
 					onChange={(type) => setDraft((current) => ({ ...current, type }))}
 					triggerClassName="w-fit self-start"
@@ -349,6 +359,7 @@ function ProjectCuesSettings({ projectId, cloudOrgId, onBusyChange, createOnly =
 	return (
 		<div className="flex flex-col gap-(--size-settings-section-inner-gap)">
 			<p className="px-(--settings-row-inset) text-sm leading-5 text-settings-muted">{t("cues.settingsDescription")}</p>
+			{commandCuesLocked ? <p className="px-(--settings-row-inset) text-sm leading-5 text-settings-muted">{t("cues.commandHostOnly")}</p> : null}
 			<fieldset className="min-w-0" disabled={busy}>{formOpen ? createOnly ? renderForm() : <div className="settings-grouped-rows flex w-full flex-col"><div className="settings-content-row">{renderForm()}</div></div> : renderList()}</fieldset>
 			{empty ? null : (
 			<div className="flex items-center justify-end gap-2">

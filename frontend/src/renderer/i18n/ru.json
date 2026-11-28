@@ -1026,6 +1026,7 @@
 	"cues.backToCues": "Ко всем быстрым командам",
 	"cues.cancel": "Отмена",
 	"cues.commandLabel": "Команда",
+	"cues.commandHostOnly": "Быстрые команды типа «Команда» можно добавлять или изменять только на самом хосте.",
 	"cues.commandPlaceholder": "Например, /status или npm test",
 	"cues.create": "Создать",
 	"cues.delete": "Удалить",

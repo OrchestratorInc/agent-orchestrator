@@ -5,13 +5,14 @@ import { Fragment, useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { ProjectSettingsSection } from "@aoagents/product-ui";
 import type { components } from "../../api/schema";
-import { cloudProjectsQueryKey, workspaceQueryKey } from "../hooks/useWorkspaceQuery";
+import { cloudProjectsQueryKey, workspaceQueryKeyForHost } from "../hooks/useWorkspaceQuery";
 import { clearTerminateSessionState } from "../hooks/useTerminateSession";
 import { useCloudCp } from "../hooks/useCloudCp";
 import { useCloudOffering } from "../hooks/useCloudOffering";
 import { useCloudOrg } from "../hooks/useCloudOrg";
-import { apiClient } from "../lib/api-client";
 import { aoBridge } from "../lib/bridge";
+import { clientForSessionHost } from "../lib/host-clients";
+import type { HostId } from "../lib/hosts";
 import type { CloudCpProject } from "../lib/cloud-cp";
 import { CODER_PROVIDER, FREESTYLE_PROVIDER, canManageBilling, projectSandboxProvider } from "../lib/cloud-offering";
 import {
@@ -22,6 +23,7 @@ import { cn } from "../lib/utils";
 import { SettingsOptionMenu } from "./settings/SettingsOptionMenu";
 import { SettingsSaveFooter } from "./settings/SettingsSaveFooter";
 import { cloudProjectSettingsQueryKey } from "./CloudProjectSettingsForm";
+import { projectQueryKey } from "../lib/project-query-key";
 import type { ProjectSettingsSaveState } from "./ProjectSettingsForm";
 import { Button } from "./ui/button";
 import { Input } from "./ui/input";
@@ -31,13 +33,14 @@ import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "./ui/t
 type Project = components["schemas"]["Project"];
 type ScriptKind = "setup" | "cleanup";
 
-export function ProjectScriptsSettings({ projectId, onSaveState }: { projectId: string; onSaveState?: (state: ProjectSettingsSaveState) => void }) {
+/** hostId names the remote host whose daemon holds the project; omit it for the local daemon. */
+export function ProjectScriptsSettings({ projectId, hostId, onSaveState }: { projectId: string; hostId?: HostId; onSaveState?: (state: ProjectSettingsSaveState) => void }) {
 	const { t } = useTranslation();
 	const client = useQueryClient();
 	const query = useQuery({
-		queryKey: ["project", projectId],
+		queryKey: projectQueryKey(projectId, hostId),
 		queryFn: async () => {
-			const { data, error } = await apiClient.GET("/api/v1/projects/{id}", { params: { path: { id: projectId } } });
+			const { data, error } = await clientForSessionHost(hostId).GET("/api/v1/projects/{id}", { params: { path: { id: projectId } } });
 			if (error) throw apiErrorException(error);
 			if (data?.status !== "ok") throw new Error(t("settings.project.degraded"));
 			return data.project as Project;
@@ -54,20 +57,21 @@ export function ProjectScriptsSettings({ projectId, onSaveState }: { projectId: 
 			postCreate: steps.postCreate.map(serializeLocalScriptStep),
 			...(steps.preRemove && { preRemove: steps.preRemove.map(serializeLocalScriptStep) }),
 		};
-		const current = await apiClient.GET("/api/v1/projects/{id}", { params: { path: { id: project.id } } });
+		const daemon = clientForSessionHost(hostId);
+		const current = await daemon.GET("/api/v1/projects/{id}", { params: { path: { id: project.id } } });
 		if (current.error) throw apiErrorException(current.error);
 		if (current.data?.status !== "ok" || !current.data.project) throw new Error(t("settings.project.degraded"));
 		const latest = current.data.project as Project;
-		const { error } = await apiClient.PUT("/api/v1/projects/{id}", {
+		const { error } = await daemon.PUT("/api/v1/projects/{id}", {
 			params: { path: { id: project.id } },
 			body: { displayName: latest.name, config: { ...latest.config, ...scripts } },
 		});
 		if (error) throw apiErrorException(error);
 	};
-	return <ScriptsEditor key={projectId} projectId={project.id} scratch={scratch} postCreate={localSteps(project.config?.postCreate)} preRemove={localSteps(project.config?.preRemove)}
+	return <ScriptsEditor key={projectId} projectId={project.id} hostId={hostId} scratch={scratch} postCreate={localSteps(project.config?.postCreate)} preRemove={localSteps(project.config?.preRemove)}
 		save={save} onSaveState={onSaveState} onSaved={() => {
-			void client.invalidateQueries({ queryKey: ["project", projectId] });
-			void client.invalidateQueries({ queryKey: workspaceQueryKey });
+			void client.invalidateQueries({ queryKey: projectQueryKey(projectId, hostId) });
+			void client.invalidateQueries({ queryKey: workspaceQueryKeyForHost(hostId) });
 		}} />;
 }
 
@@ -224,9 +228,11 @@ function CopyVariableButton({ text, label }: { text: string; label: string }) {
 	</Button>;
 }
 
-function ScriptsEditor({ projectId, scratch, postCreate, preRemove, repositories = [], cloud, save, onSaveState, onSaved }: {
+function ScriptsEditor({ projectId, hostId, scratch, postCreate, preRemove, repositories = [], cloud, save, onSaveState, onSaved }: {
 	/** The local project, for retrying its cleanup; absent for a Cloud project. */
 	projectId?: string;
+	/** The remote host whose daemon holds projectId; absent for the local daemon. */
+	hostId?: HostId;
 	scratch: boolean;
 	postCreate?: ScriptStepDraft[];
 	preRemove?: ScriptStepDraft[];
@@ -284,7 +290,7 @@ function ScriptsEditor({ projectId, scratch, postCreate, preRemove, repositories
 	});
 	const retry = useMutation({
 		mutationFn: async () => {
-			const { data, error } = await apiClient.POST("/api/v1/sessions/cleanup", { params: { query: { project: projectId ?? "" } } });
+			const { data, error } = await clientForSessionHost(hostId).POST("/api/v1/sessions/cleanup", { params: { query: { project: projectId ?? "" } } });
 			if (error) throw apiErrorException(error);
 			return data;
 		},

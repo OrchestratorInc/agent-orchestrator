@@ -1016,6 +1016,7 @@
 	"cues.backToCues": "Tüm Cue'lara dönün",
 	"cues.cancel": "İptal edin",
 	"cues.commandLabel": "Komut",
+	"cues.commandHostOnly": "Komut Cue'ları yalnızca ana makinenin kendisinde eklenebilir veya değiştirilebilir.",
 	"cues.commandPlaceholder": "ör. /status veya npm test",
 	"cues.create": "Oluşturun",
 	"cues.delete": "Silin",
