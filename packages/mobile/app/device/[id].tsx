@@ -289,9 +289,14 @@ function DeviceLive({ config, foreground, lease, leaseError, onReleased, session
 	];
 
 	const leave = () => { haptics.tap(); if (router.canGoBack()) router.back(); else router.navigate("/"); };
+	const [releasing, setReleasing] = useState(false);
 	const release = (shutdown: boolean) => {
 		setActionError(undefined);
-		void closeSessionDevice(config, sessionID, { shutdown }).then(onReleased).catch((cause) => setActionError(userFacingError(cause)));
+		setReleasing(true);
+		void closeSessionDevice(config, sessionID, { shutdown })
+			.then(onReleased)
+			.catch((cause) => setActionError(userFacingError(cause)))
+			.finally(() => setReleasing(false));
 	};
 	// What the screen does not show by itself lives in one menu, named in words:
 	// giving the device back, and powering it off.
@@ -343,10 +348,11 @@ function DeviceLive({ config, foreground, lease, leaseError, onReleased, session
 	const waiting = off && !loading && (starting || waitingForRoom);
 	const resting = off && !loading && !waiting;
 	useEffect(() => {
-		if (!waitingForRoom || !foreground || starting || !off || lease.starting) return;
+		// Not while the device is being given back: a start then would lease it again.
+		if (!waitingForRoom || !foreground || starting || releasing || !off || lease.starting) return;
 		const retry = setTimeout(() => startRef.current(), ROOM_RETRY_MS);
 		return () => clearTimeout(retry);
-	}, [foreground, lease.starting, off, starting, waitingForRoom]);
+	}, [foreground, lease.starting, off, releasing, starting, waitingForRoom]);
 
 	return <View style={styles.screen}>
 		<StatusBar hidden animated />
