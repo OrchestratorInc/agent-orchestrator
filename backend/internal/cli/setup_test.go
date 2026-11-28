@@ -1612,6 +1612,24 @@ func TestSetupInterruptedStartExits4(t *testing.T) {
 	}
 }
 
+func TestSetupUnconfirmedStartExits4(t *testing.T) {
+	for _, status := range []string{taskStatusStarting, taskStatusRunning} {
+		task := taskResult{Status: status, TaskID: "calc-1", SessionIDs: []string{"calc-1"}, waitTimedOut: true, Reason: "timed out after 2m0s", Fix: "wait longer with `ao task wait calc-1`"}
+		res := setupResult{Task: &task, Steps: []setupStep{{Step: setupStepStart, Status: setupFixed, Fix: "ao task wait calc-1"}}, NextActions: []string{}}
+		finishSetup(&res, setupOptions{start: "fix it"})
+		err := setupExit(res, setupOptions{start: "fix it"})
+		if got := ExitCode(err); got != taskExitStillQueued {
+			t.Fatalf("%s: exit = %d, want 4 for a submitted task the wait did not confirm", status, got)
+		}
+		if !strings.Contains(err.Error(), "do not start it again") {
+			t.Fatalf("%s: message = %q", status, err)
+		}
+		if !reflect.DeepEqual(res.NextActions, []string{"ao task wait calc-1"}) {
+			t.Fatalf("%s: next_actions = %q", status, res.NextActions)
+		}
+	}
+}
+
 func TestSetupListsEachSignInSeparately(t *testing.T) {
 	d := newSetupDaemon(t)
 	repo := gitRepo(t, true)

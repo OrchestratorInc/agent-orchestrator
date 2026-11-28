@@ -175,7 +175,7 @@ It runs these steps in order and reports each as `{step, status, detail, fix}`, 
 | `1` | A step failed, or the task started with `--start` failed. If `task.taskId` is set, check it with `ao task status` before starting the task again. |
 | `2` | Usage error. |
 | `3` | The task started with `--start` is waiting on you. |
-| `4` | The task started with `--start` was submitted, but the wait ended first (still queued, or interrupted). Do not start it again; follow it with `ao task wait <taskId>`. |
+| `4` | The task started with `--start` was submitted, but the wait ended before it was confirmed (still queued, not confirmed in time, or interrupted). Do not start it again; follow it with `ao task wait <taskId>`. |
 
 ```json
 {
