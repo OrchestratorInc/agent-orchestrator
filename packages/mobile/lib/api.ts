@@ -416,6 +416,10 @@ const DISCONNECT_REQUEST_TIMEOUT_MS = 2000;
 // daemon allows the driver 60s for that and cancels it if the client gives up.
 export const RESUME_REQUEST_TIMEOUT_MS = 70_000;
 export const ATTACHMENT_REQUEST_TIMEOUT_MS = 11 * 60_000;
+// Opening a device can boot it after shutting idle ones down to make room:
+// outlast the daemon's 4 min cap on a boot, so a slow cold boot is not read
+// as a failure.
+export const DEVICE_OPEN_TIMEOUT_MS = 5 * 60_000;
 
 // The server answered, but with an error status. Distinct from the errors fetch
 // itself throws (DNS/refused/timeout), which mean the server was never reached —
@@ -722,6 +726,10 @@ export type SessionDeviceLease = {
 	provider: string;
 	reason: string;
 	device: { id: string; name: string; platform: "ios" | "android"; version?: string; booted: boolean };
+	/** The device was shut down after going unused; the lease still holds it, and opening it starts it again. */
+	suspended?: boolean;
+	/** AO is booting the device now. */
+	starting?: boolean;
 };
 
 export type DeviceSummary = SessionDeviceLease["device"];
@@ -752,7 +760,7 @@ export async function getSessionDevice(cfg: ServerConfig, id: string, init?: Pic
 
 /** Leases (and boots, when it is off) a device for the session. */
 export async function openSessionDevice(cfg: ServerConfig, id: string, device: { deviceId: string; platform: "ios" | "android" }): Promise<SessionDeviceLease | null> {
-	const res = await req(cfg, `${API}/sessions/${encodeURIComponent(id)}/device/open`, { method: "POST", body: JSON.stringify(device) });
+	const res = await req(cfg, `${API}/sessions/${encodeURIComponent(id)}/device/open`, { method: "POST", body: JSON.stringify(device) }, DEVICE_OPEN_TIMEOUT_MS);
 	const data = await res.json();
 	return (data?.lease ?? null) as SessionDeviceLease | null;
 }
