@@ -552,6 +552,169 @@ describe("SessionChatSurface pending switch effort", () => {
 	});
 });
 
+describe("SessionChatSurface startup check", () => {
+	const listed = (client: QueryClient, target: WorkspaceSession) =>
+		client.setQueryData(["workspaces"], [{ id: target.workspaceId, sessions: [target] }]);
+	const checking = { ...session, statusReadiness: "checking" } satisfies WorkspaceSession;
+	const sendDuringCheck = async (target: WorkspaceSession, cached: WorkspaceSession = target, seed?: (client: QueryClient) => void) => {
+		conversationState.snapshot = { ...snapshotFor(session.id), controller: { state: "stopped" } };
+		conversationCommandState.send = vi.fn().mockResolvedValue({});
+		const client = new QueryClient();
+		listed(client, cached);
+		seed?.(client);
+		const view = render(<Wrapper client={client}><SessionChatSurface session={target} /></Wrapper>);
+		await act(async () => {
+			await sideMocks.workspaceSend?.("go on", undefined, "held-1");
+		});
+		const whenReady = conversationCommandState.send.mock.calls[0]?.[1] as Promise<void> | undefined;
+		let released = false;
+		void whenReady?.then(() => { released = true; }, () => {});
+		await act(async () => {});
+		return { client, view, whenReady, released: () => released };
+	};
+
+	it("holds a message sent during the check until the check is over", async () => {
+		const { client, whenReady, released } = await sendDuringCheck(checking);
+		expect(whenReady).toBeInstanceOf(Promise);
+		expect(released()).toBe(false);
+		await act(async () => { listed(client, { ...session, statusReadiness: "ready" }); });
+		expect(released()).toBe(true);
+	});
+
+	it("keeps holding after the chat view goes away, until that session's check is over", async () => {
+		const { client, view, released } = await sendDuringCheck(checking);
+		view.unmount();
+		await act(async () => {});
+		expect(released()).toBe(false);
+		await act(async () => { listed(client, { ...session, statusReadiness: "ready" }); });
+		expect(released()).toBe(true);
+	});
+
+	it("waits for the resume when the check finds the agent exited", async () => {
+		const { client, released } = await sendDuringCheck(checking);
+		await act(async () => { listed(client, { ...session, statusReadiness: "ready", activity: { state: "exited", lastActivityAt: "2026-08-08T00:00:00Z" } }); });
+		expect(released()).toBe(false);
+		await act(async () => { listed(client, { ...session, statusReadiness: "ready", activity: { state: "idle", lastActivityAt: "2026-08-08T00:00:00Z" } }); });
+		expect(released()).toBe(true);
+	});
+
+	it("waits on the session's own lookup when the list has no row for it", async () => {
+		const { client, released } = await sendDuringCheck(checking, { ...session, id: "another" }, (seeded) => seeded.setQueryData(["session", session.id], checking));
+		expect(released()).toBe(false);
+		await act(async () => { client.setQueryData(["session", session.id], { ...session, statusReadiness: "ready" }); });
+		expect(released()).toBe(true);
+	});
+
+	it("hands the message back when a new chat takes over the session's id", async () => {
+		const held = { ...checking, createdAt: "2026-11-28T00:00:00Z" };
+		const { client, whenReady } = await sendDuringCheck(held);
+		const outcome = whenReady?.catch((error: unknown) => error);
+		await act(async () => { listed(client, { ...session, statusReadiness: "ready", createdAt: "2026-11-28T01:00:00Z" }); });
+		await expect(outcome).resolves.toMatchObject({ code: "SESSION_NOT_FOUND" });
+	});
+
+	it("hands the message back when the session is deleted during the check", async () => {
+		const { client, whenReady } = await sendDuringCheck(checking);
+		const outcome = whenReady?.catch((error: unknown) => error);
+		await act(async () => { client.setQueryData(["workspaces"], [{ id: session.workspaceId, sessions: [] }]); });
+		await expect(outcome).resolves.toMatchObject({ code: "SESSION_NOT_FOUND" });
+	});
+
+	it("hands the message back when the session's own lookup finds it gone while the list is failing", async () => {
+		const { client, whenReady } = await sendDuringCheck(checking, { ...session, id: "another" }, (seeded) => seeded.setQueryData(["session", session.id], checking));
+		const outcome = whenReady?.catch((error: unknown) => error);
+		await act(async () => {
+			await client.prefetchQuery({ queryKey: ["workspaces"], retry: false, queryFn: () => Promise.reject({ code: "PROJECTS_FAILED" }) });
+		});
+		expect(client.getQueryState(["workspaces"])?.status).toBe("error");
+		await act(async () => {
+			await client.prefetchQuery({ queryKey: ["session", session.id], retry: false, queryFn: () => Promise.reject({ code: "SESSION_NOT_FOUND" }) });
+		});
+		await expect(outcome).resolves.toMatchObject({ code: "SESSION_NOT_FOUND" });
+	});
+
+	it("sends at once when the check is already over", async () => {
+		const { released } = await sendDuringCheck(checking, { ...session, statusReadiness: "ready" });
+		expect(released()).toBe(true);
+	});
+
+	it("restores an archived chat instead of holding its message", async () => {
+		const { whenReady } = await sendDuringCheck({ ...session, isTerminated: true, statusReadiness: "checking" });
+		expect(whenReady).toBeUndefined();
+	});
+
+	it("hands /btw back during the check instead of sending it to the main chat", async () => {
+		await sendDuringCheck(checking);
+		conversationCommandState.send.mockClear();
+		sideMocks.create.mockReset();
+		await expect(sideMocks.workspaceSend!("/btw what is this?", undefined, "side-1")).rejects.toMatchObject({ code: "CHAT_SIDE_NOT_READY" });
+		expect(conversationCommandState.send).not.toHaveBeenCalled();
+		expect(sideMocks.create).not.toHaveBeenCalled();
+	});
+
+	it("holds Continue during the check", async () => {
+		await sendDuringCheck(checking);
+		conversationCommandState.send.mockClear();
+		await userEvent.click(screen.getByRole("button", { name: "Continue test turn" }));
+		expect(conversationCommandState.send).toHaveBeenCalledWith(expect.objectContaining({ continuation: true }), expect.any(Promise));
+	});
+
+	it.each(["BAD_PASSWORD", "DEVICE_REVOKED"])("hands the message back when the remote host refuses this device with %s", async (code) => {
+		vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+		try {
+			conversationState.snapshot = { ...snapshotFor(session.id), controller: { state: "stopped" } };
+			conversationCommandState.send = vi.fn().mockResolvedValue({});
+			const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+			let refused = false;
+			const read = vi.fn(async () => {
+				if (refused) throw { code, message: "This computer is no longer paired." };
+				return [{ id: session.workspaceId, sessions: [checking] }];
+			});
+			await client.prefetchQuery({ queryKey: ["remote-workspaces", "h_air"], queryFn: read });
+			render(<Wrapper client={client}><SessionChatSurface session={checking} hostId="h_air" /></Wrapper>);
+			await act(async () => {
+				await sideMocks.workspaceSend?.("go on", undefined, "held-1");
+			});
+			const outcome = (conversationCommandState.send.mock.calls[0]?.[1] as Promise<void>).catch((error: unknown) => error);
+			refused = true;
+			await act(async () => { vi.advanceTimersByTime(1_000); });
+			await expect(outcome).resolves.toMatchObject({ code: "CHAT_CONTROLLER_NOT_READY" });
+			await act(async () => { vi.advanceTimersByTime(5_000); });
+			expect(read).toHaveBeenCalledTimes(2);
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
+	it("refreshes a remote host's sessions only while its check runs", async () => {
+		vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+		try {
+			conversationState.snapshot = { ...snapshotFor(session.id), controller: { state: "stopped" } };
+			conversationCommandState.send = vi.fn().mockResolvedValue({});
+			const client = new QueryClient();
+			let readiness: WorkspaceSession["statusReadiness"] = "checking";
+			const read = vi.fn(async () => [{ id: session.workspaceId, sessions: [{ ...session, statusReadiness: readiness }] }]);
+			await client.prefetchQuery({ queryKey: ["remote-workspaces", "h_air"], queryFn: read });
+			render(<Wrapper client={client}><SessionChatSurface session={checking} hostId="h_air" /></Wrapper>);
+			await act(async () => {
+				await sideMocks.workspaceSend?.("go on", undefined, "held-1");
+			});
+			const whenReady = conversationCommandState.send.mock.calls[0]?.[1] as Promise<void>;
+			await act(async () => { vi.advanceTimersByTime(1_000); });
+			expect(read).toHaveBeenCalledTimes(2);
+			readiness = "ready";
+			await act(async () => {
+				vi.advanceTimersByTime(1_000);
+				await whenReady;
+			});
+			await act(async () => { vi.advanceTimersByTime(5_000); });
+			expect(read).toHaveBeenCalledTimes(3);
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+});
+
 describe("SessionChatSurface search reveal", () => {
 	it("forwards a search result's matched message to the timeline", async () => {
 		const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });

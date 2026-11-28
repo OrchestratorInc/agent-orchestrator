@@ -1,4 +1,5 @@
 import { apiErrorException } from "../../lib/api-error-exception";
+import { AoError } from "../../../../../packages/shared/telemetry/ao-error";
 import { SessionChatApprovalCard } from "../approvals/ApprovalHost";
 import { useSessionAccountSwitch } from "../SessionAccountSummary";
 import type { OpenFileAnnotation } from "../../../shared/chat-file-reference";
@@ -22,8 +23,10 @@ import { type SideChatsState, useSideChatsAvailable } from "../../lib/side-chats
 
 import { AlertTriangle, Loader2 } from "@/components/app-icons";
 import { memo, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { hashKey, type QueryClient, useQuery, useQueryClient } from "@tanstack/react-query";
+import { canResumeAgent } from "../../hooks/useCanResumeAgent";
 import { useLoopbackReach } from "../../hooks/useHostLoopback";
+import { workspaceQueryKeyForHost } from "../../hooks/useWorkspaceQuery";
 import { useChatPermissionModes } from "../../hooks/useChatPermissionModes";
 import { useChatMessageFocus, useChatNavigationRequest } from "../../hooks/useChatMessageFocus";
 import { useChatModelChoices } from "../../hooks/useChatModelChoices";
@@ -59,7 +62,7 @@ import type { Theme } from "../../stores/ui-store";
 import { activeTurn, can } from "../../types/conversation";
 import type { ConversationSnapshot, TurnSettings } from "../../types/conversation";
 import type { TerminalTarget } from "../../types/terminal";
-import { STANDALONE_WORKSPACE_ID, sessionIsActive, type WorkspaceSession } from "../../types/workspace";
+import { STANDALONE_WORKSPACE_ID, sessionIsActive, type WorkspaceSession, type WorkspaceSummary } from "../../types/workspace";
 import { ComposerErrorNotice, switchEffort, type PendingAgentSwitch } from "./AgentSwitchPicker";
 import { AGENT_SWITCH_FAILED } from "../../lib/composer-send-failure";
 import { SessionBackgroundTasks } from "../BackgroundTasks";
@@ -617,6 +620,10 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 		(renderShellFallback
 			? unavailableConversationSnapshot(session)
 			: undefined);
+	const startupHold = statusReadiness === "checking" && sessionIsActive(session) && renderSnapshot?.controller.state === "stopped";
+	const sendWhenReady = (input: Parameters<typeof commands.send>[0]) => startupHold
+		? commands.send(input, whenSessionRecovered(queryClient, session, hostId))
+		: commands.send(input);
 	// A held search match is applied to the conversation the daemon holds. An
 	// orchestrator with nothing cached, and a switch from the terminal, first
 	// render a placeholder under another conversation id. Find opened on that
@@ -805,6 +812,9 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 					// Only claim /btw where side chats can open. Elsewhere the
 					// text goes to the agent as typed (it may be the harness's own skill),
 					// so a failed side launch can never strand the main draft.
+					if (startupHold && sideEnabled && /^\/btw(?:\s+|$)/i.test(text)) {
+						throw new AoError("CHAT_SIDE_NOT_READY", "Side chats aren't ready yet. Try /btw again in a moment.");
+					}
 					const btw = sideCreationEnabled ? /^\/btw(?:\s+|$)/i.exec(text) : null;
      if (btw && fileReferences?.length) {
       throw Object.assign(new Error("File annotations cannot be sent to side chats yet. Send in the main chat or remove the file annotations."), { code: "CHAT_FILE_REFERENCES_SIDE_UNSUPPORTED" });
@@ -837,7 +847,7 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 					};
 					// A new message replaces an earlier switch's failure.
 					clearSwitchError();
-					if (!pendingSwitch) return commands.send(message);
+					if (!pendingSwitch) return sendWhenReady(message);
 					// The bar shows the mode the agent will start in only once its modes are known
 					// (Pi runs only with permissions bypassed); nothing goes before then.
 					if (!pendingPermissionModes) {
@@ -867,7 +877,7 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 					// The daemon switches and sends in one request, attachments included, so no other
 					// switch can take the message; it shows at once.
 					try {
-						const sent = await commands.send({ ...message, providerSwitch: switchRequest, switchDisplay });
+						const sent = await sendWhenReady({ ...message, providerSwitch: switchRequest, switchDisplay });
 						switched();
 						return sent;
 					} catch (error) {
@@ -905,7 +915,7 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 					if (continueIntent.current?.turnId !== turnId) {
 						continueIntent.current = { turnId, clientMessageId: crypto.randomUUID(), sequence: renderSnapshot.latestSequence };
 					}
-					return commands.send({
+					return sendWhenReady({
 						text: CONTINUE_STOPPED_TURN_PROMPT,
 						continuation: true,
 						clientMessageId: continueIntent.current.clientMessageId,
@@ -971,12 +981,12 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 				// harness that cannot steer. The refusal check stays as a backstop: it
 				// covers the window before the controller reports, and it is the last word
 				// afterwards, since the capability is a property of the driver.
-				onSteer={can(renderSnapshot, "steer") && !commands.steerUnsupported ? commands.steer : undefined}
+				onSteer={can(renderSnapshot, "steer") && !commands.steerUnsupported && !startupHold ? commands.steer : undefined}
 				sendPending={commands.sendPending}
 				steerPending={commands.steerPending}
 				steerRefusal={commands.steerRefusal}
 				onPromoteQueuedTurn={
-					can(renderSnapshot, "steer") && !commands.steerUnsupported
+					can(renderSnapshot, "steer") && !commands.steerUnsupported && !startupHold
 						? commands.promoteQueuedTurn
 						: undefined
 				}
@@ -992,6 +1002,73 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 		</>
 	);
 });
+
+const HOST_REFUSALS = new Set(["BAD_PASSWORD", "HOST_API_INCOMPATIBLE", "DEVICE_REVOKED", "DEVICE_CREDENTIAL_REQUIRED"]);
+
+function whenSessionRecovered(queryClient: QueryClient, held: WorkspaceSession, hostId?: string): Promise<void> {
+	const workspacesKey = workspaceQueryKeyForHost(hostId);
+	const directKey = ["session", held.id];
+	const resumeKey = ["resume-agent", hostId ?? "local", held.id];
+	let resumeSettled = false;
+	const listed = () => queryClient.getQueryData<WorkspaceSummary[]>(workspacesKey)
+		?.flatMap((workspace) => workspace.sessions).find((candidate) => candidate.id === held.id);
+	const cached = () => listed() ?? (hostId ? undefined : queryClient.getQueryData<WorkspaceSession>(directKey));
+	const gone = () => {
+		if (listed()) return false;
+		const direct = hostId ? undefined : queryClient.getQueryState(directKey);
+		if (apiErrorCode(direct?.error) === "SESSION_NOT_FOUND") return true;
+		return queryClient.getQueryState(workspacesKey)?.status === "success" && direct?.data === undefined;
+	};
+	const refusal = () => {
+		const hostError = hostId ? queryClient.getQueryState(workspacesKey)?.error : undefined;
+		if (HOST_REFUSALS.has(apiErrorCode(hostError) ?? "")) {
+			return new AoError("CHAT_CONTROLLER_NOT_READY", apiErrorMessage(hostError, "The host no longer accepts this computer, so the message was not sent."));
+		}
+		const session = cached();
+		return gone() || (session && session.createdAt !== held.createdAt)
+			? new AoError("SESSION_NOT_FOUND", "This chat no longer exists, so the message was not sent.")
+			: undefined;
+	};
+	const recovered = () => {
+		const session = cached();
+		return Boolean(session) && session?.statusReadiness !== "checking" && queryClient.isMutating({ mutationKey: resumeKey }) === 0 &&
+			(resumeSettled || !canResumeAgent(session));
+	};
+	return new Promise((resolve, reject) => {
+		const refusedAtOnce = refusal();
+		if (refusedAtOnce) return reject(refusedAtOnce);
+		if (recovered()) return resolve();
+		const poll = setInterval(() => {
+			if (hostId) void queryClient.refetchQueries({ queryKey: workspacesKey, exact: true }, { cancelRefetch: false });
+			else if (!listed()) void queryClient.refetchQueries({ queryKey: directKey, exact: true }, { cancelRefetch: false });
+		}, 1_000);
+		const stop = () => {
+			clearInterval(poll);
+			stopQueries();
+			stopMutations();
+		};
+		const settle = () => {
+			const refused = refusal();
+			if (refused) {
+				stop();
+				return reject(refused);
+			}
+			const session = cached();
+			if (session && session.statusReadiness !== "checking") clearInterval(poll);
+			if (!recovered()) return;
+			stop();
+			resolve();
+		};
+		const stopQueries = queryClient.getQueryCache().subscribe((event) => {
+			if (event.query.queryHash === hashKey(workspacesKey) || event.query.queryHash === hashKey(directKey)) settle();
+		});
+		const stopMutations = queryClient.getMutationCache().subscribe((event) => {
+			if (!event.mutation || hashKey(event.mutation.options.mutationKey ?? []) !== hashKey(resumeKey)) return;
+			if (event.mutation.state.status === "success" || event.mutation.state.status === "error") resumeSettled = true;
+			settle();
+		});
+	});
+}
 
 function unavailableConversationSnapshot(session: WorkspaceSession): ConversationSnapshot {
 	return {

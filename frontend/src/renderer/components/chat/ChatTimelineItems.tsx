@@ -1832,6 +1832,7 @@ export function LiveResponseStatus({ entranceKey, startedAt, startupLabel, faile
 function DeliveryNote({ state }: { state: DeliveryState }) {
 	const copy: Record<DeliveryState, string> = {
 		queued: "Queued — will send when the agent is idle",
+		held: "Sending when ready",
 		sending: "Sending…",
 		accepted: "Delivered",
 		uncertain: "Delivery uncertain — not retried automatically",
