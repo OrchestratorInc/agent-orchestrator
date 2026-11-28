@@ -49,3 +49,13 @@ export function artifactFindOwner(): HTMLElement | undefined {
 	return available.find((root) => root.contains(focused));
 }
 export function artifactOwnsFind(): boolean { return artifactFindOwner() !== undefined; }
+/**
+ * The artifact pane is using Find right now: its bar is open, or keyboard focus
+ * is inside one of its frames (where Ctrl/Cmd+F hands off to the host). Unlike
+ * ownership, merely having clicked the pane last does not count.
+ */
+export function artifactFindEngaged(): boolean {
+	const owner = artifactFindOwner();
+	if (!owner) return false;
+	return owner.querySelector("[role='search']") !== null || (document.activeElement instanceof HTMLIFrameElement && owner.contains(document.activeElement));
+}

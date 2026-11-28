@@ -619,6 +619,15 @@ describe("SessionArtifactsView", () => {
 		expect(screen.queryByRole("button", { name: "View source" })).not.toBeInTheDocument();
 	});
 
+	it("scopes Find to the viewer body, so its floating bar stays below the header", async () => {
+		renderView(<SessionArtifactsView session={session()} />);
+		await userEvent.click(screen.getByRole("button", { name: /^report\.html/ }));
+		const scope = document.querySelector<HTMLElement>("[data-artifact-find-scope]")!;
+		expect(scope).not.toBeNull();
+		expect(scope).toContainElement(document.querySelector("iframe"));
+		expect(scope).not.toContainElement(screen.getByRole("button", { name: "report.html" }));
+	});
+
 	it("offers feedback on a local HTML artifact shown as its page", async () => {
 		renderView(<SessionArtifactsView session={session()} />);
 		await userEvent.click(screen.getByRole("button", { name: /^report\.html/ }));

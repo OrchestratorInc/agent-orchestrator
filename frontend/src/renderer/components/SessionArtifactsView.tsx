@@ -1037,7 +1037,6 @@ export function SessionArtifactsView({
 		const commentsCover = showingComments && commentsShownFor === commentsSlug;
 		return (
 			<ArtifactViewerFrame fullscreen={fullscreen} label={selected.name} onEngagedChange={onViewerEngagedChange} onExitFullscreen={exitFullscreen} onKeyDown={onViewerKeyDown}>
-				<ArtifactFindScope identity={`${session.id}:${selected.path}:${previewVersion ?? "live"}:${showingHtmlSource}`} enabled={!cloud && !hostId}>
 				{/* One header row: back, the file's name menu (its view and file actions), an edit's Save, Share, and full screen. */}
 				<div className={cn("flex min-h-9 shrink-0 items-center gap-1 border-b border-border bg-background px-1", fullscreen && isMacPlatform() && FULLSCREEN_MAC_HEADER_CLASS)}>
 					<Button
@@ -1121,6 +1120,8 @@ export function SessionArtifactsView({
 					</div>
 				</div>
 				<div className="relative min-h-0 flex-1" ref={setContent}>
+					{/* Only the body: the floating Find bar then sits below the header's actions. */}
+					<ArtifactFindScope identity={`${session.id}:${selected.path}:${previewVersion ?? "live"}:${showingHtmlSource}`} enabled={!cloud && !hostId} className="relative h-full min-h-0 min-w-0">
 					{commentsCover ? null : cloud && !selected.rawUrl ? (
 						cloudAccess.isError ? (
 							<PanelMessage action={<RetryButton onClick={() => void cloudAccess.refetch()} />}>{t("artifacts.accessError")}</PanelMessage>
@@ -1184,8 +1185,8 @@ export function SessionArtifactsView({
 						</div>
 					) : null}
 					<ArtifactZoomControls controller={zoomController} />
+					</ArtifactFindScope>
 				</div>
-			</ArtifactFindScope>
 			</ArtifactViewerFrame>
 		);
 	}
