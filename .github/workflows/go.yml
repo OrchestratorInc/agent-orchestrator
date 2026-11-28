@@ -54,7 +54,84 @@ jobs:
           packages=$(go list ./... | grep -v -e '/internal/storage/sqlite$' -e '/internal/service/chat$' -e '/internal/session_manager$' -e '/internal/storage/sqlite/store$')
           selected=$(printf '%s\n' "$packages" | awk -v shard=${{ matrix.shard }} '((NR - 1) % 3) == shard')
           test -n "$selected"
-          printf '%s\n' "$selected" | xargs go test -race -count=1 -timeout=10m
+          printf '%s\n' "$selected" | xargs go test -race -count=1 -timeout=10m -coverprofile=coverage-${{ matrix.shard }}.out
+
+      - name: Upload coverage profile
+        if: always()
+        # Coverage is informational; a failed upload must not fail the shard.
+        continue-on-error: true
+        uses: actions/upload-artifact@v4
+        with:
+          name: go-coverage-${{ matrix.shard }}
+          path: backend/coverage-${{ matrix.shard }}.out
+          if-no-files-found: ignore
+          retention-days: 7
+
+  # Informational only: reports statement coverage of the backend-core shards
+  # in the run summary and never fails the build. The four packages in
+  # storage-race run from prebuilt binaries and are not included yet.
+  coverage:
+    needs: backend-core
+    if: always()
+    continue-on-error: true
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: ./.github/actions/setup-go-cached
+        with:
+          name: coverage
+
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: go-coverage-*
+          path: backend/coverage
+          merge-multiple: true
+
+      - name: Summarize coverage
+        run: |
+          shopt -s nullglob
+          profiles=(coverage/coverage-*.out)
+          if [ "${#profiles[@]}" -eq 0 ]; then
+            echo "No coverage profiles were uploaded." >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          # Each shard covers different packages, so the profiles concatenate
+          # under one mode header.
+          head -n 1 "${profiles[0]}" > coverage.out
+          for p in "${profiles[@]}"; do tail -n +2 "$p" >> coverage.out; done
+          go tool cover -func=coverage.out > coverage.txt
+          total=$(awk '/^total:/ {print $NF}' coverage.txt)
+          {
+            echo "## Go coverage (backend-core): $total"
+            echo
+            echo "${#profiles[@]} of 3 shards reported. Excludes the storage-race packages."
+            echo
+            echo "<details><summary>Lowest-covered packages</summary>"
+            echo
+            echo '| Package | Statement coverage |'
+            echo '| --- | --- |'
+            # Statement coverage per package from the profile's blocks
+            # (file:range statements count), lowest first.
+            awk 'NR > 1 { pkg = $1; sub(/\/[^\/]*$/, "", pkg); total[pkg] += $2; if ($3 > 0) covered[pkg] += $2 }
+              END { for (p in total) if (total[p] > 0) printf "%.1f %s\n", 100 * covered[p] / total[p], p }' coverage.out \
+              | sort -n | head -n 25 | awk '{ printf "| `%s` | %s%% |\n", $2, $1 }'
+            echo
+            echo "</details>"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: go-coverage
+          path: |
+            backend/coverage.out
+            backend/coverage.txt
+          if-no-files-found: ignore
+          retention-days: 14
 
   # These packages run their tests serially inside one test binary, for minutes
   # each, so this job splits each across processes to use the runner's cores.
@@ -150,7 +227,7 @@ jobs:
         run: go test -race -count=1 -run '^TestResolveBinaryForMajorAcceptsSlowShim$' ./internal/adapters/agent/opencode
 
       - name: Test Goose readiness and inventory
-        run: go test -race -count=1 -timeout=10m -run '^Test(FindInstalledBinary|WarmReadinessAndFindInstalled|PresslyGoose|Refresh|Probe|ReadinessCoordinator)' ./internal/service/agent
+        run: go test -race -count=1 -timeout=10m -run '^Test(FindInstalledBinary|PresslyGoose|Refresh|Probe|ReadinessCoordinator)' ./internal/service/agent
 
   lint:
     runs-on: ubuntu-latest
@@ -183,6 +260,13 @@ jobs:
       - name: Vet
         working-directory: backend
         run: go vet ./...
+
+      # go test passes with "[no tests to run]" when -run matches nothing, so a
+      # renamed test silently drops out of the targeted steps above. This
+      # fails when any alternative of a workflow's -run pattern matches no test.
+      - name: Check go test -run patterns still match tests
+        working-directory: backend
+        run: go run ./cmd/checkrunpatterns ../.github/workflows/*.yml
 
       - name: golangci-lint
         # v8 of the action drives golangci-lint v2 (the schema this config uses);
