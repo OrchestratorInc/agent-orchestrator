@@ -437,7 +437,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
 	// never on every poll tick. openRef tracks the current state; everConnectedRef
 	// tells a fresh launch apart from a later reconnect.
 	const openRef = useRef(false);
-	// The selected machine's last board, saved on the phone after polls and shown
+	// The selected machine's last board (and through useOtherHosts every other
+	// machine's), saved on the phone after polls and shown
 	// at launch until the first poll answers (see boardSnapshot). `publishedFor`
 	// names the machine a poll has already filled the board for: a saved board
 	// never replaces a live one.
@@ -530,7 +531,10 @@ export function AppProvider({ children }: { children: ReactNode }) {
 	// while backgrounded rather than rely on the OS suspending the JS timer
 	// whenever it feels like it.
 	const [appActive, setAppActive] = useState(() => shouldPoll(RNAppState.currentState));
-	const otherHosts = useOtherHosts(pairedHosts, selectedHostId, appActive);
+	// Every other machine's board is kept the same way as the selected one's, so
+	// a machine that is off at launch still shows its last rows.
+	const otherHostBoards = useMemo(() => ({ load: loadBoard, save: boardSaver.schedule }), [boardSaver]);
+	const otherHosts = useOtherHosts(pairedHosts, selectedHostId, appActive, otherHostBoards);
 	const reloadHostMetadata = useCallback(async () => {
 		const hosts = await loadHosts();
 		setPairedHosts((previous) => sameHostConnections(previous, hosts) ? previous : hosts);
