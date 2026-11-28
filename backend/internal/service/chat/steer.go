@@ -629,6 +629,17 @@ func (c *Controller) SteerOrSend(
 	}
 
 	if _, active := c.awaitAcknowledgedTurn(ctx); active {
+		// An agent that cannot take guidance mid-turn (Muse Code, and every
+		// agent without steering) gets the message as its next turn, queued
+		// behind the running one, rather than a refusal: the caller asked to
+		// steer or send. Checked first, so no steer refusal is recorded for it.
+		if _, canSteer := c.steerer(); !canSteer {
+			turn, err := c.sendLocked(ctx, msg, true, nil, nil)
+			if err != nil {
+				return SteerOrSendResult{}, err
+			}
+			return SteerOrSendResult{Turn: turn}, nil
+		}
 		steered, err := c.steerLocked(ctx, msg)
 		if err == nil {
 			return SteerOrSendResult{Steered: true, Steer: steered}, nil
