@@ -3,6 +3,7 @@ import {
 	createContext,
 	useCallback,
 	useContext,
+	useEffect,
 	useLayoutEffect,
 	useMemo,
 	useRef,
@@ -17,9 +18,10 @@ import { cn } from "../../lib/utils";
 /**
  * A card closes the moment what it describes is acted on or goes away: its
  * trigger is clicked, a link on it is followed, the route changes, the window
- * loses focus, or the trigger stops being laid out (a chat kept alive in a
- * hidden <Activity>, display: none, or removed). Without a laid-out trigger,
- * Floating UI would place the card at the window's top-left corner.
+ * loses focus, the page or a container holding the trigger scrolls, or the
+ * trigger stops being laid out (a chat kept alive in a hidden <Activity>,
+ * display: none, or removed). Without a laid-out trigger, Floating UI would
+ * place the card at the window's top-left corner.
  */
 type HoverCardDismiss = {
 	/** Closes the card if it is open. */
@@ -82,8 +84,12 @@ function HoverCard({
 	open: openProp,
 	defaultOpen = false,
 	onOpenChange,
+	dismissOnScroll = true,
 	...props
-}: ComponentProps<typeof HoverCardPrimitive.Root>) {
+}: ComponentProps<typeof HoverCardPrimitive.Root> & {
+	/** False for an owner that follows scrolling itself, such as the sidebar's preview. */
+	dismissOnScroll?: boolean;
+}) {
 	const controlled = openProp !== undefined;
 	const [uncontrolledOpen, setUncontrolledOpen] = useState(defaultOpen);
 	const open = controlled ? openProp : uncontrolledOpen;
@@ -127,6 +133,27 @@ function HoverCard({
 			openCards.delete(dismiss);
 		};
 	}, [dismiss, open]);
+	// Radix closes a card only on pointer leave, and a scroll moves the trigger
+	// out from under a pointer that stays put: in a chat that auto-scrolls while
+	// it streams, the card never got a leave event and stayed open over the
+	// timeline. Only a scroll that can move the trigger closes it: the page, or a
+	// container the trigger sits in, including another card's content holding a
+	// nested trigger. The card's own content is portaled away from its trigger,
+	// so scrolling it, or another pane, keeps the card open.
+	useEffect(() => {
+		if (!open || !dismissOnScroll) return;
+		const onScroll = (event: Event) => {
+			const target = event.target;
+			const trigger = triggerRef.current;
+			const movesTrigger =
+				target === window ||
+				target === document ||
+				(target instanceof Node && trigger !== null && target.contains(trigger));
+			if (movesTrigger) close();
+		};
+		window.addEventListener("scroll", onScroll, { capture: true, passive: true });
+		return () => window.removeEventListener("scroll", onScroll, { capture: true });
+	}, [close, dismissOnScroll, open]);
 	const context = useMemo(() => ({ dismiss, close, allowReopen, trigger: triggerRef }), [allowReopen, close, dismiss]);
 	return (
 		<HoverCardDismissContext.Provider value={context}>

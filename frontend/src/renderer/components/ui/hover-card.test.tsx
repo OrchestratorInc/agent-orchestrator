@@ -1,5 +1,5 @@
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
-import { Activity, type ReactNode } from "react";
+import { Activity, type ReactNode, useState } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { HoverCard, HoverCardContent, HoverCardTrigger, dismissHoverCards } from "./hover-card";
 
@@ -157,5 +157,106 @@ describe("HoverCard dismissal", () => {
 			expect(screen.queryByText("Session card")).not.toBeInTheDocument();
 			expect(screen.queryByText("PR card")).not.toBeInTheDocument();
 		});
+	});
+});
+
+function Timeline({ defaultOpen = true, onOpenChange }: { defaultOpen?: boolean; onOpenChange?: (open: boolean) => void }) {
+	return (
+		<div data-testid="timeline" style={{ overflow: "auto", height: 100 }}>
+			<HoverCard defaultOpen={defaultOpen} onOpenChange={onOpenChange}>
+				<HoverCardTrigger>trigger</HoverCardTrigger>
+				<HoverCardContent>
+					<div data-testid="card-body" style={{ overflow: "auto", height: 40 }}>
+						preview
+					</div>
+				</HoverCardContent>
+			</HoverCard>
+		</div>
+	);
+}
+
+describe("HoverCard scroll dismissal", () => {
+	// https://github.com/OrchestratorInc/agent-orchestrator/issues/7694
+	it("closes when the content around it scrolls, as a streaming chat does", () => {
+		const onOpenChange = vi.fn();
+		render(<Timeline onOpenChange={onOpenChange} />);
+		expect(screen.getByText("preview")).toBeInTheDocument();
+		fireEvent.scroll(screen.getByTestId("timeline"));
+		expect(screen.queryByText("preview")).not.toBeInTheDocument();
+		expect(onOpenChange).toHaveBeenCalledWith(false);
+	});
+
+	it("closes when the window itself scrolls", () => {
+		render(<Timeline />);
+		fireEvent.scroll(window);
+		expect(screen.queryByText("preview")).not.toBeInTheDocument();
+	});
+
+	it("stays open while the card's own content scrolls", () => {
+		render(<Timeline />);
+		fireEvent.scroll(screen.getByTestId("card-body"));
+		expect(screen.getByText("preview")).toBeInTheDocument();
+	});
+
+	it("stays open while a container the trigger is not in scrolls", () => {
+		render(
+			<>
+				<Timeline />
+				<div data-testid="other-pane" style={{ overflow: "auto", height: 100 }} />
+			</>,
+		);
+		fireEvent.scroll(screen.getByTestId("other-pane"));
+		expect(screen.getByText("preview")).toBeInTheDocument();
+	});
+
+	it("closes a nested card when the outer card's content scrolls its trigger", () => {
+		render(
+			<HoverCard defaultOpen>
+				<HoverCardTrigger>outer trigger</HoverCardTrigger>
+				<HoverCardContent>
+					outer preview
+					<div data-testid="outer-body" style={{ overflow: "auto", height: 40 }}>
+						<HoverCard defaultOpen>
+							<HoverCardTrigger>inner trigger</HoverCardTrigger>
+							<HoverCardContent>inner preview</HoverCardContent>
+						</HoverCard>
+					</div>
+				</HoverCardContent>
+			</HoverCard>,
+		);
+		fireEvent.scroll(screen.getByTestId("outer-body"));
+		expect(screen.queryByText("inner preview")).not.toBeInTheDocument();
+		expect(screen.getByText("outer preview")).toBeInTheDocument();
+	});
+
+	it("leaves scrolling to an owner that opts out", () => {
+		render(
+			<div data-testid="timeline" style={{ overflow: "auto", height: 100 }}>
+				<HoverCard defaultOpen dismissOnScroll={false}>
+					<HoverCardTrigger>trigger</HoverCardTrigger>
+					<HoverCardContent>preview</HoverCardContent>
+				</HoverCard>
+			</div>,
+		);
+		fireEvent.scroll(screen.getByTestId("timeline"));
+		fireEvent.scroll(window);
+		expect(screen.getByText("preview")).toBeInTheDocument();
+	});
+
+	it("asks a controlled owner to close and leaves the state to it", () => {
+		function Controlled() {
+			const [open, setOpen] = useState(true);
+			return (
+				<div data-testid="timeline" style={{ overflow: "auto", height: 100 }}>
+					<HoverCard open={open} onOpenChange={setOpen}>
+						<HoverCardTrigger>trigger</HoverCardTrigger>
+						<HoverCardContent>preview</HoverCardContent>
+					</HoverCard>
+				</div>
+			);
+		}
+		render(<Controlled />);
+		fireEvent.scroll(screen.getByTestId("timeline"));
+		expect(screen.queryByText("preview")).not.toBeInTheDocument();
 	});
 });

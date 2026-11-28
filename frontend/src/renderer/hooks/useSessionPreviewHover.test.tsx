@@ -1,5 +1,6 @@
 import { act, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { HoverCard, HoverCardContent, HoverCardTrigger } from "../components/ui/hover-card";
 import { inTriangle, resetSessionPreviewWarmth, safeTriangle, useSessionPreviewHover } from "./useSessionPreviewHover";
 
 // Rows sit at x 0..180; the open card sits to their right at x 200..400.
@@ -142,6 +143,45 @@ describe("useSessionPreviewHover safe triangle", () => {
 		expect(screen.getByTestId("card-a")).toBeInTheDocument();
 		wait(100);
 		expect(screen.queryByTestId("card-a")).not.toBeInTheDocument();
+	});
+
+	it("hands the card to the row a still pointer rests on while the list scrolls", () => {
+		// The rows as the sidebar renders them, inside the shared HoverCard.
+		function CardRow({ id }: { id: string }) {
+			const preview = useSessionPreviewHover(false);
+			return (
+				<HoverCard closeDelay={0} dismissOnScroll={false} onOpenChange={(open) => !open && preview.hide()} open={preview.open} openDelay={0}>
+					<HoverCardTrigger asChild>
+						<div data-testid={`row-${id}`} ref={preview.rowRef} {...preview.triggerProps} />
+					</HoverCardTrigger>
+					<HoverCardContent data-testid={`card-${id}`} {...preview.contentProps} />
+				</HoverCard>
+			);
+		}
+		render(
+			<div data-testid="list" style={{ overflow: "auto", height: 100 }}>
+				<CardRow id="a" />
+				<CardRow id="b" />
+			</div>,
+		);
+		fireEvent.pointerEnter(screen.getByTestId("row-a"), { clientX: 100, clientY: 40 });
+		move(100, 40);
+		wait(200);
+		expect(screen.getByTestId("card-a")).toBeInTheDocument();
+
+		// The list scrolls row b under the pointer, over several scroll events of one gesture.
+		const rowB = screen.getByTestId("row-b");
+		Object.defineProperty(document, "elementFromPoint", { configurable: true, value: () => rowB });
+		try {
+			fireEvent.scroll(screen.getByTestId("list"));
+			fireEvent.scroll(screen.getByTestId("list"));
+			fireEvent.scroll(screen.getByTestId("list"));
+			wait(100);
+			expect(screen.queryByTestId("card-a")).not.toBeInTheDocument();
+			expect(screen.getByTestId("card-b")).toBeInTheDocument();
+		} finally {
+			delete (document as Partial<Document>).elementFromPoint;
+		}
 	});
 
 	it("keeps the card when the pointer comes back to its row", () => {
