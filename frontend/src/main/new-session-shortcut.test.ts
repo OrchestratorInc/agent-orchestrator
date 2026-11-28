@@ -390,18 +390,25 @@ describe("attachAppShortcuts", () => {
 		}
 	});
 
-	it("honors a genuinely new chord for a terminal-yielding command (issue #8420)", () => {
+	it("leaves a custom bare chord of a terminal-yielding command to the terminal, but forwards its Shift form (issue #8420)", () => {
 		const source = fakeSource();
 		const target = fakeTarget();
 		attachAppShortcuts(
 			source, false, target, false,
-			() => ({ "command-palette": [{ key: "j", ctrl: true, meta: false, shift: false, alt: false }] }),
+			() => ({ "command-palette": [
+				{ key: "j", ctrl: true, meta: false, shift: false, alt: false },
+				{ key: "j", ctrl: true, meta: false, shift: true, alt: false },
+			] }),
 			() => false, () => true, undefined, () => true,
 		);
 
-		const bound = source.emit({ key: "j", control: true });
+		const bare = source.emit({ key: "j", control: true });
+		expect(bare.preventDefault).not.toHaveBeenCalled();
+		expect(target.send).not.toHaveBeenCalled();
+
+		const shifted = source.emit({ key: "J", control: true, shift: true });
 		expect(target.send).toHaveBeenCalledExactlyOnceWith(APP_SHORTCUT_CHANNEL, { id: "command-palette" });
-		expect(bound.preventDefault).toHaveBeenCalledOnce();
+		expect(shifted.preventDefault).toHaveBeenCalledOnce();
 	});
 
 	it.each([
