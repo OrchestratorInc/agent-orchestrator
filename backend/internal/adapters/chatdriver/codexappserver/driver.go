@@ -716,7 +716,7 @@ func (d *Driver) connectSession(
 		DataDir:       dataDir,
 		Workdir:       workdir,
 		Env:           envSlice(env),
-		Argv:          []string{bin, "app-server"},
+		Argv:          append([]string{bin}, appServerArgs(env)...),
 	}
 	if prepareEnv != nil {
 		hostConfig.Prepare = func(prepareCtx context.Context) (persistenthost.PreparedProvider, error) {
@@ -725,7 +725,7 @@ func (d *Driver) connectSession(
 				return persistenthost.PreparedProvider{}, prepareErr
 			}
 			return persistenthost.PreparedProvider{
-				Env: envSlice(preparedEnv), Argv: []string{bin, "app-server"},
+				Env: envSlice(preparedEnv), Argv: append([]string{bin}, appServerArgs(preparedEnv)...),
 			}, nil
 		}
 	}
@@ -864,9 +864,26 @@ func launchApprovalSettings(mode ports.PermissionMode, readOnly bool) (policy, s
 	return policy, sandbox, approvalReviewer(mode)
 }
 
+// appServerArgs are the arguments that start `codex app-server` for env,
+// including the overrides for a custom endpoint the env carries.
+func appServerArgs(env map[string]string) []string {
+	return append(codexagent.EndpointArgs(env), "app-server")
+}
+
+// envFromSlice reads a KEY=VALUE environment list back into a map.
+func envFromSlice(env []string) map[string]string {
+	out := make(map[string]string, len(env))
+	for _, entry := range env {
+		if key, value, ok := strings.Cut(entry, "="); ok {
+			out[key] = value
+		}
+	}
+	return out
+}
+
 // spawnAppServer is the real launcher.
 func spawnAppServer(ctx context.Context, bin, workdir string, env []string) (*process, error) {
-	args := []string{"app-server"}
+	args := appServerArgs(envFromSlice(env))
 	cmd := aoprocess.Command(bin, args...)
 	cmd.Dir = workdir
 	if len(env) > 0 {

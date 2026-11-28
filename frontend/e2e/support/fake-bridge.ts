@@ -276,6 +276,7 @@ export async function installFakeBridge(page: Page, opts: FakeBridgeOptions = {}
 					setAnalyticsOptOut: async (optedOut: boolean) => optedOut,
 					onAnalyticsOptOut: () => () => undefined,
 					setCloudUser: async () => false,
+					setPlan: async () => false,
 					getGithubLogin: async () => null,
 					getLifetimeSessions: async () => null,
 					takeLaunchStart: async () => null,
@@ -510,6 +511,7 @@ export async function installFakeBridge(page: Page, opts: FakeBridgeOptions = {}
 					resolvePreviewUrl: async (_hostId: string, _sessionId: string, viewedUrl: string) => viewedUrl,
 					agentBrowserUrl: async () => "",
 					externalUrl: async (_hostId: string, url: string) => url,
+					loopbackReach: async () => false,
 					hostUpdate: async () => null,
 					checkHostUpdate: async (url: string) => {
 						throw new Error(`No fake remote for ${url}`);
@@ -1325,6 +1327,7 @@ export async function installFakeAgent(page: Page, opts: FakeAgentOptions = {}):
 					setAnalyticsOptOut: async (optedOut: boolean) => optedOut,
 					onAnalyticsOptOut: () => () => undefined,
 					setCloudUser: async () => false,
+					setPlan: async () => false,
 					getGithubLogin: async () => null,
 					getLifetimeSessions: async () => null,
 					takeLaunchStart: async () => null,
@@ -1547,6 +1550,7 @@ export async function installFakeAgent(page: Page, opts: FakeAgentOptions = {}):
 					resolvePreviewUrl: async (_hostId: string, _sessionId: string, viewedUrl: string) => viewedUrl,
 					agentBrowserUrl: async () => "",
 					externalUrl: async (_hostId: string, url: string) => url,
+					loopbackReach: async () => false,
 					hostUpdate: async () => null,
 					checkHostUpdate: async (url: string) => {
 						throw new Error(`No fake remote for ${url}`);

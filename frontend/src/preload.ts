@@ -51,6 +51,7 @@ import type {
 	OpenSessionTargetResult,
 } from "./shared/editor-handoff";
 import type { TelemetryBootstrap } from "./shared/telemetry";
+import type { CloudPlan } from "./shared/cloud-plan";
 import type { LaunchSteps, LaunchTimingStart, ResourceSummary } from "./shared/performance-telemetry";
 import {
 	TELEMETRY_CLEAR_RENDERER_QUEUES_CHANNEL,
@@ -152,6 +153,7 @@ export type BrowserBoundsApplied = BrowserBoundsInput;
 export type BrowserNavigateInput = {
 	viewId: string;
 	url: string;
+	preview?: boolean;
 };
 
 export type ImportFolderMode = "project" | "workspace";
@@ -689,6 +691,7 @@ const api = {
 			};
 		},
 		setCloudUser: (userId: string | null) => ipcRenderer.invoke("telemetry:setCloudUser", userId) as Promise<boolean | "unsupported">,
+		setPlan: (plan: CloudPlan) => ipcRenderer.invoke("telemetry:setPlan", plan) as Promise<boolean>,
 		getGithubLogin: () => ipcRenderer.invoke("telemetry:getGithubLogin") as Promise<string | null>,
 		getLifetimeSessions: () => ipcRenderer.invoke("telemetry:getLifetimeSessions") as Promise<number | null>,
 		takeLaunchStart: () => ipcRenderer.invoke("telemetry:takeLaunchStart") as Promise<LaunchTimingStart | null>,
@@ -769,7 +772,7 @@ const api = {
 			ipcRenderer.invoke("browser:closeTab", input) as Promise<BrowserTabsState>,
 		muteTab: (input: { viewId: string; tabId: string; muted: boolean }) =>
 			ipcRenderer.invoke("browser:muteTab", input) as Promise<BrowserTabsState>,
-		openTab: (input: { viewId: string; url?: string }) =>
+		openTab: (input: { viewId: string; url?: string; preview?: boolean }) =>
 			ipcRenderer.invoke("browser:openTab", input) as Promise<BrowserTabsState>,
 		getProfile: (viewId: string) =>
 			ipcRenderer.invoke("browser:profile:get", viewId) as Promise<BrowserProfileViewState>,
@@ -1110,6 +1113,7 @@ const api = {
 		// A preview's address for a browser outside AO; any other URL unchanged.
 		externalUrl: (hostId: string, url: string) =>
 			ipcRenderer.invoke("remotes:externalUrl", hostId, url) as Promise<string>,
+		loopbackReach: (hostId: string) => ipcRenderer.invoke("remotes:loopbackReach", hostId) as Promise<boolean>,
 	},
 	cloud: {
 		getSession: () => ipcRenderer.invoke("cloud:getSession") as Promise<CloudAccount | null>,

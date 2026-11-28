@@ -20,6 +20,12 @@ type ResizeHandleProps = React.HTMLAttributes<HTMLDivElement> & {
 	edge?: () => Element | null;
 	/** The panel's visible top and bottom, when they differ from `edge`'s box (a top bar over it). */
 	span?: () => Pick<DOMRect, "top" | "bottom"> | null;
+	/**
+	 * Where the line's center goes, in viewport x, when the boundary is not a
+	 * border, such as the middle of a gap between two panels. Wins over `edge`'s
+	 * border; return null to fall back to it.
+	 */
+	lineCenter?: () => number | null;
 };
 
 /** A panel's border is a 1px hairline. */
@@ -53,7 +59,7 @@ export function resizeLineSpan(handle: Pick<DOMRect, "top" | "bottom">, edge: Pi
 	};
 }
 
-export function ResizeHandle({ className, side, edge, span: panelSpan, onPointerEnter, ...props }: ResizeHandleProps) {
+export function ResizeHandle({ className, side, edge, span: panelSpan, lineCenter, onPointerEnter, ...props }: ResizeHandleProps) {
 	const lineRef = useRef<HTMLSpanElement>(null);
 	return (
 		<div
@@ -74,7 +80,8 @@ export function ResizeHandle({ className, side, edge, span: panelSpan, onPointer
 					const handle = event.currentTarget.getBoundingClientRect();
 					const panel = target.getBoundingClientRect();
 					const span = resizeLineSpan(handle, panelSpan?.() ?? panel);
-					line.style.left = `${resizeLineLeft(handle, panel)}px`;
+					const center = lineCenter?.();
+					line.style.left = `${center == null ? resizeLineLeft(handle, panel) : center - RESIZE_LINE_WIDTH_PX / 2 - handle.left}px`;
 					line.style.top = `${span.top}px`;
 					line.style.bottom = `${span.bottom}px`;
 				}

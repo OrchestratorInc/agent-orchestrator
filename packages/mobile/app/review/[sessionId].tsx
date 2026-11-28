@@ -5,6 +5,7 @@ import { Alert, Pressable, RefreshControl, ScrollView, StyleSheet, Text, View } 
 import { buildReviewBlocks } from "../../../shared/review/review-comments";
 import { AoError } from "../../../shared/telemetry/ao-error";
 import { sessionTitle, type DashboardSession, type SessionPRSummary, type SessionReviews } from "../../lib/api";
+import { AoError } from "../../../shared/telemetry/ao-error";
 import { RECONNECTING_ACTION_COPY, userFacingError } from "../../lib/connectionError";
 import { AppSymbol } from "../../lib/AppSymbol";
 import { haptics } from "../../lib/haptics";

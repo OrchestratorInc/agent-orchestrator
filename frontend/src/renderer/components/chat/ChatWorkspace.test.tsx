@@ -2456,6 +2456,44 @@ describe("ChatWorkspace timeline", () => {
 		selection.removeAllRanges();
 	});
 
+	it("adds text selected in a rendered page, only from the frame the reader is using, and the chip leads back to it", () => {
+		const snapshot = structuredClone(chatFixtureSettled);
+		const at = snapshot.items.findIndex((item) => item.id === "a-4");
+		snapshot.items[at] = {
+			kind: "activity", id: "page-1", turnId: "turn-1", sequence: 6, revision: 3, activityKind: "system", status: "completed",
+			summary: "Webhook flow", createdAt: snapshot.items[at]!.createdAt,
+			detail: { event: "render", render: { id: "r1", title: "Webhook flow", height: 300, path: "/api/v1/sessions/proj-1/renders/r1" } },
+		} as ConversationActivity;
+		render(<ChatWorkspace snapshot={snapshot} excerptsEnabled />);
+		const frame = screen.getByTitle("Webhook flow") as HTMLIFrameElement;
+		const box = { left: 10, top: 10, width: 80, height: 20 };
+		const select = (text: string, source: Window | null = frame.contentWindow) => act(() => {
+			window.dispatchEvent(new MessageEvent("message", { source, data: { jsonrpc: "2.0", method: "ao/selection", params: text ? { text, first: box, extent: box } : { text } } }));
+		});
+		const selected = "Are fewer than 20 calls already waiting?";
+		select(selected);
+		expect(screen.queryByRole("button", { name: "Add to chat" })).not.toBeInTheDocument();
+		act(() => frame.focus());
+		select(selected, window);
+		expect(screen.queryByRole("button", { name: "Add to chat" })).not.toBeInTheDocument();
+		select(selected);
+		expect(screen.getByRole("button", { name: "Add to chat" })).toBeInTheDocument();
+		select("");
+		expect(screen.queryByRole("button", { name: "Add to chat" })).not.toBeInTheDocument();
+		select(selected);
+		fireEvent.click(screen.getByRole("button", { name: "Add to chat" }));
+		expect(screen.queryByRole("button", { name: "Add to chat" })).not.toBeInTheDocument();
+		fireEvent.click(screen.getByRole("button", { name: "1 annotation" }));
+		const row = frame.closest<HTMLElement>("[data-chat-activity-id]")!;
+		expect(row.dataset.chatActivityId).toBe("page-1");
+		const reveal = vi.spyOn(row, "scrollIntoView");
+		vi.spyOn(row, "getBoundingClientRect").mockReturnValue(new DOMRect(0, 900, 600, 300));
+		vi.spyOn(screen.getByRole("log", { name: "Conversation" }), "getBoundingClientRect").mockReturnValue(new DOMRect(0, 0, 600, 500));
+		vi.spyOn(window, "requestAnimationFrame").mockImplementation((callback) => { callback(0); return 0; });
+		fireEvent.click(screen.getByRole("button", { name: selected }));
+		expect(reveal).toHaveBeenCalled();
+	});
+
 	it.each(["Win32", "Linux x86_64", "MacIntel"])("adds selected chat text with the platform shortcut on %s", (platform) => {
 		vi.mocked(isMacPlatform).mockReturnValue(platform === "MacIntel");
 		const count = () => readChatSessionDraft(chatFixtureSettled.sessionId).composer.excerpts?.length ?? 0;
@@ -3937,14 +3975,14 @@ describe("ChatWorkspace timeline", () => {
 		expect(screen.getByLabelText("Message the agent").closest("form")).toHaveAttribute("data-starting", "true");
 		expect(screen.queryByTestId("orchestrator-startup-status")).not.toBeInTheDocument();
 		expect(screen.queryByTestId("session-startup")).not.toBeInTheDocument();
-		expect(screen.getByText("What do you want to work on?")).toBeInTheDocument();
+		expect(screen.getByText("What should your agents work on?")).toBeInTheDocument();
 		const composer = screen.getByLabelText("Message the agent");
 		expect(screen.getByText("Starting your orchestrator")).toBeInTheDocument();
 		expect(screen.getByRole("button", { name: "Send message" })).toBeDisabled();
 		view.rerender(<ChatWorkspace sessionRole="orchestrator" snapshot={chatFixtureEmpty} session={{ ...chatSession, kind: "orchestrator", provisionState: "ready" }} />);
 		expect(screen.getByLabelText("Message the agent")).toBe(composer);
 		expect(composer.closest("form")).not.toHaveAttribute("data-starting");
-		expect(await screen.findByText("Ask anything, / for skills, @ for context")).toBeInTheDocument();
+		expect(await screen.findByText("Describe a task, or several at once")).toBeInTheDocument();
 	});
 
 	it("shimmers the composer and queues messages while a Freestyle Chat session starts or wakes", () => {
@@ -4052,17 +4090,29 @@ describe("ChatWorkspace timeline", () => {
 		await waitFor(() => expect(screen.queryByRole("list", { name: "Sample requests" })).not.toBeInTheDocument());
 	});
 
-	it("keeps the sample requests on screen but disabled while the orchestrator starts", () => {
+	it("keeps the sample tasks on screen but disabled while the orchestrator starts", () => {
 		const view = render(<ChatWorkspace sessionRole="orchestrator" snapshot={{ ...chatFixtureEmpty, controller: { state: "connecting" } }} newWorkDisabled />);
 
-		const prompts = within(screen.getByRole("list", { name: "Sample requests" })).getAllByRole("button");
-		expect(prompts).toHaveLength(4);
+		const prompts = within(screen.getByRole("list", { name: "Sample tasks" })).getAllByRole("button");
+		expect(prompts).toHaveLength(3);
 		for (const prompt of prompts) expect(prompt).toBeDisabled();
 		view.unmount();
 
 		// Other fenced chats (an unreachable host, leaving for the terminal) keep them hidden.
 		render(<ChatWorkspace snapshot={chatFixtureEmpty} newWorkDisabled />);
 		expect(screen.queryByRole("list", { name: "Sample requests" })).not.toBeInTheDocument();
+	});
+
+	it("asks an empty orchestrator chat for work in orchestration terms, with tasks that start workers", async () => {
+		const user = userEvent.setup();
+		render(<ChatWorkspace sessionRole="orchestrator" snapshot={chatFixtureEmpty} session={{ ...chatSession, kind: "orchestrator" }} />);
+
+		expect(screen.getByRole("heading", { name: "What should your agents work on?" })).toBeInTheDocument();
+		expect(screen.queryByRole("list", { name: "Sample requests" })).not.toBeInTheDocument();
+		const tasks = within(screen.getByRole("list", { name: "Sample tasks" })).getAllByRole("button");
+		expect(tasks.map((task) => task.textContent)).toEqual(["Refine", "Fix a bug", "Add tests"]);
+		await user.click(tasks[0]!);
+		await waitFor(() => expect(screen.getByLabelText("Message the agent")).toHaveTextContent("Find three rough spots in this project worth refining, then start a worker on each one."));
 	});
 
 	it("offers sample artifact requests to artifact sessions outside Scratchpad too", () => {
@@ -4154,7 +4204,7 @@ describe("ChatWorkspace timeline", () => {
 		);
 		expect(screen.getByRole("alert")).toHaveTextContent("Session setup failed");
 		expect(screen.getByTestId("orchestrator-startup-status")).toHaveTextContent("branch already checked out in another worktree");
-		expect(screen.getByText("What do you want to work on?")).toBeInTheDocument();
+		expect(screen.getByText("What should your agents work on?")).toBeInTheDocument();
 		await user.click(screen.getByRole("button", { name: "Retry start" }));
 		expect(resume).toHaveBeenCalledOnce();
 	});
@@ -5040,7 +5090,7 @@ describe("ChatWorkspace timeline", () => {
 
 	it("hangs the welcome heading and sample prompts from the composer so they never move it", () => {
 		render(<ChatWorkspace snapshot={chatFixtureEmpty} />);
-		const composerBox = screen.getByLabelText("Message the agent").closest("[data-tour='composer']");
+		const composerBox = screen.getByLabelText("Message the agent").closest("[data-chat-composer-box]");
 		expect(composerBox).not.toBeNull();
 		expect(composerBox).toContainElement(screen.getByRole("heading", { name: "What do you want to work on?" }));
 		expect(composerBox).toContainElement(screen.getByRole("list", { name: "Sample requests" }));

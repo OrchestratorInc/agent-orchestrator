@@ -428,4 +428,8 @@ export function registerRemotesIpc(
 		if (await accountID() !== account) throw new ExpectedIpcError("Account changed during remote connection.");
 		return registry.externalUrl(hostId, url);
 	});
+	ipcMain.handle("remotes:loopbackReach", async (_event, hostId: string) => {
+		await requireAccount();
+		return registry.loopbackReach(hostId);
+	});
 }

@@ -121,6 +121,7 @@ const OpenChatLink = createContext<{
 	open?: (url: string) => void;
 	openFile?: (path: string, line?: number) => void;
 	remoteHost?: boolean;
+	hostLocalLinks?: boolean;
 	sessionLinkHostId?: string;
 	sessionLinkSourceKind?: "cloud";
 	openSession?: (url: string) => void;
@@ -155,6 +156,7 @@ export function ChatLinkProvider({
 	onLinkOpen,
 	onFileOpen,
 	remoteHost,
+	hostLocalLinks,
 	sessionLinkHostId,
 	sessionLinkSourceKind,
 	onSessionLinkOpen,
@@ -165,6 +167,7 @@ export function ChatLinkProvider({
 	onLinkOpen?: (url: string) => void;
 	onFileOpen?: (path: string, line?: number) => void;
 	remoteHost?: boolean;
+	hostLocalLinks?: boolean;
 	sessionLinkHostId?: string;
 	sessionLinkSourceKind?: "cloud";
 	onSessionLinkOpen?: (url: string) => void;
@@ -179,8 +182,8 @@ export function ChatLinkProvider({
 	const canOpenFile = Boolean(onFileOpen);
 	const canOpenSession = Boolean(onSessionLinkOpen);
 	const value = useMemo(
-		() => ({ sessionId, open: canOpenLink ? openLink : undefined, openFile: canOpenFile ? openFile : undefined, openSession: canOpenSession ? openSession : undefined, remoteHost, sessionLinkHostId, sessionLinkSourceKind, workspacePaths, findFile }),
-		[sessionId, canOpenLink, canOpenFile, canOpenSession, openLink, openFile, openSession, remoteHost, sessionLinkHostId, sessionLinkSourceKind, workspacePaths, findFile],
+		() => ({ sessionId, open: canOpenLink ? openLink : undefined, openFile: canOpenFile ? openFile : undefined, openSession: canOpenSession ? openSession : undefined, remoteHost, hostLocalLinks, sessionLinkHostId, sessionLinkSourceKind, workspacePaths, findFile }),
+		[sessionId, canOpenLink, canOpenFile, canOpenSession, openLink, openFile, openSession, remoteHost, hostLocalLinks, sessionLinkHostId, sessionLinkSourceKind, workspacePaths, findFile],
 	);
 	const pathMenuValue = useMemo(
 		() => ({ sessionId, remote: Boolean(remoteHost || sessionLinkHostId || sessionLinkSourceKind === "cloud") }),
@@ -561,7 +564,7 @@ function InlineLinkFavicon({ href }: { href: string }) {
 
 function MarkdownLinkTarget({ href, children, className, menuPath, node, labelText, preview }: MarkdownLinkProps) {
 	const safeOriginContent = useContext(SafeOriginContent);
-	const { sessionId, open: onLinkOpen, openFile: onFileOpen, openSession: onSessionLinkOpen, remoteHost, sessionLinkHostId, sessionLinkSourceKind, workspacePaths, findFile } = useContext(OpenChatLink);
+	const { sessionId, open: onLinkOpen, openFile: onFileOpen, openSession: onSessionLinkOpen, remoteHost, hostLocalLinks, sessionLinkHostId, sessionLinkSourceKind, workspacePaths, findFile } = useContext(OpenChatLink);
 	const filePath = href && onFileOpen
 		? workspaceFilePath(href, workspacePaths) ?? findFile(href) ?? explicitWorkspaceFilePath(href)
 		: undefined;
@@ -575,7 +578,7 @@ function MarkdownLinkTarget({ href, children, className, menuPath, node, labelTe
 	const linkedFile = href && sessionId && onFileOpen ? explicitWorkspaceFilePath(href.split(/[?#]/, 1)[0]!) : undefined;
 	const ownArtifact = linkedFile && sessionId && sessionArtifactPath(linkedFile, sessionId) ? linkedFile : undefined;
 	const openInFiles = ownArtifact ?? (filePath && href && !/\.html?$/i.test(filePath) ? workspaceFileOpenTarget(href, filePath) : undefined);
-	if (remoteHost && href && (isHostLocalWebLink(href) || (isPotentialWorkspaceFileLink(href) && !openInFiles))) {
+	if (remoteHost && href && ((isHostLocalWebLink(href) && !hostLocalLinks) || (isPotentialWorkspaceFileLink(href) && !openInFiles))) {
 		const unavailable = <span className="text-muted-foreground" title={REMOTE_PREVIEW_UNAVAILABLE}>
 			{children}<span className="sr-only"> (remote preview unavailable)</span>
 		</span>;
@@ -584,6 +587,7 @@ function MarkdownLinkTarget({ href, children, className, menuPath, node, labelTe
 			: unavailable;
 	}
 	const browserLink = href ? !sessionLink && (isWebLink(href) || (!remoteHost && (!!filePath || isPotentialWorkspaceFileLink(href)))) : false;
+	const hostLocal = Boolean(remoteHost && href && isHostLocalWebLink(href));
 	// A GitHub pull request link shows the PR's card on hover; one whose text
 	// only names the PR is drawn as a chip with its state.
 	const pullRequest = href && !sessionLink && !linksImage(node) ? parsePullRequestLink(href) : undefined;
@@ -592,6 +596,8 @@ function MarkdownLinkTarget({ href, children, className, menuPath, node, labelTe
 	return (
 		<AppLink
 			href={href}
+			noHoverPreview={hostLocal}
+			inAppOnly={hostLocal}
 			onBrowserOpen={onLinkOpen}
 			inAppLink={href ? () => browserLink : undefined}
 			filePath={ownArtifact ?? (filePath && href ? workspaceFileOpenTarget(href, filePath) : filePath)}

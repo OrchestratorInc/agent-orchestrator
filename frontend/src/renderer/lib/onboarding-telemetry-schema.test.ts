@@ -37,6 +37,16 @@ describe("onboarding telemetry allowlist", () => {
 		}
 	});
 
+	it("keeps the work defaults page's choices as booleans only", () => {
+		expect(sanitizeOnboardingProperties("ao.onboarding.step_completed", { step: "work_defaults", archive_on_merge: true, auto_review: false, assigned_issues: "yes", fix_checks: true, fix_review_comments: 1 }))
+			.toEqual({ step: "work_defaults", step_index: 10, archive_on_merge: true, auto_review: false, fix_checks: true });
+	});
+
+	it("keeps the work defaults page's agent only as an agent id", () => {
+		expect(sanitizeOnboardingProperties("ao.onboarding.step_completed", { step: "work_defaults", orchestrator_agent: "claude-code", worker_agent: "/Users/me/bin/codex" }))
+			.toEqual({ step: "work_defaults", step_index: 10, orchestrator_agent: "claude-code" });
+	});
+
 	it("keeps only closed values on step events", () => {
 		expect(sanitizeOnboardingProperties("ao.onboarding.step_viewed", {
 			step: "tools",

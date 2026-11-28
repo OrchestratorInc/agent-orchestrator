@@ -9,6 +9,7 @@ import { AgentLogo } from "./AgentLogo";
 import type { ReviewRun } from "./api";
 import { AppSymbol } from "./AppSymbol";
 import { GitHubComment, WorkerSessionsProvider } from "./chat/AutomationMessage";
+import { AoError } from "../../shared/telemetry/ao-error";
 import { RECONNECTING_ACTION_COPY, userFacingError } from "./connectionError";
 import { rowDividerWidth } from "./divider";
 import { haptics } from "./haptics";

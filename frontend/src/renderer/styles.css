@@ -7047,13 +7047,6 @@ html:not([data-window-translucent="true"]) .onboarding-preview-stage {
 	mask-composite: intersect, add;
 }
 
-/* Guided tour (GuidedTour): the rest of the window fades back toward the page
- * rather than greying out, and a thin focus-coloured ring marks what's lit. */
-:root {
-	--tour-scrim: color-mix(in oklch, var(--background) 68%, transparent);
-	--tour-ring: color-mix(in oklch, var(--ring) 80%, transparent);
-}
-
 /* Onboarding illustration style: a black-and-white line drawing. Strokes
  * only: every fill is clear, so the drawing sits on the onboarding page, and
  * one thin line weight in the page's own foreground draws every edge (white
@@ -8452,4 +8445,69 @@ html[data-new-desktop-ui] [data-field="inline"] {
  * the input inside it uses the field's text size. */
 html[data-new-desktop-ui] :is([data-field="field"], [data-field="compact"], [data-field="search"]) :where(input:not(.font-mono)) {
 	font-size: var(--font-size-base);
+}
+
+/* Registered so it computes to a length: the inspector's resize line reads it
+ * (SessionInspectorRail) to sit in the middle of the gap. 0 = no split. */
+@property --split-panel-gap {
+	syntax: "<length>";
+	inherits: true;
+	initial-value: 0px;
+}
+
+/* Interface v2: with the inspector open, the session and the inspector are
+ * two panels, each with the centre panel's fill, edge and corners, divided by
+ * a narrow gap instead of a line. The shared surface stops drawing its
+ * fill and edge; the session column draws its own from the panel's top, and
+ * the rail draws one that starts an inset in from its left edge, which its
+ * content clears. */
+html[data-new-desktop-ui] .center-panel-shell--floating-topbar > .center-panel-surface:has(.session-split > [data-slot="inspector-container"][data-state="expanded"]) {
+	/* Half the window inset: close enough to read as one workspace. */
+	--split-panel-gap: calc(var(--size-center-panel-inset-mac) / 2);
+	/* Each panel paints what the shared surface's ::before would have. */
+	--split-panel-fill: var(--color-bg-primary);
+}
+
+/* Translucent dark: that fill is the darker centre plate, not the clear
+ * primary surface, so both panels stay a step darker than the frame. */
+html[data-new-desktop-ui][data-window-translucent="true"]:not([data-theme="light"]):not([data-browser-native-live]) .center-panel-shell--floating-topbar > .center-panel-surface:has(.session-split > [data-slot="inspector-container"][data-state="expanded"]) {
+	--split-panel-fill: var(--ao-center-plate);
+}
+
+html[data-new-desktop-ui] .center-panel-shell--floating-topbar > .center-panel-surface:has(.session-split > [data-slot="inspector-container"][data-state="expanded"])::before {
+	background-color: transparent;
+}
+
+html[data-new-desktop-ui] .center-panel-shell--floating-topbar > .center-panel-surface:has(.session-split > [data-slot="inspector-container"][data-state="expanded"])::after {
+	border-color: transparent;
+}
+
+html[data-new-desktop-ui] .center-panel-shell--floating-topbar .session-split:has(> [data-slot="inspector-container"][data-state="expanded"]) > [data-panel]:first-child {
+	isolation: isolate;
+}
+
+html[data-new-desktop-ui] .center-panel-shell--floating-topbar .session-split:has(> [data-slot="inspector-container"][data-state="expanded"]) > [data-panel]:first-child::before,
+html[data-new-desktop-ui] .center-panel-shell--floating-topbar [data-slot="inspector-container"][data-state="expanded"]::before {
+	content: "";
+	position: absolute;
+	inset: var(--floating-panel-top) 0 0;
+	z-index: -1;
+	border: 1px solid var(--center-panel-edge);
+	border-radius: var(--floating-panel-radius);
+	background-color: var(--split-panel-fill);
+	pointer-events: none;
+}
+
+/* The session's edge is its own box now, not the divider on its last pixel. */
+html[data-new-desktop-ui] .center-panel-shell--floating-topbar .session-split:has(> [data-slot="inspector-container"][data-state="expanded"]) > [data-panel]:first-child::after {
+	content: none;
+}
+
+html[data-new-desktop-ui] .center-panel-shell--floating-topbar [data-slot="inspector-container"][data-state="expanded"] {
+	padding-left: var(--split-panel-gap);
+	background: transparent;
+}
+
+html[data-new-desktop-ui] .center-panel-shell--floating-topbar [data-slot="inspector-container"][data-state="expanded"]::before {
+	left: var(--split-panel-gap);
 }
