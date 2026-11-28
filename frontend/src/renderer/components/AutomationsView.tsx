@@ -476,6 +476,9 @@ function AutomationDetails({ item, projectName, busy, onClose, onEdit, onDelete,
 	const { t, i18n } = useTranslation();
 	const locale = i18n.resolvedLanguage;
 	const scheduleLabel = useScheduleLabel();
+	// Runs of one automation never overlap, so a due occurrence waits for the active one.
+	const blockingRun = item.enabled && item.latestRun?.status === "pending" ? item.activeRun : undefined;
+	const blockingSessionId = blockingRun?.sessionId;
 	const asideRef = useRef<HTMLElement>(null);
 	const closeRef = useRef<HTMLButtonElement>(null);
 	// A narrow window hides the list, and the row that had focus with it, so focus moves into the panel.
@@ -546,6 +549,16 @@ function AutomationDetails({ item, projectName, busy, onClose, onEdit, onDelete,
 					<p className="text-xs tabular-nums text-muted-foreground">
 						{item.enabled ? t("automations.nextRunAt", { time: item.nextRunAt ? displayRelativeTime(new Date(item.nextRunAt), t, locale) : "—" }) : t("automations.paused")}
 					</p>
+					{blockingRun ? (
+						<div className="flex min-w-0 items-center gap-1 text-xs tabular-nums text-muted-foreground">
+							<span className="min-w-0 truncate">{t("automations.waitingForRun", { time: new Intl.DateTimeFormat(locale, { dateStyle: "medium", timeStyle: "short" }).format(new Date(blockingRun.scheduledFor)) })}</span>
+							{blockingSessionId ? (
+								<Button type="button" size="icon-xs" variant="quiet" aria-label={t("automations.runs.openSession")} onClick={() => void navigate({ to: "/sessions/$sessionId", params: { sessionId: blockingSessionId } })}>
+									<ArrowUpRight aria-hidden="true" className="size-icon-sm" />
+								</Button>
+							) : null}
+						</div>
+					) : null}
 				</section>
 				<section className="flex flex-col gap-1">
 					<h3 className={FORM_CAPTION_CLASS}>{t("automations.runs.title")}</h3>

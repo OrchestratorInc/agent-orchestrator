@@ -18892,6 +18892,8 @@ components:
       type: object
     AutomationResponse:
       properties:
+        activeRun:
+          $ref: '#/components/schemas/AutomationRunSummaryResponse'
         createdAt:
           format: date-time
           type: string

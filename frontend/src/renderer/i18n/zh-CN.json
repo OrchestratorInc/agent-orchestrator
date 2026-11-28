@@ -5079,6 +5079,7 @@
 	"automations.clearFilters": "清除筛选",
 	"automations.relativeDayTime": "{{day}} {{time}}",
 	"automations.nextRunAt": "下次运行 {{time}}",
+	"automations.waitingForRun": "等待 {{time}} 的运行完成",
 	"automations.runStatus.pending": "等待中",
 	"automations.runStatus.spawning": "启动中",
 	"automations.runStatus.running": "运行中",

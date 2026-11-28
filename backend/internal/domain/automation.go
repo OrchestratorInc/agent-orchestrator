@@ -45,9 +45,12 @@ type Automation struct {
 	LastRunAt   *time.Time   `json:"lastRunAt,omitempty"`
 	CreatedAt   time.Time    `json:"createdAt"`
 	UpdatedAt   time.Time    `json:"updatedAt"`
-	// LatestRun is populated by list/get service reads for API projection. It is
-	// derived from automation_runs and never persisted on the definition row.
+	// LatestRun and ActiveRun are populated by list/get service reads for API
+	// projection. They are derived from automation_runs and never persisted on
+	// the definition row. ActiveRun is the spawning or running run, if any,
+	// that later occurrences wait behind.
 	LatestRun *AutomationRun `json:"-"`
+	ActiveRun *AutomationRun `json:"-"`
 }
 
 // AutomationTemplateCustom and AutomationUseCaseUnknown preserve compatibility

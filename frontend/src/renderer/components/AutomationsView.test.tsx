@@ -26,6 +26,7 @@ const mocks = vi.hoisted(() => ({
 	catalogWarning: "",
 	cachedWarning: "",
 	lookupProjects: [] as string[],
+	navigate: vi.fn(),
 }));
 
 vi.mock("../lib/telemetry", async (importOriginal) => ({
@@ -37,7 +38,7 @@ vi.mock("../lib/platform", async (importOriginal) => ({
 	...await importOriginal<typeof import("../lib/platform")>(),
 }));
 
-vi.mock("@tanstack/react-router", () => ({ useNavigate: () => vi.fn() }));
+vi.mock("@tanstack/react-router", () => ({ useNavigate: () => mocks.navigate }));
 const codexSnapshot = { id: "codex", label: "Codex", installation: { state: "installed", freshness: "fresh" }, authentication: { state: "authorized", freshness: "fresh" }, effectiveReadiness: "ready", usageCount: 3, lastUsedAt: null };
 const ampSnapshot = { ...codexSnapshot, id: "amp", label: "Amp" };
 const cursorSnapshot = { id: "cursor", label: "Cursor", installation: { state: "not_installed", freshness: "fresh" }, authentication: { state: "unknown", freshness: "stale" }, effectiveReadiness: "not_ready", usageCount: 0, lastUsedAt: null };
@@ -1041,6 +1042,28 @@ describe("AutomationsView", () => {
 		await user.click(within(details).getByRole("button", { name: "Show more" }));
 		expect(within(details).getAllByRole("listitem")).toHaveLength(7);
 		expect(within(details).queryByRole("button", { name: "Show more" })).not.toBeInTheDocument();
+	});
+
+	it("names the run a due occurrence waits behind and opens its session", async () => {
+		const base = { projectId: "demo", prompt: "Review", kind: "worker", harness: "codex", rrule: "FREQ=DAILY", timezone: "UTC", latestRun: { id: "today", status: "pending", scheduledFor: "2026-11-08T09:00:00Z" } };
+		const activeRun = { id: "yesterday", status: "running", scheduledFor: "2026-11-07T09:00:00Z", sessionId: "worker-7" };
+		mocks.automations = [
+			{ ...base, id: "blocked", displayName: "Blocked triage", enabled: true, activeRun },
+			{ ...base, id: "paused", displayName: "Paused triage", enabled: false, activeRun },
+			{ ...base, id: "running", displayName: "Running triage", enabled: true, latestRun: activeRun, activeRun },
+		];
+		const user = userEvent.setup();
+		renderView();
+		const scheduledFor = new Intl.DateTimeFormat("en", { dateStyle: "medium", timeStyle: "short" }).format(new Date(activeRun.scheduledFor));
+		await openDetails(user, "Paused triage");
+		expect(within(screen.getByRole("complementary", { name: "Paused triage" })).queryByText(/Waiting for/)).not.toBeInTheDocument();
+		await openDetails(user, "Running triage");
+		expect(within(screen.getByRole("complementary", { name: "Running triage" })).queryByText(/Waiting for/)).not.toBeInTheDocument();
+		await openDetails(user, "Blocked triage");
+		const details = screen.getByRole("complementary", { name: "Blocked triage" });
+		expect(within(details).getByText(`Waiting for the ${scheduledFor} run to finish`)).toBeInTheDocument();
+		await user.click(within(details).getByRole("button", { name: "Open session" }));
+		expect(mocks.navigate).toHaveBeenCalledWith({ to: "/sessions/$sessionId", params: { sessionId: "worker-7" } });
 	});
 
 	it("surfaces run-history fetch failures instead of an empty list", async () => {

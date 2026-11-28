@@ -28,6 +28,7 @@ type Store interface {
 	DeleteAutomation(context.Context, domain.AutomationID) (bool, error)
 	ListAutomationRuns(context.Context, domain.AutomationRunFilter) (domain.AutomationRunPage, error)
 	ListLatestAutomationRuns(context.Context, []domain.AutomationID) (map[domain.AutomationID]domain.AutomationRun, error)
+	ListActiveAutomationRuns(context.Context) ([]domain.AutomationRun, error)
 }
 
 // Deps are the automation service's injectable dependencies.
@@ -184,14 +185,11 @@ func (s *Service) Create(ctx context.Context, input CreateInput) (domain.Automat
 	return created, nil
 }
 
-// Get returns one automation definition.
+// Get returns one automation definition with its latest and active runs.
 func (s *Service) Get(ctx context.Context, id domain.AutomationID) (domain.Automation, error) {
-	rec, ok, err := s.store.GetAutomation(ctx, id)
+	rec, err := s.definition(ctx, id)
 	if err != nil {
-		return domain.Automation{}, apierr.Internal("AUTOMATION_READ_FAILED", "Failed to read automation")
-	}
-	if !ok {
-		return domain.Automation{}, apierr.NotFound("AUTOMATION_NOT_FOUND", "Unknown automation")
+		return domain.Automation{}, err
 	}
 	latest, err := s.store.ListLatestAutomationRuns(ctx, []domain.AutomationID{id})
 	if err != nil {
@@ -199,6 +197,28 @@ func (s *Service) Get(ctx context.Context, id domain.AutomationID) (domain.Autom
 	}
 	if run, found := latest[id]; found {
 		rec.LatestRun = &run
+	}
+	active, err := s.store.ListActiveAutomationRuns(ctx)
+	if err != nil {
+		return domain.Automation{}, apierr.Internal("AUTOMATION_READ_FAILED", "Failed to read automation")
+	}
+	for _, run := range active {
+		if run.AutomationID == id {
+			rec.ActiveRun = &run
+		}
+	}
+	return rec, nil
+}
+
+// definition returns one automation definition without the run projections Get
+// adds, for callers that only need its settings.
+func (s *Service) definition(ctx context.Context, id domain.AutomationID) (domain.Automation, error) {
+	rec, ok, err := s.store.GetAutomation(ctx, id)
+	if err != nil {
+		return domain.Automation{}, apierr.Internal("AUTOMATION_READ_FAILED", "Failed to read automation")
+	}
+	if !ok {
+		return domain.Automation{}, apierr.NotFound("AUTOMATION_NOT_FOUND", "Unknown automation")
 	}
 	return rec, nil
 }
@@ -223,10 +243,22 @@ func (s *Service) List(ctx context.Context, filter domain.AutomationFilter) (dom
 	if err != nil {
 		return domain.AutomationPage{}, apierr.Internal("AUTOMATION_LIST_FAILED", "Failed to list automations")
 	}
+	activeRuns, err := s.store.ListActiveAutomationRuns(ctx)
+	if err != nil {
+		return domain.AutomationPage{}, apierr.Internal("AUTOMATION_LIST_FAILED", "Failed to list automations")
+	}
+	active := make(map[domain.AutomationID]domain.AutomationRun, len(activeRuns))
+	for _, run := range activeRuns {
+		active[run.AutomationID] = run
+	}
 	for i := range page.Items {
 		if run, ok := latest[page.Items[i].ID]; ok {
 			latestRun := run
 			page.Items[i].LatestRun = &latestRun
+		}
+		if run, ok := active[page.Items[i].ID]; ok {
+			activeRun := run
+			page.Items[i].ActiveRun = &activeRun
 		}
 	}
 	return page, nil

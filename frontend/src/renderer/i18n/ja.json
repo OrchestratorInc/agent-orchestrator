@@ -5097,6 +5097,7 @@
 	"automations.clearFilters": "フィルターをクリア",
 	"automations.relativeDayTime": "{{day}} {{time}}",
 	"automations.nextRunAt": "次回 {{time}}",
+	"automations.waitingForRun": "{{time}} の実行の完了を待っています",
 	"automations.runStatus.pending": "保留中",
 	"automations.runStatus.spawning": "起動中",
 	"automations.runStatus.running": "実行中",

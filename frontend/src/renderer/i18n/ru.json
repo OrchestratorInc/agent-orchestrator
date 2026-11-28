@@ -5348,6 +5348,7 @@
 	"automations.clearFilters": "Сбросить фильтры",
 	"automations.relativeDayTime": "{{day}}, {{time}}",
 	"automations.nextRunAt": "Следующий запуск {{time}}",
+	"automations.waitingForRun": "Ожидает завершения запуска от {{time}}",
 	"automations.runStatus.pending": "Ожидает",
 	"automations.runStatus.spawning": "Запускается",
 	"automations.runStatus.running": "Выполняется",

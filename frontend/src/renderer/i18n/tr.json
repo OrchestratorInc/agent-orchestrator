@@ -5158,6 +5158,7 @@
 	"automations.clearFilters": "Filtreleri temizleyin",
 	"automations.relativeDayTime": "{{day}}, {{time}}",
 	"automations.nextRunAt": "Sonraki çalışma: {{time}}",
+	"automations.waitingForRun": "{{time}} çalışmasının bitmesi bekleniyor",
 	"automations.runStatus.pending": "Bekliyor",
 	"automations.runStatus.spawning": "Başlatılıyor",
 	"automations.runStatus.running": "Çalışıyor",

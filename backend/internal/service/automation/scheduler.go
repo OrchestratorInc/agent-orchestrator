@@ -133,7 +133,8 @@ func (s *Service) materializeDefinition(ctx context.Context, store schedulerStor
 }
 
 func (s *Service) dispatch(ctx context.Context, store schedulerStore, run domain.AutomationRun, now time.Time) error {
-	definition, err := s.Get(ctx, run.AutomationID)
+	// The settings alone: a failed read here fails the run, so skip the run projections.
+	definition, err := s.definition(ctx, run.AutomationID)
 	if err != nil {
 		message := runError(err)
 		_, markErr := store.FailAutomationRun(context.WithoutCancel(ctx), run.ID, message, now)

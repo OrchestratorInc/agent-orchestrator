@@ -5097,6 +5097,7 @@
 	"automations.clearFilters": "필터 지우기",
 	"automations.relativeDayTime": "{{day}} {{time}}",
 	"automations.nextRunAt": "다음 실행 {{time}}",
+	"automations.waitingForRun": "{{time}} 실행이 끝나기를 기다리는 중",
 	"automations.runStatus.pending": "대기 중",
 	"automations.runStatus.spawning": "시작 중",
 	"automations.runStatus.running": "실행 중",

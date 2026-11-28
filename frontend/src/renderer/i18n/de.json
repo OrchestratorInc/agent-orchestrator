@@ -5097,6 +5097,7 @@
 	"automations.clearFilters": "Filter zurücksetzen",
 	"automations.relativeDayTime": "{{day}}, {{time}}",
 	"automations.nextRunAt": "Nächste Ausführung {{time}}",
+	"automations.waitingForRun": "Wartet auf das Ende der Ausführung vom {{time}}",
 	"automations.runStatus.pending": "Ausstehend",
 	"automations.runStatus.spawning": "Wird gestartet",
 	"automations.runStatus.running": "Läuft",

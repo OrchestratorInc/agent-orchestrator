@@ -5252,6 +5252,7 @@
 	"automations.clearFilters": "Effacer les filtres",
 	"automations.relativeDayTime": "{{day}}, {{time}}",
 	"automations.nextRunAt": "Prochaine exécution {{time}}",
+	"automations.waitingForRun": "En attente de la fin de l'exécution du {{time}}",
 	"automations.runStatus.pending": "En attente",
 	"automations.runStatus.spawning": "Démarrage",
 	"automations.runStatus.running": "En cours",
