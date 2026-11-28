@@ -25,7 +25,7 @@ vi.mock("react-native", async () => {
 	const React = await import("react");
 	const host = (name: string) => ({ children, ...props }: { children?: React.ReactNode }) => React.createElement(name, props, children);
 	return {
-		Image: host("Image"), View: host("View"),
+		Image: host("Image"), Text: host("Text"), View: host("View"),
 		Platform: fixtures.platform,
 		StyleSheet: { create: (styles: unknown) => styles, absoluteFill: { position: "absolute", top: 0, right: 0, bottom: 0, left: 0 } },
 	};
@@ -481,5 +481,125 @@ describe("live browser gestures", () => {
 		await act(async () => gesture("tap").onEnd({ x: 195 + 97.5, y: 300 }, true));
 		expect(sent()[0]).toEqual({ type: "input", payload: { kind: "wheel", deltaX: 0, deltaY: -30 / (fitted * 2) } });
 		expect(sent()[1]).toEqual({ type: "input", payload: { kind: "pointer", phase: "down", x: 0.625, y: 0.5, button: "left" } });
+	});
+});
+
+describe("stream stats HUD", () => {
+	it("is absent from release builds", async () => {
+		vi.useFakeTimers();
+		try {
+			await render();
+			await open();
+			await showFrame();
+			await act(async () => { vi.advanceTimersByTime(1_000); });
+			expect(nodes("Text")).toHaveLength(0);
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
+	it("times decode from the first arrival of an image source still loading", async () => {
+		vi.stubGlobal("__DEV__", true);
+		vi.useFakeTimers();
+		vi.resetModules();
+		try {
+			const { BrowserLivePane: DebugPane } = await import("./BrowserLivePane");
+			await act(async () => { screen = create(<DebugPane sessionID="session-1" headerItem={headerItem} />); });
+			await open();
+			const same = () => client().handlers.onFrame({ sequence: 1n, capturedAtMs: 1n, width: 1280, height: 800, jpeg: Uint8Array.from([0xff, 0xd8, 0xff, 7]).buffer });
+			// The same JPEG twice before the image loads: one request, timed from the first.
+			await act(async () => { same(); });
+			await act(async () => { vi.advanceTimersByTime(20); same(); });
+			await act(async () => { vi.advanceTimersByTime(20); nodes("Image")[0].props.onLoad(); });
+			await act(async () => { vi.advanceTimersByTime(1_000); });
+			expect(nodes("Text").map((node) => node.props.children).join("")).toMatch(/ · decode 40ms · /);
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
+	it("times a source shown again after another from its new request, not its old one", async () => {
+		vi.stubGlobal("__DEV__", true);
+		vi.useFakeTimers();
+		vi.resetModules();
+		try {
+			const { BrowserLivePane: DebugPane } = await import("./BrowserLivePane");
+			await act(async () => { screen = create(<DebugPane sessionID="session-1" headerItem={headerItem} />); });
+			await open();
+			const frame = (marker: number) => client().handlers.onFrame({ sequence: 1n, capturedAtMs: 1n, width: 1280, height: 800, jpeg: Uint8Array.from([0xff, 0xd8, 0xff, marker]).buffer });
+			// A, then B, then A again, each committed before any loads: three requests.
+			await act(async () => { frame(1); });
+			await act(async () => { vi.advanceTimersByTime(20); frame(2); });
+			await act(async () => { vi.advanceTimersByTime(20); frame(1); });
+			await act(async () => { vi.advanceTimersByTime(20); nodes("Image")[0].props.onLoad(); });
+			await act(async () => { vi.advanceTimersByTime(1_000); });
+			expect(nodes("Text").map((node) => node.props.children).join("")).toMatch(/ · decode 20ms · /);
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
+	it("does not time a new connection's first frame from the last stream's image", async () => {
+		vi.stubGlobal("__DEV__", true);
+		vi.useFakeTimers();
+		vi.resetModules();
+		try {
+			const { BrowserLivePane: DebugPane } = await import("./BrowserLivePane");
+			await act(async () => { screen = create(<DebugPane sessionID="session-1" headerItem={headerItem} />); });
+			await open();
+			// A frame arrives; its image has not loaded when the stream fails.
+			await showFrame();
+			await act(async () => client().handlers.onStatus("error", "The browser stream ended."));
+			const alert = screen.root.find((node) => node.props.accessibilityRole === "alert");
+			await act(async () => alert.findByType("Button" as never).props.onPress());
+			// The kept image finishes loading after the new connection started.
+			await act(async () => { nodes("Image")[0].props.onLoad(); });
+			await act(async () => { vi.advanceTimersByTime(1_000); });
+			expect(nodes("Text").map((node) => node.props.children).join("")).toMatch(/^first – · 0fps/);
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
+	it("shows debug builds the first frame, frame rate and input latency", async () => {
+		vi.stubGlobal("__DEV__", true);
+		vi.useFakeTimers();
+		vi.resetModules();
+		try {
+			const { BrowserLivePane: DebugPane } = await import("./BrowserLivePane");
+			await act(async () => { screen = create(<DebugPane sessionID="session-1" headerItem={headerItem} />); });
+			await open();
+			await showFrame();
+			await act(async () => { gesture("tap").onEnd({ x: 195, y: 300 }, true); });
+			await act(async () => { vi.advanceTimersByTime(40); nodes("Image")[0].props.onLoad(); });
+			await act(async () => { vi.advanceTimersByTime(1_000); });
+			const hud = nodes("Text").map((node) => node.props.children).join("");
+			expect(hud).toMatch(/^first \d+ms · 1fps · \d+KB\/s · decode \d+ms · input \d+ms$/);
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
+	it("counts every frame's bytes, including one replaced before it showed", async () => {
+		vi.stubGlobal("__DEV__", true);
+		vi.useFakeTimers();
+		vi.resetModules();
+		try {
+			const { BrowserLivePane: DebugPane } = await import("./BrowserLivePane");
+			await act(async () => { screen = create(<DebugPane sessionID="session-1" headerItem={headerItem} />); });
+			await open();
+			const jpeg = (fill: number) => { const bytes = new Uint8Array(10_240).fill(fill); bytes.set([0xff, 0xd8, 0xff]); return bytes.buffer; };
+			await act(async () => {
+				client().handlers.onFrame({ sequence: 1n, capturedAtMs: 1n, width: 1280, height: 800, jpeg: jpeg(1) });
+				client().handlers.onFrame({ sequence: 2n, capturedAtMs: 2n, width: 1280, height: 800, jpeg: jpeg(2) });
+			});
+			// Only the newest frame reaches the screen.
+			await act(async () => { vi.advanceTimersByTime(30); nodes("Image")[0].props.onLoad(); });
+			await act(async () => { vi.advanceTimersByTime(970); });
+			const hud = nodes("Text").map((node) => node.props.children).join("");
+			expect(hud).toMatch(/ · 1fps · 20KB\/s · decode 30ms · /);
+		} finally {
+			vi.useRealTimers();
+		}
 	});
 });

@@ -1,6 +1,6 @@
 import { Stack } from "expo-router";
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactElement } from "react";
-import { Image, StyleSheet, View, type LayoutChangeEvent } from "react-native";
+import { Image, StyleSheet, Text, View, type LayoutChangeEvent } from "react-native";
 import { Gesture, GestureDetector } from "react-native-gesture-handler";
 import Animated, { useAnimatedStyle, useSharedValue, withTiming } from "react-native-reanimated";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
@@ -20,6 +20,7 @@ import { bottomToolbarHeight, browserMenu, browserToolbar, hasBottomToolbar, typ
 import { FRAME_ZOOM_SNAP, pinchZoom, unzoomed, unzoomPoint, type FramePoint, type FrameSize, type FrameZoom } from "./frameZoom";
 import { LoadingBar } from "./LoadingBar";
 import { OpenURLPrompt } from "./OpenURLPrompt";
+import { StreamStats } from "./StreamStats";
 
 type BrowserStatus = "connecting" | "open" | "error";
 type NavigateAction = "back" | "forward" | "reload" | "stop";
@@ -28,6 +29,8 @@ type NavigateAction = "back" | "forward" | "reload" | "stop";
 const DRAG_SLOP = 7;
 /** A held finger still clicks when it lifts, as it always has here. */
 const TAP_MAX_MS = 10_000;
+/** Debug builds measure the stream (StreamStats). */
+const MEASURE_STREAM = typeof __DEV__ !== "undefined" && __DEV__;
 /** The mark a tap leaves on the frame: about a fingertip. */
 const TOUCH_MARK = 36;
 const ignoreActivation = () => {};
@@ -90,6 +93,36 @@ export function BrowserLivePane({ sessionID, onDisabled, onTitle, headerItem = n
 	const frameWidth = useRef(1);
 	frameWidth.current = frameSize.width;
 	const blank = page !== null && !page.url;
+	// Debug builds measure the stream (StreamStats): a HUD line, and a log line
+	// every 5 s for recording baselines. Release builds measure nothing.
+	const stats = useRef<StreamStats | null>(MEASURE_STREAM ? new StreamStats() : null);
+	// When each recent frame source arrived, until its image loads: a newer
+	// frame can replace one before it shows.
+	const arrivedAt = useRef(new Map<string, number>());
+	// The source last handed to the Image: a repeat of it is the same request.
+	const lastSource = useRef<string | undefined>(undefined);
+	const [statsLine, setStatsLine] = useState("");
+	useEffect(() => {
+		if (!MEASURE_STREAM) return;
+		let ticks = 0;
+		const timer = setInterval(() => {
+			const now = performance.now();
+			setStatsLine(stats.current?.line(now) ?? "");
+			if (++ticks % 5 === 0) console.log(`[stream-stats] ${JSON.stringify(stats.current?.snapshot(now))}`);
+		}, 1_000);
+		return () => clearInterval(timer);
+	}, []);
+	const frameShown = useCallback((uri: string) => {
+		const at = arrivedAt.current.get(uri);
+		if (at === undefined) return;
+		// It and every frame that arrived before it are done with.
+		for (const key of arrivedAt.current.keys()) {
+			arrivedAt.current.delete(key);
+			if (key === uri) break;
+		}
+		const now = performance.now();
+		stats.current?.shown(now, now - at);
+	}, []);
 
 	// The last frame is kept only for the session that drew it.
 	const frameSession = useRef(sessionID);
@@ -118,6 +151,9 @@ export function BrowserLivePane({ sessionID, onDisabled, onTitle, headerItem = n
 			return;
 		}
 		let disposed = false;
+		// The last stream's image stays up, but its load is not this stream's frame.
+		arrivedAt.current.clear();
+		stats.current?.connecting(performance.now());
 		setStatus("connecting");
 		setError(undefined);
 		const live = new BrowserLiveClient(config, sessionID, {
@@ -140,9 +176,24 @@ export function BrowserLivePane({ sessionID, onDisabled, onTitle, headerItem = n
 			},
 			onFrame: (frame) => {
 				if (disposed) return;
+				const arrived = performance.now();
+				stats.current?.received(arrived, frame.jpeg.byteLength);
 				try {
 					setFrameSize({ width: frame.width, height: frame.height });
-					setFrameURI(browserJPEGDataURI(frame.jpeg));
+					const uri = browserJPEGDataURI(frame.jpeg);
+					if (stats.current) {
+						// The same source again, still loading, is one image request: it
+						// keeps the time it first arrived (its bytes still count above).
+						// After another source it is a new request: timed afresh, last.
+						if (uri !== lastSource.current || !arrivedAt.current.has(uri)) {
+							arrivedAt.current.delete(uri);
+							arrivedAt.current.set(uri, arrived);
+						}
+						// Bounded: sources that never load are forgotten.
+						if (arrivedAt.current.size > 8) arrivedAt.current.delete(arrivedAt.current.keys().next().value!);
+					}
+					lastSource.current = uri;
+					setFrameURI(uri);
 					setFrameIsLive(true);
 				} catch {
 					setStatus("error");
@@ -167,7 +218,10 @@ export function BrowserLivePane({ sessionID, onDisabled, onTitle, headerItem = n
 	}, [onTitle, pageTitle]);
 	useEffect(() => () => onTitle?.(undefined), [onTitle]);
 
-	const send = useCallback((command: BrowserLiveCommand) => client.current?.send(command), []);
+	const send = useCallback((command: BrowserLiveCommand) => {
+		if (command.type === "input") stats.current?.input(performance.now());
+		client.current?.send(command);
+	}, []);
 	const navigate = useCallback((action: NavigateAction) => send({ type: "navigate", payload: { action } }), [send]);
 	const [prompting, setPrompting] = useState(false);
 	const openURL = useCallback((url: string) => send({ type: "navigate", payload: { action: "open", url } }), [send]);
@@ -335,7 +389,7 @@ export function BrowserLivePane({ sessionID, onDisabled, onTitle, headerItem = n
 					onLayout={onViewportLayout}
 				>
 					<Animated.View pointerEvents="none" style={[styles.overlay, zoomStyle]}>
-						{frameURI && !blank ? <View style={[styles.frame, frameRect]}><Image source={{ uri: frameURI }} resizeMode="contain" style={styles.frameImage} /></View> : null}
+						{frameURI && !blank ? <View style={[styles.frame, frameRect]}><Image source={{ uri: frameURI }} resizeMode="contain" style={styles.frameImage} onLoad={stats.current ? () => frameShown(frameURI) : undefined} /></View> : null}
 					</Animated.View>
 					<Animated.View pointerEvents="none" style={[styles.touchMark, markStyle]} />
 				</View>
@@ -345,6 +399,7 @@ export function BrowserLivePane({ sessionID, onDisabled, onTitle, headerItem = n
 			</View> : null}
 			{status === "open" && !blank && !frameURI ? <View pointerEvents="none" style={styles.overlay}><EmptyState busy title="Waiting for the desktop browser…" /></View> : null}
 			{status !== "open" && !holdingFrame ? <BrowserState status={status} error={error} retry={retry} /> : null}
+			{statsLine ? <Text style={styles.statsHUD}>{statsLine}</Text> : null}
 			<LoadingBar loading={(status === "open" && loading) || holdingFrame} accessibilityLabel={holdingFrame ? "Reconnecting to the browser" : "Loading page"} />
 		</View>
 		{bottomBar}
@@ -378,6 +433,7 @@ const makeStyles = (t: Theme) => StyleSheet.create({
 	viewport: { flex: 1, overflow: "hidden", backgroundColor: t.bgBase },
 	frame: { position: "absolute" },
 	frameImage: { width: "100%", height: "100%" },
+	statsHUD: { pointerEvents: "none", position: "absolute", top: 0, left: 0, right: 0, padding: space.xs, backgroundColor: "rgba(0,0,0,0.6)", color: "#8f8", fontSize: 11, fontFamily: "Menlo" },
 	overlay: { ...StyleSheet.absoluteFill },
 	opaque: { backgroundColor: t.bgBase },
 	touchMark: {
