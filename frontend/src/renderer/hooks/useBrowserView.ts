@@ -69,6 +69,12 @@ type UseBrowserViewOptions = {
 	active: boolean;
 	poppedOut: boolean;
 	/**
+	 * "window" for the panel in the session's own Browser window. Its bounds are
+	 * marked so, and while that window is open only they place the pages: the
+	 * app window's panel of the same session hides nothing there.
+	 */
+	surface?: "window";
+	/**
 	 * When true, the view is cleared and the daemon-driven preview is suppressed.
 	 * Use when the session is terminated: the old preview content should not
 	 * remain visible even if the DB still carries a preview_url.
@@ -123,6 +129,8 @@ export type BrowserViewModel = {
 	setDevToolsPlacement: (placement: BrowserDevToolsPlacement) => Promise<void>;
 	agentBrowserActive: boolean;
 	agentBrowserActivity: ObservedBrowserAgentActivity | null;
+	/** An `ao browser record --size` recording lays the page out at this size, off the panel. */
+	recordingViewport: { width: number; height: number; mobile: boolean } | null;
 	destroy: () => void;
 	annotationMode: boolean;
 	annotationState?: Pick<BrowserAnnotationStatePayload, "count" | "screenshotCount" | "hasDraft">;
@@ -223,10 +231,16 @@ function sameRect(a: BrowserRect, b: BrowserRect): boolean {
 }
 
 function scrollCanMoveSlot(target: EventTarget | null, slot: Element | null): boolean {
-	if (!slot || !(target instanceof Node)) return true;
-	if (target.nodeType === Node.DOCUMENT_NODE) return true;
-	return target.contains(slot);
+	// By node type, not instanceof: a slot in the Browser's own window is in
+	// another realm, and so are its scroll targets.
+	const node = target as Node | null;
+	if (!slot || typeof node?.nodeType !== "number") return true;
+	if (node.nodeType === Node.DOCUMENT_NODE) return true;
+	return node.contains(slot);
 }
+
+// Sized recordings by view, kept across hook remounts and session switches.
+const recordingViewports = new Map<string, { width: number; height: number; mobile: boolean }>();
 
 function claimLayoutRevision(): number {
 	nextLayoutRevision += 1;
@@ -314,7 +328,7 @@ function visibleSlotRect(node: HTMLElement): BrowserRect {
 function hiddenByFullscreen(node: HTMLElement): boolean {
 	// Truthy, not `!== null`: the spec says null, but jsdom (and older engines)
 	// leave `fullscreenElement` undefined when nothing is fullscreen.
-	const fullscreen = document.fullscreenElement;
+	const fullscreen = node.ownerDocument.fullscreenElement;
 	return Boolean(fullscreen) && !fullscreen!.contains(node);
 }
 
@@ -329,6 +343,7 @@ export function useBrowserView({
 	cloudAgentBrowser,
 	active,
 	poppedOut,
+	surface,
 	terminated,
 	transient,
 	sessionEnded,
@@ -363,6 +378,13 @@ export function useBrowserView({
 	const activeRef = useRef(active);
 	const poppedOutRef = useRef(poppedOut);
 	const frameRef = useRef<number | null>(null);
+	// The window the slot is in. Frames and timers run on it, so a panel in its
+	// own Browser window keeps measuring while the app window is minimized.
+	const slotWindowRef = useRef<Window>(window);
+	const [slotWindow, setSlotWindow] = useState<Window>(window);
+	const surfaceFields = surface ? { surface } : {};
+	const surfaceFieldsRef = useRef(surfaceFields);
+	surfaceFieldsRef.current = surfaceFields;
 	const appliedLayoutRevisionRef = useRef(0);
 	const settleTimerRef = useRef<number | null>(null);
 	// What the last setBounds told main, so a scroll that moved nothing sends nothing.
@@ -418,6 +440,7 @@ export function useBrowserView({
 			revision: claimLayoutRevision(),
 			rect: HIDDEN_RECT,
 			visible: false,
+			...surfaceFieldsRef.current,
 		});
 	}, []);
 
@@ -432,8 +455,9 @@ export function useBrowserView({
 		// scheduleMeasure() dedupe guard and cancelScheduledMeasure() cleanup would
 		// both trust a frameRef that no longer reflects the pending frame.
 		if (frameRef.current !== null) {
-			if (window.cancelAnimationFrame) window.cancelAnimationFrame(frameRef.current);
-			window.clearTimeout(frameRef.current);
+			const host = slotWindowRef.current;
+			if (host.cancelAnimationFrame) host.cancelAnimationFrame(frameRef.current);
+			host.clearTimeout(frameRef.current);
 		}
 		frameRef.current = null;
 		const id = viewIdRef.current;
@@ -450,27 +474,30 @@ export function useBrowserView({
 		const visible = rect.width > 0 && rect.height > 0;
 		const last = lastSentBoundsRef.current;
 		if (onlyIfChanged && last?.viewId === id && last.visible === visible && sameRect(last.rect, rect)) return;
-		const payload = { viewId: id, revision: claimLayoutRevision(), rect, visible };
+		const payload = { viewId: id, revision: claimLayoutRevision(), rect, visible, ...surfaceFieldsRef.current };
 		lastSentBoundsRef.current = { viewId: id, rect, visible };
-		publishBrowserHole(id, payload.visible ? rect : null);
+		// The tint hole is the app window's; another window's slot cuts none.
+		publishBrowserHole(id, payload.visible && node.ownerDocument === document ? rect : null);
 		window.ao?.browser.setBounds(payload);
 	}, [sendHiddenBounds]);
 
 	const cancelScheduledMeasure = useCallback(() => {
 		if (frameRef.current === null) return;
-		if (window.cancelAnimationFrame) {
-			window.cancelAnimationFrame(frameRef.current);
+		const host = slotWindowRef.current;
+		if (host.cancelAnimationFrame) {
+			host.cancelAnimationFrame(frameRef.current);
 		}
-		window.clearTimeout(frameRef.current);
+		host.clearTimeout(frameRef.current);
 		frameRef.current = null;
 	}, []);
 
 	const scheduleMeasure = useCallback(() => {
 		scrollOnlyMeasureRef.current = false;
 		if (frameRef.current !== null) return;
-		frameRef.current = window.requestAnimationFrame
-			? window.requestAnimationFrame(() => measureAndSend(scrollOnlyMeasureRef.current))
-			: window.setTimeout(() => measureAndSend(scrollOnlyMeasureRef.current), 16);
+		const host = slotWindowRef.current;
+		frameRef.current = host.requestAnimationFrame
+			? host.requestAnimationFrame(() => measureAndSend(scrollOnlyMeasureRef.current))
+			: host.setTimeout(() => measureAndSend(scrollOnlyMeasureRef.current), 16);
 	}, [measureAndSend]);
 
 	// Scrolling only moves the slot when the document or an element containing
@@ -479,9 +506,10 @@ export function useBrowserView({
 		if (!scrollCanMoveSlot(event.target, slotNodeRef.current)) return;
 		if (frameRef.current !== null) return;
 		scrollOnlyMeasureRef.current = true;
-		frameRef.current = window.requestAnimationFrame
-			? window.requestAnimationFrame(() => measureAndSend(scrollOnlyMeasureRef.current))
-			: window.setTimeout(() => measureAndSend(scrollOnlyMeasureRef.current), 16);
+		const host = slotWindowRef.current;
+		frameRef.current = host.requestAnimationFrame
+			? host.requestAnimationFrame(() => measureAndSend(scrollOnlyMeasureRef.current))
+			: host.setTimeout(() => measureAndSend(scrollOnlyMeasureRef.current), 16);
 	}, [measureAndSend]);
 
 	// A ResizeObserver only fires on size changes, so a position-only layout shift
@@ -494,8 +522,9 @@ export function useBrowserView({
 	// always wins.
 	const scheduleSettleMeasure = useCallback(() => {
 		scheduleMeasure();
-		if (settleTimerRef.current !== null) window.clearTimeout(settleTimerRef.current);
-		settleTimerRef.current = window.setTimeout(() => {
+		const host = slotWindowRef.current;
+		if (settleTimerRef.current !== null) host.clearTimeout(settleTimerRef.current);
+		settleTimerRef.current = host.setTimeout(() => {
 			settleTimerRef.current = null;
 			measureAndSend();
 		}, 280);
@@ -509,7 +538,21 @@ export function useBrowserView({
 				sendHiddenBounds();
 				return;
 			}
-			const observer = new ResizeObserver(scheduleMeasure);
+			const nodeWindow = node.ownerDocument.defaultView ?? window;
+			if (nodeWindow !== slotWindowRef.current) {
+				// What is queued on the previous window is cancelled there.
+				cancelScheduledMeasure();
+				if (settleTimerRef.current !== null) {
+					slotWindowRef.current.clearTimeout(settleTimerRef.current);
+					settleTimerRef.current = null;
+				}
+				slotWindowRef.current = nodeWindow;
+				setSlotWindow(nodeWindow);
+			}
+			// From the slot's own window: another window's observer does not see
+			// its layout.
+			const SlotResizeObserver = (nodeWindow as Window & typeof globalThis).ResizeObserver ?? ResizeObserver;
+			const observer = new SlotResizeObserver(scheduleMeasure);
 			observer.observe(node);
 			// The inspector column keeps a stable width and slides on `x`; the
 			// layout gap's width is what actually changes every spring frame.
@@ -526,8 +569,20 @@ export function useBrowserView({
 			measureAndSend();
 			scheduleMeasure();
 		},
-		[measureAndSend, scheduleMeasure, sendHiddenBounds],
+		[cancelScheduledMeasure, measureAndSend, scheduleMeasure, sendHiddenBounds],
 	);
+
+	// A slot in another window moves with that window's resizes and scrolls.
+	useEffect(() => {
+		if (slotWindow === window) return;
+		const handle = () => scheduleMeasure();
+		slotWindow.addEventListener("resize", handle);
+		slotWindow.addEventListener("scroll", scheduleScrollMeasure, true);
+		return () => {
+			slotWindow.removeEventListener("resize", handle);
+			slotWindow.removeEventListener("scroll", scheduleScrollMeasure, true);
+		};
+	}, [scheduleMeasure, scheduleScrollMeasure, slotWindow]);
 
 	useEffect(() => {
 		return window.ao?.browser.onBoundsApplied((result) => {
@@ -923,7 +978,7 @@ export function useBrowserView({
 			document.removeEventListener("fullscreenchange", handleFullscreenChange);
 			observerRef.current?.disconnect();
 			cancelScheduledMeasure();
-			if (settleTimerRef.current !== null) window.clearTimeout(settleTimerRef.current);
+			if (settleTimerRef.current !== null) slotWindowRef.current.clearTimeout(settleTimerRef.current);
 		};
 	}, [cancelScheduledMeasure, scheduleMeasure, scheduleScrollMeasure, scheduleSettleMeasure]);
 
@@ -1381,6 +1436,21 @@ export function useBrowserView({
 	const modelProfileState = stateBelongsToSession ? profileState : EMPTY_PROFILE_STATE;
 	const modelAgentBrowserActive = stateBelongsToSession && agentBrowserActive;
 	const modelAgentBrowserActivity = stateBelongsToSession ? agentBrowserActivity : null;
+	const [recordingViewportsVersion, setRecordingViewportsVersion] = useState(0);
+	useEffect(
+		() =>
+			window.ao?.browser.onRecordingState((state) => {
+				if (state.recording && state.viewport) recordingViewports.set(state.viewId, state.viewport);
+				else recordingViewports.delete(state.viewId);
+				setRecordingViewportsVersion((version) => version + 1);
+			}),
+		[],
+	);
+	const modelRecordingViewport = useMemo(
+		() => (stateBelongsToSession && modelViewId ? recordingViewports.get(modelViewId) ?? null : null),
+		// The version marks changes to the module-level map.
+		[modelViewId, recordingViewportsVersion, stateBelongsToSession],
+	);
 	const goBack = useCallback(() => (hasNativeBrowser ? withView((id) => window.ao!.browser.goBack(id)) : Promise.resolve()), [hasNativeBrowser, withView]);
 	const goForward = useCallback(() => (hasNativeBrowser ? withView((id) => window.ao!.browser.goForward(id)) : Promise.resolve()), [hasNativeBrowser, withView]);
 	const reload = useCallback(() => (hasNativeBrowser ? withView((id) => window.ao!.browser.reload(id)) : Promise.resolve()), [hasNativeBrowser, withView]);
@@ -1424,6 +1494,7 @@ export function useBrowserView({
 			setDevToolsPlacement,
 			agentBrowserActive: modelAgentBrowserActive,
 			agentBrowserActivity: modelAgentBrowserActivity,
+			recordingViewport: modelRecordingViewport,
 			destroy,
 			annotationMode,
 			annotationState,
@@ -1435,7 +1506,7 @@ export function useBrowserView({
 			modelFindOpenRequest, findInPage, stopFindInPage, modelTabs, modelActiveTabId, modelTabNotice, selectTab,
 			closeTab, muteTab, openTab, openLink, reorderTabs, modelClosedTabs, reopenClosedTab, modelDevtoolsState,
 			modelProfileState, openDevTools, closeDevTools, setDevToolsPlacement, modelAgentBrowserActive,
-			modelAgentBrowserActivity, destroy, annotationMode, annotationState, setAnnotationMode, annotationAction,
+			modelAgentBrowserActivity, modelRecordingViewport, destroy, annotationMode, annotationState, setAnnotationMode, annotationAction,
 		],
 	);
 }

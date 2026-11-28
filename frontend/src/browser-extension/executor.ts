@@ -213,6 +213,14 @@ export class Executor {
 					const messages = await this.deps.trusted.consoleMessages(page.tabId, ctx.signal);
 					return { messages: action === "console" ? messages.console : messages.errors, target: this.target(page), untrustedExternalContent: true };
 				}, { allowBlocked: true });
+			case "record-start":
+			case "record-status":
+			case "record-stop":
+			case "record-read":
+				throw new BridgeError(
+					"BROWSER_RECORDING_UNAVAILABLE",
+					"Recording works in Orchestrator's Browser panel, not in Chrome mode; switch with `ao browser target panel`",
+				);
 			default:
 				throw new BridgeError("INVALID_ARGUMENT", `Unsupported browser action: ${action}`);
 		}

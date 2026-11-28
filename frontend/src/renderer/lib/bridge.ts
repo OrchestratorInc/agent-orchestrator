@@ -272,6 +272,11 @@ export const aoBridge: AoBridge =
 			setBounds: () => undefined,
 			onBoundsApplied: () => () => undefined,
 			setOverlayOpen: () => undefined,
+			focusWindow: async () => undefined,
+			closeWindow: async () => undefined,
+			onWindowState: () => () => undefined,
+			onRecordingState: () => () => undefined,
+			onOpenWindowRequest: () => () => undefined,
 			navigate: async ({ viewId, url }) => ({
 				viewId,
 				url,

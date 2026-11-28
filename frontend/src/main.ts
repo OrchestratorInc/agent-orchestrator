@@ -255,6 +255,9 @@ import { registerBrowserVaultIpc } from "./main/browser-vault-ipc";
 import { VaultStore } from "./main/browser-vault-store";
 import { vaultPlatformSupported } from "./main/browser-vault";
 import { createWindowComposition, type WindowComposition } from "./main/window-composition";
+import { createBrowserSessionWindows, type BrowserSessionWindows } from "./main/browser-session-windows";
+import { BrowserRecordingStore } from "./main/browser-recording";
+import { createElectronRecordingEncoder } from "./main/browser-recording-encoder";
 import { AgentBrowserRuntime } from "./main/agent-browser-runtime";
 import { sameBrowserRuntimeIdentity, type BrowserRuntimeIdentity } from "./main/browser-runtime-identity";
 import { connectSupervisor, type SupervisorLinkHandle } from "./main/supervisor-link";
@@ -516,6 +519,8 @@ app.once("will-quit", () => awakeDownloads.dispose());
 let daemonAttachmentGeneration = 0;
 let daemonOutput = "";
 let browserViewHost: BrowserViewHost | null = null;
+// Separate windows a session's Browser panel was moved into.
+let browserSessionWindows: BrowserSessionWindows | null = null;
 let browserProfileIpc: BrowserProfileIpc | null = null;
 let browserVaultIpc: { dispose: () => void } | null = null;
 let browserProfileImporter: BrowserProfileImportService | null = null;
@@ -1306,7 +1311,10 @@ async function createWindowInternal(): Promise<void> {
 	// Harden navigation: never let renderer/terminal content open in-app windows or
 	// navigate the privileged window away from the app origin. External links go to
 	// the OS browser. Keep this in place before exposing any daemon output to the renderer.
-	shellWebContents.setWindowOpenHandler(({ url }) => {
+	shellWebContents.setWindowOpenHandler(({ url, frameName }) => {
+		// The Browser panel moving into its own window (browser-session-windows.ts).
+		const browserWindow = browserSessionWindows?.handleWindowOpen({ url, frameName });
+		if (browserWindow) return browserWindow;
 		if (isAllowedAppExternalURL(url)) {
 			void shell.openExternal(url);
 		}
@@ -1486,6 +1494,51 @@ async function createWindowInternal(): Promise<void> {
 			}),
 		clipboard: { writeImage: writeClipboardImage },
 		onNativeViewAdded: () => windowComposition?.restackShell(),
+		closeSessionWindow: (viewId) => browserSessionWindows?.close(viewId),
+		// `ao browser record` records the page in its own window: the shell opens it.
+		requestSessionWindow: (viewId, sessionId) => {
+			if (!shellWebContents.isDestroyed()) shellWebContents.send("browser:openWindowRequest", { viewId, sessionId });
+		},
+		fitSessionWindow: (viewId, viewport) => browserSessionWindows?.fitToRecording(viewId, viewport),
+		sessionWindowMaxSize: () => browserSessionWindows?.maxContentSize(),
+		// `ao browser record`: finished videos wait under the data directory
+		// until the CLI reads them back.
+		recording: {
+			store: new BrowserRecordingStore(path.join(desktopDataDir, "browser-recordings")),
+			createEncoder: createElectronRecordingEncoder(WebContentsView),
+		},
+	});
+	const sessionWindowHost = browserViewHost;
+	browserSessionWindows = createBrowserSessionWindows({
+		createWindow: (windowOptions) => new BaseWindow(windowOptions),
+		compose: (window, shell) =>
+			createWindowComposition({
+				mainWindow: window,
+				WebContentsView,
+				webContents: shell,
+				platform: process.platform,
+				allowShellDebugging: isDev,
+			}),
+		host: sessionWindowHost,
+		notify: (state) => {
+			if (!shellWebContents.isDestroyed()) shellWebContents.send("browser:windowState", state);
+		},
+		contentArea: () => {
+			const { workArea } = mainWindow && !mainWindow.isDestroyed()
+				? screen.getDisplayMatching(mainWindow.getBounds())
+				: screen.getPrimaryDisplay();
+			// Room for the window's title bar (28 px on macOS) and a little margin.
+			return { width: workArea.width - 8, height: workArea.height - 32 };
+		},
+		windowOptions: () => ({
+			backgroundColor:
+				rendererWindowBackground ??
+				(nativeTheme.shouldUseDarkColors ? NATIVE_WINDOW_BACKGROUND_DARK : NATIVE_WINDOW_BACKGROUND_LIGHT),
+		}),
+	});
+	// The panels in those windows are this document's: a new document has none.
+	shellWebContents.on("did-start-navigation", (details) => {
+		if (details.isMainFrame && !details.isSameDocument) browserSessionWindows?.closeAll();
 	});
 	browserProfileImporter = profileImporter;
 	browserVaultIpc = registerBrowserVaultIpc({
@@ -1580,6 +1633,8 @@ async function createWindowInternal(): Promise<void> {
 
 	mainWindow.on("closed", () => {
 		lifecycleLog("main_window_closed");
+		browserSessionWindows?.closeAll();
+		browserSessionWindows = null;
 		// The snapshot window is a BaseWindow too: left open it would count as the app's last window,
 		// and the requests still queued must not open another one.
 		artifactSnapshotStore.cancel();
@@ -3669,6 +3724,18 @@ ipcMain.handle("browser:runtime:reconnect", (event) => {
 ipcMain.handle("browser:runtime:state", (event): BrowserRuntimeState => {
 	if (event.sender !== getShellWebContents()) throw new Error("Untrusted browser runtime request.");
 	return browserRuntimeLink?.state ?? BROWSER_RUNTIME_DISCONNECTED;
+});
+
+// A session's Browser page in its own window (browser-session-windows.ts).
+ipcMain.handle("browser:window:focus", (event, viewId: unknown) => {
+	if (event.sender !== getShellWebContents() || typeof viewId !== "string") return;
+	if (!browserViewHost?.isRendererOwned(event, viewId)) return;
+	browserSessionWindows?.focus(viewId);
+});
+ipcMain.handle("browser:window:close", (event, viewId: unknown) => {
+	if (event.sender !== getShellWebContents() || typeof viewId !== "string") return;
+	if (!browserViewHost?.isRendererOwned(event, viewId)) return;
+	browserSessionWindows?.close(viewId);
 });
 
 ipcMain.on("browser:overlay", (event, open: unknown) => {

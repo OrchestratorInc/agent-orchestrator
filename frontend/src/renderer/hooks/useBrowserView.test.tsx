@@ -66,6 +66,11 @@ function setupBridge() {
 		setBounds: vi.fn(),
 		onBoundsApplied: vi.fn(() => () => undefined),
 		setOverlayOpen: vi.fn(),
+		focusWindow: vi.fn(async () => undefined),
+		closeWindow: vi.fn(async () => undefined),
+		onWindowState: vi.fn(() => () => undefined),
+		onRecordingState: vi.fn(() => () => undefined),
+		onOpenWindowRequest: vi.fn(() => () => undefined),
 		navigate: vi.fn(async ({ viewId }: { viewId: string }) => bridge.stateFor(viewId)),
 		clear: vi.fn(async (viewId: string) => bridge.stateFor(viewId)),
 		goBack: vi.fn(async (viewId: string) => bridge.stateFor(viewId)),
@@ -288,6 +293,33 @@ describe("useBrowserView", () => {
 			),
 		).toBe(true);
 		expect(result.current.viewId).toBe("42:sess-1");
+	});
+
+	it("marks every bounds report from the session's own Browser window", async () => {
+		const bridge = setupBridge();
+		const slot = createSlot();
+		const { result, unmount } = renderHook(() =>
+			useBrowserView({ sessionId: "sess-1", active: true, poppedOut: false, surface: "window" }),
+		);
+		await waitFor(() => expect(bridge.ensure).toHaveBeenCalledWith("sess-1", false));
+		act(() =>
+			bridge.emit({
+				viewId: "42:sess-1",
+				url: "http://localhost:3000/",
+				title: "",
+				canGoBack: false,
+				canGoForward: false,
+				isLoading: false,
+			}),
+		);
+		act(() => result.current.slotRef(slot));
+		await waitFor(() =>
+			expect(bridge.setBounds).toHaveBeenCalledWith(expect.objectContaining({ viewId: "42:sess-1", visible: true, surface: "window" })),
+		);
+		unmount();
+		// Hidden reports too: only this window's panel may hide its pages.
+		expect(bridge.setBounds.mock.calls.length).toBeGreaterThan(0);
+		expect(bridge.setBounds.mock.calls.every(([input]) => input.surface === "window")).toBe(true);
 	});
 
 	it("marks only agent commands whose start this session saw", async () => {

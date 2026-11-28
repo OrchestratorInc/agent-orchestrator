@@ -129,6 +129,9 @@ ao browser network status [--json]
 ao browser network list [--json]
 ao browser network stop [--json]
 ao browser network clear [--json]
+ao browser record start [--size <WIDTHxHEIGHT|device>] [--mobile] [--fps <1-30>] [--max-seconds <1-1800>] [--json]
+ao browser record status [--json]
+ao browser record stop [path] [--json]
 ao browser console [--json]
 ao browser errors [--json]
 ao browser frame <ref|main> [--json]
@@ -223,6 +226,37 @@ only compact metadata: the resolved path, byte size, width, and height, plus
 was requested and the browser returned none. To return inline image data
 instead, omit the path and explicitly combine `--base64` with `--json`.
 
+`record` makes a WebM video of the page, for showing what a test run did.
+`record start` records the active tab from the page's own frames and follows
+tab switches. The page opens in its own window, sized to the recording and
+fixed while it records, so the user can watch; it appears without taking the
+user's keyboard, and the side panel says the page is recording there. A size
+bigger than a window on the screen can show is refused with the largest size
+that fits (`BROWSER_RECORDING_TOO_LARGE`): record at a smaller `--size`. The
+window closes when the recording stops and the page returns to the panel; a
+window the user already had open is used instead and gets its own size back.
+If no window can open, the page is recorded off screen. Recording needs no
+screen recording permission and no computer use, and keeps going while the
+window is minimized. Drive
+the page with the other commands meanwhile, then `record stop [path]` saves the
+video (default `ao-browser-<time>.webm`), refuses to overwrite an existing
+file, and with `--json` returns the path, size, duration, frame count, width,
+height, and `stopReason`. Frames are captured only when the page changes, at
+most `--fps` per second (default 10). A recording stops by itself after
+`--max-seconds` (default 600) or 500 MB; `record stop` still saves it then. One
+recording runs per session; `record start` while one runs fails with
+`BROWSER_RECORDING_ACTIVE`. Record only when the user or task asks for a video.
+
+To show a responsive layout, give `record start --size`: the page is laid out at
+that viewport for the whole recording (default `desktop`, 1280x800) and returns
+to its own size when the recording stops. It takes
+`WIDTHxHEIGHT` (240 to 2560 each), `desktop` (1280x800), `laptop` (1440x900),
+`full-hd` (1920x1080), or a device from the Browser panel's list, such as
+`iphone-se`, `iphone-12-pro`, `pixel-8`, `galaxy-s20-ultra`, `ipad-mini`,
+`ipad-air`, or `ipad-pro`. Devices lay out as mobile pages, so the page's
+viewport meta tag applies; add `--mobile` for a `WIDTHxHEIGHT` that should too.
+To compare breakpoints, make one recording per size.
+
 `ao preview` remains available for the passive URL/static-file workflow. Use `ao browser` when the agent needs to inspect or verify the page.
 
 `ao browser open` requires an explicit HTTP(S) URL or hostname. It does not
@@ -305,7 +339,7 @@ ao browser target panel    # switch back
   cannot see or act on the user's other tabs. If the user drags a tab out of
   the group, the session loses it.
 - The same commands and output shapes work, with these differences: `devtools`
-  is not available; clicks, typing, key presses, and drags use real (trusted)
+  and `record` are not available; clicks, typing, key presses, and drags use real (trusted)
   input, which shows Chrome's "started debugging this browser" bar while acting;
   `console` and `errors` read what Chrome kept for the page. Input works while
   the session's window is covered, minimized, or behind the user's tabs, and so

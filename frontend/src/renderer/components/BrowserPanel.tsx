@@ -62,6 +62,7 @@ import {
 	RefreshCw,
 	Settings2,
 	Smartphone,
+	SquareArrowOutUpRight,
 	Tablet,
 	Trash2,
 	UserRound,
@@ -77,6 +78,7 @@ import { useBrowserRuntimeState } from "../hooks/useBrowserRuntimeState";
 import { useTabScrollEdges } from "../hooks/useTabScrollEdges";
 import { formatBrowserAnnotationMessage, type BrowserAnnotationSubmitPayload } from "../../shared/browser-annotations";
 import type { BrowserProfile } from "../../shared/browser-profiles";
+import { BROWSER_DEVICE_PRESETS as DEVICE_PRESETS } from "../../shared/browser-device-presets";
 import type { WorkspaceSession } from "../types/workspace";
 import { Button } from "./ui/button";
 import { ConfirmDialog } from "./ConfirmDialog";
@@ -118,30 +120,6 @@ import { isHostLocalWebLink } from "../lib/loopback";
 // their one orientation is used directly. iPad Air and Nest Hub have since
 // been dropped from Chrome's own current list but are kept here since
 // they're still common, well-known breakpoints worth testing against.
-const DEVICE_PRESETS: { id: string; label: string; width: number; height: number; category: "phone" | "tablet" }[] = [
-	{ id: "iphone-se", label: "iPhone SE", width: 375, height: 667, category: "phone" },
-	{ id: "iphone-xr", label: "iPhone XR", width: 414, height: 896, category: "phone" },
-	{ id: "iphone-12-pro", label: "iPhone 12 Pro", width: 390, height: 844, category: "phone" },
-	{ id: "iphone-14-pro-max", label: "iPhone 14 Pro Max", width: 430, height: 932, category: "phone" },
-	{ id: "iphone-15-pro-max", label: "iPhone 15 Pro Max", width: 430, height: 932, category: "phone" },
-	{ id: "iphone-16-pro-max", label: "iPhone 16 Pro Max", width: 440, height: 956, category: "phone" },
-	{ id: "pixel-7", label: "Pixel 7", width: 412, height: 915, category: "phone" },
-	{ id: "pixel-8", label: "Pixel 8", width: 412, height: 915, category: "phone" },
-	{ id: "pixel-9", label: "Pixel 9", width: 412, height: 924, category: "phone" },
-	{ id: "pixel-10", label: "Pixel 10", width: 412, height: 924, category: "phone" },
-	{ id: "galaxy-s8-plus", label: "Samsung Galaxy S8+", width: 360, height: 740, category: "phone" },
-	{ id: "galaxy-s20-ultra", label: "Samsung Galaxy S20 Ultra", width: 412, height: 915, category: "phone" },
-	{ id: "galaxy-a51-71", label: "Samsung Galaxy A51/71", width: 412, height: 914, category: "phone" },
-	{ id: "ipad-mini", label: "iPad Mini", width: 768, height: 1024, category: "tablet" },
-	{ id: "ipad-air", label: "iPad Air", width: 820, height: 1180, category: "tablet" },
-	{ id: "ipad-pro", label: "iPad Pro", width: 1032, height: 1376, category: "tablet" },
-	{ id: "surface-pro-7", label: "Surface Pro 7", width: 912, height: 1368, category: "tablet" },
-	{ id: "surface-duo", label: "Surface Duo", width: 540, height: 720, category: "phone" },
-	{ id: "galaxy-z-fold-5", label: "Galaxy Z Fold 5", width: 344, height: 882, category: "phone" },
-	{ id: "zenbook-fold", label: "Asus Zenbook Fold", width: 853, height: 1280, category: "tablet" },
-	{ id: "nest-hub", label: "Nest Hub", width: 1024, height: 600, category: "tablet" },
-	{ id: "nest-hub-max", label: "Nest Hub Max", width: 1280, height: 800, category: "tablet" },
-];
 const CUSTOM_DEVICE_PRESET_ID = "custom";
 const MAX_HISTORY_SUGGESTIONS = 4;
 const MIN_DEVICE_FRAME_WIDTH = 240;
@@ -174,6 +152,8 @@ type BrowserPanelProps = {
 	poppedOut: boolean;
 	onTogglePopOut: (next: boolean) => void;
 	topbarHost?: HTMLElement | null;
+	/** Shows the session's page in a separate window; no control without it. */
+	onOpenWindow?: () => void;
 };
 
 type AnnotationStatus = "idle" | "picking" | "queued" | "sending" | "sent" | "error";
@@ -393,6 +373,7 @@ export function BrowserPanel({
 	poppedOut,
 	onTogglePopOut,
 	topbarHost,
+	onOpenWindow,
 }: BrowserPanelProps & { session: WorkspaceSession }) {
 	const browserView = useBrowserView({
 		sessionId: session.id,
@@ -412,6 +393,7 @@ export function BrowserPanel({
 			active={active}
 			annotationQueue={annotationQueue}
 			browserView={browserView}
+			onOpenWindow={onOpenWindow}
 			onTogglePopOut={onTogglePopOut}
 			poppedOut={poppedOut}
 			session={session}
@@ -432,6 +414,7 @@ export const BrowserPanelView = memo(function BrowserPanelView({
 	browserView,
 	annotationQueue,
 	topbarHost,
+	onOpenWindow,
 }: BrowserPanelProps & { annotationQueue: BrowserAnnotationQueueModel; browserView: BrowserViewModel }) {
 	const { t } = useTranslation();
 	const prefersReducedMotion = useReducedMotion();
@@ -472,6 +455,7 @@ export const BrowserPanelView = memo(function BrowserPanelView({
 		annotationState = { count: 0, screenshotCount: 0, hasDraft: false },
 		setAnnotationMode,
 		annotationAction = async () => undefined,
+		recordingViewport = null,
 	} = browserView;
 	const userBrowser = useUserBrowser();
 	const [urlInput, setUrlInput] = useState(navState.url);
@@ -1522,6 +1506,20 @@ export const BrowserPanelView = memo(function BrowserPanelView({
 						</DropdownMenuContent>
 					</DropdownMenu>
 				) : null}
+				{/* Only the desktop app's native pages can move into another window. */}
+				{onOpenWindow && window.ao?.browser.nativeCompositionEnabled ? (
+					<BrowserControlTooltip label={t("browser.openInWindow")}>
+						<Button
+							aria-label={t("browser.openInWindow")}
+							onClick={onOpenWindow}
+							size="icon-sm"
+							type="button"
+							variant="quiet"
+						>
+							<SquareArrowOutUpRight aria-hidden="true" className="size-icon-base" />
+						</Button>
+					</BrowserControlTooltip>
+				) : null}
 				<BrowserControlTooltip label={t(poppedOut ? "common.returnToPanel" : "common.maximize")}>
 					<Button
 						aria-label={t(poppedOut ? "common.returnToPanel" : "common.maximize")}
@@ -1838,7 +1836,7 @@ export const BrowserPanelView = memo(function BrowserPanelView({
 					// cascade layer and can never override plain author CSS. Gate that CSS
 					// rule with this data attribute instead, so there's exactly one place
 					// deciding opacity.
-					data-placeholder={!hasNativeBrowser || navState.url === "" ? "true" : undefined}
+					data-placeholder={!hasNativeBrowser || navState.url === "" || recordingViewport ? "true" : undefined}
 					data-testid="browser-viewport"
 				>
 					{/* Only the native-view slot is width-constrained for a device
@@ -1856,6 +1854,12 @@ export const BrowserPanelView = memo(function BrowserPanelView({
 						/>
 					</div>
 					{showStaticPreview ? <StaticPreview url={navState.url} /> : null}
+					{recordingViewport ? (
+						// `ao browser record --size` lays the page out off the panel at its size.
+						<div className="pointer-events-none absolute inset-0 grid place-items-center p-5 text-center text-xs text-muted-foreground" data-testid="browser-recording-elsewhere">
+							<p>{t("browser.recordingElsewhere", { width: recordingViewport.width, height: recordingViewport.height })}</p>
+						</div>
+					) : null}
 					{navState.url === "" ? (
 						<div className="pointer-events-none absolute inset-0 grid place-items-center p-5 text-center text-xs text-muted-foreground">
 							<p>{browserUnavailable ? t("browser.sessionEnded") : t("browser.emptyUrl")}</p>
