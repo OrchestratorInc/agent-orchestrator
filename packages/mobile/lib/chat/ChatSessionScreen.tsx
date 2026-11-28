@@ -68,7 +68,9 @@ import { toolbarIcon } from "../toolbarIcon";
 import { useChatViewLease } from "./useChatViewLease";
 import { useOpenPage } from "../pageNavigation";
 import { usePRSummaries } from "../usePRSummaries";
-import { reviewRouteForPR, reviewRouteForSession, sessionPRReadyForReview } from "../reviewView";
+import { reviewRouteForPR } from "../reviewView";
+import { pullRequestMenuAction } from "../sessionPullRequests";
+import { useSessionPullRequests } from "../useSessionPullRequests";
 import { space } from "../tokens";
 import { Button, EmptyState } from "../ui";
 import { backOr } from "../backNavigation";
@@ -380,8 +382,12 @@ export function ChatSessionScreen({ session: boardSession }: { session: MobileCh
 		rememberChatSkills(currentHostId ?? undefined, skillsHarness, session.projectId || undefined, conversation.skills);
 	}, [conversation.skills, currentHostId, session.projectId, skillsHarness]);
 	const headerState = conversation.snapshot?.controller.state;
-	// The PR ready for review, as a chip over the composer that opens it.
-	const reviewPromptPR = "projectName" in session ? undefined : sessionPRReadyForReview(session);
+	// Every PR the worker raised, as a chip over the composer: one opens its
+	// review, several open a list of them. An orchestrator has none.
+	const workerSession = "projectName" in session ? undefined : session;
+	const hasPullRequests = Boolean(workerSession && (workerSession.prs?.length || workerSession.pr));
+	// The ⋯ menu's "Pull requests" asks the composer for the list by bumping this.
+	const [pullRequestListRequest, setPullRequestListRequest] = useState(0);
 	// Session fork: offered when the daemon supports it.
 	const [forkOptions, setForkOptions] = useState<ForkOptions | null>(null);
 	const forkTurnCount = conversation.snapshot?.turns.length ?? 0;
@@ -407,9 +413,9 @@ export function ChatSessionScreen({ session: boardSession }: { session: MobileCh
 	}, [config, router, session.id, session.projectId]);
 	// Fetched only over the live connection; read through the last verified one
 	// too, so the card stays put while an app switch has the connection down.
-	const reviewSummaries = usePRSummaries(config && reviewPromptPR ? [{ config, sessionId: session.id }] : []);
+	const reviewSummaries = usePRSummaries(config && hasPullRequests ? [{ config, sessionId: session.id }] : []);
 	const summaryConfig = useLastVerifiedConfig(config, machine);
-	const reviewPromptSummary = summaryConfig && reviewPromptPR ? reviewSummaries.summaryFor(summaryConfig, session.id, reviewPromptPR.number) : undefined;
+	const pullRequests = useSessionPullRequests(workerSession, (number) => summaryConfig ? reviewSummaries.summaryFor(summaryConfig, session.id, number) : undefined);
 
 	// The blocking request. It takes the composer's place until it is answered.
 	// Computed here rather than at render because the back-swipe below is a hook
@@ -723,13 +729,10 @@ export function ChatSessionScreen({ session: boardSession }: { session: MobileCh
 		shell: () => void openShell(),
 		artifacts: () => router.push({ pathname: "/artifacts/[sessionId]", params: { sessionId: session.id, title: sessionName, hostId: currentHostId } }),
 		pull_requests: () => {
-			const route = !("projectName" in session) && (session.prs?.length ?? (session.pr ? 1 : 0)) <= 1
-				? reviewRouteForSession(session, currentHostId)
-				: undefined;
-			if (route) openPage(route);
-			// Several PRs open Pull Requests over this page, so closing it
-			// returns here.
-			else openPage("/prs");
+			const action = pullRequestMenuAction(pullRequests?.rows.length ?? 0);
+			if (action === "review" && pullRequests) openPage(reviewRouteForPR(session.id, pullRequests.lead, currentHostId));
+			// Several open the same list the PR chip does, over this chat.
+			else if (action === "list") setPullRequestListRequest((request) => request + 1);
 		},
 		pin: () => {
 			if ("projectName" in session) return;
@@ -1062,9 +1065,9 @@ export function ChatSessionScreen({ session: boardSession }: { session: MobileCh
 					key={composerKey}
 					quoteRequest={quoteRequest?.composerKey === composerKey ? quoteRequest : undefined}
 					onQuoteHandled={quoteHandled}
-					reviewPR={reviewPromptPR}
-					reviewPRSummary={reviewPromptSummary}
-					onOpenReview={reviewPromptPR ? () => openPage(reviewRouteForPR(session.id, reviewPromptPR, currentHostId)) : undefined}
+					pullRequests={pullRequests}
+					onOpenPullRequest={(pr) => openPage(reviewRouteForPR(session.id, pr, currentHostId))}
+					pullRequestListRequest={pullRequestListRequest}
 					onExpandedChange={composerOpen.set}
 					sessionId={session.id}
 					config={config}
