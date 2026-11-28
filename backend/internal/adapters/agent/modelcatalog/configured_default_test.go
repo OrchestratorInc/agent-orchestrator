@@ -86,7 +86,7 @@ func TestOpenCodeDiscoveryMarksUserConfiguredModelAsDefault(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	catalog, err := (Discoverer{}).Discover(context.Background(), ports.AgentModelDiscoveryRequest{AgentID: "opencode", Binary: binary, WorkingDir: repo.dir})
+	catalog, err := discoverCommandCatalog(context.Background(), "opencode", binary, repo.dir, nil, false)
 	if err != nil {
 		t.Fatalf("Discover: %v", err)
 	}

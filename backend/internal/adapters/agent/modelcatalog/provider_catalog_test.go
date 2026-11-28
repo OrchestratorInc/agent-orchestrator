@@ -232,7 +232,15 @@ func TestSharedCatalogIncludesNativeCacheButCredentialScopeDoesNot(t *testing.T)
 		t.Fatal(err)
 	}
 	request := ports.AgentModelDiscoveryRequest{AgentID: "opencode", Binary: binary, WorkingDir: t.TempDir(), Env: env}
-	task, err := (Discoverer{}).Discover(context.Background(), request)
+	discoverer := Discoverer{ACPOptions: map[string]ACPOptionListFunc{
+		"opencode": func(context.Context, ports.AgentModelDiscoveryRequest) ([]ports.ChatConfigOption, error) {
+			return []ports.ChatConfigOption{{
+				ID: "model", Type: ports.ChatConfigOptionSelect,
+				Choices: []ports.ChatConfigOptionChoice{{Value: "anthropic/claude-sonnet"}},
+			}}, nil
+		},
+	}}
+	task, err := discoverer.Discover(context.Background(), request)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -242,13 +250,13 @@ func TestSharedCatalogIncludesNativeCacheButCredentialScopeDoesNot(t *testing.T)
 	if !reflect.DeepEqual(task.ConfiguredProviders, []string{"anthropic"}) {
 		t.Fatalf("shared catalog configured providers = %v", task.ConfiguredProviders)
 	}
-	// OpenCode lists what it can run; the cached provider is there to browse.
+	// ACP lists what it can run; the cached provider is there to browse.
 	if !reflect.DeepEqual(task.RunnableModels, []string{"anthropic/claude-sonnet"}) {
 		t.Fatalf("shared catalog runnable models = %v, want only what OpenCode listed", task.RunnableModels)
 	}
 	sharedFingerprint := (Discoverer{}).CatalogFingerprint(context.Background(), request)
 	request.CredentialType = "anthropic_api_key"
-	scoped, err := (Discoverer{}).Discover(context.Background(), request)
+	scoped, err := discoverer.Discover(context.Background(), request)
 	if err != nil {
 		t.Fatal(err)
 	}

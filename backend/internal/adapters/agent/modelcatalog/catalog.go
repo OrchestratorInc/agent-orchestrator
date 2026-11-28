@@ -352,7 +352,32 @@ func (d Discoverer) discover(ctx context.Context, request ports.AgentModelDiscov
 		}
 		return discoverCodexCatalog(ctx, request, d.CodexModels)
 	}
-	if list := d.ACPOptions[request.AgentID]; list != nil {
+	openCode := request.AgentID == "opencode" || request.AgentID == "opencode-v2"
+	if openCode && request.CredentialType == "" {
+		// The CLI and native provider cache include models ACP rejects. Only
+		// session/new's choices are valid for the sessions this picker starts.
+		list := d.ACPOptions[request.AgentID]
+		if list == nil {
+			return Base(request.AgentID), fmt.Errorf("%s ACP model discovery is unavailable", request.AgentID)
+		}
+		catalog, err := discoverACPOptionCatalog(ctx, request, list)
+		if err != nil {
+			return catalog, err
+		}
+		for _, model := range catalog.Models {
+			catalog.RunnableModels = append(catalog.RunnableModels, model.ID)
+		}
+		// Keep the native cache available for Settings browsing, while task
+		// pickers use only the ACP choices recorded above as runnable.
+		reported := localProviderCatalog(ctx, request.AgentID, request.Binary, request.WorkingDir, request.Env)
+		for i := range reported.Models {
+			reported.Models[i].IsDefault = false
+		}
+		catalog.Models = normalizeModels(append(catalog.Models, reported.Models...), false)
+		catalog.Providers = reported.Providers
+		return catalog, nil
+	}
+	if list := d.ACPOptions[request.AgentID]; list != nil && !openCode {
 		catalog, err := discoverACPOptionCatalog(ctx, request, list)
 		if err == nil {
 			return catalog, nil
@@ -795,7 +820,10 @@ func discoverACPOptionCatalog(
 			})
 		}
 	}
-	models = normalize(models)
+	// OpenCode reports the selected model explicitly. Choice names are display
+	// labels, even when they say "Default" or end in " (default)".
+	openCode := request.AgentID == "opencode" || request.AgentID == "opencode-v2"
+	models = normalizeModels(models, !openCode)
 	if len(models) == 0 {
 		return base, fmt.Errorf("%s ACP model discovery returned no models", request.AgentID)
 	}
@@ -967,8 +995,8 @@ var catalogSchemaVersions = map[string]string{
 	"crush":       "path-labels-v1",
 	"kilocode":    "path-labels-v1",
 	"mimo-code":   "path-labels-v1",
-	"opencode":    "path-labels-v1",
-	"opencode-v2": "path-labels-v1",
+	"opencode":    "acp-model-options-v1",
+	"opencode-v2": "acp-model-options-v1",
 }
 
 // CatalogFingerprint hashes every stable discovery input for an agent: the
@@ -1706,6 +1734,10 @@ func firstBool(node map[string]any, keys ...string) bool {
 }
 
 func normalize(models []ports.AgentModelInfo) []ports.AgentModelInfo {
+	return normalizeModels(models, true)
+}
+
+func normalizeModels(models []ports.AgentModelInfo, inferDefaults bool) []ports.AgentModelInfo {
 	byID := make(map[string]ports.AgentModelInfo, len(models))
 	for _, item := range models {
 		item.ID = strings.TrimSpace(item.ID)
@@ -1715,10 +1747,10 @@ func normalize(models []ports.AgentModelInfo) []ports.AgentModelInfo {
 		if strings.TrimSpace(item.Label) == "" {
 			item.Label = item.ID
 		}
-		if strings.HasSuffix(strings.ToLower(item.Label), " (default)") {
+		if inferDefaults && strings.HasSuffix(strings.ToLower(item.Label), " (default)") {
 			item.Label = strings.TrimSpace(item.Label[:len(item.Label)-len(" (default)")])
 			item.IsDefault = true
-		} else if strings.EqualFold(item.Label, "default") || strings.EqualFold(item.Label, "default (recommended)") {
+		} else if inferDefaults && (strings.EqualFold(item.Label, "default") || strings.EqualFold(item.Label, "default (recommended)")) {
 			item.Label = item.ID
 			item.IsDefault = true
 		}

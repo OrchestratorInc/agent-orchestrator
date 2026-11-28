@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -99,7 +100,11 @@ func TestOpenCodeV2ACPProviderHelper(t *testing.T) {
 			if steering {
 				meta = `"_meta":{"steering":{"supported":true}},`
 			}
-			_, _ = fmt.Fprintf(os.Stdout, `{"jsonrpc":"2.0","id":%s,"result":{"protocolVersion":1,"agentCapabilities":{"sessionCapabilities":{"resume":{}}},"authMethods":[],%s"agentInfo":{"name":"OpenCode","version":%q}}}`+"\n", request.ID, meta, os.Getenv("AO_TEST_OPENCODE_VERSION"))
+			sessionCaps := `{"resume":{}}`
+			if os.Getenv("AO_TEST_OPENCODE_V2_DELETE") == "1" {
+				sessionCaps = `{"resume":{},"delete":{}}`
+			}
+			_, _ = fmt.Fprintf(os.Stdout, `{"jsonrpc":"2.0","id":%s,"result":{"protocolVersion":1,"agentCapabilities":{"sessionCapabilities":%s},"authMethods":[],%s"agentInfo":{"name":"OpenCode","version":%q}}}`+"\n", request.ID, sessionCaps, meta, os.Getenv("AO_TEST_OPENCODE_VERSION"))
 		case "session/prompt":
 			if !steering {
 				_, _ = fmt.Fprintf(os.Stdout, `{"jsonrpc":"2.0","id":%s,"result":{}}`+"\n", request.ID)
@@ -156,6 +161,10 @@ if [ "$1" = "--version" ]; then
 fi
 printf 'argv:%s\n' "$*" >> "$AO_TEST_OPENCODE_V2_ACP_CALLS"
 printf 'config:%s\n' "$OPENCODE_CONFIG_CONTENT" >> "$AO_TEST_OPENCODE_V2_ACP_CALLS"
+printf 'data-home:%s\n' "$XDG_DATA_HOME" >> "$AO_TEST_OPENCODE_V2_ACP_CALLS"
+if [ "$OPENCODE_API_KEY" = "project-test-key" ]; then
+  printf 'project-key-forwarded\n' >> "$AO_TEST_OPENCODE_V2_ACP_CALLS"
+fi
 exec "$AO_TEST_OPENCODE_V2_ACP_BINARY" -test.run=TestOpenCodeV2ACPProviderHelper
 `
 	if err := os.WriteFile(binary, []byte(script), 0o755); err != nil {
@@ -167,6 +176,96 @@ exec "$AO_TEST_OPENCODE_V2_ACP_BINARY" -test.run=TestOpenCodeV2ACPProviderHelper
 	t.Setenv("AO_TEST_OPENCODE_V2_ACP_PROVIDER", "1")
 	t.Setenv("AO_TEST_OPENCODE_V2_ACP_CALLS", calls)
 	return binary, calls
+}
+
+func TestOpenCodeDiscoveryUsesSessionLaunchConfigWithoutPrompt(t *testing.T) {
+	for _, test := range []struct {
+		name       string
+		list       func(context.Context, ports.AgentModelDiscoveryRequest, *slog.Logger) ([]ports.ChatConfigOption, error)
+		deleteArgv string
+	}{
+		{"opencode", opencodeacp.DiscoverConfigOptions, "argv:session delete opencode-v2-provider\n"},
+		{"opencode-v2", DiscoverConfigOptions, "argv:session delete opencode-v2-provider --standalone\n"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			binary, calls := writeOpenCodeACPExecutable(t, "2.0.16")
+			t.Setenv("XDG_DATA_HOME", t.TempDir())
+			t.Setenv("HOME", t.TempDir())
+			env := map[string]string{
+				"OPENCODE_CONFIG_CONTENT": `{"provider":{"custom":{"name":"Project provider"}}}`,
+				"OPENCODE_API_KEY":        "project-test-key", "XDG_DATA_HOME": t.TempDir(),
+			}
+			got, err := test.list(context.Background(), ports.AgentModelDiscoveryRequest{
+				Binary: binary, WorkingDir: t.TempDir(), Env: env,
+			}, nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(got) == 0 || got[0].Current.Select != "provider/default" || got[0].Choices[0].Value != "provider/default" {
+				t.Fatalf("ACP catalog = %#v", got)
+			}
+			data, err := os.ReadFile(calls)
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, want := range []string{"argv:acp\n", "initialize:", "session/new:", "Project provider", "project-key-forwarded\n"} {
+				if !strings.Contains(string(data), want) {
+					t.Fatalf("discovery missing %q:\n%s", want, data)
+				}
+			}
+			if strings.Contains(string(data), "session/prompt:") || strings.Contains(string(data), "session/set_config_option:") {
+				t.Fatalf("discovery sent a prompt or applied settings:\n%s", data)
+			}
+			dataHome := env["XDG_DATA_HOME"]
+			if test.name == "opencode-v2" {
+				dataHome, err = opencodev2.DataHome(context.Background())
+				if err != nil {
+					t.Fatal(err)
+				}
+			}
+			if !strings.Contains(string(data), "data-home:"+dataHome+"\n") || env["XDG_DATA_HOME"] == dataHome && test.name == "opencode-v2" {
+				t.Fatalf("discovery did not use session data home %q:\n%s", dataHome, data)
+			}
+			// OpenCode keeps every session/new in its history; without an ACP
+			// session/delete the probe is removed with the CLI, in the same home.
+			deleted := strings.SplitN(string(data), test.deleteArgv, 2)
+			if len(deleted) != 2 || !strings.Contains(deleted[1], "data-home:"+dataHome+"\n") {
+				t.Fatalf("discovery did not delete its probe session with %q:\n%s", test.deleteArgv, data)
+			}
+		})
+	}
+}
+
+func TestOpenCodeDiscoveryDeletesProbeSessionOverACP(t *testing.T) {
+	for _, test := range []struct {
+		name string
+		list func(context.Context, ports.AgentModelDiscoveryRequest, *slog.Logger) ([]ports.ChatConfigOption, error)
+	}{
+		{"opencode", opencodeacp.DiscoverConfigOptions},
+		{"opencode-v2", DiscoverConfigOptions},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			binary, calls := writeOpenCodeACPExecutable(t, "2.4.1")
+			t.Setenv("AO_TEST_OPENCODE_V2_DELETE", "1")
+			t.Setenv("XDG_DATA_HOME", t.TempDir())
+			t.Setenv("HOME", t.TempDir())
+			if _, err := test.list(context.Background(), ports.AgentModelDiscoveryRequest{
+				Binary: binary, WorkingDir: t.TempDir(),
+			}, nil); err != nil {
+				t.Fatal(err)
+			}
+			data, err := os.ReadFile(calls)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !strings.Contains(string(data), "session/delete:opencode-v2-provider\n") {
+				t.Fatalf("discovery did not delete its probe session over ACP:\n%s", data)
+			}
+			if strings.Contains(string(data), "argv:session delete") {
+				t.Fatalf("discovery also ran the CLI delete:\n%s", data)
+			}
+		})
+	}
 }
 
 func TestLaunchesOpenCodeACPWithTheBuiltInModeAdvertisedAtStartup(t *testing.T) {

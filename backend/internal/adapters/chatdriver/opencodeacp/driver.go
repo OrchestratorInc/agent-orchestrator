@@ -43,6 +43,31 @@ func configure(_ context.Context, cfg acpdriver.LaunchConfig) ([]string, map[str
 	return []string{"acp"}, map[string]string{"OPENCODE_CONFIG_CONTENT": content}, nil
 }
 
+// DiscoverConfigOptions reads the same session catalog and inline config as
+// Chat startup, without sending a prompt or applying a model override.
+// OpenCode keeps every session/new in the user's history, so the probe session
+// is deleted afterwards: over ACP when advertised, else with the CLI.
+func DiscoverConfigOptions(ctx context.Context, request ports.AgentModelDiscoveryRequest, log *slog.Logger) ([]ports.ChatConfigOption, error) {
+	args, overrides, err := configure(ctx, acpdriver.LaunchConfig{Env: request.Env})
+	if err != nil {
+		return nil, err
+	}
+	env := make(map[string]string, len(request.Env)+len(overrides))
+	for key, value := range request.Env {
+		env[key] = value
+	}
+	for key, value := range overrides {
+		env[key] = value
+	}
+	launch := acpdriver.Launch{Command: request.Binary, Args: args, Env: env}
+	return acpdriver.DiscoverConfigOptionsWithoutHistory(ctx, launch, request.WorkingDir,
+		acpdriver.CommandProbeCleanup(launch, request.WorkingDir, deleteSessionArgs), log)
+}
+
+func deleteSessionArgs(sessionID string) []string {
+	return []string{"session", "delete", sessionID}
+}
+
 func sessionOptions(settings ports.ChatTurnSettings) []acpdriver.SessionOption {
 	options := make([]acpdriver.SessionOption, 0, 2)
 	if settings.Model != "" {

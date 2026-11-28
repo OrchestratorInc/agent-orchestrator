@@ -357,10 +357,69 @@ func DiscoverConfigOptionsForHarness(
 		Harness: harness,
 		Launch:  func(context.Context, LaunchConfig) (Launch, error) { return launch, nil },
 	}, log)
-	return driver.discoverConfigOptions(ctx, workingDir)
+	return driver.discoverConfigOptions(ctx, workingDir, nil)
 }
 
-func (d *Driver) discoverConfigOptions(ctx context.Context, workingDir string) ([]ports.ChatConfigOption, error) {
+// ProbeSessionCleanup removes a discovery probe session that the agent could
+// not delete over ACP. It runs after the agent process has stopped.
+type ProbeSessionCleanup func(ctx context.Context, sessionID string) error
+
+// DiscoverConfigOptionsWithoutHistory is DiscoverConfigOptions for agents that
+// keep every session/new in the user's history. It deletes the probe session
+// over ACP when the agent advertises session/delete, and otherwise hands its
+// id to fallback, when non-nil, once the agent has stopped. A failed cleanup is
+// logged and never fails discovery.
+func DiscoverConfigOptionsWithoutHistory(
+	ctx context.Context,
+	launch Launch,
+	workingDir string,
+	fallback ProbeSessionCleanup,
+	log *slog.Logger,
+) ([]ports.ChatConfigOption, error) {
+	driver := New(Config{
+		Launch: func(context.Context, LaunchConfig) (Launch, error) { return launch, nil },
+	}, log)
+	return driver.discoverConfigOptions(ctx, workingDir, &probeCleanup{fallback: fallback})
+}
+
+// probeDeleteTimeout bounds the ACP session/delete of a discovery probe.
+const probeDeleteTimeout = 5 * time.Second
+
+// probeCleanup asks discoverConfigOptions to remove its probe session.
+type probeCleanup struct {
+	fallback ProbeSessionCleanup
+}
+
+func (c *probeCleanup) remove(
+	ctx context.Context,
+	conv *conversation,
+	init acpsdk.InitializeResponse,
+	sessionID string,
+	log *slog.Logger,
+) {
+	if sessionID == "" {
+		return
+	}
+	if init.AgentCapabilities.SessionCapabilities.Delete != nil {
+		deleteCtx, cancel := context.WithTimeout(ctx, probeDeleteTimeout)
+		_, err := conv.conn.UnstableDeleteSession(deleteCtx, acpsdk.UnstableDeleteSessionRequest{SessionId: acpsdk.SessionId(sessionID)})
+		cancel()
+		if err == nil {
+			return
+		}
+		log.Warn("failed to delete ACP discovery session", "error", err)
+	}
+	if c.fallback == nil {
+		return
+	}
+	// The agent may hold its session store open, so stop it first.
+	_ = conv.Close()
+	if err := c.fallback(ctx, sessionID); err != nil {
+		log.Warn("failed to remove ACP discovery session", "error", err)
+	}
+}
+
+func (d *Driver) discoverConfigOptions(ctx context.Context, workingDir string, cleanup *probeCleanup) ([]ports.ChatConfigOption, error) {
 	if !filepath.IsAbs(workingDir) {
 		return nil, fmt.Errorf("workspace path must be absolute, got %q", workingDir)
 	}
@@ -373,7 +432,7 @@ func (d *Driver) discoverConfigOptions(ctx context.Context, workingDir string) (
 	if err != nil {
 		return nil, err
 	}
-	conv, _, _, err := d.initialize(ctx, cfg, proc)
+	conv, init, _, err := d.initialize(ctx, cfg, proc)
 	if err != nil {
 		return nil, err
 	}
@@ -388,11 +447,17 @@ func (d *Driver) discoverConfigOptions(ctx context.Context, workingDir string) (
 	if err != nil {
 		return nil, normalizeACPError("ACP session/new", err)
 	}
+	var options []ports.ChatConfigOption
 	if d.cfg.Harness != domain.HarnessHermes {
-		return normalizeConfigOptions(resp.ConfigOptions), nil
+		options = normalizeConfigOptions(resp.ConfigOptions)
+	} else {
+		// Hermes lists its model catalog only in the legacy response field.
+		options = normalizeSessionOptions(d.suppressedModeOptions(resp.ConfigOptions), conv.legacyWire.modelState(), d.sessionModes(resp.Modes))
 	}
-	// Hermes lists its model catalog only in the legacy response field.
-	return normalizeSessionOptions(d.suppressedModeOptions(resp.ConfigOptions), conv.legacyWire.modelState(), d.sessionModes(resp.Modes)), nil
+	if cleanup != nil {
+		cleanup.remove(ctx, conv, init, string(resp.SessionId), d.log)
+	}
+	return options, nil
 }
 
 // sessionModes drops a legacy session-mode list whose catalog the binding

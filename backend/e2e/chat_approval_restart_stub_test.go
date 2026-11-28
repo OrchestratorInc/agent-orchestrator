@@ -22,6 +22,7 @@ func TestFakeApprovalACP(t *testing.T) {
 		return
 	}
 	logPath := os.Getenv("AO_E2E_ACP_CALLS")
+	discoveryDir := filepath.Join(os.Getenv("AO_DATA_DIR"), "model-discovery")
 	var pending []string
 	classified, background := false, false
 	record := func(method string) {
@@ -60,10 +61,11 @@ func TestFakeApprovalACP(t *testing.T) {
 			continue
 		}
 		if frame.Method == "session/new" {
-			// Cosmetic naming uses a disposable background workspace. The restart
-			// assertions below count only the durable worker's provider calls.
+			// Naming and model discovery use disposable background workspaces.
+			// Restart assertions count only the durable worker's provider calls.
 			classified = true
-			background = strings.Contains(filepath.ToSlash(frame.Params.Cwd), "/background-tasks/")
+			background = strings.Contains(filepath.ToSlash(frame.Params.Cwd), "/background-tasks/") ||
+				filepath.Clean(frame.Params.Cwd) == discoveryDir
 			for _, method := range pending {
 				record(method)
 			}
