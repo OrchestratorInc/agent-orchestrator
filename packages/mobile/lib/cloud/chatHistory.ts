@@ -20,10 +20,22 @@ export const CLOUD_CHAT_LATEST_PAGE = 150;
 export const CLOUD_CHAT_RECENT_MS = 30 * 60_000;
 /** Events in a page read on demand. */
 export const CLOUD_CHAT_OLDER_PAGE = 200;
+/**
+ * Older pages read, beyond the newest page and its recent half hour, while the
+ * held events still hold none of the conversation: a paused session's newest
+ * events can all be pull request updates. Past it, "Load earlier messages"
+ * reads the rest. The desktop reads back as far (cloud-chat-history.ts).
+ */
+export const CLOUD_CHAT_READ_BACK_PAGES = 5;
 /** Events a read after the newest held one, or of the recent half hour, takes at most. */
 const CLOUD_CHAT_WIDE_PAGE = 500;
 
 type ChatEventsClient = Pick<CloudClient, "listChatEvents">;
+
+/** The events hold some of the conversation: a message or a turn's progress, not only session and pull request updates. */
+export function cloudChatEventsHoldChat(events: readonly CloudClientEvent[]): boolean {
+	return events.some((event) => event.type.startsWith("chat."));
+}
 
 /**
  * What the held event list lacks of the session's history. Undefined: nothing,

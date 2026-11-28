@@ -4042,6 +4042,23 @@ describe("ChatWorkspace timeline", () => {
 		expect(screen.queryByText("Restoring your conversation")).not.toBeInTheDocument();
 	});
 
+	it("never welcomes a chat with older history to read, and offers it even before a row loads", () => {
+		const onLoadOlder = vi.fn();
+		// A Cloud chat whose newest page held only pull request updates: not a new chat.
+		const view = render(<ChatWorkspace snapshot={chatFixtureEmpty} session={chatSession} hasOlder onLoadOlder={onLoadOlder} />);
+		expect(screen.queryByRole("heading", { name: "What do you want to work on?" })).not.toBeInTheDocument();
+		expect(screen.getByLabelText("Message the agent").closest("[data-composer-placement]")).toHaveAttribute("data-composer-placement", "dock");
+		fireEvent.click(screen.getByRole("button", { name: "Load earlier messages" }));
+		expect(onLoadOlder).toHaveBeenCalledTimes(1);
+		// With nothing older, an empty chat is a new one, local or Cloud.
+		view.rerender(<ChatWorkspace snapshot={chatFixtureEmpty} session={chatSession} hasOlder={false} onLoadOlder={onLoadOlder} />);
+		expect(screen.queryByRole("button", { name: "Load earlier messages" })).not.toBeInTheDocument();
+		view.unmount();
+		render(<ChatWorkspace snapshot={chatFixtureEmpty} session={chatSession} />);
+		expect(screen.getByRole("heading", { name: "What do you want to work on?" })).toBeInTheDocument();
+		expect(screen.queryByRole("button", { name: "Load earlier messages" })).not.toBeInTheDocument();
+	});
+
 	it("uses the report heading only while the welcome override is supplied", () => {
 		const view = render(<ChatWorkspace snapshot={chatFixtureEmpty} welcomeHeading={appI18n.t("report.heading")} />);
 		expect(screen.getByRole("heading", { name: "What went wrong?" })).toBeInTheDocument();

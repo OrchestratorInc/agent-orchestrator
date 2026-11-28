@@ -1,5 +1,5 @@
 import { CLOUD_CHAT_MESSAGE_BYTES, EXCERPT_PREAMBLE, isExcerptSnapshot, formatSnapshotExcerpt, formatNumberedAnnotations } from "../../../shared/chat-excerpt";
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { notifyManager, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import type { ChatFileReference } from "../../../shared/chat-file-reference";
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { useChatModelChoices } from "../../hooks/useChatModelChoices";
@@ -32,7 +32,7 @@ import { withMoveStateText } from "../../lib/cloud-move-state";
 import { reportPlanRefusal } from "../../lib/cloud-telemetry";
 import { useCloudBilling } from "../../hooks/useCloudBilling";
 import { cloudSessionScriptsEnded, groupScriptRuns, parseScriptStepPayload, SCRIPT_STEP_EVENT, type ScriptRun } from "../../lib/cloud-script-runs";
-import { cloudChatHistoryKey, loadCloudChatHistory, loadOlderCloudChatEvents, mergeCloudEvents, streamedCloudChatEvents, type CloudChatHistory } from "../../lib/cloud-chat-history";
+import { cloudChatEventsHoldChat, cloudChatHistoryKey, loadCloudChatHistory, loadOlderCloudChatEvents, readBackToCloudChat, mergeCloudEvents, streamedCloudChatEvents, type CloudChatHistory } from "../../lib/cloud-chat-history";
 import { useSessionLinkNavigation } from "../../lib/use-session-link-navigation";
 import type { ChatDraftExcerptReference } from "../../lib/chat-drafts";
 import type { ActivityKind, ApprovalMode, ChatConfigOption, ConversationActivity, ConversationContentSummary, ConversationItem, ConversationMessage, ConversationPlan, ConversationSnapshot, ConversationTurn, ConversationUsage, DiffFile, FileChangeFile, PlanStep, SystemEventDetail, TurnSettings } from "../../types/conversation";
@@ -1826,6 +1826,26 @@ export function CloudSessionChatSurface({
 		if (recentPending) loadOlder(true);
 	}, [loadOlder, recentPending]);
 	const onLoadOlder = useCallback(() => loadOlder(), [loadOlder]);
+	// Newest events with none of the conversation in them (a paused session's
+	// pull request updates can fill a page, and its half hour) read further
+	// back once, a bounded number of pages, until a message loads or nothing
+	// older remains; "Load earlier messages" reads on from there. Until the read
+	// back ends the history reads as pending, never as a new chat's.
+	const [readBack, setReadBack] = useState<{ sessionId: string; running: boolean }>();
+	const readBackStarted = readBack?.sessionId === session.id;
+	const quietPage = Boolean(eventsQuery.data && history?.hasOlder && !cloudChatEventsHoldChat(eventsQuery.data));
+	const readingBack = readBackStarted ? readBack.running : quietPage;
+	const readBackReady = !readBackStarted && quietPage && !recentPending && !history?.recentPending && !history?.loadingOlder;
+	useEffect(() => {
+		if (!readBackReady || !cloud) return;
+		const sessionId = session.id;
+		setReadBack({ sessionId, running: true });
+		void readBackToCloudChat(queryClient, client, cloud.orgId, sessionId).catch(() => {}).finally(() => {
+			// After the read's own cache updates reach the chat, so it never shows
+			// the held events as settled before the page that ended the read back.
+			notifyManager.schedule(() => setReadBack((current) => current?.sessionId === sessionId ? { sessionId, running: false } : current));
+		});
+	}, [client, cloud, queryClient, readBackReady, session.id]);
 	// Until the worker lists its models (it starts the agent to ask, after a
 	// sandbox waking from a pause has come back), the picker shows the control
 	// plane's catalog for the agent: what a worker on the same CLI and
@@ -2513,8 +2533,9 @@ export function CloudSessionChatSurface({
 			// A new orchestrator (openedNew) has none, so it opens as the new chat it
 			// is, not docked as one being restored for the moment the read takes. A
 			// worker may start with its task, and a woken session has history: both
-			// wait for the read.
-			historyPending={Boolean(cloud && ready) && eventsQuery.data === undefined && !eventsQuery.isError && !openedNew}
+			// wait for the read. A read that found only session and pull request
+			// updates is still pending while it reads back to a message (readingBack).
+			historyPending={Boolean(cloud && ready) && ((eventsQuery.data === undefined && !eventsQuery.isError) || readingBack) && !openedNew}
 			hasOlder={history?.hasOlder}
 			loadingOlder={history?.loadingOlder}
 			onLoadOlder={onLoadOlder}

@@ -17,6 +17,12 @@ export const CLOUD_CHAT_LATEST_PAGE = 150;
 export const CLOUD_CHAT_RECENT_MS = 30 * 60_000;
 /** Events in a page read on demand, as the reader scrolls up. */
 export const CLOUD_CHAT_OLDER_PAGE = 200;
+/**
+ * Older pages read, beyond the newest page and its recent half hour, while the
+ * held events still hold no chat: a paused session's newest events can all be
+ * pull request updates. Past it, "Load earlier messages" reads the rest.
+ */
+export const CLOUD_CHAT_READ_BACK_PAGES = 5;
 /** Events a read after the newest cached one, or of the recent half hour, takes at most. */
 const CLOUD_CHAT_WIDE_PAGE = 500;
 
@@ -46,6 +52,40 @@ export function cloudChatEventsKey(orgId: string, sessionId: string) {
 
 export function cloudChatHistoryKey(orgId: string, sessionId: string) {
 	return ["cloud-chat-history", orgId, sessionId] as const;
+}
+
+/** The events hold some of the conversation: a message or a turn's progress, not only session and pull request updates. */
+export function cloudChatEventsHoldChat(events: readonly CloudCpClientEvent[]): boolean {
+	return events.some((event) => event.type.startsWith("chat."));
+}
+
+/**
+ * Reads older pages while the held events have none of the conversation and
+ * older ones remain, at most `pages` of them: a paused session's newest events
+ * can all be pull request updates, and a chat showing none of its messages
+ * would read as a new one. A page another read already has in flight (the
+ * chat filling its view) is waited for, not counted.
+ */
+export async function readBackToCloudChat(
+	queryClient: QueryClient,
+	client: ChatEventsClient,
+	orgId: string,
+	sessionId: string,
+	{ pages = CLOUD_CHAT_READ_BACK_PAGES }: { pages?: number } = {},
+): Promise<void> {
+	const eventsKey = cloudChatEventsKey(orgId, sessionId);
+	const historyKey = cloudChatHistoryKey(orgId, sessionId);
+	for (let read = 0; read < pages;) {
+		const history = queryClient.getQueryData<CloudChatHistory>(historyKey);
+		const events = queryClient.getQueryData<CloudCpClientEvent[]>(eventsKey);
+		if (!history?.hasOlder || !events || cloudChatEventsHoldChat(events)) return;
+		if (history.loadingOlder) {
+			await new Promise((resolve) => setTimeout(resolve, 50));
+			continue;
+		}
+		read++;
+		await loadOlderCloudChatEvents(queryClient, client, orgId, sessionId);
+	}
 }
 
 /** Drops every Cloud chat's cached events, history window and step log: on sign-out or an account switch. */
