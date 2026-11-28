@@ -1,0 +1,51 @@
+# ao serve
+
+Run the Orchestrator daemon without the desktop app. Use this on a server, in a script, or when you set up Orchestrator for a user and the app is not open.
+
+`ao serve` first looks for a daemon that already serves this data directory. If one is ready, it reports it and exits 0 without starting another. Otherwise it starts the daemon in the background, waits until it is ready, and prints its URL.
+
+## Syntax
+
+```
+ao serve [flags]
+```
+
+## Flags
+
+| Flag | Meaning | Default / Required |
+|---|---|---|
+| `--background` | Start the daemon in the background and return once it is ready | default |
+| `--foreground` | Run the daemon in this process, or watch the one already running, until no daemon is left | - |
+| `--port int` | Loopback port for a new daemon; ignored, with a warning, when one is already running | `AO_PORT`, else `3001` |
+| `--timeout duration` | How long to wait for a background or still-booting daemon to become ready. A `--foreground` daemon run in this process starts without this limit | `2m` |
+| `--json` | Output the result as JSON | - |
+
+## JSON output
+
+`--json` prints one object. Paths are absolute. Fields are only ever added, never renamed or removed:
+
+```json
+{"status":"ready","port":3001,"pid":12345,"url":"http://127.0.0.1:3001","reused":false,"runFile":"/Users/you/.ao/running.json","dataDir":"/Users/you/.ao/data"}
+```
+
+`reused` is `true` when an existing daemon was found. With `--foreground`, the object is printed only when serve reuses or follows a daemon. When it runs its own daemon in the process it prints nothing, so scripts should use the default background mode to read the result. Failures exit 1 with the reason on stderr. With `--foreground`, a daemon that cannot take the data-directory lock because another Orchestrator process holds it exits 75. Bad flags exit 2.
+
+## Notes
+
+- Stop the daemon with `ao stop`.
+- If the run file names a daemon that serves a different data directory (only `AO_DATA_DIR` was changed), `ao serve` exits 1. Set `AO_RUN_FILE` and `AO_PORT` too for a separate daemon.
+- When the desktop app opens while this daemon runs, it swaps in its own daemon on the same data directory and keeps that one running after it quits. A daemon the app starts on its own, with no `ao serve` daemon running, quits with the app.
+- Usage analytics follow the app's **Share usage analytics** setting. `DO_NOT_TRACK=1` or `AO_TELEMETRY_REMOTE=off` turns them off.
+- To keep the daemon running across reboots, use [`ao service install`](service.md).
+
+## Examples
+
+```bash
+# Make sure a daemon is running, and get its port
+ao serve --json
+```
+
+```bash
+# Run a separate daemon for a scratch data directory
+AO_DATA_DIR=/tmp/ao-scratch/data AO_RUN_FILE=/tmp/ao-scratch/running.json AO_PORT=3101 ao serve
+```

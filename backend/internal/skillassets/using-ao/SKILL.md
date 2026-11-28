@@ -11,6 +11,7 @@ trigger: "Using the `ao` CLI, setting up Orchestrator for a user, importing exis
 | Command | What it does | When to use | Details |
 |---|---|---|---|
 | `spawn` | Spawn a project worker, orchestrator, or projectless standalone worker | Starting a new task or issue | [commands/spawn.md](commands/spawn.md) |
+| `task` | Hand a task to the project's orchestrator (or one worker) and report from the exit code whether it started | Sending a task from a script or an outside agent and confirming it really started | [commands/task.md](commands/task.md) |
 | `session` | Manage agent sessions (list, interrupt, kill, rename, restore, history, etc.) | Inspecting or controlling running/terminated sessions, or reading the full conversation after taking over from another agent | [commands/session.md](commands/session.md) |
 | `account` | List Claude Code and Codex subscription accounts, set the default, show or move a session's account | Starting work on a specific account, or moving a session off an account that hit its limit | [commands/account.md](commands/account.md) |
 | `agent` | Inspect installed harnesses and launch readiness | Choosing or diagnosing an agent harness | `ao agent ls --refresh` |
@@ -32,6 +33,9 @@ trigger: "Using the `ao` CLI, setting up Orchestrator for a user, importing exis
 | `device` | Open, install onto and release an iOS Simulator or Android Emulator for this session | Verifying a mobile app on a device the user watches in the Device tab | [commands/device.md](commands/device.md) |
 | `start` | Fetch (if needed) and open the Orchestrator desktop app | Launching the app | [commands/start.md](commands/start.md) |
 | `stop` | Stop the Orchestrator daemon | Shutting down Orchestrator | [commands/stop.md](commands/stop.md) |
+| `serve` | Run the Orchestrator daemon without the desktop app, or reuse the running one | Starting Orchestrator headless (servers, scripts, setting up for a user) | [commands/serve.md](commands/serve.md) |
+| `service` | Install, check, or remove a user service that keeps `ao serve` running across reboots | Keeping Orchestrator running without the app | [commands/service.md](commands/service.md) |
+| `setup` | Start the daemon, check the agent and GitHub, and register the project in one command; optionally start a first task | Setting up Orchestrator for a user | [commands/setup.md](commands/setup.md) |
 | `status` | Show daemon status | Verifying the daemon is up and healthy | [commands/status.md](commands/status.md) |
 | `triage` | Collect diagnostics and draft a problem report, even offline | Reporting a bug | [commands/triage.md](commands/triage.md) |
 | `doctor` | Run local health checks | Diagnosing Orchestrator setup problems | [commands/doctor.md](commands/doctor.md) |
@@ -41,7 +45,7 @@ trigger: "Using the `ao` CLI, setting up Orchestrator for a user, importing exis
 
 ## Conventions
 
-- When the user asks you to set up Orchestrator, add their first project, or get them started, read [commands/setup.md](commands/setup.md) first and follow it.
+- When the user asks you to set up Orchestrator, add their first project, or get them started, read [commands/setup.md](commands/setup.md) first and follow it: run `ao setup` when it is available.
 - For importing existing agent conversations from outside Orchestrator, read [commands/import.md](commands/import.md). This includes Claude Code and Codex terminal sessions.
 - Most read commands accept `--json` for machine-readable output.
 - `-p / --project` scopes session subcommand lookups to one project.

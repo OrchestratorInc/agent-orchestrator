@@ -44,7 +44,8 @@ func executeWithDeps(deps Deps, args []string) error {
 	cmd := NewRootCommand(deps)
 	cmd.SetArgs(args)
 	err := cmd.Execute()
-	if err != nil && ExitCode(err) == 2 {
+	var ue usageError
+	if err != nil && errors.As(err, &ue) {
 		(&commandContext{deps: deps}).emitCLIUsageError(context.Background(), args, err)
 	}
 	return err
@@ -64,7 +65,8 @@ func (e usageError) Unwrap() error { return e.err }
 const exitDataDirLocked = 75
 
 // ExitCode maps a CLI error to a process exit code: 2 for usage errors, 75 when
-// another AO process owns the data dir, 1 for any other failure, 0 for success.
+// another AO process owns the data dir, the task outcome's code for `ao task`,
+// 1 for any other failure, 0 for success.
 func ExitCode(err error) int {
 	if err == nil {
 		return 0
@@ -72,6 +74,10 @@ func ExitCode(err error) int {
 	var ue usageError
 	if errors.As(err, &ue) {
 		return 2
+	}
+	var te taskExitError
+	if errors.As(err, &te) {
+		return te.code
 	}
 	if errors.Is(err, datadirlock.ErrLocked) {
 		return exitDataDirLocked
@@ -89,6 +95,7 @@ type Deps struct {
 	HTTPClient            *http.Client
 	Executable            func() (string, error)
 	StartProcess          func(processStartConfig) error
+	StartDetached         func(processStartConfig) (startedProcess, error)
 	ProcessAlive          func(pid int) bool
 	LookPath              func(file string) (string, error)
 	ResolveAgentBinary    func(context.Context, string) (string, error)
@@ -124,6 +131,7 @@ func DefaultDeps() Deps {
 		HTTPClient:            &http.Client{Timeout: 2 * time.Second},
 		Executable:            os.Executable,
 		StartProcess:          startProcess,
+		StartDetached:         startDetachedProcess,
 		ProcessAlive:          processalive.Alive,
 		PIDMayBeHidden:        pidMayBeHidden,
 		LookPath:              exec.LookPath,
@@ -180,6 +188,9 @@ func (d Deps) withDefaults() Deps {
 	}
 	if d.StartProcess == nil {
 		d.StartProcess = def.StartProcess
+	}
+	if d.StartDetached == nil {
+		d.StartDetached = def.StartDetached
 	}
 	if d.ProcessAlive == nil {
 		d.ProcessAlive = def.ProcessAlive
@@ -256,6 +267,9 @@ func NewRootCommand(deps Deps) *cobra.Command {
 	root.AddCommand(newStartCommand(ctx))
 	root.AddCommand(newStopCommand(ctx))
 	root.AddCommand(newStatusCommand(ctx))
+	root.AddCommand(newServeCommand(ctx))
+	root.AddCommand(newServiceCommand(ctx))
+	root.AddCommand(newSetupCommand(ctx))
 	root.AddCommand(newRemoteHostCommand(ctx))
 	root.AddCommand(newDoctorCommand(ctx))
 	root.AddCommand(newTriageCommand(ctx))
@@ -263,6 +277,7 @@ func NewRootCommand(deps Deps) *cobra.Command {
 	root.AddCommand(newAccountCommand(ctx))
 	root.AddCommand(newSpawnCommand(ctx))
 	root.AddCommand(newSendCommand(ctx))
+	root.AddCommand(newTaskCommand(ctx))
 	root.AddCommand(newReportCommand(ctx))
 	root.AddCommand(newArtifactCommand(ctx))
 	root.AddCommand(newPreviewCommand(ctx))
@@ -306,11 +321,11 @@ func shouldEmitCLIInvocation(cmd *cobra.Command) bool {
 		return false
 	}
 	switch commandPath {
-	// "ao daemon"/"ao start" are supervisor-driven bootstrapping, and
+	// "ao daemon"/"ao start"/"ao serve" are supervisor-driven bootstrapping, and
 	// "ao completion"/"ao help" are shell setup and self-documentation.
 	// "ao pty-host", "ao browser-host", "ao agent-process", and "ao mcp" are internal runtime
 	// processes. None reflect user activity.
-	case "ao triage", "ao daemon", "ao start", "ao completion", "ao help", "ao pty-host", "ao chat-host", "ao browser-host", "ao unreal-provider", "ao codex-login", "ao claude-login", "ao agent-process", "ao agent-process supervise", "ao mcp":
+	case "ao triage", "ao daemon", "ao start", "ao serve", "ao completion", "ao help", "ao pty-host", "ao chat-host", "ao browser-host", "ao unreal-provider", "ao codex-login", "ao claude-login", "ao agent-process", "ao agent-process supervise", "ao mcp":
 		return false
 	default:
 		return true

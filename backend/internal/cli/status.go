@@ -55,6 +55,12 @@ type daemonStatus struct {
 	Ready          string     `json:"ready,omitempty"`
 	Error          string     `json:"error,omitempty"`
 	owned          bool
+	// owner is the run file's owner, read in the same run-file read as PID.
+	owner string
+	// workingDirectory is the daemon's own working directory from /healthz.
+	// The daemon chdirs into its data dir, so this identifies the data dir it
+	// actually serves (empty for daemons that do not report it).
+	workingDirectory string
 	// pidVisible records whether inspection saw the daemon's PID alive, as
 	// opposed to verifying it only over loopback (probeOwnedDaemon). Checking
 	// again later could match an unrelated process reusing that PID number.
@@ -106,6 +112,7 @@ func (c *commandContext) inspectDaemon(ctx context.Context) (daemonStatus, error
 	}
 
 	st.PID = info.PID
+	st.owner = info.Owner
 	st.Port = info.Port
 	startedAt := info.StartedAt
 	st.StartedAt = &startedAt
@@ -145,6 +152,7 @@ func (c *commandContext) inspectDaemon(ctx context.Context) (daemonStatus, error
 	}
 	st.owned = true
 	st.ExecutablePath = health.ExecutablePath
+	st.workingDirectory = health.WorkingDirectory
 	st.Health = health.Status
 	if health.Status != "ok" {
 		st.State = stateUnhealthy

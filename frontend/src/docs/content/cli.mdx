@@ -26,10 +26,14 @@ ao
 ├── start                         Open the desktop app (download it when needed)
 ├── stop                          Stop the local daemon
 ├── status                        Show daemon health
+├── serve                         Run the daemon without the desktop app
+├── service                       install, status, uninstall (keep serve running)
+├── setup                         Set up the daemon, agent, GitHub and project in one command
 ├── doctor                        Check the local Orchestrator environment
 ├── agent ls                      List built-in agent adapters and readiness
 ├── project                       add, ls, get, set-config, rm
 ├── spawn                         Create a worker or orchestrator session
+├── task                          start, status, wait: hand off a task and check it started
 ├── session                       ls, get, kill, restore, rename, cleanup, delete,
 │                                 claim-pr, exit-agent, resume-agent
 ├── automation                    create, list, get, update, delete, runs
@@ -79,6 +83,115 @@ Reports daemon state, process identity, run-file location, health, and readiness
 | `--json` | Print structured daemon status. |
 
 Use `ao session ls` for sessions.
+
+### `ao serve`
+
+Runs the Orchestrator daemon without the desktop app, for servers, scripts, and coding agents. It first checks the run file and `/readyz`: if a daemon already serves this data directory, `ao serve` reports it and exits 0 without starting another. If the run file points at a daemon for a different data directory (for example, you changed only `AO_DATA_DIR`), it exits 1 and asks you to set `AO_RUN_FILE` and `AO_PORT` too. Otherwise it starts the daemon in the background, waits until it is ready, and prints its URL.
+
+| Flag | Purpose |
+| --- | --- |
+| `--port <n>` | Loopback port for a new daemon. Defaults to `AO_PORT`, else `3001`. Ignored, with a warning, when a daemon is already running. |
+| `--background` | Start the daemon in the background and return once it is ready. This is the default; the flag exists for scripts that name it. |
+| `--foreground` | Run the daemon in this process, or watch the one already running, until no daemon is left (for launchd, systemd, or a terminal). |
+| `--timeout <duration>` | How long to wait for a background or still-booting daemon to become ready. A `--foreground` daemon run in this process starts without this limit. Default `2m`. |
+| `--json` | Print the result as JSON. |
+
+With `--json`, `ao serve` prints one object. Scripts can rely on these fields; new fields may be added, but none are renamed or removed:
+
+```json
+{
+  "status": "ready",
+  "port": 3001,
+  "pid": 12345,
+  "url": "http://127.0.0.1:3001",
+  "reused": false,
+  "runFile": "/Users/you/.ao/running.json",
+  "dataDir": "/Users/you/.ao/data"
+}
+```
+
+`reused` is `true` when an existing daemon was found. With `--foreground`, the object is printed only when `ao serve` reuses or follows a daemon. When it runs its own daemon in the process it prints nothing, so scripts should read the result from the default background mode. A failure exits 1 with the reason on stderr. With `--foreground`, a daemon that cannot take the data-directory lock because another Orchestrator process holds it exits 75. A bad flag exits 2.
+
+When you open the desktop app while this daemon runs, the app swaps in its own daemon on the same data directory. Because it replaced a headless daemon, the app keeps that one running after it quits. A daemon the app starts when no `ao serve` daemon is running quits with the app, and the service section below covers that case. Stop either with `ao stop`.
+
+With `--foreground`, `ao serve` stays running for as long as a daemon serves the data directory, following the app's swap. It exits 0 after a clean stop such as `ao stop`, and 1 when the daemon crashed or was the desktop app's own and quit with the app, so a service manager starts a new one.
+
+Usage analytics follow the desktop app: on by default, never code, prompts, or conversations. They stay off when you turned off **Share usage analytics** in the app, when `DO_NOT_TRACK=1` or `AO_TELEMETRY_REMOTE=off` is set, and in development builds.
+
+### `ao service`
+
+Keeps `ao serve` running across logins and reboots, as a user service that never needs `sudo`. On Linux it keeps running while you are logged out only with lingering; see below.
+
+| Command | Purpose |
+| --- | --- |
+| `ao service install` | Write the service, start it, and wait until the daemon is ready. |
+| `ao service status` | Show whether the service is installed and loaded, and the daemon's state. |
+| `ao service uninstall` | Stop the service and remove the file `install` wrote. |
+
+| Platform | Service |
+| --- | --- |
+| macOS | launchd user agent `~/Library/LaunchAgents/dev.agent-orchestrator.serve.plist` |
+| Linux | systemd user unit `~/.config/systemd/user/agent-orchestrator-serve.service` |
+| Windows | Not supported yet. Run `ao serve` from a logon task instead. |
+
+The service runs `ao serve --foreground` with the `PATH`, `AO_DATA_DIR`, `AO_RUN_FILE`, `AO_PORT`, `DO_NOT_TRACK`, and `AO_TELEMETRY_*` values of the shell you install from, so the daemon finds the same agents and tools. Run `ao service install` again after changing them. A custom `AO_DATA_DIR` or `AO_RUN_FILE` gets its own service name, so it never replaces your main one. The service restarts the daemon if it crashes; `ao stop` stops it until the next login. When a daemon is already running for the same data directory (for example, the desktop app's), the service watches it instead of starting a second one, and starts its own if that daemon crashes or quits with the app. Because the service cannot tell `ao stop` from the app quitting, stopping the desktop app's own daemon also makes the service start one; run `ao service uninstall` first to keep Orchestrator stopped. `install` and `uninstall` only touch a file that `ao service install` wrote. If the self-hosted host setup script already installed its own service (`dev.aoagents.self-hosted` / `ao-self-hosted.service`) for the same data directory, `install` refuses and prints how to remove it, since that service already keeps the daemon running.
+
+`install` accepts `--port`, `--no-wait`, `--timeout`, and `--json`; `status` and `uninstall` accept `--json`. On Linux, a user service starts when you log in and stops when you log out unless lingering is on; `install` and `status` report it (`"linger"` in `--json`) with the command to turn it on, `loginctl enable-linger <user>`. On a headless server, turn it on so the service runs from boot. `journalctl --user -u agent-orchestrator-serve` shows early `ao serve` failures for the default service; for a custom `AO_DATA_DIR` or `AO_RUN_FILE`, use the name `ao service status` prints.
+
+### `ao setup`
+
+Takes Orchestrator from installed to ready for a task in one command. It is built for coding agents asked to "set up Orchestrator", and works the same from a terminal.
+
+```bash
+ao setup --path ~/code/my-app --json
+```
+
+It runs these steps in order and reports each as `{step, status, detail, fix}`, where `status` is `ok`, `fixed`, `skipped`, `needs_human`, or `failed`:
+
+| Step | What it does |
+| --- | --- |
+| `daemon` | Reuses the daemon serving this data directory, or starts one in the background the same way `ao serve` does. |
+| `agent` | Picks an agent for each role. `--worker-agent`/`--orchestrator-agent` set one role each, and `--agent` sets every other role. Without them, a registered project keeps its saved agents. On a registered project, a flag that differs from a saved agent takes effect only with `--yes`; without it, setup reports `needs_human` and does not replace the saved agents. A role that still has none gets the coding agent running the command (detected from its environment, `AI_AGENT` first), otherwise the first ready agent. Checks that it is installed and signed in, asking the agent's own sign-in status command when the daemon cannot tell. It never installs an agent or signs one in. |
+| `github` | Checks that the GitHub CLI is signed in. It never runs `gh auth login`. For a repository with a `github.com` remote, a missing or signed-out `gh` needs you (`needs_human`). Otherwise the step is advisory: `skipped`, with its fix in `next_actions`, and setup can still be ready. |
+| `project` | Registers `--path` (default: `AO_PROJECT_ID`'s project inside an Orchestrator session, otherwise the Git repository containing the current directory; a linked worktree resolves to its main repository) with the chosen agent for workers and the orchestrator, or reuses its registration. A repository with no remote gets its checked-out branch as the default branch, as `ao project set-config --default-branch` would. Setup uses `origin`, else the first remote, and saves another remote's branch remote-qualified (`upstream/main`). If that remote's default branch cannot be resolved (never fetched, unreachable), setup uses its `main` or `master` tracking branch if present. Otherwise it reports `needs_human` with `git -C <repo> fetch <remote> && git -C <repo> remote set-head <remote> --auto` (or `ao project set-config <id> --default-branch <branch>` if the remote stays unreachable). It never picks the checked-out branch there. |
+| `first-run` | Reports that a registered project makes the desktop app skip its first-run screens. |
+| `start` | Only with `--start "<task>"`: starts the task as `ao task start --wait` does, on the project's orchestrator or, with `--worker`, on one worker. |
+| `verify` | Sums up: `ready` is true when nothing is left to do. |
+
+| Flag | Purpose |
+| --- | --- |
+| `--path <repo>` | Repository to register. |
+| `--agent <id>` | Agent to use. `--worker-agent` and `--orchestrator-agent` override one role. |
+| `--start "<task>"` | Start this task once setup is ready. Add `--worker` for a single worker. |
+| `--yes` | Replace agents already saved on a registered project with the ones you passed. Without it, setup keeps them and reports `needs_human`. |
+| `--check` | Report what is set up and what is missing. Changes no setup state and never starts the daemon. It still runs read-only checks, such as the agents' own sign-in status commands and a bounded, non-interactive `git ls-remote` for the default branch, and records the usual CLI usage event. |
+| `--dry-run` | Show what setup would do, without changing anything. |
+| `--json` | Print one object: `{ready, agent, project, steps, next_actions, task}`. |
+
+| Exit code | Meaning |
+| --- | --- |
+| `0` | Ready, and the task started when `--start` was given. `--dry-run` also exits 0 when it only found work to do; its `ready` stays `false`. |
+| `10` | A person must act first. `next_actions` lists the exact commands, such as the agent's login command or `gh auth login`. With `--check`, also when `ao setup` still has work to do. |
+| `1` | A step failed, or the task started with `--start` failed. If `task.taskId` is set, check it with `ao task status` before starting the task again. |
+| `2` | Usage error. |
+| `3` | The task started with `--start` is waiting on you. |
+| `4` | The task started with `--start` was submitted, but the wait ended before it was confirmed (still queued, not confirmed in time, or interrupted). Do not start it again; follow it with `ao task wait <taskId>`. |
+
+```json
+{
+  "ready": false,
+  "agent": { "id": "my-agent", "source": "caller", "detectedFrom": "AI_AGENT", "authStatus": "unauthorized", "worker": "my-agent", "orchestrator": "my-agent" },
+  "project": { "id": "my-app", "path": "/Users/me/code/my-app", "defaultBranch": "main", "reused": false },
+  "steps": [
+    { "step": "daemon", "status": "ok", "detail": "daemon running at http://127.0.0.1:3001 (pid 4242)", "fix": "" },
+    { "step": "agent", "status": "needs_human", "detail": "using my-agent (the calling agent, detected from AI_AGENT): agent my-agent is not signed in (or use `ao setup --path /Users/me/code/my-app --yes --agent other-agent`)", "fix": "my-agent login" }
+  ],
+  "next_actions": ["my-agent login"],
+  "task": null
+}
+```
+
+The `steps` list above is shortened. A daemon that `ao setup` starts follows the same usage-analytics setting as `ao serve`. Once setup is ready, open the app on macOS with `open "/Applications/Agent Orchestrator.app"`.
 
 ### `ao doctor`
 
@@ -149,6 +262,57 @@ Important flags include:
 | `--skip-agent-check` | Skip only the CLI-side install/auth preflight. |
 
 Orchestrator chooses a project in this order: `--project`, `AO_PROJECT_ID`, the project for `AO_SESSION_ID`, then the closest registered project containing the current directory. Before spawning, Orchestrator refreshes the selected agent's readiness unless you use `--skip-agent-check`. Readiness is advisory.
+
+### `ao task`
+
+Hands a task to Orchestrator and reports, through its exit code, whether the agent really picked it up. It is meant for scripts and for other coding agents.
+
+```bash
+ao task start "Fix the failing login test" --wait --json
+```
+
+By default the project's orchestrator receives the task, plans it, and starts workers. With `--worker`, a single worker session takes the task directly. Without `--project`, Orchestrator uses `AO_PROJECT_ID`, then the closest (most specific) registered project that contains the current directory. It exits `2` as a usage error when no project contains it, or when several tie for the closest match.
+
+| Command | Purpose |
+| --- | --- |
+| `ao task start "<brief>"` | Start the task. Flags: `--project <id>`, `--worker`, `--agent <id>` and `--base <branch>` (only with `--worker`), `--wait`, `--timeout <duration>` (default `120s`), `--json`. |
+| `ao task status <task-id>` | Report the task's status once. Supports `--json`. |
+| `ao task wait <task-id>` | Wait until the task has started, failed, or needs you. Supports `--timeout` and `--json`. |
+
+`start --wait` behaves like `start` followed by `wait`. A status read that fails for a passing reason, such as the daemon being briefly unreachable, doesn't end a wait; it keeps polling within `--timeout`. A task has started once its turn has finished, or has stayed running for a few seconds before `--timeout` ends. `wait` confirms that the task started, not that it finished, so an approval the agent asks for later is not seen by that call: keep calling `ao task status` or `ao task wait` until it reports `done`, `failed` or `needs_input`. For a terminal (TUI) task this works when its agent records turns (Claude Code does); otherwise check the session with `ao session get <id>`. Before starting, Orchestrator checks that each agent involved is signed in, and stops if one definitely is not. Without `--worker`, `--agent` and `--base` exit `2` as a usage error, because the orchestrator chooses agents and branches for its workers; set project defaults with `ao project set-config` instead.
+
+For a task sent to the orchestrator, the status includes the workers it started: `needs_input` if any of them needs you, `running` while the orchestrator or any worker is still working, `failed` if a worker failed after the orchestrator's turn ended, and `done` only when the orchestrator and all its workers have finished. Each worker is read at the turn it is running now (otherwise its latest), so follow-up work the orchestrator sends it keeps the task `running`, and an approval on its running turn reads `needs_input` even when a follow-up is queued. A worker that cannot be read keeps the task `running`. After a retry of the orchestrator's turn, only the current attempt's workers can fail the task. Workers that existed before the task are not tracked. A terminal (TUI) worker is read from its recorded turns too; one whose agent records none never reads `done`, so the task stays `running`.
+
+| Exit code | Meaning |
+| --- | --- |
+| `0` | With `--wait` or `ao task wait`: the task started, running or done. A one-shot read (`ao task status`, or `start` without `--wait`) also exits `0` while the task is `starting` or `queued`, so check `status`. |
+| `1` | The task failed: the session could not start, or the agent's turn failed. Also a lookup that cannot succeed, such as a 404 for the session (this ends `ao task wait` too), or a status read that failed outside a wait. Transient read errors during a wait are retried within `--timeout`. A failed read does not prove the task failed, so when `taskId` is set, check it with `ao task status` before submitting again. |
+| `2` | Usage error: the command itself needs fixing. It prints no JSON. |
+| `3` | The task is waiting on you, for example for an approval. Answer it in Orchestrator; starting the task again would run it twice. |
+| `4` | The task was submitted but the wait ended before it was confirmed: `--timeout` ran out (still queued, still starting, workspace setup unfinished, or running for under 5 seconds), or the wait was interrupted (Ctrl-C, SIGTERM, a caller's timeout). The output still has the `taskId`; don't start the task again, follow it with `ao task wait`. |
+
+With `--json`, the command prints one object:
+
+```json
+{
+  "status": "failed",
+  "taskId": "my-app-3",
+  "sessionIds": ["my-app-3"],
+  "reason": "Not logged in · Please run /login (auth_required)",
+  "fix": "run `claude auth login`, then retry"
+}
+```
+
+`status` is `starting`, `queued` (accepted; runs after the agent's current turn), `running`, `done`, `failed`, or `needs_input`. `taskId` is what you pass to `ao task status` or `ao task wait`:
+
+- a worker task: the worker's session ID;
+- a task sent to a Chat orchestrator: `<orchestrator-session>:<turn>`;
+- a task sent to a terminal (TUI) orchestrator: `<orchestrator-session>:tui-<unix ms>-<length>-<hash>`, the first turn that session recorded from when the brief was sent that carries this brief (other work recorded after the send is never taken for it, and session activity alone never confirms it);
+- empty when no task id could be reported. That does not prove no task exists: if the reason says the daemon accepted the task without a turn id, or that delivery could not be confirmed, check the session with `ao session history <id>` before starting it again.
+
+For `needs_input`, `fix` names the session that owns the pending request: the orchestrator when its own turn asks, or the worker when a tracked worker asks. Answer in the session `fix` names.
+
+A terminal (TUI) session is judged by the turns its agent records, as `ao session history` shows them (Claude Code records them): a task reads `done` once its turn is recorded with a reply, even if it finished between polls. For a terminal orchestrator, `done` confirms its own turn only; its history has no records of the workers it started, so check those with `ao session ls`. A terminal orchestrator that was just started gets about 15 seconds to boot before the brief is typed in; if the brief still lands unsubmitted, the command exits `4` with the task id, and you submit it in that session rather than starting the task again. A terminal session whose agent records no turns only shows idle or working, so it is never `done`; if `ao task wait` sees it working and then back at its prompt, it reports `running`. If the wait times out, the reason says which case it was. `sessionIds` lists the session that runs the task and any workers the orchestrator started for it; their state is part of `status`. A task that finished stays `done` after its session or a worker is archived; only a session archived before its turn finished makes it `failed`. A chat task id whose turn is not in the session's history fails once the CLI has read back to the start of that history; until then it reads `starting`. When the agent is not signed in, `fix` gives the agent's own login command. `ao spawn`, `ao send`, and the session states are unchanged.
 
 ### `ao session`
 
@@ -283,7 +447,7 @@ Lets your other devices use this machine through its authenticated remote listen
 | `AO_SESSION_ID` | unset | Current session context for preview, browser, and in-session calls. |
 | `AO_PROJECT_ID` | unset | Current project context for spawn resolution. |
 
-All current Orchestrator application state stays under `~/.ao` unless `AO_DATA_DIR` or `AO_RUN_FILE` overrides it.
+All current Orchestrator application state stays under `~/.ao` unless `AO_DATA_DIR` or `AO_RUN_FILE` overrides it. The one file outside it is the service definition that `ao service install` writes, which holds no state.
 
 ## Report a problem
 

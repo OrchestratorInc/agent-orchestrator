@@ -9,7 +9,7 @@ executables and launches a local agent, and `ao import` reads a legacy install
 into the database while the daemon is stopped. Both are described below.
 
 When using the CLI directly from a shell, make sure the daemon is running first
-by opening the desktop app or running `ao daemon` under a service manager. Product commands such as
+by opening the desktop app, running `ao serve`, or running `ao service install`. Product commands such as
 `ao agent ls` and `ao spawn` call the loopback daemon and will fail with a
 "daemon is not running" error if no `running.json` points at a live process. From
 a source checkout, build and run the local binary explicitly, for example:
@@ -31,6 +31,9 @@ Product commands use daemon HTTP routes. The offline `ao triage` and `ao import`
 | ----------------------------- | --------------------------------------------------------------------------------------------------------------------------------- |
 | `ao start`                    | Open the desktop application, downloading a release if necessary; the app supervises its daemon.                                                                        |
 | `ao stop`                     | Gracefully stop the daemon via loopback `POST /shutdown` after verifying daemon identity.                                         |
+| `ao serve` / `--json`         | Reuse the daemon serving this data dir, or start the hidden `ao daemon` detached (headless, no `AO_OWNER`) and wait for `/readyz`; `--foreground` runs or watches it in process. |
+| `ao service install/status/uninstall` | Keep `ao serve --foreground` running as a launchd user agent (macOS) or systemd user unit (Linux); never needs sudo. |
+| `ao setup` / `--json` | One-command setup: the `ao serve` start path, `POST /api/v1/agents/readiness/ensure` + `POST /api/v1/agents/{id}/probe` (fix from `GET /api/v1/agents/auth-plans`), `GET /api/v1/system/github-auth`, `POST /api/v1/projects` (or reuse; `PUT /api/v1/projects/{id}/config` for a no-remote default branch), and `ao task start` with `--start`. Exit 0 ready, 10 needs a person, 1 failed, 2 usage, 3 task waiting on the user, 4 task submitted but the wait ended first (queued or interrupted; do not resend). `--check`/`--dry-run` write nothing. |
 | `ao status` / `--json`        | Report daemon state from `running.json`, process liveness, `/healthz`, and `/readyz`.                                             |
 | `ao doctor` / `--json`        | Check config, data directory, DB-file presence, daemon state, `git`, and (on Darwin/Linux) `tmux`; on Windows conpty is built in. |
 | `ao completion <shell>`       | Generate completions for `bash`, `zsh`, `fish`, or `powershell`.                                                                  |
@@ -121,6 +124,8 @@ the report. Re-running skips rows that already exist.
 | `ao session switch <id> [agent]` / `--from <agent> [agent]` `[--model <m>] [--effort <e>] [--permission <p>] [--force] [-m <text>]` | `--from` lists via `GET /api/v1/sessions?active=true`; each switch is `POST /api/v1/sessions/{id}/provider-switch`, then `POST /api/v1/sessions/{id}/send` for `-m` |
 | `ao orchestrator ls`                | `GET /api/v1/orchestrators`                    |
 | `ao send`                           | `POST /api/v1/sessions/{id}/send`              |
+| `ao task start "<brief>"`           | `POST /api/v1/agents/{id}/probe`, then `POST /api/v1/orchestrators` and `POST /api/v1/sessions/{id}/conversation/messages` (or `/send` for a TUI orchestrator); `--worker` uses `POST /api/v1/orchestrators/delegate`. Exit 0 started, 1 failed or timed out, 2 usage error, 3 waiting on the user, 4 `--wait` ran out while still queued (do not resend). |
+| `ao task status/wait <task-id>`     | `GET /api/v1/sessions/{id}` and `GET /api/v1/sessions/{id}/conversation` (paged with `beforeSequence`); a sign-in fix comes from `GET /api/v1/agents/auth-plans`. |
 | `ao report ...`                     | `POST /api/v1/reports`                         |
 | `ao preview [url]`                  | `POST /api/v1/sessions/{id}/preview`           |
 | `ao preview clear`                  | `DELETE /api/v1/sessions/{id}/preview`         |
