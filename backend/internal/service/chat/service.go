@@ -2816,6 +2816,12 @@ func settingsFromConfigOptions(
 	for _, option := range options {
 		for _, choice := range option.Choices {
 			if choice.Value == option.Current.Select && choice.PermissionMode != "" {
+				// agy acp reports accept-edits for AO's auto and bypass tiers too,
+				// so the reported mode is display-only when it would downgrade them.
+				if choice.Value == "accept-edits" &&
+					(settings.ApprovalMode == domain.PermissionModeAuto || settings.ApprovalMode == domain.PermissionModeBypassPermissions) {
+					continue
+				}
 				next.ApprovalMode = choice.PermissionMode
 			}
 		}
