@@ -17,6 +17,7 @@ const springs = vi.hoisted(() => ({ pending: [] as { to: number; done?: (finishe
 const haptics = vi.hoisted(() => ({ armed: vi.fn() }));
 
 vi.mock("react-native", () => ({
+	Dimensions: { get: () => ({ width: 402 }) },
 	Platform: { OS: "ios" },
 	StyleSheet: { create: (styles: unknown) => styles, hairlineWidth: 0.5, absoluteFill: { position: "absolute" } },
 	View: "View",
@@ -118,6 +119,14 @@ const settle = () => act(() => {
 	const done = springs.pending;
 	springs.pending = [];
 	done.forEach((spring) => spring.done?.(true));
+});
+
+// On iOS a row first drawn without a width keeps a title running off the
+// screen, so a row starts at the window's width (402 here) before it measures.
+it("gives the row the window's width before its slot has measured", () => {
+	Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
+	act(() => { renderer = create(<WorkerRowInteraction {...props} />); });
+	expect(renderer!.root.findByType("ContextMenu" as never).props.style).toEqual([{}, { width: 402 }]);
 });
 
 // A board switch builds every row it shows, so a resting row must cost little
