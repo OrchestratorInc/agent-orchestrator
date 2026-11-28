@@ -8453,3 +8453,91 @@ html[data-new-desktop-ui] [data-field="inline"] {
 html[data-new-desktop-ui] :is([data-field="field"], [data-field="compact"], [data-field="search"]) :where(input:not(.font-mono)) {
 	font-size: var(--font-size-base);
 }
+
+/* The toast deck (ui/toast-stack.tsx). Opening and closing share one quick
+ * ease-out, so every card fans out at once and settles back together. A card
+ * behind the front one keeps only its edge: its contents fade only once the
+ * deck has closed over it, and come back the moment it opens. */
+.toast-stack {
+	--toast-ease: cubic-bezier(0.22, 1, 0.36, 1);
+	transition: height 320ms var(--toast-ease), translate 200ms var(--ease-out);
+}
+
+.toast-slot {
+	transition: transform 320ms var(--toast-ease), opacity 120ms ease-out;
+}
+
+.toast-slot[data-hidden] {
+	opacity: 0;
+	transition: transform 320ms var(--toast-ease), opacity 120ms ease-out 200ms;
+}
+
+.toast-body {
+	transition: opacity 120ms ease-out;
+}
+
+.toast-slot[data-behind] .toast-body {
+	opacity: 0;
+	transition: opacity 120ms ease-out 240ms;
+}
+
+/* A step brighter than the page with a visible edge, so the card reads over
+ * the board, a chat or a list in either theme.
+ *
+ * Corners are concentric: the card's radius is its controls' radius plus the
+ * padding between them and its edge (R = r + d), so the action's and ×'s
+ * curves follow the card's. Setting --radius-control here carries r into every
+ * Button inside, hover pill included. */
+.toast-card {
+	--toast-card-fill: var(--color-bg-settings-menu);
+	--toast-pad: 8px;
+	--radius-control: 6px;
+	padding: var(--toast-pad);
+	border-radius: calc(var(--radius-control) + var(--toast-pad));
+	transition: height 320ms cubic-bezier(0.22, 1, 0.36, 1);
+	background-color: var(--toast-card-fill);
+	border-color: color-mix(in oklab, var(--foreground) 6%, transparent);
+}
+
+/* A card that opens something lifts a little under the pointer, and shows the
+ * focus ring of its stretched title button around the whole card. */
+.toast-card[data-openable] { cursor: pointer; }
+.toast-card[data-openable]:hover { background-color: color-mix(in oklab, var(--toast-card-fill), var(--foreground) 4%); }
+.toast-card[data-openable]:has([data-toast-open]:focus-visible) { outline: 2px solid color-mix(in oklab, var(--ring) 60%, transparent); outline-offset: -2px; }
+
+/* The tile at the start of a card: one padding inside the card's corner, so
+ * its radius is the card's less that padding, and the two curves stay
+ * concentric. The agent's badge sits on its lower right in the card's colour. */
+.toast-tile {
+	position: relative;
+	display: flex;
+	flex-shrink: 0;
+	align-items: center;
+	justify-content: center;
+	width: 36px;
+	height: 36px;
+	border-radius: var(--radius-control);
+	background-color: color-mix(in oklab, var(--foreground) 6%, transparent);
+}
+
+.toast-tile-badge {
+	position: absolute;
+	right: -3px;
+	bottom: -3px;
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	width: 16px;
+	height: 16px;
+	border-radius: 999px;
+	background-color: var(--toast-card-fill);
+}
+
+html:not([data-theme="light"]) .toast-card {
+	--toast-card-fill: color-mix(in oklab, var(--color-bg-settings-menu), #fff 7%);
+	border-color: color-mix(in oklab, var(--foreground) 6%, transparent);
+}
+
+@media (prefers-reduced-motion: reduce) {
+	.toast-stack, .toast-slot, .toast-slot[data-hidden], .toast-body, .toast-slot[data-behind] .toast-body, .toast-card { transition: none; }
+}

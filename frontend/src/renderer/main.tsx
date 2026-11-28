@@ -64,6 +64,7 @@ aoBridge.telemetry.onAnalyticsOptOut((optedOut) => {
 if (import.meta.env.DEV) {
 	const w = window as never as Record<string, unknown>;
 	w.__qc = queryClient;
+	void import("./lib/toast-demo").then(({ toastDemo }) => { w.__toastDemo = () => toastDemo(queryClient); });
 	// __testNotif("needs_input") — simulates a real notification:
 	//   bell count + dock badge update immediately; dock bounces after 3s
 	//   (gives you time to click away from AO so the bounce is visible)

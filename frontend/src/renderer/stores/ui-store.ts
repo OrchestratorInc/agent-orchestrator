@@ -1,4 +1,5 @@
 import { uiUsage } from "../lib/ui-usage-telemetry";
+import type { ToastArt } from "../components/ui/toast-art";
 import { create } from "zustand";
 import { aoBridge } from "../lib/bridge";
 import { developerModeStorageKey, readStoredWindowTranslucency, windowTranslucencyStorageKey } from "../lib/window-translucency";
@@ -208,14 +209,18 @@ export type GlobalToast = {
 	/** Zero keeps the toast visible until explicitly dismissed. */
 	durationMs?: number;
 	dedupeKey?: string;
-	/** One button on the toast, such as Undo or Open; pressing it dismisses the toast. */
-	action?: { label: string; run: () => void };
+	/** One button on the toast, such as Undo or Open; pressing it dismisses the toast unless `keepOpen`, for work the toast then reports on. */
+	action?: { label: string; run: () => void; keepOpen?: boolean; busy?: boolean };
+	/** Pressing the card itself runs this, then dismisses the toast. */
+	onOpen?: () => void;
+	/** The picture of the data at the toast's start; defaults to a rail in the tone. */
+	art?: ToastArt;
 	/** One line until hovered or focused: the body opens on hover or keyboard focus, and the action is the ✕. */
 	compact?: boolean;
 	nonce: number;
 };
 
-export type GlobalToastOptions = Pick<GlobalToast, "tone" | "placement" | "dismissible" | "durationMs" | "dedupeKey" | "action" | "compact">;
+export type GlobalToastOptions = Pick<GlobalToast, "tone" | "placement" | "dismissible" | "durationMs" | "dedupeKey" | "action" | "onOpen" | "art" | "compact">;
 
 export type WorkspaceFileOpenRequest = {
 	sessionId: string;
@@ -1255,10 +1260,13 @@ export const useUiStore = create<UiState>((set, get) => ({
 			const tone = options?.tone ?? (style === "error" || style === "info" || style === "success" ? style : "info");
 			const placement = options?.placement ?? (style === "top-center" || style === "bottom-right" || style === "bottom-center" ? style : "bottom-right");
 			const toast = { title, body, tone, placement, nonce, ...options };
-			const globalToasts = toast.dedupeKey
-				? state.globalToasts.filter((existing) => existing.dedupeKey !== toast.dedupeKey)
-				: state.globalToasts;
-			return { globalToast: toast, globalToasts: [...globalToasts, toast], globalToastSequence: nonce };
+			// A toast with the key of one still showing replaces it where it is, so
+			// work it reports on updates in place instead of jumping to the front.
+			const index = toast.dedupeKey ? state.globalToasts.findIndex((existing) => existing.dedupeKey === toast.dedupeKey) : -1;
+			const globalToasts = index === -1
+				? [...state.globalToasts, toast]
+				: state.globalToasts.map((existing, i) => (i === index ? toast : existing));
+			return { globalToast: toast, globalToasts, globalToastSequence: nonce };
 		});
 		// Every error toast in the app passes through here, so this one line counts them all.
 		if (get().globalToast?.tone === "error") uiUsage.errorShown("toast", "toast");

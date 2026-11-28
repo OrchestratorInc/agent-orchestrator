@@ -61,6 +61,7 @@ import { useCloudCp } from "../hooks/useCloudCp";
 import { useCloudOrg } from "../hooks/useCloudOrg";
 import { clearRemoteNotification, clearRemoteNotifications, connectRemoteNotificationStreams, fetchRemoteNotificationsPage, markRemoteNotificationsRead, remoteNotificationsQueryKey, useRemoteNotificationHosts } from "../hooks/useRemoteNotifications";
 import type { CloudCpNotification } from "../lib/cloud-cp/types";
+import { sessionProvider, showNotificationToast } from "../lib/notification-toast";
 
 type SessionMeta = { projectId: string; projectName: string; sessionName: string };
 
@@ -193,6 +194,8 @@ export function NotificationRuntime() {
 	const queryClient = useQueryClient();
 	const { openPrimary } = useNotificationTargetNavigation();
 	const navigateToSession = useNavigateToSession();
+	const navigateToSessionRef = useRef(navigateToSession);
+	navigateToSessionRef.current = navigateToSession;
 	const unreadQuery = useNotificationsQuery("unread");
 	const remoteUnread = useRemoteNotificationHosts("unread");
 	// CloudNotificationRuntime keeps the Cloud list live; this only reads it,
@@ -226,9 +229,18 @@ export function NotificationRuntime() {
 		return useUiStore.getState().visibleTerminalKindBySession[sessionId] === "worker" ? sessionId : undefined;
 	}, []);
 
+	// The transport lives as long as the shell, so it reads the latest opener.
+	const openPrimaryRef = useRef(openPrimary);
+	openPrimaryRef.current = openPrimary;
+	// A notification also shows as a toast as it arrives, unless its agent is the one on screen.
+	const onArrived = useCallback((notification: NotificationDTO, watched: boolean) => {
+		if (watched) return;
+		const provider = sessionProvider(queryClient, notification.target.sessionId || notification.sessionId);
+		showNotificationToast({ ...notification, provider }, () => openPrimaryRef.current(notification));
+	}, [queryClient]);
 	useEffect(
-		() => createNotificationsTransport(queryClient, getVisibleAgentSessionId).connect(),
-		[getVisibleAgentSessionId, queryClient],
+		() => createNotificationsTransport(queryClient, getVisibleAgentSessionId, onArrived).connect(),
+		[getVisibleAgentSessionId, onArrived, queryClient],
 	);
 	useEffect(() => connectRemoteNotificationStreams(queryClient), [queryClient]);
 
@@ -265,6 +277,8 @@ export function NotificationRuntime() {
 					type: notification.type,
 					watched,
 				});
+				const remoteHostId = host.hostId;
+				if (!watched) showNotificationToast({ ...notification, id, hostLabel: host.label }, () => openPrimaryRef.current(notification, remoteHostId));
 			}
 			for (const id of currentIds) {
 				previousIds.delete(id);
@@ -304,6 +318,12 @@ export function NotificationRuntime() {
 				body: notification.body || undefined,
 				type: notification.type,
 				watched,
+			});
+			if (!watched) showNotificationToast({ ...notification, id }, () => {
+				if (!notification.sessionId || !notification.projectId) return;
+				recordManualWorkerOpen(notification.sessionId);
+				void captureRendererEvent("ao.notifications.opened", { target: "session" });
+				navigateToSessionRef.current(notification.projectId, notification.sessionId);
 			});
 		}
 	}, [cloudItems, cloudScope]);
