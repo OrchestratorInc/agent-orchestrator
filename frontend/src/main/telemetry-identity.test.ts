@@ -43,6 +43,23 @@ describe("TelemetryIdentityController plan hand-off", () => {
 	});
 });
 
+describe("TelemetryIdentityController plan hand-off across a daemon restart", () => {
+	it("ignores a late acknowledgment from a daemon that left ready", async () => {
+		let answer: (response: Response) => void = () => undefined;
+		const fetcher = vi.fn(() => new Promise<Response>((resolve) => { answer = resolve; }));
+		const { ctl } = await controller(fetcher as never);
+		const pending = ctl.setPlan("pro");
+		await vi.waitFor(() => expect(fetcher).toHaveBeenCalledTimes(1));
+		ctl.invalidate();
+		answer(new Response(null, { status: 204 }));
+		await pending;
+		const replay = ctl.flush();
+		await vi.waitFor(() => expect(fetcher).toHaveBeenCalledTimes(2));
+		answer(new Response(null, { status: 204 }));
+		await replay;
+	});
+});
+
 describe("TelemetryIdentityController cloud user hand-off", () => {
 	it("does not send a launch-time sign-out before the renderer resolves its session", async () => {
 		const { ctl, fetcher } = await controller();

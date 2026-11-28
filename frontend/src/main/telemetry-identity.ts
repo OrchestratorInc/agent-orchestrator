@@ -51,6 +51,9 @@ export class TelemetryIdentityController {
 	// both sides, so it is replayed to a restarted daemon like the user.
 	private plan: string | null = null;
 	private planPushed = true;
+	// Bumped on every invalidate, so a late answer from a daemon that already
+	// left `ready` cannot mark the plan pushed for the next one.
+	private planGeneration = 0;
 
 	constructor(
 		private readonly dataDir: string,
@@ -107,6 +110,7 @@ export class TelemetryIdentityController {
 	 * the next ready transition must replay the signed-in user.
 	 */
 	invalidate(): void {
+		this.planGeneration++;
 		if (this.plan !== null) this.planPushed = false;
 		if (!this.known) return;
 		this.pushed = false;
@@ -183,10 +187,11 @@ export class TelemetryIdentityController {
 		if (plan === null || this.planPushed) return;
 		const base = this.origin();
 		if (!base) return;
+		const generation = this.planGeneration;
 		try {
 			const response = await this.request(base, "/internal/telemetry/identity", { method: "POST", body: { plan } });
 			// A daemon without plan support refuses the field (400) or the route (404/405): nothing to retry.
-			if (this.plan === plan) this.planPushed = response.ok || response.status === 400 || response.status === 404 || response.status === 405;
+			if (this.plan === plan && this.planGeneration === generation) this.planPushed = response.ok || response.status === 400 || response.status === 404 || response.status === 405;
 		} catch {
 			// Daemon not reachable yet; flush() runs again on the next ready transition.
 		}

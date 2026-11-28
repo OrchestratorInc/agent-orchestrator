@@ -349,6 +349,36 @@ describe("cloud funnel telemetry", () => {
 			expect(planChanges()).toEqual([]);
 		});
 
+		it("uses the active org, not the first", async () => {
+			const twoOrgs = {
+				...me,
+				activeOrganizationId: "org-2",
+				organizations: [{ id: "org-1", slug: "a", displayName: "A", role: "owner" }, { id: "org-2", slug: "b", displayName: "B", role: "owner" }],
+			} as unknown as CloudCpMeResponse;
+			const client = instrumentCloudClient(fakeClient({
+				me: vi.fn(async () => twoOrgs),
+				getBilling: vi.fn(async () => paid("pro")),
+			} as unknown as Partial<CloudCpClient>));
+			await client.me();
+			expect(contexts.at(-1)).toMatchObject({ orgId: "org-2", plan: "unknown" });
+			await client.getBilling("org-2");
+			expect(contexts.at(-1)).toMatchObject({ orgId: "org-2", plan: "pro", paid: true });
+		});
+
+		it("keeps none when billing turned off while a billing request was in flight", async () => {
+			let release: (summary: Record<string, unknown>) => void = () => undefined;
+			const client = instrumentCloudClient(fakeClient({
+				me: vi.fn(async () => me),
+				getBilling: vi.fn(() => new Promise((resolve) => { release = resolve; })),
+			} as unknown as Partial<CloudCpClient>));
+			await client.me();
+			const inFlight = client.getBilling("org-1");
+			reportCloudOffering({ ...me, offering: { providers: [], billingMode: "off", kind: "b2c" } } as unknown as CloudCpMeResponse);
+			release(paid("pro"));
+			await inFlight;
+			expect(contexts.at(-1)).toMatchObject({ plan: "none", paid: false });
+		});
+
 		it("tags the org's events with the plan once billing loads", async () => {
 			const { client, set } = billingClient(paid("pro"));
 			await client.me();

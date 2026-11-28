@@ -17,6 +17,7 @@
 import type { CloudCpClient } from "./cloud-cp/client";
 import type { CloudCpCreateSessionRequest, CloudCpMeResponse, CloudCpSession } from "./cloud-cp/types";
 import { billingSummaryPlan, isPaidBillingSummary, type CloudPlan } from "../../shared/cloud-plan";
+import { selectActiveOrganization } from "./cloud-offering";
 import { captureRendererEvent, hashedTelemetryID, setCloudTelemetryContext } from "./telemetry";
 
 /** Pending session creations, keyed by session id, for time-to-ready. */
@@ -137,8 +138,14 @@ interface OfferingShape {
  * exception with the hashed org id, kind and billing mode.
  */
 export function reportCloudOffering(me: CloudCpMeResponse): void {
-	const orgId = me.organizations[0]?.id;
-	const offering = ((me as unknown as { offering?: OfferingShape }).offering ?? {}) as OfferingShape;
+	// The org every control-plane call (billing included) is scoped to, and its
+	// offering: its own, else the top-level one when that describes this org.
+	const organizations = me.organizations ?? [];
+	const org = selectActiveOrganization(organizations, me.activeOrganizationId);
+	const orgId = org?.id;
+	const describedByTopLevel = me.activeOrganizationId ? orgId === me.activeOrganizationId : org === organizations[0];
+	const topLevel = (me as unknown as { offering?: OfferingShape }).offering;
+	const offering = ((org as { offering?: OfferingShape } | undefined)?.offering ?? (org === undefined || describedByTopLevel ? topLevel : undefined) ?? {}) as OfferingShape;
 	const providers = Array.isArray(offering.providers)
 		? offering.providers.filter((value): value is string => typeof value === "string")
 		: me.sandboxProviders?.available ?? [];
@@ -159,7 +166,7 @@ export function reportCloudOffering(me: CloudCpMeResponse): void {
 		billing_mode: billingMode,
 		default_provider: defaultProvider,
 		provider_count: providers.length,
-		org_count: me.organizations.length,
+		org_count: organizations.length,
 	});
 }
 
@@ -239,7 +246,8 @@ export async function observeBillingPlan(orgId: string, summary: Parameters<type
 	const plan = billingSummaryPlan(summary);
 	const paid = isPaidBillingSummary(summary);
 	billedPlans.set(orgId, { plan, paid });
-	if (currentOffering?.orgId === orgId) setCloudTelemetryContext({ ...currentOffering, plan, paid });
+	// A summary that lands after /me said billing is off cannot bring a plan back.
+	if (currentOffering?.orgId === orgId && currentOffering.billingMode !== "off") setCloudTelemetryContext({ ...currentOffering, plan, paid });
 	const to = PLAN_RANKS.get(plan);
 	if (to === undefined) return;
 	const orgHash = await hashedTelemetryID(orgId);
