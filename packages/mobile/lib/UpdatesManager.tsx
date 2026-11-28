@@ -2,21 +2,26 @@ import * as Updates from "expo-updates";
 import { usePathname } from "expo-router";
 import { useEffect, useRef } from "react";
 import { AppState } from "react-native";
-import { checkAndDownload, isSetupRoute, onForeground, shouldOfferUpdate } from "./updates";
+import { checkAndDownload, isSetupRoute, latestTime, onForeground, shouldOfferUpdate } from "./updates";
 import { showUpdateReady } from "./updateScreenState";
 
 // Headless, mounted once in the root layout. Whenever an update finishes
 // downloading — natively at launch, on a resume check, or from Settings — it
 // raises the update screen, which restarts only when the user taps Restart —
 // except during onboarding or pairing, where the offer waits until they leave.
-// After the app has been in the background a while, a resume offers a pending
-// update again (if it was put off) or checks for a new one in the background.
+// Each return to the app checks again once the last check is stale, and offers
+// an update the user put off again once a day.
 export function UpdatesManager(): null {
-	const { isUpdatePending, downloadedUpdate } = Updates.useUpdates();
+	const { isUpdatePending, downloadedUpdate, lastCheckForUpdateTimeSinceRestart } = Updates.useUpdates();
 	const pending = useRef(isUpdatePending);
 	pending.current = isUpdatePending;
-	const backgroundedAt = useRef<number | null>(null);
+	// Native checks on every cold start (ON_LOAD) and may still be at it when
+	// this mounts, so the launch counts as a check until native reports its own.
+	const lastCheckStarted = useRef(Date.now());
+	const nativeLastCheck = useRef<number | null>(null);
+	nativeLastCheck.current = lastCheckForUpdateTimeSinceRestart?.getTime() ?? null;
 	const lastOffered = useRef<string | null>(null);
+	const lastOfferedAt = useRef<number | null>(null);
 	const updateId = downloadedUpdate?.updateId;
 	// Read on every change so an update that lands during onboarding or pairing
 	// is offered as soon as the user leaves it.
@@ -28,6 +33,7 @@ export function UpdatesManager(): null {
 		if (!Updates.isEnabled) return;
 		if (!shouldOfferUpdate(isUpdatePending, updateId, lastOffered.current, pathname)) return;
 		lastOffered.current = updateId ?? "embedded";
+		lastOfferedAt.current = Date.now();
 		showUpdateReady();
 	}, [isUpdatePending, updateId, pathname]);
 
@@ -35,17 +41,23 @@ export function UpdatesManager(): null {
 		// Disabled in dev builds; every call would reject.
 		if (!Updates.isEnabled) return;
 		const sub = AppState.addEventListener("change", (state) => {
-			if (state === "background") {
-				backgroundedAt.current = Date.now();
-				return;
-			}
 			if (state !== "active") return;
-			const action = onForeground(pending.current, backgroundedAt.current, Date.now());
-			backgroundedAt.current = null;
-			if (action === "prompt") {
-				if (!isSetupRoute(pathnameRef.current)) showUpdateReady();
-			} else if (action === "check") {
-				// A new download flips `isUpdatePending`, and the effect above offers it.
+			const now = Date.now();
+			const { prompt, check } = onForeground({
+				pending: pending.current,
+				lastCheckAt: latestTime(lastCheckStarted.current, nativeLastCheck.current),
+				lastOfferedAt: lastOfferedAt.current,
+				now,
+			});
+			if (prompt && !isSetupRoute(pathnameRef.current)) {
+				lastOfferedAt.current = now;
+				showUpdateReady();
+			}
+			// Independent of the prompt: a held-back offer must not hold back the check.
+			if (check) {
+				lastCheckStarted.current = now;
+				// A new download flips `isUpdatePending` or changes `updateId`, and the
+				// effect above offers it.
 				void checkAndDownload(Updates).then((outcome) => {
 					if (outcome.kind === "error") console.warn("[updates] check failed", outcome.error);
 				});

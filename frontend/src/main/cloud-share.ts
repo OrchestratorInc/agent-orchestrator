@@ -646,10 +646,92 @@ export async function cloudSessionArtifactVersion(
 	baseUrl: string,
 	ref: CloudSessionArtifactRef,
 ): Promise<{ name: string; size: number; sha256: string }> {
-	const { artifacts } = await callApi<{ artifacts: Array<{ path: string; name: string; size: number; sha256: string }> }>(api, baseUrl, "GET", `${sessionApiPath(ref)}/artifacts`);
+	const artifacts = await listCloudSessionArtifacts(api, baseUrl, ref);
 	const artifact = artifacts.find((candidate) => candidate.path === ref.path);
 	if (!artifact) throw new CloudShareError("file_missing", "The file is no longer available.");
 	return { name: artifact.path.split("/").pop() || artifact.name, size: artifact.size, sha256: artifact.sha256 };
+}
+
+/** A cloud session's committed file as its session lists it. */
+export interface CloudSessionArtifact {
+	path: string;
+	name: string;
+	size: number;
+	sha256: string;
+}
+
+/** Every committed file of ref's session, as its artifact list names them. */
+export async function listCloudSessionArtifacts(api: CloudShareApi, baseUrl: string, ref: Omit<CloudSessionArtifactRef, "path">, signal?: AbortSignal): Promise<CloudSessionArtifact[]> {
+	const { artifacts } = await callApi<{ artifacts: CloudSessionArtifact[] }>(api, baseUrl, "GET", `${sessionApiPath({ ...ref, path: "" })}/artifacts`, undefined, signal);
+	return artifacts;
+}
+
+/**
+ * A cloud session's file's text, read through a short-lived access prefix,
+ * when it is still the committed version sha256; null when the session has
+ * committed another version since. Only a page's text is read, to find the
+ * files it uses. A body over limit bytes is another version than the one
+ * listed: it is stopped there, never held whole, and is null too.
+ */
+export async function readCloudSessionArtifactText(
+	api: CloudShareApi,
+	baseUrl: string,
+	ref: CloudSessionArtifactRef & { sha256: string },
+	limit: number,
+	signal?: AbortSignal,
+): Promise<string | null> {
+	const { filesPrefix } = await callApi<{ filesPrefix: string }>(api, baseUrl, "POST", `${sessionApiPath(ref)}/artifacts/access`, undefined, signal);
+	if (!filesPrefix.startsWith("/")) throw new CloudShareError("invalid_response", "Orchestrator Cloud answered with an unexpected file address.");
+	const base = parseCloudBaseUrl(baseUrl);
+	const url = base.origin + base.pathname.replace(/\/+$/, "") + filesPrefix + ref.path.split("/").map(encodeURIComponent).join("/");
+	const bytes = await fetchWithin(SHARE_TIMEOUTS.api, signal, async (limited) => {
+		// The prefix carries its own access: no bearer header.
+		const response = await api.fetch(url, { method: "GET", signal: limited });
+		if (response.status === 404) {
+			await response.body?.cancel().catch(() => undefined);
+			throw new CloudShareError("file_missing", "The file is no longer available.");
+		}
+		if (!response.ok) {
+			await response.body?.cancel().catch(() => undefined);
+			throw new CloudShareError(`http_${response.status}`, `Request failed (${response.status})`, response.status);
+		}
+		if (!response.body) return Buffer.alloc(0);
+		const reader = response.body.getReader();
+		const chunks: Uint8Array[] = [];
+		let total = 0;
+		for (;;) {
+			const { done, value } = await reader.read();
+			if (done) break;
+			total += value.byteLength;
+			if (total > limit) {
+				await reader.cancel().catch(() => undefined);
+				return null;
+			}
+			chunks.push(value);
+		}
+		return Buffer.concat(chunks);
+	});
+	if (bytes === null) return null;
+	if (createHash("sha256").update(bytes).digest("hex") !== ref.sha256) return null;
+	return bytes.toString("utf8");
+}
+
+/** A file a cloud session's page uses, as shareCloudSessionArtifact lists it. */
+export interface CloudSessionShareFileRef {
+	/** Where the link serves it, relative to its root. */
+	path: string;
+	/** Its path in the session's artifacts. */
+	artifactPath: string;
+	/** Its committed version as listed: the control plane copies only that one. */
+	sha256: string;
+}
+
+/** What the control plane did with the files a cloud session's page listed. */
+export interface CloudSessionPageFilesResult {
+	included: number;
+	refusedVideos: string[];
+	tooLargeVideos: string[];
+	missing: string[];
 }
 
 /**
@@ -661,11 +743,16 @@ export async function cloudSessionArtifactVersion(
 export function shareCloudSessionArtifact(
 	api: CloudShareApi,
 	baseUrl: string,
-	ref: CloudSessionArtifactRef & ShareAccessInput & { sha256: string; shareId?: string },
+	ref: CloudSessionArtifactRef & ShareAccessInput & { sha256: string; shareId?: string; files?: CloudSessionShareFileRef[] },
 	signal?: AbortSignal,
-): Promise<{ share: CloudShareLink; replaced: boolean }> {
-	return callApi<{ share: CloudShareLink; replaced: boolean }>(api, baseUrl, "POST", `${sessionApiPath(ref)}/artifacts/share`,
-		{ path: ref.path, sha256: ref.sha256, ...(ref.shareId ? { shareId: ref.shareId } : {}), ...accessFields(ref) }, signal, SHARE_TIMEOUTS.publish);
+): Promise<{ share: CloudShareLink; replaced: boolean; pageFiles?: CloudSessionPageFilesResult }> {
+	return callApi<{ share: CloudShareLink; replaced: boolean; pageFiles?: CloudSessionPageFilesResult }>(api, baseUrl, "POST", `${sessionApiPath(ref)}/artifacts/share`, {
+		path: ref.path,
+		sha256: ref.sha256,
+		...(ref.shareId ? { shareId: ref.shareId } : {}),
+		...accessFields(ref),
+		...(ref.files ? { files: ref.files.map(({ path: served, artifactPath, sha256 }) => ({ path: served, artifactPath, sha256 })) } : {}),
+	}, signal, SHARE_TIMEOUTS.publish);
 }
 
 export interface ShareUploadInput extends ShareAccessInput {

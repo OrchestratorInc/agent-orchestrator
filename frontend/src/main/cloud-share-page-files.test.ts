@@ -7,7 +7,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 vi.mock("electron", () => ({ ipcMain: {} }));
 vi.mock("./cloud-auth", () => ({ getCloudAccessToken: vi.fn(async () => "token-1") }));
 
-import { collectPageFiles, findPageFiles, isSharePage, MAX_PAGE_FILES, pageFileReferences, servedPath } from "./cloud-share-page-files";
+import { CloudShareError } from "./cloud-share";
+import { collectPageFiles, findPageFiles, isSharePage, MAX_PAGE_FILES, MAX_PAGE_LOOKUPS, pageFileReferences, servedPath } from "./cloud-share-page-files";
 
 describe("pageFileReferences", () => {
 	it("finds what the page's markup and styles load", () => {
@@ -137,6 +138,19 @@ describe("collectPageFiles", () => {
 		const { files, skipped } = await collectPageFiles(dataDir, "sess-1", "page.html", html);
 		expect(files).toHaveLength(MAX_PAGE_FILES);
 		expect(skipped).toEqual([{ reference: `many/${MAX_PAGE_FILES}.png`, reason: "limit" }]);
+	});
+
+	it("asks about at most MAX_PAGE_LOOKUPS files, though none is found", async () => {
+		const html = Array.from({ length: MAX_PAGE_LOOKUPS + 5 }, (_, index) => `<img src="gone/${index}.png">`).join("");
+		let asked = 0;
+		const { files, skipped } = await findPageFiles("page.html", html, async (): Promise<{ relativePath: string }> => {
+			asked += 1;
+			throw new CloudShareError("file_missing", "gone");
+		});
+		expect(asked).toBe(MAX_PAGE_LOOKUPS);
+		expect(files).toEqual([]);
+		expect(skipped.filter((skip) => skip.reason === "missing")).toHaveLength(MAX_PAGE_LOOKUPS);
+		expect(skipped.filter((skip) => skip.reason === "limit")).toHaveLength(5);
 	});
 
 	it("stops looking files up once the most a link serves are found", async () => {

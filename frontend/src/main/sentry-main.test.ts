@@ -1,14 +1,14 @@
 import { createHash } from "node:crypto";
 import { AoError } from "../../../packages/shared/telemetry/ao-error";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { mkdtemp, mkdir, readdir, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import type { ElectronMainOptions, ErrorEvent } from "@sentry/electron/main";
 import { DEFAULT_ELECTRON_SENTRY_DSN } from "../shared/sentry-config";
 import { DesktopTelemetryController } from "./desktop-telemetry-controller";
-import { clearMainSentryCache, createErrorBudget, ERROR_BUDGET_FILE, electronMainSentryDsn, initMainSentry, installInErrorSample, sanitizeRendererCapture } from "./sentry-main";
+import { clearMainSentryCache, createErrorBudget, ERROR_BUDGET_FILE, electronMainSentryDsn, initMainSentry, installInErrorSample, sanitizeRendererCapture, setMainSentryPlan } from "./sentry-main";
 
 const hashParts = (text: string) => ["sha256", createHash("sha256").update(text).digest("hex").slice(0, 10)];
 
@@ -44,6 +44,7 @@ beforeEach(() => {
 afterEach(() => {
 	vi.unstubAllEnvs(); vi.restoreAllMocks(); vi.clearAllMocks(); sdk.close.mockResolvedValue(true);
 	installId.value = "ins_sampled_5";
+	setMainSentryPlan("unknown");
 	rmSync(dataDir, { recursive: true, force: true });
 });
 
@@ -651,6 +652,69 @@ describe("Electron main error sampling and budget", () => {
 			// A forged onboarding code is an ordinary event, so this install still samples it out.
 			transport.capture({ ...failure, tags: { category: "onboarding", code: "private:install_failed" } });
 			expect(beforeSend(sdk.captureEvent.mock.calls.at(-1)?.[0] as ErrorEvent)).toBeNull();
+		} finally {
+			rmSync(unsampledDir, { recursive: true, force: true });
+		}
+	});
+
+	it("sends a paid install's errors outside the sample, and a free one's not", async () => {
+		installId.value = "ins_unsampled_0";
+		const unsampledDir = mkdtempSync(path.join(os.tmpdir(), "ao-sentry-main-"));
+		try {
+			await initMainSentry("1.0.0", unsampledDir, "/tmp/ao-electron-test");
+			const beforeSend = beforeSendOf();
+			for (const plan of ["free", "none", "unknown", "Pro Plan"]) {
+				setMainSentryPlan(plan);
+				expect(beforeSend(mainError("main"))).toBeNull();
+			}
+			for (const plan of ["starter", "pro", "enterprise"]) {
+				setMainSentryPlan(plan);
+				expect(beforeSend(mainError(plan === "pro" ? "main" : "other"))?.tags).toMatchObject({ plan, sample_rate: "1" });
+			}
+		} finally {
+			rmSync(unsampledDir, { recursive: true, force: true });
+		}
+	});
+
+	it("tags renderer, main and handled events with the plan, never a value outside the vocabulary", async () => {
+		const transport = await initMainSentry("1.0.0", dataDir, "/tmp/ao-electron-test");
+		const beforeSend = beforeSendOf();
+		expect(beforeSend(mainError("main"))?.tags).toMatchObject({ plan: "unknown" });
+		setMainSentryPlan("Acme Corp $49");
+		expect(beforeSend(mainError("main"))?.tags).toMatchObject({ plan: "unknown" });
+		setMainSentryPlan("pro");
+		transport.capture({ consentGeneration: "generation-1", kind: "exception", message: "", level: "error", exception: { type: "TypeError", frames: [] } });
+		transport.captureMain?.({ category: "daemon", reason: "exited", detail: "signal:SIGKILL" });
+		const [renderer, handled] = sdk.captureEvent.mock.calls.map((call) => beforeSend(call[0] as ErrorEvent));
+		expect(renderer?.tags).toMatchObject({ surface: "renderer", plan: "pro" });
+		expect(handled?.tags).toMatchObject({ kind: "handled", plan: "pro" });
+		expect(beforeSend(mainError("main"))?.tags).toMatchObject({ surface: "electron-main", plan: "pro" });
+	});
+
+	it("keeps the per-fingerprint daily cap for a paid install", async () => {
+		installId.value = "ins_unsampled_0";
+		const unsampledDir = mkdtempSync(path.join(os.tmpdir(), "ao-sentry-main-"));
+		try {
+			await initMainSentry("1.0.0", unsampledDir, "/tmp/ao-electron-test");
+			setMainSentryPlan("pro");
+			const beforeSend = beforeSendOf();
+			// Three per fingerprint per day.
+			for (let sent = 0; sent < 3; sent++) expect(beforeSend(mainError("main"))).not.toBeNull();
+			expect(beforeSend(mainError("main"))).toBeNull();
+		} finally {
+			rmSync(unsampledDir, { recursive: true, force: true });
+		}
+	});
+
+	it("keeps the per-install daily cap for a paid install", async () => {
+		installId.value = "ins_unsampled_0";
+		const unsampledDir = mkdtempSync(path.join(os.tmpdir(), "ao-sentry-main-"));
+		try {
+			// Today's 25 events are already spent.
+			writeFileSync(path.join(unsampledDir, ERROR_BUDGET_FILE), JSON.stringify({ day: new Date().toISOString().slice(0, 10), total: 25, fingerprints: {} }));
+			await initMainSentry("1.0.0", unsampledDir, "/tmp/ao-electron-test");
+			setMainSentryPlan("enterprise");
+			expect(beforeSendOf()(mainError("main"))).toBeNull();
 		} finally {
 			rmSync(unsampledDir, { recursive: true, force: true });
 		}

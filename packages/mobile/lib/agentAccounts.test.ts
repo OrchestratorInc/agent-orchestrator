@@ -6,7 +6,7 @@ vi.mock("expo/fetch", () => ({ fetch: vi.fn() }));
 
 import { createElement } from "react";
 import { act, create, type ReactTestRenderer } from "react-test-renderer";
-import { agentAccountLabel, agentAccountOptions, agentAccountProvider, getAgentAccounts, getSessionAgentAccount, moveSessionAgentAccount, useAgentAccounts } from "./agentAccounts";
+import { accountUsageAccessibilityLabel, agentAccountInitial, agentAccountLabel, agentAccountOptions, agentAccountPeakUsage, agentAccountProvider, agentAccountUsageSeverity, agentAccountUsageSummary, getAgentAccounts, getSessionAgentAccount, moveSessionAgentAccount, useAgentAccounts } from "./agentAccounts";
 import { delegateTask, spawnSession } from "./api";
 import type { ServerConfig } from "./config";
 
@@ -14,6 +14,59 @@ Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
 
 const cfg: ServerConfig = { host: "ao.test", httpPort: "3011", muxPort: "3011", secure: false, password: "secret12" };
 const json = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
+
+describe("agent account usage", () => {
+	const now = Date.parse("2026-11-27T10:00:00Z");
+	const limits = { windows: [
+		{ id: "five_hour", label: "Session (5h)", usedPercent: 42.4 },
+		{ id: "seven_day", label: "Weekly", usedPercent: 18 },
+	] };
+
+	it("names the avatar by email, then name, then provider", () => {
+		expect(agentAccountInitial({ email: "prasad@x.dev", provider: "claude" })).toBe("P");
+		expect(agentAccountInitial({ name: " work key", provider: "claude" })).toBe("W");
+		expect(agentAccountInitial({ provider: "codex" })).toBe("C");
+		// A leading emoji stays whole rather than half a surrogate pair.
+		expect(agentAccountInitial({ name: "🚀 launch key", provider: "claude" })).toBe("🚀");
+	});
+
+	it("rings the fullest meter and says each one", () => {
+		expect(agentAccountPeakUsage({ limits })).toBe(42.4);
+		expect(agentAccountPeakUsage({})).toBeUndefined();
+		expect(agentAccountPeakUsage({ limits: { windows: [] } })).toBeUndefined();
+		expect(agentAccountUsageSummary({ limits }, now)).toBe("Session (5h) 42% · Weekly 18%");
+		expect(agentAccountUsageSeverity(undefined)).toBe("normal");
+		expect(agentAccountUsageSeverity(74.9)).toBe("normal");
+		expect(agentAccountUsageSeverity(75)).toBe("warn");
+		expect(agentAccountUsageSeverity(90)).toBe("critical");
+	});
+
+	it("names the account and its use for screen readers, or asks for one", () => {
+		expect(accountUsageAccessibilityLabel("a@x.dev", { signedIn: true, limits })).toBe("Account, a@x.dev, 42% of usage limit used");
+		expect(accountUsageAccessibilityLabel("a@x.dev", { signedIn: true })).toBe("Account, a@x.dev");
+		// Signed out says so, not only through a dimmed letter.
+		expect(accountUsageAccessibilityLabel("a@x.dev", { signedIn: false, limits })).toBe("Account, a@x.dev, signed out");
+		expect(accountUsageAccessibilityLabel(undefined, undefined)).toBe("Account, choose an account");
+	});
+
+	it("says when a full meter frees up", () => {
+		const full = { windows: [{ id: "five_hour", label: "Session (5h)", usedPercent: 100, resetsAt: "2026-11-27T12:30:00Z" }] };
+		expect(agentAccountUsageSummary({ limits: full }, now)).toBe("Session (5h) full, resets in 3h");
+	});
+
+	it("puts usage on each signed-in row, amber once a meter is nearly spent", () => {
+		const options = agentAccountOptions([
+			{ id: "c1", provider: "claude", email: "a@x.dev", signedIn: true, default: true, limits },
+			{ id: "c2", provider: "claude", email: "b@x.dev", signedIn: true, default: false, limits: { windows: [{ id: "seven_day", label: "Weekly", usedPercent: 91 }] } },
+			{ id: "c3", provider: "claude", email: "c@x.dev", signedIn: false, default: false, limits },
+		], undefined, now);
+		expect(options).toEqual([
+			{ id: "c1", title: "a@x.dev", detail: "Default · Session (5h) 42% · Weekly 18%", disabled: false },
+			{ id: "c2", title: "b@x.dev", detail: "Weekly 91%", disabled: false, warn: true },
+			{ id: "c3", title: "c@x.dev", detail: "Signed out", disabled: true },
+		]);
+	});
+});
 
 describe("agent accounts on mobile", () => {
 	beforeEach(() => vi.stubGlobal("fetch", vi.fn()));
@@ -122,6 +175,49 @@ describe("useAgentAccounts", () => {
 		expect(fresh!.current).toBe("c2");
 		expect(probe.get().current).toBe("c2");
 		probe.unmount();
+	});
+
+	it("drops a reload that lands after the agent changed, and hides the last agent's accounts at once", async () => {
+		// The Claude list answers at once; a reload's list waits on `releaseLate`.
+		let releaseLate!: () => void;
+		let holdNext = false;
+		vi.mocked(fetch).mockImplementation(async (url) => {
+			if (String(url).includes("/sessions/")) return json({});
+			const body = { accounts: [
+				{ id: "c1", provider: "claude", email: "a@x.dev", signedIn: true, default: true },
+				{ id: "x1", provider: "codex", email: "b@x.dev", signedIn: true, default: true },
+			] };
+			if (!holdNext) return json(body);
+			holdNext = false;
+			await new Promise<void>((resolve) => { releaseLate = resolve; });
+			return json({ accounts: [{ id: "c-late", provider: "claude", email: "late@x.dev", signedIn: true, default: true }] });
+		});
+		let state!: ReturnType<typeof useAgentAccounts>;
+		const seen: string[][] = [];
+		function Probe({ harness }: { harness: string }) {
+			state = useAgentAccounts(cfg, harness);
+			seen.push(state.accounts.map((account) => account.id));
+			return null;
+		}
+		let renderer!: ReactTestRenderer;
+		act(() => { renderer = create(createElement(Probe, { harness: "claude-code" })); });
+		await act(async () => { await vi.advanceTimersByTimeAsync(0); });
+		expect(state.accounts.map((account) => account.id)).toEqual(["c1"]);
+		// The avatar's tap starts a reload on Claude, which hangs.
+		holdNext = true;
+		let late: Promise<unknown> | undefined;
+		act(() => { late = state.reload(); });
+		// Switching to Codex shows no Claude account, not even for one render.
+		seen.length = 0;
+		act(() => renderer.update(createElement(Probe, { harness: "codex" })));
+		expect(seen[0]).toEqual([]);
+		await act(async () => { await vi.advanceTimersByTimeAsync(0); });
+		expect(state.accounts.map((account) => account.id)).toEqual(["x1"]);
+		// Claude's late answer is dropped: Codex's list stays, and the caller learns nothing.
+		await act(async () => { releaseLate(); await vi.advanceTimersByTimeAsync(0); });
+		await expect(late).resolves.toBeUndefined();
+		expect(state.accounts.map((account) => account.id)).toEqual(["x1"]);
+		act(() => renderer.unmount());
 	});
 
 	it("does not retry a machine that refuses the phone", async () => {

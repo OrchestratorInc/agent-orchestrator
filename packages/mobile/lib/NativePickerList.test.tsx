@@ -137,7 +137,9 @@ describe("iOS picker list", () => {
 		expect(onSelect).toHaveBeenCalledExactlyOnceWith("codex");
 		expect(rows[2].props.onPress).toBeUndefined();
 		expect(rows[2].props.modifiers).toEqual([{ disabled: true }]);
-		expect(rows[2].props.supportingText).toBe("Needs install");
+		// Every detail at footnote size; a plain one in the secondary label colour.
+		expect(rows[2].props.supportingText.props.children).toBe("Needs install");
+		expect(rows[2].props.supportingText.props.modifiers).toEqual([{ font: { textStyle: "footnote" } }, { foregroundStyle: { type: "color", color: "secondaryLabel" } }]);
 	});
 
 	it("refreshes when the Form is pulled down", async () => {

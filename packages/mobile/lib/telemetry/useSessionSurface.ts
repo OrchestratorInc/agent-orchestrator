@@ -37,3 +37,15 @@ export function useSessionSurface(form: keyof typeof VARIANT | null | undefined,
 		if (shown) uiUsage()?.setVariant("session", null);
 	}, [shown]);
 }
+
+/**
+ * The session screen shows its content: a chat's messages are drawn, or a
+ * terminal's first output. Ends the timing of the session's opening. Reported
+ * only while the screen is in front, so a session loading out of sight under
+ * another cannot end that one's timing.
+ */
+export function useSessionContentShown(shown: boolean): void {
+	useFocusEffect(useCallback(() => {
+		if (shown) uiUsage()?.sessionContentShown();
+	}, [shown]));
+}

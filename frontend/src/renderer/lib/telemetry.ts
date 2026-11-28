@@ -8,7 +8,7 @@ import {
 	ARTIFACT_SESSION_SCOPES,
 	ARTIFACT_SIGN_IN_PROMPT_REASONS,
 } from "./artifact-telemetry";
-import { isLoopbackHostname } from "./loopback";
+import { sanitizeSensitiveString } from "../../shared/telemetry-text";
 import { ONBOARDING_EVENTS, onboardingRateLimitKey, sanitizeOnboardingProperties } from "./onboarding-telemetry-schema";
 import { ORCHESTRATOR_SPAWN_SOURCES } from "./orchestrator-spawn-sources";
 import { IMPORTABLE_AGENTS } from "./session-import-agents";
@@ -17,6 +17,7 @@ import { isUiUsageEvent, sanitizeUiUsageProperties } from "./ui-usage-registry";
 import { isWebDistinctId } from "../../shared/cloud-account";
 import { DEFAULT_POSTHOG_HOST, DEFAULT_POSTHOG_PROJECT_KEY } from "../../shared/posthog-config";
 import { EDITOR_IDS } from "../../shared/editor-handoff";
+import { cloudPlan as cloudPlanValue, isPaidCloudPlan, type CloudPlan } from "../../shared/cloud-plan";
 import type { TelemetryInstallContext } from "../../shared/telemetry";
 import { captureExceptionToSentry, initSentry } from "./sentry";
 import { reserveException } from "./reported-errors";
@@ -24,19 +25,18 @@ import { installRendererErrorHandlers } from "../../shared/renderer-error-handle
 import { launchProperties, takeLaunchStart } from "./launch-telemetry";
 import { PERFORMANCE_EVENTS, sanitizePerformanceProperties } from "./performance-telemetry-properties";
 import { DAEMON_EXIT_REASONS } from "../../shared/daemon-exit-reason";
+import { EXIT_FEEDBACK_EVENTS, sanitizeExitFeedbackProperties } from "../../shared/exit-feedback";
+
+export { sanitizeExitFeedbackProperties };
 
 const POSTHOG_KEY = import.meta.env.VITE_AO_POSTHOG_KEY?.trim() || DEFAULT_POSTHOG_PROJECT_KEY;
 const POSTHOG_HOST = import.meta.env.VITE_AO_POSTHOG_HOST?.trim() || DEFAULT_POSTHOG_HOST;
 const RELEASE_TAG = "2026-01-30";
 // 3 marks the renamed events; 2 used the ao.v2.* names. Matches the daemon.
 const TELEMETRY_SCHEMA_VERSION = 3;
-const REDACTED_LOCAL_URL = "[redacted-local-url]";
-const REDACTED_LOCAL_PATH = "[redacted-local-path]";
 const ACTIVE_STORAGE_KEY = "ao.telemetry.activeSlotsByDate";
 const ROUTE_VIEW_STORAGE_KEY = "ao.telemetry.routeViewsByDate";
 const UPDATE_FAILURE_STORAGE_KEY = "ao.telemetry.updateFailures.v1";
-const EMBEDDED_LOCAL_URL_PATTERN =
-	/(?:\bfile:\/\/\/\S+|\bapp:\/\/renderer\/\S+|\bhttps?:\/\/(?:localhost|127\.0\.0\.1|\[::1\])(?::\d+)?\S*)/gi;
 // session_management_summary keeps its shipped exported name; every other
 // event is exported under the name it is captured with.
 const POSTHOG_EVENT_NAME_ALIASES: Record<string, string> = {
@@ -422,6 +422,7 @@ export async function identifyCloudUser(user: { id: string; email: string }): Pr
 		email: user.email,
 		ao_cloud_user_id: user.id,
 		...(githubLogin ? { github_login: githubLogin } : {}),
+		...cloudPlanPersonProperties(),
 	});
 	identifiedId = user.id;
 	identifyCalledFor = user.id;
@@ -477,6 +478,8 @@ export function clearCloudUser(): void {
 	signInKnown = true;
 	pendingWebVisitor = null;
 	identifyCalledFor = null;
+	// The departing person keeps its last plan; only events and Sentry move to none.
+	setCloudPlan("none", false, false);
 	if (!posthogReady || identifiedId === null) return;
 	identifiedId = null;
 	posthog.reset();
@@ -616,15 +619,39 @@ function enumValue(value: unknown, allowed: ReadonlySet<string>, fallback = "unk
 	return typeof value === "string" && allowed.has(value) ? value : fallback;
 }
 
-export function setCloudTelemetryContext(context: { orgId?: string; orgKind?: string; billingMode?: string }): void {
+export function setCloudTelemetryContext(context: { orgId?: string; orgKind?: string; billingMode?: string; plan?: string; paid?: boolean; trial?: boolean }): void {
 	const next: TelemetryProperties = {
 		cloud_org_kind: enumValue(context.orgKind, CLOUD_ORG_KINDS),
 		cloud_billing_mode: enumValue(context.billingMode, CLOUD_BILLING_MODES),
 	};
 	cloudContext = { ...cloudContext, ...next };
+	const plan = cloudPlanValue(context.plan);
+	const paid = context.paid === true && isPaidCloudPlan(plan);
+	setCloudPlan(plan, paid, true, paid && context.trial === true);
 	void hashedTelemetryID(context.orgId).then((hash) => {
 		cloudContext = hash ? { ...cloudContext, cloud_org_id_hash: hash } : omitKey(cloudContext, "cloud_org_id_hash");
 	});
+}
+
+/**
+ * The plan on every event (cloud_plan, cloud_paid), on the identified person,
+ * and in Electron main, which tags Sentry events with it. Only a change is
+ * passed on; main keeps it in memory and sends nothing itself.
+ */
+function setCloudPlan(plan: CloudPlan, paid: boolean, updatePerson = true, trial = false): void {
+	const planChanged = cloudContext.cloud_plan !== plan;
+	const changed = planChanged || cloudContext.cloud_paid !== paid || cloudContext.cloud_trial !== trial;
+	cloudContext = { ...cloudContext, cloud_plan: plan, cloud_paid: paid, cloud_trial: trial };
+	if (!changed) return;
+	// Sentry keys only on the plan; a trial is a paid plan there.
+	if (planChanged) void Promise.resolve().then(() => aoBridge.telemetry.setPlan(plan)).catch(() => false);
+	if (updatePerson && posthogReady && identifiedId && !analyticsOptedOut) posthog.setPersonProperties(cloudPlanPersonProperties());
+}
+
+function cloudPlanPersonProperties(): TelemetryProperties {
+	return typeof cloudContext.cloud_plan === "string"
+		? { cloud_plan: cloudContext.cloud_plan, cloud_paid: cloudContext.cloud_paid === true, cloud_trial: cloudContext.cloud_trial === true }
+		: {};
 }
 
 function omitKey(properties: TelemetryProperties, key: string): TelemetryProperties {
@@ -844,41 +871,11 @@ async function sha256Hex(raw: string): Promise<string> {
 	return Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, "0")).join("");
 }
 
-async function hashedTelemetryID(value: unknown): Promise<string | undefined> {
+export async function hashedTelemetryID(value: unknown): Promise<string | undefined> {
 	if (typeof value !== "string") return undefined;
 	const trimmed = value.trim();
 	if (!trimmed) return undefined;
 	return sha256Hex(trimmed);
-}
-
-function isLocalURL(value: string): boolean {
-	try {
-		const url = new URL(value);
-		return (
-			url.protocol === "file:" ||
-			(url.protocol === "app:" && url.host === "renderer") ||
-			isLoopbackHostname(url.hostname)
-		);
-	} catch {
-		return false;
-	}
-}
-
-function redactEmbeddedLocalURLs(value: string): string {
-	return value.replace(EMBEDDED_LOCAL_URL_PATTERN, REDACTED_LOCAL_URL);
-}
-
-function redactEmbeddedAbsolutePaths(value: string): string {
-	return value
-		.replace(/(?:\/Users\/|\/home\/|\/tmp\/|\/private\/var\/|\/var\/folders\/)\S+/g, REDACTED_LOCAL_PATH)
-		.replace(/\b[A-Za-z]:\\[^\s)]+/g, REDACTED_LOCAL_PATH);
-}
-
-function sanitizeSensitiveString(value: string): string {
-	const trimmed = value.trim();
-	if (!trimmed) return trimmed;
-	if (isLocalURL(trimmed)) return REDACTED_LOCAL_URL;
-	return redactEmbeddedAbsolutePaths(redactEmbeddedLocalURLs(trimmed));
 }
 
 function sanitizePostHogValue(value: unknown): unknown {
@@ -946,6 +943,7 @@ const CLOUD_FAILURE_STAGES = new Set(["create", "startup"]);
 const CLOUD_UPGRADE_SOURCES = new Set(["settings", "plan_refusal", "banner", "other"]);
 const CLOUD_CODE_PATTERN = /^[A-Za-z][A-Za-z0-9_]{0,63}$/;
 const CLOUD_PLAN_PATTERN = /^[a-z][a-z0-9_-]{0,31}$/;
+const PLAN_CHANGE_DIRECTIONS = new Set(["upgrade", "downgrade", "cancel", "same_tier"]);
 
 function cloudCode(value: unknown): string {
 	return typeof value === "string" && CLOUD_CODE_PATTERN.test(value) ? value : "other";
@@ -1014,6 +1012,14 @@ async function sanitizeCloudFunnelProperties(event: string, properties?: Telemet
 			if (duration !== undefined && event === "ao.renderer.cloud_checkout_completed") safe.duration_ms = duration;
 			break;
 		}
+		case "ao.billing.plan_changed":
+			safe.from_plan = cloudPlanValue(properties?.from_plan);
+			safe.to_plan = cloudPlanValue(properties?.to_plan);
+			safe.direction = enumValue(properties?.direction, PLAN_CHANGE_DIRECTIONS);
+			for (const key of ["from_trial", "to_trial"]) {
+				if (typeof properties?.[key] === "boolean") safe[key] = properties[key];
+			}
+			break;
 		case "ao.renderer.cloud_plan_refusal_shown":
 		case "ao.renderer.cloud_limit_reached":
 			safe.code = cloudCode(properties?.code);
@@ -1035,6 +1041,7 @@ const CLOUD_FUNNEL_EVENTS = new Set([
 	"ao.renderer.cloud_upgrade_viewed",
 	"ao.renderer.cloud_checkout_started",
 	"ao.renderer.cloud_checkout_completed",
+	"ao.billing.plan_changed",
 	"ao.renderer.cloud_plan_refusal_shown",
 	"ao.renderer.cloud_limit_reached",
 ]);
@@ -1098,6 +1105,8 @@ function sanitizeArtifactProperties(event: string, properties?: TelemetryPropert
 	return safe;
 }
 
+const EXIT_FEEDBACK_EVENT_SET = new Set<string>(EXIT_FEEDBACK_EVENTS);
+
 function agentList(value: unknown): string | undefined {
 	if (typeof value !== "string") return undefined;
 	const agents = value.split(",").filter((agent) => IMPORTABLE_AGENTS.has(agent));
@@ -1123,6 +1132,11 @@ export async function sanitizeRendererProperties(
 			}
 			break;
 		case "ao.app.loaded":
+			break;
+		case "ao.exit_feedback.shown":
+		case "ao.exit_feedback.answered":
+		case "ao.exit_feedback.dismissed":
+			Object.assign(safe, sanitizeExitFeedbackProperties(event, properties));
 			break;
 		case "ao.agents.missing":
 			if (properties?.reason === "none_installed") safe.reason = properties.reason;
@@ -1493,7 +1507,11 @@ export function buildPostHogConfig(distinctId: string, identified = false): Post
 			distinctID: distinctId,
 			isIdentifiedID: identified,
 		},
-		before_send: (event) => (event ? sanitizePostHogCaptureResult(event) : event),
+		before_send: (event) => {
+			if (!event) return event;
+			const safe = sanitizePostHogCaptureResult(event);
+			return handOffExitFeedbackEvent(safe as unknown as Record<string, unknown>) ? null : safe;
+		},
 		session_recording: {
 			maskCapturedNetworkRequestFn: (request) => {
 				if (request.name) {
@@ -1503,6 +1521,44 @@ export function buildPostHogConfig(distinctId: string, identified = false): Post
 			},
 		},
 	};
+}
+
+// Set by before_send when it hands an exit feedback event to main.
+let exitFeedbackHandedOff = false;
+
+/**
+ * The exit feedback events are captured right before the app quits, where the
+ * SDK's batch would die with the window. The SDK still builds each event
+ * (identity, context, cleanup); main posts it and holds the quit until it is
+ * delivered or 2 s pass. Serialized here, so the timestamp leaves as ISO text.
+ */
+export function handOffExitFeedbackEvent(event: Record<string, unknown>): boolean {
+	if (typeof event.event !== "string" || !EXIT_FEEDBACK_EVENT_SET.has(event.event)) return false;
+	try {
+		aoBridge.telemetry.sendExitFeedbackEvent(JSON.parse(JSON.stringify(event)) as Record<string, unknown>);
+		exitFeedbackHandedOff = true;
+		return true;
+	} catch {
+		// Let the SDK try instead.
+		return false;
+	}
+}
+
+/**
+ * Whether the exit feedback prompt may show: usage analytics on and none of its
+ * events silenced by the kill switch. Waits at most 1 s for telemetry to start.
+ */
+export async function exitFeedbackAllowed(): Promise<boolean> {
+	if (analyticsOptedOut) return false;
+	let timeout: ReturnType<typeof setTimeout> | undefined;
+	const ready = await Promise.race([
+		initTelemetry().catch(() => false),
+		new Promise<boolean>((resolve) => {
+			timeout = setTimeout(() => resolve(false), 1_000);
+		}),
+	]);
+	clearTimeout(timeout);
+	return ready && !analyticsOptedOut && !EXIT_FEEDBACK_EVENTS.some((event) => isDeniedEvent(event));
 }
 
 export async function initTelemetry(): Promise<boolean> {
@@ -1694,7 +1750,8 @@ export async function captureRendererEvent(event: string, properties?: Record<st
 	const safeProperties = withTelemetryContext(sanitizedProperties);
 	let captured = false;
 	try {
-		captured = Boolean(posthog.capture(postHogEventName(event), safeProperties));
+		exitFeedbackHandedOff = false;
+		captured = Boolean(posthog.capture(postHogEventName(event), safeProperties)) || exitFeedbackHandedOff;
 		if (captured && LIFETIME_SESSION_REFRESH_EVENTS.has(event)) void refreshLifetimeSessions();
 		return captured;
 	} finally {

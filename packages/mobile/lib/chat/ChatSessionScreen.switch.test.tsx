@@ -44,6 +44,7 @@ const fixtures = vi.hoisted(() => {
 		editMessage: vi.fn(async () => {}),
 	});
 	return {
+		contentShown: vi.fn(),
 		interfaceSwitch: interfaceSwitch(),
 		freshInterfaceSwitch: interfaceSwitch,
 		conversation: conversation(),
@@ -144,6 +145,8 @@ vi.mock("./conversationErrors", () => ({ conversationActionError: () => undefine
 vi.mock("./types", () => ({ brokenMcpServers: () => [], can: () => false }));
 vi.mock("./useConversation", () => ({ useMobileConversation: () => fixtures.conversation }));
 vi.mock("./useAgentSwitchMenu", () => ({ useAgentSwitchMenu: fixtures.agentSwitchMenu }));
+// Whether the chat says its content is on screen, for session-open timing.
+vi.mock("../telemetry/useSessionSurface", () => ({ useSessionContentShown: fixtures.contentShown }));
 vi.mock("../useLastVerifiedConfig", () => ({ useLastVerifiedConfig: () => undefined }));
 vi.mock("./SessionStartup", async () => ({ SessionStartupStatus: await host("SessionStartupStatus") }));
 vi.mock("../session/sessionStartup", () => ({ sessionStartupView: () => undefined, startupVisible: () => false }));
@@ -222,6 +225,7 @@ describe("Chat while it switches to Terminal", () => {
 		await mount();
 		expect(find("InterfaceSwitchCard")).toHaveLength(0);
 		expect(find("ChatTimeline")).toHaveLength(1);
+		expect(fixtures.contentShown).toHaveBeenLastCalledWith(true);
 		const [banner] = find("InlineBanner");
 		expect(banner.props).toMatchObject({ title: "Switching to Terminal UI · finishing current work", action: "Cancel" });
 		await act(async () => (banner.props.onPress as () => void)());
@@ -239,6 +243,8 @@ describe("Chat while it switches to Terminal", () => {
 		expect(card().props).toMatchObject({ title: "Switching to Terminal", message: "Stopping the Chat controller before the terminal starts.", cancellable: false });
 		expect(bannerTitles()).toEqual([]);
 		expect(composer().props.disabled).toBe(true);
+		// The card covers the messages: a session opened now has not shown them yet.
+		expect(fixtures.contentShown).toHaveBeenLastCalledWith(false);
 	});
 
 	it("holds the card through the gap before the route swaps to Terminal, then offers Retry", async () => {

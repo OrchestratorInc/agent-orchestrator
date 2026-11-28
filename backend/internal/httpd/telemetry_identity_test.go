@@ -12,6 +12,7 @@ import (
 
 	telemetryadapter "github.com/OrchestratorInc/agent-orchestrator/backend/internal/adapters/telemetry"
 	"github.com/OrchestratorInc/agent-orchestrator/backend/internal/config"
+	"github.com/OrchestratorInc/agent-orchestrator/backend/internal/observe/sentryobs"
 )
 
 func TestTelemetryIdentityRoutes(t *testing.T) {
@@ -23,6 +24,7 @@ func TestTelemetryIdentityRoutes(t *testing.T) {
 	r := NewRouterWithControl(config.Config{DataDir: dir}, discardLogger(), nil, APIDeps{
 		TelemetryIdentity: ident,
 		LifetimeSessions:  func(context.Context) (int64, error) { return 3, nil },
+		LifetimeWork:      func(context.Context) (int64, error) { return 0, nil },
 	}, ControlDeps{})
 
 	post := func(host, origin, body string) int {
@@ -50,7 +52,7 @@ func TestTelemetryIdentityRoutes(t *testing.T) {
 	}
 
 	// Install ID until someone signs in.
-	if got := get(); got["distinctId"] != ident.Snapshot().InstallID || got["installId"] != ident.InstallID() || got["optedOut"] != false || got["lifetimeSessions"] != float64(3) {
+	if got := get(); got["distinctId"] != ident.Snapshot().InstallID || got["installId"] != ident.InstallID() || got["optedOut"] != false || got["lifetimeSessions"] != float64(3) || got["lifetimeWorkSessions"] != float64(0) {
 		t.Fatalf("anonymous identity = %#v", got)
 	}
 	if _, ok := get()["isSignedIn"]; ok {
@@ -79,6 +81,28 @@ func TestTelemetryIdentityRoutes(t *testing.T) {
 	}
 	if _, ok := got["email"]; ok {
 		t.Fatal("identity response leaks email")
+	}
+	// A plan-only body sets the Sentry plan and leaves the signed-in user alone.
+	t.Cleanup(func() { sentryobs.SetPlan("unknown") })
+	if c := post("127.0.0.1:3001", "", `{"plan":"pro"}`); c != http.StatusNoContent {
+		t.Fatalf("plan-only = %d, want 204", c)
+	}
+	if c := post("127.0.0.1:3001", "app://renderer", `{"plan":"pro"}`); c != http.StatusForbidden {
+		t.Fatalf("plan from renderer origin = %d, want 403", c)
+	}
+	if got := get(); got["cloudUserId"] != "user_01H" || got["isSignedIn"] != true {
+		t.Fatalf("plan-only body changed the identity: %#v", got)
+	}
+	// Plan-only bodies are ordered on their own counter: a delayed older one is
+	// refused, and a large plan sequence never blocks an identity hand-off.
+	if c := post("127.0.0.1:3001", "", `{"plan":"free","sequence":2000}`); c != http.StatusNoContent {
+		t.Fatalf("newer plan = %d, want 204", c)
+	}
+	if c := post("127.0.0.1:3001", "", `{"plan":"pro","sequence":1000}`); c != http.StatusConflict {
+		t.Fatalf("stale plan = %d, want 409", c)
+	}
+	if c := post("127.0.0.1:3001", "", `{"cloudUserId":"user_01H","sequence":5}`); c != http.StatusNoContent {
+		t.Fatalf("identity after plan sequences = %d, want 204", c)
 	}
 	if c := post("127.0.0.1:3001", "", `{"cloudUserId":""}`); c != http.StatusNoContent {
 		t.Fatalf("sign-out = %d, want 204", c)

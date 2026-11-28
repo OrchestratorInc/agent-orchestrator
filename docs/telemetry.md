@@ -166,6 +166,12 @@ sampled by install rather than by event:
   Failed onboarding installs and sign-ins also send from every install (see
   "Onboarding errors in Sentry"): they are rare and block a new user's first
   run.
+- Every desktop and daemon event carries a `plan` tag with the install's AO
+  Cloud plan (the `cloud_plan` list in "Signing in to AO Cloud"). The desktop
+  keeps it in memory and passes it to the daemon on the loopback-only
+  `/internal/telemetry/identity` route. An install on `starter`, `pro` or
+  `enterprise` sends non-fatal errors outside the sample; the daily caps below
+  still apply.
 - Every event carries a `sample_rate` tag: `0.1` for sampled non-fatal events
   and `1` for always-sent events. Multiply counts of `sample_rate:0.1`
   events by 10 to estimate the real volume.
@@ -254,6 +260,9 @@ Orchestrator.inc sends structured events in a few broad categories:
 - Your GitHub username, when Orchestrator.inc can resolve the account signed in
   to its GitHub integration, on every desktop and daemon event (previously only
   session-start events)
+- One answer to the first-day exit feedback prompt, with any text typed in its
+  optional box, when a new install quits without starting work. See "Exit
+  feedback prompt" below
 - Desktop onboarding progress: each step viewed, completed, skipped or left,
   installs and sign-ins started there and how they ended, how long onboarding
   took, and whether the first chat message followed. See "Desktop onboarding
@@ -1105,7 +1114,8 @@ after it is turned back on.
 ## Mobile app screens and launches
 
 When mobile telemetry is active, the phone records which of its screens and
-sheets people use, the errors it shows them, and how long it takes to start,
+sheets people use, the errors it shows them, how long it takes to start, and
+how quickly it responds,
 the mobile counterpart of "UI usage" and "UI responsiveness" above. The
 properties specific to these events are fixed screen names, fixed error kinds,
 counts and durations. Like every phone event they also carry the shared
@@ -1118,6 +1128,7 @@ screenshot. There is no session replay.
 | `mobile.surfaces.viewed` | A screen or sheet stays on screen for a second. At most once per surface per UTC day | `surface` |
 | `mobile.ui.usage_summary` | When the app goes to the background at least 15 minutes after its window started, or at the next launch for a window that ran out while the app was closed. Not sent when nothing was counted | Window fields and counters (below) |
 | `mobile.ui.error_shown` | A user-visible error shows: a warning toast, a board failure view, or a screen or sheet that failed to draw. The same error on the same screen within 5 minutes is counted in the summary but not sent again | `presentation`, `error_kind`, `surface` |
+| `mobile.usage.ui_performance` | With `mobile.ui.usage_summary`, at the end of the same window. Not sent when nothing was measured | `measurement_schema_version`, `window_seconds`, `active_seconds`, `flush_reason`, and the measurements below |
 | `mobile.launches.timed` | Once per app start: when a paired machine's live data or Orchestrator Cloud's first list shows, when 60 seconds pass without it, or when the app goes to the background first | `launch_kind`, `outcome`, `landing_surface`, `clock_origin`, `to_js_start_ms`, `to_visible_ms`, `to_usable_ms` |
 
 - `surface` is one of the app's screens or sheets: `board`, `projects`,
@@ -1150,6 +1161,51 @@ screenshot. There is no session replay.
 | `session_open_from_<source>_count` | Those by where they were opened from: the screen before it (`board`, `project`, `prs`, `spawn`, `notifications_inbox`), another session (`session`), a push tap that opened it (`notification`), a link (`deep_link`), the launch reopening the session the app was left on (`restore`), or `other` |
 | `surface_<surface>_seconds` | Time that screen was on screen while the app was in the foreground |
 | `surface_<surface>_opens` | Times it came on screen, including returning to it |
+
+Properties on `mobile.usage.ui_performance` (`measurement_schema_version` is
+`1`; a count that stayed at 0, or a percentile with nothing measured, is left
+out):
+
+- Session opens: `session_open_count`, counted in
+  `session_open_lt500_count`, `session_open_lt1000_count`,
+  `session_open_lt3000_count` and `session_open_ge3000_count`, and
+  `session_open_p75_ms`: from the session screen coming up after another
+  screen to the session showing its content, that is the chat's messages
+  drawn or the terminal's first output (for an Orchestrator Cloud session, its
+  conversation or its agent's terminal output). A return to a session already
+  open, or a switch between sessions, is not timed.
+  `session_open_dropped_count` counts openings not timed because the screen
+  was left, another session was opened, or the app went to the background
+  before the content showed, or because it took over 30 seconds, as the
+  desktop's `switch_dropped_count` does.
+- Main-thread stalls: a timer asked to run every 500 ms while the app is in
+  front and telemetry is on reports how late it ran. `stall_count` counts runs 100 ms or more late,
+  `stall_long_count` those 500 ms or more, `stall_total_ms` their lateness and
+  `stall_max_ms` the worst. A run 10 seconds or more late is the app having been
+  suspended and is not counted.
+- Requests to paired machines, timed to the answer's headers:
+  `request_count` (requests that got an answer), `request_lt300_count`,
+  `request_lt1000_count`, `request_lt3000_count`, `request_ge3000_count`,
+  `request_p75_ms` and `request_p95_ms`. `request_error_count` counts the
+  answers that were an error status; they are included in `request_count`.
+  `request_unanswered_count` counts requests that timed out or got no answer;
+  they are not included in `request_count`. By connection kind,
+  `request_<kind>_count` and `request_<kind>_p75_ms`, where `<kind>` is `lan`,
+  `tailscale`, `tunnel`, `relay`, or `unknown`. A request the app cancelled
+  because the screen was left, or one still in flight when the app went to the
+  background or telemetry was switched off or on, is not counted. Orchestrator Cloud requests are not included.
+- Returns to the app from the background with a machine paired:
+  `resume_count`, and the time until a paired machine's data was fresh again
+  in `resume_fresh_lt1000_count`,
+  `resume_fresh_lt3000_count`, `resume_fresh_ge3000_count` and
+  `resume_fresh_p75_ms`. `resume_stale_count` counts returns that went back to
+  the background with no fresh data, or got it after 30 seconds or more.
+  Coming back from iOS's `inactive` state (Control Center, Notification
+  Center, the app switcher, Face ID or a system alert) is not a return: the
+  app never left and kept refreshing.
+
+The percentiles come from the last 100 measurements of each kind in the window;
+the counts include every measurement.
 
 Properties on `mobile.launches.timed`:
 
@@ -1453,6 +1509,73 @@ that was off when it began has no `started`, and so sends no `completed`.
 properties are no longer allowed: they belonged to the first-run prompt on
 Home, which has been removed. Builds from before that still send them.
 
+## Exit feedback prompt
+
+When a new desktop install quits on its first day without starting any work,
+the app shows one small dialog asking what stopped them, then closes. It asks
+at most once per install, ever.
+
+It shows only when all of these are true at the moment of quitting:
+
+- The install is less than 24 hours old (the age of `telemetry_install_id`).
+- No worker session and no standalone session has ever been started on the
+  install. An orchestrator session does not count as work. The daemon keeps a
+  durable count for this (`lifetimeWorkSessions` on
+  `GET /api/v1/telemetry/identity`) that includes sessions later deleted. If
+  the daemon cannot be reached, the prompt does not show.
+- The app has been open for at least 10 seconds in this launch.
+- It is a user quit: on macOS ⌘Q, the Quit menu item or Quit from the Dock;
+  on Windows and Linux, closing the main window or quitting. Restarting to
+  install an update, shutting down, restarting or logging out the computer, a
+  crash, and a forced quit go straight through. With the window hidden or
+  minimized, nothing shows. On macOS the menu bar icon is always on, so a
+  ⌘Q, menu or Dock quit closes the window and leaves Orchestrator running in
+  the menu bar; the prompt still asks on that quit, and its events mean the
+  window closed, not that the app exited. The prompt replaces the "Quit
+  Orchestrator?" confirm for that one quit.
+- Share usage analytics is on, and none of the three events below is silenced
+  by `AO_TELEMETRY_DISABLED_EVENTS`.
+- It has not shown on this install before. The record is the marker file
+  `exit_feedback_shown` in the AO data directory, written the moment the
+  dialog appears, whatever happens next.
+
+The question depends on how far the install got: one version for an install
+with no project, another for an install with a project but no work. The user
+can tap one of five answers, type up to 500 characters in an optional box,
+skip, press Escape (ignored once they have typed, or while an input method
+is composing), quit again or do nothing. With no input it closes itself
+after 15 seconds; once the user types, it waits for an answer or a skip. The
+dialog can never keep the app open on its own: if the check, the dialog or
+sending fails, the app quits normally.
+
+It sends three events, each with the same context as other desktop events
+(installation ID, app version, platform, and the GitHub login or AO Cloud user
+ID when there is one). Answers are not anonymous.
+
+| Event | When | Properties |
+| --- | --- | --- |
+| `ao.exit_feedback.shown` | The dialog appears | `version` |
+| `ao.exit_feedback.answered` | An answer is tapped | `version`, `answer`, `has_text`, `text`, `seconds_open` |
+| `ao.exit_feedback.dismissed` | Skipped, Escape, a second quit, or 15 seconds with no input | `version`, `how`, `seconds_open` |
+
+- `version`: `no_project` or `project_no_work`.
+- `answer`: for `no_project`, `just_looking`, `unsure_where_to_start`,
+  `no_repo_or_agent`, `something_broke` or `not_a_fit`; for
+  `project_no_work`, `no_task_in_mind`, `unsure_what_to_ask`,
+  `agent_not_ready`, `tried_nothing_started` or `not_comfortable`.
+- `how`: `skip`, `escape`, `second_close` or `timeout`.
+- `text`: what the user typed, trimmed, with local paths and local URLs
+  replaced the same way as other event text, at most 500 characters. Sent only
+  with an answer, and left out when the box is empty. Text typed before a skip
+  is not sent.
+- `seconds_open`: whole seconds from the dialog appearing to the action.
+
+The chosen answer and any typed text are sent to PostHog and stored there with
+the rest of the usage analytics, linked to the same identifiers. Because the
+app is closing, the desktop's main process sends these events itself and waits
+up to 2 seconds for them before it quits. Turning off Share usage analytics
+stops the prompt from showing, and nothing is sent.
+
 ## What Orchestrator.inc does not intentionally send
 
 Product telemetry is designed not to include:
@@ -1466,6 +1589,8 @@ Product telemetry is designed not to include:
   account (invitee emails are never sent)
 - Screen recordings, session replays, screenshots, pointer coordinates, or
   the text of anything you click or hover
+- Text you type, with one exception: the optional box in the first-day exit
+  feedback prompt, sent with your answer (see "Exit feedback prompt")
 
 The explicit account fields are the GitHub owner segment, your authenticated
 GitHub username, and, only if you sign in to AO Cloud, your AO Cloud user ID and
@@ -1613,6 +1738,22 @@ mobile app never receive your email; they receive only the user ID. Signing out
 stops attributing new desktop events to you. Only the production WorkOS sign-in
 is identified.
 
+Desktop events also carry the AO Cloud plan as `cloud_plan` (one of `free`,
+`starter`, `pro`, `enterprise`, `none` when signed out or the org has no
+billing, or `unknown` before billing loads, for a contract org, or for any other
+value) and `cloud_paid` (`true` only for a self-serve org that is entitled, not
+exempt and not on Free) and `cloud_trial` (`true` for a paid plan still on its
+free trial; it counts as paid). All three are also person properties of the
+signed-in AO Cloud person; `install_id` is unchanged. When a fresh billing
+summary shows a different plan, or a different trial state, than the one last
+seen for that org, the desktop sends `ao.billing.plan_changed` with
+`from_plan`, `to_plan` (same list), `direction` (`upgrade`, `downgrade`,
+`cancel` for a move to Free, or `same_tier`, as when a trial converts to paid on
+the same plan) and `from_trial` / `to_trial`, so a trial that ends unpaid is
+told apart from a paying customer cancelling. The last plan and trial state per
+org are kept in the app's local storage, keyed by a hash of the org ID. The first summary for an org, a sign-out and a failed
+billing request send nothing. No price, org name, email or Stripe ID is sent.
+
 A release build returns from the sign-in page through
 `https://orchestrator.inc/app/auth/return/` on the Orchestrator.inc website.
 If you accepted analytics on that website, the page passes your website
@@ -1664,7 +1805,8 @@ identity (user ID, email, GitHub username) stays in the client. It takes effect
 immediately and is remembered across restarts (it is a marker file,
 `telemetry_opt_out`, next to the installation identifier). A paired phone picks
 it up the next time it connects and keeps it until a paired desktop that has
-analytics on tells it otherwise. Turning it back on resumes sending; the desktop
+analytics on tells it otherwise. With it off, the first-day exit feedback
+prompt never shows. Turning it back on resumes sending; the desktop
 interface uses a fresh anonymous identifier until the next restart. Data already
 sent to PostHog is not deleted.
 

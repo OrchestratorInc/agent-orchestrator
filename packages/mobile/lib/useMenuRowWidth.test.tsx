@@ -123,3 +123,54 @@ it("keeps the last real width as the seed when a row reports zero", () => {
 	act(() => renderer!.update(list(["first-a", "later-i"], log)));
 	expect(firstRender(log, "later-i")).toBe(402.5);
 });
+
+// A caller that measures its slot passes an estimate of the slot's width. A
+// list's first rows have no sibling to inherit from, and a row drawn once
+// without a width inside an iOS menu keeps a title line at its intrinsic width
+// for good, running off the screen with the row's time past its edge.
+function EstimatedSlot({ id, estimate, log }: { id: string; estimate: number; log: [string, number | undefined][] }) {
+	const menuWidth = useMenuRowWidth(estimate);
+	log.push([id, menuWidth.width]);
+	return createElement("View", { ref: menuWidth.ref, onLayout: menuWidth.onLayout, testID: id },
+		createElement("Row", { style: menuWidth.style }));
+}
+
+const estimated = (ids: string[], log: [string, number | undefined][], estimate = 430) =>
+	createElement(MenuRowWidthScope, null, ...ids.map((id) => createElement(EstimatedSlot, { key: id, id, estimate, log })));
+
+it("renders a list's first rows at the estimate, never unsized, then at their slot's width", () => {
+	const log: [string, number | undefined][] = [];
+	act(() => { renderer = create(estimated(["first-a", "first-b"], log), { createNodeMock: firstBatchOnly }); });
+	expect(firstRender(log, "first-a")).toBe(430);
+	expect(firstRender(log, "first-b")).toBe(430);
+	expect(log.some(([, width]) => width === undefined)).toBe(false);
+	expect(rowStyle(renderer!, "first-a")).toEqual({ width: 402.5 });
+});
+
+it("prefers the list's measured width over the estimate for later rows", () => {
+	const log: [string, number | undefined][] = [];
+	act(() => { renderer = create(estimated(["first-a"], log), { createNodeMock: firstBatchOnly }); });
+	act(() => renderer!.update(estimated(["first-a", "later-k"], log)));
+	expect(firstRender(log, "later-k")).toBe(402.5);
+});
+
+it("follows a changed estimate while the row has measured nothing", () => {
+	const log: [string, number | undefined][] = [];
+	const unmeasured = () => ({ getBoundingClientRect: () => ({ width: 0 }) });
+	act(() => { renderer = create(createElement(EstimatedSlot, { id: "row", estimate: 350, log }), { createNodeMock: unmeasured }); });
+	act(() => renderer!.update(createElement(EstimatedSlot, { id: "row", estimate: 834, log })));
+	expect(log.at(-1)?.[1]).toBe(834);
+});
+
+it("keeps a measured width when the estimate changes", () => {
+	const log: [string, number | undefined][] = [];
+	act(() => { renderer = create(createElement(EstimatedSlot, { id: "first-a", estimate: 350, log }), { createNodeMock: firstBatchOnly }); });
+	act(() => renderer!.update(createElement(EstimatedSlot, { id: "first-a", estimate: 834, log })));
+	expect(log.at(-1)?.[1]).toBe(402.5);
+});
+
+it("leaves a row unsized when its estimate is zero", () => {
+	const log: [string, number | undefined][] = [];
+	act(() => { renderer = create(estimated(["first-a"], log, 0), { createNodeMock: () => ({ getBoundingClientRect: () => ({ width: 0 }) }) }); });
+	expect(firstRender(log, "first-a")).toBeUndefined();
+});
