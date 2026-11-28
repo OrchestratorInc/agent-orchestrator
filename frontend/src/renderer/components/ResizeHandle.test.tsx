@@ -44,6 +44,25 @@ describe("ResizeHandle hover line", () => {
 		expect(1306 + left + RESIZE_LINE_WIDTH_PX / 2).toBe(1311 + PANEL_BORDER_PX / 2);
 	});
 
+	// Interface v2 splits the session and the inspector with a 4px gap (812 to
+	// 816): the line runs down the gap's middle, not along either panel's edge.
+	it("centers on lineCenter when given, and falls back to the edge without one", () => {
+		const panel = document.createElement("div");
+		panel.getBoundingClientRect = () => rect(244, 568);
+		let center: number | null = 814;
+		render(<ResizeHandle edge={() => panel} lineCenter={() => center} side="left" />);
+		const handle = screen.getByTestId("resize-handle");
+		handle.getBoundingClientRect = () => rect(807, 12);
+		const line = handle.querySelector<HTMLElement>("[data-resize-line]")!;
+
+		fireEvent.pointerEnter(handle);
+		expect(807 + Number.parseFloat(line.style.left) + RESIZE_LINE_WIDTH_PX / 2).toBe(814);
+
+		center = null;
+		fireEvent.pointerEnter(handle);
+		expect(807 + Number.parseFloat(line.style.left) + RESIZE_LINE_WIDTH_PX / 2).toBe(811 + PANEL_BORDER_PX / 2);
+	});
+
 	it("spans the panel's height, 20px short of its top and bottom", () => {
 		const panel = document.createElement("div");
 		panel.getBoundingClientRect = () => ({ ...rect(243, 1069), top: 50, bottom: 760 }) as DOMRect;
