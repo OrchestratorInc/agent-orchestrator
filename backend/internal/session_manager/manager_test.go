@@ -5481,6 +5481,51 @@ func TestRestoreRerunsSetupThatNeverFinished(t *testing.T) {
 	}
 }
 
+// recreateThenFailWorkspace recreates the worktree and then reports a failure
+// once, standing in for a restore cut off after the worktree exists but before
+// Setup starts (a canceled request, an attachment that cannot be copied back).
+type recreateThenFailWorkspace struct {
+	ports.Workspace
+	failed bool
+}
+
+func (w *recreateThenFailWorkspace) Restore(ctx context.Context, cfg ports.WorkspaceConfig) (ports.WorkspaceInfo, error) {
+	info, err := w.Workspace.Restore(ctx, cfg)
+	if err == nil && !w.failed {
+		w.failed = true
+		return ports.WorkspaceInfo{}, errors.New("restore canceled after recreating the worktree")
+	}
+	return info, err
+}
+
+func TestRestoreOwesSetupWhenItFailsBeforeSetupStarts(t *testing.T) {
+	m, _, _, _ := newManager()
+	m.dataDir = t.TempDir()
+	managed := filepath.Join(t.TempDir(), "workspaces")
+	adapter, err := scratch.New(scratch.Options{ManagedRoot: managed})
+	if err != nil {
+		t.Fatal(err)
+	}
+	m.workspace = &recreateThenFailWorkspace{Workspace: adapter}
+	workspace := filepath.Join(managed, "scratch", "workers", "scratch-1")
+	project := domain.ProjectRecord{ID: "scratch", Kind: domain.ProjectKindScratch, Path: t.TempDir(), Config: domain.ProjectConfig{PostCreate: []string{"echo setup >> setup-runs"}}}
+	rec := domain.SessionRecord{ID: "scratch-1", ProjectID: "scratch", Kind: domain.KindWorker, Metadata: domain.SessionMetadata{WorkspacePath: workspace}}
+
+	if _, err := m.restoreSessionWorkspace(context.Background(), project, rec); err == nil {
+		t.Fatal("first restore succeeded, want it to fail after recreating the worktree")
+	}
+	if _, err := os.Stat(workspace); err != nil {
+		t.Fatalf("worktree was not recreated before the failure: %v", err)
+	}
+	if _, err := m.restoreSessionWorkspace(context.Background(), project, rec); err != nil {
+		t.Fatalf("retry: %v", err)
+	}
+	output, err := os.ReadFile(filepath.Join(workspace, "setup-runs"))
+	if err != nil || strings.Count(string(output), "setup") != 1 {
+		t.Fatalf("setup runs = %q, err = %v; want the retry to run Setup on the existing worktree", output, err)
+	}
+}
+
 func TestRestore_WorkspaceProjectRestoresChildrenAndRecordsInventory(t *testing.T) {
 	m, st, rt, ws := newManager()
 	st.projects["mer"] = domain.ProjectRecord{ID: "mer", Path: "/repo/mer", Kind: domain.ProjectKindWorkspace, Config: testRoleAgents()}

@@ -5407,6 +5407,9 @@ func (m *Manager) restoreAllSession(ctx context.Context, rec domain.SessionRecor
 		}
 		recreated = recreated || missing
 	}
+	if recreated {
+		m.noteSetupOwed(rec.ID)
+	}
 
 	// Step 1: ensure the worktree exists. workspace.Restore re-creates it
 	// if it was removed by SaveAndTeardownAll.
@@ -5565,6 +5568,9 @@ func (m *Manager) restoreSessionWorkspace(ctx context.Context, project domain.Pr
 		if err != nil {
 			return ports.WorkspaceInfo{}, err
 		}
+		if recreated {
+			m.noteSetupOwed(rec.ID)
+		}
 		ws, err := m.workspace.Restore(ctx, ports.WorkspaceConfig{
 			ProjectID:     rec.ProjectID,
 			SessionID:     rec.ID,
@@ -5603,6 +5609,9 @@ func (m *Manager) restoreSessionWorkspace(ctx context.Context, project domain.Pr
 			return ports.WorkspaceInfo{}, statErr
 		}
 		recreated = recreated || missing
+	}
+	if recreated {
+		m.noteSetupOwed(rec.ID)
 	}
 	root, err := m.restoreWorkspaceProjectRows(ctx, rows)
 	if err != nil {

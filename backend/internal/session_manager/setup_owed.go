@@ -16,9 +16,11 @@ import (
 // never provisioned. The next restore would find the path present and skip
 // Setup, launching the agent without the project's dependencies.
 //
-// The debt is therefore recorded outside the worktree before Setup starts and
-// cleared only when Setup finishes, so every later restore runs Setup again
-// until one run completes.
+// The debt is therefore recorded outside the worktree as soon as a restore
+// knows it will recreate the worktree, before anything that can fail after
+// the worktree exists (attachments, inventory rows, Setup itself), and it is
+// cleared only when Setup finishes. Every later restore runs Setup again until
+// one run completes.
 
 // setupOwedPath is the marker for a session whose recreated worktree still
 // owes Setup, or "" when the manager has no data directory.
@@ -44,27 +46,32 @@ func (m *Manager) setupOwed(id domain.SessionID, recreated bool) bool {
 	return err == nil
 }
 
-// runOwedSetup runs provision when the worktree owes Setup, keeping the debt
-// recorded until provision succeeds.
+// noteSetupOwed records that the session's worktree owes Setup. Call it before
+// recreating the worktree, so any failure from then on leaves the debt behind.
+func (m *Manager) noteSetupOwed(id domain.SessionID) {
+	path := m.setupOwedPath(id)
+	if path == "" {
+		return
+	}
+	err := os.MkdirAll(filepath.Dir(path), 0o750)
+	if err == nil {
+		err = os.WriteFile(path, nil, 0o600)
+	}
+	if err != nil && m.logger != nil {
+		m.logger.Warn("record owed setup", "sessionID", id, "error", err)
+	}
+}
+
+// runOwedSetup runs provision when the worktree owes Setup and clears the debt
+// only once provision succeeds.
 func (m *Manager) runOwedSetup(id domain.SessionID, recreated bool, provision func() error) error {
 	if !m.setupOwed(id, recreated) {
 		return nil
 	}
-	path := m.setupOwedPath(id)
-	if path != "" {
-		if err := os.MkdirAll(filepath.Dir(path), 0o750); err == nil {
-			err = os.WriteFile(path, nil, 0o600)
-			if err != nil && m.logger != nil {
-				m.logger.Warn("record owed setup", "sessionID", id, "error", err)
-			}
-		} else if m.logger != nil {
-			m.logger.Warn("record owed setup", "sessionID", id, "error", err)
-		}
-	}
 	if err := provision(); err != nil {
 		return err
 	}
-	if path != "" {
+	if path := m.setupOwedPath(id); path != "" {
 		if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) && m.logger != nil {
 			m.logger.Warn("clear owed setup", "sessionID", id, "error", err)
 		}
