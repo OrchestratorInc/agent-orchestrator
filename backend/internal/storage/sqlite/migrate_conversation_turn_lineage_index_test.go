@@ -1,15 +1,19 @@
 package sqlite
 
 import (
+	"strconv"
 	"strings"
 	"testing"
 )
 
 const (
-	turnLineageMigrationVersion      = 20261128072745042
-	turnLineageDraftMigrationVersion = 20261101115405806
-	beforeTurnLineageMigration       = 20261128055914527
+	turnLineageMigrationVersion = 20261128072745042
+	beforeTurnLineageMigration  = 20261128055914527
 )
+
+// The numbers builds of this migration recorded before it moved: the draft's
+// and the one it had before main's newer migrations landed below it.
+var turnLineageEarlierMigrationVersions = []int64{20261101115405806, 20261126084920915}
 
 // Break caught: reading a forked conversation checked each turn's lineage with a
 // range scan of the conversation's history, so a resume of a large forked
@@ -31,15 +35,21 @@ func TestConversationTurnLineageLookupsUseIndexes(t *testing.T) {
 	}
 }
 
-// A build of this migration's draft recorded it as 20261101115405806 and created
-// full lineage indexes beside the turn_id-only ones. The migration applies once
-// on such a database, leaves the indexes as on a fresh install, and drops the
-// draft's history row. Startup stays repeatable.
+// Builds of this migration under its earlier numbers recorded those numbers, and
+// the draft created full lineage indexes beside the turn_id-only ones. The
+// migration applies once on such a database, leaves the indexes as on a fresh
+// install, and drops the earlier history row. Startup stays repeatable.
 func TestTurnLineageMigrationAdoptsDraftHistory(t *testing.T) {
+	for _, earlier := range turnLineageEarlierMigrationVersions {
+		t.Run(strconv.FormatInt(earlier, 10), func(t *testing.T) { assertTurnLineageAdoptsHistory(t, earlier) })
+	}
+}
+
+func assertTurnLineageAdoptsHistory(t *testing.T, earlier int64) {
 	db := openMigratedDatabaseCopy(t, beforeTurnLineageMigration)
 	mustExec(t, db, `CREATE INDEX idx_conversation_messages_turn_lineage ON conversation_messages(turn_id, conversation_id, sequence)`)
 	mustExec(t, db, `CREATE INDEX idx_conversation_activities_turn_lineage ON conversation_activities(turn_id, conversation_id, sequence)`)
-	mustExec(t, db, `INSERT INTO goose_db_version (version_id, is_applied) VALUES (?, 1)`, turnLineageDraftMigrationVersion)
+	mustExec(t, db, `INSERT INTO goose_db_version (version_id, is_applied) VALUES (?, 1)`, earlier)
 	for range 2 {
 		if err := migrate(db); err != nil {
 			t.Fatalf("migrate draft history: %v", err)
@@ -49,11 +59,11 @@ func TestTurnLineageMigrationAdoptsDraftHistory(t *testing.T) {
 	if err := db.QueryRow(`SELECT
 		(SELECT COUNT(*) FROM goose_db_version WHERE version_id = ?),
 		(SELECT COUNT(*) FROM goose_db_version WHERE version_id = ? AND is_applied = 1)`,
-		turnLineageDraftMigrationVersion, turnLineageMigrationVersion).Scan(&draft, &applied); err != nil {
+		earlier, turnLineageMigrationVersion).Scan(&draft, &applied); err != nil {
 		t.Fatal(err)
 	}
 	if draft != 0 || applied != 1 {
-		t.Fatalf("draft history rows = %d, migration receipts = %d; want 0 and 1", draft, applied)
+		t.Fatalf("earlier history rows = %d, migration receipts = %d; want 0 and 1", draft, applied)
 	}
 	indexes := map[string]string{}
 	rows, err := db.Query(`SELECT name, sql FROM sqlite_master WHERE type = 'index' AND tbl_name IN ('conversation_messages', 'conversation_activities') AND name LIKE '%_turn%'`)

@@ -10,11 +10,12 @@
 --
 -- They lead on turn_id, so they also serve the session delete's turn_id lookups
 -- and replace the turn_id-only indexes added for it: each insert keeps
--- maintaining one turn_id index, not two. A build of this change's draft
--- (version 20261101115405806) created full indexes under these names; they are
--- rebuilt as partial ones, and the draft's history row goes, so goose's history
--- never names a migration no file ships.
-DELETE FROM goose_db_version WHERE version_id = 20261101115405806;
+-- maintaining one turn_id index, not two. Builds of this change under its
+-- earlier numbers (20261101115405806, a draft that created full indexes under
+-- these names, and 20261126084920915) left their own history rows; the indexes
+-- are rebuilt as partial ones and both rows go, so goose's history never names a
+-- migration no file ships.
+DELETE FROM goose_db_version WHERE version_id IN (20261101115405806, 20261126084920915);
 DROP INDEX IF EXISTS idx_conversation_messages_turn_lineage;
 DROP INDEX IF EXISTS idx_conversation_activities_turn_lineage;
 CREATE INDEX idx_conversation_messages_turn_lineage
