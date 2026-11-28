@@ -30,6 +30,7 @@ ao
 ├── agent ls                      List built-in agent adapters and readiness
 ├── project                       add, ls, get, set-config, rm
 ├── spawn                         Create a worker or orchestrator session
+├── task                          start, status, wait: hand off a task and check it started
 ├── session                       ls, get, kill, restore, rename, cleanup, delete,
 │                                 claim-pr, exit-agent, resume-agent
 ├── automation                    create, list, get, update, delete, runs
@@ -149,6 +150,57 @@ Important flags include:
 | `--skip-agent-check` | Skip only the CLI-side install/auth preflight. |
 
 Orchestrator chooses a project in this order: `--project`, `AO_PROJECT_ID`, the project for `AO_SESSION_ID`, then the closest registered project containing the current directory. Before spawning, Orchestrator refreshes the selected agent's readiness unless you use `--skip-agent-check`. Readiness is advisory.
+
+### `ao task`
+
+Hands a task to Orchestrator and reports, through its exit code, whether the agent really picked it up. It is meant for scripts and for other coding agents.
+
+```bash
+ao task start "Fix the failing login test" --wait --json
+```
+
+By default the project's orchestrator receives the task, plans it, and starts workers. With `--worker`, a single worker session takes the task directly. Without `--project`, Orchestrator uses `AO_PROJECT_ID`, then the closest (most specific) registered project that contains the current directory. It exits `2` as a usage error when no project contains it, or when several tie for the closest match.
+
+| Command | Purpose |
+| --- | --- |
+| `ao task start "<brief>"` | Start the task. Flags: `--project <id>`, `--worker`, `--agent <id>` and `--base <branch>` (only with `--worker`), `--wait`, `--timeout <duration>` (default `120s`), `--json`. |
+| `ao task status <task-id>` | Report the task's status once. Supports `--json`. |
+| `ao task wait <task-id>` | Wait until the task has started, failed, or needs you. Supports `--timeout` and `--json`. |
+
+`start --wait` behaves like `start` followed by `wait`. A status read that fails for a passing reason, such as the daemon being briefly unreachable, doesn't end a wait; it keeps polling within `--timeout`. A task has started once its turn has finished, or has stayed running for a few seconds before `--timeout` ends. `wait` confirms that the task started, not that it finished, so an approval the agent asks for later is not seen by that call: keep calling `ao task status` or `ao task wait` until it reports `done`, `failed` or `needs_input`. For a terminal (TUI) task this works when its agent records turns (Claude Code does); otherwise check the session with `ao session get <id>`. Before starting, Orchestrator checks that each agent involved is signed in, and stops if one definitely is not. Without `--worker`, `--agent` and `--base` exit `2` as a usage error, because the orchestrator chooses agents and branches for its workers; set project defaults with `ao project set-config` instead.
+
+For a task sent to the orchestrator, the status includes the workers it started: `needs_input` if any of them needs you, `running` while the orchestrator or any worker is still working, `failed` if a worker failed after the orchestrator's turn ended, and `done` only when the orchestrator and all its workers have finished. Each worker is read at the turn it is running now (otherwise its latest), so follow-up work the orchestrator sends it keeps the task `running`, and an approval on its running turn reads `needs_input` even when a follow-up is queued. A worker that cannot be read keeps the task `running`. After a retry of the orchestrator's turn, only the current attempt's workers can fail the task. Workers that existed before the task are not tracked. A terminal (TUI) worker is read from its recorded turns too; one whose agent records none never reads `done`, so the task stays `running`.
+
+| Exit code | Meaning |
+| --- | --- |
+| `0` | With `--wait` or `ao task wait`: the task started, running or done. A one-shot read (`ao task status`, or `start` without `--wait`) also exits `0` while the task is `starting` or `queued`, so check `status`. |
+| `1` | The task failed: the session could not start, or the agent's turn failed. Also a lookup that cannot succeed, such as a 404 for the session (this ends `ao task wait` too), or a status read that failed outside a wait. Transient read errors during a wait are retried within `--timeout`. A failed read does not prove the task failed, so when `taskId` is set, check it with `ao task status` before submitting again. |
+| `2` | Usage error: the command itself needs fixing. It prints no JSON. |
+| `3` | The task is waiting on you, for example for an approval. Answer it in Orchestrator; starting the task again would run it twice. |
+| `4` | The task was submitted but the wait ended before it was confirmed: `--timeout` ran out (still queued, still starting, workspace setup unfinished, or running for under 5 seconds), or the wait was interrupted (Ctrl-C, SIGTERM, a caller's timeout). The output still has the `taskId`; don't start the task again, follow it with `ao task wait`. |
+
+With `--json`, the command prints one object:
+
+```json
+{
+  "status": "failed",
+  "taskId": "my-app-3",
+  "sessionIds": ["my-app-3"],
+  "reason": "Not logged in · Please run /login (auth_required)",
+  "fix": "run `claude auth login`, then retry"
+}
+```
+
+`status` is `starting`, `queued` (accepted; runs after the agent's current turn), `running`, `done`, `failed`, or `needs_input`. `taskId` is what you pass to `ao task status` or `ao task wait`:
+
+- a worker task: the worker's session ID;
+- a task sent to a Chat orchestrator: `<orchestrator-session>:<turn>`;
+- a task sent to a terminal (TUI) orchestrator: `<orchestrator-session>:tui-<unix ms>-<length>-<hash>`, the first turn that session recorded from when the brief was sent that carries this brief (other work recorded after the send is never taken for it, and session activity alone never confirms it);
+- empty when no task id could be reported. That does not prove no task exists: if the reason says the daemon accepted the task without a turn id, or that delivery could not be confirmed, check the session with `ao session history <id>` before starting it again.
+
+For `needs_input`, `fix` names the session that owns the pending request: the orchestrator when its own turn asks, or the worker when a tracked worker asks. Answer in the session `fix` names.
+
+A terminal (TUI) session is judged by the turns its agent records, as `ao session history` shows them (Claude Code records them): a task reads `done` once its turn is recorded with a reply, even if it finished between polls. For a terminal orchestrator, `done` confirms its own turn only; its history has no records of the workers it started, so check those with `ao session ls`. A terminal orchestrator that was just started gets about 15 seconds to boot before the brief is typed in; if the brief still lands unsubmitted, the command exits `4` with the task id, and you submit it in that session rather than starting the task again. A terminal session whose agent records no turns only shows idle or working, so it is never `done`; if `ao task wait` sees it working and then back at its prompt, it reports `running`. If the wait times out, the reason says which case it was. `sessionIds` lists the session that runs the task and any workers the orchestrator started for it; their state is part of `status`. A task that finished stays `done` after its session or a worker is archived; only a session archived before its turn finished makes it `failed`. A chat task id whose turn is not in the session's history fails once the CLI has read back to the start of that history; until then it reads `starting`. When the agent is not signed in, `fix` gives the agent's own login command. `ao spawn`, `ao send`, and the session states are unchanged.
 
 ### `ao session`
 

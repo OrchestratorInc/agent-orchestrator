@@ -1,0 +1,1646 @@
+package cli
+
+import (
+	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"errors"
+	"fmt"
+	"net/http"
+	"net/url"
+	"os"
+	"os/signal"
+	"regexp"
+	"slices"
+	"strconv"
+	"strings"
+	"syscall"
+	"time"
+
+	"github.com/google/uuid"
+	"github.com/spf13/cobra"
+
+	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
+)
+
+// `ao task` is the scripted way for another tool or coding agent to hand
+// Orchestrator a task and learn, from the exit code alone, whether it really
+// started. It is built only on existing daemon routes and leaves `ao spawn`,
+// `ao send` and the session states unchanged.
+//
+// Exit codes: 0 the task started (running or done), 1 it failed,
+// 2 usage error only (the CLI-wide meaning), 3 it is waiting on the user, 4 a
+// wait ran out while the task was still queued (it will run; do not resend).
+// A task outcome never goes through usageError, so these are not counted as
+// usage errors.
+
+// Task statuses reported in the `status` field of --json output.
+const (
+	taskStatusStarting   = "starting"
+	taskStatusRunning    = "running"
+	taskStatusDone       = "done"
+	taskStatusFailed     = "failed"
+	taskStatusNeedsInput = "needs_input"
+	// taskStatusQueued: the agent accepted the task and will run it after its
+	// current turn.
+	taskStatusQueued = "queued"
+)
+
+// Exit codes for task statuses that are not success.
+const (
+	taskExitFailed     = 1
+	taskExitNeedsInput = 3
+	// taskExitStillQueued: a wait timed out while the task was queued. It is
+	// accepted and will run, so a caller must not start it again.
+	taskExitStillQueued = 4
+)
+
+const defaultTaskTimeout = 120 * time.Second
+
+// taskGuidanceTimeout bounds the optional sign-in guidance lookup.
+var taskGuidanceTimeout = 5 * time.Second
+
+// taskFinalReadTimeout bounds the one extra read a wait makes after its
+// deadline, so an exit-4 "still queued" result matches a fresh read.
+var taskFinalReadTimeout = 5 * time.Second
+
+// taskPollInterval paces status reads while waiting.
+var taskPollInterval = time.Second
+
+// taskRunningSettle is how long a turn must stay running before `wait` calls
+// the task started, so an agent that fails right after picking the task up
+// (a rejected login, a missing key) still reports the failure.
+var taskRunningSettle = 5 * time.Second
+
+// taskResult is the stable --json shape. Every field is always present.
+type taskResult struct {
+	Status     string   `json:"status"`
+	TaskID     string   `json:"taskId"`
+	SessionIDs []string `json:"sessionIds"`
+	Reason     string   `json:"reason"`
+	Fix        string   `json:"fix"`
+	// phase is the reading behind Status (not printed), so `start --wait`
+	// carries what the start already saw into the wait.
+	phase string
+	// waitTimedOut marks a result a wait gave up on (not printed).
+	waitTimedOut bool
+	// waitInterrupted marks a wait its caller stopped (not printed).
+	waitInterrupted bool
+	// unread marks a status synthesized without a successful read (not printed).
+	unread bool
+}
+
+// taskExitError carries a task outcome's exit code to the process entrypoint.
+type taskExitError struct {
+	code int
+	msg  string
+}
+
+func (e taskExitError) Error() string { return e.msg }
+
+type taskStartOptions struct {
+	project string
+	agent   string
+	base    string
+	worker  bool
+	wait    bool
+	timeout time.Duration
+	json    bool
+}
+
+type taskWaitOptions struct {
+	timeout time.Duration
+	json    bool
+}
+
+func newTaskCommand(ctx *commandContext) *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "task",
+		Short: "Start a task and check whether it really started",
+		Long: "Start a task on a project and check whether the agent really picked it up.\n\n" +
+			"By default the project's orchestrator receives the task, plans it, and starts workers.\n" +
+			"With --worker a single worker session takes it directly.\n\n" +
+			"Exit codes: 0 started (running or done) when the command waits; a one-shot read (status, or start\n" +
+			"without --wait) also exits 0 while starting or queued, so check status. 1 failed,\n" +
+			"2 usage error, 3 waiting on the user,\n" +
+			"4 the task was submitted but the wait ended before confirming it (timed out or interrupted); do not start it again.\n" +
+			"--wait and `ao task wait` confirm the task started; poll `ao task status` for completion.\n" +
+			"With --json, stdout is {status, taskId, sessionIds, reason, fix}; status is one of\n" +
+			"starting, queued, running, done, failed, needs_input.",
+		// Runnable so a mistyped subcommand (`ao task statuz`) is a usage
+		// error, exit 2, instead of help with exit 0. Bare `ao task` shows help.
+		Args: cobra.ArbitraryArgs,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if len(args) > 0 {
+				return usageError{fmt.Errorf("unknown command %q for %q; run `ao task --help`", args[0], cmd.CommandPath())}
+			}
+			return cmd.Help()
+		},
+	}
+	cmd.AddCommand(newTaskStartCommand(ctx))
+	cmd.AddCommand(newTaskStatusCommand(ctx))
+	cmd.AddCommand(newTaskWaitCommand(ctx))
+	return cmd
+}
+
+func newTaskStartCommand(ctx *commandContext) *cobra.Command {
+	opts := taskStartOptions{timeout: defaultTaskTimeout}
+	cmd := &cobra.Command{
+		Use:   "start <brief>",
+		Short: "Send a task to the project's orchestrator (or one worker with --worker)",
+		Args:  usageArgs(cobra.ExactArgs(1)),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			brief := strings.TrimSpace(args[0])
+			if brief == "" {
+				return usageError{fmt.Errorf("task brief must not be empty")}
+			}
+			if opts.timeout <= 0 {
+				return usageError{fmt.Errorf("--timeout must be positive")}
+			}
+			// The orchestrator picks agents and branches for the workers it
+			// starts, so nothing could enforce these flags on that path.
+			if !opts.worker && (strings.TrimSpace(opts.agent) != "" || strings.TrimSpace(opts.base) != "") {
+				return usageError{fmt.Errorf("--agent and --base apply only with --worker; the orchestrator chooses agents and branches for its workers (set project defaults with `ao project set-config <id> --worker-agent <agent> --default-branch <branch>`)")}
+			}
+			// A signal (Ctrl-C, or a calling agent's tool timeout) cancels the
+			// work cleanly, so the task id is still printed once a brief was sent.
+			runCtx, stop := signal.NotifyContext(cmd.Context(), os.Interrupt, syscall.SIGTERM)
+			defer stop()
+			res, err := ctx.startTask(runCtx, brief, opts)
+			if err != nil {
+				return err
+			}
+			// A result already settled as "submitted, not confirmed" (exit 4)
+			// carries its own instructions; a wait would replace them.
+			if opts.wait && !res.waitTimedOut && (res.Status == taskStatusStarting || res.Status == taskStatusQueued || res.Status == taskStatusRunning) {
+				res = ctx.waitTask(runCtx, res, opts.timeout)
+			}
+			return writeTaskResult(cmd, res, opts.json)
+		},
+	}
+	f := cmd.Flags()
+	f.StringVar(&opts.project, "project", "", "Project id (default: AO_PROJECT_ID or the registered project that contains the current directory)")
+	f.BoolVar(&opts.worker, "worker", false, "Start one worker session on the task instead of sending it to the orchestrator")
+	f.StringVar(&opts.agent, "agent", "", "Agent for the worker (requires --worker; default: the project's worker agent)")
+	f.StringVar(&opts.base, "base", "", "Base branch for the worker (requires --worker; default: the project's default branch)")
+	f.BoolVar(&opts.wait, "wait", false, "Wait until the task has started, failed, or needs the user")
+	f.DurationVar(&opts.timeout, "timeout", defaultTaskTimeout, "How long --wait waits before failing")
+	f.BoolVar(&opts.json, "json", false, "Print the result as JSON")
+	return cmd
+}
+
+func newTaskStatusCommand(ctx *commandContext) *cobra.Command {
+	var asJSON bool
+	cmd := &cobra.Command{
+		Use:   "status <task-id>",
+		Short: "Report a task's status once",
+		Args:  usageArgs(cobra.ExactArgs(1)),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			id, err := parseTaskID(args[0])
+			if err != nil {
+				return err
+			}
+			return writeTaskResult(cmd, ctx.taskStatus(cmd.Context(), id), asJSON)
+		},
+	}
+	cmd.Flags().BoolVar(&asJSON, "json", false, "Print the result as JSON")
+	return cmd
+}
+
+func newTaskWaitCommand(ctx *commandContext) *cobra.Command {
+	opts := taskWaitOptions{timeout: defaultTaskTimeout}
+	cmd := &cobra.Command{
+		Use:   "wait <task-id>",
+		Short: "Wait until a task has started, failed, or needs the user",
+		Args:  usageArgs(cobra.ExactArgs(1)),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			id, err := parseTaskID(args[0])
+			if err != nil {
+				return err
+			}
+			if opts.timeout <= 0 {
+				return usageError{fmt.Errorf("--timeout must be positive")}
+			}
+			runCtx, stop := signal.NotifyContext(cmd.Context(), os.Interrupt, syscall.SIGTERM)
+			defer stop()
+			res := ctx.waitTask(runCtx, taskResult{TaskID: id.String()}, opts.timeout)
+			return writeTaskResult(cmd, res, opts.json)
+		},
+	}
+	cmd.Flags().DurationVar(&opts.timeout, "timeout", defaultTaskTimeout, "How long to wait before failing")
+	cmd.Flags().BoolVar(&opts.json, "json", false, "Print the result as JSON")
+	return cmd
+}
+
+// taskID names the session that runs a task and, for a task sent to a
+// running session (the orchestrator), the conversation turn that carries it.
+// It prints as "<session>" or "<session>:<turn>".
+type taskID struct {
+	session string
+	turn    string
+	// latest selects the session's most recent turn instead of its first.
+	// Used for the workers an orchestrator task started (never printed): an
+	// orchestrator can send a worker follow-up work after its first turn.
+	latest bool
+}
+
+// terminalTaskTurnPrefix marks a task sent to a terminal (TUI) session, which
+// has no turn ids: "<session>:tui-<unix ms>" is the first turn the session
+// recorded at or after that moment.
+const terminalTaskTurnPrefix = "tui-"
+
+// taskTerminalBootWait is how long a freshly started terminal orchestrator
+// is given to boot before a brief is typed into it.
+var taskTerminalBootWait = 15 * time.Second
+
+func (id taskID) terminalSince() (time.Time, bool) {
+	rest, ok := strings.CutPrefix(id.turn, terminalTaskTurnPrefix)
+	if !ok {
+		return time.Time{}, false
+	}
+	ms, _, _ := strings.Cut(rest, "-")
+	n, err := strconv.ParseInt(ms, 10, 64)
+	if err != nil {
+		return time.Time{}, false
+	}
+	return time.UnixMilli(n), true
+}
+
+// terminalBriefFingerprint returns the "<len>-<hash>" part of a terminal task
+// id, which identifies the brief's own turn in history. Older ids have none.
+func (id taskID) terminalBriefFingerprint() (length int, hash string, ok bool) {
+	rest, found := strings.CutPrefix(id.turn, terminalTaskTurnPrefix)
+	if !found {
+		return 0, "", false
+	}
+	parts := strings.Split(rest, "-")
+	if len(parts) != 3 {
+		return 0, "", false
+	}
+	n, err := strconv.Atoi(parts[1])
+	if err != nil || n <= 0 {
+		return 0, "", false
+	}
+	return n, parts[2], true
+}
+
+// briefFingerprintEdge is how much of each end of a brief its fingerprint
+// hashes on its own, so a recorder's shortened copy (its start, a marker, its
+// end) can still be recognised.
+const briefFingerprintEdge = 1024
+
+// recorderTruncationMarker is what turn recorders put where they cut a long
+// request (hooks.go capHookText).
+const recorderTruncationMarker = "\n[... truncated by AO ...]\n"
+
+// canonicalBrief is a brief as turn recorders store it, with control
+// characters other than tab and newlines removed (as the daemon delivers it)
+// and surrounding space trimmed. It trims on both sides of sanitizing, so a
+// recorded request canonicalizes to itself.
+func canonicalBrief(text string) string {
+	return strings.TrimSpace(domain.SanitizeControlChars(strings.TrimSpace(text)))
+}
+
+// briefHash is the fingerprint of a canonical brief: a short hash of the whole
+// text, then of its first and of its last briefFingerprintEdge bytes.
+func briefHash(canonical string) string {
+	short := func(s string) string { sum := sha256.Sum256([]byte(s)); return hex.EncodeToString(sum[:4]) }
+	head := canonical[:min(len(canonical), briefFingerprintEdge)]
+	tail := canonical[len(canonical)-min(len(canonical), briefFingerprintEdge):]
+	return short(canonical) + short(head) + short(tail)
+}
+
+// turnCarriesBrief reports whether a recorded request is the complete brief:
+// the same text, or, for a brief longer than a recorder keeps, a shortened copy
+// with the same start and end. A request that only contains the brief, or extends it,
+// does not match.
+func turnCarriesBrief(request string, length int, hash string) bool {
+	request = canonicalBrief(request)
+	if matchesBriefFingerprint(request, length, hash) {
+		return true
+	}
+	// The one header Orchestrator puts in front of a message from another
+	// session (`[from <session>] `, as `ao send` writes it) is not the brief.
+	if m := senderHeader.FindStringIndex(request); m != nil {
+		return matchesBriefFingerprint(request[m[1]:], length, hash)
+	}
+	return false
+}
+
+// senderHeader is the `[from <session-id>]` prefix `ao send` writes.
+var senderHeader = regexp.MustCompile(`^\[from [A-Za-z0-9_.-]+\][ \t]*\n?`)
+
+func matchesBriefFingerprint(request string, length int, hash string) bool {
+	if len(hash) != 24 {
+		return false
+	}
+	if len(request) == length {
+		return briefHash(request) == hash
+	}
+	// A recorder's shortened copy keeps the brief's start and end around its
+	// marker: both ends must match, not a shared start alone.
+	if len(request) >= length || length <= 2*briefFingerprintEdge ||
+		len(request) < 2*briefFingerprintEdge+len(recorderTruncationMarker) ||
+		!strings.Contains(request, recorderTruncationMarker) {
+		return false
+	}
+	got := briefHash(request)
+	return got[8:] == hash[8:]
+}
+
+func (id taskID) String() string {
+	if id.turn == "" {
+		return id.session
+	}
+	return id.session + ":" + id.turn
+}
+
+func parseTaskID(raw string) (taskID, error) {
+	raw = strings.TrimSpace(raw)
+	session, turn, hasTurn := strings.Cut(raw, ":")
+	session, turn = strings.TrimSpace(session), strings.TrimSpace(turn)
+	if !sessionIDPattern.MatchString(session) || hasTurn && turn == "" {
+		return taskID{}, usageError{fmt.Errorf("invalid task id %q: expected <session-id> or <session-id>:<turn-id> as printed by `ao task start`", raw)}
+	}
+	return taskID{session: session, turn: turn}, nil
+}
+
+func writeTaskResult(cmd *cobra.Command, res taskResult, asJSON bool) error {
+	if res.SessionIDs == nil {
+		res.SessionIDs = []string{}
+	}
+	out := cmd.OutOrStdout()
+	if asJSON {
+		if err := writeJSON(out, res); err != nil {
+			return err
+		}
+	} else {
+		line := fmt.Sprintf("task %s: %s", res.TaskID, res.Status)
+		if res.TaskID == "" {
+			line = "task: " + res.Status
+		}
+		if res.Reason != "" {
+			line += " (" + res.Reason + ")"
+		}
+		if _, err := fmt.Fprintln(out, line); err != nil {
+			return err
+		}
+		if len(res.SessionIDs) > 0 {
+			if _, err := fmt.Fprintf(out, "  sessions: %s\n", strings.Join(res.SessionIDs, ", ")); err != nil {
+				return err
+			}
+		}
+		if res.Fix != "" {
+			if _, err := fmt.Fprintf(out, "  fix: %s\n", res.Fix); err != nil {
+				return err
+			}
+		}
+	}
+	msg := res.Reason
+	if res.Fix != "" {
+		msg += "; " + res.Fix
+	}
+	switch res.Status {
+	case taskStatusFailed:
+		return taskExitError{code: taskExitFailed, msg: "task failed: " + msg}
+	case taskStatusNeedsInput:
+		return taskExitError{code: taskExitNeedsInput, msg: "task is waiting on you: " + msg}
+	}
+	if res.waitTimedOut {
+		// Submitted, not confirmed before --timeout ran out: never a retry.
+		return taskExitError{code: taskExitStillQueued, msg: "task not confirmed in time: " + msg}
+	}
+	if res.waitInterrupted {
+		// Same contract as a queued timeout: submitted, not yet confirmed,
+		// and must not be started again.
+		return taskExitError{code: taskExitStillQueued, msg: "task wait interrupted: " + msg}
+	}
+	return nil
+}
+
+func failedTask(id string, sessions []string, reason, fix string) taskResult {
+	return taskResult{Status: taskStatusFailed, TaskID: id, SessionIDs: sessions, Reason: reason, Fix: fix}
+}
+
+// startTask creates the task and returns its first status. Usage errors
+// (such as an ambiguous project) come back as the error; every other failure
+// is a failed result so --json callers always get the same shape.
+func (c *commandContext) startTask(ctx context.Context, brief string, opts taskStartOptions) (taskResult, error) {
+	project, err := c.resolveTaskProject(ctx, opts.project)
+	var ue usageError
+	if errors.As(err, &ue) {
+		return taskResult{}, err
+	}
+	if err != nil {
+		return failedTask("", nil, err.Error(), ""), nil
+	}
+	res := c.createTask(ctx, project, brief, opts)
+	return res, nil
+}
+
+func (c *commandContext) createTask(ctx context.Context, project projectDetails, brief string, opts taskStartOptions) taskResult {
+	workerAgent := strings.TrimSpace(opts.agent)
+	if workerAgent == "" && project.Config != nil {
+		workerAgent = strings.TrimSpace(project.Config.Worker.Agent)
+	}
+	probed := map[string]bool{}
+	// The fix for an unsupported agent names where that agent came from: the
+	// --agent flag (worker path only) or the project setting that supplied it.
+	settingFix := func(flag string) string {
+		return fmt.Sprintf("pick a supported agent from `ao agent ls` and set it with `ao project set-config %s %s <agent>`", project.ID, flag)
+	}
+	workerFix := settingFix("--worker-agent")
+	if opts.worker && strings.TrimSpace(opts.agent) != "" {
+		workerFix = "pick a supported agent from `ao agent ls` and pass it with `--worker --agent <agent>`"
+	}
+	probe := func(agent, unsupportedFix string) *taskResult {
+		if agent == "" || probed[agent] {
+			return nil
+		}
+		probed[agent] = true
+		return c.preflightTaskAgent(ctx, agent, unsupportedFix)
+	}
+	preflight := func(agent string) *taskResult { return probe(agent, workerFix) }
+
+	if opts.worker {
+		if res := preflight(workerAgent); res != nil {
+			return *res
+		}
+		var out struct {
+			WorkerID string `json:"workerId"`
+		}
+		req := struct {
+			ClientRequestID string `json:"clientRequestId"`
+			ProjectID       string `json:"projectId"`
+			Brief           string `json:"brief"`
+			Agent           string `json:"agent,omitempty"`
+			BaseBranch      string `json:"baseBranch,omitempty"`
+		}{ClientRequestID: newTaskClientMessageID(), ProjectID: project.ID, Brief: brief, Agent: strings.TrimSpace(opts.agent), BaseBranch: strings.TrimSpace(opts.base)}
+		// The desktop's new-task route: one worker, named from the brief.
+		err := c.postSetupJSON(ctx, "orchestrators/delegate", req, &out)
+		var apiErr apiResponseError
+		lostReply := err != nil && !errors.As(err, &apiErr)
+		if lostReply && ctx.Err() == nil {
+			// The daemon may have started the worker before the reply was
+			// lost. The same client request id returns that worker instead of
+			// starting a second one.
+			err = c.postSetupJSON(ctx, "orchestrators/delegate", req, &out)
+		}
+		switch {
+		case err != nil && lostReply:
+			// After a lost reply, even an API error on the retry (such as a
+			// request record not yet committed) leaves it unknown whether the
+			// worker started, so keep the recovery handle.
+			return failedTask("", nil, fmt.Sprintf("could not confirm that the worker started (client request id %s): %s", req.ClientRequestID, err.Error()),
+				"check `ao session ls` before starting the task again, so it does not run twice")
+		case errors.As(err, &apiErr):
+			return c.taskAPIFailure(ctx, nil, workerAgent, "start worker", err)
+		case err != nil:
+			return failedTask("", nil, fmt.Sprintf("could not confirm that the worker started (client request id %s): %s", req.ClientRequestID, err.Error()),
+				"check `ao session ls` before starting the task again, so it does not run twice")
+		}
+		if strings.TrimSpace(out.WorkerID) == "" {
+			return failedTask("", nil, "daemon returned no worker id", "")
+		}
+		return c.createdTaskStatus(ctx, taskID{session: out.WorkerID})
+	}
+
+	// The orchestrator's own agent is checked after POST /orchestrators names
+	// the session that will run the brief: an existing orchestrator may run a
+	// different agent than the one the project now saves.
+	if res := preflight(workerAgent); res != nil {
+		return *res
+	}
+	var ensured struct {
+		Orchestrator struct {
+			ID string `json:"id"`
+		} `json:"orchestrator"`
+	}
+	if err := c.postSetupJSON(ctx, "orchestrators", spawnOrchestratorAPIRequest{ProjectID: project.ID}, &ensured); err != nil {
+		agent := ""
+		if project.Config != nil {
+			agent = strings.TrimSpace(project.Config.Orchestrator.Agent)
+		}
+		return c.taskAPIFailure(ctx, nil, agent, "start orchestrator", err)
+	}
+	orchestratorID := strings.TrimSpace(ensured.Orchestrator.ID)
+	if orchestratorID == "" {
+		return failedTask("", nil, "daemon returned no orchestrator id", "")
+	}
+	sessions := []string{orchestratorID}
+	sess, err := c.fetchTaskSession(ctx, orchestratorID)
+	if err != nil {
+		return failedTask("", sessions, err.Error(), "")
+	}
+	orchestratorFix := settingFix("--orchestrator-agent") + fmt.Sprintf("; the setting applies to new orchestrators only, so archive the running one (`ao session kill %s`) before starting the task again", orchestratorID)
+	if res := probe(sess.Harness, orchestratorFix); res != nil {
+		res.SessionIDs = sessions
+		return *res
+	}
+
+	message := brief
+	var sent struct {
+		TurnID string `json:"turnId"`
+	}
+	messagePath := "sessions/" + url.PathEscape(orchestratorID) + "/conversation/messages"
+	clientMessageID := newTaskClientMessageID()
+	body := conversationMessageAPIRequest{Text: message, ClientMessageID: clientMessageID}
+	sendErr := c.postJSON(ctx, messagePath, body, &sent)
+	var apiErr apiResponseError
+	lostReply := sendErr != nil && !errors.As(sendErr, &apiErr)
+	if lostReply && ctx.Err() == nil {
+		// The daemon may have accepted the message before the reply was lost.
+		// The same client message id makes this retry idempotent: it returns
+		// the turn the first attempt created instead of starting a second one.
+		sendErr = c.postJSON(ctx, messagePath, body, &sent)
+	}
+	if errors.As(sendErr, &apiErr) && apiErr.ErrorBody.Code == "SESSION_MODE_MISMATCH" {
+		// A terminal (TUI) orchestrator has no chat turns: deliver the task as
+		// `ao send` does and follow the session's activity instead.
+		// Same attribution as `ao send`: an agent inside a session names itself;
+		// anything else is the user's own message.
+		sender := strings.TrimSpace(os.Getenv("AO_SESSION_ID"))
+		// A terminal orchestrator that was just started may still be booting,
+		// and a brief typed before its prompt is ready is left unsubmitted.
+		// Nothing in the session reports readiness, so give a fresh one its
+		// boot time first.
+		if !sess.CreatedAt.IsZero() {
+			if wait := taskTerminalBootWait - c.deps.Now().Sub(sess.CreatedAt); wait > 0 {
+				c.deps.Sleep(wait)
+				if err := ctx.Err(); err != nil {
+					return failedTask("", sessions, "interrupted before the task was sent: "+err.Error(), "")
+				}
+			}
+		}
+		sentAt := c.deps.Now()
+		// The id carries the send time and the brief's fingerprint, so status
+		// matches the brief's own turn, not other work recorded after the send.
+		canonical := canonicalBrief(message)
+		id := taskID{session: orchestratorID, turn: fmt.Sprintf("%s%d-%d-%s", terminalTaskTurnPrefix, sentAt.UnixMilli(), len(canonical), briefHash(canonical))}
+		err := c.postJSON(ctx, "sessions/"+url.PathEscape(orchestratorID)+"/send", sendAPIRequest{Message: message, SenderSessionID: sender, UserAuthored: sender == ""}, nil)
+		if errors.As(err, &apiErr) && apiErr.ErrorBody.Code == "SESSION_DELIVERY_UNCONFIRMED" {
+			// The brief is in the terminal's composer but not submitted.
+			// Sending it again would be refused (composer busy) or doubled.
+			fix := fmt.Sprintf("open session %s in the Orchestrator app and submit the brief waiting in its terminal (`ao session get %s` shows it), then follow it with `ao task wait %s`", orchestratorID, orchestratorID, id)
+			if sess.Harness != "" {
+				fix += "; if " + sess.Harness + " is not signed in, " + strings.TrimSuffix(c.signInFix(ctx, sess.Harness), ", then retry") + " first"
+			}
+			return taskResult{Status: taskStatusStarting, TaskID: id.String(), SessionIDs: sessions, waitTimedOut: true,
+				Reason: fmt.Sprintf("the brief was typed into orchestrator %s's terminal, but the agent did not submit it (%s); it was delivered, so do not start the task again", orchestratorID, err.Error()),
+				Fix:    fix}
+		}
+		if err != nil && !errors.As(err, &apiErr) {
+			// The daemon may have taken the brief before the reply was lost, and
+			// this send has no client id to retry it with safely.
+			return taskResult{Status: taskStatusStarting, TaskID: id.String(), SessionIDs: sessions, waitTimedOut: true,
+				Reason: fmt.Sprintf("could not confirm that orchestrator %s received the task: %s; it may have, so do not start it again", orchestratorID, err.Error()),
+				Fix:    fmt.Sprintf("check `ao session history %s` (or follow it with `ao task wait %s`) before starting the task again", orchestratorID, id)}
+		}
+		if err != nil {
+			return c.taskAPIFailure(ctx, sessions, sess.Harness, "send task to orchestrator", err)
+		}
+		// The task is the first turn the terminal session records from now on.
+		return c.createdTaskStatus(ctx, id)
+	}
+	switch {
+	case errors.As(sendErr, &apiErr) && !lostReply:
+		return c.taskAPIFailure(ctx, sessions, sess.Harness, "send task to orchestrator", sendErr)
+	case sendErr != nil:
+		// No task id: a bare session id would name the orchestrator's other turns.
+		return failedTask("", sessions, fmt.Sprintf("could not confirm that orchestrator %s received the task (client message id %s): %s", orchestratorID, clientMessageID, sendErr.Error()),
+			fmt.Sprintf("check `ao session history %s` before starting the task again, so it is not sent twice", orchestratorID))
+	case strings.TrimSpace(sent.TurnID) == "":
+		// Accepted but unnamed: the task may still run, so this must not read as
+		// "nothing was created".
+		return failedTask("", sessions, fmt.Sprintf("orchestrator %s accepted the task but the daemon returned no turn id, so no task id can be reported; the task may still run (client message id %s)", orchestratorID, clientMessageID),
+			fmt.Sprintf("check `ao session history %s` before starting the task again, so it does not run twice", orchestratorID))
+	}
+	return c.createdTaskStatus(ctx, taskID{session: orchestratorID, turn: strings.TrimSpace(sent.TurnID)})
+}
+
+// spawnOrchestratorAPIRequest mirrors the daemon's SpawnOrchestratorRequest
+// for POST /orchestrators, which returns the project's orchestrator and
+// starts it only when there is none.
+type spawnOrchestratorAPIRequest struct {
+	ProjectID string `json:"projectId"`
+}
+
+func newTaskClientMessageID() string {
+	return "ao-task-" + uuid.NewString()
+}
+
+func (c *commandContext) resolveTaskProject(ctx context.Context, explicit string) (projectDetails, error) {
+	if id := strings.TrimSpace(explicit); id != "" {
+		return c.fetchProjectDetails(ctx, id)
+	}
+	if id := strings.TrimSpace(os.Getenv("AO_PROJECT_ID")); id != "" {
+		return c.fetchProjectDetails(ctx, id)
+	}
+	project, ok, err := c.resolveProjectFromCWD(ctx)
+	if err != nil {
+		return projectDetails{}, err
+	}
+	if !ok {
+		cwd, _ := os.Getwd()
+		return projectDetails{}, usageError{fmt.Errorf("no registered project contains %s; pass --project or register it with `ao project add --path <repo>`", cwd)}
+	}
+	return project, nil
+}
+
+// signInErrorCodes are daemon error codes that a fresh agent sign-in fixes.
+var signInErrorCodes = map[string]bool{
+	"AGENT_ACCOUNT_DEFAULT_UNUSABLE": true,
+	"AGENT_ACCOUNT_SIGNED_OUT":       true,
+	"AGENT_ACCOUNT_KEY_REJECTED":     true,
+}
+
+func (c *commandContext) taskAPIFailure(ctx context.Context, sessions []string, agent, action string, err error) taskResult {
+	var apiErr apiResponseError
+	if errors.As(err, &apiErr) && signInErrorCodes[apiErr.ErrorBody.Code] {
+		return failedTask("", sessions, fmt.Sprintf("%s: %s", action, err.Error()), c.signInFix(ctx, agent))
+	}
+	return failedTask("", sessions, fmt.Sprintf("%s: %s", action, err.Error()), "")
+}
+
+// preflightTaskAgent re-checks an agent's sign-in now. Only a definite answer
+// stops the task: "configured" and "unknown" go ahead, and the first turn is
+// the authoritative check.
+func (c *commandContext) preflightTaskAgent(ctx context.Context, agent, unsupportedFix string) *taskResult {
+	var probe struct {
+		Agent struct {
+			AuthStatus string `json:"authStatus"`
+		} `json:"agent"`
+		Supported bool `json:"supported"`
+		Installed bool `json:"installed"`
+	}
+	if err := c.postJSON(ctx, "agents/"+url.PathEscape(agent)+"/probe", struct{}{}, &probe); err != nil {
+		res := failedTask("", nil, fmt.Sprintf("check agent %s: %s", agent, err.Error()), "")
+		return &res
+	}
+	switch {
+	case !probe.Supported:
+		res := failedTask("", nil, fmt.Sprintf("agent %q is not supported by this Orchestrator", agent), unsupportedFix)
+		return &res
+	case !probe.Installed:
+		res := failedTask("", nil, fmt.Sprintf("agent %q is not installed", agent), fmt.Sprintf("install the %s CLI, then retry", agent))
+		return &res
+	case probe.Agent.AuthStatus == "unauthorized":
+		res := failedTask("", nil, fmt.Sprintf("agent %q is not signed in", agent), c.signInFix(ctx, agent))
+		res.Reason += " (auth_required)"
+		return &res
+	}
+	return nil
+}
+
+// signInFix names the agent's own login command from the daemon's auth plans.
+func (c *commandContext) signInFix(ctx context.Context, agent string) string {
+	agent = strings.TrimSpace(agent)
+	if agent == "" {
+		return "sign the agent in, then retry"
+	}
+	var plans struct {
+		Plans []struct {
+			AgentID          string `json:"agentId"`
+			DisplayCommand   string `json:"displayCommand"`
+			Guidance         string `json:"guidance"`
+			DocumentationURL string `json:"documentationUrl"`
+		} `json:"plans"`
+	}
+	// Guidance is optional and has its own short budget, so it can never use
+	// up a wait's deadline and turn a confirmed failure into a timeout.
+	planCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), taskGuidanceTimeout)
+	defer cancel()
+	if err := c.getJSON(planCtx, "agents/auth-plans", &plans); err == nil {
+		for _, plan := range plans.Plans {
+			if plan.AgentID != agent {
+				continue
+			}
+			switch {
+			case strings.TrimSpace(plan.DisplayCommand) != "":
+				return fmt.Sprintf("run `%s`, then retry", strings.TrimSpace(plan.DisplayCommand))
+			case strings.TrimSpace(plan.Guidance) != "":
+				return strings.TrimSpace(plan.Guidance)
+			case strings.TrimSpace(plan.DocumentationURL) != "":
+				return fmt.Sprintf("sign %s in (see %s), then retry", agent, strings.TrimSpace(plan.DocumentationURL))
+			}
+		}
+	}
+	return fmt.Sprintf("sign %s in, then retry", agent)
+}
+
+// taskSession is the part of GET /sessions/{id} a task status needs.
+type taskSession struct {
+	ID             string    `json:"id"`
+	CreatedAt      time.Time `json:"createdAt"`
+	Harness        string    `json:"harness"`
+	Mode           string    `json:"mode"`
+	IsTerminated   bool      `json:"isTerminated"`
+	ProvisionState string    `json:"provisionState"`
+	ProvisionError string    `json:"provisionError"`
+	Activity       struct {
+		State string `json:"state"`
+	} `json:"activity"`
+}
+
+type taskTurn struct {
+	ID            string `json:"id"`
+	State         string `json:"state"`
+	RetryOfTurnID string `json:"retryOfTurnId"`
+	ErrorMessage  string `json:"errorMessage"`
+	FailureCode   string `json:"failureCode"`
+}
+
+type taskActivity struct {
+	ID           string         `json:"id"`
+	TurnID       string         `json:"turnId"`
+	ActivityKind string         `json:"activityKind"`
+	Status       string         `json:"status"`
+	Detail       map[string]any `json:"detail"`
+}
+
+type taskBatchedDelivery struct {
+	TurnID              string `json:"turnId"`
+	DeliveredWithTurnID string `json:"deliveredWithTurnId"`
+}
+
+// taskConversation is the part of GET /sessions/{id}/conversation a task
+// status needs.
+type taskConversation struct {
+	HasMoreBefore     bool                  `json:"hasMoreBefore"`
+	OldestSequence    int64                 `json:"oldestSequence"`
+	BatchedDeliveries []taskBatchedDelivery `json:"batchedDeliveries"`
+	Turns             []taskTurn            `json:"turns"`
+	Activities        []taskActivity        `json:"activities"`
+}
+
+// taskHistoryPageLimit bounds how many older conversation pages a status read
+// loads while looking for the task's turn.
+const taskHistoryPageLimit = 50
+
+func (c *commandContext) fetchTaskSession(ctx context.Context, id string) (taskSession, error) {
+	var res struct {
+		Session taskSession `json:"session"`
+	}
+	if err := c.getJSON(ctx, "sessions/"+url.PathEscape(id), &res); err != nil {
+		var apiErr apiResponseError
+		if errors.As(err, &apiErr) && apiErr.StatusCode == http.StatusNotFound {
+			// Keep the daemon's envelope (message, code, request id).
+			return taskSession{}, fmt.Errorf("session %s not found: %w", id, err)
+		}
+		return taskSession{}, fmt.Errorf("read session %s: %w", id, err)
+	}
+	return res.Session, nil
+}
+
+// fetchTaskConversation reads the conversation and pages back until the
+// task's turn and all of its activity are loaded: until an earlier turn
+// appears too, or history ends. A worker task is its session's first turn, so
+// it reads back to the start.
+func (c *commandContext) fetchTaskConversation(ctx context.Context, id taskID) (*taskConversation, error) {
+	path := "sessions/" + url.PathEscape(id.session) + "/conversation"
+	var conv taskConversation
+	if err := c.getJSON(ctx, path, &conv); err != nil {
+		return nil, err
+	}
+	if id.latest {
+		return &conv, nil // the latest page holds the latest turn
+	}
+	for page := 0; page < taskHistoryPageLimit && conv.HasMoreBefore && conv.OldestSequence > 0; page++ {
+		// Once an earlier turn is loaded too, the page boundary no longer
+		// splits the task's turn, so its earliest activity (such as a worker
+		// it spawned) is loaded as well.
+		if id.turn != "" && conv.findTurn(id.turn) > 0 {
+			break
+		}
+		var older taskConversation
+		if err := c.getJSON(ctx, path+"?beforeSequence="+strconv.FormatInt(conv.OldestSequence, 10), &older); err != nil {
+			return nil, err
+		}
+		if older.OldestSequence <= 0 || older.OldestSequence >= conv.OldestSequence {
+			break
+		}
+		conv.prepend(older)
+	}
+	return &conv, nil
+}
+
+// findTurn returns the index of the turn that carries turnID, following a
+// queued message that was batched into another turn.
+func (conv *taskConversation) findTurn(turnID string) int {
+	target := turnID
+	for _, batched := range conv.BatchedDeliveries {
+		if batched.TurnID == target && batched.DeliveredWithTurnID != "" {
+			target = batched.DeliveredWithTurnID
+		}
+	}
+	for i, turn := range conv.Turns {
+		if turn.ID == target {
+			return i
+		}
+	}
+	return -1
+}
+
+// prepend merges an older page in front of the loaded one.
+func (conv *taskConversation) prepend(older taskConversation) {
+	seenTurns := map[string]bool{}
+	for _, turn := range conv.Turns {
+		seenTurns[turn.ID] = true
+	}
+	turns := make([]taskTurn, 0, len(older.Turns)+len(conv.Turns))
+	for _, turn := range older.Turns {
+		if !seenTurns[turn.ID] {
+			turns = append(turns, turn)
+		}
+	}
+	conv.Turns = append(turns, conv.Turns...)
+
+	seenActs := map[string]bool{}
+	for _, act := range conv.Activities {
+		if act.ID != "" {
+			seenActs[act.ID] = true
+		}
+	}
+	acts := make([]taskActivity, 0, len(older.Activities)+len(conv.Activities))
+	for _, act := range older.Activities {
+		if act.ID == "" || !seenActs[act.ID] {
+			acts = append(acts, act)
+		}
+	}
+	conv.Activities = append(acts, conv.Activities...)
+	conv.BatchedDeliveries = append(older.BatchedDeliveries, conv.BatchedDeliveries...)
+	conv.HasMoreBefore = older.HasMoreBefore
+	conv.OldestSequence = older.OldestSequence
+}
+
+// taskObservation is one status read plus what the wait loop needs from it.
+type taskObservation struct {
+	result  taskResult
+	harness string
+	phase   string
+	// readFailed: the result is a failed read, not a reading of the task.
+	readFailed bool
+	// transient: the failed read may succeed if tried again (daemon
+	// unreachable, 5xx, 429), so it says nothing about the task.
+	transient bool
+	// turnID is the turn the status describes (after retries), empty for a
+	// terminal session or before the turn exists.
+	turnID string
+}
+
+// isTransientReadErr reports whether a status read failed for a reason that a
+// later read can clear, as opposed to a permanent lookup error such as 404.
+func isTransientReadErr(err error) bool {
+	var unavailable daemonUnavailableError
+	if errors.As(err, &unavailable) || errors.Is(err, context.DeadlineExceeded) {
+		return true
+	}
+	var apiErr apiResponseError
+	return errors.As(err, &apiErr) && (apiErr.StatusCode >= 500 || apiErr.StatusCode == http.StatusTooManyRequests)
+}
+
+// createdTaskStatus is the first status of a task that was just created. A
+// transient read failure must not turn it into a failed task: the task exists
+// and keeps its id, so it reports starting and a wait keeps polling.
+func (c *commandContext) createdTaskStatus(ctx context.Context, id taskID) taskResult {
+	obs := c.observeTask(ctx, id)
+	if obs.readFailed && obs.transient {
+		return taskResult{Status: taskStatusStarting, TaskID: id.String(), SessionIDs: []string{id.session}, unread: true,
+			Reason: "the task was created, but its first status read failed: " + obs.result.Reason}
+	}
+	if obs.phase == taskPhaseTurnMissing {
+		// The daemon just returned this turn id, so it exists even if the
+		// first read raced ahead of it.
+		return taskResult{Status: taskStatusStarting, TaskID: id.String(), SessionIDs: []string{id.session},
+			Reason: "waiting for the agent to pick up the task", phase: taskPhaseAwaitingTurn}
+	}
+	return obs.result
+}
+
+// taskStatus reads the task's session and conversation once.
+func (c *commandContext) taskStatus(ctx context.Context, id taskID) taskResult {
+	return c.observeTask(ctx, id).result
+}
+
+func (c *commandContext) observeTask(ctx context.Context, id taskID) taskObservation {
+	sessions := []string{id.session}
+	sess, err := c.fetchTaskSession(ctx, id.session)
+	if err != nil {
+		return taskObservation{result: failedTask(id.String(), sessions, err.Error(), ""), readFailed: true, transient: isTransientReadErr(err)}
+	}
+	var conv *taskConversation
+	// An archived session's history is still read: a turn that finished
+	// before the session was archived (normal cleanup after merge) stays done.
+	if sess.Mode != "tui" && sess.ProvisionState != "provisioning" {
+		conv, err = c.fetchTaskConversation(ctx, id)
+		var apiErr apiResponseError
+		switch {
+		case err == nil:
+		case errors.As(err, &apiErr) && apiErr.ErrorBody.Code == "SESSION_MODE_MISMATCH":
+			conv = nil
+		case sess.IsTerminated && !isTransientReadErr(err):
+			conv = nil // no readable history: report the archive
+		default:
+			return taskObservation{
+				result:     failedTask(id.String(), sessions, fmt.Sprintf("read conversation of %s: %s", id.session, err.Error()), ""),
+				harness:    sess.Harness,
+				readFailed: true,
+				transient:  isTransientReadErr(err),
+			}
+		}
+	}
+	// A named turn exists only in a Chat conversation. A terminal session's
+	// activity says nothing about that turn, so it is not reported for it.
+	_, terminalTask := id.terminalSince()
+	if id.turn != "" && !terminalTask && conv == nil && sess.ProvisionState != "provisioning" && !sess.IsTerminated {
+		return taskObservation{
+			result:  failedTask(id.String(), sessions, fmt.Sprintf("session %s is a terminal session and has no chat turn %s; use the session id alone (`ao task status %s`)", id.session, id.turn, id.session), ""),
+			harness: sess.Harness,
+		}
+	}
+	var eval taskEvaluation
+	if conv == nil && sess.ProvisionState == "ready" {
+		// A terminal session has no chat turns, but harnesses that record
+		// turns (Claude Code) expose them as history; judge the task by them.
+		hist, histErr := c.fetchTaskHistory(ctx, id)
+		switch {
+		case histErr != nil:
+			return taskObservation{
+				result:     failedTask(id.String(), sessions, fmt.Sprintf("read history of %s: %s", id.session, histErr.Error()), ""),
+				harness:    sess.Harness,
+				readFailed: true,
+				transient:  isTransientReadErr(histErr),
+			}
+		case hist != nil:
+			eval = evaluateTerminalHistory(sess, hist, id)
+		case terminalTask:
+			// No recorded turns at all: activity cannot confirm this brief.
+			eval = terminalTaskUnconfirmed(sess)
+		default:
+			eval = evaluateTaskTurn(sess, conv, "", id.latest)
+		}
+	} else {
+		eval = evaluateTaskTurn(sess, conv, id.turn, id.latest)
+	}
+	res := taskResult{
+		Status:     eval.status,
+		TaskID:     id.String(),
+		SessionIDs: append([]string{id.session}, eval.spawned...),
+		Reason:     eval.reason,
+	}
+	switch eval.failureCode {
+	case "auth_required":
+		res.Fix = c.signInFix(ctx, sess.Harness)
+	case "provider_key_missing":
+		res.Fix = fmt.Sprintf("set up the API key that %s needs in the Orchestrator app's Agent Harnesses settings, then retry", sess.Harness)
+	}
+	if res.Status == taskStatusNeedsInput && res.Fix == "" {
+		res.Fix = answerInSessionFix(id.session, id.String())
+	}
+	// An orchestrator task is only as finished as the workers its turn started.
+	if id.turn != "" && len(eval.spawned) > 0 && (res.Status == taskStatusRunning || res.Status == taskStatusDone) {
+		res = c.foldTaskWorkers(ctx, res, eval.spawned, eval.spawnedNow)
+	}
+	res.phase = eval.phase
+	return taskObservation{result: res, harness: sess.Harness, turnID: eval.turnID, phase: eval.phase}
+}
+
+// answerInSessionFix names the session whose pending request the user must
+// answer, so a caller opens the right one rather than the orchestrator.
+func answerInSessionFix(session, task string) string {
+	return fmt.Sprintf("answer the pending request in session %s (open it in the Orchestrator app; `ao session get %s` shows it), then keep waiting with `ao task wait %s`", session, session, task)
+}
+
+// taskWorkerPass is one read of every worker a task started.
+type taskWorkerPass struct {
+	needs, active, failed []string
+	failReason, failFix   string
+}
+
+// readTaskWorkers reads each worker at its latest turn. Failures of workers
+// from superseded attempts are left out.
+func (c *commandContext) readTaskWorkers(ctx context.Context, workers, current []string) taskWorkerPass {
+	var pass taskWorkerPass
+	for _, worker := range workers {
+		obs := c.observeTask(ctx, taskID{session: worker, latest: true})
+		w := obs.result
+		if obs.readFailed {
+			// An unread worker may still be working, whichever attempt started
+			// it, so the task cannot be reported done or failed from it.
+			pass.active = append(pass.active, fmt.Sprintf("%s (could not be read: %s)", worker, w.Reason))
+			continue
+		}
+		switch w.Status {
+		case taskStatusNeedsInput:
+			pass.needs = append(pass.needs, worker)
+		case taskStatusFailed:
+			if !slices.Contains(current, worker) {
+				continue // superseded by a retry of the attempt that started it
+			}
+			pass.failed = append(pass.failed, worker)
+			if pass.failReason == "" {
+				pass.failReason, pass.failFix = fmt.Sprintf("worker %s failed: %s", worker, w.Reason), w.Fix
+			}
+		case taskStatusDone:
+		default:
+			pass.active = append(pass.active, fmt.Sprintf("%s (%s)", worker, w.Status))
+		}
+	}
+	return pass
+}
+
+// foldTaskWorkers combines the orchestrator turn's status with the workers its
+// turn (and earlier attempts of it) started. Each worker is read at its
+// running (otherwise latest) turn, so follow-up work the orchestrator sends it,
+// and an approval pending on that work, count. The task needs input if any
+// worker does, and is done only once the turn and every worker have finished,
+// as seen by two consecutive passes: a worker read as done early in the first
+// pass may have been sent follow-up work since. A failed worker fails the task
+// once the orchestrator's turn is over, but only a worker of the current
+// attempt: a retry that succeeded supersedes an earlier attempt's failures.
+// Workers that existed before the task started are not tracked, since nothing
+// records which of them the orchestrator messaged for it.
+func (c *commandContext) foldTaskWorkers(ctx context.Context, res taskResult, workers, current []string) taskResult {
+	pass := c.readTaskWorkers(ctx, workers, current)
+	turnDone := res.Status == taskStatusDone
+	if turnDone && len(pass.needs) == 0 && len(pass.failed) == 0 && len(pass.active) == 0 {
+		// Everything looked finished: confirm with a second pass, judged by
+		// the same rules (needs input, current-attempt failure, still working).
+		pass = c.readTaskWorkers(ctx, workers, current)
+	}
+	switch {
+	case len(pass.needs) > 0:
+		res.Status = taskStatusNeedsInput
+		res.Reason = fmt.Sprintf("worker %s is waiting for your answer or approval", strings.Join(pass.needs, ", "))
+		// Name the worker, not the orchestrator, as the session to answer.
+		res.Fix = answerInSessionFix(pass.needs[0], res.TaskID)
+	case len(pass.failed) > 0 && turnDone:
+		res.Status, res.Reason, res.Fix = taskStatusFailed, pass.failReason, pass.failFix
+	case len(pass.active) > 0 || len(pass.failed) > 0:
+		res.Status = taskStatusRunning
+		if turnDone {
+			res.Reason = "the orchestrator handed the task to its workers; still working: " + strings.Join(pass.active, ", ")
+		} else {
+			res.Reason = "the orchestrator is working on it; workers started so far: " + strings.Join(workers, ", ")
+		}
+	case turnDone:
+		res.Reason = fmt.Sprintf("the orchestrator and its %d worker(s) finished", len(workers))
+	}
+	return res
+}
+
+type taskEvaluation struct {
+	status      string
+	reason      string
+	failureCode string
+	spawned     []string
+	// spawnedNow are the workers the selected attempt itself started; a
+	// failure among only earlier, retried attempts' workers is superseded.
+	spawnedNow []string
+	turnID     string
+	// phase says why a task is still starting, so a timeout can name the
+	// likely cause instead of always suggesting sign-in.
+	phase string
+}
+
+// Why a task has not started yet.
+const (
+	taskPhaseProvisioning   = "provisioning"
+	taskPhaseQueued         = "queued"
+	taskPhaseAwaitingTurn   = "awaiting_turn"
+	taskPhaseTerminalPrompt = "terminal_prompt"
+	taskPhaseTerminalIdle   = "terminal_idle"
+	taskPhaseTerminalActive = "terminal_active"
+	// taskPhaseTurnMissing: a named turn is absent from the full history.
+	taskPhaseTurnMissing = "turn_missing"
+)
+
+// evaluateTaskTurn turns a session and its conversation into a task status.
+// With no turn id the task is the session's first turn (a worker's prompt), or
+// with latest its most recent one.
+func evaluateTaskTurn(sess taskSession, conv *taskConversation, turnID string, latest bool) taskEvaluation {
+	if !sess.IsTerminated {
+		return evaluateLiveTask(sess, conv, turnID, latest)
+	}
+	// Archived. A turn that finished before then stays done (archiving after a
+	// merge is normal cleanup), and a failure keeps its reason; anything that
+	// never finished is a failure.
+	if conv == nil {
+		return taskEvaluation{status: taskStatusFailed, reason: fmt.Sprintf("session %s was archived", sess.ID)}
+	}
+	live := sess
+	live.IsTerminated = false
+	eval := evaluateLiveTask(live, conv, turnID, latest)
+	switch eval.status {
+	case taskStatusDone, taskStatusFailed:
+		return eval
+	}
+	eval.status = taskStatusFailed
+	eval.reason = fmt.Sprintf("session %s was archived before the task finished", sess.ID)
+	eval.failureCode, eval.phase = "", ""
+	return eval
+}
+
+// evaluateLiveTask evaluates a session that has not been archived.
+func evaluateLiveTask(sess taskSession, conv *taskConversation, turnID string, latest bool) taskEvaluation {
+	switch sess.ProvisionState {
+	case "failed":
+		reason := strings.TrimSpace(sess.ProvisionError)
+		if reason == "" {
+			reason = "unknown error"
+		}
+		return taskEvaluation{status: taskStatusFailed, reason: "session failed to start: " + reason}
+	case "provisioning":
+		return taskEvaluation{status: taskStatusStarting, reason: "preparing the workspace", phase: taskPhaseProvisioning}
+	}
+	if conv == nil {
+		return evaluateTerminalTask(sess)
+	}
+
+	idx := -1
+	switch {
+	case turnID != "":
+		idx = conv.findTurn(turnID)
+	case latest && len(conv.Turns) > 0:
+		// The turn running now is what the worker is doing; a later queued
+		// follow-up waits behind it. Preferring it keeps a pending approval on
+		// it visible as needs_input instead of hiding it behind "queued".
+		idx = len(conv.Turns) - 1
+		for i := len(conv.Turns) - 1; i >= 0; i-- {
+			if conv.Turns[i].State == "running" {
+				idx = i
+				break
+			}
+		}
+	case len(conv.Turns) > 0 && !conv.HasMoreBefore:
+		idx = 0
+	}
+	if idx < 0 {
+		if turnID != "" && !conv.HasMoreBefore {
+			// The whole history is loaded and the named turn is not in it: a
+			// mistyped or foreign task id, not an agent that has yet to start
+			// or one that must sign in. Checked before any sign-in event.
+			return taskEvaluation{status: taskStatusFailed, reason: fmt.Sprintf("turn %s is not in session %s's history", turnID, sess.ID), phase: taskPhaseTurnMissing}
+		}
+		for _, act := range conv.Activities {
+			if act.ActivityKind == "system" && detailString(act.Detail, "event") == "auth.reauth_required" {
+				return taskEvaluation{status: taskStatusFailed, reason: "the agent needs to sign in again (auth_required)", failureCode: "auth_required"}
+			}
+		}
+		if conv.HasMoreBefore {
+			return taskEvaluation{status: taskStatusStarting, reason: "the task's turn is not in the loaded session history yet", phase: taskPhaseAwaitingTurn}
+		}
+		return taskEvaluation{status: taskStatusStarting, reason: "waiting for the agent to pick up the task", phase: taskPhaseAwaitingTurn}
+	}
+
+	// A failed turn the user retried continues as its retry. The whole chain
+	// is the task: its approvals and the workers it started all count.
+	chain := map[string]bool{conv.Turns[idx].ID: true}
+	for {
+		next := -1
+		for i, turn := range conv.Turns {
+			if turn.RetryOfTurnID != "" && turn.RetryOfTurnID == conv.Turns[idx].ID {
+				next = i
+			}
+		}
+		if next < 0 || chain[conv.Turns[next].ID] {
+			break
+		}
+		idx = next
+		chain[conv.Turns[idx].ID] = true
+	}
+	turn := conv.Turns[idx]
+
+	var spawned, spawnedNow []string
+	for _, act := range conv.Activities {
+		if chain[act.TurnID] && act.ActivityKind == "ao_action" && detailString(act.Detail, "action") == "session.spawned" {
+			if target := detailString(act.Detail, "targetSessionId"); target != "" && target != sess.ID && !slices.Contains(spawned, target) {
+				spawned = append(spawned, target)
+				if act.TurnID == turn.ID {
+					spawnedNow = append(spawnedNow, target)
+				}
+			}
+		}
+	}
+	eval := func(status, reason string) taskEvaluation {
+		return taskEvaluation{status: status, reason: reason, spawned: spawned, spawnedNow: spawnedNow, turnID: turn.ID}
+	}
+
+	// Only the live attempt can still be answered: an approval left pending on
+	// an earlier, failed attempt is stale. The session-wide activity state is
+	// not used here, since it is read before the conversation and can describe
+	// another turn.
+	if turn.State == "running" {
+		for _, act := range conv.Activities {
+			if (act.ActivityKind == "approval" || act.ActivityKind == "user_input") && act.Status == "pending" && act.TurnID == turn.ID {
+				return eval(taskStatusNeedsInput, "the agent is waiting for your answer or approval")
+			}
+		}
+	}
+
+	switch turn.State {
+	case "queued":
+		res := eval(taskStatusQueued, "queued behind the agent's current turn")
+		res.phase = taskPhaseQueued
+		return res
+	case "running":
+		return eval(taskStatusRunning, "the agent is working on it")
+	case "completed", "recovered":
+		return eval(taskStatusDone, "the agent finished its turn")
+	case "failed":
+		reason := strings.TrimSpace(turn.ErrorMessage)
+		if reason == "" {
+			reason = "the agent's turn failed"
+		}
+		if turn.FailureCode != "" {
+			reason += " (" + turn.FailureCode + ")"
+		}
+		res := eval(taskStatusFailed, reason)
+		res.failureCode = turn.FailureCode
+		return res
+	case "interrupted":
+		return eval(taskStatusFailed, "the agent's turn was interrupted before it finished")
+	case "cancelled":
+		return eval(taskStatusFailed, "the task was cancelled before the agent started it")
+	}
+	return eval(taskStatusStarting, fmt.Sprintf("turn state %q", turn.State))
+}
+
+// evaluateTerminalTask reads a terminal (TUI) session, which has no chat
+// turns, from its reported activity. Its prompt state looks the same before
+// the agent reads the task and after it finishes, so it is never "done".
+func evaluateTerminalTask(sess taskSession) taskEvaluation {
+	switch sess.Activity.State {
+	case "active":
+		return taskEvaluation{status: taskStatusRunning, reason: "the agent is working (terminal session)", phase: taskPhaseTerminalActive}
+	case "blocked":
+		return taskEvaluation{status: taskStatusNeedsInput, reason: "the agent is waiting for your approval (terminal session)"}
+	case "exited":
+		return taskEvaluation{status: taskStatusFailed, reason: "the agent process exited (terminal session)"}
+	case "waiting_input":
+		return taskEvaluation{status: taskStatusStarting, reason: "the agent is at its prompt; a terminal session does not say whether it has taken this task yet", phase: taskPhaseTerminalPrompt}
+	}
+	return taskEvaluation{status: taskStatusStarting, reason: "waiting for the agent to pick up the task (terminal session)", phase: taskPhaseTerminalIdle}
+}
+
+// taskTerminalHistory is a terminal session's recorded turns, oldest first,
+// covering at least the task's turn.
+type taskTerminalHistory struct {
+	turns []domain.HandoffTurn
+	// unresolved: the task's turn could not be located in the history read.
+	unresolved bool
+}
+
+// fetchTaskHistory reads a terminal session's recorded turns. It returns nil
+// when the session's harness records none, or the history cannot be read, so
+// the caller falls back to the session's activity.
+func (c *commandContext) fetchTaskHistory(ctx context.Context, id taskID) (*taskTerminalHistory, error) {
+	path := "sessions/" + url.PathEscape(id.session) + "/history"
+	var page sessionHistoryResponse
+	if err := c.getJSON(ctx, path+"?limit=50", &page); err != nil {
+		// A harness that records no turns has no history to read: fall back to
+		// activity. A transient failure is a read failure the wait retries.
+		return nil, transientOnly(err)
+	}
+	if len(page.Turns) == 0 {
+		return nil, nil // nothing recorded yet: fall back to activity
+	}
+	// newest is newest-first, as the route pages it.
+	newest := page.Turns
+	since, terminalTask := id.terminalSince()
+	switch {
+	case terminalTask:
+		// Page back until a turn from before the send (the boundary) or the
+		// start of history is loaded, so the submitted turn is the first one
+		// at or after the send, never a later turn on a partial page.
+		for len(newest) < page.Total && !newest[len(newest)-1].At.Before(since) {
+			if len(newest) >= taskHistoryPageLimit*50 {
+				return &taskTerminalHistory{unresolved: true}, nil
+			}
+			var older sessionHistoryResponse
+			if err := c.getJSON(ctx, fmt.Sprintf("%s?offset=%d&limit=50", path, len(newest)), &older); err != nil {
+				return nil, err
+			}
+			if len(older.Turns) == 0 {
+				break
+			}
+			newest = append(newest, older.Turns...)
+		}
+	case !id.latest && page.Total > len(newest):
+		// A worker task is the session's first turn: read the oldest one, and
+		// never substitute a later turn if that read fails.
+		var first sessionHistoryResponse
+		if err := c.getJSON(ctx, fmt.Sprintf("%s?offset=%d&limit=1", path, page.Total-1), &first); err != nil {
+			return nil, err
+		}
+		// A turn recorded between the two reads shifts the offset by one, so a
+		// changed total means this is not the oldest turn.
+		if len(first.Turns) != 1 || first.Total != page.Total {
+			return &taskTerminalHistory{unresolved: true}, nil
+		}
+		newest = append(newest, first.Turns[0])
+	}
+	hist := &taskTerminalHistory{}
+	for k := len(newest) - 1; k >= 0; k-- {
+		hist.turns = append(hist.turns, newest[k])
+	}
+	return hist, nil
+}
+
+// transientOnly keeps err only when a later read could succeed.
+func transientOnly(err error) error {
+	if isTransientReadErr(err) {
+		return err
+	}
+	return nil
+}
+
+// terminalTaskUnconfirmed is a terminal task whose brief has no recorded turn
+// yet. The session's activity is reported but never confirms the task.
+func terminalTaskUnconfirmed(sess taskSession) taskEvaluation {
+	switch {
+	case sess.IsTerminated:
+		return taskEvaluation{status: taskStatusFailed, reason: fmt.Sprintf("session %s was archived before the task's turn was recorded", sess.ID)}
+	case sess.Activity.State == "exited":
+		return taskEvaluation{status: taskStatusFailed, reason: "the agent process exited before the task's turn was recorded (terminal session)"}
+	case sess.Activity.State == "blocked":
+		return taskEvaluation{status: taskStatusNeedsInput, reason: "the agent is waiting for your approval (terminal session)"}
+	}
+	state := sess.Activity.State
+	if state == "" {
+		state = "idle"
+	}
+	return taskEvaluation{status: taskStatusStarting, reason: fmt.Sprintf("the session is %s, but no turn for this task is recorded yet (terminal session)", state), phase: taskPhaseTerminalIdle}
+}
+
+// selectTerminalTaskTurn finds a terminal task's turn: recorded at or after the
+// send, and, when the id carries the brief's fingerprint, carrying that brief.
+// Other work recorded after the send is never taken for the task. -1 when no
+// such turn is recorded yet.
+func selectTerminalTaskTurn(turns []domain.HandoffTurn, id taskID, since time.Time) int {
+	length, hash, fingerprinted := id.terminalBriefFingerprint()
+	for i, turn := range turns {
+		if turn.At.Before(since) {
+			continue
+		}
+		if !fingerprinted || turnCarriesBrief(turn.UserRequest, length, hash) {
+			return i
+		}
+	}
+	return -1
+}
+
+// evaluateTerminalHistory judges a terminal task by the session's recorded
+// turns: the first turn from the send time for an orchestrator task, the first
+// turn for a worker task, or the latest turn for a worker an orchestrator task
+// started. A recorded turn with a reply, or one that later turns followed, is
+// done, which a terminal session's activity alone cannot show.
+func evaluateTerminalHistory(sess taskSession, hist *taskTerminalHistory, id taskID) taskEvaluation {
+	var idx int
+	since, terminalTask := id.terminalSince()
+	switch {
+	case hist.unresolved:
+		return taskEvaluation{status: taskStatusStarting, reason: "the task's turn could not be located in the session's history yet", phase: taskPhaseAwaitingTurn}
+	case terminalTask:
+		idx = selectTerminalTaskTurn(hist.turns, id, since)
+	case id.latest:
+		idx = len(hist.turns) - 1
+	default:
+		idx = 0
+	}
+	if idx < 0 {
+		if terminalTask {
+			// The session's activity cannot show whether it took this brief.
+			return terminalTaskUnconfirmed(sess)
+		}
+		// Not recorded yet: fall back to the session's activity.
+		return evaluateTaskTurn(sess, nil, "", false)
+	}
+	turn := hist.turns[idx]
+	latestTurn := idx == len(hist.turns)-1
+	replied := strings.TrimSpace(turn.AgentResponse) != ""
+	// A recorded reply (or a later turn) settles the turn; the session's
+	// current activity only matters for a turn that has not finished.
+	if replied || !latestTurn {
+		done := taskEvaluation{status: taskStatusDone, reason: "the agent finished its turn (terminal session history)"}
+		if terminalTask {
+			// Terminal history has no records of the workers the turn started,
+			// so this confirms the orchestrator's own turn only.
+			done.reason = "the orchestrator finished its turn (terminal session history); a terminal orchestrator does not report the workers it started, so check them with `ao session ls`"
+		}
+		return done
+	}
+	switch {
+	case sess.IsTerminated:
+		return taskEvaluation{status: taskStatusFailed, reason: fmt.Sprintf("session %s was archived before the task finished", sess.ID)}
+	case sess.Activity.State == "exited":
+		return taskEvaluation{status: taskStatusFailed, reason: "the agent process exited before finishing the task (terminal session)"}
+	case sess.Activity.State == "blocked":
+		return taskEvaluation{status: taskStatusNeedsInput, reason: "the agent is waiting for your approval (terminal session)"}
+	case sess.Activity.State == "active":
+		return taskEvaluation{status: taskStatusRunning, reason: "the agent is working on it (terminal session)", phase: taskPhaseTerminalActive}
+	}
+	return taskEvaluation{status: taskStatusRunning, reason: "the agent took the task and has not replied yet (terminal session)", phase: taskPhaseTerminalActive}
+}
+
+func detailString(detail map[string]any, key string) string {
+	value, _ := detail[key].(string)
+	return strings.TrimSpace(value)
+}
+
+// interruptedTask is the result of a wait stopped by its caller (a signal or a
+// cancelled context). The task was already submitted, so it keeps its id and
+// last known status, and says not to start it again.
+func interruptedTask(id taskID, last taskResult) taskResult {
+	res := last
+	res.TaskID = id.String()
+	if res.SessionIDs == nil {
+		res.SessionIDs = []string{id.session}
+	}
+	if res.Status == "" {
+		res.Status = taskStatusStarting
+	}
+	res.waitTimedOut = false
+	res.waitInterrupted = true
+	res.Reason = "the wait was interrupted before the task was confirmed; it was already submitted, so do not start it again"
+	if last.Reason != "" {
+		res.Reason += " (last reading: " + last.Reason + ")"
+	}
+	res.Fix = fmt.Sprintf("follow it with `ao task wait %s` or `ao task status %s`", id, id)
+	return res
+}
+
+// waitTask polls until the task has started, failed, or needs the user. A
+// running turn must stay running for taskRunningSettle, counted from when that
+// same turn was first seen running, and must settle before the deadline.
+func (c *commandContext) waitTask(ctx context.Context, res taskResult, timeout time.Duration) taskResult {
+	id, err := parseTaskID(res.TaskID)
+	if err != nil {
+		return res
+	}
+	deadline := c.deps.Now().Add(timeout)
+	last := res
+	harness, phase := "", ""
+	sawTerminalWork := res.phase == taskPhaseTerminalActive
+	// anyRead: a status read succeeded during this wait, or the start already
+	// read the task (a standalone wait begins with only the caller's id).
+	anyRead := res.Status != "" && !res.unread
+	var runningTurn string
+	var runningSince time.Time
+	for {
+		// A cancel during the last sleep is an interruption, not a timeout.
+		if err := ctx.Err(); err != nil {
+			return interruptedTask(id, last)
+		}
+		remaining := deadline.Sub(c.deps.Now())
+		if remaining <= 0 {
+			break
+		}
+		readCtx, cancel := context.WithTimeout(ctx, remaining)
+		// The reading describes the task as of when it began, so settle time is
+		// measured from there and cannot count time spent after the deadline.
+		readAt := c.deps.Now()
+		obs := c.observeTask(readCtx, id)
+		readErr := readCtx.Err()
+		cancel()
+		if err := ctx.Err(); err != nil {
+			return interruptedTask(id, last)
+		}
+		if obs.readFailed && readErr != nil {
+			break // the read ran into the deadline
+		}
+		if obs.readFailed && obs.transient {
+			// Says nothing about the task: keep the last reading and try again
+			// within the wait budget.
+			if last.Status == "" || last.Status == taskStatusFailed {
+				last.Status = taskStatusStarting
+			}
+			last.Reason = "the last status read failed: " + obs.result.Reason
+			if remaining = deadline.Sub(c.deps.Now()); remaining <= 0 {
+				break
+			}
+			c.deps.Sleep(min(taskPollInterval, remaining))
+			continue
+		}
+		if obs.harness != "" {
+			harness = obs.harness
+		}
+		last, phase = obs.result, obs.phase
+		anyRead = true
+		now := c.deps.Now()
+		if obs.phase == taskPhaseTerminalActive {
+			sawTerminalWork = true
+		}
+		if _, timestamped := id.terminalSince(); !timestamped && obs.phase == taskPhaseTerminalPrompt && sawTerminalWork {
+			// The agent worked and is back at its prompt. That work may predate
+			// the brief, so this is never "done": report it as started, and say
+			// that a terminal session cannot confirm completion.
+			last.Status = taskStatusRunning
+			last.Reason = "the terminal agent worked and is back at its prompt; a terminal session does not report whether this task is done"
+			last.Fix = fmt.Sprintf("check the session with `ao session get %s` or open it in the Orchestrator app", id.session)
+			return last
+		}
+		switch last.Status {
+		case taskStatusFailed, taskStatusNeedsInput, taskStatusDone:
+			return last
+		case taskStatusRunning:
+			if runningSince.IsZero() || obs.turnID != runningTurn {
+				// Start the clock when the running turn was first seen, at the
+				// end of that read; readAt still bounds it by the deadline.
+				runningTurn, runningSince = obs.turnID, now
+			}
+			if readAt.Sub(runningSince) >= taskRunningSettle && readAt.Before(deadline) {
+				return last
+			}
+		default:
+			runningSince = time.Time{}
+		}
+		remaining = deadline.Sub(now)
+		if remaining <= 0 {
+			break
+		}
+		c.deps.Sleep(min(taskPollInterval, remaining))
+	}
+
+	// Nothing settled in time. A queued task is accepted and will still run,
+	// so it is reported apart from a failure: retrying it would send it twice.
+	finalReadFailed, finalReadReason := false, ""
+	if last.Status == taskStatusQueued {
+		// Re-read once, bounded, so the answer matches the task's state now:
+		// the queued turn may have started, failed or been cancelled during
+		// the last sleep.
+		if err := ctx.Err(); err != nil {
+			return interruptedTask(id, last)
+		}
+		finalCtx, cancel := context.WithTimeout(ctx, taskFinalReadTimeout)
+		final := c.observeTask(finalCtx, id)
+		cancel()
+		// A caller that cancelled during the final read gets an interrupted
+		// wait, not exit 4 from the stale observation.
+		if err := ctx.Err(); err != nil {
+			return interruptedTask(id, last)
+		}
+		finalReadFailed = final.readFailed
+		finalReadReason = final.result.Reason
+		if !final.readFailed {
+			switch final.result.Status {
+			case taskStatusFailed, taskStatusNeedsInput, taskStatusDone:
+				return final.result
+			case taskStatusQueued:
+				last = final.result
+			default:
+				last = final.result
+				phase = final.phase
+			}
+		}
+	}
+	// A cancel that landed after the last poll is an interruption too, not a
+	// timeout of whatever phase was read last.
+	if err := ctx.Err(); err != nil {
+		return interruptedTask(id, last)
+	}
+	// Every timeout here is a task that was submitted but not confirmed. It
+	// is never reported as a failure to retry: exit 4, do not start it again.
+	out := last
+	out.TaskID = id.String()
+	if out.SessionIDs == nil {
+		out.SessionIDs = []string{id.session}
+	}
+	if out.Status == "" || out.Status == taskStatusFailed {
+		out.Status = taskStatusStarting
+	}
+	out.waitTimedOut = true
+	const notAgain = "it was submitted, so do not start it again"
+	follow := fmt.Sprintf("follow it with `ao task wait %s`", id)
+	check := fmt.Sprintf("`ao session get %s`", id.session)
+	switch {
+	case last.Status == taskStatusQueued && finalReadFailed:
+		out.Reason = fmt.Sprintf("timed out after %s; the task was queued at the last check, but the final status read failed (%s), so its state is unknown; %s", timeout, finalReadReason, notAgain)
+		out.Fix = fmt.Sprintf("check `ao task status %s` before doing anything else", id)
+	case last.Status == taskStatusQueued:
+		out.Reason = fmt.Sprintf("timed out after %s while still queued behind the agent's current turn; the task is accepted and will run, so do not start it again", timeout)
+		out.Fix = fmt.Sprintf("wait longer with `ao task wait %s`, or check %s", id, check)
+	case last.Status == taskStatusRunning:
+		out.Reason = fmt.Sprintf("timed out after %s: the agent had only just started the task; %s", timeout, notAgain)
+		out.Fix = follow + ", or check " + check
+	case phase == taskPhaseProvisioning:
+		out.Reason = fmt.Sprintf("timed out after %s: workspace setup had not finished; %s", timeout, notAgain)
+		out.Fix = follow + "; if setup is stuck, check the project's setup steps and " + check
+	case phase == taskPhaseTerminalPrompt || phase == taskPhaseTerminalIdle:
+		out.Reason = fmt.Sprintf("timed out after %s: the terminal session has not shown the task yet; %s", timeout, notAgain)
+		out.Fix = follow + ", or check " + check + " (or open the session in the Orchestrator app)"
+	default:
+		out.Reason = fmt.Sprintf("timed out after %s: the task has not started yet; %s", timeout, notAgain)
+		if !anyRead {
+			out.Reason = fmt.Sprintf("timed out after %s: no status read succeeded, so the task's state could not be confirmed; %s", timeout, notAgain)
+		}
+		out.Fix = follow + ", or check " + check
+		if harness != "" {
+			out.Fix += "; if " + harness + " is not signed in, " + strings.TrimSuffix(c.signInFix(ctx, harness), ", then retry") + " first"
+		}
+	}
+	if last.Reason != "" && last.Status != taskStatusQueued {
+		out.Reason += " (last reading: " + last.Reason + ")"
+	}
+	return out
+}
