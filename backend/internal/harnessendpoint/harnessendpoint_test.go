@@ -213,7 +213,7 @@ func TestEnvRefusesStoredCleartextRemoteURL(t *testing.T) {
 
 func TestEnvRejectsIncompleteSavedEndpoint(t *testing.T) {
 	store := NewStore(t.TempDir())
-	path, err := store.path("claude-code")
+	path, err := store.path("codex")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -223,7 +223,7 @@ func TestEnvRejectsIncompleteSavedEndpoint(t *testing.T) {
 	if err := os.WriteFile(path, []byte(`{"baseUrl":"https://gateway.example.com"}`), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if env, err := store.Env("claude-code"); err == nil || env != nil {
+	if env, err := store.Env("codex"); err == nil || env != nil {
 		t.Fatalf("incomplete endpoint must fail instead of allowing a native launch, got env=%t, err=%v", env != nil, err)
 	}
 }
@@ -252,7 +252,7 @@ func TestSaveReplacesCorruptConfigOnlyWithNewKey(t *testing.T) {
 }
 
 func TestSaveUnsupportedHarness(t *testing.T) {
-	_, err := NewStore(t.TempDir()).Save("codex", Input{BaseURL: "https://a.example.com", APIKey: "k"}, testNow)
+	_, err := NewStore(t.TempDir()).Save("aider", Input{BaseURL: "https://a.example.com", APIKey: "k"}, testNow)
 	if !errors.Is(err, ErrUnsupported) {
 		t.Fatalf("err = %v, want ErrUnsupported", err)
 	}
@@ -293,8 +293,44 @@ func TestDeleteAndStatus(t *testing.T) {
 	if len(status.AuthStyles) != 2 || status.DefaultAuthStyle != AuthBearer || !status.SupportsModel {
 		t.Fatalf("spec status = %+v", status)
 	}
-	if _, ok, _ := store.Status("codex"); ok {
+	if _, ok, _ := store.Status("aider"); ok {
 		t.Fatal("codex must report unsupported until it has a spec")
+	}
+}
+
+// Codex takes its endpoint from launch overrides, so the store hands the
+// adapter AO-owned variables and blanks Codex's own sign-in credentials.
+func TestCodexEnvUsesAOVariablesAndClearsCodexCredentials(t *testing.T) {
+	store := NewStore(t.TempDir())
+	status, err := store.Save("codex", Input{BaseURL: "https://gateway.example.com/v1", APIKey: "sk-codex", Model: "gpt-oss-120b"}, testNow)
+	if err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+	if len(status.AuthStyles) != 1 || status.AuthStyles[0] != AuthBearer || !status.SupportsModel {
+		t.Fatalf("codex status = %+v, want bearer only with a model", status)
+	}
+	env, err := store.Env("codex")
+	if err != nil {
+		t.Fatalf("Env: %v", err)
+	}
+	want := map[string]string{
+		CodexBaseURLEnv:      "https://gateway.example.com/v1",
+		CodexAPIKeyEnv:       "sk-codex",
+		CodexModelEnv:        "gpt-oss-120b",
+		"OPENAI_API_KEY":     "",
+		"CODEX_API_KEY":      "",
+		"CODEX_ACCESS_TOKEN": "",
+	}
+	if len(env) != len(want) {
+		t.Fatalf("env = %v, want %v", env, want)
+	}
+	for key, value := range want {
+		if got, ok := env[key]; !ok || got != value {
+			t.Fatalf("env[%s] = %q (present=%v), want %q", key, got, ok, value)
+		}
+	}
+	if _, err := store.Save("codex", Input{BaseURL: "https://gateway.example.com", APIKey: "k", AuthStyle: AuthAPIKey}, testNow); err == nil {
+		t.Fatal("codex accepts only the bearer style")
 	}
 }
 
@@ -390,6 +426,13 @@ func TestSaveChecksTheVersionSegmentPerHarness(t *testing.T) {
 	var validation *ValidationError
 	if !errors.As(err, &validation) || !strings.Contains(validation.Message, "Remove /v1") {
 		t.Fatalf("claude-code with /v1: err = %v, want a message naming /v1", err)
+	}
+}
+
+// Codex requests start right under its base URL, so the version stays in it.
+func TestSaveKeepsTheVersionInACodexBaseURL(t *testing.T) {
+	if _, err := NewStore(t.TempDir()).Save("codex", Input{BaseURL: "https://gateway.example.com/v1", APIKey: "k"}, testNow); err != nil {
+		t.Fatalf("codex with /v1: %v", err)
 	}
 }
 

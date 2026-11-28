@@ -78,7 +78,10 @@ func (m *Manager) LaunchColdChatSwitch(
 	if err != nil {
 		return fmt.Errorf("switch %s: workspace roots: %w", id, err)
 	}
-	env := m.runtimeEnvForHarness(rec.ID, rec.ProjectID, rec.IssueID, project.Config.Env, target)
+	env, err := m.runtimeEnvForHarness(rec.ID, rec.ProjectID, rec.IssueID, project.Config.Env, target)
+	if err != nil {
+		return fmt.Errorf("switch %s: agent env: %w", id, err)
+	}
 	// The mode the source chat runs with, as its own resume would launch it. A
 	// chat with no stored approval mode hands this to the target rather than the
 	// target's defaults, so a switch never drops approvals the chat had.

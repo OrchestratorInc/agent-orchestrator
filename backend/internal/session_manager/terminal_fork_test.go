@@ -177,3 +177,39 @@ func TestTerminalForkRefusesAnOriginalThatMovedOnDuringSetup(t *testing.T) {
 		}
 	}
 }
+
+type restoreRecordingAgent struct {
+	fakeAgent
+	restored *ports.RestoreConfig
+}
+
+func (a restoreRecordingAgent) GetRestoreCommand(ctx context.Context, cfg ports.RestoreConfig) ([]string, bool, error) {
+	*a.restored = cfg
+	return []string{"codex", "resume", "S"}, true, nil
+}
+
+// A Codex fork builds its endpoint flags from the fork's resolved launch env,
+// so a project's own gateway and key stay paired instead of the argv naming
+// the saved gateway while the process env holds the project's key.
+func TestTerminalForkRestoresWithTheForksLaunchEnv(t *testing.T) {
+	m, fake, _, _ := newManager()
+	var restored ports.RestoreConfig
+	m.agents = singleAgent{agent: restoreRecordingAgent{restored: &restored}}
+	rec := domain.SessionRecord{ID: "mer-0", ProjectID: "mer", Harness: domain.HarnessCodex, Mode: domain.SessionModeTUI,
+		Activity: domain.Activity{State: domain.ActivityIdle}, Metadata: domain.SessionMetadata{AgentSessionID: "S"}}
+	fake.sessions["mer-0"] = rec
+	src, err := m.TerminalForkSource(context.Background(), rec, "")
+	if err != nil || src.PrepareTerminal == nil {
+		t.Fatalf("source = %+v, %v", src, err)
+	}
+	env := map[string]string{
+		"AO_CODEX_ENDPOINT_BASE_URL": "https://project.example.com/v1",
+		"AO_CODEX_ENDPOINT_API_KEY":  "sk-project",
+	}
+	if _, err := src.PrepareTerminal(context.Background(), ports.ForkTarget{SessionID: "mer-1", WorkspacePath: t.TempDir(), Env: env}); err != nil {
+		t.Fatalf("prepare: %v", err)
+	}
+	if restored.Env["AO_CODEX_ENDPOINT_BASE_URL"] != "https://project.example.com/v1" || restored.Env["AO_CODEX_ENDPOINT_API_KEY"] != "sk-project" {
+		t.Fatalf("restore env = %v, want the fork's launch env", restored.Env)
+	}
+}

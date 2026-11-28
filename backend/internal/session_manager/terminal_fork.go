@@ -98,6 +98,9 @@ func (m *Manager) TerminalForkSource(ctx context.Context, rec domain.SessionReco
 			},
 			Kind: source.Kind, DataDir: target.DataDir, Config: agentConfig, Permissions: agentConfig.Permissions,
 			SystemPrompt: target.SystemPrompt, SystemPromptFile: target.SystemPromptFile,
+			// The fork's resolved launch env: argv must name the same endpoint
+			// as the process env, including a project's own gateway and key.
+			Env: target.Env,
 		})
 		if err != nil {
 			return ports.ForkTerminalLaunch{}, err

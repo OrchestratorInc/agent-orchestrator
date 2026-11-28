@@ -158,6 +158,12 @@ type ReviewInvocation struct {
 	// DataDir is AO's owned state root. Reviewer prelaunch hooks may use it for
 	// profile installation but must not write outside AO/workspace boundaries.
 	DataDir string
+	// EndpointEnv is the custom-endpoint environment the reviewer process
+	// receives: AO's stored endpoint with any project values applied. A
+	// harness that takes its endpoint from launch flags builds them from this,
+	// so its flags and its process environment name one endpoint. A supported
+	// harness without an endpoint gets a non-nil, empty snapshot.
+	EndpointEnv map[string]string
 	// RunFilePath is the daemon run-file reviewer-local AO CLI calls must use to
 	// find this daemon. Some harnesses filter shell command environments, so
 	// adapters may need to pass this value through their own command config.
