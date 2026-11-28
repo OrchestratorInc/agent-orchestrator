@@ -83,7 +83,6 @@ import {
 	type ComposerPromptSuggestion,
 	type ComposerTrigger,
 } from "./ComposerEditor";
-import { AoError } from "../../../../../packages/shared/telemetry/ao-error";
 import { messageTokenScope, recordSentComposerTokens, sessionTokenScope } from "./sentComposerTokens";
 import { composerModelPicker, openComposerModelPicker } from "../../lib/composer-shortcuts";
 import { moveHighlight, rankFiles, rankSkills, type Suggestion } from "./composerSuggest";
@@ -776,12 +775,12 @@ export const ChatComposer = memo(function ChatComposer({
 	);
 	const prepareAttachments = useCallback(
 		async (attachments: FileAttachment[], signal: AbortSignal): Promise<FileAttachment[]> => {
-			if (!onStageAttachments) throw new AoError("ATTACHMENT_STAGING_UNAVAILABLE", "Attachment staging is unavailable");
+			if (!onStageAttachments) throw new Error("Attachment staging is unavailable");
 			// A file too large to inline goes as its handle on disk; the stager
 			// streams it to the daemon (toWireAttachments).
 			const paths = await onStageAttachments(attachments.flatMap(attachmentPayload), signal);
 			if (paths.length !== attachments.length) {
-				throw new AoError("ATTACHMENT_STAGING_INCOMPLETE", "Attachment staging returned an incomplete result");
+				throw new Error("Attachment staging returned an incomplete result");
 			}
 			return attachments.map((attachment, index) => {
 				const stagedPath = paths[index];
