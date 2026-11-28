@@ -3,7 +3,7 @@ import { act, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { DevicePanel } from "./DevicePanel";
+import { DevicePanel, ROOM_RETRY_MS } from "./DevicePanel";
 import { TooltipProvider } from "./ui/tooltip";
 
 const { getMock, postMock } = vi.hoisted(() => ({ getMock: vi.fn(), postMock: vi.fn() }));
@@ -277,13 +277,110 @@ describe("DevicePanel", () => {
 	it("says a leased device shut down outside AO is off and starts it again", async () => {
 		mockApi({ lease: { ...iosLease, device: { ...iosLease.device, booted: false } } });
 		renderPanel(<DevicePanel isActive sessionId="ao-1" />);
-		expect(await screen.findByText("iPhone 17 Pro is off")).toBeInTheDocument();
-		expect(screen.getByRole("img", { name: "iPhone 17 Pro screen", hidden: true }).closest("[data-device-frame]")).toHaveClass("hidden");
+		expect(await screen.findByRole("status", { name: "iPhone 17 Pro is off" })).toBeInTheDocument();
+		// The frame stays, with Ruto at rest over a screen that shows nothing.
+		const screenCanvas = screen.getByRole("img", { name: "iPhone 17 Pro screen", hidden: true });
+		expect(screenCanvas.closest("[data-device-frame]")).not.toHaveClass("hidden");
+		expect(screenCanvas).toHaveClass("invisible");
 		await userEvent.click(screen.getByRole("button", { name: "Start" }));
 		expect(postMock).toHaveBeenCalledWith("/api/v1/sessions/{sessionId}/device/open", {
 			params: { path: { sessionId: "ao-1" } },
 			body: { deviceId: "UDID-1", platform: "ios" },
 		});
+	});
+
+	it("starts a device that went to sleep once its tab is shown", async () => {
+		let finish: (value: unknown) => void = () => {};
+		mockApi({ lease: { ...iosLease, suspended: true, device: { ...iosLease.device, booted: false } } });
+		postMock.mockImplementationOnce(() => new Promise((resolve) => (finish = resolve)));
+		renderPanel(<DevicePanel isActive sessionId="ao-1" />);
+		expect(await screen.findByRole("status", { name: "Starting iPhone 17 Pro…" })).toBeInTheDocument();
+		expect(screen.queryByRole("button", { name: "Start" })).not.toBeInTheDocument();
+		expect(postMock).toHaveBeenCalledWith("/api/v1/sessions/{sessionId}/device/open", {
+			params: { path: { sessionId: "ao-1" } },
+			body: { deviceId: "UDID-1", platform: "ios" },
+		});
+		await act(async () => finish({ data: {} }));
+		expect(postMock).toHaveBeenCalledTimes(1);
+	});
+
+	it("leaves a sleeping device off while its tab is hidden", async () => {
+		mockApi({ lease: { ...iosLease, suspended: true, device: { ...iosLease.device, booted: false } } });
+		renderPanel(<DevicePanel isActive={false} sessionId="ao-1" />);
+		await act(async () => new Promise((resolve) => setTimeout(resolve, 50)));
+		expect(postMock).not.toHaveBeenCalled();
+	});
+
+	it("waits for room on the machine and starts the device on its own once there is", async () => {
+		vi.useFakeTimers({ shouldAdvanceTime: true });
+		try {
+			mockApi({ lease: { ...iosLease, suspended: true, device: { ...iosLease.device, booted: false } } });
+			const full = "Devices on this machine already use about 12 GB of the 12 GB AO lets them use: Pixel 9 (session ao-2).";
+			postMock.mockResolvedValue({ error: { code: "NO_DEVICE_ROOM", message: full } });
+			renderPanel(<DevicePanel isActive sessionId="ao-1" />);
+			// Waiting, not failed: no Start, the reason behind the info mark.
+			expect(await screen.findByRole("status", { name: "iPhone 17 Pro starts when there's room" })).toBeInTheDocument();
+			expect(screen.queryByRole("button", { name: "Start" })).not.toBeInTheDocument();
+			expect(screen.getByRole("button", { name: full })).toBeInTheDocument();
+			expect(postMock).toHaveBeenCalledTimes(1);
+			postMock.mockResolvedValue({ data: {} });
+			await act(async () => { await vi.advanceTimersByTimeAsync(ROOM_RETRY_MS); });
+			await waitFor(() => expect(postMock).toHaveBeenCalledTimes(2));
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
+	it("offers Start for a start that failed for good, and does not retry it on its own", async () => {
+		vi.useFakeTimers({ shouldAdvanceTime: true });
+		try {
+			mockApi({ lease: { ...iosLease, suspended: true, device: { ...iosLease.device, booted: false } } });
+			const failure = "The simulator could not boot.";
+			postMock.mockResolvedValue({ error: { code: "DEVICE_BOOT_FAILED", message: failure } });
+			const view = renderPanel(<DevicePanel isActive sessionId="ao-1" />);
+			expect(await screen.findByRole("button", { name: "Start" })).toBeInTheDocument();
+			expect(screen.getByRole("button", { name: failure })).toBeInTheDocument();
+			expect(screen.queryByText(failure)).not.toBeInTheDocument();
+			await act(async () => { await vi.advanceTimersByTimeAsync(ROOM_RETRY_MS * 3); });
+			expect(postMock).toHaveBeenCalledTimes(1);
+			view.rerender(<DevicePanel isActive={false} sessionId="ao-1" />);
+			view.rerender(<DevicePanel isActive sessionId="ao-1" />);
+			await waitFor(() => expect(postMock).toHaveBeenCalledTimes(2));
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
+	it("stops watching while the window is hidden, and starts a sleeping device only once it is seen", async () => {
+		let visibility: DocumentVisibilityState = "visible";
+		const spy = vi.spyOn(document, "visibilityState", "get").mockImplementation(() => visibility);
+		try {
+			const stop = vi.fn();
+			playMjpeg.mockReturnValueOnce({ stop });
+			mockApi({ lease: iosLease });
+			renderPanel(<DevicePanel isActive sessionId="ao-1" />);
+			await waitFor(() => expect(playMjpeg).toHaveBeenCalled());
+			const socket = await liveSocket();
+			visibility = "hidden";
+			act(() => document.dispatchEvent(new Event("visibilitychange")));
+			expect(stop).toHaveBeenCalledTimes(1);
+			expect(socket.readyState).toBe(3);
+		} finally {
+			spy.mockRestore();
+		}
+	});
+
+	it("leaves a sleeping device off while the window is hidden", async () => {
+		const spy = vi.spyOn(document, "visibilityState", "get").mockImplementation(() => "hidden");
+		try {
+			mockApi({ lease: { ...iosLease, suspended: true, device: { ...iosLease.device, booted: false } } });
+			renderPanel(<DevicePanel isActive sessionId="ao-1" />);
+			expect(await screen.findByRole("status", { name: "iPhone 17 Pro is asleep" })).toBeInTheDocument();
+			await act(async () => new Promise((resolve) => setTimeout(resolve, 50)));
+			expect(postMock).not.toHaveBeenCalled();
+		} finally {
+			spy.mockRestore();
+		}
 	});
 
 	it("stops the stream and closes the input socket when the tab is hidden", async () => {
@@ -312,7 +409,7 @@ describe("DevicePanel", () => {
 			first.onclose?.();
 		});
 
-		expect(screen.getByText("Reconnecting…")).toBeInTheDocument();
+		expect(screen.getByRole("status", { name: "Reconnecting…" })).toBeInTheDocument();
 		expect(screen.getByRole("button", { name: "Home" })).toBeDisabled();
 		await waitFor(() => expect(FakeSocket.instances).toHaveLength(2), { timeout: 3_000 });
 		const second = await liveSocket();

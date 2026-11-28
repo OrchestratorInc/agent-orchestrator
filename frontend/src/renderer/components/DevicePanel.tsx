@@ -15,7 +15,11 @@ import { cn } from "../lib/utils";
 import { Button } from "./ui/button";
 import { Pressable } from "./ui/pressable";
 import { DeviceFrame, deviceFrameKind } from "./DeviceFrame";
+import { AOMascot } from "./AOMascot";
+import { Tooltip, TooltipContent, TooltipTrigger } from "./ui/tooltip";
 import { PanelMessage, RetryButton } from "./WorkspaceDiffView";
+import { useDocumentVisible } from "../lib/document-visibility";
+import { useMainViewVisible } from "../lib/main-view-visibility";
 
 type DeviceStatus = components["schemas"]["DeviceStatusResponse"];
 type DeviceLease = components["schemas"]["DeviceLease"];
@@ -73,6 +77,12 @@ export function useSessionDevice(sessionId: string, enabled: boolean, watching =
 export function DevicePanel({ isActive, sessionId }: { isActive: boolean; sessionId: string }) {
 	const { t } = useTranslation();
 	const queryClient = useQueryClient();
+	// On screen, not just the selected tab: a minimized or covered window, or
+	// Settings over the session, neither streams nor counts as watching, so a
+	// device left behind there can still go to sleep.
+	const windowVisible = useDocumentVisible();
+	const mainViewVisible = useMainViewVisible();
+	const onScreen = isActive && windowVisible && mainViewVisible;
 	const status = useQuery({
 		queryKey: devicesQueryKey,
 		queryFn: fetchDeviceStatus,
@@ -110,6 +120,10 @@ export function DevicePanel({ isActive, sessionId }: { isActive: boolean; sessio
 		},
 		onSettled: refresh,
 	});
+	// Why the last start failed, kept across retries so the info mark does not
+	// blink: no room right now (NO_DEVICE_ROOM) is waited out, anything else is
+	// a failure that waits for Start.
+	const [startProblem, setStartProblem] = useState<{ reason: string; waitForRoom: boolean }>();
 	const open = useMutation({
 		mutationFn: async (device: DeviceSummary) => {
 			const { error } = await apiClient.POST("/api/v1/sessions/{sessionId}/device/open", {
@@ -118,6 +132,8 @@ export function DevicePanel({ isActive, sessionId }: { isActive: boolean; sessio
 			});
 			if (error) throw apiErrorException(error);
 		},
+		onError: (error) => setStartProblem({ reason: error.message, waitForRoom: errorCode(error) === "NO_DEVICE_ROOM" }),
+		onSuccess: () => setStartProblem(undefined),
 		onSettled: refresh,
 	});
 	const release = useMutation({
@@ -134,7 +150,7 @@ export function DevicePanel({ isActive, sessionId }: { isActive: boolean; sessio
 	const supportOff = status.data !== undefined && (!status.data.enabled || status.data.state === "off");
 	if (lease.data && !supportOff) {
 		const held = lease.data;
-		return <DeviceLive error={release.error?.message ?? open.error?.message} isActive={isActive} lease={held} onRelease={(shutdown) => release.mutate(shutdown)} onStart={() => open.mutate(held.device)} releasing={release.isPending} sessionId={sessionId} starting={open.isPending} />;
+		return <DeviceLive error={release.error?.message} isActive={onScreen} lease={held} onRelease={(shutdown) => release.mutate(shutdown)} onStart={() => open.mutate(held.device)} releasing={release.isPending} sessionId={sessionId} startError={startProblem?.reason} starting={open.isPending} waitingForRoom={startProblem?.waitForRoom === true} />;
 	}
 	if (status.isPending) return <PanelMessage>{t("device.loading")}</PanelMessage>;
 	if (status.isError) {
@@ -457,6 +473,15 @@ function SessionTitle({ sessionId }: { sessionId: string }) {
 
 type StreamState = "connecting" | "live" | "reconnecting";
 
+/** How often a device waiting for room on the machine asks again. */
+export const ROOM_RETRY_MS = 4_000;
+
+/** The daemon's error code behind an apiErrorException, when there is one. */
+function errorCode(error: unknown): string | undefined {
+	const cause = error instanceof Error ? error.cause : undefined;
+	return cause && typeof cause === "object" && "code" in cause && typeof cause.code === "string" ? cause.code : undefined;
+}
+
 function DeviceLive({
 	error,
 	isActive,
@@ -465,9 +490,11 @@ function DeviceLive({
 	onStart,
 	releasing,
 	sessionId,
+	startError,
 	starting,
+	waitingForRoom,
 }: {
-	/** A failed release, shutdown or start: said, not swallowed. */
+	/** A failed release or shutdown: said beside the controls, not swallowed. */
 	error?: string;
 	isActive: boolean;
 	lease: DeviceLease;
@@ -475,7 +502,11 @@ function DeviceLive({
 	onStart: () => void;
 	releasing: boolean;
 	sessionId: string;
+	/** Why the device could not start: behind an info mark. */
+	startError?: string;
 	starting: boolean;
+	/** The last start found no room on the machine: wait and start again on its own. */
+	waitingForRoom: boolean;
 }) {
 	const { t } = useTranslation();
 	const { device } = lease;
@@ -491,6 +522,34 @@ function DeviceLive({
 	// Connections are held only while the device is on: one opened while it is
 	// off goes nowhere once it boots, so turning it on opens fresh ones.
 	const watching = isActive && device.booted;
+	// A device put to sleep for going unused starts again once the tab is shown.
+	// One try per showing: a refused start (no room on the machine) says why and
+	// waits for Start, or for the tab to be shown again.
+	const asleep = lease.suspended === true;
+	// What the frame shows over the screen. Ruto moves only while AO boots the
+	// device or its stream connects. He waits, still, while a start is asked for
+	// and while there is no room for the device (it starts on its own once there
+	// is). Start appears only for a failure that will not clear by itself.
+	const loading = lease.starting === true || (device.booted && (!hasFrame || state !== "live"));
+	const waiting = !device.booted && !loading && (starting || waitingForRoom);
+	const resting = !device.booted && !loading && !waiting;
+	const startRef = useRef(onStart);
+	startRef.current = onStart;
+	useEffect(() => {
+		if (!waitingForRoom || !isActive || starting || device.booted || lease.starting) return;
+		const retry = setTimeout(() => startRef.current(), ROOM_RETRY_MS);
+		return () => clearTimeout(retry);
+	}, [device.booted, isActive, lease.starting, starting, waitingForRoom]);
+	const wokeOnShow = useRef(false);
+	useEffect(() => {
+		if (!asleep || !isActive) {
+			wokeOnShow.current = false;
+			return;
+		}
+		if (starting || wokeOnShow.current) return;
+		wokeOnShow.current = true;
+		onStart();
+	}, [asleep, isActive, onStart, starting]);
 
 	// Frames go to a canvas as each arrives: Android's H.264 through WebCodecs,
 	// iOS's MJPEG newest-part-first. Screenshots only where WebCodecs is missing.
@@ -628,18 +687,13 @@ function DeviceLive({
 			</div>
 			{/* A size container, so the device frame can be as large as fits both ways. */}
 			<div className="flex min-h-0 flex-1 items-center justify-center overflow-hidden p-4 [container-type:size]">
-				{/* Shut down outside AO: say so rather than hold the last frame. */}
-				{device.booted ? null : (
-					<div className="flex flex-col items-center gap-2">
-						<p className="text-sm text-muted-foreground">{t("device.offLive", { name: device.name })}</p>
-						<Button disabled={starting} onClick={onStart} size="sm" type="button" variant="outline">{t("device.start")}</Button>
-					</div>
-				)}
-				<DeviceFrame className={cn(!device.booted && "hidden")} kind={deviceFrameKind(platform, device.name, screenAspect)} screenAspect={screenAspect}>
-					{hasFrame ? null : <p className="absolute inset-0 grid place-items-center text-xs text-muted-foreground">{t("device.connecting")}</p>}
+				{/* The frame stays whatever the device is doing: AO starting it, asleep,
+				    or live. Starting and connecting show Ruto at work on the dark screen,
+				    never a line of text. */}
+				<DeviceFrame kind={deviceFrameKind(platform, device.name, screenAspect)} screenAspect={screenAspect}>
 					<canvas
 						aria-label={t("device.screenAlt", { name: device.name })}
-						className={cn("block size-full cursor-pointer touch-none select-none", !hasFrame && "invisible")}
+						className={cn("block size-full cursor-pointer touch-none select-none", (!hasFrame || !device.booted) && "invisible")}
 						role="img"
 						onPointerCancel={(event) => {
 							if (!pointerDown.current) return;
@@ -661,10 +715,33 @@ function DeviceLive({
 						}}
 						ref={screenRef}
 					/>
+					{loading || waiting || resting ? (
+						<div
+							aria-label={loading && device.booted ? t(state === "reconnecting" ? "device.reconnecting" : "device.connecting") : t(waiting && waitingForRoom ? "device.waitingForRoom" : loading || waiting ? "device.waking" : asleep ? "device.asleepLive" : "device.offLive", { name: device.name })}
+							className={cn("absolute inset-0 flex flex-col items-center justify-center gap-4", loading && hasFrame && device.booted ? "bg-black/60" : "bg-black")}
+							role="status"
+						>
+							<AOMascot className={cn("h-auto w-1/3 max-w-24", loading && "ao-startup-logo")} />
+							{waiting || resting ? (
+								<div className="flex min-h-8 items-center gap-1">
+									{resting ? <Button onClick={onStart} size="sm" type="button" variant="secondary">{t("device.start")}</Button> : null}
+									{startError ? (
+										<Tooltip>
+											<TooltipTrigger asChild>
+												<Button aria-label={startError} size="icon-sm" type="button" variant="ghost">
+													<CircleAlert aria-hidden="true" className="size-icon-sm text-muted-foreground" />
+												</Button>
+											</TooltipTrigger>
+											<TooltipContent className="max-w-72">{startError}</TooltipContent>
+										</Tooltip>
+									) : null}
+								</div>
+							) : null}
+						</div>
+					) : null}
 				</DeviceFrame>
 			</div>
 			<div className="flex shrink-0 flex-col items-center gap-1 px-3 pb-3">
-				{state === "live" ? null : <p className="text-xs text-muted-foreground">{state === "reconnecting" ? t("device.reconnecting") : t("device.connecting")}</p>}
 				{pressError || error ? <p className="text-xs text-destructive" role="alert">{pressError || error}</p> : null}
 				<div className="flex items-center divide-x divide-border overflow-hidden rounded-full border border-border bg-card">
 					{buttons.map(({ button, icon: Icon, label }) => (
