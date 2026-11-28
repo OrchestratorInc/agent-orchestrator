@@ -1170,7 +1170,7 @@ func (c *ConversationsController) stagedImages(ctx context.Context, sessionID st
 			return nil, err
 		}
 		budget -= len(data)
-		out[i] = ConversationImageContentRequest{MIMEType: image.MIMEType, Data: base64.StdEncoding.EncodeToString(data)}
+		out[i] = ConversationImageContentRequest{MIMEType: image.MIMEType, Data: base64.StdEncoding.EncodeToString(data), staged: image.Path}
 	}
 	return out, nil
 }
@@ -1261,6 +1261,11 @@ func conversationContent(req SendConversationMessageRequest) ([]ports.ChatConten
 		content = append(content, ports.ChatContent{
 			Type: "image", Data: attachment.Data,
 			MIMEType: strings.ToLower(strings.TrimSpace(attachment.MIMEType)),
+			// A staged image keeps its path even when the text never names it: the
+			// write that accepts the message commits the draft's lease on the file
+			// by its name (chat_attachment_leases), so it is never reclaimed and a
+			// replay can still read it. Agents get only the data and type.
+			URI: attachment.staged,
 		})
 	}
 	for _, resource := range req.Resources {

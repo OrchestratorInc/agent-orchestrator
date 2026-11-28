@@ -94,6 +94,10 @@ func wantStagedImageContent(t *testing.T, content []ports.ChatContent) {
 	if len(content) != 1 || content[0].Type != "image" || content[0].MIMEType != "image/png" || content[0].Data != want {
 		t.Fatalf("content = %#v, want the staged file's bytes as one png image", content)
 	}
+	// The accepting write finds the file by its name to commit the draft's lease.
+	if content[0].URI != ".ao/attachments/"+stagedImageName {
+		t.Fatalf("content URI = %q, want the staged path", content[0].URI)
+	}
 }
 
 func TestSendConversationLoadsStagedImagePath(t *testing.T) {

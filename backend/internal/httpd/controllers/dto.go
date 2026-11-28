@@ -3756,6 +3756,9 @@ type ConversationImageContentRequest struct {
 	MIMEType string `json:"mimeType"`
 	Data     string `json:"data,omitempty"`
 	Path     string `json:"path,omitempty"`
+	// staged is the path the daemon read Data from (stagedImages). Not part of
+	// the API: it carries the file's name into the accepted message.
+	staged string
 }
 
 // EditQueuedConversationMessageRequest changes an undispatched prompt. Omitted
