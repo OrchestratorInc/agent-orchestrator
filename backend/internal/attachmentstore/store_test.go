@@ -455,6 +455,46 @@ func TestStoreUploadSweepsExpiredUploads(t *testing.T) {
 	}
 }
 
+func TestStoreSweepUploadsRunsWithoutANewUpload(t *testing.T) {
+	dataDir := t.TempDir()
+	workspace := t.TempDir()
+	store := New(dataDir)
+	ctx := context.Background()
+	store.SweepUploads(ctx)
+	if _, err := os.Stat(filepath.Join(dataDir, uploadsDir)); !errors.Is(err, fs.ErrNotExist) {
+		t.Fatalf("sweep with nothing uploaded created the uploads directory: %v", err)
+	}
+	discarded, _, err := store.Upload(ctx, strings.NewReader("discarded"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	retryable, _, err := store.Upload(ctx, strings.NewReader("retryable"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	// A draft's screenshot staged from its upload, then discarded with its lease:
+	// only the upload's own link is left.
+	name := "attachment-discarded.png"
+	if err := store.PutSource(ctx, "ao-1", workspace, name, Source{Upload: discarded}); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Remove(ctx, "ao-1", workspace, name); err != nil {
+		t.Fatal(err)
+	}
+	stale := time.Now().Add(-UploadTTL - time.Minute)
+	if err := os.Chtimes(filepath.Join(dataDir, uploadsDir, discarded), stale, stale); err != nil {
+		t.Fatal(err)
+	}
+	store.SweepUploads(ctx)
+	if _, err := os.Stat(filepath.Join(dataDir, uploadsDir, discarded)); !errors.Is(err, fs.ErrNotExist) {
+		t.Fatalf("expired upload still present without a new upload: %v", err)
+	}
+	// One still inside its retry window can still be named.
+	if err := store.PutCanonicalSource(ctx, "ao-1", "attachment-retry.png", Source{Upload: retryable}); err != nil {
+		t.Fatalf("upload inside its retry window was swept: %v", err)
+	}
+}
+
 func TestStoreOpenServesLargeCanonicalFile(t *testing.T) {
 	dataDir := t.TempDir()
 	dir := filepath.Join(dataDir, durableDir, "ao-1")
