@@ -2010,11 +2010,11 @@ func (m *Manager) resolveTUIAgentConfig(ctx context.Context, cfg ports.SpawnConf
 // validates the resulting effort against the harness. Harnesses without effort
 // support clear it (or reject a flagged explicit override); command-code and
 // hermes forward the level raw for the CLI to check; the catalog-backed
-// harnesses (codex, claude-code, pi, prime-agent) confirm the selected model
+// harnesses (codex, claude-code, pi, prime-agent, omp) confirm the selected model
 // advertises the level. It returns ErrUnsupportedEffort when a model does not
 // offer an explicitly requested level and ErrModelCapabilitiesUnavailable when
-// the catalog cannot confirm the launch. Unsupported inherited Pi or Prime
-// Agent effort is cleared. Terminals leave unconfirmed inherited levels to the
+// the catalog cannot confirm the launch. Unsupported inherited Pi, Prime
+// Agent, or OMP effort is cleared. Terminals leave unconfirmed inherited levels to the
 // CLI; chat clears them.
 func (m *Manager) resolveAgentConfig(ctx context.Context, cfg ports.SpawnConfig, project domain.ProjectConfig) (ports.AgentConfig, error) {
 	resolved, err := m.resolveAgentConfigOnce(ctx, cfg, project)
