@@ -336,8 +336,9 @@ function DeviceLive({ config, foreground, lease, leaseError, onReleased, session
 	useEffect(() => {
 		if (!off) setStartProblem(undefined);
 	}, [off]);
-	// Put to sleep for going unused: started again as soon as it is on screen.
-	useWakeOnShow(asleep, foreground, starting, start);
+	// Put to sleep for going unused: started again as soon as it is on screen,
+	// but not while it is being given back (a start then would lease it again).
+	useWakeOnShow(asleep, foreground, starting || releasing, start);
 	const subtitle = [device.version, off ? (asleep ? "Asleep" : "Off") : null].filter(Boolean).join(" · ");
 	// A failed release or button press, or a lease that does not load, is said
 	// below the device. Starting, connecting and retrying show inside the frame,
