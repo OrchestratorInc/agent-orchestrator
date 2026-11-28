@@ -5867,7 +5867,7 @@
 	"comment.replyLabel": "Ответить на комментарий",
 	"comment.replyPlaceholder": "Ответить",
 	"comment.firstLabel": "Напишите комментарий",
-	"comment.firstPlaceholder": "Комментарий, @ — упомянуть",
+	"comment.firstPlaceholder": "Комментарий, @ для упоминания",
 	"comment.onAgentAnswer": "К ответу агента",
 	"comment.onMessage": "К сообщению {{name}}",
 	"comment.onAMessage": "К сообщению",
