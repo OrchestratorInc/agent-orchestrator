@@ -10,11 +10,12 @@ export const DEFAULT_DAEMON_SENTRY_DSN =
 export const DEFAULT_ELECTRON_SENTRY_DSN =
 	"https://6d68b5ece8d8d1fd9985ff87186966d1@o4511955966361600.ingest.us.sentry.io/4512334283931648";
 
-// Only a published stable (0.14.10) or nightly (0.14.11-nightly.202611100625)
-// build reports errors. A self-built copy can carry any version (0.13.0,
+// Only a published stable (0.14.10), release candidate (0.15.8-rc.1) or nightly
+// (0.14.11-nightly.202611100625) build reports errors. A release candidate
+// reports as stable (sentryEnvironment) and differs only by its version. A self-built copy can carry any version (0.13.0,
 // 0.14.10+fork.1), so the release build also bakes AO_PUBLISHED_BUILD=1 into
 // Electron main (vite.main.config.ts, set by build-artifacts.yml).
-const PUBLISHED_VERSION = /^\d+\.\d+\.\d+(?:-nightly\.\d{12})?$/;
+const PUBLISHED_VERSION = /^\d+\.\d+\.\d+(?:-nightly\.\d{12}|-rc\.\d+)?$/;
 
 export function isPublishedSentryBuild(version: string, isDev: boolean): boolean {
 	return !isDev && process.env.AO_PUBLISHED_BUILD === "1" && PUBLISHED_VERSION.test(version.trim());

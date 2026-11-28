@@ -932,6 +932,9 @@ describe("daily active heartbeat", () => {
 		expect(versionChannelFrom("0.12.0-NIGHTLY.1")).toBe("nightly");
 		// A pinned feature build is not nightly, and an absent version is unknown.
 		expect(versionChannelFrom("0.11.3-feature.42")).toBe("stable");
+		// A release candidate reports as stable; only its version differs.
+		expect(versionChannelFrom("0.15.8-rc.1")).toBe("stable");
+		expect(versionChannelFrom("0.15.8-rc.12")).toBe("stable");
 		expect(versionChannelFrom("")).toBe("unknown");
 		expect(versionChannelFrom("unknown")).toBe("unknown");
 	});

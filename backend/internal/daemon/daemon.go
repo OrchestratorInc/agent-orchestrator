@@ -140,13 +140,14 @@ func sentryEnvironment(version string) string {
 	}
 }
 
-// publishedVersion matches a release-stamped stable (0.14.10) or nightly
-// (0.14.11-nightly.202611100625) version, the same pattern as the desktop app
-// (frontend/src/shared/sentry-config.ts).
-var publishedVersion = regexp.MustCompile(`^\d+\.\d+\.\d+(?:-nightly\.\d{12})?$`)
+// publishedVersion matches a release-stamped stable (0.14.10), release
+// candidate (0.15.8-rc.1) or nightly (0.14.11-nightly.202611100625) version,
+// the same pattern as the desktop app (frontend/src/shared/sentry-config.ts).
+// A release candidate reports as stable (sentryEnvironment).
+var publishedVersion = regexp.MustCompile(`^\d+\.\d+\.\d+(?:-nightly\.\d{12}|-rc\.\d+)?$`)
 
 // publishedSentryDSN keeps Sentry off for any version that is not a published
-// stable or nightly build (an edge, PR, forked or unversioned copy). The
+// stable, release candidate or nightly build (an edge, PR, forked or unversioned copy). The
 // desktop app also withholds the DSN from self-built copies.
 func publishedSentryDSN(dsn, version string) string {
 	if publishedVersion.MatchString(strings.TrimSpace(version)) {
