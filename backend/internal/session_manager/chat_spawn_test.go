@@ -78,6 +78,7 @@ type recordingLauncher struct {
 	afterReady       func()
 	providerBoundary *domain.ConversationBranch
 	liveReconnect    bool
+	conversation     domain.ConversationRecord
 
 	preflighted          []domain.AgentHarness
 	preflightPermissions []ports.PermissionMode
@@ -197,6 +198,7 @@ func (l *recordingLauncher) StartChat(ctx context.Context, cfg ChatStart) (ChatS
 		return ChatStarted{}, l.startErr
 	}
 	started := ChatStarted{
+		Conversation:           l.conversation,
 		LiveReconnect:          l.liveReconnect,
 		ProviderConversationID: "thread-1",
 		ControllerGeneration:   "gen-1",
@@ -1037,6 +1039,54 @@ func TestResumeExitedChatSessionDoesNotRequireTerminalRuntimeHandle(t *testing.T
 	}
 }
 
+func TestAgyChatResumeCommitsTheModelConfirmedByChat(t *testing.T) {
+	launcher := &recordingLauncher{conversation: domain.ConversationRecord{
+		ID: "agy-conversation", Settings: domain.ConversationSettings{Model: "gemini-3.8-flash"},
+	}}
+	mgr, st, _ := newChatManager(launcher)
+	mgr.dataDir = t.TempDir()
+	seedChatResumeSession(st, domain.ActivityExited)
+	rec := st.sessions["mer-1"]
+	rec.Harness = domain.HarnessAgy
+	rec.Metadata.Model, rec.Metadata.Effort = "claude-opus-4-6-thinking", "high"
+	st.sessions[rec.ID] = rec
+	result, err := mgr.ResumeAgentWithMode(context.Background(), rec.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Session.Metadata.Model != "gemini-3.8-flash" || result.Session.Metadata.Effort != "" {
+		t.Fatalf("resumed session tuning = %+v", result.Session.Metadata)
+	}
+}
+
+func TestAgyChatResumePreservesSavedModelWhenConversationSettingsAreEmpty(t *testing.T) {
+	for _, imported := range []bool{false, true} {
+		t.Run(fmt.Sprintf("imported=%v", imported), func(t *testing.T) {
+			launcher := &recordingLauncher{providerConversationID: "thread-existing",
+				conversation: domain.ConversationRecord{ID: "agy-conversation"}}
+			mgr, st, _ := newChatManager(launcher)
+			mgr.dataDir = t.TempDir()
+			seedChatResumeSession(st, domain.ActivityExited)
+			rec := st.sessions["mer-1"]
+			rec.Harness = domain.HarnessAgy
+			rec.Metadata.Model, rec.Metadata.Effort = "claude-opus-4-6-thinking", "high"
+			if imported {
+				rec.Metadata.ImportSource = &domain.SessionImportSource{
+					NativeID: "thread-existing", ConfigDir: t.TempDir(), Transferred: true, Prepared: true,
+				}
+			}
+			st.sessions[rec.ID] = rec
+			result, err := mgr.ResumeAgentWithMode(context.Background(), rec.ID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if result.Session.Metadata.Model != rec.Metadata.Model || result.Session.Metadata.Effort != "" {
+				t.Fatalf("resume must preserve model and apply saved default effort: %+v", result.Session.Metadata)
+			}
+		})
+	}
+}
+
 func TestResumeChatRotatesBrowserCapabilityBeforeControllerStart(t *testing.T) {
 	launcher := &recordingLauncher{}
 	mgr, store, _ := newChatManager(launcher)
@@ -1781,6 +1831,44 @@ func TestChatSpawnAppliesRequestAgentConfigOverProjectDefaults(t *testing.T) {
 	}
 	if got := launcher.started[0].Model; got != "request-model" {
 		t.Fatalf("controller model = %q, want request-model", got)
+	}
+}
+
+func TestAgyChatSpawnCommitsTheModelConfirmedByChat(t *testing.T) {
+	launcher := &recordingLauncher{conversation: domain.ConversationRecord{
+		ID: "agy-conversation", Settings: domain.ConversationSettings{
+			Model: "gemini-3.8-flash", ReasoningEffort: "low",
+		},
+	}}
+	mgr, _, _ := newChatManager(launcher)
+	mgr.dataDir = t.TempDir()
+	rec, _, _, err := mgr.Spawn(context.Background(), ports.SpawnConfig{
+		ProjectID: chatTestProject, Kind: domain.KindWorker, Harness: domain.HarnessAgy,
+		AgentConfig:   ports.AgentConfig{Model: "claude-opus-4-6-thinking", Effort: "high"},
+		RequestedMode: domain.SessionModeChat,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rec.Metadata.Model != "gemini-3.8-flash" || rec.Metadata.Effort != "low" {
+		t.Fatalf("saved session tuning = %+v", rec.Metadata)
+	}
+}
+
+func TestAgyChatSpawnPreservesRequestedModelWhenConversationSettingsAreEmpty(t *testing.T) {
+	launcher := &recordingLauncher{conversation: domain.ConversationRecord{ID: "agy-conversation"}}
+	mgr, _, _ := newChatManager(launcher)
+	mgr.dataDir = t.TempDir()
+	rec, _, _, err := mgr.Spawn(context.Background(), ports.SpawnConfig{
+		ProjectID: chatTestProject, Kind: domain.KindWorker, Harness: domain.HarnessAgy,
+		AgentConfig:   ports.AgentConfig{Model: "claude-opus-4-6-thinking", Effort: "high"},
+		RequestedMode: domain.SessionModeChat,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rec.Metadata.Model != "claude-opus-4-6-thinking" || rec.Metadata.Effort != "" {
+		t.Fatalf("spawn must preserve model and copy the conversation's effort: %+v", rec.Metadata)
 	}
 }
 

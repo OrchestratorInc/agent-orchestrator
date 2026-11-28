@@ -29,3 +29,38 @@ func (s *Service) StageAttachments(
 	}
 	return s.manager.StageAttachments(ctx, id, attachments)
 }
+
+// draftAttachmentManager is the optional lease capability of the session
+// manager. Keeping it separate avoids widening every focused manager fake.
+type draftAttachmentManager interface {
+	StageDraftAttachments(ctx context.Context, id domain.SessionID, attachments []ports.SpawnAttachment) ([]string, error)
+	UpdateAttachmentLeases(ctx context.Context, id domain.SessionID, release, renew []string) ([]string, error)
+}
+
+// StageDraftAttachments stages files picked into an unsent Chat draft. Each is
+// leased to the draft: sending a message that names it keeps it for good,
+// while removing it or discarding the draft lets AO delete both stored copies.
+func (s *Service) StageDraftAttachments(
+	ctx context.Context,
+	id domain.SessionID,
+	attachments []ports.SpawnAttachment,
+) ([]string, error) {
+	manager, ok := s.manager.(draftAttachmentManager)
+	if !ok {
+		return s.StageAttachments(ctx, id, attachments)
+	}
+	if renewer, ok := s.manager.(taskPreparationRenewer); ok {
+		renewer.RenewTaskPreparation(domain.TaskPreparationToken(id))
+	}
+	return manager.StageDraftAttachments(ctx, id, attachments)
+}
+
+// UpdateAttachmentLeases releases draft files the caller no longer holds and
+// renews the ones it still does, answering which renewed paths are gone.
+func (s *Service) UpdateAttachmentLeases(ctx context.Context, id domain.SessionID, release, renew []string) ([]string, error) {
+	manager, ok := s.manager.(draftAttachmentManager)
+	if !ok {
+		return []string{}, nil
+	}
+	return manager.UpdateAttachmentLeases(ctx, id, release, renew)
+}

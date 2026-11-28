@@ -114,4 +114,11 @@ func TestPersistChatModelPreservesConcurrentLifecycleUpdate(t *testing.T) {
 		got.Metadata.ControllerGeneration != "generation-new" {
 		t.Fatalf("model update overwrote concurrent lifecycle state: %+v", got)
 	}
+	if err := manager.PersistChatEffort(testCtx, created.ID, "high"); err != nil {
+		t.Fatal(err)
+	}
+	got, ok, err = base.GetSession(testCtx, created.ID)
+	if err != nil || !ok || got.Metadata.Effort != "high" || got.Metadata.Model != "5.6-luna" || !got.IsTerminated {
+		t.Fatalf("effort update changed other session facts: ok=%v err=%v effort=%q model=%q terminated=%t", ok, err, got.Metadata.Effort, got.Metadata.Model, got.IsTerminated)
+	}
 }

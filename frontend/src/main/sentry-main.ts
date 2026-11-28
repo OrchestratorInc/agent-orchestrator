@@ -12,7 +12,8 @@ import { sentryIdentityTitle, sentryMessageIdentity, sentryExceptionValue } from
 import { loadOrCreateTelemetryInstallId } from "../shared/telemetry";
 import type { DesktopTelemetryTransport } from "./desktop-telemetry-controller";
 import { isSafeMainErrorDetail, MAIN_ERROR_CATEGORIES, MAIN_ERROR_REASONS, sanitizeMainErrorCapture, type MainErrorCapture } from "./main-error-capture";
-import { onboardingSentryTarget, parseOnboardingFailureCode } from "../shared/onboarding-failures";
+import { onboardingFailureCause, onboardingSentryTarget, parseOnboardingFailureCode } from "../shared/onboarding-failures";
+import { cloudPlan, isPaidCloudPlan, type CloudPlan } from "../shared/cloud-plan";
 
 export function electronMainSentryDsn(version: string, isDev: boolean): string {
 	return process.env.AO_ELECTRON_SENTRY_DSN ?? (isPublishedSentryBuild(version, isDev) ? DEFAULT_ELECTRON_SENTRY_DSN : "");
@@ -27,8 +28,17 @@ export function electronMainSentryDsn(version: string, isDev: boolean): string {
 const ERROR_SAMPLE_RATE = "0.1";
 const ALWAYS_SENT_KINDS = new Set(["uncaught_exception", "process_exit"]);
 
+// The install's AO Cloud plan, as the renderer last reported it (telemetry:setPlan).
+// Every event is tagged with it, and a paid plan sends outside the sample.
+let currentPlan: CloudPlan = "unknown";
+
+export function setMainSentryPlan(plan: unknown): void {
+	currentPlan = cloudPlan(plan);
+}
+
 function alwaysSentEvent(event: Sentry.ErrorEvent): boolean {
 	if (ALWAYS_SENT_KINDS.has(String(event.tags?.kind))) return true;
+	if (isPaidCloudPlan(currentPlan)) return true;
 	return event.tags?.category === "onboarding" && parseOnboardingFailureCode(event.tags?.code) !== undefined;
 }
 
@@ -78,13 +88,14 @@ function admitMainSentryEvent(event: Sentry.ErrorEvent | null, sampled: boolean,
 	const alwaysSent = alwaysSentEvent(event);
 	if (!alwaysSent && !sampled) return null;
 	if (!budget(event.fingerprint ?? [])) return null;
-	return { ...event, tags: { ...event.tags, sample_rate: alwaysSent ? "1" : ERROR_SAMPLE_RATE } };
+	return { ...event, tags: { ...event.tags, plan: currentPlan, sample_rate: alwaysSent ? "1" : ERROR_SAMPLE_RATE } };
 }
 
 const CAPTURE_KEYS = new Set(["consentGeneration", "kind", "level", "message", "tags", "exception"]);
 const TAG_KEYS = new Set([
 	"apierr_kind",
 	"category",
+	"cause",
 	"code",
 	"domain",
 	"error_code",
@@ -116,6 +127,15 @@ function safeRendererCode(category: unknown, code: unknown): string {
 	return safeSentryCode(code) ?? "unknown";
 }
 const PROCESS_REASONS = ["abnormal-exit", "crashed", "oom", "launch-failed", "integrity-failure"] as const;
+// childProcessIntegration names the process "'<type>' process exited with '<reason>'":
+// Electron's child-process-gone type, or "renderer" for render-process-gone.
+// Only these fixed types are kept; anything else reads as "unknown".
+const PROCESS_TYPES = new Map([
+	["renderer", "renderer"], ["GPU", "gpu"], ["Utility", "utility"], ["Zygote", "zygote"],
+	["Sandbox helper", "sandbox_helper"], ["Pepper Plugin", "pepper_plugin"], ["Pepper Plugin Broker", "pepper_plugin_broker"], ["Unknown", "unknown"],
+]);
+// ResizeObserver loop notices are not listed: only the renderer can tell the
+// bare notice (no error object) from a thrown error with the same text.
 const EXPECTED_NOISE = /^(?:AbortError|net::ERR_NETWORK_CHANGED|net::ERR_INTERNET_DISCONNECTED|net::ERR_NETWORK_IO_SUSPENDED)$/i;
 const DRAIN_TIMEOUT_MS = 2_000;
 const DEBUG_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -190,6 +210,7 @@ function scrubMainSentryEvent(event: Sentry.ErrorEvent, installId: string, versi
 	const processReason = typeof event.message === "string"
 		? PROCESS_REASONS.find((reason) => event.message?.endsWith(`process exited with '${reason}'`))
 		: undefined;
+	const processType = processReason ? PROCESS_TYPES.get(/^'([^']{1,32})' process exited with '/.exec(event.message ?? "")?.[1] ?? "") ?? "unknown" : undefined;
 	const rendererKind = event.tags?.["ao.kind"];
 	const kind = renderer
 		? (rendererKind === "exception" || rendererKind === "message" ? rendererKind : "unknown")
@@ -209,6 +230,8 @@ function scrubMainSentryEvent(event: Sentry.ErrorEvent, installId: string, versi
 	const onboarding = renderer && kind === "message" ? parseOnboardingFailureCode(safeCategory === "onboarding" ? safeCode : undefined) : undefined;
 	if (onboarding) {
 		const target = onboardingSentryTarget(event.tags?.["ao.target"]);
+		// Like target, a tag to filter by: the issue stays grouped by action and reason.
+		const cause = onboarding.reason === "install_failed" ? onboardingFailureCause(event.tags?.["ao.cause"]) : undefined;
 		return {
 			type: undefined,
 			platform: "javascript",
@@ -217,7 +240,7 @@ function scrubMainSentryEvent(event: Sentry.ErrorEvent, installId: string, versi
 			level: event.level === "warning" ? "warning" : "error",
 			message: `Onboarding ${onboarding.action} failed (${onboarding.reason})`,
 			fingerprint: ["electron", "onboarding", onboarding.action, onboarding.reason, "renderer"],
-			tags: { surface: "renderer", kind, category: "onboarding", code: safeCode, action: onboarding.action, reason: onboarding.reason, ...(target ? { target } : {}), flow: "onboarding" },
+			tags: { surface: "renderer", kind, category: "onboarding", code: safeCode, action: onboarding.action, reason: onboarding.reason, ...(target ? { target } : {}), ...(cause ? { cause } : {}), flow: "onboarding" },
 			user: { id: installId },
 			release: version,
 			environment,
@@ -254,7 +277,7 @@ function scrubMainSentryEvent(event: Sentry.ErrorEvent, installId: string, versi
 	const titleLocation = ipcChannel ?? topFunction;
 	const title = renderer
 		? kind === "message" ? `Renderer API error${safeOperation ? " in " + safeOperation : ""} (${rendererLabel})` : `Renderer ${exceptionType} in ${titleLocation} (${rendererLabel})`
-		: processReason ? "Electron process failure" : `Electron main ${exceptionType} in ${topFunction}`;
+		: processReason ? `Electron ${processType} process failure (${processReason})` : `Electron main ${exceptionType} in ${topFunction}`;
 	return {
 		type: undefined,
 		// Rebuilt events must keep a JS platform: Sentry applies source maps
@@ -264,8 +287,8 @@ function scrubMainSentryEvent(event: Sentry.ErrorEvent, installId: string, versi
 		timestamp: event.timestamp,
 		level: event.level === "fatal" || event.level === "error" || event.level === "warning" ? event.level : "error",
 		message: ipcChannel && identity.text ? title + ": " + identity.text : sentryIdentityTitle(identity, title),
-		fingerprint: errorFingerprint(identity, ["electron", kind, renderer ? rendererLabel : processReason ?? safeCode, exceptionType, topFunction, renderer ? "renderer" : "electron-main", ...(safeOperation ? [safeOperation] : [])]),
-		tags: { surface: renderer ? "renderer" : "electron-main", kind, ...(renderer ? { category: safeCategory, code: safeCode, ...(safeOperation ? { operation: safeOperation } : {}), ...(safeFlow ? { flow: safeFlow } : {}), ...(ipcChannel ? { ipc_channel: ipcChannel } : {}) } : {}), ...(processReason ? { reason: processReason } : {}), ...(identity.code ? { error_code: identity.code } : {}) },
+		fingerprint: errorFingerprint(identity, ["electron", kind, renderer ? rendererLabel : processReason ?? safeCode, ...(processType ? [processType] : []), exceptionType, topFunction, renderer ? "renderer" : "electron-main", ...(safeOperation ? [safeOperation] : [])]),
+		tags: { surface: renderer ? "renderer" : "electron-main", kind, ...(renderer ? { category: safeCategory, code: safeCode, ...(safeOperation ? { operation: safeOperation } : {}), ...(safeFlow ? { flow: safeFlow } : {}), ...(ipcChannel ? { ipc_channel: ipcChannel } : {}) } : {}), ...(processReason ? { reason: processReason, process: processType } : {}), ...(identity.code ? { error_code: identity.code } : {}) },
 		user: { id: installId },
 		release: version,
 		environment,
@@ -383,6 +406,7 @@ export async function initMainSentry(version: string, dataDir: string, cacheRoot
 					...(safe.tags?.operation && SAFE_OPERATION.test(safe.tags.operation) ? { "ao.operation": safe.tags.operation } : {}),
 					...(safe.tags?.flow && SAFE_FLOWS.has(safe.tags.flow) ? { "ao.flow": safe.tags.flow } : {}),
 					...(category === "onboarding" && onboardingSentryTarget(safe.tags?.target) ? { "ao.target": onboardingSentryTarget(safe.tags?.target) as string } : {}),
+					...(category === "onboarding" && onboardingFailureCause(safe.tags?.cause) ? { "ao.cause": onboardingFailureCause(safe.tags?.cause) as string } : {}),
 				},
 			});
 		},

@@ -3,6 +3,7 @@ import { useIsMutating, useMutation, useQueryClient } from "@tanstack/react-quer
 import { useTranslation } from "react-i18next";
 import { Play } from "@/components/app-icons";
 import { aoBridge } from "../lib/bridge";
+import { withMoveStateText } from "../lib/cloud-move-state";
 import { clientForSessionHost } from "../lib/host-clients";
 import { cloudSessionsQueryKey, workspaceQueryKeyForHost } from "../hooks/useWorkspaceQuery";
 import { useCloudCp } from "../hooks/useCloudCp";
@@ -42,7 +43,11 @@ export function ResumeAgentControl({
 		mutationFn: async () => {
 			if (usePreviewData) return;
 			if (session.cloud) {
-				const restarted = await cloudClient.restartSessionAgent(session.cloud.orgId, session.id);
+				// A session whose move's export still runs is not started again
+				// until that move ends (MOVE_IN_PROGRESS), said in the app's words.
+				const restarted = await cloudClient.restartSessionAgent(session.cloud.orgId, session.id).catch((error: unknown) => {
+					throw withMoveStateText(error);
+				});
 				if (!restarted.requested) throw new Error(t("inspector.resumeAgentAlreadyRunning"));
 				return undefined;
 			}

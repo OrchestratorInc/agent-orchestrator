@@ -360,6 +360,26 @@ describe("ChatMarkdown", () => {
 		openExternal.mockRestore();
 	});
 
+	it("opens a remote host-local link only in the Browser when the host shares its localhost", async () => {
+		const onLinkOpen = vi.fn();
+		const openExternal = vi.spyOn(aoBridge.app, "openExternal").mockResolvedValue(undefined);
+		const writeText = vi.spyOn(aoBridge.clipboard, "writeText").mockResolvedValue(undefined);
+		render(<ChatLinkProvider onLinkOpen={onLinkOpen} remoteHost hostLocalLinks sessionLinkHostId="box-a"><ChatMarkdown text="[preview](http://localhost:5173/app)" /></ChatLinkProvider>);
+		const link = screen.getByRole("link", { name: "preview" });
+		fireEvent.click(link);
+		fireEvent.click(link, { metaKey: true });
+		fireEvent(link, new MouseEvent("auxclick", { button: 1, bubbles: true, cancelable: true }));
+		expect(onLinkOpen.mock.calls).toEqual([["http://localhost:5173/app"], ["http://localhost:5173/app"], ["http://localhost:5173/app"]]);
+
+		fireEvent.contextMenu(link);
+		await userEvent.click(await screen.findByRole("menuitem", { name: "Copy link" }));
+		expect(writeText).toHaveBeenCalledWith("http://localhost:5173/app");
+		expect(screen.queryByRole("menuitem", { name: "Open in external browser" })).not.toBeInTheDocument();
+		expect(openExternal).not.toHaveBeenCalled();
+		writeText.mockRestore();
+		openExternal.mockRestore();
+	});
+
 	it("scopes a session preview to the chat source", async () => {
 		sessionPreview.mockClear();
 		const onSessionLinkOpen = vi.fn();

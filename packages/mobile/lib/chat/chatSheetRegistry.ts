@@ -27,8 +27,12 @@ export type AccountPickerEntry = {
 	subtitle: string;
 	options: PickerOption[];
 	selected: string;
+	/** Calls back at once with the latest rows and pick, then on every change (usage read again, an account signed out). */
+	subscribe?(listener: (state: AccountPickerState) => void): () => void;
 	onSelect(accountId: string): void;
 };
+
+export type AccountPickerState = { options: PickerOption[]; selected: string };
 
 export type ChatSheetEntry =
 	| ConversationActionsEntry

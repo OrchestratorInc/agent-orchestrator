@@ -311,6 +311,9 @@ describe("captured chat excerpts", () => {
 			{ kind: "message", id: "b", turnId: "turn", revision: 2, role: "assistant", text: "second" },
 		] } as ConversationSnapshot;
 		expect(captureExcerptTurn(ref, snapshot).snapshot?.turn?.messages.map(m => m.text)).toEqual(["first", "second"]);
+		snapshot.items.push({ kind: "activity", id: "page", turnId: "turn", revision: 0, activityKind: "system" } as ConversationSnapshot["items"][number]);
+		const fromPage = captureExcerptTurn({ ...ref, messageId: "page", revision: 0, snapshot: { version: 1, rawText: "", captureMode: "legacy" } }, snapshot);
+		expect(fromPage.snapshot?.turn?.messages.map(m => m.text)).toEqual(["first", "second"]);
 		snapshot.turns[0].state = "failed";
 		expect(captureExcerptTurn(ref, snapshot).snapshot?.turn).toBeUndefined();
 		snapshot.items = [];

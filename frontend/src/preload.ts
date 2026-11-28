@@ -1,5 +1,7 @@
 import type { GitHubIssueArtifact, GitHubIssueArtifactResult, GitHubIssueChoice } from "./shared/github-issue-artifact";
 import type { TriageResult } from "./main/triage-launch";
+import type { VaultListResult } from "./main/browser-vault-ipc";
+import type { VaultAuditEntry, VaultItemInput, VaultItemSummary } from "./main/browser-vault-store";
 import { contextBridge, ipcRenderer, webUtils } from "electron";
 import { WINDOW_TRANSPARENCY_CHANGED, type WindowTransparencyState } from "./shared/window-transparency";
 import { installRendererErrorHandlers } from "./shared/renderer-error-handlers";
@@ -50,6 +52,7 @@ import type {
 	OpenSessionTargetResult,
 } from "./shared/editor-handoff";
 import type { TelemetryBootstrap } from "./shared/telemetry";
+import type { CloudPlan } from "./shared/cloud-plan";
 import type { LaunchSteps, LaunchTimingStart, ResourceSummary } from "./shared/performance-telemetry";
 import {
 	TELEMETRY_CLEAR_RENDERER_QUEUES_CHANNEL,
@@ -61,6 +64,7 @@ import {
 } from "./shared/telemetry-policy";
 import type { MigrationState } from "./main/app-state";
 import type { PrivacyGuideRequest, PrivacyGuideTarget, PrivacyPane } from "./main/privacy-guide";
+import { EXIT_FEEDBACK_EVENT_CHANNEL, EXIT_FEEDBACK_REQUEST_CHANNEL, EXIT_FEEDBACK_SECOND_CLOSE_CHANNEL, EXIT_FEEDBACK_STATE_CHANNEL, isExitFeedbackVersion, type ExitFeedbackRequest, type ExitFeedbackState } from "./shared/exit-feedback";
 import type { UpdateSettings, UpdateStatus, UpdateInstallResult } from "./main/update-settings";
 import type { CloudAccount, CloudPendingSignIn } from "./shared/cloud-account";
 import {
@@ -150,6 +154,7 @@ export type BrowserBoundsApplied = BrowserBoundsInput;
 export type BrowserNavigateInput = {
 	viewId: string;
 	url: string;
+	preview?: boolean;
 };
 
 export type ImportFolderMode = "project" | "workspace";
@@ -372,6 +377,24 @@ const api = {
 			};
 		},
 		resolveQuitConfirm: (confirmed: boolean) => ipcRenderer.send(QUIT_CONFIRM_RESULT_CHANNEL, confirmed),
+		// First-day exit feedback: main holds the quit until reportExitFeedback("done").
+		onExitFeedbackRequest: (listener: (request: ExitFeedbackRequest) => void) => {
+			const wrapped = (_event: Electron.IpcRendererEvent, request?: Partial<ExitFeedbackRequest>) => {
+				if (isExitFeedbackVersion(request?.version)) listener({ version: request.version });
+			};
+			ipcRenderer.on(EXIT_FEEDBACK_REQUEST_CHANNEL, wrapped);
+			return () => {
+				ipcRenderer.off(EXIT_FEEDBACK_REQUEST_CHANNEL, wrapped);
+			};
+		},
+		onExitFeedbackSecondClose: (listener: () => void) => {
+			const wrapped = () => listener();
+			ipcRenderer.on(EXIT_FEEDBACK_SECOND_CLOSE_CHANNEL, wrapped);
+			return () => {
+				ipcRenderer.off(EXIT_FEEDBACK_SECOND_CLOSE_CHANNEL, wrapped);
+			};
+		},
+		reportExitFeedback: (state: ExitFeedbackState) => ipcRenderer.send(EXIT_FEEDBACK_STATE_CHANNEL, state),
 		// Fired by the main process when ⌘T / Ctrl+T is pressed in any web contents,
 		// including while focus is inside a terminal pane.
 		onNewShellTerminalShortcut: (listener: () => void) => {
@@ -573,7 +596,9 @@ const api = {
 	// The main process reads and uploads the file; the renderer never sees
 	// the file or the token. See shared/cloud-share.ts.
 	cloudShare: {
-		inspect: (file: CloudShareFile) => ipcRenderer.invoke("cloudShare:inspect", file) as Promise<CloudShareInspection>,
+		// linkOnly reads the link alone, without looking up whether the page's files changed.
+		inspect: (file: CloudShareFile, options?: { linkOnly?: boolean }) =>
+			ipcRenderer.invoke("cloudShare:inspect", file, options) as Promise<CloudShareInspection>,
 		available: (baseUrl: string) => ipcRenderer.invoke("cloudShare:available", { baseUrl }) as Promise<boolean | null>,
 		list: (baseUrl: string) => ipcRenderer.invoke("cloudShare:list", { baseUrl }) as Promise<CloudShareLinks>,
 		/** The links this computer published remote hosts' files to; their daemons list none. */
@@ -673,12 +698,15 @@ const api = {
 			};
 		},
 		setCloudUser: (userId: string | null) => ipcRenderer.invoke("telemetry:setCloudUser", userId) as Promise<boolean | "unsupported">,
+		setPlan: (plan: CloudPlan) => ipcRenderer.invoke("telemetry:setPlan", plan) as Promise<boolean>,
 		getGithubLogin: () => ipcRenderer.invoke("telemetry:getGithubLogin") as Promise<string | null>,
 		getLifetimeSessions: () => ipcRenderer.invoke("telemetry:getLifetimeSessions") as Promise<number | null>,
 		takeLaunchStart: () => ipcRenderer.invoke("telemetry:takeLaunchStart") as Promise<LaunchTimingStart | null>,
 		takeResourceSummary: () => ipcRenderer.invoke("telemetry:takeResourceSummary") as Promise<ResourceSummary | null>,
 		launchSteps: () => ipcRenderer.invoke("telemetry:launchSteps") as Promise<LaunchSteps | null>,
 		claimFirstOpen: () => ipcRenderer.invoke("telemetry:claimFirstOpen") as Promise<"claimed" | "ineligible" | "unknown">,
+		// A finished exit feedback event, posted by main so it survives the quit.
+		sendExitFeedbackEvent: (event: Record<string, unknown>) => ipcRenderer.send(EXIT_FEEDBACK_EVENT_CHANNEL, event),
 		getPolicy: async () => {
 			const view = await ipcRenderer.invoke("telemetry:getPolicy") as TelemetryPolicyView;
 			applyTelemetryPolicy(view);
@@ -749,7 +777,9 @@ const api = {
 			ipcRenderer.invoke("browser:selectTab", input) as Promise<BrowserTabsState>,
 		closeTab: (input: { viewId: string; tabId: string }) =>
 			ipcRenderer.invoke("browser:closeTab", input) as Promise<BrowserTabsState>,
-		openTab: (input: { viewId: string; url?: string }) =>
+		muteTab: (input: { viewId: string; tabId: string; muted: boolean }) =>
+			ipcRenderer.invoke("browser:muteTab", input) as Promise<BrowserTabsState>,
+		openTab: (input: { viewId: string; url?: string; preview?: boolean }) =>
 			ipcRenderer.invoke("browser:openTab", input) as Promise<BrowserTabsState>,
 		getProfile: (viewId: string) =>
 			ipcRenderer.invoke("browser:profile:get", viewId) as Promise<BrowserProfileViewState>,
@@ -910,6 +940,14 @@ const api = {
 				ipcRenderer.off("browser:annotation:state", wrapped);
 			};
 		},
+	},
+	// Saved site passwords. Write-only for secrets: nothing here returns one.
+	vault: {
+		list: () => ipcRenderer.invoke("vault:list") as Promise<VaultListResult>,
+		save: (input: VaultItemInput) => ipcRenderer.invoke("vault:save", input) as Promise<VaultItemSummary>,
+		delete: (id: string) => ipcRenderer.invoke("vault:delete", { id }) as Promise<void>,
+		audit: () => ipcRenderer.invoke("vault:audit") as Promise<VaultAuditEntry[]>,
+		reset: () => ipcRenderer.invoke("vault:reset") as Promise<void>,
 	},
 	browserProfiles: {
 		list: () => ipcRenderer.invoke("browserProfiles:list") as Promise<BrowserProfileListState>,
@@ -1082,6 +1120,7 @@ const api = {
 		// A preview's address for a browser outside AO; any other URL unchanged.
 		externalUrl: (hostId: string, url: string) =>
 			ipcRenderer.invoke("remotes:externalUrl", hostId, url) as Promise<string>,
+		loopbackReach: (hostId: string) => ipcRenderer.invoke("remotes:loopbackReach", hostId) as Promise<boolean>,
 	},
 	cloud: {
 		getSession: () => ipcRenderer.invoke("cloud:getSession") as Promise<CloudAccount | null>,

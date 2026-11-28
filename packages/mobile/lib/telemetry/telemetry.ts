@@ -1,5 +1,6 @@
 import { type ActiveStorage, reserveDailyActive } from "./dailyActive";
 import { MOBILE_ALLOWLIST, MOBILE_EVENTS, type MobileEventName } from "./events";
+import { safeDaemonVersion } from "./context";
 import { sanitizeMobileProperties } from "./sanitize";
 
 // The capture facade. Everything the app calls goes through here, so the
@@ -32,11 +33,17 @@ export type DesktopTelemetryIdentity = {
 	githubLogin?: string;
 	optedOut: boolean;
 	lifetimeSessions?: number;
+	/** The daemon's release. Sent even when opted out; it names a build, not a person. */
+	daemonVersion?: string;
 };
 
 export type MobileTelemetry = {
-	/** Emit an allowlisted event. Unknown event names and unknown props are dropped. */
-	capture(event: MobileEventName, properties?: Record<string, unknown>): void;
+	/**
+	 * Emit an allowlisted event. Unknown event names and unknown props are
+	 * dropped. Returns whether it was handed to the SDK (false when opted out,
+	 * killed, rate-capped or still waiting on the saved preference).
+	 */
+	capture(event: MobileEventName, properties?: Record<string, unknown>): boolean;
 	/** Emit the daily-active heartbeat at most once per UTC day. */
 	active(storage?: ActiveStorage, now?: Date): Promise<void>;
 	/** Apply the paired desktop's properties and opt-out. */
@@ -93,6 +100,7 @@ export function createMobileTelemetry(
 	let cloudUserId: string | null = null;
 	let githubActor: string | null = null;
 	let lifetimeSessions: number | null = null;
+	let pairedDaemonVersion: string | null = null;
 	let signInKnown = false;
 	void client.unregister("ao_cloud_user_id");
 	void client.unregister("github_actor");
@@ -102,6 +110,7 @@ export function createMobileTelemetry(
 		cloudUserId = null;
 		githubActor = null;
 		lifetimeSessions = null;
+		pairedDaemonVersion = null;
 		signInKnown = false;
 		void client.unregister("paired_install_id");
 		void client.unregister("github_actor");
@@ -131,6 +140,7 @@ export function createMobileTelemetry(
 			cloudUserId = null;
 			githubActor = null;
 			lifetimeSessions = null;
+			pairedDaemonVersion = null;
 			signInKnown = false;
 			return;
 		}
@@ -138,27 +148,29 @@ export function createMobileTelemetry(
 		void client.register(context);
 	};
 
-	const capture = (event: MobileEventName, properties?: Record<string, unknown>): void => {
+	const capture = (event: MobileEventName, properties?: Record<string, unknown>): boolean => {
 		// Fail closed on the event name: an event not in the allowlist is never
 		// sent, so a typo cannot ship a bare untracked event.
-		if (blocked || identityPending || optedOut) return;
-		if (!(event in MOBILE_ALLOWLIST)) return;
+		if (blocked || identityPending || optedOut) return false;
+		if (!(event in MOBILE_ALLOWLIST)) return false;
 		// Build-time kill switch, mirroring the desktop denylist.
-		if (denied.has(event)) return;
+		if (denied.has(event)) return false;
 		// Per-name rate cap: the runaway backstop. Checked last so a legitimate
 		// event is only dropped when the name is genuinely over its window.
-		if (!allow(event)) return;
+		if (!allow(event)) return false;
 		const phoneInstallId = options.phoneInstallId?.();
 		client.capture(event, {
 			...sanitizeMobileProperties(event, properties),
 			...(phoneInstallId ? { install_id: phoneInstallId } : {}),
 			...(pairedInstallId ? { paired_install_id: pairedInstallId } : {}),
 			...(lifetimeSessions !== null ? { lifetime_sessions: lifetimeSessions } : {}),
+			...(pairedDaemonVersion !== null ? { paired_daemon_version: pairedDaemonVersion } : {}),
 			...(signInKnown ? { is_signed_in: cloudUserId !== null } : {}),
 			ao_cloud_user_id: cloudUserId,
 			github_actor: githubActor,
 			$process_person_profile: false,
 		});
+		return true;
 	};
 
 	const restoreOptOut = (saved: boolean): void => {
@@ -183,6 +195,7 @@ export function createMobileTelemetry(
 		pairedInstallId = typeof identity.installId === "string" && /^ins_[0-9a-f-]{36}$/.test(identity.installId) ? identity.installId : null;
 		lifetimeSessions = typeof identity.lifetimeSessions === "number" && Number.isSafeInteger(identity.lifetimeSessions) && identity.lifetimeSessions >= 0 ? identity.lifetimeSessions : null;
 		signInKnown = typeof identity.isSignedIn === "boolean" || Boolean(identity.cloudUserId);
+		pairedDaemonVersion = safeDaemonVersion(identity.daemonVersion) ?? null;
 		const key = JSON.stringify([identity.distinctId, identity.cloudUserId, identity.githubLogin, pairedInstallId]);
 		if (key === adoptedKey) return;
 		adoptedKey = key;

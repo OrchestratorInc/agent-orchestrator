@@ -124,7 +124,7 @@ function MacAwakeMenuItem({ stay }: { stay: StayAwake }) {
 			disabled={!stay.supported}
 			onSelect={stay.toggle}
 		>
-			<span className={cn("relative grid shrink-0 place-items-center", problem && "mt-px")}>
+			<span className={cn("relative grid shrink-0 place-items-center", problem && "mt-px")} data-awake-menu-icon="">
 				<Coffee aria-hidden="true" />
 				{awakeNeedsAttention(stay) ? <TriangleAlert className="absolute -right-1 -top-1 size-2.5! fill-background text-error" strokeWidth={2.5} aria-hidden="true" /> : null}
 			</span>

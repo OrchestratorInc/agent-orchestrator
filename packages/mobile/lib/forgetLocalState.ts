@@ -5,11 +5,13 @@ import { hostMachineIdentity } from "./config";
 import { flushReviewPersistence } from "./files/reviewPersistence";
 import { forgetHostReviews } from "./files/reviewStore";
 import { LAST_ROUTE_KEY } from "./lastRoute";
+import { forgetSentReviewComments } from "./reviewSent";
 import { forgetSpawnDraftFor } from "./spawnDraft";
 
 // What the phone keeps so the app survives being closed in the background (a
 // machine's last board, the New task draft, unsent review comments, the last
-// screen) belongs to a machine or to the account signed in. It goes with them:
+// screen, the review comments sent by hand) belongs to a machine or to the
+// account signed in. It goes with them:
 // forgetting a machine, or an account signing out or giving way to another,
 // leaves nothing of theirs for whoever uses the phone next.
 
@@ -33,6 +35,7 @@ export async function forgetMachineState(hostId: string): Promise<void> {
 	await forgetAll("a forgotten machine", [
 		() => forgetBoard(hostMachineIdentity(hostId)),
 		() => forgetSpawnDraftFor({ hostId }),
+		() => forgetSentReviewComments(hostId),
 		() => AsyncStorage.removeItem(LAST_ROUTE_KEY),
 		// The reviews' removal reaches the phone before this resolves, not after a delay the app may not live through.
 		() => flushReviewPersistence(),
@@ -44,6 +47,7 @@ export async function forgetAccountState(accountId: string): Promise<void> {
 	forgetHostReviews(CLOUD_HOST_ID);
 	await forgetAll("a signed-out account", [
 		() => forgetSpawnDraftFor({ accountId }),
+		() => forgetSentReviewComments(CLOUD_HOST_ID),
 		() => AsyncStorage.removeItem(LAST_ROUTE_KEY),
 		() => flushReviewPersistence(),
 	]);

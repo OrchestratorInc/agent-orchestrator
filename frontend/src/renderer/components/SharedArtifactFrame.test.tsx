@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { render, screen } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { CloudCpError } from "../lib/cloud-cp";
 import { SharedArtifactFrame } from "./SharedArtifactFrame";
@@ -7,8 +7,8 @@ import { SharedArtifactFrame } from "./SharedArtifactFrame";
 const mocks = vi.hoisted(() => ({ ready: true, view: vi.fn() }));
 vi.mock("../hooks/useCloudCp", () => ({ useCloudCp: () => ({ client: { viewArtifactShare: mocks.view }, ready: mocks.ready, baseUrl: "https://cp.test" }) }));
 
-function renderFrame() {
-	return render(<QueryClientProvider client={new QueryClient()}><SharedArtifactFrame linkId="q3-report" title="q3.html" /></QueryClientProvider>);
+function renderFrame(onShown?: () => void) {
+	return render(<QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}><SharedArtifactFrame linkId="q3-report" onShown={onShown} title="q3.html" /></QueryClientProvider>);
 }
 
 describe("SharedArtifactFrame", () => {
@@ -59,5 +59,29 @@ describe("SharedArtifactFrame", () => {
 		renderFrame();
 		expect(screen.getByText("Sign in to Orchestrator Cloud to open artifacts shared with you.")).toBeInTheDocument();
 		expect(mocks.view).not.toHaveBeenCalled();
+	});
+
+	it("says it is shown once the page loads, not while the link is fetched", async () => {
+		let resolve: (value: unknown) => void = () => undefined;
+		mocks.view.mockReturnValue(new Promise((done) => { resolve = done; }));
+		const onShown = vi.fn();
+		renderFrame(onShown);
+		expect(onShown).not.toHaveBeenCalled();
+		resolve({ linkId: "q3-report", name: "q3.html", contentType: "text/html", size: 1, updatedAt: "", contentUrl: "https://q3-report.share.test/" });
+		const frame = await screen.findByTitle("q3.html");
+		onShown.mockClear();
+		fireEvent.load(frame);
+		expect(onShown).toHaveBeenCalledTimes(1);
+	});
+
+	it("says it is shown when a message takes the page's place", async () => {
+		mocks.view.mockRejectedValue(new CloudCpError("not found", { status: 404, code: "not_found" }));
+		const onShown = vi.fn();
+		renderFrame(onShown);
+		await waitFor(() => expect(onShown).toHaveBeenCalled());
+		const signedOut = vi.fn();
+		mocks.ready = false;
+		renderFrame(signedOut);
+		expect(signedOut).toHaveBeenCalled();
 	});
 });

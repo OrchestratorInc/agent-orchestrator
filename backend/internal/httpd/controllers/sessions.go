@@ -252,6 +252,7 @@ func (c *SessionsController) Register(r chi.Router) {
 		r.Method(method, "/sessions/{sessionId}/agent-browser/*", http.HandlerFunc(c.agentBrowser))
 	}
 	r.Post("/sessions/{sessionId}/attachments", c.stageAttachments)
+	r.Post("/sessions/{sessionId}/attachments/leases", c.updateAttachmentLeases)
 	r.Post("/attachment-uploads", c.uploadAttachment)
 	r.Post("/sessions/{sessionId}/conversation/file-references/resolve", c.resolveFileReference)
 	r.Get("/sessions/{sessionId}/workspace/manifest", c.getWorkspaceManifest)
@@ -671,6 +672,29 @@ func (c *SessionsController) previewFile(w http.ResponseWriter, r *http.Request)
 	}
 	// Only artifact files outlive their session; workspace previews need it.
 	fromArtifacts := r.URL.Query().Get("source") == "artifact"
+	if !fromArtifacts {
+		if assetPath, _, pathErr := wildcardPath(r); pathErr == nil {
+			if name, ok := attachmentstore.NameFromWorkspacePath(assetPath); ok {
+				if svc, ok := c.Svc.(attachmentSessionService); ok {
+					rec, err := svc.GetAttachmentRecord(r.Context(), sessionID(r))
+					if err != nil {
+						envelope.WriteError(w, r, err)
+						return
+					}
+					if c.Attachments != nil {
+						file, info, openErr := c.Attachments.Open(r.Context(), rec.ID, name)
+						if openErr == nil {
+							defer func() { _ = file.Close() }()
+							serveOpenedPreviewFile(w, r, file, info, assetPath)
+							return
+						}
+					}
+					c.serveRootedPreviewFile(w, r, rec.Metadata.WorkspacePath, assetPath)
+					return
+				}
+			}
+		}
+	}
 	var sess domain.Session
 	var err error
 	if fromArtifacts {
@@ -692,7 +716,7 @@ func (c *SessionsController) previewFile(w http.ResponseWriter, r *http.Request)
 			c.serveArtifactVersionFile(w, r, sess, assetPath, version)
 			return
 		}
-		c.serveRootedPreviewFile(w, r, sess.Metadata.ArtifactDir, assetPath)
+		serveArtifactPreviewFile(w, r, sess.Metadata.ArtifactDir, assetPath)
 		return
 	}
 	if name, ok := attachmentstore.NameFromWorkspacePath(assetPath); ok && c.Attachments != nil {
@@ -1148,6 +1172,23 @@ func (c *SessionsController) serveRootedPreviewFile(w http.ResponseWriter, r *ht
 		return
 	}
 	defer func() { _ = file.Close() }()
+	serveOpenedPreviewFile(w, r, file, info, clean)
+}
+
+// serveArtifactPreviewFile serves an artifact file as serveRootedPreviewFile
+// does, naming in previewutil.ResolvedPathHeader the path the opened file
+// is at, read from the open handle itself, for a shared page's files: it
+// always names the bytes served. When it cannot be read, the header is left out.
+func serveArtifactPreviewFile(w http.ResponseWriter, r *http.Request, rootPath, assetPath string) {
+	file, info, clean, err := previewutil.OpenWorkspaceFile(rootPath, assetPath)
+	if err != nil {
+		envelope.WriteAPIError(w, r, http.StatusNotFound, "not_found", "PREVIEW_FILE_NOT_FOUND", "Preview file not found", nil)
+		return
+	}
+	defer func() { _ = file.Close() }()
+	if resolved, ok := previewutil.ResolvedPath(rootPath, file); ok {
+		w.Header().Set(previewutil.ResolvedPathHeader, resolved)
+	}
 	serveOpenedPreviewFile(w, r, file, info, clean)
 }
 
@@ -3257,6 +3298,11 @@ func sessionView(r *http.Request, s domain.Session) SessionView {
 		PreviewURL:         s.Metadata.PreviewURL,
 		PreviewRevision:    s.Metadata.PreviewRevision,
 		Model:              s.Metadata.Model,
+		RoleAgent:          s.Metadata.RoleAgent,
+		Effort:             s.Metadata.Effort,
+		ModelPending: s.Harness == domain.HarnessMemcode && s.Mode == domain.SessionModeTUI && s.Metadata.ImportSource == nil &&
+			s.Metadata.RuntimeLaunchID == "" && s.Metadata.Model == "" && !s.IsTerminated &&
+			s.Activity.State != domain.ActivityExited && s.ProvisionState != domain.SessionProvisionFailed,
 		LastUserMessageAt: func() *time.Time {
 			if s.Metadata.LatestUserPromptAt.IsZero() {
 				return nil
@@ -3611,6 +3657,10 @@ func workspaceSnapshotRequested(query url.Values) bool {
 // reads, including a deleted session whose artifacts were kept.
 type artifactSessionService interface {
 	ArtifactSession(ctx context.Context, id domain.SessionID) (domain.Session, bool, error)
+}
+
+type attachmentSessionService interface {
+	GetAttachmentRecord(ctx context.Context, id domain.SessionID) (domain.SessionRecord, error)
 }
 
 // keptArtifactsService lists and forgets kept artifacts.

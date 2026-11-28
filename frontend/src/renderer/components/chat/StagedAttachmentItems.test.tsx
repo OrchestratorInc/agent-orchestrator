@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { rememberSentAttachments, resetSentAttachmentPreviewsForTest } from "../../lib/sent-attachment-previews";
 import { AttachmentStrip, StagedAttachmentItems } from "./StagedAttachmentItems";
 import { attachmentURL } from "./messageAttachments";
@@ -113,5 +113,112 @@ describe("AttachmentStrip", () => {
 		strip.scrollLeft = 120;
 		rerender(<AttachmentStrip itemCount={2} data-testid="strip">{tiles(2)}</AttachmentStrip>);
 		expect(strip.scrollLeft).toBe(120);
+	});
+});
+
+const VIEWER_BYTES = 4 * 1024 * 1024;
+
+function tileRead(init?: RequestInit): boolean {
+	return (init?.headers as Record<string, string> | undefined)?.Range === "bytes=0-2047";
+}
+
+describe("StagedAttachmentItems opening a text file", () => {
+	beforeEach(() => {
+		vi.stubGlobal("IntersectionObserver", class {
+			constructor(private readonly callback: IntersectionObserverCallback) {}
+			observe() {
+				this.callback([{ isIntersecting: true } as IntersectionObserverEntry], this as unknown as IntersectionObserver);
+			}
+			disconnect() {}
+		});
+	});
+
+	afterEach(() => {
+		vi.unstubAllGlobals();
+	});
+
+	it("shows a sent text file's whole saved copy with Copy", async () => {
+		const whole = `first line\n${"middle\n".repeat(500)}last line`;
+		const fetch = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) =>
+			new Response(tileRead(init) ? "first line" : whole, { status: 200 }));
+		vi.stubGlobal("fetch", fetch);
+		render(<StagedAttachmentItems paths={[NOTES]} sessionId="s1" apiBaseUrl={API} ariaLabel="Attachments" />);
+
+		fireEvent.click(await screen.findByRole("button", { name: "attachment-notes.txt" }));
+
+		const viewer = await screen.findByRole("dialog", { name: "attachment-notes.txt" });
+		expect(await within(viewer).findByText(/last line$/)).toBeInTheDocument();
+		expect(within(viewer).getByRole("button", { name: "Copy text" })).toBeInTheDocument();
+		expect(fetch).toHaveBeenLastCalledWith(`${attachmentURL(API, "s1", NOTES)}?raw=true`, expect.objectContaining({ headers: { Range: `bytes=0-${VIEWER_BYTES}` } }));
+	});
+
+	it("opens a text file whose thumbnail couldn't be read", async () => {
+		vi.stubGlobal("fetch", vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) =>
+			tileRead(init) ? new Response("", { status: 502 }) : new Response("first line\nlast line", { status: 200 })));
+		render(<StagedAttachmentItems paths={[NOTES]} sessionId="s1" apiBaseUrl={API} ariaLabel="Attachments" />);
+
+		fireEvent.click(await screen.findByRole("button", { name: "attachment-notes.txt" }));
+
+		const viewer = await screen.findByRole("dialog", { name: "attachment-notes.txt" });
+		expect(await within(viewer).findByText(/last line$/)).toBeInTheDocument();
+		expect(within(viewer).getByRole("button", { name: "Copy text" })).toBeInTheDocument();
+	});
+
+	it("says when the whole file can't be read, and loads it on Retry", async () => {
+		let reachable = false;
+		vi.stubGlobal("fetch", vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+			if (tileRead(init)) return new Response("first line", { status: 200 });
+			return reachable ? new Response("first line\nlast line", { status: 200 }) : new Response("", { status: 502 });
+		}));
+		render(<StagedAttachmentItems paths={[NOTES]} sessionId="s1" apiBaseUrl={API} ariaLabel="Attachments" />);
+
+		fireEvent.click(await screen.findByRole("button", { name: "attachment-notes.txt" }));
+
+		const viewer = await screen.findByRole("dialog", { name: "attachment-notes.txt" });
+		expect(await within(viewer).findByRole("alert")).toHaveTextContent("Couldn't load the whole file");
+		expect(within(viewer).getByText("first line")).toBeInTheDocument();
+		expect(within(viewer).queryByRole("button", { name: "Copy text" })).not.toBeInTheDocument();
+
+		reachable = true;
+		fireEvent.click(within(viewer).getByRole("button", { name: "Retry" }));
+
+		expect(await within(viewer).findByText(/last line$/)).toBeInTheDocument();
+		expect(within(viewer).getByRole("button", { name: "Copy text" })).toBeInTheDocument();
+		expect(within(viewer).queryByRole("alert")).not.toBeInTheDocument();
+	});
+
+	it("reads at most 4 MB of a larger file, says so, and offers no Copy", async () => {
+		vi.stubGlobal("fetch", vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) =>
+			new Response(tileRead(init) ? "first line" : "x".repeat(VIEWER_BYTES + 100), { status: 200 })));
+		render(<StagedAttachmentItems paths={[NOTES]} sessionId="s1" apiBaseUrl={API} ariaLabel="Attachments" />);
+
+		fireEvent.click(await screen.findByRole("button", { name: "attachment-notes.txt" }));
+
+		const viewer = await screen.findByRole("dialog", { name: "attachment-notes.txt" });
+		expect(await within(viewer).findByText("Showing the first 4.0 MB")).toBeInTheDocument();
+		expect(viewer.querySelector("pre")?.textContent).toHaveLength(VIEWER_BYTES);
+		expect(within(viewer).queryByRole("button", { name: "Copy text" })).not.toBeInTheDocument();
+	});
+
+	it("saves the whole file from a viewer that showed only its start", async () => {
+		const whole = "x".repeat(VIEWER_BYTES + 100);
+		const fetch = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => new Response(tileRead(init) ? "first line" : whole, { status: 200 }));
+		vi.stubGlobal("fetch", fetch);
+		const saved: Blob[] = [];
+		vi.stubGlobal("URL", Object.assign(Object.create(URL), { createObjectURL: (blob: Blob) => (saved.push(blob), "blob:whole"), revokeObjectURL: () => undefined }));
+		const click = vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(() => undefined);
+		render(<StagedAttachmentItems paths={[NOTES]} sessionId="s1" apiBaseUrl={API} ariaLabel="Attachments" />);
+
+		fireEvent.click(await screen.findByRole("button", { name: "attachment-notes.txt" }));
+		const viewer = await screen.findByRole("dialog", { name: "attachment-notes.txt" });
+		fireEvent.click(await within(viewer).findByRole("button", { name: "Save the whole file" }));
+
+		await vi.waitFor(() => expect(click).toHaveBeenCalledOnce());
+		const link = click.mock.contexts[0] as HTMLAnchorElement;
+		expect(link.download).toBe("attachment-notes.txt");
+		expect(link.href).toBe("blob:whole");
+		expect(saved[0]?.size).toBe(whole.length);
+		expect(fetch).toHaveBeenLastCalledWith(`${attachmentURL(API, "s1", NOTES)}?raw=true`);
+		click.mockRestore();
 	});
 });

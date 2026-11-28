@@ -62,6 +62,7 @@ var _ ports.AgentInterfaceHandoffStorageBridge = (*Plugin)(nil)
 var _ ports.TerminalSurfaceInspector = (*Plugin)(nil)
 var _ ports.SubmitActivitySignaler = (*Plugin)(nil)
 var _ ports.BlockedActivitySignaler = (*Plugin)(nil)
+var _ ports.AgentSkillSource = (*Plugin)(nil)
 
 // EmitsSubmitActivity reports that PreInvocation proves submitted work has
 // reached AGY's execution loop.
@@ -105,7 +106,7 @@ func (p *Plugin) GetConfigSpec(ctx context.Context) (ports.ConfigSpec, error) {
 // GetLaunchCommand builds the argv to start an interactive Agy session.
 // Shape:
 //
-//	agy --add-dir <WorkspacePath> [--mode <mode> | --dangerously-skip-permissions] [--model <Model>] [--prompt-interactive <Prompt>]
+//	agy --add-dir <WorkspacePath> [--add-dir <skill folder>] [--mode <mode> | --dangerously-skip-permissions] [--model <Model>] [--prompt-interactive <Prompt>]
 func (p *Plugin) GetLaunchCommand(ctx context.Context, cfg ports.LaunchConfig) (cmd []string, err error) {
 	binary, err := p.agyBinary(ctx)
 	if err != nil {
@@ -116,6 +117,9 @@ func (p *Plugin) GetLaunchCommand(ctx context.Context, cfg ports.LaunchConfig) (
 
 	if cfg.WorkspacePath != "" {
 		cmd = append(cmd, "--add-dir", cfg.WorkspacePath)
+	}
+	for _, dir := range SkillDirectories(cfg.DataDir, cfg.SessionID) {
+		cmd = append(cmd, "--add-dir", dir)
 	}
 
 	switch ports.NormalizePermissionMode(cfg.Permissions) {
@@ -139,7 +143,7 @@ func (p *Plugin) GetLaunchCommand(ctx context.Context, cfg ports.LaunchConfig) (
 }
 
 // GetRestoreCommand rebuilds the argv that continues an existing Agy session:
-// `agy --add-dir <WorkspacePath> [--mode <mode> | --dangerously-skip-permissions] [--model <Model>] --conversation <agentSessionId>`.
+// `agy --add-dir <WorkspacePath> [--add-dir <skill folder>] [--mode <mode> | --dangerously-skip-permissions] [--model <Model>] --conversation <agentSessionId>`.
 func (p *Plugin) GetRestoreCommand(ctx context.Context, cfg ports.RestoreConfig) (cmd []string, ok bool, err error) {
 	if err := ctx.Err(); err != nil {
 		return nil, false, err
@@ -185,6 +189,9 @@ func (p *Plugin) GetRestoreCommand(ctx context.Context, cfg ports.RestoreConfig)
 
 	if cfg.Session.WorkspacePath != "" {
 		cmd = append(cmd, "--add-dir", cfg.Session.WorkspacePath)
+	}
+	for _, dir := range SkillDirectories(cfg.DataDir, cfg.Session.ID) {
+		cmd = append(cmd, "--add-dir", dir)
 	}
 
 	switch ports.NormalizePermissionMode(cfg.Permissions) {

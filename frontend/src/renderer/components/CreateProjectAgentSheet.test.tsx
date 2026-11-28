@@ -2,11 +2,14 @@ import { useState } from "react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { act, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { agentReadiness } from "../test/agent-readiness-fixtures";
 import { CreateProjectAgentSheet, RequiredAgentField } from "./CreateProjectAgentSheet";
 import { TooltipProvider } from "./ui/tooltip";
 import { useUiStore } from "../stores/ui-store";
+
+const githubStatus = vi.hoisted(() => vi.fn(async (): Promise<{ connected: boolean; login?: string }> => ({ connected: false })));
+vi.mock("../lib/github-daemon", async (importOriginal) => ({ ...(await importOriginal<typeof import("../lib/github-daemon")>()), getGitHubStatus: githubStatus }));
 
 beforeEach(() => {
 	useUiStore.setState({ settingsModal: null });
@@ -63,6 +66,27 @@ it("unmounts the modal on submit and does not bring it back when creation succee
 });
 
 describe("CreateProjectAgentSheet", () => {
+	describe("with onboarding's assigned issues on", () => {
+		beforeEach(() => window.localStorage.setItem("ao.projectDefaults", JSON.stringify({ assignedIssues: true })));
+		afterEach(() => window.localStorage.removeItem("ao.projectDefaults"));
+
+		it("turns intake on for the GitHub user AO is signed in as", async () => {
+			githubStatus.mockResolvedValueOnce({ connected: true, login: "octocat" });
+			renderSheet();
+			expect(await screen.findByLabelText("Assignee")).toHaveValue("octocat");
+			expect(screen.getByRole("switch", { name: "Automatically work on assigned issues" })).toBeChecked();
+			expect(screen.getByRole("button", { name: "Create and start" })).toBeEnabled();
+		});
+
+		it("leaves intake off when the login isn't known, so Create stays available", async () => {
+			githubStatus.mockResolvedValueOnce({ connected: false });
+			renderSheet();
+			await waitFor(() => expect(githubStatus).toHaveBeenCalled());
+			expect(screen.getByRole("switch", { name: "Automatically work on assigned issues" })).not.toBeChecked();
+			expect(screen.getByRole("button", { name: "Create and start" })).toBeEnabled();
+		});
+	});
+
 	it("asks for no agents", () => {
 		renderSheet();
 

@@ -33,6 +33,10 @@ func verifyNativeCheckpoint(ctx context.Context, verifier ports.NativeCheckpoint
 		case <-timer.C:
 		}
 		if !time.Now().Before(deadline) {
+			var unanswered *ports.UnansweredNativeTailError
+			if errors.As(err, &unanswered) {
+				return unanswered.Boundary, nil
+			}
 			return ports.NativeCheckpointBoundary{}, fmt.Errorf("wait for native checkpoint: %w: %w", err, context.DeadlineExceeded)
 		}
 	}

@@ -170,7 +170,7 @@ export function HarnessAccountTab({ details, hostId, cloud, authWorkflowActive, 
 			{loginPanel}
 		</HarnessDetailGroup> : null}
 		{savedKeys}
-		{accountProvider ? <AgentAccountsPanel provider={accountProvider} hostId={hostId} loginMethods={authPlan?.methods} cliLogin={{
+		{accountProvider ? <AgentAccountsPanel provider={accountProvider} hostId={hostId} loginMethods={authPlan?.methods} customEndpoint={isInstalled ? authPlan?.customEndpoint : undefined} cliLogin={{
 			disabled: authBusy || authWorkflowActive || details.busy || !authPlan?.available || authPlan.action === "instructions",
 			canLogout: Boolean(authPlan?.logoutCommand),
 			onSignIn: onLogin,

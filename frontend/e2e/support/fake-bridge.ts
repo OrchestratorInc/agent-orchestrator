@@ -113,6 +113,9 @@ export async function installFakeBridge(page: Page, opts: FakeBridgeOptions = {}
 					onKeyboardShortcutsHelp: unsubscribe,
 					onQuitConfirmRequest: unsubscribe,
 					resolveQuitConfirm: () => undefined,
+					onExitFeedbackRequest: () => () => undefined,
+					onExitFeedbackSecondClose: () => () => undefined,
+					reportExitFeedback: () => undefined,
 					onNewShellTerminalShortcut: unsubscribe,
 					onCloseShellTerminalShortcut: unsubscribe,
 					setCloseShellTerminalShortcutEnabled: () => undefined,
@@ -275,12 +278,14 @@ export async function installFakeBridge(page: Page, opts: FakeBridgeOptions = {}
 					setAnalyticsOptOut: async (optedOut: boolean) => optedOut,
 					onAnalyticsOptOut: () => () => undefined,
 					setCloudUser: async () => false,
+					setPlan: async () => false,
 					getGithubLogin: async () => null,
 					getLifetimeSessions: async () => null,
 					takeLaunchStart: async () => null,
 					takeResourceSummary: async () => null,
 					launchSteps: async () => null,
 					claimFirstOpen: async () => "ineligible" as const,
+					sendExitFeedbackEvent: () => undefined,
 					getPolicy: async () => ({ eventsEnabled: false, consentGeneration: "e2e", updatedAt: new Date(0).toISOString(), acknowledged: false, consentRenewalRequired: false, state: "applied", environmentVeto: true, durabilitySupported: false, reason: "environment_veto" }),
 					setEventsEnabled: async () => ({ eventsEnabled: false, consentGeneration: "e2e", updatedAt: new Date(0).toISOString(), acknowledged: false, consentRenewalRequired: false, state: "applied", environmentVeto: true, durabilitySupported: false, reason: "environment_veto" }),
 					onPolicy: () => () => false,
@@ -344,6 +349,11 @@ export async function installFakeBridge(page: Page, opts: FakeBridgeOptions = {}
 						activeTabId: "t1",
 						tabs: [{ id: "t1", url: "", title: "", active: true }],
 					}),
+					muteTab: async ({ viewId }: { viewId: string; tabId: string; muted: boolean }) => ({
+						viewId,
+						activeTabId: "t1",
+						tabs: [{ id: "t1", url: "", title: "", active: true }],
+					}),
 					openTab: async ({ viewId }: { viewId: string; url?: string }) => ({
 						viewId,
 						activeTabId: "t1",
@@ -388,6 +398,15 @@ export async function installFakeBridge(page: Page, opts: FakeBridgeOptions = {}
 					onProfileSwitchConfirm: unsubscribe,
 					onProfileSwitchFailed: unsubscribe,
 					onPageFocus: unsubscribe,
+				},
+				vault: {
+					list: async () => ({ available: false, items: [] }),
+					save: async () => {
+						throw new Error("Saved passwords need the desktop app");
+					},
+					delete: async () => undefined,
+					audit: async () => [],
+					reset: async () => undefined,
 				},
 				browserProfiles: {
 					list: async () => ({ profiles: [], defaultProfileId: null }),
@@ -494,6 +513,7 @@ export async function installFakeBridge(page: Page, opts: FakeBridgeOptions = {}
 					resolvePreviewUrl: async (_hostId: string, _sessionId: string, viewedUrl: string) => viewedUrl,
 					agentBrowserUrl: async () => "",
 					externalUrl: async (_hostId: string, url: string) => url,
+					loopbackReach: async () => false,
 					hostUpdate: async () => null,
 					checkHostUpdate: async (url: string) => {
 						throw new Error(`No fake remote for ${url}`);
@@ -1150,6 +1170,9 @@ export async function installFakeAgent(page: Page, opts: FakeAgentOptions = {}):
 					onKeyboardShortcutsHelp: unsubscribe,
 					onQuitConfirmRequest: unsubscribe,
 					resolveQuitConfirm: () => undefined,
+					onExitFeedbackRequest: () => () => undefined,
+					onExitFeedbackSecondClose: () => () => undefined,
+					reportExitFeedback: () => undefined,
 					onNewShellTerminalShortcut: unsubscribe,
 					onCloseShellTerminalShortcut: unsubscribe,
 					setCloseShellTerminalShortcutEnabled: () => undefined,
@@ -1308,12 +1331,14 @@ export async function installFakeAgent(page: Page, opts: FakeAgentOptions = {}):
 					setAnalyticsOptOut: async (optedOut: boolean) => optedOut,
 					onAnalyticsOptOut: () => () => undefined,
 					setCloudUser: async () => false,
+					setPlan: async () => false,
 					getGithubLogin: async () => null,
 					getLifetimeSessions: async () => null,
 					takeLaunchStart: async () => null,
 					takeResourceSummary: async () => null,
 					launchSteps: async () => null,
 					claimFirstOpen: async () => "ineligible" as const,
+					sendExitFeedbackEvent: () => undefined,
 					getPolicy: async () => ({ eventsEnabled: false, consentGeneration: "e2e", updatedAt: new Date(0).toISOString(), acknowledged: false, consentRenewalRequired: false, state: "applied", environmentVeto: true, durabilitySupported: false, reason: "environment_veto" }),
 					setEventsEnabled: async () => ({ eventsEnabled: false, consentGeneration: "e2e", updatedAt: new Date(0).toISOString(), acknowledged: false, consentRenewalRequired: false, state: "applied", environmentVeto: true, durabilitySupported: false, reason: "environment_veto" }),
 					onPolicy: () => () => false,
@@ -1378,6 +1403,11 @@ export async function installFakeAgent(page: Page, opts: FakeAgentOptions = {}):
 						activeTabId: "t1",
 						tabs: [{ id: "t1", url: "", title: "", active: true }],
 					}),
+					muteTab: async ({ viewId }: { viewId: string; tabId: string; muted: boolean }) => ({
+						viewId,
+						activeTabId: "t1",
+						tabs: [{ id: "t1", url: "", title: "", active: true }],
+					}),
 					openTab: async ({ viewId }: { viewId: string; url?: string }) => ({
 						viewId,
 						activeTabId: "t1",
@@ -1422,6 +1452,15 @@ export async function installFakeAgent(page: Page, opts: FakeAgentOptions = {}):
 					onProfileSwitchConfirm: unsubscribe,
 					onProfileSwitchFailed: unsubscribe,
 					onPageFocus: unsubscribe,
+				},
+				vault: {
+					list: async () => ({ available: false, items: [] }),
+					save: async () => {
+						throw new Error("Saved passwords need the desktop app");
+					},
+					delete: async () => undefined,
+					audit: async () => [],
+					reset: async () => undefined,
 				},
 				browserProfiles: {
 					list: async () => ({ profiles: [], defaultProfileId: null }),
@@ -1515,6 +1554,7 @@ export async function installFakeAgent(page: Page, opts: FakeAgentOptions = {}):
 					resolvePreviewUrl: async (_hostId: string, _sessionId: string, viewedUrl: string) => viewedUrl,
 					agentBrowserUrl: async () => "",
 					externalUrl: async (_hostId: string, url: string) => url,
+					loopbackReach: async () => false,
 					hostUpdate: async () => null,
 					checkHostUpdate: async (url: string) => {
 						throw new Error(`No fake remote for ${url}`);

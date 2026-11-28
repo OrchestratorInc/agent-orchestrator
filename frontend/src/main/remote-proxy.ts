@@ -1,3 +1,4 @@
+import { AoError } from "../../../packages/shared/telemetry/ao-error";
 import {
 	createServer,
 	request as httpRequest,
@@ -18,6 +19,7 @@ import { connect as netConnect, isIP, type AddressInfo, type Socket } from "node
 import type { Readable, Writable } from "node:stream";
 import { connect as tlsConnect, type TLSSocket } from "node:tls";
 import { createHmac, randomBytes, timingSafeEqual } from "node:crypto";
+import { once } from "node:events";
 import path from "node:path";
 import type { Duplex } from "node:stream";
 import { WebSocket, createWebSocketStream } from "ws";
@@ -49,8 +51,12 @@ export type ActiveProxy = {
 	isRenderUrl: (url: string) => boolean;
 	/** A preview's address for a browser outside AO; any other URL unchanged. */
 	externalUrl: (url: string) => string;
+	openLoopbackTunnel: (port: number, host?: string) => Promise<Duplex>;
+	loopbackReach: () => Promise<boolean>;
 	close: () => Promise<void>;
 };
+
+const UNUSED_PORT = 1;
 
 // "agent" is the host's agent browser (the Chromium the session's agent drives),
 // streamed through the daemon's agent-browser route. "render" is an agent page
@@ -63,6 +69,7 @@ type ProxyRequest = Readable & { headers: IncomingHttpHeaders; url?: string; met
 type ProxyResponse = Writable & {
 	headersSent: boolean;
 	writableFinished: boolean;
+	socket?: object | null;
 	writeHead(status: number, headers?: OutgoingHttpHeaders): unknown;
 	flushHeaders?: () => void;
 };
@@ -540,6 +547,56 @@ export async function startRemoteProxy(entry: RemoteEntry, rendererOrigin = REND
 		res.end('{"error":"remote daemon unreachable","code":"UPSTREAM_UNAVAILABLE","message":"remote daemon unreachable"}');
 	};
 
+	const openLoopbackTunnel = async (loopbackPort: number, host?: string): Promise<Duplex> => {
+		if (host && previewHosts.has(host) && (loopbackPort === port || loopbackPort === securePort)) {
+			const local = netConnect(loopbackPort, "127.0.0.1");
+			await once(local, "connect");
+			return local;
+		}
+		await verifyUpstream();
+		if (closing) throw new AoError("LOOPBACK_TUNNEL_CLOSED", "the host is disconnected");
+		const socket = new WebSocket(`${secure ? "wss" : "ws"}://${upstream.host}${prefix}/api/v1/loopback-tunnel?port=${loopbackPort}`, {
+			headers: { authorization: `Bearer ${entry.password}`, ...(entry.hostId ? { "x-ao-expected-host-id": entry.hostId } : {}) },
+			perMessageDeflate: false,
+			handshakeTimeout: timing.openMs * 3,
+			...(isIP(hostname) ? {} : { servername: hostname }),
+		});
+		const stream = webSocketTunnelStream(socket);
+		stream.on("error", () => undefined);
+		const drop = () => stream.destroy();
+		tunnels.add(drop);
+		stream.once("close", () => tunnels.delete(drop));
+		try {
+			await new Promise<void>((resolve, reject) => {
+				socket.once("open", () => resolve());
+				socket.once("unexpected-response", (request, response) => {
+					response.resume();
+					request.destroy();
+					const message = `localhost tunnel to port ${loopbackPort} answered ${response.statusCode}`;
+					reject(new AoError(response.headers["x-ao-loopback-refused"] === "1" ? "LOOPBACK_PORT_REFUSED" : "LOOPBACK_TUNNEL_UNAVAILABLE", message));
+				});
+				socket.once("error", reject);
+			});
+		} catch (error) {
+			stream.destroy();
+			throw error;
+		}
+		return stream;
+	};
+
+	const loopbackReach = (): Promise<boolean> =>
+		openLoopbackTunnel(UNUSED_PORT).then((tunnel) => {
+			tunnel.destroy();
+			return true;
+		}, (error: unknown) => error instanceof AoError && error.code === "LOOPBACK_PORT_REFUSED");
+
+	const unmanagedPreview = async (res: ProxyResponse, path: string): Promise<string | undefined> => {
+		if (!(res.socket as Partial<TLSSocket> | null | undefined)?.encrypted) return undefined;
+		const [, sessionId, tail] = /\/sessions\/([^/]+)\/preview\/app(\/.*)$/.exec(path) ?? [];
+		const source = sessionId && previewSessions.get(decodeURIComponent(sessionId))?.sourceHref;
+		return source && await loopbackReach() ? new URL(tail!, source).href : undefined;
+	};
+
 	const relayResponse = (
 		res: ProxyResponse,
 		status: number,
@@ -560,8 +617,15 @@ export async function startRemoteProxy(entry: RemoteEntry, rendererOrigin = REND
 		}
 		if (kind === "app" && status === 409 && upstreamHeaders["x-ao-preview-managed-required"] === "1") {
 			body.resume();
-			res.writeHead(409, { "content-type": "text/html; charset=utf-8", "cache-control": "no-store" });
-			res.end("<main style='font:16px system-ui;padding:24px'><h1>Remote preview needs a managed server</h1><p>Run <code>ao preview start</code> in this session on the host.</p></main>");
+			void unmanagedPreview(res, path).then((location) => {
+				if (location) {
+					res.writeHead(302, { location, "cache-control": "no-store" });
+					res.end();
+					return;
+				}
+				res.writeHead(409, { "content-type": "text/html; charset=utf-8", "cache-control": "no-store" });
+				res.end("<main style='font:16px system-ui;padding:24px'><h1>Remote preview needs a managed server</h1><p>Run <code>ao preview start</code> in this session on the host.</p></main>");
+			});
 			return;
 		}
 		let dropped = false;
@@ -912,8 +976,7 @@ export async function startRemoteProxy(entry: RemoteEntry, rendererOrigin = REND
 				(isIP(previewHost) === 6 && /^::ffff:7f[0-9a-f]{2}:/i.test(previewHost));
 			if (previewHost === previewHostForSession(sessionId)) kind = "static";
 			else if (parsed.protocol === "http:" && loopback) kind = "app";
-			else if (loopback) throw new Error("unsupported local preview protocol");
-			else if (previewHost.endsWith(".localhost")) throw new Error("preview does not belong to this session");
+			else if (/^ao-preview[-.].*\.localhost$/i.test(previewHost)) throw new Error("preview does not belong to this session");
 			else return sourceUrl;
 			// Per kind too: a static preview (HTML an agent wrote) must not share the app's storage.
 			const host = `ao-preview-${originMac(`${kind}\n${sessionId}`).toString("hex", 0, 16)}.localhost`;
@@ -981,6 +1044,8 @@ export async function startRemoteProxy(entry: RemoteEntry, rendererOrigin = REND
 			parsed.port = String(port);
 			return parsed.href;
 		},
+		openLoopbackTunnel,
+		loopbackReach,
 		close: () =>
 			new Promise((resolve) => {
 				// close() alone waits on keep-alive and tunnelled sockets forever;

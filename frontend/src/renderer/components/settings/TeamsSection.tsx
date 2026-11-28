@@ -497,7 +497,7 @@ function TeamPage({ team, onBack, undoNotice }: { team: OpenTeam; onBack: () => 
 								if (name !== data.team.name) rename.mutate(name);
 							}}
 						>
-							<Input value={renaming} autoFocus maxLength={80} onChange={(event) => { setRenaming(event.target.value); rename.reset(); }} aria-label={t("teams.name")} className="h-9 max-w-80 text-base" />
+							<Input value={renaming} autoFocus maxLength={80} onChange={(event) => { setRenaming(event.target.value); rename.reset(); }} aria-label={t("teams.name")} data-field="field" className="h-9 max-w-80 text-base" />
 							<Button type="submit" variant="primary" size="sm" disabled={!renaming.trim()}>{t("teams.save")}</Button>
 							<Button type="button" variant="ghost" size="sm" onClick={() => { setRenaming(null); rename.reset(); }}>{t("confirm.cancel")}</Button>
 						</form>

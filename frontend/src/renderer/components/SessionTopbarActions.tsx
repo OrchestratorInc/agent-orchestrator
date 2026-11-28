@@ -131,8 +131,7 @@ export function SessionTopbarActions({
 			{!isOrchestrator && supportsProjectActions ? (
 				<Tooltip>
 					<TooltipTrigger asChild>
-						{/* The guided tour lights this on a session's page too (GuidedTour). */}
-						<span className="inline-flex" style={noDragStyle} data-tour="orchestrator-header">
+						<span className="inline-flex" style={noDragStyle}>
 							<Button type="button" size="sm"
 								data-telemetry-id="topbar.open_orchestrator"
 								aria-label={orchestratorReplyLabel(t("shell.openOrchestrator"), orchestratorReply, t)}
