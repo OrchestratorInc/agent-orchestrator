@@ -91,7 +91,7 @@ describe("active turn controls", () => {
 
 	it("offers every PR the worker raised over the chat composer, leaving it in place", () => {
 		expect(screenSource).toContain("usePRSummaries(config && hasPullRequests ? [{ config, sessionId: session.id }] : [])");
-		expect(screenSource).toContain("useSessionPullRequests(workerSession, (number) => summaryConfig ? reviewSummaries.summaryFor(summaryConfig, session.id, number) : undefined)");
+		expect(screenSource).toContain("useSessionPullRequests(workerSession, (number) => summaryConfig ? reviewSummaries.summaryFor(summaryConfig, session.id, number) : undefined, currentHostId)");
 		expect(screenSource).toContain("pullRequests={pullRequests}");
 		expect(screenSource).toContain("onOpenPullRequest={(pr) => openPage(reviewRouteForPR(session.id, pr, currentHostId))}");
 		expect(screenSource).toContain("pullRequestListRequest={pullRequestListRequest}");

@@ -65,7 +65,8 @@ export function pullRequestSummaryForURL(
 		: undefined;
 }
 
-function pullRequestIdentity(value: string): { repo: string; number: number } | undefined {
+/** A pull request's repository and number, read from any of its web URLs. */
+export function pullRequestIdentity(value: string): { repo: string; number: number } | undefined {
 	try {
 		const parts = new URL(value).pathname.split("/").filter(Boolean);
 		const marker = parts.findIndex((part) => part === "pull" || part === "merge_requests");

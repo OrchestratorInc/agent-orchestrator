@@ -27,6 +27,8 @@ export type WorkerRowPullRequest = {
 	/** The board card's tones (`prLine`): open green, merged purple, closed red, a draft quiet. */
 	tone: Tone;
 	glyph: "git-pull-request" | "git-pull-request-draft" | "git-merge" | "git-pull-request-closed";
+	/** A merge the phone started is still running (see prMergeTracker). */
+	merging?: boolean;
 };
 
 // The live one leads: a worker that closed #12 and opened #15 is on #15.
@@ -44,12 +46,34 @@ export function leadOrdered(prs: readonly DashboardPR[]): DashboardPR[] {
 	return [...prs].sort((a, b) => LEAD_ORDER[prLifecycle(a)] - LEAD_ORDER[prLifecycle(b)] || b.number - a.number);
 }
 
-/** Null for a worker with no pull request. */
-export function workerRowPullRequest(session: Pick<DashboardSession, "pr" | "prs">): WorkerRowPullRequest | null {
-	const list: DashboardPR[] = session.prs?.length ? session.prs : session.pr ? [session.pr] : [];
+/** A merge the phone started on a pull request, if any (see prMergeTracker). */
+export type TrackedMergeOf = (pr: DashboardPR) => "merging" | "merged" | "failed" | undefined;
+
+const live = (pr: DashboardPR) => prLifecycle(pr) === "open" || prLifecycle(pr) === "draft";
+
+/**
+ * The pull requests with the merges the phone finished laid over them: each
+ * reads merged before the board's next poll says so. The others are the same
+ * objects, so a caller can tell which ones changed.
+ */
+export function withTrackedMerges(prs: readonly DashboardPR[], mergeOf?: TrackedMergeOf): DashboardPR[] {
+	if (!mergeOf) return [...prs];
+	return prs.map((pr) => pr?.number > 0 && live(pr) && mergeOf(pr) === "merged" ? { ...pr, state: "merged" as const, isDraft: false } : pr);
+}
+
+/**
+ * Null for a worker with no pull request. With `mergeOf`, the merges the phone
+ * started show before the board agrees: a finished one reads merged, and one
+ * still running leads the pill, in the merged hue, so it names the pull
+ * request being merged rather than calling another one merging.
+ */
+export function workerRowPullRequest(session: Pick<DashboardSession, "pr" | "prs">, mergeOf?: TrackedMergeOf): WorkerRowPullRequest | null {
+	const list = withTrackedMerges(session.prs?.length ? session.prs : session.pr ? [session.pr] : [], mergeOf);
 	const real = list.filter((pr) => pr?.number > 0);
 	if (real.length === 0) return null;
-	const lead = leadOrdered(real)[0];
+	const ordered = leadOrdered(real);
+	const merging = mergeOf ? ordered.find((pr) => live(pr) && mergeOf(pr) === "merging") : undefined;
+	const lead = merging ?? ordered[0];
 	const lifecycle = prLifecycle(lead);
 	const more = real.length - 1;
 	const counts = new Map<PRLifecycle, number>();
@@ -69,8 +93,9 @@ export function workerRowPullRequest(session: Pick<DashboardSession, "pr" | "prs
 		more,
 		moreTone: moreToneOf(counts),
 		moreLifecycles,
-		tone: PR_TONES[lifecycle],
-		glyph: PR_GLYPHS[lifecycle],
+		tone: merging ? PR_TONES.merged : PR_TONES[lifecycle],
+		glyph: merging ? PR_GLYPHS.merged : PR_GLYPHS[lifecycle],
+		...(merging ? { merging: true } : {}),
 	};
 }
 
@@ -111,11 +136,13 @@ export function workerRowAccessibilityLabel({ title, project, indicator, display
 }): string {
 	const state = indicator === "attention"
 		? displayStatus || "Needs you"
-		: indicator
-			? INDICATOR_WORDS[indicator]
-			: displayStatus || statusLabel;
+		: indicator === "ready" && pr?.merging
+			? "Merging"
+			: indicator
+				? INDICATOR_WORDS[indicator]
+				: displayStatus || statusLabel;
 	const parts = [title, state];
-	if (pr) parts.push(`Pull request ${pr.number}, ${pr.lifecycle}${pullRequestMoreWords(pr)}`);
+	if (pr) parts.push(`Pull request ${pr.number}, ${pr.merging ? "merging" : pr.lifecycle}${pullRequestMoreWords(pr)}`);
 	// One sentence for where it runs: "web on Studio", not "web. on Studio".
 	parts.push(machine ? `${project} on ${machine}` : project);
 	if (updated) parts.push(`Updated ${spokenAge(updated)}`);

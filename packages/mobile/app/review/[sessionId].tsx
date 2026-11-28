@@ -15,6 +15,7 @@ import type { ItemAction } from "../../lib/item-actions-menu.types";
 import { openGitHub } from "../../lib/openGitHub";
 import { useOpenPage } from "../../lib/pageNavigation";
 import { mergeReadiness, type MergeTone } from "../../lib/prMerge";
+import { prMergeKey, trackPRMerge, usePRMerge } from "../../lib/prMergeTracker";
 import { usePressFeedback } from "../../lib/pressFeedback";
 import { refreshControlColors } from "../../lib/refreshControlColors";
 import { useReviewBackend } from "../../lib/reviewBackend";
@@ -54,7 +55,7 @@ function ReviewDetailContent() {
 	const router = useRouter();
 	const openPage = useOpenPage();
 	const { sessionId, prUrl, prNumber, hostId: routeHostId } = useLocalSearchParams<{ sessionId: string; prUrl?: string; prNumber?: string; hostId?: string }>();
-	const { sessions, currentHostId, restore } = useApp();
+	const { sessions, currentHostId, restore, refresh: refreshBoard } = useApp();
 	// The paired machine's daemon, or Orchestrator Cloud for a cloud worker.
 	const { backend, signedOut } = useReviewBackend();
 	const hostMatches = hostRouteMatches(routeHostId, currentHostId);
@@ -95,16 +96,13 @@ function ReviewDetailContent() {
 	}, []);
 	// The comment the reply dock answers, docked where the merge bar sits.
 	const [replyTarget, setReplyTarget] = useState<ReviewReplyTarget>();
-	// The daemon learns a merge from its next GitHub observation, seconds after
-	// the merge call returns. Show the merge at once and poll until it agrees.
-	const [mergedURL, setMergedURL] = useState<string>();
 	const [error, setError] = useState("");
 	// Kept apart from `error`: a quiet poll clears that, and it renders far below the row.
 	const [workerError, setWorkerError] = useState("");
 	const [reviewNotice, setReviewNotice] = useState("");
 	const [dismissedAutoFailureId, setDismissedAutoFailureId] = useState<string>();
 	const [refreshing, setRefreshing] = useState(false);
-	const [mutation, setMutation] = useState<"review" | "restore" | string>();
+	const [pageMutation, setMutation] = useState<"review" | "restore" | string>();
 	// The reviewer row keeps clear of the button and menu laid over its end,
 	// whose width follows the label and the text size.
 	const [trailingWidth, setTrailingWidth] = useState<number>();
@@ -122,7 +120,6 @@ function ReviewDetailContent() {
 		latestLoad.current++;
 		setData(undefined);
 		setPRs([]);
-		setMergedURL(undefined);
 		setReadWorker(undefined);
 	}, [scope]);
 
@@ -193,12 +190,22 @@ function ReviewDetailContent() {
 	// Stable, with the list above, so the Comments section skips the page's other renders.
 	const cloudHost = isCloudHost(currentHostId);
 	const viewInFile = useCallback((file: string, line?: number) => openPage(fileRoute(sessionId, file, routeHostId, undefined, line)), [openPage, routeHostId, sessionId]);
-	const awaitingMerge = Boolean(mergedURL && observedPR && observedPR.url === mergedURL && observedPR.state !== "merged");
+	// The merge is kept for the app, not this page: one started here and still
+	// running, or finished, after a trip back to the list is shown on return.
+	const mergeKey = observedPR ? prMergeKey(currentHostId, observedPR.url) : undefined;
+	const trackedMerge = usePRMerge(mergeKey);
+	const merging = trackedMerge?.status === "merging";
+	// Blocks the page's other actions while the merge runs, as each of them does.
+	const mutation = pageMutation ?? (merging ? "merge" : undefined);
+	// Whoever reads the PR may still say open just after the merge returns. Show
+	// the merge at once and poll until it agrees; the tracker stops holding it
+	// after a minute.
+	const awaitingMerge = trackedMerge?.status === "merged" && observedPR?.state !== "merged";
 	useEffect(() => {
 		if (!awaitingMerge) return;
+		void load(true);
 		const timer = setInterval(() => void load(true), 2_000);
-		const giveUp = setTimeout(() => setMergedURL(undefined), 60_000);
-		return () => { clearInterval(timer); clearTimeout(giveUp); };
+		return () => clearInterval(timer);
 	}, [awaitingMerge, load]);
 	useEffect(() => {
 		if (review?.status !== "running" && !autoReviewEnabled) return;
@@ -315,16 +322,21 @@ function ReviewDetailContent() {
 	const pr = observedPR && awaitingMerge ? { ...observedPR, state: "merged" as const } : observedPR;
 	const merge = pr ? mergeReadiness(pr) : undefined;
 	const closedPR = pr?.state === "merged" || pr?.state === "closed";
-	const merging = mutation === "merge";
+	// Kept with the merge, so a page opened after it failed still says why.
+	const mergeError = trackedMerge?.status === "failed" && pr ? userFacingError(trackedMerge.error, `Could not merge PR #${pr.number}.`) : "";
 	// The swipe itself is the confirmation; only the screen reader path asks again.
+	// Everything after the call runs whether or not this page is still shown.
 	const runMerge = async (): Promise<boolean> => {
-		if (!pr || !merge?.canMerge || (mutation && !merging)) return false;
+		if (!pr || !mergeKey || !merge?.canMerge || mutation) return false;
 		const live = connection();
 		if (!live) return false;
-		setMutation("merge"); setError("");
-		try { await live.merge(sessionId, pr); setMergedURL(pr.url); haptics.success(); await load(true); return true; }
-		catch (value) { setError(userFacingError(value, `Could not merge PR #${pr.number}.`)); return false; }
-		finally { setMutation(undefined); }
+		setError("");
+		try { await trackPRMerge(mergeKey, () => live.merge(sessionId, pr)); }
+		catch { return false; }
+		haptics.success();
+		// The board, and the PR list and worker rows drawn from it, show the merge now.
+		void refreshBoard().catch(() => {});
+		return true;
 	};
 	const confirmMerge = () => {
 		if (!pr || !merge?.canMerge || mutation || !connection()) return;
@@ -412,7 +424,7 @@ function ReviewDetailContent() {
 				<Text style={[styles.inlineNoteText, { color: t.red }]}><Text style={styles.inlineNoteStrong}>Automatic review failed. </Text>{autoReviewFailure.body.trim()}</Text>
 				<Pressable accessibilityRole="button" accessibilityLabel="Dismiss automatic review failure" android_ripple={dismissFeedback.android_ripple} onPress={() => setDismissedAutoFailureId(autoReviewFailure.id)} style={({ pressed }) => [styles.dismiss, pressed && dismissFeedback.pressed]}><AppSymbol name="close" size={iconSize.md} color={t.red} /></Pressable>
 			</View> : null}
-			{error ? <Text accessibilityRole="alert" style={[styles.note, styles.noteError]}>{error}</Text> : null}
+			{error || mergeError ? <Text accessibilityRole="alert" style={[styles.note, styles.noteError]}>{error || mergeError}</Text> : null}
 
 			{/* On while the machine reconnects (backend null after an app switch), so
 			    its Open/Resolved choice and open rows survive; requests wait for it. */}
@@ -431,8 +443,8 @@ function ReviewDetailContent() {
 		    docked within thumb reach like a checkout's slide-to-pay. It stays after
 		    the merge as a purple "Merged" bar rather than vanishing. */}
 		{replyTarget ? <ReviewReplyDock key={replyTarget.comment.key} target={replyTarget} bottomInset={insets.bottom} connected={Boolean(backend)} onSend={(body) => reply(replyTarget, body)} onClose={() => setReplyTarget(undefined)} />
-		: pr && (merge?.canMerge || pr.state === "merged") ? <View style={[styles.mergeFooter, { paddingBottom: Math.max(insets.bottom, space.md) }]}>
-			<SwipeToMerge label={`Swipe to merge PR #${pr.number}`} busyLabel="Merging…" merged={pr.state === "merged"} mergedLabel={`Merged PR #${pr.number}`} busy={merging} disabled={Boolean(mutation) && !merging} onMerge={runMerge} onAccessibilityActivate={confirmMerge} />
+		: pr && (merge?.canMerge || merging || pr.state === "merged") ? <View style={[styles.mergeFooter, { paddingBottom: Math.max(insets.bottom, space.md) }]}>
+			<SwipeToMerge label={`Swipe to merge PR #${pr.number}`} busyLabel="Merging…" merged={pr.state === "merged"} mergedLabel={`Merged PR #${pr.number}`} busy={merging} disabled={Boolean(pageMutation)} onMerge={runMerge} onAccessibilityActivate={confirmMerge} />
 		</View> : null}
 		</View>
 	);

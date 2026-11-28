@@ -53,6 +53,7 @@ export const PRCard = memo(function PRCard({
 	showProject = false,
 	position = "only",
 	now,
+	merging = false,
 	onLinkCopied,
 }: {
 	pr: DashboardPR;
@@ -65,6 +66,8 @@ export const PRCard = memo(function PRCard({
 	position?: GroupedRowPosition;
 	/** The current time, passed so the row's age re-renders as it changes. */
 	now?: number;
+	/** A merge started from its page is still running. */
+	merging?: boolean;
 	/** Called once the pull request's link is on the clipboard. */
 	onLinkCopied?: () => void;
 }) {
@@ -85,7 +88,7 @@ export const PRCard = memo(function PRCard({
 	// The repository's own name, without its owner.
 	const project = (summary?.repo || session.projectId || "Standalone").split("/").pop() || "Standalone";
 	const place = [hostName, showProject || hostName ? project : undefined].filter(Boolean).join(" · ");
-	const status = prRowStatus(pr, summary);
+	const status = merging ? { text: "Merging…", tone: "merged" as const } : prRowStatus(pr, summary);
 	// Where the pull request is, then what kind of change it is: the scope only
 	// fills the line when no status needs it.
 	const context = place || (status ? "" : scope ?? "");

@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import type { DashboardPR, SessionPRSummary } from "./api";
 import type { SessionPullRequests } from "./sessionPullRequests";
 import { useSessionPullRequests } from "./useSessionPullRequests";
+import { prMergeKey, resetPRMerges, trackPRMerge } from "./prMergeTracker";
 
 Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
 const pr = (number: number, state: "open" | "merged" | "closed"): DashboardPR => ({ number, url: "", state }) as DashboardPR;
@@ -10,7 +11,7 @@ const titled = (number: number, title: string) => ({ number, title, state: "open
 
 let renderer: ReactTestRenderer | undefined;
 let seen: (SessionPullRequests | undefined)[] = [];
-afterEach(() => { act(() => renderer?.unmount()); renderer = undefined; seen = []; });
+afterEach(() => { act(() => renderer?.unmount()); renderer = undefined; seen = []; resetPRMerges(); });
 
 function Harness({ prs, titles }: { prs: DashboardPR[]; titles: Record<number, string> }) {
 	seen.push(useSessionPullRequests({ prs }, (n) => (titles[n] ? titled(n, titles[n]) : undefined)));
@@ -34,6 +35,25 @@ describe("useSessionPullRequests", () => {
 		expect(seen[1]!.rows[0].title).toBe("Create brand doc");
 		act(() => renderer!.update(<Harness prs={[pr(9137, "merged"), pr(9125, "merged")]} titles={{ 9137: "Create brand doc" }} />));
 		expect(seen[2]!.lead.state).toBe("merged");
+	});
+
+	// Left mid-merge, the PR page no longer shows it: the chat's chip does.
+	it("follows a merge started from the PR page on the same machine", async () => {
+		const url = "https://forge.test/pr/9137";
+		const open = { ...pr(9137, "open"), url } as DashboardPR;
+		function OnHost({ hostId }: { hostId: string }) {
+			seen.push(useSessionPullRequests({ prs: [open] }, () => undefined, hostId));
+			return null;
+		}
+		let finish!: () => void;
+		const merge = trackPRMerge(prMergeKey("mac", url), () => new Promise<void>((resolve) => { finish = resolve; }));
+		act(() => { renderer = create(<OnHost hostId="other" />); });
+		expect(seen.at(-1)!.leadMerging).toBeUndefined();
+		act(() => renderer!.update(<OnHost hostId="mac" />));
+		expect(seen.at(-1)!.leadMerging).toBe(true);
+		await act(async () => { finish(); await merge; });
+		expect(seen.at(-1)!.leadMerging).toBeUndefined();
+		expect(seen.at(-1)!.rows[0].lifecycle).toBe("merged");
 	});
 
 	it("is undefined with no pull request", () => {

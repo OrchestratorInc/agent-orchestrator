@@ -419,7 +419,7 @@ export function ChatSessionScreen({ session: boardSession }: { session: MobileCh
 	// too, so the card stays put while an app switch has the connection down.
 	const reviewSummaries = usePRSummaries(config && hasPullRequests ? [{ config, sessionId: session.id }] : []);
 	const summaryConfig = useLastVerifiedConfig(config, machine);
-	const pullRequests = useSessionPullRequests(workerSession, (number) => summaryConfig ? reviewSummaries.summaryFor(summaryConfig, session.id, number) : undefined);
+	const pullRequests = useSessionPullRequests(workerSession, (number) => summaryConfig ? reviewSummaries.summaryFor(summaryConfig, session.id, number) : undefined, currentHostId);
 
 	// The blocking request. It takes the composer's place until it is answered.
 	// Computed here rather than at render because the back-swipe below is a hook

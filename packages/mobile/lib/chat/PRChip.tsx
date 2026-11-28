@@ -12,9 +12,17 @@ import { fontScaleCap, iconSize, space, type } from "../tokens";
 /** Waiting on CI or a reviewer. */
 const pending = { ios: "clock", android: "schedule" } as const;
 
+/**
+ * The chip's status: what to do next, or "Merging…" while a merge the phone
+ * started from the PR page runs (see prMergeTracker).
+ */
+export function prChipHeadline(pr: DashboardPR, summary?: SessionPRSummary, merging = false): { text: string; tone: Tone } {
+	return merging ? { text: "Merging…", tone: "merged" } : prReviewPromptHeadline(pr, summary);
+}
+
 /** What the composer's PR chip says to a screen reader, the session's other PRs included. */
-export function prChipAccessibilityLabel(pr: DashboardPR, summary?: SessionPRSummary, badge?: WorkerRowPullRequest): string {
-	return `Pull request ${pr.number}, ${prReviewPromptHeadline(pr, summary).text}${badge ? pullRequestMoreWords(badge) : ""}`;
+export function prChipAccessibilityLabel(pr: DashboardPR, summary?: SessionPRSummary, badge?: WorkerRowPullRequest, merging = false): string {
+	return `Pull request ${pr.number}, ${prChipHeadline(pr, summary, merging).text}${badge ? pullRequestMoreWords(badge) : ""}`;
 }
 
 /**
@@ -22,15 +30,17 @@ export function prChipAccessibilityLabel(pr: DashboardPR, summary?: SessionPRSum
  * the one status that decides what to do next, in that status's colour. The
  * chip opens the review, where the rest of the PR's state lives.
  */
-export function PRChipContent({ pr, summary, more }: {
+export function PRChipContent({ pr, summary, more, merging = false }: {
 	pr: DashboardPR;
 	summary?: SessionPRSummary;
 	/** The session's other PRs: a `+N` in their tone (see workerRowPullRequest's moreTone). */
 	more?: { count: number; tone: Tone | null };
+	/** A merge of `pr` started from its page is still running. */
+	merging?: boolean;
 }) {
 	const t = useTheme();
 	const styles = useThemedStyles(makeStyles);
-	const headline = prReviewPromptHeadline(pr, summary);
+	const headline = prChipHeadline(pr, summary, merging);
 	const color = toneColor(t, headline.tone);
 	return <>
 		<Feather name="git-pull-request" size={iconSize.xs} color={t.accent} />
@@ -52,7 +62,7 @@ function statusIcon(status: string): ChromeIcon {
 	if (status.startsWith("CI passing") || status === "Approved") return "checkCircle";
 	if (status.startsWith("CI failing") || status.includes("Conflict") || status === "Blocked" || status === "Changes requested" || status.includes("Unresolved")) return "error";
 	if (status.startsWith("CI running") || status.includes("pending") || status === "Unstable") return pending;
-	if (status === "Mergeable" || status === "Ready to merge" || status === "Merged") return "git-merge";
+	if (status === "Mergeable" || status === "Ready to merge" || status === "Merging…" || status === "Merged") return "git-merge";
 	return "git-pull-request";
 }
 
