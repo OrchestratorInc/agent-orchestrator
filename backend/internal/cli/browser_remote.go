@@ -44,6 +44,16 @@ func remoteBrowserForward(getenv func(string) string, args []string) (*remoteBro
 	if len(args) == 0 || args[0] != "browser" {
 		return nil, nil, nil
 	}
+	// The remote service has no batch command: AO runs the batch itself and
+	// forwards each step on its own.
+	for _, arg := range args[1:] {
+		if !strings.HasPrefix(arg, "-") {
+			if arg == "batch" {
+				return nil, nil, nil
+			}
+			break
+		}
+	}
 	baseURL := strings.TrimSpace(getenv(envAgentBrowserURL))
 	if baseURL == "" {
 		return nil, nil, nil

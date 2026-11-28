@@ -1,0 +1,24 @@
+T1 form single-step          calls=10  cli_ms=  2510  Welcome Ada Lovelace (Designer) from Analytical Engines
+T1 form batch                calls= 2  cli_ms=  2594  Welcome Ada Lovelace (Designer) from Analytical Engines
+T2 search single-step        calls= 9  cli_ms=  2163  Price: $12.50
+T2 search batch              calls= 3  cli_ms=   585  Price: $12.50
+T3 login single-step         calls= 7  cli_ms=  1492  Plan: Pro
+T3 login batch               calls= 2  cli_ms=  1376  Plan: Pro
+T1 form single-step          calls=10  cli_ms=  2407  Welcome Ada Lovelace (Designer) from Analytical Engines
+T1 form batch                calls= 2  cli_ms=  2339  Welcome Ada Lovelace (Designer) from Analytical Engines
+T2 search single-step        calls= 9  cli_ms=   689  Price: $12.50
+T2 search batch              calls= 3  cli_ms=   623  Price: $12.50
+T3 login single-step         calls= 7  cli_ms=  1364  Plan: Pro
+T3 login batch               calls= 2  cli_ms=  1456  Plan: Pro
+T1 form single-step          calls=10  cli_ms=  2572  Welcome Ada Lovelace (Designer) from Analytical Engines
+T1 form batch                calls= 2  cli_ms=  2869  Welcome Ada Lovelace (Designer) from Analytical Engines
+T2 search single-step        calls= 9  cli_ms=  3146  Price: $12.50
+T2 search batch              calls= 3  cli_ms=  2235  Price: $12.50
+T3 login single-step         calls= 7  cli_ms=  3023  Plan: Pro
+T3 login batch               calls= 2  cli_ms=  1763  Plan: Pro
+T1 form single-step          calls=10  cli_ms=  4686  out_chars= 1520  Welcome Ada Lovelace (Designer) from Analytical Engines
+T1 form batch                calls= 2  cli_ms=  3197  out_chars= 1176  Welcome Ada Lovelace (Designer) from Analytical Engines
+T2 search single-step        calls= 9  cli_ms=  3117  out_chars=  696  Price: $12.50
+T2 search batch              calls= 3  cli_ms=  2596  out_chars=  845  Price: $12.50
+T3 login single-step         calls= 7  cli_ms=  2051  out_chars=  945  Plan: Pro
+T3 login batch               calls= 2  cli_ms=  1866  out_chars=  715  Plan: Pro
