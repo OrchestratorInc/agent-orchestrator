@@ -2755,7 +2755,11 @@ func (s *Service) SetConfigOption(
 		}
 	}
 	options = permissionConfigOptions(record.Harness, options)
-	settings, _ := settingsFromConfigOptions(previous, options)
+	selectedMode := ""
+	if configID == "mode" {
+		selectedMode = value.Select
+	}
+	settings, _ := settingsFromConfigOptions(previous, options, selectedMode)
 	if record.Harness == domain.HarnessClaudeCode {
 		// Provider-owned defaults stay implicit so future Claude defaults still apply.
 		if settings.Model == "default" {
@@ -2810,6 +2814,7 @@ func restoreOpenCodeMode(ctx context.Context, conv ports.ChatConversation, mode 
 func settingsFromConfigOptions(
 	settings domain.ConversationSettings,
 	options []ports.ChatConfigOption,
+	selectedMode string,
 ) (domain.ConversationSettings, bool) {
 	next := settings
 	hasEffort := false
@@ -2817,8 +2822,9 @@ func settingsFromConfigOptions(
 		for _, choice := range option.Choices {
 			if choice.Value == option.Current.Select && choice.PermissionMode != "" {
 				// agy acp reports accept-edits for AO's auto and bypass tiers too,
-				// so the reported mode is display-only when it would downgrade them.
-				if choice.Value == "accept-edits" &&
+				// so a passive echo must not downgrade them. An explicit mode
+				// selection still applies the stricter tier.
+				if choice.Value == "accept-edits" && choice.Value != selectedMode &&
 					(settings.ApprovalMode == domain.PermissionModeAuto || settings.ApprovalMode == domain.PermissionModeBypassPermissions) {
 					continue
 				}
