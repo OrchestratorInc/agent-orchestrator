@@ -15,7 +15,7 @@ vi.mock("./host-clients", () => ({
 	baseUrlForHost: (hostId: string) => h.hosts.get(hostId),
 }));
 
-import { toWireAttachments, uploadAttachmentFile } from "./attachment-uploads";
+import { inlineStagedAttachments, toWireAttachments, uploadAttachmentFile } from "./attachment-uploads";
 
 const uploaded = (uploadId: string) => new Response(JSON.stringify({ uploadId, bytes: 3 }), { status: 201 });
 
@@ -62,6 +62,16 @@ describe("attachment uploads", () => {
 			{ mimeType: "text/plain", data: "aGk=" },
 			{ mimeType: "application/octet-stream", uploadId: "upload-d" },
 		]);
+	});
+
+	it("names a staged image that is gone, so the composer can ask for it again, and leaves other read failures retryable", async () => {
+		const image = [{ mimeType: "image/png", data: "", path: ".ao/attachments/attachment-a.png" }];
+		h.fetch.mockResolvedValueOnce(new Response("", { status: 404 }));
+		await expect(inlineStagedAttachments(image, "s-1")).rejects.toMatchObject({ code: "ATTACHMENT_NOT_FOUND" });
+		h.fetch.mockResolvedValueOnce(new Response("", { status: 502 }));
+		const error = await inlineStagedAttachments(image, "s-1").catch((caught: unknown) => caught);
+		expect(error).toBeInstanceOf(Error);
+		expect((error as { code?: string }).code).toBeUndefined();
 	});
 
 	it("refuses a disconnected remote machine", async () => {

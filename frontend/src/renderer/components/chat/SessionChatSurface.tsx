@@ -811,13 +811,15 @@ export const SessionChatSurface = memo(function SessionChatSurface({
       throw Object.assign(new Error("File annotations cannot be sent to side chats yet. Send in the main chat or remove the file annotations."), { code: "CHAT_FILE_REFERENCES_SIDE_UNSUPPORTED" });
      }
      if (btw) {
+						// A side chat takes images as bytes, not as this session's staged paths.
+						// Read first: an image that is gone is refused before a side opens.
+						const sideAttachments = await inlineStagedAttachments(attachments, session.id, hostId);
 						openSideInspector();
 						const side = await sideChats.create(undefined, true, clientMessageId);
 						const question = text.slice(btw[0].length).trim();
 						if (question || excerpts?.length || attachments?.length) {
 							// Retain the main draft if handing the request to the side fails.
-							// A side chat takes images as bytes, not as this session's staged paths.
-							await sideChats.send(side.id, question, await inlineStagedAttachments(attachments, session.id, hostId), excerpts, true, clientMessageId);
+							await sideChats.send(side.id, question, sideAttachments, excerpts, true, clientMessageId);
 						}
 						// The main transcript keeps the reader's place: /btw is for asking aside.
 						return SENT_OUTSIDE_TRANSCRIPT;

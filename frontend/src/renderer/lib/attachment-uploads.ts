@@ -93,7 +93,9 @@ export async function inlineStagedAttachments(
 		if (!path) return attachment;
 		const route = `/api/v1/sessions/${encodeURIComponent(sessionId)}/preview/files/${path.split("/").map(encodeURIComponent).join("/")}`;
 		const response = await reportingFetch(new Request(`${uploadBase(hostId)}${route}`));
-		if (!response.ok) throw new Error("An attached image couldn’t be read back. Attach it again.");
+		// A file that is gone is a definite answer the composer knows: attach it again.
+		if (response.status === 404) throw Object.assign(new Error("An attached image is gone. Attach it again."), { code: "ATTACHMENT_NOT_FOUND" });
+		if (!response.ok) throw new Error("An attached image couldn’t be read back. Try again.");
 		return { ...attachment, data: await readBlobAsBase64(await response.blob()) };
 	}));
 }
