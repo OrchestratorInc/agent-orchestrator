@@ -6,6 +6,7 @@ import { backOr } from "../../../../lib/backNavigation";
 import { saveEnvironmentMachine } from "../../../../lib/environmentActions";
 import { activeHost, findHost, type Host } from "../../../../lib/hosts";
 import { MachineEditorForm } from "../../../../lib/MachineEditorForm";
+import { hostIdFromMachineRoute, machineRouteId } from "../../../../lib/machineRoute";
 import { Spinner } from "../../../../lib/Spinner";
 import { useApp } from "../../../../lib/store";
 import { useTheme } from "../../../../lib/ThemeProvider";
@@ -17,11 +18,14 @@ export { RouteErrorBoundary as ErrorBoundary } from "../../../../lib/RouteErrorB
 
 /** Edits a paired machine's name, icon, and the route the phone reaches it by. */
 export default function MachineEditScreen() {
-	const { id } = useLocalSearchParams<{ id: string }>();
+	const { id: segment } = useLocalSearchParams<{ id: string }>();
+	// A machine with no id yet is addressed by a stand-in (lib/machineRoute).
+	const id = hostIdFromMachineRoute(segment);
 	const t = useTheme();
 	const [machine, setMachine] = useState<{ host: Host; isDefault: boolean } | null | undefined>(undefined);
 	useEffect(() => {
 		let current = true;
+		if (id === null) { setMachine(null); return; }
 		void Promise.all([findHost(id), activeHost()])
 			.then(([host, selected]) => { if (current) setMachine(host ? { host, isDefault: selected?.id === host.id } : null); })
 			.catch(() => { if (current) setMachine(null); });
@@ -110,7 +114,7 @@ function MachineEditor({ host, isDefault }: { host: Host; isDefault: boolean }) 
 		]);
 	});
 	// Leave once the save has landed.
-	useEffect(() => { if (saved) backOr(router, `/settings/machine/${host.id}`); }, [host.id, router, saved]);
+	useEffect(() => { if (saved) backOr(router, `/settings/machine/${machineRouteId(host.id)}`); }, [host.id, router, saved]);
 
 	return (
 		<>

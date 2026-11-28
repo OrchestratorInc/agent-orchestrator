@@ -219,6 +219,16 @@ describe("Settings", () => {
 		expect(fixtures.push).toHaveBeenCalledWith({ pathname: "/settings/machine/[id]", params: { id: "dev" } });
 	});
 
+	// A machine carried over from the single-server config has no id until it
+	// first connects; an offline one keeps it empty. Pushed as-is, its page
+	// resolved to /settings/machine/ and showed "Unmatched Route".
+	it("opens the page of a machine that has no id yet", async () => {
+		fixtures.hosts = [{ ...DEV, id: "" }];
+		const root = await renderSettings();
+		act(() => row(root, "Dev").props.onPress());
+		expect(fixtures.push).toHaveBeenCalledWith({ pathname: "/settings/machine/[id]", params: { id: "unidentified" } });
+	});
+
 	it("marks the default only beside another machine, and names it on its repair row", async () => {
 		fixtures.hosts = [DEV, LAB];
 		fixtures.hostStates = [{ hostId: "lab", connection: "open", loading: false }];
