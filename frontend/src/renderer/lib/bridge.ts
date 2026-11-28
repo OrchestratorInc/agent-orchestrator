@@ -56,6 +56,9 @@ export const aoBridge: AoBridge =
 			onKeyboardShortcutsHelp: () => () => undefined,
 			onQuitConfirmRequest: () => () => undefined,
 			resolveQuitConfirm: () => undefined,
+			onExitFeedbackRequest: () => () => undefined,
+			onExitFeedbackSecondClose: () => () => undefined,
+			reportExitFeedback: () => undefined,
 			onNewShellTerminalShortcut: () => () => undefined,
 			onCloseShellTerminalShortcut: () => () => undefined,
 			setCloseShellTerminalShortcutEnabled: () => undefined,
@@ -247,6 +250,7 @@ export const aoBridge: AoBridge =
 			takeResourceSummary: async () => null,
 			launchSteps: async () => null,
 			claimFirstOpen: async () => "ineligible" as const,
+			sendExitFeedbackEvent: () => undefined,
 			getPolicy: async () => ({ eventsEnabled: false, consentGeneration: "preview", updatedAt: new Date(0).toISOString(), acknowledged: false, state: "applied", environmentVeto: true, durabilitySupported: false, reason: "environment_veto" }),
 			setEventsEnabled: async () => ({ eventsEnabled: false, consentGeneration: "preview", updatedAt: new Date(0).toISOString(), acknowledged: false, state: "applied", environmentVeto: true, durabilitySupported: false, reason: "environment_veto" }),
 			onPolicy: () => () => false,
@@ -356,6 +360,7 @@ export const aoBridge: AoBridge =
 			getTabs: async (viewId: string) => ({ viewId, activeTabId: "t1", tabs: [] }),
 			selectTab: async ({ viewId, tabId }) => ({ viewId, activeTabId: tabId, tabs: [] }),
 			closeTab: async ({ viewId }) => ({ viewId, activeTabId: "", tabs: [] }),
+			muteTab: async ({ viewId, tabId }) => ({ viewId, activeTabId: tabId, tabs: [] }),
 			openTab: async ({ viewId }) => ({ viewId, activeTabId: "", tabs: [] }),
 			getProfile: async (viewId) => ({ viewId, profileId: null, temporary: true }),
 			showProfileMenu: async () => undefined,
@@ -390,6 +395,15 @@ export const aoBridge: AoBridge =
 			onAnnotationSubmit: () => () => undefined,
 			onAnnotationCancel: () => () => undefined,
 			onAnnotationState: () => () => undefined,
+		},
+		vault: {
+			list: async () => ({ available: false, items: [] }),
+			save: async () => {
+				throw new AoError("VAULT_DESKTOP_REQUIRED", "Saved passwords need the desktop app");
+			},
+			delete: async () => undefined,
+			audit: async () => [],
+			reset: async () => undefined,
 		},
 		browserProfiles: {
 			list: async () => ({ profiles: [], defaultProfileId: null }),

@@ -8,7 +8,7 @@ import {
 	ARTIFACT_SESSION_SCOPES,
 	ARTIFACT_SIGN_IN_PROMPT_REASONS,
 } from "./artifact-telemetry";
-import { isLoopbackHostname } from "./loopback";
+import { sanitizeSensitiveString } from "../../shared/telemetry-text";
 import { ONBOARDING_EVENTS, onboardingRateLimitKey, sanitizeOnboardingProperties } from "./onboarding-telemetry-schema";
 import { ORCHESTRATOR_SPAWN_SOURCES } from "./orchestrator-spawn-sources";
 import { IMPORTABLE_AGENTS } from "./session-import-agents";
@@ -24,19 +24,18 @@ import { installRendererErrorHandlers } from "../../shared/renderer-error-handle
 import { launchProperties, takeLaunchStart } from "./launch-telemetry";
 import { PERFORMANCE_EVENTS, sanitizePerformanceProperties } from "./performance-telemetry-properties";
 import { DAEMON_EXIT_REASONS } from "../../shared/daemon-exit-reason";
+import { EXIT_FEEDBACK_EVENTS, sanitizeExitFeedbackProperties } from "../../shared/exit-feedback";
+
+export { sanitizeExitFeedbackProperties };
 
 const POSTHOG_KEY = import.meta.env.VITE_AO_POSTHOG_KEY?.trim() || DEFAULT_POSTHOG_PROJECT_KEY;
 const POSTHOG_HOST = import.meta.env.VITE_AO_POSTHOG_HOST?.trim() || DEFAULT_POSTHOG_HOST;
 const RELEASE_TAG = "2026-01-30";
 // 3 marks the renamed events; 2 used the ao.v2.* names. Matches the daemon.
 const TELEMETRY_SCHEMA_VERSION = 3;
-const REDACTED_LOCAL_URL = "[redacted-local-url]";
-const REDACTED_LOCAL_PATH = "[redacted-local-path]";
 const ACTIVE_STORAGE_KEY = "ao.telemetry.activeSlotsByDate";
 const ROUTE_VIEW_STORAGE_KEY = "ao.telemetry.routeViewsByDate";
 const UPDATE_FAILURE_STORAGE_KEY = "ao.telemetry.updateFailures.v1";
-const EMBEDDED_LOCAL_URL_PATTERN =
-	/(?:\bfile:\/\/\/\S+|\bapp:\/\/renderer\/\S+|\bhttps?:\/\/(?:localhost|127\.0\.0\.1|\[::1\])(?::\d+)?\S*)/gi;
 // session_management_summary keeps its shipped exported name; every other
 // event is exported under the name it is captured with.
 const POSTHOG_EVENT_NAME_ALIASES: Record<string, string> = {
@@ -851,39 +850,15 @@ async function hashedTelemetryID(value: unknown): Promise<string | undefined> {
 	return sha256Hex(trimmed);
 }
 
-function isLocalURL(value: string): boolean {
-	try {
-		const url = new URL(value);
-		return (
-			url.protocol === "file:" ||
-			(url.protocol === "app:" && url.host === "renderer") ||
-			isLoopbackHostname(url.hostname)
-		);
-	} catch {
-		return false;
-	}
-}
-
-function redactEmbeddedLocalURLs(value: string): string {
-	return value.replace(EMBEDDED_LOCAL_URL_PATTERN, REDACTED_LOCAL_URL);
-}
-
-function redactEmbeddedAbsolutePaths(value: string): string {
-	return value
-		.replace(/(?:\/Users\/|\/home\/|\/tmp\/|\/private\/var\/|\/var\/folders\/)\S+/g, REDACTED_LOCAL_PATH)
-		.replace(/\b[A-Za-z]:\\[^\s)]+/g, REDACTED_LOCAL_PATH);
-}
-
-function sanitizeSensitiveString(value: string): string {
-	const trimmed = value.trim();
-	if (!trimmed) return trimmed;
-	if (isLocalURL(trimmed)) return REDACTED_LOCAL_URL;
-	return redactEmbeddedAbsolutePaths(redactEmbeddedLocalURLs(trimmed));
-}
-
 function sanitizePostHogValue(value: unknown): unknown {
 	if (typeof value === "string") return sanitizeSensitiveString(value);
 	if (Array.isArray(value)) return value.map((item) => sanitizePostHogValue(item));
+	// The SDK stamps every event with a Date. Rebuilding it gives {}, and an
+	// immediately sent event such as $identify then goes out with "timestamp": {},
+	// which PostHog does not store. A Date serializes to an ISO string, no path
+	// or URL. Any other object keeps the rebuild, which reads only its own
+	// enumerable values (a URL instance would otherwise serialize its href).
+	if (value instanceof Date) return value;
 	if (value && typeof value === "object") {
 		return Object.fromEntries(Object.entries(value).map(([key, nested]) => [key, sanitizePostHogValue(nested)]));
 	}
@@ -1092,6 +1067,8 @@ function sanitizeArtifactProperties(event: string, properties?: TelemetryPropert
 	return safe;
 }
 
+const EXIT_FEEDBACK_EVENT_SET = new Set<string>(EXIT_FEEDBACK_EVENTS);
+
 function agentList(value: unknown): string | undefined {
 	if (typeof value !== "string") return undefined;
 	const agents = value.split(",").filter((agent) => IMPORTABLE_AGENTS.has(agent));
@@ -1117,6 +1094,11 @@ export async function sanitizeRendererProperties(
 			}
 			break;
 		case "ao.app.loaded":
+			break;
+		case "ao.exit_feedback.shown":
+		case "ao.exit_feedback.answered":
+		case "ao.exit_feedback.dismissed":
+			Object.assign(safe, sanitizeExitFeedbackProperties(event, properties));
 			break;
 		case "ao.agents.missing":
 			if (properties?.reason === "none_installed") safe.reason = properties.reason;
@@ -1487,7 +1469,11 @@ export function buildPostHogConfig(distinctId: string, identified = false): Post
 			distinctID: distinctId,
 			isIdentifiedID: identified,
 		},
-		before_send: (event) => (event ? sanitizePostHogCaptureResult(event) : event),
+		before_send: (event) => {
+			if (!event) return event;
+			const safe = sanitizePostHogCaptureResult(event);
+			return handOffExitFeedbackEvent(safe as unknown as Record<string, unknown>) ? null : safe;
+		},
 		session_recording: {
 			maskCapturedNetworkRequestFn: (request) => {
 				if (request.name) {
@@ -1497,6 +1483,44 @@ export function buildPostHogConfig(distinctId: string, identified = false): Post
 			},
 		},
 	};
+}
+
+// Set by before_send when it hands an exit feedback event to main.
+let exitFeedbackHandedOff = false;
+
+/**
+ * The exit feedback events are captured right before the app quits, where the
+ * SDK's batch would die with the window. The SDK still builds each event
+ * (identity, context, cleanup); main posts it and holds the quit until it is
+ * delivered or 2 s pass. Serialized here, so the timestamp leaves as ISO text.
+ */
+export function handOffExitFeedbackEvent(event: Record<string, unknown>): boolean {
+	if (typeof event.event !== "string" || !EXIT_FEEDBACK_EVENT_SET.has(event.event)) return false;
+	try {
+		aoBridge.telemetry.sendExitFeedbackEvent(JSON.parse(JSON.stringify(event)) as Record<string, unknown>);
+		exitFeedbackHandedOff = true;
+		return true;
+	} catch {
+		// Let the SDK try instead.
+		return false;
+	}
+}
+
+/**
+ * Whether the exit feedback prompt may show: usage analytics on and none of its
+ * events silenced by the kill switch. Waits at most 1 s for telemetry to start.
+ */
+export async function exitFeedbackAllowed(): Promise<boolean> {
+	if (analyticsOptedOut) return false;
+	let timeout: ReturnType<typeof setTimeout> | undefined;
+	const ready = await Promise.race([
+		initTelemetry().catch(() => false),
+		new Promise<boolean>((resolve) => {
+			timeout = setTimeout(() => resolve(false), 1_000);
+		}),
+	]);
+	clearTimeout(timeout);
+	return ready && !analyticsOptedOut && !EXIT_FEEDBACK_EVENTS.some((event) => isDeniedEvent(event));
 }
 
 export async function initTelemetry(): Promise<boolean> {
@@ -1688,7 +1712,8 @@ export async function captureRendererEvent(event: string, properties?: Record<st
 	const safeProperties = withTelemetryContext(sanitizedProperties);
 	let captured = false;
 	try {
-		captured = Boolean(posthog.capture(postHogEventName(event), safeProperties));
+		exitFeedbackHandedOff = false;
+		captured = Boolean(posthog.capture(postHogEventName(event), safeProperties)) || exitFeedbackHandedOff;
 		if (captured && LIFETIME_SESSION_REFRESH_EVENTS.has(event)) void refreshLifetimeSessions();
 		return captured;
 	} finally {

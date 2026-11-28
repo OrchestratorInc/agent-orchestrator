@@ -1256,8 +1256,9 @@ describe("SessionView", () => {
 
 		fireEvent.click(screen.getByRole("button", { name: "open artifact feedback" }));
 
-		await waitFor(() => expect(artifactFeedbackConsumes).toEqual([1]));
-		await waitFor(() => expect(screen.queryByText("feedback request 1")).not.toBeInTheDocument());
+		// Request keys count across the app's life, so only how many were consumed matters.
+		await waitFor(() => expect(artifactFeedbackConsumes).toHaveLength(1));
+		await waitFor(() => expect(screen.queryByText(/^feedback request /)).not.toBeInTheDocument());
 		expect(screen.getByText("artifacts view")).toBeInTheDocument();
 		expect(screen.getByText("selected report.html")).toBeInTheDocument();
 		expect(useUiStore.getState().inspectorSessions["sess-1"]?.view).toBe("artifacts");
@@ -1265,7 +1266,7 @@ describe("SessionView", () => {
 
 		fireEvent.click(screen.getByRole("tab", { name: "Summary" }));
 		expect(screen.queryByText("artifacts view")).not.toBeInTheDocument();
-		expect(artifactFeedbackConsumes).toEqual([1]);
+		expect(artifactFeedbackConsumes).toHaveLength(1);
 	});
 
 	it("opens the workspace changes from Files after an artifact was opened", async () => {

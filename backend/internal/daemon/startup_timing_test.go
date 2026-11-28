@@ -62,7 +62,7 @@ func TestStartupStepKeysMatchTheTelemetryAllowlist(t *testing.T) {
 	if got := keys(daemonReadySteps, daemonReadyTotal); !slices.Equal(got, ready) {
 		t.Errorf("ao.daemon.ready keys = %v, want %v", got, ready)
 	}
-	reconciled := []string{"chat_hosts_ms", "reviewer_recovery_ms", "sessions_ms", "runtime_ms", "reconcile_ms"}
+	reconciled := []string{"chat_hosts_ms", "sessions_ms", "reviewer_recovery_ms", "runtime_ms", "reconcile_ms"}
 	if got := keys(daemonReconcileSteps, daemonReconcileTotal); !slices.Equal(got, reconciled) {
 		t.Errorf("ao.daemon.startup_reconciled keys = %v, want %v", got, reconciled)
 	}

@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"sort"
@@ -395,14 +396,16 @@ func (s *Service) probeManagedVersion(ctx context.Context, target Target, cli, b
 // unsettledMarker, in a target's directory, says an update is switching
 // current, or switched it but could neither record the switch nor undo it
 // (or the daemon died first), so the releases sessions recorded may not be
-// the ones they run. Cleanup keeps every release of that target until none of
-// its sessions is left.
+// the ones they run. Cleanup keeps every release of that target until current
+// is recorded and none of its sessions is left.
 const unsettledMarker = ".unsettled"
 
 // ReconcileManagedReleases runs at daemon start, before any launch. A switch
 // the daemon died in the middle of left its mark: the release new launches
 // record is set to the one current points at, the files they run. The mark
 // stays, so launches recorded before this keep every release alive.
+// An unrepairable missing current is logged and left for a later recovery,
+// without preventing other harnesses and durable install jobs from recovering.
 func (s *Service) ReconcileManagedReleases(ctx context.Context) error {
 	if s.managedRoot == "" || s.releases == nil {
 		return nil
@@ -414,6 +417,7 @@ func (s *Service) ReconcileManagedReleases(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+targets:
 	for _, entry := range entries {
 		if !entry.IsDir() || entry.Name() == "bin" {
 			continue
@@ -435,7 +439,8 @@ func (s *Service) ReconcileManagedReleases(ctx context.Context) error {
 			intended := strings.TrimSpace(string(intent))
 			record, ok := s.readManagedRecord(target)
 			if !ok {
-				return fmt.Errorf("recover %s: missing managed record", target)
+				slog.WarnContext(ctx, "managed harness recovery deferred: missing managed record", "target", target)
+				continue
 			}
 			candidates := []string{intended, record.Dir}
 			for _, candidate := range candidates {
@@ -447,15 +452,22 @@ func (s *Service) ReconcileManagedReleases(ctx context.Context) error {
 					continue
 				}
 				if err := s.switchManagedCurrent(ctx, targetDir, candidate); err != nil {
-					return fmt.Errorf("recover %s junction: %w", target, err)
+					if ctx.Err() != nil {
+						return ctx.Err()
+					}
+					slog.WarnContext(ctx, "managed harness recovery deferred: current could not be restored", "target", target, "err", err)
+					continue targets
 				}
 				current = candidate
 				break
 			}
 			if current == "" {
-				return fmt.Errorf("recover %s: no valid release for missing current", target)
+				slog.WarnContext(ctx, "managed harness recovery deferred: no valid release for missing current", "target", target)
+				continue
 			}
 		}
+		// A readable current can serve launches, so failing to record it must
+		// still stop startup rather than let launches record the wrong release.
 		if err := s.releases.SetManagedHarnessRelease(ctx, domain.AgentHarness(entry.Name()), current, time.Now().UTC()); err != nil {
 			return fmt.Errorf("recover %s release: %w", target, err)
 		}
@@ -595,22 +607,32 @@ func (s *Service) RemoveUnusedManagedReleases(ctx context.Context) {
 			gate.Unlock()
 			continue
 		}
-		// After a switch that was neither recorded nor undone, the release
-		// rows of launches since then cannot be trusted; wait for those
-		// sessions to end.
+		// current can be ahead of managed.json when an update switched it but
+		// failed before writing the file; it is what launches run, so it is
+		// kept too. Without it, nothing is known to be safe.
+		current, err := os.Readlink(filepath.Join(s.managedTargetDir(target), "current"))
+		if err != nil {
+			gate.Unlock()
+			continue
+		}
+		// After a switch that was neither recorded nor undone, keep recovery
+		// intent and every release until current is durably recorded and no
+		// session with an uncertain release remains.
 		marker := filepath.Join(s.managedTargetDir(target), unsettledMarker)
 		if _, err := os.Stat(marker); err == nil {
 			if len(sessions) > 0 {
 				gate.Unlock()
 				continue
 			}
-			_ = os.Remove(marker)
-		}
-		// current can be ahead of managed.json when an update switched it but
-		// failed before writing the file; it is what launches run, so it is
-		// kept too. Without it, nothing is known to be safe.
-		current, err := os.Readlink(filepath.Join(s.managedTargetDir(target), "current"))
-		if err != nil {
+			if err := s.releases.SetManagedHarnessRelease(ctx, domain.AgentHarness(target), filepath.Base(current), time.Now().UTC()); err != nil {
+				gate.Unlock()
+				continue
+			}
+			if err := os.Remove(marker); err != nil {
+				gate.Unlock()
+				continue
+			}
+		} else if !os.IsNotExist(err) {
 			gate.Unlock()
 			continue
 		}

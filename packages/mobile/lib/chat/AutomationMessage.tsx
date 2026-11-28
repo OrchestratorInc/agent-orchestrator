@@ -427,7 +427,7 @@ function PullRequestEvent({ automation, createdAt }: { automation: PullRequestAu
  * theirs in HTML (hidden markers, icons, `<details>` sections), which reads as
  * its words, each section folded under its summary as on the desktop.
  */
-function GitHubComment({ body }: { body: string }) {
+export function GitHubComment({ body }: { body: string }) {
 	const segments = useMemo(() => githubSegments(body), [body]);
 	return <GitHubSegments segments={segments} />;
 }

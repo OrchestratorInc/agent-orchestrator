@@ -1,6 +1,6 @@
 import type { DashboardSession, OrchestratorLink, SessionMode } from "../api";
 import { cloudAgentLabel, cloudTaskTitle, defaultCloudAgent } from "./agents";
-import type { CloudClient } from "./client";
+import { collectPages, type CloudClient } from "./client";
 import { CloudError, cloudErrorMessage } from "./errors";
 import { cloudOrchestratorLink, cloudSessionRow, cloudStandaloneAgentRow } from "./mapping";
 import type { CloudApprovalMode, CloudOrganization, CloudProject, CloudProviderConnection, CloudSession, CreateCloudSessionInput, CreateCloudStandaloneAgentInput } from "./types";
@@ -134,23 +134,53 @@ async function withInterfaceFallback<I extends { interfaceMode?: unknown }, T>(
 	}
 }
 
-/** Start a project's cloud orchestrator with its configured agent, else the first connected one. */
+/**
+ * Open a project's cloud orchestrator: the one it already has, else a new one
+ * with its configured agent, else the first connected one.
+ */
 export function launchCloudOrchestrator(context: CloudActionContext, projectId: string, mode: SessionMode = "chat"): Promise<OrchestratorLink> {
 	return inCloudWords(() => launchOrchestrator(context, projectId, mode));
+}
+
+/** The project's one orchestrator that is not archived, if it has one. */
+function liveOrchestrator(sessions: readonly CloudSession[] | undefined, projectId: string): CloudSession | undefined {
+	return sessions?.find((session) => session.kind === "orchestrator" && session.projectId === projectId && !session.isTerminated);
 }
 
 async function launchOrchestrator(context: CloudActionContext, projectId: string, mode: SessionMode): Promise<OrchestratorLink> {
 	const orgId = orgOf(context);
 	const project = context.projects.find((item) => item.id === projectId);
+	const projectName = project?.displayName ?? "Project";
+	// A project has one orchestrator until it is archived, and the control plane
+	// refuses a second. One whose sandbox is asleep reads as stopped, so Resume
+	// opens it; the session screen wakes its sandbox.
+	const existing = liveOrchestrator(context.sessions, projectId);
+	if (existing) return cloudOrchestratorLink(existing, projectName);
 	const harness = defaultCloudAgent(context.connections, project?.config?.orchestrator?.agent);
 	if (!harness) throw new Error("Connect a coding agent to Orchestrator Cloud first (Settings → Coding agents).");
-	const { session } = await context.client.createSession(orgId, {
-		projectId, kind: "orchestrator", harness, displayName: "Orchestrator", prompt: "",
-		interfaceMode: mode === "chat" && context.chatHarnesses.includes(harness) ? "chat" : "tui",
-	});
-	context.upsertSession(session);
-	void context.refreshSessions();
-	return cloudOrchestratorLink(session, project?.displayName ?? "Project");
+	// Taken before the create goes out: its answer, or the one recovered after a
+	// conflict, is listed only while this account and organization are still shown.
+	const writes = context.scoped?.() ?? context;
+	try {
+		const { session } = await context.client.createSession(orgId, {
+			projectId, kind: "orchestrator", harness, displayName: "Orchestrator", prompt: "",
+			interfaceMode: mode === "chat" && context.chatHarnesses.includes(harness) ? "chat" : "tui",
+		});
+		writes.upsertSession(session);
+		void context.refreshSessions();
+		return cloudOrchestratorLink(session, projectName);
+	} catch (cause) {
+		// The listing was behind: the project got an orchestrator since it was
+		// read (from the desktop, say). Open that one instead.
+		if (!(cause instanceof CloudError && cause.status === 409 && cause.code === "conflict")) throw cause;
+		// Pinned and recently updated sessions come first, so the orchestrator may be on a later page.
+		const items = await collectPages((cursor) => context.client.listSessions(orgId, { projectId, cursor }), 5).catch(() => [] as CloudSession[]);
+		const found = liveOrchestrator(items, projectId);
+		if (!found) throw cause;
+		writes.upsertSession(found);
+		void context.refreshSessions();
+		return cloudOrchestratorLink(found, projectName);
+	}
 }
 
 /** Archive: the sandbox stops; the conversation and branch are kept. */
