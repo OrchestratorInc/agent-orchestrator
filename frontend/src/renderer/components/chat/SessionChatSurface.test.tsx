@@ -502,6 +502,8 @@ describe("SessionChatSurface pending switch effort", () => {
 		// The send has succeeded, but the conversation still reports the outgoing Claude Code agent.
 		expect(modelPicker()).toHaveTextContent("GPT-6.2-Sol");
 		expect(modelPicker()).toHaveTextContent("High");
+		// The permission chip keeps the modes of the agent being started, not the chat's.
+		expect(sideMocks.agentSwitch?.pendingPermissionModes).toEqual(["default", "accept-edits", "bypass-permissions"]);
 		await act(async () => {
 			await sideMocks.workspaceSend?.("Follow up.", undefined, "follow-up-message");
 		});

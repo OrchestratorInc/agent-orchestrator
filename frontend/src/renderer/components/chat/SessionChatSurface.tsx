@@ -359,8 +359,9 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 			? detail?.chatPermissionMode
 			: undefined;
 	}, [currentHarness, providerSwitchMarker, snapshot?.settings.approvalMode]);
-	const permissionModes = useChatPermissionModes(hostId, pendingSwitch?.harness);
-	const pendingPermissionModes = pendingSwitch ? permissionModes?.get(pendingSwitch.harness) : undefined;
+	// The modes follow the shown switch, so a sent one keeps its starting mode until the chat catches up.
+	const permissionModes = useChatPermissionModes(hostId, displayedSwitch?.harness);
+	const pendingPermissionModes = displayedSwitch ? permissionModes?.get(displayedSwitch.harness) : undefined;
 	const accountSwitch = useSessionAccountSwitch(session, hostId ?? session.hostId);
 	const account = accountSwitch.choice;
 	const agentSwitch = useMemo(
