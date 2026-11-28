@@ -1,4 +1,6 @@
 import type { SessionPRSummary } from "../hooks/useSessionScmSummary";
+// Shared with the phone, which lists the same top-level comments.
+import { prConversationComments } from "../../../../packages/shared/review/review-comments";
 
 type CommentReviewer = SessionPRSummary["review"]["unresolvedBy"][number];
 
@@ -52,25 +54,7 @@ export function botThreadReviewers(pr: SessionPRSummary): { unresolved: CommentR
 	return { unresolved: group(false), resolved: group(true) };
 }
 
-/**
- * The PR's top-level comments (a bot's walkthrough, a person's note), oldest
- * first, for the Reviews tab to list beside its reviews. The PR author's own
- * comments are left out, as their reviews are: a worker's \`gh pr comment\`
- * notes are not feedback to send back to it. A bot's comment is kept only
- * when that bot also reviewed the PR (a review or an inline thread), so a
- * review bot's walkthrough lists and a deploy preview, coverage report or
- * CLA check does not.
- */
-export function prConversationComments(pr: SessionPRSummary): NonNullable<SessionPRSummary["conversation"]> {
-	const author = pr.author ? authorKey(pr.author) : "";
-	const reviewers = new Set([
-		...(pr.review?.reviews ?? []).map((review) => loginKey(review.reviewerId)),
-		...(pr.threads ?? []).flatMap((thread) => thread.comments.map((comment) => loginKey(comment.author))),
-	]);
-	return (pr.conversation ?? []).filter((comment) => comment.body.trim()
-		&& !(author && authorKey(comment.author) === author)
-		&& (!comment.isBot || reviewers.has(loginKey(comment.author))));
-}
+export { prConversationComments };
 
 /**
  * One bucket per reviewer: the summary's list and the threads' list can each

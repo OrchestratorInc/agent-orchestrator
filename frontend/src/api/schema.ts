@@ -5494,6 +5494,23 @@ export interface paths {
         patch: operations["updateSessionRetention"];
         trace?: never;
     };
+    "/api/v1/settings/skill-sharing": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /** Turn sharing the user's skills with every agent on or off */
+        patch: operations["updateSkillSharing"];
+        trace?: never;
+    };
     "/api/v1/settings/version-refresh": {
         parameters: {
             query?: never;
@@ -10001,6 +10018,8 @@ export interface components {
             localEnabled: boolean;
             /** @description Days an archived session whose worktree is released is kept before the daemon deletes it permanently; 0 keeps it. */
             sessionRetentionDays: number;
+            /** @description Sessions get the user's skills from ~/.agents, ~/.claude and ~/.codex that their agent does not load itself, inside Orchestrator only. A running session follows at its next resume. */
+            skillSharing: boolean;
             trackerIntakeEnabled: boolean;
             /** @description After a harness update, idle open sessions restart on the new release instead of running the old one until they happen to restart. */
             versionRefresh: boolean;
@@ -10437,6 +10456,7 @@ export interface components {
             installId?: string;
             isSignedIn?: null | boolean;
             lifetimeSessions?: null | number;
+            lifetimeWorkSessions?: null | number;
             optedOut: boolean;
         };
         TerminalShellCheckResponse: {
@@ -10564,6 +10584,9 @@ export interface components {
         UpdateShellTerminalRequest: {
             /** @description New tab title for the shell terminal. Trimmed; must be non-empty. */
             title: string;
+        };
+        UpdateSkillSharingRequest: {
+            enabled: null | boolean;
         };
         UpdateVersionRefreshRequest: {
             enabled: null | boolean;
@@ -31294,6 +31317,57 @@ export interface operations {
         requestBody: {
             content: {
                 "application/json": components["schemas"]["UpdateSessionRetentionRequest"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SettingsResponse"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    updateSkillSharing: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["UpdateSkillSharingRequest"];
             };
         };
         responses: {

@@ -678,6 +678,15 @@ func TestCanonicalIssueIDGitLabHostDisambiguates(t *testing.T) {
 	}
 }
 
+// A chat runs a skill that a message starts with, so an issue someone else wrote
+// must never be what an intake prompt starts with.
+func TestBuildIssuePromptNeverStartsWithTheIssue(t *testing.T) {
+	prompt := BuildIssuePrompt(domain.Issue{Title: "/deploy", Body: "/deploy"})
+	if !strings.HasPrefix(prompt, "Work on tracker issue") {
+		t.Fatalf("prompt = %q", prompt)
+	}
+}
+
 func TestSeenIssueIDsKeepsAMovedSessionsIssue(t *testing.T) {
 	sessions := []domain.SessionRecord{{
 		ID: "demo-1", IssueID: "github:acme/demo#12", IsTerminated: true,

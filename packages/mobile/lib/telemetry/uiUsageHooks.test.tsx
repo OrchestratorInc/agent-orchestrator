@@ -18,7 +18,7 @@ import { useToast } from "../useToast";
 import type { UiUsageTracker } from "./uiUsage";
 import { setUiUsageTracker } from "./uiUsageRegistry";
 import { useErrorShown } from "./useErrorShown";
-import { useSessionSurface } from "./useSessionSurface";
+import { useSessionContentShown, useSessionSurface } from "./useSessionSurface";
 
 let renderer: ReactTestRenderer | undefined;
 let tracker: { [K in keyof UiUsageTracker]: ReturnType<typeof vi.fn> };
@@ -28,6 +28,8 @@ beforeEach(() => {
 	tracker = {
 		setRoute: vi.fn(), setVariant: vi.fn(), setForeground: vi.fn(), sessionOpened: vi.fn(), sessionReturned: vi.fn(), openedBy: vi.fn(),
 		errorShown: vi.fn(), restore: vi.fn(), setEnabled: vi.fn(), current: vi.fn(),
+		requestTimed: vi.fn(), stalled: vi.fn(), resumed: vi.fn(), dataRefreshed: vi.fn(),
+		sessionContentShown: vi.fn(), isEnabled: vi.fn(() => true), onEnabledChange: vi.fn(() => () => {}),
 	};
 	setUiUsageTracker(tracker as unknown as UiUsageTracker);
 });
@@ -144,5 +146,24 @@ describe("sessionTargetInPath", () => {
 		expect(sessionTargetInPath("aomobile://session/worker%2F7")).toEqual({ sessionId: "worker/7" });
 		expect(sessionTargetInPath("aomobile:///session/abc#x")).toEqual({ sessionId: "abc" });
 		for (const path of ["aomobile:///", "/files/web-1", "/sessions", "aomobile://pair?code=x"]) expect(sessionTargetInPath(path)).toBeUndefined();
+	});
+});
+
+describe("useSessionContentShown", () => {
+	function Probe({ shown }: { shown: boolean }) {
+		useSessionContentShown(shown);
+		return null;
+	}
+
+	// A session loading under another one must not end that one's timing.
+	it("reports content once shown, only while in front", () => {
+		act(() => { renderer = create(<Probe shown={false} />); });
+		expect(tracker.sessionContentShown).not.toHaveBeenCalled();
+		focus.focused = false;
+		act(() => renderer!.update(<Probe shown />));
+		expect(tracker.sessionContentShown).not.toHaveBeenCalled();
+		focus.focused = true;
+		act(() => renderer!.update(<Probe shown />));
+		expect(tracker.sessionContentShown).toHaveBeenCalledTimes(1);
 	});
 });

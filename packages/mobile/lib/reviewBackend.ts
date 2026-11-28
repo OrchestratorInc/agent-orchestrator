@@ -8,7 +8,9 @@ import {
 	getSessionPR,
 	getSessionReviews,
 	killSessionReviewer,
+	loadPRDetails,
 	mergeSessionPR,
+	postPRComment,
 	requestSessionRereview,
 	resolveSessionReviewComment,
 	restoreSessionReviewer,
@@ -73,6 +75,10 @@ export type ReviewBackend = {
 	rerequest?(sessionId: string, prUrl: string, reviewerId: string): Promise<void>;
 	/** Resolve a review comment on GitHub; a daemon's only. */
 	resolveComment?(sessionId: string, prUrl: string, commentUrl: string): Promise<void>;
+	/** Reply on the provider, into a thread when one is named; a daemon's only. */
+	reply?(pr: { number: number; url: string }, body: string, threadId?: string): Promise<void>;
+	/** Read a PR's threads and comments when none are stored; a daemon's only. */
+	loadDetails?(pr: { number: number; url: string }): Promise<void>;
 };
 
 /** The review actions sheet's reviewer choice and automation switches. */
@@ -136,6 +142,8 @@ export function daemonReviewBackend(config: ServerConfig): ReviewBackend {
 		reviewerModels: (harness, signal) => getAgentModels(config, harness, undefined, signal),
 		rerequest: (sessionId, prUrl, reviewerId) => requestSessionRereview(config, sessionId, prUrl, reviewerId),
 		resolveComment: (sessionId, prUrl, commentUrl) => resolveSessionReviewComment(config, sessionId, prUrl, commentUrl),
+		reply: (pr, body, threadId) => postPRComment(config, pr, body, threadId),
+		loadDetails: (pr) => loadPRDetails(config, pr),
 	};
 }
 

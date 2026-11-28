@@ -53,6 +53,9 @@ type LaunchConfig struct {
 	// a binding can migrate provider-side history into a fresh process home.
 	// Empty on first start.
 	ProviderConversationID string
+	// SkillSessionID is the session whose shared skills the agent gets; a side
+	// conversation's host uses its session's.
+	SkillSessionID domain.SessionID
 }
 
 // Config binds one harness to an ACP agent implementation.
@@ -125,6 +128,10 @@ type Config struct {
 	// agent that sandboxes file access to its declared roots must NOT set
 	// this.
 	ImplicitWorkspaceDirectories bool
+	// OptionalDirectories lists folders to add to the session when the agent
+	// supports additional directories. They are left out when it does not,
+	// where a workspace project's own directories would fail the start.
+	OptionalDirectories func(LaunchConfig) []string
 	// SessionOptions maps AO's per-turn choices onto ACP config option ids.
 	SessionOptions func(ports.ChatTurnSettings) []SessionOption
 	// SplitModelVariant maps a model id the session does not offer onto the base
@@ -508,6 +515,7 @@ func (d *Driver) Start(ctx context.Context, cfg ports.ChatStartConfig) (ports.Ch
 		DisableTools:    cfg.DisableTools,
 		ReadOnly:        cfg.ReadOnly,
 		ProviderScopeID: cfg.ProviderScopeID,
+		SkillSessionID:  ports.SkillsOf(cfg.SessionID, cfg.SkillSessionID),
 	}
 	if err := d.checkReadOnly(launchCfg); err != nil {
 		return nil, err
@@ -528,9 +536,7 @@ func (d *Driver) Start(ctx context.Context, cfg ports.ChatStartConfig) (ports.Ch
 	// sessions; it just cannot be resumed after a disconnect. The resume
 	// capability is downgraded in conversationCapabilities, and Resume()
 	// returns ErrChatResumeFailed if called.
-	additional, err := normalizeAdditionalDirectories(cfg.WorkspacePath, cfg.AdditionalDirectories,
-		init.AgentCapabilities.SessionCapabilities.AdditionalDirectories != nil,
-		d.cfg.ImplicitWorkspaceDirectories)
+	additional, err := d.sessionDirectories(launchCfg, cfg.AdditionalDirectories, init)
 	if err != nil {
 		conv.discard()
 		return nil, err
@@ -682,6 +688,7 @@ func (d *Driver) Resume(ctx context.Context, cfg ports.ChatResumeConfig) (ports.
 		// The connect below spawns a fresh process, so a resumed conversation's
 		// provider-side history has to be reachable from the new process home.
 		ProviderConversationID: cfg.ProviderConversationID,
+		SkillSessionID:         ports.SkillsOf(cfg.SessionID, cfg.SkillSessionID),
 	}
 	if err := d.checkReadOnly(launchCfg); err != nil {
 		return nil, fmt.Errorf("%w: %w", ports.ErrChatResumeFailed, err)
@@ -758,9 +765,7 @@ func (d *Driver) resumeSession(
 		conv.discard()
 		return nil, fmt.Errorf("%w: ACP agent supports neither session/load nor session/resume", ports.ErrChatResumeFailed)
 	}
-	additional, err := normalizeAdditionalDirectories(cfg.WorkspacePath, cfg.AdditionalDirectories,
-		init.AgentCapabilities.SessionCapabilities.AdditionalDirectories != nil,
-		d.cfg.ImplicitWorkspaceDirectories)
+	additional, err := d.sessionDirectories(launchCfg, cfg.AdditionalDirectories, init)
 	if err != nil {
 		conv.discard()
 		if isACPAuthRequired(err) {

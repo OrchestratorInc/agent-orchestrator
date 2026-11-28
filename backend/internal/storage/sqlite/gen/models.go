@@ -192,6 +192,7 @@ type AppSetting struct {
 	AccountHandoff       bool
 	LimitHistory         bool
 	CommitAttribution    bool
+	SkillSharing         bool
 }
 
 type Automation struct {
@@ -1043,6 +1044,11 @@ type TelemetryEvent struct {
 }
 
 type TelemetryLifetimeSession struct {
+	Singleton int64
+	Count     int64
+}
+
+type TelemetryLifetimeWorkSession struct {
 	Singleton int64
 	Count     int64
 }
