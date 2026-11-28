@@ -59,6 +59,7 @@ import { Button } from "../ui/button";
 import { artifactAtPath } from "../../../../../packages/shared/artifacts/deliverables";
 import { sameSentence, usageLimitSentence } from "../../../../../packages/shared/chat/usage-limit";
 import { cloudPullRequestAutomation } from "../../../../../packages/shared/chat/pull-request-automation";
+import { cloudTurnFailureMessage } from "../../../../../packages/shared/chat/cloud-turn-failure";
 
 type EventPayload = {
 	attempt?: unknown;
@@ -1146,6 +1147,10 @@ export function toSnapshot(session: WorkspaceSession, events: CloudCpClientEvent
 			if (limit) {
 				turn.errorMessage = limit;
 				turn.usageLimit = { autoResume: false };
+			} else if (turn.state === "failed" && turn.errorMessage) {
+				// Any other failed ACP prompt shows the agent's own words, never the
+				// worker's JSON-RPC envelope or the adapter's stderr.
+				turn.errorMessage = cloudTurnFailureMessage(turn.errorMessage) || undefined;
 			}
 			// No agent started on it: its prompt is loaded with no start after it
 			// (a turn starts after its prompt), or it ended at attempt 0, never

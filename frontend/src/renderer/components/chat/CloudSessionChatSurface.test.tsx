@@ -1186,6 +1186,29 @@ describe("CloudSessionChatSurface", () => {
 		});
 	});
 
+	it("shows a failed ACP prompt in the agent's words, and a usage limit as one, said once", () => {
+		const raw = 'ACP prompt: {"code":-32603,"message":"Internal error: You\'ve hit your 5-hour limit · resets 11am (UTC)","data":{"errorKind":"rate_limit"}}: [session/query] sessionId=c8cf34f2 resume=none apiType=native baseUrl=native\n'
+			+ "(node:9482) [CLAUDE_SDK_CAN_USE_TOOL_SHADOWED] Warning: canUseTool will not be invoked: permissionMode 'bypassPermissions' auto-approves every tool call.\n"
+			+ "(Use `node --trace-warnings ...` to show where the warning was created)";
+		const limit = "You've hit your 5-hour limit · resets 11am (UTC)";
+		const events: CloudCpClientEvent[] = [
+			{ sessionId: session.id, sequence: 1, type: "chat.user_message", payload: { text: "start a review", turnId: "turn-1" }, createdAt: "2026-11-27T08:00:00Z" },
+			{ sessionId: session.id, sequence: 2, type: "chat.turn_started", payload: { turnId: "turn-1" }, createdAt: "2026-11-27T08:00:01Z" },
+			{ sessionId: session.id, sequence: 3, type: "chat.assistant_delta", payload: { turnId: "turn-1", itemId: "a1", text: limit }, createdAt: "2026-11-27T08:00:02Z" },
+			{ sessionId: session.id, sequence: 4, type: "chat.turn_aborted", payload: { turnId: "turn-1", attempt: 1, error: raw }, createdAt: "2026-11-27T08:00:04Z" },
+			{ sessionId: session.id, sequence: 5, type: "chat.user_message", payload: { text: "again", turnId: "turn-2" }, createdAt: "2026-11-27T08:01:00Z" },
+			{ sessionId: session.id, sequence: 6, type: "chat.turn_started", payload: { turnId: "turn-2" }, createdAt: "2026-11-27T08:01:01Z" },
+			{ sessionId: session.id, sequence: 7, type: "chat.turn_aborted", payload: { turnId: "turn-2", attempt: 1, error: "ACP prompt: peer disconnected: Error: spawn claude ENOENT\n(node:1) Warning: something\n" }, createdAt: "2026-11-27T08:01:02Z" },
+		];
+		const snapshot = toSnapshot(session, events);
+		const [limited, crashed] = snapshot.turns;
+		expect(limited).toMatchObject({ state: "failed", errorMessage: limit, usageLimit: { autoResume: false } });
+		// The reply that restates the limit is the outcome's to say.
+		expect(snapshot.items.some((item) => item.kind === "message" && item.role === "assistant")).toBe(false);
+		expect(crashed).toMatchObject({ state: "failed", errorMessage: "peer disconnected: Error: spawn claude ENOENT" });
+		expect(crashed).not.toHaveProperty("usageLimit");
+	});
+
 	it("reads the pull request event an automation message reports, and only from automation", () => {
 		const automation = {
 			kind: "merge_conflict",
