@@ -95,6 +95,12 @@ type ProjectConfig struct {
 	// Read at spawn, when the worker prompt is built.
 	WorkersRequestReview bool `json:"workersRequestReview,omitempty"`
 
+	// BrowserTemporary opens every session's desktop browser in a Temporary,
+	// signed-out profile that is cleared when the session ends, instead of the
+	// user's persistent default profile. A profile the user picks for one
+	// session still wins. Read by the desktop app when a session's browser opens.
+	BrowserTemporary bool `json:"browserTemporary,omitempty"`
+
 	// Attribution turns off parts of Orchestrator's credit on this project's
 	// commits and PRs. It only matters while the Orchestrator attribution beta
 	// (Settings, Advanced) is on; then every part is on unless disabled here.

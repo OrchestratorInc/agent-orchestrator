@@ -8986,6 +8986,7 @@ export interface components {
             agentRulesFile?: string;
             attribution?: components["schemas"]["AttributionConfig"];
             autoReview?: boolean;
+            browserTemporary?: boolean;
             canonicalRepoURL?: string;
             containerReap?: components["schemas"]["ContainerReapConfig"];
             defaultBranch?: string;

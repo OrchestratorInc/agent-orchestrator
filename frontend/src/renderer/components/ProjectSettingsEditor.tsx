@@ -6,7 +6,7 @@ import { useTranslation } from "react-i18next";
 import type { ProjectSettingsSaveState, ProjectSettingsSection as SettingsSection } from "./ProjectSettingsForm";
 import { deriveRepoHost, deriveRepoPath, IntakeFields, intakeNeedsRule } from "./IntakeFields";
 import { ProductExternalLink } from "./ProductExternalLink";
-import { AgentModelField, ProjectAttributionToggles, ProjectAutoReviewToggle, ProjectCoAuthorCommitsToggle, ProjectWorkersRequestReviewToggle } from "./settings/ProjectAgentRoleControls";
+import { AgentModelField, ProjectAttributionToggles, ProjectAutoReviewToggle, ProjectBrowserStartSelect, ProjectCoAuthorCommitsToggle, ProjectWorkersRequestReviewToggle } from "./settings/ProjectAgentRoleControls";
 import { SettingsOptionMenu } from "./settings/SettingsOptionMenu";
 import { Button } from "./ui/button";
 
@@ -32,6 +32,8 @@ export type ProjectSettingsDraft = {
 	autoReview: boolean;
 	/** Local-only: workers may ask AO to review their own PRs. */
 	workersRequestReview?: boolean;
+	/** Local-only: sessions open their desktop browser in a temporary profile. */
+	browserTemporary?: boolean;
 	/** Cloud-only: agent commits name the AO GitHub App as a co-author. */
 	coAuthorCommits?: boolean;
 	/** Local-only, Orchestrator attribution beta: add the Co-authored-by trailer to commits. */
@@ -62,6 +64,7 @@ type Capabilities = {
 	reviewer: boolean;
 	requiredAgents: boolean;
 	workersRequestReview?: boolean;
+	browserTemporary?: boolean;
 	coAuthorCommits?: boolean;
 	/** Shown while the Orchestrator attribution beta is on (Settings, Advanced). */
 	attribution?: boolean;
@@ -232,6 +235,9 @@ export function ProjectSettingsEditor({ initialValues, section, capabilities, de
 						{settingRow("attribution", ["attributionCommitTrailer", "attributionPRFooter"], <ProjectAttributionToggles commitTrailer={draft.attributionCommitTrailer ?? true} prFooter={draft.attributionPRFooter ?? true} onChange={patch} />)}
 					</ProjectSettingsSection>}
 				</>}
+				{capabilities.browserTemporary && <ProjectSettingsSection title={t("settings.project.browser")} grouped>
+					{settingRow("browserTemporary", ["browserTemporary"], <ProjectBrowserStartSelect temporary={draft.browserTemporary ?? false} onChange={(browserTemporary) => patch({ browserTemporary })} />)}
+				</ProjectSettingsSection>}
 				{generalExtra}
 			</> : <>
 				{visibleRoles.map((role) => {

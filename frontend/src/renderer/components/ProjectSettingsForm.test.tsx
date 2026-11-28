@@ -1160,6 +1160,60 @@ describe("ProjectSettingsForm", () => {
 		expect(request?.body.config.autoReview).toBe(false);
 	});
 
+	it("loads and saves whether sessions always use a temporary browser profile", async () => {
+		mockProject({
+			id: "proj-1",
+			name: "Project One",
+			kind: "single_repo",
+			path: "/repo/project-one",
+			repo: "git@github.com:acme/project-one.git",
+			defaultBranch: "main",
+			config: {
+				worker: { agent: "codex" },
+				orchestrator: { agent: "claude-code" },
+			},
+		});
+
+		renderSettings("proj-1", undefined, "general");
+
+		const startIn = await screen.findByRole("button", { name: "Sessions start in" });
+		expect(startIn).toHaveTextContent("Default profile");
+		await chooseOption(startIn, "Temporary browser");
+		expect(startIn).toHaveTextContent("Temporary browser");
+		submitSettings();
+
+		await waitFor(() => expect(putMock).toHaveBeenCalledTimes(1));
+		expect(putMock.mock.calls[0]?.[1]?.body.config.browserTemporary).toBe(true);
+	});
+
+	it("autosaves the sessions-start-in choice through PUT /api/v1/projects/{id} without a submit, even while the window is hidden", async () => {
+		mockProject({
+			id: "proj-1",
+			name: "Project One",
+			kind: "single_repo",
+			path: "/repo/project-one",
+			repo: "git@github.com:acme/project-one.git",
+			defaultBranch: "main",
+			config: {
+				worker: { agent: "codex" },
+				orchestrator: { agent: "claude-code" },
+			},
+		});
+		const visibility = vi.spyOn(document, "visibilityState", "get").mockReturnValue("hidden");
+		const focus = vi.spyOn(document, "hasFocus").mockReturnValue(false);
+		try {
+			renderSettings("proj-1", undefined, "general");
+			await chooseOption(await screen.findByRole("button", { name: "Sessions start in" }), "Temporary browser");
+
+			await waitFor(() => expect(putMock).toHaveBeenCalledTimes(1), { timeout: 3_000 });
+			expect(putMock.mock.calls[0]?.[0]).toBe("/api/v1/projects/{id}");
+			expect(putMock.mock.calls[0]?.[1]?.body.config.browserTemporary).toBe(true);
+		} finally {
+			visibility.mockRestore();
+			focus.mockRestore();
+		}
+	});
+
 	it("loads and saves whether workers request an AO review", async () => {
 		mockProject({
 			id: "proj-1",

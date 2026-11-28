@@ -169,6 +169,7 @@ function SettingsBody({ project, projectId, hostId, hostConnected, onSaved, sect
 		reviewerPermissions: config.reviewers?.[0]?.agentConfig?.permissions ?? config.agentConfig?.permissions ?? "",
 		autoReview: config.autoReview ?? false,
 		workersRequestReview: config.workersRequestReview ?? false,
+		browserTemporary: config.browserTemporary ?? false,
 		attributionCommitTrailer: !config.attribution?.disableCommitTrailer,
 		attributionPRFooter: !config.attribution?.disablePRFooter,
 		intakeEnabled: intake.enabled ?? false,
@@ -263,6 +264,7 @@ function SettingsBody({ project, projectId, hostId, hostConnected, onSaved, sect
 						disablePRFooter: values.attributionPRFooter === false || undefined,
 					}),
 				};
+		next.browserTemporary = values.browserTemporary || undefined;
 		const { error } = await (hostId ? clientForHost(hostId) : apiClient).PUT("/api/v1/projects/{id}", {
 			params: { path: { id: projectId } },
 			body: { displayName, config: next },
@@ -333,7 +335,7 @@ function SettingsBody({ project, projectId, hostId, hostConnected, onSaved, sect
 		}
 	};
 	return <ProjectSettingsEditor initialValues={initialValues} section={section} disabled={!hostConnected}
-		capabilities={{ workflow: !isScratchProject, sessionPrefix: !isScratchProject, sessionPrefixPlaceholder: "orchestrator", intake: intakeVisible, reviewer: !isScratchProject, requiredAgents: true, workersRequestReview: !isScratchProject, attribution: !isScratchProject && !hostId && !!settings?.commitAttribution }}
+		capabilities={{ workflow: !isScratchProject, sessionPrefix: !isScratchProject, sessionPrefixPlaceholder: "orchestrator", intake: intakeVisible, reviewer: !isScratchProject, requiredAgents: true, workersRequestReview: !isScratchProject, browserTemporary: !hostId, attribution: !isScratchProject && !hostId && !!settings?.commitAttribution }}
 		details={[{ label: t("settings.project.path"), value: project.path, href: hostId ? undefined : `file://${encodeURI(project.path)}` }, { label: t("settings.project.repo"), value: project.repo || "—", href: project.repo ? repositoryHref(project.repo) : undefined }]}
 		workspaceRepos={project.kind === "workspace" ? project.workspaceRepos ?? [] : undefined} repository={project.repo}
 		modelScope={() => ""} defaultReviewer={(draft) => WORKER_DEFAULT_REVIEWERS[draft.workerAgent] ?? "claude-code"}

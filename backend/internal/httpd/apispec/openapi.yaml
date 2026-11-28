@@ -25602,6 +25602,8 @@ components:
           $ref: '#/components/schemas/AttributionConfig'
         autoReview:
           type: boolean
+        browserTemporary:
+          type: boolean
         canonicalRepoURL:
           type: string
         containerReap:

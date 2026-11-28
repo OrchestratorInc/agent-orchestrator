@@ -138,8 +138,10 @@ type projectConfig struct {
 	TerminateOnPRMerge    *bool                `json:"terminateOnPrMerge,omitempty"`
 	// WorkersRequestReview must round-trip through set-config so a CLI edit
 	// of another field never silently turns it off.
-	WorkersRequestReview bool             `json:"workersRequestReview,omitempty"`
-	Reviewers            []reviewerConfig `json:"reviewers,omitempty"`
+	WorkersRequestReview bool `json:"workersRequestReview,omitempty"`
+	// BrowserTemporary must round-trip through set-config like the other toggles.
+	BrowserTemporary bool             `json:"browserTemporary,omitempty"`
+	Reviewers        []reviewerConfig `json:"reviewers,omitempty"`
 	// Attribution must round-trip too, so a CLI edit keeps a project's opt-out.
 	Attribution *attributionConfig `json:"attribution,omitempty"`
 }
