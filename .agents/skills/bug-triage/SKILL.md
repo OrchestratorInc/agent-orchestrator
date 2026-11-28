@@ -198,10 +198,11 @@ install or auth checks or model discovery, or change state. Examples include
 `logout`, the account login, API-key, default, session-switch, and `DELETE` routes, and
 `accounts/{id}/reset-credit`, which spends one of the account's Codex usage-limit
 resets. Also avoid `?refresh=true`, `agent ls`, and `account ls --refresh`,
-`account default`, or `account switch`. Don't run the harness's own login, logout, auth status, doctor, or update
-commands; they can refresh tokens or rewrite credential stores. Running `--version` on
-the executable reported above is fine when the advisory has no version. If a fresh check
-would help, ask the reporter to press **Check again** on the Health tab, and note when.
+`account default`, or `account switch`. Don't run the harness's own login, logout,
+auth status, doctor, or update commands; they can refresh tokens or rewrite credential
+stores. Running `--version` on the executable reported above is fine when the advisory
+has no version. If a fresh check would help, ask the reporter to press **Check again**
+on the Health tab, and note when.
 
 `authentication.account` can hold the account email, name, and organization; the
 readiness filter above drops them so they never enter the evidence, matching the
