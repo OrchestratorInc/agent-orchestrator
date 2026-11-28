@@ -80,6 +80,7 @@ vi.mock("./cloud/CloudProvider", () => ({ useCloud: () => ({ sessionsLoaded: tru
 vi.mock("./cloud/useCloudPRSummaries", () => ({ useCloudPRSummaries: () => cloudLookup }));
 
 import PRsScreen from "../app/prs/index";
+import { prMergeKey, resetPRMerges, trackPRMerge } from "./prMergeTracker";
 let renderer: ReactTestRenderer | undefined;
 function session(hostId: string): HostedSession {
 	return {
@@ -100,8 +101,25 @@ beforeEach(() => {
 	fixture.cardRenders = []; fixture.params = {}; fixture.summaries.clear();
 	fixture.reload.mockClear(); fixture.refreshAll.mockReset(); fixture.refreshAll.mockImplementation(async () => {}); fixture.focus = undefined; fixture.summaryTargets = [];
 	fixture.getArchivedPRSessions.mockReset();
+	resetPRMerges();
 });
 afterEach(() => { act(() => renderer?.unmount()); renderer = undefined; vi.unstubAllGlobals(); vi.restoreAllMocks(); });
+
+// A merge from the PR page used to leave its row under Ready to merge until
+// the next board poll, with nothing saying it was under way.
+it("says a row is merging while its merge runs, and moves it out of Open once it lands", async () => {
+	act(() => { renderer = create(<PRsScreen />); });
+	let land!: () => void;
+	let merged!: Promise<void>;
+	act(() => { merged = trackPRMerge(prMergeKey("mac", "https://github.com/ao/test/pull/7"), () => new Promise<void>((resolve) => { land = resolve; })); });
+	const cards = () => renderer!.root.findAll((node) => (node.type as unknown) === "Pressable" && String(node.props.accessibilityLabel).includes("Pull request 7")).map((node) => String(node.props.accessibilityLabel));
+	expect(cards()).toEqual([expect.stringContaining("Task on mac"), expect.stringContaining("Task on windows")]);
+	expect(cards()[0]).toContain("Merging");
+	expect(cards()[1]).not.toContain("Merging");
+
+	await act(async () => { land(); await merged; });
+	expect(cards()).toEqual([expect.stringContaining("Task on windows")]);
+});
 
 // A page now, mounted only when opened, so its details load straight away.
 it("loads PR details as the page opens, without reloading them on its first focus", () => {

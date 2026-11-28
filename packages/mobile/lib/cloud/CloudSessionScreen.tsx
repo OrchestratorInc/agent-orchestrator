@@ -359,7 +359,7 @@ export function CloudSessionScreen({ sessionId }: { sessionId: string }) {
 	const sessionRow = useMemo(() => session ? cloudSessionRow(session) : undefined, [session]);
 	const hasPullRequests = Boolean(sessionRow && (sessionRow.prs?.length || sessionRow.pr));
 	const reviewSummaries = useCloudPRSummaries(hasPullRequests && session ? [session.id] : NO_IDS);
-	const pullRequests = useSessionPullRequests(sessionRow, (number) => session ? reviewSummaries.summaryFor(session.id, number) : undefined);
+	const pullRequests = useSessionPullRequests(sessionRow, (number) => session ? reviewSummaries.summaryFor(session.id, number) : undefined, CLOUD_HOST_ID);
 	// The ⋯ menu's "Pull requests" asks the composer for the list. From the
 	// agent's terminal, where there is no composer, it shows the chat first.
 	const showChat = useCallback(() => setView("chat"), []);

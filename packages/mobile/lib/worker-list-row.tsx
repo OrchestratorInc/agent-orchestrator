@@ -14,7 +14,8 @@ import { useTheme, useThemedStyles } from "./ThemeProvider";
 import { workerRowIndicator, type WorkerRowIndicator, type WorkerRowMarker } from "./workerRowMarker";
 import Animated, { useAnimatedStyle, useSharedValue, withSequence, withSpring, withTiming } from "react-native-reanimated";
 import { useReducedMotion } from "./useReducedMotion";
-import { workerRowAccessibilityLabel, workerRowPullRequest, type WorkerRowPullRequest } from "./workerRowPullRequest";
+import { withTrackedMerge, workerRowAccessibilityLabel, workerRowPullRequest, type WorkerRowPullRequest } from "./workerRowPullRequest";
+import { prMergeKey, usePRMerge } from "./prMergeTracker";
 import { textSelectionColors } from "./textSelection";
 import { workerContextActions, type WorkerActionId } from "./worker-action-model";
 import { WorkerRowActions } from "./worker-row-actions";
@@ -102,7 +103,11 @@ export const WorkerListRow = memo(
 	// The subtitle is project and machine alone (no branch: a long worktree path
 	// the session's header still shows), with the pull request in a pill: the
 	// live one's number, in its own lifecycle's colour and glyph.
-	const pr = workerRowPullRequest(session);
+	// A merge started from the PR page shows here too: the user leaves that
+	// page for this board while it runs.
+	const observedPR = workerRowPullRequest(session);
+	const mergeKey = observedPR?.lead.url ? prMergeKey(sessionHostId(session) ?? hostId, observedPR.lead.url) : undefined;
+	const pr = withTrackedMerge(observedPR, usePRMerge(mergeKey)?.status);
 	// When the worker last changed, the time the board orders it by; `nowBucket`
 	// re-renders the row as the minute turns.
 	const updated = relativeTime(eventAtOf(session));
@@ -453,7 +458,7 @@ function PullRequestPill({ pr, t, styles }: { pr: WorkerRowPullRequest; t: Theme
 		<View testID="worker-pr-pill" style={[styles.pill, { backgroundColor: statusTint(t, color) }]}>
 			<Feather name={pr.glyph} size={iconSize.xs} color={color} />
 			<Text style={[styles.pillText, { color }]} numberOfLines={1}>
-				{`#${pr.number}`}
+				{pr.merging ? `#${pr.number} · Merging…` : `#${pr.number}`}
 				{pr.more > 0 ? <Text style={pr.moreTone ? { color: toneColor(t, pr.moreTone) } : undefined}>{` +${pr.more}`}</Text> : null}
 			</Text>
 		</View>

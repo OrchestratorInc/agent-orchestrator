@@ -1,5 +1,6 @@
 import { useRef } from "react";
 import type { DashboardSession, SessionPRSummary } from "./api";
+import { prMergeKey, usePRMerges } from "./prMergeTracker";
 import { sessionPullRequestModel, type SessionPullRequests } from "./sessionPullRequests";
 
 /**
@@ -12,12 +13,17 @@ import { sessionPullRequestModel, type SessionPullRequests } from "./sessionPull
 export function useSessionPullRequests(
 	session: Pick<DashboardSession, "pr" | "prs"> | undefined,
 	summaryFor: (number: number) => SessionPRSummary | undefined,
+	/** The session's machine, for the merges the phone started (see prMergeTracker). */
+	hostId?: string | null,
 ): SessionPullRequests | undefined {
-	const next = session ? sessionPullRequestModel(session, summaryFor) : undefined;
+	// A merge started from the PR page: the chip and its list say so while it runs.
+	const merges = usePRMerges();
+	const next = session ? sessionPullRequestModel(session, summaryFor, (pr) => pr.url ? merges.get(prMergeKey(hostId, pr.url))?.status : undefined) : undefined;
 	const key = next ? JSON.stringify([
 		next.rows.map((row) => [row.number, row.pr.url, row.lifecycle, row.title, row.status.text, row.status.tone]),
 		next.badge.moreTone,
 		next.leadSummary ?? null,
+		next.leadMerging ?? false,
 	]) : "";
 	const kept = useRef<{ key: string; value: SessionPullRequests | undefined }>({ key: "", value: undefined });
 	if (kept.current.key !== key) kept.current = { key, value: next };

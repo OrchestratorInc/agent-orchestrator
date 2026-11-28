@@ -9,6 +9,7 @@ const fixtures = vi.hoisted(() => ({
 	getSession: vi.fn(),
 	reviewerSurface: undefined as undefined | { mode: string; reviewId: string; harness: string },
 	restore: vi.fn(async (_id: string, _hostId?: string) => {}),
+	refresh: vi.fn(async () => {}),
 	hostId: "dev",
 	cloudClient: {} as Record<string, ReturnType<typeof vi.fn>>,
 	theme: new Proxy({}, { get: () => "#000000" }),
@@ -78,7 +79,7 @@ vi.mock("./api", () => ({
 }));
 vi.mock("./store", () => ({
 	HostScope: ({ children }: { children: unknown }) => children,
-	useApp: () => ({ config: fixtures.hostId === "dev" && fixtures.connected ? fixtures.config : null, sessions: fixtures.sessions, currentHostId: fixtures.hostId, restore: fixtures.restore }),
+	useApp: () => ({ config: fixtures.hostId === "dev" && fixtures.connected ? fixtures.config : null, sessions: fixtures.sessions, currentHostId: fixtures.hostId, restore: fixtures.restore, refresh: fixtures.refresh }),
 }));
 vi.mock("./ThemeProvider", () => ({ useTheme: () => fixtures.theme, useThemedStyles: (factory: (theme: object) => object) => factory(fixtures.theme) }));
 vi.mock("./ui", () => ({ Button: "Button", Dot: "Dot", EmptyState: "EmptyState", ListSectionHeader: "ListSectionHeader" }));
@@ -93,6 +94,7 @@ const cloudState = vi.hoisted(() => ({ client: {} as unknown, org: null as null 
 vi.mock("./cloud/CloudProvider", () => ({ useCloud: () => cloudState }));
 
 import ReviewDetailScreen from "../app/review/[sessionId]";
+import { resetPRMerges } from "./prMergeTracker";
 
 const worker = (over: Partial<DashboardSession> = {}) => ({
 	id: "worker-1", projectId: "repo", status: "idle", harness: "claude-code", displayName: "Fix the PR page", ...over,
@@ -106,6 +108,8 @@ beforeEach(() => {
 	fixtures.getSessionPR.mockReset().mockResolvedValue([]);
 	fixtures.loadPRDetails.mockReset().mockResolvedValue(undefined);
 	fixtures.restore.mockReset();
+	fixtures.refresh.mockReset();
+	resetPRMerges();
 	fixtures.reviewerSurface = undefined;
 	fixtures.hostId = "dev";
 	fixtures.sendMessage.mockReset().mockResolvedValue(undefined);
@@ -456,6 +460,42 @@ describe("a Cloud worker's pull request", () => {
 		await render();
 		await act(async () => { await mergeBar()[0].props.onMerge(); });
 		expect(client.mergePullRequest).toHaveBeenCalledWith("org-1", "worker-1", 12, PR_URL, "abc123");
+		// The board shows the merge at once, not on its next poll.
+		expect(fixtures.refresh).toHaveBeenCalled();
+		expect(mergeBar()[0].props.merged).toBe(true);
+	});
+
+	// Leaving the page mid-merge used to drop it: the page opened again on an
+	// empty slider, and the success arrived as a haptic with nothing moving.
+	it("shows a merge still running on a page opened again, then the merge as it lands", async () => {
+		const client = signedIn();
+		let land!: (value: { status: string }) => void;
+		client.mergePullRequest.mockImplementation(() => new Promise((resolve) => { land = resolve; }));
+		await render();
+		let swiped!: Promise<boolean>;
+		act(() => { swiped = mergeBar()[0].props.onMerge(); });
+		act(() => renderer!.unmount());
+
+		await render();
+		expect(mergeBar()[0].props).toMatchObject({ busy: true, merged: false });
+		await act(async () => { land({ status: "merge_accepted" }); await swiped; });
+		expect(mergeBar()[0].props).toMatchObject({ busy: false, merged: true });
+		expect(client.mergePullRequest).toHaveBeenCalledTimes(1);
+	});
+
+	it("says why a merge failed on a page opened after it failed", async () => {
+		const client = signedIn();
+		let fail!: (error: unknown) => void;
+		client.mergePullRequest.mockImplementation(() => new Promise((_resolve, reject) => { fail = reject; }));
+		await render();
+		let swiped!: Promise<boolean>;
+		act(() => { swiped = mergeBar()[0].props.onMerge(); });
+		act(() => renderer!.unmount());
+		await act(async () => { fail(new Error("Head commit changed.")); await swiped; });
+
+		await render();
+		expect(mergeBar()[0].props).toMatchObject({ busy: false, merged: false });
+		expect(alerts()).toEqual([expect.stringContaining("Head commit changed")]);
 	});
 
 	it("says when the head commit was already reviewed", async () => {

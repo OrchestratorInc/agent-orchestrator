@@ -785,8 +785,8 @@ function Composer({
 				<AppSymbol name="warning" size={iconSize.xs} color={quotaChip.severity === "critical" ? t.red : t.amber} />
 				<Text numberOfLines={1} maxFontSizeMultiplier={fontScaleCap.chrome} style={[styles.contextText, styles.tabular, { color: quotaChip.severity === "critical" ? t.red : t.amber }]}>{quotaChip.label}</Text>
 			</ComposerChip> : null}
-			{prChip ? <ComposerChip accessibilityLabel={prChipAccessibilityLabel(prChip.lead, prChip.leadSummary, prChip.badge)} accessibilityHint={prChip.rows.length > 1 ? "Lists this worker's pull requests" : "Opens the pull request review"} onPress={openPullRequests}>
-				<PRChipContent pr={prChip.lead} summary={prChip.leadSummary} more={prChip.badge.more > 0 ? { count: prChip.badge.more, tone: prChip.badge.moreTone } : undefined} />
+			{prChip ? <ComposerChip accessibilityLabel={prChipAccessibilityLabel(prChip.lead, prChip.leadSummary, prChip.badge, prChip.leadMerging)} accessibilityHint={prChip.rows.length > 1 ? "Lists this worker's pull requests" : "Opens the pull request review"} onPress={openPullRequests}>
+				<PRChipContent pr={prChip.lead} summary={prChip.leadSummary} merging={prChip.leadMerging} more={prChip.badge.more > 0 ? { count: prChip.badge.more, tone: prChip.badge.moreTone } : undefined} />
 			</ComposerChip> : null}
 			{changes ? <ComposerChip accessibilityLabel={changesAccessibilityLabel(changes)} accessibilityHint="Opens the changed files" onPress={changes.onOpen}>
 				<AppSymbol name="diff" size={iconSize.xs} color={t.textSecondary} />

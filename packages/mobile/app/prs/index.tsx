@@ -34,6 +34,7 @@ import { hostedRowKey, type HostedSession } from "../../lib/hostedRows";
 import { useArchivedPRs, withArchivedPRSessions, type ArchivedPRSource } from "../../lib/archivedPRs";
 import type { ArchivedPRState } from "../../lib/api";
 import { useLastVerifiedConfigs } from "../../lib/useLastVerifiedConfig";
+import { prMergeKey, usePRMerges } from "../../lib/prMergeTracker";
 
 export { RouteErrorBoundary as ErrorBoundary } from "../../lib/RouteErrorBoundary";
 
@@ -104,6 +105,9 @@ function PRList() {
 	const archived = useArchivedPRs(archivedSources, { states: READ_ARCHIVED_STATES, refreshToken });
 	const archivedLoading = archivedStates.some((state) => archived.loading[state]);
 	const archivedKeys = useMemo(() => new Set(archived.sessions.map((session) => hostedRowKey(session.hostId, session.id))), [archived.sessions]);
+	// Merges started from a PR page: a finished one moves its row out of Open
+	// before the board's next poll says so, and one still running says Merging.
+	const merges = usePRMerges();
 	const prs = useMemo(() => {
 		// Hosted rows are structurally shared across sync/notification updates.
 		// Keep those identities, and deduplicate PRs within each machine only.
@@ -115,8 +119,11 @@ function PRList() {
 			if (rows) rows.push(session);
 			else byHost.set(session.hostId, [session]);
 		}
-		return [...byHost.values()].flatMap(sessions => collectPRs(sessions).filter(({ session }) => projectFilter === "all" || session.projectId === projectFilter));
-	}, [allSessions, archived.sessions, routeHostId, projectFilter]);
+		return [...byHost.values()].flatMap(sessions => collectPRs(sessions).filter(({ session }) => projectFilter === "all" || session.projectId === projectFilter))
+			.map((row) => row.pr.state !== "merged" && merges.get(prMergeKey(row.session.hostId, row.pr.url))?.status === "merged"
+				? { ...row, pr: { ...row.pr, state: "merged" as const } }
+				: row);
+	}, [allSessions, archived.sessions, routeHostId, projectFilter, merges]);
 	const configured = hostStates.length > 0 || Boolean(cloud);
 	const loading = visibleHosts.some((host) => host.loading) || (cloudShown && !cloudSessionsLoaded);
 	// A machine's failure fills the page only when nothing answers: with
@@ -266,6 +273,7 @@ function PRList() {
 						showProject={showProject}
 						position={groupedRowPosition(index, section.data.length)}
 						now={now}
+						merging={merges.get(prMergeKey(session.hostId, pr.url))?.status === "merging"}
 						summary={isCloudHost(session.hostId) ? cloudSummaries.summaryFor(session.id, pr.number) : config ? summaries.summaryFor(config, session.id, pr.number) : undefined}
 						onLinkCopied={linkCopied}
 					/>;

@@ -156,7 +156,7 @@ describe("reviewer control integration", () => {
 
 	it("merges like desktop: only when ready, fenced to the head commit, after confirmation", () => {
 		expect(detail).toContain("const merge = pr ? mergeReadiness(pr) : undefined;");
-		expect(detail).toContain("await live.merge(sessionId, pr)");
+		expect(detail).toContain("await trackPRMerge(mergeKey, () => live.merge(sessionId, pr))");
 		expect(backend).toContain("merge: (_sessionId, pr) => mergeSessionPR(config, pr),");
 		expect(backend).toContain("await client.mergePullRequest(orgId, sessionId, pr.number, pr.url, pr.headSha);");
 		expect(detail).toContain("This will squash-merge PR #${pr.number} in the remote repository.");

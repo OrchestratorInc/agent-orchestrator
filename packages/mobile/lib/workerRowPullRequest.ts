@@ -27,6 +27,8 @@ export type WorkerRowPullRequest = {
 	/** The board card's tones (`prLine`): open green, merged purple, closed red, a draft quiet. */
 	tone: Tone;
 	glyph: "git-pull-request" | "git-pull-request-draft" | "git-merge" | "git-pull-request-closed";
+	/** A merge the phone started is still running (see prMergeTracker). */
+	merging?: boolean;
 };
 
 // The live one leads: a worker that closed #12 and opened #15 is on #15.
@@ -83,6 +85,18 @@ function moreToneOf(counts: Map<PRLifecycle, number>): Tone | null {
 	return PR_TONES.merged;
 }
 
+/**
+ * The pill with a merge the phone started laid over it: one still running
+ * reads "Merging…" in the merged hue, and a finished one reads merged before
+ * the board's next poll says so.
+ */
+export function withTrackedMerge(pr: WorkerRowPullRequest | null, status: "merging" | "merged" | "failed" | undefined): WorkerRowPullRequest | null {
+	if (!pr || (pr.lifecycle !== "open" && pr.lifecycle !== "draft")) return pr;
+	if (status === "merging") return { ...pr, tone: PR_TONES.merged, glyph: PR_GLYPHS.merged, merging: true };
+	if (status === "merged") return { ...pr, lifecycle: "merged", tone: PR_TONES.merged, glyph: PR_GLYPHS.merged };
+	return pr;
+}
+
 const INDICATOR_WORDS: Record<Exclude<WorkerRowIndicator, null | "attention">, string> = {
 	working: "Working",
 	review: "Review next",
@@ -111,11 +125,13 @@ export function workerRowAccessibilityLabel({ title, project, indicator, display
 }): string {
 	const state = indicator === "attention"
 		? displayStatus || "Needs you"
-		: indicator
-			? INDICATOR_WORDS[indicator]
-			: displayStatus || statusLabel;
+		: indicator === "ready" && pr?.merging
+			? "Merging"
+			: indicator
+				? INDICATOR_WORDS[indicator]
+				: displayStatus || statusLabel;
 	const parts = [title, state];
-	if (pr) parts.push(`Pull request ${pr.number}, ${pr.lifecycle}${pullRequestMoreWords(pr)}`);
+	if (pr) parts.push(`Pull request ${pr.number}, ${pr.merging ? "merging" : pr.lifecycle}${pullRequestMoreWords(pr)}`);
 	// One sentence for where it runs: "web on Studio", not "web. on Studio".
 	parts.push(machine ? `${project} on ${machine}` : project);
 	if (updated) parts.push(`Updated ${spokenAge(updated)}`);

@@ -30,9 +30,15 @@ export type SessionPullRequests = {
 	/** The badge's view: how many more, and the `+N`'s tone and words. */
 	badge: WorkerRowPullRequest;
 	rows: PullRequestRow[];
+	/** A merge of `lead` started from its page is still running (see prMergeTracker). */
+	leadMerging?: boolean;
 };
 
 type SummaryFor = (number: number) => SessionPRSummary | undefined;
+/** A merge the phone started on this pull request, if any (see prMergeTracker). */
+type MergeOf = (pr: DashboardPR) => "merging" | "merged" | "failed" | undefined;
+
+const MERGING: PullRequestRow["status"] = { text: "Merging…", tone: "merged" };
 
 /** The session's real pull requests (a number above zero), in lead order. */
 export function sessionPullRequests(session: Pick<DashboardSession, "pr" | "prs">): DashboardPR[] {
@@ -62,12 +68,27 @@ export function pullRequestRows(prs: readonly DashboardPR[], summaryFor: Summary
 	});
 }
 
-/** Undefined for a session with no pull request, which shows no chip. */
-export function sessionPullRequestModel(session: Pick<DashboardSession, "pr" | "prs">, summaryFor: SummaryFor): SessionPullRequests | undefined {
-	const prs = sessionPullRequests(session);
-	const badge = workerRowPullRequest(session);
+/**
+ * Undefined for a session with no pull request, which shows no chip. A merge
+ * the phone started shows before the board or the summaries agree: one running
+ * says "Merging…", and a finished one reads merged at once.
+ */
+export function sessionPullRequestModel(session: Pick<DashboardSession, "pr" | "prs">, summaryFor: SummaryFor, mergeOf: MergeOf = () => undefined): SessionPullRequests | undefined {
+	const list: DashboardPR[] = session.prs?.length ? session.prs : session.pr ? [session.pr] : [];
+	const merged = new Set(list.filter((pr) => pr && pr.state !== "merged" && pr.state !== "closed" && mergeOf(pr) === "merged").map((pr) => pr.number));
+	const tracked = merged.size ? { prs: list.map((pr) => merged.has(pr.number) ? { ...pr, state: "merged" as const } : pr) } : session;
+	const trackedSummaryFor: SummaryFor = merged.size ? (number) => {
+		const summary = summaryFor(number);
+		return summary && merged.has(number) ? { ...summary, state: "merged" } : summary;
+	} : summaryFor;
+	const prs = sessionPullRequests(tracked);
+	const badge = workerRowPullRequest(tracked);
 	if (prs.length === 0 || !badge) return undefined;
-	return { lead: badge.lead, leadSummary: summaryFor(badge.lead.number), badge, rows: pullRequestRows(prs, summaryFor) };
+	const rows = pullRequestRows(prs, trackedSummaryFor).map((row) => mergeOf(row.pr) === "merging"
+		? { ...row, status: MERGING, accessibilityLabel: row.title === "Pull request" ? `Pull request ${row.number}, ${MERGING.text}` : `Pull request ${row.number}, ${row.title}, ${MERGING.text}` }
+		: row);
+	const model: SessionPullRequests = { lead: badge.lead, leadSummary: trackedSummaryFor(badge.lead.number), badge, rows };
+	return mergeOf(badge.lead) === "merging" ? { ...model, leadMerging: true } : model;
 }
 
 /** What the session's ⋯ menu "Pull requests" does: one PR's review, or the list. */

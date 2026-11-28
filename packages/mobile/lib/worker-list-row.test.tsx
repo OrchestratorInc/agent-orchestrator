@@ -1,5 +1,5 @@
 import { act, create, type ReactTestRenderer } from "react-test-renderer";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { DashboardSession } from "./api";
 import { createContext, createElement, useContext, useImperativeHandle, Fragment } from "react";
 
@@ -100,9 +100,10 @@ function TestList({ ref, ...props }: { ref?: React.Ref<unknown>; data: {key: str
 	return createElement("virtual-list", props, props.data.map(item => <Fragment key={item.key}>{props.renderItem({ item })}</Fragment>));
 }
 vi.mock("./pageNavigation", () => ({ useOpenPage: () => counters.openPage }));
-vi.mock("./reviewView", () => ({ reviewRouteForPR: (sessionId: string, pr: { number: number }) => ({ pathname: "/review/[sessionId]", params: { sessionId, prNumber: String(pr.number) } }) }));
+vi.mock("./reviewView", async (importOriginal) => ({ ...await importOriginal<typeof import("./reviewView")>(), reviewRouteForPR: (sessionId: string, pr: { number: number }) => ({ pathname: "/review/[sessionId]", params: { sessionId, prNumber: String(pr.number) } }) }));
 
 import { pullRequestLabel, WorkerListRow } from "./worker-list-row";
+import { prMergeKey, resetPRMerges, trackPRMerge } from "./prMergeTracker";
 import { WorkerBoardList } from "./worker-board-list";
 
 const session: DashboardSession = {
@@ -790,6 +791,7 @@ describe("pullRequestLabel", () => {
 });
 
 describe("the pull request pill on a row", () => {
+	afterEach(() => resetPRMerges());
 	const handlers = {
 		onSwipeOpen: vi.fn(), onSwipeClose: vi.fn(), onRenameStart: vi.fn(), onRenameCancel: vi.fn(),
 		onRename: vi.fn(async () => {}), onSetPinned: vi.fn(async () => {}), onDelete: vi.fn(), onResume: vi.fn(), onRestore: vi.fn(),
@@ -854,6 +856,34 @@ describe("the pull request pill on a row", () => {
 		const renderer = render({ prs: [{ number: 12, state: "closed" }, { number: 15, state: "open" }] as never });
 		act(() => renderer.root.findByType("RowInteraction" as never).props.onAction("openPr"));
 		expect(counters.openPage).toHaveBeenCalledWith({ pathname: "/review/[sessionId]", params: { sessionId: "worker-1", prNumber: "15" } });
+		act(() => renderer.unmount());
+	});
+
+	// Left mid-merge, the PR page no longer shows the merge: the row the user
+	// lands on says it is merging, then merged, before the board's next poll.
+	it("says Merging… in purple while a merge started from its page runs, then shows it merged", async () => {
+		const url = "https://github.test/acme/tracker/pull/15";
+		let finish!: () => void;
+		const merge = trackPRMerge(prMergeKey(undefined, url), () => new Promise<void>((resolve) => { finish = resolve; }));
+		const renderer = render({ prs: [{ number: 15, state: "open", url }] as never });
+		const pill = () => renderer.root.findByProps({ testID: "worker-pr-pill" });
+		const label = () => renderer.root.findAll((node) => typeof node.props.accessibilityLabel === "string" && node.props.accessibilityLabel.startsWith("Polish workers."))[0].props.accessibilityLabel as string;
+		expect(pill().findByType("Feather" as never).props).toMatchObject({ name: "git-merge", color: "tone:merged" });
+		expect(pill().findByType("Text" as never).props.children[0]).toBe("#15 · Merging…");
+		expect(label()).toContain("Pull request 15, merging.");
+		await act(async () => { finish(); await merge; });
+		expect(pill().findByType("Feather" as never).props).toMatchObject({ name: "git-merge", color: "tone:merged" });
+		expect(pill().findByType("Text" as never).props.children[0]).toBe("#15");
+		expect(label()).toContain("Pull request 15, merged.");
+		act(() => renderer.unmount());
+	});
+
+	// A merge on another machine's pull request with the same number is not this one.
+	it("leaves the pill alone for a merge on another machine", () => {
+		const url = "https://github.test/acme/tracker/pull/15";
+		void trackPRMerge(prMergeKey("host-2", url), () => new Promise<void>(() => {}));
+		const renderer = render({ prs: [{ number: 15, state: "open", url }] as never });
+		expect(renderer.root.findByProps({ testID: "worker-pr-pill" }).findByType("Text" as never).props.children[0]).toBe("#15");
 		act(() => renderer.unmount());
 	});
 });

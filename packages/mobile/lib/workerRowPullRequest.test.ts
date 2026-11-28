@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { workerRowAccessibilityLabel, workerRowPullRequest } from "./workerRowPullRequest";
+import { withTrackedMerge, workerRowAccessibilityLabel, workerRowPullRequest } from "./workerRowPullRequest";
 
 const pr = (number: number, state: "open" | "merged" | "closed", isDraft = false) => ({ number, state, isDraft });
 
@@ -63,6 +63,20 @@ describe("workerRowAccessibilityLabel", () => {
 	it("says what a mixed +N counts, since its colour says nothing to a screen reader", () => {
 		const pr = workerRowPullRequest({ prs: [{ number: 15, state: "open" }, { number: 9, state: "closed" }, { number: 12, state: "merged" }, { number: 11, state: "merged" }] } as never);
 		expect(workerRowAccessibilityLabel({ ...base, indicator: null, pr })).toContain(". Pull request 15, open, and 3 more: 2 merged, 1 closed.");
+	});
+
+	// A row reading "Ready to merge. Pull request 15, merging" contradicts itself.
+	it("says the worker is merging, not ready to merge, while a merge it started runs", () => {
+		const open = workerRowPullRequest({ prs: [{ number: 15, state: "open", url: "u" }] } as never);
+		const merging = withTrackedMerge(open, "merging");
+		expect(merging).toMatchObject({ label: "#15", tone: "merged", glyph: "git-merge", merging: true });
+		expect(workerRowAccessibilityLabel({ ...base, indicator: "ready", pr: merging })).toBe("Fix login. Merging. Pull request 15, merging. web. Updated 5 minutes ago.");
+		expect(withTrackedMerge(open, "merged")).toMatchObject({ label: "#15", lifecycle: "merged", tone: "merged", glyph: "git-merge" });
+		// A failed merge leaves the pull request as the board reports it.
+		expect(withTrackedMerge(open, "failed")).toBe(open);
+		// The board already reports it merged or closed: nothing to lay over.
+		const closed = workerRowPullRequest({ prs: [{ number: 15, state: "closed" }] } as never);
+		expect(withTrackedMerge(closed, "merging")).toBe(closed);
 	});
 
 	it("says just now for a fresh row", () => {
