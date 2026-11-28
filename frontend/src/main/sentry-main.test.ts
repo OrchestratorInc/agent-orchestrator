@@ -105,6 +105,33 @@ describe("Electron main Sentry configuration", () => {
 		expect(JSON.stringify(event)).not.toContain("/private/session");
 	});
 
+	it("tells frameless window errors apart by hash without sending their text", async () => {
+		await initMainSentry("1.0.0", dataDir, "/tmp/ao-electron-test");
+		const beforeSend = sdk.init.mock.calls[0]?.[0].beforeSend as (event: ErrorEvent) => ErrorEvent | null;
+		const windowError = (value: string) => beforeSend({
+			type: undefined,
+			tags: { "ao.origin": "renderer", "ao.kind": "exception", "ao.category": "renderer_exception", "ao.code": "WINDOW_ERROR" },
+			exception: { values: [{ type: "Error", value }] },
+		});
+		const prose = "Request failed: my private prompt contains the launch plan";
+		const event = windowError(prose);
+		expect(event?.message).toBe("Renderer Error in unknown (WINDOW_ERROR)");
+		expect(event?.tags?.message_hash).toBe(hashParts(prose.toLowerCase())[1]);
+		expect(JSON.stringify(event)).not.toMatch(/private prompt|launch plan/);
+		expect(windowError("a different failure")?.tags?.message_hash).not.toBe(event?.tags?.message_hash);
+	});
+
+	it("keeps a coded renderer error in one issue across builds", async () => {
+		await initMainSentry("1.0.0", dataDir, "/tmp/ao-electron-test");
+		const beforeSend = sdk.init.mock.calls[0]?.[0].beforeSend as (event: ErrorEvent) => ErrorEvent | null;
+		const coded = (filename: string) => beforeSend({
+			type: undefined,
+			tags: { "ao.origin": "renderer", "ao.kind": "exception", "ao.category": "renderer_exception", "ao.code": "SESSION_WORKSPACE_NOT_FOUND" },
+			exception: { values: [{ type: "WorkspaceRequestError", value: "missing", stacktrace: { frames: [{ function: "renderer_frame", filename, lineno: 4, colno: 12986 }] } }] },
+		});
+		expect(coded("assets/AppLink-DzNcVpMu.js")?.fingerprint).toEqual(coded("assets/useSessionWorkspaceFiles-DRAZJrV6.js")?.fingerprint);
+	});
+
 	it("reports handled main failures with a scrubbed title", async () => {
 		const transport = await initMainSentry("1.0.0", dataDir, "/tmp/ao-electron-test");
 		const beforeSend = sdk.init.mock.calls[0]?.[0].beforeSend as (event: ErrorEvent) => ErrorEvent | null;
@@ -332,7 +359,7 @@ describe("Electron main Sentry configuration", () => {
 			tags: { "ao.origin": "renderer", "ao.kind": "exception", "ao.category": "http_5xx", "ao.code": "WORKSPACE_GIT_READ_FAILED", branch: "private" },
 			exception: { values: [{ type: "Error", value: "get project ai-sports-coach-113", stacktrace: { frames: [{ function: "ChatWorkspace", filename: "/Users/alice/private-repo/file.ts", context_line: "private" }] } }] },
 		});
-		expect(result).toMatchObject({ message: "Renderer Error in ChatWorkspace (WORKSPACE_GIT_READ_FAILED)", user: { id: "ins_sampled_5" }, fingerprint: ["electron", "exception", "WORKSPACE_GIT_READ_FAILED", "Error", "ChatWorkspace", "renderer", "code", "WORKSPACE_GIT_READ_FAILED"] });
+		expect(result).toMatchObject({ message: "Renderer Error in ChatWorkspace (WORKSPACE_GIT_READ_FAILED)", user: { id: "ins_sampled_5" }, fingerprint: ["electron", "exception", "WORKSPACE_GIT_READ_FAILED", "Error", "renderer", "code", "WORKSPACE_GIT_READ_FAILED"] });
 		const encoded = JSON.stringify(result);
 		for (const secret of ["ai-sports-coach-113", "private-repo", "private branch", "private@example.test", "private-host", "file:///"]) expect(encoded).not.toContain(secret);
 		expect(result.exception?.values?.[0]?.stacktrace?.frames?.[0]).toEqual({ function: "ChatWorkspace", in_app: true });

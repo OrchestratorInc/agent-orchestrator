@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { isExpectedSentryError } from "../../../../packages/shared/telemetry/ao-error";
+import { markApiError, reserveException } from "../lib/reported-errors";
 import {
 	WorkspaceRequestError,
 	isMissingWorkspaceError,
@@ -195,5 +196,20 @@ describe("workspace files on selected hosts", () => {
 		await expect(sessionWorkspaceFileQueryOptions("same-id", "src/app.ts", "read failed", "combined", undefined, "offline").queryFn()).rejects.toThrow("not connected");
 		expect(localPut).not.toHaveBeenCalled();
 		expect(localGet).not.toHaveBeenCalled();
+	});
+});
+
+describe("recordWorkspaceResult", () => {
+	it("keeps API ownership so the query cache does not report the error again", () => {
+		// Not an expected answer, so only the API ownership keeps it from a second report.
+		const apiError = { code: "SERVICE_UNAVAILABLE", message: "Daemon busy" };
+		markApiError(apiError);
+		const typed = recordWorkspaceResult("session-owned", undefined, apiError, new Response(null, { status: 503 }), "fallback");
+		expect(typed.expected).toBe(false);
+		expect(reserveException(typed)).toBe(false);
+	});
+
+	it("still reports a failure with no API error behind it", () => {
+		expect(reserveException(recordWorkspaceResult("session-unowned", undefined, undefined, undefined, "fallback"))).toBe(true);
 	});
 });
