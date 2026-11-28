@@ -291,12 +291,18 @@ type Observer struct {
 	trigger chan struct{}
 	// lifecycleTimeout bounds each lifecycle notification.
 	lifecycleTimeout time.Duration
+	// terminalMu prevents a subsequent poll from delivering a second reaction
+	// while terminal teardown for the same session is still running.
+	terminalMu       sync.Mutex
+	terminalInFlight map[domain.SessionID]map[string]bool
+	terminalTasks    map[domain.SessionID][]terminalReaction
+	terminalWG       sync.WaitGroup
 }
 
 // New constructs an Observer with default cadence/cache settings for zero
 // values in cfg.
 func New(provider Provider, store Store, lifecycle Lifecycle, cfg Config) *Observer {
-	o := &Observer{provider: provider, store: store, lifecycle: lifecycle, tick: cfg.Tick, reviewInterval: cfg.ReviewInterval, clock: cfg.Clock, logger: cfg.Logger, scopedIdentityResolver: cfg.ScopedIdentityResolver, Cache: newCache(cfg.CacheMax), rateLimitUntil: map[string]time.Time{}, branchStates: cfg.BranchStates, lifecycleTimeout: DefaultLifecycleTimeout, forcedReviews: map[string]bool{}, forcedSessions: map[domain.SessionID]bool{}, sessionRefreshDebounce: 500 * time.Millisecond, trigger: make(chan struct{}, 1)}
+	o := &Observer{provider: provider, store: store, lifecycle: lifecycle, tick: cfg.Tick, reviewInterval: cfg.ReviewInterval, clock: cfg.Clock, logger: cfg.Logger, scopedIdentityResolver: cfg.ScopedIdentityResolver, Cache: newCache(cfg.CacheMax), rateLimitUntil: map[string]time.Time{}, branchStates: cfg.BranchStates, lifecycleTimeout: DefaultLifecycleTimeout, terminalInFlight: map[domain.SessionID]map[string]bool{}, terminalTasks: map[domain.SessionID][]terminalReaction{}, forcedReviews: map[string]bool{}, forcedSessions: map[domain.SessionID]bool{}, sessionRefreshDebounce: 500 * time.Millisecond, trigger: make(chan struct{}, 1)}
 	if o.tick <= 0 {
 		o.tick = DefaultTickInterval
 	}
@@ -332,7 +338,14 @@ func (o *Observer) Start(ctx context.Context) <-chan struct{} {
 		})
 		return o.Poll(ctx)
 	}
-	return observe.StartTriggeredPollLoop(ctx, o.tick, o.trigger, poll, o.logger, "scm observer")
+	loopDone := observe.StartTriggeredPollLoop(ctx, o.tick, o.trigger, poll, o.logger, "scm observer")
+	done := make(chan struct{})
+	go func() {
+		<-loopDone
+		o.terminalWG.Wait()
+		close(done)
+	}()
+	return done
 }
 
 type subject struct {
@@ -436,7 +449,9 @@ func (o *Observer) takeForcedSessions() map[domain.SessionID]bool {
 	return forced
 }
 
-// takeForcedReviews returns and clears the pending forced refreshes.
+// takeForcedReviews captures requests before discovery, which must include
+// terminal PRs whose background reaction failed. New requests during the poll
+// remain in the map for its next cycle.
 func (o *Observer) takeForcedReviews() map[string]bool {
 	o.forceMu.Lock()
 	defer o.forceMu.Unlock()
@@ -445,12 +460,21 @@ func (o *Observer) takeForcedReviews() map[string]bool {
 	return forced
 }
 
+func (o *Observer) restoreForcedReviews(forced map[string]bool) {
+	o.forceMu.Lock()
+	defer o.forceMu.Unlock()
+	for url := range forced {
+		o.forcedReviews[url] = true
+	}
+}
+
 // forcedFor reports whether a forced refresh names this tracked PR.
 func forcedFor(forced map[string]bool, pr domain.PullRequest) bool {
 	return forced[pr.URL] || (pr.HTMLURL != "" && forced[pr.HTMLURL])
 }
 
-// Poll runs one synchronous SCM observation cycle.
+// Poll runs one SCM observation cycle. Terminal lifecycle reactions continue
+// after it returns so teardown cannot hold the serial provider loop.
 func (o *Observer) Poll(ctx context.Context) (pollErr error) {
 	pollStarted := time.Now()
 	o.logger.Debug("scm observer: poll started", "started_at", pollStarted.UTC())
@@ -484,7 +508,14 @@ func (o *Observer) Poll(ctx context.Context) (pollErr error) {
 			o.logger.Warn("scm observer: branch state reconcile failed", "err", err)
 		}
 	}
-	subjects, sessionRepos, err := o.discoverSubjects(ctx)
+	forced := o.takeForcedReviews()
+	forcedConsumed := false
+	defer func() {
+		if !forcedConsumed {
+			o.restoreForcedReviews(forced)
+		}
+	}()
+	subjects, sessionRepos, err := o.discoverSubjects(ctx, forced)
 	if err != nil {
 		return err
 	}
@@ -548,7 +579,6 @@ func (o *Observer) Poll(ctx context.Context) (pollErr error) {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	forced := o.takeForcedReviews()
 	selection := o.selectRefreshCandidates(ctx, subjects, repoGuards, listedPRs, forced, forcedSessions, markRepoRefreshFailed, now)
 	// Item 2 — terminal-state reconciliation for GitHub: tracked open PRs
 	// not in the current state=open listing may have transitioned to
@@ -723,6 +753,15 @@ func (o *Observer) Poll(ctx context.Context) (pollErr error) {
 			continue
 		}
 		finalPR, finalChecks, finalReviews, finalThreads, finalComments := domainFromObservation(subj.session.ID, subj.session, prepared, local, opts, now)
+		if o.reactionForPRActive(subj.session.ID, finalPR.URL) {
+			// The older delivery still owns this PR's acknowledgement. Keep
+			// the refresh pending so a later poll can persist newer facts.
+			if prepared.PR.Merged || prepared.PR.Closed {
+				o.retryTerminalReaction(finalPR.URL)
+			}
+			markRepoRefreshFailed(subj.repo)
+			continue
+		}
 		pr, checks, reviews, threads, comments := finalPR, finalChecks, finalReviews, finalThreads, finalComments
 		// Lifecycle is allowed to run only after the observed facts are durable,
 		// but semantic hashes are the observer's acknowledgement cursor. Keep
@@ -749,13 +788,25 @@ func (o *Observer) Poll(ctx context.Context) (pollErr error) {
 			continue
 		}
 		if o.lifecycle != nil {
-			// A merged or closed PR is not selected again after a failed
-			// reaction, so its one reaction (teardown, final notifications)
-			// runs unbounded. An open PR is retried on the next poll.
-			lifecycleCtx, cancel := ctx, context.CancelFunc(func() {})
-			if !prepared.PR.Merged && !prepared.PR.Closed {
-				lifecycleCtx, cancel = context.WithTimeout(ctx, o.lifecycleTimeout)
+			if prepared.PR.Merged || prepared.PR.Closed {
+				// Teardown may use its own long cleanup budget. Keep it off the
+				// serial provider loop, but leave the hashes pending until delivery
+				// and acknowledgement both succeed. A later poll can retry failures.
+				o.queueTerminalReaction(terminalReaction{ctx: ctx, sessionID: subj.session.ID, observation: prepared, pr: finalPR, checks: finalChecks})
+				markRepoRefreshOK(subj.repo)
+				prRefreshOK[key] = !prepared.PR.DetailsPending
+				continue
 			}
+			if o.terminalReactionActive(subj.session.ID) {
+				// An open PR in the same session waits behind teardown without
+				// holding the provider loop. It keeps the normal timeout.
+				o.queueTerminalReaction(terminalReaction{ctx: ctx, sessionID: subj.session.ID, observation: prepared, pr: finalPR, checks: finalChecks, bounded: true})
+				markRepoRefreshOK(subj.repo)
+				prRefreshOK[key] = !prepared.PR.DetailsPending
+				continue
+			}
+			// Open PR reactions keep their timeout and retry on a later poll.
+			lifecycleCtx, cancel := context.WithTimeout(ctx, o.lifecycleTimeout)
 			err := o.lifecycle.ApplySCMObservation(lifecycleCtx, subj.session.ID, prepared)
 			cancel()
 			if err != nil {
@@ -840,7 +891,96 @@ func (o *Observer) Poll(ctx context.Context) (pollErr error) {
 			o.Cache.LastSyncCursor[key] = now
 		}
 	}
+	forcedConsumed = true
 	return nil
+}
+
+type terminalReaction struct {
+	ctx         context.Context
+	sessionID   domain.SessionID
+	observation ports.SCMObservation
+	pr          domain.PullRequest
+	checks      []domain.PullRequestCheck
+	bounded     bool
+}
+
+func (o *Observer) queueTerminalReaction(task terminalReaction) {
+	o.terminalMu.Lock()
+	defer o.terminalMu.Unlock()
+	id := task.sessionID
+	if o.terminalInFlight[id] == nil {
+		o.terminalInFlight[id] = map[string]bool{}
+		o.terminalWG.Add(1)
+		go o.runTerminalReactions(id)
+	}
+	if o.terminalInFlight[id][task.pr.URL] {
+		return
+	}
+	o.terminalInFlight[id][task.pr.URL] = true
+	o.terminalTasks[id] = append(o.terminalTasks[id], task)
+}
+
+func (o *Observer) terminalReactionActive(id domain.SessionID) bool {
+	o.terminalMu.Lock()
+	defer o.terminalMu.Unlock()
+	return len(o.terminalInFlight[id]) > 0
+}
+
+func (o *Observer) reactionForPRActive(id domain.SessionID, prURL string) bool {
+	o.terminalMu.Lock()
+	defer o.terminalMu.Unlock()
+	return o.terminalInFlight[id][prURL]
+}
+
+func (o *Observer) runTerminalReactions(id domain.SessionID) {
+	defer o.terminalWG.Done()
+	for {
+		o.terminalMu.Lock()
+		if len(o.terminalTasks[id]) == 0 {
+			delete(o.terminalInFlight, id)
+			delete(o.terminalTasks, id)
+			o.terminalMu.Unlock()
+			return
+		}
+		task := o.terminalTasks[id][0]
+		o.terminalTasks[id] = o.terminalTasks[id][1:]
+		o.terminalMu.Unlock()
+		delivered := o.deliverTerminalReaction(task)
+		o.terminalMu.Lock()
+		if !delivered {
+			// Publish the retry before releasing in-flight ownership, so a
+			// poll cannot consume the request while still skipping this PR.
+			o.retryTerminalReaction(task.pr.URL)
+		}
+		delete(o.terminalInFlight[id], task.pr.URL)
+		o.terminalMu.Unlock()
+	}
+}
+
+func (o *Observer) deliverTerminalReaction(task terminalReaction) bool {
+	lifecycleCtx, cancel := task.ctx, context.CancelFunc(func() {})
+	if task.bounded {
+		lifecycleCtx, cancel = context.WithTimeout(task.ctx, o.lifecycleTimeout)
+	}
+	err := o.lifecycle.ApplySCMObservation(lifecycleCtx, task.sessionID, task.observation)
+	cancel()
+	if err != nil {
+		o.logger.Error("scm observer: lifecycle notification failed", "session", task.sessionID, "pr", task.pr.URL, "err", err)
+		sentryobs.CaptureBackground(task.ctx, err, "scm", "scm_persist", map[string]string{"reason": "notify"})
+		return false
+	}
+	if err := o.store.WriteSCMObservation(task.ctx, task.pr, task.checks, nil, nil, nil, ports.ReviewWritePreserve); err != nil {
+		o.logger.Error("scm observer: DB lifecycle acknowledgement failed", "session", task.sessionID, "pr", task.pr.URL, "err", err)
+		sentryobs.CaptureBackground(task.ctx, err, "scm", "scm_persist", map[string]string{"reason": "db_write"})
+		return false
+	}
+	return true
+}
+
+func (o *Observer) retryTerminalReaction(prURL string) {
+	o.forceMu.Lock()
+	o.forcedReviews[prURL] = true
+	o.forceMu.Unlock()
 }
 
 // dispatchOrder returns observation keys in a deterministic order so lifecycle
@@ -881,7 +1021,7 @@ func (o *Observer) checkCredentials(ctx context.Context) (bool, error) {
 // session may own several PRs, so each open tracked PR becomes its own subject.
 // Terminal PRs stay eligible only for an opted-in live session, allowing an
 // unacknowledged teardown failure to be delivered again on a later poll.
-func (o *Observer) discoverSubjects(ctx context.Context) (map[string]*subject, []sessionRepo, error) {
+func (o *Observer) discoverSubjects(ctx context.Context, forced map[string]bool) (map[string]*subject, []sessionRepo, error) {
 	sessions, err := o.store.ListAllSessions(ctx)
 	if err != nil {
 		return nil, nil, err
@@ -939,7 +1079,17 @@ func (o *Observer) discoverSubjects(ctx context.Context) (map[string]*subject, [
 		if err != nil {
 			return nil, nil, err
 		}
-		for _, pr := range trackedPRsForSession(sess, prs) {
+		tracked := trackedPRsForSession(sess, prs)
+		if !sess.TerminateOnPRMerge {
+			// A failed detached reaction must be fetched again even though
+			// ordinary discovery excludes terminal PRs for this session.
+			for _, pr := range prs {
+				if (pr.Merged || pr.Closed) && forcedFor(forced, pr) {
+					tracked = append(tracked, pr)
+				}
+			}
+		}
+		for _, pr := range tracked {
 			prRepo, ok := repoForTrackedPR(pr, repos)
 			if !ok {
 				o.logger.Warn("scm observer: tracked PR repo no longer belongs to project", "session", sess.ID, "pr", pr.URL, "repo", pr.Repo)

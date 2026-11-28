@@ -61,6 +61,7 @@ func TestPoll_IdentityRecoveryRetriesMissedDiscoveries(t *testing.T) {
 			if err := obs.Poll(context.Background()); err != nil {
 				t.Fatal(err)
 			}
+			waitForTerminalReaction(t, obs, "p-1")
 			if len(store.writes) == 0 || !store.writes[0].pr.Merged {
 				t.Fatal("existing PR did not refresh during identity outage")
 			}
@@ -73,6 +74,7 @@ func TestPoll_IdentityRecoveryRetriesMissedDiscoveries(t *testing.T) {
 			if err := obs.Poll(context.Background()); err != nil {
 				t.Fatal(err)
 			}
+			waitForTerminalReaction(t, obs, "p-1")
 			if len(provider.listedAfter) != 1 || !provider.listedAfter[0].IsZero() || provider.guardETags[1] != "" {
 				t.Fatalf("recovery did not retry full listing: cursors=%v etags=%v", provider.listedAfter, provider.guardETags)
 			}
