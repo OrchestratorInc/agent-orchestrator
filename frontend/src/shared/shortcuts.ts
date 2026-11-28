@@ -34,6 +34,14 @@ export const SET_ARTIFACT_ZOOM_ENGAGED_CHANNEL = "artifactZoom:setEngaged";
 /** Main sends the zoom chord it claimed for an engaged artifact viewer. */
 export const ARTIFACT_ZOOM_SHORTCUT_CHANNEL = "artifactZoom:shortcut";
 export type ArtifactZoomAction = "in" | "out" | "reset";
+/**
+ * The renderer reports whether a full-screen artifact viewer or an artifact
+ * preview is open; main then reports Escape pressed anywhere in the shell,
+ * also inside a framed page, whose keys never reach the shell's document.
+ */
+export const SET_ARTIFACT_ESCAPE_ARMED_CHANNEL = "artifactEscape:setArmed";
+/** Main reports a plain Escape press while an artifact viewer or preview is open. */
+export const ARTIFACT_ESCAPE_CHANNEL = "artifactEscape:pressed";
 
 /**
  * The artifact zoom a chord asks for: Cmd+= / Cmd+- / Cmd+0 on macOS, Ctrl

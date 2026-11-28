@@ -971,6 +971,49 @@ describe("SessionArtifactsView", () => {
 		expect(screen.getByRole("button", { name: "Maximize" })).toBeInTheDocument();
 	});
 
+	it("leaves full screen on Escape pressed inside the framed page, which main reports", async () => {
+		let escape: (() => void) | undefined;
+		const onEscape = vi.spyOn(aoBridge.artifactEscape, "onEscape").mockImplementation((listener) => {
+			escape = listener;
+			return () => undefined;
+		});
+		const setArmed = vi.spyOn(aoBridge.artifactEscape, "setArmed");
+		try {
+			renderView(<SessionArtifactsView request={{ key: 1, path: "report.html" }} session={session()} />);
+			expect(setArmed).not.toHaveBeenCalled();
+			await userEvent.click(screen.getByRole("button", { name: "Maximize" }));
+			const overlay = screen.getByRole("dialog", { name: "report.html" });
+			expect(setArmed).toHaveBeenLastCalledWith(true);
+
+			// A click in the page leaves its cross-origin frame as this document's
+			// activeElement, and its keys never reach this document.
+			const page = overlay.querySelector("iframe")!;
+			Object.defineProperty(document, "activeElement", { configurable: true, get: () => page });
+			act(() => escape?.());
+
+			expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+			expect(screen.getByRole("button", { name: "Maximize" })).toBeInTheDocument();
+			expect(setArmed).toHaveBeenLastCalledWith(false);
+		} finally {
+			delete (document as { activeElement?: Element | null }).activeElement;
+			onEscape.mockRestore();
+			setArmed.mockRestore();
+		}
+	});
+
+	it("keeps full screen when Escape closes a menu open over the artifact", async () => {
+		renderView(<SessionArtifactsView request={{ key: 1, path: "report.html" }} session={session()} />);
+		await userEvent.click(screen.getByRole("button", { name: "Maximize" }));
+		const overlay = screen.getByRole("dialog", { name: "report.html" });
+		await userEvent.click(within(overlay).getByRole("button", { name: /^report\.html/ }));
+		expect(await screen.findByRole("menu")).toBeInTheDocument();
+
+		await userEvent.keyboard("{Escape}");
+
+		expect(screen.queryByRole("menu")).not.toBeInTheDocument();
+		expect(screen.getByRole("dialog", { name: "report.html" })).toBeInTheDocument();
+	});
+
 	it("covers the whole app window without taking the window itself full screen", async () => {
 		const action = vi.spyOn(aoBridge.menu, "action").mockResolvedValue(undefined);
 		renderView(<SessionArtifactsView session={session()} />);

@@ -10,6 +10,7 @@ import type { KeptArtifactSet } from "../hooks/useKeptArtifacts";
 import type { CloudCpSharedArtifact } from "../lib/cloud-cp";
 import { newChatDraftScope, readChatSessionDraft, writeChatComposerText } from "../lib/chat-drafts";
 import { TooltipProvider } from "./ui/tooltip";
+import { aoBridge } from "../lib/bridge";
 
 // The signed-in person's control-plane user ID: only a cloud session's creator shares its files.
 vi.mock("../hooks/useCloudMeUserId", () => ({ useCloudMeUserId: () => "me-1" }));
@@ -723,6 +724,36 @@ describe("ArtifactsView", () => {
 		await user.click(screen.getByRole("button", { name: "Remove filter Owner: Me" }));
 		await user.click(screen.getByRole("button", { name: "Select" }));
 		expect(screen.getByRole("checkbox", { name: "Select q3-report.html" })).toBeDisabled();
+	});
+
+	it("closes the preview on Escape pressed inside its framed page, which main reports", async () => {
+		const user = userEvent.setup();
+		let escape: (() => void) | undefined;
+		const onEscape = vi.spyOn(aoBridge.artifactEscape, "onEscape").mockImplementation((listener) => {
+			escape = listener;
+			return () => undefined;
+		});
+		mocks.cloudArtifacts = false;
+		mocks.shared = [{
+			linkId: "q3-report", name: "q3-report.html", contentType: "text/html", size: 10, updatedAt: "2030-01-01T00:00:00Z",
+			access: "restricted", via: "direct", teams: [], sharedAt: "2030-01-01T00:00:00Z", viewerUrl: "https://orchestrator.inc/artifact/q3-report",
+		}];
+		try {
+			renderView();
+			await user.click(within(screen.getByRole("group", { name: "Artifact location" })).getByRole("button", { name: "Cloud" }));
+			await user.click(within(within(artifactList()).getByRole("listitem")).getByRole("button", { name: /^q3-report\.html/ }));
+			const page = within(screen.getByRole("dialog", { name: "q3-report.html" })).getByTestId("shared-artifact-preview");
+
+			// A click in the page leaves its cross-origin frame as this document's
+			// activeElement, and its keys never reach this document.
+			Object.defineProperty(document, "activeElement", { configurable: true, get: () => page });
+			act(() => escape?.());
+
+			await waitFor(() => expect(screen.queryByRole("dialog", { name: "q3-report.html" })).not.toBeInTheDocument());
+		} finally {
+			delete (document as { activeElement?: Element | null }).activeElement;
+			onEscape.mockRestore();
+		}
 	});
 
 	it("says when the links shared with this person did not load, keeping the rest listed", async () => {

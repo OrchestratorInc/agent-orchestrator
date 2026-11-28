@@ -84,6 +84,10 @@ export const aoBridge: AoBridge =
 			setEngaged: () => undefined,
 			onShortcut: () => () => undefined,
 		},
+		artifactEscape: {
+			setArmed: () => undefined,
+			onEscape: () => () => undefined,
+		},
 		window: {
 			getZoomFactor: async () => 1,
 			onZoomFactor: () => () => undefined,
