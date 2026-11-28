@@ -9,20 +9,23 @@
 (function () {
   // Enabled only by the local artifact viewer, never by a page itself.
   var findEngine, findBindings = [], findRequest, findAnchor, findAnchorQuery, findOpen = false;
-  var findStop, findUnobserve, findMatches, findMatchesGeneration;
+  var findStop, findUnobserve, findMatches, findMatchesGeneration, findStale = false;
   function findPost(method, params) {
     window.parent.postMessage({ jsonrpc: "2.0", method: method, params: params }, "*");
   }
   function cancelFind() {
     if (findStop) findStop.abort();
-    findStop = undefined; findMatches = undefined;
+    findStop = undefined; findMatches = undefined; findStale = false;
     if (findEngine) findEngine.clear();
   }
   function watchFind() {
     if (findUnobserve || !findOpen || !document.body) return;
+    // Content that keeps changing must not abort every search: let a running
+    // search finish and paint, then ask for one fresh search. Highlights stay
+    // up until the next result replaces them.
     findUnobserve = findEngine.observe(document.body, function () {
       if (!findRequest || !findRequest.query.trim() || !findOpen) return;
-      cancelFind();
+      if (findStop) { findStale = true; return; }
       findPost("ao/find-changed", { generation: findRequest.generation });
     });
   }
@@ -31,7 +34,10 @@
     if (findRequest && params.generation < findRequest.generation) return;
     if (!params.query.trim()) { findRequest = params; cancelFind(); return; }
     var cached = findMatchesGeneration === params.generation && findRequest?.query === params.query ? findMatches : undefined;
-    cancelFind();
+    // Replace the previous search without clearing its highlights: paint swaps them.
+    if (findStop) findStop.abort();
+    findMatches = undefined; findStale = false;
+    if (findRequest?.query !== params.query && findEngine) findEngine.clear();
     var stop = new AbortController(); findStop = stop;
     var retain = findAnchorQuery === params.query && !params.reveal && findAnchor;
     findRequest = params;
@@ -49,8 +55,10 @@
     findEngine.paint(ranges, active, document);
     if (params.reveal) findEngine.reveal(ranges[active]);
     findPost("ao/find-result", { generation: params.generation, total: ranges.length, active: active });
+    findStop = undefined;
+    if (findStale) { findStale = false; findPost("ao/find-changed", { generation: params.generation }); }
     } catch (error) {
-      if (!stop.signal.aborted && findStop === stop) findPost("ao/find-error", { generation: params.generation });
+      if (!stop.signal.aborted && findStop === stop) { findStop = undefined; findStale = false; findPost("ao/find-error", { generation: params.generation }); }
     }
   }
   window.addEventListener("message", function (event) {

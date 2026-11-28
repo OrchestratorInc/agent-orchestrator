@@ -127,6 +127,30 @@ describe("local artifact sandbox find bridge", () => {
 		await vi.advanceTimersByTimeAsync(150);
 		expect(h.sent).toHaveBeenCalledWith({ jsonrpc: "2.0", method: "ao/find-changed", params: { generation: 11 } }, "*");
 	});
+	it("completes a slow search under a fast ticker, keeps highlights, and asks for one refresh", async () => {
+		vi.useFakeTimers();
+		const h = frameHarness(); await h.configure();
+		h.doc.body.innerHTML = `<p id="clock">0</p><pre>${"needle ".repeat(3000)}</pre>`;
+		// Every step costs 2 ms, so the search spans many 8 ms slices and outlasts the 100 ms refresh interval.
+		let clock = 0; vi.spyOn(performance, "now").mockImplementation(() => clock += 2);
+		let tick = 0; const ticker = setInterval(() => { h.doc.getElementById("clock")!.textContent = String(++tick); }, 50);
+		try {
+			h.sent.mockClear();
+			await h.message("ao/find", { generation: 30, query: "needle", active: 0, reveal: false }, h.reader.parent, false);
+			const methods = () => h.sent.mock.calls.map(([message]) => message.method);
+			for (let i = 0; i < 200 && !methods().includes("ao/find-result"); i++) await vi.advanceTimersByTimeAsync(50);
+			expect(h.sent).toHaveBeenCalledWith({ jsonrpc: "2.0", method: "ao/find-result", params: { generation: 30, total: 3000, active: 0 } }, "*");
+			expect(tick).toBeGreaterThan(2);
+			const resultAt = methods().indexOf("ao/find-result");
+			expect(methods().slice(0, resultAt)).not.toContain("ao/find-changed");
+			expect(methods().slice(resultAt)).toContain("ao/find-changed");
+			// The refresh replaces the highlights instead of clearing them first.
+			const before = h.highlights.get("artifact-find-matches");
+			expect(before.size).toBe(3000);
+			await h.message("ao/find", { generation: 31, query: "needle", active: 0, reveal: false }, h.reader.parent, false);
+			expect(h.highlights.get("artifact-find-matches")).toBe(before);
+		} finally { clearInterval(ticker); }
+	});
 	it("acknowledges a search before completing it and rejects late cancelled work", async () => {
 		vi.useFakeTimers();
 		const h = frameHarness(); await h.configure();

@@ -228,6 +228,9 @@ export function createArtifactSearchEngine(exceptions) {
   // Discover open roots in bounded, single-flight tasks while Find is open.
   function observe(root, changed) {
     var win = root.ownerDocument.defaultView, stop = new AbortController(), watched = new Map(), timer, discoveryTimer, stopped = false;
+    // Discovery walks the whole tree, so it backs off while nothing changes and
+    // returns to the short interval as soon as a mutation is seen.
+    var minDiscovery = 500, maxDiscovery = 8000, discoveryDelay = minDiscovery, scanning = false;
     function ignored(change) {
       var element = change.target.nodeType === 1 ? change.target : change.target.parentElement;
       if (element?.closest("[role='search'], style[data-artifact-find-style]")) return true;
@@ -236,7 +239,12 @@ export function createArtifactSearchEngine(exceptions) {
     // Keep the first pending refresh: content that changes faster than the
     // interval still refreshes once per interval instead of never.
     function schedule() {
-      if (stopped || timer !== undefined) return;
+      if (stopped) return;
+      if (discoveryDelay !== minDiscovery) {
+        discoveryDelay = minDiscovery;
+        if (!scanning) { clearTimeout(discoveryTimer); discoveryTimer = setTimeout(scan, minDiscovery); }
+      }
+      if (timer !== undefined) return;
       timer = setTimeout(function () { timer = undefined; if (!stopped) changed(); }, 100);
     }
     function* discover() {
@@ -261,8 +269,14 @@ export function createArtifactSearchEngine(exceptions) {
       if (added && !stopped) schedule();
     }
     function scan() {
+      scanning = true;
       void cooperate(discover(), stop.signal).catch(function () {}).finally(function () {
-        if (!stopped) discoveryTimer = setTimeout(scan, 500);
+        scanning = false;
+        if (stopped) return;
+        // A mutation during the pass has already reset the delay to the minimum.
+        var wait = discoveryDelay;
+        discoveryDelay = Math.min(wait * 2, maxDiscovery);
+        discoveryTimer = setTimeout(scan, wait);
       });
     }
     scan();

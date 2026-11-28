@@ -144,6 +144,23 @@ describe("artifact text search", () => {
 			expect(changed.mock.calls.length).toBeGreaterThanOrEqual(3);
 		} finally { clearInterval(timer); dispose(); }
 	});
+	it("backs off shadow-root discovery while idle and returns to the short interval after a mutation", async () => {
+		vi.useFakeTimers();
+		document.body.innerHTML = "<x-late></x-late><p>idle</p>";
+		const walk = vi.spyOn(Element.prototype, "shadowRoot", "get");
+		const changed = vi.fn(), dispose = createArtifactFindEngine().observe(document.body, changed);
+		try {
+			await vi.advanceTimersByTimeAsync(500); const early = walk.mock.calls.length;
+			await vi.advanceTimersByTimeAsync(20_000); const idle = walk.mock.calls.length - early;
+			// At a fixed 500 ms the 20 s window would hold 40 passes; backed off it holds at most a handful.
+			expect(idle / Math.max(1, early)).toBeLessThan(8);
+			// A root attached without a mutation is still found within the longest interval.
+			const shadow = document.querySelector("x-late")!.attachShadow({ mode: "open" }); shadow.innerHTML = "<p>late</p>";
+			await vi.advanceTimersByTimeAsync(8_200); changed.mockClear();
+			shadow.querySelector("p")!.textContent = "edited";
+			await vi.advanceTimersByTimeAsync(150); expect(changed).toHaveBeenCalled();
+		} finally { dispose(); }
+	});
 	it("refreshes when a reader excludes content from Find", async () => {
 		vi.useFakeTimers();
 		document.body.innerHTML = "<p>needle</p>";

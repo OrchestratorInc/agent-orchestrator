@@ -159,6 +159,47 @@ describe("find within a local artifact", () => {
 		view.rerender(<Harness text="hello" />);
 		await screen.findByText("1/1");
 	});
+	it("finishes a slow search while content keeps changing, then refreshes once without clearing", async () => {
+		const finishers: Array<(result: ArtifactFindResult) => void> = [], signals: AbortSignal[] = [];
+		const firstClear = vi.fn(), paints: number[] = [];
+		const adapter: ArtifactFindAdapter = { search: vi.fn((_query: string, stop: AbortSignal) => { signals.push(stop); return new Promise<ArtifactFindResult>((resolve) => { finishers.push(resolve); }); }) };
+		function Document() {
+			const register = useArtifactFindRegistration(), element = useRef<HTMLParagraphElement>(null);
+			useLayoutEffect(() => element.current ? register?.(element.current, adapter) : undefined, [register]);
+			return <p ref={element} data-testid="content">hello</p>;
+		}
+		render(<ArtifactFindScope identity="ticker"><Document /></ArtifactFindScope>);
+		await search(); await waitFor(() => expect(adapter.search).toHaveBeenCalledTimes(1));
+		// A ticker edits the document every 50 ms, longer than the refresh interval.
+		const content = screen.getByTestId("content"); let tick = 0;
+		const ticker = setInterval(() => { content.dataset.tick = String(++tick); content.className = `tick-${tick}`; }, 50);
+		try {
+			await act(() => new Promise((resolve) => setTimeout(resolve, 350)));
+			expect(signals[0].aborted).toBe(false); expect(adapter.search).toHaveBeenCalledTimes(1);
+			await act(async () => { finishers[0]({ total: 2, paint: (selected) => paints.push(selected), clear: firstClear }); });
+			expect(await screen.findByText("1/2")).toBeInTheDocument(); expect(paints).toEqual([0]);
+			// The stale result triggers exactly one fresh search; the old count and highlights stay meanwhile.
+			await waitFor(() => expect(adapter.search).toHaveBeenCalledTimes(2));
+			expect(screen.getByText("1/2")).toBeInTheDocument(); expect(firstClear).not.toHaveBeenCalled();
+			await act(async () => { finishers[1]({ total: 3, paint: (selected) => paints.push(selected), clear: vi.fn() }); });
+			expect(await screen.findByText("1/3")).toBeInTheDocument();
+		} finally { clearInterval(ticker); }
+	});
+	it("reconfigures frames only when an iframe is added", async () => {
+		function Reader({ frames }: { frames: number }) {
+			return <ArtifactFindScope identity="html"><p data-testid="text">text</p>{Array.from({ length: frames }, (_, index) => <iframe key={index} title={`frame-${index}`} />)}</ArtifactFindScope>;
+		}
+		const view = render(<Reader frames={1} />);
+		const post = vi.spyOn((screen.getByTitle("frame-0") as HTMLIFrameElement).contentWindow!, "postMessage");
+		const configures = () => post.mock.calls.filter(([message]) => message.method === "ao/find-configure").length;
+		// The frame's own load event reconfigures it; let that settle first.
+		await act(() => new Promise((resolve) => setTimeout(resolve, 50))); post.mockClear();
+		screen.getByTestId("text").append(document.createElement("span"));
+		await act(async () => { await Promise.resolve(); });
+		expect(configures()).toBe(0);
+		view.rerender(<Reader frames={2} />);
+		await waitFor(() => expect(configures()).toBeGreaterThan(0));
+	});
 	it("keeps the active table occurrence when rows are sorted", async () => {
 		render(<ArtifactFindScope identity="table"><table data-testid="content" data-artifact-find-content=""><tbody><tr><td>hello first</td></tr><tr><td>hello second</td></tr></tbody></table></ArtifactFindScope>);
 		const input = await search(); await screen.findByText("1/2");
