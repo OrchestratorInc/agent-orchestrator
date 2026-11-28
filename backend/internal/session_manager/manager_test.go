@@ -52,6 +52,7 @@ type fakeStore struct {
 	cleanupMu                          sync.Mutex
 	cleanupFacts                       map[domain.SessionID]domain.SessionCleanupRecord
 	sessions                           map[domain.SessionID]domain.SessionRecord
+	automationRunStarts                map[domain.AutomationRunID]time.Time
 	pr                                 map[domain.SessionID]domain.PRFacts
 	projects                           map[string]domain.ProjectRecord
 	conversations                      map[domain.SessionID]domain.ConversationRecord
@@ -97,6 +98,13 @@ func newFakeStore() *fakeStore {
 		workspaceRepo: map[string][]domain.WorkspaceRepoRecord{},
 		worktrees:     map[domain.SessionID][]domain.SessionWorktreeRecord{},
 	}
+}
+func (f *fakeStore) RecordAutomationRunStarted(_ context.Context, id domain.AutomationRunID, startedAt time.Time) (bool, error) {
+	if f.automationRunStarts == nil {
+		f.automationRunStarts = map[domain.AutomationRunID]time.Time{}
+	}
+	f.automationRunStarts[id] = startedAt
+	return true, nil
 }
 func (f *fakeStore) GetProject(_ context.Context, id string) (domain.ProjectRecord, bool, error) {
 	if f.getProjectErr != nil {
@@ -3129,38 +3137,28 @@ func TestSpawnAutomationAfterStartPromptFailureDoesNotCompleteLaunch(t *testing.
 	}
 }
 
-// Marking an automation launch complete moves its prompt time to the
-// completion, which follows after-start delivery, so a run recovered after a
-// restart never starts before the prompt reached the agent. A later prompt
-// time (the agent's prompt-submit hook) is kept.
-func TestMarkAutomationLaunchCompletedRecordsPromptTimeAfterDelivery(t *testing.T) {
+// Marking an automation launch complete records the run's start at that
+// moment, after prompt delivery, and leaves the session's prompt time alone.
+func TestMarkAutomationLaunchCompletedRecordsTheRunStart(t *testing.T) {
 	built := time.Date(2026, time.August, 25, 11, 0, 0, 0, time.UTC)
 	completed := built.Add(5 * time.Second)
-	for _, tc := range []struct {
-		name     string
-		promptAt time.Time
-		want     time.Time
-	}{
-		{name: "built before delivery", promptAt: built, want: completed},
-		{name: "hook already later", promptAt: completed.Add(time.Second), want: completed.Add(time.Second)},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			m, st, _, _ := newManager()
-			m.clock = func() time.Time { return completed }
-			runID := domain.AutomationRunID("run-1")
-			rec := mkLive("mer-1")
-			rec.AutomationRunID = &runID
-			rec.Metadata.LatestUserPromptAt = tc.promptAt
-			st.sessions[rec.ID] = rec
+	m, st, _, _ := newManager()
+	m.clock = func() time.Time { return completed }
+	runID := domain.AutomationRunID("run-1")
+	rec := mkLive("mer-1")
+	rec.AutomationRunID = &runID
+	rec.Metadata.LatestUserPromptAt = built
+	st.sessions[rec.ID] = rec
 
-			if err := m.markAutomationLaunchCompleted(ctx, rec.ID); err != nil {
-				t.Fatal(err)
-			}
-			got := st.sessions[rec.ID]
-			if !got.AutomationLaunchCompleted || !got.Metadata.LatestUserPromptAt.Equal(tc.want) {
-				t.Fatalf("completed=%v prompt at %s, want %s", got.AutomationLaunchCompleted, got.Metadata.LatestUserPromptAt, tc.want)
-			}
-		})
+	if err := m.markAutomationLaunchCompleted(ctx, rec.ID); err != nil {
+		t.Fatal(err)
+	}
+	got := st.sessions[rec.ID]
+	if !got.AutomationLaunchCompleted || !got.Metadata.LatestUserPromptAt.Equal(built) {
+		t.Fatalf("completed=%v prompt at %s, want completed with prompt at %s", got.AutomationLaunchCompleted, got.Metadata.LatestUserPromptAt, built)
+	}
+	if start, ok := st.automationRunStarts[runID]; !ok || !start.Equal(completed) {
+		t.Fatalf("run start = %s (recorded=%v), want %s", start, ok, completed)
 	}
 }
 

@@ -1432,7 +1432,11 @@ func (s *Service) KillSettledForAutomation(ctx context.Context, read domain.Sess
 	}
 	before, live := s.liveSessionBeforeEnd(ctx, read.ID)
 	_, err := killer.KillIfSettled(ctx, read)
-	if errors.Is(err, sessionmanager.ErrSessionActivityChanged) {
+	// Work that started since the reading, or another operation on the
+	// session, holds the kill for now; the scheduler re-checks next tick.
+	if errors.Is(err, sessionmanager.ErrSessionActivityChanged) ||
+		errors.Is(err, sessionmanager.ErrOperationInProgress) ||
+		errors.Is(err, sessionmanager.ErrInterfaceTransitionInProgress) {
 		return false, nil
 	}
 	s.cancelTitleRefinement(read.ID)

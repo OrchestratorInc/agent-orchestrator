@@ -17,6 +17,11 @@ const (
 	dispatchScanLimit = 100
 	spawnLease        = 2 * time.Minute
 	maxRunErrorBytes  = 512
+	// settleGrace is how long an agent must stay idle after its turn before
+	// the scheduler stops it and completes the run. It matches Chat's
+	// hibernation grace, and leaves time to answer an agent that ended its
+	// turn with a question: any reply makes the agent active again.
+	settleGrace = 30 * time.Second
 )
 
 // SessionSpawner is the existing user-facing session launch boundary.
@@ -39,6 +44,7 @@ type schedulerStore interface {
 	MaterializeAutomationRun(context.Context, domain.AutomationID, time.Time, domain.AutomationRun, time.Time, time.Time) (bool, error)
 	ClaimNextAutomationRun(context.Context, time.Time, time.Time) (domain.AutomationRun, bool, error)
 	ListActiveAutomationRuns(context.Context) ([]domain.AutomationRun, error)
+	GetAutomationRun(context.Context, domain.AutomationRunID) (domain.AutomationRun, bool, error)
 	GetSessionByAutomationRunID(context.Context, domain.AutomationRunID) (domain.SessionRecord, bool, error)
 	GetSession(context.Context, domain.SessionID) (domain.SessionRecord, bool, error)
 	MarkAutomationRunRunning(context.Context, domain.AutomationRunID, domain.SessionID, time.Time, time.Time) (bool, error)
@@ -152,8 +158,11 @@ func (s *Service) dispatch(ctx context.Context, store schedulerStore, run domain
 			return errors.Join(spawnErr, lookupErr)
 		} else if ok {
 			if session.AutomationLaunchCompleted {
-				started := s.clock().UTC()
-				_, markErr := store.MarkAutomationRunRunning(context.WithoutCancel(ctx), run.ID, session.ID, started, started)
+				started, startErr := s.launchStart(context.WithoutCancel(ctx), store, run.ID)
+				if startErr != nil {
+					return errors.Join(spawnErr, startErr)
+				}
+				_, markErr := store.MarkAutomationRunRunning(context.WithoutCancel(ctx), run.ID, session.ID, started, s.clock().UTC())
 				return errors.Join(spawnErr, markErr)
 			}
 			if !session.IsTerminated {
@@ -175,12 +184,28 @@ func (s *Service) dispatch(ctx context.Context, store schedulerStore, run domain
 		_, releaseErr := store.ReleaseAutomationRun(context.WithoutCancel(ctx), run.ID, runError(spawnErr), now)
 		return errors.Join(spawnErr, releaseErr)
 	}
-	// Record the start after Spawn returns: by then the launch, including any
-	// after-start prompt delivery, has completed, so activity the agent reported
-	// before its prompt arrived cannot settle the run.
-	started := s.clock().UTC()
-	_, err = store.MarkAutomationRunRunning(context.WithoutCancel(ctx), run.ID, session.ID, started, started)
+	started, err := s.launchStart(context.WithoutCancel(ctx), store, run.ID)
+	if err != nil {
+		return err
+	}
+	_, err = store.MarkAutomationRunRunning(context.WithoutCancel(ctx), run.ID, session.ID, started, s.clock().UTC())
 	return err
+}
+
+// launchStart is the run's start: the moment its launch, including any
+// after-start prompt delivery, completed, which Session Manager records on the
+// run. Activity the agent reported before then cannot settle the run. A launch
+// that recorded none falls back to now, after Spawn returned, which is later
+// still.
+func (s *Service) launchStart(ctx context.Context, store schedulerStore, id domain.AutomationRunID) (time.Time, error) {
+	run, ok, err := store.GetAutomationRun(ctx, id)
+	if err != nil {
+		return time.Time{}, err
+	}
+	if ok && run.StartedAt != nil {
+		return run.StartedAt.UTC(), nil
+	}
+	return s.clock().UTC(), nil
 }
 
 // Reconcile repairs crash-interrupted claims, projects durable completion, and
@@ -221,11 +246,17 @@ func (s *Service) completeAndAdoptActive(ctx context.Context, store schedulerSto
 			if lookupErr != nil {
 				problems = append(problems, lookupErr)
 			} else if ok && session.AutomationLaunchCompleted {
-				started := recoveredStart(session)
+				// The launch recorded its start before it was marked complete,
+				// so a run adopted after a restart keeps that start rather than
+				// the recovery time. Rows from earlier builds have none.
+				var started time.Time
+				if run.StartedAt != nil {
+					started = run.StartedAt.UTC()
+				}
 				_, lookupErr = store.MarkAutomationRunRunning(ctx, run.ID, session.ID, started, now)
 				if lookupErr != nil {
 					problems = append(problems, lookupErr)
-				} else if automationSessionSettled(session, started) {
+				} else if automationSessionSettled(session, started, now) {
 					if lookupErr = s.finishSettledRun(ctx, store, run.ID, session, now); lookupErr != nil {
 						problems = append(problems, lookupErr)
 					}
@@ -267,14 +298,11 @@ func (s *Service) completeAndAdoptActive(ctx context.Context, store schedulerSto
 			startedAt = *run.StartedAt
 		}
 		if run.SessionID == nil {
-			if startedAt.IsZero() {
-				startedAt = recoveredStart(session)
-			}
 			if _, err := store.MarkAutomationRunRunning(ctx, run.ID, session.ID, startedAt, now); err != nil {
 				problems = append(problems, err)
 			}
 		}
-		if automationSessionSettled(session, startedAt) {
+		if automationSessionSettled(session, startedAt, now) {
 			if err := s.finishSettledRun(ctx, store, run.ID, session, now); err != nil {
 				problems = append(problems, err)
 			}
@@ -292,12 +320,13 @@ func (s *Service) completeAndAdoptActive(ctx context.Context, store schedulerSto
 // from before it come from the agent starting up (a seeded idle, a
 // SessionStart, an empty Stop before the prompt was pasted), not from working
 // on the prompt. Rows without a start time fall back to requiring a reading
-// later than the first signal.
+// later than the first signal. The reading must also be settleGrace old, so
+// a reply to an agent that ended its turn with a question keeps the run.
 //
 // waiting_input and blocked keep the run: harnesses report tool-approval and
 // input requests as either (the chat controller and several terminal adapters
 // use waiting_input for approvals), so the agent is still mid-task.
-func automationSessionSettled(session domain.SessionRecord, startedAt time.Time) bool {
+func automationSessionSettled(session domain.SessionRecord, startedAt, now time.Time) bool {
 	if session.IsTerminated {
 		return true
 	}
@@ -308,25 +337,13 @@ func automationSessionSettled(session domain.SessionRecord, startedAt time.Time)
 		return false
 	}
 	reading := session.Activity.LastActivityAt
+	if reading.Add(settleGrace).After(now) {
+		return false
+	}
 	if startedAt.IsZero() {
 		return reading.After(session.FirstSignalAt)
 	}
 	return reading.After(startedAt)
-}
-
-// recoveredStart is the start recorded for a run adopted after a restart,
-// whose launch completed without the scheduler seeing Spawn return. The
-// recovery time would hide a turn that finished while the daemon was down, so
-// use the session's latest prompt time instead. Marking the launch complete
-// moves that time to the completion, after the prompt was delivered, in the
-// same write, and the agent's prompt-submit hook only moves it later; so it
-// never predates delivery. Only rows from earlier builds lack it, and fall
-// back to their creation time.
-func recoveredStart(session domain.SessionRecord) time.Time {
-	if at := session.Metadata.LatestUserPromptAt; !at.IsZero() {
-		return at.UTC()
-	}
-	return session.CreatedAt.UTC()
 }
 
 // finishSettledRun stops a settled session's agent and then completes its run.

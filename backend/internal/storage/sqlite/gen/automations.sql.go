@@ -752,6 +752,26 @@ func (q *Queries) MarkAutomationRunRunning(ctx context.Context, arg MarkAutomati
 	return result.RowsAffected()
 }
 
+const recordAutomationRunStarted = `-- name: RecordAutomationRunStarted :execrows
+UPDATE automation_runs
+SET started_at = ?, updated_at = ?
+WHERE id = ? AND status = 'spawning'
+`
+
+type RecordAutomationRunStartedParams struct {
+	StartedAt sql.NullTime
+	UpdatedAt time.Time
+	ID        domain.AutomationRunID
+}
+
+func (q *Queries) RecordAutomationRunStarted(ctx context.Context, arg RecordAutomationRunStartedParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, recordAutomationRunStarted, arg.StartedAt, arg.UpdatedAt, arg.ID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
 const releaseAutomationRun = `-- name: ReleaseAutomationRun :execrows
 UPDATE automation_runs
 SET status = 'pending', claimed_at = NULL, lease_expires_at = NULL,

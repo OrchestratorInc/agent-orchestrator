@@ -947,7 +947,18 @@ func (c chatLauncher) SwitchToInstalledRelease(ctx context.Context, id domain.Se
 	return c.svc.SwitchToInstalledRelease(ctx, id, minIdle)
 }
 
+// HibernateChatForAutomation reports false, so the scheduler retries on a
+// later tick, until persistent chat hosts are reconciled: before then a live
+// provider has no controller yet and would read as already stopped. It does
+// not wait, because automation reconciliation runs earlier in daemon start.
 func (c chatLauncher) HibernateChatForAutomation(ctx context.Context, id domain.SessionID) (bool, error) {
+	if c.persistentHostReconcileDone != nil {
+		select {
+		case <-c.persistentHostReconcileDone:
+		default:
+			return false, nil
+		}
+	}
 	return c.svc.HibernateChatForAutomation(ctx, id)
 }
 

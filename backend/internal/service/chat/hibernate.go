@@ -258,14 +258,19 @@ func (s *Service) HibernateChatForUpdate(ctx context.Context, id domain.SessionI
 }
 
 // HibernateChatForAutomation stops the provider of a scheduled session whose
-// run has finished, whatever the hibernation setting, keeping the session and
-// its conversation resumable. It applies the same checks as idle hibernation,
-// so a turn in flight, a queued message, a pending approval, background work
-// or an open view keeps the provider running and the call reports false. A
-// session with no live controller has nothing left running and reports true.
-// A provider that cannot resume, or cannot hibernate, returns
-// ports.ErrChatHibernationUnsupported. A shutdown an earlier call started but
-// could not confirm is finished here rather than left to a later wake.
+// run has finished, whatever the hibernation setting and even while the user
+// views it, keeping the session and its conversation resumable: reading a
+// finished run must not hold back the next one, and the next message wakes it.
+// A turn in flight, a queued message, a pending approval or background work
+// keeps the provider running and the call reports false. A session with no
+// live controller has nothing left running and reports true.
+//
+// Conditions that will not clear return ports.ErrChatHibernationUnsupported,
+// so the caller kills the session instead of waiting on it forever: a provider
+// that cannot resume or hibernate, a session with no provider conversation to
+// resume, a task-preparation or failed session, or a live controller already
+// marked hibernated outside a shutdown. A shutdown an earlier call started
+// but could not confirm is finished here rather than left to a later wake.
 func (s *Service) HibernateChatForAutomation(ctx context.Context, id domain.SessionID) (bool, error) {
 	controller, err := s.Controller(id)
 	if errors.Is(err, ErrNoController) {
@@ -286,7 +291,16 @@ func (s *Service) HibernateChatForAutomation(ctx context.Context, id domain.Sess
 	if _, ok := controller.conv.(ports.ChatProviderHibernator); !ok {
 		return false, ports.ErrChatHibernationUnsupported
 	}
-	return s.hibernateChat(ctx, id, hibernateOptions{forAutomation: true, minIdle: chatHibernateGrace})
+	rec, err := s.requireChatSession(ctx, id)
+	if err != nil {
+		return false, err
+	}
+	if rec.IsTaskPreparation || rec.HibernatedAt != nil ||
+		rec.ProvisionState.WithDefault() == domain.SessionProvisionFailed ||
+		strings.TrimSpace(rec.Metadata.ProviderConversationID) == "" {
+		return false, ports.ErrChatHibernationUnsupported
+	}
+	return s.hibernateChat(ctx, id, hibernateOptions{forAutomation: true, minIdle: chatHibernateGrace, ignoreViews: true})
 }
 
 // finishAutomationHibernation completes the provider shutdown of a controller

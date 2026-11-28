@@ -335,6 +335,37 @@ func TestHibernateChatForAutomationIgnoresIdleSettingButKeepsWork(t *testing.T) 
 	}
 }
 
+// Reading a finished automation's output keeps a view open. That must not
+// hold the provider, or every later occurrence would wait on the open tab.
+func TestHibernateChatForAutomationIgnoresAnOpenView(t *testing.T) {
+	h, conv := settledHibernationHarness(t, domain.TurnStateCompleted)
+	ctx := context.Background()
+	if err := h.svc.SetChatView(ctx, testSession, "viewer-1", true); err != nil {
+		t.Fatal(err)
+	}
+	if stopped, err := h.svc.HibernateChatForAutomation(ctx, testSession); err != nil || !stopped || conv.calls.Load() != 1 {
+		t.Fatalf("viewed automation session: stopped=%v err=%v calls=%d", stopped, err, conv.calls.Load())
+	}
+}
+
+// A session with no provider conversation can never hibernate. Reporting it
+// unsupported lets the scheduler kill it instead of retrying forever.
+func TestHibernateChatForAutomationReportsUnresumableSessionUnsupported(t *testing.T) {
+	h, conv := settledHibernationHarness(t, domain.TurnStateCompleted)
+	ctx := context.Background()
+	rec, _, err := h.st.GetSession(ctx, testSession)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rec.Metadata.ProviderConversationID = ""
+	if err := h.st.UpdateSession(ctx, rec); err != nil {
+		t.Fatal(err)
+	}
+	if stopped, err := h.svc.HibernateChatForAutomation(ctx, testSession); stopped || !errors.Is(err, ports.ErrChatHibernationUnsupported) || conv.calls.Load() != 0 {
+		t.Fatalf("no provider conversation: stopped=%v err=%v calls=%d", stopped, err, conv.calls.Load())
+	}
+}
+
 // A provider that advertises resume but cannot hibernate is reported as
 // unsupported, so the scheduler kills the session instead of retrying forever.
 func TestHibernateChatForAutomationReportsProviderWithoutHibernator(t *testing.T) {

@@ -358,12 +358,33 @@ func automationRunsFromGen(rows []gen.AutomationRun) []domain.AutomationRun {
 	return items
 }
 
-// MarkAutomationRunRunning links the unique spawned session.
+// RecordAutomationRunStarted stores when a spawning run's launch, including
+// its prompt delivery, completed. Session Manager writes it before marking the
+// launch complete, so the scheduler reads the same start whether it saw Spawn
+// return or adopted the run after a restart.
+func (s *Store) RecordAutomationRunStarted(ctx context.Context, id domain.AutomationRunID, startedAt time.Time) (bool, error) {
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
+	rows, err := s.qw.RecordAutomationRunStarted(ctx, gen.RecordAutomationRunStartedParams{
+		StartedAt: timePtrToNullTime(&startedAt), UpdatedAt: startedAt, ID: id,
+	})
+	if err != nil {
+		return false, fmt.Errorf("record automation run %s start: %w", id, err)
+	}
+	return rows > 0, nil
+}
+
+// MarkAutomationRunRunning links the unique spawned session. A zero startedAt
+// leaves the start unrecorded.
 func (s *Store) MarkAutomationRunRunning(ctx context.Context, id domain.AutomationRunID, sessionID domain.SessionID, startedAt, now time.Time) (bool, error) {
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()
+	var started *time.Time
+	if !startedAt.IsZero() {
+		started = &startedAt
+	}
 	rows, err := s.qw.MarkAutomationRunRunning(ctx, gen.MarkAutomationRunRunningParams{
-		SessionID: &sessionID, StartedAt: timePtrToNullTime(&startedAt), UpdatedAt: now, ID: id,
+		SessionID: &sessionID, StartedAt: timePtrToNullTime(started), UpdatedAt: now, ID: id,
 	})
 	if err != nil {
 		return false, fmt.Errorf("mark automation run %s running: %w", id, err)

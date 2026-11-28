@@ -143,6 +143,11 @@ SET status = 'running', session_id = ?, started_at = ?,
     lease_expires_at = NULL, error_message = NULL, updated_at = ?
 WHERE id = ? AND status = 'spawning';
 
+-- name: RecordAutomationRunStarted :execrows
+UPDATE automation_runs
+SET started_at = ?, updated_at = ?
+WHERE id = ? AND status = 'spawning';
+
 -- name: CompleteAutomationRun :execrows
 UPDATE automation_runs
 SET status = 'completed', finished_at = ?, claimed_at = NULL,

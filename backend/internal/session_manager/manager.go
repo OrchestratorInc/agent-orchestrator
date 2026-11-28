@@ -1956,6 +1956,12 @@ func (m *Manager) Spawn(ctx context.Context, cfg ports.SpawnConfig) (result doma
 	return rec, promptBytes, systemPromptBytes, nil
 }
 
+// automationRunStartRecorder is the optional store capability that stores
+// when an automation run's launch completed.
+type automationRunStartRecorder interface {
+	RecordAutomationRunStarted(ctx context.Context, id domain.AutomationRunID, startedAt time.Time) (bool, error)
+}
+
 func (m *Manager) markAutomationLaunchCompleted(ctx context.Context, id domain.SessionID) error {
 	rec, ok, err := m.store.GetSession(ctx, id)
 	if err != nil {
@@ -1967,15 +1973,17 @@ func (m *Manager) markAutomationLaunchCompleted(ctx context.Context, id domain.S
 	if rec.AutomationRunID == nil || rec.AutomationLaunchCompleted {
 		return nil
 	}
-	rec.AutomationLaunchCompleted = true
 	now := m.clock()
-	// The prompt time was recorded when the launch built the prompt; an
-	// after-start launch delivers it only later. A run adopted after a restart
-	// starts at this time, so move it to the completion, which follows
-	// delivery, in the same write that marks the launch complete.
-	if promptAt := rec.Metadata.LatestUserPromptAt; !promptAt.IsZero() && promptAt.Before(now) {
-		rec.Metadata.LatestUserPromptAt = now
+	// The run starts now, after the prompt was delivered. Record that on the
+	// run before marking the launch complete, so the scheduler reads it
+	// whether it sees Spawn return or adopts the run after a restart. Agent
+	// readings from before this instant come from the agent starting up.
+	if recorder, ok := m.store.(automationRunStartRecorder); ok {
+		if _, err := recorder.RecordAutomationRunStarted(ctx, *rec.AutomationRunID, now); err != nil {
+			return err
+		}
 	}
+	rec.AutomationLaunchCompleted = true
 	rec.UpdatedAt = now
 	return m.store.UpdateSession(ctx, rec)
 }
@@ -3334,14 +3342,23 @@ var ErrSessionActivityChanged = errors.New("session: activity changed since it w
 // is not delivered at all. A refused kill returns ErrSessionActivityChanged
 // and leaves the session untouched.
 func (m *Manager) KillIfSettled(ctx context.Context, read domain.SessionRecord) (bool, error) {
-	result, err := m.killWith(ctx, read.ID, false, func(current domain.SessionRecord) bool {
+	settled := func(current domain.SessionRecord) bool {
 		if current.IsTerminated {
 			return true
 		}
 		state := current.Activity.State
 		return (state == domain.ActivityIdle || state == domain.ActivityExited) &&
 			!current.Metadata.LatestUserPromptAt.After(read.Metadata.LatestUserPromptAt)
-	})
+	}
+	// Check first, so a session that has already started work is not made to
+	// cancel a spawn or wait on input admission; the check repeats once the
+	// kill holds admission.
+	if current, ok, err := m.store.GetSession(ctx, read.ID); err != nil {
+		return false, fmt.Errorf("kill %s: %w", read.ID, err)
+	} else if ok && !settled(current) {
+		return false, fmt.Errorf("kill %s: %w", read.ID, ErrSessionActivityChanged)
+	}
+	result, err := m.killWith(ctx, read.ID, false, settled)
 	return result.Freed, err
 }
 

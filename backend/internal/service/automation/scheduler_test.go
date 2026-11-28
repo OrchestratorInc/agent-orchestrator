@@ -135,9 +135,17 @@ func (f *schedulerMemoryStore) MarkAutomationRunRunning(_ context.Context, id do
 	if run.Status != domain.AutomationRunSpawning {
 		return false, nil
 	}
-	run.Status, run.SessionID, run.StartedAt, run.LeaseExpiresAt, run.UpdatedAt = domain.AutomationRunRunning, &sessionID, &startedAt, nil, now
+	run.Status, run.SessionID, run.StartedAt, run.LeaseExpiresAt, run.UpdatedAt = domain.AutomationRunRunning, &sessionID, nil, nil, now
+	if !startedAt.IsZero() {
+		run.StartedAt = &startedAt
+	}
 	f.runs[id] = run
 	return true, nil
+}
+
+func (f *schedulerMemoryStore) GetAutomationRun(_ context.Context, id domain.AutomationRunID) (domain.AutomationRun, bool, error) {
+	run, ok := f.runs[id]
+	return run, ok, nil
 }
 
 func (f *schedulerMemoryStore) CompleteAutomationRun(_ context.Context, id domain.AutomationRunID, now time.Time) (bool, error) {
@@ -529,23 +537,44 @@ func TestTickIgnoresActivityFromBeforeTheRunStarted(t *testing.T) {
 	}
 }
 
-// Dispatch records the run's start after Spawn returns, so readings the agent
-// sent while launching cannot settle it.
-func TestTickRecordsRunStartAfterSpawnReturns(t *testing.T) {
+// The run starts when its launch, including prompt delivery, completed:
+// Session Manager records that on the run, and dispatch keeps it. A launch
+// that recorded none starts after Spawn returned. Either way readings the
+// agent sent while launching cannot settle it.
+func TestTickRecordsTheLaunchStart(t *testing.T) {
 	tick := time.Date(2026, time.August, 25, 12, 0, 0, 0, time.UTC)
-	clock := tick
-	store := newSchedulerStore()
-	store.automations["automation-1"] = domain.Automation{ID: "automation-1", ProjectID: "scheduled", Enabled: true, NextRunAt: tick.Add(time.Hour)}
-	store.runs["run-1"] = domain.AutomationRun{ID: "run-1", AutomationID: "automation-1", ScheduledFor: tick, Status: domain.AutomationRunPending}
-	spawner := &recordingSpawner{store: store, onSpawn: func() { clock = tick.Add(42 * time.Second) }}
-	svc := New(Deps{Store: store, Spawner: spawner, Clock: func() time.Time { return clock }})
+	for _, tc := range []struct {
+		name     string
+		recorded bool
+		want     time.Time
+	}{
+		{name: "recorded by the launch", recorded: true, want: tick.Add(10 * time.Second)},
+		{name: "not recorded", want: tick.Add(42 * time.Second)},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			clock := tick
+			store := newSchedulerStore()
+			store.automations["automation-1"] = domain.Automation{ID: "automation-1", ProjectID: "scheduled", Enabled: true, NextRunAt: tick.Add(time.Hour)}
+			store.runs["run-1"] = domain.AutomationRun{ID: "run-1", AutomationID: "automation-1", ScheduledFor: tick, Status: domain.AutomationRunPending}
+			spawner := &recordingSpawner{store: store, onSpawn: func() {
+				if tc.recorded {
+					run := store.runs["run-1"]
+					delivered := tick.Add(10 * time.Second)
+					run.StartedAt = &delivered
+					store.runs["run-1"] = run
+				}
+				clock = tick.Add(42 * time.Second)
+			}}
+			svc := New(Deps{Store: store, Spawner: spawner, Clock: func() time.Time { return clock }})
 
-	if err := svc.Tick(context.Background(), tick); err != nil {
-		t.Fatal(err)
-	}
-	run := store.runs["run-1"]
-	if run.Status != domain.AutomationRunRunning || run.StartedAt == nil || !run.StartedAt.Equal(tick.Add(42*time.Second)) {
-		t.Fatalf("run = %#v, want running with start after the spawn returned", run)
+			if err := svc.Tick(context.Background(), tick); err != nil {
+				t.Fatal(err)
+			}
+			run := store.runs["run-1"]
+			if run.Status != domain.AutomationRunRunning || run.StartedAt == nil || !run.StartedAt.Equal(tc.want) {
+				t.Fatalf("run = %#v, want running with start %s", run, tc.want)
+			}
+		})
 	}
 }
 
@@ -563,6 +592,9 @@ func TestTickKeepsRunWhileSessionHasNotSettled(t *testing.T) {
 		"blocked on approval":          {FirstSignalAt: firstSignal, Activity: domain.Activity{State: domain.ActivityBlocked, LastActivityAt: now}},
 		"waiting on approval or input": {FirstSignalAt: firstSignal, Activity: domain.Activity{State: domain.ActivityWaitingInput, LastActivityAt: now}},
 		"still provisioning":           {FirstSignalAt: firstSignal, ProvisionState: domain.SessionProvisionProvisioning, Activity: domain.Activity{State: domain.ActivityIdle, LastActivityAt: now}},
+		// An agent that ends its turn with a question reports idle; the grace
+		// leaves time to answer before it is stopped.
+		"idle within the grace": {FirstSignalAt: firstSignal, Activity: domain.Activity{State: domain.ActivityIdle, LastActivityAt: now.Add(-settleGrace + time.Second)}},
 	}
 	for name, session := range cases {
 		t.Run(name, func(t *testing.T) {
@@ -629,30 +661,27 @@ func TestReconcileAdoptsSessionForExpiredClaim(t *testing.T) {
 }
 
 // A restart between a launch completing and the scheduler marking its run
-// running must not use the recovery time as the start: a turn that finished
-// while the daemon was down would never settle. The session's prompt time is
-// the start, so its later idle settles the run while a startup idle from
-// before the prompt still does not.
-func TestReconcileStartsAdoptedRunAtThePromptNotTheRecovery(t *testing.T) {
+// running keeps the start the launch recorded, not the recovery time: a turn
+// that finished while the daemon was down still settles the run, and a
+// startup idle from before the prompt was delivered still does not.
+func TestReconcileKeepsTheLaunchStartForAnAdoptedRun(t *testing.T) {
 	now := time.Date(2026, time.August, 25, 12, 0, 0, 0, time.UTC)
-	prompt := now.Add(-20 * time.Minute)
+	delivered := now.Add(-20 * time.Minute)
 	for _, tc := range []struct {
 		name    string
 		reading time.Time
 		settled bool
 	}{
-		{name: "idle after the prompt, before the restart", reading: prompt.Add(5 * time.Minute), settled: true},
-		{name: "startup idle before the prompt", reading: prompt.Add(-time.Minute), settled: false},
+		{name: "idle after delivery, before the restart", reading: delivered.Add(5 * time.Minute), settled: true},
+		{name: "startup idle before delivery", reading: delivered.Add(-time.Minute), settled: false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			store := newSchedulerStore()
 			store.automations["automation-1"] = domain.Automation{ID: "automation-1", Enabled: true, NextRunAt: now.Add(time.Hour)}
 			runID, sessionID := domain.AutomationRunID("run-1"), domain.SessionID("session-1")
 			lease := now.Add(-time.Minute)
-			store.runs[runID] = domain.AutomationRun{ID: runID, AutomationID: "automation-1", Status: domain.AutomationRunSpawning, LeaseExpiresAt: &lease}
-			session := domain.SessionRecord{ID: sessionID, AutomationRunID: &runID, AutomationLaunchCompleted: true, FirstSignalAt: prompt.Add(-2 * time.Minute), Activity: domain.Activity{State: domain.ActivityIdle, LastActivityAt: tc.reading}}
-			session.Metadata.LatestUserPromptAt = prompt
-			store.sessions[sessionID] = session
+			store.runs[runID] = domain.AutomationRun{ID: runID, AutomationID: "automation-1", Status: domain.AutomationRunSpawning, LeaseExpiresAt: &lease, StartedAt: &delivered}
+			store.sessions[sessionID] = domain.SessionRecord{ID: sessionID, AutomationRunID: &runID, AutomationLaunchCompleted: true, FirstSignalAt: delivered.Add(-2 * time.Minute), Activity: domain.Activity{State: domain.ActivityIdle, LastActivityAt: tc.reading}}
 			spawner := &recordingSpawner{store: store}
 			svc := New(Deps{Store: store, Spawner: spawner, Clock: func() time.Time { return now }})
 
@@ -660,8 +689,8 @@ func TestReconcileStartsAdoptedRunAtThePromptNotTheRecovery(t *testing.T) {
 				t.Fatal(err)
 			}
 			run := store.runs[runID]
-			if run.StartedAt == nil || !run.StartedAt.Equal(prompt) {
-				t.Fatalf("started at %v, want the prompt time %s", run.StartedAt, prompt)
+			if run.StartedAt == nil || !run.StartedAt.Equal(delivered) {
+				t.Fatalf("started at %v, want the launch start %s", run.StartedAt, delivered)
 			}
 			if completed := run.Status == domain.AutomationRunCompleted; completed != tc.settled {
 				t.Fatalf("run = %#v, want completed=%v", run, tc.settled)
