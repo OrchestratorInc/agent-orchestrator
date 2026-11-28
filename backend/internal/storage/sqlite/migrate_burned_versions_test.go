@@ -302,6 +302,7 @@ var shippedMigrations = map[int64]string{
 	20261127085740884: "20261127085740884_session_version_moves.sql",
 	20261127183058106: "20261127183058106_repair_open_usage_harness_checks.sql",
 	20261128055914527: "20261128055914527_lifetime_work_session_count.sql",
+	20261128072745042: "20261128072745042_conversation_turn_lineage_indexes.sql",
 }
 
 // burnedVersion reports version numbers that must never be (re)used: they
@@ -335,7 +336,11 @@ func burnedVersion(v int64) bool {
 		v == 20261125063907001 || v == 20261125063907002 || v == 20261125063907003 ||
 		// 20261127064704491 was the usage CHECK repair's number before main's
 		// 20261127085740884 landed below it.
-		v == 20261127064704491
+		v == 20261127064704491 ||
+		// 20261101115405806 was the turn lineage indexes' draft number, and
+		// 20261126084920915 its number before main's 20261126154409684 landed
+		// below it.
+		v == 20261101115405806 || v == 20261126084920915
 }
 
 // TestMigrationVersionLedger enforces the append-only migration ledger: every
