@@ -67,6 +67,12 @@ describe("trackPRMerge", () => {
 		expect(prMergeKey("dev", "https://github.com/Acme/Repo/pull/12/")).toBe(KEY);
 	});
 
+	// The same repository path and number on two forges are two pull requests.
+	it("keys pull requests on different forges apart", () => {
+		expect(prMergeKey("dev", "https://gitlab.com/acme/repo/-/merge_requests/12")).not.toBe(KEY);
+		expect(prMergeKey("dev", "https://GitHub.com/acme/repo/pull/12#discussion_r1")).toBe(KEY);
+	});
+
 	it("keys each machine's pull request apart", () => {
 		expect(prMergeKey("dev", "https://github.com/acme/repo/pull/12")).not.toBe(prMergeKey("laptop", "https://github.com/acme/repo/pull/12"));
 	});

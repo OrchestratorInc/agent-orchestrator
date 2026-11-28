@@ -27,13 +27,18 @@ const expiries = new Map<string, ReturnType<typeof setTimeout>>();
 const listeners = new Set<() => void>();
 
 /**
- * One machine's pull request: the same one on two machines is two merges. Read
- * by repository and number, since the board and the PR page may spell its URL
+ * One machine's pull request: the same one on two machines is two merges, and
+ * so is the same repository and number on two forges. Read by forge,
+ * repository and number, since the board and the PR page may spell its URL
  * differently.
  */
 export function prMergeKey(hostId: string | null | undefined, prUrl: string): string {
 	const identity = pullRequestIdentity(prUrl);
-	return JSON.stringify([hostId ?? "", identity ? `${identity.repo}#${identity.number}` : prUrl]);
+	return JSON.stringify([hostId ?? "", identity ? `${forgeHost(prUrl)}/${identity.repo}#${identity.number}` : prUrl]);
+}
+
+function forgeHost(prUrl: string): string {
+	try { return new URL(prUrl).host; } catch { return ""; }
 }
 
 function set(key: string, entry: PRMergeEntry | undefined) {
