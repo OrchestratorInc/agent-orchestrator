@@ -4592,7 +4592,8 @@ describe("agent browser runtime", () => {
 		};
 
 		it("shows and drives the agent browser page its viewer reports, like any tab", async () => {
-			const { invoke, agent, viewId, tabs } = await openAgent();
+			const { emit, invoke, agent, viewId, tabs } = await openAgent();
+			emit("browser:setBounds", { viewId, revision: 1, rect: { x: 0, y: 0, width: 800, height: 600 }, visible: true });
 			agent.emitConsoleMessage(0, report());
 			expect(agent.executeJavaScript).not.toHaveBeenCalledWith("window.__rbHost && window.__rbHost.show(true)");
 			// Only the tab in front streams: Chrome paints only the agent's front page.
@@ -4607,6 +4608,45 @@ describe("agent browser runtime", () => {
 			expect(agent.loadURL).not.toHaveBeenCalledWith("https://example.com/");
 			await invoke("browser:selectTab", { viewId, tabId: "t1" });
 			expect(agent.executeJavaScript).toHaveBeenCalledWith("window.__rbHost && window.__rbHost.show(false)");
+		});
+
+		// The viewer streams only while its page is visible, and Chromium reports a
+		// throttled page as hidden: a throttled viewer stays empty. Whether it
+		// streams is main's call, through show().
+		it("never throttles an agent tab's viewer, even in a hidden idle panel", async () => {
+			const { emit, viewId, views } = await openAgent();
+			emit("browser:setBounds", { viewId, revision: 101, rect: { x: 0, y: 0, width: 0, height: 0 }, visible: false });
+			expect(views[1].webContents.setBackgroundThrottling).not.toHaveBeenCalledWith(true);
+			// A person's own tab is still throttled.
+			expect(views[0].webContents.setBackgroundThrottling).toHaveBeenLastCalledWith(true);
+		});
+
+		it("streams the agent tab in front only while its panel is on screen", async () => {
+			const { emit, invoke, agent, viewId } = await openAgent();
+			const shows = () => agent.executeJavaScript.mock.calls.map((call: unknown[]) => String(call[0])).filter((script) => script.includes("__rbHost.show("));
+			agent.emitConsoleMessage(0, report());
+			await invoke("browser:selectTab", { viewId, tabId: "a1" });
+			// In front of a panel nobody has laid out yet: nothing to stream to.
+			expect(shows()).not.toContain("window.__rbHost && window.__rbHost.show(true)");
+			emit("browser:setBounds", { viewId, revision: 101, rect: { x: 0, y: 0, width: 800, height: 600 }, visible: true });
+			expect(shows().at(-1)).toBe("window.__rbHost && window.__rbHost.show(true)");
+			agent.emitConsoleMessage(0, report({ shown: true }));
+			emit("browser:setBounds", { viewId, revision: 102, rect: { x: 0, y: 0, width: 0, height: 0 }, visible: false });
+			expect(shows().at(-1)).toBe("window.__rbHost && window.__rbHost.show(false)");
+			// Shown again before the viewer reports the hide: its last report still
+			// says shown, so only main's own record of what it sent can tell.
+			emit("browser:setBounds", { viewId, revision: 103, rect: { x: 0, y: 0, width: 800, height: 600 }, visible: true });
+			expect(shows().slice(-2)).toEqual(["window.__rbHost && window.__rbHost.show(false)", "window.__rbHost && window.__rbHost.show(true)"]);
+		});
+
+		it("keeps going when a torn-down viewer throws while its panel is shown or hidden", async () => {
+			const { emit, invoke, agent, viewId, views } = await openAgent();
+			agent.emitConsoleMessage(0, report());
+			await invoke("browser:selectTab", { viewId, tabId: "a1" });
+			agent.executeJavaScript.mockImplementation(() => { throw new TypeError("Object has been destroyed"); });
+			expect(() => emit("browser:setBounds", { viewId, revision: 101, rect: { x: 0, y: 0, width: 800, height: 600 }, visible: true })).not.toThrow();
+			// The throttling sync still finished: the person's tab is unthrottled.
+			expect(views[0].webContents.setBackgroundThrottling).toHaveBeenLastCalledWith(false);
 		});
 
 		it("believes reports only from AO's agent-browser viewer", async () => {
