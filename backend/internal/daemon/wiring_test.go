@@ -1085,6 +1085,9 @@ func (f *fakeSessionLifecycle) SetCodexAccountSwitchObserver(func()) {}
 func (f *fakeSessionLifecycle) PersistChatModel(_ context.Context, _ domain.SessionID, _ string) error {
 	return nil
 }
+func (f *fakeSessionLifecycle) PersistChatEffort(_ context.Context, _ domain.SessionID, _ string) error {
+	return nil
+}
 
 // TestWiring_SessionLifecycleInterfaceInvokedByDaemon asserts the
 // sessionLifecycle interface is satisfied by *sessionmanager.Manager (compile

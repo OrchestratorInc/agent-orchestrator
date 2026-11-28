@@ -2,6 +2,7 @@ import { apiErrorException } from "../lib/api-error-exception";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import type { components } from "../../api/schema";
 import { apiClient } from "../lib/api-client";
+import { STANDALONE_WORKSPACE_ID } from "../types/workspace";
 
 export type Automation = components["schemas"]["AutomationResponse"];
 export type AutomationRun = components["schemas"]["AutomationRunResponse"];
@@ -9,6 +10,19 @@ export type CreateAutomationInput = components["schemas"]["CreateAutomationReque
 export type UpdateAutomationInput = components["schemas"]["UpdateAutomationRequest"];
 
 export const automationsQueryKey = ["automations"] as const;
+
+/**
+ * The daemon gives a Scratchpad automation no project. The app names it by the
+ * Scratchpad's workspace id instead, so pickers and filters never hold an empty
+ * value; this turns that id back into the daemon's.
+ */
+export function daemonProjectId(projectId: string): string {
+	return projectId === STANDALONE_WORKSPACE_ID ? "" : projectId;
+}
+
+function fromDaemon(automation: Automation): Automation {
+	return automation.projectId ? automation : { ...automation, projectId: STANDALONE_WORKSPACE_ID };
+}
 
 async function fetchAutomationPage(cursor?: string) {
 	const { data, error } = await apiClient.GET("/api/v1/automations", { params: { query: { limit: 100, cursor } } });
@@ -24,7 +38,7 @@ export function useAutomations() {
 			let cursor: string | undefined;
 			do {
 				const page = await fetchAutomationPage(cursor);
-				automations.push(...(page?.automations ?? []));
+				automations.push(...(page?.automations ?? []).map(fromDaemon));
 				cursor = page?.nextCursor;
 			} while (cursor);
 			return automations;
@@ -37,10 +51,10 @@ export function useCreateAutomation() {
 	const client = useQueryClient();
 	return useMutation({
 		mutationFn: async (body: CreateAutomationInput) => {
-			const { data, error } = await apiClient.POST("/api/v1/automations", { body });
+			const { data, error } = await apiClient.POST("/api/v1/automations", { body: { ...body, projectId: daemonProjectId(body.projectId) } });
 			if (error) throw apiErrorException(error);
 			if (!data) throw new Error("Automation response was empty");
-			return data.automation;
+			return fromDaemon(data.automation);
 		},
 		onSuccess: (automation) => client.setQueryData<Automation[]>(automationsQueryKey, (current = []) => [...current, automation]),
 	});
@@ -53,7 +67,7 @@ export function useUpdateAutomation() {
 			const { data, error } = await apiClient.PATCH("/api/v1/automations/{automationId}", { params: { path: { automationId: id } }, body });
 			if (error) throw apiErrorException(error);
 			if (!data) throw new Error("Automation response was empty");
-			return data.automation;
+			return fromDaemon(data.automation);
 		},
 		onMutate: async ({ id, body }) => {
 			await client.cancelQueries({ queryKey: automationsQueryKey });

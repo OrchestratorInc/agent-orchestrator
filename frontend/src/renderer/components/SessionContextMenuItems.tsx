@@ -1,17 +1,21 @@
 import { useCallback, useRef } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
-import { Archive, Code2, Copy, ExternalLink, GitBranch, GitFork, Pencil, Pin, PinOff, Play } from "@/components/app-icons";
+import { Archive, Cloud, Code2, Copy, ExternalLink, GitBranch, GitFork, Laptop, Pencil, Pin, PinOff, Play } from "@/components/app-icons";
 import type { OpenTarget } from "../../shared/editor-handoff";
 import { resumeAgentOnOpen, useCanResumeAgent } from "../hooks/useCanResumeAgent";
+import { useIsCloudSessionCreator } from "../hooks/useCloudAgentSwitch";
+import { useCloudGate } from "../hooks/useCloudGate";
+import { useCloudOffering } from "../hooks/useCloudOffering";
 import { conversationQueryKey } from "../hooks/useConversation";
 import { editorHandoffErrorMessage, useEditorHandoffState, useOpenSessionTarget } from "../hooks/useEditorHandoff";
 import { usePinSession, useUnpinSession } from "../hooks/usePinSession";
 import { workspaceQueryKeyForHost } from "../hooks/useWorkspaceQuery";
 import { aoBridge } from "../lib/bridge";
+import { CLOUD_BRANCH_FEATURE } from "../lib/move-session";
 import { sessionBranchPresentation } from "../lib/session-branch";
 import { useUiStore } from "../stores/ui-store";
-import { isOrchestratorSession, primaryPR, type WorkspaceSession } from "../types/workspace";
+import { isOrchestratorSession, primaryPR, sessionIsActive, type WorkspaceSession } from "../types/workspace";
 import { MenuEntries, type MenuEntry } from "./menu-model";
 import { OpenTargetIcon } from "./OpenTargetIcon";
 import { useForkSessionFromMenu, useSessionForkOptions } from "./SessionForkControls";
@@ -64,6 +68,14 @@ export function useSessionMenuEntries(session: WorkspaceSession | undefined, { o
 	// whether this one can, and why not.
 	const forkable = Boolean(session && !session.cloud);
 	const forkOptions = useSessionForkOptions(session, forkable);
+	const openMoveSession = useUiStore((state) => state.openMoveSession);
+	// Sessions move between this computer and AO Cloud, so only they read this daemon's settings.
+	const { cloudEnabled } = useCloudGate(Boolean(session && !session.hostId));
+	// Only the person who started a Cloud session may move it, and only once
+	// its organization's Cloud can push a session's branch.
+	const cloudOrgId = session?.cloud?.orgId;
+	const cloudOffering = useCloudOffering(Boolean(cloudOrgId), cloudOrgId);
+	const cloudCreator = useIsCloudSessionCreator(session?.cloud ? session : undefined);
 	if (!session) return [];
 
 	const branch = sessionBranchPresentation(session).branch;
@@ -73,6 +85,16 @@ export function useSessionMenuEntries(session: WorkspaceSession | undefined, { o
 	// plane for a Cloud session. A session shared from another organization is
 	// the sharer's to name and lists outside this sidebar's pins.
 	const canRenameAndPin = !session.cloud?.shared;
+	// A live worker on this computer can move to AO Cloud when Cloud is on.
+	const canMove = cloudEnabled && !session.cloud && !isOrchestratorSession(session) && sessionIsActive(session);
+	// A live worker this person started in AO Cloud can move to this computer.
+	const canMoveHere =
+		cloudEnabled &&
+		Boolean(session.cloud && !session.cloud.shared) &&
+		cloudCreator &&
+		cloudOffering.features.includes(CLOUD_BRANCH_FEATURE) &&
+		!isOrchestratorSession(session) &&
+		sessionIsActive(session);
 	const resume = () => {
 		void resumeAgentOnOpen(session.id)
 			.catch((error: unknown) => {
@@ -118,7 +140,8 @@ export function useSessionMenuEntries(session: WorkspaceSession | undefined, { o
 	}
 	// Forks at the latest finished turn; terminal sessions have no turn rows,
 	// so this is their way to fork. A session that can't be forked shows the
-	// item disabled, with the reason under it.
+	// item disabled, with the reason as its tooltip: a line under it would
+	// widen the fixed-width menu.
 	if (forkable) {
 		const refused = forkOptions.data && !forkOptions.data.allowed ? forkOptions.data : undefined;
 		entries.push({
@@ -127,10 +150,16 @@ export function useSessionMenuEntries(session: WorkspaceSession | undefined, { o
 			icon: <GitFork aria-hidden="true" />,
 			label: t("sessionFork.forkSession"),
 			disabled: Boolean(refused),
-			description: refused?.refusal?.message,
+			title: refused?.refusal?.message,
 			onSelect: () => forkSession(session),
 			accelerator: "f",
 		});
+	}
+	if (canMove) {
+		entries.push({ kind: "item", id: "session-move-to-cloud", icon: <Cloud aria-hidden="true" />, label: t("move.menuItem"), onSelect: () => openMoveSession(session) });
+	}
+	if (canMoveHere) {
+		entries.push({ kind: "item", id: "session-move-here", icon: <Laptop aria-hidden="true" />, label: t("moveHere.menuItem"), onSelect: () => openMoveSession(session) });
 	}
 	entries.push({ kind: "separator", id: "session-links-sep" });
 	if (pr) {

@@ -606,6 +606,12 @@ type SessionView struct {
 	// setting that differs from it changed afterwards. Omitted for sessions
 	// from before AO recorded it. Pulled from the json:"-" domain Metadata.
 	RoleAgent domain.AgentHarness `json:"roleAgent,omitempty"`
+	// ModelPending distinguishes Memcode endpoint discovery during a TUI spawn
+	// from a completed launch that selected the provider default model.
+	ModelPending bool `json:"modelPending,omitempty"`
+	// Effort is the reasoning level resolved for this session at spawn time.
+	// Empty means the provider default.
+	Effort string `json:"effort,omitempty"`
 	// LastUserMessageAt is the latest real user-authored task direction time.
 	// Lifecycle and internal automation updates do not advance it.
 	LastUserMessageAt *time.Time `json:"lastUserMessageAt,omitempty"`
@@ -3370,7 +3376,9 @@ type RemoteHostUpdateCheckResponse struct {
 // TelemetryIdentityResponse is the body of GET /api/v1/telemetry/identity. A
 // phone paired to this desktop identifies only a signed-in AO Cloud user ID.
 // Without one, DistinctID is the desktop install ID and stays anonymous. The
-// phone honors OptedOut. This response carries no email.
+// phone honors OptedOut. This response carries no email. DaemonVersion is the
+// daemon's release (the same value its own Sentry events use), sent even when
+// opted out so the phone can tell which daemon a failure came from.
 type TelemetryIdentityResponse struct {
 	DistinctID       string `json:"distinctId"`
 	InstallID        string `json:"installId,omitempty"`
@@ -3379,6 +3387,7 @@ type TelemetryIdentityResponse struct {
 	GitHubLogin      string `json:"githubLogin,omitempty"`
 	OptedOut         bool   `json:"optedOut"`
 	LifetimeSessions *int64 `json:"lifetimeSessions,omitempty"`
+	DaemonVersion    string `json:"daemonVersion,omitempty"`
 }
 
 // LinkPreviewQuery selects the external page to unfurl.
@@ -5039,6 +5048,251 @@ type ForkSessionRequest struct {
 type ForkSessionResponse struct {
 	SessionID   domain.SessionID `json:"sessionId"`
 	DisplayName string           `json:"displayName"`
+}
+
+// ApprovalPendingResponse is an agent action waiting for the user's approval.
+type ApprovalPendingResponse struct {
+	ID        string    `json:"id"`
+	Kind      string    `json:"kind" enum:"browser-action,credential-use" description:"What is asking: a browser action, or the first use of a saved login."`
+	SessionID string    `json:"sessionId"`
+	Site      string    `json:"site" description:"Origin (scheme, host, and non-default port) the action happens on; Always allow is remembered for it."`
+	URL       string    `json:"url,omitempty"`
+	PageTitle string    `json:"pageTitle,omitempty"`
+	Action    string    `json:"action" description:"What will happen, e.g. Click \"Place order\" on shop.example."`
+	Category  string    `json:"category" description:"payment, message, publish, delete, security, account, submit, or credential."`
+	Reason    string    `json:"reason" description:"Why it was flagged."`
+	Element   string    `json:"element,omitempty" description:"The target element's role and label."`
+	Image     string    `json:"image,omitempty" description:"Base64 PNG of the element in its page."`
+	CreatedAt time.Time `json:"createdAt"`
+	ExpiresAt time.Time `json:"expiresAt" description:"When the request is denied if nobody answers."`
+}
+
+// ApprovalListResponse lists pending approval requests, oldest first.
+type ApprovalListResponse struct {
+	Pending []ApprovalPendingResponse `json:"pending"`
+}
+
+// ApprovalIDParam is the {id} path parameter of an approval request.
+type ApprovalIDParam struct {
+	ID string `path:"id" description:"Approval request id."`
+}
+
+// ApprovalDecisionRequest is the user's answer to an approval request.
+type ApprovalDecisionRequest struct {
+	Decision string `json:"decision" enum:"allow-once,allow-site,deny" required:"true"`
+}
+
+// ApprovalDecisionResponse confirms how a request ended.
+type ApprovalDecisionResponse struct {
+	ID       string `json:"id"`
+	Decision string `json:"decision" enum:"allow-once,allow-site,deny,timeout,cancelled,site-allowed"`
+}
+
+// ApprovalAuditQuery filters the approval audit log.
+type ApprovalAuditQuery struct {
+	Limit     *int64 `query:"limit,omitempty" minimum:"1" maximum:"500" description:"Maximum entries, newest first. Defaults to 100."`
+	SessionID string `query:"sessionId,omitempty" description:"Only this session's entries."`
+}
+
+// ApprovalAuditEntryResponse is one gated action in the audit log.
+type ApprovalAuditEntryResponse struct {
+	ID        string    `json:"id"`
+	Time      time.Time `json:"time"`
+	Kind      string    `json:"kind"`
+	SessionID string    `json:"sessionId"`
+	Site      string    `json:"site"`
+	URL       string    `json:"url,omitempty"`
+	Action    string    `json:"action"`
+	Category  string    `json:"category"`
+	Reason    string    `json:"reason,omitempty"`
+	Decision  string    `json:"decision" enum:"allow-once,allow-site,deny,timeout,cancelled,site-allowed"`
+	DecidedAt time.Time `json:"decidedAt"`
+}
+
+// ApprovalAuditResponse is a page of the approval audit log.
+type ApprovalAuditResponse struct {
+	Entries []ApprovalAuditEntryResponse `json:"entries"`
+}
+
+// ApprovalPolicyQuery selects whose mode to report.
+type ApprovalPolicyQuery struct {
+	SessionID string `query:"sessionId,omitempty" description:"Report this session's mode."`
+}
+
+// ApprovalSiteRuleResponse is an "always allow on this site" choice.
+type ApprovalSiteRuleResponse struct {
+	Site      string    `json:"site"`
+	Category  string    `json:"category"`
+	CreatedAt time.Time `json:"createdAt"`
+}
+
+// ApprovalPolicyResponse is a session's approval mode and the remembered sites.
+type ApprovalPolicyResponse struct {
+	Mode        string                     `json:"mode" enum:"off,risky,every-submit" description:"The session's mode, or the default when no session was named."`
+	DefaultMode string                     `json:"defaultMode" enum:"off,risky,every-submit" description:"The mode for sessions that have not chosen their own."`
+	Sites       []ApprovalSiteRuleResponse `json:"sites"`
+}
+
+// ApprovalPolicyRequest changes a session's approval mode, or the default
+// when sessionId is empty.
+type ApprovalPolicyRequest struct {
+	SessionID string `json:"sessionId,omitempty"`
+	Mode      string `json:"mode" enum:"off,risky,every-submit" required:"true"`
+}
+
+// ApprovalSiteRuleQuery names an "always allow" choice to forget.
+type ApprovalSiteRuleQuery struct {
+	Site     string `query:"site" required:"true"`
+	Category string `query:"category" required:"true"`
+}
+
+// BrowserRemoteCommandRequest is one raw agent-browser command for this
+// host's self-hosted agent browser.
+type BrowserRemoteCommandRequest struct {
+	SessionID domain.SessionID  `json:"sessionId" required:"true"`
+	Args      []string          `json:"args" required:"true" description:"agent-browser arguments, e.g. [\"click\", \"@e2\"]."`
+	Files     map[string]string `json:"files,omitempty" description:"Uploaded files by path, base64."`
+}
+
+// BrowserRemoteCommandResponse is the agent browser's reply.
+type BrowserRemoteCommandResponse struct {
+	Output string            `json:"output"`
+	Error  string            `json:"error,omitempty"`
+	Files  map[string]string `json:"files,omitempty" description:"Files the command wrote, by path, base64."`
+}
+
+// MovePreviewResponse is what a move to AO Cloud would push now: the branch
+// and the uncommitted paths its WIP commit would carry.
+type MovePreviewResponse struct {
+	Branch        string             `json:"branch"`
+	DefaultBranch string             `json:"defaultBranch,omitempty" description:"The repository's default branch: the project's configured one, else origin's. Absent when neither is known."`
+	Changes       []MoveChange       `json:"changes"`
+	Withheld      []string           `json:"withheld,omitempty" description:"Secret environment files (.env, .env.<name>, not .env.example) with changes the move leaves out. They stay on this computer and never reach origin or Orchestrator Cloud."`
+	Transcript    MoveTranscriptInfo `json:"transcript"`
+}
+
+// MoveTranscriptInfo says whether a move would carry the agent's conversation
+// to AO Cloud, which resumes it, or only the handoff note.
+type MoveTranscriptInfo struct {
+	Bytes              int64  `json:"bytes" description:"The transcript and the subagent transcripts and saved tool output that move with it."`
+	Subagents          int    `json:"subagents,omitempty" description:"Subagent transcripts that move with the conversation."`
+	Unavailable        string `json:"unavailable,omitempty" enum:"unsupported,not_found,too_large" description:"Why the conversation would not move: an agent AO Cloud cannot resume, no saved conversation, or over 64 MiB (or AO Cloud's 32 MiB upload limit once gzipped)."`
+	SidecarUnavailable string `json:"sidecarUnavailable,omitempty" enum:"too_large" description:"The sidecar folder is over AO Cloud's limits, so the transcript moves without it."`
+}
+
+// MoveTranscriptResponse is a stopped session's agent conversation for AO Cloud.
+type MoveTranscriptResponse struct {
+	AgentSessionID string `json:"agentSessionId"`
+	TranscriptGzip []byte `json:"transcriptGzip" description:"The transcript, gzipped and base64-encoded, with this machine's working directory (and Claude Code's project folder) replaced by placeholders AO Cloud's worker fills in."`
+	SidecarGzip    []byte `json:"sidecarGzip,omitempty" description:"The transcript's sidecar folder (subagent transcripts, saved tool output) as a gzipped tar, base64-encoded, paths replaced the same way. Absent when there is none or it is over 64 MiB."`
+	SidecarOmitted string `json:"sidecarOmitted,omitempty" enum:"too_large,unreadable" description:"Why the conversation's sidecar folder stays on this computer, when it does."`
+}
+
+// MoveChange is one uncommitted path a move would push.
+type MoveChange struct {
+	Path   string `json:"path"`
+	Status string `json:"status" enum:"added,modified,deleted"`
+	// Untracked marks an added file git did not track, which the user may not
+	// expect the move to commit and push.
+	Untracked bool `json:"untracked,omitempty"`
+}
+
+// MoveExportRequest asks this machine to push a stopped session for a move to
+// AO Cloud.
+type MoveExportRequest struct {
+	// MoveID identifies one move across every call; the app reuses it on retry.
+	MoveID string `json:"moveId" minLength:"1" maxLength:"64" pattern:"^[A-Za-z0-9._-]+$"`
+	// SourceLabel is this machine's name as the user knows it, for the note
+	// and the WIP commit.
+	SourceLabel string `json:"sourceLabel,omitempty" maxLength:"100"`
+}
+
+// MoveExportResponse is the pushed session: the manifest and handoff note
+// AO Cloud starts it from.
+type MoveExportResponse struct {
+	Manifest    sessionsvc.MoveManifest `json:"manifest"`
+	HandoffNote string                  `json:"handoffNote"`
+	Changes     int                     `json:"changes"`
+	Submodules  []string                `json:"submodules,omitempty"`
+}
+
+// MoveImportRequest starts a session AO Cloud pushed in one of this machine's
+// projects. Its body is the control plane's move/export response plus the
+// project and move id.
+type MoveImportRequest struct {
+	ProjectID   string                  `json:"projectId" minLength:"1"`
+	MoveID      string                  `json:"moveId" minLength:"1" maxLength:"64" pattern:"^[A-Za-z0-9._-]+$"`
+	Manifest    sessionsvc.MoveManifest `json:"manifest"`
+	HandoffNote string                  `json:"handoffNote,omitempty"`
+	// Transcript is the agent's conversation from Orchestrator Cloud's
+	// move/export; the session resumes it instead of the note.
+	Transcript *MoveImportTranscript `json:"transcript,omitempty"`
+}
+
+// MoveImportTranscript is an agent conversation an Orchestrator Cloud sandbox kept.
+type MoveImportTranscript struct {
+	AgentSessionID string `json:"agentSessionId" minLength:"1" maxLength:"80" pattern:"^[A-Za-z0-9_-]+$"`
+	ProjectDir     string `json:"projectDir" minLength:"1" description:"The folder the transcript was in on Orchestrator Cloud. For Claude Code its paths, and the sandbox's working directory, become this machine's."`
+	TranscriptGzip []byte `json:"transcriptGzip" description:"The transcript, gzipped and base64-encoded."`
+	SidecarGzip    []byte `json:"sidecarGzip,omitempty" description:"The transcript's sidecar folder as a gzipped tar, base64-encoded."`
+}
+
+// MoveTargetsQuery names the repository and branch a session from
+// Orchestrator Cloud would move into.
+type MoveTargetsQuery struct {
+	RepoKey string `query:"repoKey" required:"true" description:"The repository's key, lower-case github.com/<owner>/<name>."`
+	Branch  string `query:"branch" required:"true" description:"The branch the session continues on."`
+}
+
+// MoveTargetsResponse lists the projects here a session from Orchestrator
+// Cloud could move into.
+type MoveTargetsResponse struct {
+	Targets []MoveTargetView `json:"targets"`
+}
+
+// MoveTargetView is one project; refusal says why the session cannot move into it.
+type MoveTargetView struct {
+	ProjectID string       `json:"projectId"`
+	Name      string       `json:"name"`
+	Path      string       `json:"path"`
+	Refusal   *MoveRefusal `json:"refusal,omitempty"`
+}
+
+// MoveRefusal is why a move cannot happen, as the dialog shows it.
+type MoveRefusal struct {
+	Code    string `json:"code"`
+	Message string `json:"message"`
+}
+
+// MoveImportResponse is the new session. Warnings list what did not carry
+// over, such as a pull request this machine could not claim.
+type MoveImportResponse struct {
+	Session                SessionView `json:"session"`
+	Warnings               []string    `json:"warnings,omitempty"`
+	ConversationIncomplete bool        `json:"conversationIncomplete,omitempty" description:"The conversation, or its subagent transcripts and saved tool output, came with the move but was not placed here. The source holds the only full copy, so keep it."`
+}
+
+// MoveCompleteRequest records the AO Cloud session the session moved to.
+type MoveCompleteRequest struct {
+	MoveID    string `json:"moveId" minLength:"1" maxLength:"64"`
+	OrgID     string `json:"orgId" minLength:"1"`
+	SessionID string `json:"sessionId" minLength:"1"`
+}
+
+// MoveAbandonRequest ends a move to AO Cloud that this machine will not
+// finish, without starting the agent.
+type MoveAbandonRequest struct {
+	MoveID string `json:"moveId" minLength:"1" maxLength:"64"`
+}
+
+// MoveAbandonResponse says whether the move was still in progress here.
+type MoveAbandonResponse struct {
+	Ended bool `json:"ended" description:"True when the move was in progress and is now over; false when it had already ended or another move is in progress."`
+}
+
+// MoveCompleteResponse is the archived source session with its movedTo set.
+type MoveCompleteResponse struct {
+	Session SessionView `json:"session"`
 }
 
 // DevicePlatformStatus says whether this machine can run a platform's

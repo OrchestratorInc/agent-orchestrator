@@ -255,10 +255,16 @@ func sessionMode(permission ports.PermissionMode) string {
 // a session on a model it lacks keeps its default, and the chat's own picker
 // lists what the server really has.
 func sessionOptions(settings ports.ChatTurnSettings) []acpdriver.SessionOption {
+	var options []acpdriver.SessionOption
 	if model := strings.TrimSpace(settings.Model); model != "" {
-		return []acpdriver.SessionOption{{ID: "model", Value: model, Optional: true}}
+		options = append(options, acpdriver.SessionOption{ID: "model", Value: model, Optional: true})
 	}
-	return nil
+	// A startup fallback saves the ACP base model and its actual reasoning
+	// level separately. Reapply that level when the corrected session resumes.
+	if effort := strings.TrimSpace(settings.Effort); effort != "" {
+		options = append(options, acpdriver.SessionOption{ID: thinkingLevelOption, Value: effort, Optional: true})
+	}
+	return options
 }
 
 // splitModelVariant turns gemini-3.8-flash-high into what server 1.4 and `agy

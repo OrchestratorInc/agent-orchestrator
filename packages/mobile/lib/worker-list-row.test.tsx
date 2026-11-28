@@ -203,6 +203,23 @@ describe("WorkerListRow", () => {
 		expect(counters.renders).toBe(0);
 		act(() => renderer.unmount());
 	});
+	// Choosing a machine rebuilds every row, so a row must settle on its first
+	// render rather than draw itself again once its effects run.
+	it("renders a newly mounted worker once", () => {
+		counters.renders = 0;
+		let renderer!: ReactTestRenderer;
+		act(() => {
+			renderer = create(
+				<WorkerListRow
+					session={session} projectName="Project" isRenaming={false} nowBucket={1}
+					onSwipeOpen={vi.fn()} onSwipeClose={vi.fn()} onRenameStart={vi.fn()} onRenameCancel={vi.fn()}
+					onRename={vi.fn(async () => {})} onSetPinned={vi.fn(async () => {})} onDelete={vi.fn()} onResume={vi.fn()} onRestore={vi.fn()}
+				/>,
+			);
+		});
+		expect(counters.renders).toBe(1);
+		act(() => renderer.unmount());
+	});
 	it("places a distinct machine name and symbol on the bottom metadata line", () => {
 		let renderer!: ReactTestRenderer;
 		act(() => {
@@ -253,6 +270,57 @@ describe("WorkerListRow", () => {
 // Haptics mark an outcome or a destructive confirmation; opening a row,
 // pressing a rail control or folding a section stays silent, and one action
 // never buzzes twice.
+// Choosing another machine or project gives the board a new identity. Rows on
+// both boards stay as they are (rebuilding every row took seconds on a phone),
+// and the board still starts over as a new list would.
+describe("switching the board's filter", () => {
+	const a = { ...session, id: "a", hostId: "mac", lastEventAt: "2026-10-08T02:00:00Z" };
+	const b = { ...session, id: "b", hostId: "dev", lastEventAt: "2026-10-08T01:00:00Z" };
+	const onRefresh = vi.fn();
+	const render = (sessions: DashboardSession[], identityKey: string) =>
+		<WorkerBoardList sessions={sessions} identityKey={identityKey} contentBottomInset={0} refreshing={false} onRefresh={onRefresh} />;
+	const rowIds = (renderer: ReactTestRenderer) => renderer.root.findByType("virtual-list" as never).props.data
+		.filter((row: { kind: string }) => row.kind === "session").map((row: { session: DashboardSession }) => row.session.id);
+
+	it("keeps the rows both boards share instead of building them again", () => {
+		let renderer!: ReactTestRenderer;
+		act(() => { renderer = create(render([a, b], "all|all")); });
+		counters.renders = 0;
+		act(() => { renderer.update(render([a], "mac|all")); });
+		expect(rowIds(renderer)).toEqual(["a"]);
+		expect(counters.renders).toBe(0);
+		act(() => renderer.unmount());
+	});
+
+	it("starts the new board at its top, in its current order, with no news held back", () => {
+		const scrollToOffset = counters.scrollToOffset.mockClear();
+		let renderer!: ReactTestRenderer;
+		act(() => { renderer = create(render([a, b], "all|all")); });
+		const newer = { ...b, lastEventAt: "2026-10-08T03:00:00Z" };
+		act(() => { renderer.update(render([a, newer], "all|all")); });
+		// Held still on the same board, behind the pill.
+		expect(rowIds(renderer)).toEqual(["a", "b"]);
+		expect(scrollToOffset).not.toHaveBeenCalled();
+		act(() => { renderer.update(render([a, newer], "all|project-1")); });
+		expect(rowIds(renderer)).toEqual(["b", "a"]);
+		expect(renderer.root.findAllByType("Pressable" as never).filter((node) => node.props.accessibilityLabel?.includes("updated"))).toHaveLength(0);
+		expect(scrollToOffset).toHaveBeenCalledWith({ offset: 0, animated: false });
+		act(() => renderer.unmount());
+	});
+
+	it("closes a row's open swipe rail when the board moves", () => {
+		let renderer!: ReactTestRenderer;
+		act(() => { renderer = create(render([a, b], "all|all")); });
+		const close = vi.fn();
+		const key = JSON.stringify(["mac", "a"]);
+		const rowA = renderer.root.findAllByType("RowInteraction" as never).find((node) => node.props.sessionId === key)!;
+		act(() => rowA.props.onSwipeOpen(key, close));
+		act(() => { renderer.update(render([a], "mac|all")); });
+		expect(close).toHaveBeenCalled();
+		act(() => renderer.unmount());
+	});
+});
+
 describe("worker board haptics", () => {
 	it("fires one warning as Archive asks to confirm, and nothing for the presses before it", async () => {
 		const { haptics } = await import("./haptics");

@@ -290,11 +290,17 @@ var shippedMigrations = map[int64]string{
 	20261119090000000: "20261119090000000_allow_mastra_code_harness.sql",
 	20261119200201916: "20261119200201916_session_pr_footer_choice.sql",
 	20261121120000000: "20261121120000000_pr_merge_queue.sql",
+	20261123090620327: "20261123090620327_automation_scratchpad_project.sql",
 	20261124173817272: "20261124173817272_review_run_github_review_id_index.sql",
 	20261124180709139: "20261124180709139_review_reviewer_handle_index.sql",
 	20261124180938781: "20261124180938781_review_chat_active_index.sql",
 	20261125084210509: "20261125084210509_skill_sharing.sql",
 	20261126154409684: "20261126154409684_session_role_agent.sql",
+	20261126171748993: "20261126171748993_add_session_moved_to.sql",
+	20261126171749183: "20261126171749183_add_session_move_conversation_placed.sql",
+	20261126171749354: "20261126171749354_add_session_move_started.sql",
+	20261127085740884: "20261127085740884_session_version_moves.sql",
+	20261127183058106: "20261127183058106_repair_open_usage_harness_checks.sql",
 }
 
 // burnedVersion reports version numbers that must never be (re)used: they
@@ -318,7 +324,17 @@ func burnedVersion(v int64) bool {
 		v == 216 || v == 20261114174124485 ||
 		// 0207, 20261023182047274 and 20261114174310512 were Mastra Code draft
 		// numbers before its migration moved above main's latest version.
-		v == 207 || v == 20261023182047274 || v == 20261114174310512
+		v == 207 || v == 20261023182047274 || v == 20261114174310512 ||
+		// 20261107221212658, 20261121170116818 and 20261121170942121 were the
+		// session move draft numbers before its migrations moved above main's
+		// latest version.
+		v == 20261107221212658 || v == 20261121170116818 || v == 20261121170942121 ||
+		// 20261125063907001-003 were the session move numbers before main's
+		// 20261126154409684 landed below them.
+		v == 20261125063907001 || v == 20261125063907002 || v == 20261125063907003 ||
+		// 20261127064704491 was the usage CHECK repair's number before main's
+		// 20261127085740884 landed below it.
+		v == 20261127064704491
 }
 
 // TestMigrationVersionLedger enforces the append-only migration ledger: every

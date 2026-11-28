@@ -1031,6 +1031,12 @@ const (
 	ChatEventTurnDiff ChatEventKind = "turn.diff"
 	// ChatEventCompacted reports that the provider summarized earlier history to
 	// reclaim context. It is a fact about the conversation, not a turn.
+	//
+	// ActivityStatus carries where the compaction is: running while the provider
+	// summarizes, failed (Summary holds the provider's reason) when it gave up,
+	// and empty or completed once the history was replaced. A driver that can see
+	// a compaction start reports it running and then settles the same
+	// ProviderItemID, so the timeline shows one row that changes in place.
 	ChatEventCompacted ChatEventKind = "thread.compacted"
 	// ChatEventUsage is a token accounting update for the conversation.
 	ChatEventUsage ChatEventKind = "usage"

@@ -38,6 +38,7 @@ const h = vi.hoisted(() => ({
 	modelWarningRetries: true,
 	offering: { ready: false, loaded: false, org: undefined as { id: string } | undefined, features: [] as string[], maxAttachmentBytes: undefined as number | undefined },
 	workspaces: [] as Array<Record<string, unknown>>,
+	preparedSessionId: "",
 	autoCompact: undefined as { value?: "200k" | "1m" | "off"; beforeStart?: boolean; onChange: (value?: "200k" | "1m" | "off") => void } | undefined,
 }));
 
@@ -81,6 +82,7 @@ vi.mock("./TaskComposer", () => ({
 		effectiveInterface: "chat",
 		refreshModels: async () => undefined,
 		notePreparationUsed: () => undefined,
+		preparedSessionId: h.preparedSessionId,
 		modelWarning: h.modelWarning,
 		modelWarningRetries: h.modelWarningRetries,
 		chatModels: h.chatModels,
@@ -141,6 +143,7 @@ beforeEach(() => {
 	h.modelWarningRetries = true;
 	h.offering = { ready: false, loaded: false, org: undefined, features: [], maxAttachmentBytes: undefined };
 	h.workspaces = [{ id: "proj-1", name: "Project", kind: "project", sessions: [] }];
+	h.preparedSessionId = "";
 	window.localStorage.clear();
 });
 
@@ -171,6 +174,14 @@ describe("NewChatPage", () => {
 		expect(screen.getByText(/isn't available to your Codex account on Cloud/)).toBeInTheDocument();
 		expect(screen.queryByRole("button", { name: "Retry" })).toBeNull();
 	});
+	it("passes the prepared session id as assetSessionId instead of the synthetic draft id", () => {
+		const page = renderPage();
+		expect(h.workspace?.assetSessionId).toBe("");
+		h.preparedSessionId = "proj-1-42";
+		page.refresh();
+		expect(h.workspace?.assetSessionId).toBe("proj-1-42");
+	});
+
 	it("shows a confirmed branch choice as status before the next send", () => {
 		h.status = "Branch fix/login selected for your next task.";
 		renderPage();

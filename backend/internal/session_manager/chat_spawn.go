@@ -338,6 +338,12 @@ func (m *Manager) launchChatController(ctx context.Context, in chatSpawn) (domai
 				Model:                     agentConfig.Model,
 				Effort:                    agentConfig.Effort,
 			}
+			if in.cfg.Harness == domain.HarnessAgy && started.Conversation.ID != "" {
+				if started.Conversation.Settings.Model != "" {
+					metadata.Model = started.Conversation.Settings.Model
+				}
+				metadata.Effort = started.Conversation.Settings.ReasoningEffort
+			}
 			committedConversation, commitErr := m.markChatControllerSpawned(
 				ctx, id, metadata, started.Conversation, started.ProviderBoundary,
 				started.CommitProviderHistory, nil, started.LiveReconnect,
@@ -637,6 +643,9 @@ func (m *Manager) resumeChatController(
 		awakeTarget = &target
 	}
 	var completionErr error
+	if err := m.versionMoveStage(ctx, rec.ID, domain.VersionMoveStarting); err != nil {
+		return RestoreResult{}, err
+	}
 	_, err = m.chat.StartChat(ctx, ChatStart{
 		AwakeReconnectTarget:    awakeTarget,
 		ReconnectOnly:           reconnectOnly,
@@ -728,6 +737,13 @@ func (m *Manager) resumeChatController(
 			// A fresh generation per launch: events still arriving from the
 			// controller this one replaced carry the old one and are rejected.
 			metadata.ControllerGeneration = started.ControllerGeneration
+			// Imported and older conversations may not have saved settings yet.
+			if rec.Harness == domain.HarnessAgy && !started.LiveReconnect && started.Conversation.ID != "" {
+				if started.Conversation.Settings.Model != "" {
+					metadata.Model = started.Conversation.Settings.Model
+				}
+				metadata.Effort = started.Conversation.Settings.ReasoningEffort
+			}
 
 			committedConversation, commitErr := m.markChatControllerSpawned(
 				ctx, rec.ID, metadata, started.Conversation, started.ProviderBoundary,
@@ -757,6 +773,11 @@ func (m *Manager) resumeChatController(
 		// Another app can hold an imported conversation after adoption too.
 		if rec.Metadata.ImportSource != nil && providerRefusedImportOwnership(err) {
 			return RestoreResult{}, ErrSessionOpenElsewhere
+		}
+		if !errors.Is(err, ports.ErrChatRecoveryInconclusive) && !m.chat.HasLiveChatController(rec.ID) {
+			cleanup, cancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
+			defer cancel()
+			err = errors.Join(err, m.versionMoveStage(cleanup, rec.ID, domain.VersionMoveRetry))
 		}
 		m.requireChatLogin(ctx, rec.ID, err)
 		return RestoreResult{}, relaunchFailed("chat start", fmt.Errorf("%s %s: resume chat: %w", operation, rec.ID, agentlaunch.RedactError(err, project.Config.Env)))

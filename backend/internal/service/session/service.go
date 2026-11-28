@@ -301,6 +301,8 @@ type Service struct {
 	// githubRepos lets ClaimPR accept a PR on the repository a github.com
 	// origin was renamed or transferred to. Nil keeps exact origin matching.
 	githubRepos ports.GitHubRepositoryResolver
+	// moveNotes renders the handoff note of a session moved to AO Cloud.
+	moveNotes MoveNoter
 }
 
 // renewTaskPreparation extends a hidden preparation's expiry when its files
@@ -2000,6 +2002,21 @@ func (s *Service) GetRecord(ctx context.Context, id domain.SessionID) (domain.Se
 	return rec, nil
 }
 
+// GetAttachmentRecord returns the stored row for a session or held task
+// preparation whose staged attachments may be previewed, renewing a
+// preparation's expiry so reading its staged files counts as use.
+func (s *Service) GetAttachmentRecord(ctx context.Context, id domain.SessionID) (domain.SessionRecord, error) {
+	rec, ok, err := s.store.GetSession(ctx, id)
+	if err != nil {
+		return domain.SessionRecord{}, fmt.Errorf("get %s: %w", id, err)
+	}
+	if !ok {
+		return domain.SessionRecord{}, apierr.NotFound("SESSION_NOT_FOUND", "Unknown session")
+	}
+	s.renewTaskPreparation(rec)
+	return rec, nil
+}
+
 // Get returns one session as an enriched display model, or an apierr.NotFound
 // (SESSION_NOT_FOUND) if it is absent.
 func (s *Service) Get(ctx context.Context, id domain.SessionID) (domain.Session, error) {
@@ -2141,6 +2158,8 @@ func mapSessionError(err error) error {
 	case errors.Is(err, ports.ErrAgentAccountUnshared):
 		return apierr.Conflict("AGENT_ACCOUNT_UNSHARED",
 			"Orchestrator cannot link this account's folder to this computer's history.", nil)
+	case errors.Is(err, sessionmanager.ErrSessionMoved):
+		return apierr.Conflict("SESSION_MOVED", "This session moved to Orchestrator Cloud. Open it there.", nil)
 	case errors.Is(err, sessionmanager.ErrNotRestorable):
 		return apierr.Conflict("SESSION_NOT_RESTORABLE", "Session is not restorable", nil)
 	case errors.Is(err, sessionmanager.ErrTerminated):

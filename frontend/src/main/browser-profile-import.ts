@@ -804,7 +804,7 @@ export class BrowserProfileImportService {
 				onProgress({ requestId: request.requestId, phase: "importing", completed: index + 1, total: groups.length });
 			}
 			// Only a committed import may become the default; see createProfile.
-			if (created[0]) await this.options.profileStore.claimDefaultIfFirst(created[0].id);
+			if (created[0]) await this.options.profileStore.claimDefaultForImport(created[0].id);
 			return { sourceName: source.public.name, entries: results };
 		} catch (error) {
 			const cleanupFailures: string[] = [];
