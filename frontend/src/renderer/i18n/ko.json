@@ -4739,6 +4739,8 @@
 	"usage.windows.recordingSince": "읽기 시작: {{value}}",
 	"usage.windows.timeline": "5시간 창",
 	"usage.windows.allowance": "이번 주 할당량",
+	"usage.windows.organizationUnknown": "조직 기록 없음",
+	"usage.windows.accountLabel": "계정 {{id}}",
 	"usage.windows.onPace": "이 속도면 재설정 시 약 {{value}}",
 	"usage.windows.runsOut": "이 속도면 {{value}}에 소진",
 	"usage.windows.notReadSince": "{{value}} 이후 읽기 없음",

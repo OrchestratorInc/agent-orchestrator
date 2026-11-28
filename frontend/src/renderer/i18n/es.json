@@ -4868,6 +4868,8 @@
 	"usage.windows.recordingSince": "Las lecturas empiezan el {{value}}.",
 	"usage.windows.timeline": "Ventanas de cinco horas",
 	"usage.windows.allowance": "Asignación de esta semana",
+	"usage.windows.organizationUnknown": "Organización no registrada",
+	"usage.windows.accountLabel": "Cuenta {{id}}",
 	"usage.windows.onPace": "a este ritmo, cerca de {{value}} al reiniciarse",
 	"usage.windows.runsOut": "a este ritmo se agota el {{value}}",
 	"usage.windows.notReadSince": "sin lecturas desde el {{value}}",

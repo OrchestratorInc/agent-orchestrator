@@ -4739,6 +4739,8 @@
 	"usage.windows.recordingSince": "Messwerte ab {{value}}.",
 	"usage.windows.timeline": "Fünf-Stunden-Fenster",
 	"usage.windows.allowance": "Kontingent dieser Woche",
+	"usage.windows.organizationUnknown": "Organisation nicht erfasst",
+	"usage.windows.accountLabel": "Konto {{id}}",
 	"usage.windows.onPace": "bei diesem Tempo etwa {{value}} beim Zurücksetzen",
 	"usage.windows.runsOut": "bei diesem Tempo aufgebraucht am {{value}}",
 	"usage.windows.notReadSince": "seit {{value}} nicht gelesen",

@@ -4722,6 +4722,8 @@
 	"usage.windows.recordingSince": "Ölçümler {{value}} itibarıyla başlıyor.",
 	"usage.windows.timeline": "Beş saatlik aralıklar",
 	"usage.windows.allowance": "Bu haftanın kotası",
+	"usage.windows.organizationUnknown": "Kuruluş kaydedilmedi",
+	"usage.windows.accountLabel": "Hesap {{id}}",
 	"usage.windows.onPace": "bu hızla sıfırlanana kadar yaklaşık {{value}} kullanım öngörülüyor",
 	"usage.windows.runsOut": "bu hızla tükenme: {{value}}",
 	"usage.windows.notReadSince": "{{value}} sonrasında ölçüm alınmadı",
