@@ -4,6 +4,7 @@ import { sortedPRs, type PRState, type PullRequestFacts, type SessionBranchState
 import { appI18n, type PluralMessageKey } from "../i18n";
 import type {
 	PRCardPresentation,
+	PRCardSignal,
 	PRCardStatus,
 	PRCheckState,
 	PRChecksTally,
@@ -11,8 +12,6 @@ import type {
 	PRNoun,
 	PRStatusRow,
 	PRSummaryLink,
-	PRStripCell,
-	PRStripTone,
 	PRSummaryPart,
 } from "@aoagents/product-ui";
 
@@ -231,7 +230,40 @@ export function prStatusRows(pr: SessionPRSummary): PRStatusRow[] {
  * `noChecks` (see prHasNoChecks) stops a PR that nothing checks from
  * waiting on checks; the classic card leaves it unset.
  */
+/**
+ * The card's status: its rows, what decides the merge, and, beside the
+ * readiness line, unresolved comments and approvals as small counts.
+ */
 export function prCardPresentation(pr: SessionPRSummary, options: { noChecks?: boolean } = {}): PRCardPresentation {
+	const presentation = cardPresentation(pr, options);
+	if (!presentation.readinessRows) return presentation;
+	const signals = readinessSignals(pr);
+	return signals.length > 0 ? { ...presentation, readinessSignals: signals } : presentation;
+}
+
+/**
+ * Unresolved comments when there are any; approvals when the repo asks for
+ * review or someone has given a verdict. Nothing to say, no count.
+ */
+export function readinessSignals(pr: SessionPRSummary): PRCardSignal[] {
+	const signals: PRCardSignal[] = [];
+	const unresolved = pr.review.unresolvedThreadCount ?? pr.review.unresolvedBy.reduce((sum, reviewer) => sum + reviewer.count, 0);
+	if (unresolved > 0) signals.push({ key: "comments", count: unresolved, tone: "warning", label: appI18n.t("inspector.unresolvedCount", { count: unresolved }) });
+	const { approvedBy, changesRequestedBy } = latestReviewers(pr.review.reviews);
+	const decision = pr.review.decision;
+	const approvedLine = approvedBy.length > 0 ? appI18n.t("pr.review.approvedBy", { names: approvedBy.join(", ") }) : undefined;
+	if (decision === "changes_requested" || (decision === "none" && changesRequestedBy.length > 0)) {
+		const label = changesRequestedBy.length > 0 ? appI18n.t("pr.review.changesRequestedBy", { names: changesRequestedBy.join(", ") }) : appI18n.t("pr.review.changesRequested");
+		signals.push({ key: "approvals", count: approvedBy.length, tone: "error", label: [label, approvedLine].filter(Boolean).join(" · ") });
+	} else if (decision === "review_required") {
+		signals.push({ key: "approvals", count: approvedBy.length, tone: "warning", label: [appI18n.t("pr.card.reviewRequired"), approvedLine].filter(Boolean).join(" · ") });
+	} else if (decision === "approved" || approvedBy.length > 0) {
+		signals.push({ key: "approvals", count: Math.max(1, approvedBy.length), tone: "success", label: approvedLine ?? appI18n.t("pr.review.approved") });
+	}
+	return signals;
+}
+
+function cardPresentation(pr: SessionPRSummary, options: { noChecks?: boolean }): PRCardPresentation {
 	// CI "unknown" means checks are still being read, unless the PR has none.
 	const awaitingChecks = pr.ci.state === "unknown" && !options.noChecks;
 	const queued = prMergeQueueEntry(pr);
@@ -306,24 +338,23 @@ export function prCardPresentation(pr: SessionPRSummary, options: { noChecks?: b
 		}
 		statusRows.push(cardStatus("review", "pr.card.reviewStatus", reviewTone(pr.review.decision, pr.review.hasUnresolvedHumanComments), reviewStatusDetail(pr)));
 		const readinessRows = mergeReadinessRows(pr, options);
-		const strip = readinessStrip(pr, readinessRows);
 		const mergeable = prCanMerge(pr, options);
 		if (queued) {
-			return { primary, supporting, statusRows, readinessRows, strip, readinessExplained: true, readiness: {
+			return { primary, supporting, statusRows, readinessRows, readinessExplained: true, readiness: {
 				label: appI18n.t("pr.queue.card"),
 				detail: prMergeQueueDetail(queued),
 				tone: queued.state === "unmergeable" ? "warning" : "neutral",
 			} };
 		}
 		if (mergeReasons(pr).includes("github_checks_unavailable")) {
-			return { primary, supporting, statusRows, readinessRows, strip, readiness: {
+			return { primary, supporting, statusRows, readinessRows, readiness: {
 				label: appI18n.t("pr.merge.accessLost"),
 				detail: appI18n.t("pr.merge.checksUnavailableDetail"),
 				tone: "warning",
 			} };
 		}
 		if (hasLostGitHubAccess(pr)) {
-			return { primary, supporting, statusRows, readinessRows, strip, readiness: {
+			return { primary, supporting, statusRows, readinessRows, readiness: {
 				label: appI18n.t("pr.merge.accessLost"),
 				detail: appI18n.t("pr.merge.accessLostDetail"),
 				tone: "warning",
@@ -342,7 +373,7 @@ export function prCardPresentation(pr: SessionPRSummary, options: { noChecks?: b
 		const readinessExplained = checkingReadiness
 			? readinessRows.some((row) => row.tone !== "passive" && row.tone !== "success")
 			: mergeable || readinessRows.some((row) => row.tone === "error" || row.tone === "warning" || row.tone === "review");
-		return { primary, supporting, statusRows, readinessRows, strip, readinessExplained, readiness: {
+		return { primary, supporting, statusRows, readinessRows, readinessExplained, readiness: {
 			label: appI18n.t(checkingReadiness ? "pr.merge.checkingReadiness" : mergeable ? "pr.merge.mergeable" : "pr.merge.notMergeableYet"),
 			detail: checkingReadiness ? appI18n.t("pr.merge.checkingDetail") : mergeReadinessDetail(pr),
 			tone: checkingReadiness ? "neutral" : mergeable ? "success" : "error",
@@ -382,91 +413,6 @@ function mergeReadinessRows(pr: SessionPRSummary, options: { noChecks?: boolean 
 	}
 	rows.push(reviewReadinessRow(pr));
 	return rows;
-}
-
-const stripCheckTone: Record<PRCheckState, PRStripTone> = { passed: "success", skipped: "passive", pending: "neutral", running: "working", failed: "error" };
-/** The bar's order: done on the left, what still needs a look on the right. */
-const stripCheckOrder: PRCheckState[] = ["passed", "skipped", "pending", "running", "failed"];
-const attentionCheckStates: PRCheckState[] = ["failed", "running", "pending"];
-const sumCounts = (reviewers: { count: number }[] = []) => reviewers.reduce((total, reviewer) => total + reviewer.count, 0);
-
-/**
- * The card's readiness strip, as on GitHub's merge box: Checks always;
- * Comments only when the PR has review threads; Approvals only when the repo
- * requires reviews (GitHub's review decision is empty without such a rule).
- * A cell's note names only what still needs a look.
- */
-export function readinessStrip(pr: SessionPRSummary, rows: PRCardStatus[]): PRStripCell[] {
-	const cells: PRStripCell[] = [];
-	const ciRow = rows.find((row) => row.key === "ci");
-	const tally = ciRow?.checks;
-	const lead = tally?.counts[0] && attentionCheckStates.includes(tally.counts[0].state) ? tally.counts[0] : undefined;
-	cells.push({
-		key: "ci",
-		title: appI18n.t("pr.tab.checks"),
-		note: lead?.label,
-		noteTone: lead?.state === "failed" ? "error" : "neutral",
-		segments: tally
-			? stripCheckOrder.flatMap((state) => {
-				const count = tally.counts.find((entry) => entry.state === state);
-				return count ? [{ tone: stripCheckTone[state], count: count.count, label: count.label }] : [];
-			})
-			: [],
-		summary: tally ? tally.counts.map((count) => count.label).join(" · ") : ciRow?.label ?? "",
-	});
-
-	const unresolved = pr.review.unresolvedThreadCount ?? sumCounts(pr.review.unresolvedBy);
-	const resolved = sumCounts(pr.review.resolvedBy);
-	if (unresolved + resolved > 0) {
-		const unresolvedLabel = appI18n.t("pr.fact.unresolved", { count: unresolved });
-		const resolvedLabel = appI18n.t("pr.fact.resolved", { count: resolved });
-		cells.push({
-			key: "comments",
-			title: appI18n.t("pr.tab.comments"),
-			note: unresolved > 0 ? unresolvedLabel : undefined,
-			shortNote: unresolved > 0 ? String(unresolved) : undefined,
-			noteTone: "neutral",
-			segments: [
-				{ tone: "success", count: resolved, label: resolvedLabel },
-				{ tone: "warning", count: unresolved, label: unresolvedLabel },
-			],
-			summary: [unresolved > 0 ? unresolvedLabel : "", resolved > 0 ? resolvedLabel : ""].filter(Boolean).join(" · "),
-		});
-	}
-
-	const decision = pr.review.decision;
-	if (decision !== "none") {
-		const { approvedBy, changesRequestedBy } = latestReviewers(pr.review.reviews);
-		const approvedLine = approvedBy.length > 0 ? appI18n.t("pr.review.approvedBy", { names: approvedBy.join(", ") }) : undefined;
-		const approved = { tone: "success" as const, count: approvedBy.length, label: approvedLine ?? appI18n.t("pr.review.approved") };
-		if (decision === "approved") {
-			cells.push({ key: "approvals", title: appI18n.t("pr.fact.approvals"), segments: [{ ...approved, count: Math.max(1, approvedBy.length) }], summary: approved.label, detail: approvedLine });
-		} else if (decision === "changes_requested") {
-			const note = appI18n.t("pr.review.changesRequested");
-			cells.push({
-				key: "approvals",
-				title: appI18n.t("pr.fact.approvals"),
-				note,
-				shortNote: appI18n.t("pr.fact.changesShort"),
-				noteTone: "error",
-				segments: [approved, { tone: "error", count: Math.max(1, changesRequestedBy.length), label: note }],
-				summary: [note, approvedLine].filter(Boolean).join(" · "),
-				detail: changesRequestedBy.length > 0 ? appI18n.t("pr.review.changesRequestedBy", { names: changesRequestedBy.join(", ") }) : undefined,
-			});
-		} else {
-			const note = appI18n.t("pr.fact.required");
-			cells.push({
-				key: "approvals",
-				title: appI18n.t("pr.fact.approvals"),
-				note,
-				noteTone: "neutral",
-				segments: [approved, { tone: "warning", count: 1, label: note }],
-				summary: [note, approvedLine].filter(Boolean).join(" · "),
-				detail: approvedLine,
-			});
-		}
-	}
-	return cells;
 }
 
 type PRCheck = SessionPRSummary["ci"]["checks"][number];
