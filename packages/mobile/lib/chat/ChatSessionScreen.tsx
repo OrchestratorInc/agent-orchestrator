@@ -74,6 +74,7 @@ import { pullRequestMenuAction } from "../sessionPullRequests";
 import { useSessionPullRequests } from "../useSessionPullRequests";
 import { space } from "../tokens";
 import { Button, EmptyState } from "../ui";
+import { ConversationLoading } from "../OrchestratorLoader";
 import { backOr } from "../backNavigation";
 import { userFacingError, NOT_PAIRED_ACTION_COPY, RECONNECTING_ACTION_COPY } from "../connectionError";
 import { agentAccountLabel, agentAccountOptions, moveSessionAgentAccount, useAgentAccounts } from "../agentAccounts";
@@ -885,7 +886,7 @@ export function ChatSessionScreen({ session: boardSession }: { session: MobileCh
 	if (awaitingConversation && startupView && !startupView.failed) {
 		return <View style={[styles.startupLoading, { paddingTop: space.md + headerOverlap }]}><SessionStartupStatus startup={startupView} /></View>;
 	}
-	if (awaitingConversation) return <View style={[styles.center, { paddingTop: headerOverlap }]}><EmptyState busy title="Loading conversation…" /></View>;
+	if (awaitingConversation) return <View style={[styles.center, { paddingTop: headerOverlap }]}><ConversationLoading title="Orchestrating…" message={isOrchestrator ? undefined : title} /></View>;
 	if (conversation.unavailable) {
 		return <Failure>
 			<EmptyState
