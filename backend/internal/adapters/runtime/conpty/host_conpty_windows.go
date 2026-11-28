@@ -3,13 +3,18 @@
 package conpty
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"os"
+	"strconv"
 	"sync"
+	"time"
 
 	gopty "github.com/aymanbagabas/go-pty"
 	"golang.org/x/sys/windows"
+
+	aoprocess "github.com/aoagents/agent-orchestrator/backend/internal/process"
 )
 
 // conptyConn is the real ptyConn implementation backed by go-pty's ConPty
@@ -90,6 +95,12 @@ func (c *conptyConn) wait() {
 func (c *conptyConn) Read(b []byte) (int, error)  { return c.pty.Read(b) }
 func (c *conptyConn) Write(b []byte) (int, error) { return c.pty.Write(b) }
 func (c *conptyConn) Close() error {
+	// Kill the whole tree first, while the parent links taskkill walks are
+	// still intact. The ConPTY's direct child is the "ao agent-process
+	// supervise" wrapper; TerminateProcess on it alone orphans the real agent
+	// (claude.exe, codex.exe), which keeps its cwd inside the session worktree
+	// and makes a later force-remove fail with "file in use".
+	c.killTree()
 	c.closeConsole()
 	c.disposeOnce.Do(func() {
 		c.disposeErr = errors.Join(
@@ -103,6 +114,25 @@ func (c *conptyConn) Close() error {
 		_ = c.cmd.Process.Kill()
 	}
 	return c.disposeErr
+}
+
+// killTree terminates the child and every descendant with taskkill /T /F,
+// the same pattern acp's chat driver uses. A child that already exited is
+// skipped so a recycled PID is never targeted.
+func (c *conptyConn) killTree() {
+	if c.cmd.Process == nil {
+		return
+	}
+	c.exitMu.Lock()
+	exited := c.exited
+	c.exitMu.Unlock()
+	if exited {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	kill := aoprocess.CommandContext(ctx, "taskkill", "/PID", strconv.Itoa(c.cmd.Process.Pid), "/T", "/F")
+	_ = kill.Run()
 }
 
 func (c *conptyConn) closeConsole() {
