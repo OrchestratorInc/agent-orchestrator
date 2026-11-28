@@ -1896,8 +1896,11 @@ export function ActivityRow({
 	else if (activity.detail?.event === "workspace.setup") content = <ProjectSetupRow activity={activity} />;
 	else if (activity.detail?.event === "account.switched") content = <AccountSwitchedRow accountId={activity.detail.accountId} />;
 	else if (activity.detail?.event === "account.limit_handoff") content = <AccountHandoffRow accountId={activity.detail.accountId} retry={activity.detail.retry} />;
-	else if (renderRef) content = <RenderFrame render={renderRef} />;
-	else if (artifactRef) content = <RenderFrame artifact={artifactRef} foldKey={activity.id} />;
+	else if (renderRef || artifactRef) content = (
+		<div className="min-w-0" data-chat-activity-id={activity.id}>
+			{renderRef ? <RenderFrame render={renderRef} /> : <RenderFrame artifact={artifactRef!} foldKey={activity.id} />}
+		</div>
+	);
 	else content = <GenericActivityRow activity={activity} repeats={repeats} />;
 
 	if (!toolActivity) return content;

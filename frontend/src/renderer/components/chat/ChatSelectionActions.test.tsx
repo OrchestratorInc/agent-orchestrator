@@ -100,6 +100,25 @@ describe("chat selection actions", () => {
 		await user.type(box, "{Escape}");
 		expect(props.onInvalid).toHaveBeenCalledTimes(2);
 	});
+	it("marks a pinned chat selection but leaves a page selection to its own frame", async () => {
+		const highlights = new Map<string, unknown>();
+		vi.stubGlobal("Highlight", class { constructor(readonly range: Range) {} });
+		vi.stubGlobal("CSS", { highlights });
+		try {
+			const props = setup();
+			const view = render(<ChatSelectionActions {...props} />);
+			const user = userEvent.setup();
+			await user.click(screen.getByRole("textbox", { name: "Comment on the selected text" }));
+			expect(highlights.has("chat-annotation-draft")).toBe(true);
+			view.unmount();
+			const at = { left: 0, top: 0, width: 10, height: 10 };
+			render(<ChatSelectionActions {...props} selection={{ ...props.selection, frame: { element: document.createElement("iframe"), first: at, extent: at } }} />);
+			await user.click(screen.getByRole("textbox", { name: "Comment on the selected text" }));
+			expect(highlights.has("chat-annotation-draft")).toBe(false);
+		} finally {
+			vi.unstubAllGlobals();
+		}
+	});
 	it("shows the side action disabled while checking, then enables it", () => {
 		const props = setup(); const onSide = vi.fn();
 		const view = render(<ChatSelectionActions {...props} checkingSide />);
