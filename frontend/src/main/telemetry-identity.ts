@@ -203,6 +203,8 @@ export class TelemetryIdentityController {
 					const last = await daemonSequence(response);
 					if (last !== null) {
 						this.planSequence = Math.max(this.planSequence, last);
+						// Reading the body awaited: a newer plan, or a restart, leaves this one to the queued flush.
+						if (this.plan !== plan || this.planGeneration !== generation) return;
 						continue;
 					}
 				}
