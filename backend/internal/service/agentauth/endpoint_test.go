@@ -283,3 +283,46 @@ func TestSetEndpointSavesAKeyWithoutModelListAccess(t *testing.T) {
 		t.Fatalf("explicit style save = %+v, %v; want it saved without asking the listing to agree", status, err)
 	}
 }
+
+// An endpoint without a model listing (404) still takes a default model the
+// user types from the provider's docs. It is saved as given, and later saves
+// that keep the base URL, with or without a new key, keep it.
+func TestSetEndpointKeepsATypedModelWhenTheEndpointListsNone(t *testing.T) {
+	t.Parallel()
+	var listings atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/v1/models" {
+			listings.Add(1)
+		}
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	t.Cleanup(server.Close)
+	svc, _ := newEndpointService(t)
+	svc.endpointProbeClient = server.Client()
+
+	status, err := svc.SetEndpoint(context.Background(), "claude-code", harnessendpoint.Input{BaseURL: server.URL, APIKey: "sk-test"})
+	if err != nil || !status.Configured || status.Model != "" {
+		t.Fatalf("first save = %+v, %v; want it saved with no model", status, err)
+	}
+
+	if status, err = svc.SetEndpoint(context.Background(), "claude-code", harnessendpoint.Input{BaseURL: server.URL, Model: "provider-model"}); err != nil {
+		t.Fatalf("SetEndpoint typed model: %v", err)
+	}
+	if !status.Configured || status.Model != "provider-model" || status.AuthStyle != harnessendpoint.AuthBearer {
+		t.Fatalf("typed model save = %+v, want the typed model saved with the kept style", status)
+	}
+	if saved := claudePlan(t, svc).CustomEndpoint; saved == nil || saved.Model != "provider-model" {
+		t.Fatalf("CustomEndpoint = %+v, want the typed model reported", saved)
+	}
+
+	before := listings.Load()
+	if status, err = svc.SetEndpoint(context.Background(), "claude-code", harnessendpoint.Input{BaseURL: server.URL, APIKey: "sk-test-2"}); err != nil {
+		t.Fatalf("SetEndpoint new key: %v", err)
+	}
+	if status.Model != "provider-model" {
+		t.Fatalf("new key save = %+v, want the typed model kept", status)
+	}
+	if listings.Load() == before {
+		t.Fatalf("a new key must be checked against the endpoint again")
+	}
+}
