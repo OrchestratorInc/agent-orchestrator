@@ -10,6 +10,9 @@ msgstr ""
 msgid "{name} Docs"
 msgstr "{name} Belgeleri"
 
+msgid "{name} home"
+msgstr "{name} ana sayfası"
+
 msgid "{title} | Orchestrator.inc Docs"
 msgstr "{title} | Orchestrator.inc Belgeleri"
 
@@ -23,6 +26,9 @@ msgstr "Belgelerin ana sayfasına dön"
 msgctxt "sidebar section"
 msgid "Built-in capabilities"
 msgstr "Yerleşik özellikler"
+
+msgid "Changelog"
+msgstr "Değişiklik günlüğü"
 
 msgctxt "language switcher"
 msgid "Choose a language"
@@ -66,6 +72,15 @@ msgstr "Markdown'ı kopyala"
 msgid "Docs"
 msgstr "Belgeler"
 
+msgid "Download"
+msgstr "İndir"
+
+msgid "Edit this page"
+msgstr "Bu sayfayı düzenle"
+
+msgid "Followed a link here? <0>Report a broken link</0>"
+msgstr "Buraya bir bağlantıdan mı geldiniz? <0>Bozuk bağlantıyı bildirin</0>"
+
 msgctxt "sidebar section"
 msgid "Getting Started"
 msgstr "Başlarken"
@@ -82,8 +97,8 @@ msgctxt "sidebar"
 msgid "Hide sidebar"
 msgstr "Kenar çubuğunu gizle"
 
-msgid "Main site"
-msgstr "Ana site"
+msgid "Installation"
+msgstr "Kurulum"
 
 msgctxt "pagination"
 msgid "Next"
@@ -122,6 +137,9 @@ msgstr "Kenar çubuğunu aç"
 msgid "Page not found"
 msgstr "Sayfa bulunamadı"
 
+msgid "Popular pages"
+msgstr "Popüler sayfalar"
+
 msgctxt "pagination"
 msgid "Previous"
 msgstr "Önceki"
@@ -145,6 +163,12 @@ msgctxt "sidebar"
 msgid "Show sidebar"
 msgstr "Kenar çubuğunu göster"
 
+msgid "Something wrong or missing on this page?"
+msgstr "Bu sayfada yanlış veya eksik bir şey mi var?"
+
+msgid "Suggest a change"
+msgstr "Değişiklik öner"
+
 msgctxt "table of contents"
 msgid "Table of contents"
 msgstr "İçindekiler"
@@ -167,12 +191,12 @@ msgctxt "sidebar section"
 msgid "Trackers"
 msgstr "Takip araçları"
 
+msgid "Troubleshooting"
+msgstr "Sorun giderme"
+
 msgctxt "sidebar section"
 msgid "Using Orchestrator"
 msgstr "Orchestrator'ı kullanma"
-
-msgid "View on GitHub"
-msgstr "GitHub'da görüntüle"
 
 msgctxt "sidebar section"
 msgid "Workspaces"

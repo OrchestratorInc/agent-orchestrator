@@ -10,6 +10,9 @@ msgstr ""
 msgid "{name} Docs"
 msgstr "{name}-documentatie"
 
+msgid "{name} home"
+msgstr "{name} home"
+
 msgid "{title} | Orchestrator.inc Docs"
 msgstr "{title} | Orchestrator.inc-documentatie"
 
@@ -23,6 +26,9 @@ msgstr "Terug naar de startpagina van de documentatie"
 msgctxt "sidebar section"
 msgid "Built-in capabilities"
 msgstr "Ingebouwde functies"
+
+msgid "Changelog"
+msgstr "Wijzigingslogboek"
 
 msgctxt "language switcher"
 msgid "Choose a language"
@@ -66,6 +72,15 @@ msgstr "Markdown kopiëren"
 msgid "Docs"
 msgstr "Documentatie"
 
+msgid "Download"
+msgstr "Downloaden"
+
+msgid "Edit this page"
+msgstr "Deze pagina bewerken"
+
+msgid "Followed a link here? <0>Report a broken link</0>"
+msgstr "Via een link hier gekomen? <0>Meld een kapotte link</0>"
+
 msgctxt "sidebar section"
 msgid "Getting Started"
 msgstr "Aan de slag"
@@ -82,8 +97,8 @@ msgctxt "sidebar"
 msgid "Hide sidebar"
 msgstr "Zijbalk verbergen"
 
-msgid "Main site"
-msgstr "Hoofdsite"
+msgid "Installation"
+msgstr "Installatie"
 
 msgctxt "pagination"
 msgid "Next"
@@ -122,6 +137,9 @@ msgstr "Zijbalk openen"
 msgid "Page not found"
 msgstr "Pagina niet gevonden"
 
+msgid "Popular pages"
+msgstr "Populaire pagina’s"
+
 msgctxt "pagination"
 msgid "Previous"
 msgstr "Vorige"
@@ -145,6 +163,12 @@ msgctxt "sidebar"
 msgid "Show sidebar"
 msgstr "Zijbalk tonen"
 
+msgid "Something wrong or missing on this page?"
+msgstr "Klopt er iets niet of ontbreekt er iets op deze pagina?"
+
+msgid "Suggest a change"
+msgstr "Wijziging voorstellen"
+
 msgctxt "table of contents"
 msgid "Table of contents"
 msgstr "Inhoudsopgave"
@@ -167,12 +191,12 @@ msgctxt "sidebar section"
 msgid "Trackers"
 msgstr "Trackers"
 
+msgid "Troubleshooting"
+msgstr "Problemen oplossen"
+
 msgctxt "sidebar section"
 msgid "Using Orchestrator"
 msgstr "Orchestrator gebruiken"
-
-msgid "View on GitHub"
-msgstr "Bekijken op GitHub"
 
 msgctxt "sidebar section"
 msgid "Workspaces"

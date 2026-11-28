@@ -1,7 +1,7 @@
 import { setupI18n } from "@lingui/core";
 import { msg } from "@lingui/core/macro";
 import { createRelativeLink } from "fumadocs-ui/mdx";
-import { DocsBody, DocsDescription, DocsPage, DocsTitle } from "fumadocs-ui/layouts/docs/page";
+import { DocsBody, DocsDescription, DocsPage, DocsTitle } from "fumadocs-ui/layouts/notebook/page";
 import type { Metadata } from "next";
 import { notFound } from "next/navigation";
 import type { ComponentProps } from "react";
@@ -10,12 +10,13 @@ import { DEFAULT_LOCALE, type SupportedLocale } from "@/i18n/locales";
 import { localePath } from "@/i18n/paths";
 import { visibleProductName } from "@/lib/branding";
 import { COMPANY } from "@/lib/constants";
+import { docsIssueUrl } from "@/lib/docs-issue";
 import { markdownPath, sourceUrl } from "@/lib/llms";
 import { articleStructuredData, OG_IMAGE_SIZE, OG_LOCALES, ogImagePath } from "@/lib/seo";
 import { source } from "@/lib/source";
 import { articleLocales, articlePath, localizeHref } from "@/lib/translations";
 import { Card, getMDXComponents } from "./mdx";
-import { PageActions } from "./page-actions";
+import { PageActions, PageFeedback } from "./page-actions";
 import { EnglishArticleNotice, LocalizedTitle } from "./page-locale";
 
 type Props = { params: Promise<{ slug?: string[] }> };
@@ -42,6 +43,12 @@ export function articleRoute(locale: SupportedLocale) {
     const page = getArticle(slug, locale);
     const MDX = page.data.body;
     const RelativeLink = createRelativeLink(source, page);
+    // The URL the reader is on, so a report says which language is wrong.
+    const issueUrl = docsIssueUrl({
+      title: page.data.title,
+      pageUrl: `${COMPANY.DOCS_URL}${localePath(articlePath(page.slugs), locale)}`,
+    });
+    const editUrl = sourceUrl(page);
 
     return (
       <DocsPage toc={page.data.toc} full={page.data.full}>
@@ -50,7 +57,7 @@ export function articleRoute(locale: SupportedLocale) {
         <DocsDescription lang={locale}>{page.data.description && visibleProductName(page.data.description)}</DocsDescription>
         {locale === DEFAULT_LOCALE && <EnglishArticleNotice />}
         {/* The Markdown copy is English, also for translated articles. */}
-        <PageActions markdownPath={markdownPath(page.slugs)} sourceUrl={sourceUrl(page)} />
+        <PageActions markdownPath={markdownPath(page.slugs)} />
         <DocsBody lang={locale}>
           <MDX
             components={getMDXComponents({
@@ -59,6 +66,7 @@ export function articleRoute(locale: SupportedLocale) {
             })}
           />
         </DocsBody>
+        <PageFeedback issueUrl={issueUrl} sourceUrl={editUrl} />
         <JsonLd data={articleStructuredData({ title: page.data.title, description: page.data.description, slugs: page.slugs, url: page.url, locale, path: page.path })} />
       </DocsPage>
     );

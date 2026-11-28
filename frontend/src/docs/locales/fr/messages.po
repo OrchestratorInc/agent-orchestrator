@@ -10,6 +10,9 @@ msgstr ""
 msgid "{name} Docs"
 msgstr "Documentation {name}"
 
+msgid "{name} home"
+msgstr "Accueil {name}"
+
 msgid "{title} | Orchestrator.inc Docs"
 msgstr "{title} | Documentation Orchestrator.inc"
 
@@ -23,6 +26,9 @@ msgstr "Retour à l’accueil de la documentation"
 msgctxt "sidebar section"
 msgid "Built-in capabilities"
 msgstr "Fonctionnalités intégrées"
+
+msgid "Changelog"
+msgstr "Journal des modifications"
 
 msgctxt "language switcher"
 msgid "Choose a language"
@@ -66,6 +72,15 @@ msgstr "Copier le Markdown"
 msgid "Docs"
 msgstr "Documentation"
 
+msgid "Download"
+msgstr "Télécharger"
+
+msgid "Edit this page"
+msgstr "Modifier cette page"
+
+msgid "Followed a link here? <0>Report a broken link</0>"
+msgstr "Arrivé ici via un lien ? <0>Signaler un lien cassé</0>"
+
 msgctxt "sidebar section"
 msgid "Getting Started"
 msgstr "Premiers pas"
@@ -82,8 +97,8 @@ msgctxt "sidebar"
 msgid "Hide sidebar"
 msgstr "Masquer la barre latérale"
 
-msgid "Main site"
-msgstr "Site principal"
+msgid "Installation"
+msgstr "Installation"
 
 msgctxt "pagination"
 msgid "Next"
@@ -122,6 +137,9 @@ msgstr "Ouvrir la barre latérale"
 msgid "Page not found"
 msgstr "Page introuvable"
 
+msgid "Popular pages"
+msgstr "Pages populaires"
+
 msgctxt "pagination"
 msgid "Previous"
 msgstr "Précédent"
@@ -145,6 +163,12 @@ msgctxt "sidebar"
 msgid "Show sidebar"
 msgstr "Afficher la barre latérale"
 
+msgid "Something wrong or missing on this page?"
+msgstr "Quelque chose d’erroné ou de manquant sur cette page ?"
+
+msgid "Suggest a change"
+msgstr "Suggérer une modification"
+
 msgctxt "table of contents"
 msgid "Table of contents"
 msgstr "Table des matières"
@@ -167,12 +191,12 @@ msgctxt "sidebar section"
 msgid "Trackers"
 msgstr "Outils de suivi"
 
+msgid "Troubleshooting"
+msgstr "Dépannage"
+
 msgctxt "sidebar section"
 msgid "Using Orchestrator"
 msgstr "Utiliser Orchestrator"
-
-msgid "View on GitHub"
-msgstr "Voir sur GitHub"
 
 msgctxt "sidebar section"
 msgid "Workspaces"

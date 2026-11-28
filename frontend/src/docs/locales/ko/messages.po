@@ -10,6 +10,9 @@ msgstr ""
 msgid "{name} Docs"
 msgstr "{name} 문서"
 
+msgid "{name} home"
+msgstr "{name} 홈"
+
 msgid "{title} | Orchestrator.inc Docs"
 msgstr "{title} | Orchestrator.inc 문서"
 
@@ -23,6 +26,9 @@ msgstr "문서 홈으로 돌아가기"
 msgctxt "sidebar section"
 msgid "Built-in capabilities"
 msgstr "기본 제공 기능"
+
+msgid "Changelog"
+msgstr "변경 내역"
 
 msgctxt "language switcher"
 msgid "Choose a language"
@@ -66,6 +72,15 @@ msgstr "Markdown 복사"
 msgid "Docs"
 msgstr "문서"
 
+msgid "Download"
+msgstr "다운로드"
+
+msgid "Edit this page"
+msgstr "이 페이지 편집"
+
+msgid "Followed a link here? <0>Report a broken link</0>"
+msgstr "링크를 따라 오셨나요? <0>깨진 링크 신고</0>"
+
 msgctxt "sidebar section"
 msgid "Getting Started"
 msgstr "시작하기"
@@ -82,8 +97,8 @@ msgctxt "sidebar"
 msgid "Hide sidebar"
 msgstr "사이드바 숨기기"
 
-msgid "Main site"
-msgstr "메인 사이트"
+msgid "Installation"
+msgstr "설치"
 
 msgctxt "pagination"
 msgid "Next"
@@ -122,6 +137,9 @@ msgstr "사이드바 열기"
 msgid "Page not found"
 msgstr "페이지를 찾을 수 없습니다"
 
+msgid "Popular pages"
+msgstr "인기 페이지"
+
 msgctxt "pagination"
 msgid "Previous"
 msgstr "이전"
@@ -145,6 +163,12 @@ msgctxt "sidebar"
 msgid "Show sidebar"
 msgstr "사이드바 표시"
 
+msgid "Something wrong or missing on this page?"
+msgstr "이 페이지에 잘못되었거나 빠진 내용이 있나요?"
+
+msgid "Suggest a change"
+msgstr "변경 제안"
+
 msgctxt "table of contents"
 msgid "Table of contents"
 msgstr "목차"
@@ -167,12 +191,12 @@ msgctxt "sidebar section"
 msgid "Trackers"
 msgstr "트래커"
 
+msgid "Troubleshooting"
+msgstr "문제 해결"
+
 msgctxt "sidebar section"
 msgid "Using Orchestrator"
 msgstr "Orchestrator 사용하기"
-
-msgid "View on GitHub"
-msgstr "GitHub에서 보기"
 
 msgctxt "sidebar section"
 msgid "Workspaces"

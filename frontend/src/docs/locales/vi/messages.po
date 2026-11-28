@@ -10,6 +10,9 @@ msgstr ""
 msgid "{name} Docs"
 msgstr "Tài liệu {name}"
 
+msgid "{name} home"
+msgstr "Trang chủ {name}"
+
 msgid "{title} | Orchestrator.inc Docs"
 msgstr "{title} | Tài liệu Orchestrator.inc"
 
@@ -23,6 +26,9 @@ msgstr "Quay lại trang chủ tài liệu"
 msgctxt "sidebar section"
 msgid "Built-in capabilities"
 msgstr "Tính năng tích hợp sẵn"
+
+msgid "Changelog"
+msgstr "Nhật ký thay đổi"
 
 msgctxt "language switcher"
 msgid "Choose a language"
@@ -66,6 +72,15 @@ msgstr "Sao chép Markdown"
 msgid "Docs"
 msgstr "Tài liệu"
 
+msgid "Download"
+msgstr "Tải xuống"
+
+msgid "Edit this page"
+msgstr "Chỉnh sửa trang này"
+
+msgid "Followed a link here? <0>Report a broken link</0>"
+msgstr "Bạn đến đây từ một liên kết? <0>Báo cáo liên kết hỏng</0>"
+
 msgctxt "sidebar section"
 msgid "Getting Started"
 msgstr "Bắt đầu"
@@ -82,8 +97,8 @@ msgctxt "sidebar"
 msgid "Hide sidebar"
 msgstr "Ẩn thanh bên"
 
-msgid "Main site"
-msgstr "Trang chính"
+msgid "Installation"
+msgstr "Cài đặt"
 
 msgctxt "pagination"
 msgid "Next"
@@ -122,6 +137,9 @@ msgstr "Mở thanh bên"
 msgid "Page not found"
 msgstr "Không tìm thấy trang"
 
+msgid "Popular pages"
+msgstr "Trang phổ biến"
+
 msgctxt "pagination"
 msgid "Previous"
 msgstr "Trước"
@@ -145,6 +163,12 @@ msgctxt "sidebar"
 msgid "Show sidebar"
 msgstr "Hiện thanh bên"
 
+msgid "Something wrong or missing on this page?"
+msgstr "Trang này có gì sai hoặc thiếu không?"
+
+msgid "Suggest a change"
+msgstr "Đề xuất thay đổi"
+
 msgctxt "table of contents"
 msgid "Table of contents"
 msgstr "Mục lục"
@@ -167,12 +191,12 @@ msgctxt "sidebar section"
 msgid "Trackers"
 msgstr "Trình theo dõi"
 
+msgid "Troubleshooting"
+msgstr "Khắc phục sự cố"
+
 msgctxt "sidebar section"
 msgid "Using Orchestrator"
 msgstr "Sử dụng Orchestrator"
-
-msgid "View on GitHub"
-msgstr "Xem trên GitHub"
 
 msgctxt "sidebar section"
 msgid "Workspaces"
