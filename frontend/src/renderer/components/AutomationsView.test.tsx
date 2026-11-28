@@ -43,6 +43,7 @@ const mocks = vi.hoisted(() => ({
 	runNow: vi.fn(),
 	subscribe: vi.fn(),
 	cloudProjectsLoaded: false,
+	cloudProjects: undefined as Array<{ id: string }> | undefined,
 	providerConnections: undefined as Array<{ provider: string; validationState: string }> | undefined,
 }));
 
@@ -61,7 +62,7 @@ const ampSnapshot = { ...codexSnapshot, id: "amp", label: "Amp" };
 const cursorSnapshot = { id: "cursor", label: "Cursor", installation: { state: "not_installed", freshness: "fresh" }, authentication: { state: "unknown", freshness: "stale" }, effectiveReadiness: "not_ready", usageCount: 0, lastUsedAt: null };
 vi.mock("../hooks/useAgentReadinessQuery", () => ({ useAgentReadinessQuery: () => ({ data: { agents: [mocks.fallbackAmp ? { ...codexSnapshot, effectiveReadiness: "not_ready" } : codexSnapshot, cursorSnapshot, ampSnapshot] } }) }));
 vi.mock("../hooks/useProjectDefaultWorker", () => ({ useProjectWorkerDefaults: (projectId: string) => (mocks.lookupProjects.push(projectId), { loaded: mocks.defaultsLoaded, harness: mocks.defaultWorker, agentConfig: mocks.baseTuning, worker: { agent: mocks.defaultWorker, agentConfig: mocks.workerTuning } }) }));
-vi.mock("../hooks/useWorkspaceQuery", () => ({ useWorkspaceQuery: () => ({ data: mocks.workspaces }), useCloudProjectsQuery: () => ({ data: mocks.cloudProjectsLoaded ? [] : undefined }) }));
+vi.mock("../hooks/useWorkspaceQuery", () => ({ useWorkspaceQuery: () => ({ data: mocks.workspaces }), useCloudProjectsQuery: () => ({ data: mocks.cloudProjects ?? (mocks.cloudProjectsLoaded ? [] : undefined) }) }));
 vi.mock("../hooks/useAgentModelsQuery", () => ({
 	agentModelsQueryKey: (agentId: string, projectId: string) => ["agent-models", agentId, projectId],
 	agentModelsQueryOptions: (agentId: string, projectId: string) => (mocks.lookupProjects.push(projectId), {
@@ -102,7 +103,7 @@ vi.mock("../hooks/useCloudAutomations", async (importOriginal) => ({
 
 // Every test starts with AO Cloud automations off, as on a desktop signed out of AO Cloud.
 beforeEach(() => {
-	mocks.cloudAvailable = false; mocks.cloudAutomations = []; mocks.cloudRuns = []; mocks.cloudUserId = "u1"; mocks.providerConnections = undefined; mocks.cloudProjectsLoaded = false;
+	mocks.cloudAvailable = false; mocks.cloudAutomations = []; mocks.cloudRuns = []; mocks.cloudUserId = "u1"; mocks.providerConnections = undefined; mocks.cloudProjectsLoaded = false; mocks.cloudProjects = undefined;
 	mocks.createCloudError = null; mocks.createCloudVariables = undefined; mocks.updateCloudError = null;
 	for (const mock of [mocks.createCloud, mocks.updateCloud, mocks.removeCloud, mocks.runNow, mocks.subscribe, mocks.navigate]) mock.mockReset();
 });
@@ -1783,8 +1784,45 @@ describe("AO Cloud automations", () => {
 		expect(within(details).getByRole("alert")).toHaveTextContent("Skipped: a session of this automation was moving to another computer.");
 		// Each run's reason is one hover or focus away, named with its status.
 		expect(within(details).getByRole("button", { name: "Failed: Stopped: the run's session moved to another computer before it finished." })).toBeInTheDocument();
+		// A reason that already leads with the status says it once.
+		expect(within(details).getByRole("button", { name: "Skipped: a session of this automation was moving to another computer." })).toBeInTheDocument();
 		await user.click(within(details).getByRole("button", { name: "Run Nightly debt now" }));
 		expect(await screen.findByText("A session of this automation is moving to another computer. Run it again once the move finishes.")).toHaveAttribute("role", "alert");
+	});
+
+	it("names a skipped run's status pill with its reason, saying Skipped once", async () => {
+		const user = userEvent.setup();
+		mocks.cloudAvailable = true;
+		const skipped = { ...cloudAutomation.latestRun, errorCode: "PREVIOUS_RUN_ACTIVE", errorMessage: "The previous run was still going." };
+		mocks.cloudAutomations = [{ ...cloudAutomation, latestRun: skipped }];
+		mocks.cloudRuns = [skipped];
+		renderView();
+		const details = await openCloudDetails(user, "Nightly debt");
+		const pill = within(details).getByRole("button", { name: /previous run was still going/ });
+		expect(pill).toHaveAccessibleName("Skipped: the previous run was still going.");
+		expect(pill).toHaveTextContent("Skipped");
+	});
+
+	it("reads the cloud automations again when the organization's project list changes, not on its first load", async () => {
+		mocks.cloudAvailable = true;
+		mocks.cloudAutomations = [{ ...cloudAutomation, latestRun: settled }];
+		const invalidate = vi.spyOn(QueryClient.prototype, "invalidateQueries");
+		try {
+			mocks.cloudProjects = [{ id: "cloud-1" }, { id: "cloud-doomed" }];
+			const view = renderView();
+			const automationsInvalidated = () => invalidate.mock.calls.filter(([filters]) => JSON.stringify(filters?.queryKey) === JSON.stringify(["cloud-automations"])).length;
+			expect(automationsInvalidated()).toBe(0);
+			// The same projects in a new list (a refetch) change nothing.
+			mocks.cloudProjects = [{ id: "cloud-doomed" }, { id: "cloud-1" }];
+			view.rerender(<AutomationsView />);
+			expect(automationsInvalidated()).toBe(0);
+			// A project deleted (here, in its settings, or on another device) leaves the list.
+			mocks.cloudProjects = [{ id: "cloud-1" }];
+			view.rerender(<AutomationsView />);
+			await waitFor(() => expect(automationsInvalidated()).toBe(1));
+		} finally {
+			invalidate.mockRestore();
+		}
 	});
 
 	it("keeps showing a run in flight that a newer skipped occurrence hides, with Run now off", async () => {

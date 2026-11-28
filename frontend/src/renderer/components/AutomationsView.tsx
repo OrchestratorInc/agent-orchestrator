@@ -48,6 +48,7 @@ import { CLOUD_PROJECT_KIND, STANDALONE_PROJECT_KIND, STANDALONE_WORKSPACE_ID } 
 import { agentLabel } from "../lib/agent-options";
 import {
 	CLOUD_AUTOMATION_HARNESSES,
+	cloudAutomationsQueryKey,
 	cloudAutomationActiveRun,
 	cloudAutomationErrorMessage,
 	cloudRunErrorMessage,
@@ -248,8 +249,22 @@ export function AutomationsView() {
 	// A cloud automation's project that the loaded project list lacks (deleted:
 	// its automation stays, turned off, until someone deletes it) reads as not
 	// found rather than as its id.
-	const cloudProjectsLoaded = useCloudProjectsQuery({ enabled: cloud.available }).data !== undefined;
+	const cloudProjects = useCloudProjectsQuery({ enabled: cloud.available }).data;
+	const cloudProjectsLoaded = cloudProjects !== undefined;
 	const cloudProjectIds = useMemo(() => new Set((cloudItems ?? []).map((item) => item.projectId)), [cloudItems]);
+	// The organization's projects changed (one deleted here, in its settings
+	// or on another device): the control plane has turned that project's
+	// automations off, so read them again now rather than at the next poll.
+	const listedProjectIds = useMemo(() => cloudProjects?.map((project) => project.id).sort().join("\n"), [cloudProjects]);
+	const queryClient = useQueryClient();
+	const previousProjectIds = useRef<string | undefined>(undefined);
+	useEffect(() => {
+		if (listedProjectIds === undefined) return;
+		if (previousProjectIds.current !== undefined && previousProjectIds.current !== listedProjectIds) {
+			void queryClient.invalidateQueries({ queryKey: cloudAutomationsQueryKey });
+		}
+		previousProjectIds.current = listedProjectIds;
+	}, [listedProjectIds, queryClient]);
 	const projectName = (id: string) => id === STANDALONE_WORKSPACE_ID ? t("standalone.workspaceName") : workspaces.find((workspace) => workspace.id === id)?.name
 		?? (cloudProjectsLoaded && cloudProjectIds.has(id) ? t("automations.cloud.projectNotFound") : id);
 	// Projects that own at least one automation, so the filter never offers an empty choice.
@@ -558,6 +573,16 @@ function AutomationRow({ rowKey, item, projectName, selected, onSelect }: { rowK
 /** A cloud automation's latest run did not finish: it failed or reached its time limit. */
 function cloudRunFailed(status: string | undefined) {
 	return status === "failed" || status === "timed_out";
+}
+
+/**
+ * A run's status and reason as one accessible name, with the status said once:
+ * a reason that already leads with it ("Skipped: the previous run was still
+ * going.") stands alone; any other reason follows the status.
+ */
+function runStatusLabel(status: string, reason: string) {
+	const lead = reason.split(/[:：]/, 1)[0]?.trim() ?? "";
+	return lead.localeCompare(status, undefined, { sensitivity: "accent" }) === 0 ? reason : `${status}: ${reason}`;
 }
 
 /** A schedule as a person reads it, with the automation's timezone when it is not this computer's (the organization shares it). */
@@ -931,7 +956,7 @@ function CloudAutomationDetails({ item, userId, sessionTerminated, projectName, 
 											// The reason stays one hover or focus away, so a long message never stretches the row.
 											<Tooltip>
 												<TooltipTrigger asChild>
-													<button type="button" aria-label={`${status}: ${runError}`} className={cn(GHOST_PILL_CLASS, statusClass, "-mx-1.5 inline-flex h-control-sm items-center gap-1 rounded-md px-1.5 outline-none")}>
+													<button type="button" aria-label={runStatusLabel(status, runError)} className={cn(GHOST_PILL_CLASS, statusClass, "-mx-1.5 inline-flex h-control-sm items-center gap-1 rounded-md px-1.5 outline-none")}>
 														{status}
 														<CircleAlert aria-hidden="true" className={cn("size-icon-sm", failed ? "text-destructive" : "text-muted-foreground")} />
 													</button>
