@@ -56,6 +56,7 @@ it("preserves agents when the draft dialog confirms after the outside-quit deadl
 		fetch: request,
 		disposeBrowserRuntimeLink: vi.fn(), disposeBrowserStreamLink: vi.fn(),
 		trayLifecycle: { dispose: vi.fn() }, browserCleanupComplete: true,
+		exitFeedbackGate: { intercept: () => false, reset: vi.fn() },
 	});
 	app.quit.mockImplementation(() => {
 		app.emit("before-quit", { preventDefault: vi.fn() });
@@ -108,6 +109,7 @@ it("sends no shutdown when the window cancels an outside quit during the ownersh
 		fetch: request,
 		disposeBrowserRuntimeLink: vi.fn(), disposeBrowserStreamLink: vi.fn(),
 		trayLifecycle: { dispose: vi.fn() }, browserCleanupComplete: true,
+		exitFeedbackGate: { intercept: () => false, reset: vi.fn() },
 	});
 	vm.runInContext(script, context);
 	try {

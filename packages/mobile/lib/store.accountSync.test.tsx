@@ -17,7 +17,7 @@ vi.mock("./api", () => ({ ApiError: class extends Error {}, getSessions: vi.fn()
 vi.mock("./resolveConfig", () => ({ resolveActiveConfig: state.resolveConfig, runtimeResolveDeps: () => ({}) }));
 vi.mock("./config", () => ({ isConfigured: () => false, machineIdentity: () => "", hostMachineIdentity: (id: string) => `host.${id}` }));
 vi.mock("./race", () => ({ IncompatibleHostVersionError: class extends Error {} }));
-vi.mock("./connectRuntime", () => ({ rejectedEndpointNeedsRace: () => false }));
+vi.mock("./connectRuntime", () => ({ endpointStillAnswers: async () => false, rejectedEndpointNeedsRace: () => false }));
 vi.mock("./hosts", () => ({ activeHost: async () => state.hosts[0] ?? null, loadHosts: async () => state.hosts, sameHostConnections: (a: unknown, b: unknown) => JSON.stringify(a) === JSON.stringify(b), setActiveHost: vi.fn() }));
 vi.mock("./account", () => ({ loadAccount: async () => ({ id: "user-a", email: "person@example.com" }) }));
 vi.mock("./accountHosts", () => ({ syncAccountHosts: state.sync, cancelAccountHostSync: state.cancel }));

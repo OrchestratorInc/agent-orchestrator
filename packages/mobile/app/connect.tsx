@@ -9,6 +9,8 @@ import { releaseSheetResult, takeSheetResult } from "../lib/sheetResult";
 import { backOr } from "../lib/backNavigation";
 import { Spinner } from "../lib/Spinner";
 import { useApp } from "../lib/store";
+import { MOBILE_EVENTS } from "../lib/telemetry/events";
+import { mobileTelemetry } from "../lib/telemetry/runtime";
 import { EmptyState } from "../lib/ui";
 
 // Manual pairing and editing use the same native connection form, on a page
@@ -16,7 +18,7 @@ import { EmptyState } from "../lib/ui";
 export default function ConnectRoute() {
 	const router = useRouter();
 	const navigation = useNavigation();
-	const { resultKey, hostId } = useLocalSearchParams<{ resultKey?: string; hostId?: string }>();
+	const { resultKey, hostId, from } = useLocalSearchParams<{ resultKey?: string; hostId?: string; from?: string }>();
 	const { config, currentHostId, reloadConfig } = useApp();
 	const [editingHost, setEditingHost] = useState<Host | null | undefined>(hostId === undefined ? null : undefined);
 	const [busy, setBusy] = useState(false);
@@ -57,6 +59,15 @@ export default function ConnectRoute() {
 				onBusyChange={setBusy}
 				onScanInstead={() => backOr(router)}
 				onConnected={() => {
+					// Reported here rather than by the pair screen's callback, which is
+					// gone if the person left this page while it connected (below).
+					// Opened from Pair a machine (it parks a result), a new pairing,
+					// a re-pair or an edit, the same as a scan.
+					if (resultKey) {
+						const fromOnboarding = from === "onboarding";
+						mobileTelemetry()?.capture(MOBILE_EVENTS.paired, { method: "manual", from_onboarding: fromOnboarding });
+						if (fromOnboarding) mobileTelemetry()?.capture(MOBILE_EVENTS.onboardingCompleted);
+					}
 					void loadAccount().then(async (account) => {
 						if (account) {
 							const pairedId = editingHost?.id ?? (await activeHost())?.id;

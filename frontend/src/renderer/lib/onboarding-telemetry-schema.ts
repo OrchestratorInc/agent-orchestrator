@@ -1,5 +1,5 @@
 import { ONBOARDING_STEPS, onboardingStepIndex, type OnboardingStep } from "./onboarding-steps";
-import { ONBOARDING_ACTIONS, ONBOARDING_FAILURE_REASONS } from "../../shared/onboarding-failures";
+import { ONBOARDING_ACTIONS, ONBOARDING_FAILURE_CAUSES, ONBOARDING_FAILURE_REASONS } from "../../shared/onboarding-failures";
 
 // The onboarding funnel's closed vocabulary and its per-event property
 // allowlist. telemetry.ts hands every ao.onboarding.* event here, so a value
@@ -11,8 +11,8 @@ import { ONBOARDING_ACTIONS, ONBOARDING_FAILURE_REASONS } from "../../shared/onb
 // actions and failure reasons live in shared/ so Electron main's Sentry
 // allowlist reads the same lists.
 
-export { ONBOARDING_ACTIONS, ONBOARDING_FAILURE_REASONS };
-export type { OnboardingAction, OnboardingFailureReason } from "../../shared/onboarding-failures";
+export { ONBOARDING_ACTIONS, ONBOARDING_FAILURE_CAUSES, ONBOARDING_FAILURE_REASONS };
+export type { OnboardingAction, OnboardingFailureCause, OnboardingFailureReason } from "../../shared/onboarding-failures";
 
 export const ONBOARDING_RUN_KINDS = ["first_run", "replay"] as const;
 export type OnboardingRunKind = (typeof ONBOARDING_RUN_KINDS)[number];
@@ -22,7 +22,9 @@ export const ONBOARDING_OUTCOMES = ["finished", "skipped_setup", "superseded"] a
 export type OnboardingOutcome = (typeof ONBOARDING_OUTCOMES)[number];
 
 /** already_done: passed over because there was nothing to do; user: the person moved on without doing it; dismissed: the tour was closed. */
-export const ONBOARDING_SKIP_REASONS = ["already_done", "user", "dismissed"] as const;
+export const ONBOARDING_SKIP_REASONS = ["already_done", "user", "dismissed", "activated", "expired"] as const;
+/** Which version of the post-setup funnel sent a `tour_*` / `first_task` / activation event. */
+export const ONBOARDING_FUNNEL_VARIANTS = ["unguided"] as const;
 export type OnboardingSkipReason = (typeof ONBOARDING_SKIP_REASONS)[number];
 
 /** left: onboarding ended, or the window closed, with the attempt still running, so nothing will see how it ends. */
@@ -139,11 +141,13 @@ export function sanitizeOnboardingProperties(event: string, properties?: Propert
 				safe.time_bucket = activationBucket(since);
 			}
 			if (typeof p?.during_tour === "boolean") safe.during_tour = p.during_tour;
+			set(safe, "funnel_variant", oneOf(p?.funnel_variant, ONBOARDING_FUNNEL_VARIANTS));
 			return safe;
 		}
 	}
 	stepFields(safe, p);
 	set(safe, "run_kind", oneOf(p?.run_kind, ONBOARDING_RUN_KINDS));
+	set(safe, "funnel_variant", oneOf(p?.funnel_variant, ONBOARDING_FUNNEL_VARIANTS));
 	switch (event) {
 		case "ao.onboarding.step_viewed":
 			set(safe, "missing", missingList(p?.missing));
@@ -157,6 +161,13 @@ export function sanitizeOnboardingProperties(event: string, properties?: Propert
 			set(safe, "project_source", oneOf(p?.project_source, ONBOARDING_PROJECT_SOURCES));
 			set(safe, "agents_ready", boundedInt(p?.agents_ready, 0, 100));
 			if (typeof p?.gh_ready === "boolean") safe.gh_ready = p.gh_ready;
+			for (const key of ["archive_on_merge", "auto_review", "assigned_issues", "fix_checks", "fix_review_comments"] as const) {
+				if (typeof p?.[key] === "boolean") safe[key] = p[key];
+			}
+			// The agent picked on work_defaults: registry ids, nothing else.
+			for (const key of ["orchestrator_agent", "worker_agent"] as const) {
+				if (typeof p?.[key] === "string" && TARGET_PATTERN.test(p[key])) safe[key] = p[key];
+			}
 			break;
 		case "ao.onboarding.step_abandoned":
 			set(safe, "time_on_step_ms", duration(p?.time_on_step_ms));
@@ -206,6 +217,8 @@ export function sanitizeOnboardingProperties(event: string, properties?: Propert
 			}
 			set(safe, "outcome", oneOf(p?.outcome, ONBOARDING_ACTION_OUTCOMES));
 			set(safe, "reason", oneOf(p?.reason, ONBOARDING_FAILURE_REASONS));
+			// Only with install_failed: why the install job failed, from the daemon's closed list.
+			if (safe.reason === "install_failed") set(safe, "failure_cause", oneOf(p?.failure_cause, ONBOARDING_FAILURE_CAUSES));
 			if (typeof p?.error_code === "string" && ERROR_CODE_PATTERN.test(p.error_code)) safe.error_code = p.error_code;
 			set(safe, "duration_ms", duration(p?.duration_ms));
 			break;

@@ -59,6 +59,7 @@ const {
 	workspacePathsState: { paths: [] as string[] },
 	conversationCommandState: {
 		busy: false,
+		resumingAgent: false,
 		send: vi.fn(),
 		chooseSettings: vi.fn(),
 		pendingAcceptedTurnId: undefined as string | undefined,
@@ -110,6 +111,9 @@ const sideMocks = vi.hoisted(() => ({
 	sentOutsideTranscript: Symbol("chat.sentOutsideTranscript"),
 }));
 const stageAttachmentsMock = vi.hoisted(() => vi.fn());
+// A plain function, not a vi.fn(): mock resets must not leave the lease
+// renewal without a promise to chain on.
+const updateAttachmentLeasesMock = vi.hoisted(() => async (): Promise<string[]> => []);
 vi.mock("./IndependentSideChats", () => ({
 	useIndependentSideChats: () => ({ ...sideMocks, panel: null }),
 }));
@@ -159,6 +163,7 @@ vi.mock("../../hooks/useConversation", () => ({
 	useConversationModels: vi.fn(() => ({ models: [], loaded: true })),
 	useConversationSkills: vi.fn(() => ({ skills: [] })),
 	useStageAttachments: () => stageAttachmentsMock,
+	useAttachmentLeases: () => updateAttachmentLeasesMock,
 	useWorkspaceFilePaths: () => ({ paths: workspacePathsState.paths, truncated: false }),
 }));
 
@@ -194,7 +199,9 @@ vi.mock("./ChatWorkspace", async () => {
 			importBlock,
 			findRequest,
 			onFindRequestHandled,
+			welcomeHeading,
 		}: {
+			welcomeHeading?: string;
 			importBlock?: string;
 			onSend: typeof sideMocks.workspaceSend;
 			onStageAttachments?: unknown;
@@ -250,6 +257,7 @@ vi.mock("./ChatWorkspace", async () => {
 					))}
 					{snapshot.harness === "claude-code" && <TurnSettingsBar models={models} settings={snapshot.settings} harness={snapshot.harness} configOptions={configOptions} onChangeConfigOption={() => {}} />}
 					<div data-testid="prompt-suggestion">{promptSuggestion?.text}</div>
+					<div data-testid="welcome-heading">{welcomeHeading}</div>
 					<div data-testid="conversation-id">{snapshot.conversationId}</div>
 					<div data-testid="find-request" data-request-id={findRequest?.id ?? ""}>{findRequest ? `${findRequest.query}@${findRequest.messageId ?? ""}` : ""}</div>
 					<button type="button" onClick={() => { if (findRequest) onFindRequestHandled?.(findRequest.id); }}>Apply find request</button>
@@ -273,6 +281,7 @@ vi.mock("./ChatWorkspace", async () => {
 
 import { sessionUiKey } from "../../lib/hosts";
 import { SessionChatSurface } from "./SessionChatSurface";
+import { rememberLaunchSettings } from "./LaunchSettingsBar";
 import {
 	peekSessionSearchReveal,
 	requestSessionSearchReveal,
@@ -326,6 +335,7 @@ beforeEach(() => {
 	conversationState.loadOlder = vi.fn();
 	conversationCommandState.send = vi.fn().mockResolvedValue({});
 	conversationCommandState.busy = false;
+	conversationCommandState.resumingAgent = false;
 	conversationCommandState.pendingAcceptedTurnId = undefined;
 	conversationCommandState.acknowledgeAcceptedTurn.mockReset();
 	conversationCommandState.echoBeforeSend.mockReset();
@@ -352,10 +362,15 @@ describe("SessionChatSurface recovery", () => {
 		expect(conversationCommandArgs.at(-1)).toEqual([target.id, undefined, terminated, false, undefined]);
 	});
 
-	it("takes files only once an archived session is back", () => {
+	it("takes files in an archived session once the restore its message runs is under way", () => {
 		const client = new QueryClient();
-		const view = render(<Wrapper client={client}><SessionChatSurface session={{ ...session, isTerminated: true }} /></Wrapper>);
+		const archived = { ...session, isTerminated: true };
+		const view = render(<Wrapper client={client}><SessionChatSurface session={archived} /></Wrapper>);
 		expect(sideMocks.stageAttachments).toBeUndefined();
+		conversationCommandState.resumingAgent = true;
+		view.rerender(<Wrapper client={client}><SessionChatSurface session={{ ...archived }} /></Wrapper>);
+		expect(sideMocks.stageAttachments).toEqual(expect.any(Function));
+		conversationCommandState.resumingAgent = false;
 		view.rerender(<Wrapper client={client}><SessionChatSurface session={session} /></Wrapper>);
 		expect(sideMocks.stageAttachments).toEqual(expect.any(Function));
 	});
@@ -377,6 +392,26 @@ describe("SessionChatSurface recovery", () => {
 		};
 		render(<Wrapper client={new QueryClient()}><SessionChatSurface session={session} /></Wrapper>);
 		expect(conversationCommandArgs.at(-1)).toEqual([session.id, undefined, false, true, "turn-1"]);
+	});
+});
+
+describe("SessionChatSurface Ultracode", () => {
+	it("stays on for a task started with it on the new chat page", async () => {
+		conversationState.snapshot = { ...snapshotFor(session.id), harness: "claude-code" };
+		const client = new QueryClient();
+		rememberLaunchSettings(client, session.id, undefined, { harness: "claude-code", projectId: "p", models: [], settings: {}, ultracode: true });
+		render(<Wrapper client={client}><SessionChatSurface session={session} /></Wrapper>);
+		expect(sideMocks.agentSwitch?.ultracode?.on).toBe(true);
+		await act(async () => {
+			await sideMocks.workspaceSend?.("And the tests.", undefined, "next-message");
+		});
+		expect(conversationCommandState.send).toHaveBeenCalledWith(expect.objectContaining({ text: "Ultracode:\nAnd the tests." }));
+	});
+
+	it("starts off otherwise", () => {
+		conversationState.snapshot = { ...snapshotFor(session.id), harness: "claude-code" };
+		render(<Wrapper client={new QueryClient()}><SessionChatSurface session={session} /></Wrapper>);
+		expect(sideMocks.agentSwitch?.ultracode?.on).toBe(false);
 	});
 });
 
@@ -781,6 +816,27 @@ describe("SessionChatSurface link routing", () => {
 		view.rerender(tree("ready"));
 		expect(screen.getByText(`Mounted ${session.id}`)).toBe(mounted);
 		expect(useUiStore.getState().provisioningProjectIds.has(session.workspaceId)).toBe(false);
+	});
+
+	it("asks an orchestrator for the project's first task until the project shows a worker", () => {
+		const orchestrator = { ...session, id: "proj-1-orchestrator", kind: "orchestrator" as const };
+		const project = (sessions: WorkspaceSession[]) => [{ id: session.workspaceId, name: "proj", kind: "single_repo", path: "/tmp/proj", type: "main", sessions }];
+		const headingWith = (projects: ReturnType<typeof project> | undefined, chat: WorkspaceSession = orchestrator) => {
+			const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+			if (projects) queryClient.setQueryData(workspaceQueryKey, projects);
+			conversationState.snapshot = snapshotFor(chat.id);
+			const view = render(<Wrapper client={queryClient}><SessionChatSurface session={chat} /></Wrapper>);
+			const text = screen.getByTestId("welcome-heading").textContent;
+			view.unmount();
+			return text;
+		};
+		// The project list hasn't loaded: "first task", so a new project never switches heading.
+		expect(headingWith(undefined)).toBe("Give your orchestrator its first task");
+		expect(headingWith(project([orchestrator]))).toBe("Give your orchestrator its first task");
+		// Once the project has a worker, the chat's usual orchestrator heading.
+		expect(headingWith(project([orchestrator, session]))).toBe("");
+		// A worker's chat keeps the chat's own heading.
+		expect(headingWith(project([orchestrator, session]), session)).toBe("");
 	});
 
 	it("releases project loading to show a failed orchestrator's retry UI", () => {

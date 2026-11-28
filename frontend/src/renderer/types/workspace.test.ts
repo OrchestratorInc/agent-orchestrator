@@ -7,6 +7,7 @@ import {
 	canonicalTrackerIssueId,
 	findProjectOrchestrator,
 	newestActiveOrchestrator,
+	orchestratorAgentSettingChanged,
 	orchestratorHealth,
 	sessionAgentExited,
 	sessionCueTargetAvailable,
@@ -280,47 +281,70 @@ describe("sessionNeedsAttention", () => {
 });
 
 describe("orchestratorHealth", () => {
-	it("reports restart_needed when the configured orchestrator agent differs from the newest active orchestrator", () => {
-		const older = sessionWith({
-			id: "skills-1",
+	const orchestratorWith = (overrides: Partial<WorkspaceSession>) =>
+		sessionWith({
+			id: "skills-orchestrator",
 			kind: "orchestrator",
-			provider: "codex",
-			status: "working",
-			createdAt: "2026-01-01T00:00:00Z",
-			updatedAt: "2026-01-01T00:00:00Z",
-		});
-		const newest = sessionWith({
-			id: "skills-2",
-			kind: "orchestrator",
-			provider: "claude-code",
 			status: "working",
 			createdAt: "2026-01-02T00:00:00Z",
 			updatedAt: "2026-01-02T00:00:00Z",
+			...overrides,
 		});
+	const project = (sessions: WorkspaceSession[], orchestratorAgent: WorkspaceSummary["orchestratorAgent"] = "codex"): WorkspaceSummary => ({
+		id: "skills",
+		name: "skills",
+		path: "/tmp/skills",
+		orchestratorAgent,
+		sessions,
+	});
 
-		expect(
-			orchestratorHealth({
-				id: "skills",
-				name: "skills",
-				path: "/tmp/skills",
-				orchestratorAgent: "codex",
-				sessions: [older, newest],
-			}),
-		).toEqual({
+	it("reports duplicates before anything else", () => {
+		const older = orchestratorWith({ id: "skills-1", provider: "codex", createdAt: "2026-01-01T00:00:00Z", updatedAt: "2026-01-01T00:00:00Z" });
+		const newest = orchestratorWith({ id: "skills-2", provider: "claude-code", roleAgent: "codex" });
+		expect(orchestratorHealth(project([older, newest]))).toEqual({
 			state: "duplicates",
 			message:
 				"Multiple orchestrators are active. The newest one is used; stale ones will be cleaned up on daemon reconcile.",
 		});
+	});
 
-		expect(
-			orchestratorHealth({
-				id: "skills",
-				name: "skills",
-				path: "/tmp/skills",
-				orchestratorAgent: "codex",
-				sessions: [newest],
-			}).state,
-		).toBe("restart_needed");
+	it("is ok after the orchestrator was switched to another agent", () => {
+		// The project still names Codex; the user switched its orchestrator to Claude Code.
+		expect(orchestratorHealth(project([orchestratorWith({ provider: "claude-code", roleAgent: "codex" })]))).toEqual({ state: "ok" });
+	});
+
+	it("is ok for an orchestrator from before the daemon recorded its role agent", () => {
+		expect(orchestratorHealth(project([orchestratorWith({ provider: "claude-code" })]))).toEqual({ state: "ok" });
+	});
+
+	it("is ok when the setting changed to the agent the orchestrator already runs", () => {
+		expect(orchestratorHealth(project([orchestratorWith({ provider: "claude-code", roleAgent: "codex" })], "claude-code"))).toEqual({ state: "ok" });
+	});
+
+	it("reports a setting changed after the orchestrator's agent was chosen, without pressing for a restart", () => {
+		const health = orchestratorHealth(project([orchestratorWith({ provider: "codex", roleAgent: "codex" })], "claude-code"));
+		expect(health).toEqual({
+			state: "agent_setting_changed",
+			message:
+				"This project's orchestrator agent is now Claude Code. The running orchestrator stays on Codex; a restart starts a new one on Claude Code.",
+		});
+	});
+});
+
+describe("orchestratorAgentSettingChanged", () => {
+	it("never reads the running agent alone as drift", () => {
+		expect(orchestratorAgentSettingChanged({ orchestratorAgent: "codex" }, { provider: "claude-code" })).toBe(false);
+		expect(orchestratorAgentSettingChanged({ orchestratorAgent: "codex" }, { provider: "claude-code", roleAgent: "codex" })).toBe(false);
+	});
+
+	it("reads a later change to the setting as drift until the orchestrator runs that agent", () => {
+		expect(orchestratorAgentSettingChanged({ orchestratorAgent: "goose" }, { provider: "claude-code", roleAgent: "codex" })).toBe(true);
+		expect(orchestratorAgentSettingChanged({ orchestratorAgent: "goose" }, { provider: "goose", roleAgent: "codex" })).toBe(false);
+	});
+
+	it("reports nothing without a configured agent or an orchestrator", () => {
+		expect(orchestratorAgentSettingChanged({}, { provider: "claude-code", roleAgent: "codex" })).toBe(false);
+		expect(orchestratorAgentSettingChanged({ orchestratorAgent: "codex" }, undefined)).toBe(false);
 	});
 });
 

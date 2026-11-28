@@ -1,4 +1,4 @@
-import { isCloudHost } from "./cloud/mapping";
+import { CLOUD_HOST_ID, isCloudHost } from "./cloud/mapping";
 import type { ServerConfig } from "./config";
 import { classifyConnectionFailure, describeConnectionFailure, isPollRejected, type ConnectionErrorCopy } from "./connectionError";
 import { canRepairWithQr } from "./machineRecovery";
@@ -34,53 +34,67 @@ export function connectedSpawnHosts(hosts: readonly SpawnHostState[]): SpawnHost
 		.map((host) => ({ id: host.hostId, label: host.name }));
 }
 
-/** An explicit route never falls through to another machine's same-ID project. */
-export function initialSpawnHostId({
-	routeHostId,
-	currentHostId,
-	hosts,
-}: {
-	routeHostId?: string;
-	currentHostId?: string;
-	hosts: readonly SpawnHostOption[];
-}): string | null {
-	const available = (id: string | undefined) => Boolean(id && hosts.some((host) => host.id === id));
-	if (routeHostId) return available(routeHostId) ? routeHostId : null;
-	if (available(currentHostId)) return currentHostId!;
-	return hosts[0]?.id ?? null;
-}
+export type AutoSpawnHost = { settled: false } | { settled: true; hostId: string | null };
 
 /**
- * Whether the New task page knows enough to pick its machine. A machine
- * still connecting is waited for before Cloud can become the default, and so
- * are the pairings the store has not read from the phone yet: the page can
- * open before they load (reopened after the app was closed, a link), routed
- * to a machine or not, and the machine picked first is not picked again.
- * Orchestrator Cloud waited for (routed there, or its draft restored) is
- * waited for until it has signed in or failed to (`cloudResolved`): it can
- * load after the machines, and picked before, a machine takes its place.
+ * The machine New task picks by itself, asked again on every change until the
+ * person picks one or the picked one can be used. Back from the background
+ * every machine is reconnecting, so a reconnecting machine is still the one
+ * wanted: the route's, the restored draft's, then the default. Another machine,
+ * then Cloud, only stands in once that one is offline or refused (`state`), and
+ * with nothing else to use it stays, so the page says why and picks it up when
+ * it is back. An explicit route never falls through to another machine.
  */
-export function spawnHostSelectionReady({
+export function autoSpawnHostId({
 	routeHostId,
-	configResolved,
+	draftHostId,
+	currentHostId,
 	hosts,
-	connectedMachineCount,
+	cloud,
+	configResolved,
 	cloudResolved,
 }: {
 	routeHostId?: string;
+	draftHostId?: string;
+	currentHostId?: string;
+	hosts: ReadonlyArray<{ hostId: string; ready: boolean; state: MachineState }>;
+	/** Signed in to Orchestrator Cloud. */
+	cloud: boolean;
 	configResolved: boolean;
-	hosts: ReadonlyArray<{ hostId: string; loading?: boolean }>;
-	connectedMachineCount: number;
-	cloudResolved?: boolean;
-}): boolean {
-	if (isCloudHost(routeHostId)) return configResolved && cloudResolved === true;
-	if (routeHostId) {
-		const routed = hosts.find((host) => host.hostId === routeHostId);
-		if (!routed) return configResolved;
-		return !routed.loading;
+	cloudResolved: boolean;
+}): AutoSpawnHost {
+	const paired = (id: string | undefined) => hosts.find((host) => host.hostId === id);
+	if (isCloudHost(routeHostId)) {
+		return configResolved && cloudResolved ? { settled: true, hostId: cloud ? routeHostId! : null } : { settled: false };
 	}
-	if (!configResolved) return false;
-	return !(connectedMachineCount === 0 && hosts.some((host) => host.loading));
+	if (routeHostId) {
+		if (paired(routeHostId)) return { settled: true, hostId: routeHostId };
+		return configResolved ? { settled: true, hostId: null } : { settled: false };
+	}
+	if (!configResolved) return { settled: false };
+	for (const id of [draftHostId, currentHostId]) {
+		if (isCloudHost(id)) {
+			if (!cloudResolved) return { settled: false };
+			if (cloud) return { settled: true, hostId: id! };
+			continue;
+		}
+		const host = paired(id);
+		if (host && (host.ready || host.state === "ok")) return { settled: true, hostId: host.hostId };
+	}
+	const connected = hosts.find((host) => host.ready);
+	if (connected) return { settled: true, hostId: connected.hostId };
+	if (cloud) return { settled: true, hostId: CLOUD_HOST_ID };
+	const kept = paired(draftHostId) ?? paired(currentHostId) ?? hosts[0];
+	return { settled: true, hostId: kept?.hostId ?? null };
+}
+
+/**
+ * A machine New task should ask again for at once instead of waiting for the
+ * next recovery try: its last try failed, nothing is retrying it now, and it
+ * holds no verified connection (one that does is already polling again).
+ */
+export function spawnHostNeedsRetry(host: { connection: string; loading: boolean; config: ServerConfig | null } | undefined): boolean {
+	return Boolean(host && host.connection === "closed" && !host.loading && !host.config);
 }
 
 export function spawnHostRequestIsCurrent(

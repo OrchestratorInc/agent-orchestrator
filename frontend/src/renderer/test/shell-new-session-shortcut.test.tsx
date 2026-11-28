@@ -157,8 +157,15 @@ vi.mock("@tanstack/react-router", async (importOriginal) => ({
 	useRouter: () => shellMocks.router,
 	useParams: () => shellMocks.state.routeParams,
 	useSearch: () => shellMocks.state.routeSearch,
-	useRouterState: ({ select }: { select: (state: { location: { search: unknown; pathname: string } }) => unknown }) =>
-		select({ location: { search: shellMocks.state.routeSearch ?? {}, pathname: shellMocks.state.matchRouteTarget ?? "" } }),
+	useRouterState: ({
+		select,
+	}: {
+		select: (state: { location: { search: unknown; pathname: string }; matches: { pathname: string }[] }) => unknown;
+	}) =>
+		select({
+			location: { search: shellMocks.state.routeSearch ?? {}, pathname: shellMocks.state.matchRouteTarget ?? "" },
+			matches: [{ pathname: shellMocks.state.matchRouteTarget ?? "" }],
+		}),
 }));
 
 vi.mock("../lib/bridge", () => ({
@@ -172,6 +179,9 @@ vi.mock("../lib/bridge", () => ({
 			onNewSessionShortcut: shellMocks.onNewSessionShortcut,
 			onKeyboardShortcutsHelp: shellMocks.onKeyboardShortcutsHelp,
 			onQuitConfirmRequest: shellMocks.onQuitConfirmRequest,
+			onExitFeedbackRequest: () => () => undefined,
+			onExitFeedbackSecondClose: () => () => undefined,
+			reportExitFeedback: () => undefined,
 			resolveQuitConfirm: shellMocks.resolveQuitConfirm,
 			reportSessionsShown: shellMocks.reportSessionsShown,
 			onNewShellTerminalShortcut: shellMocks.onNewShellTerminalShortcut,
@@ -356,10 +366,10 @@ vi.mock("../lib/shell-context", () => ({
 		return children;
 	},
 }));
-// First-run onboarding and the guided tour after it load their own queries;
+// First-run onboarding and the funnel after it load their own queries;
 // this harness has no query provider and doesn't exercise them.
 vi.mock("../components/onboarding/FirstRunOnboarding", () => ({ FirstRunOnboarding: () => null }));
-vi.mock("../components/onboarding/GuidedTour", () => ({ GuidedTour: () => null }));
+vi.mock("../components/onboarding/FirstTaskFunnel", () => ({ FirstTaskFunnel: () => null }));
 vi.mock("../components/ui/sidebar", () => ({
 	SidebarProvider: ({ children, open }: PropsWithChildren<{ open?: boolean }>) => (
 		<div data-open={open ? "true" : "false"} data-testid="sidebar-provider">

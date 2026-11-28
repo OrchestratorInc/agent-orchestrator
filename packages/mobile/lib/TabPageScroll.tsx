@@ -10,9 +10,13 @@ import { ScrollView, StyleSheet } from "react-native";
  * automatic insets starts below the bar, gives the title something to collapse
  * with, and lets the content centre in the space that is left.
  */
-export function TabPageScroll({ children }: { children: ReactNode }) {
+export function TabPageScroll({ children, topInset = 0 }: {
+	children: ReactNode;
+	/** Room above the content for a bar the automatic insets do not cover (Android's clear pill bar, whose height `useGlassBarInset` gives). */
+	topInset?: number;
+}) {
 	return (
-		<ScrollView contentInsetAdjustmentBehavior="automatic" contentContainerStyle={styles.fill}>
+		<ScrollView contentInsetAdjustmentBehavior="automatic" contentContainerStyle={topInset ? [styles.fill, { paddingTop: topInset }] : styles.fill}>
 			{children}
 		</ScrollView>
 	);

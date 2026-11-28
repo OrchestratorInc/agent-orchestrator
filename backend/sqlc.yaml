@@ -140,10 +140,12 @@ sql:
             go_type:
               import: "github.com/aoagents/agent-orchestrator/backend/internal/domain"
               type: "AutomationID"
+          # Nullable: a Scratchpad automation has no project row to point at.
           - column: "automations.project_id"
             go_type:
               import: "github.com/aoagents/agent-orchestrator/backend/internal/domain"
               type: "ProjectID"
+              pointer: true
           - column: "automations.kind"
             go_type:
               import: "github.com/aoagents/agent-orchestrator/backend/internal/domain"
@@ -244,6 +246,8 @@ sql:
           - column: "app_settings.computer_use"
             go_type: "bool"
           - column: "app_settings.commit_attribution"
+            go_type: "bool"
+          - column: "app_settings.skill_sharing"
             go_type: "bool"
           - column: "app_settings.limit_history"
             go_type: "bool"

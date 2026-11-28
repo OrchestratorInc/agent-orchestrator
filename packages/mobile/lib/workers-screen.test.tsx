@@ -88,7 +88,7 @@ vi.mock("./store", () => ({ useApp: () => ({
 }) }));
 vi.mock("./FreshnessLine", () => ({ FreshnessLine: "FreshnessLine" }));
 vi.mock("./useMachineFreshness", () => ({ useMachineFreshness: () => new Map() }));
-vi.mock("./useBoardFailure", () => ({ useBoardFailure: () => ({ icon: "wifi-off", title: "Can't connect", hint: "Try again" }) }));
+vi.mock("./useBoardFailure", () => ({ useBoardFailure: () => ({ icon: "wifi-off", title: "Can't connect", hint: "Try again" }), useBoardFailureKind: () => "unreachable" }));
 vi.mock("./UnpairedState", () => ({ UnpairedState: "UnpairedState" }));
 vi.mock("./ThemeProvider", () => ({
 	useTheme: () => fixtures.theme,
@@ -350,8 +350,8 @@ describe("Workers filter menu", () => {
 			act(() => { renderer = create(<FleetScreen />); });
 			expect(pinned()).toHaveLength(1);
 			expect(inList()).toHaveLength(0);
-			// A solid bar: the frost's tail lay over the chips and dimmed them at rest.
-			expect(renderer.root.findByType("LargeTitleEdge" as never).props.backdrop).toBe("solid");
+			// The default (lifted) frost: its tail comes up only once the list moves.
+			expect(renderer.root.findByType("LargeTitleEdge" as never).props.backdrop).toBeUndefined();
 			act(() => renderer.unmount());
 		}
 		act(() => { renderer = create(<FleetScreen />); });

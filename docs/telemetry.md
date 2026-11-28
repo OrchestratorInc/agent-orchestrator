@@ -73,7 +73,13 @@ and reads the consent policy itself. An import failure can therefore report even
 when the renderer never starts. Early reports use the same error codes and message rules, with a standard
 exception type and validated asset locations. Once the renderer starts,
 the same listeners hand off to its normal reporter. Early captures are not
-replayed through the later renderer boundaries.
+replayed through the later renderer boundaries. Chromium's ResizeObserver loop
+notice (`ResizeObserver loop completed with undelivered notifications` or
+`ResizeObserver loop limit exceeded`, raised with no error object) is a browser
+warning, not a failure, and is never reported. Neither is a bare `Script error.`
+with no error object and no file name, which is how the browser hides a
+cross-origin script's error; one with a file name or an error object still
+reports.
 Router error boundaries and query/mutation cache callbacks also report unexpected
 client failures. The sender excludes query keys, mutation inputs and route
 parameters. API failures retain a local ownership marker through message wrapping,
@@ -103,8 +109,16 @@ The sender checks consent both before capture and immediately before network
 send, so an event still queued when opt-out arrives is discarded.
 
 Mobile Sentry sends application codes and applies the same normalized first-line display rule for JavaScript engine errors. Other uncoded errors contribute only a hash of the cleaned-up text. It also receives the error category, safe stack line numbers with generic
-frame names, release version and build number, and the production or preview
-environment. The sender excludes request bodies and account identity. Its `user.id` is the authenticated paired
+frame names, release version and build number, the running OTA update ID
+(`embedded` for the bundle in the binary) as `dist` and `ao.update_id`, the
+daemon's version as `ao.daemon_version`, and the production or preview
+environment. For a failed request that is the version of the desktop the
+request went to; for other errors it is sent only when every connected desktop
+reported its version and they are all the same. A failed daemon request is named by its method and route as
+`ao.operation`, such as `POST /api/v1/sessions/:id/send`: only the app's fixed
+route words are kept, every other path segment becomes `:id`, and a workspace
+file path becomes `*`, so no session, project, branch or file name is sent.
+The request ID is not sent. The sender excludes request bodies and account identity. Its `user.id` is the authenticated paired
 desktop installation ID only. It is absent before pairing, during repair, and
 after unpairing or a failed identity refresh. The phone retains its separate
 PostHog identity across those changes. A paired Sentry error can therefore be
@@ -143,11 +157,21 @@ sampled by install rather than by event:
   of its processes, and the rest send none. An install whose identifier cannot
   be read is outside the sample.
 - Fatal events send from every install: Electron main uncaught exceptions,
-  Electron process crashes (`process_exit`), and daemon panics. Renderer errors,
+  Electron process crashes (`process_exit`), and daemon panics. A process
+  crash is titled, tagged and grouped by its `reason` (`abnormal-exit`,
+  `crashed`, `oom`, `launch-failed`, `integrity-failure`) and its `process`
+  type: `renderer`, `gpu`, `utility`, `zygote`, `sandbox_helper`,
+  `pepper_plugin`, `pepper_plugin_broker`, or `unknown` for any other name. Renderer errors,
   including unhandled window errors and rejections, are non-fatal and sampled.
   Failed onboarding installs and sign-ins also send from every install (see
   "Onboarding errors in Sentry"): they are rare and block a new user's first
   run.
+- Every desktop and daemon event carries a `plan` tag with the install's AO
+  Cloud plan (the `cloud_plan` list in "Signing in to AO Cloud"). The desktop
+  keeps it in memory and passes it to the daemon on the loopback-only
+  `/internal/telemetry/identity` route. An install on `starter`, `pro` or
+  `enterprise` sends non-fatal errors outside the sample; the daily caps below
+  still apply.
 - Every event carries a `sample_rate` tag: `0.1` for sampled non-fatal events
   and `1` for always-sent events. Multiply counts of `sample_rate:0.1`
   events by 10 to estimate the real volume.
@@ -187,6 +211,16 @@ Orchestrator.inc sends structured events in a few broad categories:
   (`duration_ms`) and the names and line numbers of the four innermost code
   functions that held it (`caller`). It never includes file paths, database
   contents, or message text
+- Daemon exits: when the desktop app's daemon stops on its own,
+  `ao.daemon.failed` sends the failure `code`, the numeric `exit_code` or
+  `signal`, and `exit_reason`, one of `already_running`, `data_dir_locked`,
+  `store_open_failed`, `run_file_unreadable`, `working_dir_failed`,
+  `port_in_use`, `disk_full`, `permission_denied`, `panic`, `crashed`, or
+  `unknown`. `crashed` is a Windows native crash, read from its NTSTATUS exit
+  code (for example `3221225477`, access violation). The reason is read from
+  the exit code and the daemon's last output line on the device; the output
+  itself is never sent. The handled Sentry report for the exit carries the
+  same code and reason as its `detail` (`code:3221225477:crashed`)
 - Daemon startup time: once the daemon's API starts listening,
   `ao.daemon.ready` sends `startup_ms`, the milliseconds from the daemon
   process starting, split into back-to-back steps that add up to it:
@@ -198,7 +232,9 @@ Orchestrator.inc sends structured events in a few broad categories:
   session safety check that must finish before the API opens), and
   `listen_ms`. When the restore that starts alongside the API ends,
   `ao.daemon.startup_reconciled` sends `reconcile_ms` split into
-  `chat_hosts_ms`, `reviewer_recovery_ms`, `sessions_ms`, and `runtime_ms`.
+  `chat_hosts_ms`, `sessions_ms`, `reviewer_recovery_ms` (reviewer recovery runs
+  alongside the session check; this is the time it runs past it), and
+  `runtime_ms`.
   Both carry durations only
 - Basic environment information, such as the Orchestrator.inc version, operating system,
   release channel, and which supported agent types are available. Desktop and
@@ -224,6 +260,9 @@ Orchestrator.inc sends structured events in a few broad categories:
 - Your GitHub username, when Orchestrator.inc can resolve the account signed in
   to its GitHub integration, on every desktop and daemon event (previously only
   session-start events)
+- One answer to the first-day exit feedback prompt, with any text typed in its
+  optional box, when a new install quits without starting work. See "Exit
+  feedback prompt" below
 - Desktop onboarding progress: each step viewed, completed, skipped or left,
   installs and sign-ins started there and how they ended, how long onboarding
   took, and whether the first chat message followed. See "Desktop onboarding
@@ -266,7 +305,19 @@ Orchestrator.inc sends structured events in a few broad categories:
   while its desktop identity is known,
   and one-way hashes of project or session identifiers when an event needs them
 - Coarse mobile-app usage, such as pairing, reconnecting, completing onboarding,
-  opening a notification, or using a core action
+  opening a notification, or using a core action. Phone events also carry the
+  running OTA update as `update_id` (a UUID, or `embedded` for the bundle in the
+  binary) and `update_channel` (`production`, `preview`, `development`, or
+  `other`), and while a desktop is paired its daemon's version as
+  `paired_daemon_version` (the desktop named by `paired_install_id`; with
+  several connected, the one whose identity the phone adopted).
+  `notification_opened` reports its `target` as `session`, `review`, `prs`, or
+  `cloud`. `paired` is sent for every pairing finished from Pair a machine, by
+  scan or manual entry: a new machine, a re-pair, or an edited connection. A
+  manual pairing is reported even if the person left the page while it
+  connected.
+  The phone also reports which of its screens are used and how long its
+  launches take (see "Mobile app screens and launches" below)
 - Coarse geographic location (country, and where available region and city),
   derived by PostHog from the connection's IP address when it receives each
   event. Orchestrator.inc does not resolve or send precise coordinates, and does not store
@@ -501,12 +552,38 @@ New (`historical: false`) PR outcomes add:
   controller).
 - `failed_step` is `model_check`, `branch_fetch`, `worktree`, `setup`,
   `agent_start`, `prompt` or `other`.
-- `cause` is a fixed value, never error text: `timeout`; for git and worktree
-  failures `branch_exists`, `path_exists`, `locked`, `permission`,
-  `path_too_long`, `not_a_repo`, `killed` or `other`, classified from git's
-  stderr inside the daemon; for agent and Chat starts `exited`,
-  `no_response`, `not_logged_in`, `killed` or `other`. Sentry spawn errors
-  carry `failed_step` and `cause` as tags.
+- `cause` is a fixed value from a closed list, never error text, paths or
+  messages. The daemon reads the error inside the process to choose it and
+  sends only the value. Sentry spawn errors carry `failed_step` and `cause`
+  as tags and drop any value not on this list.
+  - Any step: `timeout` (the start ran out of its time budget),
+    `permission` (permission denied, read-only file system), `disk_full`
+    (no space left or quota exceeded), `path_too_long`, `killed` (the process
+    was killed by a signal) and `other` (none of the causes below).
+  - Worktree and branch steps, from AO's own typed refusals first, then git's
+    stderr and exit state, then the operating-system error behind a non-git
+    step: `branch_exists` (the branch exists or is checked out in another
+    worktree), `path_exists` (the worktree folder is already occupied),
+    `locked` (a git lock file or a locked worktree), `not_a_repo` (the project
+    folder is not a Git repository), `unsafe_repo` (git refused a repository
+    it considers of dubious ownership), `repo_missing` (the project folder is
+    gone or not registered), `git_missing` (git is not installed, including
+    the macOS stub that needs the Command Line Tools), `in_use` (a file is held
+    by another process), `repo_corrupt` (a corrupt object or index),
+    `ref_conflict` (the branch name collides with an existing branch folder,
+    such as `a` and `a/b`), `ref_missing` (the start branch or commit does not
+    exist locally), `no_default_branch` (the default branch could not be
+    determined), `invalid_branch` (the branch name is not valid) and
+    `git_error` (git ran and failed with a message not listed here). Only
+    `git worktree` and `git status` run with English messages, so other git
+    commands in a non-English locale can report `git_error`.
+  - Agent and Chat starts: `not_logged_in`, `binary_missing` (the agent is
+    not installed, not on PATH, or not a valid executable), `agent_error` (the
+    agent answered the start request with an error), `host_failed` (AO's
+    background chat host process did not start or could not be reached),
+    `exited` (the agent process exited or disconnected while starting),
+    `no_response` (the agent did not answer in time) and `incompatible` (the
+    agent's version does not speak the protocol AO expects).
 - `mode` is `chat` or `terminal` (absent when the start failed before a mode
   was chosen), `async` is whether the start went on in the background after
   the request was answered, and `model` is a fixed Claude family alias
@@ -963,7 +1040,7 @@ Properties on `ao.launches.timed`:
 
 Properties on `ao.usage.ui_performance`:
 
-- Window: `measurement_schema_version` (3), `flush_reason` (`interval` or
+- Window: `measurement_schema_version` (4), `flush_reason` (`interval` or
   `startup`), `window_seconds` (elapsed time while the app was running, so a
   window kept across a quit leaves out the time the app was closed; never less
   than `active_seconds`),
@@ -990,10 +1067,16 @@ Properties on `ao.usage.ui_performance`:
   from the browser's Event Timing API, which reports only interactions of
   40 ms or more, so `interaction_p98_ms` is 0 when none reached 40 ms: a
   fallback, not a measured duration.
-- Frozen frames: `long_frame_count` (frames that took over 50 ms),
+- Frozen frames: `long_frame_count` (frames that took over 50 ms and that
+  someone could notice: an input arrived during the frame, or it drew to the
+  screen while the user was active, within five minutes of their last input),
   `long_frame_blocking_ms` (their total blocking time), `long_frame_ms` (their
   total duration), `long_frame_max_ms` (the longest one), and
-  `long_frame_no_script_count` (those the browser listed no script for). Each
+  `long_frame_no_script_count` (those the browser listed no script for). Frames
+  over 50 ms that drew nothing with no input waiting, or that came while the
+  user was away, are only counted in `long_frame_unnoticed_count` and
+  `long_frame_unnoticed_ms` (their total duration), and none of the other
+  frozen-frame properties include them. Each counted
   frame's time is split by phase into causes, and each cause's total is sent
   as `long_frame_<cause>_ms` with dashes as underscores, such as
   `long_frame_frame_callbacks_ms`: before rendering starts, each script the
@@ -1015,8 +1098,10 @@ Properties on `ao.usage.ui_performance`:
   with no ids, attributes or URLs; script loads are not named.
   `long_frame_top_bundle` is the app code bundle whose listed scripts took
   longest, such as `SessionView`, and is left out for code from anywhere else.
-  Version 2 summaries put `unlisted` and `frame-callbacks` time under `other`,
-  and version 1 also put rendering there.
+  Version 3 and earlier summaries counted every frame over 50 ms while the
+  window was visible, including ones no one could notice. Version 2 summaries
+  also put `unlisted` and `frame-callbacks` time under `other`, and version 1
+  also put rendering there.
 - Chat open: `chat_open_count` and `chat_open_p75_ms`, for opening a chat whose
   messages were not in memory, from the click to the frame that shows them.
 - Memory and CPU: `renderer_mb_bucket` (the window's peak memory) and
@@ -1033,6 +1118,133 @@ between launches and replaced after each send. Share usage analytics and the
 kill switch control both events. Turning Share usage analytics off stops the
 summary and deletes the window counted so far, so nothing from before is sent
 after it is turned back on.
+
+## Mobile app screens and launches
+
+When mobile telemetry is active, the phone records which of its screens and
+sheets people use, the errors it shows them, how long it takes to start, and
+how quickly it responds,
+the mobile counterpart of "UI usage" and "UI responsiveness" above. The
+properties specific to these events are fixed screen names, fixed error kinds,
+counts and durations. Like every phone event they also carry the shared
+context, such as `app_version`. They never include a session, project, PR or
+file name, path, URL, message text, error message, tap position or
+screenshot. There is no session replay.
+
+| Event | When it is sent | Properties |
+| --- | --- | --- |
+| `mobile.surfaces.viewed` | A screen or sheet stays on screen for a second. At most once per surface per UTC day | `surface` |
+| `mobile.ui.usage_summary` | When the app goes to the background at least 15 minutes after its window started, or at the next launch for a window that ran out while the app was closed. Not sent when nothing was counted | Window fields and counters (below) |
+| `mobile.ui.error_shown` | A user-visible error shows: a warning toast, a board failure view, or a screen or sheet that failed to draw. The same error on the same screen within 5 minutes is counted in the summary but not sent again | `presentation`, `error_kind`, `surface` |
+| `mobile.usage.ui_performance` | With `mobile.ui.usage_summary`, at the end of the same window. Not sent when nothing was measured | `measurement_schema_version`, `window_seconds`, `active_seconds`, `flush_reason`, and the measurements below |
+| `mobile.launches.timed` | Once per app start: when a paired machine's live data or Orchestrator Cloud's first list shows, when 60 seconds pass without it, or when the app goes to the background first | `launch_kind`, `outcome`, `landing_surface`, `clock_origin`, `to_js_start_ms`, `to_visible_ms`, `to_usable_ms` |
+
+- `surface` is one of the app's screens or sheets: `board`, `projects`,
+  `project`, `compose`, `spawn`, `prs`, `notifications`, `session` (the session
+  screen while it loads), `session_chat`, `session_tui`, `session_cloud`,
+  `conversation_actions`, `review`, `review_actions`, `reviewer`, `files`,
+  `file_viewer`, `files_review`, `files_branch`, `files_changes`, `artifacts`,
+  `artifact`, `artifact_history`, `render`, `preview`, `browser`, `device`,
+  `shell`, `cloud_terminal`, `cloud_new_project`, `cloud_plan`,
+  `conversation_usage`, `model_picker`, `agent_picker`, `account`,
+  `machine_name`, `onboarding`, `pair`, `connect`, `settings`,
+  `settings_theme`, `settings_machine`, `settings_cloud`, or `other` for a
+  screen added later.
+- `presentation` is `toast`, `screen`, or `sheet`. `error_kind` is
+  `render_crash`, `unreachable`, `auth`, `incompatible_host`, `rate_limited`,
+  `server_error`, `phone_offline`, `cloud_unavailable`, or `action_failed` (a
+  warning toast after an action).
+
+`mobile.ui.usage_summary` properties (a counter that stayed at 0 is left out):
+
+| Property | Meaning |
+| --- | --- |
+| `measurement_schema_version` | `1` |
+| `window_seconds` | Wall time from the window's start to the send, or, for a window sent at the next launch, to its last save while the app was open (time the app was closed is not counted) |
+| `active_seconds` | Time the app was in the foreground |
+| `flush_reason` | `background`, or `startup` for a window that ended while the app was closed |
+| `foreground_count` | Launches and returns to the foreground |
+| `error_shown_count` | User-visible errors, including repeats not sent as their own event |
+| `session_open_count` | Sessions opened, each once while it stays open: a remount or a chat/terminal switch is not a new opening, going straight to another session is |
+| `session_open_from_<source>_count` | Those by where they were opened from: the screen before it (`board`, `project`, `prs`, `spawn`, `notifications_inbox`), another session (`session`), a push tap that opened it (`notification`), a link (`deep_link`), the launch reopening the session the app was left on (`restore`), or `other` |
+| `surface_<surface>_seconds` | Time that screen was on screen while the app was in the foreground |
+| `surface_<surface>_opens` | Times it came on screen, including returning to it |
+
+Properties on `mobile.usage.ui_performance` (`measurement_schema_version` is
+`1`; a count that stayed at 0, or a percentile with nothing measured, is left
+out):
+
+- Session opens: `session_open_count`, counted in
+  `session_open_lt500_count`, `session_open_lt1000_count`,
+  `session_open_lt3000_count` and `session_open_ge3000_count`, and
+  `session_open_p75_ms`: from the session screen coming up after another
+  screen to the session showing its content, that is the chat's messages
+  drawn or the terminal's first output (for an Orchestrator Cloud session, its
+  conversation or its agent's terminal output). A return to a session already
+  open, or a switch between sessions, is not timed.
+  `session_open_dropped_count` counts openings not timed because the screen
+  was left, another session was opened, or the app went to the background
+  before the content showed, or because it took over 30 seconds, as the
+  desktop's `switch_dropped_count` does.
+- Main-thread stalls: a timer asked to run every 500 ms while the app is in
+  front and telemetry is on reports how late it ran. `stall_count` counts runs 100 ms or more late,
+  `stall_long_count` those 500 ms or more, `stall_total_ms` their lateness and
+  `stall_max_ms` the worst. A run 10 seconds or more late is the app having been
+  suspended and is not counted.
+- Requests to paired machines, timed to the answer's headers:
+  `request_count` (requests that got an answer), `request_lt300_count`,
+  `request_lt1000_count`, `request_lt3000_count`, `request_ge3000_count`,
+  `request_p75_ms` and `request_p95_ms`. `request_error_count` counts the
+  answers that were an error status; they are included in `request_count`.
+  `request_unanswered_count` counts requests that timed out or got no answer;
+  they are not included in `request_count`. By connection kind,
+  `request_<kind>_count` and `request_<kind>_p75_ms`, where `<kind>` is `lan`,
+  `tailscale`, `tunnel`, `relay`, or `unknown`. A request the app cancelled
+  because the screen was left, or one still in flight when the app went to the
+  background or telemetry was switched off or on, is not counted. Orchestrator Cloud requests are not included.
+- Returns to the app from the background with a machine paired:
+  `resume_count`, and the time until a paired machine's data was fresh again
+  in `resume_fresh_lt1000_count`,
+  `resume_fresh_lt3000_count`, `resume_fresh_ge3000_count` and
+  `resume_fresh_p75_ms`. `resume_stale_count` counts returns that went back to
+  the background with no fresh data, or got it after 30 seconds or more.
+  Coming back from iOS's `inactive` state (Control Center, Notification
+  Center, the app switcher, Face ID or a system alert) is not a return: the
+  app never left and kept refreshing.
+
+The percentiles come from the last 100 measurements of each kind in the window;
+the counts include every measurement.
+
+Properties on `mobile.launches.timed`:
+
+- `launch_kind` is `first` (the first launch of an install with this
+  telemetry), `update` (the first launch on a new app version or OTA update), or
+  `cold`.
+- `outcome` is `usable`, `timeout`, `no_machine` (the 60 seconds passed on a
+  phone with no paired machine and no Orchestrator Cloud, which has nothing to
+  load), or `backgrounded`. A launch that went to the
+  background before it was usable sends only `launch_kind`, `outcome` and
+  `landing_surface`.
+- `landing_surface` is the screen on show when the launch ended, such as
+  `board`, or `onboarding` on a phone that is not paired yet.
+- Times are in milliseconds from the app's start, read from React Native's
+  startup marks; `clock_origin` is `process`, or `runtime` when the app's own
+  start was not recorded and the JavaScript runtime's start is used instead.
+  The app does not record its own start today, so launches report `runtime`.
+  `to_js_start_ms` is the app's JavaScript starting (sent only with `process`:
+  measured from the runtime's start it is always 0), `to_visible_ms` its first
+  frame, and `to_usable_ms` the first frame after a paired machine's data or
+  Cloud's first list arrives. A time outside 0 to 10 minutes is left out.
+
+Counting happens in memory and is saved in the app's storage when it goes to
+the background, and at most once a minute while screens change. The phone's
+analytics opt-out (which follows the paired desktop's) drops everything
+counted so far, removes the saved window, and stops counting; nothing counted
+before an opt-out is sent after opting in again. Development builds do not
+count. The once-per-day screen markers are kept only so the same screen is not
+sent twice in a day. A screen view or shown error that was not sent (rate
+limit, kill switch, or the preference still loading) is tried again on its next
+showing.
 
 ## Chat import
 
@@ -1068,8 +1280,11 @@ users move through first-run onboarding, so we can see where they stop and
 why. The flow is: the startup dependency dialog (only when git, tmux or a
 coding agent is missing, before onboarding), the welcome page and its three-part story (the last
 part shows CI and code review on GitHub), the optional AO Cloud sign-in, Your
-tools (the GitHub CLI and coding agents), then a guided tour of the real app
-(add a project, open its orchestrator, send the first message).
+tools (the GitHub CLI and coding agents), how agents finish their work
+(defaults for the projects added next), then the real app with Add Project
+open: adding a project lands on its orchestrator's chat, where the person
+sends the first message. There is no guided tour; the last three steps only
+measure whether the app gets people there on its own.
 
 The onboarding properties below are only the closed values listed here,
 counts, buckets and durations: never a path, repository name or URL, project
@@ -1080,16 +1295,25 @@ GitHub CLI is signed in and `ao_cloud_user_id` when signed in to AO Cloud.
 
 ### Steps
 
-The funnel to read is the pages and then the tour: `welcome` → `sign_in` →
-`tools` → `tour_project` → `tour_orchestrator` → `first_task` → `finish`.
+The funnel to read is the pages and then the app: `welcome` → `sign_in` →
+`tools` → `work_defaults` → `tour_project` → `tour_orchestrator` →
+`first_task`. `work_defaults` was added after the others, so its `step_index`
+(10) is out of flow order. The `tour_*`
+names are from the guided tour that used to cover those steps, but the steps
+now complete on different signals (below), so they do not read the same across
+versions: every event the unguided funnel sends for `tour_project`,
+`tour_orchestrator` and `first_task`, and every `activated`, carries
+`funnel_variant: "unguided"`. Compare across the change by that property, not
+by step name alone.
 Three steps are conditional sub-steps, not stages every run passes through,
 so `step_index` is an order, not a dense funnel:
 
 - `dependencies` shows only when git, tmux or a coding agent is missing, and
   before `started`. It counts only while onboarding has not been seen yet; the
   same dialog after onboarding (a tool removed months later) sends nothing.
-- `github_auth` shows inside Your tools, or in the clone dialog opened from
-  the tour, only while the GitHub CLI needs installing or signing in. It has
+- `github_auth` shows inside Your tools, or in the clone dialog opened while
+  the first project is being added, only while the GitHub CLI needs
+  installing or signing in. It has
   no `already_done` skip when Your tools itself is skipped. The clone dialog
   outside onboarding sends nothing.
 - `import_chats` is not reachable today.
@@ -1105,16 +1329,17 @@ Every step is identified by `step` and its position in the flow,
 | 3 | `tools` | Your tools: the GitHub CLI and coding agents |
 | 4 | `github_auth` | Signing the GitHub CLI in, on Your tools |
 | 5 | `import_chats` | Importing earlier chats. Not shown since the first-run prompt on Home was removed; recorded if it returns |
-| 6 | `tour_project` | Tour: open or add a project |
-| 7 | `tour_orchestrator` | Tour: open the project's orchestrator |
-| 8 | `first_task` | Tour: send the first message |
-| 9 | `finish` | Tour: the closing note |
+| 6 | `tour_project` | A project is added (Add Project opens as onboarding closes), or an existing one opened, local or on a remote host. Skipped as `dismissed` when the Add Project that onboarding opened is closed with no project (the step can still complete later) |
+| 7 | `tour_orchestrator` | Any chat is showing, not only the orchestrator's; adding a project lands on its orchestrator's, so this usually completes at once |
+| 8 | `first_task` | The first message is sent from a chat while the funnel is on this step |
+| 9 | `finish` | The guided tour's closing note. Not sent since the tour was removed |
+| 10 | `work_defaults` | What new projects start with: the agent their orchestrator and workers run on, and how agents finish their work: review every PR, fix failing checks and merge conflicts, fix review comments, archive chats on merge, work on assigned issues |
 
 | Event | When it is sent | Onboarding-specific properties |
 | --- | --- | --- |
 | `ao.onboarding.step_viewed` | A step is shown | `step`, `step_index`, `run_kind`, `missing` (dependencies, tools), `agents_ready` (tools), `chats_found_bucket` (import_chats) |
-| `ao.onboarding.step_completed` | A step is done: Continue on a page, the tour moving on, the tool signed in | `step`, `step_index`, `run_kind`, `time_on_step_ms`; `story_points_seen` and `story_completed` (welcome); `agents_ready` and `gh_ready` (tools); `project_source` (tour_project) |
-| `ao.onboarding.step_skipped` | A step is passed over: automatically because there was nothing to do, by the person (Sign in's "do it later", Skip setup, Skip on the import step), or by closing the tour | `step`, `step_index`, `run_kind`, `reason`, `time_on_step_ms` |
+| `ao.onboarding.step_completed` | A step is done: Continue on a page, the app reaching the next step, the tool signed in | `step`, `step_index`, `run_kind`, `time_on_step_ms`; `story_points_seen` and `story_completed` (welcome); `agents_ready` and `gh_ready` (tools); `archive_on_merge`, `auto_review`, `assigned_issues`, `fix_checks` and `fix_review_comments` (work_defaults, booleans); `orchestrator_agent` and `worker_agent` (work_defaults, agent registry ids only; the same agent for both); `project_source` (tour_project) |
+| `ao.onboarding.step_skipped` | A step is passed over: automatically because there was nothing to do, by the person (Skip on Sign in, Skip setup, Skip on the import step), or, in versions with the tour, by closing it | `step`, `step_index`, `run_kind`, `reason`, `time_on_step_ms` |
 | `ao.onboarding.step_abandoned` | The window closes while the step is showing. Sent at once with `sendBeacon` | `step`, `step_index`, `run_kind`, `time_on_step_ms` |
 | `ao.onboarding.back_clicked` | Back is clicked | `step`, `step_index`, `to_step`, `run_kind` |
 
@@ -1135,7 +1360,7 @@ was known. Its `time_on_step_ms` runs from when it opened.
 | `ao.onboarding.started` | Onboarding opens for the first time on this installation, or a replay starts | `step`, `step_index`, `run_kind` |
 | `ao.onboarding.resumed` | Onboarding opens on a later launch after the app was quit mid-flow | `step`, `step_index`, `run_kind`, `away_ms`, `away_bucket`, `launch_count` |
 | `ao.onboarding.abandoned` | The window closes mid-flow. At most once per launch. Sent at once with `sendBeacon` | `step` (the page showing), `step_index`, `run_kind`, `duration_ms`, `duration_bucket`, `launch_count` |
-| `ao.onboarding.completed` | Onboarding ends. Once per run | `step` (the last page shown: `welcome`, `sign_in` or `tools`), `step_index`, `run_kind`, `outcome`, `duration_ms`, `duration_bucket`, `launch_count`, `resumed`, `back_count`, `auto_skipped_count` |
+| `ao.onboarding.completed` | Onboarding ends. Once per run | `step` (the last page shown: `welcome`, `sign_in`, `tools` or `work_defaults`), `step_index`, `run_kind`, `outcome`, `duration_ms`, `duration_bucket`, `launch_count`, `resumed`, `back_count`, `auto_skipped_count` |
 | `ao.onboarding.activated` | The first chat message delivered after a first run finished, within 7 days. Once per installation | `milestone`, `time_since_completed_ms`, `time_bucket`, `during_tour` |
 
 PostHog sends its queue from its own `pagehide` handler before the app's run,
@@ -1147,14 +1372,14 @@ visible: the run has `started` without `completed`, and a later launch sends
 ### Actions
 
 Installs and sign-ins started during onboarding report how each attempt
-ended. The tour's project step sends no action: its add or clone is already
+ended. The `tour_project` step sends no action: its add or clone is already
 `ao.projects.added`, `ao.projects.add_failed` or `ao.projects.clone_failed`,
 and `project_source` on its `step_completed` says which it was.
 
 | Event | When it is sent | Onboarding-specific properties |
 | --- | --- | --- |
 | `ao.onboarding.action_started` | An install or sign-in starts, by a click or (`auto`) by the page, as the GitHub CLI login does once | `action`, `target`, `step`, `step_index`, `attempt`, `auto` |
-| `ao.onboarding.action_finished` | That attempt ends, once, or onboarding ends while it still runs (`left`) | `action`, `target`, `step`, `step_index`, `attempt`, `outcome`, `reason`, `error_code`, `duration_ms` |
+| `ao.onboarding.action_finished` | That attempt ends, once, or onboarding ends while it still runs (`left`) | `action`, `target`, `step`, `step_index`, `attempt`, `outcome`, `reason`, `failure_cause`, `error_code`, `duration_ms` |
 
 `attempt` counts from 1 for each action and target in a launch, so a value
 above 1 is a retry. The existing `ao.projects.clone_failed`,
@@ -1184,8 +1409,10 @@ sampling.
   `<action>:<reason>`, `action`, `reason`, `target` and `flow` `onboarding`.
   `target` is what the action was for, from a fixed list in
   `shared/onboarding-failures.ts` (`gh`, `tmux`, `claude-code`, `codex` and
-  the other registry agents), or `other` for any id not on it. It is a tag to
-  filter by, not part of the grouping. Only these
+  the other registry agents), or `other` for any id not on it. An
+  `install_failed` issue also carries `cause`, the same closed-list value as
+  PostHog's `failure_cause` (below). Both are tags to filter by, not part of
+  the grouping. Only these
   reasons are sent: `start_failed`, `install_failed`, `interrupted`,
   `lost_contact`, `cleanup_failed`, `request_failed` and `other`. A login the
   person did not finish (`not_signed_in`), a platform with no installer
@@ -1196,10 +1423,10 @@ sampling.
   `left`), so a later failure is not filed as an onboarding issue. The API
   error code stays in PostHog's `action_finished`.
 - Every other renderer Sentry event (a render crash, a failed query, an API
-  error) sent while the first-run window shows, or a tour step in the launch
-  whose onboarding pages finished, carries `flow:onboarding`. A tour restored
-  on a later launch stays until it is dismissed, so it does not tag those
-  launches' errors. The tag does not change how the event is grouped.
+  error) sent while the first-run window shows, or a `tour_*` or `first_task`
+  step in the launch whose onboarding pages finished, carries
+  `flow:onboarding`. Those steps are restored on later launches until the
+  first message is sent, so they do not tag those launches' errors. The tag does not change how the event is grouped.
   Electron main's own events (process crashes, handled update or IPC
   failures) do not carry it: main does not track which screen the renderer
   shows.
@@ -1226,7 +1453,12 @@ sampling.
   played at least once, CI part included.
 - `project_source` is `clone`, `local_folder`, `existing` (a project that was
   already there) or `other` (such as an AO Cloud project).
-- `reason` on `step_skipped` is `already_done`, `user` or `dismissed`.
+- `reason` on `step_skipped` is `already_done`, `user`, `dismissed`,
+  `activated` (the first message was sent before the funnel reached that step;
+  the run ends and every step not yet completed is skipped) or `expired` (the
+  7-day activation window passed with the run unfinished; same).
+- `funnel_variant` is `unguided` on the post-setup funnel's events and on
+  `activated`; events from versions with the guided tour have none.
 - `outcome` on `completed` is `finished` (the last page's Continue),
   `skipped_setup` (Skip setup on Your tools) or `superseded` (a later launch
   found a project, or an offer to bring over data from an older installation,
@@ -1236,7 +1468,10 @@ sampling.
   the run has spanned. Durations are capped at 30 days.
 - `time_bucket` on `activated` is `lt_5m`, `5m_15m`, `15m_1h`, `1h_1d` or
   `1d_7d`. `milestone` is `first_message`. `during_tour` is true when the
-  message was the tour's task step.
+  message was sent on the `first_task` step. With `funnel_variant: "unguided"`
+  that means the person got there through Add Project, which is most first
+  messages; it meant the tour was showing before, so do not compare it across
+  the change.
 - `action` is `dependency_install`, `gh_install`, `gh_sign_in`,
   `agent_install`, `agent_sign_in` or `cloud_sign_in`. `target` is the install target or agent id from AO's own
   registry, such as `gh`, `tmux` or `claude-code`.
@@ -1244,14 +1479,42 @@ sampling.
   person closed the login or moved on), `timed_out` (a login left open 15
   minutes), `handed_off` (the agent signs in outside AO, so its guide
   opened) or `left` (onboarding ended, or the window closed, while it was
-  still running: Skip setup, onboarding closed for the person, the tour ending
-  or closing, or quitting mid-onboarding). An install or sign-in from the
-  onboarding pages keeps running into the tour, so its `left` comes when the
-  tour ends and its `duration_ms` includes the tour.
+  still running: Skip setup, onboarding closed for the person, the first
+  message being sent, or quitting mid-onboarding). An install or sign-in from
+  the onboarding pages keeps running past them, so its `left` comes with the
+  first message and its `duration_ms` includes the time until then.
 - `reason` on `action_finished` is `start_failed`, `install_failed`,
   `interrupted`, `unsupported`, `lost_contact`, `not_signed_in`,
   `cleanup_failed`, `request_failed`, `documentation` or `other`.
   `error_code` is the API's error code, never its message.
+- `failure_cause` on `action_finished` comes only with `reason`
+  `install_failed` (`dependency_install`, `gh_install` and `agent_install`).
+  The daemon reads it from the failed install job's error and installer
+  output (`InstallJob.failureCause`, `systeminstall/failure_cause.go`); the
+  error and output themselves never leave the machine. It is one of:
+  - `timeout`: the install, or the check after it, ran past its deadline.
+  - `not_found_after_install`: the command finished but the program could
+    not be found afterwards (not on the daemon's PATH, or its adapter cannot
+    resolve it).
+  - `verify_failed`: the program was found but did not start or report the
+    expected version.
+  - `node_missing`, `npm_missing`, `brew_missing`: Node.js, npm or Homebrew
+    is not installed or not on PATH.
+  - `tool_missing`: another program the installer runs (`curl`, `bash`,
+    `winget`, `apt-get` and so on) is missing.
+  - `xcode_tools_missing`: macOS Command Line Tools are missing or broken.
+  - `disk_full`: no space left on the disk.
+  - `permission_denied`: the installer could not write where it installs
+    (`EACCES`, `EPERM`, a `sudo` password prompt, Windows "Access is denied").
+  - `network`: a download or registry request failed (DNS, connection,
+    proxy, TLS or an HTTP error status).
+  - `locked`: the package manager or the agent was busy with another install
+    (a held Homebrew or dpkg lock, an install already running).
+  - `exit_nonzero`: the installer exited with an error none of the above
+    explains.
+  - `other`: anything else, including a cause this build does not know.
+
+  A daemon too old to report a cause sends none, so the property is absent.
 
 `ao.renderer.cloud_signed_in` also carries `source` `onboarding` when the
 sign-in finished within 30 minutes of clicking Sign in on onboarding's account
@@ -1275,6 +1538,73 @@ that was off when it began has no `started`, and so sends no `completed`.
 properties are no longer allowed: they belonged to the first-run prompt on
 Home, which has been removed. Builds from before that still send them.
 
+## Exit feedback prompt
+
+When a new desktop install quits on its first day without starting any work,
+the app shows one small dialog asking what stopped them, then closes. It asks
+at most once per install, ever.
+
+It shows only when all of these are true at the moment of quitting:
+
+- The install is less than 24 hours old (the age of `telemetry_install_id`).
+- No worker session and no standalone session has ever been started on the
+  install. An orchestrator session does not count as work. The daemon keeps a
+  durable count for this (`lifetimeWorkSessions` on
+  `GET /api/v1/telemetry/identity`) that includes sessions later deleted. If
+  the daemon cannot be reached, the prompt does not show.
+- The app has been open for at least 10 seconds in this launch.
+- It is a user quit: on macOS ⌘Q, the Quit menu item or Quit from the Dock;
+  on Windows and Linux, closing the main window or quitting. Restarting to
+  install an update, shutting down, restarting or logging out the computer, a
+  crash, and a forced quit go straight through. With the window hidden or
+  minimized, nothing shows. On macOS the menu bar icon is always on, so a
+  ⌘Q, menu or Dock quit closes the window and leaves Orchestrator running in
+  the menu bar; the prompt still asks on that quit, and its events mean the
+  window closed, not that the app exited. The prompt replaces the "Quit
+  Orchestrator?" confirm for that one quit.
+- Share usage analytics is on, and none of the three events below is silenced
+  by `AO_TELEMETRY_DISABLED_EVENTS`.
+- It has not shown on this install before. The record is the marker file
+  `exit_feedback_shown` in the AO data directory, written the moment the
+  dialog appears, whatever happens next.
+
+The question depends on how far the install got: one version for an install
+with no project, another for an install with a project but no work. The user
+can tap one of five answers, type up to 500 characters in an optional box,
+skip, press Escape (ignored once they have typed, or while an input method
+is composing), quit again or do nothing. With no input it closes itself
+after 15 seconds; once the user types, it waits for an answer or a skip. The
+dialog can never keep the app open on its own: if the check, the dialog or
+sending fails, the app quits normally.
+
+It sends three events, each with the same context as other desktop events
+(installation ID, app version, platform, and the GitHub login or AO Cloud user
+ID when there is one). Answers are not anonymous.
+
+| Event | When | Properties |
+| --- | --- | --- |
+| `ao.exit_feedback.shown` | The dialog appears | `version` |
+| `ao.exit_feedback.answered` | An answer is tapped | `version`, `answer`, `has_text`, `text`, `seconds_open` |
+| `ao.exit_feedback.dismissed` | Skipped, Escape, a second quit, or 15 seconds with no input | `version`, `how`, `seconds_open` |
+
+- `version`: `no_project` or `project_no_work`.
+- `answer`: for `no_project`, `just_looking`, `unsure_where_to_start`,
+  `no_repo_or_agent`, `something_broke` or `not_a_fit`; for
+  `project_no_work`, `no_task_in_mind`, `unsure_what_to_ask`,
+  `agent_not_ready`, `tried_nothing_started` or `not_comfortable`.
+- `how`: `skip`, `escape`, `second_close` or `timeout`.
+- `text`: what the user typed, trimmed, with local paths and local URLs
+  replaced the same way as other event text, at most 500 characters. Sent only
+  with an answer, and left out when the box is empty. Text typed before a skip
+  is not sent.
+- `seconds_open`: whole seconds from the dialog appearing to the action.
+
+The chosen answer and any typed text are sent to PostHog and stored there with
+the rest of the usage analytics, linked to the same identifiers. Because the
+app is closing, the desktop's main process sends these events itself and waits
+up to 2 seconds for them before it quits. Turning off Share usage analytics
+stops the prompt from showing, and nothing is sent.
+
 ## What Orchestrator.inc does not intentionally send
 
 Product telemetry is designed not to include:
@@ -1288,6 +1618,8 @@ Product telemetry is designed not to include:
   account (invitee emails are never sent)
 - Screen recordings, session replays, screenshots, pointer coordinates, or
   the text of anything you click or hover
+- Text you type, with one exception: the optional box in the first-day exit
+  feedback prompt, sent with your answer (see "Exit feedback prompt")
 
 The explicit account fields are the GitHub owner segment, your authenticated
 GitHub username, and, only if you sign in to AO Cloud, your AO Cloud user ID and
@@ -1349,8 +1681,10 @@ that waitlist as described in the [privacy policy](https://orchestrator.inc/priv
   while the daemon is still starting. HTTP 409 responses are dropped only for
   `POST /api/v1/sessions/:id/workspace/diffs`,
   `GET /api/v1/sessions/:id/conversation/config-options`,
-  `GET /api/v1/sessions/:id/conversation/models`, and
-  `GET /api/v1/sessions/:id/conversation/skills`. Codex
+  `GET /api/v1/sessions/:id/conversation/models`,
+  `GET /api/v1/sessions/:id/conversation/skills`, and
+  `GET /api/v1/agents/:id/skills`; none of these 4xx responses go to Sentry,
+  so a remote host too old to scan skills for the new chat page stays quiet. Codex
   account management being unwired, and an already-closed shell terminal, are
   not analytics events. A GitHub token rejected after refresh still reports
   `GITHUB_AUTH_INVALID` (with that `error_code`). A temporary refresh outage reports
@@ -1433,6 +1767,22 @@ mobile app never receive your email; they receive only the user ID. Signing out
 stops attributing new desktop events to you. Only the production WorkOS sign-in
 is identified.
 
+Desktop events also carry the AO Cloud plan as `cloud_plan` (one of `free`,
+`starter`, `pro`, `enterprise`, `none` when signed out or the org has no
+billing, or `unknown` before billing loads, for a contract org, or for any other
+value) and `cloud_paid` (`true` only for a self-serve org that is entitled, not
+exempt and not on Free) and `cloud_trial` (`true` for a paid plan still on its
+free trial; it counts as paid). All three are also person properties of the
+signed-in AO Cloud person; `install_id` is unchanged. When a fresh billing
+summary shows a different plan, or a different trial state, than the one last
+seen for that org, the desktop sends `ao.billing.plan_changed` with
+`from_plan`, `to_plan` (same list), `direction` (`upgrade`, `downgrade`,
+`cancel` for a move to Free, or `same_tier`, as when a trial converts to paid on
+the same plan) and `from_trial` / `to_trial`, so a trial that ends unpaid is
+told apart from a paying customer cancelling. The last plan and trial state per
+org are kept in the app's local storage, keyed by a hash of the org ID. The first summary for an org, a sign-out and a failed
+billing request send nothing. No price, org name, email or Stripe ID is sent.
+
 A release build returns from the sign-in page through
 `https://orchestrator.inc/app/auth/return/` on the Orchestrator.inc website.
 If you accepted analytics on that website, the page passes your website
@@ -1484,7 +1834,8 @@ identity (user ID, email, GitHub username) stays in the client. It takes effect
 immediately and is remembered across restarts (it is a marker file,
 `telemetry_opt_out`, next to the installation identifier). A paired phone picks
 it up the next time it connects and keeps it until a paired desktop that has
-analytics on tells it otherwise. Turning it back on resumes sending; the desktop
+analytics on tells it otherwise. With it off, the first-day exit feedback
+prompt never shows. Turning it back on resumes sending; the desktop
 interface uses a fresh anonymous identifier until the next restart. Data already
 sent to PostHog is not deleted.
 
@@ -1664,7 +2015,7 @@ renamed event. Events not listed keep their names.
 | `ao.v2.mobile_app.paired` | `mobile.app.paired` |
 | `ao.v2.mobile_app.onboarding_started` | `mobile.app.onboarding_started` |
 | `ao.v2.mobile_app.onboarding_completed` | `mobile.app.onboarding_completed` |
-| `ao.v2.mobile_app.onboarding_skipped` | `mobile.app.onboarding_skipped` |
+| `ao.v2.mobile_app.onboarding_skipped` | `mobile.app.onboarding_skipped` (retired: onboarding has no skip, so it is not sent) |
 | `ao.v2.mobile_app.feature_used` | `mobile.app.feature_used` |
 | `ao.v2.mobile_app.notification_opened` | `mobile.app.notification_opened` |
 | `ao.usage.*` (`worker_pr_associated`, `worker_pr_merged`, `messages_sent`) | unchanged |

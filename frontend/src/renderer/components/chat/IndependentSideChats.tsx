@@ -22,7 +22,7 @@ import { ComposerEditor, type ComposerEditorHandle, type ComposerTrigger } from 
 import { ComposerSuggestMenu } from "./ComposerSuggestMenu";
 import { rankSkills, moveHighlight } from "./composerSuggest";
 import { ChatAnnotationSummary, type ChatAnnotationSummaryItem } from "./ChatAnnotationSummary";
-import { emptySideChatDraft, mergeSideChatDraft, parseSideChatDraft, type SideChatDraft, type SideDeliveryReceipt } from "./sideChatDraft";
+import { emptySideChatDraft, mergeSideChatDraft, parseSideChatDraft, sideDeliveryHoldsPath, type SideChatDraft, type SideDeliveryReceipt } from "./sideChatDraft";
 import { TurnSettingsBar } from "./TurnSettingsBar";
 import { QueuedMessageDock, type QueuedMessage } from "./QueuedMessageDock";
 import { Button } from "../ui/button";
@@ -395,6 +395,9 @@ export function useIndependentSideChats(
 	onNavigate?: (annotation: ChatAnnotationSummaryItem) => void,
 	_onHide?: () => void,
 	canCreate = true,
+	// Releases a removed draft file's lease and renews the files a side draft
+	// still holds; see useAttachmentLeases. Absent, staged files are only kept.
+	updateAttachmentLeases?: (release: string[], renew?: string[]) => Promise<string[]>,
 ) {
 	const { t } = useTranslation();
 	const translateDraft = useChatDraftTranslation();
@@ -492,6 +495,30 @@ export function useIndependentSideChats(
 	const [inputAnswers, setInputAnswers] = useState<Record<string, Record<string, Record<string, string>>>>({});
 	const activeIdRef = useRef(activeId);
 	activeIdRef.current = activeId;
+	// The open side's draft files are renewed whenever they change, so a draft
+	// kept open does not lose them to lease expiry.
+	const activeDraftPaths = (activeId ? drafts[activeId]?.attachments ?? [] : []).map((file) => file.path).join("\n");
+	// A file the daemon has already reclaimed (its draft expired or gave it up
+	// elsewhere) is dropped from the draft, but only while the same side is
+	// still the open one.
+	useEffect(() => {
+		if (!updateAttachmentLeases || !activeDraftPaths || !activeId) return;
+		const sideId = activeId;
+		let cancelled = false;
+		void updateAttachmentLeases([], activeDraftPaths.split("\n")).then((missing) => {
+			if (cancelled || activeIdRef.current !== sideId || !missing.length) return;
+			const gone = new Set(missing);
+			setDrafts((current) => {
+				const draft = current[sideId];
+				if (!draft?.attachments.some((file) => gone.has(file.path))) return current;
+				return { ...current, [sideId]: { ...draft, attachments: draft.attachments.filter((file) => !gone.has(file.path)) } };
+			});
+			setAttachments((current) => current[sideId]?.some((item) => gone.has(item.path))
+				? { ...current, [sideId]: current[sideId].filter((item) => !gone.has(item.path)) }
+				: current);
+		}).catch(() => undefined);
+		return () => { cancelled = true; };
+	}, [activeId, activeDraftPaths, updateAttachmentLeases, setDrafts]);
 	const activationRevision = useRef({ id: activeId, revision: 0 });
 	if (activationRevision.current.id !== activeId) {
 		activationRevision.current = { id: activeId, revision: activationRevision.current.revision + 1 };
@@ -1915,6 +1942,7 @@ export function useIndependentSideChats(
 											<input
 												autoFocus
 												aria-label={t("sideChat.renameSideChat")}
+												data-field="inline"
 												className={terminalTabRenameInputClassName}
 												maxLength={MAX_SESSION_DISPLAY_NAME_LEN}
 												onFocus={(event) => event.currentTarget.select()}
@@ -2050,6 +2078,7 @@ export function useIndependentSideChats(
 					<label key={key} className="block">
 						{key}
 						<input
+							data-field="compact"
 							className="ml-2 rounded border border-border bg-background p-1"
 							value={inputAnswers[activeId]?.[requestId]?.[key] ?? ""}
 							onChange={(event) => {
@@ -2210,6 +2239,8 @@ export function useIndependentSideChats(
 										...current,
 										[activeId]: (current[activeId] ?? []).filter((item) => item.path !== path),
 									}));
+									if (path && !sideDeliveryHoldsPath(drafts[activeId], path) && !sendingRef.current.has(activeId))
+										void updateAttachmentLeases?.([path]).catch(() => undefined);
 								}
 							}}
 							files={[]}
@@ -2257,6 +2288,7 @@ export function useIndependentSideChats(
 												<p className="mb-1 text-muted-foreground">{t("sideChat.editingQueuedMessage")}</p>
 												<textarea
 													aria-label={t("sideChat.editQueuedSideQuestion")}
+													data-field="textarea"
 													className="w-full rounded border border-border bg-background p-2"
 													value={editingText}
 													onChange={(event) => { const text = event.target.value; if (operationCurrent(activeId)()) setQueuedEditors(current => ({ ...current, [activeId]: { turnId: editingTurnId!, text } })); }}

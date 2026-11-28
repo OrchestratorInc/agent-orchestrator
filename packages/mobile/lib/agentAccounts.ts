@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { ApiError, apiRequest } from "./api";
 import type { ServerConfig } from "./config";
+import { QUOTA_CRITICAL_PERCENT, QUOTA_WARN_PERCENT, resetLabel } from "./chat/conversationChrome";
 import type { PickerOption } from "./NativePickerList";
 
 const API = "/api/v1/agents/accounts";
@@ -18,7 +19,20 @@ export type AgentAccount = {
 	orgName?: string;
 	signedIn: boolean;
 	default: boolean;
+	/** An API key account's own name. */
+	name?: string;
+	/** The subscription's usage meters, when the machine could read them. */
+	limits?: { windows?: AgentAccountLimitWindow[] };
 };
+
+export type AgentAccountLimitWindow = {
+	id: string;
+	label: string;
+	usedPercent: number;
+	resetsAt?: string;
+};
+
+export type AgentAccountUsageSeverity = "normal" | "warn" | "critical";
 
 export function agentAccountProvider(harness?: string): AgentAccountProvider | undefined {
 	if (harness === "claude-code") return "claude";
@@ -47,6 +61,52 @@ export function agentAccountLabel(account: Pick<AgentAccount, "id" | "email" | "
 	return parts.join(" · ");
 }
 
+/** The letter an account's avatar shows: its email's or name's first, else the provider's. */
+export function agentAccountInitial(account: Pick<AgentAccount, "email" | "name" | "provider">): string {
+	const source = account.email?.trim() || account.name?.trim() || account.provider;
+	// By code point: a name led by an emoji keeps both halves of its surrogate pair.
+	return (Array.from(source)[0] ?? "").toUpperCase();
+}
+
+function reportedWindows(account: Pick<AgentAccount, "limits">): AgentAccountLimitWindow[] {
+	return (account.limits?.windows ?? []).filter((window) => Number.isFinite(window.usedPercent));
+}
+
+/** The fullest meter's use, 0..100, or undefined when the machine reported none. */
+export function agentAccountPeakUsage(account: Pick<AgentAccount, "limits">): number | undefined {
+	const windows = reportedWindows(account);
+	if (!windows.length) return undefined;
+	return Math.min(100, Math.max(0, ...windows.map((window) => window.usedPercent)));
+}
+
+export function agentAccountUsageSeverity(percent: number | undefined): AgentAccountUsageSeverity {
+	if (percent === undefined) return "normal";
+	return percent >= QUOTA_CRITICAL_PERCENT ? "critical" : percent >= QUOTA_WARN_PERCENT ? "warn" : "normal";
+}
+
+/**
+ * Each meter's use on one line, "Session (5h) 42% · Weekly 18%". A full meter
+ * says when it frees up, since that is what decides whether to pick it.
+ */
+export function agentAccountUsageSummary(account: Pick<AgentAccount, "limits">, nowMs = Date.now()): string | undefined {
+	const windows = reportedWindows(account);
+	if (!windows.length) return undefined;
+	return windows.map((window) => {
+		const percent = Math.round(Math.min(100, Math.max(0, window.usedPercent)));
+		const resetsAt = window.resetsAt ? Date.parse(window.resetsAt) : NaN;
+		const reset = percent >= 100 && Number.isFinite(resetsAt) ? resetLabel(Math.max(0, (resetsAt - nowMs) / 1000)) : undefined;
+		return reset ? `${window.label} full, resets in ${reset}` : `${window.label} ${percent}%`;
+	}).join(" · ");
+}
+
+/** What a screen reader says for the avatar's button. */
+export function accountUsageAccessibilityLabel(name: string | undefined, account: Pick<AgentAccount, "limits" | "signedIn"> | undefined): string {
+	if (!account || !name) return "Account, choose an account";
+	if (!account.signedIn) return `Account, ${name}, signed out`;
+	const percent = agentAccountPeakUsage(account);
+	return percent === undefined ? `Account, ${name}` : `Account, ${name}, ${Math.round(percent)}% of usage limit used`;
+}
+
 export async function getAgentAccounts(cfg: ServerConfig, provider: AgentAccountProvider): Promise<AgentAccount[]> {
 	const res = await apiRequest(cfg, API, undefined, READ_TIMEOUT_MS);
 	const accounts = ((await res.json())?.accounts ?? []) as AgentAccount[];
@@ -66,33 +126,48 @@ export async function moveSessionAgentAccount(cfg: ServerConfig, sessionId: stri
 	});
 }
 
-export function agentAccountOptions(accounts: readonly AgentAccount[]): PickerOption[] {
-	return accounts.map((account) => ({
-		id: account.id,
-		title: agentAccountLabel(account, accounts),
-		detail: !account.signedIn ? "Signed out" : account.default ? "Default" : undefined,
-		disabled: !account.signedIn,
-	}));
+/** `mark` draws each row's avatar, given the account. */
+export function agentAccountOptions(accounts: readonly AgentAccount[], mark?: (account: AgentAccount) => PickerOption["mark"], nowMs = Date.now()): PickerOption[] {
+	return accounts.map((account) => {
+		const usage = account.signedIn ? agentAccountUsageSummary(account, nowMs) : undefined;
+		const detail = [!account.signedIn ? "Signed out" : account.default ? "Default" : undefined, usage].filter(Boolean).join(" · ");
+		const option: PickerOption = {
+			id: account.id,
+			title: agentAccountLabel(account, accounts),
+			detail: detail || undefined,
+			disabled: !account.signedIn,
+		};
+		if (usage && agentAccountUsageSeverity(agentAccountPeakUsage(account)) !== "normal") option.warn = true;
+		const drawn = mark?.(account);
+		if (drawn) option.mark = drawn;
+		return option;
+	});
 }
 
 function accountReadRetryable(error: unknown): boolean {
 	return !(error instanceof ApiError) || error.status >= 500 || error.status === 408 || error.status === 429;
 }
 
-/** Reloads when `reloadKey` changes. An older machine that refuses the phone offers no accounts. */
+/**
+ * Reloads when `reloadKey` changes. An older machine that refuses the phone
+ * offers no accounts. What it holds belongs to one scope (the machine, the
+ * agent's provider, the session): a read started for another scope, such as a
+ * reload still in flight when the person switched machine or agent, is
+ * dropped, and a scope change hides the last scope's accounts in the same
+ * render rather than an effect later.
+ */
 export function useAgentAccounts(cfg: ServerConfig | null | undefined, harness: string | undefined, sessionId?: string, reloadKey?: unknown) {
 	const provider = agentAccountProvider(harness);
-	const [accounts, setAccounts] = useState<AgentAccount[]>([]);
-	const [current, setCurrent] = useState<string>();
+	const cfgKey = cfg ? JSON.stringify(cfg) : "";
+	const scope = JSON.stringify([cfgKey, provider ?? "", sessionId ?? ""]);
+	const [loaded, setLoaded] = useState<{ scope: string; accounts: AgentAccount[]; current?: string }>();
 	const [attempt, setAttempt] = useState(0);
 	const failures = useRef(0);
 	const cfgRef = useRef(cfg);
 	cfgRef.current = cfg;
-	const cfgKey = cfg ? JSON.stringify(cfg) : "";
-	useEffect(() => {
-		setAccounts((list) => (list.length ? [] : list));
-		setCurrent(undefined);
-	}, [cfgKey, provider, sessionId]);
+	// Read by a result when it lands, so it knows whether its scope is still the one shown.
+	const scopeRef = useRef(scope);
+	scopeRef.current = scope;
 	useEffect(() => {
 		const cfg = cfgRef.current;
 		if (!cfg || !provider) return;
@@ -102,8 +177,7 @@ export function useAgentAccounts(cfg: ServerConfig | null | undefined, harness: 
 			.then(([list, id]) => {
 				if (cancelled) return;
 				failures.current = 0;
-				setAccounts(list);
-				setCurrent(id);
+				setLoaded({ scope, accounts: list, current: id });
 			})
 			.catch((error) => {
 				if (cancelled || !accountReadRetryable(error)) return;
@@ -111,14 +185,19 @@ export function useAgentAccounts(cfg: ServerConfig | null | undefined, harness: 
 				retry = setTimeout(() => setAttempt((n) => n + 1), delay);
 			});
 		return () => { cancelled = true; clearTimeout(retry); };
-	}, [attempt, cfgKey, provider, reloadKey, sessionId]);
+	}, [attempt, provider, reloadKey, scope, sessionId]);
+	/** Undefined when there is nothing to read, or the scope changed while it read. */
 	const reload = useCallback(async () => {
 		const cfg = cfgRef.current;
+		const startedFor = scopeRef.current;
 		if (!cfg || !provider) return undefined;
 		const [list, id] = await Promise.all([getAgentAccounts(cfg, provider), sessionId ? getSessionAgentAccount(cfg, sessionId, provider) : undefined]);
-		setAccounts(list);
-		setCurrent(id);
+		if (scopeRef.current !== startedFor) return undefined;
+		setLoaded({ scope: startedFor, accounts: list, current: id });
 		return { accounts: list, current: id };
 	}, [provider, sessionId]);
-	return { provider, accounts, current, reload };
+	const mine = loaded?.scope === scope ? loaded : undefined;
+	return { provider, accounts: mine?.accounts ?? NO_ACCOUNTS, current: mine?.current, reload };
 }
+
+const NO_ACCOUNTS: AgentAccount[] = [];

@@ -57,13 +57,13 @@ func providerSwitchRouteRequest(t *testing.T, svc controllers.ConversationServic
 func TestProviderSwitchRoutePassesTheRequestAndAnswersOK(t *testing.T) {
 	svc := &fakeConversationService{}
 	status, body := providerSwitchRouteRequest(t, svc, http.MethodPost, "/sessions/p1-1/provider-switch",
-		`{"targetHarness":"codex","idempotencyKey":"k1","model":" gpt-5 ","effort":"high","fastMode":true,"ultracode":true,"autoCompactWindow":"1m","permissionMode":"accept-edits"}`)
+		`{"targetHarness":"codex","idempotencyKey":"k1","model":" gpt-5 ","effort":"high","fastMode":true,"ultracode":true,"permissionMode":"accept-edits"}`)
 	if status != http.StatusOK || string(bytes.TrimSpace(body)) != `{"status":"ok"}` {
 		t.Fatalf("switch = %d %s, want 200 with an ok body", status, body)
 	}
 	want := domain.ProviderSwitchRequest{
 		TargetHarness: domain.HarnessCodex, IdempotencyKey: "k1", Model: "gpt-5", Effort: "high",
-		FastMode: true, Ultracode: true, AutoCompactWindow: "1m", PermissionMode: domain.PermissionMode("accept-edits"),
+		FastMode: true, Ultracode: true, PermissionMode: domain.PermissionMode("accept-edits"),
 	}
 	if svc.switchRequest != want {
 		t.Fatalf("service request = %+v, want %+v", svc.switchRequest, want)
@@ -306,5 +306,27 @@ func TestProviderSwitchReportsWhatAForcedSwitchStopped(t *testing.T) {
 	status, body := providerSwitchRouteRequest(t, svc, http.MethodPost, "/sessions/p1-1/provider-switch", `{"targetHarness":"codex","force":true}`)
 	if status != http.StatusOK || string(bytes.TrimSpace(body)) != `{"status":"ok","stoppedTurn":true,"cancelledQueuedMessages":2,"failedPendingApprovals":true}` {
 		t.Fatalf("switch = %d %s", status, body)
+	}
+}
+
+func TestProviderSwitchRefusesAChoiceTheTargetCannotTake(t *testing.T) {
+	for _, tc := range []struct {
+		body, want string
+		status     int
+	}{
+		{`{"targetHarness":"codex","autoCompactWindow":"1m"}`, `auto-compaction window \"1m\" is for Claude Code`, http.StatusBadRequest},
+		{`{"targetHarness":"claude-code","autoCompactWindow":"off"}`, "claude-code cannot turn auto-compaction off", http.StatusBadRequest},
+		{`{"targetHarness":"claude-code","fastMode":true}`, "claude-code has no Fast mode", http.StatusBadRequest},
+		// The fake catalog's models have no faster tier.
+		{`{"targetHarness":"codex","model":"claude-opus-5-5","fastMode":true}`, "claude-opus-5-5 has no Fast mode", http.StatusBadRequest},
+		{`{"targetHarness":"codex","fastMode":true}`, `{"status":"ok"}`, http.StatusOK},
+		{`{"targetHarness":"opencode","autoCompactWindow":"off"}`, `{"status":"ok"}`, http.StatusOK},
+		{`{"targetHarness":"claude-code","autoCompactWindow":"500k"}`, `{"status":"ok"}`, http.StatusOK},
+	} {
+		svc := &fakeConversationService{}
+		status, body := switchWithCatalog(t, svc, tc.body)
+		if status != tc.status || !bytes.Contains([]byte(body), []byte(tc.want)) || (svc.switchRequest.TargetHarness != "") != (tc.status == http.StatusOK) {
+			t.Fatalf("%s: %d %s called=%v", tc.body, status, body, svc.switchRequest.TargetHarness != "")
+		}
 	}
 }

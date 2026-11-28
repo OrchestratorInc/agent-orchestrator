@@ -283,6 +283,116 @@ func TestLaunchWaitsForAHarnessChangeInsteadOfFailing(t *testing.T) {
 	}
 }
 
+func TestVersionRecoverySkipsChangingHarnessWithoutWaiting(t *testing.T) {
+	s := newTestService("linux")
+	harness := domain.AgentHarness(TargetAuggie)
+	gate := s.harnessGate(harness)
+	gate.Lock()
+	s.setHarnessChanging(TargetAuggie, true)
+	var unlock sync.Once
+	releaseInstall := func() {
+		s.setHarnessChanging(TargetAuggie, false)
+		gate.Unlock()
+	}
+	t.Cleanup(func() { unlock.Do(releaseInstall) })
+	done := make(chan bool, 1)
+	go func() {
+		release, ok := s.TryBeginHarnessUseNow(harness)
+		if ok {
+			release()
+		}
+		done <- ok
+	}()
+	select {
+	case ok := <-done:
+		if ok {
+			t.Fatal("recovery acquired an installer-held harness")
+		}
+	case <-time.After(time.Second):
+		t.Fatal("recovery waited on the installer")
+	}
+	unlock.Do(releaseInstall)
+	release, ok := s.TryBeginHarnessUseNow(harness)
+	if !ok {
+		t.Fatal("recovery refused a completed installation")
+	}
+	if gate.TryLock() {
+		gate.Unlock()
+		t.Fatal("recovery did not hold a read lease")
+	}
+	release()
+	if !gate.TryLock() {
+		t.Fatal("recovery did not release the harness")
+	}
+	gate.Unlock()
+}
+
+func TestVersionRecoverySkipsUngatedInstallAndVerification(t *testing.T) {
+	s := newTestService("linux", "npm")
+	s.installCapabilities = installCapabilitiesStub{prefix: "/test/.npm", writable: true}
+	started, verifying := make(chan struct{}), make(chan struct{})
+	releaseInstall, releaseVerify := make(chan struct{}), make(chan struct{})
+	var installOnce, verifyOnce sync.Once
+	t.Cleanup(func() {
+		installOnce.Do(func() { close(releaseInstall) })
+		verifyOnce.Do(func() { close(releaseVerify) })
+		s.workers.Wait()
+	})
+	s.commands = commandRunnerFunc(func(ctx context.Context, _ []string, _, _ io.Writer) error {
+		close(started)
+		select {
+		case <-releaseInstall:
+			return nil
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	})
+	s.verifier = harnessVerifierFunc(func(ctx context.Context, _ Target) (VerifyResult, error) {
+		close(verifying)
+		select {
+		case <-releaseVerify:
+			return VerifyResult{ResolvedPath: "/test/.npm/bin/codex", Output: "codex 1.2.3\n"}, nil
+		case <-ctx.Done():
+			return VerifyResult{}, ctx.Err()
+		}
+	})
+	if _, err := s.StartAgentOperation(context.Background(), TargetCodex, "npm", AgentOperationInstall, ""); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-started:
+	case <-time.After(3 * time.Second):
+		t.Fatal("install did not reach the held command")
+	}
+	harness := domain.HarnessCodex
+	gate := s.harnessGate(harness)
+	if !gate.TryLock() {
+		t.Fatal("fixture did not exercise an ungated install")
+	}
+	gate.Unlock()
+	if release, ok := s.TryBeginHarnessUseNow(harness); ok {
+		release()
+		t.Fatal("recovery admitted an actively installed harness")
+	}
+	installOnce.Do(func() { close(releaseInstall) })
+	select {
+	case <-verifying:
+	case <-time.After(3 * time.Second):
+		t.Fatal("install did not reach held verification")
+	}
+	if release, ok := s.TryBeginHarnessUseNow(harness); ok {
+		release()
+		t.Fatal("recovery admitted an unverified installation")
+	}
+	verifyOnce.Do(func() { close(releaseVerify) })
+	waitForStatus(t, s, TargetCodex, StatusSucceeded)
+	if release, ok := s.TryBeginHarnessUseNow(harness); !ok {
+		t.Fatal("recovery remained blocked after install completion")
+	} else {
+		release()
+	}
+}
+
 // eventRecorder keeps the telemetry events a test emitted.
 type eventRecorder struct {
 	mu     sync.Mutex

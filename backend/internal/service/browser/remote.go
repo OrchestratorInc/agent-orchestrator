@@ -1,0 +1,792 @@
+package browser
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"slices"
+	"strconv"
+	"strings"
+
+	"github.com/aoagents/agent-orchestrator/backend/internal/approval"
+	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
+	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/apierr"
+)
+
+// RemoteResponse is a self-hosted agent-browser service's reply to one
+// command: its output, an optional error, and files it wrote.
+type RemoteResponse struct {
+	Output string            `json:"output"`
+	Error  string            `json:"error,omitempty"`
+	Files  map[string]string `json:"files,omitempty"`
+}
+
+// RemoteBrowser forwards raw agent-browser commands to the host's own
+// browser service (AO_AGENT_BROWSER_URL), holding its token.
+type RemoteBrowser interface {
+	Forward(ctx context.Context, args []string, files map[string]string) (RemoteResponse, error)
+}
+
+// UseRemoteBrowser routes sessions' remote browser commands through this
+// service, so they pass the approval gate before reaching the browser.
+func (s *Service) UseRemoteBrowser(remote RemoteBrowser) {
+	s.remote = remote
+}
+
+// ExecuteRemote checks one agent-browser command against the approval gate,
+// then forwards it to the host's browser service. It fails closed: a command
+// that may need approval is refused when no gate can ask.
+func (s *Service) ExecuteRemote(ctx context.Context, sessionID domain.SessionID, capability string, args []string, files map[string]string) (RemoteResponse, error) {
+	if err := s.authorize(ctx, sessionID, capability); err != nil {
+		return RemoteResponse{}, err
+	}
+	if s.remote == nil {
+		return RemoteResponse{}, apierr.Unavailable("BROWSER_REMOTE_UNAVAILABLE", "This host has no agent browser service")
+	}
+	if err := s.remotePreflight(ctx, sessionID, args); err != nil {
+		return RemoteResponse{}, err
+	}
+	out, err := s.remote.Forward(ctx, args, files)
+	if err != nil {
+		return RemoteResponse{}, apierr.Unavailable("BROWSER_REMOTE_UNREACHABLE", err.Error())
+	}
+	return out, nil
+}
+
+type remoteGateKind int
+
+const (
+	remoteNone remoteGateKind = iota
+	// remoteDescribe: read the target, then classify it.
+	remoteDescribe
+	// remoteAsk: the effect cannot be read in advance; always ask.
+	remoteAsk
+)
+
+type remoteGate struct {
+	kind     remoteGateKind
+	action   string
+	selector string
+	key      string
+	role     string
+	name     string
+	// typed: the command types a line break, which presses Enter.
+	typed bool
+	// source is what a drag picks up; selector is where it drops.
+	source string
+	// nth picks one of the elements selector matches ("0", "2", "-1" for the
+	// last); empty means the first.
+	nth string
+}
+
+// Commands that read, navigate by URL, or change a field's value without
+// submitting. Everything not listed here and not classified below asks.
+var remoteBenign = map[string]struct{}{
+	"open": {}, "goto": {}, "navigate": {}, "back": {}, "forward": {}, "reload": {}, "snapshot": {},
+	"screenshot": {}, "pdf": {}, "get": {}, "is": {}, "wait": {}, "scroll": {}, "scrollintoview": {},
+	"hover": {}, "focus": {}, "fill": {}, "type": {}, "select": {}, "check": {}, "uncheck": {},
+	"highlight": {}, "tab": {}, "tabs": {}, "window": {}, "frame": {}, "dialog": {}, "console": {},
+	"errors": {}, "network": {}, "set": {}, "diff": {}, "upload": {}, "close": {},
+	"help": {}, "version": {}, "record": {}, "trace": {}, "cookies": {}, "storage": {},
+}
+
+// agent-browser 0.38.1's global flags, as its --help lists them.
+var (
+	// remoteValueFlags take the next word as their value.
+	remoteValueFlags = setOf("-d", "--depth", "-s", "--selector", "--session", "--session-name", "--namespace",
+		"--screenshot-dir", "--screenshot-quality", "--screenshot-format", "--input-mode", "--color-scheme",
+		"--download-path", "--max-output", "--idle-timeout", "--model", "--restore-save", "--restore-check-url",
+		"--restore-check-text", "--device", "--user-agent", "--proxy-bypass", "--allowed-domains", "--confirm-actions")
+	// remoteBoolFlags take no value; remoteOptionalBoolFlags may be followed
+	// by an explicit true or false.
+	remoteBoolFlags = setOf("--json", "-i", "--interactive", "-c", "--compact", "--annotate", "--webgpu",
+		"--no-webmcp", "--pin-tab", "--no-pin-tab", "--content-boundaries", "--confirm-interactive",
+		"--no-auto-dialog", "-v", "--verbose", "-q", "--quiet", "--debug", "--no-ca-cert", "--help", "-h", "--version", "-V")
+	remoteOptionalBoolFlags = setOf("--headed", "--hide-scrollbars")
+	// remoteTrustFlags run script in pages or change what the browser trusts,
+	// and mean only that wherever they appear: they always ask.
+	remoteTrustFlags = setOf("--init-script", "--restore-check-fn", "--extension", "--executable-path",
+		"--allow-file-access", "--cdp", "--auto-connect", "--config", "--action-policy", "--ca-cert", "--ignore-https-errors")
+	// remoteLeadingTrustFlags do the same as global flags, but some share a
+	// name with a command option (wait --state), so they ask only up front.
+	remoteLeadingTrustFlags = setOf("--enable", "--args", "--profile", "--state", "--restore", "--headers",
+		"-p", "--provider", "--engine", "--proxy")
+)
+
+func setOf(words ...string) map[string]struct{} {
+	set := make(map[string]struct{}, len(words))
+	for _, word := range words {
+		set[word] = struct{}{}
+	}
+	return set
+}
+
+// classifyRemoteArgs reads an agent-browser command line the way the service
+// will: leading global flags (and the values of those that take one) are
+// skipped, and the first word after them is the command. A leading flag it
+// does not know, or one that runs script or changes the browser's trust,
+// asks.
+func classifyRemoteArgs(args []string) remoteGate {
+	for _, arg := range args {
+		name, _, _ := strings.Cut(arg, "=")
+		if _, ok := remoteTrustFlags[name]; ok {
+			return remoteGate{kind: remoteAsk, action: name}
+		}
+	}
+	words := make([]string, 0, len(args))
+	for i := 0; i < len(args); i++ {
+		arg := args[i]
+		if len(words) == 0 && strings.HasPrefix(arg, "-") {
+			name, _, hasValue := strings.Cut(arg, "=")
+			if _, ok := remoteLeadingTrustFlags[name]; ok {
+				return remoteGate{kind: remoteAsk, action: name}
+			}
+			switch {
+			case hasValue:
+			case contains(remoteValueFlags, name):
+				i++
+			case contains(remoteOptionalBoolFlags, name):
+				if i+1 < len(args) && (args[i+1] == "true" || args[i+1] == "false") {
+					i++
+				}
+			case contains(remoteBoolFlags, name):
+			default:
+				// An unknown flag might take the next word as its value or not:
+				// either way the command cannot be read, so ask.
+				return remoteGate{kind: remoteAsk, action: name}
+			}
+			continue
+		}
+		words = append(words, arg)
+	}
+	if len(words) == 0 {
+		return remoteGate{}
+	}
+	command := strings.ToLower(words[0])
+	rest := words[1:]
+	switch command {
+	case "click", "dblclick":
+		if len(rest) == 0 {
+			return remoteGate{}
+		}
+		return remoteGate{kind: remoteDescribe, action: command, selector: rest[0]}
+	case "type":
+		// Typing key by key turns a line break into a real Enter.
+		if len(rest) > 1 && slices.ContainsFunc(rest[1:], approval.HasLineBreak) {
+			return remoteGate{kind: remoteDescribe, action: "type", key: "Enter", selector: rest[0], typed: true}
+		}
+		return remoteGate{}
+	case "press", "key":
+		if len(rest) > 0 && approval.IsActivationKey(rest[0]) {
+			return remoteGate{kind: remoteDescribe, action: "press", key: rest[0]}
+		}
+		return remoteGate{}
+	case "keyboard":
+		for _, word := range rest {
+			if approval.IsActivationKey(word) {
+				return remoteGate{kind: remoteDescribe, action: "press", key: word}
+			}
+			if approval.HasLineBreak(word) {
+				return remoteGate{kind: remoteDescribe, action: "press", key: "Enter", typed: true}
+			}
+		}
+		return remoteGate{}
+	case "find":
+		return classifyFind(rest)
+	case "wait":
+		// wait --fn evaluates its expression in the page: it is an eval.
+		if scriptFlag(rest) != "" {
+			return remoteGate{kind: remoteAsk, action: "wait"}
+		}
+		return remoteGate{}
+	case "open", "goto", "navigate":
+		// A javascript: address runs script in the page.
+		for _, word := range rest {
+			if !strings.HasPrefix(word, "-") {
+				if strings.HasPrefix(strings.ToLower(strings.TrimSpace(word)), "javascript:") {
+					return remoteGate{kind: remoteAsk, action: command}
+				}
+				break
+			}
+		}
+		return remoteGate{}
+	case "download":
+		// agent-browser downloads by clicking the element: it is a click.
+		if len(rest) == 0 {
+			return remoteGate{}
+		}
+		return remoteGate{kind: remoteDescribe, action: "click", selector: rest[0]}
+	case "drag":
+		// A drag presses on one element and releases on another: what it
+		// does is decided where it drops ("Delete", "Trash").
+		var ends []string
+		for _, word := range rest {
+			if !strings.HasPrefix(word, "-") {
+				ends = append(ends, word)
+			}
+		}
+		if len(ends) < 2 {
+			return remoteGate{kind: remoteAsk, action: "drag"}
+		}
+		return remoteGate{kind: remoteDescribe, action: "drag", selector: ends[1], source: ends[0]}
+	case "dialog":
+		// Accepting a confirm or prompt lets the page carry on with what it
+		// asked about; reading or dismissing it does not.
+		if len(rest) > 0 && strings.EqualFold(rest[0], "accept") {
+			return remoteGate{kind: remoteAsk, action: "dialog"}
+		}
+		return remoteGate{}
+	case "eval", "js", "mouse", "batch", "run":
+		return remoteGate{kind: remoteAsk, action: command}
+	}
+	if _, ok := remoteBenign[command]; ok {
+		return remoteGate{}
+	}
+	return remoteGate{kind: remoteAsk, action: command}
+}
+
+// classifyFind handles `find <locator> <value> [action] [text]` (and
+// `find nth <index> <selector> [action]`). The action defaults to click, as
+// agent-browser's does; a shape it does not recognise asks.
+func classifyFind(rest []string) remoteGate {
+	var positional []string
+	name := ""
+	for i := 0; i < len(rest); i++ {
+		if rest[i] == "--name" && i+1 < len(rest) {
+			name = rest[i+1]
+			i++
+			continue
+		}
+		if strings.HasPrefix(rest[i], "-") {
+			continue
+		}
+		positional = append(positional, rest[i])
+	}
+	unknown := remoteGate{kind: remoteAsk, action: "find"}
+	if len(positional) < 2 {
+		return unknown
+	}
+	locator := strings.ToLower(positional[0])
+	values := 1
+	if locator == "nth" {
+		values = 2
+	}
+	if len(positional) < 1+values {
+		return unknown
+	}
+	action := "click"
+	if len(positional) > 1+values {
+		action = strings.ToLower(positional[1+values])
+	}
+	gate := remoteGate{kind: remoteDescribe, action: "click"}
+	switch {
+	case action == "click" || action == "dblclick":
+	case action == "type" && slices.ContainsFunc(positional[2+values:], approval.HasLineBreak):
+		gate.action, gate.key, gate.typed = "type", "Enter", true
+	case action == "fill" || action == "check" || action == "uncheck" || action == "hover" || action == "text" || action == "type":
+		// A value change, a hover, or a read: nothing is submitted.
+		return remoteGate{}
+	default:
+		return unknown
+	}
+	value := positional[1]
+	switch locator {
+	case "role":
+		gate.role, gate.name = strings.ToLower(value), name
+	case "text", "label", "placeholder", "alt", "title":
+		gate.name = value
+	case "testid":
+		gate.selector = fmt.Sprintf("[data-testid=%q]", value)
+	case "first":
+		gate.selector, gate.nth = value, "0"
+	case "last":
+		gate.selector, gate.nth = value, "-1"
+	case "nth":
+		if _, err := strconv.Atoi(value); err != nil {
+			return unknown
+		}
+		gate.selector, gate.nth = positional[2], value
+	default:
+		return unknown
+	}
+	return gate
+}
+
+// scriptFlag returns the expression wait --fn evaluates, or "".
+func scriptFlag(rest []string) string {
+	for i, word := range rest {
+		if word == "--fn" && i+1 < len(rest) {
+			return rest[i+1]
+		}
+		if expression, ok := strings.CutPrefix(word, "--fn="); ok {
+			return expression
+		}
+	}
+	return ""
+}
+
+// remoteScope returns the command's leading flags that pick which
+// agent-browser session (and socket namespace) it runs in. Every read the
+// daemon makes to judge the command carries them, so it judges the page the
+// command will act on, not the default session's.
+func remoteScope(args []string) []string {
+	var scope []string
+	for i := 0; i < len(args) && strings.HasPrefix(args[i], "-"); i++ {
+		name, _, hasValue := strings.Cut(args[i], "=")
+		scoped := name == "--session" || name == "--namespace"
+		switch {
+		case hasValue:
+			if scoped {
+				scope = append(scope, args[i])
+			}
+		case contains(remoteValueFlags, name) && i+1 < len(args):
+			if scoped {
+				scope = append(scope, args[i], args[i+1])
+			}
+			i++
+		case contains(remoteOptionalBoolFlags, name) && i+1 < len(args) && (args[i+1] == "true" || args[i+1] == "false"):
+			i++
+		}
+	}
+	return scope
+}
+
+type remoteScopeKey struct{}
+
+func (s *Service) remotePreflight(ctx context.Context, sessionID domain.SessionID, args []string) error {
+	if scope := remoteScope(args); len(scope) > 0 {
+		ctx = context.WithValue(ctx, remoteScopeKey{}, scope)
+	}
+	gate := classifyRemoteArgs(args)
+	if gate.kind == remoteNone {
+		return nil
+	}
+	if s.approvals == nil {
+		return apierr.Unavailable("BROWSER_APPROVAL_UNAVAILABLE", "This command may need the user's approval, and approvals are unavailable on this host, so it was not run")
+	}
+	mode := s.approvals.SessionMode(string(sessionID))
+	if mode == approval.ModeOff {
+		return nil
+	}
+	// Discovery gets its own short deadline: a stalled page must not use up
+	// the request's budget before the user is even asked.
+	limit := s.describeTimeout
+	if limit <= 0 {
+		limit = DefaultDescribeTimeout
+	}
+	discoverCtx, cancelDiscover := context.WithTimeout(ctx, limit)
+	defer cancelDiscover()
+	pageURL, pageTitle := s.remotePage(discoverCtx)
+	summary := onSite(remoteSummary(gate, args), pageURL)
+	var verdict approval.Verdict
+	var approved approval.Target
+	var approvedIdentified bool
+	var approvedDocument float64
+	if gate.kind == remoteDescribe {
+		target, identified, partial, document := s.remoteTarget(discoverCtx, gate)
+		// The address is read again after the target: if the page moved on in
+		// between, the prompt would pair one page's address with another's
+		// control. A re-read that fails (discovery ran out of time) proves no
+		// navigation, so the facts are dropped and the user is asked about an
+		// unknown target instead.
+		afterURL, readOK := s.remoteURL(discoverCtx)
+		switch {
+		case !readOK:
+			target, identified, partial, document = approval.Target{Action: gate.action, Key: gate.key}, false, false, 0
+		case afterURL != pageURL:
+			return remoteTargetChanged()
+		}
+		target.PageURL = pageURL
+		approved, approvedIdentified, approvedDocument = target, identified, document
+		target.PageURL, target.PageTitle = pageURL, pageTitle
+		if identified {
+			judged := target
+			if gate.action == "drag" {
+				// The drop lands on the target as a click would.
+				judged.Action = "click"
+			}
+			verdict = approval.Classify(judged, mode)
+			if gate.action == "drag" && verdict.NeedsApproval {
+				verdict.Summary = onSite(fmt.Sprintf("Drag %s onto %q", remoteSelectorLabel(gate.source), target.Name), pageURL)
+			}
+		}
+		if identified && partial && !verdict.NeedsApproval {
+			verdict = approval.Verdict{NeedsApproval: true, Category: approval.CategoryScript,
+				Summary: summary,
+				Reason:  "Orchestrator could not read the form this element belongs to, so it asks first."}
+		} else if !identified {
+			verdict = approval.Verdict{NeedsApproval: true, Category: approval.CategoryScript,
+				Summary: summary,
+				Reason:  "Orchestrator could not identify the element this acts on, so it asks first."}
+		}
+	} else {
+		reason := "This runs JavaScript in the page, which can do anything the page can, including pay or send."
+		switch {
+		case gate.action == "dialog":
+			reason = "Accepting the page's dialog lets the page carry on with what it asked to confirm."
+		case !runsScript(gate.action):
+			reason = "Orchestrator cannot tell in advance what this command does on the page, so it asks first."
+		}
+		verdict = approval.Verdict{NeedsApproval: true, Category: approval.CategoryScript,
+			Summary: summary, Reason: reason}
+	}
+	if !verdict.NeedsApproval {
+		return nil
+	}
+	outcome, err := s.approvals.Request(ctx, approval.Request{
+		Kind: approval.KindBrowserAction, SessionID: string(sessionID), Site: approval.Site(pageURL), URL: pageURL,
+		PageTitle: pageTitle, Action: verdict.Summary, Category: verdict.Category, Reason: verdict.Reason,
+		Timeout: s.approvalTimeout,
+	})
+	if err != nil {
+		return err
+	}
+	if !outcome.Allowed() {
+		return approvalRefusal(outcome.Decision, verdict.Summary, s.approvalTimeout)
+	}
+	// The service runs refs and selectors when the command arrives, not when
+	// the user approved it: read the page again and refuse if it moved on.
+	recheckCtx, cancelRecheck := context.WithTimeout(ctx, limit)
+	defer cancelRecheck()
+	// The target is read first and the address after it, so a navigation
+	// between the two reads cannot pass both checks. What remains is the gap
+	// between this read and the service running the command, which only the
+	// service can close (it takes no expected-page guard today).
+	// A target the user approved without seeing (it could not be read) has
+	// nothing to compare but the page itself.
+	if gate.kind == remoteDescribe && approvedIdentified {
+		now, identified, _, document := s.remoteTarget(recheckCtx, gate)
+		var readOK bool
+		now.PageURL, readOK = s.remoteURL(recheckCtx)
+		// After approval an unread address is not trusted: refuse.
+		if !readOK || identified != approvedIdentified || document != approvedDocument || !sameRemoteTarget(now, approved) {
+			return remoteTargetChanged()
+		}
+		return nil
+	}
+	if nowURL, readOK := s.remoteURL(recheckCtx); !readOK || nowURL != pageURL {
+		return remoteTargetChanged()
+	}
+	return nil
+}
+
+// sameRemoteTarget compares what the user was shown and judged by.
+func sameRemoteTarget(a, b approval.Target) bool {
+	return a.PageURL == b.PageURL && a.Role == b.Role && a.Name == b.Name && a.IsSubmit == b.IsSubmit &&
+		a.FormAction == b.FormAction && a.FormMethod == b.FormMethod && a.FormHasPayment == b.FormHasPayment &&
+		a.FormHasPassword == b.FormHasPassword && a.FormHasNewPassword == b.FormHasNewPassword && a.SubmitName == b.SubmitName
+}
+
+// runsScript reports the remote commands that evaluate script in the page.
+func runsScript(action string) bool {
+	switch action {
+	case "eval", "js", "wait", "open", "goto", "navigate":
+		return true
+	}
+	return false
+}
+
+func remoteTargetChanged() error {
+	return apierr.Conflict("BROWSER_TARGET_CHANGED",
+		"The page changed while the action waited for approval, so it no longer acts on what the user approved. Take a new snapshot and try again.", nil)
+}
+
+// remoteSummary says what a gated command does from its verb and target
+// only. It goes to the prompt, the audit log and push notifications, so it
+// never carries typed text or other argument values; eval and js keep their
+// script, which is the action being approved.
+func remoteSummary(gate remoteGate, args []string) string {
+	if gate.kind == remoteAsk && gate.action == "dialog" {
+		return "Accept the page's dialog"
+	}
+	if gate.kind == remoteAsk {
+		if runsScript(gate.action) {
+			// The script is the action being approved: show it, and say plainly
+			// when it is too long to show whole, since Allow runs all of it.
+			script := strings.Join(remoteCommandArgs(args, gate.action), " ")
+			if gate.action == "wait" {
+				script = "--fn " + scriptFlag(args)
+			}
+			shown, cut := approval.Truncate(strings.TrimSpace(script), 160)
+			text := fmt.Sprintf("Run %q", strings.TrimSpace(gate.action+" "+shown))
+			if cut > 0 {
+				text += fmt.Sprintf(" (script cut: %d more characters not shown; Allow runs all of it)", cut)
+			}
+			return text
+		}
+		return fmt.Sprintf("Run %q", gate.action)
+	}
+	target := "the focused element"
+	switch {
+	case gate.name != "":
+		target = fmt.Sprintf("%q", gate.name)
+	case gate.selector != "":
+		target, _ = approval.Truncate(gate.selector, 80)
+	}
+	switch {
+	case gate.action == "drag":
+		return fmt.Sprintf("Drag %s onto %s", remoteSelectorLabel(gate.source), target)
+	case gate.typed:
+		return "Type a line break into " + target
+	case gate.action == "press":
+		return fmt.Sprintf("Press %s on %s", strings.TrimSpace(gate.key), target)
+	case gate.action == "dblclick":
+		return "Double-click " + target
+	}
+	return "Click " + target
+}
+
+func contains(set map[string]struct{}, word string) bool {
+	_, ok := set[word]
+	return ok
+}
+
+// remoteSelectorLabel shortens a selector or ref for a prompt.
+func remoteSelectorLabel(selector string) string {
+	label, _ := approval.Truncate(selector, 80)
+	return label
+}
+
+// remoteCommandArgs returns what follows the command verb in args.
+func remoteCommandArgs(args []string, verb string) []string {
+	for i, word := range args {
+		if strings.EqualFold(word, verb) {
+			return args[i+1:]
+		}
+	}
+	return nil
+}
+
+func onSite(text, pageURL string) string {
+	if host := approval.Host(pageURL); host != "" {
+		return text + " on " + host
+	}
+	return text
+}
+
+// remoteURL reads the active page's URL; ok is false when the read failed.
+func (s *Service) remoteURL(ctx context.Context) (string, bool) {
+	data, ok := s.remoteData(ctx, "get", "url", "--json")
+	if !ok {
+		return "", false
+	}
+	url, _ := data["url"].(string)
+	return url, true
+}
+
+// remotePage reads the active page's URL and title; empty when unavailable.
+func (s *Service) remotePage(ctx context.Context) (string, string) {
+	var url, title string
+	if data, ok := s.remoteData(ctx, "get", "url", "--json"); ok {
+		url, _ = data["url"].(string)
+	}
+	if data, ok := s.remoteData(ctx, "get", "title", "--json"); ok {
+		title, _ = data["title"].(string)
+	}
+	return url, title
+}
+
+// remoteTarget describes what a click, Enter or Space would act on.
+// identified is false when nothing about the element could be read; partial
+// is true when the element was named (by a snapshot ref or a find locator)
+// but the page could not resolve it to one element, so its form is unknown.
+// document identifies the page document the facts were read from (its
+// performance.timeOrigin, new on every navigation or reload); 0 when unread.
+func (s *Service) remoteTarget(ctx context.Context, gate remoteGate) (target approval.Target, identified, partial bool, document float64) {
+	target = approval.Target{Action: gate.action, Key: gate.key, Role: gate.role, Name: gate.name}
+	var request map[string]string
+	switch ref, isRef := snapshotRef(gate.selector); {
+	case gate.name != "":
+		// find: text locators match any control; role locators one role.
+		request = map[string]string{"mode": "named", "role": gate.role, "name": gate.name}
+	case gate.action == "press":
+		// Enter and Space act on the focused element.
+		request = map[string]string{"mode": "focused"}
+	case isRef:
+		// The snapshot gives only role and name; the element itself says
+		// what form it would submit.
+		data, ok := s.remoteData(ctx, "snapshot", "--interactive", "--json")
+		if !ok {
+			return target, false, false, 0
+		}
+		refs, _ := data["refs"].(map[string]interface{})
+		entry, _ := refs[ref].(map[string]interface{})
+		target.Role, _ = entry["role"].(string)
+		target.Name, _ = entry["name"].(string)
+		if target.Role == "" && target.Name == "" {
+			return target, false, false, 0
+		}
+		request = map[string]string{"mode": "named", "role": target.Role, "name": target.Name}
+	default:
+		request = map[string]string{"mode": "selector", "selector": gate.selector}
+		if gate.nth != "" {
+			request["nth"] = gate.nth
+		}
+	}
+	named := request["mode"] == "named"
+	if named && target.Role == "" && gate.action != "type" {
+		target.Role = "button"
+	}
+	described, ok := s.remoteDescribe(ctx, request)
+	if !ok || described.Partial {
+		// A named element without its form facts may still submit one.
+		return typedEnter(gate, target), named, named, described.DocumentOrigin
+	}
+	described.Action, described.Key = gate.action, gate.key
+	if named && described.Name == "" {
+		described.Role, described.Name = target.Role, target.Name
+	}
+	return typedEnter(gate, described.Target), described.Role != "" || described.Name != "" || described.IsSubmit, false, described.DocumentOrigin
+}
+
+// typedEnter classifies a typed line break as the Enter press it becomes.
+func typedEnter(gate remoteGate, target approval.Target) approval.Target {
+	if !gate.typed {
+		return target
+	}
+	return approval.TypedEnter(target)
+}
+
+type remoteFacts struct {
+	approval.Target
+	Partial        bool    `json:"partial"`
+	DocumentOrigin float64 `json:"documentOrigin"`
+}
+
+// remoteDescribe runs remoteDescribeScript for request.
+func (s *Service) remoteDescribe(ctx context.Context, request map[string]string) (remoteFacts, bool) {
+	raw, _ := json.Marshal(request)
+	data, ok := s.remoteData(ctx, "eval", fmt.Sprintf(remoteDescribeScript, raw), "--json")
+	if !ok {
+		return remoteFacts{}, false
+	}
+	facts, ok := data["result"].(map[string]interface{})
+	if !ok {
+		return remoteFacts{}, false
+	}
+	encoded, _ := json.Marshal(facts)
+	var described remoteFacts
+	if json.Unmarshal(encoded, &described) != nil {
+		return remoteFacts{}, false
+	}
+	return described, true
+}
+
+// snapshotRef reads a snapshot ref as agents write it: "e2" as the snapshot
+// prints it, or "@e2". Anything else is a CSS selector.
+func snapshotRef(selector string) (string, bool) {
+	ref := strings.TrimPrefix(selector, "@")
+	if len(ref) < 2 || ref[0] != 'e' {
+		return "", false
+	}
+	for _, r := range ref[1:] {
+		if r < '0' || r > '9' {
+			return "", false
+		}
+	}
+	return ref, true
+}
+
+// remoteData runs a describe command on the service and returns its JSON
+// "data" object.
+func (s *Service) remoteData(ctx context.Context, args ...string) (map[string]interface{}, bool) {
+	// Read the session the command runs in (remoteScope).
+	if scope, _ := ctx.Value(remoteScopeKey{}).([]string); len(scope) > 0 {
+		args = append(slices.Clone(scope), args...)
+	}
+	resp, err := s.remote.Forward(ctx, args, nil)
+	if err != nil || resp.Error != "" {
+		return nil, false
+	}
+	var envelope struct {
+		Success bool                   `json:"success"`
+		Data    map[string]interface{} `json:"data"`
+	}
+	if json.Unmarshal([]byte(strings.TrimSpace(resp.Output)), &envelope) != nil || !envelope.Success {
+		return nil, false
+	}
+	return envelope.Data, true
+}
+
+// remoteDescribeScript reads the focused element, or the one a selector
+// names, the way the desktop runtimes' describe does: role, label, and the
+// form it would submit. %s is a JSON request.
+const remoteDescribeScript = `(() => {
+const req = %s;
+const clean = (v) => (v || "").replace(/\s+/g, " ").trim().slice(0, 120);
+// Implicit roles as the panel's describer and the snapshot assign them, so a
+// snapshot ref's role matches the element it names.
+const roleOf = (el) => {
+  const explicit = el.getAttribute("role");
+  if (explicit) return explicit.split(/\s+/)[0].toLowerCase();
+  const tag = el.tagName.toLowerCase(), type = (el.type || "text").toLowerCase();
+  if (tag === "a") return "link";
+  if (tag === "button" || tag === "summary") return "button";
+  if (tag === "textarea") return "textbox";
+  if (tag === "select") return "combobox";
+  if (tag === "input") {
+    if (["submit", "button", "reset", "image"].includes(type)) return "button";
+    if (type === "checkbox" || type === "radio") return type;
+    if (type === "search") return "searchbox";
+    if (type === "number") return "spinbutton";
+    return "textbox";
+  }
+  return el.isContentEditable ? "textbox" : "";
+};
+const nameOf = (el) => {
+  const tag = el.tagName.toLowerCase(), type = (el.type || "").toLowerCase();
+  let name = clean(el.getAttribute("aria-label")) || (tag === "input" && ["submit", "button"].includes(type) ? clean(el.value) : "");
+  if (!name && el.id) { const l = document.querySelector('label[for="' + CSS.escape(el.id) + '"]'); if (l) name = clean(l.textContent); }
+  // An editable field's content is what the agent typed: name it only by its
+  // label or hint, never by its text, so typed values stay out of the prompt.
+  const editable = tag === "textarea" || el.isContentEditable || (tag === "input" && !["submit", "button", "image", "reset", "checkbox", "radio"].includes(type));
+  // A wrapping label names its field; its own text nodes only, so a field's
+  // content (what the agent typed) never becomes the name.
+  if (!name && (editable || tag === "input" || tag === "select")) {
+    const wrap = el.closest("label");
+    if (wrap) name = clean([...wrap.childNodes].filter((n) => n.nodeType === 3).map((n) => n.textContent).join(" "));
+  }
+  if (editable) {
+    return name || clean(el.placeholder || el.getAttribute("aria-placeholder") || el.getAttribute("data-placeholder") || el.title);
+  }
+  return name || clean(el.innerText || el.textContent || el.placeholder);
+};
+let el;
+if (req.mode === "named") {
+  // A snapshot ref or find locator names an element by role and label; it
+  // counts only when exactly one control on the page matches.
+  const want = clean(req.name).toLowerCase();
+  const hits = [...document.querySelectorAll("a,button,input,select,textarea,summary,[role],[onclick],[tabindex]")]
+    .filter((c) => (!req.role || roleOf(c) === req.role) && nameOf(c).toLowerCase() === want);
+  if (hits.length !== 1) return { partial: true, documentOrigin: performance.timeOrigin };
+  el = hits[0];
+} else {
+  if (req.mode === "focused") el = document.activeElement;
+  else if (req.nth === undefined) el = document.querySelector(req.selector);
+  else { const all = document.querySelectorAll(req.selector); const i = Number(req.nth); el = all[i < 0 ? all.length + i : i]; }
+}
+if (!el || el === document.body) return null;
+const tag = el.tagName.toLowerCase();
+const type = (el.type || "").toLowerCase();
+const role = roleOf(el);
+const name = nameOf(el);
+const form = el.form || el.closest("form");
+const out = { documentOrigin: performance.timeOrigin, role, name, tag, inputType: type || undefined, isSubmit: false, formHasPayment: false, formHasPassword: false };
+if (form) {
+  const pay = (f) => /cc-(number|csc|exp)/.test(f.getAttribute("autocomplete") || "") || /card.?num|cc.?num|\bcvc\b|\bcvv\b|security.?code/i.test((f.name || "") + " " + (f.id || "") + " " + (f.placeholder || ""));
+  // Controls are collected by their own form owner, so fields outside the
+  // form tag that join it with form="id" count, as the panel's describer does.
+  const controls = [...document.querySelectorAll("input,select,textarea,button")].filter((c) => c.form === form);
+  const submit = controls.find((c) => (c.tagName === "BUTTON" && (c.type || "submit") === "submit") || (c.tagName === "INPUT" && ["submit", "image"].includes(c.type)));
+  out.formMethod = (form.getAttribute("method") || "get").toLowerCase();
+  out.formAction = clean(form.action);
+  out.formHasPayment = controls.filter((c) => c.tagName === "INPUT" || c.tagName === "SELECT").some(pay);
+  const passwords = controls.filter((c) => c.tagName === "INPUT" && c.type === "password");
+  out.formHasPassword = passwords.length > 0;
+  out.formHasNewPassword = passwords.length > 1 || passwords.some((f) => /\bnew-password\b/i.test(f.getAttribute("autocomplete") || ""));
+  out.submitName = submit ? clean(submit.getAttribute("aria-label") || submit.innerText || submit.textContent || submit.value) : undefined;
+  const textField = tag === "input" && !["checkbox", "radio", "submit", "button", "reset", "image", "file"].includes(type);
+  out.isSubmit = (tag === "button" && (type || "submit") === "submit") || ["submit", "image"].includes(type) || (req.mode === "focused" && textField);
+}
+return out;
+})()`

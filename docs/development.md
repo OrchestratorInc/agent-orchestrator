@@ -47,7 +47,7 @@ agent-orchestrator/
 ## Getting the code
 
 ```bash
-git clone https://github.com/Untrivial-ai/agent-orchestrator.git
+git clone https://github.com/OrchestratorInc/agent-orchestrator.git
 cd agent-orchestrator
 npm ci
 ```
@@ -159,8 +159,14 @@ npm run api
 
 ```bash
 cd frontend
-npm install
+npm ci                 # or: npm run dev:warm
 ```
+
+`npm run dev:warm` makes a fresh checkout launchable quickly. When another
+checkout already ran `npm ci` against the same `package-lock.json`, it clones
+that install (copy-on-write) instead of downloading again, then runs the
+`predev` build steps. Its caches live under `~/.ao/warm` and
+`~/.ao/build-cache`. See `AGENTS.md` for its flags.
 
 ### Run in development mode
 
@@ -212,10 +218,10 @@ npm run frontend:typecheck
 
 ## Mobile companion app
 
-The mobile companion app is still being wired into the contributor docs. Do not
-assume `packages/mobile/README.md` is a complete setup guide on this branch.
-Until a tracked guide lands, use the desktop/backend workflow above and check
-open issues/PRs for current mobile-specific setup notes.
+The Expo app lives in `packages/mobile/`. Its
+[README](../packages/mobile/README.md) covers prerequisites, turning on Connect
+Mobile on the desktop, building the dev client for a device or simulator,
+pairing, over-the-air updates, and store releases.
 
 ## Running end-to-end
 

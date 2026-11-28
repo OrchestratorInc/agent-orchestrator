@@ -388,7 +388,7 @@ export function KeyboardShortcutsContent({
 					sectionId="keyboard-shortcuts"
 					toolbar={
 						<div className="shortcut-toolbar sticky top-toolbar z-10 flex flex-wrap items-center gap-2 bg-(--color-bg-primary) pb-2">
-							<div className="flex h-9 min-w-40 flex-1 items-center gap-2 rounded-md border border-(--color-border-settings-input) bg-(--color-bg-settings-input) px-3 focus-within:outline-2 focus-within:outline-offset-2 focus-within:outline-(--color-settings-accent)">
+							<div data-field="search" className="flex h-9 min-w-40 flex-1 items-center gap-2 rounded-md border border-(--color-border-settings-input) bg-(--color-bg-settings-input) px-3 focus-within:outline-2 focus-within:outline-offset-2 focus-within:outline-(--color-settings-accent)">
 								<Search aria-hidden="true" className="size-4 shrink-0 text-settings-muted" />
 								<input
 									ref={searchRef}

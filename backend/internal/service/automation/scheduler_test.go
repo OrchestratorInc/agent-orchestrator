@@ -10,12 +10,15 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/apierr"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
+	sessionmanager "github.com/aoagents/agent-orchestrator/backend/internal/session_manager"
 )
 
 type schedulerMemoryStore struct {
 	*fakeStore
 	runs     map[domain.AutomationRunID]domain.AutomationRun
 	sessions map[domain.SessionID]domain.SessionRecord
+	ready    bool
+	readyErr error
 }
 
 func newSchedulerStore() *schedulerMemoryStore {
@@ -46,7 +49,23 @@ func (f *schedulerMemoryStore) MaterializeAutomationRuns(_ context.Context, id d
 	return true, nil
 }
 
+func (f *schedulerMemoryStore) AutomationSessionReadyToComplete(context.Context, domain.SessionID, time.Time) (bool, error) {
+	return f.ready, f.readyErr
+}
+
 func (f *schedulerMemoryStore) ClaimNextAutomationRun(_ context.Context, now, lease time.Time) (domain.AutomationRun, bool, error) {
+	for id, run := range f.runs {
+		if run.Status != domain.AutomationRunPending || run.ScheduledFor.After(now) {
+			continue
+		}
+		for _, newer := range f.runs {
+			if newer.AutomationID == run.AutomationID && newer.ScheduledFor.After(run.ScheduledFor) && !newer.ScheduledFor.After(now) {
+				run.Status, run.ErrorMessage, run.FinishedAt = domain.AutomationRunFailed, "Superseded by a newer scheduled occurrence", &now
+				f.runs[id] = run
+				break
+			}
+		}
+	}
 	active := map[domain.AutomationID]bool{}
 	for _, run := range f.runs {
 		if run.Status == domain.AutomationRunSpawning || run.Status == domain.AutomationRunRunning {
@@ -103,6 +122,16 @@ func (f *schedulerMemoryStore) MarkAutomationRunRunning(_ context.Context, id do
 	return true, nil
 }
 
+func (f *schedulerMemoryStore) RecordAutomationRunOutcome(_ context.Context, id domain.AutomationRunID, failure string, now time.Time) (bool, error) {
+	run := f.runs[id]
+	if run.Status != domain.AutomationRunRunning {
+		return false, nil
+	}
+	run.ErrorMessage, run.UpdatedAt = failure, now
+	f.runs[id] = run
+	return true, nil
+}
+
 func (f *schedulerMemoryStore) CompleteAutomationRun(_ context.Context, id domain.AutomationRunID, now time.Time) (bool, error) {
 	run := f.runs[id]
 	if run.Status != domain.AutomationRunRunning {
@@ -151,22 +180,22 @@ func (s *recordingSpawner) Spawn(_ context.Context, cfg ports.SpawnConfig) (doma
 	return domain.Session{SessionRecord: rec}, 0, 0, nil
 }
 
-func (s *recordingSpawner) Kill(_ context.Context, id domain.SessionID) (bool, error) {
+// RequestKill records a close that leaves cleanup commands in the background.
+func (s *recordingSpawner) RequestKill(_ context.Context, id domain.SessionID) (sessionmanager.KillResult, error) {
 	s.kills = append(s.kills, id)
 	if s.killErr != nil {
-		return false, s.killErr
+		return sessionmanager.KillResult{}, s.killErr
 	}
 	rec, ok := s.store.sessions[id]
 	if ok {
 		rec.IsTerminated = true
 		s.store.sessions[id] = rec
 	}
-	return s.killFreed, nil
+	return sessionmanager.KillResult{Freed: s.killFreed}, nil
 }
 
-// Catch-up is capped at three durable rows but advances past the whole missed
-// window, and only the oldest occurrence is dispatched for the definition.
-func TestTickMaterializesBoundedCatchupAndDispatchesOldest(t *testing.T) {
+// Catch-up dispatches the newest due occurrence without replaying stale work.
+func TestTickMaterializesNewestDueOccurrence(t *testing.T) {
 	base := time.Date(2026, time.August, 25, 9, 0, 0, 0, time.UTC)
 	now := base.Add(5 * time.Hour)
 	store := newSchedulerStore()
@@ -178,8 +207,8 @@ func TestTickMaterializesBoundedCatchupAndDispatchesOldest(t *testing.T) {
 	if err := svc.Tick(context.Background(), now); err != nil {
 		t.Fatalf("Tick: %v", err)
 	}
-	if len(store.runs) != 3 || len(spawner.calls) != 1 {
-		t.Fatalf("runs=%d spawns=%d, want 3 and 1", len(store.runs), len(spawner.calls))
+	if len(store.runs) != 1 || len(spawner.calls) != 1 {
+		t.Fatalf("runs=%d spawns=%d, want 1 and 1", len(store.runs), len(spawner.calls))
 	}
 	if got := store.automations["automation-1"].NextRunAt; !got.Equal(base.Add(6 * time.Hour)) {
 		t.Fatalf("next run = %s, want %s", got, base.Add(6*time.Hour))
@@ -187,8 +216,8 @@ func TestTickMaterializesBoundedCatchupAndDispatchesOldest(t *testing.T) {
 	if got := spawner.calls[0].AgentConfig; got.Model != "gpt-5" || got.Effort != "high" || got.Mode != "agent" {
 		t.Fatalf("agent config = %#v", got)
 	}
-	if spawner.calls[0].AutomationRunID == nil || store.runs[*spawner.calls[0].AutomationRunID].ScheduledFor != base {
-		t.Fatalf("spawn config = %#v, want oldest occurrence", spawner.calls[0])
+	if spawner.calls[0].AutomationRunID == nil || store.runs[*spawner.calls[0].AutomationRunID].ScheduledFor != now {
+		t.Fatalf("spawn config = %#v, want newest due occurrence", spawner.calls[0])
 	}
 }
 
@@ -403,5 +432,197 @@ func TestTickFailsTerminatedRetainedSeedWithoutKilling(t *testing.T) {
 	}
 	if len(spawner.kills) != 0 {
 		t.Fatalf("kills = %v, want no teardown for terminated seed", spawner.kills)
+	}
+}
+
+// A finished but live worker must release its slot, including during startup.
+// Closing the controller must succeed before another occurrence is dispatched.
+func TestFinishedScheduledWorkerReleasesNextRun(t *testing.T) {
+	for _, tc := range []struct {
+		name              string
+		ready             bool
+		activity          domain.ActivityState
+		kind              domain.SessionKind
+		closeErr, readErr error
+		reconcile         bool
+		wantComplete      bool
+	}{
+		{name: "finished worker", ready: true, activity: domain.ActivityIdle, kind: domain.KindWorker, wantComplete: true},
+		{name: "restart", ready: true, activity: domain.ActivityIdle, kind: domain.KindWorker, reconcile: true, wantComplete: true},
+		{name: "idle without completion", activity: domain.ActivityIdle, kind: domain.KindWorker},
+		{name: "working", ready: true, activity: domain.ActivityActive, kind: domain.KindWorker},
+		{name: "approval", ready: true, activity: domain.ActivityBlocked, kind: domain.KindWorker},
+		{name: "input", ready: true, activity: domain.ActivityWaitingInput, kind: domain.KindWorker},
+		{name: "orchestrator", ready: true, activity: domain.ActivityIdle, kind: domain.KindOrchestrator},
+		{name: "close failed", ready: true, activity: domain.ActivityIdle, kind: domain.KindWorker, closeErr: errors.New("close failed")},
+		{name: "read failed", activity: domain.ActivityIdle, kind: domain.KindWorker, readErr: errors.New("unavailable")},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			now := time.Date(2026, 10, 27, 3, 30, 0, 0, time.UTC)
+			store := newSchedulerStore()
+			store.ready, store.readyErr = tc.ready, tc.readErr
+			store.automations["a"] = domain.Automation{ID: "a", Enabled: true, NextRunAt: now.Add(24 * time.Hour)}
+			runID, sid := domain.AutomationRunID("first"), domain.SessionID("worker")
+			store.runs[runID] = domain.AutomationRun{ID: runID, AutomationID: "a", Status: domain.AutomationRunRunning, SessionID: &sid, ScheduledFor: now.Add(-5 * 24 * time.Hour)}
+			store.sessions[sid] = domain.SessionRecord{ID: sid, Kind: tc.kind, Activity: domain.Activity{State: tc.activity}, AutomationRunID: &runID}
+			for i := 1; i <= 5; i++ {
+				id := domain.AutomationRunID(string(rune('a' + i)))
+				store.runs[id] = domain.AutomationRun{ID: id, AutomationID: "a", Status: domain.AutomationRunPending, ScheduledFor: now.Add(time.Duration(i-5) * 24 * time.Hour)}
+			}
+			spawner := &recordingSpawner{store: store, killErr: tc.closeErr}
+			svc := New(Deps{Store: store, Spawner: spawner, Clock: func() time.Time { return now }})
+			var err error
+			if tc.reconcile {
+				err = svc.Reconcile(context.Background())
+			} else {
+				err = svc.Tick(context.Background(), now)
+			}
+			if (err != nil) != (tc.closeErr != nil || tc.readErr != nil) {
+				t.Fatalf("error=%v", err)
+			}
+			if (store.runs[runID].Status == domain.AutomationRunCompleted) != tc.wantComplete {
+				t.Fatalf("first run=%+v", store.runs[runID])
+			}
+			if tc.reconcile {
+				if err := svc.Tick(context.Background(), now); err != nil {
+					t.Fatal(err)
+				}
+			}
+			wantSpawns := 0
+			if tc.wantComplete {
+				wantSpawns = 1
+			}
+			if len(spawner.calls) != wantSpawns {
+				t.Fatalf("spawns=%d want=%d", len(spawner.calls), wantSpawns)
+			}
+			if tc.wantComplete {
+				if !store.sessions[sid].IsTerminated || len(spawner.kills) != 1 {
+					t.Fatal("session not closed before releasing run")
+				}
+				if got := store.runs[*spawner.calls[0].AutomationRunID].ScheduledFor; !got.Equal(now) {
+					t.Fatalf("dispatched stale occurrence: %s", got)
+				}
+			}
+			for _, run := range store.runs {
+				if run.ID != runID && run.ScheduledFor.Before(now) && (run.Status != domain.AutomationRunFailed || run.ErrorMessage == "" || run.AttemptCount != 0) {
+					t.Fatalf("stale run=%+v", run)
+				}
+			}
+		})
+	}
+}
+
+// A run without completion evidence stops blocking once a newer occurrence is
+// due, unless its agent is still working or waiting on the user. A worker's
+// session is left open. An orchestrator is closed only then, even after a
+// successful turn, because an idle one may still be waiting on its workers.
+func TestUnfinishedRunReleasesAtNextOccurrence(t *testing.T) {
+	for _, tc := range []struct {
+		name        string
+		kind        domain.SessionKind
+		activity    domain.ActivityState
+		ready       bool
+		newerDue    bool
+		closeErr    error
+		wantRelease domain.AutomationRunStatus
+	}{
+		{name: "idle", kind: domain.KindWorker, activity: domain.ActivityIdle, newerDue: true, wantRelease: domain.AutomationRunFailed},
+		{name: "agent exited", kind: domain.KindWorker, activity: domain.ActivityExited, newerDue: true, wantRelease: domain.AutomationRunFailed},
+		{name: "orchestrator finished", kind: domain.KindOrchestrator, activity: domain.ActivityIdle, ready: true, newerDue: true, wantRelease: domain.AutomationRunCompleted},
+		{name: "orchestrator unfinished", kind: domain.KindOrchestrator, activity: domain.ActivityIdle, newerDue: true, wantRelease: domain.AutomationRunFailed},
+		{name: "orchestrator before next occurrence", kind: domain.KindOrchestrator, activity: domain.ActivityIdle, ready: true},
+		{name: "orchestrator close failed", kind: domain.KindOrchestrator, activity: domain.ActivityIdle, ready: true, newerDue: true, closeErr: errors.New("close failed")},
+		{name: "no newer occurrence", kind: domain.KindWorker, activity: domain.ActivityIdle},
+		{name: "working", kind: domain.KindWorker, activity: domain.ActivityActive, newerDue: true},
+		{name: "waiting input", kind: domain.KindWorker, activity: domain.ActivityWaitingInput, newerDue: true},
+		{name: "approval", kind: domain.KindWorker, activity: domain.ActivityBlocked, newerDue: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			now := time.Date(2026, 11, 8, 3, 30, 0, 0, time.UTC)
+			yesterday := now.Add(-24 * time.Hour)
+			last := yesterday
+			store := newSchedulerStore()
+			store.ready = tc.ready
+			runID, sid := domain.AutomationRunID("yesterday"), domain.SessionID("worker")
+			store.runs[runID] = domain.AutomationRun{ID: runID, AutomationID: "a", Status: domain.AutomationRunRunning, SessionID: &sid, ScheduledFor: yesterday}
+			if tc.newerDue {
+				last = now
+				store.runs["today"] = domain.AutomationRun{ID: "today", AutomationID: "a", Status: domain.AutomationRunPending, ScheduledFor: now}
+			}
+			store.automations["a"] = domain.Automation{ID: "a", Enabled: true, LastRunAt: &last, NextRunAt: now.Add(24 * time.Hour)}
+			store.sessions[sid] = domain.SessionRecord{ID: sid, Kind: tc.kind, Activity: domain.Activity{State: tc.activity}, AutomationRunID: &runID}
+			spawner := &recordingSpawner{store: store, killErr: tc.closeErr}
+			svc := New(Deps{Store: store, Spawner: spawner, Clock: func() time.Time { return now }})
+			if err := svc.Tick(context.Background(), now); (err != nil) != (tc.closeErr != nil) {
+				t.Fatalf("error=%v", err)
+			}
+			got := store.runs[runID]
+			if tc.wantRelease == "" {
+				if got.Status != domain.AutomationRunRunning || len(spawner.calls) != 0 || store.sessions[sid].IsTerminated {
+					t.Fatalf("run=%+v spawns=%d kills=%v, want held with the session open", got, len(spawner.calls), spawner.kills)
+				}
+				return
+			}
+			if got.Status != tc.wantRelease || (got.Status == domain.AutomationRunFailed) != (got.ErrorMessage == "Did not finish before the next scheduled run") {
+				t.Fatalf("run=%+v, want %s", got, tc.wantRelease)
+			}
+			if closed := store.sessions[sid].IsTerminated; closed != (tc.kind == domain.KindOrchestrator) {
+				t.Fatalf("session closed=%v kills=%v", closed, spawner.kills)
+			}
+			if len(spawner.calls) != 1 || *spawner.calls[0].AutomationRunID != "today" {
+				t.Fatalf("spawns=%+v, want today's run", spawner.calls)
+			}
+		})
+	}
+}
+
+// A closed orchestrator is no longer idle, so its readiness is recorded before
+// the close. If the session ends but the close reports an error, the next pass
+// still fails an unfinished run instead of completing it.
+func TestInterruptedOrchestratorCloseKeepsRecordedOutcome(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		ready bool
+		want  domain.AutomationRunStatus
+	}{
+		{name: "unfinished", want: domain.AutomationRunFailed},
+		{name: "finished", ready: true, want: domain.AutomationRunCompleted},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			now := time.Date(2026, 11, 8, 3, 30, 0, 0, time.UTC)
+			yesterday := now.Add(-24 * time.Hour)
+			store := newSchedulerStore()
+			store.ready = tc.ready
+			runID, sid := domain.AutomationRunID("yesterday"), domain.SessionID("orchestrator")
+			store.runs[runID] = domain.AutomationRun{ID: runID, AutomationID: "a", Status: domain.AutomationRunRunning, SessionID: &sid, ScheduledFor: yesterday}
+			store.runs["today"] = domain.AutomationRun{ID: "today", AutomationID: "a", Status: domain.AutomationRunPending, ScheduledFor: now}
+			store.automations["a"] = domain.Automation{ID: "a", Enabled: true, LastRunAt: &now, NextRunAt: now.Add(24 * time.Hour)}
+			store.sessions[sid] = domain.SessionRecord{ID: sid, Kind: domain.KindOrchestrator, Activity: domain.Activity{State: domain.ActivityIdle}, AutomationRunID: &runID}
+			spawner := &recordingSpawner{store: store, killErr: errors.New("cleanup marker write failed")}
+			svc := New(Deps{Store: store, Spawner: spawner, Clock: func() time.Time { return now }})
+
+			if err := svc.Tick(context.Background(), now); err == nil {
+				t.Fatal("Tick succeeded, want the close error")
+			}
+			if got := store.runs[runID]; got.Status != domain.AutomationRunRunning || len(spawner.calls) != 0 {
+				t.Fatalf("run=%+v spawns=%d, want held until the session ends", got, len(spawner.calls))
+			}
+			// The kill ended the session even though it reported an error.
+			session := store.sessions[sid]
+			session.IsTerminated, session.Activity.State = true, domain.ActivityExited
+			store.sessions[sid] = session
+			spawner.killErr = nil
+
+			if err := svc.Tick(context.Background(), now); err != nil {
+				t.Fatal(err)
+			}
+			got := store.runs[runID]
+			if got.Status != tc.want || (got.Status == domain.AutomationRunFailed) != (got.ErrorMessage == unfinishedRunMessage) {
+				t.Fatalf("run=%+v, want %s", got, tc.want)
+			}
+			if len(spawner.calls) != 1 || *spawner.calls[0].AutomationRunID != "today" {
+				t.Fatalf("spawns=%+v, want today's run", spawner.calls)
+			}
+		})
 	}
 }

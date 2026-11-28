@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
@@ -27,15 +28,24 @@ func TestArtifactAddPostsPathsAndSummarises(t *testing.T) {
 	defer srv.Close()
 
 	writeRunFileFor(t, cfg, srv)
-	stdout, _, err := executeCLI(t, Deps{ProcessAlive: func(int) bool { return true }}, "artifact", "add", "brand.html")
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	workingDir := t.TempDir()
+	t.Chdir(workingDir)
+	stdout, _, err := executeCLI(t, Deps{ProcessAlive: func(int) bool { return true }}, "artifact", "add", "brand.html", "~/notes/plan.md")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if gotPath != "/api/v1/sessions/worker-1/artifact-registrations" {
 		t.Fatalf("path = %q", gotPath)
 	}
-	if !reflect.DeepEqual(got.Paths, []string{"brand.html"}) {
+	if !reflect.DeepEqual(got.Paths, []string{"brand.html", filepath.Join(home, "notes", "plan.md")}) {
 		t.Fatalf("paths = %v", got.Paths)
+	}
+	// The daemon decides whether this folder counts; the CLI only reports it.
+	if resolved, _ := filepath.EvalSymlinks(workingDir); got.WorkingDir != workingDir && got.WorkingDir != resolved {
+		t.Fatalf("workingDir = %q, want %q", got.WorkingDir, workingDir)
 	}
 	for _, want := range []string{
 		"Registered brand.html.",
@@ -71,5 +81,24 @@ func TestArtifactAddSummaryWithNothingElse(t *testing.T) {
 	got = artifactAddSummary(artifactRegisterResponse{Registered: []string{"a.md"}, OtherFiles: 1})
 	if !strings.Contains(got, "1 other file stays") {
 		t.Fatalf("summary = %q", got)
+	}
+}
+
+func TestExpandHome(t *testing.T) {
+	home := filepath.Join("/", "home", "jane")
+	for in, want := range map[string]string{
+		"~":                  home,
+		"~/report.html":      filepath.Join(home, "report.html"),
+		`~\report.html`:      filepath.Join(home, "report.html"),
+		"report.html":        "report.html",
+		"~jane/report.html":  "~jane/report.html",
+		"/abs/~/report.html": "/abs/~/report.html",
+	} {
+		if got := expandHome(in, home); got != want {
+			t.Errorf("expandHome(%q) = %q, want %q", in, got, want)
+		}
+	}
+	if got := expandHome("~/report.html", ""); got != "~/report.html" {
+		t.Errorf("without a home = %q", got)
 	}
 }

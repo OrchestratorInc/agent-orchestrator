@@ -10,7 +10,7 @@ import { lazy, memo, Suspense, type ComponentProps, type CSSProperties, type Rea
 import { FolderPlus } from "@/components/app-icons";
 import { motion, useReducedMotion } from "motion/react";
 import { useTranslation } from "react-i18next";
-import { SHELL_PANEL_SPRING } from "@/lib/motion-spring";
+import { shellPanelTransition } from "@/lib/motion-spring";
 import { MainViewVisibleContext } from "../lib/main-view-visibility";
 import { CommandPalette } from "../components/CommandPalette";
 import { useLatestCallback } from "../hooks/useStable";
@@ -25,19 +25,24 @@ import { TrayRuntime } from "../components/TrayRuntime";
 import { SharedWithYouNotifier } from "../components/teams/SharedWithYouNotifier";
 import { NewTaskNavigator } from "../components/NewTaskNavigator";
 import { FirstRunOnboarding } from "../components/onboarding/FirstRunOnboarding";
-import { GuidedTour } from "../components/onboarding/GuidedTour";
+import { projectDefaultsConfig, readProjectDefaults, remoteProjectDefaults, type ProjectDefaults } from "../lib/project-defaults";
+import { FirstTaskFunnel } from "../components/onboarding/FirstTaskFunnel";
 import { ArchiveModalHost } from "../components/ArchiveModalHost";
 import { GlobalToast } from "../components/GlobalToast";
+import { GlobalApprovalCard } from "../components/approvals/ApprovalHost";
 import { SettingsPane, SettingsProvider, useSettingsPage } from "../components/SettingsDialog";
 import { ShareLinkHost } from "../components/OpenShareLinkDialog";
 import { SharedArtifactLinkHost } from "../components/SharedArtifactLinkHost";
 import { KeyboardShortcutsDialog } from "../components/KeyboardShortcutsDialog";
 import { QuitConfirmDialog } from "../components/QuitConfirmDialog";
+import { ExitFeedbackPrompt } from "../components/ExitFeedbackPrompt";
 import { PageTopbar } from "../components/PageTopbar";
 import { SessionTopbarProvider } from "../components/SessionTopbarPortal";
 import { OrchestratorReplacementDialog } from "../components/OrchestratorReplacementDialog";
 import { RestartToUpdateDialog } from "../components/RestartToUpdateDialog";
 import { SessionImportDialog } from "../components/SessionImportDialog";
+import { MoveSessionDialog } from "../components/MoveSessionDialog";
+import { useFinishUnfinishedMoves } from "../lib/move-finish";
 import { Sidebar } from "../components/Sidebar";
 import type { CreateProjectInput } from "../components/CreateProjectFlow";
 import { useRemoteHosts } from "../hooks/useRemoteHosts";
@@ -72,6 +77,7 @@ import { ShellProvider } from "../lib/shell-context";
 import { restartProjectOrchestrator } from "../lib/restart-orchestrator";
 import { captureOrchestratorReplacementFailure } from "../lib/orchestrator-replacement-telemetry";
 import { applyDocumentTheme, applyDocumentThemeStyle } from "../lib/theme";
+import { applyNewDesktopUi, newDesktopUiEnabled } from "../lib/new-desktop-ui";
 import { applyWindowTranslucency } from "../lib/window-translucency";
 import { aoBridge } from "../lib/bridge";
 import { handleModifierLinkClick } from "../lib/external-link-policy";
@@ -184,6 +190,8 @@ function ShellLayoutWithSettings() {
 	return (
 		<SettingsProvider>
 			<ShellLayout />
+			{/* Outside ShellLayout, so an open prompt survives the startup readiness swap. */}
+			<ExitFeedbackPrompt />
 			{/* Outside ShellLayout, so links it holds survive every route and the
 			    startup loader that replaces the shell while the daemon restarts. */}
 			<SharedArtifactLinkHost />
@@ -276,12 +284,14 @@ type CreateProjectConfigInput = {
 	defaultBranch?: string;
 };
 
-export function createProjectConfig(input: CreateProjectConfigInput): components["schemas"]["ProjectConfig"] {
+/** `defaults`: how agents finish their work, as chosen in onboarding (project-defaults.ts). */
+export function createProjectConfig(input: CreateProjectConfigInput, defaults: ProjectDefaults | null = null): components["schemas"]["ProjectConfig"] {
 	return {
 		...(input.defaultBranch ? { defaultBranch: input.defaultBranch } : {}),
 		worker: { agent: input.workerAgent as components["schemas"]["RoleOverride"]["agent"] },
 		orchestrator: { agent: input.orchestratorAgent as components["schemas"]["RoleOverride"]["agent"] },
 		...(input.reviewerAgent ? { reviewers: [{ harness: input.reviewerAgent }] } : {}),
+		...projectDefaultsConfig(defaults, input.reviewerAgent),
 		...(input.trackerIntake ? { trackerIntake: input.trackerIntake } : {}),
 	};
 }
@@ -373,7 +383,15 @@ function ShellLayout() {
 	const settingsPage = useSettingsPage();
 	// One string, so a session switch (same kind of route) does not re-render the shell
 	// while the router loads; useMatchRoute would on every location and status change.
-	const routeKind = useRouterState({ select: (state) => shellRouteKind((state.resolvedLocation ?? state.location).pathname) });
+	const newDesktopUi = useUiStore(newDesktopUiEnabled);
+	// Interface v2 reads the rendered matches, the ones the Outlet and useParams
+	// show, so the shell's frame changes in the same commit as the page inside it.
+	// The resolved location lands a commit later, which painted a session's tabs
+	// for a frame in the bare, no-top-bar frame of the page it came from.
+	const routeKind = useRouterState({
+		select: (state) =>
+			shellRouteKind(newDesktopUi ? (state.matches.at(-1)?.pathname ?? state.location.pathname) : (state.resolvedLocation ?? state.location).pathname),
+	});
 	const queryClient = useQueryClient();
 	const { client: cloudClient } = useCloudCp();
 	const { org: cloudOrg } = useCloudOrg();
@@ -952,7 +970,7 @@ const replacementErrorCount = Object.keys(orchestratorReplacementErrors).length;
 					path: input.path,
 					asWorkspace: input.asWorkspace || undefined,
 					clonePreparationId: input.clonePreparationId,
-					config: createProjectConfig(input),
+					config: createProjectConfig(input, readProjectDefaults()),
 				},
 			}).catch((requestError: unknown) => {
 				reportFailure("REQUEST_FAILED");
@@ -1051,7 +1069,7 @@ const replacementErrorCount = Object.keys(orchestratorReplacementErrors).length;
 				body: {
 					remoteUrl: input.remoteUrl,
 					destinationParent: input.destinationParent,
-					config: createProjectConfig(input),
+					config: createProjectConfig(input, readProjectDefaults()),
 				},
 			}).catch((requestError: unknown) => {
 				// A clone the user cancelled is not a failure.
@@ -1102,7 +1120,7 @@ const replacementErrorCount = Object.keys(orchestratorReplacementErrors).length;
 			path: input.path,
 			asWorkspace: input.asWorkspace || undefined,
 			clonePreparationId: input.clonePreparationId,
-			config: createProjectConfig(input),
+			config: createProjectConfig(input, remoteProjectDefaults(readProjectDefaults())),
 		} });
 		let projectId = error ? undefined : data?.project.id;
 		if (input.clonePreparationId && apiErrorCode(error) === "PATH_ALREADY_REGISTERED") {
@@ -1372,6 +1390,9 @@ const replacementErrorCount = Object.keys(orchestratorReplacementErrors).length;
 		if (!isMac) return;
 		applyWindowTranslucency(windowTranslucent);
 	}, [windowTranslucent]);
+	useEffect(() => {
+		applyNewDesktopUi(newDesktopUi);
+	}, [newDesktopUi]);
 
 	// Follow OS appearance while the user keeps Theme on System — updates
 	// resolvedTheme (and thus React consumers) without writing light/dark to storage.
@@ -1697,11 +1718,14 @@ const replacementErrorCount = Object.keys(orchestratorReplacementErrors).length;
 				) : null}
 				<NewTaskNavigator />
 				<FirstRunOnboarding />
-				<GuidedTour />
+				<FirstTaskFunnel />
 				<ArchiveModalHost />
 				<GlobalToast />
+				{daemonStatus.state === "ready" ? <GlobalApprovalCard /> : null}
 				<RestartToUpdateDialog />
 				<SessionImportDialog />
+				<MoveSessionDialog />
+				<UnfinishedMoves />
 				{quitConfirmDialog}
 				<KeyboardShortcutsDialog
 					open={isKeyboardShortcutsOpen}
@@ -1832,7 +1856,7 @@ const replacementErrorCount = Object.keys(orchestratorReplacementErrors).length;
 								// so a var fallback wider than the sidebar would cover the panel.
 								style={sidebarWidthPx ? { width: sidebarWidthPx } : undefined}
 								initial={false}
-								transition={prefersReducedMotion ? { duration: 0 } : SHELL_PANEL_SPRING}
+								transition={prefersReducedMotion ? { duration: 0 } : shellPanelTransition(newDesktopUi)}
 							/>
 						</div>
 					) : null}
@@ -1875,4 +1899,10 @@ const replacementErrorCount = Object.keys(orchestratorReplacementErrors).length;
 			</AppBrowserLinkContext.Provider>
 		</ShellProvider>
 	);
+}
+
+/** Retries the last step of moves that failed after their session started elsewhere. */
+function UnfinishedMoves() {
+	useFinishUnfinishedMoves();
+	return null;
 }

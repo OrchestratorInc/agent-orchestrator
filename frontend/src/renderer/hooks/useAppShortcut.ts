@@ -1,5 +1,11 @@
 import { useEffect, useRef } from "react";
-import { matchesAppShortcut, shortcutYieldsToTerminal, type AppShortcutEvent, type AppShortcutId } from "../../shared/shortcuts";
+import {
+	matchedByUserOverride,
+	matchesAppShortcut,
+	shortcutYieldsToTerminal,
+	type AppShortcutEvent,
+	type AppShortcutId,
+} from "../../shared/shortcuts";
 import { aoBridge } from "../lib/bridge";
 import { queryShown } from "../lib/dom-selectors";
 import { isMacPlatform } from "../lib/platform";
@@ -93,7 +99,7 @@ export function useAppShortcut(
 	useEffect(() => {
 		if (!enabled) return;
 		const isMac = isMacPlatform();
-		const onKeyDown = (event: KeyboardEvent) => {
+		const onKeyDown = (event: KeyboardEvent, beforeTerminal = false) => {
 			if ((event.defaultPrevented && !claimedEvents.has(event)) || event.isComposing || event.repeat) return;
 			const chord = {
 				key: event.key,
@@ -107,16 +113,34 @@ export function useAppShortcut(
 			if (!matchesAppShortcut(id, chord, isMac, overrides)) return;
 			if (!shouldHandleRef.current()) return;
 			const target = event.target instanceof Element ? event.target : null;
-			if (!isMac && shortcutYieldsToTerminal(id, chord) && target?.closest(TERMINAL_SELECTOR)) return;
+			const userOverrode = matchedByUserOverride(id, chord, isMac, overrides);
+			// xterm consumes Ctrl+letter keydowns before they can bubble to the
+			// window. Claim a custom contextual Find here only when a chat can
+			// handle it. Defaults, IME and ineligible contexts still reach xterm.
+			if (beforeTerminal && (!userOverrode || !target?.closest(".xterm"))) return;
+			if (
+				!isMac &&
+				shortcutYieldsToTerminal(id, chord, userOverrode) &&
+				target?.closest(TERMINAL_SELECTOR)
+			) {
+				return;
+			}
 			// The chords main leaves to the page (find, add selection) and, with no
 			// main process, all of them. Counted once however many handlers claim it.
 			if (!claimedEvents.has(event)) uiUsage.shortcutUsed(id, "key");
 			claimedEvents.add(event);
 			event.preventDefault();
+			if (beforeTerminal) event.stopPropagation();
 			handlerRef.current(id === "jump-to-session" ? { id, index: Number(event.key) - 1 } : { id });
 		};
-		window.addEventListener("keydown", onKeyDown);
-		return () => window.removeEventListener("keydown", onKeyDown);
+		const bubble = (event: KeyboardEvent) => onKeyDown(event);
+		const capture = (event: KeyboardEvent) => onKeyDown(event, true);
+		window.addEventListener("keydown", bubble);
+		if (id === "find-in-chat") window.addEventListener("keydown", capture, true);
+		return () => {
+			window.removeEventListener("keydown", bubble);
+			if (id === "find-in-chat") window.removeEventListener("keydown", capture, true);
+		};
 	}, [id, enabled]);
 }
 

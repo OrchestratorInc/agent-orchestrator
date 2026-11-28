@@ -736,11 +736,16 @@ func TestRetryContinuesFromTheLatestUsageLimitedEvent(t *testing.T) {
 	assertContinuedEvent(t, h.conv.sentMessages()[2], `CI is failing on PR 12\n\nCI is failing on PR 13`)
 }
 
-func TestRetryRefusesAnEventTurnThatFailedForAnotherReason(t *testing.T) {
+func TestRetryResendsAnEventTurnThatFailedForAnotherReason(t *testing.T) {
 	h := newHarness(t)
 	source := failUsageLimitedEvent(t, h, "CI is failing on PR 12", "connection lost")
-	if _, err := h.svc.RetryTurn(context.Background(), testSession, source.ID); !errors.Is(err, chatsvc.ErrTurnNotRetryable) {
-		t.Fatalf("retry = %v, want ErrTurnNotRetryable", err)
+	if _, err := h.svc.RetryTurn(context.Background(), testSession, source.ID); err != nil {
+		t.Fatalf("retry = %v, want the event sent again", err)
+	}
+	// No limit refused it, so it is sent again as it was, not as a continue.
+	sent := h.conv.sentMessages()
+	if last := sent[len(sent)-1]; last.Text != "CI is failing on PR 12" || last.Continuation || last.Origin != domain.MessageOriginAutomation {
+		t.Fatalf("sent = %+v, want the event as it was", last)
 	}
 }
 

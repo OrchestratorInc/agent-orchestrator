@@ -33,6 +33,8 @@ type AppSettings struct {
 	// CommitAttribution is the Orchestrator attribution beta: new sessions
 	// credit Orchestrator on their commits and PRs.
 	CommitAttribution bool
+	// SkillSharing gives every agent the user's skills it does not load itself.
+	SkillSharing bool
 	// SessionRetentionDays is how long an archived session is kept before the
 	// daemon deletes it; 0 keeps it.
 	SessionRetentionDays int
@@ -58,6 +60,7 @@ func (s *Store) GetAppSettings(ctx context.Context) (AppSettings, error) {
 		VersionRefresh:       row.VersionRefresh,
 		ComputerUse:          row.ComputerUse,
 		CommitAttribution:    row.CommitAttribution,
+		SkillSharing:         row.SkillSharing,
 		SessionRetentionDays: int(row.SessionRetentionDays),
 		AccountHandoff:       row.AccountHandoff,
 		UpdatedAt:            row.UpdatedAt,
@@ -115,6 +118,19 @@ func (s *Store) SetCommitAttribution(ctx context.Context, enabled bool, now time
 		UpdatedAt:         now,
 	}); err != nil {
 		return fmt.Errorf("set commit attribution: %w", err)
+	}
+	return nil
+}
+
+// SetSkillSharing persists whether agents get the user's skills they miss.
+func (s *Store) SetSkillSharing(ctx context.Context, enabled bool, now time.Time) error {
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
+	if err := s.qw.SetSkillSharing(ctx, gen.SetSkillSharingParams{
+		SkillSharing: enabled,
+		UpdatedAt:    now,
+	}); err != nil {
+		return fmt.Errorf("set skill sharing: %w", err)
 	}
 	return nil
 }

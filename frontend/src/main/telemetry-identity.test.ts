@@ -26,6 +26,52 @@ describe("TelemetryIdentityController opt-out", () => {
 	});
 });
 
+describe("TelemetryIdentityController plan hand-off", () => {
+	it("posts a plan-only body, replays it to a restarted daemon, and stops on an older daemon's 400", async () => {
+		const { ctl, fetcher } = await controller();
+		const bodies = () => fetcher.mock.calls.map((call) => JSON.parse((call as unknown as [string, RequestInit])[1].body as string) as { plan: string; sequence: number });
+		await ctl.setPlan("pro");
+		await ctl.setPlan("pro");
+		expect(bodies().map((body) => body.plan)).toEqual(["pro"]);
+		ctl.invalidate();
+		await ctl.flush();
+		expect(bodies().map((body) => body.plan)).toEqual(["pro", "pro"]);
+		fetcher.mockResolvedValue(new Response(null, { status: 400 }));
+		await ctl.setPlan("free");
+		await ctl.flush();
+		expect(bodies().map((body) => body.plan)).toEqual(["pro", "pro", "free"]);
+		// A failed send is retried by the next setPlan with the same plan.
+		fetcher.mockResolvedValueOnce(new Response(null, { status: 500 }));
+		await ctl.setPlan("pro");
+		fetcher.mockResolvedValue(new Response(null, { status: 204 }));
+		await ctl.setPlan("pro");
+		await ctl.setPlan("pro");
+		expect(bodies().map((body) => body.plan)).toEqual(["pro", "pro", "free", "pro", "pro"]);
+		// Plan-only: never a cloudUserId; strictly increasing sequences.
+		expect(bodies().every((body) => !("cloudUserId" in body))).toBe(true);
+		const sequences = bodies().map((body) => body.sequence);
+		expect(sequences).toEqual([...sequences].sort((a, b) => a - b));
+		expect(new Set(sequences).size).toBe(5);
+	});
+});
+
+describe("TelemetryIdentityController plan hand-off across a daemon restart", () => {
+	it("ignores a late acknowledgment from a daemon that left ready", async () => {
+		let answer: (response: Response) => void = () => undefined;
+		const fetcher = vi.fn(() => new Promise<Response>((resolve) => { answer = resolve; }));
+		const { ctl } = await controller(fetcher as never);
+		const pending = ctl.setPlan("pro");
+		await vi.waitFor(() => expect(fetcher).toHaveBeenCalledTimes(1));
+		ctl.invalidate();
+		answer(new Response(null, { status: 204 }));
+		await pending;
+		const replay = ctl.flush();
+		await vi.waitFor(() => expect(fetcher).toHaveBeenCalledTimes(2));
+		answer(new Response(null, { status: 204 }));
+		await replay;
+	});
+});
+
 describe("TelemetryIdentityController cloud user hand-off", () => {
 	it("does not send a launch-time sign-out before the renderer resolves its session", async () => {
 		const { ctl, fetcher } = await controller();

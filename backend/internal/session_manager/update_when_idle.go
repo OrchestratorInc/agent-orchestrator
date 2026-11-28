@@ -117,7 +117,7 @@ func (m *Manager) SessionRuntimeEnv(ctx context.Context, rec domain.SessionRecor
 	if err != nil {
 		return nil, err
 	}
-	return m.runtimeEnvForHarness(rec.ID, rec.ProjectID, rec.IssueID, project.Config.Env, rec.Harness), nil
+	return m.runtimeEnvForHarness(rec.ID, rec.ProjectID, rec.IssueID, project.Config.Env, rec.Harness)
 }
 
 // terminalResumesNatively reports whether a terminal stopped for an update
@@ -141,7 +141,10 @@ func (m *Manager) terminalResumesNatively(ctx context.Context, rec domain.Sessio
 	// Adapters that look the conversation up through the CLI need the
 	// session's environment: a project-level credential or profile reaches the
 	// session, not the daemon. No browser capability is issued for a probe.
-	probeEnv := m.runtimeEnvForHarness(rec.ID, rec.ProjectID, rec.IssueID, project.Config.Env, rec.Harness)
+	probeEnv, err := m.runtimeEnvForHarness(rec.ID, rec.ProjectID, rec.IssueID, project.Config.Env, rec.Harness)
+	if err != nil {
+		return false
+	}
 	_, ok, err = agent.GetRestoreCommand(ctx, ports.RestoreConfig{
 		Session: ref, Kind: rec.Kind, DataDir: m.dataDir, Config: agentConfig, Permissions: agentConfig.Permissions,
 		Env: probeEnv,
@@ -198,7 +201,7 @@ func (m *Manager) stopForUpdate(ctx context.Context, rec domain.SessionRecord) (
 		}
 		stopped, err := hibernator.HibernateChatForUpdate(ctx, rec.ID)
 		if err != nil {
-			return false, err
+			return stopped, err
 		}
 		if !stopped {
 			return false, errors.New("chat has work in progress")
@@ -219,13 +222,22 @@ func (m *Manager) stopForUpdate(ctx context.Context, rec domain.SessionRecord) (
 	// recorded as released before the runtime goes, so the reaper never reads
 	// the dead runtime as a crash and terminates the session while the update
 	// installs.
+	moveRecorded, stopAttempted := false, false
+	if err == nil {
+		err = m.beginVersionMove(ctx, current)
+		moveRecorded = err == nil
+	}
 	if err == nil {
 		err = m.releaseTerminalRuntime(ctx, current)
 	}
 	if err == nil {
+		stopAttempted = true
 		err = m.stopSourceControllerConclusive(current)
 	}
 	if err != nil {
+		if moveRecorded {
+			err = errors.Join(err, m.cancelUnstartedVersionMove(ctx, current, stopAttempted))
+		}
 		if releaseInput != nil {
 			releaseInput()
 		}
@@ -239,7 +251,7 @@ func (m *Manager) stopForUpdate(ctx context.Context, rec domain.SessionRecord) (
 	if err := m.recordAgentExited(ctx, current); err != nil {
 		return true, fmt.Errorf("record exit: %w", err)
 	}
-	return true, nil
+	return true, m.versionMoveStage(ctx, rec.ID, domain.VersionMoveRetry)
 }
 
 // ResumeHarnessSessions starts sessions stopped for an update again on the
@@ -253,6 +265,8 @@ func (m *Manager) ResumeHarnessSessions(ctx context.Context, ids []domain.Sessio
 			m.versionRetries.note(id)
 			m.logger.Warn("could not resume a session after a harness update; retrying", "sessionID", id, "error", err)
 			errs = append(errs, fmt.Errorf("resume %s after update: %w", id, err))
+		} else if err := m.completeVersionMove(ctx, id); err != nil {
+			errs = append(errs, err)
 		}
 	}
 	return errors.Join(errs...)

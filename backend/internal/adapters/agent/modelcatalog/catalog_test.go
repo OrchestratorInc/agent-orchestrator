@@ -4,9 +4,12 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"strconv"
 	"strings"
 	"testing"
@@ -20,11 +23,18 @@ func TestModelCommandUsesProjectWorkingDirectory(t *testing.T) {
 	if cmd.Dir != "/work/project" {
 		t.Fatalf("Dir = %q, want /work/project", cmd.Dir)
 	}
-	if cmd.WaitDelay != commandTerminationWait {
-		t.Fatalf("WaitDelay = %s, want %s", cmd.WaitDelay, commandTerminationWait)
+	if cmd.WaitDelay != 5*time.Second {
+		t.Fatalf("WaitDelay = %s, want 5s", cmd.WaitDelay)
 	}
 	if !environmentContains(cmd.Env, "OPENCODE_CONFIG=/project/opencode.json") {
 		t.Fatalf("Env does not contain project override: %#v", cmd.Env)
+	}
+}
+
+func TestModelCommandKeepsInterruptGraceShort(t *testing.T) {
+	cmd := commandSpecs["minimax-code"].command(context.Background(), "agent", "/work/project", nil)
+	if cmd.WaitDelay != 2*time.Second {
+		t.Fatalf("interrupt grace = %s, want 2s", cmd.WaitDelay)
 	}
 }
 
@@ -191,6 +201,105 @@ func TestModelDiscoveryErrorExplainsTimeout(t *testing.T) {
 	err := modelDiscoveryError(deadlineCtx, "kilocode", errors.New("signal: killed"), nil)
 	if !strings.Contains(err.Error(), "kilocode model discovery timed out after 20s") {
 		t.Fatalf("error = %q, want clear timeout", err)
+	}
+}
+
+func TestModelDiscoveryErrorExplainsWaitDelay(t *testing.T) {
+	for _, cause := range []error{exec.ErrWaitDelay, fmt.Errorf("command wrapper: %w", exec.ErrWaitDelay)} {
+		err := modelDiscoveryError(context.Background(), "agy", cause, []byte("\x1b[33mCLI diagnostic\x1b[0m\n"))
+		for _, want := range []string{"agy", "background process", "Retry model refresh"} {
+			if !strings.Contains(err.Error(), want) {
+				t.Errorf("error = %q, want %q", err, want)
+			}
+		}
+		if strings.Contains(err.Error(), exec.ErrWaitDelay.Error()) {
+			t.Errorf("error = %q, want raw Go sentinel hidden", err)
+		}
+		if !errors.Is(err, exec.ErrWaitDelay) || !errors.Is(err, cause) {
+			t.Errorf("error = %v, want original cause preserved", err)
+		}
+		if diagnostic := errors.Unwrap(err); diagnostic == nil || !strings.Contains(diagnostic.Error(), "CLI diagnostic") {
+			t.Errorf("unwrapped error = %v, want command output retained for diagnostics", diagnostic)
+		}
+	}
+}
+
+func TestModelDiscoveryContextErrorsTakePrecedenceOverWaitDelay(t *testing.T) {
+	deadlineCtx, deadlineCancel := context.WithDeadline(context.Background(), time.Now().Add(-time.Second))
+	defer deadlineCancel()
+	canceledCtx, cancel := context.WithCancel(context.Background())
+	cancel()
+	for _, tc := range []struct {
+		ctx  context.Context
+		want string
+	}{
+		{deadlineCtx, "agy model discovery timed out after 20s"},
+		{canceledCtx, "agy model discovery canceled"},
+	} {
+		err := modelDiscoveryError(tc.ctx, "agy", exec.ErrWaitDelay, nil)
+		if !strings.Contains(err.Error(), tc.want) {
+			t.Errorf("error = %q, want %q", err, tc.want)
+		}
+		if tc.ctx == canceledCtx && !errors.Is(err, context.Canceled) {
+			t.Errorf("error = %v, want cancellation identity preserved", err)
+		}
+	}
+}
+
+func TestDiscoverWaitsForShortLivedDescendant(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("fixture requires a POSIX shell")
+	}
+	dir := t.TempDir()
+	binary := filepath.Join(dir, "fake-agy")
+	// The child outlives the old 2s drain wait but exits within the new 5s wait.
+	script := "#!/bin/sh\nsleep 3 &\nprintf 'gemini-3.7-flash-high  Gemini 3.7 Flash (High)\\n'\nexit 0\n"
+	if err := os.WriteFile(binary, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	catalog, err := (Discoverer{}).Discover(context.Background(), ports.AgentModelDiscoveryRequest{
+		AgentID: "agy", Binary: binary, WorkingDir: dir,
+	})
+	if err != nil {
+		t.Fatalf("Discover: %v", err)
+	}
+	if len(catalog.Models) != 1 || catalog.Models[0].ID != "gemini-3.7-flash-high" {
+		t.Fatalf("models = %#v, want the discovered model", catalog.Models)
+	}
+}
+
+func TestDiscoverExplainsPipeHoldingDescendant(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("fixture requires a POSIX shell")
+	}
+	dir := t.TempDir()
+	binary := filepath.Join(dir, "fake-agy")
+	// Keep the pipe open beyond WaitDelay, then explicitly clean up the child.
+	script := "#!/bin/sh\nsleep 30 &\nprintf '%s' \"$!\" > child.pid\nexit 0\n"
+	if err := os.WriteFile(binary, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		data, err := os.ReadFile(filepath.Join(dir, "child.pid"))
+		if err != nil {
+			return
+		}
+		pid, err := strconv.Atoi(string(data))
+		if err != nil || pid <= 0 {
+			return
+		}
+		if child, err := os.FindProcess(pid); err == nil {
+			_ = child.Kill()
+		}
+	})
+	_, err := (Discoverer{}).Discover(context.Background(), ports.AgentModelDiscoveryRequest{
+		AgentID: "agy", Binary: binary, WorkingDir: dir,
+	})
+	if !errors.Is(err, exec.ErrWaitDelay) {
+		t.Fatalf("Discover error = %v, want preserved WaitDelay diagnostic", err)
+	}
+	if !strings.Contains(err.Error(), "Retry model refresh") || strings.Contains(err.Error(), exec.ErrWaitDelay.Error()) {
+		t.Fatalf("Discover error = %q, want actionable warning without Go sentinel", err)
 	}
 }
 
@@ -1609,5 +1718,64 @@ func TestModelDiscoveryErrorNamesACrashedCLIsError(t *testing.T) {
 		"    at Module.require (node:internal/modules/cjs/loader:1311:19)\n"
 	if detail := discoveryErrorDetail([]byte(output)); detail != "Error: Cannot find module 'tree-sitter'" {
 		t.Fatalf("detail = %q, want the error line", detail)
+	}
+}
+
+// Fireworks model IDs are resource names. A model of the shared "fireworks"
+// account is labelled with its own name; another account's deployment keeps the
+// account, so it does not read as the shared one. The ID, which selects the
+// model, is unchanged. Other nested names carry a vendor that is part of the
+// name, so they stay as they are.
+func TestParseProviderIDLinesLabelsAccountModelResourcePaths(t *testing.T) {
+	t.Parallel()
+	models, err := parseProviderIDLines([]byte(strings.Join([]string{
+		"fireworks/accounts/fireworks/models/deepseek-v4-pro",
+		"fireworks/accounts/myteam/models/deepseek-v4-pro",
+		"openrouter/anthropic/claude-sonnet",
+		"openai/gpt-5",
+	}, "\n")))
+	if err != nil {
+		t.Fatalf("parseProviderIDLines() error = %v", err)
+	}
+	got := map[string]string{}
+	for _, model := range models {
+		got[model.ID] = model.Provider + " | " + model.Label
+	}
+	want := map[string]string{
+		"fireworks/accounts/fireworks/models/deepseek-v4-pro": "fireworks | deepseek-v4-pro",
+		"fireworks/accounts/myteam/models/deepseek-v4-pro":    "fireworks | myteam/deepseek-v4-pro",
+		"openrouter/anthropic/claude-sonnet":                  "openrouter | anthropic/claude-sonnet",
+		"openai/gpt-5":                                        "openai | gpt-5",
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("labels = %v, want %v", got, want)
+	}
+}
+
+// A cached catalog keeps its old labels until its fingerprint changes, so every
+// agent whose list goes through splitProviderID needs a schema version.
+func TestResourcePathLabelsInvalidateCachedCatalogs(t *testing.T) {
+	t.Parallel()
+	for _, agentID := range []string{"aider", "crush", "kilocode", "mimo-code", "opencode", "opencode-v2"} {
+		if catalogSchemaVersions[agentID] == "" {
+			t.Errorf("%s has no catalog schema version; cached labels would never refresh", agentID)
+		}
+	}
+}
+
+// normalize reads a label of "default" as the default-model marker. A resource
+// path whose model happens to be named "default" is a real model, so it keeps
+// its path as the label and is not marked as the default.
+func TestResourcePathModelNamedDefaultIsNotTheDefaultMarker(t *testing.T) {
+	t.Parallel()
+	models, err := parseMiMoModels([]byte("fireworks/accounts/fireworks/models/default — Custom deployment"))
+	if err != nil {
+		t.Fatalf("parseMiMoModels() error = %v", err)
+	}
+	if len(models) != 1 {
+		t.Fatalf("models = %+v, want one", models)
+	}
+	if got := models[0]; got.Label != "accounts/fireworks/models/default" || got.IsDefault {
+		t.Fatalf("model = %+v, want the path as its label and not the default", got)
 	}
 }
