@@ -211,8 +211,8 @@ async function waitFor(label, timeoutMs, check) {
 }
 
 // seedUpdateSettings writes update-settings.json before first launch.
-// ensureUpdatePrefs only shows its first-run dialog when no settings file
-// exists, so pre-seeding is what makes the whole flow non-interactive. Shape
+// Without it, ensureUpdatePrefs saves first-run defaults on the build's own
+// channel, so pre-seeding is what picks the channel this run tests. Shape
 // must match UpdateSettings in src/main/update-settings.ts.
 //
 // settingsDir must be opts.settingsDir, i.e. dirname(AO_RUN_FILE), because that

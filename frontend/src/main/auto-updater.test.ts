@@ -4620,18 +4620,18 @@ describe("channel downgrade safety", () => {
     expect(h.module.getUpdateStatus().state).toBe("not-available");
   });
 
-  it("silently saves Stable with automatic downloads off on a first-run stable install", async () => {
+  it("silently saves Stable with automatic downloads on for a first-run stable install", async () => {
     const h = await importAutoUpdater(stable, { version: "0.13.0" });
     await h.module.ensureUpdatePrefs(stateDir);
     expect(h.dialog.showMessageBox).not.toHaveBeenCalled();
-    expect(h.writeUpdateSettings).toHaveBeenCalledWith(stateDir, stable);
+    expect(h.writeUpdateSettings).toHaveBeenCalledWith(stateDir, { ...stable, enabled: true });
   });
 
-  it("silently keeps a first-run nightly install on Nightly with automatic downloads off", async () => {
+  it("silently keeps a first-run nightly install on Nightly with automatic downloads on", async () => {
     const h = await importAutoUpdater(stable, { version: running });
     await h.module.ensureUpdatePrefs(stateDir);
     expect(h.dialog.showMessageBox).not.toHaveBeenCalled();
-    expect(h.writeUpdateSettings).toHaveBeenCalledWith(stateDir, nightly);
+    expect(h.writeUpdateSettings).toHaveBeenCalledWith(stateDir, { ...nightly, enabled: true });
   });
 
   it("preserves existing explicit stable preferences on a nightly install", async () => {

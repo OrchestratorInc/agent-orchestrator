@@ -3269,14 +3269,14 @@ async function prepareRememberedNonDarwinUpdate(): Promise<void> {
 }
 
 // ensureUpdatePrefs writes the first-run defaults once, without asking, when no
-// settings file exists: automatic downloads off, Stable channel. Both are changed
+// settings file exists: automatic downloads on, Stable channel. Both are changed
 // in Settings > Updates. A Nightly build stays on Nightly so it is never offered
 // Stable behind the user's back (#4954). Saved settings are never touched.
 export async function ensureUpdatePrefs(stateDir: string): Promise<void> {
   if (existsSync(path.join(stateDir, UPDATE_SETTINGS_FILE_NAME))) return;
   const installedNightly = installedUpdateChannel() === "nightly";
   await writeUpdateSettings(stateDir, {
-    enabled: false,
+    enabled: true,
     channel: installedNightly ? "nightly" : "latest",
     nightlyAck: installedNightly,
     feature: null,
