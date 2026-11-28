@@ -1,0 +1,23 @@
+cortex acp serve
+
+Start Cortex Code as an ACP agent (stdio transport)
+
+Options:
+      --help                       Show help                           [boolean]
+  -c, --connection                 Snowflake connection name            [string]
+      --bypass                     Auto-approve all tool calls
+                                                      [boolean] [default: false]
+  -m, --model                      Model override                       [string]
+  -w, --workdir                    Working directory          [string] [default:
+            "<audit-checkout>"]
+      --plugin-dir                 Plugin directory or GitHub repo (owner/repo,
+                                   owner/repo#branch, or URL). Can be repeated.
+                                                                         [array]
+      --only-explicit-plugins      Load only --plugin-dir plugins and skip
+                                   ambient plugins and plugin auto-update
+                                                      [boolean] [default: false]
+      --only-explicit-skills       Load only project, bundled, profile, session,
+                                   and plugin skills  [boolean] [default: false]
+      --only-explicit-mcp-servers  Load only explicitly-provided MCP servers and
+                                   skip ambient user MCP config
+                                                      [boolean] [default: false]
