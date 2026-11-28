@@ -1003,6 +1003,8 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 	);
 });
 
+const HOST_REFUSALS = new Set(["BAD_PASSWORD", "HOST_API_INCOMPATIBLE", "DEVICE_REVOKED", "DEVICE_CREDENTIAL_REQUIRED"]);
+
 function whenSessionRecovered(queryClient: QueryClient, held: WorkspaceSession, hostId?: string): Promise<void> {
 	const workspacesKey = workspaceQueryKeyForHost(hostId);
 	const directKey = ["session", held.id];
@@ -1013,8 +1015,7 @@ function whenSessionRecovered(queryClient: QueryClient, held: WorkspaceSession, 
 	const cached = () => listed() ?? (hostId ? undefined : queryClient.getQueryData<WorkspaceSession>(directKey));
 	const refusal = () => {
 		const hostError = hostId ? queryClient.getQueryState(workspacesKey)?.error : undefined;
-		const hostCode = apiErrorCode(hostError);
-		if (hostCode === "BAD_PASSWORD" || hostCode === "HOST_API_INCOMPATIBLE") {
+		if (HOST_REFUSALS.has(apiErrorCode(hostError) ?? "")) {
 			return new AoError("CHAT_CONTROLLER_NOT_READY", apiErrorMessage(hostError, "The host no longer accepts this computer, so the message was not sent."));
 		}
 		const session = cached();

@@ -640,7 +640,7 @@ describe("SessionChatSurface startup check", () => {
 		expect(conversationCommandState.send).toHaveBeenCalledWith(expect.objectContaining({ continuation: true }), expect.any(Promise));
 	});
 
-	it("hands the message back when the remote host stops accepting this device", async () => {
+	it.each(["BAD_PASSWORD", "DEVICE_REVOKED"])("hands the message back when the remote host refuses this device with %s", async (code) => {
 		vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
 		try {
 			conversationState.snapshot = { ...snapshotFor(session.id), controller: { state: "stopped" } };
@@ -648,7 +648,7 @@ describe("SessionChatSurface startup check", () => {
 			const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
 			let refused = false;
 			const read = vi.fn(async () => {
-				if (refused) throw { code: "BAD_PASSWORD", message: "This computer is no longer paired." };
+				if (refused) throw { code, message: "This computer is no longer paired." };
 				return [{ id: session.workspaceId, sessions: [checking] }];
 			});
 			await client.prefetchQuery({ queryKey: ["remote-workspaces", "h_air"], queryFn: read });
