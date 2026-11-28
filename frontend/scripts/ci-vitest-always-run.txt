@@ -5,6 +5,7 @@ src/renderer/i18n/renderer-coverage.test.ts
 src/browser-extension/manifest.test.ts
 src/main/cloud-share.test.ts
 src/main/daemon-auto-restart.integration.test.ts
+src/main/desktop-quit.integration.test.ts
 src/main/sentry-main.test.ts
 src/main/browser-profile-store.test.ts
 src/main/auto-updater.test.ts

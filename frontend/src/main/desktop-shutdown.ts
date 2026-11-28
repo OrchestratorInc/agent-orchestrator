@@ -6,6 +6,8 @@ export async function requestDesktopShutdown(options: {
 	appRunId: string;
 	status: DaemonStatus;
 	preserveAgents(): boolean;
+	/** True once this quit was canceled (the window kept itself open): send nothing. */
+	canceled?(): boolean;
 	readRunInfo(): Promise<RunFileInfo | null>;
 	requestShutdown(port: number, body: { stopAgents: boolean; appRunId: string }): Promise<{ ok: boolean; status: number }>;
 }): Promise<boolean> {
@@ -18,6 +20,9 @@ export async function requestDesktopShutdown(options: {
 	if (!info.appRunId || info.appRunId !== options.appRunId) {
 		throw new Error("Daemon app ownership changed before desktop quit");
 	}
+	// The ownership read is async: the person may have declined the quit
+	// meanwhile, and stopAgents would then reflect a quit that is not happening.
+	if (options.canceled?.()) return false;
 	const response = await options.requestShutdown(info.port, {
 		stopAgents: !options.preserveAgents(),
 		appRunId: options.appRunId,

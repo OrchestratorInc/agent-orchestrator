@@ -60,4 +60,23 @@ describe("desktop daemon shutdown", () => {
 		options.requestShutdown.mockResolvedValue({ ok: false, status: 409 });
 		await expect(requestDesktopShutdown(options)).rejects.toThrow("HTTP 409");
 	});
+
+	it("sends nothing when the quit is canceled during the ownership read", async () => {
+		const options = setup();
+		let canceled = false;
+		options.readRunInfo.mockImplementation(async () => {
+			canceled = true;
+			return { pid: 123, port: 3002, startedAtMs: 0, owner: "app", appRunId: "run-1" };
+		});
+		expect(await requestDesktopShutdown({ ...options, canceled: () => canceled })).toBe(false);
+		expect(options.requestShutdown).not.toHaveBeenCalled();
+		expect(options.preserveAgents).not.toHaveBeenCalled();
+	});
+
+	it("still keeps agents for an outside quit that is not canceled", async () => {
+		const options = setup();
+		options.preserveAgents.mockReturnValue(true);
+		expect(await requestDesktopShutdown({ ...options, canceled: () => false })).toBe(true);
+		expect(options.requestShutdown).toHaveBeenCalledWith(3002, { stopAgents: false, appRunId: "run-1" });
+	});
 });

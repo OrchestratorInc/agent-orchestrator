@@ -530,6 +530,15 @@ let browserQuitRequested = false;
 let preserveAgentsOnQuit = false;
 let agentQuitCleanupComplete = false;
 let agentQuitCleanupPromise: Promise<void> | null = null;
+// Bumped whenever a pending quit is canceled, so an in-flight quit cleanup can
+// tell it no longer applies (see the before-quit handler).
+let quitAttempt = 0;
+function cancelPendingQuit(): void {
+	quitAttempt += 1;
+	preserveAgentsOnQuit = false;
+	// A later quit starts its own cleanup instead of waiting on the canceled one.
+	agentQuitCleanupPromise = null;
+}
 let desktopAgentShutdownAccepted = false;
 let createWindowPromise: Promise<void> | null = null;
 const desktopQuit = createDesktopQuitController({
@@ -551,6 +560,13 @@ const desktopQuit = createDesktopQuitController({
 	},
 	hideDock: () => app.dock?.hide(),
 	quit: () => app.quit(),
+	// An outside quit keeps agents, like an update restart: nothing asked to
+	// stop them.
+	externalQuitStarted: () => { preserveAgentsOnQuit = true; },
+	exit: () => {
+		console.warn("AO: quit cleanup exceeded the outside-quit deadline; exiting");
+		app.exit(0);
+	},
 });
 // macOS app menu Quit. ⌘Q asks the shell to confirm; with no visible window
 // there is nowhere to show the dialog, so the shortcut quits directly.
@@ -572,7 +588,7 @@ const quitConfirm = createQuitConfirmController({
 		};
 		shell?.send(QUIT_CONFIRM_REQUEST_CHANNEL, request);
 	},
-	quit: () => app.quit(),
+	quit: () => desktopQuit.backgroundQuit(),
 });
 // First-day exit feedback (docs/telemetry.md, "Exit feedback prompt"). The
 // facts are kept ready while the app runs; a quit only reads memory.
@@ -1401,7 +1417,7 @@ async function createWindowInternal(): Promise<void> {
 		}
 		// Doing nothing honors the renderer's request to stay, so a quit's close
 		// did not happen and AO keeps its Dock icon.
-		desktopQuit.windowCloseCanceled();
+		if (desktopQuit.windowCloseCanceled()) cancelPendingQuit();
 	});
 
 	mainWindow.on("close", (event) => {
@@ -1412,7 +1428,7 @@ async function createWindowInternal(): Promise<void> {
 			chatDraftDialog,
 		);
 		if (preventClose) {
-			desktopQuit.windowCloseCanceled();
+			if (desktopQuit.windowCloseCanceled()) cancelPendingQuit();
 			event.preventDefault();
 			return;
 		}
@@ -3284,8 +3300,9 @@ function scheduleDaemonAutoRestart(
 	}, plan.delayMs);
 }
 
-async function shutdownDaemonForDesktopQuit(): Promise<void> {
+async function shutdownDaemonForDesktopQuit(canceled: () => boolean): Promise<void> {
 	const accepted = await requestDesktopShutdown({
+		canceled,
 		keepAlive: keepDaemonAlive(process.env),
 		appRunId,
 		status: daemonStatus,
@@ -3841,7 +3858,7 @@ ipcMain.handle("menu:action", (event, action: string) => {
 		case "window.close":
 			return win.close();
 		case "app.quit":
-			return app.quit();
+			return desktopQuit.backgroundQuit();
 		case "help.shortcuts":
 			shell?.focus();
 			return shell?.send(KEYBOARD_SHORTCUTS_HELP_CHANNEL);
@@ -5280,9 +5297,10 @@ app.whenReady().then(async () => {
 
 // Daemon teardown is now handled via the OS-native supervisor socket: the daemon
 // self-stops ~5s after the last client (this process) drops its connection.
-// Ordinary macOS Quit closes the window and leaves the Dock; the tray stays.
-// Full exit drops the supervisor socket, stopping the app-owned daemon after
-// its grace period and stopping agents. Planned updates explicitly detach.
+// On macOS with the tray, Orchestrator's own Quit backgrounds the app and an
+// outside quit exits it (see createDesktopQuitController). Full exit drops the
+// supervisor socket, stopping the app-owned daemon after its grace period and
+// stopping agents. Planned updates explicitly detach.
 setUpdateRestartFailureHandler(() => {
 	if (!browserQuitRequested) focusMainWindow();
 });
@@ -5293,8 +5311,11 @@ app.on("before-quit", (event) => {
 	// update restart, a shutdown or a forced quit was bypassed before this. An
 	// unsafe chat draft asks first, so a cancelled quit never spends the prompt;
 	// once confirmed, the re-entered quit reaches the gate.
+	// An outside quit (Apple Event, Homebrew, SIGTERM) is never held. A held
+	// in-app Quit resumes as one, so it still only hides to the tray.
 	const chatDraftConfirmPending = chatDraftRisks.length > 0 && !chatDraftQuitConfirmed;
-	if (!chatDraftConfirmPending && exitFeedbackGate.intercept(() => app.quit())) {
+	const resumeQuit = desktopQuit.isBackgroundQuit() ? () => desktopQuit.backgroundQuit() : () => app.quit();
+	if (!chatDraftConfirmPending && !desktopQuit.isOutsideQuit() && exitFeedbackGate.intercept(resumeQuit)) {
 		event.preventDefault();
 		return;
 	}
@@ -5313,13 +5334,14 @@ app.on("before-quit", (event) => {
 			chatDraftQuitConfirmed = true;
 			app.quit();
 		} else {
-			preserveAgentsOnQuit = false;
+			cancelPendingQuit();
 			clearUpdateRestartRequest();
 			desktopQuit.cancelQuit();
 			exitFeedbackGate.reset();
 		}
 		return;
 	}
+	desktopQuit.startCleanupDeadline();
 	if (!agentQuitCleanupComplete) {
 		event.preventDefault();
 		// Quit has started: a pending crash respawn must not race the agent
@@ -5329,15 +5351,23 @@ app.on("before-quit", (event) => {
 			// Fail open: a crashed, hung, or taken-over daemon must never block
 			// quit or an update restart. Dropping the supervisor link and the exit
 			// handler still clean up an app-owned daemon.
-			agentQuitCleanupPromise = shutdownDaemonForDesktopQuit()
+			const attempt = quitAttempt;
+			const canceled = () => attempt !== quitAttempt;
+			const cleanup: Promise<void> = shutdownDaemonForDesktopQuit(canceled)
 				.catch((error) => {
 					console.error("AO: daemon shutdown on desktop quit failed; quitting anyway", error);
 				})
 				.then(() => {
+					if (agentQuitCleanupPromise === cleanup) agentQuitCleanupPromise = null;
+					// A quit the person declined meanwhile must not finish.
+					if (canceled()) {
+						lifecycleLog("daemon_quit_shutdown_canceled");
+						return;
+					}
 					agentQuitCleanupComplete = true;
-					agentQuitCleanupPromise = null;
 					app.quit();
 				});
+			agentQuitCleanupPromise = cleanup;
 		}
 		return;
 	}
