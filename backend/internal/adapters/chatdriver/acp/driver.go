@@ -1058,24 +1058,7 @@ func (d *Driver) initialize(
 			Version: "0.1.0",
 		},
 		ClientCapabilities: acpsdk.ClientCapabilities{
-			// These two Claude bridge extensions enrich the transcript. They do
-			// not grant the agent access to AO's terminal or filesystem APIs.
-			Meta: map[string]any{
-				// Cursor reports a model's effort, thinking and speed as their own
-				// settings only to a client that asks. Other agents ignore it.
-				"parameterizedModelPicker": true,
-				"subagent-transcript":      true,
-				"terminal_output":          true,
-				// claude-agent-acp publishes retryable API/transport failures only
-				// when the client opts into this namespaced metadata extension. It is
-				// observational: AO receives status, but grants no new capability.
-				"jetbrains": map[string]any{
-					"air": map[string]any{
-						"version":      1,
-						"capabilities": airCapabilities,
-					},
-				},
-			},
+			Meta: clientCapabilityMeta(d.cfg.Harness, airCapabilities),
 			Elicitation: &acpsdk.ElicitationCapabilities{
 				Form: &acpsdk.ElicitationFormCapabilities{},
 				Url:  &acpsdk.ElicitationUrlCapabilities{},
@@ -1405,4 +1388,32 @@ func normalizeACPLoadError(operation string, err error) error {
 		return fmt.Errorf("%w: %s: %w", ports.ErrChatHistoryLoadFailed, operation, err)
 	}
 	return normalizeACPError(operation, err)
+}
+
+// clientCapabilityMeta is the extensions AO asks for in initialize. None grants
+// the agent access to AO's terminal or filesystem APIs.
+func clientCapabilityMeta(harness domain.AgentHarness, airCapabilities []string) map[string]any {
+	meta := map[string]any{
+		// Cursor reports a model's effort, thinking and speed as their own
+		// settings only to a client that asks. Other agents ignore it.
+		"parameterizedModelPicker": true,
+		// These two Claude bridge extensions enrich the transcript.
+		"subagent-transcript": true,
+		"terminal_output":     true,
+		// claude-agent-acp publishes retryable API/transport failures only
+		// when the client opts into this namespaced metadata extension. It is
+		// observational: AO receives status, but grants no new capability.
+		"jetbrains": map[string]any{
+			"air": map[string]any{
+				"version":      1,
+				"capabilities": airCapabilities,
+			},
+		},
+	}
+	if harness == domain.HarnessOpenCodeV2 {
+		// OpenCode 2 then streams each subagent's session to AO, including after
+		// the turn that launched it ends. See opencode_subagents.go.
+		meta[openCodeChildUpdatesCapability] = true
+	}
+	return meta
 }

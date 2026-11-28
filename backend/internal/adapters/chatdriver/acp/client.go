@@ -643,6 +643,8 @@ func (c *conversation) handleNotification(method string, params json.RawMessage)
 		_, err = c.HandleExtensionMethod(context.Background(), method, params)
 	case claudeSDKMessageMethod:
 		err = c.handleClaudeSDKMessage(params)
+	case openCodeChildUpdateMethod:
+		err = c.handleOpenCodeChildUpdate(params)
 	default:
 		return false
 	}
@@ -762,14 +764,7 @@ func (c *conversation) processUpdate(params acpsdk.SessionNotification) error {
 		defer c.armProviderCycle(cycle, update)
 	}
 	sourceID := stableACPEventID(params.Meta)
-	sourceIndex := 0
-	emit := func(event ports.ChatEvent) {
-		if sourceID != "" {
-			event.ProviderEventID = fmt.Sprintf("%s:%d", sourceID, sourceIndex)
-			sourceIndex++
-		}
-		c.emit(event)
-	}
+	emit := c.sourceEmitter(sourceID)
 
 	providerOutputResumed := update.AgentMessageChunk != nil ||
 		update.AgentThoughtChunk != nil ||
@@ -852,19 +847,14 @@ func (c *conversation) processUpdate(params acpsdk.SessionNotification) error {
 			emit(ports.ChatEvent{Kind: ports.ChatEventReasoningDelta, ProviderTurnID: turnID, ProviderItemID: id, Delta: delta})
 		}
 	case update.ToolCall != nil:
-		tool := &toolState{
-			id: string(update.ToolCall.ToolCallId), title: update.ToolCall.Title,
-			kind: update.ToolCall.Kind, status: update.ToolCall.Status,
-			locations: update.ToolCall.Locations, content: update.ToolCall.Content,
-			rawInput: update.ToolCall.RawInput, rawOutput: update.ToolCall.RawOutput,
-			meta: cloneMeta(update.ToolCall.Meta),
-		}
+		tool := newToolState(update.ToolCall)
 		c.mu.Lock()
 		c.tools[tool.id] = tool
 		c.mu.Unlock()
 		c.observeBackgroundTool(tool)
 		emit(c.toolEvent(turnID, tool, toolTerminal(tool.status)))
 		c.emitDiffs(turnID, tool.id, tool.content, emit)
+		c.observeSubagentLaunch(turnID, tool, emit)
 	case update.ToolCallUpdate != nil:
 		tool := c.mergeToolUpdate(update.ToolCallUpdate)
 		if delta := terminalOutput(update.ToolCallUpdate.Meta); delta != "" {
@@ -874,6 +864,7 @@ func (c *conversation) processUpdate(params acpsdk.SessionNotification) error {
 		c.observeBackgroundTool(tool)
 		emit(c.toolEvent(turnID, tool, toolTerminal(tool.status)))
 		c.emitDiffs(turnID, tool.id, tool.content, emit)
+		c.observeSubagentLaunch(turnID, tool, emit)
 	case update.Plan != nil:
 		plan := normalizePlan(update.Plan.Entries)
 		plan.SpansTurns = c.plansSpanTurns
@@ -930,6 +921,20 @@ func (c *conversation) processUpdate(params acpsdk.SessionNotification) error {
 	return nil
 }
 
+// sourceEmitter emits the events one provider notification produces. A
+// notification the persistent host journaled carries a stable id, and each of
+// its events is numbered under it so a replay of the same frame is recognised.
+func (c *conversation) sourceEmitter(sourceID string) func(ports.ChatEvent) {
+	sourceIndex := 0
+	return func(event ports.ChatEvent) {
+		if sourceID != "" {
+			event.ProviderEventID = fmt.Sprintf("%s:%d", sourceID, sourceIndex)
+			sourceIndex++
+		}
+		c.emit(event)
+	}
+}
+
 func stableACPEventID(meta map[string]any) string {
 	eventID, _ := meta[persistenthost.ACPEventIDMetaKey].(string)
 	return strings.TrimSpace(eventID)
@@ -956,14 +961,30 @@ func segmentedMessageID(id *string, prefix, turnID string, segment int) string {
 	return prefix + "-" + turnID
 }
 
+func newToolState(call *acpsdk.SessionUpdateToolCall) *toolState {
+	return &toolState{
+		id: string(call.ToolCallId), title: call.Title,
+		kind: call.Kind, status: call.Status,
+		locations: call.Locations, content: call.Content,
+		rawInput: call.RawInput, rawOutput: call.RawOutput,
+		meta: cloneMeta(call.Meta),
+	}
+}
+
 func (c *conversation) mergeToolUpdate(update *acpsdk.SessionToolCallUpdate) *toolState {
-	id := string(update.ToolCallId)
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	tool := c.tools[id]
+	return mergeToolState(c.tools, update)
+}
+
+// mergeToolState applies one update to the tool it names in tools and returns a
+// snapshot. The caller holds c.mu.
+func mergeToolState(tools map[string]*toolState, update *acpsdk.SessionToolCallUpdate) *toolState {
+	id := string(update.ToolCallId)
+	tool := tools[id]
 	if tool == nil {
 		tool = &toolState{id: id}
-		c.tools[id] = tool
+		tools[id] = tool
 	}
 	if update.Title != nil {
 		tool.title = *update.Title
@@ -1077,6 +1098,10 @@ func (c *conversation) toolEvent(turnID string, tool *toolState, completed bool)
 			detailMap["providerTitle"] = title
 		}
 	}
+	if tool.parentID != "" {
+		detailMap["parentProviderItemId"] = c.providerItemID(tool.parentID)
+	}
+	openCodeLaunchDetail(c.harness, tool, detailMap)
 	if terminal := nestedMap(tool.meta, "terminal_info"); terminal != nil {
 		copyDetail(detailMap, terminal, "terminal_id", "terminalId")
 	}

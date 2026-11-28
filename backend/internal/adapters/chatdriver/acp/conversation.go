@@ -89,6 +89,9 @@ type toolState struct {
 	rawOutput      any
 	meta           map[string]any
 	terminalOutput string
+	// parentID is the native id of the subagent launch this tool ran under,
+	// for a provider that names it outside the tool's own metadata.
+	parentID string
 }
 
 type nestedMessageState struct {
@@ -137,6 +140,8 @@ type conversation struct {
 	configOptions     []ports.ChatConfigOption
 	skills            []ports.ChatSkill
 	skillsKnown       bool
+	// subagents follows OpenCode 2's child sessions; see opencode_subagents.go.
+	subagents *openCodeSubagents
 	// compactAdvertised is whether the agent's own list, before HideCommand,
 	// named compact; start derives compaction from it, not from the shown skills.
 	compactAdvertised bool
@@ -2350,6 +2355,8 @@ func (c *conversation) emit(event ports.ChatEvent) {
 // keepOpen names tools that outlive the turn (see keepToolsOutlivingTurn);
 // they stay running instead of failing with it.
 func (c *conversation) settleOpenItems(turnID string, keepOpen map[string]bool, turnState ...domain.TurnState) {
+	// Child work released by the turn's unnamed launches joins what it settles.
+	c.settleSubagentLaunches(turnID)
 	// Copy what is settled while holding the lock. A late session/update for the
 	// same turn can still write these maps and tool states (processUpdate) while
 	// the items below are emitted, so iterating the live ones raced.

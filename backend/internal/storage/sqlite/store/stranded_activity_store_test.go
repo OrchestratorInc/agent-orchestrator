@@ -200,3 +200,102 @@ func TestSettleStrandedActivitiesLeavesInFlightAOActions(t *testing.T) {
 		t.Fatalf("AO action after its terminal update = %q, want completed", got)
 	}
 }
+
+// A background subagent's step runs on the child's clock, so the ACP driver files
+// it with no turn (opencode_subagents.go). Settling the parent's turn while the
+// step still runs leaves it running, and the child's own completion settles it.
+func TestSettleTurnLeavesAChildStepWithNoTurnRunning(t *testing.T) {
+	s, session, conversation := conversationFixture(t)
+	ctx := context.Background()
+	if created, err := s.AppendUserMessage(ctx, conversation, session, "gen-1", domain.ConversationMessage{
+		ID: "turn-parent-msg", Text: "start a subagent", Origin: domain.MessageOriginHuman,
+	}, "turn-parent", histClock); err != nil || !created {
+		t.Fatalf("append prompt: created=%v err=%v", created, err)
+	}
+	if err := s.BindTurnToProvider(ctx, "turn-parent", "provider-turn-parent", histClock); err != nil {
+		t.Fatalf("bind: %v", err)
+	}
+	upsert := func(status domain.ActivityStatus, at time.Time) {
+		t.Helper()
+		if err := s.UpsertActivity(ctx, conversation, "", domain.ConversationActivity{
+			ID: "child-step", Kind: domain.ActivityKindCommand, Status: status, Summary: "sleep 14",
+			ProviderItemID: "ses_child:call_sleep", Detail: []byte(`{"parentProviderItemId":"call_launch"}`),
+		}, at); err != nil {
+			t.Fatalf("upsert child step %s: %v", status, err)
+		}
+	}
+	read := func() domain.ActivityStatus {
+		t.Helper()
+		got, found, err := s.ActivityStatusByProviderItem(ctx, conversation, "ses_child:call_sleep")
+		if err != nil || !found {
+			t.Fatalf("read child step: found=%v err=%v", found, err)
+		}
+		return got
+	}
+	upsert(domain.ActivityStatusRunning, histClock)
+
+	later := histClock.Add(7 * time.Second)
+	if err := s.SettleTurn(ctx, conversation, "provider-turn-parent", domain.TurnStateCompleted, "", later); err != nil {
+		t.Fatalf("settle parent turn: %v", err)
+	}
+	if got := read(); got != domain.ActivityStatusRunning {
+		t.Fatalf("child step after the parent turn settled = %q, want running", got)
+	}
+	upsert(domain.ActivityStatusCompleted, later.Add(7*time.Second))
+	if got := read(); got != domain.ActivityStatusCompleted {
+		t.Fatalf("child step after its own completion = %q, want completed", got)
+	}
+}
+
+// Only the controller that saw a background child start can end its turn-less
+// rows. When a new controller starts without that state, as on a reattach after
+// the launching turn ended, the child's running rows are failed so its launch
+// stops reading as working; a row the child ended is left as it ended, and so is
+// a running row with no launch.
+func TestSettleStrandedActivitiesFailsADetachedChildsRunningRows(t *testing.T) {
+	s, session, conversation := conversationFixture(t)
+	ctx := context.Background()
+	if created, err := s.AppendUserMessage(ctx, conversation, session, "gen-1", domain.ConversationMessage{
+		ID: "turn-parent-msg", Text: "start a subagent", Origin: domain.MessageOriginHuman,
+	}, "turn-parent", histClock); err != nil || !created {
+		t.Fatalf("append prompt: created=%v err=%v", created, err)
+	}
+	if err := s.BindTurnToProvider(ctx, "turn-parent", "provider-turn-parent", histClock); err != nil {
+		t.Fatalf("bind: %v", err)
+	}
+	upsert := func(id string, status domain.ActivityStatus, detail string) {
+		t.Helper()
+		if err := s.UpsertActivity(ctx, conversation, "", domain.ConversationActivity{
+			ID: id, Kind: domain.ActivityKindMCPTool, Status: status, Summary: id,
+			ProviderItemID: id, Detail: []byte(detail),
+		}, histClock); err != nil {
+			t.Fatalf("upsert %s: %v", id, err)
+		}
+	}
+	child := `{"parentProviderItemId":"call_launch"}`
+	upsert("subagent-message", domain.ActivityStatusRunning, child)
+	upsert("subagent-run", domain.ActivityStatusRunning, child)
+	upsert("subagent-read", domain.ActivityStatusCompleted, child)
+	upsert("loose-step", domain.ActivityStatusRunning, `{}`)
+	if err := s.SettleTurn(ctx, conversation, "provider-turn-parent", domain.TurnStateCompleted, "", histClock); err != nil {
+		t.Fatalf("settle parent turn: %v", err)
+	}
+
+	if err := s.SettleStrandedActivities(ctx, conversation, histClock.Add(time.Minute)); err != nil {
+		t.Fatalf("SettleStrandedActivities: %v", err)
+	}
+	for id, want := range map[string]domain.ActivityStatus{
+		"subagent-message": domain.ActivityStatusFailed,
+		"subagent-run":     domain.ActivityStatusFailed,
+		"subagent-read":    domain.ActivityStatusCompleted,
+		"loose-step":       domain.ActivityStatusRunning,
+	} {
+		got, found, err := s.ActivityStatusByProviderItem(ctx, conversation, id)
+		if err != nil || !found {
+			t.Fatalf("read %s: found=%v err=%v", id, found, err)
+		}
+		if got != want {
+			t.Fatalf("%s = %q, want %q", id, got, want)
+		}
+	}
+}

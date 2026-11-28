@@ -1944,6 +1944,10 @@ func (s *Store) SettleOrphanedTurns(ctx context.Context, session domain.SessionI
 // status their turn's settlement writes. It covers turns an earlier session
 // handled before a handoff, and touches settled turns only, so unlike
 // SettleOrphanedTurns it is safe while a live controller is attached.
+//
+// It runs as a controller starts, which then holds none of the previous one's
+// subagent state, so it also fails a background child's running rows that carry
+// no turn: nothing left can end them (FailDetachedSubagentActivities).
 func (s *Store) SettleStrandedActivities(ctx context.Context, conversationID string, now time.Time) error {
 	q, unlock := s.conversationWriter(ctx)
 	defer unlock()
@@ -1953,6 +1957,13 @@ func (s *Store) SettleStrandedActivities(ctx context.Context, conversationID str
 			ConversationID: conversationID,
 		}); err != nil {
 		return fmt.Errorf("settle stranded activities in %s: %w", conversationID, err)
+	}
+	if err := q.FailDetachedSubagentActivities(ctx,
+		gen.FailDetachedSubagentActivitiesParams{
+			UpdatedAt:      now,
+			ConversationID: conversationID,
+		}); err != nil {
+		return fmt.Errorf("settle detached subagent activities in %s: %w", conversationID, err)
 	}
 	return nil
 }
@@ -2033,6 +2044,13 @@ func cleanupOwnedControllerWork(
 			UpdatedAt: now, HandledBySessionID: session,
 		}); err != nil {
 		return false, fmt.Errorf("settle orphaned activities for %s: %w", session, err)
+	}
+	// A background child's turn-less rows end only through this controller.
+	if err := q.FailDetachedSubagentActivities(ctx,
+		gen.FailDetachedSubagentActivitiesParams{
+			UpdatedAt: now, ConversationID: conversationID,
+		}); err != nil {
+		return false, fmt.Errorf("settle detached subagent activities in %s: %w", conversationID, err)
 	}
 	if err := q.SettleOrphanedConversationTurns(ctx,
 		gen.SettleOrphanedConversationTurnsParams{
