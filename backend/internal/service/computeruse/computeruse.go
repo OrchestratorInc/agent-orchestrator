@@ -155,9 +155,11 @@ type Service struct {
 	stop       context.CancelFunc
 	workers    sync.WaitGroup
 
-	mu         sync.Mutex
-	granting   bool
-	grantError string
+	mu sync.Mutex
+	// daemonStart is the start of the background service in progress, if any.
+	daemonStart *daemonStart
+	granting    bool
+	grantError  string
 	// sessionless are tools the driver refused a `session` argument for.
 	sessionless map[string]bool
 	snapshots   snapshotWindows
@@ -204,9 +206,14 @@ func (s *Service) Installed(ctx context.Context) (bool, error) {
 	return err == nil, err
 }
 
-// Close cancels a pending permission request and waits for it to stop.
+// Close cancels a pending permission request or daemon start and waits for it
+// to stop. Cancelling under s.mu orders it against ensureDaemon, which checks
+// the background context and adds its worker under the same lock, so no worker
+// is added once Wait may have begun.
 func (s *Service) Close(ctx context.Context) error {
+	s.mu.Lock()
 	s.stop()
+	s.mu.Unlock()
 	done := make(chan struct{})
 	go func() {
 		s.workers.Wait()
@@ -279,6 +286,10 @@ func (s *Service) GrantPermissions(ctx context.Context) (Status, error) {
 		return Status{}, err
 	}
 	s.mu.Lock()
+	if err := s.background.Err(); err != nil {
+		s.mu.Unlock()
+		return Status{}, err
+	}
 	if !s.granting {
 		s.granting = true
 		s.grantError = ""
@@ -527,8 +538,56 @@ func (s *Service) locate(ctx context.Context) (string, error) {
 	return binary, err
 }
 
+// daemonStart is one attempt to start the background service, shared by every
+// caller that asks while it runs.
+type daemonStart struct {
+	done chan struct{}
+	err  error
+	// joined counts the callers that have joined this attempt. It is never
+	// decremented when a waiter gives up; only tests read it, to know every
+	// caller has reached the shared start.
+	joined int
+}
+
 // ensureDaemon starts the service when it is not answering and waits for it.
+// Calls that arrive while a start is in progress wait for that start and get
+// its result rather than starting another copy: macOS's `open -n` launches a
+// new instance every time. The start runs on the service's own context, so a
+// caller that gives up does not cut it short for the others.
 func (s *Service) ensureDaemon(ctx context.Context, binary string) error {
+	s.mu.Lock()
+	if err := s.background.Err(); err != nil {
+		s.mu.Unlock()
+		return err
+	}
+	start := s.daemonStart
+	if start == nil {
+		start = &daemonStart{done: make(chan struct{})}
+		s.daemonStart = start
+		s.workers.Add(1)
+		go s.runDaemonStart(start, binary)
+	}
+	start.joined++
+	s.mu.Unlock()
+	select {
+	case <-start.done:
+		return start.err
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+func (s *Service) runDaemonStart(start *daemonStart, binary string) {
+	defer s.workers.Done()
+	err := s.startDaemon(s.background, binary)
+	s.mu.Lock()
+	s.daemonStart = nil
+	start.err = err
+	s.mu.Unlock()
+	close(start.done)
+}
+
+func (s *Service) startDaemon(ctx context.Context, binary string) error {
 	if s.daemonState(ctx, binary) == DaemonRunning {
 		return nil
 	}

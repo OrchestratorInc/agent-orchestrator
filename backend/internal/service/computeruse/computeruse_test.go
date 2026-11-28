@@ -75,7 +75,7 @@ func (f *fakeDriver) StartDaemon(context.Context, string) error {
 	return nil
 }
 
-func newTestService(t *testing.T, driver *fakeDriver, goos string) *Service {
+func newTestService(t *testing.T, driver Driver, goos string) *Service {
 	t.Helper()
 	s := New(driver, t.TempDir())
 	s.goos = goos
@@ -406,6 +406,177 @@ func TestCallStartsStoppedDaemonAndRetries(t *testing.T) {
 	}
 	if driver.started != 1 || attempts != 2 {
 		t.Fatalf("started = %d, attempts = %d", driver.started, attempts)
+	}
+}
+
+// gatedStartDriver holds StartDaemon until the test releases it, so the test
+// decides when the start finishes.
+type gatedStartDriver struct {
+	*fakeDriver
+	release chan struct{}
+}
+
+func (d gatedStartDriver) StartDaemon(ctx context.Context, binary string) error {
+	select {
+	case <-d.release:
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+	return d.fakeDriver.StartDaemon(ctx, binary)
+}
+
+// stoppedDaemonCalls fails tool calls with the driver's "not running" answer
+// until the service is up.
+func stoppedDaemonCalls(driver *fakeDriver) func([]string) ([]byte, []byte, error) {
+	return func([]string) ([]byte, []byte, error) {
+		driver.mu.Lock()
+		up := driver.daemonUp
+		driver.mu.Unlock()
+		if !up {
+			return nil, []byte("Cua Driver daemon is not running."), errors.New("exit status 1")
+		}
+		return []byte(`{"apps":[]}`), nil, nil
+	}
+}
+
+// waitForJoined waits until n callers are waiting on the start in progress.
+func waitForJoined(t *testing.T, s *Service, n int) {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		s.mu.Lock()
+		joined := 0
+		if s.daemonStart != nil {
+			joined = s.daemonStart.joined
+		}
+		s.mu.Unlock()
+		if joined >= n {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("%d callers joined the daemon start, want %d", joined, n)
+		}
+		time.Sleep(time.Millisecond)
+	}
+}
+
+// callTogether makes callers Calls that all reach ensureDaemon while one start
+// is held, then releases it and returns each call's error.
+func callTogether(t *testing.T, s *Service, release chan struct{}, callers int) []error {
+	t.Helper()
+	errs := make([]error, callers)
+	var wg sync.WaitGroup
+	for index := range callers {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			_, errs[index] = s.Call(context.Background(), CallRequest{Tool: "list_windows"})
+		}()
+	}
+	waitForJoined(t, s, callers)
+	close(release)
+	wg.Wait()
+	return errs
+}
+
+func TestConcurrentCallsStartStoppedDaemonOnce(t *testing.T) {
+	driver := &fakeDriver{startsUp: true}
+	driver.onCall = stoppedDaemonCalls(driver)
+	release := make(chan struct{})
+	s := newTestService(t, gatedStartDriver{driver, release}, "linux")
+
+	for _, err := range callTogether(t, s, release, 5) {
+		if err != nil {
+			t.Fatalf("Call() error = %v", err)
+		}
+	}
+	driver.mu.Lock()
+	defer driver.mu.Unlock()
+	if driver.started != 1 {
+		t.Fatalf("StartDaemon ran %d times, want 1", driver.started)
+	}
+}
+
+func TestConcurrentCallsShareOneFailedDaemonStart(t *testing.T) {
+	driver := &fakeDriver{startErr: errors.New("no desktop session")}
+	driver.onCall = stoppedDaemonCalls(driver)
+	release := make(chan struct{})
+	s := newTestService(t, gatedStartDriver{driver, release}, "linux")
+
+	for _, err := range callTogether(t, s, release, 5) {
+		var apiErr *apierr.Error
+		if !errors.As(err, &apiErr) || apiErr.Code != "COMPUTER_USE_DAEMON_START_FAILED" {
+			t.Fatalf("Call() error = %v, want COMPUTER_USE_DAEMON_START_FAILED", err)
+		}
+	}
+	driver.mu.Lock()
+	defer driver.mu.Unlock()
+	if driver.started != 1 {
+		t.Fatalf("StartDaemon ran %d times, want 1", driver.started)
+	}
+}
+
+// The caller that began a start giving up neither stops the start nor lets the
+// next caller launch another copy.
+func TestDaemonStartOutlivesCancelledCaller(t *testing.T) {
+	driver := &fakeDriver{startsUp: true}
+	release := make(chan struct{})
+	s := newTestService(t, gatedStartDriver{driver, release}, "linux")
+
+	first, cancel := context.WithCancel(context.Background())
+	firstErr := make(chan error, 1)
+	go func() { firstErr <- s.ensureDaemon(first, "/opt/cua-driver") }()
+	waitForJoined(t, s, 1)
+	secondErr := make(chan error, 1)
+	go func() { secondErr <- s.ensureDaemon(context.Background(), "/opt/cua-driver") }()
+	waitForJoined(t, s, 2)
+
+	cancel()
+	if err := <-firstErr; !errors.Is(err, context.Canceled) {
+		t.Fatalf("cancelled caller's ensureDaemon() error = %v, want context.Canceled", err)
+	}
+	close(release)
+	if err := <-secondErr; err != nil {
+		t.Fatalf("waiting caller's ensureDaemon() error = %v", err)
+	}
+	driver.mu.Lock()
+	defer driver.mu.Unlock()
+	if driver.started != 1 {
+		t.Fatalf("StartDaemon ran %d times, want 1", driver.started)
+	}
+}
+
+func TestEnsureDaemonAfterCloseStartsNothing(t *testing.T) {
+	driver := &fakeDriver{startsUp: true}
+	s := newTestService(t, driver, "linux")
+	if err := s.Close(context.Background()); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+	if err := s.ensureDaemon(context.Background(), "/opt/cua-driver"); !errors.Is(err, context.Canceled) {
+		t.Fatalf("ensureDaemon() error = %v, want context.Canceled", err)
+	}
+	driver.mu.Lock()
+	defer driver.mu.Unlock()
+	if driver.started != 0 {
+		t.Fatalf("StartDaemon ran %d times after Close, want 0", driver.started)
+	}
+}
+
+func TestGrantPermissionsAfterCloseStartsNothing(t *testing.T) {
+	driver := &fakeDriver{daemonUp: true}
+	s := newTestService(t, driver, "darwin")
+	if err := s.Close(context.Background()); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+	if _, err := s.GrantPermissions(context.Background()); !errors.Is(err, context.Canceled) {
+		t.Fatalf("GrantPermissions() error = %v, want context.Canceled", err)
+	}
+	driver.mu.Lock()
+	defer driver.mu.Unlock()
+	for _, call := range driver.calls {
+		if len(call) > 1 && call[0] == "permissions" && call[1] == "grant" {
+			t.Fatalf("permissions grant ran after Close")
+		}
 	}
 }
 
