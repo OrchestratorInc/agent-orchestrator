@@ -89,12 +89,12 @@ describe("active turn controls", () => {
 		expect(screenSource).toContain('disabled={switchingToTerminal || Boolean(failedStart)}');
 	});
 
-	it("offers a live PR review shortcut while leaving the chat composer in place", () => {
-		expect(screenSource).toContain("sessionPRReadyForReview(session)");
-		expect(screenSource).toContain("reviewPR={reviewPromptPR}");
-		expect(screenSource).toContain("reviewRouteForPR(session.id, reviewPromptPR, currentHostId)");
-		expect(screenSource).toContain("reviewRouteForSession(session, currentHostId)");
-		expect(screenSource).toContain("reviewSummaries.summaryFor(summaryConfig, session.id, reviewPromptPR.number)");
+	it("offers every PR the worker raised over the chat composer, leaving it in place", () => {
+		expect(screenSource).toContain("usePRSummaries(config && hasPullRequests ? [{ config, sessionId: session.id }] : [])");
+		expect(screenSource).toContain("useSessionPullRequests(workerSession, (number) => summaryConfig ? reviewSummaries.summaryFor(summaryConfig, session.id, number) : undefined)");
+		expect(screenSource).toContain("pullRequests={pullRequests}");
+		expect(screenSource).toContain("onOpenPullRequest={(pr) => openPage(reviewRouteForPR(session.id, pr, currentHostId))}");
+		expect(screenSource).toContain("pullRequestListRequest={pullRequestListRequest}");
 		expect(screenSource).toContain("<StableChatComposer");
 	});
 

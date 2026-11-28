@@ -5,6 +5,7 @@ const fixtures = vi.hoisted(() => ({
 	platform: { OS: "ios" },
 	theme: new Proxy({}, { get: (_target, property) => `#${String(property)}` }),
 }));
+vi.mock("./headerPill", () => ({ pillHeaderOptions: () => ({}), pillScreenLayout: undefined, PillHeaderFrame: ({ children }: { children: unknown }) => children }));
 vi.mock("react-native", () => ({ Platform: fixtures.platform, View: "View" }));
 vi.mock("expo-router", async () => {
 	const React = await import("react");

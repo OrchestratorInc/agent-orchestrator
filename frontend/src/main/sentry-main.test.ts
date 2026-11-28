@@ -1,14 +1,14 @@
 import { createHash } from "node:crypto";
 import { AoError } from "../../../packages/shared/telemetry/ao-error";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { mkdtemp, mkdir, readdir, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import type { ElectronMainOptions, ErrorEvent } from "@sentry/electron/main";
 import { DEFAULT_ELECTRON_SENTRY_DSN } from "../shared/sentry-config";
 import { DesktopTelemetryController } from "./desktop-telemetry-controller";
-import { clearMainSentryCache, createErrorBudget, ERROR_BUDGET_FILE, electronMainSentryDsn, initMainSentry, installInErrorSample, sanitizeRendererCapture } from "./sentry-main";
+import { clearMainSentryCache, createErrorBudget, ERROR_BUDGET_FILE, electronMainSentryDsn, initMainSentry, installInErrorSample, sanitizeRendererCapture, setMainSentryPlan } from "./sentry-main";
 
 const hashParts = (text: string) => ["sha256", createHash("sha256").update(text).digest("hex").slice(0, 10)];
 
@@ -44,6 +44,7 @@ beforeEach(() => {
 afterEach(() => {
 	vi.unstubAllEnvs(); vi.restoreAllMocks(); vi.clearAllMocks(); sdk.close.mockResolvedValue(true);
 	installId.value = "ins_sampled_5";
+	setMainSentryPlan("unknown");
 	rmSync(dataDir, { recursive: true, force: true });
 });
 
@@ -426,6 +427,23 @@ describe("Electron main Sentry configuration", () => {
 		expect(beforeSend(sdk.captureEvent.mock.calls.at(-1)?.[0] as ErrorEvent).tags).not.toHaveProperty("target");
 	});
 
+	it("tags a failed onboarding install with its cause from the closed list only", async () => {
+		const transport = await initMainSentry("1.0.0", dataDir, "/tmp/ao-electron-test");
+		const beforeSend = sdk.init.mock.calls[0]?.[0].beforeSend as (event: ErrorEvent) => ErrorEvent;
+		transport.capture({ consentGeneration: "generation-1", kind: "message", message: "safe", tags: { category: "onboarding", code: "gh_install:install_failed", target: "gh", cause: "brew_missing" } });
+		expect(sdk.captureEvent.mock.calls.at(-1)?.[0].tags).toMatchObject({ "ao.cause": "brew_missing" });
+		const event = beforeSend(sdk.captureEvent.mock.calls.at(-1)?.[0] as ErrorEvent);
+		expect(event.tags).toMatchObject({ action: "gh_install", reason: "install_failed", cause: "brew_missing" });
+		// A tag to filter by: the issue stays grouped by action and reason.
+		expect(event.fingerprint).toEqual(["electron", "onboarding", "gh_install", "install_failed", "renderer"]);
+		transport.capture({ consentGeneration: "generation-1", kind: "message", message: "safe", tags: { category: "onboarding", code: "agent_install:install_failed", target: "codex", cause: "EACCES /Users/alice/.npm" } });
+		expect(sdk.captureEvent.mock.calls.at(-1)?.[0].tags).toMatchObject({ "ao.cause": "other" });
+		expect(JSON.stringify(sdk.captureEvent.mock.calls.at(-1)?.[0])).not.toContain("alice");
+		// Other renderer events don't carry it.
+		transport.capture({ consentGeneration: "generation-1", kind: "message", message: "safe", tags: { category: "http_5xx", code: "CHAT_DELIVERY_FAILED", cause: "network" } });
+		expect(sdk.captureEvent.mock.calls.at(-1)?.[0].tags).not.toHaveProperty("ao.cause");
+	});
+
 	it("drops onboarding codes outside the closed action and reason lists", async () => {
 		const transport = await initMainSentry("1.0.0", dataDir, "/tmp/ao-electron-test");
 		const beforeSend = sdk.init.mock.calls[0]?.[0].beforeSend as (event: ErrorEvent) => ErrorEvent;
@@ -456,6 +474,26 @@ describe("Electron main Sentry configuration", () => {
 		expect(plain.tags).not.toHaveProperty("flow");
 		transport.capture({ ...request, tags: { ...request.tags, flow: "private-flow" } });
 		expect(sdk.captureEvent.mock.calls.at(-1)?.[0].tags).not.toHaveProperty("ao.flow");
+	});
+
+	it("titles, tags, and groups an Electron process failure by its process type and reason", async () => {
+		await initMainSentry("1.0.0", dataDir, "/tmp/ao-electron-test");
+		const beforeSend = sdk.init.mock.calls[0]?.[0].beforeSend as (event: ErrorEvent) => ErrorEvent;
+		const exit = (message: string) => beforeSend({ type: undefined, level: "fatal", message, tags: { "event.process": "GPU" } });
+		const gpu = exit("'GPU' process exited with 'crashed'");
+		expect(gpu.message).toBe("Electron gpu process failure (crashed)");
+		expect(gpu.exception?.values?.[0]?.value).toBe("Electron gpu process failure (crashed)");
+		expect(gpu.tags).toMatchObject({ surface: "electron-main", kind: "process_exit", reason: "crashed", process: "gpu" });
+		expect(gpu.tags).not.toHaveProperty(["event.process"]);
+		expect(gpu.fingerprint).toEqual(["electron", "process_exit", "crashed", "gpu", "Error", "unknown", "electron-main"]);
+		expect(exit("'Utility' process exited with 'oom'").tags).toMatchObject({ reason: "oom", process: "utility" });
+		expect(exit("'Sandbox helper' process exited with 'launch-failed'").tags).toMatchObject({ process: "sandbox_helper" });
+		expect(exit("'renderer' process exited with 'crashed'").fingerprint).not.toEqual(gpu.fingerprint);
+		// A process name outside Electron's fixed types is never sent.
+		const other = exit("'/Users/alice/private helper' process exited with 'crashed'");
+		expect(other.message).toBe("Electron unknown process failure (crashed)");
+		expect(other.tags).toMatchObject({ process: "unknown" });
+		expect(JSON.stringify(other)).not.toContain("alice");
 	});
 
 	it("groups Electron main exceptions by safe type and top in-app frame", async () => {
@@ -494,6 +532,8 @@ describe("Electron main Sentry configuration", () => {
 		for (const message of ["AbortError", "net::ERR_NETWORK_CHANGED", "net::ERR_INTERNET_DISCONNECTED"]) {
 			expect(beforeSend({ type: undefined, message })).toBeNull();
 		}
+		// The renderer drops the bare ResizeObserver notice; a thrown error with its text still reports.
+		expect(beforeSend({ type: undefined, message: "ResizeObserver loop completed with undelivered notifications.", exception: { values: [{ type: "TypeError", value: "ResizeObserver loop completed with undelivered notifications." }] } })).not.toBeNull();
 		expect(beforeSend({ type: undefined, message: "Updater failed: net::ERR_NETWORK_CHANGED" })).not.toBeNull();
 		const mainError = (message: string) => beforeSend({
 			type: undefined, message,
@@ -501,7 +541,7 @@ describe("Electron main Sentry configuration", () => {
 		});
 		expect(mainError("resume agent ai-sports-coach-113")?.fingerprint).toEqual(["electron", "unhandled_rejection", "unknown", "Error", "unknown", "electron-main", ...hashParts("resume agent <id>")]);
 		expect(mainError("get project private-repo")?.fingerprint).not.toEqual(mainError("resume agent ai-sports-coach-113")?.fingerprint);
-		expect(beforeSend({ type: undefined, message: "'renderer' process exited with 'crashed'" })?.fingerprint).toEqual(["electron", "process_exit", "crashed", "Error", "unknown", "electron-main"]);
+		expect(beforeSend({ type: undefined, message: "'renderer' process exited with 'crashed'" })?.fingerprint).toEqual(["electron", "process_exit", "crashed", "renderer", "Error", "unknown", "electron-main"]);
 		expect(beforeSend({ type: undefined, level: "fatal", exception: { values: [{ type: "TypeError", mechanism: { type: "generic" } }] } })?.fingerprint).toEqual(["electron", "uncaught_exception", "unknown", "TypeError", "unknown", "electron-main"]);
 	});
 
@@ -612,6 +652,69 @@ describe("Electron main error sampling and budget", () => {
 			// A forged onboarding code is an ordinary event, so this install still samples it out.
 			transport.capture({ ...failure, tags: { category: "onboarding", code: "private:install_failed" } });
 			expect(beforeSend(sdk.captureEvent.mock.calls.at(-1)?.[0] as ErrorEvent)).toBeNull();
+		} finally {
+			rmSync(unsampledDir, { recursive: true, force: true });
+		}
+	});
+
+	it("sends a paid install's errors outside the sample, and a free one's not", async () => {
+		installId.value = "ins_unsampled_0";
+		const unsampledDir = mkdtempSync(path.join(os.tmpdir(), "ao-sentry-main-"));
+		try {
+			await initMainSentry("1.0.0", unsampledDir, "/tmp/ao-electron-test");
+			const beforeSend = beforeSendOf();
+			for (const plan of ["free", "none", "unknown", "Pro Plan"]) {
+				setMainSentryPlan(plan);
+				expect(beforeSend(mainError("main"))).toBeNull();
+			}
+			for (const plan of ["starter", "pro", "enterprise"]) {
+				setMainSentryPlan(plan);
+				expect(beforeSend(mainError(plan === "pro" ? "main" : "other"))?.tags).toMatchObject({ plan, sample_rate: "1" });
+			}
+		} finally {
+			rmSync(unsampledDir, { recursive: true, force: true });
+		}
+	});
+
+	it("tags renderer, main and handled events with the plan, never a value outside the vocabulary", async () => {
+		const transport = await initMainSentry("1.0.0", dataDir, "/tmp/ao-electron-test");
+		const beforeSend = beforeSendOf();
+		expect(beforeSend(mainError("main"))?.tags).toMatchObject({ plan: "unknown" });
+		setMainSentryPlan("Acme Corp $49");
+		expect(beforeSend(mainError("main"))?.tags).toMatchObject({ plan: "unknown" });
+		setMainSentryPlan("pro");
+		transport.capture({ consentGeneration: "generation-1", kind: "exception", message: "", level: "error", exception: { type: "TypeError", frames: [] } });
+		transport.captureMain?.({ category: "daemon", reason: "exited", detail: "signal:SIGKILL" });
+		const [renderer, handled] = sdk.captureEvent.mock.calls.map((call) => beforeSend(call[0] as ErrorEvent));
+		expect(renderer?.tags).toMatchObject({ surface: "renderer", plan: "pro" });
+		expect(handled?.tags).toMatchObject({ kind: "handled", plan: "pro" });
+		expect(beforeSend(mainError("main"))?.tags).toMatchObject({ surface: "electron-main", plan: "pro" });
+	});
+
+	it("keeps the per-fingerprint daily cap for a paid install", async () => {
+		installId.value = "ins_unsampled_0";
+		const unsampledDir = mkdtempSync(path.join(os.tmpdir(), "ao-sentry-main-"));
+		try {
+			await initMainSentry("1.0.0", unsampledDir, "/tmp/ao-electron-test");
+			setMainSentryPlan("pro");
+			const beforeSend = beforeSendOf();
+			// Three per fingerprint per day.
+			for (let sent = 0; sent < 3; sent++) expect(beforeSend(mainError("main"))).not.toBeNull();
+			expect(beforeSend(mainError("main"))).toBeNull();
+		} finally {
+			rmSync(unsampledDir, { recursive: true, force: true });
+		}
+	});
+
+	it("keeps the per-install daily cap for a paid install", async () => {
+		installId.value = "ins_unsampled_0";
+		const unsampledDir = mkdtempSync(path.join(os.tmpdir(), "ao-sentry-main-"));
+		try {
+			// Today's 25 events are already spent.
+			writeFileSync(path.join(unsampledDir, ERROR_BUDGET_FILE), JSON.stringify({ day: new Date().toISOString().slice(0, 10), total: 25, fingerprints: {} }));
+			await initMainSentry("1.0.0", unsampledDir, "/tmp/ao-electron-test");
+			setMainSentryPlan("enterprise");
+			expect(beforeSendOf()(mainError("main"))).toBeNull();
 		} finally {
 			rmSync(unsampledDir, { recursive: true, force: true });
 		}

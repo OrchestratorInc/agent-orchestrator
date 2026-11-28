@@ -44,7 +44,7 @@ import { SettingsButtonRow, SettingsForm, SettingsSection, SettingsValueRow, typ
 import { Spinner } from "../../../../lib/Spinner";
 import { useTheme } from "../../../../lib/ThemeProvider";
 import { ToastHost } from "../../../../lib/Toast";
-import { toolbarIcon } from "../../../../lib/toolbarIcon";
+import { HeaderPillButton, PillHeaderRight } from "../../../../lib/headerPill";
 import { Button, EmptyState } from "../../../../lib/ui";
 import { useGlassBarInset } from "../../../../lib/useHeaderOverlap";
 import { useToast } from "../../../../lib/useToast";
@@ -152,24 +152,33 @@ export default function CloudAgentScreen() {
 	const titleScreen = useMemo(() => <Stack.Screen options={{ title: label }} />, [label]);
 
 	// A pasted credential or Claude's code is sent from the bar's trailing item,
-	// as the machine editor saves: text on iOS, a check on Android, whose bar
-	// draws icons only. Memoized on what it shows, so typing does not register
+	// as the machine editor saves: text on iOS, a check on its own pill on
+	// Android. Memoized on what it shows, so typing does not register
 	// the header again on every key; the item sends the latest text.
 	const submitTitle = flow.kind === "paste" ? "Save" : flow.kind === "claude" ? "Connect" : null;
 	const canSubmit = secret.trim().length > 0 && !busy;
 	const headerItems = useMemo(() => {
 		if (!submitTitle) return null;
 		const accessibilityLabel = submitTitle === "Save" ? `Save ${label} credential` : `Connect ${label}`;
+		// On Android the Settings stack has the clear pill bar: the check takes a
+		// pill of its own, as the machine editor's Save does, not a bare icon.
+		if (Platform.OS === "android") {
+			return (
+				<PillHeaderRight>
+					<HeaderPillButton icon="checkmark" label={busy ? `Connecting ${label}` : accessibilityLabel} disabled={!canSubmit} onPress={() => submitRef.current()} testID="cloud-agent-submit">
+						{busy ? <Spinner accessibilityLabel={`Connecting ${label}`} /> : undefined}
+					</HeaderPillButton>
+				</PillHeaderRight>
+			);
+		}
 		return (
 			<Stack.Toolbar placement="right">
 				{busy ? (
 					<Stack.Toolbar.View hidesSharedBackground>
 						<Spinner accessibilityLabel={`Connecting ${label}`} />
 					</Stack.Toolbar.View>
-				) : Platform.OS === "ios" ? (
-					<Stack.Toolbar.Button accessibilityLabel={accessibilityLabel} disabled={!canSubmit} style={{ fontWeight: "600" }} onPress={() => submitRef.current()}>{submitTitle}</Stack.Toolbar.Button>
 				) : (
-					<Stack.Toolbar.Button icon={toolbarIcon("checkmark")} accessibilityLabel={accessibilityLabel} disabled={!canSubmit} onPress={() => submitRef.current()} />
+					<Stack.Toolbar.Button accessibilityLabel={accessibilityLabel} disabled={!canSubmit} style={{ fontWeight: "600" }} onPress={() => submitRef.current()}>{submitTitle}</Stack.Toolbar.Button>
 				)}
 			</Stack.Toolbar>
 		);

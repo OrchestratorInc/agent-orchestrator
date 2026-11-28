@@ -502,7 +502,10 @@ func (s requestPlanner) planForOperation(plan Plan, operation AgentOperation) Pl
 			pkg := packageWithoutLatest(plan.Package)
 			plan.Command = []string{"npm", "install", "-g", "--prefix", plan.PackagePrefix, pkg + "@latest"}
 		case "winget":
-			plan.Command = []string{"winget", "upgrade", "-e", "--id", plan.Package, "--silent", "--accept-package-agreements", "--accept-source-agreements", "--disable-interactivity"}
+			// This method maintains community-source installs: planWinget installs
+			// there, and the ownership/version probes also select that source.
+			// Keep upgrades there to avoid msstore's first-run agreement prompt.
+			plan.Command = []string{"winget", "upgrade", "-e", "--id", plan.Package, "--source", "winget", "--silent", "--accept-package-agreements", "--accept-source-agreements", "--disable-interactivity"}
 		case "uv":
 			plan.Command = []string{"uv", "tool", "upgrade", plan.Package}
 		case "pipx":

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"testing"
 
@@ -244,6 +245,109 @@ func TestNativeCheckpointRejectsUnprovenAncestry(t *testing.T) {
 				ports.NativeCheckpointRequest{ProviderConversationID: "native", Evidence: evidence})
 			if !errors.Is(err, ports.ErrChatHistoryUnsettled) {
 				t.Fatalf("error=%v", err)
+			}
+		})
+	}
+}
+
+func TestNativeCheckpointSettlesDamagedTranscriptsAndSlashCommands(t *testing.T) {
+	command := "<command-message>review</command-message>\n<command-name>/review</command-name>\n<command-args>PR 12</command-args>"
+	quoted := "<command-name>/model</command-name> why is this in my log?"
+	source := checkpointFixture(t, []string{"A", "B"}, []string{"answer A", "answer B"})
+	lost := slices.DeleteFunc(strings.SplitAfter(source, "\n"), func(line string) bool { return strings.Contains(line, `"uuid":"assistant-0"`) })
+	for name, test := range map[string]struct{ transcript, typed, owner string }{
+		"blank lines":         {strings.Replace(source, "\n", "\n\n", 4), "B", "user-1"},
+		"lost parent record":  {strings.Join(lost, ""), "B", "user-1"},
+		"typed slash command": {checkpointFixture(t, []string{"A", command}, []string{"answer A", "answer B"}), "/review PR 12", "user-0"},
+		"prompt quoting tags": {checkpointFixture(t, []string{"A", quoted}, []string{"answer A", "answer B"}), quoted, "user-1"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			evidence := checkpointEvidence(
+				domain.NativeCheckpointObservation{Submission: true, PromptID: "prompt-0", SubmissionID: "submission-0", Text: "A"},
+				domain.NativeCheckpointObservation{PromptID: "prompt-0", Text: "answer A"},
+				domain.NativeCheckpointObservation{Submission: true, PromptID: "prompt-1", SubmissionID: "submission-1", Text: test.typed},
+				domain.NativeCheckpointObservation{PromptID: "prompt-1", Text: "answer B"})
+			got, err := verifyCheckpointTranscript(context.Background(), strings.NewReader(test.transcript),
+				ports.NativeCheckpointRequest{ProviderConversationID: "native", Evidence: evidence})
+			if err != nil || got.UserMessageID != test.owner || got.AssistantText != "answer B" {
+				t.Fatalf("boundary=%+v error=%v", got, err)
+			}
+		})
+	}
+}
+
+func TestNativeCheckpointSettlesTurnsClaudeNeverAnswered(t *testing.T) {
+	answered := checkpointFixture(t, []string{"A"}, []string{"answer A"})
+	prompt := func(id, promptID, parent, text string) string {
+		return fmt.Sprintf(`{"type":"user","sessionId":"native","uuid":%q,"parentUuid":%q,"promptId":%q,"message":{"content":%q}}`, id, parent, promptID, text) + "\n"
+	}
+	synthetic := func(parent, fields, text string) string {
+		return `{"type":"assistant","sessionId":"native","uuid":"filler","parentUuid":` + jsonString(parent) + `,` + fields + `"message":{"model":"<synthetic>","content":[{"type":"text","text":` +
+			jsonString(text) + `}],"stop_reason":"stop_sequence"}}` + "\n"
+	}
+	cancelled := prompt("user-p", "prompt-p", "assistant-0", "P") + submissionHookRecord("hook-p", "user-p", 9)
+	filler := synthetic("hook-p", "", "No response requested.")
+	next := func(parent string) string {
+		return prompt("user-b", "prompt-b", parent, "B") + submissionHookRecord("hook-b", "user-b", 8) +
+			`{"type":"assistant","sessionId":"native","uuid":"answer-b","parentUuid":"hook-b","message":{"content":[{"type":"text","text":"answer B"}],"stop_reason":"end_turn"}}` + "\n"
+	}
+	localCommand := func(parent string) string {
+		return prompt("user-c", "prompt-c", parent, "<command-name>/cost</command-name>\n<command-message>cost</command-message>\n<command-args></command-args>") +
+			prompt("stdout-c", "prompt-c", "user-c", "<local-command-stdout>Total cost: $0.01</local-command-stdout>")
+	}
+	noticeCutShort := prompt("note-n", "prompt-n", "assistant-0", "<task-notification>done</task-notification>") +
+		`{"type":"user","sessionId":"native","uuid":"marker-n","parentUuid":"note-n","promptId":"prompt-n","message":{"content":[{"type":"text","text":"[Request interrupted by user]"}]}}` + "\n" +
+		synthetic("marker-n", "", "No response requested.")
+	stray := `{"type":"system","sessionId":"native","uuid":"stray","parentUuid":"assistant-0"}` + "\n"
+	submitP := domain.NativeCheckpointObservation{Submission: true, PromptID: "prompt-p", SubmissionID: "submission-9", Text: "P"}
+	submitB := domain.NativeCheckpointObservation{Submission: true, PromptID: "prompt-b", SubmissionID: "submission-8", Text: "B"}
+	stopB := domain.NativeCheckpointObservation{PromptID: "prompt-b", Text: "answer B"}
+	for _, test := range []struct {
+		name, transcript     string
+		later                []domain.NativeCheckpointObservation
+		wantUser, wantAnswer string
+		interrupted          bool
+		afterWindow          bool
+		wantError            string
+	}{
+		{name: "cancelled tail", transcript: answered + cancelled, later: []domain.NativeCheckpointObservation{submitP},
+			wantUser: "user-p", interrupted: true, afterWindow: true},
+		{name: "cancelled tail resumed with filler", transcript: answered + cancelled + filler, later: []domain.NativeCheckpointObservation{submitP},
+			wantUser: "user-p", interrupted: true, afterWindow: true},
+		{name: "usage limit before a reply", transcript: answered + cancelled + synthetic("hook-p", `"isApiErrorMessage":true,"error":"rate_limit",`, "You've hit your 5-hour limit · resets 7pm (Asia/Calcutta)"),
+			later: []domain.NativeCheckpointObservation{submitP}, wantUser: "user-p", interrupted: true, afterWindow: true},
+		{name: "local command after an answered turn", transcript: answered + localCommand("assistant-0"), wantUser: "user-0", interrupted: true, afterWindow: true},
+		{name: "notice cut short after an answered turn", transcript: answered + noticeCutShort, wantUser: "user-0", interrupted: true},
+		{name: "filler, then a normal turn", transcript: answered + cancelled + filler + next("filler"),
+			later: []domain.NativeCheckpointObservation{submitP, submitB, stopB}, wantUser: "user-b", wantAnswer: "answer B"},
+		{name: "cancelled on a dead branch", transcript: answered + cancelled + next("assistant-0"),
+			later: []domain.NativeCheckpointObservation{submitP, submitB, stopB}, wantUser: "user-b", wantAnswer: "answer B"},
+		{name: "Stop still owed", transcript: answered + cancelled, later: []domain.NativeCheckpointObservation{submitP, {PromptID: "prompt-p"}},
+			wantError: "observed native turn not completed"},
+		{name: "newer turn off the live chain", transcript: answered + next("assistant-0") + stray, later: []domain.NativeCheckpointObservation{submitB, stopB},
+			wantError: "native submission attachment not flushed"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			evidence := checkpointEvidence(slices.Concat([]domain.NativeCheckpointObservation{
+				{Submission: true, PromptID: "prompt-0", SubmissionID: "submission-0", Text: "A"},
+				{PromptID: "prompt-0", Text: "answer A"}}, test.later)...)
+			got, err := verifyCheckpointTranscript(context.Background(), strings.NewReader(test.transcript),
+				ports.NativeCheckpointRequest{ProviderConversationID: "native", Evidence: evidence})
+			var unanswered *ports.UnansweredNativeTailError
+			if errors.As(err, &unanswered) != test.afterWindow || !errors.Is(err, ports.ErrChatHistoryUnsettled) && test.afterWindow {
+				t.Fatalf("boundary=%+v error=%v, want afterWindow=%v", got, err, test.afterWindow)
+			}
+			if test.afterWindow {
+				got, err = unanswered.Boundary, nil
+			}
+			if test.wantError != "" {
+				if !errors.Is(err, ports.ErrChatHistoryUnsettled) || !strings.Contains(err.Error(), test.wantError) {
+					t.Fatalf("boundary=%+v error=%v, want %q", got, err, test.wantError)
+				}
+				return
+			}
+			if err != nil || got.UserMessageID != test.wantUser || got.AssistantText != test.wantAnswer || got.Interrupted != test.interrupted {
+				t.Fatalf("boundary=%+v error=%v, want user %s answer %q interrupted=%v", got, err, test.wantUser, test.wantAnswer, test.interrupted)
 			}
 		})
 	}

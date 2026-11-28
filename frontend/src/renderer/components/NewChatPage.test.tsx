@@ -18,6 +18,7 @@ const h = vi.hoisted(() => ({
 	navigate: vi.fn(),
 	launch: vi.fn(),
 	launchFallback: vi.fn(),
+	chooseTurnSettings: vi.fn(),
 	fallbackAction: undefined as string | undefined,
 	isCloudProject: false,
 	error: undefined as string | undefined,
@@ -37,6 +38,8 @@ const h = vi.hoisted(() => ({
 	modelWarningRetries: true,
 	offering: { ready: false, loaded: false, org: undefined as { id: string } | undefined, features: [] as string[], maxAttachmentBytes: undefined as number | undefined },
 	workspaces: [] as Array<Record<string, unknown>>,
+	preparedSessionId: "",
+	autoCompact: undefined as { value?: "200k" | "1m" | "off"; beforeStart?: boolean; onChange: (value?: "200k" | "1m" | "off") => void } | undefined,
 }));
 
 vi.mock("@tanstack/react-router", () => ({
@@ -44,11 +47,12 @@ vi.mock("@tanstack/react-router", () => ({
 	useRouter: () => ({ preloadRoute: async () => undefined, history: { canGoBack: () => false, back: vi.fn() } }),
 }));
 // What the settings bar's agent and model picker is given; the picker is tested on its own.
-const modelPicker = vi.hoisted(() => ({ current: undefined as PickerSource | undefined }));
+const modelPicker = vi.hoisted(() => ({ current: undefined as PickerSource | undefined, autoCompact: undefined as { kind?: string; value?: string; title?: string; onChange: (value?: "200k" | "1m" | "off") => void } | undefined }));
 vi.mock("./chat/AgentSwitchPicker", async (original) => ({
 	...await original<typeof import("./chat/AgentSwitchPicker")>(),
-	AgentModelPicker: ({ current }: { current: PickerSource }) => {
+	AgentModelPicker: ({ current, autoCompact }: { current: PickerSource; autoCompact?: typeof modelPicker.autoCompact }) => {
 		modelPicker.current = current;
+		modelPicker.autoCompact = autoCompact;
 		return null;
 	},
 }));
@@ -78,12 +82,14 @@ vi.mock("./TaskComposer", () => ({
 		effectiveInterface: "chat",
 		refreshModels: async () => undefined,
 		notePreparationUsed: () => undefined,
+		preparedSessionId: h.preparedSessionId,
 		modelWarning: h.modelWarning,
 		modelWarningRetries: h.modelWarningRetries,
 		chatModels: h.chatModels,
 		turnSettings: { model: h.model, reasoningEffort: "high", approvalMode: h.approvalMode },
 		approvalModes: h.approvalModes,
-		chooseTurnSettings: vi.fn(),
+		chooseTurnSettings: h.chooseTurnSettings,
+		autoCompact: h.autoCompact,
 		agent: { value: h.harness },
 		model: {},
 		effort: {},
@@ -114,6 +120,7 @@ beforeEach(() => {
 	h.navigate.mockReset();
 	h.launch.mockReset();
 	h.launchFallback.mockReset();
+	h.chooseTurnSettings.mockReset();
 	h.fallbackAction = undefined;
 	h.isCloudProject = false;
 	h.error = undefined;
@@ -128,12 +135,15 @@ beforeEach(() => {
 	h.chatModels = [{ id: "gpt-6", displayName: "GPT-6", default: true }];
 	h.model = "gpt-6";
 	modelPicker.current = undefined;
+	modelPicker.autoCompact = undefined;
+	h.autoCompact = undefined;
 	h.approvalMode = "auto";
 	h.approvalModes = undefined;
 	h.modelWarning = undefined;
 	h.modelWarningRetries = true;
 	h.offering = { ready: false, loaded: false, org: undefined, features: [], maxAttachmentBytes: undefined };
 	h.workspaces = [{ id: "proj-1", name: "Project", kind: "project", sessions: [] }];
+	h.preparedSessionId = "";
 	window.localStorage.clear();
 });
 
@@ -164,6 +174,14 @@ describe("NewChatPage", () => {
 		expect(screen.getByText(/isn't available to your Codex account on Cloud/)).toBeInTheDocument();
 		expect(screen.queryByRole("button", { name: "Retry" })).toBeNull();
 	});
+	it("passes the prepared session id as assetSessionId instead of the synthetic draft id", () => {
+		const page = renderPage();
+		expect(h.workspace?.assetSessionId).toBe("");
+		h.preparedSessionId = "proj-1-42";
+		page.refresh();
+		expect(h.workspace?.assetSessionId).toBe("proj-1-42");
+	});
+
 	it("shows a confirmed branch choice as status before the next send", () => {
 		h.status = "Branch fix/login selected for your next task.";
 		renderPage();
@@ -745,6 +763,40 @@ describe("New Chat model menu", () => {
 			["sonnet", "Sonnet 5.5"], ["fable", "Fable 5.2"], ["opus", "Opus 5.5"],
 		]);
 		expect(modelPicker.current?.modelId).toBe("sonnet");
+		// Cloud's chat does not keep Ultracode for later messages, so a Cloud task does not offer it.
+		expect(modelPicker.current?.onToggleUltracode).toBeUndefined();
+	});
+
+	it("asks for Ultracode in the opening message and keeps it on in the session's chat", async () => {
+		h.harness = "claude-code";
+		h.chatModels = catalog;
+		h.model = "sonnet";
+		h.launch.mockResolvedValue("sess-1");
+		const queryClient = renderPage();
+		render(<QueryClientProvider client={queryClient}>{h.workspace?.draftSettings}</QueryClientProvider>);
+		expect(modelPicker.current?.ultracode).toBe(false);
+		act(() => modelPicker.current?.onToggleUltracode?.(true));
+
+		await act(async () => { await h.workspace?.onSend?.("Fix the build", undefined, "cid-1"); });
+		expect(h.launch).toHaveBeenCalledWith("Ultracode:\nFix the build", expect.objectContaining({ clientRequestId: "cid-1" }));
+		// The brief shows what was typed; the session's chat starts with Ultracode on.
+		expect(h.workspace?.localEchos).toEqual([expect.objectContaining({ text: "Fix the build" })]);
+		expect(queryClient.getQueryData(["session-launch-settings", "sess-1"])).toEqual(expect.objectContaining({ ultracode: true }));
+	});
+
+	it("offers Claude Code's compaction window before the task starts", () => {
+		h.harness = "claude-code";
+		h.chatModels = catalog;
+		h.model = "sonnet";
+		const onChange = vi.fn();
+		h.autoCompact = { value: "1m", beforeStart: true, onChange };
+		const queryClient = renderPage();
+		render(<QueryClientProvider client={queryClient}>{h.workspace?.draftSettings}</QueryClientProvider>);
+		expect(modelPicker.autoCompact).toEqual(expect.objectContaining({ kind: "window", value: "1m" }));
+		// Nothing is running yet, so the hint does not warn of a restart.
+		expect(modelPicker.autoCompact?.title).not.toContain("restarts the agent");
+		modelPicker.autoCompact?.onChange("200k");
+		expect(onChange).toHaveBeenCalledWith("200k");
 	});
 
 	it("keeps the model this computer's agent defaults to in a local task's menu", () => {
@@ -761,5 +813,29 @@ describe("New Chat model menu", () => {
 		expect(modelPicker.current?.models.map((model) => [model.id, model.label])).toEqual([
 			["sonnet", "Sonnet 5.5"], ["fable", "Fable 5.2"], ["opus", "Opus 5.5"],
 		]);
+	});
+
+	it("keeps a project-pinned model the account's catalog lacks re-selectable after picking a listed one", () => {
+		const note = "Set for this project · Codex doesn't list it for this account";
+		h.chatModels = [
+			{ id: "gpt-6", displayName: "GPT-6", default: true },
+			{ id: "gpt-5.4-mini", displayName: "gpt-5.4-mini", default: false, hint: note },
+		];
+		h.model = "gpt-5.4-mini";
+		const page = renderPage();
+		const showBar = () => render(<QueryClientProvider client={page}>{h.workspace?.draftSettings}</QueryClientProvider>);
+		showBar();
+		expect(modelPicker.current?.modelId).toBe("gpt-5.4-mini");
+		expect(modelPicker.current?.models.find((model) => model.id === "gpt-5.4-mini")).toEqual(expect.objectContaining({ hint: note }));
+		act(() => modelPicker.current?.onPickModel?.("gpt-6"));
+		expect(h.chooseTurnSettings).toHaveBeenLastCalledWith(expect.objectContaining({ model: "gpt-6" }));
+
+		h.model = "gpt-6";
+		page.refresh();
+		showBar();
+		expect(modelPicker.current?.modelId).toBe("gpt-6");
+		expect(modelPicker.current?.models.map((model) => model.id)).toEqual(["gpt-6", "gpt-5.4-mini"]);
+		act(() => modelPicker.current?.onPickModel?.("gpt-5.4-mini"));
+		expect(h.chooseTurnSettings).toHaveBeenLastCalledWith(expect.objectContaining({ model: "gpt-5.4-mini" }));
 	});
 });

@@ -541,6 +541,13 @@ var (
 	// session the user deleted must leave the sidebar whether or not its
 	// worktree could be reclaimed.
 	ErrWorkspaceRepoUnavailable = errors.New("workspace: project repository is unavailable")
+	// ErrWorkspaceNotARepo reports that a registered project repository folder
+	// (a project, a workspace root, or a workspace child repository) is no
+	// longer a Git repository, for example because its .git was deleted.
+	// Adapters return it inside *WorkspaceNotARepoError only for those
+	// registered folders, never for a session worktree, so callers can surface
+	// recovery guidance instead of git's raw "not a git repository" exit 128.
+	ErrWorkspaceNotARepo = errors.New("workspace: project folder is not a git repository")
 	// ErrWorkspaceStale reports an AO-managed workspace path no longer points
 	// at a registered git worktree. Replacement paths may skip preservation for
 	// this state after path-safety checks, while real preserve failures remain
@@ -602,6 +609,23 @@ var (
 	ErrRuntimeProbeInconclusive = errors.New("runtime: liveness probe inconclusive")
 )
 
+// WorkspaceNotARepoError names the registered project repository folder that
+// git no longer recognizes as a repository. It matches ErrWorkspaceNotARepo via
+// errors.Is and keeps the underlying git failure in its chain for logs and
+// telemetry.
+type WorkspaceNotARepoError struct {
+	Path string
+	Err  error
+}
+
+func (e *WorkspaceNotARepoError) Error() string {
+	return fmt.Sprintf("%v: %q: %v", ErrWorkspaceNotARepo, e.Path, e.Err)
+}
+
+func (e *WorkspaceNotARepoError) Unwrap() []error {
+	return []error{ErrWorkspaceNotARepo, e.Err}
+}
+
 // WorkspaceTaskNamer renames a launched task's temporary branch. The checkout
 // never moves, so the returned info differs only in branch names, and on error
 // it still describes the branches Git holds, which may differ per repository.
@@ -661,6 +685,11 @@ type WorkspaceInfo struct {
 	// when the normal workspace lifecycle primitives operate on one child repo
 	// inside a workspace project.
 	RepoPath string
+	// ReleaseAgentState is set when the session is being deleted, so it can no
+	// longer be restored. Teardown may then remove an agent's restorable
+	// conversation kept in the workspace (see hookutil.IsRestorableStateDir),
+	// which an archive keeps so a later restore can resume it.
+	ReleaseAgentState bool
 }
 
 // WorkspaceProjectConfig describes a multi-repo workspace session. RootRepoPath

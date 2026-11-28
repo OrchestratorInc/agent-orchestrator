@@ -439,7 +439,7 @@ func TestRegisterArtifacts(t *testing.T) {
 		}
 		return resp, string(raw)
 	}
-	resp, body := post(`{"paths":["plan.md"]}`)
+	resp, body := post(`{"paths":["plan.md"],"workingDir":"/data/artifacts/ao-1/screens"}`)
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("status = %d, body %s", resp.StatusCode, body)
 	}
@@ -454,8 +454,8 @@ func TestRegisterArtifacts(t *testing.T) {
 	if len(got.Registered) != 1 || got.Registered[0] != "plan.md" || got.OtherFiles != 2 || len(got.OtherRootFiles) != 1 {
 		t.Fatalf("response = %+v", got)
 	}
-	if len(fake.artifactsRegistered) != 1 {
-		t.Fatalf("registered = %v", fake.artifactsRegistered)
+	if len(fake.artifactsRegistered) != 1 || fake.artifactsWorkingDir != "/data/artifacts/ao-1/screens" {
+		t.Fatalf("registered = %v from %q", fake.artifactsRegistered, fake.artifactsWorkingDir)
 	}
 	if resp, _ := post(`{"paths":[]}`); resp.StatusCode != http.StatusBadRequest {
 		t.Fatalf("empty paths status = %d, want 400", resp.StatusCode)

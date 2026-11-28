@@ -13,8 +13,8 @@ import (
 const daemonReadyEvent = "ao.daemon.ready"
 
 // ao.daemon.startup_reconciled is sent when the background restore that starts
-// with the listener ends: chat hosts, reviewer chats, sessions and agent
-// processes, adding up to reconcile_ms.
+// with the listener ends: chat hosts, sessions, reviewer chats still recovering
+// and agent processes, adding up to reconcile_ms.
 const daemonStartupReconciledEvent = "ao.daemon.startup_reconciled"
 
 // Steps of ao.daemon.ready, in order. Each is sent as <step>_ms; the payload
@@ -36,14 +36,14 @@ const (
 // Steps of ao.daemon.startup_reconciled, in order.
 const (
 	stepChatHosts        = "chat_hosts"
-	stepReviewerRecovery = "reviewer_recovery"
 	stepSessions         = "sessions"
+	stepReviewerRecovery = "reviewer_recovery"
 	stepRuntime          = "runtime"
 )
 
 var (
 	daemonReadySteps     = []string{stepPrepare, stepLockWait, stepStoreOpen, stepLifecycleSetup, stepChatSetup, stepSessionSetup, stepInstallRecovery, stepServicesSetup, stepCodexRecovery, stepStartupReconcile, stepListen}
-	daemonReconcileSteps = []string{stepChatHosts, stepReviewerRecovery, stepSessions, stepRuntime}
+	daemonReconcileSteps = []string{stepChatHosts, stepSessions, stepReviewerRecovery, stepRuntime}
 	daemonReadyTotal     = "startup_ms"
 	daemonReconcileTotal = "reconcile_ms"
 )

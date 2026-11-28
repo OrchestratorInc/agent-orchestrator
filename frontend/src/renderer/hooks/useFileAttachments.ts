@@ -80,8 +80,11 @@ export type FileAttachmentOptions = {
 	maxAttachmentBytes?: number;
 };
 
-/** A file still being read or staged; an image shows its own picture meanwhile. */
-type PendingFileAttachment = Pick<FileAttachment, "id" | "name"> & { previewUrl?: string };
+/**
+ * A file still being read or staged. Its type is known from the start, so its placeholder can take the
+ * shape its tile will; an image shows its own picture meanwhile.
+ */
+type PendingFileAttachment = Pick<FileAttachment, "id" | "name" | "mimeType"> & { previewUrl?: string };
 
 type SharedAttachmentUpdate = {
 	pending: number;
@@ -608,7 +611,7 @@ export function useFileAttachments(options: FileAttachmentOptions = {}) {
 	}, [initialKey, maxAttachmentBytes, onAttachmentsChange, prepareAttachments, prepareEach]);
 
 	/** Resolves with the attachments this batch actually added, staged when staging is on. */
-	const addFiles = useCallback((files: Iterable<File>): Promise<FileAttachment[]> => {
+	const addFiles = useCallback((files: Iterable<File>, ids?: ReadonlyMap<File, string>): Promise<FileAttachment[]> => {
 		// Serialize batches. Two paste/drop events can arrive before React publishes
 		// `preparing`; processing both against the same attachment snapshot could
 		// otherwise exceed count/byte caps or overwrite one batch with the other.
@@ -624,7 +627,7 @@ export function useFileAttachments(options: FileAttachmentOptions = {}) {
 		const pending = batch.map((file, index): PendingFileAttachment => {
 			const fits = index < slots && (maxAttachmentBytes === undefined || file.size <= maxAttachmentBytes);
 			const previewUrl = fits && isSupportedImageAttachment(file.type) ? fileObjectUrl(file) : undefined;
-			return { id: crypto.randomUUID(), name: file.name, ...(previewUrl ? { previewUrl } : {}) };
+			return { id: ids?.get(file) ?? crypto.randomUUID(), name: file.name, mimeType: file.type, ...(previewUrl ? { previewUrl } : {}) };
 		});
 		for (const file of pending) pendingFileControllers.set(file.id, new AbortController());
 		const entries = batch.map((file, index) => ({ file, id: pending[index]!.id }));

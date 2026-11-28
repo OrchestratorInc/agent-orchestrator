@@ -112,6 +112,7 @@ export function CoderTemplatePicker({ orgId }: { orgId: string | undefined }) {
 							rows={4}
 							spellCheck={false}
 							placeholder={t("coder.startup.placeholder", { defaultValue: "# runs once the workspace is ready\nmake dev" })}
+							data-field="textarea"
 							className="w-full rounded-md border border-border bg-transparent px-3 py-2 font-mono text-xs text-foreground outline-none focus-visible:ring-1 focus-visible:ring-primary"
 						/>
 					) : null}

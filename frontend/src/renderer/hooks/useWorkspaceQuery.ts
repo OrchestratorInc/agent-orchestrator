@@ -122,6 +122,7 @@ export function toWorkspaceSession(
 		title: session.terminalTitle ?? session.displayName ?? session.issueId ?? session.id,
 		issueId: session.issueId,
 		provider: toAgentProvider(session.harness),
+		roleAgent: session.roleAgent ? toAgentProvider(session.roleAgent) : undefined,
 		reviewerHarness: toReviewerHarnessId(session.reviewerHarness),
 		reviewerConfig: session.reviewerConfig
 			? {
@@ -160,6 +161,8 @@ export function toWorkspaceSession(
 		terminateOnPrMerge: session.terminateOnPrMerge ?? false,
 		autoInjectReview: session.autoInjectReview ?? true,
 		autoInjectCI: session.autoInjectCI ?? true,
+		...(session.movedTo ? { movedTo: { orgId: session.movedTo.orgId, sessionId: session.movedTo.sessionId, at: session.movedTo.at } } : {}),
+		...(session.moveStarted ? { moveStarted: session.moveStarted } : {}),
 		createdAt: session.createdAt,
 		updatedAt: session.updatedAt,
 		lastUserMessageAt: session.lastUserMessageAt ?? undefined,
@@ -231,6 +234,7 @@ function toLocalWorkspaceSession(
 		title: session.terminalTitle ?? session.displayName ?? session.issueId ?? session.id,
 		issueId: session.issueId,
 		provider: toAgentProvider(session.harness),
+		roleAgent: session.roleAgent ? toAgentProvider(session.roleAgent) : undefined,
 		reviewerHarness: toReviewerHarnessId(session.reviewerHarness),
 		reviewerConfig: session.reviewerConfig
 			? {
@@ -269,6 +273,8 @@ function toLocalWorkspaceSession(
 		terminateOnPrMerge: session.terminateOnPrMerge ?? false,
 		autoInjectReview: session.autoInjectReview ?? true,
 		autoInjectCI: session.autoInjectCI ?? true,
+		...(session.movedTo ? { movedTo: { orgId: session.movedTo.orgId, sessionId: session.movedTo.sessionId, at: session.movedTo.at } } : {}),
+		...(session.moveStarted ? { moveStarted: session.moveStarted } : {}),
 		createdAt: session.createdAt,
 		updatedAt: session.updatedAt,
 		lastUserMessageAt: session.lastUserMessageAt ?? undefined,
@@ -583,6 +589,7 @@ export function toCloudWorkspaceSession(
 			runtimeError: session.runtimeError,
 			startupError: session.startupError,
 			coderWorkspaceUrl: session.coderWorkspaceUrl,
+			...(session.movedAway ? { movedAway: true as const } : {}),
 			...(session.workerEpoch ? { workerEpoch: session.workerEpoch } : {}),
 			...(session.requestedBy ? { requestedBy: session.requestedBy } : {}),
 			...(session.createdByUserId ? { createdByUserId: session.createdByUserId } : {}),

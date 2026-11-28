@@ -14,6 +14,7 @@ import { CloudCpAuthError, type CloudCpInterfaceTransition } from "../lib/cloud-
 import { conversationQueryKey } from "./useConversation";
 import { useCloudCp } from "./useCloudCp";
 import { cloudSessionsQueryKey, workspaceQueryKeyForHost } from "./useWorkspaceQuery";
+import { withMoveStateText } from "../lib/cloud-move-state";
 
 export type SessionInterfaceTransition = components["schemas"]["SessionInterfaceTransition"];
 export type SessionInterfaceTransitionStatus =
@@ -379,7 +380,10 @@ export function useSessionInterfaceTransition(
 						...(input.reasoningEffort ? { reasoningEffort: input.reasoningEffort } : {}),
 						...(targetHarness ? { targetHarness } : {}),
 					},
-				);
+				).catch((error: unknown) => {
+					// A session whose work is moving does not switch (SESSION_MOVING).
+					throw withMoveStateText(error);
+				});
 				return {
 					transition: toSessionInterfaceTransition(response.transition),
 				};

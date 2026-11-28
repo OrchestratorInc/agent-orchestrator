@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"testing"
 
@@ -151,6 +152,18 @@ func TestNativeCheckpointCompactionKeepsSafetyChecks(t *testing.T) {
 				compactionSummary("summary", "boundary", "prompt-0"))...),
 			events: []domain.NativeCheckpointObservation{submitObservation(0, "A"), stopObservation(0, "answer A")},
 			reason: "no native user prompt since compaction",
+		},
+		{
+			name: "parent dropped at the compaction",
+			transcript: compactionLines(t, slices.Concat(compactionPrompt(0, "", "A"), []map[string]any{
+				compactionAnswer("assistant-0", "submission-attachment-0", "answer A", "end_turn"),
+				compactionBoundary("boundary", "assistant-0", map[string]any{"trigger": "manual"}),
+				compactionSummary("summary", "boundary", "prompt-0"),
+			}, compactionPrompt(1, "assistant-0", "B"), []map[string]any{
+				compactionAnswer("assistant-1", "submission-attachment-1", "answer B", "end_turn"),
+			})...),
+			events: []domain.NativeCheckpointObservation{submitObservation(1, "B"), stopObservation(1, "answer B")},
+			reason: "incomplete native ancestry",
 		},
 	} {
 		t.Run(test.name, func(t *testing.T) {
@@ -343,23 +356,6 @@ func TestNativeCheckpointManualCompactCommand(t *testing.T) {
 	}
 }
 
-func TestClaudeLocalCommandMetadata(t *testing.T) {
-	for text, want := range map[string]bool{
-		"<command-name>/compact</command-name>\n<command-message>compact</command-message>\n<command-args></command-args>": true,
-		"<local-command-stdout>Compacted </local-command-stdout>":                                                          true,
-		"<local-command-stderr>failed</local-command-stderr>":                                                              true,
-		"<command-name>/review</command-name> please look at auth":                                                         false,
-		"<command-name>unclosed":         false,
-		"what does <command-name> mean?": false,
-		"plain prompt":                   false,
-		"":                               false,
-	} {
-		if got := claudeLocalCommandMetadata(text); got != want {
-			t.Errorf("claudeLocalCommandMetadata(%q) = %v", text, got)
-		}
-	}
-}
-
 // Long sessions are the ones that compact. History before the latest
 // compaction is dropped as it is read, so the size bound applies to each
 // stretch between compactions, not to the whole file.
@@ -389,5 +385,126 @@ func TestNativeCheckpointSizeBoundCountsOnlySinceCompaction(t *testing.T) {
 	}
 	if _, err := verifyCompacted(transcript(false), events...); err == nil || !strings.Contains(err.Error(), "exceeds readable bounds") {
 		t.Fatalf("uncompacted oversized transcript: %v", err)
+	}
+}
+
+// A prompt can set off an automatic compaction before Claude answers it.
+// Claude Code then keeps the prompt and its submission hook among the
+// preserved messages, gives the summary the prompt's ID, and replay hangs the
+// prompt after the summary. The summary is a note replay skips, so the prompt
+// is still its turn's only user boundary (regression of #5661).
+func compactedBySubmittedPrompt(t *testing.T, metadata map[string]any, end string, extra ...map[string]any) string {
+	records := compactionPrompt(0, "", "A")
+	records = append(records, compactionAnswer("assistant-0", "submission-attachment-0", "answer A", "end_turn"))
+	records = append(records, compactionPrompt(1, "assistant-0", "B")...)
+	records = append(records, compactionBoundary("boundary", "submission-attachment-1", metadata))
+	records = append(records, compactionContext("boundary")...)
+	records = append(records, compactionSummary("summary", "context-date", "prompt-1"))
+	parent := "summary"
+	for _, record := range extra {
+		record["parentUuid"] = parent
+		parent = record["uuid"].(string)
+	}
+	records = append(records, extra...)
+	return compactionLines(t, append(records, compactionAnswer("assistant-1", parent, "answer B", end))...)
+}
+
+func TestNativeCheckpointPromptTriggersCompaction(t *testing.T) {
+	events := []domain.NativeCheckpointObservation{
+		submitObservation(0, "A"), stopObservation(0, "answer A"), submitObservation(1, "B"), stopObservation(1, "answer B"),
+	}
+	for name, metadata := range map[string]map[string]any{
+		"preserved messages": keptMessages("summary", "assistant-0", "user-1", "submission-attachment-1"),
+		"preserved segment": {"trigger": "auto", "preservedSegment": map[string]any{
+			"headUuid": "assistant-0", "anchorUuid": "summary", "tailUuid": "submission-attachment-1"}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			got, err := verifyCompacted(compactedBySubmittedPrompt(t, metadata, "end_turn"), events...)
+			if err != nil || got.UserMessageID != "user-1" || got.UserText != "B" || got.AssistantText != "answer B" {
+				t.Fatalf("boundary=%+v error=%v", got, err)
+			}
+		})
+	}
+}
+
+// The kept prompt is an ordinary replayed turn, not one the compaction hid:
+// its Stop must see it complete and match its answer, and a second visible
+// prompt with the same ID is still ambiguous.
+func TestNativeCheckpointPromptTriggersCompactionKeepsSafetyChecks(t *testing.T) {
+	kept := keptMessages("summary", "assistant-0", "user-1", "submission-attachment-1")
+	events := func(answer string) []domain.NativeCheckpointObservation {
+		return []domain.NativeCheckpointObservation{
+			submitObservation(0, "A"), stopObservation(0, "answer A"), submitObservation(1, "B"), stopObservation(1, answer),
+		}
+	}
+	duplicate := map[string]any{"type": "user", "uuid": "user-1-again", "promptId": "prompt-1", "message": map[string]any{"content": "B again"}}
+	for _, test := range []struct {
+		name       string
+		transcript string
+		events     []domain.NativeCheckpointObservation
+		reason     string
+	}{
+		{
+			name:       "answer still running",
+			transcript: compactedBySubmittedPrompt(t, kept, "tool_use"),
+			events:     events("answer B"),
+			reason:     "observed native turn not completed",
+		},
+		{
+			name:       "Stop text from another answer",
+			transcript: compactedBySubmittedPrompt(t, kept, "end_turn"),
+			events:     events("a different answer"),
+			reason:     "Stop answer does not match its native prompt",
+		},
+		{
+			name:       "second visible prompt with the same ID",
+			transcript: compactedBySubmittedPrompt(t, kept, "end_turn", duplicate),
+			events:     events("answer B"),
+			reason:     "ambiguous native prompt ID",
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			got, err := verifyCompacted(test.transcript, test.events...)
+			if !errors.Is(err, ports.ErrChatHistoryUnsettled) || !strings.Contains(err.Error(), test.reason) {
+				t.Fatalf("boundary=%+v error=%v, want %q", got, err, test.reason)
+			}
+		})
+	}
+}
+
+// A local command typed before a prompt is written ahead of it under the same
+// prompt ID: the meta caveat, the command and its output. Replay skips them,
+// so the prompt after them is that cycle's user boundary.
+func TestNativeCheckpointLocalCommandBeforePrompt(t *testing.T) {
+	transcript := func(second string) string {
+		records := compactionPrompt(0, "", "A")
+		records = append(records,
+			compactionAnswer("assistant-0", "submission-attachment-0", "answer A", "end_turn"),
+			map[string]any{"type": "user", "uuid": "caveat", "parentUuid": "assistant-0", "promptId": "prompt-1", "isMeta": true,
+				"message": map[string]any{"content": "<local-command-caveat>Caveat: generated by local commands.</local-command-caveat>"}},
+			map[string]any{"type": "user", "uuid": "command", "parentUuid": "caveat", "promptId": "prompt-1",
+				"message": map[string]any{"content": "<command-name>/model</command-name>\n<command-message>model</command-message>\n<command-args></command-args>"}},
+			map[string]any{"type": "user", "uuid": "stdout", "parentUuid": "command", "promptId": "prompt-1",
+				"message": map[string]any{"content": "<local-command-stdout>Set model</local-command-stdout>"}},
+		)
+		records = append(records, compactionPrompt(1, "stdout", "B")...)
+		parent := "submission-attachment-1"
+		if second != "" {
+			records = append(records, map[string]any{"type": "user", "uuid": "user-1-again", "parentUuid": parent, "promptId": "prompt-1",
+				"message": map[string]any{"content": second}})
+			parent = "user-1-again"
+		}
+		return compactionLines(t, append(records, compactionAnswer("assistant-1", parent, "answer B", "end_turn"))...)
+	}
+	events := []domain.NativeCheckpointObservation{
+		submitObservation(0, "A"), stopObservation(0, "answer A"), submitObservation(1, "B"), stopObservation(1, "answer B"),
+	}
+	got, err := verifyCompacted(transcript(""), events...)
+	if err != nil || got.UserMessageID != "user-1" || got.UserText != "B" || got.AssistantText != "answer B" {
+		t.Fatalf("boundary=%+v error=%v", got, err)
+	}
+	if _, err := verifyCompacted(transcript("B again"), events...); !errors.Is(err, ports.ErrChatHistoryUnsettled) ||
+		!strings.Contains(err.Error(), "ambiguous native prompt ID") {
+		t.Fatalf("second prompt with the same ID admitted: %v", err)
 	}
 }

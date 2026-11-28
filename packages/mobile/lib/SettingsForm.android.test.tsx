@@ -6,6 +6,7 @@ const fixtures = vi.hoisted(() => ({
 	theme: { bgBase: "#base", bgElevated: "#elevated", textPrimary: "#primary", textSecondary: "#secondary", textTertiary: "#tertiary", accent: "#accent", accentTint: "#accentTint", borderDefault: "#border", red: "#red", green: "#green" },
 }));
 
+vi.mock("./useHeaderOverlap", () => ({ useGlassBarInset: () => 0, useHeaderOverlap: () => 0 }));
 vi.mock("react-native", () => ({ StyleSheet: { create: (styles: object) => styles } }));
 vi.mock("react-native-safe-area-context", () => ({ useSafeAreaInsets: () => ({ top: 0, bottom: 24, left: 0, right: 0 }) }));
 vi.mock("./ThemeProvider", () => ({ useTheme: () => fixtures.theme, useThemeState: () => ({ scheme: "dark" }) }));

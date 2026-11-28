@@ -51,6 +51,20 @@ describe("resolveActiveConfig", () => {
 		);
 	});
 
+	it("reports a late credential repair for the config it returned", async () => {
+		const stale = { ...DEFAULT_CONFIG, host: "192.168.1.42", httpPort: "3011", password: "aod_refused" };
+		let repair!: (repaired: boolean) => void;
+		const d = deps({ connect: vi.fn(async (id: string) => ({
+			ok: true as const, config: stale, endpoint: lan, hostId: id,
+			credentialRepair: new Promise<boolean>((done) => { repair = done; }),
+		})) });
+		const onRepaired = vi.fn();
+		await expect(resolveActiveConfig(d, onRepaired)).resolves.toBe(stale);
+		expect(onRepaired).not.toHaveBeenCalled();
+		repair(true);
+		await vi.waitFor(() => expect(onRepaired).toHaveBeenCalledExactlyOnceWith(stale));
+	});
+
 	it("does not persist anything when the race fails", async () => {
 		const d = deps({ connect: vi.fn(async () => ({ ok: false as const, reason: "none-reachable" as const })) });
 		await resolveActiveConfig(d);

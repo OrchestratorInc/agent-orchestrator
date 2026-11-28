@@ -397,6 +397,12 @@ type SessionMetadata struct {
 	// means the provider default, including an explicit task-level reset. The
 	// resolved value is pinned so project-default changes cannot alter resume.
 	Effort string `json:"effort,omitempty"`
+	// RoleAgent is the agent the project named for this session's role when
+	// the session's agent was last chosen: at spawn, or by switching to another
+	// agent. A project setting that differs from it changed afterwards. A
+	// session's own agent differing from the setting is not drift: a spawn or
+	// switch may pick any agent. Empty for sessions from before it was recorded.
+	RoleAgent AgentHarness `json:"-"`
 	// ArtifactDir is the session-owned artifact directory under AO's data dir.
 	// It is outside the git workspace and is never exposed directly on the API.
 	ArtifactDir string `json:"-"`
@@ -406,6 +412,14 @@ type SessionMetadata struct {
 	// session. Keeping the verifier durable lets a surviving worker authenticate
 	// after the desktop app or daemon restarts.
 	BrowserCapabilityVerifier string `json:"-"`
+}
+
+// SessionMove records the AO Cloud session a session moved to.
+type SessionMove struct {
+	MoveID    string    `json:"moveId"`
+	OrgID     string    `json:"orgId"`
+	SessionID string    `json:"sessionId"`
+	At        time.Time `json:"at"`
 }
 
 // SessionRecord is the persistence shape. It intentionally stores only durable
@@ -455,6 +469,18 @@ type SessionRecord struct {
 	// HibernatedAt records that the idle Chat controller was stopped while the
 	// session and conversation remain resumable. Nil means no recorded hibernation.
 	HibernatedAt *time.Time `json:"hibernatedAt,omitempty"`
+	// MovedTo is set when the session moved to AO Cloud. The session is
+	// archived here and continues there, so it must not run here again.
+	MovedTo *SessionMove `json:"movedTo,omitempty"`
+	// MoveConversationPlaced is set on a session moved here from AO Cloud once
+	// its conversation and the conversation's sidecar folder are placed.
+	MoveConversationPlaced bool `json:"-"`
+	// MoveStarted is the move id of a move to AO Cloud whose export pushed the
+	// branch and that has neither finished nor been rolled back. Restoring at
+	// startup leaves such a session stopped; an explicit restore or resume ends
+	// the move here and clears it. The app finishes that move under this id
+	// instead of starting a second one.
+	MoveStarted string `json:"moveStarted,omitempty"`
 	// StaleBinary is set while the session's current launch still runs a
 	// harness release an update has since replaced. It is derived when the row
 	// is read: any later launch starts on the installed release and reads as

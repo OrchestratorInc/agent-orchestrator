@@ -149,7 +149,10 @@ func (m *Manager) runRecordBackgroundTask(ctx context.Context, rec domain.Sessio
 	config := ports.AgentConfig{
 		Model: rec.Metadata.Model, Effort: rec.Metadata.Effort, Permissions: backgroundTaskPermissions(rec.Harness),
 	}
-	env := m.runtimeEnvForHarness(rec.ID, rec.ProjectID, rec.IssueID, nil, rec.Harness)
+	env, err := m.runtimeEnvForHarness(rec.ID, rec.ProjectID, rec.IssueID, nil, rec.Harness)
+	if err != nil {
+		return "", err
+	}
 	if m.agents != nil {
 		if agent, found := m.agents.Agent(rec.Harness); found {
 			m.augmentAgentRuntimeEnv(agent, env)
@@ -248,7 +251,11 @@ func (m *Manager) launchChatController(ctx context.Context, in chatSpawn) (domai
 	}
 	// Chat Service retains this unprivileged base environment. The bearer is
 	// minted inside its per-session launch gate and is never cached for reuse.
-	env := m.runtimeEnvForHarness(id, in.record.ProjectID, in.record.IssueID, in.project.Config.Env, in.record.Harness)
+	env, err := m.runtimeEnvForHarness(id, in.record.ProjectID, in.record.IssueID, in.project.Config.Env, in.record.Harness)
+	if err != nil {
+		m.rollbackSeedSpawnWorkspace(ctx, in.record, in.workspace, in.workspaceProject, false, in.promptQueued)
+		return domain.SessionRecord{}, wrapSpawnStage(id, ErrChatController, err)
+	}
 	if agent, ok := m.agents.Agent(in.cfg.Harness); ok {
 		m.augmentAgentRuntimeEnv(agent, env)
 		// Chat launches go through the same workspace preparation as terminal
@@ -301,6 +308,8 @@ func (m *Manager) launchChatController(ctx context.Context, in chatSpawn) (domai
 		SystemPrompt:            in.systemPrompt,
 		ForkHandoffNote:         forkHandoffNote,
 		ForkFirstStart:          in.cfg.Fork != nil && in.cfg.Fork.PrepareChat != nil,
+		FastMode:                in.cfg.FastMode,
+		AutoCompactWindow:       in.cfg.AutoCompactWindow,
 		AdditionalDirectories:   workspaceProjectDirectories(in.workspace.Path, in.workspaceProject),
 		MCPServers:              m.aoMCPServers(ctx, in.cfg.Harness, env),
 		ExpectedControllerOwner: in.record.ControllerOwner(),
@@ -335,6 +344,12 @@ func (m *Manager) launchChatController(ctx context.Context, in chatSpawn) (domai
 				BrowserCapabilityVerifier: in.record.Metadata.BrowserCapabilityVerifier,
 				Model:                     agentConfig.Model,
 				Effort:                    agentConfig.Effort,
+			}
+			if in.cfg.Harness == domain.HarnessAgy && started.Conversation.ID != "" {
+				if started.Conversation.Settings.Model != "" {
+					metadata.Model = started.Conversation.Settings.Model
+				}
+				metadata.Effort = started.Conversation.Settings.ReasoningEffort
 			}
 			committedConversation, commitErr := m.markChatControllerSpawned(
 				ctx, id, metadata, started.Conversation, started.ProviderBoundary,
@@ -583,7 +598,10 @@ func (m *Manager) resumeChatController(
 			return RestoreResult{}, relaunchFailed("browser capability", fmt.Errorf("%s %s: browser capability: %w", operation, rec.ID, err))
 		}
 	} else {
-		env = m.runtimeEnvForHarness(rec.ID, rec.ProjectID, rec.IssueID, project.Config.Env, rec.Harness)
+		env, err = m.runtimeEnvForHarness(rec.ID, rec.ProjectID, rec.IssueID, project.Config.Env, rec.Harness)
+		if err != nil {
+			return RestoreResult{}, relaunchFailed("launch environment", fmt.Errorf("%s %s: %w", operation, rec.ID, err))
+		}
 	}
 	if agent, ok := m.agents.Agent(rec.Harness); ok {
 		m.augmentAgentRuntimeEnv(agent, env)
@@ -621,6 +639,10 @@ func (m *Manager) resumeChatController(
 			}
 		}
 	}
+	// An imported chat's workspace preparation above already shared the skills.
+	if agent, ok := m.agents.Agent(rec.Harness); ok && !reconnectOnly && !rec.NeedsImportResume() {
+		m.syncSkills(ctx, agent, rec.ID, launchPath, env)
+	}
 	freshIfMissing := !requireNativeHistory && !reconnectOnly && providerHandoff == nil && m.providerNeverPersisted(ctx, rec)
 	var awakeTarget *domain.AwakeAgentTarget
 	if len(awakeTargets) > 0 {
@@ -631,6 +653,9 @@ func (m *Manager) resumeChatController(
 		awakeTarget = &target
 	}
 	var completionErr error
+	if err := m.versionMoveStage(ctx, rec.ID, domain.VersionMoveStarting); err != nil {
+		return RestoreResult{}, err
+	}
 	_, err = m.chat.StartChat(ctx, ChatStart{
 		AwakeReconnectTarget:    awakeTarget,
 		ReconnectOnly:           reconnectOnly,
@@ -722,6 +747,13 @@ func (m *Manager) resumeChatController(
 			// A fresh generation per launch: events still arriving from the
 			// controller this one replaced carry the old one and are rejected.
 			metadata.ControllerGeneration = started.ControllerGeneration
+			// Imported and older conversations may not have saved settings yet.
+			if rec.Harness == domain.HarnessAgy && !started.LiveReconnect && started.Conversation.ID != "" {
+				if started.Conversation.Settings.Model != "" {
+					metadata.Model = started.Conversation.Settings.Model
+				}
+				metadata.Effort = started.Conversation.Settings.ReasoningEffort
+			}
 
 			committedConversation, commitErr := m.markChatControllerSpawned(
 				ctx, rec.ID, metadata, started.Conversation, started.ProviderBoundary,
@@ -751,6 +783,11 @@ func (m *Manager) resumeChatController(
 		// Another app can hold an imported conversation after adoption too.
 		if rec.Metadata.ImportSource != nil && providerRefusedImportOwnership(err) {
 			return RestoreResult{}, ErrSessionOpenElsewhere
+		}
+		if !errors.Is(err, ports.ErrChatRecoveryInconclusive) && !m.chat.HasLiveChatController(rec.ID) {
+			cleanup, cancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
+			defer cancel()
+			err = errors.Join(err, m.versionMoveStage(cleanup, rec.ID, domain.VersionMoveRetry))
 		}
 		m.requireChatLogin(ctx, rec.ID, err)
 		return RestoreResult{}, relaunchFailed("chat start", fmt.Errorf("%s %s: resume chat: %w", operation, rec.ID, agentlaunch.RedactError(err, project.Config.Env)))

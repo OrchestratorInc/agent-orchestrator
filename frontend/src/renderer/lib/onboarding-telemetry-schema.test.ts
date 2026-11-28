@@ -118,6 +118,16 @@ describe("onboarding telemetry allowlist", () => {
 		})).toEqual({});
 	});
 
+	it("keeps a failure cause only from the closed list, and only for install_failed", () => {
+		const finished = { action: "agent_install", target: "codex", attempt: 1, outcome: "failed" };
+		expect(sanitizeOnboardingProperties("ao.onboarding.action_finished", { ...finished, reason: "install_failed", failure_cause: "npm_missing" }))
+			.toEqual({ ...finished, reason: "install_failed", failure_cause: "npm_missing" });
+		expect(sanitizeOnboardingProperties("ao.onboarding.action_finished", { ...finished, reason: "install_failed", failure_cause: "exec: \"npm\": executable file not found in $PATH" }))
+			.toEqual({ ...finished, reason: "install_failed" });
+		expect(sanitizeOnboardingProperties("ao.onboarding.action_finished", { ...finished, reason: "start_failed", failure_cause: "network" }))
+			.toEqual({ ...finished, reason: "start_failed" });
+	});
+
 	it("buckets activation time", () => {
 		expect(sanitizeOnboardingProperties("ao.onboarding.activated", { milestone: "first_message", time_since_completed_ms: 90_000, during_tour: true, run_kind: "first_run" }))
 			.toEqual({ milestone: "first_message", time_since_completed_ms: 90_000, time_bucket: "lt_5m", during_tour: true });

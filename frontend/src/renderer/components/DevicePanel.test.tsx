@@ -102,22 +102,69 @@ describe("DevicePanel", () => {
 		postMock.mockReset();
 	});
 
-	it("offers to turn device support on, with what this machine is missing", async () => {
+	it("offers to set up the tools before anything else", async () => {
 		mockApi({ deviceStatus: status({ enabled: false, state: "off", devices: [], leases: [] }) });
 		renderPanel(<DevicePanel isActive sessionId="ao-1" />);
-		await userEvent.click(await screen.findByRole("button", { name: "Turn on device support" }));
+		expect(await screen.findByRole("heading", { name: "Run your apps on a simulator" })).toBeInTheDocument();
+		await userEvent.click(screen.getByRole("button", { name: "Set up tools" }));
 		expect(postMock).toHaveBeenCalledWith("/api/v1/devices/setup");
-		expect(screen.getByText(/Install the Android SDK\./)).toBeInTheDocument();
 	});
 
-	it("offers to turn support back on rather than show a device kept from before it was off", async () => {
+	it("says why setup failed, with home paths written as ~, and offers to retry", async () => {
+		mockApi({ deviceStatus: status({ state: "error", error: "device hub exited; see /Users/me/.ao/data/devices/hub.log", devices: [], leases: [] }) });
+		renderPanel(<DevicePanel isActive sessionId="ao-1" />);
+		expect(await screen.findByRole("alert")).toHaveTextContent("device hub exited; see ~/.ao/data/devices/hub.log");
+		await userEvent.click(screen.getByRole("button", { name: "Retry" }));
+		expect(postMock).toHaveBeenCalledWith("/api/v1/devices/setup");
+	});
+
+	it("offers setup rather than show a device kept from before support was off", async () => {
 		mockApi({ deviceStatus: status({ enabled: false, state: "off", devices: [], leases: [iosLease] }), lease: iosLease });
 		renderPanel(<DevicePanel isActive sessionId="ao-1" />);
-		expect(await screen.findByRole("button", { name: "Turn on device support" })).toBeInTheDocument();
+		expect(await screen.findByRole("button", { name: "Set up tools" })).toBeInTheDocument();
 		expect(FakeSocket.instances).toHaveLength(0);
 	});
 
-	it("says what to install instead of offering to turn on when nothing can run", async () => {
+	it("lets the user choose a platform once the tools are ready, saying which need setup", async () => {
+		mockApi();
+		renderPanel(<DevicePanel isActive sessionId="ao-1" />);
+		expect(await screen.findByRole("button", { name: "iOS, Ready" })).toBeInTheDocument();
+		await userEvent.click(screen.getByRole("button", { name: "Android, Needs setup" }));
+		expect(screen.getByRole("heading", { name: "Set up Android" })).toBeInTheDocument();
+		expect(screen.getByText("Install Android Studio from developer.android.com.")).toBeInTheDocument();
+		const calls = getMock.mock.calls.length;
+		await userEvent.click(screen.getByRole("button", { name: "Check again" }));
+		await waitFor(() => expect(getMock.mock.calls.length).toBeGreaterThan(calls));
+		await userEvent.click(screen.getByRole("button", { name: "Back" }));
+		expect(screen.getByRole("heading", { name: "Choose a simulator" })).toBeInTheDocument();
+	});
+
+	it("walks through what an Android SDK is missing, with its path written as ~", async () => {
+		mockApi({
+			deviceStatus: status({
+				platforms: [
+					{ platform: "ios", available: true },
+					{ platform: "android", available: false, reason: "The Android SDK at /Users/me/Library/Android/sdk is missing the command-line tools (avdmanager)." },
+				],
+			}),
+		});
+		renderPanel(<DevicePanel isActive sessionId="ao-1" />);
+		await userEvent.click(await screen.findByRole("button", { name: "Android, Needs setup" }));
+		expect(screen.getByText("Android SDK found at ~/Library/Android/sdk.")).toBeInTheDocument();
+		expect(screen.getByText(/Android SDK Command-line Tools \(latest\)/)).toBeInTheDocument();
+		expect(screen.queryByText(/\/Users\/me/)).not.toBeInTheDocument();
+	});
+
+	it("says a platform this host can never run is unavailable", async () => {
+		mockApi({ deviceStatus: status({ platforms: [{ platform: "ios", available: false, reason: "iOS Simulators need macOS with Xcode." }, { platform: "android", available: true }] }) });
+		renderPanel(<DevicePanel isActive sessionId="ao-1" />);
+		await userEvent.click(await screen.findByRole("button", { name: "iOS, Unavailable" }));
+		expect(screen.getByRole("heading", { name: "iOS can't run here" })).toBeInTheDocument();
+		expect(screen.getByText("iOS Simulators need macOS with Xcode.")).toBeInTheDocument();
+		expect(screen.queryByRole("button", { name: "Check again" })).not.toBeInTheDocument();
+	});
+
+	it("goes straight to the install guides when nothing can run yet", async () => {
 		mockApi({
 			deviceStatus: status({
 				enabled: false,
@@ -125,22 +172,70 @@ describe("DevicePanel", () => {
 				devices: [],
 				leases: [],
 				platforms: [
-					{ platform: "ios", available: false, reason: "Install Xcode." },
-					{ platform: "android", available: false, reason: "Install the Android SDK." },
+					{ platform: "ios", available: false, reason: "Install Xcode and an iOS Simulator runtime (Xcode Settings → Components)." },
+					{ platform: "android", available: false, reason: "Install the Android SDK (platform-tools and emulator) or set ANDROID_HOME." },
 				],
 			}),
 		});
 		renderPanel(<DevicePanel isActive sessionId="ao-1" />);
-		expect(await screen.findByText("This machine can't run one yet.")).toBeInTheDocument();
-		expect(screen.getByText(/Install Xcode\./)).toBeInTheDocument();
-		expect(screen.getByText(/Install the Android SDK\./)).toBeInTheDocument();
-		expect(screen.queryByRole("button", { name: "Turn on device support" })).not.toBeInTheDocument();
+		await userEvent.click(await screen.findByRole("button", { name: "Set up tools" }));
+		// There is nothing to install the tools for yet.
+		expect(postMock).not.toHaveBeenCalled();
+		expect(screen.getByRole("button", { name: "Android, Needs setup" })).toBeInTheDocument();
+		await userEvent.click(screen.getByRole("button", { name: "iOS, Needs setup" }));
+		expect(screen.getByRole("heading", { name: "Set up iOS" })).toBeInTheDocument();
+		expect(screen.getByText("Install Xcode from the Mac App Store.")).toBeInTheDocument();
+	});
+
+	it("goes to the install guides from a failed setup once nothing can run", async () => {
+		mockApi({
+			deviceStatus: status({
+				state: "error",
+				error: "device hub exited during startup",
+				devices: [],
+				leases: [],
+				platforms: [
+					{ platform: "ios", available: false, reason: "Install Xcode and an iOS Simulator runtime (Xcode Settings → Components)." },
+					{ platform: "android", available: false, reason: "Install the Android SDK (platform-tools and emulator) or set ANDROID_HOME." },
+				],
+			}),
+		});
+		renderPanel(<DevicePanel isActive sessionId="ao-1" />);
+		await userEvent.click(await screen.findByRole("button", { name: "Retry" }));
+		// The daemon would refuse a setup with nothing to run it for.
+		expect(postMock).not.toHaveBeenCalled();
+		expect(screen.getByRole("button", { name: "iOS, Needs setup" })).toBeInTheDocument();
+		expect(screen.getByRole("button", { name: "Android, Needs setup" })).toBeInTheDocument();
+	});
+
+	it("sets up the tools when a platform becomes ready after its guide", async () => {
+		let deviceStatus = status({
+			enabled: false,
+			state: "off",
+			devices: [],
+			leases: [],
+			platforms: [
+				{ platform: "ios", available: false, reason: "Install Xcode and an iOS Simulator runtime (Xcode Settings → Components)." },
+				{ platform: "android", available: false, reason: "Install the Android SDK (platform-tools and emulator) or set ANDROID_HOME." },
+			],
+		});
+		getMock.mockImplementation(async (path: string) => (path === "/api/v1/devices" ? { data: deviceStatus } : { data: { lease: null } }));
+		postMock.mockResolvedValue({ data: {} });
+		renderPanel(<DevicePanel isActive sessionId="ao-1" />);
+		await userEvent.click(await screen.findByRole("button", { name: "Set up tools" }));
+		await userEvent.click(screen.getByRole("button", { name: "iOS, Needs setup" }));
+		// Xcode is installed now.
+		deviceStatus = { ...deviceStatus, platforms: [{ platform: "ios", available: true }, deviceStatus.platforms[1]] };
+		await userEvent.click(screen.getByRole("button", { name: "Check again" }));
+		await userEvent.click(await screen.findByRole("button", { name: "iOS, Ready" }));
+		expect(postMock).toHaveBeenCalledWith("/api/v1/devices/setup");
 	});
 
 	it("opens a free device and blocks one another session holds", async () => {
 		mockApi();
 		renderPanel(<DevicePanel isActive sessionId="ao-1" />);
-		expect(await screen.findByText("iPhone 17 Pro")).toBeInTheDocument();
+		await userEvent.click(await screen.findByRole("button", { name: "iOS, Ready" }));
+		expect(screen.getByText("iPhone 17 Pro")).toBeInTheDocument();
 		const buttons = screen.getAllByRole("button", { name: "Open" });
 		expect(buttons[1]).toBeDisabled();
 		expect(screen.getByText(/In use by ao-2/)).toBeInTheDocument();

@@ -9,7 +9,7 @@
 import type { DashboardPR, DashboardSession, KanbanColumn } from "./api";
 import { compareArchived } from "./archive/archiveOrder";
 import { relativeTime } from "./notificationView";
-import { prLifecycle, type Tone } from "./prView";
+import { prLifecycle, type PRLifecycle, type Tone } from "./prView";
 import { attentionOf, sessionTitle } from "./sessionStatus";
 import { statusVisual, type Theme } from "./theme";
 
@@ -442,18 +442,36 @@ export function trackerIssueId(issueId?: string | null): string | null {
 	return TRACKER_PROVIDER_PREFIXES.some((prefix) => id.startsWith(prefix)) ? id : null;
 }
 
+/** One run of the PR line: a lifecycle group in its own color, or plain glue. */
+export type PrLineSegment = { text: string; tone?: Tone };
+
+const LIFECYCLE_TONE: Record<PRLifecycle, Tone> = {
+	open: "success",
+	draft: "passive",
+	merged: "merged",
+	closed: "error",
+};
+
 /**
- * The card's PR line, grouped by lifecycle the way desktop's board card does:
- * `PR #12, #13 open`. Returns null when the session has no PR, so the card
- * renders nothing rather than an empty row.
+ * The archived row's PR line, grouped by lifecycle the way desktop's board card
+ * does: `PR #12, #13 open`. Returns null when the session has no PR, so the row
+ * renders nothing rather than an empty line. (The live board row shows a pill
+ * instead: see workerRowPullRequest.)
+ *
+ * Each lifecycle group carries its own tone, so a worker with one open PR and
+ * several merged ones shows the open number green and the merged ones purple.
+ * One tone for the whole line painted every merged number green beside the open
+ * one, and once the line truncated, the "merged" word that told them apart was
+ * gone too. The "PR" lead and the separators have no tone and keep the row's
+ * own metadata color.
  */
-export function prLine(session: DashboardSession): { text: string; tone: Tone } | null {
+export function prLine(session: DashboardSession): { text: string; segments: PrLineSegment[] } | null {
 	const list: DashboardPR[] = session.prs?.length ? session.prs : session.pr ? [session.pr] : [];
 	const real = list.filter((pr) => pr?.number > 0);
 	if (real.length === 0) return null;
 
 	// Group in first-seen order, matching desktop's groupPRsByLifecycle.
-	const groups = new Map<string, number[]>();
+	const groups = new Map<PRLifecycle, number[]>();
 	for (const pr of real) {
 		const life = prLifecycle(pr);
 		const nums = groups.get(life);
@@ -461,15 +479,10 @@ export function prLine(session: DashboardSession): { text: string; tone: Tone } 
 		else groups.set(life, [pr.number]);
 	}
 
-	const parts = [...groups.entries()].map(([life, nums]) => `${nums.map((n) => `#${n}`).join(", ")} ${life}`);
-	// One tone for the whole line: the worst lifecycle present.
-	const lifecycles = [...groups.keys()];
-	const tone: Tone = lifecycles.includes("closed")
-		? "error"
-		: lifecycles.includes("open")
-			? "success"
-			: lifecycles.includes("merged")
-				? "merged"
-				: "passive";
-	return { text: `PR ${parts.join(" · ")}`, tone };
+	const segments: PrLineSegment[] = [{ text: "PR " }];
+	[...groups.entries()].forEach(([life, nums], index) => {
+		if (index > 0) segments.push({ text: " · " });
+		segments.push({ text: `${nums.map((n) => `#${n}`).join(", ")} ${life}`, tone: LIFECYCLE_TONE[life] });
+	});
+	return { text: segments.map((segment) => segment.text).join(""), segments };
 }

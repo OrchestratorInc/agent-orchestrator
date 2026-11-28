@@ -122,9 +122,11 @@ export function NativePickerList({ header, options, selected, onSelect, refreshi
 function OptionRow({ option, selected, onSelect }: { option: PickerOption; selected: boolean; onSelect(id: string): void }) {
 	const t = useTheme();
 	if (Platform.OS === "ios") {
-		const detail = option.detail && option.warn
-			? <SwiftUIText modifiers={[font({ textStyle: "footnote" }), foregroundStyle(t.amber)]}>{option.detail}</SwiftUIText>
-			: option.detail;
+		// Every detail at one size: a bare string falls back to body size, and a
+		// sheet mixing it with an amber one (accounts with their usage) read uneven.
+		const detail = option.detail
+			? <SwiftUIText modifiers={[font({ textStyle: "footnote" }), foregroundStyle(option.warn ? t.amber : { type: "color", color: "secondaryLabel" })]}>{option.detail}</SwiftUIText>
+			: undefined;
 		return (
 			<ListItem
 				onPress={option.disabled ? undefined : () => onSelect(option.id)}

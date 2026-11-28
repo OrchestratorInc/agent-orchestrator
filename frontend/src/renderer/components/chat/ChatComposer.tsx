@@ -56,7 +56,7 @@ import {
 	type ReactNode,
 	type Ref,
 } from "react";
-import { ArrowUp, CornerUpRight, Loader2, Mic, Paperclip, Play, Plus, Square, X } from "@/components/app-icons";
+import { ArrowUp, CornerUpRight, Loader2, Mic, Paperclip, Play, Plus, Square } from "@/components/app-icons";
 import { AnimatePresence, motion, useReducedMotion } from "motion/react";
 import { isMacPlatform } from "../../lib/platform";
 import { useDictation } from "./useDictation";
@@ -83,6 +83,7 @@ import {
 	type ComposerPromptSuggestion,
 	type ComposerTrigger,
 } from "./ComposerEditor";
+import { AoError } from "../../../../../packages/shared/telemetry/ao-error";
 import { messageTokenScope, recordSentComposerTokens, sessionTokenScope } from "./sentComposerTokens";
 import { composerModelPicker, openComposerModelPicker } from "../../lib/composer-shortcuts";
 import { moveHighlight, rankFiles, rankSkills, type Suggestion } from "./composerSuggest";
@@ -94,7 +95,6 @@ import {
 	MAX_ATTACHMENTS,
 	type FileAttachmentPayload,
 } from "../../hooks/useFileAttachments";
-import { File } from "@/components/app-icons";
 import type { ChatSkill, ChatSteerOutcome } from "../../types/conversation";
 import {
 	acknowledgeChatComposerMutation,
@@ -106,6 +106,7 @@ import {
 	clearRejectedChatComposerDelivery,
 	clearUncertainChatComposerDelivery,
 	discardUnsentChatComposerDelivery,
+	draftStagedPaths,
 	finishChatComposerMutation,
 	getChatComposerMutation,
 	isChatComposerMutationCurrent,
@@ -129,8 +130,9 @@ import {
 	type ChatDraftRetainedAttachment,
 	type DraftClearResult,
 } from "../../lib/chat-drafts";
-import { attachmentURL, IMAGE_ATTACHMENT_PATH, isInlineImagePath, proseBesideImages, removeInlineImagePath, splitInlineImagePaths, withAttachmentReferences } from "./messageAttachments";
-import { AttachmentFileText, AttachmentThumbnail } from "./StagedAttachmentItems";
+import { attachmentPreviewKind, attachmentURL, IMAGE_ATTACHMENT_PATH, isInlineImagePath, proseBesideImages, removeInlineImagePath, splitInlineImagePaths, withAttachmentReferences } from "./messageAttachments";
+import { ComposerAttachmentTile, ComposerPendingTile } from "./ComposerAttachmentTile";
+import { AttachmentStrip } from "./StagedAttachmentItems";
 import { rememberAttachmentName } from "../../lib/chat-attachment-names";
 import { noteComposerDropTargetFocus, registerComposerDropTarget, type ComposerDropTarget } from "../../lib/composer-drop-targets";
 import { rememberSentAttachments } from "../../lib/sent-attachment-previews";
@@ -153,6 +155,22 @@ const DEFINITIVE_SEND_REJECTIONS = new Set<string>(SEND_REJECTION_CODES);
 const SEND_CONCEAL_MS = 3000;
 const MAX_NATIVE_IMAGE_BYTES = 10 * 1024 * 1024;
 const MAX_NATIVE_IMAGES_BYTES = 25 * 1024 * 1024;
+const PASTED_TEXT_ATTACHMENT_CHARS = 5000;
+
+function isPlainPasteShortcut(event: KeyboardEvent<HTMLDivElement>): boolean {
+	const key = event.key.toLowerCase();
+	const isV = /^[a-z]$/.test(key) ? key === "v" : event.code === "KeyV";
+	return isV && event.shiftKey && (event.metaKey || event.ctrlKey);
+}
+
+function pastedTextFileName(text: string, taken: string[]): string {
+	const firstLine = text.split("\n").find((line) => line.trim()) ?? "";
+	const base = firstLine.replace(/[\\/\p{Cc}]/gu, " ").replace(/\s+/g, " ").trim().slice(0, 60).trim() || "pasted-text";
+	for (let index = 1; ; index++) {
+		const name = index === 1 ? `${base}.txt` : `${base} ${index}.txt`;
+		if (!taken.includes(name)) return name;
+	}
+}
 
 /**
  * The band hung on the chat box slides up out from behind it as it comes and
@@ -292,6 +310,7 @@ export const ChatComposer = memo(function ChatComposer({
 	typingLocked = false,
 	sendBlockedReason,
 	starting,
+	restoring = false,
 	holdAttachments,
 	onHeldAttachmentsChange,
 	attachmentsRefusal,
@@ -306,6 +325,7 @@ export const ChatComposer = memo(function ChatComposer({
 	filePathsTruncated,
 	onFileQuery,
 	onStageAttachments,
+	onUpdateAttachmentLeases,
 	cloudAttachments,
 	nativeImages,
 	onSteer,
@@ -400,6 +420,7 @@ export const ChatComposer = memo(function ChatComposer({
 	typingLocked?: boolean;
 	sendBlockedReason?: string;
 	starting?: boolean;
+	restoring?: boolean;
 	/**
 	 * Files that cannot be staged yet (no workspace to write into) stay in the
 	 * composer with their bytes and go to `onSend` with the message, for a chat
@@ -442,6 +463,13 @@ export const ChatComposer = memo(function ChatComposer({
 	 * offered at all.
 	 */
 	onStageAttachments?: (attachments: FileAttachmentPayload[], signal?: AbortSignal) => Promise<string[]>;
+	/**
+	 * Releases staged paths this draft gave up and renews the ones it still
+	 * holds, answering which renewed paths are already gone. Removing a chip or
+	 * letting a discarded unsent message lapse releases its files; restoring a
+	 * draft renews them. The daemon never deletes a file a sent message names.
+	 */
+	onUpdateAttachmentLeases?: (release: string[], renew?: string[]) => Promise<string[]>;
 	/**
 	 * Staged files are uploaded to AO Cloud, which takes files up to maxBytes
 	 * each. Each file uploads on its own and shows its own failure, removing one
@@ -694,6 +722,9 @@ export const ChatComposer = memo(function ChatComposer({
 	 * the user's own text.
 	 */
 	const historyBrowse = useRef<{ entries: string[]; index: number; draft: string; shown: string } | null>(null);
+	const plainPasteShortcut = useRef(false);
+	const pendingTextPastes = useRef(new Set<Promise<boolean>>());
+	const textPasteUploads = useRef(new Map<string, { cancelled: boolean }>());
 	// Code selected in a file or diff view ("Ask in chat") arrives here as a
 	// reference chip. Only the session's ordinary prompt accepts it; a queued-turn
 	// edit has no draftSessionId and stays out of the way.
@@ -735,6 +766,8 @@ export const ChatComposer = memo(function ChatComposer({
 		getComposerMutation,
 	);
 	const optimisticSend = Boolean(durableDelivery?.draft && composerMutation.pending);
+	const sentFiles = Boolean(holdAttachments || durableDelivery?.draft?.attachments.length);
+	const takesNextFiles = optimisticSend && restoring && !sentFiles;
 	const chatReferences = draftScope
 		? readChatSessionDraft(draftScope).composer.excerpts ?? []
 		: [];
@@ -783,7 +816,7 @@ export const ChatComposer = memo(function ChatComposer({
 	);
 	const prepareAttachments = useCallback(
 		async (attachments: FileAttachment[], signal: AbortSignal): Promise<FileAttachment[]> => {
-			if (!onStageAttachments) throw new Error("Attachment staging is unavailable");
+			if (!onStageAttachments) throw new AoError("ATTACHMENT_STAGING_UNAVAILABLE", "Attachment staging is unavailable");
 			// A file too large to inline goes as its handle on disk; the stager
 			// streams it to the daemon (toWireAttachments). Where the daemon names
 			// staged images by path, every file goes that way: raw bytes are a
@@ -793,7 +826,7 @@ export const ChatComposer = memo(function ChatComposer({
 				: attachmentPayload(attachment));
 			const paths = await onStageAttachments(payloads, signal);
 			if (paths.length !== attachments.length) {
-				throw new Error("Attachment staging returned an incomplete result");
+				throw new AoError("ATTACHMENT_STAGING_INCOMPLETE", "Attachment staging returned an incomplete result");
 			}
 			return attachments.map((attachment, index) => {
 				const stagedPath = paths[index];
@@ -866,6 +899,43 @@ export const ChatComposer = memo(function ChatComposer({
 		if (images.length === send.images.length && images.every((image, index) => same(image, send.images[index]))) return;
 		publishUploadingSend({ ...send, images });
 	}, [awaitingUploads, fileAttachments.attachments, pendingAttachments, publishUploadingSend]);
+	const fileAttachmentsRef = useRef(fileAttachments);
+	fileAttachmentsRef.current = fileAttachments;
+	const draftScopeRef = useRef(draftScope);
+	draftScopeRef.current = draftScope;
+	// Give up staged files this draft no longer holds. A path the saved draft
+	// still names elsewhere (a send in flight, an unsent message, a queued edit)
+	// stays leased. Best effort: an unreleased lease expires on its own.
+	const releaseStagedPaths = useCallback((paths: (string | undefined)[]) => {
+		if (!onUpdateAttachmentLeases) return;
+		const scope = draftScopeRef.current;
+		const held = scope ? draftStagedPaths(readChatSessionDraft(scope), { composer: false }) : new Set<string>();
+		const release = [...new Set(paths)].filter((path): path is string =>
+			Boolean(path) && !isCloudAttachmentReference(path!) && !held.has(path!));
+		if (release.length > 0) void onUpdateAttachmentLeases(release).catch(() => undefined);
+	}, [onUpdateAttachmentLeases]);
+	const queuedDraftScopeRef = useRef(queuedDraftScope);
+	queuedDraftScopeRef.current = queuedDraftScope;
+	// A restored draft renews its files so they outlive the lease expiry, and
+	// drops any chip whose file is already gone rather than sending a dead path.
+	// A queued-edit editor has no draft scope of its own; its files live in the
+	// session draft's queued edit.
+	useEffect(() => {
+		const scope = draftScopeRef.current ?? queuedDraftScopeRef.current;
+		if (!scope || !onUpdateAttachmentLeases) return;
+		const renew = [...draftStagedPaths(readChatSessionDraft(scope), { composer: true })]
+			.filter((path) => !isCloudAttachmentReference(path));
+		if (renew.length === 0) return;
+		let current = true;
+		void onUpdateAttachmentLeases([], renew).then((missing) => {
+			if (!current || missing.length === 0) return;
+			const gone = new Set(missing);
+			for (const attachment of fileAttachmentsRef.current.getAttachments()) {
+				if (attachment.stagedPath && gone.has(attachment.stagedPath)) fileAttachmentsRef.current.remove(attachment.id);
+			}
+		}, () => undefined);
+		return () => { current = false; };
+	}, [attachmentScopeKey, onUpdateAttachmentLeases]);
 	const canAttach = (Boolean(onStageAttachments) || Boolean(holdAttachments)) && !queuedEditRecovery;
 	useEffect(() => {
 		if (!holdAttachments || !onHeldAttachmentsChange) return;
@@ -982,14 +1052,18 @@ export const ChatComposer = memo(function ChatComposer({
 	const sendConcealed = sendInFlight && !concealExpired;
 	const nextDraftHasChanged = Boolean(durableDelivery?.draft && composerRevision.current > durableDelivery.revision + 1);
 	const stripConcealed = (steerInFlight && sendConcealed) || awaitingUploads;
-	const stripAttachments = (optimisticSend || nextDraftHasChanged || stripConcealed ? [] : [...visibleRetainedAttachments, ...fileAttachments.attachments]).map((file) => {
+	const stripAttachments = (stripConcealed || (sentFiles && (optimisticSend || nextDraftHasChanged)) ? [] : [...visibleRetainedAttachments, ...fileAttachments.attachments]).map((file) => {
 		const path = "stagedPath" in file ? file.stagedPath : "path" in file ? file.path : undefined;
 		const assetOrigin = remoteHost ? assetBaseUrl : assetBaseUrl ?? getApiBaseUrl();
+		const previewSessionId = assetSessionId ?? boundarySessionId ?? "";
 		// A cloud file's reference is no daemon path: it previews from its bytes
 		// while they are in memory, else as a file.
-		const preview = file.dataUrl ?? (path && !isCloudAttachmentReference(path) && assetOrigin !== undefined && IMAGE_ATTACHMENT_PATH.test(path)
-			? attachmentURL(assetOrigin, assetSessionId ?? boundarySessionId ?? "", path) : undefined);
-		return { file, path, preview };
+		const preview = file.dataUrl ?? (path && previewSessionId && !isCloudAttachmentReference(path) && assetOrigin !== undefined && IMAGE_ATTACHMENT_PATH.test(path)
+			? attachmentURL(assetOrigin, previewSessionId, path) : undefined);
+		// Videos, PDFs and text files preview from the staged copy once the picked file is gone.
+		const mediaUrl = path && previewSessionId && !isCloudAttachmentReference(path) && assetOrigin !== undefined && attachmentPreviewKind(path)
+			? attachmentURL(assetOrigin, previewSessionId, path) : undefined;
+		return { file, path, preview, mediaUrl };
 	});
 	const composerImages: ComposerImage[] = stripAttachments.flatMap(({ file, path, preview }) =>
 		path && IMAGE_ATTACHMENT_PATH.test(path) ? [{ path, name: file.name, src: preview }] : []);
@@ -1006,6 +1080,9 @@ export const ChatComposer = memo(function ChatComposer({
 	const acceptedClearFailed = composerMutation.accepted?.result.ok === false;
 	const draftMutationPending =
 		submitting || composerMutation.pending || acceptedMutationWaiting || Boolean(durableDelivery);
+	// A file still uploading here does not stop another one (batches are added one
+	// after another); one still uploading from a replaced surface does.
+	const attachBlocked = !takesNextFiles && (fileAttachments.hasForeignPendingWork() || draftMutationPending);
 	const canRecoverDelivery = Boolean(
 		durableDelivery &&
 			(!busy || durableDelivery.state === "accepted") &&
@@ -1223,7 +1300,7 @@ export const ChatComposer = memo(function ChatComposer({
 			} else if (!unsavedText.current && editor.current?.getSnapshot().text !== "") {
 				clearEditorView();
 			}
-			if (result.draft.composer.attachments.length === 0) {
+			if (result.draft.composer.attachments.length === 0 && !fileAttachments.preparing) {
 				fileAttachments.clear();
 			} else {
 				for (const attachment of fileAttachments.getAttachments()) {
@@ -1537,9 +1614,15 @@ export const ChatComposer = memo(function ChatComposer({
 	};
 	useEffect(() => {
 		if (!discardedUnsent) return;
-		const timer = window.setTimeout(() => setDiscardedUnsent(undefined), UNSENT_UNDO_MS);
+		const timer = window.setTimeout(() => {
+			// Undo can no longer bring it back, so its files are given up, except
+			// any the composer still shows.
+			const shown = new Set(fileAttachmentsRef.current.getAttachments().flatMap((attachment) => attachment.stagedPath ?? []));
+			releaseStagedPaths((discardedUnsent.draft?.attachments ?? []).map((attachment) => attachment.path).filter((path) => !shown.has(path)));
+			setDiscardedUnsent(undefined);
+		}, UNSENT_UNDO_MS);
 		return () => window.clearTimeout(timer);
-	}, [discardedUnsent]);
+	}, [discardedUnsent, releaseStagedPaths]);
 
 	const approvalActive = Boolean(approval);
 	const previousApprovalActive = useRef(approvalActive);
@@ -1815,7 +1898,8 @@ export const ChatComposer = memo(function ChatComposer({
 			if (
 				!savingQueuedEdit &&
 				editorClears.current !== editorClearsAtSubmit.current &&
-				textRef.current.trim()
+				(textRef.current.trim() || fileAttachments.hasPendingReads() ||
+					(draftScope && readChatSessionDraft(draftScope).composer.attachments.length > 0))
 			) {
 				// A repeat Enter re-holds the same draft; count it only once.
 				const alreadyHeld = heldDuringSubmit.current?.text === textRef.current;
@@ -1951,6 +2035,7 @@ export const ChatComposer = memo(function ChatComposer({
 			return;
 		}
 
+		const textPastes = [...pendingTextPastes.current];
 		// Files still uploading: the message leaves the box now and waits in the
 		// queue with its pictures, instead of the box greying out until the upload
 		// ends. It keeps the id its send will use, so the real row replaces it in place.
@@ -1960,7 +2045,7 @@ export const ChatComposer = memo(function ChatComposer({
 			setAwaitingUploads(true);
 			publishUploadingSend({
 				clientMessageId: uploadingId,
-				// Images show as chips in the row, so their paths leave the text.
+				// Images show as thumbnails in the row, so their paths leave the text.
 				text: splitInlineImagePaths(currentText)
 					.flatMap((segment) => (segment.path === undefined ? [segment.text] : []))
 					.join("")
@@ -1976,6 +2061,7 @@ export const ChatComposer = memo(function ChatComposer({
 		}
 		// A replacement hook can still have staging work owned by the old surface.
 		if (fileAttachments.hasPendingReads()) return;
+		if ((await Promise.all(textPastes)).includes(false)) return;
 		const settledAttachments = fileAttachments.getAttachments();
 		const settledPaths = settledAttachments.flatMap((attachment) =>
 			attachment.stagedPath ? [attachment.stagedPath] : []);
@@ -2019,6 +2105,22 @@ export const ChatComposer = memo(function ChatComposer({
 				holdOwnDraft(forceSteer);
 			}
 			return;
+		}
+		// A draft left open past the lease expiry can hold a chip whose file was
+		// already reclaimed (by a later stage or the startup pass). Renew right
+		// before sending: a file reported gone loses its chip and nothing is sent,
+		// so the send is not refused, and retried, for a file that no longer exists.
+		const renewPaths = settledPaths.filter((path) => !isCloudAttachmentReference(path));
+		if (onUpdateAttachmentLeases && renewPaths.length > 0 && !recoveringDelivery) {
+			const missing = await onUpdateAttachmentLeases([], renewPaths).catch(() => [] as string[]);
+			if (missing.length > 0) {
+				const gone = new Set(missing);
+				for (const attachment of fileAttachmentsRef.current.getAttachments()) {
+					if (attachment.stagedPath && gone.has(attachment.stagedPath)) fileAttachmentsRef.current.remove(attachment.id);
+				}
+				setSendError({ message: "chat.draft.filesUnavailable", code: "ATTACHMENTS_UNAVAILABLE" });
+				return;
+			}
 		}
 		// Held files carry their bytes, or a large one its handle on disk, to the
 		// send instead of a staged path.
@@ -2082,8 +2184,10 @@ export const ChatComposer = memo(function ChatComposer({
 					}
 					if (!attachment.stagedPath) throw new Error("Missing staged attachment");
 					const assetOrigin = remoteHost ? assetBaseUrl : assetBaseUrl ?? getApiBaseUrl();
+					const previewSessionId = assetSessionId ?? attachmentScope.sessionId;
 					if (assetOrigin === undefined) throw new Error("Remote host disconnected");
-					const response = await fetch(attachmentURL(assetOrigin, assetSessionId ?? attachmentScope.sessionId, attachment.stagedPath));
+					if (!previewSessionId) throw new Error("Missing staged attachment");
+					const response = await fetch(attachmentURL(assetOrigin, previewSessionId, attachment.stagedPath));
 					if (!response.ok) throw new Error("Could not read staged attachment");
 					const blob = await response.blob();
 					const data = await new Promise<string>((resolve, reject) => {
@@ -2413,6 +2517,7 @@ export const ChatComposer = memo(function ChatComposer({
 	);
 
 	function onKeyDown(event: KeyboardEvent<HTMLDivElement>) {
+		plainPasteShortcut.current = isPlainPasteShortcut(event);
 		if (event.nativeEvent.isComposing || event.keyCode === 229) return;
 		// Typing takes over from dictation, so the next transcript update cannot overwrite it.
 		const typing = !event.metaKey && !event.ctrlKey && (event.key.length === 1 || event.key === "Backspace" || event.key === "Delete");
@@ -2514,41 +2619,63 @@ export const ChatComposer = memo(function ChatComposer({
 
 	// Images get an inline chip only beside prose that can refer to them.
 	// Image-only drafts already show every image in the attachment strip.
-	function attachFiles(files: File[]) {
+	function attachFiles(files: File[], ids?: ReadonlyMap<File, string>) {
 		// Reserve the spot now: staging can take a while, and the user keeps typing.
 		const reservation = proseBesideImages(textRef.current.trim(), composerImages.map((image) => image.path)) &&
 			files.some((file) => file.type.startsWith("image/"))
 			? editor.current?.reserveImages()
 			: undefined;
-		void fileAttachments.addFiles(files).then((added) => {
-			if (!reservation) return;
-			editor.current?.fillImages(reservation, added.flatMap((attachment) =>
-				attachment.stagedPath && isInlineImagePath(attachment.stagedPath) ? [attachment.stagedPath] : []));
+		return fileAttachments.addFiles(files, ids).then((added) => {
+			if (reservation) {
+				editor.current?.fillImages(reservation, added.flatMap((attachment) =>
+					attachment.stagedPath && isInlineImagePath(attachment.stagedPath) ? [attachment.stagedPath] : []));
+			}
+			return added;
 		});
 	}
 
-	/** A file still uploading does not stop another one (batches are added one after another); a send does. */
 	function acceptsFiles(): boolean {
-		return canAttach && !fileAttachments.hasForeignPendingWork() && !draftMutationPending && !submitInFlight.current;
+		return canAttach && !attachBlocked && (takesNextFiles || !submitInFlight.current);
 	}
 
 	function onPaste(event: ClipboardEvent<HTMLDivElement>) {
+		const asText = plainPasteShortcut.current;
+		plainPasteShortcut.current = false;
 		if (!acceptsFiles()) return;
 		const clipboard = event.clipboardData;
 		const files = Array.from(clipboard?.files ?? []);
-		if (files.length === 0) return;
-		// The paste is only claimed when there is no text alongside the image: a copy
-		// carrying both should still paste its text.
-		const hasText = typeof clipboard?.getData === "function" && clipboard.getData("text/plain") !== "";
-		if (!hasText) event.preventDefault();
+		const text = typeof clipboard?.getData === "function" ? clipboard.getData("text/plain") : "";
+		const taken = [...visibleRetainedAttachments, ...fileAttachments.attachments, ...pendingAttachments, ...files].map((file) => file.name);
+		const textAsFile = !asText && !holdAttachments && !historyBrowse.current && !heldSubmitRef.current && !heldDuringSubmit.current && text.length >= PASTED_TEXT_ATTACHMENT_CHARS && taken.length < MAX_ATTACHMENTS;
+		if (textAsFile) files.push(new globalThis.File([text], pastedTextFileName(text, taken), { type: "text/plain" }));
+		else if (files.length === 0) return;
+		// A copy carrying both an image and text still pastes its text, unless that
+		// text becomes a file.
+		if (text === "" || textAsFile) event.preventDefault();
 		uiUsage.attachmentAdded("paste");
-		attachFiles(files);
+		if (!textAsFile) {
+			void attachFiles(files);
+			return;
+		}
+		const pasted = files[files.length - 1]!;
+		const pastedId = crypto.randomUUID();
+		const scope = restoredSessionId.current;
+		const upload = { cancelled: false };
+		textPasteUploads.current.set(pastedId, upload);
+		const landed = attachFiles(files, new Map([[pasted, pastedId]])).then((added) => {
+			textPasteUploads.current.delete(pastedId);
+			if (upload.cancelled || added.some((attachment) => attachment.name === pasted.name)) return true;
+			if (restoredSessionId.current === scope) editor.current?.appendText(text);
+			return false;
+		});
+		pendingTextPastes.current.add(landed);
+		void landed.then(() => pendingTextPastes.current.delete(landed));
 	}
 
 	function acceptDroppedFiles(files: File[]): boolean {
 		if (!acceptsFiles() || files.length === 0) return false;
 		uiUsage.attachmentAdded("drop");
-		attachFiles(files);
+		void attachFiles(files);
 		return true;
 	}
 
@@ -2593,7 +2720,7 @@ export const ChatComposer = memo(function ChatComposer({
 	}, []);
 
 	const attachmentError =
-		fileAttachments.error ??
+		(sendError?.code === "SESSION_RESTORE_FAILED" ? null : fileAttachments.error) ??
 		draftPersistenceError ??
 		(optimisticSend ? null : deliveryRecoveryNotice) ??
 		(attachmentsRefusal && fileAttachments.attachments.length > 0 && !durableDelivery ? attachmentsRefusal : null) ??
@@ -2673,7 +2800,7 @@ export const ChatComposer = memo(function ChatComposer({
 			onSubmit={(event) => void submit(event, steersDraft, "button")}
 			data-telemetry-surface="composer"
 				onDragOver={(event) => {
-					if (!canAttach || submitInFlight.current) return;
+					if (!canAttach || (submitInFlight.current && !takesNextFiles)) return;
 					event.preventDefault();
 					setDragging(true);
 				}}
@@ -2731,103 +2858,64 @@ export const ChatComposer = memo(function ChatComposer({
 					</div>
 				) : null}
 				{(staged && !stripConcealed) || pendingAttachments.length > 0 || contextReferences.length > 0 ? (
-					<div className="flex flex-wrap items-center gap-1.5" data-testid="composer-attachments-and-annotations">
+					<AttachmentStrip
+						// The top and right padding leave room for each tile's corner remove control and its focus ring.
+						className="-mr-1 -mt-1 max-w-none pr-2.5 pt-2.5"
+						itemCount={stripAttachments.length + pendingAttachments.length}
+						data-testid="composer-attachments-and-annotations"
+					>
 						{(staged && !stripConcealed) || pendingAttachments.length > 0 ? (
 							<ul className="contents" aria-label="Attached files">
-								{stripAttachments.map(({ file, path, preview }) => {
-									return (
-									<li
+								{stripAttachments.map(({ file, path, preview, mediaUrl }) => (
+									<ComposerAttachmentTile
 										key={file.id}
-										className="flex items-center gap-1.5 rounded-md bg-interactive-hover py-0.5 pl-0.5 pr-1"
-									>
-										{preview ? (
-											<AttachmentThumbnail src={preview} name={file.name} />
-										) : (
-											<div className="flex size-6 items-center justify-center rounded-sm bg-surface">
-												<File aria-hidden="true" className="size-3.5 text-muted-foreground" />
-											</div>
-										)}
-										{preview ? (
-											<span className="max-w-[120px] truncate text-xs text-muted-foreground" title={file.name}>
-												{file.name}
-											</span>
-										) : (
-											<span className="flex min-w-0 items-center gap-1.5 text-xs text-muted-foreground" title={file.name}>
-												<AttachmentFileText name={file.name} bytes={"bytes" in file ? file.bytes : undefined} nameClassName="max-w-[120px]" />
-											</span>
-										)}
-										<Button
-											type="button"
-											variant="destructive-ghost"
-											size="icon-xs"
-											onMouseDown={(event) => {
-												if (event.button === 0) event.preventDefault();
-											}}
-											onClick={() => {
+										name={file.name}
+										bytes={"bytes" in file ? file.bytes : undefined}
+										imageSrc={preview}
+										file={"file" in file ? file.file : undefined}
+										mediaUrl={mediaUrl}
+										removeLabel={`Remove ${file.name}`}
+										removeDisabled={controlsDisabled || queuedEditRecovery || draftMutationPending || fileAttachments.preparing}
+										onRemove={() => {
 											if (submitInFlight.current) return;
 											if (path) {
-											editor.current?.removeImage(path);
-											removeImageFromSavedDraft(path);
-										}
+												editor.current?.removeImage(path);
+												removeImageFromSavedDraft(path);
+											}
 											if (visibleRetainedAttachments.some((attachment) => attachment.id === file.id)) {
 												const next = retainedAttachments.filter((attachment) => attachment.id !== file.id);
 												setRetainedAttachments(next);
 												onQueuedRetainedAttachmentsChange?.(next);
-											} else fileAttachments.remove(file.id);
+											} else {
+												fileAttachments.remove(file.id);
+												releaseStagedPaths([path]);
+											}
 											editor.current?.focus();
-											}}
-											disabled={controlsDisabled || queuedEditRecovery || draftMutationPending || fileAttachments.preparing}
-											aria-label={`Remove ${file.name}`}
-										>
-											<X aria-hidden="true" className="size-3" />
-										</Button>
-									</li>
-									);
-								})}
+										}}
+									/>
+								))}
+								{/* Removing a file while it attaches cancels it. */}
 								{pendingAttachments.map((file) => (
-									<li
+									<ComposerPendingTile
 										key={file.id}
-										role="status"
-										aria-label={`Attaching ${file.name}`}
-										className="flex items-center gap-1.5 rounded-md bg-interactive-hover py-0.5 pl-0.5 pr-1"
-									>
-										{/* An image shows its own picture while it uploads; the pulse says it is still on its way. */}
-										{file.previewUrl ? (
-											<>
-												<img src={file.previewUrl} alt="" aria-hidden="true" className="size-6 shrink-0 rounded-sm object-cover motion-safe:animate-pulse" />
-												<span aria-hidden="true" className="max-w-[120px] truncate text-xs text-muted-foreground">{file.name}</span>
-											</>
-										) : (
-											<>
-												<div aria-hidden="true" className="size-6 rounded-sm bg-surface motion-safe:animate-pulse" />
-												<span aria-hidden="true" className="relative max-w-[120px] truncate text-xs motion-safe:animate-pulse">
-													<span className="invisible">{file.name}</span>
-													<span className="absolute inset-x-0 top-1/2 h-2 -translate-y-1/2 rounded-sm bg-surface" />
-												</span>
-											</>
-										)}
-										{/* Removing a file while it attaches cancels it. */}
-										<Button
-											type="button"
-											variant="destructive-ghost"
-											size="icon-xs"
-											onMouseDown={(event) => {
-												if (event.button === 0) event.preventDefault();
-											}}
-											onClick={() => {
-												fileAttachments.cancelPending(file.id);
-												editor.current?.focus();
-											}}
-											aria-label={`Cancel attaching ${file.name}`}
-										>
-											<X aria-hidden="true" className="size-3" />
-										</Button>
-									</li>
+										name={file.name}
+										mimeType={file.mimeType}
+										previewUrl={file.previewUrl}
+										statusLabel={`Attaching ${file.name}`}
+										cancelLabel={`Cancel attaching ${file.name}`}
+										onCancel={() => {
+											const upload = textPasteUploads.current.get(file.id);
+											if (upload) upload.cancelled = true;
+											fileAttachments.cancelPending(file.id);
+											editor.current?.focus();
+										}}
+									/>
 								))}
 							</ul>
 						) : null}
 						{contextReferences.length > 0 ? (
 							<ChatAnnotationSummary
+								appearance="card"
 								annotations={contextReferences}
 								onSelect={onSelectAnnotation}
 								disabled={controlsDisabled || draftMutationPending}
@@ -2855,7 +2943,7 @@ export const ChatComposer = memo(function ChatComposer({
 								}}
 							/>
 						) : null}
-					</div>
+					</AttachmentStrip>
 				) : null}
 
 				<ComposerEditor
@@ -2927,11 +3015,11 @@ export const ChatComposer = memo(function ChatComposer({
 									type="file"
 									multiple
 									hidden
-									disabled={controlsDisabled}
+									disabled={Boolean(disabled || (submitting && !takesNextFiles))}
 									onChange={(event) => {
 										if (!disabled && acceptsFiles()) {
 											if (event.target.files?.length) uiUsage.attachmentAdded("picker");
-											attachFiles(Array.from(event.target.files ?? []));
+											void attachFiles(Array.from(event.target.files ?? []));
 										}
 										// Cleared so picking the same file twice still fires a change.
 										event.target.value = "";
@@ -2950,7 +3038,7 @@ export const ChatComposer = memo(function ChatComposer({
 										<OptionMenuTrigger variant="ghost"
 											ref={addMenuTrigger}
 											showCaret={false}
-											disabled={controlsDisabled}
+											disabled={Boolean(disabled || (submitting && !takesNextFiles))}
 											aria-label="Add"
 											title="Add files or change mode"
 											className={cn("size-7 shrink-0 justify-center rounded-full bg-transparent p-0 text-muted-foreground hover:text-foreground data-[state=open]:text-foreground", GHOST_PILL_CLASS)}
@@ -2971,7 +3059,7 @@ export const ChatComposer = memo(function ChatComposer({
 												icon={Paperclip}
 												title="Files"
 												description="Attach files to this message"
-												disabled={queuedEditRecovery || draftMutationPending || fileAttachments.hasForeignPendingWork()}
+												disabled={queuedEditRecovery || attachBlocked}
 												onSelect={() => filePicker.current?.click()}
 											/>
 											{addMenuItems}
@@ -2984,7 +3072,7 @@ export const ChatComposer = memo(function ChatComposer({
 										variant="quiet"
 										size="icon-sm"
 										shape="pill"
-										disabled={controlsDisabled || queuedEditRecovery || draftMutationPending || fileAttachments.hasForeignPendingWork()}
+										disabled={Boolean(disabled) || queuedEditRecovery || attachBlocked}
 										onClick={() => filePicker.current?.click()}
 										data-telemetry-id="composer.attach"
 										aria-label="Attach a file"

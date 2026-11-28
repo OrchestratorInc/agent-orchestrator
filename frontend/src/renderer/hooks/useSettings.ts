@@ -39,6 +39,8 @@ export interface Settings {
 	computerUse?: boolean;
 	/** Orchestrator attribution beta: new sessions credit Orchestrator on commits and PRs. */
 	commitAttribution?: boolean;
+	/** Every agent gets the user's skills it does not load itself. */
+	skillSharing?: boolean;
 	/** Days an archived session with a released worktree is kept before the daemon deletes it; 0 keeps it. */
 	sessionRetentionDays?: number;
 	accountHandoff?: boolean;
@@ -84,6 +86,8 @@ function settingsQueryOptions(hostId?: string) {
 				computerUse: data?.computerUse ?? false,
 				// A daemon that predates the beta never adds attribution.
 				commitAttribution: data?.commitAttribution ?? false,
+				// Absent on a daemon that predates the setting, which hides the row.
+				skillSharing: data?.skillSharing,
 				// Absent on a daemon that predates retention, which keeps every session.
 				sessionRetentionDays: data?.sessionRetentionDays,
 				accountHandoff: data?.accountHandoff ?? false,
@@ -240,6 +244,28 @@ export function useUpdateCommitAttribution() {
 	const mutation = useMutation({
 		mutationFn: async (enabled: boolean) => {
 			const { data, error } = await apiClient.PATCH("/api/v1/settings/commit-attribution", {
+				body: { enabled },
+			});
+			if (error) throw error;
+			return data;
+		},
+		// The daemon is the source of truth: refetch instead of assuming the write.
+		onSuccess: () => queryClient.invalidateQueries({ queryKey: settingsQueryKey }),
+	});
+
+	return {
+		update: (enabled: boolean) => mutation.mutate(enabled),
+		saving: mutation.isPending,
+		error: mutation.error ? apiErrorMessage(mutation.error) : undefined,
+	};
+}
+
+/** Switches sharing the user's skills with every agent. A running session follows at its next resume. */
+export function useUpdateSkillSharing() {
+	const queryClient = useQueryClient();
+	const mutation = useMutation({
+		mutationFn: async (enabled: boolean) => {
+			const { data, error } = await apiClient.PATCH("/api/v1/settings/skill-sharing", {
 				body: { enabled },
 			});
 			if (error) throw error;

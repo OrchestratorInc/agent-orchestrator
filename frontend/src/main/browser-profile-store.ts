@@ -135,7 +135,15 @@ function parseRegistry(raw: unknown): BrowserProfileRegistry {
 	const defaultProfileId: BrowserProfileId | null =
 		savedDefaultProfileId ?? (raw.defaultProfileSeeded === true ? null : (profiles[0]?.id ?? null));
 
-	return { version: BROWSER_PROFILE_REGISTRY_VERSION, profiles, bindings, defaultProfileId, defaultProfileSeeded: true };
+	return {
+		version: BROWSER_PROFILE_REGISTRY_VERSION,
+		profiles,
+		bindings,
+		defaultProfileId,
+		defaultProfileSeeded: true,
+		...(raw.defaultProfileCreated === true ? { defaultProfileCreated: true as const } : {}),
+		...(raw.defaultProfileChosen === true ? { defaultProfileChosen: true as const } : {}),
+	};
 }
 
 function cloneRegistry(registry: BrowserProfileRegistry): BrowserProfileRegistry {
@@ -147,6 +155,8 @@ function cloneRegistry(registry: BrowserProfileRegistry): BrowserProfileRegistry
 		),
 		defaultProfileId: registry.defaultProfileId,
 		defaultProfileSeeded: true,
+		...(registry.defaultProfileCreated ? { defaultProfileCreated: true as const } : {}),
+		...(registry.defaultProfileChosen ? { defaultProfileChosen: true as const } : {}),
 	};
 }
 
@@ -161,6 +171,9 @@ export class BrowserProfileStore {
 	private readonly profileOperationsPending = new Set<string>();
 	private readonly profileOperationsInProgress = new Set<string>();
 	private loadPromise: Promise<void> | null = null;
+	// Only a mutation writes the registry, so a file that already existed means
+	// the user has made profile choices; first run is settled for them.
+	private registryExisted = false;
 
 	constructor(options: BrowserProfileStoreOptions) {
 		this.file = path.join(options.stateDir, BROWSER_PROFILE_REGISTRY_FILE_NAME);
@@ -181,6 +194,7 @@ export class BrowserProfileStore {
 		let raw: string;
 		try {
 			raw = await readFile(this.file, "utf8");
+			this.registryExisted = true;
 		} catch (error) {
 			if ((error as NodeJS.ErrnoException).code === "ENOENT") return;
 			this.loadError = {
@@ -285,7 +299,7 @@ export class BrowserProfileStore {
 
 	/**
 	 * The first profile becomes the default. An import passes
-	 * `claimDefault: false` and calls `claimDefaultIfFirst` after it commits,
+	 * `claimDefault: false` and calls `claimDefaultForImport` after it commits,
 	 * so no unbound worker opens a half-imported or rolled-back profile.
 	 */
 	async createProfile(rawName: unknown, { claimDefault = true }: { claimDefault?: boolean } = {}): Promise<BrowserProfile> {
@@ -306,13 +320,55 @@ export class BrowserProfileStore {
 		});
 	}
 
-	/** Makes `profileId` the default if no default is set and it is the oldest profile. */
-	async claimDefaultIfFirst(profileId: string): Promise<void> {
+	/**
+	 * A committed import becomes the default: the user imported it to use its
+	 * sign-ins, and a re-import next to an older profile must not be left unused
+	 * while new sessions keep opening the older, signed-out one (#8190). A default
+	 * the user picked (or turned off) in Settings is kept.
+	 */
+	async claimDefaultForImport(profileId: string): Promise<void> {
 		return this.enqueueMutation((current) => {
-			if (current.defaultProfileId === null && current.profiles[0]?.id === profileId) {
+			if (!current.defaultProfileChosen && current.profiles.some((profile) => profile.id === profileId)) {
 				current.defaultProfileId = profileId;
 			}
 			return { registry: current, result: undefined };
+		});
+	}
+
+	/**
+	 * Creates the first-run default profile once, so agents start in a
+	 * persistent profile and a site the user signs in to stays signed in for the
+	 * next session. Returns the default profile ID, or null when the user has
+	 * opted out (deleted every profile, or unset the default themselves).
+	 */
+	async ensureDefaultProfile(rawName: unknown): Promise<BrowserProfileId | null> {
+		await this.load();
+		if (this.loadError) return null;
+		if (this.registry.defaultProfileCreated) return this.registry.defaultProfileId;
+		const name = normalizeBrowserProfileName(rawName);
+		if (!name) throw new BrowserProfileStoreError("INVALID_ARGUMENT", "Profile name is invalid.");
+		return this.enqueueMutation((current) => {
+			if (current.defaultProfileCreated) return { registry: current, result: current.defaultProfileId };
+			// Existing profiles, or a registry saved before this marker existed (even
+			// one with no profiles left), already settle first run. Record that, so
+			// a user who deleted every profile keeps Temporary after upgrading.
+			if (current.profiles.length > 0 || this.registryExisted) {
+				current.defaultProfileCreated = true;
+				// Older versions only ever set the oldest profile as the default
+				// (first create, first import, promotion after a delete). A default
+				// that is off, or any other profile, was the user's choice, so a
+				// later import must keep it.
+				if (current.profiles.length > 0 && current.defaultProfileId !== current.profiles[0]?.id) {
+					current.defaultProfileChosen = true;
+				}
+				return { registry: current, result: current.defaultProfileId };
+			}
+			const now = this.now().toISOString();
+			const profile: BrowserProfile = { id: randomUUID(), name, createdAt: now, updatedAt: now };
+			current.profiles.push(profile);
+			current.defaultProfileId = profile.id;
+			current.defaultProfileCreated = true;
+			return { registry: current, result: profile.id };
 		});
 	}
 
@@ -377,9 +433,12 @@ export class BrowserProfileStore {
 				Object.entries(current.bindings).filter(([, binding]) => binding.profileId !== profileId),
 			);
 			const profiles = current.profiles.filter((profile) => profile.id !== profileId);
+			const deletesDefault = current.defaultProfileId === profileId;
+			const { defaultProfileChosen: _chosen, ...rest } = current;
 			return {
 				registry: {
-					...current,
+					// Deleting the chosen default hands the choice back to the app.
+					...(deletesDefault ? rest : current),
 					profiles,
 					bindings,
 					// Deleting the default promotes the oldest remaining profile.
@@ -398,7 +457,7 @@ export class BrowserProfileStore {
 			if (profileId !== null && !current.profiles.some((profile) => profile.id === profileId)) {
 				throw new BrowserProfileStoreError("BROWSER_PROFILE_NOT_FOUND", "Browser profile was not found.");
 			}
-			return { registry: { ...current, defaultProfileId: profileId }, result: undefined };
+			return { registry: { ...current, defaultProfileId: profileId, defaultProfileChosen: true }, result: undefined };
 		});
 	}
 

@@ -39,7 +39,7 @@ export function ReportProblemContent({ active }: { active: boolean }) {
 				{([
 					["report.github", githubUrl, "github"],
 					["report.discord", "https://discord.gg/WjKNa7EbB8", "discord"],
-					["report.email", "mailto:prasad@untrivial.ai?cc=prateek@untrivial.ai", "email"],
+					["report.email", "mailto:prasad@untrivial.ai?cc=prateek@orchestrator.inc", "email"],
 				] as const).map(([label, href, destination]) => (
 					<a key={label} href={href} className="text-muted-foreground underline-offset-2 hover:underline"
 						onClick={(event) => {

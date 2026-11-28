@@ -296,7 +296,11 @@ function reportArchiveCleanup(queryClient: QueryClient, session: WorkspaceSessio
 		const cleanup = archiveCleanup(current);
 		if (cleanup === undefined || cleanup === "pending") return false;
 		const errorKey = workspaceCleanupErrorKey(current);
-		if (errorKey) showWorkspaceCleanupNotice(session, errorKey, t);
+		// A standalone agent's folder is its only copy of the work and is
+		// always kept while it has files, so keeping it is no news; only a
+		// failed teardown is reported.
+		const keptStandaloneFolder = errorKey === "shell.workspaceCleanupDirty" && session.workspaceId === STANDALONE_WORKSPACE_ID;
+		if (errorKey && !keptStandaloneFolder) showWorkspaceCleanupNotice(session, errorKey, t);
 		return true;
 	};
 	if (settled()) return;

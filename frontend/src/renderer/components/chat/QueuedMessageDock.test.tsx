@@ -1,11 +1,10 @@
-import { act, render, screen, waitFor, within } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 import { QueuedMessageDock, type QueuedMessage } from "./QueuedMessageDock";
 import { ChatWorkspace } from "./ChatWorkspace";
 import { chatFixture } from "../../lib/chat-fixture";
 import { renderChat } from "../../test/render-chat";
-import { rememberAttachmentName } from "../../lib/chat-attachment-names";
 
 const { dragEnds, dragStarts } = vi.hoisted(() => ({
 	dragEnds: new Map<string, (event: { active: { id: string }; over: { id: string } | null }) => void>(),
@@ -404,6 +403,75 @@ describe("QueuedMessageDock excerpt rows", () => {
 	});
 });
 
+describe("QueuedMessageDock attachment rows", () => {
+	const shot = ".ao/attachments/attachment-6803746e3bc.png";
+	const notes = ".ao/attachments/attachment-notes.md";
+	const withFiles = (text: string, paths: string[]) =>
+		`${text ? `${text}\n\n` : ""}Attached files (read these files in the workspace):\n${paths.map((path) => `- ${path}`).join("\n")}`;
+	const source = { sessionId: "sess-1", apiBaseUrl: "http://127.0.0.1:3001" };
+	const row = () => screen.getByTestId("queued-message-queued-1");
+	const rowText = () => row().querySelector(".queue-dock-row-text");
+	const fileNames = () => within(row()).getByTestId("queued-message-files");
+	const shotURL = "http://127.0.0.1:3001/api/v1/sessions/sess-1/preview/files/.ao/attachments/attachment-6803746e3bc.png";
+
+	it("shows an image-only message as its image, not the reference block", () => {
+		render(<QueuedMessageDock messages={queuedMessages([withFiles("", [shot])])} attachmentSource={source} />);
+
+		const image = within(row()).getByRole("button", { name: "Open image: Image 1" }).querySelector("img");
+		expect(image).toHaveAttribute("src", shotURL);
+		expect(row()).not.toHaveTextContent("Attached files");
+		expect(image).toHaveAttribute("crossorigin", "anonymous");
+		// A long queue reads only the images scrolled near, not its whole backlog.
+		expect(image).toHaveAttribute("loading", "lazy");
+		expect(rowText()).toBeNull();
+	});
+
+	it("shows the typed text beside the image, with inline images numbered", () => {
+		render(<QueuedMessageDock messages={queuedMessages([withFiles(`fix ${shot} please`, [shot])])} attachmentSource={source} />);
+
+		expect(within(row()).getByRole("button", { name: "Open image: Image 1" })).toBeInTheDocument();
+		expect(rowText()).toHaveTextContent(/^fix \[Image 1\] please$/);
+	});
+
+	it("names attached files that are not images", () => {
+		render(<QueuedMessageDock messages={queuedMessages([withFiles("", [notes])])} attachmentSource={source} />);
+
+		expect(fileNames()).toHaveTextContent(/^attachment-notes\.md$/);
+		expect(row()).not.toHaveTextContent("Attached files");
+	});
+
+	it("names attached files beside the typed text and its images", () => {
+		render(<QueuedMessageDock messages={queuedMessages([withFiles("compare these", [shot, notes])])} attachmentSource={source} />);
+
+		expect(within(row()).getByRole("button", { name: "Open image: Image 1" })).toBeInTheDocument();
+		expect(rowText()).toHaveTextContent(/^compare these$/);
+		expect(fileNames()).toHaveTextContent(/^attachment-notes\.md$/);
+	});
+
+	it("draws a few images and counts the rest, so the text keeps its room", () => {
+		const shots = Array.from({ length: 6 }, (_, index) => `.ao/attachments/attachment-shot${index}.png`);
+		render(<QueuedMessageDock messages={queuedMessages([withFiles("all of them", shots)])} attachmentSource={source} />);
+
+		expect(within(row()).getAllByRole("button", { name: /^Open image:/ })).toHaveLength(4);
+		expect(screen.getByTestId("queued-message-images")).toHaveTextContent(/^\+2$/);
+	});
+
+	it("shows the name of an image that cannot be read", () => {
+		render(<QueuedMessageDock messages={queuedMessages([withFiles("", [shot])])} attachmentSource={source} />);
+
+		fireEvent.error(within(row()).getByRole("button", { name: "Open image: Image 1" }).querySelector("img")!);
+		expect(within(row()).queryByRole("button", { name: /^Open image/ })).not.toBeInTheDocument();
+		expect(screen.getByTestId("queued-message-images")).toHaveTextContent(/^Image 1$/);
+	});
+
+	it("names images when there is nowhere to read them from", () => {
+		render(<QueuedMessageDock messages={queuedMessages([withFiles("", [shot])])} attachmentSource={{ sessionId: "sess-1", apiBaseUrl: null }} />);
+
+		expect(within(row()).queryByRole("button", { name: /^Open / })).not.toBeInTheDocument();
+		expect(fileNames()).toHaveTextContent(/^Image 1$/);
+	});
+});
+
 describe("ChatWorkspace queued excerpts", () => {
 	it("shows the selected text on a queued excerpt the daemon has not confirmed yet", () => {
 		renderChat(
@@ -426,63 +494,25 @@ describe("ChatWorkspace queued excerpts", () => {
 	});
 });
 
-describe("QueuedMessageDock attachments", () => {
-	const shot = ".ao/attachments/attachment-1367e3e6.png";
-	const notes = ".ao/attachments/attachment-0a1b2c3d.pdf";
-	const block = (...paths: string[]) => `\n\nAttached files (read these files in the workspace):\n${paths.map((path) => `- ${path}`).join("\n")}`;
-
-	it("shows what the person wrote with an image chip, never AO's reference block", () => {
-		const [message] = queuedMessages([`then i got this ${shot}${block(shot)}`]);
-		render(<QueuedMessageDock messages={[message!]} />);
-		const row = screen.getByTestId("queued-message-queued-1");
-		expect(row).toHaveTextContent("then i got this");
-		expect(row).toHaveTextContent("Image 1");
-		expect(row).not.toHaveTextContent("Attached files");
-		expect(row).not.toHaveTextContent(".ao/attachments");
-	});
-
-	it("names an attached file by the name it was picked with, after the text", () => {
-		rememberAttachmentName(notes, "release-notes.pdf");
-		const [message] = queuedMessages([`summarise this${block(notes)}`]);
-		render(<QueuedMessageDock messages={[message!]} />);
-		const row = screen.getByTestId("queued-message-queued-1");
-		expect(row).toHaveTextContent("summarise thisrelease-notes.pdf");
-		expect(row).not.toHaveTextContent("attachment-0a1b2c3d");
-	});
-
-	it("keeps a screenshot's chip beside the excerpt it was sent with", () => {
-		const [queued] = queuedMessages([block(shot).trimStart()]);
-		const message = { ...queued!, message: { ...queued!.message, content: [{ type: "excerpt", text: "prune build cache", annotationId: "ex-1", annotationOrder: 1, sourceMessageId: "m-1" }] } };
-		render(<QueuedMessageDock messages={[message]} />);
-		const row = screen.getByTestId("queued-message-queued-1");
-		expect(row).toHaveTextContent("“prune build cache”Image 1");
-		expect(row).not.toHaveTextContent("Attached files");
-	});
-
-	it("reads a staged image from the daemon but leaves a Cloud reference to its plain chip", () => {
-		const [message] = queuedMessages(["compare"]);
+describe("QueuedMessageDock uploading row", () => {
+	it("says a message is still uploading and shows the pictures it waits on", () => {
+		const [message] = queuedMessages(["then i got this"]);
+		const restored = ".ao/attachments/attachment-1367e3e6.png";
 		const cloud = "ao-cloud-attachment:6f1c2a8e-0b1d-4c3e-9f5a-2d7e8b9c0a11/shot.png";
 		render(
 			<QueuedMessageDock
-				imageSource={{ sessionId: "s-1", assetBaseUrl: "http://127.0.0.1:3001" }}
-				messages={[{ ...message!, pending: true, uploadingImages: [{ path: shot }, { path: cloud }] }]}
+				attachmentSource={{ sessionId: "s-1", apiBaseUrl: "http://127.0.0.1:3001" }}
+				messages={[{ ...message!, pending: true, uploadingImages: [{ src: "blob:local-shot" }, { path: restored }, { path: cloud }] }]}
 			/>,
 		);
-		const images = screen.getByTestId("queued-message-queued-1").querySelectorAll("img");
-		// The local daemon cannot serve a Cloud reference: no broken picture, just "Image 2".
-		expect(images).toHaveLength(1);
-		expect(images[0]).toHaveAttribute("src", expect.stringContaining("/preview/files/.ao/attachments/attachment-1367e3e6.png"));
-		// A remote host's loopback proxy refuses a picture requested without its origin.
-		expect(images[0]).toHaveAttribute("crossorigin", "anonymous");
-		expect(screen.getByTestId("queued-message-queued-1")).toHaveTextContent("Image 2");
-	});
-
-	it("says a message is still uploading and shows its picture meanwhile", () => {
-		const [message] = queuedMessages(["then i got this"]);
-		render(<QueuedMessageDock messages={[{ ...message!, pending: true, uploadingImages: [{ src: "blob:local-shot" }] }]} />);
 		const row = screen.getByTestId("queued-message-queued-1");
 		expect(within(row).getByRole("status")).toHaveTextContent("Uploading…");
-		expect(row).toHaveTextContent("then i got thisImage 1");
-		expect(row.querySelector("img")).toHaveAttribute("src", "blob:local-shot");
+		expect(row).toHaveTextContent("then i got this");
+		const images = row.querySelectorAll("img");
+		expect(images).toHaveLength(2);
+		expect(images[0]).toHaveAttribute("src", "blob:local-shot");
+		expect(images[1]).toHaveAttribute("src", expect.stringContaining(`/preview/files/${restored}`));
+		// The local daemon does not hold a Cloud reference: it reads as its name, never a broken picture.
+		expect(screen.getByTestId("queued-message-images")).toHaveTextContent("Image 3");
 	});
 });

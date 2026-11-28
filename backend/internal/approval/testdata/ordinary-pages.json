@@ -1,0 +1,7419 @@
+{
+"capturedAt": "2026-11-15",
+"note": "Interactive buttons/links/menu items from ordinary pages, captured with ao browser snapshot --interactive in a dev build. Deduplicated per page.",
+"pages": [
+{
+"page": "en.wikipedia.org/wiki/Bicycle",
+"elements": [
+[
+"button",
+"185 languages"
+],
+[
+"button",
+"Appearance"
+],
+[
+"button",
+"Main menu"
+],
+[
+"button",
+"Personal tools"
+],
+[
+"button",
+"Play audio"
+],
+[
+"button",
+"Toggle the table of contents"
+],
+[
+"button",
+"Tools"
+],
+[
+"button",
+"[show]"
+],
+[
+"link",
+""
+],
+[
+"link",
+"  "
+],
+[
+"link",
+"\"200 years since the father of the bicycle Baron Karl von Drais invented the 'running machine'\""
+],
+[
+"link",
+"\"200th anniversary: How the bicycle changed society\""
+],
+[
+"link",
+"\"6 Questions for Women's Bicycling Pioneer Georgena Terry\""
+],
+[
+"link",
+"\"A Bike for Abel\""
+],
+[
+"link",
+"\"A Complete List of Womens Touring Bikes: Step Through & Mixte\""
+],
+[
+"link",
+"\"A beginners' guide to … a cycle's drivetrain | Cycling UK\""
+],
+[
+"link",
+"\"A beginners' guide to … a cycle's handlebars | Cycling UK\""
+],
+[
+"link",
+"\"A beginners' guide to … wheels on a cycle | Cycling UK\""
+],
+[
+"link",
+"\"About My Planet: Bamboo Bikes\""
+],
+[
+"link",
+"\"Accessoires obligatoires à vélo\""
+],
+[
+"link",
+"\"Appropriate Transportation and Rural Development in Makete District, Tanzania\""
+],
+[
+"link",
+"\"BBC Inside Out - Raleigh Bikes\""
+],
+[
+"link",
+"\"Back on ya bike! How to keep your bicycle running smoothly and save amid the fuel crisis\""
+],
+[
+"link",
+"\"Baron von Drais' Bicycle\""
+],
+[
+"link",
+"\"Beijing looks to revitalise bicycle culture\""
+],
+[
+"link",
+"\"Belt drive bicycles: the pros and cons explained\""
+],
+[
+"link",
+"\"Bicycle Advisor\""
+],
+[
+"link",
+"\"Bicycle Market Size, Share & Industry Trends | 2026-2034\""
+],
+[
+"link",
+"\"Bicycle Technology\""
+],
+[
+"link",
+"\"Bicycle road rules : VicRoads\""
+],
+[
+"link",
+"\"Bicycle: The Unnoticed Potential\""
+],
+[
+"link",
+"\"Bicycling; A way of life; Faster in town than going by car, bus, tube or on foot\""
+],
+[
+"link",
+"\"Bike Saddle Key Features | BiSaddle\""
+],
+[
+"link",
+"\"Bike gears explained | A complete guide to bicycle transmissions\""
+],
+[
+"link",
+"\"Bike serial numbers\""
+],
+[
+"link",
+"\"Bike test: urban bikes with belt drives\""
+],
+[
+"link",
+"\"BikeWebSite: Bicycle Glossary – Patch kit\""
+],
+[
+"link",
+"\"Biography – ERIH\""
+],
+[
+"link",
+"\"Breaking into bicycle theft: Insights from Montreal, Canada\""
+],
+[
+"link",
+"\"Built environment influences on healthy transportation choices: bicycling versus driving\""
+],
+[
+"link",
+"\"China's Hangzhou Public Bicycle\""
+],
+[
+"link",
+"\"Community Bicycle Organizations\""
+],
+[
+"link",
+"\"Cycle market: Moving into the fast lane\""
+],
+[
+"link",
+"\"Cycling as transport\""
+],
+[
+"link",
+"\"Cycling: how to fix a puncture (even if you don't have the right tools)\""
+],
+[
+"link",
+"\"DPMA | World Day of the Bicycle\""
+],
+[
+"link",
+"\"Disc Brakes and Road Bikes: What does the Future Hold?\""
+],
+[
+"link",
+"\"Disc Brakes\""
+],
+[
+"link",
+"\"Dunlop, What sets Dunlop apart, History, 1889\""
+],
+[
+"link",
+"\"Effects of bicycle helmet wearing on accident and injury rates\""
+],
+[
+"link",
+"\"European, American and International Standards online\""
+],
+[
+"link",
+"\"Fixed Gear Conversions: Braking\""
+],
+[
+"link",
+"\"Flight of the Pigeon\""
+],
+[
+"link",
+"\"Frames & Materials\""
+],
+[
+"link",
+"\"Game changers | 12 innovations that changed road cycling\""
+],
+[
+"link",
+"\"Guide to saddle comfort for women | Cycling UK\""
+],
+[
+"link",
+"\"History Loudly Tells Why The Recumbent Bike Is Popular Today\""
+],
+[
+"link",
+"\"How Bike Suspension Works: A Guide for Every Type of Rider\""
+],
+[
+"link",
+"\"How an Ancestor of the Bicycle Relates to Climate Resilience\""
+],
+[
+"link",
+"\"How are bicycles made? From mine to market\""
+],
+[
+"link",
+"\"How bicycles transformed our world\""
+],
+[
+"link",
+"\"How can the bicycle assist in poverty eradication and social development in Africa?\""
+],
+[
+"link",
+"\"How the Bicycle Became a Symbol for Women's Emancipation\""
+],
+[
+"link",
+"\"How to Stoppie on a Mountain Bike\""
+],
+[
+"link",
+"\"ISO/TC 149 - Cycles\""
+],
+[
+"link",
+"\"In Almost Every European Country, Bikes Are Outselling New Cars\""
+],
+[
+"link",
+"\"Is It Crazy to Think We Can Eradicate Poverty?\""
+],
+[
+"link",
+"\"Is dangerous cycling a problem?\""
+],
+[
+"link",
+"\"Italian bicycle sales 'surpass those of cars'\""
+],
+[
+"link",
+"\"Karl Drais and the Mechanical Horse | SciHi Blog\""
+],
+[
+"link",
+"\"Keep on Bikin': American-Made Bikes Making a Comeback\""
+],
+[
+"link",
+"\"LAND - MEN'S 1 HOUR STANDING START (Single Rider)\""
+],
+[
+"link",
+"\"Learning to cycle: From training wheels to balance bike\""
+],
+[
+"link",
+"\"Like falling off\""
+],
+[
+"link",
+"\"Made in Africa: Bamboo bikes put Zambian business on right track\""
+],
+[
+"link",
+"\"Maintenance – How Do I Know When to Replace My Bike Tires?\""
+],
+[
+"link",
+"\"Mandatory Bicycle Helmet Laws in the United States: Origins, Context, and Controversies\""
+],
+[
+"link",
+"\"Mastering balance: The use of balance bicycles promotes the development of independent cycling\""
+],
+[
+"link",
+"\"Material challenges of bicycle manufacturing in a post-growth world\""
+],
+[
+"link",
+"\"Metro Making Room for Bikes on Their Trains\""
+],
+[
+"link",
+"\"Mixte is one of many styles of women's bike frame! – Bike Tinker\""
+],
+[
+"link",
+"\"One-Speed Bicycle Coaster Brakes\""
+],
+[
+"link",
+"\"Our Impact\""
+],
+[
+"link",
+"\"Pedal Powered Hope Project (PPHP)\""
+],
+[
+"link",
+"\"Pedal power probe shows bicycles waste little energy\""
+],
+[
+"link",
+"\"Practical Help for Afghans\""
+],
+[
+"link",
+"\"Project Tsunami Report Confirms The Power of Bicycle\""
+],
+[
+"link",
+"\"Properly Lubing Your Chain Helps With a Quieter, Faster Ride. It Can Also Save You Time and Money\""
+],
+[
+"link",
+"\"Quantifying abrasion of microplastics from mountain bike tires\""
+],
+[
+"link",
+"\"Rules of the road for bicycles\""
+],
+[
+"link",
+"\"Safety Accessories\""
+],
+[
+"link",
+"\"Seven easy maintenance tips for road hydraulic disc brakes\""
+],
+[
+"link",
+"\"Sheldon Brown: Flat tires\""
+],
+[
+"link",
+"\"So many bikes, so little space\""
+],
+[
+"link",
+"\"Steering in bicycles and motorcycles\""
+],
+[
+"link",
+"\"Tax free bikes for work through the Government's Green Transport Initiative\""
+],
+[
+"link",
+"\"Techies on the cutting edge... of bike commuting\""
+],
+[
+"link",
+"\"The Best Road Bike Tire Size Isn't What You Think—Here's What Actually Matters\""
+],
+[
+"link",
+"\"The Black Buffalo Soldiers Who Biked Across the American West\""
+],
+[
+"link",
+"\"The Coolest Bike Accessories For Kids\""
+],
+[
+"link",
+"\"The Essentials of Bike Clothing\""
+],
+[
+"link",
+"\"The Golden Book of Cycling\""
+],
+[
+"link",
+"\"The Wrights' bicycle shop\""
+],
+[
+"link",
+"\"The bicycle industry's dirty secret\""
+],
+[
+"link",
+"\"The ultimate guide to bike tyre pressure (PSI)\""
+],
+[
+"link",
+"\"The world's most flexible mode of transport\""
+],
+[
+"link",
+"\"Transport and Map Symbols\""
+],
+[
+"link",
+"\"Tricycles at the National Cycle Museum\""
+],
+[
+"link",
+"\"Types of Different Bikes: Ultimate Buying Guide - Bike Coop\""
+],
+[
+"link",
+"\"Understanding the World of Carbon Fiber Frames in Bicycles\""
+],
+[
+"link",
+"\"Vienna Convention on Road Traffic, Chapter XI Transport and Communications, B. Road Traffic, 19. Convention on Road Traffic\""
+],
+[
+"link",
+"\"What can cyclist legally do, and not do, in Europe?\""
+],
+[
+"link",
+"\"What is a fat bike? Everything you need to know about fat-tyre bikes\""
+],
+[
+"link",
+"\"Why Diamond Frame Cycles Are More Stable | The Engineering Behind Bicy\""
+],
+[
+"link",
+"\"Wilbur Wright Working in the Bicycle Shop\""
+],
+[
+"link",
+"\"Women's work\""
+],
+[
+"link",
+"\"World's first bicycle ride took place 200 years ago\""
+],
+[
+"link",
+"\"Worldwide Bikesharing\""
+],
+[
+"link",
+"\"bicycle (n.)\""
+],
+[
+"link",
+"\"bicycle\""
+],
+[
+"link",
+"\"bike\""
+],
+[
+"link",
+"\"cycle\""
+],
+[
+"link",
+"\"pedal cycle\""
+],
+[
+"link",
+"\"pushbike\""
+],
+[
+"link",
+"\"unicycle\""
+],
+[
+"link",
+"0-7864-4013-9"
+],
+[
+"link",
+"0006-2073"
+],
+[
+"link",
+"0144-1647"
+],
+[
+"link",
+"0261-3077"
+],
+[
+"link",
+"0261-510X"
+],
+[
+"link",
+"10.1007/s10668-024-05550-0"
+],
+[
+"link",
+"10.1007/s11524-010-9509-6"
+],
+[
+"link",
+"10.1016/0015-0568(81)90023-3"
+],
+[
+"link",
+"10.1016/S0966-6923(97)00040-9"
+],
+[
+"link",
+"10.1016/bs.atpp.2022.04.002"
+],
+[
+"link",
+"10.1016/j.scitotenv.2025.178971"
+],
+[
+"link",
+"10.1080/01441647.2015.1114271"
+],
+[
+"link",
+"10.1080/15568318.2013.811332"
+],
+[
+"link",
+"10.1098/rspa.2007.1857"
+],
+[
+"link",
+"10.1111/bjdp.12409"
+],
+[
+"link",
+"10.1119/1.19504"
+],
+[
+"link",
+"10.1177/03635465030310041801"
+],
+[
+"link",
+"10.2105/AJPH.2020.305718"
+],
+[
+"link",
+"10.3141/2143-20"
+],
+[
+"link",
+"10.3141/2247-05"
+],
+[
+"link",
+"10.3390/ijerph19031814"
+],
+[
+"link",
+"111120290"
+],
+[
+"link",
+"12860549"
+],
+[
+"link",
+"1364-5021"
+],
+[
+"link",
+"1660-4601"
+],
+[
+"link",
+"18309860"
+],
+[
+"link",
+"1886 Rover safety bicycle at the British Motor Museum. The first modern bicycle, it had a rear-wheel-drive and was chain-driven with two similar-sized wheels. Dunlop's pneumatic tire was added to the bicycle in 1888."
+],
+[
+"link",
+"19th-century inventions"
+],
+[
+"link",
+"2000AmJPh..68..654F"
+],
+[
+"link",
+"2007RSPSA.463.1955M"
+],
+[
+"link",
+"2015IJSTr...9..490V"
+],
+[
+"link",
+"2025ScTEn.96978971S"
+],
+[
+"link",
+"2026EDSus..2817311D"
+],
+[
+"link",
+"21174189"
+],
+[
+"link",
+"22497516"
+],
+[
+"link",
+"270–72"
+],
+[
+"link",
+"3005092"
+],
+[
+"link",
+"32552017"
+],
+[
+"link",
+"35162834"
+],
+[
+"link",
+"35262200"
+],
+[
+"link",
+"40024044"
+],
+[
+"link",
+"40770008"
+],
+[
+"link",
+"44047626"
+],
+[
+"link",
+"7349454"
+],
+[
+"link",
+"8834827"
+],
+[
+"link",
+"9310799"
+],
+[
+"link",
+"978-0-226-92187-7"
+],
+[
+"link",
+"978-0-262-23111-4"
+],
+[
+"link",
+"978-0-262-53840-4"
+],
+[
+"link",
+"978-0-262-73154-6"
+],
+[
+"link",
+"978-0-300-12047-9"
+],
+[
+"link",
+"978-0-8020-8205-3"
+],
+[
+"link",
+"978-0-916468-91-0"
+],
+[
+"link",
+"978-1-4303-0861-4"
+],
+[
+"link",
+"9780192559814"
+],
+[
+"link",
+"A History of Bicycles and Other Cycles"
+],
+[
+"link",
+"A Triumph with a step-through frame"
+],
+[
+"link",
+"A Wheel Within a Wheel: How I Learned to Ride the Bicycle, with Some Reflections by the Way"
+],
+[
+"link",
+"A bicycle with shaft drive instead of a chain"
+],
+[
+"link",
+"A car drives past 4 wind turbines in a field, with more on the horizon"
+],
+[
+"link",
+"A carbon fiber Trek Y-Foil from the late 1990s"
+],
+[
+"link",
+"A penny-farthing or ordinary bicycle in the Škoda Auto museum in the Czech Republic"
+],
+[
+"link",
+"A recumbent bicycle"
+],
+[
+"link",
+"A set of rear sprockets (also known as a cassette) and a derailleur"
+],
+[
+"link",
+"About Wikipedia"
+],
+[
+"link",
+"Ailsa Craig"
+],
+[
+"link",
+"Albert A. Pope"
+],
+[
+"link",
+"American Automobile Association"
+],
+[
+"link",
+"Amsterdam"
+],
+[
+"link",
+"Annie Lowrey"
+],
+[
+"link",
+"Antônio"
+],
+[
+"link",
+"Appropriate technology"
+],
+[
+"link",
+"Archived"
+],
+[
+"link",
+"Article"
+],
+[
+"link",
+"Audio help"
+],
+[
+"link",
+"Authority control databases"
+],
+[
+"link",
+"BBC News"
+],
+[
+"link",
+"BMX bike"
+],
+[
+"link",
+"BMX bikes"
+],
+[
+"link",
+"BMX racing"
+],
+[
+"link",
+"Balance bicycle"
+],
+[
+"link",
+"Balance bicycle for young children"
+],
+[
+"link",
+"Bamboo bicycles made in Zambia"
+],
+[
+"link",
+"Barbie doll"
+],
+[
+"link",
+"Baron"
+],
+[
+"link",
+"Better World Club"
+],
+[
+"link",
+"Bibcode"
+],
+[
+"link",
+"Bicycle (disambiguation)"
+],
+[
+"link",
+"Bicycle Film Festival"
+],
+[
+"link",
+"Bicycle and motorcycle dynamics"
+],
+[
+"link",
+"Bicycle and motorcycle geometry"
+],
+[
+"link",
+"Bicycle brake"
+],
+[
+"link",
+"Bicycle drivetrain systems"
+],
+[
+"link",
+"Bicycle drum brake"
+],
+[
+"link",
+"Bicycle fender"
+],
+[
+"link",
+"Bicycle frame"
+],
+[
+"link",
+"Bicycle helmets"
+],
+[
+"link",
+"Bicycle in Plymouth, England, at the start of the 20th century"
+],
+[
+"link",
+"Bicycle industry"
+],
+[
+"link",
+"Bicycle law"
+],
+[
+"link",
+"Bicycle lighting"
+],
+[
+"link",
+"Bicycle manufacturing"
+],
+[
+"link",
+"Bicycle parking station"
+],
+[
+"link",
+"Bicycle parts"
+],
+[
+"link",
+"Bicycle performance"
+],
+[
+"link",
+"Bicycle poverty reduction"
+],
+[
+"link",
+"Bicycle sports"
+],
+[
+"link",
+"Bicycle summary"
+],
+[
+"link",
+"Bicycle suspension"
+],
+[
+"link",
+"Bicycle theft"
+],
+[
+"link",
+"Bicycle tire"
+],
+[
+"link",
+"Bicycle tools"
+],
+[
+"link",
+"Bicycle wheel"
+],
+[
+"link",
+"Bicycle-friendly"
+],
+[
+"link",
+"Bicycle-sharing system"
+],
+[
+"link",
+"Bicycle: The History"
+],
+[
+"link",
+"Bicycles"
+],
+[
+"link",
+"Bicycling"
+],
+[
+"link",
+"Bicycling Science"
+],
+[
+"link",
+"Bicycling and feminism"
+],
+[
+"link",
+"Bicyclus"
+],
+[
+"link",
+"Bike (disambiguation)"
+],
+[
+"link",
+"Bike trainers"
+],
+[
+"link",
+"Birger Ljungström"
+],
+[
+"link",
+"Bois de Boulogne"
+],
+[
+"link",
+"Bowden cable"
+],
+[
+"link",
+"Brazilian princes (from left) Antônio, Luís, and Pedro on a triple tandem bicycle during their exile, 1891"
+],
+[
+"link",
+"British Motor Museum"
+],
+[
+"link",
+"CO2 pump"
+],
+[
+"link",
+"Canada Science and Technology Museum"
+],
+[
+"link",
+"Categories"
+],
+[
+"link",
+"Category"
+],
+[
+"link",
+"Champs Elysées"
+],
+[
+"link",
+"Code of Conduct"
+],
+[
+"link",
+"Columbia Bicycles"
+],
+[
+"link",
+"Contact Wikipedia"
+],
+[
+"link",
+"Convention on Road Traffic"
+],
+[
+"link",
+"Cookie statement"
+],
+[
+"link",
+"Copenhagen"
+],
+[
+"link",
+"Coventry"
+],
+[
+"link",
+"Coventry Machinists Company"
+],
+[
+"link",
+"Creative Commons Attribution-ShareAlike 4.0 License"
+],
+[
+"link",
+"Cycle types"
+],
+[
+"link",
+"Cycling"
+],
+[
+"link",
+"Cycling Science: How Rider and Machine Work Together"
+],
+[
+"link",
+"Cycling infrastructure"
+],
+[
+"link",
+"Cycling § Environmental_impact"
+],
+[
+"link",
+"Cyclists' Touring Club"
+],
+[
+"link",
+"Cyclists' Touring Club sign at the National Museum of Scotland"
+],
+[
+"link",
+"Definitions"
+],
+[
+"link",
+"Dennis Crowley"
+],
+[
+"link",
+"Derailleur gears"
+],
+[
+"link",
+"Developers"
+],
+[
+"link",
+"Different gears and ranges of gears"
+],
+[
+"link",
+"Disc brakes"
+],
+[
+"link",
+"Disclaimers"
+],
+[
+"link",
+"Drawing from an 1896 newspaper of The London Hansom Cycle"
+],
+[
+"link",
+"Duke University"
+],
+[
+"link",
+"Durham, North Carolina"
+],
+[
+"link",
+"EN 14764"
+],
+[
+"link",
+"EN 14765"
+],
+[
+"link",
+"EN 14766"
+],
+[
+"link",
+"EN 14781"
+],
+[
+"link",
+"EN 14782"
+],
+[
+"link",
+"EN 15194"
+],
+[
+"link",
+"EN 15496"
+],
+[
+"link",
+"EN 15532"
+],
+[
+"link",
+"Eastman Company"
+],
+[
+"link",
+"Edit this at Wikidata"
+],
+[
+"link",
+"Electric bicycle"
+],
+[
+"link",
+"Electric_bicycle § Environmental_effects"
+],
+[
+"link",
+"Energy conservation"
+],
+[
+"link",
+"Eugène Meyer"
+],
+[
+"link",
+"European Committee for Standardization"
+],
+[
+"link",
+"Fenders"
+],
+[
+"link",
+"Flying Pigeon"
+],
+[
+"link",
+"Folding bicycles"
+],
+[
+"link",
+"Ford"
+],
+[
+"link",
+"Foursquare"
+],
+[
+"link",
+"Frame"
+],
+[
+"link",
+"Frances Willard"
+],
+[
+"link",
+"Frankfurt"
+],
+[
+"link",
+"Fred P. Hochberg"
+],
+[
+"link",
+"Fredrik Ljungström"
+],
+[
+"link",
+"French chalk"
+],
+[
+"link",
+"General Motors"
+],
+[
+"link",
+"German inventions"
+],
+[
+"link",
+"Greymouth"
+],
+[
+"link",
+"HTML"
+],
+[
+"link",
+"Herlihy 2004"
+],
+[
+"link",
+"History of cycling infrastructure"
+],
+[
+"link",
+"History of the bicycle"
+],
+[
+"link",
+"Hub gear"
+],
+[
+"link",
+"Human"
+],
+[
+"link",
+"Human-powered transport"
+],
+[
+"link",
+"Husted Harper, Ida"
+],
+[
+"link",
+"ISBN"
+],
+[
+"link",
+"ISO 10230"
+],
+[
+"link",
+"ISO 11243"
+],
+[
+"link",
+"ISO 4210"
+],
+[
+"link",
+"ISO 5775"
+],
+[
+"link",
+"ISO 6692"
+],
+[
+"link",
+"ISO 6695"
+],
+[
+"link",
+"ISO 6696"
+],
+[
+"link",
+"ISO 6697"
+],
+[
+"link",
+"ISO 6698"
+],
+[
+"link",
+"ISO 6699"
+],
+[
+"link",
+"ISO 6701"
+],
+[
+"link",
+"ISO 6742"
+],
+[
+"link",
+"ISO 8090"
+],
+[
+"link",
+"ISO 8098"
+],
+[
+"link",
+"ISO 8488"
+],
+[
+"link",
+"ISO 8562"
+],
+[
+"link",
+"ISO 9633"
+],
+[
+"link",
+"ISO standards"
+],
+[
+"link",
+"ISSN"
+],
+[
+"link",
+"International Organization for Standardization"
+],
+[
+"link",
+"J.K. Starley"
+],
+[
+"link",
+"James Starley"
+],
+[
+"link",
+"John Boyd Dunlop"
+],
+[
+"link",
+"John Boyd Dunlop on a bicycle c. 1915"
+],
+[
+"link",
+"Jump to content"
+],
+[
+"link",
+"Jump up"
+],
+[
+"link",
+"Jump up to: "
+],
+[
+"link",
+"Karl von Drais"
+],
+[
+"link",
+"Kevlar"
+],
+[
+"link",
+"Kick stands"
+],
+[
+"link",
+"Kirkpatrick MacMillan"
+],
+[
+"link",
+"La Rochelle"
+],
+[
+"link",
+"Legal & safety contacts"
+],
+[
+"link",
+"List of bicycle brands and manufacturing companies"
+],
+[
+"link",
+"List of bicycle types"
+],
+[
+"link",
+"List of films about bicycles and cycling"
+],
+[
+"link",
+"List of land vehicles types by number of wheels"
+],
+[
+"link",
+"Listen to this article"
+],
+[
+"link",
+"Lulu"
+],
+[
+"link",
+"Luís"
+],
+[
+"link",
+"Man with a bicycle in Glengarry County, Ontario between 1895 and 1910"
+],
+[
+"link",
+"Mannheim"
+],
+[
+"link",
+"Marketplace"
+],
+[
+"link",
+"Media"
+],
+[
+"link",
+"Michaux's son on a velocipede 1868"
+],
+[
+"link",
+"Micromobility"
+],
+[
+"link",
+"Mobile view"
+],
+[
+"link",
+"More spoken articles"
+],
+[
+"link",
+"Morris Motors"
+],
+[
+"link",
+"National Geographic"
+],
+[
+"link",
+"National Museum of Scotland"
+],
+[
+"link",
+"Netherlands"
+],
+[
+"link",
+"New Woman"
+],
+[
+"link",
+"New York University"
+],
+[
+"link",
+"New York World"
+],
+[
+"link",
+"Nicholas D. Kristof"
+],
+[
+"link",
+"Norcliffe 2001"
+],
+[
+"link",
+"Nottingham"
+],
+[
+"link",
+"Ouagadougou"
+],
+[
+"link",
+"Outline of bicycles"
+],
+[
+"link",
+"Oxford"
+],
+[
+"link",
+"Oxford English Dictionary"
+],
+[
+"link",
+"PMC"
+],
+[
+"link",
+"PMID"
+],
+[
+"link",
+"Page semi-protected"
+],
+[
+"link",
+"Parsoid"
+],
+[
+"link",
+"Pedro"
+],
+[
+"link",
+"Pierre Lallement"
+],
+[
+"link",
+"Pierre Michaux"
+],
+[
+"link",
+"Plymouth"
+],
+[
+"link",
+"Pope"
+],
+[
+"link",
+"Powered by MediaWiki"
+],
+[
+"link",
+"Privacy Policy"
+],
+[
+"link",
+"Privacy policy"
+],
+[
+"link",
+"Private transport"
+],
+[
+"link",
+"Proceedings of the Royal Society A"
+],
+[
+"link",
+"Quotations"
+],
+[
+"link",
+"Raleigh Bicycle Company"
+],
+[
+"link",
+"Renewable energy"
+],
+[
+"link",
+"Renewable energy portal"
+],
+[
+"link",
+"Road bicycles"
+],
+[
+"link",
+"Rodale"
+],
+[
+"link",
+"Rover"
+],
+[
+"link",
+"Rover Company"
+],
+[
+"link",
+"Rudin Center for Transportation Policy & Management"
+],
+[
+"link",
+"S2CID"
+],
+[
+"link",
+"Saddles"
+],
+[
+"link",
+"Scientific American"
+],
+[
+"link",
+"Search"
+],
+[
+"link",
+"Shimano"
+],
+[
+"link",
+"Skirt guard"
+],
+[
+"link",
+"Sports portal"
+],
+[
+"link",
+"Sri Lanka"
+],
+[
+"link",
+"Statistics"
+],
+[
+"link",
+"Susan B. Anthony"
+],
+[
+"link",
+"Sustainable energy"
+],
+[
+"link",
+"Sustainable technologies"
+],
+[
+"link",
+"Sustainable transport"
+],
+[
+"link",
+"Svea Velocipede"
+],
+[
+"link",
+"Talk"
+],
+[
+"link",
+"Tanzania"
+],
+[
+"link",
+"Terms of Use"
+],
+[
+"link",
+"Textbooks"
+],
+[
+"link",
+"Texts"
+],
+[
+"link",
+"The Bicycle Touring Club"
+],
+[
+"link",
+"The Bicycle: Vehicle for a Small Planet"
+],
+[
+"link",
+"The Daily News"
+],
+[
+"link",
+"The Economist"
+],
+[
+"link",
+"The Independent"
+],
+[
+"link",
+"The New York Times"
+],
+[
+"link",
+"The Ride to Modernity: The Bicycle in Canada, 1869–1900"
+],
+[
+"link",
+"The first bicycle by Baron Karl von Drais"
+],
+[
+"link",
+"The lever-operated Svea Velocipede by Fredrik Ljungström and Birger Ljungström"
+],
+[
+"link",
+"The life and work of Susan B. Anthony: including public addresses, her own letters and many from her contemporaries during fifty years. A story of the evolution of the status of woman"
+],
+[
+"link",
+"This audio file"
+],
+[
+"link",
+"Thomas McCall"
+],
+[
+"link",
+"Toe-clips"
+],
+[
+"link",
+"Track bicycles"
+],
+[
+"link",
+"Training wheels"
+],
+[
+"link",
+"Trampe bicycle lift"
+],
+[
+"link",
+"Transport portal"
+],
+[
+"link",
+"Transportation"
+],
+[
+"link",
+"Transportation Nation"
+],
+[
+"link",
+"Travel information"
+],
+[
+"link",
+"Trek"
+],
+[
+"link",
+"Triumph"
+],
+[
+"link",
+"Trondheim"
+],
+[
+"link",
+"Uganda"
+],
+[
+"link",
+"Unicode"
+],
+[
+"link",
+"Unicycles"
+],
+[
+"link",
+"Union Cycliste Internationale"
+],
+[
+"link",
+"Utility bicycle"
+],
+[
+"link",
+"Velomobile"
+],
+[
+"link",
+"Vienna Convention on Road Traffic"
+],
+[
+"link",
+"Wayback Machine"
+],
+[
+"link",
+"Wikibooks logo"
+],
+[
+"link",
+"Wikimedia Commons logo"
+],
+[
+"link",
+"Wikimedia Foundation"
+],
+[
+"link",
+"Wikimedia Foundation, Inc."
+],
+[
+"link",
+"Wikipedia The Free Encyclopedia"
+],
+[
+"link",
+"Wikisource logo"
+],
+[
+"link",
+"Wikivoyage logo"
+],
+[
+"link",
+"Wiktionary logo"
+],
+[
+"link",
+"Wilbur and Orville Wright"
+],
+[
+"link",
+"Willard, Frances Elizabeth"
+],
+[
+"link",
+"Willie Hume"
+],
+[
+"link",
+"Wilson 1973"
+],
+[
+"link",
+"Woman's Christian Temperance Union"
+],
+[
+"link",
+"Woman's Temperance Publishing Association"
+],
+[
+"link",
+"Women on bicycles on unpaved road, US, late 19th century"
+],
+[
+"link",
+"Wooden bicycle"
+],
+[
+"link",
+"Wooden draisine (around 1820), the first two-wheeler and as such the archetype of the bicycle"
+],
+[
+"link",
+"Woolworth"
+],
+[
+"link",
+"World Bicycle Day"
+],
+[
+"link",
+"World Digital Library"
+],
+[
+"link",
+"Wright Cycle Company"
+],
+[
+"link",
+"Wright brothers"
+],
+[
+"link",
+"[100]"
+],
+[
+"link",
+"[101]"
+],
+[
+"link",
+"[102]"
+],
+[
+"link",
+"[103]"
+],
+[
+"link",
+"[104]"
+],
+[
+"link",
+"[105]"
+],
+[
+"link",
+"[106]"
+],
+[
+"link",
+"[107]"
+],
+[
+"link",
+"[108]"
+],
+[
+"link",
+"[109]"
+],
+[
+"link",
+"[10]"
+],
+[
+"link",
+"[110]"
+],
+[
+"link",
+"[111]"
+],
+[
+"link",
+"[112]"
+],
+[
+"link",
+"[113]"
+],
+[
+"link",
+"[114]"
+],
+[
+"link",
+"[115]"
+],
+[
+"link",
+"[116]"
+],
+[
+"link",
+"[117]"
+],
+[
+"link",
+"[118]"
+],
+[
+"link",
+"[119]"
+],
+[
+"link",
+"[11]"
+],
+[
+"link",
+"[120]"
+],
+[
+"link",
+"[121]"
+],
+[
+"link",
+"[122]"
+],
+[
+"link",
+"[123]"
+],
+[
+"link",
+"[124]"
+],
+[
+"link",
+"[125]"
+],
+[
+"link",
+"[126]"
+],
+[
+"link",
+"[127]"
+],
+[
+"link",
+"[128]"
+],
+[
+"link",
+"[129]"
+],
+[
+"link",
+"[12]"
+],
+[
+"link",
+"[130]"
+],
+[
+"link",
+"[131]"
+],
+[
+"link",
+"[132]"
+],
+[
+"link",
+"[133]"
+],
+[
+"link",
+"[134]"
+],
+[
+"link",
+"[135]"
+],
+[
+"link",
+"[136]"
+],
+[
+"link",
+"[137]"
+],
+[
+"link",
+"[138]"
+],
+[
+"link",
+"[139]"
+],
+[
+"link",
+"[13]"
+],
+[
+"link",
+"[140]"
+],
+[
+"link",
+"[141]"
+],
+[
+"link",
+"[142]"
+],
+[
+"link",
+"[143]"
+],
+[
+"link",
+"[144]"
+],
+[
+"link",
+"[145]"
+],
+[
+"link",
+"[146]"
+],
+[
+"link",
+"[147]"
+],
+[
+"link",
+"[148]"
+],
+[
+"link",
+"[149]"
+],
+[
+"link",
+"[14]"
+],
+[
+"link",
+"[150]"
+],
+[
+"link",
+"[151]"
+],
+[
+"link",
+"[152]"
+],
+[
+"link",
+"[153]"
+],
+[
+"link",
+"[154]"
+],
+[
+"link",
+"[155]"
+],
+[
+"link",
+"[156]"
+],
+[
+"link",
+"[157]"
+],
+[
+"link",
+"[158]"
+],
+[
+"link",
+"[159]"
+],
+[
+"link",
+"[15]"
+],
+[
+"link",
+"[160]"
+],
+[
+"link",
+"[161]"
+],
+[
+"link",
+"[162]"
+],
+[
+"link",
+"[163]"
+],
+[
+"link",
+"[164]"
+],
+[
+"link",
+"[165]"
+],
+[
+"link",
+"[166]"
+],
+[
+"link",
+"[167]"
+],
+[
+"link",
+"[168]"
+],
+[
+"link",
+"[169]"
+],
+[
+"link",
+"[16]"
+],
+[
+"link",
+"[17]"
+],
+[
+"link",
+"[18]"
+],
+[
+"link",
+"[19]"
+],
+[
+"link",
+"[1]"
+],
+[
+"link",
+"[20]"
+],
+[
+"link",
+"[21]"
+],
+[
+"link",
+"[22]"
+],
+[
+"link",
+"[23]"
+],
+[
+"link",
+"[24]"
+],
+[
+"link",
+"[25]"
+],
+[
+"link",
+"[26]"
+],
+[
+"link",
+"[27]"
+],
+[
+"link",
+"[28]"
+],
+[
+"link",
+"[29]"
+],
+[
+"link",
+"[2]"
+],
+[
+"link",
+"[30]"
+],
+[
+"link",
+"[31]"
+],
+[
+"link",
+"[32]"
+],
+[
+"link",
+"[33]"
+],
+[
+"link",
+"[34]"
+],
+[
+"link",
+"[35]"
+],
+[
+"link",
+"[36]"
+],
+[
+"link",
+"[37]"
+],
+[
+"link",
+"[38]"
+],
+[
+"link",
+"[39]"
+],
+[
+"link",
+"[3]"
+],
+[
+"link",
+"[40]"
+],
+[
+"link",
+"[41]"
+],
+[
+"link",
+"[42]"
+],
+[
+"link",
+"[43]"
+],
+[
+"link",
+"[44]"
+],
+[
+"link",
+"[45]"
+],
+[
+"link",
+"[46]"
+],
+[
+"link",
+"[47]"
+],
+[
+"link",
+"[48]"
+],
+[
+"link",
+"[49]"
+],
+[
+"link",
+"[4]"
+],
+[
+"link",
+"[50]"
+],
+[
+"link",
+"[51]"
+],
+[
+"link",
+"[52]"
+],
+[
+"link",
+"[53]"
+],
+[
+"link",
+"[54]"
+],
+[
+"link",
+"[55]"
+],
+[
+"link",
+"[56]"
+],
+[
+"link",
+"[57]"
+],
+[
+"link",
+"[58]"
+],
+[
+"link",
+"[59]"
+],
+[
+"link",
+"[5]"
+],
+[
+"link",
+"[60]"
+],
+[
+"link",
+"[61]"
+],
+[
+"link",
+"[62]"
+],
+[
+"link",
+"[63]"
+],
+[
+"link",
+"[64]"
+],
+[
+"link",
+"[65]"
+],
+[
+"link",
+"[66]"
+],
+[
+"link",
+"[67]"
+],
+[
+"link",
+"[68]"
+],
+[
+"link",
+"[69]"
+],
+[
+"link",
+"[6]"
+],
+[
+"link",
+"[70]"
+],
+[
+"link",
+"[71]"
+],
+[
+"link",
+"[72]"
+],
+[
+"link",
+"[73]"
+],
+[
+"link",
+"[74]"
+],
+[
+"link",
+"[75]"
+],
+[
+"link",
+"[76]"
+],
+[
+"link",
+"[77]"
+],
+[
+"link",
+"[78]"
+],
+[
+"link",
+"[79]"
+],
+[
+"link",
+"[7]"
+],
+[
+"link",
+"[80]"
+],
+[
+"link",
+"[81]"
+],
+[
+"link",
+"[82]"
+],
+[
+"link",
+"[83]"
+],
+[
+"link",
+"[84]"
+],
+[
+"link",
+"[85]"
+],
+[
+"link",
+"[86]"
+],
+[
+"link",
+"[87]"
+],
+[
+"link",
+"[88]"
+],
+[
+"link",
+"[89]"
+],
+[
+"link",
+"[8]"
+],
+[
+"link",
+"[90]"
+],
+[
+"link",
+"[91]"
+],
+[
+"link",
+"[92]"
+],
+[
+"link",
+"[93]"
+],
+[
+"link",
+"[94]"
+],
+[
+"link",
+"[95]"
+],
+[
+"link",
+"[96]"
+],
+[
+"link",
+"[97]"
+],
+[
+"link",
+"[98]"
+],
+[
+"link",
+"[99]"
+],
+[
+"link",
+"[9]"
+],
+[
+"link",
+"[note 1]"
+],
+[
+"link",
+"aerodynamically"
+],
+[
+"link",
+"aluminum"
+],
+[
+"link",
+"amphibious bicycles"
+],
+[
+"link",
+"amphibious cycle"
+],
+[
+"link",
+"artistic cycling"
+],
+[
+"link",
+"automobile racing"
+],
+[
+"link",
+"automobiles"
+],
+[
+"link",
+"balance bike"
+],
+[
+"link",
+"ball bearings"
+],
+[
+"link",
+"bamboo"
+],
+[
+"link",
+"baskets"
+],
+[
+"link",
+"bells"
+],
+[
+"link",
+"bicycle"
+],
+[
+"link",
+"bicycle carriers"
+],
+[
+"link",
+"bicycle commuting"
+],
+[
+"link",
+"bicycle craze"
+],
+[
+"link",
+"bicycle craze in the 1890s"
+],
+[
+"link",
+"bicycle culture"
+],
+[
+"link",
+"bicycle industry"
+],
+[
+"link",
+"bicycle infantries"
+],
+[
+"link",
+"bicycle manufacturers"
+],
+[
+"link",
+"bicycle mechanics"
+],
+[
+"link",
+"bicycle parking"
+],
+[
+"link",
+"bicycle racing"
+],
+[
+"link",
+"bicycle sharing systems"
+],
+[
+"link",
+"bicycle touring"
+],
+[
+"link",
+"bicycle with shaft drive"
+],
+[
+"link",
+"bicycles"
+],
+[
+"link",
+"bicycles safer"
+],
+[
+"link",
+"bike boom"
+],
+[
+"link",
+"bike horns"
+],
+[
+"link",
+"bike locks"
+],
+[
+"link",
+"bloomers"
+],
+[
+"link",
+"bottom bracket"
+],
+[
+"link",
+"cadence"
+],
+[
+"link",
+"cages"
+],
+[
+"link",
+"carbon fibre"
+],
+[
+"link",
+"cargo bike"
+],
+[
+"link",
+"cargo bikes"
+],
+[
+"link",
+"cassette"
+],
+[
+"link",
+"center of mass"
+],
+[
+"link",
+"chain drive"
+],
+[
+"link",
+"chain tool"
+],
+[
+"link",
+"chain-driven"
+],
+[
+"link",
+"chain-driven sprockets"
+],
+[
+"link",
+"chainguards"
+],
+[
+"link",
+"chainring"
+],
+[
+"link",
+"chair-like seat"
+],
+[
+"link",
+"chaise"
+],
+[
+"link",
+"child seats"
+],
+[
+"link",
+"children's toys"
+],
+[
+"link",
+"citation needed"
+],
+[
+"link",
+"clarification needed"
+],
+[
+"link",
+"clipless pedals"
+],
+[
+"link",
+"coaster brakes"
+],
+[
+"link",
+"code point"
+],
+[
+"link",
+"communications"
+],
+[
+"link",
+"commuting"
+],
+[
+"link",
+"composite material"
+],
+[
+"link",
+"computer-aided design"
+],
+[
+"link",
+"conspicuous consumption"
+],
+[
+"link",
+"countersteering"
+],
+[
+"link",
+"courier services"
+],
+[
+"link",
+"crank"
+],
+[
+"link",
+"cranks"
+],
+[
+"link",
+"crankset"
+],
+[
+"link",
+"criterium"
+],
+[
+"link",
+"cruiser bicycle"
+],
+[
+"link",
+"cruiser bicycles"
+],
+[
+"link",
+"culture"
+],
+[
+"link",
+"cycling"
+],
+[
+"link",
+"cycling clubs"
+],
+[
+"link",
+"cycling infrastructure"
+],
+[
+"link",
+"cyclist"
+],
+[
+"link",
+"cyclocomputers"
+],
+[
+"link",
+"dandy horse"
+],
+[
+"link",
+"derailleur"
+],
+[
+"link",
+"diameter"
+],
+[
+"link",
+"distributors"
+],
+[
+"link",
+"doi"
+],
+[
+"link",
+"draisine"
+],
+[
+"link",
+"drivetrain"
+],
+[
+"link",
+"dropouts"
+],
+[
+"link",
+"e"
+],
+[
+"link",
+"edit"
+],
+[
+"link",
+"electric bicycle"
+],
+[
+"link",
+"electric bicycles"
+],
+[
+"link",
+"energy"
+],
+[
+"link",
+"entity"
+],
+[
+"link",
+"fairing"
+],
+[
+"link",
+"first mechanically propelled, two-wheeled vehicle"
+],
+[
+"link",
+"fitness"
+],
+[
+"link",
+"fixed gear"
+],
+[
+"link",
+"folding bicycle"
+],
+[
+"link",
+"folding models"
+],
+[
+"link",
+"for deliveries"
+],
+[
+"link",
+"fork"
+],
+[
+"link",
+"frame"
+],
+[
+"link",
+"freestyle BMX"
+],
+[
+"link",
+"freewheel"
+],
+[
+"link",
+"gear ratio"
+],
+[
+"link",
+"hand pump"
+],
+[
+"link",
+"handlebar"
+],
+[
+"link",
+"handlebars"
+],
+[
+"link",
+"headset"
+],
+[
+"link",
+"hex keys"
+],
+[
+"link",
+"horse buggies"
+],
+[
+"link",
+"horse-drawn vehicles"
+],
+[
+"link",
+"hub gears"
+],
+[
+"link",
+"human-powered"
+],
+[
+"link",
+"hybrid bicycle"
+],
+[
+"link",
+"hybrid bicycles"
+],
+[
+"link",
+"hydraulic"
+],
+[
+"link",
+"icon"
+],
+[
+"link",
+"industrial"
+],
+[
+"link",
+"industry"
+],
+[
+"link",
+"inner tube"
+],
+[
+"link",
+"jock strap"
+],
+[
+"link",
+"jurisdictions"
+],
+[
+"link",
+"laypeople"
+],
+[
+"link",
+"lights"
+],
+[
+"link",
+"local bike shops"
+],
+[
+"link",
+"locking hubs"
+],
+[
+"link",
+"low rider"
+],
+[
+"link",
+"low riders"
+],
+[
+"link",
+"luggage carriers"
+],
+[
+"link",
+"mail carriers"
+],
+[
+"link",
+"mass production"
+],
+[
+"link",
+"means of transport"
+],
+[
+"link",
+"messengers"
+],
+[
+"link",
+"military"
+],
+[
+"link",
+"mixed-mode commute"
+],
+[
+"link",
+"mixte"
+],
+[
+"link",
+"modern materials"
+],
+[
+"link",
+"motor vehicle"
+],
+[
+"link",
+"motor-assisted"
+],
+[
+"link",
+"motor-power"
+],
+[
+"link",
+"motorcycle"
+],
+[
+"link",
+"mountain bicycle"
+],
+[
+"link",
+"mountain bicycles"
+],
+[
+"link",
+"mountain bike"
+],
+[
+"link",
+"mountain biking"
+],
+[
+"link",
+"multi-tools"
+],
+[
+"link",
+"non-primary source needed"
+],
+[
+"link",
+"p. 648, patent no. 86,705: \"Perfectionnements dans les roues de vélocipèdes\""
+],
+[
+"link",
+"page needed"
+],
+[
+"link",
+"palm area"
+],
+[
+"link",
+"panniers"
+],
+[
+"link",
+"paramedics"
+],
+[
+"link",
+"participating institution membership"
+],
+[
+"link",
+"pedal-driven"
+],
+[
+"link",
+"pedals"
+],
+[
+"link",
+"penny-farthing"
+],
+[
+"link",
+"physical fitness"
+],
+[
+"link",
+"planned obsolescence"
+],
+[
+"link",
+"play"
+],
+[
+"link",
+"pneumatic tire"
+],
+[
+"link",
+"pneumatic tires"
+],
+[
+"link",
+"police"
+],
+[
+"link",
+"puncture-resistant"
+],
+[
+"link",
+"quadracycles"
+],
+[
+"link",
+"racing"
+],
+[
+"link",
+"racing bicycle"
+],
+[
+"link",
+"racing bicycles"
+],
+[
+"link",
+"racks"
+],
+[
+"link",
+"rational dress"
+],
+[
+"link",
+"re-branders"
+],
+[
+"link",
+"reconnaissance"
+],
+[
+"link",
+"recreation"
+],
+[
+"link",
+"recumbent"
+],
+[
+"link",
+"recumbent bicycle"
+],
+[
+"link",
+"recumbents"
+],
+[
+"link",
+"reduce poverty"
+],
+[
+"link",
+"retailers"
+],
+[
+"link",
+"retronym"
+],
+[
+"link",
+"roller racing"
+],
+[
+"link",
+"rubber pollution"
+],
+[
+"link",
+"rural economy"
+],
+[
+"link",
+"rural poverty"
+],
+[
+"link",
+"saddle"
+],
+[
+"link",
+"safety bicycle"
+],
+[
+"link",
+"safety bicycles"
+],
+[
+"link",
+"sandpaper"
+],
+[
+"link",
+"seat"
+],
+[
+"link",
+"shillings"
+],
+[
+"link",
+"shopping"
+],
+[
+"link",
+"single-track vehicle"
+],
+[
+"link",
+"sister projects"
+],
+[
+"link",
+"slick"
+],
+[
+"link",
+"spoke"
+],
+[
+"link",
+"spoke beads"
+],
+[
+"link",
+"sportives"
+],
+[
+"link",
+"standover height"
+],
+[
+"link",
+"steel"
+],
+[
+"link",
+"steering"
+],
+[
+"link",
+"stem"
+],
+[
+"link",
+"step-through frame"
+],
+[
+"link",
+"stiffness"
+],
+[
+"link",
+"stoppie"
+],
+[
+"link",
+"suffragists"
+],
+[
+"link",
+"t"
+],
+[
+"link",
+"tall bike"
+],
+[
+"link",
+"tall bikes"
+],
+[
+"link",
+"tandem"
+],
+[
+"link",
+"tandems"
+],
+[
+"link",
+"tech sector"
+],
+[
+"link",
+"tension-spoked wheels"
+],
+[
+"link",
+"the original"
+],
+[
+"link",
+"their emancipation"
+],
+[
+"link",
+"time trials"
+],
+[
+"link",
+"tire levers"
+],
+[
+"link",
+"tires"
+],
+[
+"link",
+"titanium"
+],
+[
+"link",
+"touring bicycle"
+],
+[
+"link",
+"touring bicycles"
+],
+[
+"link",
+"track racing"
+],
+[
+"link",
+"traffic congestion"
+],
+[
+"link",
+"trailer"
+],
+[
+"link",
+"tricycles"
+],
+[
+"link",
+"truss"
+],
+[
+"link",
+"tubes"
+],
+[
+"link",
+"ulnar syndrome"
+],
+[
+"link",
+"unpaved road"
+],
+[
+"link",
+"upright or \"safety\" bicycle"
+],
+[
+"link",
+"urban planning"
+],
+[
+"link",
+"utility bicycles"
+],
+[
+"link",
+"utility cycling"
+],
+[
+"link",
+"v"
+],
+[
+"link",
+"velocipede"
+],
+[
+"link",
+"venture capitalists"
+],
+[
+"link",
+"vulcanizing"
+],
+[
+"link",
+"walk"
+],
+[
+"link",
+"washers"
+],
+[
+"link",
+"welding"
+],
+[
+"link",
+"wheels"
+],
+[
+"link",
+"wrenches"
+],
+[
+"link",
+"Ílhavo"
+],
+[
+"link",
+"Škoda"
+],
+[
+"link",
+"Škoda Auto"
+]
+]
+},
+{
+"page": "news.ycombinator.com",
+"elements": [
+[
+"link",
+""
+],
+[
+"link",
+"'Grey Rocking': The Life-Improving Power of Being Really, Really Boring (2021)"
+],
+[
+"link",
+"1 hour ago"
+],
+[
+"link",
+"10 hours ago"
+],
+[
+"link",
+"111 comments"
+],
+[
+"link",
+"11 comments"
+],
+[
+"link",
+"12 hours ago"
+],
+[
+"link",
+"135 comments"
+],
+[
+"link",
+"138 comments"
+],
+[
+"link",
+"14 comments"
+],
+[
+"link",
+"151 comments"
+],
+[
+"link",
+"16 hours ago"
+],
+[
+"link",
+"16 comments"
+],
+[
+"link",
+"17 comments"
+],
+[
+"link",
+"1 comment"
+],
+[
+"link",
+"2 hours ago"
+],
+[
+"link",
+"20 comments"
+],
+[
+"link",
+"25 comments"
+],
+[
+"link",
+"260 comments"
+],
+[
+"link",
+"26 comments"
+],
+[
+"link",
+"2 comments"
+],
+[
+"link",
+"3 hours ago"
+],
+[
+"link",
+"30 comments"
+],
+[
+"link",
+"34 comments"
+],
+[
+"link",
+"36 comments"
+],
+[
+"link",
+"4 hours ago"
+],
+[
+"link",
+"48 comments"
+],
+[
+"link",
+"4 comments"
+],
+[
+"link",
+"5 hours ago"
+],
+[
+"link",
+"54 comments"
+],
+[
+"link",
+"56 comments"
+],
+[
+"link",
+"5 comments"
+],
+[
+"link",
+"6 hours ago"
+],
+[
+"link",
+"6 comments"
+],
+[
+"link",
+"7 hours ago"
+],
+[
+"link",
+"71 comments"
+],
+[
+"link",
+"87 comments"
+],
+[
+"link",
+"9 hours ago"
+],
+[
+"link",
+"A Family Tree of Software Job Titles"
+],
+[
+"link",
+"A QR code that says who made it"
+],
+[
+"link",
+"A visual explanation of reinforcement learning"
+],
+[
+"link",
+"API"
+],
+[
+"link",
+"Advancing science and engineering with Antigravity's /teamwork"
+],
+[
+"link",
+"Apply to YC"
+],
+[
+"link",
+"C3 0.8.6:Library fetching,30% smaller safe-mode binaries,and stricter type rules"
+],
+[
+"link",
+"Contact"
+],
+[
+"link",
+"Creating a self booting ZIP archive"
+],
+[
+"link",
+"DASD"
+],
+[
+"link",
+"DeepLogin"
+],
+[
+"link",
+"Demystifying phone unlocking tools: A technical overview"
+],
+[
+"link",
+"FAQ"
+],
+[
+"link",
+"Formalizing US Tax Code (Using Lean)"
+],
+[
+"link",
+"Generative AI uses more energy on non-English text"
+],
+[
+"link",
+"Guidelines"
+],
+[
+"link",
+"Hacker News"
+],
+[
+"link",
+"How to Create Your Own Decentralized Messenger Protocol"
+],
+[
+"link",
+"Italy fines Meta $887M over Android users' data access"
+],
+[
+"link",
+"KDE: The documentary [video]"
+],
+[
+"link",
+"Legal"
+],
+[
+"link",
+"Let's Write a PostScript Interpreter"
+],
+[
+"link",
+"LinkedIn, Monster take down over 1000 fake job postings after CBC investigation"
+],
+[
+"link",
+"Lists"
+],
+[
+"link",
+"Lovable apps expose passport details and more than 200K private messages"
+],
+[
+"link",
+"Monkey Island: all 13 versions side by side"
+],
+[
+"link",
+"More"
+],
+[
+"link",
+"NaOH"
+],
+[
+"link",
+"PaulHoule"
+],
+[
+"link",
+"Project Zero will disclose vulnerabilities 90 days after reporting"
+],
+[
+"link",
+"PyPI's redesigned project pages with clearer security signals are now live"
+],
+[
+"link",
+"RebelPotato"
+],
+[
+"link",
+"Reverse engineering a vintage diode-transistor logic chip"
+],
+[
+"link",
+"Seagate's new hybrid drive raises some old questions"
+],
+[
+"link",
+"Security"
+],
+[
+"link",
+"Show HN: A terminal-native idle factory game, written in Rust with ratatui"
+],
+[
+"link",
+"Show HN: Agweb – a browser for agents that stays out of your way"
+],
+[
+"link",
+"Show HN: DeepSeek V3 in ~200 lines of pure Jax"
+],
+[
+"link",
+"Show HN: Fursoy – Out-of-order RV64IMAFDV core in SystemVerilog (Linux 6.6)"
+],
+[
+"link",
+"Tech Companies Are Trying to Shift the Concept of Privacy (Again)"
+],
+[
+"link",
+"Testing a Trash Can Faraday Cage"
+],
+[
+"link",
+"US IRS free online tax filing open source repo (2025)"
+],
+[
+"link",
+"VaibhaavTiwari"
+],
+[
+"link",
+"Why get an expensive Pi when I have an old phone?"
+],
+[
+"link",
+"Will we put data centers in space?"
+],
+[
+"link",
+"aatish"
+],
+[
+"link",
+"aatishb.com"
+],
+[
+"link",
+"accountinhn"
+],
+[
+"link",
+"acossta"
+],
+[
+"link",
+"armcat"
+],
+[
+"link",
+"arstechnica.com"
+],
+[
+"link",
+"ask"
+],
+[
+"link",
+"beyondloom.com"
+],
+[
+"link",
+"c3-lang.org"
+],
+[
+"link",
+"casi"
+],
+[
+"link",
+"cbc.ca"
+],
+[
+"link",
+"comments"
+],
+[
+"link",
+"crissyfield.de"
+],
+[
+"link",
+"discuss"
+],
+[
+"link",
+"dnw"
+],
+[
+"link",
+"dverlaeckt80"
+],
+[
+"link",
+"eff.org"
+],
+[
+"link",
+"esquire.com"
+],
+[
+"link",
+"fagnerbrack"
+],
+[
+"link",
+"forethought.org"
+],
+[
+"link",
+"fursoy"
+],
+[
+"link",
+"gdgghhhhh"
+],
+[
+"link",
+"github.com/fursoy"
+],
+[
+"link",
+"github.com/irs-public"
+],
+[
+"link",
+"github.com/paul-nameless"
+],
+[
+"link",
+"github.com/vaibhaav-tiwari"
+],
+[
+"link",
+"gitlab.com/snipedbywifi"
+],
+[
+"link",
+"giuliomagnifico"
+],
+[
+"link",
+"gnabgib"
+],
+[
+"link",
+"goliath32.com"
+],
+[
+"link",
+"gslin"
+],
+[
+"link",
+"hacb"
+],
+[
+"link",
+"hide"
+],
+[
+"link",
+"iloveyoutwo"
+],
+[
+"link",
+"jefftk.com"
+],
+[
+"link",
+"jobs"
+],
+[
+"link",
+"karboosx.net"
+],
+[
+"link",
+"kockatoo.org"
+],
+[
+"link",
+"lexifina.com"
+],
+[
+"link",
+"login"
+],
+[
+"link",
+"mart9"
+],
+[
+"link",
+"maximilianburke"
+],
+[
+"link",
+"monkeyisland.pages.dev"
+],
+[
+"link",
+"mrkn1"
+],
+[
+"link",
+"new"
+],
+[
+"link",
+"osservatorionessuno.org"
+],
+[
+"link",
+"past"
+],
+[
+"link",
+"paul_nameless"
+],
+[
+"link",
+"projectzero.google"
+],
+[
+"link",
+"pypi.org"
+],
+[
+"link",
+"qrsig.org"
+],
+[
+"link",
+"rbanffy"
+],
+[
+"link",
+"research.google"
+],
+[
+"link",
+"reuters.com"
+],
+[
+"link",
+"righto.com"
+],
+[
+"link",
+"show"
+],
+[
+"link",
+"simonebrunozzi"
+],
+[
+"link",
+"snipedbywifi"
+],
+[
+"link",
+"submit"
+],
+[
+"link",
+"thanks.fish"
+],
+[
+"link",
+"torutofu"
+],
+[
+"link",
+"umerf"
+],
+[
+"link",
+"umich.edu"
+],
+[
+"link",
+"zwischenzugs.com"
+]
+]
+},
+{
+"page": "developer.mozilla.org/.../Element/form",
+"elements": [
+[
+"button",
+"Chrome Android – Full support 108"
+],
+[
+"button",
+"Chrome Android – Full support 18"
+],
+[
+"button",
+"Chrome Android – Full support 18 footnote"
+],
+[
+"button",
+"Chrome Android – Full support 69"
+],
+[
+"button",
+"Chrome Android – Full support 84"
+],
+[
+"button",
+"Chrome – Full support 1"
+],
+[
+"button",
+"Chrome – Full support 10"
+],
+[
+"button",
+"Chrome – Full support 108"
+],
+[
+"button",
+"Chrome – Full support 14 footnote"
+],
+[
+"button",
+"Chrome – Full support 69"
+],
+[
+"button",
+"Chrome – Full support 93"
+],
+[
+"button",
+"Copy"
+],
+[
+"button",
+"Edge – Full support 108"
+],
+[
+"button",
+"Edge – Full support 12"
+],
+[
+"button",
+"Edge – Full support 79"
+],
+[
+"button",
+"Edge – Full support 93"
+],
+[
+"button",
+"English (US)"
+],
+[
+"button",
+"Firefox for Android – Full support 109"
+],
+[
+"button",
+"Firefox for Android – Full support 111"
+],
+[
+"button",
+"Firefox for Android – Full support 122"
+],
+[
+"button",
+"Firefox for Android – Full support 4"
+],
+[
+"button",
+"Firefox for Android – Full support 79"
+],
+[
+"button",
+"Firefox – Full support 1"
+],
+[
+"button",
+"Firefox – Full support 109"
+],
+[
+"button",
+"Firefox – Full support 111"
+],
+[
+"button",
+"Firefox – Full support 122"
+],
+[
+"button",
+"Firefox – Full support 4"
+],
+[
+"button",
+"Firefox – Full support 69"
+],
+[
+"button",
+"No"
+],
+[
+"button",
+"Opera Android – Full support 14"
+],
+[
+"button",
+"Opera Android – Full support 14 footnote"
+],
+[
+"button",
+"Opera Android – Full support 48"
+],
+[
+"button",
+"Opera Android – Full support 60"
+],
+[
+"button",
+"Opera Android – Full support 73"
+],
+[
+"button",
+"Opera – Full support 15"
+],
+[
+"button",
+"Opera – Full support 15 footnote"
+],
+[
+"button",
+"Opera – Full support 56"
+],
+[
+"button",
+"Opera – Full support 79"
+],
+[
+"button",
+"Opera – Full support 94"
+],
+[
+"button",
+"Reset"
+],
+[
+"button",
+"Safari on iOS – Full support 10"
+],
+[
+"button",
+"Safari on iOS – Full support 10.3"
+],
+[
+"button",
+"Safari on iOS – Full support 12"
+],
+[
+"button",
+"Safari on iOS – Full support 15.4"
+],
+[
+"button",
+"Safari on iOS – Full support 16.4"
+],
+[
+"button",
+"Safari on iOS – Full support 2"
+],
+[
+"button",
+"Safari on iOS – Full support 6"
+],
+[
+"button",
+"Safari – Full support 10"
+],
+[
+"button",
+"Safari – Full support 10.1"
+],
+[
+"button",
+"Safari – Full support 12"
+],
+[
+"button",
+"Safari – Full support 15.4"
+],
+[
+"button",
+"Safari – Full support 16.4"
+],
+[
+"button",
+"Safari – Full support 3"
+],
+[
+"button",
+"Safari – Full support 6"
+],
+[
+"button",
+"Samsung Browser – Full support 1"
+],
+[
+"button",
+"Samsung Browser – Full support 1 footnote"
+],
+[
+"button",
+"Samsung Browser – Full support 10"
+],
+[
+"button",
+"Samsung Browser – Full support 14"
+],
+[
+"button",
+"Samsung Browser – Full support 21"
+],
+[
+"button",
+"Save"
+],
+[
+"button",
+"Search the site"
+],
+[
+"button",
+"Settings"
+],
+[
+"button",
+"Subscribe!"
+],
+[
+"button",
+"Switch color theme"
+],
+[
+"button",
+"Toggle navigation"
+],
+[
+"button",
+"Toggle sidebar"
+],
+[
+"button",
+"WebView Android – Full support 108"
+],
+[
+"button",
+"WebView Android – Full support 37"
+],
+[
+"button",
+"WebView Android – Full support 4.4"
+],
+[
+"button",
+"WebView Android – Full support 4.4 footnote"
+],
+[
+"button",
+"WebView Android – Full support 69"
+],
+[
+"button",
+"WebView Android – No support No"
+],
+[
+"button",
+"WebView on iOS – Full support 10"
+],
+[
+"button",
+"WebView on iOS – Full support 10.3"
+],
+[
+"button",
+"WebView on iOS – Full support 12"
+],
+[
+"button",
+"WebView on iOS – Full support 15.4"
+],
+[
+"button",
+"WebView on iOS – Full support 16.4"
+],
+[
+"button",
+"WebView on iOS – Full support 2"
+],
+[
+"button",
+"WebView on iOS – Full support 6"
+],
+[
+"button",
+"Yes"
+],
+[
+"link",
+":invalid"
+],
+[
+"link",
+":valid"
+],
+[
+"link",
+"<button>"
+],
+[
+"link",
+"<datalist>"
+],
+[
+"link",
+"<dialog>"
+],
+[
+"link",
+"<fieldset>"
+],
+[
+"link",
+"<form>"
+],
+[
+"link",
+"<input type=\"image\">"
+],
+[
+"link",
+"<input type=\"submit\">"
+],
+[
+"link",
+"<input>"
+],
+[
+"link",
+"<label>"
+],
+[
+"link",
+"<legend>"
+],
+[
+"link",
+"<meter>"
+],
+[
+"link",
+"<optgroup>"
+],
+[
+"link",
+"<option>"
+],
+[
+"link",
+"<output>"
+],
+[
+"link",
+"<progress>"
+],
+[
+"link",
+"<select>"
+],
+[
+"link",
+"<textarea>"
+],
+[
+"link",
+"AD"
+],
+[
+"link",
+"ARIA: Form role"
+],
+[
+"link",
+"ARIA: Search role"
+],
+[
+"link",
+"About"
+],
+[
+"link",
+"Advertise with us"
+],
+[
+"link",
+"Attributes"
+],
+[
+"link",
+"Attributes for form submission"
+],
+[
+"link",
+"Blog"
+],
+[
+"link",
+"Browser compatibility"
+],
+[
+"link",
+"Community Participation Guidelines (external)"
+],
+[
+"link",
+"Community resources"
+],
+[
+"link",
+"Content categories"
+],
+[
+"link",
+"Document"
+],
+[
+"link",
+"Elements"
+],
+[
+"link",
+"Examples"
+],
+[
+"link",
+"Flow content"
+],
+[
+"link",
+"GET"
+],
+[
+"link",
+"Glossary"
+],
+[
+"link",
+"Guides"
+],
+[
+"link",
+"HTML"
+],
+[
+"link",
+"HTML # the-form-element (external)"
+],
+[
+"link",
+"HTML forms guide"
+],
+[
+"link",
+"HTMLFormElement"
+],
+[
+"link",
+"HTMLFormElement.elements"
+],
+[
+"link",
+"HTTP"
+],
+[
+"link",
+"Hacks blog (external)"
+],
+[
+"link",
+"Hetzner Your project on Hetzner Cloud Minimize risks, control costs & maximize data protection! Start now!"
+],
+[
+"link",
+"Learn how to contribute"
+],
+[
+"link",
+"Learn web development"
+],
+[
+"link",
+"Legal (external)"
+],
+[
+"link",
+"MDN"
+],
+[
+"link",
+"MDN Community"
+],
+[
+"link",
+"MDN Discord (external)"
+],
+[
+"link",
+"MDN Plus"
+],
+[
+"link",
+"MDN blog RSS feed"
+],
+[
+"link",
+"MDN contributors"
+],
+[
+"link",
+"MDN logo"
+],
+[
+"link",
+"MDN on Bluesky"
+],
+[
+"link",
+"MDN on GitHub"
+],
+[
+"link",
+"MDN on GitHub (external)"
+],
+[
+"link",
+"MDN on Mastodon"
+],
+[
+"link",
+"MDN on X"
+],
+[
+"link",
+"MIME type (external)"
+],
+[
+"link",
+"Managing autofill for login fields"
+],
+[
+"link",
+"MongoDB"
+],
+[
+"link",
+"Mozilla careers (external)"
+],
+[
+"link",
+"Mozilla logo"
+],
+[
+"link",
+"POST"
+],
+[
+"link",
+"Play"
+],
+[
+"link",
+"Product help (external)"
+],
+[
+"link",
+"Report a problem with this content (external)"
+],
+[
+"link",
+"Report problems with this compatibility data (external)"
+],
+[
+"link",
+"Result"
+],
+[
+"link",
+"See also"
+],
+[
+"link",
+"Skip to main content"
+],
+[
+"link",
+"Skip to search"
+],
+[
+"link",
+"Specifications"
+],
+[
+"link",
+"Technical summary"
+],
+[
+"link",
+"Telemetry Settings (external)"
+],
+[
+"link",
+"Try it"
+],
+[
+"link",
+"Tutorials"
+],
+[
+"link",
+"View data on GitHub (external)"
+],
+[
+"link",
+"View this page on GitHub (external)"
+],
+[
+"link",
+"Web technologies"
+],
+[
+"link",
+"Website Privacy Notice (external)"
+],
+[
+"link",
+"Window"
+],
+[
+"link",
+"Writing guidelines"
+],
+[
+"link",
+"a Creative Commons license"
+],
+[
+"link",
+"accept"
+],
+[
+"link",
+"accept Deprecated"
+],
+[
+"link",
+"accept-charset"
+],
+[
+"link",
+"action"
+],
+[
+"link",
+"autocapitalize"
+],
+[
+"link",
+"autocomplete"
+],
+[
+"link",
+"character encoding"
+],
+[
+"link",
+"content types"
+],
+[
+"link",
+"document.forms"
+],
+[
+"link",
+"elements"
+],
+[
+"link",
+"enctype"
+],
+[
+"link",
+"external"
+],
+[
+"link",
+"fenced frame"
+],
+[
+"link",
+"flow content"
+],
+[
+"link",
+"form"
+],
+[
+"link",
+"formaction"
+],
+[
+"link",
+"formenctype"
+],
+[
+"link",
+"formmethod"
+],
+[
+"link",
+"formnovalidate"
+],
+[
+"link",
+"formtarget"
+],
+[
+"link",
+"global attributes"
+],
+[
+"link",
+"has no side effects"
+],
+[
+"link",
+"help"
+],
+[
+"link",
+"license"
+],
+[
+"link",
+"method"
+],
+[
+"link",
+"name"
+],
+[
+"link",
+"next"
+],
+[
+"link",
+"nofollow"
+],
+[
+"link",
+"none"
+],
+[
+"link",
+"noopener"
+],
+[
+"link",
+"noreferrer"
+],
+[
+"link",
+"novalidate"
+],
+[
+"link",
+"opener"
+],
+[
+"link",
+"palpable content"
+],
+[
+"link",
+"presentation"
+],
+[
+"link",
+"prev"
+],
+[
+"link",
+"pseudo-classes"
+],
+[
+"link",
+"rel"
+],
+[
+"link",
+"rel=\"noopener\""
+],
+[
+"link",
+"request body"
+],
+[
+"link",
+"search"
+],
+[
+"link",
+"target"
+],
+[
+"link",
+"window.opener"
+]
+]
+},
+{
+"page": "docs.python.org/3/tutorial",
+"elements": [
+[
+"button",
+"Go"
+],
+[
+"link",
+"1. Whetting Your Appetite"
+],
+[
+"link",
+"10. Brief tour of the standard library"
+],
+[
+"link",
+"10.1. Operating system interface"
+],
+[
+"link",
+"10.10. Performance measurement"
+],
+[
+"link",
+"10.11. Quality control"
+],
+[
+"link",
+"10.12. Batteries included"
+],
+[
+"link",
+"10.2. File wildcards"
+],
+[
+"link",
+"10.3. Command-line arguments"
+],
+[
+"link",
+"10.4. Error output redirection and program termination"
+],
+[
+"link",
+"10.5. String pattern matching"
+],
+[
+"link",
+"10.6. Mathematics"
+],
+[
+"link",
+"10.7. Internet access"
+],
+[
+"link",
+"10.8. Dates and times"
+],
+[
+"link",
+"10.9. Data compression"
+],
+[
+"link",
+"11. Brief tour of the standard library — part II"
+],
+[
+"link",
+"11.1. Output formatting"
+],
+[
+"link",
+"11.2. Templating"
+],
+[
+"link",
+"11.3. Working with binary data record layouts"
+],
+[
+"link",
+"11.4. Multi-threading"
+],
+[
+"link",
+"11.5. Logging"
+],
+[
+"link",
+"11.6. Weak references"
+],
+[
+"link",
+"11.7. Tools for working with lists"
+],
+[
+"link",
+"11.8. Decimal floating-point arithmetic"
+],
+[
+"link",
+"12. Virtual Environments and Packages"
+],
+[
+"link",
+"12.1. Introduction"
+],
+[
+"link",
+"12.2. Creating Virtual Environments"
+],
+[
+"link",
+"12.3. Managing Packages with pip"
+],
+[
+"link",
+"13. What Now?"
+],
+[
+"link",
+"14. Interactive Input Editing and History Substitution"
+],
+[
+"link",
+"14.1. Tab Completion and History Editing"
+],
+[
+"link",
+"14.2. Alternatives to the Interactive Interpreter"
+],
+[
+"link",
+"15. Floating-Point Arithmetic: Issues and Limitations"
+],
+[
+"link",
+"15.1. Representation Error"
+],
+[
+"link",
+"16. Appendix"
+],
+[
+"link",
+"16.1. Interactive Mode"
+],
+[
+"link",
+"16.1.1. Error Handling"
+],
+[
+"link",
+"16.1.2. Executable Python Scripts"
+],
+[
+"link",
+"16.1.3. The Interactive Startup File"
+],
+[
+"link",
+"16.1.4. The Customization Modules"
+],
+[
+"link",
+"2. Using the Python Interpreter"
+],
+[
+"link",
+"2.1. Invoking the Interpreter"
+],
+[
+"link",
+"2.1.1. Argument Passing"
+],
+[
+"link",
+"2.1.2. Interactive Mode"
+],
+[
+"link",
+"2.2. The Interpreter and Its Environment"
+],
+[
+"link",
+"2.2.1. Source Code Encoding"
+],
+[
+"link",
+"3. An Informal Introduction to Python"
+],
+[
+"link",
+"3.1. Using Python as a Calculator"
+],
+[
+"link",
+"3.1.1. Numbers"
+],
+[
+"link",
+"3.1.2. Text"
+],
+[
+"link",
+"3.1.3. Lists"
+],
+[
+"link",
+"3.15.2 documentation"
+],
+[
+"link",
+"3.2. First Steps Towards Programming"
+],
+[
+"link",
+"4. More Control Flow Tools"
+],
+[
+"link",
+"4.1. if Statements"
+],
+[
+"link",
+"4.10. Intermezzo: Coding Style"
+],
+[
+"link",
+"4.2. for Statements"
+],
+[
+"link",
+"4.3. The range() Function"
+],
+[
+"link",
+"4.4. break and continue Statements"
+],
+[
+"link",
+"4.5. else Clauses on Loops"
+],
+[
+"link",
+"4.6. pass Statements"
+],
+[
+"link",
+"4.7. match Statements"
+],
+[
+"link",
+"4.8. Defining Functions"
+],
+[
+"link",
+"4.9. More on Defining Functions"
+],
+[
+"link",
+"4.9.1. Default Argument Values"
+],
+[
+"link",
+"4.9.2. Keyword Arguments"
+],
+[
+"link",
+"4.9.3. Special parameters"
+],
+[
+"link",
+"4.9.3.1. Positional-or-Keyword Arguments"
+],
+[
+"link",
+"4.9.3.2. Positional-Only Parameters"
+],
+[
+"link",
+"4.9.3.3. Keyword-Only Arguments"
+],
+[
+"link",
+"4.9.3.4. Function Examples"
+],
+[
+"link",
+"4.9.3.5. Recap"
+],
+[
+"link",
+"4.9.4. Arbitrary Argument Lists"
+],
+[
+"link",
+"4.9.5. Unpacking Argument Lists"
+],
+[
+"link",
+"4.9.6. Lambda Expressions"
+],
+[
+"link",
+"4.9.7. Documentation Strings"
+],
+[
+"link",
+"4.9.8. Function Annotations"
+],
+[
+"link",
+"5. Data Structures"
+],
+[
+"link",
+"5.1. More on Lists"
+],
+[
+"link",
+"5.1.1. Using Lists as Stacks"
+],
+[
+"link",
+"5.1.2. Using Lists as Queues"
+],
+[
+"link",
+"5.1.3. List Comprehensions"
+],
+[
+"link",
+"5.1.4. Nested List Comprehensions"
+],
+[
+"link",
+"5.1.5. Unpacking in Lists and List Comprehensions"
+],
+[
+"link",
+"5.2. The del statement"
+],
+[
+"link",
+"5.3. Tuples and Sequences"
+],
+[
+"link",
+"5.4. Sets"
+],
+[
+"link",
+"5.5. Dictionaries"
+],
+[
+"link",
+"5.6. Looping Techniques"
+],
+[
+"link",
+"5.7. More on Conditions"
+],
+[
+"link",
+"5.8. Comparing Sequences and Other Types"
+],
+[
+"link",
+"6. Modules"
+],
+[
+"link",
+"6.1. More on Modules"
+],
+[
+"link",
+"6.1.1. Executing modules as scripts"
+],
+[
+"link",
+"6.1.2. The Module Search Path"
+],
+[
+"link",
+"6.1.3. “Compiled” Python files"
+],
+[
+"link",
+"6.2. Standard Modules"
+],
+[
+"link",
+"6.3. The dir() Function"
+],
+[
+"link",
+"6.4. Packages"
+],
+[
+"link",
+"6.4.1. Importing * From a Package"
+],
+[
+"link",
+"6.4.2. Intra-package References"
+],
+[
+"link",
+"7. Input and output"
+],
+[
+"link",
+"7.1. Fancier output formatting"
+],
+[
+"link",
+"7.1.1. Formatted string literals"
+],
+[
+"link",
+"7.1.2. The string format() method"
+],
+[
+"link",
+"7.1.3. Manual string formatting"
+],
+[
+"link",
+"7.1.4. Old string formatting"
+],
+[
+"link",
+"7.2. Reading and writing files"
+],
+[
+"link",
+"7.2.1. Methods of file objects"
+],
+[
+"link",
+"7.2.2. Saving structured data with json"
+],
+[
+"link",
+"8. Errors and Exceptions"
+],
+[
+"link",
+"8.1. Syntax Errors"
+],
+[
+"link",
+"8.10. Enriching Exceptions with Notes"
+],
+[
+"link",
+"8.2. Exceptions"
+],
+[
+"link",
+"8.3. Handling Exceptions"
+],
+[
+"link",
+"8.4. Raising Exceptions"
+],
+[
+"link",
+"8.5. Exception Chaining"
+],
+[
+"link",
+"8.6. User-defined Exceptions"
+],
+[
+"link",
+"8.7. Defining Clean-up Actions"
+],
+[
+"link",
+"8.8. Predefined Clean-up Actions"
+],
+[
+"link",
+"8.9. Raising and Handling Multiple Unrelated Exceptions"
+],
+[
+"link",
+"9. Classes"
+],
+[
+"link",
+"9.1. A Word About Names and Objects"
+],
+[
+"link",
+"9.10. Generator Expressions"
+],
+[
+"link",
+"9.2. Python Scopes and Namespaces"
+],
+[
+"link",
+"9.2.1. Scopes and Namespaces Example"
+],
+[
+"link",
+"9.3. A First Look at Classes"
+],
+[
+"link",
+"9.3.1. Class Definition Syntax"
+],
+[
+"link",
+"9.3.2. Class Objects"
+],
+[
+"link",
+"9.3.3. Instance Objects"
+],
+[
+"link",
+"9.3.4. Method Objects"
+],
+[
+"link",
+"9.3.5. Class and Instance Variables"
+],
+[
+"link",
+"9.4. Random Remarks"
+],
+[
+"link",
+"9.5. Inheritance"
+],
+[
+"link",
+"9.5.1. Multiple Inheritance"
+],
+[
+"link",
+"9.6. Private Variables"
+],
+[
+"link",
+"9.7. Odds and Ends"
+],
+[
+"link",
+"9.8. Iterators"
+],
+[
+"link",
+"9.9. Generators"
+],
+[
+"link",
+"Changelog"
+],
+[
+"link",
+"Copyright"
+],
+[
+"link",
+"Extending and Embedding the Python Interpreter"
+],
+[
+"link",
+"Found a bug"
+],
+[
+"link",
+"Glossary"
+],
+[
+"link",
+"History and License"
+],
+[
+"link",
+"Improve this page"
+],
+[
+"link",
+"Please donate."
+],
+[
+"link",
+"Python built-ins reference"
+],
+[
+"link",
+"Python logo"
+],
+[
+"link",
+"Python/C API reference manual"
+],
+[
+"link",
+"Report a bug"
+],
+[
+"link",
+"Show source"
+],
+[
+"link",
+"Sphinx"
+],
+[
+"link",
+"The Python Language Reference"
+],
+[
+"link",
+"The Python Tutorial"
+],
+[
+"link",
+"The Python standard library"
+],
+[
+"link",
+"https://www.python.org/"
+]
+]
+},
+{
+"page": "github.com/explore",
+"elements": [
+[
+"button",
+""
+],
+[
+"button",
+"Do not share my personal information"
+],
+[
+"button",
+"Hide player controls"
+],
+[
+"button",
+"Manage cookies"
+],
+[
+"button",
+"Play video"
+],
+[
+"button",
+"Share"
+],
+[
+"button",
+"Toggle navigation"
+],
+[
+"link",
+" Code"
+],
+[
+"link",
+" Discussions"
+],
+[
+"link",
+" Issues"
+],
+[
+"link",
+" Pull requests"
+],
+[
+"link",
+" colibri"
+],
+[
+"link",
+" jarvis"
+],
+[
+"link",
+" opencodex"
+],
+[
+"link",
+" skillshare"
+],
+[
+"link",
+"Baris Sencan"
+],
+[
+"link",
+"Build a game this November"
+],
+[
+"link",
+"ChromeDevTools"
+],
+[
+"link",
+"Collections"
+],
+[
+"link",
+"Community"
+],
+[
+"link",
+"Contact"
+],
+[
+"link",
+"Docs"
+],
+[
+"link",
+"Events"
+],
+[
+"link",
+"Explore"
+],
+[
+"link",
+"GitHub"
+],
+[
+"link",
+"GitHub Homepage"
+],
+[
+"link",
+"GitHub Sponsors"
+],
+[
+"link",
+"GoogleChrome"
+],
+[
+"link",
+"Hack on open source with us"
+],
+[
+"link",
+"Homepage"
+],
+[
+"link",
+"JUN"
+],
+[
+"link",
+"Jueves de Quack con Alejandro Menocal"
+],
+[
+"link",
+"JuliusBrussee"
+],
+[
+"link",
+"Likely7"
+],
+[
+"link",
+"LoopForge"
+],
+[
+"link",
+"Made in Brazil"
+],
+[
+"link",
+"Naming Conventions Bot"
+],
+[
+"link",
+"Privacy"
+],
+[
+"link",
+"Python"
+],
+[
+"link",
+"Python logo"
+],
+[
+"link",
+"QwenLM"
+],
+[
+"link",
+"Security"
+],
+[
+"link",
+"See more trending developers"
+],
+[
+"link",
+"See the 41 items in this collection "
+],
+[
+"link",
+"Sign in"
+],
+[
+"link",
+"Skip to content"
+],
+[
+"link",
+"Status"
+],
+[
+"link",
+"Tencent"
+],
+[
+"link",
+"TensorFold"
+],
+[
+"link",
+"Terms"
+],
+[
+"link",
+"Topics"
+],
+[
+"link",
+"Trending"
+],
+[
+"link",
+"Trending developers"
+],
+[
+"link",
+"Veyra-NRVideo"
+],
+[
+"link",
+"Vincenzo Fornaro"
+],
+[
+"link",
+"Watch on YouTube"
+],
+[
+"link",
+"Willie"
+],
+[
+"link",
+"You must be signed in to star a repository"
+],
+[
+"link",
+"ag-ui"
+],
+[
+"link",
+"ag-ui-protocol"
+],
+[
+"link",
+"agent"
+],
+[
+"link",
+"agent-frontend"
+],
+[
+"link",
+"agent-orchestration"
+],
+[
+"link",
+"agent-skills"
+],
+[
+"link",
+"agent-ui"
+],
+[
+"link",
+"agentic"
+],
+[
+"link",
+"agentic-workflow"
+],
+[
+"link",
+"agents"
+],
+[
+"link",
+"ai"
+],
+[
+"link",
+"ai-agent"
+],
+[
+"link",
+"ai-agents"
+],
+[
+"link",
+"ai-coding"
+],
+[
+"link",
+"ai-tools"
+],
+[
+"link",
+"airgorah"
+],
+[
+"link",
+"alibaba"
+],
+[
+"link",
+"anthropic"
+],
+[
+"link",
+"ashhart"
+],
+[
+"link",
+"backnotprop"
+],
+[
+"link",
+"board"
+],
+[
+"link",
+"browser"
+],
+[
+"link",
+"caveman"
+],
+[
+"link",
+"chrome"
+],
+[
+"link",
+"chrome-devtools"
+],
+[
+"link",
+"chrome-devtools-mcp"
+],
+[
+"link",
+"claude"
+],
+[
+"link",
+"claude-code"
+],
+[
+"link",
+"claude-trading-skills"
+],
+[
+"link",
+"cli"
+],
+[
+"link",
+"code-review"
+],
+[
+"link",
+"code-review-assistant"
+],
+[
+"link",
+"codebuddy"
+],
+[
+"link",
+"codex"
+],
+[
+"link",
+"coding-agent"
+],
+[
+"link",
+"coding-agents"
+],
+[
+"link",
+"collaboration"
+],
+[
+"link",
+"cursor"
+],
+[
+"link",
+"debugging"
+],
+[
+"link",
+"developer-tools"
+],
+[
+"link",
+"devtools"
+],
+[
+"link",
+"doc"
+],
+[
+"link",
+"docker"
+],
+[
+"link",
+"docx"
+],
+[
+"link",
+"dream-num"
+],
+[
+"link",
+"excel"
+],
+[
+"link",
+"gui"
+],
+[
+"link",
+"harness"
+],
+[
+"link",
+"human-on-the-loop"
+],
+[
+"link",
+"kali"
+],
+[
+"link",
+"linux-app"
+],
+[
+"link",
+"llm"
+],
+[
+"link",
+"llm-inference"
+],
+[
+"link",
+"llm-tools"
+],
+[
+"link",
+"louislam"
+],
+[
+"link",
+"martin-olivier"
+],
+[
+"link",
+"mcp"
+],
+[
+"link",
+"mcp-server"
+],
+[
+"link",
+"meme"
+],
+[
+"link",
+"modern-web-guidance-src"
+],
+[
+"link",
+"monitor"
+],
+[
+"link",
+"monitoring"
+],
+[
+"link",
+"multi-agent"
+],
+[
+"link",
+"obsidian"
+],
+[
+"link",
+"offce365"
+],
+[
+"link",
+"office"
+],
+[
+"link",
+"open-code-review"
+],
+[
+"link",
+"opencode"
+],
+[
+"link",
+"pdf"
+],
+[
+"link",
+"pi-mono"
+],
+[
+"link",
+"plan-mode"
+],
+[
+"link",
+"plannotator"
+],
+[
+"link",
+"ppt"
+],
+[
+"link",
+"pptx"
+],
+[
+"link",
+"pre-commit ci lite"
+],
+[
+"link",
+"presentation"
+],
+[
+"link",
+"prompt-engineering"
+],
+[
+"link",
+"puppeteer"
+],
+[
+"link",
+"qwen"
+],
+[
+"link",
+"qwen-code"
+],
+[
+"link",
+"repository-level-context"
+],
+[
+"link",
+"responsive"
+],
+[
+"link",
+"sdk"
+],
+[
+"link",
+"sdlc"
+],
+[
+"link",
+"security"
+],
+[
+"link",
+"security-audit"
+],
+[
+"link",
+"self-hosted"
+],
+[
+"link",
+"selfhosted"
+],
+[
+"link",
+"sheet"
+],
+[
+"link",
+"single-page-app"
+],
+[
+"link",
+"skill"
+],
+[
+"link",
+"skills"
+],
+[
+"link",
+"slides"
+],
+[
+"link",
+"socket-io"
+],
+[
+"link",
+"sop"
+],
+[
+"link",
+"spreadsheet"
+],
+[
+"link",
+"sure"
+],
+[
+"link",
+"terminal"
+],
+[
+"link",
+"tokens"
+],
+[
+"link",
+"tradermonty"
+],
+[
+"link",
+"typescript"
+],
+[
+"link",
+"univer"
+],
+[
+"link",
+"uptime"
+],
+[
+"link",
+"uptime-kuma"
+],
+[
+"link",
+"uptime-monitoring"
+],
+[
+"link",
+"we-promise"
+],
+[
+"link",
+"webapp"
+],
+[
+"link",
+"websocket"
+],
+[
+"link",
+"wifi"
+],
+[
+"link",
+"wifi-security"
+],
+[
+"link",
+"wireless"
+],
+[
+"link",
+"word"
+],
+[
+"link",
+"wordprocessor"
+],
+[
+"link",
+"workflow-automation"
+],
+[
+"link",
+"workflow-engine"
+],
+[
+"link",
+"workspace"
+],
+[
+"link",
+"xlsx"
+]
+]
+},
+{
+"page": "npmjs.com/package/react",
+"elements": [
+[
+"button",
+"Close notification"
+],
+[
+"button",
+"Copy install command line"
+],
+[
+"button",
+"Light mode — click for dark"
+],
+[
+"button",
+"Search"
+],
+[
+"button",
+"Showing weekly downloads"
+],
+[
+"button",
+"View more provenance details"
+],
+[
+"link",
+"About"
+],
+[
+"link",
+"Advisories"
+],
+[
+"link",
+"Analyze security with Socket"
+],
+[
+"link",
+"Blog"
+],
+[
+"link",
+"Build File"
+],
+[
+"link",
+"Check bundle size"
+],
+[
+"link",
+"Code of Conduct"
+],
+[
+"link",
+"Contact npm"
+],
+[
+"link",
+"DefinitelyTyped icon, indicating that this package has TypeScript declarations provided by the separate @types/react package"
+],
+[
+"link",
+"Documentation"
+],
+[
+"link",
+"Explore dependencies"
+],
+[
+"link",
+"GitHub"
+],
+[
+"link",
+"Help"
+],
+[
+"link",
+"Homepage react.dev/"
+],
+[
+"link",
+"Learn how to prepare for the npm bypass 2FA token deprecation"
+],
+[
+"link",
+"Npm"
+],
+[
+"link",
+"Permalink: API"
+],
+[
+"link",
+"Permalink: Documentation"
+],
+[
+"link",
+"Permalink: Usage"
+],
+[
+"link",
+"Permalink: react"
+],
+[
+"link",
+"Policies"
+],
+[
+"link",
+"Press"
+],
+[
+"link",
+"Pricing"
+],
+[
+"link",
+"Privacy"
+],
+[
+"link",
+"Pro"
+],
+[
+"link",
+"Report malware"
+],
+[
+"link",
+"Repository github.com/react/react"
+],
+[
+"link",
+"Share feedback"
+],
+[
+"link",
+"Sign In"
+],
+[
+"link",
+"Sign Up"
+],
+[
+"link",
+"Source Commit"
+],
+[
+"link",
+"Status"
+],
+[
+"link",
+"Teams"
+],
+[
+"link",
+"Terms of Use"
+],
+[
+"link",
+"Transparency log entry"
+],
+[
+"link",
+"View build summary"
+],
+[
+"link",
+"View package health"
+],
+[
+"link",
+"Visit npm GitHub page"
+],
+[
+"link",
+"fb"
+],
+[
+"link",
+"https://react.dev/"
+],
+[
+"link",
+"https://react.dev/reference/react"
+],
+[
+"link",
+"production build"
+],
+[
+"link",
+"react"
+],
+[
+"link",
+"react-bot"
+],
+[
+"link",
+"skip to content"
+],
+[
+"link",
+"skip to package search"
+],
+[
+"link",
+"skip to sign in"
+]
+]
+},
+{
+"page": "bbc.com/news",
+"elements": [
+[
+"button",
+"BBC in other languages"
+],
+[
+"button",
+"Follow BBC on facebook"
+],
+[
+"button",
+"Follow BBC on instagram"
+],
+[
+"button",
+"Follow BBC on linkedin"
+],
+[
+"button",
+"Follow BBC on tiktok"
+],
+[
+"button",
+"Follow BBC on x"
+],
+[
+"button",
+"Follow BBC on youtube"
+],
+[
+"button",
+"Open menu"
+],
+[
+"link",
+"1 US has floated Ukraine ceding Donbas for Nato membership, Zelensky says"
+],
+[
+"link",
+"1 Watch: Cruise ship overturns after collision with tanker in New Orleans"
+],
+[
+"link",
+"10 How the Jensen Huang scandal created a headache for business-friendly Singapore"
+],
+[
+"link",
+"2 Copper wire upgrade caused nationwide flight suspension, US transport secretary says"
+],
+[
+"link",
+"2 Two horses briefly board public bus in Detroit"
+],
+[
+"link",
+"3 Sotheby's auction of $180m Van Gogh challenged over claims it was 'sold under duress'"
+],
+[
+"link",
+"3 Why are these purple flowers shutting down streets in Sydney?"
+],
+[
+"link",
+"4 'We'll get home one day' - US travellers impacted by nationwide ground stop"
+],
+[
+"link",
+"4 Philippines wins first Eurovision Song Contest Asia"
+],
+[
+"link",
+"5 Horse interrupts remembrance service"
+],
+[
+"link",
+"5 Lauren Boebert, once a MAGA star, loses her Colorado seat"
+],
+[
+"link",
+"6 Second catch attempt for SpaceX Starship rocket"
+],
+[
+"link",
+"7 Noel Fielding 'appalled' by jokes he made with Russell Brand"
+],
+[
+"link",
+"8 Trump, Putin and Xi plan historic joint meeting in China next week, White House says"
+],
+[
+"link",
+"9 Brand, Walliams and MAFS: Is this a reckoning for the entertainment industry?"
+],
+[
+"link",
+"A composite of head and shoulders images of Donald Trump, Vladimir Putin and Xi Jinping. Trump, Putin and Xi plan historic joint meeting in China next week, White House says Trump will discuss the \"reduction of nuclear weapons\" during the unprecedented talks, a spokeswoman says. 5 hrs ago US & Canada"
+],
+[
+"link",
+"About the BBC"
+],
+[
+"link",
+"Accessibility Help"
+],
+[
+"link",
+"Advertise with us"
+],
+[
+"link",
+"After a summer win, India's Gen Z protesters face a winter of uncertainty A new wave of youth dissent swept India this summer, fuelled by frustration and irreverent online satire. 21 hrs ago India"
+],
+[
+"link",
+"Arts"
+],
+[
+"link",
+"At least 24 killed after bus collides with truck in north-east India"
+],
+[
+"link",
+"Audio"
+],
+[
+"link",
+"BBC Shop"
+],
+[
+"link",
+"BBC.com Help & FAQs"
+],
+[
+"link",
+"BritBox"
+],
+[
+"link",
+"British Broadcasting Corporation"
+],
+[
+"link",
+"Business"
+],
+[
+"link",
+"Composite of Jonathan Head and the Eurovision winner 'It's a real crowd pleaser, Carmelle's song was always a front runner' BBC's Jonathan Head reports from the first ever Eurovision Song Contest Asia in Bangkok. 2 hrs ago Asia"
+],
+[
+"link",
+"Contact the BBC"
+],
+[
+"link",
+"Content Index"
+],
+[
+"link",
+"Cookies"
+],
+[
+"link",
+"Culture"
+],
+[
+"link",
+"Do not share or sell my info"
+],
+[
+"link",
+"Earth"
+],
+[
+"link",
+"Health"
+],
+[
+"link",
+"Home"
+],
+[
+"link",
+"How the Jensen Huang scandal created a headache for business-friendly Singapore The scandal has cast a spotlight on Singapore's success as a chip hub - and a location for alleged illicit trade. 22 hrs ago Business"
+],
+[
+"link",
+"Italy fines Meta €805m over accessing users' photos"
+],
+[
+"link",
+"LIVE Nations League: Northern Ireland v Ukraine build-up Live video, audio and text commentary of Northern Ireland's Nations League game against Ukraine in Belfast."
+],
+[
+"link",
+"LIVE WSL: Olsson scores double for Liverpool against Brighton Earlier Chelsea beat 10-player Manchester City to go top of the Women's Super League, whilst Maya Le Tissier scored a stunner for Manchester United as they beat Crystal Palace 2-0 and Spurs v Everton finished 0-0."
+],
+[
+"link",
+"LIVE Watch Nations League: Norway 3-1 Wales - hosts victorious in Oslo Watch and listen live and follow live text commentary and match stats from Norway vs Wales in the Uefa Nations League"
+],
+[
+"link",
+"Live"
+],
+[
+"link",
+"Magnificent Wales beat All Blacks for first time since 1953"
+],
+[
+"link",
+"News"
+],
+[
+"link",
+"Philippines' contestant Carmelle (2R) react after winning the grand final of the Eurovision Song Contest Asia 2026 at One Bangkok Forum in Bangkok on November 14, 2026 Philippines wins first Eurovision Song Contest Asia Front-runner Carmelle emerges victorious with her women's empowerment anthem Sobra-Sobra. 2 hrs ago World"
+],
+[
+"link",
+"Privacy Policy"
+],
+[
+"link",
+"Read about our approach to external linking."
+],
+[
+"link",
+"Rosenberg: Uncompromising Putin ups demands for peace with Ukraine The fact the question of European security now features in discussions is viewed in Moscow as a victory, BBC Russia Editor Steve Rosenberg says. 1 day ago Europe"
+],
+[
+"link",
+"Set Preferred Source"
+],
+[
+"link",
+"Singapore CBD skyline"
+],
+[
+"link",
+"Skip to content"
+],
+[
+"link",
+"Sotheby's auction of $180m Van Gogh challenged over claims it was 'sold under duress'"
+],
+[
+"link",
+"SpaceX's Starship rockect launches from its launch tower between two giant plumes of exhaust against a deep blue sky Second catch attempt for SpaceX Starship rocket The attempt follows an unsuccessful effort to catch of the rocket’s booster which instead came down in the ocean. 6 hrs ago Science & Environment"
+],
+[
+"link",
+"Sport"
+],
+[
+"link",
+"Technology"
+],
+[
+"link",
+"Terms of Use"
+],
+[
+"link",
+"Thousands turn out in Edinburgh to protest against AI data centres Demonstrators armed with placards - and some dressed in costume - assembled at the top of the Royal Mile before marching towards the Scottish Parliament. 3 hrs ago Edinburgh, Fife & East"
+],
+[
+"link",
+"Travel"
+],
+[
+"link",
+"US envoy Jared Kushner speaks alongside Ukraine's President Volodymyr Zelensky in Dublin."
+],
+[
+"link",
+"US has floated Ukraine ceding Donbas for Nato membership, Zelensky says The Ukrainian president says US envoys touted the exchange as part of efforts to end the war with Russia. 5 hrs ago Europe"
+],
+[
+"link",
+"Video"
+],
+[
+"link",
+"Watch: Cruise ship overturns after collision with tanker in New Orleans"
+],
+[
+"link",
+"Weather"
+],
+[
+"link",
+"When to put up a real Christmas tree - according to an expert Supermarkets have started selling Christmas trees - six weeks out from the big day. 20 hrs ago UK"
+],
+[
+"link",
+"image unavailable A Network Time-out error message on login pages for Microsoft Outlook and Microsoft Teams on a laptop Microsoft says services fully restored after day-long global outage Efforts to address the underlying problem with Outlook, Teams and Copilot are complete, the tech firm says. 14 hrs ago Business"
+],
+[
+"link",
+"image unavailable Airplane passengers during the ground stop at Ronald Reagan Washington National Airport on 13 November 2026. According to aviation officials, it is only the third nationwide ground stop in US history, following the 11 September 2001 terrorist attacks and a 2023 FAA system outage. Federal Aviation Administration issues nationwide ground stop in the US, Arlington, Usa - 13 Nov 2026 How telecoms upgrade work sparked US flight chaos US officials say the disruption was caused by old equipment overloading and not a cyber-attack. 2 hrs ago US & Canada"
+],
+[
+"link",
+"image unavailable Antonio Nusa celebrates"
+],
+[
+"link",
+"image unavailable Art from GTA 6 showing characters Jason and Lucia sitting in a car. Jason is driving and holding from a paper cup with a straw. Lucia is wearing a grey tshirt and is leaning on the open window. Jason is wearing a dark grey vest. Both have various tattoos on their arms. Even Grand Theft Auto's original creators haven't been able to play GTA 6 The next title in the series is expected to be the biggest video game release ever. 20 hrs ago Technology"
+],
+[
+"link",
+"image unavailable Beach and sand dune, Sainte-Cecile, Côte d'Opale, France Body found on French beach after attempted Channel crossing The man was found after authorities stopped and overloaded dinghy leaving the beach overnight. 8 hrs ago Europe"
+],
+[
+"link",
+"image unavailable Carlo Ancelotti is shown red card during Brazil's defeat by Japan Ancelotti and Raphinha sent off as Japan beat Brazil Manager Carlo Ancelotti and captain Raphinha are both sent off as Brazil are beaten by a stoppage-time winner in a friendly against Japan in Singapore."
+],
+[
+"link",
+"image unavailable Chelsea players celebrate Chelsea beat 10-player Man City to return to WSL summit Chelsea return to the top of the Women's Super League table with a crucial victory over rivals Manchester City, who had goalkeeper Ayaka Yamashita sent off."
+],
+[
+"link",
+"image unavailable Elton John and King Charles stand side by side, both are smiling. Elton John is wearing a light blue shirt and a green cord jacket. The King is wearing a dark blue striped suit, with a light blue shirt and patterned tie King Charles jokes with Elton John as he marks 78th birthday with radio show The monarch appears on a special episode to coincide with his 78th birthday on Saturday. 11 hrs ago UK"
+],
+[
+"link",
+"image unavailable Hundreds of protesters marching down a hill with colourful signs opposing AI data centres"
+],
+[
+"link",
+"image unavailable Jojo stands on all fours behind a fence.Prof Forrester, a woman in khaki trousers and blue top, who is wearing a jungle hat with an insect visor Jojo the gorilla has spent his life alone. Can he finally find a companion? Jojo was poached as an infant and grew up in captivity. His keepers want to find him a friend - but it's not straightforward. 21 hrs ago Africa"
+],
+[
+"link",
+"image unavailable Russell Brand, with dark, long-ish hair and wearing a black jacket and white shirt, poses for a photograph while sitting among a row of blue chairs at a lecture theatre before giving a talk in 2014. Brand, Walliams and MAFS: Is this a reckoning for the entertainment industry? Noor Nanji, culture correspondent, explores how these stories represent the consequences of changes that began years ago, rather than being a sudden cultural shift. 20 hrs ago Culture"
+],
+[
+"link",
+"image unavailable Vaibhav Sooryavanshi Sooryavanshi becomes youngest captain in men's T20s at 15 Teenage India sensation Vaibhav Sooryavanshi breaks the record held by Croatia's Zach Vukusic as the youngest captain in top-level men's Twenty20 cricket. 11 hrs ago India"
+],
+[
+"link",
+"image unavailable Wales players celebrate beating New Zealand Magnificent Wales beat New Zealand for first time since 1953 Wales celebrate a first victory against New Zealand since 1953 with a brilliant 35-28 win to spark astonishing scenes in Cardiff. 4 hrs ago Wales"
+],
+[
+"link",
+"image unavailable Will Joseph Joseph scores record-equalling five tries as England rout Japan Will Joseph marked his comeback after four years out the Test game with a record-equalling five tries as England tore through Japan. 2 hrs ago England"
+],
+[
+"link",
+"index image Copper wire upgrade caused nationwide flight suspension, US transport secretary says The US government is trying to find out whether the chaos was caused by \"incompetence\" or faulty equipment. 3 hrs ago US & Canada"
+]
+]
+},
+{
+"page": "stackoverflow.com/questions/tagged/javascript",
+"elements": [
+[
+"link",
+"Cloudflare, opens in a new tab"
+],
+[
+"link",
+"Help, opens in a new tab"
+],
+[
+"link",
+"Privacy, opens in a new tab"
+]
+]
+},
+{
+"page": "gov.uk",
+"elements": [
+[
+"button",
+"Accept additional cookies"
+],
+[
+"button",
+"No  this page is not useful "
+],
+[
+"button",
+"Reject additional cookies"
+],
+[
+"button",
+"Report a problem with this page"
+],
+[
+"button",
+"Search GOV.UK"
+],
+[
+"button",
+"Show navigation menu"
+],
+[
+"button",
+"Show search menu"
+],
+[
+"button",
+"Yes  this page is useful "
+],
+[
+"link",
+"Accessibility statement"
+],
+[
+"link",
+"Apply for a passport"
+],
+[
+"link",
+"Benefits"
+],
+[
+"link",
+"Births, death, marriages and care"
+],
+[
+"link",
+"Births, deaths, marriages and care"
+],
+[
+"link",
+"Business and self-employed"
+],
+[
+"link",
+"Check MOT history of a vehicle"
+],
+[
+"link",
+"Check your State Pension age"
+],
+[
+"link",
+"Check your State Pension forecast"
+],
+[
+"link",
+"Childcare account: sign in"
+],
+[
+"link",
+"Childcare and parenting"
+],
+[
+"link",
+"Citizenship and living in the UK"
+],
+[
+"link",
+"Citizenship and living in the UK"
+],
+[
+"link",
+"Contact"
+],
+[
+"link",
+"Cookies"
+],
+[
+"link",
+"Cost of living support"
+],
+[
+"link",
+"Crime, justice and the law"
+],
+[
+"link",
+"Crime, justice and the law"
+],
+[
+"link",
+"Departments"
+],
+[
+"link",
+"Disabled people"
+],
+[
+"link",
+"Driving and transport"
+],
+[
+"link",
+"Education and learning"
+],
+[
+"link",
+"Employing people"
+],
+[
+"link",
+"Environment and countryside"
+],
+[
+"link",
+"Find a job"
+],
+[
+"link",
+"Foreign travel advice"
+],
+[
+"link",
+"Get involved"
+],
+[
+"link",
+"Get the GOV.UK app"
+],
+[
+"link",
+"Go to the GOV.UK homepage"
+],
+[
+"link",
+"Government Digital Service"
+],
+[
+"link",
+"Guidance and regulation"
+],
+[
+"link",
+"HMRC account: sign in or set up"
+],
+[
+"link",
+"HMRC services: sign in"
+],
+[
+"link",
+"Help"
+],
+[
+"link",
+"Housing and local services"
+],
+[
+"link",
+"How government works"
+],
+[
+"link",
+"Money and tax"
+],
+[
+"link",
+"National Insurance"
+],
+[
+"link",
+"News"
+],
+[
+"link",
+"Open Government Licence v3.0"
+],
+[
+"link",
+"Passports, travel and living abroad"
+],
+[
+"link",
+"Passports, travel and living abroad"
+],
+[
+"link",
+"Personal tax account: sign in or set up"
+],
+[
+"link",
+"Policy papers and consultations"
+],
+[
+"link",
+"Privacy"
+],
+[
+"link",
+"Research and statistics"
+],
+[
+"link",
+"Rhestr o Wasanaethau Cymraeg"
+],
+[
+"link",
+"Self Assessment tax returns"
+],
+[
+"link",
+"Skip to main content"
+],
+[
+"link",
+"Student finance: sign in"
+],
+[
+"link",
+"Tax your vehicle"
+],
+[
+"link",
+"Terms and conditions"
+],
+[
+"link",
+"Transparency"
+],
+[
+"link",
+"Transparency documents"
+],
+[
+"link",
+"Universal Credit"
+],
+[
+"link",
+"Universal Credit account: sign in"
+],
+[
+"link",
+"View cookies"
+],
+[
+"link",
+"Visas and immigration"
+],
+[
+"link",
+"Working, jobs and pensions"
+],
+[
+"link",
+"Working, jobs and pensions"
+],
+[
+"link",
+"eVisas: access and use your online immigration status"
+],
+[
+"link",
+"© Crown copyright"
+]
+]
+},
+{
+"page": "reddit.com/r/programming",
+"elements": [
+[
+"button",
+""
+],
+[
+"button",
+"Create Post"
+],
+[
+"button",
+"Downvote"
+],
+[
+"button",
+"Expand user menu"
+],
+[
+"button",
+"Join"
+],
+[
+"button",
+"Open menu"
+],
+[
+"button",
+"Open user actions"
+],
+[
+"button",
+"Share"
+],
+[
+"button",
+"Sort by: Best"
+],
+[
+"button",
+"Upvote"
+],
+[
+"button",
+"View: Card"
+],
+[
+"link",
+""
+],
+[
+"link",
+"0 Go to comments"
+],
+[
+"link",
+"158 Go to comments"
+],
+[
+"link",
+"40 Go to comments"
+],
+[
+"link",
+"76 Go to comments"
+],
+[
+"link",
+"Ad"
+],
+[
+"link",
+"Advertisement: Speed up workflow with Figma's agent"
+],
+[
+"link",
+"Announcing Rust 1.100.0"
+],
+[
+"link",
+"Author: u/Dear-Economics-315"
+],
+[
+"link",
+"Author: u/Either_Collection349"
+],
+[
+"link",
+"Author: u/NXGZ"
+],
+[
+"link",
+"Eight Bits of Trust; eMudhra's CA keys cracked in milliseconds"
+],
+[
+"link",
+"Home"
+],
+[
+"link",
+"How I accidentally became a millionaire"
+],
+[
+"link",
+"Learn More"
+],
+[
+"link",
+"Log In"
+],
+[
+"link",
+"Skip to main content"
+],
+[
+"link",
+"Speed up workflow with Figma's agent"
+],
+[
+"link",
+"figma.com"
+],
+[
+"link",
+"https://blog.rust-lang.org/2026/11/12/Rust-1.100.0/"
+],
+[
+"link",
+"https://lyra.horse/blog/2026/11/disinformation-machine/"
+],
+[
+"link",
+"https://scotthelme.co.uk/eight-bits-of-trust-emudhras-ca-keys-cracked-in-milliseconds/"
+],
+[
+"link",
+"r/programming - Announcing Rust 1.100.0"
+],
+[
+"link",
+"r/programming - Eight Bits of Trust; eMudhra's CA keys cracked in milliseconds"
+],
+[
+"link",
+"u/FigmaOfficial"
+]
+]
+},
+{
+"page": "demo shop home",
+"elements": [
+[
+"button",
+"Add to cart"
+],
+[
+"button",
+"Show more"
+],
+[
+"link",
+"Checkout"
+],
+[
+"link",
+"Messages"
+],
+[
+"link",
+"Payments"
+],
+[
+"link",
+"Search"
+]
+]
+},
+{
+"page": "demo search + ordinary form",
+"elements": [
+[
+"button",
+"Next"
+],
+[
+"button",
+"Search"
+]
+]
+},
+{
+"page": "demo payments nav",
+"elements": [
+[
+"link",
+"Home"
+],
+[
+"link",
+"Pay bills"
+]
+]
+}
+]
+}

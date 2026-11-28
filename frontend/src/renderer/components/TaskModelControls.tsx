@@ -1,15 +1,19 @@
-import type { ReactNode } from "react";
+import { useEffect, useId, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 import type { TaskComposerEffortControl, TaskComposerModelControl } from "@aoagents/product-ui";
-import { acceptsLocalModelID, agentModelDisplayLabel, isConcreteModelID } from "../lib/agent-model-choices";
+import { acceptsLocalModelID, agentModelDisplayLabel, isConcreteModelID, modelChoiceLabel } from "../lib/agent-model-choices";
+import { agentLabel } from "../lib/agent-options";
 import { fallbackEffort } from "../lib/effort";
-import { collapseModelVariants, findModelVariant, listsModelVariants, pickModelVariant } from "../lib/model-variants";
-import { ToggleRow } from "./chat/AgentSwitchPicker";
+import { listsModelVariants } from "../lib/model-variants";
+import { AgentModelPicker, type AgentSwitchProps, type PickerSource } from "./chat/AgentSwitchPicker";
 import { NativeModePicker } from "./NativeModePicker";
 import { AgentModelCombobox } from "./settings/AgentModelCombobox";
-import { EffortPicker, type EffortAvailability } from "./settings/EffortPicker";
+import { EffortPicker, formatEffortLabel, type EffortAvailability } from "./settings/EffortPicker";
 import { useModelTuning } from "./settings/ModelTuningControls";
+import { Button } from "./ui/button";
 import { MENU_TRIGGER_CHROME } from "./ui/option-menu";
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "./ui/tooltip";
+import { TriangleAlert } from "@/components/app-icons";
 
 // The agent, model and effort menus share one compact width.
 export const COMPOSER_MENU_WIDTH = "w-[min(14rem,calc(100vw-2rem))]! min-w-0! max-w-[calc(100vw-2rem)]!";
@@ -141,54 +145,87 @@ export function TaskModelPicker({
 	);
 }
 
-/** New Task's model and effort controls, with selection state owned by the caller. */
+/**
+ * The automation form's agent, model and effort as the chat composer's one picker,
+ * with selection state owned by the caller.
+ */
 export function TaskModelSelection(props: TaskComposerModelControl & {
 	effort: string;
 	onEffortChange: (value: string) => void;
 	onValidityChange: (valid: boolean) => void;
-	onRefresh: () => Promise<void>;
+	agentSwitch: AgentSwitchProps;
+	/** Why the agent's models could not be loaded or checked. */
+	warning?: string;
+	/** Reads Cloud's model list again, when that can clear the warning. */
+	onRetry?: () => Promise<void>;
 }) {
 	const { t } = useTranslation();
-	const { catalog, value, effort, onEffortChange } = props;
+	const { agentId, catalog, value, mode, effort, onEffortChange, onValidityChange } = props;
 	const models = catalog?.models;
 	const selectedModel = value || models?.find((item) => item.isDefault)?.id || "";
-	const { selected, invalidEffort } = useModelTuning({ models, model: selectedModel, effort, onEffortChange, onValidityChange: props.onValidityChange });
+	const { selected, invalidEffort } = useModelTuning({ models, model: selectedModel, effort, onEffortChange });
+	const problemId = useId();
+	const problem = props.warning ?? (invalidEffort ? t("settings.models.unsupportedTuning", { role: "" }) : undefined);
+	// Only an agent with no models to pick, or a level its model no longer offers, cannot be saved;
+	// a warning beside a usable list (cached models, a partial listing) is information.
+	const blocking = invalidEffort || (Boolean(props.warning) && !models?.length);
+	useEffect(() => onValidityChange(!blocking), [onValidityChange, blocking]);
 	const options = selected?.efforts?.filter((level) => level && level.toLowerCase() !== "default") ?? [];
-	const families = listsModelVariants(props.agentId) ? collapseModelVariants((models ?? []).filter((item) => isConcreteModelID(item.id))) : undefined;
-	const cursorChoice = families ? findModelVariant(families, selectedModel) : undefined;
-	const pickVariant = (want: { effort?: string; thinking?: boolean }) => {
-		if (cursorChoice) {
-			props.onModelChange(pickModelVariant(cursorChoice.family, { ...cursorChoice.variant, ...want }).id);
-			onEffortChange("");
-		}
+	// An agent that picks its own model for each mode lists its modes as the models.
+	const modes = catalog?.selectionMode === "mode";
+	const defaultMode = modes ? models?.find((item) => item.isDefault && isConcreteModelID(item.id))?.id : undefined;
+	// Cursor folds effort and thinking into its model ids; the picker splits them back out.
+	const variants = listsModelVariants(agentId);
+	const listed = (models ?? []).filter((item) => isConcreteModelID(item.id)).map((item) => ({
+		id: item.id,
+		label: item.id === "auto" ? t("settings.models.autoRouteLabel") : agentModelDisplayLabel(agentId, modes ? modelChoiceLabel(item) : item.label),
+	}));
+	const shownId = modes ? mode || defaultMode : selectedModel;
+	const current: PickerSource = {
+		models: listed,
+		modelId: shownId,
+		modelLabel: agentId === "" ? t("newTask.selectAgent") : listed.find((item) => item.id === shownId)?.label ?? agentLabel(agentId),
+		onPickModel: modes
+			? (next) => { props.onModeChange(next === defaultMode ? "" : next); props.onModelChange(""); onEffortChange(""); }
+			: (next) => {
+				const picked = models?.find((item) => next ? item.id === next : item.isDefault);
+				props.onModelChange(next || picked?.id || "");
+				props.onModeChange("");
+				const levels = picked?.efforts ?? [];
+				onEffortChange(effort && levels.includes(effort) ? effort : picked?.defaultEffort || fallbackEffort(levels) || "");
+			},
+		efforts: modes || variants ? [] : options.map((level) => ({ value: level, label: formatEffortLabel(level, t) })),
+		// Unset follows the model's own default, which the picker names.
+		effort: effort || fallbackEffort(options, selected?.defaultEffort) || selected?.defaultEffort || undefined,
+		onPickEffort: (next) => {
+			// An effort edit must stay attached to the model whose levels were offered.
+			props.onModelChange(selectedModel);
+			props.onModeChange("");
+			onEffortChange(next || selected?.defaultEffort || "");
+		},
 	};
-	const availability: EffortAvailability = !selected || selected.efforts === undefined ? "unknown" : options.length ? "supported" : "unsupported";
-	return <>
-		<div className="flex min-w-0 flex-wrap items-center gap-1.5">
-			<TaskModelPicker {...props} value={selectedModel} showFollowAgentAction={true}
-				onModelChange={(next) => {
-					const picked = models?.find((item) => next ? item.id === next : item.isDefault);
-					props.onModelChange(next || picked?.id || "");
-					props.onModeChange("");
-					const levels = picked?.efforts ?? [];
-					onEffortChange(effort && levels.includes(effort) ? effort : picked?.defaultEffort || fallbackEffort(levels) || "");
-				}}
-				onModeChange={(next) => { props.onModeChange(next); props.onModelChange(""); onEffortChange(""); }}
-			/>
-			<TaskEffortPicker id={`${props.id}-effort`} label={t("settings.models.effort")} disabled={props.disabled}
-				options={cursorChoice ? cursorChoice.family.efforts : options}
-				value={cursorChoice ? cursorChoice.variant.effort ?? "" : effort || fallbackEffort(options, selected?.defaultEffort) || ""}
-				defaultEffort={cursorChoice ? undefined : selected?.defaultEffort}
-				availability={cursorChoice ? "supported" : availability}
-				onChange={cursorChoice ? (next) => pickVariant({ effort: next }) : (next) => {
-					// An effort edit must stay attached to the model whose levels were offered.
-					props.onModelChange(selectedModel);
-					props.onModeChange("");
-					onEffortChange(next || selected?.defaultEffort || "");
-				}}
-				footer={cursorChoice?.family.hasThinkingChoice ? <ToggleRow label={t("agentSwitch.thinking")} checked={cursorChoice.variant.thinking} onChange={(thinking) => pickVariant({ thinking })} /> : undefined}
-			/>
+	return (
+		<div className="flex min-w-0 items-center gap-0.5">
+			<AgentModelPicker currentHarness={agentId} current={current} agentSwitch={props.agentSwitch} disabled={props.disabled} loadingModels={props.fetching && !catalog} />
+			{/* An icon beside the picker, so a long message never moves it; the whole message opens on hover or focus. */}
+			{problem ? (
+				<TooltipProvider>
+					<Tooltip>
+						<TooltipTrigger asChild>
+							<Button type="button" variant="quiet" size="icon-xs" aria-label={t("newTask.modelNotice.icon")} aria-describedby={problemId} className={`shrink-0 cursor-default ${blocking ? "text-destructive hover:text-destructive focus-visible:text-destructive" : "text-warning hover:text-warning focus-visible:text-warning"}`}>
+								<TriangleAlert aria-hidden="true" className="size-3.5" />
+							</Button>
+						</TooltipTrigger>
+						<TooltipContent side="top" className="max-w-80">{problem}</TooltipContent>
+					</Tooltip>
+				</TooltipProvider>
+			) : null}
+			{problem ? <span id={problemId} className="sr-only">{problem}</span> : null}
+			{problem && props.onRetry ? (
+				<Button type="button" size="xs" variant="ghost" className="shrink-0" onClick={() => void props.onRetry?.().catch(() => undefined)}>
+					{t("newTask.modelNotice.retry")}
+				</Button>
+			) : null}
 		</div>
-		{invalidEffort ? <p role="alert" className="text-xs text-warning">{t("settings.models.unsupportedTuning", { role: "" })}</p> : null}
-	</>;
+	);
 }

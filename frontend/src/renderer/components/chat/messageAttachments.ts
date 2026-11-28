@@ -153,14 +153,8 @@ export function proseBesideImages(text: string, attached: string[]): string {
 	return onlyImages ? "" : text;
 }
 
-/**
- * Plain-text form for one-line surfaces: what the person wrote, with attached
- * inline images read as `[Image N]`. AO's reference block is left out: it is
- * the agent's instruction to open the files, not part of the message.
- */
-export function labelInlineImages(text: string, label: (index: number) => string = (index) => `Image ${index}`): string {
-	const { body, attachments } = stagedAttachmentParts(text);
-	const images = attachments.filter((path) => IMAGE_ATTACHMENT_PATH.test(path));
+/** A message body for one-line surfaces: its inline images, numbered in `images` order, read as `[Image N]`. */
+export function labelInlineImages(body: string, images: string[], label: (index: number) => string = (index) => `Image ${index}`): string {
 	if (images.length === 0) return body;
 	return splitInlineImagePaths(body, (path) => images.includes(path))
 		.map((segment) => segment.path === undefined ? segment.text : `[${label(images.indexOf(segment.path) + 1)}]`)

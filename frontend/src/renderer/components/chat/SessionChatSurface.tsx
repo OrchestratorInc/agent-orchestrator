@@ -1,5 +1,6 @@
 import { inlineStagedAttachments } from "../../lib/attachment-uploads";
 import { apiErrorException } from "../../lib/api-error-exception";
+import { SessionChatApprovalCard } from "../approvals/ApprovalHost";
 import { useSessionAccountSwitch } from "../SessionAccountSummary";
 import type { OpenFileAnnotation } from "../../../shared/chat-file-reference";
 import { ForkSessionContext } from "../SessionForkControls";
@@ -23,6 +24,7 @@ import { type SideChatsState, useSideChatsAvailable } from "../../lib/side-chats
 import { AlertTriangle, Loader2 } from "@/components/app-icons";
 import { memo, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { useLoopbackReach } from "../../hooks/useHostLoopback";
 import { useChatPermissionModes } from "../../hooks/useChatPermissionModes";
 import { useChatMessageFocus, useChatNavigationRequest } from "../../hooks/useChatMessageFocus";
 import { useChatModelChoices } from "../../hooks/useChatModelChoices";
@@ -39,6 +41,7 @@ import {
 	useConversationConfigOptions,
 	useConversationModels,
 	useConversationSkills,
+	useAttachmentLeases,
 	useProviderSwitchCommand,
 	useStageAttachments,
 	useWorkspaceFilePaths,
@@ -81,6 +84,7 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 	onRevealSubagents,
 	session,
 	hostId,
+	showApprovals = false,
 	assetBaseUrl,
 	reviewerTerminal,
 	onOpenReviewerTerminal,
@@ -137,6 +141,8 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 	session: WorkspaceSession;
 	/** Owning daemon for a remote session; omitted for the local daemon. */
 	hostId?: string;
+	/** Draw the session's pending browser approval at the end of its chat. */
+	showApprovals?: boolean;
 	assetBaseUrl?: string;
 	reviewerTerminal?: { handleId: string; harness: string };
 	onOpenReviewerTerminal?: (target: { handleId: string; harness: string }) => void;
@@ -309,7 +315,8 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 			.catch(() => undefined);
 	}, [hostId, pendingHarness]);
 	// Ultracode is asked for in each message, so it is kept here, not on the agent.
-	const [ultracodeOn, setUltracodeOn] = useState(false);
+	// A task started with it on, from the new chat page, keeps it on.
+	const [ultracodeOn, setUltracodeOn] = useState(() => Boolean(launchSettings?.ultracode));
 	const ultracode = useMemo(() => ({ on: ultracodeOn, onChange: setUltracodeOn }), [ultracodeOn]);
 	const autoCompactWindow = snapshot?.settings.autoCompactWindow;
 	const [applyingAutoCompact, setApplyingAutoCompact] = useState(false);
@@ -444,7 +451,10 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 		rememberChatSkills(snapshot.harness, hostId, skills, session.workspaceId);
 	}, [hostId, session.kind, session.workspaceId, skills, skillsSettled, snapshot?.harness]);
 	const { paths, truncated, isLoading: filePathsLoading } = useWorkspaceFilePaths(session.id, Boolean(snapshot) && !session.needsResume, hostId);
-	const stageAttachments = useStageAttachments(session.id, hostId);
+	// Files picked into a draft are leased to it, so a removed chip or a
+	// discarded draft frees its stored copies; a sent one keeps them.
+	const stageAttachments = useStageAttachments(session.id, hostId, !sessionIsActive(session), true);
+	const updateAttachmentLeases = useAttachmentLeases(session.id, hostId);
 	// Applied once: the chat below unmounts while the conversation reloads, and
 	// a request still held would scroll it back to the same message on return.
 	const annotationNavigation = useChatNavigationRequest<{ id: string; text: string; snapshot?: import("../../../shared/chat-excerpt").ChatExcerptSnapshot; messageId?: string; revision?: number; activitySequence?: number }>(uiSessionId);
@@ -496,6 +506,7 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 		},
 		() => useUiStore.getState().setInspectorOpen(uiSessionId, false),
 		sideCreationEnabled,
+		updateAttachmentLeases,
 	);
 	useEffect(() => { if (sideChatContainer) sideChats.show(); }, [sideChatContainer]);
 	const sideChatsPresent = sideChats.loaded ? sideChats.sides.length > 0 : undefined;
@@ -578,6 +589,7 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 
 	const openLinkInBrowser = useSessionBrowserLink(session, onOpenLinkInBrowser, paths, onOpenFile);
 	const openSessionLink = useSessionLinkNavigation(hostId);
+	const loopbackReach = useLoopbackReach(hostId);
 	const promptSuggestion = useConversationPromptSuggestion(snapshot, Boolean(
 		controllerCatalogsEnabled && !controllerBusy && !localEchos.length &&
 		!commands.rollbackPending && !commands.editMessagePending && !commands.activateBranchPending && !commands.compacting &&
@@ -740,12 +752,14 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 				remoteHostId={hostId}
 				snapshot={renderSnapshot}
 				promptSuggestion={promptSuggestion}
+				timelineEnd={showApprovals ? <SessionChatApprovalCard sessionId={session.id} hostId={hostId} /> : undefined}
 				newWorkDisabled={newWorkDisabled || savedCopy}
 				composerLockedPlaceholder={hostUnreachable && newWorkDisabled ? t("remote.offlineCopy") : showingSavedPage ? "Loading conversation…" : undefined}
 				sendBlockedReason={hostUnreachable && !newWorkDisabled ? t("remote.sendWhenConnected") : undefined}
 				savedCopy={savedCopy}
 				importBlock={importBlock}
 				onLinkOpen={openLinkInBrowser}
+				hostLocalLinks={loopbackReach && sessionIsActive(session)}
 				onSessionLinkOpen={openSessionLink}
 				sessionTitle={session.title}
 				sessionRole={session.kind}
@@ -871,7 +885,7 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 				}}
 				commandError={commands.error}
 				agentSwitch={agentSwitch}
-				composerNotice={<>{!hostId ? <SessionBackgroundTasks session={session} onOpenTask={openBackgroundTask} /> : null}{interfaceSwitch?.errorNotice ?? (switchError ? (
+				composerNotice={<><SessionBackgroundTasks session={session} hostId={hostId} onOpenTask={openBackgroundTask} />{interfaceSwitch?.errorNotice ?? (switchError ? (
 					<ComposerErrorNotice
 						title={t("agentSwitch.couldNotSwitch")}
 						message={apiErrorMessage(switchError)}
@@ -952,9 +966,8 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 				filePathsTruncated={truncated}
 				filePathsLoading={filePathsLoading}
 				localEchos={localEchos}
-				// An archived session's worktree is gone until the restore its first message
-				// runs, so files are taken once it is back, as an archived Cloud chat does.
-				onStageAttachments={sessionIsActive(session) ? stageAttachments : undefined}
+				onStageAttachments={sessionIsActive(session) || commands.resumingAgent ? stageAttachments : undefined}
+				onUpdateAttachmentLeases={updateAttachmentLeases}
 				nativeImages={can(renderSnapshot, "images")}
 				// Gated on what the daemon advertises, so the control is never drawn for a
 				// harness that cannot steer. The refusal check stays as a backstop: it
