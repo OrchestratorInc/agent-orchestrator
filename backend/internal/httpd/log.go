@@ -30,6 +30,24 @@ import (
 // A 5xx line additionally carries the raw service error recorded by
 // envelope.WriteError: the wire envelope hides internals ("Internal server
 // error"), so without this the cause of a 500 was lost entirely.
+// routineRequestMaxDuration bounds what counts as a routine read: a slow one is
+// worth a line at info even when it succeeded.
+const routineRequestMaxDuration = 500 * time.Millisecond
+
+// LevelTrace is below debug: the daemon logs it only with AO_LOG_LEVEL=trace.
+const LevelTrace = slog.LevelDebug - 4
+
+// routineRequest reports a fast, successful read: logged at trace. Writes,
+// errors and slow requests stay at info.
+func routineRequest(method string, status int, took time.Duration) bool {
+	switch method {
+	case http.MethodGet, http.MethodHead, http.MethodOptions:
+	default:
+		return false
+	}
+	return status < http.StatusBadRequest && took < routineRequestMaxDuration
+}
+
 func requestLogger(log *slog.Logger, sink ports.EventSink) func(http.Handler) http.Handler {
 	return requestLoggerWithCapture(log, sink, sentryobs.CaptureErrorAsync)
 }
@@ -56,7 +74,15 @@ func requestLoggerWithCapture(log *slog.Logger, sink ports.EventSink, captureHTT
 				if captured.Err != nil && ww.Status() >= http.StatusInternalServerError {
 					attrs = append(attrs, "error", captured.Err)
 				}
-				log.Info("http request", attrs...)
+				if routineRequest(r.Method, ww.Status(), time.Since(start)) {
+					// Polls from the desktop app (status, workspace, settings) arrive
+					// every few seconds; a line for each was most of what the daemon
+					// logged at rest, and the app copies every line. Trace keeps them
+					// on demand (AO_LOG_LEVEL=trace).
+					log.Log(r.Context(), LevelTrace, "http request", attrs...)
+				} else {
+					log.Info("http request", attrs...)
+				}
 				if status := ww.Status(); status >= http.StatusBadRequest && status < http.StatusInternalServerError {
 					captureFaultCode(r, status, captured, captureHTTPError)
 				}
