@@ -39,7 +39,7 @@ import { activeHost, loadHosts, sameHostConnections, setActiveHost, updateHostEn
 import { knowsRemoteAddress, learnRemoteAddress, LEARN_REMOTE_EVERY_MS, LEARN_REMOTE_FOR_MS } from "./learnRemoteAddress";
 import { loadAccount } from "./account";
 import { cancelAccountHostSync, syncAccountHosts } from "./accountHosts";
-import { recoveryDelayMs, shouldReRace } from "./reRace";
+import { RE_RACE_COOLDOWN_MS, recoveryDelayMs, shouldReRace } from "./reRace";
 import { shouldRaceForUpgrade, UPGRADE_RACE_CHECK_MS } from "./upgradeRace";
 import { pollResultIsCurrent, sameServerConfig } from "./sameConfig";
 import { shouldShowLoading } from "./configLoading";
@@ -820,32 +820,34 @@ export function AppProvider({ children }: { children: ReactNode }) {
 		// Pointless while the phone has no network at all: the network listener
 		// races the moment it comes back. On a network the OS wrongly calls
 		// offline, its report never changes, so this probe is the only way back.
-		// Soon at first, then less often (see recoveryDelayMs), one attempt at a
-		// time: a race on a slow link can take 15 s, and starting another would
-		// throw that one away. Only tries that ran use up a step, and any change
-		// in the phone's network report starts the steps again: otherwise the
-		// short ones were spent while the phone had no network at all, and the
-		// network that finally came up waited the full 15 s.
+		// Often at first, then less often as the outage goes on (see
+		// recoveryDelayMs), one attempt at a time: a race on a slow link can take
+		// 15 s, and starting another would throw that one away. Any change in the
+		// phone's network report counts as a fresh outage: otherwise the quick
+		// tries were spent while the phone had no network at all, and the network
+		// that finally came up waited the full 15 s.
 		let stopped = false;
 		let running = false;
-		let attempt = 0;
+		let outageSince = Date.now();
 		let reportedAt = phoneNetworkReportedAtRef.current;
 		let timer: ReturnType<typeof setTimeout> | undefined;
 		const schedule = () => {
 			if (phoneNetworkReportedAtRef.current !== reportedAt) {
 				reportedAt = phoneNetworkReportedAtRef.current;
-				attempt = 0;
+				outageSince = Date.now();
 			}
+			// A machine that answered (an incompatible version) is not out, and
+			// trying sooner cannot change its answer.
+			const delay = linkTrackerRef.current.recent.at(-1) === "answered-error" ? RE_RACE_COOLDOWN_MS : recoveryDelayMs(Date.now() - outageSince);
 			timer = setTimeout(async () => {
 				if (stopped) return;
 				if (worthProbingForRecovery(phoneNetworkRef.current, phoneNetworkReportedAtRef.current, lastAnsweredRequestAt(), Date.now())) {
 					running = true;
 					await reloadConfig().catch(() => null);
 					running = false;
-					attempt += 1;
 				}
 				if (!stopped) schedule();
-			}, recoveryDelayMs(attempt));
+			}, delay);
 		};
 		// A try in flight reschedules from the new report once it settles.
 		const wake = () => {

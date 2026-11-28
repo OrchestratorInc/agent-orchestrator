@@ -234,7 +234,9 @@ describe("the connection in use", () => {
 });
 
 describe("reconnecting after a failure", () => {
-	it("tries again soon, then less often", () => {
-		expect([0, 1, 2, 3, 9].map(recoveryDelayMs)).toEqual([2_000, 4_000, 8_000, 15_000, 15_000]);
+	it("tries every 2 s for the first minute out, then every 5 s, then every 15 s", () => {
+		expect([0, 30_000, 59_999].map(recoveryDelayMs)).toEqual([2_000, 2_000, 2_000]);
+		expect([60_000, 299_999].map(recoveryDelayMs)).toEqual([5_000, 5_000]);
+		expect([300_000, 3_600_000].map(recoveryDelayMs)).toEqual([15_000, 15_000]);
 	});
 });

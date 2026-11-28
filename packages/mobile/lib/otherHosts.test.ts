@@ -68,8 +68,73 @@ describe("another paired host's live runner", () => {
 			await runner.refresh();
 			expect(snapshot.connection).toBe("closed");
 			expect(health()).toBe("reconnecting");
-			await vi.advanceTimersByTimeAsync(2_000 + 15_000 + 15_000);
+			await vi.advanceTimersByTimeAsync(14_000);
+			expect(health()).toBe("reconnecting");
+			await vi.advanceTimersByTimeAsync(2_000);
 			expect(health()).toBe("unreachable");
+		} finally { runner.stop(); }
+	});
+
+	// A failed race used to wait a flat 15 s, so a machine restarted the moment
+	// the board marked it unreachable stayed marked for up to 15 s more.
+	it("finds a machine that comes back after a short outage within 2 s", async () => {
+		vi.useFakeTimers();
+		const { connectToHost } = await import("./connectRuntime");
+		const { getSessions, getNotifications } = await import("./api");
+		let up = true;
+		vi.mocked(connectToHost).mockImplementation(async () => up
+			? { ok: true, hostId: host.id, endpoint: { kind: "lan", host: config.host, port: 3011, secure: false }, config }
+			: { ok: false, reason: "none-reachable" });
+		vi.mocked(getSessions).mockImplementation(async () => {
+			if (!up) throw new TypeError("Network request failed");
+			return { projects: [], sessions: [], orchestrators: [], orchestratorId: null, stats: {} };
+		});
+		vi.mocked(getNotifications).mockResolvedValue({ notifications: [], unreadCount: 0, nextCursor: undefined });
+		const { emptyHostSnapshot, startOtherHost } = await import("./otherHosts");
+		let snapshot = emptyHostSnapshot(host);
+		const runner = startOtherHost(host, undefined, (patch) => { snapshot = { ...snapshot, ...patch }; });
+		try {
+			await runner.refresh();
+			expect(snapshot.connection).toBe("open");
+			up = false;
+			await vi.advanceTimersByTimeAsync(8_000);
+			expect(snapshot.connection).toBe("closed");
+			await vi.advanceTimersByTimeAsync(25_000);
+			up = true;
+			await vi.advanceTimersByTimeAsync(2_000);
+			expect(snapshot.connection).toBe("open");
+		} finally { runner.stop(); }
+	});
+
+	it("tries a machine that stays off less often as the outage goes on", async () => {
+		vi.useFakeTimers();
+		const { connectToHost } = await import("./connectRuntime");
+		vi.mocked(connectToHost).mockResolvedValue({ ok: false, reason: "none-reachable" });
+		const { startOtherHost } = await import("./otherHosts");
+		const runner = startOtherHost(host, undefined, () => {});
+		const triesDuring = async (ms: number) => {
+			const before = vi.mocked(connectToHost).mock.calls.length;
+			await vi.advanceTimersByTimeAsync(ms);
+			return vi.mocked(connectToHost).mock.calls.length - before;
+		};
+		try {
+			await runner.refresh();
+			expect(await triesDuring(60_000)).toBe(30);
+			expect(await triesDuring(240_000)).toBe(48);
+			expect(await triesDuring(600_000)).toBe(40);
+		} finally { runner.stop(); }
+	});
+
+	it("keeps an incompatible machine on the slow pace: it answered", async () => {
+		vi.useFakeTimers();
+		const { connectToHost } = await import("./connectRuntime");
+		vi.mocked(connectToHost).mockResolvedValue({ ok: false, reason: "incompatible" } as never);
+		const { startOtherHost } = await import("./otherHosts");
+		const runner = startOtherHost(host, undefined, () => {});
+		try {
+			await runner.refresh();
+			await vi.advanceTimersByTimeAsync(60_000);
+			expect(connectToHost).toHaveBeenCalledTimes(5);
 		} finally { runner.stop(); }
 	});
 
