@@ -6,6 +6,7 @@ package agentauth
 import (
 	"context"
 	"fmt"
+	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -18,6 +19,7 @@ import (
 	"github.com/OrchestratorInc/agent-orchestrator/backend/internal/adapters/agent/mastracode"
 	"github.com/OrchestratorInc/agent-orchestrator/backend/internal/adapters/agent/opencodev2"
 	"github.com/OrchestratorInc/agent-orchestrator/backend/internal/adapters/agent/primeagent"
+	"github.com/OrchestratorInc/agent-orchestrator/backend/internal/harnessendpoint"
 	"github.com/OrchestratorInc/agent-orchestrator/backend/internal/httpd/apierr"
 	"github.com/OrchestratorInc/agent-orchestrator/backend/internal/process"
 	"github.com/OrchestratorInc/agent-orchestrator/backend/internal/providerkeys"
@@ -80,6 +82,9 @@ type Plan struct {
 	Guidance         string `json:"guidance,omitempty"`
 	DocumentationURL string `json:"documentationUrl"`
 	Reason           string `json:"reason,omitempty"`
+	// CustomEndpoint is present for harnesses that accept a user-supplied base
+	// URL and API key in place of native login. The key is never included.
+	CustomEndpoint *harnessendpoint.Status `json:"customEndpoint,omitempty"`
 	// Methods lists the login methods supported by the background UI flow.
 	Methods       []LoginMethod `json:"methods,omitempty"`
 	command       []string
@@ -164,12 +169,15 @@ type StartResult struct {
 // dataDir roots the stable per-harness auth workspaces used by plans with a
 // prepareWorkspace hook.
 type Service struct {
-	executables    ExecutableFinder
-	agents         AgentBinaryResolver
-	terminals      TerminalOpener
-	dataDir        string
-	selfExecutable func() (string, error)
-	mu             sync.Mutex
+	executables ExecutableFinder
+	agents      AgentBinaryResolver
+	terminals   TerminalOpener
+	dataDir     string
+	// endpointProbeClient asks a custom endpoint which auth style it accepts;
+	// nil uses harnessendpoint.ProbeClient. Tests point it at a local server.
+	endpointProbeClient *http.Client
+	selfExecutable      func() (string, error)
+	mu                  sync.Mutex
 	// keysMu serializes changes to AO's provider keys and their OS user
 	// environment copies: saves, removals and the startup republication.
 	keysMu         sync.Mutex
@@ -473,6 +481,7 @@ func (s *Service) prepareAuthWorkspace(ctx context.Context, plan Plan) (string, 
 
 func (s *Service) resolve(ctx context.Context, plan Plan) Plan {
 	plan.Methods = loginMethods(plan.AgentID)
+	plan.CustomEndpoint = s.endpointStatus(plan.AgentID)
 	plan.command = append([]string(nil), plan.command...)
 	if len(plan.command) == 0 {
 		plan.Available = true

@@ -53,6 +53,7 @@ type AgentLimitReading struct {
 	UsedPercent     float64
 	ResetsAtMs      sql.NullInt64
 	ReadAtMs        int64
+	OrgID           string
 }
 
 type AgentModelCatalog struct {

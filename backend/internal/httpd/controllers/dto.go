@@ -8,6 +8,7 @@ import (
 
 	"github.com/OrchestratorInc/agent-orchestrator/backend/internal/devimport"
 	"github.com/OrchestratorInc/agent-orchestrator/backend/internal/domain"
+	"github.com/OrchestratorInc/agent-orchestrator/backend/internal/harnessendpoint"
 	"github.com/OrchestratorInc/agent-orchestrator/backend/internal/httpd/envelope"
 	"github.com/OrchestratorInc/agent-orchestrator/backend/internal/legacyimport"
 	"github.com/OrchestratorInc/agent-orchestrator/backend/internal/ports"
@@ -167,6 +168,12 @@ type PrewarmChatAgentResponse struct {
 // ListAgentAuthPlansResponse is the display-safe authentication catalog.
 type ListAgentAuthPlansResponse struct {
 	Plans []agentauth.Plan `json:"plans"`
+}
+
+// AgentEndpointResponse returns a harness's display-safe custom endpoint
+// status. The API key is never echoed.
+type AgentEndpointResponse struct {
+	Endpoint harnessendpoint.Status `json:"endpoint"`
 }
 
 // StartAgentAuthResponse returns the native terminal opened for authentication.

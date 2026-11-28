@@ -603,7 +603,11 @@ func (m *Manager) runInterfaceTransition(
 				fail("HANDOFF_STORAGE_BRIDGE_FAILED", projectErr)
 				return
 			}
-			env := m.runtimeEnvForHarness(rec.ID, rec.ProjectID, rec.IssueID, project.Config.Env, rec.Harness)
+			env, envErr := m.runtimeEnvForHarness(rec.ID, rec.ProjectID, rec.IssueID, project.Config.Env, rec.Harness)
+			if envErr != nil {
+				fail("HANDOFF_STORAGE_BRIDGE_FAILED", envErr)
+				return
+			}
 			m.augmentAgentRuntimeEnv(bridge, env)
 			m.applyImportedConfigEnv(ctx, rec, env)
 			if bridgeErr := storageBridge.PrepareInterfaceHandoffStorage(ctx, ports.SessionRef{
@@ -1040,7 +1044,10 @@ func (m *Manager) persistedNativeConversationID(
 	if err != nil {
 		return "", err
 	}
-	env := m.runtimeEnvForHarness(rec.ID, rec.ProjectID, rec.IssueID, project.Config.Env, rec.Harness)
+	env, err := m.runtimeEnvForHarness(rec.ID, rec.ProjectID, rec.IssueID, project.Config.Env, rec.Harness)
+	if err != nil {
+		return "", err
+	}
 	m.applyImportedConfigEnv(ctx, rec, env)
 	exists, err := probe.NativeConversationExists(ctx, ports.SessionRef{
 		ID:            string(rec.ID),
@@ -1077,6 +1084,9 @@ func (m *Manager) preflightInterfaceTarget(
 			return err
 		}
 		permissions := effectiveAgentConfig(rec.Harness, rec.Kind, project.Config).Permissions
+		if _, err := m.loadHarnessEndpointEnv(rec.Harness, project.Config.Env, envKeysCaseInsensitive); err != nil {
+			return err
+		}
 		return m.chat.PreflightChat(ctx, rec.Harness, permissions)
 	}
 	agent, ok := m.agents.Agent(rec.Harness)
@@ -1088,7 +1098,10 @@ func (m *Manager) preflightInterfaceTarget(
 		return err
 	}
 	config := restoredAgentConfig(rec, project.Config)
-	env := m.runtimeEnvForHarness(rec.ID, rec.ProjectID, rec.IssueID, project.Config.Env, rec.Harness)
+	env, err := m.runtimeEnvForHarness(rec.ID, rec.ProjectID, rec.IssueID, project.Config.Env, rec.Harness)
+	if err != nil {
+		return err
+	}
 	pinRuntimePermissionEnv(env, config.Permissions)
 	m.augmentAgentRuntimeEnv(agent, env)
 	m.applyImportedConfigEnv(ctx, rec, env)
