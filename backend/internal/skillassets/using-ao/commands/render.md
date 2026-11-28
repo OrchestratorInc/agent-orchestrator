@@ -83,6 +83,28 @@ the page. Then run `ao artifact add` on the path it prints so the page is listed
 - Scripts are sandboxed away from Orchestrator, cookies, and storage. Links open
   in the user's browser.
 
+
+### Mobile responsiveness
+
+The same page is shown in the mobile app, typically at about 390-440 CSS pixels
+wide. Do not design only for the desktop reply column or expanded dialog.
+
+- Include `<meta name="viewport" content="width=device-width, initial-scale=1">`
+  in the document head.
+- Apply `box-sizing: border-box` globally. Let images and other media shrink
+  with `max-width: 100%`.
+- Avoid fixed pixel widths and fixed multi-column layouts. Use shrinkable grid
+  tracks such as `minmax(0, 1fr)`, and `auto-fit`/`auto-fill` where suitable.
+  Set `min-width: 0` on grid and flex children.
+- Collapse dense multi-column layouts to one column at narrow widths (around
+  600px). Wrap long words and code. Put wide tables in their own horizontally
+  scrollable wrapper rather than overflowing the page.
+- Do not clip content or cause horizontal page scrolling.
+
+Check the finished page at **both 720px and 390px** with
+`html_preview` / `ao render --check`. Inspect both screenshots and fix
+overflow, clipped content, or unreadably narrow columns before publishing.
+
 ## Theme
 
 These CSS variables on `:root` hold Orchestrator's current theme and change when

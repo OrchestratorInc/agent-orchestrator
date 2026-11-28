@@ -19,6 +19,7 @@ type mcpReply struct {
 		ServerInfo      struct{ Name string }      `json:"serverInfo"`
 		Tools           []struct {
 			Name        string
+			Description string
 			InputSchema struct {
 				Properties map[string]map[string]any
 				Required   []string
@@ -104,6 +105,11 @@ func TestMCPListsBothTools(t *testing.T) {
 	if got := tools[1].InputSchema.Required; !slices.Equal(got, []string{"html", "title"}) || tools[1].InputSchema.Properties["height"] == nil ||
 		tools[1].InputSchema.Properties["artifact"]["type"] != "boolean" {
 		t.Errorf("html_render schema: required %q, properties %v", got, tools[1].InputSchema.Properties)
+	}
+	for _, want := range []string{"mobile app", "viewport", "minmax(0, 1fr)", "390px", "720px"} {
+		if !strings.Contains(tools[1].Description, want) {
+			t.Errorf("html_render description does not contain %q", want)
+		}
 	}
 }
 
