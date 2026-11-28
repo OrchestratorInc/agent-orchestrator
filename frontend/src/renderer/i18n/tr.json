@@ -1,4 +1,9 @@
 {
+	"artifacts.find.label": "Çıktıda ara",
+	"artifacts.find.partial": "Arama tamamlanmadı. Bazı içeriklere erişilemiyor veya içerik önizleme boyutu sınırını aşıyor.",
+	"artifacts.find.unavailable": "Bu çıktı görünümünde arama kullanılamıyor.",
+	"artifacts.find.noText": "Bu PDF'de aranabilir metin yok. Taranmış sayfalar OCR gerektirir.",
+	"artifacts.find.failed": "Bu çıktıda arama yapılamadı. Aramayı kapatıp tekrar deneyin.",
 	"issueArtifact.add": "GitHub kaydına ekle",
 	"issueArtifact.addLatest": "En son sürümü GitHub kaydına ekle",
 	"issueArtifact.unconfirmed": "Yükleme doğrulanamadı",

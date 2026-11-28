@@ -9,6 +9,88 @@
 // The messages are the MCP Apps postMessage methods, so this host could later
 // show upstream MCP apps.
 (function () {
+  // Enabled only by the local artifact viewer, never by a page itself.
+  var findEngine, findBindings = [], findRequest, findAnchor, findAnchorQuery, findOpen = false;
+  var findStop, findUnobserve, findMatches, findMatchesGeneration, findStale = false;
+  function findPost(method, params) {
+    window.parent.postMessage({ jsonrpc: "2.0", method: method, params: params }, "*");
+  }
+  function cancelFind() {
+    if (findStop) findStop.abort();
+    findStop = undefined; findMatches = undefined; findStale = false;
+    if (findEngine) findEngine.clear();
+  }
+  function watchFind() {
+    if (findUnobserve || !findOpen || !document.body) return;
+    // Content that keeps changing must not abort every search: let a running
+    // search finish and paint, then ask for one fresh search. Highlights stay
+    // up until the next result replaces them.
+    findUnobserve = findEngine.observe(document.body, function () {
+      if (!findRequest || !findRequest.query.trim() || !findOpen) return;
+      if (findStop) { findStale = true; return; }
+      findPost("ao/find-changed", { generation: findRequest.generation });
+    });
+  }
+  async function runFind(params) {
+    if (!findEngine || typeof params.query !== "string" || !Number.isSafeInteger(params.generation)) return;
+    if (findRequest && params.generation < findRequest.generation) return;
+    if (!params.query.trim()) { findRequest = params; cancelFind(); return; }
+    var cached = findMatchesGeneration === params.generation && findRequest?.query === params.query ? findMatches : undefined;
+    // Replace the previous search without clearing its highlights: paint swaps them.
+    if (findStop) findStop.abort();
+    findMatches = undefined; findStale = false;
+    if (findRequest?.query !== params.query && findEngine) findEngine.clear();
+    var stop = new AbortController(); findStop = stop;
+    var retain = findAnchorQuery === params.query && !params.reveal && findAnchor;
+    findRequest = params;
+    findPost("ao/find-started", { generation: params.generation });
+    try {
+    var ranges = cached || await findEngine.search(document.body, params.query, stop.signal);
+    if (stop.signal.aborted || findStop !== stop || findRequest !== params) return;
+    findMatches = ranges; findMatchesGeneration = params.generation;
+    var active = Math.max(0, Math.min(ranges.length - 1, Number.isSafeInteger(params.active) ? params.active : 0));
+    var retained = retain ? findEngine.retained(ranges, findAnchor) : -1;
+    if (retained >= 0) active = retained;
+    var range = ranges[active];
+    findAnchorQuery = params.query;
+    findAnchor = findEngine.anchor(range);
+    findEngine.paint(ranges, active, document);
+    if (params.reveal) findEngine.reveal(ranges[active]);
+    findPost("ao/find-result", { generation: params.generation, total: ranges.length, active: active });
+    findStop = undefined;
+    if (findStale) { findStale = false; findPost("ao/find-changed", { generation: params.generation }); }
+    } catch (error) {
+      if (!stop.signal.aborted && findStop === stop) { findStop = undefined; findStale = false; findPost("ao/find-error", { generation: params.generation }); }
+    }
+  }
+  window.addEventListener("message", function (event) {
+    var data = event.data, params = data && data.params;
+    if (event.source !== window.parent || !data || data.jsonrpc !== "2.0" || !params || window.parent === window) return;
+    if (data.method === "ao/find-configure" && params.exceptions && Array.isArray(params.bindings)) {
+      if (!findEngine) {
+        findEngine = createArtifactSearchEngine(params.exceptions);
+        if (!document.body) document.addEventListener("DOMContentLoaded", watchFind, { once: true });
+      }
+      findBindings = params.bindings;
+      findOpen = params.open === true;
+      if (findOpen) watchFind();
+      else { cancelFind(); if (findUnobserve) findUnobserve(); findUnobserve = undefined; }
+    } else if (data.method === "ao/find") void runFind(params);
+    else if (data.method === "ao/find-cancel" && Number.isSafeInteger(params.generation) && (!findRequest || params.generation >= findRequest.generation)) {
+      findRequest = { generation: params.generation, query: "" }; cancelFind();
+    }
+  });
+  document.addEventListener("keydown", function (event) {
+    if (!findEngine || event.isComposing || event.repeat || event.composedPath().some(function (node) {
+      return node.nodeType === 1 && node.closest("input,textarea,select,[contenteditable]:not([contenteditable='false']),.cm-editor,.monaco-editor,.xterm,.terminal-surface,[data-editing='true']");
+    })) return;
+    var matches = findBindings.some(function (binding) {
+      return (String(binding.key).toLowerCase() === event.key.toLowerCase() || binding.code && binding.code === event.code) &&
+        binding.ctrl === event.ctrlKey && binding.meta === event.metaKey && binding.shift === event.shiftKey && binding.alt === event.altKey;
+    });
+    if (matches) { event.preventDefault(); event.stopImmediatePropagation(); findPost("ao/find-open", {}); }
+    if (event.key === "Escape" && findOpen) { event.preventDefault(); event.stopImmediatePropagation(); findPost("ao/find-close", {}); }
+  }, true);
   var theme = document.getElementById("ao-theme");
   // Created now, so it precedes the page's own styles and they win over it.
   var display = document.createElement("style");

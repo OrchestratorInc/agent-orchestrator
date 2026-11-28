@@ -1,4 +1,5 @@
 import { upgradeExcerpt } from "../../lib/chat-excerpt-snapshot";
+import { claimArtifactFind, registerArtifactFindRoot } from "../../lib/artifact-find-focus";
 import { CLOUD_CHAT_MESSAGE_BYTES } from "../../../shared/chat-excerpt";
 import { appI18n } from "../../i18n/instance";
 import { purgeFileAttachmentsForSession } from "../../hooks/useFileAttachments";
@@ -563,6 +564,45 @@ describe("send keys", () => {
 		});
 
 		expect(document.activeElement).toBe(field);
+	});
+	describe("window focus next to an artifact reader", () => {
+		function reader() {
+			const element = document.createElement("div"); element.dataset.artifactFindScope = "";
+			element.getClientRects = () => [{}] as unknown as DOMRectList;
+			document.body.append(element);
+			const unregister = registerArtifactFindRoot(element);
+			return { element, dispose: () => { unregister(); element.remove(); } };
+		}
+		it("does not recover composer focus during an artifact frame's Find handoff", () => {
+			const { field } = renderComposer({ autoFocusKey: "session-1" });
+			const { element, dispose } = reader();
+			try {
+				const frame = document.createElement("iframe"); element.append(frame);
+				frame.focus(); claimArtifactFind(element);
+				expect(document.activeElement).toBe(frame);
+				act(() => window.dispatchEvent(new Event("focus")));
+				expect(document.activeElement).not.toBe(field);
+			} finally { dispose(); }
+		});
+		it("does not recover composer focus while the artifact Find bar is open", () => {
+			const { field } = renderComposer({ autoFocusKey: "session-1" });
+			const { element, dispose } = reader();
+			try {
+				const bar = document.createElement("div"); bar.setAttribute("role", "search"); element.append(bar);
+				field.blur(); claimArtifactFind(element);
+				act(() => window.dispatchEvent(new Event("focus")));
+				expect(document.activeElement).not.toBe(field);
+			} finally { dispose(); }
+		});
+		it("recovers composer focus after the reader was only clicked", () => {
+			const { field } = renderComposer({ autoFocusKey: "session-1" });
+			const { element, dispose } = reader();
+			try {
+				field.blur(); claimArtifactFind(element);
+				act(() => window.dispatchEvent(new Event("focus")));
+				expect(document.activeElement).toBe(field);
+			} finally { dispose(); }
+		});
 	});
 
  it("does not steal selection when the same composer becomes enabled", () => {

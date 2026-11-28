@@ -34,6 +34,7 @@ import { ShareArtifactButton, useHostShareLinks, useReconciledShareLinks, useSha
 import { ArtifactCommentsButton, ArtifactCommentsWorkspace, artifactCommentsKind } from "./artifact-comments/ArtifactComments";
 import { sharedArtifactLinkId } from "../../../../packages/shared/artifacts/shared-artifact-link";
 import { ArtifactGalleryCard } from "./ArtifactGalleryCard";
+import { ArtifactFindScope } from "./ArtifactFindScope";
 import { ArtifactFileView } from "./ArtifactFileView";
 import { CloudArtifactFrame } from "./CloudArtifactFrame";
 import { ArtifactHistoryMenu, ArtifactVersionPreview } from "./ArtifactHistory";
@@ -1119,6 +1120,8 @@ export function SessionArtifactsView({
 					</div>
 				</div>
 				<div className="relative min-h-0 flex-1" ref={setContent}>
+					{/* Only the body: the floating Find bar then sits below the header's actions. */}
+					<ArtifactFindScope identity={`${session.id}:${selected.path}:${previewVersion ?? "live"}:${showingHtmlSource}`} enabled={!cloud && !hostId} className="relative h-full min-h-0 min-w-0">
 					{commentsCover ? null : cloud && !selected.rawUrl ? (
 						cloudAccess.isError ? (
 							<PanelMessage action={<RetryButton onClick={() => void cloudAccess.refetch()} />}>{t("artifacts.accessError")}</PanelMessage>
@@ -1182,6 +1185,7 @@ export function SessionArtifactsView({
 						</div>
 					) : null}
 					<ArtifactZoomControls controller={zoomController} />
+					</ArtifactFindScope>
 				</div>
 			</ArtifactViewerFrame>
 		);

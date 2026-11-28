@@ -1,0 +1,61 @@
+// Contextual find belongs to the last pane used, even when clicking text did
+// not move keyboard focus. Capture once per document; readers register roots.
+const roots = new Set<HTMLElement>();
+let lastPane: Element | null = null;
+const nativeFind = ".cm-editor, .monaco-editor, .xterm, .terminal-surface, [data-editing='true']";
+export function nativeArtifactFindFocused(): boolean {
+	let focused: Element | null = document.activeElement;
+	while (focused) {
+		if (focused.closest(nativeFind) || (focused.getRootNode() instanceof ShadowRoot && focused.matches("input,textarea,select,[contenteditable]:not([contenteditable='false'])"))) return true;
+		focused = focused.shadowRoot?.activeElement ?? null;
+	}
+	return false;
+}
+function visible(element: HTMLElement): boolean {
+	return element.isConnected && element.getClientRects().length > 0 && !element.closest("[hidden], [aria-hidden='true'], [data-state='closed']");
+}
+function record(event: Event) {
+	for (const target of event.composedPath()) {
+		if (!(target instanceof Element)) continue;
+		const pane = target.closest("[data-artifact-find-scope], [data-chat-find-surface], [data-chat-find-scope]");
+		if (pane) { lastPane = pane; return; }
+	}
+}
+export function registerArtifactFindRoot(root: HTMLElement): () => void {
+	if (!roots.size) {
+		document.addEventListener("pointerdown", record, true);
+		document.addEventListener("focusin", record, true);
+	}
+	roots.add(root);
+	return () => {
+		roots.delete(root);
+		if (lastPane === root) lastPane = null;
+		if (!roots.size) {
+			document.removeEventListener("pointerdown", record, true);
+			document.removeEventListener("focusin", record, true);
+		}
+	};
+}
+export function claimArtifactFind(root: HTMLElement): void { lastPane = root; }
+export function artifactFindOwner(): HTMLElement | undefined {
+	const focused = document.activeElement;
+	if (nativeArtifactFindFocused()) return;
+	const dialogs = Array.from(document.querySelectorAll<HTMLElement>("[role='dialog'], [role='alertdialog'], [aria-modal='true']")).filter(visible);
+	const dialog = dialogs.at(-1);
+	const available = Array.from(roots).filter((root) => visible(root) && (!dialog || dialog.contains(root)));
+	if (dialog) return available.find((root) => root.contains(focused)) ?? available.at(-1);
+	if (focused instanceof HTMLIFrameElement) return available.find((root) => root.contains(focused));
+	if (lastPane?.isConnected) return available.find((root) => root === lastPane);
+	return available.find((root) => root.contains(focused));
+}
+export function artifactOwnsFind(): boolean { return artifactFindOwner() !== undefined; }
+/**
+ * The artifact pane is using Find right now: its bar is open, or keyboard focus
+ * is inside one of its frames (where Ctrl/Cmd+F hands off to the host). Unlike
+ * ownership, merely having clicked the pane last does not count.
+ */
+export function artifactFindEngaged(): boolean {
+	const owner = artifactFindOwner();
+	if (!owner) return false;
+	return owner.querySelector("[role='search']") !== null || (document.activeElement instanceof HTMLIFrameElement && owner.contains(document.activeElement));
+}

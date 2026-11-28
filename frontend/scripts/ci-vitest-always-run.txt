@@ -1,6 +1,7 @@
 src/renderer/native-composition-cascade.test.ts
 src/renderer/components/WindowTitlebar.test.tsx
 src/renderer/lib/theme-tokens.test.ts
+src/renderer/lib/artifact-find-frame.test.ts
 src/renderer/i18n/renderer-coverage.test.ts
 src/browser-extension/manifest.test.ts
 src/main/cloud-share.test.ts
