@@ -92,6 +92,17 @@ func TestTelemetryIdentityRoutes(t *testing.T) {
 	if got := get(); got["cloudUserId"] != "user_01H" || got["isSignedIn"] != true {
 		t.Fatalf("plan-only body changed the identity: %#v", got)
 	}
+	// Plan-only bodies are ordered on their own counter: a delayed older one is
+	// refused, and a large plan sequence never blocks an identity hand-off.
+	if c := post("127.0.0.1:3001", "", `{"plan":"free","sequence":2000}`); c != http.StatusNoContent {
+		t.Fatalf("newer plan = %d, want 204", c)
+	}
+	if c := post("127.0.0.1:3001", "", `{"plan":"pro","sequence":1000}`); c != http.StatusConflict {
+		t.Fatalf("stale plan = %d, want 409", c)
+	}
+	if c := post("127.0.0.1:3001", "", `{"cloudUserId":"user_01H","sequence":5}`); c != http.StatusNoContent {
+		t.Fatalf("identity after plan sequences = %d, want 204", c)
+	}
 	if c := post("127.0.0.1:3001", "", `{"cloudUserId":""}`); c != http.StatusNoContent {
 		t.Fatalf("sign-out = %d, want 204", c)
 	}

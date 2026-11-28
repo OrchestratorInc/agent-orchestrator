@@ -54,6 +54,9 @@ export class TelemetryIdentityController {
 	// Bumped on every invalidate, so a late answer from a daemon that already
 	// left `ready` cannot mark the plan pushed for the next one.
 	private planGeneration = 0;
+	// Orders plan-only POSTs on the daemon's own plan counter, apart from the
+	// identity sequence.
+	private planSequence = 0;
 
 	constructor(
 		private readonly dataDir: string,
@@ -180,8 +183,9 @@ export class TelemetryIdentityController {
 		return this.flush();
 	}
 
-	// A plan-only body on the identity route: no cloudUserId and no sequence, so
-	// the daemon leaves the identity alone.
+	// A plan-only body on the identity route: no cloudUserId, so the daemon
+	// leaves the identity alone, and its own sequence, so a delayed older plan
+	// cannot replace a newer one.
 	private async flushPlan(): Promise<void> {
 		const plan = this.plan;
 		if (plan === null || this.planPushed) return;
@@ -189,9 +193,23 @@ export class TelemetryIdentityController {
 		if (!base) return;
 		const generation = this.planGeneration;
 		try {
-			const response = await this.request(base, "/internal/telemetry/identity", { method: "POST", body: { plan } });
-			// A daemon without plan support refuses the field (400) or the route (404/405): nothing to retry.
-			if (this.plan === plan && this.planGeneration === generation) this.planPushed = response.ok || response.status === 400 || response.status === 404 || response.status === 405;
+			// As for the identity: a 409 on the first attempt means this process is
+			// behind the daemon's plan counter, so it jumps past it once.
+			for (let attempt = 0; attempt < 2; attempt++) {
+				this.planSequence = Math.max(this.planSequence + 1, Date.now());
+				const response = await this.request(base, "/internal/telemetry/identity", { method: "POST", body: { plan, sequence: this.planSequence } });
+				if (this.plan !== plan || this.planGeneration !== generation) return;
+				if (response.status === 409 && attempt === 0) {
+					const last = await daemonSequence(response);
+					if (last !== null) {
+						this.planSequence = Math.max(this.planSequence, last);
+						continue;
+					}
+				}
+				// A daemon without plan support refuses the field (400) or the route (404/405): nothing to retry.
+				this.planPushed = response.ok || response.status === 400 || response.status === 404 || response.status === 405;
+				return;
+			}
 		} catch {
 			// Daemon not reachable yet; flush() runs again on the next ready transition.
 		}

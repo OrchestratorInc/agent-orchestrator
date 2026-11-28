@@ -388,6 +388,9 @@ func mountTelemetryIdentity(r chi.Router, ident ports.TelemetryIdentityStore) {
 	var (
 		seqMu   sync.Mutex
 		lastSeq int64
+		// Plan-only bodies are ordered on their own counter, so they never
+		// advance or reject the identity sequence.
+		lastPlanSeq int64
 	)
 	r.Post("/internal/telemetry/identity", func(w http.ResponseWriter, req *http.Request) {
 		if !localControlRequest(req) {
@@ -401,12 +404,24 @@ func mountTelemetryIdentity(r chi.Router, ident ports.TelemetryIdentityStore) {
 			envelope.WriteAPIError(w, req, http.StatusBadRequest, "bad_request", "INVALID_JSON", "request body must be valid JSON", nil)
 			return
 		}
+		if body.Plan != nil && body.CloudUserID == nil {
+			// Check-and-apply in one critical section, like the identity below: a
+			// plan POST delayed in transit cannot replace a newer one.
+			seqMu.Lock()
+			defer seqMu.Unlock()
+			if body.Sequence > 0 {
+				if body.Sequence < lastPlanSeq {
+					envelope.WriteAPIError(w, req, http.StatusConflict, "conflict", "STALE_TELEMETRY_PLAN", "a newer telemetry plan was already applied", map[string]any{"lastSequence": lastPlanSeq})
+					return
+				}
+				lastPlanSeq = body.Sequence
+			}
+			sentryobs.SetPlan(*body.Plan)
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
 		if body.Plan != nil {
 			sentryobs.SetPlan(*body.Plan)
-			if body.CloudUserID == nil {
-				w.WriteHeader(http.StatusNoContent)
-				return
-			}
 		}
 		cloudUserID := ""
 		if body.CloudUserID != nil {

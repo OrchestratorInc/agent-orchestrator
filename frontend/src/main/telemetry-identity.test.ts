@@ -29,17 +29,22 @@ describe("TelemetryIdentityController opt-out", () => {
 describe("TelemetryIdentityController plan hand-off", () => {
 	it("posts a plan-only body, replays it to a restarted daemon, and stops on an older daemon's 400", async () => {
 		const { ctl, fetcher } = await controller();
-		const bodies = () => fetcher.mock.calls.map((call) => JSON.parse((call as unknown as [string, RequestInit])[1].body as string));
+		const bodies = () => fetcher.mock.calls.map((call) => JSON.parse((call as unknown as [string, RequestInit])[1].body as string) as { plan: string; sequence: number });
 		await ctl.setPlan("pro");
 		await ctl.setPlan("pro");
-		expect(bodies()).toEqual([{ plan: "pro" }]);
+		expect(bodies().map((body) => body.plan)).toEqual(["pro"]);
 		ctl.invalidate();
 		await ctl.flush();
-		expect(bodies()).toEqual([{ plan: "pro" }, { plan: "pro" }]);
+		expect(bodies().map((body) => body.plan)).toEqual(["pro", "pro"]);
 		fetcher.mockResolvedValue(new Response(null, { status: 400 }));
 		await ctl.setPlan("free");
 		await ctl.flush();
-		expect(bodies()).toEqual([{ plan: "pro" }, { plan: "pro" }, { plan: "free" }]);
+		expect(bodies().map((body) => body.plan)).toEqual(["pro", "pro", "free"]);
+		// Plan-only: never a cloudUserId; strictly increasing sequences.
+		expect(bodies().every((body) => !("cloudUserId" in body))).toBe(true);
+		const sequences = bodies().map((body) => body.sequence);
+		expect(sequences).toEqual([...sequences].sort((a, b) => a - b));
+		expect(new Set(sequences).size).toBe(3);
 	});
 });
 
