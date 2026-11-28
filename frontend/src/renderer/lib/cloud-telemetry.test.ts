@@ -28,6 +28,7 @@ import {
 	reportPlanRefusal,
 	resetCloudTelemetryForTest,
 } from "./cloud-telemetry";
+import { hashedTelemetryID } from "./telemetry";
 
 function session(overrides: Partial<CloudCpSession> = {}): CloudCpSession {
 	return {
@@ -373,6 +374,26 @@ describe("cloud funnel telemetry", () => {
 				{ from_plan: "pro", to_plan: "starter", direction: "downgrade", from_trial: false, to_trial: true },
 				{ from_plan: "starter", to_plan: "free", direction: "cancel", from_trial: true, to_trial: false },
 			]);
+		});
+
+		it("does not store or report a plan when billing turns off while the org id is hashed", async () => {
+			const { client } = billingClient(paid("pro"));
+			await client.me();
+			let hashed: (hash: string) => void = () => undefined;
+			const hashStarted = new Promise<void>((started) => {
+				vi.mocked(hashedTelemetryID).mockImplementationOnce(() => {
+					started();
+					return new Promise((resolve) => { hashed = resolve; });
+				});
+			});
+			const pending = client.getBilling("org-1");
+			await hashStarted;
+			// observeBillingPlan is awaiting the hash; /me now reports billing off.
+			reportCloudOffering({ ...me, offering: { providers: [], billingMode: "off", kind: "b2c" } } as unknown as CloudCpMeResponse);
+			hashed("hash:org-1");
+			await pending;
+			expect(planChanges()).toEqual([]);
+			expect(window.localStorage.getItem("ao.telemetry.cloudPlans")).toBeNull();
 		});
 
 		it("uses the active org, not the first", async () => {
