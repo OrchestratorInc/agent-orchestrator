@@ -209,6 +209,56 @@ describe("sessionBranchPR", () => {
 		expect(sessionBranchPR(branch({ remoteBranch: "origin/ao/faq-questions" }), [quickNav, { ...faq, state: "merged" }])).toBeUndefined();
 	});
 
+	it("does not match an open PR sharing the tip commit when the checked-out branch is different", () => {
+		// A new branch created at the head of an open PR shares its tip SHA before new commits.
+		// If branch identity is observed, it must not fall back to SHA and match the original PR.
+		expect(
+			sessionBranchPR(
+				branch({ branch: "ao/stacked-fix", head: "614aaa3", unpushed: 0 }),
+				[quickNav, faq],
+			),
+		).toBeUndefined();
+	});
+
+	it("matches the open PR when the observed branch name matches even if unpushed", () => {
+		expect(
+			sessionBranchPR(
+				branch({ branch: "ao/faq-questions", head: "new0001", unpushed: 1 }),
+				[quickNav, faq],
+			)?.number,
+		).toBe(5);
+	});
+
+	it("matches fallback PR summary when fallback sourceBranch equals the observed branch in stacked-branch case", () => {
+		// When provider details have not loaded, sessionPRFactToSummary sets sourceBranch
+		// to session.branch. If the checkout equals session.branch (and has no upstream),
+		// the matcher attaches this fallback PR even if the open PR belongs to another branch.
+		const sess = sessionWith({
+			branch: "ao/main-feature",
+			branchState: { branch: "ao/main-feature", commits: 1, unpushed: 0, behind: 0 },
+			prs: [
+				{
+					url: "https://github.com/acme/repo/pull/12",
+					number: 12,
+					state: "open",
+					ci: "passing",
+					review: "approved",
+					mergeability: "mergeable",
+					reviewComments: false,
+					updatedAt: "2026-06-15T00:00:00Z",
+				},
+			],
+		});
+		const fallbackSummaries = sessionPRDisplaySummaries(sess, []);
+		expect(fallbackSummaries[0]?.sourceBranch).toBe("ao/main-feature");
+		expect(sessionBranchPR(sess, fallbackSummaries)?.number).toBe(12);
+
+		// Once provider details load with the real source branch ("ao/stacked-fix"),
+		// the matcher no longer attaches the PR to the current checkout.
+		const enriched = [summary({ number: 12, sourceBranch: "ao/stacked-fix", headSha: "abc1234" })];
+		expect(sessionBranchPR(sess, enriched)).toBeUndefined();
+	});
+
 	it("falls back to the first open PR before the daemon reports the branch", () => {
 		expect(sessionBranchPR(sessionWith(), [quickNav, faq])?.number).toBe(4);
 	});
