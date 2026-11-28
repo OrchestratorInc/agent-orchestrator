@@ -5442,6 +5442,45 @@ func TestRestoreRecreatedWorkspaceRunsSetupOnce(t *testing.T) {
 	}
 }
 
+// A Setup that fails (or is killed when the client hangs up) after the
+// worktree was recreated must run again on the next restore, even though the
+// worktree now exists; otherwise the agent starts in an unprovisioned tree.
+func TestRestoreRerunsSetupThatNeverFinished(t *testing.T) {
+	m, _, _, _ := newManager()
+	m.dataDir = t.TempDir()
+	managed := filepath.Join(t.TempDir(), "workspaces")
+	adapter, err := scratch.New(scratch.Options{ManagedRoot: managed})
+	if err != nil {
+		t.Fatal(err)
+	}
+	m.workspace = adapter
+	workspace := filepath.Join(managed, "scratch", "workers", "scratch-1")
+	allow := filepath.Join(t.TempDir(), "setup-may-finish")
+	project := domain.ProjectRecord{ID: "scratch", Kind: domain.ProjectKindScratch, Path: t.TempDir(), Config: domain.ProjectConfig{
+		PostCreate: []string{"test -f '" + allow + "' && echo setup >> setup-runs"},
+	}}
+	rec := domain.SessionRecord{ID: "scratch-1", ProjectID: "scratch", Kind: domain.KindWorker, Metadata: domain.SessionMetadata{WorkspacePath: workspace}}
+
+	if _, err := m.restoreSessionWorkspace(context.Background(), project, rec); err == nil {
+		t.Fatal("first restore succeeded, want its Setup to fail")
+	}
+	if _, err := os.Stat(workspace); err != nil {
+		t.Fatalf("recreated worktree is gone after the failed Setup: %v", err)
+	}
+	if err := os.WriteFile(allow, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < 2; i++ {
+		if _, err := m.restoreSessionWorkspace(context.Background(), project, rec); err != nil {
+			t.Fatalf("retry %d: %v", i+1, err)
+		}
+	}
+	output, err := os.ReadFile(filepath.Join(workspace, "setup-runs"))
+	if err != nil || strings.Count(string(output), "setup") != 1 {
+		t.Fatalf("setup runs = %q, err = %v; want the retry to finish Setup exactly once", output, err)
+	}
+}
+
 func TestRestore_WorkspaceProjectRestoresChildrenAndRecordsInventory(t *testing.T) {
 	m, st, rt, ws := newManager()
 	st.projects["mer"] = domain.ProjectRecord{ID: "mer", Path: "/repo/mer", Kind: domain.ProjectKindWorkspace, Config: testRoleAgents()}

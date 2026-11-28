@@ -5489,11 +5489,13 @@ func (m *Manager) restoreAllSession(ctx context.Context, rec domain.SessionRecor
 	}
 	if recreated {
 		m.restoreForkStartingFiles(ctx, project, rec, ws.Path)
-		if err := m.provisionWorkspaceWith(ctx, project, rec.ID, ws.Path, attributionRecorded, ""); err != nil {
-			m.logger.Error("restore-all: setup recreated workspace failed", "sessionID", rec.ID, "error", err)
-			captureBackgroundFault(ctx, err, "boot_restore", "restore_workspace")
-			return
-		}
+	}
+	if err := m.runOwedSetup(rec.ID, recreated, func() error {
+		return m.provisionWorkspaceWith(ctx, project, rec.ID, ws.Path, attributionRecorded, "")
+	}); err != nil {
+		m.logger.Error("restore-all: setup recreated workspace failed", "sessionID", rec.ID, "error", err)
+		captureBackgroundFault(ctx, err, "boot_restore", "restore_workspace")
+		return
 	}
 
 	// Step 3: relaunch the agent in the restored workspace.
@@ -5582,9 +5584,11 @@ func (m *Manager) restoreSessionWorkspace(ctx context.Context, project domain.Pr
 		}
 		if recreated {
 			m.restoreForkStartingFiles(ctx, project, rec, ws.Path)
-			if err := m.provisionRecreatedWorkspace(ctx, project, rec.ID, ws.Path); err != nil {
-				return ports.WorkspaceInfo{}, fmt.Errorf("setup recreated workspace: %w", err)
-			}
+		}
+		if err := m.runOwedSetup(rec.ID, recreated, func() error {
+			return m.provisionRecreatedWorkspace(ctx, project, rec.ID, ws.Path)
+		}); err != nil {
+			return ports.WorkspaceInfo{}, fmt.Errorf("setup recreated workspace: %w", err)
 		}
 		return ws, nil
 	}
@@ -5613,10 +5617,10 @@ func (m *Manager) restoreSessionWorkspace(ctx context.Context, project domain.Pr
 	if err := m.restoreAttachments(ctx, rec.ID, ws); err != nil {
 		return ports.WorkspaceInfo{}, fmt.Errorf("restore attachments: %w", err)
 	}
-	if recreated {
-		if err := m.provisionRecreatedWorkspace(ctx, project, rec.ID, ws.Path); err != nil {
-			return ports.WorkspaceInfo{}, fmt.Errorf("setup recreated workspace: %w", err)
-		}
+	if err := m.runOwedSetup(rec.ID, recreated, func() error {
+		return m.provisionRecreatedWorkspace(ctx, project, rec.ID, ws.Path)
+	}); err != nil {
+		return ports.WorkspaceInfo{}, fmt.Errorf("setup recreated workspace: %w", err)
 	}
 	return ws, nil
 }
